@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
@@ -19,8 +20,8 @@
 #include "chromeos/ash/components/network/network_state_test_helper.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
 #include "chromeos/ash/components/tether/fake_host_scanner.h"
-#include "chromeos/ash/services/device_sync/cryptauth_device_manager.h"
 #include "chromeos/dbus/power/power_manager_client.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -53,7 +54,7 @@ class HostScanSchedulerImplTest : public testing::Test {
  protected:
   void SetUp() override {
     helper_ = std::make_unique<NetworkStateTestHelper>(
-        true /* use_default_devices_and_services */);
+        /*use_default_devices_and_services=*/true);
 
     histogram_tester_ = std::make_unique<base::HistogramTester>();
 
@@ -61,7 +62,8 @@ class HostScanSchedulerImplTest : public testing::Test {
         NetworkStateHandler::TECHNOLOGY_ENABLED);
 
     fake_host_scanner_ = std::make_unique<FakeHostScanner>();
-    session_manager_ = std::make_unique<session_manager::SessionManager>();
+    session_manager_ = std::make_unique<session_manager::SessionManager>(
+        std::make_unique<session_manager::FakeSessionManagerDelegate>());
 
     host_scan_scheduler_ = std::make_unique<HostScanSchedulerImpl>(
         helper_->network_state_handler(), fake_host_scanner_.get(),
@@ -74,7 +76,7 @@ class HostScanSchedulerImplTest : public testing::Test {
     test_clock_.Advance(base::Seconds(10));
     test_task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
     host_scan_scheduler_->SetTestDoubles(
-        base::WrapUnique(mock_host_scan_batch_timer_), &test_clock_,
+        base::WrapUnique(mock_host_scan_batch_timer_.get()), &test_clock_,
         test_task_runner_);
   }
 
@@ -171,7 +173,8 @@ class HostScanSchedulerImplTest : public testing::Test {
   std::unique_ptr<FakeHostScanner> fake_host_scanner_;
   std::unique_ptr<session_manager::SessionManager> session_manager_;
 
-  base::MockOneShotTimer* mock_host_scan_batch_timer_;
+  raw_ptr<base::MockOneShotTimer, DanglingUntriaged>
+      mock_host_scan_batch_timer_;
   base::SimpleTestClock test_clock_;
   scoped_refptr<base::TestSimpleTaskRunner> test_task_runner_;
 

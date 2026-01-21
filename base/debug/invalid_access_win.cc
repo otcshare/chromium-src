@@ -4,11 +4,14 @@
 
 #include "base/debug/invalid_access_win.h"
 
-#include <intrin.h>
-#include <stdlib.h>
 #include <windows.h>
 
+#include <intrin.h>
+#include <stdlib.h>
+
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 
 namespace base {
@@ -53,13 +56,13 @@ void TerminateWithHeapCorruption() {
     CHECK(addr);
     // Corrupt heap header.
     char* addr_mutable = reinterpret_cast<char*>(addr);
-    memset(addr_mutable - sizeof(addr), 0xCC, sizeof(addr));
+    UNSAFE_TODO(memset(addr_mutable - sizeof(addr), 0xCC, sizeof(addr)));
 
     HeapFree(heap, 0, addr);
     HeapDestroy(heap);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     // Heap corruption exception should never be caught.
-    CHECK(false);
+    NOTREACHED();
   }
   // Should never reach here.
   abort();
@@ -74,7 +77,7 @@ void TerminateWithControlFlowViolation() {
     IndirectCall(&func);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     // CFG fast fail should never be caught.
-    CHECK(false);
+    NOTREACHED();
   }
   // Should only reach here if CFG is disabled.
   abort();

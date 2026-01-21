@@ -7,7 +7,8 @@
 
 #include <memory>
 #include <type_traits>
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -32,14 +33,15 @@ class Document;
 class DocumentLoader;
 class InspectorAgent;
 class LocalFrame;
+class InspectorAccessibilityAgent;
 class InspectorAuditsAgent;
 class InspectorCSSAgent;
 class InspectorCacheStorageAgent;
 class InspectorDOMAgent;
 class InspectorDOMDebuggerAgent;
 class InspectorDOMSnapshotAgent;
-class InspectorDatabaseAgent;
 class InspectorEmulationAgent;
+class InspectorInspectorAgent;
 class InspectorIOAgent;
 class InspectorLogAgent;
 class InspectorNetworkAgent;
@@ -61,6 +63,7 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
           main_receiver,
       mojo::PendingReceiver<mojom::blink::DevToolsSession> io_receiver,
       mojom::blink::DevToolsSessionStatePtr reattach_session_state,
+      const String& script_to_evaluate_on_load,
       bool client_expects_binary_responses,
       bool client_is_trusted,
       const String& session_id,
@@ -83,6 +86,7 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
     return agent;
   }
   void Detach();
+  void DetachFromV8();
   void Trace(Visitor*) const;
 
   // protocol::FrontendChannel implementation.
@@ -95,6 +99,10 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
   void PaintTiming(Document* document, const char* name, double timestamp);
   void DomContentLoadedEventFired(LocalFrame*);
 
+  const String& script_to_evaluate_on_load() const {
+    return script_to_evaluate_on_load_;
+  }
+
  private:
   class IOSession;
 
@@ -102,6 +110,8 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
   void DispatchProtocolCommand(int call_id,
                                const String& method,
                                base::span<const uint8_t> message) override;
+  void UnpauseAndTerminate() override;
+
   void DispatchProtocolCommandImpl(int call_id,
                                    const String& method,
                                    base::span<const uint8_t> message);
@@ -129,18 +139,20 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
 
   // Converts to JSON if requested by the client.
   blink::mojom::blink::DevToolsMessagePtr FinalizeMessage(
-      std::vector<uint8_t> message) const;
+      std::vector<uint8_t> message,
+      std::optional<int> call_id) const;
 
   template <typename T>
   bool IsDomainAvailableToUntrustedClient() {
     return std::disjunction_v<std::is_same<T, InspectorAuditsAgent>,
                               std::is_same<T, InspectorCSSAgent>,
                               std::is_same<T, InspectorCacheStorageAgent>,
+                              std::is_same<T, InspectorAccessibilityAgent>,
                               std::is_same<T, InspectorDOMAgent>,
                               std::is_same<T, InspectorDOMDebuggerAgent>,
                               std::is_same<T, InspectorDOMSnapshotAgent>,
-                              std::is_same<T, InspectorDatabaseAgent>,
                               std::is_same<T, InspectorEmulationAgent>,
+                              std::is_same<T, InspectorInspectorAgent>,
                               std::is_same<T, InspectorIOAgent>,
                               std::is_same<T, InspectorLogAgent>,
                               std::is_same<T, InspectorNetworkAgent>,
@@ -159,7 +171,7 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
   HeapMojoAssociatedRemote<mojom::blink::DevToolsSessionHost> host_remote_{
       nullptr};
   IOSession* io_session_;
-  std::unique_ptr<v8_inspector::V8InspectorSession> v8_session_;
+  std::shared_ptr<v8_inspector::V8InspectorSession> v8_session_;
   std::unique_ptr<protocol::UberDispatcher> inspector_backend_dispatcher_;
   InspectorSessionState session_state_;
   HeapVector<Member<InspectorAgent>> agents_;
@@ -171,6 +183,7 @@ class CORE_EXPORT DevToolsSession : public GarbageCollected<DevToolsSession>,
   const bool client_is_trusted_;
   InspectorAgentState v8_session_state_;
   InspectorAgentState::Bytes v8_session_state_cbor_;
+  String script_to_evaluate_on_load_;
   const String session_id_;
   // This is only relevant until the initial attach to v8 and is never reset
   // once the session stops waiting.

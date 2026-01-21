@@ -2,20 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file contains unit tests for webgpu commands
+#include "gpu/command_buffer/common/webgpu_cmd_format.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
 #include <limits>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
-#include "gpu/command_buffer/common/webgpu_cmd_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// This file contains unit tests for webgpu commands.
 
 namespace gpu {
 namespace webgpu {
@@ -24,7 +27,7 @@ class WebGPUFormatTest : public testing::Test {
  protected:
   static const unsigned char kInitialValue = 0xBD;
 
-  void SetUp() override { memset(buffer_, kInitialValue, sizeof(buffer_)); }
+  void SetUp() override { std::ranges::fill(buffer_, kInitialValue); }
 
   void TearDown() override {}
 
@@ -38,7 +41,8 @@ class WebGPUFormatTest : public testing::Test {
                          size_t written_size) {
     size_t actual_size = static_cast<const unsigned char*>(end) -
                          GetBufferAs<const unsigned char>();
-    EXPECT_LT(actual_size, sizeof(buffer_));
+    EXPECT_LT(actual_size,
+              (buffer_.size() * sizeof(decltype(buffer_)::value_type)));
     EXPECT_GT(actual_size, 0u);
     EXPECT_EQ(expected_size, actual_size);
     EXPECT_EQ(kInitialValue, buffer_[written_size]);
@@ -51,7 +55,7 @@ class WebGPUFormatTest : public testing::Test {
   }
 
  private:
-  unsigned char buffer_[1024];
+  std::array<unsigned char, 1024> buffer_;
 };
 
 const unsigned char WebGPUFormatTest::kInitialValue;

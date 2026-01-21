@@ -6,13 +6,12 @@
 
 #include <string.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -162,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, RunsExternalCommand) {
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kTestUrl), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -188,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotKeepSpaces) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kTestUrlWithSpaces),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -199,8 +198,8 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotKeepSpaces) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   std::string output;
   ASSERT_TRUE(base::ReadFileToString(temp_file, &output));
-  EXPECT_FALSE(base::Contains(output, ' '));
-  EXPECT_TRUE(base::Contains(output, "%20"));
+  EXPECT_FALSE(output.contains(' '));
+  EXPECT_TRUE(output.contains("%20"));
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -218,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, UnencodesSingleQUotes) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kTestUrlWithQuotes),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -244,7 +243,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotRunOnRandomUrls) {
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kOtherUrl), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(

@@ -7,9 +7,10 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
@@ -19,7 +20,7 @@
 namespace profiles {
 
 // Name of the badged icon file generated for a given profile.
-extern const base::FilePath::StringPieceType kProfileIconFileName;
+extern const base::FilePath::StringViewType kProfileIconFileName;
 
 namespace internal {
 
@@ -55,8 +56,8 @@ class ShortcutFilenameMatcher {
 
  private:
   const std::wstring profile_shortcut_filename_;
-  const base::WStringPiece lnk_ext_;
-  base::WStringPiece profile_shortcut_name_;
+  const std::wstring_view lnk_ext_;
+  std::wstring_view profile_shortcut_name_;
 };
 
 // Returns the command-line flags to launch Chrome with the given profile.

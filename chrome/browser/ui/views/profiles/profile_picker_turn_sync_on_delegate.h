@@ -9,14 +9,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/profiles/profile_metrics.h"
-#include "chrome/browser/ui/views/profiles/profile_picker_signed_in_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
-#include "chrome/browser/ui/webui/signin/enterprise_profile_welcome_ui.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
+#include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper.h"
 
 class Profile;
 class SigninUIError;
+class ProfilePickerPostSignInAdapter;
 
 // Handles turning on sync for signed-in profile creation flow, embedded in the
 // profile picker.
@@ -24,7 +24,7 @@ class ProfilePickerTurnSyncOnDelegate : public TurnSyncOnHelper::Delegate,
                                         public LoginUIService::Observer {
  public:
   ProfilePickerTurnSyncOnDelegate(
-      base::WeakPtr<ProfilePickerSignedInFlowController> controller,
+      base::WeakPtr<ProfilePickerPostSignInAdapter> controller,
       Profile* profile);
   ~ProfilePickerTurnSyncOnDelegate() override;
   ProfilePickerTurnSyncOnDelegate(const ProfilePickerTurnSyncOnDelegate&) =
@@ -45,7 +45,6 @@ class ProfilePickerTurnSyncOnDelegate : public TurnSyncOnHelper::Delegate,
   void ShowSyncConfirmation(
       base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
           callback) override;
-  bool ShouldAbortBeforeShowSyncDisabledConfirmation() override;
   void ShowSyncDisabledConfirmation(
       bool is_managed_account,
       base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
@@ -65,17 +64,21 @@ class ProfilePickerTurnSyncOnDelegate : public TurnSyncOnHelper::Delegate,
   void FinishSyncConfirmation(
       LoginUIService::SyncConfirmationUIClosedResult result);
 
-  // Shows the enterprise welcome screen.
-  void ShowEnterpriseWelcome(EnterpriseProfileWelcomeUI::ScreenType type);
-  void OnEnterpriseWelcomeClosed(EnterpriseProfileWelcomeUI::ScreenType type,
+  // Shows the managed user notice screen.
+  void ShowManagedUserNotice(ManagedUserProfileNoticeUI::ScreenType type);
+  void OnManagedUserNoticeClosed(ManagedUserProfileNoticeUI::ScreenType type,
                                  signin::SigninChoice choice);
+
+  // Handles the logic behind when the cancel button is clicked
+  void HandleCancelSigninChoice(
+      ProfileMetrics::ProfileSignedInFlowOutcome outcome);
 
   // Reports metric with the outcome of the turn-sync-on flow.
   void LogOutcome(ProfileMetrics::ProfileSignedInFlowOutcome outcome);
 
   // Controls the sign-in flow. Is not guaranteed to outlive this object (gets
   // destroyed when the flow window closes).
-  base::WeakPtr<ProfilePickerSignedInFlowController> controller_;
+  base::WeakPtr<ProfilePickerPostSignInAdapter> adapter_;
 
   raw_ptr<Profile> profile_;
   bool enterprise_account_ = false;

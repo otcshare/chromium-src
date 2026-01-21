@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,30 +8,29 @@ import static org.chromium.chrome.browser.feed.webfeed.WebFeedSubscriptionReques
 
 import android.content.Context;
 
-import org.chromium.chrome.browser.creator.CreatorApiBridge.Creator;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.feed.FeedServiceBridge;
 import org.chromium.chrome.browser.feed.webfeed.WebFeedBridge;
 import org.chromium.ui.modelutil.PropertyModel;
 
-import java.nio.charset.StandardCharsets;
-
 /**
- * Sets up the Mediator for Cormorant Creator surface.  It is based on the doc at
+ * Sets up the Mediator for Cormorant Creator surface. It is based on the doc at
  * https://chromium.googlesource.com/chromium/src/+/HEAD/docs/ui/android/mvc_simple_list_tutorial.md
  */
+@NullMarked
 public class CreatorMediator {
-    private Context mContext;
-    private Creator mCreator;
-    private byte[] mWebFeedId;
-    private String mTitle;
-    private String mUrl;
-    private PropertyModel mCreatorModel;
-    private boolean mFollowState;
+    private final PropertyModel mCreatorModel;
+    private final CreatorSnackbarController mCreatorSnackbarController;
+    private final SignInInterstitialInitiator mSignInInterstitialInitiator;
 
-    CreatorMediator(Context context, PropertyModel creatorModel) {
-        mContext = context;
+    CreatorMediator(
+            Context context,
+            PropertyModel creatorModel,
+            CreatorSnackbarController creatorSnackbarController,
+            SignInInterstitialInitiator signInInterstitialInitiator) {
         mCreatorModel = creatorModel;
-        mWebFeedId = mCreatorModel.get(CreatorProperties.WEB_FEED_ID_KEY);
-        getCreator();
+        mCreatorSnackbarController = creatorSnackbarController;
+        mSignInInterstitialInitiator = signInInterstitialInitiator;
 
         // Set Follow OnClick Action
         mCreatorModel.set(CreatorProperties.ON_FOLLOW_CLICK_KEY, this::followClickHandler);
@@ -39,30 +38,36 @@ public class CreatorMediator {
     }
 
     private void followClickHandler() {
-        WebFeedBridge.followFromId(mWebFeedId,
-                /*isDurable=*/false, WebFeedBridge.CHANGE_REASON_WEB_PAGE_MENU, (result) -> {
-                    if (result.requestStatus == SUCCESS) {
-                        mCreatorModel.set(CreatorProperties.IS_FOLLOWED_KEY, true);
-                    }
-                });
+        if (FeedServiceBridge.isSignedIn()) {
+            byte[] bytes = mCreatorModel.get(CreatorProperties.WEB_FEED_ID_KEY);
+            WebFeedBridge.followFromId(
+                    bytes,
+                    /* isDurable= */ false,
+                    WebFeedBridge.CHANGE_REASON_SINGLE_WEB_FEED,
+                    (result) -> {
+                        if (result.requestStatus == SUCCESS) {
+                            mCreatorModel.set(CreatorProperties.IS_FOLLOWED_KEY, true);
+                        }
+                        mCreatorSnackbarController.showSnackbarForFollow(
+                                result.requestStatus,
+                                mCreatorModel.get(CreatorProperties.TITLE_KEY));
+                    });
+        } else {
+            mSignInInterstitialInitiator.showSignInInterstitial();
+        }
     }
 
     private void followingClickHandler() {
-        WebFeedBridge.unfollow(mWebFeedId,
-                /*isDurable=*/false, WebFeedBridge.CHANGE_REASON_WEB_PAGE_MENU, (result) -> {
+        WebFeedBridge.unfollow(
+                mCreatorModel.get(CreatorProperties.WEB_FEED_ID_KEY),
+                /* isDurable= */ false,
+                WebFeedBridge.CHANGE_REASON_SINGLE_WEB_FEED,
+                (result) -> {
                     if (result.requestStatus == SUCCESS) {
                         mCreatorModel.set(CreatorProperties.IS_FOLLOWED_KEY, false);
                     }
+                    mCreatorSnackbarController.showSnackbarForUnfollow(
+                            result.requestStatus, mCreatorModel.get(CreatorProperties.TITLE_KEY));
                 });
-    }
-
-    private void getCreator() {
-        CreatorApiBridge.getCreator(
-                new String(mWebFeedId, StandardCharsets.UTF_8), this::onGetCreator);
-    }
-
-    private void onGetCreator(Creator creator) {
-        // TODO(crbug/1374058): Get Title and Url from CreatorAPI
-        mCreator = creator;
     }
 }

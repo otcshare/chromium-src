@@ -10,6 +10,7 @@
 #include <iterator>
 #include <type_traits>
 
+#include "base/compiler_specific.h"
 #include "components/zucchini/image_utils.h"
 #include "components/zucchini/version_info.h"
 
@@ -105,7 +106,7 @@ typename std::iterator_traits<It>::difference_type DecodeVarUInt(It first,
   T val = 0;
   for (auto it = first; it != last;) {
     val |= T(*it & 0x7F) << sh;
-    if (*(it++) < 0x80) {
+    if (*(UNSAFE_TODO(it++)) < 0x80) {
       *value = val;
       return it - first;
     }

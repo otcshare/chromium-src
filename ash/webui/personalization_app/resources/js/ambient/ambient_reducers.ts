@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Actions} from '../personalization_actions.js';
-import {ReducerFunction} from '../personalization_reducers.js';
-import {PersonalizationState} from '../personalization_state.js';
+import type {Actions} from '../personalization_actions.js';
+import type {ReducerFunction} from '../personalization_reducers.js';
+import type {PersonalizationState} from '../personalization_state.js';
 
 import {AmbientActionName} from './ambient_actions.js';
-import {AmbientState} from './ambient_state.js';
+import type {AmbientState} from './ambient_state.js';
 
 export function albumsReducer(
     state: AmbientState['albums'], action: Actions,
@@ -39,23 +39,45 @@ export function ambientModeEnabledReducer(
   }
 }
 
-export function animationThemeReducer(
-    state: AmbientState['animationTheme'], action: Actions,
-    _: PersonalizationState): AmbientState['animationTheme'] {
+export function ambientThemeReducer(
+    state: AmbientState['ambientTheme'], action: Actions,
+    _: PersonalizationState): AmbientState['ambientTheme'] {
   switch (action.name) {
-    case AmbientActionName.SET_ANIMATION_THEME:
-      return action.animationTheme;
+    case AmbientActionName.SET_AMBIENT_THEME:
+      return action.ambientTheme;
     default:
       return state;
   }
 }
 
-export function googlePhotosAlbumsPreviewsReducer(
-    state: AmbientState['googlePhotosAlbumsPreviews'], action: Actions,
-    _: PersonalizationState): AmbientState['googlePhotosAlbumsPreviews'] {
+export function ambientThemePreviewsReducer(
+    state: AmbientState['ambientThemePreviews'], action: Actions,
+    _: PersonalizationState): AmbientState['ambientThemePreviews'] {
   switch (action.name) {
-    case AmbientActionName.SET_GOOGLE_PHOTOS_ALBUMS_PREVIEWS:
+    case AmbientActionName.SET_AMBIENT_THEME_PREVIEWS:
       return action.previews;
+    default:
+      return state;
+  }
+}
+
+
+export function previewsReducer(
+    state: AmbientState['previews'], action: Actions,
+    _: PersonalizationState): AmbientState['previews'] {
+  switch (action.name) {
+    case AmbientActionName.SET_PREVIEWS:
+      return action.previews;
+    default:
+      return state;
+  }
+}
+
+export function screenSaverDurationReducer(
+    state: number|null, action: Actions, _: PersonalizationState): number|null {
+  switch (action.name) {
+    case AmbientActionName.SET_SCREEN_SAVER_DURATION:
+      return action.minutes;
     default:
       return state;
   }
@@ -94,13 +116,51 @@ export function ambientUiVisibilityReducer(
   }
 }
 
+export function shouldShowTimeOfDayBannerReducer(
+    state: boolean, action: Actions, _: PersonalizationState): boolean {
+  switch (action.name) {
+    case AmbientActionName.SET_SHOULD_SHOW_TIME_OF_DAY_BANNER:
+      return action.shouldShowTimeOfDayBanner;
+    default:
+      return state;
+  }
+}
+
+export function geolocationPermissionEnabledReducer(
+    state: AmbientState['geolocationPermissionEnabled'], action: Actions,
+    _: PersonalizationState): AmbientState['geolocationPermissionEnabled'] {
+  switch (action.name) {
+    case AmbientActionName.SET_GEOLOCATION_PERMISSION_ENABLED:
+      return action.enabled;
+    default:
+      return state;
+  }
+}
+
+export function geolocationIsUserModifiableReducer(
+    state: AmbientState['geolocationIsUserModifiable'], action: Actions,
+    _: PersonalizationState): AmbientState['geolocationIsUserModifiable'] {
+  switch (action.name) {
+    case AmbientActionName.SET_GEOLOCATION_IS_USER_MODIFIABLE:
+      return action.isUserModifiable;
+    default:
+      return state;
+  }
+}
+
+
 export const ambientReducers:
     {[K in keyof AmbientState]: ReducerFunction<AmbientState[K]>} = {
       albums: albumsReducer,
       ambientModeEnabled: ambientModeEnabledReducer,
-      animationTheme: animationThemeReducer,
-      googlePhotosAlbumsPreviews: googlePhotosAlbumsPreviewsReducer,
+      ambientTheme: ambientThemeReducer,
+      ambientThemePreviews: ambientThemePreviewsReducer,
+      duration: screenSaverDurationReducer,
+      previews: previewsReducer,
       temperatureUnit: temperatureUnitReducer,
       topicSource: topicSourceReducer,
       ambientUiVisibility: ambientUiVisibilityReducer,
+      shouldShowTimeOfDayBanner: shouldShowTimeOfDayBannerReducer,
+      geolocationPermissionEnabled: geolocationPermissionEnabledReducer,
+      geolocationIsUserModifiable: geolocationIsUserModifiableReducer,
     };

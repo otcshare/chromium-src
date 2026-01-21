@@ -8,11 +8,12 @@ Running: addRule
 element.style { ()
 
 [expanded] 
-foo, [$#inspected, $].bar, [$#inspected$] { (inspector-stylesheet:1 -> inspector-stylesheet:1:36)
+foo, [$#inspected$], .bar, [$#inspected$] { (inspector-stylesheet:1 -> inspector-stylesheet:1:36)
 
 [expanded] 
 [$div$] { (user agent stylesheet)
     display: block;
+    unicode-bidi: isolate;
 
 
 Running: changeSelector
@@ -20,10 +21,11 @@ Running: changeSelector
 element.style { ()
 
 [expanded] 
-[$#inspected, $]a, hr { (inspector-stylesheet:1 -> inspector-stylesheet:1:20)
+[$#inspected$], a, hr { (*inspector-stylesheet:1 -> inspector-stylesheet:1:20)
 
 [expanded] 
 [$div$] { (user agent stylesheet)
     display: block;
+    unicode-bidi: isolate;
 
 

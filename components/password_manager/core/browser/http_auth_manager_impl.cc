@@ -6,7 +6,9 @@
 
 #include <utility>
 
+#include "base/task/single_thread_task_runner.h"
 #include "components/autofill/core/common/save_password_progress_logger.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
@@ -33,8 +35,12 @@ HttpAuthManagerImpl::HttpAuthManagerImpl(PasswordManagerClient* client,
 }
 
 HttpAuthManagerImpl::~HttpAuthManagerImpl() {
-  if (observer_)
+  if (observer_) {
     observer_->OnLoginModelDestroying();
+  }
+  if (authenticator_) {
+    authenticator_->Cancel();
+  }
 }
 
 void HttpAuthManagerImpl::DetachObserver(HttpAuthObserver* observer) {
@@ -53,9 +59,14 @@ void HttpAuthManagerImpl::SetObserverAndDeliverCredentials(
   // Set the observer and communicate the signon_realm.
   // If a previous view registered itself as an observer, it must be notified
   // about its replacement.
-  if (observer_)
+  if (observer_) {
     observer_->OnLoginModelDestroying();
+  }
   observer_ = observer;
+
+  if (!client_->IsFillingEnabled(observed_form.url)) {
+    return;
+  }
   // Initialize the form manager.
   form_manager_ = std::make_unique<PasswordFormManager>(
       client_, PasswordFormDigest(observed_form), nullptr /* form_fetcher */,
@@ -64,18 +75,62 @@ void HttpAuthManagerImpl::SetObserverAndDeliverCredentials(
 
 void HttpAuthManagerImpl::ProvisionallySaveForm(
     const PasswordForm& password_form) {
-  if (form_manager_)
+  if (form_manager_) {
     form_manager_->ProvisionallySaveHttpAuthForm(password_form);
+  }
 }
 
-void HttpAuthManagerImpl::Autofill(
-    const PasswordForm& preferred_match,
-    const PasswordFormManagerForUI* form_manager) const {
-  DCHECK_NE(PasswordForm::Scheme::kHtml, preferred_match.scheme);
-  if (observer_ && (form_manager_.get() == form_manager) &&
-      client_->IsFillingEnabled(form_manager_->GetURL())) {
+void HttpAuthManagerImpl::Autofill(const PasswordForm& preferred_match,
+                                   const PasswordFormManagerForUI* form_manager,
+                                   base::OnceClosure on_filling_complete) {
+  CHECK_NE(PasswordForm::Scheme::kHtml, preferred_match.scheme);
+  if (!observer_ || form_manager_.get() != form_manager) {
+    return;
+  }
+
+  if (!client_->IsFillingEnabled(form_manager_->GetURL())) {
+    return;
+  }
+
+  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator =
+      client_->GetDeviceAuthenticator();
+
+  // Biometric filling is disabled, notify observers and invoke callback.
+  if (!client_->IsReauthBeforeFillingRequired(authenticator.get())) {
     observer_->OnAutofillDataAvailable(preferred_match.username_value,
                                        preferred_match.password_value);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(on_filling_complete));
+    return;
+  }
+
+  auto filling_callback = base::BindOnce(
+      &HttpAuthManagerImpl::OnReauthCompleted, weak_ptr_factory_.GetWeakPtr(),
+      preferred_match.username_value, preferred_match.password_value,
+      std::move(on_filling_complete));
+  if (authenticator_) {
+    authenticator_->Cancel();
+  }
+  authenticator_ = std::move(authenticator);
+
+  std::u16string message;
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  const std::u16string origin = base::UTF8ToUTF16(
+      GetShownOrigin(url::Origin::Create(client_->GetLastCommittedURL())));
+  message =
+      l10n_util::GetStringFUTF16(IDS_PASSWORD_MANAGER_FILLING_REAUTH, origin);
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  authenticator_->AuthenticateWithMessage(message, std::move(filling_callback));
+}
+
+void HttpAuthManagerImpl::OnReauthCompleted(
+    const std::u16string& username,
+    const std::u16string& password,
+    base::OnceClosure on_filling_complete,
+    bool auth_result) {
+  if (observer_ && auth_result) {
+    observer_->OnAutofillDataAvailable(username, password);
+    std::move(on_filling_complete).Run();
   }
 }
 
@@ -103,8 +158,9 @@ void HttpAuthManagerImpl::OnDidFinishMainFrameNavigation() {
   // defer it until the password form is actually dismissed. If error pages are
   // changed to no longer double-commit, we can remove the |form_dismissed_|
   // logic.
-  if (!form_dismissed_)
+  if (!form_dismissed_) {
     return;
+  }
 
   form_dismissed_ = false;
 
@@ -124,8 +180,9 @@ void HttpAuthManagerImpl::OnLoginSuccesfull() {
 
   // ProvisionallySaveForm() might not have called, so |form_manager_| might be
   // not in submitted state. Do nothing in that case.
-  if (!form_manager_->is_submitted())
+  if (!form_manager_->is_submitted()) {
     return;
+  }
 
   if (form_manager_->GetFormFetcher()->GetState() ==
       FormFetcher::State::WAITING) {
@@ -134,19 +191,24 @@ void HttpAuthManagerImpl::OnLoginSuccesfull() {
     return;
   }
 
-  // TODO(crbug/831123) Move the logic into the PasswordFormManager.
+  // TODO(crbug.com/40570965) Move the logic into the PasswordFormManager.
   bool is_update = form_manager_->IsPasswordUpdate();
   bool is_new_login = form_manager_->IsNewLogin();
   if (is_update || is_new_login) {
     client_->PromptUserToSaveOrUpdatePassword(std::move(form_manager_),
                                               is_update);
     LogMessage(Logger::STRING_HTTPAUTH_ON_PROMPT_USER);
+  } else {
+    // For existing credentials that haven't been updated invoke
+    // form_manager_->Save() in order to update meta data fields (e.g. last used
+    // timestamp).
+    form_manager_->Save();
   }
 }
 
 void HttpAuthManagerImpl::LogMessage(const Logger::StringID msg) const {
   if (password_manager_util::IsLoggingActive(client_)) {
-    BrowserSavePasswordProgressLogger logger(client_->GetLogManager());
+    BrowserSavePasswordProgressLogger logger(client_->GetCurrentLogManager());
     logger.LogMessage(msg);
   }
 }

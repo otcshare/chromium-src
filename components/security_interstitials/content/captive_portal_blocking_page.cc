@@ -16,9 +16,7 @@
 #include "components/captive_portal/core/captive_portal_detector.h"
 #include "components/captive_portal/core/captive_portal_metrics.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/security_interstitials/content/cert_report_helper.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
-#include "components/security_interstitials/content/ssl_cert_reporter.h"
 #include "components/security_interstitials/core/controller_client.h"
 #include "components/security_interstitials/core/metrics_helper.h"
 #include "components/strings/grit/components_strings.h"
@@ -44,7 +42,6 @@ CaptivePortalBlockingPage::CaptivePortalBlockingPage(
     content::WebContents* web_contents,
     const GURL& request_url,
     const GURL& login_url,
-    std::unique_ptr<SSLCertReporter> ssl_cert_reporter,
     bool can_show_enhanced_protection_message,
     const net::SSLInfo& ssl_info,
     std::unique_ptr<
@@ -52,10 +49,8 @@ CaptivePortalBlockingPage::CaptivePortalBlockingPage(
         controller_client,
     const OpenLoginCallback& open_login_callback)
     : SSLBlockingPageBase(web_contents,
-                          CertificateErrorReport::INTERSTITIAL_CAPTIVE_PORTAL,
                           ssl_info,
                           request_url,
-                          std::move(ssl_cert_reporter),
                           false /* overridable */,
                           base::Time::Now(),
                           can_show_enhanced_protection_message,
@@ -143,7 +138,8 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
 
   std::u16string paragraph;
   if (login_url_.is_empty() ||
-      login_url_.spec() == captive_portal::CaptivePortalDetector::kDefaultURL) {
+      login_url_.spec() ==
+          captive_portal::CaptivePortalDetector::GetDefaultUrl()) {
     // Don't show the login url when it's empty or is the portal detection URL.
     // login_url_ can be empty when:
     // - The captive portal intercepted requests without HTTP redirects, in
@@ -163,7 +159,8 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
   } else {
     // Portal redirection was done with HTTP redirects, so show the login URL.
     // If |languages| is empty, punycode in |login_host| will always be decoded.
-    std::u16string login_host = url_formatter::IDNToUnicode(login_url_.host());
+    std::u16string login_host =
+        url_formatter::IDNToUnicode(login_url_.GetHost());
     if (base::i18n::IsRTL())
       base::i18n::WrapStringWithLTRFormatting(&login_host);
 
@@ -181,25 +178,14 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
   load_time_data.Set("primaryParagraph", std::move(paragraph));
   load_time_data.Set("optInLink", l10n_util::GetStringUTF16(
                                       IDS_SAFE_BROWSING_SCOUT_REPORTING_AGREE));
-  load_time_data.Set(
-      "enhancedProtectionMessage",
-      l10n_util::GetStringUTF16(IDS_SAFE_BROWSING_ENHANCED_PROTECTION_MESSAGE));
   // Explicitly specify other expected fields to empty.
   load_time_data.Set("openDetails", "");
   load_time_data.Set("closeDetails", "");
   load_time_data.Set("explanationParagraph", "");
   load_time_data.Set("finalParagraph", "");
-  load_time_data.Set("recurrentErrorParagraph", "");
-  load_time_data.Set("show_recurrent_error_paragraph", false);
+  load_time_data.Set(security_interstitials::kDisplayCheckBox, false);
 
-  if (cert_report_helper()) {
-    cert_report_helper()->PopulateExtendedReportingOption(load_time_data);
-    cert_report_helper()->PopulateEnhancedProtectionMessage(load_time_data);
-  } else {
-    load_time_data.Set(security_interstitials::kDisplayCheckBox, false);
-    load_time_data.Set(
-        security_interstitials::kDisplayEnhancedProtectionMessage, false);
-  }
+  PopulateEnhancedProtectionMessage(load_time_data);
 }
 
 void CaptivePortalBlockingPage::CommandReceived(const std::string& command) {
@@ -214,8 +200,6 @@ void CaptivePortalBlockingPage::CommandReceived(const std::string& command) {
   security_interstitials::SecurityInterstitialCommand cmd =
       static_cast<security_interstitials::SecurityInterstitialCommand>(
           command_num);
-  cert_report_helper()->HandleReportingCommands(cmd,
-                                                controller()->GetPrefService());
   switch (cmd) {
     case security_interstitials::CMD_OPEN_LOGIN:
       captive_portal::CaptivePortalMetrics::LogCaptivePortalBlockingPageEvent(
@@ -227,6 +211,9 @@ void CaptivePortalBlockingPage::CommandReceived(const std::string& command) {
       break;
     case security_interstitials::CMD_OPEN_WHITEPAPER:
       controller()->OpenExtendedReportingWhitepaper(true);
+      break;
+    case security_interstitials::CMD_OPEN_ENHANCED_PROTECTION_SETTINGS:
+      controller()->OpenEnhancedProtectionSettings();
       break;
     case security_interstitials::CMD_ERROR:
     case security_interstitials::CMD_TEXT_FOUND:

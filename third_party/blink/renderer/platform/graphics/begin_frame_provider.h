@@ -7,11 +7,9 @@
 
 #include <string>
 
-#include "base/notreached.h"
-#include "components/power_scheduler/power_mode_voter.h"
+#include "base/notimplemented.h"
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame_sinks/embedded_frame_sink.mojom-blink.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -48,18 +46,21 @@ class PLATFORM_EXPORT BeginFrameProvider
 
   // viz::mojom::blink::CompositorFrameSinkClient implementation.
   void DidReceiveCompositorFrameAck(
-      WTF::Vector<viz::ReturnedResource> resources) final {
+      Vector<viz::ReturnedResource> resources) final {
     NOTIMPLEMENTED();
   }
-  void OnBeginFrame(
-      const viz::BeginFrameArgs&,
-      const WTF::HashMap<uint32_t, viz::FrameTimingDetails>&) final;
+  void OnBeginFrame(const viz::BeginFrameArgs&,
+                    const HashMap<uint32_t, viz::FrameTimingDetails>&,
+                    Vector<viz::ReturnedResource> resources) final;
   void OnBeginFramePausedChanged(bool paused) final {}
-  void ReclaimResources(WTF::Vector<viz::ReturnedResource> resources) final {
+  void ReclaimResources(Vector<viz::ReturnedResource> resources) final {
     NOTIMPLEMENTED();
   }
   void OnCompositorFrameTransitionDirectiveProcessed(
       uint32_t sequence_id) final {
+    NOTIMPLEMENTED();
+  }
+  void OnSurfaceEvicted(const viz::LocalSurfaceId& local_surface_id) final {
     NOTIMPLEMENTED();
   }
 
@@ -94,8 +95,6 @@ class PLATFORM_EXPORT BeginFrameProvider
   viz::FrameSinkId parent_frame_sink_id_;
   HeapMojoRemote<viz::mojom::blink::CompositorFrameSink> compositor_frame_sink_;
   Member<BeginFrameProviderClient> begin_frame_client_;
-
-  std::unique_ptr<power_scheduler::PowerModeVoter> animation_power_mode_voter_;
 };
 
 }  // namespace blink

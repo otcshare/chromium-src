@@ -2,23 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/upgrade_detector/upgrade_detector.h"
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/environment.h"
+#include "base/test/scoped_libc_timezone_override.h"
 #include "base/test/task_environment.h"
 #include "base/time/clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -47,8 +49,7 @@ class TestUpgradeDetector : public UpgradeDetector {
 class UpgradeDetectorTest : public ::testing::Test {
  protected:
   UpgradeDetectorTest()
-      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        scoped_local_state_(TestingBrowserProcess::GetGlobal()) {}
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
   const base::Clock* GetMockClock() { return task_environment_.GetMockClock(); }
 
@@ -57,33 +58,10 @@ class UpgradeDetectorTest : public ::testing::Test {
   }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  ~UpgradeDetectorTest() override {
-    if (!tz_overridden_)
-      return;
-
-    // Revert back to the original timezone.
-    DCHECK(env_);
-    if (original_tz_) {
-      env_->SetVar("TZ", original_tz_.value());
-    } else {
-      env_->UnSetVar("TZ");
-    }
-    tzset();
-  }
-
   void OverrideTimezone(const std::string& tz) {
-    if (!tz_overridden_) {
-      env_ = base::Environment::Create();
-      // Store the original timezone of the device so that it can be restored in
-      // the destructor at the end of the test.
-      std::string env_tz;
-      if (env_->GetVar("TZ", &env_tz))
-        original_tz_ = env_tz;
-      tz_overridden_ = true;
-    }
-    DCHECK(env_);
-    env_->SetVar("TZ", tz);
-    tzset();
+    // If there already is the override, reset it first.
+    libc_timezone_override_.reset();
+    libc_timezone_override_.emplace(tz);
   }
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
@@ -92,20 +70,19 @@ class UpgradeDetectorTest : public ::testing::Test {
   // Sets the browser.relaunch_window preference in Local State.
   void SetRelaunchWindowPref(int hour, int minute, int duration_mins) {
     // Create the dict representing relaunch time interval.
-    base::Value entry(base::Value::Type::DICTIONARY);
-    entry.SetIntPath("start.hour", hour);
-    entry.SetIntPath("start.minute", minute);
-    entry.SetIntKey("duration_mins", duration_mins);
+    base::Value::Dict entry;
+    entry.SetByDottedPath("start.hour", hour);
+    entry.SetByDottedPath("start.minute", minute);
+    entry.Set("duration_mins", duration_mins);
     // Put it in a list.
-    base::Value entries(base::Value::Type::LIST);
+    base::Value::List entries;
     entries.Append(std::move(entry));
     // Put the list in the policy value.
-    base::Value value(base::Value::Type::DICTIONARY);
-    value.SetKey("entries", std::move(entries));
+    base::Value::Dict value;
+    value.Set("entries", std::move(entries));
 
-    scoped_local_state_.Get()->SetManagedPref(
-        prefs::kRelaunchWindow,
-        std::make_unique<base::Value>(std::move(value)));
+    TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+        prefs::kRelaunchWindow, base::Value(std::move(value)));
   }
 
   UpgradeDetector::RelaunchWindow CreateRelaunchWindow(int hour,
@@ -117,11 +94,8 @@ class UpgradeDetectorTest : public ::testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
-  ScopedTestingLocalState scoped_local_state_;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  std::unique_ptr<base::Environment> env_;
-  absl::optional<std::string> original_tz_;
-  bool tz_overridden_ = false;
+  std::optional<base::test::ScopedLibcTimezoneOverride> libc_timezone_override_;
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 };
 
@@ -132,7 +106,7 @@ TEST_F(UpgradeDetectorTest, RelaunchWindowPolicy) {
 
   // Set relaunch window from 2:20am to 5:20am.
   SetRelaunchWindowPref(/*hour=*/2, /*minute=*/20, /*duration_mins=*/180);
-  absl::optional<UpgradeDetector::RelaunchWindow> window =
+  std::optional<UpgradeDetector::RelaunchWindow> window =
       upgrade_detector.GetRelaunchWindowPolicyValue();
   ASSERT_TRUE(window);
   EXPECT_EQ(window.value().hour, 2);

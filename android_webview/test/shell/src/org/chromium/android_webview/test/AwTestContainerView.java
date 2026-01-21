@@ -10,7 +10,6 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -21,12 +20,11 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
-
-import androidx.annotation.RequiresApi;
 
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.gfx.AwDrawFnImpl;
@@ -44,7 +42,7 @@ public class AwTestContainerView extends FrameLayout {
     private static Handler sRenderThreadHandler;
 
     private AwContents mAwContents;
-    private AwContents.InternalAccessDelegate mInternalAccessDelegate;
+    private final AwContents.InternalAccessDelegate mInternalAccessDelegate;
 
     private HardwareView mHardwareView;
     private boolean mAttachedContents;
@@ -80,15 +78,14 @@ public class AwTestContainerView extends FrameLayout {
         AwDrawFnImpl.setDrawFnFunctionTable(ContextManager.getDrawFnFunctionTable(useVulkan));
     }
 
-    private class HardwareView extends SurfaceView implements SurfaceHolder.Callback {
+    private static class HardwareView extends SurfaceView implements SurfaceHolder.Callback {
         // Only accessed on UI thread.
         private int mWidth;
         private int mHeight;
         private int mLastScrollX;
         private int mLastScrollY;
         private boolean mHaveSurface;
-        private Runnable mReadyToRenderCallback;
-        private SurfaceView mOverlaysSurfaceView;
+        private final SurfaceView mOverlaysSurfaceView;
 
         // Only accessed on render thread.
         private final ContextManager mContextManager;
@@ -115,19 +112,16 @@ public class AwTestContainerView extends FrameLayout {
         }
 
         public void readbackQuadrantColors(Callback<int[]> callback) {
-            sRenderThreadHandler.post(() -> {
-                callback.onResult(mContextManager.draw(
-                        mWidth, mHeight, mLastScrollX, mLastScrollY, /*readbackQuadrants=*/true));
-            });
-        }
-
-        public boolean isReadyToRender() {
-            return mHaveSurface;
-        }
-
-        public void setReadyToRenderCallback(Runnable runner) {
-            assert !isReadyToRender() || runner == null;
-            mReadyToRenderCallback = runner;
+            sRenderThreadHandler.post(
+                    () -> {
+                        callback.onResult(
+                                mContextManager.draw(
+                                        mWidth,
+                                        mHeight,
+                                        mLastScrollX,
+                                        mLastScrollY,
+                                        /* readbackQuadrants= */ true));
+                    });
         }
 
         public SurfaceView getOverlaysView() {
@@ -141,7 +135,10 @@ public class AwTestContainerView extends FrameLayout {
         public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             if (holder == mOverlaysSurfaceView.getHolder()) {
                 Surface surface = holder.getSurface();
-                sRenderThreadHandler.post(() -> { mContextManager.setOverlaysSurface(surface); });
+                sRenderThreadHandler.post(
+                        () -> {
+                            mContextManager.setOverlaysSurface(surface);
+                        });
                 return;
             }
 
@@ -151,32 +148,31 @@ public class AwTestContainerView extends FrameLayout {
 
             Surface surface = holder.getSurface();
             sRenderThreadHandler.post(
-                    () -> { mContextManager.setSurface(surface, width, height); });
-
-            if (mReadyToRenderCallback != null) {
-                mReadyToRenderCallback.run();
-                mReadyToRenderCallback = null;
-            }
+                    () -> {
+                        mContextManager.setSurface(surface, width, height);
+                    });
         }
 
         @Override
         public void surfaceDestroyed(SurfaceHolder holder) {
             if (holder == mOverlaysSurfaceView.getHolder()) {
                 WaitableEvent event = new WaitableEvent();
-                sRenderThreadHandler.post(() -> {
-                    mContextManager.setOverlaysSurface(null);
-                    event.signal();
-                });
+                sRenderThreadHandler.post(
+                        () -> {
+                            mContextManager.setOverlaysSurface(null);
+                            event.signal();
+                        });
                 event.waitForEvent();
                 return;
             }
 
             mHaveSurface = false;
             WaitableEvent event = new WaitableEvent();
-            sRenderThreadHandler.post(() -> {
-                mContextManager.setSurface(null, 0, 0);
-                event.signal();
-            });
+            sRenderThreadHandler.post(
+                    () -> {
+                        mContextManager.setSurface(null, 0, 0);
+                        event.signal();
+                    });
             event.waitForEvent();
         }
 
@@ -191,21 +187,28 @@ public class AwTestContainerView extends FrameLayout {
             }
 
             WaitableEvent syncEvent = new WaitableEvent();
-            sRenderThreadHandler.post(() -> {
-                drawOnRt(syncEvent, functor, mWidth, mHeight, mLastScrollX, mLastScrollY);
-            });
+            sRenderThreadHandler.post(
+                    () -> {
+                        drawOnRt(syncEvent, functor, mWidth, mHeight, mLastScrollX, mLastScrollY);
+                    });
             syncEvent.waitForEvent();
         }
 
-        private void drawOnRt(WaitableEvent syncEvent, int functor, int width, int height,
-                int scrollX, int scrollY) {
+        private void drawOnRt(
+                WaitableEvent syncEvent,
+                int functor,
+                int width,
+                int height,
+                int scrollX,
+                int scrollY) {
             mContextManager.sync(functor, false);
             syncEvent.signal();
-            mContextManager.draw(width, height, scrollX, scrollY, /*readbackQuadrants=*/false);
+            mContextManager.draw(width, height, scrollX, scrollY, /* readbackQuadrants= */ false);
         }
     }
 
     private static boolean sCreatedOnce;
+
     private HardwareView createHardwareViewOnlyOnce(Context context) {
         if (sCreatedOnce) return null;
         sCreatedOnce = true;
@@ -218,13 +221,16 @@ public class AwTestContainerView extends FrameLayout {
             mHardwareView = createHardwareViewOnlyOnce(context);
         }
         if (isBackedByHardwareView()) {
-            addView(mHardwareView.getOverlaysView(),
-                    new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT));
-            addView(mHardwareView,
+            addView(
+                    mHardwareView.getOverlaysView(),
                     new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT));
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT));
+            addView(
+                    mHardwareView,
+                    new FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT));
         } else {
             setLayerType(LAYER_TYPE_SOFTWARE, null);
         }
@@ -255,9 +261,7 @@ public class AwTestContainerView extends FrameLayout {
         return mHardwareView != null;
     }
 
-    /**
-     * Use glReadPixels to get 4 pixels from center of 4 quadrants. Result is in row-major order.
-     */
+    /** Use glReadPixels to get 4 pixels from center of 4 quadrants. Result is in row-major order. */
     public void readbackQuadrantColors(Callback<int[]> callback) {
         assert isBackedByHardwareView();
         mHardwareView.readbackQuadrantColors(callback);
@@ -271,8 +275,8 @@ public class AwTestContainerView extends FrameLayout {
         return mAwContents;
     }
 
-    public AwContents.NativeDrawFunctorFactory getNativeDrawFunctorFactory() {
-        return new NativeDrawFunctorFactory();
+    public AwDrawFnImpl.DrawFnAccess getDrawFnAccess() {
+        return new DrawFnAccess();
     }
 
     public AwContents.InternalAccessDelegate getInternalAccessDelegate() {
@@ -286,30 +290,26 @@ public class AwTestContainerView extends FrameLayout {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        mAwContents.onConfigurationChanged(newConfig);
+        mAwContents.getViewMethods().onConfigurationChanged(newConfig);
     }
 
     private void attachedContentsInternal() {
         assert !mAttachedContents;
-        mAwContents.onAttachedToWindow();
+        mAwContents.getViewMethods().onAttachedToWindow();
         mAttachedContents = true;
     }
 
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
-        if (mHardwareView == null || mHardwareView.isReadyToRender()) {
-            attachedContentsInternal();
-        } else {
-            mHardwareView.setReadyToRenderCallback(() -> attachedContentsInternal());
-        }
+        attachedContentsInternal();
     }
 
     @Override
     public void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         if (mAttachedContents) {
-            mAwContents.onDetachedFromWindow();
+            mAwContents.getViewMethods().onDetachedFromWindow();
             mAttachedContents = false;
         }
     }
@@ -317,82 +317,89 @@ public class AwTestContainerView extends FrameLayout {
     @Override
     public void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect);
-        mAwContents.onFocusChanged(focused, direction, previouslyFocusedRect);
+        mAwContents.getViewMethods().onFocusChanged(focused, direction, previouslyFocusedRect);
     }
 
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        return mAwContents.onCreateInputConnection(outAttrs);
+        return mAwContents.getViewMethods().onCreateInputConnection(outAttrs);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        return mAwContents.onKeyUp(keyCode, event);
+        return mAwContents.getViewMethods().onKeyUp(keyCode, event);
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        return mAwContents.dispatchKeyEvent(event);
+        return mAwContents.getViewMethods().dispatchKeyEvent(event);
     }
 
     @Override
     public void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-        mAwContents.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        mAwContents.getViewMethods().onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
 
     @Override
     public void onSizeChanged(int w, int h, int ow, int oh) {
         super.onSizeChanged(w, h, ow, oh);
-        mAwContents.onSizeChanged(w, h, ow, oh);
+        mAwContents.getViewMethods().onSizeChanged(w, h, ow, oh);
     }
 
     @Override
     public void onOverScrolled(int scrollX, int scrollY, boolean clampedX, boolean clampedY) {
-        mAwContents.onContainerViewOverScrolled(scrollX, scrollY, clampedX, clampedY);
+        mAwContents
+                .getViewMethods()
+                .onContainerViewOverScrolled(scrollX, scrollY, clampedX, clampedY);
     }
 
     @Override
     public void onScrollChanged(int l, int t, int oldl, int oldt) {
         super.onScrollChanged(l, t, oldl, oldt);
         if (mAwContents != null) {
-            mAwContents.onContainerViewScrollChanged(l, t, oldl, oldt);
+            mAwContents.getViewMethods().onContainerViewScrollChanged(l, t, oldl, oldt);
         }
     }
 
     @Override
     public void computeScroll() {
-        mAwContents.computeScroll();
+        mAwContents.getViewMethods().computeScroll();
     }
 
     @Override
     public void onVisibilityChanged(View changedView, int visibility) {
         super.onVisibilityChanged(changedView, visibility);
-        mAwContents.onVisibilityChanged(changedView, visibility);
+        mAwContents.getViewMethods().onVisibilityChanged(changedView, visibility);
     }
 
     @Override
     public void onWindowVisibilityChanged(int visibility) {
         super.onWindowVisibilityChanged(visibility);
-        mAwContents.onWindowVisibilityChanged(visibility);
+        mAwContents.getViewMethods().onWindowVisibilityChanged(visibility);
+    }
+
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        return mAwContents.onApplyWindowInsets(insets);
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
         super.onTouchEvent(ev);
-        return mAwContents.onTouchEvent(ev);
+        return mAwContents.getViewMethods().onTouchEvent(ev);
     }
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent ev) {
         super.onGenericMotionEvent(ev);
-        return mAwContents.onGenericMotionEvent(ev);
+        return mAwContents.getViewMethods().onGenericMotionEvent(ev);
     }
 
     @Override
     public boolean onHoverEvent(MotionEvent ev) {
         super.onHoverEvent(ev);
-        return mAwContents.onHoverEvent(ev);
+        return mAwContents.getViewMethods().onHoverEvent(ev);
     }
 
     @Override
@@ -400,38 +407,25 @@ public class AwTestContainerView extends FrameLayout {
         if (isBackedByHardwareView()) {
             mHardwareView.updateScroll(getScrollX(), getScrollY());
         }
-        mAwContents.onDraw(canvas);
+        mAwContents.getViewMethods().onDraw(canvas);
         super.onDraw(canvas);
     }
 
     @Override
     public AccessibilityNodeProvider getAccessibilityNodeProvider() {
         AccessibilityNodeProvider provider =
-                mAwContents.getAccessibilityNodeProvider();
+                mAwContents.getViewMethods().getAccessibilityNodeProvider();
         return provider == null ? super.getAccessibilityNodeProvider() : provider;
     }
 
     @Override
     public boolean performAccessibilityAction(int action, Bundle arguments) {
-        return mAwContents.performAccessibilityAction(action, arguments);
+        return mAwContents.getViewMethods().performAccessibilityAction(action, arguments);
     }
 
     @Override
-    @RequiresApi(Build.VERSION_CODES.N)
     public boolean onDragEvent(DragEvent event) {
-        return mAwContents.onDragEvent(event);
-    }
-
-    private class NativeDrawFunctorFactory implements AwContents.NativeDrawFunctorFactory {
-        @Override
-        public AwContents.NativeDrawGLFunctor createGLFunctor(long context) {
-            return null;
-        }
-
-        @Override
-        public AwDrawFnImpl.DrawFnAccess getDrawFnAccess() {
-            return new DrawFnAccess();
-        }
+        return mAwContents.getViewMethods().onDragEvent(event);
     }
 
     private class DrawFnAccess implements AwDrawFnImpl.DrawFnAccess {
@@ -479,14 +473,27 @@ public class AwTestContainerView extends FrameLayout {
         }
 
         @Override
-        public void overScrollBy(int deltaX, int deltaY,
-                int scrollX, int scrollY,
-                int scrollRangeX, int scrollRangeY,
-                int maxOverScrollX, int maxOverScrollY,
+        public void overScrollBy(
+                int deltaX,
+                int deltaY,
+                int scrollX,
+                int scrollY,
+                int scrollRangeX,
+                int scrollRangeY,
+                int maxOverScrollX,
+                int maxOverScrollY,
                 boolean isTouchEvent) {
             // We're intentionally not calling super.scrollTo here to make testing easier.
-            AwTestContainerView.this.overScrollBy(deltaX, deltaY, scrollX, scrollY,
-                     scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, isTouchEvent);
+            AwTestContainerView.this.overScrollBy(
+                    deltaX,
+                    deltaY,
+                    scrollX,
+                    scrollY,
+                    scrollRangeX,
+                    scrollRangeY,
+                    maxOverScrollX,
+                    maxOverScrollY,
+                    isTouchEvent);
         }
 
         @Override

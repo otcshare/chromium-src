@@ -6,23 +6,11 @@
 '''Implements Chrome-Fuchsia package binary size differ.'''
 
 import argparse
-import collections
-import copy
 import json
-import logging
-import math
 import os
-import re
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
 import traceback
-import uuid
 
-from common import GetHostToolPathFromPlatform, GetHostArchFromPlatform
-from common import SDK_ROOT, DIR_SOURCE_ROOT
 from binary_sizes import ReadPackageSizesJson
 from binary_sizes import PACKAGES_SIZES_FILE
 
@@ -31,8 +19,9 @@ from binary_sizes import PACKAGES_SIZES_FILE
 # First-warning will fail the test if the uncompressed and compressed size
 # grow, while always-fail will fail the test regardless of uncompressed growth
 # (solely based on compressed growth).
-_FIRST_WARNING_DELTA_BYTES = 12 * 1024  # 12 KiB
-_ALWAYS_FAIL_DELTA_BYTES = 100 * 1024  # 100 KiB
+_FIRST_WARNING_COMPRESSED_DELTA_BYTES = 32 * 1024
+_FIRST_WARNING_UNCOMPRESSED_DELTA_BYTES = 16 * 1024
+_ALWAYS_FAIL_DELTA_BYTES = 128 * 1024
 _TRYBOT_DOC = 'https://chromium.googlesource.com/chromium/src/+/main/docs/speed/binary_size/fuchsia_binary_size_trybot.md'
 
 SIZE_FAILURE = 1
@@ -60,8 +49,10 @@ def ComputePackageDiffs(before_sizes_file, after_sizes_file, author=None):
         after_sizes[package_name].uncompressed -
         before_sizes[package_name].uncompressed)
     # Developers are only responsible if uncompressed increases.
-    if ((growth['compressed'][package_name] >= _FIRST_WARNING_DELTA_BYTES
-         and growth['uncompressed'][package_name] > 0)
+    if ((growth['compressed'][package_name]
+         >= _FIRST_WARNING_COMPRESSED_DELTA_BYTES
+         and growth['uncompressed'][package_name]
+         >= _FIRST_WARNING_UNCOMPRESSED_DELTA_BYTES)
         # However, if compressed growth is unusually large, fail always.
         or growth['compressed'][package_name] >= _ALWAYS_FAIL_DELTA_BYTES):
       if not summary:
@@ -72,6 +63,8 @@ def ComputePackageDiffs(before_sizes_file, after_sizes_file, author=None):
                    ' {} bytes).<br>').format(
                        package_name, growth['compressed'][package_name],
                        growth['uncompressed'][package_name]))
+      summary += ('Note that this bot compares growth against trunk, and is '
+                  'not aware of CL chaining.<br>')
 
   # Allow rollers to pass even with size increases. See crbug.com/1355914.
   if author and '-autoroll' in author and status_code == SIZE_FAILURE:
@@ -85,7 +78,7 @@ def ComputePackageDiffs(before_sizes_file, after_sizes_file, author=None):
               ' this trybot:<br>{}'.format(_TRYBOT_DOC))
   growth['summary'] = summary
 
-  # TODO(crbug.com/1266085): Investigate using these fields.
+  # TODO(crbug.com/40801868): Investigate using these fields.
   growth['archive_filenames'] = []
   growth['links'] = []
   return growth

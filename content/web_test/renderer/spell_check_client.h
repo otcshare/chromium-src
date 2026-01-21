@@ -7,10 +7,12 @@
 
 #include <stdint.h>
 
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/web_test/renderer/web_test_spell_checker.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
 #include "v8/include/v8.h"
 
@@ -46,9 +48,13 @@ class SpellCheckClient : public blink::WebTextCheckClient {
       const blink::WebString& text,
       size_t& offset,
       size_t& length,
-      blink::WebVector<blink::WebString>* optional_suggestions) override;
+      std::vector<blink::WebString>* optional_suggestions) override;
   void RequestCheckingOfText(
       const blink::WebString& text,
+      const std::vector<blink::WebTextCheckClient::WebSpellingMarker>&
+          spelling_markers,
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
+          should_force_refresh,
       std::unique_ptr<blink::WebTextCheckingCompletion> completion) override;
 
  private:
@@ -56,7 +62,7 @@ class SpellCheckClient : public blink::WebTextCheckClient {
 
   void RequestResolved();
 
-  blink::WebLocalFrame* const frame_;
+  const raw_ptr<blink::WebLocalFrame> frame_;
 
   // Do not perform any checking when |enabled_ == false|.
   // Tests related to spell checking should enable it manually.

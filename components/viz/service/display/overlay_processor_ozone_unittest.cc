@@ -8,10 +8,9 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/viz/common/features.h"
 #include "components/viz/test/test_context_provider.h"
-#include "gpu/command_buffer/client/shared_image_interface.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/linux/native_pixmap_dmabuf.h"
@@ -58,7 +57,7 @@ class FakeOverlayCandidatesOzone : public ui::OverlayCandidatesOzone {
 
 class FakeNativePixmap : public gfx::NativePixmap {
  public:
-  FakeNativePixmap(gfx::Size size, gfx::BufferFormat format)
+  FakeNativePixmap(gfx::Size size, SharedImageFormat format)
       : size_(size), format_(format) {}
   bool AreDmaBufFdsValid() const override { return false; }
   int GetDmaBufFd(size_t plane) const override { return -1; }
@@ -66,7 +65,7 @@ class FakeNativePixmap : public gfx::NativePixmap {
   size_t GetDmaBufOffset(size_t plane) const override { return 0; }
   size_t GetDmaBufPlaneSize(size_t plane) const override { return 0; }
   uint64_t GetBufferFormatModifier() const override { return 0; }
-  gfx::BufferFormat GetBufferFormat() const override { return format_; }
+  SharedImageFormat GetSharedImageFormat() const override { return format_; }
   size_t GetNumberOfPlanes() const override { return 0; }
   bool SupportsZeroCopyWebGPUImport() const override { return false; }
   gfx::Size GetBufferSize() const override { return size_; }
@@ -78,17 +77,17 @@ class FakeNativePixmap : public gfx::NativePixmap {
       std::vector<gfx::GpuFence> release_fences) override {
     return false;
   }
-  gfx::NativePixmapHandle ExportHandle() override {
+  gfx::NativePixmapHandle ExportHandle() const override {
     return gfx::NativePixmapHandle();
   }
 
  private:
   ~FakeNativePixmap() override = default;
   gfx::Size size_;
-  gfx::BufferFormat format_;
+  SharedImageFormat format_;
 };
 
-class MockSharedImageInterface : public TestSharedImageInterface {
+class MockPixmapProvider : public OverlayProcessorOzone::PixmapProvider {
  public:
   MOCK_METHOD1(GetNativePixmap,
                scoped_refptr<gfx::NativePixmap>(const gpu::Mailbox& mailbox));
@@ -96,43 +95,43 @@ class MockSharedImageInterface : public TestSharedImageInterface {
 
 }  // namespace
 
-// TODO(crbug.com/1138568): Fuchsia claims support for presenting primary
+// TODO(crbug.com/40153057): Fuchsia claims support for presenting primary
 // plane as overlay, but does not provide a mailbox. Handle this case.
 #if !BUILDFLAG(IS_FUCHSIA)
 TEST(OverlayProcessorOzoneTest, PrimaryPlaneSizeAndFormatMatches) {
   // Set up the primary plane.
   gfx::Size size(128, 128);
-  OverlayProcessorInterface::OutputSurfaceOverlayPlane primary_plane;
-  primary_plane.resource_size = size;
-  primary_plane.format = gfx::BufferFormat::BGRA_8888;
-  primary_plane.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  OverlayCandidate primary_plane;
+  primary_plane.resource_size_in_pixels = size;
+  primary_plane.format = SinglePlaneFormat::kBGRA_8888;
+  primary_plane.mailbox = gpu::Mailbox::Generate();
 
   // Set up a dummy OverlayCandidate.
   OverlayCandidate candidate;
   candidate.resource_size_in_pixels = size;
-  candidate.format = gfx::BufferFormat::BGRA_8888;
-  candidate.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  candidate.format = SinglePlaneFormat::kBGRA_8888;
+  candidate.mailbox = gpu::Mailbox::Generate();
   candidate.overlay_handled = false;
   OverlayCandidateList candidates;
   candidates.push_back(candidate);
 
-  // Initialize a MockSharedImageInterface that returns a NativePixmap with
+  // Initialize a MockPixmapProvider that returns a NativePixmap with
   // matching params to the primary plane.
-  std::unique_ptr<MockSharedImageInterface> sii =
-      std::make_unique<MockSharedImageInterface>();
+  auto pixmap_provider = std::make_unique<MockPixmapProvider>();
   scoped_refptr<gfx::NativePixmap> primary_plane_pixmap =
       base::MakeRefCounted<FakeNativePixmap>(size,
-                                             gfx::BufferFormat::BGRA_8888);
+                                             SinglePlaneFormat::kBGRA_8888);
   scoped_refptr<gfx::NativePixmap> candidate_pixmap =
       base::MakeRefCounted<FakeNativePixmap>(size,
-                                             gfx::BufferFormat::BGRA_8888);
-  EXPECT_CALL(*sii, GetNativePixmap(_))
+                                             SinglePlaneFormat::kBGRA_8888);
+  EXPECT_CALL(*pixmap_provider, GetNativePixmap(_))
       .WillOnce(Return(primary_plane_pixmap))
       .WillOnce(Return(candidate_pixmap));
   OverlayProcessorOzone processor(
-      std::make_unique<FakeOverlayCandidatesOzone>(), {}, sii.get());
+      std::make_unique<FakeOverlayCandidatesOzone>(), {},
+      std::move(pixmap_provider));
 
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
+  processor.CheckOverlaySupport(primary_plane, &candidates);
 
   // Since the |OutputSurfaceOverlayPlane|'s size and format match those of
   // primary plane's NativePixmap, the overlay candidate is promoted.
@@ -142,31 +141,32 @@ TEST(OverlayProcessorOzoneTest, PrimaryPlaneSizeAndFormatMatches) {
 TEST(OverlayProcessorOzoneTest, PrimaryPlaneFormatMismatch) {
   // Set up the primary plane.
   gfx::Size size(128, 128);
-  OverlayProcessorInterface::OutputSurfaceOverlayPlane primary_plane;
-  primary_plane.resource_size = size;
-  primary_plane.format = gfx::BufferFormat::BGRA_8888;
-  primary_plane.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  OverlayCandidate primary_plane;
+  primary_plane.resource_size_in_pixels = size;
+  primary_plane.format = SinglePlaneFormat::kBGRA_8888;
+  primary_plane.mailbox = gpu::Mailbox::Generate();
 
   // Set up a dummy OverlayCandidate.
   OverlayCandidate candidate;
   candidate.resource_size_in_pixels = size;
-  candidate.format = gfx::BufferFormat::BGRA_8888;
-  candidate.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  candidate.format = SinglePlaneFormat::kBGRA_8888;
+  candidate.mailbox = gpu::Mailbox::Generate();
   candidate.overlay_handled = false;
   OverlayCandidateList candidates;
   candidates.push_back(candidate);
 
-  // Initialize a MockSharedImageInterface that returns a NativePixmap with
+  // Initialize a MockPixmapProvider that returns a NativePixmap with
   // a different buffer format than that of the primary plane.
-  std::unique_ptr<MockSharedImageInterface> sii =
-      std::make_unique<MockSharedImageInterface>();
+  auto pixmap_provider = std::make_unique<MockPixmapProvider>();
   scoped_refptr<gfx::NativePixmap> primary_plane_pixmap =
-      base::MakeRefCounted<FakeNativePixmap>(size, gfx::BufferFormat::R_8);
-  EXPECT_CALL(*sii, GetNativePixmap(_)).WillOnce(Return(primary_plane_pixmap));
+      base::MakeRefCounted<FakeNativePixmap>(size, SinglePlaneFormat::kR_8);
+  EXPECT_CALL(*pixmap_provider, GetNativePixmap(_))
+      .WillOnce(Return(primary_plane_pixmap));
   OverlayProcessorOzone processor(
-      std::make_unique<FakeOverlayCandidatesOzone>(), {}, sii.get());
+      std::make_unique<FakeOverlayCandidatesOzone>(), {},
+      std::move(pixmap_provider));
 
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
+  processor.CheckOverlaySupport(primary_plane, &candidates);
 
   // Since the |OutputSurfaceOverlayPlane|'s format doesn't match that of the
   // primary plane's NativePixmap, the overlay candidate is NOT promoted.
@@ -176,56 +176,54 @@ TEST(OverlayProcessorOzoneTest, PrimaryPlaneFormatMismatch) {
 TEST(OverlayProcessorOzoneTest, ColorSpaceMismatch) {
   // Set up the primary plane.
   gfx::Size size(128, 128);
-  OverlayProcessorInterface::OutputSurfaceOverlayPlane primary_plane;
-  primary_plane.resource_size = size;
-  primary_plane.format = gfx::BufferFormat::BGRA_8888;
-  primary_plane.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  OverlayCandidate primary_plane;
+  primary_plane.resource_size_in_pixels = size;
+  primary_plane.format = SinglePlaneFormat::kBGRA_8888;
+  primary_plane.mailbox = gpu::Mailbox::Generate();
 
   // Set up a dummy OverlayCandidate.
   OverlayCandidate candidate;
   candidate.resource_size_in_pixels = size;
-  candidate.format = gfx::BufferFormat::BGRA_8888;
-  candidate.mailbox = gpu::Mailbox::GenerateForSharedImage();
+  candidate.format = SinglePlaneFormat::kBGRA_8888;
+  candidate.mailbox = gpu::Mailbox::Generate();
   candidate.overlay_handled = false;
   OverlayCandidateList candidates;
   candidates.push_back(candidate);
 
-  // Initialize a MockSharedImageInterface that returns a NativePixmap with
+  // Initialize a MockPixmapProvider that returns a NativePixmap with
   // matching params to the primary plane.
-  std::unique_ptr<MockSharedImageInterface> sii =
-      std::make_unique<::testing::NiceMock<MockSharedImageInterface>>();
+  auto pixmap_provider = std::make_unique<MockPixmapProvider>();
   scoped_refptr<gfx::NativePixmap> primary_plane_pixmap =
       base::MakeRefCounted<FakeNativePixmap>(size,
-                                             gfx::BufferFormat::BGRA_8888);
+                                             SinglePlaneFormat::kBGRA_8888);
   scoped_refptr<gfx::NativePixmap> candidate_pixmap =
       base::MakeRefCounted<FakeNativePixmap>(size,
-                                             gfx::BufferFormat::BGRA_8888);
-  ON_CALL(*sii, GetNativePixmap(primary_plane.mailbox))
+                                             SinglePlaneFormat::kBGRA_8888);
+  ON_CALL(*pixmap_provider, GetNativePixmap(primary_plane.mailbox))
       .WillByDefault(Return(primary_plane_pixmap));
-  ON_CALL(*sii, GetNativePixmap(candidate.mailbox))
+  ON_CALL(*pixmap_provider, GetNativePixmap(candidate.mailbox))
       .WillByDefault(Return(candidate_pixmap));
   OverlayProcessorOzone processor(
-      std::make_unique<FakeOverlayCandidatesOzone>(), {}, sii.get());
+      std::make_unique<FakeOverlayCandidatesOzone>(), {},
+      std::move(pixmap_provider));
 
   // In Chrome OS, we don't allow the promotion of the candidate if the
   // ContentColorUsage is different from the primary plane (e.g., SDR vs. HDR).
   // In other platforms, this is not a restriction.
   primary_plane.color_space = gfx::ColorSpace::CreateSRGB();
   candidates[0].color_space = gfx::ColorSpace::CreateHDR10();
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  processor.CheckOverlaySupport(primary_plane, &candidates);
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_FALSE(candidates.at(0).overlay_handled);
 #else
   EXPECT_TRUE(candidates.at(0).overlay_handled);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   candidates[0] = candidate;
 
-  // We do allow color space mismatches as long as the ContentColorUsage is the
-  // same as the primary plane's (and this applies to all platforms).
   primary_plane.color_space = gfx::ColorSpace::CreateHDR10();
   candidates[0].color_space = gfx::ColorSpace::CreateHLG();
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
+  processor.CheckOverlaySupport(primary_plane, &candidates);
   EXPECT_TRUE(candidates.at(0).overlay_handled);
 
   candidates[0] = candidate;
@@ -235,7 +233,7 @@ TEST(OverlayProcessorOzoneTest, ColorSpaceMismatch) {
   primary_plane.color_space = gfx::ColorSpace::CreateSRGB();
   candidates[0].color_space = gfx::ColorSpace::CreateHDR10();
   candidates[0].requires_overlay = true;
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
+  processor.CheckOverlaySupport(primary_plane, &candidates);
   EXPECT_TRUE(candidates.at(0).overlay_handled);
 
   candidates[0] = candidate;
@@ -245,7 +243,7 @@ TEST(OverlayProcessorOzoneTest, ColorSpaceMismatch) {
   primary_plane.color_space = gfx::ColorSpace::CreateHDR10();
   candidates[0].color_space = gfx::ColorSpace();
   EXPECT_FALSE(candidates[0].color_space.IsValid());
-  processor.CheckOverlaySupport(&primary_plane, &candidates);
+  processor.CheckOverlaySupport(primary_plane, &candidates);
   EXPECT_TRUE(candidates.at(0).overlay_handled);
 }
 
@@ -264,15 +262,9 @@ TEST(OverlayProcessorOzoneTest, ObserveHardwareCapabilites) {
   OverlayCandidateList candidates;
   // Enable 4 overlays
   const std::vector<base::test::FeatureRefAndParams> feature_and_params_list = {
-      {features::kEnableOverlayPrioritization, {}},
       {features::kUseMultipleOverlays, {{features::kMaxOverlaysParam, "4"}}}};
   base::test::ScopedFeatureList scoped_features;
   scoped_features.InitWithFeaturesAndParameters(feature_and_params_list, {});
-  // When overlay prioritization is explicitly disabled (Lacros) we should
-  // skip multiple overlays tests.
-  if (!features::IsOverlayPrioritizationEnabled()) {
-    GTEST_SKIP();
-  }
 
   auto fake_candidates_unique = std::make_unique<FakeOverlayCandidatesOzone>();
   auto* fake_candidates = fake_candidates_unique.get();
@@ -282,7 +274,7 @@ TEST(OverlayProcessorOzoneTest, ObserveHardwareCapabilites) {
   // No receive_callback yet.
   EXPECT_TRUE(fake_candidates->receive_callback().is_null());
 
-  processor.CheckOverlaySupport(nullptr, &candidates);
+  processor.CheckOverlaySupport(std::nullopt, &candidates);
 
   // Receive callback is set.
   EXPECT_FALSE(fake_candidates->receive_callback().is_null());

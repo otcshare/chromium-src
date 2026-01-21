@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/chromevox/touch_exploration_controller.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_controller_impl.h"
 #include "ash/constants/ash_switches.h"
@@ -30,7 +30,7 @@ namespace ash {
 
 namespace {
 
-AccessibilityControllerImpl* GetA11yController() {
+AccessibilityController* GetA11yController() {
   return Shell::Get()->accessibility_controller();
 }
 
@@ -142,26 +142,10 @@ void TouchExplorationManager::OnDisplayMetricsChanged(
     const display::Display& display,
     uint32_t changed_metrics) {
   const display::Display this_display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
+      display::Screen::Get()->GetDisplayNearestWindow(
           root_window_controller_->GetRootWindow());
   if (this_display.id() == display.id())
     UpdateTouchExplorationState();
-}
-
-void TouchExplorationManager::OnTwoFingerTouchStart() {
-  GetA11yController()->OnTwoFingerTouchStart();
-}
-
-void TouchExplorationManager::OnTwoFingerTouchStop() {
-  // Can be null during shutdown.
-  if (AccessibilityControllerImpl* controller = GetA11yController())
-    controller->OnTwoFingerTouchStop();
-}
-
-void TouchExplorationManager::PlaySpokenFeedbackToggleCountdown(
-    int tick_count) {
-  if (GetA11yController()->ShouldToggleSpokenFeedbackViaTouch())
-    GetA11yController()->PlaySpokenFeedbackToggleCountdown(tick_count);
 }
 
 void TouchExplorationManager::PlayTouchTypeEarcon() {
@@ -235,7 +219,7 @@ void TouchExplorationManager::UpdateTouchExplorationState() {
     }
     if (pass_through_surface) {
       const display::Display display =
-          display::Screen::GetScreen()->GetDisplayNearestWindow(
+          display::Screen::Get()->GetDisplayNearestWindow(
               root_window_controller_->GetRootWindow());
       const gfx::Rect work_area = display.work_area();
       touch_exploration_controller_->SetExcludeBounds(work_area);

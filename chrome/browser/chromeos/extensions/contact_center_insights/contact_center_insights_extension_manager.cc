@@ -6,14 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/no_destructor.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/enterprise/util/affiliation.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/browser_resources.h"
@@ -24,54 +21,6 @@
 using ::extensions::ComponentLoader;
 
 namespace chromeos {
-namespace {
-
-class ContactCenterInsightsExtensionManagerFactory
-    : public ProfileKeyedServiceFactory {
- public:
-  ContactCenterInsightsExtensionManagerFactory();
-  ContactCenterInsightsExtensionManagerFactory(
-      const ContactCenterInsightsExtensionManagerFactory&) = delete;
-  ContactCenterInsightsExtensionManagerFactory& operator=(
-      const ContactCenterInsightsExtensionManagerFactory&) = delete;
-  ~ContactCenterInsightsExtensionManagerFactory() override;
-
-  // Returns an instance of `ContactCenterInsightsExtensionManager` for the
-  // given profile.
-  ContactCenterInsightsExtensionManager* GetForProfile(Profile* profile);
-
- private:
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* context) const override;
-};
-
-ContactCenterInsightsExtensionManagerFactory::
-    ContactCenterInsightsExtensionManagerFactory()
-    : ProfileKeyedServiceFactory("ContactCenterInsightsExtensionManager") {}
-
-ContactCenterInsightsExtensionManagerFactory::
-    ~ContactCenterInsightsExtensionManagerFactory() = default;
-
-ContactCenterInsightsExtensionManager*
-ContactCenterInsightsExtensionManagerFactory::GetForProfile(Profile* profile) {
-  DCHECK(profile);
-  return static_cast<ContactCenterInsightsExtensionManager*>(
-      GetServiceForBrowserContext(profile, true));
-}
-
-KeyedService*
-ContactCenterInsightsExtensionManagerFactory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
-  auto* const profile = Profile::FromBrowserContext(context);
-  auto* const component_loader = ::extensions::ExtensionSystem::Get(profile)
-                                     ->extension_service()
-                                     ->component_loader();
-  return new ContactCenterInsightsExtensionManager(
-      component_loader, profile,
-      std::make_unique<ContactCenterInsightsExtensionManager::Delegate>());
-}
-
-}  // namespace
 
 void ContactCenterInsightsExtensionManager::Delegate::InstallExtension(
     ComponentLoader* component_loader) {
@@ -87,21 +36,13 @@ void ContactCenterInsightsExtensionManager::Delegate::UninstallExtension(
 
 bool ContactCenterInsightsExtensionManager::Delegate::IsProfileAffiliated(
     Profile* profile) const {
-  return ::chrome::enterprise_util::IsProfileAffiliated(profile);
+  return ::enterprise_util::IsProfileAffiliated(profile);
 }
 
 bool ContactCenterInsightsExtensionManager::Delegate::IsExtensionInstalled(
     ComponentLoader* component_loader) const {
   return component_loader->Exists(
       extension_misc::kContactCenterInsightsExtensionId);
-}
-
-// static
-ContactCenterInsightsExtensionManager*
-ContactCenterInsightsExtensionManager::GetForProfile(Profile* profile) {
-  return static_cast<ContactCenterInsightsExtensionManagerFactory*>(
-             GetFactory())
-      ->GetForProfile(profile);
 }
 
 ContactCenterInsightsExtensionManager::ContactCenterInsightsExtensionManager(
@@ -116,14 +57,6 @@ ContactCenterInsightsExtensionManager::ContactCenterInsightsExtensionManager(
 
 ContactCenterInsightsExtensionManager::
     ~ContactCenterInsightsExtensionManager() = default;
-
-// static
-BrowserContextKeyedServiceFactory*
-ContactCenterInsightsExtensionManager::GetFactory() {
-  static base::NoDestructor<ContactCenterInsightsExtensionManagerFactory>
-      g_factory;
-  return g_factory.get();
-}
 
 void ContactCenterInsightsExtensionManager::Init() {
   if (CanInstallExtension()) {

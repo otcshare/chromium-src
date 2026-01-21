@@ -9,6 +9,7 @@
 #include "base/i18n/streaming_utf8_validator.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/utf8_validator_tables.h"
 
 namespace base {
@@ -16,25 +17,26 @@ namespace {
 
 uint8_t StateTableLookup(uint8_t offset) {
   DCHECK_LT(offset, internal::kUtf8ValidatorTablesSize);
-  return internal::kUtf8ValidatorTables[offset];
+  return UNSAFE_TODO(internal::kUtf8ValidatorTables[offset]);
 }
 
 }  // namespace
 
-StreamingUtf8Validator::State StreamingUtf8Validator::AddBytes(const char* data,
-                                                               size_t size) {
+StreamingUtf8Validator::State StreamingUtf8Validator::AddBytes(
+    base::span<const uint8_t> data) {
   // Copy |state_| into a local variable so that the compiler doesn't have to be
   // careful of aliasing.
   uint8_t state = state_;
-  for (const char* p = data; p != data + size; ++p) {
-    if ((*p & 0x80) == 0) {
-      if (state == 0)
+  for (const uint8_t ch : data) {
+    if ((ch & 0x80) == 0) {
+      if (state == 0) {
         continue;
+      }
       state = internal::I18N_UTF8_VALIDATOR_INVALID_INDEX;
       break;
     }
     const uint8_t shift_amount = StateTableLookup(state);
-    const uint8_t shifted_char = (*p & 0x7F) >> shift_amount;
+    const uint8_t shifted_char = (ch & 0x7F) >> shift_amount;
     state = StateTableLookup(state + shifted_char + 1);
     // State may be INVALID here, but this code is optimised for the case of
     // valid UTF-8 and it is more efficient (by about 2%) to not attempt an
@@ -42,9 +44,9 @@ StreamingUtf8Validator::State StreamingUtf8Validator::AddBytes(const char* data,
   }
   state_ = state;
   return state == 0 ? VALID_ENDPOINT
-      : state == internal::I18N_UTF8_VALIDATOR_INVALID_INDEX
-      ? INVALID
-      : VALID_MIDPOINT;
+         : state == internal::I18N_UTF8_VALIDATOR_INVALID_INDEX
+             ? INVALID
+             : VALID_MIDPOINT;
 }
 
 void StreamingUtf8Validator::Reset() {
@@ -52,7 +54,7 @@ void StreamingUtf8Validator::Reset() {
 }
 
 bool StreamingUtf8Validator::Validate(const std::string& string) {
-  return StreamingUtf8Validator().AddBytes(string.data(), string.size()) ==
+  return StreamingUtf8Validator().AddBytes(base::as_byte_span(string)) ==
          VALID_ENDPOINT;
 }
 

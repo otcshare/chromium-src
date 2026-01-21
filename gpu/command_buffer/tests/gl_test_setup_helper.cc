@@ -54,7 +54,9 @@ void GLTestSetupHelper::OnTestEnd(const testing::TestInfo& test_info) {
   // crashes.
   viz::TestGpuServiceHolder::ResetInstance();
   gl::init::ShutdownGL(display_, /*due_to_fallback=*/false);
+  display_ = nullptr;
   task_environment_ = nullptr;
+  ::gles2::Terminate();
 }
 
 }  // namespace gpu

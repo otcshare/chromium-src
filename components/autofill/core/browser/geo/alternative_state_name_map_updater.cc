@@ -4,58 +4,67 @@
 
 #include "components/autofill/core/browser/geo/alternative_state_name_map_updater.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map_constants.h"
 #include "components/autofill/core/browser/geo/country_data.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
+#include "components/autofill/core/browser/proto/states.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_l10n_util.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/prefs/pref_service.h"
-
+#include "third_party/zlib/google/compression_utils.h"
+#include "ui/base/resource/resource_bundle.h"
 namespace autofill {
+
+int32_t FindResourceIdForCountry(std::string_view country_code) {
+  size_t cursor = 0;
+  while (true) {
+    auto ret = kCountriesWithAlternativeStateNames.find(country_code, cursor);
+    if (ret == std::string_view::npos) {
+      return -1;  // Not found
+    }
+    if ((ret & 1) == 0) {
+      // Found at an even index. This is an intended match.
+      return IDR_STATE_NAME_MAP_BEGIN + 1 + static_cast<int32_t>(ret / 2);
+    }
+    cursor = ret + 1;
+  }
+}
 
 namespace {
 
-// Returns data read from the file specified in |file|.
-std::string LoadDataFromFile(const base::FilePath& file) {
-  DCHECK(!file.empty());
-
-  std::string data;
-  if (!base::PathExists(file)) {
-    VLOG(1) << "File does not exist: " << file;
-    return std::string();
+std::string ExtractAlternativeStateNames(const std::string& country_code) {
+  int32_t resource_key = FindResourceIdForCountry(country_code);
+  if (resource_key != -1) {
+    return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+        resource_key);
   }
-
-  if (!base::ReadFileToString(file, &data)) {
-    VLOG(1) << "Failed reading from file: " << file;
-    return std::string();
-  }
-
-  return data;
+  return std::string();
 }
 
 }  // namespace
 
 AlternativeStateNameMapUpdater::AlternativeStateNameMapUpdater(
-    PrefService* local_state,
-    PersonalDataManager* personal_data_manager)
-    : personal_data_manager_(personal_data_manager),
-      local_state_(local_state) {}
+    AddressDataManager* address_data_manager)
+    : address_data_manager_(address_data_manager) {
+  adm_observer_.Observe(address_data_manager_);
+}
 
 AlternativeStateNameMapUpdater::~AlternativeStateNameMapUpdater() = default;
 
@@ -68,7 +77,7 @@ bool AlternativeStateNameMapUpdater::ContainsState(
   l10n::CaseInsensitiveCompare compare;
 
   // Returns true if |str1| is same as |str2| in a case-insensitive comparison.
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       stripped_alternative_state_names,
       [&](const AlternativeStateNameMap::StateName& text) {
         return compare.StringsEqual(text.value(),
@@ -76,35 +85,31 @@ bool AlternativeStateNameMapUpdater::ContainsState(
       });
 }
 
-void AlternativeStateNameMapUpdater::OnPersonalDataFinishedProfileTasks() {
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillUseAlternativeStateNameMap)) {
-    PopulateAlternativeStateNameMap();
-  }
+void AlternativeStateNameMapUpdater::OnAddressDataChanged() {
+  PopulateAlternativeStateNameMap();
 }
 
 void AlternativeStateNameMapUpdater::PopulateAlternativeStateNameMap(
     base::OnceClosure callback) {
-  DCHECK(personal_data_manager_);
-  std::vector<AutofillProfile*> profiles =
-      personal_data_manager_->GetProfiles();
+  DCHECK(address_data_manager_);
+  std::vector<const AutofillProfile*> profiles =
+      address_data_manager_->GetProfiles();
 
   CountryToStateNamesListMapping country_to_state_names_map;
-  for (AutofillProfile* profile : profiles) {
-    const AutofillType country_code_type(HtmlFieldType::kCountryCode,
-                                         HtmlFieldMode::kNone);
+  for (const AutofillProfile* profile : profiles) {
     const AlternativeStateNameMap::CountryCode country(
         base::UTF16ToUTF8(profile->GetInfo(
-            country_code_type, personal_data_manager_->app_locale())));
+            AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
+            address_data_manager_->app_locale())));
 
-    const AlternativeStateNameMap::StateName state_name(
-        profile->GetInfo(AutofillType(ADDRESS_HOME_STATE),
-                         personal_data_manager_->app_locale()));
+    const AlternativeStateNameMap::StateName state_name(profile->GetInfo(
+        ADDRESS_HOME_STATE, address_data_manager_->app_locale()));
     const AlternativeStateNameMap::StateName normalized_state =
         AlternativeStateNameMap::NormalizeStateName(state_name);
 
-    if (country.value().empty() || normalized_state.value().empty())
+    if (country.value().empty() || normalized_state.value().empty()) {
       continue;
+    }
 
     if (parsed_state_values_.find({country, normalized_state}) !=
         parsed_state_values_.end()) {
@@ -115,40 +120,27 @@ void AlternativeStateNameMapUpdater::PopulateAlternativeStateNameMap(
     parsed_state_values_.insert({country, normalized_state});
   }
 
-  LoadStatesData(std::move(country_to_state_names_map), local_state_,
-                 std::move(callback));
+  LoadStatesData(std::move(country_to_state_names_map), std::move(callback));
 }
 
 void AlternativeStateNameMapUpdater::LoadStatesData(
     CountryToStateNamesListMapping country_to_state_names_map,
-    PrefService* pref_service,
     base::OnceClosure done_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  // Would be null in the case of tests.
-  if (!pref_service) {
-    return;
-  }
-
-  // Get the states data installation path from |pref_service| which is set by
-  // the component updater once it downloads the states data and should be safe
-  // to use.
-  const base::FilePath data_download_path =
-      pref_service->GetFilePath(prefs::kAutofillStatesDataDir);
 
   const std::vector<std::string>& country_codes =
       CountryDataMap::GetInstance()->country_codes();
 
   // Remove all invalid country names.
-  base::EraseIf(country_to_state_names_map,
+  std::erase_if(country_to_state_names_map,
                 [&country_codes](
                     const CountryToStateNamesListMapping::value_type& entry) {
-                  return !base::Contains(country_codes, entry.first.value());
+                  return !std::ranges::contains(country_codes,
+                                                entry.first.value());
                 });
 
-  // If the installed directory path is empty, it means that the component is
-  // not ready for use yet.
-  if (data_download_path.empty() || country_to_state_names_map.empty()) {
+  // If there is no valid country to be processed, return early.
+  if (country_to_state_names_map.empty()) {
     is_alternative_state_name_map_populated_ = true;
     std::move(done_callback).Run();
     return;
@@ -161,8 +153,9 @@ void AlternativeStateNameMapUpdater::LoadStatesData(
   for (const auto& [country_code, states] : country_to_state_names_map) {
     // This is a security check to ensure that we only attempt to read files
     // that match to known countries.
-    if (!base::Contains(country_codes, country_code.value()))
+    if (!std::ranges::contains(country_codes, country_code.value())) {
       continue;
+    }
 
     ++number_pending_init_tasks_;
 
@@ -170,8 +163,7 @@ void AlternativeStateNameMapUpdater::LoadStatesData(
     // Example -> File "DE" contains the geographical states data of Germany.
     GetTaskRunner()->PostTaskAndReplyWithResult(
         FROM_HERE,
-        base::BindOnce(&LoadDataFromFile,
-                       data_download_path.AppendASCII(country_code.value())),
+        base::BindOnce(&ExtractAlternativeStateNames, country_code.value()),
         base::BindOnce(
             &AlternativeStateNameMapUpdater::ProcessLoadedStateFileContent,
             weak_ptr_factory_.GetWeakPtr(), states));
@@ -213,15 +205,15 @@ void AlternativeStateNameMapUpdater::ProcessLoadedStateFileContent(
       // abbreviations) in |state_names|.
       const std::vector<AlternativeStateNameMap::StateName> state_names =
           ExtractAllStateNames(state_entry);
-
       // Canonical name is always the first entry in the |state_names|.
       DCHECK(!state_names.empty());
       AlternativeStateNameMap::CanonicalStateName
           normalized_canonical_state_name(state_names[0].value());
 
-      for (size_t i = 0; i < stripped_state_values_from_profiles.size(); i++) {
-        if (match_found[i])
+      for (size_t i = 0; i < stripped_state_values_from_profiles.size(); ++i) {
+        if (match_found[i]) {
           continue;
+        }
 
         // If |stripped_state_values_from_profile[i]| is in the set of names of
         // the state under consideration, add it to the AlternativeStateNameMap.
@@ -240,8 +232,9 @@ void AlternativeStateNameMapUpdater::ProcessLoadedStateFileContent(
   // callbacks.
   if (number_pending_init_tasks_ == 0) {
     is_alternative_state_name_map_populated_ = true;
-    for (auto& callback : std::exchange(pending_init_done_callbacks_, {}))
+    for (auto& callback : std::exchange(pending_init_done_callbacks_, {})) {
       std::move(callback).Run();
+    }
   }
 }
 

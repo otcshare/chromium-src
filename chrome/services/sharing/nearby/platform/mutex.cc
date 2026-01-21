@@ -4,9 +4,7 @@
 
 #include "chrome/services/sharing/nearby/platform/mutex.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 Mutex::Mutex() = default;
 
@@ -20,6 +18,4 @@ void Mutex::Unlock() UNLOCK_FUNCTION() {
   lock_.Release();
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

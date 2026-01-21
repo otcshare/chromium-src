@@ -4,7 +4,7 @@
 
 #include "media/mojo/services/mojo_cdm_helper.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
@@ -121,6 +121,6 @@ TEST_F(MojoCdmHelperTest, CreateCdmFileIO_OpenWithoutClose) {
   base::RunLoop().RunUntilIdle();
 }
 
-// TODO(crbug.com/773860): Add more test cases.
+// TODO(crbug.com/40544338): Add more test cases.
 
 }  // namespace media

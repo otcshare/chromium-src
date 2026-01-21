@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "base/check.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 
 namespace device {
@@ -42,7 +44,8 @@ HidReportDescriptorItem::HidReportDescriptorItem(
     payload_size_ = header->size == 0x3 ? 4 : header->size;
     DCHECK_LE(payload_size_, sizeof(shortData_));
     if (GetHeaderSize() + payload_size() <= bytes.size())
-      memcpy(&shortData_, bytes.data() + GetHeaderSize(), payload_size());
+      UNSAFE_TODO(
+          memcpy(&shortData_, bytes.data() + GetHeaderSize(), payload_size()));
   }
 
   if (previous) {

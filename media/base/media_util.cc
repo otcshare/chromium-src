@@ -4,6 +4,10 @@
 
 #include "media/base/media_util.h"
 
+#include "base/trace_event/trace_event.h"
+#include "media/base/media_switches.h"
+#include "media/media_buildflags.h"
+
 namespace media {
 
 std::vector<uint8_t> EmptyExtraData() {
@@ -28,4 +32,17 @@ AudioParameters::Format ConvertAudioCodecToBitstreamFormat(AudioCodec codec) {
   }
 }
 
+bool MediaTraceIsEnabled() {
+  bool enable_decode_traces = false;
+  TRACE_EVENT_CATEGORY_GROUP_ENABLED("media", &enable_decode_traces);
+  return enable_decode_traces;
+}
+
+bool IsOpenH264SoftwareEncoderEnabled() {
+#if BUILDFLAG(ENABLE_OPENH264)
+  return base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder);
+#else
+  return false;
+#endif  // BUILDFLAG(ENABLE_OPENH264)
+}
 }  // namespace media

@@ -20,11 +20,13 @@
 
 // https://html.spec.whatwg.org/C/#the-button-element
 [
-    Exposed=Window,
-    HTMLConstructor
+    Exposed=Window
 ] interface HTMLButtonElement : HTMLElement {
+    [HTMLConstructor] constructor();
     [CEReactions, Reflect] attribute boolean disabled;
-    [ImplementedAs=formOwner] readonly attribute HTMLFormElement? form;
+    // Until ReferenceTarget is enabled, this will only ever return HTMLFormElement.
+    // https://github.com/whatwg/html/pull/10995
+    [ImplementedAs=formForBinding] readonly attribute HTMLElement? form;
     [CEReactions] attribute USVString formAction;
     [CEReactions] attribute DOMString formEnctype;
     [CEReactions] attribute DOMString formMethod;
@@ -45,4 +47,6 @@
     readonly attribute NodeList labels;
 };
 
-HTMLButtonElement includes PopoverTargetElement;
+HTMLButtonElement includes PopoverTargetAttributes;
+HTMLButtonElement includes CommandInvokerElement;
+HTMLButtonElement includes InterestInvokerElement;

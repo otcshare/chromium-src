@@ -21,7 +21,7 @@
 #include "ui/events/ozone/evdev/event_factory_evdev.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/platform/cast/overlay_manager_cast.h"
 #include "ui/ozone/platform/cast/platform_window_cast.h"
 #include "ui/ozone/platform/cast/surface_factory_cast.h"
@@ -91,10 +91,7 @@ class OzonePlatformCast : public OzonePlatform {
   InputController* GetInputController() override {
     return event_factory_ozone_->input_controller();
   }
-  std::unique_ptr<PlatformScreen> CreateScreen() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  std::unique_ptr<PlatformScreen> CreateScreen() override { NOTREACHED(); }
   void InitScreen(PlatformScreen* screen) override { NOTREACHED(); }
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
     return gpu_platform_support_host_.get();
@@ -118,11 +115,13 @@ class OzonePlatformCast : public OzonePlatform {
     return std::make_unique<InputMethodMinimal>(ime_key_event_dispatcher);
   }
 
-  bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                      gfx::BufferUsage usage) const override {
-    return format == gfx::BufferFormat::BGRA_8888 &&
+    return format == viz::SinglePlaneFormat::kBGRA_8888 &&
            usage == gfx::BufferUsage::SCANOUT;
   }
+
+  bool IsWindowCompositingSupported() const override { return true; }
 
   bool InitializeUI(const InitParams& params) override {
     device_manager_ = CreateDeviceManager();
@@ -151,10 +150,18 @@ class OzonePlatformCast : public OzonePlatform {
 
     return true;
   }
+
   void InitializeGPU(const InitParams& params) override {
     overlay_manager_ = std::make_unique<OverlayManagerCast>();
     surface_factory_ =
         std::make_unique<SurfaceFactoryCast>(std::move(egl_platform_));
+  }
+
+  void PostCreateMainMessageLoop(base::OnceCallback<void()> shutdown_cb,
+                                 scoped_refptr<base::SingleThreadTaskRunner>
+                                     user_input_task_runner) override {
+    event_factory_ozone_->SetUserInputTaskRunner(
+        std::move(user_input_task_runner));
   }
 
  private:

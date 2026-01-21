@@ -7,59 +7,53 @@
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image'",
       "position": [8, 8],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 40, 60, 4]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image size-contain'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image size-contain'",
       "position": [108, 8],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [0, 0, 60, 44],
         [50, 40, 60, 4]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image percent-height'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image percent-height'",
       "position": [208, 8],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [0, 0, 60, 44],
         [50, 40, 60, 4]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image bottom'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image bottom'",
       "position": [308, 8],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 0, 60, 44]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image no-repeat'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image no-repeat'",
       "position": [408, 8],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 40, 60, 4]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test image repeat-round'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test image repeat-round'",
       "bounds": [60, 44],
-      "contentsOpaqueForText": true,
       "backfaceVisibility": "hidden",
       "invalidations": [
         [0, 0, 60, 44]
@@ -67,50 +61,45 @@
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test generated'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test generated'",
       "position": [8, 108],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 0, 60, 44]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test generated size-contain'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test generated size-contain'",
       "position": [108, 108],
       "bounds": [160, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [100, 0, 60, 44],
         [0, 0, 60, 44]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test generated top'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test generated top'",
       "position": [258, 108],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 0, 60, 44]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test generated center'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test generated center'",
       "position": [358, 108],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 0, 60, 44]
       ]
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='test generated repeat-space'",
+      "name": "LayoutBlockFlow (positioned) DIV class='test generated repeat-space'",
       "position": [458, 108],
       "bounds": [110, 44],
-      "contentsOpaqueForText": true,
       "invalidations": [
         [50, 0, 60, 44],
         [0, 0, 60, 44]

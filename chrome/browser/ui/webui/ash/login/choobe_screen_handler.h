@@ -16,7 +16,7 @@ class ChobbeScreen;
 
 // Interface for dependency injection between ChobbeScreen and its
 // WebUI representation.
-class ChoobeScreenView : public base::SupportsWeakPtr<ChoobeScreenView> {
+class ChoobeScreenView {
  public:
   inline constexpr static StaticOobeScreenId kScreenId{"choobe",
                                                        "ChoobeScreen"};
@@ -24,11 +24,14 @@ class ChoobeScreenView : public base::SupportsWeakPtr<ChoobeScreenView> {
   virtual ~ChoobeScreenView() = default;
 
   // Shows the contents of the screen.
-  virtual void Show(
-      const std::vector<ChoobeFlowController::OptionalScreen>& screens) = 0;
+  virtual void Show(const std::vector<ScreenSummary>& screens) = 0;
+
+  // Gets a WeakPtr to the instance.
+  virtual base::WeakPtr<ChoobeScreenView> AsWeakPtr() = 0;
 };
 
-class ChoobeScreenHandler : public BaseScreenHandler, public ChoobeScreenView {
+class ChoobeScreenHandler final : public BaseScreenHandler,
+                                  public ChoobeScreenView {
  public:
   using TView = ChoobeScreenView;
 
@@ -44,8 +47,11 @@ class ChoobeScreenHandler : public BaseScreenHandler, public ChoobeScreenView {
       ::login::LocalizedValuesBuilder* builder) override;
 
   // ChoobeScreenView:
-  void Show(const std::vector<ChoobeFlowController::OptionalScreen>& screens)
-      override;
+  void Show(const std::vector<ScreenSummary>& screens) override;
+  base::WeakPtr<ChoobeScreenView> AsWeakPtr() override;
+
+ private:
+  base::WeakPtrFactory<ChoobeScreenView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

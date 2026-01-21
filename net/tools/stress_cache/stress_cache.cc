@@ -14,17 +14,20 @@
 // To test that the disk cache doesn't generate critical errors with regular
 // application level crashes, edit stress_support.h.
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
@@ -32,16 +35,21 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/test/test_future.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
+#include "net/disk_cache/backend_cleanup_tracker.h"
 #include "net/disk_cache/blockfile/backend_impl.h"
 #include "net/disk_cache/blockfile/stress_support.h"
 #include "net/disk_cache/disk_cache.h"
@@ -96,9 +104,9 @@ int MasterCode() {
 std::string GenerateStressKey() {
   char key[20 * 1024];
   size_t size = 50 + rand() % 20000;
-  CacheTestFillBuffer(key, size, true);
-
-  key[size - 1] = '\0';
+  auto key_span = base::as_writable_byte_span(key);
+  CacheTestFillBuffer(key_span.first(size), true);
+  key_span[size - 1] = '\0';
   return std::string(key);
 }
 
@@ -124,8 +132,8 @@ enum Operation { NONE, OPEN, CREATE, READ, WRITE, DOOM };
 class EntryWrapper {
  public:
   EntryWrapper() {
-    buffer_ = base::MakeRefCounted<net::IOBuffer>(kBufferSize);
-    memset(buffer_->data(), 'k', kBufferSize);
+    buffer_ = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
+    std::ranges::fill(buffer_->span(), 'k');
   }
 
   Operation state() const { return state_; }
@@ -155,8 +163,8 @@ struct Data {
   int writes = 0;             // How many writes since this iteration started.
   int iteration = 0;          // The iteration (number of crashes).
   disk_cache::BackendImpl* cache = nullptr;
-  std::string keys[kNumKeys];
-  EntryWrapper entries[kNumEntries];
+  std::array<std::string, kNumKeys> keys;
+  std::array<EntryWrapper, kNumEntries> entries;
 };
 
 Data* g_data = nullptr;
@@ -195,7 +203,7 @@ void EntryWrapper::DoRead() {
     return DoWrite();
 
   state_ = READ;
-  memset(buffer_->data(), 'k', kReadSize);
+  std::ranges::fill(buffer_->first(kReadSize), 'k');
   int rv = entry_->ReadData(
       0, 0, buffer_.get(), kReadSize,
       base::BindOnce(&EntryWrapper::OnReadDone, base::Unretained(this)));
@@ -206,7 +214,7 @@ void EntryWrapper::DoRead() {
 void EntryWrapper::OnReadDone(int result) {
   DCHECK_EQ(state_, READ);
   CHECK_EQ(result, kReadSize);
-  CHECK_EQ(0, memcmp(buffer_->data(), "Write: ", 7));
+  CHECK(buffer_->first(7) == base::byte_span_from_cstring("Write: "));
   DoWrite();
 }
 
@@ -214,9 +222,11 @@ void EntryWrapper::DoWrite() {
   bool truncate = (rand() % 2 == 0);
   int size = kBufferSize - (rand() % 20) * kBufferSize / 20;
   state_ = WRITE;
-  base::snprintf(buffer_->data(), kBufferSize,
-                 "Write: %d iter: %d, size: %d, truncate: %d     ",
-                 g_data->writes, g_data->iteration, size, truncate ? 1 : 0);
+  std::string payload = base::StringPrintf(
+      "Write: %d iter: %d, size: %d, truncate: %d     ", g_data->writes,
+      g_data->iteration, size, truncate ? 1 : 0);
+  buffer_->span().copy_prefix_from(base::as_byte_span(payload).first(
+      std::min(payload.size(), static_cast<size_t>(kBufferSize))));
   int rv = entry_->WriteData(
       0, 0, buffer_.get(), size,
       base::BindOnce(&EntryWrapper::OnWriteDone, base::Unretained(this), size),
@@ -315,7 +325,8 @@ void StressTheCache(int iteration) {
   g_data = new Data();
   g_data->iteration = iteration;
   g_data->cache = new disk_cache::BackendImpl(
-      path, mask, cache_thread.task_runner().get(), net::DISK_CACHE, nullptr);
+      path, mask, /*cleanup_tracker=*/nullptr, cache_thread.task_runner().get(),
+      net::DISK_CACHE, nullptr);
   g_data->cache->SetMaxSize(cache_size);
   g_data->cache->SetFlags(disk_cache::kNoLoadProtection);
 
@@ -326,8 +337,15 @@ void StressTheCache(int iteration) {
     printf("Unable to initialize cache.\n");
     return;
   }
-  printf("Iteration %d, initial entries: %d\n", iteration,
-         g_data->cache->GetEntryCount());
+
+  base::test::TestFuture<int32_t> future;
+  base::expected<int32_t, net::Error> result =
+      g_data->cache->GetEntryCount(future.GetCallback());
+  if (!result.has_value()) {
+    CHECK_EQ(result.error(), net::ERR_IO_PENDING);
+    result = base::ok(future.Get());
+  }
+  printf("Iteration %d, initial entries: %d\n", iteration, result.value());
 
   int seed = static_cast<int>(Time::Now().ToInternalValue());
   srand(seed);
@@ -380,8 +398,8 @@ bool StartCrashThread() {
 
 void CrashHandler(const char* file,
                   int line,
-                  const base::StringPiece str,
-                  const base::StringPiece stack_trace) {
+                  std::string_view str,
+                  std::string_view stack_trace) {
   g_crashing = true;
   base::debug::BreakDebugger();
 }
@@ -419,8 +437,11 @@ int main(int argc, const char* argv[]) {
   base::PlatformThread::Sleep(base::Seconds(3));
   base::SingleThreadTaskExecutor io_task_executor(base::MessagePumpType::IO);
 
-  char* end;
-  long int iteration = strtol(argv[1], &end, 0);
+  base::ThreadPoolInstance::CreateAndStartWithDefaultParams("stress_cache");
+
+  int iteration = 0;
+  // SAFETY: We check that argc >= 2 above, so argv[1] is fine.
+  base::StringToInt(UNSAFE_BUFFERS(argv[1]), &iteration);
 
   if (!StartCrashThread()) {
     printf("failed to start thread\n");

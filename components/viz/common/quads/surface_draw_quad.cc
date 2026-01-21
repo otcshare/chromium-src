@@ -7,7 +7,7 @@
 #include "base/check_op.h"
 #include "base/trace_event/traced_value.h"
 #include "base/values.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/gfx/color_utils.h"
 
 namespace viz {
 
@@ -53,12 +53,27 @@ void SurfaceDrawQuad::SetAll(const SharedQuadState* shared_quad_state,
 }
 
 const SurfaceDrawQuad* SurfaceDrawQuad::MaterialCast(const DrawQuad* quad) {
-  DCHECK_EQ(quad->material, DrawQuad::Material::kSurfaceContent);
+  CHECK_EQ(quad->material, DrawQuad::Material::kSurfaceContent);
   return static_cast<const SurfaceDrawQuad*>(quad);
 }
 
 void SurfaceDrawQuad::ExtendValue(base::trace_event::TracedValue* value) const {
   value->SetString("surface_range", surface_range.ToString());
+  value->SetString(
+      "default_background_color",
+      color_utils::SkColor4fToRgbaString(default_background_color));
+  value->SetBoolean("stretch_content_to_fill_bounds",
+                    stretch_content_to_fill_bounds);
+  value->SetBoolean("is_reflection", is_reflection);
+  value->SetBoolean("allow_merge", allow_merge);
+  if (override_child_filter_quality) {
+    value->SetInteger("override_child_filter_quality",
+                      static_cast<int>(*override_child_filter_quality));
+  }
+  if (override_child_dynamic_range_limit) {
+    value->SetString("override_child_dynamic_range_limit",
+                     override_child_dynamic_range_limit->ToString());
+  }
 }
 
 }  // namespace viz

@@ -6,7 +6,6 @@
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/frame_request_callback_collection.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -14,6 +13,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_compositor.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -114,12 +114,18 @@ TEST_F(DocumentLoadingRenderingTest,
 
   // Sheet loading and no documentElement, so don't resume.
   main_resource.Write("<?xml-stylesheet type='text/css' href='test.css'?>");
-  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+  // TODO(https://crbug.com/441911594): Rust XML parser always issues a
+  // StartDocument before any elements, also before PIs.
+  EXPECT_TRUE(RuntimeEnabledFeatures::XMLParsingRustEnabled() ||
+              Compositor().DeferMainFrameUpdate());
 
   // Sheet finishes loading, but no documentElement yet so don't resume.
   css_resource.Complete("a { color: red; }");
   test::RunPendingTasks();
-  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+  // TODO(https://crbug.com/441911594): Rust XML parser always issues a
+  // StartDocument before any elements, also before PIs.
+  EXPECT_TRUE(RuntimeEnabledFeatures::XMLParsingRustEnabled() ||
+              Compositor().DeferMainFrameUpdate());
 
   // Root inserted so resume.
   main_resource.Write("<svg xmlns='http://www.w3.org/2000/svg'></svg>");
@@ -213,9 +219,9 @@ TEST_F(DocumentLoadingRenderingTest, ShouldScheduleFrameAfterSheetsLoaded) {
   Compositor().BeginFrame();
 
   // Replace the stylesheet by changing href.
-  auto* element = GetDocument().getElementById("link");
+  auto* element = GetDocument().getElementById(AtomicString("link"));
   EXPECT_NE(nullptr, element);
-  element->setAttribute(html_names::kHrefAttr, "second.css");
+  element->setAttribute(html_names::kHrefAttr, AtomicString("second.css"));
   EXPECT_FALSE(Compositor().NeedsBeginFrame());
 
   second_css_resource.Complete("body { color: red; }");
@@ -260,8 +266,8 @@ TEST_F(DocumentLoadingRenderingTest,
 
   // Trigger a layout with a blocking sheet. For example, a parent frame
   // executing a script that reads offsetTop in the child frame could do this.
-  auto* child_frame =
-      To<HTMLIFrameElement>(GetDocument().getElementById("frame"));
+  auto* child_frame = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("frame")));
   child_frame->contentDocument()->UpdateStyleAndLayout(
       DocumentUpdateReason::kTest);
 
@@ -330,8 +336,8 @@ TEST_F(DocumentLoadingRenderingTest,
     <body style='background: blue'>
   )HTML");
 
-  auto* child_frame =
-      To<HTMLIFrameElement>(GetDocument().getElementById("frame"));
+  auto* child_frame = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("frame")));
 
   // Frame while the child frame still has pending sheets.
   auto* frame1_callback = MakeGarbageCollected<CheckRafCallback>();

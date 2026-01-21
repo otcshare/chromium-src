@@ -21,7 +21,6 @@ const FillLayer* GetFillLayerForPosition(const CSSProperty& property,
       return &style.MaskLayers();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -36,7 +35,6 @@ FillLayer* AccessFillLayerForPosition(const CSSProperty& property,
       return &builder.AccessMaskLayers();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -61,7 +59,6 @@ struct FillLayerMethods {
         break;
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -92,12 +89,13 @@ Length::ValueRange LengthListPropertyFunctions::GetValueRange(
     case CSSPropertyID::kBorderBottomRightRadius:
     case CSSPropertyID::kBorderTopLeftRadius:
     case CSSPropertyID::kBorderTopRightRadius:
+    case CSSPropertyID::kColumnRuleWidth:
+    case CSSPropertyID::kRowRuleWidth:
     case CSSPropertyID::kStrokeDasharray:
       return Length::ValueRange::kNonNegative;
 
     default:
       NOTREACHED();
-      return Length::ValueRange::kAll;
   }
 }
 
@@ -135,8 +133,9 @@ bool LengthListPropertyFunctions::GetLengthList(const CSSProperty& property,
 
   switch (property.PropertyID()) {
     case CSSPropertyID::kStrokeDasharray: {
-      if (style.StrokeDashArray())
-        result.AppendVector(style.StrokeDashArray()->data);
+      if (const SVGDashArray* array = style.StrokeDashArray()) {
+        result.AppendVector(*array);
+      }
       return true;
     }
 
@@ -182,7 +181,6 @@ bool LengthListPropertyFunctions::GetLengthList(const CSSProperty& property,
 
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -209,7 +207,7 @@ void LengthListPropertyFunctions::SetLengthList(const CSSProperty& property,
       builder.SetStrokeDashArray(
           length_list.empty()
               ? nullptr
-              : base::MakeRefCounted<SVGDashArray>(std::move(length_list)));
+              : MakeGarbageCollected<SVGDashArray>(length_list));
       return;
 
     case CSSPropertyID::kObjectPosition:
@@ -265,7 +263,6 @@ void LengthListPropertyFunctions::SetLengthList(const CSSProperty& property,
 
     default:
       NOTREACHED();
-      break;
   }
 }
 

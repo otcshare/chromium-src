@@ -5,17 +5,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PARSER_CSS_TOKENIZER_INPUT_STREAM_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PARSER_CSS_TOKENIZER_INPUT_STREAM_H_
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 class CSSTokenizerInputStream {
-  USING_FAST_MALLOC(CSSTokenizerInputStream);
-
  public:
-  explicit CSSTokenizerInputStream(const String& input)
-      : string_length_(input.length()), string_(input.Impl()) {}
+  explicit CSSTokenizerInputStream(StringView input)
+      : string_length_(input.length()), string_(input) {}
 
   CSSTokenizerInputStream(const CSSTokenizerInputStream&) = delete;
   CSSTokenizerInputStream& operator=(const CSSTokenizerInputStream&) = delete;
@@ -24,9 +23,10 @@ class CSSTokenizerInputStream {
   // replacement character. Will return (NUL) kEndOfFileMarker when at the
   // end of the stream.
   UChar NextInputChar() const {
-    if (offset_ >= string_length_)
+    if (offset_ >= string_length_) {
       return '\0';
-    UChar result = (*string_)[offset_];
+    }
+    UChar result = string_[offset_];
     return result ? result : 0xFFFD;
   }
 
@@ -35,9 +35,13 @@ class CSSTokenizerInputStream {
   // NOTE: This may *also* return NUL if there's one in the input! Never
   // compare the return value to '\0'.
   UChar PeekWithoutReplacement(unsigned lookahead_offset) const {
-    if ((offset_ + lookahead_offset) >= string_length_)
+    if ((offset_ + lookahead_offset) >= string_length_) {
       return '\0';
-    return (*string_)[offset_ + lookahead_offset];
+    }
+    return string_[offset_ + lookahead_offset];
+  }
+  StringView Peek() const {
+    return StringView(string_, offset_, length() - offset_);
   }
 
   void Advance(unsigned offset = 1) { offset_ += offset; }
@@ -48,18 +52,24 @@ class CSSTokenizerInputStream {
 
   double GetDouble(unsigned start, unsigned end) const;
 
+  // Like GetDouble(), but only for the case where the number matches
+  // [0-9]+ (no decimal point, no exponent, no sign), and is faster.
+  double GetNaturalNumberAsDouble(unsigned start, unsigned end) const;
+
   template <bool characterPredicate(UChar)>
   unsigned SkipWhilePredicate(unsigned offset) {
-    if (string_->Is8Bit()) {
-      const LChar* characters8 = string_->Characters8();
+    if (string_.Is8Bit()) {
+      const LChar* characters8 = string_.Span8().data();
       while ((offset_ + offset) < string_length_ &&
-             characterPredicate(characters8[offset_ + offset]))
+             characterPredicate(UNSAFE_TODO(characters8[offset_ + offset]))) {
         ++offset;
+      }
     } else {
-      const UChar* characters16 = string_->Characters16();
+      const UChar* characters16 = string_.Span16().data();
       while ((offset_ + offset) < string_length_ &&
-             characterPredicate(characters16[offset_ + offset]))
+             characterPredicate(UNSAFE_TODO(characters16[offset_ + offset]))) {
         ++offset;
+      }
     }
     return offset;
   }
@@ -69,15 +79,21 @@ class CSSTokenizerInputStream {
   unsigned length() const { return string_length_; }
   unsigned Offset() const { return std::min(offset_, string_length_); }
 
+  StringView RangeFrom(unsigned start) const {
+    return StringView(string_, start, string_length_ - start);
+  }
+
   StringView RangeAt(unsigned start, unsigned length) const {
     DCHECK(start + length <= string_length_);
-    return StringView(*string_, start, length);
+    return StringView(string_, start, length);
   }
+
+  void Restore(wtf_size_t offset) { offset_ = offset; }
 
  private:
   wtf_size_t offset_ = 0;
   const wtf_size_t string_length_;
-  const scoped_refptr<StringImpl> string_;
+  StringView string_;
 };
 
 }  // namespace blink

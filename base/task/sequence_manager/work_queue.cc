@@ -4,55 +4,19 @@
 
 #include "base/task/sequence_manager/work_queue.h"
 
-#include <atomic>
+#include <optional>
 
-#include "base/containers/stack_container.h"
 #include "base/debug/alias.h"
-#include "base/metrics/field_trial_params.h"
+#include "base/task/common/task_annotator.h"
 #include "base/task/sequence_manager/fence.h"
 #include "base/task/sequence_manager/sequence_manager_impl.h"
 #include "base/task/sequence_manager/task_order.h"
 #include "base/task/sequence_manager/work_queue_sets.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "third_party/abseil-cpp/absl/container/inlined_vector.h"
 
-namespace base {
-namespace sequence_manager {
-namespace internal {
-
-namespace {
-
-BASE_FEATURE(kDifferentWorkQueueCapacities,
-             "DifferentWorkQueueCapacities",
-             FEATURE_DISABLED_BY_DEFAULT);
-
-std::atomic<bool> g_different_work_queue_capacities_feature_enabled(false);
-
-}  // namespace
-
-// static
-void WorkQueue::ConfigureCapacityFieldTrial() {
-  g_different_work_queue_capacities_feature_enabled.store(
-      FeatureList::IsEnabled(kDifferentWorkQueueCapacities),
-      std::memory_order_relaxed);
-}
-
-// static
-bool WorkQueue::IsDifferentWorkQueueCapacitiesEnabled() {
-  return g_different_work_queue_capacities_feature_enabled.load(
-      std::memory_order_relaxed);
-}
-
-// static
-size_t WorkQueue::GetStackCapacityChoice() {
-  static const size_t kStackCapacityChoice =
-      IsDifferentWorkQueueCapacitiesEnabled()
-          ? static_cast<size_t>(GetFieldTrialParamByFeatureAsInt(
-                kDifferentWorkQueueCapacities, "StackCapacity",
-                StackCapacity::kDefault))
-          : StackCapacity::kDefault;
-  return kStackCapacityChoice;
-}
+namespace base::sequence_manager::internal {
 
 WorkQueue::WorkQueue(TaskQueueImpl* task_queue,
                      const char* name,
@@ -61,8 +25,9 @@ WorkQueue::WorkQueue(TaskQueueImpl* task_queue,
 
 Value::List WorkQueue::AsValue(TimeTicks now) const {
   Value::List state;
-  for (const Task& task : tasks_)
+  for (const Task& task : tasks_) {
     state.Append(TaskQueueImpl::TaskAsValue(task, now));
+  }
   return state;
 }
 
@@ -72,20 +37,23 @@ WorkQueue::~WorkQueue() {
 }
 
 const Task* WorkQueue::GetFrontTask() const {
-  if (tasks_.empty())
+  if (tasks_.empty()) {
     return nullptr;
+  }
   return &tasks_.front();
 }
 
 const Task* WorkQueue::GetBackTask() const {
-  if (tasks_.empty())
+  if (tasks_.empty()) {
     return nullptr;
+  }
   return &tasks_.back();
 }
 
 bool WorkQueue::BlockedByFence() const {
-  if (!fence_)
+  if (!fence_) {
     return false;
+  }
 
   // If the queue is empty then any future tasks will have a higher enqueue
   // order and will be blocked. The queue is also blocked if the head is past
@@ -93,9 +61,10 @@ bool WorkQueue::BlockedByFence() const {
   return tasks_.empty() || tasks_.front().task_order() >= fence_->task_order();
 }
 
-absl::optional<TaskOrder> WorkQueue::GetFrontTaskOrder() const {
-  if (tasks_.empty() || BlockedByFence())
-    return absl::nullopt;
+std::optional<TaskOrder> WorkQueue::GetFrontTaskOrder() const {
+  if (tasks_.empty() || BlockedByFence()) {
+    return std::nullopt;
+  }
   // Quick sanity check.
   DCHECK(tasks_.front().task_order() <= tasks_.back().task_order())
       << task_queue_->GetName() << " : " << work_queue_sets_->GetName() << " : "
@@ -120,12 +89,14 @@ void WorkQueue::Push(Task task) {
   // Amortized O(1).
   tasks_.push_back(std::move(task));
 
-  if (!was_empty)
+  if (!was_empty) {
     return;
+  }
 
   // If we hit the fence, pretend to WorkQueueSets that we're empty.
-  if (work_queue_sets_ && !BlockedByFence())
+  if (work_queue_sets_ && !BlockedByFence()) {
     work_queue_sets_->OnTaskPushedToEmptyQueue(this);
+  }
 }
 
 WorkQueue::TaskPusher::TaskPusher(WorkQueue* work_queue)
@@ -196,12 +167,14 @@ void WorkQueue::PushNonNestableTaskToFront(Task task) {
   // Amortized O(1).
   tasks_.push_front(std::move(task));
 
-  if (!work_queue_sets_)
+  if (!work_queue_sets_) {
     return;
+  }
 
   // Pretend  to WorkQueueSets that nothing has changed if we're blocked.
-  if (BlockedByFence())
+  if (BlockedByFence()) {
     return;
+  }
 
   // Pushing task to front may unblock the fence.
   if (was_empty || was_blocked) {
@@ -215,12 +188,14 @@ void WorkQueue::TakeImmediateIncomingQueueTasks() {
   DCHECK(tasks_.empty());
 
   task_queue_->TakeImmediateIncomingQueueTasks(&tasks_);
-  if (tasks_.empty())
+  if (tasks_.empty()) {
     return;
+  }
 
   // If we hit the fence, pretend to WorkQueueSets that we're empty.
-  if (work_queue_sets_ && !BlockedByFence())
+  if (work_queue_sets_ && !BlockedByFence()) {
     work_queue_sets_->OnTaskPushedToEmptyQueue(this);
+  }
 }
 
 Task WorkQueue::TakeTaskFromWorkQueue() {
@@ -237,9 +212,6 @@ Task WorkQueue::TakeTaskFromWorkQueue() {
       // right thing.
       task_queue_->TakeImmediateIncomingQueueTasks(&tasks_);
     }
-    // Since the queue is empty, now is a good time to consider reducing it's
-    // capacity if we're wasting memory.
-    tasks_.MaybeShrinkQueue();
   }
 
   DCHECK(work_queue_sets_);
@@ -256,64 +228,66 @@ Task WorkQueue::TakeTaskFromWorkQueue() {
   return pending_task;
 }
 
-template <size_t stack_capacity>
-bool WorkQueue::RemoveAllCancelledTasksFromFrontImpl() {
+bool WorkQueue::RemoveCancelledTasks(RemoveCancelledTasksPolicy policy) {
   // Since task destructors could have a side-effect of deleting this task queue
   // we move cancelled tasks into a temporary container which can be emptied
   // without accessing |this|.
-  StackVector<Task, stack_capacity> tasks_to_delete;
+  absl::InlinedVector<Task, 8> tasks_to_delete;
 
-  while (!tasks_.empty()) {
-    const auto& pending_task = tasks_.front();
-    if (pending_task.task && !pending_task.IsCanceled())
+  for (auto& pending_task : tasks_) {
+#if DCHECK_IS_ON()
+    // Checking if a task is cancelled can trip DCHECK/CHECK failures out of the
+    // control of the SequenceManager code, so provide a task trace for easier
+    // diagnosis. See crbug.com/374409662 for context.
+    absl::Cleanup resetter = [original_task =
+                                  TaskAnnotator::CurrentTaskForThread()] {
+      TaskAnnotator::SetCurrentTaskForThread({}, original_task);
+    };
+    TaskAnnotator::SetCurrentTaskForThread(base::PassKey<WorkQueue>(),
+                                           &pending_task);
+#endif
+    CHECK(pending_task.task, base::NotFatalUntil::M140);
+
+    if (pending_task.task.IsCancelled()) {
+      tasks_to_delete.push_back(std::move(pending_task));
+    } else if (policy == RemoveCancelledTasksPolicy::kFront) {
+      // Stop iterating when encountering a non-cancelled tasks and the policy
+      // is to remove only from the front.
       break;
-    tasks_to_delete->push_back(std::move(tasks_.front()));
-    tasks_.pop_front();
-  }
-  if (!tasks_to_delete->empty()) {
-    if (tasks_.empty()) {
-      // NB delayed tasks are inserted via Push, no don't need to reload those.
-      if (queue_type_ == QueueType::kImmediate) {
-        // Short-circuit the queue reload so that OnPopMinQueueInSet does the
-        // right thing.
-        task_queue_->TakeImmediateIncomingQueueTasks(&tasks_);
-      }
-      // Since the queue is empty, now is a good time to consider reducing it's
-      // capacity if we're wasting memory.
-      tasks_.MaybeShrinkQueue();
     }
-    // If we have a valid |heap_handle_| (i.e. we're not blocked by a fence or
-    // disabled) then |work_queue_sets_| needs to be told.
-    if (heap_handle_.IsValid())
-      work_queue_sets_->OnQueuesFrontTaskChanged(this);
-    task_queue_->TraceQueueSize();
   }
-  return !tasks_to_delete->empty();
-}
 
-template bool WorkQueue::RemoveAllCancelledTasksFromFrontImpl<
-    WorkQueue::StackCapacity::kSmall>();
-template bool WorkQueue::RemoveAllCancelledTasksFromFrontImpl<
-    WorkQueue::StackCapacity::kMedium>();
-template bool WorkQueue::RemoveAllCancelledTasksFromFrontImpl<
-    WorkQueue::StackCapacity::kLarge>();
-template bool WorkQueue::RemoveAllCancelledTasksFromFrontImpl<
-    WorkQueue::StackCapacity::kDefault>();
-
-bool WorkQueue::RemoveAllCanceledTasksFromFront() {
-  if (!work_queue_sets_)
+  if (tasks_to_delete.empty()) {
     return false;
-
-  switch (GetStackCapacityChoice()) {
-    case StackCapacity::kSmall:
-      return RemoveAllCancelledTasksFromFrontImpl<StackCapacity::kSmall>();
-    case StackCapacity::kMedium:
-      return RemoveAllCancelledTasksFromFrontImpl<StackCapacity::kMedium>();
-    case StackCapacity::kLarge:
-      return RemoveAllCancelledTasksFromFrontImpl<StackCapacity::kLarge>();
-    default:
-      return RemoveAllCancelledTasksFromFrontImpl<StackCapacity::kDefault>();
   }
+
+  if (policy == RemoveCancelledTasksPolicy::kFront) {
+    tasks_.erase(tasks_.begin(),
+                 tasks_.begin() + base::checked_cast<std::ptrdiff_t>(
+                                      tasks_to_delete.size()));
+  } else {
+    DCHECK_EQ(policy, RemoveCancelledTasksPolicy::kAll);
+    std::erase_if(tasks_, [](const Task& task) { return task.task.is_null(); });
+  }
+
+  if (tasks_.empty()) {
+    // NB delayed tasks are inserted via Push, no don't need to reload those.
+    if (queue_type_ == QueueType::kImmediate) {
+      // Short-circuit the queue reload so that OnPopMinQueueInSet does the
+      // right thing.
+      task_queue_->TakeImmediateIncomingQueueTasks(&tasks_);
+    }
+  }
+
+  // If we have a valid |heap_handle_| (i.e. we're not blocked by a fence or
+  // disabled) then |work_queue_sets_| needs to be told.
+  if (heap_handle_.IsValid()) {
+    CHECK(work_queue_sets_);
+    work_queue_sets_->OnQueuesFrontTaskChanged(this);
+  }
+  task_queue_->TraceQueueSize();
+
+  return true;
 }
 
 void WorkQueue::AssignToWorkQueueSets(WorkQueueSets* work_queue_sets) {
@@ -340,8 +314,9 @@ void WorkQueue::InsertFenceSilently(Fence fence) {
 
 bool WorkQueue::InsertFence(Fence fence) {
   bool was_blocked_by_fence = InsertFenceImpl(fence);
-  if (!work_queue_sets_)
+  if (!work_queue_sets_) {
     return false;
+  }
 
   // Moving the fence forward may unblock some tasks.
   if (!tasks_.empty() && was_blocked_by_fence && !BlockedByFence()) {
@@ -349,14 +324,15 @@ bool WorkQueue::InsertFence(Fence fence) {
     return true;
   }
   // Fence insertion may have blocked all tasks in this work queue.
-  if (BlockedByFence())
+  if (BlockedByFence()) {
     work_queue_sets_->OnQueueBlocked(this);
+  }
   return false;
 }
 
 bool WorkQueue::RemoveFence() {
   bool was_blocked_by_fence = BlockedByFence();
-  fence_ = absl::nullopt;
+  fence_ = std::nullopt;
   if (work_queue_sets_ && !tasks_.empty() && was_blocked_by_fence) {
     work_queue_sets_->OnTaskPushedToEmptyQueue(this);
     return true;
@@ -364,26 +340,22 @@ bool WorkQueue::RemoveFence() {
   return false;
 }
 
-void WorkQueue::MaybeShrinkQueue() {
-  tasks_.MaybeShrinkQueue();
-}
-
 void WorkQueue::PopTaskForTesting() {
-  if (tasks_.empty())
+  if (tasks_.empty()) {
     return;
+  }
   tasks_.pop_front();
 }
 
 void WorkQueue::CollectTasksOlderThan(TaskOrder reference,
                                       std::vector<const Task*>* result) const {
   for (const Task& task : tasks_) {
-    if (task.task_order() >= reference)
+    if (task.task_order() >= reference) {
       break;
+    }
 
     result->push_back(&task);
   }
 }
 
-}  // namespace internal
-}  // namespace sequence_manager
-}  // namespace base
+}  // namespace base::sequence_manager::internal

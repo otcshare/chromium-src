@@ -16,13 +16,15 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ChildBindingState;
 import org.chromium.base.process_launcher.ChildConnectionAllocator;
 import org.chromium.base.process_launcher.ChildProcessConnection;
+import org.chromium.base.process_launcher.IChildProcessArgs;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.UrlUtils;
-import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer;
@@ -35,8 +37,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 /**
- * Integration test that starts the full shell and load pages to test ChildProcessLauncher
- * and related code.
+ * Integration test that starts the full shell and loads pages to test ChildProcessLauncher and
+ * related code.
  */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class ChildProcessLauncherIntegrationTest {
@@ -49,11 +51,25 @@ public class ChildProcessLauncherIntegrationTest {
         private final List<TestChildProcessConnection> mConnections = new ArrayList<>();
 
         @Override
-        public ChildProcessConnection createConnection(Context context, ComponentName serviceName,
-                ComponentName fallbackServiceName, boolean bindToCaller,
-                boolean bindAsExternalService, Bundle serviceBundle, String instanceName) {
-            TestChildProcessConnection connection = new TestChildProcessConnection(
-                    context, serviceName, bindToCaller, bindAsExternalService, serviceBundle);
+        public ChildProcessConnection createConnection(
+                Context context,
+                ComponentName serviceName,
+                ComponentName fallbackServiceName,
+                boolean bindToCaller,
+                boolean bindAsExternalService,
+                Bundle serviceBundle,
+                String instanceName,
+                boolean independentFallback,
+                boolean isSandboxedForHistograms) {
+            TestChildProcessConnection connection =
+                    new TestChildProcessConnection(
+                            context,
+                            serviceName,
+                            bindToCaller,
+                            bindAsExternalService,
+                            serviceBundle,
+                            independentFallback,
+                            isSandboxedForHistograms);
             mConnections.add(connection);
             return connection;
         }
@@ -66,11 +82,24 @@ public class ChildProcessLauncherIntegrationTest {
     private static class TestChildProcessConnection extends ChildProcessConnection {
         private RuntimeException mRemovedBothVisibleAndStrongBinding;
 
-        public TestChildProcessConnection(Context context, ComponentName serviceName,
-                boolean bindToCaller, boolean bindAsExternalService,
-                Bundle childProcessCommonParameters) {
-            super(context, serviceName, null /* fallbackServiceName */, bindToCaller,
-                    bindAsExternalService, childProcessCommonParameters, null /* instanceName */);
+        public TestChildProcessConnection(
+                Context context,
+                ComponentName serviceName,
+                boolean bindToCaller,
+                boolean bindAsExternalService,
+                Bundle childProcessCommonParameters,
+                boolean independentFallback,
+                boolean isSandboxedForHistograms) {
+            super(
+                    context,
+                    serviceName,
+                    /* fallbackServiceName= */ null,
+                    bindToCaller,
+                    bindAsExternalService,
+                    childProcessCommonParameters,
+                    /* instanceName= */ null,
+                    independentFallback,
+                    isSandboxedForHistograms);
         }
 
         @Override
@@ -84,7 +113,8 @@ public class ChildProcessLauncherIntegrationTest {
         @Override
         public void removeVisibleBinding() {
             super.removeVisibleBinding();
-            if (mRemovedBothVisibleAndStrongBinding == null && !isStrongBindingBound()) {
+            if (mRemovedBothVisibleAndStrongBinding == null
+                    && bindingStateCurrent() < ChildBindingState.STRONG) {
                 mRemovedBothVisibleAndStrongBinding = new RuntimeException("removeVisibleBinding");
             }
         }
@@ -92,7 +122,8 @@ public class ChildProcessLauncherIntegrationTest {
         @Override
         public void removeStrongBinding() {
             super.removeStrongBinding();
-            if (mRemovedBothVisibleAndStrongBinding == null && !isVisibleBindingBound()) {
+            if (mRemovedBothVisibleAndStrongBinding == null
+                    && bindingStateCurrent() < ChildBindingState.VISIBLE) {
                 mRemovedBothVisibleAndStrongBinding = new RuntimeException("removeStrongBinding");
             }
         }
@@ -106,62 +137,84 @@ public class ChildProcessLauncherIntegrationTest {
 
     @Test
     @MediumTest
-    // This test may run with --site-per-process, which also enables a feature to maintain a
-    // spare renderer process. The spare process interferes with assertions on the number of
-    // process connections in this test, so disable it.
-    @CommandLineFlags.Add({"disable-features=SpareRendererForSitePerProcess"})
+    // This test may run with --site-per-process or AndroidWarmUpSpareRendererWithTimeout, which
+    // also enables a feature to maintain a spare renderer process.
+    // The spare process interferes with assertions on the number of process connections in this
+    // test, so disable it.
+    @CommandLineFlags.Add({
+        "disable-features=SpareRendererForSitePerProcess,AndroidWarmUpSpareRendererWithTimeout"
+    })
     public void testCrossDomainNavigationDoNotLoseImportance() throws Throwable {
+        testCrossDomainNavigationDoNotLoseImportance(null);
+    }
+
+    @Test
+    @MediumTest
+    // This test may run with --site-per-process or AndroidWarmUpSpareRendererWithTimeout, which
+    // also enables a feature to maintain a spare renderer process.
+    // The spare process interferes with assertions on the number of process connections in this
+    // test, so disable it.
+    @CommandLineFlags.Add({
+        "disable-features=SpareRendererForSitePerProcess,AndroidWarmUpSpareRendererWithTimeout"
+    })
+    @DisabledTest(message = "No released Android version which supports this yet")
+    public void testCrossDomainNavigationJavaless() throws Throwable {
+        testCrossDomainNavigationDoNotLoseImportance(
+                "org.chromium.content.app.NativeOnlySandboxedProcessService");
+    }
+
+    private void testCrossDomainNavigationDoNotLoseImportance(String serviceName) throws Throwable {
         final TestChildProcessConnectionFactory factory = new TestChildProcessConnectionFactory();
         final List<TestChildProcessConnection> connections = factory.getConnections();
-        ChildProcessLauncherHelperImpl.setSandboxServicesSettingsForTesting(factory,
-                10 /* arbitrary number, only realy need 2 */, null /* use default service name */);
+        ChildProcessLauncherHelperImpl.setSandboxServicesSettingsForTesting(
+                factory, 10 /* arbitrary number, only really need 2 */, serviceName);
 
         // TODO(boliu,nasko): Ensure navigation is actually successful
         // before proceeding.
-        ContentShellActivity activity = mActivityTestRule.launchContentShellWithUrlSync(
-                "content/test/data/android/title1.html");
+        ContentShellActivity activity =
+                mActivityTestRule.launchContentShellWithUrlSync(
+                        "content/test/data/android/title1.html");
         NavigationController navigationController =
                 mActivityTestRule.getWebContents().getNavigationController();
         TestCallbackHelperContainer testCallbackHelperContainer =
                 new TestCallbackHelperContainer(activity.getActiveWebContents());
 
-        mActivityTestRule.loadUrl(navigationController, testCallbackHelperContainer,
-                new LoadUrlParams(UrlUtils.getIsolatedTestFileUrl(
-                        "content/test/data/android/geolocation.html")));
-        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(new Runnable() {
-            @Override
-            public void run() {
-                Assert.assertEquals(1, connections.size());
-                connections.get(0).throwIfDroppedBothVisibleAndStrongBinding();
-            }
-        });
+        mActivityTestRule.loadUrl(
+                navigationController,
+                testCallbackHelperContainer,
+                new LoadUrlParams(
+                        UrlUtils.getIsolatedTestFileUrl(
+                                "content/test/data/android/geolocation.html")));
+        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        Assert.assertEquals(1, connections.size());
+                        connections.get(0).throwIfDroppedBothVisibleAndStrongBinding();
+                    }
+                });
 
         mActivityTestRule.loadUrl(
                 navigationController, testCallbackHelperContainer, new LoadUrlParams("data:,foo"));
-        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(new Runnable() {
-            @Override
-            public void run() {
-                if (ContentFeatureList.isEnabled(
-                            ContentFeatureList.PROCESS_SHARING_WITH_STRICT_SITE_INSTANCES)) {
-                    // If this feature is turned on all the URLs will use the same process.
-                    // Verify that the process has not lost its importance now that the
-                    // data: URL is also in the same process as the file: URLs.
-                    Assert.assertEquals(1, connections.size());
-                    connections.get(0).throwIfDroppedBothVisibleAndStrongBinding();
-                } else {
-                    Assert.assertEquals(2, connections.size());
-                    connections.get(1).throwIfDroppedBothVisibleAndStrongBinding();
-                }
-            }
-        });
+        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        Assert.assertEquals(2, connections.size());
+                        connections.get(1).throwIfDroppedBothVisibleAndStrongBinding();
+                    }
+                });
     }
 
     @Test
     @MediumTest
-    // This test may run with --site-per-process, which also enables a feature to maintain a
-    // spare renderer process. The spare process interferes with assertions on the number of
-    // process connections in this test, so disable it.
-    @CommandLineFlags.Add({"disable-features=SpareRendererForSitePerProcess"})
+    // This test may run with --site-per-process or AndroidWarmUpSpareRendererWithTimeout, which
+    // also enables a feature to maintain a spare renderer process.
+    // The spare process interferes with assertions on the number of process connections in this
+    // test, so disable it.
+    @CommandLineFlags.Add({
+        "disable-features=SpareRendererForSitePerProcess,AndroidWarmUpSpareRendererWithTimeout"
+    })
     public void testIntentionalKillToFreeServiceSlot() throws Throwable {
         final TestChildProcessConnectionFactory factory = new TestChildProcessConnectionFactory();
         final List<TestChildProcessConnection> connections = factory.getConnections();
@@ -170,54 +223,66 @@ public class ChildProcessLauncherIntegrationTest {
         // Doing a cross-domain navigation would need to kill the first process in order to create
         // the second process.
 
-        ContentShellActivity activity = mActivityTestRule.launchContentShellWithUrlSync(
-                "content/test/data/android/vsync.html");
+        ContentShellActivity activity =
+                mActivityTestRule.launchContentShellWithUrlSync(
+                        "content/test/data/android/vsync.html");
         NavigationController navigationController =
                 mActivityTestRule.getWebContents().getNavigationController();
         TestCallbackHelperContainer testCallbackHelperContainer =
                 new TestCallbackHelperContainer(activity.getActiveWebContents());
 
-        mActivityTestRule.loadUrl(navigationController, testCallbackHelperContainer,
-                new LoadUrlParams(UrlUtils.getIsolatedTestFileUrl(
-                        "content/test/data/android/geolocation.html")));
+        mActivityTestRule.loadUrl(
+                navigationController,
+                testCallbackHelperContainer,
+                new LoadUrlParams(
+                        UrlUtils.getIsolatedTestFileUrl(
+                                "content/test/data/android/geolocation.html")));
         mActivityTestRule.loadUrl(
                 navigationController, testCallbackHelperContainer, new LoadUrlParams("data:,foo"));
 
-        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(new Runnable() {
-            @Override
-            public void run() {
-                if (ContentFeatureList.isEnabled(
-                            ContentFeatureList.PROCESS_SHARING_WITH_STRICT_SITE_INSTANCES)) {
-                    // If this feature is turned on all the URLs will use the same process
-                    // and this test will not observe any kills.
-                    Assert.assertEquals(1, connections.size());
-                    Assert.assertFalse(connections.get(0).isKilledByUs());
-                } else {
-                    // The file: URLs and data: URL are expected to be in different processes and
-                    // the data: URL is expected to kill the process used for the file: URLs.
-                    // Note: The default SiteInstance process model also follows this path because
-                    // file: URLs are not allowed in the default SiteInstance process while data:
-                    // URLs are.
-                    Assert.assertEquals(2, connections.size());
-                    Assert.assertTrue(connections.get(0).isKilledByUs());
-                }
-            }
-        });
+        ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        // The file: URLs and data: URL are expected to be in different
+                        // processes and the data: URL is expected to kill the process used
+                        // for the file:
+                        // URLs.
+                        // Note: The default SiteInstance process model also follows this path
+                        // because
+                        // file: URLs are not allowed in the default SiteInstance process while
+                        // data:
+                        // URLs are.
+                        Assert.assertEquals(2, connections.size());
+                        Assert.assertTrue(connections.get(0).isKilledByUs());
+                    }
+                });
     }
 
     private static class CrashOnLaunchChildProcessConnection extends TestChildProcessConnection {
         private boolean mCrashServiceCalled;
         private final CountDownLatch mDisconnectedLatch = new CountDownLatch(1);
         // Arguments to setupConnection
-        private Bundle mConnectionBundle;
+        private IChildProcessArgs mChildProcessArgs;
         private List<IBinder> mClientInterfaces;
         private ConnectionCallback mConnectionCallback;
 
-        public CrashOnLaunchChildProcessConnection(Context context, ComponentName serviceName,
-                boolean bindToCaller, boolean bindAsExternalService,
-                Bundle childProcessCommonParameters) {
-            super(context, serviceName, bindToCaller, bindAsExternalService,
-                    childProcessCommonParameters);
+        public CrashOnLaunchChildProcessConnection(
+                Context context,
+                ComponentName serviceName,
+                boolean bindToCaller,
+                boolean bindAsExternalService,
+                Bundle childProcessCommonParameters,
+                boolean independentFallback,
+                boolean isSandboxedForHistograms) {
+            super(
+                    context,
+                    serviceName,
+                    bindToCaller,
+                    bindAsExternalService,
+                    childProcessCommonParameters,
+                    independentFallback,
+                    isSandboxedForHistograms);
         }
 
         @Override
@@ -225,10 +290,10 @@ public class ChildProcessLauncherIntegrationTest {
             super.onServiceConnectedOnLauncherThread(service);
             crashServiceForTesting();
             mCrashServiceCalled = true;
-            if (mConnectionBundle != null) {
+            if (mChildProcessArgs != null) {
                 super.setupConnection(
-                        mConnectionBundle, mClientInterfaces, mConnectionCallback, null);
-                mConnectionBundle = null;
+                        mChildProcessArgs, mClientInterfaces, mConnectionCallback, null);
+                mChildProcessArgs = null;
                 mClientInterfaces = null;
                 mConnectionCallback = null;
             }
@@ -241,15 +306,18 @@ public class ChildProcessLauncherIntegrationTest {
         }
 
         @Override
-        public void setupConnection(Bundle connectionBundle, List<IBinder> clientInterfaces,
-                ConnectionCallback connectionCallback, ZygoteInfoCallback zygoteInfoCallback) {
+        public void setupConnection(
+                IChildProcessArgs childProcessArgs,
+                List<IBinder> clientInterfaces,
+                ConnectionCallback connectionCallback,
+                ZygoteInfoCallback zygoteInfoCallback) {
             // Make sure setupConnection is called after crashServiceForTesting so that
             // setupConnection is guaranteed to fail.
             if (mCrashServiceCalled) {
-                super.setupConnection(connectionBundle, clientInterfaces, connectionCallback, null);
+                super.setupConnection(childProcessArgs, clientInterfaces, connectionCallback, null);
                 return;
             }
-            mConnectionBundle = connectionBundle;
+            mChildProcessArgs = childProcessArgs;
             mClientInterfaces = clientInterfaces;
             mConnectionCallback = connectionCallback;
         }
@@ -265,16 +333,38 @@ public class ChildProcessLauncherIntegrationTest {
         private CrashOnLaunchChildProcessConnection mCrashConnection;
 
         @Override
-        public ChildProcessConnection createConnection(Context context, ComponentName serviceName,
-                ComponentName fallbackServiceName, boolean bindToCaller,
-                boolean bindAsExternalService, Bundle serviceBundle, String instanceName) {
+        public ChildProcessConnection createConnection(
+                Context context,
+                ComponentName serviceName,
+                ComponentName fallbackServiceName,
+                boolean bindToCaller,
+                boolean bindAsExternalService,
+                Bundle serviceBundle,
+                String instanceName,
+                boolean independentFallback,
+                boolean isSandboxedForHistograms) {
             if (mCrashConnection == null) {
-                mCrashConnection = new CrashOnLaunchChildProcessConnection(
-                        context, serviceName, bindToCaller, bindAsExternalService, serviceBundle);
+                mCrashConnection =
+                        new CrashOnLaunchChildProcessConnection(
+                                context,
+                                serviceName,
+                                bindToCaller,
+                                bindAsExternalService,
+                                serviceBundle,
+                                independentFallback,
+                                isSandboxedForHistograms);
                 return mCrashConnection;
             }
-            return super.createConnection(context, serviceName, fallbackServiceName, bindToCaller,
-                    bindAsExternalService, serviceBundle, instanceName);
+            return super.createConnection(
+                    context,
+                    serviceName,
+                    fallbackServiceName,
+                    bindToCaller,
+                    bindAsExternalService,
+                    serviceBundle,
+                    instanceName,
+                    independentFallback,
+                    isSandboxedForHistograms);
         }
 
         public CrashOnLaunchChildProcessConnection getCrashConnection() {
@@ -288,7 +378,7 @@ public class ChildProcessLauncherIntegrationTest {
         final CrashOnLaunchChildProcessConnectionFactory factory =
                 new CrashOnLaunchChildProcessConnectionFactory();
         ChildProcessLauncherHelperImpl.setSandboxServicesSettingsForTesting(
-                factory, 1, null /* use default service name */);
+                factory, 2, null /* use default service name */);
 
         // Load url which should fail.
         String url = UrlUtils.getIsolatedTestFileUrl("content/test/data/android/title1.html");
@@ -296,8 +386,8 @@ public class ChildProcessLauncherIntegrationTest {
 
         // Poll until connection is allocated, then wait until connection is disconnected.
         CriteriaHelper.pollInstrumentationThread(
-                ()
-                        -> ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
+                () ->
+                        ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
                                 () -> factory.getCrashConnection() != null),
                 "The connection wasn't established.");
         CrashOnLaunchChildProcessConnection crashConnection =
@@ -310,9 +400,12 @@ public class ChildProcessLauncherIntegrationTest {
                 mActivityTestRule.getWebContents().getNavigationController();
         TestCallbackHelperContainer testCallbackHelperContainer =
                 new TestCallbackHelperContainer(activity.getActiveWebContents());
-        mActivityTestRule.loadUrl(navigationController, testCallbackHelperContainer,
-                new LoadUrlParams(UrlUtils.getIsolatedTestFileUrl(
-                        "content/test/data/android/geolocation.html")));
+        mActivityTestRule.loadUrl(
+                navigationController,
+                testCallbackHelperContainer,
+                new LoadUrlParams(
+                        UrlUtils.getIsolatedTestFileUrl(
+                                "content/test/data/android/geolocation.html")));
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         Assert.assertTrue(factory.getConnections().size() > 0);
     }

@@ -2,11 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/scoped_feature_list.h"
-
 #include "ash/app_list/model/app_list_model.h"
-#include "ash/constants/ash_features.h"
-#include "base/containers/cxx20_erase_vector.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/app_list_test_util.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_model_updater.h"
@@ -17,7 +14,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/crx_file/id_util.h"
 #include "components/sync/test/fake_sync_change_processor.h"
-#include "components/sync/test/sync_error_factory_mock.h"
+#include "ui/display/test/test_screen.h"
 
 namespace app_list {
 
@@ -25,11 +22,7 @@ using crx_file::id_util::GenerateId;
 
 class TemporaryAppListSortTest : public test::AppListSyncableServiceTestBase {
  public:
-  TemporaryAppListSortTest() {
-    feature_list_.InitWithFeatures(
-        {ash::features::kLauncherAppSort, ash::features::kProductivityLauncher},
-        {});
-  }
+  TemporaryAppListSortTest() = default;
   ~TemporaryAppListSortTest() override = default;
 
   void SetUp() override {
@@ -50,8 +43,7 @@ class TemporaryAppListSortTest : public test::AppListSyncableServiceTestBase {
   // Returns the app list order stored as preference.
   ash::AppListSortOrder GetSortOrderFromPrefs() {
     return static_cast<ash::AppListSortOrder>(
-        app_list_syncable_service()->profile()->GetPrefs()->GetInteger(
-            prefs::kAppListPreferredOrder));
+        profile()->GetPrefs()->GetInteger(prefs::kAppListPreferredOrder));
   }
 
   syncer::StringOrdinal GetPositionFromModelUpdater(const std::string& id) {
@@ -70,7 +62,8 @@ class TemporaryAppListSortTest : public test::AppListSyncableServiceTestBase {
   }
 
  private:
-  base::test::ScopedFeatureList feature_lists_;
+  display::test::TestScreen test_screen_{/*create_dispay=*/true,
+                                         /*register_screen=*/true};
   std::unique_ptr<test::TestAppListController> app_list_controller_;
 };
 
@@ -418,8 +411,7 @@ TEST_F(TemporaryAppListSortTest, ReparentingItemToRootResetsSortOrder) {
 
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Sort with name alphabetical order.
@@ -556,8 +548,7 @@ TEST_F(TemporaryAppListSortTest, ReparentingItemToFolderDoesNotResetSortOrder) {
 
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Sort with name alphabetical order.
@@ -698,8 +689,7 @@ TEST_F(TemporaryAppListSortTest, HandlePositionSyncUpdate) {
   // Start syncing.
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, syncer::SyncDataList(),
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
   RemoveAllExistingItems();
 
@@ -846,8 +836,7 @@ TEST_F(TemporaryAppListSortTest, HandleFolderRename) {
       kItemId2, "B", kFolderItemId, child_position.ToInternalValue(), kUnset));
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Install four apps.
@@ -911,7 +900,7 @@ TEST_F(TemporaryAppListSortTest, HandleMoveItemToFolder) {
   const std::string kFolderItemId = GenerateId("folder_id");
   ChromeAppListModelUpdater* model_updater = GetChromeModelUpdater();
   std::unique_ptr<ChromeAppListItem> folder_item =
-      std::make_unique<ChromeAppListItem>(profile_.get(), kFolderItemId,
+      std::make_unique<ChromeAppListItem>(profile(), kFolderItemId,
                                           model_updater);
   folder_item->SetChromeIsFolder(true);
   ChromeAppListItem::TestApi(folder_item.get())
@@ -939,8 +928,7 @@ TEST_F(TemporaryAppListSortTest, HandleMoveItemToFolder) {
 
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Install three apps.
@@ -1014,8 +1002,7 @@ TEST_F(TemporaryAppListSortTest, HandleMoveItemToRootGrid) {
 
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Install test apps that were added to the folder.
@@ -1142,8 +1129,7 @@ TEST_F(TemporaryAppListSortTest, InstallAppRemotely) {
   // Start syncing.
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, syncer::SyncDataList(),
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
   RemoveAllExistingItems();
 
@@ -1221,8 +1207,7 @@ TEST_F(TemporaryAppListSortTest, RemoveItemRemotely) {
   // Start syncing.
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, syncer::SyncDataList(),
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
   RemoveAllExistingItems();
 
@@ -1348,7 +1333,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
   // Add an ephemeral app and an ephemeral folder with two ephemeral apps
   // inside.
   std::unique_ptr<ChromeAppListItem> app3_item =
-      std::make_unique<ChromeAppListItem>(profile_.get(), GenerateId("app_id3"),
+      std::make_unique<ChromeAppListItem>(profile(), GenerateId("app_id3"),
                                           model_updater);
   app3_item->SetIsEphemeral(true);
   ChromeAppListItem::TestApi(app3_item.get()).SetPosition(child_position);
@@ -1358,8 +1343,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
 
   const std::string kFolderId2 = GenerateId("folder_id_2");
   std::unique_ptr<ChromeAppListItem> folder2_item =
-      std::make_unique<ChromeAppListItem>(profile_.get(), kFolderId2,
-                                          model_updater);
+      std::make_unique<ChromeAppListItem>(profile(), kFolderId2, model_updater);
   folder2_item->SetChromeIsFolder(true);
   folder2_item->SetIsEphemeral(true);
   ChromeAppListItem::TestApi(folder2_item.get()).SetPosition(child_position);
@@ -1369,7 +1353,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
 
   std::unique_ptr<ChromeAppListItem> app_folder2_item =
       std::make_unique<ChromeAppListItem>(
-          profile_.get(), GenerateId("folder_app_id_2"), model_updater);
+          profile(), GenerateId("folder_app_id_2"), model_updater);
   app_folder2_item->SetIsEphemeral(true);
   app_folder2_item->SetChromeFolderId(kFolderId2);
   ChromeAppListItem::TestApi(app_folder2_item.get())
@@ -1380,7 +1364,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
 
   std::unique_ptr<ChromeAppListItem> app_folder3_item =
       std::make_unique<ChromeAppListItem>(
-          profile_.get(), GenerateId("folder_app_id_3"), model_updater);
+          profile(), GenerateId("folder_app_id_3"), model_updater);
   app_folder3_item->SetIsEphemeral(true);
   app_folder3_item->SetChromeFolderId(kFolderId2);
   ChromeAppListItem::TestApi(app_folder3_item.get())
@@ -1390,8 +1374,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
 
   app_list_syncable_service()->MergeDataAndStartSyncing(
       syncer::APP_LIST, sync_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>(),
-      std::make_unique<syncer::SyncErrorFactoryMock>());
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
   content::RunAllTasksUntilIdle();
 
   // Verify the default order.
@@ -1421,8 +1404,7 @@ TEST_F(TemporaryAppListSortTest, AlphabeticalEphemeralAppFirstSort) {
   // Add a new ephemeral app.
   const std::string kItemId6 = GenerateId("app_id6");
   std::unique_ptr<ChromeAppListItem> kItemId6_item =
-      std::make_unique<ChromeAppListItem>(profile_.get(), kItemId6,
-                                          model_updater);
+      std::make_unique<ChromeAppListItem>(profile(), kItemId6, model_updater);
   kItemId6_item->SetIsEphemeral(true);
   ChromeAppListItem::TestApi(kItemId6_item.get()).SetName("App 4");
   app_list_syncable_service()->AddItem(std::move(kItemId6_item));

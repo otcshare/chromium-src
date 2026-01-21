@@ -4,6 +4,7 @@
 
 #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
 
+#include "base/notimplemented.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/aura/client/cursor_shape_client.h"
 #include "ui/aura/window_event_dispatcher.h"
@@ -32,10 +33,9 @@ void DesktopNativeCursorManager::RemoveHost(aura::WindowTreeHost* host) {
 void DesktopNativeCursorManager::SetDisplay(
     const display::Display& display,
     wm::NativeCursorManagerDelegate* delegate) {
-  cursor_loader_.SetDisplayData(display.rotation(),
-                                display.device_scale_factor());
-
-  SetCursor(delegate->GetCursor(), delegate);
+  if (cursor_loader_.SetDisplay(display)) {
+    SetCursor(delegate->GetCursor(), delegate);
+  }
 }
 
 void DesktopNativeCursorManager::SetCursor(
@@ -46,8 +46,9 @@ void DesktopNativeCursorManager::SetCursor(
   delegate->CommitCursor(new_cursor);
 
   if (delegate->IsCursorVisible()) {
-    for (auto* host : hosts_)
+    for (aura::WindowTreeHost* host : hosts_) {
       host->SetCursor(new_cursor);
+    }
   }
 }
 
@@ -63,16 +64,24 @@ void DesktopNativeCursorManager::SetVisibility(
   } else {
     gfx::NativeCursor invisible_cursor(ui::mojom::CursorType::kNone);
     cursor_loader_.SetPlatformCursor(&invisible_cursor);
-    for (auto* host : hosts_)
+    for (aura::WindowTreeHost* host : hosts_) {
       host->SetCursor(invisible_cursor);
+    }
   }
 
-  for (auto* host : hosts_)
+  for (aura::WindowTreeHost* host : hosts_) {
     host->OnCursorVisibilityChanged(visible);
+  }
 }
 
 void DesktopNativeCursorManager::SetCursorSize(
     ui::CursorSize cursor_size,
+    wm::NativeCursorManagerDelegate* delegate) {
+  NOTIMPLEMENTED();
+}
+
+void DesktopNativeCursorManager::SetLargeCursorSizeInDip(
+    int large_cursor_size_in_dip,
     wm::NativeCursorManagerDelegate* delegate) {
   NOTIMPLEMENTED();
 }
@@ -88,13 +97,20 @@ void DesktopNativeCursorManager::SetMouseEventsEnabled(
 
   SetVisibility(delegate->IsCursorVisible(), delegate);
 
-  for (auto* host : hosts_)
+  for (aura::WindowTreeHost* host : hosts_) {
     host->dispatcher()->OnMouseEventsEnableStateChanged(enabled);
+  }
 }
 
-void DesktopNativeCursorManager::InitCursorSizeObserver(
+void DesktopNativeCursorManager::InitSystemCursorObservers(
     wm::NativeCursorManagerDelegate* delegate) {
   NOTREACHED();
+}
+
+void DesktopNativeCursorManager::SetCursorColor(
+    SkColor color,
+    wm::NativeCursorManagerDelegate* delegate) {
+  NOTIMPLEMENTED();
 }
 
 }  // namespace views

@@ -4,9 +4,12 @@
 
 #include "remoting/codec/audio_decoder_opus.h"
 
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "remoting/proto/audio.pb.h"
 #include "third_party/opus/src/include/opus.h"
@@ -57,11 +60,10 @@ bool AudioDecoderOpus::ResetForPacket(AudioPacket* packet) {
     channels_ = packet->channels();
     sampling_rate_ = packet->sampling_rate();
 
-    if (channels_ <= 0 || channels_ > 2 ||
-        sampling_rate_ != kSamplingRate) {
-      LOG(WARNING) << "Unsupported OPUS parameters: "
-                   << channels_ << " channels with "
-                   << sampling_rate_ << " samples per second.";
+    if (channels_ <= 0 || channels_ > 2 || sampling_rate_ != kSamplingRate) {
+      LOG(WARNING) << "Unsupported OPUS parameters: " << channels_
+                   << " channels with " << sampling_rate_
+                   << " samples per second.";
       return false;
     }
   }
@@ -96,33 +98,35 @@ std::unique_ptr<AudioPacket> AudioDecoderOpus::Decode(
   decoded_packet->set_bytes_per_sample(AudioPacket::BYTES_PER_SAMPLE_2);
   decoded_packet->set_channels(packet->channels());
 
-  int max_frame_samples = kMaxFrameSizeMs * kSamplingRate /
-      base::Time::kMillisecondsPerSecond;
-  int max_frame_bytes = max_frame_samples * channels_ *
-      decoded_packet->bytes_per_sample();
+  int max_frame_samples =
+      kMaxFrameSizeMs * kSamplingRate / base::Time::kMillisecondsPerSecond;
+  int max_frame_bytes =
+      max_frame_samples * channels_ * decoded_packet->bytes_per_sample();
 
   std::string* decoded_data = decoded_packet->add_data();
   decoded_data->resize(packet->data_size() * max_frame_bytes);
   int buffer_pos = 0;
 
   for (int i = 0; i < packet->data_size(); ++i) {
-    int16_t* pcm_buffer =
-        reinterpret_cast<int16_t*>(std::data(*decoded_data) + buffer_pos);
+    CHECK_GE(buffer_pos, 0);
+    const size_t buffer_pos_size = base::checked_cast<size_t>(buffer_pos);
+    auto decoded_span = base::as_writable_byte_span(*decoded_data);
+    auto current_span = decoded_span.subspan(buffer_pos_size);
     CHECK_LE(buffer_pos + max_frame_bytes,
              static_cast<int>(decoded_data->size()));
     std::string* frame = packet->mutable_data(i);
-    unsigned char* frame_data =
-        reinterpret_cast<unsigned char*>(std::data(*frame));
-    int result = opus_decode(decoder_, frame_data, frame->size(),
-                             pcm_buffer, max_frame_samples, 0);
+    auto frame_span = base::as_byte_span(*frame);
+    int result = opus_decode(decoder_, frame_span.data(), frame_span.size(),
+                             reinterpret_cast<int16_t*>(current_span.data()),
+                             max_frame_samples, 0);
     if (result < 0) {
       LOG(ERROR) << "Failed decoding Opus frame. Error code: " << result;
       DestroyDecoder();
       return nullptr;
     }
 
-    buffer_pos += result * packet->channels() *
-        decoded_packet->bytes_per_sample();
+    buffer_pos +=
+        result * packet->channels() * decoded_packet->bytes_per_sample();
   }
 
   if (!buffer_pos) {

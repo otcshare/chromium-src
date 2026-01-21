@@ -16,19 +16,6 @@ namespace blink {
 // blink::ResourceFetcher).
 struct PreloadKey final {
  public:
-  struct Hash {
-    STATIC_ONLY(Hash);
-
-   public:
-    static unsigned GetHash(const PreloadKey& key) {
-      return KURLHash::GetHash(key.url);
-    }
-    static bool Equal(const PreloadKey& x, const PreloadKey& y) {
-      return x == y;
-    }
-    static constexpr bool safe_to_compare_to_empty_or_deleted = false;
-  };
-
   PreloadKey() = default;
   PreloadKey(const KURL& url, ResourceType type)
       : url(RemoveFragmentFromUrl(url)), type(type) {}
@@ -49,27 +36,10 @@ struct PreloadKey final {
   ResourceType type = ResourceType::kImage;
 };
 
+template <>
+struct HashTraits<PreloadKey>
+    : TwoFieldsHashTraits<PreloadKey, &PreloadKey::url, &PreloadKey::type> {};
+
 }  // namespace blink
-
-namespace WTF {
-
-template <>
-struct DefaultHash<blink::PreloadKey> : blink::PreloadKey::Hash {};
-
-template <>
-struct HashTraits<blink::PreloadKey>
-    : public SimpleClassHashTraits<blink::PreloadKey> {
-  static const bool kEmptyValueIsZero = false;
-
-  static bool IsDeletedValue(const blink::PreloadKey& value) {
-    return HashTraits<blink::KURL>::IsDeletedValue(value.url);
-  }
-
-  static void ConstructDeletedValue(blink::PreloadKey& slot, bool zero_value) {
-    HashTraits<blink::KURL>::ConstructDeletedValue(slot.url, zero_value);
-  }
-};
-
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_PRELOAD_KEY_H_

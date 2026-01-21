@@ -7,17 +7,21 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
+#include <algorithm>
 #include <type_traits>
 
 #include "base/check_op.h"
-#include "base/ranges/algorithm.h"
+#include "base/compiler_specific.h"
 #include "components/zucchini/algorithm.h"
 
 namespace zucchini {
 
 // Describes a region within a buffer, with starting offset and size.
 struct BufferRegion {
+  bool operator==(const BufferRegion& other) const = default;
+
   // The region data are stored as |offset| and |size|, but often it is useful
   // to represent it as an interval [lo(), hi()) = [offset, offset + size).
   size_t lo() const { return offset; }
@@ -67,7 +71,7 @@ class BufferViewBase {
   BufferViewBase() = default;
 
   BufferViewBase(iterator first, size_type size)
-      : first_(first), last_(first_ + size) {
+      : first_(first), last_(UNSAFE_TODO(first_ + size)) {
     DCHECK_GE(last_, first_);
   }
 
@@ -113,22 +117,24 @@ class BufferViewBase {
   // If |pos| is not within the range of the buffer, the process is terminated.
   reference operator[](size_type pos) const {
     CHECK_LT(pos, size());
-    return first_[pos];
+    return UNSAFE_TODO(first_[pos]);
   }
 
   // Returns a sub-buffer described by |region|.
   BufferViewBase operator[](BufferRegion region) const {
     DCHECK_LE(region.offset, size());
     DCHECK_LE(region.size, size() - region.offset);
-    return {begin() + region.offset, region.size};
+    return {UNSAFE_TODO(begin() + region.offset), region.size};
   }
 
   template <class U>
-  const U& read(size_type pos) const {
+  U read(size_type pos) const {
     // TODO(huangs): Use can_access<U>(pos) after fixing can_access().
     CHECK_LE(sizeof(U), size());
     CHECK_LE(pos, size() - sizeof(U));
-    return *reinterpret_cast<const U*>(begin() + pos);
+    U ret = {};
+    UNSAFE_TODO(::memcpy(&ret, begin() + pos, sizeof(U)));
+    return ret;
   }
 
   template <class U>
@@ -136,17 +142,7 @@ class BufferViewBase {
     // TODO(huangs): Use can_access<U>(pos) after fixing can_access().
     CHECK_LE(sizeof(U), size());
     CHECK_LE(pos, size() - sizeof(U));
-    *reinterpret_cast<U*>(begin() + pos) = value;
-  }
-
-  // Returns a mutable reference to an object type U whose raw storage starts
-  // at location |pos|.
-  template <class U>
-  U& modify(size_type pos) {
-    // TODO(huangs): Use can_access<U>(pos) after fixing can_access().
-    CHECK_LE(sizeof(U), size());
-    CHECK_LE(pos, size() - sizeof(U));
-    return *reinterpret_cast<U*>(begin() + pos);
+    UNSAFE_TODO(::memcpy(begin() + pos, &value, sizeof(U)));
   }
 
   template <class U>
@@ -160,20 +156,20 @@ class BufferViewBase {
   BufferRegion local_region() const { return BufferRegion{0, size()}; }
 
   bool equals(BufferViewBase other) const {
-    return base::ranges::equal(*this, other);
+    return std::ranges::equal(*this, other);
   }
 
   // Modifiers
 
   void shrink(size_type new_size) {
-    DCHECK_LE(first_ + new_size, last_);
-    last_ = first_ + new_size;
+    UNSAFE_TODO(DCHECK_LE(first_ + new_size, last_));
+    last_ = UNSAFE_TODO(first_ + new_size);
   }
 
   // Moves the start of the view forward by n bytes.
   void remove_prefix(size_type n) {
     DCHECK_LE(n, size());
-    first_ += n;
+    UNSAFE_TODO(first_ += n);
   }
 
   // Moves the start of the view to |it|, which is in range [begin(), end()).
@@ -195,7 +191,7 @@ class BufferViewBase {
         AlignCeil(static_cast<size_type>(first_ - origin.first_), alignment);
     if (aligned_size > static_cast<size_type>(last_ - origin.first_))
       return false;
-    first_ = origin.first_ + aligned_size;
+    first_ = UNSAFE_TODO(origin.first_ + aligned_size);
     return true;
   }
 

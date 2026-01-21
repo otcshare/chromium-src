@@ -12,8 +12,9 @@
 #include "components/permissions/features.h"
 #include "components/permissions/permission_manager.h"
 #include "components/permissions/permission_request_manager.h"
-#include "components/permissions/permission_result.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_request_description.h"
 #include "content/public/browser/permission_result.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -51,15 +52,17 @@ class GeolocationPermissionContextDelegateTests
     permissions::PermissionRequestManager::CreateForWebContents(web_contents());
     content_settings::PageSpecificContentSettings::CreateForWebContents(
         web_contents(),
-        std::make_unique<chrome::PageSpecificContentSettingsDelegate>(
-            web_contents()));
+        std::make_unique<PageSpecificContentSettingsDelegate>(web_contents()));
 #if BUILDFLAG(IS_ANDROID)
     static_cast<permissions::GeolocationPermissionContextAndroid*>(
         PermissionManagerFactory::GetForProfile(profile())
             ->GetPermissionContextForTesting(ContentSettingsType::GEOLOCATION))
         ->SetLocationSettingsForTesting(
             std::make_unique<MockLocationSettings>());
-    MockLocationSettings::SetLocationStatus(true, true);
+    MockLocationSettings::SetLocationStatus(
+        /*has_android_coarse_location_permission=*/true,
+        /*has_android_fine_location_permission=*/true,
+        /*is_system_location_setting_enabled=*/true);
     MockLocationSettings::SetCanPromptForAndroidPermission(true);
     MockLocationSettings::SetLocationSettingsDialogStatus(false /* enabled */,
                                                           GRANTED);
@@ -71,16 +74,19 @@ class GeolocationPermissionContextDelegateTests
       blink::PermissionType permission,
       content::RenderFrameHost* render_frame_host,
       bool user_gesture,
-      base::OnceCallback<void(blink::mojom::PermissionStatus)> callback) {
+      base::OnceCallback<void(content::PermissionResult)> callback) {
     PermissionManagerFactory::GetForProfile(profile())
         ->RequestPermissionsFromCurrentDocument(
-            {permission}, render_frame_host, user_gesture,
+            render_frame_host,
+            content::PermissionRequestDescription(
+                content::PermissionDescriptorUtil::
+                    CreatePermissionDescriptorForPermissionType(permission),
+                user_gesture),
             base::BindOnce(
-                [](base::OnceCallback<void(blink::mojom::PermissionStatus)>
-                       callback,
-                   const std::vector<blink::mojom::PermissionStatus>& state) {
-                  DCHECK_EQ(state.size(), 1U);
-                  std::move(callback).Run(state[0]);
+                [](base::OnceCallback<void(content::PermissionResult)> callback,
+                   const std::vector<content::PermissionResult>& result) {
+                  DCHECK_EQ(result.size(), 1U);
+                  std::move(callback).Run(result[0]);
                 },
                 std::move(callback)));
   }
@@ -90,7 +96,10 @@ class GeolocationPermissionContextDelegateTests
       blink::PermissionType permission,
       const url::Origin& origin) {
     return PermissionManagerFactory::GetForProfile(profile)
-        ->GetPermissionResultForOriginWithoutContext(permission, origin);
+        ->GetPermissionResultForOriginWithoutContext(
+            content::PermissionDescriptorUtil::
+                CreatePermissionDescriptorForPermissionType(permission),
+            origin, origin);
   }
 };
 
@@ -106,8 +115,8 @@ TEST_F(GeolocationPermissionContextDelegateTests, TabContentSettingIsUpdated) {
   RequestPermissionFromCurrentDocument(
       blink::PermissionType::GEOLOCATION, main_rfh(), true,
       base::BindOnce(
-          [](base::RunLoop* run_loop, blink::mojom::PermissionStatus status) {
-            EXPECT_EQ(status, blink::mojom::PermissionStatus::GRANTED);
+          [](base::RunLoop* run_loop, content::PermissionResult result) {
+            EXPECT_EQ(result.status, blink::mojom::PermissionStatus::GRANTED);
             run_loop->Quit();
           },
           &run_loop));
@@ -123,7 +132,7 @@ TEST_F(GeolocationPermissionContextDelegateTests, TabContentSettingIsUpdated) {
 }
 
 #if BUILDFLAG(IS_ANDROID)
-// TODO(https://crbug.com/1318240): Flaky.
+// TODO(crbug.com/40835241): Flaky.
 TEST_F(GeolocationPermissionContextDelegateTests,
        DISABLED_SearchGeolocationInIncognito) {
   url::Origin requesting_frame_url = url::Origin::Create(GURL(kDSETestUrl));

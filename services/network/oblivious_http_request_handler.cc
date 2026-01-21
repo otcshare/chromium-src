@@ -6,13 +6,19 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
+#include <string>
 
+#include "base/i18n/time_formatting.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/string_number_conversions.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_log_util.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "net/http/http_util.h"
 #include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_values.h"
 #include "net/log/net_log_with_source.h"
@@ -24,34 +30,39 @@
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "services/network/public/mojom/oblivious_http_request.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/trust_tokens/trust_token_request_helper_factory.h"
 
 namespace network {
 
 namespace {
 
-constexpr size_t kMaxResponseSize = 10 * 1024;  // Response size limit is 10kB
-constexpr base::TimeDelta kRequestTimeout = base::Minutes(1);
+constexpr size_t kMaxResponseSize =
+    5 * 1024 * 1024;  // Response size limit is 5MB
+constexpr base::TimeDelta kDefaultRequestTimeout = base::Minutes(1);
 constexpr char kObliviousHttpRequestMimeType[] = "message/ohttp-req";
 
 constexpr size_t kMaxMethodSize = 16;
-constexpr size_t kMaxRequestBodySize = 10 * 1024;  // Request size limit is 10kB
+constexpr size_t kMaxRequestBodySize =
+    5 * 1024 * 1024;                               // Request size limit is 5MB
 constexpr size_t kMaxContentTypeSize = 256;        // Per RFC6838
-
-const std::array<char, 2> kHeaderForbiddenChars = {'\n', '\r'};
 
 // Class wrapping quiche::ObliviousHttpClient. Should be created once for each
 // request/response pair.
 class StatefulObliviousHttpClient {
  public:
-  static absl::optional<StatefulObliviousHttpClient> CreateFromKeyConfig(
+  static std::optional<StatefulObliviousHttpClient> CreateFromKeyConfig(
       std::string key_config_str) {
     auto key_configs =
         quiche::ObliviousHttpKeyConfigs::ParseConcatenatedKeys(key_config_str);
     if (!key_configs.ok()) {
-      return absl::nullopt;
+      return std::nullopt;
+    }
+    if (key_configs->NumKeys() == 0) {
+      return std::nullopt;
     }
     quiche::ObliviousHttpHeaderKeyConfig key_config =
         key_configs->PreferredConfig();
@@ -59,7 +70,7 @@ class StatefulObliviousHttpClient {
         key_configs->GetPublicKeyForId(key_config.GetKeyId()).value(),
         key_config);
     if (!ohttp_client.ok()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     return StatefulObliviousHttpClient(std::move(*ohttp_client));
   }
@@ -69,22 +80,22 @@ class StatefulObliviousHttpClient {
   StatefulObliviousHttpClient& operator=(StatefulObliviousHttpClient&& other) =
       default;
 
-  absl::optional<std::string> EncryptRequest(std::string plain_text) {
+  std::optional<std::string> EncryptRequest(std::string plain_text) {
     auto maybe_request = quiche_client_.CreateObliviousHttpRequest(plain_text);
     if (!maybe_request.ok()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     std::string cipher_text = maybe_request->EncapsulateAndSerialize();
     context_ = std::move(*maybe_request).ReleaseContext();
     return cipher_text;
   }
 
-  absl::optional<std::string> DecryptResponse(std::string cipher_text) {
+  std::optional<std::string> DecryptResponse(std::string cipher_text) {
     DCHECK(context_) << "Decrypt called before Encrypt";
     auto maybe_response = quiche_client_.DecryptObliviousHttpResponse(
         cipher_text, context_.value());
     if (!maybe_response.ok()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     return std::string(maybe_response->GetPlaintextData());
   }
@@ -95,39 +106,53 @@ class StatefulObliviousHttpClient {
       : quiche_client_(std::move(quiche_client)) {}
 
   quiche::ObliviousHttpClient quiche_client_;
-  absl::optional<quiche::ObliviousHttpRequest::Context> context_;
+  std::optional<quiche::ObliviousHttpRequest::Context> context_;
 };
 
 std::string CreateAndSerializeBhttpMessage(
     const GURL& request_url,
     const std::string& method,
-    absl::optional<std::string> content_type,
-    absl::optional<std::string> content_data,
+    mojom::ObliviousHttpRequestBodyPtr request_body,
     net::HttpRequestHeaders::HeaderVector headers) {
-  std::string host_port = request_url.host();
+  std::string host_port = request_url.GetHost();
   if (request_url.has_port()) {
-    host_port += ":" + request_url.port();
+    host_port += ":" + request_url.GetPort();
   }
 
-  quiche::BinaryHttpRequest bhttp_request(
-      {method, request_url.scheme(), host_port, request_url.PathForRequest()});
+  quiche::BinaryHttpRequest bhttp_request({method, request_url.GetScheme(),
+                                           host_port,
+                                           request_url.PathForRequest()});
   bhttp_request.AddHeaderField({net::HttpRequestHeaders::kHost, host_port});
   // Date should be provided by the client to allow for server anti-replay
   // protections (according to the OHTTP spec).
   bhttp_request.AddHeaderField(
       {"Date", base::TimeFormatHTTP(base::Time::Now())});
-  if (content_data) {
-    DCHECK(content_type);
+  if (request_body && !request_body->content.empty()) {
+    DCHECK(!request_body->content_type.empty());
+    bhttp_request.AddHeaderField({net::HttpRequestHeaders::kContentType,
+                                  std::move(request_body->content_type)});
     bhttp_request.AddHeaderField(
-        {net::HttpRequestHeaders::kContentType, std::move(*content_type)});
-    bhttp_request.AddHeaderField({net::HttpRequestHeaders::kContentLength,
-                                  base::NumberToString(content_data->size())});
-    bhttp_request.set_body(std::move(*content_data));
+        {net::HttpRequestHeaders::kContentLength,
+         base::NumberToString(request_body->content.size())});
+    bhttp_request.set_body(std::move(request_body->content));
   }
   for (const auto& header : headers) {
     bhttp_request.AddHeaderField({header.key, header.value});
   }
   return bhttp_request.Serialize().value();
+}
+
+scoped_refptr<net::HttpResponseHeaders> GetSyntheticBhttpResponseHeader(
+    const std::vector<quiche::BinaryHttpRequest::Field>& bhttp_headers) {
+  std::string synthetic_headers = "HTTP/1.1 200 Success\r\n";
+  for (const auto& header : bhttp_headers) {
+    if (!net::HttpUtil::IsValidHeaderName(header.name) ||
+        !net::HttpUtil::IsValidHeaderValue(header.value)) {
+      return nullptr;
+    }
+    synthetic_headers += header.name + ": " + header.value + "\r\n";
+  }
+  return net::HttpResponseHeaders::TryToCreate(synthetic_headers);
 }
 
 }  // namespace
@@ -139,7 +164,7 @@ class ObliviousHttpRequestHandler::RequestState {
   std::unique_ptr<TrustTokenRequestHelperFactory> trust_token_helper_factory;
   std::unique_ptr<TrustTokenRequestHelper> trust_token_helper;
   net::NetLogWithSource net_log;
-  absl::optional<StatefulObliviousHttpClient> ohttp_client;
+  std::optional<StatefulObliviousHttpClient> ohttp_client;
 };
 
 ObliviousHttpRequestHandler::ObliviousHttpRequestHandler(
@@ -196,7 +221,7 @@ void ObliviousHttpRequestHandler::StartRequest(
 
   state->net_log = net::NetLogWithSource::Make(
       net::NetLog::Get(), net::NetLogSourceType::URL_REQUEST);
-  state->net_log.BeginEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST_START);
+  state->net_log.BeginEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST);
 
   if (state->request->trust_token_params) {
     state->trust_token_helper_factory =
@@ -209,17 +234,21 @@ void ObliviousHttpRequestHandler::StartRequest(
             // state, which owns the TrustTokenRequestHelperFactory.
             base::BindRepeating(&NetworkContext::client,
                                 base::Unretained(owner_network_context_)),
+            // It's safe to bind to |state| pointer. Callback is owned by the
+            // |state->trust_token_helper_factory|.
             base::BindRepeating(
-                [](NetworkContext* context) {
+                [](NetworkContext* context, RequestState* state) {
                   // Trust tokens will be blocked if the user has either
-                  // disabled the Trust Token Privacy Sandbox setting, or if the
-                  // user has disabled third party cookies.
-                  return !(context->cookie_manager()
-                               ->cookie_settings()
-                               .are_third_party_cookies_blocked() ||
-                           context->are_trust_tokens_blocked());
+                  // disabled the anti-abuse content setting or blocked the
+                  // issuer site from storing data (i.e. the cookie content
+                  // setting for that site is blocked).
+                  bool is_allowed = context->cookie_manager()
+                                        ->cookie_settings()
+                                        .ArePrivateStateTokensAllowed(
+                                            state->request->resource_url);
+                  return (is_allowed && !context->are_trust_tokens_blocked());
                 },
-                base::Unretained(owner_network_context_)));
+                base::Unretained(owner_network_context_), state));
 
     state->trust_token_helper_factory->CreateTrustTokenHelperForRequest(
         url::Origin::Create(state->request->resource_url),
@@ -232,19 +261,20 @@ void ObliviousHttpRequestHandler::StartRequest(
             base::Unretained(this), id));
     return;
   }
-  ContinueHandlingRequest(/*headers=*/absl::nullopt, id);
+  ContinueHandlingRequest(/*headers=*/std::nullopt, id);
 }
 
 void ObliviousHttpRequestHandler::OnDoneConstructingTrustTokenHelper(
     mojo::RemoteSetElementId id,
     TrustTokenStatusOrRequestHelper status_or_helper) {
   if (!status_or_helper.ok()) {
-    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED);
+    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
 
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
 
   RequestState* state = state_iter->second.get();
   state->trust_token_helper = status_or_helper.TakeOrCrash();
@@ -258,26 +288,26 @@ void ObliviousHttpRequestHandler::OnDoneConstructingTrustTokenHelper(
 
 void ObliviousHttpRequestHandler::OnDoneBeginningTrustTokenOperation(
     mojo::RemoteSetElementId id,
-    absl::optional<net::HttpRequestHeaders> headers,
+    std::optional<net::HttpRequestHeaders> headers,
     mojom::TrustTokenOperationStatus status) {
   if (status != mojom::TrustTokenOperationStatus::kOk) {
-    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED);
+    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
   ContinueHandlingRequest(std::move(headers), id);
 }
 
 void ObliviousHttpRequestHandler::ContinueHandlingRequest(
-    absl::optional<net::HttpRequestHeaders> headers,
+    std::optional<net::HttpRequestHeaders> headers,
     mojo::RemoteSetElementId id) {
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
   RequestState* state = state_iter->second.get();
 
   std::string bhttp_payload = CreateAndSerializeBhttpMessage(
       state->request->resource_url, state->request->method,
-      std::move(state->request->request_body->content_type),
-      std::move(state->request->request_body->content),
+      std::move(state->request->request_body),
       std::move(headers.value_or(net::HttpRequestHeaders()).GetHeaderVector()));
 
   state->net_log.AddEvent(
@@ -289,7 +319,7 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
           dict.Set("bytes", net::NetLogBinaryValue(bhttp_payload.data(),
                                                    bhttp_payload.size()));
         }
-        return base::Value(std::move(dict));
+        return dict;
       });
 
   // Padding
@@ -327,14 +357,16 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
   auto maybe_client = StatefulObliviousHttpClient::CreateFromKeyConfig(
       std::move(state->request->key_config));
   if (!maybe_client) {
-    RespondWithError(id, net::ERR_INVALID_ARGUMENT);
+    RespondWithError(id, net::ERR_INVALID_ARGUMENT,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
   state->ohttp_client = std::move(maybe_client);
   auto maybe_encrypted_blob =
       state->ohttp_client->EncryptRequest(std::move(padded_payload));
   if (!maybe_encrypted_blob) {
-    RespondWithError(id, net::ERR_FAILED);
+    RespondWithError(id, net::ERR_FAILED,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
 
@@ -353,7 +385,9 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
 
   state->loader->AttachStringForUpload(*maybe_encrypted_blob,
                                        kObliviousHttpRequestMimeType);
-  state->loader->SetTimeoutDuration(kRequestTimeout);
+  state->loader->SetTimeoutDuration(state->request->timeout_duration
+                                        ? *state->request->timeout_duration
+                                        : kDefaultRequestTimeout);
   state->loader->DownloadToString(
       GetURLLoaderFactory(),
       base::BindOnce(&ObliviousHttpRequestHandler::OnRequestComplete,
@@ -361,16 +395,36 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
       kMaxResponseSize);
 }
 
-void ObliviousHttpRequestHandler::RespondWithError(mojo::RemoteSetElementId id,
-                                                   int error_code) {
+void ObliviousHttpRequestHandler::RespondWithError(
+    mojo::RemoteSetElementId id,
+    int error_code,
+    std::optional<int> outer_response_error_code) {
   mojom::ObliviousHttpClient* client = clients_.Get(id);
   auto state_iter = client_state_.find(id);
   DCHECK(client);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
   RequestState* state = state_iter->second.get();
-  state->net_log.EndEventWithIntParams(
-      net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST_END, "status", error_code);
-  client->OnCompleted(absl::nullopt, error_code);
+  state->net_log.EndEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST, [&] {
+    base::Value::Dict params;
+    params.Set("net_error", error_code);
+    if (outer_response_error_code) {
+      params.Set("outer_response_error_code",
+                 outer_response_error_code.value());
+    }
+    return params;
+  });
+
+  network::mojom::ObliviousHttpCompletionResultPtr response_result;
+  if (outer_response_error_code) {
+    DCHECK_NE(outer_response_error_code.value(), net::HTTP_OK);
+    response_result = network::mojom::ObliviousHttpCompletionResult::
+        NewOuterResponseErrorCode(outer_response_error_code.value());
+  } else {
+    response_result =
+        network::mojom::ObliviousHttpCompletionResult::NewNetError(error_code);
+  }
+
+  client->OnCompleted(std::move(response_result));
   clients_.Remove(id);
 
   DCHECK_EQ(1u, client_state_.count(id));
@@ -379,20 +433,28 @@ void ObliviousHttpRequestHandler::RespondWithError(mojo::RemoteSetElementId id,
 
 void ObliviousHttpRequestHandler::OnRequestComplete(
     mojo::RemoteSetElementId id,
-    std::unique_ptr<std::string> response) {
+    std::optional<std::string> response) {
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
 
   RequestState* state = state_iter->second.get();
   if (!response) {
-    RespondWithError(id, state->loader->NetError());
+    std::optional<int> outer_response_error_code;
+    if (state->loader->NetError() == net::ERR_HTTP_RESPONSE_CODE_FAILURE &&
+        state->loader->ResponseInfo() &&
+        state->loader->ResponseInfo()->headers) {
+      outer_response_error_code =
+          state->loader->ResponseInfo()->headers->response_code();
+    }
+    RespondWithError(id, state->loader->NetError(), outer_response_error_code);
     return;
   }
 
   auto maybe_payload =
-      state->ohttp_client->DecryptResponse(std::move(*response));
+      state->ohttp_client->DecryptResponse(std::move(response).value());
   if (!maybe_payload) {
-    RespondWithError(id, net::ERR_FAILED);
+    RespondWithError(id, net::ERR_INVALID_RESPONSE,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
 
@@ -405,70 +467,85 @@ void ObliviousHttpRequestHandler::OnRequestComplete(
           dict.Set("bytes", net::NetLogBinaryValue(maybe_payload->data(),
                                                    maybe_payload->size()));
         }
-        return base::Value(std::move(dict));
+        return dict;
       });
 
+  // Parse the inner request.
   auto bhttp_response = quiche::BinaryHttpResponse::Create(*maybe_payload);
   if (!bhttp_response.ok()) {
-    RespondWithError(id, net::ERR_FAILED);
+    RespondWithError(id, net::ERR_INVALID_RESPONSE,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
 
-  // Check that the inner request was successful.
-  int status_code = bhttp_response->status_code();
-  if (status_code / 100 != 2) {
-    RespondWithError(id, net::ERR_HTTP_RESPONSE_CODE_FAILURE);
+  int inner_status_code = bhttp_response->status_code();
+  scoped_refptr<net::HttpResponseHeaders> headers =
+      GetSyntheticBhttpResponseHeader(bhttp_response->GetHeaderFields());
+  // Check that the header is valid.
+  if (!headers) {
+    RespondWithError(id, net::ERR_INVALID_RESPONSE,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
 
   if (state->trust_token_helper) {
-    std::string synthetic_headers = "HTTP/1.1 200 Success\r\n";
-    for (const auto& header : bhttp_response->GetHeaderFields()) {
-      // Header names and values can not contain embedded newlines. The rest of
-      // the constraints are handled by HttpResponseHeaders::TryToCreate.
-      if (base::ranges::find_first_of(header.name, kHeaderForbiddenChars) !=
-              header.name.end() ||
-          base::ranges::find_first_of(header.value, kHeaderForbiddenChars) !=
-              header.value.end()) {
-        // Invalid header value
-        RespondWithError(id, net::ERR_INVALID_RESPONSE);
-      }
-      synthetic_headers += header.name + ": " + header.value + "\r\n";
-    }
-    scoped_refptr<net::HttpResponseHeaders> headers =
-        net::HttpResponseHeaders::TryToCreate(synthetic_headers);
-    if (!headers) {
-      RespondWithError(id, net::ERR_INVALID_RESPONSE);
-      return;
-    }
     state->trust_token_helper->Finalize(
         *headers,
         base::BindOnce(
             &ObliviousHttpRequestHandler::OnDoneFinalizingTrustTokenOperation,
-            base::Unretained(this), id, std::string(bhttp_response->body())));
+            base::Unretained(this), id, inner_status_code, headers,
+            std::string(bhttp_response->body())));
     return;
   }
 
-  NotifyComplete(id, std::string(bhttp_response->body()));
+  NotifyComplete(id, inner_status_code, std::move(headers),
+                 std::string(bhttp_response->body()));
 }
 
 void ObliviousHttpRequestHandler::OnDoneFinalizingTrustTokenOperation(
     mojo::RemoteSetElementId id,
+    int inner_response_code,
+    scoped_refptr<net::HttpResponseHeaders> headers,
     std::string body,
     mojom::TrustTokenOperationStatus status) {
   if (status != mojom::TrustTokenOperationStatus::kOk) {
-    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED);
+    RespondWithError(id, net::ERR_TRUST_TOKEN_OPERATION_FAILED,
+                     /*outer_response_error_code=*/std::nullopt);
     return;
   }
-  NotifyComplete(id, std::move(body));
+  NotifyComplete(id, inner_response_code, std::move(headers), std::move(body));
 }
 
-void ObliviousHttpRequestHandler::NotifyComplete(mojo::RemoteSetElementId id,
-                                                 std::string body) {
+void ObliviousHttpRequestHandler::NotifyComplete(
+    mojo::RemoteSetElementId id,
+    int inner_response_code,
+    scoped_refptr<net::HttpResponseHeaders> headers,
+    std::string body) {
   mojom::ObliviousHttpClient* client = clients_.Get(id);
+  auto state_iter = client_state_.find(id);
   DCHECK(client);
+  CHECK(state_iter != client_state_.end());
+  RequestState* state = state_iter->second.get();
+  net::NetLogResponseHeaders(
+      state->net_log, net::NetLogEventType::OBLIVIOUS_HTTP_RESPONSE_HEADERS,
+      headers.get());
+  state->net_log.EndEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST, [&] {
+    base::Value::Dict params;
+    params.Set("net_error", net::OK);
+    params.Set("inner_response_code", inner_response_code);
+    return params;
+  });
 
-  client->OnCompleted(std::move(body), net::OK);
+  network::mojom::ObliviousHttpResponsePtr response =
+      network::mojom::ObliviousHttpResponse::New();
+  response->response_code = inner_response_code;
+  response->response_body = std::move(body);
+  response->headers = std::move(headers);
+  network::mojom::ObliviousHttpCompletionResultPtr response_result =
+      network::mojom::ObliviousHttpCompletionResult::NewInnerResponse(
+          std::move(response));
+
+  client->OnCompleted(std::move(response_result));
   clients_.Remove(id);
   client_state_.erase(id);
 }
@@ -489,7 +566,7 @@ ObliviousHttpRequestHandler::GetURLLoaderFactory() {
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
   params->process_id = network::mojom::kBrowserProcessId;
-  params->is_corb_enabled = false;
+  params->is_orb_enabled = false;
   params->is_trusted = true;
   params->automatically_assign_isolation_info = true;
 

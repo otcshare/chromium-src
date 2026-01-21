@@ -4,15 +4,14 @@
 
 #include "remoting/host/desktop_and_cursor_conditional_composer.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "build/build_config.h"
 
 namespace remoting {
 
 DesktopAndCursorConditionalComposer::DesktopAndCursorConditionalComposer(
     std::unique_ptr<DesktopCapturer> desktop_capturer) {
-#if defined(WEBRTC_USE_GIO)
   desktop_capturer_ = desktop_capturer.get();
-#endif
   capturer_ = webrtc::DesktopAndCursorComposer::CreateWithoutMouseCursorMonitor(
       std::move(desktop_capturer));
 }
@@ -21,15 +20,18 @@ DesktopAndCursorConditionalComposer::~DesktopAndCursorConditionalComposer() =
     default;
 
 void DesktopAndCursorConditionalComposer::SetComposeEnabled(bool enabled) {
-  if (enabled == compose_enabled_)
+  if (enabled == compose_enabled_) {
     return;
+  }
 
   if (enabled) {
-    if (mouse_cursor_)
+    if (mouse_cursor_) {
       capturer_->OnMouseCursor(webrtc::MouseCursor::CopyOf(*mouse_cursor_));
+    }
   } else {
     webrtc::MouseCursor* empty = new webrtc::MouseCursor(
-        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(0, 0)),
+        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(0, 0),
+                                      webrtc::FOURCC_ARGB),
         webrtc::DesktopVector(0, 0));
     capturer_->OnMouseCursor(empty);
   }
@@ -40,14 +42,16 @@ void DesktopAndCursorConditionalComposer::SetComposeEnabled(bool enabled) {
 void DesktopAndCursorConditionalComposer::SetMouseCursor(
     std::unique_ptr<webrtc::MouseCursor> mouse_cursor) {
   mouse_cursor_ = std::move(mouse_cursor);
-  if (compose_enabled_)
+  if (compose_enabled_) {
     capturer_->OnMouseCursor(webrtc::MouseCursor::CopyOf(*mouse_cursor_));
+  }
 }
 
 void DesktopAndCursorConditionalComposer::SetMouseCursorPosition(
     const webrtc::DesktopVector& position) {
-  if (compose_enabled_)
+  if (compose_enabled_) {
     capturer_->OnMouseCursorPosition(position);
+  }
 }
 
 void DesktopAndCursorConditionalComposer::Start(
@@ -84,6 +88,15 @@ bool DesktopAndCursorConditionalComposer::FocusOnSelectedSource() {
 bool DesktopAndCursorConditionalComposer::IsOccluded(
     const webrtc::DesktopVector& pos) {
   return capturer_->IsOccluded(pos);
+}
+
+void DesktopAndCursorConditionalComposer::SetMaxFrameRate(
+    uint32_t max_frame_rate) {
+  capturer_->SetMaxFrameRate(max_frame_rate);
+}
+
+bool DesktopAndCursorConditionalComposer::SupportsFrameCallbacks() const {
+  return desktop_capturer_->SupportsFrameCallbacks();
 }
 
 #if defined(WEBRTC_USE_GIO)

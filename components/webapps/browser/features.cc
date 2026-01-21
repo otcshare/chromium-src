@@ -10,73 +10,44 @@ namespace webapps {
 namespace features {
 
 #if BUILDFLAG(IS_ANDROID)
-BASE_FEATURE(kAddToHomescreenMessaging,
-             "AddToHomescreenMessaging",
+// Enables WebAPK Install Failure Notification.
+BASE_FEATURE(kWebApkInstallFailureNotification,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables or disables the installable ambient badge infobar.
-BASE_FEATURE(kInstallableAmbientBadgeInfoBar,
-             "InstallableAmbientBadgeInfoBar",
+BASE_FEATURE(kAndroidWebAppMenuButton, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAndroidTWAOriginDisplay, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAndroidWebAppHeaderForStandaloneMode,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables or disables the installable ambient badge message.
-BASE_FEATURE(kInstallableAmbientBadgeMessage,
-             "InstallableAmbientBadgeMessage",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// The capacity of cached domains which do not show message again if
-// users do not accept the message.
-extern const base::FeatureParam<int>
-    kInstallableAmbientBadgeMessage_ThrottleDomainsCapacity{
-        &kInstallableAmbientBadgeMessage,
-        "installable_ambient_badge_message_throttle_domains_capacity", 100};
-
-// Enables PWA Unique IDs for WebAPKs.
-BASE_FEATURE(kWebApkUniqueId,
-             "WebApkUniqueId",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kAndroidAutoMintedTWA, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// When the user clicks "Create Shortcut" in the dot menu, the current page is
-// used as start-url, instead of the manifest-supplied value.
-// This allows subpages of web apps to be bookmarked via shortcuts
-// separately from their parent app.
-// For installing the parent app, the existing "Install Site" should be used
-// instead. With this feature, "Install Site" now also shows up for websites
-// without service worker, as long as they have a manifest.
-BASE_FEATURE(kCreateShortcutIgnoresManifest,
-             "CreateShortcutIgnoresManifest",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Skip the service worker install criteria check for installing. This affect
-// only the "installable" status but not "promotable".
-BASE_FEATURE(kSkipServiceWorkerCheckInstallOnly,
-             "SkipServiceWorkerCheckInstallOnly",
+// Do not remove this feature flag, since it serves as a kill-switch for the ML
+// promotion model. Kill switches are required for all ML model-backed features.
+BASE_FEATURE(kWebAppsEnableMLModelForPromotion,
 #if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
-
-// Enables showing a detailed install dialog for user installs.
-BASE_FEATURE(kDesktopPWAsDetailedInstallDialog,
-             "DesktopPWAsDetailedInstallDialog",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enables sending the beforeinstallprompt without a service worker check.
-BASE_FEATURE(kSkipServiceWorkerForInstallPrompt,
-             "SkipServiceWorkerForInstallPromot",
+#else
              base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+extern const base::FeatureParam<double> kWebAppsMLGuardrailResultReportProb(
+    &kWebAppsEnableMLModelForPromotion,
+    "guardrail_report_prob",
+    0);
+extern const base::FeatureParam<double> kWebAppsMLModelUserDeclineReportProb(
+    &kWebAppsEnableMLModelForPromotion,
+    "model_and_user_decline_report_prob",
+    0);
+extern const base::FeatureParam<int> kMaxDaysForMLPromotionGuardrailStorage(
+    &kWebAppsEnableMLModelForPromotion,
+    "max_days_to_store_guardrails",
+    kTotalDaysToStoreMLGuardrails);
 
-bool SkipInstallServiceWorkerCheck() {
-  return base::FeatureList::IsEnabled(kSkipServiceWorkerCheckInstallOnly);
-}
-
-bool SkipServiceWorkerForInstallPromotion() {
-  return base::FeatureList::IsEnabled(kSkipServiceWorkerCheckInstallOnly) &&
-         base::FeatureList::IsEnabled(kSkipServiceWorkerForInstallPrompt);
-}
-
+// Checking if a web app is installed in Chrome Android ultimately leads to a
+// long, UI-thread Binder call. Enabling this flag makes the web app
+// installation check on Clank async.
+BASE_FEATURE(kCheckWebAppExistenceAsync, base::FEATURE_ENABLED_BY_DEFAULT);
 }  // namespace features
 }  // namespace webapps

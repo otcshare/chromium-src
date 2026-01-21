@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "components/sync/model/string_ordinal.h"
 
@@ -37,18 +38,15 @@ class AppListSyncModelSanitizer {
   ~AppListSyncModelSanitizer();
 
   // Updates page breaks in the app list sync data to ensure items in the app
-  // list model respect legacy max page size - productivity launcher UI ignores
-  // page breaks, and will not itself manage pagination state. This method
+  // list model respect legacy max page size - launcher UI ignores page breaks,
+  // and will not itself manage pagination state. This method
   // ensures that app list model change synced to other devices have sane
   // pagination structure.
   // `reset_page_breaks` indicates whether all existing page breaks can be
   // removed. If false, only page breaks previously created by a model
   // sanitization can be removed.
-  // Used when order of apps in top level app list changes with
-  // kProductivityLauncher enabled.
-  void SanitizePageBreaksForProductivityLauncher(
-      const std::set<std::string>& top_level_items,
-      bool reset_page_breaks);
+  void SanitizePageBreaks(const std::set<std::string>& top_level_items,
+                          bool reset_page_breaks);
 
  private:
   // For items in sync_items that have identical position ordinals starting at
@@ -64,7 +62,7 @@ class AppListSyncModelSanitizer {
       const syncer::StringOrdinal& starting_ordinal,
       std::map<std::string, syncer::StringOrdinal>* resolved_positions);
 
-  AppListSyncableService* const syncable_service_;
+  const raw_ptr<AppListSyncableService> syncable_service_;
 };
 
 }  // namespace app_list

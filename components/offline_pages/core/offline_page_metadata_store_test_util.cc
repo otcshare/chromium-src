@@ -7,8 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
@@ -39,7 +39,7 @@ int64_t GetPageCountSync(sql::Database* db) {
 OfflinePageMetadataStoreTestUtil::OfflinePageMetadataStoreTestUtil()
     : store_ptr_(nullptr) {}
 
-OfflinePageMetadataStoreTestUtil::~OfflinePageMetadataStoreTestUtil() {}
+OfflinePageMetadataStoreTestUtil::~OfflinePageMetadataStoreTestUtil() = default;
 
 void OfflinePageMetadataStoreTestUtil::BuildStore() {
   if (!temp_directory_.IsValid() && !temp_directory_.CreateUniqueTempDir()) {
@@ -60,8 +60,8 @@ void OfflinePageMetadataStoreTestUtil::BuildStoreInMemory() {
 }
 
 void OfflinePageMetadataStoreTestUtil::DeleteStore() {
-  store_.reset();
   store_ptr_ = nullptr;
+  store_.reset();
 }
 
 std::unique_ptr<OfflinePageMetadataStore>
@@ -106,8 +106,9 @@ OfflinePageMetadataStoreTestUtil::GetPageByOfflineId(int64_t offline_id) {
       store(), criteria,
       base::BindLambdaForTesting(
           [&](const std::vector<OfflinePageItem>& cb_pages) {
-            if (!cb_pages.empty())
+            if (!cb_pages.empty()) {
               page = new OfflinePageItem(cb_pages[0]);
+            }
             run_loop.Quit();
           }));
   task->Execute(base::DoNothing());

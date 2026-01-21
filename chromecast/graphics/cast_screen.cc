@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "ui/aura/env.h"
 #include "ui/display/display.h"
 
@@ -25,7 +26,7 @@ bool CastScreen::IsWindowUnderCursor(gfx::NativeWindow window) {
 }
 
 gfx::NativeWindow CastScreen::GetWindowAtScreenPoint(const gfx::Point& point) {
-  return gfx::NativeWindow(nullptr);
+  return gfx::NativeWindow();
 }
 
 display::Display CastScreen::GetDisplayNearestWindow(

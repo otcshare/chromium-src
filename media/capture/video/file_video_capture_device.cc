@@ -6,21 +6,29 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "media/base/video_frame.h"
 #include "media/capture/mojom/image_capture_types.h"
 #include "media/capture/video/blob_utils.h"
-#include "media/capture/video/gpu_memory_buffer_utils.h"
+#include "media/capture/video/mappable_shared_image_utils.h"
+#include "media/capture/video/video_capture_gpu_channel_host.h"
 #include "media/capture/video_capture_types.h"
 #include "media/parsers/jpeg_parser.h"
 #include "third_party/libyuv/include/libyuv.h"
@@ -42,14 +50,14 @@ int gcd(int a, int b) {
   return (b);
 }
 
+constexpr int kY4MHeaderMaxSize = 200;
+constexpr char kY4MSimpleFrameDelimiter[] = "FRAME";
+constexpr int kY4MSimpleFrameDelimiterSize = 6;
+constexpr float kMJpegFrameRate = 30.0f;
+
 }  // namespace
 
-static const int kY4MHeaderMaxSize = 200;
-static const char kY4MSimpleFrameDelimiter[] = "FRAME";
-static const int kY4MSimpleFrameDelimiterSize = 6;
-static const float kMJpegFrameRate = 30.0f;
-
-int ParseY4MInt(const base::StringPiece& token) {
+int ParseY4MInt(std::string_view token) {
   int temp_int;
   CHECK(base::StringToInt(token, &temp_int)) << token;
   return temp_int;
@@ -57,7 +65,7 @@ int ParseY4MInt(const base::StringPiece& token) {
 
 // Extract numerator and denominator out of a token that must have the aspect
 // numerator:denominator, both integer numbers.
-void ParseY4MRational(const base::StringPiece& token,
+void ParseY4MRational(std::string_view token,
                       int* numerator,
                       int* denominator) {
   size_t index_divider = token.find(':');
@@ -84,13 +92,13 @@ void ParseY4MTags(const std::string& file_header,
   format.pixel_format = PIXEL_FORMAT_I420;
   size_t index = 0;
   size_t blank_position = 0;
-  base::StringPiece token;
+  std::string_view token;
   while ((blank_position = file_header.find_first_of("\n ", index)) !=
          std::string::npos) {
     // Every token is supposed to have an identifier letter and a bunch of
     // information immediately after, which we extract into a |token| here.
-    token =
-        base::StringPiece(&file_header[index + 1], blank_position - index - 1);
+    token = std::string_view(file_header)
+                .substr(index + 1, blank_position - index - 1);
     CHECK(!token.empty());
     switch (file_header[index]) {
       case 'W':
@@ -101,8 +109,9 @@ void ParseY4MTags(const std::string& file_header,
         break;
       case 'F': {
         // If the token is "FRAME", it means we have finished with the header.
-        if (token[0] == 'R')
+        if (token[0] == 'R') {
           break;
+        }
         int fps_numerator, fps_denominator;
         ParseY4MRational(token, &fps_numerator, &fps_denominator);
         format.frame_rate = fps_numerator / fps_denominator;
@@ -124,8 +133,9 @@ void ParseY4MTags(const std::string& file_header,
         break;
     }
     // We're done if we have found a newline character right after the token.
-    if (file_header[blank_position] == '\n')
+    if (file_header[blank_position] == '\n') {
       break;
+    }
     index = blank_position + 1;
   }
   // Last video format semantic correctness check before sending it back.
@@ -143,11 +153,11 @@ class VideoFileParser {
 
   // Gets the start pointer of next frame and stores current frame size in
   // |frame_size|.
-  virtual const uint8_t* GetNextFrame(int* frame_size) = 0;
+  virtual base::span<const uint8_t> GetNextFrame() = 0;
 
  protected:
   const base::FilePath file_path_;
-  int frame_size_;
+  size_t frame_size_;
   size_t current_byte_index_;
   size_t first_frame_byte_index_;
 };
@@ -162,11 +172,11 @@ class Y4mFileParser final : public VideoFileParser {
   // VideoFileParser implementation, class methods.
   ~Y4mFileParser() override;
   bool Initialize(VideoCaptureFormat* capture_format) override;
-  const uint8_t* GetNextFrame(int* frame_size) override;
+  base::span<const uint8_t> GetNextFrame() override;
 
  private:
   std::unique_ptr<base::File> file_;
-  std::unique_ptr<uint8_t[]> video_frame_;
+  base::HeapArray<uint8_t> video_frame_;
 };
 
 class MjpegFileParser final : public VideoFileParser {
@@ -179,7 +189,7 @@ class MjpegFileParser final : public VideoFileParser {
   // VideoFileParser implementation, class methods.
   ~MjpegFileParser() override;
   bool Initialize(VideoCaptureFormat* capture_format) override;
-  const uint8_t* GetNextFrame(int* frame_size) override;
+  base::span<const uint8_t> GetNextFrame() override;
 
  private:
   std::unique_ptr<base::MemoryMappedFile> mapped_file_;
@@ -208,7 +218,7 @@ bool Y4mFileParser::Initialize(VideoCaptureFormat* capture_format) {
   }
 
   std::string header(kY4MHeaderMaxSize, '\0');
-  file_->Read(0, &header[0], header.size());
+  file_->Read(0, base::as_writable_byte_span(header));
   const size_t header_end = header.find(kY4MSimpleFrameDelimiter);
   CHECK_NE(header_end, header.npos);
 
@@ -220,27 +230,27 @@ bool Y4mFileParser::Initialize(VideoCaptureFormat* capture_format) {
   return true;
 }
 
-const uint8_t* Y4mFileParser::GetNextFrame(int* frame_size) {
-  if (!video_frame_)
-    video_frame_ = std::make_unique<uint8_t[]>(frame_size_);
-  int result =
-      file_->Read(current_byte_index_,
-                  reinterpret_cast<char*>(video_frame_.get()), frame_size_);
+base::span<const uint8_t> Y4mFileParser::GetNextFrame() {
+  if (video_frame_.size() != frame_size_) {
+    video_frame_ = base::HeapArray<uint8_t>::Uninit(frame_size_);
+  }
+  std::optional<size_t> result = file_->Read(current_byte_index_, video_frame_);
+
+  // Result will only not have a value if there was an error.
+  CHECK(result.has_value());
 
   // If we passed EOF to base::File, it will return 0 read characters. In that
   // case, reset the pointer and read again.
-  if (result != frame_size_) {
-    CHECK_EQ(result, 0);
+  if (result.value() != frame_size_) {
+    CHECK_EQ(result.value(), 0u);
     current_byte_index_ = first_frame_byte_index_;
-    CHECK_EQ(
-        file_->Read(current_byte_index_,
-                    reinterpret_cast<char*>(video_frame_.get()), frame_size_),
-        frame_size_);
+    result = file_->Read(current_byte_index_, video_frame_);
+    CHECK(result.has_value());
+    CHECK_EQ(result.value(), frame_size_);
   } else {
     current_byte_index_ += frame_size_ + kY4MSimpleFrameDelimiterSize;
   }
-  *frame_size = frame_size_;
-  return video_frame_.get();
+  return video_frame_;
 }
 
 MjpegFileParser::MjpegFileParser(const base::FilePath& file_path)
@@ -257,11 +267,12 @@ bool MjpegFileParser::Initialize(VideoCaptureFormat* capture_format) {
   }
 
   JpegParseResult result;
-  if (!ParseJpegStream(mapped_file_->data(), mapped_file_->length(), &result))
+  if (!ParseJpegStream(mapped_file_->bytes(), &result)) {
     return false;
+  }
 
   frame_size_ = result.image_size;
-  if (frame_size_ > static_cast<int>(mapped_file_->length())) {
+  if (frame_size_ > mapped_file_->length()) {
     LOG(ERROR) << "File is incomplete";
     return false;
   }
@@ -271,26 +282,28 @@ bool MjpegFileParser::Initialize(VideoCaptureFormat* capture_format) {
   format.frame_size.set_width(result.frame_header.visible_width);
   format.frame_size.set_height(result.frame_header.visible_height);
   format.frame_rate = kMJpegFrameRate;
-  if (!format.IsValid())
+  if (!format.IsValid()) {
     return false;
+  }
   *capture_format = format;
   return true;
 }
 
-const uint8_t* MjpegFileParser::GetNextFrame(int* frame_size) {
-  const uint8_t* buf_ptr = mapped_file_->data() + current_byte_index_;
+base::span<const uint8_t> MjpegFileParser::GetNextFrame() {
+  base::span<const uint8_t> buf_span =
+      mapped_file_->bytes().subspan(current_byte_index_);
 
   JpegParseResult result;
-  if (!ParseJpegStream(buf_ptr, mapped_file_->length() - current_byte_index_,
-                       &result)) {
-    return nullptr;
+  if (!ParseJpegStream(buf_span, &result)) {
+    return base::span<const uint8_t>();
   }
-  *frame_size = frame_size_ = result.image_size;
+  int frame_size = frame_size_ = result.image_size;
   current_byte_index_ += frame_size_;
   // Reset the pointer to play repeatedly.
-  if (current_byte_index_ >= mapped_file_->length())
+  if (current_byte_index_ >= mapped_file_->length()) {
     current_byte_index_ = first_frame_byte_index_;
-  return buf_ptr;
+  }
+  return buf_span.first(base::checked_cast<size_t>(frame_size));
 }
 
 // static
@@ -325,7 +338,7 @@ std::unique_ptr<VideoFileParser> FileVideoCaptureDevice::GetVideoFileParser(
   return file_parser;
 }
 
-std::unique_ptr<uint8_t[]> FileVideoCaptureDevice::CropPTZRegion(
+std::vector<uint8_t> FileVideoCaptureDevice::CropPTZRegion(
     const uint8_t* frame,
     size_t frame_buffer_size,
     VideoPixelFormat* final_pixel_format) {
@@ -335,7 +348,7 @@ std::unique_ptr<uint8_t[]> FileVideoCaptureDevice::CropPTZRegion(
 
   const gfx::Size& frame_size = capture_format_.frame_size;
   uint32_t fourcc;
-  std::unique_ptr<uint8_t[]> jpeg_to_i420_buffer_;
+  base::HeapArray<uint8_t> jpeg_to_i420_buffer_;
   switch (capture_format_.pixel_format) {
     case PIXEL_FORMAT_MJPEG:
       // |libyuv::ConvertToI420| don't support cropping MJPG into different
@@ -344,15 +357,15 @@ std::unique_ptr<uint8_t[]> FileVideoCaptureDevice::CropPTZRegion(
             const size_t i420_buffer_size =
                 VideoFrame::AllocationSize(PIXEL_FORMAT_I420, frame_size);
             jpeg_to_i420_buffer_ =
-                std::make_unique<uint8_t[]>(i420_buffer_size);
+                base::HeapArray<uint8_t>::Uninit(i420_buffer_size);
 
-            uint8_t* dst_yp = jpeg_to_i420_buffer_.get();
-            uint8_t* dst_up =
+            uint8_t* dst_yp = jpeg_to_i420_buffer_.data();
+            uint8_t* dst_up = UNSAFE_TODO(
                 dst_yp + VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, frame_size)
-                             .GetArea();
-            uint8_t* dst_vp =
+                             .GetArea());
+            uint8_t* dst_vp = UNSAFE_TODO(
                 dst_up + VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, frame_size)
-                             .GetArea();
+                             .GetArea());
             int dst_yp_stride = frame_size.width();
             int dst_up_stride = dst_yp_stride / 2;
             int dst_vp_stride = dst_yp_stride / 2;
@@ -369,7 +382,7 @@ std::unique_ptr<uint8_t[]> FileVideoCaptureDevice::CropPTZRegion(
           }()) {
         LOG(ERROR) << "Failed to convert MJPEG to i420 for ptz transform";
       }
-      frame = jpeg_to_i420_buffer_.get();
+      frame = jpeg_to_i420_buffer_.data();
       frame_buffer_size =
           VideoFrame::AllocationSize(PIXEL_FORMAT_I420, frame_size);
       *final_pixel_format = PIXEL_FORMAT_I420;
@@ -394,68 +407,69 @@ std::unique_ptr<uint8_t[]> FileVideoCaptureDevice::CropPTZRegion(
                frame_size.height() - crop_height);
   const size_t crop_buffer_size =
       VideoFrame::AllocationSize(PIXEL_FORMAT_I420, crop_size);
-  auto crop_frame = std::make_unique<uint8_t[]>(crop_buffer_size);
+  std::vector<uint8_t> crop_frame(crop_buffer_size);
 
-  uint8_t* crop_yp = crop_frame.get();
-  uint8_t* crop_up =
-      crop_yp +
+  const size_t kCropPlaneYSize =
       VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, crop_size).GetArea();
-  uint8_t* crop_vp =
-      crop_up +
+  const size_t kCropPlaneUVSize =
       VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, crop_size).GetArea();
+  base::span<uint8_t> crop_frame_span = crop_frame;
+  base::span<uint8_t> crop_yp = crop_frame_span.subspan(0u, kCropPlaneYSize);
+  base::span<uint8_t> crop_up =
+      crop_frame_span.subspan(kCropPlaneYSize, kCropPlaneUVSize);
+  base::span<uint8_t> crop_vp = crop_frame_span.subspan(
+      kCropPlaneYSize + kCropPlaneUVSize, kCropPlaneUVSize);
   int crop_yp_stride = crop_width;
   int crop_up_stride = crop_yp_stride / 2;
   int crop_vp_stride = crop_yp_stride / 2;
 
-  if (libyuv::ConvertToI420(frame, frame_buffer_size, crop_yp, crop_yp_stride,
-                            crop_up, crop_up_stride, crop_vp, crop_vp_stride,
-                            crop_x, crop_y, frame_size.width(),
-                            frame_size.height(), crop_width, crop_height,
-                            libyuv::RotationMode::kRotate0, fourcc)) {
+  if (libyuv::ConvertToI420(
+          frame, frame_buffer_size, crop_yp.data(), crop_yp_stride,
+          crop_up.data(), crop_up_stride, crop_vp.data(), crop_vp_stride,
+          crop_x, crop_y, frame_size.width(), frame_size.height(), crop_width,
+          crop_height, libyuv::RotationMode::kRotate0, fourcc)) {
     LOG(ERROR) << "Failed to crop image for ptz transform.";
     return {};
   }
 
-  if (crop_size == frame_size)
+  if (crop_size == frame_size) {
     return crop_frame;
+  }
 
   // Scale cropped region to original size.
   const auto& scale_size = frame_size;
   const size_t scale_buffer_size =
       VideoFrame::AllocationSize(PIXEL_FORMAT_I420, scale_size);
-  auto scale_frame = std::make_unique<uint8_t[]>(scale_buffer_size);
+  std::vector<uint8_t> scale_frame(scale_buffer_size);
 
-  uint8_t* scale_yp = scale_frame.get();
-  uint8_t* scale_up =
-      scale_yp +
+  const size_t kScalePlaneYSize =
       VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, scale_size).GetArea();
-  uint8_t* scale_vp =
-      scale_up +
+  const size_t kScalePlaneUVSize =
       VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, scale_size).GetArea();
+  base::span<uint8_t> scale_frame_span = scale_frame;
+  base::span<uint8_t> scale_yp = scale_frame_span.subspan(0u, kScalePlaneYSize);
+  base::span<uint8_t> scale_up =
+      scale_frame_span.subspan(kScalePlaneYSize, kScalePlaneUVSize);
+  base::span<uint8_t> scale_vp = scale_frame_span.subspan(
+      kScalePlaneYSize + kScalePlaneUVSize, kScalePlaneUVSize);
   int scale_yp_stride = scale_size.width();
   int scale_up_stride = scale_yp_stride / 2;
   int scale_vp_stride = scale_yp_stride / 2;
 
-  if (libyuv::I420Scale(crop_yp, crop_yp_stride, crop_up, crop_up_stride,
-                        crop_vp, crop_vp_stride, crop_width, crop_height,
-                        scale_yp, scale_yp_stride, scale_up, scale_up_stride,
-                        scale_vp, scale_vp_stride, scale_size.width(),
-                        scale_size.height(),
-                        libyuv::FilterMode::kFilterBilinear)) {
+  if (libyuv::I420Scale(
+          crop_yp.data(), crop_yp_stride, crop_up.data(), crop_up_stride,
+          crop_vp.data(), crop_vp_stride, crop_width, crop_height,
+          scale_yp.data(), scale_yp_stride, scale_up.data(), scale_up_stride,
+          scale_vp.data(), scale_vp_stride, scale_size.width(),
+          scale_size.height(), libyuv::FilterMode::kFilterBilinear)) {
     LOG(ERROR) << "Failed to scale image for ptz transform.";
     return {};
   }
   return scale_frame;
 }
 
-FileVideoCaptureDevice::FileVideoCaptureDevice(
-    const base::FilePath& file_path,
-    std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support)
-    : capture_thread_("CaptureThread"),
-      file_path_(file_path),
-      gmb_support_(gmb_support
-                       ? std::move(gmb_support)
-                       : std::make_unique<gpu::GpuMemoryBufferSupport>()) {}
+FileVideoCaptureDevice::FileVideoCaptureDevice(const base::FilePath& file_path)
+    : capture_thread_("CaptureThread"), file_path_(file_path) {}
 
 FileVideoCaptureDevice::~FileVideoCaptureDevice() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -555,11 +569,13 @@ void FileVideoCaptureDevice::OnSetPhotoOptions(
     return;
   }
 
-  if (settings->has_torch && settings->torch)
+  if (settings->has_torch && settings->torch) {
     return;
+  }
 
-  if (settings->has_red_eye_reduction && settings->red_eye_reduction)
+  if (settings->has_red_eye_reduction && settings->red_eye_reduction) {
     return;
+  }
 
   if (settings->has_exposure_compensation || settings->has_exposure_time ||
       settings->has_color_temperature || settings->has_iso ||
@@ -570,14 +586,14 @@ void FileVideoCaptureDevice::OnSetPhotoOptions(
   }
 
   if (settings->has_pan) {
-    pan_ = base::clamp(int(settings->pan), 0, zoom_max_levels_);
+    pan_ = std::clamp(int(settings->pan), 0, zoom_max_levels_);
   }
 
   if (settings->has_tilt) {
-    tilt_ = base::clamp(int(settings->tilt), 0, zoom_max_levels_);
+    tilt_ = std::clamp(int(settings->tilt), 0, zoom_max_levels_);
   }
   if (settings->has_zoom) {
-    zoom_ = base::clamp(int(settings->zoom), 0, zoom_max_levels_);
+    zoom_ = std::clamp(int(settings->zoom), 0, zoom_max_levels_);
   }
 
   std::move(callback).Run(true);
@@ -597,8 +613,13 @@ void FileVideoCaptureDevice::OnAllocateAndStart(
 
   client_ = std::move(client);
 
-  if (params.buffer_type == VideoCaptureBufferType::kGpuMemoryBuffer)
-    video_capture_use_gmb_ = true;
+  // Note that VideoCaptureBufferType::kGpuMemoryBuffer is used currently to
+  // either created a gmb or MappableSI.
+  // VideoCaptureBufferType::kGpuMemoryBuffer will be renamed once all clients
+  // are converted to use MappableSI.
+  if (params.buffer_type == VideoCaptureBufferType::kGpuMemoryBuffer) {
+    video_capture_use_mappable_buffer_ = true;
+  }
 
   DCHECK(!file_parser_);
   file_parser_ = GetVideoFileParser(file_path_, &capture_format_);
@@ -637,33 +658,35 @@ void FileVideoCaptureDevice::OnStopAndDeAllocate() {
 
 void FileVideoCaptureDevice::OnCaptureTask() {
   DCHECK(capture_thread_.task_runner()->BelongsToCurrentThread());
-  if (!client_)
+  if (!client_) {
     return;
+  }
   base::AutoLock lock(lock_);
 
   // Give the captured frame to the client.
-  int frame_size = 0;
-  const uint8_t* frame_ptr = file_parser_->GetNextFrame(&frame_size);
-  CHECK(frame_ptr);
+  base::span<const uint8_t> frame_span = file_parser_->GetNextFrame();
+  CHECK(!frame_span.empty());
 
   VideoPixelFormat ptz_pixel_format;
-  auto ptz_frame = CropPTZRegion(frame_ptr, frame_size, &ptz_pixel_format);
+  auto ptz_frame =
+      CropPTZRegion(frame_span.data(), frame_span.size(), &ptz_pixel_format);
 
   VideoCaptureFormat ptz_format = capture_format_;
   ptz_format.pixel_format = ptz_pixel_format;
 
-  CHECK(ptz_frame);
+  CHECK(!ptz_frame.empty());
 
   const base::TimeTicks current_time = base::TimeTicks::Now();
-  if (first_ref_time_.is_null())
+  if (first_ref_time_.is_null()) {
     first_ref_time_ = current_time;
+  }
 
-  if (video_capture_use_gmb_) {
+  if (video_capture_use_mappable_buffer_) {
     const gfx::Size& buffer_size = capture_format_.frame_size;
-    std::unique_ptr<gfx::GpuMemoryBuffer> gmb;
+    scoped_refptr<gpu::ClientSharedImage> shared_image;
     VideoCaptureDevice::Client::Buffer capture_buffer;
-    auto reserve_result = AllocateNV12GpuMemoryBuffer(
-        client_.get(), buffer_size, gmb_support_.get(), &gmb, &capture_buffer);
+    auto reserve_result = AllocateNV12SharedImage(
+        client_.get(), buffer_size, &shared_image, &capture_buffer);
     if (reserve_result !=
         VideoCaptureDevice::Client::ReserveResult::kSucceeded) {
       client_->OnFrameDropped(
@@ -671,35 +694,41 @@ void FileVideoCaptureDevice::OnCaptureTask() {
       DVLOG(2) << __func__ << " frame was dropped.";
       return;
     }
-    ScopedNV12GpuMemoryBufferMapping scoped_mapping(std::move(gmb));
-    const uint8_t* src_y_plane = ptz_frame.get();
-    const uint8_t* src_u_plane =
-        ptz_frame.get() +
-        VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, buffer_size).GetArea();
-    const uint8_t* src_v_plane =
-        ptz_frame.get() +
+
+    const uint8_t* src_y_plane = ptz_frame.data();
+    const uint8_t* src_u_plane = UNSAFE_TODO(
+        ptz_frame.data() +
+        VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, buffer_size).GetArea());
+    const uint8_t* src_v_plane = UNSAFE_TODO(
+        ptz_frame.data() +
         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, buffer_size).GetArea() +
-        VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, buffer_size).GetArea();
+        VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, buffer_size).GetArea());
+    auto scoped_mapping = shared_image->Map();
     libyuv::I420ToNV12(
         src_y_plane, buffer_size.width(), src_u_plane, buffer_size.width() / 2,
-        src_v_plane, buffer_size.width() / 2, scoped_mapping.y_plane(),
-        scoped_mapping.y_stride(), scoped_mapping.uv_plane(),
-        scoped_mapping.uv_stride(), buffer_size.width(), buffer_size.height());
-    // When GpuMemoryBuffer is used, the frame data is opaque to the CPU for
+        src_v_plane, buffer_size.width() / 2,
+        scoped_mapping->GetMemoryForPlane(0).data(), scoped_mapping->Stride(0),
+        scoped_mapping->GetMemoryForPlane(1).data(), scoped_mapping->Stride(1),
+        buffer_size.width(), buffer_size.height());
+
+    // When mappable buffer is used, the frame data is opaque to the CPU for
     // most of the time.  Currently the only supported underlying format is
     // NV12.
-    VideoCaptureFormat gmb_format = ptz_format;
-    gmb_format.pixel_format = PIXEL_FORMAT_NV12;
-    client_->OnIncomingCapturedBuffer(std::move(capture_buffer), gmb_format,
+    VideoCaptureFormat buffer_format = ptz_format;
+    buffer_format.pixel_format = PIXEL_FORMAT_NV12;
+    client_->OnIncomingCapturedBuffer(std::move(capture_buffer), buffer_format,
                                       current_time,
-                                      current_time - first_ref_time_);
+                                      current_time - first_ref_time_,
+                                      /*capture_begin_timestamp=*/std::nullopt,
+                                      /*metadata=*/std::nullopt);
   } else {
     // Leave the color space unset for compatibility purposes but this
     // information should be retrieved from the container when possible.
     client_->OnIncomingCapturedData(
-        ptz_frame.get(), frame_size, ptz_format, gfx::ColorSpace(),
+        ptz_frame.data(), ptz_frame.size(), ptz_format, gfx::ColorSpace(),
         0 /* clockwise_rotation */, false /* flip_y */, current_time,
-        current_time - first_ref_time_);
+        current_time - first_ref_time_,
+        /*capture_begin_timestamp=*/std::nullopt, VideoFrameMetadata{});
   }
 
   // Process waiting photo callbacks
@@ -708,9 +737,10 @@ void FileVideoCaptureDevice::OnCaptureTask() {
     take_photo_callbacks_.pop();
 
     mojom::BlobPtr blob =
-        RotateAndBlobify(ptz_frame.get(), frame_size, ptz_format, 0);
-    if (!blob)
+        RotateAndBlobify(ptz_frame.data(), ptz_frame.size(), ptz_format, 0);
+    if (!blob) {
       continue;
+    }
 
     std::move(cb).Run(std::move(blob));
   }
@@ -724,8 +754,9 @@ void FileVideoCaptureDevice::OnCaptureTask() {
     next_frame_time_ += frame_interval;
     // Don't accumulate any debt if we are lagging behind - just post next frame
     // immediately and continue as normal.
-    if (next_frame_time_ < current_time)
+    if (next_frame_time_ < current_time) {
       next_frame_time_ = current_time;
+    }
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,

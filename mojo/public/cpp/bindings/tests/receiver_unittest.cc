@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/receiver.h"
+
 #include <stdint.h>
+
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -16,23 +20,23 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
 #include "base/threading/thread.h"
+#include "build/blink_buildflags.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/bindings/tests/receiver_unittest.test-mojom.h"
 #include "mojo/public/cpp/system/functions.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_interfaces.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_service.mojom.h"
+#include "mojo/public/cpp/test_support/validation_errors_test_util.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_interfaces.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 namespace test {
@@ -51,8 +55,9 @@ class ServiceImpl : public sample::Service {
   ServiceImpl& operator=(const ServiceImpl&) = delete;
 
   ~ServiceImpl() override {
-    if (destruction_callback_)
+    if (destruction_callback_) {
       std::move(destruction_callback_).Run();
+    }
   }
 
  private:
@@ -338,8 +343,9 @@ class PingServiceImpl : public test::PingService {
 
   // test::PingService:
   void Ping(PingCallback callback) override {
-    if (ping_handler_)
+    if (ping_handler_) {
       ping_handler_.Run();
+    }
     std::move(callback).Run();
   }
 
@@ -725,8 +731,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_receiver_storage_ = std::move(receiver);
       next_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindReceiver(GenericPendingReceiver receiver) override {
@@ -734,8 +741,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_receiver_storage_ = std::move(receiver);
       next_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindOptionalAssociatedReceiver(
@@ -744,8 +752,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_associated_receiver_storage_ = std::move(receiver);
       next_associated_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindAssociatedReceiver(
@@ -754,20 +763,22 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_associated_receiver_storage_ = std::move(receiver);
       next_associated_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
  private:
   void OnDisconnect() {
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
     connected_ = false;
   }
 
   Receiver<mojom::TestGenericBinder> receiver_;
   bool connected_ = true;
-  absl::optional<base::RunLoop> wait_loop_;
+  std::optional<base::RunLoop> wait_loop_;
   raw_ptr<GenericPendingReceiver> next_receiver_storage_ = nullptr;
   raw_ptr<GenericPendingAssociatedReceiver> next_associated_receiver_storage_ =
       nullptr;
@@ -777,11 +788,11 @@ using ReceiverSerializationTest = ReceiverTest;
 
 TEST_P(ReceiverSerializationTest, NullGenericPendingReceiver) {
   Remote<mojom::TestGenericBinder> remote;
+  GenericPendingReceiver receiver;
   TestGenericBinderImpl binder(remote.BindNewPipeAndPassReceiver());
 
   // Bind a null, nullable receiver.
   remote->BindOptionalReceiver(GenericPendingReceiver());
-  GenericPendingReceiver receiver;
   binder.WaitForNextReceiver(&receiver);
   EXPECT_FALSE(receiver.is_valid());
 
@@ -828,11 +839,11 @@ TEST_P(ReceiverSerializationTest, NullGenericPendingReceiver) {
 
 TEST_P(ReceiverSerializationTest, NullGenericPendingAssociatedReceiver) {
   Remote<mojom::TestGenericBinder> remote;
+  GenericPendingAssociatedReceiver receiver;
   TestGenericBinderImpl binder(remote.BindNewPipeAndPassReceiver());
 
   // Bind a null, nullable associated receiver.
   remote->BindOptionalAssociatedReceiver(GenericPendingAssociatedReceiver());
-  GenericPendingAssociatedReceiver receiver;
   binder.WaitForNextAssociatedReceiver(&receiver);
   EXPECT_FALSE(receiver.is_valid());
 
@@ -982,6 +993,8 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessReceiverClient,
   MojoClose(test_pipe);
 }
 
+// iOS doesn't have the ability to fork processes yet.
+#if !BUILDFLAG(IS_IOS)
 TEST_F(MultiprocessReceiverTest, MultiprocessReceiver) {
   // Regression test for https://crbug.com/1371860.
   //
@@ -1010,7 +1023,7 @@ TEST_F(MultiprocessReceiverTest, MultiprocessReceiver) {
     constexpr size_t kNumIterations = 1000;
     constexpr size_t kNumReceiversPerIteration = 10;
     for (size_t i = 0; i < kNumIterations; ++i) {
-      std::vector<absl::optional<Receiver<mojom::TestInterface1>>> receivers(
+      std::vector<std::optional<Receiver<mojom::TestInterface1>>> receivers(
           kNumReceiversPerIteration);
       for (auto& receiver : receivers) {
         receiver.emplace(this);
@@ -1025,6 +1038,7 @@ TEST_F(MultiprocessReceiverTest, MultiprocessReceiver) {
     }
   });
 }
+#endif  // BUILDFLAG(USE_BLINK)
 
 INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(ReceiverTest);
 INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(SelfOwnedReceiverTest);

@@ -20,17 +20,14 @@ interface ButtonEvent {
 export class Dialog extends View {
   private readonly positiveButton: HTMLButtonElement;
 
-  private negativeButton: HTMLButtonElement|null;
+  private readonly negativeButton: HTMLButtonElement|null;
 
-  private messageHolder: HTMLElement;
+  private readonly messageHolder: HTMLElement;
 
-  private titleHolder: HTMLDivElement|null;
+  private readonly titleHolder: HTMLDivElement|null;
 
-  private descHolder: HTMLDivElement|null;
+  protected readonly descHolder: HTMLDivElement|null;
 
-  /**
-   * @param name View name of the dialog.
-   */
   constructor(
       name: ViewName,
       {onPositiveButtonClicked, onNegativeButtonClicked}: ButtonEvent = {}) {

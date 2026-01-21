@@ -8,10 +8,11 @@
 #include <map>
 #include <vector>
 
-#include "ash/components/arc/arc_prefs.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/gmock_move_support.h"
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
@@ -37,7 +39,6 @@
 
 using testing::_;
 using testing::AnyNumber;
-using testing::Invoke;
 using testing::Mock;
 using testing::Pointee;
 
@@ -201,9 +202,9 @@ class ArcAppInstallEventLogManagerTest : public testing::Test {
   void AddLogEntry(int app_index) {
     ASSERT_GE(app_index, 0);
     ASSERT_LT(app_index, static_cast<int>(std::size(kPackageNames)));
-    const std::string package_name = kPackageNames[app_index];
+    const std::string package_name = UNSAFE_TODO(kPackageNames[app_index]);
     events_[package_name].push_back(event_);
-    manager_->Add({kPackageNames[app_index]}, event_);
+    manager_->Add({UNSAFE_TODO(kPackageNames[app_index])}, event_);
     FlushNonDelayedTasks();
     event_.set_timestamp(event_.timestamp() + 1000);
   }
@@ -229,17 +230,17 @@ class ArcAppInstallEventLogManagerTest : public testing::Test {
   }
 
   void ExpectUploadAndCaptureCallback(
-      CloudPolicyClient::StatusCallback* callback) {
+      CloudPolicyClient::ResultCallback* callback) {
     events_value_.clear();
     BuildReport();
 
     EXPECT_CALL(cloud_policy_client_,
-                UploadAppInstallReport_(MatchEvents(&events_value_), _))
+                UploadAppInstallReport(MatchEvents(&events_value_), _))
         .WillOnce(MoveArg<1>(callback));
   }
 
-  void ReportUploadSuccess(CloudPolicyClient::StatusCallback callback) {
-    std::move(callback).Run(true /* success */);
+  void ReportUploadSuccess(CloudPolicyClient::ResultCallback callback) {
+    std::move(callback).Run(CloudPolicyClient::Result(DM_STATUS_SUCCESS));
     FlushNonDelayedTasks();
   }
 
@@ -248,11 +249,11 @@ class ArcAppInstallEventLogManagerTest : public testing::Test {
     BuildReport();
 
     EXPECT_CALL(cloud_policy_client_,
-                UploadAppInstallReport_(MatchEvents(&events_value_), _))
-        .WillOnce(Invoke([](base::Value::Dict&,
-                            CloudPolicyClient::StatusCallback& callback) {
-          std::move(callback).Run(true /* success */);
-        }));
+                UploadAppInstallReport(MatchEvents(&events_value_), _))
+        .WillOnce([](base::Value::Dict,
+                     CloudPolicyClient::ResultCallback callback) {
+          std::move(callback).Run(CloudPolicyClient::Result(DM_STATUS_SUCCESS));
+        });
   }
 
   void FlushNonDelayedTasks() {
@@ -300,8 +301,8 @@ class ArcAppInstallEventLogManagerTest : public testing::Test {
   std::unique_ptr<base::ScopedMockTimeMessageLoopTaskRunner>
       scoped_main_task_runner_;
 
-  base::TestSimpleTaskRunner* log_task_runner_ = nullptr;
-  base::TestMockTimeTaskRunner* main_task_runner_ = nullptr;
+  raw_ptr<base::TestSimpleTaskRunner> log_task_runner_ = nullptr;
+  raw_ptr<base::TestMockTimeTaskRunner> main_task_runner_ = nullptr;
 
   const base::FilePath log_file_path_;
   const std::set<std::string> packages_;
@@ -587,7 +588,7 @@ TEST_F(ArcAppInstallEventLogManagerTest, RequestUploadAddUpload) {
   FastForwardTo(kExpeditedUploadDelay - kOneMs);
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);
 
-  CloudPolicyClient::StatusCallback upload_callback;
+  CloudPolicyClient::ResultCallback upload_callback;
   ExpectUploadAndCaptureCallback(&upload_callback);
   FastForwardTo(kExpeditedUploadDelay);
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);
@@ -630,7 +631,7 @@ TEST_F(ArcAppInstallEventLogManagerTest, RequestUploadAddExpeditedUpload) {
   FastForwardTo(kExpeditedUploadDelay - kOneMs);
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);
 
-  CloudPolicyClient::StatusCallback upload_callback;
+  CloudPolicyClient::ResultCallback upload_callback;
   ExpectUploadAndCaptureCallback(&upload_callback);
   FastForwardTo(kExpeditedUploadDelay);
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);
@@ -681,7 +682,7 @@ TEST_F(ArcAppInstallEventLogManagerTest, RequestExpeditedUploadAddUpload) {
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);
   EXPECT_FALSE(base::PathExists(log_file_path_));
 
-  CloudPolicyClient::StatusCallback upload_callback;
+  CloudPolicyClient::ResultCallback upload_callback;
   ExpectUploadAndCaptureCallback(&upload_callback);
   FastForwardTo(offset + kExpeditedUploadDelay);
   Mock::VerifyAndClearExpectations(&cloud_policy_client_);

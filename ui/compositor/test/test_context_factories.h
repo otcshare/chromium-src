@@ -7,20 +7,18 @@
 
 #include <memory>
 
+#include "ui/compositor/test/in_process_context_factory.h"
+
 namespace gl {
 class DisableNullDrawGLBindings;
 }
 
 namespace viz {
 class HostFrameSinkManager;
-class ServerSharedBitmapManager;
 class FrameSinkManagerImpl;
 }  // namespace viz
 
 namespace ui {
-
-class InProcessContextFactory;
-class ContextFactory;
 
 // Set up the compositor ContextFactory for a test environment. Unit tests that
 // do not have a full content environment need to call this before initializing
@@ -37,11 +35,10 @@ class TestContextFactories {
   TestContextFactories(const TestContextFactories&) = delete;
   TestContextFactories& operator=(const TestContextFactories&) = delete;
 
-  ContextFactory* GetContextFactory() const;
+  ui::InProcessContextFactory* GetContextFactory() const;
 
  private:
   std::unique_ptr<gl::DisableNullDrawGLBindings> disable_null_draw_;
-  std::unique_ptr<viz::ServerSharedBitmapManager> shared_bitmap_manager_;
   std::unique_ptr<viz::FrameSinkManagerImpl> frame_sink_manager_;
   std::unique_ptr<viz::HostFrameSinkManager> host_frame_sink_manager_;
   std::unique_ptr<ui::InProcessContextFactory> implicit_factory_;

@@ -4,27 +4,28 @@
 
 #include "chrome/browser/ash/app_list/search/app_search_provider.h"
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ash/public/cpp/app_list/app_list_features.h"
-#include "base/bind.h"
 #include "base/callback_list.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/search/app_search_data_source.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
+#include "chrome/browser/ash/app_list/search/types.h"
 
 namespace app_list {
 
 namespace {
 
 // Checks if current locale is non Latin locales.
-bool IsNonLatinLocale(base::StringPiece locale) {
+bool IsNonLatinLocale(std::string_view locale) {
   // A set of of non Latin locales. This set is used to select appropriate
   // algorithm for app search.
   static constexpr char kNonLatinLocales[][6] = {
@@ -32,13 +33,13 @@ bool IsNonLatinLocale(base::StringPiece locale) {
       "hy", "iw", "ja", "ka", "kk",    "km",    "kn",   "ko", "ky",
       "lo", "mk", "ml", "mn", "mr",    "my",    "pa",   "ru", "sr",
       "ta", "te", "th", "uk", "zh-CN", "zh-HK", "zh-TW"};
-  return base::Contains(kNonLatinLocales, locale);
+  return std::ranges::contains(kNonLatinLocales, locale);
 }
 
 }  // namespace
 
 AppSearchProvider::AppSearchProvider(AppSearchDataSource* data_source)
-    : data_source_(data_source) {
+    : SearchProvider(SearchCategory::kApps), data_source_(data_source) {
   app_updates_subscription_ =
       data_source_->SubscribeToAppUpdates(base::BindRepeating(
           &AppSearchProvider::UpdateResults, base::Unretained(this)));

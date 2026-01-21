@@ -4,18 +4,18 @@
 
 #include "net/test/embedded_test_server/http_response.h"
 
+#include <algorithm>
 #include <iterator>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -31,8 +31,8 @@ HttpResponseDelegate::~HttpResponseDelegate() = default;
 
 HttpResponse::~HttpResponse() = default;
 
-RawHttpResponse::RawHttpResponse(const std::string& headers,
-                                 const std::string& contents)
+RawHttpResponse::RawHttpResponse(std::string_view headers,
+                                 std::string_view contents)
     : headers_(headers), contents_(contents) {}
 
 RawHttpResponse::~RawHttpResponse() = default;
@@ -53,8 +53,8 @@ void RawHttpResponse::SendResponse(
   delegate->SendContentsAndFinish(contents_);
 }
 
-void RawHttpResponse::AddHeader(const std::string& key_value_pair) {
-  headers_.append(base::StringPrintf("%s\r\n", key_value_pair.c_str()));
+void RawHttpResponse::AddHeader(std::string_view key_value_pair) {
+  headers_.append(base::StringPrintf("%s\r\n", key_value_pair));
 }
 
 BasicHttpResponse::BasicHttpResponse() = default;
@@ -86,7 +86,7 @@ base::StringPairs BasicHttpResponse::BuildHeaders() const {
   headers.emplace_back("Content-Length", base::NumberToString(content_.size()));
   headers.emplace_back("Content-Type", content_type_);
 
-  base::ranges::copy(custom_headers_, std::back_inserter(headers));
+  std::ranges::copy(custom_headers_, std::back_inserter(headers));
 
   return headers;
 }

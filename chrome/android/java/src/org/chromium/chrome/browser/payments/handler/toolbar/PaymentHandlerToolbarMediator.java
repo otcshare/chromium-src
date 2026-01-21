@@ -8,22 +8,30 @@ import android.os.Handler;
 
 import androidx.annotation.DrawableRes;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
 import org.chromium.content_public.browser.LifecycleState;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.Page;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 
+import java.util.function.Supplier;
+
 /**
  * PaymentHandlerToolbar mediator, which is responsible for receiving events from the view and
  * notifies the backend (the coordinator).
  */
+@NullMarked
 /* package */ class PaymentHandlerToolbarMediator extends WebContentsObserver {
     /** The delay (four video frames - for 60Hz) after which the hide progress will be hidden. */
     private static final long HIDE_PROGRESS_BAR_DELAY_MS = (1000 / 60) * 4;
+
     /**
      * The minimum load progress that can be shown when a page is loading. This is not 0 so that
      * it's obvious to the user that something is attempting to load.
@@ -31,26 +39,38 @@ import org.chromium.url.GURL;
     /* package */ static final float MINIMUM_LOAD_PROGRESS = 0.05f;
 
     private final PropertyModel mModel;
+
     /** The handler to delay hiding the progress bar. */
-    private Handler mHideProgressBarHandler;
+    private @Nullable Handler mHideProgressBarHandler;
+
     /** Postfix with "Ref" to distinguish from mWebContent in WebContentsObserver. */
     private final WebContents mWebContentsRef;
+
     private final PaymentHandlerToolbarMediatorDelegate mDelegate;
 
     /** The delegate of PaymentHandlerToolbarMediator. */
     /* package */ interface PaymentHandlerToolbarMediatorDelegate {
         /** Get the security level of PaymentHandler's WebContents. */
+        @ConnectionSecurityLevel
         int getSecurityLevel();
+
+        /** Get the malicious content status of PaymentHandler's WebContents. */
+        @ConnectionMaliciousContentStatus
+        int getMaliciousContentStatus();
 
         /**
          * Get the security icon resource for a given security level.
+         *
          * @param securityLevel The security level.
          */
         @DrawableRes
-        int getSecurityIconResource(@ConnectionSecurityLevel int securityLevel);
+        int getSecurityIconResource(
+                @ConnectionSecurityLevel int securityLevel,
+                Supplier<@ConnectionMaliciousContentStatus Integer> maliciousContentStatus);
 
         /**
          * Get the content description of the security icon for a given security level.
+         *
          * @param securityLevel The security level.
          */
         String getSecurityIconContentDescription(@ConnectionSecurityLevel int securityLevel);
@@ -63,7 +83,9 @@ import org.chromium.url.GURL;
      * @param webContents The web-contents that loads the payment app.
      * @param delegate The delegate of this class.
      */
-    /* package */ PaymentHandlerToolbarMediator(PropertyModel model, WebContents webContents,
+    /* package */ PaymentHandlerToolbarMediator(
+            PropertyModel model,
+            WebContents webContents,
             PaymentHandlerToolbarMediatorDelegate delegate) {
         super(webContents);
         mWebContentsRef = webContents;
@@ -73,28 +95,29 @@ import org.chromium.url.GURL;
 
     // WebContentsObserver:
     @Override
-    public void didFinishLoadInPrimaryMainFrame(GlobalRenderFrameHostId rfhId, GURL url,
-            boolean isKnownValid, @LifecycleState int rfhLifecycleState) {
+    public void didFinishLoadInPrimaryMainFrame(
+            Page page,
+            GlobalRenderFrameHostId rfhId,
+            GURL url,
+            boolean isKnownValid,
+            @LifecycleState int rfhLifecycleState) {
         if (rfhLifecycleState != LifecycleState.ACTIVE) return;
         // Hides the Progress Bar after a delay to make sure it is rendered for at least
         // a few frames, otherwise its completion won't be visually noticeable.
         mHideProgressBarHandler = new Handler();
-        mHideProgressBarHandler.postDelayed(() -> {
-            mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, false);
-            mHideProgressBarHandler = null;
-        }, HIDE_PROGRESS_BAR_DELAY_MS);
+        mHideProgressBarHandler.postDelayed(
+                () -> {
+                    mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, false);
+                    mHideProgressBarHandler = null;
+                },
+                HIDE_PROGRESS_BAR_DELAY_MS);
     }
 
     @Override
-    public void didFinishLoadNoop(GlobalRenderFrameHostId rfhId, GURL url, boolean isKnownValid,
-            boolean isInPrimaryMainFrame, @LifecycleState int rfhLifecycleState) {
-        // In case something goes wrong, we can enable NotifyJavaSpuriouslyToMeasurePerf so
-        // didFinishLoad has the same behavior as before.
-        didFinishLoadInPrimaryMainFrame(rfhId, url, isKnownValid, rfhLifecycleState);
-    }
-
-    @Override
-    public void didFailLoad(boolean isInPrimaryMainFrame, int errorCode, GURL failingUrl,
+    public void didFailLoad(
+            boolean isInPrimaryMainFrame,
+            int errorCode,
+            GURL failingUrl,
             @LifecycleState int frameLifecycleState) {
         if (frameLifecycleState != LifecycleState.ACTIVE) return;
         mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, false);
@@ -108,19 +131,9 @@ import org.chromium.url.GURL;
     }
 
     @Override
-    public void didFinishNavigationNoop(NavigationHandle navigation) {
-        if (!navigation.isInPrimaryMainFrame()) return;
-    }
-
-    @Override
     public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
         if (navigation.isSameDocument()) return;
         setSecurityState(ConnectionSecurityLevel.NONE);
-    }
-
-    @Override
-    public void didStartNavigationNoop(NavigationHandle navigation) {
-        if (!navigation.isInPrimaryMainFrame()) return;
     }
 
     @Override
@@ -139,16 +152,20 @@ import org.chromium.url.GURL;
             mHideProgressBarHandler = null;
         }
         mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, true);
-        mModel.set(PaymentHandlerToolbarProperties.LOAD_PROGRESS,
+        mModel.set(
+                PaymentHandlerToolbarProperties.LOAD_PROGRESS,
                 Math.max(progress, MINIMUM_LOAD_PROGRESS));
     }
 
     private void setSecurityState(@ConnectionSecurityLevel int securityLevel) {
         @DrawableRes
-        int iconRes = mDelegate.getSecurityIconResource(securityLevel);
+        int iconRes =
+                mDelegate.getSecurityIconResource(
+                        securityLevel, mDelegate::getMaliciousContentStatus);
         mModel.set(PaymentHandlerToolbarProperties.SECURITY_ICON, iconRes);
         String contentDescription = mDelegate.getSecurityIconContentDescription(securityLevel);
-        mModel.set(PaymentHandlerToolbarProperties.SECURITY_ICON_CONTENT_DESCRIPTION,
+        mModel.set(
+                PaymentHandlerToolbarProperties.SECURITY_ICON_CONTENT_DESCRIPTION,
                 contentDescription);
     }
 

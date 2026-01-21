@@ -1,8 +1,10 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/commerce/price_tracking_icon_view.h"
+
+#include <string_view>
 
 #include "base/metrics/user_metrics.h"
 #include "base/timer/timer.h"
@@ -13,7 +15,10 @@
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/commerce/price_tracking/shopping_list_ui_tab_helper.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/commerce/commerce_ui_tab_helper.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/commerce/price_tracking_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
@@ -23,6 +28,8 @@
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/commerce/core/commerce_feature_list.h"
+#include "components/commerce/core/metrics/metrics_utils.h"
+#include "components/commerce/core/pref_names.h"
 #include "components/commerce/core/price_tracking_utils.h"
 #include "components/commerce/core/shopping_service.h"
 #include "components/feature_engagement/public/feature_constants.h"
@@ -32,11 +39,41 @@
 #include "components/power_bookmarks/core/proto/power_bookmark_meta.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_class_properties.h"
+
+namespace {
+
+// This will add the bookmark to the shopping collection if the feature is
+// enabled, otherwise we create a new shopping collection in the account and
+// save it there.
+void AddIfNotBookmarkedToTheDefaultFolder(bookmarks::BookmarkModel* model,
+                                          content::WebContents* web_contents) {
+  GURL url;
+  std::u16string title;
+
+  if (chrome::GetURLAndTitleToBookmark(web_contents, &url, &title)) {
+    if (bookmarks::IsBookmarkedByUser(model, url)) {
+      return;
+    }
+
+    const bookmarks::BookmarkNode* parent =
+        commerce::GetShoppingCollectionBookmarkFolder(model, true);
+    // At this point, we expect that the shopping collection folder exists in
+    // the account and can be saved to.
+    CHECK(parent);
+
+    model->AddNewURL(parent, parent->children().size(), title, url);
+  }
+}
+
+}  // namespace
 
 PriceTrackingIconView::PriceTrackingIconView(
     IconLabelBubbleView::Delegate* parent_delegate,
@@ -50,20 +87,17 @@ PriceTrackingIconView::PriceTrackingIconView(
       browser_(browser),
       profile_(browser->profile()),
       bubble_coordinator_(this),
-      icon_(&omnibox::kPriceTrackingDisabledIcon) {
+      icon_(&omnibox::kPriceTrackingDisabledRefreshIcon) {
   SetUpForInOutAnimation();
   SetProperty(views::kElementIdentifierKey, kPriceTrackingChipElementId);
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_OMNIBOX_TRACK_PRICE));
 }
 
 PriceTrackingIconView::~PriceTrackingIconView() = default;
 
 views::BubbleDialogDelegate* PriceTrackingIconView::GetBubble() const {
   return bubble_coordinator_.GetBubble();
-}
-
-std::u16string PriceTrackingIconView::GetTextForTooltipAndAccessibleName()
-    const {
-  return tooltip_text_and_accessibleName_;
 }
 
 void PriceTrackingIconView::OnExecuting(
@@ -74,17 +108,26 @@ void PriceTrackingIconView::OnExecuting(
 
   auto* web_contents = GetWebContents();
   DCHECK(web_contents);
-  auto* tab_helper =
-      commerce::ShoppingListUiTabHelper::FromWebContents(web_contents);
+  auto* tab_helper = tabs::TabInterface::GetFromContents(web_contents)
+                         ->GetTabFeatures()
+                         ->commerce_ui_tab_helper();
   CHECK(tab_helper);
 
   const gfx::Image& product_image = tab_helper->GetProductImage();
+  tab_helper->OnPriceTrackingIconClicked();
   DCHECK(!product_image.IsEmpty());
 
   base::RecordAction(
       base::UserMetricsAction("Commerce.PriceTracking.OmniboxChipClicked"));
 
+  bookmarks::BookmarkModel* bookmarkModel =
+      BookmarkModelFactory::GetForBrowserContext(profile_);
+
   if (ShouldShowFirstUseExperienceBubble()) {
+    const bookmarks::BookmarkNode* bookmark =
+        bookmarkModel->GetMostRecentlyAddedUserNodeForURL(
+            GetWebContents()->GetLastCommittedURL());
+
     bubble_coordinator_.Show(
         GetWebContents(), profile_, GetWebContents()->GetLastCommittedURL(),
         ui::ImageModel::FromImage(product_image),
@@ -92,9 +135,16 @@ void PriceTrackingIconView::OnExecuting(
                        weak_ptr_factory_.GetWeakPtr()),
         base::BindOnce(&PriceTrackingIconView::UnpauseAnimation,
                        weak_ptr_factory_.GetWeakPtr()),
-        PriceTrackingBubbleDialogView::Type::TYPE_FIRST_USE_EXPERIENCE);
+        PriceTrackingBubbleDialogView::Type::TYPE_FIRST_USE_EXPERIENCE,
+        bookmark ? std::optional<std::u16string>(bookmark->parent()->GetTitle())
+                 : std::nullopt);
   } else {
     EnablePriceTracking(/*enable=*/true);
+
+    const bookmarks::BookmarkNode* bookmark =
+        bookmarkModel->GetMostRecentlyAddedUserNodeForURL(
+            GetWebContents()->GetLastCommittedURL());
+
     bubble_coordinator_.Show(
         GetWebContents(), profile_, GetWebContents()->GetLastCommittedURL(),
         ui::ImageModel::FromImage(product_image),
@@ -102,7 +152,9 @@ void PriceTrackingIconView::OnExecuting(
                        weak_ptr_factory_.GetWeakPtr()),
         base::BindOnce(&PriceTrackingIconView::UnpauseAnimation,
                        weak_ptr_factory_.GetWeakPtr()),
-        PriceTrackingBubbleDialogView::Type::TYPE_NORMAL);
+        PriceTrackingBubbleDialogView::Type::TYPE_NORMAL,
+        bookmark ? std::optional<std::u16string>(bookmark->parent()->GetTitle())
+                 : std::nullopt);
   }
 }
 
@@ -115,10 +167,12 @@ bool PriceTrackingIconView::ShouldShow() {
     return false;
   }
   auto* web_contents = GetWebContents();
-  if (!web_contents)
+  if (!web_contents) {
     return false;
-  auto* tab_helper =
-      commerce::ShoppingListUiTabHelper::FromWebContents(web_contents);
+  }
+  auto* tab_helper = tabs::TabInterface::GetFromContents(web_contents)
+                         ->GetTabFeatures()
+                         ->commerce_ui_tab_helper();
 
   return tab_helper && tab_helper->ShouldShowPriceTrackingIconView();
 }
@@ -132,9 +186,10 @@ void PriceTrackingIconView::UpdateImpl() {
     if (!GetVisible()) {
       base::RecordAction(
           base::UserMetricsAction("Commerce.PriceTracking.OmniboxChipShown"));
-      MaybeShowPageActionLabel();
     }
+    MaybeShowPageActionLabel();
   } else {
+    scoped_window_call_to_action_ptr_.reset();
     HidePageActionLabel();
   }
   SetVisible(should_show);
@@ -147,9 +202,10 @@ void PriceTrackingIconView::AnimationProgressed(
   // kLabelPersistDuration before resuming the animation and allowing the label
   // to animate out. This is currently set to show for 12s including the in/out
   // animation.
-  // TODO(crbug.com/1314206): This approach of inspecting the animation progress
-  // to extend the animation duration is quite hacky. This should be removed and
-  // the IconLabelBubbleView API expanded to support a finer level of control.
+  // TODO(crbug.com/40832707): This approach of inspecting the animation
+  // progress to extend the animation duration is quite hacky. This should be
+  // removed and the IconLabelBubbleView API expanded to support a finer level
+  // of control.
   constexpr double kAnimationValueWhenLabelFullyShown = 0.5;
   constexpr base::TimeDelta kLabelPersistDuration = base::Seconds(10.8);
   if (should_extend_label_shown_duration_ &&
@@ -168,7 +224,7 @@ void PriceTrackingIconView::ForceVisibleForTesting(bool is_tracking_price) {
   SetVisualState(is_tracking_price);
 }
 
-const std::u16string& PriceTrackingIconView::GetIconLabelForTesting() {
+std::u16string_view PriceTrackingIconView::GetIconLabelForTesting() const {
   return label()->GetText();
 }
 
@@ -178,8 +234,9 @@ void PriceTrackingIconView::SetOneShotTimerForTesting(
 }
 
 void PriceTrackingIconView::EnablePriceTracking(bool enable) {
-  if (IsPriceTracking() == enable)
+  if (IsPriceTracking() == enable) {
     return;
+  }
 
   if (enable && ShouldShowFirstUseExperienceBubble()) {
     profile_->GetPrefs()->SetBoolean(prefs::kShouldShowPriceTrackFUEBubble,
@@ -189,76 +246,54 @@ void PriceTrackingIconView::EnablePriceTracking(bool enable) {
   bookmarks::BookmarkModel* const model =
       BookmarkModelFactory::GetForBrowserContext(profile_);
 
+  const bookmarks::BookmarkNode* existing_node =
+      model->GetMostRecentlyAddedUserNodeForURL(
+          GetWebContents()->GetLastCommittedURL());
+  bool is_new_bookmark = existing_node == nullptr;
+
   if (enable) {
-    GURL url;
-    std::u16string title;
-    if (chrome::GetURLAndTitleToBookmark(GetWebContents(), &url, &title)) {
-      bookmarks::AddIfNotBookmarked(model, url, title);
-    }
+    CHECK(commerce::ShoppingServiceFactory::GetForBrowserContext(profile_)
+              ->IsShoppingListEligible());
+
+    AddIfNotBookmarkedToTheDefaultFolder(model, GetWebContents());
     base::RecordAction(
         base::UserMetricsAction("Commerce.PriceTracking.OmniboxChip.Tracked"));
     commerce::MaybeEnableEmailNotifications(profile_->GetPrefs());
-    bool should_show_iph = browser_->window()->MaybeShowFeaturePromo(
-        feature_engagement::kIPHPriceTrackingInSidePanelFeature);
-    if (should_show_iph) {
-      SidePanelCoordinator* coordinator =
-          BrowserView::GetBrowserViewForBrowser(browser_)
-              ->side_panel_coordinator();
-      if (coordinator) {
-        SidePanelRegistry* registry = coordinator->GetGlobalSidePanelRegistry();
-        registry->SetActiveEntry(registry->GetEntryForKey(
-            SidePanelEntry::Key(SidePanelEntry::Id::kBookmarks)));
-      } else {
-        profile_->GetPrefs()->SetBoolean(prefs::kShouldShowSidePanelBookmarkTab,
-                                         true);
-      }
-    }
+
+    commerce::metrics::RecordShoppingActionUKM(
+        GetWebContents()->GetPrimaryMainFrame()->GetPageUkmSourceId(),
+        commerce::metrics::ShoppingAction::kPriceTracked);
   }
 
-  const bookmarks::BookmarkNode* node =
-      model->GetMostRecentlyAddedUserNodeForURL(
-          GetWebContents()->GetLastCommittedURL());
+  auto* tab_helper = tabs::TabInterface::GetFromContents(GetWebContents())
+                         ->GetTabFeatures()
+                         ->commerce_ui_tab_helper();
+  CHECK(tab_helper);
 
-  commerce::ShoppingService* service =
-      commerce::ShoppingServiceFactory::GetForBrowserContext(profile_);
-  base::OnceCallback<void(bool)> callback =
+  tab_helper->SetPriceTrackingState(
+      enable, is_new_bookmark,
       base::BindOnce(&PriceTrackingIconView::OnPriceTrackingServerStateUpdated,
-                     weak_ptr_factory_.GetWeakPtr());
-
-  if (node) {
-    commerce::SetPriceTrackingStateForBookmark(
-        commerce::ShoppingServiceFactory::GetForBrowserContext(profile_), model,
-        node, enable, std::move(callback));
-  } else {
-    absl::optional<commerce::ProductInfo> info =
-        service->GetAvailableProductInfoForUrl(
-            GetWebContents()->GetLastCommittedURL());
-    if (info.has_value()) {
-      commerce::SetPriceTrackingStateForClusterId(
-          commerce::ShoppingServiceFactory::GetForBrowserContext(profile_),
-          model, info->product_cluster_id, enable, std::move(callback));
-    }
-  }
+                     weak_ptr_factory_.GetWeakPtr()));
 
   SetVisualState(enable);
 }
 
 void PriceTrackingIconView::SetVisualState(bool enable) {
-  icon_ = enable ? &omnibox::kPriceTrackingEnabledFilledIcon
-                 : &omnibox::kPriceTrackingDisabledIcon;
+  icon_ = enable ? &omnibox::kPriceTrackingEnabledRefreshIcon
+                 : &omnibox::kPriceTrackingDisabledRefreshIcon;
   // TODO(meiliang@): Confirm with UXW on the tooltip string. If this expected,
   // we can return label()->GetText() instead.
-  tooltip_text_and_accessibleName_ = l10n_util::GetStringUTF16(
-      enable ? IDS_OMNIBOX_TRACKING_PRICE : IDS_OMNIBOX_TRACK_PRICE);
+  GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
+      enable ? IDS_OMNIBOX_TRACKING_PRICE : IDS_OMNIBOX_TRACK_PRICE));
 
   SetLabel(l10n_util::GetStringUTF16(enable ? IDS_OMNIBOX_TRACKING_PRICE
                                             : IDS_OMNIBOX_TRACK_PRICE));
-  SetPaintLabelOverSolidBackground(true);
+  SetBackgroundVisibility(BackgroundVisibility::kWithLabel);
   UpdateIconImage();
 }
 
 void PriceTrackingIconView::OnPriceTrackingServerStateUpdated(bool success) {
-  // TODO(crbug.com/1364739): Handles error if |success| is false.
+  // TODO(crbug.com/40865740): Handles error if |success| is false.
   if (commerce::kRevertIconOnFailure.Get() && !success) {
     bubble_coordinator_.Hide();
     UpdateImpl();
@@ -266,11 +301,13 @@ void PriceTrackingIconView::OnPriceTrackingServerStateUpdated(bool success) {
 }
 
 bool PriceTrackingIconView::IsPriceTracking() const {
-  if (!GetWebContents())
+  if (!GetWebContents()) {
     return false;
+  }
 
-  auto* tab_helper =
-      commerce::ShoppingListUiTabHelper::FromWebContents(GetWebContents());
+  auto* tab_helper = tabs::TabInterface::GetFromContents(GetWebContents())
+                         ->GetTabFeatures()
+                         ->commerce_ui_tab_helper();
   CHECK(tab_helper);
 
   return tab_helper->IsPriceTracking();
@@ -279,26 +316,33 @@ bool PriceTrackingIconView::IsPriceTracking() const {
 bool PriceTrackingIconView::ShouldShowFirstUseExperienceBubble() const {
   return profile_->GetPrefs()->GetBoolean(
              prefs::kShouldShowPriceTrackFUEBubble) &&
+         !profile_->GetPrefs()->HasPrefPath(
+             commerce::kPriceEmailNotificationsEnabled) &&
          !IsPriceTracking();
 }
 
 void PriceTrackingIconView::MaybeShowPageActionLabel() {
-  auto* tracker =
-      feature_engagement::TrackerFactory::GetForBrowserContext(profile_);
-  if (!tracker ||
-      !tracker->ShouldTriggerHelpUI(
-          feature_engagement::kIPHPriceTrackingPageActionIconLabelFeature)) {
+  auto* tab_helper = tabs::TabInterface::GetFromContents(GetWebContents())
+                         ->GetTabFeatures()
+                         ->commerce_ui_tab_helper();
+
+  if (!tab_helper || !tab_helper->ShouldExpandPageActionIcon(
+                         PageActionIconType::kPriceTracking)) {
+    return;
+  }
+  if (!tabs::TabInterface::GetFromContents(GetWebContents())
+           ->GetBrowserWindowInterface()
+           ->CanShowCallToAction()) {
     return;
   }
 
-  should_extend_label_shown_duration_ = true;
-  AnimateIn(absl::nullopt);
+  scoped_window_call_to_action_ptr_ =
+      tabs::TabInterface::GetFromContents(GetWebContents())
+          ->GetBrowserWindowInterface()
+          ->ShowCallToAction();
 
-  // Note that `Dismiss()` in this case does not dismiss the UI. It's telling
-  // the FE backend that the promo is done so that other promos can run. Showing
-  // the label should not block other promos from displaying.
-  tracker->Dismissed(
-      feature_engagement::kIPHPriceTrackingPageActionIconLabelFeature);
+  should_extend_label_shown_duration_ = true;
+  AnimateIn(std::nullopt);
 }
 
 void PriceTrackingIconView::HidePageActionLabel() {
@@ -310,3 +354,6 @@ base::OneShotTimer& PriceTrackingIconView::AnimateOutTimer() {
   return animate_out_timer_for_testing_ ? *animate_out_timer_for_testing_
                                         : animate_out_timer_;
 }
+
+BEGIN_METADATA(PriceTrackingIconView)
+END_METADATA

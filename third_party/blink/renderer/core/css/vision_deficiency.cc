@@ -6,6 +6,7 @@
 
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -14,11 +15,10 @@ namespace blink {
 namespace {
 
 AtomicString CreateFilterDataUrl(const char* piece) {
-  // TODO(mathias): Remove `color-interpolation-filters` attribute once
-  // crbug.com/335066 is fixed. See crbug.com/1270748.
-  return "data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\">"
-         "<filter id=\"f\" color-interpolation-filters=\"linearRGB\">" +
-         StringView(piece) + "</filter></svg>#f";
+  return AtomicString(StrCat(
+      {"data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\"><filter "
+       "id=\"f\">",
+       piece, "</filter></svg>#f"}));
 }
 
 }  // namespace
@@ -39,6 +39,15 @@ AtomicString CreateVisionDeficiencyFilterUrl(
   // Honolulu, HI, 2017. pp. 6750-6758.
   // https://openaccess.thecvf.com/content_cvpr_2017/papers/Nguyen_Why_You_Should_CVPR_2017_paper.pdf
   switch (vision_deficiency) {
+    case VisionDeficiency::kBlurredVision:
+      return CreateFilterDataUrl("<feGaussianBlur stdDeviation=\"2\"/>");
+    case VisionDeficiency::kReducedContrast:
+      return CreateFilterDataUrl(
+          "<feComponentTransfer>"
+          "  <feFuncR type=\"gamma\" offset=\"0.5\"/>"
+          "  <feFuncG type=\"gamma\" offset=\"0.5\"/>"
+          "  <feFuncB type=\"gamma\" offset=\"0.5\"/>"
+          "</feComponentTransfer>");
     case VisionDeficiency::kAchromatopsia:
       return CreateFilterDataUrl(
           "<feColorMatrix values=\""
@@ -47,8 +56,6 @@ AtomicString CreateVisionDeficiencyFilterUrl(
           "0.213  0.715  0.072  0.000  0.000 "
           "0.000  0.000  0.000  1.000  0.000 "
           "\"/>");
-    case VisionDeficiency::kBlurredVision:
-      return CreateFilterDataUrl("<feGaussianBlur stdDeviation=\"2\"/>");
     case VisionDeficiency::kDeuteranopia:
       return CreateFilterDataUrl(
           "<feColorMatrix values=\""
@@ -75,7 +82,6 @@ AtomicString CreateVisionDeficiencyFilterUrl(
           "\"/>");
     case VisionDeficiency::kNoVisionDeficiency:
       NOTREACHED();
-      return "";
   }
 }
 

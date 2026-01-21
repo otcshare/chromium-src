@@ -8,32 +8,51 @@
 #include <memory>
 
 #include "components/sync/base/sync_mode.h"
-#include "components/sync/driver/model_type_controller.h"
-#include "components/sync/test/fake_model_type_controller_delegate.h"
+#include "components/sync/service/data_type_controller.h"
+#include "components/sync/test/fake_data_type_controller_delegate.h"
+
+namespace base {
+class Location;
+}  // namespace base
 
 namespace syncer {
 
-// Fake DataTypeController implementation based on ModelTypeController that
-// simulates the state machine of a typical asynchronous data type.
-class FakeDataTypeController : public ModelTypeController {
+// Fake DataTypeController implementation that simulates the state machine of a
+// typical asynchronous data type.
+class FakeDataTypeController : public DataTypeController {
  public:
-  explicit FakeDataTypeController(ModelType type);
-  FakeDataTypeController(ModelType type, bool enable_transport_only_model);
+  explicit FakeDataTypeController(
+      DataType type,
+      bool enable_transport_mode = false,
+      std::unique_ptr<DataTypeLocalDataBatchUploader> uploader = nullptr);
   ~FakeDataTypeController() override;
 
   void SetPreconditionState(PreconditionState state);
 
-  // Access to the fake underlying model. |kTransportOnly] only exists if
-  // |enable_transport_only_model| is set upon construction.
-  FakeModelTypeControllerDelegate* model(SyncMode sync_mode = SyncMode::kFull);
+  // Access to the fake underlying model. `kTransportOnly] only exists if
+  // `enable_transport_mode` is set upon construction.
+  FakeDataTypeControllerDelegate* model(SyncMode sync_mode = SyncMode::kFull);
+
+  const ConfigureContext& last_configure_context() {
+    return last_configure_context_;
+  }
 
   int activate_call_count() const { return activate_call_count_; }
 
-  // ModelTypeController overrides.
+  // Mimics the advanced/hypothetical scenario where a custom controller
+  // (subclass of DataTypeController) issues an error. Prefer using
+  // model()->SimulateModelError() unless you know what you are doing, as the
+  // most common source for errors is the actual model itself (e.g. I/O error).
+  void SimulateControllerError(const base::Location& location);
+
+  // DataTypeController overrides.
+  void LoadModels(const ConfigureContext& configure_context,
+                  const ModelLoadCallback& model_load_callback) override;
   PreconditionState GetPreconditionState() const override;
   std::unique_ptr<DataTypeActivationResponse> Connect() override;
 
  private:
+  ConfigureContext last_configure_context_;
   PreconditionState precondition_state_ = PreconditionState::kPreconditionsMet;
   int activate_call_count_ = 0;
 };

@@ -50,20 +50,25 @@ ArcPictureInPictureWindowControllerImpl::GetWebContents() {
   return nullptr;
 }
 
-absl::optional<gfx::Rect>
-ArcPictureInPictureWindowControllerImpl::GetWindowBounds() {
+std::optional<gfx::Rect>
+ArcPictureInPictureWindowControllerImpl::GetWindowBoundsInScreen() {
   for (auto* window : ChromeShelfController::instance()->GetArcWindows()) {
     if (window->GetProperty(chromeos::kWindowStateTypeKey) ==
         chromeos::WindowStateType::kPip) {
       return window->GetBoundsInScreen();
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 content::WebContents*
 ArcPictureInPictureWindowControllerImpl::GetChildWebContents() {
   return nullptr;
+}
+
+std::optional<url::Origin>
+ArcPictureInPictureWindowControllerImpl::GetOrigin() {
+  return std::nullopt;
 }
 
 }  // namespace arc

@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_recommended_bubble_view.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "content/public/test/browser_test.h"
 
@@ -29,5 +30,6 @@ class RelaunchRecommendedBubbleViewDialogTest : public DialogBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(RelaunchRecommendedBubbleViewDialogTest,
                        InvokeUi_default) {
+  set_baseline("5855019");
   ShowAndVerifyUi();
 }

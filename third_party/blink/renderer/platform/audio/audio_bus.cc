@@ -30,18 +30,20 @@
 
 #include <assert.h>
 #include <math.h>
+
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 
-#include "base/ranges/algorithm.h"
+#include "base/compiler_specific.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/denormal_disabler.h"
 #include "third_party/blink/renderer/platform/audio/sinc_resampler.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
-#include "ui/base/resource/resource_scale_factor.h"
 
 namespace blink {
 
@@ -176,7 +178,6 @@ AudioChannel* AudioBus::ChannelByType(unsigned channel_type) {
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 const AudioChannel* AudioBus::ChannelByType(unsigned type) const {
@@ -503,8 +504,6 @@ void AudioBus::SumFromByDownMixing(const AudioBus& source_bus) {
 void AudioBus::CopyWithGainFrom(const AudioBus& source_bus, float gain) {
   if (!TopologyMatches(source_bus)) {
     NOTREACHED();
-    Zero();
-    return;
   }
 
   if (source_bus.IsSilent()) {
@@ -523,8 +522,8 @@ void AudioBus::CopyWithGainFrom(const AudioBus& source_bus, float gain) {
     return;
   }
 
-  const float* sources[kMaxBusChannels];
-  float* destinations[kMaxBusChannels];
+  std::array<const float*, kMaxBusChannels> sources;
+  std::array<float*, kMaxBusChannels> destinations;
 
   for (unsigned i = 0; i < number_of_channels; ++i) {
     sources[i] = source_bus.Channel(i)->Data();
@@ -537,14 +536,16 @@ void AudioBus::CopyWithGainFrom(const AudioBus& source_bus, float gain) {
   if (gain == 1) {
     for (unsigned channel_index = 0; channel_index < number_of_channels;
          ++channel_index) {
-      memcpy(destinations[channel_index], sources[channel_index],
-             frames_to_process * sizeof(*destinations[channel_index]));
+      UNSAFE_TODO(
+          memcpy(destinations[channel_index], sources[channel_index],
+                 frames_to_process * sizeof(*destinations[channel_index])));
     }
   } else if (gain == 0) {
     for (unsigned channel_index = 0; channel_index < number_of_channels;
          ++channel_index) {
-      memset(destinations[channel_index], 0,
-             frames_to_process * sizeof(*destinations[channel_index]));
+      UNSAFE_TODO(
+          memset(destinations[channel_index], 0,
+                 frames_to_process * sizeof(*destinations[channel_index])));
     }
   } else {
     for (unsigned channel_index = 0; channel_index < number_of_channels;
@@ -563,12 +564,10 @@ void AudioBus::CopyWithSampleAccurateGainValuesFrom(
   // We *are* able to process from mono -> stereo
   if (source_bus.NumberOfChannels() != 1 && !TopologyMatches(source_bus)) {
     NOTREACHED();
-    return;
   }
 
   if (!gain_values || number_of_gain_values > source_bus.length()) {
     NOTREACHED();
-    return;
   }
 
   if (source_bus.length() == number_of_gain_values &&
@@ -683,7 +682,8 @@ scoped_refptr<AudioBus> AudioBus::CreateByMixingToMono(
 
       // Do the mono mixdown.
       for (unsigned i = 0; i < n; ++i) {
-        destination[i] = (source_l[i] + source_r[i]) / 2;
+        UNSAFE_TODO(destination[i]) =
+            (UNSAFE_TODO(source_l[i]) + UNSAFE_TODO(source_r[i])) / 2;
       }
 
       destination_bus->ClearSilentFlag();
@@ -693,11 +693,10 @@ scoped_refptr<AudioBus> AudioBus::CreateByMixingToMono(
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 bool AudioBus::IsSilent() const {
-  return base::ranges::all_of(channels_, &AudioChannel::IsSilent);
+  return std::ranges::all_of(channels_, &AudioChannel::IsSilent);
 }
 
 void AudioBus::ClearSilentFlag() {
@@ -706,10 +705,11 @@ void AudioBus::ClearSilentFlag() {
   }
 }
 
-scoped_refptr<AudioBus> DecodeAudioFileData(const char* data, size_t size) {
-  WebAudioBus web_audio_bus;
-  if (Platform::Current()->DecodeAudioFileData(&web_audio_bus, data, size)) {
-    return web_audio_bus.Release();
+scoped_refptr<AudioBus> DecodeAudioFileData(base::span<const char> data) {
+  std::unique_ptr<WebAudioBus> out =
+      Platform::Current()->DecodeAudioFileData(data);
+  if (out) {
+    return out->Release();
   }
   return nullptr;
 }
@@ -725,10 +725,9 @@ scoped_refptr<AudioBus> AudioBus::GetDataResource(int resource_id,
   // it's reasonable to (potentially) pay a one-time flat access cost.
   // If this becomes problematic, we'll have the refactor DecodeAudioFileData
   // to take WebData and use segmented access.
-  SharedBuffer::DeprecatedFlatData flat_data(
-      resource.operator scoped_refptr<SharedBuffer>());
-  scoped_refptr<AudioBus> audio_bus =
-      DecodeAudioFileData(flat_data.Data(), flat_data.size());
+  SegmentedBuffer::DeprecatedFlatData flat_data(
+      resource.operator scoped_refptr<SharedBuffer>().get());
+  scoped_refptr<AudioBus> audio_bus = DecodeAudioFileData(flat_data);
 
   if (!audio_bus.get()) {
     return nullptr;
@@ -744,12 +743,10 @@ scoped_refptr<AudioBus> AudioBus::GetDataResource(int resource_id,
 }
 
 scoped_refptr<AudioBus> AudioBus::CreateBusFromInMemoryAudioFile(
-    const void* data,
-    size_t data_size,
+    base::span<const uint8_t> data,
     bool mix_to_mono,
     float sample_rate) {
-  scoped_refptr<AudioBus> audio_bus =
-      DecodeAudioFileData(static_cast<const char*>(data), data_size);
+  scoped_refptr<AudioBus> audio_bus = DecodeAudioFileData(base::as_chars(data));
   if (!audio_bus.get()) {
     return nullptr;
   }

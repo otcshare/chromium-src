@@ -8,10 +8,9 @@
 #include <string>
 
 #include "base/check_op.h"
-#include "base/memory/weak_ptr.h"
+#include "base/component_export.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/gfx_export.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/win/msg_util.h"
 
 namespace gfx {
@@ -37,7 +36,7 @@ class MessageMapInterface {
 //  Windows.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT WindowImpl : public MessageMapInterface {
+class COMPONENT_EXPORT(GFX) WindowImpl : public MessageMapInterface {
  public:
   // |debugging_id| is reported with crashes to help attribute the code that
   // created the WindowImpl.
@@ -121,13 +120,6 @@ class GFX_EXPORT WindowImpl : public MessageMapInterface {
 
   // Our hwnd.
   HWND hwnd_ = nullptr;
-
-  // For debugging.
-  // TODO(sky): nuke this when get crash data.
-  bool got_create_ = false;
-  bool got_valid_hwnd_ = false;
-  // For tracking whether this object has been destroyed. Must be last.
-  base::WeakPtrFactory<WindowImpl> weak_factory_{this};
 };
 
 }  // namespace gfx

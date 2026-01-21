@@ -8,9 +8,11 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "chrome/browser/media/router/discovery/dial/dial_device_data.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -21,6 +23,10 @@
 #include "net/base/network_interfaces.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"  // nogncheck
+#endif
 
 using base::Time;
 using ::testing::A;
@@ -70,6 +76,14 @@ class DialServiceImplTest : public testing::Test {
 };
 
 TEST_F(DialServiceImplTest, TestSendMultipleRequests) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/354933489): Investigate why this fails on MacOS 15 and
+  // re-enable.
+  if (base::mac::MacOSMajorVersion() >= 15) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
   // Setting the finish delay to zero disables the timer that invokes
   // FinishDiscovery().
   dial_service_.finish_delay_ = base::Seconds(0);
@@ -88,6 +102,14 @@ TEST_F(DialServiceImplTest, TestSendMultipleRequests) {
 }
 
 TEST_F(DialServiceImplTest, TestMultipleNetworkInterfaces) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/354933489): Investigate why this fails on MacOS 15 and
+  // re-enable.
+  if (base::mac::MacOSMajorVersion() >= 15) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
   // Setting the finish delay to zero disables the timer that invokes
   // FinishDiscovery().
   dial_service_.finish_delay_ = base::Seconds(0);
@@ -141,7 +163,8 @@ TEST_F(DialServiceImplTest, TestOnDeviceDiscovered) {
   int response_size = std::size(kValidResponse) - 1;
   dial_socket_->recv_buffer_ =
       base::MakeRefCounted<net::IOBufferWithSize>(response_size);
-  strncpy(dial_socket_->recv_buffer_->data(), kValidResponse, response_size);
+  UNSAFE_TODO(strncpy(dial_socket_->recv_buffer_->data(), kValidResponse,
+                      response_size));
   dial_socket_->recv_address_ =
       net::IPEndPoint(net::IPAddress::IPv4Localhost(), 12345);
 

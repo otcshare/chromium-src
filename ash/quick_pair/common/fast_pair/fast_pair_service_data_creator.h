@@ -6,15 +6,14 @@
 #define ASH_QUICK_PAIR_COMMON_FAST_PAIR_FAST_PAIR_SERVICE_DATA_CREATOR_H_
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/component_export.h"
 #include "base/strings/string_number_conversions.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 // Convenience class with Builder to create byte arrays which represent Fast
 // Pair Service Data.
@@ -34,14 +33,14 @@ class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairServiceDataCreator {
     std::unique_ptr<FastPairServiceDataCreator> Build();
 
    private:
-    absl::optional<uint8_t> header_;
-    absl::optional<std::string> model_id_;
+    std::optional<uint8_t> header_;
+    std::optional<std::string> model_id_;
     std::vector<uint8_t> extra_field_headers_;
     std::vector<std::string> extra_fields_;
   };
 
-  FastPairServiceDataCreator(absl::optional<uint8_t> header,
-                             absl::optional<std::string> model_id,
+  FastPairServiceDataCreator(std::optional<uint8_t> header,
+                             std::optional<std::string> model_id,
                              std::vector<uint8_t> extra_field_headers,
                              std::vector<std::string> extra_fields);
   FastPairServiceDataCreator(const FastPairServiceDataCreator&) = delete;
@@ -52,13 +51,12 @@ class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairServiceDataCreator {
   std::vector<uint8_t> CreateServiceData();
 
  private:
-  absl::optional<uint8_t> header_;
-  absl::optional<std::string> model_id_;
+  std::optional<uint8_t> header_;
+  std::optional<std::string> model_id_;
   std::vector<uint8_t> extra_field_headers_;
   std::vector<std::string> extra_fields_;
 };
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_FAST_PAIR_FAST_PAIR_SERVICE_DATA_CREATOR_H_

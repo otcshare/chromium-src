@@ -17,6 +17,7 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -25,15 +26,15 @@
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_occlusion_tracker.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/display/display.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 namespace {
 
 int64_t GetPrimaryDisplayId() {
-  return display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  return display::Screen::Get()->GetPrimaryDisplay().id();
 }
 
 class AppListPresenterImplTest : public AshTestBase {
@@ -67,16 +68,7 @@ class AppListPresenterImplTest : public AshTestBase {
   void ShowAppList() {
     presenter()->Show(AppListViewState::kFullscreenAllApps,
                       GetPrimaryDisplay().id(), base::TimeTicks(),
-                      /*show_source=*/absl::nullopt);
-  }
-
-  // Shows the Assistant UI.
-  void ShowAssistantUI() {
-    presenter()->ShowEmbeddedAssistantUI(/*show=*/true);
-  }
-
-  bool IsShowingAssistantUI() {
-    return presenter()->IsShowingEmbeddedAssistantUI();
+                      /*show_source=*/std::nullopt);
   }
 };
 
@@ -93,42 +85,20 @@ TEST_F(AppListPresenterImplTest,
       Shelf::ForWindow(Shell::GetRootWindowForDisplayId(GetPrimaryDisplayId()))
           ->shelf_layout_manager();
   EXPECT_EQ(ShelfBackgroundType::kHomeLauncher,
-            shelf_layout_manager->GetShelfBackgroundType());
+            shelf_layout_manager->shelf_background_type());
   HotseatWidget* hotseat = GetPrimaryShelf()->hotseat_widget();
 
   for (int id : AppListPresenterImpl::kIdsOfContainersThatWontHideAppList) {
     // Create a widget with a specific container id and make sure that the
     // kHomeLauncher background is still shown.
-    std::unique_ptr<views::Widget> widget = CreateTestWidget(nullptr, id);
+    std::unique_ptr<views::Widget> widget = CreateTestWidget(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET, nullptr, id);
 
     EXPECT_EQ(ShelfBackgroundType::kHomeLauncher,
-              shelf_layout_manager->GetShelfBackgroundType())
+              shelf_layout_manager->shelf_background_type())
         << " container " << id;
     EXPECT_EQ(hotseat->state(), HotseatState::kShownHomeLauncher);
   }
-}
-
-// Tests that Assistant UI in tablet mode is closed when open another window.
-TEST_F(AppListPresenterImplTest, HideAssistantUIOnFocusOut) {
-  // Enter tablet mode to display the home launcher.
-  EnableTabletMode();
-  EXPECT_TRUE(presenter()->IsVisibleDeprecated());
-  EXPECT_FALSE(IsShowingAssistantUI());
-
-  // Open a window to cover Home Launcher.
-  std::unique_ptr<aura::Window> window1 = CreateTestWindow();
-  EXPECT_FALSE(presenter()->IsVisibleDeprecated());
-
-  // Open Assistant UI.
-  ShowAssistantUI();
-  // Assistant UI is visible but Home Launcher is considered not visible.
-  EXPECT_TRUE(IsShowingAssistantUI());
-  EXPECT_FALSE(presenter()->IsVisibleDeprecated());
-
-  // Open another window should close Assistant UI.
-  std::unique_ptr<aura::Window> window2 = CreateTestWindow();
-  EXPECT_FALSE(IsShowingAssistantUI());
-  EXPECT_FALSE(presenter()->IsVisibleDeprecated());
 }
 
 // Regression test for https://crbug.com/1235056
@@ -141,8 +111,8 @@ TEST_F(AppListPresenterImplTest, ClearShelfObserversOnShelfRemoval) {
   // Enter tablet mode, so the test can trigger tablet mode exit later on.
   EnableTabletMode();
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Remove the secondary display, and exit tablet mode to trigger app list view
   // dismissal. Note that the display will be removed before the app list close

@@ -11,7 +11,6 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "extensions/buildflags/buildflags.h"
@@ -21,13 +20,17 @@
 #include "chrome/browser/extensions/context_menu_matcher.h"
 #endif
 
+#if BUILDFLAG(ENABLE_COMPOSE)
+class ChromeComposeClient;
+#endif
+
 namespace content {
 class WebContents;
 }
 namespace ui {
 class MenuModel;
 }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace policy {
 class DlpRulesManager;
 }
@@ -50,15 +53,19 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   // Use the constructor if you want to create menu with fine-grained params.
   static std::unique_ptr<TestRenderViewContextMenu> Create(
       content::WebContents* web_contents,
-      const GURL& page_url,
-      const GURL& link_url,
-      const GURL& frame_url);
+      const GURL& frame_url,
+      const GURL& link_url = GURL(),
+      bool is_subframe = false);
 
   static std::unique_ptr<TestRenderViewContextMenu> Create(
       content::RenderFrameHost* render_frame_host,
-      const GURL& page_url,
-      const GURL& link_url,
-      const GURL& frame_url);
+      const GURL& frame_url,
+      const GURL& link_url = GURL(),
+      bool is_subframe = false);
+
+  static constexpr auto GetFencedFrameUntrustedNetworkStatusGatedCommands() {
+    return kFencedFrameUntrustedNetworkStatusGatedCommands;
+  }
 
   // Returns true if the command specified by |command_id| is present
   // in the menu.
@@ -69,6 +76,10 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   // menu.
   bool IsItemChecked(int command_id) const;
 
+  // Returns true if the command specified by |command_id| is enabled in the
+  // menu.
+  bool IsItemEnabled(int command_id) const;
+
   // Returns true if a command specified by any command id between
   // |command_id_first| and |command_id_last| (inclusive) is present in the
   // menu.
@@ -78,7 +89,7 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   // value is true and the model and index where it appears in that model are
   // returned in |found_model| and |found_index|. Otherwise returns false.
   bool GetMenuModelAndItemIndex(int command_id,
-                                ui::MenuModel** found_model,
+                                raw_ptr<ui::MenuModel>* found_model,
                                 size_t* found_index);
 
   // Returns the command id of the menu item with the specified |path|.
@@ -98,6 +109,7 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   }
 
   using RenderViewContextMenu::AppendImageItems;
+  using RenderViewContextMenu::GetIsNewFeatureAtValue;
 
   // RenderViewContextMenu:
   void Show() override;
@@ -109,6 +121,9 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   void set_dlp_rules_manager(policy::DlpRulesManager* dlp_rules_manager);
 #endif
 
+#if BUILDFLAG(ENABLE_COMPOSE)
+  void SetChromeComposeClient(ChromeComposeClient* compose_client);
+#endif
   // If `browser` is not null, sets it as the return value of GetBrowser(),
   // overriding the base class behavior. If the Browser object is destroyed
   // before this class is, then SetBrowser(nullptr) should be called. If
@@ -119,11 +134,19 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
   // RenderViewContextMenu:
   Browser* GetBrowser() const override;
 
+#if BUILDFLAG(ENABLE_COMPOSE)
+  ChromeComposeClient* GetChromeComposeClient() const override;
+#endif
+
  private:
   raw_ptr<Browser> browser_ = nullptr;
 
 #if BUILDFLAG(IS_CHROMEOS)
-  policy::DlpRulesManager* dlp_rules_manager_ = nullptr;
+  raw_ptr<policy::DlpRulesManager> dlp_rules_manager_ = nullptr;
+#endif
+
+#if BUILDFLAG(ENABLE_COMPOSE)
+  raw_ptr<ChromeComposeClient> compose_client_ = nullptr;
 #endif
 };
 

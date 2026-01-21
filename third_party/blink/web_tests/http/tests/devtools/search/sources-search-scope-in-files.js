@@ -2,22 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {BindingsTestRunner} from 'bindings_test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Common from 'devtools/core/common/common.js';
+import * as Workspace from 'devtools/models/workspace/workspace.js';
+import * as SourcesModule from 'devtools/panels/sources/sources.js';
+import * as Persistence from 'devtools/models/persistence/persistence.js';
+
 (async function() {
+  Common.Settings.Settings.instance().moduleSetting('persistence-network-overrides-enabled').set(true);
   TestRunner.addResult(`Tests that ScriptSearchScope performs search across all sources correctly.\n`);
-  await TestRunner.loadTestModule('bindings_test_runner');
-  await TestRunner.loadLegacyModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadLegacyModule('search');
   await TestRunner.showPanel('sources');
+
+  const workspace = Workspace.Workspace.WorkspaceImpl.instance();
 
   function fileSystemUISourceCodes() {
     var uiSourceCodes = [];
-    var fileSystemProjects = Workspace.workspace.projectsForType(Workspace.projectTypes.FileSystem);
-    for (var project of fileSystemProjects)
-      uiSourceCodes = uiSourceCodes.concat(project.uiSourceCodes());
+    var fileSystemProjects = workspace.projectsForType(Workspace.Workspace.projectTypes.FileSystem);
+    for (var project of fileSystemProjects) {
+      for (const uiSourceCode of project.uiSourceCodes()) {
+        uiSourceCodes.push(uiSourceCode);
+      }
+    }
     return uiSourceCodes;
   }
 
-  var scope = new Sources.SourcesSearchScope();
+  var scope = new SourcesModule.SourcesSearchScope.SourcesSearchScope();
   var names = ['search.html', 'search.js', 'search.css'];
   var fs = new BindingsTestRunner.TestFileSystem('/var/www');
 
@@ -36,7 +48,7 @@
     fs.reportCreated(fileSystemCreated);
 
     function fileSystemCreated() {
-      TestRunner.addResult('Total uiSourceCodes: ' + Workspace.workspace.uiSourceCodes().length);
+      TestRunner.addResult('Total uiSourceCodes: ' + workspace.uiSourceCodes().length);
       TestRunner.runTestSuite(testSuite);
     }
   }
@@ -55,7 +67,7 @@
       var paths = [];
       for (var i = 0; i < names.length; ++i)
         paths.push('/var/www/' + names[i]);
-      Persistence.isolatedFileSystemManager.onSearchCompleted(
+      Persistence.IsolatedFileSystemManager.IsolatedFileSystemManager.instance().onSearchCompleted(
           {data: {requestId: requestId, fileSystemPath: path, files: paths}});
     }
   };
@@ -64,14 +76,14 @@
     function testIgnoreCase(next) {
       var query = 'searchTest' +
           'UniqueString';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
     function testCaseSensitive(next) {
       var query = 'searchTest' +
           'UniqueString';
-      var searchConfig = new Search.SearchConfig(query, false, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, false, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -79,7 +91,7 @@
       var query = 'searchTest' +
           'UniqueString' +
           ' file:html';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -87,7 +99,7 @@
       var query = 'file:js ' +
           'searchTest' +
           'UniqueString';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -96,7 +108,7 @@
           'searchTest' +
           'UniqueString' +
           ' file:html';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -105,7 +117,7 @@
           'Unique' +
           ' space' +
           ' String';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -115,7 +127,7 @@
           'Unique' +
           ' space' +
           ' String';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -126,7 +138,7 @@
           ' space' +
           ' String' +
           ' file:search';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -137,7 +149,7 @@
           ' space' +
           ' String' +
           ' file:search file:html';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -147,7 +159,7 @@
           ' file:html ' +
           ' space' +
           ' String';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -158,7 +170,7 @@
           ' space' +
           ' String' +
           ' file:search';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -170,7 +182,7 @@
           ' space' +
           ' String' +
           ' file:search';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -178,7 +190,7 @@
       var query = 'searchTest' +
           'UniqueString' +
           ' file:search -file:js -file:css';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -188,7 +200,7 @@
           ' -file:css ' +
           ' space' +
           ' String';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     },
 
@@ -197,7 +209,7 @@
       var query = 'searchTest' +
           'Unique' +
           ' file:www';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, step2);
 
       function step2() {
@@ -205,7 +217,7 @@
         query = 'searchTest' +
             'Unique' +
             ' file:zzz';
-        searchConfig = new Search.SearchConfig(query, true, false);
+        searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
         SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
       }
     },
@@ -227,7 +239,7 @@
           ' BAR');
       var query = 'searchTest' +
           'UniqueString';
-      var searchConfig = new Search.SearchConfig(query, true, false);
+      var searchConfig = new Workspace.SearchConfig.SearchConfig(query, true, false);
       SourcesTestRunner.runSearchAndDumpResults(scope, searchConfig, next);
     }
   ];

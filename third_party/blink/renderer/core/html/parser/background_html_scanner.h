@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/sequence_bound.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -52,35 +51,30 @@ class CORE_EXPORT BackgroundHTMLScanner {
     static std::unique_ptr<ScriptTokenScanner> Create(
         ScriptableDocumentParser* parser);
 
-    struct OptimizationParams {
-      scoped_refptr<base::SequencedTaskRunner> task_runner;
-      wtf_size_t min_size = 0;
-      bool enabled = false;
-    };
     ScriptTokenScanner(ScriptableDocumentParser* parser,
-                       OptimizationParams precompile_scripts_params,
-                       OptimizationParams pretokenize_css_params);
+                       scoped_refptr<base::SequencedTaskRunner> task_runner,
+                       wtf_size_t min_script_size);
 
     void ScanToken(const HTMLToken& token);
 
     void set_first_script_in_scan(bool value) { first_script_in_scan_ = value; }
 
    private:
+    // Careful this isolate doesn't belong to the sequence that this class
+    // executes on.
+    v8::Isolate* isolate_;
     CrossThreadWeakPersistent<ScriptableDocumentParser> parser_;
+    scoped_refptr<base::SequencedTaskRunner> task_runner_;
+    wtf_size_t min_script_size_;
+    StringBuilder script_builder_;
 
-    enum class InsideTag { kNone, kScript, kStyle };
-    InsideTag in_tag_ = InsideTag::kNone;
-    StringBuilder builder_;
-    HashSet<wtf_size_t> css_text_hashes_;
-
+    bool in_script_ = false;
     bool first_script_in_scan_ = false;
-    OptimizationParams precompile_scripts_params_;
-    OptimizationParams pretokenize_css_params_;
   };
 
   // Creates a sequence bound BackgroundHTMLScanner which will live on a
   // background thread. Methods can be called using SequenceBound::AsyncCall().
-  static WTF::SequenceBound<BackgroundHTMLScanner> Create(
+  static SequenceBound<BackgroundHTMLScanner> Create(
       const HTMLParserOptions& options,
       ScriptableDocumentParser* parser);
   BackgroundHTMLScanner(std::unique_ptr<HTMLTokenizer> tokenizer,

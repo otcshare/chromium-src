@@ -36,6 +36,11 @@ class CONTENT_EXPORT AuthenticatorImpl
   AuthenticatorImpl(const AuthenticatorImpl&) = delete;
   AuthenticatorImpl& operator=(const AuthenticatorImpl&) = delete;
 
+  static blink::mojom::GetCredentialResponsePtr MakeGetAssertionResponse(
+      blink::mojom::AuthenticatorStatus status,
+      blink::mojom::GetAssertionAuthenticatorResponsePtr assertion,
+      blink::mojom::WebAuthnDOMExceptionDetailsPtr dom_exception_details);
+
  private:
   friend class AuthenticatorImplTest;
   friend class AuthenticatorImplRequestDelegateTest;
@@ -46,16 +51,15 @@ class CONTENT_EXPORT AuthenticatorImpl
       std::unique_ptr<AuthenticatorCommonImpl> authenticator_common_impl);
   ~AuthenticatorImpl() override;
 
-  AuthenticatorCommonImpl* get_authenticator_common_impl_for_testing() {
-    return authenticator_common_impl_.get();
-  }
-
   // mojom::Authenticator
   void MakeCredential(
       blink::mojom::PublicKeyCredentialCreationOptionsPtr options,
       MakeCredentialCallback callback) override;
-  void GetAssertion(blink::mojom::PublicKeyCredentialRequestOptionsPtr options,
-                    GetAssertionCallback callback) override;
+  void GetCredential(blink::mojom::GetCredentialOptionsPtr options,
+                     GetCredentialCallback callback) override;
+  void GetClientCapabilities(GetClientCapabilitiesCallback callback) override;
+  void Report(blink::mojom::PublicKeyCredentialReportOptionsPtr options,
+              ReportCallback callback) override;
   void IsUserVerifyingPlatformAuthenticatorAvailable(
       IsUserVerifyingPlatformAuthenticatorAvailableCallback callback) override;
   void IsConditionalMediationAvailable(

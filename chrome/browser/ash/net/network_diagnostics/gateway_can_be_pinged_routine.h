@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/net/network_diagnostics/network_diagnostics_routine.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
@@ -21,7 +22,9 @@ namespace network_diagnostics {
 // Tests whether a device can ping all the gateways it is connected to.
 class GatewayCanBePingedRoutine : public NetworkDiagnosticsRoutine {
  public:
-  explicit GatewayCanBePingedRoutine(DebugDaemonClient* debug_daemon_client);
+  GatewayCanBePingedRoutine(
+      chromeos::network_diagnostics::mojom::RoutineCallSource source,
+      DebugDaemonClient* debug_daemon_client);
   GatewayCanBePingedRoutine(const GatewayCanBePingedRoutine&) = delete;
   GatewayCanBePingedRoutine& operator=(const GatewayCanBePingedRoutine&) =
       delete;
@@ -51,7 +54,7 @@ class GatewayCanBePingedRoutine : public NetworkDiagnosticsRoutine {
   // |is_default_network_ping_result| is true if the ICMP result, stored in
   // |status| corresponds to that of the default network.
   void OnTestICMPCompleted(bool is_default_network_ping_result,
-                           const absl::optional<std::string> status);
+                           const std::optional<std::string> status);
   DebugDaemonClient* debug_daemon_client() const {
     DCHECK(debug_daemon_client_);
     return debug_daemon_client_;
@@ -62,7 +65,7 @@ class GatewayCanBePingedRoutine : public NetworkDiagnosticsRoutine {
   std::vector<chromeos::network_diagnostics::mojom::GatewayCanBePingedProblem>
       problems_;
   // An unowned pointer to the DebugDaemonClient instance.
-  DebugDaemonClient* debug_daemon_client_;
+  raw_ptr<DebugDaemonClient, DanglingUntriaged> debug_daemon_client_;
   std::vector<std::string> gateways_;
   bool unreachable_gateways_ = true;
   int non_default_network_unsuccessful_ping_count_ = 0;

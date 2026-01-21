@@ -4,12 +4,12 @@
 
 #include "third_party/blink/renderer/modules/sensor/sensor.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/ranges/algorithm.h"
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
 #include "services/device/public/mojom/sensor.mojom-blink.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -28,9 +28,9 @@ const double kWaitingIntervalThreshold = 0.01;
 
 bool AreFeaturesEnabled(
     ExecutionContext* context,
-    const Vector<mojom::blink::PermissionsPolicyFeature>& features) {
-  return base::ranges::all_of(
-      features, [context](mojom::blink::PermissionsPolicyFeature feature) {
+    const Vector<network::mojom::PermissionsPolicyFeature>& features) {
+  return std::ranges::all_of(
+      features, [context](network::mojom::PermissionsPolicyFeature feature) {
         return context->IsFeatureEnabled(feature,
                                          ReportOptions::kReportOnFailure);
       });
@@ -42,8 +42,9 @@ Sensor::Sensor(ExecutionContext* execution_context,
                const SensorOptions* sensor_options,
                ExceptionState& exception_state,
                device::mojom::blink::SensorType type,
-               const Vector<mojom::blink::PermissionsPolicyFeature>& features)
-    : ExecutionContextLifecycleObserver(execution_context),
+               const Vector<network::mojom::PermissionsPolicyFeature>& features)
+    : ActiveScriptWrappable<Sensor>({}),
+      ExecutionContextLifecycleObserver(execution_context),
       frequency_(0.0),
       type_(type),
       state_(SensorState::kIdle),
@@ -80,13 +81,14 @@ Sensor::Sensor(ExecutionContext* execution_context,
                const SpatialSensorOptions* options,
                ExceptionState& exception_state,
                device::mojom::blink::SensorType sensor_type,
-               const Vector<mojom::blink::PermissionsPolicyFeature>& features)
+               const Vector<network::mojom::PermissionsPolicyFeature>& features)
     : Sensor(execution_context,
              static_cast<const SensorOptions*>(options),
              exception_state,
              sensor_type,
              features) {
-  use_screen_coords_ = (options->referenceFrame() == "screen");
+  use_screen_coords_ =
+      (options->referenceFrame() == V8LocalCoordinateSystem::Enum::kScreen);
 }
 
 Sensor::~Sensor() = default;
@@ -119,15 +121,15 @@ bool Sensor::hasReading() const {
   return sensor_proxy_->GetReading().timestamp() != 0.0;
 }
 
-absl::optional<DOMHighResTimeStamp> Sensor::timestamp(
+std::optional<DOMHighResTimeStamp> Sensor::timestamp(
     ScriptState* script_state) const {
   if (!hasReading()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   LocalDOMWindow* window = LocalDOMWindow::From(script_state);
   if (!window) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   WindowPerformance* performance = DOMWindowPerformance::performance(*window);
@@ -143,7 +145,7 @@ void Sensor::Trace(Visitor* visitor) const {
   visitor->Trace(sensor_proxy_);
   ActiveScriptWrappable::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
 }
 
 bool Sensor::HasPendingActivity() const {
@@ -185,8 +187,14 @@ void Sensor::InitSensorProxyIfNeeded() {
 }
 
 void Sensor::ContextDestroyed() {
-  if (!IsIdleOrErrored())
+  // We do not use IsIdleOrErrored() here because we also want to call
+  // Deactivate() if |pending_error_notification_| is active (see
+  // https://crbug.com/324301018).
+  if (state_ != SensorState::kIdle) {
     Deactivate();
+  }
+
+  state_ = SensorState::kIdle;
 
   if (sensor_proxy_)
     sensor_proxy_->Detach();
@@ -218,7 +226,7 @@ void Sensor::OnSensorReadingChanged() {
   // We also avoid scheduling if the elapsed time is slightly behind the
   // polling period.
   auto sensor_reading_changed =
-      WTF::BindOnce(&Sensor::NotifyReading, WrapWeakPersistent(this));
+      BindOnce(&Sensor::NotifyReading, WrapWeakPersistent(this));
   if (waitingTime < kWaitingIntervalThreshold) {
     // Invoke JS callbacks in a different callchain to obviate
     // possible modifications of SensorProxy::observers_ container
@@ -254,7 +262,7 @@ void Sensor::OnAddConfigurationRequestCompleted(bool result) {
 
   pending_activated_notification_ = PostCancellableTask(
       *GetExecutionContext()->GetTaskRunner(TaskType::kSensor), FROM_HERE,
-      WTF::BindOnce(&Sensor::NotifyActivated, WrapWeakPersistent(this)));
+      BindOnce(&Sensor::NotifyActivated, WrapWeakPersistent(this)));
 }
 
 void Sensor::Activate() {
@@ -305,8 +313,8 @@ void Sensor::RequestAddConfiguration() {
   DCHECK(sensor_proxy_);
   sensor_proxy_->AddConfiguration(
       configuration_->Clone(),
-      WTF::BindOnce(&Sensor::OnAddConfigurationRequestCompleted,
-                    WrapWeakPersistent(this)));
+      BindOnce(&Sensor::OnAddConfigurationRequestCompleted,
+               WrapWeakPersistent(this)));
 }
 
 void Sensor::HandleError(DOMExceptionCode code,
@@ -326,8 +334,8 @@ void Sensor::HandleError(DOMExceptionCode code,
                                                    unsanitized_message);
   pending_error_notification_ = PostCancellableTask(
       *GetExecutionContext()->GetTaskRunner(TaskType::kSensor), FROM_HERE,
-      WTF::BindOnce(&Sensor::NotifyError, WrapWeakPersistent(this),
-                    WrapPersistent(error)));
+      BindOnce(&Sensor::NotifyError, WrapWeakPersistent(this),
+               WrapPersistent(error)));
 }
 
 void Sensor::NotifyReading() {
@@ -347,8 +355,7 @@ void Sensor::NotifyActivated() {
     DCHECK(!pending_reading_notification_.IsActive());
     pending_reading_notification_ = PostCancellableTask(
         *GetExecutionContext()->GetTaskRunner(TaskType::kSensor), FROM_HERE,
-        WTF::BindOnce(&Sensor::OnSensorReadingChanged,
-                      WrapWeakPersistent(this)));
+        BindOnce(&Sensor::OnSensorReadingChanged, WrapWeakPersistent(this)));
   }
 
   DispatchEvent(*Event::Create(event_type_names::kActivate));

@@ -8,14 +8,11 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
-#endif
 
 using content::GlobalRequestID;
 using content::NavigationController;
@@ -24,16 +21,16 @@ using content::WebContents;
 #if BUILDFLAG(IS_ANDROID)
 NavigateParams::NavigateParams(std::unique_ptr<WebContents> contents_to_insert)
     : contents_to_insert(std::move(contents_to_insert)) {}
-#else
-NavigateParams::NavigateParams(Browser* a_browser,
+#endif
+
+NavigateParams::NavigateParams(BrowserWindowInterface* a_browser,
                                const GURL& a_url,
                                ui::PageTransition a_transition)
     : url(a_url), transition(a_transition), browser(a_browser) {}
 
-NavigateParams::NavigateParams(Browser* a_browser,
+NavigateParams::NavigateParams(BrowserWindowInterface* a_browser,
                                std::unique_ptr<WebContents> contents_to_insert)
     : contents_to_insert(std::move(contents_to_insert)), browser(a_browser) {}
-#endif  // BUILDFLAG(IS_ANDROID)
 
 NavigateParams::NavigateParams(Profile* a_profile,
                                const GURL& a_url,
@@ -41,12 +38,12 @@ NavigateParams::NavigateParams(Profile* a_profile,
     : url(a_url),
       disposition(WindowOpenDisposition::NEW_FOREGROUND_TAB),
       transition(a_transition),
-      window_action(SHOW_WINDOW),
+      window_action(WindowAction::kShowWindow),
       initiating_profile(a_profile) {}
 
 NavigateParams::NavigateParams(NavigateParams&&) = default;
 
-NavigateParams::~NavigateParams() {}
+NavigateParams::~NavigateParams() = default;
 
 void NavigateParams::FillNavigateParamsFromOpenURLParams(
     const content::OpenURLParams& params) {
@@ -76,7 +73,7 @@ void NavigateParams::FillNavigateParamsFromOpenURLParams(
   this->should_replace_current_entry = params.should_replace_current_entry;
   this->post_data = params.post_data;
   this->started_from_context_menu = params.started_from_context_menu;
-  this->open_pwa_window_if_possible = params.open_app_window_if_possible;
+  this->is_service_worker_open_window = params.is_service_worker_open_window;
   this->user_gesture = params.user_gesture;
   this->blob_url_loader_factory = params.blob_url_loader_factory;
   this->href_translate = params.href_translate;

@@ -9,13 +9,13 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chromeos/ash/components/network/policy_certificate_provider.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class Profile;
-class PrefRegistrySimple;
 
 namespace base {
 class FilePath;
@@ -53,14 +53,20 @@ class PolicyCertService : public KeyedService,
 
   ~PolicyCertService() override;
 
-  // Returns true if the profile that owns this service has used certificates
-  // installed via policy to establish a secure connection before. This means
-  // that it may have cached content from an untrusted source.
-  bool UsedPolicyCertificates() const;
+  // Starts observing for changes to the policy-provided certificates and sets
+  // a callback to be called when this happens. This should only be called if
+  // the network service is enabled.
+  void StartObservingCertChanges(base::RepeatingClosure callback);
 
-  // Sets the flag that the current profile used certificates pushed by policy
-  // before.
-  void SetUsedPolicyCertificates();
+  // Clears the callback set by `StartObservingCertChanges()` and stops
+  // observing for changes to the policy-provided certificates.
+  void StopObservingCertChanges();
+
+  // Returns true if the service is currently observing changes to the
+  // policy-provided certificates.
+  bool IsObservingCertChanges() const {
+    return !!on_policy_provided_certs_changed_callback_;
+  }
 
   // Returns true if the profile that owns this service has at least one
   // policy-provided trust anchor configured.
@@ -71,6 +77,9 @@ class PolicyCertService : public KeyedService,
   // PolicyCertificateProvider::Observer:
   void OnPolicyProvidedCertsChanged() override;
 
+  // PolicyCertificateProvider::OnDestroying:
+  void OnPolicyCertificateProviderDestroying() override;
+
   // Fills *|out_all_server_and_authority_certificates| and *|out_trust_anchors|
   // with policy-provided certificates that should be used when verifying a
   // server certificate for Web requests from the StoragePartition identified by
@@ -79,8 +88,6 @@ class PolicyCertService : public KeyedService,
       const base::FilePath& partition_path,
       net::CertificateList* out_all_server_and_authority_certificates,
       net::CertificateList* out_trust_anchors) const;
-
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   static std::unique_ptr<PolicyCertService> CreateForTesting(Profile* profile);
 
@@ -101,8 +108,12 @@ class PolicyCertService : public KeyedService,
 
   const raw_ptr<Profile> profile_;
 
+  // Callback to be called when the policy-provided certificates change. Set via
+  // `StartObservingForProfile()`.
+  base::RepeatingClosure on_policy_provided_certs_changed_callback_;
+
   // The source of certificates for this PolicyCertService.
-  const raw_ptr<ash::PolicyCertificateProvider> policy_certificate_provider_;
+  raw_ptr<ash::PolicyCertificateProvider> policy_certificate_provider_;
 
   // If true, CA certificates |policy_certificate_provider_| that have requested
   // "Web" trust and have profile-wide scope may be used for |profile_|.

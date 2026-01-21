@@ -65,7 +65,7 @@ TEST_F(TouchEventManagerTest, LostTouchDueToInnerIframeRemove) {
       Vector<WebPointerEvent>(), Vector<WebPointerEvent>());
   GetEventHandler().DispatchBufferedTouchEvents();
 
-  GetDocument().getElementById("target")->remove();
+  GetDocument().getElementById(AtomicString("target"))->remove();
 
   GetEventHandler().HandlePointerEvent(
       CreateTouchPointerEvent(WebInputEvent::Type::kPointerUp),
@@ -90,16 +90,16 @@ TEST_F(TouchEventManagerTest, AbosolutePosWithScrollAndZoom) {
       position: absolute; left:100px; top:100px; width:200px; height:200px;'>
     </body>
   )HTML");
-  GetDocument().GetFrame()->SetPageZoomFactor(2);
-  Window().scrollTo(100, 100);
+  GetDocument().GetFrame()->SetLayoutZoomFactor(2);
+  Window().scrollToForTesting(100, 100);
 
   GetEventHandler().HandlePointerEvent(
       CreateTouchPointerEvent(WebInputEvent::Type::kPointerDown),
       Vector<WebPointerEvent>(), Vector<WebPointerEvent>());
   GetEventHandler().DispatchBufferedTouchEvents();
 
-  auto* input =
-      To<HTMLInputElement>(GetDocument().getElementById("slideElement"));
+  auto* input = To<HTMLInputElement>(
+      GetDocument().getElementById(AtomicString("slideElement")));
   // Allow off by 1 error because it may result in different value in some
   // platform.
   EXPECT_NEAR(23, ParseToDoubleForNumberType(input->Value()), 1);

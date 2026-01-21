@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/threading/thread_restrictions.h"
@@ -30,7 +29,6 @@
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
@@ -47,7 +45,7 @@ class DOMStorageBrowserTest : public ContentBrowserTest {
     Shell* the_browser = incognito ? CreateOffTheRecordBrowser() : shell();
     NavigateToURLBlockUntilNavigationsComplete(the_browser, test_url, 2);
     std::string result =
-        the_browser->web_contents()->GetLastCommittedURL().ref();
+        the_browser->web_contents()->GetLastCommittedURL().GetRef();
     if (result != "pass") {
       std::string js_result = EvalJs(the_browser, "getLog()").ExtractString();
       FAIL() << "Failed: " << js_result;
@@ -98,7 +96,8 @@ IN_PROC_BROWSER_TEST_F(DOMStorageBrowserTest, SanityCheckIncognito) {
 }
 
 // http://crbug.com/654704 PRE_ tests aren't supported on Android.
-#if BUILDFLAG(IS_ANDROID)
+// TODO(crbug.com/40885339): Re-enable this test for fuchsia.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_DataPersists DISABLED_DataPersists
 #else
 #define MAYBE_DataPersists DataPersists
@@ -125,7 +124,13 @@ IN_PROC_BROWSER_TEST_F(DOMStorageBrowserTest, MAYBE_DataPersists) {
   SimpleTest(GetTestUrl("dom_storage", "verify_data.html"), kNotIncognito);
 }
 
-IN_PROC_BROWSER_TEST_F(DOMStorageBrowserTest, DeletePhysicalStorageKey) {
+// TODO(crbug/361107780): Fix flakiness on android-bfcache-rel and re-enable.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_DeletePhysicalStorageKey DISABLED_DeletePhysicalStorageKey
+#else
+#define MAYBE_DeletePhysicalStorageKey DeletePhysicalStorageKey
+#endif
+IN_PROC_BROWSER_TEST_F(DOMStorageBrowserTest, MAYBE_DeletePhysicalStorageKey) {
   EXPECT_EQ(0U, GetUsage().size());
   SimpleTest(GetTestUrl("dom_storage", "store_data.html"), kNotIncognito);
   std::vector<StorageUsageInfo> usage = GetUsage();

@@ -4,11 +4,13 @@
 
 #include "services/device/usb/usb_device_handle_android.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "services/device/usb/jni_headers/ChromeUsbConnection_jni.h"
 #include "services/device/usb/usb_device.h"
 #include "services/device/usb/usb_service.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/usb/jni_headers/ChromeUsbConnection_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 
@@ -48,9 +50,11 @@ void UsbDeviceHandleAndroid::FinishClose() {
 }
 
 void UsbDeviceHandleAndroid::CloseConnection() {
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   Java_ChromeUsbConnection_close(env, j_object_);
   j_object_.Reset();
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeUsbConnection)

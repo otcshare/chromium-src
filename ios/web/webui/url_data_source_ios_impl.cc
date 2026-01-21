@@ -4,7 +4,7 @@
 
 #include "ios/web/webui/url_data_source_ios_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_util.h"
@@ -15,13 +15,11 @@
 
 namespace web {
 
-URLDataSourceIOSImpl::URLDataSourceIOSImpl(const std::string& source_name,
+URLDataSourceIOSImpl::URLDataSourceIOSImpl(std::string_view source_name,
                                            URLDataSourceIOS* source)
-    : source_name_(source_name), backend_(NULL), source_(source) {
-}
+    : source_name_(source_name), backend_(nullptr), source_(source) {}
 
-URLDataSourceIOSImpl::~URLDataSourceIOSImpl() {
-}
+URLDataSourceIOSImpl::~URLDataSourceIOSImpl() {}
 
 void URLDataSourceIOSImpl::SendResponse(
     int request_id,
@@ -50,8 +48,9 @@ void URLDataSourceIOSImpl::SendResponseOnIOThread(
     int request_id,
     scoped_refptr<base::RefCountedMemory> bytes) {
   DCHECK_CURRENTLY_ON(web::WebThread::IO);
-  if (backend_)
+  if (backend_) {
     backend_->DataAvailable(request_id, bytes.get());
+  }
 }
 
 const ui::TemplateReplacements* URLDataSourceIOSImpl::GetReplacements() const {

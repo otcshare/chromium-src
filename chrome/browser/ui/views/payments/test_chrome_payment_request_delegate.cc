@@ -5,7 +5,11 @@
 #include "chrome/browser/ui/views/payments/test_chrome_payment_request_delegate.h"
 
 #include <memory>
+#include <utility>
 
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/payments/core/error_logger.h"
 #include "components/webauthn/content/browser/internal_authenticator_impl.h"
 #include "content/public/browser/render_frame_host.h"
@@ -109,14 +113,17 @@ TestChromePaymentRequestDelegate::CreateInternalAuthenticator() const {
 
 std::string
 TestChromePaymentRequestDelegate::GetInvalidSslCertificateErrorMessage() {
-  if (is_valid_ssl_.has_value())
+  if (is_valid_ssl_.has_value()) {
     return *is_valid_ssl_ ? "" : "Invalid SSL certificate";
+  }
 
   return ChromePaymentRequestDelegate::GetInvalidSslCertificateErrorMessage();
 }
 
-std::string TestChromePaymentRequestDelegate::GetTwaPackageName() const {
-  return twa_package_name_;
+void TestChromePaymentRequestDelegate::GetTwaPackageName(
+    GetTwaPackageNameCallback callback) const {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), twa_package_name_));
 }
 
 const base::WeakPtr<PaymentUIObserver>

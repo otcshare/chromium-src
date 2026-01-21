@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors
+// Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,30 @@
 #include <memory>
 
 #include "ash/ash_export.h"
+#include "ash/wm/splitview/split_view_types.h"
+#include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_resizer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
+
+namespace aura {
+class Window;
+}
+
+namespace ui {
+class GestureEvent;
+}
 
 namespace ash {
 
+class SplitViewController;
+class SplitViewDragIndicators;
 class TabletModeWindowDragDelegate;
 class WindowState;
 
-// WindowResizer implementation for windows in tablet mode. Currently we
-// don't allow any resizing and any dragging happening on the area other than
-// the caption tabs area in tablet mode, or the top few client pixels for app
-// windows without caption areas. Depending on the event position, the dragged
-// window may be 1) maximized, or 2) snapped in splitscreen, or 3) merged to an
-// existing window (in the case of a browser window).
 class ASH_EXPORT TabletModeWindowResizer : public WindowResizer {
  public:
   TabletModeWindowResizer(
@@ -40,22 +49,44 @@ class ASH_EXPORT TabletModeWindowResizer : public WindowResizer {
   void RevertDrag() override;
   void FlingOrSwipe(ui::GestureEvent* event) override;
 
-  TabletModeWindowDragDelegate* drag_delegate_for_testing() {
-    return drag_delegate_.get();
-  }
-
  private:
-  // The drag delegate that does the real work: shows/hides the drag indicators,
-  // preview windows, blurred background, etc, during dragging.
   std::unique_ptr<TabletModeWindowDragDelegate> drag_delegate_;
-
   gfx::PointF previous_location_in_screen_;
 
-  bool did_lock_cursor_ = false;
+  // Converts the given parent-relative location to a screen coordinate and
+  // stores it in previous_location_in_screen_, returning that new value.
+  const gfx::PointF& ConvertAndSetPreviousLocationInScreen(
+      const gfx::PointF& location_in_parent);
+};
 
-  // Used to determine if this has been deleted during a drag such as when a tab
-  // gets dragged into another browser window.
-  base::WeakPtrFactory<TabletModeWindowResizer> weak_ptr_factory_{this};
+class ASH_EXPORT TabletModeWindowDragDelegate {
+ public:
+  TabletModeWindowDragDelegate();
+
+  TabletModeWindowDragDelegate(const TabletModeWindowDragDelegate&) = delete;
+  TabletModeWindowDragDelegate& operator=(const TabletModeWindowDragDelegate&) =
+      delete;
+
+  virtual ~TabletModeWindowDragDelegate();
+
+  void StartWindowDrag(aura::Window* window,
+                       const gfx::PointF& location_in_screen);
+
+  // |target_bounds| is the desired bounds of the dragged window.
+  void ContinueWindowDrag(const gfx::PointF& location_in_screen,
+                          const gfx::Rect& target_bounds = gfx::Rect());
+
+  void EndWindowDrag(ToplevelWindowEventHandler::DragResult result,
+                     const gfx::PointF& location_in_screen);
+
+ private:
+  SnapPosition GetSnapPosition(const gfx::PointF& location_in_screen) const;
+
+  raw_ref<SplitViewController> split_view_controller_;
+  std::unique_ptr<SplitViewDragIndicators> split_view_drag_indicators_;
+  raw_ptr<aura::Window> dragged_window_ = nullptr;
+  gfx::PointF initial_location_in_screen_;
+  base::WeakPtrFactory<TabletModeWindowDragDelegate> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

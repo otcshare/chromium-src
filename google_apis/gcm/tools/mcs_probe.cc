@@ -10,18 +10,19 @@
 #include <cstddef>
 #include <cstdio>
 #include <memory>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
@@ -66,7 +67,7 @@
 #include "url/scheme_host_port.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "base/mac/scoped_nsautorelease_pool.h"
+#include "base/apple/scoped_nsautorelease_pool.h"
 #endif
 
 // This is a simple utility that initializes an mcs client and
@@ -162,7 +163,18 @@ class MyTestCertVerifier : public net::CertVerifier {
     verify_result->verified_cert = params.certificate();
     return net::OK;
   }
+  void Verify2QwacBinding(
+      const std::string& binding,
+      const std::string& hostname,
+      const scoped_refptr<net::X509Certificate>& tls_cert,
+      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+          callback,
+      const net::NetLogWithSource& net_log) override {
+    std::move(callback).Run(nullptr);
+  }
   void SetConfig(const Config& config) override {}
+  void AddObserver(Observer* observer) override {}
+  void RemoveObserver(Observer* observer) override {}
 };
 
 class MCSProbeAuthPreferences : public net::HttpAuthPreferences {
@@ -296,8 +308,8 @@ void MCSProbe::Start() {
       base::SingleThreadTaskRunner::GetCurrentDefault(), &recorder_,
       network_connection_tracker_.get());
   gcm_store_ = std::make_unique<GCMStoreImpl>(
-      gcm_store_path_, /*remove_account_mappings_with_email_key=*/true,
-      file_thread_.task_runner(), std::make_unique<FakeEncryptor>());
+      gcm_store_path_, file_thread_.task_runner(),
+      std::make_unique<FakeEncryptor>());
 
   mcs_client_ = std::make_unique<MCSClient>(
       "probe", &clock_, connection_factory_.get(), gcm_store_.get(),
@@ -355,7 +367,7 @@ void MCSProbe::InitializeNetworkState() {
   builder.set_host_resolver(
       net::HostResolver::CreateStandaloneResolver(net_log_));
   http_auth_preferences_.set_allowed_schemes(
-      std::set<std::string>{net::kBasicAuthScheme});
+      base::flat_set<std::string>({net::kBasicAuthScheme}));
   builder.SetHttpAuthHandlerFactory(
       net::HttpAuthHandlerRegistryFactory::Create(&http_auth_preferences_));
   builder.set_proxy_resolution_service(
@@ -375,7 +387,7 @@ void MCSProbe::InitializeNetworkState() {
   auto url_loader_factory_params =
       network::mojom::URLLoaderFactoryParams::New();
   url_loader_factory_params->process_id = network::mojom::kBrowserProcessId;
-  url_loader_factory_params->is_corb_enabled = false;
+  url_loader_factory_params->is_orb_enabled = false;
   network_context_->CreateURLLoaderFactory(
       url_loader_factory_.BindNewPipeAndPassReceiver(),
       std::move(url_loader_factory_params));
@@ -405,7 +417,6 @@ void MCSProbe::CheckIn() {
   chrome_build_proto.set_chrome_version(kChromeVersion);
 
   CheckinRequest::RequestInfo request_info(0, 0,
-                                           std::map<std::string, std::string>(),
                                            std::string(), chrome_build_proto);
 
   checkin_request_ = std::make_unique<CheckinRequest>(

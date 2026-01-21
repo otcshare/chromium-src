@@ -9,16 +9,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/strings/string_util.h"
 #include "base/task/task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/assist_ranker/proto/ranker_model.pb.h"
 #include "components/assist_ranker/proto/translate_ranker_model.pb.h"
@@ -27,7 +26,6 @@
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "components/translate/core/common/translate_switches.h"
-#include "components/variations/variations_associated_data.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -68,14 +66,14 @@ double ScoreComponent(const google::protobuf::Map<std::string, float>& weights,
 
 RankerModelStatus ValidateModel(const RankerModel& model) {
   if (model.proto().model_case() != RankerModelProto::kTranslate)
-    return RankerModelStatus::VALIDATION_FAILED;
+    return RankerModelStatus::kValidationFailed;
 
   if (model.proto().translate().model_revision_case() !=
       TranslateRankerModel::kTranslateLogisticRegressionModel) {
-    return RankerModelStatus::INCOMPATIBLE;
+    return RankerModelStatus::kIncompatible;
   }
 
-  return RankerModelStatus::OK;
+  return RankerModelStatus::kOk;
 }
 
 }  // namespace
@@ -94,15 +92,10 @@ const char kDefaultTranslateRankerModelURL[] =
     "translate/2017/03/translate_ranker_model_20170329.pb.bin";
 #endif
 
-BASE_FEATURE(kTranslateRankerQuery,
-             "TranslateRankerQuery",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kTranslateRankerEnforcement,
-             "TranslateRankerEnforcement",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTranslateRankerQuery, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTranslateRankerEnforcement, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kTranslateRankerPreviousLanguageMatchesOverride,
-             "TranslateRankerPreviousLanguageMatchesOverride",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 TranslateRankerFeatures::TranslateRankerFeatures() = default;
@@ -202,7 +195,7 @@ GURL TranslateRankerImpl::GetModelURL() {
         command_line->GetSwitchValueASCII(switches::kTranslateRankerModelURL);
   } else {
     // Otherwise take the ranker model URL from the ranker query variation.
-    raw_url = variations::GetVariationParamValueByFeature(
+    raw_url = base::GetFieldTrialParamValueByFeature(
         kTranslateRankerQuery, switches::kTranslateRankerModelURL);
   }
   // If the ranker URL is still not defined, use the default.
@@ -261,8 +254,6 @@ bool TranslateRankerImpl::ShouldOfferTranslation(
   translate_metrics_logger->LogRankerStart();
   bool result = GetModelDecision(*translate_event);
   translate_metrics_logger->LogRankerFinish();
-
-  UMA_HISTOGRAM_BOOLEAN("Translate.Ranker.QueryResult", result);
 
   translate_event->set_ranker_response(result ? TranslateEventProto::SHOW
                                               : TranslateEventProto::DONT_SHOW);

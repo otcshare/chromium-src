@@ -8,8 +8,12 @@
 #include <atk/atkutil.h>
 #include <atspi/atspi.h>
 
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "base/no_destructor.h"
 #include "base/process/process_handle.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "ui/accessibility/platform/ax_platform_tree_manager.h"
@@ -53,7 +57,7 @@ bool AXEventRecorderAuraLinux::ShouldUseATSPI() {
 }
 
 AXEventRecorderAuraLinux::AXEventRecorderAuraLinux(
-    AXPlatformTreeManager* manager,
+    base::WeakPtr<AXPlatformTreeManager> manager,
     base::ProcessId pid,
     const AXTreeSelector& selector)
     : manager_(manager), pid_(pid), selector_(selector) {
@@ -121,8 +125,12 @@ std::string AXEventRecorderAuraLinux::AtkObjectToString(AtkObject* obj,
       base::StringPrintf("role=ROLE_%s", base::ToUpperASCII(role).c_str());
   // Getting the name breaks firing of name-change events. Allow disabling of
   // logging the name in those situations.
-  if (include_name)
-    str += base::StringPrintf(" name='%s'", atk_object_get_name(obj));
+  if (include_name) {
+    // Supplying null to the corresponding argument of a "%s" specifier is UB.
+    // Explicitly avoid this.
+    const gchar* name = atk_object_get_name(obj);
+    str += base::StringPrintf(" name='%s'", name ? name : "(null)");
+  }
   return str;
 }
 
@@ -130,7 +138,7 @@ void AXEventRecorderAuraLinux::ProcessATKEvent(const char* event,
                                                unsigned int n_params,
                                                const GValue* params) {
   // If we don't have a root object, it means the tree is being destroyed.
-  if (!manager_->RootDelegate()) {
+  if (!manager_ || !manager_->RootDelegate()) {
     RemoveATKEventListeners();
     return;
   }
@@ -140,8 +148,8 @@ void AXEventRecorderAuraLinux::ProcessATKEvent(const char* event,
   std::string log;
   if (event_name.find("property-change") != std::string::npos) {
     DCHECK_GE(n_params, 2u);
-    AtkPropertyValues* property_values =
-        static_cast<AtkPropertyValues*>(g_value_get_pointer(&params[1]));
+    AtkPropertyValues* property_values = static_cast<AtkPropertyValues*>(
+        g_value_get_pointer(&UNSAFE_TODO(params[1])));
 
     if (g_strcmp0(property_values->property_name, "accessible-value") == 0) {
       log += "VALUE-CHANGED:";
@@ -171,34 +179,36 @@ void AXEventRecorderAuraLinux::ProcessATKEvent(const char* event,
     log_name = false;
     log += base::ToUpperASCII(event);
     // Despite this actually being a signed integer, it's defined as a uint.
-    int index = static_cast<int>(g_value_get_uint(&params[1]));
+    int index = static_cast<int>(g_value_get_uint(&UNSAFE_TODO(params[1])));
     log += base::StringPrintf(" index:%d", index);
-    AtkObject* child = static_cast<AtkObject*>(g_value_get_pointer(&params[2]));
+    AtkObject* child =
+        static_cast<AtkObject*>(g_value_get_pointer(&UNSAFE_TODO(params[2])));
     if (child)
       log += " CHILD:(" + AtkObjectToString(child, log_name) + ")";
     else
       log += " CHILD:(NULL)";
   } else if (event_name.find("focus-event") != std::string::npos) {
     log += base::ToUpperASCII(event);
-    gchar* parameter = g_strdup_value_contents(&params[1]);
+    gchar* parameter = g_strdup_value_contents(&UNSAFE_TODO(params[1]));
     log += base::StringPrintf(":%s", parameter);
     g_free(parameter);
   } else {
     log += base::ToUpperASCII(event);
     if (event_name.find("state-change") != std::string::npos) {
-      std::string state_type = g_value_get_string(&params[1]);
+      std::string state_type = g_value_get_string(&UNSAFE_TODO(params[1]));
       log += ":" + base::ToUpperASCII(state_type);
 
-      gchar* parameter = g_strdup_value_contents(&params[2]);
+      gchar* parameter = g_strdup_value_contents(&UNSAFE_TODO(params[2]));
       log += base::StringPrintf(":%s", parameter);
       g_free(parameter);
 
     } else if (event_name.find("text-insert") != std::string::npos ||
                event_name.find("text-remove") != std::string::npos) {
       DCHECK_GE(n_params, 4u);
-      log += base::StringPrintf(
-          " (start=%i length=%i '%s')", g_value_get_int(&params[1]),
-          g_value_get_int(&params[2]), g_value_get_string(&params[3]));
+      log += base::StringPrintf(" (start=%i length=%i '%s')",
+                                g_value_get_int(&UNSAFE_TODO(params[1])),
+                                g_value_get_int(&UNSAFE_TODO(params[2])),
+                                g_value_get_string(&UNSAFE_TODO(params[3])));
     }
   }
 
@@ -223,7 +233,7 @@ void AXEventRecorderAuraLinux::ProcessATKEvent(const char* event,
 // This list is composed of the sorted event names taken from the list provided
 // in the libatspi documentation at:
 // https://developer.gnome.org/libatspi/stable/AtspiEventListener.html#atspi-event-listener-register
-const char* const kEventNames[] = {
+constexpr auto kEventNames = std::to_array<const char*>({
     "document:load-complete",
     "object:active-descendant-changed",
     "object:children-changed",
@@ -270,7 +280,7 @@ const char* const kEventNames[] = {
     "window:restyle",
     "window:shade",
     "window:unshade",
-};
+});
 
 static void OnATSPIEventReceived(AtspiEvent* event, void* data) {
   static_cast<AXEventRecorderAuraLinux*>(data)->ProcessATSPIEvent(event);
@@ -376,13 +386,14 @@ void AXEventRecorderAuraLinux::ProcessATSPIEvent(const AtspiEvent* event) {
   GArray* state_array = atspi_state_set_get_states(atspi_states);
   std::vector<std::string> states;
   for (unsigned i = 0; i < state_array->len; i++) {
-    AtspiStateType state_type = g_array_index(state_array, AtspiStateType, i);
+    AtspiStateType state_type =
+        UNSAFE_TODO(g_array_index(state_array, AtspiStateType, i));
     states.push_back(ATSPIStateToString(state_type));
   }
   g_array_free(state_array, TRUE);
   g_object_unref(atspi_states);
   output << " ";
-  base::ranges::copy(states, std::ostream_iterator<std::string>(output, ", "));
+  std::ranges::copy(states, std::ostream_iterator<std::string>(output, ", "));
 
   OnEvent(output.str());
 }

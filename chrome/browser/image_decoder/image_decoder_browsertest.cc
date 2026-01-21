@@ -4,6 +4,7 @@
 
 #include "chrome/browser/image_decoder/image_decoder.h"
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/grit/generated_resources.h"
@@ -13,6 +14,7 @@
 #include "content/public/browser/child_process_data.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using content::BrowserThread;
@@ -28,7 +30,8 @@ std::vector<uint8_t> GetValidPngData() {
       "\x00\x05\xfe\x02\xfe\xdc\xcc\x59\xe7\x00\x00\x00\x00\x49\x45\x4e"
       "\x44\xae\x42\x60\x82";
   // Need to specify the buffer size because it contains NULs.
-  return std::vector<uint8_t>(kPngData, kPngData + sizeof(kPngData) - 1);
+  return std::vector<uint8_t>(kPngData,
+                              UNSAFE_TODO(kPngData + sizeof(kPngData) - 1));
 }
 
 std::vector<uint8_t> GetValidJpgData() {
@@ -53,7 +56,8 @@ std::vector<uint8_t> GetValidJpgData() {
       "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xFF\xDA\x00\x0C\x03\x01"
       "\x00\x02\x11\x03\x11\x00\x3F\x00\xA0\x00\xFF\xD9";
   // Need to specify the buffer size because it contains NULs.
-  return std::vector<uint8_t>(kJpgData, kJpgData + sizeof(kJpgData) - 1);
+  return std::vector<uint8_t>(kJpgData,
+                              UNSAFE_TODO(kJpgData + sizeof(kJpgData) - 1));
 }
 
 class TestImageRequest : public ImageDecoder::ImageRequest {

@@ -31,8 +31,9 @@ MessageQueue::MessageQueue(uint64_t next_sequence_num)
 MessageQueue::~MessageQueue() {
 #if DCHECK_IS_ON()
   size_t num_leaked_ports = 0;
-  for (const auto& message : heap_)
+  for (const auto& message : heap_) {
     num_leaked_ports += message->num_ports();
+  }
   DVLOG_IF(1, num_leaked_ports > 0)
       << "Leaking " << num_leaked_ports << " ports in unreceived messages";
 #endif
@@ -59,8 +60,8 @@ void MessageQueue::GetNextMessage(std::unique_ptr<UserMessageEvent>* message,
   // here is somewhat arbitrary.
   constexpr size_t kHeapMinimumShrinkSize = 16;
   constexpr size_t kHeapShrinkInterval = 512;
-  if (UNLIKELY(heap_.size() > kHeapMinimumShrinkSize &&
-               heap_.size() % kHeapShrinkInterval == 0)) {
+  if (heap_.size() > kHeapMinimumShrinkSize &&
+      heap_.size() % kHeapShrinkInterval == 0) [[unlikely]] {
     heap_.shrink_to_fit();
   }
 }

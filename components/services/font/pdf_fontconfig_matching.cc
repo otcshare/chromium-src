@@ -14,6 +14,8 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
 #include "third_party/blink/public/platform/web_font_description.h"
@@ -166,7 +168,7 @@ int MatchFontFaceWithFallback(const std::string& face,
   const std::string sysroot = c_sysroot ? c_sysroot : "";
   if (font_set) {
     for (int i = 0; i < font_set->nfont; ++i) {
-      FcPattern* current = font_set->fonts[i];
+      FcPattern* current = UNSAFE_TODO(font_set->fonts[i]);
 
       // Older versions of fontconfig have a bug where they cannot select
       // only scalable fonts so we have to manually filter the results.
@@ -225,23 +227,31 @@ int MatchFontFaceWithFallback(const std::string& face,
       }
 
       font_fd = HANDLE_EINTR(open(filename.c_str(), O_RDONLY));
-      if (font_fd >= 0)
+      if (font_fd >= 0) {
+        VLOG(1) << "PDF font mapping: " << face << " to " << filename;
         break;
+      }
     }
   }
 
   if (font_fd == -1 && good_enough_index_set) {
     // We didn't find a font that we liked, so we fallback to something
     // acceptable.
-    FcPattern* current = font_set->fonts[good_enough_index];
+    FcPattern* current = UNSAFE_TODO(font_set->fonts[good_enough_index]);
     if (!FcPatternGetString(
             current, FC_FILE, 0,
             reinterpret_cast<FcChar8**>(const_cast<char**>(&c_filename)))) {
       const std::string filename = sysroot + c_filename;
       font_fd = HANDLE_EINTR(open(filename.c_str(), O_RDONLY));
+      if (font_fd >= 0) {
+        VLOG(1) << "PDF fallback font mapping: " << face << " to " << filename;
+      }
     }
   }
 
+  if (font_fd < 0) {
+    VLOG(1) << "PDF font mapping failed for: " << face;
+  }
   return font_fd;
 }
 

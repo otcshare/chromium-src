@@ -12,15 +12,16 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
-#include "base/win/scoped_com_initializer.h"
 #include "components/crash/core/common/crash_key.h"
 #include "media/base/cdm_factory.h"
 #include "media/base/media_export.h"
 #include "media/cdm/cdm_auxiliary_helper.h"
+#include "media/cdm/win/media_foundation_cdm_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace media {
 
@@ -50,7 +51,8 @@ class MEDIA_EXPORT MediaFoundationCdmFactory final : public CdmFactory {
 
  private:
   // Callback to MediaFoundationCDM to resolve the promise.
-  using IsTypeSupportedResultCB = base::OnceCallback<void(bool is_supported)>;
+  using IsTypeSupportedResultCB =
+      base::OnceCallback<void(IsTypeSupportedValueOrError value_or_error)>;
 
   void OnCdmOriginIdObtained(
       const CdmConfig& cdm_config,
@@ -77,7 +79,7 @@ class MEDIA_EXPORT MediaFoundationCdmFactory final : public CdmFactory {
   // can bind it to a repeating callback using weak pointer.
   void CreateMfCdm(const CdmConfig& cdm_config,
                    const base::UnguessableToken& cdm_origin_id,
-                   const absl::optional<std::vector<uint8_t>>& cdm_client_token,
+                   const std::optional<std::vector<uint8_t>>& cdm_client_token,
                    const base::FilePath& cdm_store_path_root,
                    HRESULT& hresult,
                    Microsoft::WRL::ComPtr<IMFContentDecryptionModule>& mf_cdm);
@@ -87,12 +89,9 @@ class MEDIA_EXPORT MediaFoundationCdmFactory final : public CdmFactory {
   // CDM origin crash key used in crash reporting.
   crash_reporter::ScopedCrashKeyString cdm_origin_crash_key_;
 
-  // IMFContentDecryptionModule implementations typically require MTA to run.
-  base::win::ScopedCOMInitializer com_initializer_{
-      base::win::ScopedCOMInitializer::kMTA};
-
   // Key system to CreateCdmFactoryCB mapping. This is for testing only.
-  std::map<std::string, CreateCdmFactoryCB> create_cdm_factory_cbs_for_testing_;
+  absl::flat_hash_map<std::string, CreateCdmFactoryCB>
+      create_cdm_factory_cbs_for_testing_;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationCdmFactory> weak_factory_{this};

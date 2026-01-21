@@ -26,14 +26,18 @@
 
 class InteractionTestUtilBrowserTest : public views::ViewsTestBase {
  public:
-  InteractionTestUtilBrowserTest() = default;
+  InteractionTestUtilBrowserTest() {
+    test_util_.AddSimulator(
+        std::make_unique<views::test::InteractionTestUtilSimulatorViews>());
+    InteractionTestUtilBrowser::PopulateSimulators(test_util_);
+  }
   ~InteractionTestUtilBrowserTest() override = default;
 
   std::unique_ptr<views::Widget> CreateWidget() {
     auto widget = std::make_unique<views::Widget>();
     views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+        CreateParams(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+                     views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.bounds = gfx::Rect(0, 0, 650, 650);
     widget->Init(std::move(params));
     auto* contents = widget->SetContentsView(std::make_unique<views::View>());
@@ -63,24 +67,24 @@ class InteractionTestUtilBrowserTest : public views::ViewsTestBase {
   }
 
   void TearDown() override {
-    widget_.reset();
     contents_ = nullptr;
+    widget_.reset();
     layout_provider_.reset();
     ViewsTestBase::TearDown();
   }
 
  protected:
   std::unique_ptr<views::LayoutProvider> layout_provider_;
-  InteractionTestUtilBrowser test_util_;
+  ui::test::InteractionTestUtil test_util_;
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<views::View> contents_ = nullptr;
 };
 
 TEST_F(InteractionTestUtilBrowserTest, PressHoverButton) {
-  base::raw_ptr<HoverButton> hover_button;
+  raw_ptr<HoverButton> hover_button;
   auto pressed = base::BindLambdaForTesting([&]() {
-    hover_button->parent()->RemoveChildViewT(hover_button);
-    hover_button = nullptr;
+    HoverButton* button = hover_button.ExtractAsDangling();
+    button->parent()->RemoveChildViewT(button);
   });
   hover_button = contents_->AddChildView(std::make_unique<HoverButton>(
       views::Button::PressedCallback(pressed), u"Button"));

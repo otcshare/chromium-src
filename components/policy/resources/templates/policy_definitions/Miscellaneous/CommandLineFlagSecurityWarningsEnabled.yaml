@@ -3,9 +3,7 @@ default: true
 desc: |-
   Setting the policy to Enabled or leaving it unset means security warnings appear when potentially dangerous command-line flags are used to launch Chrome.
 
-        Setting the policy to Disabled prevents security warnings from appearing when Chrome is launched with potentially dangerous command-line flags.
-
-        On <ph name="MS_WIN_NAME">Microsoft® Windows®</ph>, this functionality is only available on instances that are joined to a <ph name="MS_AD_NAME">Microsoft® Active Directory®</ph> domain, running on Windows 10 Pro, or enrolled in Chrome Browser Cloud Management. On <ph name="MAC_OS_NAME">macOS</ph>, this functionality is only available on instances that are managed via MDM, or joined to a domain via MCX.
+  Setting the policy to Disabled prevents security warnings from appearing when Chrome is launched with potentially dangerous command-line flags.
 example_value: true
 features:
   dynamic_refresh: false
@@ -23,6 +21,7 @@ owners:
 - proberge@chromium.org
 schema:
   type: boolean
+sensitive: true
 supported_on:
 - chrome.*:76-
 tags:

@@ -6,11 +6,12 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "components/subresource_filter/core/browser/copying_file_stream.h"
+#include "components/subresource_filter/core/common/copying_file_stream.h"
 #include "components/subresource_filter/core/common/indexed_ruleset.h"
 #include "components/subresource_filter/core/common/unindexed_ruleset.h"
 #include "components/url_pattern_index/proto/rules.pb.h"
@@ -45,11 +46,11 @@ bool IndexAndWriteRuleset(const base::FilePath& unindexed_path,
 
   indexer.Finish();
 
-  base::WriteFile(indexed_path, reinterpret_cast<const char*>(indexer.data()),
-                  base::checked_cast<int>(indexer.size()));
+  base::WriteFile(indexed_path, indexer.data());
 
-  if (out_checksum)
+  if (out_checksum) {
     *out_checksum = indexer.GetChecksum();
+  }
 
   return true;
 }
@@ -57,7 +58,7 @@ bool IndexAndWriteRuleset(const base::FilePath& unindexed_path,
 void WriteVersionMetadata(const base::FilePath& path,
                           const std::string& content_version,
                           int checksum) {
-  const char* version_format = R"({
+  static constexpr char kVersionFormat[] = R"({
   "subresource_filter": {
     "ruleset_version": {
       "content": "%s",
@@ -67,9 +68,9 @@ void WriteVersionMetadata(const base::FilePath& path,
   }
 })";
   std::string version = base::StringPrintf(
-      version_format, content_version.c_str(),
+      kVersionFormat, content_version.c_str(),
       subresource_filter::RulesetIndexer::kIndexedFormatVersion, checksum);
-  base::WriteFile(path, version.data(), version.size());
+  base::WriteFile(path, version);
 }
 
 }  // namespace subresource_filter

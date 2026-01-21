@@ -32,7 +32,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_FILE_INPUT_TYPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_FILE_INPUT_TYPE_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/file_chooser.h"
 #include "third_party/blink/renderer/core/html/forms/input_type.h"
@@ -66,17 +65,15 @@ class CORE_EXPORT FileInputType final : public InputType,
 
  private:
   InputTypeView* CreateView() override;
-  const AtomicString& FormControlType() const override;
   FormControlState SaveFormControlState() const override;
   void RestoreFormControlState(const FormControlState&) override;
   void AppendToFormData(FormData&) const override;
   String ValueMissingText() const override;
   void HandleDOMActivateEvent(Event&) override;
   void OpenPopupView() override;
-  scoped_refptr<ComputedStyle> CustomStyleForLayoutObject(
-      scoped_refptr<ComputedStyle> original_style) override;
-  LayoutObject* CreateLayoutObject(const ComputedStyle&,
-                                   LegacyLayout) const override;
+  bool IsPickerVisible() const override;
+  void AdjustStyle(ComputedStyleBuilder&) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) const override;
   FileList* Files() override;
   bool SetFiles(FileList*) override;
   void SetFilesAndDispatchEvents(FileList*) override;

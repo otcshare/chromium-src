@@ -4,6 +4,8 @@
 
 source_set("browser") {
   sources = [
+    "issue_manager.cc",
+    "issue_manager.h",
     "media_router.h",
     "media_router_base.cc",
     "media_router_base.h",
@@ -17,16 +19,19 @@ source_set("browser") {
     "media_routes_observer.h",
     "media_sinks_observer.cc",
     "media_sinks_observer.h",
+    "mirroring_media_controller_host.h",
+    "mirroring_media_controller_host_impl.cc",
+    "mirroring_media_controller_host_impl.h",
     "presentation/browser_presentation_connection_proxy.cc",
     "presentation/browser_presentation_connection_proxy.h",
+    "presentation/controller_presentation_service_delegate_impl.cc",
+    "presentation/controller_presentation_service_delegate_impl.h",
     "presentation/local_presentation_manager.cc",
     "presentation/local_presentation_manager.h",
     "presentation/local_presentation_manager_factory.cc",
     "presentation/local_presentation_manager_factory.h",
     "presentation/presentation_media_sinks_observer.cc",
     "presentation/presentation_media_sinks_observer.h",
-    "presentation/presentation_service_delegate_impl.cc",
-    "presentation/presentation_service_delegate_impl.h",
     "presentation/presentation_service_delegate_observers.cc",
     "presentation/presentation_service_delegate_observers.h",
     "presentation/receiver_presentation_service_delegate_impl.cc",
@@ -60,9 +65,12 @@ source_set("browser") {
     "//url",
   ]
   public_deps = [
+    "//build:android_buildflags",
     "//components/media_router/common",
     "//components/media_router/common/mojom:media_router",
+    "//extensions/buildflags",
   ]
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   if (is_android) {
     sources += [
@@ -78,14 +86,15 @@ source_set("browser") {
     deps += [ "android:jni_headers" ]
   } else {
     sources += [
-      "issue_manager.cc",
-      "issue_manager.h",
       "issues_observer.cc",
       "issues_observer.h",
       "log_util.cc",
       "log_util.h",
       "logger_impl.cc",
       "logger_impl.h",
+      "media_router_debugger.h",
+      "mirroring_to_flinging_switcher.cc",
+      "mirroring_to_flinging_switcher.h",
       "presentation/presentation_navigation_policy.cc",
       "presentation/presentation_navigation_policy.h",
     ]
@@ -107,7 +116,10 @@ source_set("test_support") {
     "//content/public/browser",
     "//testing/gmock",
   ]
-  public_deps = [ ":browser" ]
+  public_deps = [
+    ":browser",
+    "//build:android_buildflags",
+  ]
 }
 
 source_set("unit_tests") {
@@ -119,7 +131,9 @@ source_set("unit_tests") {
     "media_router_factory_unittest.cc",
     "media_router_metrics_unittest.cc",
     "media_sinks_observer_unittest.cc",
+    "mirroring_media_controller_host_impl_unittest.cc",
     "presentation/browser_presentation_connection_proxy_unittest.cc",
+    "presentation/controller_presentation_service_delegate_impl_unittest.cc",
     "presentation/local_presentation_manager_unittest.cc",
     "presentation/presentation_media_sinks_observer_unittest.cc",
   ]
@@ -142,6 +156,7 @@ source_set("unit_tests") {
     sources += [
       "issue_manager_unittest.cc",
       "logger_impl_unittest.cc",
+      "mirroring_to_flinging_switcher_unittest.cc",
     ]
   }
 }

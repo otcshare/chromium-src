@@ -4,7 +4,7 @@
 
 #include "chrome/browser/sync_file_system/drive_backend/uninstall_app_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_util.h"
@@ -28,7 +28,7 @@ UninstallAppTask::UninstallAppTask(SyncEngineContext* sync_context,
       uninstall_flag_(uninstall_flag),
       app_root_tracker_id_(0) {}
 
-UninstallAppTask::~UninstallAppTask() {}
+UninstallAppTask::~UninstallAppTask() = default;
 
 void UninstallAppTask::RunExclusive(SyncStatusCallback callback) {
   if (!IsContextReady()) {
@@ -56,8 +56,6 @@ void UninstallAppTask::RunExclusive(SyncStatusCallback callback) {
   if (!metadata_database()->FindTrackerByTrackerID(trackers.active_tracker(),
                                                    &app_root_tracker)) {
     NOTREACHED();
-    std::move(callback).Run(SYNC_STATUS_FAILED);
-    return;
   }
   app_root_tracker_id_ = app_root_tracker.tracker_id();
   DCHECK(app_root_tracker.has_synced_details());

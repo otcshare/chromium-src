@@ -5,10 +5,11 @@
 #ifndef CHROMECAST_CAST_CORE_RUNTIME_BROWSER_MESSAGE_PORT_SERVICE_GRPC_H_
 #define CHROMECAST_CAST_CORE_RUNTIME_BROWSER_MESSAGE_PORT_SERVICE_GRPC_H_
 
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
@@ -39,7 +40,7 @@ class MessagePortServiceGrpc : public cast_receiver::MessagePortService {
 
   // MessagePortService implementation:
   void ConnectToPortAsync(
-      base::StringPiece port_name,
+      std::string_view port_name,
       std::unique_ptr<cast_api_bindings::MessagePort> port) override;
   uint32_t RegisterOutgoingPort(
       std::unique_ptr<cast_api_bindings::MessagePort> port) override;

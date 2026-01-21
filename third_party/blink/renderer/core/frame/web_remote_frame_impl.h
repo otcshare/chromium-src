@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_WEB_REMOTE_FRAME_IMPL_H_
 
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/tree_scope_type.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink-forward.h"
@@ -22,7 +23,7 @@ struct FrameVisualProperties;
 class RemoteFrame;
 class RemoteFrameClientImpl;
 enum class WebFrameLoadType;
-class WebFrameWidget;
+class WebFrameWidgetImpl;
 class WebView;
 class WindowAgentFactory;
 
@@ -41,7 +42,7 @@ class CORE_EXPORT WebRemoteFrameImpl final
       mojo::PendingAssociatedReceiver<mojom::blink::RemoteFrame> receiver,
       mojom::blink::FrameReplicationStatePtr replicated_state);
 
-  static WebRemoteFrameImpl* CreateForPortalOrFencedFrame(
+  static WebRemoteFrameImpl* CreateForFencedFrame(
       mojom::blink::TreeScopeType,
       const RemoteFrameToken& frame_token,
       const base::UnguessableToken& devtools_frame_token,
@@ -56,7 +57,7 @@ class CORE_EXPORT WebRemoteFrameImpl final
   ~WebRemoteFrameImpl() override;
 
   // WebFrame methods:
-  void Close() override;
+  void Close(DetachReason detach_reason) override;
   WebView* View() const override;
 
   // WebRemoteFrame methods:
@@ -71,12 +72,13 @@ class CORE_EXPORT WebRemoteFrameImpl final
       const LocalFrameToken& frame_token,
       WebFrame* opener,
       const DocumentToken& document_token,
+      CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>,
       std::unique_ptr<blink::WebPolicyContainer> policy_container) override;
   void SetReplicatedOrigin(
       const WebSecurityOrigin&,
       bool is_potentially_trustworthy_opaque_origin) override;
   void DidStartLoading() override;
-  v8::Local<v8::Object> GlobalProxy() const override;
+  v8::Local<v8::Object> GlobalProxy(v8::Isolate*) const override;
   WebString UniqueName() const override;
   const FrameVisualProperties& GetPendingVisualPropertiesForTesting()
       const override;
@@ -104,7 +106,8 @@ class CORE_EXPORT WebRemoteFrameImpl final
       mojo::PendingAssociatedRemote<mojom::blink::RemoteFrameHost>
           remote_frame_host,
       mojo::PendingAssociatedReceiver<mojom::blink::RemoteFrame> receiver,
-      mojom::blink::FrameReplicationStatePtr replicated_state);
+      mojom::blink::FrameReplicationStatePtr replicated_state,
+      mojom::blink::FrameOwnerPropertiesPtr owner_properties);
 
   static WebRemoteFrameImpl* FromFrame(RemoteFrame&);
 
@@ -115,12 +118,14 @@ class CORE_EXPORT WebRemoteFrameImpl final
   void SetReplicatedState(mojom::FrameReplicationStatePtr replicated_state);
   void SetReplicatedState(
       mojom::blink::FrameReplicationStatePtr replicated_state);
+  void SetFrameOwnerProperties(
+      mojom::blink::FrameOwnerPropertiesPtr owner_properties);
 
  private:
   friend class RemoteFrameClientImpl;
 
   void SetCoreFrame(RemoteFrame*);
-  void InitializeFrameVisualProperties(WebFrameWidget* ancestor_widget,
+  void InitializeFrameVisualProperties(WebFrameWidgetImpl* ancestor_widget,
                                        WebView* web_view);
 
   // Inherited from WebFrame, but intentionally hidden: it never makes sense

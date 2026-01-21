@@ -6,9 +6,9 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/values.h"
 #include "components/onc/onc_constants.h"
 #include "net/cert/x509_certificate.h"
@@ -68,14 +68,14 @@ bool OncCertificatePattern::Matches(
     return false;
   }
   if (!pem_encoded_issuer_cas_.empty() &&
-      !base::Contains(pem_encoded_issuer_cas_, pem_encoded_issuer_ca)) {
+      !std::ranges::contains(pem_encoded_issuer_cas_, pem_encoded_issuer_ca)) {
     return false;
   }
   return true;
 }
 
 // static
-absl::optional<OncCertificatePattern>
+std::optional<OncCertificatePattern>
 OncCertificatePattern::ReadFromONCDictionary(const base::Value::Dict& dict) {
   // All of these are optional.
   const base::Value::List* pem_encoded_issuer_cas_value =
@@ -84,7 +84,7 @@ OncCertificatePattern::ReadFromONCDictionary(const base::Value::Dict& dict) {
   if (pem_encoded_issuer_cas_value &&
       !GetAsListOfStrings(*pem_encoded_issuer_cas_value,
                           &pem_encoded_issuer_cas)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   const base::Value::List* enrollment_uri_list_value =
@@ -92,7 +92,7 @@ OncCertificatePattern::ReadFromONCDictionary(const base::Value::Dict& dict) {
   std::vector<std::string> enrollment_uri_list;
   if (enrollment_uri_list_value &&
       !GetAsListOfStrings(*enrollment_uri_list_value, &enrollment_uri_list)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   auto issuer_pattern =

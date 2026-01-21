@@ -11,11 +11,13 @@
 #include <unordered_map>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/crostini/crostini_export_import_notification_controller.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
+#include "chrome/browser/ash/crostini/crostini_simple_types.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -32,7 +34,12 @@ namespace crostini {
 enum class ExportContainerResult;
 enum class ImportContainerResult;
 
-enum class ExportImportType { EXPORT, IMPORT };
+enum class ExportImportType {
+  EXPORT,
+  IMPORT,
+  EXPORT_DISK_IMAGE,
+  IMPORT_DISK_IMAGE
+};
 
 // ExportContainerResult is used for UMA, if you update this make sure to update
 // CrostiniExportContainerResult in enums.xml
@@ -60,12 +67,13 @@ enum class ImportContainerResult {
 // importing containers with crostini.  It manages a file dialog for selecting
 // files and a notification to show the progress of export/import.
 //
-// TODO(crbug.com/932339): Ensure we have enough free space before doing
+// TODO(crbug.com/41441501): Ensure we have enough free space before doing
 // backup or restore.
 class CrostiniExportImport : public KeyedService,
                              public ui::SelectFileDialog::Listener,
                              public crostini::ExportContainerProgressObserver,
-                             public crostini::ImportContainerProgressObserver {
+                             public crostini::ImportContainerProgressObserver,
+                             public crostini::DiskImageProgressObserver {
  public:
   class Observer : public base::CheckedObserver {
    public:
@@ -88,8 +96,6 @@ class CrostiniExportImport : public KeyedService,
     guest_os::GuestId container_id;
     OnceTrackerFactory tracker_factory;
   };
-
-  static CrostiniExportImport* GetForProfile(Profile* profile);
 
   explicit CrostiniExportImport(Profile* profile);
 
@@ -118,10 +124,38 @@ class CrostiniExportImport : public KeyedService,
   void ExportContainer(guest_os::GuestId container_id,
                        base::FilePath path,
                        CrostiniManager::CrostiniResultCallback callback);
+
   // Import |container_id| from |path| and invoke |callback| when complete.
   void ImportContainer(guest_os::GuestId container_id,
                        base::FilePath path,
                        CrostiniManager::CrostiniResultCallback callback);
+
+  // Export |container_id|'s disk image using FileDialog.
+  void ExportDiskImageFlow(guest_os::GuestId container_id,
+                           content::WebContents* web_contents);
+
+  // Import |container_id|'s disk image using FileDialog.
+  void ImportDiskImageFlow(guest_os::GuestId container_id,
+                           content::WebContents* web_contents);
+
+  // Export |container_id| to |path| and invoke |callback| when complete.
+  void ExportDiskImageWithCallback(
+      guest_os::GuestId container_id,
+      base::FilePath path,
+      CrostiniManager::CrostiniResultCallback callback);
+
+  // Import |container_id| from |path| and invoke |callback| when complete.
+  void ImportDiskImageWithCallback(
+      guest_os::GuestId container_id,
+      base::FilePath path,
+      CrostiniManager::CrostiniResultCallback callback);
+
+  // Create a new container with |container_id| from |path| and invoke
+  // |callback| when complete.
+  void CreateContainerFromImport(
+      guest_os::GuestId container_id,
+      base::FilePath path,
+      CrostiniManager::CrostiniResultCallback callback);
 
   // Export |container_id| showing FileDialog, and using |tracker_factory| for
   // status tracking.
@@ -153,6 +187,8 @@ class CrostiniExportImport : public KeyedService,
 
   // Returns the default location to export the container to.
   base::FilePath GetDefaultBackupPath() const;
+  // Returns the default location to export the disk image to.
+  base::FilePath GetDefaultImageBackupPath() const;
 
   base::WeakPtr<CrostiniExportImportNotificationController>
   GetNotificationControllerForTesting(guest_os::GuestId container_id);
@@ -168,6 +204,7 @@ class CrostiniExportImport : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
                            TestExportDoneBeforeCancelled);
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestImportSuccess);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestImportZstdFileSuccess);
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
                            TestImportCustomVmContainerSuccess);
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestImportFail);
@@ -177,21 +214,29 @@ class CrostiniExportImport : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
                            TestImportFailArchitecture);
   FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestImportFailSpace);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
+                           TestExportDiskImageSuccess);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestExportDiskImageFail);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
+                           TestExportDiskImageCancelled);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
+                           TestImportDiskImageSuccess);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest, TestImportDiskImageFail);
+  FRIEND_TEST_ALL_PREFIXES(CrostiniExportImportTest,
+                           TestImportDiskImageCancelled);
 
-  OperationData* NewOperationData(ExportImportType type,
-                                  guest_os::GuestId id,
-                                  OnceTrackerFactory cb);
-  OperationData* NewOperationData(ExportImportType type, guest_os::GuestId id);
-  OperationData* NewOperationData(ExportImportType type);
+  void FillOperationData(ExportImportType type,
+                         guest_os::GuestId id,
+                         OnceTrackerFactory cb);
+  void FillOperationData(ExportImportType type, guest_os::GuestId id);
+  void FillOperationData(ExportImportType type);
 
   // ui::SelectFileDialog::Listener implementation.
-  void FileSelected(const base::FilePath& path,
-                    int index,
-                    void* params) override;
-  void FileSelectionCanceled(void* params) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
 
-  void Start(OperationData* params,
-             base::FilePath path,
+  void Start(base::FilePath path,
+             bool create_new_container,
              CrostiniManager::CrostiniResultCallback callback);
 
   // Restart VM with LXD if required and share the file path with VM.
@@ -199,6 +244,7 @@ class CrostiniExportImport : public KeyedService,
       const guest_os::GuestId& container_id,
       const base::FilePath& path,
       bool persist,
+      bool create_new_container,
       guest_os::GuestOsSharePath::SharePathCallback callback);
 
   // Share the file path with VM after VM has been restarted.
@@ -211,6 +257,11 @@ class CrostiniExportImport : public KeyedService,
   void OnExportContainerProgress(const guest_os::GuestId& container_id,
                                  const StreamingExportStatus& status) override;
 
+  // crostini::DiskImageProgressObserver implementation.
+  void OnDiskImageProgress(const guest_os::GuestId& container_id,
+                           DiskImageProgressStatus status,
+                           int progress) override;
+
   // crostini::ImportContainerProgressObserver implementation.
   void OnImportContainerProgress(const guest_os::GuestId& container_id,
                                  crostini::ImportContainerProgressStatus status,
@@ -220,6 +271,20 @@ class CrostiniExportImport : public KeyedService,
                                  const std::string& architecture_container,
                                  uint64_t available_space,
                                  uint64_t minimum_required_space) override;
+
+  void ExportDiskImage(const guest_os::GuestId& container_id,
+                       const base::FilePath& path,
+                       CrostiniManager::CrostiniResultCallback callback,
+                       CrostiniResult result);
+
+  void ImportDiskImage(const guest_os::GuestId& container_id,
+                       const base::FilePath& path,
+                       CrostiniManager::CrostiniResultCallback callback,
+                       CrostiniResult result);
+
+  void AfterDiskImageOperation(const guest_os::GuestId& container_id,
+                               CrostiniManager::CrostiniResultCallback callback,
+                               CrostiniResult result);
 
   void ExportAfterSharing(const guest_os::GuestId& container_id,
                           const base::FilePath& path,
@@ -245,8 +310,7 @@ class CrostiniExportImport : public KeyedService,
                         CrostiniManager::CrostiniResultCallback callback,
                         CrostiniResult result);
 
-  void OpenFileDialog(OperationData* params,
-                      content::WebContents* web_contents);
+  void OpenFileDialog(content::WebContents* web_contents);
 
   std::string GetUniqueNotificationId();
 
@@ -257,16 +321,13 @@ class CrostiniExportImport : public KeyedService,
   std::unique_ptr<CrostiniExportImportStatusTracker> RemoveTracker(
       TrackerMap::iterator it);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   scoped_refptr<ui::SelectFileDialog> select_folder_dialog_;
   TrackerMap status_trackers_;
-  // |operation_data_storage_| persists the data required to complete an
-  // operation while the file selection dialog is open/operation is in progress.
-  std::unordered_map<OperationData*, std::unique_ptr<OperationData>>
-      operation_data_storage_;
+  std::unique_ptr<OperationData> operation_data_;
   // Trackers must have unique-per-profile identifiers.
   // A non-static member on a profile-keyed-service will suffice.
-  int next_status_tracker_id_;
+  int next_status_tracker_id_ = 0;
   base::ObserverList<Observer> observers_;
   // weak_ptr_factory_ should always be last member.
   base::WeakPtrFactory<CrostiniExportImport> weak_ptr_factory_{this};

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/test/base/chrome_render_view_test.h"
 #include "content/public/renderer/render_frame.h"
 #include "ui/accessibility/ax_node.h"
@@ -28,26 +28,34 @@ class AXTreeDistillerTestBase : public ChromeRenderViewTest {
     content::RenderFrame* render_frame =
         content::RenderFrame::FromWebFrame(GetMainFrame());
     ui::AXTreeUpdate snapshot;
-    // |ui::AXMode::kHTML| is needed for URL information.
-    // |ui::AXMode::kScreenReader| is needed for heading level information.
+    // |ui::AXMode::kHTML| is needed for retrieving the presence of the
+    // "aria-expanded" attribute.
+    // TODO(crbug.com/366000250): This is a heavy-handed approach as it copies
+    // all HTML attributes into the accessibility tree. It should be removed
+    // ASAP.
+    //
+    // |ui::AXMode::kExtendedProperties| is needed for heading level
+    // information.
     const ui::AXMode ax_mode = ui::AXMode::kWebContents | ui::AXMode::kHTML |
-                               ui::AXMode::kScreenReader;
+                               ui::AXMode::kExtendedProperties;
     render_frame->CreateAXTreeSnapshotter(ax_mode)->Snapshot(
-        /* exclude_offscreen= */ false, /* max_nodes= */ 0,
+        /* max_nodes= */ 0,
         /* timeout= */ {}, &snapshot);
     ui::AXTree tree(snapshot);
     distiller_ = std::make_unique<AXTreeDistiller>(
         render_frame,
         base::BindRepeating(&AXTreeDistillerTestBase::OnAXTreeDistilled,
                             base::Unretained(this), &tree));
-    distiller_->Distill(&tree, snapshot);
+    distiller_->Distill(tree, snapshot, ukm::kInvalidSourceId);
   }
 
   void OnAXTreeDistilled(ui::AXTree* tree,
+                         const ui::AXTreeID& tree_id,
                          const std::vector<int32_t>& content_node_ids) {
     // Content node IDs list should be the same length as
     // |expected_node_contents_|.
     EXPECT_EQ(content_node_ids.size(), expected_node_contents_.size());
+    EXPECT_EQ(tree_id, tree->GetAXTreeID());
 
     // Iterate through each content node ID from distiller and check that the
     // text value equals the passed-in string from |expected_node_contents_|.
@@ -188,6 +196,53 @@ const TestCase kDistillWebPageTestCases[] = {
         </div>
       <body>)HTML",
      {"Main", "Article 1", "Article 2", "Article 3"}},
+    /* ----------------------- */
+    {"simple_page_with_heading_outside_of_main",
+     R"HTML(<!doctype html>
+      <body>
+        <h1>Heading</h1>
+        <main>
+          <p>Main</p>
+        </main>
+      <body>)HTML",
+     {"Heading", "Main"}},
+    /* ----------------------- */
+    {"simple_page_with_heading_no_main",
+     R"HTML(<!doctype html>
+      <body>
+        <h1>Heading</h1>
+      <body>)HTML",
+     {}},
+    /* ----------------------- */
+    {"simple_page_heading_offscreen",
+     R"HTML(<!doctype html>
+      <body>
+        <h1 style="
+        position: absolute;
+        left: -10000px;
+        top: -10000px;
+        width: 1px;
+        height: 1px;"
+        >
+          Heading
+        </h1>
+        <main>
+          <p>Main</p>
+        </main>
+      <body>)HTML",
+     {"Main"}},
+    /* ----------------------- */
+    // Ensure Gmail thread support.
+    {"simple_page_aria_expanded",
+     R"HTML(<!doctype html>
+      <body>
+        <main>
+          <p>Main</p>
+          <div role='listitem' aria-expanded='true'>Expanded</div>
+          <div role='listitem' aria-expanded='false'>Collapsed</div>
+        </main>
+      <body>)HTML",
+     {"Main", "Expanded"}},
 };
 
 TEST_P(AXTreeDistillerTest, DistillsWebPage) {

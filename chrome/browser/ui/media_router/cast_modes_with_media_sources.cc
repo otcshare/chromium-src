@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/media_router/cast_modes_with_media_sources.h"
-#include "base/containers/contains.h"
+
 
 namespace media_router {
 
@@ -24,22 +24,24 @@ void CastModesWithMediaSources::RemoveSource(MediaCastMode cast_mode,
   if (cast_mode_it != cast_modes_.end()) {
     auto& sources_for_cast_mode = cast_mode_it->second;
     sources_for_cast_mode.erase(source);
-    if (sources_for_cast_mode.empty())
+    if (sources_for_cast_mode.empty()) {
       cast_modes_.erase(cast_mode);
+    }
   }
 }
 
 bool CastModesWithMediaSources::HasSource(MediaCastMode cast_mode,
                                           const MediaSource& source) const {
-  return base::Contains(cast_modes_, cast_mode)
-             ? base::Contains(cast_modes_.at(cast_mode), source)
+  return cast_modes_.contains(cast_mode)
+             ? cast_modes_.at(cast_mode).contains(source)
              : false;
 }
 
 CastModeSet CastModesWithMediaSources::GetCastModes() const {
   CastModeSet cast_mode_set;
-  for (const auto& cast_mode_pair : cast_modes_)
+  for (const auto& cast_mode_pair : cast_modes_) {
     cast_mode_set.insert(cast_mode_pair.first);
+  }
   return cast_mode_set;
 }
 

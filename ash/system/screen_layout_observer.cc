@@ -4,11 +4,11 @@
 
 #include "ash/system/screen_layout_observer.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/public/cpp/notification_utils.h"
@@ -19,14 +19,14 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/tray_constants.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/display_manager.h"
+#include "ui/display/tablet_state.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/util/display_util.h"
 #include "ui/message_center/message_center.h"
@@ -58,8 +58,8 @@ std::u16string GetDisplaySize(int64_t display_id) {
   // to empty string if this happens on release build.
   const display::DisplayIdList id_list =
       display_manager->GetMirroringDestinationDisplayIdList();
-  const bool mirroring =
-      display_manager->IsInMirrorMode() && base::Contains(id_list, display_id);
+  const bool mirroring = display_manager->IsInMirrorMode() &&
+                         std::ranges::contains(id_list, display_id);
   DCHECK(!mirroring);
   if (mirroring)
     return std::u16string();
@@ -71,7 +71,7 @@ std::u16string GetDisplaySize(int64_t display_id) {
 }
 
 // Callback to handle a user selecting the notification view.
-void OnNotificationClicked(absl::optional<int> button_index) {
+void OnNotificationClicked(std::optional<int> button_index) {
   DCHECK(!button_index);
 
   // Settings may be blocked, e.g. at the lock screen.
@@ -185,16 +185,12 @@ const char ScreenLayoutObserver::kNotificationId[] =
     "chrome://settings/display";
 
 ScreenLayoutObserver::ScreenLayoutObserver() {
-  Shell::Get()->window_tree_host_manager()->AddObserver(this);
+  Shell::Get()->display_manager()->AddDisplayManagerObserver(this);
   UpdateDisplayInfo(nullptr);
 }
 
 ScreenLayoutObserver::~ScreenLayoutObserver() {
-  Shell::Get()->window_tree_host_manager()->RemoveObserver(this);
-}
-
-void ScreenLayoutObserver::SetDisplayChangedFromSettingsUI(int64_t display_id) {
-  displays_changed_from_settings_ui_.insert(display_id);
+  Shell::Get()->display_manager()->RemoveDisplayManagerObserver(this);
 }
 
 void ScreenLayoutObserver::UpdateDisplayInfo(
@@ -327,7 +323,7 @@ void ScreenLayoutObserver::CreateOrUpdateNotification(
       std::move(notification));
 }
 
-void ScreenLayoutObserver::OnDisplayConfigurationChanged() {
+void ScreenLayoutObserver::OnDidApplyDisplayChanges() {
   DisplayInfoMap old_info;
   UpdateDisplayInfo(&old_info);
 

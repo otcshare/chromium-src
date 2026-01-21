@@ -5,12 +5,16 @@
 #include "chrome/browser/ash/extensions/file_manager/drivefs_event_router.h"
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
-#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
+#include "chrome/browser/ash/extensions/file_manager/private_api_util.h"
+#include "chrome/common/extensions/api/file_manager_private.h"
+#include "chromeos/ash/components/drivefs/drivefs_host.h"
+#include "chromeos/ash/components/drivefs/drivefs_pinning_manager.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 
 namespace file_manager {
@@ -18,253 +22,128 @@ namespace file_manager_private = extensions::api::file_manager_private;
 
 namespace {
 
-constexpr auto& kTransferEventName =
-    file_manager_private::OnFileTransfersUpdated::kEventName;
-constexpr auto& kPinEventName =
-    file_manager_private::OnPinTransfersUpdated::kEventName;
 constexpr auto& kIndividualTransferEventName =
     file_manager_private::OnIndividualFileTransfersUpdated::kEventName;
-constexpr auto& kIndividualPinEventName =
-    file_manager_private::OnIndividualPinTransfersUpdated::kEventName;
 
 constexpr extensions::events::HistogramValue kTransferEvent =
     extensions::events::FILE_MANAGER_PRIVATE_ON_FILE_TRANSFERS_UPDATED;
-constexpr extensions::events::HistogramValue kPinEvent =
-    extensions::events::FILE_MANAGER_PRIVATE_ON_PIN_TRANSFERS_UPDATED;
-
-std::vector<IndividualFileTransferStatus> CopyIndividualStatuses(
-    std::vector<IndividualFileTransferStatus>& statuses) {
-  std::vector<IndividualFileTransferStatus> statuses_copy;
-  for (const auto& status : statuses) {
-    IndividualFileTransferStatus copy;
-    copy.transfer_state = status.transfer_state;
-    copy.processed = status.processed;
-    copy.total = status.total;
-    statuses_copy.push_back(std::move(copy));
-  }
-  return statuses_copy;
-}
-
-file_manager_private::TransferState ConvertItemEventState(
-    drivefs::mojom::ItemEvent::State state) {
-  switch (state) {
-    case drivefs::mojom::ItemEvent::State::kQueued:
-      return file_manager_private::TRANSFER_STATE_QUEUED;
-    case drivefs::mojom::ItemEvent::State::kInProgress:
-      return file_manager_private::TRANSFER_STATE_IN_PROGRESS;
-    case drivefs::mojom::ItemEvent::State::kCompleted:
-      return file_manager_private::TRANSFER_STATE_COMPLETED;
-    case drivefs::mojom::ItemEvent::State::kFailed:
-      return file_manager_private::TRANSFER_STATE_FAILED;
-  }
-}
-
-bool IsItemEventCompleted(drivefs::mojom::ItemEvent::State state) {
-  switch (state) {
-    case drivefs::mojom::ItemEvent::State::kQueued:
-    case drivefs::mojom::ItemEvent::State::kInProgress:
-      return false;
-    case drivefs::mojom::ItemEvent::State::kCompleted:
-    case drivefs::mojom::ItemEvent::State::kFailed:
-      return true;
-  }
-  return false;
-}
 
 file_manager_private::DriveConfirmDialogType ConvertDialogReasonType(
     drivefs::mojom::DialogReason::Type type) {
   switch (type) {
     case drivefs::mojom::DialogReason::Type::kEnableDocsOffline:
-      return file_manager_private::
-          DRIVE_CONFIRM_DIALOG_TYPE_ENABLE_DOCS_OFFLINE;
+      return file_manager_private::DriveConfirmDialogType::kEnableDocsOffline;
   }
 }
 
 }  // namespace
 
+// Time interval to check for stale sync status in
+// DriveFsEventRouter::path_to_sync_state_.
+constexpr auto kSyncStateStaleCheckInterval = base::Seconds(100);
+
+// Time after which a sync status in DriveFsEventRouter::path_to_sync_state_ is
+// considered to be stale.
+constexpr auto kSyncStateStaleThreshold = base::Seconds(90);
+
 DriveFsEventRouter::DriveFsEventRouter(
+    Profile* profile,
     SystemNotificationManager* notification_manager)
-    : notification_manager_(notification_manager) {}
+    : profile_(profile), notification_manager_(notification_manager) {
+  stale_sync_state_cleanup_timer_.Start(
+      FROM_HERE, kSyncStateStaleCheckInterval,
+      base::BindRepeating(&DriveFsEventRouter::ClearStaleSyncStates,
+                          weak_ptr_factory_.GetWeakPtr()));
+}
+
 DriveFsEventRouter::~DriveFsEventRouter() = default;
 
-DriveFsEventRouter::SyncingStatusState::SyncingStatusState() = default;
-DriveFsEventRouter::SyncingStatusState::SyncingStatusState(
-    const SyncingStatusState& other) = default;
-DriveFsEventRouter::SyncingStatusState::~SyncingStatusState() = default;
-
 void DriveFsEventRouter::OnUnmounted() {
-  sync_status_state_.completed_bytes = 0;
-  sync_status_state_.group_id_to_bytes_to_transfer.clear();
-  pin_status_state_.completed_bytes = 0;
-  pin_status_state_.group_id_to_bytes_to_transfer.clear();
-
-  // Ensure any existing sync progress indicator is cleared.
-  FileTransferStatus sync_status;
-  sync_status.transfer_state = file_manager_private::TRANSFER_STATE_FAILED;
-  sync_status.show_notification = true;
-  sync_status.hide_when_zero_jobs = true;
-  FileTransferStatus pin_status;
-  pin_status.transfer_state = file_manager_private::TRANSFER_STATE_FAILED;
-  pin_status.show_notification = true;
-  pin_status.hide_when_zero_jobs = true;
-
-  BroadcastTransferEvent(kTransferEvent, sync_status);
-  BroadcastTransferEvent(kPinEvent, pin_status);
-
+  stale_sync_state_cleanup_timer_.Stop();
+  path_to_sync_state_.clear();
   dialog_callback_.Reset();
 }
 
-void DriveFsEventRouter::OnSyncingStatusUpdate(
-    const drivefs::mojom::SyncingStatus& syncing_status) {
-  std::vector<const drivefs::mojom::ItemEvent*> transfer_items;
-  std::vector<const drivefs::mojom::ItemEvent*> pin_items;
+file_manager_private::SyncStatus ConvertSyncStatus(drivefs::SyncStatus status) {
+  switch (status) {
+    case drivefs::SyncStatus::kNotFound:
+      return file_manager_private::SyncStatus::kNotFound;
+    case drivefs::SyncStatus::kQueued:
+      return file_manager_private::SyncStatus::kQueued;
+    case drivefs::SyncStatus::kInProgress:
+      return file_manager_private::SyncStatus::kInProgress;
+    case drivefs::SyncStatus::kCompleted:
+      return file_manager_private::SyncStatus::kCompleted;
+    case drivefs::SyncStatus::kError:
+      return file_manager_private::SyncStatus::kError;
+    default:
+      NOTREACHED();
+  }
+}
 
-  for (const auto& item : syncing_status.item_events) {
-    if (item->reason == drivefs::mojom::ItemEventReason::kTransfer) {
-      transfer_items.push_back(item.get());
-    } else {
-      pin_items.push_back(item.get());
+void DriveFsEventRouter::OnItemProgress(
+    const drivefs::mojom::ProgressEvent& event) {
+  base::FilePath file_path;
+  std::string path;
+
+  if (event.file_path.has_value()) {
+    file_path = *event.file_path;
+    path = file_path.value();
+  } else {
+    path = event.path;
+    file_path = base::FilePath(path);
+  }
+
+  drivefs::SyncStatus status;
+  if (event.progress == 0) {
+    status = drivefs::SyncStatus::kQueued;
+  } else if (event.progress == 100) {
+    status = drivefs::SyncStatus::kCompleted;
+  } else {
+    status = drivefs::SyncStatus::kInProgress;
+  }
+
+  std::vector<drivefs::SyncState> filtered_states;
+
+  filtered_states.emplace_back(
+      drivefs::SyncState{status, static_cast<float>(event.progress) / 100.0f,
+                         file_path, base::Time::Now()});
+
+  if (status == drivefs::SyncStatus::kCompleted) {
+    const auto previous_state_iter = path_to_sync_state_.find(path);
+    const bool was_tracked = previous_state_iter != path_to_sync_state_.end();
+    if (was_tracked) {
+      // Stop tracking completed events but push it to subscribers.
+      path_to_sync_state_.erase(previous_state_iter);
+    }
+  } else {
+    path_to_sync_state_[path] = filtered_states.back();
+    if (!stale_sync_state_cleanup_timer_.IsRunning()) {
+      stale_sync_state_cleanup_timer_.Reset();
     }
   }
 
-  if (base::FeatureList::IsEnabled(ash::features::kFilesInlineSyncStatus)) {
-    BroadcastIndividualTransferEventsForItems(transfer_items, kTransferEvent,
-                                              kIndividualTransferEventName);
-    BroadcastIndividualTransferEventsForItems(pin_items, kPinEvent,
-                                              kIndividualPinEventName);
-    return;
-  }
-
-  BroadcastAggregateTransferEventForItems(
-      transfer_items, kTransferEvent, kTransferEventName, sync_status_state_);
-  BroadcastAggregateTransferEventForItems(pin_items, kPinEvent, kPinEventName,
-                                          pin_status_state_);
-}
-
-void DriveFsEventRouter::BroadcastIndividualTransferEventsForItems(
-    const std::vector<const drivefs::mojom::ItemEvent*>& items,
-    const extensions::events::HistogramValue& event_type,
-    const std::string& event_name) {
   std::vector<IndividualFileTransferStatus> statuses;
   std::vector<base::FilePath> paths;
-  for (const auto* const item : items) {
-    IndividualFileTransferStatus status;
-    status.transfer_state = ConvertItemEventState(item->state);
-    status.processed = item->bytes_transferred;
-    status.total = item->bytes_to_transfer;
-    statuses.push_back(std::move(status));
-    paths.emplace_back(item->path);
+
+  for (const auto& sync_state : filtered_states) {
+    IndividualFileTransferStatus individual_status;
+    individual_status.sync_status = ConvertSyncStatus(sync_state.status);
+    individual_status.progress = sync_state.progress;
+    statuses.emplace_back(std::move(individual_status));
+    paths.emplace_back(sync_state.path);
   }
 
-  for (const auto& url : GetEventListenerURLs(event_name)) {
-    PathsToEntries(paths, url,
-                   base::BindOnce(&DriveFsEventRouter::OnEntries,
-                                  weak_ptr_factory_.GetWeakPtr(), event_type,
-                                  CopyIndividualStatuses(statuses)));
+  for (const GURL& url : GetEventListenerURLs(kIndividualTransferEventName)) {
+    const auto file_urls = ConvertPathsToFileSystemUrls(paths, url);
+    for (size_t i = 0; i < file_urls.size(); i++) {
+      statuses[i].file_url = file_urls[i].spec();
+    }
+    // Note: Inline Sync Statuses don't need to differentiate between transfer
+    // and pin events because they do not display aggregate progress separately
+    // for each of those two categories.
+    BroadcastIndividualTransfersEvent(kTransferEvent, statuses);
   }
-}
-
-void DriveFsEventRouter::OnEntries(
-    const extensions::events::HistogramValue& event_type,
-    std::vector<IndividualFileTransferStatus> statuses,
-    IndividualFileTransferEntries entries) {
-  std::vector<IndividualFileTransferStatus> filtered_statuses;
-
-  for (size_t i = 0; i < entries.size(); i++) {
-    auto& entry = entries[i];
-    auto& status = statuses[i];
-    if (!entry.additional_properties.empty()) {
-      status.entry = std::move(entry);
-      filtered_statuses.push_back(std::move(status));
-    }
-  }
-  BroadcastIndividualTransfersEvent(event_type, filtered_statuses);
-}
-
-void DriveFsEventRouter::BroadcastAggregateTransferEventForItems(
-    const std::vector<const drivefs::mojom::ItemEvent*>& items,
-    const extensions::events::HistogramValue& event_type,
-    const std::string& event_name,
-    SyncingStatusState& state) {
-  std::vector<const drivefs::mojom::ItemEvent*> filtered_items;
-  std::vector<const drivefs::mojom::ItemEvent*> ignored_items;
-  bool are_any_failed = false;
-  bool are_any_in_progress = false;
-  int64_t total_bytes_transferred = 0;
-  int64_t total_bytes_to_transfer = 0;
-  int num_syncing_items = 0;
-  const drivefs::mojom::ItemEvent* some_syncing_item = nullptr;
-
-  for (const auto* item : items) {
-    if (base::Contains(ignored_file_paths_, base::FilePath(item->path))) {
-      ignored_items.push_back(item);
-    } else {
-      filtered_items.push_back(item);
-    }
-  }
-
-  for (const auto* const item : filtered_items) {
-    if (IsItemEventCompleted(item->state)) {
-      auto it = state.group_id_to_bytes_to_transfer.find(item->group_id);
-      if (it != state.group_id_to_bytes_to_transfer.end()) {
-        state.completed_bytes += it->second;
-        state.group_id_to_bytes_to_transfer.erase(it);
-      }
-      if (item->state == drivefs::mojom::ItemEvent_State::kFailed) {
-        are_any_failed = true;
-      }
-      continue;
-    }
-
-    // Any not-completed item will do. It is exclusively used to display
-    // notification copy when there's only one last item that is syncing.
-    if (!some_syncing_item) {
-      some_syncing_item = item;
-    }
-    if (item->state == drivefs::mojom::ItemEvent_State::kInProgress) {
-      are_any_in_progress = true;
-    }
-    total_bytes_transferred += item->bytes_transferred;
-    total_bytes_to_transfer += item->bytes_to_transfer;
-    ++num_syncing_items;
-    if (item->bytes_to_transfer) {
-      state.group_id_to_bytes_to_transfer[item->group_id] =
-          item->bytes_to_transfer;
-    }
-  }
-
-  FileTransferStatus status;
-  status.hide_when_zero_jobs = true;
-
-  if (some_syncing_item) {
-    status.show_notification = true;
-    status.num_total_jobs = num_syncing_items;
-    status.processed = total_bytes_transferred + state.completed_bytes;
-    status.total = total_bytes_to_transfer + state.completed_bytes;
-    status.transfer_state =
-        are_any_in_progress ? file_manager_private::TRANSFER_STATE_IN_PROGRESS
-                            : file_manager_private::TRANSFER_STATE_QUEUED;
-
-    base::FilePath path(some_syncing_item->path);
-    for (const auto& url : GetEventListenerURLs(event_name)) {
-      status.file_url = ConvertDrivePathToFileSystemUrl(path, url).spec();
-      BroadcastTransferEvent(event_type, status);
-    }
-
-    return;
-  }
-
-  // If no events of this type were filtered in and at least one was
-  // filtered out because it was ignored, this means all remaining events of
-  // this type are currently ignored. Let's silently hide the notification.
-  status.show_notification =
-      !(filtered_items.empty() && !ignored_items.empty());
-  state.completed_bytes = 0;
-  state.group_id_to_bytes_to_transfer.clear();
-  status.transfer_state = are_any_failed
-                              ? file_manager_private::TRANSFER_STATE_FAILED
-                              : file_manager_private::TRANSFER_STATE_COMPLETED;
-  BroadcastTransferEvent(event_type, status);
 }
 
 void DriveFsEventRouter::OnFilesChanged(
@@ -278,8 +157,8 @@ void DriveFsEventRouter::OnFilesChanged(
     for (const auto& change : changes) {
       auto& event = events[change.path.DirName()];
       if (!event.changed_files) {
-        event.event_type = extensions::api::file_manager_private::
-            FILE_WATCH_EVENT_TYPE_CHANGED;
+        event.event_type =
+            extensions::api::file_manager_private::FileWatchEventType::kChanged;
         event.changed_files.emplace();
         event.entry.additional_properties.Set(
             "fileSystemRoot", base::StrCat({ConvertDrivePathToFileSystemUrl(
@@ -298,9 +177,9 @@ void DriveFsEventRouter::OnFilesChanged(
           ConvertDrivePathToFileSystemUrl(change.path, listener_url).spec();
       file_manager_change.changes.push_back(
           change.type == drivefs::mojom::FileChange::Type::kDelete
-              ? extensions::api::file_manager_private::CHANGE_TYPE_DELETE
-              : extensions::api::file_manager_private::
-                    CHANGE_TYPE_ADD_OR_UPDATE);
+              ? extensions::api::file_manager_private::ChangeType::kDelete
+              : extensions::api::file_manager_private::ChangeType::
+                    kAddOrUpdate);
     }
     for (auto& event : events) {
       BroadcastOnDirectoryChangedEvent(event.first, event.second);
@@ -312,14 +191,19 @@ void DriveFsEventRouter::OnError(const drivefs::mojom::DriveError& error) {
   file_manager_private::DriveSyncErrorEvent event;
   switch (error.type) {
     case drivefs::mojom::DriveError::Type::kCantUploadStorageFull:
-      event.type = file_manager_private::DRIVE_SYNC_ERROR_TYPE_NO_SERVER_SPACE;
+      event.type = file_manager_private::DriveSyncErrorType::kNoServerSpace;
       break;
     case drivefs::mojom::DriveError::Type::kCantUploadStorageFullOrganization:
-      event.type = file_manager_private::
-          DRIVE_SYNC_ERROR_TYPE_NO_SERVER_SPACE_ORGANIZATION;
+      event.type =
+          file_manager_private::DriveSyncErrorType::kNoServerSpaceOrganization;
       break;
     case drivefs::mojom::DriveError::Type::kPinningFailedDiskFull:
-      event.type = file_manager_private::DRIVE_SYNC_ERROR_TYPE_NO_LOCAL_SPACE;
+      event.type = file_manager_private::DriveSyncErrorType::kNoLocalSpace;
+      break;
+    case drivefs::mojom::DriveError::Type::kCantUploadSharedDriveStorageFull:
+      event.type =
+          file_manager_private::DriveSyncErrorType::kNoSharedDriveSpace;
+      event.shared_drive = error.shared_drive;
       break;
   }
   for (const auto& listener_url : GetEventListenerURLs(
@@ -329,6 +213,50 @@ void DriveFsEventRouter::OnError(const drivefs::mojom::DriveError& error) {
     BroadcastEvent(extensions::events::FILE_MANAGER_PRIVATE_ON_DRIVE_SYNC_ERROR,
                    file_manager_private::OnDriveSyncError::kEventName,
                    file_manager_private::OnDriveSyncError::Create(event));
+  }
+}
+
+void DriveFsEventRouter::Observe(
+    drive::DriveIntegrationService* const service) {
+  DCHECK(service);
+  drive::DriveIntegrationService::Observer::Observe(service);
+  drivefs::DriveFsHost* const host = service->GetDriveFsHost();
+  drivefs::DriveFsHost::Observer::Observe(host);
+  host->set_dialog_handler(
+      base::BindRepeating(&DriveFsEventRouter::DisplayConfirmDialog,
+                          weak_ptr_factory_.GetWeakPtr()));
+}
+
+void DriveFsEventRouter::Reset() {
+  if (drivefs::DriveFsHost* const host = GetHost()) {
+    host->set_dialog_handler({});
+  }
+  drivefs::DriveFsHost::Observer::Reset();
+  drive::DriveIntegrationService::Observer::Reset();
+}
+
+void DriveFsEventRouter::OnDriveIntegrationServiceDestroyed() {
+  Reset();
+}
+
+void DriveFsEventRouter::OnBulkPinProgress(
+    const drivefs::pinning::Progress& progress) {
+  BroadcastEvent(extensions::events::FILE_MANAGER_PRIVATE_ON_BULK_PIN_PROGRESS,
+                 file_manager_private::OnBulkPinProgress::kEventName,
+                 file_manager_private::OnBulkPinProgress::Create(
+                     util::BulkPinProgressToJs(progress)));
+}
+
+void DriveFsEventRouter::ClearStaleSyncStates() {
+  const base::Time now = base::Time::Now();
+  for (auto it = path_to_sync_state_.cbegin();
+       it != path_to_sync_state_.cend();) {
+    const base::Time& last_updated = it->second.last_updated;
+    if (now - last_updated > kSyncStateStaleThreshold) {
+      it = path_to_sync_state_.erase(it);
+    } else {
+      ++it;
+    }
   }
 }
 
@@ -377,45 +305,13 @@ void DriveFsEventRouter::RestoreNotificationsForFilePath(
   }
 }
 
-void DriveFsEventRouter::BroadcastTransferEvent(
-    const extensions::events::HistogramValue event_type,
-    const FileTransferStatus& status) {
-  switch (event_type) {
-    case extensions::events::FILE_MANAGER_PRIVATE_ON_FILE_TRANSFERS_UPDATED:
-      BroadcastEvent(
-          event_type, kTransferEventName,
-          file_manager_private::OnFileTransfersUpdated::Create(status));
-      break;
-    case extensions::events::FILE_MANAGER_PRIVATE_ON_PIN_TRANSFERS_UPDATED:
-      BroadcastEvent(
-          event_type, kPinEventName,
-          file_manager_private::OnPinTransfersUpdated::Create(status));
-      break;
-    default:
-      NOTREACHED() << "Event type not handled: " << event_type;
-  }
-}
-
 void DriveFsEventRouter::BroadcastIndividualTransfersEvent(
     const extensions::events::HistogramValue event_type,
     const std::vector<IndividualFileTransferStatus>& status) {
-  switch (event_type) {
-    case extensions::events::FILE_MANAGER_PRIVATE_ON_FILE_TRANSFERS_UPDATED:
-      BroadcastEvent(
-          event_type, kIndividualTransferEventName,
-          file_manager_private::OnIndividualFileTransfersUpdated::Create(
-              status),
-          false);
-      break;
-    case extensions::events::FILE_MANAGER_PRIVATE_ON_PIN_TRANSFERS_UPDATED:
-      BroadcastEvent(
-          event_type, kIndividualPinEventName,
-          file_manager_private::OnIndividualPinTransfersUpdated::Create(status),
-          false);
-      break;
-    default:
-      NOTREACHED() << "Event type not handled: " << event_type;
-  }
+  BroadcastEvent(
+      event_type, kIndividualTransferEventName,
+      file_manager_private::OnIndividualFileTransfersUpdated::Create(status),
+      /*dispatch_to_system_notification=*/false);
 }
 
 void DriveFsEventRouter::BroadcastOnDirectoryChangedEvent(
@@ -427,6 +323,15 @@ void DriveFsEventRouter::BroadcastOnDirectoryChangedEvent(
   BroadcastEvent(extensions::events::FILE_MANAGER_PRIVATE_ON_DIRECTORY_CHANGED,
                  file_manager_private::OnDirectoryChanged::kEventName,
                  file_manager_private::OnDirectoryChanged::Create(event));
+}
+
+drivefs::SyncState DriveFsEventRouter::GetDriveSyncStateForPath(
+    const base::FilePath& drive_path) {
+  const auto it = path_to_sync_state_.find(drive_path.AsUTF8Unsafe());
+  if (it == path_to_sync_state_.end()) {
+    return drivefs::SyncState::CreateNotFound(drive_path);
+  }
+  return it->second;
 }
 
 }  // namespace file_manager

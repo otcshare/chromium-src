@@ -32,15 +32,13 @@ class StatusController {
 
   // The types which had non-deletion updates in the GetUpdates during the
   // last sync cycle.
-  ModelTypeSet get_updated_types() const;
-  void add_updated_type(ModelType type);
+  DataTypeSet get_updated_types() const;
+  void add_updated_type(DataType type);
   void clear_updated_types();
 
   // Various conflict counters.
   int num_server_conflicts() const;
 
-  // Aggregate sum of all conflicting items over all conflict types.
-  int TotalNumConflictingItems() const;
 
   // The time at which we started the most recent sync cycle.
   base::Time sync_start_time() const { return sync_start_time_; }
@@ -53,7 +51,7 @@ class StatusController {
     return model_neutral_;
   }
 
-  SyncerError last_get_key_result() const;
+  bool last_get_key_failed() const;
 
   // Download counters.
   void increment_num_updates_downloaded_by(int value);
@@ -67,7 +65,7 @@ class StatusController {
   void increment_num_successful_bookmark_commits();
 
   // Server communication status tracking.
-  void set_last_get_key_result(const SyncerError result);
+  void set_last_get_key_failed(bool failed);
   void set_last_download_updates_result(const SyncerError result);
   void set_commit_result(const SyncerError result);
 

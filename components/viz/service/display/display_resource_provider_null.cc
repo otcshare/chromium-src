@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+
 namespace viz {
 
 DisplayResourceProviderNull::DisplayResourceProviderNull()
@@ -16,17 +17,17 @@ DisplayResourceProviderNull::~DisplayResourceProviderNull() {
   Destroy();
 }
 
-std::vector<ReturnedResource>
+std::vector<ReturnedResourceViz>
 DisplayResourceProviderNull::DeleteAndReturnUnusedResourcesToChildImpl(
     Child& child_info,
     DeleteStyle style,
     const std::vector<ResourceId>& unused) {
-  std::vector<ReturnedResource> to_return;
+  std::vector<ReturnedResourceViz> to_return;
   to_return.reserve(unused.size());
 
   for (ResourceId local_id : unused) {
     auto it = resources_.find(local_id);
-    DCHECK(it != resources_.end());
+    CHECK(it != resources_.end());
     ChildResource& resource = it->second;
 
     ResourceId child_id = resource.transferable.id;

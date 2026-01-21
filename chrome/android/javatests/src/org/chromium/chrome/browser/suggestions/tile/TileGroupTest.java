@@ -4,283 +4,196 @@
 
 package org.chromium.chrome.browser.suggestions.tile;
 
-import android.support.test.InstrumentationRegistry;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.TextView;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
-import androidx.test.espresso.matcher.ViewMatchers;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
+
+import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.MediumTest;
 
-import org.hamcrest.Matchers;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Before;
-import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.FeatureList;
-import org.chromium.base.test.params.ParameterAnnotations;
-import org.chromium.base.test.params.ParameterSet;
-import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
-import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Criteria;
-import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.R;
-import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.native_page.ContextMenuManager;
-import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
-import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
-import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
-import org.chromium.chrome.test.util.NewTabPageTestUtils;
+import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ntp.MvtRemovedSnackbarFacility;
+import org.chromium.chrome.test.transit.ntp.MvtUnpinnedSnackbarFacility;
+import org.chromium.chrome.test.transit.ntp.MvtsFacility;
+import org.chromium.chrome.test.transit.ntp.MvtsTileFacility;
+import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.browser.suggestions.SuggestionsDependenciesRule;
 import org.chromium.chrome.test.util.browser.suggestions.mostvisited.FakeMostVisitedSites;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.content_public.browser.test.util.TestTouchUtils;
 import org.chromium.net.test.EmbeddedTestServer;
-import org.chromium.ui.test.util.ViewUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
+import java.util.Set;
 
-/**
- * Instrumentation tests for {@link TileGroup} on the New Tab Page.
- */
-@RunWith(ParameterizedRunner.class)
-@ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
+/** Instrumentation tests for {@link TileGroup} on the New Tab Page. */
+@RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class TileGroupTest {
-    @ParameterAnnotations.ClassParameter
-    private static List<ParameterSet> sClassParams =
-            Arrays.asList(new ParameterSet().value(true).name("EnableScrollableMVTOnNTP"),
-                    new ParameterSet().value(false).name("DisableScrollableMVTOnNTP"));
-
-    @ClassRule
-    public static final ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
-
     @Rule
-    public final BlankCTATabInitialStateRule mInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, true);
+    public final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
 
-    @Rule
-    public SuggestionsDependenciesRule mSuggestionsDeps = new SuggestionsDependenciesRule();
+    @Rule public SuggestionsDependenciesRule mSuggestionsDeps = new SuggestionsDependenciesRule();
 
     private static final String[] FAKE_MOST_VISITED_URLS =
-            new String[] {"/chrome/test/data/android/navigate/one.html",
-                    "/chrome/test/data/android/navigate/two.html",
-                    "/chrome/test/data/android/navigate/three.html"};
+            new String[] {
+                "/chrome/test/data/android/navigate/one.html",
+                "/chrome/test/data/android/navigate/two.html",
+                "/chrome/test/data/android/navigate/three.html"
+            };
+    private static final GURL FAKE_CUSTOM_LINK_URL = new GURL("https://www.google.com/");
 
-    private NewTabPage mNtp;
     private String[] mSiteSuggestionUrls;
     private FakeMostVisitedSites mMostVisitedSites;
+    private List<SiteSuggestion> mSiteSuggestions;
     private EmbeddedTestServer mTestServer;
-    private boolean mEnableScrollableMVT;
-
-    public TileGroupTest(boolean enableScrollableMVT) {
-        mEnableScrollableMVT = enableScrollableMVT;
-    }
+    private WebPageStation mInitialPage;
 
     @Before
     public void setUp() {
-        Assume.assumeFalse(sActivityTestRule.getActivity().isTablet() && mEnableScrollableMVT);
-        FeatureList.TestValues testValuesOverride = new FeatureList.TestValues();
-        testValuesOverride.addFeatureFlagOverride(
-                ChromeFeatureList.SHOW_SCROLLABLE_MVT_ON_NTP_ANDROID, mEnableScrollableMVT);
-        FeatureList.setTestValues(testValuesOverride);
-
-        mTestServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
+        mTestServer =
+                EmbeddedTestServer.createAndStartServer(
+                        ApplicationProvider.getApplicationContext());
 
         mSiteSuggestionUrls = mTestServer.getURLs(FAKE_MOST_VISITED_URLS);
 
         mMostVisitedSites = new FakeMostVisitedSites();
         mSuggestionsDeps.getFactory().mostVisitedSites = mMostVisitedSites;
-        mMostVisitedSites.setTileSuggestions(mSiteSuggestionUrls);
-    }
+        mSiteSuggestions = FakeMostVisitedSites.createSiteSuggestions(mSiteSuggestionUrls);
+        mMostVisitedSites.setTileSuggestions(mSiteSuggestions);
 
-    public void initializeTab() {
-        sActivityTestRule.loadUrl(UrlConstants.NTP_URL);
-        Tab mTab = sActivityTestRule.getActivity().getActivityTab();
-        NewTabPageTestUtils.waitForNtpLoaded(mTab);
-
-        Assert.assertTrue(mTab.getNativePage() instanceof NewTabPage);
-        mNtp = (NewTabPage) mTab.getNativePage();
-
-        ViewUtils.waitForView(
-                (ViewGroup) mNtp.getView(), ViewMatchers.withId(R.id.mv_tiles_layout));
-    }
-
-    @After
-    public void tearDown() {
-        if (mTestServer != null) {
-            mTestServer.stopAndDestroyServer();
-        }
+        mInitialPage = mActivityTestRule.startOnBlankPage();
     }
 
     @Test
     @MediumTest
     @Feature({"NewTabPage"})
-    public void testDismissTileWithContextMenu() throws Exception {
-        initializeTab();
-        SiteSuggestion siteToDismiss = mMostVisitedSites.getCurrentSites().get(0);
-        final View tileView = getNonNullTileViewFor(siteToDismiss);
-
-        // Dismiss the tile using the context menu.
-        invokeContextMenu(tileView, ContextMenuManager.ContextMenuItemId.REMOVE);
-        Assert.assertTrue(mMostVisitedSites.isUrlBlocklisted(new GURL(mSiteSuggestionUrls[0])));
-
-        // Ensure that the removal is reflected in the ui.
-        Assert.assertEquals(3, getTileLayout().getChildCount());
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mMostVisitedSites.setTileSuggestions(mSiteSuggestionUrls[1], mSiteSuggestionUrls[2]);
-        });
-        waitForTileRemoved(siteToDismiss);
-        Assert.assertEquals(2, getTileLayout().getChildCount());
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testDismissTileWithContextMenu_Phones() {
+        doTestDismissTileWithContextMenuImpl();
     }
 
     @Test
     @MediumTest
     @Feature({"NewTabPage"})
-    public void testDismissTileUndo() throws Exception {
-        initializeTab();
-        GURL url0 = new GURL(mSiteSuggestionUrls[0]);
-        GURL url1 = new GURL(mSiteSuggestionUrls[1]);
-        GURL url2 = new GURL(mSiteSuggestionUrls[2]);
-        SiteSuggestion siteToDismiss = mMostVisitedSites.getCurrentSites().get(0);
-        final ViewGroup tileContainer = getTileLayout();
-        final View tileView = getNonNullTileViewFor(siteToDismiss);
-        Assert.assertEquals(3, tileContainer.getChildCount());
+    @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP})
+    public void testDismissTileWithContextMenu_Tablets() {
+        doTestDismissTileWithContextMenuImpl();
+    }
+
+    private MvtRemovedSnackbarFacility doTestDismissTileWithContextMenuImpl() {
+        RegularNewTabPageStation ntp =
+                mInitialPage.loadPageProgrammatically(
+                        getOriginalNativeNtpUrl(), RegularNewTabPageStation.newBuilder());
+        MvtsFacility mvts = ntp.focusOnMvts(mSiteSuggestions);
+        MvtsTileFacility tile = mvts.ensureTileIsDisplayedAndGet(0);
 
         // Dismiss the tile using the context menu.
-        invokeContextMenu(tileView, ContextMenuManager.ContextMenuItemId.REMOVE);
+        List<SiteSuggestion> siteSuggestionsAfterRemove =
+                mSiteSuggestions.subList(1, mSiteSuggestions.size());
+        var snackbar =
+                tile.openContextMenu().selectRemove(siteSuggestionsAfterRemove, mMostVisitedSites);
+        assertTrue(mMostVisitedSites.isUrlBlocklisted(new GURL(mSiteSuggestionUrls[0])));
 
-        // Ensure that the removal update goes through.
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mMostVisitedSites.setTileSuggestions(mSiteSuggestionUrls[1], mSiteSuggestionUrls[2]);
-        });
-        waitForTileRemoved(siteToDismiss);
-        Assert.assertEquals(2, tileContainer.getChildCount());
-        final View snackbarButton = waitForSnackbar(sActivityTestRule.getActivity());
-
-        Assert.assertTrue(mMostVisitedSites.isUrlBlocklisted(url0));
-        TestThreadUtils.runOnUiThreadBlocking(() -> { snackbarButton.callOnClick(); });
-
-        Assert.assertFalse(mMostVisitedSites.isUrlBlocklisted(url0));
-
-        // Ensure that the removal of the update goes through.
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mMostVisitedSites.setTileSuggestions(mSiteSuggestionUrls); });
-        waitForTileAdded(siteToDismiss);
-        Assert.assertEquals(3, tileContainer.getChildCount());
+        return snackbar;
     }
 
-    private ViewGroup getTileLayout() {
-        ViewGroup newTabPageLayout = mNtp.getNewTabPageLayout();
-        Assert.assertNotNull("Unable to retrieve the NewTabPageLayout.", newTabPageLayout);
-
-        ViewGroup viewGroup = newTabPageLayout.findViewById(R.id.mv_tiles_layout);
-        Assert.assertNotNull("Unable to retrieve the "
-                        + (mEnableScrollableMVT ? "MvTilesLayout." : "TileGridLayout."),
-                viewGroup);
-        return viewGroup;
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testDismissTileUndo_Phones() {
+        doTestDismissTileUndoImpl();
     }
 
-    private View getTileViewFor(SiteSuggestion suggestion) {
-        View tileView;
-        if (mEnableScrollableMVT) {
-            tileView = ((MostVisitedTilesCarouselLayout) getTileLayout())
-                               .findTileViewForTesting(suggestion);
-        } else {
-            tileView = ((MostVisitedTilesGridLayout) getTileLayout())
-                               .findTileViewForTesting(suggestion);
-        }
-        return tileView;
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP})
+    public void testDismissTileUndo_Tablets() {
+        doTestDismissTileUndoImpl();
     }
 
-    private View getNonNullTileViewFor(SiteSuggestion suggestion) {
-        View tileView = getTileViewFor(suggestion);
-        Assert.assertNotNull("Tile not found for suggestion " + suggestion.url, tileView);
-        return tileView;
+    private void doTestDismissTileUndoImpl() {
+        MvtRemovedSnackbarFacility snackbar = doTestDismissTileWithContextMenuImpl();
+
+        // Undo removal with the snackbar.
+        snackbar.undo(mMostVisitedSites);
+        assertFalse(mMostVisitedSites.isUrlBlocklisted(new GURL(mSiteSuggestionUrls[0])));
     }
 
-    private void invokeContextMenu(View view, int contextMenuItemId) throws ExecutionException {
-        TestTouchUtils.performLongClickOnMainSync(
-                InstrumentationRegistry.getInstrumentation(), view);
-        Assert.assertTrue(InstrumentationRegistry.getInstrumentation().invokeContextMenuAction(
-                sActivityTestRule.getActivity(), contextMenuItemId, 0));
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testUnpinCustomTile_Phones() {
+        doTestUnpinCustomTileImpl();
     }
 
-    /** Wait for the snackbar associated to a tile dismissal to be shown and returns its button. */
-    private static View waitForSnackbar(final ChromeActivity activity) {
-        final String expectedSnackbarMessage =
-                activity.getResources().getString(R.string.most_visited_item_removed);
-        CriteriaHelper.pollUiThread(() -> {
-            SnackbarManager snackbarManager = activity.getSnackbarManager();
-            Criteria.checkThat(snackbarManager.isShowing(), Matchers.is(true));
-            TextView snackbarMessage = (TextView) activity.findViewById(R.id.snackbar_message);
-            Criteria.checkThat(snackbarMessage, Matchers.notNullValue());
-            Criteria.checkThat(
-                    snackbarMessage.getText().toString(), Matchers.is(expectedSnackbarMessage));
-        });
-
-        return activity.findViewById(R.id.snackbar_button);
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP})
+    public void testUnpinCustomTile_Tablets() {
+        doTestUnpinCustomTileImpl();
     }
 
-    private void waitForTileRemoved(final SiteSuggestion suggestion) throws TimeoutException {
-        ViewGroup tileContainer = getTileLayout();
-        SuggestionsTileView removedTile = (SuggestionsTileView) getTileViewFor(suggestion);
-        if (removedTile == null) return;
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testUnpinCustomTile_undo_Phones() {
+        var snackbar = doTestUnpinCustomTileImpl();
 
-        final CallbackHelper callback = new CallbackHelper();
-        tileContainer.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
-            @Override
-            public void onChildViewAdded(View parent, View child) {}
-
-            @Override
-            public void onChildViewRemoved(View parent, View child) {
-                if (child == removedTile) callback.notifyCalled();
-            }
-        });
-        callback.waitForCallback("The expected tile was not removed.", 0);
-        tileContainer.setOnHierarchyChangeListener(null);
+        // Undo the unpin.
+        snackbar.undo(mMostVisitedSites);
+        assertTrue(mMostVisitedSites.hasCustomLink(FAKE_CUSTOM_LINK_URL));
     }
 
-    private void waitForTileAdded(final SiteSuggestion suggestion) throws TimeoutException {
-        ViewGroup tileContainer = getTileLayout();
-        SuggestionsTileView addedTile = (SuggestionsTileView) getTileViewFor(suggestion);
-        if (addedTile != null) return;
+    @Test
+    @MediumTest
+    @Feature({"NewTabPage"})
+    @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP})
+    public void testUnpinCustomTile_undo_Tablets() {
+        var snackbar = doTestUnpinCustomTileImpl();
 
-        final CallbackHelper callback = new CallbackHelper();
-        tileContainer.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
-            @Override
-            public void onChildViewAdded(View parent, View child) {
-                if (!(child instanceof SuggestionsTileView)) return;
-                if (!((SuggestionsTileView) child).getData().equals(suggestion)) return;
+        // Undo the unpin.
+        snackbar.undo(mMostVisitedSites);
+        assertTrue(mMostVisitedSites.hasCustomLink(FAKE_CUSTOM_LINK_URL));
+    }
 
-                callback.notifyCalled();
-            }
+    private MvtUnpinnedSnackbarFacility doTestUnpinCustomTileImpl() {
+        mMostVisitedSites.addCustomLink("Custom Link", FAKE_CUSTOM_LINK_URL, 0);
 
-            @Override
-            public void onChildViewRemoved(View parent, View child) {}
-        });
-        callback.waitForCallback("The expected tile was not added.", 0);
-        tileContainer.setOnHierarchyChangeListener(null);
+        RegularNewTabPageStation ntp =
+                mInitialPage.loadPageProgrammatically(
+                        getOriginalNativeNtpUrl(), RegularNewTabPageStation.newBuilder());
+        MvtsFacility mvts =
+                ntp.focusOnMvts(
+                        mMostVisitedSites.getCombinedSuggestions(),
+                        /* separatorIndices= */ Set.of(1));
+        MvtsTileFacility tile = mvts.ensureTileIsDisplayedAndGet(0);
+
+        // Unpin the tile using the context menu.
+        var snackbar = tile.openContextMenu().selectUnpin(mSiteSuggestions, mMostVisitedSites);
+        assertFalse(mMostVisitedSites.hasCustomLink(FAKE_CUSTOM_LINK_URL));
+        return snackbar;
     }
 }

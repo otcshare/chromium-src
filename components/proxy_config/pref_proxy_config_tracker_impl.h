@@ -7,8 +7,10 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -23,6 +25,9 @@ class PrefRegistrySimple;
 namespace base {
 class SingleThreadTaskRunner;
 }
+
+// Killswitch for the rules set by the "ProxyOverrideRules" policy.
+PROXY_CONFIG_EXPORT BASE_DECLARE_FEATURE(kEnableProxyOverrideRules);
 
 // A net::ProxyConfigService implementation that applies preference proxy
 // settings (pushed from PrefProxyConfigTrackerImpl) as overrides to the proxy
@@ -47,11 +52,14 @@ class ProxyConfigServiceImpl : public net::ProxyConfigService,
   ConfigAvailability GetLatestProxyConfig(
       net::ProxyConfigWithAnnotation* config) override;
   void OnLazyPoll() override;
+  bool UsesPolling() override;
 
   // Method on IO thread that receives the preference proxy settings pushed from
   // PrefProxyConfigTrackerImpl.
   void UpdateProxyConfig(ProxyPrefs::ConfigState config_state,
                          const net::ProxyConfigWithAnnotation& config);
+
+  base::WeakPtr<ProxyConfigServiceImpl> AsWeakPtr();
 
  private:
   // ProxyConfigService::Observer implementation:
@@ -76,6 +84,8 @@ class ProxyConfigServiceImpl : public net::ProxyConfigService,
   bool registered_observer_;
 
   base::ThreadChecker thread_checker_;
+
+  base::WeakPtrFactory<ProxyConfigServiceImpl> weak_ptr_factory_{this};
 };
 
 // A class that tracks proxy preferences. It translates the configuration
@@ -171,7 +181,7 @@ class PROXY_CONFIG_EXPORT PrefProxyConfigTrackerImpl
   net::ProxyConfigWithAnnotation pref_config_;
 
   raw_ptr<PrefService> pref_service_;
-  raw_ptr<ProxyConfigServiceImpl> proxy_config_service_impl_;  // Weak ptr.
+  base::WeakPtr<ProxyConfigServiceImpl> proxy_config_service_impl_;
   PrefChangeRegistrar proxy_prefs_;
 
   // State of |active_config_|.  |active_config_| is only valid if

@@ -11,24 +11,22 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "gpu/gpu_export.h"
+#include "gpu/config/gpu_config_export.h"
 
 namespace gpu {
 
 struct GPUInfo;
 
-class GPU_EXPORT GPUTestConfig {
+class GPU_CONFIG_EXPORT GPUTestConfig {
  public:
   enum OS {
     kOsUnknown = 0,
-    kOsWinXP = 1 << 0,
-    kOsWinVista = 1 << 1,
-    kOsWin7 = 1 << 2,
-    kOsWin8 = 1 << 3,
-    kOsWin10 = 1 << 4,
-    kOsWin = kOsWinXP | kOsWinVista | kOsWin7 | kOsWin8 | kOsWin10,
+    kOsWin10 = 1 << 1,
+    kOsWin = kOsWin10,
     // Jump over a few bits for future Windows versions.
-    kOsMacLeopard = 1 << 10,
+    // Versions after Sonoma are now at the top of the list, replacing obsolete
+    // versions.
+    kOsMacSequoia = 1 << 10,
     kOsMacSnowLeopard = 1 << 11,
     kOsMacLion = 1 << 12,
     kOsMacMountainLion = 1 << 13,
@@ -42,17 +40,19 @@ class GPU_EXPORT GPUTestConfig {
     kOsMacBigSur = 1 << 21,
     kOsMacMonterey = 1 << 22,
     kOsMacVentura = 1 << 23,
-    kOsMac = kOsMacLeopard | kOsMacSnowLeopard | kOsMacLion |
+    kOsMacSonoma = 1 << 24,
+    kOsMac = kOsMacSequoia | kOsMacSnowLeopard | kOsMacLion |
              kOsMacMountainLion | kOsMacMavericks | kOsMacYosemite |
              kOsMacElCapitan | kOsMacSierra | kOsMacHighSierra | kOsMacMojave |
-             kOsMacCatalina | kOsMacBigSur | kOsMacMonterey | kOsMacVentura,
-    // Jump over a few bits for future OSX versions.
+             kOsMacCatalina | kOsMacBigSur | kOsMacMonterey | kOsMacVentura |
+             kOsMacSonoma,
     kOsLinux = 1 << 25,
     kOsChromeOS = 1 << 26,
     kOsAndroid = 1 << 27,
     kOsFuchsia = 1 << 28,
+    kOsIOS = 1 << 29,
     // If we run out of bits, please retire older OS versions, like WinXP,
-    // MacLeopard, etc., for which we no longer have bots.
+    // MacSnowLeopard, etc., for which we no longer have bots.
   };
 
   enum BuildType {
@@ -125,7 +125,7 @@ class GPU_EXPORT GPUTestConfig {
   int32_t command_decoder_;
 };
 
-class GPU_EXPORT GPUTestBotConfig : public GPUTestConfig {
+class GPU_CONFIG_EXPORT GPUTestBotConfig : public GPUTestConfig {
  public:
   GPUTestBotConfig() = default;
   ~GPUTestBotConfig() override;

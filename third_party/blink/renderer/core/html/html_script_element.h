@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/dom/create_element_flags.h"
 #include "third_party/blink/renderer/core/html/blocking_attribute.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/probe/async_task_context.h"
 #include "third_party/blink/renderer/core/script/script_element_base.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/platform/bindings/parkable_string.h"
@@ -37,29 +38,44 @@
 namespace blink {
 
 class ExceptionState;
-class ScriptState;
 
 class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
                                             public ScriptElementBase {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static bool supports(ScriptState*, const AtomicString&);
+  static bool supports(const AtomicString&);
 
   HTMLScriptElement(Document&, const CreateElementFlags);
 
   // Returns attributes that should be checked against Trusted Types
   const AttrNameToTrustedType& GetCheckedAttributeTypes() const override;
 
-  String text() { return TextFromChildren(); }
-  void setText(const String&);
   void setInnerTextForBinding(
-      const V8UnionStringTreatNullAsEmptyStringOrTrustedScript*
+      const V8UnionStringLegacyNullToEmptyStringOrTrustedScript*
           string_or_trusted_script,
       ExceptionState& exception_state) override;
   void setTextContentForBinding(const V8UnionStringOrTrustedScript* value,
                                 ExceptionState& exception_state) override;
   void setTextContent(const String&) override;
+  void setSrc(
+      const V8UnionTrustedScriptURLOrUSVString* string_or_trusted_script_url,
+      ExceptionState& exception_state);
+  V8UnionTrustedScriptURLOrUSVString* src();
+
+  void setText(V8UnionStringOrTrustedScript*, ExceptionState&);
+  V8UnionStringOrTrustedScript* text();
+  void setTextWithoutTrustedTypes(const String&);
+
+  void setScriptTextContentForBinding(const V8UnionStringOrTrustedScript*,
+                                      ExceptionState&);
+  V8UnionStringOrTrustedScript* scriptTextContentForBinding();
+  void setScriptInnerTextForBinding(
+      const V8UnionStringLegacyNullToEmptyStringOrTrustedScript*
+          string_or_trusted_script,
+      ExceptionState& exception_state);
+  V8UnionStringLegacyNullToEmptyStringOrTrustedScript*
+  scriptInnerTextForBinding();
 
   void setAsync(bool);
   bool async() const;
@@ -91,7 +107,6 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
 
   bool IsURLAttribute(const Attribute&) const override;
   bool HasLegalLinkAttribute(const QualifiedName&) const override;
-  const QualifiedName& SubResourceAttributeName() const override;
 
   // ScriptElementBase overrides:
   String SourceAttributeValue() const override;
@@ -103,6 +118,7 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
   String EventAttributeValue() const override;
   String CrossOriginAttributeValue() const override;
   String IntegrityAttributeValue() const override;
+  String SignatureAttributeValue() const override;
   String ReferrerPolicyAttributeValue() const override;
   String FetchPriorityAttributeValue() const override;
   String ChildTextContent() override;
@@ -118,21 +134,24 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
     return HasDuplicateAttribute();
   }
   bool AllowInlineScriptForCSP(const AtomicString& nonce,
-                               const WTF::OrdinalNumber&,
+                               const OrdinalNumber&,
                                const String& script_content) override;
   void DispatchLoadEvent() override;
   void DispatchErrorEvent() override;
 
   Type GetScriptElementType() override;
 
-  Element& CloneWithoutAttributesAndChildren(Document&) const override;
+  Element& CloneWithoutAttributesAndChildren(Document&, CustomElementRegistry*)
+      const override;
 
-  // https://w3c.github.io/webappsec-trusted-types/dist/spec/#script-scripttext
+  // https://w3c.github.io/trusted-types/dist/spec/#script-scripttext
   ParkableString script_text_internal_slot_;
   bool children_changed_by_api_;
 
   Member<BlockingAttribute> blocking_attribute_;
   Member<ScriptLoader> loader_;
+
+  probe::AsyncTaskContext async_task_context_;
 };
 
 }  // namespace blink

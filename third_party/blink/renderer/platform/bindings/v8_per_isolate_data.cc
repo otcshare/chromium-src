@@ -25,39 +25,48 @@
 
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/allocator/partition_allocator/oom.h"
+#include "base/debug/crash_logging.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "gin/public/v8_idle_task_runner.h"
+#include "partition_alloc/oom.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/platform/bindings/active_script_wrappable_base.h"
 #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/thread_debugger.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
+#include "third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 #include "third_party/blink/renderer/platform/bindings/v8_private_property.h"
 #include "third_party/blink/renderer/platform/bindings/v8_value_cache.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/thread_state_scopes.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
 
 namespace blink {
 
-// Function defined in third_party/blink/public/web/blink.h.
-v8::Isolate* MainThreadIsolate() {
-  return V8PerIsolateData::MainThreadIsolate();
-}
+BASE_FEATURE(kTaskAttributionInfrastructureDisabledForTesting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-static V8PerIsolateData* g_main_thread_per_isolate_data = nullptr;
+namespace {
+
+V8PerIsolateData::TaskAttributionTrackerFactoryPtr
+    task_attribution_tracker_factory = nullptr;
+
+}  // namespace
 
 static void BeforeCallEnteredCallback(v8::Isolate* isolate) {
   CHECK(!ScriptForbiddenScope::IsScriptForbidden());
@@ -72,12 +81,15 @@ static bool AllowAtomicWaits(
 
 V8PerIsolateData::V8PerIsolateData(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> user_visible_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> best_effort_task_runner,
     V8ContextSnapshotMode v8_context_snapshot_mode,
     v8::CreateHistogramCallback create_histogram_callback,
-    v8::AddHistogramSampleCallback add_histogram_sample_callback)
+    v8::AddHistogramSampleCallback add_histogram_sample_callback,
+    std::unique_ptr<v8::CppHeap> cpp_heap)
     : v8_context_snapshot_mode_(v8_context_snapshot_mode),
       isolate_holder_(
-          task_runner,
+          std::move(task_runner),
           gin::IsolateHolder::kSingleThread,
           AllowAtomicWaits(v8_context_snapshot_mode)
               ? gin::IsolateHolder::kAllowAtomicsWait
@@ -89,10 +101,12 @@ V8PerIsolateData::V8PerIsolateData(
               ? gin::IsolateHolder::IsolateCreationMode::kCreateSnapshot
               : gin::IsolateHolder::IsolateCreationMode::kNormal,
           create_histogram_callback,
-          add_histogram_sample_callback),
+          add_histogram_sample_callback,
+          std::move(user_visible_task_runner),
+          std::move(best_effort_task_runner),
+          std::move(cpp_heap)),
       string_cache_(std::make_unique<StringCache>(GetIsolate())),
       private_property_(std::make_unique<V8PrivateProperty>()),
-      constructor_mode_(ConstructorMode::kCreateNewObject),
       runtime_call_stats_(base::DefaultTickClock::GetInstance()) {
   if (v8_context_snapshot_mode == V8ContextSnapshotMode::kTakeSnapshot) {
     // Snapshot should only execute on the main thread. SnapshotCreator enters
@@ -103,27 +117,36 @@ V8PerIsolateData::V8PerIsolateData(
     GetIsolate()->Enter();
     GetIsolate()->AddBeforeCallEnteredCallback(&BeforeCallEnteredCallback);
   }
-  if (IsMainThread())
-    g_main_thread_per_isolate_data = this;
+  if (IsMainThread()) {
+    main_world_ =
+        DOMWrapperWorld::Create(GetIsolate(), DOMWrapperWorld::WorldType::kMain,
+                                /*is_default_world_of_isolate=*/true);
+    if (!base::FeatureList::IsEnabled(
+            kTaskAttributionInfrastructureDisabledForTesting)) {
+      CHECK(task_attribution_tracker_factory);
+      task_attribution_tracker_ =
+          task_attribution_tracker_factory(GetIsolate());
+    }
+  }
 }
 
 V8PerIsolateData::~V8PerIsolateData() = default;
 
-v8::Isolate* V8PerIsolateData::MainThreadIsolate() {
-  DCHECK(g_main_thread_per_isolate_data);
-  return g_main_thread_per_isolate_data->GetIsolate();
-}
-
 v8::Isolate* V8PerIsolateData::Initialize(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> user_visible_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> best_effort_task_runner,
     V8ContextSnapshotMode context_mode,
     v8::CreateHistogramCallback create_histogram_callback,
-    v8::AddHistogramSampleCallback add_histogram_sample_callback) {
+    v8::AddHistogramSampleCallback add_histogram_sample_callback,
+    std::unique_ptr<v8::CppHeap> cpp_heap) {
   TRACE_EVENT1("v8", "V8PerIsolateData::Initialize", "V8ContextSnapshotMode",
                context_mode);
-  V8PerIsolateData* data =
-      new V8PerIsolateData(task_runner, context_mode, create_histogram_callback,
-                           add_histogram_sample_callback);
+  V8PerIsolateData* data = new V8PerIsolateData(
+      std::move(task_runner), std::move(user_visible_task_runner),
+      std::move(best_effort_task_runner), context_mode,
+      create_histogram_callback, add_histogram_sample_callback,
+      std::move(cpp_heap));
   DCHECK(data);
 
   v8::Isolate* isolate = data->GetIsolate();
@@ -144,31 +167,15 @@ void V8PerIsolateData::WillBeDestroyed(v8::Isolate* isolate) {
 
   data->thread_debugger_.reset();
 
-  if (data->profiler_group_) {
-    data->profiler_group_->WillBeDestroyed();
-    data->profiler_group_ = nullptr;
+  for (auto& item : data->user_data_) {
+    if (item) {
+      item->WillBeDestroyed();
+    }
   }
 
   data->ClearScriptRegexpContext();
 
   ThreadState::Current()->DetachFromIsolate();
-
-  data->active_script_wrappable_manager_.Clear();
-  // Callbacks can be removed as they only cover single events (e.g. atomic
-  // pause) and they cannot get out of sync.
-  DCHECK_EQ(0u, data->gc_callback_depth_);
-  isolate->RemoveGCPrologueCallback(data->prologue_callback_);
-  isolate->RemoveGCEpilogueCallback(data->epilogue_callback_);
-}
-
-void V8PerIsolateData::SetGCCallbacks(
-    v8::Isolate* isolate,
-    v8::Isolate::GCCallback prologue_callback,
-    v8::Isolate::GCCallback epilogue_callback) {
-  prologue_callback_ = prologue_callback;
-  epilogue_callback_ = epilogue_callback;
-  isolate->AddGCPrologueCallback(prologue_callback_);
-  isolate->AddGCEpilogueCallback(epilogue_callback_);
 }
 
 // destroy() clear things that should be cleared after ThreadState::detach()
@@ -178,15 +185,14 @@ void V8PerIsolateData::Destroy(v8::Isolate* isolate) {
   V8PerIsolateData* data = From(isolate);
 
   // Clear everything before exiting the Isolate.
-  if (data->script_regexp_script_state_)
+  if (data->script_regexp_script_state_) {
     data->script_regexp_script_state_->DisposePerContextData();
+  }
   data->private_property_.reset();
   data->string_cache_->Dispose();
   data->string_cache_.reset();
   data->v8_template_map_for_main_world_.clear();
   data->v8_template_map_for_non_main_worlds_.clear();
-  if (IsMainThread())
-    g_main_thread_per_isolate_data = nullptr;
 
   // FIXME: Remove once all v8::Isolate::GetCurrent() calls are gone.
   isolate->Exit();
@@ -208,6 +214,22 @@ void V8PerIsolateData::AddV8Template(const DOMWrapperWorld& world,
                                      v8::Local<v8::Template> value) {
   auto& map = SelectV8TemplateMap(world);
   auto result = map.insert(key, v8::Eternal<v8::Template>(GetIsolate(), value));
+  DCHECK(result.is_new_entry);
+}
+
+v8::MaybeLocal<v8::DictionaryTemplate>
+V8PerIsolateData::FindV8DictionaryTemplate(const void* key) {
+  auto it = v8_dict_template_map_.find(key);
+  return it != v8_dict_template_map_.end()
+             ? it->value.Get(GetIsolate())
+             : v8::MaybeLocal<v8::DictionaryTemplate>();
+}
+
+void V8PerIsolateData::AddV8DictionaryTemplate(
+    const void* key,
+    v8::Local<v8::DictionaryTemplate> value) {
+  auto result = v8_dict_template_map_.insert(
+      key, v8::Eternal<v8::DictionaryTemplate>(GetIsolate(), value));
   DCHECK(result.is_new_entry);
 }
 
@@ -274,33 +296,33 @@ void V8PerIsolateData::ClearPersistentsForV8ContextSnapshot() {
 const base::span<const v8::Eternal<v8::Name>>
 V8PerIsolateData::FindOrCreateEternalNameCache(
     const void* lookup_key,
-    const base::span<const char* const>& names) {
+    base::span<const std::string_view> names) {
   auto it = eternal_name_cache_.find(lookup_key);
   const Vector<v8::Eternal<v8::Name>>* vector = nullptr;
-  if (UNLIKELY(it == eternal_name_cache_.end())) {
+  if (it == eternal_name_cache_.end()) [[unlikely]] {
     v8::Isolate* isolate = GetIsolate();
     Vector<v8::Eternal<v8::Name>> new_vector(
         base::checked_cast<wtf_size_t>(names.size()));
-    std::transform(names.begin(), names.end(), new_vector.begin(),
-                   [isolate](const char* name) {
-                     return v8::Eternal<v8::Name>(
-                         isolate, V8AtomicString(isolate, name));
-                   });
+    std::ranges::transform(
+        names, new_vector.begin(), [isolate](std::string_view name) {
+          return v8::Eternal<v8::Name>(
+              isolate,
+              V8AtomicString(isolate, StringView(base::as_byte_span(name))));
+        });
     vector = &eternal_name_cache_.Set(lookup_key, std::move(new_vector))
                   .stored_value->value;
   } else {
     vector = &it->value;
   }
   DCHECK_EQ(vector->size(), names.size());
-  return base::span<const v8::Eternal<v8::Name>>(vector->data(),
-                                                 vector->size());
+  return *vector;
 }
 
 v8::Local<v8::Context> V8PerIsolateData::EnsureScriptRegexpContext() {
   if (!script_regexp_script_state_) {
     LEAK_SANITIZER_DISABLED_SCOPE;
     v8::Local<v8::Context> context(v8::Context::New(GetIsolate()));
-    script_regexp_script_state_ = MakeGarbageCollected<ScriptState>(
+    script_regexp_script_state_ = ScriptState::Create(
         context,
         DOMWrapperWorld::Create(GetIsolate(),
                                 DOMWrapperWorld::WorldType::kRegExp),
@@ -323,23 +345,19 @@ void V8PerIsolateData::SetThreadDebugger(
   thread_debugger_ = std::move(thread_debugger);
 }
 
-void V8PerIsolateData::SetProfilerGroup(
-    V8PerIsolateData::GarbageCollectedData* profiler_group) {
-  profiler_group_ = profiler_group;
+void V8PerIsolateData::SetPasswordRegexp(ScriptRegexp* password_regexp) {
+  password_regexp_ = password_regexp;
 }
 
-V8PerIsolateData::GarbageCollectedData* V8PerIsolateData::ProfilerGroup() {
-  return profiler_group_;
+ScriptRegexp* V8PerIsolateData::GetPasswordRegexp() {
+  return password_regexp_;
 }
 
-void V8PerIsolateData::SetCanvasResourceTracker(
-    V8PerIsolateData::GarbageCollectedData* canvas_resource_tracker) {
-  canvas_resource_tracker_ = canvas_resource_tracker;
-}
-
-V8PerIsolateData::GarbageCollectedData*
-V8PerIsolateData::CanvasResourceTracker() {
-  return canvas_resource_tracker_;
+void V8PerIsolateData::SetTaskAttributionTrackerFactory(
+    TaskAttributionTrackerFactoryPtr factory) {
+  CHECK(!task_attribution_tracker_factory);
+  CHECK(IsMainThread());
+  task_attribution_tracker_factory = factory;
 }
 
 void* CreateHistogram(const char* name, int min, int max, size_t buckets) {
@@ -356,14 +374,16 @@ void* CreateHistogram(const char* name, int min, int max, size_t buckets) {
 
   const std::string histogram_name =
       Platform::Current()->GetNameForHistogram(name);
-  return base::Histogram::FactoryGet(
+  base::HistogramBase* histogram = base::Histogram::FactoryGet(
       histogram_name, min, max, static_cast<uint32_t>(buckets),
       base::Histogram::kUmaTargetedHistogramFlag);
+
+  return V8HistogramAccumulator::GetInstance()->RegisterHistogram(
+      histogram, histogram_name);
 }
 
 void AddHistogramSample(void* hist, int sample) {
-  auto* histogram = static_cast<base::HistogramBase*>(hist);
-  histogram->Add(sample);
+  V8HistogramAccumulator::GetInstance()->AddSample(hist, sample);
 }
 
 }  // namespace blink

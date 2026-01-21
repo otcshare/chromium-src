@@ -6,11 +6,21 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/trace_event/trace_event.h"
+#include "base/trace_event/trace_id_helper.h"
+#include "content/browser/preloading/prerender/prerender_commit_deferring_condition.h"
+#include "content/browser/preloading/prerender/prerender_no_vary_search_commit_deferring_condition.h"
+#include "content/browser/preloading/prerender/prerender_no_vary_search_hint_commit_deferring_condition.h"
 #include "content/browser/renderer_host/back_forward_cache_commit_deferring_condition.h"
+#include "content/browser/renderer_host/concurrent_navigations_commit_deferring_condition.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/navigator_delegate.h"
+#include "content/browser/renderer_host/network_restrictions_commit_deferring_condition.h"
 #include "content/browser/renderer_host/view_transition_commit_deferring_condition.h"
+#include "content/common/content_navigation_policy.h"
+#include "content/common/features.h"
 #include "content/public/browser/commit_deferring_condition.h"
+#include "content/public/common/content_features.h"
 
 namespace content {
 
@@ -32,7 +42,9 @@ std::unique_ptr<CommitDeferringConditionRunner>
 CommitDeferringConditionRunner::Create(
     NavigationRequest& navigation_request,
     CommitDeferringCondition::NavigationType navigation_type,
-    absl::optional<int> candidate_prerender_frame_tree_node_id) {
+    std::optional<FrameTreeNodeId> candidate_prerender_frame_tree_node_id) {
+  // Initial WebUI navigations shouldn't run CommitDeferringConditions.
+  CHECK(!navigation_request.IsInitialWebUISyncNavigation());
   auto runner = base::WrapUnique(new CommitDeferringConditionRunner(
       navigation_request, navigation_type,
       candidate_prerender_frame_tree_node_id));
@@ -42,13 +54,20 @@ CommitDeferringConditionRunner::Create(
 CommitDeferringConditionRunner::CommitDeferringConditionRunner(
     Delegate& delegate,
     CommitDeferringCondition::NavigationType navigation_type,
-    absl::optional<int> candidate_prerender_frame_tree_node_id)
+    std::optional<FrameTreeNodeId> candidate_prerender_frame_tree_node_id)
     : delegate_(delegate),
       navigation_type_(navigation_type),
       candidate_prerender_frame_tree_node_id_(
           candidate_prerender_frame_tree_node_id) {}
 
-CommitDeferringConditionRunner::~CommitDeferringConditionRunner() = default;
+CommitDeferringConditionRunner::~CommitDeferringConditionRunner() {
+  if (is_deferred_) {
+    // End `condition->TraceEventName()` trace event.
+    TRACE_EVENT_END("navigation", perfetto::Track::FromPointer(this));
+    // End "CommitDeferringConditionRunning" trace event.
+    TRACE_EVENT_END("navigation", perfetto::Track::FromPointer(this));
+  }
+}
 
 void CommitDeferringConditionRunner::ProcessChecks() {
   ProcessConditions();
@@ -61,8 +80,9 @@ void CommitDeferringConditionRunner::AddConditionForTesting(
 
 CommitDeferringCondition*
 CommitDeferringConditionRunner::GetDeferringConditionForTesting() const {
-  if (!is_deferred_)
+  if (!is_deferred_) {
     return nullptr;
+  }
 
   DCHECK(!conditions_.empty());
   return (*conditions_.begin()).get();
@@ -71,7 +91,10 @@ CommitDeferringConditionRunner::GetDeferringConditionForTesting() const {
 void CommitDeferringConditionRunner::ResumeProcessing() {
   DCHECK(is_deferred_);
   is_deferred_ = false;
-
+  // End `condition->TraceEventName()` trace event.
+  TRACE_EVENT_END("navigation", perfetto::Track::FromPointer(this));
+  // End "CommitDeferringConditionRunning" trace event.
+  TRACE_EVENT_END("navigation", perfetto::Track::FromPointer(this));
   // This is resuming from a check that resolved asynchronously. The current
   // check is always at the front of the vector so pop it and then proceed with
   // the next one.
@@ -82,6 +105,10 @@ void CommitDeferringConditionRunner::ResumeProcessing() {
 
 void CommitDeferringConditionRunner::RegisterDeferringConditions(
     NavigationRequest& navigation_request) {
+  // Initial WebUI navigations shouldn't run CommitDeferringConditions.
+  CHECK(!navigation_request.IsInitialWebUINavigation() ||
+        !base::FeatureList::IsEnabled(
+            features::kInitialWebUISyncNavStartToCommit));
   switch (navigation_type_) {
     case CommitDeferringCondition::NavigationType::kPrerenderedPageActivation:
       // For prerendered page activation, conditions should run before start
@@ -90,9 +117,13 @@ void CommitDeferringConditionRunner::RegisterDeferringConditions(
                 NavigationRequest::WILL_START_NAVIGATION);
       break;
     case CommitDeferringCondition::NavigationType::kOther:
-      // For other navigations, conditions should run before navigation commit.
-      DCHECK_EQ(navigation_request.state(),
-                NavigationRequest::WILL_PROCESS_RESPONSE);
+      // For other navigations, conditions should run before navigation commit,
+      // which can be either a normal commit or an error page commit.
+      DCHECK(navigation_request.state() ==
+                 NavigationRequest::WILL_PROCESS_RESPONSE ||
+             navigation_request.state() ==
+                 NavigationRequest::WILL_FAIL_REQUEST ||
+             navigation_request.state() == NavigationRequest::CANCELING);
       break;
   }
 
@@ -106,12 +137,37 @@ void CommitDeferringConditionRunner::RegisterDeferringConditions(
     AddCondition(std::move(condition));
   }
 
+  // PrerenderNoVarySearchHintCommitDeferringCondition should run before
+  // PrerenderCommitDeferringCondition as it needs to defer until headers
+  // are received. Headers are a required prerequisite for the correctness of
+  // PrerenderCommitDeferringCondition and
+  // PrerenderNoVarySearchCommitDeferringCondition in the presence of
+  // No-Vary-Search hint/header.
+  AddCondition(PrerenderNoVarySearchHintCommitDeferringCondition::MaybeCreate(
+      navigation_request, navigation_type_,
+      candidate_prerender_frame_tree_node_id_));
+
   AddCondition(PrerenderCommitDeferringCondition::MaybeCreate(
+      navigation_request, navigation_type_,
+      candidate_prerender_frame_tree_node_id_));
+
+  // PrerenderNoVarySearchCommitDeferringCondition should run after we've
+  // made the decision to activate the prerender as it changes the
+  // prerender renderer's URL.
+  AddCondition(PrerenderNoVarySearchCommitDeferringCondition::MaybeCreate(
       navigation_request, navigation_type_,
       candidate_prerender_frame_tree_node_id_));
 
   AddCondition(
       ViewTransitionCommitDeferringCondition::MaybeCreate(navigation_request));
+
+  if (ShouldAvoidRedundantNavigationCancellations()) {
+    AddCondition(ConcurrentNavigationsCommitDeferringCondition::MaybeCreate(
+        navigation_request, navigation_type_));
+  }
+
+  AddCondition(NetworkRestrictionsCommitDeferringCondition::MaybeCreate(
+      navigation_request));
 
   // The BFCache deferring condition should run after all other conditions
   // since it'll disable eviction on a cached renderer.
@@ -152,10 +208,25 @@ void CommitDeferringConditionRunner::ProcessConditions() {
         base::BindOnce(&CommitDeferringConditionRunner::ResumeProcessing,
                        weak_factory_.GetWeakPtr());
     CommitDeferringCondition* condition = (*conditions_.begin()).get();
-    if (condition->WillCommitNavigation(std::move(resume_closure)) ==
-        CommitDeferringCondition::Result::kDefer) {
-      is_deferred_ = true;
-      return;
+    is_deferred_ = false;
+    switch (condition->WillCommitNavigation(std::move(resume_closure))) {
+      case CommitDeferringCondition::Result::kDefer:
+        is_deferred_ = true;
+        TRACE_EVENT_BEGIN("navigation", "CommitDeferringConditionRunning",
+                          perfetto::Track::FromPointer(this));
+        TRACE_EVENT_BEGIN("navigation",
+                          perfetto::DynamicString(condition->TraceEventName()),
+                          perfetto::Track::FromPointer(this));
+        return;
+      // TODO(crbug.com/40270812): Also add instant tracing for the condition
+      // that is being resolved synchronously.
+      case CommitDeferringCondition::Result::kCancelled:
+        // DO NOT ADD CODE after this. The previous call to
+        // `WillCommitNavigation()` may have caused the destruction of the
+        // `NavigationRequest` that owns this `CommitDeferringConditionRunner`.
+        return;
+      case CommitDeferringCondition::Result::kProceed:
+        break;
     }
 
     // Otherwise, the condition is resolved synchronously so remove it and move

@@ -5,6 +5,7 @@
 #include "net/dns/mapped_host_resolver.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/test/task_environment.h"
@@ -19,7 +20,6 @@
 #include "net/test/gtest_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
 
@@ -56,12 +56,11 @@ TEST(MappedHostResolverTest, Inclusion) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(HostPortPair("www.google.com", 80),
                               NetworkAnonymizationKey(), NetLogWithSource(),
-                              absl::nullopt);
+                              std::nullopt);
   int rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsError(ERR_NAME_NOT_RESOLVED));
-  EXPECT_FALSE(request->GetAddressResults());
 
   // Remap *.google.com to baz.com.
   EXPECT_TRUE(resolver->AddRuleFromString("map *.google.com baz.com"));
@@ -70,24 +69,24 @@ TEST(MappedHostResolverTest, Inclusion) {
   // Try resolving "www.google.com:80". Should be remapped to "baz.com:80".
   request = resolver->CreateRequest(HostPortPair("www.google.com", 80),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.5:80", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.5:80", FirstAddress(request->GetAddressResults()));
   request.reset();
 
   // Try resolving "foo.com:77". This will NOT be remapped, so result
   // is "foo.com:77".
   request = resolver->CreateRequest(HostPortPair("foo.com", 77),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.8:77", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.8:77", FirstAddress(request->GetAddressResults()));
   request.reset();
 
   // Remap "*.org" to "proxy:99".
@@ -96,12 +95,12 @@ TEST(MappedHostResolverTest, Inclusion) {
   // Try resolving "chromium.org:61". Should be remapped to "proxy:99".
   request = resolver->CreateRequest(HostPortPair("chromium.org", 61),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.11:99", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.11:99", FirstAddress(request->GetAddressResults()));
 }
 
 TEST(MappedHostResolverTest, MapsHostWithScheme) {
@@ -119,14 +118,14 @@ TEST(MappedHostResolverTest, MapsHostWithScheme) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kHttpScheme, "to.map.test", 155),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
 
   EXPECT_THAT(callback.GetResult(rv), IsOk());
   EXPECT_THAT(
-      request->GetAddressResults()->endpoints(),
+      request->GetAddressResults(),
       testing::ElementsAre(IPEndPoint(IPAddress(192, 168, 1, 22), 155)));
 }
 
@@ -148,13 +147,13 @@ TEST(MappedHostResolverTest, MapsHostWithSchemeToIpLiteral) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kHttpScheme, "host.test", 156),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
 
   EXPECT_THAT(callback.GetResult(rv), IsOk());
-  EXPECT_THAT(request->GetAddressResults()->endpoints(),
+  EXPECT_THAT(request->GetAddressResults(),
               testing::ElementsAre(IPEndPoint(expected_address, 156)));
 }
 
@@ -174,14 +173,14 @@ TEST(MappedHostResolverTest, MapsHostWithSchemeToNonCanon) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kHttpScheme, "host.test", 157),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
 
   EXPECT_THAT(callback.GetResult(rv), IsOk());
   EXPECT_THAT(
-      request->GetAddressResults()->endpoints(),
+      request->GetAddressResults(),
       testing::ElementsAre(IPEndPoint(IPAddress(192, 168, 1, 23), 157)));
 }
 
@@ -200,14 +199,14 @@ TEST(MappedHostResolverTest, MapsHostWithSchemeToNameWithPort) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kHttpScheme, "host.test", 158),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
 
   EXPECT_THAT(callback.GetResult(rv), IsOk());
   EXPECT_THAT(
-      request->GetAddressResults()->endpoints(),
+      request->GetAddressResults(),
       testing::ElementsAre(IPEndPoint(IPAddress(192, 168, 1, 24), 258)));
 }
 
@@ -225,14 +224,14 @@ TEST(MappedHostResolverTest, HandlesUnmappedHostWithScheme) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kHttpsScheme, "unmapped.test", 155),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
 
   EXPECT_THAT(callback.GetResult(rv), IsOk());
   EXPECT_THAT(
-      request->GetAddressResults()->endpoints(),
+      request->GetAddressResults(),
       testing::ElementsAre(IPEndPoint(IPAddress(192, 168, 1, 23), 155)));
 }
 
@@ -261,23 +260,23 @@ TEST(MappedHostResolverTest, Exclusion) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(HostPortPair("www.google.com", 80),
                               NetworkAnonymizationKey(), NetLogWithSource(),
-                              absl::nullopt);
+                              std::nullopt);
   int rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.3:80", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.3:80", FirstAddress(request->GetAddressResults()));
   request.reset();
 
   // Try resolving "chrome.com:80". Should be remapped to "baz:80".
   request = resolver->CreateRequest(HostPortPair("chrome.com", 80),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.5:80", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.5:80", FirstAddress(request->GetAddressResults()));
 }
 
 TEST(MappedHostResolverTest, SetRulesFromString) {
@@ -301,23 +300,23 @@ TEST(MappedHostResolverTest, SetRulesFromString) {
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(HostPortPair("www.google.com", 80),
                               NetworkAnonymizationKey(), NetLogWithSource(),
-                              absl::nullopt);
+                              std::nullopt);
   int rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.7:80", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.7:80", FirstAddress(request->GetAddressResults()));
   request.reset();
 
   // Try resolving "chrome.net:80". Should be remapped to "bar:60".
   request = resolver->CreateRequest(HostPortPair("chrome.net", 80),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.9:60", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.9:60", FirstAddress(request->GetAddressResults()));
 }
 
 // Parsing bad rules should silently discard the rule (and never crash).
@@ -349,14 +348,14 @@ TEST(MappedHostResolverTest, MapToError) {
       std::make_unique<MappedHostResolver>(std::move(resolver_impl));
 
   // Remap *.google.com to resolving failures.
-  EXPECT_TRUE(resolver->AddRuleFromString("MAP *.google.com ~NOTFOUND"));
+  EXPECT_TRUE(resolver->AddRuleFromString("MAP *.google.com ^NOTFOUND"));
 
   // Try resolving www.google.com --> Should give an error.
   TestCompletionCallback callback1;
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(HostPortPair("www.google.com", 80),
                               NetworkAnonymizationKey(), NetLogWithSource(),
-                              absl::nullopt);
+                              std::nullopt);
   int rv = request->Start(callback1.callback());
   EXPECT_THAT(rv, IsError(ERR_NAME_NOT_RESOLVED));
   request.reset();
@@ -365,12 +364,12 @@ TEST(MappedHostResolverTest, MapToError) {
   TestCompletionCallback callback2;
   request = resolver->CreateRequest(HostPortPair("www.foo.com", 80),
                                     NetworkAnonymizationKey(),
-                                    NetLogWithSource(), absl::nullopt);
+                                    NetLogWithSource(), std::nullopt);
   rv = request->Start(callback2.callback());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = callback2.WaitForResult();
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ("192.168.1.5:80", FirstAddress(*request->GetAddressResults()));
+  EXPECT_EQ("192.168.1.5:80", FirstAddress(request->GetAddressResults()));
 }
 
 TEST(MappedHostResolverTest, MapHostWithSchemeToError) {
@@ -383,12 +382,12 @@ TEST(MappedHostResolverTest, MapHostWithSchemeToError) {
   // Create a remapped resolver that uses `resolver_impl`.
   auto resolver =
       std::make_unique<MappedHostResolver>(std::move(resolver_impl));
-  ASSERT_TRUE(resolver->AddRuleFromString("MAP host.test ~NOTFOUND"));
+  ASSERT_TRUE(resolver->AddRuleFromString("MAP host.test ^NOTFOUND"));
 
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
       resolver->CreateRequest(
           url::SchemeHostPort(url::kWssScheme, "host.test", 155),
-          NetworkAnonymizationKey(), NetLogWithSource(), absl::nullopt);
+          NetworkAnonymizationKey(), NetLogWithSource(), std::nullopt);
 
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());

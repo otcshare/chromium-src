@@ -9,7 +9,7 @@
 
 #include <set>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -17,7 +17,9 @@
 #include "components/services/storage/public/mojom/cache_storage_control.mojom-forward.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom-forward.h"
 #include "content/common/content_export.h"
+#include "media/media_buildflags.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/cert_verifier_service_updater.mojom-forward.h"
 #include "services/network/public/mojom/cookie_manager.mojom-forward.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom-forward.h"
 #include "services/network/public/mojom/trust_tokens.mojom-forward.h"
@@ -46,11 +48,11 @@ namespace mojom {
 class CookieManager;
 class NetworkContext;
 class URLLoaderNetworkServiceObserver;
+class DeviceBoundSessionManager;
 }  // namespace mojom
 }  // namespace network
 
 namespace storage {
-class DatabaseTracker;
 class QuotaManager;
 struct QuotaSettings;
 class SharedStorageManager;
@@ -63,10 +65,12 @@ class Origin;
 
 namespace content {
 
+class AttributionDataModel;
 class BackgroundSyncContext;
 class BrowserContext;
 class BrowsingDataFilterBuilder;
 class BrowsingTopicsSiteDataManager;
+class CdmStorageDataModel;
 class ContentIndexContext;
 class DedicatedWorkerService;
 class DevToolsBackgroundServicesContext;
@@ -76,10 +80,11 @@ class GeneratedCodeCacheContext;
 class HostZoomLevelContext;
 class HostZoomMap;
 class InterestGroupManager;
-class NativeIOContext;
 class PlatformNotificationContext;
+class PrivateAggregationDataModel;
 class ServiceWorkerContext;
 class SharedWorkerService;
+class StoragePartitionConfig;
 class ZoomLevelDelegate;
 class NavigationRequest;
 
@@ -91,12 +96,18 @@ class NavigationRequest;
 // the cookies, localStorage, etc., that normal web renderers have access to.
 class CONTENT_EXPORT StoragePartition {
  public:
-  virtual base::FilePath GetPath() = 0;
+  // Returns the StoragePartitionConfig that represents this StoragePartition.
+  virtual const StoragePartitionConfig& GetConfig() const = 0;
+
+  virtual const base::FilePath& GetPath() const = 0;
 
   // Returns a raw mojom::NetworkContext pointer. When network service crashes
   // or restarts, the raw pointer will not be valid or safe to use. Therefore,
   // caller should not hold onto this pointer beyond the same message loop task.
   virtual network::mojom::NetworkContext* GetNetworkContext() = 0;
+
+  virtual cert_verifier::mojom::CertVerifierServiceUpdater*
+  GetCertVerifierServiceUpdater() = 0;
 
   // Returns the SharedStorageManager for the StoragePartition, or nullptr if it
   // doesn't exist because the feature is disabled.
@@ -113,7 +124,7 @@ class CONTENT_EXPORT StoragePartition {
   // network process restarts.
   //
   // SECURITY NOTE: This browser-process factory relaxes many security features
-  // (e.g. may disable CORB, won't set |request_initiator_origin_lock| or
+  // (e.g. may disable ORB, won't set |request_initiator_origin_lock| or
   // IsolationInfo, etc.).  Network requests that may be initiated or influenced
   // by a web origin should typically use a different factory (e.g.  the one
   // from RenderFrameHost::CreateNetworkServiceDefaultFactory).
@@ -139,7 +150,6 @@ class CONTENT_EXPORT StoragePartition {
   virtual storage::QuotaManager* GetQuotaManager() = 0;
   virtual BackgroundSyncContext* GetBackgroundSyncContext() = 0;
   virtual storage::FileSystemContext* GetFileSystemContext() = 0;
-  virtual storage::DatabaseTracker* GetDatabaseTracker() = 0;
   virtual DOMStorageContext* GetDOMStorageContext() = 0;
   virtual storage::mojom::LocalStorageControl* GetLocalStorageControl() = 0;
   virtual storage::mojom::IndexedDBControl& GetIndexedDBControl() = 0;
@@ -152,13 +162,24 @@ class CONTENT_EXPORT StoragePartition {
   virtual DevToolsBackgroundServicesContext*
   GetDevToolsBackgroundServicesContext() = 0;
   virtual ContentIndexContext* GetContentIndexContext() = 0;
-  virtual NativeIOContext* GetNativeIOContext() = 0;
   virtual HostZoomMap* GetHostZoomMap() = 0;
   virtual HostZoomLevelContext* GetHostZoomLevelContext() = 0;
   virtual ZoomLevelDelegate* GetZoomLevelDelegate() = 0;
   virtual PlatformNotificationContext* GetPlatformNotificationContext() = 0;
   virtual InterestGroupManager* GetInterestGroupManager() = 0;
   virtual BrowsingTopicsSiteDataManager* GetBrowsingTopicsSiteDataManager() = 0;
+  virtual AttributionDataModel* GetAttributionDataModel() = 0;
+  virtual PrivateAggregationDataModel* GetPrivateAggregationDataModel() = 0;
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  virtual CdmStorageDataModel* GetCdmStorageDataModel() = 0;
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  virtual network::mojom::DeviceBoundSessionManager*
+  GetDeviceBoundSessionManager() = 0;
+
+  // This clears stale session cookies/storage from the current profile. This
+  // must only be called after session restore has completed to ensure active
+  // session cookies/storage are not cleared.
+  virtual void DeleteStaleSessionData() = 0;
 
   virtual leveldb_proto::ProtoDatabaseProvider* GetProtoDatabaseProvider() = 0;
   // Must be set before the first call to GetProtoDatabaseProvider(), or a new
@@ -174,7 +195,7 @@ class CONTENT_EXPORT StoragePartition {
     REMOVE_DATA_MASK_INDEXEDDB = 1 << 3,
     REMOVE_DATA_MASK_LOCAL_STORAGE = 1 << 4,
     REMOVE_DATA_MASK_SHADER_CACHE = 1 << 5,
-    REMOVE_DATA_MASK_WEBSQL = 1 << 6,
+    REMOVE_DATA_MASK_WEBSQL_DEPRECATED = 1 << 6,
     REMOVE_DATA_MASK_SERVICE_WORKERS = 1 << 7,
     REMOVE_DATA_MASK_CACHE_STORAGE = 1 << 8,
     REMOVE_DATA_MASK_MEDIA_LICENSES = 1 << 9,
@@ -197,16 +218,24 @@ class CONTENT_EXPORT StoragePartition {
     REMOVE_DATA_MASK_ATTRIBUTION_REPORTING_INTERNAL = 1 << 16,
     REMOVE_DATA_MASK_PRIVATE_AGGREGATION_INTERNAL = 1 << 17,
     REMOVE_DATA_MASK_INTEREST_GROUPS_INTERNAL = 1 << 18,
+    // Device bound sessions. Public explainer:
+    // https://github.com/WICG/dbsc/blob/main/README.md
+    REMOVE_DATA_MASK_DEVICE_BOUND_SESSIONS = 1 << 19,
+
+    // Things in interest groups that should only be removed as part of
+    // user-initiated clearing.
+    REMOVE_DATA_MASK_INTEREST_GROUPS_USER_CLEAR = 1 << 20,
+
+    // Keepalive loads might be kept around in memory for a long time when
+    // waiting for a chance to retry. They should be removed as part of
+    // user-initiated clearing.
+    REMOVE_KEEPALIVE_LOADS_ATTEMPTING_RETRY = 1 << 21,
 
     REMOVE_DATA_MASK_ALL = 0xFFFFFFFF,
 
-    // Corresponds to storage::kStorageTypeTemporary.
+    // Corresponds to storage::kStorageTypeTemporary, which is equivalent to
+    // all quota managed storage after all other types have been deprecated.
     QUOTA_MANAGED_STORAGE_MASK_TEMPORARY = 1 << 0,
-    // Corresponds to storage::kStorageTypePersistent.
-    // Deprecated since crbug.com/1233525.
-    // QUOTA_MANAGED_STORAGE_MASK_PERSISTENT = 1 << 1,
-    // Corresponds to storage::kStorageTypeSyncable.
-    QUOTA_MANAGED_STORAGE_MASK_SYNCABLE = 1 << 2,
     QUOTA_MANAGED_STORAGE_MASK_ALL = 0xFFFFFFFF,
   };
 
@@ -334,11 +363,12 @@ class CONTENT_EXPORT StoragePartition {
   // use only.
   virtual void FlushNetworkInterfaceForTesting() = 0;
 
+  // Call |FlushForTesting()| on Cert Verifier Service related interfaces. For
+  // test use only.
+  virtual void FlushCertVerifierInterfaceForTesting() = 0;
+
   // Wait until all deletions tasks are finished. For test use only.
   virtual void WaitForDeletionTasksForTesting() = 0;
-
-  // Wait until code cache's shutdown is complete. For test use only.
-  virtual void WaitForCodeCacheShutdownForTesting() = 0;
 
   virtual void SetNetworkContextForTesting(
       mojo::PendingRemote<network::mojom::NetworkContext>
@@ -349,15 +379,13 @@ class CONTENT_EXPORT StoragePartition {
   virtual leveldb_proto::ProtoDatabaseProvider*
   GetProtoDatabaseProviderForTesting() = 0;
 
-  // Resets all state associated with the Attribution Reporting API for use in
-  // hermetic tests.
-  virtual void ResetAttributionManagerForTesting(
-      base::OnceCallback<void(bool success)> callback) = 0;
-
   // The value pointed to by |settings| should remain valid until the
   // the function is called again with a new value or a nullptr.
   static void SetDefaultQuotaSettingsForTesting(
       const storage::QuotaSettings* settings);
+
+  virtual void OverrideDeleteStaleSessionOnlyCookiesDelayForTesting(
+      const base::TimeDelta& delay) = 0;
 
  protected:
   virtual ~StoragePartition() {}

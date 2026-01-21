@@ -5,17 +5,15 @@
 #ifndef UI_GFX_IPC_GFX_PARAM_TRAITS_H_
 #define UI_GFX_IPC_GFX_PARAM_TRAITS_H_
 
-#include <string>
-
 #include "build/build_config.h"
-#include "ipc/ipc_message_utils.h"
 #include "ipc/param_traits_macros.h"
+#include "ipc/param_traits_utils.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/ipc/gfx_ipc_export.h"
 #include "ui/gfx/ipc/gfx_param_traits_macros.h"
 #include "ui/gfx/selection_bound.h"
 
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_APPLE)
 #include "ui/gfx/mac/io_surface.h"
 #endif
 
@@ -32,10 +30,9 @@ struct GFX_IPC_EXPORT ParamTraits<gfx::Range> {
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
                    param_type* r);
-  static void Log(const param_type& p, std::string* l);
 };
 
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_APPLE)
 template <>
 struct GFX_IPC_EXPORT ParamTraits<gfx::ScopedRefCountedIOSurfaceMachPort> {
   typedef gfx::ScopedRefCountedIOSurfaceMachPort param_type;
@@ -47,7 +44,6 @@ struct GFX_IPC_EXPORT ParamTraits<gfx::ScopedRefCountedIOSurfaceMachPort> {
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
                    param_type* r);
-  static void Log(const param_type& p, std::string* l);
 };
 
 template <>
@@ -57,9 +53,8 @@ struct GFX_IPC_EXPORT ParamTraits<gfx::ScopedIOSurface> {
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
                    param_type* r);
-  static void Log(const param_type& p, std::string* l);
 };
-#endif  // BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_APPLE)
 
 template <>
 struct GFX_IPC_EXPORT ParamTraits<gfx::SelectionBound> {
@@ -68,7 +63,6 @@ struct GFX_IPC_EXPORT ParamTraits<gfx::SelectionBound> {
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
                    param_type* r);
-  static void Log(const param_type& p, std::string* l);
 };
 
 }  // namespace IPC

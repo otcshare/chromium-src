@@ -8,19 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
 #include "base/values.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/log/net_log_capture_mode.h"
-#include "services/network/public/mojom/net_log.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
 namespace base {

@@ -4,11 +4,22 @@
 
 #include "components/power_bookmarks/storage/empty_power_bookmark_database.h"
 
-#include "components/power_bookmarks/core/powers/search_params.h"
+#include "components/power_bookmarks/common/search_params.h"
 #include "components/sync/protocol/power_bookmark_specifics.pb.h"
 #include "url/gurl.h"
 
 namespace power_bookmarks {
+
+namespace {
+class EmptyDatabaseTransaction : public Transaction {
+ public:
+  bool Commit() override;
+};
+
+bool EmptyDatabaseTransaction::Commit() {
+  return true;
+}
+}  // namespace
 
 EmptyPowerBookmarkDatabase::EmptyPowerBookmarkDatabase() = default;
 
@@ -40,22 +51,34 @@ EmptyPowerBookmarkDatabase::GetPowersForSearchParams(
   return std::vector<std::unique_ptr<Power>>();
 }
 
+std::vector<std::unique_ptr<PowerOverview>>
+EmptyPowerBookmarkDatabase::GetPowerOverviewsForSearchParams(
+    const SearchParams& search_params) {
+  return std::vector<std::unique_ptr<PowerOverview>>();
+}
+
 bool EmptyPowerBookmarkDatabase::CreatePower(std::unique_ptr<Power> power) {
   return false;
 }
 
-bool EmptyPowerBookmarkDatabase::UpdatePower(std::unique_ptr<Power> power) {
-  return false;
+std::unique_ptr<Power> EmptyPowerBookmarkDatabase::UpdatePower(
+    std::unique_ptr<Power> power) {
+  return nullptr;
 }
 
-bool EmptyPowerBookmarkDatabase::DeletePower(const base::GUID& guid) {
+bool EmptyPowerBookmarkDatabase::DeletePower(const base::Uuid& guid) {
   return false;
 }
 
 bool EmptyPowerBookmarkDatabase::DeletePowersForURL(
     const GURL& url,
-    const sync_pb::PowerBookmarkSpecifics::PowerType& power_type) {
+    const sync_pb::PowerBookmarkSpecifics::PowerType& power_type,
+    std::vector<std::string>* deleted_guids) {
   return false;
+}
+
+std::unique_ptr<Transaction> EmptyPowerBookmarkDatabase::BeginTransaction() {
+  return std::make_unique<EmptyDatabaseTransaction>();
 }
 
 }  // namespace power_bookmarks

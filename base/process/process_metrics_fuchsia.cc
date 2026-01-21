@@ -9,6 +9,8 @@
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/notimplemented.h"
+#include "base/trace_event/trace_event.h"
 
 namespace base {
 
@@ -23,7 +25,7 @@ size_t GetHandleLimit() {
 }
 
 size_t GetSystemCommitCharge() {
-  // TODO(https://crbug.com/926581): Fuchsia does not support this.
+  // TODO(crbug.com/42050627): Fuchsia does not support this.
   return 0;
 }
 
@@ -35,19 +37,49 @@ std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
   return base::WrapUnique(new ProcessMetrics(process));
 }
 
-TimeDelta ProcessMetrics::GetCumulativeCPUUsage() {
+base::expected<TimeDelta, ProcessCPUUsageError>
+ProcessMetrics::GetCumulativeCPUUsage() {
+  TRACE_EVENT("base", "GetCumulativeCPUUsage");
   zx_info_task_runtime_t stats;
 
   zx_status_t status = zx::unowned_process(process_)->get_info(
       ZX_INFO_TASK_RUNTIME, &stats, sizeof(stats), nullptr, nullptr);
-  ZX_CHECK(status == ZX_OK, status);
+  if (status != ZX_OK) {
+    return base::unexpected(ProcessCPUUsageError::kSystemError);
+  }
 
-  return TimeDelta::FromZxDuration(stats.cpu_time);
+  return base::ok(TimeDelta::FromZxDuration(stats.cpu_time));
 }
 
-bool GetSystemMemoryInfo(SystemMemoryInfoKB* meminfo) {
-  // TODO(https://crbug.com/926581).
+base::expected<ProcessMemoryInfo, ProcessUsageError>
+ProcessMetrics::GetMemoryInfo() const {
+  zx_info_task_stats_t info;
+  zx_status_t status = zx::unowned_process(process_)->get_info(
+      ZX_INFO_TASK_STATS, &info, sizeof(info), nullptr, nullptr);
+  if (status != ZX_OK) {
+    return base::unexpected(ProcessUsageError::kSystemError);
+  }
+
+  ProcessMemoryInfo memory_info;
+  memory_info.resident_set_bytes =
+      info.mem_private_bytes + info.mem_shared_bytes;
+  memory_info.rss_anon_bytes = info.mem_private_bytes;
+  // Fuchsia has no swap.
+  memory_info.vm_swap_bytes = 0;
+  return memory_info;
+}
+
+bool GetSystemMemoryInfo(SystemMemoryInfo* meminfo) {
+  // TODO(https://crbug.com/42050627).
   return false;
+}
+
+ByteSize SystemMemoryInfo::GetAvailablePhysicalMemory() const {
+  NOTIMPLEMENTED();
+  // GetSystemMemoryInfo() is not implemented on Fuchsia, so this struct will
+  // contain default (zero) values. Return a zero ByteSize to satisfy the
+  // linker.
+  return ByteSize(0);
 }
 
 }  // namespace base

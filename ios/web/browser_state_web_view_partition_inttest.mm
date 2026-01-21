@@ -7,29 +7,26 @@
 #import <memory>
 #import <string>
 
-#import "base/mac/foundation_util.h"
+#import "base/apple/foundation_util.h"
 #import "base/test/ios/wait_util.h"
 #import "ios/web/common/web_view_creation_util.h"
 #import "ios/web/public/browser_state.h"
 #import "ios/web/public/test/js_test_util.h"
 #import "ios/web/test/web_int_test.h"
-#import "net/base/mac/url_conversions.h"
+#import "ios/web/web_state/crw_web_view.h"
+#import "net/base/apple/url_conversions.h"
 #import "net/test/embedded_test_server/default_handlers.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
 
 // A WKNavigationDelegate that is used to check if a WKWebView has finished
 // a navigation. Used for testing purposes.
-@interface FakeNavigationDelegate : NSObject<WKNavigationDelegate>
+@interface FakeNavigationDelegate : NSObject <WKNavigationDelegate>
 // YES if a navigation has finished.
-@property (nonatomic, assign) BOOL didFinishNavigation;
+@property(nonatomic, assign) BOOL didFinishNavigation;
 @end
 
 @implementation FakeNavigationDelegate
@@ -72,13 +69,13 @@ class BrowserStateWebViewPartitionTest : public WebIntTest {
         stringWithFormat:@"document.cookie='%@=%@;"
                          @"Expires=Tue, 05-May-9999 02:18:23 GMT; Path=/'",
                          key, value];
-    web::test::ExecuteJavaScript(web_view, set_cookie);
+    web::test::ExecuteJavaScriptInWebView(web_view, set_cookie);
   }
 
   // Returns a csv list of all cookies from `web_view`.
   NSString* GetCookies(WKWebView* web_view) {
     id result = web::test::ExecuteJavaScript(web_view, @"document.cookie");
-    return base::mac::ObjCCastStrict<NSString>(result);
+    return base::apple::ObjCCastStrict<NSString>(result);
   }
 
   // Sets a localstorage key, value pair on `web_view`.
@@ -88,8 +85,8 @@ class BrowserStateWebViewPartitionTest : public WebIntTest {
     NSString* set_local_storage_item = [NSString
         stringWithFormat:@"localStorage.setItem('%@', '%@')", key, value];
     NSError* unused_error = nil;
-    web::test::ExecuteJavaScript(web_view, set_local_storage_item,
-                                 &unused_error);
+    web::test::ExecuteJavaScriptInWebView(web_view, set_local_storage_item,
+                                          &unused_error);
   }
 
   // Returns the localstorage value associated with `key` from `web_view`.

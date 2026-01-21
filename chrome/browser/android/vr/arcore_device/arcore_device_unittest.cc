@@ -6,25 +6,31 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/android/scoped_java_ref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/android/vr/arcore_device/fake_arcore.h"
 #include "components/viz/common/quads/compositor_frame.h"
-#include "components/viz/common/resources/shared_bitmap.h"
 #include "components/webxr/mailbox_to_surface_bridge_impl.h"
 #include "device/vr/android/arcore/ar_image_transport.h"
 #include "device/vr/android/arcore/arcore_gl.h"
-#include "device/vr/android/arcore/arcore_session_utils.h"
+#include "device/vr/android/compositor_delegate_provider.h"
+#include "device/vr/android/web_xr_presentation_state.h"
+#include "device/vr/android/xr_java_coordinator.h"
 #include "device/vr/public/cpp/xr_frame_sink_client.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
+#include "device/vr/public/mojom/xr_session.mojom.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/viz/public/mojom/compositing/layer_context.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/display/types/display_constants.h"
 
 namespace device {
 
@@ -32,10 +38,12 @@ class StubArImageTransport : public ArImageTransport {
  public:
   explicit StubArImageTransport(
       std::unique_ptr<MailboxToSurfaceBridge> mailbox_bridge)
-      : ArImageTransport(std::move(mailbox_bridge)) {}
+      : ArImageTransport(std::move(mailbox_bridge)),
+        shared_buffer_(std::make_unique<WebXrSharedBuffer>()) {}
 
   void Initialize(WebXrPresentationState*,
-                  XrInitStatusCallback callback) override {
+                  XrInitStatusCallback callback,
+                  bool webgpu_session) override {
     std::move(callback).Run(true);
   }
 
@@ -43,22 +51,33 @@ class StubArImageTransport : public ArImageTransport {
   GLuint GetCameraTextureId() override { return CAMERA_TEXTURE_ID; }
 
   // This transfers whatever the contents of the texture specified
-  // by GetCameraTextureId() is at the time it is called and returns
-  // a gpu::MailboxHolder with that texture copied to a shared buffer.
-  gpu::MailboxHolder TransferFrame(
+  // by GetCameraTextureId() is at the time it is called and intends
+  // to return to its caller a sync token as well as
+  // a scoped_refptr<gpu::ClientSharedImage> with that texture copied
+  // to a shared buffer. The two values are currently returned
+  // together via a wrapping WebXrSharedBuffer.
+  // TODO(crbug.com/40286368): Change the return type to
+  // scoped_refptr<gpu::ClientSharedImage> once the sync token is
+  // incorporated into ClientSharedImage.
+  WebXrSharedBuffer* TransferFrame(
       WebXrPresentationState*,
       const gfx::Size& frame_size,
       const gfx::Transform& uv_transform) override {
-    return gpu::MailboxHolder();
+    shared_buffer_->shared_image = gpu::ClientSharedImage::CreateForTesting();
+    shared_buffer_->sync_token = gpu::SyncToken();
+    return shared_buffer_.get();
   }
-  gpu::MailboxHolder TransferCameraImageFrame(
+  WebXrSharedBuffer* TransferCameraImageFrame(
       WebXrPresentationState*,
       const gfx::Size& frame_size,
       const gfx::Transform& uv_transform) override {
-    return gpu::MailboxHolder();
+    shared_buffer_->shared_image = gpu::ClientSharedImage::CreateForTesting();
+    shared_buffer_->sync_token = gpu::SyncToken();
+    return shared_buffer_.get();
   }
 
   std::unique_ptr<MailboxToSurfaceBridge> mailbox_bridge_;
+  std::unique_ptr<WebXrSharedBuffer> shared_buffer_;
   const GLuint CAMERA_TEXTURE_ID = 10;
 };
 
@@ -95,17 +114,26 @@ class StubMailboxToSurfaceBridgeFactory : public MailboxToSurfaceBridgeFactory {
   }
 };
 
-class StubArCoreSessionUtils : public ArCoreSessionUtils {
+class StubCompositorDelegateProvider : public CompositorDelegateProvider {
  public:
-  StubArCoreSessionUtils() = default;
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject() const override {
+    return base::android::ScopedJavaLocalRef<jobject>();
+  }
+};
 
-  void RequestArSession(int render_process_id,
-                        int render_frame_id,
-                        bool use_overlay,
-                        bool can_render_dom_content,
-                        SurfaceReadyCallback ready_callback,
-                        SurfaceTouchCallback touch_callback,
-                        SurfaceDestroyedCallback destroyed_callback) override {
+class StubXrJavaCoordinator : public XrJavaCoordinator {
+ public:
+  StubXrJavaCoordinator() = default;
+
+  void RequestArSession(
+      int render_process_id,
+      int render_frame_id,
+      bool use_overlay,
+      bool can_render_dom_content,
+      const CompositorDelegateProvider& compositor_delegate_provider,
+      SurfaceReadyCallback ready_callback,
+      SurfaceTouchCallback touch_callback,
+      JavaShutdownCallback destroyed_callback) override {
     // Return arbitrary screen geometry as stand-in for the expected
     // drawing surface. It's not actually a surface, hence the nullptr
     // instead of a WindowAndroid.
@@ -113,11 +141,24 @@ class StubArCoreSessionUtils : public ArCoreSessionUtils {
         .Run(nullptr, gpu::kNullSurfaceHandle, nullptr,
              display::Display::Rotation::ROTATE_0, {1024, 512});
   }
+
+  void RequestVrSession(
+      int render_process_id,
+      int render_frame_id,
+      const CompositorDelegateProvider& compositor_delegate_provider,
+      SurfaceReadyCallback ready_callback,
+      SurfaceTouchCallback touch_callback,
+      JavaShutdownCallback destroyed_callback,
+      XrSessionButtonTouchedCallback button_touched_callback) override {
+    NOTREACHED();
+  }
   void EndSession() override {}
+  void EndSession(JavaShutdownCallback destroyed_callback) override {}
 
-  bool EnsureLoaded() override { return true; }
+  bool EnsureARCoreLoaded() override { return true; }
 
-  base::android::ScopedJavaLocalRef<jobject> GetApplicationContext() override {
+  base::android::ScopedJavaLocalRef<jobject> GetCurrentActivityContext()
+      override {
     JNIEnv* env = base::android::AttachCurrentThread();
     jclass activityThread = env->FindClass("android/app/ActivityThread");
     jmethodID currentActivityThread =
@@ -128,7 +169,13 @@ class StubArCoreSessionUtils : public ArCoreSessionUtils {
     jmethodID getApplication = env->GetMethodID(
         activityThread, "getApplication", "()Landroid/app/Application;");
     jobject context = env->CallObjectMethod(at, getApplication);
-    return base::android::ScopedJavaLocalRef<jobject>(env, context);
+    return base::android::ScopedJavaLocalRef<jobject>::Adopt(env, context);
+  }
+
+  base::android::ScopedJavaLocalRef<jobject> GetActivityFrom(
+      int render_process_id,
+      int render_frame_id) override {
+    return nullptr;
   }
 };
 
@@ -172,8 +219,9 @@ class StubCompositorFrameSink
   void SetDisplayVSyncParameters(base::TimeTicks timebase,
                                  base::TimeDelta interval) override {}
   void ForceImmediateDrawAndSwapIfPossible() override {}
-  void SetVSyncPaused(bool paused) override {}
   void UpdateRefreshRate(float refresh_rate) override {}
+  void SetAdaptiveRefreshRateInfo(
+      viz::mojom::AdaptiveRefreshRateInfoPtr info) override {}
   void SetSupportedRefreshRates(
       const std::vector<float>& supported_refresh_rates) override {}
   void PreserveChildSurfaceControls() override {}
@@ -186,28 +234,24 @@ class StubCompositorFrameSink
   void SetSwapCompletionCallbackEnabled(bool enable) override {}
   void SetStandaloneBeginFrameObserver(
       mojo::PendingRemote<viz::mojom::BeginFrameObserver> observer) override {}
+  void SetMaxVSyncAndVrr(std::optional<base::TimeDelta> max_vsync_interval,
+                         display::VariableRefreshRateState vrr_state) override {
+  }
 
   // mojom::CompositorFrameSink:
   void SetNeedsBeginFrame(bool needs_begin_frame) override {}
-  void SetWantsAnimateOnlyBeginFrames() override {}
+  void SetParams(viz::mojom::CompositorFrameSinkParamsPtr params) override {}
   void SubmitCompositorFrame(
       const viz::LocalSurfaceId& local_surface_id,
       viz::CompositorFrame frame,
-      absl::optional<viz::HitTestRegionList> hit_test_region_list,
+      std::optional<viz::HitTestRegionList> hit_test_region_list,
       uint64_t submit_time) override {}
   void DidNotProduceFrame(const viz::BeginFrameAck& begin_frame_ack) override {}
-  void DidAllocateSharedBitmap(base::ReadOnlySharedMemoryRegion region,
-                               const viz::SharedBitmapId& id) override {}
-  void DidDeleteSharedBitmap(const viz::SharedBitmapId& id) override {}
-  void SubmitCompositorFrameSync(
-      const viz::LocalSurfaceId& local_surface_id,
-      viz::CompositorFrame frame,
-      absl::optional<viz::HitTestRegionList> hit_test_region_list,
-      uint64_t submit_time,
-      SubmitCompositorFrameSyncCallback callback) override {}
-  void InitializeCompositorFrameSinkType(
-      viz::mojom::CompositorFrameSinkType type) override {}
-  void SetThreadIds(const std::vector<int32_t>& thread_ids) override {}
+  void NotifyNewLocalSurfaceIdExpectedWhilePaused() override {}
+  void BindLayerContext(viz::mojom::PendingLayerContextPtr context,
+                        viz::mojom::LayerContextSettingsPtr settings) override {
+  }
+  void SetThreads(const std::vector<viz::Thread>& threads) override {}
 
   // mojom::ExternalBeginFrameController implementation.
   void IssueExternalBeginFrame(
@@ -255,8 +299,8 @@ class StubXrFrameSinkClient : public XrFrameSinkClient {
     std::move(on_initialized).Run();
   }
   void SurfaceDestroyed() override {}
-  absl::optional<viz::SurfaceId> GetDOMSurface() override {
-    return absl::nullopt;
+  std::optional<viz::SurfaceId> GetDOMSurface() override {
+    return std::nullopt;
   }
   viz::FrameSinkId FrameSinkId() override { return {}; }
 
@@ -271,14 +315,14 @@ std::unique_ptr<XrFrameSinkClient> FrameSinkClientFactory(int32_t, int32_t) {
 
 class ArCoreDeviceTest : public testing::Test {
  public:
-  ArCoreDeviceTest() {}
-  ~ArCoreDeviceTest() override {}
+  ArCoreDeviceTest() = default;
+  ~ArCoreDeviceTest() override = default;
 
   void OnSessionCreated(mojom::XRRuntimeSessionResultPtr session_result) {
     DVLOG(1) << __func__;
     session_ = std::move(session_result->session);
     controller_.Bind(std::move(session_result->controller));
-    // TODO(crbug.com/837834): verify that things fail if restricted.
+    // TODO(crbug.com/41386002): verify that things fail if restricted.
     // We should think through the right result here for javascript.
     // If an AR page tries to hittest while not focused, should it
     // get no results or fail?
@@ -290,7 +334,7 @@ class ArCoreDeviceTest : public testing::Test {
     std::move(quit_closure).Run();
   }
 
-  raw_ptr<StubArCoreSessionUtils> session_utils;
+  raw_ptr<StubXrJavaCoordinator> session_utils;
   mojo::Remote<mojom::XRFrameDataProvider> frame_provider;
   mojo::AssociatedRemote<mojom::XREnvironmentIntegrationProvider>
       environment_provider;
@@ -299,14 +343,15 @@ class ArCoreDeviceTest : public testing::Test {
 
  protected:
   void SetUp() override {
-    std::unique_ptr<StubArCoreSessionUtils> session_utils_ptr =
-        std::make_unique<StubArCoreSessionUtils>();
+    std::unique_ptr<StubXrJavaCoordinator> session_utils_ptr =
+        std::make_unique<StubXrJavaCoordinator>();
     session_utils = session_utils_ptr.get();
     device_ = std::make_unique<ArCoreDevice>(
         std::make_unique<FakeArCoreFactory>(),
         std::make_unique<StubArImageTransportFactory>(),
         std::make_unique<StubMailboxToSurfaceBridgeFactory>(),
         std::move(session_utils_ptr),
+        std::make_unique<StubCompositorDelegateProvider>(),
         base::BindRepeating(&FrameSinkClientFactory));
   }
 
@@ -318,7 +363,7 @@ class ArCoreDeviceTest : public testing::Test {
                              base::BindOnce(&ArCoreDeviceTest::OnSessionCreated,
                                             base::Unretained(this)));
 
-    // TODO(https://crbug.com/837834): figure out how to make this work
+    // TODO(crbug.com/41386002): figure out how to make this work
     // EXPECT_CALL(*bridge,
     // DoCreateUnboundContextProvider(testing::_)).Times(1);
 
@@ -342,7 +387,7 @@ class ArCoreDeviceTest : public testing::Test {
       std::move(run_loop_quit_closure).Run();
     };
 
-    // TODO(https://crbug.com/837834): verify GetFrameData fails if we
+    // TODO(crbug.com/41386002): verify GetFrameData fails if we
     // haven't resolved the Mailbox.
     frame_provider->GetFrameData(
         nullptr,

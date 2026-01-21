@@ -4,8 +4,7 @@
 
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_extensions_core)
 
 source_set("updater") {
   sources = [
@@ -17,6 +16,7 @@ source_set("updater") {
     "extension_downloader_task.cc",
     "extension_downloader_task.h",
     "extension_downloader_test_delegate.h",
+    "extension_downloader_types.cc",
     "extension_downloader_types.h",
     "extension_installer.cc",
     "extension_installer.h",
@@ -60,5 +60,17 @@ source_set("keepalive") {
   sources = [
     "scoped_extension_updater_keep_alive.cc",
     "scoped_extension_updater_keep_alive.h",
+  ]
+}
+
+source_set("test_support") {
+  sources = [
+    "extension_update_found_test_observer.cc",
+    "extension_update_found_test_observer.h",
+  ]
+
+  deps = [
+    ":updater",
+    "//base",
   ]
 }

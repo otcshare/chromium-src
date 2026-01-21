@@ -4,13 +4,13 @@
 
 #include "chromeos/ash/components/network/cellular_esim_profile_handler_impl.h"
 
+#include <algorithm>
 #include <sstream>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/callback_helpers.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_euicc_client.h"
 #include "chromeos/ash/components/network/cellular_utils.h"
@@ -72,8 +72,8 @@ CellularESimProfileHandlerImpl::GetESimProfiles() {
       continue;
     }
 
-    absl::optional<CellularESimProfile> profile =
-        CellularESimProfile::FromDictionaryValue(value);
+    std::optional<CellularESimProfile> profile =
+        CellularESimProfile::FromDictionaryValue(value.GetDict());
     if (!profile) {
       NET_LOG(ERROR) << "Unable to deserialize eSIM profile: " << value;
       continue;
@@ -139,7 +139,7 @@ void CellularESimProfileHandlerImpl::AutoRefreshEuiccsIfNecessary() {
 
   base::flat_set<std::string> paths_needing_auto_refresh;
   for (const auto& euicc_path : euicc_paths_from_hermes) {
-    if (!base::Contains(auto_refreshed_euicc_paths, euicc_path))
+    if (!auto_refreshed_euicc_paths.contains(euicc_path))
       paths_needing_auto_refresh.insert(euicc_path);
   }
 
@@ -166,7 +166,7 @@ void CellularESimProfileHandlerImpl::StartAutoRefresh(
   // originally boots or after a powerwash.
   for (const auto& path : euicc_paths) {
     NET_LOG(EVENT) << "Found new EUICC whose profiles have not yet been "
-                   << "refreshsed. Refreshing profile list for " << path;
+                   << "refreshed. Refreshing profile list for " << path;
     RefreshProfileListAndRestoreSlot(
         dbus::ObjectPath(path),
         base::BindOnce(
@@ -229,28 +229,41 @@ void CellularESimProfileHandlerImpl::AddNewlyRefreshedEuiccPathToPrefs(
       GetAutoRefreshedEuiccPathsFromPrefs();
 
   // Keep all paths which were already in prefs.
-  base::Value euicc_paths(base::Value::Type::LIST);
+  base::Value::List euicc_paths;
   for (const auto& path : auto_refreshed_euicc_paths)
     euicc_paths.Append(path);
 
   // Add new path.
   euicc_paths.Append(new_path);
 
-  device_prefs_->Set(prefs::kESimRefreshedEuiccs, std::move(euicc_paths));
+  device_prefs_->SetList(prefs::kESimRefreshedEuiccs, std::move(euicc_paths));
 }
 
 void CellularESimProfileHandlerImpl::UpdateProfilesFromHermes() {
   DCHECK(device_prefs_);
 
   std::vector<CellularESimProfile> profiles_from_hermes =
-      GenerateProfilesFromHermes();
+      cellular_utils::GenerateProfilesFromHermes();
+
+  // Don't include pending profiles in the list to cache since we do not provide
+  // a mechanism for installing a pending profile except through the dedicated
+  // dialog which performs a fresh SM-DS scan each time it is opened.
+  std::erase_if(profiles_from_hermes, [](const CellularESimProfile& profile) {
+    if (profile.state() == CellularESimProfile::State::kPending) {
+      NET_LOG(DEBUG) << "Removing eSIM profile {iccid: " << profile.iccid()
+                     << ", eid: " << profile.eid()
+                     << "} from list to cache since it is pending";
+      return true;
+    }
+    return false;
+  });
 
   // Skip updating if there are profiles that haven't received ICCID updates
   // yet. This is required because property updates to eSIM profile objects
   // occur after the profile list has been updated. This state is temporary.
   // This method will be triggered again when ICCID properties are updated.
-  if (base::ranges::any_of(profiles_from_hermes, &std::string::empty,
-                           &CellularESimProfile::iccid)) {
+  if (std::ranges::any_of(profiles_from_hermes, &std::string::empty,
+                          &CellularESimProfile::iccid)) {
     return;
   }
 
@@ -266,19 +279,20 @@ void CellularESimProfileHandlerImpl::UpdateProfilesFromHermes() {
 
   // If nothing has changed since the last update, do not update prefs or notify
   // observers of a change.
-  if (profiles_from_hermes == profiles_before_fetch)
+  if (profiles_from_hermes == profiles_before_fetch) {
     return;
+  }
 
   std::stringstream ss;
   ss << "New set of eSIM profiles have been fetched from Hermes: ";
 
   // Store the updated list of profiles in prefs.
-  base::Value list(base::Value::Type::LIST);
+  base::Value::List list;
   for (const auto& profile : profiles_from_hermes) {
     list.Append(profile.ToDictionaryValue());
     ss << "{iccid: " << profile.iccid() << ", eid: " << profile.eid() << "}, ";
   }
-  device_prefs_->Set(prefs::kESimProfiles, std::move(list));
+  device_prefs_->SetList(prefs::kESimProfiles, std::move(list));
 
   if (profiles_from_hermes.empty())
     ss << "<empty>";
@@ -308,8 +322,8 @@ void CellularESimProfileHandlerImpl::ResetESimProfileCache() {
 void CellularESimProfileHandlerImpl::DisableActiveESimProfile() {
   std::vector<CellularESimProfile> esim_profiles = GetESimProfiles();
   const auto iter =
-      base::ranges::find(esim_profiles, CellularESimProfile::State::kActive,
-                         &CellularESimProfile::state);
+      std::ranges::find(esim_profiles, CellularESimProfile::State::kActive,
+                        &CellularESimProfile::state);
   if (iter == esim_profiles.end()) {
     NET_LOG(EVENT) << "No active eSIM profile is found.";
     return;

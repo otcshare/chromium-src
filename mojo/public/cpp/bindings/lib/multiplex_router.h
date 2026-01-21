@@ -9,6 +9,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/check.h"
 #include "base/component_export.h"
@@ -19,7 +20,6 @@
 #include "base/synchronization/lock.h"
 #include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/associated_group_controller.h"
-#include "mojo/public/cpp/bindings/connection_group.h"
 #include "mojo/public/cpp/bindings/connector.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/message_dispatcher.h"
@@ -28,7 +28,6 @@
 #include "mojo/public/cpp/bindings/pipe_control_message_handler_delegate.h"
 #include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -37,6 +36,7 @@ class SequencedTaskRunner;
 namespace mojo {
 
 class AsyncFlusher;
+class ConnectionGroupRef;
 class PendingFlush;
 
 namespace internal {
@@ -119,7 +119,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   // Adds this object to a ConnectionGroup identified by |ref|. All receiving
   // pipe endpoints decoded from inbound messages on this MultiplexRouter will
   // be added to the same group.
-  void SetConnectionGroup(ConnectionGroup::Ref ref);
+  void SetConnectionGroup(ConnectionGroupRef ref);
 
   // ---------------------------------------------------------------------------
   // The following public methods are safe to call from any sequence.
@@ -131,7 +131,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
       InterfaceId id) override;
   void CloseEndpointHandle(
       InterfaceId id,
-      const absl::optional<DisconnectReason>& reason) override;
+      const std::optional<DisconnectReason>& reason) override;
+  void NotifyLocalEndpointOfPeerClosure(InterfaceId id) override;
   InterfaceEndpointController* AttachEndpointClient(
       const ScopedInterfaceEndpointHandle& handle,
       InterfaceEndpointClient* endpoint_client,
@@ -221,7 +222,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   // PipeControlMessageHandlerDelegate implementation:
   bool OnPeerAssociatedEndpointClosed(
       InterfaceId id,
-      const absl::optional<DisconnectReason>& reason) override;
+      const std::optional<DisconnectReason>& reason) override;
   bool WaitForFlushToComplete(ScopedMessagePipeHandle flush_pipe) override;
 
   void OnPipeConnectionError(bool force_async_dispatch);
@@ -307,7 +308,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
 
   // Active whenever dispatch is blocked by a pending remote flush.
   ScopedMessagePipeHandle active_flush_pipe_;
-  absl::optional<mojo::SimpleWatcher> flush_pipe_watcher_;
+  std::optional<mojo::SimpleWatcher> flush_pipe_watcher_;
 
   // Tracks information about the current exclusive sync wait, if any, on the
   // MultiplexRouter's primary thread. Note that exclusive off-thread sync waits
@@ -317,13 +318,13 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
     uint64_t request_id = 0;
     bool finished = false;
   };
-  absl::optional<ExclusiveSyncWaitInfo> exclusive_sync_wait_;
+  std::optional<ExclusiveSyncWaitInfo> exclusive_sync_wait_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   // Protects the following members.
   // Not set in Config::SINGLE_INTERFACE* mode.
-  mutable absl::optional<base::Lock> lock_;
+  mutable std::optional<base::Lock> lock_;
   PipeControlMessageHandler control_message_handler_;
 
   // NOTE: It is unsafe to call into this object while holding |lock_|.
@@ -339,6 +340,10 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
 
   bool posted_to_process_tasks_ = false;
   scoped_refptr<base::SequencedTaskRunner> posted_to_task_runner_;
+
+  // Indicates whether we're currently within ProcessTasks(). Used to avoid
+  // re-entrancy into that method.
+  bool processing_tasks_ = false;
 
   bool encountered_error_ = false;
 

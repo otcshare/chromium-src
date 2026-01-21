@@ -63,7 +63,6 @@ CSSSkew* CSSSkew::FromCSSValue(const CSSFunctionValue& value) {
                            CSSNumericValue::FromCSSValue(y_value));
   }
   NOTREACHED();
-  return nullptr;
 }
 
 DOMMatrix* CSSSkew::toMatrix(ExceptionState&) const {
@@ -80,14 +79,16 @@ DOMMatrix* CSSSkew::toMatrix(ExceptionState&) const {
 const CSSFunctionValue* CSSSkew::ToCSSValue() const {
   const CSSValue* ax = ax_->ToCSSValue();
   const CSSValue* ay = ay_->ToCSSValue();
-  if (!ax || !ay)
+  if (!ax || !ay) {
     return nullptr;
+  }
 
   CSSFunctionValue* result =
       MakeGarbageCollected<CSSFunctionValue>(CSSValueID::kSkew);
   result->Append(*ax);
-  if (!ay_->IsUnitValue() || To<CSSUnitValue>(ay_.Get())->value() != 0)
+  if (!ay_->IsUnitValue() || To<CSSUnitValue>(ay_.Get())->value() != 0) {
     result->Append(*ay);
+  }
   return result;
 }
 

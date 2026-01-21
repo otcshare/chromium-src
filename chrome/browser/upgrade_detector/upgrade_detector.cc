@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/debug/alias.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/rand_util.h"
@@ -20,12 +23,15 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_otr_state.h"
+#include "chrome/browser/upgrade_detector/version_history_client.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/network_time/network_time_tracker.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/version_info/version_info.h"
 #include "ui/base/idle/idle.h"
 
 namespace {
@@ -77,14 +83,41 @@ base::Time ComputeRelaunchWindowStartForDay(
     } else {
       --window_start_exploded.hour;
     }
-    CHECK(base::Time::FromLocalExploded(window_start_exploded, &window_start));
+
+    // The adjusted time could still fail `Time::FromLocalExploded`. This
+    // happens on ARM devices in ChromeOS. Once it happens, it could be sticky
+    // and creates a crash loop. Return the unadjusted time in this case.
+    // See http://crbug/1307913
+    if (!base::Time::FromLocalExploded(window_start_exploded, &window_start)) {
+      LOG(ERROR) << "FromLocalExploded failed with time=" << time
+                 << ", now=" << base::Time::Now()
+                 << ", year=" << window_start_exploded.year
+                 << ", month=" << window_start_exploded.month
+                 << ", day=" << window_start_exploded.day_of_month;
+
+      base::debug::Alias(&window_start_exploded);
+
+      // Dump once per chrome run.
+      static bool dumped = false;
+      if (!dumped) {
+        dumped = base::debug::DumpWithoutCrashing();
+      }
+
+      return time;
+    }
   }
   return window_start;
 }
 
-// Returns random TimeDelta uniformly selected between zero and `max`.
-base::TimeDelta GenRandomTimeDelta(base::TimeDelta max) {
-  return base::Microseconds(base::RandGenerator(max.InMicroseconds()));
+// Returns the value of the RelaunchFastIfOutdated policy, or a zero TimeDelta
+// if the policy is unset.
+base::TimeDelta GetRelaunchFastIfOutdated() {
+  auto* local_state = g_browser_process->local_state();
+  if (!local_state) {
+    return base::TimeDelta();
+  }
+  return base::Days(
+      local_state->GetInteger(prefs::kRelaunchFastIfOutdated));
 }
 
 }  // namespace
@@ -102,6 +135,7 @@ void UpgradeDetector::Init() {
     pref_change_registrar_.Init(local_state);
     MonitorPrefChanges(prefs::kRelaunchNotificationPeriod);
     MonitorPrefChanges(prefs::kRelaunchWindow);
+    MonitorPrefChanges(prefs::kRelaunchFastIfOutdated);
   }
 }
 
@@ -110,7 +144,7 @@ void UpgradeDetector::Shutdown() {
   weak_factory_.InvalidateWeakPtrs();
   pref_change_task_pending_ = false;
   idle_check_timer_.Stop();
-  pref_change_registrar_.RemoveAll();
+  pref_change_registrar_.Reset();
 }
 
 void UpgradeDetector::OverrideRelaunchNotificationToRequired(bool overridden) {
@@ -143,6 +177,10 @@ void UpgradeDetector::NotifyOutdatedInstallNoAutoUpdate() {
 
   for (auto& observer : observer_list_)
     observer.OnOutdatedInstallNoAutoUpdate();
+}
+
+void UpgradeDetector::NotifyUpgradeForTesting() {
+  NotifyUpgrade();
 }
 
 UpgradeDetector::UpgradeDetector(const base::Clock* clock,
@@ -240,7 +278,7 @@ base::Time UpgradeDetector::AdjustDeadline(base::Time deadline,
       next_window_start =
           ComputeRelaunchWindowStartForDay(window, deadline + base::Hours(23));
     }
-    return next_window_start + GenRandomTimeDelta(duration);
+    return next_window_start + base::RandTimeDeltaUpTo(duration);
   }
 
   // Is the deadline within this day's window?
@@ -265,37 +303,39 @@ base::Time UpgradeDetector::AdjustDeadline(base::Time deadline,
 
   // The deadline is after previous day's window. Push the deadline forward into
   // a random interval in the day's window.
-  return window_start + GenRandomTimeDelta(duration);
+  return window_start + base::RandTimeDeltaUpTo(duration);
 }
 
 // static
-absl::optional<UpgradeDetector::RelaunchWindow>
+std::optional<UpgradeDetector::RelaunchWindow>
 UpgradeDetector::GetRelaunchWindowPolicyValue() {
   // Not all tests provide a PrefService for local_state().
   auto* local_state = g_browser_process->local_state();
   if (!local_state)
-    return absl::nullopt;
+    return std::nullopt;
 
   const auto* preference = local_state->FindPreference(prefs::kRelaunchWindow);
   DCHECK(preference);
   if (preference->IsDefaultValue())
-    return absl::nullopt;
+    return std::nullopt;
 
   const base::Value* policy_value = preference->GetValue();
   DCHECK(policy_value->is_dict());
 
-  const base::Value* entries = policy_value->FindListKey("entries");
-  if (!entries || entries->GetList().empty())
-    return absl::nullopt;
+  const base::Value::List* entries =
+      policy_value->GetDict().FindList("entries");
+  if (!entries || entries->empty()) {
+    return std::nullopt;
+  }
 
   // Currently only single daily window is supported.
-  const auto& window = entries->GetList().front();
-  const absl::optional<int> hour = window.FindIntPath("start.hour");
-  const absl::optional<int> minute = window.FindIntPath("start.minute");
-  const absl::optional<int> duration_mins = window.FindIntKey("duration_mins");
+  const auto& window = entries->front().GetDict();
+  const std::optional<int> hour = window.FindIntByDottedPath("start.hour");
+  const std::optional<int> minute = window.FindIntByDottedPath("start.minute");
+  const std::optional<int> duration_mins = window.FindInt("duration_mins");
 
   if (!hour || !minute || !duration_mins)
-    return absl::nullopt;
+    return std::nullopt;
 
   return RelaunchWindow(hour.value(), minute.value(),
                         base::Minutes(duration_mins.value()));
@@ -305,6 +345,52 @@ UpgradeDetector::GetRelaunchWindowPolicyValue() {
 base::TimeDelta UpgradeDetector::GetGracePeriod(
     base::TimeDelta elevated_to_high_delta) {
   return std::min(kDefaultGracePeriod, elevated_to_high_delta / 2);
+}
+
+bool UpgradeDetector::GetNetworkTimeWithFallback(base::Time& current_time) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (g_browser_process->network_time_tracker()->GetNetworkTime(
+          &current_time, /*uncertainty=*/nullptr) ==
+      network_time::NetworkTimeTracker::NETWORK_TIME_AVAILABLE) {
+    return true;
+  }
+  // When network time has not been initialized yet, simply rely on the
+  // machine's current time.
+  current_time = base::Time::Now();
+  return false;
+}
+
+// static
+bool UpgradeDetector::ShouldRelaunchFast() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!last_served_date_.has_value()) {
+    return false;
+  }
+  base::TimeDelta max_age = GetRelaunchFastIfOutdated();
+  if (max_age.is_zero()) {
+    return false;
+  }
+  base::Time current_time;
+  GetNetworkTimeWithFallback(current_time);
+  return current_time - last_served_date_.value() > max_age;
+}
+
+bool UpgradeDetector::ShouldFetchLastServedDate() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return !fetched_last_served_date_ &&
+         !GetRelaunchFastIfOutdated().is_zero();
+}
+
+void UpgradeDetector::FetchLastServedDate() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (fetched_last_served_date_) {
+    // Only do it once.
+    return;
+  }
+  fetched_last_served_date_ = true;
+  GetLastServedDate(version_info::GetVersion(),
+                    base::BindOnce(&UpgradeDetector::OnGotLastServedDate,
+                                   weak_factory_.GetWeakPtr()));
 }
 
 void UpgradeDetector::NotifyUpgrade() {
@@ -397,8 +483,7 @@ void UpgradeDetector::CheckIdle() {
   // Don't proceed while an off-the-record or Guest window is open. The timer
   // will still keep firing, so this function will get a chance to re-evaluate
   // this.
-  if (chrome::IsOffTheRecordSessionActive() ||
-      BrowserList::GetGuestBrowserCount()) {
+  if (IsOffTheRecordSessionActive() || chrome::GetGuestBrowserCount()) {
     return;
   }
 
@@ -427,7 +512,7 @@ void UpgradeDetector::CheckIdle() {
 
 void UpgradeDetector::OnRelaunchPrefChanged() {
   // Coalesce simultaneous changes to multiple prefs into a single call to the
-  // implementation's OnMonitoredPrefsChanged method by making the call in a
+  // implementation's RecomputeSchedule method by making the call in a
   // task that will run after processing returns to the main event loop.
   if (pref_change_task_pending_)
     return;
@@ -438,8 +523,17 @@ void UpgradeDetector::OnRelaunchPrefChanged() {
                      [](base::WeakPtr<UpgradeDetector> weak_this) {
                        if (weak_this) {
                          weak_this->pref_change_task_pending_ = false;
-                         weak_this->OnMonitoredPrefsChanged();
+                         weak_this->RecomputeSchedule();
                        }
                      },
                      weak_factory_.GetWeakPtr()));
+}
+
+void UpgradeDetector::OnGotLastServedDate(
+    std::optional<base::Time> last_served_date) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (last_served_date.has_value()) {
+    last_served_date_ = last_served_date;
+    RecomputeSchedule();
+  }
 }

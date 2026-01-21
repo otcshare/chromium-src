@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chromeos/crosapi/mojom/account_manager.mojom.h"
 #include "components/account_manager_core/account_manager_util.h"
@@ -30,7 +30,7 @@ AccessTokenFetcher::AccessTokenFetcher(
   receiver_.set_disconnect_handler(base::BindOnce(
       &AccessTokenFetcher::OnMojoPipeError, base::Unretained(this)));
 
-  absl::optional<account_manager::AccountKey> maybe_account_key =
+  std::optional<account_manager::AccountKey> maybe_account_key =
       account_manager::FromMojoAccountKey(mojo_account_key);
   if (maybe_account_key.has_value()) {
     access_token_fetcher_ = account_manager->CreateAccessTokenFetcher(
@@ -52,7 +52,7 @@ void AccessTokenFetcher::Start(const std::vector<std::string>& scopes,
     // `access_token_fetcher_` can be null only if `account_key` is invalid /
     // unknown.
     OnGetTokenFailure(GoogleServiceAuthError(
-        GoogleServiceAuthError::State::USER_NOT_SIGNED_UP));
+        GoogleServiceAuthError::State::ACCOUNT_NOT_FOUND));
     return;
   }
 

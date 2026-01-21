@@ -14,7 +14,7 @@
 namespace ui {
 
 // StubWindow is useful for tests, as well as implementations that only care
-// about bounds.
+// about bounds and activation state.
 class STUB_WINDOW_EXPORT StubWindow : public PlatformWindow {
  public:
   explicit StubWindow(PlatformWindowDelegate* delegate,
@@ -28,11 +28,19 @@ class STUB_WINDOW_EXPORT StubWindow : public PlatformWindow {
 
   void InitDelegate(PlatformWindowDelegate* delegate,
                     bool use_default_accelerated_widget = true);
+  void InitDelegateWithWidget(PlatformWindowDelegate* delegate,
+                              gfx::AcceleratedWidget widget);
 
  protected:
   PlatformWindowDelegate* delegate() { return delegate_; }
 
  private:
+  enum class ActivationState {
+    kUnknown,
+    kActive,
+    kInactive,
+  };
+
   // PlatformWindow:
   void Show(bool inactive) override;
   void Hide() override;
@@ -68,6 +76,7 @@ class STUB_WINDOW_EXPORT StubWindow : public PlatformWindow {
   raw_ptr<PlatformWindowDelegate> delegate_ = nullptr;
   gfx::Rect bounds_;
   ui::PlatformWindowState window_state_ = ui::PlatformWindowState::kUnknown;
+  ActivationState activation_state_ = ActivationState::kUnknown;
 };
 
 }  // namespace ui

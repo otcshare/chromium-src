@@ -18,24 +18,23 @@ struct MultiloginParameters {
   // Parameters with UPDATE mode and empty accounts.
   MultiloginParameters();
   MultiloginParameters(gaia::MultiloginMode mode,
-                       const std::vector<CoreAccountId>& accounts_to_send);
-  MultiloginParameters(const MultiloginParameters& other);
-  MultiloginParameters& operator=(const MultiloginParameters& other);
+                       std::vector<CoreAccountId> accounts_to_send);
+  MultiloginParameters(const MultiloginParameters&);
+  MultiloginParameters& operator=(const MultiloginParameters&);
   ~MultiloginParameters();
 
   std::string ToString() const;
 
-  bool operator==(const MultiloginParameters& other) const {
-    return mode == other.mode && accounts_to_send == other.accounts_to_send;
-  }
-
-  bool operator!=(const MultiloginParameters& other) const {
-    return !(*this == other);
-  }
+  bool operator==(const MultiloginParameters&) const = default;
 
   gaia::MultiloginMode mode =
       gaia::MultiloginMode::MULTILOGIN_UPDATE_COOKIE_ACCOUNTS_ORDER;
   std::vector<CoreAccountId> accounts_to_send;
+  // Whether to wait for a connected network state before sending the request.
+  // This is the historical default, but network state can be unreliable, so
+  // using this is not advised.
+  // TODO(crbug.com/466303351): Remove all uses of DelayNetworkCall().
+  bool wait_on_connectivity = true;
 };
 
 std::ostream& operator<<(std::ostream& out, const MultiloginParameters& p);

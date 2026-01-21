@@ -4,6 +4,7 @@
 
 #include "services/network/web_bundle/web_bundle_manager.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/unguessable_token.h"
@@ -12,7 +13,6 @@
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/web_bundle_handle.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
@@ -51,7 +51,7 @@ class TestWebBundleHandle : public mojom::WebBundleHandle {
     web_bundle_handles_.Add(this, std::move(receiver));
   }
 
-  const absl::optional<std::pair<mojom::WebBundleErrorType, std::string>>&
+  const std::optional<std::pair<mojom::WebBundleErrorType, std::string>>&
   last_bundle_error() const {
     return last_bundle_error_;
   }
@@ -79,7 +79,7 @@ class TestWebBundleHandle : public mojom::WebBundleHandle {
   void OnWebBundleLoadFinished(bool success) override {}
 
  private:
-  absl::optional<std::pair<mojom::WebBundleErrorType, std::string>>
+  std::optional<std::pair<mojom::WebBundleErrorType, std::string>>
       last_bundle_error_;
   base::OnceClosure quit_closure_for_bundle_error_;
 
@@ -99,8 +99,7 @@ CreateWebBundleLoaderFactory(WebBundleManager& manager, int32_t process_id) {
   base::WeakPtr<WebBundleURLLoaderFactory> factory =
       manager.CreateWebBundleURLLoaderFactory(
           GURL(kBundleUrl), create_params, process_id,
-          /*devtools_observer=*/mojo::PendingRemote<mojom::DevToolsObserver>(),
-          /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
+          CrossOriginEmbedderPolicy(),
           /*coep_reporter=*/nullptr);
 
   return std::forward_as_tuple(std::move(factory), std::move(handle));
@@ -174,8 +173,7 @@ TEST_F(WebBundleManagerTest, NoFactoryExistsForDifferentProcessId) {
 
   auto factory = manager.CreateWebBundleURLLoaderFactory(
       GURL(kBundleUrl), create_params, process_id1,
-      /*devtools_observer=*/mojo::PendingRemote<mojom::DevToolsObserver>(),
-      /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
+      CrossOriginEmbedderPolicy(),
       /*coep_reporter=*/nullptr);
   ASSERT_TRUE(factory);
 
@@ -196,8 +194,7 @@ TEST_F(WebBundleManagerTest, UseProcesIdInTokenParamsForRequestsFromBrowser) {
 
   auto factory = manager.CreateWebBundleURLLoaderFactory(
       GURL(kBundleUrl), create_params, process_id1,
-      /*devtools_observer=*/mojo::PendingRemote<mojom::DevToolsObserver>(),
-      /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
+      CrossOriginEmbedderPolicy(),
       /*coep_reporter=*/nullptr);
   ASSERT_TRUE(factory);
 
@@ -227,8 +224,7 @@ TEST_F(WebBundleManagerTest, RemoveFactoryWhenDisconnected) {
 
     auto factory = manager.CreateWebBundleURLLoaderFactory(
         GURL(kBundleUrl), create_params, process_id1,
-        /*devtools_observer=*/mojo::PendingRemote<mojom::DevToolsObserver>(),
-        /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
+        CrossOriginEmbedderPolicy(),
         /*coep_reporter=*/nullptr);
     ASSERT_TRUE(factory);
     ASSERT_TRUE(
@@ -270,7 +266,7 @@ TEST_F(WebBundleManagerTest,
   // manually here, as network::URLLoaderFactory does, and verify that the
   // subresource request is correctly loaded.
   //
-  // TODO(crbug.com/1158709): Find a better way to test this scenario.
+  // TODO(crbug.com/40161416): Find a better way to test this scenario.
 
   WebBundleManager manager;
 
@@ -316,8 +312,7 @@ TEST_F(WebBundleManagerTest,
 
   auto factory = manager.CreateWebBundleURLLoaderFactory(
       GURL(kBundleUrl), token_params, process_id1,
-      /*devtools_observer=*/mojo::PendingRemote<mojom::DevToolsObserver>(),
-      /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
+      CrossOriginEmbedderPolicy(),
       /*coep_reporter=*/nullptr);
 
   // Then, simulate that the bundle is loaded from the network, calling
@@ -336,7 +331,7 @@ TEST_F(WebBundleManagerTest,
     req.client->RunUntilComplete();
 
     EXPECT_EQ(net::OK, req.client->completion_status().error_code);
-    EXPECT_EQ(req.client->response_head()->web_bundle_url, GURL(kBundleUrl));
+    EXPECT_TRUE(req.client->response_head()->is_web_bundle_inner_response);
     std::string body;
     EXPECT_TRUE(
         mojo::BlockingCopyToString(req.client->response_body_release(), &body));
@@ -573,7 +568,7 @@ TEST_F(WebBundleManagerTest, MemoryQuota_ProcessIsolation) {
   // Confirm that the subresource is correctly loaded.
   client1_1->RunUntilComplete();
   EXPECT_EQ(net::OK, client1_1->completion_status().error_code);
-  EXPECT_EQ(client1_1->response_head()->web_bundle_url, GURL(kBundleUrl));
+  EXPECT_TRUE(client1_1->response_head()->is_web_bundle_inner_response);
   std::string body1_1;
   EXPECT_TRUE(
       mojo::BlockingCopyToString(client1_1->response_body_release(), &body1_1));
@@ -596,7 +591,7 @@ TEST_F(WebBundleManagerTest, MemoryQuota_ProcessIsolation) {
   // Confirm that the subresource is correctly loaded.
   client1_2->RunUntilComplete();
   EXPECT_EQ(net::OK, client1_2->completion_status().error_code);
-  EXPECT_EQ(client1_2->response_head()->web_bundle_url, GURL(kBundleUrl));
+  EXPECT_TRUE(client1_2->response_head()->is_web_bundle_inner_response);
   std::string body1_2;
   EXPECT_TRUE(
       mojo::BlockingCopyToString(client1_2->response_body_release(), &body1_2));
@@ -642,7 +637,7 @@ TEST_F(WebBundleManagerTest, MemoryQuota_ProcessIsolation) {
   // Confirm that the subresource is correctly loaded.
   client2->RunUntilComplete();
   EXPECT_EQ(net::OK, client2->completion_status().error_code);
-  EXPECT_EQ(client2->response_head()->web_bundle_url, GURL(kBundleUrl));
+  EXPECT_TRUE(client2->response_head()->is_web_bundle_inner_response);
   std::string body2;
   EXPECT_TRUE(
       mojo::BlockingCopyToString(client2->response_body_release(), &body2));
@@ -683,11 +678,10 @@ TEST_F(WebBundleManagerTest, WebBundleURLRedirection) {
   // is readirected by WebRequest extension API.
   GURL redirected_bundle_url("https://redirected.example.com/bundle.wbn");
   base::WeakPtr<WebBundleURLLoaderFactory> factory =
-      manager.CreateWebBundleURLLoaderFactory(
-          redirected_bundle_url, create_params, process_id1,
-          /*devtools_observer=*/{},
-          /*devtools_request_id=*/absl::nullopt, CrossOriginEmbedderPolicy(),
-          /*coep_reporter=*/nullptr);
+      manager.CreateWebBundleURLLoaderFactory(redirected_bundle_url,
+                                              create_params, process_id1,
+                                              CrossOriginEmbedderPolicy(),
+                                              /*coep_reporter=*/nullptr);
 
   // TestWebBundleHandle must receive an error.
   handle->RunUntilBundleError();

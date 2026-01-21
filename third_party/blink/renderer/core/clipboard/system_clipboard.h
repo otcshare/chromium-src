@@ -5,9 +5,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CLIPBOARD_SYSTEM_CLIPBOARD_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CLIPBOARD_SYSTEM_CLIPBOARD_H_
 
+#include <memory>
+#include <optional>
+
+#include "build/build_config.h"
 #include "third_party/blink/public/mojom/clipboard/clipboard.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/frame/platform_event_dispatcher.h"
+#include "third_party/blink/renderer/platform/bindings/bigint.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -19,6 +26,7 @@ class DataObject;
 class Image;
 class KURL;
 class LocalFrame;
+class ScopedSystemClipboardSnapshot;
 
 // SystemClipboard:
 // - is a LocalFrame bounded object.
@@ -27,7 +35,9 @@ class LocalFrame;
 //
 // All calls to write functions must be followed by a call to CommitWrite().
 class CORE_EXPORT SystemClipboard final
-    : public GarbageCollected<SystemClipboard> {
+    : public GarbageCollected<SystemClipboard>,
+      public PlatformEventDispatcher,
+      public mojom::blink::ClipboardListener {
  public:
   enum SmartReplaceOption { kCanSmartReplace, kCannotSmartReplace };
 
@@ -35,7 +45,21 @@ class CORE_EXPORT SystemClipboard final
   SystemClipboard(const SystemClipboard&) = delete;
   SystemClipboard& operator=(const SystemClipboard&) = delete;
 
-  ClipboardSequenceNumberToken SequenceNumber();
+  // Inherited from PlatformEventDispatcher.
+  void StartListening(LocalDOMWindow*) override;
+  void StopListening() override;
+
+  // Inherited from ClipboardListener.
+  void OnClipboardDataChanged(const Vector<String>& types,
+                              const absl::uint128& changeId) override;
+
+  struct ClipboardChangeData {
+    const Vector<String> types;
+    const BigInt change_id;
+  };
+  const ClipboardChangeData& GetClipboardChangeEventData();
+
+  absl::uint128 SequenceNumber();
   bool IsSelectionMode() const;
   void SetSelectionMode(bool);
   Vector<String> ReadAvailableTypes();
@@ -53,7 +77,7 @@ class CORE_EXPORT SystemClipboard final
   // markup that indicate the start and end of the returned markup. If there is
   // no additional context, fragmentStart will be zero and fragmentEnd will be
   // the same as the length of the markup.
-  String ReadHTML(KURL&, unsigned& fragment_start, unsigned& fragment_end);
+  String ReadHTML(KURL& url, unsigned& fragment_start, unsigned& fragment_end);
   void ReadHTML(mojom::blink::ClipboardHost::ReadHtmlCallback callback);
   void WriteHTML(const String& markup,
                  const KURL& document_url,
@@ -75,7 +99,7 @@ class CORE_EXPORT SystemClipboard final
   // Read files.
   mojom::blink::ClipboardFilesPtr ReadFiles();
 
-  String ReadCustomData(const String& type);
+  String ReadDataTransferCustomData(const String& type);
   void WriteDataObject(DataObject*);
 
   // Clipboard write functions must use CommitWrite for changes to reach
@@ -83,6 +107,11 @@ class CORE_EXPORT SystemClipboard final
   void CommitWrite();
 
   void CopyToFindPboard(const String& text);
+
+#if BUILDFLAG(IS_MAC)
+  void GetPlatformPermissionState(
+      mojom::blink::ClipboardHost::GetPlatformPermissionStateCallback callback);
+#endif
 
   void ReadAvailableCustomAndStandardFormats(
       mojom::blink::ClipboardHost::ReadAvailableCustomAndStandardFormatsCallback
@@ -95,19 +124,149 @@ class CORE_EXPORT SystemClipboard final
   void WriteUnsanitizedCustomFormat(const String& type,
                                     mojo_base::BigBuffer data);
 
-  void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
 
  private:
-  bool IsValidBufferType(mojom::ClipboardBuffer);
+  friend class ScopedSystemClipboardSnapshot;
+
+  // When in scope, forces the specified system clipboard to take a snapshot
+  // of its current state and return those value for the ReadXXX methods.
+  // Calling WriteXXX methods on the specified clipboard are not allowed and
+  // will DCHECK.
+  class CORE_EXPORT Snapshot {
+   public:
+    explicit Snapshot();
+    ~Snapshot();
+
+    // The methods below are an API intended for only SystemClipboard.  Each
+    // data type XXX has three basic methods:
+    //
+    //   HasXXX(): whether this snapshot object has cached a value for XXX.
+    //   SetXXX(): sets the value in the snapshot for data type XXX.
+    //   XXX(): gets the value in the snapshot for data type XXX.
+
+    bool HasPlainText(mojom::blink::ClipboardBuffer buffer) const;
+    const String& PlainText(mojom::blink::ClipboardBuffer buffer) const;
+    void SetPlainText(mojom::blink::ClipboardBuffer buffer, const String& text);
+
+    bool HasHtml(mojom::blink::ClipboardBuffer buffer) const;
+    const KURL& Url(mojom::blink::ClipboardBuffer buffer) const;
+    unsigned FragmentStart(mojom::blink::ClipboardBuffer buffer) const;
+    unsigned FragmentEnd(mojom::blink::ClipboardBuffer buffer) const;
+    const String& Html(mojom::blink::ClipboardBuffer buffer) const;
+    void SetHtml(mojom::blink::ClipboardBuffer buffer,
+                 const String& html,
+                 const KURL& url,
+                 unsigned fragment_start,
+                 unsigned fragment_end);
+
+    bool HasRtf(mojom::blink::ClipboardBuffer buffer) const;
+    const String& Rtf(mojom::blink::ClipboardBuffer buffer) const;
+    void SetRtf(mojom::blink::ClipboardBuffer buffer, const String& rtf);
+
+    bool HasPng(mojom::blink::ClipboardBuffer buffer) const;
+    mojo_base::BigBuffer Png(mojom::blink::ClipboardBuffer buffer) const;
+    void SetPng(mojom::blink::ClipboardBuffer buffer,
+                const mojo_base::BigBuffer& png);
+
+    bool HasFiles(mojom::blink::ClipboardBuffer buffer) const;
+    mojom::blink::ClipboardFilesPtr Files(
+        mojom::blink::ClipboardBuffer buffer) const;
+    // Because of the special handling needed to clone ClipboardFilesPtr,
+    // SetFiles() needs to change the function argument `files`.
+    void SetFiles(mojom::blink::ClipboardBuffer buffer,
+                  mojom::blink::ClipboardFilesPtr& files);
+
+    bool HasCustomData(mojom::blink::ClipboardBuffer buffer,
+                       const String& type) const;
+    String CustomData(mojom::blink::ClipboardBuffer buffer,
+                      const String& type) const;
+    void SetCustomData(mojom::blink::ClipboardBuffer buffer,
+                       const String& type,
+                       const String& data);
+
+    static mojom::blink::ClipboardFilesPtr CloneFiles(
+        mojom::blink::ClipboardFilesPtr& files);
+
+   private:
+    // Called in the set methods to bind this snapshot to the specified buffer.
+    // All calls to set data for all types need to specify the same buffer.
+    void BindToBuffer(mojom::blink::ClipboardBuffer buffer);
+
+    std::optional<mojom::blink::ClipboardBuffer> buffer_;
+
+    std::optional<String> plain_text_;
+
+    std::optional<String> html_;
+    KURL url_;
+    unsigned fragment_start_ = 0;
+    unsigned fragment_end_ = 0;
+
+    std::optional<String> rtf_;
+
+    std::optional<mojo_base::BigBuffer> png_;
+
+    mutable std::optional<mojom::blink::ClipboardFilesPtr> files_;
+
+    HashMap<String, String> custom_data_;
+  };
+
+  bool IsValidBufferType(mojom::blink::ClipboardBuffer);
+
+  // Methods to enter and leave snapshot mode.  Only the
+  // ScopedSystemClipboardSnapshot calls these methods.
+  void TakeSnapshot();
+  void DropSnapshot();
+
+  // Resets the clipboard snapshot if a write operation occurs
+  // while the snapshot is active.
+  void ResetSnapshot();
 
   HeapMojoRemote<mojom::blink::ClipboardHost> clipboard_;
+  HeapMojoReceiver<mojom::blink::ClipboardListener, SystemClipboard>
+      clipboard_listener_receiver_;
+
   // In some Linux environments, |buffer_| may equal ClipboardBuffer::kStandard
   // or kSelection.  In other platforms |buffer_| always equals
   // ClipboardBuffer::kStandard.
-  mojom::ClipboardBuffer buffer_ = mojom::ClipboardBuffer::kStandard;
+  mojom::blink::ClipboardBuffer buffer_ =
+      mojom::blink::ClipboardBuffer::kStandard;
 
   // Whether the selection buffer is available on the underlying platform.
   bool is_selection_buffer_available_ = false;
+
+  // When non-null, the system clipboard uses the cached value in the snapshot
+  // rather than making calls to the browser process via the clipboard host.
+  // Snapshots can be nested and `snapshot_count_` counts the number of
+  // nestings.  The snapshot is created when the first call to TakeSnapshot()
+  // is made and released once an equal number of DropSnapshot()s have been
+  // made.
+  std::unique_ptr<Snapshot> snapshot_;
+  size_t snapshot_count_ = 0;
+
+  // A data from the most recent clipboard change notification.
+  // TODO(crbug.com/457463706): Possibly move this data somewhere within
+  // `ClipboardChangeEventController` or similar place.
+  std::optional<ClipboardChangeData> clipboard_change_data_;
+
+  // Declared SystemClipboardTest class as friend to access the private members
+  // of this class as we need to use clipboard_ and buffer_ for unbound remote
+  // tests.
+  friend class SystemClipboardTest;
+};
+
+// When in scope, forces the specified system clipboard to take a snapshot
+// of its current state and return those value for the ReadXXX methods.  Calling
+// WriteXXX methods on the specified clipboard are not allowed and will DCHECK.
+class CORE_EXPORT ScopedSystemClipboardSnapshot {
+  STACK_ALLOCATED();
+
+ public:
+  explicit ScopedSystemClipboardSnapshot(SystemClipboard& clipboard);
+  ~ScopedSystemClipboardSnapshot();
+
+ private:
+  SystemClipboard& clipboard_;
 };
 
 }  // namespace blink

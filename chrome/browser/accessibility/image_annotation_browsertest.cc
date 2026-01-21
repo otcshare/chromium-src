@@ -3,11 +3,11 @@
 // found in the LICENSE file.
 
 #include <map>
+#include <optional>
 
-#include "base/callback_helpers.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
@@ -22,11 +22,13 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/scoped_accessibility_mode_override.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -62,8 +64,9 @@ void DescribeNodesWithAnnotations(const ui::AXNode& node,
     else
       descriptions->push_back(role_str + " " + annotation);
   }
-  for (const auto* child : node.children())
+  for (const ui::AXNode* child : node.children()) {
     DescribeNodesWithAnnotations(*child, descriptions);
+  }
 }
 
 std::vector<std::string> DescribeNodesWithAnnotations(
@@ -134,13 +137,33 @@ class FakeAnnotator : public image_annotation::mojom::Annotator {
       return;
     }
 
+    processors_.emplace_back(std::move(image_processor));
+    processors_.back()->GetJpgImageData(base::BindOnce(
+        &FakeAnnotator::OnJpgImageDataReceived, base::Unretained(this),
+        std::move(image_id), std::move(description_language_tag),
+        std::move(callback)));
+  }
+
+  void OnJpgImageDataReceived(const std::string& image_id,
+                              const std::string& description_language_tag,
+                              AnnotateImageCallback callback,
+                              const std::vector<uint8_t>& image_bytes,
+                              const int32_t width,
+                              const int32_t height) {
+    if (image_bytes.empty()) {
+      std::move(callback).Run(
+          image_annotation::mojom::AnnotateImageResult::NewErrorCode(
+              image_annotation::mojom::AnnotateImageError::kFailure));
+      return;
+    }
+
     // Use the filename to create annotation strings. Check a map from filename
     // to desired label, otherwise just construct a string based on the
     // filename. Adds some trailing whitespace and punctuation to check that
     // clean-up happens correctly when combining annotation strings.
     std::string image_filename = GURL(image_id).ExtractFileName();
     std::string label_text;
-    if (base::Contains(custom_label_result_mapping_, image_filename)) {
+    if (custom_label_result_mapping_.contains(image_filename)) {
       label_text = custom_label_result_mapping_[image_filename];
     } else {
       label_text = image_filename + " '" + description_language_tag + "' Label";
@@ -169,10 +192,12 @@ class FakeAnnotator : public image_annotation::mojom::Annotator {
 
  private:
   mojo::ReceiverSet<image_annotation::mojom::Annotator> receivers_;
+  std::vector<mojo::Remote<image_annotation::mojom::ImageProcessor>>
+      processors_;
   static bool return_ocr_results_;
   static bool return_label_results_;
   static std::map<std::string, std::string> custom_label_result_mapping_;
-  static absl::optional<image_annotation::mojom::AnnotateImageError>
+  static std::optional<image_annotation::mojom::AnnotateImageError>
       return_error_code_;
 };
 
@@ -183,7 +208,7 @@ bool FakeAnnotator::return_label_results_ = false;
 // static
 std::map<std::string, std::string> FakeAnnotator::custom_label_result_mapping_;
 // static
-absl::optional<image_annotation::mojom::AnnotateImageError>
+std::optional<image_annotation::mojom::AnnotateImageError>
     FakeAnnotator::return_error_code_;
 
 // The fake ImageAnnotationService, which handles mojo calls from the renderer
@@ -230,14 +255,6 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
       delete;
 
  protected:
-  void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kEnableAccessibilityExposeHTMLElement,
-         features::kAugmentExistingImageLabels},
-        {});
-    InProcessBrowserTest::SetUp();
-  }
-
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
@@ -250,14 +267,14 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
         ->OverrideImageAnnotatorBinderForTesting(
             base::BindRepeating(&BindImageAnnotatorService));
 
-    ui::AXMode mode = ui::kAXModeComplete;
-    mode.set_mode(ui::AXMode::kLabelImages, true);
-    web_contents->SetAccessibilityMode(mode);
+    scoped_accessibility_mode_.emplace(
+        web_contents, ui::kAXModeComplete | ui::AXMode::kLabelImages);
 
     SetAcceptLanguages("en,fr");
   }
 
   void TearDownOnMainThread() override {
+    scoped_accessibility_mode_.reset();
     AccessibilityLabelsServiceFactory::GetForProfile(browser()->profile())
         ->OverrideImageAnnotatorBinderForTesting(base::NullCallback());
     InProcessBrowserTest::TearDownOnMainThread();
@@ -277,6 +294,8 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
 
  protected:
   net::EmbeddedTestServer https_server_;
+  std::optional<content::ScopedAccessibilityModeOverride>
+      scoped_accessibility_mode_;
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -538,17 +557,21 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
       "Appears to say: red.png Annotation. Appears to be: red.png 'fr' Label");
 }
 
+// TODO(crbug.com/40928269): Fix flakiness on ChromeOS
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_DoesntAnnotateInternalPages DISABLED_DoesntAnnotateInternalPages
+#else
+#define MAYBE_DoesntAnnotateInternalPages DoesntAnnotateInternalPages
+#endif
 IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
-                       DoesntAnnotateInternalPages) {
+                       MAYBE_DoesntAnnotateInternalPages) {
   FakeAnnotator::SetReturnLabelResults(true);
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), GURL("chrome://version")));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  ui::AXMode mode = ui::kAXModeComplete;
-  mode.set_mode(ui::AXMode::kLabelImages, true);
-  web_contents->SetAccessibilityMode(mode);
+
   std::string svg_image =
       "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><circle "
       "cx='50' cy='50' r='40' fill='yellow' /></svg>";
@@ -559,7 +582,7 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
       "\";"
       "var outer = document.getElementById('outer');"
       "outer.insertBefore(image, outer.childNodes[0]);";
-  EXPECT_TRUE(content::ExecuteScript(web_contents, javascript));
+  EXPECT_TRUE(content::ExecJs(web_contents, javascript));
 
   ui::AXTreeUpdate snapshot =
       content::GetAccessibilityTreeSnapshot(web_contents);
@@ -587,9 +610,9 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  ui::AXMode mode = ui::kAXModeComplete;
-  mode.set_mode(ui::AXMode::kLabelImages, false);
-  web_contents->SetAccessibilityMode(mode);
+
+  scoped_accessibility_mode_ = content::ScopedAccessibilityModeOverride(
+      web_contents, ui::kAXModeComplete);
 
   // Block until there are at least two images that have been processed. One of
   // them should get the tutor message and the other shouldn't. The annotation
@@ -625,9 +648,9 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  ui::AXMode mode = ui::kAXModeComplete;
-  mode.set_mode(ui::AXMode::kLabelImages, false);
-  web_contents->SetAccessibilityMode(mode);
+
+  scoped_accessibility_mode_ = content::ScopedAccessibilityModeOverride(
+      web_contents, ui::kAXModeComplete);
 
   // Block until there are at least two images that have been processed. One of
   // them should get the tutor message and the other shouldn't. The annotation
@@ -646,4 +669,35 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
     content::WaitForAccessibilityTreeToChange(web_contents);
     snapshot = content::GetAccessibilityTreeSnapshot(web_contents);
   }
+}
+
+IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest, LazyLoadingImages) {
+  FakeAnnotator::SetReturnOcrResults(true);
+  FakeAnnotator::SetReturnLabelResults(true);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      https_server_.GetURL("/accessibility/page_with_lazy_image.html")));
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  content::WaitForAccessibilityTreeToContainNodeWithName(
+      web_contents,
+      "Appears to say: green.png Annotation. Appears to be: green.png 'en' "
+      "Label");
+  EXPECT_EQ(1u, DescribeNodesWithAnnotations(
+                    content::GetAccessibilityTreeSnapshot(web_contents))
+                    .size());
+
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, run_loop.QuitWhenIdleClosure(), base::Milliseconds(500));
+  run_loop.Run();
+  web_contents->ScrollToBottomOfDocument();
+
+  content::WaitForAccessibilityTreeToContainNodeWithName(
+      web_contents,
+      "Appears to say: red.png Annotation. Appears to be: red.png 'en' Label");
+  EXPECT_EQ(2u, DescribeNodesWithAnnotations(
+                    content::GetAccessibilityTreeSnapshot(web_contents))
+                    .size());
 }

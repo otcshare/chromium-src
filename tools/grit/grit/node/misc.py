@@ -5,13 +5,9 @@
 """Miscellaneous node types.
 """
 
-from __future__ import print_function
-
 import os.path
 import re
 import sys
-
-import six
 
 from grit import constants
 from grit import exception
@@ -244,8 +240,8 @@ def _ComputeIds(root, predetermined_tids):
               'avoid conflicts with system-defined resource IDs.')
 
       if tid not in predetermined_tids and id in predetermined_ids:
-        raise exception.IdRangeOverlap('ID %d overlaps between %s and %s'
-                                       % (id, tid, predetermined_ids[tid]))
+        raise exception.IdRangeOverlap('ID %d overlaps between %s and %s' %
+                                       (id, tid, predetermined_ids[id]))
 
       ids[id] = tid
       tids[tid] = id
@@ -276,7 +272,7 @@ class IfNode(SplicingNode):
 
   def _IsValidChild(self, child):
     return (isinstance(child, (ThenNode, ElseNode)) or
-            super(IfNode, self)._IsValidChild(child))
+            super()._IsValidChild(child))
 
   def EndParsing(self):
     children = self.children
@@ -294,7 +290,7 @@ class IfNode(SplicingNode):
       return self.children[0 if cond else 1].ActiveChildren()
     else:
       # Equivalent to having all children inside <then> with an empty <else>
-      return super(IfNode, self).ActiveChildren() if cond else []
+      return super().ActiveChildren() if cond else []
 
 
 class ThenNode(SplicingNode):
@@ -312,14 +308,14 @@ class PartNode(SplicingNode):
   """
 
   def __init__(self):
-    super(PartNode, self).__init__()
+    super().__init__()
     self.started_inclusion = False
 
   def MandatoryAttributes(self):
     return ['file']
 
   def _IsValidChild(self, child):
-    return self.started_inclusion and super(PartNode, self)._IsValidChild(child)
+    return self.started_inclusion and super()._IsValidChild(child)
 
 
 class ReleaseNode(base.Node):
@@ -347,7 +343,7 @@ class GritNode(base.Node):
   """The <grit> root element."""
 
   def __init__(self):
-    super(GritNode, self).__init__()
+    super().__init__()
     self.output_language = ''
     self.defines = {}
     self.substituter = None
@@ -366,10 +362,10 @@ class GritNode(base.Node):
                               empty.OutputsNode))
 
   def _IsValidAttribute(self, name, value):
-    if name not in ['base_dir', 'first_ids_file', 'source_lang_id',
-                    'latest_public_release', 'current_release',
-                    'enc_check', 'tc_project', 'grit_version',
-                    'output_all_resource_defines']:
+    if name not in [
+        'base_dir', 'first_ids_file', 'source_lang_id', 'latest_public_release',
+        'current_release', 'enc_check', 'tc_project', 'grit_version'
+    ]:
       return False
     if name in ['latest_public_release', 'current_release'] and value.strip(
       '0123456789') != '':
@@ -390,7 +386,7 @@ class GritNode(base.Node):
     }
 
   def EndParsing(self):
-    super(GritNode, self).EndParsing()
+    super().EndParsing()
     if (int(self.attrs['latest_public_release'])
         > int(self.attrs['current_release'])):
       raise exception.Parsing('latest_public_release cannot have a greater '
@@ -560,8 +556,8 @@ class GritNode(base.Node):
     """Returns the distinct (language, context, fallback_to_default_layout)
     triples from the output nodes.
     """
-    return set((n.GetLanguage(), n.GetContext(), n.GetFallbackToDefaultLayout())
-               for n in self.GetOutputFiles())
+    return {(n.GetLanguage(), n.GetContext(), n.GetFallbackToDefaultLayout())
+               for n in self.GetOutputFiles()}
 
   def GetSubstitutionMessages(self):
     """Returns the list of <message sub_variable="true"> nodes."""
@@ -627,7 +623,7 @@ class GritNode(base.Node):
     assert self._id_map is None, 'AssignFirstIds() after InitializeIds()'
     # If the input is a stream, then we're probably in a unit test and
     # should skip this step.
-    if not isinstance(filename_or_stream, six.string_types):
+    if not isinstance(filename_or_stream, str):
       return
 
     # Nothing to do if the first_ids_filename attribute isn't set.
@@ -731,7 +727,7 @@ class IdentifierNode(base.Node):
 
   def EndParsing(self):
     """Handles system identifiers."""
-    super(IdentifierNode, self).EndParsing()
+    super().EndParsing()
     if self.attrs['systemid'] == 'true':
       util.SetupSystemIdentifiers((self.attrs['name'],))
 

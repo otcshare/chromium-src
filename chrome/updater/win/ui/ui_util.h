@@ -8,13 +8,11 @@
 #include <windows.h>
 
 #include <stdint.h>
+
 #include <string>
 #include <vector>
 
-#include "base/check_op.h"
-
-namespace updater {
-namespace ui {
+namespace updater::ui {
 
 // Finds all the primary windows owned by the given process. A primary window is
 // a top-level, has a system menu, and it is visible.
@@ -42,16 +40,8 @@ HRESULT SetWindowIcon(HWND hwnd, WORD icon_id, HICON* hicon);
 
 // Returns a localized installer name for a bundle. If |bundle_name| is empty,
 // the friendly company name is used.
-std::wstring GetInstallerDisplayName(const std::u16string& bundle_name);
-
-// Returns the quotient of the two numbers (m/n) rounded upwards to the
-// nearest integer type. T should be unsigned integer type, such as unsigned
-// short, unsigned long, unsigned int etc.
-template <typename T>
-inline T CeilingDivide(T m, T n) {
-  DCHECK_NE(0, n);
-  return (m + n - 1) / n;
-}
+std::wstring GetInstallerDisplayName(const std::u16string& bundle_name,
+                                     const std::wstring& lang = {});
 
 // Gets the text corresponding to a control in a dialog box.
 bool GetDlgItemText(HWND dlg, int item_id, std::wstring* text);
@@ -59,7 +49,6 @@ bool GetDlgItemText(HWND dlg, int item_id, std::wstring* text);
 // Returns true if the system is in high contrast mode.
 bool IsHighContrastOn();
 
-}  // namespace ui
-}  // namespace updater
+}  // namespace updater::ui
 
 #endif  // CHROME_UPDATER_WIN_UI_UI_UTIL_H_

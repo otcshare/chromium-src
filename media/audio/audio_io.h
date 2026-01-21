@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include "base/time/time.h"
-#include "media/base/audio_bus.h"
 #include "media/base/audio_glitch_info.h"
 #include "media/base/media_export.h"
 
@@ -50,6 +49,8 @@
 // created.
 
 namespace media {
+
+class AudioBus;
 
 class MEDIA_EXPORT AudioOutputStream {
  public:
@@ -96,8 +97,10 @@ class MEDIA_EXPORT AudioOutputStream {
 
   virtual ~AudioOutputStream() {}
 
-  // Open the stream. false is returned if the stream cannot be opened.  Open()
-  // must always be followed by a call to Close() even if Open() fails.
+  // Opens the stream. Returns `false` if the stream cannot be opened. This
+  // method should not be called more than once, and must always be eventually
+  // followed by a call to `Close()`, even if `Open()` fails and returns
+  // `false`.
   virtual bool Open() = 0;
 
   // Starts playing audio and generating AudioSourceCallback::OnMoreData().
@@ -130,6 +133,11 @@ class MEDIA_EXPORT AudioOutputStream {
   // Flushes the stream. This should only be called if the stream is not
   // playing. (i.e. called after Stop or Open)
   virtual void Flush() = 0;
+
+  // Constrains a timedelta representing a delay to between 0 and 10 seconds.
+  // This is used by OS implementations to prevent miscalculated delay values
+  // from creating large amounts of noise in the delay stats.
+  static base::TimeDelta BoundedDelay(base::TimeDelta delay);
 };
 
 // Models an audio sink receiving recorded audio from the audio driver.
@@ -147,7 +155,8 @@ class MEDIA_EXPORT AudioInputStream {
     // monotonically increasing.
     virtual void OnData(const AudioBus* source,
                         base::TimeTicks capture_time,
-                        double volume) = 0;
+                        double volume,
+                        const AudioGlitchInfo& audio_glitch_info) = 0;
 
     // There was an error while recording audio. The audio sink cannot be
     // destroyed yet. No direct action needed by the AudioInputStream, but it

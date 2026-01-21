@@ -2,39 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {FittingType, PdfScriptingApi} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import {PdfScriptingApi} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_scripting_api.js';
+import {FittingType} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 import {isMac} from 'chrome://resources/js/platform.js';
-import {getDeepActiveElement} from 'chrome://resources/js/util_ts.js';
-import {keyDownOn} from 'chrome://resources/polymer/v3_0/iron-test-helpers/mock-interactions.js';
+import {getDeepActiveElement} from 'chrome://resources/js/util.js';
+import {keyDownOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
-import {createWheelEvent} from './test_util.js';
+import {createWheelEvent, ensureFullscreen, enterFullscreenWithUserGesture, getCurrentPage} from './test_util.js';
 
 const viewer = document.body.querySelector('pdf-viewer')!;
 const scroller = viewer.$.scroller;
 
-async function ensureFullscreen(): Promise<void> {
-  if (document.fullscreenElement !== null) {
-    return;
-  }
-
-  const toolbar = viewer.shadowRoot!.querySelector('viewer-toolbar')!;
-  toolbar.dispatchEvent(new CustomEvent('present-click'));
-  await eventToPromise('fullscreenchange', scroller);
-}
-
 async function enterAndExitFullscreen(): Promise<void> {
-  // Subsequent calls to requestFullScreen() fail with an "API can only be
-  // initiated by a user gesture" error, so we need to run with user
-  // gesture.
-  function enterFullscreenWithUserGesture(): Promise<void> {
-    return new Promise(res => {
-      chrome.test.runWithUserGesture(() => {
-        ensureFullscreen().then(res);
-      });
-    });
-  }
-
   await enterFullscreenWithUserGesture();
   document.exitFullscreen();
   await eventToPromise('fullscreenchange', scroller);
@@ -83,52 +63,52 @@ const tests = [
   },
   async function testWheelEventUpdatesPage() {
     await ensureFullscreen();
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    chrome.test.assertEq(0, getCurrentPage());
 
     const content = viewer.$.content;
 
     // Simulate scrolling towards the bottom.
     content.dispatchEvent(
         createWheelEvent(40, {clientX: 0, clientY: 0}, false));
-    chrome.test.assertEq(1, viewer.viewport.getMostVisiblePage());
+    chrome.test.assertEq(1, getCurrentPage());
 
     // Simulate scrolling towards the top.
     content.dispatchEvent(
         createWheelEvent(-40, {clientX: 0, clientY: 0}, false));
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    chrome.test.assertEq(0, getCurrentPage());
 
     chrome.test.succeed();
   },
   async function testKeysUpdatePage() {
     await ensureFullscreen();
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    chrome.test.assertEq(0, getCurrentPage());
 
     // Test arrow keys.
-    keyDownOn(viewer, 0, '', 'ArrowDown');
-    chrome.test.assertEq(1, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'ArrowDown');
+    chrome.test.assertEq(1, getCurrentPage());
 
-    keyDownOn(viewer, 0, '', 'ArrowUp');
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'ArrowUp');
+    chrome.test.assertEq(0, getCurrentPage());
 
-    keyDownOn(viewer, 0, '', 'ArrowRight');
-    chrome.test.assertEq(1, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'ArrowRight');
+    chrome.test.assertEq(1, getCurrentPage());
 
-    keyDownOn(viewer, 0, '', 'ArrowLeft');
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'ArrowLeft');
+    chrome.test.assertEq(0, getCurrentPage());
 
     // Test Space key.
-    keyDownOn(viewer, 0, '', ' ');
-    chrome.test.assertEq(1, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], ' ');
+    chrome.test.assertEq(1, getCurrentPage());
 
     keyDownOn(viewer, 0, 'shift', ' ');
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    chrome.test.assertEq(0, getCurrentPage());
 
     // Test PageUp/PageDown keys.
-    keyDownOn(viewer, 0, '', 'PageDown');
-    chrome.test.assertEq(1, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'PageDown');
+    chrome.test.assertEq(1, getCurrentPage());
 
-    keyDownOn(viewer, 0, '', 'PageUp');
-    chrome.test.assertEq(0, viewer.viewport.getMostVisiblePage());
+    keyDownOn(viewer, 0, [], 'PageUp');
+    chrome.test.assertEq(0, getCurrentPage());
 
     chrome.test.succeed();
   },
@@ -188,15 +168,15 @@ const tests = [
 
     chrome.test.succeed();
   },
-  async function testEnterAndExitFullscreenWithType_FitToPage() {
+  async function testEnterAndExitFullscreenWithTypeFitToPage() {
     await assertEnterAndExitFullscreenWithType(FittingType.FIT_TO_PAGE);
     chrome.test.succeed();
   },
-  async function testEnterAndExitFullscreenWithType_FitToWidth() {
+  async function testEnterAndExitFullscreenWithTypeFitToWidth() {
     await assertEnterAndExitFullscreenWithType(FittingType.FIT_TO_WIDTH);
     chrome.test.succeed();
   },
-  async function testEnterAndExitFullscreenWithType_FitToHeight() {
+  async function testEnterAndExitFullscreenWithTypeFitToHeight() {
     await assertEnterAndExitFullscreenWithType(FittingType.FIT_TO_HEIGHT);
     chrome.test.succeed();
   },

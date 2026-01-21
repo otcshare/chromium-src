@@ -6,16 +6,13 @@
 #define COMPONENTS_WEB_PACKAGE_SIGNED_WEB_BUNDLES_ED25519_SIGNATURE_H_
 
 #include <array>
+#include <optional>
 
 #include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/types/expected.h"
 #include "components/web_package/signed_web_bundles/ed25519_public_key.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace mojo {
-struct DefaultConstructTraits;
-}  // namespace mojo
+#include "mojo/public/cpp/bindings/default_construct_tag.h"
 
 namespace web_package {
 
@@ -31,8 +28,14 @@ class Ed25519Signature {
 
   static Ed25519Signature Create(base::span<const uint8_t, kLength> bytes);
 
-  bool operator==(const Ed25519Signature& other) const;
-  bool operator!=(const Ed25519Signature& other) const;
+  explicit Ed25519Signature(mojo::DefaultConstruct::Tag) {}
+  Ed25519Signature(const Ed25519Signature&) = default;
+  Ed25519Signature(Ed25519Signature&&) = default;
+  Ed25519Signature& operator=(const Ed25519Signature&) = default;
+  Ed25519Signature& operator=(Ed25519Signature&&) = default;
+
+  friend bool operator==(const Ed25519Signature&,
+                         const Ed25519Signature&) = default;
 
   [[nodiscard]] bool Verify(base::span<const uint8_t> message,
                             const Ed25519PublicKey& public_key) const;
@@ -40,22 +43,16 @@ class Ed25519Signature {
   const std::array<uint8_t, kLength>& bytes() const { return *bytes_; }
 
  private:
-  friend mojo::DefaultConstructTraits;
   FRIEND_TEST_ALL_PREFIXES(StructTraitsTest, Ed25519Signature);
 
+  Ed25519Signature() = default;
   explicit Ed25519Signature(std::array<uint8_t, kLength>& bytes);
 
-  // The default constructor is only present so that this class can be used as
-  // part of mojom `StructTraits`, which require a class to be
-  // default-constructible. `mojo::DefaultConstructTraits` allows us to at least
-  // make the default constructor private.
-  Ed25519Signature() = default;
-
-  // This field is `absl::nullopt` only when the default constructor is used,
+  // This field is `std::nullopt` only when the default constructor is used,
   // which only happens as part of mojom `StructTraits`. All methods of this
-  // class can safely assume that this field is never `absl::nullopt` and should
+  // class can safely assume that this field is never `std::nullopt` and should
   // `CHECK` if it is.
-  absl::optional<std::array<uint8_t, kLength>> bytes_;
+  std::optional<std::array<uint8_t, kLength>> bytes_;
 };
 
 }  // namespace web_package

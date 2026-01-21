@@ -31,7 +31,6 @@
 
 #include <memory>
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/audio/hrtf_elevation.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -41,13 +40,19 @@ namespace blink {
 
 class HRTFKernel;
 
-class HRTFDatabase {
+class HRTFDatabase final {
   USING_FAST_MALLOC(HRTFDatabase);
 
  public:
   explicit HRTFDatabase(float sample_rate);
   HRTFDatabase(const HRTFDatabase&) = delete;
   HRTFDatabase& operator=(const HRTFDatabase&) = delete;
+
+  // Returns the number of different azimuth angles.
+  static unsigned NumberOfAzimuths();
+
+  // Returns the number of elevations loaded from resource.
+  static unsigned NumberOfRawElevations();
 
   // getKernelsFromAzimuthElevation() returns a left and right ear kernel, and
   // an interpolated left and right frame delay for the given azimuth and
@@ -65,34 +70,8 @@ class HRTFDatabase {
                                       double& frame_delay_l,
                                       double& frame_delay_r) const;
 
-  // Returns the number of different azimuth angles.
-  static unsigned NumberOfAzimuths() {
-    return HRTFElevation::kNumberOfTotalAzimuths;
-  }
-
-  float SampleRate() const { return sample_rate_; }
-
-  // Number of elevations loaded from resource.
-  static const unsigned kNumberOfRawElevations;
-
  private:
-  // Minimum and maximum elevation angles (inclusive) for a HRTFDatabase.
-  static const int kMinElevation;
-  static const int kMaxElevation;
-  static const unsigned kRawElevationAngleSpacing;
-
-  // Interpolates by this factor to get the total number of elevations from
-  // every elevation loaded from resource.
-  static const unsigned kInterpolationFactor;
-
-  // Total number of elevations after interpolation.
-  static const unsigned kNumberOfTotalElevations;
-
-  // Returns the index for the correct HRTFElevation given the elevation angle.
-  static unsigned IndexFromElevationAngle(double);
-
   Vector<std::unique_ptr<HRTFElevation>> elevations_;
-  float sample_rate_;
 };
 
 }  // namespace blink

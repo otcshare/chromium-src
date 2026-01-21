@@ -16,22 +16,29 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/media_session_service.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "content/public/common/content_client.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_media_session_client.h"
 #include "content/public/test/test_renderer_host.h"
+#include "content/test/test_content_browser_client.h"
 #include "content/test/test_web_contents.h"
 #include "media/base/media_content_type.h"
+#include "media/base/media_switches.h"
 #include "services/media_session/public/cpp/features.h"
 #include "services/media_session/public/cpp/test/audio_focus_test_util.h"
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 #include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
+#include "third_party/blink/public/common/features.h"
 
 using ::testing::_;
+using testing::Return;
 
 namespace content {
 
 using media_session::mojom::AudioFocusType;
 using media_session::mojom::MediaPlaybackState;
+using media_session::mojom::MediaSessionAction;
 using media_session::mojom::MediaSessionInfo;
 using media_session::mojom::MediaSessionInfoPtr;
 using media_session::test::MockMediaSessionMojoObserver;
@@ -52,10 +59,11 @@ class MockAudioFocusDelegate : public AudioFocusDelegate {
 
   AudioFocusResult RequestAudioFocus(AudioFocusType type) override {
     request_audio_focus_count_++;
+    last_requested_focus_type_ = type;
     return AudioFocusResult::kSuccess;
   }
 
-  absl::optional<AudioFocusType> GetCurrentFocusType() const override {
+  std::optional<AudioFocusType> GetCurrentFocusType() const override {
     return AudioFocusType::kGain;
   }
 
@@ -75,8 +83,13 @@ class MockAudioFocusDelegate : public AudioFocusDelegate {
 
   int request_audio_focus_count() const { return request_audio_focus_count_; }
 
+  const std::optional<AudioFocusType>& GetLastRequestedFocusType() {
+    return last_requested_focus_type_;
+  }
+
  private:
   int request_audio_focus_count_ = 0;
+  std::optional<AudioFocusType> last_requested_focus_type_;
 
   MediaSessionInfoPtr session_info_;
 };
@@ -88,33 +101,56 @@ class MockWebContentsDelegate : public content::WebContentsDelegate {
   MOCK_METHOD(void, ActivateContents, (content::WebContents*), (override));
 };
 
+class MockContentBrowserClient : public TestContentBrowserClient {
+ public:
+  MOCK_METHOD(media::PictureInPictureEventsInfo::AutoPipInfo,
+              GetAutoPipInfo,
+              (const WebContents& web_contents),
+              (const, override));
+};
+
 }  // anonymous namespace
+
+MATCHER_P(EnterPictureInPictureReasonEquals,
+          expected_reason,
+          "Matches a MediaSessionActionDetails with a specific "
+          "EnterPictureInPicture reason.") {
+  if (!arg) {
+    return false;
+  }
+
+  if (!arg->is_enter_picture_in_picture()) {
+    return false;
+  }
+
+  return arg->get_enter_picture_in_picture()->reason == expected_reason;
+}
 
 class MediaSessionImplTest : public RenderViewHostTestHarness {
  public:
   MediaSessionImplTest()
       : RenderViewHostTestHarness(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-    default_actions_.insert(media_session::mojom::MediaSessionAction::kPlay);
-    default_actions_.insert(media_session::mojom::MediaSessionAction::kPause);
-    default_actions_.insert(media_session::mojom::MediaSessionAction::kStop);
-    default_actions_.insert(media_session::mojom::MediaSessionAction::kSeekTo);
-    default_actions_.insert(media_session::mojom::MediaSessionAction::kScrubTo);
+    default_actions_.insert(MediaSessionAction::kPlay);
+    default_actions_.insert(MediaSessionAction::kPause);
+    default_actions_.insert(MediaSessionAction::kStop);
+    default_actions_.insert(MediaSessionAction::kSeekTo);
+    default_actions_.insert(MediaSessionAction::kScrubTo);
+    default_actions_.insert(MediaSessionAction::kSeekForward);
+    default_actions_.insert(MediaSessionAction::kSeekBackward);
   }
 
   MediaSessionImplTest(const MediaSessionImplTest&) = delete;
   MediaSessionImplTest& operator=(const MediaSessionImplTest&) = delete;
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {media_session::features::kMediaSessionService,
-         media_session::features::kAudioFocusEnforcement},
-        {});
+    scoped_feature_list_.InitWithFeatures(GetEnabledFeatures(),
+                                          GetDisabledFeatures());
 
     RenderViewHostTestHarness::SetUp();
 
     player_observer_ = std::make_unique<MockMediaSessionPlayerObserver>(
-        main_rfh(), media::MediaContentType::Persistent);
+        main_rfh(), media::MediaContentType::kPersistent);
     mock_media_session_service_ =
         std::make_unique<testing::NiceMock<MockMediaSessionServiceImpl>>(
             main_rfh());
@@ -123,12 +159,29 @@ class MediaSessionImplTest : public RenderViewHostTestHarness {
     // it.
     GetMediaSessionService().BindAudioFocusManager(
         audio_focus_remote_.BindNewPipeAndPassReceiver());
+    audio_focus_remote_->SetEnforcementMode(
+        media_session::mojom::EnforcementMode::kDefault);
   }
 
   void TearDown() override {
     mock_media_session_service_.reset();
 
+    scoped_feature_list_.Reset();
+    audio_focus_remote_->SetEnforcementMode(
+        media_session::mojom::EnforcementMode::kDefault);
+
     RenderViewHostTestHarness::TearDown();
+  }
+
+ protected:
+  virtual std::vector<base::test::FeatureRef> GetEnabledFeatures() {
+    return {media_session::features::kMediaSessionService,
+            media_session::features::kAudioFocusEnforcement,
+            blink::features::kBrowserInitiatedAutomaticPictureInPicture};
+  }
+
+  virtual std::vector<base::test::FeatureRef> GetDisabledFeatures() {
+    return {};
   }
 
   void RequestAudioFocus(MediaSessionImpl* session,
@@ -173,8 +226,8 @@ class MediaSessionImplTest : public RenderViewHostTestHarness {
   std::unique_ptr<MockMediaSessionPlayerObserver> player_observer_;
 
   void SetDelegateForTests(MediaSessionImpl* session,
-                           AudioFocusDelegate* delegate) {
-    session->SetDelegateForTests(base::WrapUnique(delegate));
+                           std::unique_ptr<AudioFocusDelegate> delegate) {
+    session->SetDelegateForTests(std::move(delegate));
   }
 
   MockMediaSessionServiceImpl& mock_media_session_service() const {
@@ -185,18 +238,32 @@ class MediaSessionImplTest : public RenderViewHostTestHarness {
     return MediaSessionImpl::Get(web_contents());
   }
 
-  void StartNewPlayer() {
-    GetMediaSession()->AddPlayer(player_observer_.get(),
-                                 player_observer_->StartNewPlayer());
+  // Returns the player ID.
+  int StartNewPlayer() {
+    int player_id;
+    GetMediaSession()->AddPlayer(
+        player_observer_.get(), player_id = player_observer_->StartNewPlayer());
+    return player_id;
   }
 
-  const std::set<media_session::mojom::MediaSessionAction>& default_actions()
-      const {
+  MockMediaSessionPlayerObserver* player_observer() {
+    return player_observer_.get();
+  }
+
+  const std::set<MediaSessionAction>& default_actions() const {
     return default_actions_;
   }
 
+  void OnVideoVisibilityChanged() {
+    GetMediaSession()->OnVideoVisibilityChanged();
+  }
+
+  bool HasSufficientlyVisibleVideo() {
+    return GetMediaSession()->HasSufficientlyVisibleVideo();
+  }
+
  private:
-  std::set<media_session::mojom::MediaSessionAction> default_actions_;
+  std::set<MediaSessionAction> default_actions_;
 
   base::test::ScopedFeatureList scoped_feature_list_;
 
@@ -262,8 +329,9 @@ TEST_F(MediaSessionImplTest, SessionInfoState) {
 }
 
 TEST_F(MediaSessionImplTest, NotifyDelegateOnStateChange) {
-  MockAudioFocusDelegate* delegate = new MockAudioFocusDelegate();
-  SetDelegateForTests(GetMediaSession(), delegate);
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
 
   RequestAudioFocus(GetMediaSession(), AudioFocusType::kGain);
   base::RunLoop().RunUntilIdle();
@@ -288,28 +356,6 @@ TEST_F(MediaSessionImplTest, NotifyDelegateOnStateChange) {
   AbandonAudioFocus(GetMediaSession());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaSessionInfo::SessionState::kInactive, delegate->GetState());
-}
-
-TEST_F(MediaSessionImplTest, PepperForcesDuckAndRequestsFocus) {
-  int player_id = player_observer_->StartNewPlayer();
-
-  {
-    player_observer_->SetMediaContentType(media::MediaContentType::Pepper);
-    MockMediaSessionMojoObserver observer(*GetMediaSession());
-    GetMediaSession()->AddPlayer(player_observer_.get(), player_id);
-    observer.WaitForState(MediaSessionInfo::SessionState::kActive);
-    player_observer_->SetMediaContentType(media::MediaContentType::Persistent);
-  }
-
-  EXPECT_TRUE(GetForceDuck(GetMediaSession()));
-
-  {
-    MockMediaSessionMojoObserver observer(*GetMediaSession());
-    GetMediaSession()->RemovePlayer(player_observer_.get(), player_id);
-    observer.WaitForState(MediaSessionInfo::SessionState::kInactive);
-  }
-
-  EXPECT_FALSE(GetForceDuck(GetMediaSession()));
 }
 
 TEST_F(MediaSessionImplTest, RegisterObserver) {
@@ -346,9 +392,8 @@ TEST_F(MediaSessionImplTest, SessionInfo_PlaybackState) {
 }
 
 TEST_F(MediaSessionImplTest, SuspendUI) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPause, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPause, _))
       .Times(0);
 
   StartNewPlayer();
@@ -362,14 +407,12 @@ TEST_F(MediaSessionImplTest, SuspendUI) {
 }
 
 TEST_F(MediaSessionImplTest, SuspendContent_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPause, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPause, _))
       .Times(0);
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPause);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPause);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kContent);
   mock_media_session_service().FlushForTesting();
@@ -380,14 +423,12 @@ TEST_F(MediaSessionImplTest, SuspendContent_WithAction) {
 }
 
 TEST_F(MediaSessionImplTest, SuspendSystem_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPause, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPause, _))
       .Times(0);
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPause);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPause);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kSystem);
   mock_media_session_service().FlushForTesting();
@@ -398,13 +439,11 @@ TEST_F(MediaSessionImplTest, SuspendSystem_WithAction) {
 }
 
 TEST_F(MediaSessionImplTest, SuspendUI_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPause, _));
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPause, _));
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPause);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPause);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kUI);
   mock_media_session_service().FlushForTesting();
@@ -415,9 +454,8 @@ TEST_F(MediaSessionImplTest, SuspendUI_WithAction) {
 }
 
 TEST_F(MediaSessionImplTest, ResumeUI) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPlay, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPlay, _))
       .Times(0);
 
   StartNewPlayer();
@@ -432,14 +470,12 @@ TEST_F(MediaSessionImplTest, ResumeUI) {
 }
 
 TEST_F(MediaSessionImplTest, ResumeContent_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPlay, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPlay, _))
       .Times(0);
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPlay);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPlay);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kSystem);
   GetMediaSession()->Resume(MediaSession::SuspendType::kContent);
@@ -451,14 +487,12 @@ TEST_F(MediaSessionImplTest, ResumeContent_WithAction) {
 }
 
 TEST_F(MediaSessionImplTest, ResumeSystem_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPlay, _))
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPlay, _))
       .Times(0);
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPlay);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPlay);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kSystem);
   GetMediaSession()->Resume(MediaSession::SuspendType::kSystem);
@@ -470,13 +504,11 @@ TEST_F(MediaSessionImplTest, ResumeSystem_WithAction) {
 }
 
 TEST_F(MediaSessionImplTest, ResumeUI_WithAction) {
-  EXPECT_CALL(
-      mock_media_session_service().mock_client(),
-      DidReceiveAction(media_session::mojom::MediaSessionAction::kPlay, _));
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(MediaSessionAction::kPlay, _));
 
   StartNewPlayer();
-  mock_media_session_service().EnableAction(
-      media_session::mojom::MediaSessionAction::kPlay);
+  mock_media_session_service().EnableAction(MediaSessionAction::kPlay);
 
   GetMediaSession()->Suspend(MediaSession::SuspendType::kSystem);
   GetMediaSession()->Resume(MediaSession::SuspendType::kUI);
@@ -586,8 +618,9 @@ TEST_F(MediaSessionImplTest, WebContentsDestroyed_StopsDucking) {
 #if BUILDFLAG(IS_MAC)
 
 TEST_F(MediaSessionImplTest, TabFocusDoesNotCauseAudioFocus) {
-  MockAudioFocusDelegate* delegate = new MockAudioFocusDelegate();
-  SetDelegateForTests(GetMediaSession(), delegate);
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
 
   {
     MockMediaSessionMojoObserver observer(*GetMediaSession());
@@ -604,8 +637,9 @@ TEST_F(MediaSessionImplTest, TabFocusDoesNotCauseAudioFocus) {
 #else  // BUILDFLAG(IS_MAC)
 
 TEST_F(MediaSessionImplTest, RequestAudioFocus_OnFocus_Active) {
-  MockAudioFocusDelegate* delegate = new MockAudioFocusDelegate();
-  SetDelegateForTests(GetMediaSession(), delegate);
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
 
   {
     MockMediaSessionMojoObserver observer(*GetMediaSession());
@@ -620,8 +654,9 @@ TEST_F(MediaSessionImplTest, RequestAudioFocus_OnFocus_Active) {
 }
 
 TEST_F(MediaSessionImplTest, RequestAudioFocus_OnFocus_Inactive) {
-  MockAudioFocusDelegate* delegate = new MockAudioFocusDelegate();
-  SetDelegateForTests(GetMediaSession(), delegate);
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
   EXPECT_EQ(MediaSessionInfo::SessionState::kInactive,
             GetState(GetMediaSession()));
 
@@ -631,8 +666,9 @@ TEST_F(MediaSessionImplTest, RequestAudioFocus_OnFocus_Inactive) {
 }
 
 TEST_F(MediaSessionImplTest, RequestAudioFocus_OnFocus_Suspended) {
-  MockAudioFocusDelegate* delegate = new MockAudioFocusDelegate();
-  SetDelegateForTests(GetMediaSession(), delegate);
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
 
   {
     MockMediaSessionMojoObserver observer(*GetMediaSession());
@@ -671,22 +707,6 @@ TEST_F(MediaSessionImplTest, SourceId_DifferentBrowserContext) {
   EXPECT_NE(GetMediaSession()->GetSourceId(), other_session->GetSourceId());
 }
 
-TEST_F(MediaSessionImplTest, SessionInfoSensitive) {
-  EXPECT_FALSE(browser_context()->IsOffTheRecord());
-  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
-                   ->is_sensitive);
-}
-
-TEST_F(MediaSessionImplTest, SessionInfoSensitive_OffTheRecord) {
-  auto other_context = std::make_unique<TestBrowserContext>();
-  other_context->set_is_off_the_record(true);
-  auto other_contents = TestWebContents::Create(other_context.get(), nullptr);
-  MediaSessionImpl* other_session = MediaSessionImpl::Get(other_contents.get());
-
-  EXPECT_TRUE(other_context->IsOffTheRecord());
-  EXPECT_TRUE(media_session::test::GetMediaSessionInfoSync(other_session)
-                  ->is_sensitive);
-}
 
 TEST_F(MediaSessionImplTest, SessionInfoPictureInPicture) {
   WebContentsImpl* web_contents_impl =
@@ -747,6 +767,26 @@ TEST_F(MediaSessionImplTest, SessionInfoPresentation) {
                    ->has_presentation);
 }
 
+TEST_F(MediaSessionImplTest, SessionInfoRemotePlaybackMetadata) {
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->remote_playback_metadata);
+
+  int player1 = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  GetMediaSession()->SetRemotePlaybackMetadata(
+      media_session::mojom::RemotePlaybackMetadata::New(
+          "video_codec", "audio_codec", false, true, "device_friendly_name",
+          false));
+  EXPECT_TRUE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                  ->remote_playback_metadata);
+
+  int player2 = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player2);
+
+  EXPECT_TRUE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                  ->remote_playback_metadata->remote_playback_disabled);
+}
+
 TEST_F(MediaSessionImplTest, RaiseActivatesWebContents) {
   MockWebContentsDelegate delegate;
   web_contents()->SetDelegate(&delegate);
@@ -760,6 +800,779 @@ TEST_F(MediaSessionImplTest, RaiseActivatesWebContents) {
   // When the WebContents does not have a delegate, |Raise()| should not crash.
   web_contents()->SetDelegate(nullptr);
   GetMediaSession()->Raise();
+}
+
+TEST_F(MediaSessionImplTest,
+       RegisteredEnterPictureInPictureExposesAutoPictureInPicture) {
+  // When the website has registered for 'enterpictureinpicture',
+  // MediaSessionImpl should expose the kEnterPictureInPicture,
+  // kEnterAutoPictureInPicture, and kExitPictureInPicture to the internal
+  // MediaSession service.
+  StartNewPlayer();
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  mock_media_session_service().EnableAction(
+      MediaSessionAction::kEnterPictureInPicture);
+  mock_media_session_service().FlushForTesting();
+
+  EXPECT_TRUE(
+      observer.actions().contains(MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_TRUE(
+      observer.actions().contains(MediaSessionAction::kExitPictureInPicture));
+}
+
+TEST_F(MediaSessionImplTest, WebContentsHasPictureInPictureVideo) {
+  WebContentsImpl* web_contents_impl =
+      static_cast<WebContentsImpl*>(web_contents());
+  web_contents_impl->SetHasPictureInPictureVideo(true);
+
+  StartNewPlayer();
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  mock_media_session_service().EnableAction(MediaSessionAction::kPause);
+  mock_media_session_service().FlushForTesting();
+
+  EXPECT_FALSE(
+      observer.actions().contains(MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_TRUE(
+      observer.actions().contains(MediaSessionAction::kExitPictureInPicture));
+}
+
+TEST_F(MediaSessionImplTest, WebContentsHasPictureInPictureDocument) {
+  WebContentsImpl* web_contents_impl =
+      static_cast<WebContentsImpl*>(web_contents());
+  web_contents_impl->SetHasPictureInPictureDocument(true);
+
+  StartNewPlayer();
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  mock_media_session_service().EnableAction(MediaSessionAction::kPause);
+  mock_media_session_service().FlushForTesting();
+
+  EXPECT_FALSE(
+      observer.actions().contains(MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_TRUE(
+      observer.actions().contains(MediaSessionAction::kExitPictureInPicture));
+}
+
+TEST_F(MediaSessionImplTest, SufficientlyVisibleVideo_NoPlayer) {
+  OnVideoVisibilityChanged();
+
+  EXPECT_FALSE(HasSufficientlyVisibleVideo());
+}
+
+TEST_F(MediaSessionImplTest, SufficientlyVisibleVideo_MultiplePlayers) {
+  // Start with a single player with a video reporting as sufficiently visible.
+  int player1 = player_observer_->StartNewPlayer();
+  player_observer_->SetHasSufficientlyVisibleVideo(player1, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+
+  OnVideoVisibilityChanged();
+  EXPECT_TRUE(HasSufficientlyVisibleVideo());
+
+  // Add a second player with with a video reporting as sufficiently visible,
+  // and make player1 report that its video is not sufficiently visible.
+  int player2 = player_observer_->StartNewPlayer();
+  player_observer_->SetHasSufficientlyVisibleVideo(player2, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player2);
+
+  player_observer_->SetHasSufficientlyVisibleVideo(player1, false);
+
+  OnVideoVisibilityChanged();
+  EXPECT_TRUE(HasSufficientlyVisibleVideo());
+
+  // Make player2 report that its video is not sufficiently visible.
+  player_observer_->SetHasSufficientlyVisibleVideo(player2, false);
+
+  OnVideoVisibilityChanged();
+  EXPECT_FALSE(HasSufficientlyVisibleVideo());
+}
+
+TEST_F(MediaSessionImplTest, SessionInfoDontHideMetadataByDefault) {
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->hide_metadata);
+}
+
+TEST_F(MediaSessionImplTest, PausedPlayersDoNotRequestFocus) {
+  // If a player is paused when it's added, it should be controllable but should
+  // not request audio focus.
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
+  int player_id = StartNewPlayer();
+  EXPECT_TRUE(GetMediaSession()->IsActive());
+  EXPECT_TRUE(GetMediaSession()->IsControllable());
+  EXPECT_EQ(delegate->request_audio_focus_count(), 1);
+  player_observer()->SetPlaying(player_id, false);
+  // Remember that the player still has the audio focus.  Re-adding the paused
+  // player should neither lose the focus, nor re-request it.
+  GetMediaSession()->AddPlayer(player_observer(), player_id);
+  EXPECT_EQ(delegate->request_audio_focus_count(), 1);
+  EXPECT_TRUE(GetMediaSession()->IsActive());
+
+  // Give up audio focus.
+  GetMediaSession()->RemovePlayer(player_observer(), player_id);
+  EXPECT_FALSE(GetMediaSession()->IsActive());
+  EXPECT_FALSE(GetMediaSession()->IsControllable());
+
+  // Adding should now result in an inactive session that is controllable,
+  // without requesting focus again.
+  GetMediaSession()->AddPlayer(player_observer(), player_id);
+  EXPECT_EQ(delegate->request_audio_focus_count(), 1);
+  EXPECT_FALSE(GetMediaSession()->IsActive());
+  EXPECT_TRUE(GetMediaSession()->IsControllable());
+}
+
+TEST_F(MediaSessionImplTest, SeekingAndScrubbingNotAllowedWithMaxDuration) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  int player_id = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player_id);
+
+  media_session::MediaPosition pos;
+  pos = media_session::MediaPosition(
+      /*playback_rate=*/1.0,
+      /*duration=*/base::TimeDelta::Max(),
+      /*position=*/base::TimeDelta(), /*end_of_media=*/false);
+
+  player_observer_->SetPosition(player_id, pos);
+  GetMediaSession()->RebuildAndNotifyMediaPositionChanged();
+  FlushForTesting(GetMediaSession());
+
+  // With a max duration, we should be considered live media and should not
+  // allow seeking and scrubbing actions by default.
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekTo));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kScrubTo));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekForward));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekBackward));
+
+  // However, if the website explicitly supports the action, then we will still
+  // route it.
+  mock_media_session_service().EnableAction(MediaSessionAction::kSeekTo);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_TRUE(observer.actions().contains(MediaSessionAction::kSeekTo));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kScrubTo));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekForward));
+  EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekBackward));
+}
+
+TEST_F(MediaSessionImplTest, AmbientPlayerFocusRequest) {
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  MockAudioFocusDelegate* delegate = delegate_unique.get();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
+
+  int player_id = player_observer_->StartNewPlayer();
+
+  player_observer_->SetMediaContentType(media::MediaContentType::kAmbient);
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  GetMediaSession()->AddPlayer(player_observer_.get(), player_id);
+
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, ambient players should not request audio focus.
+  observer.WaitForState(MediaSessionInfo::SessionState::kInactive);
+  EXPECT_FALSE(delegate->GetLastRequestedFocusType().has_value());
+#else
+  // On other platforms, an ambient player should request ambient focus.
+  observer.WaitForState(MediaSessionInfo::SessionState::kActive);
+  EXPECT_TRUE(delegate->GetLastRequestedFocusType().has_value());
+  EXPECT_EQ(AudioFocusType::kAmbient, *delegate->GetLastRequestedFocusType());
+
+  // Ambient players should also receive volume multiplier updates.
+  constexpr float kDuckingMultiplier = 0.1;
+  EXPECT_EQ(player_observer_->GetVolumeMultiplier(player_id), 1.0);
+  GetMediaSession()->SetDuckingVolumeMultiplier(kDuckingMultiplier);
+  GetMediaSession()->StartDucking();
+  EXPECT_EQ(player_observer_->GetVolumeMultiplier(player_id),
+            kDuckingMultiplier);
+  GetMediaSession()->StopDucking();
+  EXPECT_EQ(player_observer_->GetVolumeMultiplier(player_id), 1.0);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+TEST_F(MediaSessionImplTest, AmbientPlayerDoesNotRequestFocusWhenSuspended) {
+  auto delegate_unique = std::make_unique<MockAudioFocusDelegate>();
+  SetDelegateForTests(GetMediaSession(), std::move(delegate_unique));
+
+  int persistent_player_id = player_observer_->StartNewPlayer();
+
+  MockMediaSessionPlayerObserver ambient_player_observer(
+      main_rfh(), media::MediaContentType::kAmbient);
+  int ambient_player_id = ambient_player_observer.StartNewPlayer();
+
+  // Add a persistent player to get audio focus.
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  GetMediaSession()->AddPlayer(player_observer_.get(), persistent_player_id);
+  observer.WaitForState(MediaSessionInfo::SessionState::kActive);
+
+  // Suspend the persistent player.
+  GetMediaSession()->Suspend(MediaSession::SuspendType::kSystem);
+  observer.WaitForState(MediaSessionInfo::SessionState::kSuspended);
+
+  // Adding an ambient player should not change the audio focus state.
+  GetMediaSession()->AddPlayer(&ambient_player_observer, ambient_player_id);
+  observer.WaitForState(MediaSessionInfo::SessionState::kSuspended);
+}
+
+TEST_F(MediaSessionImplTest, AutoPictureInPictureInfoChanged) {
+  EXPECT_EQ(
+      0,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  mock_media_session_service().EnableAction(
+      MediaSessionAction::kEnterPictureInPicture);
+  mock_media_session_service().FlushForTesting();
+
+  int player = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  GetMediaSession()->EnterAutoPictureInPicture();
+
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEntersBrowserInitiatedAutoPip_MoreThanOnePlayer) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player1 = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player1, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  observer.WaitForState(MediaSessionInfo::SessionState::kActive);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  int player2 = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player2, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player2);
+  observer.WaitForState(MediaSessionInfo::SessionState::kActive);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(GetMediaSession()->ShouldRouteAction(
+      MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEntersBrowserInitiatedAutoPip_SinglePlayerNotPlaying) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer(/*is_playing=*/false);
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(GetMediaSession()->ShouldRouteAction(
+      MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEnterBrowserInitiatedAutoPip_PlayerInSubframe) {
+  // Create a subframe.
+  auto* parent_host_tester = content::RenderFrameHostTester::For(main_rfh());
+  parent_host_tester->InitializeRenderFrameIfNeeded();
+  content::RenderFrameHost* sub_frame =
+      parent_host_tester->AppendChild("child");
+  ASSERT_TRUE(sub_frame);
+
+  // Create a player observer associated with the subframe.
+  player_observer_ = std::make_unique<MockMediaSessionPlayerObserver>(
+      sub_frame, media::MediaContentType::kPersistent);
+
+  // Start a playing player with picture-in-picture available.
+  int player_id = player_observer_->StartNewPlayer(/*is_playing=*/true);
+  player_observer_->SetIsPictureInPictureAvailable(player_id, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player_id);
+
+  // Verify that kEnterAutoPictureInPicture action is not available.
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+  EXPECT_FALSE(GetMediaSession()->ShouldRouteAction(
+      MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  // Attempt to enter automatic picture-in-picture and verify that
+  // OnEnterPictureInPicture was not called.
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       EntersBrowserInitiatedAutoPip_SinglePlayerPlaying) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(GetMediaSession()->ShouldRouteAction(
+      MediaSessionAction::kEnterPictureInPicture));
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(1, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEnterBrowserInitiatedAutoPip_WhenUsingCamera) {
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  // With no camera/microphone usage, auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  // Set camera state to `kTurnedOn`.
+  mock_media_session_service().SetCameraState(
+      media_session::mojom::CameraState::kTurnedOn);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should not be possible.
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  // Set camera state back to Unknown.
+  mock_media_session_service().SetCameraState(
+      media_session::mojom::CameraState::kUnknown);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(1, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEnterBrowserInitiatedAutoPip_WhenUsingMicrophone) {
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  // With no camera/microphone usage, auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  // Set microphone state to `kUnmuted`.
+  mock_media_session_service().SetMicrophoneState(
+      media_session::mojom::MicrophoneState::kUnmuted);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should not be possible.
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  // Set microphone state back to `kUnknown`.
+  mock_media_session_service().SetMicrophoneState(
+      media_session::mojom::MicrophoneState::kUnknown);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(1, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEnterBrowserInitiatedAutoPip_WhenUsingCameraAndMicrophone) {
+  media_session::test::MockMediaSessionMojoObserver observer(
+      *GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  // With no camera/microphone usage, auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+
+  // Set camera and microphone state to `kTurnedOn`/`kUnmuted`.
+  mock_media_session_service().SetCameraState(
+      media_session::mojom::CameraState::kTurnedOn);
+  mock_media_session_service().SetMicrophoneState(
+      media_session::mojom::MicrophoneState::kUnmuted);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should not be possible.
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  // Set camera and microphone state back to `kUnknown`.
+  mock_media_session_service().SetCameraState(
+      media_session::mojom::CameraState::kUnknown);
+  mock_media_session_service().SetMicrophoneState(
+      media_session::mojom::MicrophoneState::kUnknown);
+  FlushForTesting(GetMediaSession());
+
+  // Auto-pip should be possible.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(1, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(MediaSessionImplTest,
+       DoesNotEnterBrowserInitiatedAutoPip_WhenPictureInPictureNotAvailable) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->can_enter_browser_initiated_autopip);
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, false);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->can_enter_browser_initiated_autopip);
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+}
+
+TEST_F(
+    MediaSessionImplTest,
+    CanEnterBrowserInitiatedAutoPipIsFalse_WhenEnterPictureInPictureIsPresent) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_FALSE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->can_enter_browser_initiated_autopip);
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  // With no action handler, `can_enter_browser_initiated_autopip` should be
+  // true.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_TRUE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                  ->can_enter_browser_initiated_autopip);
+
+  // Enable the enterpictureinpicture action handler.
+  mock_media_session_service().EnableAction(
+      MediaSessionAction::kEnterPictureInPicture);
+  FlushForTesting(GetMediaSession());
+
+  // With the enterpictureinpicture action handler enabled,
+  // `can_enter_browser_initiated_autopip` should be false.
+  EXPECT_TRUE(observer.actions().contains(
+      MediaSessionAction::kEnterAutoPictureInPicture));
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->can_enter_browser_initiated_autopip);
+}
+
+TEST_F(MediaSessionImplTest,
+       ReportAutoPictureInPictureInfoChanged_Deduplicates) {
+  int player = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+
+  MockContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  media::PictureInPictureEventsInfo::AutoPipInfo info;
+  info.auto_pip_reason =
+      media::PictureInPictureEventsInfo::AutoPipReason::kMediaPlayback;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+
+  // The first call should notify.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // A second call with the same info should not.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // A call with different info should notify.
+  info.is_playing = true;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      2,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // A call with the same info again should not.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      2,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(MediaSessionImplTest,
+       ReportAutoPictureInPictureInfoChanged_ClearedOnCrossDocumentNavigate) {
+  int player = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+
+  MockContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  media::PictureInPictureEventsInfo::AutoPipInfo info;
+  info.auto_pip_reason =
+      media::PictureInPictureEventsInfo::AutoPipReason::kMediaPlayback;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+
+  // The first call should notify.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Navigate to a new document, which should clear the cached info.
+  NavigateAndCommit(GURL("https://example.com/foo"));
+
+  // The info is the same, but since we navigated, it should be sent again.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      2,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(MediaSessionImplTest,
+       ReportAutoPictureInPictureInfoChanged_NotClearedOnSameDocumentNavigate) {
+  // Navigate to an initial page.
+  NavigateAndCommit(GURL("https://example.com/"));
+
+  int player = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+
+  MockContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  media::PictureInPictureEventsInfo::AutoPipInfo info;
+  info.auto_pip_reason =
+      media::PictureInPictureEventsInfo::AutoPipReason::kMediaPlayback;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+
+  // The first call should notify.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Navigate to a same-document fragment, which should not clear the cached
+  // info.
+  NavigateAndCommit(GURL("https://example.com/#foo"));
+
+  // The info is the same, and since we did a same-document navigation, it
+  // should not be sent again.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(MediaSessionImplTest, NewPlayerReceivesAutoPictureInPictureInfo) {
+  // Add a player. It should not receive any info yet.
+  int player1 = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  EXPECT_EQ(
+      0,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Set up the mock client to return some auto-pip info.
+  MockContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  media::PictureInPictureEventsInfo::AutoPipInfo info;
+  info.auto_pip_reason =
+      media::PictureInPictureEventsInfo::AutoPipReason::kMediaPlayback;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+
+  // Report the info change. The first player should be notified.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Add a second player. It should be notified immediately with the cached
+  // info.
+  int player2 = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player2);
+  EXPECT_EQ(
+      2,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(MediaSessionImplTest, NewPlayerReceivesAutoPictureInPictureInfoOnce) {
+  MockContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  media::PictureInPictureEventsInfo::AutoPipInfo info;
+  info.auto_pip_reason =
+      media::PictureInPictureEventsInfo::AutoPipReason::kMediaPlayback;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+
+  // Report an info change. There are no players, so nothing should happen.
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      0,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Add a player. It should be notified immediately with the cached info.
+  int player1 = player_observer_->StartNewPlayer();
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Add the same player again. It should not be notified again.
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  EXPECT_EQ(
+      1,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Report a change. The existing player should be notified.
+  info.is_playing = true;
+  EXPECT_CALL(mock_client, GetAutoPipInfo(_)).WillRepeatedly(Return(info));
+  GetMediaSession()->ReportAutoPictureInPictureInfoChanged();
+  EXPECT_EQ(
+      2,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  // Remove the player and add it back. It should be notified again.
+  GetMediaSession()->RemovePlayer(player_observer_.get(), player1);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player1);
+  EXPECT_EQ(
+      3,
+      player_observer_->received_auto_picture_in_picture_info_changed_calls());
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(MediaSessionImplTest, EnterPictureInPictureWithReason) {
+  StartNewPlayer();
+  mock_media_session_service().EnableAction(
+      MediaSessionAction::kEnterPictureInPicture);
+
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(
+                  MediaSessionAction::kEnterPictureInPicture,
+                  EnterPictureInPictureReasonEquals(
+                      blink::mojom::MediaSessionEnterPictureInPictureReason::
+                          kUserAction)));
+
+  GetMediaSession()->EnterPictureInPicture();
+  mock_media_session_service().FlushForTesting();
+}
+
+TEST_F(MediaSessionImplTest, EnterAutoPictureInPictureWithReason) {
+  StartNewPlayer();
+  mock_media_session_service().EnableAction(
+      MediaSessionAction::kEnterPictureInPicture);
+
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(
+                  MediaSessionAction::kEnterPictureInPicture,
+                  EnterPictureInPictureReasonEquals(
+                      blink::mojom::MediaSessionEnterPictureInPictureReason::
+                          kContentOccluded)));
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  mock_media_session_service().FlushForTesting();
+}
+
+class MediaSessionImplWithMediaSessionClientTest : public MediaSessionImplTest {
+ protected:
+  TestMediaSessionClient client_;
+};
+
+TEST_F(MediaSessionImplWithMediaSessionClientTest,
+       SessionInfoDontHideMetadata) {
+  client_.SetShouldHideMetadata(false);
+  EXPECT_FALSE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                   ->hide_metadata);
+}
+
+TEST_F(MediaSessionImplWithMediaSessionClientTest, SessionInfoHideMetadata) {
+  client_.SetShouldHideMetadata(true);
+  EXPECT_TRUE(media_session::test::GetMediaSessionInfoSync(GetMediaSession())
+                  ->hide_metadata);
 }
 
 // Tests for throttling duration updates.
@@ -808,8 +1621,26 @@ TEST_F(MediaSessionImplDurationThrottleTest, ThrottleDurationUpdate) {
                     /*playback_rate=*/0.0,
                     /*duration=*/base::TimeDelta::Max(),
                     /*position=*/base::TimeDelta(), /*end_of_media=*/false));
+
+      // Since we're now considered live, the seeking and scrubbing actions
+      // should no longer be available.
+      EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kSeekTo));
+      EXPECT_FALSE(observer.actions().contains(MediaSessionAction::kScrubTo));
+      EXPECT_FALSE(
+          observer.actions().contains(MediaSessionAction::kSeekForward));
+      EXPECT_FALSE(
+          observer.actions().contains(MediaSessionAction::kSeekBackward));
     } else {
       EXPECT_EQ(**observer.session_position(), pos);
+
+      // If we're not considered live, then the seeking and scrubbing actions
+      // should still be available.
+      EXPECT_TRUE(observer.actions().contains(MediaSessionAction::kSeekTo));
+      EXPECT_TRUE(observer.actions().contains(MediaSessionAction::kScrubTo));
+      EXPECT_TRUE(
+          observer.actions().contains(MediaSessionAction::kSeekForward));
+      EXPECT_TRUE(
+          observer.actions().contains(MediaSessionAction::kSeekBackward));
     }
   }
 
@@ -843,5 +1674,97 @@ TEST_F(MediaSessionImplDurationThrottleTest, ThrottleResetOnPlayerChange) {
     GetMediaSession()->RemovePlayer(player_observer_.get(), player_id);
   }
 }
+
+class MediaSessionImplBrowserAutoPipDryRunTest
+    : public MediaSessionImplTest,
+      public ::testing::WithParamInterface<std::tuple<bool, bool, bool>> {
+ public:
+  bool IsBrowserInitiatedAutoPipEnabled() const {
+    return std::get<0>(GetParam());
+  }
+  bool IsBrowserInitiatedAutoPipDryRunEnabled() const {
+    return std::get<1>(GetParam());
+  }
+  bool IsEnterPictureInPictureActionEnabled() const {
+    return std::get<2>(GetParam());
+  }
+
+ private:
+  std::vector<base::test::FeatureRef> GetEnabledFeatures() override {
+    std::vector<base::test::FeatureRef> enabled_features = {
+        media_session::features::kMediaSessionService,
+        media_session::features::kAudioFocusEnforcement};
+
+    if (IsBrowserInitiatedAutoPipDryRunEnabled()) {
+      enabled_features.push_back(
+          media::kBrowserInitiatedAutomaticPictureInPictureDryRun);
+    }
+
+    if (IsBrowserInitiatedAutoPipEnabled()) {
+      enabled_features.push_back(
+          blink::features::kBrowserInitiatedAutomaticPictureInPicture);
+    }
+    return enabled_features;
+  }
+
+  std::vector<base::test::FeatureRef> GetDisabledFeatures() override {
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (!IsBrowserInitiatedAutoPipDryRunEnabled()) {
+      disabled_features.push_back(
+          media::kBrowserInitiatedAutomaticPictureInPictureDryRun);
+    }
+
+    if (!IsBrowserInitiatedAutoPipEnabled()) {
+      disabled_features.push_back(
+          blink::features::kBrowserInitiatedAutomaticPictureInPicture);
+    }
+    return disabled_features;
+  }
+};
+
+TEST_P(MediaSessionImplBrowserAutoPipDryRunTest, EnterAutoPictureInPicture) {
+  MockMediaSessionMojoObserver observer(*GetMediaSession());
+  FlushForTesting(GetMediaSession());
+
+  EXPECT_EQ(0, player_observer_->received_enter_picture_in_picture_calls());
+
+  int player = player_observer_->StartNewPlayer();
+  player_observer_->SetIsPictureInPictureAvailable(player, true);
+  GetMediaSession()->AddPlayer(player_observer_.get(), player);
+  FlushForTesting(GetMediaSession());
+
+  if (IsEnterPictureInPictureActionEnabled()) {
+    mock_media_session_service().EnableAction(
+        MediaSessionAction::kEnterPictureInPicture);
+  }
+
+  // The EnterPictureInPictureAction action should be received if enabled on the
+  // media session service.
+  EXPECT_CALL(mock_media_session_service().mock_client(),
+              DidReceiveAction(
+                  MediaSessionAction::kEnterPictureInPicture,
+                  EnterPictureInPictureReasonEquals(
+                      blink::mojom::MediaSessionEnterPictureInPictureReason::
+                          kContentOccluded)))
+      .Times(IsEnterPictureInPictureActionEnabled() ? 1 : 0);
+
+  GetMediaSession()->EnterAutoPictureInPicture();
+  mock_media_session_service().FlushForTesting();
+
+  // Verify that the `BrowserInitiatedAutomaticPictureInPictureDryRun` flag does
+  // not cause PiP to be entered.
+  int expected_pip_calls = (!IsEnterPictureInPictureActionEnabled() &&
+                            IsBrowserInitiatedAutoPipEnabled())
+                               ? 1
+                               : 0;
+  EXPECT_EQ(expected_pip_calls,
+            player_observer()->received_enter_picture_in_picture_calls());
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         MediaSessionImplBrowserAutoPipDryRunTest,
+                         ::testing::Combine(::testing::Bool(),
+                                            ::testing::Bool(),
+                                            ::testing::Bool()));
 
 }  // namespace content

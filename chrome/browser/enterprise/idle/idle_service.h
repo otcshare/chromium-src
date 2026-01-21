@@ -13,7 +13,6 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/enterprise/idle/action_runner.h"
-#include "chrome/browser/enterprise/idle/browser_closer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "ui/base/idle/idle_polling_service.h"
@@ -40,14 +39,12 @@ class IdleService : public KeyedService,
   void OnIdleStateChange(
       const ui::IdlePollingService::State& polled_state) override;
 
+  base::TimeDelta GetTimeout() const;
+
  private:
   // Called when the IdleTimeout policy changes, via the
   // "idle_profile_close_timeout" pref it's mapped to.
   void OnIdleTimeoutPrefChanged();
-
-  // Runs when the BrowserCloser finishes. Depending on the result, shows the
-  // Profile Picker.
-  void OnCloseFinished(BrowserCloser::CloseResult result);
 
   raw_ptr<Profile> const profile_;
   std::unique_ptr<ActionRunner> action_runner_;
@@ -59,6 +56,9 @@ class IdleService : public KeyedService,
   base::ScopedObservation<ui::IdlePollingService,
                           ui::IdlePollingService::Observer>
       polling_service_observation_{this};
+
+  class BrowserObserver;
+  std::unique_ptr<BrowserObserver> browser_observer_;
 
   base::WeakPtrFactory<IdleService> weak_ptr_factory_{this};
 };

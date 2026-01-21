@@ -6,15 +6,17 @@
 #define CHROMEOS_ASH_COMPONENTS_MEMORY_USERSPACE_SWAP_REGION_H_
 
 #include <sys/uio.h>
+
 #include <cstdint>
+#include <optional>
 #include <ostream>
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/containers/span.h"
 #include "base/numerics/checked_math.h"
-#include "base/strings/string_piece.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 namespace memory {
@@ -70,11 +72,11 @@ class Region {
 
   template <typename T>
   base::span<T> AsSpan() const {
-    return base::span<T>(reinterpret_cast<T*>(address), length);
+    return UNSAFE_TODO(base::span<T>(reinterpret_cast<T*>(address), length));
   }
 
   struct iovec COMPONENT_EXPORT(USERSPACE_SWAP) AsIovec() const;
-  base::StringPiece COMPONENT_EXPORT(USERSPACE_SWAP) AsStringPiece() const;
+  std::string_view COMPONENT_EXPORT(USERSPACE_SWAP) AsStringPiece() const;
 
   bool operator<(const Region& other) const {
     // Because the standard library treats equality as !less(a,b) &&
@@ -115,9 +117,9 @@ struct COMPONENT_EXPORT(USERSPACE_SWAP) RegionOverlap {
 
   RegionOverlap(const RegionOverlap&);
 
-  absl::optional<Region> before;
-  absl::optional<Region> intersection;
-  absl::optional<Region> after;
+  std::optional<Region> before;
+  std::optional<Region> intersection;
+  std::optional<Region> after;
 };
 
 }  // namespace userspace_swap

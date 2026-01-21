@@ -5,17 +5,19 @@
 #ifndef GIN_OBJECT_TEMPLATE_BUILDER_H_
 #define GIN_OBJECT_TEMPLATE_BUILDER_H_
 
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "gin/converter.h"
 #include "gin/function_template.h"
 #include "gin/gin_export.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "v8/include/v8-forward.h"
+#include "v8/include/v8-template.h"
 
 namespace gin {
 
@@ -46,17 +48,14 @@ class GIN_EXPORT ObjectTemplateBuilder {
  public:
   explicit ObjectTemplateBuilder(v8::Isolate* isolate);
   ObjectTemplateBuilder(v8::Isolate* isolate, const char* type_name);
-  ObjectTemplateBuilder(v8::Isolate* isolate,
-                        const char* type_name,
-                        v8::Local<v8::ObjectTemplate> tmpl);
   ObjectTemplateBuilder(const ObjectTemplateBuilder& other);
   ~ObjectTemplateBuilder();
 
   // It's against Google C++ style to return a non-const ref, but we take some
   // poetic license here in order that all calls to Set() can be via the '.'
   // operator and line up nicely.
-  template<typename T>
-  ObjectTemplateBuilder& SetValue(const base::StringPiece& name, T val) {
+  template <typename T>
+  ObjectTemplateBuilder& SetValue(const std::string_view& name, T val) {
     return SetImpl(name, ConvertToV8(isolate_, val));
   }
 
@@ -64,8 +63,8 @@ class GIN_EXPORT ObjectTemplateBuilder {
   // pointer, base::RepeatingCallback, or v8::FunctionTemplate. Most clients
   // will want to use one of the first two options. Also see
   // gin::CreateFunctionTemplate() for creating raw function templates.
-  template<typename T>
-  ObjectTemplateBuilder& SetMethod(const base::StringPiece& name,
+  template <typename T>
+  ObjectTemplateBuilder& SetMethod(const std::string_view& name,
                                    const T& callback) {
     return SetImpl(
         name, internal::CreateFunctionTemplate(isolate_, callback, type_name_));
@@ -78,16 +77,17 @@ class GIN_EXPORT ObjectTemplateBuilder {
         name, internal::CreateFunctionTemplate(isolate_, callback, type_name_));
   }
 
-  template<typename T>
-  ObjectTemplateBuilder& SetProperty(const base::StringPiece& name,
+  template <typename T>
+  ObjectTemplateBuilder& SetProperty(const std::string_view& name,
                                      const T& getter) {
     return SetPropertyImpl(
         name, internal::CreateFunctionTemplate(isolate_, getter, type_name_),
         v8::Local<v8::FunctionTemplate>());
   }
-  template<typename T, typename U>
-  ObjectTemplateBuilder& SetProperty(const base::StringPiece& name,
-                                     const T& getter, const U& setter) {
+  template <typename T, typename U>
+  ObjectTemplateBuilder& SetProperty(const std::string_view& name,
+                                     const T& getter,
+                                     const U& setter) {
     return SetPropertyImpl(
         name, internal::CreateFunctionTemplate(isolate_, getter, type_name_),
         internal::CreateFunctionTemplate(isolate_, setter, type_name_));
@@ -97,7 +97,7 @@ class GIN_EXPORT ObjectTemplateBuilder {
   // to be a data property but whose value is lazily computed the first time the
   // [[Get]] operation occurs.
   template <typename T>
-  ObjectTemplateBuilder& SetLazyDataProperty(const base::StringPiece& name,
+  ObjectTemplateBuilder& SetLazyDataProperty(const std::string_view& name,
                                              const T& getter) {
     InvokerOptions options;
     if (std::is_member_function_pointer<T>::value) {
@@ -109,23 +109,77 @@ class GIN_EXPORT ObjectTemplateBuilder {
     return SetLazyDataPropertyImpl(name, callback, data);
   }
 
-  ObjectTemplateBuilder& AddNamedPropertyInterceptor();
+  template <WrappablePointerTag tag>
+  ObjectTemplateBuilder& AddNamedPropertyInterceptor() {
+    template_->SetHandler(v8::NamedPropertyHandlerConfiguration(
+        &ObjectTemplateBuilder::NamedPropertyGetter<tag>,
+        &ObjectTemplateBuilder::NamedPropertySetter<tag>,
+        &ObjectTemplateBuilder::NamedPropertyQuery<tag>, nullptr,
+        &ObjectTemplateBuilder::NamedPropertyEnumerator<tag>,
+        v8::Local<v8::Value>(),
+        v8::PropertyHandlerFlags::kOnlyInterceptStrings));
+    return *this;
+  }
+
   ObjectTemplateBuilder& AddIndexedPropertyInterceptor();
 
   v8::Local<v8::ObjectTemplate> Build();
 
  private:
-  ObjectTemplateBuilder& SetImpl(const base::StringPiece& name,
+  ObjectTemplateBuilder& SetImpl(const std::string_view& name,
                                  v8::Local<v8::Data> val);
   ObjectTemplateBuilder& SetImpl(v8::Local<v8::Name> name,
                                  v8::Local<v8::Data> val);
   ObjectTemplateBuilder& SetPropertyImpl(
-      const base::StringPiece& name, v8::Local<v8::FunctionTemplate> getter,
+      const std::string_view& name,
+      v8::Local<v8::FunctionTemplate> getter,
       v8::Local<v8::FunctionTemplate> setter);
   ObjectTemplateBuilder& SetLazyDataPropertyImpl(
-      const base::StringPiece& name,
+      const std::string_view& name,
       v8::AccessorNameGetterCallback callback,
       v8::Local<v8::Value> data);
+
+  static v8::Intercepted NamedPropertyGetterImpl(
+      WrappablePointerTag tag,
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Value>& info);
+  static v8::Intercepted NamedPropertySetterImpl(
+      WrappablePointerTag tag,
+      v8::Local<v8::Name> property,
+      v8::Local<v8::Value> value,
+      const v8::PropertyCallbackInfo<void>& info);
+  static v8::Intercepted NamedPropertyQueryImpl(
+      WrappablePointerTag tag,
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Integer>& info);
+  static void NamedPropertyEnumeratorImpl(
+      WrappablePointerTag tag,
+      const v8::PropertyCallbackInfo<v8::Array>& info);
+
+  template <WrappablePointerTag tag>
+  static v8::Intercepted NamedPropertyGetter(
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Value>& info) {
+    return NamedPropertyGetterImpl(tag, property, info);
+  }
+  template <WrappablePointerTag tag>
+  static v8::Intercepted NamedPropertySetter(
+      v8::Local<v8::Name> property,
+      v8::Local<v8::Value> value,
+      const v8::PropertyCallbackInfo<void>& info) {
+    return NamedPropertySetterImpl(tag, property, value, info);
+  }
+  template <WrappablePointerTag tag>
+  static v8::Intercepted NamedPropertyQuery(
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Integer>& info) {
+    return NamedPropertyQueryImpl(tag, property, info);
+  }
+  template <WrappablePointerTag tag>
+  static void NamedPropertyEnumerator(
+      const v8::PropertyCallbackInfo<v8::Array>& info) {
+    NamedPropertyEnumeratorImpl(tag, info);
+  }
 
   raw_ptr<v8::Isolate> isolate_;
 
@@ -134,6 +188,7 @@ class GIN_EXPORT ObjectTemplateBuilder {
   const char* type_name_ = nullptr;
 
   // ObjectTemplateBuilder should only be used on the stack.
+  v8::Local<v8::FunctionTemplate> constructor_template_;
   v8::Local<v8::ObjectTemplate> template_;
 };
 

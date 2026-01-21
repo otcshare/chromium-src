@@ -9,35 +9,44 @@
 
 #include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/core/animation/interpolable_length.h"
+#include "third_party/blink/renderer/core/animation/underlying_value_owner.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/style/text_indent_flags.h"
 
 namespace blink {
 
 class CSSTextIndentNonInterpolableValue : public NonInterpolableValue {
  public:
-  static scoped_refptr<CSSTextIndentNonInterpolableValue> Create(
-      scoped_refptr<const NonInterpolableValue> length_non_interpolable_value) {
-    return base::AdoptRef(new CSSTextIndentNonInterpolableValue(
-        std::move(length_non_interpolable_value)));
+  explicit CSSTextIndentNonInterpolableValue(
+      const NonInterpolableValue* length_non_interpolable_value,
+      TextIndentFlags flags)
+      : length_non_interpolable_value_(length_non_interpolable_value),
+        flags_(flags) {}
+
+  void Trace(Visitor* visitor) const override {
+    NonInterpolableValue::Trace(visitor);
+    visitor->Trace(length_non_interpolable_value_);
   }
 
   const NonInterpolableValue* LengthNonInterpolableValue() const {
-    return length_non_interpolable_value_.get();
+    return length_non_interpolable_value_.Get();
+  }
+
+  TextIndentFlags Flags() const { return flags_; }
+
+  bool IsCompatibleWith(const CSSTextIndentNonInterpolableValue& other) const {
+    return Flags() == other.Flags();
   }
 
   DECLARE_NON_INTERPOLABLE_VALUE_TYPE();
 
  private:
-  explicit CSSTextIndentNonInterpolableValue(
-      scoped_refptr<const NonInterpolableValue> length_non_interpolable_value)
-      : length_non_interpolable_value_(
-            std::move(length_non_interpolable_value)) {}
-
-  scoped_refptr<const NonInterpolableValue> length_non_interpolable_value_;
+  Member<const NonInterpolableValue> length_non_interpolable_value_;
+  TextIndentFlags flags_;
 };
 
 DEFINE_NON_INTERPOLABLE_VALUE_TYPE(CSSTextIndentNonInterpolableValue);
@@ -67,13 +76,17 @@ class InheritedIndentChecker
   const Length length_;
 };
 
-InterpolationValue CreateValue(const Length& length, double zoom) {
-  InterpolationValue converted_length(
-      InterpolableLength::MaybeConvertLength(length, zoom));
+InterpolationValue CreateValue(const Length& length,
+                               TextIndentFlags flags,
+                               const CSSProperty& property,
+                               double zoom) {
+  InterpolationValue converted_length(InterpolableLength::MaybeConvertLength(
+      length, property, zoom, /*interpolate_size=*/std::nullopt));
   DCHECK(converted_length);
-  return InterpolationValue(std::move(converted_length.interpolable_value),
-                            CSSTextIndentNonInterpolableValue::Create(std::move(
-                                converted_length.non_interpolable_value)));
+  return InterpolationValue(
+      std::move(converted_length.interpolable_value),
+      MakeGarbageCollected<CSSTextIndentNonInterpolableValue>(
+          std::move(converted_length.non_interpolable_value), flags));
 }
 
 }  // namespace
@@ -81,13 +94,16 @@ InterpolationValue CreateValue(const Length& length, double zoom) {
 InterpolationValue CSSTextIndentInterpolationType::MaybeConvertNeutral(
     const InterpolationValue& underlying,
     ConversionCheckers& conversion_checkers) const {
-  return CreateValue(Length::Fixed(0), 1);
+  return CreateValue(Length::Fixed(0), TextIndentFlags::kDefault, CssProperty(),
+                     1);
 }
 
 InterpolationValue CSSTextIndentInterpolationType::MaybeConvertInitial(
     const StyleResolverState&,
     ConversionCheckers&) const {
-  return CreateValue(ComputedStyleInitialValues::InitialTextIndent(), 1);
+  return CreateValue(ComputedStyleInitialValues::InitialTextIndent(),
+                     ComputedStyleInitialValues::InitialTextIndentFlags(),
+                     CssProperty(), 1);
 }
 
 InterpolationValue CSSTextIndentInterpolationType::MaybeConvertInherit(
@@ -95,40 +111,66 @@ InterpolationValue CSSTextIndentInterpolationType::MaybeConvertInherit(
     ConversionCheckers& conversion_checkers) const {
   const ComputedStyle& parent_style = *state.ParentStyle();
   conversion_checkers.push_back(
-      std::make_unique<InheritedIndentChecker>(parent_style.TextIndent()));
-  return CreateValue(parent_style.TextIndent(), parent_style.EffectiveZoom());
+      MakeGarbageCollected<InheritedIndentChecker>(parent_style.TextIndent()));
+  return CreateValue(parent_style.TextIndent(),
+                     parent_style.GetTextIndentFlags(), CssProperty(),
+                     parent_style.EffectiveZoom());
 }
 
 InterpolationValue CSSTextIndentInterpolationType::MaybeConvertValue(
     const CSSValue& value,
-    const StyleResolverState*,
+    const StyleResolverState&,
     ConversionCheckers&) const {
   InterpolationValue length = nullptr;
-
-  for (const auto& item : To<CSSValueList>(value)) {
-    length =
-        InterpolationValue(InterpolableLength::MaybeConvertCSSValue(*item));
+  TextIndentFlags flags = TextIndentFlags::kDefault;
+  if (const auto* primitive_value = DynamicTo<CSSPrimitiveValue>(value)) {
+    length = InterpolationValue(
+        InterpolableLength::MaybeConvertCSSValue(*primitive_value));
+  } else {
+    for (const auto& list_value : To<CSSValueList>(value)) {
+      if (const auto* primitive = DynamicTo<CSSPrimitiveValue>(*list_value)) {
+        length = InterpolationValue(
+            InterpolableLength::MaybeConvertCSSValue(*primitive));
+      } else if (const auto* ident =
+                     DynamicTo<CSSIdentifierValue>(*list_value)) {
+        flags |= CssValueIDToPlatformEnum<TextIndentFlags>(ident->GetValueID());
+      } else {
+        NOTREACHED();
+      }
+    }
   }
   DCHECK(length);
 
-  return InterpolationValue(std::move(length.interpolable_value),
-                            CSSTextIndentNonInterpolableValue::Create(
-                                std::move(length.non_interpolable_value)));
+  return InterpolationValue(
+      std::move(length.interpolable_value),
+      MakeGarbageCollected<CSSTextIndentNonInterpolableValue>(
+          std::move(length.non_interpolable_value), flags));
 }
 
 InterpolationValue
 CSSTextIndentInterpolationType::MaybeConvertStandardPropertyUnderlyingValue(
     const ComputedStyle& style) const {
-  return CreateValue(style.TextIndent(), style.EffectiveZoom());
+  return CreateValue(style.TextIndent(), style.GetTextIndentFlags(),
+                     CssProperty(), style.EffectiveZoom());
 }
 
 PairwiseInterpolationValue CSSTextIndentInterpolationType::MaybeMergeSingles(
     InterpolationValue&& start,
     InterpolationValue&& end) const {
-  PairwiseInterpolationValue result = InterpolableLength::MergeSingles(
+  const auto& start_non_interpolable_value =
+      To<CSSTextIndentNonInterpolableValue>(*start.non_interpolable_value);
+  const auto& end_non_interpolable_value =
+      To<CSSTextIndentNonInterpolableValue>(*end.non_interpolable_value);
+  if (!start_non_interpolable_value.IsCompatibleWith(
+          end_non_interpolable_value)) {
+    return nullptr;
+  }
+  PairwiseInterpolationValue result = InterpolableLength::MaybeMergeSingles(
       std::move(start.interpolable_value), std::move(end.interpolable_value));
-  result.non_interpolable_value = CSSTextIndentNonInterpolableValue::Create(
-      std::move(result.non_interpolable_value));
+  result.non_interpolable_value =
+      MakeGarbageCollected<CSSTextIndentNonInterpolableValue>(
+          std::move(result.non_interpolable_value),
+          start_non_interpolable_value.Flags());
   return result;
 }
 
@@ -137,6 +179,18 @@ void CSSTextIndentInterpolationType::Composite(
     double underlying_fraction,
     const InterpolationValue& value,
     double interpolation_fraction) const {
+  const auto* underlying_non_interpolable_value =
+      To<CSSTextIndentNonInterpolableValue>(
+          underlying_value_owner.GetNonInterpolableValue());
+  const auto* non_interpolable_value =
+      To<CSSTextIndentNonInterpolableValue>(value.non_interpolable_value.Get());
+  if (!underlying_non_interpolable_value->IsCompatibleWith(
+          *non_interpolable_value)) {
+    underlying_value_owner.SetInterpolableValue(value.interpolable_value.Get());
+    underlying_value_owner.SetNonInterpolableValue(
+        value.non_interpolable_value.Get());
+    return;
+  }
   underlying_value_owner.MutableInterpolableValue().ScaleAndAdd(
       underlying_fraction, *value.interpolable_value);
 }
@@ -149,6 +203,8 @@ void CSSTextIndentInterpolationType::ApplyStandardPropertyValue(
       To<InterpolableLength>(interpolable_value)
           .CreateLength(state.CssToLengthConversionData(),
                         Length::ValueRange::kAll));
+  state.StyleBuilder().SetTextIndentFlags(
+      To<CSSTextIndentNonInterpolableValue>(non_interpolable_value)->Flags());
 }
 
 }  // namespace blink

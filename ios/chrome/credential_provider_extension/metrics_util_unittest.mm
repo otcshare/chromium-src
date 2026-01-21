@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 #import "ios/chrome/credential_provider_extension/metrics_util.h"
 
 #import <Foundation/Foundation.h>
@@ -18,8 +14,8 @@
 
 namespace credential_provider_extension {
 
-NSString* kMetric1 = @"CpeMetricTest1";
-NSString* kMetric2 = @"CpeMetricTest2";
+NSString* const kMetric1 = @"CpeMetricTest1";
+NSString* const kMetric2 = @"CpeMetricTest2";
 
 void RemoveMetricForKey(NSString* key) {
   NSUserDefaults* sharedDefaults = app_group::GetGroupUserDefaults();
@@ -64,4 +60,4 @@ TEST_F(MetricsUtilTest, CheckUMACountUpdatesAsExpected) {
   VerifyMetricForKey(kMetric2, 0);
 }
 
-}  // credential_provider_extension
+}  // namespace credential_provider_extension

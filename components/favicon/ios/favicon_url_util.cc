@@ -30,7 +30,6 @@ favicon_base::IconType IconTypeFromWebIconType(
       return favicon_base::IconType::kInvalid;
   }
   NOTREACHED();
-  return favicon_base::IconType::kInvalid;
 }
 
 }  // namespace
@@ -46,8 +45,8 @@ std::vector<FaviconURL> FaviconURLsFromWebFaviconURLs(
     const std::vector<web::FaviconURL>& favicon_urls) {
   std::vector<FaviconURL> result;
   result.reserve(favicon_urls.size());
-  std::transform(favicon_urls.begin(), favicon_urls.end(),
-                 std::back_inserter(result), FaviconURLFromWebFaviconURL);
+  std::ranges::transform(favicon_urls, std::back_inserter(result),
+                         FaviconURLFromWebFaviconURL);
   return result;
 }
 

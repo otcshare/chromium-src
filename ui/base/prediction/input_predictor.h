@@ -47,7 +47,7 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) InputPredictor {
 
   // Generate the prediction based on current points.
   // It can use a latency based on the vsync refresh rate: `frame_interval`.
-  // TODO(crbug.com/1142061): Remove the `frame_interval` arg if the expriment
+  // TODO(crbug.com/40154523): Remove the `frame_interval` arg if the expriment
   // concludes that a frame-dependent latency isn't better.
   virtual std::unique_ptr<InputData> GeneratePrediction(
       base::TimeTicks predict_time,
@@ -63,6 +63,10 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) InputPredictor {
 
   // Return the time interval based on current points.
   virtual base::TimeDelta TimeInterval() const = 0;
+
+  // Returns the latency offset to apply for resampling.
+  // Default implementation returns zero, indicating no offset.
+  virtual base::TimeDelta ResampleLatency(base::TimeDelta frame_interval) const;
 
  protected:
   static constexpr base::TimeDelta kMaxTimeDelta = base::Milliseconds(20);

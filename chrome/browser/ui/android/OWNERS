@@ -1,2 +1,3 @@
 file://chrome/android/OWNERS
-per-file ssl_client_certificate_selector.cc=dmcardle@chromium.org
+
+per-file browser_navigator_android*.*=jthiesen@chromium.org

@@ -4,8 +4,8 @@
 
 #include "chromeos/ash/components/dbus/virtual_file_provider/fake_virtual_file_provider_client.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 
@@ -19,7 +19,7 @@ void FakeVirtualFileProviderClient::Init(dbus::Bus* bus) {}
 void FakeVirtualFileProviderClient::GenerateVirtualFileId(
     int64_t size,
     GenerateVirtualFileIdCallback callback) {
-  absl::optional<std::string> id;
+  std::optional<std::string> id;
   if (size != expected_size_)
     LOG(ERROR) << "Unexpected size " << size << " vs " << expected_size_;
   else

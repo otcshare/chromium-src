@@ -23,6 +23,11 @@ class ChromeSitePerProcessTest : public InProcessBrowserTest {
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
   void SetUpOnMainThread() override;
+
+  base::test::ScopedFeatureList* feature_list() { return &feature_list_; }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 #endif  // CHROME_BROWSER_SITE_ISOLATION_CHROME_SITE_PER_PROCESS_TEST_H_

@@ -8,6 +8,14 @@
 
 namespace bookmarks {
 
-const base::FilePath::CharType kBookmarksFileName[] = FPL("Bookmarks");
+// The actual file name is inconsistent with variable name for historical
+// reasons and kept as is to avoid risky migrations for existing users.
+const base::FilePath::CharType kLocalOrSyncableBookmarksFileName[] =
+    FPL("Bookmarks");
+const base::FilePath::CharType kAccountBookmarksFileName[] =
+    FPL("AccountBookmarks");
+
+// ID of the root node. This is also exposed externally via an extensions API.
+const int64_t kRootNodeId = 0;
 
 }  // namespace bookmarks

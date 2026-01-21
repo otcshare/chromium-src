@@ -8,31 +8,33 @@ import android.content.Context;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
-import android.widget.FrameLayout;
 
-import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.payments.ui.InputProtector;
 import org.chromium.content_public.browser.RenderCoordinates;
 import org.chromium.content_public.browser.WebContents;
 
 /**
- * The view of the PaymentHandler UI. This view can be divided into the toolbar area and the
- * content area. The content area does not include the toolbar area; it includes the BottomSheet
- * area below the toolbar, which includes the part that extends beneath the screen. The ThinWebView
- * has a fixed height, which is the height of visible content area when the sheet is in full state.
+ * The view of the PaymentHandler UI. This view can be divided into the toolbar area and the content
+ * area. The content area does not include the toolbar area; it includes the BottomSheet area below
+ * the toolbar, which includes the part that extends beneath the screen. The ThinWebView has a fixed
+ * height, which is the height of visible content area when the sheet is in full state.
  */
+@NullMarked
 /* package */ class PaymentHandlerView implements BottomSheetContent {
     private final View mToolbarView;
-    private final FrameLayout mContentView;
+    private final PaymentHandlerContentFrameLayout mContentView;
     private final View mThinWebView;
     private final WebContents mWebContents;
     private final int mToolbarHeightPx;
-    private final ObservableSupplierImpl<Boolean> mBackPressStateChangedSupplier =
-            new ObservableSupplierImpl<>();
-    private Runnable mBackPressCallback;
+    private @Nullable Runnable mBackPressCallback;
 
     /**
      * Construct the PaymentHandlerView.
@@ -43,18 +45,24 @@ import org.chromium.content_public.browser.WebContents;
      * @param thinWebView The view that shows the WebContents of the payment app.
      */
     /* package */ PaymentHandlerView(
-            Context context, WebContents webContents, View toolbarView, View thinWebView) {
+            Context context,
+            WebContents webContents,
+            View toolbarView,
+            View thinWebView,
+            InputProtector inputProtector) {
         mWebContents = webContents;
         mToolbarView = toolbarView;
         mThinWebView = thinWebView;
         mToolbarHeightPx =
                 context.getResources().getDimensionPixelSize(R.dimen.sheet_tab_toolbar_height);
-        mContentView = (FrameLayout) LayoutInflater.from(context).inflate(
-                R.layout.payment_handler_content, null);
+        mContentView =
+                (PaymentHandlerContentFrameLayout)
+                        LayoutInflater.from(context)
+                                .inflate(R.layout.payment_handler_content, null);
+        mContentView.setInputProtector(inputProtector);
         mContentView.setPadding(
-                /*left=*/0, /*top=*/mToolbarHeightPx, /*right=*/0, /*bottom=*/0);
-        mContentView.addView(thinWebView, /*index=*/0);
-        mBackPressStateChangedSupplier.set(true);
+                /* left= */ 0, /* top= */ mToolbarHeightPx, /* right= */ 0, /* bottom= */ 0);
+        mContentView.addView(thinWebView, /* index= */ 0);
     }
 
     /**
@@ -87,8 +95,7 @@ import org.chromium.content_public.browser.WebContents;
     }
 
     @Override
-    @Nullable
-    public View getToolbarView() {
+    public @Nullable View getToolbarView() {
         return mToolbarView;
     }
 
@@ -118,51 +125,47 @@ import org.chromium.content_public.browser.WebContents;
     public void destroy() {}
 
     @Override
-    @ContentPriority
-    public int getPriority() {
+    public @ContentPriority int getPriority() {
         // If multiple bottom sheets are queued up to be shown, prioritize payment-handler, because
         // it's triggered by a user gesture, such as a click on <button>Buy this article</button>.
         return BottomSheetContent.ContentPriority.HIGH;
     }
 
     @Override
-    public int getPeekHeight() {
-        return BottomSheetContent.HeightMode.DISABLED;
-    }
-
-    @Override
     public boolean handleBackPress() {
+        assert mBackPressCallback != null;
         mBackPressCallback.run();
         return true; // Prevent further handling of the back press.
     }
 
     @Override
-    public ObservableSupplierImpl<Boolean> getBackPressStateChangedSupplier() {
-        return mBackPressStateChangedSupplier;
+    public NonNullObservableSupplier<Boolean> getBackPressStateChangedSupplier() {
+        return ObservableSuppliers.alwaysTrue();
     }
 
     @Override
     public void onBackPressed() {
+        assert mBackPressCallback != null;
         mBackPressCallback.run();
     }
 
     @Override
-    public int getSheetContentDescriptionStringId() {
-        return R.string.payment_handler_sheet_description;
+    public String getSheetContentDescription(Context context) {
+        return context.getString(R.string.payment_handler_sheet_description);
     }
 
     @Override
-    public int getSheetHalfHeightAccessibilityStringId() {
+    public @StringRes int getSheetHalfHeightAccessibilityStringId() {
         return R.string.payment_handler_sheet_opened_half;
     }
 
     @Override
-    public int getSheetFullHeightAccessibilityStringId() {
+    public @StringRes int getSheetFullHeightAccessibilityStringId() {
         return R.string.payment_handler_sheet_opened_full;
     }
 
     @Override
-    public int getSheetClosedAccessibilityStringId() {
+    public @StringRes int getSheetClosedAccessibilityStringId() {
         return R.string.payment_handler_sheet_closed;
     }
 

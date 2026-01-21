@@ -9,16 +9,18 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <tuple>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/numerics/safe_math.h"
 #include "base/synchronization/lock.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/ipcz_driver/ring_buffer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/core/ipcz_driver/validate_enum.h"
 #include "third_party/ipcz/include/ipcz/ipcz.h"
 
 namespace mojo::core::ipcz_driver {
@@ -35,14 +37,12 @@ struct IPCZ_ALIGN(8) DataPipeHeader {
   // The size in bytes of an element of this pipe.
   uint32_t element_size;
 
-  RingBuffer::SerializedState ring_buffer_state;
-
-  // Indicates whether the peer is known to be closed.
-  bool is_peer_closed;
-
   // Padding for alignment to an 8-byte boundary.
-  uint8_t padding[7];
+  uint32_t padding;
+
+  RingBuffer::SerializedState ring_buffer_state;
 };
+static_assert(sizeof(DataPipeHeader) == 24, "Invalid DataPipeHeader size");
 
 // Attempts to put a single (32-bit) integer into the given `portal`. Returns
 // true if successful, or false to indicate that the peer portal is closed.
@@ -72,15 +72,11 @@ struct DrainResult {
 DrainResult DrainPeerUpdates(IpczHandle portal) {
   size_t num_bytes_changed = 0;
   for (;;) {
-    const void* data;
-    size_t num_bytes;
-    const IpczResult result = GetIpczAPI().BeginGet(
-        portal, IPCZ_NO_FLAGS, nullptr, &data, &num_bytes, nullptr);
-    auto end_get = [portal](size_t num_bytes_consumed) {
-      GetIpczAPI().EndGet(portal, num_bytes_consumed, 0, IPCZ_NO_FLAGS, nullptr,
-                          nullptr);
-    };
-
+    uint32_t value;
+    size_t num_bytes = sizeof(value);
+    const IpczResult result =
+        GetIpczAPI().Get(portal, IPCZ_GET_PARTIAL, nullptr, &value, &num_bytes,
+                         nullptr, nullptr, nullptr);
     switch (result) {
       case IPCZ_RESULT_UNAVAILABLE:
         // No more parcels and peer is still alive.
@@ -91,23 +87,19 @@ DrainResult DrainPeerUpdates(IpczHandle portal) {
         return {.num_bytes_changed = num_bytes_changed, .dead = true};
 
       case IPCZ_RESULT_OK: {
-        if (num_bytes != sizeof(uint32_t)) {
-          // Unexpected data. Treat as if closed.
-          end_get(0);
+        if (num_bytes < sizeof(value)) {
+          // Missing data. Treat as if closed.
           return {.num_bytes_changed = num_bytes_changed, .dead = true};
         }
 
-        const uint32_t value = *static_cast<const uint32_t*>(data);
         if (!base::CheckAdd(num_bytes_changed, value)
                  .AssignIfValid(&num_bytes_changed)) {
           // Stop accumulating on overflow to avoid losing information. This is
           // not an error condition and subsequent operations may continue to
           // drain control messages.
-          end_get(0);
           return {.num_bytes_changed = num_bytes_changed, .dead = false};
         }
 
-        end_get(sizeof(value));
         continue;
       }
 
@@ -136,8 +128,7 @@ DataPipe::DataPipe(EndpointType endpoint_type,
     : endpoint_type_(endpoint_type),
       element_size_(config.element_size),
       buffer_(std::move(buffer)),
-      data_(std::move(mapping)),
-      is_peer_closed_(config.is_peer_closed) {
+      data_(std::move(mapping)) {
   DCHECK_GT(element_size_, 0u);
   DCHECK_LE(element_size_, std::numeric_limits<uint32_t>::max());
   DCHECK_GT(config.byte_capacity, 0u);
@@ -151,7 +142,7 @@ DataPipe::~DataPipe() {
 }
 
 // static
-absl::optional<DataPipe::Pair> DataPipe::CreatePair(const Config& config) {
+std::optional<DataPipe::Pair> DataPipe::CreatePair(const Config& config) {
   ScopedIpczHandle producer;
   ScopedIpczHandle consumer;
   const IpczResult result =
@@ -163,12 +154,12 @@ absl::optional<DataPipe::Pair> DataPipe::CreatePair(const Config& config) {
   base::UnsafeSharedMemoryRegion consumer_region =
       base::UnsafeSharedMemoryRegion::Create(config.byte_capacity);
   if (!consumer_region.IsValid()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   base::UnsafeSharedMemoryRegion producer_region = consumer_region.Duplicate();
   if (!producer_region.IsValid()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   scoped_refptr<SharedBuffer> consumer_buffer =
@@ -180,7 +171,7 @@ absl::optional<DataPipe::Pair> DataPipe::CreatePair(const Config& config) {
   auto producer_mapping =
       SharedBufferMapping::Create(producer_buffer->region());
   if (!consumer_mapping || !producer_mapping) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   Pair pair;
@@ -196,13 +187,22 @@ absl::optional<DataPipe::Pair> DataPipe::CreatePair(const Config& config) {
   return pair;
 }
 
-void DataPipe::AdoptPortal(ScopedIpczHandle portal) {
-  auto wrapper = base::MakeRefCounted<PortalWrapper>(std::move(portal));
-  {
-    base::AutoLock lock(lock_);
-    DCHECK(!portal_);
-    portal_ = wrapper;
+bool DataPipe::AdoptPortal(ScopedIpczHandle portal) {
+  if (!portal.is_valid()) {
+    return false;
   }
+
+  IpczPortalStatus status = {.size = sizeof(status)};
+  if (GetIpczAPI().QueryPortalStatus(portal.get(), IPCZ_NO_FLAGS, nullptr,
+                                     &status) != IPCZ_RESULT_OK) {
+    return false;
+  }
+
+  base::AutoLock lock(lock_);
+  DCHECK(!portal_);
+  portal_ = base::MakeRefCounted<PortalWrapper>(std::move(portal));
+  is_peer_closed_ = (status.flags & IPCZ_PORTAL_STATUS_PEER_CLOSED) != 0;
+  return true;
 }
 
 scoped_refptr<DataPipe::PortalWrapper> DataPipe::GetPortal() {
@@ -227,7 +227,7 @@ MojoResult DataPipe::WriteData(const void* elements,
 
   FlushUpdatesFromPeer();
   const base::span<const uint8_t> input_bytes =
-      base::make_span(static_cast<const uint8_t*>(elements), num_bytes);
+      UNSAFE_TODO(base::span(static_cast<const uint8_t*>(elements), num_bytes));
   scoped_refptr<PortalWrapper> portal;
   size_t write_size;
   {
@@ -331,20 +331,33 @@ MojoResult DataPipe::ReadData(void* elements,
 
   // Filter for assorted configurations that aren't used in practice and which
   // therefore do not require support here.
-  if (!query && !discard && !elements) {
-    return MOJO_RESULT_INVALID_ARGUMENT;
-  }
   if ((peek && discard) || (query && (peek || discard))) {
     return MOJO_RESULT_INVALID_ARGUMENT;
   }
 
   FlushUpdatesFromPeer();
-  const base::span<uint8_t> output_bytes =
-      base::make_span(static_cast<uint8_t*>(elements), num_bytes);
+  base::span<uint8_t> output_bytes;
+  if (!(discard || query)) {
+    // `elements` can be null in the `discard` or `query` cases and would result
+    // in creating a non-empty, dangling `span` (hitting a `DCHECK` in `span`'s
+    // constructor).  OTOH, `elements` and `num_bytes` need to describe a valid
+    // span in all the other cases.
+    if (!elements && num_bytes > 0) {
+      return MOJO_RESULT_INVALID_ARGUMENT;
+    }
+
+    output_bytes =
+        UNSAFE_TODO(base::span(static_cast<uint8_t*>(elements), num_bytes));
+  }
+
   size_t read_size = num_bytes;
   scoped_refptr<PortalWrapper> portal;
   {
     base::AutoLock lock(lock_);
+    if (two_phase_reader_) {
+      return MOJO_RESULT_BUSY;
+    }
+
     const size_t data_size = data_.data_size();
     if (query) {
       num_bytes = base::checked_cast<uint32_t>(data_size);
@@ -488,13 +501,12 @@ bool DataPipe::Serialize(Transport& transmitter,
   // in core_ipcz.cc. Here we only serialize the header and the backing
   // SharedBuffer object.
   DCHECK_GE(data.size(), sizeof(DataPipeHeader));
-  auto& header = *reinterpret_cast<DataPipeHeader*>(data.data());
-  memset(&header, 0, sizeof(header));
-  header.size = sizeof(header);
-  header.endpoint_type = endpoint_type_;
-  header.element_size = base::checked_cast<uint32_t>(element_size_);
-  data_.Serialize(header.ring_buffer_state);
-  header.is_peer_closed = is_peer_closed_;
+  DataPipeHeader* header = new (data.data()) DataPipeHeader{
+      .size = sizeof(DataPipeHeader),
+      .endpoint_type = endpoint_type_,
+      .element_size = base::checked_cast<uint32_t>(element_size_),
+  };
+  data_.Serialize(header->ring_buffer_state);
 
   auto buffer_data = data.subspan(sizeof(DataPipeHeader));
   if (!buffer_->Serialize(transmitter, buffer_data, handles)) {
@@ -516,7 +528,11 @@ scoped_refptr<DataPipe> DataPipe::Deserialize(
 
   const auto& header = *reinterpret_cast<const DataPipeHeader*>(data.data());
   const size_t header_size = header.size;
-  if (header_size < sizeof(header)) {
+  if (header_size < sizeof(header) || header_size % 8 != 0) {
+    return nullptr;
+  }
+
+  if (!ValidateEnum(header.endpoint_type)) {
     return nullptr;
   }
 
@@ -540,9 +556,7 @@ scoped_refptr<DataPipe> DataPipe::Deserialize(
 
   auto endpoint = base::MakeRefCounted<DataPipe>(
       header.endpoint_type,
-      Config{.element_size = element_size,
-             .byte_capacity = buffer_size,
-             .is_peer_closed = header.is_peer_closed},
+      Config{.element_size = element_size, .byte_capacity = buffer_size},
       std::move(buffer), std::move(mapping));
   if (!endpoint->DeserializeRingBuffer(header.ring_buffer_state)) {
     return nullptr;
@@ -550,20 +564,24 @@ scoped_refptr<DataPipe> DataPipe::Deserialize(
   return endpoint;
 }
 
-MojoHandleSignalsState DataPipe::GetSignals() {
-  MojoHandleSignalsState signals_state = {};
+bool DataPipe::GetSignals(MojoHandleSignalsState& signals_state) {
+  signals_state = {};
   MojoHandleSignals& satisfied = signals_state.satisfied_signals;
   MojoHandleSignals& satisfiable = signals_state.satisfiable_signals;
 
   base::AutoLock lock(lock_);
+  if (!portal_) {
+    return false;
+  }
+
   IpczPortalStatus status = {.size = sizeof(status)};
   const IpczResult result = GetIpczAPI().QueryPortalStatus(
       portal_->handle(), IPCZ_NO_FLAGS, nullptr, &status);
   if (result != IPCZ_RESULT_OK) {
-    return signals_state;
+    return false;
   }
 
-  if ((status.flags & IPCZ_PORTAL_STATUS_DEAD) != 0) {
+  if ((status.flags & IPCZ_PORTAL_STATUS_PEER_CLOSED) != 0) {
     is_peer_closed_ = true;
   }
 
@@ -594,7 +612,7 @@ MojoHandleSignalsState DataPipe::GetSignals() {
           MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_NEW_DATA_READABLE;
     }
 
-    return signals_state;
+    return true;
   }
 
   DCHECK(is_producer());
@@ -605,7 +623,7 @@ MojoHandleSignalsState DataPipe::GetSignals() {
     }
   }
 
-  return signals_state;
+  return true;
 }
 
 void DataPipe::FlushUpdatesFromPeer() {
@@ -653,9 +671,9 @@ bool DataPipe::DeserializeRingBuffer(const RingBuffer::SerializedState& state) {
 
 DataPipe::Pair::Pair() = default;
 
-DataPipe::Pair::Pair(const Pair&) = default;
+DataPipe::Pair::Pair(Pair&&) = default;
 
-DataPipe::Pair& DataPipe::Pair::operator=(const Pair&) = default;
+DataPipe::Pair& DataPipe::Pair::operator=(Pair&&) = default;
 
 DataPipe::Pair::~Pair() = default;
 

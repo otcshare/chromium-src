@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/frame_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/public/worker_scheduler.h"
@@ -19,11 +19,6 @@ WorkerSchedulerProxy::WorkerSchedulerProxy(FrameOrWorkerScheduler* scheduler) {
       FrameOrWorkerScheduler::ObserverType::kWorkerScheduler,
       base::BindRepeating(&WorkerSchedulerProxy::OnLifecycleStateChanged,
                           base::Unretained(this)));
-  if (FrameScheduler* frame_scheduler = scheduler->ToFrameScheduler()) {
-    parent_frame_type_ = GetFrameOriginType(frame_scheduler);
-    initial_frame_status_ = GetFrameStatus(frame_scheduler);
-    ukm_source_id_ = frame_scheduler->GetUkmSourceId();
-  }
 }
 
 WorkerSchedulerProxy::~WorkerSchedulerProxy() {

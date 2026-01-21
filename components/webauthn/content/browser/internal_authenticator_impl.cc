@@ -26,6 +26,11 @@ InternalAuthenticatorImpl::InternalAuthenticatorImpl(
   // Autofill only ever uses platform authenticators and can take place
   // on any webpage.
   authenticator_common_->DisableUI();
+
+  // WebAuthn policy is to disallow use on pages with "Not secure" or "None" TLS
+  // connection status. However, internal clients such as autofill may be called
+  // from these pages (e.g. on chrome://settings/payments).
+  authenticator_common_->DisableTLSCheck();
 }
 
 InternalAuthenticatorImpl::~InternalAuthenticatorImpl() = default;
@@ -44,25 +49,40 @@ void InternalAuthenticatorImpl::MakeCredential(
     blink::mojom::PublicKeyCredentialCreationOptionsPtr options,
     blink::mojom::Authenticator::MakeCredentialCallback callback) {
   authenticator_common_->MakeCredential(effective_origin_, std::move(options),
+                                        std::move(payment_),
                                         std::move(callback));
 }
 
 void InternalAuthenticatorImpl::GetAssertion(
-    blink::mojom::PublicKeyCredentialRequestOptionsPtr options,
-    blink::mojom::Authenticator::GetAssertionCallback callback) {
-  authenticator_common_->GetAssertion(effective_origin_, std::move(options),
-                                      std::move(payment_), std::move(callback));
+    blink::mojom::PublicKeyCredentialRequestOptionsPtr pk_options,
+    GetAssertionCallback callback) {
+  auto options = blink::mojom::GetCredentialOptions::New();
+  options->public_key = std::move(pk_options);
+  authenticator_common_->GetCredential(
+      effective_origin_, std::move(options), std::move(payment_),
+      base::BindOnce(
+          [](GetAssertionCallback get_assertion_callback,
+             blink::mojom::GetCredentialResponsePtr response) {
+            if (response.is_null() || !response->is_get_assertion_response()) {
+              return;
+            }
+            auto assertion = std::move(response->get_get_assertion_response());
+            std::move(get_assertion_callback)
+                .Run(assertion->status, std::move(assertion->credential),
+                     std::move(assertion->dom_exception_details));
+          },
+          std::move(callback)));
 }
 
 void InternalAuthenticatorImpl::IsUserVerifyingPlatformAuthenticatorAvailable(
     blink::mojom::Authenticator::
         IsUserVerifyingPlatformAuthenticatorAvailableCallback callback) {
   authenticator_common_->IsUserVerifyingPlatformAuthenticatorAvailable(
-      std::move(callback));
+      effective_origin_, std::move(callback));
 }
 
 bool InternalAuthenticatorImpl::IsGetMatchingCredentialIdsSupported() {
-  // TODO(crbug.com/1368590): Not yet supported on any desktop platform.
+  // TODO(crbug.com/40868539): Not yet supported on any desktop platform.
   return false;
 }
 

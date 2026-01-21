@@ -30,7 +30,7 @@ class TestTaskQueueFactory final : public webrtc::TaskQueueFactory {
   TestTaskQueueFactory() : factory_(CreateWebRtcTaskQueueFactory()) {}
 
   std::unique_ptr<webrtc::TaskQueueBase, webrtc::TaskQueueDeleter>
-  CreateTaskQueue(absl::string_view name, Priority priority) const override {
+  CreateTaskQueue(std::string_view name, Priority priority) const override {
     return factory_->CreateTaskQueue(name, priority);
   }
 
@@ -41,7 +41,7 @@ class TestTaskQueueFactory final : public webrtc::TaskQueueFactory {
 
 std::unique_ptr<webrtc::TaskQueueFactory> CreateTaskQueueFactory(
     const webrtc::FieldTrialsView*) {
-  return absl::make_unique<TestTaskQueueFactory>();
+  return std::make_unique<TestTaskQueueFactory>();
 }
 
 // Instantiate suite to run all tests defined in

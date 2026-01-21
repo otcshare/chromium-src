@@ -6,16 +6,22 @@
 // to create the authentication packages used to sign the user into a Windows
 // system.
 
-#include <vector>
-
 #include "chrome/credential_provider/gaiacp/auth_utils.h"
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include <atlconv.h>
+#include <security.h>
+
+#include <vector>
+
+#include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
+#include "base/win/ntsecapi_shim.h"
+#include "base/win/wincred_shim.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 namespace credential_provider {
 
@@ -55,7 +61,8 @@ HRESULT ProtectIfNecessaryAndCopyPassword(
   if ((!::CredIsProtectedW(password, &protection_type) ||
        CredUnprotected != protection_type)) {
     protected_password->resize(password_length + 1);
-    wcscpy_s(&(*protected_password)[0], password_length + 1, password);
+    UNSAFE_TODO(
+        wcscpy_s(&(*protected_password)[0], password_length + 1, password));
     return S_OK;
   }
 
@@ -99,7 +106,7 @@ void UnicodeStringPackedUnicodeStringCopy(const UNICODE_STRING& rus,
   pus->MaximumLength = rus.Length;
   pus->Buffer = buffer;
 
-  CopyMemory(pus->Buffer, rus.Buffer, pus->Length);
+  UNSAFE_TODO(CopyMemory(pus->Buffer, rus.Buffer, pus->Length));
 }
 
 // Initialize the members of a KERB_INTERACTIVE_UNLOCK_LOGON with weak
@@ -120,7 +127,7 @@ void KerbInteractiveUnlockLogonInit(wchar_t* domain,
   DCHECK(password);
   DCHECK(pkiul);
 
-  ZeroMemory(pkiul, sizeof(KERB_INTERACTIVE_UNLOCK_LOGON));
+  UNSAFE_TODO(ZeroMemory(pkiul, sizeof(KERB_INTERACTIVE_UNLOCK_LOGON)));
 
   KERB_INTERACTIVE_LOGON* pkil = &pkiul->Logon;
 
@@ -148,7 +155,6 @@ void KerbInteractiveUnlockLogonInit(wchar_t* domain,
       break;
     default:
       NOTREACHED();
-      return;
   }
 
   // Initialize the UNICODE_STRINGS to share domain, username and password
@@ -198,8 +204,9 @@ HRESULT KerbInteractiveUnlockLogonPack(
                      sizeof(output_unlock_logon->LogonId));
 
   // Point output_buffer at the beginning of the extra space.
-  BYTE* output_buffer = reinterpret_cast<BYTE*>(output_unlock_logon) +
-                        sizeof(*output_unlock_logon);
+  BYTE* output_buffer =
+      UNSAFE_TODO(reinterpret_cast<BYTE*>(output_unlock_logon) +
+                  sizeof(*output_unlock_logon));
 
   // Set up the Logon structure within the KERB_INTERACTIVE_UNLOCK_LOGON.
   KERB_INTERACTIVE_LOGON* output_logon = &output_unlock_logon->Logon;
@@ -213,14 +220,14 @@ HRESULT KerbInteractiveUnlockLogonPack(
                                        &output_logon->LogonDomainName);
   output_logon->LogonDomainName.Buffer =
       reinterpret_cast<wchar_t*>(output_buffer - (BYTE*)output_unlock_logon);
-  output_buffer += output_logon->LogonDomainName.Length;
+  UNSAFE_TODO(output_buffer += output_logon->LogonDomainName.Length);
 
   UnicodeStringPackedUnicodeStringCopy(
       input_logon->UserName, reinterpret_cast<wchar_t*>(output_buffer),
       &output_logon->UserName);
   output_logon->UserName.Buffer =
       reinterpret_cast<wchar_t*>(output_buffer - (BYTE*)output_unlock_logon);
-  output_buffer += output_logon->UserName.Length;
+  UNSAFE_TODO(output_buffer += output_logon->UserName.Length);
 
   UnicodeStringPackedUnicodeStringCopy(
       input_logon->Password, reinterpret_cast<wchar_t*>(output_buffer),
@@ -389,8 +396,8 @@ HRESULT BuildCredPackAuthenticationBuffer(
   // Copy the password and pass the copied buffer into
   // ProtectIfNecessaryAndCopyPassword since it expects a non-const input
   // buffer.
-  std::vector<wchar_t> copy_password(OLE2W(password),
-                                     OLE2W(password) + wcslen(password) + 1);
+  std::vector<wchar_t> copy_password(
+      OLE2W(password), UNSAFE_TODO(OLE2W(password) + wcslen(password) + 1));
   hr = ProtectIfNecessaryAndCopyPassword(&copy_password[0], cpus,
                                          &protected_password);
 
@@ -402,9 +409,9 @@ HRESULT BuildCredPackAuthenticationBuffer(
   }
 
   // Protected password may still be insecure so make sure to zero it out.
-  base::ScopedClosureRunner zero_buffer_on_exit(
-      base::BindOnce(base::IgnoreResult(&SecurelyClearBuffer),
-                     &protected_password[0], protected_password.size()));
+  absl::Cleanup zero_buffer_on_exit = [&protected_password] {
+    SecurelyClearBuffer(protected_password.data(), protected_password.size());
+  };
 
   wchar_t* logon_domain = domain;
 

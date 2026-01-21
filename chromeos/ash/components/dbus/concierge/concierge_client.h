@@ -9,9 +9,9 @@
 #include "base/files/scoped_file.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation_traits.h"
-#include "chromeos/ash/components/dbus/concierge/concierge_service.pb.h"
+#include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "chromeos/dbus/common/dbus_client.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
 #include "dbus/object_proxy.h"
 
 namespace ash {
@@ -40,11 +40,19 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
    public:
     // OnVmStarted is signaled by Concierge when a VM starts.
     virtual void OnVmStarted(
-        const vm_tools::concierge::VmStartedSignal& signal) = 0;
+        const vm_tools::concierge::VmStartedSignal& signal) {}
 
     // OnVmStopped is signaled by Concierge when a VM stops.
     virtual void OnVmStopped(
-        const vm_tools::concierge::VmStoppedSignal& signal) = 0;
+        const vm_tools::concierge::VmStoppedSignal& signal) {}
+
+    // OnVmStopping is signaled by Concierge when a VM is stopping.
+    virtual void OnVmStopping(
+        const vm_tools::concierge::VmStoppingSignal& signal) {}
+
+    // OnVmSwapping is signaled by Concierge when a VM is swapping.
+    virtual void OnVmSwapping(
+        const vm_tools::concierge::VmSwappingSignal& signal) {}
 
    protected:
     virtual ~VmObserver() = default;
@@ -54,9 +62,9 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
   // operations, e.g. importing.
   class DiskImageObserver {
    public:
-    // OnDiskImageProgress is signaled by Concierge after an ImportDiskImage
-    // call has been made and an update about the status of the import
-    // is available.
+    // OnDiskImageProgress is signaled by Concierge after an
+    // {Import,Export}DiskImage call has been made and an update about the
+    // status of the import/export is available.
     virtual void OnDiskImageProgress(
         const vm_tools::concierge::DiskImageStatusResponse& signal) = 0;
 
@@ -82,10 +90,11 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
   // Adds an observer for disk image operations.
   virtual void RemoveDiskImageObserver(DiskImageObserver* observer) = 0;
 
-  // IsVmSartedSignalConnected and IsVmStoppedSignalConnected must return true
+  // IsVmStartedSignalConnected and IsVmStoppedSignalConnected must return true
   // before RestartCrostini is called.
   virtual bool IsVmStartedSignalConnected() = 0;
   virtual bool IsVmStoppedSignalConnected() = 0;
+  virtual bool IsVmStoppingSignalConnected() = 0;
 
   // IsDiskImageProgressSignalConnected must return true before
   // ImportDiskImage is called.
@@ -122,12 +131,20 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
       chromeos::DBusMethodCallback<vm_tools::concierge::ImportDiskImageResponse>
           callback) = 0;
 
+  // Exports a VM disk image.
+  // |callback| is called after the method call finishes.
+  virtual void ExportDiskImage(
+      std::vector<base::ScopedFD> fds,
+      const vm_tools::concierge::ExportDiskImageRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::ExportDiskImageResponse>
+          callback) = 0;
+
   // Cancels a VM disk image operation (import or export) that is being
   // executed.
   // |callback| is called after the method call finishes.
   virtual void CancelDiskImageOperation(
       const vm_tools::concierge::CancelDiskImageRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::CancelDiskImageResponse>
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
           callback) = 0;
 
   // Retrieves the status of a disk image operation
@@ -160,35 +177,25 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
       chromeos::DBusMethodCallback<vm_tools::concierge::StartVmResponse>
           callback) = 0;
 
-  // Starts a Termina VM if there is not already one running.
-  // |fds| contains any number of file descriptors to be passed to concierge in
-  // |the order they appear in the vector.
-  // |callback| is called after the method call finishes.
-  virtual void StartVmWithFds(
-      std::vector<base::ScopedFD> fds,
-      const vm_tools::concierge::StartVmRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::StartVmResponse>
-          callback) = 0;
-
   // Stops the named Termina VM if it is running.
   // |callback| is called after the method call finishes.
   virtual void StopVm(
       const vm_tools::concierge::StopVmRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::StopVmResponse>
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
           callback) = 0;
 
   // Suspends the named Termina VM if it is running.
   // |callback| is called after the method call finishes.
   virtual void SuspendVm(
       const vm_tools::concierge::SuspendVmRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::SuspendVmResponse>
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
           callback) = 0;
 
   // Resumes the named Termina VM if it is running.
   // |callback| is called after the method call finishes.
   virtual void ResumeVm(
       const vm_tools::concierge::ResumeVmRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::ResumeVmResponse>
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
           callback) = 0;
 
   // Get VM Info.
@@ -228,14 +235,6 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
   virtual void WaitForServiceToBeAvailable(
       dbus::ObjectProxy::WaitForServiceToBeAvailableCallback callback) = 0;
 
-  // Gets SSH server public key of container and trusted SSH client private key
-  // which can be used to connect to the container.
-  // |callback| is called after the method call finishes.
-  virtual void GetContainerSshKeys(
-      const vm_tools::concierge::ContainerSshKeysRequest& request,
-      chromeos::DBusMethodCallback<
-          vm_tools::concierge::ContainerSshKeysResponse> callback) = 0;
-
   // Attaches a USB device to a VM.
   // |callback| is called once the method call has finished.
   virtual void AttachUsbDevice(
@@ -248,7 +247,7 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
   // |callback| is called once the method call has finished.
   virtual void DetachUsbDevice(
       const vm_tools::concierge::DetachUsbDeviceRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::concierge::DetachUsbDeviceResponse>
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
           callback) = 0;
 
   // Starts ARCVM if there is not already one running.
@@ -280,10 +279,57 @@ class COMPONENT_EXPORT(CONCIERGE) ConciergeClient
       chromeos::DBusMethodCallback<vm_tools::concierge::ListVmsResponse>
           callback) = 0;
 
+  // Modifies VM fake power configurations.
+  // |callback| is called after the method call finishes.
+  virtual void ModifyFakePowerConfig(
+      const vm_tools::concierge::ModifyFakePowerConfigRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
+          callback) = 0;
+
   virtual void GetVmLaunchAllowed(
       const vm_tools::concierge::GetVmLaunchAllowedRequest& request,
       chromeos::DBusMethodCallback<
           vm_tools::concierge::GetVmLaunchAllowedResponse> callback) = 0;
+
+  // Swap out VMs.
+  // |callback| is called after the method call finishes.
+  virtual void SwapVm(
+      const vm_tools::concierge::SwapVmRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
+          callback) = 0;
+
+  virtual void InstallPflash(
+      base::ScopedFD fd,
+      const vm_tools::concierge::InstallPflashRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
+          callback) = 0;
+
+  // Enables or disables aggressive balloon.
+  // |callback| is called after the method call finishes.
+  virtual void AggressiveBalloon(
+      const vm_tools::concierge::AggressiveBalloonRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
+          callback) = 0;
+
+  // Mutes or unmutes the audio of the given VM.
+  // |callback| is called after the method call finishes.
+  virtual void MuteVmAudio(
+      const vm_tools::concierge::MuteVmAudioRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SuccessFailureResponse>
+          callback) = 0;
+
+  // Sets up a vm user via maitred.
+  // |callback| is called after the method call finishes.
+  virtual void SetUpVmUser(
+      const vm_tools::concierge::SetUpVmUserRequest& request,
+      chromeos::DBusMethodCallback<vm_tools::concierge::SetUpVmUserResponse>
+          callback) = 0;
+
+  // Returns Baguette image URL information.
+  // |callback| is called after the method call finishes.
+  virtual void GetBaguetteImageUrl(
+      chromeos::DBusMethodCallback<
+          vm_tools::concierge::GetBaguetteImageUrlResponse> callback) = 0;
 
   // Creates and initializes the global instance. |bus| must not be null.
   static void Initialize(dbus::Bus* bus);

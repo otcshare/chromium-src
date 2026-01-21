@@ -4,52 +4,56 @@
 
 #include "components/attribution_reporting/suitable_origin.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/check.h"
-#include "base/strings/string_piece.h"
-#include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/attribution_reporting/is_origin_suitable.h"
+#include "mojo/public/cpp/bindings/default_construct_tag.h"
+#include "net/base/schemeful_site.h"
 #include "url/gurl.h"
 #include "url/origin.h"
-#include "url/url_constants.h"
 
 namespace attribution_reporting {
 
-// static
-bool SuitableOrigin::IsSuitable(const url::Origin& origin) {
-  const std::string& scheme = origin.scheme();
-  return (scheme == url::kHttpScheme || scheme == url::kHttpsScheme) &&
-         network::IsOriginPotentiallyTrustworthy(origin);
+bool IsSitePotentiallySuitable(const net::SchemefulSite& site) {
+  return site.has_registrable_domain_or_host() &&
+         site.GetURL().SchemeIsHTTPOrHTTPS();
 }
 
 // static
-absl::optional<SuitableOrigin> SuitableOrigin::Create(url::Origin origin) {
-  if (!IsSuitable(origin))
-    return absl::nullopt;
+bool SuitableOrigin::IsSuitable(const url::Origin& origin) {
+  return IsOriginSuitable(origin);
+}
+
+// static
+std::optional<SuitableOrigin> SuitableOrigin::Create(url::Origin origin) {
+  if (!IsSuitable(origin)) {
+    return std::nullopt;
+  }
 
   return SuitableOrigin(std::move(origin));
 }
 
 // static
-absl::optional<SuitableOrigin> SuitableOrigin::Create(const GURL& url) {
+std::optional<SuitableOrigin> SuitableOrigin::Create(const GURL& url) {
   return Create(url::Origin::Create(url));
 }
 
 // static
-absl::optional<SuitableOrigin> SuitableOrigin::Deserialize(
-    base::StringPiece str) {
+std::optional<SuitableOrigin> SuitableOrigin::Deserialize(
+    std::string_view str) {
   return Create(GURL(str));
 }
 
-SuitableOrigin::SuitableOrigin() {
-  DCHECK(!IsValid());
+SuitableOrigin::SuitableOrigin(mojo::DefaultConstruct::Tag) {
+  CHECK(!IsValid());
 }
 
 SuitableOrigin::SuitableOrigin(url::Origin origin)
     : origin_(std::move(origin)) {
-  DCHECK(IsValid());
+  CHECK(IsValid());
 }
 
 SuitableOrigin::~SuitableOrigin() = default;
@@ -62,14 +66,8 @@ SuitableOrigin::SuitableOrigin(SuitableOrigin&&) = default;
 
 SuitableOrigin& SuitableOrigin::operator=(SuitableOrigin&&) = default;
 
-bool SuitableOrigin::operator<(const SuitableOrigin& other) const {
-  DCHECK(IsValid());
-  DCHECK(other.IsValid());
-  return origin_ < other.origin_;
-}
-
 std::string SuitableOrigin::Serialize() const {
-  DCHECK(IsValid());
+  CHECK(IsValid());
   return origin_.Serialize();
 }
 

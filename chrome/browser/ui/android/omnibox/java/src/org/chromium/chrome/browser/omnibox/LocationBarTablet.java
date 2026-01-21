@@ -6,23 +6,27 @@ package org.chromium.chrome.browser.omnibox;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.View.OnLongClickListener;
 
+import androidx.appcompat.content.res.AppCompatResources;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.widget.Toast;
 
-/**
- * Location bar for tablet form factors.
- */
-class LocationBarTablet extends LocationBarLayout {
+/** Location bar for tablet form factors. */
+@NullMarked
+class LocationBarTablet extends LocationBarLayout implements OnLongClickListener {
     // The number of toolbar buttons that can be hidden at small widths (reload, back, forward).
     private static final int HIDEABLE_BUTTON_COUNT = 3;
 
     private View mLocationBarIcon;
     private View mBookmarkButton;
-    private View mSaveOfflineButton;
     private View[] mTargets;
     private final Rect mCachedTargetBounds = new Rect();
 
@@ -36,14 +40,16 @@ class LocationBarTablet extends LocationBarLayout {
     private float mLayoutRight;
     private int mToolbarStartPaddingDifference;
 
-    /**
-     * Constructor used to inflate from XML.
-     */
+    @SuppressWarnings("HidingField")
+    private UrlBar mUrlBar;
+
+    /** Constructor used to inflate from XML. */
     public LocationBarTablet(Context context, AttributeSet attrs) {
         super(context, attrs);
 
-        mToolbarButtonsWidth = getResources().getDimensionPixelOffset(R.dimen.toolbar_button_width)
-                * HIDEABLE_BUTTON_COUNT;
+        mToolbarButtonsWidth =
+                getResources().getDimensionPixelOffset(R.dimen.toolbar_button_width)
+                        * HIDEABLE_BUTTON_COUNT;
         int locationBarIconWidth =
                 getResources().getDimensionPixelOffset(R.dimen.location_bar_icon_width);
         mMicButtonWidth = locationBarIconWidth;
@@ -56,16 +62,30 @@ class LocationBarTablet extends LocationBarLayout {
 
         mLocationBarIcon = findViewById(R.id.location_bar_status_icon);
         mBookmarkButton = findViewById(R.id.bookmark_button);
-        mSaveOfflineButton = findViewById(R.id.save_offline_button);
+        mUrlBar = findViewById(R.id.url_bar);
 
-        boolean isRtl = mUrlActionContainer.getLayoutDirection() == LAYOUT_DIRECTION_RTL;
-        int urlActionContainerPadding =
-                getResources().getDimensionPixelSize(R.dimen.location_bar_url_action_padding);
-        mUrlActionContainer.setPadding(
-                isRtl ? urlActionContainerPadding : mUrlActionContainer.getPaddingLeft(),
-                mUrlActionContainer.getPaddingTop(),
-                isRtl ? mUrlActionContainer.getRight() : urlActionContainerPadding,
-                mUrlActionContainer.getPaddingBottom());
+        mUrlBar.setOnHoverListener(
+                new View.OnHoverListener() {
+                    @Override
+                    public boolean onHover(View v, MotionEvent event) {
+                        switch (event.getAction()) {
+                            case MotionEvent.ACTION_HOVER_ENTER:
+                                setForeground(
+                                        AppCompatResources.getDrawable(
+                                                getContext(),
+                                                R.drawable
+                                                        .modern_toolbar_text_box_background_highlight));
+                                return true;
+                            case MotionEvent.ACTION_HOVER_EXIT:
+                                setForeground(null);
+                                return true;
+                            default:
+                                return false;
+                        }
+                    }
+                });
+
+        setOnLongClickListener(this);
 
         mTargets = new View[] {mUrlBar, mDeleteButton};
     }
@@ -137,27 +157,21 @@ class LocationBarTablet extends LocationBarLayout {
      * hiding buttons.
      */
     /* package */ void resetValuesAfterAnimation() {
-        mMicButton.setTranslationX(0);
-        mLensButton.setTranslationX(0);
-        mDeleteButton.setTranslationX(0);
-        mBookmarkButton.setTranslationX(0);
-        mSaveOfflineButton.setTranslationX(0);
-        mLocationBarIcon.setTranslationX(0);
+        setLocationBarButtonTranslationForNtpAnimation(0.f);
         mUrlBar.setTranslationX(0);
 
         mMicButton.setAlpha(1.f);
         mLensButton.setAlpha(1.f);
         mDeleteButton.setAlpha(1.f);
         mBookmarkButton.setAlpha(1.f);
-        mSaveOfflineButton.setAlpha(1.f);
     }
 
     /**
      * Updates completion progress for the location bar width change animation.
      *
      * @param fraction How complete the animation is, where 0 represents the normal width (toolbar
-     *         buttons fully visible) and 1.f represents the expanded width (toolbar buttons fully
-     *         hidden).
+     *     buttons fully visible) and 1.f represents the expanded width (toolbar buttons fully
+     *     hidden).
      */
     /* package */ void setWidthChangeAnimationFraction(float fraction) {
         mWidthChangeFraction = fraction;
@@ -195,10 +209,10 @@ class LocationBarTablet extends LocationBarLayout {
      * compensates for the change to the left/right position of the location bar and ensures child
      * views stay in the same spot visually during the animation.
      *
-     * The delete button is special because if it's visible during the animation its start and end
-     * location are not the same. When buttons are shown in the unfocused location bar, the delete
-     * button is left of the microphone. When buttons are not shown in the unfocused location bar,
-     * the delete button is aligned with the left edge of the location bar.
+     * <p>The delete button is special because if it's visible during the animation its start and
+     * end location are not the same. When buttons are shown in the unfocused location bar, the
+     * delete button is left of the microphone. When buttons are not shown in the unfocused location
+     * bar, the delete button is aligned with the left edge of the location bar.
      *
      * @param offset The offset to use for the child views.
      * @param deleteOffset The additional offset to use for the delete button.
@@ -207,11 +221,7 @@ class LocationBarTablet extends LocationBarLayout {
         if (getLayoutDirection() != LAYOUT_DIRECTION_RTL) {
             // When the location bar layout direction is LTR, the buttons at the end (left side)
             // of the location bar need to stick to the left edge.
-            if (mSaveOfflineButton.getVisibility() == View.VISIBLE) {
-                mSaveOfflineButton.setTranslationX(offset);
-            } else {
-                mMicButton.setTranslationX(offset);
-            }
+            mMicButton.setTranslationX(offset);
 
             if (mDeleteButton.getVisibility() == View.VISIBLE) {
                 mDeleteButton.setTranslationX(offset + deleteOffset);
@@ -232,17 +242,9 @@ class LocationBarTablet extends LocationBarLayout {
     }
 
     /* package */ void setBookmarkButtonVisibility(boolean showBookmarkButton) {
+        // The button may be null if this method is called before initialization is finished.
+        if (mBookmarkButton == null) return;
         mBookmarkButton.setVisibility(showBookmarkButton ? View.VISIBLE : View.GONE);
-    }
-
-    /* package */ void setSaveOfflineButtonVisibility(
-            boolean showSaveOfflineButton, boolean isSaveOfflineButtonEnabled) {
-        mSaveOfflineButton.setVisibility(showSaveOfflineButton ? View.VISIBLE : View.GONE);
-        if (showSaveOfflineButton) mSaveOfflineButton.setEnabled(isSaveOfflineButtonEnabled);
-    }
-
-    /* package */ boolean isSaveOfflineButtonVisible() {
-        return mSaveOfflineButton.getVisibility() == VISIBLE;
     }
 
     /* package */ boolean isDeleteButtonVisible() {
@@ -266,21 +268,12 @@ class LocationBarTablet extends LocationBarLayout {
     }
 
     /**
-     * Gets the bookmark button view for the purposes of creating an animator that targets it.
-     * Don't use this for any other reason, e.g. to access or modify the view's properties directly.
+     * Gets the bookmark button view for the purposes of creating an animator that targets it. Don't
+     * use this for any other reason, e.g. to access or modify the view's properties directly.
      */
     @Deprecated
     /* package */ View getBookmarkButtonForAnimation() {
         return mBookmarkButton;
-    }
-
-    /**
-     * Gets the save offline button view for the purposes of creating an animator that targets it.
-     * Don't use this for any other reason, e.g. to access or modify the view's properties directly.
-     */
-    @Deprecated
-    /* package */ View getSaveOfflineButtonForAnimation() {
-        return mSaveOfflineButton;
     }
 
     /**
@@ -309,5 +302,23 @@ class LocationBarTablet extends LocationBarLayout {
     /* package */ void finishAnimatingWidthChange() {
         mAnimatingWidthChange = false;
         mToolbarStartPaddingDifference = 0;
+    }
+
+    @Override
+    public boolean onLongClick(View v) {
+        String description = null;
+        Context context = getContext();
+        Resources resources = context.getResources();
+
+        if (v == mBookmarkButton) {
+            description = resources.getString(R.string.menu_bookmark);
+        }
+        return Toast.showAnchoredToast(context, v, description);
+    }
+
+    @Override
+    /* package */ void setLocationBarButtonTranslationForNtpAnimation(float translationX) {
+        super.setLocationBarButtonTranslationForNtpAnimation(translationX);
+        mBookmarkButton.setTranslationX(translationX);
     }
 }

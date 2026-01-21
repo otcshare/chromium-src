@@ -5,19 +5,16 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_COUNTRY_NAMES_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_COUNTRY_NAMES_H_
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
+#include <string_view>
 
 #include "base/containers/lru_cache.h"
+#include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
 #include "components/autofill/core/browser/geo/country_names_for_locale.h"
-
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}  // namespace base
 
 namespace autofill {
 
@@ -32,27 +29,22 @@ class CountryNames {
   CountryNames(const CountryNames&) = delete;
   CountryNames& operator=(const CountryNames&) = delete;
 
-  // Tells CountryNames, what is the application locale. Only the first supplied
-  // value is used, further calls result in no changes.  Call this on the UI
-  // thread, before first using CountryNames. `locale` must not be empty.
-  static void SetLocaleString(const std::string& locale);
-
   // Returns the country code corresponding to the `country_name` queried for
   // the application and default locale.
-  const std::string GetCountryCode(const std::u16string& country_name) const;
+  const std::string& GetCountryCode(std::u16string_view country_name) const;
 
   // Returns the country code for a `country_name` provided with a
   // `locale_name`. If no country code can be determined, an empty string is
   // returned. The purpose of this method is to translate country names from a
   // locale different to one the instance was constructed for.
-  const std::string GetCountryCodeForLocalizedCountryName(
-      const std::u16string& country_name,
-      const std::string& locale_name);
+  const std::string& GetCountryCodeForLocalizedCountryName(
+      std::u16string_view country_name,
+      std::string_view locale_name);
 
 #if defined(UNIT_TEST)
   // Returns true if the country names for the locale_name are in the cache.
   // Only used for testing.
-  bool IsCountryNamesForLocaleCachedForTesting(const std::string& locale_name) {
+  bool IsCountryNamesForLocaleCachedForTesting(std::string_view locale_name) {
     auto iter = localized_country_names_cache_.Get(locale_name);
     return iter != localized_country_names_cache_.end();
   }
@@ -60,7 +52,7 @@ class CountryNames {
 
  protected:
   // Create CountryNames for `locale_name`. Protected for testing.
-  explicit CountryNames(const std::string& locale_name);
+  explicit CountryNames(std::string locale_name);
 
   // Protected for testing.
   ~CountryNames();
@@ -69,19 +61,16 @@ class CountryNames {
   // Create CountryNames for the default locale.
   CountryNames();
 
-  friend struct base::DefaultSingletonTraits<CountryNames>;
+  friend base::NoDestructor<CountryNames>;
 
   // Caches localized country name for a locale that is neither the application
   // or default locale. The Cache is keyed by the locale_name and contains
   // `CountryNamesForLocale` instances.
   using LocalizedCountryNamesCache =
-      base::LRUCache<std::string, CountryNamesForLocale>;
+      base::LRUCache<std::string, CountryNamesForLocale, std::less<>>;
 
   // The locale object for the application locale string.
   const std::string application_locale_name_;
-
-  // The locale object for the default locale string.
-  const std::string default_locale_name_;
 
   // Maps country names localized for the default locale to country codes.
   const CountryNamesForLocale country_names_for_default_locale_;

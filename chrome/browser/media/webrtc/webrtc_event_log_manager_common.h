@@ -6,13 +6,14 @@
 #define CHROME_BROWSER_MEDIA_WEBRTC_WEBRTC_EVENT_LOG_MANAGER_COMMON_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "ipc/ipc_message.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "content/public/common/child_process_id.h"
+#include "ipc/constants.mojom.h"
 
 class Profile;
 
@@ -30,8 +31,11 @@ namespace webrtc_event_logging {
 
 extern const size_t kWebRtcEventLogManagerUnlimitedFileSize;
 
-extern const size_t kDefaultMaxLocalLogFileSizeBytes;
+extern const size_t kDefaultMaxLocalEventLogFileSizeBytes;
 extern const size_t kMaxNumberLocalWebRtcEventLogFiles;
+
+extern const size_t kDefaultMaxLocalDataChannelFileSizeBytes;
+extern const size_t kMaxNumberLocalWebRtcDataChannelLogFiles;
 
 extern const size_t kMaxRemoteLogFileSizeBytes;
 
@@ -97,7 +101,7 @@ extern const base::TimeDelta kRemoteBoundWebRtcEventLogsMaxRetention;
 
 // These are made globally visible so that unit tests may check for them.
 extern const char kStartRemoteLoggingFailureAlreadyLogging[];
-extern const char kStartRemoteLoggingFailureDeadRenderProcessHost[];
+// extern const char OBSOLETE_kStartRemoteLoggingFailureDeadRenderProcessHost[];
 extern const char kStartRemoteLoggingFailureFeatureDisabled[];
 extern const char kStartRemoteLoggingFailureFileCreationError[];
 extern const char kStartRemoteLoggingFailureFilePathUsedHistory[];
@@ -110,6 +114,7 @@ extern const char kStartRemoteLoggingFailureNoAdditionalActiveLogsAllowed[];
 extern const char kStartRemoteLoggingFailureOutputPeriodMsTooLarge[];
 extern const char kStartRemoteLoggingFailureUnknownOrInactivePeerConnection[];
 extern const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[];
+extern const char kBrowserContextNotFound[];
 
 // Values for the histogram for the result of the API call to collect
 // a WebRTC event log.
@@ -118,7 +123,7 @@ extern const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[];
 // numeric values should never be reused.
 enum class WebRtcEventLoggingApiUma {
   kSuccess = 0,                         // Log successfully collected.
-  kDeadRph = 1,                         // Log not collected.
+  kDeadRph_OBSOLETE = 1,                // Log not collected.
   kFeatureDisabled = 2,                 // Log not collected.
   kIncognito = 3,                       // Log not collected.
   kInvalidArguments = 4,                // Log not collected.
@@ -130,7 +135,8 @@ enum class WebRtcEventLoggingApiUma {
   kLogPathNotAvailable = 10,            // Log not collected.
   kHistoryPathNotAvailable = 11,        // Log not collected.
   kFileCreationError = 12,              // Log not collected.
-  kMaxValue = kFileCreationError
+  kBrowserContextNotFound = 13,         // Log not collected.
+  kMaxValue = kBrowserContextNotFound
 };
 
 void UmaRecordWebRtcEventLoggingApi(WebRtcEventLoggingApiUma result);
@@ -173,7 +179,7 @@ struct WebRtcEventLogPeerConnectionKey {
             /*render_process_id=*/0,
             /*lid=*/0,
             reinterpret_cast<BrowserContextId>(nullptr),
-            /*render_frame_id=*/MSG_ROUTING_NONE) {}
+            /*render_frame_id=*/IPC::mojom::kRoutingIdNone) {}
 
   constexpr WebRtcEventLogPeerConnectionKey(int render_process_id,
                                             int lid,
@@ -270,9 +276,15 @@ struct WebRtcLogFileInfo {
 // the paths which will be used for these logs.
 class WebRtcLocalEventLogsObserver {
  public:
-  virtual void OnLocalLogStarted(WebRtcEventLogPeerConnectionKey key,
-                                 const base::FilePath& file_path) = 0;
-  virtual void OnLocalLogStopped(WebRtcEventLogPeerConnectionKey key) = 0;
+  virtual void OnLocalEventLogStarted(WebRtcEventLogPeerConnectionKey key,
+                                      const base::FilePath& file_path) = 0;
+  virtual void OnLocalEventLogStopped(WebRtcEventLogPeerConnectionKey key) = 0;
+
+  virtual void OnLocalDataChannelLogStarted(
+      WebRtcEventLogPeerConnectionKey key,
+      const base::FilePath& file_path) = 0;
+  virtual void OnLocalDataChannelLogStopped(
+      WebRtcEventLogPeerConnectionKey key) = 0;
 
  protected:
   virtual ~WebRtcLocalEventLogsObserver() = default;
@@ -309,7 +321,7 @@ class LogFileWriter {
     virtual size_t MinFileSizeBytes() const = 0;
 
     // The extension type associated with this type of log files.
-    virtual base::FilePath::StringPieceType Extension() const = 0;
+    virtual base::FilePath::StringViewType Extension() const = 0;
 
     // Instantiate and initialize a LogFileWriter.
     // If creation or initialization fail, an empty unique_ptr will be returned,
@@ -318,7 +330,7 @@ class LogFileWriter {
     // If !max_file_size_bytes.has_value(), the LogFileWriter is unlimited.
     virtual std::unique_ptr<LogFileWriter> Create(
         const base::FilePath& path,
-        absl::optional<size_t> max_file_size_bytes) const = 0;
+        std::optional<size_t> max_file_size_bytes) const = 0;
   };
 
   virtual ~LogFileWriter() = default;
@@ -359,11 +371,11 @@ class BaseLogFileWriterFactory : public LogFileWriter::Factory {
 
   size_t MinFileSizeBytes() const override;
 
-  base::FilePath::StringPieceType Extension() const override;
+  base::FilePath::StringViewType Extension() const override;
 
   std::unique_ptr<LogFileWriter> Create(
       const base::FilePath& path,
-      absl::optional<size_t> max_file_size_bytes) const override;
+      std::optional<size_t> max_file_size_bytes) const override;
 };
 
 // Interface for a class that provides compression of a stream, while attempting
@@ -396,7 +408,7 @@ class LogCompressor {
     // initializations are successful; en empty unique_ptr otherwise.
     // If !max_size_bytes.has_value(), an unlimited compressor is created.
     virtual std::unique_ptr<LogCompressor> Create(
-        absl::optional<size_t> max_size_bytes) const = 0;
+        std::optional<size_t> max_size_bytes) const = 0;
   };
 
   // Result of a call to Compress().
@@ -482,7 +494,7 @@ class GzipLogCompressorFactory : public LogCompressor::Factory {
   size_t MinSizeBytes() const override;
 
   std::unique_ptr<LogCompressor> Create(
-      absl::optional<size_t> max_size_bytes) const override;
+      std::optional<size_t> max_size_bytes) const override;
 
  private:
   std::unique_ptr<CompressedSizeEstimator::Factory> estimator_factory_;
@@ -498,11 +510,11 @@ class GzippedLogFileWriterFactory : public LogFileWriter::Factory {
 
   size_t MinFileSizeBytes() const override;
 
-  base::FilePath::StringPieceType Extension() const override;
+  base::FilePath::StringViewType Extension() const override;
 
   std::unique_ptr<LogFileWriter> Create(
       const base::FilePath& path,
-      absl::optional<size_t> max_file_size_bytes) const override;
+      std::optional<size_t> max_file_size_bytes) const override;
 
  private:
   std::unique_ptr<GzipLogCompressorFactory> gzip_compressor_factory_;
@@ -523,7 +535,18 @@ WebRtcEventLogPeerConnectionKey::BrowserContextId GetBrowserContextId(
 // it would have no BrowserContext associated, so the ID associated with a
 // null BrowserContext will be returned.)
 WebRtcEventLogPeerConnectionKey::BrowserContextId GetBrowserContextId(
-    int render_process_id);
+    content::ChildProcessId render_process_id);
+
+// Fetches the BrowserContext associated with the render process ID, then
+// returns its BrowserContextId. (If the render process has already died,
+// it would have no BrowserContext associated, so the ID associated with a
+// null BrowserContext will be returned.)
+inline WebRtcEventLogPeerConnectionKey::BrowserContextId GetBrowserContextId(
+    int render_process_id) {
+  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
+  return GetBrowserContextId(
+      content::ChildProcessId::FromUnsafeValue(render_process_id));
+}
 
 // Given a BrowserContext's directory, return the path to the directory where
 // we store the pending remote-bound logs associated with this BrowserContext.
@@ -533,11 +556,10 @@ base::FilePath GetRemoteBoundWebRtcEventLogsDir(
 
 // Produce the path to a remote-bound WebRTC event log file with the given
 // log ID, web-app ID and extension, in the given directory.
-base::FilePath WebRtcEventLogPath(
-    const base::FilePath& remote_logs_dir,
-    const std::string& log_id,
-    size_t web_app_id,
-    const base::FilePath::StringPieceType& extension);
+base::FilePath WebRtcEventLogPath(const base::FilePath& remote_logs_dir,
+                                  const std::string& log_id,
+                                  size_t web_app_id,
+                                  base::FilePath::StringViewType extension);
 
 // Checks whether the path/filename would be a valid reference to a remote-bound
 // even log. These functions do not examine the file's content or its extension.

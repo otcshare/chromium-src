@@ -5,31 +5,26 @@
 #ifndef CONTENT_BROWSER_THEME_HELPER_MAC_H_
 #define CONTENT_BROWSER_THEME_HELPER_MAC_H_
 
+#include <memory>
+
 #include "base/containers/span.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/writable_shared_memory_region.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/render_process_host_creation_observer.h"
 #include "third_party/blink/public/common/sandbox_support/sandbox_support_mac.h"
 #include "third_party/blink/public/platform/mac/web_scrollbar_theme.h"
 #include "third_party/skia/include/core/SkColor.h"
-
-#if __OBJC__
-@class SystemThemeObserver;
-#else
-class SystemThemeObserver;
-#endif
 
 namespace content {
 
 // This class is used to monitor macOS system appearance changes and to notify
 // sandboxed child processes when they change. This class lives on the UI
 // thread.
-class ThemeHelperMac : public NotificationObserver {
+class ThemeHelperMac : public content::RenderProcessHostCreationObserver {
  public:
   // Return pointer to the singleton instance for the current process, or NULL
   // if none.
-  static ThemeHelperMac* GetInstance();
+  CONTENT_EXPORT static ThemeHelperMac* GetInstance();
 
   ThemeHelperMac(const ThemeHelperMac&) = delete;
   ThemeHelperMac& operator=(const ThemeHelperMac&) = delete;
@@ -39,6 +34,8 @@ class ThemeHelperMac : public NotificationObserver {
   base::ReadOnlySharedMemoryRegion DuplicateReadOnlyColorMapRegion();
 
  private:
+  friend class SystemAccentColorTest;
+
   ThemeHelperMac();
   ~ThemeHelperMac() override;
 
@@ -53,13 +50,11 @@ class ThemeHelperMac : public NotificationObserver {
   // be stored.
   void LoadSystemColorsForCurrentAppearance(base::span<SkColor> values);
 
-  // Overridden from NotificationObserver:
-  void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details) override;
+  // Test-only method to set accent color for testing.
+  CONTENT_EXPORT void SetAccentColorForTesting(SkColor accent_color);
 
-  // ObjC object that observes notifications from the system.
-  SystemThemeObserver* theme_observer_;  // strong
+  // Overridden from content::RenderProcessHostCreationObserver:
+  void OnRenderProcessHostCreated(content::RenderProcessHost* host) override;
 
   // Writable and mapped array of SkColor values, indexed by MacSystemColorID
   // for a light appearance. Colors for a dark appearance in indexed by
@@ -70,7 +65,8 @@ class ThemeHelperMac : public NotificationObserver {
   // sharing to child processes.
   base::ReadOnlySharedMemoryRegion read_only_color_map_;
 
-  NotificationRegistrar registrar_;
+  struct ObjCStorage;
+  std::unique_ptr<ObjCStorage> objc_storage_;
 };
 
 }  // namespace content

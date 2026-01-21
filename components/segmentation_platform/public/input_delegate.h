@@ -5,8 +5,8 @@
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_PUBLIC_INPUT_DELEGATE_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_PUBLIC_INPUT_DELEGATE_H_
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "components/segmentation_platform/public/proto/model_metadata.pb.h"
 #include "components/segmentation_platform/public/types/processed_value.h"
 
@@ -29,7 +29,7 @@ class InputDelegate {
   // in the Tensor should be equal to `input.tensor_length()`.
   using ProcessedCallback = base::OnceCallback<void(/*error=*/bool, Tensor)>;
   virtual void Process(const proto::CustomInput& input,
-                       const FeatureProcessorState& feature_processor_state,
+                       FeatureProcessorState& feature_processor_state,
                        ProcessedCallback callback) = 0;
 };
 

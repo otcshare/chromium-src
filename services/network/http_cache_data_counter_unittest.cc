@@ -5,17 +5,18 @@
 #include "services/network/http_cache_data_counter.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/cache_type.h"
@@ -27,6 +28,7 @@
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_manager.h"
 #include "net/http/http_transaction_factory.h"
+#include "net/http/mock_http_cache.h"
 #include "net/url_request/url_request_context.h"
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
@@ -44,7 +46,7 @@ struct CacheTestEntry {
   int size;
 };
 
-constexpr CacheTestEntry kCacheEntries[] = {
+constexpr const auto kCacheEntries = std::to_array<CacheTestEntry>({
     {"http://www.google.com", "15 Jun 1975", 1024},
     {"https://www.google.com", "15 Jun 1985", 2048},
     {"http://www.wikipedia.com", "15 Jun 1995", 4096},
@@ -52,7 +54,8 @@ constexpr CacheTestEntry kCacheEntries[] = {
     {"http://localhost:1234/mysite", "15 Jun 2015", 16384},
     {"https://localhost:1234/mysite", "15 Jun 2016", 32768},
     {"http://localhost:3456/yoursite", "15 Jun 2017", 65536},
-    {"https://localhost:3456/yoursite", "15 Jun 2018", 512}};
+    {"https://localhost:3456/yoursite", "15 Jun 2018", 512},
+});
 
 mojom::NetworkContextParamsPtr CreateContextParams() {
   mojom::NetworkContextParamsPtr params =
@@ -84,9 +87,12 @@ class HttpCacheDataCounterTest : public testing::Test {
                                 ->GetCache();
     ASSERT_TRUE(cache);
     {
-      net::TestCompletionCallback callback;
-      int rv = cache->GetBackend(&backend_, callback.callback());
-      ASSERT_EQ(net::OK, callback.GetResult(rv));
+      net::TestGetBackendCompletionCallback callback;
+      net::HttpCache::GetBackendResult result =
+          cache->GetBackend(callback.callback());
+      result = callback.GetResult(result);
+      ASSERT_EQ(net::OK, result.first);
+      backend_ = result.second;
       ASSERT_TRUE(backend_);
     }
 
@@ -100,8 +106,9 @@ class HttpCacheDataCounterTest : public testing::Test {
       disk_cache::Entry* entry = result.ReleaseEntry();
       ASSERT_TRUE(entry);
 
-      auto io_buf = base::MakeRefCounted<net::IOBuffer>(test_entry.size);
-      std::fill(io_buf->data(), io_buf->data() + test_entry.size, 0);
+      auto io_buf =
+          base::MakeRefCounted<net::IOBufferWithSize>(test_entry.size);
+      std::ranges::fill(io_buf->span(), 0);
 
       net::TestCompletionCallback write_data_callback;
       int rv = entry->WriteData(1, 0, io_buf.get(), test_entry.size,
@@ -185,7 +192,7 @@ class HttpCacheDataCounterTest : public testing::Test {
   void InitNetworkContext() {
     mojom::NetworkContextParamsPtr context_params = CreateContextParams();
     context_params->http_cache_enabled = true;
-    context_params->http_cache_directory = cache_dir_.GetPath();
+    context_params->file_paths->http_cache_directory = cache_dir_.GetPath();
 
     network_context_ = std::make_unique<NetworkContext>(
         network_service_.get(),
@@ -201,7 +208,8 @@ class HttpCacheDataCounterTest : public testing::Test {
   // Stores the mojo::Remote<mojom::NetworkContext> of the most recently created
   // NetworkContext.
   mojo::Remote<mojom::NetworkContext> network_context_remote_;
-  disk_cache::Backend* backend_ = nullptr;
+
+  raw_ptr<disk_cache::Backend> backend_ = nullptr;
 };
 
 TEST_F(HttpCacheDataCounterTest, Basic) {

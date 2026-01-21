@@ -9,25 +9,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <bitset>
 #include <memory>
+#include <ostream>
 #include <queue>
-// See if we compile against new enough headers and add missing definition
-// if the headers are too old.
-#include "base/memory/raw_ptr.h"
-
-#ifndef MT_TOOL_PALM
-#define MT_TOOL_PALM 2
-#endif
+#include <set>
+#include <utility>
+#include <vector>
 
 #include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
-#include "base/message_loop/message_pump_libevent.h"
-#include "base/metrics/field_trial_params.h"
+#include "base/memory/raw_ptr.h"
+#include "base/message_loop/message_pump_epoll.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "ui/events/ozone/evdev/event_converter_evdev.h"
 #include "ui/events/ozone/evdev/event_device_info.h"
+#include "ui/events/ozone/evdev/heatmap_palm_detector.h"
 #include "ui/events/ozone/evdev/touch_evdev_debug_buffer.h"
 #include "ui/events/ozone/evdev/touch_filter/palm_detection_filter.h"
 #include "ui/events/types/event_type.h"
@@ -63,6 +61,10 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
       SharedPalmDetectionFilterState* shared_palm_state,
       DeviceEventDispatcherEvdev* dispatcher);
 
+  // Get model ID for heatmap supported devices.
+  static HeatmapPalmDetector::ModelId GetHidrawModelId(
+      const EventDeviceInfo& info);
+
   // EventConverterEvdev:
   bool HasTouchscreen() const override;
   bool HasPen() const override;
@@ -91,14 +93,48 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   // Unsafe part of initialization.
   virtual void Initialize(const EventDeviceInfo& info);
 
+  std::ostream& DescribeForLog(std::ostream& os) const override;
+
   static const char kHoldCountAtReleaseEventName[];
   static const char kHoldCountAtCancelEventName[];
   static const char kPalmFilterTimerEventName[];
+  static const char kPalmTouchCountEventName[];
+  static const char kRepeatedTouchCountEventName[];
+  static const char kTouchGapAfterStylusEventName[];
+  static const char kTouchGapBeforeStylusEventName[];
+  static const char kTouchTypeAfterStylusEventName[];
+  static const char kTouchTypeBeforeStylusEventName[];
+  static const char kTouchSessionCountEventName[];
+  static const char kTouchSessionLengthEventName[];
+  static const char kStylusSessionCountEventName[];
+  static const char kStylusSessionLengthEventName[];
 
  private:
+  struct CancelledTouch {
+    const base::TimeTicks cancel_timestamp;
+    const float start_x, start_y;
+
+    CancelledTouch(base::TimeTicks cancel_timestamp,
+                   float start_x,
+                   float start_y)
+        : cancel_timestamp(cancel_timestamp),
+          start_x(start_x),
+          start_y(start_y) {}
+
+    bool operator==(const CancelledTouch& other) const {
+      return cancel_timestamp == other.cancel_timestamp &&
+             start_x == other.start_x && start_y == other.start_y;
+    }
+
+    bool operator<(const CancelledTouch& other) const {
+      return std::tie(cancel_timestamp, start_x, start_y) <
+             std::tie(other.cancel_timestamp, other.start_x, other.start_y);
+    }
+  };
+
   friend class MockTouchEventConverterEvdev;
 
-  // Overidden from base::MessagePumpLibevent::FdWatcher.
+  // Overridden from base::MessagePumpEpoll::FdWatcher.
   void OnFileCanReadWithoutBlocking(int fd) override;
 
   virtual void Reinitialize();
@@ -109,8 +145,8 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   void ProcessAbs(const input_event& input);
   void ProcessSyn(const input_event& input);
 
-  // Returns an EventType to dispatch for |touch|. Returns ET_UNKNOWN if an
-  // event should not be dispatched.
+  // Returns an EventType to dispatch for |touch|. Returns EventType::kUnknown
+  // if an event should not be dispatched.
   EventType GetEventTypeForTouch(const InProgressTouchEvdev& touch);
 
   void ReportTouchEvent(const InProgressTouchEvdev& event,
@@ -135,6 +171,14 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   void UpdateRadiusFromTouchWithOrientation(InProgressTouchEvdev* event) const;
 
   int NextTrackingId();
+
+  void UpdateSharedPalmState(base::TimeTicks timestamp);
+
+  void DetectRepeatedTouch(base::TimeTicks timestamp);
+
+  void RecordMetrics(base::TimeTicks timestamp);
+
+  void RecordSession(base::TimeDelta session_length);
 
   // Input device file descriptor.
   const base::ScopedFD input_device_fd_;
@@ -180,6 +224,18 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   float y_min_tuxels_;
   float y_num_tuxels_;
 
+  // Resolution of tool_x and tool_y.
+  int tool_x_res_;
+  int tool_y_res_;
+
+  // Input range for tool_x-axis.
+  float tool_x_min_tuxels_;
+  float tool_x_num_tuxels_;
+
+  // Input range for tool_y-axis.
+  float tool_y_min_tuxels_;
+  float tool_y_num_tuxels_;
+
   // The resolution of ABS_MT_TOUCH_MAJOR/MINOR might be different from the
   // resolution of ABS_MT_POSITION_X/Y. As we use the (position range, display
   // pixels) to resize touch event radius, we have to scale major/minor.
@@ -223,6 +279,9 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   // Finds touches that are palms with user software not just firmware.
   const std::unique_ptr<PalmDetectionFilter> palm_detection_filter_;
 
+  // Finds touches that are palms based on heatmap data.
+  const std::unique_ptr<PalmDetectionFilter> heatmap_palm_detection_filter_;
+
   // Records the recent touch events. It is used to fill the feedback reports
   TouchEventLogEvdev touch_evdev_debug_buffer_;
 
@@ -236,10 +295,33 @@ class COMPONENT_EXPORT(EVDEV) TouchEventConverterEvdev
   GetLatestStylusStateCallback get_latest_stylus_state_callback_;
 
   // Do we mark a touch as palm when touch_major is the max?
-  bool palm_on_touch_major_max_;
+  bool palm_on_touch_major_max_ = true;
 
   // Do we mark a touch as palm when the tool type is marked as TOOL_TYPE_PALM ?
-  bool palm_on_tool_type_palm_;
+  bool palm_on_tool_type_palm_ = true;
+
+  // The start time of a touch session.
+  std::optional<base::TimeTicks> session_start_time_;
+
+  // Whether the last touch was detected as palm.
+  bool last_touch_is_palm_ = false;
+
+  // Stores recently-canceled touches, which are used to detect repeated
+  // touches.
+  std::set<CancelledTouch> cancelled_touches_;
+
+  // A delay timer starts whenever a touch is reported and stops after 5s. If a
+  // new touch is reported during the 5s, the timer will be reset and restarted.
+  // When the timer finishes, it will record session metrics.
+  base::OneShotTimer record_session_timer_;
+
+  // Not owned!
+  const raw_ptr<SharedPalmDetectionFilterState> shared_palm_state_;
+
+  // Whether device supports hidraw spi and heatmap palm detection.
+  bool support_heatmap_palm_detection_ = false;
+
+  base::WeakPtrFactory<TouchEventConverterEvdev> weak_factory_{this};
 };
 
 }  // namespace ui

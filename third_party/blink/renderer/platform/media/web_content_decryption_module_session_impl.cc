@@ -5,9 +5,8 @@
 #include "third_party/blink/renderer/platform/media/web_content_decryption_module_session_impl.h"
 
 #include <memory>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
@@ -26,13 +25,14 @@
 #include "third_party/blink/public/platform/web_encrypted_media_key_information.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/platform/web_vector.h"
-#include "third_party/blink/public/web/modules/media/webmediaplayer_util.h"
 #include "third_party/blink/renderer/platform/media/cdm_result_promise.h"
 #include "third_party/blink/renderer/platform/media/cdm_result_promise_helper.h"
 #include "third_party/blink/renderer/platform/media/cdm_session_adapter.h"
+#include "third_party/blink/renderer/platform/media/media_player_util.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
+
 namespace {
 
 const char kCloseSessionUMAName[] = "CloseSession";
@@ -41,6 +41,8 @@ const char kLoadSessionUMAName[] = "LoadSession";
 const char kRemoveSessionUMAName[] = "RemoveSession";
 const char kUpdateSessionUMAName[] = "UpdateSession";
 const char kKeyStatusSystemCodeUMAName[] = "KeyStatusSystemCode";
+const char kInitialKeyStatusMixUMAName[] = "InitialKeyStatusMix";
+const char kLastKeyStatusMixUMAName[] = "LastKeyStatusMix";
 
 media::CdmSessionType ConvertSessionType(
     WebEncryptedMediaSessionType session_type) {
@@ -54,16 +56,14 @@ media::CdmSessionType ConvertSessionType(
   }
 
   NOTREACHED();
-  return media::CdmSessionType::kTemporary;
 }
 
 bool SanitizeInitData(media::EmeInitDataType init_data_type,
-                      const unsigned char* init_data,
-                      size_t init_data_length,
+                      base::span<const uint8_t> init_data,
                       std::vector<uint8_t>* sanitized_init_data,
                       std::string* error_message) {
-  DCHECK_GT(init_data_length, 0u);
-  if (init_data_length > media::limits::kMaxInitDataLength) {
+  DCHECK(!init_data.empty());
+  if (init_data.size() > media::limits::kMaxInitDataLength) {
     error_message->assign("Initialization data too long.");
     return false;
   }
@@ -71,15 +71,15 @@ bool SanitizeInitData(media::EmeInitDataType init_data_type,
   switch (init_data_type) {
     case media::EmeInitDataType::WEBM:
       // |init_data| for WebM is a single key.
-      if (init_data_length > media::limits::kMaxKeyIdLength) {
+      if (init_data.size() > media::limits::kMaxKeyIdLength) {
         error_message->assign("Initialization data for WebM is too long.");
         return false;
       }
-      sanitized_init_data->assign(init_data, init_data + init_data_length);
+      sanitized_init_data->assign(init_data.begin(), init_data.end());
       return true;
 
     case media::EmeInitDataType::CENC:
-      sanitized_init_data->assign(init_data, init_data + init_data_length);
+      sanitized_init_data->assign(init_data.begin(), init_data.end());
       if (!media::ValidatePsshInput(*sanitized_init_data)) {
         error_message->assign("Initialization data for CENC is incorrect.");
         return false;
@@ -89,7 +89,7 @@ bool SanitizeInitData(media::EmeInitDataType init_data_type,
     case media::EmeInitDataType::KEYIDS: {
       // Extract the keys and then rebuild the message. This ensures that any
       // extra data in the provided JSON is dropped.
-      std::string init_data_string(init_data, init_data + init_data_length);
+      std::string init_data_string(init_data.begin(), init_data.end());
       media::KeyIdList key_ids;
       if (!media::ExtractKeyIdsFromKeyIdsInitData(init_data_string, &key_ids,
                                                   error_message))
@@ -112,8 +112,6 @@ bool SanitizeInitData(media::EmeInitDataType init_data_type,
   }
 
   NOTREACHED();
-  error_message->assign("Initialization data type is not supported.");
-  return false;
 }
 
 bool SanitizeSessionId(const WebString& session_id,
@@ -131,7 +129,7 @@ bool SanitizeSessionId(const WebString& session_id,
   // Check that |sanitized_session_id| only contains printable characters for
   // easier logging. Note that checking alphanumeric is too strict because there
   // are key systems using Base64 session IDs (which may include spaces). See
-  // https://crbug.com/902828.
+  // https://crbug.com/40601386.
   for (const char c : *sanitized_session_id) {
     if (!base::IsAsciiPrintable(c))
       return false;
@@ -141,8 +139,7 @@ bool SanitizeSessionId(const WebString& session_id,
 }
 
 bool SanitizeResponse(const std::string& key_system,
-                      const uint8_t* response,
-                      size_t response_length,
+                      base::span<const uint8_t> response,
                       std::vector<uint8_t>* sanitized_response) {
   // The user agent should thoroughly validate the response before passing it
   // to the CDM. This may include verifying values are within reasonable limits,
@@ -150,11 +147,12 @@ bool SanitizeResponse(const std::string& key_system,
   // and/or generating a fully sanitized version. The user agent should check
   // that the length and values of fields are reasonable. Unknown fields should
   // be rejected or removed.
-  if (response_length > media::limits::kMaxSessionResponseLength)
+  if (response.size() > media::limits::kMaxSessionResponseLength) {
     return false;
+  }
 
   if (media::IsClearKey(key_system) || media::IsExternalClearKey(key_system)) {
-    std::string key_string(response, response + response_length);
+    std::string key_string(response.begin(), response.end());
     media::KeyIdAndKeyPairs keys;
     auto session_type = media::CdmSessionType::kTemporary;
     if (!ExtractKeysFromJWKSet(key_string, &keys, &session_type))
@@ -177,25 +175,96 @@ bool SanitizeResponse(const std::string& key_system,
   }
 
   // TODO(jrummell): Verify responses for Widevine.
-  sanitized_response->assign(response, response + response_length);
+  sanitized_response->assign(response.begin(), response.end());
   return true;
+}
+
+// Reported to UMA. Do NOT change or reuse existing values.
+enum class KeyStatusMixForUma {
+  kAllUsable = 0,
+  kAllInternalError = 1,
+  kAllExpired = 2,
+  kAllOutputRestricted = 3,
+  kAllOutputDownscaled = 4,
+  kAllKeyStatusPending = 5,
+  kAllReleased = 6,
+  kEmpty = 7,
+  kMixedWithUsable = 8,
+  kMixedWithoutUsable = 9,
+  kAllUsableInFuture = 10,
+  kMaxValue = kAllUsableInFuture
+};
+
+KeyStatusMixForUma GetKeyStatusMixForUma(const media::CdmKeysInfo& keys_info) {
+  if (keys_info.empty()) {
+    return KeyStatusMixForUma::kEmpty;
+  }
+
+  bool has_usable = false;
+  bool is_mixed = false;
+  auto key_status = keys_info[0]->status;
+
+  for (const auto& key_info : keys_info) {
+    if (key_info->status == media::CdmKeyInformation::KeyStatus::USABLE) {
+      has_usable = true;
+    }
+    if (key_info->status != key_status) {
+      is_mixed = true;
+    }
+  }
+
+  if (!is_mixed) {
+    switch (key_status) {
+      case media::CdmKeyInformation::KeyStatus::USABLE:
+        return KeyStatusMixForUma::kAllUsable;
+      case media::CdmKeyInformation::KeyStatus::INTERNAL_ERROR:
+        return KeyStatusMixForUma::kAllInternalError;
+      case media::CdmKeyInformation::KeyStatus::EXPIRED:
+        return KeyStatusMixForUma::kAllExpired;
+      case media::CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED:
+        return KeyStatusMixForUma::kAllOutputRestricted;
+      case media::CdmKeyInformation::KeyStatus::OUTPUT_DOWNSCALED:
+        return KeyStatusMixForUma::kAllOutputDownscaled;
+      case media::CdmKeyInformation::KeyStatus::KEY_STATUS_PENDING:
+        return KeyStatusMixForUma::kAllKeyStatusPending;
+      case media::CdmKeyInformation::KeyStatus::RELEASED:
+        return KeyStatusMixForUma::kAllReleased;
+      case media::CdmKeyInformation::KeyStatus::USABLE_IN_FUTURE:
+        return KeyStatusMixForUma::kAllUsableInFuture;
+    }
+  } else {
+    return has_usable ? KeyStatusMixForUma::kMixedWithUsable
+                      : KeyStatusMixForUma::kMixedWithoutUsable;
+  }
 }
 
 }  // namespace
 
 WebContentDecryptionModuleSessionImpl::WebContentDecryptionModuleSessionImpl(
     const scoped_refptr<CdmSessionAdapter>& adapter,
-    WebEncryptedMediaSessionType session_type)
+    WebEncryptedMediaSessionType session_type,
+    media::KeySystems* key_systems)
     : adapter_(adapter),
       session_type_(ConvertSessionType(session_type)),
+      key_systems_(key_systems),
       has_close_been_called_(false),
-      is_closed_(false) {}
+      is_closed_(false) {
+  DCHECK(key_systems_);
+}
 
 WebContentDecryptionModuleSessionImpl::
     ~WebContentDecryptionModuleSessionImpl() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (!session_id_.empty()) {
+    if (last_keys_info_.has_value()) {
+      auto key_status_mix_for_uma =
+          GetKeyStatusMixForUma(last_keys_info_.value());
+      base::UmaHistogramEnumeration(
+          adapter_->GetKeySystemUMAPrefix() + kLastKeyStatusMixUMAName,
+          key_status_mix_for_uma);
+    }
+
     adapter_->UnregisterSession(session_id_);
 
     // From http://w3c.github.io/encrypted-media/#mediakeysession-interface
@@ -226,10 +295,9 @@ WebString WebContentDecryptionModuleSessionImpl::SessionId() const {
 
 void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
     media::EmeInitDataType eme_init_data_type,
-    const unsigned char* init_data,
-    size_t init_data_length,
+    base::span<const uint8_t> init_data,
     WebContentDecryptionModuleResult result) {
-  DCHECK(init_data);
+  DCHECK(init_data.data());
   DCHECK(session_id_.empty());
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -238,8 +306,8 @@ void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
   //    implementation value does not support initDataType as an Initialization
   //    Data Type, return a promise rejected with a NotSupportedError.
   //    String comparison is case-sensitive.
-  if (!IsSupportedKeySystemWithInitDataType(adapter_->GetKeySystem(),
-                                            eme_init_data_type)) {
+  if (!key_systems_->IsSupportedInitDataType(adapter_->GetKeySystem(),
+                                             eme_init_data_type)) {
     std::string message =
         "The initialization data type is not supported by the key system.";
     result.CompleteWithError(
@@ -265,8 +333,8 @@ void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
   //      TypeError.
   std::vector<uint8_t> sanitized_init_data;
   std::string message;
-  if (!SanitizeInitData(eme_init_data_type, init_data, init_data_length,
-                        &sanitized_init_data, &message)) {
+  if (!SanitizeInitData(eme_init_data_type, init_data, &sanitized_init_data,
+                        &message)) {
     result.CompleteWithError(kWebContentDecryptionModuleExceptionTypeError, 0,
                              WebString::FromUTF8(message));
     return;
@@ -293,14 +361,12 @@ void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
   // 10.9 Use the cdm to execute the following steps:
   adapter_->InitializeNewSession(
       eme_init_data_type, sanitized_init_data, session_type_,
-      std::unique_ptr<media::NewSessionCdmPromise>(
-          new NewSessionCdmResultPromise(
-              result, adapter_->GetKeySystemUMAPrefix(),
-              kGenerateRequestUMAName,
-              base::BindOnce(
-                  &WebContentDecryptionModuleSessionImpl::OnSessionInitialized,
-                  weak_ptr_factory_.GetWeakPtr()),
-              {SessionInitStatus::NEW_SESSION})));
+      std::make_unique<NewSessionCdmResultPromise>(
+          result, adapter_->GetKeySystemUMAPrefix(), kGenerateRequestUMAName,
+          blink::BindOnce(
+              &WebContentDecryptionModuleSessionImpl::OnSessionInitialized,
+              weak_ptr_factory_.GetWeakPtr()),
+          Vector<SessionInitStatus>{SessionInitStatus::NEW_SESSION}));
 }
 
 void WebContentDecryptionModuleSessionImpl::Load(
@@ -327,21 +393,19 @@ void WebContentDecryptionModuleSessionImpl::Load(
 
   adapter_->LoadSession(
       session_type_, sanitized_session_id,
-      std::unique_ptr<media::NewSessionCdmPromise>(
-          new NewSessionCdmResultPromise(
-              result, adapter_->GetKeySystemUMAPrefix(), kLoadSessionUMAName,
-              base::BindOnce(
-                  &WebContentDecryptionModuleSessionImpl::OnSessionInitialized,
-                  weak_ptr_factory_.GetWeakPtr()),
-              {SessionInitStatus::NEW_SESSION,
-               SessionInitStatus::SESSION_NOT_FOUND})));
+      std::make_unique<NewSessionCdmResultPromise>(
+          result, adapter_->GetKeySystemUMAPrefix(), kLoadSessionUMAName,
+          blink::BindOnce(
+              &WebContentDecryptionModuleSessionImpl::OnSessionInitialized,
+              weak_ptr_factory_.GetWeakPtr()),
+          Vector<SessionInitStatus>{SessionInitStatus::NEW_SESSION,
+                                    SessionInitStatus::SESSION_NOT_FOUND}));
 }
 
 void WebContentDecryptionModuleSessionImpl::Update(
-    const uint8_t* response,
-    size_t response_length,
+    base::span<const uint8_t> response,
     WebContentDecryptionModuleResult result) {
-  DCHECK(response);
+  DCHECK(response.data());
   DCHECK(!session_id_.empty());
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -356,7 +420,7 @@ void WebContentDecryptionModuleSessionImpl::Update(
   // 6.2 If the preceding step failed, or if sanitized response is empty,
   //     reject promise with a newly created TypeError.
   std::vector<uint8_t> sanitized_response;
-  if (!SanitizeResponse(adapter_->GetKeySystem(), response, response_length,
+  if (!SanitizeResponse(adapter_->GetKeySystem(), response,
                         &sanitized_response)) {
     result.CompleteWithError(kWebContentDecryptionModuleExceptionTypeError, 0,
                              "Invalid response.");
@@ -407,18 +471,17 @@ void WebContentDecryptionModuleSessionImpl::OnSessionMessage(
     const std::vector<uint8_t>& message) {
   DCHECK(client_) << "Client not set before message event";
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  client_->OnSessionMessage(message_type, message.data(), message.size());
+  client_->OnSessionMessage(message_type, message);
 }
 
 void WebContentDecryptionModuleSessionImpl::OnSessionKeysChange(
     bool has_additional_usable_key,
     media::CdmKeysInfo keys_info) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  WebVector<WebEncryptedMediaKeyInformation> keys(keys_info.size());
+  std::vector<WebEncryptedMediaKeyInformation> keys(keys_info.size());
   for (size_t i = 0; i < keys_info.size(); ++i) {
     auto& key_info = keys_info[i];
-    keys[i].SetId(WebData(reinterpret_cast<char*>(&key_info->key_id[0]),
-                          key_info->key_id.size()));
+    keys[i].SetId(WebData(key_info->key_id));
     keys[i].SetStatus(ConvertCdmKeyStatus(key_info->status));
     keys[i].SetSystemCode(key_info->system_code);
 
@@ -426,6 +489,18 @@ void WebContentDecryptionModuleSessionImpl::OnSessionKeysChange(
         adapter_->GetKeySystemUMAPrefix() + kKeyStatusSystemCodeUMAName,
         key_info->system_code);
   }
+
+  // Only report the UMA on the first keys change event per session.
+  if (!has_key_status_uma_reported_) {
+    has_key_status_uma_reported_ = true;
+    auto key_status_mix_for_uma = GetKeyStatusMixForUma(keys_info);
+    base::UmaHistogramEnumeration(
+        adapter_->GetKeySystemUMAPrefix() + kInitialKeyStatusMixUMAName,
+        key_status_mix_for_uma);
+  }
+
+  // Update the last key status information.
+  last_keys_info_ = std::move(keys_info);
 
   // Now send the event to blink.
   client_->OnSessionKeysChange(keys, has_additional_usable_key);
@@ -435,10 +510,12 @@ void WebContentDecryptionModuleSessionImpl::OnSessionExpirationUpdate(
     base::Time new_expiry_time) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // The check works around an issue in base::Time that converts null base::Time
-  // to |1601-01-01 00:00:00 UTC| in ToJsTime(). See http://crbug.com/679079
+  // to |1601-01-01 00:00:00 UTC| in InMillisecondsFSinceUnixEpoch(). See
+  // http://crbug.com/40500427.
   client_->OnSessionExpirationUpdate(
-      new_expiry_time.is_null() ? std::numeric_limits<double>::quiet_NaN()
-                                : new_expiry_time.ToJsTime());
+      new_expiry_time.is_null()
+          ? std::numeric_limits<double>::quiet_NaN()
+          : new_expiry_time.InMillisecondsFSinceUnixEpoch());
 }
 
 void WebContentDecryptionModuleSessionImpl::OnSessionClosed(

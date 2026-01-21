@@ -5,7 +5,7 @@
 #include "cc/raster/playback_image_provider.h"
 
 #include <utility>
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "cc/tiles/image_decode_cache.h"
 #include "gpu/command_buffer/common/mailbox.h"
 
@@ -22,7 +22,7 @@ void UnrefImageFromCache(DrawImage draw_image,
 PlaybackImageProvider::PlaybackImageProvider(
     ImageDecodeCache* cache,
     const TargetColorParams& target_color_params,
-    absl::optional<Settings>&& settings)
+    std::optional<Settings>&& settings)
     : cache_(cache),
       target_color_params_(target_color_params),
       settings_(std::move(settings)) {
@@ -59,14 +59,9 @@ ImageProvider::ScopedResult PlaybackImageProvider::GetRasterContent(
 
   DrawImage adjusted_image(draw_image, 1.f, frame_index, target_color_params_);
   if (!cache_->UseCacheForDrawImage(adjusted_image)) {
-    if (settings_->raster_mode == RasterMode::kOop) {
+    if (settings_->raster_mode == RasterMode::kGpu) {
       return ScopedResult(DecodedDrawImage(paint_image.GetMailbox(),
                                            draw_image.filter_quality()));
-    } else if (settings_->raster_mode == RasterMode::kGpu) {
-      return ScopedResult(DecodedDrawImage(
-          paint_image.GetAcceleratedSkImage(), nullptr, SkSize::Make(0, 0),
-          SkSize::Make(1.f, 1.f), draw_image.filter_quality(),
-          true /* is_budgeted */));
     } else {
       return ScopedResult(DecodedDrawImage(
           paint_image.GetSwSkImage(), nullptr, SkSize::Make(0, 0),

@@ -15,10 +15,10 @@
 #include "snapshot/crashpad_types/crashpad_info_reader.h"
 
 #include <type_traits>
+#include <utility>
 
 #include "build/build_config.h"
 #include "client/crashpad_info.h"
-#include "util/misc/as_underlying_type.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "util/win/traits.h"
@@ -33,13 +33,13 @@ namespace crashpad {
 namespace {
 
 void UnsetIfNotValidTriState(TriState* value) {
-  switch (AsUnderlyingType(*value)) {
-    case AsUnderlyingType(TriState::kUnset):
-    case AsUnderlyingType(TriState::kEnabled):
-    case AsUnderlyingType(TriState::kDisabled):
+  switch (std::to_underlying(*value)) {
+    case std::to_underlying(TriState::kUnset):
+    case std::to_underlying(TriState::kEnabled):
+    case std::to_underlying(TriState::kDisabled):
       return;
   }
-  LOG(WARNING) << "Unsetting invalid TriState " << AsUnderlyingType(*value);
+  LOG(WARNING) << "Unsetting invalid TriState " << std::to_underlying(*value);
   *value = TriState::kUnset;
 }
 

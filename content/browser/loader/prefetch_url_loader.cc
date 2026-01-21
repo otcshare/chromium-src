@@ -4,13 +4,12 @@
 
 #include "content/browser/loader/prefetch_url_loader.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "content/browser/web_package/prefetched_signed_exchange_cache.h"
 #include "content/browser/web_package/prefetched_signed_exchange_cache_adapter.h"
 #include "content/browser/web_package/signed_exchange_prefetch_handler.h"
-#include "content/browser/web_package/signed_exchange_prefetch_metric_recorder.h"
 #include "content/browser/web_package/signed_exchange_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/frame_accept_header.h"
@@ -37,7 +36,7 @@ constexpr char kSignedExchangeEnabledAcceptHeaderForCrossOriginPrefetch[] =
 PrefetchURLLoader::PrefetchURLLoader(
     int32_t request_id,
     uint32_t options,
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     const network::ResourceRequest& resource_request,
     const net::NetworkAnonymizationKey& network_anonymization_key,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
@@ -45,8 +44,6 @@ PrefetchURLLoader::PrefetchURLLoader(
     scoped_refptr<network::SharedURLLoaderFactory> network_loader_factory,
     URLLoaderThrottlesGetter url_loader_throttles_getter,
     BrowserContext* browser_context,
-    scoped_refptr<SignedExchangePrefetchMetricRecorder>
-        signed_exchange_prefetch_metric_recorder,
     scoped_refptr<PrefetchedSignedExchangeCache>
         prefetched_signed_exchange_cache,
     const std::string& accept_langs,
@@ -57,8 +54,6 @@ PrefetchURLLoader::PrefetchURLLoader(
       network_loader_factory_(std::move(network_loader_factory)),
       forwarding_client_(std::move(client)),
       url_loader_throttles_getter_(url_loader_throttles_getter),
-      signed_exchange_prefetch_metric_recorder_(
-          std::move(signed_exchange_prefetch_metric_recorder)),
       accept_langs_(accept_langs),
       recursive_prefetch_token_generator_(
           std::move(recursive_prefetch_token_generator)),
@@ -66,15 +61,17 @@ PrefetchURLLoader::PrefetchURLLoader(
           signed_exchange_utils::IsSignedExchangeHandlingEnabled(
               browser_context)) {
   DCHECK(network_loader_factory_);
-  DCHECK(!resource_request.trusted_params ||
-         resource_request.trusted_params->isolation_info.request_type() ==
-             net::IsolationInfo::RequestType::kOther);
+  CHECK(!resource_request.trusted_params ||
+        resource_request.trusted_params->isolation_info.request_type() ==
+            net::IsolationInfo::RequestType::kOther ||
+        resource_request.trusted_params->isolation_info.request_type() ==
+            net::IsolationInfo::RequestType::kMainFrame);
 
   if (is_signed_exchange_handling_enabled_) {
     // Set the SignedExchange accept header.
     // (https://wicg.github.io/webpackage/draft-yasskin-http-origin-signed-responses.html#internet-media-type-applicationsigned-exchange).
 
-    // TODO(https://crbug.com/1400888): find a solution for CORS requests,
+    // TODO(crbug.com/40250488): find a solution for CORS requests,
     // perhaps exempt the Accept header from the 128-byte rule
     // (https://fetch.spec.whatwg.org/#cors-safelisted-request-header). For now,
     // we use the frame Accept header for prefetches only in requests with a
@@ -109,7 +106,7 @@ void PrefetchURLLoader::FollowRedirect(
     const std::vector<std::string>& removed_headers,
     const net::HttpRequestHeaders& modified_headers,
     const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    const absl::optional<GURL>& new_url) {
+    const std::optional<GURL>& new_url) {
   DCHECK(modified_headers.IsEmpty())
       << "Redirect with modified headers was not supported yet. "
          "crbug.com/845683";
@@ -126,27 +123,14 @@ void PrefetchURLLoader::FollowRedirect(
   loader_->FollowRedirect(
       removed_headers, net::HttpRequestHeaders() /* modified_headers */,
       net::HttpRequestHeaders() /* modified_cors_exempt_headers */,
-      absl::nullopt);
+      std::nullopt);
 }
 
 void PrefetchURLLoader::SetPriority(net::RequestPriority priority,
                                     int intra_priority_value) {
-  if (loader_)
+  if (loader_) {
     loader_->SetPriority(priority, intra_priority_value);
-}
-
-void PrefetchURLLoader::PauseReadingBodyFromNet() {
-  // TODO(kinuko): Propagate or handle the case where |loader_| is
-  // detached (for SignedExchanges), see OnReceiveResponse.
-  if (loader_)
-    loader_->PauseReadingBodyFromNet();
-}
-
-void PrefetchURLLoader::ResumeReadingBodyFromNet() {
-  // TODO(kinuko): Propagate or handle the case where |loader_| is
-  // detached (for SignedExchanges), see OnReceiveResponse.
-  if (loader_)
-    loader_->ResumeReadingBodyFromNet();
+  }
 }
 
 void PrefetchURLLoader::OnReceiveEarlyHints(
@@ -157,7 +141,7 @@ void PrefetchURLLoader::OnReceiveEarlyHints(
 void PrefetchURLLoader::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr response,
     mojo::ScopedDataPipeConsumerHandle body,
-    absl::optional<mojo_base::BigBuffer> cached_metadata) {
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   if (is_signed_exchange_handling_enabled_ &&
       signed_exchange_utils::ShouldHandleAsSignedHTTPExchange(
           resource_request_.url, *response)) {
@@ -172,8 +156,7 @@ void PrefetchURLLoader::OnReceiveResponse(
             frame_tree_node_id_, resource_request_, std::move(response),
             std::move(body), loader_.Unbind(), client_receiver_.Unbind(),
             network_loader_factory_, url_loader_throttles_getter_, this,
-            network_anonymization_key_,
-            signed_exchange_prefetch_metric_recorder_, accept_langs_,
+            network_anonymization_key_, accept_langs_,
             keep_entry_for_prefetch_cache);
     return;
   }
@@ -186,7 +169,8 @@ void PrefetchURLLoader::OnReceiveResponse(
   // NetworkAnonymizationKey to use when fetching the request. In the Signed
   // Exchange case, we do this after redirects from the outer response, because
   // we redirect back here for the inner response.
-  if (resource_request_.load_flags & net::LOAD_RESTRICTED_PREFETCH) {
+  if (resource_request_.load_flags &
+      net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME) {
     DCHECK(!recursive_prefetch_token_generator_.is_null());
     base::UnguessableToken recursive_prefetch_token =
         std::move(recursive_prefetch_token_generator_).Run(resource_request_);
@@ -200,7 +184,7 @@ void PrefetchURLLoader::OnReceiveResponse(
   if (!body) {
     forwarding_client_->OnReceiveResponse(std::move(response),
                                           mojo::ScopedDataPipeConsumerHandle(),
-                                          absl::nullopt);
+                                          std::nullopt);
     return;
   }
 
@@ -276,7 +260,7 @@ bool PrefetchURLLoader::SendEmptyBody() {
   }
   DCHECK(response_);
   forwarding_client_->OnReceiveResponse(std::move(response_),
-                                        std::move(consumer), absl::nullopt);
+                                        std::move(consumer), std::nullopt);
   return true;
 }
 

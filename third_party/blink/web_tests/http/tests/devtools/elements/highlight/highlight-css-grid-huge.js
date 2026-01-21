@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(`This test verifies that huge CSS grids can be highlighted.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <style>
@@ -36,7 +38,7 @@
   // But don't dump it since that would make the test time out.
   await new Promise(resolve => {
     ElementsTestRunner.nodeWithId('huge-grid', async function(node) {
-      await TestRunner.OverlayAgent.getHighlightObjectForTest(node.id);
+      await TestRunner.OverlayAgent.invoke_getHighlightObjectForTest({nodeId: node.id});
       resolve();
     });
   });

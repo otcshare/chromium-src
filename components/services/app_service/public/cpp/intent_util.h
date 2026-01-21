@@ -7,13 +7,15 @@
 
 // Utility functions for App Service intent handling.
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/values.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace apps_util {
 
@@ -31,8 +33,8 @@ extern const char kIntentActionPotentialFileHandler[];
 // will open the link, and that we should not prompt the user about it.
 extern const char kUseBrowserForLink[];
 
-// Activity name for GuestOS intent filters. TODO(crbug/1349974): Remove when
-// default file handling preferences for Files App are migrated.
+// Activity name for GuestOS intent filters. TODO(crbug.com/40233967): Remove
+// when default file handling preferences for Files App are migrated.
 extern const char kGuestOsActivityName[];
 
 struct SharedText {
@@ -63,6 +65,12 @@ apps::IntentPtr MakeShareIntent(const GURL& filesystem_url,
 apps::IntentPtr MakeShareIntent(const std::string& text,
                                 const std::string& title);
 
+// Creates an intent for sharing |filesystem_urls|, with |dlpSourceUrls|.
+apps::IntentPtr MakeShareIntent(
+    const std::vector<GURL>& filesystem_urls,
+    const std::vector<std::string>& mime_types,
+    const std::vector<std::string>& dlp_source_urls);
+
 // Create an edit intent for the file with a given |filesystem_url| and
 // |mime_type|.
 apps::IntentPtr MakeEditIntent(const GURL& filesystem_url,
@@ -81,8 +89,12 @@ apps::IntentPtr CreateStartOnLockScreenIntent();
 
 // Return true if |value| matches with the |condition_value|, based on the
 // pattern match type in the |condition_value|.
-bool ConditionValueMatches(const std::string& value,
+bool ConditionValueMatches(std::string_view value,
                            const apps::ConditionValuePtr& condition_value);
+
+bool PatternMatchValue(std::string_view test_value,
+                       apps::PatternMatchType match_type,
+                       std::string_view match_value);
 
 bool IsGenericFileHandler(const apps::IntentPtr& intent,
                           const apps::IntentFilterPtr& filter);
@@ -96,9 +108,9 @@ bool IsGenericFileHandler(const apps::IntentPtr& intent,
 // This function is transcribed from android's PatternMatcher#matchPattern.
 // See
 // https://android.googlesource.com/platform/frameworks/base.git/+/e93165456c3c28278f275566bd90bfbcf1a0e5f7/core/java/android/os/PatternMatcher.java#186
-bool MatchGlob(const std::string& value, const std::string& pattern);
+bool MatchGlob(std::string_view value, std::string_view pattern);
 
-// TODO(crbug.com/1092784): Handle file path with extension with mime type.
+// TODO(crbug.com/40134747): Handle file path with extension with mime type.
 // Unlike Android mime type matching logic, if the intent mime type has *, it
 // can only match with *, not anything. The reason for this is the way we find
 // the common mime type for multiple files. It uses * to represent more than one
@@ -106,8 +118,8 @@ bool MatchGlob(const std::string& value, const std::string& pattern);
 // match with any filter. e.g. If we select a .zip, .jep and a .txt, the common
 // mime type will be */*, with Android matching logic, it will match with filter
 // that has mime type video, which is not what we expected.
-bool MimeTypeMatched(const std::string& intent_mime_type,
-                     const std::string& filter_mime_type);
+bool MimeTypeMatched(std::string_view intent_mime_type,
+                     std::string_view filter_mime_type);
 
 bool ExtensionMatched(const std::string& file_name,
                       const std::string& filter_extension);
@@ -124,37 +136,6 @@ bool ExtensionMatched(const std::string& file_name,
 //    "share_title": "title",
 // }
 base::Value ConvertIntentToValue(const apps::IntentPtr& intent);
-
-// Gets the string value from base::DictionaryValue, e.g. { "key": "value" }
-// returns "value".
-absl::optional<std::string> GetStringValueFromDict(
-    const base::Value::Dict& dict,
-    const std::string& key_name);
-
-// Gets absl::optional<bool> value from base::DictionaryValue, e.g. {
-// "key": "value" } returns "value".
-absl::optional<bool> GetBoolValueFromDict(const base::DictionaryValue& dict,
-                                          const std::string& key_name);
-
-// Gets GURL from base::DictionaryValue, e.g. { "url": "abc.com" } returns
-// "abc.com".
-absl::optional<GURL> GetGurlValueFromDict(const base::DictionaryValue& dict,
-                                          const std::string& key_name);
-
-// Gets std::vector<IntentFilePtr> from base::DictionaryValue, e.g. {
-// "file_urls": "/abc, /a" } returns
-// std::vector<apps::IntentFilePtr>{"/abc", "/a"}.
-std::vector<apps::IntentFilePtr> GetFilesFromDict(
-    const base::DictionaryValue& dict,
-    const std::string& key_name);
-
-std::vector<std::string> GetCategoriesFromDict(
-    const base::DictionaryValue& dict,
-    const std::string& key_name);
-
-base::flat_map<std::string, std::string> GetExtrasFromDict(
-    const base::DictionaryValue& dict,
-    const std::string& key_name);
 
 // Converts base::Value to Intent. Returns nullptr for invalid base::Values.
 apps::IntentPtr ConvertValueToIntent(base::Value&& value);
@@ -173,6 +154,36 @@ std::string CalculateCommonMimeType(const std::vector<std::string>& mime_types);
 // Testing covered by share_target_utils_unittest.cc as this function was
 // migrated out from web_app::ShareTargetUtils.
 SharedText ExtractSharedText(const std::string& share_text);
+
+// A view object onto a host and optional port string, represents the same thing
+// as arc::IntentFilter::AuthorityEntry with an emphasis on string
+// encoding/decoding for use with ConditionValue's std::string value.
+// The underlying strings must be kept alive while the AuthorityView is around.
+struct AuthorityView {
+  const std::string_view host;
+  const std::optional<std::string_view> port;
+
+  // Stringifies the effective port of `url` if there is one. Not all URL
+  // schemes have ports.
+  static std::optional<std::string> PortToString(const GURL& url);
+  static std::optional<std::string> PortToString(const url::Origin& url);
+
+  // Decodes strings of the form:
+  // "www.example.com:1234" into {.host="www.example.com", .port="1234"}
+  // or "www.example.com" into {.host="www.example.com", .port=nullopt}
+  static AuthorityView Decode(std::string_view);
+
+  // Delegates to Encode().
+  static std::string Encode(const GURL& url);
+  static std::string Encode(const url::Origin& origin);
+
+  // Encodes into the form:
+  // "www.example.com:1234" if port is set
+  // or "www.example.com" if port is unset.
+  // Note that the default scheme port will be used even if not explicitly
+  // specified e.g.: Encode(GURL("https://www.foo.com")) == "www.foo.com:443"
+  std::string Encode();
+};
 
 }  // namespace apps_util
 

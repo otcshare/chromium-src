@@ -4,20 +4,22 @@
 
 #include "chrome/browser/ash/customization/customization_wallpaper_util.h"
 
-#include "base/bind.h"
+#include "ash/public/cpp/wallpaper/wallpaper_controller.h"
+#include "base/check_deref.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/customization/customization_document.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_loader.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_image/user_image.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/gfx/codec/jpeg_codec.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "url/gurl.h"
 
@@ -35,12 +37,14 @@ bool SaveResizedWallpaper(const gfx::ImageSkia& image,
                           const base::FilePath& file_path) {
   gfx::ImageSkia resized_image = gfx::ImageSkiaOperations::CreateResizedImage(
       image, skia::ImageOperations::RESIZE_LANCZOS3, size);
-  scoped_refptr<base::RefCountedBytes> image_data = new base::RefCountedBytes();
-  gfx::JPEGCodec::Encode(*resized_image.bitmap(), 90 /*quality=*/,
-                         &image_data->data());
-  size_t written_bytes = base::WriteFile(
-      file_path, image_data->front_as<const char>(), image_data->size());
-  return written_bytes == image_data->size();
+
+  std::optional<std::vector<uint8_t>> image_data =
+      gfx::JPEGCodec::Encode(*resized_image.bitmap(), /*quality=*/90);
+  if (!image_data) {
+    return false;
+  }
+
+  return base::WriteFile(file_path, image_data.value());
 }
 
 // Returns true if both file paths exist.
@@ -68,7 +72,9 @@ bool ResizeAndSaveCustomizedDefaultWallpaper(
 
 // Checks the result of |ResizeAndSaveCustomizedDefaultWallpaper| and sends
 // the paths to apply the wallpapers.
+// `local_state` must be non-null.
 void OnCustomizedDefaultWallpaperResizedAndSaved(
+    PrefService* local_state,
     const GURL& wallpaper_url,
     const base::FilePath& resized_small_path,
     const base::FilePath& resized_large_path,
@@ -79,16 +85,20 @@ void OnCustomizedDefaultWallpaperResizedAndSaved(
     return;
   }
 
-  g_browser_process->local_state()->SetString(
-      prefs::kCustomizationDefaultWallpaperURL, wallpaper_url.spec());
-  WallpaperControllerClientImpl::Get()->SetCustomizedDefaultWallpaperPaths(
+  CHECK_DEREF(local_state)
+      .SetString(prefs::kCustomizationDefaultWallpaperURL,
+                 wallpaper_url.spec());
+  ash::WallpaperController::Get()->SetCustomizedDefaultWallpaperPaths(
       resized_small_path, resized_large_path);
   VLOG(1) << "Customized default wallpaper applied.";
 }
 
 // Initiates resizing and saving the customized default wallpapers if decoding
 // is successful.
+// `local_state` must be non-null, and must be valid until
+// `OnCustomizedDefaultWallpaperResizedAndSaved` is complete.
 void OnCustomizedDefaultWallpaperDecoded(
+    PrefService* local_state,
     const GURL& wallpaper_url,
     const base::FilePath& resized_small_path,
     const base::FilePath& resized_large_path,
@@ -110,22 +120,26 @@ void OnCustomizedDefaultWallpaperDecoded(
       base::BindOnce(&ResizeAndSaveCustomizedDefaultWallpaper,
                      wallpaper->image().DeepCopy(), resized_small_path,
                      resized_large_path),
-      base::BindOnce(&OnCustomizedDefaultWallpaperResizedAndSaved,
+      base::BindOnce(&OnCustomizedDefaultWallpaperResizedAndSaved, local_state,
                      wallpaper_url, resized_small_path, resized_large_path));
 }
 
 // If |both_sizes_exist| is false or the url doesn't match the current value,
 // initiates image decoding, otherwise directly sends the paths.
+// `local_state` must be non-null, and must be valid until
+// `OnCustomizedDefaultWallpaperResizedAndSaved` is complete.
 void SetCustomizedDefaultWallpaperAfterCheck(
+    PrefService* local_state,
     const GURL& wallpaper_url,
     const base::FilePath& file_path,
     const base::FilePath& resized_small_path,
     const base::FilePath& resized_large_path,
     bool both_sizes_exist) {
-  const std::string current_url = g_browser_process->local_state()->GetString(
-      prefs::kCustomizationDefaultWallpaperURL);
+  const std::string current_url =
+      CHECK_DEREF(local_state)
+          .GetString(prefs::kCustomizationDefaultWallpaperURL);
   if (both_sizes_exist && current_url == wallpaper_url.spec()) {
-    WallpaperControllerClientImpl::Get()->SetCustomizedDefaultWallpaperPaths(
+    ash::WallpaperController::Get()->SetCustomizedDefaultWallpaperPaths(
         resized_small_path, resized_small_path);
   } else {
     // Either resized images do not exist or cached version is incorrect.
@@ -135,10 +149,11 @@ void SetCustomizedDefaultWallpaperAfterCheck(
             {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
              base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
     user_image_loader::StartWithFilePath(
-        task_runner, file_path, ImageDecoder::DEFAULT_CODEC,
+        task_runner, file_path,
+        user_manager::UserImage::ImageFormat::FORMAT_UNKNOWN,
         0,  // Do not crop.
-        base::BindOnce(&OnCustomizedDefaultWallpaperDecoded, wallpaper_url,
-                       resized_small_path, resized_large_path));
+        base::BindOnce(&OnCustomizedDefaultWallpaperDecoded, local_state,
+                       wallpaper_url, resized_small_path, resized_large_path));
   }
 }
 
@@ -146,7 +161,8 @@ void SetCustomizedDefaultWallpaperAfterCheck(
 
 namespace customization_wallpaper_util {
 
-void StartSettingCustomizedDefaultWallpaper(const GURL& wallpaper_url,
+void StartSettingCustomizedDefaultWallpaper(PrefService* local_state,
+                                            const GURL& wallpaper_url,
                                             const base::FilePath& file_path) {
   // Should fail if this ever happens in tests.
   DCHECK(wallpaper_url.is_valid());
@@ -166,6 +182,8 @@ void StartSettingCustomizedDefaultWallpaper(const GURL& wallpaper_url,
     return;
   }
 
+  CHECK(local_state);
+
   scoped_refptr<base::SequencedTaskRunner> task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
@@ -174,8 +192,9 @@ void StartSettingCustomizedDefaultWallpaper(const GURL& wallpaper_url,
       FROM_HERE,
       base::BindOnce(&CheckCustomizedWallpaperFilesExist, resized_small_path,
                      resized_large_path),
-      base::BindOnce(&SetCustomizedDefaultWallpaperAfterCheck, wallpaper_url,
-                     file_path, resized_small_path, resized_large_path));
+      base::BindOnce(&SetCustomizedDefaultWallpaperAfterCheck, local_state,
+                     wallpaper_url, file_path, resized_small_path,
+                     resized_large_path));
 }
 
 bool GetCustomizedDefaultWallpaperPaths(base::FilePath* small_path_out,
@@ -194,9 +213,8 @@ bool GetCustomizedDefaultWallpaperPaths(base::FilePath* small_path_out,
   return true;
 }
 
-bool ShouldUseCustomizedDefaultWallpaper() {
-  PrefService* pref_service = g_browser_process->local_state();
-  return !pref_service->FindPreference(prefs::kCustomizationDefaultWallpaperURL)
+bool ShouldUseCustomizedDefaultWallpaper(PrefService& local_state) {
+  return !local_state.FindPreference(prefs::kCustomizationDefaultWallpaperURL)
               ->IsDefaultValue();
 }
 

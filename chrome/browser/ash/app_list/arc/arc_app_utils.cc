@@ -10,22 +10,14 @@
 #include <tuple>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/metrics/arc_metrics_constants.h"
-#include "ash/components/arc/metrics/arc_metrics_service.h"
-#include "ash/components/arc/mojom/intent_helper.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
@@ -38,20 +30,29 @@
 #include "chrome/browser/ash/arc/boot_phase_monitor/arc_boot_phase_monitor_bridge.h"
 #include "chrome/browser/ash/arc/notification/arc_management_transition_notification.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/arc/vmm/arc_vmm_manager.h"
 #include "chrome/browser/ash/arc/window_predictor/window_predictor.h"
 #include "chrome/browser/ash/arc/window_predictor/window_predictor_utils.h"
 #include "chrome/browser/ash/login/login_pref_names.h"
-#include "chrome/browser/ash/policy/handlers/powerwash_requirements_checker.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
 #include "chrome/browser/ui/ash/shelf/arc_shelf_spinner_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_launch_notifier.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
+#include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "components/app_restore/app_restore_utils.h"
 #include "components/app_restore/features.h"
-#include "components/arc/common/intent_helper/arc_intent_helper_package.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
@@ -94,34 +95,14 @@ constexpr char kAndroidClockAppId[] = "ddmmnabaeomoacfpfjgghfpocfolhjlg";
 constexpr char kAndroidFilesAppId[] = "gmiohhmfhgfclpeacmdfancbipocempm";
 
 constexpr char const* kAppIdsHiddenInLauncher[] = {
-    kAndroidClockAppId, kSettingsAppId, kAndroidFilesAppId,
-    kAndroidContactsAppId, kPlayGamesAppId};
+    kAndroidClockAppId,    kSettingsAppId,  kAndroidFilesAppId,
+    kAndroidContactsAppId, kPlayGamesAppId, kPackageInstallerAppId};
 
 // Returns true if |event_flags| came from a mouse or touch event.
 bool IsMouseOrTouchEventFromFlags(int event_flags) {
   return (event_flags & (ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON |
                          ui::EF_RIGHT_MOUSE_BUTTON | ui::EF_BACK_MOUSE_BUTTON |
                          ui::EF_FORWARD_MOUSE_BUTTON | ui::EF_FROM_TOUCH)) != 0;
-}
-
-using AppLaunchObserverMap =
-    std::map<content::BrowserContext*, base::ObserverList<AppLaunchObserver>>;
-
-AppLaunchObserverMap* GetAppLaunchObserverMap() {
-  static base::NoDestructor<
-      std::map<content::BrowserContext*, base::ObserverList<AppLaunchObserver>>>
-      instance;
-  return instance.get();
-}
-
-void NotifyAppLaunchObservers(content::BrowserContext* context,
-                              const ArcAppListPrefs::AppInfo& app_info) {
-  AppLaunchObserverMap* const map = GetAppLaunchObserverMap();
-  auto it = map->find(context);
-  if (it != map->end()) {
-    for (auto& observer : it->second)
-      observer.OnAppLaunchRequested(app_info);
-  }
 }
 
 bool Launch(Profile* profile,
@@ -158,7 +139,13 @@ bool Launch(Profile* profile,
 
   // Unthrottle the ARC instance before launching an ARC app. This is done
   // to minimize lag on an app launch.
-  NotifyAppLaunchObservers(profile, *app_info);
+  auto* notifier = ArcAppLaunchNotifier::GetForBrowserContext(profile);
+  if (notifier) {
+    // ArcAppLaunchNotifier may not exist in test environment.
+    notifier->NotifyArcAppLaunchRequest(app_info->package_name);
+  } else {
+    CHECK_IS_TEST();
+  }
 
   if (app_info->shortcut || intent) {
     const std::string intent_uri =
@@ -216,8 +203,9 @@ bool Launch(Profile* profile,
 int64_t GetValidDisplayId(int64_t display_id) {
   if (display_id != display::kInvalidDisplayId)
     return display_id;
-  if (auto* screen = display::Screen::GetScreen())
+  if (auto* screen = display::Screen::Get()) {
     return screen->GetPrimaryDisplay().id();
+  }
   return display::kInvalidDisplayId;
 }
 
@@ -229,39 +217,13 @@ std::string ConstructArcAppShortcutUrl(const std::string& app_id,
   return "appshortcutsearch://" + app_id + "/" + shortcut_id;
 }
 
-bool IsFixupWindowEnabled() {
-  return base::FeatureList::IsEnabled(arc::kFixupWindowFeature);
-}
-
-bool IsInstantResponseOpenEnabled() {
-  return base::FeatureList::IsEnabled(arc::kInstantResponseWindowOpen);
+bool IsArcVmAndSwappedOut(content::BrowserContext* context) {
+  return IsArcVmEnabled() &&
+         base::FeatureList::IsEnabled(arc::kVmmSwapoutGhostWindow) &&
+         ArcVmmManager::GetForBrowserContext(context)->IsSwapped();
 }
 
 }  // namespace
-
-// Package names, kept in sorted order.
-const char kPlayStoreActivity[] = "com.android.vending.AssetBrowserActivity";
-const char kPlayStorePackage[] = "com.android.vending";
-
-// App IDs, kept in sorted order.
-const char kAndroidContactsAppId[] = "kipfkokfekalckplgaikemhghlbkgpfl";
-const char kGmailAppId[] = "hhkfkjpmacfncmbapfohfocpjpdnobjg";
-const char kGoogleCalendarAppId[] = "decaoeahkmjpajbmlbpogjjkjbjokeed";
-const char kGoogleDuoAppId[] = "djkcbcmkefiiphjkonbeknmcgiheajce";
-const char kGoogleMapsAppId[] = "gmhipfhgnoelkiiofcnimehjnpaejiel";
-const char kGooglePhotosAppId[] = "fdbkkojdbojonckghlanfaopfakedeca";
-const char kGoogleTVAppId[] = "kadljooblnjdohjelobhphgeimdbcpbo";
-const char kInfinitePainterAppId[] = "afihfgfghkmdmggakhkgnfhlikhdpima";
-const char kLightRoomAppId[] = "fpegfnbgomakooccabncdaelhfppceni";
-const char kPlayBooksAppId[] = "cafegjnmmjpfibnlddppihpnkbkgicbg";
-const char kPlayGamesAppId[] = "nplnnjkbeijcggmpdcecpabgbjgeiedc";
-const char kPlayMoviesAppId[] = "dbbihmicnlldbflflckpafphlekmjfnm";
-const char kPlayMusicAppId[] = "ophbaopahelaolbjliokocojjbgfadfn";
-const char kPlayStoreAppId[] = "cnbgggchhmkkdmeppjobngjoejnihlei";
-const char kSettingsAppId[] = "mconboelelhjpkbdhhiijkgcimoangdj";
-const char kYoutubeAppId[] = "aniolghapcdkoolpkffememnhpphmjkl";
-const char kYoutubeMusicAppId[] = "hpdkdmlckojaocbedhffglopeafcgggc";
-const char kYoutubeMusicWebApkAppId[] = "jcmmigapnpnikbmnjknhcoageaeinihi";
 
 bool ShouldShowInLauncher(const std::string& app_id) {
   for (auto* const id : kAppIdsHiddenInLauncher) {
@@ -316,19 +278,6 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
     return false;
   }
 
-  // Check if ARC apps are not allowed to start because device needs to be
-  // powerwashed. If it is so then show notification instead of starting
-  // the application.
-  policy::PowerwashRequirementsChecker pw_checker(
-      policy::PowerwashRequirementsChecker::Context::kArc, profile);
-  if (pw_checker.GetState() !=
-      policy::PowerwashRequirementsChecker::State::kNotRequired) {
-    VLOG(1) << "Attempt to launch " << app_id
-            << " while ARC++ is blocked due to powerwash request.";
-    pw_checker.ShowNotification();
-    return false;
-  }
-
   // In case management transition is in progress ARC++ is not available.
   const ArcManagementTransition management_transition =
       GetManagementTransition(profile);
@@ -344,16 +293,21 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
     window_info->display_id = GetValidDisplayId(window_info->display_id);
 
   // Activate ARC in case still not active.
-  ArcSessionManager::Get()->AllowActivation();
+  ArcSessionManager::Get()->AllowActivation(
+      ArcSessionManager::AllowActivationReason::kUserLaunchAction);
 
   ArcAppListPrefs* const prefs = ArcAppListPrefs::Get(context);
   std::unique_ptr<ArcAppListPrefs::AppInfo> app_info = prefs->GetApp(app_id);
   apps::IntentPtr launch_intent_to_send = std::move(launch_intent);
 
+  if (!app_info) {
+    LOG(WARNING) << "Ignore invalid app launch quest, id = " << app_id;
+    return false;
+  }
+
   // Some apps need fixup when ARC version upgrade e.g. from ARC P to ARC R.
   // Before fixup finishes, the |app_info->ready| is true but not launchable.
-  if (app_info &&
-      ((IsFixupWindowEnabled() && app_info->need_fixup) || !app_info->ready)) {
+  if (app_info->need_fixup || !app_info->ready) {
     if (!IsArcPlayStoreEnabledForProfile(profile)) {
       if (prefs->IsDefault(app_id)) {
         // The setting can fail if the preference is managed.  However, the
@@ -400,11 +354,12 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
       arc::ArcBootPhaseMonitorBridge::RecordFirstAppLaunchDelayUMA(context);
     }
 
-    if (IsFixupWindowEnabled() && app_info->need_fixup) {
+    if (app_info->need_fixup) {
       // TODO(sstan): Use different UI after UX design finalized.
       if (WindowPredictor::GetInstance()->LaunchArcAppWithGhostWindow(
               profile, app_id, *app_info, launch_intent_to_send, event_flags,
-              GhostWindowType::kFixup, window_info)) {
+              GhostWindowType::kFixup, WindowPredictorUseCase::kArcNotReady,
+              window_info)) {
         prefs->SetLastLaunchTime(app_id);
         return true;
       }
@@ -414,7 +369,8 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
                arc::GetArcAndroidSdkVersionAsInt() >= arc::kArcVersionR) {
       if (WindowPredictor::GetInstance()->LaunchArcAppWithGhostWindow(
               profile, app_id, *app_info, launch_intent_to_send, event_flags,
-              GhostWindowType::kAppLaunch, window_info)) {
+              GhostWindowType::kAppLaunch, WindowPredictorUseCase::kArcNotReady,
+              window_info)) {
         prefs->SetLastLaunchTime(app_id);
         return true;
       }
@@ -434,10 +390,29 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
       // default to avoid slowing down Chrome's user session restoration.
       // However, the restriction should be lifted once the user explicitly
       // tries to launch an ARC app.
-      NotifyAppLaunchObservers(context, *app_info);
+      auto* notifier = ArcAppLaunchNotifier::GetForBrowserContext(profile);
+      if (notifier) {
+        // ArcAppLaunchNotifier may not exist in test environment.
+        notifier->NotifyArcAppLaunchRequest(app_info->package_name);
+      } else {
+        CHECK_IS_TEST();
+      }
     }
     prefs->SetLastLaunchTime(app_id);
     return true;
+  } else if (IsArcVmAndSwappedOut(context) &&
+             !WindowPredictor::GetInstance()->IsAppPendingLaunch(profile,
+                                                                 app_id)) {
+    // Assume this condition branch will never be triggered in ARCVM launch (ARC
+    // booting) stage. It should be trigger after ARCVM idle for a while.
+    if (WindowPredictor::GetInstance()->LaunchArcAppWithGhostWindow(
+            profile, app_id, *app_info, launch_intent_to_send, event_flags,
+            GhostWindowType::kAppLaunch, WindowPredictorUseCase::kArcVmmSwapped,
+            window_info)) {
+      return true;
+    }
+    VLOG(2) << "Failed to launch ghost window for swapped state, fallback to "
+               "launch directly.";
   } else if (app_id == kPlayStoreAppId) {
     // Record launch request time in order to track Play Store default launch
     // performance.
@@ -450,16 +425,6 @@ bool LaunchAppWithIntent(content::BrowserContext* context,
     launch_intent_to_send->extras[kRequestStartTimeParamKey] =
         base::NumberToString(
             (base::TimeTicks::Now() - base::TimeTicks()).InMilliseconds());
-  } else if (IsInstantResponseOpenEnabled() &&
-             !WindowPredictor::GetInstance()->IsAppPendingLaunch(profile,
-                                                                 app_id)) {
-    // For some devices, launch ghost window and app at the same time.
-    if (WindowPredictor::GetInstance()->LaunchArcAppWithGhostWindow(
-            profile, app_id, *app_info, launch_intent_to_send, event_flags,
-            GhostWindowType::kAppLaunch, window_info)) {
-      return true;
-    }
-    VLOG(2) << "Failed to launch ghost window, fallback to launch directly.";
   }
 
   arc::ArcBootPhaseMonitorBridge::RecordFirstAppLaunchDelayUMA(context);
@@ -526,10 +491,10 @@ bool SetTouchMode(bool enable) {
   if (!intent_helper_instance)
     return false;
 
-  base::DictionaryValue extras;
-  extras.SetBoolKey("inTouchMode", enable);
-  std::string extras_string;
-  base::JSONWriter::Write(extras, &extras_string);
+  base::Value::Dict extras;
+  extras.Set("inTouchMode", enable);
+  std::string extras_string =
+      base::WriteJson(base::Value(std::move(extras))).value_or("");
   intent_helper_instance->SendBroadcast(kSetInTouchModeIntent,
                                         kArcIntentHelperPackageName,
                                         kIntentHelperClassName, extras_string);
@@ -639,16 +604,17 @@ bool IsArcItem(content::BrowserContext* context, const std::string& id) {
   return arc_prefs->IsRegistered(arc_app_shelf_id.app_id());
 }
 
-void GetLocaleAndPreferredLanguages(const Profile* profile,
-                                    std::string* out_locale,
-                                    std::string* out_preferred_languages) {
+void GetLocaleAndPreferredLanguages(
+    const ApplicationLocaleStorage& application_locale_storage,
+    const Profile* profile,
+    std::string* out_locale,
+    std::string* out_preferred_languages) {
   const PrefService::Preference* locale_pref =
       profile->GetPrefs()->FindPreference(
           ::language::prefs::kApplicationLocale);
   DCHECK(locale_pref);
   const std::string& locale = locale_pref->GetValue()->GetString();
-  *out_locale =
-      locale.empty() ? g_browser_process->GetApplicationLocale() : locale;
+  *out_locale = locale.empty() ? application_locale_storage.Get() : locale;
 
   // |preferredLanguages| consists of comma separated locale strings. It may be
   // empty or contain empty items, but those are ignored on ARC.  If an item
@@ -688,51 +654,6 @@ std::string ArcPackageNameToAppId(const std::string& package_name,
   ArcAppListPrefs* arc_prefs = ArcAppListPrefs::Get(profile);
   return arc_prefs ? arc_prefs->GetAppIdByPackageName(package_name)
                    : std::string();
-}
-
-void AddAppLaunchObserver(content::BrowserContext* context,
-                          AppLaunchObserver* observer) {
-  class ProfileDestroyedObserver : public ProfileObserver {
-   public:
-    ProfileDestroyedObserver() = default;
-
-    ProfileDestroyedObserver(const ProfileDestroyedObserver&) = delete;
-    ProfileDestroyedObserver& operator=(const ProfileDestroyedObserver&) =
-        delete;
-
-    ~ProfileDestroyedObserver() override = default;
-
-    void Observe(Profile* profile) {
-      if (!observed_profiles_.IsObservingSource(profile))
-        observed_profiles_.AddObservation(profile);
-    }
-
-    void OnProfileWillBeDestroyed(Profile* profile) override {
-      observed_profiles_.RemoveObservation(profile);
-      GetAppLaunchObserverMap()->erase(profile);
-    }
-
-   private:
-    base::ScopedMultiSourceObservation<Profile, ProfileObserver>
-        observed_profiles_{this};
-  };
-  static base::NoDestructor<ProfileDestroyedObserver>
-      profile_destroyed_observer;
-
-  AppLaunchObserverMap* const map = GetAppLaunchObserverMap();
-  auto result =
-      map->emplace(std::piecewise_construct, std::forward_as_tuple(context),
-                   std::forward_as_tuple());
-  profile_destroyed_observer->Observe(Profile::FromBrowserContext(context));
-  result.first->second.AddObserver(observer);
-}
-
-void RemoveAppLaunchObserver(content::BrowserContext* context,
-                             AppLaunchObserver* observer) {
-  AppLaunchObserverMap* const map = GetAppLaunchObserverMap();
-  auto it = map->find(context);
-  if (it != map->end())
-    it->second.RemoveObserver(observer);
 }
 
 const std::string GetAppFromAppOrGroupId(content::BrowserContext* context,
@@ -780,7 +701,7 @@ void ExecuteArcShortcutCommand(content::BrowserContext* context,
     return;
 
   app_list::LaunchData launch_data;
-  // TODO(crbug.com/1199206): This should set launch_data.launched_from.
+  // TODO(crbug.com/40177716): This should set launch_data.launched_from.
   launch_data.id =
       ConstructArcAppShortcutUrl(arc_shelf_id.app_id(), shortcut_id),
   launch_data.result_type = ash::AppListSearchResultType::kArcAppShortcut;

@@ -7,12 +7,12 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/metrics/user_metrics.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace web_app {
@@ -33,16 +33,16 @@ void UserUninstalledPreinstalledWebAppPrefs::RegisterProfilePrefs(
 }
 
 void UserUninstalledPreinstalledWebAppPrefs::Add(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     base::flat_set<GURL> install_urls) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   base::Value::List url_list;
 
   AppendExistingInstallUrlsPerAppId(app_id, install_urls);
 
-  for (auto install_url : install_urls)
+  for (const auto& install_url : install_urls) {
     url_list.Append(install_url.spec());
-
+  }
   if (!DoesAppIdExist(app_id)) {
     base::RecordAction(
         base::UserMetricsAction(kUserUninstalledPreinstalledAppAction));
@@ -53,7 +53,7 @@ void UserUninstalledPreinstalledWebAppPrefs::Add(
   update->Set(app_id, std::move(url_list));
 }
 
-absl::optional<AppId>
+std::optional<webapps::AppId>
 UserUninstalledPreinstalledWebAppPrefs::LookUpAppIdByInstallUrl(
     const GURL& url) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -61,7 +61,7 @@ UserUninstalledPreinstalledWebAppPrefs::LookUpAppIdByInstallUrl(
       pref_service_->GetDict(prefs::kUserUninstalledPreinstalledWebAppPref);
 
   if (!url.is_valid())
-    return absl::nullopt;
+    return std::nullopt;
 
   for (auto it : ids_to_urls) {
     const base::Value::List* urls = it.second.GetIfList();
@@ -74,11 +74,11 @@ UserUninstalledPreinstalledWebAppPrefs::LookUpAppIdByInstallUrl(
         return it.first;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool UserUninstalledPreinstalledWebAppPrefs::DoesAppIdExist(
-    const AppId& app_id) {
+    const webapps::AppId& app_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const base::Value::Dict& ids_to_urls =
       pref_service_->GetDict(prefs::kUserUninstalledPreinstalledWebAppPref);
@@ -87,7 +87,7 @@ bool UserUninstalledPreinstalledWebAppPrefs::DoesAppIdExist(
 }
 
 void UserUninstalledPreinstalledWebAppPrefs::AppendExistingInstallUrlsPerAppId(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     base::flat_set<GURL>& urls) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const base::Value::Dict& ids_to_urls =
@@ -117,7 +117,7 @@ int UserUninstalledPreinstalledWebAppPrefs::Size() {
 }
 
 bool UserUninstalledPreinstalledWebAppPrefs::RemoveByInstallUrl(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     const GURL& install_url) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const base::Value::Dict& ids_to_urls =
@@ -156,7 +156,7 @@ bool UserUninstalledPreinstalledWebAppPrefs::RemoveByInstallUrl(
 }
 
 bool UserUninstalledPreinstalledWebAppPrefs::RemoveByAppId(
-    const AppId& app_id) {
+    const webapps::AppId& app_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const base::Value::Dict& ids_to_urls =
       pref_service_->GetDict(prefs::kUserUninstalledPreinstalledWebAppPref);
@@ -170,7 +170,7 @@ bool UserUninstalledPreinstalledWebAppPrefs::RemoveByAppId(
 }
 
 bool UserUninstalledPreinstalledWebAppPrefs::AppIdContainsAllUrls(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     const base::flat_map<WebAppManagement::Type,
                          WebApp::ExternalManagementConfig>& url_map,
     const bool only_default) {
@@ -190,16 +190,23 @@ bool UserUninstalledPreinstalledWebAppPrefs::AppIdContainsAllUrls(
     existing_urls.emplace(url.GetString());
   }
 
-  for (auto it : url_map) {
+  for (const auto& it : url_map) {
     if (only_default && !(it.first == WebAppManagement::kDefault))
       continue;
 
     for (const GURL& url_to_insert : it.second.install_urls) {
-      if (!base::Contains(existing_urls, url_to_insert.spec()))
+      if (!existing_urls.contains(url_to_insert.spec())) {
         return false;
+      }
     }
   }
   return true;
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+void UserUninstalledPreinstalledWebAppPrefs::ClearAllApps() {
+  pref_service_->ClearPref(prefs::kUserUninstalledPreinstalledWebAppPref);
+}
+#endif
 
 }  // namespace web_app

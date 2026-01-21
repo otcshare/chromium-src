@@ -4,9 +4,7 @@
 
 #include "content/browser/preloading/prefetch/prefetch_origin_prober.h"
 
-#include "base/bind.h"
-#include "base/feature_list.h"
-#include "base/strings/string_util.h"
+#include "base/functional/bind.h"
 #include "content/browser/preloading/prefetch/prefetch_canary_checker.h"
 #include "content/browser/preloading/prefetch/prefetch_dns_prober.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
@@ -23,7 +21,6 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
-#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/origin.h"
 
 namespace content {
@@ -85,8 +82,8 @@ class TLSProber {
 
  private:
   void OnTCPConnected(int result,
-                      const absl::optional<net::IPEndPoint>& local_addr,
-                      const absl::optional<net::IPEndPoint>& peer_adder,
+                      const std::optional<net::IPEndPoint>& local_addr,
+                      const std::optional<net::IPEndPoint>& peer_adder,
                       mojo::ScopedDataPipeConsumerHandle receive_stream,
                       mojo::ScopedDataPipeProducerHandle send_stream) {
     if (result != net::OK) {
@@ -109,7 +106,7 @@ class TLSProber {
   void OnUpgradeToTLS(int result,
                       mojo::ScopedDataPipeConsumerHandle receive_stream,
                       mojo::ScopedDataPipeProducerHandle send_stream,
-                      const absl::optional<net::SSLInfo>& ssl_info) {
+                      const std::optional<net::SSLInfo>& ssl_info) {
     std::move(callback_).Run(result == net::OK
                                  ? PrefetchProbeResult::kTLSProbeSuccess
                                  : PrefetchProbeResult::kTLSProbeFailure);
@@ -200,24 +197,11 @@ void PrefetchOriginProber::Probe(const GURL& url,
                                  OnProbeResultCallback callback) {
   // If canary checks are disabled, or if the TLS canary check is enabled and
   // failed (or did not complete), do TLS probing.
-  if (!PrefetchCanaryCheckEnabled() ||
+  bool also_do_tls_connect = !PrefetchCanaryCheckEnabled() ||
       (tls_canary_checker_ &&
-       !tls_canary_checker_->CanaryCheckSuccessful().value_or(false))) {
-    TLSProbe(url, std::move(callback));
-    return;
-  }
+       !tls_canary_checker_->CanaryCheckSuccessful().value_or(false));
 
-  DNSProbe(url, std::move(callback));
-}
-
-void PrefetchOriginProber::DNSProbe(const GURL& url,
-                                    OnProbeResultCallback callback) {
-  StartDNSResolution(url, std::move(callback), /*also_do_tls_connect=*/false);
-}
-
-void PrefetchOriginProber::TLSProbe(const GURL& url,
-                                    OnProbeResultCallback callback) {
-  StartDNSResolution(url, std::move(callback), /*also_do_tls_connect=*/true);
+  StartDNSResolution(url, std::move(callback), also_do_tls_connect);
 }
 
 void PrefetchOriginProber::StartDNSResolution(const GURL& url,
@@ -239,8 +223,8 @@ void PrefetchOriginProber::StartDNSResolution(const GURL& url,
           std::move(callback), also_do_tls_connect)),
       client_remote.InitWithNewPipeAndPassReceiver());
 
-  // TODO(crbug.com/1355169): Consider passing a SchemeHostPort to trigger HTTPS
-  // DNS resource record query.
+  // TODO(crbug.com/40235854): Consider passing a SchemeHostPort to trigger
+  // HTTPS DNS resource record query.
   browser_context_->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->ResolveHost(network::mojom::HostResolverHost::NewHostPortPair(
@@ -254,9 +238,8 @@ void PrefetchOriginProber::OnDNSResolved(
     OnProbeResultCallback callback,
     bool also_do_tls_connect,
     int net_error,
-    const absl::optional<net::AddressList>& resolved_addresses) {
-  bool successful = net_error == net::OK && resolved_addresses &&
-                    !resolved_addresses->empty();
+    const net::AddressList& resolved_addresses) {
+  bool successful = net_error == net::OK && !resolved_addresses.empty();
 
   // A TLS connection needs the resolved addresses, so it also fails here.
   if (!successful) {
@@ -269,7 +252,7 @@ void PrefetchOriginProber::OnDNSResolved(
     return;
   }
 
-  DoTLSProbeAfterDNSResolution(url, std::move(callback), *resolved_addresses);
+  DoTLSProbeAfterDNSResolution(url, std::move(callback), resolved_addresses);
 }
 
 void PrefetchOriginProber::DoTLSProbeAfterDNSResolution(
@@ -284,7 +267,7 @@ void PrefetchOriginProber::DoTLSProbeAfterDNSResolution(
   browser_context_->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->CreateTCPConnectedSocket(
-          /*local_addr=*/absl::nullopt, addresses,
+          /*local_addr=*/std::nullopt, addresses,
           /*tcp_connected_socket_options=*/nullptr,
           net::MutableNetworkTrafficAnnotationTag(
               GetProbingTrafficAnnotation()),

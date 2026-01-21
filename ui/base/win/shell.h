@@ -5,18 +5,16 @@
 #ifndef UI_BASE_WIN_SHELL_H_
 #define UI_BASE_WIN_SHELL_H_
 
-#include <windows.h>
-
 #include <string>
 
 #include "base/component_export.h"
+#include "base/win/windows_types.h"
 
 namespace base {
 class FilePath;
 }
 
-namespace ui {
-namespace win {
+namespace ui::win {
 
 // Open the folder at |full_path| via the Windows shell. It is an error if
 // |full_path| does not refer to a folder.
@@ -76,16 +74,6 @@ void SetRelaunchDetailsForWindow(const std::wstring& relaunch_command,
 // Clears the Window Property Store on an HWND.
 COMPONENT_EXPORT(UI_BASE) void ClearWindowPropertyStore(HWND hwnd);
 
-// Returns true if dwm composition is available and turned on on the current
-// platform.
-// This method supports a command-line override for testing.
-COMPONENT_EXPORT(UI_BASE) bool IsAeroGlassEnabled();
-
-// Returns true if dwm composition is available and turned on on the current
-// platform.
-COMPONENT_EXPORT(UI_BASE) bool IsDwmCompositionEnabled();
-
-}  // namespace win
-}  // namespace ui
+}  // namespace ui::win
 
 #endif  // UI_BASE_WIN_SHELL_H_

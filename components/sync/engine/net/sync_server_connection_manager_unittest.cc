@@ -4,8 +4,8 @@
 
 #include "components/sync/engine/net/sync_server_connection_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
@@ -15,6 +15,7 @@
 #include "components/sync/engine/net/http_post_provider.h"
 #include "components/sync/engine/net/http_post_provider_factory.h"
 #include "net/base/net_errors.h"
+#include "net/http/http_request_headers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -26,12 +27,12 @@ class BlockingHttpPost : public HttpPostProvider {
       : wait_for_abort_(base::WaitableEvent::ResetPolicy::AUTOMATIC,
                         base::WaitableEvent::InitialState::NOT_SIGNALED) {}
 
-  void SetExtraRequestHeaders(const char* headers) override {}
+  void SetExtraRequestHeaders(const net::HttpRequestHeaders& headers) override {
+  }
   void SetURL(const GURL& url) override {}
   void SetPostPayload(const char* content_type,
                       int content_length,
                       const char* content) override {}
-  void SetAllowBatching(bool allow_batching) override {}
   bool MakeSynchronousPost(int* net_error_code,
                            int* http_status_code) override {
     wait_for_abort_.TimedWait(TestTimeouts::action_max_timeout());
@@ -72,8 +73,7 @@ TEST(SyncServerConnectionManagerTest, VeryEarlyAbortPost) {
       &signal);
 
   std::string buffer_out;
-  HttpResponse http_response =
-      server.PostBuffer("", "testauth", /*allow_batching=*/false, &buffer_out);
+  HttpResponse http_response = server.PostBuffer("", "testauth", &buffer_out);
 
   EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }
@@ -87,8 +87,7 @@ TEST(SyncServerConnectionManagerTest, EarlyAbortPost) {
 
   signal.Signal();
   std::string buffer_out;
-  HttpResponse http_response =
-      server.PostBuffer("", "testauth", /*allow_batching=*/false, &buffer_out);
+  HttpResponse http_response = server.PostBuffer("", "testauth", &buffer_out);
 
   EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }
@@ -108,8 +107,7 @@ TEST(SyncServerConnectionManagerTest, AbortPost) {
       TestTimeouts::tiny_timeout());
 
   std::string buffer_out;
-  HttpResponse http_response =
-      server.PostBuffer("", "testauth", /*allow_batching=*/false, &buffer_out);
+  HttpResponse http_response = server.PostBuffer("", "testauth", &buffer_out);
 
   EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
   abort_thread.Stop();
@@ -122,12 +120,12 @@ class FailingHttpPost : public HttpPostProvider {
   explicit FailingHttpPost(int net_error_code)
       : net_error_code_(net_error_code) {}
 
-  void SetExtraRequestHeaders(const char* headers) override {}
+  void SetExtraRequestHeaders(const net::HttpRequestHeaders& headers) override {
+  }
   void SetURL(const GURL& url) override {}
   void SetPostPayload(const char* content_type,
                       int content_length,
                       const char* content) override {}
-  void SetAllowBatching(bool allow_batching) override {}
   bool MakeSynchronousPost(int* net_error_code,
                            int* http_status_code) override {
     *net_error_code = net_error_code_;
@@ -173,8 +171,7 @@ TEST(SyncServerConnectionManagerTest, FailPostWithTimedOut) {
       std::make_unique<FailingHttpPostFactory>(net::ERR_TIMED_OUT), &signal);
 
   std::string buffer_out;
-  HttpResponse http_response =
-      server.PostBuffer("", "testauth", /*allow_batching=*/false, &buffer_out);
+  HttpResponse http_response = server.PostBuffer("", "testauth", &buffer_out);
 
   EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }

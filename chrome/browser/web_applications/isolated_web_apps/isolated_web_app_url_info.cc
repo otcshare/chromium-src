@@ -4,189 +4,122 @@
 
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "base/base64.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/functional/overloaded.h"
 #include "base/strings/strcat.h"
-#include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
-#include "chrome/browser/web_applications/isolated_web_apps/signed_web_bundle_reader.h"
-#include "chrome/browser/web_applications/isolation_data.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/url_constants.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_integrity_block.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_verifier.h"
+#include "components/webapps/isolated_web_apps/bundle_operations/bundle_operations.h"
+#include "components/webapps/isolated_web_apps/types/iwa_origin.h"
+#include "components/webapps/isolated_web_apps/types/source.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "crypto/sha2.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace web_app {
 
 namespace {
-
-void GetSignedWebBundleIdByPath(
-    const base::FilePath& path,
-    base::OnceCallback<void(base::expected<IsolatedWebAppUrlInfo, std::string>)>
-        callback) {
-  std::unique_ptr<SignedWebBundleReader> reader =
-      SignedWebBundleReader::Create(path, /*base_url=*/absl::nullopt);
-
-  SignedWebBundleReader* reader_raw_ptr = reader.get();
-
-  auto [callback_first, callback_second] =
-      base::SplitOnceCallback(std::move(callback));
-
-  SignedWebBundleReader::IntegrityBlockReadResultCallback
-      integrity_block_result_callback = base::BindOnce(
-          [](base::OnceCallback<void(
-                 base::expected<IsolatedWebAppUrlInfo, std::string>)> callback,
-             const std::vector<web_package::Ed25519PublicKey>& public_key_stack,
-             base::OnceCallback<void(
-                 SignedWebBundleReader::SignatureVerificationAction)>
-                 verify_callback) {
-            std::move(verify_callback)
-                .Run(SignedWebBundleReader::SignatureVerificationAction::Abort(
-                    "Stopped after reading the integrity block."));
-            DCHECK(!public_key_stack.empty());
-            web_package::SignedWebBundleId bundle_id =
-                web_package::SignedWebBundleId::CreateForEd25519PublicKey(
-                    public_key_stack[0]);
-            std::move(callback).Run(
-                IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(bundle_id));
-          },
-          std::move(callback_first));
-
-  SignedWebBundleReader::ReadErrorCallback read_error_callback = base::BindOnce(
-      [](std::unique_ptr<SignedWebBundleReader> reader_ownership,
-         base::OnceCallback<void(
-             base::expected<IsolatedWebAppUrlInfo, std::string>)> callback,
-         absl::optional<
-             SignedWebBundleReader::ReadIntegrityBlockAndMetadataError>
-             read_error) {
-        DCHECK(read_error.has_value());
-
-        if (!absl::holds_alternative<SignedWebBundleReader::AbortedByCaller>(
-                read_error.value())) {
-          web_package::mojom::BundleIntegrityBlockParseErrorPtr* error_ptr =
-              absl::get_if<
-                  web_package::mojom::BundleIntegrityBlockParseErrorPtr>(
-                  &read_error.value());
-          // only other possible variant, as the other 2 variants shouldn't be
-          // reachable.
-          DCHECK(error_ptr);
-
-          std::move(callback).Run(base::unexpected(base::StrCat(
-              {"Failed to read the integrity block of the signed web bundle: ",
-               (*error_ptr)->message})));
-        }
-      },
-      std::move(reader), std::move(callback_second));
-  ;
-
-  reader_raw_ptr->StartReading(std::move(integrity_block_result_callback),
-                               std::move(read_error_callback));
+base::expected<IsolatedWebAppUrlInfo, std::string> MakeIsolatedWebAppUrlInfo(
+    base::expected<web_package::SignedWebBundleId, std::string> bundle_id) {
+  return bundle_id.transform([](const web_package::SignedWebBundleId& id) {
+    return IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(id);
+  });
 }
-
 }  // namespace
 
 // static
 base::expected<IsolatedWebAppUrlInfo, std::string>
 IsolatedWebAppUrlInfo::Create(const GURL& url) {
-  if (!url.is_valid()) {
-    return base::unexpected("Invalid URL");
-  }
-  if (!url.SchemeIs(chrome::kIsolatedAppScheme)) {
-    return base::unexpected(
-        base::StringPrintf("The URL scheme must be %s, but was %s",
-                           chrome::kIsolatedAppScheme, url.scheme().c_str()));
-  }
-
-  // Valid isolated-app:// `GURL`s can never include credentials or ports, since
-  // the scheme is configured as `url::SCHEME_WITH_HOST`. The `DCHECK` is here
-  // just in case, but should never trigger as long as the scheme is configured
-  // correctly.
-  DCHECK(!url.has_username() && !url.has_password() && !url.has_port() &&
-         url.IsStandard());
-
-  auto web_bundle_id = web_package::SignedWebBundleId::Create(url.host());
-  if (!web_bundle_id.has_value()) {
-    return base::unexpected(
-        base::StringPrintf("The host of isolated-app:// URLs must be a valid "
-                           "Signed Web Bundle ID (got %s): %s",
-                           url.host().c_str(), web_bundle_id.error().c_str()));
-  }
-
-  return IsolatedWebAppUrlInfo(*web_bundle_id);
+  return IwaOrigin::Create(url).transform(
+      [](const auto& iwa_origin) { return IsolatedWebAppUrlInfo(iwa_origin); });
 }
 
 // static
 IsolatedWebAppUrlInfo IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
     const web_package::SignedWebBundleId& web_bundle_id) {
-  return IsolatedWebAppUrlInfo(web_bundle_id);
+  return IsolatedWebAppUrlInfo(IwaOrigin(web_bundle_id));
 }
 
 // static
-void IsolatedWebAppUrlInfo::CreateFromIsolationData(
-    const IsolationData& isolation_data,
+void IsolatedWebAppUrlInfo::CreateFromIsolatedWebAppSource(
+    const IwaSource& source,
     base::OnceCallback<void(base::expected<IsolatedWebAppUrlInfo, std::string>)>
         callback) {
-  absl::visit(base::Overloaded{
-                  [&](const IsolationData::InstalledBundle&) {
-                    std::move(callback).Run(base::unexpected(
-                        "Getting IsolationInfo from |InstalledBundle| is not "
-                        "implemented"));
-                  },
-                  [&](const IsolationData::DevModeBundle& dev_mode_bundle) {
-                    GetSignedWebBundleIdByPath(dev_mode_bundle.path,
-                                               std::move(callback));
-                  },
-                  [&](const IsolationData::DevModeProxy&) {
-                    std::move(callback).Run(
-                        IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
-                            web_package::SignedWebBundleId::
-                                CreateRandomForDevelopment()));
-                  }},
-              isolation_data.content);
+  std::visit(
+      absl::Overload{
+          [&](const IwaSourceBundle& bundle) {
+            ReadSignedWebBundleIdInsecurely(
+                bundle.path(), base::BindOnce(&MakeIsolatedWebAppUrlInfo)
+                                   .Then(std::move(callback)));
+          },
+          [&](const IwaSourceProxy& proxy) {
+            const web_package::SignedWebBundleId bundle_id = [&] {
+              if (proxy.explicit_bundle_id()) {
+                CHECK(proxy.explicit_bundle_id()->is_for_proxy_mode());
+                return *proxy.explicit_bundle_id();
+              } else {
+                return web_package::SignedWebBundleId::
+                    CreateRandomForProxyMode();
+              }
+            }();
+
+            std::move(callback).Run(
+                IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(bundle_id));
+          }},
+      source.variant());
 }
 
-IsolatedWebAppUrlInfo::IsolatedWebAppUrlInfo(
-    const web_package::SignedWebBundleId& web_bundle_id)
-    : origin_(url::Origin::CreateFromNormalizedTuple(chrome::kIsolatedAppScheme,
-                                                     web_bundle_id.id(),
-                                                     /*port=*/0)),
+IsolatedWebAppUrlInfo::IsolatedWebAppUrlInfo(const IwaOrigin& iwa_origin)
+    : iwa_origin_(iwa_origin),
       // The manifest id of Isolated Web Apps must resolve to the app's origin.
       // The manifest parser will resolve "id" relative the origin of the app's
       // start_url, and then sets Manifest::id to the path of this resolved URL,
       // not including a leading slash. Because of this, the resolved manifest
       // id will always be empty string.
-      app_id_(GenerateAppId(/*manifest_id=*/"", origin_.GetURL())),
-      web_bundle_id_(web_bundle_id) {}
+      app_id_(
+          GenerateAppId(/*manifest_id=*/"", iwa_origin_.origin().GetURL())) {}
 
 const url::Origin& IsolatedWebAppUrlInfo::origin() const {
-  return origin_;
+  return iwa_origin_.origin();
 }
 
-const AppId& IsolatedWebAppUrlInfo::app_id() const {
+const webapps::AppId& IsolatedWebAppUrlInfo::app_id() const {
   return app_id_;
 }
 
 const web_package::SignedWebBundleId& IsolatedWebAppUrlInfo::web_bundle_id()
     const {
-  return web_bundle_id_;
+  return iwa_origin_.web_bundle_id();
 }
 
 content::StoragePartitionConfig IsolatedWebAppUrlInfo::storage_partition_config(
     content::BrowserContext* browser_context) const {
-  DCHECK(browser_context != nullptr);
+  return iwa_origin_.storage_partition_config(browser_context);
+}
 
-  constexpr char kIsolatedWebAppPartitionPrefix[] = "iwa-";
-  // We add a prefix to `partition_domain` to avoid potential name conflicts
-  // with Chrome Apps, which use their id/hostname as `partition_domain`.
-  return content::StoragePartitionConfig::Create(
-      browser_context,
-      /*partition_domain=*/kIsolatedWebAppPartitionPrefix + origin().host(),
-      /*partition_name=*/"",
-      /*in_memory=*/false);
+content::StoragePartitionConfig
+IsolatedWebAppUrlInfo::GetStoragePartitionConfigForControlledFrame(
+    content::BrowserContext* browser_context,
+    const std::string& partition_name,
+    bool in_memory) const {
+  CHECK(!partition_name.empty() || in_memory);
+  return iwa_origin_.storage_partition_config(
+      browser_context, IwaOrigin::StoragePartitionConfigOptions{
+                           .partition_name = partition_name,
+                           .in_memory = in_memory,
+                       });
 }
 
 }  // namespace web_app

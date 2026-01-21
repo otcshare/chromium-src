@@ -7,8 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
@@ -42,7 +42,6 @@ class WrappedTaskRunner : public base::SequencedTaskRunner {
                                   base::TimeDelta delay) override {
     // Not implemented.
     NOTREACHED();
-    return false;
   }
 
   bool RunsTasksInCurrentSequence() const override {
@@ -63,7 +62,7 @@ class WrappedTaskRunner : public base::SequencedTaskRunner {
   }
 
  private:
-  ~WrappedTaskRunner() override {}
+  ~WrappedTaskRunner() override = default;
 
   void RunWrappedTask(base::OnceClosure task) {
     ++ran_task_count_;

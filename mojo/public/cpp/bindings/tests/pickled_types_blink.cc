@@ -36,22 +36,23 @@ bool ParamTraits<mojo::test::PickledStructBlink>::Read(
     base::PickleIterator* iter,
     param_type* p) {
   int foo, bar;
-  if (!iter->ReadInt(&foo) || !iter->ReadInt(&bar) || foo < 0 || bar < 0)
+  if (!iter->ReadInt(&foo) || !iter->ReadInt(&bar) || foo < 0 || bar < 0) {
     return false;
+  }
 
   p->set_foo(foo);
   p->set_bar(bar);
   return true;
 }
 
-#include "ipc/param_traits_write_macros.h"
-IPC_ENUM_TRAITS_MAX_VALUE(mojo::test::PickledEnumBlink,
-                          mojo::test::PickledEnumBlink::VALUE_1)
+// Generate read methods from macros.
+#undef MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_H_
 #include "ipc/param_traits_read_macros.h"
-IPC_ENUM_TRAITS_MAX_VALUE(mojo::test::PickledEnumBlink,
-                          mojo::test::PickledEnumBlink::VALUE_1)
-#include "ipc/param_traits_log_macros.h"
-IPC_ENUM_TRAITS_MAX_VALUE(mojo::test::PickledEnumBlink,
-                          mojo::test::PickledEnumBlink::VALUE_1)
+#include "mojo/public/cpp/bindings/tests/pickled_types_blink.h"
+
+// Generate write methods from macros.
+#undef MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_H_
+#include "ipc/param_traits_write_macros.h"
+#include "mojo/public/cpp/bindings/tests/pickled_types_blink.h"
 
 }  // namespace IPC

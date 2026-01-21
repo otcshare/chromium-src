@@ -23,6 +23,7 @@
 
 #include "third_party/blink/renderer/core/html/html_style_element.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
@@ -54,11 +55,9 @@ void HTMLStyleElement::ParseAttribute(
   } else if (params.name == html_names::kTypeAttr) {
     HTMLElement::ParseAttribute(params);
     StyleElement::ChildrenChanged(*this);
-  } else if (params.name == html_names::kBlockingAttr &&
-             RuntimeEnabledFeatures::BlockingAttributeEnabled()) {
-    blocking_attribute_->DidUpdateAttributeValue(params.old_value,
+  } else if (params.name == html_names::kBlockingAttr) {
+    blocking_attribute_->OnAttributeValueChanged(params.old_value,
                                                  params.new_value);
-    blocking_attribute_->CountTokenUsage();
     BlockingAttributeChanged(*this);
   } else {
     HTMLElement::ParseAttribute(params);
@@ -136,7 +135,7 @@ void HTMLStyleElement::NotifyLoadedSheetAndAllCriticalSubresources(
       .GetTaskRunner(TaskType::kNetworking)
       ->PostTask(
           FROM_HERE,
-          WTF::BindOnce(
+          BindOnce(
               &HTMLStyleElement::DispatchPendingEvent, WrapPersistent(this),
               std::make_unique<IncrementLoadEventDelayCount>(GetDocument()),
               is_load_event));

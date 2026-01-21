@@ -30,19 +30,18 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/node_lists_node_data.h"
-#include "third_party/blink/renderer/core/dom/node_rare_data.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 
 namespace blink {
 
 void TreeScopeAdopter::Execute() const {
-  if (RuntimeEnabledFeatures::UseSeparateTraversalForWillMoveEnabled()) {
-    WillMoveTreeToNewDocument(*to_adopt_);
-  }
+  WillMoveTreeToNewDocument(*to_adopt_);
   MoveTreeToNewScope(*to_adopt_);
   Document& old_document = OldScope().GetDocument();
   if (old_document == NewScope().GetDocument())
@@ -62,31 +61,50 @@ void TreeScopeAdopter::MoveTreeToNewScope(Node& root) const {
   Document& old_document = OldScope().GetDocument();
   Document& new_document = NewScope().GetDocument();
   bool will_move_to_new_document = old_document != new_document;
+  bool is_document_unmodified_and_uninteracted =
+      IsDocumentEligibleForFastAdoption(old_document);
 
   for (Node& node : NodeTraversal::InclusiveDescendantsOf(root)) {
     UpdateTreeScope(node);
 
     if (will_move_to_new_document) {
-      MoveNodeToNewDocument(node, old_document, new_document);
-    } else if (node.HasRareData()) {
-      NodeRareData* rare_data = node.RareData();
+      MoveNodeToNewDocument(node, old_document,
+                            is_document_unmodified_and_uninteracted);
+    } else if (ElementRareDataVector* rare_data = node.RareData()) {
       if (rare_data->NodeLists())
         rare_data->NodeLists()->AdoptTreeScope();
     }
 
+    // 3. if inclusiveDescendant is an element
     auto* element = DynamicTo<Element>(node);
     if (!element)
       continue;
 
+    // 3-1. Set the node document of each attribute in inclusiveDescendant's
+    // attribute list to document.
     if (HeapVector<Member<Attr>>* attrs = element->GetAttrNodeList()) {
       for (const auto& attr : *attrs)
         MoveTreeToNewScope(*attr);
     }
 
+    // 3-2. If inclusiveDescendant's custom element registry is a global custom
+    // element registry then set inclusiveDescendant's custom element registry
+    // to document's effective global custom element registry.
+    if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
+      auto* registry = element->customElementRegistry();
+      if (registry && registry->IsGlobalRegistry() &&
+          registry != new_document.EffectiveGlobalCustomElementRegistry()) {
+        element->SetCustomElementRegistry(
+            new_document.EffectiveGlobalCustomElementRegistry());
+      }
+    }
+
     if (ShadowRoot* shadow = element->GetShadowRoot()) {
       shadow->SetParentTreeScope(NewScope());
-      if (will_move_to_new_document)
-        MoveShadowTreeToNewDocument(*shadow, old_document, new_document);
+      if (will_move_to_new_document) {
+        MoveShadowTreeToNewDocument(*shadow, old_document, new_document,
+                                    is_document_unmodified_and_uninteracted);
+      }
     }
   }
 }
@@ -94,7 +112,8 @@ void TreeScopeAdopter::MoveTreeToNewScope(Node& root) const {
 void TreeScopeAdopter::MoveShadowTreeToNewDocument(
     ShadowRoot& shadow_root,
     Document& old_document,
-    Document& new_document) const {
+    Document& new_document,
+    bool is_document_unmodified_and_uninteracted) const {
   DCHECK_NE(old_document, new_document);
   if (old_document.TemplateDocumentHost() != &new_document &&
       new_document.TemplateDocumentHost() != &old_document) {
@@ -107,31 +126,51 @@ void TreeScopeAdopter::MoveShadowTreeToNewDocument(
     new_document.SetContainsShadowRoot();
   }
 
-  if (RuntimeEnabledFeatures::UseSeparateTraversalForWillMoveEnabled()) {
-    shadow_root.SetDocument(new_document);
+  shadow_root.SetDocument(new_document);
+
+  // 2. If inclusiveDescendant is a shadow root and inclusiveDescendant's custom
+  // element registry is a global custom element registry, then set
+  // inclusiveDescendant's custom element registry to document's effective
+  // global custom element registry.
+  auto* shadow_root_registry = shadow_root.customElementRegistry();
+  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
+      shadow_root_registry && shadow_root_registry->IsGlobalRegistry()) {
+    shadow_root_registry = new_document.EffectiveGlobalCustomElementRegistry();
+    shadow_root.SetCustomElementRegistry(shadow_root_registry);
   }
 
-  MoveTreeToNewDocument(shadow_root, old_document, new_document);
+  if (shadow_root_registry) {
+    shadow_root_registry->AssociatedWith(new_document);
+  }
+
+  MoveTreeToNewDocument(shadow_root, old_document, new_document,
+                        is_document_unmodified_and_uninteracted);
 }
 
-void TreeScopeAdopter::MoveTreeToNewDocument(Node& root,
-                                             Document& old_document,
-                                             Document& new_document) const {
+void TreeScopeAdopter::MoveTreeToNewDocument(
+    Node& root,
+    Document& old_document,
+    Document& new_document,
+    bool is_document_unmodified_and_uninteracted) const {
   DCHECK_NE(old_document, new_document);
   for (Node& node : NodeTraversal::InclusiveDescendantsOf(root)) {
-    MoveNodeToNewDocument(node, old_document, new_document);
+    MoveNodeToNewDocument(node, old_document,
+                          is_document_unmodified_and_uninteracted);
 
     auto* element = DynamicTo<Element>(node);
     if (!element)
       continue;
 
     if (HeapVector<Member<Attr>>* attrs = element->GetAttrNodeList()) {
-      for (const auto& attr : *attrs)
-        MoveTreeToNewDocument(*attr, old_document, new_document);
+      for (const auto& attr : *attrs) {
+        MoveTreeToNewDocument(*attr, old_document, new_document,
+                              is_document_unmodified_and_uninteracted);
+      }
     }
 
     if (ShadowRoot* shadow_root = element->GetShadowRoot()) {
-      MoveShadowTreeToNewDocument(*shadow_root, old_document, new_document);
+      MoveShadowTreeToNewDocument(*shadow_root, old_document, new_document,
+                                  is_document_unmodified_and_uninteracted);
     }
   }
 }
@@ -144,11 +183,22 @@ void TreeScopeAdopter::WillMoveTreeToNewDocument(Node& root) const {
 
   for (Node& node : NodeTraversal::InclusiveDescendantsOf(root)) {
     DCHECK_EQ(old_document, node.GetDocument());
-    // TODO(crbug.com/1371962): `node` is still in `old_document`, so only
-    // send in `new_document` here.
-    node.WillMoveToNewDocument(old_document, new_document);
+    node.WillMoveToNewDocument(new_document);
 
     if (auto* element = DynamicTo<Element>(node)) {
+      // An element's custom element registry could be implied by its tree
+      // scope's registry if the element's registry wasn't explicitly set
+      // before. However, in the scenario of cross-document adoption, we need
+      // to make sure the element keeps its knowledge about the prior registry
+      // when it's moved to the new scope. Therefore, we're explicitly setting
+      // the element's registry here to ensure the knowledge is kept even with
+      // the scope change.
+      auto* registry = element->customElementRegistry();
+      if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
+          registry && registry == old_document.customElementRegistry()) {
+        element->SetCustomElementRegistry(element->customElementRegistry(),
+                                          /*explicitly_set=*/true);
+      }
       if (ShadowRoot* shadow_root = element->GetShadowRoot())
         WillMoveTreeToNewDocument(*shadow_root);
 
@@ -183,38 +233,50 @@ inline void TreeScopeAdopter::UpdateTreeScope(Node& node) const {
 inline void TreeScopeAdopter::MoveNodeToNewDocument(
     Node& node,
     Document& old_document,
-    Document& new_document) const {
+    bool is_document_unmodified_and_uninteracted) const {
+  Document& new_document = node.GetDocument();
   DCHECK_NE(old_document, new_document);
-#if DCHECK_IS_ON()
-  if (RuntimeEnabledFeatures::UseSeparateTraversalForWillMoveEnabled()) {
-    // TODO(crbug.com/1371962) `new_document` should no longer be needed.
-    DCHECK_EQ(new_document, node.GetDocument());
-  }
-#endif  // DCHECK_IS_ON()
+  DCHECK_EQ(old_document, OldScope().GetDocument());
+  DCHECK_EQ(new_document, NewScope().GetDocument());
 
-  if (node.HasRareData()) {
-    NodeRareData* rare_data = node.RareData();
-    if (rare_data->NodeLists())
-      rare_data->NodeLists()->AdoptDocument(old_document, new_document);
-  }
+  if (!is_document_unmodified_and_uninteracted) {
+    // fast adoption can skip all the checks below
+    if (ElementRareDataVector* rare_data = node.RareData()) {
+      if (rare_data->NodeLists()) {
+        rare_data->NodeLists()->AdoptDocument(old_document, new_document);
+      }
+      if (old_document.HasMutationObservers()) {
+        node.MoveMutationObserversToNewDocument(new_document);
+      }
+    }
 
-  if (!RuntimeEnabledFeatures::UseSeparateTraversalForWillMoveEnabled()) {
-    node.WillMoveToNewDocument(old_document, new_document);
-  }
-  old_document.MoveNodeIteratorsToNewDocument(node, new_document);
-  if (auto* element = DynamicTo<Element>(node)) {
-    old_document.MoveElementExplicitlySetAttrElementsMapToNewDocument(
-        element, new_document);
+    if (old_document.HasNodeIterators()) {
+      old_document.MoveNodeIteratorsToNewDocument(node, new_document);
+    }
+
+    if (auto* element = DynamicTo<Element>(node)) {
+      if (old_document.HasCachedAttrAssociatedElements()) {
+        old_document.MoveElementCachedAttrAssociatedElementsMapToNewDocument(
+            element, new_document);
+      }
+    }
+
+    if (old_document.HasAnyNodeWithEventListeners()) {
+      node.MoveEventListenersToNewDocument(old_document, new_document);
+    }
+  } else {
+    // DCHECK all the fast adoption conditions
+    DCHECK(!old_document.HasNodeIterators());
+    DCHECK(!old_document.HasRanges());
+    DCHECK(!old_document.HasAnyNodeWithEventListeners());
+    DCHECK(!old_document.HasMutationObservers());
+    DCHECK(!old_document.ShouldInvalidateNodeListCaches());
+    DCHECK(!old_document.HasCachedAttrAssociatedElements());
   }
 
   if (node.GetCustomElementState() == CustomElementState::kCustom) {
     CustomElement::EnqueueAdoptedCallback(To<Element>(node), old_document,
                                           new_document);
-  }
-
-  if (!RuntimeEnabledFeatures::UseSeparateTraversalForWillMoveEnabled()) {
-    if (auto* shadow_root = DynamicTo<ShadowRoot>(node))
-      shadow_root->SetDocument(new_document);
   }
 
 #if DCHECK_IS_ON()
@@ -226,6 +288,15 @@ inline void TreeScopeAdopter::MoveNodeToNewDocument(
 #if DCHECK_IS_ON()
   DCHECK(g_did_move_to_new_document_was_called);
 #endif
+}
+
+inline bool TreeScopeAdopter::IsDocumentEligibleForFastAdoption(
+    Document& old_document) const {
+  return !old_document.HasNodeIterators() && !old_document.HasRanges() &&
+         !old_document.HasAnyNodeWithEventListeners() &&
+         !old_document.HasMutationObservers() &&
+         !old_document.ShouldInvalidateNodeListCaches() &&
+         !old_document.HasCachedAttrAssociatedElements();
 }
 
 }  // namespace blink

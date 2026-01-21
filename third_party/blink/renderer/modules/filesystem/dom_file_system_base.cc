@@ -95,7 +95,7 @@ KURL DOMFileSystemBase::CreateFileSystemRootURL(
   else
     return KURL();
 
-  String result = "filesystem:" + origin + "/" + type_string + "/";
+  String result = StrCat({"filesystem:", origin, "/", type_string, "/"});
   return KURL(result);
 }
 
@@ -131,8 +131,8 @@ KURL DOMFileSystemBase::CreateFileSystemURL(const String& full_path) const {
   DCHECK(!filesystem_root_url_.IsEmpty());
   KURL url = filesystem_root_url_;
   // Remove the extra leading slash.
-  url.SetPath(url.GetPath() +
-              EncodeWithURLEscapeSequences(full_path.Substring(1)));
+  url.SetPath(StrCat(
+      {url.GetPath(), EncodeWithURLEscapeSequences(full_path.Substring(1))}));
   return url;
 }
 
@@ -188,8 +188,9 @@ File* DOMFileSystemBase::CreateFile(ExecutionContext* context,
   // https://www.w3.org/Bugs/Public/show_bug.cgi?id=17746
   if (!metadata.platform_path.empty() &&
       (type == mojom::blink::FileSystemType::kTemporary ||
-       type == mojom::blink::FileSystemType::kPersistent))
+       type == mojom::blink::FileSystemType::kPersistent)) {
     return File::CreateForFileSystemFile(metadata.platform_path, name);
+  }
 
   const File::UserVisibility user_visibility =
       (type == mojom::blink::FileSystemType::kExternal)
@@ -199,7 +200,8 @@ File* DOMFileSystemBase::CreateFile(ExecutionContext* context,
   if (!metadata.platform_path.empty()) {
     // If the platformPath in the returned metadata is given, we create a File
     // object for the snapshot path.
-    return File::CreateForFileSystemFile(name, metadata, user_visibility);
+    return File::CreateForFileSystemFile(context, name, metadata,
+                                         user_visibility);
   } else {
     // Otherwise we create a File object for the fileSystemURL.
     return File::CreateForFileSystemFile(*context, file_system_url, metadata,

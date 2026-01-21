@@ -12,13 +12,12 @@
 #import "ios/web/web_state/web_state_impl.h"
 #import "testing/gtest/include/gtest/gtest.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace web {
 
 namespace {
+
+constexpr char kLowercaseFrameId[] = "abba1234beef1234cafe1234deed1234";
+constexpr char kUppercaseFrameId[] = "ABBA1234BEEF1234CAFE1234DEED1234";
 
 class FakeWebFramesManagerObserver : public WebFramesManagerImpl::Observer {
  public:
@@ -33,7 +32,7 @@ class FakeWebFramesManagerObserver : public WebFramesManagerImpl::Observer {
   }
 
   void WebFrameBecameUnavailable(WebFramesManager* web_frames_manager,
-                                 const std::string frame_id) override {
+                                 const std::string& frame_id) override {
     frames_.erase(frame_id);
   }
 
@@ -48,31 +47,30 @@ class WebFramesManagerImplTest : public WebTestWithWebState {
   void SetUp() override {
     WebTestWithWebState::SetUp();
 
-    GetWebFramesManager().AddObserver(&observer_);
+    GetPageWorldWebFramesManager().AddObserver(&observer_);
   }
 
   void TearDown() override {
-    GetWebFramesManager().RemoveObserver(&observer_);
+    GetPageWorldWebFramesManager().RemoveObserver(&observer_);
 
     WebTestWithWebState::TearDown();
   }
 
   // Notifies `web_state()` of a newly available `web_frame`.
   void SendFrameBecameAvailableMessage(std::unique_ptr<WebFrame> web_frame) {
-    WebStateImpl* web_state_impl = static_cast<WebStateImpl*>(web_state());
-    web_state_impl->WebFrameBecameAvailable(std::move(web_frame));
+    GetPageWorldWebFramesManager().AddFrame(std::move(web_frame));
   }
 
   // Notifies `web_state()` that the web frame with `frame_id` will become
   // unavailable.
   void SendFrameBecameUnavailableMessage(const std::string& frame_id) {
-    WebStateImpl* web_state_impl = static_cast<WebStateImpl*>(web_state());
-    web_state_impl->WebFrameBecameUnavailable(frame_id);
+    GetPageWorldWebFramesManager().RemoveFrameWithId(frame_id);
   }
 
-  WebFramesManagerImpl& GetWebFramesManager() {
-    WebStateImpl* web_state_impl = static_cast<WebStateImpl*>(web_state());
-    return web_state_impl->GetWebFramesManagerImpl();
+  WebFramesManagerImpl& GetPageWorldWebFramesManager() {
+    WebStateImpl* web_state_impl = WebStateImpl::FromWebState(web_state());
+    return web_state_impl->GetWebFramesManagerImpl(
+        ContentWorld::kPageContentWorld);
   }
 
  protected:
@@ -88,10 +86,10 @@ TEST_F(WebFramesManagerImplTest, MainWebFrame) {
 
   SendFrameBecameAvailableMessage(std::move(frame));
 
-  EXPECT_EQ(1ul, GetWebFramesManager().GetAllWebFrames().size());
-  WebFrame* main_frame = GetWebFramesManager().GetMainWebFrame();
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
   WebFrame* main_frame_by_id =
-      GetWebFramesManager().GetFrameWithId(kMainFakeFrameId);
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
   ASSERT_TRUE(main_frame);
   ASSERT_TRUE(main_frame_by_id);
   EXPECT_EQ(main_frame, main_frame_by_id);
@@ -109,9 +107,9 @@ TEST_F(WebFramesManagerImplTest, MainWebFrame) {
   EXPECT_EQ(main_frame, observed_main_frame);
 
   SendFrameBecameUnavailableMessage(kMainFakeFrameId);
-  EXPECT_EQ(0ul, GetWebFramesManager().GetAllWebFrames().size());
-  EXPECT_FALSE(GetWebFramesManager().GetMainWebFrame());
-  EXPECT_FALSE(GetWebFramesManager().GetFrameWithId(kMainFakeFrameId));
+  EXPECT_EQ(0ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetMainWebFrame());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId));
 
   EXPECT_EQ(0ul, observer_.frames().size());
 }
@@ -132,10 +130,10 @@ TEST_F(WebFramesManagerImplTest, DuplicateMainWebFrame) {
 
   // Validate that `frame` remains the main frame and `second_main_frame` is
   // ignored.
-  EXPECT_EQ(1ul, GetWebFramesManager().GetAllWebFrames().size());
-  WebFrame* main_frame = GetWebFramesManager().GetMainWebFrame();
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
   WebFrame* main_frame_by_id =
-      GetWebFramesManager().GetFrameWithId(kMainFakeFrameId);
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
   ASSERT_TRUE(main_frame);
   ASSERT_TRUE(main_frame_by_id);
   EXPECT_EQ(main_frame, main_frame_by_id);
@@ -165,18 +163,20 @@ TEST_F(WebFramesManagerImplTest, RemoveAllWebFrames) {
   SendFrameBecameAvailableMessage(FakeWebFrame::Create(
       kChildFakeFrameId2,
       /*is_main_frame=*/false, GURL("https://www.frame2.test")));
-  EXPECT_EQ(3ul, GetWebFramesManager().GetAllWebFrames().size());
+  EXPECT_EQ(3ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
 
-  WebStateImpl* web_state_impl = static_cast<WebStateImpl*>(web_state());
+  WebStateImpl* web_state_impl = WebStateImpl::FromWebState(web_state());
   web_state_impl->RemoveAllWebFrames();
-  EXPECT_EQ(0ul, GetWebFramesManager().GetAllWebFrames().size());
+  EXPECT_EQ(0ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
   // Check main frame.
-  EXPECT_FALSE(GetWebFramesManager().GetMainWebFrame());
-  EXPECT_FALSE(GetWebFramesManager().GetFrameWithId(kMainFakeFrameId));
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetMainWebFrame());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId));
   // Check frame 1.
-  EXPECT_FALSE(GetWebFramesManager().GetFrameWithId(kChildFakeFrameId));
+  EXPECT_FALSE(
+      GetPageWorldWebFramesManager().GetFrameWithId(kChildFakeFrameId));
   // Check frame 2.
-  EXPECT_FALSE(GetWebFramesManager().GetFrameWithId(kChildFakeFrameId2));
+  EXPECT_FALSE(
+      GetPageWorldWebFramesManager().GetFrameWithId(kChildFakeFrameId2));
 
   const std::map<std::string, WebFrame*> observed_frames = observer_.frames();
   ASSERT_EQ(0ul, observed_frames.size());
@@ -200,10 +200,10 @@ TEST_F(WebFramesManagerImplTest, RemoveNonexistantFrame) {
   SendFrameBecameAvailableMessage(std::move(frame));
 
   SendFrameBecameUnavailableMessage(kChildFakeFrameId);
-  EXPECT_EQ(1ul, GetWebFramesManager().GetAllWebFrames().size());
-  WebFrame* main_frame = GetWebFramesManager().GetMainWebFrame();
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
   WebFrame* main_frame_by_id =
-      GetWebFramesManager().GetFrameWithId(kMainFakeFrameId);
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
   ASSERT_TRUE(main_frame);
   ASSERT_TRUE(main_frame_by_id);
   EXPECT_EQ(main_frame, main_frame_by_id);
@@ -219,6 +219,41 @@ TEST_F(WebFramesManagerImplTest, RemoveNonexistantFrame) {
   WebFrame* observed_main_frame = main_frame_it->second;
   EXPECT_TRUE(observed_main_frame);
   EXPECT_EQ(main_frame, observed_main_frame);
+}
+
+// Tests that frame lookup is not case-sensitive.
+TEST_F(WebFramesManagerImplTest, CaseInsensitiveLookup) {
+  auto frame = FakeWebFrame::Create(kLowercaseFrameId,
+                                    /*is_main_frame=*/true,
+                                    GURL("https://www.main.test"));
+  SendFrameBecameAvailableMessage(std::move(frame));
+
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+
+  WebFrame* frame_by_uppercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kUppercaseFrameId);
+  EXPECT_TRUE(frame_by_uppercase_id);
+
+  WebFrame* frame_by_lowercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kLowercaseFrameId);
+  EXPECT_TRUE(frame_by_lowercase_id);
+
+  EXPECT_EQ(frame_by_uppercase_id, frame_by_lowercase_id);
+}
+
+// By convention, the frame ID should be stored in lowercase internally, even if
+// it was passed as uppercase at construct-time.
+TEST_F(WebFramesManagerImplTest, CaseInsensitiveConstruct) {
+  auto frame_with_uppercase_id = FakeWebFrame::Create(
+      kUppercaseFrameId, /*is_main_frame=*/true, GURL("https://www.main.test"));
+
+  SendFrameBecameAvailableMessage(std::move(frame_with_uppercase_id));
+
+  WebFrame* frame_by_lowercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kLowercaseFrameId);
+  ASSERT_TRUE(frame_by_lowercase_id);
+
+  EXPECT_EQ(frame_by_lowercase_id->GetFrameId(), kLowercaseFrameId);
 }
 
 }  // namespace web

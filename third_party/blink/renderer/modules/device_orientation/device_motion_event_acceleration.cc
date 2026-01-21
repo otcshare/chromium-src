@@ -24,6 +24,9 @@
  */
 
 #include "third_party/blink/renderer/modules/device_orientation/device_motion_event_acceleration.h"
+
+#include <limits>
+
 #include "third_party/blink/renderer/bindings/modules/v8/v8_device_motion_event_acceleration_init.h"
 
 namespace blink {
@@ -36,9 +39,9 @@ DeviceMotionEventAcceleration* DeviceMotionEventAcceleration::Create(double x,
 
 DeviceMotionEventAcceleration* DeviceMotionEventAcceleration::Create(
     const DeviceMotionEventAccelerationInit* init) {
-  double x = init->hasXNonNull() ? init->xNonNull() : NAN;
-  double y = init->hasYNonNull() ? init->yNonNull() : NAN;
-  double z = init->hasZNonNull() ? init->zNonNull() : NAN;
+  double x = init->x().value_or(std::numeric_limits<double>::quiet_NaN());
+  double y = init->y().value_or(std::numeric_limits<double>::quiet_NaN());
+  double z = init->z().value_or(std::numeric_limits<double>::quiet_NaN());
   return DeviceMotionEventAcceleration::Create(x, y, z);
 }
 
@@ -51,21 +54,21 @@ bool DeviceMotionEventAcceleration::HasAccelerationData() const {
   return !std::isnan(x_) || !std::isnan(y_) || !std::isnan(z_);
 }
 
-absl::optional<double> DeviceMotionEventAcceleration::x() const {
+std::optional<double> DeviceMotionEventAcceleration::x() const {
   if (std::isnan(x_))
-    return absl::nullopt;
+    return std::nullopt;
   return x_;
 }
 
-absl::optional<double> DeviceMotionEventAcceleration::y() const {
+std::optional<double> DeviceMotionEventAcceleration::y() const {
   if (std::isnan(y_))
-    return absl::nullopt;
+    return std::nullopt;
   return y_;
 }
 
-absl::optional<double> DeviceMotionEventAcceleration::z() const {
+std::optional<double> DeviceMotionEventAcceleration::z() const {
   if (std::isnan(z_))
-    return absl::nullopt;
+    return std::nullopt;
   return z_;
 }
 

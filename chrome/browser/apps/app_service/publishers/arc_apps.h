@@ -7,24 +7,21 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/mojom/app_permissions.mojom.h"
-#include "ash/components/arc/mojom/intent_helper.mojom-forward.h"
-#include "ash/components/arc/mojom/privacy_items.mojom.h"
 #include "ash/public/cpp/message_center/arc_notification_manager_base.h"
 #include "ash/public/cpp/message_center/arc_notifications_host_initializer.h"
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/apps/app_service/app_icon/arc_activity_adaptive_icon_impl.h"
-#include "chrome/browser/apps/app_service/app_icon/arc_icon_once_loader.h"
-#include "chrome/browser/apps/app_service/app_icon/icon_key_util.h"
 #include "chrome/browser/apps/app_service/app_notifications.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_forward.h"
 #include "chrome/browser/apps/app_service/app_shortcut_item.h"
@@ -34,40 +31,35 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/arc/app_shortcuts/arc_app_shortcuts_request.h"
 #include "chrome/browser/ash/arc/privacy_items/arc_privacy_items_bridge.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
-#include "components/arc/intent_helper/arc_intent_helper_observer.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_observer.h"
+#include "chromeos/ash/experiences/arc/mojom/app_permissions.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom-forward.h"
+#include "chromeos/ash/experiences/arc/mojom/privacy_items.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/instance_registry.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/menu.h"
 #include "components/services/app_service/public/cpp/permission.h"
-#include "components/services/app_service/public/cpp/publisher_base.h"
-#include "components/services/app_service/public/mojom/app_service.mojom.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote_set.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class Profile;
 
 namespace apps {
 
 class PublisherTest;
-class WebApkManager;
 struct AppLaunchParams;
 
 // An app publisher (in the App Service sense) of ARC++ apps,
 //
 // See components/services/app_service/README.md.
-//
-// TODO(crbug.com/1253250):
-// 1. Remove the parent class apps::PublisherBase.
-// 2. Remove all apps::mojom related code.
 class ArcApps : public KeyedService,
-                public apps::PublisherBase,
                 public AppPublisher,
+                public arc::ArcSessionManagerObserver,
                 public ArcAppListPrefs::Observer,
                 public arc::ArcIntentHelperObserver,
                 public ash::ArcNotificationManagerBase::Observer,
@@ -75,19 +67,17 @@ class ArcApps : public KeyedService,
                 public apps::InstanceRegistry::Observer,
                 public arc::ArcPrivacyItemsBridge::Observer {
  public:
-  static ArcApps* Get(Profile* profile);
-
   explicit ArcApps(AppServiceProxy* proxy);
   ArcApps(const ArcApps&) = delete;
   ArcApps& operator=(const ArcApps&) = delete;
-
   ~ArcApps() override;
 
-  ArcIconOnceLoader& GetArcIconOnceLoaderForTesting() {
-    return arc_icon_once_loader_;
-  }
+  // TODO(crbug.com/450429333, crbug.com/451841683): Remove this once we've
+  // completed the refactoring of ArcNotificationManager, and moved out
+  // `web_apk_manager_`.
+  static ArcApps* GetForTesting(Profile* profile);
 
-  WebApkManager* GetWebApkManagerForTesting() { return web_apk_manager_.get(); }
+  static void SetArcVersionForTesting(int version);
 
  private:
   friend class ArcAppsFactory;
@@ -98,18 +88,11 @@ class ArcApps : public KeyedService,
   using AppIdToTaskIds = std::map<std::string, std::set<int>>;
   using TaskIdToAppId = std::map<int, std::string>;
 
-  void Initialize();
-
-  // KeyedService overrides.
-  void Shutdown() override;
-
   // apps::AppPublisher overrides.
-  void LoadIcon(const std::string& app_id,
-                const IconKey& icon_key,
-                IconType icon_type,
-                int32_t size_hint_in_dip,
-                bool allow_placeholder_icon,
-                apps::LoadIconCallback callback) override;
+  void GetCompressedIconData(const std::string& app_id,
+                             int32_t size_in_dip,
+                             ui::ResourceScaleFactor scale_factor,
+                             LoadIconCallback callback) override;
   void Launch(const std::string& app_id,
               int32_t event_flags,
               LaunchSource launch_source,
@@ -122,9 +105,6 @@ class ArcApps : public KeyedService,
                            LaunchCallback callback) override;
   void LaunchAppWithParams(AppLaunchParams&& params,
                            LaunchCallback callback) override;
-  void LaunchShortcut(const std::string& app_id,
-                      const std::string& shortcut_id,
-                      int64_t display_id) override;
   void SetPermission(const std::string& app_id,
                      PermissionPtr permission) override;
   void Uninstall(const std::string& app_id,
@@ -135,19 +115,16 @@ class ArcApps : public KeyedService,
                     MenuType menu_type,
                     int64_t display_id,
                     base::OnceCallback<void(MenuItems)> callback) override;
-  void OnPreferredAppSet(
-      const std::string& app_id,
-      IntentFilterPtr intent_filter,
-      IntentPtr intent,
-      ReplacedAppPreferences replaced_app_preferences) override;
   void SetResizeLocked(const std::string& app_id, bool locked) override;
+  void SetAppLocale(const std::string& app_id,
+                    const std::string& locale_tag) override;
 
-  // apps::mojom::Publisher overrides.
-  void Connect(mojo::PendingRemote<apps::mojom::Subscriber> subscriber_remote,
-               apps::mojom::ConnectOptionsPtr opts) override;
   void PauseApp(const std::string& app_id) override;
   void UnpauseApp(const std::string& app_id) override;
+  void BlockApp(const std::string& app_id) override;
+  void UnblockApp(const std::string& app_id) override;
   void StopApp(const std::string& app_id) override;
+  void UpdateAppSize(const std::string& app_id) override;
   void ExecuteContextMenuCommand(const std::string& app_id,
                                  int command_id,
                                  const std::string& shortcut_id,
@@ -156,14 +133,16 @@ class ArcApps : public KeyedService,
   void OnSupportedLinksPreferenceChanged(const std::string& app_id,
                                          bool open_in_app) override;
 
+  // ArcSessionManagerObserver oveerrides:
+  void OnInitialized() override;
+  void OnShutdown() override;
+
   // ArcAppListPrefs::Observer overrides.
   void OnAppRegistered(const std::string& app_id,
                        const ArcAppListPrefs::AppInfo& app_info) override;
   void OnAppStatesChanged(const std::string& app_id,
                           const ArcAppListPrefs::AppInfo& app_info) override;
   void OnAppRemoved(const std::string& app_id) override;
-  void OnAppIconUpdated(const std::string& app_id,
-                        const ArcAppIconDescriptor& descriptor) override;
   void OnAppNameUpdated(const std::string& app_id,
                         const std::string& name) override;
   void OnAppLastLaunchTimeUpdated(const std::string& app_id) override;
@@ -178,20 +157,27 @@ class ArcApps : public KeyedService,
                      const std::string& intent,
                      int32_t session_id) override;
   void OnTaskDestroyed(int32_t task_id) override;
+  void OnInstallationStarted(const std::string& package_name) override;
+  void OnInstallationProgressChanged(const std::string& package_name,
+                                     float progress) override;
+  void OnInstallationActiveChanged(const std::string& package_name,
+                                   bool active) override;
+  void OnInstallationFinished(const std::string& package_name,
+                              bool success,
+                              bool is_launchable_app) override;
+  void OnAppConnectionClosed() override;
 
   // arc::ArcIntentHelperObserver overrides.
   void OnIntentFiltersUpdated(
-      const absl::optional<std::string>& package_name) override;
+      const std::optional<std::string>& package_name) override;
   void OnArcSupportedLinksChanged(
       const std::vector<arc::mojom::SupportedLinksPackagePtr>& added,
       const std::vector<arc::mojom::SupportedLinksPackagePtr>& removed,
       arc::mojom::SupportedLinkChangeSource source) override;
 
   // ash::ArcNotificationsHostInitializer::Observer overrides.
-  void OnSetArcNotificationsInstance(
+  void OnArcNotificationManagerInitialized(
       ash::ArcNotificationManagerBase* arc_notification_manager) override;
-  void OnArcNotificationInitializerDestroyed(
-      ash::ArcNotificationsHostInitializer* initializer) override;
 
   // ArcNotificationManagerBase::Observer overrides.
   void OnNotificationUpdated(const std::string& notification_id,
@@ -209,19 +195,15 @@ class ArcApps : public KeyedService,
   void OnInstanceRegistryWillBeDestroyed(
       apps::InstanceRegistry* instance_registry) override;
 
-  void LoadPlayStoreIcon(apps::IconType icon_type,
-                         int32_t size_hint_in_dip,
-                         IconEffects icon_effects,
-                         apps::LoadIconCallback callback);
-
+  // Creates the App struct for `app_id` based on `app_info`. If `update_icon`
+  // is true, creates a new icon key. If `raw_icon_updated` is true, sets
+  // `raw_icon_updated` in the icon key as true, to remove the icon files in the
+  // icon directory to get the new icon files when loading icons.
   AppPtr CreateApp(ArcAppListPrefs* prefs,
                    const std::string& app_id,
                    const ArcAppListPrefs::AppInfo& app_info,
-                   bool update_icon = true);
-  apps::mojom::AppPtr Convert(ArcAppListPrefs* prefs,
-                              const std::string& app_id,
-                              const ArcAppListPrefs::AppInfo& app_info,
-                              bool update_icon = true);
+                   bool update_icon = true,
+                   bool raw_icon_updated = false);
   void ConvertAndPublishPackageApps(
       const arc::mojom::ArcPackageInfo& package_info,
       bool update_icon = true);
@@ -229,10 +211,6 @@ class ArcApps : public KeyedService,
                              const ArcAppListPrefs::AppInfo& app_info);
   void SetIconEffect(const std::string& app_id);
   void CloseTasks(const std::string& app_id);
-  void UpdateAppIntentFilters(
-      std::string package_name,
-      arc::ArcIntentHelperBridge* intent_helper_bridge,
-      std::vector<apps::mojom::IntentFilterPtr>* intent_filters);
 
   void BuildMenuForShortcut(const std::string& package_name,
                             MenuItems menu_items,
@@ -240,18 +218,27 @@ class ArcApps : public KeyedService,
 
   // Bound by |arc_app_shortcuts_request_|'s OnGetAppShortcutItems method.
   void OnGetAppShortcutItems(
-      const base::TimeTicks start_time,
       MenuItems menu_items,
       base::OnceCallback<void(MenuItems)> callback,
       std::unique_ptr<apps::AppShortcutItems> app_shortcut_items);
 
-  mojo::RemoteSet<apps::mojom::Subscriber> subscribers_;
+  // Observes DisabledSystemFeaturesList policy.
+  void ObserveDisabledSystemFeaturesPolicy();
 
-  Profile* const profile_;
-  ArcIconOnceLoader arc_icon_once_loader_;
+  // Triggered when DisabledSystemFeaturesList policy changes.
+  void OnDisableListPolicyChanged();
+
+  // Returns true if the app is suspended.
+  bool IsAppSuspended(const std::string& app_id,
+                      const ArcAppListPrefs::AppInfo& app_info);
+
+  // Calculates the readiness state. Use this function for installed apps to be
+  // consistent.
+  Readiness GetReadiness(const std::string& app_id,
+                         const ArcAppListPrefs::AppInfo& app_info);
+
+  const raw_ptr<Profile> profile_;
   ArcActivityAdaptiveIconImpl arc_activity_adaptive_icon_impl_;
-
-  apps_util::IncrementingIconKeyFactory icon_key_factory_;
 
   PausedApps paused_apps_;
 
@@ -264,7 +251,12 @@ class ArcApps : public KeyedService,
   // Handles requesting app shortcuts from Android.
   std::unique_ptr<arc::ArcAppShortcutsRequest> arc_app_shortcuts_request_;
 
-  std::unique_ptr<apps::WebApkManager> web_apk_manager_;
+  base::ScopedObservation<arc::ArcSessionManager,
+                          arc::ArcSessionManagerObserver>
+      arc_session_manager_observation_{this};
+
+  base::ScopedObservation<ArcAppListPrefs, ArcAppListPrefs::Observer>
+      arc_app_list_prefs_observation_{this};
 
   base::ScopedObservation<arc::ArcIntentHelperBridge,
                           arc::ArcIntentHelperObserver>
@@ -289,6 +281,12 @@ class ArcApps : public KeyedService,
       instance_registry_observation_{this};
 
   bool settings_app_is_active_ = false;
+
+  bool settings_app_is_disabled_ = false;
+
+  PrefChangeRegistrar local_state_pref_change_registrar_;
+
+  std::set<std::string> blocked_app_ids_;
 
   base::WeakPtrFactory<ArcApps> weak_ptr_factory_{this};
 };

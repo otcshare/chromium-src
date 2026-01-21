@@ -10,13 +10,10 @@
 #import "ios/chrome/common/app_group/app_group_metrics.h"
 #import "ios/chrome/common/ui/elements/popover_label_view_controller.h"
 #import "ios/chrome/common/ui/promo_style/promo_style_view_controller_delegate.h"
-#import "ios/chrome/credential_provider_extension/metrics_util.h"
+#import "ios/chrome/credential_provider_extension/generated_localized_strings.h"
 #import "ios/chrome/credential_provider_extension/reauthentication_handler.h"
 #import "ios/chrome/credential_provider_extension/ui/consent_view_controller.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/credential_provider_extension/ui/credential_response_handler.h"
 
 @interface ConsentCoordinator () <PromoStyleViewControllerDelegate>
 
@@ -30,20 +27,21 @@
 @property(nonatomic, strong)
     PopoverLabelViewController* learnMoreViewController;
 
-// The extension context for the credential provider.
-@property(nonatomic, weak) ASCredentialProviderExtensionContext* context;
+// The response handler for the credential configuration.
+@property(nonatomic, weak) id<CredentialResponseHandler>
+    credentialResponseHandler;
 
 @end
 
 @implementation ConsentCoordinator
 
-- (instancetype)
-    initWithBaseViewController:(UIViewController*)baseViewController
-                       context:(ASCredentialProviderExtensionContext*)context {
+- (instancetype)initWithBaseViewController:(UIViewController*)baseViewController
+                 credentialResponseHandler:
+                     (id<CredentialResponseHandler>)credentialResponseHandler {
   self = [super init];
   if (self) {
     _baseViewController = baseViewController;
-    _context = context;
+    _credentialResponseHandler = credentialResponseHandler;
   }
   return self;
 }
@@ -57,7 +55,6 @@
   [self.baseViewController presentViewController:self.viewController
                                         animated:NO
                                       completion:nil];
-  UpdateUMACountForKey(app_group::kCredentialExtensionConsentVerifiedCount);
 }
 
 - (void)stop {
@@ -69,16 +66,14 @@
 
 #pragma mark - PromoStyleViewControllerDelegate
 
-// Invoked when the primary action button is tapped.
-- (void)didTapPrimaryActionButton {
-  [self.context completeExtensionConfigurationRequest];
+// Invoked when the dismiss button is tapped.
+- (void)didTapDismissButton {
+  [self.credentialResponseHandler completeExtensionConfigurationRequest];
 }
 
 // Invoked when the learn more button is tapped.
 - (void)didTapLearnMoreButton {
-  NSString* message =
-      NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_MORE_INFO_STRING",
-                        @"The information provided in the consent popover.");
+  NSString* message = CredentialProviderConsentMoreInfoString();
   self.learnMoreViewController =
       [[PopoverLabelViewController alloc] initWithMessage:message];
   [self.viewController presentViewController:self.learnMoreViewController

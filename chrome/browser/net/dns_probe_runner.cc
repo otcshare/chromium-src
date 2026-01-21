@@ -4,9 +4,10 @@
 
 #include "chrome/browser/net/dns_probe_runner.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/address_list.h"
 #include "net/base/host_port_pair.h"
@@ -14,7 +15,6 @@
 #include "net/base/network_anonymization_key.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chrome_browser_net {
 
@@ -24,7 +24,7 @@ namespace {
 
 DnsProbeRunner::Result EvaluateResponse(
     int net_error,
-    const absl::optional<net::AddressList>& resolved_addresses) {
+    const net::AddressList& resolved_addresses) {
   switch (net_error) {
     case net::OK:
       break;
@@ -47,7 +47,11 @@ DnsProbeRunner::Result EvaluateResponse(
     case net::ERR_DNS_MALFORMED_RESPONSE:
     case net::ERR_DNS_SERVER_REQUIRES_TCP:  // Shouldn't happen; DnsTransaction
                                             // will retry with TCP.
-    case net::ERR_DNS_SERVER_FAILED:
+    case net::ERR_DNS_FORMAT_ERROR:
+    case net::ERR_DNS_SERVER_FAILURE:
+    case net::ERR_DNS_NOT_IMPLEMENTED:
+    case net::ERR_DNS_REFUSED:
+    case net::ERR_DNS_OTHER_FAILURE:
     case net::ERR_DNS_SORT_ERROR:  // Can only happen if the server responds.
       return DnsProbeRunner::FAILING;
 
@@ -58,12 +62,7 @@ DnsProbeRunner::Result EvaluateResponse(
       return DnsProbeRunner::UNREACHABLE;
   }
 
-  if (!resolved_addresses) {
-    // If net_error is OK, resolved_addresses should be set. The binding is not
-    // closed here since it will be closed by the caller anyway.
-    mojo::ReportBadMessage("resolved_addresses not set when net_error=OK");
-    return DnsProbeRunner::UNKNOWN;
-  } else if (resolved_addresses.value().empty()) {
+  if (resolved_addresses.empty()) {
     return DnsProbeRunner::INCORRECT;
   } else {
     return DnsProbeRunner::CORRECT;
@@ -74,7 +73,7 @@ DnsProbeRunner::Result EvaluateResponse(
 
 DnsProbeRunner::DnsProbeRunner(
     net::DnsConfigOverrides dns_config_overrides,
-    const NetworkContextGetter& network_context_getter)
+    const network::NetworkContextGetter& network_context_getter)
     : dns_config_overrides_(dns_config_overrides),
       network_context_getter_(network_context_getter) {
   CreateHostResolver();
@@ -121,9 +120,8 @@ bool DnsProbeRunner::IsRunning() const {
 void DnsProbeRunner::OnComplete(
     int32_t result,
     const net::ResolveErrorInfo& resolve_error_info,
-    const absl::optional<net::AddressList>& resolved_addresses,
-    const absl::optional<net::HostResolverEndpointResults>&
-        endpoint_results_with_metadata) {
+    const net::AddressList& resolved_addresses,
+    const net::HostResolverEndpointResults& alternative_endpoints) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!callback_.is_null());
 
@@ -146,8 +144,8 @@ void DnsProbeRunner::OnMojoConnectionError() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CreateHostResolver();
   OnComplete(net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net::ERR_FAILED),
-             /*resolved_addresses=*/absl::nullopt,
-             /*endpoint_results_with_metadata=*/absl::nullopt);
+             /*resolved_addresses=*/{},
+             /*alternative_endpoints=*/{});
 }
 
 }  // namespace chrome_browser_net

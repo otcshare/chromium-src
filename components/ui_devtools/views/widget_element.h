@@ -5,10 +5,11 @@
 #ifndef COMPONENTS_UI_DEVTOOLS_VIEWS_WIDGET_ELEMENT_H_
 #define COMPONENTS_UI_DEVTOOLS_VIEWS_WIDGET_ELEMENT_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/ui_devtools/ui_element.h"
 #include "components/ui_devtools/views/ui_element_with_metadata.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/widget/widget_removals_observer.h"
@@ -45,6 +46,7 @@ class WidgetElement : public views::WidgetRemovalsObserver,
   std::vector<std::string> GetAttributes() const override;
   std::pair<gfx::NativeWindow, gfx::Rect> GetNodeWindowAndScreenBounds()
       const override;
+  gfx::Rect GetNodeBoundsInScreen() const override;
   bool DispatchKeyEvent(protocol::DOM::KeyEvent* event) override;
 
   static views::Widget* From(const UIElement* element);
@@ -55,7 +57,7 @@ class WidgetElement : public views::WidgetRemovalsObserver,
   void* GetClassInstance() const override;
 
  private:
-  views::Widget* widget_;
+  raw_ptr<views::Widget> widget_;
 };
 
 }  // namespace ui_devtools

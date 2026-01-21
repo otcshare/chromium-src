@@ -23,19 +23,21 @@
 
 #import "third_party/blink/renderer/platform/fonts/mac/font_platform_data_mac.h"
 
-#import <AppKit/NSFont.h>
+#if BUILDFLAG(IS_MAC)
+#import <AppKit/AppKit.h>
+#import <CoreText/CoreText.h>
+#endif  // BUILDFLAG(IS_MAC)
 #import <AvailabilityMacros.h>
 
-#import "base/mac/foundation_util.h"
-#import "base/mac/scoped_nsobject.h"
-#include "third_party/blink/public/platform/mac/web_sandbox_support.h"
-#include "third_party/blink/public/platform/platform.h"
+#include "base/apple/bridging.h"
+#import "base/apple/foundation_util.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
-#include "third_party/blink/renderer/platform/fonts/mac/core_text_font_format_support.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/font_settings.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkFont.h"
@@ -44,23 +46,28 @@
 #include "third_party/skia/include/core/SkTypes.h"
 #import "third_party/skia/include/ports/SkTypeface_mac.h"
 
+using base::apple::ScopedCFTypeRef;
+
 namespace {
+#if BUILDFLAG(IS_MAC)
 constexpr SkFourByteTag kOpszTag = SkSetFourByteTag('o', 'p', 's', 'z');
+#endif  // BUILDFLAG(IS_MAC)
 }
 
 namespace blink {
 
+#if BUILDFLAG(IS_MAC)
 bool VariableAxisChangeEffective(SkTypeface* typeface,
                                  SkFourByteTag axis,
                                  float new_value) {
   // First clamp new value to within range of min and max of variable axis.
-  int num_axes = typeface->getVariationDesignParameters(nullptr, 0);
+  int num_axes = typeface->getVariationDesignParameters({});
   if (num_axes <= 0)
     return false;
 
   Vector<SkFontParameters::Variation::Axis> axes_parameters(num_axes);
   int returned_axes =
-      typeface->getVariationDesignParameters(axes_parameters.data(), num_axes);
+      typeface->getVariationDesignParameters(axes_parameters);
   DCHECK_EQ(num_axes, returned_axes);
   DCHECK_GE(num_axes, 0);
 
@@ -72,7 +79,7 @@ bool VariableAxisChangeEffective(SkTypeface* typeface,
     }
   }
 
-  int num_coordinates = typeface->getVariationDesignPosition(nullptr, 0);
+  int num_coordinates = typeface->getVariationDesignPosition({});
   if (num_coordinates <= 0)
     return true;  // Font has axes, but no positions, setting one would have an
                   // effect.
@@ -81,7 +88,7 @@ bool VariableAxisChangeEffective(SkTypeface* typeface,
   Vector<SkFontArguments::VariationPosition::Coordinate> coordinates(
       num_coordinates);
   int returned_coordinates =
-      typeface->getVariationDesignPosition(coordinates.data(), num_coordinates);
+      typeface->getVariationDesignPosition(coordinates);
 
   if (returned_coordinates != num_coordinates)
     return false;  // Something went wrong in retrieving actual axis positions,
@@ -94,75 +101,17 @@ bool VariableAxisChangeEffective(SkTypeface* typeface,
   return false;
 }
 
-static bool CanLoadInProcess(NSFont* ns_font) {
-  base::ScopedCFTypeRef<CGFontRef> cg_font(
-      CTFontCopyGraphicsFont(base::mac::NSToCFCast(ns_font), 0));
-  // Toll-free bridged types CFStringRef and NSString*.
-  base::scoped_nsobject<NSString> font_name(
-      base::mac::CFToNSCast(CGFontCopyPostScriptName(cg_font)));
-  return ![font_name isEqualToString:@"LastResort"];
+static bool CanLoadInProcess(CTFontRef ct_font) {
+  ScopedCFTypeRef<CGFontRef> cg_font(
+      CTFontCopyGraphicsFont(ct_font, /*attributes=*/nullptr));
+  ScopedCFTypeRef<CFStringRef> font_name(
+      CGFontCopyPostScriptName(cg_font.get()));
+  return CFStringCompare(font_name.get(), CFSTR("LastResort"), 0) !=
+         kCFCompareEqualTo;
 }
 
-static CFDictionaryRef CascadeToLastResortFontAttributes() {
-  static CFDictionaryRef attributes;
-  if (attributes)
-    return attributes;
-
-  base::ScopedCFTypeRef<CTFontDescriptorRef> last_resort(
-      CTFontDescriptorCreateWithNameAndSize(CFSTR("LastResort"), 0));
-  const void* descriptors[] = {last_resort};
-  base::ScopedCFTypeRef<CFArrayRef> values_array(
-      CFArrayCreate(kCFAllocatorDefault, descriptors, std::size(descriptors),
-                    &kCFTypeArrayCallBacks));
-
-  const void* keys[] = {kCTFontCascadeListAttribute};
-  const void* values[] = {values_array};
-  attributes = CFDictionaryCreate(
-      kCFAllocatorDefault, keys, values, std::size(keys),
-      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-  return attributes;
-}
-
-static sk_sp<SkTypeface> LoadFromBrowserProcess(NSFont* ns_font,
-                                                float text_size) {
-  // Send cross-process request to load font.
-  WebSandboxSupport* sandbox_support = Platform::Current()->GetSandboxSupport();
-  if (!sandbox_support) {
-    // This function should only be called in response to an error loading a
-    // font due to being blocked by the sandbox.
-    // This by definition shouldn't happen if there is no sandbox support.
-    NOTREACHED();
-    return nullptr;
-  }
-
-  base::ScopedCFTypeRef<CTFontDescriptorRef> loaded_data_descriptor;
-  uint32_t font_id;
-  if (!sandbox_support->LoadFont(base::mac::NSToCFCast(ns_font),
-                                 &loaded_data_descriptor, &font_id)) {
-    // TODO crbug.com/461279: Make this appear in the inspector console?
-    DLOG(ERROR)
-        << "Loading user font \"" << [[ns_font familyName] UTF8String]
-        << "\" from non system location failed. Corrupt or missing font file?";
-    return nullptr;
-  }
-
-  base::ScopedCFTypeRef<CTFontDescriptorRef> data_descriptor_with_cascade(
-      CTFontDescriptorCreateCopyWithAttributes(
-          loaded_data_descriptor, CascadeToLastResortFontAttributes()));
-  base::ScopedCFTypeRef<CTFontRef> ct_font(CTFontCreateWithFontDescriptor(
-      data_descriptor_with_cascade.get(), text_size, 0));
-  sk_sp<SkTypeface> return_font = SkMakeTypefaceFromCTFont(ct_font);
-
-  if (!return_font.get())
-    // TODO crbug.com/461279: Make this appear in the inspector console?
-    DLOG(ERROR)
-        << "Instantiating SkTypeface from user font failed for font family \""
-        << [[ns_font familyName] UTF8String] << "\".";
-  return return_font;
-}
-
-std::unique_ptr<FontPlatformData> FontPlatformDataFromNSFont(
-    NSFont* ns_font,
+const FontPlatformData* FontPlatformDataFromCTFont(
+    CTFontRef ct_font,
     float size,
     float specified_size,
     bool synthetic_bold,
@@ -171,23 +120,20 @@ std::unique_ptr<FontPlatformData> FontPlatformDataFromNSFont(
     ResolvedFontFeatures resolved_font_features,
     FontOrientation orientation,
     OpticalSizing optical_sizing,
-    FontVariationSettings* variation_settings) {
-  DCHECK(ns_font);
-  sk_sp<SkTypeface> typeface;
-  if (CanLoadInProcess(ns_font)) {
-    typeface = SkMakeTypefaceFromCTFont(base::mac::NSToCFCast(ns_font));
-  } else {
-    // In process loading fails for cases where third party font manager
-    // software registers fonts in non system locations such as /Library/Fonts
-    // and ~/Library Fonts, see crbug.com/72727 or crbug.com/108645.
-    typeface = LoadFromBrowserProcess(ns_font, size);
-  }
+    const FontVariationSettings* variation_settings) {
+  DCHECK(ct_font);
+
+  // fontd automatically issues a sandbox extension to permit reading
+  // activated fonts that would otherwise be restricted by the sandbox.
+  DCHECK(CanLoadInProcess(ct_font));
+
+  sk_sp<SkTypeface> typeface = SkMakeTypefaceFromCTFont(ct_font);
 
   auto make_typeface_fontplatformdata = [&typeface, &size, &synthetic_bold,
                                          &synthetic_italic, &text_rendering,
                                          resolved_font_features,
                                          &orientation]() {
-    return std::make_unique<FontPlatformData>(
+    return MakeGarbageCollected<FontPlatformData>(
         std::move(typeface), std::string(), size, synthetic_bold,
         synthetic_italic, text_rendering, resolved_font_features, orientation);
   };
@@ -204,7 +150,7 @@ std::unique_ptr<FontPlatformData> FontPlatformDataFromNSFont(
   if (!typeface)
     return nullptr;
 
-  int existing_axes = typeface->getVariationDesignPosition(nullptr, 0);
+  int existing_axes = typeface->getVariationDesignPosition({});
   // Don't apply variation parameters if the font does not have axes or we
   // fail to retrieve the existing ones.
   if (existing_axes <= 0)
@@ -213,8 +159,7 @@ std::unique_ptr<FontPlatformData> FontPlatformDataFromNSFont(
   Vector<SkFontArguments::VariationPosition::Coordinate> coordinates_to_set;
   coordinates_to_set.resize(existing_axes);
 
-  if (typeface->getVariationDesignPosition(coordinates_to_set.data(),
-                                           existing_axes) != existing_axes) {
+  if (typeface->getVariationDesignPosition(coordinates_to_set) != existing_axes) {
     return make_typeface_fontplatformdata();
   }
 
@@ -261,9 +206,9 @@ std::unique_ptr<FontPlatformData> FontPlatformDataFromNSFont(
   typeface = cloned_typeface;
   return make_typeface_fontplatformdata();
 }
+#endif  // BUILDFLAG(IS_MAC)
 
 SkFont FontPlatformData::CreateSkFont(
-    bool,
     const FontDescription* font_description) const {
   bool should_smooth_fonts = true;
   bool should_antialias = true;
@@ -287,7 +232,8 @@ SkFont FontPlatformData::CreateSkFont(
     }
   }
 
-  if (WebTestSupport::IsRunningWebTest()) {
+  if (WebTestSupport::IsRunningWebTest() ||
+      RuntimeEnabledFeatures::NoFontAntialiasingEnabled()) {
     should_smooth_fonts = false;
     should_antialias =
         should_antialias && WebTestSupport::IsFontAntialiasingEnabledForTest();
@@ -295,7 +241,7 @@ SkFont FontPlatformData::CreateSkFont(
         WebTestSupport::IsTextSubpixelPositioningAllowedForTest();
   }
 
-  SkFont skfont;
+  SkFont skfont(typeface_);
   if (should_antialias && should_smooth_fonts) {
     skfont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
   } else if (should_antialias) {
@@ -306,7 +252,6 @@ SkFont FontPlatformData::CreateSkFont(
   skfont.setEmbeddedBitmaps(false);
   const float ts = text_size_ >= 0 ? text_size_ : 12;
   skfont.setSize(SkFloatToScalar(ts));
-  skfont.setTypeface(typeface_);
   skfont.setEmbolden(synthetic_bold_);
   skfont.setSkewX(synthetic_italic_ ? -SK_Scalar1 / 4 : 0);
   skfont.setSubpixel(should_subpixel_position);

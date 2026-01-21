@@ -9,14 +9,16 @@ import sys
 
 from util import build_utils
 from util import resource_utils
+import action_helpers  # build_utils adds //build to sys.path.
+import zip_helpers
 
 
 def _ConcatRTxts(rtxt_in_paths, combined_out_path):
   all_lines = set()
   for rtxt_in_path in rtxt_in_paths:
-    with open(rtxt_in_path) as rtxt_in:
+    with open(rtxt_in_path, encoding='utf-8') as rtxt_in:
       all_lines.update(rtxt_in.read().splitlines())
-  with open(combined_out_path, 'w') as combined_out:
+  with open(combined_out_path, 'w', encoding='utf-8') as combined_out:
     combined_out.write('\n'.join(sorted(all_lines)))
 
 
@@ -34,12 +36,13 @@ def _CreateRJava(rtxts, package_name, srcjar_out):
                                     rjava_build_options=rjava_build_options,
                                     srcjar_out=srcjar_out,
                                     ignore_mismatched_values=True)
-    build_utils.ZipDir(srcjar_out, build.srcjar_dir)
+    with action_helpers.atomic_output(srcjar_out) as f:
+      zip_helpers.zip_directory(f, build.srcjar_dir)
 
 
 def main(args):
   parser = argparse.ArgumentParser(description='Create an R.java srcjar.')
-  build_utils.AddDepfileOption(parser)
+  action_helpers.add_depfile_arg(parser)
   parser.add_argument('--srcjar-out',
                       required=True,
                       help='Path to output srcjar.')
@@ -50,12 +53,12 @@ def main(args):
                       required=True,
                       help='R.java package to use.')
   options = parser.parse_args(build_utils.ExpandFileArgs(args))
-  options.deps_rtxts = build_utils.ParseGnList(options.deps_rtxts)
+  options.deps_rtxts = action_helpers.parse_gn_list(options.deps_rtxts)
 
   _CreateRJava(options.deps_rtxts, options.r_package, options.srcjar_out)
-  build_utils.WriteDepfile(options.depfile,
-                           options.srcjar_out,
-                           inputs=options.deps_rtxts)
+  action_helpers.write_depfile(options.depfile,
+                               options.srcjar_out,
+                               inputs=options.deps_rtxts)
 
 
 if __name__ == "__main__":

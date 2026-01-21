@@ -4,47 +4,41 @@
 
 #include "chrome/browser/ui/webui/connectors_internals/connectors_internals_ui.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/connectors_internals/connectors_internals.mojom.h"
 #include "chrome/browser/ui/webui/connectors_internals/connectors_internals_page_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
+#include "chrome/browser/ui/webui/connectors_internals/device_trust_utils.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/browser_resources.h"
-#include "chrome/grit/connectors_internals_resources.h"
-#include "chrome/grit/connectors_internals_resources_map.h"
+#include "components/enterprise/connectors/connectors_internals.mojom.h"
+#include "components/grit/connectors_internals_resources.h"
+#include "components/grit/connectors_internals_resources_map.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/webui/webui_util.h"
 
 namespace enterprise_connectors {
 
 ConnectorsInternalsUI::ConnectorsInternalsUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui) {
-  content::WebUIDataSource* source = content::WebUIDataSource::Create(
-      chrome::kChromeUIConnectorsInternalsHost);
-
   Profile* profile = Profile::FromWebUI(web_ui);
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      profile, chrome::kChromeUIConnectorsInternalsHost);
 
   source->AddBoolean("isOtr", profile->IsOffTheRecord());
-  source->AddBoolean("deviceTrustConnectorEnabled",
-                     IsDeviceTrustConnectorFeatureEnabled());
+  source->AddBoolean("canDeleteDeviceTrustKey",
+                     utils::CanDeleteDeviceTrustKey());
 
-  webui::SetupWebUIDataSource(
-      source,
-      base::make_span(kConnectorsInternalsResources,
-                      kConnectorsInternalsResourcesSize),
-      IDR_CONNECTORS_INTERNALS_INDEX_HTML);
+  webui::SetupWebUIDataSource(source, kConnectorsInternalsResources,
+                              IDR_CONNECTORS_INTERNALS_INDEX_HTML);
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::RequireTrustedTypesFor,
       "require-trusted-types-for 'script';");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       "trusted-types static-types;");
-
-  content::WebUIDataSource::Add(profile, source);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(ConnectorsInternalsUI)

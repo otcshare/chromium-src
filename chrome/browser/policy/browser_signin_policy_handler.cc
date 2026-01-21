@@ -26,7 +26,7 @@ BrowserSigninPolicyHandler::BrowserSigninPolicyHandler(Schema chrome_schema)
                             static_cast<int>(BrowserSigninMode::kForced),
                             false /* clamp */) {}
 
-BrowserSigninPolicyHandler::~BrowserSigninPolicyHandler() {}
+BrowserSigninPolicyHandler::~BrowserSigninPolicyHandler() = default;
 
 void BrowserSigninPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
                                                      PrefValueMap* prefs) {
@@ -45,7 +45,7 @@ void BrowserSigninPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
       policies.GetValue(policy_name(), base::Value::Type::INTEGER);
   switch (static_cast<BrowserSigninMode>(value->GetInt())) {
     case BrowserSigninMode::kForced:
-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_CHROMEOS)
       prefs->SetValue(prefs::kForceBrowserSignin, base::Value(true));
 #endif
       [[fallthrough]];

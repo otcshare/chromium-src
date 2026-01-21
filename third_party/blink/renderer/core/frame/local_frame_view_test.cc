@@ -6,16 +6,22 @@
 
 #include <memory>
 
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "content/test/test_blink_web_unit_test_support.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/scroll/scrollbar_mode.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/css_style_declaration.h"
+#include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
+#include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/loader/document_loader.h"
+#include "third_party/blink/renderer/core/media_type_names.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/paint/paint_property_tree_printer.h"
@@ -25,6 +31,9 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -48,7 +57,8 @@ class AnimationMockChromeClient : public RenderingTestChromeClient {
   }
 
   void ScheduleAnimation(const LocalFrameView*,
-                         base::TimeDelta = base::TimeDelta()) override {
+                         base::TimeDelta = base::TimeDelta(),
+                         bool urgent = false) override {
     has_scheduled_animation_ = true;
   }
   bool has_scheduled_animation_;
@@ -83,8 +93,9 @@ class LocalFrameViewTest : public RenderingTest {
 
 TEST_F(LocalFrameViewTest, SetPaintInvalidationDuringUpdateAllLifecyclePhases) {
   SetBodyInnerHTML("<div id='a' style='color: blue'>A</div>");
-  GetDocument().getElementById("a")->setAttribute(html_names::kStyleAttr,
-                                                  "color: green");
+  GetDocument()
+      .getElementById(AtomicString("a"))
+      ->setAttribute(html_names::kStyleAttr, AtomicString("color: green"));
   GetAnimationMockChromeClient().has_scheduled_animation_ = false;
   UpdateAllLifecyclePhasesForTest();
   EXPECT_FALSE(GetAnimationMockChromeClient().has_scheduled_animation_);
@@ -93,8 +104,9 @@ TEST_F(LocalFrameViewTest, SetPaintInvalidationDuringUpdateAllLifecyclePhases) {
 TEST_F(LocalFrameViewTest,
        SetPaintInvalidationDuringUpdateLifecyclePhasesToPrePaintClean) {
   SetBodyInnerHTML("<div id='a' style='color: blue'>A</div>");
-  GetDocument().getElementById("a")->setAttribute(html_names::kStyleAttr,
-                                                  "color: green");
+  GetDocument()
+      .getElementById(AtomicString("a"))
+      ->setAttribute(html_names::kStyleAttr, AtomicString("color: green"));
   GetAnimationMockChromeClient().has_scheduled_animation_ = false;
   GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
       DocumentUpdateReason::kTest);
@@ -105,14 +117,14 @@ TEST_F(LocalFrameViewTest, SetPaintInvalidationOutOfUpdateAllLifecyclePhases) {
   SetBodyInnerHTML("<div id='a' style='color: blue'>A</div>");
   GetAnimationMockChromeClient().has_scheduled_animation_ = false;
   GetDocument()
-      .getElementById("a")
+      .getElementById(AtomicString("a"))
       ->GetLayoutObject()
       ->SetShouldDoFullPaintInvalidation();
   EXPECT_TRUE(GetAnimationMockChromeClient().has_scheduled_animation_);
   GetAnimationMockChromeClient().has_scheduled_animation_ = false;
   UpdateAllLifecyclePhasesForTest();
   GetDocument()
-      .getElementById("a")
+      .getElementById(AtomicString("a"))
       ->GetLayoutObject()
       ->SetShouldDoFullPaintInvalidation();
   EXPECT_TRUE(GetAnimationMockChromeClient().has_scheduled_animation_);
@@ -130,7 +142,8 @@ TEST_F(LocalFrameViewTest, HideTooltipWhenScrollPositionChanges) {
       GetAnimationMockChromeClient(),
       MockUpdateTooltipUnderCursor(GetDocument().GetFrame(), String(), _));
   GetDocument().View()->LayoutViewport()->SetScrollOffset(
-      ScrollOffset(1, 1), mojom::blink::ScrollType::kUser);
+      ScrollOffset(1, 1), mojom::blink::ScrollType::kUser,
+      cc::ScrollSourceType::kNone);
 
   // Programmatic scrolling should not dismiss the tooltip, so
   // MockUpdateTooltipUnderCursor should not be called for this invocation.
@@ -139,7 +152,8 @@ TEST_F(LocalFrameViewTest, HideTooltipWhenScrollPositionChanges) {
       MockUpdateTooltipUnderCursor(GetDocument().GetFrame(), String(), _))
       .Times(0);
   GetDocument().View()->LayoutViewport()->SetScrollOffset(
-      ScrollOffset(2, 2), mojom::blink::ScrollType::kProgrammatic);
+      ScrollOffset(2, 2), mojom::blink::ScrollType::kProgrammatic,
+      cc::ScrollSourceType::kNone);
 }
 
 // NoOverflowInIncrementVisuallyNonEmptyPixelCount tests fail if the number of
@@ -156,7 +170,7 @@ TEST_F(LocalFrameViewTest, UpdateLifecyclePhasesForPrintingDetachedFrame) {
   SetBodyInnerHTML("<iframe style='display: none'></iframe>");
   SetChildFrameHTML("A");
 
-  ChildFrame().StartPrinting(gfx::SizeF(200, 200), gfx::SizeF(200, 200), 1);
+  ChildFrame().StartPrinting(WebPrintParams(gfx::SizeF(200, 200)));
   ChildDocument().View()->UpdateLifecyclePhasesForPrinting();
 
   // The following checks that the detached frame has been walked for PrePaint.
@@ -172,7 +186,7 @@ TEST_F(LocalFrameViewTest, PrintFrameUpdateAllLifecyclePhases) {
   SetBodyInnerHTML("<iframe></iframe>");
   SetChildFrameHTML("A");
 
-  ChildFrame().StartPrinting(gfx::SizeF(200, 200), gfx::SizeF(200, 200), 1);
+  ChildFrame().StartPrinting(WebPrintParams(gfx::SizeF(200, 200)));
   ChildDocument().View()->UpdateLifecyclePhasesForPrinting();
 
   EXPECT_EQ(DocumentLifecycle::kPrePaintClean,
@@ -202,19 +216,20 @@ TEST_F(LocalFrameViewTest, CanHaveScrollbarsIfScrollingAttrEqualsNoChanged) {
 
   ChildDocument().WillChangeFrameOwnerProperties(
       0, 0, mojom::blink::ScrollbarMode::kAlwaysOn, false,
-      mojom::blink::ColorScheme::kLight);
+      mojom::blink::ColorScheme::kLight,
+      mojom::blink::PreferredColorScheme::kLight);
   EXPECT_TRUE(ChildDocument().View()->CanHaveScrollbars());
 }
 
 TEST_F(LocalFrameViewTest,
        MainThreadScrollingForBackgroundFixedAttachmentWithCompositing) {
-  GetDocument().GetFrame()->GetSettings()->SetPreferCompositingToLCDTextEnabled(
-      true);
+  SetPreferCompositingToLCDText(true);
 
   SetBodyInnerHTML(R"HTML(
     <style>
       .fixed-background {
-        background: linear-gradient(blue, red) fixed;
+        background: linear-gradient(blue, red) fixed,
+                    linear-gradient(white, black) local;
       }
     </style>
     <div id="div" style="width: 5000px; height: 5000px"></div>
@@ -227,17 +242,17 @@ TEST_F(LocalFrameViewTest,
 
   Element* body = GetDocument().body();
   Element* html = GetDocument().documentElement();
-  Element* div = GetDocument().getElementById("div");
+  Element* div = GetDocument().getElementById(AtomicString("div"));
 
   // Only body has fixed background. No main thread scrolling.
-  body->setAttribute(html_names::kClassAttr, "fixed-background");
+  body->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(1u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_FALSE(
       frame_view->RequiresMainThreadScrollingForBackgroundAttachmentFixed());
 
   // Both body and div have fixed background. Requires main thread scrolling.
-  div->setAttribute(html_names::kClassAttr, "fixed-background");
+  div->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(2u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
@@ -252,14 +267,14 @@ TEST_F(LocalFrameViewTest,
 
   // Only html has fixed background. No main thread scrolling.
   div->removeAttribute(html_names::kClassAttr);
-  html->setAttribute(html_names::kClassAttr, "fixed-background");
+  html->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(1u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_FALSE(
       frame_view->RequiresMainThreadScrollingForBackgroundAttachmentFixed());
 
   // Both html and body have fixed background. Requires main thread scrolling.
-  body->setAttribute(html_names::kClassAttr, "fixed-background");
+  body->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(2u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
@@ -284,17 +299,17 @@ TEST_F(LocalFrameViewTest,
 
   Element* body = GetDocument().body();
   Element* html = GetDocument().documentElement();
-  Element* div = GetDocument().getElementById("div");
+  Element* div = GetDocument().getElementById(AtomicString("div"));
 
   // When not prefer compositing, we use main thread scrolling when there is
   // any object with fixed-attachment background.
-  body->setAttribute(html_names::kClassAttr, "fixed-background");
+  body->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(1u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
       frame_view->RequiresMainThreadScrollingForBackgroundAttachmentFixed());
 
-  div->setAttribute(html_names::kClassAttr, "fixed-background");
+  div->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(2u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
@@ -307,13 +322,13 @@ TEST_F(LocalFrameViewTest,
       frame_view->RequiresMainThreadScrollingForBackgroundAttachmentFixed());
 
   div->removeAttribute(html_names::kClassAttr);
-  html->setAttribute(html_names::kClassAttr, "fixed-background");
+  html->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(1u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
       frame_view->RequiresMainThreadScrollingForBackgroundAttachmentFixed());
 
-  body->setAttribute(html_names::kClassAttr, "fixed-background");
+  body->setAttribute(html_names::kClassAttr, AtomicString("fixed-background"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(2u, frame_view->BackgroundAttachmentFixedObjects().size());
   EXPECT_TRUE(
@@ -349,8 +364,8 @@ TEST_F(LocalFrameViewSimTest, FragmentNavChangesFocusWhileRenderingBlocked) {
 
   // Click on the anchor element. This will cause a synchronous same-document
   //  navigation.
-  auto* anchor =
-      To<HTMLAnchorElement>(GetDocument().getElementById("anchorlink"));
+  auto* anchor = To<HTMLAnchorElement>(
+      GetDocument().getElementById(AtomicString("anchorlink")));
   anchor->click();
 
   // Even though the navigation is synchronous, the active element shouldn't be
@@ -376,7 +391,7 @@ TEST_F(LocalFrameViewSimTest, FragmentNavChangesFocusWhileRenderingBlocked) {
   RunPendingTasks();
   Compositor().BeginFrame();
   ASSERT_TRUE(GetDocument().IsLoadCompleted());
-  EXPECT_EQ(GetDocument().getElementById("bottom"),
+  EXPECT_EQ(GetDocument().getElementById(AtomicString("bottom")),
             GetDocument().ActiveElement())
       << "Active element wasn't changed after load completed.";
   EXPECT_NE(ScrollOffset(), viewport->GetScrollOffset())
@@ -481,8 +496,8 @@ TEST_F(LocalFrameViewSimTest, SameOriginPaintEligibility) {
       </iframe>
     )HTML");
 
-  auto* frame_element =
-      To<HTMLIFrameElement>(GetDocument().getElementById("frame"));
+  auto* frame_element = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("frame")));
   auto* frame_document = frame_element->contentDocument();
   PaintTiming& frame_timing = PaintTiming::From(*frame_document);
 
@@ -510,8 +525,8 @@ TEST_F(LocalFrameViewSimTest, CrossOriginPaintEligibility) {
       </iframe>
     )HTML");
 
-  auto* frame_element =
-      To<HTMLIFrameElement>(GetDocument().getElementById("frame"));
+  auto* frame_element = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("frame")));
   auto* frame_document = frame_element->contentDocument();
   PaintTiming& frame_timing = PaintTiming::From(*frame_document);
 
@@ -546,13 +561,13 @@ TEST_F(LocalFrameViewSimTest, NestedCrossOriginPaintEligibility) {
       </iframe>
     )HTML");
 
-  auto* outer_frame_element =
-      To<HTMLIFrameElement>(GetDocument().getElementById("outer"));
+  auto* outer_frame_element = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("outer")));
   auto* outer_frame_document = outer_frame_element->contentDocument();
   PaintTiming& outer_frame_timing = PaintTiming::From(*outer_frame_document);
 
-  auto* inner_frame_element =
-      To<HTMLIFrameElement>(outer_frame_document->getElementById("inner"));
+  auto* inner_frame_element = To<HTMLIFrameElement>(
+      outer_frame_document->getElementById(AtomicString("inner")));
   auto* inner_frame_document = inner_frame_element->contentDocument();
   PaintTiming& inner_frame_timing = PaintTiming::From(*inner_frame_document);
 
@@ -677,7 +692,7 @@ TEST_F(LocalFrameViewTest, StartOfLifecycleTaskRunsOnFullLifecycle) {
   TestCallback callback;
 
   frame_view->EnqueueStartOfLifecycleTask(
-      base::BindOnce(&TestCallback::Increment, base::Unretained(&callback)));
+      BindOnce(&TestCallback::Increment, Unretained(&callback)));
   EXPECT_EQ(callback.calls, 0);
 
   frame_view->UpdateAllLifecyclePhasesExceptPaint(DocumentUpdateReason::kTest);
@@ -713,6 +728,17 @@ TEST_F(LocalFrameViewTest, DarkModeDocumentBackground) {
   EXPECT_EQ(frame_view->DocumentBackgroundColor(), Color(18, 18, 18));
 }
 
+TEST_F(LocalFrameViewTest,
+       AdjustMediaTypeForPrintingRestoresMediaTypeCorrectly) {
+  auto* frame_view = GetDocument().View();
+  frame_view->SetMediaType(media_type_names::kScreen);
+  GetDocument().GetSettings()->SetMediaTypeOverride("print");
+  frame_view->AdjustMediaTypeForPrinting(true);
+  frame_view->AdjustMediaTypeForPrinting(false);
+  GetDocument().GetSettings()->SetMediaTypeOverride(g_null_atom);
+  EXPECT_EQ(frame_view->MediaType(), "screen");
+}
+
 class FencedFrameLocalFrameViewTest : private ScopedFencedFramesForTest,
                                       public SimTest {
  public:
@@ -726,9 +752,187 @@ class FencedFrameLocalFrameViewTest : private ScopedFencedFramesForTest,
 };
 
 TEST_F(FencedFrameLocalFrameViewTest, DoNotDeferCommitsInFencedFrames) {
-  InitializeFencedFrameRoot(mojom::blink::FencedFrameMode::kDefault);
+  InitializeFencedFrameRoot(
+      blink::FencedFrame::DeprecatedFencedFrameMode::kDefault);
   GetDocument().SetDeferredCompositorCommitIsAllowed(true);
   EXPECT_FALSE(GetDocument().View()->WillDoPaintHoldingForFCP());
+}
+
+class ResizableLocalFrameViewTest : public testing::Test {
+ public:
+  void SetUp() override { web_view_helper_.Initialize(); }
+
+  void TearDown() override { web_view_helper_.Reset(); }
+
+  Document& GetDocument() {
+    return *static_cast<Document*>(
+        web_view_helper_.LocalMainFrame()->GetDocument());
+  }
+
+  void UpdateAllLifecyclePhasesForTest() {
+    GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  }
+
+  void SetHtmlInnerHTML(const char* content) {
+    GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
+        String::FromUTF8(content));
+    UpdateAllLifecyclePhasesForTest();
+  }
+
+  void Resize(const gfx::Size& size) { web_view_helper_.Resize(size); }
+
+  void Focus() {
+    web_view_helper_.GetWebView()->MainFrameWidget()->SetFocus(true);
+  }
+
+ private:
+  test::TaskEnvironment task_environment_;
+  frame_test_helpers::WebViewHelper web_view_helper_;
+};
+
+TEST_F(ResizableLocalFrameViewTest, FocusedElementStaysOnResizeWithCQ) {
+  Resize(gfx::Size(640, 480));
+  Focus();
+  test::RunPendingTasks();
+
+  UpdateAllLifecyclePhasesForTest();
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+      #fixed {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 10px;
+        height: 10px;
+        background: blue;
+      }
+      #container {
+        container-type: size;
+      }
+      @container (max-width: 630px) {
+        input {
+          background: blue;
+        }
+      }
+    </style>
+    <div id=fixed></div>
+    <div id=container>
+      <input id=input type=text></input>
+    </div>
+  )HTML");
+
+  auto* element = GetDocument().getElementById(AtomicString("input"));
+  ASSERT_TRUE(element);
+
+  element->Focus();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(element, GetDocument().FocusedElement());
+
+  Resize(gfx::Size(600, 480));
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(element, GetDocument().FocusedElement());
+}
+
+class PrerenderLocalFrameViewTest : public base::test::WithFeatureOverride,
+                                    public SimTest {
+ public:
+  PrerenderLocalFrameViewTest()
+      : base::test::WithFeatureOverride(
+            features::kPrerender2EarlyDocumentLifecycleUpdate) {}
+};
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PrerenderLocalFrameViewTest);
+
+TEST_P(PrerenderLocalFrameViewTest, DryRunPaintBeforePrerenderActivation) {
+  InitializePrerenderPageRoot();
+  ASSERT_TRUE(GetDocument().IsPrerendering());
+  SimRequest resource("https://example.test", "text/html");
+  LoadURL("https://example.test");
+  resource.Complete(R"(
+    <body>
+    This is a prerendering page.
+    </body>
+  )");
+  PaintControllerPersistentData& pd =
+      GetDocument().View()->GetPaintControllerPersistentDataForTesting();
+
+  if (base::FeatureList::IsEnabled(
+          features::kPrerender2EarlyDocumentLifecycleUpdate)) {
+    EXPECT_EQ(DocumentLifecycle::kPaintClean,
+              GetDocument().Lifecycle().GetState());
+    EXPECT_FALSE(GetPage().GetVisualViewport().NeedsPaintPropertyUpdate());
+    EXPECT_EQ(1u, pd.GetPaintChunks().size());
+  } else {
+    EXPECT_EQ(DocumentLifecycle::kLayoutClean,
+              GetDocument().Lifecycle().GetState());
+    EXPECT_TRUE(GetPage().GetVisualViewport().NeedsPaintPropertyUpdate());
+  }
+}
+
+class LocalFrameViewPresentationTimeTest : public SimTest {
+ public:
+  void SetUp() override {
+    SimTest::SetUp();
+    WebView().MainFrameViewWidget()->Resize(gfx::Size(800, 600));
+  }
+};
+
+TEST_F(LocalFrameViewPresentationTimeTest,
+       SameDocumentNavigationPresentationTime) {
+  const char kHistogramName[] =
+      "Navigation.MainframeSameDocumentNavigationCommitToPresentFirstFrame";
+
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete("<div id='a' style='color: blue'>A</div>");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+
+  base::HistogramTester histogram_tester;
+
+  // 1. Simulate a same-document navigation.
+  LocalFrame* frame = GetDocument().GetFrame();
+  DocumentLoader* loader = frame->Loader().GetDocumentLoader();
+  loader->CommitSameDocumentNavigation(
+      KURL("https://example.com/test.html#foo"), WebFrameLoadType::kStandard,
+      nullptr, ClientRedirectPolicy::kNotClientRedirect,
+      false /* has_transient_user_activation */, /*initiator_origin=*/nullptr,
+      /*is_synchronously_committed=*/false, /*source_element=*/nullptr,
+      mojom::blink::TriggeringEventInfo::kNotFromEvent,
+      /*is_browser_initiated=*/false,
+      /*has_ua_visual_transition,=*/false,
+      /*soft_navigation_heuristics_task_id=*/std::nullopt,
+      /*should_skip_screenshot=*/false);
+
+  // 2. Verify that the UMA is not recorded yet.
+  histogram_tester.ExpectTotalCount(kHistogramName, 0);
+
+  // 3. Trigger a compositing step.
+  Compositor().BeginFrame();
+
+  // 4. Verify that the UMA is recorded once.
+  histogram_tester.ExpectTotalCount(kHistogramName, 1);
+
+  // 5. Simulate 100 more same-document navigations.
+  for (int i = 0; i < 100; ++i) {
+    loader->CommitSameDocumentNavigation(
+        KURL(String::FromUTF8("https://example.com/test.html#bar") +
+             String::Number(i)),
+        WebFrameLoadType::kStandard, nullptr,
+        ClientRedirectPolicy::kNotClientRedirect,
+        false /* has_transient_user_activation */, /*initiator_origin=*/nullptr,
+        /*is_synchronously_committed=*/false, /*source_element=*/nullptr,
+        mojom::blink::TriggeringEventInfo::kNotFromEvent,
+        /*is_browser_initiated=*/false,
+        /*has_ua_visual_transition,=*/false,
+        /*soft_navigation_heuristics_task_id=*/std::nullopt,
+        /*should_skip_screenshot=*/false);
+  }
+
+  Compositor().BeginFrame();
+
+  // 6. Verify that we only record one more histogram.
+  histogram_tester.ExpectTotalCount(kHistogramName, 2);
 }
 
 }  // namespace

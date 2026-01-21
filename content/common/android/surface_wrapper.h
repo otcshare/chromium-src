@@ -13,18 +13,24 @@ namespace content {
 base::android::ScopedJavaLocalRef<jobject> JNI_SurfaceWrapper_create(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& surface,
-    jboolean canBeUsedWithSurfaceControl);
+    bool canBeUsedWithSurfaceControl,
+    const base::android::JavaRef<jobject>& browserInputToken);
+
+base::android::ScopedJavaLocalRef<jobject> JNI_SurfaceWrapper_create(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& surface,
+    bool canBeUsedWithSurfaceControl);
 
 base::android::ScopedJavaLocalRef<jobject>
 JNI_SurfaceWrapper_createFromSurfaceControl(
     JNIEnv* env,
     gl::ScopedJavaSurfaceControl surface_control);
 
-jboolean JNI_SurfaceWrapper_canBeUsedWithSurfaceControl(
+bool JNI_SurfaceWrapper_canBeUsedWithSurfaceControl(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& obj);
 
-jboolean JNI_SurfaceWrapper_getWrapsSurface(
+bool JNI_SurfaceWrapper_getWrapsSurface(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& obj);
 
@@ -34,6 +40,11 @@ base::android::ScopedJavaLocalRef<jobject> JNI_SurfaceWrapper_takeSurface(
 
 base::android::ScopedJavaLocalRef<jobject>
 JNI_SurfaceWrapper_takeSurfaceControl(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& obj);
+
+base::android::ScopedJavaLocalRef<jobject>
+JNI_SurfaceWrapper_getBrowserInputToken(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& obj);
 

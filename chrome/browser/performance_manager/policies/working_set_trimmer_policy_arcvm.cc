@@ -4,18 +4,19 @@
 
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy_arcvm.h"
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/public/cpp/app_types_util.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/singleton.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/arc/vmm/arcvm_working_set_trim_executor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "components/exo/wm_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -81,7 +82,7 @@ WorkingSetTrimmerPolicyArcVm::WorkingSetTrimmerPolicyArcVm() {
   // If app() and/or intent_helper() are already connected to the instance in
   // the guest, the OnConnectionReady() function is synchronously called before
   // returning from AddObserver. For more details, see
-  // ash/components/arc/session/connection_holder.h, especially its
+  // chromeos/ash/experiences/arc/session/connection_holder.h, especially its
   // AddObserver() function.
   auto* arc_service_manager = arc::ArcServiceManager::Get();
   // ArcServiceManager and objects owned by the manager are created very early
@@ -95,7 +96,7 @@ WorkingSetTrimmerPolicyArcVm::~WorkingSetTrimmerPolicyArcVm() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   content::BrowserContext* context =
-      context_for_testing_ ? context_for_testing_ : GetContext();
+      context_for_testing_ ? context_for_testing_.get() : GetContext();
   if (context) {
     auto* metrics_service =
         arc::ArcMetricsService::GetForBrowserContext(context);
@@ -223,7 +224,7 @@ void WorkingSetTrimmerPolicyArcVm::StartObservingUserInteractions() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   content::BrowserContext* context =
-      context_for_testing_ ? context_for_testing_ : GetContext();
+      context_for_testing_ ? context_for_testing_.get() : GetContext();
   DCHECK(context);
 
   // ArcMetricsService is created in OnPrimaryUserProfilePrepared() in

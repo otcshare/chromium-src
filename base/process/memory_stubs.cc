@@ -9,11 +9,9 @@
 
 namespace base {
 
-void EnableTerminationOnOutOfMemory() {
-}
+void EnableTerminationOnOutOfMemory() {}
 
-void EnableTerminationOnHeapCorruption() {
-}
+void EnableTerminationOnHeapCorruption() {}
 
 bool AdjustOOMScore(ProcessId process, int score) {
   return false;
@@ -35,6 +33,10 @@ bool UncheckedMalloc(size_t size, void** result) {
 bool UncheckedCalloc(size_t num_items, size_t size, void** result) {
   *result = calloc(num_items, size);
   return *result != nullptr;
+}
+
+void UncheckedFree(void* ptr) {
+  free(ptr);
 }
 
 }  // namespace base

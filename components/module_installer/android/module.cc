@@ -12,8 +12,10 @@
 #include "base/check.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "components/module_installer/android/jni_headers/Module_jni.h"
 #include "ui/base/resource/resource_bundle_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/module_installer/android/jni_headers/Module_jni.h"
 
 using base::android::BundleUtils;
 
@@ -30,8 +32,8 @@ namespace module_installer {
 // in the unnamed namespace.
 class ScopedAllowModulePakLoad {
  public:
-  ScopedAllowModulePakLoad() {}
-  ~ScopedAllowModulePakLoad() {}
+  ScopedAllowModulePakLoad() = default;
+  ~ScopedAllowModulePakLoad() = default;
 
  private:
   base::ScopedAllowBlocking allow_blocking_;
@@ -87,11 +89,10 @@ void LoadResources(const std::string& pak, const std::string& name) {
 
 static void JNI_Module_LoadNative(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& jname,
-    const base::android::JavaParamRef<jobjectArray>& jlibraries,
-    const base::android::JavaParamRef<jobjectArray>& jpaks) {
-  std::string name;
-  base::android::ConvertJavaStringToUTF8(env, jname, &name);
+    const base::android::JavaRef<jstring>& jname,
+    const base::android::JavaRef<jobjectArray>& jlibraries,
+    const base::android::JavaRef<jobjectArray>& jpaks) {
+  std::string name = base::android::ConvertJavaStringToUTF8(env, jname);
   std::vector<std::string> libraries;
   base::android::AppendJavaStringArrayToStringVector(env, jlibraries,
                                                      &libraries);
@@ -113,3 +114,5 @@ static void JNI_Module_LoadNative(
 }
 
 }  // namespace module_installer
+
+DEFINE_JNI(Module)

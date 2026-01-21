@@ -6,10 +6,11 @@
 #define NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_
 
 #include <string>
+#include <vector>
 
 #include "base/android/jni_android.h"
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/net_export.h"
 #include "net/proxy_resolution/proxy_config_service.h"
@@ -44,17 +45,14 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
     // The fourth argument is the proxy exclusion list.
     virtual void ProxySettingsChangedTo(
         JNIEnv*,
-        const base::android::JavaParamRef<jobject>&,
-        const base::android::JavaParamRef<jstring>&,
-        jint,
-        const base::android::JavaParamRef<jstring>&,
-        const base::android::JavaParamRef<jobjectArray>&) = 0;
+        const base::android::JavaRef<jstring>&,
+        int32_t,
+        const base::android::JavaRef<jstring>&,
+        const base::android::JavaRef<jobjectArray>&) = 0;
 
     // Called from Java (on JNI thread) to signal that the proxy settings have
     // changed. New proxy settings are fetched from the system property store.
-    virtual void ProxySettingsChanged(
-        JNIEnv*,
-        const base::android::JavaParamRef<jobject>&) = 0;
+    virtual void ProxySettingsChanged(JNIEnv*) = 0;
   };
 
   ProxyConfigServiceAndroid(

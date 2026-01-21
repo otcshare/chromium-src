@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_NEW_TAB_PAGE_CHROME_COLORS_CHROME_COLORS_SERVICE_H_
 #define CHROME_BROWSER_NEW_TAB_PAGE_CHROME_COLORS_CHROME_COLORS_SERVICE_H_
 
-#include "base/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -15,10 +14,6 @@
 class TestChromeColorsService;
 
 namespace chrome_colors {
-
-// These constants have to match the values of ChromeColorsInfo in enums.xml.
-extern const int kDefaultColorId;
-extern const int kOtherColorId;
 
 // Supports theme changes originating from the NTP customization menu. Users can
 // apply a Chrome color or the default theme, which will then either be reverted
@@ -33,14 +28,6 @@ class ChromeColorsService : public KeyedService {
   ChromeColorsService& operator=(const ChromeColorsService&) = delete;
 
   ~ChromeColorsService() override;
-
-  // Returns id for the given |color| if it is in the predefined set, and
-  // |kOtherColorId| otherwise.
-  static int GetColorId(const SkColor color);
-
-  // Record installed color id to UMA histogram. If |color| is not in the
-  // predefined set, |kOtherColorId| is recorded.
-  static void RecordColorOnLoadHistogram(SkColor color);
 
   // Applies a theme that can be reverted by saving the previous theme state and
   // the |tab| that changes are made from.

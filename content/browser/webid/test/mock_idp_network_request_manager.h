@@ -7,11 +7,16 @@
 
 #include "content/browser/webid/idp_network_request_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/webid/login_status_options.h"
+#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace content {
 
-class MockIdpNetworkRequestManager : public IdpNetworkRequestManager {
+class MockIdpNetworkRequestManager : public webid::IdpNetworkRequestManager {
  public:
   MockIdpNetworkRequestManager();
   ~MockIdpNetworkRequestManager() override;
@@ -20,28 +25,66 @@ class MockIdpNetworkRequestManager : public IdpNetworkRequestManager {
   MockIdpNetworkRequestManager& operator=(const MockIdpNetworkRequestManager&) =
       delete;
 
-  MOCK_METHOD2(FetchWellKnown, void(const GURL&, FetchWellKnownCallback));
-  MOCK_METHOD4(FetchConfig, void(const GURL&, int, int, FetchConfigCallback));
-  MOCK_METHOD3(FetchClientMetadata,
-               void(const GURL&,
-                    const std::string&,
-                    FetchClientMetadataCallback));
-  MOCK_METHOD3(SendAccountsRequest,
-               void(const GURL&, const std::string&, AccountsRequestCallback));
-  MOCK_METHOD4(SendTokenRequest,
-               void(const GURL&,
-                    const std::string&,
-                    const std::string&,
-                    TokenRequestCallback));
-  MOCK_METHOD5(SendSuccessfulTokenRequestMetrics,
-               void(const GURL&,
-                    base::TimeDelta,
-                    base::TimeDelta,
-                    base::TimeDelta,
-                    base::TimeDelta));
-  MOCK_METHOD2(SendFailedTokenRequestMetrics,
-               void(const GURL&, MetricsEndpointErrorCode code));
-  MOCK_METHOD2(SendLogout, void(const GURL& logout_url, LogoutCallback));
+  MOCK_METHOD(void,
+              FetchWellKnown,
+              (const GURL&, FetchWellKnownCallback),
+              (override));
+  MOCK_METHOD(void,
+              FetchConfig,
+              (const GURL&, int, int, FetchConfigCallback),
+              (override));
+  MOCK_METHOD(
+      void,
+      FetchClientMetadata,
+      (const GURL&, const std::string&, int, int, FetchClientMetadataCallback),
+      (override));
+  MOCK_METHOD(bool,
+              SendAccountsRequest,
+              (const url::Origin& idp_origin,
+               const GURL&,
+               const std::string&,
+               AccountsRequestCallback),
+              (override));
+  MOCK_METHOD(void,
+              SendTokenRequest,
+              (const GURL&,
+               const std::string&,
+               const std::string&,
+               bool,
+               TokenRequestCallback,
+               ContinueOnCallback,
+               RedirectToCallback,
+               RecordErrorMetricsCallback),
+              (override));
+  MOCK_METHOD(void,
+              SendSuccessfulTokenRequestMetrics,
+              (const GURL&,
+               base::TimeDelta,
+               base::TimeDelta,
+               base::TimeDelta,
+               base::TimeDelta),
+              (override));
+  MOCK_METHOD(void,
+              SendFailedTokenRequestMetrics,
+              (const GURL&, bool, webid::MetricsEndpointErrorCode),
+              (override));
+  MOCK_METHOD(void,
+              SendLogout,
+              (const GURL& logout_url, LogoutCallback),
+              (override));
+  MOCK_METHOD(void,
+              DownloadAndDecodeImage,
+              (const GURL&, ImageCallback),
+              (override));
+  MOCK_METHOD(void,
+              DownloadAndDecodeCachedImage,
+              (const url::Origin& idp_origin, const GURL&, ImageCallback),
+              (override));
+
+  MOCK_METHOD(void,
+              CacheAccountPictures,
+              (const url::Origin&, const std::vector<GURL>&),
+              (override));
 };
 
 }  // namespace content

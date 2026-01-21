@@ -5,16 +5,16 @@
 #ifndef COMPONENTS_CRASH_CONTENT_BROWSER_ERROR_REPORTING_MOCK_CRASH_ENDPOINT_H_
 #define COMPONENTS_CRASH_CONTENT_BROWSER_ERROR_REPORTING_MOCK_CRASH_ENDPOINT_H_
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "net/http/http_status_code.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
 
 namespace net {
 namespace test_server {
@@ -27,10 +27,25 @@ struct HttpRequest;
 // Installs a mock crash server endpoint.
 class MockCrashEndpoint {
  public:
-  struct Report {
-    Report(std::string query_value, std::string content_value);
-    std::string query;
-    std::string content;
+  class Report {
+   public:
+    Report(std::multimap<std::string, std::string> query_params,
+           std::string content);
+    Report(const Report&);
+    ~Report();
+
+    static Report ParseQuery(std::string_view query, std::string content);
+
+    std::optional<std::string_view> GetQueryParam(
+        const std::string& param) const;
+    const std::multimap<std::string, std::string>& query_params() const {
+      return query_params_;
+    }
+    const std::string_view content() const { return content_; }
+
+   private:
+    std::multimap<std::string, std::string> query_params_;
+    std::string content_;
   };
 
   explicit MockCrashEndpoint(net::test_server::EmbeddedTestServer* test_server);
@@ -42,7 +57,7 @@ class MockCrashEndpoint {
   Report WaitForReport();
 
   // Returns the last report received, if any.
-  const absl::optional<Report>& last_report() const { return last_report_; }
+  const std::optional<Report>& last_report() const { return last_report_; }
 
   // Clears last report so that WaitForReport will wait for another report.
   // Does not clear report_count() or all_reports().
@@ -75,7 +90,7 @@ class MockCrashEndpoint {
 
   raw_ptr<net::test_server::EmbeddedTestServer> test_server_;
   std::unique_ptr<Client> client_;
-  absl::optional<Report> last_report_;
+  std::optional<Report> last_report_;
   std::vector<Report> all_reports_;
   int report_count_ = 0;
   bool consented_ = true;

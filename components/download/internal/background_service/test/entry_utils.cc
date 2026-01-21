@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include "components/download/internal/background_service/test/entry_utils.h"
-#include "base/guid.h"
+
+#include <algorithm>
+
 #include "base/memory/values_equivalent.h"
-#include "base/ranges/algorithm.h"
+#include "base/uuid.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 
 namespace download {
@@ -17,12 +19,12 @@ bool CompareEntry(const Entry* const& expected, const Entry* const& actual) {
 
 bool CompareEntryList(const std::vector<Entry*>& expected,
                       const std::vector<Entry*>& actual) {
-  return base::ranges::is_permutation(actual, expected, CompareEntry);
+  return std::ranges::is_permutation(actual, expected, CompareEntry);
 }
 
 bool CompareEntryList(const std::vector<Entry>& list1,
                       const std::vector<Entry>& list2) {
-  return base::ranges::is_permutation(list1, list2);
+  return std::ranges::is_permutation(list1, list2);
 }
 
 bool CompareEntryUsingGuidOnly(const Entry* const& expected,
@@ -35,12 +37,13 @@ bool CompareEntryUsingGuidOnly(const Entry* const& expected,
 
 bool CompareEntryListUsingGuidOnly(const std::vector<Entry*>& expected,
                                    const std::vector<Entry*>& actual) {
-  return base::ranges::is_permutation(actual, expected,
-                                      CompareEntryUsingGuidOnly);
+  return std::ranges::is_permutation(actual, expected,
+                                     CompareEntryUsingGuidOnly);
 }
 
 Entry BuildBasicEntry() {
-  return BuildEntry(DownloadClient::TEST, base::GenerateGUID());
+  return BuildEntry(DownloadClient::TEST,
+                    base::Uuid::GenerateRandomV4().AsLowercaseString());
 }
 
 Entry BuildBasicEntry(Entry::State state) {

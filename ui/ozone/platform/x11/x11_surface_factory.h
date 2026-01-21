@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/vulkan/buildflags.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gl/gl_surface.h"
@@ -40,21 +41,18 @@ class X11SurfaceFactory : public SurfaceFactoryOzone {
       gfx::AcceleratedWidget widget,
       gpu::VulkanDeviceQueue* device_queue,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
-      absl::optional<gfx::Size> framebuffer_size = absl::nullopt) override;
-  bool CanCreateNativePixmapForFormat(gfx::BufferFormat format) override;
-  void CreateNativePixmapAsync(gfx::AcceleratedWidget widget,
-                               gpu::VulkanDeviceQueue* device_queue,
-                               gfx::Size size,
-                               gfx::BufferFormat format,
-                               gfx::BufferUsage usage,
-                               NativePixmapCallback callback) override;
+      std::optional<gfx::Size> framebuffer_size = std::nullopt) override;
+  bool CanCreateNativePixmapForFormat(viz::SharedImageFormat format) override;
   scoped_refptr<gfx::NativePixmap> CreateNativePixmapFromHandle(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle) override;
+
+  bool IsFormatSupportedForTexturing(
+      viz::SharedImageFormat format) const override;
 
  private:
   std::unique_ptr<GLOzone> egl_implementation_;

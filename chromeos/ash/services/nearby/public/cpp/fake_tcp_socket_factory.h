@@ -5,15 +5,14 @@
 #ifndef CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_SOCKET_FACTORY_H_
 #define CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_SOCKET_FACTORY_H_
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "chromeos/ash/services/nearby/public/cpp/tcp_server_socket_port.h"
 #include "chromeos/ash/services/nearby/public/mojom/tcp_socket_factory.mojom.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 // An implementation of TcpSocketFactory used for unit tests. The user sets
 // expectations--via SetCreate{Server,Connected}SocketCallExpectations()--for
@@ -52,7 +51,7 @@ class FakeTcpSocketFactory : public sharing::mojom::TcpSocketFactory {
       CreateTCPServerSocketCallback callback) override;
   void CreateTCPConnectedSocket(
       base::TimeDelta timeout,
-      const absl::optional<net::IPEndPoint>& local_addr,
+      const std::optional<net::IPEndPoint>& local_addr,
       const net::AddressList& remote_addr_list,
       network::mojom::TCPConnectedSocketOptionsPtr tcp_connected_socket_options,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
@@ -70,7 +69,6 @@ class FakeTcpSocketFactory : public sharing::mojom::TcpSocketFactory {
       pending_create_connected_socket_callbacks_;
 };
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby
 
 #endif  // CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_SOCKET_FACTORY_H_

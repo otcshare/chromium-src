@@ -6,6 +6,7 @@
 #define CHROME_TEST_PAYMENTS_PAYMENT_REQUEST_TEST_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -113,6 +114,24 @@ class PaymentRequestTestController {
     return app_descriptions_;
   }
 
+  // Whether the browser payment sheet is displaying a section for selecting a
+  // shipping address.
+  std::optional<bool> is_shipping_section_visible() const {
+    return is_shipping_section_visible_;
+  }
+  void set_shipping_section_visible(bool is_shipping_section_visible) {
+    is_shipping_section_visible_ = is_shipping_section_visible;
+  }
+
+  // Whether the browser payment sheet is displaying a section for selecting
+  // contact info.
+  std::optional<bool> is_contact_section_visible() const {
+    return is_contact_section_visible_;
+  }
+  void set_contact_section_visible(bool is_contact_section_visible) {
+    is_contact_section_visible_ = is_contact_section_visible;
+  }
+
  private:
   // Observers that forward through to the PaymentRequestTestObserver.
   void OnCanMakePaymentCalled();
@@ -137,6 +156,8 @@ class PaymentRequestTestController {
   std::string twa_payment_app_method_name_;
   std::string twa_payment_app_response_;
   std::vector<AppDescription> app_descriptions_;
+  std::optional<bool> is_shipping_section_visible_;
+  std::optional<bool> is_contact_section_visible_;
 
 #if !BUILDFLAG(IS_ANDROID)
   void UpdateDelegateFactory();
@@ -148,6 +169,8 @@ class PaymentRequestTestController {
 
   base::WeakPtr<ContentPaymentRequestDelegate> delegate_;
 #endif
+
+  base::WeakPtrFactory<PaymentRequestTestController> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

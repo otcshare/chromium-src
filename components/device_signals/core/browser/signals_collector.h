@@ -7,11 +7,12 @@
 
 #include <unordered_set>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 
 namespace device_signals {
 
 enum class SignalName;
+enum class UserPermission;
 struct SignalsAggregationRequest;
 struct SignalsAggregationResponse;
 
@@ -32,6 +33,7 @@ class SignalsCollector {
   // caller who is responsible for keeping the value alive while the signal is
   // being collected.
   virtual void GetSignal(SignalName signal_name,
+                         UserPermission permission,
                          const SignalsAggregationRequest& request,
                          SignalsAggregationResponse& response,
                          base::OnceClosure done_closure) = 0;

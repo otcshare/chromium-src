@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chromeos/ash/components/dbus/hermes/hermes_profile_client.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_client_test_base.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_response_status.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_test_utils.h"
@@ -50,7 +51,7 @@ class HermesProfileClientTest : public HermesClientTestBase {
 
  protected:
   scoped_refptr<dbus::MockObjectProxy> proxy_;
-  HermesProfileClient* client_;
+  raw_ptr<HermesProfileClient, DanglingUntriaged> client_;
 };
 
 TEST_F(HermesProfileClientTest, TestEnableProfile) {
@@ -60,7 +61,7 @@ TEST_F(HermesProfileClientTest, TestEnableProfile) {
   method_call.SetSerial(123);
   EXPECT_CALL(
       *proxy_.get(),
-      DoCallMethodWithErrorResponse(
+      CallMethodWithErrorResponse(
           hermes_test_utils::MatchMethodName(hermes::profile::kEnable), _, _))
       .Times(2)
       .WillRepeatedly(Invoke(this, &HermesProfileClientTest::OnMethodCalled));
@@ -94,7 +95,7 @@ TEST_F(HermesProfileClientTest, TestDisableProfile) {
   method_call.SetSerial(123);
   EXPECT_CALL(
       *proxy_.get(),
-      DoCallMethodWithErrorResponse(
+      CallMethodWithErrorResponse(
           hermes_test_utils::MatchMethodName(hermes::profile::kDisable), _, _))
       .Times(2)
       .WillRepeatedly(Invoke(this, &HermesProfileClientTest::OnMethodCalled));
@@ -128,7 +129,7 @@ TEST_F(HermesProfileClientTest, TestRenameProfile) {
   method_call.SetSerial(123);
   EXPECT_CALL(
       *proxy_.get(),
-      DoCallMethodWithErrorResponse(
+      CallMethodWithErrorResponse(
           hermes_test_utils::MatchMethodName(hermes::profile::kRename), _, _))
       .Times(2)
       .WillRepeatedly(Invoke(this, &HermesProfileClientTest::OnMethodCalled));

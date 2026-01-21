@@ -4,7 +4,7 @@
 
 #include "chrome/browser/sync_file_system/local/root_delete_helper.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/sync_file_system/local/local_file_change_tracker.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_status.h"
@@ -52,13 +52,13 @@ RootDeleteHelper::RootDeleteHelper(
   DCHECK(storage::VirtualPath::IsRootPath(url.path()));
 }
 
-RootDeleteHelper::~RootDeleteHelper() {
-}
+RootDeleteHelper::~RootDeleteHelper() = default;
 
 void RootDeleteHelper::Run() {
-  util::Log(logging::LOG_VERBOSE, FROM_HERE,
+  util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
             "Deleting the entire local filesystem for remote root deletion: "
-            "%s", url_.DebugString().c_str());
+            "%s",
+            url_.DebugString().c_str());
 
   file_system_context_->DeleteFileSystem(
       url_.storage_key(), url_.type(),

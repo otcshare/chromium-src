@@ -16,14 +16,19 @@ extension Color {
     return Color(kTextPrimaryColor)
   }
 
-  /// The tertiary background color
-  public static var tertiaryBackground: Color {
-    return Color(kTertiaryBackgroundColor)
+  /// The secondary text color.
+  public static var textSecondary: Color {
+    return Color(kTextSecondaryColor)
   }
 
-  /// The updated tertiary background color
-  public static var updatedTertiaryBackground: Color {
-    return Color(kUpdatedTertiaryBackgroundColor)
+  /// The tertiary text color.
+  public static var textTertiary: Color {
+    return Color(kTextTertiaryColor)
+  }
+
+  /// The quaternary text color.
+  public static var textQuaternary: Color {
+    return Color(kTextQuaternaryColor)
   }
 
   /// The primary grouped background color.
@@ -84,6 +89,11 @@ extension Color {
   /// The blue600 color.
   public static var blue600: Color {
     return Color(kBlue600Color)
+  }
+
+  /// The red500 color.
+  public static var red500: Color {
+    return Color(kRed500Color)
   }
 
   /// The table row view highlight color.

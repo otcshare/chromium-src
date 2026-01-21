@@ -4,8 +4,10 @@
 
 #include "extensions/browser/api/offscreen/lifetime_enforcer_factories.h"
 
-#include "base/bind.h"
+#include <utility>
+
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "extensions/browser/api/offscreen/audio_lifetime_enforcer.h"
 #include "extensions/browser/api/offscreen/offscreen_document_lifetime_enforcer.h"
@@ -78,22 +80,26 @@ struct ReasonAndFactoryMethodPair {
 // A mapping between each of the different reasons and their corresponding
 // factory methods.
 constexpr ReasonAndFactoryMethodPair kReasonAndFactoryMethodPairs[] = {
-    {api::offscreen::REASON_TESTING, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_AUDIO_PLAYBACK, &CreateAudioLifetimeEnforcer},
+    {api::offscreen::Reason::kTesting, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kAudioPlayback, &CreateAudioLifetimeEnforcer},
     // The following reasons do not currently have bespoke lifetime enforcement.
     // This enforcement can be added on as-appropriate basis.
-    {api::offscreen::REASON_IFRAME_SCRIPTING, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_DOM_SCRAPING, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_BLOBS, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_DOM_PARSER, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_USER_MEDIA, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_DISPLAY_MEDIA, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_WEB_RTC, &CreateEmptyEnforcer},
-    {api::offscreen::REASON_CLIPBOARD, &CreateEmptyEnforcer},
-};
+    {api::offscreen::Reason::kIframeScripting, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kDomScraping, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kBlobs, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kDomParser, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kUserMedia, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kDisplayMedia, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kWebRtc, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kClipboard, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kLocalStorage, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kWorkers, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kBatteryStatus, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kMatchMedia, &CreateEmptyEnforcer},
+    {api::offscreen::Reason::kGeolocation, &CreateEmptyEnforcer}};
 
 static_assert(std::size(kReasonAndFactoryMethodPairs) ==
-                  api::offscreen::REASON_LAST,
+                  std::to_underlying(api::offscreen::Reason::kMaxValue),
               "Factory method size does not equal reason size.");
 
 }  // namespace
@@ -114,16 +120,17 @@ LifetimeEnforcerFactories::GetLifetimeEnforcer(
         notify_inactive_callback) {
   if (g_testing_override) {
     auto iter = g_testing_override->map().find(reason);
-    if (iter != g_testing_override->map().end())
+    if (iter != g_testing_override->map().end()) {
       return iter->second.Run(offscreen_document,
                               std::move(termination_callback),
                               std::move(notify_inactive_callback));
+    }
   }
 
   auto& factories = GetFactoriesInstance();
   auto iter = factories.map_.find(reason);
-  DCHECK(iter != factories.map_.end())
-      << "No factory registered for: " << reason;
+  CHECK(iter != factories.map_.end())
+      << "No factory registered for: " << api::offscreen::ToString(reason);
   return iter->second.Run(offscreen_document, std::move(termination_callback),
                           std::move(notify_inactive_callback));
 }

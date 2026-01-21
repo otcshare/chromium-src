@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/profiles/profile_activity_metrics_recorder.h"
+
 #include <string>
 #include <vector>
 
@@ -11,11 +13,9 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
-#include "chrome/browser/profiles/profile_activity_metrics_recorder.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -60,6 +60,7 @@ class ProfileActivityMetricsRecorderTest : public testing::Test {
     // next test case.
     ProfileActivityMetricsRecorder::CleanupForTesting();
     metrics::DesktopSessionDurationTracker::CleanupForTesting();
+
   }
 
   void ActivateBrowser(Profile* profile) {
@@ -67,7 +68,7 @@ class ProfileActivityMetricsRecorderTest : public testing::Test {
     browsers_.push_back(CreateBrowserWithTestWindowForParams(browser_params));
 
     // This triggers the recorder to post a task, wait until that's done.
-    BrowserList::SetLastActive(browsers_.back().get());
+    browsers_.back().get()->DidBecomeActive();
     task_environment_.RunUntilIdle();
   }
 
@@ -234,21 +235,21 @@ TEST_F(ProfileActivityMetricsRecorderTest, SessionInactivityNotRecorded) {
 TEST_F(ProfileActivityMetricsRecorderTest, ProfileState) {
   Profile* regular_profile = profile_manager()->CreateTestingProfile("p1");
   Profile* guest_profile = profile_manager()->CreateGuestProfile();
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 0);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 0);
 
   ActivateBrowser(regular_profile);
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 1);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 1);
   // This is somehow important for the session to end later in the test.
   SimulateUserEvent();
 
   // Repeating the same thing immediately has no impact.
   ActivateBrowser(regular_profile);
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 1);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 1);
 
   // Repeating the same thing immediately has no impact (neither for any other
   // profile).
   ActivateGuestBrowser(guest_profile);
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 1);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 1);
 
   // Stay inactive so the session ends and stay inactive long after that.
   task_environment()->FastForwardBy(kInactivityTimeout * 2 +
@@ -256,11 +257,11 @@ TEST_F(ProfileActivityMetricsRecorderTest, ProfileState) {
 
   // Now we get another record (no matter which profile triggers that).
   ActivateBrowser(regular_profile);
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 2);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 2);
 
   // Repeating the same thing immediately has no impact.
   ActivateBrowser(regular_profile);
-  histograms()->ExpectTotalCount("Profile.State.Avatar_All", 2);
+  histograms()->ExpectTotalCount("Profile.State.LastUsed_All", 2);
 }
 
 TEST_F(ProfileActivityMetricsRecorderTest, AccountMetrics) {

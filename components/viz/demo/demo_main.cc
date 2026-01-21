@@ -9,11 +9,13 @@
 #include "base/command_line.h"
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
+#include "components/viz/demo/common/switches.h"
 #include "components/viz/demo/host/demo_host.h"
 #include "components/viz/demo/service/demo_service.h"
 #include "mojo/core/embedder/embedder.h"
@@ -21,6 +23,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/events/platform/platform_event_source.h"
+#include "ui/gl/init/gl_factory.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_delegate.h"
 #include "ui/platform_window/platform_window_init_properties.h"
@@ -178,7 +181,10 @@ class DemoWindow : public ui::PlatformWindowDelegate {
   void OnWillDestroyAcceleratedWidget() override {}
   void OnAcceleratedWidgetDestroyed() override {}
   void OnActivationChanged(bool active) override {}
-  void OnMouseEnter() override {}
+  void OnCursorUpdate() override {}
+  int64_t OnStateUpdate(const State& old, const State& latest) override {
+    return -1;
+  }
 
   std::unique_ptr<demo::DemoHost> host_;
   std::unique_ptr<demo::DemoService> service_;
@@ -199,12 +205,19 @@ int DemoMain() {
 std::unique_ptr<ui::OzoneGpuTestHelper> gpu_helper;
 
 static void SetupOzone(base::WaitableEvent* done) {
-  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
-  cmd_line->AppendSwitchASCII(switches::kUseGL, gl::kGLImplementationEGLName);
   ui::OzonePlatform::InitParams params;
   params.single_process = true;
   ui::OzonePlatform::InitializeForGPU(params);
   done->Signal();
+}
+
+void InitFeatureList(int argc, char** argv) {
+  base::CommandLine command_line(argc, argv);
+  auto feature_list = std::make_unique<base::FeatureList>();
+  feature_list->InitFromCommandLine(
+      command_line.GetSwitchValueASCII(switches::kEnableFeatures),
+      command_line.GetSwitchValueASCII(switches::kDisableFeatures));
+  base::FeatureList::SetInstance(std::move(feature_list));
 }
 #endif
 
@@ -212,25 +225,26 @@ static void SetupOzone(base::WaitableEvent* done) {
 
 int main(int argc, char** argv) {
 #if BUILDFLAG(IS_OZONE)
-  base::CommandLine command_line(argc, argv);
-  auto feature_list = std::make_unique<base::FeatureList>();
-  feature_list->InitializeFromCommandLine(
-      command_line.GetSwitchValueASCII(switches::kEnableFeatures),
-      command_line.GetSwitchValueASCII(switches::kDisableFeatures));
-  base::FeatureList::SetInstance(std::move(feature_list));
-
-  base::Thread rendering_thread("GLRenderingVEAClientThread");
+  InitFeatureList(argc, argv);
 #endif
 
   InitBase base(argc, argv);
   InitMojo mojo;
   InitUI ui;
 
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  const bool use_gpu = command_line->HasSwitch(switches::kVizDemoUseGPU);
+  command_line->AppendSwitchASCII(switches::kUseGL,
+                                  use_gpu ? gl::kGLImplementationANGLEName
+                                          : gl::kGLImplementationDisabledName);
+  command_line->AppendSwitchASCII("type", "demo");
+
 #if BUILDFLAG(IS_OZONE)
   ui::OzonePlatform::InitParams params;
   params.single_process = true;
   ui::OzonePlatform::InitializeForUI(params);
 
+  base::Thread rendering_thread("GLRenderingVEAClientThread");
   base::Thread::Options options;
   options.message_pump_type = base::MessagePumpType::UI;
   CHECK(rendering_thread.StartWithOptions(std::move(options)));
@@ -245,5 +259,6 @@ int main(int argc, char** argv) {
   gpu_helper->Initialize();
 #endif
 
+  gl::init::InitializeGLOneOff(gl::GpuPreference::kDefault);
   return DemoMain();
 }

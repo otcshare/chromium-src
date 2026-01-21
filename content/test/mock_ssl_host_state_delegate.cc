@@ -4,8 +4,8 @@
 
 #include "content/test/mock_ssl_host_state_delegate.h"
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -28,8 +28,9 @@ void MockSSLHostStateDelegate::Clear(
     for (auto it = exceptions_.begin(); it != exceptions_.end();) {
       auto next_it = std::next(it);
 
-      if (host_filter.Run(*it))
+      if (host_filter.Run(*it)) {
         exceptions_.erase(it);
+      }
 
       it = next_it;
     }
@@ -41,25 +42,23 @@ SSLHostStateDelegate::CertJudgment MockSSLHostStateDelegate::QueryPolicy(
     const net::X509Certificate& cert,
     int error,
     StoragePartition* storage_partition) {
-  if (exceptions_.find(host) == exceptions_.end())
+  if (!exceptions_.contains(host)) {
     return SSLHostStateDelegate::DENIED;
+  }
 
   return SSLHostStateDelegate::ALLOWED;
 }
 
 void MockSSLHostStateDelegate::HostRanInsecureContent(
     const std::string& host,
-    int child_id,
     InsecureContentType content_type) {
   hosts_ran_insecure_content_.insert(host);
 }
 
 bool MockSSLHostStateDelegate::DidHostRunInsecureContent(
     const std::string& host,
-    int child_id,
     InsecureContentType content_type) {
-  return hosts_ran_insecure_content_.find(host) !=
-         hosts_ran_insecure_content_.end();
+  return hosts_ran_insecure_content_.contains(host);
 }
 
 void MockSSLHostStateDelegate::AllowHttpForHost(
@@ -71,18 +70,44 @@ void MockSSLHostStateDelegate::AllowHttpForHost(
 bool MockSSLHostStateDelegate::IsHttpAllowedForHost(
     const std::string& host,
     StoragePartition* storage_partition) {
-  return base::Contains(allow_http_hosts_, host);
+  return allow_http_hosts_.contains(host);
+}
+
+void MockSSLHostStateDelegate::SetHttpsEnforcementForHost(
+    const std::string& host,
+    bool enforce,
+    StoragePartition* storage_partition) {
+  if (enforce) {
+    enforce_https_hosts_.insert(host);
+  } else {
+    enforce_https_hosts_.erase(host);
+  }
+}
+
+bool MockSSLHostStateDelegate::IsHttpsEnforcedForUrl(
+    const GURL& url,
+    StoragePartition* storage_partition) {
+  // HTTPS-First Mode is never auto-enabled for URLs with non-default ports.
+  if (!url.GetPort().empty()) {
+    return false;
+  }
+  return enforce_https_hosts_.contains(url.GetHost());
 }
 
 void MockSSLHostStateDelegate::RevokeUserAllowExceptions(
     const std::string& host) {
-  exceptions_.erase(exceptions_.find(host));
+  exceptions_.erase(host);
 }
 
 bool MockSSLHostStateDelegate::HasAllowException(
     const std::string& host,
     StoragePartition* storage_partition) {
-  return exceptions_.find(host) != exceptions_.end();
+  return exceptions_.contains(host);
+}
+
+bool MockSSLHostStateDelegate::HasAllowExceptionForAnyHost(
+    StoragePartition* storage_partition) {
+  return !exceptions_.empty();
 }
 
 }  // namespace content

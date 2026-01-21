@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/network/network_context.h"
+
 #include <memory>
+#include <optional>
 
 #include "base/feature_list.h"
 #include "base/strings/strcat.h"
@@ -11,31 +14,35 @@
 #include "base/test/task_environment.h"
 #include "net/base/features.h"
 #include "net/log/test_net_log.h"
+#include "net/net_buildflags.h"
 #include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/cert_verifier/cert_verifier_service_factory.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
-#include "services/network/network_context.h"
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/cert_verifier_service.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace cert_verifier {
 namespace {
 
-mojo::PendingRemote<mojom::CertVerifierService> GetNewCertVerifierServiceRemote(
+network::mojom::CertVerifierServiceRemoteParamsPtr
+GetNewCertVerifierServiceRemoteParams(
     mojom::CertVerifierServiceFactory* cert_verifier_service_factory,
     mojom::CertVerifierCreationParamsPtr creation_params) {
   mojo::PendingRemote<mojom::CertVerifierService> cert_verifier_remote;
+  mojo::PendingReceiver<mojom::CertVerifierServiceClient> cert_verifier_client;
   cert_verifier_service_factory->GetNewCertVerifier(
       cert_verifier_remote.InitWithNewPipeAndPassReceiver(),
+      /*updater=*/mojo::NullReceiver(),
+      cert_verifier_client.InitWithNewPipeAndPassRemote(),
       std::move(creation_params));
-  return cert_verifier_remote;
+  return network::mojom::CertVerifierServiceRemoteParams::New(
+      std::move(cert_verifier_remote), std::move(cert_verifier_client));
 }
 
 }  // namespace
@@ -67,23 +74,20 @@ class NetworkContextWithRealCertVerifierTest : public testing::Test {
     if (!cert_verifier_service_factory_) {
       cert_verifier_service_factory_ =
           std::make_unique<CertVerifierServiceFactoryImpl>(
-              GetCertVerifierServiceParams(),
               cert_verifier_service_factory_remote_
                   .BindNewPipeAndPassReceiver());
+      InitializeCertVerifierServiceFactory(
+          cert_verifier_service_factory_.get());
     }
 
     // Create a cert verifier service.
-    auto cert_verifier_service_remote = GetNewCertVerifierServiceRemote(
+    return GetNewCertVerifierServiceRemoteParams(
         cert_verifier_service_factory_.get(),
         std::move(cert_verifier_creation_params));
-
-    return network::mojom::CertVerifierServiceRemoteParams::New(
-        std::move(cert_verifier_service_remote));
   }
 
-  virtual mojom::CertVerifierServiceParamsPtr GetCertVerifierServiceParams() {
-    return nullptr;
-  }
+  virtual void InitializeCertVerifierServiceFactory(
+      mojom::CertVerifierServiceFactory* factory) {}
 
   network::mojom::NetworkService* network_service() const {
     return network_service_.get();
@@ -104,7 +108,7 @@ class NetworkContextWithRealCertVerifierTest : public testing::Test {
       cert_verifier_service_factory_;
 };
 
-#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+#if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
 namespace {
 
 network::mojom::NetworkContextParamsPtr CreateContextParams() {
@@ -126,7 +130,7 @@ std::unique_ptr<network::TestURLLoaderClient> FetchRequest(
   if (!params)
     params = network::mojom::URLLoaderFactoryParams::New();
   params->process_id = process_id;
-  params->is_corb_enabled = false;
+  params->is_orb_enabled = false;
 
   // If |site_for_cookies| is null, any non-empty NIK is fine. Otherwise, the
   // NIK must be consistent with |site_for_cookies|.
@@ -157,43 +161,20 @@ std::unique_ptr<network::TestURLLoaderClient> FetchRequest(
 
 }  // namespace
 
-class NetworkContextChromeRootStoreFeatureFlagTest
+class NetworkContextChromeRootStoreIsUsedTest
     : public NetworkContextWithRealCertVerifierTest,
-      public testing::WithParamInterface<
-          std::tuple<bool, absl::optional<bool>>> {
+      public testing::WithParamInterface<bool> {
  public:
-  NetworkContextChromeRootStoreFeatureFlagTest() {
-    scoped_feature_list_.InitWithFeatureState(
-        net::features::kChromeRootStoreUsed, feature_use_chrome_root_store());
+  void InitializeCertVerifierServiceFactory(
+      mojom::CertVerifierServiceFactory* factory) override {
+    factory->SetUseChromeRootStore(use_chrome_root_store(), base::DoNothing());
   }
 
-  mojom::CertVerifierServiceParamsPtr GetCertVerifierServiceParams() override {
-    mojom::CertVerifierServiceParamsPtr params;
-    if (param_use_chrome_root_store().has_value()) {
-      params = mojom::CertVerifierServiceParams::New();
-      params->use_chrome_root_store = *param_use_chrome_root_store();
-    }
-    return params;
-  }
-
-  bool feature_use_chrome_root_store() const { return std::get<0>(GetParam()); }
-
-  absl::optional<bool> param_use_chrome_root_store() const {
-    return std::get<1>(GetParam());
-  }
-
-  bool expected_use_chrome_root_store() const {
-    if (param_use_chrome_root_store().has_value())
-      return *param_use_chrome_root_store();
-    return feature_use_chrome_root_store();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  bool use_chrome_root_store() const { return GetParam(); }
 };
 
-TEST_P(NetworkContextChromeRootStoreFeatureFlagTest,
-       CombinationOfFeatureFlagAndServiceParamsUsesCorrectVerifier) {
+TEST_P(NetworkContextChromeRootStoreIsUsedTest,
+       ChromeRootStoreCanBeDisabledTest) {
   net::EmbeddedTestServer test_server(net::EmbeddedTestServer::TYPE_HTTPS);
   net::test_server::RegisterDefaultHandlers(&test_server);
   ASSERT_TRUE(test_server.Start());
@@ -216,22 +197,12 @@ TEST_P(NetworkContextChromeRootStoreFeatureFlagTest,
   std::vector<net::NetLogEntry> crs_netlog_entries =
       net_log_observer.GetEntriesWithType(
           net::NetLogEventType::CERT_VERIFY_PROC_CHROME_ROOT_STORE_VERSION);
-  EXPECT_EQ(expected_use_chrome_root_store(), !crs_netlog_entries.empty());
+  EXPECT_EQ(use_chrome_root_store(), !crs_netlog_entries.empty());
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    NetworkContextChromeRootStoreFeatureFlagTest,
-    ::testing::Combine(::testing::Bool(),
-                       ::testing::Values(absl::nullopt, false, true)),
-    [](const testing::TestParamInfo<
-        NetworkContextChromeRootStoreFeatureFlagTest::ParamType>& info) {
-      return base::StrCat(
-          {std::get<0>(info.param) ? "FeatureTrue" : "FeatureFalse",
-           std::get<1>(info.param).has_value()
-               ? (*std::get<1>(info.param) ? "ParamTrue" : "ParamFalse")
-               : "ParamNotSet"});
-    });
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+INSTANTIATE_TEST_SUITE_P(All,
+                         NetworkContextChromeRootStoreIsUsedTest,
+                         ::testing::Bool());
+#endif  // BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
 
 }  // namespace cert_verifier

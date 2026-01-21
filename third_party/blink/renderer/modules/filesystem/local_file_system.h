@@ -33,7 +33,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "third_party/blink/public/mojom/filesystem/file_system.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
@@ -74,7 +74,9 @@ class LocalFileSystem final : public GarbageCollected<LocalFileSystem>,
 
   static LocalFileSystem* From(ExecutionContext&);
 
-  const char* NameInHeapSnapshot() const override { return "LocalFileSystem"; }
+  const char* GetHumanReadableName() const override {
+    return "LocalFileSystem";
+  }
 
  private:
   void ResolveURLCallback(const KURL& file_system_url,

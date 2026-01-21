@@ -18,6 +18,7 @@
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
+#include "media/base/picture_in_picture_events_info.h"
 #include "media/mojo/mojom/media_player.mojom.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -85,6 +86,7 @@ class TestOverlayWindow : public VideoOverlayWindow {
   void SetSkipAdButtonVisibility(bool is_visible) override {}
   void SetNextTrackButtonVisibility(bool is_visible) override {}
   void SetPreviousTrackButtonVisibility(bool is_visible) override {}
+  void SetHidePictureInPictureButtonVisibility(bool is_visible) override {}
   void SetMicrophoneMuted(bool muted) override {}
   void SetCameraState(bool turned_on) override {}
   void SetToggleMicrophoneButtonVisibility(bool is_visible) override {}
@@ -92,6 +94,10 @@ class TestOverlayWindow : public VideoOverlayWindow {
   void SetHangUpButtonVisibility(bool is_visible) override {}
   void SetNextSlideButtonVisibility(bool is_visible) override {}
   void SetPreviousSlideButtonVisibility(bool is_visible) override {}
+  void SetMediaPosition(const media_session::MediaPosition&) override {}
+  void SetSourceTitle(const std::u16string& source_title) override {}
+  void SetFaviconImages(
+      const std::vector<media_session::MediaImage>& images) override {}
   void SetSurfaceId(const viz::SurfaceId& surface_id) override {}
 
  private:
@@ -132,7 +138,6 @@ class PictureInPictureMediaPlayerReceiver : public media::mojom::MediaPlayer {
   void RequestSeekBackward(base::TimeDelta seek_time) override {}
   void RequestSeekTo(base::TimeDelta seek_time) override {}
   void RequestEnterPictureInPicture() override {}
-  void RequestExitPictureInPicture() override {}
   void RequestMute(bool mute) override {}
   void SetVolumeMultiplier(double multiplier) override {}
   void SetPersistentState(bool persistent) override {}
@@ -140,6 +145,11 @@ class PictureInPictureMediaPlayerReceiver : public media::mojom::MediaPlayer {
   void SetAudioSinkId(const std::string& sink_id) override {}
   void SuspendForFrameClosed() override {}
   void RequestMediaRemoting() override {}
+  void RequestVisibility(
+      RequestVisibilityCallback request_visibility_callback) override {}
+  void RecordAutoPictureInPictureInfo(
+      const media::PictureInPictureEventsInfo::AutoPipInfo&
+          auto_picture_in_picture_info) override {}
 
  private:
   mojo::AssociatedReceiver<media::mojom::MediaPlayer> receiver_{this};
@@ -163,6 +173,7 @@ class PictureInPictureServiceImplTest : public RenderViewHostImplTestHarness {
   }
 
   void TearDown() override {
+    service_impl_ = nullptr;
     RenderViewHostImplTestHarness::TearDown();
   }
 
@@ -211,10 +222,10 @@ TEST_F(PictureInPictureServiceImplTest, MAYBE_EnterPictureInPicture) {
   // If Picture-in-Picture there shouldn't be an active session.
   EXPECT_FALSE(controller->active_session_for_testing());
 
-  viz::SurfaceId surface_id =
-      viz::SurfaceId(viz::FrameSinkId(1, 1),
-                     viz::LocalSurfaceId(
-                         11, base::UnguessableToken::Deserialize(0x111111, 0)));
+  viz::SurfaceId surface_id = viz::SurfaceId(
+      viz::FrameSinkId(1, 1),
+      viz::LocalSurfaceId(
+          11, base::UnguessableToken::CreateForTesting(0x111111, 0)));
 
   EXPECT_CALL(delegate(), EnterPictureInPicture(contents()))
       .WillRepeatedly(testing::Return(PictureInPictureResult::kSuccess));
@@ -257,10 +268,10 @@ TEST_F(PictureInPictureServiceImplTest, EnterPictureInPicture_NotSupported) {
 
   mojo::PendingRemote<blink::mojom::PictureInPictureSessionObserver>
       observer_remote;
-  viz::SurfaceId surface_id =
-      viz::SurfaceId(viz::FrameSinkId(1, 1),
-                     viz::LocalSurfaceId(
-                         11, base::UnguessableToken::Deserialize(0x111111, 0)));
+  viz::SurfaceId surface_id = viz::SurfaceId(
+      viz::FrameSinkId(1, 1),
+      viz::LocalSurfaceId(
+          11, base::UnguessableToken::CreateForTesting(0x111111, 0)));
 
   EXPECT_CALL(delegate(), EnterPictureInPicture(contents()))
       .WillRepeatedly(testing::Return(PictureInPictureResult::kNotSupported));

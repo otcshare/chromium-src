@@ -8,10 +8,8 @@
 #include "ash/ash_export.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/shelf/shelf_bubble.h"
-#include "ash/style/default_colors.h"
-#include "base/callback_forward.h"
-#include "base/time/time.h"
-#include "ui/gfx/geometry/size.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -23,6 +21,8 @@ class View;
 }  // namespace views
 
 namespace ash {
+
+class LoginShelfButton;
 
 // The implementation of tooltip bubbles for the shelf.
 class ASH_EXPORT ShelfShutdownConfirmationBubble : public ShelfBubble {
@@ -43,7 +43,7 @@ class ASH_EXPORT ShelfShutdownConfirmationBubble : public ShelfBubble {
     kMaxValue = kDismissed
   };
 
-  ShelfShutdownConfirmationBubble(views::View* anchor,
+  ShelfShutdownConfirmationBubble(LoginShelfButton* anchor,
                                   ShelfAlignment alignment,
                                   base::OnceClosure on_confirm_callback,
                                   base::OnceClosure on_cancel_callback);
@@ -55,8 +55,6 @@ class ASH_EXPORT ShelfShutdownConfirmationBubble : public ShelfBubble {
   ~ShelfShutdownConfirmationBubble() override;
 
   // views::View:
-  void OnThemeChanged() override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   std::u16string GetAccessibleWindowTitle() const override;
 
  protected:
@@ -75,18 +73,20 @@ class ASH_EXPORT ShelfShutdownConfirmationBubble : public ShelfBubble {
   // Report bubble action metrics
   void ReportBubbleAction(BubbleAction action);
 
-  views::ImageView* icon_ = nullptr;
-  views::Label* title_ = nullptr;
-  views::LabelButton* cancel_ = nullptr;
-  views::LabelButton* confirm_ = nullptr;
+  void OnTitleTextChanged();
+
+  raw_ptr<views::ImageView> icon_ = nullptr;
+  raw_ptr<views::Label> title_ = nullptr;
+  raw_ptr<views::LabelButton> cancel_ = nullptr;
+  raw_ptr<views::LabelButton> confirm_ = nullptr;
+  raw_ptr<LoginShelfButton, DanglingUntriaged> anchor_ = nullptr;
 
   enum class DialogResult { kNone, kCancelled, kConfirmed };
 
   // A simple state machine to keep track of the dialog result.
   DialogResult dialog_result_{DialogResult::kNone};
 
-  // Track time delta between bubble opened to an action taken
-  base::TimeTicks bubble_opened_timestamp_;
+  base::CallbackListSubscription title_text_changed_subscription_;
 };
 
 }  // namespace ash

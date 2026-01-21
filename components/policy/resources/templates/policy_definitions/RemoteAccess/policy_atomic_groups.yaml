@@ -26,3 +26,7 @@ RemoteAccess:
   - RemoteAccessHostMaximumSessionDurationMinutes
   - RemoteAccessHostClipboardSizeBytes
   - RemoteAccessHostAllowRemoteSupportConnections
+  - RemoteAccessHostAllowEnterpriseRemoteSupportConnections
+  - RemoteAccessHostAllowEnterpriseFileTransfer
+  - RemoteAccessHostAllowUrlForwarding
+  - RemoteAccessHostAllowPinAuthentication

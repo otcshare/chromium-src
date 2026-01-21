@@ -4,13 +4,17 @@
 
 #include "components/custom_handlers/protocol_handler.h"
 
+#include <string_view>
+
 #include "base/json/values_util.h"
 #include "base/strings/escape.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/origin_util.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
 #include "third_party/blink/public/common/scheme_registry.h"
@@ -20,6 +24,13 @@
 using content::BrowserThread;
 
 namespace custom_handlers {
+
+namespace features {
+
+// https://html.spec.whatwg.org/multipage/system-state.html#security-and-privacy
+BASE_FEATURE(kStripCredentialsForExternalProtocolHandler,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+}  // namespace features
 
 ProtocolHandler::ProtocolHandler(
     const std::string& protocol,
@@ -45,13 +56,17 @@ ProtocolHandler ProtocolHandler::CreateProtocolHandler(
 ProtocolHandler::ProtocolHandler(
     const std::string& protocol,
     const GURL& url,
-    const std::string& app_id,
+    std::optional<std::string> app_id,
+    std::optional<std::string> extension_id,
     base::Time last_modified,
+    bool is_confirmed,
     blink::ProtocolHandlerSecurityLevel security_level)
     : protocol_(base::ToLowerASCII(protocol)),
       url_(url),
       web_app_id_(app_id),
+      extension_id_(extension_id),
       last_modified_(last_modified),
+      is_confirmed_(is_confirmed),
       security_level_(security_level) {}
 
 // static
@@ -60,8 +75,21 @@ ProtocolHandler ProtocolHandler::CreateWebAppProtocolHandler(
     const GURL& url,
     const std::string& app_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return ProtocolHandler(protocol, url, app_id, base::Time::Now(),
+  return ProtocolHandler(protocol, url, app_id, /*extension_id=*/std::nullopt,
+                         base::Time::Now(), /*is_confirmed=*/true,
                          blink::ProtocolHandlerSecurityLevel::kStrict);
+}
+
+// static
+ProtocolHandler ProtocolHandler::CreateExtensionProtocolHandler(
+    const std::string& protocol,
+    const GURL& url,
+    const std::string& extension_id) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  return ProtocolHandler(
+      protocol, url, /*app_id=*/std::nullopt, extension_id, base::Time::Now(),
+      /*is_confirmed=*/false,
+      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures);
 }
 
 ProtocolHandler::ProtocolHandler() = default;
@@ -104,18 +132,22 @@ ProtocolHandler ProtocolHandler::CreateProtocolHandler(
   std::string protocol, url;
   // |time| defaults to the beginning of time if it is not specified.
   base::Time time;
+  bool is_confirmed = true;
   blink::ProtocolHandlerSecurityLevel security_level =
       blink::ProtocolHandlerSecurityLevel::kStrict;
   if (const std::string* protocol_in = value.FindString("protocol"))
     protocol = *protocol_in;
   if (const std::string* url_in = value.FindString("url"))
     url = *url_in;
-  absl::optional<base::Time> time_value =
+  std::optional<base::Time> time_value =
       base::ValueToTime(value.Find("last_modified"));
   // Treat invalid times as the default value.
   if (time_value)
     time = *time_value;
-  absl::optional<int> security_level_value = value.FindInt("security_level");
+  if (std::optional<bool> is_confirmed_value = value.FindBool("is_confirmed")) {
+    is_confirmed = *is_confirmed_value;
+  }
+  std::optional<int> security_level_value = value.FindInt("security_level");
   if (security_level_value) {
     security_level =
         blink::ProtocolHandlerSecurityLevelFrom(*security_level_value);
@@ -125,7 +157,18 @@ ProtocolHandler ProtocolHandler::CreateProtocolHandler(
     std::string app_id;
     if (app_id_val->is_string())
       app_id = app_id_val->GetString();
-    return ProtocolHandler(protocol, GURL(url), app_id, time, security_level);
+    return ProtocolHandler(protocol, GURL(url), app_id,
+                           /*extension_id=*/std::nullopt, time, is_confirmed,
+                           security_level);
+  }
+
+  if (const base::Value* extension_id_val = value.Find("extension_id")) {
+    std::string extension_id;
+    if (extension_id_val->is_string()) {
+      extension_id = extension_id_val->GetString();
+    }
+    return ProtocolHandler(protocol, GURL(url), /*app_id=*/std::nullopt,
+                           extension_id, time, is_confirmed, security_level);
   }
 
   return ProtocolHandler(protocol, GURL(url), time, security_level);
@@ -133,10 +176,25 @@ ProtocolHandler ProtocolHandler::CreateProtocolHandler(
 
 GURL ProtocolHandler::TranslateUrl(const GURL& url) const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  std::string clean_url;
+  std::string_view url_spec(url.spec());
+
+  // Remove credentials from the url if present, in order to mitigate the risk
+  // of credential leakage
+  if ((url.has_username() || url.has_password()) &&
+      base::FeatureList::IsEnabled(
+          features::kStripCredentialsForExternalProtocolHandler)) {
+    GURL::Replacements replacements;
+    replacements.ClearUsername();
+    replacements.ClearPassword();
+    clean_url = url.ReplaceComponents(replacements).spec();
+    url_spec = clean_url;
+  }
+
   std::string translatedUrlSpec(url_.spec());
   base::ReplaceFirstSubstringAfterOffset(
       &translatedUrlSpec, 0, "%s",
-      base::EscapeQueryParamValue(url.spec(), false));
+      base::EscapeQueryParamValue(url_spec, false));
   return GURL(translatedUrlSpec);
 }
 
@@ -146,10 +204,14 @@ base::Value::Dict ProtocolHandler::Encode() const {
   d.Set("protocol", protocol_);
   d.Set("url", url_.spec());
   d.Set("last_modified", base::TimeToValue(last_modified_));
+  d.Set("is_confirmed", is_confirmed_);
   d.Set("security_level", static_cast<int>(security_level_));
 
   if (web_app_id_.has_value())
     d.Set("app_id", web_app_id_.value());
+  if (extension_id_.has_value()) {
+    d.Set("extension_id", extension_id_.value());
+  }
 
   return d;
 }
@@ -171,7 +233,12 @@ std::u16string ProtocolHandler::GetProtocolDisplayName() const {
 
 #if !defined(NDEBUG)
 std::string ProtocolHandler::ToString() const {
-  return "{ protocol=" + protocol_ + ", url=" + url_.spec() + " }";
+  std::string web_app_id_str =
+      web_app_id_.has_value() ? ", web_app_id= " + *web_app_id_ : "";
+  std::string extension_id_str =
+      extension_id_.has_value() ? ", extension_id= " + *extension_id_ : "";
+  return "{ protocol=" + protocol_ + ", url=" + url_.spec() + web_app_id_str +
+         extension_id_str + " }";
 }
 #endif
 

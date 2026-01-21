@@ -2,37 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/ui/views/frame/minimize_button_metrics_win.h"
+
+#include <dwmapi.h>
 
 #include "base/check.h"
 #include "base/i18n/rtl.h"
-#include "base/win/windows_version.h"
-#include "dwmapi.h"
-#include "ui/base/win/shell.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/geometry/point.h"
 
 namespace {
 
-// These constants were determined by manually adding various offsets
-// until the identity switcher was placed at the same location as before.
-// When a new or updated OS version is released, a new constant may need
-// to be added to this list and GetDefaultButtonBoundsOffset() is updated.
-const int kWin7ButtonBoundsPositionOffset = 1;
-const int kWin8ButtonBoundsPositionOffset = 10;
-const int kWin10ButtonBoundsPositionOffset = 6;
+const int kButtonBoundsPositionOffset = 6;
 const int kInvalidOffset = static_cast<int>(0x80000000);
 
-using base::win::GetVersion;
 using display::win::ScreenWin;
-
-int GetDefaultButtonBoundsOffset() {
-  if (GetVersion() >= base::win::Version::WIN10)
-    return kWin10ButtonBoundsPositionOffset;
-  if (GetVersion() >= base::win::Version::WIN8)
-    return kWin8ButtonBoundsPositionOffset;
-  return kWin7ButtonBoundsPositionOffset;
-}
 
 }  // namespace
 
@@ -42,14 +27,9 @@ int MinimizeButtonMetrics::last_cached_minimize_button_x_delta_ = 0;
 // static
 int MinimizeButtonMetrics::button_bounds_position_offset_ = kInvalidOffset;
 
-MinimizeButtonMetrics::MinimizeButtonMetrics()
-    : hwnd_(nullptr),
-      cached_minimize_button_x_delta_(last_cached_minimize_button_x_delta_),
-      was_activated_(false) {
-}
+MinimizeButtonMetrics::MinimizeButtonMetrics() = default;
 
-MinimizeButtonMetrics::~MinimizeButtonMetrics() {
-}
+MinimizeButtonMetrics::~MinimizeButtonMetrics() = default;
 
 void MinimizeButtonMetrics::Init(HWND hwnd) {
   DCHECK(!hwnd_);
@@ -78,16 +58,18 @@ int MinimizeButtonMetrics::GetButtonBoundsPositionOffset(
     const RECT& button_bounds,
     const RECT& window_bounds) const {
   if (button_bounds_position_offset_ == kInvalidOffset) {
-    if (!was_activated_ || !IsWindowVisible(hwnd_))
-      return GetDefaultButtonBoundsOffset();
+    if (!was_activated_ || !IsWindowVisible(hwnd_)) {
+      return kButtonBoundsPositionOffset;
+    }
     TITLEBARINFOEX info = {0};
     info.cbSize = sizeof(info);
     SendMessage(hwnd_, WM_GETTITLEBARINFOEX, 0,
                 reinterpret_cast<LPARAM>(&info));
     if (info.rgrect[2].right == info.rgrect[2].left ||
         (info.rgstate[2] & (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN |
-                            STATE_SYSTEM_UNAVAILABLE)))
-      return GetDefaultButtonBoundsOffset();
+                            STATE_SYSTEM_UNAVAILABLE))) {
+      return kButtonBoundsPositionOffset;
+    }
     button_bounds_position_offset_ =
         info.rgrect[2].left - (button_bounds.left + window_bounds.left);
   }
@@ -137,8 +119,9 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetForWindow() const {
     if (titlebar_info.rgrect[2].left == titlebar_info.rgrect[2].right ||
         (titlebar_info.rgstate[2] &
          (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN |
-          STATE_SYSTEM_UNAVAILABLE)))
+          STATE_SYSTEM_UNAVAILABLE))) {
       return 0;
+    }
     minimize_button_corner = {titlebar_info.rgrect[2].left, 0};
   }
 
@@ -148,7 +131,8 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetForWindow() const {
   // convert the minimize button corner offset to DIP before returning it.
   MapWindowPoints(HWND_DESKTOP, hwnd_, &minimize_button_corner, 1);
   gfx::Point pixel_point = {minimize_button_corner.x, 0};
-  gfx::Point dip_point = ScreenWin::ClientToDIPPoint(hwnd_, pixel_point);
+  gfx::Point dip_point =
+      display::win::GetScreenWin()->ClientToDIPPoint(hwnd_, pixel_point);
   return dip_point.x();
 }
 
@@ -157,11 +141,8 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetX() const {
   // WM_NCACTIVATE (maybe it returns classic values?). In an attempt to return a
   // consistant value we cache the last value across instances and use it until
   // we get the activate.
-  if (was_activated_ || !ui::win::IsAeroGlassEnabled() ||
-      cached_minimize_button_x_delta_ == 0) {
-    const int minimize_button_offset = GetAndCacheMinimizeButtonOffsetX();
-    if (minimize_button_offset > 0)
-      return minimize_button_offset;
+  if (was_activated_ || cached_minimize_button_x_delta_ == 0) {
+    CalculateAndCacheMinimizeButtonOffsetX();
   }
 
   // If we fail to get the minimize button offset via the WM_GETTITLEBARINFOEX
@@ -170,27 +151,22 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetX() const {
   // CacheMinimizeButtonDelta() for more details.
   DCHECK(cached_minimize_button_x_delta_);
 
-  if (base::i18n::IsRTL())
-    return cached_minimize_button_x_delta_;
-
-  RECT client_rect = {0};
-  GetClientRect(hwnd_, &client_rect);
-  return client_rect.right - cached_minimize_button_x_delta_;
-}
-
-int MinimizeButtonMetrics::GetAndCacheMinimizeButtonOffsetX() const {
-  const int minimize_button_offset = GetMinimizeButtonOffsetForWindow();
-  if (minimize_button_offset <= 0)
-    return 0;
-
+  // In RTL the origin (for Views purposes) is the upper-right corner, and the
+  // X axis is reversed.
   if (base::i18n::IsRTL()) {
-    cached_minimize_button_x_delta_ = minimize_button_offset;
-  } else {
     RECT client_rect = {0};
     GetClientRect(hwnd_, &client_rect);
-    cached_minimize_button_x_delta_ =
-        client_rect.right - minimize_button_offset;
+    return client_rect.right - cached_minimize_button_x_delta_;
   }
+
+  return cached_minimize_button_x_delta_;
+}
+
+void MinimizeButtonMetrics::CalculateAndCacheMinimizeButtonOffsetX() const {
+  const int minimize_button_offset = GetMinimizeButtonOffsetForWindow();
+  if (minimize_button_offset <= 0) {
+    return;
+  }
+  cached_minimize_button_x_delta_ = minimize_button_offset;
   last_cached_minimize_button_x_delta_ = cached_minimize_button_x_delta_;
-  return minimize_button_offset;
 }

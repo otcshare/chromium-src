@@ -8,15 +8,15 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/debug/stack_trace.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "components/tracing/common/trace_to_console.h"
-#include "components/tracing/common/tracing_switches.h"
 #include "mojo/core/embedder/embedder.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
@@ -55,15 +55,6 @@ int main(int argc, char** argv) {
     exit(EXIT_SUCCESS);
   }
 
-  // Initialize tracing.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kTraceToConsole)) {
-    base::trace_event::TraceConfig trace_config =
-        tracing::GetConfigForTraceToConsole();
-    base::trace_event::TraceLog::GetInstance()->SetEnabled(
-        trace_config, base::trace_event::TraceLog::RECORDING_MODE);
-  }
-
   mojo::core::Init();
 
   base::SingleThreadTaskExecutor main_task_executor(base::MessagePumpType::UI);
@@ -73,9 +64,16 @@ int main(int argc, char** argv) {
   params.single_process = true;
   ui::OzonePlatform::InitializeForUI(params);
   ui::KeyboardLayoutEngineManager::GetKeyboardLayoutEngine()
-      ->SetCurrentLayoutByName("us");
+      ->SetCurrentLayoutByName("us", base::DoNothing());
 
   ui::OzonePlatform::InitializeForGPU(params);
+
+  auto shutdown_cb =
+      base::BindOnce([] { LOG(FATAL) << "Failed to shutdown."; });
+
+  ui::OzonePlatform::GetInstance()->PostCreateMainMessageLoop(
+      std::move(shutdown_cb),
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 
   base::RunLoop run_loop;
 

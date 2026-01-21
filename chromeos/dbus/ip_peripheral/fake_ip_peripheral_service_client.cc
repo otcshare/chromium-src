@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace chromeos {
@@ -86,6 +86,29 @@ void FakeIpPeripheralServiceClient::SetZoom(const std::string& ip,
                                             SetCallback callback) {
   set_zoom_call_count_++;
   zoom_ = zoom;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), true));
+}
+
+void FakeIpPeripheralServiceClient::GetControl(
+    const std::string& ip,
+    const std::vector<uint8_t>& guid_le,
+    uint8_t control_selector,
+    uint8_t uvc_get_request,
+    GetControlCallback callback) {
+  get_control_call_count_++;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), true, control_response_));
+}
+
+void FakeIpPeripheralServiceClient::SetControl(
+    const std::string& ip,
+    const std::vector<uint8_t>& guid_le,
+    uint8_t control_selector,
+    const std::vector<uint8_t>& control_setting,
+    SetControlCallback callback) {
+  set_control_call_count_++;
+  control_response_ = control_setting;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), true));
 }

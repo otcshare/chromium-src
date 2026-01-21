@@ -9,12 +9,17 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <array>
 #include <limits>
 #include <memory>
 
-#include "base/allocator/partition_allocator/partition_alloc_config.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/types/fixed_array.h"
 #include "build/build_config.h"
+#include "partition_alloc/partition_alloc_config.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // Death tests on Android are currently very flaky. No need to add more flaky
@@ -24,11 +29,10 @@
 #define ALLOW_DEATH_TEST
 #endif
 
-namespace base {
-namespace strings {
+namespace base::strings {
 
 TEST(SafeSPrintfTest, Empty) {
-  char buf[2] = { 'X', 'X' };
+  char buf[2] = {'X', 'X'};
 
   // Negative buffer size should always result in an error.
   EXPECT_EQ(-1, SafeSNPrintf(buf, static_cast<size_t>(-1), ""));
@@ -65,46 +69,46 @@ TEST(SafeSPrintfTest, NoArguments) {
   // always add a trailing NUL; it always deduplicates '%' characters).
   static const char text[] = "hello world";
   char ref[20], buf[20];
-  memset(ref, 'X', sizeof(ref));
-  memcpy(buf, ref, sizeof(buf));
+  UNSAFE_TODO(memset(ref, 'X', sizeof(ref)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A negative buffer size should always result in an error.
   EXPECT_EQ(-1, SafeSNPrintf(buf, static_cast<size_t>(-1), text));
-  EXPECT_TRUE(!memcmp(buf, ref, sizeof(buf)));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf, ref, sizeof(buf))));
 
   // Zero buffer size should always result in an error.
   EXPECT_EQ(-1, SafeSNPrintf(buf, 0, text));
-  EXPECT_TRUE(!memcmp(buf, ref, sizeof(buf)));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf, ref, sizeof(buf))));
 
   // A one-byte buffer should always print a single NUL byte.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1, SafeSNPrintf(buf, 1, text));
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1, SafeSNPrintf(buf, 1, text));
   EXPECT_EQ(0, buf[0]);
-  EXPECT_TRUE(!memcmp(buf+1, ref+1, sizeof(buf)-1));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + 1, ref + 1, sizeof(buf) - 1)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A larger (but limited) buffer should always leave the trailing bytes
   // unchanged.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1, SafeSNPrintf(buf, 2, text));
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1, SafeSNPrintf(buf, 2, text));
   EXPECT_EQ(text[0], buf[0]);
   EXPECT_EQ(0, buf[1]);
-  EXPECT_TRUE(!memcmp(buf+2, ref+2, sizeof(buf)-2));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + 2, ref + 2, sizeof(buf) - 2)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A unrestricted buffer length should always leave the trailing bytes
   // unchanged.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1,
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1,
             SafeSNPrintf(buf, sizeof(buf), text));
   EXPECT_EQ(std::string(text), std::string(buf));
-  EXPECT_TRUE(!memcmp(buf + sizeof(text), ref + sizeof(text),
-                      sizeof(buf) - sizeof(text)));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + sizeof(text), ref + sizeof(text),
+                                  sizeof(buf) - sizeof(text))));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // The same test using SafeSPrintf() instead of SafeSNPrintf().
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1, SafeSPrintf(buf, text));
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1, SafeSPrintf(buf, text));
   EXPECT_EQ(std::string(text), std::string(buf));
-  EXPECT_TRUE(!memcmp(buf + sizeof(text), ref + sizeof(text),
-                      sizeof(buf) - sizeof(text)));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + sizeof(text), ref + sizeof(text),
+                                  sizeof(buf) - sizeof(text))));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // Check for deduplication of '%' percent characters.
   EXPECT_EQ(1, SafeSPrintf(buf, "%%"));
@@ -127,50 +131,50 @@ TEST(SafeSPrintfTest, NoArguments) {
 TEST(SafeSPrintfTest, OneArgument) {
   // Test basic single-argument single-character substitution.
   const char text[] = "hello world";
-  const char fmt[]  = "hello%cworld";
+  const char fmt[] = "hello%cworld";
   char ref[20], buf[20];
-  memset(ref, 'X', sizeof(buf));
-  memcpy(buf, ref, sizeof(buf));
+  UNSAFE_TODO(memset(ref, 'X', sizeof(buf)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A negative buffer size should always result in an error.
   EXPECT_EQ(-1, SafeSNPrintf(buf, static_cast<size_t>(-1), fmt, ' '));
-  EXPECT_TRUE(!memcmp(buf, ref, sizeof(buf)));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf, ref, sizeof(buf))));
 
   // Zero buffer size should always result in an error.
   EXPECT_EQ(-1, SafeSNPrintf(buf, 0, fmt, ' '));
-  EXPECT_TRUE(!memcmp(buf, ref, sizeof(buf)));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf, ref, sizeof(buf))));
 
   // A one-byte buffer should always print a single NUL byte.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1,
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1,
             SafeSNPrintf(buf, 1, fmt, ' '));
   EXPECT_EQ(0, buf[0]);
-  EXPECT_TRUE(!memcmp(buf+1, ref+1, sizeof(buf)-1));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + 1, ref + 1, sizeof(buf) - 1)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A larger (but limited) buffer should always leave the trailing bytes
   // unchanged.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1,
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1,
             SafeSNPrintf(buf, 2, fmt, ' '));
   EXPECT_EQ(text[0], buf[0]);
   EXPECT_EQ(0, buf[1]);
-  EXPECT_TRUE(!memcmp(buf+2, ref+2, sizeof(buf)-2));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + 2, ref + 2, sizeof(buf) - 2)));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // A unrestricted buffer length should always leave the trailing bytes
   // unchanged.
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1,
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1,
             SafeSNPrintf(buf, sizeof(buf), fmt, ' '));
   EXPECT_EQ(std::string(text), std::string(buf));
-  EXPECT_TRUE(!memcmp(buf + sizeof(text), ref + sizeof(text),
-                      sizeof(buf) - sizeof(text)));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + sizeof(text), ref + sizeof(text),
+                                  sizeof(buf) - sizeof(text))));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // The same test using SafeSPrintf() instead of SafeSNPrintf().
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(text))-1, SafeSPrintf(buf, fmt, ' '));
+  EXPECT_EQ(static_cast<ssize_t>(sizeof(text)) - 1, SafeSPrintf(buf, fmt, ' '));
   EXPECT_EQ(std::string(text), std::string(buf));
-  EXPECT_TRUE(!memcmp(buf + sizeof(text), ref + sizeof(text),
-                      sizeof(buf) - sizeof(text)));
-  memcpy(buf, ref, sizeof(buf));
+  EXPECT_TRUE(!UNSAFE_TODO(memcmp(buf + sizeof(text), ref + sizeof(text),
+                                  sizeof(buf) - sizeof(text))));
+  UNSAFE_TODO(memcpy(buf, ref, sizeof(buf)));
 
   // Check for deduplication of '%' percent characters.
   EXPECT_EQ(1, SafeSPrintf(buf, "%%", 0));
@@ -205,13 +209,14 @@ TEST(SafeSPrintfTest, ASANFriendlyBufferTest) {
   // There is a more complicated test in PrintLongString() that covers a lot
   // more edge case, but it is also harder to debug in case of a failure.
   const char kTestString[] = "This is a test";
-  std::unique_ptr<char[]> buf(new char[sizeof(kTestString)]);
+  base::FixedArray<char> buf(sizeof(kTestString));
+  UNSAFE_TODO(memcpy(buf.data(), kTestString, sizeof(kTestString)));
   EXPECT_EQ(static_cast<ssize_t>(sizeof(kTestString) - 1),
-            SafeSNPrintf(buf.get(), sizeof(kTestString), kTestString));
-  EXPECT_EQ(std::string(kTestString), std::string(buf.get()));
-  EXPECT_EQ(static_cast<ssize_t>(sizeof(kTestString) - 1),
-            SafeSNPrintf(buf.get(), sizeof(kTestString), "%s", kTestString));
-  EXPECT_EQ(std::string(kTestString), std::string(buf.get()));
+            SafeSNPrintf(buf.data(), buf.size(), kTestString));
+  EXPECT_EQ(std::string(kTestString), std::string(buf.data()));
+  EXPECT_EQ(static_cast<ssize_t>(buf.size() - 1),
+            SafeSNPrintf(buf.data(), buf.size(), "%s", kTestString));
+  EXPECT_EQ(std::string(kTestString), std::string(buf.data()));
 }
 
 TEST(SafeSPrintfTest, NArgs) {
@@ -237,11 +242,11 @@ TEST(SafeSPrintfTest, NArgs) {
   EXPECT_EQ("\1\2\3\4\5\6\7", std::string(buf));
   EXPECT_EQ(8, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7, 8));
   EXPECT_EQ("\1\2\3\4\5\6\7\10", std::string(buf));
-  EXPECT_EQ(9, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c",
-                           1, 2, 3, 4, 5, 6, 7, 8, 9));
+  EXPECT_EQ(9,
+            SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7, 8, 9));
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11", std::string(buf));
-  EXPECT_EQ(10, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c%c",
-                            1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+  EXPECT_EQ(10, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7, 8,
+                            9, 10));
 
   // Repeat all the tests with SafeSNPrintf() instead of SafeSPrintf().
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11\12", std::string(buf));
@@ -259,21 +264,21 @@ TEST(SafeSPrintfTest, NArgs) {
   EXPECT_EQ("\1\2\3\4\5\6", std::string(buf));
   EXPECT_EQ(7, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7));
   EXPECT_EQ("\1\2\3\4\5\6\7", std::string(buf));
-  EXPECT_EQ(8, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c",
-                            1, 2, 3, 4, 5, 6, 7, 8));
+  EXPECT_EQ(8,
+            SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7, 8));
   EXPECT_EQ("\1\2\3\4\5\6\7\10", std::string(buf));
-  EXPECT_EQ(9, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c%c",
-                            1, 2, 3, 4, 5, 6, 7, 8, 9));
+  EXPECT_EQ(9, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7,
+                            8, 9));
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11", std::string(buf));
-  EXPECT_EQ(10, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c%c%c",
-                             1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+  EXPECT_EQ(10, SafeSNPrintf(buf, 11, "%c%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6,
+                             7, 8, 9, 10));
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11\12", std::string(buf));
 
-  EXPECT_EQ(11, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c%c%c",
-                            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+  EXPECT_EQ(11, SafeSPrintf(buf, "%c%c%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5, 6, 7,
+                            8, 9, 10, 11));
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11\12\13", std::string(buf));
-  EXPECT_EQ(11, SafeSNPrintf(buf, 12, "%c%c%c%c%c%c%c%c%c%c%c",
-                             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+  EXPECT_EQ(11, SafeSNPrintf(buf, 12, "%c%c%c%c%c%c%c%c%c%c%c", 1, 2, 3, 4, 5,
+                             6, 7, 8, 9, 10, 11));
   EXPECT_EQ("\1\2\3\4\5\6\7\10\11\12\13", std::string(buf));
 }
 
@@ -314,7 +319,7 @@ TEST(SafeSPrintfTest, DataTypes) {
   EXPECT_EQ(2, SafeSPrintf(buf, "%d", (int32_t)-1));
   EXPECT_EQ("-1", std::string(buf));
   // Work-around for an limitation of C90
-  EXPECT_EQ(11, SafeSPrintf(buf, "%d", (int32_t)-2147483647-1));
+  EXPECT_EQ(11, SafeSPrintf(buf, "%d", (int32_t)-2147483647 - 1));
   EXPECT_EQ("-2147483648", std::string(buf));
 
   // Quads
@@ -327,7 +332,7 @@ TEST(SafeSPrintfTest, DataTypes) {
   EXPECT_EQ(2, SafeSPrintf(buf, "%d", (int64_t)-1));
   EXPECT_EQ("-1", std::string(buf));
   // Work-around for an limitation of C90
-  EXPECT_EQ(20, SafeSPrintf(buf, "%d", (int64_t)-9223372036854775807LL-1));
+  EXPECT_EQ(20, SafeSPrintf(buf, "%d", (int64_t)-9223372036854775807LL - 1));
   EXPECT_EQ("-9223372036854775808", std::string(buf));
 
   // Strings (both const and mutable).
@@ -341,7 +346,7 @@ TEST(SafeSPrintfTest, DataTypes) {
   snprintf(addr, sizeof(addr), "0x%llX", (unsigned long long)(uintptr_t)buf);
   SafeSPrintf(buf, "%p", buf);
   EXPECT_EQ(std::string(addr), std::string(buf));
-  SafeSPrintf(buf, "%p", (const char *)buf);
+  SafeSPrintf(buf, "%p", (const char*)buf);
   EXPECT_EQ(std::string(addr), std::string(buf));
   snprintf(addr, sizeof(addr), "0x%llX",
            (unsigned long long)(uintptr_t)snprintf);
@@ -355,9 +360,10 @@ TEST(SafeSPrintfTest, DataTypes) {
   SafeSPrintf(buf, "%019p", buf);
   EXPECT_EQ(std::string(addr), std::string(buf));
   snprintf(addr, sizeof(addr), "0x%llX", (unsigned long long)(uintptr_t)buf);
-  memset(addr, ' ',
-         (char*)memmove(addr + sizeof(addr) - strlen(addr) - 1,
-                        addr, strlen(addr)+1) - addr);
+  UNSAFE_TODO(memset(addr, ' ',
+                     (char*)memmove(addr + sizeof(addr) - strlen(addr) - 1,
+                                    addr, strlen(addr) + 1) -
+                         addr));
   SafeSPrintf(buf, "%19p", buf);
   EXPECT_EQ(std::string(addr), std::string(buf));
 }
@@ -370,8 +376,8 @@ void PrintLongString(char* buf, size_t sz) {
 
   // Allocate slightly more space, so that we can verify that SafeSPrintf()
   // never writes past the end of the buffer.
-  std::unique_ptr<char[]> tmp(new char[sz + 2]);
-  memset(tmp.get(), 'X', sz+2);
+  base::FixedArray<char> tmp(sz + 2);
+  tmp.fill('X');
 
   // Use SafeSPrintf() to output a complex list of arguments:
   // - test padding and truncating %c single characters.
@@ -381,10 +387,10 @@ void PrintLongString(char* buf, size_t sz) {
   // - test outputting and truncating %d MININT.
   // - test outputting and truncating %p arbitrary pointer values.
   // - test outputting, padding and truncating NULL-pointer %s strings.
-  char* out = tmp.get();
+  char* out = tmp.data();
   size_t out_sz = sz;
   size_t len;
-  for (std::unique_ptr<char[]> perfect_buf;;) {
+  for (base::HeapArray<char> perfect_buf;;) {
     size_t needed =
         SafeSNPrintf(out, out_sz,
 #if defined(NDEBUG)
@@ -399,8 +405,8 @@ void PrintLongString(char* buf, size_t sz) {
     // Various sanity checks:
     // The numbered of characters needed to print the full string should always
     // be bigger or equal to the bytes that have actually been output.
-    len = strlen(tmp.get());
-    CHECK_GE(needed, len+1);
+    len = strlen(tmp.data());
+    CHECK_GE(needed, len + 1);
 
     // The number of characters output should always fit into the buffer that
     // was passed into SafeSPrintf().
@@ -415,18 +421,19 @@ void PrintLongString(char* buf, size_t sz) {
     // running SafeSNPrintf() the first time, it is possible to compute the
     // correct buffer size for this test. So, allocate a second buffer and run
     // the exact same SafeSNPrintf() command again.
-    if (!perfect_buf.get()) {
+    if (perfect_buf.empty()) {
       out_sz = std::min(needed, sz);
-      out = new char[out_sz];
-      perfect_buf.reset(out);
+      perfect_buf = base::HeapArray<char>::Uninit(out_sz);
+      out = perfect_buf.data();
     } else {
       break;
     }
   }
 
   // All trailing bytes are unchanged.
-  for (size_t i = len+1; i < sz+2; ++i)
+  for (size_t i = len + 1; i < sz + 2; ++i) {
     EXPECT_EQ('X', tmp[i]);
+  }
 
   // The text that was generated by SafeSPrintf() should always match the
   // equivalent text generated by snprintf(). Please note that the format
@@ -436,13 +443,15 @@ void PrintLongString(char* buf, size_t sz) {
   // N.B.: It would be so much cleaner to use snprintf(). But unfortunately,
   //       Visual Studio doesn't support this function, and the work-arounds
   //       are all really awkward.
-  char ref[256];
-  CHECK_LE(sz, sizeof(ref));
-  snprintf(ref, sizeof(ref), "A long string: %%d 00DEADBEEF %lld 0x%llX <NULL>",
-           static_cast<long long>(std::numeric_limits<intptr_t>::min()),
-           static_cast<unsigned long long>(
-               reinterpret_cast<uintptr_t>(PrintLongString)));
-  ref[sz-1] = '\000';
+  std::array<char, 256> ref;
+  CHECK_LE(sz, (ref.size() * sizeof(decltype(ref)::value_type)));
+  UNSAFE_TODO(
+      snprintf(ref.data(), (ref.size() * sizeof(decltype(ref)::value_type)),
+               "A long string: %%d 00DEADBEEF %lld 0x%llX <NULL>",
+               static_cast<long long>(std::numeric_limits<intptr_t>::min()),
+               static_cast<unsigned long long>(
+                   reinterpret_cast<uintptr_t>(PrintLongString))));
+  ref[sz - 1] = '\000';
 
 #if defined(NDEBUG)
   const size_t kSSizeMax = std::numeric_limits<ssize_t>::max();
@@ -451,18 +460,19 @@ void PrintLongString(char* buf, size_t sz) {
 #endif
 
   // Compare the output from SafeSPrintf() to the one from snprintf().
-  EXPECT_EQ(std::string(ref).substr(0, kSSizeMax-1), std::string(tmp.get()));
+  EXPECT_EQ(std::string(ref.data()).substr(0, kSSizeMax - 1),
+            std::string(tmp.data()));
 
   // We allocated a slightly larger buffer, so that we could perform some
   // extra sanity checks. Now that the tests have all passed, we copy the
   // data to the output buffer that the caller provided.
-  memcpy(buf, tmp.get(), len+1);
+  UNSAFE_TODO(memcpy(buf, tmp.data(), len + 1));
 }
 
 #if !defined(NDEBUG)
 class ScopedSafeSPrintfSSizeMaxSetter {
  public:
-  ScopedSafeSPrintfSSizeMaxSetter(size_t sz) {
+  explicit ScopedSafeSPrintfSSizeMaxSetter(size_t sz) {
     old_ssize_max_ = internal::GetSafeSPrintfSSizeMaxForTest();
     internal::SetSafeSPrintfSSizeMaxForTest(sz);
   }
@@ -483,21 +493,14 @@ class ScopedSafeSPrintfSSizeMaxSetter {
 
 }  // anonymous namespace
 
-// TODO(crbug.com/1369007): Fails when OOB protection is turned on.
-#if BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) || \
-    BUILDFLAG(ENABLE_MTE_CHECKED_PTR_SUPPORT)
-#define MAYBE_Truncation DISABLED_Truncation
-#else
-#define MAYBE_Truncation Truncation
-#endif
-TEST(SafeSPrintfTest, MAYBE_Truncation) {
+TEST(SafeSPrintfTest, Truncation) {
   // We use PrintLongString() to print a complex long string and then
   // truncate to all possible lengths. This ends up exercising a lot of
   // different code paths in SafeSPrintf() and IToASCII(), as truncation can
   // happen in a lot of different states.
   char ref[256];
   PrintLongString(ref, sizeof(ref));
-  for (size_t i = strlen(ref)+1; i; --i) {
+  for (size_t i = strlen(ref) + 1; i; --i) {
     char buf[sizeof(ref)];
     PrintLongString(buf, i);
     EXPECT_EQ(std::string(ref, i - 1), std::string(buf));
@@ -510,7 +513,7 @@ TEST(SafeSPrintfTest, MAYBE_Truncation) {
   // Repeat the truncation test and verify that this other code path in
   // SafeSPrintf() works correctly, too.
 #if !defined(NDEBUG)
-  for (size_t i = strlen(ref)+1; i > 1; --i) {
+  for (size_t i = strlen(ref) + 1; i > 1; --i) {
     ScopedSafeSPrintfSSizeMaxSetter ssize_max_setter(i);
     char buf[sizeof(ref)];
     PrintLongString(buf, sizeof(buf));
@@ -544,7 +547,8 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2c", 'A'));
   EXPECT_EQ("%-2c", std::string(buf));
   SafeSPrintf(fmt, "%%%dc", std::numeric_limits<ssize_t>::max() - 1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1, SafeSPrintf(buf, fmt, 'A'));
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
+            SafeSPrintf(buf, fmt, 'A'));
   SafeSPrintf(fmt, "%%%dc",
               static_cast<size_t>(std::numeric_limits<ssize_t>::max()));
 #if defined(NDEBUG)
@@ -573,12 +577,12 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ("111", std::string(buf));
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2o", 1));
   EXPECT_EQ("%-2o", std::string(buf));
-  SafeSPrintf(fmt, "%%%do", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%%do", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("   ", std::string(buf));
-  SafeSPrintf(fmt, "%%0%do", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%0%do", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("000", std::string(buf));
   SafeSPrintf(fmt, "%%%do",
@@ -607,12 +611,12 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ("-111", std::string(buf));
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2d", 1));
   EXPECT_EQ("%-2d", std::string(buf));
-  SafeSPrintf(fmt, "%%%dd", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%%dd", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("   ", std::string(buf));
-  SafeSPrintf(fmt, "%%0%dd", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%0%dd", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("000", std::string(buf));
   SafeSPrintf(fmt, "%%%dd",
@@ -643,12 +647,12 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ("111", std::string(buf));
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2X", 1));
   EXPECT_EQ("%-2X", std::string(buf));
-  SafeSPrintf(fmt, "%%%dX", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%%dX", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("   ", std::string(buf));
-  SafeSPrintf(fmt, "%%0%dX", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%0%dX", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, 1));
   EXPECT_EQ("000", std::string(buf));
   SafeSPrintf(fmt, "%%%dX",
@@ -671,12 +675,12 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ("0x111", std::string(buf));
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2p", (void*)1));
   EXPECT_EQ("%-2p", std::string(buf));
-  SafeSPrintf(fmt, "%%%dp", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%%dp", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, (void*)1));
   EXPECT_EQ("   ", std::string(buf));
-  SafeSPrintf(fmt, "%%0%dp", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%0%dp", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, (void*)1));
   EXPECT_EQ("0x0", std::string(buf));
   SafeSPrintf(fmt, "%%%dp",
@@ -699,12 +703,12 @@ TEST(SafeSPrintfTest, Padding) {
   EXPECT_EQ("AAA", std::string(buf));
   EXPECT_EQ(4, SafeSPrintf(buf, "%-2s", "A"));
   EXPECT_EQ("%-2s", std::string(buf));
-  SafeSPrintf(fmt, "%%%ds", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%%ds", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, "A"));
   EXPECT_EQ("   ", std::string(buf));
-  SafeSPrintf(fmt, "%%0%ds", std::numeric_limits<ssize_t>::max()-1);
-  EXPECT_EQ(std::numeric_limits<ssize_t>::max()-1,
+  SafeSPrintf(fmt, "%%0%ds", std::numeric_limits<ssize_t>::max() - 1);
+  EXPECT_EQ(std::numeric_limits<ssize_t>::max() - 1,
             SafeSNPrintf(buf, 4, fmt, "A"));
   EXPECT_EQ("   ", std::string(buf));
   SafeSPrintf(fmt, "%%%ds",
@@ -718,11 +722,11 @@ TEST(SafeSPrintfTest, Padding) {
 }
 
 TEST(SafeSPrintfTest, EmbeddedNul) {
-  char buf[] = { 'X', 'X', 'X', 'X' };
+  char buf[] = {'X', 'X', 'X', 'X'};
   EXPECT_EQ(2, SafeSPrintf(buf, "%3c", 0));
   EXPECT_EQ(' ', buf[0]);
   EXPECT_EQ(' ', buf[1]);
-  EXPECT_EQ(0,   buf[2]);
+  EXPECT_EQ(0, buf[2]);
   EXPECT_EQ('X', buf[3]);
 
   // Check handling of a NUL format character. N.B. this takes two different
@@ -763,8 +767,8 @@ TEST(SafeSPrintfTest, PointerSize) {
   // but we want to avoid doing so for pointer types. This could be a
   // problem on systems, where pointers are only 32bit. This tests verifies
   // that there is no such problem.
-  char *str = reinterpret_cast<char *>(0x80000000u);
-  void *ptr = str;
+  char* str = reinterpret_cast<char*>(0x80000000u);
+  void* ptr = str;
   char buf[40];
   EXPECT_EQ(10, SafeSPrintf(buf, "%p", str));
   EXPECT_EQ("0x80000000", std::string(buf));
@@ -772,5 +776,12 @@ TEST(SafeSPrintfTest, PointerSize) {
   EXPECT_EQ("0x80000000", std::string(buf));
 }
 
-}  // namespace strings
-}  // namespace base
+TEST(SafeSPrintfTest, SpanForms) {
+  std::vector<char> buf(6);
+  EXPECT_EQ(5, SafeSPrintf(buf, "abcde"));
+  EXPECT_THAT(buf, testing::ElementsAre('a', 'b', 'c', 'd', 'e', '\0'));
+  EXPECT_EQ(5, SafeSPrintf(buf, "%c=%d\n", 'x', 42));
+  EXPECT_THAT(buf, testing::ElementsAre('x', '=', '4', '2', '\n', '\0'));
+}
+
+}  // namespace base::strings

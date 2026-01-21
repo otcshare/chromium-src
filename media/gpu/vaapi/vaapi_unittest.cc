@@ -2,28 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // This has to be included first.
 // See http://code.google.com/p/googletest/issues/detail?id=371
-#include "testing/gtest/include/gtest/gtest.h"
-
 #include <drm_fourcc.h>
 #include <gbm.h>
 #include <unistd.h>
-#include <map>
-#include <vector>
-
 #include <va/va.h>
 #include <va/va_drmcommon.h>
 #include <va/va_str.h>
 #include <xf86drm.h>
 
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <vector>
+
 #include "base/bits.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/cpu.h"
 #include "base/files/file.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/strings/pattern.h"
@@ -34,24 +38,22 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_suite.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/media_switches.h"
+#include "media/base/platform_features.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 #include "media/media_buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/linux/gbm_defines.h"
 
-#if BUILDFLAG(IS_OZONE) && BUILDFLAG(IS_LINUX)
-// GN doesn't understand conditional includes, so we need nogncheck here.
-// See crbug.com/1125897.
-#include "ui/ozone/public/ozone_platform.h"  // nogncheck
+#ifndef I915_FORMAT_MOD_4_TILED
+#define I915_FORMAT_MOD_4_TILED 0x100000000000009
 #endif
 
 namespace media {
 namespace {
 
-absl::optional<VAProfile> ConvertToVAProfile(VideoCodecProfile profile) {
+std::optional<VAProfile> ConvertToVAProfile(VideoCodecProfile profile) {
   // A map between VideoCodecProfile and VAProfile.
   const std::map<VideoCodecProfile, VAProfile> kProfileMap = {
     // VAProfileH264Baseline is deprecated in <va/va.h> from libva 2.0.0.
@@ -69,12 +71,12 @@ absl::optional<VAProfile> ConvertToVAProfile(VideoCodecProfile profile) {
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
   };
   auto it = kProfileMap.find(profile);
-  return it != kProfileMap.end() ? absl::make_optional<VAProfile>(it->second)
-                                 : absl::nullopt;
+  return it != kProfileMap.end() ? std::make_optional<VAProfile>(it->second)
+                                 : std::nullopt;
 }
 
 // Converts the given string to VAProfile
-absl::optional<VAProfile> StringToVAProfile(const std::string& va_profile) {
+std::optional<VAProfile> StringToVAProfile(const std::string& va_profile) {
   const std::map<std::string, VAProfile> kStringToVAProfile = {
     {"VAProfileNone", VAProfileNone},
     {"VAProfileH264ConstrainedBaseline", VAProfileH264ConstrainedBaseline},
@@ -99,12 +101,12 @@ absl::optional<VAProfile> StringToVAProfile(const std::string& va_profile) {
 
   auto it = kStringToVAProfile.find(va_profile);
   return it != kStringToVAProfile.end()
-             ? absl::make_optional<VAProfile>(it->second)
-             : absl::nullopt;
+             ? std::make_optional<VAProfile>(it->second)
+             : std::nullopt;
 }
 
 // Converts the given string to VAEntrypoint
-absl::optional<VAEntrypoint> StringToVAEntrypoint(
+std::optional<VAEntrypoint> StringToVAEntrypoint(
     const std::string& va_entrypoint) {
   const std::map<std::string, VAEntrypoint> kStringToVAEntrypoint = {
     {"VAEntrypointVLD", VAEntrypointVLD},
@@ -119,8 +121,8 @@ absl::optional<VAEntrypoint> StringToVAEntrypoint(
 
   auto it = kStringToVAEntrypoint.find(va_entrypoint);
   return it != kStringToVAEntrypoint.end()
-             ? absl::make_optional<VAEntrypoint>(it->second)
-             : absl::nullopt;
+             ? std::make_optional<VAEntrypoint>(it->second)
+             : std::nullopt;
 }
 
 unsigned int ToVaRTFormat(uint32_t va_fourcc) {
@@ -166,7 +168,6 @@ const std::string VARTFormatToString(unsigned int va_rt_format) {
       return "VA_RT_FORMAT_YUV420_10";
   }
   NOTREACHED() << "Unknown VA_RT_FORMAT 0x" << std::hex << va_rt_format;
-  return "Unknown VA_RT_FORMAT";
 }
 
 #define TOSTR(enumCase) \
@@ -184,7 +185,6 @@ const char* VAProfileToString(VAProfile profile) {
     TOSTR(VAProfileMPEG4Main);
     case VAProfileH264Baseline:
       NOTREACHED() << "VAProfileH264Baseline is deprecated";
-      return "Deprecated VAProfileH264Baseline";
     TOSTR(VAProfileH264Main);
     TOSTR(VAProfileH264High);
     TOSTR(VAProfileVC1Simple);
@@ -217,9 +217,28 @@ const char* VAProfileToString(VAProfile profile) {
 #if VA_MAJOR_VERSION >= 2 || VA_MINOR_VERSION >= 11
     TOSTR(VAProfileProtected);
 #endif
+#if VA_MAJOR_VERSION >= 2 || VA_MINOR_VERSION >= 18
+    TOSTR(VAProfileH264High10);
+#endif
+#if VA_MAJOR_VERSION >= 2 || VA_MINOR_VERSION >= 22
+    TOSTR(VAProfileVVCMain10);
+    TOSTR(VAProfileVVCMultilayerMain10);
+#endif
   }
   // clang-format on
   return "<unknown profile>";
+}
+
+// Returns true if the Display version is 14. CPU model ID's are referenced from
+// the following file in the kernel source: arch/x86/include/asm/intel-family.h.
+bool IsDisplayVer14() {
+  constexpr int kMeteorLakeModelId = 0xAC;
+  constexpr int kMeteorLake_LModelId = 0xAA;
+  constexpr int kPentiumAndLaterFamily = 0x06;
+  const base::CPU cpuid;
+  return cpuid.family() == kPentiumAndLaterFamily &&
+         (cpuid.model() == kMeteorLakeModelId ||
+          cpuid.model() == kMeteorLake_LModelId);
 }
 
 }  // namespace
@@ -272,11 +291,10 @@ std::string GetVaInfo(std::vector<std::string> argv) {
   EXPECT_TRUE(LaunchProcess(argv, options).IsValid());
   write_pipe_fd.reset();
 
-  char buf[262144] = {};
-  int n = read_pipe.ReadAtCurrentPos(buf, sizeof(buf));
-  PCHECK(n >= 0);
-  EXPECT_LT(n, 262144);
-  std::string output(buf, n);
+  uint8_t buf[262144] = {};
+  std::optional<size_t> n = read_pipe.ReadAtCurrentPos(buf);
+  PCHECK(n);
+  auto output = std::string(base::as_string_view(base::span(buf).first(*n)));
   DVLOG(4) << output;
   return output;
 }
@@ -299,7 +317,7 @@ TEST_F(VaapiTest, VaapiSandboxInitialization) {
 // [1] https://github.com/intel/libva/commit/6f69256f8ccc9a73c0b196ab77ac69ab1f4f33c2
 TEST_F(VaapiTest, VerifyNoVAProfileH264Baseline) {
   const auto va_info = RetrieveVAInfoOutput();
-  EXPECT_FALSE(base::Contains(va_info, VAProfileH264Baseline));
+  EXPECT_FALSE(va_info.contains(VAProfileH264Baseline));
 }
 
 // Verifies that every VAProfile from VaapiWrapper::GetSupportedDecodeProfiles()
@@ -312,7 +330,7 @@ TEST_F(VaapiTest, GetSupportedDecodeProfiles) {
     const auto va_profile = ConvertToVAProfile(profile.profile);
     ASSERT_TRUE(va_profile.has_value());
 
-    EXPECT_TRUE(base::Contains(va_info.at(*va_profile), VAEntrypointVLD))
+    EXPECT_TRUE(std::ranges::contains(va_info.at(*va_profile), VAEntrypointVLD))
         << " profile: " << GetProfileName(profile.profile)
         << ", va profile: " << vaProfileStr(*va_profile);
     EXPECT_TRUE(VaapiWrapper::IsDecodeSupported(*va_profile))
@@ -329,9 +347,22 @@ TEST_F(VaapiTest, GetSupportedEncodeProfiles) {
   for (const auto& profile : VaapiWrapper::GetSupportedEncodeProfiles()) {
     const auto va_profile = ConvertToVAProfile(profile.profile);
     ASSERT_TRUE(va_profile.has_value());
+    constexpr VAProfile kSupportableVideoEncoderProfiles[] = {
+        VAProfileH264ConstrainedBaseline,
+        VAProfileH264Main,
+        VAProfileH264High,
+        VAProfileVP8Version0_3,
+        VAProfileVP9Profile0,
+        VAProfileAV1Profile0,
+    };
+    // Check if VaapiWrapper reports a profile that is not supported by
+    // VaapiVideoEncodeAccelerator.
+    ASSERT_TRUE(
+        std::ranges::contains(kSupportableVideoEncoderProfiles, va_profile));
 
-    EXPECT_TRUE(base::Contains(va_info.at(*va_profile), VAEntrypointEncSlice) ||
-                base::Contains(va_info.at(*va_profile), VAEntrypointEncSliceLP))
+    EXPECT_TRUE(
+        std::ranges::contains(va_info.at(*va_profile), VAEntrypointEncSlice) ||
+        std::ranges::contains(va_info.at(*va_profile), VAEntrypointEncSliceLP))
         << " profile: " << GetProfileName(profile.profile)
         << ", va profile: " << vaProfileStr(*va_profile);
   }
@@ -388,6 +419,7 @@ TEST_F(VaapiTest, VbrAndCbrResolutionsMatch) {
 }
 
 #if BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
+#if BUILDFLAG(IS_CHROMEOS)
 // Verifies that VAProfileProtected is indeed supported by the command line
 // vainfo utility.
 TEST_F(VaapiTest, VaapiProfileProtected) {
@@ -398,13 +430,14 @@ TEST_F(VaapiTest, VaapiProfileProtected) {
   if (impl == VAImplementation::kIntelIHD) {
     const auto va_info = RetrieveVAInfoOutput();
 
-    EXPECT_TRUE(base::Contains(va_info.at(VAProfileProtected),
-                               VAEntrypointProtectedContent))
+    EXPECT_TRUE(std::ranges::contains(va_info.at(VAProfileProtected),
+                                      VAEntrypointProtectedContent))
         << ", va profile: " << vaProfileStr(VAProfileProtected);
   } else {
     EXPECT_EQ(impl, VAImplementation::kMesaGallium);
   }
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
 
 // Verifies that if JPEG decoding and encoding are supported by VaapiWrapper,
@@ -413,10 +446,11 @@ TEST_F(VaapiTest, VaapiProfilesJPEG) {
   const auto va_info = RetrieveVAInfoOutput();
 
   EXPECT_EQ(VaapiWrapper::IsDecodeSupported(VAProfileJPEGBaseline),
-            base::Contains(va_info.at(VAProfileJPEGBaseline), VAEntrypointVLD));
+            std::ranges::contains(va_info.at(VAProfileJPEGBaseline),
+                                  VAEntrypointVLD));
   EXPECT_EQ(VaapiWrapper::IsJpegEncodeSupported(),
-            base::Contains(va_info.at(VAProfileJPEGBaseline),
-                           VAEntrypointEncPicture));
+            std::ranges::contains(va_info.at(VAProfileJPEGBaseline),
+                                  VAEntrypointEncPicture));
 }
 
 // Verifies that the default VAEntrypoint as per VaapiWrapper is indeed among
@@ -432,13 +466,80 @@ TEST_F(VaapiTest, DefaultEntrypointIsSupported) {
           VaapiWrapper::GetDefaultVaEntryPoint(wrapper_mode,
                                                profile_and_entrypoints.first);
       const auto& supported_entrypoints = profile_and_entrypoints.second;
-      EXPECT_TRUE(base::Contains(supported_entrypoints, default_entrypoint))
+      EXPECT_TRUE(
+          std::ranges::contains(supported_entrypoints, default_entrypoint))
           << "Default VAEntrypoint " << vaEntrypointStr(default_entrypoint)
           << " (VaapiWrapper mode = " << wrapper_mode
           << ") is not supported for "
           << vaProfileStr(profile_and_entrypoints.first);
     }
   }
+}
+
+// Verifies that VaapiWrapper::Create...() fails when called with an unsupported
+// codec profile.
+TEST_F(VaapiTest, UnsupportedVAProfile) {
+  std::map<VAProfile, std::vector<VAEntrypoint>> configurations =
+      VaapiWrapper::GetSupportedConfigurationsForCodecModeForTesting(
+          VaapiWrapper::kDecode);
+  // H.263 decoding is NOT supported anywhere, but leave an ASSERT JIC.
+  constexpr auto kUnsupportedVAProfile = VAProfileH263Baseline;
+  ASSERT_FALSE(configurations.contains(kUnsupportedVAProfile));
+
+  auto wrapper_or_error =
+      VaapiWrapper::Create(VaapiWrapper::kDecode, kUnsupportedVAProfile,
+                           EncryptionScheme::kUnencrypted, base::DoNothing());
+  ASSERT_FALSE(wrapper_or_error.has_value());
+  ASSERT_EQ(wrapper_or_error.error(),
+            DecoderStatus::Codes::kUnsupportedProfile);
+}
+
+// Verifies that VaapiWrapper::Create...() fails after the limit of created
+// instances exceeds the threshold.
+TEST_F(VaapiTest, TooManyDecoderInstances) {
+  std::map<VAProfile, std::vector<VAEntrypoint>> configurations =
+      VaapiWrapper::GetSupportedConfigurationsForCodecModeForTesting(
+          VaapiWrapper::kDecode);
+  // H.264 decoding is currently supported everywhere, but leave an ASSERT.
+  constexpr auto kVAProfile = VAProfileH264ConstrainedBaseline;
+  ASSERT_TRUE(configurations.contains(kVAProfile));
+
+  const int kMaxNumOfInstances = VaapiWrapper::GetMaxNumDecoderInstances();
+  std::vector<scoped_refptr<VaapiWrapper>> vaapi_wrappers(kMaxNumOfInstances);
+  for (auto& wrapper : vaapi_wrappers) {
+    auto wrapper_or_error =
+        VaapiWrapper::Create(VaapiWrapper::kDecode, kVAProfile,
+                             EncryptionScheme::kUnencrypted, base::DoNothing());
+    ASSERT_TRUE(wrapper_or_error.has_value());
+    wrapper = std::move(wrapper_or_error.value());
+  }
+  // Next one fails
+  auto wrapper_or_error = VaapiWrapper::Create(VaapiWrapper::kDecode, kVAProfile,
+                                     EncryptionScheme::kUnencrypted,
+                                     base::DoNothing());
+  ASSERT_FALSE(wrapper_or_error.has_value());
+  ASSERT_EQ(wrapper_or_error.error(), DecoderStatus::Codes::kTooManyDecoders);
+}
+
+// Verifies that VaapiWrapper::Create...() fails when an EncryptionScheme is
+// specified for a non-protected CodecMode.
+TEST_F(VaapiTest, EncryptionSchemeNeedsCodecMode) {
+#if !BUILDFLAG(IS_CHROMEOS)
+  GTEST_SKIP() << "This test only applies to ChromeOS builds.";
+#else
+  std::map<VAProfile, std::vector<VAEntrypoint>> configurations =
+      VaapiWrapper::GetSupportedConfigurationsForCodecModeForTesting(
+          VaapiWrapper::kDecode);
+  // H.264 decoding is currently supported everywhere, but leave an ASSERT.
+  constexpr auto kVAProfile = VAProfileH264ConstrainedBaseline;
+  ASSERT_TRUE(configurations.contains(kVAProfile));
+
+  auto wrapper_or_error =
+      VaapiWrapper::Create(VaapiWrapper::kDecode, kVAProfile,
+                           EncryptionScheme::kCenc, base::DoNothing());
+  ASSERT_FALSE(wrapper_or_error.has_value());
+  ASSERT_EQ(wrapper_or_error.error(), DecoderStatus::Codes::kFailed);
+#endif
 }
 
 // Verifies that VaapiWrapper::CreateContext() will queue up a buffer to set the
@@ -452,8 +553,8 @@ TEST_F(VaapiTest, LowQualityEncodingSetting) {
       base::MatchPattern(cpuid.cpu_brand(), "Intel(R) Core(TM) *Y CPU*");
   const bool is_low_power_intel =
       cpuid.family() == kPentiumAndLaterFamily &&
-      (base::Contains(cpuid.cpu_brand(), "Pentium") ||
-       base::Contains(cpuid.cpu_brand(), "Celeron") || is_core_y_processor);
+      (cpuid.cpu_brand().contains("Pentium") ||
+       cpuid.cpu_brand().contains("Celeron") || is_core_y_processor);
   if (!is_low_power_intel)
     GTEST_SKIP() << "Not an Intel low power processor";
 
@@ -466,20 +567,24 @@ TEST_F(VaapiTest, LowQualityEncodingSetting) {
 
     for (const auto& profile_and_entrypoints : configurations) {
       const VAProfile va_profile = profile_and_entrypoints.first;
-      scoped_refptr<VaapiWrapper> wrapper = VaapiWrapper::Create(
-          VaapiWrapper::kEncodeConstantBitrate, va_profile,
-          EncryptionScheme::kUnencrypted, base::DoNothing());
+      scoped_refptr<VaapiWrapper> wrapper =
+          VaapiWrapper::Create(VaapiWrapper::kEncodeConstantBitrate, va_profile,
+                               EncryptionScheme::kUnencrypted,
+                               base::DoNothing())
+              .value_or(nullptr);
 
       // Depending on the GPU Gen, flags and policies, we may or may not utilize
       // all entrypoints (e.g. we might always want VAEntrypointEncSliceLP if
       // supported and enabled). Query VaapiWrapper's mandated entry point.
       const VAEntrypoint entrypoint =
           VaapiWrapper::GetDefaultVaEntryPoint(codec_mode, va_profile);
-      ASSERT_TRUE(base::Contains(profile_and_entrypoints.second, entrypoint));
+      ASSERT_TRUE(
+          std::ranges::contains(profile_and_entrypoints.second, entrypoint));
 
       VAConfigAttrib attrib{};
       attrib.type = VAConfigAttribEncQualityRange;
       {
+        VAAPI_CHECK_CALLED_ON_VALID_SEQUENCE(wrapper->sequence_checker_);
         base::AutoLockMaybe auto_lock(wrapper->va_lock_.get());
         VAStatus va_res = vaGetConfigAttributes(
             wrapper->va_display_, va_profile, entrypoint, &attrib, 1);
@@ -498,15 +603,17 @@ TEST_F(VaapiTest, LowQualityEncodingSetting) {
       // |pending_va_buffers_| that, when mapped, looks correct. That buffer
       // should be created by CreateContext().
       ASSERT_TRUE(wrapper->CreateContext(gfx::Size(640, 368)));
+      VAAPI_CHECK_CALLED_ON_VALID_SEQUENCE(wrapper->sequence_checker_);
       ASSERT_EQ(wrapper->pending_va_buffers_.size(), 1u);
       {
         base::AutoLockMaybe auto_lock(wrapper->va_lock_.get());
-        ScopedVABufferMapping mapping(wrapper->va_lock_, wrapper->va_display_,
-                                      wrapper->pending_va_buffers_.front());
-        ASSERT_TRUE(mapping.IsValid());
 
+        auto mapping = ScopedVABufferMapping::Create(
+            wrapper->va_lock_, wrapper->va_display_,
+            wrapper->pending_va_buffers_.front());
+        ASSERT_TRUE(mapping);
         auto* const va_buffer =
-            reinterpret_cast<VAEncMiscParameterBuffer*>(mapping.data());
+            reinterpret_cast<VAEncMiscParameterBuffer*>(mapping->data());
         EXPECT_EQ(va_buffer->type, VAEncMiscParameterTypeQualityLevel);
 
         auto* const enc_quality =
@@ -521,59 +628,60 @@ TEST_F(VaapiTest, LowQualityEncodingSetting) {
 
 // This test checks the supported SVC scalability mode.
 TEST_F(VaapiTest, CheckSupportedSVCScalabilityModes) {
+  const std::vector<SVCScalabilityMode> kSupportedL1T1 = {
+      SVCScalabilityMode::kL1T1};
 #if BUILDFLAG(IS_CHROMEOS)
   const std::vector<SVCScalabilityMode> kSupportedTemporalSVC = {
-      SVCScalabilityMode::kL1T2, SVCScalabilityMode::kL1T3};
+      SVCScalabilityMode::kL1T1, SVCScalabilityMode::kL1T2,
+      SVCScalabilityMode::kL1T3};
   const std::vector<SVCScalabilityMode> kSupportedTemporalAndKeySVC = {
-      SVCScalabilityMode::kL1T2,    SVCScalabilityMode::kL1T3,
-      SVCScalabilityMode::kL2T2Key, SVCScalabilityMode::kL2T3Key,
-      SVCScalabilityMode::kL3T2Key, SVCScalabilityMode::kL3T3Key};
+      SVCScalabilityMode::kL1T1,    SVCScalabilityMode::kL1T2,
+      SVCScalabilityMode::kL1T3,    SVCScalabilityMode::kL2T2Key,
+      SVCScalabilityMode::kL2T3Key, SVCScalabilityMode::kL3T2Key,
+      SVCScalabilityMode::kL3T3Key, SVCScalabilityMode::kS2T1,
+      SVCScalabilityMode::kS2T2,    SVCScalabilityMode::kS2T3,
+      SVCScalabilityMode::kS3T1,    SVCScalabilityMode::kS3T2,
+      SVCScalabilityMode::kS3T3};
 #endif
 
   const auto scalability_modes_vp9_profile0 =
       VaapiWrapper::GetSupportedScalabilityModes(VP9PROFILE_PROFILE0,
                                                  VAProfileVP9Profile0);
 #if BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(kVaapiVp9kSVCHWEncoding) &&
+  const VAEntrypoint vp9_cqp_enc_va_entry_point =
       VaapiWrapper::GetDefaultVaEntryPoint(
           VaapiWrapper::kEncodeConstantQuantizationParameter,
-          VAProfileVP9Profile0) == VAEntrypointEncSliceLP) {
+          VAProfileVP9Profile0);
+  if (vp9_cqp_enc_va_entry_point == VAEntrypointEncSliceLP ||
+      vp9_cqp_enc_va_entry_point == VAEntrypointEncSlice) {
     EXPECT_EQ(scalability_modes_vp9_profile0, kSupportedTemporalAndKeySVC);
   } else {
     EXPECT_EQ(scalability_modes_vp9_profile0, kSupportedTemporalSVC);
   }
 #else
-  EXPECT_TRUE(scalability_modes_vp9_profile0.empty());
+  EXPECT_EQ(scalability_modes_vp9_profile0, kSupportedL1T1);
 #endif
 
   const auto scalability_modes_vp9_profile2 =
       VaapiWrapper::GetSupportedScalabilityModes(VP9PROFILE_PROFILE2,
                                                  VAProfileVP9Profile2);
-  EXPECT_TRUE(scalability_modes_vp9_profile2.empty());
+  EXPECT_EQ(scalability_modes_vp9_profile2, kSupportedL1T1);
 
   const auto scalability_modes_vp8 = VaapiWrapper::GetSupportedScalabilityModes(
       VP8PROFILE_ANY, VAProfileVP8Version0_3);
 #if BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(kVaapiVp8TemporalLayerHWEncoding)) {
-    EXPECT_EQ(scalability_modes_vp8, kSupportedTemporalSVC);
-  } else {
-    EXPECT_TRUE(scalability_modes_vp8.empty());
-  }
+  EXPECT_EQ(scalability_modes_vp8, kSupportedTemporalSVC);
 #else
-  EXPECT_TRUE(scalability_modes_vp8.empty());
+  EXPECT_EQ(scalability_modes_vp8, kSupportedL1T1);
 #endif
 
   const auto scalability_modes_h264_baseline =
       VaapiWrapper::GetSupportedScalabilityModes(
           H264PROFILE_BASELINE, VAProfileH264ConstrainedBaseline);
 #if BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(kVaapiH264TemporalLayerHWEncoding)) {
-    EXPECT_EQ(scalability_modes_h264_baseline, kSupportedTemporalSVC);
-  } else {
-    EXPECT_TRUE(scalability_modes_h264_baseline.empty());
-  }
+  EXPECT_EQ(scalability_modes_h264_baseline, kSupportedTemporalSVC);
 #else
-  EXPECT_TRUE(scalability_modes_h264_baseline.empty());
+  EXPECT_EQ(scalability_modes_h264_baseline, kSupportedL1T1);
 #endif
 }
 
@@ -617,7 +725,8 @@ TEST_P(VaapiVppTest, BlitWithVAAllocatedSurfaces) {
 
   auto wrapper =
       VaapiWrapper::Create(VaapiWrapper::kVideoProcess, VAProfileNone,
-                           EncryptionScheme::kUnencrypted, base::DoNothing());
+                           EncryptionScheme::kUnencrypted, base::DoNothing())
+          .value_or(nullptr);
   ASSERT_TRUE(!!wrapper);
   // Size is unnecessary for a VPP context.
   ASSERT_TRUE(wrapper->CreateContext(gfx::Size()));
@@ -629,27 +738,21 @@ TEST_P(VaapiVppTest, BlitWithVAAllocatedSurfaces) {
 
   auto scoped_surfaces = wrapper->CreateScopedVASurfaces(
       va_rt_format_in, kInputSize, {VaapiWrapper::SurfaceUsageHint::kGeneric},
-      1u, /*visible_size=*/absl::nullopt, /*va_fourcc=*/absl::nullopt);
+      1u, /*visible_size=*/std::nullopt, /*va_fourcc=*/std::nullopt);
   ASSERT_FALSE(scoped_surfaces.empty());
   std::unique_ptr<ScopedVASurface> scoped_surface_in =
       std::move(scoped_surfaces[0]);
 
   scoped_surfaces = wrapper->CreateScopedVASurfaces(
       va_rt_format_out, kOutputSize, {VaapiWrapper::SurfaceUsageHint::kGeneric},
-      1u, /*visible_size=*/absl::nullopt, /*va_fourcc=*/absl::nullopt);
+      1u, /*visible_size=*/std::nullopt, /*va_fourcc=*/std::nullopt);
   ASSERT_FALSE(scoped_surfaces.empty());
   std::unique_ptr<ScopedVASurface> scoped_surface_out =
       std::move(scoped_surfaces[0]);
 
-  scoped_refptr<VASurface> surface_in = base::MakeRefCounted<VASurface>(
-      scoped_surface_in->id(), kInputSize, va_rt_format_in, base::DoNothing());
-  scoped_refptr<VASurface> surface_out =
-      base::MakeRefCounted<VASurface>(scoped_surface_out->id(), kOutputSize,
-                                      va_rt_format_out, base::DoNothing());
-
-  ASSERT_TRUE(wrapper->BlitSurface(*surface_in, *surface_out,
-                                   gfx::Rect(kInputSize),
-                                   gfx::Rect(kOutputSize), VIDEO_ROTATION_0));
+  ASSERT_TRUE(wrapper->BlitSurface(
+      scoped_surface_in->id(), kInputSize, scoped_surface_out->id(),
+      kOutputSize, gfx::Rect(kInputSize), gfx::Rect(kOutputSize)));
   ASSERT_TRUE(wrapper->SyncSurface(scoped_surface_out->id()));
   wrapper->DestroyContext();
 }
@@ -736,14 +839,15 @@ TEST_P(VaapiMinigbmTest, AllocateAndCompareWithMinigbm) {
 
   auto wrapper =
       VaapiWrapper::Create(VaapiWrapper::kDecode, va_profile,
-                           EncryptionScheme::kUnencrypted, base::DoNothing());
+                           EncryptionScheme::kUnencrypted, base::DoNothing())
+          .value_or(nullptr);
   ASSERT_TRUE(!!wrapper);
   ASSERT_TRUE(wrapper->CreateContext(resolution));
 
   auto scoped_surfaces = wrapper->CreateScopedVASurfaces(
       va_rt_format, resolution, {VaapiWrapper::SurfaceUsageHint::kVideoDecoder},
       1u,
-      /*visible_size=*/absl::nullopt, /*va_fourcc=*/absl::nullopt);
+      /*visible_size=*/std::nullopt, /*va_fourcc=*/std::nullopt);
   ASSERT_FALSE(scoped_surfaces.empty());
   const auto scoped_va_surface = std::move(scoped_surfaces[0]);
   wrapper->DestroyContext();
@@ -754,6 +858,7 @@ TEST_P(VaapiMinigbmTest, AllocateAndCompareWithMinigbm) {
   // Request the underlying DRM metadata for |scoped_va_surface|.
   VADRMPRIMESurfaceDescriptor va_descriptor{};
   {
+    VAAPI_CHECK_CALLED_ON_VALID_SEQUENCE(wrapper->sequence_checker_);
     base::AutoLockMaybe auto_lock(wrapper->va_lock_.get());
     VAStatus va_res =
         vaSyncSurface(wrapper->va_display_, scoped_va_surface->id());
@@ -789,15 +894,17 @@ TEST_P(VaapiMinigbmTest, AllocateAndCompareWithMinigbm) {
               base::checked_cast<uint32_t>(2 * uv_width * uv_height));
   }
 
+  VAAPI_CHECK_CALLED_ON_VALID_SEQUENCE(wrapper->sequence_checker_);
   base::AutoLockMaybe auto_lock(wrapper->va_lock_.get());
   const std::string va_vendor_string
          = vaQueryVendorString(wrapper->va_display_);
   uint64_t expected_drm_modifier = DRM_FORMAT_MOD_LINEAR;
 
   if (backend == VAImplementation::kIntelIHD) {
-    expected_drm_modifier = I915_FORMAT_MOD_Y_TILED;
+    expected_drm_modifier =
+        IsDisplayVer14() ? I915_FORMAT_MOD_4_TILED : I915_FORMAT_MOD_Y_TILED;
   } else if (backend == VAImplementation::kMesaGallium) {
-    if (va_vendor_string.find("STONEY") != std::string::npos) {
+    if (va_vendor_string.find("stoney") != std::string::npos) {
       expected_drm_modifier = DRM_FORMAT_MOD_INVALID;
     }
   }
@@ -821,7 +928,8 @@ TEST_P(VaapiMinigbmTest, AllocateAndCompareWithMinigbm) {
           base::checked_cast<uint32_t>(scoped_va_surface->size().width()));
     } else {
       const auto expected_rounded_up_pitch =
-          base::bits::AlignUp(scoped_va_surface->size().width(), 2);
+          base::bits::AlignUpDeprecatedDoNotUse(
+              scoped_va_surface->size().width(), 2);
       EXPECT_GE(va_descriptor.layers[i].pitch[0],
                 base::checked_cast<uint32_t>(expected_rounded_up_pitch));
     }
@@ -921,17 +1029,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 int main(int argc, char** argv) {
   base::TestSuite test_suite(argc, argv);
-
-#if BUILDFLAG(IS_OZONE) && BUILDFLAG(IS_LINUX)
-  // Initialize Ozone so that the VADisplayState can decide if we're running
-  // on top of a platform that can deal with VA-API buffers.
-  // TODO(b/230370976): we may no longer need to initialize Ozone since we
-  // don't use it for buffer allocation.
-  ui::OzonePlatform::InitParams params;
-  params.single_process = true;
-  ui::OzonePlatform::InitializeForUI(params);
-  ui::OzonePlatform::InitializeForGPU(params);
-#endif
 
   // PreSandboxInitialization() loads and opens the driver, queries its
   // capabilities and fills in the VASupportedProfiles.

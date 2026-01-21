@@ -8,12 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/observer_list_types.h"
-#include "build/chromeos_buildflags.h"
 #include "components/account_manager_core/account.h"
-#include "components/account_manager_core/account_addition_result.h"
+#include "components/account_manager_core/account_upsertion_result.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
 class OAuth2AccessTokenFetcher;
@@ -25,7 +24,8 @@ namespace account_manager {
 // Implementations of this interface hide the in-process / out-of-process nature
 // of this communication.
 // Instances of this class are singletons, and are independent of a |Profile|.
-// Use |GetAccountManagerFacade()| to get an instance of this class.
+// Use |ash::AccountManagerFactory::Get()->GetAccountManagerFacade()| to get an
+// instance of this class.
 class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
  public:
   // UMA histogram name.
@@ -94,8 +94,14 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
     kChromeSyncPromoAddAccount = 15,
     // Chrome Settings > Turn on Sync.
     kChromeSettingsTurnOnSyncButton = 16,
+    // Launched from ChromeOS Projector App for re-authentication.
+    kChromeOSProjectorAppReauth = 17,
+    // Chrome Menu -> Turn on Sync
+    kChromeMenuTurnOnSync = 18,
+    // Sign-in promo with a new account.
+    kChromeSigninPromoAddAccount = 19,
 
-    kMaxValue = kChromeSettingsTurnOnSyncButton
+    kMaxValue = kChromeSigninPromoAddAccount
   };
 
   AccountManagerFacade();
@@ -127,16 +133,20 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
 
   // Launches account addition dialog and calls the `callback` with the result.
   // If `result` is `kSuccess`, the added account will be passed to the
-  // callback. Otherwise `account` will be set to `absl::nullopt`.
+  // callback. Otherwise `account` will be set to `std::nullopt`.
   virtual void ShowAddAccountDialog(
       AccountAdditionSource source,
-      base::OnceCallback<void(const AccountAdditionResult& result)>
+      base::OnceCallback<void(const AccountUpsertionResult& result)>
           callback) = 0;
 
   // Launches account reauthentication dialog for provided `email`.
-  virtual void ShowReauthAccountDialog(AccountAdditionSource source,
-                                       const std::string& email,
-                                       base::OnceClosure callback) = 0;
+  // Note: the added/reauthenticated account may not match the account provided
+  // in the `email` field if user decided to edit the email inside the dialog.
+  virtual void ShowReauthAccountDialog(
+      AccountAdditionSource source,
+      const std::string& email,
+      base::OnceCallback<void(const AccountUpsertionResult& result)>
+          callback) = 0;
 
   // Launches OS Settings > Accounts.
   virtual void ShowManageAccountsSettings() = 0;

@@ -6,20 +6,22 @@
 #define ASH_PUBLIC_CPP_WALLPAPER_WALLPAPER_CONTROLLER_H_
 
 #include <cstdint>
+#include <optional>
 #include <string>
-#include <vector>
 
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/wallpaper/google_photos_wallpaper_params.h"
 #include "ash/public/cpp/wallpaper/online_wallpaper_params.h"
+#include "ash/public/cpp/wallpaper/sea_pen_image.h"
 #include "ash/public/cpp/wallpaper/wallpaper_info.h"
 #include "ash/public/cpp/wallpaper/wallpaper_types.h"
-#include "base/callback_helpers.h"
+#include "ash/webui/common/mojom/sea_pen.mojom-forward.h"
 #include "base/containers/lru_cache.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/time/time.h"
 #include "components/user_manager/user_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class AccountId;
 
@@ -40,7 +42,16 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // successfully.
   using SetWallpaperCallback = base::OnceCallback<void(bool success)>;
 
+  // A callback specifically for `SetTimeOfDayWallpaper` that also gives
+  // information about which wallpaper image was set, and if the operation was
+  // successful.
+  using SetTimeOfDayWallpaperCallback =
+      base::OnceCallback<void(uint64_t unit_id, bool success)>;
+
   using DailyGooglePhotosIdCache = base::HashingLRUCacheSet<uint32_t>;
+
+  using LoadPreviewImageCallback =
+      base::OnceCallback<void(scoped_refptr<base::RefCountedMemory>)>;
 
   WallpaperController();
   virtual ~WallpaperController();
@@ -53,15 +64,10 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   virtual void SetDriveFsDelegate(
       std::unique_ptr<WallpaperDriveFsDelegate> drivefs_delegate) = 0;
 
-  // Sets paths for wallpaper directories and the device policy wallpaper path.
-  // |user_data|: Directory where user data can be written.
-  // |wallpapers|: Directory where downloaded chromeos wallpapers reside.
-  // |custom_wallpapers|: Directory where custom wallpapers reside.
-  // |device_policy_wallpaper|: Path of the device policy wallpaper (if any).
-  virtual void Init(const base::FilePath& user_data,
-                    const base::FilePath& wallpapers,
-                    const base::FilePath& custom_wallpapers,
-                    const base::FilePath& device_policy_wallpaper) = 0;
+  // Whether the user with `account_id` can set wallpaper. Users may be
+  // disallowed from setting wallpaper based on enterprise policy or if the
+  // device is running in kiosk mode.
+  virtual bool CanSetUserWallpaper(const AccountId& account_id) const = 0;
 
   // Sets the wallpaper from a local file and updates the saved wallpaper info
   // for the user.
@@ -109,6 +115,9 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   virtual void SetOnlineWallpaper(const OnlineWallpaperParams& params,
                                   SetWallpaperCallback callback) = 0;
 
+  // Used to select, load, and show the OOBE wallpaper
+  virtual void ShowOobeWallpaper() = 0;
+
   // Sets the Google Photos photo with id |params.id| as the active wallpaper.
   virtual void SetGooglePhotosWallpaper(
       const GooglePhotosWallpaperParams& params,
@@ -135,16 +144,13 @@ class ASH_PUBLIC_EXPORT WallpaperController {
       const AccountId& account_id,
       DailyGooglePhotosIdCache& ids_out) const = 0;
 
-  // Deprecated. Use |SetOnlineWallpaper| instead because it will handle
-  // downloading the image if it is not on disk yet.
-  // Sets wallpaper from the Chrome OS wallpaper picker. If the
-  // wallpaper file corresponding to |url| already exists in local file system
-  // (i.e. |SetOnlineWallpaper| was called earlier with the same |url|),
-  // returns true and sets wallpaper for the user, otherwise returns false.
-  // |params|: The parameters of the online wallpaper.
-  // Responds with true if the wallpaper file exists in local file system.
-  virtual void SetOnlineWallpaperIfExists(const OnlineWallpaperParams& params,
-                                          SetWallpaperCallback callback) = 0;
+  // Downloads and sets a time of day wallpaper to be the active wallpaper.
+  // |acount_id|: The user's account id.
+  // |callback|: Called with the unit_id of the selected wallpaper, and a
+  // boolean to indicate success when the wallpaper is fetched and decoded.
+  virtual void SetTimeOfDayWallpaper(
+      const AccountId& account_id,
+      SetTimeOfDayWallpaperCallback callback) = 0;
 
   // Sets the user's wallpaper to be the default wallpaper. Note: different user
   // types may have different default wallpapers.
@@ -210,6 +216,16 @@ class ASH_PUBLIC_EXPORT WallpaperController {
                                       WallpaperLayout layout,
                                       const gfx::ImageSkia& image) = 0;
 
+  // Sets `image_id` as system wallpaper for user with `account_id`. A
+  // corresponding image with id `image_id` is expected to be present on disk
+  // and will be loaded via SeaPenWallpaperManager. Calls `callback` with
+  // boolean success. Can fail if `account_id` is not allowed to set wallpaper,
+  // or the image failed to decode.
+  virtual void SetSeaPenWallpaper(const AccountId& account_id,
+                                  uint32_t image_id,
+                                  bool preview_mode,
+                                  SetWallpaperCallback callback) = 0;
+
   // Confirms the wallpaper being previewed to be set as the actual user
   // wallpaper. Must be called in preview mode.
   virtual void ConfirmPreviewWallpaper() = 0;
@@ -238,7 +254,7 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // wallpaper if necessary. This is intendend for use where users are not
   // yet logged in (i.e. login screen).
   virtual void ShowUserWallpaper(const AccountId& account_id,
-                                 user_manager::UserType user_type) = 0;
+                                 const user_manager::UserType user_type) = 0;
 
   // Used by the gaia-signin UI. Signin wallpaper is considered either as the
   // device policy wallpaper or the default wallpaper.
@@ -250,20 +266,24 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // when using this method.
   virtual void ShowOneShotWallpaper(const gfx::ImageSkia& image) = 0;
 
-  // Shows a wallpaper that stays on top of everything except for the power off
-  // animation. All other wallpaper requests are ignored when the always-on-top
-  // wallpaper is being shown.
+  // Shows an override wallpaper instead of the wallpaper that would normally be
+  // shown. All other wallpaper requests are ignored when the override wallpaper
+  // is being shown.
   // |image_path|: The file path to read the image data from.
-  virtual void ShowAlwaysOnTopWallpaper(const base::FilePath& image_path) = 0;
+  // |always_on_top|: Whether the override wallpaper should be shown on top of
+  //                  everything except for the power off animation.
+  virtual void ShowOverrideWallpaper(const base::FilePath& image_path,
+                                     bool always_on_top) = 0;
 
-  // Removes the always-on-top wallpaper. The wallpaper will revert to the
-  // previous one, or a default one if there was none. No-op if the current
-  // wallpaper is not always-on-top.
-  virtual void RemoveAlwaysOnTopWallpaper() = 0;
+  // Removes the override wallpaper. The wallpaper will revert to the previous
+  // one, or a default one if there was none. No-op if the current wallpaper is
+  // not overridden.
+  virtual void RemoveOverrideWallpaper() = 0;
 
   // Removes all of the user's saved wallpapers and related info.
   // |account_id|: The user's account id.
-  virtual void RemoveUserWallpaper(const AccountId& account_id) = 0;
+  virtual void RemoveUserWallpaper(const AccountId& account_id,
+                                   base::OnceClosure on_removed) = 0;
 
   // Removes all of the user's saved wallpapers and related info if the
   // wallpaper was set by |SetPolicyWallpaper|. In addition, sets the user's
@@ -272,14 +292,6 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // next time |ShowUserWallpaper| is called.
   // |account_id|: The user's account id.
   virtual void RemovePolicyWallpaper(const AccountId& account_id) = 0;
-
-  // Returns the urls of the wallpapers that exist in local file system (i.e.
-  // |SetOnlineWallpaper| was called earlier). The url is used as id
-  // to identify which wallpapers are available to be set offline.
-  using GetOfflineWallpaperListCallback =
-      base::OnceCallback<void(const std::vector<std::string>&)>;
-  virtual void GetOfflineWallpaperList(
-      GetOfflineWallpaperListCallback callback) = 0;
 
   // Sets wallpaper animation duration. Passing an empty value disables the
   // animation.
@@ -305,6 +317,10 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // Returns the wallpaper image currently being shown.
   virtual gfx::ImageSkia GetWallpaperImage() = 0;
 
+  // Loads the preview image of the currently shown wallpaper. Callback is
+  // called after the operation completes.
+  virtual void LoadPreviewImage(LoadPreviewImageCallback callback) = 0;
+
   // Returns whether the current wallpaper is blurred on lock/login screen.
   virtual bool IsWallpaperBlurredForLockState() const = 0;
 
@@ -319,13 +335,14 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   virtual bool IsWallpaperControlledByPolicy(
       const AccountId& account_id) const = 0;
 
-  // Returns a struct with info about the active user's wallpaper if there is an
-  // active user.
-  virtual absl::optional<WallpaperInfo> GetActiveUserWallpaperInfo() const = 0;
+  // Returns active user's `WallpaperInfo` if there is an active user that has
+  // valid `WallpaperInfo`.
+  virtual std::optional<WallpaperInfo> GetActiveUserWallpaperInfo() const = 0;
 
-  // Returns true if the wallpaper setting (used to open the wallpaper picker)
-  // should be visible.
-  virtual bool ShouldShowWallpaperSetting() = 0;
+  // Returns a `WallpaperInfo` for the given `account_id` if `account_id` exists
+  // and has valid saved info.
+  virtual std::optional<WallpaperInfo> GetWallpaperInfoForAccountId(
+      const AccountId& account_id) const = 0;
 
   // Set and store the collection id used to update refreshable wallpapers.
   // Empty if daily refresh is not enabled.
@@ -347,9 +364,9 @@ class ASH_PUBLIC_EXPORT WallpaperController {
   // |account_id|: The account id of the user.
   virtual void SyncLocalAndRemotePrefs(const AccountId& account_id) = 0;
 
-  // Returns a suffix to be appended to the base url of Backdrop (online)
-  // wallpapers.
-  static std::string GetBackdropWallpaperSuffix();
+  // The `AccountId` for the user whose wallpaper is currently displayed. May be
+  // empty `AccountId` for things like OOBE and device policy wallpaper.
+  virtual const AccountId& CurrentAccountId() const = 0;
 };
 
 }  // namespace ash

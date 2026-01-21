@@ -2,16 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/audio/fuchsia/audio_input_stream_fuchsia.h"
 
 #include <lib/sys/cpp/component_context.h>
 #include <lib/zx/vmo.h>
 
+#include "base/bits.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "media/audio/audio_device_description.h"
 #include "media/audio/fuchsia/audio_manager_fuchsia.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 
 namespace media {
 
@@ -69,9 +78,10 @@ AudioInputStream::OpenOutcome AudioInputStreamFuchsia::Open() {
   capturer_->SetPcmStreamType(std::move(stream_type));
 
   // Allocate shared buffer.
+  const size_t page_size = static_cast<size_t>(zx_system_get_page_size());
   size_t capture_buffer_size =
       parameters_.GetBytesPerBuffer(kSampleFormatF32) * kBufferPacketCapacity;
-  capture_buffer_size = base::bits::AlignUp(capture_buffer_size, ZX_PAGE_SIZE);
+  capture_buffer_size = base::bits::AlignUp(capture_buffer_size, page_size);
 
   zx::vmo buffer_vmo;
   zx_status_t status = zx::vmo::create(capture_buffer_size, 0, &buffer_vmo);
@@ -84,7 +94,7 @@ AudioInputStream::OpenOutcome AudioInputStreamFuchsia::Open() {
   bool mapped =
       capture_buffer_.Initialize(std::move(buffer_vmo), /*writable=*/false,
                                  /*offset=*/0, /*size=*/capture_buffer_size,
-                                 fuchsia::sysmem::CoherencyDomain::CPU);
+                                 fuchsia::sysmem2::CoherencyDomain::CPU);
 
   if (!mapped)
     return OpenOutcome::kFailed;
@@ -175,7 +185,7 @@ void AudioInputStreamFuchsia::OnPacketProduced(
                                        packet.payload_offset),
         num_frames);
     callback_->OnData(audio_bus_.get(), base::TimeTicks::FromZxTime(packet.pts),
-                      /*volume=*/1.0);
+                      /*volume=*/1.0, {});
   }
 
   capturer_->ReleasePacket(std::move(packet));

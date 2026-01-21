@@ -5,17 +5,19 @@
 #include <atomic>
 
 #include "base/command_line.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/page_capture/page_capture_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "content/public/test/browser_test.h"
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/switches.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
-using ContextType = ExtensionApiTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
 class PageCaptureSaveAsMHTMLDelegate
     : public PageCaptureSaveAsMHTMLFunction::TestDelegate {
@@ -32,7 +34,7 @@ class PageCaptureSaveAsMHTMLDelegate
       scoped_refptr<storage::ShareableFileReference> file) override {
     file->AddFinalReleaseCallback(
         base::BindOnce(&PageCaptureSaveAsMHTMLDelegate::OnReleaseCallback,
-                       base::Unretained(this)));
+                       weak_factory_.GetWeakPtr()));
     ++temp_file_count_;
   }
 
@@ -52,6 +54,7 @@ class PageCaptureSaveAsMHTMLDelegate
   base::RunLoop run_loop_;
   base::RepeatingClosure release_closure_ = run_loop_.QuitClosure();
   std::atomic<int> temp_file_count_{0};
+  base::WeakPtrFactory<PageCaptureSaveAsMHTMLDelegate> weak_factory_{this};
 };
 
 class ExtensionPageCaptureApiTest

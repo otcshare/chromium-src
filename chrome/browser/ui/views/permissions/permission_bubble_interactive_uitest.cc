@@ -5,9 +5,8 @@
 #include <memory>
 
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -27,6 +26,8 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/views/test/button_test_api.h"
+#include "ui/views/test/views_test_utils.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 
 enum ChipFeatureConfig {
@@ -36,10 +37,7 @@ enum ChipFeatureConfig {
 
 class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
  public:
-  PermissionBubbleInteractiveUITest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        permissions::features::kPermissionChip);
-  }
+  PermissionBubbleInteractiveUITest() = default;
 
   PermissionBubbleInteractiveUITest(const PermissionBubbleInteractiveUITest&) =
       delete;
@@ -56,8 +54,7 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     SCOPED_TRACE(message);
     EXPECT_TRUE(widget);
 
-    views::test::WidgetActivationWaiter waiter(widget, true);
-    waiter.Wait();
+    views::test::WaitForWidgetActive(widget, true);
   }
 
   // Send Ctrl/Cmd+keycode in the key window to the browser.
@@ -70,8 +67,12 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     bool command = false;
 #endif
 
-    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), keycode, control,
-                                                shift, alt, command));
+    // Wait for "key press" instead of "key release" because some tests destroy
+    // the target in response to "key press", which prevents "key release" from
+    // being observed.
+    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+        browser(), keycode, control, shift, alt, command,
+        /* wait_for=*/ui_controls::KeyEventType::kKeyPress));
   }
 
   void SetUpOnMainThread() override {
@@ -111,6 +112,8 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
 #else
     SendAcceleratorSync(ui::VKEY_TAB, true, false);
 #endif
+    views::test::RunScheduledLayout(
+        BrowserView::GetBrowserViewForBrowser(browser()));
   }
 
   void OpenBubbleIfRequestChipUiIsShown() {
@@ -119,12 +122,12 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
     LocationBarView* lbv = browser_view->toolbar()->location_bar();
-    if (lbv->chip_controller()->IsPermissionPromptChipVisible() &&
-        !lbv->chip_controller()->IsBubbleShowing()) {
-      views::test::ButtonTestApi(lbv->chip_controller()->chip())
-          .NotifyClick(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                      gfx::Point(), ui::EventTimeForNow(),
-                                      ui::EF_LEFT_MOUSE_BUTTON, 0));
+    if (lbv->GetChipController()->IsPermissionPromptChipVisible() &&
+        !lbv->GetChipController()->IsBubbleShowing()) {
+      views::test::ButtonTestApi(lbv->GetChipController()->chip())
+          .NotifyClick(ui::MouseEvent(
+              ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+              ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
       base::RunLoop().RunUntilIdle();
     }
   }
@@ -151,12 +154,9 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
 
  protected:
   std::unique_ptr<test::PermissionRequestManagerTestApi> test_api_;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // TODO(crbug.com/1072425): views::test::WidgetTest::GetAllWidgets() crashes
 // on Chrome OS, need to investigate\fix that.
 #define MAYBE_CmdWClosesWindow DISABLED_CmdWClosesWindow
@@ -170,14 +170,17 @@ IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest,
                        MAYBE_CmdWClosesWindow) {
   EXPECT_TRUE(browser()->window()->IsVisible());
 
+  // On Windows, the WM_NCDESTROY message triggering Widget destruction may not
+  // have been processed by the time `SendAcceleratorSync` returns (only waits
+  // for WM_KEYDOWN). For that reason, wait until there are no more widgets
+  // instead of checking immediately that there are no more widgets.
   SendAcceleratorSync(ui::VKEY_W, false, false);
-
-  // The window has been destroyed so there should be no widgets hanging around.
-  EXPECT_EQ(0u, views::test::WidgetTest::GetAllWidgets().size());
+  EXPECT_TRUE(base::test::RunUntil(
+      [&] { return views::test::WidgetTest::GetAllWidgets().empty(); }));
 }
 
 #if BUILDFLAG(IS_MAC)
-// TODO(crbug.com/1324444): For Mac builders, the test fails after activating
+// TODO(crbug.com/40839289): For Mac builders, the test fails after activating
 // the browser and cannot spot the widget. Needs investigation and fix.
 #define MAYBE_SwitchTabs DISABLED_SwitchTabs
 #else
@@ -236,46 +239,4 @@ IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest, MAYBE_SwitchTabs) {
 #if BUILDFLAG(IS_MAC)
   TestSwitchingTabsWithCurlyBraces();
 #endif
-}
-
-class PermissionPromptBubbleViewConfirmationTest
-    : public PermissionBubbleInteractiveUITest {
- public:
-  PermissionPromptBubbleViewConfirmationTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {permissions::features::kConfirmationChip},
-        {permissions::features::kPermissionChip});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleViewConfirmationTest,
-                       VerifyConfirmationChipShown) {
-  test_api_->manager()->Accept();
-  base::RunLoop().RunUntilIdle();
-
-  LocationBarView* location_bar_view =
-      BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
-  EXPECT_NE(location_bar_view->chip_controller(), nullptr);
-  EXPECT_TRUE(location_bar_view->chip_controller()->chip()->GetVisible());
-  EXPECT_EQ(location_bar_view->chip_controller()->chip()->GetText(),
-            l10n_util::GetStringUTF16(
-                IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION));
-}
-
-IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleViewConfirmationTest,
-                       VerifyFullScreenHandledCorrectly) {
-  FullscreenNotificationObserver fullscreen_observer(browser());
-  chrome::ToggleFullscreenMode(browser());
-  fullscreen_observer.Wait();
-
-  test_api_->manager()->Accept();
-  base::RunLoop().RunUntilIdle();
-
-  LocationBarView* location_bar_view =
-      BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
-  EXPECT_NE(location_bar_view->chip_controller(), nullptr);
-  EXPECT_FALSE(location_bar_view->chip_controller()->chip()->GetVisible());
 }

@@ -5,9 +5,10 @@
 #ifndef CHROME_BROWSER_DOWNGRADE_DOWNGRADE_UTILS_H_
 #define CHROME_BROWSER_DOWNGRADE_DOWNGRADE_UTILS_H_
 
-#include "base/callback.h"
+#include <optional>
+
 #include "base/files/file_path.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback.h"
 
 namespace downgrade {
 

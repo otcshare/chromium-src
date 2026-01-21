@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/flat_map.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
 #include "extensions/common/constants.h"
@@ -57,7 +57,8 @@ void FakeAppListModelUpdater::RemoveItem(const std::string& id,
 void FakeAppListModelUpdater::SetItemIconAndColor(
     const std::string& id,
     const gfx::ImageSkia& icon,
-    const ash::IconColor& icon_color) {
+    const ash::IconColor& icon_color,
+    bool is_placeholder_icon) {
   ++update_image_count_;
   if (update_image_count_ == expected_update_image_count_ &&
       !icon_updated_callback_.is_null()) {
@@ -160,14 +161,6 @@ ChromeAppListItem* FakeAppListModelUpdater::FindFolderItem(
   return (item && item->is_folder()) ? item : nullptr;
 }
 
-void FakeAppListModelUpdater::GetIdToAppListIndexMap(
-    GetIdToAppListIndexMapCallback callback) {
-  base::flat_map<std::string, uint16_t> id_to_app_list_index;
-  for (uint16_t i = 0; i < items_.size(); ++i)
-    id_to_app_list_index[items_[i]->id()] = i;
-  std::move(callback).Run(id_to_app_list_index);
-}
-
 syncer::StringOrdinal FakeAppListModelUpdater::GetPositionBeforeFirstItem()
     const {
   return GetPositionBeforeFirstItemInternal(GetTopLevelItems());
@@ -198,8 +191,10 @@ bool FakeAppListModelUpdater::SearchEngineIsGoogle() {
   return search_engine_is_google_;
 }
 
+void FakeAppListModelUpdater::RecalculateWouldTriggerLauncherSearchIph() {}
+
 void FakeAppListModelUpdater::PublishSearchResults(
-    const std::vector<ChromeSearchResult*>& results,
+    const std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>& results,
     const std::vector<ash::AppListSearchResultCategory>& categories) {
   search_results_ = results;
 }

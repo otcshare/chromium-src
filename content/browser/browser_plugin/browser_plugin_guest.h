@@ -7,14 +7,13 @@
 
 #include <vector>
 
-#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_plugin_guest_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/blink/public/mojom/choosers/popup_menu.mojom.h"
 
 namespace content {
+class RenderFrameHostImpl;
 class WebContentsImpl;
 
 // A browser plugin guest provides functionality for WebContents to operate in
@@ -67,6 +66,7 @@ class BrowserPluginGuest : public WebContentsObserver {
       base::TerminationStatus status) override;
 
   WebContentsImpl* GetWebContents() const;
+  RenderFrameHostImpl* GetProspectiveOuterDocument();
 
  private:
   // BrowserPluginGuest is a WebContentsObserver of |web_contents| and
@@ -76,7 +76,8 @@ class BrowserPluginGuest : public WebContentsObserver {
 
   void InitInternal(WebContentsImpl* owner_web_contents);
 
-  const raw_ptr<BrowserPluginGuestDelegate, DanglingUntriaged> delegate_;
+  // May be null during guest destruction.
+  const base::WeakPtr<BrowserPluginGuestDelegate> delegate_;
 };
 
 }  // namespace content

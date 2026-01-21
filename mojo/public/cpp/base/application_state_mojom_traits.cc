@@ -4,6 +4,8 @@
 
 #include "mojo/public/cpp/base/application_state_mojom_traits.h"
 
+#include "base/notreached.h"
+
 namespace mojo {
 
 // static
@@ -24,7 +26,6 @@ mojo_base::mojom::ApplicationState EnumTraits<
       return mojo_base::mojom::ApplicationState::HAS_DESTROYED_ACTIVITIES;
   }
   NOTREACHED();
-  return mojo_base::mojom::ApplicationState::UNKNOWN;
 }
 
 // static

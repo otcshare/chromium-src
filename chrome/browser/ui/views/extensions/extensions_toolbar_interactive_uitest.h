@@ -9,12 +9,15 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "extensions/common/extension.h"
 
-class ExtensionsToolbarContainer;
+class ExtensionsToolbarDesktop;
 class ToolbarActionView;
+class ExtensionsToolbarButton;
+class ExtensionsMenuCoordinator;
 
 namespace extensions {
 class Extension;
@@ -26,8 +29,8 @@ class Button;
 
 // Base class for interactive ui tests that use the toolbar area. This is used
 // for browser test fixtures that are generally related to the
-// ExtensionsToolbarContainer in the ToolbarView area. For example, this is used
-// by ExtensionsToolbarContainer and ExtensionsMenuView separately to clarify
+// ExtensionsToolbarDesktop in the ToolbarView area. For example, this is used
+// by ExtensionsToolbarDesktop and ExtensionsMenuView separately to clarify
 // what the suite is primarily trying to test.
 class ExtensionsToolbarUITest : public DialogBrowserTest {
  public:
@@ -80,13 +83,13 @@ class ExtensionsToolbarUITest : public DialogBrowserTest {
   void SetUpIncognitoBrowser();
 
   // Gets the extensions toolbar container from the browser() toolbar.
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainer() const;
+  ExtensionsToolbarDesktop* GetExtensionsToolbarDesktop() const;
   // Returns the extensions toolbar container for the given `browser`.
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainerForBrowser(
+  ExtensionsToolbarDesktop* GetExtensionsToolbarDesktopForBrowser(
       Browser* browser) const;
 
   // Gets the ToolbarActionView instances inside
-  // GetExtensionsToolbarContainer().
+  // GetExtensionsToolbarDesktop().
   std::vector<ToolbarActionView*> GetToolbarActionViews() const;
   // Returns the ToolbarActionView instances within the extensions toolbar for
   // the given `browser`.
@@ -97,16 +100,36 @@ class ExtensionsToolbarUITest : public DialogBrowserTest {
   // GetToolbarActionViews().
   std::vector<ToolbarActionView*> GetVisibleToolbarActionViews() const;
 
+  // Returns the extensions button in the toolbar.
+  ExtensionsToolbarButton* extensions_button();
+
+  // Returns the extensions menu coordinator.
+  ExtensionsMenuCoordinator* menu_coordinator();
+
   // Triggers the press and release event of the given `button`.
   void ClickButton(views::Button* button) const;
+
+  // Returns whether the extension injected a script by checking the document
+  // title. Extension must use 'extensions/blocked_actions/content_scripts'.
+  bool DidInjectScript(content::WebContents* web_contents);
+
+  // Navigate to `url` in the currently active web contents.
+  void NavigateTo(const GURL& url);
+
+  // Adds a a site access request for `extension` in `web_contents`.
+  void AddHostAccessRequest(const extensions::Extension& extension,
+                            content::WebContents* web_contents);
 
   // Waits for the extensions container to animate (on pin, unpin, pop-out,
   // etc.)
   void WaitForAnimation();
 
  private:
-  raw_ptr<Browser, DanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
   std::vector<scoped_refptr<const extensions::Extension>> extensions_;
+
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_INTERACTIVE_UITEST_H_

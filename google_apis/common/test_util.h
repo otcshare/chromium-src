@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "google_apis/common/api_error_codes.h"
 #include "google_apis/common/base_requests.h"
@@ -67,7 +67,7 @@ GURL GetBaseUrlForTesting(int port);
 // Writes the |content| to the file at |file_path|. Returns true on success,
 // otherwise false.
 bool WriteStringToFile(const base::FilePath& file_path,
-                       const std::string& content);
+                       std::string_view content);
 
 // Creates a |size| byte file. The file is filled with random bytes so that
 // the test assertions can identify correct portion/position of the file is

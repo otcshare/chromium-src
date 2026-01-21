@@ -8,12 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/snapshot/snapshot_export.h"
 
 namespace ui {
@@ -62,7 +62,7 @@ class SNAPSHOT_EXPORT ScreenshotGrabber {
   class ScopedCursorHider;
 #endif
 
-  void GrabWindowSnapshotAsyncCallback(
+  void GrabSnapshotImageCallback(
       const std::string& window_identifier,
       bool is_partial,
       ScreenshotCallback callback,

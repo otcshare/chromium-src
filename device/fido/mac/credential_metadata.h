@@ -9,23 +9,20 @@
 #define DEVICE_FIDO_MAC_CREDENTIAL_METADATA_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
-#include "base/strings/string_piece_forward.h"
 #include "crypto/aead.h"
-#include "crypto/hmac.h"
-#include "crypto/symmetric_key.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/fido/public/features.h"
 
 namespace device {
 
 class PublicKeyCredentialUserEntity;
 
-namespace fido {
-namespace mac {
+namespace fido::mac {
 
 // CredentialMetadata is the metadata for a Touch ID credential.
 //
@@ -52,8 +49,14 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CredentialMetadata {
     // Also added `uses_timestamp_sign_counter` so we can migrate older
     // instances to V3.
     kV3 = 3,
-    // Update this whenever you add a new version:
-    kCurrent = kV3,
+    // Credentials are created without a `kSecAttrAccessControl` attribute, so
+    // that Assertions can now be generated without providing user verification
+    // if necessary. Older credentials use a `SecAccessControl` instance with
+    // `kSecAccessControlUserPresence` and require the user to pass a device
+    // password or Touch ID challenge whenever a signature is produced.
+    kV4 = 4,
+    // Also update CurrentVersion() when adding values here.
+    MAX_VERSION = kV4,
   };
 
   // Whether the signature counter for the credential is a timestamp or fixed at
@@ -62,6 +65,9 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CredentialMetadata {
     kTimestamp = 0,
     kZero = 1,
   };
+
+  // Returns the Version to use for newly created credentials.
+  static Version CurrentVersion();
 
   static CredentialMetadata FromPublicKeyCredentialUserEntity(
       const PublicKeyCredentialUserEntity&,
@@ -130,35 +136,25 @@ std::vector<uint8_t> SealCredentialMetadata(const std::string& secret,
                                             const CredentialMetadata& metadata);
 
 // UnsealCredentialId attempts to decrypt a CredentialMetadata from a credential
-// id.
+// id for version <= kV2.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<CredentialMetadata> UnsealMetadataFromLegacyCredentialId(
+std::optional<CredentialMetadata> UnsealMetadataFromLegacyCredentialId(
     const std::string& secret,
     const std::string& rp_id,
     base::span<const uint8_t> credential_id);
 
+// UnsealMetadataFromApplicationTag attempts to decrypt CredentialMetadata from
+// an kSecAttrApplicationTag attribute for version >= kV3.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<CredentialMetadata> UnsealMetadataFromApplicationTag(
+std::optional<CredentialMetadata> UnsealMetadataFromApplicationTag(
     const std::string& secret,
     const std::string& rp_id,
     base::span<const uint8_t> application_tag);
 
-// EncodeRpIdAndUserIdDeprecated encodes the concatenation of RP ID and user ID
-// for storage in the macOS keychain.
-//
-// This encoding allows lookup of credentials for a given RP and user but
-// without the credential ID. This is "deprecated" because we're going to
-// abandon that encoding for CredentialMetadata v3. Querying by user ID will
-// require iterating over all credentials for the RP ID and looking at the
-// unsealed metadata.
-COMPONENT_EXPORT(DEVICE_FIDO)
-std::string EncodeRpIdAndUserIdDeprecated(const std::string& secret,
-                                          const std::string& rp_id,
-                                          base::span<const uint8_t> user_id);
-
 // EncodeRpId encodes the given RP ID for storage in the macOS keychain. The
-// returned value is a UTF-8 string, to ensure it can be set as the
-// `kSecAttrLabel` value of a keychain item.
+// returned value is guaranteed to be a valid UTF-8 string, to ensure it can
+// safely be converted to an NSString and used as a string property in a
+// parameters dictionary.
 COMPONENT_EXPORT(DEVICE_FIDO)
 std::string EncodeRpId(const std::string& secret, const std::string& rp_id);
 
@@ -168,8 +164,8 @@ std::string EncodeRpId(const std::string& secret, const std::string& rp_id);
 // under the given secret without knowing the RP ID (which would be required to
 // unseal a credential ID).
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<std::string> DecodeRpId(const std::string& secret,
-                                       const std::string& ciphertext);
+std::optional<std::string> DecodeRpId(const std::string& secret,
+                                      const std::string& ciphertext);
 
 // Seals a legacy V0, V1 or V2 credential ID.
 COMPONENT_EXPORT(DEVICE_FIDO)
@@ -182,8 +178,8 @@ std::vector<uint8_t> SealLegacyCredentialIdForTestingOnly(
     const std::string& user_display_name,
     bool is_resident);
 
-}  // namespace mac
-}  // namespace fido
+}  // namespace fido::mac
+
 }  // namespace device
 
 #endif  // DEVICE_FIDO_MAC_CREDENTIAL_METADATA_H_

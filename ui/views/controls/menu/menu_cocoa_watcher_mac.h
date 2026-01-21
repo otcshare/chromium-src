@@ -5,9 +5,9 @@
 #ifndef UI_VIEWS_CONTROLS_MENU_MENU_COCOA_WATCHER_MAC_H_
 #define UI_VIEWS_CONTROLS_MENU_MENU_COCOA_WATCHER_MAC_H_
 
-#include <objc/objc.h>
+#include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/views/views_export.h"
 
 namespace views {
@@ -35,16 +35,19 @@ class VIEWS_EXPORT MenuCocoaWatcherMac {
 
   ~MenuCocoaWatcherMac();
 
+  // Instructs the watcher to ignore only the next
+  // NSWindowDidBecomeKeyNotification.
+  void SetIgnoreWindowKeyNotificationOnce();
+
  private:
   void ExecuteCallback();
 
   // The closure to call when the notification comes in.
   base::OnceClosure callback_;
 
-  // Tokens representing the notification observers.
-  id observer_token_other_menu_;
-  id observer_token_new_window_focus_;
-  id observer_token_app_change_;
+  struct ObjCStorage;
+  std::unique_ptr<ObjCStorage> objc_storage_;
+  bool ignore_window_key_notification_once_ = false;
 };
 
 }  // namespace views

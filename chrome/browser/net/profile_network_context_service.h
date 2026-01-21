@@ -9,34 +9,44 @@
 #include <string>
 #include <utility>
 
-#include "base/callback_forward.h"
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/enterprise/encryption/cache_encryption_provider_impl.h"
 #include "chrome/browser/net/proxy_config_monitor.h"
+#include "chrome/common/buildflags.h"
 #include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
-#include "components/privacy_sandbox/privacy_sandbox_settings.h"
+#include "content/public/browser/storage_partition.h"
 #include "net/net_buildflags.h"
+#include "net/ssl/client_cert_matcher.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/cert_verifier_service_updater.mojom.h"
+#include "services/network/public/mojom/cookie_manager.mojom-forward.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/extension_registry.h"
-#include "extensions/browser/extension_registry_observer.h"
+#if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
+#include "components/server_certificate_database/server_certificate_database.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ssl/ssl_config_overlay.h"
 #endif
 
 class PrefRegistrySimple;
 class Profile;
-class TrialComparisonCertVerifierController;
 
 namespace net {
 class ClientCertStore;
@@ -44,10 +54,10 @@ class ClientCertStore;
 // Enum that specifies which profiles are allowed to do
 // ambient authentication.
 enum class AmbientAuthAllowedProfileTypes {
-  REGULAR_ONLY = 0,
-  INCOGNITO_AND_REGULAR = 1,
-  GUEST_AND_REGULAR = 2,
-  ALL = 3,
+  kRegularOnly = 0,
+  kIncognitoAndRegular = 1,
+  kGuestAndRegular = 2,
+  kAll = 3,
 };
 
 }  // namespace net
@@ -61,11 +71,7 @@ class PrefRegistrySyncable;
 class ProfileNetworkContextService
     : public KeyedService,
       public content_settings::Observer,
-      public content_settings::CookieSettings::Observer,
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-      public extensions::ExtensionRegistryObserver,
-#endif
-      public privacy_sandbox::PrivacySandboxSettings::Observer {
+      public content_settings::CookieSettings::Observer {
  public:
   explicit ProfileNetworkContextService(Profile* profile);
 
@@ -85,9 +91,27 @@ class ProfileNetworkContextService
       cert_verifier::mojom::CertVerifierCreationParams*
           cert_verifier_creation_params);
 
-#if BUILDFLAG(IS_CHROMEOS)
+  // Update all of the profile_'s CertVerifierServices with certificates from
+  // enterprise policies, and any user-added certificates if present.
   void UpdateAdditionalCertificates();
+
+  struct CertificatePoliciesForView {
+    CertificatePoliciesForView();
+    ~CertificatePoliciesForView();
+    CertificatePoliciesForView(CertificatePoliciesForView&&);
+    CertificatePoliciesForView& operator=(CertificatePoliciesForView&& other);
+
+    cert_verifier::mojom::AdditionalCertificatesPtr certificate_policies;
+
+#if !BUILDFLAG(IS_CHROMEOS)
+    bool is_include_system_trust_store_managed;
 #endif
+
+    std::vector<std::vector<uint8_t>> full_distrusted_certs;
+  };
+
+  // Get enterprise certificate policies for viewing by end users.
+  CertificatePoliciesForView GetCertificatePolicyForView();
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
   static void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
@@ -98,6 +122,12 @@ class ProfileNetworkContextService
       Profile* profile,
       const content_settings::CookieSettings& cookie_settings);
 
+  // Flushes a cached client certificate preference for |host| if |certificate|
+  // doesn't match the cached certificate.
+  void FlushCachedClientCertIfNeeded(
+      const net::HostPortPair& host,
+      const scoped_refptr<net::X509Certificate>& certificate);
+
   // Flushes all pending proxy configuration changes.
   void FlushProxyConfigMonitorForTesting();
 
@@ -106,11 +136,18 @@ class ProfileNetworkContextService
   void set_client_cert_store_factory_for_testing(
       base::RepeatingCallback<std::unique_ptr<net::ClientCertStore>()>
           factory) {
-    client_cert_store_factory_ = std::move(factory);
+    client_cert_store_factory_for_testing_ = std::move(factory);
   }
 
   // Get platform ClientCertStore. May return nullptr.
   std::unique_ptr<net::ClientCertStore> CreateClientCertStore();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns a factory callback that may be run to get the issuer sources for
+  // client cert pathbuilding. The factory callback may run its result callback
+  // either synchronously or asynchronously.
+  net::ClientCertIssuerSourceGetter GetClientCertIssuerSourceFactory();
+#endif
 
  private:
   FRIEND_TEST_ALL_PREFIXES(ProfileNetworkContextServiceBrowsertest,
@@ -135,24 +172,48 @@ class ProfileNetworkContextService
   std::string ComputeAcceptLanguage() const;
 
   void UpdateReferrersEnabled();
-  void UpdatePreconnect();
 
   // Gets the current CTPolicy from preferences.
   network::mojom::CTPolicyPtr GetCTPolicy();
-
-  // Update the CTPolicy for the given NetworkContexts.
-  void UpdateCTPolicyForContexts(
-      const std::vector<network::mojom::NetworkContext*>& contexts);
 
   // Update the CTPolicy for the all of profiles_'s NetworkContexts.
   void UpdateCTPolicy();
 
   void ScheduleUpdateCTPolicy();
 
+  void ScheduleUpdateCertificatePolicy();
+
+  // Get the current certificate policies from preferences.
+  cert_verifier::mojom::AdditionalCertificatesPtr GetCertificatePolicy(
+      const base::FilePath& storage_partition_path);
+
+#if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
+  // Like UpdateAdditionalCertificates, but also includes the passed in user
+  // added certificates.
+  void UpdateAdditionalCertificatesWithUserAddedCerts(
+      std::vector<net::ServerCertificateDatabase::CertInformation> cert_infos);
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+  void CreateClientCertIssuerSources(
+      net::ClientCertIssuerSourceGetterCallback callback);
+  void CreateClientCertIssuerSourcesWithDBCerts(
+      net::ClientCertIssuerSourceGetterCallback callback,
+      std::vector<net::ServerCertificateDatabase::CertInformation>
+          db_cert_infos);
+#endif
+
   bool ShouldSplitAuthCacheByNetworkIsolationKey() const;
   void UpdateSplitAuthCacheByNetworkIsolationKey();
 
   void UpdateCorsNonWildcardRequestHeadersSupport();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // These settings are only managed at a Profile level on ChromeOS for the
+  // login screen profile. (In other cases they are managed by
+  // SSLConfigServiceManager on a NetworkService-global basis.)
+  void ConfigureSSLComplianceSettings(network::mojom::SSLConfig* config) const;
+  void UpdateSSLComplianceConfig();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Creates parameters for the NetworkContext. Use |in_memory| instead of
   // |profile_->IsOffTheRecord()| because sometimes normal profiles want off the
@@ -168,12 +229,6 @@ class ProfileNetworkContextService
   base::FilePath GetPartitionPath(
       const base::FilePath& relative_partition_path);
 
-  // Populates |network_context_params| with initial additional server and
-  // authority certificates for |relative_partition_path|.
-  void PopulateInitialAdditionalCerts(
-      const base::FilePath& relative_partition_path,
-      network::mojom::NetworkContextParams* network_context_params);
-
   // content_settings::Observer:
   void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
                                const ContentSettingsPattern& secondary_pattern,
@@ -182,55 +237,65 @@ class ProfileNetworkContextService
   // content_settings::CookieSettings::Observer:
   void OnThirdPartyCookieBlockingChanged(
       bool block_third_party_cookies) override;
+  void OnMitigationsEnabledFor3pcdChanged(bool enable) override;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // extensions::ExtensionRegistryObserver:
-  void OnExtensionInstalled(content::BrowserContext* browser_context,
-                            const extensions::Extension* extension,
-                            bool is_update) override;
-#endif
+#if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+  void SaveEncryptedCacheMasterKey(
+      const std::vector<uint8_t>& encrypted_master_key);
 
-  // PrivacySandboxSettings::Observer:
-  void OnTrustTokenBlockingChanged(bool block_trust_tokens) override;
-  void OnFirstPartySetsEnabledChanged(bool enabled) override;
+  // Returns the encrypted cache master key stored in the profile prefs.
+  // Returns an empty vector if the key is not set or cannot be decoded.
+  std::vector<uint8_t> GetEncryptedCacheMasterKey();
+#endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
 
-  const raw_ptr<Profile> profile_;
+  // KeyedService:
+  void Shutdown() override;
 
-  ProxyConfigMonitor proxy_config_monitor_;
+  bool is_shutting_down_ = false;
+
+  raw_ptr<Profile> profile_;
+
+  std::unique_ptr<ProxyConfigMonitor> proxy_config_monitor_;
 
   BooleanPrefMember quic_allowed_;
   StringPrefMember pref_accept_language_;
   BooleanPrefMember enable_referrers_;
-  IntegerPrefMember preload_allowed_;
   PrefChangeRegistrar pref_change_registrar_;
+#if BUILDFLAG(IS_CHROMEOS)
+  // These prefs are only used on ChromeOS in the login screen profile.
+  StringPrefMember profile_key_exchange_compliance_;
+  StringPrefMember profile_tls13_cipher_compliance_;
+
+  // Only populated on ChromeOS for the login screen profile.
+  // Holds helper objects used to override certain SSLConfig settings for the
+  // NetworkContexts associated with this object's Profile. Each
+  // SSLConfigOverlay corresponds to a single NetworkContext. Inactive instances
+  // may get deleted but nulls are not removed from the vector.
+  std::vector<std::unique_ptr<SSLConfigOverlay>> ssl_config_overlays_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   scoped_refptr<content_settings::CookieSettings> cookie_settings_;
   base::ScopedObservation<content_settings::CookieSettings,
                           content_settings::CookieSettings::Observer>
       cookie_settings_observation_{this};
-  base::ScopedObservation<privacy_sandbox::PrivacySandboxSettings,
-                          privacy_sandbox::PrivacySandboxSettings::Observer>
-      privacy_sandbox_settings_observer_{this};
 
-  // Used to post schedule CT policy updates
+  // Used to post schedule CT and Certificate policy updates
   base::OneShotTimer ct_policy_update_timer_;
+  base::OneShotTimer cert_policy_update_timer_;
 
-#if BUILDFLAG(TRIAL_COMPARISON_CERT_VERIFIER_SUPPORTED)
-  // Controls the cert verification trial. May be null if the trial is disabled
-  // or not allowed for this profile.
-  std::unique_ptr<TrialComparisonCertVerifierController>
-      trial_comparison_cert_verifier_controller_;
+#if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
+  base::CallbackListSubscription server_cert_database_observer_;
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  base::ScopedObservation<extensions::ExtensionRegistry,
-                          ExtensionRegistryObserver>
-      registry_observation_{this};
-#endif
-
-  // Used for testing.
   base::RepeatingCallback<std::unique_ptr<net::ClientCertStore>()>
-      client_cert_store_factory_;
+      client_cert_store_factory_for_testing_;
+
+#if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+  std::unique_ptr<enterprise_encryption::CacheEncryptionProviderImpl>
+      cache_encryption_provider_;
+#endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+
+  base::WeakPtrFactory<ProfileNetworkContextService> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_NET_PROFILE_NETWORK_CONTEXT_SERVICE_H_

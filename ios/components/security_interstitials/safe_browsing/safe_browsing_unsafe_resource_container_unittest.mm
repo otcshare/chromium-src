@@ -4,17 +4,13 @@
 
 #import "ios/components/security_interstitials/safe_browsing/safe_browsing_unsafe_resource_container.h"
 
-#import "base/bind.h"
+#import "base/functional/bind.h"
 #import "components/safe_browsing/ios/browser/safe_browsing_url_allow_list.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "services/network/public/mojom/fetch_api.mojom.h"
 #import "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using security_interstitials::UnsafeResource;
 
@@ -30,16 +26,14 @@ class SafeBrowsingUnsafeResourceContainerTest : public PlatformTest {
     SafeBrowsingUnsafeResourceContainer::CreateForWebState(&web_state_);
   }
 
-  UnsafeResource MakePendingUnsafeResource(bool is_main_frame) {
+  UnsafeResource MakePendingUnsafeResource() {
     UnsafeResource resource;
     resource.url = GURL("http://www.chromium.test");
     resource.navigation_url = resource.url;
-    resource.threat_type = safe_browsing::SB_THREAT_TYPE_URL_PHISHING;
+    resource.threat_type =
+        safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
     resource.callback =
-        base::BindRepeating([](bool proceed, bool showed_interstitial) {});
-    resource.request_destination =
-        is_main_frame ? network::mojom::RequestDestination::kDocument
-                      : network::mojom::RequestDestination::kIframe;
+        base::BindRepeating([](UnsafeResource::UrlCheckResult result) {});
     resource.weak_web_state = web_state_.GetWeakPtr();
     allow_list()->AddPendingUnsafeNavigationDecision(resource.url,
                                                      resource.threat_type);
@@ -61,7 +55,7 @@ class SafeBrowsingUnsafeResourceContainerTest : public PlatformTest {
 // Tests that main frame resources are correctly stored in and released from the
 // container.
 TEST_F(SafeBrowsingUnsafeResourceContainerTest, MainFrameResource) {
-  UnsafeResource resource = MakePendingUnsafeResource(/*is_main_frame=*/true);
+  UnsafeResource resource = MakePendingUnsafeResource();
 
   // The container should not have any unsafe main frame resources initially.
   EXPECT_FALSE(container()->GetMainFrameUnsafeResource());
@@ -77,25 +71,4 @@ TEST_F(SafeBrowsingUnsafeResourceContainerTest, MainFrameResource) {
   // the container.
   allow_list()->RemovePendingUnsafeNavigationDecisions(resource.url);
   EXPECT_FALSE(container()->GetMainFrameUnsafeResource());
-}
-
-// Tests that subresources are correctly stored in and released from the
-// container.
-TEST_F(SafeBrowsingUnsafeResourceContainerTest, SubFrameResource) {
-  UnsafeResource resource = MakePendingUnsafeResource(/*is_main_frame=*/false);
-
-  // The container should not have any unsafe sub frame resources initially.
-  EXPECT_FALSE(container()->GetSubFrameUnsafeResource(item_.get()));
-
-  // Store `resource` in the container.
-  container()->StoreSubFrameUnsafeResource(resource, item_.get());
-  const UnsafeResource* resource_copy =
-      container()->GetSubFrameUnsafeResource(item_.get());
-  ASSERT_TRUE(resource_copy);
-  EXPECT_EQ(resource.url, resource_copy->url);
-
-  // Remove the pending decision and verify that the resource is removed from
-  // the container.
-  allow_list()->RemovePendingUnsafeNavigationDecisions(resource.url);
-  EXPECT_FALSE(container()->GetSubFrameUnsafeResource(item_.get()));
 }

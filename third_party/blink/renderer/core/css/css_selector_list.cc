@@ -27,6 +27,8 @@
 #include "third_party/blink/renderer/core/css/css_selector_list.h"
 
 #include <memory>
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/css/css_selector.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -51,10 +53,24 @@ CSSSelectorList* CSSSelectorList::Copy() const {
   CSSSelectorList* list = MakeGarbageCollected<CSSSelectorList>(
       AdditionalBytes(sizeof(CSSSelector) * (length - 1)),
       base::PassKey<CSSSelectorList>());
-  for (unsigned i = 0; i < length; ++i)
-    new (&list->first_selector_[i]) CSSSelector(first_selector_[i]);
+  for (unsigned i = 0; i < length; ++i) {
+    UNSAFE_BUFFERS(new (&list->first_selector_[i])
+                       CSSSelector(first_selector_[i]));
+  }
 
   return list;
+}
+
+HeapVector<CSSSelector> CSSSelectorList::Copy(
+    const CSSSelector* selector_list) {
+  HeapVector<CSSSelector> selectors;
+  for (const CSSSelector* selector = selector_list; selector;
+       selector = selector->IsLastInSelectorList()
+                      ? nullptr
+                      : UNSAFE_BUFFERS(selector + 1)) {
+    selectors.push_back(*selector);
+  }
+  return selectors;
 }
 
 void CSSSelectorList::AdoptSelectorVector(
@@ -62,7 +78,8 @@ void CSSSelectorList::AdoptSelectorVector(
     CSSSelector* selector_array) {
   std::uninitialized_move(selector_vector.begin(), selector_vector.end(),
                           selector_array);
-  selector_array[selector_vector.size() - 1].SetLastInSelectorList(true);
+  UNSAFE_BUFFERS(selector_array[selector_vector.size() - 1])
+      .SetLastInSelectorList(true);
 }
 
 CSSSelectorList* CSSSelectorList::AdoptSelectorVector(
@@ -79,29 +96,63 @@ CSSSelectorList* CSSSelectorList::AdoptSelectorVector(
 }
 
 unsigned CSSSelectorList::ComputeLength() const {
-  if (!IsValid())
+  if (!IsValid()) {
     return 0;
+  }
   const CSSSelector* current = First();
-  while (!current->IsLastInSelectorList())
-    ++current;
+  while (!current->IsLastInSelectorList()) {
+    UNSAFE_BUFFERS(++current);
+  }
   return SelectorIndex(*current) + 1;
 }
 
 unsigned CSSSelectorList::MaximumSpecificity() const {
   unsigned specificity = 0;
 
-  for (const CSSSelector* s = First(); s; s = Next(*s))
+  for (const CSSSelector* s = First(); s; s = Next(*s)) {
     specificity = std::max(specificity, s->Specificity());
+  }
 
   return specificity;
+}
+
+bool CSSSelectorList::Renest(const CSSSelector* selector_list,
+                             StyleRule* new_parent,
+                             HeapVector<CSSSelector>& result) {
+  bool renested_any = false;
+  for (const CSSSelector* current = selector_list; current;
+       current = current->IsLastInSelectorList() ? nullptr
+                                                 : UNSAFE_BUFFERS(++current)) {
+    std::optional<CSSSelector> renested = current->Renest(new_parent);
+    renested_any |= renested.has_value();
+    result.push_back(renested.value_or(*current));
+  }
+  return renested_any;
+}
+
+CSSSelectorList* CSSSelectorList::Renest(StyleRule* new_parent) {
+  HeapVector<CSSSelector> selectors;
+  if (IsValid() && Renest(First(), new_parent, selectors)) {
+    return AdoptSelectorVector(selectors);
+  }
+  return this;
+}
+
+const CSSSelectorList* CSSSelectorList::Renest(StyleRule* new_parent) const {
+  HeapVector<CSSSelector> selectors;
+  if (IsValid() && Renest(First(), new_parent, selectors)) {
+    return AdoptSelectorVector(selectors);
+  }
+  return this;
 }
 
 String CSSSelectorList::SelectorsText(const CSSSelector* first) {
   StringBuilder result;
 
   for (const CSSSelector* s = first; s; s = Next(*s)) {
-    if (s != first)
+    if (s != first) {
       result.Append(", ");
+    }
     result.Append(s->SelectorText());
   }
 
@@ -112,10 +163,13 @@ void CSSSelectorList::Trace(Visitor* visitor) const {
   if (!IsValid()) {
     return;
   }
-  const CSSSelector* current = First();
-  do {
-    visitor->Trace(*current);
-  } while (!(current++)->IsLastInSelectorList());
+
+  for (int i = 0;; ++i) {
+    visitor->Trace(UNSAFE_BUFFERS(first_selector_[i]));
+    if (UNSAFE_BUFFERS(first_selector_[i].IsLastInSelectorList())) {
+      break;
+    }
+  }
 }
 
 }  // namespace blink

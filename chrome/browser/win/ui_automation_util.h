@@ -12,11 +12,11 @@
 // Must be before <uiautomation.h>
 #include <objbase.h>
 
-#include <uiautomation.h>
-
+#include <cstdint>
 #include <string>
 #include <vector>
 
+#include <uiautomation.h>
 
 // Returns a cached BSTR property of |element|.
 std::wstring GetCachedBstrValue(IUIAutomationElement* element,

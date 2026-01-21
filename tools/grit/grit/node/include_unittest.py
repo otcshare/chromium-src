@@ -5,7 +5,6 @@
 
 '''Unit tests for include.IncludeNode'''
 
-from __future__ import print_function
 
 import os
 import sys
@@ -19,6 +18,7 @@ import grit.format.resource_map
 from grit.node import misc
 from grit.node import include
 from grit.node import empty
+from grit import constants
 from grit import util
 
 
@@ -31,7 +31,9 @@ def checkIsGzipped(filename, compress_attr):
       </includes>''' % (filename, compress_attr),
       base_dir=test_data_root)
   node, = root.GetChildrenOfType(include.IncludeNode)
-  compressed = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+  compressed = node.GetDataPackValue(lang='en',
+                                     gender=constants.DEFAULT_GENDER,
+                                     encoding=util.BINARY)
 
   decompressed_data = zlib.decompress(compressed, 16 + zlib.MAX_WBITS)
   expected = util.ReadFile(os.path.join(test_data_root, filename), util.BINARY)
@@ -41,20 +43,20 @@ def checkIsGzipped(filename, compress_attr):
 class IncludeNodeUnittest(unittest.TestCase):
   def testGetPath(self):
     root = misc.GritNode()
-    root.StartParsing(u'grit', None)
-    root.HandleAttribute(u'latest_public_release', u'0')
-    root.HandleAttribute(u'current_release', u'1')
-    root.HandleAttribute(u'base_dir', r'..\resource')
+    root.StartParsing('grit', None)
+    root.HandleAttribute('latest_public_release', '0')
+    root.HandleAttribute('current_release', '1')
+    root.HandleAttribute('base_dir', r'..\resource')
     release = misc.ReleaseNode()
-    release.StartParsing(u'release', root)
-    release.HandleAttribute(u'seq', u'1')
+    release.StartParsing('release', root)
+    release.HandleAttribute('seq', '1')
     root.AddChild(release)
     includes = empty.IncludesNode()
-    includes.StartParsing(u'includes', release)
+    includes.StartParsing('includes', release)
     release.AddChild(includes)
     include_node = include.IncludeNode()
-    include_node.StartParsing(u'include', includes)
-    include_node.HandleAttribute(u'file', r'flugel\kugel.pdf')
+    include_node.StartParsing('include', includes)
+    include_node.HandleAttribute('file', r'flugel\kugel.pdf')
     includes.AddChild(include_node)
     root.EndParsing()
 
@@ -64,27 +66,27 @@ class IncludeNodeUnittest(unittest.TestCase):
 
   def testGetPathNoBasedir(self):
     root = misc.GritNode()
-    root.StartParsing(u'grit', None)
-    root.HandleAttribute(u'latest_public_release', u'0')
-    root.HandleAttribute(u'current_release', u'1')
-    root.HandleAttribute(u'base_dir', r'..\resource')
+    root.StartParsing('grit', None)
+    root.HandleAttribute('latest_public_release', '0')
+    root.HandleAttribute('current_release', '1')
+    root.HandleAttribute('base_dir', r'..\resource')
     release = misc.ReleaseNode()
-    release.StartParsing(u'release', root)
-    release.HandleAttribute(u'seq', u'1')
+    release.StartParsing('release', root)
+    release.HandleAttribute('seq', '1')
     root.AddChild(release)
     includes = empty.IncludesNode()
-    includes.StartParsing(u'includes', release)
+    includes.StartParsing('includes', release)
     release.AddChild(includes)
     include_node = include.IncludeNode()
-    include_node.StartParsing(u'include', includes)
-    include_node.HandleAttribute(u'file', r'flugel\kugel.pdf')
-    include_node.HandleAttribute(u'use_base_dir', u'false')
+    include_node.StartParsing('include', includes)
+    include_node.HandleAttribute('file', r'flugel\kugel.pdf')
+    include_node.HandleAttribute('use_base_dir', 'false')
     includes.AddChild(include_node)
     root.EndParsing()
 
     last_dir = os.path.basename(os.getcwd())
     expected_path = util.normpath(os.path.join(
-        u'..', last_dir, u'flugel/kugel.pdf'))
+        '..', last_dir, 'flugel/kugel.pdf'))
     self.assertEqual(root.ToRealPath(include_node.GetInputPath()),
                      expected_path)
 
@@ -96,11 +98,13 @@ class IncludeNodeUnittest(unittest.TestCase):
     self.assertTrue(checkIsGzipped('test_js.js', ''))
     self.assertTrue(checkIsGzipped('test_css.css', ''))
     self.assertTrue(checkIsGzipped('test_svg.svg', ''))
+    self.assertTrue(checkIsGzipped('test_json.json', ''))
 
     self.assertTrue(checkIsGzipped('test_html.html', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_js.js', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_css.css', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_svg.svg', 'compress="default"'))
+    self.assertTrue(checkIsGzipped('test_json.json', 'compress="default"'))
 
   def testSkipInResourceMap(self):
     root = util.ParseGrdForUnittest('''
@@ -125,7 +129,9 @@ class IncludeNodeUnittest(unittest.TestCase):
         </includes>''',
         base_dir=util.PathFromRoot('grit/testdata'))
     inc, = root.GetChildrenOfType(include.IncludeNode)
-    result = inc.GetDataPackValue(lang='en', encoding=util.BINARY)
+    result = inc.GetDataPackValue(lang='en',
+                                  gender=constants.DEFAULT_GENDER,
+                                  encoding=util.BINARY)
     self.assertIn(b'should be kept', result)
     self.assertIn(b'in the middle...', result)
     self.assertNotIn(b'should be removed', result)
@@ -155,6 +161,7 @@ class IncludeNodeUnittest(unittest.TestCase):
         'resource_file_map_source')
     formatted = formatter(root,
                           lang='en',
+                          gender=None,
                           output_dir=util.PathFromRoot('grit/testdata'))
     found = False
     for segment in formatted:

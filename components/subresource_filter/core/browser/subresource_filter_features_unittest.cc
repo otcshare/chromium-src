@@ -4,13 +4,14 @@
 
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
@@ -56,7 +57,6 @@ class ScopedExperimentalStateToggle {
 
       case base::FeatureList::OVERRIDE_USE_DEFAULT:
         NOTREACHED();
-        break;
     }
   }
 
@@ -64,8 +64,7 @@ class ScopedExperimentalStateToggle {
   ScopedExperimentalStateToggle& operator=(
       const ScopedExperimentalStateToggle&) = delete;
 
-  ~ScopedExperimentalStateToggle() {
-  }
+  ~ScopedExperimentalStateToggle() {}
 
  private:
   testing::ScopedSubresourceFilterConfigurator scoped_configurator_;
@@ -73,7 +72,7 @@ class ScopedExperimentalStateToggle {
 };
 
 void ExpectAndRetrieveExactlyOneEnabledConfig(Configuration* actual_config) {
-  DCHECK(actual_config);
+  CHECK(actual_config);
   const auto config_list = GetEnabledConfigurations();
   ASSERT_EQ(1u, config_list->configs_by_decreasing_priority().size());
   *actual_config = config_list->configs_by_decreasing_priority().front();
@@ -81,7 +80,7 @@ void ExpectAndRetrieveExactlyOneEnabledConfig(Configuration* actual_config) {
 
 void ExpectAndRetrieveExactlyOneExtraEnabledConfig(
     Configuration* actual_config) {
-  DCHECK(actual_config);
+  CHECK(actual_config);
   const auto config_list = GetEnabledConfigurations();
   ASSERT_EQ(4u, config_list->configs_by_decreasing_priority().size());
   *actual_config = config_list->configs_by_decreasing_priority().back();
@@ -119,13 +118,13 @@ void ExpectParamsGeneratePreset(
 
 class SubresourceFilterFeaturesTest : public ::testing::Test {
  public:
-  SubresourceFilterFeaturesTest() {}
+  SubresourceFilterFeaturesTest() = default;
 
   SubresourceFilterFeaturesTest(const SubresourceFilterFeaturesTest&) = delete;
   SubresourceFilterFeaturesTest& operator=(
       const SubresourceFilterFeaturesTest&) = delete;
 
-  ~SubresourceFilterFeaturesTest() override {}
+  ~SubresourceFilterFeaturesTest() override = default;
 
   void SetUp() override {
     // Reset the global configuration at the start so tests start without a
@@ -669,7 +668,7 @@ TEST_F(SubresourceFilterFeaturesTest, AdTagging_EnablesDryRun) {
       Configuration::MakePresetForPerformanceTestingDryRunOnAllSites();
   base::test::ScopedFeatureList scoped_feature;
   scoped_feature.InitAndEnableFeature(kAdTagging);
-  EXPECT_TRUE(base::Contains(
+  EXPECT_TRUE(std::ranges::contains(
       GetEnabledConfigurations()->configs_by_decreasing_priority(), dryrun));
 }
 
@@ -678,7 +677,7 @@ TEST_F(SubresourceFilterFeaturesTest, AdTaggingDisabled_DisablesDryRun) {
       Configuration::MakePresetForPerformanceTestingDryRunOnAllSites();
   base::test::ScopedFeatureList scoped_feature;
   scoped_feature.InitAndDisableFeature(kAdTagging);
-  EXPECT_FALSE(base::Contains(
+  EXPECT_FALSE(std::ranges::contains(
       GetEnabledConfigurations()->configs_by_decreasing_priority(), dryrun));
 }
 

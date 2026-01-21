@@ -7,8 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "media/audio/audio_source_parameters.h"
@@ -19,6 +19,7 @@
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/renderer/modules/media/audio/mojo_audio_input_ipc.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
@@ -57,10 +58,10 @@ void CreateMojoAudioInputStream(
     bool automatic_gain_control,
     uint32_t total_segments) {
   main_task_runner->PostTask(
-      FROM_HERE, base::BindOnce(&CreateMojoAudioInputStreamOnMainThread,
-                                frame_token, source_params, std::move(client),
-                                std::move(controls_receiver), params,
-                                automatic_gain_control, total_segments));
+      FROM_HERE, blink::BindOnce(&CreateMojoAudioInputStreamOnMainThread,
+                                 frame_token, source_params, std::move(client),
+                                 std::move(controls_receiver), params,
+                                 automatic_gain_control, total_segments));
 }
 
 void AssociateInputAndOutputForAec(
@@ -68,7 +69,7 @@ void AssociateInputAndOutputForAec(
     const blink::LocalFrameToken& frame_token,
     const base::UnguessableToken& input_stream_id,
     const std::string& output_device_id) {
-  auto task = base::BindOnce(
+  auto task = blink::BindOnce(
       [](const blink::LocalFrameToken& frame_token,
          const base::UnguessableToken& input_stream_id,
          const std::string& output_device_id) {

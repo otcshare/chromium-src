@@ -11,20 +11,24 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/trace_event/trace_event.h"
+#include "ui/display/types/display_configuration_params.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/events/ozone/device/device_event.h"
 #include "ui/events/ozone/device/device_manager.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
-#include "ui/ozone/platform/drm/host/drm_device_handle.h"
+#include "ui/ozone/platform/drm/common/drm_wrapper.h"
+#include "ui/ozone/platform/drm/common/hardware_display_controller_info.h"
 #include "ui/ozone/platform/drm/host/drm_display_host.h"
 #include "ui/ozone/platform/drm/host/drm_native_display_delegate.h"
 #include "ui/ozone/platform/drm/host/gpu_thread_adapter.h"
@@ -37,12 +41,18 @@ constexpr int kDriverReadySleepMs = 100;
 
 typedef base::OnceCallback<void(const base::FilePath&,
                                 const base::FilePath&,
-                                std::unique_ptr<DrmDeviceHandle>)>
+                                std::unique_ptr<DrmWrapper>)>
     OnOpenDeviceReplyCallback;
 
 const char kDefaultGraphicsCardPattern[] = "/dev/dri/card%d";
 
-const char* kDisplayActionString[] = {
+// Sleep this many milliseconds before retrying after authentication fails.
+const int kAuthFailSleepMs = 100;
+
+// Log a warning after failing to authenticate for this many milliseconds.
+const int kLogAuthFailDelayMs = 1000;
+
+constexpr const char* kDisplayActionString[] = {
     "ADD",
     "REMOVE",
     "CHANGE",
@@ -74,7 +84,7 @@ base::FilePath MapDevPathToSysPath(const base::FilePath& device_path) {
     // corresponding USB touch device. If the symlink doesn't exist, use the
     // normal sysfs path. In order to ensure that the sysfs path remains unique,
     // append the card name to it.
-    if (base::StartsWith(component, "evdi", base::CompareCase::SENSITIVE)) {
+    if (component.starts_with("evdi")) {
       base::FilePath usb_device_path;
       if (base::ReadSymbolicLink(path_thus_far.Append("device"),
                                  &usb_device_path)) {
@@ -88,21 +98,89 @@ base::FilePath MapDevPathToSysPath(const base::FilePath& device_path) {
   return sys_path;
 }
 
+std::unique_ptr<DrmWrapper> OpenDrmDevice(const base::FilePath& dev_path,
+                                          const base::FilePath& sys_path,
+                                          bool is_primary_device) {
+  // Security folks have requested that we assert the graphics device has the
+  // expected path, so use a CHECK instead of a DCHECK. The sys_path is only
+  // used a label and is otherwise unvalidated.
+  CHECK(dev_path.DirName() == base::FilePath("/dev/dri"));
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+
+  base::ScopedFD scoped_fd;
+  int num_auth_attempts = 0;
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  while (true) {
+    scoped_fd.reset();
+    int fd = HANDLE_EINTR(open(dev_path.value().c_str(), O_RDWR | O_CLOEXEC));
+    if (fd < 0) {
+      PLOG(ERROR) << "Failed to open " << dev_path.value();
+      return nullptr;
+    }
+    scoped_fd.reset(fd);
+
+    num_auth_attempts++;
+    // To avoid spamming the logs, hold off before logging a warning (some
+    // failures are expected at first).
+    const bool should_log_error =
+        (base::TimeTicks::Now() - start_time).InMilliseconds() >=
+        kLogAuthFailDelayMs;
+    drm_magic_t magic;
+    UNSAFE_TODO(memset(&magic, 0, sizeof(magic)));
+    // We need to make sure the DRM device has enough privilege. Use the DRM
+    // authentication logic to figure out if the device has enough permissions.
+    int drm_errno = drmGetMagic(fd, &magic);
+    if (drm_errno) {
+      LOG_IF(ERROR, should_log_error)
+          << "Failed to get magic cookie to authenticate: " << dev_path.value()
+          << " with errno: " << drm_errno << " after " << num_auth_attempts
+          << " attempt(s)";
+      usleep(kAuthFailSleepMs * 1000);
+      continue;
+    }
+    drm_errno = drmAuthMagic(fd, magic);
+    if (drm_errno) {
+      LOG_IF(ERROR, should_log_error)
+          << "Failed to authenticate: " << dev_path.value()
+          << " with errno: " << drm_errno << " after " << num_auth_attempts
+          << " attempt(s)";
+      usleep(kAuthFailSleepMs * 1000);
+      continue;
+    }
+    break;
+  }
+
+  VLOG(1) << "Succeeded authenticating " << dev_path.value() << " in "
+          << (base::TimeTicks::Now() - start_time).InMilliseconds() << " ms "
+          << "with " << num_auth_attempts << " attempt(s)";
+
+  auto drm = std::make_unique<DrmWrapper>(sys_path, std::move(scoped_fd),
+                                          is_primary_device);
+
+  if (!drm->Initialize()) {
+    LOG(ERROR) << "Failed to initialize " << dev_path.value();
+    return nullptr;
+  }
+
+  return drm;
+}
+
 void OpenDeviceAsync(const base::FilePath& device_path,
                      const scoped_refptr<base::TaskRunner>& reply_runner,
                      OnOpenDeviceReplyCallback callback) {
   base::FilePath sys_path = MapDevPathToSysPath(device_path);
 
-  std::unique_ptr<DrmDeviceHandle> handle(new DrmDeviceHandle());
-  handle->Initialize(device_path, sys_path);
+  std::unique_ptr<DrmWrapper> drm =
+      OpenDrmDevice(device_path, sys_path, /*is_primary_device=*/false);
   reply_runner->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), device_path, sys_path,
-                                std::move(handle)));
+                                std::move(drm)));
 }
 
 struct DisplayCard {
   base::FilePath path;
-  absl::optional<std::string> driver;
+  std::optional<std::string> driver;
 };
 
 std::vector<DisplayCard> GetValidDisplayCards() {
@@ -127,7 +205,7 @@ std::vector<DisplayCard> GetValidDisplayCards() {
     }
 
     struct drm_mode_card_res res;
-    memset(&res, 0, sizeof(struct drm_mode_card_res));
+    UNSAFE_TODO(memset(&res, 0, sizeof(struct drm_mode_card_res)));
     int ret = drmIoctl(fd.get(), DRM_IOCTL_MODE_GETRESOURCES, &res);
     VPLOG_IF(1, ret) << "Failed to get DRM resources for '" << card_path << "'";
 
@@ -166,7 +244,6 @@ base::FilePath GetPrimaryDisplayCardPath() {
   }
 
   LOG(FATAL) << "Failed to open primary graphics device.";
-  return base::FilePath();  // Not reached.
 }
 
 }  // namespace
@@ -189,14 +266,13 @@ DrmDisplayHostManager::DrmDisplayHostManager(
     base::FilePath primary_graphics_card_path_sysfs =
         MapDevPathToSysPath(primary_graphics_card_path_);
 
-    primary_drm_device_handle_ = std::make_unique<DrmDeviceHandle>();
-    if (!primary_drm_device_handle_->Initialize(
-            primary_graphics_card_path_, primary_graphics_card_path_sysfs)) {
+    primary_drm_device_ = OpenDrmDevice(primary_graphics_card_path_,
+                                        primary_graphics_card_path_sysfs,
+                                        /*is_primary_device=*/true);
+    if (!primary_drm_device_) {
       LOG(FATAL) << "Failed to open primary graphics card";
-      return;
     }
-    host_properties->supports_overlays =
-        primary_drm_device_handle_->has_atomic_capabilities();
+    host_properties->supports_overlays = primary_drm_device_->is_atomic();
     drm_devices_[primary_graphics_card_path_] =
         primary_graphics_card_path_sysfs;
   }
@@ -205,17 +281,14 @@ DrmDisplayHostManager::DrmDisplayHostManager(
   proxy_->RegisterHandlerForDrmDisplayHostManager(this);
   proxy_->AddGpuThreadObserver(this);
 
-  auto display_infos =
-      GetAvailableDisplayControllerInfos(primary_drm_device_handle_->fd());
+  auto display_infos = GetAvailableDisplayControllerInfos(*primary_drm_device_);
+  ConsolidateTiledDisplayInfo(display_infos);
   has_dummy_display_ = !display_infos.empty();
   MapEdidIdToDisplaySnapshot edid_id_collision_map;
   for (auto& display_info : display_infos) {
     // Create a dummy DisplaySnapshot and resolve display ID collisions.
     std::unique_ptr<display::DisplaySnapshot> current_display_snapshot =
-        CreateDisplaySnapshot(display_info.get(),
-                              primary_drm_device_handle_->fd(),
-                              primary_drm_device_handle_->sys_path(), 0,
-                              display::DrmFormatsAndModifiers());
+        CreateDisplaySnapshot(*primary_drm_device_, display_info.get(), 0);
 
     const auto colliding_display_snapshot_iter =
         edid_id_collision_map.find(current_display_snapshot->edid_display_id());
@@ -261,10 +334,10 @@ DrmDisplayHostManager::DisplayEvent::~DisplayEvent() = default;
 
 DrmDisplayHost* DrmDisplayHostManager::GetDisplay(int64_t display_id) {
   auto it =
-      base::ranges::find(displays_, display_id,
-                         [](const std::unique_ptr<DrmDisplayHost>& display) {
-                           return display->snapshot()->display_id();
-                         });
+      std::ranges::find(displays_, display_id,
+                        [](const std::unique_ptr<DrmDisplayHost>& display) {
+                          return display->snapshot()->display_id();
+                        });
   if (it == displays_.end())
     return nullptr;
 
@@ -283,6 +356,7 @@ void DrmDisplayHostManager::RemoveDelegate(DrmNativeDisplayDelegate* delegate) {
 
 void DrmDisplayHostManager::TakeDisplayControl(
     display::DisplayControlCallback callback) {
+  TRACE_EVENT0("drm", "DrmDisplayHostManager::TakeDisplayControl");
   if (display_control_change_pending_) {
     LOG(ERROR) << "TakeDisplayControl called while change already pending";
     std::move(callback).Run(false);
@@ -304,6 +378,7 @@ void DrmDisplayHostManager::TakeDisplayControl(
 
 void DrmDisplayHostManager::RelinquishDisplayControl(
     display::DisplayControlCallback callback) {
+  TRACE_EVENT0("drm", "DrmDisplayHostManager::RelinquishDisplayControl");
   if (display_control_change_pending_) {
     LOG(ERROR)
         << "RelinquishDisplayControl called while change already pending";
@@ -336,24 +411,23 @@ void DrmDisplayHostManager::UpdateDisplays(
 void DrmDisplayHostManager::ConfigureDisplays(
     const std::vector<display::DisplayConfigurationParams>& config_requests,
     display::ConfigureCallback callback,
-    uint32_t modeset_flag) {
+    display::ModesetFlags modeset_flags) {
   for (auto& config : config_requests) {
     if (GetDisplay(config.id)->is_dummy()) {
-      std::move(callback).Run(true);
+      std::move(callback).Run(config_requests, true);
       return;
     }
   }
 
   proxy_->GpuConfigureNativeDisplays(config_requests, std::move(callback),
-                                     modeset_flag);
+                                     modeset_flags);
 }
 
 void DrmDisplayHostManager::OnDeviceEvent(const DeviceEvent& event) {
   if (event.device_type() != DeviceEvent::DISPLAY)
     return;
 
-  event_queue_.push(
-      DisplayEvent(event.action_type(), event.path(), event.properties()));
+  event_queue_.emplace(event.action_type(), event.path(), event.properties());
   ProcessEvent();
 }
 
@@ -365,8 +439,9 @@ void DrmDisplayHostManager::ProcessEvent() {
     const std::string seqnum = seqnum_it == event.display_event_props.end()
                                    ? ""
                                    : ("(SEQNUM:" + seqnum_it->second + ")");
-    VLOG(1) << "Got display event " << kDisplayActionString[event.action_type]
-            << seqnum << " for " << event.path.value();
+    VLOG(1) << "Got display event "
+            << UNSAFE_TODO(kDisplayActionString[event.action_type]) << seqnum
+            << " for " << event.path.value();
     switch (event.action_type) {
       case DeviceEvent::ADD:
         if (drm_devices_.find(event.path) == drm_devices_.end()) {
@@ -410,10 +485,11 @@ void DrmDisplayHostManager::ProcessEvent() {
 void DrmDisplayHostManager::OnAddGraphicsDevice(
     const base::FilePath& dev_path,
     const base::FilePath& sys_path,
-    std::unique_ptr<DrmDeviceHandle> handle) {
-  if (handle->IsValid()) {
+    std::unique_ptr<DrmWrapper> drm) {
+  if (drm) {
     drm_devices_[dev_path] = sys_path;
-    proxy_->GpuAddGraphicsDevice(sys_path, handle->PassFD());
+    proxy_->GpuAddGraphicsDevice(sys_path,
+                                 DrmWrapper::ToScopedFD(std::move(drm)));
     NotifyDisplayDelegate();
   }
 
@@ -435,8 +511,8 @@ void DrmDisplayHostManager::OnRemoveGraphicsDevice(
 }
 
 void DrmDisplayHostManager::OnGpuProcessLaunched() {
-  std::unique_ptr<DrmDeviceHandle> handle =
-      std::move(primary_drm_device_handle_);
+  std::unique_ptr<DrmWrapper> primary_drm_device =
+      std::move(primary_drm_device_);
   {
     base::ScopedAllowBlocking scoped_allow_blocking;
 
@@ -444,18 +520,22 @@ void DrmDisplayHostManager::OnGpuProcessLaunched() {
     drm_devices_[primary_graphics_card_path_] =
         MapDevPathToSysPath(primary_graphics_card_path_);
 
-    if (!handle) {
-      handle = std::make_unique<DrmDeviceHandle>();
-      if (!handle->Initialize(primary_graphics_card_path_,
-                              drm_devices_[primary_graphics_card_path_]))
-        LOG(FATAL) << "Failed to open primary graphics card";
+    if (!primary_drm_device) {
+      primary_drm_device =
+          OpenDrmDevice(primary_graphics_card_path_,
+                        drm_devices_[primary_graphics_card_path_],
+                        /*is_primary_device=*/true);
+      if (!primary_drm_device) {
+        LOG(FATAL) << "Failed to open the primary graphics card";
+      }
     }
   }
 
   // Send the primary device first since this is used to initialize graphics
   // state.
-  proxy_->GpuAddGraphicsDevice(drm_devices_[primary_graphics_card_path_],
-                               handle->PassFD());
+  proxy_->GpuAddGraphicsDevice(
+      drm_devices_[primary_graphics_card_path_],
+      DrmWrapper::ToScopedFD(std::move(primary_drm_device)));
 }
 
 void DrmDisplayHostManager::OnGpuThreadReady() {
@@ -495,10 +575,10 @@ void DrmDisplayHostManager::GpuHasUpdatedNativeDisplays(
   displays_.swap(old_displays);
   for (auto& display : displays) {
     auto it =
-        base::ranges::find(old_displays, display->display_id(),
-                           [](const std::unique_ptr<DrmDisplayHost>& display) {
-                             return display->snapshot()->display_id();
-                           });
+        std::ranges::find(old_displays, display->display_id(),
+                          [](const std::unique_ptr<DrmDisplayHost>& display) {
+                            return display->snapshot()->display_id();
+                          });
     if (it == old_displays.end()) {
       displays_.push_back(std::make_unique<DrmDisplayHost>(
           proxy_, std::move(display), false /* is_dummy */));
@@ -516,6 +596,16 @@ void DrmDisplayHostManager::GpuHasUpdatedNativeDisplays(
                        weak_ptr_factory_.GetWeakPtr(),
                        std::move(get_displays_callback_)));
     get_displays_callback_.Reset();
+  }
+}
+
+void DrmDisplayHostManager::GpuSetHdcpKeyProp(int64_t display_id,
+                                              bool success) {
+  DrmDisplayHost* display = GetDisplay(display_id);
+  if (display) {
+    display->OnHdcpKeyPropSetReceived(success);
+  } else {
+    LOG(ERROR) << "Couldn't find display with id=" << display_id;
   }
 }
 
@@ -550,7 +640,7 @@ void DrmDisplayHostManager::GpuTookDisplayControl(bool status) {
   DCHECK(display_control_change_pending_);
 
   if (status) {
-    input_controller_->SetInputDevicesEnabled(true);
+    scoped_input_devices_disabler_.reset();
     display_externally_controlled_ = false;
   }
 
@@ -571,7 +661,7 @@ void DrmDisplayHostManager::GpuRelinquishedDisplayControl(bool status) {
   DCHECK(display_control_change_pending_);
 
   if (status) {
-    input_controller_->SetInputDevicesEnabled(false);
+    scoped_input_devices_disabler_ = input_controller_->DisableInputDevices();
     display_externally_controlled_ = true;
   }
 
@@ -593,7 +683,7 @@ void DrmDisplayHostManager::GpuShouldDisplayEventTriggerConfiguration(
 
 void DrmDisplayHostManager::RunUpdateDisplaysCallback(
     display::GetDisplaysCallback callback) const {
-  std::vector<display::DisplaySnapshot*> snapshots;
+  std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> snapshots;
   for (const auto& display : displays_)
     snapshots.push_back(display->snapshot());
 

@@ -16,7 +16,7 @@ MockExternalProvider::MockExternalProvider(VisitorInterface* visitor,
                                            mojom::ManifestLocation location)
     : location_(location), visitor_(visitor), visit_count_(0) {}
 
-MockExternalProvider::~MockExternalProvider() {}
+MockExternalProvider::~MockExternalProvider() = default;
 
 void MockExternalProvider::UpdateOrAddExtension(const ExtensionId& id,
                                                 const std::string& version_str,
@@ -30,14 +30,14 @@ void MockExternalProvider::UpdateOrAddExtension(const ExtensionId& id,
 void MockExternalProvider::UpdateOrAddExtension(
     std::unique_ptr<ExternalInstallInfoFile> info) {
   const std::string& id = info->extension_id;
-  CHECK(url_extension_map_.find(id) == url_extension_map_.end());
+  CHECK(!url_extension_map_.contains(id));
   file_extension_map_[id] = std::move(info);
 }
 
 void MockExternalProvider::UpdateOrAddExtension(
     std::unique_ptr<ExternalInstallInfoUpdateUrl> info) {
   const std::string& id = info->extension_id;
-  CHECK(file_extension_map_.find(id) == file_extension_map_.end());
+  CHECK(!file_extension_map_.contains(id));
   url_extension_map_[id] = std::move(info);
 }
 
@@ -65,8 +65,25 @@ void MockExternalProvider::TriggerOnExternalExtensionFound() {
 }
 
 bool MockExternalProvider::HasExtension(const std::string& id) const {
-  return file_extension_map_.find(id) != file_extension_map_.end() ||
-         url_extension_map_.find(id) != url_extension_map_.end();
+  return file_extension_map_.contains(id) || url_extension_map_.contains(id);
+}
+
+bool MockExternalProvider::HasExtensionWithLocation(
+    const std::string& id,
+    mojom::ManifestLocation location) const {
+  if (auto it = file_extension_map_.find(id); it != file_extension_map_.end()) {
+    if (it->second->crx_location == location) {
+      return true;
+    }
+  }
+
+  if (auto it = url_extension_map_.find(id); it != url_extension_map_.end()) {
+    if (it->second->download_location == location) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool MockExternalProvider::GetExtensionDetails(
@@ -77,15 +94,18 @@ bool MockExternalProvider::GetExtensionDetails(
   auto it2 = url_extension_map_.find(id);
 
   // |id| can't be on both |file_extension_map_| and |url_extension_map_|.
-  if (it1 == file_extension_map_.end() && it2 == url_extension_map_.end())
+  if (it1 == file_extension_map_.end() && it2 == url_extension_map_.end()) {
     return false;
+  }
 
   // Only ExternalInstallInfoFile has version.
-  if (version && it1 != file_extension_map_.end())
+  if (version && it1 != file_extension_map_.end()) {
     *version = std::make_unique<base::Version>(it1->second->version);
+  }
 
-  if (location)
+  if (location) {
     *location = location_;
+  }
 
   return true;
 }

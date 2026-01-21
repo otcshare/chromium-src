@@ -5,16 +5,22 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_VIEW_TRANSITION_COMMIT_DEFERRING_CONDITION_H_
 #define CONTENT_BROWSER_RENDERER_HOST_VIEW_TRANSITION_COMMIT_DEFERRING_CONDITION_H_
 
-#include <map>
 #include <memory>
 #include <vector>
 
 #include "base/memory/ptr_util.h"
+#include "base/time/time.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/commit_deferring_condition.h"
 
+namespace blink {
+struct ViewTransitionState;
+}
+
 namespace content {
 class NavigationRequest;
+class RenderFrameHostImpl;
+class ScopedViewTransitionResources;
 
 class CONTENT_EXPORT ViewTransitionCommitDeferringCondition
     : public CommitDeferringCondition {
@@ -30,10 +36,22 @@ class CONTENT_EXPORT ViewTransitionCommitDeferringCondition
   ~ViewTransitionCommitDeferringCondition() override;
 
   Result WillCommitNavigation(base::OnceClosure resume) override;
+  const char* TraceEventName() const override;
 
  private:
   explicit ViewTransitionCommitDeferringCondition(
       NavigationRequest& navigation_request);
+
+  void OnSnapshotAckFromRenderer(
+      const blink::ViewTransitionState& view_transition_state);
+  void OnSnapshotTimeout();
+  base::TimeDelta GetSnapshotCallbackTimeout() const;
+
+  std::unique_ptr<ScopedViewTransitionResources> resources_;
+  base::WeakPtr<RenderFrameHostImpl> old_rfh_;
+  base::OnceClosure resume_navigation_;
+  base::WeakPtrFactory<ViewTransitionCommitDeferringCondition> weak_factory_{
+      this};
 };
 
 }  // namespace content

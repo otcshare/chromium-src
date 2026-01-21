@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
-#include "chrome/browser/ui/webui/ash/office_fallback/office_fallback.mojom-shared.h"
 #include "chrome/browser/ui/webui/ash/office_fallback/office_fallback.mojom.h"
 #include "chrome/browser/ui/webui/ash/office_fallback/office_fallback_page_handler.h"
 #include "chrome/common/webui_url_constants.h"
@@ -18,9 +17,10 @@
 namespace ash::office_fallback {
 
 // The string conversions of ash::office_fallback::mojom::DialogChoice.
-const char kDialogChoiceCancel[] = "cancel";
-const char kDialogChoiceQuickOffice[] = "quick-office";
-const char kDialogChoiceTryAgain[] = "try-again";
+inline constexpr char kDialogChoiceCancel[] = "cancel";
+inline constexpr char kDialogChoiceOk[] = "ok";
+inline constexpr char kDialogChoiceQuickOffice[] = "quick-office";
+inline constexpr char kDialogChoiceTryAgain[] = "try-again";
 
 class OfficeFallbackUI;
 

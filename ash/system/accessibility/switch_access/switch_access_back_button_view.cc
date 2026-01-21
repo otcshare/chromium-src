@@ -9,7 +9,7 @@
 #include "ash/style/ash_color_id.h"
 #include "ash/system/accessibility/floating_menu_button.h"
 #include "ash/system/tray/tray_constants.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/mojom/ax_node_data.mojom-shared.h"
@@ -20,7 +20,9 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 
@@ -54,6 +56,8 @@ SwitchAccessBackButtonView::SwitchAccessBackButtonView(bool for_menu) {
                   base::Unretained(this))))
       .SetSize(gfx::Size(side_length, side_length))
       .BuildChildren();
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
 }
 
 int SwitchAccessBackButtonView::GetFocusRingWidthPerSide() {
@@ -61,26 +65,29 @@ int SwitchAccessBackButtonView::GetFocusRingWidthPerSide() {
 }
 
 void SwitchAccessBackButtonView::SetFocusRing(bool should_show) {
-  if (show_focus_ring_ == should_show)
+  if (show_focus_ring_ == should_show) {
     return;
+  }
   show_focus_ring_ = should_show;
   SchedulePaint();
 }
 
 void SwitchAccessBackButtonView::SetForMenu(bool for_menu) {
-  if (for_menu)
+  if (for_menu) {
     back_button_->SetVectorIcon(kSwitchAccessCloseIcon);
-  else
+  } else {
     back_button_->SetVectorIcon(kSwitchAccessBackIcon);
+  }
 }
 
-void SwitchAccessBackButtonView::GetAccessibleNodeData(
-    ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kButton;
-}
-
-int SwitchAccessBackButtonView::GetHeightForWidth(int w) const {
-  return w;
+gfx::Size SwitchAccessBackButtonView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size preferred_size =
+      views::BoxLayoutView::CalculatePreferredSize(available_size);
+  if (available_size.width().is_bounded()) {
+    preferred_size.set_height(available_size.width().value());
+  }
+  return preferred_size;
 }
 
 void SwitchAccessBackButtonView::OnPaint(gfx::Canvas* canvas) {
@@ -92,8 +99,9 @@ void SwitchAccessBackButtonView::OnPaint(gfx::Canvas* canvas) {
   flags.setStyle(cc::PaintFlags::kFill_Style);
   canvas->DrawCircle(gfx::PointF(rect.CenterPoint()), kRadiusDp, flags);
 
-  if (!show_focus_ring_)
+  if (!show_focus_ring_) {
     return;
+  }
 
   flags.setColor(
       color_provider->GetColor(kColorAshSwitchAccessInnerStrokeColor));
@@ -109,11 +117,11 @@ void SwitchAccessBackButtonView::OnPaint(gfx::Canvas* canvas) {
 }
 
 void SwitchAccessBackButtonView::OnButtonPressed() {
-  NotifyAccessibilityEvent(ax::mojom::Event::kClicked,
-                           /*send_native_event=*/false);
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kClicked,
+                                     /*send_native_event=*/false);
 }
 
-BEGIN_METADATA(SwitchAccessBackButtonView, views::BoxLayoutView)
+BEGIN_METADATA(SwitchAccessBackButtonView)
 END_METADATA
 
 }  // namespace ash

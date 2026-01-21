@@ -11,22 +11,17 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list_threadsafe.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "crypto/scoped_nss_types.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/cert/cert_type.h"
 #include "net/cert/scoped_nss_types.h"
 #include "net/cert/x509_certificate.h"
-
-namespace base {
-template <class ObserverType>
-class ObserverListThreadSafe;
-}
 
 namespace net {
 
@@ -44,38 +39,11 @@ class NET_EXPORT NSSCertDatabase {
 
     // Will be called when a certificate is added, removed, or trust settings
     // are changed.
-    virtual void OnCertDBChanged() {}
+    virtual void OnTrustStoreChanged() {}
+    virtual void OnClientCertStoreChanged() {}
 
    protected:
     Observer() = default;
-  };
-
-  // Holds an NSS certificate along with additional information.
-  struct CertInfo {
-    CertInfo();
-    CertInfo(CertInfo&& other);
-    ~CertInfo();
-    CertInfo& operator=(CertInfo&& other);
-
-    // The certificate itself.
-    ScopedCERTCertificate cert;
-
-    // The certificate is stored on a read-only slot.
-    bool on_read_only_slot = false;
-
-    // The certificate is untrusted.
-    bool untrusted = false;
-
-    // The certificate is trusted for web navigations according to the trust
-    // bits stored in the database.
-    bool web_trust_anchor = false;
-
-    // The certificate is hardware-backed.
-    bool hardware_backed = false;
-
-    // The certificate is device-wide.
-    // Note: can be true only on Chrome OS.
-    bool device_wide = false;
   };
 
   // Stores per-certificate error codes for import failures.
@@ -116,11 +84,6 @@ class NET_EXPORT NSSCertDatabase {
     DISTRUSTED_OBJ_SIGN   = 1 << 5,
   };
 
-  using CertInfoList = std::vector<CertInfo>;
-
-  using ListCertsInfoCallback =
-      base::OnceCallback<void(CertInfoList certs_info)>;
-
   using ListCertsCallback =
       base::OnceCallback<void(ScopedCERTCertificateList certs)>;
 
@@ -153,11 +116,6 @@ class NET_EXPORT NSSCertDatabase {
   // be called on the IO thread. This does not block by retrieving the certs
   // asynchronously on a worker thread.
   virtual void ListCertsInSlot(ListCertsCallback callback, PK11SlotInfo* slot);
-
-  // Asynchronously get a list of certificates along with additional
-  // information. Note that the callback may be run even after the database is
-  // deleted.
-  virtual void ListCertsInfo(ListCertsInfoCallback callback);
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Get the slot for system-wide key data. May be NULL if the system token was
@@ -200,10 +158,11 @@ class NET_EXPORT NSSCertDatabase {
 
   // Export the given certificates and private keys into a PKCS #12 blob,
   // storing into |output|.
-  // Returns the number of certificates successfully exported.
-  int ExportToPKCS12(const ScopedCERTCertificateList& certs,
-                     const std::u16string& password,
-                     std::string* output) const;
+  // Returns the number of certificates successfully exported. NSS has to be
+  // initialized before the method is called.
+  static int ExportToPKCS12(const ScopedCERTCertificateList& certs,
+                            const std::u16string& password,
+                            std::string* output);
 
   // Uses similar logic to nsNSSCertificateDB::handleCACertDownload to find the
   // root.  Assumes the list is an ordered hierarchy with the root being either
@@ -257,16 +216,9 @@ class NET_EXPORT NSSCertDatabase {
   void DeleteCertAndKeyAsync(ScopedCERTCertificate cert,
                              DeleteCertCallback callback);
 
-  // IsUntrusted returns true if |cert| is specifically untrusted. These
-  // certificates are stored in the database for the specific purpose of
-  // rejecting them.
-  static bool IsUntrusted(const CERTCertificate* cert);
-
-  // IsWebTrustAnchor returns true if |cert| is explicitly trusted for web
-  // navigations according to the trust bits stored in the database.
-  static bool IsWebTrustAnchor(const CERTCertificate* cert);
-
   // Check whether cert is stored in a readonly slot.
+  // TODO(mattm): this is ill-defined if the cert exists on both readonly and
+  // non-readonly slots.
   static bool IsReadOnly(const CERTCertificate* cert);
 
   // Check whether cert is stored in a hardware slot.
@@ -287,40 +239,35 @@ class NET_EXPORT NSSCertDatabase {
   void RemoveObserver(Observer* observer);
 
  protected:
-  // Returns a list of certificates extracted from |certs_info| list ignoring
-  // additional information.
-  static ScopedCERTCertificateList ExtractCertificates(CertInfoList certs_info);
-
   // Certificate listing implementation used by |ListCerts*|. Static so it may
   // safely be used on the worker thread. If |slot| is nullptr, obtains the
   // certs of all slots, otherwise only of |slot|.
   static ScopedCERTCertificateList ListCertsImpl(crypto::ScopedPK11Slot slot);
 
-  // Implements the logic behind returning a list of certificates along with
-  // additional information about every certificate.
-  // If |add_certs_info| is false, doesn't compute the certificate additional
-  // information, the corresponding CertInfo struct fields will be left on their
-  // default values.
-  // Static so it may safely be used on the worker thread. If |slot| is nullptr,
-  // obtains the certs of all slots, otherwise only of |slot|.
-  static CertInfoList ListCertsInfoImpl(crypto::ScopedPK11Slot slot,
-                                        bool add_certs_info);
 
   // Broadcasts notifications to all registered observers.
-  void NotifyObserversCertDBChanged();
+  void NotifyObserversTrustStoreChanged();
+  void NotifyObserversClientCertStoreChanged();
 
  private:
+  enum class DeleteCertAndKeyResult {
+    ERROR,
+    OK_FOUND_KEY,
+    OK_NO_KEY,
+  };
   // Notifies observers of the removal of a cert and calls |callback| with
   // |success| as argument.
-  void NotifyCertRemovalAndCallBack(DeleteCertCallback callback, bool success);
+  void NotifyCertRemovalAndCallBack(DeleteCertCallback callback,
+                                    DeleteCertAndKeyResult result);
 
   // Certificate removal implementation used by |DeleteCertAndKey*|. Static so
   // it may safely be used on the worker thread.
-  static bool DeleteCertAndKeyImpl(CERTCertificate* cert);
+  static DeleteCertAndKeyResult DeleteCertAndKeyImpl(CERTCertificate* cert);
   // Like above, but taking a ScopedCERTCertificate. This is a workaround for
   // base::Bind not having a way to own a unique_ptr but pass it to the
   // function as a raw pointer.
-  static bool DeleteCertAndKeyImplScoped(ScopedCERTCertificate cert);
+  static DeleteCertAndKeyResult DeleteCertAndKeyImplScoped(
+      ScopedCERTCertificate cert);
 
   crypto::ScopedPK11Slot public_slot_;
   crypto::ScopedPK11Slot private_slot_;

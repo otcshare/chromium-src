@@ -8,7 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "components/policy/core/browser/configuration_policy_handler_list.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/core/common/schema_registry.h"
@@ -44,6 +45,8 @@ class POLICY_EXPORT BrowserPolicyConnectorBase {
 
   // Returns a handle to the Chrome schema.
   const Schema& GetChromeSchema() const;
+
+  const Schema& GetExtensionInstallPolicySchema() const;
 
   // Returns the global CombinedSchemaRegistry. SchemaRegistries from Profiles
   // should be tracked by the global registry, so that the global policy
@@ -97,12 +100,15 @@ class POLICY_EXPORT BrowserPolicyConnectorBase {
   // Returns the providers to pass to the PolicyService. Generally this is the
   // same as |policy_providers_|, unless SetPolicyProviderForTesting() has been
   // called.
-  std::vector<ConfigurationPolicyProvider*> GetProvidersForPolicyService();
+  std::vector<raw_ptr<ConfigurationPolicyProvider, VectorExperimental>>
+  GetProvidersForPolicyService();
 
   // Set to true when the PolicyService has been created, and false in
   // Shutdown(). Once created the PolicyService is destroyed in the destructor,
   // not Shutdown().
   bool is_initialized_ = false;
+
+  Schema extension_install_policy_schema_;
 
   // Used to convert policies to preferences. The providers declared below
   // may trigger policy updates during shutdown, which will result in

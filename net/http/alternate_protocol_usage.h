@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,6 +33,21 @@ enum AlternateProtocolUsage {
   // Maximum value for the enum.
   ALTERNATE_PROTOCOL_USAGE_MAX,
 };
+
+// The state of the advertised alternative service.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(AdvertisedAltSvcState)
+enum class AdvertisedAltSvcState {
+  // The state is unknown.
+  kUnknown = 0,
+  // QUIC is advertised and it's not broken.
+  kQuicNotBroken = 1,
+  // QUIC is advertised but it's broken.
+  kQuicBroken = 2,
+  kMaxValue = kQuicBroken,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/page/enums.xml:AdvertisedAltSvcState)
 
 }  // namespace net
 

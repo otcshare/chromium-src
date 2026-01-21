@@ -6,12 +6,14 @@
 
 #include <stdint.h>
 
-#include "chrome/android/chrome_jni_headers/UmaUtils_jni.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
 #include "components/metrics/metrics_reporting_default_state.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/base_module_jni/UmaUtils_jni.h"
+
+using jni_zero::JavaRef;
 
 class PrefService;
 
@@ -19,24 +21,27 @@ namespace chrome {
 namespace android {
 
 base::TimeTicks GetApplicationStartTime() {
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   return base::TimeTicks::FromUptimeMillis(
       Java_UmaUtils_getApplicationStartTime(env));
 }
 
 base::TimeTicks GetProcessStartTime() {
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   return base::TimeTicks::FromUptimeMillis(
       Java_UmaUtils_getProcessStartTime(env));
 }
 
-static jboolean JNI_UmaUtils_IsClientInMetricsReportingSample(JNIEnv* env) {
-  return ChromeMetricsServicesManagerClient::IsClientInSample();
+static bool JNI_UmaUtils_IsClientInSampleForMetrics(JNIEnv* env) {
+  return ChromeMetricsServicesManagerClient::IsClientInSampleForMetrics();
 }
 
-static void JNI_UmaUtils_RecordMetricsReportingDefaultOptIn(
-    JNIEnv* env,
-    jboolean opt_in) {
+static bool JNI_UmaUtils_IsClientInSampleForCrashes(JNIEnv* env) {
+  return ChromeMetricsServicesManagerClient::IsClientInSampleForCrashes();
+}
+
+static void JNI_UmaUtils_RecordMetricsReportingDefaultOptIn(JNIEnv* env,
+                                                            bool opt_in) {
   DCHECK(g_browser_process);
   PrefService* local_state = g_browser_process->local_state();
 
@@ -52,3 +57,5 @@ static void JNI_UmaUtils_RecordMetricsReportingDefaultOptIn(
 
 }  // namespace android
 }  // namespace chrome
+
+DEFINE_JNI(UmaUtils)

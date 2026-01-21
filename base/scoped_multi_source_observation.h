@@ -7,12 +7,11 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/scoped_observation_traits.h"
 
 namespace base {
@@ -57,14 +56,15 @@ class ScopedMultiSourceObservation {
 
   // Adds the object passed to the constructor as an observer on |source|.
   void AddObservation(Source* source) {
+    CHECK(!IsObservingSource(source));
     sources_.push_back(source);
     Traits::AddObserver(source, observer_);
   }
 
   // Remove the object passed to the constructor as an observer from |source|.
   void RemoveObservation(Source* source) {
-    auto it = base::ranges::find(sources_, source);
-    DCHECK(it != sources_.end());
+    auto it = std::ranges::find(sources_, source);
+    CHECK(it != sources_.end());
     sources_.erase(it);
     Traits::RemoveObserver(source, observer_);
   }
@@ -84,18 +84,26 @@ class ScopedMultiSourceObservation {
   // Returns true if |source| is being observed.
   bool IsObservingSource(Source* source) const {
     DCHECK(source);
-    return base::Contains(sources_, source);
+    return std::ranges::contains(sources_, source);
   }
 
   // Returns the number of sources being observed.
   size_t GetSourcesCount() const { return sources_.size(); }
+
+  // Returns a pointer to the observer that observes the sources.
+  Observer* observer() { return observer_; }
+  const Observer* observer() const { return observer_; }
+
+  // Returns the sources being observed. Note: It is invalid to add or remove
+  // sources while iterating on it.
+  const std::vector<raw_ptr<Source>>& sources() const { return sources_; }
 
  private:
   using Traits = ScopedObservationTraits<Source, Observer>;
 
   const raw_ptr<Observer> observer_;
 
-  std::vector<Source*> sources_;
+  std::vector<raw_ptr<Source>> sources_;
 };
 
 }  // namespace base

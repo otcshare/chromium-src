@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -43,18 +44,22 @@ base::FilePath SavePrintDocument(mojo::ScopedHandle scoped_handle) {
 
   base::File temp(temp_path, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
   char buf[4096];
-  int bytes;
-  while ((bytes = src_file.ReadAtCurrentPos(buf, sizeof(buf))) > 0) {
-    if (!temp.WriteAtCurrentPosAndCheck(
-            base::as_bytes(base::make_span(buf, bytes)))) {
+  const base::span<uint8_t> buf_span = base::as_writable_byte_span(buf);
+  while (true) {
+    std::optional<size_t> bytes_read = src_file.ReadAtCurrentPos(buf_span);
+    if (!bytes_read) {
+      PLOG(ERROR) << "Error reading PDF.";
+      return base::FilePath();
+    }
+
+    if (*bytes_read == 0) {
+      break;
+    }
+
+    if (!temp.WriteAtCurrentPosAndCheck(buf_span.first(*bytes_read))) {
       PLOG(ERROR) << "Error while saving PDF to disk.";
       return base::FilePath();
     }
-  }
-
-  if (bytes < 0) {
-    PLOG(ERROR) << "Error reading PDF.";
-    return base::FilePath();
   }
 
   return base::MakeAbsoluteFilePath(temp_path);

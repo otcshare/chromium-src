@@ -7,11 +7,13 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
+#include "components/policy/core/common/cloud/cloud_policy_client_types.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_export.h"
 
 namespace enterprise_management {
 class CloudPolicySettings;
+class ExtensionInstallPolicies;
 }  // namespace enterprise_management
 
 namespace policy {
@@ -28,10 +30,42 @@ enum class PolicyPerProfileFilter {
   kAny
 };
 
-// Decode all the fields in |policy| that match the needed |per_profile| flag
+POLICY_EXPORT ExtensionInstallDecision ConvertToExtensionInstallDecision(
+    const enterprise_management::ExtensionInstallPolicies& policies,
+    const ExtensionIdAndVersion& extension_id_and_version);
+
+// Decode all the fields in `policy` and store them in the given `map`, with the
+// given `source` and `scope`.
+// Writes a value for each extension ID and version, with the action and reasons
+// as a dictionary under the extension ID key of the following format:
+// {
+//   "extension_id": {
+//     "version_1": {
+//       "action": 1,
+//       "reasons": [1, 2]
+//     },
+//     "version_2": {
+//       "action": 2,
+//       "reasons": [1]
+//     }
+//   },
+//   "extension_id_2": {
+//     "version_1": {
+//       "action": 1,
+//       "reasons": [1]
+//     }
+//   }
+// }
+POLICY_EXPORT void DecodeProtoFields(
+    const enterprise_management::ExtensionInstallPolicies& policies,
+    PolicySource source,
+    PolicyScope scope,
+    PolicyMap* map);
+
+// Decode all the fields in `policy` that match the needed `per_profile` flag
 // which are recognized (see the metadata in policy_constants.cc) and store them
-// in the given |map|, with the given |source| and |scope|. The value of
-// |per_profile| parameter specifies which fields have to be included based on
+// in the given `map`, with the given `source` and `scope`. The value of
+// `per_profile` parameter specifies which fields have to be included based on
 // per_profile flag.
 POLICY_EXPORT void DecodeProtoFields(
     const enterprise_management::CloudPolicySettings& policy,
@@ -41,11 +75,11 @@ POLICY_EXPORT void DecodeProtoFields(
     PolicyMap* map,
     PolicyPerProfileFilter per_profile);
 
-// Parses the JSON policy in |data| into |policy|, and returns true if the
-// parse was successful. The |scope| and |source| are set as scope and source of
-// the policy in the result. In case of failure, the |error| is populated with
+// Parses the JSON policy in `json_dict` into `policy`, and returns true if the
+// parse was successful. The `scope` and `source` are set as scope and source of
+// the policy in the result. In case of failure, the `error` is populated with
 // error message and false is returned.
-POLICY_EXPORT bool ParseComponentPolicy(base::Value json,
+POLICY_EXPORT bool ParseComponentPolicy(base::Value::Dict json_dict,
                                         PolicyScope scope,
                                         PolicySource source,
                                         PolicyMap* policy,

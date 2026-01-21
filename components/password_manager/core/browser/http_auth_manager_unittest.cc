@@ -3,32 +3,41 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/test/test_mock_time_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/device_reauth/mock_device_authenticator.h"
 #include "components/password_manager/core/browser/form_fetcher_impl.h"
 #include "components/password_manager/core/browser/http_auth_manager_impl.h"
-#include "components/password_manager/core/browser/mock_password_store_interface.h"
-#include "components/password_manager/core/browser/mock_smart_bubble_stats_store.h"
+#include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
-#include "components/password_manager/core/browser/password_store_consumer.h"
-#include "components/password_manager/core/browser/password_store_interface.h"
+#include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#include "components/password_manager/core/browser/password_store/mock_smart_bubble_stats_store.h"
+#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
-#include "components/password_manager/core/common/password_manager_features.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using base::TestMockTimeTaskRunner;
 using testing::_;
@@ -64,6 +73,15 @@ class MockPasswordManagerClient : public StubPasswordManagerClient {
               (),
               (const, override));
   MOCK_METHOD(void, PromptUserToSaveOrUpdatePasswordPtr, (), ());
+  MOCK_METHOD(PrefService*, GetPrefs, (), (const, override));
+  MOCK_METHOD(bool,
+              IsReauthBeforeFillingRequired,
+              (device_reauth::DeviceAuthenticator*),
+              (override));
+  MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthenticator>,
+              GetDeviceAuthenticator,
+              (),
+              (override));
 
   // Workaround for std::unique_ptr<> lacking a copy constructor.
   bool PromptUserToSaveOrUpdatePassword(
@@ -83,16 +101,18 @@ class MockHttpAuthObserver : public HttpAuthObserver {
 
   MOCK_METHOD0(OnLoginModelDestroying, void());
   MOCK_METHOD2(OnAutofillDataAvailable,
-               void(const std::u16string&, const std::u16string&));
+               void(std::u16string_view, std::u16string_view));
 };
 
 ACTION_P(InvokeEmptyConsumerWithForms, store) {
-  arg0->OnGetPasswordStoreResultsOrErrorFrom(
-      store, std::vector<std::unique_ptr<PasswordForm>>());
+  arg0->OnGetPasswordStoreResultsOrErrorFrom(store,
+                                             std::vector<PasswordForm>());
 }
 }  // namespace
 
-class HttpAuthManagerTest : public testing::Test {
+// The boolean param determines the presence of the "account" PasswordStore.
+class HttpAuthManagerTest : public testing::Test,
+                            public testing::WithParamInterface<bool> {
  public:
   HttpAuthManagerTest() = default;
   ~HttpAuthManagerTest() override = default;
@@ -101,8 +121,7 @@ class HttpAuthManagerTest : public testing::Test {
   void SetUp() override {
     store_ = new testing::StrictMock<MockPasswordStoreInterface>;
 
-    if (base::FeatureList::IsEnabled(
-            features::kEnablePasswordsAccountStorage)) {
+    if (GetParam()) {
       account_store_ = new testing::NiceMock<MockPasswordStoreInterface>;
 
       // Most tests don't really need the account store, but it'll still get
@@ -115,20 +134,22 @@ class HttpAuthManagerTest : public testing::Test {
               WithArg<1>(InvokeEmptyConsumerWithForms(account_store_.get())));
     }
 
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    pref_service_.registry()->RegisterIntegerPref(
+        password_manager::prefs::kRelaunchChromeBubbleDismissedCounter, 0);
+#endif
+
     ON_CALL(client_, GetProfilePasswordStore())
         .WillByDefault(Return(store_.get()));
     ON_CALL(client_, GetAccountPasswordStore())
         .WillByDefault(Return(account_store_.get()));
     EXPECT_CALL(*store_, GetSmartBubbleStatsStore)
         .WillRepeatedly(Return(&smart_bubble_stats_store_));
+    ON_CALL(client_, GetPrefs()).WillByDefault(Return(&pref_service_));
 
     httpauth_manager_ = std::make_unique<HttpAuthManagerImpl>(&client_);
 
     EXPECT_CALL(*store_, IsAbleToSavePasswords()).WillRepeatedly(Return(true));
-
-    ON_CALL(client_, AutofillHttpAuth(_, _))
-        .WillByDefault(
-            Invoke(httpauth_manager_.get(), &HttpAuthManagerImpl::Autofill));
   }
 
   HttpAuthManagerImpl* httpauth_manager() { return httpauth_manager_.get(); }
@@ -136,51 +157,161 @@ class HttpAuthManagerTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
   scoped_refptr<MockPasswordStoreInterface> store_;
   scoped_refptr<MockPasswordStoreInterface> account_store_;
+  TestingPrefServiceSimple pref_service_;
   testing::NiceMock<MockPasswordManagerClient> client_;
   testing::NiceMock<MockSmartBubbleStatsStore> smart_bubble_stats_store_;
   std::unique_ptr<HttpAuthManagerImpl> httpauth_manager_;
 };
 
-TEST_F(HttpAuthManagerTest, HttpAuthFilling) {
-  for (bool filling_enabled : {false, true}) {
-    SCOPED_TRACE(testing::Message("filling_enabled=") << filling_enabled);
-    EXPECT_CALL(client_, IsFillingEnabled(_))
-        .WillRepeatedly(Return(filling_enabled));
+TEST_P(HttpAuthManagerTest, HttpAuthFillingReauthNotRequired) {
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsReauthBeforeFillingRequired)
+      .WillRepeatedly(Return(false));
+  base::test::TestFuture<void> future;
+  EXPECT_CALL(client_, AutofillHttpAuth)
+      .WillRepeatedly(
+          [&](const password_manager::PasswordForm& preferred_match,
+              const password_manager::PasswordFormManagerForUI* form_manager) {
+            httpauth_manager()->Autofill(preferred_match, form_manager,
+                                         future.GetCallback());
+          });
 
-    PasswordForm observed_form;
-    observed_form.scheme = PasswordForm::Scheme::kBasic;
-    observed_form.url = GURL("http://proxy.com/");
-    observed_form.signon_realm = "proxy.com/realm";
+  PasswordForm observed_form;
+  observed_form.scheme = PasswordForm::Scheme::kBasic;
+  observed_form.url = GURL("http://proxy.com/");
+  observed_form.signon_realm = "proxy.com/realm";
 
-    PasswordForm stored_form = observed_form;
-    stored_form.username_value = u"user";
-    stored_form.password_value = u"1234";
+  PasswordForm stored_form = observed_form;
+  stored_form.username_value = u"user";
+  stored_form.password_value = u"1234";
 
-    MockHttpAuthObserver observer;
+  MockHttpAuthObserver observer;
 
-    base::WeakPtr<PasswordStoreConsumer> consumer;
-    EXPECT_CALL(*store_, GetLogins(_, _)).WillOnce(SaveArg<1>(&consumer));
-    httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
-                                                         observed_form);
-    EXPECT_CALL(observer, OnAutofillDataAvailable(std::u16string(u"user"),
-                                                  std::u16string(u"1234")))
-        .Times(filling_enabled);
-    ASSERT_TRUE(consumer);
-    std::vector<std::unique_ptr<PasswordForm>> result;
-    result.push_back(std::make_unique<PasswordForm>(stored_form));
-    consumer->OnGetPasswordStoreResultsOrErrorFrom(store_.get(),
-                                                   std::move(result));
-    testing::Mock::VerifyAndClearExpectations(&store_);
-    httpauth_manager()->DetachObserver(&observer);
-  }
+  base::WeakPtr<PasswordStoreConsumer> consumer;
+  EXPECT_CALL(*store_, GetLogins).WillOnce(SaveArg<1>(&consumer));
+  httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
+                                                       observed_form);
+  EXPECT_CALL(observer, OnAutofillDataAvailable(std::u16string_view(u"user"),
+                                                std::u16string_view(u"1234")))
+      .Times(2);
+  ASSERT_TRUE(consumer);
+  std::vector<PasswordForm> result;
+  result.push_back(stored_form);
+  consumer->OnGetPasswordStoreResultsOrErrorFrom(store_.get(),
+                                                 std::move(result));
+  ASSERT_TRUE(future.Wait());
+
+  testing::Mock::VerifyAndClearExpectations(&store_);
+  httpauth_manager()->DetachObserver(&observer);
 }
 
-TEST_F(HttpAuthManagerTest, HttpAuthSaving) {
+// Test autofill when biometric re-auth is required and successful.
+TEST_P(HttpAuthManagerTest, HttpAuthFillingReauthSuccess) {
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsReauthBeforeFillingRequired)
+      .WillRepeatedly(Return(true));
+  base::MockOnceClosure mock_callback;
+  EXPECT_CALL(client_, AutofillHttpAuth)
+      .WillOnce(
+          [&](const password_manager::PasswordForm& preferred_match,
+              const password_manager::PasswordFormManagerForUI* form_manager) {
+            httpauth_manager()->Autofill(preferred_match, form_manager,
+                                         mock_callback.Get());
+          });
+
+  auto mock_authenticator =
+      std::make_unique<device_reauth::MockDeviceAuthenticator>();
+  EXPECT_CALL(*mock_authenticator, AuthenticateWithMessage)
+      .WillOnce(base::test::RunOnceCallback<1>(true));
+  EXPECT_CALL(client_, GetDeviceAuthenticator)
+      .WillOnce(Return(testing::ByMove(std::move(mock_authenticator))));
+
+  PasswordForm observed_form;
+  observed_form.scheme = PasswordForm::Scheme::kBasic;
+  observed_form.url = GURL("http://proxy.com/");
+  observed_form.signon_realm = "proxy.com/realm";
+
+  PasswordForm stored_form = observed_form;
+  stored_form.username_value = u"user";
+  stored_form.password_value = u"1234";
+
+  MockHttpAuthObserver observer;
+
+  base::WeakPtr<PasswordStoreConsumer> consumer;
+  EXPECT_CALL(*store_, GetLogins).WillOnce(SaveArg<1>(&consumer));
+  httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
+                                                       observed_form);
+  EXPECT_CALL(observer, OnAutofillDataAvailable(std::u16string_view(u"user"),
+                                                std::u16string_view(u"1234")));
+  EXPECT_CALL(mock_callback, Run);
+  ASSERT_TRUE(consumer);
+  std::vector<PasswordForm> result;
+  result.push_back(stored_form);
+  consumer->OnGetPasswordStoreResultsOrErrorFrom(store_.get(),
+                                                 std::move(result));
+  testing::Mock::VerifyAndClearExpectations(&store_);
+
+  httpauth_manager()->DetachObserver(&observer);
+}
+
+// Test autofill when biometric re-auth is required and successful.
+TEST_P(HttpAuthManagerTest, HttpAuthFillingReauthFailure) {
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsReauthBeforeFillingRequired)
+      .WillRepeatedly(Return(true));
+  base::MockOnceClosure mock_callback;
+  EXPECT_CALL(client_, AutofillHttpAuth)
+      .WillOnce(
+          [&](const password_manager::PasswordForm& preferred_match,
+              const password_manager::PasswordFormManagerForUI* form_manager) {
+            httpauth_manager()->Autofill(preferred_match, form_manager,
+                                         mock_callback.Get());
+          });
+
+  auto mock_authenticator =
+      std::make_unique<device_reauth::MockDeviceAuthenticator>();
+  EXPECT_CALL(*mock_authenticator, AuthenticateWithMessage)
+      .WillOnce(base::test::RunOnceCallback<1>(false));
+
+  EXPECT_CALL(client_, GetDeviceAuthenticator)
+      .WillOnce(Return(testing::ByMove(std::move(mock_authenticator))));
+
+  PasswordForm observed_form;
+  observed_form.scheme = PasswordForm::Scheme::kBasic;
+  observed_form.url = GURL("http://proxy.com/");
+  observed_form.signon_realm = "proxy.com/realm";
+
+  PasswordForm stored_form = observed_form;
+  stored_form.username_value = u"user";
+  stored_form.password_value = u"1234";
+
+  MockHttpAuthObserver observer;
+
+  base::WeakPtr<PasswordStoreConsumer> consumer;
+  EXPECT_CALL(*store_, GetLogins).WillOnce(SaveArg<1>(&consumer));
+  httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
+                                                       observed_form);
+  EXPECT_CALL(observer, OnAutofillDataAvailable).Times(0);
+  EXPECT_CALL(mock_callback, Run).Times(0);
+
+  ASSERT_TRUE(consumer);
+  std::vector<PasswordForm> result;
+  result.push_back(stored_form);
+  consumer->OnGetPasswordStoreResultsOrErrorFrom(store_.get(),
+                                                 std::move(result));
+  testing::Mock::VerifyAndClearExpectations(&store_);
+
+  httpauth_manager()->DetachObserver(&observer);
+}
+
+TEST_P(HttpAuthManagerTest, HttpAuthSaving) {
   for (bool filling_and_saving_enabled : {true, false}) {
     SCOPED_TRACE(testing::Message("filling_and_saving_enabled=")
                  << filling_and_saving_enabled);
 
     EXPECT_CALL(client_, IsSavingAndFillingEnabled(_))
+        .WillRepeatedly(Return(filling_and_saving_enabled));
+    EXPECT_CALL(client_, IsFillingEnabled)
         .WillRepeatedly(Return(filling_and_saving_enabled));
     PasswordForm observed_form;
     observed_form.scheme = PasswordForm::Scheme::kBasic;
@@ -202,7 +333,6 @@ TEST_F(HttpAuthManagerTest, HttpAuthSaving) {
     httpauth_manager()->OnPasswordFormDismissed();
 
     // Expect save prompt on successful submission.
-    std::unique_ptr<PasswordFormManagerForUI> form_manager_to_save;
     EXPECT_CALL(client_, PromptUserToSaveOrUpdatePasswordPtr())
         .Times(filling_and_saving_enabled ? 1 : 0);
     httpauth_manager()->OnDidFinishMainFrameNavigation();
@@ -211,8 +341,50 @@ TEST_F(HttpAuthManagerTest, HttpAuthSaving) {
   }
 }
 
-TEST_F(HttpAuthManagerTest, DontSaveEmptyPasswords) {
+TEST_P(HttpAuthManagerTest, UpdateLastUsedTimeWhenSubmittingSavedCredentials) {
   EXPECT_CALL(client_, IsSavingAndFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
+
+  PasswordForm observed_form;
+  observed_form.scheme = PasswordForm::Scheme::kBasic;
+  observed_form.url = GURL("http://proxy.com/");
+  observed_form.signon_realm = "proxy.com/realm";
+
+  PasswordForm stored_form = observed_form;
+  stored_form.username_value = u"user";
+  stored_form.password_value = u"1234";
+  stored_form.in_store = PasswordForm::Store::kProfileStore;
+  stored_form.date_last_used = base::Time::Now() - base::Days(1);
+  stored_form.match_type = PasswordForm::MatchType::kExact;
+
+  MockHttpAuthObserver observer;
+
+  base::WeakPtr<PasswordStoreConsumer> consumer;
+  EXPECT_CALL(*store_, GetLogins).WillOnce(SaveArg<1>(&consumer));
+  httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
+                                                       observed_form);
+  ASSERT_TRUE(consumer);
+  std::vector<PasswordForm> result;
+  result.push_back(stored_form);
+  consumer->OnGetPasswordStoreResultsOrErrorFrom(store_.get(),
+                                                 std::move(result));
+
+  // Emulate that http auth credentials submitted.
+  httpauth_manager()->OnPasswordFormSubmitted(stored_form);
+  httpauth_manager()->OnPasswordFormDismissed();
+  PasswordForm expected_updated_form;
+  EXPECT_CALL(*store_, UpdateLogin)
+      .WillOnce(SaveArg<0>(&expected_updated_form));
+  httpauth_manager()->OnDidFinishMainFrameNavigation();
+  // `date_last_used` should have been updated to a more recent value.
+  EXPECT_GT(expected_updated_form.date_last_used, stored_form.date_last_used);
+  testing::Mock::VerifyAndClearExpectations(&store_);
+  httpauth_manager()->DetachObserver(&observer);
+}
+
+TEST_P(HttpAuthManagerTest, DontSaveEmptyPasswords) {
+  EXPECT_CALL(client_, IsSavingAndFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
   PasswordForm observed_form;
   observed_form.scheme = PasswordForm::Scheme::kBasic;
   observed_form.url = GURL("http://proxy.com/");
@@ -233,16 +405,16 @@ TEST_F(HttpAuthManagerTest, DontSaveEmptyPasswords) {
   httpauth_manager()->OnPasswordFormDismissed();
 
   // Expect no save prompt on successful submission.
-  std::unique_ptr<PasswordFormManagerForUI> form_manager_to_save;
   EXPECT_CALL(client_, PromptUserToSaveOrUpdatePasswordPtr()).Times(0);
   httpauth_manager()->OnDidFinishMainFrameNavigation();
   testing::Mock::VerifyAndClearExpectations(&client_);
   httpauth_manager()->DetachObserver(&observer);
 }
 
-TEST_F(HttpAuthManagerTest, NavigationWithoutSubmission) {
+TEST_P(HttpAuthManagerTest, NavigationWithoutSubmission) {
   EXPECT_CALL(client_, IsSavingAndFillingEnabled(_))
       .WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
   PasswordForm observed_form;
   observed_form.scheme = PasswordForm::Scheme::kBasic;
   observed_form.url = GURL("http://proxy.com/");
@@ -262,8 +434,9 @@ TEST_F(HttpAuthManagerTest, NavigationWithoutSubmission) {
   httpauth_manager()->DetachObserver(&observer);
 }
 
-TEST_F(HttpAuthManagerTest, NavigationWhenMatchingNotReady) {
+TEST_P(HttpAuthManagerTest, NavigationWhenMatchingNotReady) {
   EXPECT_CALL(client_, IsSavingAndFillingEnabled).WillRepeatedly(Return(true));
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(true));
   PasswordForm observed_form;
   observed_form.scheme = PasswordForm::Scheme::kBasic;
   observed_form.url = GURL("http://proxy.com/");
@@ -287,5 +460,34 @@ TEST_F(HttpAuthManagerTest, NavigationWhenMatchingNotReady) {
   httpauth_manager()->OnDidFinishMainFrameNavigation();
   httpauth_manager()->DetachObserver(&observer);
 }
+
+TEST_P(HttpAuthManagerTest, FillingDisabled) {
+  EXPECT_CALL(client_, IsSavingAndFillingEnabled).WillRepeatedly(Return(false));
+  EXPECT_CALL(client_, IsFillingEnabled).WillRepeatedly(Return(false));
+  PasswordForm observed_form;
+  observed_form.scheme = PasswordForm::Scheme::kBasic;
+  observed_form.url = GURL("http://proxy.com/");
+  observed_form.signon_realm = "proxy.com/realm";
+
+  MockHttpAuthObserver observer;
+  // The password store is not queried as the password manager is disabled.
+  EXPECT_CALL(*store_, GetLogins).Times(0);
+  // Initiate creating a form manager.
+  httpauth_manager()->SetObserverAndDeliverCredentials(&observer,
+                                                       observed_form);
+
+  PasswordForm submitted_form = observed_form;
+  submitted_form.username_value = u"user";
+  submitted_form.password_value = u"1234";
+  httpauth_manager()->OnPasswordFormSubmitted(submitted_form);
+  httpauth_manager()->OnPasswordFormDismissed();
+
+  // Expect no prompt.
+  EXPECT_CALL(client_, PromptUserToSaveOrUpdatePasswordPtr()).Times(0);
+  httpauth_manager()->OnDidFinishMainFrameNavigation();
+  httpauth_manager()->DetachObserver(&observer);
+}
+
+INSTANTIATE_TEST_SUITE_P(, HttpAuthManagerTest, ::testing::Bool());
 
 }  // namespace password_manager

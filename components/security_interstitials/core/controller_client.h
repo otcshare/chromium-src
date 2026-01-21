@@ -26,7 +26,7 @@ extern const char kPrivacyLinkHtml[];
 
 // These represent the commands sent from the interstitial JavaScript.
 // DO NOT reorder or change these without also changing the JavaScript!
-// See components/security_interstitials/core/browser/resources/
+// LINT.IfChange(SecurityInterstitialCommand)
 enum SecurityInterstitialCommand {
   // Used by tests
   CMD_TEXT_FOUND = -3,
@@ -52,7 +52,21 @@ enum SecurityInterstitialCommand {
   CMD_REPORT_PHISHING_ERROR = 12,
   // Open enhanced protection settings.
   CMD_OPEN_ENHANCED_PROTECTION_SETTINGS = 13,
+  // User closes interstitial without making decision through UI.
+  CMD_CLOSE_INTERSTITIAL_WITHOUT_UI = 14,
+  // Request permission to blocked website.
+  CMD_REQUEST_SITE_ACCESS_PERMISSION = 15,
+  CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS = 16,
+  // Commands for opening links in a new tab, used by middle-clicks.
+  CMD_OPEN_HELP_CENTER_IN_NEW_TAB = 17,
+  CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB = 18,
+  CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB = 19,
+  CMD_OPEN_WHITEPAPER_IN_NEW_TAB = 20,
+  CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB = 21,
+  // View the certificate.
+  CMD_SHOW_CERTIFICATE_VIEWER = 22,
 };
+// LINT.ThenChange(/components/security_interstitials/core/common/resources/interstitial_common.js,/components/security_interstitials/content/renderer/security_interstitial_page_controller.cc,/components/security_interstitials/content/security_interstitial_tab_helper.cc,/components/security_interstitials/core/common/mojom/interstitial_commands.mojom)
 
 // Provides methods for handling commands from the user, which requires some
 // embedder-specific abstraction. This class should handle all commands sent
@@ -82,7 +96,7 @@ class ControllerClient {
 
   // Close the error and go back to the previous page. This applies to
   // situations where navigation is blocked before committing.
-  // TODO(crbug.com/928901) - rename this to NavigateAway or similar.
+  // TODO(crbug.com/41439461) - rename this to NavigateAway or similar.
   virtual void GoBack() = 0;
   // Whether it is possible to go 'Back to safety'.
   virtual bool CanGoBack() = 0;
@@ -101,6 +115,11 @@ class ControllerClient {
   // Reload the blocked page to see if it succeeds now.
   virtual void Reload() = 0;
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Shows the platform-specific certificate viewer.
+  virtual void ShowCertificateViewer() = 0;
+#endif
+
   MetricsHelper* metrics_helper() const;
 
   virtual void OpenUrlInCurrentTab(const GURL& url) = 0;
@@ -108,6 +127,10 @@ class ControllerClient {
   virtual void OpenUrlInNewForegroundTab(const GURL& url) = 0;
 
   virtual void OpenEnhancedProtectionSettings() = 0;
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual void OpenAdvancedProtectionSettings() = 0;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   virtual PrefService* GetPrefService() = 0;
 
@@ -120,6 +143,11 @@ class ControllerClient {
   GURL GetBaseHelpCenterUrl() const;
 
   void SetBaseHelpCenterUrlForTesting(const GURL& test_url);
+
+  // The following methods are for handling the new `_IN_NEW_TAB` commands.
+  virtual void OpenHelpCenterInNewTab() {}
+  virtual void OpenReportingPrivacyInNewTab() {}
+  virtual void OpenWhitepaperInNewTab() {}
 
  protected:
   virtual const std::string GetExtendedReportingPrefName() const = 0;

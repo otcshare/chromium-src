@@ -6,12 +6,11 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/files/file_error_or.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "storage/browser/file_system/file_system_usage_cache.h"
-#include "storage/browser/file_system/file_system_util.h"
 #include "storage/browser/file_system/sandbox_file_system_backend_delegate.h"
 #include "storage/browser/quota/quota_client_type.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -91,15 +90,15 @@ void SandboxQuotaObserver::SetUsageCacheEnabled(const url::Origin& origin,
                                                 bool enabled) {
   if (quota_manager_proxy_.get()) {
     quota_manager_proxy_->SetUsageCacheEnabled(
-        QuotaClientType::kFileSystem, blink::StorageKey(origin),
-        FileSystemTypeToQuotaStorageType(type), enabled);
+        QuotaClientType::kFileSystem,
+        blink::StorageKey::CreateFirstParty(origin), enabled);
   }
 }
 
 base::FileErrorOr<base::FilePath> SandboxQuotaObserver::GetUsageCachePath(
     const FileSystemURL& url) {
   DCHECK(sandbox_file_util_);
-  base::FileErrorOr<base::FilePath> path = base::FilePath();
+  base::FileErrorOr<base::FilePath> path;
   if (url.bucket().has_value()) {
     path = SandboxFileSystemBackendDelegate::GetUsageCachePathForBucketAndType(
         sandbox_file_util_, url.bucket().value(), url.type());

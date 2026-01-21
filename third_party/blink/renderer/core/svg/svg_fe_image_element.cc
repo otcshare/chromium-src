@@ -24,13 +24,16 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_fe_image.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_preserve_aspect_ratio.h"
+#include "third_party/blink/renderer/core/svg/svg_filter_element.h"
 #include "third_party/blink/renderer/core/svg/svg_preserve_aspect_ratio.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -43,9 +46,7 @@ SVGFEImageElement::SVGFEImageElement(Document& document)
       preserve_aspect_ratio_(
           MakeGarbageCollected<SVGAnimatedPreserveAspectRatio>(
               this,
-              svg_names::kPreserveAspectRatioAttr)) {
-  AddToPropertyMap(preserve_aspect_ratio_);
-}
+              svg_names::kPreserveAspectRatioAttr)) {}
 
 SVGFEImageElement::~SVGFEImageElement() = default;
 
@@ -58,10 +59,10 @@ void SVGFEImageElement::Trace(Visitor* visitor) const {
   ImageResourceObserver::Trace(visitor);
 }
 
-bool SVGFEImageElement::CurrentFrameHasSingleSecurityOrigin() const {
+bool SVGFEImageElement::HasSingleSecurityOrigin() const {
   if (cached_image_) {
     if (Image* image = cached_image_->GetImage())
-      return image->CurrentFrameHasSingleSecurityOrigin();
+      return image->HasSingleSecurityOrigin();
   }
   return true;
 }
@@ -122,13 +123,11 @@ void SVGFEImageElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   const QualifiedName& attr_name = params.name;
   if (attr_name == svg_names::kPreserveAspectRatioAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
 
   if (SVGURIReference::IsKnownAttribute(attr_name)) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     BuildPendingResource();
     return;
   }
@@ -169,6 +168,7 @@ const SVGElement* SVGFEImageElement::TargetElement() const {
 }
 
 FilterEffect* SVGFEImageElement::Build(SVGFilterBuilder*, Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEImageElement);
   if (cached_image_) {
     // Don't use the broken image icon on image loading errors.
     scoped_refptr<Image> image =
@@ -183,6 +183,29 @@ FilterEffect* SVGFEImageElement::Build(SVGFilterBuilder*, Filter* filter) {
 bool SVGFEImageElement::TaintsOrigin() const {
   // We always consider a 'href' that references a local element as tainting.
   return !cached_image_ || !cached_image_->IsAccessAllowed();
+}
+
+SVGAnimatedPropertyBase* SVGFEImageElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kPreserveAspectRatioAttr) {
+    return preserve_aspect_ratio_.Get();
+  } else {
+    SVGAnimatedPropertyBase* ret =
+        SVGURIReference::PropertyFromAttribute(attribute_name);
+    if (ret) {
+      return ret;
+    } else {
+      return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+          attribute_name);
+    }
+  }
+}
+
+void SVGFEImageElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{preserve_aspect_ratio_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGURIReference::SynchronizeAllSVGAttributes();
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

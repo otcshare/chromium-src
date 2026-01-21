@@ -7,23 +7,25 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/custom_handlers/simple_protocol_handler_registry_factory.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/common/user_agent.h"
 #include "extensions/browser/api/core_extensions_browser_api_provider.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extensions_browser_interface_binders.h"
 #include "extensions/browser/null_app_sorting.h"
+#include "extensions/browser/safe_browsing_delegate.h"
 #include "extensions/browser/updater/null_extension_cache.h"
 #include "extensions/browser/url_request_util.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/shell/browser/api/runtime/shell_runtime_api_delegate.h"
 #include "extensions/shell/browser/delegates/shell_kiosk_delegate.h"
@@ -34,7 +36,7 @@
 #include "extensions/shell/browser/shell_navigation_ui_data.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #endif
 
@@ -45,7 +47,8 @@ namespace extensions {
 
 ShellExtensionsBrowserClient::ShellExtensionsBrowserClient()
     : api_client_(new ShellExtensionsAPIClient),
-      extension_cache_(new NullExtensionCache()) {
+      extension_cache_(new NullExtensionCache()),
+      safe_browsing_delegate_(std::make_unique<SafeBrowsingDelegate>()) {
   // app_shell does not have a concept of channel yet, so leave UNKNOWN to
   // enable all channel-dependent extension APIs.
   SetCurrentChannel(version_info::Channel::UNKNOWN);
@@ -66,7 +69,7 @@ bool ShellExtensionsBrowserClient::AreExtensionsDisabled(
   return false;
 }
 
-bool ShellExtensionsBrowserClient::IsValidContext(BrowserContext* context) {
+bool ShellExtensionsBrowserClient::IsValidContext(void* context) {
   DCHECK(browser_context_);
   return context == browser_context_;
 }
@@ -93,42 +96,38 @@ BrowserContext* ShellExtensionsBrowserClient::GetOriginalContext(
 }
 
 content::BrowserContext*
-ShellExtensionsBrowserClient::GetRedirectedContextInIncognito(
-    content::BrowserContext* context,
-    bool force_guest_profile,
-    bool force_system_profile) {
+ShellExtensionsBrowserClient::GetContextRedirectedToOriginal(
+    content::BrowserContext* context) {
+  return context;
+}
+
+content::BrowserContext* ShellExtensionsBrowserClient::GetContextOwnInstance(
+    content::BrowserContext* context) {
   return context;
 }
 
 content::BrowserContext*
-ShellExtensionsBrowserClient::GetContextForRegularAndIncognito(
-    content::BrowserContext* context,
-    bool force_guest_profile,
-    bool force_system_profile) {
+ShellExtensionsBrowserClient::GetContextForOriginalOnly(
+    content::BrowserContext* context) {
   return context;
 }
 
-content::BrowserContext* ShellExtensionsBrowserClient::GetRegularProfile(
-    content::BrowserContext* context,
-    bool force_guest_profile,
-    bool force_system_profile) {
-  return context;
+bool ShellExtensionsBrowserClient::AreExtensionsDisabledForContext(
+    content::BrowserContext* context) {
+  return false;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+bool ShellExtensionsBrowserClient::IsActiveContext(
+    content::BrowserContext* browser_context) const {
+  return true;
+}
+
 std::string ShellExtensionsBrowserClient::GetUserIdHashFromContext(
     content::BrowserContext* context) {
   if (!ash::LoginState::IsInitialized())
     return "";
   return ash::LoginState::Get()->primary_user_hash();
-}
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-bool ShellExtensionsBrowserClient::IsFromMainProfile(
-    content::BrowserContext* context) {
-  // AppShell only supports single context.
-  return true;
 }
 #endif
 
@@ -138,7 +137,7 @@ bool ShellExtensionsBrowserClient::IsGuestSession(
 }
 
 bool ShellExtensionsBrowserClient::IsExtensionIncognitoEnabled(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     content::BrowserContext* context) const {
   return false;
 }
@@ -175,11 +174,12 @@ bool ShellExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     bool is_incognito,
     const Extension* extension,
     const ExtensionSet& extensions,
-    const ProcessMap& process_map) {
+    const ProcessMap& process_map,
+    const GURL& upstream_url) {
   bool allowed = false;
   if (url_request_util::AllowCrossRendererResourceLoad(
           request, destination, page_transition, child_id, is_incognito,
-          extension, extensions, process_map, &allowed)) {
+          extension, extensions, process_map, upstream_url, &allowed)) {
     return allowed;
   }
 
@@ -200,6 +200,14 @@ void ShellExtensionsBrowserClient::GetEarlyExtensionPrefsObservers(
 ProcessManagerDelegate*
 ShellExtensionsBrowserClient::GetProcessManagerDelegate() const {
   return nullptr;
+}
+
+mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ShellExtensionsBrowserClient::GetControlledFrameEmbedderURLLoader(
+    const url::Origin& app_origin,
+    content::FrameTreeNodeId frame_tree_node_id,
+    content::BrowserContext* browser_context) {
+  return mojo::PendingRemote<network::mojom::URLLoaderFactory>();
 }
 
 std::unique_ptr<ExtensionHostDelegate>
@@ -297,6 +305,11 @@ void ShellExtensionsBrowserClient::SetAPIClientForTest(
   api_client_.reset(api_client);
 }
 
+void ShellExtensionsBrowserClient::CreateExtensionWebContentsObserver(
+    content::WebContents* web_contents) {
+  ShellExtensionWebContentsObserver::CreateForWebContents(web_contents);
+}
+
 ExtensionWebContentsObserver*
 ShellExtensionsBrowserClient::GetExtensionWebContentsObserver(
     content::WebContents* web_contents) {
@@ -309,19 +322,13 @@ KioskDelegate* ShellExtensionsBrowserClient::GetKioskDelegate() {
   return kiosk_delegate_.get();
 }
 
-bool ShellExtensionsBrowserClient::IsLockScreenContext(
-    content::BrowserContext* context) {
-  return false;
+SafeBrowsingDelegate* ShellExtensionsBrowserClient::GetSafeBrowsingDelegate() {
+  return safe_browsing_delegate_.get();
 }
 
 std::string ShellExtensionsBrowserClient::GetApplicationLocale() {
   // TODO(michaelpg): Use system locale.
   return "en-US";
-}
-
-std::string ShellExtensionsBrowserClient::GetUserAgent() const {
-  return content::BuildUserAgentFromProduct(
-      version_info::GetProductNameAndVersionForUserAgent());
 }
 
 void ShellExtensionsBrowserClient::InitWithBrowserContext(
@@ -331,6 +338,13 @@ void ShellExtensionsBrowserClient::InitWithBrowserContext(
   DCHECK(!pref_service_);
   browser_context_ = context;
   pref_service_ = pref_service;
+}
+
+custom_handlers::ProtocolHandlerRegistry*
+ShellExtensionsBrowserClient::GetProtocolHandlerRegistry(
+    content::BrowserContext* context) {
+  return custom_handlers::SimpleProtocolHandlerRegistryFactory::
+      GetForBrowserContext(context, true);
 }
 
 }  // namespace extensions

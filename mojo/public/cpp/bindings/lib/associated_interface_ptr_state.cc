@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/containers/span.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/lib/task_runner_helper.h"
 
 namespace mojo {
@@ -28,8 +29,9 @@ void AssociatedInterfacePtrStateBase::QueryVersion(
 }
 
 void AssociatedInterfacePtrStateBase::RequireVersion(uint32_t version) {
-  if (version <= version_)
+  if (version <= version_) {
     return;
+  }
 
   version_ = version;
   endpoint_client_->RequireVersion(version);

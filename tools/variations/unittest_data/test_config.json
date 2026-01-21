@@ -71,15 +71,20 @@
       "experiments": [{"name": "TestGroup2"}]
     }
   ],
-  "TrialWithOverrideUIString": [
+  "TrialWithDisableBenchmarking": [
+    {
+      "platforms": ["windows"],
+      "experiments": [{"name": "TestGroup1", "disable_benchmarking": "true"}]
+    },
     {
       "platforms": ["windows"],
       "experiments": [
-        {
-          "name": "TestGroup",
-          "override_ui_strings": {"IDS_NEW_TAB_TITLE": "test"}
-        }
+        {"name": "TestGroup2", "disable_benchmarking": "false"}
       ]
+    },
+    {
+      "platforms": ["windows"],
+      "experiments": [{"name": "TestGroup3"}]
     }
   ]
 }

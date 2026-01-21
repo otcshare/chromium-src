@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,16 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_AVIF_AVIF_IMAGE_DECODER_H_
 
 #include <memory>
+#include <vector>
 
+#include "third_party/blink/renderer/platform/allow_discouraged_type.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
-#include "third_party/libavif/src/include/avif/avif.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/crabbyavif/src/include/avif/avif.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/color_transform.h"
+#include "ui/gfx/geometry/point.h"
 
 namespace blink {
 
@@ -21,7 +25,8 @@ class PLATFORM_EXPORT AVIFImageDecoder final : public ImageDecoder {
  public:
   AVIFImageDecoder(AlphaOption,
                    HighBitDepthDecodingOption,
-                   const ColorBehavior&,
+                   ColorBehavior,
+                   cc::AuxImage,
                    wtf_size_t max_decoded_bytes,
                    AnimationOption);
   AVIFImageDecoder(const AVIFImageDecoder&) = delete;
@@ -29,20 +34,22 @@ class PLATFORM_EXPORT AVIFImageDecoder final : public ImageDecoder {
   ~AVIFImageDecoder() override;
 
   // ImageDecoder:
-  String FilenameExtension() const override { return "avif"; }
+  String FilenameExtension() const override;
   const AtomicString& MimeType() const override;
   bool ImageIsHighBitDepth() override;
-  void OnSetData(SegmentReader* data) override;
+  void OnSetData(scoped_refptr<SegmentReader> data) override;
+  bool GetGainmapInfoAndData(
+      SkGainmapInfo& out_gainmap_info,
+      scoped_refptr<SegmentReader>& out_gainmap_data) const override;
   cc::YUVSubsampling GetYUVSubsampling() const override;
   gfx::Size DecodedYUVSize(cc::YUVIndex) const override;
   wtf_size_t DecodedYUVWidthBytes(cc::YUVIndex) const override;
   SkYUVColorSpace GetYUVColorSpace() const override;
   uint8_t GetYUVBitDepth() const override;
-  absl::optional<gfx::HDRMetadata> GetHDRMetadata() const override;
   void DecodeToYUV() override;
   int RepetitionCount() const override;
   bool FrameIsReceivedAtIndex(wtf_size_t) const override;
-  absl::optional<base::TimeDelta> FrameTimestampAtIndex(
+  std::optional<base::TimeDelta> FrameTimestampAtIndex(
       wtf_size_t) const override;
   base::TimeDelta FrameDurationAtIndex(wtf_size_t) const override;
   bool ImageHasBothStillAndAnimatedSubImages() const override;
@@ -51,12 +58,17 @@ class PLATFORM_EXPORT AVIFImageDecoder final : public ImageDecoder {
   // (ftyp) that supports the brand 'avif' or 'avis'.
   static bool MatchesAVIFSignature(const FastSharedBufferReader& fast_reader);
 
-  gfx::ColorTransform* GetColorTransformForTesting();
+  gfx::ColorSpace GetColorSpaceForTesting() const;
 
  private:
   struct AvifIOData {
-    blink::SegmentReader* reader = nullptr;
-    std::vector<uint8_t> buffer;
+    AvifIOData();
+    AvifIOData(scoped_refptr<const SegmentReader> reader,
+               bool all_data_received);
+    ~AvifIOData();
+
+    scoped_refptr<const SegmentReader> reader;
+    std::vector<uint8_t> buffer ALLOW_DISCOURAGED_TYPE("Required by libavif");
     bool all_data_received = false;
   };
 
@@ -69,29 +81,31 @@ class PLATFORM_EXPORT AVIFImageDecoder final : public ImageDecoder {
   void Decode(wtf_size_t) override;
   bool CanReusePreviousFrameBuffer(wtf_size_t) const override;
 
-  // Implements avifIOReadFunc, the |read| function in the avifIO struct.
-  static avifResult ReadFromSegmentReader(avifIO* io,
-                                          uint32_t read_flags,
-                                          uint64_t offset,
-                                          size_t size,
-                                          avifROData* out);
+  // Implements crabbyavif::avifIOReadFunc, the |read| function in the
+  // crabbyavif::avifIO struct.
+  static crabbyavif::avifResult ReadFromSegmentReader(
+      crabbyavif::avifIO* io,
+      uint32_t read_flags,
+      uint64_t offset,
+      size_t size,
+      crabbyavif::avifROData* out);
 
   // Creates |decoder_| if not yet created and decodes the size and frame count.
   bool UpdateDemuxer();
 
   // Decodes the frame at index |index| and checks if the frame's size, bit
   // depth, and YUV format matches those reported by the container. The decoded
-  // frame is available in decoder_->image.
-  avifResult DecodeImage(wtf_size_t index);
+  // frame is available in decoded_image_.
+  crabbyavif::avifResult DecodeImage(wtf_size_t index);
 
-  // Updates or creates |color_transform_| for YUV-to-RGB conversion.
-  void UpdateColorTransform(const gfx::ColorSpace& frame_cs, int bit_depth);
+  // Crops |decoded_image_|.
+  void CropDecodedImage();
 
   // Renders the rows [from_row, *to_row) of |image| to |buffer|. Returns
   // whether |image| was rendered successfully. On return, the in/out argument
   // |*to_row| may be decremented in case of subsampled chroma needing more
   // data.
-  bool RenderImage(const avifImage* image,
+  bool RenderImage(const crabbyavif::avifImage* image,
                    int from_row,
                    int* to_row,
                    ImageFrame* buffer);
@@ -100,31 +114,67 @@ class PLATFORM_EXPORT AVIFImageDecoder final : public ImageDecoder {
   // |buffer|, if desired.
   void ColorCorrectImage(int from_row, int to_row, ImageFrame* buffer);
 
+  // Returns decoder_->image or decoder_->image->gainMap->image depending on
+  // aux_image_. May be nullptr if requesting the gain map image
+  // (cc::AuxImage::kGainmap) but no gain map is present.
+  crabbyavif::avifImage* GetDecoderImage() const;
+
   bool have_parsed_current_data_ = false;
+  // The image width and height (before cropping, if any) from the container.
+  //
+  // Note: container_width_, container_height_, decoder_->image->width, and
+  // decoder_->image->height are the width and height of the full image. Size()
+  // returns the size of the cropped image (the clean aperture).
+  uint32_t container_width_ = 0;
+  uint32_t container_height_ = 0;
   // The bit depth from the container.
   uint8_t bit_depth_ = 0;
   bool decode_to_half_float_ = false;
   uint8_t chroma_shift_x_ = 0;
   uint8_t chroma_shift_y_ = 0;
-  absl::optional<gfx::HDRMetadata> hdr_metadata_;
   bool progressive_ = false;
   // Number of displayed rows for a non-progressive still image.
   int incrementally_displayed_height_ = 0;
   // The YUV format from the container.
-  avifPixelFormat avif_yuv_format_ = AVIF_PIXEL_FORMAT_NONE;
+  crabbyavif::avifPixelFormat avif_yuv_format_ =
+      crabbyavif::AVIF_PIXEL_FORMAT_NONE;
   wtf_size_t decoded_frame_count_ = 0;
   SkYUVColorSpace yuv_color_space_ = SkYUVColorSpace::kIdentity_SkYUVColorSpace;
-  std::unique_ptr<avifDecoder, void (*)(avifDecoder*)> decoder_{nullptr,
-                                                                nullptr};
-  avifIO avif_io_ = {};
+  // Used to call UpdateBppHistogram<"Avif">() at most once to record the
+  // bits-per-pixel value of the image when the image is successfully decoded.
+  CrossThreadOnceFunction<void(gfx::Size, size_t)>
+      update_bpp_histogram_callback_;
+  // Whether the 'clap' (clean aperture) property should be ignored, e.g.
+  // because the 'clap' property is invalid or unsupported.
+  bool ignore_clap_ = false;
+  // The origin (top left corner) of the clean aperture. Used only when the
+  // image has a valid 'clap' (clean aperture) property.
+  gfx::Point clap_origin_;
+  // A copy of decoder_->image with the width, height, and plane buffers
+  // adjusted to those of the clean aperture. Used only when the image has a
+  // 'clap' (clean aperture) property.
+  std::unique_ptr<crabbyavif::avifImage,
+                  decltype(&crabbyavif::crabby_avifImageDestroy)>
+      cropped_image_{nullptr, crabbyavif::crabby_avifImageDestroy};
+  // Set by a successful DecodeImage() call to either decoder_->image or
+  // cropped_image_.get() depending on whether the image has a 'clap' (clean
+  // aperture) property.
+  raw_ptr<const crabbyavif::avifImage, DanglingUntriaged> decoded_image_ =
+      nullptr;
+  // The declaration order of the next three fields is important. decoder_
+  // points to avif_io_, and avif_io_ points to avif_io_data_. The destructor
+  // must destroy them in that order.
   AvifIOData avif_io_data_;
-
-  std::unique_ptr<gfx::ColorTransform> color_transform_;
+  crabbyavif::avifIO avif_io_ = {};
+  std::unique_ptr<crabbyavif::avifDecoder,
+                  decltype(&crabbyavif::crabby_avifDecoderDestroy)>
+      decoder_{nullptr, crabbyavif::crabby_avifDecoderDestroy};
 
   const AnimationOption animation_option_;
 
-  // Used temporarily during incremental decoding.
-  std::vector<uint32_t> previous_last_decoded_row_;
+  // Used temporarily for incremental decoding and for some YUV to RGB color
+  // conversions.
+  Vector<uint8_t> previous_last_decoded_row_;
 };
 
 }  // namespace blink

@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/dbus/media_analytics/fake_media_analytics_client.h"
 #include "chromeos/ash/components/dbus/media_analytics/media_analytics_client.h"
@@ -34,12 +35,12 @@ class TestMediaPerceptionAPIDelegate : public MediaPerceptionAPIDelegate {
                          LoadCrOSComponentCallback load_callback) override {
     // For testing both success and failure cases, test class has the LIGHT
     // component succeed install and the others fail.
-    if (type == media_perception::COMPONENT_TYPE_LIGHT) {
+    if (type == media_perception::ComponentType::kLight) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(
               std::move(load_callback),
-              media_perception::COMPONENT_INSTALLATION_ERROR_NONE,
+              media_perception::ComponentInstallationError::kNone,
               base::FilePath("/run/imageloader/rtanalytics-light/1.0")));
       return;
     }
@@ -47,7 +48,7 @@ class TestMediaPerceptionAPIDelegate : public MediaPerceptionAPIDelegate {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(load_callback),
-                       media_perception::COMPONENT_INSTALLATION_ERROR_NOT_FOUND,
+                       media_perception::ComponentInstallationError::kNotFound,
                        base::FilePath()));
   }
 

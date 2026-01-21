@@ -8,12 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "components/media_router/browser/test/mock_media_router.h"
 #include "components/media_router/common/media_route.h"
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/pref_names.h"
@@ -51,8 +50,8 @@ RemotingSinkMetadataPtr GetDefaultSinkMetadata() {
 
 class MockRemotingSource final : public media::mojom::RemotingSource {
  public:
-  MockRemotingSource() {}
-  ~MockRemotingSource() override {}
+  MockRemotingSource() = default;
+  ~MockRemotingSource() override = default;
 
   void Bind(mojo::PendingReceiver<media::mojom::RemotingSource> receiver) {
     receiver_.Bind(std::move(receiver));
@@ -79,7 +78,7 @@ class MockMediaRemoter final : public media::mojom::Remoter {
                                        source_.BindNewPipeAndPassReceiver());
   }
 
-  ~MockMediaRemoter() override {}
+  ~MockMediaRemoter() override = default;
 
   void OnSinkAvailable() {
     EXPECT_TRUE(source_);
@@ -164,7 +163,7 @@ class CastRemotingConnectorTest : public ::testing::Test {
   void CreateConnector(bool remoting_allowed) {
     connector_.reset();  // Call dtor first if there is one created.
     connector_.reset(new CastRemotingConnector(
-        &media_router_, &pref_service_, kRemotingTabId,
+        &pref_service_, kRemotingTabId,
         std::make_unique<MediaRemotingDialogCoordinator>()));
     connector_->set_remoting_allowed_for_testing(remoting_allowed);
   }
@@ -175,7 +174,6 @@ class CastRemotingConnectorTest : public ::testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-  media_router::MockMediaRouter media_router_;
   std::unique_ptr<CastRemotingConnector> connector_;
 };
 

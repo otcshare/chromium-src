@@ -4,8 +4,7 @@
 
 #include "chrome/browser/webauthn/local_credential_management_win.h"
 
-#include "base/bind.h"
-#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
@@ -14,7 +13,6 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
-#include "content/public/common/content_features.h"
 #include "device/fido/win/authenticator.h"
 #include "device/fido/win/webauthn_api.h"
 
@@ -22,7 +20,7 @@ namespace {
 
 bool ContainsUserCreatedCredential(
     const std::vector<device::DiscoverableCredentialMetadata>& credentials) {
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       credentials, [](const device::DiscoverableCredentialMetadata& cred) {
         return !cred.system_created;
       });
@@ -54,7 +52,7 @@ class CredentialPresenceCacher : public ProfileObserver {
   CredentialPresenceCacher(
       Profile* profile,
       base::OnceCallback<void(
-          absl::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
+          std::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
           callback)
       : profile_(profile), callback_(std::move(callback)) {}
 
@@ -87,13 +85,13 @@ class CredentialPresenceCacher : public ProfileObserver {
  private:
   raw_ptr<Profile> profile_;
   base::OnceCallback<void(
-      absl::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
+      std::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
       callback_;
 };
 
 void EnumerateResultToBool(
     base::OnceCallback<void(bool)> callback,
-    absl::optional<std::vector<device::DiscoverableCredentialMetadata>>
+    std::optional<std::vector<device::DiscoverableCredentialMetadata>>
         credentials) {
   std::move(callback).Run(credentials.has_value() &&
                           ContainsUserCreatedCredential(*credentials));
@@ -120,10 +118,9 @@ std::unique_ptr<LocalCredentialManagement> LocalCredentialManagement::Create(
 
 void LocalCredentialManagementWin::HasCredentials(
     base::OnceCallback<void(bool)> callback) {
-  absl::optional<bool> result;
+  std::optional<bool> result;
 
-  if (!api_->IsAvailable() || !api_->SupportsSilentDiscovery() ||
-      !base::FeatureList::IsEnabled(features::kWebAuthConditionalUI)) {
+  if (!api_->IsAvailable() || !api_->SupportsSilentDiscovery()) {
     result = false;
   } else if (profile_->GetPrefs()->GetBoolean(kHasPlatformCredentialsPref)) {
     result = true;
@@ -144,11 +141,11 @@ void LocalCredentialManagementWin::HasCredentials(
 
 void LocalCredentialManagementWin::Enumerate(
     base::OnceCallback<void(
-        absl::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
+        std::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
         callback) {
   if (!api_->IsAvailable() || !api_->SupportsSilentDiscovery()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
 

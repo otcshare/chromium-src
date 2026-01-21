@@ -4,10 +4,10 @@
 
 var newTabUrls = [
   'chrome://newtab/',
-  // The tab URL for to the Local New Tab Page.
-  'chrome-search://local-ntp/local-ntp.html',
+  'chrome-native://newtab/',
 ];
 
+var firstWindowId;
 var secondWindowId;
 var thirdWindowId;
 var testTabId;
@@ -18,7 +18,13 @@ function clickLink(id) {
   document.querySelector('#' + id).dispatchEvent(clickEvent);
 }
 
-chrome.test.runTests([
+
+const tests = [
+  function getFirstWindowId() {
+    chrome.windows.getCurrent(pass(function(window) {
+      firstWindowId = window.id;
+    }));
+  },
 
   function setupTwoWindows() {
     createWindow(["about:blank", "chrome://newtab/", pageUrl("a")], {},
@@ -49,7 +55,8 @@ chrome.test.runTests([
         assertEq((i == 0), tabs[i].active && tabs[i].selected);
       }
       assertEq("about:blank", tabs[0].url);
-      assertTrue(newTabUrls.includes(tabs[1].url));
+      assertTrue(newTabUrls.includes(tabs[1].url),
+                 'Unexpected URL: ' + tabs[1].url);
       assertEq(pageUrl("a"), tabs[2].url);
     }));
 
@@ -62,6 +69,16 @@ chrome.test.runTests([
       }
       assertTrue(newTabUrls.includes(tabs[0].url));
       assertEq(pageUrl("b"), tabs[1].url);
+    }));
+  },
+
+  // TODO(crbug.com/40698663): This test must either be run in a window context
+  // where the current window is guaranteed, or be moved to the interactive
+  // test so there's consistent focus to guarantee which window is the default.
+  function getAllInWindowNullArg() {
+    chrome.tabs.getAllInWindow(null, pass(function(tabs) {
+      assertEq(1, tabs.length);
+      assertEq(firstWindowId, tabs[0].windowId);
     }));
   },
 
@@ -194,4 +211,55 @@ chrome.test.runTests([
     }));
   },
 
-]);
+  // TODO(crbug.com/40698663): This test only runs in a window context.
+  // We should collect it with other such tests and put them together
+  // in a new test suite. Also, chrome.tabs.detectLanguage has been
+  // broken for a while, so this test really isn't accomplishing
+  // anything right now. See crbug.com/1410643.
+  function detectLanguage() {
+    chrome.tabs.getAllInWindow(null, pass(function(tabs) {
+      chrome.tabs.detectLanguage(tabs[0].id, pass(function(lang) {
+        assertEq("und", lang);
+      }));
+    }));
+  },
+
+  // TODO(crbug.com/40698663): This test must either be run in a window context
+  // where the current window is guaranteed, or be moved to the interactive
+  // test so there's consistent focus to guarantee which window is the default.
+  function getCurrentWindow() {
+    var errorMsg = "No window with id: -1.";
+    chrome.windows.get(chrome.windows.WINDOW_ID_NONE, fail(errorMsg));
+    chrome.windows.get(chrome.windows.WINDOW_ID_CURRENT, pass(function(win1) {
+      chrome.windows.getCurrent(pass(function(win2) {
+        assertEq(win1.id, win2.id);
+      }));
+    }));
+  }
+];
+
+// The following tests don't work on desktop android (yet).
+// TODO(https://crbug.com/371432155): Enable these on desktop android.
+const skipForAndroid = [
+    'openerTabId',
+    'testRedirectingToAnotherWindow',
+    'testOpenWindowInEmptyPopup',
+    'testOpenEmptyPopup',
+    'testCreatePopupAndMoveTab',
+    'detectLanguage',
+    'getCurrentWindow',
+];
+
+(async function() {
+  const os = await new Promise((resolve) => {
+    chrome.runtime.getPlatformInfo(info => resolve(info.os));
+  });
+  const isAndroid = os === 'android';
+  let testsToRun = tests;
+  if (isAndroid) {
+    testsToRun =
+        tests.filter((t) => { return !skipForAndroid.includes(t.name); });
+  }
+
+  chrome.test.runTests(testsToRun);
+})();

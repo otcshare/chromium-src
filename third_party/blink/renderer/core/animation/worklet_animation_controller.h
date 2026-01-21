@@ -15,6 +15,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
 
@@ -69,7 +70,7 @@ class CORE_EXPORT WorkletAnimationController
   HeapHashSet<Member<WorkletAnimationBase>> pending_animations_;
   HeapHashMap<int, Member<WorkletAnimationBase>> animations_;
 
-  WTF::HashSet<String> animator_names_;
+  HashSet<String> animator_names_;
 
   // TODO(crbug.com/1090515): The following proxy is needed for platform/ to
   // access this class. We should bypass it eventually.

@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/services/secure_channel/shared_resource_scheduler.h"
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -30,17 +29,16 @@ void RemoveItemFromList(const DeviceIdPair& item,
     return;
   }
 
-  PA_LOG(ERROR) << "RemoveItemFromList(): Tried to remove an item from |list|, "
-                << "but that item was not present. Item: " << item;
-  NOTREACHED();
+  NOTREACHED() << "RemoveItemFromList(): Tried to remove an item from |list|, "
+               << "but that item was not present. Item: " << item;
 }
 
 // Remove the first item from |list| and returns it. If |list| is empty,
-// absl::nullopt is returned.
-absl::optional<DeviceIdPair> RemoveFirstItemFromList(
+// std::nullopt is returned.
+std::optional<DeviceIdPair> RemoveFirstItemFromList(
     std::list<DeviceIdPair>* list) {
   if (list->empty())
-    return absl::nullopt;
+    return std::nullopt;
 
   DeviceIdPair first_item = list->front();
   list->pop_front();
@@ -56,11 +54,10 @@ SharedResourceScheduler::~SharedResourceScheduler() = default;
 void SharedResourceScheduler::ScheduleRequest(
     const DeviceIdPair& request,
     ConnectionPriority connection_priority) {
-  if (base::Contains(request_to_priority_map_, request)) {
-    PA_LOG(ERROR) << "SharedResourceScheduler::ScheduleRequest(): Tried to "
-                  << "schedule a request which was already scheduled. Request: "
-                  << request << ", Priority: " << connection_priority;
-    NOTREACHED();
+  if (request_to_priority_map_.contains(request)) {
+    NOTREACHED() << "SharedResourceScheduler::ScheduleRequest(): Tried to "
+                 << "schedule a request which was already scheduled. Request: "
+                 << request << ", Priority: " << connection_priority;
   }
 
   priority_to_queued_requests_map_[connection_priority].push_back(request);
@@ -70,12 +67,11 @@ void SharedResourceScheduler::ScheduleRequest(
 void SharedResourceScheduler::UpdateRequestPriority(
     const DeviceIdPair& request,
     ConnectionPriority connection_priority) {
-  if (!base::Contains(request_to_priority_map_, request)) {
-    PA_LOG(ERROR) << "SharedResourceScheduler::UpdateRequestPriority(): Tried "
-                  << "to update priority for a request which was not "
-                  << "scheduled. Request: " << request
-                  << ", Priority: " << connection_priority;
-    NOTREACHED();
+  if (!request_to_priority_map_.contains(request)) {
+    NOTREACHED() << "SharedResourceScheduler::UpdateRequestPriority(): Tried "
+                 << "to update priority for a request which was not "
+                 << "scheduled. Request: " << request
+                 << ", Priority: " << connection_priority;
   }
 
   if (request_to_priority_map_[request] == connection_priority) {
@@ -99,11 +95,10 @@ void SharedResourceScheduler::UpdateRequestPriority(
 
 void SharedResourceScheduler::RemoveScheduledRequest(
     const DeviceIdPair& request) {
-  if (!base::Contains(request_to_priority_map_, request)) {
-    PA_LOG(ERROR) << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
-                  << "to remove a scheduled request, but that request was not "
-                  << "actually scheduled. Request: " << request;
-    NOTREACHED();
+  if (!request_to_priority_map_.contains(request)) {
+    NOTREACHED() << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
+                 << "to remove a scheduled request, but that request was not "
+                 << "actually scheduled. Request: " << request;
   }
 
   auto& list_for_priority =
@@ -121,55 +116,52 @@ void SharedResourceScheduler::RemoveScheduledRequest(
   }
 
   if (!was_removed_from_list) {
-    PA_LOG(ERROR) << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
-                  << "to remove a scheduled request, but that request was not "
-                  << "present in priority_to_queued_requests_map_. "
-                  << "Request: " << request;
-    NOTREACHED();
+    NOTREACHED() << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
+                 << "to remove a scheduled request, but that request was not "
+                 << "present in priority_to_queued_requests_map_. "
+                 << "Request: " << request;
   }
 
   // Remove from |request_to_priority_map_|.
   size_t num_removed = request_to_priority_map_.erase(request);
   if (num_removed != 1u) {
-    PA_LOG(ERROR) << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
-                  << "to remove a scheduled request, but that request was not "
-                  << "present in request_to_priority_map_. "
-                  << "Request: " << request;
-    NOTREACHED();
+    NOTREACHED() << "SharedResourceScheduler::RemoveScheduledRequest(): Tried "
+                 << "to remove a scheduled request, but that request was not "
+                 << "present in request_to_priority_map_. "
+                 << "Request: " << request;
   }
 }
 
-absl::optional<std::pair<DeviceIdPair, ConnectionPriority>>
+std::optional<std::pair<DeviceIdPair, ConnectionPriority>>
 SharedResourceScheduler::GetNextScheduledRequest() {
   for (const auto& priority : kOrderedPriorities) {
-    absl::optional<DeviceIdPair> potential_request =
+    std::optional<DeviceIdPair> potential_request =
         RemoveFirstItemFromList(&priority_to_queued_requests_map_[priority]);
     if (!potential_request)
       continue;
 
     size_t num_removed = request_to_priority_map_.erase(*potential_request);
     if (num_removed != 1u) {
-      PA_LOG(ERROR) << "SharedResourceScheduler::GetNextScheduledRequest(): "
-                    << "Tried to remove request from "
-                    << "request_to_priority_map_, but no request was present."
-                    << "Request: " << *potential_request;
-      NOTREACHED();
+      NOTREACHED() << "SharedResourceScheduler::GetNextScheduledRequest(): "
+                   << "Tried to remove request from "
+                   << "request_to_priority_map_, but no request was present."
+                   << "Request: " << *potential_request;
     }
 
     return std::make_pair(*potential_request, priority);
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<ConnectionPriority>
+std::optional<ConnectionPriority>
 SharedResourceScheduler::GetHighestPriorityOfScheduledRequests() {
   for (const auto& priority : kOrderedPriorities) {
     if (!priority_to_queued_requests_map_[priority].empty())
       return priority;
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace ash::secure_channel

@@ -17,15 +17,11 @@
 #include "gpu/command_buffer/common/buffer.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 #include "gpu/command_buffer/common/constants.h"
-#include "gpu/gpu_export.h"
+#include "gpu/command_buffer/service/gpu_command_buffer_service_export.h"
 
 // Forwardly declare a few GL types to avoid including GL header files.
 using GLsizei = int;
 using GLint = int;
-
-namespace gfx {
-class ColorSpace;
-}  // namespace gfx
 
 namespace gpu {
 
@@ -34,7 +30,7 @@ class DecoderClient;
 
 // This class is a helper base class for implementing the common parts of the
 // o3d/gl2 command buffer decoder.
-class GPU_EXPORT CommonDecoder {
+class GPU_COMMAND_BUFFER_SERVICE_EXPORT CommonDecoder {
  public:
   using Error = error::Error;
 
@@ -62,7 +58,7 @@ class GPU_EXPORT CommonDecoder {
   // arbitary size, the service puts the string in a bucket. The client can
   // then query the size of a bucket and request sections of the bucket to
   // be passed across shared memory.
-  class GPU_EXPORT Bucket {
+  class GPU_COMMAND_BUFFER_SERVICE_EXPORT Bucket {
    public:
     Bucket();
 
@@ -160,6 +156,10 @@ class GPU_EXPORT CommonDecoder {
     return static_cast<T>(GetAddressAndCheckSize(shm_id, offset, size));
   }
 
+  base::span<uint8_t> GetSharedMemoryAsSpan(uint32_t shm_id,
+                                            uint32_t offset,
+                                            uint32_t size);
+
   void* GetAddressAndSize(unsigned int shm_id,
                           unsigned int offset,
                           unsigned int minimum_size,
@@ -199,13 +199,6 @@ class GPU_EXPORT CommonDecoder {
   // watchdog checks in CommandExecutor().
   virtual void ExitCommandProcessingEarly() {}
 
-  // Read a serialized gfx::ColorSpace. Return true on success and false if the
-  // serialization was invalid.
-  bool ReadColorSpace(uint32_t shm_id,
-                      uint32_t shm_offset,
-                      uint32_t color_space_size,
-                      gfx::ColorSpace* color_space);
-
  private:
   // Generate a member function prototype for each command in an automated and
   // typesafe way.
@@ -217,8 +210,8 @@ class GPU_EXPORT CommonDecoder {
 
   #undef COMMON_COMMAND_BUFFER_CMD_OP
 
-  raw_ptr<CommandBufferServiceBase> command_buffer_service_;
-  raw_ptr<DecoderClient> client_;
+  raw_ptr<CommandBufferServiceBase, DanglingUntriaged> command_buffer_service_;
+  raw_ptr<DecoderClient, DanglingUntriaged> client_;
   size_t max_bucket_size_;
 
   using BucketMap = std::map<uint32_t, std::unique_ptr<Bucket>>;

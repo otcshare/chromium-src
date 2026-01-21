@@ -5,8 +5,10 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_CERT_VERIFIER_MOJO_CERT_VERIFIER_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_CERT_VERIFIER_MOJO_CERT_VERIFIER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/observer_list.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
@@ -20,7 +22,8 @@ namespace cert_verifier {
 
 // Implementation of net::CertVerifier that proxies across a Mojo interface to
 // verify certificates.
-class MojoCertVerifier : public net::CertVerifier {
+class MojoCertVerifier : public net::CertVerifier,
+                         public mojom::CertVerifierServiceClient {
  public:
   using ReconnectURLLoaderFactory = base::RepeatingCallback<void(
       mojo::PendingReceiver<network::mojom::URLLoaderFactory>)>;
@@ -30,6 +33,7 @@ class MojoCertVerifier : public net::CertVerifier {
   // connect a new URLLoaderFactory.
   MojoCertVerifier(
       mojo::PendingRemote<mojom::CertVerifierService> mojo_cert_verifier,
+      mojo::PendingReceiver<mojom::CertVerifierServiceClient> client_receiver,
       mojo::PendingRemote<network::mojom::URLLoaderFactory> url_loader_factory,
       ReconnectURLLoaderFactory reconnector);
   ~MojoCertVerifier() override;
@@ -40,7 +44,19 @@ class MojoCertVerifier : public net::CertVerifier {
              net::CompletionOnceCallback callback,
              std::unique_ptr<net::CertVerifier::Request>* out_req,
              const net::NetLogWithSource& net_log) override;
+  void Verify2QwacBinding(
+      const std::string& binding,
+      const std::string& hostname,
+      const scoped_refptr<net::X509Certificate>& tls_cert,
+      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+          callback,
+      const net::NetLogWithSource& net_log) override;
   void SetConfig(const net::CertVerifier::Config& config) override;
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
+
+  // mojom::CertVerifierServiceClient implementation:
+  void OnCertVerifierChanged() override;
 
   // Flushes the underlying Mojo pipe.
   void FlushForTesting();
@@ -49,7 +65,9 @@ class MojoCertVerifier : public net::CertVerifier {
   class MojoReconnector;
 
   mojo::Remote<mojom::CertVerifierService> mojo_cert_verifier_;
+  mojo::Receiver<mojom::CertVerifierServiceClient> client_receiver_;
   std::unique_ptr<MojoReconnector> reconnector_;
+  base::ObserverList<Observer> observers_;
 };
 
 }  // namespace cert_verifier

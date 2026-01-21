@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/content_capture/browser/content_capture_frame.h"
 #include "components/content_capture/common/content_capture.mojom.h"
@@ -50,6 +51,8 @@ class OnscreenContentProvider
   void RemoveConsumer(ContentCaptureConsumer& consumer);
 
   // The methods called by ContentCaptureReceiver.
+  void FlushCaptureContent(ContentCaptureReceiver* content_capture_receiver,
+                           const ContentCaptureFrame& data);
   void DidCaptureContent(ContentCaptureReceiver* content_capture_receiver,
                          const ContentCaptureFrame& data);
   void DidUpdateContent(ContentCaptureReceiver* content_capture_receiver,
@@ -60,6 +63,11 @@ class OnscreenContentProvider
   void DidUpdateTitle(ContentCaptureReceiver* content_capture_receiver);
   void DidUpdateFavicon(ContentCaptureReceiver* content_capture_receiver);
 
+  // The methods called by metadata providers.
+  void DidUpdateSensitivityScore(float sensitivity_score);
+  void DidUpdateLanguageDetails(const std::string& detected_language,
+                                float language_confidence);
+  void ClearContentCaptureMetadata();
   // content::WebContentsObserver:
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
@@ -69,6 +77,8 @@ class OnscreenContentProvider
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
       const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
 
   size_t GetFrameMapSizeForTesting() const { return frame_map_.size(); }
 
@@ -88,7 +98,8 @@ class OnscreenContentProvider
     return ContentCaptureReceiverForFrame(render_frame_host);
   }
 
-  const std::vector<ContentCaptureConsumer*>& GetConsumersForTesting() const {
+  const std::vector<raw_ptr<ContentCaptureConsumer, VectorExperimental>>&
+  GetConsumersForTesting() const {
     return consumers_;
   }
 #endif
@@ -130,7 +141,7 @@ class OnscreenContentProvider
            std::unique_ptr<ContentCaptureReceiver>>
       frame_map_;
 
-  std::vector<ContentCaptureConsumer*> consumers_;
+  std::vector<raw_ptr<ContentCaptureConsumer, VectorExperimental>> consumers_;
 
   base::WeakPtrFactory<OnscreenContentProvider> weak_ptr_factory_{this};
 };

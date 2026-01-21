@@ -6,9 +6,9 @@
 #define BASE_AT_EXIT_H_
 
 #include "base/base_export.h"
-#include "base/callback.h"
 #include "base/containers/stack.h"
 #include "base/dcheck_is_on.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
@@ -56,6 +56,11 @@ class BASE_EXPORT AtExitManager {
   // process mode.
   static void DisableAllAtExitManagers();
 
+  // Marks the current AtExitManager as one that can be shadowed by another.
+  // This is useful when a test wants to run code that creates its own
+  // AtExitManager, and as such ShadowingAtExitManager can't be used.
+  static void AllowShadowingForTesting();
+
  protected:
   // This constructor will allow this instance of AtExitManager to be created
   // even if one already exists.  This should only be used for testing!
@@ -74,6 +79,7 @@ class BASE_EXPORT AtExitManager {
 
   // Stack of managers to allow shadowing.
   const raw_ptr<AtExitManager, DanglingUntriaged> next_manager_;
+  bool allow_shadowing_ = false;
 };
 
 #if defined(UNIT_TEST)

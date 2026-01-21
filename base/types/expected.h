@@ -5,12 +5,16 @@
 #ifndef BASE_TYPES_EXPECTED_H_
 #define BASE_TYPES_EXPECTED_H_
 
+#include <concepts>
+#include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
+#include "base/strings/strcat.h"
+#include "base/strings/to_string.h"
 #include "base/types/expected_internal.h"  // IWYU pragma: export
-#include "third_party/abseil-cpp/absl/utility/utility.h"
 
 // Class template `expected<T, E>` is a vocabulary type which contains an
 // expected value of type `T`, or an error `E`. The class skews towards behaving
@@ -32,7 +36,7 @@
 // Example Usage:
 //
 // Before:
-//   bool ParseInt32(base::StringPiece input,
+//   bool ParseInt32(std::string_view input,
 //                   int32_t* output,
 //                   ParseIntError* error);
 //   ...
@@ -47,7 +51,7 @@
 //
 // After:
 //
-//   base::expected<int32_t, ParseIntError> ParseInt32(base::StringPiece input);
+//   base::expected<int32_t, ParseIntError> ParseInt32(std::string_view input);
 //   ...
 //
 //   if (auto parsed = ParseInt32("..."); parsed.has_value()) {
@@ -55,6 +59,21 @@
 //   } else {
 //     // process `parsed.error()`
 //   }
+//
+// For even less boilerplate, see expected_macros.h.
+//
+// Note that there are various transformation member functions. To avoid having
+// to puzzle through the standard-ese on their documentation, here's a quick
+// reference table, assuming a source `expected<T, E> ex;` and types U and G
+// convertible from T and E, respectively:
+//
+//                        Return type     Val when ex = t  Val when ex = e
+//                        -----------     ---------------  ---------------
+// ex.value_or(t2)        T               t                t2
+// ex.and_then(f)         expected<U, E>  f(t)             unexpected(e)
+// ex.transform(f)        expected<U, E>  expected(f(t))   unexpected(e)
+// ex.or_else(f)          expected<T, G>  expected(t)      f(e)
+// ex.transform_error(f)  expected<T, G>  expected(t)      unexpected(f(e))
 //
 // References:
 // * https://wg21.link/P0323
@@ -116,19 +135,20 @@ namespace base {
 //     return base::ok(std::move(result));
 //   }
 template <typename T>
-class ok {
+class ok final {
  public:
-  template <typename U = T, internal::EnableIfOkValueConstruction<T, U> = 0>
+  template <typename U = T>
+    requires(internal::IsOkValueConstruction<T, U>)
   constexpr explicit ok(U&& val) noexcept : value_(std::forward<U>(val)) {}
 
   template <typename... Args>
-  constexpr explicit ok(absl::in_place_t, Args&&... args) noexcept
+  constexpr explicit ok(std::in_place_t, Args&&... args) noexcept
       : value_(std::forward<Args>(args)...) {}
 
   template <typename U, typename... Args>
-  constexpr explicit ok(absl::in_place_t,
-                        std::initializer_list<U> il,
-                        Args&&... args) noexcept
+  constexpr ok(std::in_place_t,
+               std::initializer_list<U> il,
+               Args&&... args) noexcept
       : value_(il, std::forward<Args>(args)...) {}
 
   constexpr T& value() & noexcept { return value_; }
@@ -143,42 +163,58 @@ class ok {
 
   friend constexpr void swap(ok& x, ok& y) noexcept { x.swap(y); }
 
+  std::string ToString() const {
+    return StrCat({"ok(", base::ToString(value()), ")"});
+  }
+
  private:
   T value_;
 };
 
-template <typename T, typename U>
-constexpr bool operator==(const ok<T>& lhs, const ok<U>& rhs) noexcept {
-  return lhs.value() == rhs.value();
-}
+template <typename T>
+  requires(std::is_void_v<T>)
+class ok<T> final {
+ public:
+  constexpr ok() noexcept = default;
+
+  std::string ToString() const { return "ok()"; }
+};
 
 template <typename T, typename U>
-constexpr bool operator!=(const ok<T>& lhs, const ok<U>& rhs) noexcept {
-  return !(lhs == rhs);
+constexpr bool operator==(const ok<T>& lhs, const ok<U>& rhs) noexcept {
+  if constexpr (std::is_void_v<T> && std::is_void_v<U>) {
+    return true;
+  } else if constexpr (std::is_void_v<T> || std::is_void_v<U>) {
+    return false;
+  } else {
+    return lhs.value() == rhs.value();
+  }
 }
 
 template <typename T>
 ok(T) -> ok<T>;
 
+ok() -> ok<void>;
+
 // [expected.un.object], class template unexpected
 // https://eel.is/c++draft/expected#un.object
 template <typename E>
-class unexpected {
+class unexpected final {
  public:
   // [expected.un.ctor] Constructors
-  template <typename Err = E,
-            internal::EnableIfUnexpectedValueConstruction<E, Err> = 0>
+  template <typename Err = E>
+    requires(internal::IsUnexpectedValueConstruction<E, Err>)
   constexpr explicit unexpected(Err&& err) noexcept
       : error_(std::forward<Err>(err)) {}
 
   template <typename... Args>
-  constexpr explicit unexpected(absl::in_place_t, Args&&... args) noexcept
+  constexpr explicit unexpected(std::in_place_t, Args&&... args) noexcept
       : error_(std::forward<Args>(args)...) {}
 
   template <typename U, typename... Args>
-  constexpr explicit unexpected(absl::in_place_t,
-                                std::initializer_list<U> il,
-                                Args&&... args) noexcept
+  constexpr unexpected(std::in_place_t,
+                       std::initializer_list<U> il,
+                       Args&&... args) noexcept
       : error_(il, std::forward<Args>(args)...) {}
 
   // [expected.un.obs] Observers
@@ -195,6 +231,15 @@ class unexpected {
 
   friend constexpr void swap(unexpected& x, unexpected& y) noexcept {
     x.swap(y);
+  }
+
+  // Deviation from the Standard: stringification support.
+  //
+  // If we move to `std::unexpected` someday, we would need to either forego
+  // nice formatted output or move to `std::format` or similar, which can have
+  // customized output for STL types.
+  std::string ToString() const noexcept {
+    return StrCat({"Unexpected(", base::ToString(error()), ")"});
   }
 
  private:
@@ -220,7 +265,7 @@ unexpected(E) -> unexpected<E>;
 // [expected.expected], class template expected
 // https://eel.is/c++draft/expected#expected
 template <typename T, typename E>
-class expected<T, E, /* is_void_v<T> = */ false> {
+class [[nodiscard, gsl::Owner]] expected final {
   // Note: A partial specialization for void value types follows below.
   static_assert(!std::is_void_v<T>, "Error: T must not be void");
 
@@ -234,7 +279,7 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   template <typename U>
   using rebind = expected<U, E>;
 
-  template <typename U, typename G, bool IsVoid>
+  template <typename U, typename G>
   friend class expected;
 
   // [expected.object.ctor], constructors
@@ -243,90 +288,67 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   // Converting copy and move constructors. These constructors are explicit if
   // either the value or error type is not implicitly convertible from `rhs`'s
   // corresponding type.
-  template <typename U,
-            typename G,
-            internal::EnableIfExplicitConversion<T, E, const U&, const G&> = 0>
-  explicit constexpr expected(const expected<U, G>& rhs) noexcept
+  template <typename U, typename G>
+    requires(internal::IsValidConversion<T, E, const U&, const G&>)
+  explicit(!std::convertible_to<const U&, T> ||
+           !std::convertible_to<const G&, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(const expected<U, G>& rhs) noexcept
       : impl_(rhs.impl_) {}
 
-  template <typename U,
-            typename G,
-            internal::EnableIfImplicitConversion<T, E, const U&, const G&> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(const expected<U, G>& rhs) noexcept
-      : impl_(rhs.impl_) {}
-
-  template <typename U,
-            typename G,
-            internal::EnableIfExplicitConversion<T, E, U, G> = 0>
-  explicit constexpr expected(expected<U, G>&& rhs) noexcept
-      : impl_(std::move(rhs.impl_)) {}
-
-  template <typename U,
-            typename G,
-            internal::EnableIfImplicitConversion<T, E, U, G> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(expected<U, G>&& rhs) noexcept
+  template <typename U, typename G>
+    requires(internal::IsValidConversion<T, E, U, G>)
+  explicit(!std::convertible_to<U, T> || !std::convertible_to<G, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(expected<U, G>&& rhs) noexcept
       : impl_(std::move(rhs.impl_)) {}
 
   // Deviation from the Standard, which allows implicit conversions as long as U
   // is implicitly convertible to T: Chromium additionally requires that U is
   // not implicitly convertible to E.
-  template <typename U = T,
-            internal::EnableIfExplicitValueConstruction<T, E, U> = 0>
-  explicit constexpr expected(U&& v) noexcept
+  template <typename U = std::remove_cv_t<T>>
+    requires(internal::IsValidValueConstruction<T, E, U>)
+  explicit(!std::convertible_to<U, T> || std::convertible_to<U, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(U&& v) noexcept
       : impl_(kValTag, std::forward<U>(v)) {}
 
-  template <typename U = T,
-            internal::EnableIfImplicitValueConstruction<T, E, U> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(U&& v) noexcept
-      : impl_(kValTag, std::forward<U>(v)) {}
-
-  template <typename U, internal::EnableIfExplicitConstruction<T, const U&> = 0>
-  explicit constexpr expected(const ok<U>& o) noexcept
+  template <typename U>
+    requires(std::constructible_from<T, const U&>)
+  explicit(!std::convertible_to<const U&, T>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(const ok<U>& o) noexcept
       : impl_(kValTag, o.value()) {}
 
-  template <typename U, internal::EnableIfImplicitConstruction<T, const U&> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(const ok<U>& o) noexcept
-      : impl_(kValTag, o.value()) {}
-
-  template <typename U, internal::EnableIfExplicitConstruction<T, U> = 0>
-  explicit constexpr expected(ok<U>&& o) noexcept
+  template <typename U>
+    requires(std::constructible_from<T, U>)
+  explicit(!std::convertible_to<U, T>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(ok<U>&& o) noexcept
       : impl_(kValTag, std::move(o.value())) {}
 
-  template <typename U, internal::EnableIfImplicitConstruction<T, U> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(ok<U>&& o) noexcept
-      : impl_(kValTag, std::move(o.value())) {}
-
-  template <typename G, internal::EnableIfExplicitConstruction<E, const G&> = 0>
-  explicit constexpr expected(const unexpected<G>& e) noexcept
+  template <typename G>
+    requires(std::constructible_from<E, const G&>)
+  explicit(!std::convertible_to<const G&, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(const unexpected<G>& e) noexcept
       : impl_(kErrTag, e.error()) {}
 
-  template <typename G, internal::EnableIfImplicitConstruction<E, const G&> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(const unexpected<G>& e) noexcept
-      : impl_(kErrTag, e.error()) {}
-
-  template <typename G, internal::EnableIfExplicitConstruction<E, G> = 0>
-  explicit constexpr expected(unexpected<G>&& e) noexcept
-      : impl_(kErrTag, std::move(e.error())) {}
-
-  template <typename G, internal::EnableIfImplicitConstruction<E, G> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(unexpected<G>&& e) noexcept
+  template <typename G>
+    requires(std::constructible_from<E, G>)
+  explicit(!std::convertible_to<G, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(unexpected<G>&& e) noexcept
       : impl_(kErrTag, std::move(e.error())) {}
 
   template <typename... Args>
-  constexpr explicit expected(absl::in_place_t, Args&&... args) noexcept
+  constexpr explicit expected(std::in_place_t, Args&&... args) noexcept
       : impl_(kValTag, std::forward<Args>(args)...) {}
 
   template <typename U, typename... Args>
-  constexpr explicit expected(absl::in_place_t,
-                              std::initializer_list<U> il,
-                              Args&&... args) noexcept
+  constexpr expected(std::in_place_t,
+                     std::initializer_list<U> il,
+                     Args&&... args) noexcept
       : impl_(kValTag, il, std::forward<Args>(args)...) {}
 
   template <typename... Args>
@@ -334,13 +356,14 @@ class expected<T, E, /* is_void_v<T> = */ false> {
       : impl_(kErrTag, std::forward<Args>(args)...) {}
 
   template <typename U, typename... Args>
-  constexpr explicit expected(unexpect_t,
-                              std::initializer_list<U> il,
-                              Args&&... args) noexcept
+  constexpr expected(unexpect_t,
+                     std::initializer_list<U> il,
+                     Args&&... args) noexcept
       : impl_(kErrTag, il, std::forward<Args>(args)...) {}
 
   // [expected.object.assign], assignment
-  template <typename U = T, internal::EnableIfValueAssignment<T, E, U> = 0>
+  template <typename U = std::remove_cv_t<T>>
+    requires(internal::IsValueAssignment<T, E, U>)
   constexpr expected& operator=(U&& v) noexcept {
     emplace(std::forward<U>(v));
     return *this;
@@ -412,39 +435,39 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   constexpr E&& error() && noexcept { return std::move(error()); }
   constexpr const E&& error() const&& noexcept { return std::move(error()); }
 
-  template <typename U>
+  template <typename U = std::remove_cv_t<T>>
   constexpr T value_or(U&& v) const& noexcept {
-    static_assert(std::is_copy_constructible_v<T>,
+    static_assert(std::copy_constructible<T>,
                   "expected<T, E>::value_or: T must be copy constructible");
-    static_assert(std::is_convertible_v<U&&, T>,
+    static_assert(std::convertible_to<U&&, T>,
                   "expected<T, E>::value_or: U must be convertible to T");
     return has_value() ? value() : static_cast<T>(std::forward<U>(v));
   }
 
-  template <typename U>
+  template <typename U = std::remove_cv_t<T>>
   constexpr T value_or(U&& v) && noexcept {
-    static_assert(std::is_move_constructible_v<T>,
+    static_assert(std::move_constructible<T>,
                   "expected<T, E>::value_or: T must be move constructible");
-    static_assert(std::is_convertible_v<U&&, T>,
+    static_assert(std::convertible_to<U&&, T>,
                   "expected<T, E>::value_or: U must be convertible to T");
     return has_value() ? std::move(value())
                        : static_cast<T>(std::forward<U>(v));
   }
 
-  template <typename G>
+  template <typename G = E>
   constexpr E error_or(G&& e) const& noexcept {
-    static_assert(std::is_copy_constructible_v<E>,
+    static_assert(std::copy_constructible<E>,
                   "expected<T, E>::error_or: E must be copy constructible");
-    static_assert(std::is_convertible_v<G&&, E>,
+    static_assert(std::convertible_to<G&&, E>,
                   "expected<T, E>::error_or: G must be convertible to E");
     return has_value() ? static_cast<E>(std::forward<G>(e)) : error();
   }
 
-  template <typename G>
+  template <typename G = E>
   constexpr E error_or(G&& e) && noexcept {
-    static_assert(std::is_move_constructible_v<E>,
+    static_assert(std::move_constructible<E>,
                   "expected<T, E>::error_or: E must be move constructible");
-    static_assert(std::is_convertible_v<G&&, E>,
+    static_assert(std::convertible_to<G&&, E>,
                   "expected<T, E>::error_or: G must be convertible to E");
     return has_value() ? static_cast<E>(std::forward<G>(e))
                        : std::move(error());
@@ -467,30 +490,26 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `and_then` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto and_then(F&& f) & noexcept {
     return internal::AndThen(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto and_then(F&& f) const& noexcept {
     return internal::AndThen(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto and_then(F&& f) && noexcept {
     return internal::AndThen(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto and_then(F&& f) const&& noexcept {
     return internal::AndThen(std::move(*this), std::forward<F>(f));
   }
@@ -507,39 +526,28 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `or_else` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfCopyConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::copy_constructible<T>)
   constexpr auto or_else(F&& f) & noexcept {
     return internal::OrElse(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfCopyConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::copy_constructible<T>)
   constexpr auto or_else(F&& f) const& noexcept {
     return internal::OrElse(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfMoveConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::move_constructible<T>)
   constexpr auto or_else(F&& f) && noexcept {
     return internal::OrElse(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfMoveConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::move_constructible<T>)
   constexpr auto or_else(F&& f) const&& noexcept {
     return internal::OrElse(std::move(*this), std::forward<F>(f));
-  }
-
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
-  constexpr auto transform(F&& f) & noexcept {
-    return internal::Transform(*this, std::forward<F>(f));
   }
 
   // `transform`: This methods accepts a callable `f` that is invoked with
@@ -547,7 +555,7 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `f`'s return type U needs to be a valid value_type for expected, i.e. any
   // type for which `remove_cv_t` is either void, or a complete non-array object
-  // type that is not `absl::in_place_t`, `base::unexpect_t`, or a
+  // type that is not `std::in_place_t`, `base::unexpect_t`, or a
   // specialization of `base::ok` or `base::unexpected`.
   //
   // Returns an instance of base::expected<remove_cv_t<U>, E> that is
@@ -556,23 +564,26 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `transform` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
+  constexpr auto transform(F&& f) & noexcept {
+    return internal::Transform(*this, std::forward<F>(f));
+  }
+
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto transform(F&& f) const& noexcept {
     return internal::Transform(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto transform(F&& f) && noexcept {
     return internal::Transform(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto transform(F&& f) const&& noexcept {
     return internal::Transform(std::move(*this), std::forward<F>(f));
   }
@@ -582,7 +593,7 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `f`'s return type G needs to be a valid error_type for expected, i.e. any
   // type for which `remove_cv_t` is a complete non-array object type that is
-  // not `absl::in_place_t`, `base::unexpect_t`, or a specialization of
+  // not `std::in_place_t`, `base::unexpect_t`, or a specialization of
   // `base::ok` or `base::unexpected`.
   //
   // Returns an instance of base::expected<T, remove_cv_t<G>> that is
@@ -591,32 +602,38 @@ class expected<T, E, /* is_void_v<T> = */ false> {
   //
   // `transform_error` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfCopyConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::copy_constructible<T>)
   constexpr auto transform_error(F&& f) & noexcept {
     return internal::TransformError(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfCopyConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::copy_constructible<T>)
   constexpr auto transform_error(F&& f) const& noexcept {
     return internal::TransformError(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfMoveConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::move_constructible<T>)
   constexpr auto transform_error(F&& f) && noexcept {
     return internal::TransformError(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyT = T,
-            internal::EnableIfMoveConstructible<LazyT> = 0>
+  template <typename F>
+    requires(std::move_constructible<T>)
   constexpr auto transform_error(F&& f) const&& noexcept {
     return internal::TransformError(std::move(*this), std::forward<F>(f));
+  }
+
+  // Deviation from the Standard: stringification support.
+  //
+  // If we move to `std::expected` someday, we would need to either forego nice
+  // formatted output or move to `std::format` or similar, which can have
+  // customized output for STL types.
+  std::string ToString() const {
+    return has_value() ? StrCat({"Expected(", base::ToString(value()), ")"})
+                       : StrCat({"Unexpected(", base::ToString(error()), ")"});
   }
 
  private:
@@ -629,7 +646,8 @@ class expected<T, E, /* is_void_v<T> = */ false> {
 
 // [expected.void], partial specialization of expected for void types
 template <typename T, typename E>
-class expected<T, E, /* is_void_v<T> = */ true> {
+  requires(std::is_void_v<T>)
+class [[nodiscard]] expected<T, E> final {
   // Note: A partial specialization for non-void value types can be found above.
   static_assert(std::is_void_v<T>, "Error: T must be void");
 
@@ -643,7 +661,7 @@ class expected<T, E, /* is_void_v<T> = */ true> {
   template <typename U>
   using rebind = expected<U, E>;
 
-  template <typename U, typename G, bool IsVoid>
+  template <typename U, typename G>
   friend class expected;
 
   // [expected.void.ctor], constructors
@@ -651,60 +669,47 @@ class expected<T, E, /* is_void_v<T> = */ true> {
 
   // Converting copy and move constructors. These constructors are explicit if
   // the error type is not implicitly convertible from `rhs`'s error type.
-  template <typename U,
-            typename G,
-            internal::EnableIfExplicitVoidConversion<E, U, const G&> = 0>
-  constexpr explicit expected(const expected<U, G>& rhs) noexcept
+  template <typename U, typename G>
+    requires(internal::IsValidVoidConversion<E, U, const G&>)
+  explicit(!std::convertible_to<const G&, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(const expected<U, G>& rhs) noexcept
       : impl_(rhs.impl_) {}
 
-  template <typename U,
-            typename G,
-            internal::EnableIfImplicitVoidConversion<E, U, const G&> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr /* implicit */ expected(const expected<U, G>& rhs) noexcept
-      : impl_(rhs.impl_) {}
-
-  template <typename U,
-            typename G,
-            internal::EnableIfExplicitVoidConversion<E, U, G> = 0>
-  constexpr explicit expected(expected<U, G>&& rhs) noexcept
+  template <typename U, typename G>
+    requires(internal::IsValidVoidConversion<E, U, G>)
+  explicit(!std::convertible_to<G, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(expected<U, G>&& rhs) noexcept
       : impl_(std::move(rhs.impl_)) {}
 
-  template <typename U,
-            typename G,
-            internal::EnableIfImplicitVoidConversion<E, U, G> = 0>
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr /* implicit */ expected(expected<U, G>&& rhs) noexcept
-      : impl_(std::move(rhs.impl_)) {}
+  constexpr /* implicit */ expected(base::ok<T>) noexcept {}
 
-  template <typename G, internal::EnableIfExplicitConstruction<E, const G&> = 0>
-  explicit constexpr expected(const unexpected<G>& e) noexcept
+  template <typename G>
+    requires(std::constructible_from<E, const G&>)
+  explicit(!std::convertible_to<const G&, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(const unexpected<G>& e) noexcept
       : impl_(kErrTag, e.error()) {}
 
-  template <typename G, internal::EnableIfImplicitConstruction<E, const G&> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(const unexpected<G>& e) noexcept
-      : impl_(kErrTag, e.error()) {}
-
-  template <typename G, internal::EnableIfExplicitConstruction<E, G> = 0>
-  explicit constexpr expected(unexpected<G>&& e) noexcept
+  template <typename G>
+    requires(std::constructible_from<E, G>)
+  explicit(!std::convertible_to<G, E>)
+      // NOLINTNEXTLINE(google-explicit-constructor)
+      constexpr expected(unexpected<G>&& e) noexcept
       : impl_(kErrTag, std::move(e.error())) {}
 
-  template <typename G, internal::EnableIfImplicitConstruction<E, G> = 0>
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  /* implicit */ constexpr expected(unexpected<G>&& e) noexcept
-      : impl_(kErrTag, std::move(e.error())) {}
-
-  constexpr explicit expected(absl::in_place_t) noexcept {}
+  constexpr explicit expected(std::in_place_t) noexcept {}
 
   template <typename... Args>
   constexpr explicit expected(unexpect_t, Args&&... args) noexcept
       : impl_(kErrTag, std::forward<Args>(args)...) {}
 
   template <typename U, typename... Args>
-  constexpr explicit expected(unexpect_t,
-                              std::initializer_list<U> il,
-                              Args&&... args) noexcept
+  constexpr expected(unexpect_t,
+                     std::initializer_list<U> il,
+                     Args&&... args) noexcept
       : impl_(kErrTag, il, std::forward<Args>(args)...) {}
 
   // [expected.void.assign], assignment
@@ -741,18 +746,18 @@ class expected<T, E, /* is_void_v<T> = */ true> {
 
   template <typename G>
   constexpr E error_or(G&& e) const& noexcept {
-    static_assert(std::is_copy_constructible_v<E>,
+    static_assert(std::copy_constructible<E>,
                   "expected<T, E>::error_or: E must be copy constructible");
-    static_assert(std::is_convertible_v<G&&, E>,
+    static_assert(std::convertible_to<G&&, E>,
                   "expected<T, E>::error_or: G must be convertible to E");
     return has_value() ? static_cast<E>(std::forward<G>(e)) : error();
   }
 
   template <typename G>
   constexpr E error_or(G&& e) && noexcept {
-    static_assert(std::is_move_constructible_v<E>,
+    static_assert(std::move_constructible<E>,
                   "expected<T, E>::error_or: E must be move constructible");
-    static_assert(std::is_convertible_v<G&&, E>,
+    static_assert(std::convertible_to<G&&, E>,
                   "expected<T, E>::error_or: G must be convertible to E");
     return has_value() ? static_cast<E>(std::forward<G>(e))
                        : std::move(error());
@@ -777,30 +782,26 @@ class expected<T, E, /* is_void_v<T> = */ true> {
   //
   // `and_then` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto and_then(F&& f) & noexcept {
     return internal::AndThen(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto and_then(F&& f) const& noexcept {
     return internal::AndThen(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto and_then(F&& f) && noexcept {
     return internal::AndThen(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto and_then(F&& f) const&& noexcept {
     return internal::AndThen(std::move(*this), std::forward<F>(f));
   }
@@ -841,7 +842,7 @@ class expected<T, E, /* is_void_v<T> = */ true> {
   //
   // `f`'s return type U needs to be a valid value_type for expected, i.e. any
   // type for which `remove_cv_t` is either void, or a complete non-array object
-  // type that is not `absl::in_place_t`, `base::unexpect_t`, or a
+  // type that is not `std::in_place_t`, `base::unexpect_t`, or a
   // specialization of `base::ok` or `base::unexpected`.
   //
   // Returns an instance of base::expected<remove_cv_t<U>, E> that is
@@ -850,30 +851,26 @@ class expected<T, E, /* is_void_v<T> = */ true> {
   //
   // `transform` is overloaded for all possible forms of const and ref
   // qualifiers.
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto transform(F&& f) & noexcept {
     return internal::Transform(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfCopyConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::copy_constructible<E>)
   constexpr auto transform(F&& f) const& noexcept {
     return internal::Transform(*this, std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto transform(F&& f) && noexcept {
     return internal::Transform(std::move(*this), std::forward<F>(f));
   }
 
-  template <typename F,
-            typename LazyE = E,
-            internal::EnableIfMoveConstructible<LazyE> = 0>
+  template <typename F>
+    requires(std::move_constructible<E>)
   constexpr auto transform(F&& f) const&& noexcept {
     return internal::Transform(std::move(*this), std::forward<F>(f));
   }
@@ -883,7 +880,7 @@ class expected<T, E, /* is_void_v<T> = */ true> {
   //
   // `f`'s return type G needs to be a valid error_type for expected, i.e. any
   // type for which `remove_cv_t` is a complete non-array object type that is
-  // not `absl::in_place_t`, `base::unexpect_t`, or a specialization of
+  // not `std::in_place_t`, `base::unexpect_t`, or a specialization of
   // `base::ok` or `base::unexpected`.
   //
   // Returns an instance of base::expected<cv void, remove_cv_t<G>> that is
@@ -912,9 +909,19 @@ class expected<T, E, /* is_void_v<T> = */ true> {
     return internal::TransformError(std::move(*this), std::forward<F>(f));
   }
 
+  // Deviation from the Standard: stringification support.
+  //
+  // If we move to `std::expected` someday, we would need to either forego nice
+  // formatted output or move to `std::format` or similar, which can have
+  // customized output for STL types.
+  std::string ToString() const {
+    return has_value() ? "Expected()"
+                       : StrCat({"Unexpected(", base::ToString(error()), ")"});
+  }
+
  private:
-  // Note: Since we can't store void types we use absl::monostate instead.
-  using Impl = internal::ExpectedImpl<absl::monostate, E>;
+  // Note: Since we can't store void types we use std::monostate instead.
+  using Impl = internal::ExpectedImpl<std::monostate, E>;
   static constexpr auto kErrTag = Impl::kErrTag;
 
   Impl impl_;
@@ -922,90 +929,46 @@ class expected<T, E, /* is_void_v<T> = */ true> {
 
 // [expected.object.eq], equality operators
 // [expected.void.eq], equality operators
-template <typename T, typename E, typename U, typename G, bool IsVoid>
-constexpr bool operator==(const expected<T, E, IsVoid>& x,
-                          const expected<U, G, IsVoid>& y) noexcept {
-  auto equal_values = [](const auto& x, const auto& y) {
+template <typename T, typename E, typename U, typename G>
+constexpr bool operator==(const expected<T, E>& x,
+                          const expected<U, G>& y) noexcept {
+  if (x.has_value() != y.has_value()) {
+    return false;
+  }
+
+  if (x.has_value()) {
     // Values for expected void types always compare equal.
-    if constexpr (IsVoid) {
+    if constexpr (std::is_void_v<T> && std::is_void_v<U>) {
       return true;
     } else {
       return x.value() == y.value();
     }
-  };
+  }
 
-  return x.has_value() == y.has_value() &&
-         (x.has_value() ? equal_values(x, y) : x.error() == y.error());
+  return x.error() == y.error();
 }
 
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
+template <typename T, typename E, typename U>
+  requires(!std::is_void_v<T>)
 constexpr bool operator==(const expected<T, E>& x, const U& v) noexcept {
   return x.has_value() && x.value() == v;
 }
 
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator==(const U& v, const expected<T, E>& x) noexcept {
-  return x == v;
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
+template <typename T, typename E, typename U>
 constexpr bool operator==(const expected<T, E>& x, const ok<U>& o) noexcept {
-  return x.has_value() && x.value() == o.value();
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator==(const ok<U>& o, const expected<T, E>& x) noexcept {
-  return x == o;
+  if constexpr (std::is_void_v<T> && std::is_void_v<U>) {
+    return x.has_value();
+  } else if constexpr (std::is_void_v<T> || std::is_void_v<U>) {
+    return false;
+  } else {
+    return x.has_value() && x.value() == o.value();
+  }
 }
 
 template <typename T, typename E, typename G>
 constexpr bool operator==(const expected<T, E>& x,
                           const unexpected<G>& e) noexcept {
   return !x.has_value() && x.error() == e.error();
-}
-
-template <typename T, typename E, typename G>
-constexpr bool operator==(const unexpected<G>& e,
-                          const expected<T, E>& x) noexcept {
-  return x == e;
-}
-
-template <typename T, typename E, typename U, typename G, bool IsVoid>
-constexpr bool operator!=(const expected<T, E, IsVoid>& x,
-                          const expected<U, G, IsVoid>& y) noexcept {
-  return !(x == y);
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator!=(const expected<T, E>& x, const U& v) noexcept {
-  return !(x == v);
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator!=(const U& v, const expected<T, E>& x) noexcept {
-  return !(v == x);
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator!=(const expected<T, E>& x, const ok<U>& o) noexcept {
-  return !(x == o);
-}
-
-template <typename T, typename E, typename U, internal::EnableIfNotVoid<T> = 0>
-constexpr bool operator!=(const ok<U>& o, const expected<T, E>& x) noexcept {
-  return !(o == x);
-}
-
-template <typename T, typename E, typename G>
-constexpr bool operator!=(const expected<T, E>& x,
-                          const unexpected<G>& e) noexcept {
-  return !(x == e);
-}
-
-template <typename T, typename E, typename G>
-constexpr bool operator!=(const unexpected<G>& e,
-                          const expected<T, E>& x) noexcept {
-  return !(e == x);
 }
 
 }  // namespace base

@@ -5,13 +5,12 @@
 #ifndef CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_ACCESS_CODE_ACCESS_CODE_CAST_SINK_SERVICE_FACTORY_H_
 #define CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_ACCESS_CODE_ACCESS_CODE_CAST_SINK_SERVICE_FACTORY_H_
 
-#include "base/gtest_prod_util.h"
 #include "base/lazy_instance.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 namespace base {
-template <typename Type>
-struct DefaultSingletonTraits;
+template <typename T>
+class NoDestructor;
 }
 
 class Profile;
@@ -34,13 +33,13 @@ class AccessCodeCastSinkServiceFactory : public ProfileKeyedServiceFactory {
   static AccessCodeCastSinkServiceFactory* GetInstance();
 
  protected:
-  friend struct base::DefaultSingletonTraits<AccessCodeCastSinkServiceFactory>;
+  friend base::NoDestructor<AccessCodeCastSinkServiceFactory>;
 
   AccessCodeCastSinkServiceFactory();
   ~AccessCodeCastSinkServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
   bool ServiceIsCreatedWithBrowserContext() const override;
 };

@@ -10,8 +10,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "components/permissions/chooser_controller.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/models/table_model.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/gfx/range/range.h"
 #include "ui/views/view.h"
 
@@ -22,15 +24,17 @@ class LabelButton;
 class TableView;
 class TableViewObserver;
 class Throbber;
-}
+}  // namespace views
 
 // A bubble or dialog view for choosing among several options in a table.
 // Used for WebUSB/WebBluetooth device selection for Chrome and extensions.
 class DeviceChooserContentView : public views::View,
                                  public ui::TableModel,
                                  public permissions::ChooserController::View {
+  METADATA_HEADER(DeviceChooserContentView, views::View)
+
  public:
-  METADATA_HEADER(DeviceChooserContentView);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kDeviceChooserDialogBubbleElementId);
   DeviceChooserContentView(
       views::TableViewObserver* table_view_observer,
       std::unique_ptr<permissions::ChooserController> chooser_controller);
@@ -61,7 +65,7 @@ class DeviceChooserContentView : public views::View,
   // initially set the window title.
   std::u16string GetWindowTitle() const;
   std::unique_ptr<views::View> CreateExtraView();
-  bool IsDialogButtonEnabled(ui::DialogButton button) const;
+  bool IsDialogButtonEnabled(ui::mojom::DialogButton button) const;
   void Accept();
   void Cancel();
   void Close();

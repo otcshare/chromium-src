@@ -7,14 +7,13 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 
 using base::File;
@@ -57,8 +56,7 @@ void SaveImageImpl(FilePath storage_path,
                    bool needs_transcoding) {
   FilePath file_path = BuildFilePath(storage_path, key, needs_transcoding);
 
-  int len = base::WriteFile(file_path, data.c_str(), data.length());
-  if (len == -1 || (size_t)len != data.length()) {
+  if (!base::WriteFile(file_path, data)) {
     DVLOG(1) << "WriteFile failed.";
   }
 

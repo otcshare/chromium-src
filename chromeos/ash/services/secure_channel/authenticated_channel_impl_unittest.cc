@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
@@ -103,7 +103,7 @@ class SecureChannelAuthenticatedChannelImplTest : public testing::Test {
     // -1 is returned by SendMessageAndVerifyResults() when
     // |expected_to_succeed| is false.
     EXPECT_NE(-1, sequence_number);
-    return base::Contains(sent_sequence_numbers_, sequence_number);
+    return sent_sequence_numbers_.contains(sequence_number);
   }
 
   void CallGetConnectionMetadata() {
@@ -141,7 +141,7 @@ class SecureChannelAuthenticatedChannelImplTest : public testing::Test {
 
   std::unordered_set<int> sent_sequence_numbers_;
 
-  FakeSecureChannelConnection* fake_secure_channel_;
+  raw_ptr<FakeSecureChannelConnection, DanglingUntriaged> fake_secure_channel_;
   std::unique_ptr<FakeAuthenticatedChannelObserver> test_observer_;
 
   std::unique_ptr<AuthenticatedChannel> channel_;

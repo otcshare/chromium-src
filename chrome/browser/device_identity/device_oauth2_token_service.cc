@@ -7,12 +7,14 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/device_identity/device_oauth2_token_store.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
@@ -23,6 +25,10 @@
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+namespace {
+const char kRefreshTokenInitMetric[] = "Enterprise.RefreshTokenLoadResult";
+}  // namespace
 
 struct DeviceOAuth2TokenService::PendingRequest {
   PendingRequest(
@@ -119,14 +125,13 @@ bool DeviceOAuth2TokenService::RefreshTokenIsAvailable() const {
   }
 
   NOTREACHED() << "Unhandled state " << state_;
-  return false;
 }
 
 OAuth2AccessTokenManager* DeviceOAuth2TokenService::GetAccessTokenManager() {
   return token_manager_.get();
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 void DeviceOAuth2TokenService::SetServiceAccountEmail(
     const std::string& account_email) {
   store_->SetAccountEmail(account_email);
@@ -169,6 +174,7 @@ void DeviceOAuth2TokenService::OnNetworkError(int response_code) {
 
 void DeviceOAuth2TokenService::OnInitComplete(bool init_result,
                                               bool validation_required) {
+  base::UmaHistogramBoolean(kRefreshTokenInitMetric, init_result);
   if (!init_result) {
     state_ = STATE_NO_TOKEN;
     return;
@@ -196,7 +202,7 @@ void DeviceOAuth2TokenService::OnPrepareTrustedAccountIdFinished(
     bool check_passed) {
   if (!check_passed) {
     state_ = STATE_NO_TOKEN;
-    ReportServiceError(GoogleServiceAuthError::USER_NOT_SIGNED_UP);
+    ReportServiceError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND);
     return;
   }
 
@@ -224,7 +230,8 @@ std::unique_ptr<OAuth2AccessTokenFetcher>
 DeviceOAuth2TokenService::CreateAccessTokenFetcher(
     const CoreAccountId& account_id,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    OAuth2AccessTokenConsumer* consumer) {
+    OAuth2AccessTokenConsumer* consumer,
+    const std::string& token_binding_challenge) {
   std::string refresh_token = GetRefreshToken();
   DCHECK(!refresh_token.empty());
   return GaiaAccessTokenFetcher::
@@ -281,7 +288,7 @@ bool DeviceOAuth2TokenService::HandleAccessTokenFetch(
     case STATE_VALIDATION_STARTED:
       return true;
     case STATE_NO_TOKEN:
-      FailRequest(request, GoogleServiceAuthError::USER_NOT_SIGNED_UP);
+      FailRequest(request, GoogleServiceAuthError::ACCOUNT_NOT_FOUND);
       return true;
     case STATE_TOKEN_INVALID:
       FailRequest(request, GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS);
@@ -292,15 +299,15 @@ bool DeviceOAuth2TokenService::HandleAccessTokenFetch(
   }
 
   NOTREACHED() << "Unexpected state " << state_;
-  return false;
 }
 
 void DeviceOAuth2TokenService::FlushPendingRequests(
     bool token_is_valid,
     GoogleServiceAuthError::State error) {
-  std::vector<PendingRequest*> requests;
+  std::vector<raw_ptr<PendingRequest, VectorExperimental>> requests;
   requests.swap(pending_requests_);
-  for (std::vector<PendingRequest*>::iterator request(requests.begin());
+  for (std::vector<raw_ptr<PendingRequest, VectorExperimental>>::iterator
+           request(requests.begin());
        request != requests.end(); ++request) {
     std::unique_ptr<PendingRequest> scoped_request(*request);
     if (!scoped_request->request)
@@ -345,7 +352,6 @@ std::string DeviceOAuth2TokenService::GetRefreshToken() const {
       // minting via OAuth2AccessTokenManager::FetchOAuth2Token should be
       // triggered.
       NOTREACHED();
-      return std::string();
     case STATE_VALIDATION_PENDING:
     case STATE_VALIDATION_STARTED:
     case STATE_TOKEN_VALID:
@@ -353,7 +359,6 @@ std::string DeviceOAuth2TokenService::GetRefreshToken() const {
   }
 
   NOTREACHED() << "Unhandled state " << state_;
-  return std::string();
 }
 
 void DeviceOAuth2TokenService::StartValidation() {

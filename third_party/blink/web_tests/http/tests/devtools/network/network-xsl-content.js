@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests XSL stylsheet content. http://crbug.com/603806\n`);
-  await TestRunner.loadTestModule('network_test_runner');
   await TestRunner.showPanel('network');
   NetworkTestRunner.recordNetwork();
   await TestRunner.evaluateInPageAsync(`
@@ -17,7 +19,7 @@
   var resultsOutput = [];
   const requests = NetworkTestRunner.networkRequests();
   for (const request of requests) {
-    const content = await TestRunner.NetworkAgent.getResponseBody(request.requestId());
+    const {body: content} = await TestRunner.NetworkAgent.invoke_getResponseBody({requestId: request.requestId()});
     var output = [];
     output.push(request.url());
     output.push('resource.type: ' + request.resourceType());

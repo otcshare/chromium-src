@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_WEB_MODAL_SINGLE_WEB_CONTENTS_DIALOG_MANAGER_H_
 #define COMPONENTS_WEB_MODAL_SINGLE_WEB_CONTENTS_DIALOG_MANAGER_H_
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 class WebContents;
@@ -19,14 +19,14 @@ class WebContentsModalDialogHost;
 // WebContentsModalDialogManager.
 class SingleWebContentsDialogManagerDelegate {
  public:
-  SingleWebContentsDialogManagerDelegate() {}
+  SingleWebContentsDialogManagerDelegate() = default;
 
   SingleWebContentsDialogManagerDelegate(
       const SingleWebContentsDialogManagerDelegate&) = delete;
   SingleWebContentsDialogManagerDelegate& operator=(
       const SingleWebContentsDialogManagerDelegate&) = delete;
 
-  virtual ~SingleWebContentsDialogManagerDelegate() {}
+  virtual ~SingleWebContentsDialogManagerDelegate() = default;
 
   virtual content::WebContents* GetWebContents() const = 0;
 
@@ -49,7 +49,7 @@ class SingleWebContentsDialogManager {
   SingleWebContentsDialogManager& operator=(
       const SingleWebContentsDialogManager&) = delete;
 
-  virtual ~SingleWebContentsDialogManager() {}
+  virtual ~SingleWebContentsDialogManager() = default;
 
   // Makes the web contents modal dialog visible. Only one web contents modal
   // dialog is shown at a time per tab.
@@ -75,8 +75,12 @@ class SingleWebContentsDialogManager {
   // Return the dialog under management by this object.
   virtual gfx::NativeWindow dialog() = 0;
 
+  // Returns true if the web contents modal dialog is the currently active
+  // window, otherwise false.
+  virtual bool IsActive() const = 0;
+
  protected:
-  SingleWebContentsDialogManager() {}
+  SingleWebContentsDialogManager() = default;
 };
 
 }  // namespace web_modal

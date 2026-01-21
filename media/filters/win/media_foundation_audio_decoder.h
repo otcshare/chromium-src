@@ -10,22 +10,18 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/sequence_checker.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/audio_decoder_config.h"
+#include "media/base/audio_discard_helper.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_export.h"
 #include "media/base/media_log.h"
 
-namespace base {
-class SingleThreadTaskRunner;
-}
-
 namespace media {
 class AudioBufferMemoryPool;
-class AudioTimestampHelper;
 
 // MFAudioDecoder is based on Window's MediaFoundation API. The MediaFoundation
 // API is required to decode codecs that aren't supported by Chromium.
@@ -33,11 +29,9 @@ class MEDIA_EXPORT MediaFoundationAudioDecoder : public AudioDecoder {
  public:
   // Creates a MediaFoundationAudioDecoder if MediaFoundation is supported,
   // returns nullptr if not.
-  static std::unique_ptr<MediaFoundationAudioDecoder> Create(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  static std::unique_ptr<MediaFoundationAudioDecoder> Create();
 
-  MediaFoundationAudioDecoder(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  MediaFoundationAudioDecoder();
 
   MediaFoundationAudioDecoder(const MediaFoundationAudioDecoder&) = delete;
   MediaFoundationAudioDecoder& operator=(const MediaFoundationAudioDecoder&) =
@@ -78,17 +72,14 @@ class MEDIA_EXPORT MediaFoundationAudioDecoder : public AudioDecoder {
   //     Any time Reset() is called.
   enum class DecoderState { kUninitialized, kNormal, kDecodeFinished, kError };
 
-  bool CreateDecoder();
-  bool ConfigureOutput();
+  HRESULT CreateDecoder();
+  HRESULT ConfigureOutput();
 
   enum class OutputStatus { kSuccess, kNeedMoreInput, kStreamChange, kFailed };
   enum class PumpState { kNormal, kStreamChange };
 
   OutputStatus PumpOutput(PumpState pump_state);
-
-  // Used to post tasks. This class is single threaded and every method should
-  // run on this task runner.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  void ResetTimestampState();
 
   // Cached decoder config.
   AudioDecoderConfig config_;
@@ -108,7 +99,8 @@ class MEDIA_EXPORT MediaFoundationAudioDecoder : public AudioDecoder {
   // Callback that delivers output frames.
   OutputCB output_cb_;
 
-  std::unique_ptr<AudioTimestampHelper> timestamp_helper_;
+  AudioDiscardHelper::TimeInfo current_buffer_time_info_;
+  std::unique_ptr<AudioDiscardHelper> discard_helper_;
 
   // Pool which helps avoid thrashing memory when returning audio buffers.
   scoped_refptr<AudioBufferMemoryPool> pool_;

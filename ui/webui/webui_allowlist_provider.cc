@@ -22,6 +22,14 @@ WebUIAllowlistProvider::GetRuleIterator(ContentSettingsType content_type,
   return allowlist_->GetRuleIterator(content_type);
 }
 
+std::unique_ptr<content_settings::Rule> WebUIAllowlistProvider::GetRule(
+    const GURL& primary_url,
+    const GURL& secondary_url,
+    ContentSettingsType content_type,
+    bool off_the_record) const {
+  return allowlist_->GetRule(primary_url, secondary_url, content_type);
+}
+
 void WebUIAllowlistProvider::NotifyContentSettingChange(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,

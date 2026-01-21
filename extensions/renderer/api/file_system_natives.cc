@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
 #include "extensions/renderer/script_context.h"
@@ -55,7 +55,7 @@ void FileSystemNatives::GetIsolatedFileSystem(
   // layer, and it's not worth pulling it up into //extensions just for this.
   CHECK(context_url.SchemeIs(extensions::kExtensionScheme) ||
         (context_url.SchemeIs(content::kChromeUIScheme) &&
-         context_url.host_piece() == "file-manager"));
+         context_url.host() == "file-manager"));
 
   const GURL origin(url::Origin::Create(context_url).Serialize());
   std::string name(storage::GetIsolatedFileSystemName(origin, file_system_id));
@@ -71,11 +71,10 @@ void FileSystemNatives::GetIsolatedFileSystem(
   GURL root_url(storage::GetIsolatedFileSystemRootURIString(
       origin, file_system_id, optional_root_name));
 
-  args.GetReturnValue().Set(
-      blink::WebDOMFileSystem::Create(
-          webframe, blink::kWebFileSystemTypeIsolated,
-          blink::WebString::FromUTF8(name), root_url)
-          .ToV8Value(context()->v8_context()->Global(), isolate));
+  args.GetReturnValue().Set(blink::WebDOMFileSystem::Create(
+                                webframe, blink::kWebFileSystemTypeIsolated,
+                                blink::WebString::FromUTF8(name), root_url)
+                                .ToV8Value(isolate));
 }
 
 void FileSystemNatives::GetFileEntry(
@@ -114,8 +113,7 @@ void FileSystemNatives::GetFileEntry(
           webframe, type, blink::WebString::FromUTF8(file_system_name),
           file_system_root_url)
           .CreateV8Entry(blink::WebString::FromUTF8(file_path_string),
-                         entry_type, context()->v8_context()->Global(),
-                         args.GetIsolate()));
+                         entry_type, args.GetIsolate()));
 }
 
 void FileSystemNatives::CrackIsolatedFileSystemName(

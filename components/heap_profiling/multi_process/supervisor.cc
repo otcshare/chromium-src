@@ -4,8 +4,11 @@
 
 #include "components/heap_profiling/multi_process/supervisor.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <utility>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
@@ -25,15 +28,11 @@ namespace heap_profiling {
 
 namespace {
 
-base::trace_event::TraceConfig GetBackgroundTracingConfig(bool anonymize) {
+base::trace_event::TraceConfig GetBackgroundTracingConfig() {
   // Disable all categories other than memory-infra.
   base::trace_event::TraceConfig trace_config(
       "-*,disabled-by-default-memory-infra",
       base::trace_event::RECORD_UNTIL_FULL);
-
-  // This flag is set by background tracing to filter out undesired events.
-  if (anonymize)
-    trace_config.EnableArgumentFilter();
 
   return trace_config;
 }
@@ -102,10 +101,14 @@ Mode Supervisor::GetMode() {
   return client_connection_manager_->GetMode();
 }
 
-void Supervisor::StartManualProfiling(base::ProcessId pid) {
+void Supervisor::StartManualProfiling(
+    base::ProcessId pid,
+    mojom::ProfilingService::AddProfilingClientCallback
+        started_profiling_closure) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   DCHECK(HasStarted());
-  client_connection_manager_->StartProfilingProcess(pid);
+  client_connection_manager_->StartProfilingProcess(
+      pid, std::move(started_profiling_closure));
 }
 
 void Supervisor::GetProfiledPids(GetProfiledPidsCallback callback) {
@@ -137,7 +140,8 @@ void Supervisor::RequestTraceWithHeapDump(TraceFinishedCallback callback,
   }
 
   auto finished_dump_callback = base::BindOnce(
-      [](TraceFinishedCallback callback, bool anonymize, bool success,
+      [](TraceFinishedCallback callback, bool anonymize,
+         memory_instrumentation::mojom::RequestOutcome outcome,
          uint64_t dump_guid) {
         // Once the trace has stopped, run |callback| on the UI thread.
         auto finish_sink_callback = base::BindOnce(
@@ -160,13 +164,14 @@ void Supervisor::RequestTraceWithHeapDump(TraceFinishedCallback callback,
       std::move(callback), anonymize);
 
   auto trigger_memory_dump_callback = base::BindOnce(
-      [](base::OnceCallback<void(bool success, uint64_t dump_guid)>
-             finished_dump_callback) {
+      [](base::OnceCallback<void(
+             memory_instrumentation::mojom::RequestOutcome outcome,
+             uint64_t dump_guid)> finished_dump_callback) {
         memory_instrumentation::MemoryInstrumentation::GetInstance()
             ->RequestGlobalDumpAndAppendToTrace(
-                base::trace_event::MemoryDumpType::EXPLICITLY_TRIGGERED,
-                base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND,
-                base::trace_event::MemoryDumpDeterminism::NONE,
+                base::trace_event::MemoryDumpType::kExplicitlyTriggered,
+                base::trace_event::MemoryDumpLevelOfDetail::kBackground,
+                base::trace_event::MemoryDumpDeterminism::kNone,
                 std::move(finished_dump_callback));
       },
       std::move(finished_dump_callback));
@@ -174,8 +179,7 @@ void Supervisor::RequestTraceWithHeapDump(TraceFinishedCallback callback,
   // The only reason this should return false is if tracing is already enabled,
   // which we've already checked.
   bool result = content::TracingController::GetInstance()->StartTracing(
-      GetBackgroundTracingConfig(anonymize),
-      std::move(trigger_memory_dump_callback));
+      GetBackgroundTracingConfig(), std::move(trigger_memory_dump_callback));
   DCHECK(result);
 }
 

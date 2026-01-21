@@ -4,24 +4,14 @@
 
 #include "printing/print_settings_conversion_chromeos.h"
 
-#include <ostream>
+#include <optional>
 #include <string>
 
 #include "base/test/values_test_util.h"
 #include "base/values.h"
-#include "printing/client_info_helpers.h"
 #include "printing/mojom/print.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace printing {
-
-namespace mojom {
-std::ostream& operator<<(std::ostream& os, const IppClientInfo& value) {
-  absl::optional<std::string> str =
-      ClientInfoCollectionToCupsOptionValue(value);
-  return os << (str.has_value() ? str.value() : std::string(""));
-}
-}  // namespace mojom
 
 namespace {
 
@@ -48,9 +38,9 @@ const std::vector<mojom::IppClientInfo> kClientInfo{
                          "version"),
     mojom::IppClientInfo(mojom::IppClientInfo::ClientType::kOther,
                          "chromebook-{DEVICE_ASSET_ID}",
-                         absl::nullopt,
+                         std::nullopt,
                          "",
-                         absl::nullopt)};
+                         std::nullopt)};
 
 TEST(PrintSettingsConversionChromeosTest, ConvertClientInfoToJobSetting) {
   base::Value::List job_setting = ConvertClientInfoToJobSetting(kClientInfo);

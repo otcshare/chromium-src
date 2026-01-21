@@ -10,20 +10,18 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
 #include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/command_buffer/service/framebuffer_manager.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h"
-#include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
 #include "gpu/command_buffer/service/sampler_manager.h"
-#include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/command_buffer/service/shader_manager.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
 #include "gpu/command_buffer/service/texture_manager.h"
@@ -45,9 +43,8 @@ void GetIntegerv(GLenum pname, uint32_t* var) {
 
 }  // namespace anonymous
 
-DisallowedFeatures AdjustDisallowedFeatures(
-    ContextType context_type, const DisallowedFeatures& disallowed_features) {
-  DisallowedFeatures adjusted_disallowed_features = disallowed_features;
+DisallowedFeatures GetDisallowedFeatures(ContextType context_type) {
+  DisallowedFeatures adjusted_disallowed_features;
   if (context_type == CONTEXT_TYPE_WEBGL1) {
     adjusted_disallowed_features.npot_support = true;
   }
@@ -69,20 +66,14 @@ DisallowedFeatures AdjustDisallowedFeatures(
 
 ContextGroup::ContextGroup(
     const GpuPreferences& gpu_preferences,
-    bool supports_passthrough_command_decoders,
-    MailboxManager* mailbox_manager,
-    std::unique_ptr<MemoryTracker> memory_tracker,
+    scoped_refptr<MemoryTracker> memory_tracker,
     ShaderTranslatorCache* shader_translator_cache,
     FramebufferCompletenessCache* framebuffer_completeness_cache,
     const scoped_refptr<FeatureInfo>& feature_info,
-    bool bind_generates_resource,
     gl::ProgressReporter* progress_reporter,
     const GpuFeatureInfo& gpu_feature_info,
-    ServiceDiscardableManager* discardable_manager,
-    PassthroughDiscardableManager* passthrough_discardable_manager,
     SharedImageManager* shared_image_manager)
     : gpu_preferences_(gpu_preferences),
-      mailbox_manager_(mailbox_manager),
       memory_tracker_(std::move(memory_tracker)),
       shader_translator_cache_(shader_translator_cache),
 #if BUILDFLAG(IS_MAC)
@@ -97,7 +88,6 @@ ContextGroup::ContextGroup(
       framebuffer_completeness_cache_(framebuffer_completeness_cache),
 #endif
       enforce_gl_minimums_(gpu_preferences_.enforce_gl_minimums),
-      bind_generates_resource_(bind_generates_resource),
       max_vertex_attribs_(0u),
       max_texture_units_(0u),
       max_texture_image_units_(0u),
@@ -119,26 +109,20 @@ ContextGroup::ContextGroup(
       feature_info_(feature_info),
       use_passthrough_cmd_decoder_(false),
       passthrough_resources_(new PassthroughResources),
-      passthrough_discardable_manager_(passthrough_discardable_manager),
       progress_reporter_(progress_reporter),
       gpu_feature_info_(gpu_feature_info),
-      discardable_manager_(discardable_manager),
       shared_image_representation_factory_(
           std::make_unique<SharedImageRepresentationFactory>(
               shared_image_manager,
-              memory_tracker_.get())),
+              memory_tracker_)),
       shared_image_manager_(shared_image_manager) {
-  DCHECK(discardable_manager);
   DCHECK(feature_info_);
-  DCHECK(mailbox_manager_);
-  use_passthrough_cmd_decoder_ = supports_passthrough_command_decoders &&
-                                 gpu_preferences_.use_passthrough_cmd_decoder;
+
+  use_passthrough_cmd_decoder_ = gpu_preferences_.use_passthrough_cmd_decoder;
 }
 
-gpu::ContextResult ContextGroup::Initialize(
-    DecoderContext* decoder,
-    ContextType context_type,
-    const DisallowedFeatures& disallowed_features) {
+gpu::ContextResult ContextGroup::Initialize(DecoderContext* decoder,
+                                            ContextType context_type) {
   switch (context_type) {
     case CONTEXT_TYPE_WEBGL1:
       if (kGpuFeatureStatusBlocklisted ==
@@ -170,7 +154,7 @@ gpu::ContextResult ContextGroup::Initialize(
   }
 
   DisallowedFeatures adjusted_disallowed_features =
-      AdjustDisallowedFeatures(context_type, disallowed_features);
+      GetDisallowedFeatures(context_type);
 
   feature_info_->Initialize(context_type, use_passthrough_cmd_decoder_,
                             adjusted_disallowed_features);
@@ -217,7 +201,7 @@ gpu::ContextResult ContextGroup::Initialize(
       max_color_attachments_ = 1;
     if (max_color_attachments_ > 16)
       max_color_attachments_ = 16;
-    GetIntegerv(GL_MAX_DRAW_BUFFERS_ARB, &max_draw_buffers_);
+    GetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers_);
     if (max_draw_buffers_ < 1)
       max_draw_buffers_ = 1;
     if (max_draw_buffers_ > 16)
@@ -229,7 +213,7 @@ gpu::ContextResult ContextGroup::Initialize(
     DCHECK(max_dual_source_draw_buffers_ >= 1);
   }
 
-  if (feature_info_->gl_version_info().is_es3_capable) {
+  if (feature_info_->gl_version_info().IsAtLeastGLES(3, 0)) {
     const GLint kMinTransformFeedbackSeparateAttribs = 4;
     if (!QueryGLFeatureU(GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS,
                          kMinTransformFeedbackSeparateAttribs,
@@ -266,10 +250,10 @@ gpu::ContextResult ContextGroup::Initialize(
   // Managers are not used by the passthrough command decoder. Save memory by
   // not allocating them.
   if (!use_passthrough_cmd_decoder_) {
-    buffer_manager_ = std::make_unique<BufferManager>(memory_tracker_.get(),
-                                                      feature_info_.get());
+    buffer_manager_ =
+        std::make_unique<BufferManager>(memory_tracker_, feature_info_.get());
     renderbuffer_manager_ = std::make_unique<RenderbufferManager>(
-        memory_tracker_.get(), max_renderbuffer_size, max_samples,
+        memory_tracker_, max_renderbuffer_size, max_samples,
         feature_info_.get());
     shader_manager_ = std::make_unique<ShaderManager>(progress_reporter_);
     sampler_manager_ = std::make_unique<SamplerManager>(feature_info_.get());
@@ -335,7 +319,7 @@ gpu::ContextResult ContextGroup::Initialize(
     return was_lost ? gpu::ContextResult::kTransientFailure
                     : gpu::ContextResult::kFatalFailure;
   }
-  if (feature_info_->gl_version_info().is_es3_capable &&
+  if (feature_info_->gl_version_info().IsAtLeastGLES(3, 0) &&
       !QueryGLFeature(GL_MAX_3D_TEXTURE_SIZE, kMin3DTextureSize,
                       &max_3d_texture_size)) {
     bool was_lost = decoder->CheckResetStatus();
@@ -347,7 +331,7 @@ gpu::ContextResult ContextGroup::Initialize(
     return was_lost ? gpu::ContextResult::kTransientFailure
                     : gpu::ContextResult::kFatalFailure;
   }
-  if (feature_info_->gl_version_info().is_es3_capable &&
+  if (feature_info_->gl_version_info().IsAtLeastGLES(3, 0) &&
       !QueryGLFeature(GL_MAX_ARRAY_TEXTURE_LAYERS, kMinArrayTextureLayers,
                       &max_array_texture_layers)) {
     bool was_lost = decoder->CheckResetStatus();
@@ -360,7 +344,7 @@ gpu::ContextResult ContextGroup::Initialize(
                     : gpu::ContextResult::kFatalFailure;
   }
   if (feature_info_->feature_flags().arb_texture_rectangle &&
-      !QueryGLFeature(GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB,
+      !QueryGLFeature(GL_MAX_RECTANGLE_TEXTURE_SIZE_ANGLE,
                       kMinRectangleTextureSize, &max_rectangle_texture_size)) {
     bool was_lost = decoder->CheckResetStatus();
     LOG(ERROR) << (was_lost ? "ContextResult::kTransientFailure: "
@@ -398,10 +382,10 @@ gpu::ContextResult ContextGroup::Initialize(
   // not allocating them.
   if (!use_passthrough_cmd_decoder_) {
     texture_manager_ = std::make_unique<TextureManager>(
-        memory_tracker_.get(), feature_info_.get(), max_texture_size,
+        memory_tracker_, feature_info_.get(), max_texture_size,
         max_cube_map_texture_size, max_rectangle_texture_size,
-        max_3d_texture_size, max_array_texture_layers, bind_generates_resource_,
-        progress_reporter_, discardable_manager_);
+        max_3d_texture_size, max_array_texture_layers,
+        /*use_default_textures=*/false, progress_reporter_);
   }
 
   const GLint kMinTextureImageUnits = 8;
@@ -430,20 +414,9 @@ gpu::ContextResult ContextGroup::Initialize(
                     : gpu::ContextResult::kFatalFailure;
   }
 
-  if (feature_info_->gl_version_info().BehavesLikeGLES()) {
-    GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS,
-        &max_fragment_uniform_vectors_);
-    GetIntegerv(GL_MAX_VARYING_VECTORS, &max_varying_vectors_);
-    GetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &max_vertex_uniform_vectors_);
-  } else {
-    GetIntegerv(
-        GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_fragment_uniform_vectors_);
-    max_fragment_uniform_vectors_ /= 4;
-    GetIntegerv(GL_MAX_VARYING_FLOATS, &max_varying_vectors_);
-    max_varying_vectors_ /= 4;
-    GetIntegerv(GL_MAX_VERTEX_UNIFORM_COMPONENTS, &max_vertex_uniform_vectors_);
-    max_vertex_uniform_vectors_ /= 4;
-  }
+  GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &max_fragment_uniform_vectors_);
+  GetIntegerv(GL_MAX_VARYING_VECTORS, &max_varying_vectors_);
+  GetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &max_vertex_uniform_vectors_);
 
   const GLint kMinFragmentUniformVectors = 16;
   const GLint kMinVaryingVectors = 8;
@@ -569,7 +542,7 @@ class WeakPtrEquals {
 }  // namespace anonymous
 
 bool ContextGroup::HaveContexts() {
-  base::EraseIf(decoders_, IsNull);
+  std::erase_if(decoders_, IsNull);
   return !decoders_.empty();
 }
 
@@ -579,7 +552,7 @@ void ContextGroup::ReportProgress() {
 }
 
 void ContextGroup::Destroy(DecoderContext* decoder, bool have_context) {
-  base::EraseIf(decoders_, WeakPtrEquals<DecoderContext>(decoder));
+  std::erase_if(decoders_, WeakPtrEquals<DecoderContext>(decoder));
 
   // If we still have contexts do nothing.
   if (HaveContexts()) {
@@ -625,10 +598,6 @@ void ContextGroup::Destroy(DecoderContext* decoder, bool have_context) {
     sampler_manager_->Destroy(have_context);
     sampler_manager_.reset();
     ReportProgress();
-  }
-
-  if (passthrough_discardable_manager_) {
-    passthrough_discardable_manager_->DeleteContextGroup(this, have_context);
   }
 
   if (passthrough_resources_) {

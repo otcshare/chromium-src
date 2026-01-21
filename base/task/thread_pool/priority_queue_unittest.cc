@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/task_traits.h"
@@ -18,8 +18,7 @@
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -253,5 +252,4 @@ TEST_F(PriorityQueueWithSequencesTest, UpdateSortKey) {
   }
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

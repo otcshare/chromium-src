@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "ash/public/cpp/holding_space/holding_space_client.h"
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace ash {
@@ -23,17 +23,9 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
   ~MockHoldingSpaceClient() override;
 
   // HoldingSpaceClient:
-  MOCK_METHOD(void,
-              AddDiagnosticsLog,
-              (const base::FilePath& file_path),
-              (override));
-  MOCK_METHOD(void,
-              AddScreenshot,
-              (const base::FilePath& file_path),
-              (override));
-  MOCK_METHOD(void,
-              AddScreenRecording,
-              (const base::FilePath& file_path),
+  MOCK_METHOD(const std::string&,
+              AddItemOfType,
+              (HoldingSpaceItem::Type type, const base::FilePath& file_path),
               (override));
   MOCK_METHOD(void,
               CopyImageToClipboard,
@@ -45,7 +37,6 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
               (const, override));
   MOCK_METHOD(bool, IsDriveDisabled, (), (const, override));
   MOCK_METHOD(void, OpenDownloads, (SuccessCallback callback), (override));
-  MOCK_METHOD(void, OpenMyFiles, (SuccessCallback callback), (override));
   MOCK_METHOD(void,
               OpenItems,
               (const std::vector<const HoldingSpaceItem*>& items,
@@ -55,8 +46,9 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
               PinFiles,
               (const std::vector<base::FilePath>& file_paths),
               (override));
+  MOCK_METHOD(void, RefreshSuggestions, (), (override));
   MOCK_METHOD(void,
-              RemoveFileSuggestions,
+              RemoveSuggestions,
               (const std::vector<base::FilePath>& absolute_file_paths),
               (override));
   MOCK_METHOD(void,
@@ -65,7 +57,8 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
               (override));
   MOCK_METHOD(void,
               ShowItemInFolder,
-              (const HoldingSpaceItem& item, SuccessCallback callback),
+              (const HoldingSpaceItem& item,
+               SuccessCallback callback),
               (override));
   MOCK_METHOD(void,
               UnpinItems,

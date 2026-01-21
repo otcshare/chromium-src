@@ -5,8 +5,10 @@
 // Benchmarks in-memory compression and decompression of an input file,
 // comparing zlib and snappy.
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -16,10 +18,11 @@
 #include "third_party/brotli/include/brotli/encode.h"
 #include "third_party/snappy/src/snappy.h"
 #include "third_party/zlib/google/compression_utils.h"
+#include "third_party/zstd/src/lib/zstd.h"
 
 namespace {
 
-enum class CompressionType { kSnappy, kZlib, kBrotli };
+enum class CompressionType { kSnappy, kZlib, kBrotli, kZstd };
 
 void LogResults(CompressionType compression_type,
                 bool compression,
@@ -44,6 +47,9 @@ void LogResults(CompressionType compression_type,
     case CompressionType::kBrotli:
       compression_name = "brotli";
       break;
+    case CompressionType::kZstd:
+      compression_name = "zstd";
+      break;
   }
   LOG(INFO) << compression_name << ","
             << (compression ? "compression" : "decompression") << ","
@@ -60,7 +66,7 @@ void CompressChunks(const std::string& contents,
 
   for (size_t i = 0; i < chunk_count; ++i) {
     std::string compressed;
-    base::StringPiece input(contents.c_str() + i * chunk_size, chunk_size);
+    std::string_view input(contents.c_str() + i * chunk_size, chunk_size);
 
     switch (compression_type) {
       case CompressionType::kSnappy:
@@ -79,6 +85,15 @@ void CompressChunks(const std::string& contents,
             reinterpret_cast<uint8_t*>(&compressed_data[0])));
         compressed.assign(reinterpret_cast<const char*>(&compressed_data[0]),
                           encoded_size);
+      } break;
+      case CompressionType::kZstd: {
+        size_t compressed_size = ZSTD_compressBound(input.size());
+        std::vector<char> compressed_data(compressed_size);
+        size_t const cSize = ZSTD_compress(
+            compressed_data.data(), compressed_data.size(), input.data(),
+            input.size(), 1 /* compression level */);
+        CHECK(!ZSTD_isError(cSize));
+        compressed.assign(compressed_data.data(), cSize);
       } break;
     }
 
@@ -109,6 +124,13 @@ void BenchmarkDecompression(const std::string& contents,
             chunk.size(), reinterpret_cast<const uint8_t*>(&chunk[0]),
             &decoded_size, &decoded_data[0]));
         CHECK_EQ(chunk_size, decoded_size);
+      } break;
+      case CompressionType::kZstd: {
+        std::vector<char> decoded_data(chunk_size);
+        size_t const decoded_size = ZSTD_decompress(
+            decoded_data.data(), chunk_size, chunk.data(), chunk.size());
+        CHECK(!ZSTD_isError(decoded_size));
+        CHECK_EQ(decoded_size, chunk_size);
       } break;
     }
   }
@@ -141,7 +163,6 @@ int main(int argc, char** argv) {
   if (argc != 2) {
     LOG(FATAL) << "Usage: " << argv[0] << " <filename>\n\n"
                << "Where the file contains data to compress";
-    return 1;
   }
 
   LOG(INFO) << "Reading the input file";
@@ -159,10 +180,14 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < repeats; ++i)
     repeated_contents.append(contents);
 
-  for (CompressionType compression_type :
-       {CompressionType::kSnappy, CompressionType::kZlib,
-        CompressionType::kBrotli}) {
-    for (size_t size = kPageSize; size < contents.size(); size *= 2) {
+  // In Chromium, it's rare that individual files are larger than 4MiB, so cap
+  // the chunk size at this value.
+  constexpr size_t kMaxBlockSize = 4 << 20;
+  for (size_t size = kPageSize; size < std::min(kMaxBlockSize, contents.size());
+       size *= 2) {
+    for (CompressionType compression_type :
+         {CompressionType::kSnappy, CompressionType::kZlib,
+          CompressionType::kBrotli, CompressionType::kZstd}) {
       BenchmarkCompression(repeated_contents, size, compression_type);
       BenchmarkDecompression(repeated_contents, size, compression_type);
     }

@@ -31,6 +31,7 @@
 // https://w3.org/TR/web-animations-1/#the-keyframeeffect-interface
 
 enum CompositeOperation { "replace", "add", "accumulate" };
+enum IterationCompositeOperation { "replace", "accumulate" };
 
 [
     Exposed=Window
@@ -38,8 +39,9 @@ enum CompositeOperation { "replace", "add", "accumulate" };
   [CallWith=ScriptState, RaisesException, Measure] constructor(Element? target, object? keyframes, optional (unrestricted double or KeyframeEffectOptions) options);
   [CallWith=ScriptState, RaisesException, Measure] constructor(KeyframeEffect source);
   attribute Element? target;
-  [RuntimeEnabled=WebAnimationsAPI, RaisesException=Setter] attribute CSSOMString? pseudoElement;
-  [RuntimeEnabled=WebAnimationsAPI] attribute CompositeOperation composite;
-  [CallWith=ScriptState, RuntimeEnabled=WebAnimationsAPI] sequence<object> getKeyframes();
-  [CallWith=ScriptState, RaisesException, RuntimeEnabled=WebAnimationsAPI] void setKeyframes(object? keyframes);
+  [RaisesException=Setter] attribute CSSOMString? pseudoElement;
+  attribute CompositeOperation composite;
+  [RuntimeEnabled=CSSAnimationIterationComposite] attribute IterationCompositeOperation iterationComposite;
+  [CallWith=ScriptState] sequence<object> getKeyframes();
+  [CallWith=ScriptState, RaisesException] void setKeyframes(object? keyframes);
 };

@@ -5,6 +5,9 @@
 #ifndef BASE_TASK_SEQUENCE_MANAGER_TASKS_H_
 #define BASE_TASK_SEQUENCE_MANAGER_TASKS_H_
 
+#include <optional>
+#include <variant>
+
 #include "base/base_export.h"
 #include "base/check.h"
 #include "base/containers/intrusive_heap.h"
@@ -14,8 +17,6 @@
 #include "base/task/sequence_manager/delayed_task_handle_delegate.h"
 #include "base/task/sequence_manager/enqueue_order.h"
 #include "base/task/sequenced_task_runner.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace base {
 namespace sequence_manager {
@@ -30,39 +31,39 @@ namespace internal {
 // Wrapper around PostTask method arguments and the assigned task type.
 // Eventually it becomes a PendingTask once accepted by a TaskQueueImpl.
 struct BASE_EXPORT PostedTask {
-  explicit PostedTask(scoped_refptr<SequencedTaskRunner> task_runner,
-                      OnceClosure callback,
-                      Location location,
-                      TimeDelta delay = base::TimeDelta(),
-                      Nestable nestable = Nestable::kNestable,
-                      TaskType task_type = kTaskTypeNone,
-                      WeakPtr<DelayedTaskHandleDelegate>
-                          delayed_task_handle_delegate = nullptr);
-  explicit PostedTask(scoped_refptr<SequencedTaskRunner> task_runner,
-                      OnceClosure callback,
-                      Location location,
-                      TimeTicks delayed_run_time,
-                      subtle::DelayPolicy delay_policy,
-                      Nestable nestable = Nestable::kNestable,
-                      TaskType task_type = kTaskTypeNone,
-                      WeakPtr<DelayedTaskHandleDelegate>
-                          delayed_task_handle_delegate = nullptr);
+  PostedTask(scoped_refptr<SequencedTaskRunner> task_runner,
+             OnceClosure callback,
+             Location location,
+             TimeDelta delay = base::TimeDelta(),
+             Nestable nestable = Nestable::kNestable,
+             TaskType task_type = kTaskTypeNone,
+             WeakPtr<DelayedTaskHandleDelegate> delayed_task_handle_delegate =
+                 nullptr);
+  PostedTask(scoped_refptr<SequencedTaskRunner> task_runner,
+             OnceClosure callback,
+             Location location,
+             TimeTicks delayed_run_time,
+             subtle::DelayPolicy delay_policy,
+             Nestable nestable = Nestable::kNestable,
+             TaskType task_type = kTaskTypeNone,
+             WeakPtr<DelayedTaskHandleDelegate> delayed_task_handle_delegate =
+                 nullptr);
   PostedTask(PostedTask&& move_from) noexcept;
   PostedTask(const PostedTask&) = delete;
   PostedTask& operator=(const PostedTask&) = delete;
   ~PostedTask();
 
   bool is_delayed() const {
-    return absl::holds_alternative<TimeTicks>(delay_or_delayed_run_time)
-               ? !absl::get<TimeTicks>(delay_or_delayed_run_time).is_null()
-               : !absl::get<TimeDelta>(delay_or_delayed_run_time).is_zero();
+    return std::holds_alternative<TimeTicks>(delay_or_delayed_run_time)
+               ? !std::get<TimeTicks>(delay_or_delayed_run_time).is_null()
+               : !std::get<TimeDelta>(delay_or_delayed_run_time).is_zero();
   }
 
   OnceClosure callback;
   Location location;
   Nestable nestable = Nestable::kNestable;
   TaskType task_type = kTaskTypeNone;
-  absl::variant<TimeDelta, TimeTicks> delay_or_delayed_run_time;
+  std::variant<TimeDelta, TimeTicks> delay_or_delayed_run_time;
   subtle::DelayPolicy delay_policy = subtle::DelayPolicy::kFlexibleNoSooner;
   // The task runner this task is running on. Can be used by task runners that
   // support posting back to the "current sequence".
@@ -74,33 +75,20 @@ struct BASE_EXPORT PostedTask {
 
 }  // namespace internal
 
-enum class WakeUpResolution { kLow, kHigh };
-
 // Represents a time at which a task wants to run.
 struct WakeUp {
   // is_null() for immediate wake up.
   TimeTicks time;
   // These are meaningless if is_immediate().
   TimeDelta leeway;
-  WakeUpResolution resolution = WakeUpResolution::kLow;
   subtle::DelayPolicy delay_policy = subtle::DelayPolicy::kFlexibleNoSooner;
 
-  bool operator!=(const WakeUp& other) const {
-    return time != other.time || leeway != other.leeway ||
-           resolution != other.resolution || delay_policy != other.delay_policy;
-  }
-
-  bool operator==(const WakeUp& other) const { return !(*this != other); }
+  friend bool operator==(const WakeUp&, const WakeUp&) = default;
 
   bool is_immediate() const { return time.is_null(); }
 
   TimeTicks earliest_time() const;
   TimeTicks latest_time() const;
-};
-
-struct WorkDetails {
-  absl::optional<WakeUp> next_wake_up;
-  TimeDelta work_interval;
 };
 
 // PendingTask with extra metadata for SequenceManager.
@@ -109,7 +97,6 @@ struct BASE_EXPORT Task : public PendingTask {
        EnqueueOrder sequence_order,
        EnqueueOrder enqueue_order = EnqueueOrder(),
        TimeTicks queue_time = TimeTicks(),
-       WakeUpResolution wake_up_resolution = WakeUpResolution::kLow,
        TimeDelta leeway = TimeDelta());
   Task(Task&& move_from);
   ~Task();
@@ -134,9 +121,6 @@ struct BASE_EXPORT Task : public PendingTask {
   // OK to dispatch from a nested loop.
   Nestable nestable = Nestable::kNonNestable;
 
-  // Needs high resolution timers.
-  bool is_high_res = false;
-
   TaskType task_type;
 
   // The task runner this task is running on. Can be used by task runners that
@@ -156,9 +140,11 @@ struct BASE_EXPORT Task : public PendingTask {
   // invalidation or through |delayed_task_handle_delegate_|.
   bool IsCanceled() const;
 
-  // Indicates that this task will be executed. Used to invalidate
-  // |delayed_task_handle_delegate_|, if any, just before task execution.
-  void WillRunTask();
+  // Must be invoked before running the task. Returns true if the task must run
+  // (any delayed task handle will have been invalidated by this method), false
+  // if it mustn't run (e.g. delayed task handle was invalidated prior to
+  // calling this method).
+  bool WillRunTask();
 
  private:
   // `enqueue_order_` is the primary component used to order tasks (see

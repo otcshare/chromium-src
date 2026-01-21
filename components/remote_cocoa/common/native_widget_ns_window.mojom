@@ -5,9 +5,11 @@
 module remote_cocoa.mojom;
 
 import "components/remote_cocoa/common/select_file_dialog.mojom";
+import "components/remote_cocoa/common/menu.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "services/network/public/mojom/network_param.mojom";
 import "ui/base/cursor/mojom/cursor.mojom";
+import "ui/base/mojom/color_mode.mojom";
 import "ui/base/mojom/ui_base_types.mojom";
 import "ui/events/mojom/event_constants.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
@@ -22,6 +24,8 @@ enum WindowClass {
   kBrowser,
   // NativeWidgetMacFramelessNSWindow
   kFrameless,
+  // NativeWidgetMacOverlayNSWindow
+  kOverlay,
 };
 
 // Parameters used to described creation of an NSWindow.
@@ -53,7 +57,9 @@ enum WindowVisibilityState {
   kShowAndActivateWindow,
   // Shows with -[NSWindow orderWindow:..]. Orders the window above its parent
   // if it has one.
-  kShowInactive
+  kShowInactive,
+  // Miniaturizes with -[NSWindow miniaturize:].
+  kMiniaturizeWindow
 };
 
 // Window transitions to animate, mirrors views::Widget::VisibilityTransition.
@@ -75,8 +81,6 @@ struct NativeWidgetNSWindowInitParams {
   // NSWindowCollectionBehaviorParticipatesInCycle (this is not the
   // default for NSWindows with NSWindowStyleMaskBorderless).
   bool force_into_collection_cycle;
-  // If true, the window was created in headless mode.
-  bool is_headless_mode_window;
   // An opaque blob of AppKit data which includes, among other things, a
   // window's workspace and fullscreen state, and can be retrieved from or
   // applied to a window.
@@ -84,11 +88,6 @@ struct NativeWidgetNSWindowInitParams {
   // If true, this window is functionally a tooltip, and shouldn't be presented
   // as a new window to the accessibility system.
   bool is_tooltip;
-};
-
-enum WindowControlsOverlayNSViewType {
-  kCaptionButtonContainer,
-  kWebAppFrameToolbar,
 };
 
 // The visibility style of the toolbar in immersive fullscreen.
@@ -140,7 +139,11 @@ interface NativeWidgetNSWindow {
 
   // Create the NSView to be the content view for the window. Use |ns_view_id|
   // to look up this NSView in other functions (e.g, to specify a parent view).
-  CreateContentView(uint64 ns_view_id, gfx.mojom.Rect bounds);
+  // If `corner_radius` is set, the content view clips sublayers to a rounded
+  // corner mask of the given radius.
+  CreateContentView(uint64 ns_view_id,
+                    gfx.mojom.Rect bounds,
+                    int32? corner_radius);
 
   // Destroy the content NSView for this window. Note that the window will
   // become blank once this has been called.
@@ -163,9 +166,17 @@ interface NativeWidgetNSWindow {
 
   // Specify new bounds for the window via |new_bounds| in screen coordinates.
   // The size of the window will be expanded so that the content size will be
-  // at least |minimum_content_size|.
+  // at least |minimum_content_size| and at most |maximum_content_size| (if
+  // provided).
   SetBounds(gfx.mojom.Rect new_bounds,
-            gfx.mojom.Size minimum_content_size);
+            gfx.mojom.Size minimum_content_size,
+            gfx.mojom.Size? maximum_content_size);
+
+  // Specify new size for the window via |new_size|. The top-left corner of the
+  // window will be kept in place. The size of the window will be expanded so
+  // that the content size will be at least |minimum_content_size|.
+  SetSize(gfx.mojom.Size new_size,
+          gfx.mojom.Size minimum_content_size);
 
   // Centers the window and sets its content size to |content_size|. The size of
   // the window will be expanded so that the content size will be at least
@@ -219,8 +230,35 @@ interface NativeWidgetNSWindow {
   // Set the window level of the NSWindow.
   SetWindowLevel(int32 level);
 
-  // Set the aspect ratio of the NSWindow. |aspect_ratio| must not be empty.
-  SetAspectRatio(gfx.mojom.SizeF aspect_ratio);
+  // Set or un-set the NSWindow as being "activation independent". This sets
+  // two properties:
+  //
+  // - If Chromium is hidden (from the Dock menu or programmatically), the
+  //   NSWindow is not forced to be hidden as well.
+  // - The NSWindow can be interacted with without causing Chromium to be
+  //   activated.
+  //
+  // To accomplish this, the activation independence state of all ancestor
+  // NSWindows is set as well.
+  SetActivationIndependence(bool independence);
+
+  // Set the aspect ratio of the NSWindow. `aspect_ratio` must not be empty.
+  // The aspect ratio refers to the client area only; system-drawn window
+  // decorations like a title bar are not considered in the aspect ratio.
+  //
+  // `excluded_margin` is the amount of client area to ignore when computing
+  // the aspect ratio.  This allows for client-drawn window decorations to be
+  // excluded from the aspect-ratio-constrained size, similar to how system-
+  // drawn decorations are excluded.  If no adjustment is needed, such as if
+  // there are no client-drawn window decorations, then set `excluded_margin`
+  // to (0, 0).
+  //
+  // For example, `aspect_ratio` == 1.f, and `excluded_margin` == (10, 15)
+  // would allow a client area size of (40, 45), since (40-10)/(45-15) == 1.
+  // Presumably, (10, 15) of this area would be used to draw client-drawn
+  // decorations, while the remaining (30, 30) would be used for whatever
+  // content is supposed to have a 1.f aspect-ratio.
+  SetAspectRatio(gfx.mojom.SizeF aspect_ratio, gfx.mojom.Size excluded_margin);
 
   // Specify the content to draw in the NSView.
   SetCALayerParams(gfx.mojom.CALayerParams ca_layer_params);
@@ -256,29 +294,14 @@ interface NativeWidgetNSWindow {
   // Enable or disable this widget's local event monitor.
   SetLocalEventMonitorEnabled(bool enabled);
 
-  // Add the overlay NSView for a PWA with window controls overlay
-  // display override given a |overlay_type|.
-  CreateWindowControlsOverlayNSView(
-      WindowControlsOverlayNSViewType overlay_type);
-
-  // Update the overlay NSView with |bounds| for a PWA with window controls
-  // overlay display override for a |overlay_type|.
-  UpdateWindowControlsOverlayNSView(
-    gfx.mojom.Rect bounds, WindowControlsOverlayNSViewType overlay_type);
-
-  // Remove the overlay NSView with |bounds| for a PWA with window controls
-  // overlay display override for a |overlay_type|.
-  RemoveWindowControlsOverlayNSView(
-      WindowControlsOverlayNSViewType overlay_type);
-
   // Set the cursor type to display.
   SetCursor(ui.mojom.Cursor cursor);
 
-  // Enables immersive fullscreen. Pass the id of the overlay widget which is
-  // hosting top chrome. The callback is run once the top chrome NSView has
-  // been reparented into the AppKit controlled fullscreen NSWindow, indicating
-  // the immersive transition has started.
-  EnableImmersiveFullscreen(uint64 fullscreen_overlay_widget_id) => ();
+  // Enables immersive fullscreen. |fullscreen_overlay_widget_id| is the id of
+  // the overlay widget which is hosting top chrome.
+  // |tab_widget_id| holds the id of the tab hosting widget.
+  EnableImmersiveFullscreen(uint64 fullscreen_overlay_widget_id,
+                            uint64 tab_widget_id);
 
   // Rollback the immersive transition. The top chrome NSView is reparented into
   // the overlay widget.
@@ -307,4 +330,15 @@ interface NativeWidgetNSWindow {
 
   // Set whether can go forward to the following page.
   SetCanGoForward(bool can_go_forward);
+
+  // Displayed a context menu, anchored to this window.
+  DisplayContextMenu(ContextMenu menu,
+                     pending_remote<MenuHost> host,
+                     pending_receiver<Menu> receiver);
+
+  // Set whether the window should be included in screenshots or not.
+  SetAllowScreenshots(bool allow);
+
+  // Set the color mode of the window.
+  SetColorMode(ui.mojom.ColorMode color_mode);
 };

@@ -12,13 +12,13 @@ BackForwardCacheRestoration::BackForwardCacheRestoration(
     DOMHighResTimeStamp start_time,
     DOMHighResTimeStamp pageshow_event_start,
     DOMHighResTimeStamp pageshow_event_end,
-    uint32_t navigation_id,
-    DOMWindow* source)
+    DOMWindow* source,
+    uint32_t navigation_id)
     : PerformanceEntry(g_empty_atom,
                        start_time,
                        pageshow_event_start,
-                       navigation_id,
-                       source),
+                       source,
+                       navigation_id),
       pageshow_event_start_(pageshow_event_start),
       pageshow_event_end_(pageshow_event_end) {}
 BackForwardCacheRestoration::~BackForwardCacheRestoration() = default;
@@ -34,7 +34,7 @@ void BackForwardCacheRestoration::Trace(Visitor* visitor) const {
 void BackForwardCacheRestoration::BuildJSONValue(
     V8ObjectBuilder& builder) const {
   PerformanceEntry::BuildJSONValue(builder);
-  builder.Add("pageshowEventStart", pageshow_event_start_);
-  builder.Add("pageshowEventEnd", pageshow_event_end_);
+  builder.AddNumber("pageshowEventStart", pageshow_event_start_);
+  builder.AddNumber("pageshowEventEnd", pageshow_event_end_);
 }
 }  // namespace blink

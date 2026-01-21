@@ -7,29 +7,37 @@ package org.chromium.support_lib_glue;
 import static org.chromium.support_lib_glue.SupportLibWebViewChromiumFactory.recordApiCall;
 
 import org.chromium.android_webview.AwRenderProcess;
-import org.chromium.android_webview.AwSupportLibIsomorphic;
+import org.chromium.android_webview.common.Lifetime;
+import org.chromium.base.TraceEvent;
 import org.chromium.support_lib_boundary.WebViewRendererBoundaryInterface;
 import org.chromium.support_lib_glue.SupportLibWebViewChromiumFactory.ApiCall;
 
+import java.util.concurrent.Callable;
+
 /**
  * Adapter between WebViewRendererBoundaryInterface and AwRenderProcess.
+ *
+ * <p>Once created, instances are kept alive by the peer AwRendererProcess.
  */
-class SupportLibWebViewRendererAdapter
-        extends IsomorphicAdapter implements WebViewRendererBoundaryInterface {
-    private AwRenderProcess mRenderer;
+@Lifetime.Renderer
+class SupportLibWebViewRendererAdapter implements WebViewRendererBoundaryInterface {
+    private final AwRenderProcess mRenderer;
 
     SupportLibWebViewRendererAdapter(AwRenderProcess renderer) {
         mRenderer = renderer;
     }
 
     @Override
-    AwSupportLibIsomorphic getPeeredObject() {
-        return mRenderer;
+    public boolean terminate() {
+        try (TraceEvent event =
+                TraceEvent.scoped("WebView.APICall.AndroidX.WEBVIEW_RENDERER_TERMINATE")) {
+            recordApiCall(ApiCall.WEBVIEW_RENDERER_TERMINATE);
+            return mRenderer.terminate();
+        }
     }
 
     @Override
-    public boolean terminate() {
-        recordApiCall(ApiCall.WEBVIEW_RENDERER_TERMINATE);
-        return mRenderer.terminate();
+    public Object getOrCreatePeer(Callable<Object> creationCallable) {
+        return mRenderer.getOrCreateSupportLibObject(creationCallable);
     }
 }

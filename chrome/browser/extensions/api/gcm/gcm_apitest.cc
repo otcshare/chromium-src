@@ -2,20 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "chrome/browser/extensions/api/gcm/extension_gcm_app_handler.h"
 #include "chrome/browser/extensions/api/gcm/gcm_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_gcm_app_handler.h"
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "components/gcm_driver/fake_gcm_profile_service.h"
 #include "components/sync/base/command_line_switches.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/test/result_catcher.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::ResultCatcher;
 
@@ -62,18 +66,14 @@ class GcmApiTest : public ExtensionApiTest {
  protected:
   // BrowserTestBase overrides.
   void SetUpCommandLine(base::CommandLine* command_line) override;
-  void SetUpInProcessBrowserTestFixture() override;
+  void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* context) override;
 
   void StartCollecting();
 
   const Extension* LoadTestExtension(const std::string& extension_path,
                                      const std::string& page_name);
-  gcm::FakeGCMProfileService* service() const;
-
- private:
-  void OnWillCreateBrowserContextServices(content::BrowserContext* context);
-
-  base::CallbackListSubscription create_services_subscription_;
+  gcm::FakeGCMProfileService* service();
 };
 
 void GcmApiTest::SetUpCommandLine(base::CommandLine* command_line) {
@@ -86,17 +86,9 @@ void GcmApiTest::SetUpCommandLine(base::CommandLine* command_line) {
   ExtensionApiTest::SetUpCommandLine(command_line);
 }
 
-void GcmApiTest::SetUpInProcessBrowserTestFixture() {
-  create_services_subscription_ =
-      BrowserContextDependencyManager::GetInstance()
-          ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
-              &GcmApiTest::OnWillCreateBrowserContextServices,
-              base::Unretained(this)));
-  ExtensionApiTest::SetUpInProcessBrowserTestFixture();
-}
-
-void GcmApiTest::OnWillCreateBrowserContextServices(
+void GcmApiTest::SetUpBrowserContextKeyedServices(
     content::BrowserContext* context) {
+  ExtensionApiTest::SetUpBrowserContextKeyedServices(context);
   gcm::GCMProfileServiceFactory::GetInstance()->SetTestingFactory(
       context, base::BindRepeating(&gcm::FakeGCMProfileService::Build));
 }
@@ -105,10 +97,9 @@ void GcmApiTest::StartCollecting() {
   service()->set_collect(true);
 }
 
-gcm::FakeGCMProfileService* GcmApiTest::service() const {
+gcm::FakeGCMProfileService* GcmApiTest::service() {
   return static_cast<gcm::FakeGCMProfileService*>(
-      gcm::GCMProfileServiceFactory::GetInstance()->GetForProfile(
-          browser()->profile()));
+      gcm::GCMProfileServiceFactory::GetInstance()->GetForProfile(profile()));
 }
 
 const Extension* GcmApiTest::LoadTestExtension(
@@ -117,12 +108,17 @@ const Extension* GcmApiTest::LoadTestExtension(
   const Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII(extension_path));
   if (extension) {
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(
-        browser(), extension->GetResourceURL(page_name)));
+    const GURL extension_url = extension->GetResourceURL(page_name);
+    EXPECT_TRUE(extension_url.is_valid());
+    auto* web_contents = GetActiveWebContents();
+    EXPECT_TRUE(NavigateToURL(web_contents, extension_url));
   }
   return extension;
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+// Register and unregister are deprecated on the server. Don't test them.
+// TODO(crbug.com/421235963): Consider deprecating on other platforms.
 IN_PROC_BROWSER_TEST_F(GcmApiTest, RegisterValidation) {
   ASSERT_TRUE(RunExtensionTest("gcm/functions/register_validation"));
 }
@@ -133,8 +129,8 @@ IN_PROC_BROWSER_TEST_F(GcmApiTest, Register) {
 
   const std::vector<std::string>& sender_ids =
       service()->last_registered_sender_ids();
-  EXPECT_TRUE(base::Contains(sender_ids, "Sender1"));
-  EXPECT_TRUE(base::Contains(sender_ids, "Sender2"));
+  EXPECT_TRUE(std::ranges::contains(sender_ids, "Sender1"));
+  EXPECT_TRUE(std::ranges::contains(sender_ids, "Sender2"));
 }
 
 IN_PROC_BROWSER_TEST_F(GcmApiTest, Unregister) {
@@ -143,6 +139,7 @@ IN_PROC_BROWSER_TEST_F(GcmApiTest, Unregister) {
 
   ASSERT_TRUE(RunExtensionTest("gcm/functions/unregister"));
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 IN_PROC_BROWSER_TEST_F(GcmApiTest, SendValidation) {
   ASSERT_TRUE(RunExtensionTest("gcm/functions/send"));
@@ -260,6 +257,9 @@ IN_PROC_BROWSER_TEST_F(GcmApiTest, OnSendError) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+// Register and unregister are deprecated on the server. Don't test them.
+// TODO(crbug.com/421235963): Consider deprecating on other platforms.
 IN_PROC_BROWSER_TEST_F(GcmApiTest, Incognito) {
   ResultCatcher catcher;
   catcher.RestrictToBrowserContext(profile());
@@ -273,5 +273,6 @@ IN_PROC_BROWSER_TEST_F(GcmApiTest, Incognito) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
   EXPECT_TRUE(incognito_catcher.GetNextResult()) << incognito_catcher.message();
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

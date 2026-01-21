@@ -5,18 +5,19 @@
 #include "content/browser/background_fetch/background_fetch_test_base.h"
 
 #include <stdint.h>
+
 #include <map>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
-#include "base/files/file_util.h"
+#include "base/check_deref.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
@@ -80,7 +81,8 @@ BackgroundFetchTestBase::BackgroundFetchTestBase()
     : task_environment_(BrowserTaskEnvironment::IO_MAINLOOP),
       delegate_(browser_context_.GetBackgroundFetchDelegate()),
       embedded_worker_test_helper_(base::FilePath()),
-      storage_key_(blink::StorageKey(url::Origin::Create(GURL(kTestOrigin)))),
+      storage_key_(blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(GURL(kTestOrigin)))),
       storage_partition_factory_(static_cast<StoragePartitionImpl*>(
           browser_context()->GetDefaultStoragePartition())) {}
 
@@ -108,7 +110,7 @@ int64_t BackgroundFetchTestBase::RegisterServiceWorkerForOrigin(
   int64_t service_worker_registration_id =
       blink::mojom::kInvalidServiceWorkerRegistrationId;
 
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   {
     blink::mojom::ServiceWorkerRegistrationOptions options;
@@ -135,7 +137,7 @@ int64_t BackgroundFetchTestBase::RegisterServiceWorkerForOrigin(
 
   {
     base::RunLoop run_loop;
-    embedded_worker_test_helper_.context()->registry()->FindRegistrationForId(
+    embedded_worker_test_helper_.context()->registry().FindRegistrationForId(
         service_worker_registration_id, key,
         base::BindOnce(&DidFindServiceWorkerRegistration,
                        &service_worker_registration, run_loop.QuitClosure()));
@@ -161,11 +163,9 @@ void BackgroundFetchTestBase::UnregisterServiceWorker(
     int64_t service_worker_registration_id) {
   base::RunLoop run_loop;
   const GURL scope = GetScopeForId(kTestOrigin, service_worker_registration_id);
-  // TODO(crbug.com/1199077): Update this when background fetch implements
-  // StorageKey.
   embedded_worker_test_helper_.context()->UnregisterServiceWorker(
-      scope, blink::StorageKey(url::Origin::Create(scope)),
-      /*is_immediate=*/false,
+      scope, blink::StorageKey::CreateFirstParty(url::Origin::Create(scope)),
+      /*is_immediate=*/false, ServiceWorkerRegistration::DeleteInitiator::kTest,
       base::BindOnce(&DidUnregisterServiceWorker, run_loop.QuitClosure()));
   run_loop.Run();
 }
@@ -199,10 +199,10 @@ BackgroundFetchTestBase::CreateBackgroundFetchRegistrationData(
       /* download_total= */ 0, /* downloaded= */ 0, result, failure_reason);
 }
 
-scoped_refptr<DevToolsBackgroundServicesContextImpl>
+DevToolsBackgroundServicesContextImpl&
 BackgroundFetchTestBase::devtools_context() {
-  return static_cast<DevToolsBackgroundServicesContextImpl*>(
-      storage_partition()->GetDevToolsBackgroundServicesContext());
+  return CHECK_DEREF(static_cast<DevToolsBackgroundServicesContextImpl*>(
+      storage_partition()->GetDevToolsBackgroundServicesContext()));
 }
 
 }  // namespace content

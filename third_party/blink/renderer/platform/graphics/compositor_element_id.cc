@@ -18,12 +18,16 @@ static CompositorElementId CreateCompositorElementId(
     CompositorElementIdNamespace namespace_id) {
   DCHECK(blink_id);
   DCHECK_LT(blink_id, std::numeric_limits<uint64_t>::max() /
-                          static_cast<unsigned>(
-                              CompositorElementIdNamespace::kMaxRepresentable));
+                          (static_cast<unsigned>(
+                               CompositorElementIdNamespace::kMaxRepresentable)
+                           << kCompositorReservedBitCount));
   // Shift to make room for namespace_id enum bits.
-  cc::ElementIdType id = blink_id << kCompositorNamespaceBitCount;
+  uint64_t id = blink_id << kCompositorNamespaceBitCount;
   id += static_cast<uint64_t>(namespace_id);
-  return CompositorElementId(id);
+  // Shift for the reserved bit count.
+  id = id << kCompositorReservedBitCount;
+  auto result = CompositorElementId(id);
+  return result;
 }
 
 CompositorElementId PLATFORM_EXPORT CompositorElementIdFromUniqueObjectId(
@@ -31,6 +35,17 @@ CompositorElementId PLATFORM_EXPORT CompositorElementIdFromUniqueObjectId(
     CompositorElementIdNamespace namespace_id) {
   DCHECK_LE(namespace_id, CompositorElementIdNamespace::kMax);
   return CreateCompositorElementId(id, namespace_id);
+}
+
+CompositorElementId PLATFORM_EXPORT
+CompositorElementIdWithNamespace(CompositorElementId element_id,
+                                 CompositorElementIdNamespace namespace_id) {
+  DCHECK_LE(namespace_id, CompositorElementIdNamespace::kMax);
+  uint64_t id = element_id.GetInternalValue();
+  id &= ~((1 << (kCompositorNamespaceBitCount + kCompositorReservedBitCount)) -
+          1);
+  id |= static_cast<uint64_t>(namespace_id) << kCompositorReservedBitCount;
+  return CompositorElementId(id);
 }
 
 CompositorElementId PLATFORM_EXPORT
@@ -49,15 +64,16 @@ CompositorElementIdFromUniqueObjectId(UniqueObjectId id) {
 CompositorElementIdNamespace NamespaceFromCompositorElementId(
     CompositorElementId element_id) {
   return static_cast<CompositorElementIdNamespace>(
-      element_id.GetStableId() %
+      (element_id.GetInternalValue() >> kCompositorReservedBitCount) %
       static_cast<uint64_t>(CompositorElementIdNamespace::kMaxRepresentable));
 }
 
 DOMNodeId DOMNodeIdFromCompositorElementId(CompositorElementId element_id) {
   DCHECK_EQ(NamespaceFromCompositorElementId(element_id),
             CompositorElementIdNamespace::kDOMNodeId);
-  return static_cast<DOMNodeId>(element_id.GetStableId() >>
-                                kCompositorNamespaceBitCount);
+  return static_cast<DOMNodeId>(
+      element_id.GetInternalValue() >>
+      (kCompositorNamespaceBitCount + kCompositorReservedBitCount));
 }
 
 }  // namespace blink

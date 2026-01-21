@@ -32,12 +32,14 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/cpp/request_mode.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/resource_request_blocked_reason.h"
@@ -116,7 +118,7 @@ class WebAssociatedURLLoaderImpl::ClientAdapter final
                    uint64_t /*totalBytesToBeSent*/) override;
   void DidReceiveResponse(uint64_t, const ResourceResponse&) override;
   void DidDownloadData(uint64_t /*dataLength*/) override;
-  void DidReceiveData(const char*, unsigned /*dataLength*/) override;
+  void DidReceiveData(base::span<const char> /*data*/) override;
   void DidFinishLoading(uint64_t /*identifier*/) override;
   void DidFail(uint64_t /*identifier*/, const ResourceError&) override;
   void DidFailRedirectCheck(uint64_t /*identifier*/) override;
@@ -157,7 +159,7 @@ class WebAssociatedURLLoaderImpl::ClientAdapter final
   WebAssociatedURLLoaderOptions options_;
   network::mojom::RequestMode request_mode_;
   network::mojom::CredentialsMode credentials_mode_;
-  absl::optional<WebURLError> error_;
+  std::optional<WebURLError> error_;
 
   HeapTaskRunnerTimer<ClientAdapter> error_timer_;
   bool enable_error_notifications_;
@@ -252,14 +254,12 @@ void WebAssociatedURLLoaderImpl::ClientAdapter::DidDownloadData(
 }
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::DidReceiveData(
-    const char* data,
-    unsigned data_length) {
-  if (!client_)
+    base::span<const char> data) {
+  if (!client_) {
     return;
+  }
 
-  CHECK_LE(data_length, static_cast<unsigned>(std::numeric_limits<int>::max()));
-
-  client_->DidReceiveData(data, data_length);
+  client_->DidReceiveData(data);
 }
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::DidFinishLoading(
@@ -321,7 +321,7 @@ class WebAssociatedURLLoaderImpl::Observer final
   void Dispose() {
     parent_ = nullptr;
     // TODO(keishi): Remove IsIteratingOverObservers() check when
-    // HeapObserverSet() supports removal while iterating.
+    // HeapObserverList() supports removal while iterating.
     if (!GetExecutionContext()
              ->ContextLifecycleObserverSet()
              .IsIteratingOverObservers()) {
@@ -516,9 +516,8 @@ void WebAssociatedURLLoaderImpl::DisposeObserver() {
   // ThreadState::current() is null. However, the fact we reached here
   // without cancelling the loader means that it's possible there're some
   // non-Blink non-on-heap objects still facing on-heap Blink objects. E.g.
-  // there could be a WebURLLoader instance behind the
-  // ThreadableLoader instance. So, for safety, we chose to just
-  // crash here.
+  // there could be a URLLoader instance behind the ThreadableLoader instance.
+  // So, for safety, we chose to just crash here.
   CHECK(ThreadState::Current());
 
   observer_->Dispose();

@@ -31,7 +31,7 @@ void ThreadSafeScriptContainer::AddOnIOThread(
     const KURL& url,
     std::unique_ptr<RawScriptData> data) {
   base::AutoLock locker(lock_);
-  DCHECK_EQ(script_data_.end(), script_data_.find(url));
+  DCHECK(!script_data_.Contains(url));
   ScriptStatus status = data ? ScriptStatus::kReceived : ScriptStatus::kFailed;
   script_data_.Set(url, std::make_pair(status, std::move(data)));
   if (url == waiting_url_)
@@ -57,7 +57,7 @@ bool ThreadSafeScriptContainer::WaitOnWorkerThread(const KURL& url) {
   DCHECK(!waiting_url_.IsValid())
       << "The script container is unexpectedly shared among worker threads.";
   waiting_url_ = url;
-  while (script_data_.find(url) == script_data_.end()) {
+  while (!script_data_.Contains(url)) {
     // If waiting script hasn't been added yet though all data are received,
     // that means something went wrong.
     if (are_all_data_added_) {
@@ -76,7 +76,7 @@ std::unique_ptr<ThreadSafeScriptContainer::RawScriptData>
 ThreadSafeScriptContainer::TakeOnWorkerThread(const KURL& url) {
   base::AutoLock locker(lock_);
   auto it = script_data_.find(url);
-  DCHECK(it != script_data_.end())
+  CHECK(it != script_data_.end())
       << "Script should have been received before calling Take";
   std::pair<ScriptStatus, std::unique_ptr<RawScriptData>>& pair = it->value;
   DCHECK_EQ(ScriptStatus::kReceived, pair.first);

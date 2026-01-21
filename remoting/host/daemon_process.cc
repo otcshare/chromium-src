@@ -9,14 +9,14 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/base/constants.h"
@@ -35,12 +35,6 @@ namespace {
 
 // This is used for tagging system event logs.
 const char kApplicationName[] = "chromoting";
-
-std::ostream& operator<<(std::ostream& os, const ScreenResolution& resolution) {
-  return os << resolution.dimensions().width() << "x"
-            << resolution.dimensions().height() << " at "
-            << resolution.dpi().x() << "x" << resolution.dpi().y() << " DPI";
-}
 
 }  // namespace
 
@@ -157,8 +151,9 @@ void DaemonProcess::CloseDesktopSession(int terminal_id) {
   // It is OK if the terminal ID wasn't found. There is a race between
   // the network and daemon processes. Each frees its own recources first and
   // notifies the other party if there was something to clean up.
-  if (i == desktop_sessions_.end())
+  if (i == desktop_sessions_.end()) {
     return;
+  }
 
   delete *i;
   desktop_sessions_.erase(i);
@@ -180,6 +175,11 @@ DaemonProcess::DaemonProcess(
   // TODO(sammc): On OSX, mojo::core::SetMachPortProvider() should be called
   // with a base::PortProvider implementation. Add it here when this code is
   // used on OSX.
+
+  // Tests may use their own thread pool so create one if needed.
+  if (!base::ThreadPoolInstance::Get()) {
+    base::ThreadPoolInstance::CreateAndStartWithDefaultParams("Daemon");
+  }
 }
 
 void DaemonProcess::CreateDesktopSession(int terminal_id,
@@ -242,8 +242,9 @@ void DaemonProcess::SetScreenResolution(int terminal_id,
   // It is OK if the terminal ID wasn't found. There is a race between
   // the network and daemon processes. Each frees its own resources first and
   // notifies the other party if there was something to clean up.
-  if (i == desktop_sessions_.end())
+  if (i == desktop_sessions_.end()) {
     return;
+  }
 
   (*i)->SetScreenResolution(resolution);
 }
@@ -263,6 +264,8 @@ void DaemonProcess::Initialize() {
   config_watcher_->Watch(this);
   host_event_logger_ =
       HostEventLogger::Create(status_monitor_, kApplicationName);
+
+  StartChromotingHostServices();
 
   // Launch the process.
   LaunchNetworkProcess();
@@ -285,29 +288,33 @@ bool DaemonProcess::WasTerminalIdAllocated(int terminal_id) {
 void DaemonProcess::OnClientAccessDenied(const std::string& signaling_id) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnClientAccessDenied(signaling_id);
+  }
 }
 
 void DaemonProcess::OnClientAuthenticated(const std::string& signaling_id) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnClientAuthenticated(signaling_id);
+  }
 }
 
 void DaemonProcess::OnClientConnected(const std::string& signaling_id) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnClientConnected(signaling_id);
+  }
 }
 
 void DaemonProcess::OnClientDisconnected(const std::string& signaling_id) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnClientDisconnected(signaling_id);
+  }
 }
 
 void DaemonProcess::OnClientRouteChange(const std::string& signaling_id,
@@ -315,22 +322,25 @@ void DaemonProcess::OnClientRouteChange(const std::string& signaling_id,
                                         const protocol::TransportRoute& route) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnClientRouteChange(signaling_id, channel_name, route);
+  }
 }
 
 void DaemonProcess::OnHostStarted(const std::string& owner_email) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnHostStarted(owner_email);
+  }
 }
 
 void DaemonProcess::OnHostShutdown() {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  for (auto& observer : status_monitor_->observers())
+  for (auto& observer : status_monitor_->observers()) {
     observer.OnHostShutdown();
+  }
 }
 
 void DaemonProcess::DeleteAllDesktopSessions() {

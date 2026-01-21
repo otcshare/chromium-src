@@ -11,15 +11,11 @@ This code doesn't support other diff commands such as "diff" and "svn diff".
 
 import base64
 import difflib
+import html as cgi
 import mimetypes
 import re
-import six
 import zlib
 
-if six.PY2:
-    import cgi
-else:
-    import html as cgi
 
 # The style below is meant to be similar to PolyGerrit.
 _LEADING_HTML = """<!DOCTYPE html>
@@ -365,21 +361,28 @@ class DiffHunk(object):
     @staticmethod
     def _annotate(lines, index, start, end, annotations):
         assert index < len(lines)
-        line_len = len(lines[index]) - 1
-        if line_len == 0 and start == 0:
-            annotations[index] = [(0, 0)]
-            DiffHunk._annotate(lines, index + 1, start, end, annotations)
-            return
-        if start >= line_len:
-            DiffHunk._annotate(lines, index + 1, start - line_len,
-                               end - line_len, annotations)
-            return
-        if not annotations[index]:
-            annotations[index] = []
-        annotations[index].append((start, min(line_len, end)))
-        if end > line_len:
-            DiffHunk._annotate(lines, index + 1, 0, end - line_len,
-                               annotations)
+        while index < len(lines):
+            line_len = len(lines[index]) - 1
+            if line_len == 0 and start == 0:
+                annotations[index] = [(0, 0)]
+                index += 1
+                continue
+            if start >= line_len:
+                start -= line_len
+                end -= line_len
+                index += 1
+                continue
+
+            if not annotations[index]:
+                annotations[index] = []
+            annotations[index].append((start, min(line_len, end)))
+            if end > line_len:
+                start = 0
+                end -= line_len
+                index += 1
+                continue
+            else:
+                break
 
     def prettify_code(self, index, klass):
         line = self._lines[index][1:]

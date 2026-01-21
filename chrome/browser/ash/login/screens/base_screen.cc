@@ -8,6 +8,7 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/wizard_context.h"
@@ -67,6 +68,11 @@ bool BaseScreen::HandleAccelerator(LoginAcceleratorAction action) {
 void BaseScreen::OnUserAction(const base::Value::List& args) {
   CHECK_GE(args.size(), 1u);
   NOTREACHED() << "Unhandled user action: action_id=" << args[0];
+}
+
+ScreenSummary BaseScreen::GetScreenSummary() {
+  NOTIMPLEMENTED();
+  return {};
 }
 
 }  // namespace ash

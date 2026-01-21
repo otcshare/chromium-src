@@ -4,13 +4,18 @@
 
 package org.chromium.chrome.browser.webapps;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 
-import org.chromium.base.StrictModeContext;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.customtabs.BaseCustomTabActivity;
+import org.chromium.chrome.browser.customtabs.CustomTabLocator;
 import org.chromium.components.background_task_scheduler.NativeBackgroundTask;
 import org.chromium.components.background_task_scheduler.TaskIds;
 import org.chromium.components.background_task_scheduler.TaskParameters;
+import org.chromium.components.webapps.WebappsUtils;
 
 import java.lang.ref.WeakReference;
 import java.util.List;
@@ -19,28 +24,30 @@ import java.util.List;
  * Handles servicing of background WebAPK update requests coming via background_task_scheduler
  * component. Will update multiple WebAPKs if there are multiple WebAPKs pending update.
  */
+@NullMarked
 public class WebApkUpdateTask extends NativeBackgroundTask {
     /** The WebappDataStorage for the WebAPK to update. */
-    private WebappDataStorage mStorageToUpdate;
+    private @Nullable WebappDataStorage mStorageToUpdate;
 
-    /** Whether there are more WebAPKs to update than just {@link mStorageToUpdate}. */
+    /** Whether there are more WebAPKs to update than just {@link #mStorageToUpdate}. */
     private boolean mMoreToUpdate;
 
     @Override
-    @StartBeforeNativeResult
-    protected int onStartTaskBeforeNativeLoaded(
+    protected @StartBeforeNativeResult int onStartTaskBeforeNativeLoaded(
             Context context, TaskParameters taskParameters, TaskFinishedCallback callback) {
         assert taskParameters.getTaskId() == TaskIds.WEBAPK_UPDATE_JOB_ID;
 
-        try (StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
-            WebappRegistry.warmUpSharedPrefs();
-        }
+        WebappRegistry.warmUpSharedPrefs();
+
+        WebappsUtils.prepareIsRequestPinShortcutSupported();
 
         List<String> ids = WebappRegistry.getInstance().findWebApksWithPendingUpdate();
         for (String id : ids) {
             WebappDataStorage storage = WebappRegistry.getInstance().getWebappDataStorage(id);
+            assumeNonNull(storage);
+
             WeakReference<BaseCustomTabActivity> activity =
-                    WebappLocator.findRunningWebappActivityWithId(storage.getId());
+                    CustomTabLocator.findRunningWebappActivityWithId(storage.getId());
             if (activity == null || activity.get() == null) {
                 mStorageToUpdate = storage;
                 mMoreToUpdate = ids.size() > 1;
@@ -54,6 +61,7 @@ public class WebApkUpdateTask extends NativeBackgroundTask {
     protected void onStartTaskWithNative(
             Context context, TaskParameters taskParameters, final TaskFinishedCallback callback) {
         assert taskParameters.getTaskId() == TaskIds.WEBAPK_UPDATE_JOB_ID;
+        assert mStorageToUpdate != null;
 
         WebApkUpdateManager.updateWhileNotRunning(
                 mStorageToUpdate, () -> callback.taskFinished(mMoreToUpdate));
@@ -76,7 +84,4 @@ public class WebApkUpdateTask extends NativeBackgroundTask {
         // WebAPKs that we need to update.
         return true;
     }
-
-    @Override
-    public void reschedule(Context context) {}
 }

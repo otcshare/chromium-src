@@ -5,23 +5,22 @@
 #ifndef CHROME_BROWSER_ASH_ARC_ACCESSIBILITY_ARC_ACCESSIBILITY_HELPER_BRIDGE_H_
 #define CHROME_BROWSER_ASH_ARC_ACCESSIBILITY_ARC_ACCESSIBILITY_HELPER_BRIDGE_H_
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <tuple>
 
-#include "ash/components/arc/mojom/accessibility_helper.mojom-forward.h"
-#include "ash/components/arc/session/connection_observer.h"
-#include "ash/public/cpp/external_arc/message_center/arc_notification_surface_manager.h"
 #include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/arc/accessibility/accessibility_helper_instance_remote_proxy.h"
 #include "chrome/browser/ash/arc/accessibility/arc_accessibility_tree_tracker.h"
-#include "chrome/browser/ash/arc/accessibility/ax_tree_source_arc.h"
+#include "chromeos/ash/experiences/arc/message_center/arc_notification_surface_manager.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "services/accessibility/android/ax_tree_source_android.h"
+#include "services/accessibility/android/public/mojom/accessibility_helper.mojom-forward.h"
 
-class PrefService;
 class Profile;
 
 namespace content {
@@ -36,21 +35,23 @@ namespace gfx {
 class Rect;
 }  // namespace gfx
 
+namespace ax::android {
+class AXTreeSourceAndroid;
+}
+
 namespace arc {
 
-class AXTreeSourceArc;
 class ArcBridgeService;
-
-arc::mojom::CaptionStylePtr GetCaptionStyleFromPrefs(PrefService* prefs);
 
 // ArcAccessibilityHelperBridge is an instance to receive converted Android
 // accessibility events and info via mojo interface and dispatch them to Chrome
 // OS components.
 class ArcAccessibilityHelperBridge
     : public KeyedService,
-      public mojom::AccessibilityHelperHost,
-      public ConnectionObserver<mojom::AccessibilityHelperInstance>,
-      public AXTreeSourceArc::Delegate,
+      public ax::android::mojom::AccessibilityHelperHost,
+      public ConnectionObserver<
+          ax::android::mojom::AccessibilityHelperInstance>,
+      public ax::android::AXTreeSourceAndroid::Delegate,
       public ash::ArcNotificationSurfaceManager::Observer,
       public extensions::AutomationEventRouterObserver {
  public:
@@ -87,13 +88,13 @@ class ArcAccessibilityHelperBridge
 
   // mojom::AccessibilityHelperHost overrides.
   void OnAccessibilityEvent(
-      mojom::AccessibilityEventDataPtr event_data) override;
+      ax::android::mojom::AccessibilityEventDataPtr event_data) override;
   void OnNotificationStateChanged(
       const std::string& notification_key,
-      mojom::AccessibilityNotificationStateType state) override;
+      ax::android::mojom::AccessibilityNotificationStateType state) override;
   void OnToggleNativeChromeVoxArcSupport(bool enabled) override;
 
-  // AXTreeSourceArc::Delegate overrides.
+  // ax::android::AXTreeSourceAndroid::Delegate overrides.
   void OnAction(const ui::AXActionData& data) const override;
   bool UseFullFocusMode() const override;
 
@@ -113,40 +114,43 @@ class ArcAccessibilityHelperBridge
     return tree_tracker_.trees_for_test();
   }
 
+  static void EnsureFactoryBuilt();
+
  private:
   // virtual for testing.
   virtual extensions::EventRouter* GetEventRouter() const;
-  virtual arc::mojom::AccessibilityFilterType GetFilterType();
+  virtual ax::android::mojom::AccessibilityFilterType GetFilterType();
 
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
-  void UpdateCaptionSettings() const;
 
   void OnActionResult(const ui::AXActionData& data, bool result) const;
   void OnGetTextLocationDataResult(
       const ui::AXActionData& data,
-      const absl::optional<gfx::Rect>& result_rect) const;
+      const std::optional<gfx::Rect>& result_rect) const;
 
   void PopulateActionParameters(
       const ui::AXActionData& chrome_data,
-      arc::mojom::AccessibilityActionData& action_data) const;
+      ax::android::mojom::AccessibilityActionData& action_data) const;
 
-  absl::optional<gfx::Rect> OnGetTextLocationDataResultInternal(
+  std::optional<gfx::Rect> OnGetTextLocationDataResultInternal(
       const ui::AXTreeID& ax_tree_id,
-      const absl::optional<gfx::Rect>& result_rect) const;
+      const std::optional<gfx::Rect>& result_rect) const;
 
   void OnAccessibilityStatusChanged(
       const ash::AccessibilityStatusEventDetails& event_details);
   void UpdateEnabledFeature();
-  void HandleFilterTypeFocusEvent(mojom::AccessibilityEventDataPtr event_data);
-  void HandleFilterTypeAllEvent(mojom::AccessibilityEventDataPtr event_data);
+  void HandleFilterTypeFocusEvent(
+      ax::android::mojom::AccessibilityEventDataPtr event_data);
+  void HandleFilterTypeAllEvent(
+      ax::android::mojom::AccessibilityEventDataPtr event_data);
 
   void DispatchEventTextAnnouncement(
-      mojom::AccessibilityEventData* event_data) const;
+      ax::android::mojom::AccessibilityEventData* event_data) const;
 
   bool is_focus_event_enabled_ = false;
   bool use_full_focus_mode_ = false;
-  Profile* const profile_;
-  ArcBridgeService* const arc_bridge_service_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<ArcBridgeService> arc_bridge_service_;
 
   const AccessibilityHelperInstanceRemoteProxy accessibility_helper_instance_;
 
@@ -154,8 +158,8 @@ class ArcAccessibilityHelperBridge
 
   base::CallbackListSubscription accessibility_status_subscription_;
 
-  arc::mojom::AccessibilityFilterType filter_type_ =
-      arc::mojom::AccessibilityFilterType::OFF;
+  ax::android::mojom::AccessibilityFilterType filter_type_ =
+      ax::android::mojom::AccessibilityFilterType::OFF;
 
   base::ScopedObservation<extensions::AutomationEventRouter,
                           extensions::AutomationEventRouterObserver>

@@ -9,8 +9,9 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_image.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_recorder.h"
-#include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/skia/include/core/SkTypes.h"
@@ -31,22 +32,28 @@ class DrawingDisplayItemTest : public testing::Test {
       MakeGarbageCollected<FakeDisplayItemClient>();
 };
 
-static PaintRecord CreateRectRecord(const gfx::RectF& record_bounds) {
+static PaintRecord CreateRectRecord(const gfx::RectF& record_bounds,
+                                    SkColor4f color = SkColors::kBlack) {
   PaintRecorder recorder;
   cc::PaintCanvas* canvas = recorder.beginRecording();
-  canvas->drawRect(gfx::RectFToSkRect(record_bounds), cc::PaintFlags());
+  cc::PaintFlags flags;
+  flags.setColor(color);
+  canvas->drawRect(gfx::RectFToSkRect(record_bounds), flags);
   return recorder.finishRecordingAsPicture();
 }
 
 static PaintRecord CreateRectRecordWithTranslate(
     const gfx::RectF& record_bounds,
     float dx,
-    float dy) {
+    float dy,
+    SkColor4f color = SkColors::kBlack) {
   PaintRecorder recorder;
   cc::PaintCanvas* canvas = recorder.beginRecording();
   canvas->save();
   canvas->translate(dx, dy);
-  canvas->drawRect(gfx::RectFToSkRect(record_bounds), cc::PaintFlags());
+  cc::PaintFlags flags;
+  flags.setColor(color);
+  canvas->drawRect(gfx::RectFToSkRect(record_bounds), flags);
   canvas->restore();
   return recorder.finishRecordingAsPicture();
 }
@@ -130,21 +137,25 @@ TEST_F(DrawingDisplayItemTest, SolidColorRect) {
   gfx::RectF record_bounds(5, 6, 10, 10);
   DrawingDisplayItem item(client_->Id(), DisplayItem::Type::kDocumentBackground,
                           ToEnclosingRect(record_bounds),
-                          CreateRectRecord(record_bounds),
+                          CreateRectRecord(record_bounds, SkColors::kGreen),
                           client_->VisualRectOutsetForRasterEffects());
   EXPECT_EQ(gfx::Rect(5, 6, 10, 10), item.VisualRect());
-  EXPECT_TRUE(item.IsSolidColor());
+  auto background = item.BackgroundColor();
+  EXPECT_TRUE(background.is_solid_color);
+  EXPECT_EQ(background.color, SkColors::kGreen);
 }
 
 TEST_F(DrawingDisplayItemTest, NonSolidColorSnappedRect) {
   gfx::RectF record_bounds(5.1, 6.9, 10, 10);
   DrawingDisplayItem item(client_->Id(), DisplayItem::Type::kDocumentBackground,
                           ToEnclosingRect(record_bounds),
-                          CreateRectRecord(record_bounds),
+                          CreateRectRecord(record_bounds, SkColors::kGreen),
                           client_->VisualRectOutsetForRasterEffects());
   EXPECT_EQ(gfx::Rect(5, 6, 11, 11), item.VisualRect());
   // Not solid color if the drawing does not fully cover the visual rect.
-  EXPECT_FALSE(item.IsSolidColor());
+  auto background = item.BackgroundColor();
+  EXPECT_FALSE(background.is_solid_color);
+  EXPECT_EQ(background.color, SkColors::kGreen);
 }
 
 TEST_F(DrawingDisplayItemTest, NonSolidColorOval) {
@@ -152,6 +163,8 @@ TEST_F(DrawingDisplayItemTest, NonSolidColorOval) {
 
   PaintRecorder recorder;
   cc::PaintCanvas* canvas = recorder.beginRecording();
+  cc::PaintFlags flags;
+  flags.setColor(SkColors::kGreen);
   canvas->drawOval(gfx::RectFToSkRect(record_bounds), cc::PaintFlags());
 
   DrawingDisplayItem item(client_->Id(), DisplayItem::Type::kDocumentBackground,
@@ -160,7 +173,9 @@ TEST_F(DrawingDisplayItemTest, NonSolidColorOval) {
                           client_->VisualRectOutsetForRasterEffects());
   EXPECT_EQ(gfx::Rect(5, 6, 10, 10), item.VisualRect());
   // Not solid color if the drawing does not fully cover the visual rect.
-  EXPECT_FALSE(item.IsSolidColor());
+  auto background = item.BackgroundColor();
+  EXPECT_FALSE(background.is_solid_color);
+  EXPECT_EQ(background.color, SkColors::kTransparent);
 }
 
 // Checks that DrawingDisplayItem::RectKnownToBeOpaque() doesn't cover any
@@ -232,9 +247,9 @@ TEST_F(DrawingDisplayItemTest, DrawEmptyImage) {
                    .set_id(1)
                    .TakePaintImage();
   PaintRecorder recorder;
-  recorder.beginRecording()->drawImageRect(image, SkRect::MakeEmpty(),
-                                           SkRect::MakeEmpty(),
-                                           SkCanvas::kFast_SrcRectConstraint);
+  recorder.beginRecording()->drawImageRect(
+      image, SkRect::MakeEmpty(), SkRect::MakeEmpty(), SkSamplingOptions(),
+      nullptr, SkCanvas::kFast_SrcRectConstraint);
   DrawingDisplayItem item(
       client_->Id(), DisplayItem::kBoxDecorationBackground, gfx::Rect(10, 20),
       recorder.finishRecordingAsPicture(), RasterEffectOutset::kNone);

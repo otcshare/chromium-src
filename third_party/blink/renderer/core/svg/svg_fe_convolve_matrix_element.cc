@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/core/svg/svg_fe_convolve_matrix_element.h"
 
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_boolean.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_integer.h"
@@ -31,6 +32,7 @@
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -39,11 +41,11 @@ namespace blink {
 template <>
 CORE_EXPORT const SVGEnumerationMap&
 GetEnumerationMap<FEConvolveMatrix::EdgeModeType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {FEConvolveMatrix::EDGEMODE_DUPLICATE, "duplicate"},
-      {FEConvolveMatrix::EDGEMODE_WRAP, "wrap"},
-      {FEConvolveMatrix::EDGEMODE_NONE, "none"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "duplicate",
+      "wrap",
+      "none",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
@@ -55,12 +57,10 @@ class SVGAnimatedOrder : public SVGAnimatedIntegerOptionalInteger {
                                           svg_names::kOrderAttr,
                                           3) {}
 
-  SVGParsingError AttributeChanged(const String&) override;
+  SVGParsingError AttributeChanged(const String& value) override;
 
  protected:
-  static SVGParsingError CheckValue(SVGParsingError parse_status, int value) {
-    if (parse_status != SVGParseStatus::kNoError)
-      return parse_status;
+  static SVGParsingError CheckValue(int value) {
     if (value < 0)
       return SVGParseStatus::kNegativeValue;
     if (value == 0)
@@ -70,13 +70,15 @@ class SVGAnimatedOrder : public SVGAnimatedIntegerOptionalInteger {
 };
 
 SVGParsingError SVGAnimatedOrder::AttributeChanged(const String& value) {
-  SVGParsingError parse_status =
-      SVGAnimatedIntegerOptionalInteger::AttributeChanged(value);
-  // Check for semantic errors.
-  parse_status = CheckValue(parse_status, FirstInteger()->BaseValue()->Value());
-  parse_status =
-      CheckValue(parse_status, SecondInteger()->BaseValue()->Value());
-  return parse_status;
+  return UpdateBaseValueFromAttribute(
+      *BaseValue(), value, [](const SVGIntegerOptionalInteger& base_value) {
+        SVGParsingError parse_status =
+            CheckValue(base_value.FirstInteger()->Value());
+        if (parse_status != SVGParseStatus::kNoError) {
+          return parse_status;
+        }
+        return CheckValue(base_value.SecondInteger()->Value());
+      });
 }
 
 SVGFEConvolveMatrixElement::SVGFEConvolveMatrixElement(Document& document)
@@ -112,18 +114,7 @@ SVGFEConvolveMatrixElement::SVGFEConvolveMatrixElement(Document& document)
       target_y_(
           MakeGarbageCollected<SVGAnimatedInteger>(this,
                                                    svg_names::kTargetYAttr,
-                                                   0)) {
-  AddToPropertyMap(preserve_alpha_);
-  AddToPropertyMap(divisor_);
-  AddToPropertyMap(bias_);
-  AddToPropertyMap(kernel_unit_length_);
-  AddToPropertyMap(kernel_matrix_);
-  AddToPropertyMap(in1_);
-  AddToPropertyMap(edge_mode_);
-  AddToPropertyMap(order_);
-  AddToPropertyMap(target_x_);
-  AddToPropertyMap(target_y_);
-}
+                                                   0)) {}
 
 SVGAnimatedNumber* SVGFEConvolveMatrixElement::kernelUnitLengthX() {
   return kernel_unit_length_->FirstNumber();
@@ -178,12 +169,9 @@ gfx::Point SVGFEConvolveMatrixElement::TargetPoint() const {
 float SVGFEConvolveMatrixElement::ComputeDivisor() const {
   if (divisor_->IsSpecified())
     return divisor_->CurrentValue()->Value();
-  float divisor_value = 0;
-  SVGNumberList* kernel_matrix = kernel_matrix_->CurrentValue();
-  uint32_t kernel_matrix_size = kernel_matrix->length();
-  for (uint32_t i = 0; i < kernel_matrix_size; ++i)
-    divisor_value += kernel_matrix->at(i)->Value();
-  return divisor_value ? divisor_value : 1;
+  // If the divisor is not set, then return zero to get the sum-of-matrix
+  // behavior (see FEColorMatrix::ComputeDivisor).
+  return 0;
 }
 
 bool SVGFEConvolveMatrixElement::SetFilterEffectAttribute(
@@ -215,14 +203,12 @@ void SVGFEConvolveMatrixElement::SvgAttributeChanged(
       attr_name == svg_names::kTargetXAttr ||
       attr_name == svg_names::kTargetYAttr ||
       attr_name == svg_names::kPreserveAlphaAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr || attr_name == svg_names::kOrderAttr ||
       attr_name == svg_names::kKernelMatrixAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -233,6 +219,7 @@ void SVGFEConvolveMatrixElement::SvgAttributeChanged(
 FilterEffect* SVGFEConvolveMatrixElement::Build(
     SVGFilterBuilder* filter_builder,
     Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEConvolveMatrixElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   DCHECK(input1);
@@ -244,6 +231,45 @@ FilterEffect* SVGFEConvolveMatrixElement::Build(
       kernel_matrix_->CurrentValue()->ToFloatVector());
   effect->InputEffects().push_back(input1);
   return effect;
+}
+
+SVGAnimatedPropertyBase* SVGFEConvolveMatrixElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kPreserveAlphaAttr) {
+    return preserve_alpha_.Get();
+  } else if (attribute_name == svg_names::kDivisorAttr) {
+    return divisor_.Get();
+  } else if (attribute_name == svg_names::kBiasAttr) {
+    return bias_.Get();
+  } else if (attribute_name == svg_names::kKernelUnitLengthAttr) {
+    return kernel_unit_length_.Get();
+  } else if (attribute_name == svg_names::kKernelMatrixAttr) {
+    return kernel_matrix_.Get();
+  } else if (attribute_name == svg_names::kInAttr) {
+    return in1_.Get();
+  } else if (attribute_name == svg_names::kEdgeModeAttr) {
+    return edge_mode_.Get();
+  } else if (attribute_name == order_->AttributeName()) {
+    return order_.Get();
+  } else if (attribute_name == svg_names::kTargetXAttr) {
+    return target_x_.Get();
+  } else if (attribute_name == svg_names::kTargetYAttr) {
+    return target_y_.Get();
+  } else {
+    return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+        attribute_name);
+  }
+}
+
+void SVGFEConvolveMatrixElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{
+      preserve_alpha_.Get(), divisor_.Get(),
+      bias_.Get(),           kernel_unit_length_.Get(),
+      kernel_matrix_.Get(),  in1_.Get(),
+      edge_mode_.Get(),      order_.Get(),
+      target_x_.Get(),       target_y_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

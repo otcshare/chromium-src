@@ -28,7 +28,6 @@
 <translation id="2329392777730037872">クライアントで <ph name="URL" /> を開けませんでした。</translation>
 <translation id="2359808026110333948">続行</translation>
 <translation id="2366718077645204424">ホストにアクセスできません。お使いのネットワークの設定が原因であることが考えられます。</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />最終オンライン: <ph name="RELATIVE_TIMESTAMP" />。</translation>
 <translation id="2504109125669302160"><ph name="PRODUCT_NAME" />に「アクセシビリティ」権限を付与する</translation>
 <translation id="2509394361235492552"><ph name="HOSTNAME" /> に接続されました</translation>
 <translation id="2540992418118313681">このパソコンの閲覧と制御の権限を別のユーザーと共有しますか？</translation>
@@ -36,17 +35,18 @@
 <translation id="2599300881200251572">このサービスにより、Chrome リモート デスクトップ クライアントからの着信接続が有効になります。</translation>
 <translation id="2647232381348739934">Chromoting サービス</translation>
 <translation id="2676780859508944670">処理しています...</translation>
-<translation id="2692522824157224199">Copyright 2022 Google LLC. All Rights Reserved.</translation>
 <translation id="2699970397166997657">Chromoting</translation>
 <translation id="2758123043070977469">認証中に問題が発生しました。ログインし直してください。</translation>
 <translation id="2803375539583399270">PIN を入力</translation>
 <translation id="2919669478609886916">現在このパソコンを別のユーザーと共有しています。共有を継続しますか？</translation>
+<translation id="2929683002824598593">デバイスを共有</translation>
 <translation id="2939145106548231838">ホストへの認証</translation>
 <translation id="3027681561976217984">タップモード</translation>
 <translation id="3106379468611574572">リモートのパソコンが接続リクエストに応答しません。リモートのパソコンがネットワークに接続していることを確認して、もう一度お試しください。</translation>
 <translation id="3150823315463303127">ホストでポリシーを読み取れませんでした。</translation>
 <translation id="3171922709365450819">このデバイスは第三者の認証を必要とするため、このクライアントではサポートされていません。</translation>
 <translation id="3197730452537982411">リモートデスクトップ</translation>
+<translation id="3236334139428307578">Copyright 2026 The Chromium Authors. All Rights Reserved.</translation>
 <translation id="324272851072175193">手順をメールで送信</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> が変更を求めています。</translation>
 <translation id="3339299787263251426">インターネット経由でパソコンに安全にアクセス</translation>
@@ -54,7 +54,6 @@
 <translation id="3423542133075182604">セキュリティ キーのリモーティング プロセス</translation>
 <translation id="3581045510967524389">ネットワークに接続できませんでした。デバイスがインターネットに接続されているか確認してください。</translation>
 <translation id="3596628256176442606">このサービスにより、Chromoting クライアントからの着信接続が有効になります。</translation>
-<translation id="369442766917958684">オフラインです。</translation>
 <translation id="3695446226812920698">詳細</translation>
 <translation id="3776024066357219166">Chrome リモート デスクトップ セッションが終了しました。</translation>
 <translation id="3858860766373142691">名前</translation>
@@ -73,7 +72,6 @@
 <translation id="4257751272692708833"><ph name="PRODUCT_NAME" /> URL Forwarder</translation>
 <translation id="4277736576214464567">アクセス コードが無効です。もう一度入力してください。</translation>
 <translation id="4281844954008187215">利用規約</translation>
-<translation id="4372650392690220936">Copyright 2022 The Chromium Authors. All Rights Reserved.</translation>
 <translation id="4405930547258349619">コア ライブラリ</translation>
 <translation id="443560535555262820">[アクセシビリティ] 設定を開く</translation>
 <translation id="4450893287417543264">次回から表示しない</translation>
@@ -95,6 +93,7 @@
 <translation id="4987330545941822761">Chrome リモート デスクトップでは、URL をローカルで開くブラウザを決定できません。下のリストから選択してください。</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" />（オフライン）</translation>
 <translation id="507204348399810022"><ph name="HOSTNAME" /> へのリモート接続を無効にしてもよろしいですか？</translation>
+<translation id="5095424396646120601">障害レポート</translation>
 <translation id="5170982930780719864">ホスト ID が無効です。</translation>
 <translation id="5204575267916639804">よくある質問</translation>
 <translation id="5222676887888702881">ログアウト</translation>
@@ -107,12 +106,12 @@
 <translation id="5601503069213153581">PIN</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">デスクトップは現在 <ph name="USER" /> と共有されています。</translation>
-<translation id="5750083143895808682"><ph name="EMAIL_ADDRESS" /> としてログインしています。</translation>
 <translation id="579702532610384533">再接続</translation>
 <translation id="5810269635982033450">画面がトラックパッドとして機能します</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> さんがあなたの画面を表示して、キーボードとマウスを操作する権限をリクエストしています。このリクエストに心当たりがない場合は、[<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />] を押します。それ以外の場合は、準備ができたら [<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />] を選択して接続を許可します。</translation>
 <translation id="5823658491130719298">リモート アクセスを行うパソコンで Chrome を開き、<ph name="INSTALLATION_LINK" /> にアクセスします</translation>
 <translation id="5841343754884244200">表示オプション</translation>
+<translation id="5965133372831030509">Copyright 2026 Google LLC. All Rights Reserved.</translation>
 <translation id="6033507038939587647">キーボード オプション</translation>
 <translation id="6040143037577758943">閉じる</translation>
 <translation id="6062854958530969723">ホストを初期化できませんでした。</translation>
@@ -121,10 +120,12 @@
 <translation id="6178645564515549384">リモート アシスタンス用のネイティブ·メッセージング·ホスト</translation>
 <translation id="618120821413932081">リモート デスクトップの解像度をウィンドウに合わせて更新します</translation>
 <translation id="6223301979382383752">[画面の録画] 設定を開く</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> さんがあなたの画面を表示して、キーボードとマウスを操作する権限をリクエストしています。デバイスを共有しますか？</translation>
 <translation id="6284412385303060032">コンソールのログイン画面で実行されるホストは、カーテンモードをサポートするために終了されました（ユーザー固有のセッションで実行されるホストに切り替えられました）。</translation>
 <translation id="6542902059648396432">問題を報告…</translation>
 <translation id="6583902294974160967">サポート</translation>
 <translation id="6612717000975622067">Ctrl-Alt-Del を送信</translation>
+<translation id="6625262630437221505">{0,plural, =1{何も操作しない場合、デバイスは # 秒後に共有を自動的に開始します。}other{何も操作しない場合、デバイスは # 秒後に共有を自動的に開始します。}}</translation>
 <translation id="6654753848497929428">共有</translation>
 <translation id="677755392401385740">次のユーザーのホストを開始しました: <ph name="HOST_USERNAME" />。</translation>
 <translation id="6902524959760471898"><ph name="PRODUCT_NAME" /> クライアントで URL を開くヘルパー アプリケーション</translation>

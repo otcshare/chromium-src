@@ -5,32 +5,41 @@
 #include "content/browser/tracing/tracing_controller_impl.h"
 
 #include <inttypes.h>
+
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/cpu.h"
 #include "base/dcheck_is_on.h"
 #include "base/files/file_tracing.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/strings/stringprintf.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_config.h"
+#include "base/trace_event/trace_log.h"
 #include "base/tracing/protos/grit/tracing_proto_resources.h"
 #include "base/values.h"
+#include "base/version_info/version_info.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "components/tracing/common/trace_to_console.h"
 #include "components/tracing/common/tracing_switches.h"
+#include "components/variations/active_field_trials.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/tracing/file_tracing_provider_impl.h"
@@ -38,26 +47,29 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/tracing_controller.h"
-#include "content/public/browser/tracing_delegate.h"
 #include "content/public/browser/tracing_service.h"
 #include "content/public/common/content_client.h"
 #include "gpu/config/gpu_info.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/network_change_notifier.h"
+#include "net/log/net_log_util.h"
+#include "services/tracing/public/cpp/perfetto/metadata_data_source.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
-#include "services/tracing/public/cpp/perfetto/trace_event_data_source.h"
-#include "services/tracing/public/cpp/trace_event_agent.h"
 #include "services/tracing/public/cpp/traced_process_impl.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "services/tracing/public/mojom/constants.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/icu/source/i18n/unicode/timezone.h"
 #include "third_party/perfetto/include/perfetto/protozero/message.h"
+#include "third_party/perfetto/protos/perfetto/common/track_event_descriptor.gen.h"
+#include "third_party/perfetto/protos/perfetto/trace/chrome/chrome_trace_event.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/extension_descriptor.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/trace_packet.pbzero.h"
+#include "third_party/webrtc_overrides/init_webrtc.h"
+#include "v8/include/v8-trace-categories.h"
 #include "v8/include/v8-version-string.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "content/browser/tracing/cros_tracing_agent.h"
 #endif
@@ -68,6 +80,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
+#include "base/power_monitor/cpu_frequency_utils.h"
 #include "base/win/registry.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
@@ -75,96 +89,54 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include <sys/time.h>
-#include "base/debug/elf_reader.h"
 #include "content/browser/android/tracing_controller_android.h"
 #include "services/tracing/public/cpp/perfetto/java_heap_profiler/java_heap_profiler_android.h"
-
-// Symbol with virtual address of the start of ELF header of the current binary.
-extern char __ehdr_start;
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
 
 namespace {
 
+inline constexpr char kNetConstantMetadataPrefix[] = "net-constant-";
+inline constexpr char kUserAgentKey[] = "user-agent";
+inline constexpr char kRevisionMetadataKey[] = "revision";
+
 TracingControllerImpl* g_tracing_controller = nullptr;
 
-std::string GetNetworkTypeString() {
-  switch (net::NetworkChangeNotifier::GetConnectionType()) {
-    case net::NetworkChangeNotifier::CONNECTION_ETHERNET:
-      return "Ethernet";
-    case net::NetworkChangeNotifier::CONNECTION_WIFI:
-      return "WiFi";
-    case net::NetworkChangeNotifier::CONNECTION_2G:
-      return "2G";
-    case net::NetworkChangeNotifier::CONNECTION_3G:
-      return "3G";
-    case net::NetworkChangeNotifier::CONNECTION_4G:
-      return "4G";
-    case net::NetworkChangeNotifier::CONNECTION_5G:
-      return "5G";
-    case net::NetworkChangeNotifier::CONNECTION_NONE:
-      return "None";
-    case net::NetworkChangeNotifier::CONNECTION_BLUETOOTH:
-      return "Bluetooth";
-    case net::NetworkChangeNotifier::CONNECTION_UNKNOWN:
-    default:
-      break;
+void AddCategoriesToSet(
+    const perfetto::internal::TrackEventCategoryRegistry& registry,
+    std::set<std::string>& category_set) {
+  for (size_t i = 0; i < registry.category_count(); ++i) {
+    if (registry.GetCategory(i)->IsGroup()) {
+      continue;
+    }
+    category_set.insert(registry.GetCategory(i)->name);
   }
-  return "Unknown";
 }
 
-std::string GetClockString() {
-  switch (base::TimeTicks::GetClock()) {
-    case base::TimeTicks::Clock::FUCHSIA_ZX_CLOCK_MONOTONIC:
-      return "FUCHSIA_ZX_CLOCK_MONOTONIC";
-    case base::TimeTicks::Clock::LINUX_CLOCK_MONOTONIC:
-      return "LINUX_CLOCK_MONOTONIC";
-    case base::TimeTicks::Clock::IOS_CF_ABSOLUTE_TIME_MINUS_KERN_BOOTTIME:
-      return "IOS_CF_ABSOLUTE_TIME_MINUS_KERN_BOOTTIME";
-    case base::TimeTicks::Clock::MAC_MACH_ABSOLUTE_TIME:
-      return "MAC_MACH_ABSOLUTE_TIME";
-    case base::TimeTicks::Clock::WIN_QPC:
-      return "WIN_QPC";
-    case base::TimeTicks::Clock::WIN_ROLLOVER_PROTECTED_TIME_GET_TIME:
-      return "WIN_ROLLOVER_PROTECTED_TIME_GET_TIME";
+void AddCategoriesToDescriptor(
+    const perfetto::internal::TrackEventCategoryRegistry& registry,
+    perfetto::protos::gen::TrackEventDescriptor& descriptor) {
+  for (size_t i = 0; i < registry.category_count(); ++i) {
+    const auto* category = registry.GetCategory(i);
+    if (category->IsGroup()) {
+      continue;
+    }
+    auto* proto_category = descriptor.add_available_categories();
+    proto_category->set_name(category->name);
+    if (category->description) {
+      proto_category->set_description(category->description);
+    }
+    std::vector<std::string> tags_vector;
+    for (const char* tag : category->tags) {
+      if (!tag) {
+        break;
+      }
+      tags_vector.push_back(tag);
+    }
+    *proto_category->mutable_tags() = std::move(tags_vector);
   }
-
-  NOTREACHED();
-  return std::string();
 }
-
-#if BUILDFLAG(IS_ANDROID)
-int64_t ConvertTimespecToMicros(const struct timespec& ts) {
-  // On 32-bit systems, the calculation cannot overflow int64_t.
-  // 2**32 * 1000000 + 2**64 / 1000 < 2**63
-  if (sizeof(ts.tv_sec) <= 4 && sizeof(ts.tv_nsec) <= 8) {
-    int64_t result = ts.tv_sec;
-    result *= base::Time::kMicrosecondsPerSecond;
-    result += (ts.tv_nsec / base::Time::kNanosecondsPerMicrosecond);
-    return result;
-  }
-  base::CheckedNumeric<int64_t> result(ts.tv_sec);
-  result *= base::Time::kMicrosecondsPerSecond;
-  result += (ts.tv_nsec / base::Time::kNanosecondsPerMicrosecond);
-  return result.ValueOrDie();
-}
-
-// This returns the offset between the monotonic clock and the realtime clock.
-// We could read btime from /proc/status files; however, btime can be off by
-// around 1s, which is too much. The following method should give us a better
-// approximation of the offset.
-std::string GetClockOffsetSinceEpoch() {
-  struct timespec realtime_before, monotonic, realtime_after;
-  clock_gettime(CLOCK_REALTIME, &realtime_before);
-  clock_gettime(CLOCK_MONOTONIC, &monotonic);
-  clock_gettime(CLOCK_REALTIME, &realtime_after);
-  return base::StringPrintf("%" PRId64,
-                            ConvertTimespecToMicros(realtime_before) / 2 +
-                                ConvertTimespecToMicros(realtime_after) / 2 -
-                                ConvertTimespecToMicros(monotonic));
-}
-#endif
 
 }  // namespace
 
@@ -173,15 +145,16 @@ TracingController* TracingController::GetInstance() {
 }
 
 TracingControllerImpl::TracingControllerImpl()
-    : delegate_(GetContentClient()->browser()->GetTracingDelegate()) {
+    : delegate_(GetContentClient()->browser()->CreateTracingDelegate()) {
   DCHECK(!g_tracing_controller);
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK(delegate_);
   // Deliberately leaked, like this class.
   base::FileTracing::SetProvider(new FileTracingProviderImpl);
-  AddAgents();
+  InitializeDataSources();
   g_tracing_controller = this;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Bind hwclass once the statistics are available.
   ash::system::StatisticsProvider::GetInstance()
       ->ScheduleOnMachineStatisticsLoaded(
@@ -189,40 +162,27 @@ TracingControllerImpl::TracingControllerImpl()
                          weak_ptr_factory_.GetWeakPtr()));
 #endif
 
-  tracing::PerfettoTracedProcess::Get()->SetConsumerConnectionFactory(
+  tracing::PerfettoTracedProcess::Get().SetConsumerConnectionFactory(
       &GetTracingService, base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
 TracingControllerImpl::~TracingControllerImpl() = default;
 
-void TracingControllerImpl::AddAgents() {
+void TracingControllerImpl::InitializeDataSources() {
   tracing::TracedProcessImpl::GetInstance()->SetTaskRunner(
       base::SequencedTaskRunner::GetCurrentDefault());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  agents_.push_back(std::make_unique<CrOSTracingAgent>());
+  // Metadata only needs to be installed in the browser process.
+  tracing::MetadataDataSource::Register(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      {tracing_delegate()->CreateSystemProfileMetadataRecorder(),
+       base::BindRepeating(&TracingControllerImpl::RecorderMetadataToBundle)},
+      {base::BindRepeating(&TracingControllerImpl::GenerateMetadataPacket)});
+
+#if BUILDFLAG(IS_CHROMEOS)
+  RegisterCrOSTracingDataSource();
 #elif defined(CAST_TRACING_AGENT)
-  agents_.push_back(std::make_unique<CastTracingAgent>());
-#endif
-
-  // Ensure the TraceEventAgent has been created.
-  tracing::TraceEventAgent::GetInstance();
-
-  // For adding general CPU, network, OS, and other system information to the
-  // metadata.
-  auto* metadata_source = tracing::TraceEventMetadataSource::GetInstance();
-  metadata_source->AddGeneratorFunction(base::BindRepeating(
-      &TracingControllerImpl::GenerateMetadataDict, base::Unretained(this)));
-  if (delegate_) {
-    metadata_source->AddGeneratorFunction(
-        base::BindRepeating(&TracingDelegate::GenerateMetadataDict,
-                            base::Unretained(delegate_.get())));
-  }
-  metadata_source->AddGeneratorFunction(base::BindRepeating(
-      &TracingControllerImpl::GenerateMetadataPacket, base::Unretained(this)));
-#if BUILDFLAG(IS_ANDROID)
-  tracing::PerfettoTracedProcess::Get()->AddDataSource(
-      tracing::JavaHeapProfiler::GetInstance());
+  RegisterCastTracingDataSource();
 #endif
 }
 
@@ -231,6 +191,20 @@ void TracingControllerImpl::ConnectToServiceIfNeeded() {
     GetTracingService().BindConsumerHost(
         consumer_host_.BindNewPipeAndPassReceiver());
     consumer_host_.reset_on_disconnect();
+  }
+}
+
+void TracingControllerImpl::RecorderMetadataToBundle(
+    perfetto::protos::pbzero::ChromeEventBundle* bundle) {
+  tracing::MetadataDataSource::AddMetadataToBundle(
+      kRevisionMetadataKey, version_info::GetLastChange(), bundle);
+  tracing::MetadataDataSource::AddMetadataToBundle(
+      kUserAgentKey, GetContentClient()->browser()->GetUserAgent(), bundle);
+  for (auto constant :
+       net::GetNetConstants(net::NetConstantsRequestMode::kTracing)) {
+    tracing::MetadataDataSource::AddMetadataToBundle(
+        base::StrCat({kNetConstantMetadataPrefix, constant.first}),
+        constant.second, bundle);
   }
 }
 
@@ -243,141 +217,13 @@ void TracingControllerImpl::GenerateMetadataPacket(
   auto* extension_descriptor = handle->BeginNestedMessage<protozero::Message>(
       perfetto::protos::pbzero::TracePacket::kExtensionDescriptorFieldNumber);
   scoped_refptr<base::RefCountedMemory> descriptor_bytes(
-      GetContentClient()->GetDataResourceBytes(chrome_track_event_descriptor));
+      GetContentClient()->GetDataResourceBytes(
+          chrome_track_event_extension_descriptor));
   if (!descriptor_bytes)
     return;
   extension_descriptor->AppendBytes(
       perfetto::protos::pbzero::ExtensionDescriptor::kExtensionSetFieldNumber,
       descriptor_bytes->data(), descriptor_bytes->size());
-}
-
-// Can be called on any thread.
-absl::optional<base::Value> TracingControllerImpl::GenerateMetadataDict() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::Value::Dict metadata_dict;
-
-  metadata_dict.Set("network-type", GetNetworkTypeString());
-  metadata_dict.Set("product-version",
-                    GetContentClient()->browser()->GetProduct());
-  metadata_dict.Set("v8-version", V8_VERSION_STRING);
-  metadata_dict.Set("user-agent",
-                    GetContentClient()->browser()->GetUserAgent());
-
-#if BUILDFLAG(IS_ANDROID)
-  // The library name is used for symbolizing heap profiles. This cannot be
-  // obtained from process maps since library can be mapped from apk directly.
-  // This is not added as part of memory-infra os dumps since it is special case
-  // only for chrome library.
-  absl::optional<base::StringPiece> soname =
-      base::debug::ReadElfLibraryName(&__ehdr_start);
-  if (soname)
-    metadata_dict.Set("chrome-library-name", *soname);
-  metadata_dict.Set("clock-offset-since-epoch", GetClockOffsetSinceEpoch());
-#endif  // BUILDFLAG(IS_ANDROID)
-  metadata_dict.Set("chrome-bitness", static_cast<int>(8 * sizeof(uintptr_t)));
-
-#if DCHECK_IS_ON()
-  metadata_dict.Set("chrome-dcheck-on", 1);
-#endif
-
-  // OS
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  metadata_dict.Set("os-name", "CrOS");
-  if (are_statistics_loaded_)
-    metadata_dict.Set("hardware-class", hardware_class_);
-#else
-  metadata_dict.Set("os-name", base::SysInfo::OperatingSystemName());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  metadata_dict.Set("os-version", base::SysInfo::OperatingSystemVersion());
-#if BUILDFLAG(IS_WIN)
-  if (base::win::OSInfo::GetArchitecture() ==
-      base::win::OSInfo::X64_ARCHITECTURE) {
-    if (base::win::OSInfo::GetInstance()->IsWowX86OnAMD64()) {
-      metadata_dict.Set("os-wow64", "enabled");
-    } else {
-      metadata_dict.Set("os-wow64", "disabled");
-    }
-  }
-
-  metadata_dict.Set("module-apphelp", (::GetModuleHandle(L"apphelp.dll"))
-                                          ? "Loaded"
-                                          : "NotLoaded");
-
-  metadata_dict.Set("os-session",
-                    base::win::IsCurrentSessionRemote() ? "remote" : "local");
-#endif
-
-  metadata_dict.Set("os-arch", base::SysInfo::OperatingSystemArchitecture());
-
-  // CPU
-  base::CPU cpu;
-  metadata_dict.Set("cpu-family", cpu.family());
-  metadata_dict.Set("cpu-model", cpu.model());
-  metadata_dict.Set("cpu-stepping", cpu.stepping());
-  metadata_dict.Set("num-cpus", base::SysInfo::NumberOfProcessors());
-  metadata_dict.Set("physical-memory",
-                    base::SysInfo::AmountOfPhysicalMemoryMB());
-
-  metadata_dict.Set("cpu-brand", cpu.cpu_brand());
-
-  // GPU
-  const gpu::GPUInfo gpu_info =
-      content::GpuDataManagerImpl::GetInstance()->GetGPUInfo();
-  const gpu::GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
-
-#if !BUILDFLAG(IS_ANDROID)
-  metadata_dict.Set("gpu-venid", static_cast<int>(active_gpu.vendor_id));
-  metadata_dict.Set("gpu-devid", static_cast<int>(active_gpu.device_id));
-#endif
-
-  metadata_dict.Set("gpu-driver", active_gpu.driver_version);
-  metadata_dict.Set("gpu-psver", gpu_info.pixel_shader_version);
-  metadata_dict.Set("gpu-vsver", gpu_info.vertex_shader_version);
-
-#if BUILDFLAG(IS_MAC)
-  metadata_dict.Set("gpu-glver", gpu_info.gl_version);
-#elif BUILDFLAG(IS_POSIX)
-  metadata_dict.Set("gpu-gl-vendor", gpu_info.gl_vendor);
-  metadata_dict.Set("gpu-gl-renderer", gpu_info.gl_renderer);
-#endif
-  metadata_dict.Set("gpu-features", GetFeatureStatus());
-
-  metadata_dict.Set("clock-domain", GetClockString());
-  metadata_dict.Set("highres-ticks", base::TimeTicks::IsHighResolution());
-
-  base::CommandLine::StringType command_line =
-      base::CommandLine::ForCurrentProcess()->GetCommandLineString();
-#if BUILDFLAG(IS_WIN)
-  metadata_dict.Set("command_line", base::WideToUTF16(command_line));
-#else
-  metadata_dict.Set("command_line", command_line);
-#endif
-
-  base::Time::Exploded ctime;
-  TRACE_TIME_NOW().UTCExplode(&ctime);
-  std::string time_string = base::StringPrintf(
-      "%u-%u-%u %d:%d:%d", ctime.year, ctime.month, ctime.day_of_month,
-      ctime.hour, ctime.minute, ctime.second);
-  metadata_dict.Set("trace-capture-datetime", time_string);
-
-  // TODO(crbug.com/737049): The central controller doesn't know about
-  // metadata filters, so we temporarily filter here as the controller is
-  // what assembles the full trace data.
-  base::trace_event::MetadataFilterPredicate metadata_filter;
-  if (trace_config_ && trace_config_->IsArgumentFilterEnabled()) {
-    metadata_filter = base::trace_event::TraceLog::GetInstance()
-                          ->GetMetadataFilterPredicate();
-  }
-
-  if (!metadata_filter.is_null()) {
-    for (auto it : metadata_dict) {
-      if (!metadata_filter.Run(it.first)) {
-        it.second = base::Value("__stripped__");
-      }
-    }
-  }
-
-  return base::Value(std::move(metadata_dict));
 }
 
 TracingControllerImpl* TracingControllerImpl::GetInstance() {
@@ -387,10 +233,23 @@ TracingControllerImpl* TracingControllerImpl::GetInstance() {
 
 bool TracingControllerImpl::GetCategories(GetCategoriesDoneCallback callback) {
   std::set<std::string> category_set;
-  tracing::TracedProcessImpl::GetInstance()->GetCategories(&category_set);
+
+  AddCategoriesToSet(base::perfetto_track_event::internal::kCategoryRegistry,
+                     category_set);
+  AddCategoriesToSet(v8::GetTrackEventCategoryRegistry(), category_set);
+  AddCategoriesToSet(GetWebRtcTrackEventCategoryRegistry(), category_set);
 
   std::move(callback).Run(category_set);
   return true;
+}
+
+std::vector<uint8_t> TracingControllerImpl::GetTrackEventDescriptor() {
+  perfetto::protos::gen::TrackEventDescriptor track_event;
+  AddCategoriesToDescriptor(
+      base::perfetto_track_event::internal::kCategoryRegistry, track_event);
+  AddCategoriesToDescriptor(v8::GetTrackEventCategoryRegistry(), track_event);
+  AddCategoriesToDescriptor(GetWebRtcTrackEventCategoryRegistry(), track_event);
+  return track_event.SerializeAsArray();
 }
 
 bool TracingControllerImpl::StartTracing(
@@ -422,11 +281,10 @@ bool TracingControllerImpl::StartTracing(
   DCHECK(!tracing_session_host_);
   ConnectToServiceIfNeeded();
 
-  perfetto::TraceConfig perfetto_config = tracing::GetDefaultPerfettoConfig(
-      trace_config,
-      /*privacy_filtering_enabled=*/false,
-      /*convert_to_legacy_json=*/true,
-      perfetto::protos::gen::ChromeConfig::USER_INITIATED);
+  perfetto::TraceConfig perfetto_config =
+      tracing::GetDefaultPerfettoConfig(trace_config,
+                                        /*privacy_filtering_enabled=*/false,
+                                        /*convert_to_legacy_json=*/true);
 
   consumer_host_->EnableTracing(
       tracing_session_host_.BindNewPipeAndPassReceiver(),
@@ -456,10 +314,6 @@ bool TracingControllerImpl::StopTracing(
   if (!IsTracing() || drainer_ || !tracing_session_host_)
     return false;
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-#if BUILDFLAG(IS_ANDROID)
-  base::trace_event::TraceLog::GetInstance()->AddClockSyncMetadataEvent();
-#endif
 
   // Setting the argument filter is no longer supported just in the TraceConfig;
   // clients of the TracingController that need filtering need to pass that
@@ -528,10 +382,9 @@ void TracingControllerImpl::OnTracingFailed() {
   CompleteFlush();
 }
 
-void TracingControllerImpl::OnDataAvailable(const void* data,
-                                            size_t num_bytes) {
+void TracingControllerImpl::OnDataAvailable(base::span<const uint8_t> data) {
   if (trace_data_endpoint_) {
-    const std::string chunk(static_cast<const char*>(data), num_bytes);
+    const std::string chunk(base::as_string_view(data));
     trace_data_endpoint_->ReceiveTraceChunk(
         std::make_unique<std::string>(chunk));
   }
@@ -560,9 +413,9 @@ void TracingControllerImpl::OnReadBuffersComplete() {
     CompleteFlush();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void TracingControllerImpl::OnMachineStatisticsLoaded() {
-  if (const absl::optional<base::StringPiece> hardware_class =
+  if (const std::optional<std::string_view> hardware_class =
           ash::system::StatisticsProvider::GetInstance()->GetMachineStatistic(
               ash::system::kHardwareClassKey)) {
     hardware_class_ = std::string(hardware_class.value());
@@ -570,14 +423,5 @@ void TracingControllerImpl::OnMachineStatisticsLoaded() {
   are_statistics_loaded_ = true;
 }
 #endif
-
-void TracingControllerImpl::SetTracingDelegateForTesting(
-    std::unique_ptr<TracingDelegate> delegate) {
-  if (!delegate) {
-    delegate_.reset(GetContentClient()->browser()->GetTracingDelegate());
-  } else {
-    delegate_ = std::move(delegate);
-  }
-}
 
 }  // namespace content

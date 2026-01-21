@@ -18,14 +18,11 @@ import org.mockito.InOrder;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
 
-/**
- * Unit tests for MagnifierAnimator.
- */
+/** Unit tests for MagnifierAnimator. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class MagnifierAnimatorTest {
@@ -35,7 +32,6 @@ public class MagnifierAnimatorTest {
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        ShadowLog.stream = System.out;
 
         mMagnifier = Mockito.mock(MagnifierWrapper.class);
         when(mMagnifier.isAvailable()).thenReturn(true);

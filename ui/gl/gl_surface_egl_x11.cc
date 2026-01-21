@@ -4,12 +4,14 @@
 
 #include "ui/gl/gl_surface_egl_x11.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "ui/base/x/x11_util.h"
 #include "ui/base/x/x11_xrandr_interval_only_vsync_provider.h"
 #include "ui/gfx/frame_data.h"
+#include "ui/gfx/x/connection.h"
+#include "ui/gfx/x/visual_manager.h"
 #include "ui/gfx/x/xproto.h"
-#include "ui/gfx/x/xproto_util.h"
 #include "ui/gl/egl_util.h"
 
 namespace gl {
@@ -71,12 +73,13 @@ gfx::SwapResult NativeViewGLSurfaceEGLX11::SwapBuffers(
 
 EGLint NativeViewGLSurfaceEGLX11::GetNativeVisualID() const {
   x11::VisualId visual_id;
-  ui::XVisualManager::GetInstance()->ChooseVisualForWindow(
+  GetXNativeConnection()->GetOrCreateVisualManager().ChooseVisualForWindow(
       true, &visual_id, nullptr, nullptr, nullptr);
   return static_cast<EGLint>(visual_id);
 }
 
 NativeViewGLSurfaceEGLX11::~NativeViewGLSurfaceEGLX11() {
+  InvalidateWeakPtrs();
   Destroy();
 }
 
@@ -93,13 +96,15 @@ void NativeViewGLSurfaceEGLX11::OnEvent(const x11::Event& x11_event) {
   // When ANGLE is used for EGL, it creates an X11 child window. Expose events
   // from this window need to be forwarded to this class.
   auto* expose = x11_event.As<x11::ExposeEvent>();
-  if (!expose || !base::Contains(children_, expose->window))
+  if (!expose || !std::ranges::contains(children_, expose->window)) {
     return;
+  }
 
   auto expose_copy = *expose;
   auto window = static_cast<x11::Window>(window_);
   expose_copy.window = window;
-  x11::SendEvent(expose_copy, window, x11::EventMask::Exposure);
+  x11::Connection::Get()->SendEvent(expose_copy, window,
+                                    x11::EventMask::Exposure);
   x11::Connection::Get()->Flush();
 }
 

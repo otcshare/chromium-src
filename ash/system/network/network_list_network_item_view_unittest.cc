@@ -6,24 +6,27 @@
 
 #include <memory>
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/login_types.h"
+#include "ash/public/cpp/style/dark_light_mode_controller.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
+#include "ash/style/color_util.h"
 #include "ash/system/network/fake_network_detailed_network_view.h"
 #include "ash/system/network/network_icon.h"
-#include "ash/system/network/network_info.h"
 #include "ash/test/ash_test_base.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
-#include "base/test/scoped_feature_list.h"
-#include "chromeos/services/network_config/public/cpp/cros_network_config_test_helper.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -36,15 +39,14 @@ namespace ash {
 
 namespace {
 
-using chromeos::network_config::CrosNetworkConfigTestHelper;
-
-using chromeos::network_config::mojom::ActivationStateType;
-using chromeos::network_config::mojom::ConnectionStateType;
-using chromeos::network_config::mojom::NetworkStatePropertiesPtr;
-using chromeos::network_config::mojom::NetworkType;
-using chromeos::network_config::mojom::OncSource;
-using chromeos::network_config::mojom::PortalState;
-using chromeos::network_config::mojom::SecurityType;
+using ::chromeos::network_config::mojom::ActivationStateType;
+using ::chromeos::network_config::mojom::ConnectionStateType;
+using ::chromeos::network_config::mojom::NetworkStatePropertiesPtr;
+using ::chromeos::network_config::mojom::NetworkType;
+using ::chromeos::network_config::mojom::OncSource;
+using ::chromeos::network_config::mojom::PortalState;
+using ::chromeos::network_config::mojom::SecurityType;
+using network_config::CrosNetworkConfigTestHelper;
 
 const std::string kWiFiName = "WiFi";
 const std::string kCellularName = "cellular";
@@ -59,7 +61,7 @@ const char kWiFiDevicePath[] = "/device/wifi_device";
 const char kCellularDeviceName[] = "cellular_device";
 const char kCellularDevicePath[] = "/device/cellular_device";
 
-int kSignalStrength = 50;
+constexpr int kSignalStrength = 50;
 
 }  // namespace
 
@@ -67,10 +69,6 @@ class NetworkListNetworkItemViewTest : public AshTestBase {
  public:
   void SetUp() override {
     AshTestBase::SetUp();
-
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kQuickSettingsNetworkRevamp},
-        /*disabled_features=*/{features::kCaptivePortalUI2022});
 
     SetUpDefaultNetworkDevices();
 
@@ -150,6 +148,10 @@ class NetworkListNetworkItemViewTest : public AshTestBase {
     return network_list_network_item_view_;
   }
 
+  const ui::ColorProvider* GetColorProvider() {
+    return widget_->GetColorProvider();
+  }
+
  protected:
   void SetUpDefaultNetworkDevices() {
     network_state_helper()->ClearDevices();
@@ -165,12 +167,12 @@ class NetworkListNetworkItemViewTest : public AshTestBase {
     return &network_config_helper_.network_state_helper();
   }
 
-  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<views::Widget> widget_;
   std::unique_ptr<FakeNetworkDetailedNetworkView>
       fake_network_detailed_network_view_;
   CrosNetworkConfigTestHelper network_config_helper_;
-  NetworkListNetworkItemView* network_list_network_item_view_;
+  raw_ptr<NetworkListNetworkItemView, DanglingUntriaged>
+      network_list_network_item_view_;
 };
 
 TEST_F(NetworkListNetworkItemViewTest, HasCorrectLabel) {
@@ -233,6 +235,18 @@ TEST_F(NetworkListNetworkItemViewTest, HasCorrectCellularSublabel) {
                 IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CLICK_TO_ACTIVATE),
             network_list_network_item_view()->sub_text_label()->GetText());
 
+  // Simulate user logout and check label for pSIM networks that are
+  // connected but not activated.
+  ClearLogin();
+  base::RunLoop().RunUntilIdle();
+  UpdateViewForNetwork(cellular_network);
+  EXPECT_EQ(l10n_util::GetStringUTF16(
+                IDS_ASH_STATUS_TRAY_NETWORK_STATUS_ACTIVATE_AFTER_DEVICE_SETUP),
+            network_list_network_item_view()->sub_text_label()->GetText());
+
+  SimulateUserLogin(kRegularUserLoginInfo);
+  base::RunLoop().RunUntilIdle();
+
   // Label for unactivated eSIM networks.
   cellular_network->type_state->get_cellular()->eid = kEid;
   UpdateViewForNetwork(cellular_network);
@@ -270,11 +284,25 @@ TEST_F(NetworkListNetworkItemViewTest, HasCorrectCellularSublabel) {
             network_list_network_item_view()->sub_text_label()->GetText());
 
   // label for locked cellular network when user is not logged in.
-  GetSessionControllerClient()->Reset();
+  ClearLogin();
   base::RunLoop().RunUntilIdle();
   UpdateViewForNetwork(cellular_network);
   EXPECT_EQ(l10n_util::GetStringUTF16(
                 IDS_ASH_STATUS_TRAY_NETWORK_STATUS_SIGN_IN_TO_UNLOCK),
+            network_list_network_item_view()->sub_text_label()->GetText());
+}
+
+TEST_F(NetworkListNetworkItemViewTest, HasCorrectCarrierLockSublabel) {
+  EXPECT_FALSE(network_list_network_item_view()->sub_text_label());
+  NetworkStatePropertiesPtr cellular_network =
+      CreateStandaloneNetworkProperties(kCellularName, NetworkType::kCellular,
+                                        ConnectionStateType::kConnected);
+  // Label for carrier locked cellular network.
+  cellular_network->type_state->get_cellular()->sim_locked = true;
+  cellular_network->type_state->get_cellular()->sim_lock_type = "network-pin";
+  UpdateViewForNetwork(cellular_network);
+  EXPECT_EQ(l10n_util::GetStringUTF16(
+                IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED),
             network_list_network_item_view()->sub_text_label()->GetText());
 }
 
@@ -288,55 +316,11 @@ TEST_F(NetworkListNetworkItemViewTest, HasCorrectPortalSublabel) {
   UpdateViewForNetwork(wifi_network);
   EXPECT_TRUE(network_list_network_item_view()->sub_text_label());
   EXPECT_EQ(
-      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CONNECTED),
-      network_list_network_item_view()->sub_text_label()->GetText());
-}
-
-TEST_F(NetworkListNetworkItemViewTest, HasCorrectPortalSublabelWithFlag) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kCaptivePortalUI2022,
-                            features::kQuickSettingsNetworkRevamp},
-      /*disabled_features=*/{});
-  EXPECT_FALSE(network_list_network_item_view()->sub_text_label());
-
-  NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
-      kWiFiName, NetworkType::kWiFi, ConnectionStateType::kPortal);
-  wifi_network->portal_state = PortalState::kPortal;
-
-  UpdateViewForNetwork(wifi_network);
-  EXPECT_TRUE(network_list_network_item_view()->sub_text_label());
-  EXPECT_EQ(
       l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_NETWORK_STATUS_SIGNIN),
       network_list_network_item_view()->sub_text_label()->GetText());
 }
 
-TEST_F(NetworkListNetworkItemViewTest, HasCorrectProxyAuthSublabelWithFlag) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kCaptivePortalUI2022,
-                            features::kQuickSettingsNetworkRevamp},
-      /*disabled_features=*/{});
-  EXPECT_FALSE(network_list_network_item_view()->sub_text_label());
-
-  NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
-      kWiFiName, NetworkType::kWiFi, ConnectionStateType::kPortal);
-  wifi_network->portal_state = PortalState::kProxyAuthRequired;
-
-  UpdateViewForNetwork(wifi_network);
-  EXPECT_TRUE(network_list_network_item_view()->sub_text_label());
-  EXPECT_EQ(
-      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_NETWORK_STATUS_SIGNIN),
-      network_list_network_item_view()->sub_text_label()->GetText());
-}
-
-TEST_F(NetworkListNetworkItemViewTest,
-       HasCorrectPortalSuspectedSublabelWithFlag) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kCaptivePortalUI2022,
-                            features::kQuickSettingsNetworkRevamp},
-      /*disabled_features=*/{});
+TEST_F(NetworkListNetworkItemViewTest, HasCorrectPortalSuspectedSublabel) {
   EXPECT_FALSE(network_list_network_item_view()->sub_text_label());
 
   NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
@@ -345,18 +329,12 @@ TEST_F(NetworkListNetworkItemViewTest,
 
   UpdateViewForNetwork(wifi_network);
   EXPECT_TRUE(network_list_network_item_view()->sub_text_label());
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CONNECTED_NO_INTERNET),
-            network_list_network_item_view()->sub_text_label()->GetText());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_NETWORK_STATUS_SIGNIN),
+      network_list_network_item_view()->sub_text_label()->GetText());
 }
 
-TEST_F(NetworkListNetworkItemViewTest,
-       HasCorrectNoConnectivitySublabelWithFlag) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kCaptivePortalUI2022,
-                            features::kQuickSettingsNetworkRevamp},
-      /*disabled_features=*/{});
+TEST_F(NetworkListNetworkItemViewTest, HasCorrectNoConnectivitySublabel) {
   EXPECT_FALSE(network_list_network_item_view()->sub_text_label());
 
   NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
@@ -392,8 +370,7 @@ TEST_F(NetworkListNetworkItemViewTest, HasEnterpriseIconWhenBlockedByPolicy) {
 
   const gfx::Image expected_image(CreateVectorIcon(
       kSystemMenuBusinessIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorPrimary)));
+      AshColorProvider::Get()->GetColor(cros_tokens::kIconColorPrimary)));
   const gfx::Image actual_image(
       static_cast<views::ImageView*>(
           network_list_network_item_view()->right_view())
@@ -439,7 +416,7 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedA11yText) {
   EXPECT_EQ(
       l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_NETWORK_A11Y_LABEL_OPEN,
                                  base::UTF8ToUTF16(kWiFiName)),
-      network_list_network_item_view()->GetAccessibleName());
+      network_list_network_item_view()->GetViewAccessibility().GetCachedName());
 
   // Network can be connected to.
   wifi_network->connectable = true;
@@ -449,7 +426,7 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedA11yText) {
   EXPECT_EQ(
       l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_NETWORK_A11Y_LABEL_CONNECT,
                                  base::UTF8ToUTF16(kWiFiName)),
-      network_list_network_item_view()->GetAccessibleName());
+      network_list_network_item_view()->GetViewAccessibility().GetCachedName());
 
   // Activate cellular network A11Y label is shown when a pSIM network is
   // connected but not yet activated.
@@ -462,19 +439,35 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedA11yText) {
       ActivationStateType::kNotActivated;
   UpdateViewForNetwork(cellular_network);
 
-  EXPECT_EQ(l10n_util::GetStringFUTF16(
-                IDS_ASH_STATUS_TRAY_NETWORK_A11Y_LABEL_ACTIVATE,
-                base::UTF8ToUTF16(kCellularName)),
-            network_list_network_item_view()->GetAccessibleName());
+  EXPECT_EQ(
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_STATUS_TRAY_NETWORK_A11Y_LABEL_ACTIVATE,
+          base::UTF8ToUTF16(kCellularName)),
+      network_list_network_item_view()->GetViewAccessibility().GetCachedName());
+
+  // Simulate user logout and check label for pSIM networks that are
+  // connected but not activated.
+  ClearLogin();
+  base::RunLoop().RunUntilIdle();
+  UpdateViewForNetwork(cellular_network);
+  EXPECT_EQ(
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_STATUS_TRAY_NETWORK_A11Y_LABEL_ACTIVATE_AFTER_SETUP,
+          base::UTF8ToUTF16(kCellularName)),
+      network_list_network_item_view()->GetViewAccessibility().GetCachedName());
+
+  SimulateUserLogin(kRegularUserLoginInfo);
+  base::RunLoop().RunUntilIdle();
 
   // Contact carrier A11Y label is shown when a eSIM network is connected but
   // not yet activated.
   cellular_network->type_state->get_cellular()->eid = kEid;
   UpdateViewForNetwork(cellular_network);
-  EXPECT_EQ(l10n_util::GetStringFUTF16(
-                IDS_ASH_STATUS_TRAY_NETWORK_A11Y_UNAVAILABLE_SIM_NETWORK,
-                base::UTF8ToUTF16(kCellularName)),
-            network_list_network_item_view()->GetAccessibleName());
+  EXPECT_EQ(
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_STATUS_TRAY_NETWORK_A11Y_UNAVAILABLE_SIM_NETWORK,
+          base::UTF8ToUTF16(kCellularName)),
+      network_list_network_item_view()->GetViewAccessibility().GetCachedName());
 }
 
 TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForEthernet) {
@@ -592,6 +585,17 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForCellular) {
       l10n_util::GetStringUTF16(
           IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CLICK_TO_ACTIVATE));
 
+  // Cellular is not activate and user is not logged in.
+  ClearLogin();
+  base::RunLoop().RunUntilIdle();
+  AssertA11yDescription(
+      cellular_network,
+      l10n_util::GetStringUTF16(
+          IDS_ASH_STATUS_TRAY_NETWORK_STATUS_ACTIVATE_AFTER_DEVICE_SETUP));
+
+  SimulateUserLogin(kRegularUserLoginInfo);
+  base::RunLoop().RunUntilIdle();
+
   // Cellular is not activated and is an eSIM network.
   cellular_network->type_state->get_cellular()->eid = kEid;
   AssertA11yDescription(
@@ -610,7 +614,7 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForCellular) {
           IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CLICK_TO_UNLOCK));
 
   // User is not signed in.
-  GetSessionControllerClient()->Reset();
+  ClearLogin();
   AssertA11yDescription(
       cellular_network,
       l10n_util::GetStringUTF16(
@@ -681,95 +685,6 @@ TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForCellular) {
 }
 
 TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForWiFi) {
-  SecurityType security_types[2] = {SecurityType::kNone, SecurityType::kWepPsk};
-
-  NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
-      kWiFiName, NetworkType::kWiFi, ConnectionStateType::kConnected);
-
-  for (const auto& security : security_types) {
-    wifi_network->type_state->get_wifi()->security = security;
-    const std::u16string security_label = l10n_util::GetStringUTF16(
-        security == SecurityType::kWepPsk
-            ? IDS_ASH_STATUS_TRAY_NETWORK_STATUS_SECURED
-            : IDS_ASH_STATUS_TRAY_NETWORK_STATUS_UNSECURED);
-
-    for (const auto& connection : GetConnectionStateTypes()) {
-      wifi_network->connection_state = connection;
-      std::u16string connection_status;
-      for (const auto& policy : GetPolicies()) {
-        wifi_network->source = policy;
-        switch (connection) {
-          case ConnectionStateType::kConnected:
-          case ConnectionStateType::kPortal:
-          case ConnectionStateType::kOnline: {
-            connection_status = l10n_util::GetStringUTF16(
-                IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CONNECTED);
-            if (policy == OncSource::kDevicePolicy) {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC_MANAGED_WITH_CONNECTION_STATUS,
-                      security_label, connection_status,
-                      base::FormatPercent(kSignalStrength)));
-
-            } else {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC_WITH_CONNECTION_STATUS,
-                      security_label, connection_status,
-                      base::FormatPercent(kSignalStrength)));
-            }
-            break;
-          }
-          case ConnectionStateType::kConnecting: {
-            connection_status = l10n_util::GetStringUTF16(
-                IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CONNECTING);
-            if (policy == OncSource::kDevicePolicy) {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC_MANAGED_WITH_CONNECTION_STATUS,
-                      security_label, connection_status,
-                      base::FormatPercent(kSignalStrength)));
-
-            } else {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC_WITH_CONNECTION_STATUS,
-                      security_label, connection_status,
-                      base::FormatPercent(kSignalStrength)));
-            }
-            break;
-          }
-          case ConnectionStateType::kNotConnected:
-            if (policy == OncSource::kDevicePolicy) {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC_MANAGED,
-                      security_label, base::FormatPercent(kSignalStrength)));
-            } else {
-              AssertA11yDescription(
-                  wifi_network,
-                  l10n_util::GetStringFUTF16(
-                      IDS_ASH_STATUS_TRAY_WIFI_NETWORK_A11Y_DESC,
-                      security_label, base::FormatPercent(kSignalStrength)));
-            }
-        }
-      }
-    }
-  }
-}
-
-TEST_F(NetworkListNetworkItemViewTest, HasExpectedDescriptionForWiFiWithFlag) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kCaptivePortalUI2022,
-                            features::kQuickSettingsNetworkRevamp},
-      /*disabled_features=*/{});
-
   SecurityType security_types[2] = {SecurityType::kNone, SecurityType::kWepPsk};
 
   NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
@@ -882,7 +797,7 @@ TEST_F(NetworkListNetworkItemViewTest, NetworkIconAnimating) {
   // Override current icon with an empty icon, check it is updated when
   // animation starts.
   static_cast<views::ImageView*>(network_list_network_item_view()->left_view())
-      ->SetImage(gfx::ImageSkia());
+      ->SetImage(ui::ImageModel());
 
   EXPECT_TRUE(static_cast<views::ImageView*>(
                   network_list_network_item_view()->left_view())
@@ -896,6 +811,65 @@ TEST_F(NetworkListNetworkItemViewTest, NetworkIconAnimating) {
                    network_list_network_item_view()->left_view())
                    ->GetImage()
                    .isNull());
+}
+
+TEST_F(NetworkListNetworkItemViewTest, WiFiIcon) {
+  DarkLightModeController::Get()->SetDarkModeEnabledForTest(false);
+
+  NetworkStatePropertiesPtr wifi_network = CreateStandaloneNetworkProperties(
+      kWiFiName, NetworkType::kWiFi, ConnectionStateType::kConnecting);
+
+  UpdateViewForNetwork(wifi_network);
+
+  gfx::ImageSkia image = static_cast<views::ImageView*>(
+                             network_list_network_item_view()->left_view())
+                             ->GetImage();
+
+  gfx::Image default_image =
+      gfx::Image(network_icon::GetImageForNonVirtualNetwork(
+          GetColorProvider(), wifi_network.get(), network_icon::ICON_TYPE_LIST,
+          false));
+
+  EXPECT_TRUE(gfx::test::AreImagesEqual(gfx::Image(image), default_image));
+
+  // Test that theme changes cause network icon change.
+  DarkLightModeController::Get()->SetDarkModeEnabledForTest(true);
+
+  image = static_cast<views::ImageView*>(
+              network_list_network_item_view()->left_view())
+              ->GetImage();
+
+  EXPECT_FALSE(gfx::test::AreImagesEqual(gfx::Image(image), default_image));
+}
+
+TEST_F(NetworkListNetworkItemViewTest, CellularIcon) {
+  DarkLightModeController::Get()->SetDarkModeEnabledForTest(false);
+
+  NetworkStatePropertiesPtr cellular_network =
+      CreateStandaloneNetworkProperties(kCellularName, NetworkType::kCellular,
+                                        ConnectionStateType::kConnected);
+
+  UpdateViewForNetwork(cellular_network);
+
+  gfx::ImageSkia image = static_cast<views::ImageView*>(
+                             network_list_network_item_view()->left_view())
+                             ->GetImage();
+
+  gfx::Image default_image =
+      gfx::Image(network_icon::GetImageForNonVirtualNetwork(
+          GetColorProvider(), cellular_network.get(),
+          network_icon::ICON_TYPE_LIST, false));
+
+  EXPECT_TRUE(gfx::test::AreImagesEqual(gfx::Image(image), default_image));
+
+  // Test that theme changes cause network icon change.
+  DarkLightModeController::Get()->SetDarkModeEnabledForTest(true);
+
+  image = static_cast<views::ImageView*>(
+              network_list_network_item_view()->left_view())
+              ->GetImage();
+
+  EXPECT_FALSE(gfx::test::AreImagesEqual(gfx::Image(image), default_image));
 }
 
 }  // namespace ash

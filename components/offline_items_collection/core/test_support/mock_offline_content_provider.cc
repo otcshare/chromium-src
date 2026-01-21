@@ -4,7 +4,7 @@
 
 #include "components/offline_items_collection/core/test_support/mock_offline_content_provider.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace offline_items_collection {
@@ -12,7 +12,7 @@ namespace offline_items_collection {
 MockOfflineContentProvider::MockObserver::MockObserver() = default;
 MockOfflineContentProvider::MockObserver::~MockObserver() = default;
 
-MockOfflineContentProvider::MockOfflineContentProvider() {}
+MockOfflineContentProvider::MockOfflineContentProvider() = default;
 MockOfflineContentProvider::~MockOfflineContentProvider() = default;
 
 void MockOfflineContentProvider::SetItems(const OfflineItemList& items) {
@@ -36,7 +36,7 @@ void MockOfflineContentProvider::NotifyOnItemRemoved(const ContentId& id) {
 
 void MockOfflineContentProvider::NotifyOnItemUpdated(
     const OfflineItem& item,
-    const absl::optional<UpdateDelta>& update_delta) {
+    const std::optional<UpdateDelta>& update_delta) {
   NotifyItemUpdated(item, update_delta);
 }
 
@@ -63,7 +63,7 @@ void MockOfflineContentProvider::GetAllItems(MultipleItemCallback callback) {
 
 void MockOfflineContentProvider::GetItemById(const ContentId& id,
                                              SingleItemCallback callback) {
-  absl::optional<OfflineItem> result;
+  std::optional<OfflineItem> result;
   for (auto item : items_) {
     if (item.id == id) {
       result = item;

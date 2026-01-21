@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_DEVTOOLS_BROWSER_DEVTOOLS_AGENT_HOST_H_
 #define CONTENT_BROWSER_DEVTOOLS_BROWSER_DEVTOOLS_AGENT_HOST_H_
 
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 
 namespace content {
@@ -25,7 +26,7 @@ class BrowserDevToolsAgentHost : public DevToolsAgentHostImpl {
   ~BrowserDevToolsAgentHost() override;
 
   // DevToolsAgentHostImpl overrides.
-  bool AttachSession(DevToolsSession* session, bool acquire_wake_lock) override;
+  bool AttachSession(DevToolsSession* session) override;
   void DetachSession(DevToolsSession* session) override;
   protocol::TargetAutoAttacher* auto_attacher() override;
 

@@ -28,7 +28,6 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="2329392777730037872"><ph name="URL" /> ei avaudu asiakassovelluksessa.</translation>
 <translation id="2359808026110333948">Jatka</translation>
 <translation id="2366718077645204424">Isäntään ei saatu yhteyttä. Tämä johtuu luultavasti käyttämäsi verkon määrityksistä.</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />  Havaittiin verkossa viimeksi <ph name="RELATIVE_TIMESTAMP" />.</translation>
 <translation id="2504109125669302160">Myönnä Esteettömyys-käyttölupa: <ph name="PRODUCT_NAME" /></translation>
 <translation id="2509394361235492552">Yhdistetty isäntään <ph name="HOSTNAME" /></translation>
 <translation id="2540992418118313681">Haluatko jakaa tämän tietokoneen niin, että toinen käyttäjä voi käyttää ja valvoa sitä?</translation>
@@ -36,17 +35,18 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="2599300881200251572">Tämä palvelu mahdollistaa Chrome-etäkäytön asiakkaiden muodostamat yhteydet.</translation>
 <translation id="2647232381348739934">Chromoting-palvelu</translation>
 <translation id="2676780859508944670">Käsitellään…</translation>
-<translation id="2692522824157224199">Copyright 2022 Google LLC. Kaikki oikeudet pidätetään.</translation>
 <translation id="2699970397166997657">Chromoting</translation>
 <translation id="2758123043070977469">Todennusvirhe – kirjaudu uudelleen sisään.</translation>
 <translation id="2803375539583399270">Lisää PIN-koodi</translation>
 <translation id="2919669478609886916">Jaat tällä hetkellä tämän tietokoneen toisen käyttäjän kanssa. Haluatko jatkaa jakamista?</translation>
+<translation id="2929683002824598593">Jaa laite</translation>
 <translation id="2939145106548231838">Todenna isännälle</translation>
 <translation id="3027681561976217984">Kosketustila</translation>
 <translation id="3106379468611574572">Etätietokone ei vastaa yhteyspyyntöihin. Vahvista, että se on online-tilassa, ja yritä uudelleen.</translation>
 <translation id="3150823315463303127">Isäntä ei voinut lukea käytäntöä.</translation>
 <translation id="3171922709365450819">Asiakassovellus ei tue laitetta, koska laite edellyttää kolmannen osapuolen todennusta.</translation>
 <translation id="3197730452537982411">Etäkäyttö</translation>
+<translation id="3236334139428307578">Tekijänoikeudet 2026: The Chromium Authors. Kaikki oikeudet pidätetään.</translation>
 <translation id="324272851072175193">Lähetä nämä ohjeet sähköpostilla</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> haluaa tehdä muutoksia.</translation>
 <translation id="3339299787263251426">Käytä tietokonettasi turvallisesti internetissä</translation>
@@ -54,7 +54,6 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="3423542133075182604">Suojausavaimen etäkäyttöprosessi</translation>
 <translation id="3581045510967524389">Verkkoon yhdistäminen ei onnistu. Varmista, että laitteesi on online-tilassa.</translation>
 <translation id="3596628256176442606">Tämä palvelu mahdollistaa Chromoting-asiakkaiden muodostamat yhteydet.</translation>
-<translation id="369442766917958684">Offline.</translation>
 <translation id="3695446226812920698">Lisätietoja</translation>
 <translation id="3776024066357219166">Chrome-etäkäyttökerta on päättynyt.</translation>
 <translation id="3858860766373142691">Nimi</translation>
@@ -73,7 +72,6 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="4257751272692708833">URL-osoitteen välittäjä: <ph name="PRODUCT_NAME" /></translation>
 <translation id="4277736576214464567">Käyttökoodi on virheellinen. Yritä uudelleen.</translation>
 <translation id="4281844954008187215">Käyttöehdot</translation>
-<translation id="4372650392690220936">Copyright 2022 The Chromium Authors. Kaikki oikeudet pidätetään.</translation>
 <translation id="4405930547258349619">Ydinkirjasto</translation>
 <translation id="443560535555262820">Avaa esteettömyysasetukset</translation>
 <translation id="4450893287417543264">Älä näytä uudelleen</translation>
@@ -95,6 +93,7 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="4987330545941822761">Chrome-etäkäyttö ei tunnista URL-osoitteiden paikalliseen avaamiseen käytettävää selainta. Valitse se listalta.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (offline)</translation>
 <translation id="507204348399810022">Haluatko varmasti poistaa käytöstä etäyhteydet kohteeseen <ph name="HOSTNAME" />?</translation>
+<translation id="5095424396646120601">Crash Reporting</translation>
 <translation id="5170982930780719864">Isännän tunnus on virheellinen.</translation>
 <translation id="5204575267916639804">Usein kysytyt kysymykset</translation>
 <translation id="5222676887888702881">Kirjaudu ulos</translation>
@@ -107,12 +106,12 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="5601503069213153581">PIN-koodi</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">Tietokoneesi on jaettu käyttäjän <ph name="USER" /> kanssa.</translation>
-<translation id="5750083143895808682">Kirjautunut osoitteella <ph name="EMAIL_ADDRESS" /></translation>
 <translation id="579702532610384533">Yhdistä uudelleen</translation>
 <translation id="5810269635982033450">Näyttö toimii ohjauslevynä</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> on pyytänyt lupaa nähdä näyttösi ja ohjata näppäimistöäsi ja hiirtäsi. Paina ''<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />'', jos et odottanut tätä pyyntöä. Muussa tapauksessa voit sallia yhteyden valitsemalla ''<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />'', kun olet valmis.</translation>
 <translation id="5823658491130719298">Kun olet tietokoneella, jota haluat käyttää etänä, avaa Chrome ja siirry osoitteeseen <ph name="INSTALLATION_LINK" />.</translation>
 <translation id="5841343754884244200">Näyttöasetukset</translation>
+<translation id="5965133372831030509">Tekijänoikeudet 2026 Google LLC. Kaikki oikeudet pidätetään.</translation>
 <translation id="6033507038939587647">Näppäimistöasetukset</translation>
 <translation id="6040143037577758943">Sulje</translation>
 <translation id="6062854958530969723">Isännän alustus epäonnistui.</translation>
@@ -121,10 +120,12 @@ Jos <ph name="SERVICE_SCRIPT_NAME" /> on jo valittuna, poista valinta ja valitse
 <translation id="6178645564515549384">Viestiliikenteen alkuperäinen isäntä etäavustukselle</translation>
 <translation id="618120821413932081">Päivitä etäresoluutio vastaamaan ikkunan resoluutiota</translation>
 <translation id="6223301979382383752">Avaa näytön tallennuksen asetukset</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> on pyytänyt lupaa nähdä näyttösi ja ohjata näppäimistöäsi ja hiirtäsi. Haluatko jakaa laitteesi?</translation>
 <translation id="6284412385303060032">Konsolin logiikkaruudussa käynnissä ollut isäntä sulkeutui tukeakseen verhotilaa. Vaihdetaan käyttäjäkohtaisessa istunnossa käynnissä olevaan isäntään.</translation>
 <translation id="6542902059648396432">Ilmoita ongelmasta…</translation>
 <translation id="6583902294974160967">Tuki</translation>
 <translation id="6612717000975622067">Lähetä Ctrl-Alt-Del</translation>
+<translation id="6625262630437221505">{0,plural, =1{Jos et tee mitään, laite aloittaa jakamisen automaattisesti # sekunnin päästä.}other{Jos et tee mitään, laite aloittaa jakamisen automaattisesti # sekunnin päästä.}}</translation>
 <translation id="6654753848497929428">Jaa</translation>
 <translation id="677755392401385740">Käyttäjän <ph name="HOST_USERNAME" /> isäntä käynnistettiin.</translation>
 <translation id="6902524959760471898">Apusovellus URL-osoitteen avaamiseen asiakassovelluksessa: <ph name="PRODUCT_NAME" /></translation>

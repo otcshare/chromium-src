@@ -4,15 +4,16 @@
 
 package org.chromium.components.payments;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.payments.mojom.PayerDetail;
 import org.chromium.payments.mojom.PaymentOptions;
 import org.chromium.payments.mojom.PaymentResponse;
 
 /**
  * The helper class that generates a {@link PaymentResponse} with the input of payment details.
- * Compared to ChromePaymentResponseHelper, this helper does not handle the Autofill data, and so
- * can be used for WebLayerPaymentRequestService.
+ * Compared to ChromePaymentResponseHelper, this helper does not handle the Autofill data.
  */
+@NullMarked
 public class PaymentResponseHelper implements PaymentResponseHelperInterface {
     private final PaymentResponse mPaymentResponse;
     private final PaymentOptions mPaymentOptions;
@@ -33,8 +34,11 @@ public class PaymentResponseHelper implements PaymentResponseHelperInterface {
     }
 
     @Override
-    public void generatePaymentResponse(String methodName, String stringifiedDetails,
-            PayerData payerData, PaymentResponseResultCallback resultCallback) {
+    public void generatePaymentResponse(
+            String methodName,
+            String stringifiedDetails,
+            PayerData payerData,
+            PaymentResponseResultCallback resultCallback) {
         mPaymentResponse.methodName = methodName;
         mPaymentResponse.stringifiedDetails = stringifiedDetails;
         // Set up the shipping section of the response when it comes from payment app.

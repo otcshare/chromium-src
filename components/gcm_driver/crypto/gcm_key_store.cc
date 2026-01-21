@@ -8,18 +8,23 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/gcm_driver/crypto/p256_key_util.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
 #include "components/leveldb_proto/public/shared_proto_database_client_list.h"
+#include "crypto/evp.h"
+#include "crypto/keypair.h"
+#include "crypto/openssl_util.h"
 #include "crypto/random.h"
-#include "third_party/leveldatabase/env_chromium.h"
+#include "third_party/boringssl/src/include/openssl/bytestring.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
+#include "third_party/boringssl/src/include/openssl/pkcs8.h"
 
 namespace gcm {
 
@@ -32,9 +37,6 @@ using EntryVectorType =
 // authentication secret. Must be at least 16 bytes.
 const size_t kAuthSecretBytes = 16;
 
-// Size cap for the leveldb log file before compression.
-const size_t kDatabaseWriteBufferSizeBytes = 16 * 1024;
-
 std::string DatabaseKey(const std::string& app_id,
                         const std::string& authorized_entity) {
   DCHECK_EQ(std::string::npos, app_id.find(','));
@@ -43,14 +45,6 @@ std::string DatabaseKey(const std::string& app_id,
   return authorized_entity.empty()
              ? app_id  // No comma, for compatibility with existing keys.
              : app_id + ',' + authorized_entity;
-}
-
-leveldb_env::Options CreateLevelDbOptions() {
-  leveldb_env::Options options;
-  options.create_if_missing = true;
-  options.max_open_files = 0;  // Use minimum.
-  options.write_buffer_size = kDatabaseWriteBufferSizeBytes;
-  return options;
 }
 
 }  // namespace
@@ -71,7 +65,7 @@ GCMKeyStore::GCMKeyStore(
   DCHECK(blocking_task_runner);
 }
 
-GCMKeyStore::~GCMKeyStore() {}
+GCMKeyStore::~GCMKeyStore() = default;
 
 void GCMKeyStore::GetKeys(const std::string& app_id,
                           const std::string& authorized_entity,
@@ -100,15 +94,15 @@ void GCMKeyStore::GetKeysAfterInitialize(
         inner_iter = inner_map.find(std::string());
       if (inner_iter != inner_map.end()) {
         const auto& map_entry = inner_iter->second;
-        std::move(callback).Run(map_entry.first->Copy(), map_entry.second);
+        std::move(callback).Run(map_entry.first, map_entry.second);
         success = true;
       }
     }
   }
 
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.GetKeySuccessRate", success);
   if (!success)
-    std::move(callback).Run(nullptr /* key */, std::string() /* auth_secret */);
+    std::move(callback).Run(std::nullopt /* key */,
+                            std::string() /* auth_secret */);
 }
 
 void GCMKeyStore::CreateKeys(const std::string& app_id,
@@ -125,7 +119,8 @@ void GCMKeyStore::CreateKeysAfterInitialize(
     KeysCallback callback) {
   DCHECK(state_ == State::INITIALIZED || state_ == State::FAILED);
   if (state_ != State::INITIALIZED) {
-    std::move(callback).Run(nullptr /* key */, std::string() /* auth_secret */);
+    std::move(callback).Run(std::nullopt /* key */,
+                            std::string() /* auth_secret */);
     return;
   }
 
@@ -142,21 +137,12 @@ void GCMKeyStore::CreateKeysAfterInitialize(
       << "Instance ID tokens cannot share an app_id with a non-InstanceID GCM "
          "registration";
 
-  std::unique_ptr<crypto::ECPrivateKey> key(crypto::ECPrivateKey::Create());
-
-  if (!key) {
-    NOTREACHED() << "Unable to initialize a P-256 key pair.";
-
-    std::move(callback).Run(nullptr /* key */, std::string() /* auth_secret */);
-    return;
-  }
-
-  std::string auth_secret;
+  auto key = crypto::keypair::PrivateKey::GenerateEcP256();
 
   // Create the authentication secret, which has to be a cryptographically
   // secure random number of at least 128 bits (16 bytes).
-  crypto::RandBytes(base::WriteInto(&auth_secret, kAuthSecretBytes + 1),
-                    kAuthSecretBytes);
+  std::string auth_secret(kAuthSecretBytes, '\0');
+  crypto::RandBytes(base::as_writable_byte_span(auth_secret));
 
   // Store the keys in a new EncryptionData object.
   EncryptionData encryption_data;
@@ -165,14 +151,12 @@ void GCMKeyStore::CreateKeysAfterInitialize(
     encryption_data.set_authorized_entity(authorized_entity);
   encryption_data.set_auth_secret(auth_secret);
 
-  std::string private_key;
-  bool success = GetRawPrivateKey(*key, &private_key);
-  DCHECK(success);
-  encryption_data.set_private_key(private_key);
+  encryption_data.set_private_key(base::as_string_view(key.ToPrivateKeyInfo()));
 
   // Write them immediately to our cache, so subsequent calls to
   // {Get/Create/Remove}Keys can see them.
-  key_data_[app_id][authorized_entity] = {key->Copy(), auth_secret};
+  key_data_[app_id].emplace(authorized_entity,
+                            std::make_pair(key, auth_secret));
 
   std::unique_ptr<EntryVectorType> entries_to_save(new EntryVectorType());
   std::unique_ptr<std::vector<std::string>> keys_to_remove(
@@ -184,26 +168,25 @@ void GCMKeyStore::CreateKeysAfterInitialize(
   database_->UpdateEntries(
       std::move(entries_to_save), std::move(keys_to_remove),
       base::BindOnce(&GCMKeyStore::DidStoreKeys, weak_factory_.GetWeakPtr(),
-                     std::move(key), auth_secret, std::move(callback)));
+                     key, auth_secret, std::move(callback)));
 }
 
-void GCMKeyStore::DidStoreKeys(std::unique_ptr<crypto::ECPrivateKey> pair,
+void GCMKeyStore::DidStoreKeys(crypto::keypair::PrivateKey key,
                                const std::string& auth_secret,
                                KeysCallback callback,
                                bool success) {
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.CreateKeySuccessRate", success);
-
   if (!success) {
     DVLOG(1) << "Unable to store the created key in the GCM Key Store.";
 
     // Our cache is now inconsistent. Reject requests until restarted.
     state_ = State::FAILED;
 
-    std::move(callback).Run(nullptr /* key */, std::string() /* auth_secret */);
+    std::move(callback).Run(std::nullopt /* key */,
+                            std::string() /* auth_secret */);
     return;
   }
 
-  std::move(callback).Run(std::move(pair), auth_secret);
+  std::move(callback).Run(key, auth_secret);
 }
 
 void GCMKeyStore::RemoveKeys(const std::string& app_id,
@@ -261,8 +244,6 @@ void GCMKeyStore::RemoveKeysAfterInitialize(
 }
 
 void GCMKeyStore::DidRemoveKeys(base::OnceClosure callback, bool success) {
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.RemoveKeySuccessRate", success);
-
   if (!success) {
     DVLOG(1) << "Unable to delete a key from the GCM Key Store.";
 
@@ -274,7 +255,6 @@ void GCMKeyStore::DidRemoveKeys(base::OnceClosure callback, bool success) {
 }
 
 void GCMKeyStore::DidUpgradeDatabase(bool success) {
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.GCMDatabaseUpgradeResult", success);
   if (!success) {
     DVLOG(1) << "Unable to upgrade the GCM Key Store database.";
     // Our cache is now inconsistent. Reject requests until restarted.
@@ -304,13 +284,12 @@ void GCMKeyStore::LazyInitialize(base::OnceClosure done_closure) {
       blocking_task_runner_);
 
   database_->Init(
-      CreateLevelDbOptions(),
+      leveldb_proto::CreateSimpleOptions(),
       base::BindOnce(&GCMKeyStore::DidInitialize, weak_factory_.GetWeakPtr()));
 }
 
 void GCMKeyStore::DidInitialize(leveldb_proto::Enums::InitStatus status) {
   bool success = status == leveldb_proto::Enums::kOK;
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.InitKeyStoreSuccessRate", success);
   if (!success) {
     DVLOG(1) << "Unable to initialize the GCM Key Store.";
     state_ = State::FAILED;
@@ -341,8 +320,6 @@ void GCMKeyStore::UpgradeDatabase(
                << entry.keys(0).private_key();
       state_ = State::FAILED;
       delayed_task_controller_.SetReady();
-      UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.GCMDatabaseUpgradeResult",
-                            false /* sucess */);
       return;
     }
 
@@ -361,7 +338,6 @@ void GCMKeyStore::UpgradeDatabase(
 void GCMKeyStore::DidLoadKeys(
     bool success,
     std::unique_ptr<std::vector<EncryptionData>> entries) {
-  UMA_HISTOGRAM_BOOLEAN("GCM.Crypto.LoadKeyStoreSuccessRate", success);
   if (!success) {
     DVLOG(1) << "Unable to load entries into the GCM Key Store.";
     state_ = State::FAILED;
@@ -374,11 +350,10 @@ void GCMKeyStore::DidLoadKeys(
     std::string authorized_entity;
     if (entry.has_authorized_entity())
       authorized_entity = entry.authorized_entity();
-    std::unique_ptr<crypto::ECPrivateKey> key;
 
     // The old format of EncryptionData has a KeyPair in it. Previously
     // we used to cache the key pair and auth secret in key_data_.
-    // The new code adds the pair {ECPrivateKey, auth_secret} to
+    // The new code adds the pair {PrivateKey, auth_secret} to
     // key_data_ instead.
     if (entry.keys_size()) {
       if (state_ == State::FAILED)
@@ -388,17 +363,18 @@ void GCMKeyStore::DidLoadKeys(
       // entries. We'll reload keys from the database once this is done.
       UpgradeDatabase(std::move(entries));
       return;
-    } else {
-      std::string private_key_str = entry.private_key();
-      if (private_key_str.empty())
-        continue;
-      std::vector<uint8_t> private_key(private_key_str.begin(),
-                                       private_key_str.end());
-      key = crypto::ECPrivateKey::CreateFromPrivateKeyInfo(private_key);
     }
 
-    key_data_[entry.app_id()][authorized_entity] =
-        std::make_pair(std::move(key), entry.auth_secret());
+    if (entry.private_key().empty()) {
+      continue;
+    }
+    auto key = crypto::keypair::PrivateKey::FromPrivateKeyInfo(
+        base::as_byte_span(entry.private_key()));
+    if (!key || !key->IsEc()) {
+      continue;
+    }
+    key_data_[entry.app_id()].emplace(
+        authorized_entity, std::make_pair(*key, entry.auth_secret()));
   }
 
   state_ = State::INITIALIZED;
@@ -406,19 +382,32 @@ void GCMKeyStore::DidLoadKeys(
   delayed_task_controller_.SetReady();
 }
 
-bool GCMKeyStore::DecryptPrivateKey(const std::string& to_decrypt,
+bool GCMKeyStore::DecryptPrivateKey(const std::string& to_decrypt_str,
                                     std::string* decrypted) {
-  DCHECK(decrypted);
-  std::vector<uint8_t> to_decrypt_vector(to_decrypt.begin(), to_decrypt.end());
-  std::unique_ptr<crypto::ECPrivateKey> key_to_decrypt =
-      crypto::ECPrivateKey::CreateFromEncryptedPrivateKeyInfo(
-          to_decrypt_vector);
-  if (!key_to_decrypt)
+  auto to_decrypt = base::as_byte_span(to_decrypt_str);
+
+  crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
+  CBS cbs;
+  CBS_init(&cbs, to_decrypt.data(), to_decrypt.size());
+  bssl::UniquePtr<EVP_PKEY> pkey(
+      PKCS8_parse_encrypted_private_key(&cbs, "", 0));
+
+  // Hack for reading keys generated by an older version of the OpenSSL code.
+  // Some implementations encode the empty password as "\0\0" (passwords are
+  // normally encoded in big-endian UCS-2 with a NUL terminator) and some
+  // encode as the empty string. PKCS8_parse_encrypted_private_key
+  // distinguishes the two by whether the password is nullptr.
+  if (!pkey) {
+    CBS_init(&cbs, to_decrypt.data(), to_decrypt.size());
+    pkey.reset(PKCS8_parse_encrypted_private_key(&cbs, nullptr, 0));
+  }
+
+  if (!pkey || CBS_len(&cbs) != 0 || EVP_PKEY_id(pkey.get()) != EVP_PKEY_EC) {
     return false;
-  std::vector<uint8_t> decrypted_vector;
-  if (!key_to_decrypt->ExportPrivateKey(&decrypted_vector))
-    return false;
-  decrypted->assign(decrypted_vector.begin(), decrypted_vector.end());
+  }
+
+  auto decrypted_vec = crypto::evp::PrivateKeyToBytes(pkey.get());
+  decrypted->assign(decrypted_vec.begin(), decrypted_vec.end());
   return true;
 }
 

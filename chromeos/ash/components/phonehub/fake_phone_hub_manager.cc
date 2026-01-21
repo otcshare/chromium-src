@@ -6,9 +6,9 @@
 
 #include "ash/constants/ash_features.h"
 #include "chromeos/ash/components/phonehub/app_stream_launcher_data_model.h"
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 FakePhoneHubManager::FakePhoneHubManager() = default;
 
@@ -91,7 +91,7 @@ FakePingManager* FakePhoneHubManager::GetPingManager() {
 }
 
 void FakePhoneHubManager::GetHostLastSeenTimestamp(
-    base::OnceCallback<void(absl::optional<base::Time>)> callback) {
+    base::OnceCallback<void(std::optional<base::Time>)> callback) {
   std::move(callback).Run(host_last_seen_timestamp_);
 }
 
@@ -103,5 +103,33 @@ AppStreamManager* FakePhoneHubManager::GetAppStreamManager() {
   return &app_stream_manager_;
 }
 
-}  // namespace phonehub
-}  // namespace ash
+PhoneHubUiReadinessRecorder*
+FakePhoneHubManager::GetPhoneHubUiReadinessRecorder() {
+  return phone_hub_ui_readiness_recorder_;
+}
+
+eche_app::EcheConnectionStatusHandler*
+FakePhoneHubManager::GetEcheConnectionStatusHandler() {
+  return eche_connection_status_handler_;
+}
+
+void FakePhoneHubManager::SetEcheConnectionStatusHandler(
+    eche_app::EcheConnectionStatusHandler* eche_connection_status_handler) {
+  eche_connection_status_handler_ = eche_connection_status_handler;
+}
+
+void FakePhoneHubManager::SetSystemInfoProvider(
+    eche_app::SystemInfoProvider* system_info_provider) {
+  system_info_provider_ = system_info_provider;
+}
+
+eche_app::SystemInfoProvider* FakePhoneHubManager::GetSystemInfoProvider() {
+  return system_info_provider_;
+}
+
+PhoneHubStructuredMetricsLogger*
+FakePhoneHubManager::GetPhoneHubStructuredMetricsLogger() {
+  return phone_hub_structured_metrics_logger_;
+}
+
+}  // namespace ash::phonehub

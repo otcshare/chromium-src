@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/task_environment.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -42,7 +42,7 @@ class PrintingOAuth2HttpExchangeTest : public testing::Test {
   PrintingOAuth2HttpExchangeTest()
       : url_loader_factory_(),
         http_exchange_(url_loader_factory_.GetSafeWeakWrapper()) {}
-  ~PrintingOAuth2HttpExchangeTest() override {}
+  ~PrintingOAuth2HttpExchangeTest() override = default;
   // Helper method calling http_exchange_.Exchange("GET", ...).
   printing::oauth2::StatusCode Exchange(
       HttpExchangeDefinition def,

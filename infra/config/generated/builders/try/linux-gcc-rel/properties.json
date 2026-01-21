@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/try/linux-gcc-rel/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -10,7 +13,6 @@
               "project": "chromium"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-linux-archive",
               "builder_group": "chromium.linux",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -18,8 +20,9 @@
                   "mb"
                 ],
                 "build_config": "Release",
-                "config": "chromium_no_goma",
-                "target_bits": 64
+                "config": "chromium",
+                "target_bits": 64,
+                "target_platform": "linux"
               },
               "legacy_gclient_config": {
                 "config": "chromium"
@@ -34,12 +37,22 @@
           "builder": "linux-gcc-rel",
           "project": "chromium"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/try/linux-gcc-rel/targets"
     }
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-untrusted",
-    "metrics_project": "chromium-reclient-metrics"
+  "$build/siso": {
+    "configs": [
+      "builder",
+      "remote-link"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "keep_going": 3,
+    "output_local_strategy": "minimum",
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted"
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],

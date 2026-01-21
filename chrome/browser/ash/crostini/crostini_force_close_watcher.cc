@@ -6,11 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/crostini/crostini_util.h"
+#include "chrome/browser/ui/views/crostini/crostini_force_close_view.h"
 #include "components/exo/shell_surface_base.h"
 #include "ui/views/widget/widget.h"
 
@@ -39,8 +39,9 @@ void ForceCloseWatcher::OnCloseRequested() {
     return;
   }
 
-  if (show_dialog_timer_->Elapsed() < force_close_delay_)
+  if (show_dialog_timer_->Elapsed() < force_close_delay_) {
     return;
+  }
 
   delegate_->Prompt();
 }
@@ -104,8 +105,9 @@ void ShellSurfaceForceCloseDelegate::Watched(ForceCloseWatcher* watcher) {
 }
 
 void ShellSurfaceForceCloseDelegate::Prompt() {
-  if (current_dialog_)
+  if (current_dialog_) {
     Hide();
+  }
 
   DCHECK(!current_dialog_);
   current_dialog_ = ShowCrostiniForceCloseDialog(

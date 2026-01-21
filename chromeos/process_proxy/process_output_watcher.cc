@@ -11,13 +11,13 @@
 #include <cstdio>
 #include <cstring>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/third_party/icu/icu_utf.h"
-#include "base/threading/thread_task_runner_handle.h"
 
 namespace {
 
@@ -84,9 +84,9 @@ void ProcessOutputWatcher::ReadFromFd(int fd) {
   // more than read_buffer_size_ bytes in pipe, it will be read in the next
   // iteration.
   DCHECK_GT(read_buffer_capacity_, read_buffer_size_);
-  ssize_t bytes_read =
+  ssize_t bytes_read = UNSAFE_TODO(
       HANDLE_EINTR(read(fd, &read_buffer_[read_buffer_size_],
-                        read_buffer_capacity_ - read_buffer_size_));
+                        read_buffer_capacity_ - read_buffer_size_)));
 
   if (bytes_read > 0) {
     ReportOutput(PROCESS_OUTPUT_TYPE_OUT, bytes_read);
@@ -119,13 +119,15 @@ size_t ProcessOutputWatcher::OutputSizeWithoutIncompleteUTF8() {
       return read_buffer_size_;
 
     // Found the starting character byte; stop searching.
-    if (!CBU8_IS_TRAIL(read_buffer_[last_lead_byte]))
+    if (!UNSAFE_TODO(CBU8_IS_TRAIL(read_buffer_[last_lead_byte]))) {
       break;
+    }
 
     --last_lead_byte;
   }
 
-  size_t last_length = UTF8SizeFromLeadingByte(read_buffer_[last_lead_byte]);
+  size_t last_length =
+      UTF8SizeFromLeadingByte(UNSAFE_TODO(read_buffer_[last_lead_byte]));
 
   // Note that if |last_length| == 0 or
   // |last_length| + |last_read_byte| < |read_buffer_size_|, the string is
@@ -148,7 +150,8 @@ void ProcessOutputWatcher::ReportOutput(ProcessOutputType type,
   // update the buffer size accordingly.
   if (output_to_report < read_buffer_size_) {
     for (size_t i = output_to_report; i < read_buffer_size_; ++i) {
-      read_buffer_[i - output_to_report] = read_buffer_[i];
+      UNSAFE_TODO(read_buffer_[i - output_to_report]) =
+          UNSAFE_TODO(read_buffer_[i]);
     }
   }
   read_buffer_size_ -= output_to_report;

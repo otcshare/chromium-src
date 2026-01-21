@@ -4,32 +4,23 @@
 
 #import "ios/web_view/internal/sync/web_view_profile_invalidation_provider_factory.h"
 
-#include <memory>
-#include <utility>
+#import <memory>
+#import <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/no_destructor.h"
-#include "components/gcm_driver/gcm_profile_service.h"
-#include "components/gcm_driver/instance_id/instance_id_profile_service.h"
-#include "components/invalidation/impl/fcm_invalidation_service.h"
-#include "components/invalidation/impl/fcm_network_handler.h"
-#include "components/invalidation/impl/invalidator_registrar_with_memory.h"
-#include "components/invalidation/impl/per_user_topic_subscription_manager.h"
-#include "components/invalidation/impl/profile_identity_provider.h"
-#include "components/invalidation/impl/profile_invalidation_provider.h"
-#include "components/keyed_service/ios/browser_state_dependency_manager.h"
-#include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/pref_registry.h"
-#include "ios/web_view/internal/signin/web_view_identity_manager_factory.h"
-#include "ios/web_view/internal/sync/web_view_gcm_profile_service_factory.h"
-#include "ios/web_view/internal/sync/web_view_instance_id_profile_service_factory.h"
-#include "ios/web_view/internal/web_view_browser_state.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/functional/bind.h"
+#import "base/functional/callback.h"
+#import "base/no_destructor.h"
+#import "components/gcm_driver/gcm_profile_service.h"
+#import "components/gcm_driver/instance_id/instance_id_profile_service.h"
+#import "components/invalidation/impl/per_user_topic_subscription_manager.h"
+#import "components/invalidation/profile_invalidation_provider.h"
+#import "components/keyed_service/ios/browser_state_dependency_manager.h"
+#import "components/pref_registry/pref_registry_syncable.h"
+#import "components/prefs/pref_registry.h"
+#import "ios/web_view/internal/sync/web_view_gcm_profile_service_factory.h"
+#import "ios/web_view/internal/sync/web_view_instance_id_profile_service_factory.h"
+#import "ios/web_view/internal/web_view_browser_state.h"
+#import "services/network/public/cpp/shared_url_loader_factory.h"
 
 using invalidation::ProfileInvalidationProvider;
 
@@ -56,7 +47,6 @@ WebViewProfileInvalidationProviderFactory::
           "InvalidationService",
           BrowserStateDependencyManager::GetInstance()) {
   DependsOn(WebViewInstanceIDProfileServiceFactory::GetInstance());
-  DependsOn(WebViewIdentityManagerFactory::GetInstance());
   DependsOn(WebViewGCMProfileServiceFactory::GetInstance());
 }
 
@@ -65,40 +55,12 @@ WebViewProfileInvalidationProviderFactory::
 
 std::unique_ptr<KeyedService>
 WebViewProfileInvalidationProviderFactory::BuildServiceInstanceFor(
-    web::BrowserState* context) const {
-  WebViewBrowserState* browser_state =
-      WebViewBrowserState::FromBrowserState(context);
-
-  auto identity_provider =
-      std::make_unique<invalidation::ProfileIdentityProvider>(
-          WebViewIdentityManagerFactory::GetForBrowserState(browser_state));
-
-  auto service = std::make_unique<invalidation::FCMInvalidationService>(
-      identity_provider.get(),
-      base::BindRepeating(
-          &invalidation::FCMNetworkHandler::Create,
-          WebViewGCMProfileServiceFactory::GetForBrowserState(browser_state)
-              ->driver(),
-          WebViewInstanceIDProfileServiceFactory::GetForBrowserState(
-              browser_state)
-              ->driver()),
-      base::BindRepeating(
-          &invalidation::PerUserTopicSubscriptionManager::Create,
-          identity_provider.get(), browser_state->GetPrefs(),
-          browser_state->GetURLLoaderFactory()),
-      WebViewInstanceIDProfileServiceFactory::GetForBrowserState(browser_state)
-          ->driver(),
-      browser_state->GetPrefs());
-  service->Init();
-
-  return std::make_unique<ProfileInvalidationProvider>(
-      std::move(service), std::move(identity_provider));
+    web::BrowserState* /*context*/) const {
+  return std::make_unique<ProfileInvalidationProvider>();
 }
 
 void WebViewProfileInvalidationProviderFactory::RegisterBrowserStatePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  ProfileInvalidationProvider::RegisterProfilePrefs(registry);
-  invalidation::InvalidatorRegistrarWithMemory::RegisterProfilePrefs(registry);
   invalidation::PerUserTopicSubscriptionManager::RegisterProfilePrefs(registry);
 }
 

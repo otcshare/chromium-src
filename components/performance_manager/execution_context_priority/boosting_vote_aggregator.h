@@ -6,12 +6,13 @@
 #define COMPONENTS_PERFORMANCE_MANAGER_EXECUTION_CONTEXT_PRIORITY_BOOSTING_VOTE_AGGREGATOR_H_
 
 #include <map>
+#include <optional>
 #include <set>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/task/task_traits.h"
 #include "components/performance_manager/public/execution_context_priority/execution_context_priority.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace performance_manager {
 namespace execution_context_priority {
@@ -87,15 +88,16 @@ class BoostingVoteAggregator : public VoteObserver {
  protected:
   friend class BoostingVote;
 
-  // We currently require that base::TaskPriority be zero-based, and
+  // We currently require that base::Process::Priority be zero-based, and
   // consecutive. These static asserts ensure that we revisit this code if the
-  // base::TaskPriority enum ever changes.
-  static_assert(static_cast<int>(base::TaskPriority::LOWEST) == 0,
+  // base::Process::Priority enum ever changes.
+  static_assert(static_cast<int>(base::Process::Priority::kMinValue) == 0,
                 "expect 0-based priorities");
-  static_assert(static_cast<int>(base::TaskPriority::HIGHEST) == 2,
+  static_assert(static_cast<int>(base::Process::Priority::kMaxValue) == 2,
                 "expect 3 priority levels");
 
-  using NodePriorityMap = std::map<const ExecutionContext*, base::TaskPriority>;
+  using NodePriorityMap =
+      std::map<const ExecutionContext*, base::Process::Priority>;
 
   // Small helper class used to endow both edges and nodes with "active" bits
   // for each priority layer.
@@ -138,7 +140,7 @@ class BoostingVoteAggregator : public VoteObserver {
     }
     void RemoveIncomingVote() {
       DCHECK(incoming_vote_.has_value());
-      incoming_vote_ = absl::nullopt;
+      incoming_vote_ = std::nullopt;
     }
     // Updates the incoming vote.
     void UpdateIncomingVote(const Vote& incoming_vote) {
@@ -153,7 +155,7 @@ class BoostingVoteAggregator : public VoteObserver {
     }
     void CancelOutgoingVote() {
       DCHECK(outgoing_vote_.has_value());
-      outgoing_vote_ = absl::nullopt;
+      outgoing_vote_ = std::nullopt;
     }
     // Updates the outgoing vote. Returns true if it changed.
     bool UpdateOutgoingVote(const Vote& outgoing_vote) {
@@ -178,7 +180,7 @@ class BoostingVoteAggregator : public VoteObserver {
 
     // Returns the effective priority of this node based on the highest of the
     // values in |supporting_node_count_|.
-    base::TaskPriority GetEffectivePriorityLevel() const;
+    base::Process::Priority GetEffectivePriorityLevel() const;
 
     // For keeping track of the number of edges in which this node is involved.
     void IncrementEdgeCount();
@@ -193,10 +195,10 @@ class BoostingVoteAggregator : public VoteObserver {
     size_t edge_count_ = 0;
 
     // The input vote we've received, if any.
-    absl::optional<Vote> incoming_vote_;
+    std::optional<Vote> incoming_vote_;
 
     // The output vote we're emitted, if any.
-    absl::optional<Vote> outgoing_vote_;
+    std::optional<Vote> outgoing_vote_;
   };
 
   // NOTE: It is important that NodeDataMap preserve pointers to NodeData
@@ -249,16 +251,12 @@ class BoostingVoteAggregator : public VoteObserver {
         : src_(boosting_vote->input_execution_context()),
           dst_(boosting_vote->output_execution_context()) {}
     Edge(const Edge&) = default;
-    ~Edge() {}
+    ~Edge() = default;
 
     Edge& operator=(const Edge&) = default;
     Edge& operator=(Edge&&) = delete;
 
-    bool operator==(const Edge& rhs) const {
-      return std::tie(src_, dst_) == std::tie(rhs.src_, rhs.dst_);
-    }
-
-    bool operator!=(const Edge& rhs) const { return !(*this == rhs); }
+    friend bool operator==(const Edge&, const Edge&) = default;
 
     // Forward edges sort by (src, dst), while reverse edges sort by (dst, src).
     bool operator<(const Edge& rhs) const {
@@ -271,9 +269,8 @@ class BoostingVoteAggregator : public VoteObserver {
     const ExecutionContext* dst() const { return dst_; }
 
    private:
-    // TODO(crbug.com/1298696): Breaks component_unittests.
-    raw_ptr<const ExecutionContext, DegradeToNoOpWhenMTE> src_ = nullptr;
-    raw_ptr<const ExecutionContext, DegradeToNoOpWhenMTE> dst_ = nullptr;
+    raw_ptr<const ExecutionContext> src_ = nullptr;
+    raw_ptr<const ExecutionContext> dst_ = nullptr;
   };
   using ForwardEdge = Edge<true>;
   using ReverseEdge = Edge<false>;

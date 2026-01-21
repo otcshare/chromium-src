@@ -56,15 +56,18 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/services/quarantine/quarantine.h"
 #include "content/browser/download/save_types.h"
 #include "content/common/content_export.h"
+#include "net/base/isolation_info.h"
+#include "services/network/public/cpp/request_mode.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 class GURL;
 
@@ -99,6 +102,9 @@ class CONTENT_EXPORT SaveFileManager
       SaveItemId save_item_id,
       const GURL& url,
       const Referrer& referrer,
+      const net::IsolationInfo& isolation_info,
+      network::mojom::RequestMode request_mode,
+      bool is_outermost_main_frame,
       int render_process_host_id,
       int render_view_routing_id,
       int render_frame_routing_id,
@@ -113,9 +119,18 @@ class CONTENT_EXPORT SaveFileManager
   // Notifications sent from the IO thread and run on the file thread:
   void StartSave(std::unique_ptr<SaveFileCreateInfo> info);
   void UpdateSaveProgress(SaveItemId save_item_id, const std::string& data);
+
+  // Called on the download TaskRunner when all the data is saved or the
+  // download failed. The saved item will go through quarantine before it is
+  // considered comple.
   void SaveFinished(SaveItemId save_item_id,
                     SavePackageId save_package_id,
                     bool is_success);
+  // The file saving is completed. We forward the message to OnSaveFinished in
+  // UI thread.
+  void SaveCompleted(SaveItemId save_item_id,
+                     SavePackageId save_package_id,
+                     bool is_success);
 
   // Notifications sent from the UI thread and run on the file thread.
   // Cancel a SaveFile instance which has specified save item id.
@@ -175,17 +190,17 @@ class CONTENT_EXPORT SaveFileManager
   // Help function for sending notification of canceling specific request.
   void SendCancelRequest(SaveItemId save_item_id);
 
-  // Called on the file thread when the URLLoader completes saving a SaveItem.
-  void OnURLLoaderComplete(
+  // Called on the download TaskRunner to start quarantine a saved file.
+  void QuarantineItem(
       SaveItemId save_item_id,
       SavePackageId save_package_id,
       const GURL& url,
       const GURL& referrer_url,
       const std::string& client_guid,
-      mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
-      bool is_success);
+      mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine);
 
-  // Called on the file thread when file quarantine finishes on a SaveItem.
+  // Called on the download TaskRunner when file quarantine finishes on a
+  // SaveItem.
   void OnQuarantineComplete(SaveItemId save_item_id,
                             SavePackageId save_package_id,
                             download::DownloadInterruptReason result);
@@ -202,9 +217,9 @@ class CONTENT_EXPORT SaveFileManager
                             bool write_success);
   // Update the SavePackage with the finish state, and remove the request
   // tracking entries.
-  void OnSaveFinished(SaveItemId save_item_id,
-                      int64_t bytes_so_far,
-                      bool is_success);
+  void OnSaveCompleted(SaveItemId save_item_id,
+                       int64_t bytes_so_far,
+                       bool is_success);
   // Notifies SavePackage that the whole page saving job is finished.
   void OnFinishSavePageJob(int render_process_id,
                            int render_frame_routing_id,
@@ -228,18 +243,16 @@ class CONTENT_EXPORT SaveFileManager
   void ClearURLLoader(SaveItemId save_item_id);
 
   // A map from save_item_id into SaveFiles.
-  std::unordered_map<SaveItemId, std::unique_ptr<SaveFile>, SaveItemId::Hasher>
-      save_file_map_;
+  absl::flat_hash_map<SaveItemId, std::unique_ptr<SaveFile>> save_file_map_;
 
   // Tracks which SavePackage to send data to, called only on UI thread.
   // SavePackageMap maps save item ids to their SavePackage.
-  std::unordered_map<SaveItemId, SavePackage*, SaveItemId::Hasher> packages_;
+  absl::flat_hash_map<SaveItemId, raw_ptr<SavePackage, CtnExperimental>>
+      packages_;
 
   // The helper object doing the actual download. Should be accessed on the UI
   // thread.
-  std::unordered_map<SaveItemId,
-                     std::unique_ptr<SimpleURLLoaderHelper>,
-                     SaveItemId::Hasher>
+  absl::flat_hash_map<SaveItemId, std::unique_ptr<SimpleURLLoaderHelper>>
       url_loader_helpers_;
 };
 

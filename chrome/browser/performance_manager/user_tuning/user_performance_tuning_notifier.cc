@@ -4,23 +4,31 @@
 
 #include "chrome/browser/performance_manager/user_tuning/user_performance_tuning_notifier.h"
 
+#include <memory>
+#include <utility>
+
+#include "base/byte_size.h"
+#include "base/check_op.h"
+#include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/graph/process_node.h"
 
 namespace performance_manager::user_tuning {
 
+const int UserPerformanceTuningNotifier::kTabCountThresholdForPromo = 10;
+const int UserPerformanceTuningNotifier::kMemoryPercentThresholdForPromo = 70;
+
 UserPerformanceTuningNotifier::UserPerformanceTuningNotifier(
     std::unique_ptr<Receiver> receiver,
-    uint64_t resident_set_threshold_kb,
+    base::ByteSize resident_set_threshold,
     int tab_count_threshold)
     : receiver_(std::move(receiver)),
-      resident_set_threshold_kb_(resident_set_threshold_kb),
+      resident_set_threshold_(resident_set_threshold),
       tab_count_threshold_(tab_count_threshold) {}
 
 UserPerformanceTuningNotifier::~UserPerformanceTuningNotifier() = default;
 
 void UserPerformanceTuningNotifier::OnPassedToGraph(Graph* graph) {
-  CHECK(graph->GetAllPageNodes().empty());
-  graph_ = graph;
+  CHECK_EQ(graph->GetAllPageNodes().size(), 0u);
   graph->AddPageNodeObserver(this);
 
   metrics_interest_token_ = performance_manager::ProcessMetricsDecorator::
@@ -33,7 +41,6 @@ void UserPerformanceTuningNotifier::OnTakenFromGraph(Graph* graph) {
   metrics_interest_token_.reset();
 
   graph->RemovePageNodeObserver(this);
-  graph_ = nullptr;
 }
 
 void UserPerformanceTuningNotifier::OnPageNodeAdded(const PageNode* page_node) {
@@ -61,15 +68,16 @@ void UserPerformanceTuningNotifier::OnTypeChanged(const PageNode* page_node,
 
 void UserPerformanceTuningNotifier::OnProcessMemoryMetricsAvailable(
     const SystemNode* system_node) {
-  uint64_t total_rss = 0;
-  for (const ProcessNode* process_node : graph_->GetAllProcessNodes()) {
-    total_rss += process_node->GetResidentSetKb();
+  base::ByteSize total_rss;
+  for (const ProcessNode* process_node :
+       GetOwningGraph()->GetAllProcessNodes()) {
+    total_rss += process_node->GetResidentSet();
   }
 
   // Only notify when the threshold is crossed, not if an update keeps the total
   // RSS above the threshold.
-  if (total_rss >= resident_set_threshold_kb_ &&
-      previous_total_rss_ < resident_set_threshold_kb_) {
+  if (total_rss >= resident_set_threshold_ &&
+      previous_total_rss_ < resident_set_threshold_) {
     receiver_->NotifyMemoryThresholdReached();
   }
 

@@ -7,14 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "chrome/browser/extensions/api/commands/command_service.h"
-#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/extensions/commands/command_service.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/extension_action/action_info.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace {
 
-base::Value::Dict CreateCommandValue(const extensions::Command& command,
-                                     bool active) {
+base::Value::Dict CreateCommandValue(const ui::Command& command, bool active) {
   base::Value::Dict result;
   result.Set("name", command.command_name());
   result.Set("description", command.description());
@@ -25,44 +26,44 @@ base::Value::Dict CreateCommandValue(const extensions::Command& command,
 
 }  // namespace
 
-ExtensionFunction::ResponseAction GetAllCommandsFunction::Run() {
+ExtensionFunction::ResponseAction CommandsGetAllFunction::Run() {
   base::Value::List command_list;
 
   extensions::CommandService* command_service =
       extensions::CommandService::Get(browser_context());
 
-  // TODO(https://crbug.com/1067130): We should be able to check what
+  // TODO(crbug.com/466310522): We should be able to check what
   // type of action (if any) the extension has, and just check for
   // that one.
   extensions::Command browser_action;
   bool active = false;
   if (command_service->GetExtensionActionCommand(
-          extension_->id(), extensions::ActionInfo::TYPE_BROWSER,
+          extension_->id(), extensions::ActionInfo::Type::kBrowser,
           extensions::CommandService::ALL, &browser_action, &active)) {
     command_list.Append(CreateCommandValue(browser_action, active));
   }
 
   extensions::Command action;
   if (command_service->GetExtensionActionCommand(
-          extension_->id(), extensions::ActionInfo::TYPE_ACTION,
+          extension_->id(), extensions::ActionInfo::Type::kAction,
           extensions::CommandService::ALL, &action, &active)) {
     command_list.Append(CreateCommandValue(action, active));
   }
 
   extensions::Command page_action;
   if (command_service->GetExtensionActionCommand(
-          extension_->id(), extensions::ActionInfo::TYPE_PAGE,
+          extension_->id(), extensions::ActionInfo::Type::kPage,
           extensions::CommandService::ALL, &page_action, &active)) {
     command_list.Append(CreateCommandValue(page_action, active));
   }
 
-  extensions::CommandMap named_commands;
+  ui::CommandMap named_commands;
   command_service->GetNamedCommands(extension_->id(),
                                     extensions::CommandService::ALL,
                                     extensions::CommandService::ANY_SCOPE,
                                     &named_commands);
 
-  for (extensions::CommandMap::const_iterator iter = named_commands.begin();
+  for (ui::CommandMap::const_iterator iter = named_commands.begin();
        iter != named_commands.end(); ++iter) {
     extensions::Command command = command_service->FindCommandByName(
         extension_->id(), iter->second.command_name());

@@ -9,14 +9,23 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "chrome/browser/ui/extensions/settings_overridden_dialog_controller.h"
 #include "extensions/common/extension_id.h"
 
 class Profile;
 
+namespace extensions {
+class Extension;
+}  // namespace extensions
+
 namespace gfx {
 struct VectorIcon;
-}
+}  // namespace gfx
+
+namespace user_prefs {
+class PrefRegistrySyncable;
+}  // namespace user_prefs
 
 // The controller for a settings overridden dialog that manages settings
 // overridden by an extension. The user has the option to acknowledge or
@@ -24,6 +33,11 @@ struct VectorIcon;
 class ExtensionSettingsOverriddenDialog
     : public SettingsOverriddenDialogController {
  public:
+  // Preference key to store the timestamp when the simple override enforcement
+  // began. Used to grandfather in existing installations.
+  static constexpr char kSimpleOverrideBeginConfirmationTimestamp[] =
+      "extensions.simple_override_begin_confirmation_timestamp";
+
   struct Params {
     // Chromium style requires an explicit ctor - which means we need more than
     // one : (
@@ -50,7 +64,9 @@ class ExtensionSettingsOverriddenDialog
     std::u16string dialog_message;
 
     // The icon to display in the dialog, if any.
-    const gfx::VectorIcon* icon = nullptr;
+    // RAW_PTR_EXCLUSION: Seems to always point to nullptr (other VectorIncon*
+    // typically point to a global).
+    RAW_PTR_EXCLUSION const gfx::VectorIcon* icon = nullptr;
   };
 
   ExtensionSettingsOverriddenDialog(Params params, Profile* profile);
@@ -59,6 +75,8 @@ class ExtensionSettingsOverriddenDialog
   ExtensionSettingsOverriddenDialog& operator=(
       const ExtensionSettingsOverriddenDialog&) = delete;
   ~ExtensionSettingsOverriddenDialog() override;
+
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // SettingsOverriddenDialogController:
   bool ShouldShow() override;
@@ -77,6 +95,10 @@ class ExtensionSettingsOverriddenDialog
   // Returns true if the extension with the given |id| has already been
   // acknowledged.
   bool HasAcknowledgedExtension(const extensions::ExtensionId& id);
+
+  // Returns true if a simple overridden extension should get a dialog shown.
+  bool ShouldShowForSimpleOverrideExtension(
+      const extensions::Extension& extension);
 
   const Params params_;
 

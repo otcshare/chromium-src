@@ -20,13 +20,15 @@
 #include "ash/system/phonehub/phone_hub_content_view.h"
 #include "ash/system/phonehub/tether_connection_pending_view.h"
 #include "ash/system/status_area_widget.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/phonehub/browser_tabs_model_provider.h"
 #include "chromeos/ash/components/phonehub/connection_scheduler.h"
 #include "chromeos/ash/components/phonehub/phone_hub_manager.h"
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
+#include "chromeos/ash/components/phonehub/phone_hub_ui_readiness_recorder.h"
 #include "chromeos/ash/components/phonehub/tether_controller.h"
 #include "chromeos/ash/components/phonehub/user_action_recorder.h"
 
@@ -151,8 +153,7 @@ void PhoneHubUiController::SetPhoneHubManager(
   if (phone_hub_manager_) {
     phone_hub_manager_->GetFeatureStatusProvider()->AddObserver(this);
     phone_hub_manager_->GetOnboardingUiTracker()->AddObserver(this);
-    if (features::IsEcheLauncherEnabled())
-      phone_hub_manager_->GetAppStreamLauncherDataModel()->AddObserver(this);
+    phone_hub_manager_->GetAppStreamLauncherDataModel()->AddObserver(this);
     phone_hub_manager_->GetPhoneModel()->AddObserver(this);
   }
 
@@ -217,7 +218,15 @@ void PhoneHubUiController::HandleBubbleOpened() {
   auto feature_status =
       phone_hub_manager_->GetFeatureStatusProvider()->GetStatus();
   if (feature_status == FeatureStatus::kEnabledButDisconnected)
-    phone_hub_manager_->GetConnectionScheduler()->ScheduleConnectionNow();
+    phone_hub_manager_->GetConnectionScheduler()->ScheduleConnectionNow(
+        phonehub::DiscoveryEntryPoint::kPhoneHubBubbleOpen);
+
+  if (feature_status == FeatureStatus::kEnabledAndConnected) {
+    if (phone_hub_manager_->GetEcheConnectionStatusHandler()) {
+      phone_hub_manager_->GetEcheConnectionStatusHandler()
+          ->CheckConnectionStatusForUi();
+    }
+  }
 
   phone_hub_manager_->GetBrowserTabsModelProvider()->TriggerRefresh();
   RecordStatusOnBubbleOpened();
@@ -270,7 +279,7 @@ void PhoneHubUiController::RecordStatusOnBubbleOpened() {
 
 void PhoneHubUiController::OnGetHostLastSeenTimestamp(
     UiState ui_state_when_opened,
-    absl::optional<base::Time> timestamp) {
+    std::optional<base::Time> timestamp) {
   if (timestamp) {
     base::UmaHistogramLongTimes(
         "PhoneHub.BubbleOpened.Connectable.Failed.HostLastSeen",
@@ -303,12 +312,11 @@ void PhoneHubUiController::OnShouldShowOnboardingUiChanged() {
 }
 
 void PhoneHubUiController::OnShouldShowMiniLauncherChanged() {
-  if (!features::IsEcheLauncherEnabled())
-    return;
   UpdateUiState(GetUiStateFromPhoneHubManager());
 }
 
 void PhoneHubUiController::OnModelChanged() {
+  PA_LOG(INFO) << "Updating UI status as Phone Model has changed";
   UpdateUiState(GetUiStateFromPhoneHubManager());
 }
 
@@ -326,16 +334,49 @@ void PhoneHubUiController::UpdateUiState(
                   << ": old ui = " << PhoneHubUIStateToString(ui_state_)
                   << ", new ui = " << PhoneHubUIStateToString(new_state);
   ui_state_ = new_state;
-  for (auto& observer : observer_list_)
+
+  for (auto& observer : observer_list_) {
     observer.OnPhoneHubUiStateChanged();
+  }
+
+  switch (ui_state_) {
+    case UiState::kBluetoothDisabled:
+      [[fallthrough]];
+    case UiState::kPhoneDisconnected:
+      if (phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()) {
+        phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()
+            ->LogPhoneHubUiStateUpdated(
+                phonehub::PhoneHubUiState::kDisconnected);
+        phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()
+            ->ResetSessionId();
+      }
+      break;
+    case UiState::kPhoneConnecting:
+      if (phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()) {
+        phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()
+            ->LogPhoneHubUiStateUpdated(phonehub::PhoneHubUiState::kConnecting);
+      }
+      break;
+    case UiState::kPhoneConnected:
+      if (phone_hub_manager_->GetPhoneHubUiReadinessRecorder()) {
+        phone_hub_manager_->GetPhoneHubUiReadinessRecorder()
+            ->RecordPhoneHubUiConnected();
+      }
+      if (phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()) {
+        phone_hub_manager_->GetPhoneHubStructuredMetricsLogger()
+            ->LogPhoneHubUiStateUpdated(phonehub::PhoneHubUiState::kConnected);
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 PhoneHubUiController::UiState
 PhoneHubUiController::GetUiStateFromPhoneHubManager() {
   PhoneHubUiController::UiState ui_state =
       GetUiStateFromPhoneHubManagerInternal();
-  if (features::IsEcheLauncherEnabled() &&
-      (ui_state != PhoneHubUiController::UiState::kMiniLauncher) &&
+  if ((ui_state != PhoneHubUiController::UiState::kMiniLauncher) &&
       phone_hub_manager_ &&
       phone_hub_manager_->GetAppStreamLauncherDataModel()) {
     // Make sure the next time we go back to the "Phone Connected" state
@@ -406,8 +447,7 @@ PhoneHubUiController::GetUiStateFromPhoneHubManagerInternal() {
         // Decide to show the Mini Launcher or the main connected phone view.
         return phone_hub_manager_->GetAppStreamLauncherDataModel()
                            ->GetShouldShowMiniLauncher() &&
-                       features::IsEcheSWAEnabled() &&
-                       features::IsEcheLauncherEnabled()
+                       features::IsEcheSWAEnabled()
                    ? UiState::kMiniLauncher
                    : UiState::kPhoneConnected;
       }

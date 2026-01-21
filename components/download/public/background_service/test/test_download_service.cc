@@ -4,7 +4,7 @@
 
 #include "components/download/public/background_service/test/test_download_service.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -97,7 +97,7 @@ void TestDownloadService::CancelDownload(const std::string& guid) {
 
       CompletionInfo completion_info(base::FilePath(), 0u);
 
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&TestDownloadService::OnDownloadFailed,
                          base::Unretained(this), guid, completion_info,
@@ -115,13 +115,13 @@ Logger* TestDownloadService::GetLogger() {
   return logger_.get();
 }
 
-const absl::optional<DownloadParams>& TestDownloadService::GetDownload(
+const std::optional<DownloadParams>& TestDownloadService::GetDownload(
     const std::string& guid) const {
   for (const auto& download : downloads_) {
     if (download.value().guid == guid)
       return download;
   }
-  static base::NoDestructor<absl::optional<DownloadParams>> none;
+  static base::NoDestructor<std::optional<DownloadParams>> none;
   return *none;
 }
 

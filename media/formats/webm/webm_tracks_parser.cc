@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -16,25 +17,8 @@
 
 namespace media {
 
-static TextKind CodecIdToTextKind(const std::string& codec_id) {
-  if (codec_id == kWebMCodecSubtitles)
-    return kTextSubtitles;
-
-  if (codec_id == kWebMCodecCaptions)
-    return kTextCaptions;
-
-  if (codec_id == kWebMCodecDescriptions)
-    return kTextDescriptions;
-
-  if (codec_id == kWebMCodecMetadata)
-    return kTextMetadata;
-
-  return kTextNone;
-}
-
-WebMTracksParser::WebMTracksParser(MediaLog* media_log, bool ignore_text_tracks)
-    : ignore_text_tracks_(ignore_text_tracks),
-      media_log_(media_log),
+WebMTracksParser::WebMTracksParser(MediaLog* media_log)
+    : media_log_(media_log),
       audio_client_(media_log),
       video_client_(media_log) {
   Reset();
@@ -69,11 +53,9 @@ void WebMTracksParser::Reset() {
   video_track_num_ = -1;
   video_default_duration_ = -1;
   video_decoder_config_ = VideoDecoderConfig();
-  text_tracks_.clear();
   ignored_tracks_.clear();
   detected_audio_track_count_ = 0;
   detected_video_track_count_ = 0;
-  detected_text_track_count_ = 0;
   media_tracks_ = std::make_unique<MediaTracks>();
 }
 
@@ -123,7 +105,7 @@ WebMParserClient* WebMTracksParser::OnListStart(int id) {
   if (id == kWebMIdContentEncodings) {
     if (track_content_encodings_client_) {
       MEDIA_LOG(ERROR, media_log_) << "Multiple ContentEncodings lists";
-      return NULL;
+      return nullptr;
     }
 
     track_content_encodings_client_ =
@@ -167,37 +149,6 @@ bool WebMTracksParser::OnListEnd(int id) {
       return false;
     }
 
-    TextKind text_track_kind = kTextNone;
-    if (track_type_ == kWebMTrackTypeSubtitlesOrCaptions) {
-      text_track_kind = CodecIdToTextKind(codec_id_);
-      if (text_track_kind == kTextNone) {
-        MEDIA_LOG(ERROR, media_log_) << "Missing TrackEntry CodecID"
-                                     << " TrackNum " << track_num_;
-        return false;
-      }
-
-      if (text_track_kind != kTextSubtitles &&
-          text_track_kind != kTextCaptions) {
-        MEDIA_LOG(ERROR, media_log_) << "Wrong TrackEntry CodecID"
-                                     << " TrackNum " << track_num_;
-        return false;
-      }
-    } else if (track_type_ == kWebMTrackTypeDescriptionsOrMetadata) {
-      text_track_kind = CodecIdToTextKind(codec_id_);
-      if (text_track_kind == kTextNone) {
-        MEDIA_LOG(ERROR, media_log_) << "Missing TrackEntry CodecID"
-                                     << " TrackNum " << track_num_;
-        return false;
-      }
-
-      if (text_track_kind != kTextDescriptions &&
-          text_track_kind != kTextMetadata) {
-        MEDIA_LOG(ERROR, media_log_) << "Wrong TrackEntry CodecID"
-                                     << " TrackNum " << track_num_;
-        return false;
-      }
-    }
-
     std::string encryption_key_id;
     if (track_content_encodings_client_) {
       DCHECK(!track_content_encodings_client_->content_encodings().empty());
@@ -231,7 +182,7 @@ bool WebMTracksParser::OnListEnd(int id) {
           return false;
         }
         media_tracks_->AddAudioTrack(
-            audio_decoder_config_,
+            audio_decoder_config_, true,
             static_cast<StreamParser::TrackId>(track_num_),
             MediaTrack::Kind("main"), MediaTrack::Label(track_name_),
             MediaTrack::Language(track_language_));
@@ -259,7 +210,7 @@ bool WebMTracksParser::OnListEnd(int id) {
           return false;
         }
         media_tracks_->AddVideoTrack(
-            video_decoder_config_,
+            video_decoder_config_, true,
             static_cast<StreamParser::TrackId>(track_num_),
             MediaTrack::Kind("main"), MediaTrack::Label(track_name_),
             MediaTrack::Language(track_language_));
@@ -269,15 +220,8 @@ bool WebMTracksParser::OnListEnd(int id) {
       }
     } else if (track_type_ == kWebMTrackTypeSubtitlesOrCaptions ||
                track_type_ == kWebMTrackTypeDescriptionsOrMetadata) {
-      detected_text_track_count_++;
-      if (ignore_text_tracks_) {
-        MEDIA_LOG(DEBUG, media_log_) << "Ignoring text track " << track_num_;
-        ignored_tracks_.insert(track_num_);
-      } else {
-        std::string track_num = base::NumberToString(track_num_);
-        text_tracks_[track_num_] = TextTrackConfig(
-            text_track_kind, track_name_, track_language_, track_num);
-      }
+      MEDIA_LOG(DEBUG, media_log_) << "Ignoring text track " << track_num_;
+      ignored_tracks_.insert(track_num_);
     } else {
       MEDIA_LOG(ERROR, media_log_) << "Unexpected TrackType " << track_type_;
       return false;
@@ -301,7 +245,7 @@ bool WebMTracksParser::OnListEnd(int id) {
 }
 
 bool WebMTracksParser::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdTrackNumber:
@@ -344,7 +288,7 @@ bool WebMTracksParser::OnBinary(int id, const uint8_t* data, int size) {
           << "Multiple CodecPrivate fields in a track.";
       return false;
     }
-    codec_private_.assign(data, data + size);
+    codec_private_.assign(data, UNSAFE_TODO(data + size));
     return true;
   }
   return true;

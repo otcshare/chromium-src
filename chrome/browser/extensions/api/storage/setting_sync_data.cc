@@ -14,6 +14,10 @@
 #include "components/sync/protocol/app_setting_specifics.pb.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/extension_setting_specifics.pb.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -23,12 +27,12 @@ SettingSyncData::SettingSyncData(const syncer::SyncChange& sync_change)
 }
 
 SettingSyncData::SettingSyncData(const syncer::SyncData& sync_data)
-    : change_type_(absl::nullopt) {
+    : change_type_(std::nullopt) {
   ExtractSyncData(sync_data);
 }
 
 SettingSyncData::SettingSyncData(syncer::SyncChange::SyncChangeType change_type,
-                                 const std::string& extension_id,
+                                 const ExtensionId& extension_id,
                                  const std::string& key,
                                  base::Value value)
     : change_type_(change_type),
@@ -36,7 +40,7 @@ SettingSyncData::SettingSyncData(syncer::SyncChange::SyncChangeType change_type,
       key_(key),
       value_(std::move(value)) {}
 
-SettingSyncData::~SettingSyncData() {}
+SettingSyncData::~SettingSyncData() = default;
 
 base::Value SettingSyncData::ExtractValue() {
   DCHECK(value_) << "value has already been Extract()ed";
@@ -56,7 +60,8 @@ void SettingSyncData::ExtractSyncData(const syncer::SyncData& sync_data) {
 
   extension_id_ = extension_specifics.extension_id();
   key_ = extension_specifics.key();
-  value_ = base::JSONReader::Read(extension_specifics.value());
+  value_ = base::JSONReader::Read(extension_specifics.value(),
+                                  base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   if (!value_) {
     LOG(WARNING) << "Specifics for " << extension_id_ << "/" << key_

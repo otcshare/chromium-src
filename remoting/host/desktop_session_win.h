@@ -14,9 +14,9 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/win/scoped_handle.h"
-#include "ipc/ipc_channel_handle.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 #include "remoting/host/desktop_session.h"
 #include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/win/wts_terminal_observer.h"
@@ -67,12 +67,11 @@ class DesktopSessionWin : public DesktopSession,
   // Passes the owning |daemon_process|, a unique identifier of the desktop
   // session |id| and the interface for monitoring session attach/detach events.
   // Both |daemon_process| and |monitor| must outlive |this|.
-  DesktopSessionWin(
-    scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
-    scoped_refptr<AutoThreadTaskRunner> io_task_runner,
-    DaemonProcess* daemon_process,
-    int id,
-    WtsTerminalMonitor* monitor);
+  DesktopSessionWin(scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
+                    scoped_refptr<AutoThreadTaskRunner> io_task_runner,
+                    DaemonProcess* daemon_process,
+                    int id,
+                    WtsTerminalMonitor* monitor);
   ~DesktopSessionWin() override;
 
   const scoped_refptr<AutoThreadTaskRunner>& caller_task_runner() const {

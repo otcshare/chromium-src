@@ -6,16 +6,18 @@
 
 #include <vulkan/vulkan.h>
 
+#include <optional>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_function_pointers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace gpu {
 namespace {
 
-absl::optional<uint32_t> FindMemoryTypeIndex(
+std::optional<uint32_t> FindMemoryTypeIndex(
     VkPhysicalDevice physical_device,
     const VkMemoryRequirements* requirements,
     VkMemoryPropertyFlags flags) {
@@ -26,13 +28,13 @@ absl::optional<uint32_t> FindMemoryTypeIndex(
     if (((1u << i) & requirements->memoryTypeBits) == 0) {
       continue;
     }
-    if ((properties.memoryTypes[i].propertyFlags & flags) != flags) {
+    if ((UNSAFE_TODO(properties.memoryTypes[i]).propertyFlags & flags) !=
+        flags) {
       continue;
     }
     return i;
   }
-  NOTREACHED();
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace
@@ -88,7 +90,12 @@ bool VulkanMemory::Initialize(VulkanDeviceQueue* device_queue,
   auto index =
       FindMemoryTypeIndex(device_queue->GetVulkanPhysicalDevice(), requirements,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
+  if (!index) {
+    // Fallback to use any driver advertised memory type when the preferred
+    // DEVICE_LOCAL_BIT is not available.
+    index = FindMemoryTypeIndex(device_queue->GetVulkanPhysicalDevice(),
+                                requirements, 0 /* flags */);
+  }
   if (!index) {
     DLOG(ERROR) << "Cannot find validate memory type index.";
     return false;

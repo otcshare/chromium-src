@@ -50,10 +50,7 @@ ui::SelectedFileInfo CreateSelectedFileInfo(
 
 class FakeDriveFs : public drivefs::mojom::DriveFsInterceptorForTesting {
  public:
-  DriveFs* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  DriveFs* GetForwardingInterface() override { NOTREACHED(); }
 
   void GetMetadata(const base::FilePath& path,
                    GetMetadataCallback callback) override {
@@ -140,7 +137,7 @@ class FileTasksNotifierTest : public testing::Test {
 
     my_files_ = util::GetMyFilesFolderForProfile(profile_.get());
     ASSERT_TRUE(base::CreateDirectory(my_files_));
-    base::WriteFile(my_files_.Append("file"), "data", 4);
+    base::WriteFile(my_files_.Append("file"), "data");
     ASSERT_TRUE(mount_points->RegisterFileSystem(
         "downloads", storage::kFileSystemTypeLocal, {}, my_files_));
     ASSERT_TRUE(mount_points->RegisterFileSystem(

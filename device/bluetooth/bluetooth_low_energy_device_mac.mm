@@ -7,15 +7,18 @@
 #import <CoreFoundation/CoreFoundation.h>
 #include <stddef.h>
 
+#include <algorithm>
+
+#include "base/apple/scoped_cftyperef.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
-#include "device/bluetooth/bluetooth_adapter_mac.h"
+#include "crypto/hash.h"
 #include "device/bluetooth/bluetooth_device.h"
+#include "device/bluetooth/bluetooth_low_energy_adapter_apple.h"
 #include "device/bluetooth/bluetooth_low_energy_peripheral_delegate.h"
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic_mac.h"
 #include "device/bluetooth/bluetooth_remote_gatt_descriptor_mac.h"
@@ -25,15 +28,15 @@
 namespace device {
 
 BluetoothLowEnergyDeviceMac::BluetoothLowEnergyDeviceMac(
-    BluetoothAdapterMac* adapter,
+    BluetoothAdapter* adapter,
     CBPeripheral* peripheral)
     : BluetoothDeviceMac(adapter),
-      peripheral_(peripheral, base::scoped_policy::RETAIN),
+      peripheral_(peripheral),
       connected_(false),
       discovery_pending_count_(0) {
   DCHECK(peripheral_);
-  peripheral_delegate_.reset([[BluetoothLowEnergyPeripheralDelegate alloc]
-      initWithBluetoothLowEnergyDeviceMac:this]);
+  peripheral_delegate_ = [[BluetoothLowEnergyPeripheralDelegate alloc]
+      initWithBluetoothLowEnergyDeviceMac:this];
   [peripheral_ setDelegate:peripheral_delegate_];
   identifier_ = GetPeripheralIdentifier(peripheral);
   hash_address_ = GetPeripheralHashAddress(peripheral);
@@ -42,7 +45,7 @@ BluetoothLowEnergyDeviceMac::BluetoothLowEnergyDeviceMac(
 
 BluetoothLowEnergyDeviceMac::~BluetoothLowEnergyDeviceMac() {
   if (IsGattConnected()) {
-    GetMacAdapter()->DisconnectGatt(this);
+    GetLowEnergyAdapter()->DisconnectGatt(this);
   }
 
   [peripheral_ setDelegate:nil];
@@ -84,20 +87,21 @@ uint16_t BluetoothLowEnergyDeviceMac::GetDeviceID() const {
 }
 
 uint16_t BluetoothLowEnergyDeviceMac::GetAppearance() const {
-  // TODO(crbug.com/588083): Implementing GetAppearance()
+  // TODO(crbug.com/41240161): Implementing GetAppearance()
   // on mac, win, and android platforms for chrome
   NOTIMPLEMENTED();
   return 0;
 }
 
-absl::optional<std::string> BluetoothLowEnergyDeviceMac::GetName() const {
+std::optional<std::string> BluetoothLowEnergyDeviceMac::GetName() const {
   if ([peripheral_ name])
     return base::SysNSStringToUTF8([peripheral_ name]);
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool BluetoothLowEnergyDeviceMac::IsPaired() const {
-  return GetMacAdapter()->IsBluetoothLowEnergyDeviceSystemPaired(identifier_);
+  return GetLowEnergyAdapter()->IsBluetoothLowEnergyDeviceSystemPaired(
+      identifier_);
 }
 
 bool BluetoothLowEnergyDeviceMac::IsConnected() const {
@@ -107,7 +111,7 @@ bool BluetoothLowEnergyDeviceMac::IsConnected() const {
 bool BluetoothLowEnergyDeviceMac::IsGattConnected() const {
   // |connected_| can be false while |[peripheral_ state]| is
   // |CBPeripheralStateConnected|. This happens
-  // BluetoothAdapterMac::DidConnectPeripheral() is called and
+  // BluetoothLowEnergyAdapterApple::DidConnectPeripheral() is called and
   // BluetoothLowEnergyDeviceMac::DidConnectGatt() has not been called yet.
   return connected_;
 }
@@ -200,14 +204,14 @@ bool BluetoothLowEnergyDeviceMac::IsLowEnergyDevice() {
 }
 
 void BluetoothLowEnergyDeviceMac::CreateGattConnectionImpl(
-    absl::optional<BluetoothUUID> serivce_uuid) {
+    std::optional<BluetoothUUID> serivce_uuid) {
   if (!IsGattConnected()) {
-    GetMacAdapter()->CreateGattConnection(this);
+    GetLowEnergyAdapter()->CreateGattConnection(this);
   }
 }
 
 void BluetoothLowEnergyDeviceMac::DisconnectGatt() {
-  GetMacAdapter()->DisconnectGatt(this);
+  GetLowEnergyAdapter()->DisconnectGatt(this);
 }
 
 void BluetoothLowEnergyDeviceMac::DidDiscoverPrimaryServices(NSError* error) {
@@ -226,7 +230,7 @@ void BluetoothLowEnergyDeviceMac::DidDiscoverPrimaryServices(NSError* error) {
     // TODO(http://crbug.com/609844): Decide what to do if discover failed
     // a device services.
     DVLOG(1) << *this << ": Can't discover primary services: "
-             << BluetoothAdapterMac::String(error);
+             << BluetoothLowEnergyAdapterApple::String(error);
     return;
   }
 
@@ -254,8 +258,8 @@ void BluetoothLowEnergyDeviceMac::DidDiscoverPrimaryServices(NSError* error) {
     }
   }
   if (discovery_pending_count_ == 0) {
-    for (auto it = gatt_services_.begin(); it != gatt_services_.end(); ++it) {
-      BluetoothRemoteGattService* gatt_service = it->second.get();
+    for (auto& it : gatt_services_) {
+      BluetoothRemoteGattService* gatt_service = it.second.get();
       BluetoothRemoteGattServiceMac* gatt_service_mac =
           static_cast<BluetoothRemoteGattServiceMac*>(gatt_service);
       gatt_service_mac->DiscoverCharacteristics();
@@ -271,7 +275,7 @@ void BluetoothLowEnergyDeviceMac::DidDiscoverCharacteristics(
     // TODO(http://crbug.com/609320): Need to pass the error.
     // TODO(http://crbug.com/609844): Decide what to do if discover failed
     DVLOG(1) << *this << ": Can't discover characteristics: "
-             << BluetoothAdapterMac::String(error);
+             << BluetoothLowEnergyAdapterApple::String(error);
     return;
   }
 
@@ -350,7 +354,7 @@ void BluetoothLowEnergyDeviceMac::DidDiscoverDescriptors(
     // TODO(http://crbug.com/609320): Need to pass the error.
     // TODO(http://crbug.com/609844): Decide what to do if discover failed
     DVLOG(1) << *this << ": Can't discover descriptors: "
-             << BluetoothAdapterMac::String(error);
+             << BluetoothLowEnergyAdapterApple::String(error);
     return;
   }
   if (!IsGattConnected()) {
@@ -406,18 +410,18 @@ std::string BluetoothLowEnergyDeviceMac::GetPeripheralHashAddress(
 
 // static
 std::string BluetoothLowEnergyDeviceMac::GetPeripheralHashAddress(
-    base::StringPiece device_identifier) {
+    std::string_view device_identifier) {
   const size_t kCanonicalAddressNumberOfBytes = 6;
-  char raw[kCanonicalAddressNumberOfBytes];
-  crypto::SHA256HashString(device_identifier, raw, sizeof(raw));
-  return CanonicalizeBluetoothAddress(base::HexEncode(raw, sizeof(raw)));
+  const auto hash = crypto::hash::Sha256(device_identifier);
+  return CanonicalizeBluetoothAddress(
+      base::span(hash).first<kCanonicalAddressNumberOfBytes>());
 }
 
 void BluetoothLowEnergyDeviceMac::DidConnectPeripheral() {
   DVLOG(1) << *this << ": GATT connected.";
   if (!connected_) {
     connected_ = true;
-    DidConnectGatt(/*error_code=*/absl::nullopt);
+    DidConnectGatt(/*error_code=*/std::nullopt);
     DiscoverPrimaryServices();
   } else {
     // -[<CBCentralManagerDelegate> centralManager:didConnectPeripheral:] can be
@@ -439,7 +443,7 @@ void BluetoothLowEnergyDeviceMac::SendNotificationIfDiscoveryComplete() {
   // Notify when all services have been discovered.
   bool discovery_complete =
       discovery_pending_count_ == 0 &&
-      base::ranges::all_of(
+      std::ranges::all_of(
           gatt_services_, [](GattServiceMap::value_type& pair) {
             BluetoothRemoteGattService* gatt_service = pair.second.get();
             return static_cast<BluetoothRemoteGattServiceMac*>(gatt_service)
@@ -454,12 +458,14 @@ void BluetoothLowEnergyDeviceMac::SendNotificationIfDiscoveryComplete() {
   }
 }
 
-BluetoothAdapterMac* BluetoothLowEnergyDeviceMac::GetMacAdapter() {
-  return static_cast<BluetoothAdapterMac*>(this->adapter_);
+BluetoothLowEnergyAdapterApple*
+BluetoothLowEnergyDeviceMac::GetLowEnergyAdapter() {
+  return static_cast<BluetoothLowEnergyAdapterApple*>(this->adapter_);
 }
 
-BluetoothAdapterMac* BluetoothLowEnergyDeviceMac::GetMacAdapter() const {
-  return static_cast<BluetoothAdapterMac*>(this->adapter_);
+BluetoothLowEnergyAdapterApple*
+BluetoothLowEnergyDeviceMac::GetLowEnergyAdapter() const {
+  return static_cast<BluetoothLowEnergyAdapterApple*>(this->adapter_);
 }
 
 CBPeripheral* BluetoothLowEnergyDeviceMac::GetPeripheral() {
@@ -469,8 +475,8 @@ CBPeripheral* BluetoothLowEnergyDeviceMac::GetPeripheral() {
 BluetoothRemoteGattServiceMac*
 BluetoothLowEnergyDeviceMac::GetBluetoothRemoteGattServiceMac(
     CBService* cb_service) const {
-  for (auto it = gatt_services_.begin(); it != gatt_services_.end(); ++it) {
-    BluetoothRemoteGattService* gatt_service = it->second.get();
+  for (const auto& it : gatt_services_) {
+    BluetoothRemoteGattService* gatt_service = it.second.get();
     BluetoothRemoteGattServiceMac* gatt_service_mac =
         static_cast<BluetoothRemoteGattServiceMac*>(gatt_service);
     if (gatt_service_mac->GetService() == cb_service)
@@ -508,8 +514,8 @@ void BluetoothLowEnergyDeviceMac::DidDisconnectPeripheral(NSError* error) {
   connected_ = false;
   DVLOG(1) << *this << ": Disconnected from peripheral.";
   if (error) {
-    DVLOG(1) << *this
-             << ": Bluetooth error: " << BluetoothAdapterMac::String(error);
+    DVLOG(1) << *this << ": Bluetooth error: "
+             << BluetoothLowEnergyAdapterApple::String(error);
   }
   SetGattServicesDiscoveryComplete(false);
   // Removing all services at once to ensure that calling GetGattService on
@@ -534,9 +540,9 @@ void BluetoothLowEnergyDeviceMac::DidDisconnectPeripheral(NSError* error) {
 
 std::ostream& operator<<(std::ostream& out,
                          const BluetoothLowEnergyDeviceMac& device) {
-  // TODO(crbug.com/703878): Should use
+  // TODO(crbug.com/40511884): Should use
   // BluetoothLowEnergyDeviceMac::GetNameForDisplay() instead.
-  absl::optional<std::string> name = device.GetName();
+  std::optional<std::string> name = device.GetName();
   const char* is_gatt_connected =
       device.IsGattConnected() ? "GATT connected" : "GATT disconnected";
   return out << "<BluetoothLowEnergyDeviceMac " << device.GetAddress() << "/"

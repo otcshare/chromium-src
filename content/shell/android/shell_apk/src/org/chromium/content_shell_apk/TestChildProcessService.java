@@ -14,20 +14,19 @@ import android.os.RemoteException;
 import android.util.SparseArray;
 
 import org.chromium.base.CommandLine;
-import org.chromium.base.JNIUtils;
 import org.chromium.base.Log;
+import org.chromium.base.library_loader.IRelroLibInfo;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.process_launcher.ChildProcessService;
 import org.chromium.base.process_launcher.ChildProcessServiceDelegate;
+import org.chromium.base.process_launcher.IChildProcessArgs;
 
 import java.util.List;
 
 import javax.annotation.concurrent.GuardedBy;
 
-/**
- * Child service started by ChildProcessLauncherTest.
- */
+/** Child service started by ChildProcessLauncherTest. */
 public class TestChildProcessService extends Service {
     private static final String TAG = "TestProcessService";
 
@@ -35,6 +34,7 @@ public class TestChildProcessService extends Service {
 
     private static class TestChildProcessServiceDelegate implements ChildProcessServiceDelegate {
         private final Object mConnectionSetupLock = new Object();
+
         @GuardedBy("mConnectionSetupLock")
         private boolean mConnectionSetup;
 
@@ -55,14 +55,13 @@ public class TestChildProcessService extends Service {
         }
 
         @Override
-        public void onConnectionSetup(Bundle connectionBundle, List<IBinder> clientInterfaces) {
+        public void onConnectionSetup(IChildProcessArgs args, List<IBinder> clientInterfaces) {
             if (clientInterfaces != null && !clientInterfaces.isEmpty()) {
                 mIChildProcessTest = IChildProcessTest.Stub.asInterface(clientInterfaces.get(0));
             }
             if (mIChildProcessTest != null) {
                 try {
-                    mIChildProcessTest.onConnectionSetup(
-                            mServiceCreated, mServiceBundle, connectionBundle);
+                    mIChildProcessTest.onConnectionSetup(mServiceCreated, mServiceBundle);
                 } catch (RemoteException re) {
                     Log.e(TAG, "Failed to call IChildProcessTest.onConnectionSetup.", re);
                 }
@@ -81,11 +80,8 @@ public class TestChildProcessService extends Service {
         @Override
         public void loadNativeLibrary(Context hostContext) {
             // Store the command line before loading the library to avoid an assert in CommandLine.
-            mCommandLine = CommandLine.getJavaSwitchesOrNull();
+            mCommandLine = CommandLine.getJavaSwitchesForTesting();
 
-            // Non-main processes are launched for testing. Mark them as such so that the JNI
-            // in the seconary dex won't be registered. See https://crbug.com/810720.
-            JNIUtils.enableSelectiveJniRegistration();
             LibraryLoader.getInstance().loadNow();
             LibraryLoader.getInstance().ensureInitialized();
 
@@ -140,7 +136,7 @@ public class TestChildProcessService extends Service {
         }
 
         @Override
-        public void consumeRelroBundle(Bundle bundle) {}
+        public void consumeRelroLibInfo(IRelroLibInfo libInfo) {}
     }
 
     private ChildProcessService mService;
@@ -150,8 +146,9 @@ public class TestChildProcessService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        mService = new ChildProcessService(
-                new TestChildProcessServiceDelegate(), this, getApplicationContext());
+        mService =
+                new ChildProcessService(
+                        new TestChildProcessServiceDelegate(), this, getApplicationContext());
         mService.onCreate();
     }
 

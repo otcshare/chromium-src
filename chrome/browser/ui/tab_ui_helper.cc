@@ -4,48 +4,69 @@
 
 #include "chrome/browser/ui/tab_ui_helper.h"
 
-#include "base/bind.h"
+#include "base/callback_list.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/process/kill.h"
 #include "build/build_config.h"
-#include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_restore.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_web_contents_listener.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/favicon/core/favicon_service.h"
-#include "components/keyed_service/core/service_access_type.h"
-#include "components/url_formatter/url_formatter.h"
-#include "content/public/browser/invalidate_type.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/resources/grit/ui_resources.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#endif
 
 namespace {
 
-std::u16string FormatUrlToSubdomain(const GURL& url) {
-  std::u16string formated_url = url_formatter::FormatUrl(
-      url, url_formatter::kFormatUrlOmitTrivialSubdomains,
-      base::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
-  return base::UTF8ToUTF16(GURL(formated_url).host());
-}
+// Whether the throbber should be shown for a restored tab after it becomes
+// visible, instead of when it's active in the tab strip (this signal is known
+// to be broken crbug.com/413080225#comment8).
+BASE_FEATURE(kSessionRestoreShowThrobberOnVisible,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace
 
-TabUIHelper::TabUIData::TabUIData(const GURL& url)
-    : title(FormatUrlToSubdomain(url)), favicon(favicon::GetDefaultFavicon()) {}
+DEFINE_USER_DATA(TabUIHelper);
 
-TabUIHelper::TabUIHelper(content::WebContents* contents)
-    : WebContentsObserver(contents),
-      content::WebContentsUserData<TabUIHelper>(*contents) {}
+TabUIHelper::TabUIHelper(tabs::TabInterface& tab_interface)
+    : ContentsObservingTabFeature(tab_interface),
+      scoped_unowned_user_data_(tab_interface.GetUnownedUserDataHost(), *this) {
+}
 
 TabUIHelper::~TabUIHelper() = default;
 
-std::u16string TabUIHelper::GetTitle() const {
-  const std::u16string& contents_title = web_contents()->GetTitle();
-  if (!contents_title.empty())
-    return contents_title;
+// static
+const TabUIHelper* TabUIHelper::From(const tabs::TabInterface* tab) {
+  return Get(tab->GetUnownedUserDataHost());
+}
 
-  if (tab_ui_data_)
-    return tab_ui_data_->title;
+// static
+TabUIHelper* TabUIHelper::From(tabs::TabInterface* tab) {
+  return Get(tab->GetUnownedUserDataHost());
+}
+
+std::u16string TabUIHelper::GetTitle() const {
+  const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
+      tab().GetTabFeatures()->saved_tab_group_web_contents_listener();
+  if (wc_listener) {
+    if (const std::optional<tab_groups::DeferredTabState>& deferred_tab_state =
+            wc_listener->deferred_tab_state()) {
+      return deferred_tab_state.value().title();
+    }
+  }
+
+  const std::u16string& contents_title = web_contents()->GetTitle();
+  if (!contents_title.empty()) {
+    return contents_title;
+  }
 
 #if BUILDFLAG(IS_MAC)
   return l10n_util::GetStringUTF16(IDS_BROWSER_WINDOW_MAC_TAB_UNTITLED);
@@ -54,104 +75,79 @@ std::u16string TabUIHelper::GetTitle() const {
 #endif
 }
 
-gfx::Image TabUIHelper::GetFavicon() const {
-  if (ShouldUseFaviconFromHistory() && tab_ui_data_)
-    return tab_ui_data_->favicon;
-  return favicon::TabFaviconFromWebContents(web_contents());
+ui::ImageModel TabUIHelper::GetFavicon() const {
+  const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
+      tab().GetTabFeatures()->saved_tab_group_web_contents_listener();
+  if (wc_listener) {
+    if (const std::optional<tab_groups::DeferredTabState>& deferred_tab_state =
+            wc_listener->deferred_tab_state()) {
+      return deferred_tab_state.value().favicon();
+    }
+  }
+
+  return ui::ImageModel::FromImage(
+      favicon::TabFaviconFromWebContents(web_contents()));
 }
 
 bool TabUIHelper::ShouldHideThrobber() const {
-  // Hiding throbber and using favicon from history is desired when a new
-  // background tab's initial navigation is delayed, so the user has a way to
-  // see what the tab is.
-  if (ShouldUseFaviconFromHistory())
-    return true;
-
-  // We also want to hide a background tab's throbber during page load if it is
+  // We want to hide a background tab's throbber during page load if it is
   // created by session restore. A restored tab's favicon is already fetched
   // by |SessionRestoreDelegate|.
-  if (created_by_session_restore_ && !was_active_at_least_once_)
+  if (created_by_session_restore_ && !was_active_at_least_once_) {
     return true;
+  }
 
   return false;
 }
 
-void TabUIHelper::NotifyInitialNavigationDelayed(bool is_navigation_delayed) {
-  DCHECK(web_contents()->GetController().IsInitialNavigation());
+void TabUIHelper::SetWasActiveAtLeastOnce() {
+  if (!base::FeatureList::IsEnabled(kSessionRestoreShowThrobberOnVisible)) {
+    was_active_at_least_once_ = true;
+  }
+}
 
-  is_navigation_delayed_ = is_navigation_delayed;
-  if (!is_navigation_delayed_)
-    return;
+bool TabUIHelper::IsCrashed() {
+  const base::TerminationStatus crashed_status =
+      web_contents()->GetCrashedStatus();
+  return (crashed_status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED ||
+#if BUILDFLAG(IS_CHROMEOS)
+          crashed_status ==
+              base::TERMINATION_STATUS_PROCESS_WAS_KILLED_BY_OOM ||
+#endif
+          crashed_status == base::TERMINATION_STATUS_PROCESS_CRASHED ||
+          crashed_status == base::TERMINATION_STATUS_ABNORMAL_TERMINATION ||
+          crashed_status == base::TERMINATION_STATUS_LAUNCH_FAILED);
+}
 
-  tab_ui_data_ = std::make_unique<TabUIData>(web_contents()->GetVisibleURL());
-  web_contents()->NotifyNavigationStateChanged(content::INVALIDATE_TYPE_TAB);
+base::CallbackListSubscription TabUIHelper::AddTitleUpdatedCallback(
+    TitleUpdatedCallbackList::CallbackType callback) {
+  return title_change_callbacks_.Add(std::move(callback));
+}
 
-  // When fetching favicon from history, we first try the exact URL, and then
-  // fall back to the host.
-  FetchFaviconFromHistory(web_contents()->GetVisibleURL(),
-                          base::BindOnce(&TabUIHelper::OnURLFaviconFetched,
-                                         weak_ptr_factory_.GetWeakPtr()));
+void TabUIHelper::TitleWasSet(content::NavigationEntry* entry) {
+  title_change_callbacks_.Notify(GetTitle());
 }
 
 void TabUIHelper::DidStopLoading() {
   // Reset the properties after the initial navigation finishes loading, so that
   // latter navigations are not affected. Note that the prerendered page won't
   // reset the properties because DidStopLoading is not called for prerendering.
-  is_navigation_delayed_ = false;
   created_by_session_restore_ = false;
-  tab_ui_data_.reset();
 }
 
-bool TabUIHelper::ShouldUseFaviconFromHistory() const {
-  return web_contents()->GetController().IsInitialNavigation() &&
-         is_navigation_delayed_ && !was_active_at_least_once_;
-}
-
-void TabUIHelper::FetchFaviconFromHistory(
-    const GURL& url,
-    favicon_base::FaviconImageCallback callback) {
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  favicon::FaviconService* favicon_service =
-      FaviconServiceFactory::GetForProfile(profile,
-                                           ServiceAccessType::EXPLICIT_ACCESS);
-  // |favicon_service| might be null when testing.
-  if (favicon_service) {
-    favicon_service->GetFaviconImageForPageURL(url, std::move(callback),
-                                               &favicon_tracker_);
+void TabUIHelper::OnVisibilityChanged(content::Visibility visiblity) {
+  if (base::FeatureList::IsEnabled(kSessionRestoreShowThrobberOnVisible) &&
+      visiblity == content::Visibility::VISIBLE) {
+    was_active_at_least_once_ = true;
   }
 }
 
-void TabUIHelper::OnURLFaviconFetched(
-    const favicon_base::FaviconImageResult& favicon) {
-  if (!ShouldUseFaviconFromHistory())
-    return;
-
-  if (!favicon.image.IsEmpty()) {
-    UpdateFavicon(favicon);
-    return;
-  }
-
-  FetchFaviconFromHistory(web_contents()->GetVisibleURL().GetWithEmptyPath(),
-                          base::BindOnce(&TabUIHelper::OnHostFaviconFetched,
-                                         weak_ptr_factory_.GetWeakPtr()));
-}
-
-void TabUIHelper::OnHostFaviconFetched(
-    const favicon_base::FaviconImageResult& favicon) {
-  if (!ShouldUseFaviconFromHistory())
-    return;
-
-  if (!favicon.image.IsEmpty())
-    UpdateFavicon(favicon);
-}
-
-void TabUIHelper::UpdateFavicon(
-    const favicon_base::FaviconImageResult& favicon) {
-  if (tab_ui_data_) {
-    tab_ui_data_->favicon = favicon.image;
-    web_contents()->NotifyNavigationStateChanged(content::INVALIDATE_TYPE_TAB);
+#if !BUILDFLAG(IS_ANDROID)
+void TabUIHelper::PrimaryPageChanged(content::Page& page) {
+  if (tab().IsSplit()) {
+    split_tabs::LogSplitViewUpdatedUKM(
+        tab().GetBrowserWindowInterface()->GetTabStripModel(),
+        tab().GetSplit().value());
   }
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(TabUIHelper);
+#endif

@@ -7,8 +7,8 @@ package org.chromium.build.resource_overlay;
 import static org.junit.Assert.assertEquals;
 
 import android.content.res.Resources;
-import android.support.test.InstrumentationRegistry;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
@@ -17,9 +17,7 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 
-/**
- * Test for resource_overlay parameter in android_resources() build rule.
- */
+/** Test for resource_overlay parameter in android_resources() build rule. */
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class ResourceOverlayTest {
@@ -45,5 +43,17 @@ public class ResourceOverlayTest {
     public void testRootTagged() {
         Resources resources = InstrumentationRegistry.getTargetContext().getResources();
         assertEquals(42, resources.getInteger(R.integer.resource_overlay_root_tagged_secret));
+    }
+
+    /**
+     * Test that when both an android_resources() target and its dependency have
+     * resource_overlay=true with resources of the same name but different values, the dependent
+     * target's value is used. This tests the fix for dependency ordering in resource overlays.
+     */
+    @Test
+    @SmallTest
+    public void testBothTagged() {
+        Resources resources = InstrumentationRegistry.getTargetContext().getResources();
+        assertEquals(42, resources.getInteger(R.integer.resource_overlay_both_tagged_secret));
     }
 }

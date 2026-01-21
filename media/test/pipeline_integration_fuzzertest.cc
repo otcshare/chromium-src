@@ -2,23 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
+
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/eme_constants.h"
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "media/base/pipeline_status.h"
+#include "media/base/test_data_util.h"
 #include "media/media_buildflags.h"
 #include "media/test/pipeline_integration_test_base.h"
 #include "media/test/test_media_source.h"
@@ -106,10 +113,7 @@ std::string MseFuzzerVariantEnumToMimeTypeString(FuzzerVariant variant) {
 
     case SRC:
       NOTREACHED() << "SRC is an invalid MSE fuzzer variant";
-      break;
   }
-
-  return "";
 }
 
 }  // namespace
@@ -155,15 +159,16 @@ class ProgressivePipelineIntegrationFuzzerTest
   ProgressivePipelineIntegrationFuzzerTest() {
     set_encrypted_media_init_data_cb(
         base::BindRepeating(&OnEncryptedMediaInitData, this));
-    set_audio_play_delay_cb(
-        BindToCurrentLoop(base::BindRepeating(&OnAudioPlayDelay, this)));
+    set_audio_play_delay_cb(base::BindPostTaskToCurrentDefault(
+        base::BindRepeating(&OnAudioPlayDelay, this)));
   }
 
   ~ProgressivePipelineIntegrationFuzzerTest() override = default;
 
-  void RunTest(const uint8_t* data, size_t size) {
-    if (PIPELINE_OK != Start(data, size, kUnreliableDuration | kFuzzing))
+  void RunTest(base::span<const uint8_t> data) {
+    if (PIPELINE_OK != Start(data, kUnreliableDuration | kFuzzing)) {
       return;
+    }
 
     Play();
     if (PIPELINE_OK != WaitUntilEndedOrError())
@@ -179,18 +184,21 @@ class MediaSourcePipelineIntegrationFuzzerTest
   MediaSourcePipelineIntegrationFuzzerTest() {
     set_encrypted_media_init_data_cb(
         base::BindRepeating(&OnEncryptedMediaInitData, this));
-    set_audio_play_delay_cb(
-        BindToCurrentLoop(base::BindRepeating(&OnAudioPlayDelay, this)));
+    set_audio_play_delay_cb(base::BindPostTaskToCurrentDefault(
+        base::BindRepeating(&OnAudioPlayDelay, this)));
   }
 
   ~MediaSourcePipelineIntegrationFuzzerTest() override = default;
 
-  void RunTest(const uint8_t* data, size_t size, const std::string& mimetype) {
-    if (size == 0)
+  void RunTest(base::span<const uint8_t> data, const std::string& mimetype) {
+    if (data.empty()) {
       return;
+    }
 
-    scoped_refptr<media::DecoderBuffer> buffer(
-        DecoderBuffer::CopyFrom(data, size));
+    auto external_memory =
+        std::make_unique<media::ExternalMemoryAdapterForTesting>(data);
+    scoped_refptr<media::DecoderBuffer> buffer =
+        media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
 
     TestMediaSource source(buffer, mimetype, kAppendWholeFile);
 
@@ -233,9 +241,9 @@ struct Environment {
 
     media::InitializeMediaLibrary();
 
-    // Note, instead of LOG_FATAL, use a value at or below logging::LOG_VERBOSE
-    // here to assist local debugging.
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    // Note, instead of LOGGING_FATAL, use a value at or below
+    // logging::LOGGING_VERBOSE here to assist local debugging.
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
   }
 };
 
@@ -247,21 +255,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   base::AtExitManager at_exit;
 
   FuzzerVariant variant = PIPELINE_FUZZER_VARIANT;
+  base::span<const uint8_t> bytes(data, size);
 
   // These tests use GoogleTest assertions without using the GoogleTest
   // framework. While this is the case, tell GoogleTest's stack trace getter
   // that GoogleTest is being left now so that there is a basis for traces
-  // collected upon assertion failure. TODO(https://crbug.com/1039559): use
+  // collected upon assertion failure. TODO(crbug.com/40113640): use
   // RUN_ALL_TESTS() and remove this code.
   ::testing::internal::GetUnitTestImpl()
       ->os_stack_trace_getter()
       ->UponLeavingGTest();
   if (variant == SRC) {
     media::ProgressivePipelineIntegrationFuzzerTest test;
-    test.RunTest(data, size);
+    test.RunTest(bytes);
   } else {
     media::MediaSourcePipelineIntegrationFuzzerTest test;
-    test.RunTest(data, size, MseFuzzerVariantEnumToMimeTypeString(variant));
+    test.RunTest(bytes, MseFuzzerVariantEnumToMimeTypeString(variant));
   }
 
   return 0;

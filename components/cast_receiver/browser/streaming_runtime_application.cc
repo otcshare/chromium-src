@@ -4,12 +4,13 @@
 
 #include "components/cast_receiver/browser/streaming_runtime_application.h"
 
+#include "base/strings/stringprintf.h"
 #include "components/cast/message_port/platform_message_port.h"
 #include "components/cast_receiver/browser/application_client.h"
 #include "components/cast_receiver/browser/public/embedder_application.h"
 #include "components/cast_receiver/browser/public/message_port_service.h"
-#include "components/cast_streaming/public/app_ids.h"
-#include "components/cast_streaming/public/cast_streaming_url.h"
+#include "components/cast_streaming/common/public/app_ids.h"
+#include "components/cast_streaming/common/public/cast_streaming_url.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -43,7 +44,7 @@ StreamingRuntimeApplication::~StreamingRuntimeApplication() {
 
 void StreamingRuntimeApplication::OnStreamingSessionStarted() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  OnPageLoaded();
+  OnPageNavigationComplete();
 }
 
 void StreamingRuntimeApplication::OnError() {
@@ -51,13 +52,6 @@ void StreamingRuntimeApplication::OnError() {
   LOG(WARNING) << "Streaming session for " << *this << " has hit an error!";
   StopApplication(EmbedderApplication::ApplicationStopReason::kRuntimeError,
                   net::ERR_FAILED);
-}
-
-void StreamingRuntimeApplication::OnResolutionChanged(
-    const gfx::Rect& size,
-    const media::VideoTransformation& transformation) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  application_client().OnStreamingResolutionChanged(size, transformation);
 }
 
 void StreamingRuntimeApplication::Launch(StatusCallback callback) {
@@ -86,7 +80,7 @@ void StreamingRuntimeApplication::Launch(StatusCallback callback) {
   receiver_session_client_->LaunchStreamingReceiverAsync();
 
   // Application is initialized now - we can load the URL.
-  LoadPage(GURL(base::StringPrintf(
+  NavigateToPage(GURL(base::StringPrintf(
       kStreamingPageUrlTemplate,
       cast_streaming::GetCastStreamingMediaSourceUrl().spec().c_str())));
 

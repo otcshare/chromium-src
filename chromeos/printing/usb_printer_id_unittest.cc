@@ -4,10 +4,11 @@
 
 #include "chromeos/printing/usb_printer_id.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 
-#include "base/ranges/algorithm.h"
+#include "base/compiler_specific.h"
 #include "base/strings/string_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -54,7 +55,7 @@ std::vector<uint8_t> MapToBuffer(const MapType& map) {
   std::string device_id_str = MapToString(map);
 
   std::vector<uint8_t> ret;
-  base::ranges::copy(device_id_str, std::back_inserter(ret));
+  std::ranges::copy(device_id_str, std::back_inserter(ret));
   return ret;
 }
 
@@ -66,7 +67,14 @@ TEST(UsbPrinterIdTest, EmptyDeviceId) {
 TEST(UsbPrinterIdTest, SimpleSanityTest) {
   MapType mapping = GetDefaultDeviceId();
   std::vector<uint8_t> buffer = MapToBuffer(mapping);
-  EXPECT_EQ(mapping, BuildDeviceIdMapping(buffer));
+
+  // Output also includes original buffer without the two leading size bytes.
+  MapType expected = mapping;
+  expected["CHROMEOS_RAW_ID"].emplace_back(
+      UNSAFE_TODO(reinterpret_cast<const char*>(buffer.data()) + 2),
+      buffer.size() - 2);
+
+  EXPECT_EQ(expected, BuildDeviceIdMapping(buffer));
 }
 
 }  // namespace

@@ -5,11 +5,13 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_impl.h"
 
 #include "ash/public/cpp/shelf_model.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
@@ -22,6 +24,7 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/chunneld/chunneld_client.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
@@ -56,6 +59,7 @@ class PluginVmManagerImplTest : public testing::Test {
     ash::DebugDaemonClient::InitializeFake();
     ash::SeneschalClient::InitializeFake();
     ash::VmPluginDispatcherClient::InitializeFake();
+    browser_controller_.emplace();
     testing_profile_ = std::make_unique<TestingProfile>();
     test_helper_ = std::make_unique<PluginVmTestHelper>(testing_profile_.get());
     plugin_vm_manager_ = static_cast<PluginVmManagerImpl*>(
@@ -64,8 +68,7 @@ class PluginVmManagerImplTest : public testing::Test {
         testing_profile_.get());
     shelf_model_ = std::make_unique<ash::ShelfModel>();
     chrome_shelf_controller_ = std::make_unique<ChromeShelfController>(
-        testing_profile_.get(), shelf_model_.get(),
-        /*shelf_item_factory=*/nullptr);
+        testing_profile_.get(), shelf_model_.get());
     chrome_shelf_controller_->SetProfileForTest(testing_profile_.get());
     chrome_shelf_controller_->SetShelfControllerHelperForTest(
         std::make_unique<ShelfControllerHelper>(testing_profile_.get()));
@@ -93,6 +96,7 @@ class PluginVmManagerImplTest : public testing::Test {
     display_service_.reset();
     test_helper_.reset();
     testing_profile_.reset();
+    browser_controller_.reset();
     ash::VmPluginDispatcherClient::Shutdown();
     ash::SeneschalClient::Shutdown();
     ash::DebugDaemonClient::Shutdown();
@@ -151,10 +155,12 @@ class PluginVmManagerImplTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
+
   std::unique_ptr<TestingProfile> testing_profile_;
   std::unique_ptr<PluginVmTestHelper> test_helper_;
   std::unique_ptr<NotificationDisplayServiceTester> display_service_;
-  PluginVmManagerImpl* plugin_vm_manager_;
+  raw_ptr<PluginVmManagerImpl, DanglingUntriaged> plugin_vm_manager_;
+  std::optional<ash::BrowserControllerImpl> browser_controller_;
   std::unique_ptr<ash::ShelfModel> shelf_model_;
   std::unique_ptr<ChromeShelfController> chrome_shelf_controller_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;

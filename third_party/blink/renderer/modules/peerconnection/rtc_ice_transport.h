@@ -8,6 +8,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_pair.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_parameters.h"
@@ -25,10 +26,12 @@ class IceTransportInterface;
 namespace blink {
 
 class ExceptionState;
-class RTCIceCandidate;
-class RTCIceGatherOptions;
 class IceTransportAdapterCrossThreadFactory;
+class RTCIceCandidate;
 class RTCPeerConnection;
+class V8RTCIceGatheringState;
+class V8RTCIceRole;
+class V8RTCIceTransportState;
 
 // Blink bindings for the RTCIceTransport JavaScript object.
 //
@@ -40,7 +43,7 @@ class RTCPeerConnection;
 // while the ICE implementation is active, regardless of the number of
 // JavaScript references held to it.
 class MODULES_EXPORT RTCIceTransport final
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ActiveScriptWrappable<RTCIceTransport>,
       public ExecutionContextLifecycleObserver,
       public IceTransportProxy::Delegate {
@@ -59,13 +62,9 @@ class MODULES_EXPORT RTCIceTransport final
 
   static RTCIceTransport* Create(
       ExecutionContext* context,
-      rtc::scoped_refptr<webrtc::IceTransportInterface> ice_transport_channel,
+      webrtc::scoped_refptr<webrtc::IceTransportInterface>
+          ice_transport_channel,
       RTCPeerConnection* peer_connection);
-  static RTCIceTransport* Create(
-      ExecutionContext* context,
-      scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
-      scoped_refptr<base::SingleThreadTaskRunner> host_thread,
-      std::unique_ptr<IceTransportAdapterCrossThreadFactory> adapter_factory);
 
   RTCIceTransport(
       ExecutionContext* context,
@@ -73,61 +72,33 @@ class MODULES_EXPORT RTCIceTransport final
       scoped_refptr<base::SingleThreadTaskRunner> host_thread,
       std::unique_ptr<IceTransportAdapterCrossThreadFactory> adapter_factory,
       RTCPeerConnection* peer_connection);
-  RTCIceTransport(
-      ExecutionContext* context,
-      scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
-      scoped_refptr<base::SingleThreadTaskRunner> host_thread,
-      std::unique_ptr<IceTransportAdapterCrossThreadFactory> adapter_factory);
   ~RTCIceTransport() override;
 
   // Returns true if start() has been called.
-  bool IsStarted() const { return role_ != cricket::ICEROLE_UNKNOWN; }
+  bool IsStarted() const { return role_ != webrtc::ICEROLE_UNKNOWN; }
 
   // Returns the role specified in start().
-  cricket::IceRole GetRole() const { return role_; }
+  webrtc::IceRole GetRole() const { return role_; }
 
   webrtc::IceTransportState GetState() const { return state_; }
 
   // Returns true if the RTCIceTransport is in a terminal state.
   bool IsClosed() const { return state_ == webrtc::IceTransportState::kClosed; }
-
-  // If |this| was created from an RTCPeerConnection.
-  //
-  // Background: This is because we don't reuse an RTCIceTransport that has been
-  // created from an RTCPeerConnection for an RTCQuicTransport (see
-  // bugs.webrtc.org/10591). The core issue here is that the source of truth for
-  // connecting a consumer to ICE is at the P2PTransportChannel. In the case of
-  // RTCPeerConnection, the P2PTransportChannel is already connected and given
-  // to the RTCIceTransport. In the case of the RTCQuicTransport it uses the
-  // RTCIceTransport as the source of truth for enforcing just one connected
-  // consumer. Possible fixes to this issue could include: -Use the
-  // P2PTransportChannel as the source of truth directly (calling this
-  // synchronously from the main thread)
-  // -Asynchronously connect to the P2PTransport - if the count of connected
-  // transports to the P2PTransportChannel is > 1, then throw an exception.
-  bool IsFromPeerConnection() const;
+  void Stop() { Close(CloseReason::kStopped); }
 
   // rtc_ice_transport.idl
-  String role() const;
-  String state() const;
-  String gatheringState() const;
+  std::optional<V8RTCIceRole> role() const;
+  V8RTCIceTransportState state() const;
+  V8RTCIceGatheringState gatheringState() const;
   const HeapVector<Member<RTCIceCandidate>>& getLocalCandidates() const;
   const HeapVector<Member<RTCIceCandidate>>& getRemoteCandidates() const;
   RTCIceCandidatePair* getSelectedCandidatePair() const;
   RTCIceParameters* getLocalParameters() const;
   RTCIceParameters* getRemoteParameters() const;
-  void gather(RTCIceGatherOptions* options, ExceptionState& exception_state);
-  void start(RTCIceParameters* raw_remote_parameters,
-             const String& role,
-             ExceptionState& exception_state);
-  void stop();
-  void addRemoteCandidate(RTCIceCandidate* remote_candidate,
-                          ExceptionState& exception_state);
   DEFINE_ATTRIBUTE_EVENT_LISTENER(statechange, kStatechange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(gatheringstatechange, kGatheringstatechange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(selectedcandidatepairchange,
                                   kSelectedcandidatepairchange)
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(icecandidate, kIcecandidate)
 
   // EventTarget overrides.
   const AtomicString& InterfaceName() const override;
@@ -144,16 +115,12 @@ class MODULES_EXPORT RTCIceTransport final
 
  private:
   // IceTransportProxy::Delegate overrides.
-  void OnGatheringStateChanged(cricket::IceGatheringState new_state) override;
-  void OnCandidateGathered(const cricket::Candidate& candidate) override;
+  void OnGatheringStateChanged(webrtc::IceGatheringState new_state) override;
+  void OnCandidateGathered(const webrtc::Candidate& candidate) override;
   void OnStateChanged(webrtc::IceTransportState new_state) override;
   void OnSelectedCandidatePairChanged(
-      const std::pair<cricket::Candidate, cricket::Candidate>&
+      const std::pair<webrtc::Candidate, webrtc::Candidate>&
           selected_candidate_pair) override;
-
-  // Fills in |local_parameters_| with a random usernameFragment and a random
-  // password.
-  void GenerateLocalParameters();
 
   // Permenantly closes the RTCIceTransport with the given reason.
   // The RTCIceTransport must not already be closed.
@@ -163,9 +130,9 @@ class MODULES_EXPORT RTCIceTransport final
   bool RaiseExceptionIfClosed(ExceptionState& exception_state) const;
   void Dispose();
 
-  cricket::IceRole role_ = cricket::ICEROLE_UNKNOWN;
+  webrtc::IceRole role_ = webrtc::ICEROLE_UNKNOWN;
   webrtc::IceTransportState state_ = webrtc::IceTransportState::kNew;
-  cricket::IceGatheringState gathering_state_ = cricket::kIceGatheringNew;
+  webrtc::IceGatheringState gathering_state_ = webrtc::kIceGatheringNew;
 
   HeapVector<Member<RTCIceCandidate>> local_candidates_;
   HeapVector<Member<RTCIceCandidate>> remote_candidates_;

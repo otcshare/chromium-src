@@ -7,17 +7,21 @@
 #include <iterator>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/hash/sha1.h"
 #include "base/location.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
-#include "crypto/signature_creator.h"
+#include "components/policy/proto/device_management_backend.pb.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace em = enterprise_management;
@@ -44,15 +48,24 @@ int GetCommandIdOrDefault(const em::SignedData& signed_command) {
 
 }  // namespace
 
-std::string SignDataWithTestKey(const std::string& data) {
-  std::unique_ptr<crypto::RSAPrivateKey> private_key =
-      PolicyBuilder::CreateTestSigningKey();
-  std::string sha1 = base::SHA1HashString(data);
-  std::vector<uint8_t> digest(sha1.begin(), sha1.end());
-  std::vector<uint8_t> result;
-  CHECK(crypto::SignatureCreator::Sign(private_key.get(),
-                                       crypto::SignatureCreator::SHA1,
-                                       digest.data(), digest.size(), &result));
+std::string SignDataWithTestKey(const std::string& data,
+                                SignatureType algorithm) {
+  crypto::sign::SignatureKind kind;
+
+  switch (algorithm) {
+    case em::PolicyFetchRequest::SHA256_RSA:
+      kind = crypto::sign::SignatureKind::RSA_PKCS1_SHA256;
+      break;
+    case em::PolicyFetchRequest::NONE:
+    case em::PolicyFetchRequest::SHA1_RSA:
+      kind = crypto::sign::SignatureKind::RSA_PKCS1_SHA1;
+      break;
+  }
+
+  auto key = PolicyBuilder::CreateTestSigningKey();
+  std::vector<uint8_t> result =
+      crypto::sign::Sign(kind, key, base::as_byte_span(data));
+
   return std::string(result.begin(), result.end());
 }
 

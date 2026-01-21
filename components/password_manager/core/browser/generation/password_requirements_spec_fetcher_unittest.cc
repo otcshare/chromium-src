@@ -2,14 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/password_manager/core/browser/generation/password_requirements_spec_fetcher_impl.h"
-
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "components/autofill/core/browser/proto/password_requirements.pb.h"
 #include "components/autofill/core/browser/proto/password_requirements_shard.pb.h"
+#include "components/password_manager/core/browser/generation/password_requirements_spec_fetcher_impl.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -205,7 +203,6 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchData) {
 
   for (const auto& test : tests) {
     SCOPED_TRACE(test.test_name);
-    base::HistogramTester histogram_tester;
 
     base::test::TaskEnvironment environment(
         base::test::TaskEnvironment::TimeSource::MOCK_TIME);
@@ -241,9 +238,6 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchData) {
     ASSERT_TRUE(callback_called);
     EXPECT_EQ(test.expected_spec->SerializeAsString(),
               returned_spec.SerializeAsString());
-    histogram_tester.ExpectUniqueSample(
-        "PasswordManager.RequirementsSpecFetcher.Result", test.expected_result,
-        1u);
   }
 }
 

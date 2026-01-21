@@ -6,6 +6,8 @@
 
 #include <stdlib.h>
 
+#include "base/compiler_specific.h"
+
 namespace mojo {
 namespace test {
 
@@ -14,7 +16,7 @@ std::vector<std::string> EnumerateSourceRootRelativeDirectory(
   char** names = MojoTestSupportEnumerateSourceRootRelativeDirectory(
       relative_path.c_str());
   std::vector<std::string> results;
-  for (char** ptr = names; *ptr != nullptr; ++ptr) {
+  for (char** ptr = names; *ptr != nullptr; UNSAFE_TODO(++ptr)) {
     results.push_back(*ptr);
     free(*ptr);
   }

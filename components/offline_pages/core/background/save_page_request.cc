@@ -26,7 +26,7 @@ SavePageRequest::SavePageRequest(int64_t request_id,
 
 SavePageRequest::SavePageRequest(const SavePageRequest& other) = default;
 
-SavePageRequest::~SavePageRequest() {}
+SavePageRequest::~SavePageRequest() = default;
 
 bool SavePageRequest::operator==(const SavePageRequest& other) const {
   return request_id_ == other.request_id_ && url_ == other.url_ &&
@@ -105,6 +105,7 @@ void SavePageRequest::UpdateFailState(FailState fail_state) {
     case FailState::SERVER_CROSS_ORIGIN_REDIRECT:
     case FailState::FILE_FAILED:
     case FailState::FILE_HASH_MISMATCH:
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
       fail_state_ = fail_state;
       break;
     case FailState::FILE_TRANSIENT_ERROR:  // Intentional fallthrough.

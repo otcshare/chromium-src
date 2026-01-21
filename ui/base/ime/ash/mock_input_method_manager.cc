@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "ui/base/ime/ash/input_method_util.h"
+
 namespace ash {
 namespace input_method {
 
@@ -19,7 +21,7 @@ scoped_refptr<InputMethodManager::State> MockInputMethodManager::State::Clone()
 void MockInputMethodManager::State::AddInputMethodExtension(
     const std::string& extension_id,
     const InputMethodDescriptors& descriptors,
-    ui::TextInputMethod* instance) {}
+    TextInputMethod* instance) {}
 
 void MockInputMethodManager::State::RemoveInputMethodExtension(
     const std::string& extension_id) {}
@@ -41,7 +43,11 @@ bool MockInputMethodManager::State::EnableInputMethod(
 
 void MockInputMethodManager::State::EnableLoginLayouts(
     const std::string& language_code,
-    const std::vector<std::string>& initial_layout) {}
+    const std::vector<std::string>& initial_layouts) {}
+
+void MockInputMethodManager::State::EnableOobeInputMethods(
+    const std::string& language_code,
+    const std::vector<std::string>& initial_input_methods) {}
 
 void MockInputMethodManager::State::DisableNonLockScreenLayouts() {}
 
@@ -74,9 +80,10 @@ size_t MockInputMethodManager::State::GetNumEnabledInputMethods() const {
 }
 
 void MockInputMethodManager::State::SetEnabledExtensionImes(
-    std::vector<std::string>* ids) {}
+    base::span<const std::string> ids) {}
 
-void MockInputMethodManager::State::SetInputMethodLoginDefault() {}
+void MockInputMethodManager::State::SetInputMethodLoginDefault(
+    bool is_in_oobe_context) {}
 
 void MockInputMethodManager::State::SetInputMethodLoginDefaultFromVPD(
     const std::string& locale,
@@ -94,13 +101,14 @@ InputMethodDescriptor MockInputMethodManager::State::GetCurrentInputMethod()
 
 bool MockInputMethodManager::State::ReplaceEnabledInputMethods(
     const std::vector<std::string>& new_enabled_input_method_ids) {
-  return true;
+  enabled_input_method_ids = new_enabled_input_method_ids;
+  return !enabled_input_method_ids.empty();
 }
 
 bool MockInputMethodManager::State::SetAllowedInputMethods(
     const std::vector<std::string>& new_allowed_input_method_ids) {
   allowed_input_method_ids_ = new_allowed_input_method_ids;
-  return true;
+  return !allowed_input_method_ids_.empty();
 }
 
 const std::vector<std::string>&
@@ -162,6 +170,9 @@ void MockInputMethodManager::ActivateInputMethodMenuItem(
 void MockInputMethodManager::ConnectInputEngineManager(
     mojo::PendingReceiver<ime::mojom::InputEngineManager> receiver) {}
 
+void MockInputMethodManager::BindInputMethodUserDataService(
+    mojo::PendingReceiver<ime::mojom::InputMethodUserDataService> receiver) {}
+
 bool MockInputMethodManager::IsISOLevel5ShiftUsedByCurrentInputMethod() const {
   return false;
 }
@@ -192,7 +203,12 @@ bool MockInputMethodManager::IsLoginKeyboard(const std::string& layout) const {
   return true;
 }
 
-bool MockInputMethodManager::MigrateInputMethods(
+std::string MockInputMethodManager::GetMigratedInputMethodID(
+    const std::string& input_method_id) {
+  return "";
+}
+
+bool MockInputMethodManager::GetMigratedInputMethodIDs(
     std::vector<std::string>* input_method_ids) {
   return false;
 }
@@ -221,10 +237,11 @@ void MockInputMethodManager::OverrideKeyboardKeyset(ImeKeyset keyset) {}
 
 void MockInputMethodManager::SetImeMenuFeatureEnabled(ImeMenuFeature feature,
                                                       bool enabled) {
-  if (enabled)
+  if (enabled) {
     features_enabled_state_ |= feature;
-  else
+  } else {
     features_enabled_state_ &= ~feature;
+  }
 }
 
 bool MockInputMethodManager::GetImeMenuFeatureEnabled(

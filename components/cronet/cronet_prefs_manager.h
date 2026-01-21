@@ -7,11 +7,10 @@
 
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
 
 class JsonPrefStore;
-class NetLog;
 class PrefService;
 
 namespace base {

@@ -4,40 +4,69 @@
 
 package org.chromium.components.content_settings;
 
-import androidx.annotation.Nullable;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.WebContents;
 
-/**
- * Communicates between CookieControlsController (C++ backend) and PageInfoView (Java UI).
- */
+/** Communicates between CookieControlsController (C++ backend) and PageInfoView (Java UI). */
 @JNINamespace("content_settings")
+@NullMarked
 public class CookieControlsBridge {
     private long mNativeCookieControlsBridge;
-    private CookieControlsObserver mObserver;
+    private final CookieControlsObserver mObserver;
 
     /**
      * Initializes a CookieControlsBridge instance.
+     *
      * @param observer An observer to call with updates from the cookie controller.
      * @param webContents The WebContents instance to observe.
      * @param originalBrowserContext The "original" browser context. In Chrome, this corresponds to
-     *         the regular profile when webContents is incognito.
+     *     the regular profile when the current profile is off the record.
+     * @param isIncognitoBranded boolean that determines whether the profile is incognito.
      */
-    public CookieControlsBridge(CookieControlsObserver observer, WebContents webContents,
-            @Nullable BrowserContextHandle originalBrowserContext) {
+    public CookieControlsBridge(
+            CookieControlsObserver observer,
+            WebContents webContents,
+            @Nullable BrowserContextHandle originalBrowserContext,
+            boolean isIncognitoBranded) {
         mObserver = observer;
-        mNativeCookieControlsBridge = CookieControlsBridgeJni.get().init(
-                CookieControlsBridge.this, webContents, originalBrowserContext);
+        mNativeCookieControlsBridge =
+                CookieControlsBridgeJni.get()
+                        .init(this, webContents, originalBrowserContext, isIncognitoBranded);
+    }
+
+    /**
+     * Called when web contents have changed.
+     *
+     * @param webContents The WebContents instance to update to.
+     * @param originalBrowserContext The "original" browser context. In Chrome, this corresponds to
+     *     the regular profile when the current profile is off the record.
+     * @param isIncognitoBranded boolean that determines whether the profile is incognito.
+     */
+    public void updateWebContents(
+            WebContents webContents,
+            @Nullable BrowserContextHandle originalBrowserContext,
+            boolean isIncognitoBranded) {
+        if (mNativeCookieControlsBridge != 0) {
+            CookieControlsBridgeJni.get()
+                    .updateWebContents(
+                            mNativeCookieControlsBridge,
+                            webContents,
+                            originalBrowserContext,
+                            isIncognitoBranded);
+        }
     }
 
     public void setThirdPartyCookieBlockingEnabledForSite(boolean blockCookies) {
         if (mNativeCookieControlsBridge != 0) {
-            CookieControlsBridgeJni.get().setThirdPartyCookieBlockingEnabledForSite(
-                    mNativeCookieControlsBridge, blockCookies);
+            CookieControlsBridgeJni.get()
+                    .setThirdPartyCookieBlockingEnabledForSite(
+                            mNativeCookieControlsBridge, blockCookies);
         }
     }
 
@@ -47,13 +76,16 @@ public class CookieControlsBridge {
         }
     }
 
-    /**
-     * Destroys the native counterpart of this class.
-     */
+    public void onEntryPointAnimated() {
+        if (mNativeCookieControlsBridge != 0) {
+            CookieControlsBridgeJni.get().onEntryPointAnimated(mNativeCookieControlsBridge);
+        }
+    }
+
+    /** Destroys the native counterpart of this class. */
     public void destroy() {
         if (mNativeCookieControlsBridge != 0) {
-            CookieControlsBridgeJni.get().destroy(
-                    mNativeCookieControlsBridge, CookieControlsBridge.this);
+            CookieControlsBridgeJni.get().destroy(mNativeCookieControlsBridge);
             mNativeCookieControlsBridge = 0;
         }
     }
@@ -63,24 +95,46 @@ public class CookieControlsBridge {
     }
 
     @CalledByNative
-    private void onCookieBlockingStatusChanged(
-            @CookieControlsStatus int status, @CookieControlsEnforcement int enforcement) {
-        mObserver.onCookieBlockingStatusChanged(status, enforcement);
+    private void onStatusChanged(
+            @CookieControlsState int controlsState,
+            @CookieControlsEnforcement int enforcement,
+            long expiration) {
+        mObserver.onStatusChanged(controlsState, enforcement, expiration);
     }
 
     @CalledByNative
-    private void onCookiesCountChanged(int allowedCookies, int blockedCookies) {
-        mObserver.onCookiesCountChanged(allowedCookies, blockedCookies);
+    private void onHighlightCookieControl(boolean shouldHighlight) {
+        mObserver.onHighlightCookieControl(shouldHighlight);
+    }
+
+    @CalledByNative
+    private void onHighlightPwaCookieControl() {
+        mObserver.onHighlightPwaCookieControl();
     }
 
     @NativeMethods
-    interface Natives {
-        long init(CookieControlsBridge caller, WebContents webContents,
-                BrowserContextHandle originalContextHandle);
-        void destroy(long nativeCookieControlsBridge, CookieControlsBridge caller);
+    public interface Natives {
+        long init(
+                CookieControlsBridge self,
+                WebContents webContents,
+                @Nullable BrowserContextHandle originalContextHandle,
+                boolean isIncognitoBranded);
+
+        void updateWebContents(
+                long nativeCookieControlsBridge,
+                WebContents webContents,
+                @Nullable BrowserContextHandle originalBrowserContext,
+                boolean isIncognitoBranded);
+
+        void destroy(long nativeCookieControlsBridge);
+
         void setThirdPartyCookieBlockingEnabledForSite(
                 long nativeCookieControlsBridge, boolean blockCookies);
+
         void onUiClosing(long nativeCookieControlsBridge);
+
+        void onEntryPointAnimated(long nativeCookieControlsBridge);
+
         boolean isCookieControlsEnabled(BrowserContextHandle browserContextHandle);
     }
 }

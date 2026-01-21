@@ -52,7 +52,6 @@ std::string GetPrefPath(AppListNudgeController::NudgeType type) {
       return prefs::kAppListReorderNudge;
     default:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -72,12 +71,6 @@ void AppListNudgeController::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kAppListReorderNudge);
   registry->RegisterDictionaryPref(prefs::kLauncherFilesPrivacyNotice);
-}
-
-// static
-void AppListNudgeController::ResetPrefsForNewUserSession(PrefService* prefs) {
-  prefs->ClearPref(prefs::kAppListReorderNudge);
-  prefs->ClearPref(prefs::kLauncherFilesPrivacyNotice);
 }
 
 // static
@@ -109,6 +102,11 @@ bool AppListNudgeController::ShouldShowReorderNudge() const {
   if (current_nudge_ == NudgeType::kPrivacyNotice)
     return false;
 
+  // Don't show the reorder nudge if the tutorial nudge is showing.
+  if (current_nudge_ == NudgeType::kTutorialNudge) {
+    return false;
+  }
+
   if (GetShownCount(prefs, NudgeType::kReorderNudge) < kMaxShowCount &&
       !WasAppListReorderedPreviously(prefs)) {
     return true;
@@ -118,7 +116,7 @@ bool AppListNudgeController::ShouldShowReorderNudge() const {
 }
 
 void AppListNudgeController::OnTemporarySortOrderChanged(
-    const absl::optional<AppListSortOrder>& new_order) {
+    const std::optional<AppListSortOrder>& new_order) {
   PrefService* prefs = GetPrefs();
   if (!prefs)
     return;
@@ -251,6 +249,7 @@ void AppListNudgeController::UpdateCurrentNudgeStateInPrefs(
         break;
       }
       case NudgeType::kPrivacyNotice:
+      case NudgeType::kTutorialNudge:
       case NudgeType::kNone:
         break;
     }
@@ -280,6 +279,7 @@ void AppListNudgeController::UpdateCurrentNudgeStateInPrefs(
       }
     } break;
     case NudgeType::kPrivacyNotice:
+    case NudgeType::kTutorialNudge:
     case NudgeType::kNone:
       break;
   }

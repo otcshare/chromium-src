@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
 #include "content/renderer/media/batching_media_log.h"
 #include "third_party/blink/public/web/web_media_inspector.h"
@@ -19,13 +20,14 @@ namespace content {
 class CONTENT_EXPORT InspectorMediaEventHandler
     : public BatchingMediaLog::EventHandler {
  public:
-  explicit InspectorMediaEventHandler(blink::MediaInspectorContext*);
+  explicit InspectorMediaEventHandler(blink::MediaInspectorContext*,
+                                      int dom_node_id);
   ~InspectorMediaEventHandler() override = default;
   void SendQueuedMediaEvents(std::vector<media::MediaLogRecord>) override;
   void OnWebMediaPlayerDestroyed() override;
 
  private:
-  blink::MediaInspectorContext* inspector_context_;
+  raw_ptr<blink::MediaInspectorContext, DanglingUntriaged> inspector_context_;
   blink::WebString player_id_;
   bool video_player_destroyed_ = false;
 };

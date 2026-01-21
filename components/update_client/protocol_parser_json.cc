@@ -4,12 +4,18 @@
 
 #include "components/update_client/protocol_parser_json.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/check.h"
 #include "base/json/json_reader.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "components/update_client/protocol_definition.h"
@@ -18,278 +24,244 @@ namespace update_client {
 
 namespace {
 
-std::string GetValueString(const base::Value& node, const char* key) {
-  const auto* value = node.FindKey(key);
-  return (value && value->is_string()) ? value->GetString() : std::string();
+std::string GetValueString(const base::Value::Dict& node, const char* key) {
+  const std::string* value = node.FindString(key);
+  return value ? *value : std::string();
 }
 
-bool ParseManifest(const base::Value& manifest_node,
-                   ProtocolParser::Result* result,
-                   std::string* error) {
-  if (!manifest_node.is_dict()) {
-    *error = "'manifest' is not a dictionary.";
+base::expected<std::string, std::string> Parse(const base::Value::Dict& node,
+                                               const std::string& key) {
+  const std::string* value = node.FindString(key);
+  if (!value) {
+    return base::unexpected(base::StrCat({"Missing ", key}));
   }
-  const auto* version = manifest_node.FindKey("version");
-  if (!version || !version->is_string()) {
-    *error = "Missing version for manifest.";
-    return false;
-  }
-
-  result->manifest.version = version->GetString();
-  if (!base::Version(result->manifest.version).IsValid()) {
-    *error =
-        base::StrCat({"Invalid version: '", result->manifest.version, "'."});
-    return false;
-  }
-
-  // Get the optional minimum browser version.
-  const auto* browser_min_version = manifest_node.FindKey("prodversionmin");
-  if (browser_min_version && browser_min_version->is_string()) {
-    result->manifest.browser_min_version = browser_min_version->GetString();
-    if (!base::Version(result->manifest.browser_min_version).IsValid()) {
-      *error = base::StrCat({"Invalid prodversionmin: '",
-                             result->manifest.browser_min_version, "'."});
-      return false;
-    }
-  }
-
-  result->manifest.run = GetValueString(manifest_node, "run");
-  result->manifest.arguments = GetValueString(manifest_node, "arguments");
-
-  const auto* packages_node = manifest_node.FindKey("packages");
-  if (!packages_node || !packages_node->is_dict()) {
-    *error = "Missing packages in manifest or 'packages' is not a dictionary.";
-    return false;
-  }
-  const auto* package_node = packages_node->FindKey("package");
-  if (!package_node || !package_node->is_list()) {
-    *error = "Missing package in packages.";
-    return false;
-  }
-
-  for (const auto& package : package_node->GetList()) {
-    if (!package.is_dict()) {
-      *error = "'package' is not a dictionary.";
-      return false;
-    }
-    ProtocolParser::Result::Manifest::Package p;
-    const auto* name = package.FindKey("name");
-    if (!name || !name->is_string()) {
-      *error = "Missing name for package.";
-      return false;
-    }
-    p.name = name->GetString();
-
-    p.namediff = GetValueString(package, "namediff");
-    p.fingerprint = GetValueString(package, "fp");
-    p.hash_sha256 = GetValueString(package, "hash_sha256");
-    p.hashdiff_sha256 = GetValueString(package, "hashdiff_sha256");
-
-    const auto* size = package.FindKey("size");
-    if (size && (size->is_int() || size->is_double())) {
-      const auto val = size->GetDouble();
-      if (0 <= val && val < kProtocolMaxInt)
-        p.size = size->GetDouble();
-    }
-
-    const auto* sizediff = package.FindKey("sizediff");
-    if (sizediff && (sizediff->is_int() || sizediff->is_double())) {
-      const auto val = sizediff->GetDouble();
-      if (0 <= val && val < kProtocolMaxInt)
-        p.sizediff = sizediff->GetDouble();
-    }
-
-    result->manifest.packages.push_back(std::move(p));
-  }
-
-  return true;
+  return base::expected<std::string, std::string>(*value);
 }
 
-void ParseActions(const base::Value& actions_node,
-                  ProtocolParser::Result* result) {
-  if (!actions_node.is_dict())
+base::expected<base::Version, std::string> ParseVersion(
+    const base::Value::Dict& node,
+    const std::string& key) {
+  base::expected<std::string, std::string> value = Parse(node, key);
+  if (!value.has_value()) {
+    return base::unexpected(value.error());
+  }
+  base::Version version(value.value());
+  if (!version.IsValid()) {
+    return base::unexpected(
+        base::StrCat({"Invalid version: '", value.value(), "'."}));
+  }
+  return version;
+}
+
+std::optional<std::string> ParseOptional(const base::Value::Dict& node,
+                                         const std::string& key) {
+  const std::string* value = node.FindString(key);
+  if (value) {
+    return *value;
+  }
+  return std::nullopt;
+}
+
+int64_t ParseNumberWithDefault(const base::Value::Dict& node,
+                               const std::string& key,
+                               int64_t def) {
+  const std::optional<double> value = node.FindDouble(key);
+  if (value) {
+    const double val = value.value();
+    if (0 <= val && val < protocol_request::kProtocolMaxInt) {
+      return static_cast<int64_t>(val);
+    }
+  }
+  return def;
+}
+
+std::string ParseWithDefault(const base::Value::Dict& node,
+                             const std::string& key,
+                             const std::string& def) {
+  const std::string* value = node.FindString(key);
+  if (value) {
+    return *value;
+  }
+  return def;
+}
+
+std::string ParseWithDefault(const base::Value::Dict& node,
+                             const std::string& outer_key,
+                             const std::string& inner_key,
+                             const std::string& def) {
+  const base::Value::Dict* outer = node.FindDict(outer_key);
+  return outer ? ParseWithDefault(*outer, inner_key, def) : def;
+}
+
+base::expected<ProtocolParser::Operation, std::string> ParseOperation(
+    const base::Value& node_val) {
+  if (!node_val.is_dict()) {
+    return base::unexpected("'operation' contains a non-dictionary.");
+  }
+  const base::Value::Dict& node = node_val.GetDict();
+  ProtocolParser::Operation op;
+  base::expected<std::string, std::string> type = Parse(node, "type");
+  if (!type.has_value()) {
+    return base::unexpected(type.error());
+  }
+  op.type = type.value();
+  op.sha256_out = ParseWithDefault(node, "out", "sha256", {});
+  op.sha256_in = ParseWithDefault(node, "in", "sha256", {});
+  op.sha256_previous = ParseWithDefault(node, "previous", "sha256", {});
+  op.path = ParseWithDefault(node, "path", {});
+  op.arguments = ParseWithDefault(node, "arguments", {});
+  op.size = ParseNumberWithDefault(node, "size", 0);
+  if (const base::Value::List* list = node.FindList("urls")) {
+    for (const base::Value& url_node : *list) {
+      if (!url_node.is_dict()) {
+        return base::unexpected("url node is not a dict");
+      }
+      base::expected<std::string, std::string> url =
+          Parse(url_node.GetDict(), "url");
+      if (!url.has_value()) {
+        return base::unexpected(url.error());
+      }
+      GURL gurl(url.value());
+      if (!gurl.is_valid()) {
+        return base::unexpected("operation contains a malformed url");
+      }
+      op.urls.push_back(gurl);
+    }
+  }
+  return op;
+}
+
+base::expected<ProtocolParser::Pipeline, std::string> ParsePipeline(
+    const base::Value& node_val) {
+  if (!node_val.is_dict()) {
+    return base::unexpected("'pipeline' contains a non-dictionary.");
+  }
+  ProtocolParser::Pipeline pipeline;
+  pipeline.pipeline_id =
+      ParseWithDefault(node_val.GetDict(), "pipeline_id", {});
+  if (const base::Value::List* node =
+          node_val.GetDict().FindList("operations")) {
+    for (const base::Value& operation_node : *node) {
+      base::expected<ProtocolParser::Operation, std::string> operation =
+          ParseOperation(operation_node);
+      if (!operation.has_value()) {
+        return base::unexpected(operation.error());
+      }
+      pipeline.operations.push_back(operation.value());
+    }
+  }
+  return pipeline;
+}
+
+void ParseData(const base::Value& data_node_val, ProtocolParser::App* result) {
+  if (!data_node_val.is_dict()) {
     return;
+  }
+  const base::Value::Dict& data_node = data_node_val.GetDict();
 
-  const auto* action_node = actions_node.FindKey("action");
-  if (!action_node || !action_node->is_list())
-    return;
-
-  const auto& action_list = action_node->GetList();
-  if (action_list.empty() || !action_list[0].is_dict())
-    return;
-
-  result->action_run = GetValueString(action_list[0], "run");
+  result->data.emplace_back(
+      GetValueString(data_node, "index"), GetValueString(data_node, "#text"));
 }
 
-bool ParseUrls(const base::Value& urls_node,
-               ProtocolParser::Result* result,
-               std::string* error) {
-  if (!urls_node.is_dict()) {
-    *error = "'urls' is not a dictionary.";
-    return false;
-  }
-  const auto* url_node = urls_node.FindKey("url");
-  if (!url_node || !url_node->is_list()) {
-    *error = "Missing url on urls.";
-    return false;
-  }
-
-  for (const auto& url : url_node->GetList()) {
-    if (!url.is_dict())
-      continue;
-    const auto* codebase = url.FindKey("codebase");
-    if (codebase && codebase->is_string()) {
-      GURL crx_url(codebase->GetString());
-      if (crx_url.is_valid())
-        result->crx_urls.push_back(std::move(crx_url));
-    }
-    const auto* codebasediff = url.FindKey("codebasediff");
-    if (codebasediff && codebasediff->is_string()) {
-      GURL crx_diffurl(codebasediff->GetString());
-      if (crx_diffurl.is_valid())
-        result->crx_diffurls.push_back(std::move(crx_diffurl));
-    }
-  }
-
-  // Expect at least one url for full update.
-  if (result->crx_urls.empty()) {
-    *error = "Missing valid url for full update.";
-    return false;
-  }
-
-  return true;
-}
-
-void ParseData(const base::Value& data_node, ProtocolParser::Result* result) {
-  if (!data_node.is_dict())
-    return;
-
-  result->data.emplace_back(ProtocolParser::Result::Data(
-      GetValueString(data_node, "status"), GetValueString(data_node, "name"),
-      GetValueString(data_node, "index"), GetValueString(data_node, "#text")));
-}
-
-bool ParseUpdateCheck(const base::Value& updatecheck_node,
-                      ProtocolParser::Result* result,
+bool ParseUpdateCheck(const base::Value* node_val,
+                      ProtocolParser::App* result,
                       std::string* error) {
-  if (!updatecheck_node.is_dict()) {
-    *error = "'updatecheck' is not a dictionary.";
+  if (!node_val || !node_val->is_dict()) {
+    *error = "'updatecheck' node is missing or not a dictionary.";
     return false;
   }
+  const base::Value::Dict& node = node_val->GetDict();
 
-  for (auto kv : updatecheck_node.DictItems()) {
-    if (kv.first.front() == '_' && kv.second.is_string()) {
-      result->custom_attributes[kv.first] = kv.second.GetString();
+  for (auto [k, v] : node) {
+    if (!k.empty() && k.front() == '_' && v.is_string()) {
+      result->custom_attributes[k] = v.GetString();
     }
   }
 
-  const auto* status = updatecheck_node.FindKey("status");
-  if (!status || !status->is_string()) {
-    *error = "Missing status on updatecheck node";
+  // result->status was set to "ok" when parsing the app node; overwrite it with
+  // the updatecheck status.
+  base::expected<std::string, std::string> status = Parse(node, "status");
+  if (!status.has_value()) {
+    *error = status.error();
     return false;
   }
+  result->status = status.value();
 
-  result->status = status->GetString();
   if (result->status == "noupdate") {
-    const auto* actions_node = updatecheck_node.FindKey("actions");
-    if (actions_node)
-      ParseActions(*actions_node, result);
     return true;
   }
 
   if (result->status == "ok") {
-    const auto* actions_node = updatecheck_node.FindKey("actions");
-    if (actions_node)
-      ParseActions(*actions_node, result);
-
-    const auto* urls_node = updatecheck_node.FindKey("urls");
-    if (!urls_node) {
-      *error = "Missing urls on updatecheck.";
+    base::expected<base::Version, std::string> nextversion =
+        ParseVersion(node, "nextversion");
+    if (nextversion.has_value()) {
+      result->nextversion = nextversion.value();
+    } else {
+      *error = nextversion.error();
       return false;
     }
 
-    if (!ParseUrls(*urls_node, result, error))
-      return false;
-
-    const auto* manifest_node = updatecheck_node.FindKey("manifest");
-    if (!manifest_node) {
-      *error = "Missing manifest on updatecheck.";
-      return false;
+    if (const base::Value::List* list = node.FindList("pipelines")) {
+      for (const base::Value& pipeline_node : *list) {
+        base::expected<ProtocolParser::Pipeline, std::string> pipeline =
+            ParsePipeline(pipeline_node);
+        if (!pipeline.has_value()) {
+          *error = pipeline.error();
+          return false;
+        }
+        result->pipelines.push_back(pipeline.value());
+      }
     }
-    return ParseManifest(*manifest_node, result, error);
+    return true;
   }
 
   // Return the |updatecheck| element status as a parsing error.
   *error = result->status;
-  return false;
+  return true;
 }
 
-bool ParseApp(const base::Value& app_node,
-              ProtocolParser::Result* result,
+bool ParseApp(const base::Value& node_value,
+              ProtocolParser::App* result,
               std::string* error) {
-  if (!app_node.is_dict()) {
+  if (!node_value.is_dict()) {
     *error = "'app' is not a dictionary.";
     return false;
   }
-  for (const auto* cohort_key :
-       {ProtocolParser::Result::kCohort, ProtocolParser::Result::kCohortHint,
-        ProtocolParser::Result::kCohortName}) {
-    const auto* cohort_value = app_node.FindKey(cohort_key);
-    if (cohort_value && cohort_value->is_string())
-      result->cohort_attrs[cohort_key] = cohort_value->GetString();
-  }
-  const auto* appid = app_node.FindKey("appid");
-  if (appid && appid->is_string())
-    result->extension_id = appid->GetString();
-  if (result->extension_id.empty()) {
-    *error = "Missing appid on app node";
+  const base::Value::Dict& node = node_value.GetDict();
+
+  result->cohort = ParseOptional(node, "cohort");
+  result->cohort_name = ParseOptional(node, "cohortname");
+  result->cohort_hint = ParseOptional(node, "cohorthint");
+  base::expected<std::string, std::string> appid = Parse(node, "appid");
+  if (!appid.has_value()) {
+    *error = appid.error();
     return false;
   }
-
-  // Read the |status| attribute for the app.
-  // If the status is one of the defined app status error literals, then return
-  // it in the result as if it were an updatecheck status, then stop parsing,
-  // and return success.
-  const auto* status = app_node.FindKey("status");
-  if (status && status->is_string()) {
-    result->status = status->GetString();
-    if (result->status == "restricted" ||
-        result->status == "error-unknownApplication" ||
-        result->status == "error-invalidAppId")
-      return true;
-
-    // If the status was not handled above and the status is not "ok", then
-    // this must be a status literal that that the parser does not know about.
-    if (!result->status.empty() && result->status != "ok") {
-      *error = "Unknown app status";
-      return false;
-    }
+  result->app_id = appid.value();
+  base::expected<std::string, std::string> status = Parse(node, "status");
+  if (!status.has_value()) {
+    *error = status.error();
+    return false;
   }
+  result->status = status.value();
 
-  DCHECK(result->status.empty() || result->status == "ok");
-
-  if (const auto* data_node = app_node.FindKey("data")) {
-    if (const auto* data_list = data_node->GetIfList()) {
-      base::ranges::for_each(*data_list, [&result](const base::Value& data) {
+  if (result->status == "ok") {
+    if (const base::Value::List* data_node = node.FindList("data")) {
+      std::ranges::for_each(*data_node, [&result](const base::Value& data) {
         ParseData(data, result);
       });
     }
+    return ParseUpdateCheck(node.Find("updatecheck"), result, error);
   }
 
-  const auto* updatecheck_node = app_node.FindKey("updatecheck");
-  if (!updatecheck_node) {
-    *error = "Missing updatecheck on app.";
-    return false;
-  }
-
-  return ParseUpdateCheck(*updatecheck_node, result, error);
+  return true;
 }
 
 }  // namespace
 
-bool ProtocolParserJSON::DoParse(const std::string& response_json,
+bool ProtocolParserJSON::DoParse(std::string_view response_json,
                                  Results* results) {
-  DCHECK(results);
+  CHECK(results);
 
   if (response_json.empty()) {
     ParseError("Empty JSON.");
@@ -297,77 +269,67 @@ bool ProtocolParserJSON::DoParse(const std::string& response_json,
   }
 
   // The JSON response contains a prefix to prevent XSSI.
-  constexpr char kJSONPrefix[] = ")]}'";
+  static constexpr std::string_view kJSONPrefix = ")]}'";
   if (!base::StartsWith(response_json, kJSONPrefix,
                         base::CompareCase::SENSITIVE)) {
     ParseError("Missing secure JSON prefix.");
     return false;
   }
-  const auto doc = base::JSONReader::Read(base::MakeStringPiece(
-      response_json.begin() + std::char_traits<char>::length(kJSONPrefix),
-      response_json.end()));
+  const auto doc =
+      base::JSONReader::ReadDict(response_json.substr(kJSONPrefix.size()),
+                                 base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!doc) {
     ParseError("JSON read error.");
     return false;
   }
-  if (!doc->is_dict()) {
-    ParseError("JSON document is not a dictionary.");
-    return false;
-  }
-  const auto* response_node = doc->FindKey("response");
-  if (!response_node || !response_node->is_dict()) {
+  const base::Value::Dict* response_node = doc->FindDict("response");
+  if (!response_node) {
     ParseError("Missing 'response' element or 'response' is not a dictionary.");
     return false;
   }
-  const auto* protocol = response_node->FindKey("protocol");
-  if (!protocol || !protocol->is_string()) {
+  const std::string* protocol = response_node->FindString("protocol");
+  if (!protocol) {
     ParseError("Missing/non-string protocol.");
     return false;
   }
-  if (protocol->GetString() != kProtocolVersion) {
+  if (*protocol != protocol_request::kProtocolVersion) {
     ParseError("Incorrect protocol. (expected '%s', found '%s')",
-               kProtocolVersion, protocol->GetString().c_str());
+               protocol_request::kProtocolVersion, protocol->c_str());
     return false;
   }
 
-  const auto* daystart_node = response_node->FindKey("daystart");
-  if (daystart_node && daystart_node->is_dict()) {
-    const auto* elapsed_seconds = daystart_node->FindKey("elapsed_seconds");
-    if (elapsed_seconds && elapsed_seconds->is_int())
-      results->daystart_elapsed_seconds = elapsed_seconds->GetInt();
-    const auto* elapsed_days = daystart_node->FindKey("elapsed_days");
-    if (elapsed_days && elapsed_days->is_int())
-      results->daystart_elapsed_days = elapsed_days->GetInt();
+  const base::Value::Dict* daystart_node = response_node->FindDict("daystart");
+  if (daystart_node) {
+    const std::optional<int> elapsed_days =
+        daystart_node->FindInt("elapsed_days");
+    if (elapsed_days) {
+      results->daystart_elapsed_days = *elapsed_days;
+    }
   }
 
-  const auto* systemrequirements_node =
-      response_node->FindKey("systemrequirements");
-  if (systemrequirements_node && systemrequirements_node->is_dict()) {
-    const auto* platform = systemrequirements_node->FindKey("platform");
-    if (platform && platform->is_string())
-      results->system_requirements.platform = platform->GetString();
-    const auto* arch = systemrequirements_node->FindKey("arch");
-    if (arch && arch->is_string())
-      results->system_requirements.arch = arch->GetString();
-    const auto* min_os_version =
-        systemrequirements_node->FindKey("min_os_version");
-    if (min_os_version && min_os_version->is_string())
-      results->system_requirements.min_os_version = min_os_version->GetString();
-  }
-
-  const auto* app_node = response_node->FindKey("app");
-  if (app_node && app_node->is_list()) {
-    for (const auto& app : app_node->GetList()) {
-      Result result;
+  const base::Value::List* app_node = response_node->FindList("apps");
+  if (app_node) {
+    for (const auto& app : *app_node) {
+      App result;
       std::string error;
-      if (ParseApp(app, &result, &error))
-        results->list.push_back(result);
-      else
+      if (ParseApp(app, &result, &error)) {
+        results->apps.push_back(result);
+      } else {
         ParseError("%s", error.c_str());
+      }
     }
   }
 
   return true;
+}
+
+base::expected<ProtocolParser::Results, std::string>
+ProtocolParserJSON::ParseJSON(const std::string& json) {
+  ProtocolParserJSON parser;
+  if (parser.Parse(json)) {
+    return parser.results();
+  }
+  return base::unexpected(parser.errors());
 }
 
 }  // namespace update_client

@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/media/service_launched_video_capture_device.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -23,6 +22,14 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "media/base/media_switches.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "content/browser/gpu/gpu_data_manager_impl.h"
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include "media/capture/video/apple/video_capture_device_factory_apple.h"
 #endif
 
 namespace content {
@@ -85,11 +92,8 @@ void ServiceVideoCaptureDeviceLauncher::LaunchDeviceAsync(
   auto scoped_trace = ScopedCaptureTrace::CreateIfEnabled(
       "ServiceVideoCaptureDeviceLauncher::LaunchDeviceAsync");
 
-  if (stream_type != blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
-    // This launcher only supports MediaStreamType::DEVICE_VIDEO_CAPTURE.
-    NOTREACHED();
-    return;
-  }
+  // This launcher only supports MediaStreamType::DEVICE_VIDEO_CAPTURE.
+  CHECK_EQ(stream_type, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
 
   connect_to_source_provider_cb_.Run(&service_connection_);
   if (!service_connection_->source_provider().is_bound()) {
@@ -142,24 +146,32 @@ void ServiceVideoCaptureDeviceLauncher::LaunchDeviceAsync(
                          OnConnectionLostWhileWaitingForCallback,
                      base::Unretained(this)));
 
-  // TODO(crbug.com/925083)
+  // TODO(crbug.com/40610987)
   media::VideoCaptureParams new_params = params;
   new_params.power_line_frequency =
       media::VideoCaptureDevice::GetPowerLineFrequency(params);
 
-  // GpuMemoryBuffer-based VideoCapture buffer works only on the Chrome OS
-  // and Windows VideoCaptureDevice implementations.
+  // GpuMemoryBuffer-based VideoCapture buffer works only on the Chrome OS,
+  // Windows and Linux VideoCaptureDevice implementations.
 #if BUILDFLAG(IS_WIN)
   if (media::IsMediaFoundationD3D11VideoCaptureEnabled() &&
       params.requested_format.pixel_format == media::PIXEL_FORMAT_NV12) {
     new_params.buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
   }
-#else
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableVideoCaptureUseGpuMemoryBuffer) &&
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kVideoCaptureUseGpuMemoryBuffer)) {
+#elif BUILDFLAG(IS_MAC)
+  // For mac(https://crbug.com/1175142), zero-copy is always enabled unless the
+  // user explicitly asks to disable it.
+  if (media::ShouldEnableGpuMemoryBuffer(device_id)) {
     new_params.buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
+  }
+#else
+  if (switches::IsVideoCaptureUseGpuMemoryBufferEnabled()) {
+#if BUILDFLAG(IS_LINUX)
+    // On Linux, additionally check whether the NV12 GPU memory buffer is
+    // supported.
+    if (GpuDataManagerImpl::GetInstance()->IsGpuMemoryBufferNV12Supported())
+#endif
+      new_params.buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
   }
 #endif
 

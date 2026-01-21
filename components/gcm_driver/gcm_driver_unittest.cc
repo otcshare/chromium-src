@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/gcm_driver/gcm_driver_desktop.h"
-
 #include <stdint.h>
 
 #include "base/base64.h"
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
@@ -20,9 +18,11 @@
 #include "components/gcm_driver/crypto/gcm_encryption_result.h"
 #include "components/gcm_driver/fake_gcm_client_factory.h"
 #include "components/gcm_driver/gcm_client_factory.h"
+#include "components/gcm_driver/gcm_driver_desktop.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
-#include "crypto/ec_private_key.h"
+#include "crypto/keypair.h"
 #include "net/url_request/url_request_test_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -30,7 +30,6 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "services/network/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace gcm {
 
@@ -93,6 +92,7 @@ class GCMDriverBaseTest : public testing::Test {
   void UnregisterCompleted(GCMClient::Result result);
 
  private:
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   base::ScopedTempDir temp_dir_;
   TestingPrefServiceSimple prefs_;
   base::test::TaskEnvironment task_environment_{
@@ -113,7 +113,10 @@ class GCMDriverBaseTest : public testing::Test {
   std::string decrypted_message_;
 };
 
-GCMDriverBaseTest::GCMDriverBaseTest() : io_thread_("IOThread") {}
+GCMDriverBaseTest::GCMDriverBaseTest()
+    : os_crypt_(os_crypt_async::GetTestOSCryptAsyncForTesting(
+          /*is_sync_for_unittests=*/true)),
+      io_thread_("IOThread") {}
 
 GCMDriverBaseTest::~GCMDriverBaseTest() = default;
 
@@ -153,13 +156,13 @@ void GCMDriverBaseTest::CreateDriver() {
       std::make_unique<FakeGCMClientFactory>(
           base::SingleThreadTaskRunner::GetCurrentDefault(),
           io_thread_.task_runner()),
-      chrome_build_info, &prefs_, temp_dir_.GetPath(),
-      /*remove_account_mappings_with_email_key=*/true, base::DoNothing(),
+      chrome_build_info, &prefs_, temp_dir_.GetPath(), base::DoNothing(),
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory_),
       network::TestNetworkConnectionTracker::GetInstance(),
       base::SingleThreadTaskRunner::GetCurrentDefault(),
-      io_thread_.task_runner(), task_environment_.GetMainThreadTaskRunner());
+      io_thread_.task_runner(), task_environment_.GetMainThreadTaskRunner(),
+      os_crypt_.get());
 }
 
 void GCMDriverBaseTest::ShutdownDriver() {

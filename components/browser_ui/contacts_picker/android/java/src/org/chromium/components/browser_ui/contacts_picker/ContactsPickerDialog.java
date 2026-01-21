@@ -4,23 +4,27 @@
 
 package org.chromium.components.browser_ui.contacts_picker;
 
-import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.app.AlertDialog;
+import static org.chromium.build.NullUtil.assertNonNull;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.browser_ui.widget.FullscreenAlertDialog;
+import org.chromium.content_public.browser.ContactsFetcher;
 import org.chromium.content_public.browser.ContactsPickerListener;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
- * UI for the contacts picker that shows on the Android platform as a result of
- * &lt;input type=file accept=contacts &gt; form element.
+ * UI for the contacts picker that shows on the Android platform as a result of &lt;input type=file
+ * accept=contacts &gt; form element.
  */
-public class ContactsPickerDialog
-        extends AlertDialog implements ContactsPickerToolbar.ContactsToolbarDelegate {
+@NullMarked
+public class ContactsPickerDialog extends FullscreenAlertDialog
+        implements ContactsPickerToolbar.ContactsToolbarDelegate {
     // The category we're showing contacts for.
-    private PickerCategoryView mCategoryView;
+    private final PickerCategoryView mCategoryView;
 
     /**
      * The ContactsPickerDialog constructor.
+     *
      * @param windowAndroid The window associated with the main Activity.
      * @param adapter An uninitialized {@link PickerAdapter} for this dialog.
      * @param listener The listener object that gets notified when an action is taken.
@@ -31,30 +35,48 @@ public class ContactsPickerDialog
      * @param includeAddresses Whether the contacts data returned should include addresses.
      * @param includeIcons Whether the contacts data returned should include icons.
      * @param formattedOrigin The origin the data will be shared with, formatted for display with
-     *                        the scheme omitted.
+     *     the scheme omitted.
+     * @param contactsFetcher An instance of {@link ContactsFetcher} for this dialog.
      */
-    public ContactsPickerDialog(WindowAndroid windowAndroid, PickerAdapter adapter,
-            ContactsPickerListener listener, boolean allowMultiple, boolean includeNames,
-            boolean includeEmails, boolean includeTel, boolean includeAddresses,
-            boolean includeIcons, String formattedOrigin) {
-        super(windowAndroid.getContext().get(), R.style.ThemeOverlay_BrowserUI_Fullscreen);
+    public ContactsPickerDialog(
+            WindowAndroid windowAndroid,
+            PickerAdapter adapter,
+            ContactsPickerListener listener,
+            boolean allowMultiple,
+            boolean includeNames,
+            boolean includeEmails,
+            boolean includeTel,
+            boolean includeAddresses,
+            boolean includeIcons,
+            String formattedOrigin,
+            boolean shouldPadForContent,
+            ContactsFetcher contactsFetcher) {
+        super(assertNonNull(windowAndroid.getActivity().get()), shouldPadForContent);
 
         // Initialize the main content view.
-        mCategoryView = new PickerCategoryView(windowAndroid, adapter, allowMultiple, includeNames,
-                includeEmails, includeTel, includeAddresses, includeIcons, formattedOrigin, this);
+        mCategoryView =
+                new PickerCategoryView(
+                        windowAndroid,
+                        adapter,
+                        allowMultiple,
+                        includeNames,
+                        includeEmails,
+                        includeTel,
+                        includeAddresses,
+                        includeIcons,
+                        formattedOrigin,
+                        this,
+                        contactsFetcher);
         mCategoryView.initialize(this, listener);
         setView(mCategoryView);
     }
 
-    /**
-     * Cancels the dialog in response to a back navigation.
-     */
+    /** Cancels the dialog in response to a back navigation. */
     @Override
     public void onNavigationBackCallback() {
         cancel();
     }
 
-    @VisibleForTesting
     public PickerCategoryView getCategoryViewForTesting() {
         return mCategoryView;
     }

@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_ASH_SERVICES_BLUETOOTH_CONFIG_FAKE_BLUETOOTH_POWER_CONTROLLER_H_
 #define CHROMEOS_ASH_SERVICES_BLUETOOTH_CONFIG_FAKE_BLUETOOTH_POWER_CONTROLLER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/services/bluetooth_config/adapter_state_controller.h"
 #include "chromeos/ash/services/bluetooth_config/bluetooth_power_controller.h"
 
@@ -21,7 +22,7 @@ class FakeBluetoothPowerController : public BluetoothPowerController {
 
  private:
   // BluetoothPowerController:
-  void SetBluetoothHidDetectionActive() override;
+  void SetBluetoothEnabledWithoutPersistence() override;
   void SetBluetoothHidDetectionInactive(bool is_using_bluetooth) override;
   void SetPrefs(PrefService* logged_in_profile_prefs,
                 PrefService* local_state) override {}
@@ -30,7 +31,7 @@ class FakeBluetoothPowerController : public BluetoothPowerController {
   // enabled on a fresh device.
   bool last_enabled_ = true;
 
-  AdapterStateController* adapter_state_controller_;
+  raw_ptr<AdapterStateController> adapter_state_controller_;
 };
 
 }  // namespace ash::bluetooth_config

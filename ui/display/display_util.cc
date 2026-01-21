@@ -4,6 +4,7 @@
 
 #include "ui/display/display_util.h"
 
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -18,13 +19,12 @@ void DisplayUtil::DisplayToScreenInfo(ScreenInfo* screen_info,
   // TODO(husky): Remove any Android system controls from availableRect.
   screen_info->available_rect = display.work_area();
   screen_info->device_scale_factor = display.device_scale_factor();
-  screen_info->display_color_spaces = display.color_spaces();
+  screen_info->display_color_spaces = display.GetColorSpaces();
   screen_info->depth = display.color_depth();
   screen_info->depth_per_component = display.depth_per_component();
   screen_info->is_monochrome = display.is_monochrome();
-  screen_info->display_frequency = display.display_frequency();
 
-  // TODO(https://crbug.com/998131): Expose panel orientation via a proper web
+  // TODO(crbug.com/41478398): Expose panel orientation via a proper web
   // API instead of window.screen.orientation.angle.
   screen_info->orientation_angle = display.PanelRotationAsDegree();
 #if defined(USE_AURA)
@@ -41,7 +41,7 @@ void DisplayUtil::DisplayToScreenInfo(ScreenInfo* screen_info,
     screen_info->orientation_angle = 90;
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   screen_info->orientation_type = GetOrientationTypeForMobile(display);
 #else
   screen_info->orientation_type = GetOrientationTypeForDesktop(display);
@@ -49,7 +49,7 @@ void DisplayUtil::DisplayToScreenInfo(ScreenInfo* screen_info,
 
   // TODO(crbug.com/1194700 and crbug.com/1182855): Use cross-process screen
   // info caches, not local-process info, for child frames and Mac's shim.
-  auto* screen = Screen::GetScreen();
+  auto* screen = Screen::Get();
   // Some tests are run with no Screen initialized.
   screen_info->is_extended = screen && screen->GetNumDisplays() > 1;
   screen_info->is_primary =
@@ -61,14 +61,14 @@ void DisplayUtil::DisplayToScreenInfo(ScreenInfo* screen_info,
 
 // static
 void DisplayUtil::GetDefaultScreenInfo(ScreenInfo* screen_info) {
-  return GetNativeViewScreenInfo(screen_info, nullptr);
+  return GetNativeViewScreenInfo(screen_info, gfx::NativeView());
 }
 
 // static
 void DisplayUtil::GetNativeViewScreenInfo(ScreenInfo* screen_info,
                                           gfx::NativeView native_view) {
   // Some tests are run with no Screen initialized.
-  Screen* screen = Screen::GetScreen();
+  Screen* screen = Screen::Get();
   if (!screen) {
     *screen_info = ScreenInfo();
     return;
@@ -106,7 +106,6 @@ mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForMobile(
                               : mojom::ScreenOrientation::kPortraitPrimary;
     default:
       NOTREACHED();
-      return mojom::ScreenOrientation::kPortraitPrimary;
   }
 }
 
@@ -141,7 +140,7 @@ mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForDesktop(
 uint32_t DisplayUtil::GetAudioFormats() {
   // Audio passthrough is only supported with a single display. If multiple
   // displays are attached, audio passthrough will not be enabled.
-  Screen* screen = Screen::GetScreen();
+  Screen* screen = Screen::Get();
   if (screen) {
     auto display = screen->GetAllDisplays();
     if (display.size() == 1) {

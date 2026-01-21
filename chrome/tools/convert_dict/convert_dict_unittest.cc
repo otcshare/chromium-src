@@ -4,9 +4,12 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <map>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/i18n/icu_string_conversions.h"
@@ -26,23 +29,21 @@ namespace {
 bool VerifyWords(const convert_dict::DicReader::WordList& org_words,
                  const std::string& serialized) {
   hunspell::BDictReader reader;
-  EXPECT_TRUE(
-      reader.Init(reinterpret_cast<const unsigned char*>(serialized.data()),
-      serialized.size()));
+  EXPECT_TRUE(reader.Init(base::as_byte_span(serialized)));
 
   hunspell::WordIterator iter = reader.GetAllWordIterator();
 
-  int affix_ids[hunspell::BDict::MAX_AFFIXES_PER_WORD];
+  std::array<int, hunspell::BDict::MAX_AFFIXES_PER_WORD> affix_ids;
 
   static const int kBufSize = 128;
-  char buf[kBufSize];
+  std::array<char, kBufSize> buf;
   for (size_t i = 0; i < org_words.size(); i++) {
     SCOPED_TRACE(base::StringPrintf(
         "org_words[%" PRIuS "]: %s", i, org_words[i].first.c_str()));
 
-    int affix_matches = iter.Advance(buf, kBufSize, affix_ids);
+    int affix_matches = iter.Advance(buf.data(), kBufSize, affix_ids.data());
     EXPECT_NE(0, affix_matches);
-    EXPECT_EQ(org_words[i].first, std::string(buf));
+    EXPECT_EQ(org_words[i].first, std::string(buf.data()));
     EXPECT_EQ(affix_matches, static_cast<int>(org_words[i].second.size()));
 
     // Check the individual affix indices.
@@ -82,11 +83,11 @@ void RunDictionaryTest(const char* codepage,
   // Create a temporary affix file and a dictionary file from the test data.
   base::FilePath aff_file;
   base::CreateTemporaryFile(&aff_file);
-  base::WriteFile(aff_file, aff_data.c_str(), aff_data.length());
+  base::WriteFile(aff_file, aff_data);
 
   base::FilePath dic_file;
   base::CreateTemporaryFile(&dic_file);
-  base::WriteFile(dic_file, dic_data.c_str(), dic_data.length());
+  base::WriteFile(dic_file, dic_data);
 
   {
     // Read the above affix file with AffReader and read the dictionary file
@@ -116,15 +117,15 @@ void RunDictionaryTest(const char* codepage,
     writer.SetWords(dic_reader.words());
 
     std::string bdict_data = writer.GetBDict();
+    base::span<const uint8_t> bytes = base::as_byte_span(bdict_data);
     VerifyWords(dic_reader.words(), bdict_data);
-    EXPECT_TRUE(hunspell::BDict::Verify(bdict_data.data(), bdict_data.size()));
+    EXPECT_TRUE(hunspell::BDict::Verify(bytes));
 
     // Trim the end of this BDICT and verify our verifier tells these trimmed
     // BDICTs are corrupted.
     for (size_t i = 1; i < bdict_data.size(); ++i) {
       SCOPED_TRACE(base::StringPrintf("i = %" PRIuS, i));
-      EXPECT_FALSE(hunspell::BDict::Verify(bdict_data.data(),
-                                           bdict_data.size() - i));
+      EXPECT_FALSE(hunspell::BDict::Verify(bytes.first(i)));
     }
   }
 
@@ -140,13 +141,13 @@ void RunDictionaryTest(const char* codepage,
 // Tests whether or not our DicReader can read all the input English words
 TEST(ConvertDictTest, English) {
   static constexpr char kCodepage[] = "UTF-8";
-  static constexpr const wchar_t* kWords[] = {
+  static constexpr std::array kWords = {
       L"I", L"he", L"she", L"it", L"we", L"you", L"they",
   };
 
   std::map<std::u16string, bool> word_list;
-  for (size_t i = 0; i < std::size(kWords); ++i) {
-    word_list.insert({base::WideToUTF16(kWords[i]), true});
+  for (const auto* word : kWords) {
+    word_list.insert({base::WideToUTF16(word), true});
   }
 
   RunDictionaryTest(kCodepage, word_list);
@@ -155,7 +156,7 @@ TEST(ConvertDictTest, English) {
 // Tests whether or not our DicReader can read all the input Russian words.
 TEST(ConvertDictTest, Russian) {
   static constexpr char kCodepage[] = "KOI8-R";
-  static constexpr const wchar_t* kWords[] = {
+  static constexpr std::array kWords = {
       L"\x044f",
       L"\x0442\x044b",
       L"\x043e\x043d",
@@ -167,8 +168,8 @@ TEST(ConvertDictTest, Russian) {
   };
 
   std::map<std::u16string, bool> word_list;
-  for (size_t i = 0; i < std::size(kWords); ++i) {
-    word_list.insert({base::WideToUTF16(kWords[i]), true});
+  for (const auto* word : kWords) {
+    word_list.insert({base::WideToUTF16(word), true});
   }
 
   RunDictionaryTest(kCodepage, word_list);
@@ -177,7 +178,7 @@ TEST(ConvertDictTest, Russian) {
 // Tests whether or not our DicReader can read all the input Hungarian words.
 TEST(ConvertDictTest, Hungarian) {
   static constexpr char kCodepage[] = "ISO8859-2";
-  static constexpr const wchar_t* kWords[] = {
+  static constexpr std::array kWords = {
       L"\x00e9\x006e",
       L"\x0074\x0065",
       L"\x0151",
@@ -191,8 +192,8 @@ TEST(ConvertDictTest, Hungarian) {
   };
 
   std::map<std::u16string, bool> word_list;
-  for (size_t i = 0; i < std::size(kWords); ++i) {
-    word_list.insert({base::WideToUTF16(kWords[i]), true});
+  for (const auto* word : kWords) {
+    word_list.insert({base::WideToUTF16(word), true});
   }
 
   RunDictionaryTest(kCodepage, word_list);

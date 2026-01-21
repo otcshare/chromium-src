@@ -82,8 +82,9 @@ PlatformChannelServerEndpoint NamedPlatformChannel::CreateServerEndpoint(
     const Options& options,
     ServerName* server_name) {
   ServerName name = options.server_name;
-  if (name.empty())
+  if (name.empty()) {
     name = GenerateRandomServerName(options);
+  }
 
   // Make sure the path we need exists.
   base::FilePath socket_dir = base::FilePath(name).DirName();
@@ -99,15 +100,17 @@ PlatformChannelServerEndpoint NamedPlatformChannel::CreateServerEndpoint(
   }
 
   net::SockaddrStorage storage;
-  if (!MakeUnixAddr(name, options.use_abstract_namespace, &storage))
+  if (!MakeUnixAddr(name, options.use_abstract_namespace, &storage)) {
     return PlatformChannelServerEndpoint();
+  }
 
   PlatformHandle handle = CreateUnixDomainSocket();
-  if (!handle.is_valid())
+  if (!handle.is_valid()) {
     return PlatformChannelServerEndpoint();
+  }
 
   // Bind the socket.
-  if (bind(handle.GetFD().get(), storage.addr, storage.addr_len) < 0) {
+  if (bind(handle.GetFD().get(), storage.addr(), storage.addr_len) < 0) {
     PLOG(ERROR) << "bind " << name;
     return PlatformChannelServerEndpoint();
   }
@@ -130,15 +133,17 @@ PlatformChannelEndpoint NamedPlatformChannel::CreateClientEndpoint(
 
   net::SockaddrStorage storage;
   if (!MakeUnixAddr(options.server_name, options.use_abstract_namespace,
-                    &storage))
+                    &storage)) {
     return PlatformChannelEndpoint();
+  }
 
   PlatformHandle handle = CreateUnixDomainSocket();
-  if (!handle.is_valid())
+  if (!handle.is_valid()) {
     return PlatformChannelEndpoint();
+  }
 
-  if (HANDLE_EINTR(
-          connect(handle.GetFD().get(), storage.addr, storage.addr_len)) < 0) {
+  if (HANDLE_EINTR(connect(handle.GetFD().get(), storage.addr(),
+                           storage.addr_len)) < 0) {
     VPLOG(1) << "connect " << options.server_name;
     return PlatformChannelEndpoint();
   }

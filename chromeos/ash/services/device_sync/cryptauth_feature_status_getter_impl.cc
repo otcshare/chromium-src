@@ -7,8 +7,7 @@
 #include <array>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -87,7 +86,7 @@ ConvertFeatureStatusesToSoftwareFeatureMap(
   base::flat_set<multidevice::SoftwareFeature> marked_enabled;
   for (const cryptauthv2::DeviceFeatureStatus::FeatureStatus& status :
        feature_statuses) {
-    absl::optional<CryptAuthFeatureType> feature_type =
+    std::optional<CryptAuthFeatureType> feature_type =
         CryptAuthFeatureTypeFromString(status.feature_type());
 
     bool is_known_feature_type = feature_type.has_value();
@@ -100,14 +99,14 @@ ConvertFeatureStatusesToSoftwareFeatureMap(
       continue;
     }
 
-    if (base::Contains(GetSupportedCryptAuthFeatureTypes(), *feature_type) &&
+    if (GetSupportedCryptAuthFeatureTypes().contains(*feature_type) &&
         status.enabled()) {
       marked_supported.insert(
           CryptAuthFeatureTypeToSoftwareFeature(*feature_type));
       continue;
     }
 
-    if (base::Contains(GetEnabledCryptAuthFeatureTypes(), *feature_type) &&
+    if (GetEnabledCryptAuthFeatureTypes().contains(*feature_type) &&
         status.enabled()) {
       marked_enabled.insert(
           CryptAuthFeatureTypeToSoftwareFeature(*feature_type));
@@ -117,8 +116,8 @@ ConvertFeatureStatusesToSoftwareFeatureMap(
 
   CryptAuthFeatureStatusGetter::SoftwareFeatureStateMap feature_states;
   for (const multidevice::SoftwareFeature& feature : kAllSoftwareFeatures) {
-    bool is_marked_supported = base::Contains(marked_supported, feature);
-    bool is_marked_enabled = base::Contains(marked_enabled, feature);
+    bool is_marked_supported = marked_supported.contains(feature);
+    bool is_marked_enabled = marked_enabled.contains(feature);
     bool is_unsupported_feature_marked_enabled =
         !is_marked_supported && is_marked_enabled;
 
@@ -153,7 +152,8 @@ base::Time GetMaxLastModifiedTimeFromFeatureStatuses(
                                              max_last_modified_time_millis);
   }
 
-  return base::Time::FromJavaTime(max_last_modified_time_millis);
+  return base::Time::FromMillisecondsSinceUnixEpoch(
+      max_last_modified_time_millis);
 }
 
 void RecordGetFeatureStatusesMetrics(base::TimeDelta execution_time,
@@ -246,7 +246,7 @@ void CryptAuthFeatureStatusGetterImpl::OnBatchGetFeatureStatusesSuccess(
        feature_response.device_feature_statuses()) {
     const std::string& id = device_feature_status.device_id();
 
-    bool was_id_requested = base::Contains(input_device_ids, id);
+    bool was_id_requested = input_device_ids.contains(id);
     base::UmaHistogramBoolean(
         "CryptAuth.DeviceSyncV2.FeatureStatusGetter."
         "WasDeviceInResponseRequested",
@@ -258,8 +258,7 @@ void CryptAuthFeatureStatusGetterImpl::OnBatchGetFeatureStatusesSuccess(
       continue;
     }
 
-    bool is_duplicate_id =
-        base::Contains(id_to_device_software_feature_info_map_, id);
+    bool is_duplicate_id = id_to_device_software_feature_info_map_.contains(id);
     base::UmaHistogramBoolean(
         "CryptAuth.DeviceSyncV2.FeatureStatusGetter.IsDuplicateDeviceId",
         is_duplicate_id);

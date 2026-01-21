@@ -2,18 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/commerce/core/metrics/scheduled_metrics_manager.h"
+
 #include <map>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "components/bookmarks/browser/bookmark_model.h"
-#include "components/bookmarks/browser/bookmark_node.h"
-#include "components/bookmarks/test/test_bookmark_client.h"
-#include "components/commerce/core/metrics/scheduled_metrics_manager.h"
+#include "components/commerce/core/commerce_feature_list.h"
+#include "components/commerce/core/mock_account_checker.h"
+#include "components/commerce/core/mock_shopping_service.h"
 #include "components/commerce/core/pref_names.h"
+#include "components/commerce/core/price_tracking_utils.h"
 #include "components/commerce/core/test_utils.h"
 #include "components/power_bookmarks/core/power_bookmark_utils.h"
 #include "components/power_bookmarks/core/proto/power_bookmark_meta.pb.h"
@@ -27,8 +30,9 @@ namespace commerce::metrics {
 class ScheduledMetricsManagerTest : public testing::Test {
  public:
   ScheduledMetricsManagerTest()
-      : bookmark_model_(bookmarks::TestBookmarkClient::CreateModel()),
-        pref_service_(std::make_unique<TestingPrefServiceSimple>()) {}
+      : account_checker_(std::make_unique<MockAccountChecker>()),
+        pref_service_(std::make_unique<TestingPrefServiceSimple>()),
+        shopping_service_(std::make_unique<MockShoppingService>()) {}
   ScheduledMetricsManagerTest(const ScheduledMetricsManagerTest&) = delete;
   ScheduledMetricsManagerTest operator=(const ScheduledMetricsManagerTest&) =
       delete;
@@ -36,18 +40,26 @@ class ScheduledMetricsManagerTest : public testing::Test {
 
   void TestBody() override {}
 
-  void SetUp() override { RegisterPrefs(pref_service_->registry()); }
+  void SetUp() override {
+    test_features_.InitWithFeatures({kSubscriptionsApi, kShoppingList}, {});
+    MockAccountChecker::RegisterCommercePrefs(pref_service_->registry());
+    SetShoppingListEnterprisePolicyPref(pref_service_.get(), true);
+    account_checker_->SetPrefs(pref_service_.get());
+    shopping_service_->SetAccountChecker(account_checker_.get());
+  }
 
   void CreateUpdateManagerAndWait() {
     auto metrics_manager = std::make_unique<ScheduledMetricsManager>(
-        pref_service_.get(), bookmark_model_.get());
+        pref_service_.get(), shopping_service_.get());
     base::RunLoop().RunUntilIdle();
   }
 
  protected:
+  base::test::ScopedFeatureList test_features_;
   base::test::TaskEnvironment task_environment_;
-  std::unique_ptr<bookmarks::BookmarkModel> bookmark_model_;
+  std::unique_ptr<MockAccountChecker> account_checker_;
   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
+  std::unique_ptr<MockShoppingService> shopping_service_;
 };
 
 TEST_F(ScheduledMetricsManagerTest, TrackedProductCountRecorded) {
@@ -56,13 +68,10 @@ TEST_F(ScheduledMetricsManagerTest, TrackedProductCountRecorded) {
   pref_service_->SetTime(kCommerceDailyMetricsLastUpdateTime, base::Time());
   base::HistogramTester histogram_tester;
 
-  // Add two tracked products and one untracked product.
-  AddProductBookmark(bookmark_model_.get(), u"product 1",
-                     GURL("http://example.com"), 123L, true);
-  AddProductBookmark(bookmark_model_.get(), u"product 2",
-                     GURL("http://example.com"), 456L, false);
-  AddProductBookmark(bookmark_model_.get(), u"product 3",
-                     GURL("http://example.com"), 789L, true);
+  // Add two tracked products.
+  shopping_service_->SetGetAllSubscriptionsCallbackValue(
+      {BuildUserSubscriptionForClusterId(123L),
+       BuildUserSubscriptionForClusterId(456L)});
 
   CreateUpdateManagerAndWait();
 
@@ -75,8 +84,8 @@ TEST_F(ScheduledMetricsManagerTest, TrackedProductCountNotRecordedEarly) {
                          base::Time::Now());
   base::HistogramTester histogram_tester;
 
-  AddProductBookmark(bookmark_model_.get(), u"product 1",
-                     GURL("http://example.com"), 123L, true);
+  shopping_service_->SetGetAllSubscriptionsCallbackValue(
+      {BuildUserSubscriptionForClusterId(123L)});
 
   CreateUpdateManagerAndWait();
 
@@ -92,6 +101,8 @@ TEST_F(ScheduledMetricsManagerTest, EmailNotification_NoTrackedProducts) {
   // Assume the user has enabled notifications but has no tracked products.
   pref_service_->SetBoolean(kPriceEmailNotificationsEnabled, true);
 
+  shopping_service_->SetGetAllSubscriptionsCallbackValue(
+      std::vector<CommerceSubscription>());
   CreateUpdateManagerAndWait();
 
   histogram_tester.ExpectUniqueSample(
@@ -110,8 +121,8 @@ TEST_F(ScheduledMetricsManagerTest, EmailNotification_TrackedProducts) {
   pref_service_->SetBoolean(kPriceEmailNotificationsEnabled, true);
 
   // Have at least one tracked product.
-  AddProductBookmark(bookmark_model_.get(), u"product 1",
-                     GURL("http://example.com"), 123L, true);
+  shopping_service_->SetGetAllSubscriptionsCallbackValue(
+      {BuildUserSubscriptionForClusterId(123L)});
 
   CreateUpdateManagerAndWait();
 
@@ -131,8 +142,8 @@ TEST_F(ScheduledMetricsManagerTest,
   pref_service_->SetBoolean(kPriceEmailNotificationsEnabled, false);
 
   // Have at least one tracked product.
-  AddProductBookmark(bookmark_model_.get(), u"product 1",
-                     GURL("http://example.com"), 123L, true);
+  shopping_service_->SetGetAllSubscriptionsCallbackValue(
+      {BuildUserSubscriptionForClusterId(123L)});
 
   CreateUpdateManagerAndWait();
 

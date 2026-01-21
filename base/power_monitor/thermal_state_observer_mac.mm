@@ -4,7 +4,6 @@
 
 #include "base/power_monitor/thermal_state_observer_mac.h"
 
-#import <Foundation/Foundation.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMKeys.h>
@@ -12,65 +11,125 @@
 #include <IOKit/pwr_mgt/IOPMLibDefs.h>
 #include <notify.h>
 
+#include <memory>
+#include <optional>
+
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/feature_list.h"
+#include "base/features.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_source.h"
 #include "base/power_monitor/power_observer.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/threading/scoped_blocking_call.h"
+
+namespace base {
 
 namespace {
 
-base::PowerThermalObserver::DeviceThermalState
+PowerThermalObserver::DeviceThermalState
 NSProcessInfoThermalStateToDeviceThermalState(
-    NSProcessInfoThermalState nsinfo_state) NS_AVAILABLE_MAC(10_10_3) {
+    NSProcessInfoThermalState nsinfo_state) {
   switch (nsinfo_state) {
     case NSProcessInfoThermalStateNominal:
-      return base::PowerThermalObserver::DeviceThermalState::kNominal;
+      return PowerThermalObserver::DeviceThermalState::kNominal;
     case NSProcessInfoThermalStateFair:
-      return base::PowerThermalObserver::DeviceThermalState::kFair;
+      return PowerThermalObserver::DeviceThermalState::kFair;
     case NSProcessInfoThermalStateSerious:
-      return base::PowerThermalObserver::DeviceThermalState::kSerious;
+      return PowerThermalObserver::DeviceThermalState::kSerious;
     case NSProcessInfoThermalStateCritical:
-      return base::PowerThermalObserver::DeviceThermalState::kCritical;
+      return PowerThermalObserver::DeviceThermalState::kCritical;
   }
   NOTREACHED();
-  return base::PowerThermalObserver::DeviceThermalState::kUnknown;
-}
 }
 
-namespace base {
+// Fetches the CPU speed limit from IOKit. This is a potentially blocking call.
+// If |may_block| is true, it indicates that the function is running on a
+// thread where blocking is permissible.
+int DoGetCurrentSpeedLimit(bool may_block) {
+  std::optional<ScopedBlockingCall> scoped_blocking_call;
+  if (may_block) {
+    scoped_blocking_call.emplace(FROM_HERE, BlockingType::MAY_BLOCK);
+  }
+
+  apple::ScopedCFTypeRef<CFDictionaryRef> dictionary;
+  IOReturn result = IOPMCopyCPUPowerStatus(dictionary.InitializeInto());
+  if (result != kIOReturnSuccess) {
+    DVLOG(1) << __func__
+             << "Unable to get CPU power status, result = " << result;
+    return PowerThermalObserver::kSpeedLimitMax;
+  }
+  if (CFNumberRef value = apple::GetValueFromDictionary<CFNumberRef>(
+          dictionary.get(), CFSTR(kIOPMCPUPowerLimitProcessorSpeedKey))) {
+    int speed_limit = -1;
+    if (CFNumberGetValue(value, kCFNumberIntType, &speed_limit)) {
+      return speed_limit;
+    } else {
+      DVLOG(1) << __func__ << "Unable to get speed limit value";
+    }
+  } else {
+    DVLOG(1) << __func__ << "Unable to get speed limit";
+  }
+  return PowerThermalObserver::kSpeedLimitMax;
+}
+
+// Posts a task to fetch the speed limit on a worker thread and runs the
+// callback on the originating thread with the result.
+void PostTaskToGetSpeedLimit(
+    const ThermalStateObserverMac::SpeedLimitUpdateCallback& callback) {
+  ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {MayBlock()}, BindOnce(&DoGetCurrentSpeedLimit, true),
+      BindOnce(callback));
+}
+
+}  // namespace
+
+struct ThermalStateObserverMac::ObjCStorage {
+  id __strong thermal_state_update_observer = nil;
+};
 
 ThermalStateObserverMac::ThermalStateObserverMac(
     StateUpdateCallback state_update_callback,
     SpeedLimitUpdateCallback speed_limit_update_callback,
-    const char* power_notification_key) NS_AVAILABLE_MAC(10_10_3)
-    : power_notification_key_(power_notification_key) {
+    const char* power_notification_key)
+    : power_notification_key_(power_notification_key),
+      objc_storage_(std::make_unique<ObjCStorage>()) {
   auto on_state_change_block = ^(NSNotification* notification) {
     auto state = PowerThermalObserver::DeviceThermalState::kUnknown;
     // |thermalState| is basically a scale of power usage and its associated
     // thermal dissipation increase, from Nominal upwards, see:
     // https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/RespondToThermalStateChanges.html
     NSProcessInfoThermalState nsinfo_state =
-        [[NSProcessInfo processInfo] thermalState];
+        NSProcessInfo.processInfo.thermalState;
     state = NSProcessInfoThermalStateToDeviceThermalState(nsinfo_state);
     if (state_for_testing_ !=
-        PowerThermalObserver::DeviceThermalState::kUnknown)
+        PowerThermalObserver::DeviceThermalState::kUnknown) {
       state = state_for_testing_;
+    }
     DVLOG(1) << __func__ << ": "
              << PowerMonitorSource::DeviceThermalStateToString(state);
     state_update_callback.Run(state);
   };
 
-  thermal_state_update_observer_ = [[NSNotificationCenter defaultCenter]
-      addObserverForName:NSProcessInfoThermalStateDidChangeNotification
-                  object:nil
-                   queue:nil
-              usingBlock:on_state_change_block];
+  objc_storage_->thermal_state_update_observer =
+      [NSNotificationCenter.defaultCenter
+          addObserverForName:NSProcessInfoThermalStateDidChangeNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:on_state_change_block];
 
   auto on_speed_change_block = ^() {
-    int speed_limit = GetCurrentSpeedLimit();
-    DVLOG(1) << __func__ << ": " << speed_limit;
-    speed_limit_update_callback.Run(speed_limit);
+    if (FeatureList::IsEnabled(features::kReducePPMs)) {
+      PostTaskToGetSpeedLimit(speed_limit_update_callback);
+    } else {
+      int speed_limit = GetCurrentSpeedLimit();
+      DVLOG(1) << __func__ << ": " << speed_limit;
+      speed_limit_update_callback.Run(speed_limit);
+    }
   };
 
   uint32_t result = notify_register_dispatch(power_notification_key_,
@@ -88,40 +147,23 @@ ThermalStateObserverMac::ThermalStateObserverMac(
 }
 
 ThermalStateObserverMac::~ThermalStateObserverMac() {
-  [[NSNotificationCenter defaultCenter]
-      removeObserver:thermal_state_update_observer_];
+  [NSNotificationCenter.defaultCenter
+      removeObserver:objc_storage_->thermal_state_update_observer];
   notify_cancel(speed_limit_notification_token_);
 }
 
 PowerThermalObserver::DeviceThermalState
-ThermalStateObserverMac::GetCurrentThermalState() NS_AVAILABLE_MAC(10_10_3) {
-  if (state_for_testing_ != PowerThermalObserver::DeviceThermalState::kUnknown)
+ThermalStateObserverMac::GetCurrentThermalState() {
+  if (state_for_testing_ !=
+      PowerThermalObserver::DeviceThermalState::kUnknown) {
     return state_for_testing_;
+  }
   NSProcessInfoThermalState nsinfo_state =
-      [[NSProcessInfo processInfo] thermalState];
+      NSProcessInfo.processInfo.thermalState;
   return NSProcessInfoThermalStateToDeviceThermalState(nsinfo_state);
 }
 
-int ThermalStateObserverMac::GetCurrentSpeedLimit() {
-  base::ScopedCFTypeRef<CFDictionaryRef> dictionary;
-  IOReturn result = IOPMCopyCPUPowerStatus(dictionary.InitializeInto());
-  if (result != kIOReturnSuccess) {
-    DVLOG(1) << __func__
-             << "Unable to get CPU power status, result = " << result;
-    return PowerThermalObserver::kSpeedLimitMax;
-  }
-  if (CFTypeRef value = CFDictionaryGetValue(
-          dictionary.get(), CFSTR(kIOPMCPUPowerLimitProcessorSpeedKey))) {
-    int speed_limit = -1;
-    if (CFNumberGetValue(reinterpret_cast<CFNumberRef>(value), kCFNumberIntType,
-                         &speed_limit)) {
-      return speed_limit;
-    } else {
-      DVLOG(1) << __func__ << "Unable to get speed limit value";
-    }
-  } else {
-    DVLOG(1) << __func__ << "Unable to get speed limit";
-  }
-  return PowerThermalObserver::kSpeedLimitMax;
+int ThermalStateObserverMac::GetCurrentSpeedLimit() const {
+  return DoGetCurrentSpeedLimit(false);
 }
-}
+}  // namespace base

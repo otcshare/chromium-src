@@ -36,19 +36,23 @@ const char kUserGestureRequired[] =
 const char kDisablePictureInPicturePresent[] =
     "\"disablePictureInPicture\" attribute is present.";
 const char kAutoPipAndroid[] = "The video is currently in auto-pip mode.";
+const char kDocumentPip[] = "The video is currently in document pip mode.";
 
 }  // namespace
 
 // static
-ScriptPromise HTMLVideoElementPictureInPicture::requestPictureInPicture(
+ScriptPromise<PictureInPictureWindow>
+HTMLVideoElementPictureInPicture::requestPictureInPicture(
     ScriptState* script_state,
     HTMLVideoElement& element,
     ExceptionState& exception_state) {
   CheckIfPictureInPictureIsAllowed(element, exception_state);
   if (exception_state.HadException())
-    return ScriptPromise();
+    return EmptyPromise();
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<PictureInPictureWindow>>(
+          script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
 
   PictureInPictureController::From(element.GetDocument())
@@ -119,6 +123,10 @@ void HTMLVideoElementPictureInPicture::CheckIfPictureInPictureIsAllowed(
     case Status::kAutoPipAndroid:
       exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                         kAutoPipAndroid);
+      return;
+    case Status::kDocumentPip:
+      exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                        kDocumentPip);
       return;
     case Status::kEnabled:
       break;

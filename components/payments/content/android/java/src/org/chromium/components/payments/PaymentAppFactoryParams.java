@@ -4,13 +4,14 @@
 
 package org.chromium.components.payments;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.Origin;
 
 /** Interface for providing information to a payment app factory. */
+@NullMarked
 public interface PaymentAppFactoryParams extends PaymentRequestParams {
     /** @return The web contents where the payment is being requested. */
     WebContents getWebContents();
@@ -19,7 +20,7 @@ public interface PaymentAppFactoryParams extends PaymentRequestParams {
     RenderFrameHost getRenderFrameHost();
 
     /** @return The PaymentRequest object identifier. */
-    default String getId() {
+    default @Nullable String getId() {
         return null;
     }
 
@@ -28,7 +29,7 @@ public interface PaymentAppFactoryParams extends PaymentRequestParams {
      * formatted by UrlFormatter.formatUrlForSecurityDisplay().
      */
     default String getTopLevelOrigin() {
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     /**
@@ -36,7 +37,7 @@ public interface PaymentAppFactoryParams extends PaymentRequestParams {
      * PaymentRequest API as formatted by UrlFormatter.formatUrlForSecurityDisplay().
      */
     default String getPaymentRequestOrigin() {
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     /**
@@ -45,21 +46,20 @@ public interface PaymentAppFactoryParams extends PaymentRequestParams {
      * null.
      */
     default Origin getPaymentRequestSecurityOrigin() {
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     /**
      * @return The certificate chain of the top-level context as returned by
-     * CertificateChainHelper.getCertificateChain(). Can be null.
+     * CertificateChainHelper.getCertificateChain(). Can be null when
+     * ANDROID_PAYMENT_INTENTS_OMIT_DEPRECATED_PARAMETERS is enabled or for localhost or local file,
+     * which are secure contexts without SSL. Each byte array cannot be null.
      */
-    @Nullable
-    default byte[][] getCertificateChain() {
+    default byte @Nullable [][] getCertificateChain() {
         return null;
     }
 
-    /**
-     * @return Whether crawling the web for just-in-time installable payment handlers is enabled.
-     */
+    /** @return Whether crawling the web for just-in-time installable payment handlers is enabled. */
     default boolean getMayCrawl() {
         return false;
     }
@@ -67,27 +67,66 @@ public interface PaymentAppFactoryParams extends PaymentRequestParams {
     /**
      * @return The listener for payment method, shipping address, and shipping option change events.
      */
-    default PaymentRequestUpdateEventListener getPaymentRequestUpdateEventListener() {
+    default @Nullable PaymentRequestUpdateEventListener getPaymentRequestUpdateEventListener() {
         return null;
     }
 
-    /** @return The Payment Request information received from the merchant. */
+    /**
+     * @return The Payment Request information received from the merchant.
+     */
     default PaymentRequestSpec getSpec() {
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     /**
      * @return The Android package name of the Trusted Web Activity that invoked Chrome, if running
      * in TWA mode. Otherwise null or empty string.
      */
-    @Nullable
-    default String getTwaPackageName() {
+    default @Nullable String getTwaPackageName() {
         return null;
     }
 
     /**
-     * @return Whether the merchant WebContents's profile is in off-the-record mode. Return true
-     *         if the tab profile is not accessible from the WebContents.
+     * @return Whether the merchant WebContents's profile is in off-the-record mode. Return true if
+     *     the tab profile is not accessible from the WebContents.
      */
     boolean isOffTheRecord();
+
+    /**
+     * @return Whether the "can make payment" preference is enabled.
+     */
+    boolean prefsCanMakePayment();
+
+    /**
+     * @return The Content-Security-Policy (CSP) checker.
+     */
+    CSPChecker getCSPChecker();
+
+    /**
+     * @return An instance of a dialog for displaying informational or warning messages.
+     */
+    default @Nullable DialogController getDialogController() {
+        return null;
+    }
+
+    /**
+     * @return The launcher for Android intent-based payment app.
+     */
+    default @Nullable AndroidIntentLauncher getAndroidIntentLauncher() {
+        return null;
+    }
+
+    /**
+     * Used to check whether payment apps are required to handle shipping address and contact
+     * information, when merchant websites request that information. This information can be
+     * returned either from payment apps or from Chrome's autofill. Result of this method does not
+     * guarantee the payment. Even if this method returns true, there could be no payment apps to
+     * support providing shipping address or contact information.
+     *
+     * @return Whether payment apps are required to provide shipping address and contact
+     *     information.
+     */
+    default boolean isFullDelegationRequired() {
+        return false;
+    }
 }

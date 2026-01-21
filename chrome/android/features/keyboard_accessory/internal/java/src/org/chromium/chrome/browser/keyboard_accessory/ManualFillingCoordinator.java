@@ -4,71 +4,131 @@
 
 package org.chromium.chrome.browser.keyboard_accessory;
 
+import android.content.Context;
+import android.graphics.RectF;
 import android.view.View;
 
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ObserverList;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.back_press.BackPressManager;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
+import org.chromium.chrome.browser.fullscreen.BrowserControlsManagerSupplier;
 import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryCoordinator;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
-import org.chromium.chrome.browser.keyboard_accessory.data.PropertyProvider;
+import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetCoordinator;
 import org.chromium.chrome.browser.password_manager.ConfirmationDialogHelper;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.components.autofill.AutofillDelegate;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.AsyncViewStub;
-import org.chromium.ui.DropdownPopupWindow;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.insets.InsetObserver;
+
+import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * Handles requests to the manual UI for filling passwords, payments and other user data. Ideally,
  * the caller has no access to Keyboard accessory or sheet and is only interacting with this
- * component.
- * For that, it facilitates the communication between {@link KeyboardAccessoryCoordinator} and
- * {@link AccessorySheetCoordinator} to add and trigger surfaces that may assist users while filling
- * fields.
+ * component. For that, it facilitates the communication between {@link
+ * KeyboardAccessoryCoordinator} and {@link AccessorySheetCoordinator} to add and trigger surfaces
+ * that may assist users while filling fields.
  */
 class ManualFillingCoordinator implements ManualFillingComponent {
     private final ManualFillingMediator mMediator = new ManualFillingMediator();
-    private ObserverList<Observer> mObserverList = new ObserverList<>();
+    private final ObserverList<Observer> mObserverList = new ObserverList<>();
+    private KeyboardAccessoryCoordinator mKeyboardAccessoryCoordinator;
 
-    public ManualFillingCoordinator() {}
+    ManualFillingCoordinator() {}
 
     @Override
-    public void initialize(WindowAndroid windowAndroid, BottomSheetController sheetController,
-            SoftKeyboardDelegate keyboardDelegate, BackPressManager backPressManager,
-            AsyncViewStub sheetStub, AsyncViewStub barStub) {
-        if (barStub == null || sheetStub == null) return; // The manual filling isn't needed.
-        barStub.setLayoutResource(
-                ChromeFeatureList.isEnabled(ChromeFeatureList.AUTOFILL_KEYBOARD_ACCESSORY)
-                        ? R.layout.keyboard_accessory_modern
-                        : R.layout.keyboard_accessory);
+    public void initialize(
+            WindowAndroid windowAndroid,
+            Profile profile,
+            BottomSheetController sheetController,
+            BooleanSupplier isContextualSearchOpened,
+            SoftKeyboardDelegate keyboardDelegate,
+            BackPressManager backPressManager,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+            InsetObserver insetObserver,
+            AsyncViewStub sheetStub,
+            AsyncViewStub barStub) {
+        Context context = windowAndroid.getContext().get();
+        if (barStub == null || sheetStub == null || context == null) {
+            return; // The manual filling isn't needed.
+        }
+        // TODO(crbug.com/40269514): Initialize in the xml resources file.
+        barStub.setLayoutResource(R.layout.keyboard_accessory);
         sheetStub.setLayoutResource(R.layout.keyboard_accessory_sheet);
         barStub.setShouldInflateOnBackgroundThread(true);
         sheetStub.setShouldInflateOnBackgroundThread(true);
-        initialize(windowAndroid, new KeyboardAccessoryCoordinator(mMediator, barStub),
-                new AccessorySheetCoordinator(sheetStub), sheetController, backPressManager,
-                keyboardDelegate, new ConfirmationDialogHelper(windowAndroid.getContext()));
+        mKeyboardAccessoryCoordinator =
+                new KeyboardAccessoryCoordinator(
+                        profile,
+                        mMediator,
+                        mMediator,
+                        edgeToEdgeControllerSupplier,
+                        insetObserver,
+                        barStub,
+                        mMediator::isLargeFormFactor,
+                        this::dismiss);
+        BrowserControlsManager browserControlsManager =
+                BrowserControlsManagerSupplier.getValueOrNullFrom(windowAndroid);
+
+        initialize(
+                windowAndroid,
+                mKeyboardAccessoryCoordinator,
+                new AccessorySheetCoordinator(sheetStub, mMediator),
+                sheetController,
+                isContextualSearchOpened,
+                backPressManager,
+                edgeToEdgeControllerSupplier,
+                keyboardDelegate,
+                new ConfirmationDialogHelper(context),
+                browserControlsManager);
     }
 
     @VisibleForTesting
-    void initialize(WindowAndroid windowAndroid, KeyboardAccessoryCoordinator accessoryBar,
-            AccessorySheetCoordinator accessorySheet, BottomSheetController sheetController,
-            BackPressManager backPressManager, SoftKeyboardDelegate keyboardDelegate,
-            ConfirmationDialogHelper confirmationHelper) {
-        mMediator.initialize(accessoryBar, accessorySheet, windowAndroid, sheetController,
-                backPressManager, keyboardDelegate, confirmationHelper);
+    void initialize(
+            WindowAndroid windowAndroid,
+            KeyboardAccessoryCoordinator accessoryBar,
+            AccessorySheetCoordinator accessorySheet,
+            BottomSheetController sheetController,
+            BooleanSupplier isContextualSearchOpened,
+            BackPressManager backPressManager,
+            Supplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+            SoftKeyboardDelegate keyboardDelegate,
+            ConfirmationDialogHelper confirmationHelper,
+            @Nullable BrowserControlsManager controlsManager) {
+        mMediator.initialize(
+                accessoryBar,
+                accessorySheet,
+                windowAndroid,
+                sheetController,
+                isContextualSearchOpened,
+                backPressManager,
+                edgeToEdgeControllerSupplier,
+                keyboardDelegate,
+                confirmationHelper,
+                controlsManager);
     }
 
     @Override
     public void destroy() {
         for (Observer observer : mObserverList) observer.onDestroy();
         mMediator.destroy();
+        if (mKeyboardAccessoryCoordinator != null) {
+            mKeyboardAccessoryCoordinator.destroy();
+        }
     }
 
     @Override
@@ -77,23 +137,18 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
-    public void handleBackPress() {
-        mMediator.handleBackPress();
+    public @BackPressResult int handleBackPress() {
+        return mMediator.handleBackPress();
     }
 
     @Override
-    public ObservableSupplier<Boolean> getHandleBackPressChangedSupplier() {
+    public NonNullObservableSupplier<Boolean> getHandleBackPressChangedSupplier() {
         return mMediator.getHandleBackPressChangedSupplier();
     }
 
     @Override
     public void dismiss() {
         mMediator.dismiss();
-    }
-
-    @Override
-    public void notifyPopupAvailable(DropdownPopupWindow popup) {
-        mMediator.notifyPopupOpened(popup);
     }
 
     @Override
@@ -107,14 +162,16 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
-    public void registerActionProvider(WebContents webContents,
-            PropertyProvider<KeyboardAccessoryData.Action[]> actionProvider) {
+    public void registerActionProvider(
+            WebContents webContents, Provider<KeyboardAccessoryData.Action[]> actionProvider) {
         mMediator.registerActionProvider(webContents, actionProvider);
     }
 
     @Override
-    public void registerSheetDataProvider(WebContents webContents, @AccessoryTabType int sheetType,
-            PropertyProvider<KeyboardAccessoryData.AccessorySheetData> sheetDataProvider) {
+    public void registerSheetDataProvider(
+            WebContents webContents,
+            @AccessoryTabType int sheetType,
+            Provider<KeyboardAccessoryData.AccessorySheetData> sheetDataProvider) {
         mMediator.registerSheetDataProvider(webContents, sheetType, sheetDataProvider);
     }
 
@@ -125,14 +182,18 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
-    public void registerAutofillProvider(
-            PropertyProvider<AutofillSuggestion[]> autofillProvider, AutofillDelegate delegate) {
-        mMediator.registerAutofillProvider(autofillProvider, delegate);
+    public void setFieldBounds(RectF bounds) {
+        mMediator.setFieldBounds(bounds);
     }
 
     @Override
-    public void show(boolean waitForKeyboard) {
-        mMediator.show(waitForKeyboard);
+    public void setSuggestions(List<AutofillSuggestion> suggestions, AutofillDelegate delegate) {
+        mMediator.setSuggestions(suggestions, delegate);
+    }
+
+    @Override
+    public void show(boolean waitForKeyboard, boolean isCredentialFieldOrHasAutofillSuggestions) {
+        mMediator.show(waitForKeyboard, isCredentialFieldOrHasAutofillSuggestions);
     }
 
     @Override
@@ -161,7 +222,7 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
-    public ObservableSupplier<Integer> getBottomInsetSupplier() {
+    public MonotonicObservableSupplier<Integer> getBottomInsetSupplier() {
         return mMediator.getBottomInsetSupplier();
     }
 
@@ -176,11 +237,16 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
-    public void confirmOperation(String title, String message, Runnable confirmedCallback) {
-        mMediator.confirmOperation(title, message, confirmedCallback);
+    public void confirmDeletionOperation(
+            String title,
+            CharSequence message,
+            String confirmButtonText,
+            Runnable confirmedCallback,
+            Runnable declinedCallback) {
+        mMediator.confirmDeletionOperation(
+                title, message, confirmButtonText, confirmedCallback, declinedCallback);
     }
 
-    @VisibleForTesting
     ManualFillingMediator getMediatorForTesting() {
         return mMediator;
     }
@@ -191,7 +257,20 @@ class ManualFillingCoordinator implements ManualFillingComponent {
     }
 
     @Override
+    public MonotonicObservableSupplier<KeyboardAccessoryVisualStateProvider>
+            getKeyboardAccessoryVisualStateProvider() {
+        return mMediator.getKeyboardAccessoryVisualStateProvider();
+    }
+
+    @Override
+    public MonotonicObservableSupplier<AccessorySheetVisualStateProvider>
+            getAccessorySheetVisualStateProvider() {
+        return mMediator.getAccessorySheetVisualStateProvider();
+    }
+
+    @Override
     public void forceShowForTesting() {
-        mMediator.show(true);
+        mMediator.show(
+                /* waitForKeyboard= */ true, /* isCredentialFieldOrHasAutofillSuggestions= */ true);
     }
 }

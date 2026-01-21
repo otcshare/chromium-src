@@ -11,6 +11,8 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.blink.mojom.DisplayMode;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
@@ -22,15 +24,15 @@ import org.chromium.device.mojom.ScreenOrientationLockType;
 import org.chromium.ui.util.ColorUtils;
 import org.chromium.webapk.lib.common.splash.SplashLayout;
 
-/**
- * Factory for building {@link BrowserServicesIntentDataProvider} for homescreen shortcuts.
- */
+/** Factory for building {@link BrowserServicesIntentDataProvider} for homescreen shortcuts. */
+@NullMarked
 public class WebappIntentDataProviderFactory {
     private static final String TAG = "WebappInfo";
 
     private static int sourceFromIntent(Intent intent) {
-        int source = IntentUtils.safeGetIntExtra(
-                intent, WebappConstants.EXTRA_SOURCE, ShortcutSource.UNKNOWN);
+        int source =
+                IntentUtils.safeGetIntExtra(
+                        intent, WebappConstants.EXTRA_SOURCE, ShortcutSource.UNKNOWN);
         if (source >= ShortcutSource.COUNT) {
             source = ShortcutSource.UNKNOWN;
         }
@@ -57,9 +59,10 @@ public class WebappIntentDataProviderFactory {
 
     /**
      * Construct a BrowserServicesIntentDataProvider.
+     *
      * @param intent Intent containing info about the app.
      */
-    public static BrowserServicesIntentDataProvider create(Intent intent) {
+    public static @Nullable BrowserServicesIntentDataProvider create(Intent intent) {
         String id = WebappIntentUtils.getIdForHomescreenShortcut(intent);
         String url = IntentUtils.safeGetStringExtra(intent, WebappConstants.EXTRA_URL);
         if (id == null || url == null) {
@@ -67,11 +70,22 @@ public class WebappIntentDataProviderFactory {
             return null;
         }
 
-        long themeColor = IntentUtils.safeGetLongExtra(
-                intent, WebappConstants.EXTRA_THEME_COLOR, ColorUtils.INVALID_COLOR);
+        long themeColor =
+                IntentUtils.safeGetLongExtra(
+                        intent, WebappConstants.EXTRA_THEME_COLOR, ColorUtils.INVALID_COLOR);
         boolean hasValidToolbarColor = WebappIntentUtils.isLongColorValid(themeColor);
-        int toolbarColor = hasValidToolbarColor ? (int) themeColor
-                                                : WebappIntentDataProvider.getDefaultToolbarColor();
+        int toolbarColor =
+                hasValidToolbarColor
+                        ? (int) themeColor
+                        : WebappIntentDataProvider.getDefaultToolbarColor();
+        long darkThemeColor =
+                IntentUtils.safeGetLongExtra(
+                        intent, WebappConstants.EXTRA_DARK_THEME_COLOR, ColorUtils.INVALID_COLOR);
+        boolean hasValidDarkToolbarColor = WebappIntentUtils.isLongColorValid(darkThemeColor);
+        int darkToolbarColor =
+                hasValidDarkToolbarColor
+                        ? (int) darkThemeColor
+                        : WebappIntentDataProvider.getDefaultDarkToolbarColor();
 
         String icon = IntentUtils.safeGetStringExtra(intent, WebappConstants.EXTRA_ICON);
 
@@ -81,19 +95,36 @@ public class WebappIntentDataProviderFactory {
         }
 
         @DisplayMode.EnumType
-        int displayMode = IntentUtils.safeGetIntExtra(
-                intent, WebappConstants.EXTRA_DISPLAY_MODE, DisplayMode.STANDALONE);
-        int orientation = IntentUtils.safeGetIntExtra(
-                intent, WebappConstants.EXTRA_ORIENTATION, ScreenOrientationLockType.DEFAULT);
+        int displayMode =
+                IntentUtils.safeGetIntExtra(
+                        intent, WebappConstants.EXTRA_DISPLAY_MODE, DisplayMode.STANDALONE);
+        int orientation =
+                IntentUtils.safeGetIntExtra(
+                        intent,
+                        WebappConstants.EXTRA_ORIENTATION,
+                        ScreenOrientationLockType.DEFAULT);
         int source = sourceFromIntent(intent);
-        Integer backgroundColor = WebappIntentUtils.colorFromLongColor(IntentUtils.safeGetLongExtra(
-                intent, WebappConstants.EXTRA_BACKGROUND_COLOR, ColorUtils.INVALID_COLOR));
-        boolean isIconGenerated = IntentUtils.safeGetBooleanExtra(
-                intent, WebappConstants.EXTRA_IS_ICON_GENERATED, false);
-        boolean isIconAdaptive = IntentUtils.safeGetBooleanExtra(
-                intent, WebappConstants.EXTRA_IS_ICON_ADAPTIVE, false);
-        boolean forceNavigation = IntentUtils.safeGetBooleanExtra(
-                intent, WebappConstants.EXTRA_FORCE_NAVIGATION, false);
+        Integer backgroundColor =
+                WebappIntentUtils.colorFromLongColor(
+                        IntentUtils.safeGetLongExtra(
+                                intent,
+                                WebappConstants.EXTRA_BACKGROUND_COLOR,
+                                ColorUtils.INVALID_COLOR));
+        Integer darkBackgroundColor =
+                WebappIntentUtils.colorFromLongColor(
+                        IntentUtils.safeGetLongExtra(
+                                intent,
+                                WebappConstants.EXTRA_DARK_BACKGROUND_COLOR,
+                                ColorUtils.INVALID_COLOR));
+        boolean isIconGenerated =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, WebappConstants.EXTRA_IS_ICON_GENERATED, false);
+        boolean isIconAdaptive =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, WebappConstants.EXTRA_IS_ICON_ADAPTIVE, false);
+        boolean forceNavigation =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, WebappConstants.EXTRA_FORCE_NAVIGATION, false);
 
         String name = nameFromIntent(intent);
         String shortName = shortNameFromIntent(intent);
@@ -102,10 +133,30 @@ public class WebappIntentDataProviderFactory {
                 SplashLayout.getDefaultBackgroundColor(ContextUtils.getApplicationContext());
 
         WebappExtras webappExtras =
-                new WebappExtras(id, url, scope, new WebappIcon(icon, true /* isTrusted */), name,
-                        shortName, displayMode, orientation, source, backgroundColor,
-                        defaultBackgroundColor, isIconGenerated, isIconAdaptive, forceNavigation);
-        return new WebappIntentDataProvider(intent, toolbarColor, hasValidToolbarColor,
-                null /* shareData */, webappExtras, null /* webApkExtras */);
+                new WebappExtras(
+                        id,
+                        url,
+                        scope,
+                        new WebappIcon(icon, /* isTrusted= */ true),
+                        name,
+                        shortName,
+                        displayMode,
+                        orientation,
+                        source,
+                        backgroundColor,
+                        darkBackgroundColor,
+                        defaultBackgroundColor,
+                        isIconGenerated,
+                        isIconAdaptive,
+                        forceNavigation);
+        return new WebappIntentDataProvider(
+                intent,
+                toolbarColor,
+                hasValidToolbarColor,
+                darkToolbarColor,
+                hasValidDarkToolbarColor,
+                /* shareData= */ null,
+                webappExtras,
+                /* webApkExtras= */ null);
     }
 }

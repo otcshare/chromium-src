@@ -6,7 +6,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/barrier_closure.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -17,8 +17,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -26,11 +25,12 @@ namespace {
 const char kMessagesPackageName[] = "com.google.android.apps.messaging";
 const SkColor kMessagesOverrideColor = gfx::kGoogleBlue600;
 
-absl::optional<SkColor> getMonochromeIconColor(const proto::Notification& proto,
-                                               const gfx::Image& icon) {
-  if (icon.IsEmpty() || !proto.origin_app().has_icon_color()) {
-    return absl::nullopt;
+std::optional<SkColor> getMonochromeIconColor(const proto::Notification& proto,
+                                              const gfx::Image& icon) {
+  if (icon.IsEmpty() || !proto.origin_app().has_monochrome_icon_color()) {
+    return std::nullopt;
   }
+
   if (proto.origin_app().package_name() == kMessagesPackageName) {
     // The notification color supplied by the Messages app (Bugle) is based
     // on light/dark mode of the phone, not the Chromebook, with no way to
@@ -38,9 +38,10 @@ absl::optional<SkColor> getMonochromeIconColor(const proto::Notification& proto,
     // a fixed color. See conversation at b/207089786 for more details.
     return kMessagesOverrideColor;
   }
-  return SkColorSetRGB(proto.origin_app().icon_color().red(),
-                       proto.origin_app().icon_color().green(),
-                       proto.origin_app().icon_color().blue());
+
+  return SkColorSetRGB(proto.origin_app().monochrome_icon_color().red(),
+                       proto.origin_app().monochrome_icon_color().green(),
+                       proto.origin_app().monochrome_icon_color().blue());
 }
 
 Notification::Importance GetNotificationImportanceFromProto(
@@ -77,8 +78,14 @@ bool HasSupportedActionIdInProto(const proto::Notification& proto) {
   return false;
 }
 
+bool IsMonochromeIconEnabled(const proto::Notification& notification_proto) {
+  return features::IsPhoneHubMonochromeNotificationIconsEnabled() &&
+         notification_proto.origin_app().has_monochrome_icon_mask();
+}
+
 Notification CreateInternalNotification(const proto::Notification& proto,
-                                        const gfx::Image& icon,
+                                        const gfx::Image& color_icon,
+                                        const gfx::Image& monochrome_icon,
                                         const gfx::Image& shared_image,
                                         const gfx::Image& contact_image) {
   base::flat_map<Notification::ActionType, int64_t> action_id_map;
@@ -127,41 +134,52 @@ Notification CreateInternalNotification(const proto::Notification& proto,
       break;
   }
 
-  absl::optional<std::u16string> title = absl::nullopt;
+  std::optional<std::u16string> title = std::nullopt;
   if (!proto.title().empty())
     title = base::UTF8ToUTF16(proto.title());
 
-  absl::optional<std::u16string> text_content = absl::nullopt;
+  std::optional<std::u16string> text_content = std::nullopt;
   if (!proto.text_content().empty())
     text_content = base::UTF8ToUTF16(proto.text_content());
 
-  absl::optional<gfx::Image> opt_shared_image = absl::nullopt;
+  std::optional<gfx::Image> opt_shared_image = std::nullopt;
   if (!shared_image.IsEmpty())
     opt_shared_image = shared_image;
 
-  absl::optional<gfx::Image> opt_contact_image = absl::nullopt;
+  std::optional<gfx::Image> opt_contact_image = std::nullopt;
   if (!contact_image.IsEmpty())
     opt_contact_image = contact_image;
 
-  bool icon_is_monochrome =
-      proto.origin_app().icon_styling() ==
-      proto::NotificationIconStyling::ICON_STYLE_MONOCHROME_SMALL_ICON;
-  absl::optional<SkColor> icon_color =
-      icon_is_monochrome ? getMonochromeIconColor(proto, icon) : absl::nullopt;
+  bool icon_is_monochrome = IsMonochromeIconEnabled(proto);
+  std::optional<SkColor> icon_color =
+      icon_is_monochrome ? getMonochromeIconColor(proto, monochrome_icon)
+                         : std::nullopt;
 
-  return Notification(proto.id(),
-                      Notification::AppMetadata(
-                          base::UTF8ToUTF16(proto.origin_app().visible_name()),
-                          proto.origin_app().package_name(), icon, icon_color,
-                          icon_is_monochrome, proto.origin_app().user_id(),
-                          proto.origin_app().app_streamability_status()),
-                      base::Time::FromJsTime(proto.epoch_time_millis()),
-                      GetNotificationImportanceFromProto(proto.importance()),
-                      category, action_id_map, behavior, title, text_content,
-                      opt_shared_image, opt_contact_image);
+  return Notification(
+      proto.id(),
+      Notification::AppMetadata(
+          base::UTF8ToUTF16(proto.origin_app().visible_name()),
+          proto.origin_app().package_name(), color_icon, monochrome_icon,
+          icon_color, icon_is_monochrome, proto.origin_app().user_id(),
+          proto.origin_app().app_streamability_status()),
+      base::Time::FromMillisecondsSinceUnixEpoch(proto.epoch_time_millis()),
+      GetNotificationImportanceFromProto(proto.importance()), category,
+      action_id_map, behavior, title, text_content, opt_shared_image,
+      opt_contact_image);
 }
 
 }  // namespace
+
+NotificationProcessor::NotificationImages::NotificationImages() = default;
+
+NotificationProcessor::NotificationImages::~NotificationImages() = default;
+
+NotificationProcessor::NotificationImages::NotificationImages(
+    const NotificationImages& other) = default;
+
+NotificationProcessor::NotificationImages&
+NotificationProcessor::NotificationImages::operator=(
+    const NotificationImages& other) = default;
 
 NotificationProcessor::DecodeImageRequestMetadata::DecodeImageRequestMetadata(
     int64_t notification_id,
@@ -207,8 +225,19 @@ void NotificationProcessor::AddNotifications(
 
     processed_notification_protos.emplace_back(proto);
 
-    decode_image_requests.emplace_back(
-        proto.id(), NotificationImageField::kIcon, proto.origin_app().icon());
+    decode_image_requests.emplace_back(proto.id(),
+                                       NotificationImageField::kColorIcon,
+                                       proto.origin_app().icon());
+
+    if (IsMonochromeIconEnabled(proto)) {
+      decode_image_requests.emplace_back(
+          proto.id(), NotificationImageField::kMonochromeIcon,
+          proto.origin_app().monochrome_icon_mask());
+    } else {
+      decode_image_requests.emplace_back(
+          proto.id(), NotificationImageField::kMonochromeIcon,
+          proto.origin_app().icon());
+    }
 
     if (!proto.shared_image().empty()) {
       decode_image_requests.emplace_back(proto.id(),
@@ -280,12 +309,12 @@ void NotificationProcessor::StartDecodingImages(
 void NotificationProcessor::ImageDecoderDelegate::PerformImageDecode(
     const std::string& data,
     DecodeImageCallback single_image_decoded_closure) {
-  data_decoder::DecodeImage(
-      &data_decoder_, base::as_bytes(base::make_span(data)),
-      data_decoder::mojom::ImageCodec::kDefault,
-      /*shrink_to_fit=*/true, data_decoder::kDefaultMaxSizeInBytes,
-      /*desired_image_frame_size=*/gfx::Size(),
-      std::move(single_image_decoded_closure));
+  data_decoder::DecodeImage(&data_decoder_, base::as_byte_span(data),
+                            data_decoder::mojom::ImageCodec::kDefault,
+                            /*shrink_to_fit=*/true,
+                            data_decoder::kDefaultMaxSizeInBytes,
+                            /*desired_image_frame_size=*/gfx::Size(),
+                            std::move(single_image_decoded_closure));
 }
 
 void NotificationProcessor::OnDecodedBitmapReady(
@@ -308,8 +337,11 @@ void NotificationProcessor::OnDecodedBitmapReady(
   }
 
   switch (request.image_field) {
-    case NotificationImageField::kIcon:
-      it->second.icon = gfx::Image(image_skia);
+    case NotificationImageField::kColorIcon:
+      it->second.color_icon = gfx::Image(image_skia);
+      break;
+    case NotificationImageField::kMonochromeIcon:
+      it->second.monochrome_icon_mask = gfx::Image(image_skia);
       break;
     case NotificationImageField::kSharedImage:
       it->second.shared_image = gfx::Image(image_skia);
@@ -332,8 +364,9 @@ void NotificationProcessor::OnAllImagesDecoded(
 
     NotificationImages notification_images = it->second;
     notifications.emplace(CreateInternalNotification(
-        proto, notification_images.icon, notification_images.shared_image,
-        notification_images.contact_image));
+        proto, notification_images.color_icon,
+        notification_images.monochrome_icon_mask,
+        notification_images.shared_image, notification_images.contact_image));
   }
 
   AddNotificationsAndProcessNextRequest(notifications);
@@ -369,5 +402,4 @@ void NotificationProcessor::RemoveNotificationsAndProcessNextRequest(
   CompleteRequest();
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

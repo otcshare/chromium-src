@@ -4,16 +4,17 @@
 
 #include "chromeos/ash/components/phonehub/fake_message_sender.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 FakeMessageSender::FakeMessageSender() = default;
 FakeMessageSender::~FakeMessageSender() = default;
 
 void FakeMessageSender::SendCrosState(bool notification_enabled,
-                                      bool camera_roll_enabled) {
-  cros_states_.push_back(
-      std::make_pair(notification_enabled, camera_roll_enabled));
+                                      bool camera_roll_enabled,
+                                      const std::vector<std::string>* certs) {
+  auto new_message =
+      std::make_tuple(notification_enabled, camera_roll_enabled, certs);
+  cros_states_.push_back(new_message);
 }
 
 void FakeMessageSender::SendUpdateNotificationModeRequest(
@@ -115,7 +116,8 @@ size_t FakeMessageSender::GetPingRequestCallCount() const {
   return send_ping_requests_.size();
 }
 
-std::pair<bool, bool> FakeMessageSender::GetRecentCrosState() const {
+std::tuple<bool, bool, const std::vector<std::string>*>
+FakeMessageSender::GetRecentCrosState() const {
   return cros_states_.back();
 }
 
@@ -163,5 +165,4 @@ std::pair<bool, bool> FakeMessageSender::GetRecentFeatureSetupRequest() const {
   return feature_setup_requests_.back();
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

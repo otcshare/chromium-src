@@ -4,16 +4,15 @@
 
 #include "components/browsing_data/content/mock_local_storage_helper.h"
 
-#include <utility>
-
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
+#include "content/public/browser/storage_partition.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browsing_data {
 
-MockLocalStorageHelper::MockLocalStorageHelper(content::BrowserContext* context)
-    : browsing_data::LocalStorageHelper(context) {}
+MockLocalStorageHelper::MockLocalStorageHelper(
+    content::StoragePartition* storage_partition)
+    : browsing_data::LocalStorageHelper(storage_partition) {}
 
 MockLocalStorageHelper::~MockLocalStorageHelper() = default;
 
@@ -21,15 +20,6 @@ void MockLocalStorageHelper::StartFetching(FetchCallback callback) {
   ASSERT_FALSE(callback.is_null());
   ASSERT_TRUE(callback_.is_null());
   callback_ = std::move(callback);
-}
-
-void MockLocalStorageHelper::DeleteStorageKey(
-    const blink::StorageKey& storage_key,
-    base::OnceClosure callback) {
-  ASSERT_TRUE(base::Contains(storage_keys_, storage_key));
-  last_deleted_storage_key_ = storage_key;
-  storage_keys_[storage_key] = false;
-  std::move(callback).Run();
 }
 
 void MockLocalStorageHelper::AddLocalStorageSamples() {
@@ -45,24 +35,10 @@ void MockLocalStorageHelper::AddLocalStorageForStorageKey(
     const blink::StorageKey& storage_key,
     int64_t size) {
   response_.emplace_back(storage_key, size, base::Time());
-  storage_keys_[storage_key] = true;
 }
 
 void MockLocalStorageHelper::Notify() {
   std::move(callback_).Run(response_);
-}
-
-void MockLocalStorageHelper::Reset() {
-  for (auto& pair : storage_keys_)
-    pair.second = true;
-}
-
-bool MockLocalStorageHelper::AllDeleted() {
-  for (const auto& pair : storage_keys_) {
-    if (pair.second)
-      return false;
-  }
-  return true;
 }
 
 }  // namespace browsing_data

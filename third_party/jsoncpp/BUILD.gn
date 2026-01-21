@@ -4,19 +4,8 @@
 
 import("//testing/libfuzzer/fuzzer_test.gni")
 
-declare_args() {
-  # Allow individual projects to remove the warning suppression
-  # by overriding this in their .gn file or through custom args.gn
-  # TODO(crbug.com/983223): Set this to false on all platforms, then remove it.
-  jsoncpp_no_deprecated_declarations = is_win && is_clang
-}
-
 config("jsoncpp_config") {
   include_dirs = [ "source/include" ]
-
-  if (jsoncpp_no_deprecated_declarations) {
-    cflags_cc = [ "-Wno-deprecated-declarations" ]
-  }
 }
 
 source_set("jsoncpp") {
@@ -49,6 +38,13 @@ source_set("jsoncpp") {
   if (!is_win || is_clang) {
     cflags_cc = [ "-Wno-implicit-fallthrough" ]
   }
+
+  # jsoncpp makes use of static objects for things like a null singleton.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+
+  # TODO(https://github.com/open-source-parsers/jsoncpp/pull/1612): Remove this
+  # when the PR is merged.
+  use_libcxx_modules = false
 }
 
 if (build_with_chromium) {

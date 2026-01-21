@@ -12,11 +12,15 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/message_loop/message_pump_for_io.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 #include "base/threading/thread_checker.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_pixmap_handle.h"
+#include "ui/ozone/public/native_pixmap_usage.h"
 
 namespace gfx {
 class NativePixmap;
@@ -33,11 +37,13 @@ class FlatlandSurfaceFactory;
 // be called on the same thread (because it may be be safe to use
 // VkBufferCollectionFUCHSIA concurrently on different threads).
 class FlatlandSysmemBufferCollection
-    : public base::RefCountedThreadSafe<FlatlandSysmemBufferCollection>,
+    : public base::RefCountedDeleteOnSequence<FlatlandSysmemBufferCollection>,
       public base::MessagePumpForIO::ZxHandleWatcher {
  public:
-  static bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  static bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                             gfx::BufferUsage usage);
+  static bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
+                                            NativePixmapUsageSet usage);
 
   FlatlandSysmemBufferCollection();
   FlatlandSysmemBufferCollection(const FlatlandSysmemBufferCollection&) =
@@ -52,20 +58,20 @@ class FlatlandSysmemBufferCollection
   // participants.
   // If |register_with_flatland_allocator| is true, |token_handle| gets
   // duplicated and registered with the Flatland Allocator.
-  bool Initialize(fuchsia::sysmem::Allocator_Sync* sysmem_allocator,
+  bool Initialize(fuchsia::sysmem2::Allocator_Sync* sysmem_allocator,
                   fuchsia::ui::composition::Allocator* flatland_allocator,
                   FlatlandSurfaceFactory* flatland_surface_factory,
                   zx::eventpair handle,
                   zx::channel sysmem_token,
                   gfx::Size size,
-                  gfx::BufferFormat format,
-                  gfx::BufferUsage usage,
+                  viz::SharedImageFormat format,
+                  NativePixmapUsageSet usage,
                   VkDevice vk_device,
                   size_t min_buffer_count,
                   bool register_with_flatland_allocator);
 
   // Does minimum initialization needed for tests based on |usage|.
-  void InitializeForTesting(zx::eventpair handle, gfx::BufferUsage usage);
+  void InitializeForTesting(zx::eventpair handle, NativePixmapUsageSet usage);
 
   // Creates a NativePixmap with the specified handle. The handle must reference
   // a buffer in this collection.
@@ -83,10 +89,10 @@ class FlatlandSysmemBufferCollection
                      VkDeviceSize* mem_allocation_size);
 
   zx_koid_t id() const { return id_; }
-  size_t num_buffers() const { return buffers_info_.buffer_count; }
-  gfx::BufferFormat format() const { return format_; }
+  size_t num_buffers() const { return buffers_info_.buffers().size(); }
+  viz::SharedImageFormat format() const { return format_; }
   size_t buffer_size() const {
-    return buffers_info_.settings.buffer_settings.size_bytes;
+    return buffers_info_.settings().buffer_settings().size_bytes();
   }
 
   // Returns a duplicate of |flatland_import_token_| so Images can be created.
@@ -97,24 +103,22 @@ class FlatlandSysmemBufferCollection
   void AddOnReleasedCallback(base::OnceClosure on_released);
 
  private:
-  friend class base::RefCountedThreadSafe<FlatlandSysmemBufferCollection>;
+  friend class base::RefCountedDeleteOnSequence<FlatlandSysmemBufferCollection>;
+  friend class base::DeleteHelper<FlatlandSysmemBufferCollection>;
 
   ~FlatlandSysmemBufferCollection() override;
 
   bool InitializeInternal(
-      fuchsia::sysmem::Allocator_Sync* sysmem_allocator,
+      fuchsia::sysmem2::Allocator_Sync* sysmem_allocator,
       fuchsia::ui::composition::Allocator* flatland_allocator,
-      fuchsia::sysmem::BufferCollectionTokenSyncPtr collection_token,
+      fuchsia::sysmem2::BufferCollectionTokenSyncPtr collection_token,
       bool register_with_flatland_allocator,
       size_t min_buffer_count);
 
   void InitializeImageCreateInfo(VkImageCreateInfo* vk_image_info,
                                  gfx::Size size);
 
-  bool is_mappable() const {
-    return usage_ == gfx::BufferUsage::SCANOUT_CPU_READ_WRITE ||
-           usage_ == gfx::BufferUsage::GPU_READ_CPU_READ_WRITE;
-  }
+  bool is_mappable() const { return usage_.Has(NativePixmapUsage::kCpuRead); }
 
   // base::MessagePumpForIO::ZxHandleWatcher implementation.
   void OnZxHandleSignalled(zx_handle_t handle, zx_signals_t signals) override;
@@ -130,11 +134,11 @@ class FlatlandSysmemBufferCollection
   // sysmem clients. Size of the image is passed to CreateVkImage().
   gfx::Size min_size_;
 
-  gfx::BufferFormat format_ = gfx::BufferFormat::RGBA_8888;
-  gfx::BufferUsage usage_ = gfx::BufferUsage::GPU_READ_CPU_READ_WRITE;
+  viz::SharedImageFormat format_ = viz::SinglePlaneFormat::kRGBA_8888;
+  NativePixmapUsageSet usage_ = NativePixmapBufferUsage::kGpuReadCpuReadWrite;
 
-  fuchsia::sysmem::BufferCollectionSyncPtr collection_;
-  fuchsia::sysmem::BufferCollectionInfo_2 buffers_info_;
+  fuchsia::sysmem2::BufferCollectionSyncPtr collection_;
+  fuchsia::sysmem2::BufferCollectionInfo buffers_info_;
   fuchsia::ui::composition::BufferCollectionImportToken flatland_import_token_;
 
   // Vulkan device for which the collection was initialized.

@@ -7,8 +7,8 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
@@ -20,8 +20,14 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
+#include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "content/public/browser/permission_controller_delegate.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -31,15 +37,12 @@
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/notifications/notifier_state_tracker.h"
 #include "chrome/browser/notifications/notifier_state_tracker_factory.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
@@ -49,27 +52,24 @@
 
 namespace {
 
-void StoreContentSetting(ContentSetting* out_content_setting,
-                         ContentSetting content_setting) {
-  DCHECK(out_content_setting);
-  *out_content_setting = content_setting;
+using PermissionStatus = blink::mojom::PermissionStatus;
+
+void StorePermissionStatus(PermissionStatus* out_permission_status,
+                           content::PermissionResult permission_result) {
+  DCHECK(out_permission_status);
+  *out_permission_status = permission_result.status;
 }
 
 class TestNotificationPermissionContext : public NotificationPermissionContext {
  public:
   explicit TestNotificationPermissionContext(Profile* profile)
-      : NotificationPermissionContext(profile),
-        permission_set_count_(0),
-        last_permission_set_persisted_(false),
-        last_permission_set_setting_(CONTENT_SETTING_DEFAULT) {}
+      : NotificationPermissionContext(profile) {}
 
   int permission_set_count() const { return permission_set_count_; }
   bool last_permission_set_persisted() const {
     return last_permission_set_persisted_;
   }
-  ContentSetting last_permission_set_setting() const {
-    return last_permission_set_setting_;
-  }
+  PermissionDecision last_set_decision() const { return last_set_decision_; }
 
   ContentSetting GetContentSettingFromMap(const GURL& url_a,
                                           const GURL& url_b) {
@@ -81,25 +81,21 @@ class TestNotificationPermissionContext : public NotificationPermissionContext {
 
  private:
   // NotificationPermissionContext:
-  void NotifyPermissionSet(const permissions::PermissionRequestID& id,
-                           const GURL& requesting_origin,
-                           const GURL& embedder_origin,
-                           permissions::BrowserPermissionCallback callback,
-                           bool persist,
-                           ContentSetting content_setting,
-                           bool is_one_time,
-                           bool is_final_decision) override {
+  void NotifyPermissionSet(
+      const permissions::PermissionRequestData& request_data,
+      permissions::BrowserPermissionCallback callback,
+      bool persist,
+      const permissions::PermissionPromptDecision& decision) override {
     permission_set_count_++;
     last_permission_set_persisted_ = persist;
-    last_permission_set_setting_ = content_setting;
+    last_set_decision_ = decision.overall_decision;
     NotificationPermissionContext::NotifyPermissionSet(
-        id, requesting_origin, embedder_origin, std::move(callback), persist,
-        content_setting, /*is_one_time=*/false, is_final_decision);
+        request_data, std::move(callback), persist, decision);
   }
 
-  int permission_set_count_;
-  bool last_permission_set_persisted_;
-  ContentSetting last_permission_set_setting_;
+  int permission_set_count_ = 0;
+  bool last_permission_set_persisted_ = false;
+  PermissionDecision last_set_decision_ = PermissionDecision::kNone;
 };
 
 }  // namespace
@@ -124,13 +120,17 @@ class NotificationPermissionContextTest
                             const GURL& requesting_origin,
                             const GURL& embedding_origin,
                             ContentSetting setting) {
-    context->UpdateContentSetting(requesting_origin, embedding_origin, setting,
-                                  /*is_one_time=*/false);
+    context->UpdateContentSetting(
+        permissions::PermissionRequestData(
+            std::make_unique<permissions::ContentSettingPermissionResolver>(
+                ContentSettingsType::NOTIFICATIONS),
+            /*user_gesture=*/true, requesting_origin, embedding_origin),
+        setting, /*is_one_time=*/false);
   }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Registers the given |extension| with the extension service and returns the
-  // extension if it could be registered appropriately.
+  // Registers the given |extension| with the extension registrar and returns
+  // the extension if it could be registered appropriately.
   scoped_refptr<const extensions::Extension> RegisterExtension(
       scoped_refptr<const extensions::Extension> extension) {
     base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
@@ -138,12 +138,11 @@ class NotificationPermissionContextTest
         static_cast<extensions::TestExtensionSystem*>(
             extensions::ExtensionSystem::Get(profile()));
 
-    extensions::ExtensionService* extension_service =
-        test_extension_system->CreateExtensionService(
-            &command_line, base::FilePath() /* install_directory */,
-            false /* autoupdate_enabled */);
+    test_extension_system->CreateExtensionService(
+        &command_line, base::FilePath() /* install_directory */,
+        false /* autoupdate_enabled */);
 
-    extension_service->AddExtension(extension.get());
+    extensions::ExtensionRegistrar::Get(profile())->AddExtension(extension);
 
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile());
@@ -176,79 +175,108 @@ TEST_F(NotificationPermissionContextTest, CrossOriginPermissionChecks) {
 
   // Both same-origin and cross-origin requests for |requesting_origin| should
   // have their default values.
-  EXPECT_EQ(CONTENT_SETTING_ASK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::ASK,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
   // Now grant permission for the |requesting_origin|. This should be granted
   // in both contexts.
   UpdateContentSetting(&context, requesting_origin, requesting_origin,
                        CONTENT_SETTING_ALLOW);
 
-  EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
-// Now block permission for |requesting_origin|.
+  // Now block permission for |requesting_origin|.
 
 #if BUILDFLAG(IS_ANDROID)
-  // On Android O+, permission must be reset before it can be blocked. This is
-  // because granting a permission on O+ creates a system-managed notification
-  // channel which determines the value of the content setting, so it is not
-  // allowed to then toggle the value from ALLOW->BLOCK directly. However,
-  // Chrome may reset the permission (which deletes the channel), and *then*
-  // grant/block it (creating a new channel).
-  if (base::android::BuildInfo::GetInstance()->sdk_int() >=
-      base::android::SDK_VERSION_OREO) {
-    context.ResetPermission(requesting_origin, requesting_origin);
-  }
+  // Permission must be reset before it can be blocked. This is because granting
+  // a permission on Android O+ creates a system-managed notification channel
+  // which determines the value of the content setting, so it is not allowed to
+  // then toggle the value from ALLOW->BLOCK directly. However, Chrome may reset
+  // the permission (which deletes the channel), and *then* grant/block it
+  // (creating a new channel).
+  context.ResetPermission(requesting_origin, requesting_origin);
 #endif  // BUILDFLAG(IS_ANDROID)
 
   UpdateContentSetting(&context, requesting_origin, requesting_origin,
                        CONTENT_SETTING_BLOCK);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
   // Resetting the permission should demonstrate the default behaviour again.
   context.ResetPermission(requesting_origin, requesting_origin);
 
-  EXPECT_EQ(CONTENT_SETTING_ASK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::ASK,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 }
 
 // Web Notifications permission requests should only succeed for top level
@@ -261,50 +289,74 @@ TEST_F(NotificationPermissionContextTest, WebNotificationsTopLevelOriginOnly) {
 
   NotificationPermissionContext context(profile());
 
-  EXPECT_EQ(CONTENT_SETTING_ASK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::ASK,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
   // Requesting permission for different origins should fail.
   permissions::PermissionRequestID request_id(
       web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       permissions::PermissionRequestID::RequestLocalId());
 
-  ContentSetting result = CONTENT_SETTING_DEFAULT;
-  context.DecidePermission(request_id, requesting_origin, embedding_origin,
-                           true /* user_gesture */,
-                           base::BindOnce(&StoreContentSetting, &result));
+  auto permission_status = PermissionStatus::ASK;
+  context.DecidePermission(
+      std::make_unique<permissions::PermissionRequestData>(
+          std::make_unique<permissions::ContentSettingPermissionResolver>(
+              ContentSettingsType::NOTIFICATIONS),
+          request_id,
+          /*user_gesture=*/true, requesting_origin, embedding_origin),
+      base::BindOnce(&StorePermissionStatus, &permission_status));
 
-  ASSERT_EQ(result, CONTENT_SETTING_BLOCK);
-  EXPECT_EQ(CONTENT_SETTING_ASK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, requesting_origin)
-                .content_setting);
+  ASSERT_EQ(permission_status, PermissionStatus::DENIED);
+  EXPECT_EQ(
+      PermissionStatus::ASK,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, requesting_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
   // Reading previously set permissions should continue to work.
   UpdateContentSetting(&context, requesting_origin, embedding_origin,
                        CONTENT_SETTING_ALLOW);
 
-  EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     requesting_origin, embedding_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               requesting_origin, embedding_origin)
+          .status);
 
   context.ResetPermission(requesting_origin, embedding_origin);
 }
@@ -316,17 +368,25 @@ TEST_F(NotificationPermissionContextTest, SecureOriginRequirement) {
 
   NotificationPermissionContext web_notification_context(profile());
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            web_notification_context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     insecure_origin, insecure_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      web_notification_context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */, insecure_origin,
+                               insecure_origin)
+          .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            web_notification_context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     insecure_origin, secure_origin)
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      web_notification_context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */, insecure_origin,
+                               secure_origin)
+          .status);
 }
 
 #if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)
@@ -352,11 +412,14 @@ TEST_F(NotificationPermissionContextTest, MAYBE_TestDenyInIncognitoAfterDelay) {
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());
-  ASSERT_EQ(CONTENT_SETTING_DEFAULT,
-            permission_context.last_permission_set_setting());
+  ASSERT_EQ(PermissionDecision::kNone, permission_context.last_set_decision());
 
-  permission_context.RequestPermission(id, url, true /* user_gesture */,
-                                       base::DoNothing());
+  permission_context.RequestPermission(
+      std::make_unique<permissions::PermissionRequestData>(
+          std::make_unique<permissions::ContentSettingPermissionResolver>(
+              ContentSettingsType::NOTIFICATIONS),
+          id, /*user_gesture=*/true, url),
+      base::DoNothing());
 
   // Should be blocked after 1-2 seconds, but the timer is reset whenever the
   // tab is not visible, so these 500ms never add up to >= 1 second.
@@ -392,13 +455,13 @@ TEST_F(NotificationPermissionContextTest, MAYBE_TestDenyInIncognitoAfterDelay) {
             permission_context.GetContentSettingFromMap(url, url));
 
   // But 5*500ms > 2 seconds, so it should now be blocked.
-  for (int n = 0; n < 4; n++)
+  for (int n = 0; n < 4; n++) {
     task_runner->FastForwardBy(base::Milliseconds(500));
+  }
 
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 }
@@ -422,13 +485,22 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());
-  ASSERT_EQ(CONTENT_SETTING_DEFAULT,
-            permission_context.last_permission_set_setting());
+  ASSERT_EQ(PermissionDecision::kNone, permission_context.last_set_decision());
 
-  permission_context.RequestPermission(id1, url, true /* user_gesture */,
-                                       base::DoNothing());
-  permission_context.RequestPermission(id2, url, true /* user_gesture */,
-                                       base::DoNothing());
+  permission_context.RequestPermission(
+      std::make_unique<permissions::PermissionRequestData>(
+          std::make_unique<permissions::ContentSettingPermissionResolver>(
+              ContentSettingsType::NOTIFICATIONS),
+          id1,
+          /*user_gesture=*/true, url),
+      base::DoNothing());
+  permission_context.RequestPermission(
+      std::make_unique<permissions::PermissionRequestData>(
+          std::make_unique<permissions::ContentSettingPermissionResolver>(
+              ContentSettingsType::NOTIFICATIONS),
+          id2,
+          /*user_gesture=*/true, url),
+      base::DoNothing());
 
   EXPECT_EQ(0, permission_context.permission_set_count());
   EXPECT_EQ(CONTENT_SETTING_ASK,
@@ -438,15 +510,15 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
   // request is auto-denied.
   for (int n = 0; n < 5; n++) {
     task_runner->FastForwardBy(base::Milliseconds(500));
-    if (permission_context.permission_set_count())
+    if (permission_context.permission_set_count()) {
       break;
+    }
   }
 
   // Only the first permission request receives a response (crbug.com/577336).
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 
@@ -455,8 +527,7 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
   task_runner->FastForwardBy(base::Milliseconds(2500));
   EXPECT_EQ(2, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 }
@@ -475,9 +546,9 @@ TEST_F(NotificationPermissionContextTest, GetNotificationsSettings) {
   NotificationPermissionContext::UpdatePermission(
       profile(), GURL("https://denied2.com"), CONTENT_SETTING_BLOCK);
 
-  ContentSettingsForOneType settings;
-  HostContentSettingsMapFactory::GetForProfile(profile())
-      ->GetSettingsForOneType(ContentSettingsType::NOTIFICATIONS, &settings);
+  ContentSettingsForOneType settings =
+      HostContentSettingsMapFactory::GetForProfile(profile())
+          ->GetSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
   // |settings| contains the default setting and 4 exceptions.
   ASSERT_EQ(5u, settings.size());
@@ -525,11 +596,15 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionAskByDefault) {
   ASSERT_EQ(CONTENT_SETTING_ASK,
             GetPermissionStatusForExtension(context, extension->url()));
 
-  EXPECT_EQ(CONTENT_SETTING_ASK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     extension->url(), extension->url())
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::ASK,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               extension->url(), extension->url())
+          .status);
 }
 
 TEST_F(NotificationPermissionContextTest, ExtensionPermissionGranted) {
@@ -539,7 +614,7 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionGranted) {
 
   scoped_refptr<const extensions::Extension> extension = RegisterExtension(
       extensions::ExtensionBuilder("Notification Permission Test")
-          .AddPermission("notifications")
+          .AddAPIPermission("notifications")
           .Build());
 
   ASSERT_TRUE(extension);
@@ -547,11 +622,15 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionGranted) {
   ASSERT_EQ(CONTENT_SETTING_ALLOW,
             GetPermissionStatusForExtension(context, extension->url()));
 
-  EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     extension->url(), extension->url())
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               extension->url(), extension->url())
+          .status);
 }
 
 TEST_F(NotificationPermissionContextTest, ExtensionPermissionOverrideDenied) {
@@ -561,7 +640,7 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionOverrideDenied) {
 
   scoped_refptr<const extensions::Extension> extension = RegisterExtension(
       extensions::ExtensionBuilder("Notification Permission Test")
-          .AddPermission("notifications")
+          .AddAPIPermission("notifications")
           .Build());
 
   ASSERT_TRUE(extension);
@@ -578,10 +657,14 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionOverrideDenied) {
   ASSERT_EQ(CONTENT_SETTING_BLOCK,
             GetPermissionStatusForExtension(context, extension->url()));
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     extension->url(), extension->url())
-                .content_setting);
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               nullptr /* render_frame_host */,
+                               extension->url(), extension->url())
+          .status);
 }
 #endif

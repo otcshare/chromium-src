@@ -4,79 +4,113 @@
 
 #include "chrome/browser/hid/hid_pinned_notification.h"
 
+#include <string>
+
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/device_notifications/device_pinned_notification_unittest.h"
 #include "chrome/browser/hid/hid_connection_tracker.h"
 #include "chrome/browser/hid/hid_connection_tracker_factory.h"
-#include "chrome/browser/hid/hid_system_tray_icon_unittest.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
+#include "chrome/browser/hid/hid_test_utils.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 
-class HidPinnedNotificationTest : public HidSystemTrayIconTestBase {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/common/constants.h"
+#include "extensions/common/extension.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+class HidPinnedNotificationTest : public DevicePinnedNotificationTestBase {
  public:
-  void SetUp() override {
-    HidSystemTrayIconTestBase::SetUp();
-    TestingBrowserProcess::GetGlobal()->SetSystemNotificationHelper(
-        std::make_unique<SystemNotificationHelper>());
-    display_service_ =
-        std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
+  HidPinnedNotificationTest()
+      : DevicePinnedNotificationTestBase(
+            /*device_content_settings_label=*/u"HID settings") {}
+
+  void ResetTestingBrowserProcessSystemTrayIcon() override {
+    TestingBrowserProcess::GetGlobal()->SetHidSystemTrayIcon(nullptr);
   }
 
-  void TearDown() override {
-    TestingBrowserProcess::GetGlobal()->SetSystemNotificationHelper(nullptr);
-    HidSystemTrayIconTestBase::TearDown();
+  std::u16string GetExpectedTitle(size_t num_origins,
+                                  size_t num_connections) override {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    // The text might use "Google Chrome" or "Chromium" depending
+    // is_chrome_branded in the build config file, hence using l10n_util to get
+    // the expected string.
+    return l10n_util::GetPluralStringFUTF16(IDS_WEBHID_SYSTEM_TRAY_ICON_TITLE,
+                                            static_cast<int>(num_connections));
+#else
+    NOTREACHED();
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
   }
 
-  void CheckIcon(const std::vector<std::pair<Profile*, size_t>>&
-                     profile_connection_counts) override {
-    EXPECT_FALSE(display_service_
-                     ->GetDisplayedNotificationsForType(
-                         NotificationHandler::Type::TRANSIENT)
-                     .empty());
+  void SetDeviceConnectionTrackerTestingFactory(Profile* profile) override {
+    HidConnectionTrackerFactory::GetInstance()->SetTestingFactory(
+        profile,
+        base::BindRepeating([](content::BrowserContext* browser_context) {
+          return static_cast<std::unique_ptr<KeyedService>>(
+              std::make_unique<TestHidConnectionTracker>(
+                  Profile::FromBrowserContext(browser_context)));
+        }));
+  }
 
-    // Check each button label and behavior of clicking the button.
-    for (const auto& pair : profile_connection_counts) {
-      auto* hid_connection_tracker = static_cast<MockHidConnectionTracker*>(
-          HidConnectionTrackerFactory::GetForProfile(pair.first,
-                                                     /*create=*/false));
-      EXPECT_TRUE(hid_connection_tracker);
-      auto maybe_notification = display_service_->GetNotification(
-          HidPinnedNotification::GetNotificationId(pair.first));
-      ASSERT_TRUE(maybe_notification);
-      EXPECT_EQ(maybe_notification->title(), GetExpectedIconTooltip(
-                                                 /*num_devices=*/pair.second));
+  DeviceConnectionTracker* GetDeviceConnectionTracker(Profile* profile,
+                                                      bool create) override {
+    return static_cast<DeviceConnectionTracker*>(
+        HidConnectionTrackerFactory::GetForProfile(profile, create));
+  }
 
-      EXPECT_EQ(maybe_notification->rich_notification_data().buttons.size(),
-                1u);
-      EXPECT_EQ(maybe_notification->rich_notification_data().buttons[0].title,
-                GetExpectedButtonTitleForProfile(pair.first));
-      EXPECT_TRUE(maybe_notification->delegate());
+  MockDeviceConnectionTracker* GetMockDeviceConnectionTracker(
+      DeviceConnectionTracker* connection_tracker) override {
+    return static_cast<TestHidConnectionTracker*>(connection_tracker)
+        ->mock_device_connection_tracker();
+  }
 
-      EXPECT_CALL(*hid_connection_tracker, ShowHidContentSettingsExceptions());
-      SimulateButtonClick(pair.first);
+  DevicePinnedNotificationRenderer* GetDevicePinnedNotificationRenderer()
+      override {
+    auto* hid_pinned_notification = static_cast<HidPinnedNotification*>(
+        g_browser_process->hid_system_tray_icon());
+    return static_cast<DevicePinnedNotificationRenderer*>(
+        hid_pinned_notification->GetIconRendererForTesting());
+  }
+
+  std::u16string GetExpectedMessage(
+      const std::vector<DeviceSystemTrayIconTestBase::OriginItem>& origin_items)
+      override {
+    auto sorted_origin_items = origin_items;
+    // Sort the |origin_items| by origin. This is necessary because the origin
+    // items for each profile in the pinned notification are created by
+    // iterating through a structure of flat_map<url::Origin, ...>.
+    std::ranges::sort(sorted_origin_items);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    std::vector<std::string> extension_names;
+    for (const auto& [origin, connection_count, name] : sorted_origin_items) {
+      CHECK(origin.scheme() == extensions::kExtensionScheme);
+      extension_names.push_back(name);
     }
+    CHECK(!extension_names.empty());
+    if (extension_names.size() == 1) {
+      return base::UTF8ToUTF16(base::StringPrintf("%s is accessing HID devices",
+                                                  extension_names[0].c_str()));
+    } else if (extension_names.size() == 2) {
+      return base::UTF8ToUTF16(base::StringPrintf(
+          "Extensions accessing devices: %s, %s", extension_names[0].c_str(),
+          extension_names[1].c_str()));
+    }
+    return base::UTF8ToUTF16(base::StringPrintf(
+        "Extensions accessing devices: %s, %s +%zu more",
+        extension_names[0].c_str(), extension_names[1].c_str(),
+        extension_names.size() - 2));
+#else
+    NOTREACHED();
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
   }
-
-  void CheckIconHidden() override {
-    EXPECT_TRUE(display_service_
-                    ->GetDisplayedNotificationsForType(
-                        NotificationHandler::Type::TRANSIENT)
-                    .empty());
-  }
-
- private:
-  void SimulateButtonClick(Profile* profile) {
-    display_service_->SimulateClick(
-        NotificationHandler::Type::TRANSIENT,
-        HidPinnedNotification::GetNotificationId(profile),
-        /*action_index=*/0, /*reply=*/absl::nullopt);
-  }
-
-  std::unique_ptr<NotificationDisplayServiceTester> display_service_;
 };
 
-TEST_F(HidPinnedNotificationTest, SingleProfileEmptyName) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+TEST_F(HidPinnedNotificationTest, SingleProfileEmptyNameExtensionOrigins) {
   // Current TestingProfileManager can't support empty profile name as it uses
   // profile name for profile path. Passing empty would result in a failure in
   // ProfileManager::IsAllowedProfilePath(). Changing the way
@@ -86,13 +120,27 @@ TEST_F(HidPinnedNotificationTest, SingleProfileEmptyName) {
   // profile with non-empty name and then change the profile name to empty which
   // can still achieve what this file wants to test.
   profile()->set_profile_name("");
-  TestSingleProfile();
+  TestSingleProfileExtentionOrigins();
 }
 
-TEST_F(HidPinnedNotificationTest, SingleProfileNonEmptyName) {
-  TestSingleProfile();
+TEST_F(HidPinnedNotificationTest, BounceConnectionExtensionOrigins) {
+  TestBounceConnectionExtensionOrigins();
 }
 
-TEST_F(HidPinnedNotificationTest, MultipleProfiles) {
-  TestMultipleProfiles();
+TEST_F(HidPinnedNotificationTest, SingleProfileNonEmptyNameExtentionOrigins) {
+  TestSingleProfileExtentionOrigins();
 }
+
+TEST_F(HidPinnedNotificationTest, MultipleProfilesExtentionOrigins) {
+  TestMultipleProfilesExtensionOrigins();
+}
+
+TEST_F(HidPinnedNotificationTest, ExtensionRemoval) {
+  TestExtensionRemoval();
+}
+
+// Test message in pinned notification for up to 5 extensions.
+TEST_F(HidPinnedNotificationTest, MultipleExtensionsNotificationMessage) {
+  TestMultipleExtensionsNotificationMessage();
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)

@@ -30,8 +30,13 @@ class SearchResponseParserTest : public testing::Test {
     run_loop_ = std::make_unique<base::RunLoop>();
   }
 
-  void SearchResponseParserCallback(std::unique_ptr<QuickAnswer> quick_answer) {
-    quick_answer_ = std::move(quick_answer);
+  void SearchResponseParserCallback(
+      std::unique_ptr<QuickAnswersSession> quick_answers_session) {
+    if (quick_answers_session) {
+      quick_answer_ = std::move(quick_answers_session->quick_answer);
+    } else {
+      quick_answer_ = nullptr;
+    }
     run_loop_->Quit();
   }
 
@@ -40,7 +45,7 @@ class SearchResponseParserTest : public testing::Test {
  protected:
   std::unique_ptr<SearchResponseParser> search_result_parser_;
   std::unique_ptr<QuickAnswer> quick_answer_;
-  base::test::SingleThreadTaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   std::unique_ptr<base::RunLoop> run_loop_;
 };
@@ -61,14 +66,15 @@ TEST_F(SearchResponseParserTest, ProcessResponseSuccessFirstResult) {
               "valueAndUnit": {
                 "rawText": "9.055 inches"
               }
-            }
+            },
+            "category": "Length",
+            "sourceAmount": 23
           }
         }
       ]
     }
   )";
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>(kSearchResponse));
+  search_result_parser_->ProcessResponse(kSearchResponse);
   WaitForResponse();
   EXPECT_TRUE(quick_answer_);
   EXPECT_EQ("9.055 inches",
@@ -93,14 +99,15 @@ TEST_F(SearchResponseParserTest, ProcessResponseSuccessMultipleResults) {
               "valueAndUnit": {
                 "rawText": "9.055 inches"
               }
-            }
+            },
+            "category": "Length",
+            "sourceAmount": 23
           }
         }
       ]
     }
   )";
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>(kSearchResponse));
+  search_result_parser_->ProcessResponse(kSearchResponse);
   WaitForResponse();
   EXPECT_TRUE(quick_answer_);
   EXPECT_EQ("9.055 inches",
@@ -114,8 +121,7 @@ TEST_F(SearchResponseParserTest, ProcessResponseNoResults) {
 
     {}
   )";
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>(kSearchResponse));
+  search_result_parser_->ProcessResponse(kSearchResponse);
   WaitForResponse();
   EXPECT_EQ(nullptr, quick_answer_);
 }
@@ -125,15 +131,13 @@ TEST_F(SearchResponseParserTest, ProcessResponseEmptyResults) {
 
     { "results": [] }
   )";
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>(kSearchResponse));
+  search_result_parser_->ProcessResponse(kSearchResponse);
   WaitForResponse();
   EXPECT_EQ(nullptr, quick_answer_);
 }
 
 TEST_F(SearchResponseParserTest, ProcessResponseInvalidResponse) {
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>("results {}"));
+  search_result_parser_->ProcessResponse("results {}");
   WaitForResponse();
   EXPECT_FALSE(quick_answer_);
 }
@@ -143,8 +147,7 @@ TEST_F(SearchResponseParserTest, ProcessResponseInvalidXssiPrefix) {
 
     {}
   )";
-  search_result_parser_->ProcessResponse(
-      std::make_unique<std::string>(kSearchResponse));
+  search_result_parser_->ProcessResponse(kSearchResponse);
   WaitForResponse();
   EXPECT_FALSE(quick_answer_);
 }

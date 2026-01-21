@@ -5,6 +5,11 @@
 #ifndef CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_FILE_WRITER_IMPL_H_
 #define CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_FILE_WRITER_IMPL_H_
 
+#include <stdint.h>
+
+#include <memory>
+
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/thread_annotations.h"
 #include "base/types/pass_key.h"
@@ -14,7 +19,6 @@
 #include "content/browser/file_system_access/file_system_access_safe_move_helper.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_file_writer.mojom.h"
@@ -45,7 +49,8 @@ class CONTENT_EXPORT FileSystemAccessFileWriterImpl
       const BindingContext& context,
       const storage::FileSystemURL& url,
       const storage::FileSystemURL& swap_url,
-      scoped_refptr<FileSystemAccessWriteLockManager::WriteLock> lock,
+      scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+      scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
       const SharedHandleState& handle_state,
       mojo::PendingReceiver<blink::mojom::FileSystemAccessFileWriter> receiver,
       bool has_transient_user_activation,
@@ -114,8 +119,11 @@ class CONTENT_EXPORT FileSystemAccessFileWriterImpl
   // most filesystems, this move operation is atomic.
   storage::FileSystemURL swap_url_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // Exclusive write lock on the file. It is released on destruction.
-  scoped_refptr<FileSystemAccessWriteLockManager::WriteLock> lock_
+  // Lock on the target file. It is released on destruction.
+  scoped_refptr<FileSystemAccessLockManager::LockHandle> lock_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+  // Exclusive lock on the swap file. It is released on destruction.
+  scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
   CloseCallback close_callback_ GUARDED_BY_CONTEXT(sequence_checker_);

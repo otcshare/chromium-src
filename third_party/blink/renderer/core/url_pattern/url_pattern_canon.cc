@@ -4,7 +4,9 @@
 
 #include "third_party/blink/renderer/core/url_pattern/url_pattern_canon.h"
 
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/url_pattern/url_pattern_component.h"
+#include "third_party/blink/renderer/core/url_pattern/url_pattern_dummy_url_canon.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
@@ -31,233 +33,21 @@ String MaybeStripSuffix(const String& value, StringView suffix) {
 
 String StringFromCanonOutput(const url::CanonOutput& output,
                              const url::Component& component) {
-  return String::FromUTF8(output.data() + component.begin, component.len);
-}
-
-std::string StdStringFromCanonOutput(const url::CanonOutput& output,
-                                     const url::Component& component) {
-  return std::string(output.data() + component.begin, component.len);
-}
-
-bool ContainsForbiddenHostnameCodePoint(absl::string_view input) {
-  for (auto c : input) {
-    // The full list of forbidden code points is defined at:
-    //
-    //  https://url.spec.whatwg.org/#forbidden-host-code-point
-    //
-    // We only check the code points the chromium URL parser incorrectly
-    // permits.  See: crbug.com/1065667#c18
-    if (c == ' ' || c == '#' || c == ':' || c == '<' || c == '>' || c == '@' ||
-        c == '[' || c == ']' || c == '|') {
-      return true;
-    }
-  }
-  return false;
+  return String::FromUTF8(output.view().substr(component.begin, component.len));
 }
 
 }  // anonymous namespace
 
-absl::StatusOr<std::string> ProtocolEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  bool result = url::CanonicalizeScheme(
-      input.data(), url::Component(0, static_cast<int>(input.size())),
-      &canon_output, &component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid protocol '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> UsernameEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component username_component;
-  url::Component password_component;
-
-  bool result = url::CanonicalizeUserInfo(
-      input.data(), url::Component(0, static_cast<int>(input.size())), "",
-      url::Component(0, 0), &canon_output, &username_component,
-      &password_component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid username pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, username_component);
-}
-
-absl::StatusOr<std::string> PasswordEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component username_component;
-  url::Component password_component;
-
-  bool result = url::CanonicalizeUserInfo(
-      "", url::Component(0, 0), input.data(),
-      url::Component(0, static_cast<int>(input.size())), &canon_output,
-      &username_component, &password_component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid password pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, password_component);
-}
-
-absl::StatusOr<std::string> HostnameEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  // Due to crbug.com/1065667 the url::CanonicalizeHost() call below will
-  // permit and possibly encode some illegal code points.  Since we want
-  // to ultimately fix that in the future we don't want to encourage more
-  // use of these characters in URLPattern.  Therefore we apply an additional
-  // restrictive check for these forbidden code points.
-  //
-  // TODO(crbug.com/1065667): Remove this check after the URL parser is fixed.
-  if (ContainsForbiddenHostnameCodePoint(input)) {
-    return absl::InvalidArgumentError("Invalid hostname pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  bool result = url::CanonicalizeHost(
-      input.data(), url::Component(0, static_cast<int>(input.size())),
-      &canon_output, &component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid hostname pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> IPv6HostnameEncodeCallback(
-    absl::string_view input) {
-  std::string result;
-  result.reserve(input.size());
-  // This implements a light validation and canonicalization of IPv6 hostname
-  // content.  Ideally we would use the URL parser's hostname canonicalizer
-  // here, but that is too strict for the encoding callback.  The callback may
-  // see only bits and pieces of the hostname pattern; e.g. for `[:address]` it
-  // sees the `[` and `]` strings as separate calls.  Since the full URL
-  // hostname parser wants to completely parse IPv6 hostnames, this will always
-  // trigger an error.  Therefore, to allow pattern syntax within IPv6 brackets
-  // we simply check for valid characters and lowercase any hex digits.
-  for (size_t i = 0; i < input.size(); ++i) {
-    char c = input[i];
-    if (!IsASCIIHexDigit(c) && c != '[' && c != ']' && c != ':') {
-      return absl::InvalidArgumentError(
-          std::string("Invalid IPv6 hostname character '") + c + "' in '" +
-          std::string(input) + "'.");
-    }
-    result += ToASCIILower(c);
-  }
-  return result;
-}
-
-absl::StatusOr<std::string> PortEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  bool result = url::CanonicalizePort(
-      input.data(), url::Component(0, static_cast<int>(input.size())),
-      url::PORT_UNSPECIFIED, &canon_output, &component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid port pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> StandardURLPathnameEncodeCallback(
-    absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  bool result = url::CanonicalizePartialPath(
-      input.data(), url::Component(0, static_cast<int>(input.size())),
-      &canon_output, &component);
-
-  if (!result) {
-    return absl::InvalidArgumentError("Invalid pathname pattern '" +
-                                      std::string(input) + "'.");
-  }
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> PathURLPathnameEncodeCallback(
-    absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  url::CanonicalizePathURLPath(
-      input.data(), url::Component(0, static_cast<int>(input.size())),
-      &canon_output, &component);
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> SearchEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  url::CanonicalizeQuery(input.data(),
-                         url::Component(0, static_cast<int>(input.size())),
-                         /*converter=*/nullptr, &canon_output, &component);
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
-absl::StatusOr<std::string> HashEncodeCallback(absl::string_view input) {
-  if (input.empty())
-    return std::string();
-
-  url::RawCanonOutputT<char> canon_output;
-  url::Component component;
-
-  url::CanonicalizeRef(input.data(),
-                       url::Component(0, static_cast<int>(input.size())),
-                       &canon_output, &component);
-
-  return StdStringFromCanonOutput(canon_output, component);
-}
-
 String CanonicalizeProtocol(const String& input,
                             ValueType type,
                             ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizeProtocol(
+        input, static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        exception_state);
+  }
+
   // We allow the protocol input to optionally contain a ":" suffix.  Strip
   // this for both URL and pattern protocols.
   String stripped = MaybeStripSuffix(input, ":");
@@ -272,17 +62,17 @@ String CanonicalizeProtocol(const String& input,
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
   if (stripped.Is8Bit()) {
-    StringUTF8Adaptor utf8(stripped);
-    result = url::CanonicalizeScheme(
-        utf8.data(), url::Component(0, utf8.size()), &canon_output, &component);
+    StringUtf8Adaptor utf8(stripped);
+    result =
+        url::CanonicalizeScheme(utf8.AsStringView(), &canon_output, &component);
   } else {
-    result = url::CanonicalizeScheme(stripped.Characters16(),
-                                     url::Component(0, stripped.length()),
-                                     &canon_output, &component);
+    result =
+        url::CanonicalizeScheme(stripped.View16(), &canon_output, &component);
   }
 
   if (!result) {
-    exception_state.ThrowTypeError("Invalid protocol '" + stripped + "'.");
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid protocol '", stripped, "'."}));
     return String();
   }
 
@@ -295,6 +85,15 @@ void CanonicalizeUsernameAndPassword(const String& username,
                                      String& username_out,
                                      String& password_out,
                                      ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    blink::url_pattern_dummy_url_canon::CanonicalizeUsernameAndPassword(
+        username, password,
+        static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        username_out, password_out, exception_state);
+    return;
+  }
+
   if (type == ValueType::kPattern) {
     // Canonicalization for patterns is handled during compilation via
     // encoding callbacks.
@@ -309,11 +108,10 @@ void CanonicalizeUsernameAndPassword(const String& username,
   url::Component password_component;
 
   if (username && password && username.Is8Bit() && password.Is8Bit()) {
-    StringUTF8Adaptor username_utf8(username);
-    StringUTF8Adaptor password_utf8(password);
+    StringUtf8Adaptor username_utf8(username);
+    StringUtf8Adaptor password_utf8(password);
     result = url::CanonicalizeUserInfo(
-        username_utf8.data(), url::Component(0, username_utf8.size()),
-        password_utf8.data(), url::Component(0, password_utf8.size()),
+        username_utf8.AsStringView(), password_utf8.AsStringView(),
         &canon_output, &username_component, &password_component);
 
   } else {
@@ -321,15 +119,15 @@ void CanonicalizeUsernameAndPassword(const String& username,
     String password16(password);
     username16.Ensure16Bit();
     password16.Ensure16Bit();
-    result = url::CanonicalizeUserInfo(
-        username16.Characters16(), url::Component(0, username16.length()),
-        password16.Characters16(), url::Component(0, password16.length()),
-        &canon_output, &username_component, &password_component);
+    result = url::CanonicalizeUserInfo(username16.View16(), password16.View16(),
+                                       &canon_output, &username_component,
+                                       &password_component);
   }
 
   if (!result) {
-    exception_state.ThrowTypeError("Invalid username '" + username +
-                                   "' and/or password '" + password + "'.");
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid username '", username, "' and/or password '", password,
+                "'."}));
     return;
   }
 
@@ -342,6 +140,13 @@ void CanonicalizeUsernameAndPassword(const String& username,
 String CanonicalizeHostname(const String& input,
                             ValueType type,
                             ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizeHostname(
+        input, static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        exception_state);
+  }
+
   if (type == ValueType::kPattern) {
     // Canonicalization for patterns is handled during compilation via
     // encoding callbacks.
@@ -349,9 +154,9 @@ String CanonicalizeHostname(const String& input,
   }
 
   bool success = false;
-  String result = SecurityOrigin::CanonicalizeHost(input, &success);
+  String result = SecurityOrigin::CanonicalizeSpecialHost(input, &success);
   if (!success) {
-    exception_state.ThrowTypeError("Invalid hostname '" + input + "'.");
+    exception_state.ThrowTypeError(StrCat({"Invalid hostname '", input, "'."}));
     return String();
   }
 
@@ -362,6 +167,13 @@ String CanonicalizePort(const String& input,
                         ValueType type,
                         const String& protocol,
                         ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizePort(
+        input, static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        protocol, exception_state);
+  }
+
   if (type == ValueType::kPattern) {
     // Canonicalization for patterns is handled during compilation via
     // encoding callbacks.
@@ -370,19 +182,18 @@ String CanonicalizePort(const String& input,
 
   int default_port = url::PORT_UNSPECIFIED;
   if (!input.empty()) {
-    StringUTF8Adaptor protocol_utf8(protocol);
-    default_port =
-        url::DefaultPortForScheme(protocol_utf8.data(), protocol_utf8.size());
+    StringUtf8Adaptor protocol_utf8(protocol);
+    default_port = url::DefaultPortForScheme(protocol_utf8.AsStringView());
   }
 
   // Since ports only consist of digits there should be no encoding needed.
   // Therefore we directly use the UTF8 encoding version of CanonicalizePort().
-  StringUTF8Adaptor utf8(input);
+  StringUtf8Adaptor utf8(input);
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
-  if (!url::CanonicalizePort(utf8.data(), url::Component(0, utf8.size()),
-                             default_port, &canon_output, &component)) {
-    exception_state.ThrowTypeError("Invalid port '" + input + "'.");
+  if (!url::CanonicalizePort(utf8.AsStringView(), default_port, &canon_output,
+                             &component)) {
+    exception_state.ThrowTypeError(StrCat({"Invalid port '", input, "'."}));
     return String();
   }
 
@@ -394,6 +205,14 @@ String CanonicalizePathname(const String& protocol,
                             const String& input,
                             ValueType type,
                             ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizePathname(
+        protocol, input,
+        static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        exception_state);
+  }
+
   if (type == ValueType::kPattern) {
     // Canonicalization for patterns is handled during compilation via
     // encoding callbacks.
@@ -414,11 +233,10 @@ String CanonicalizePathname(const String& protocol,
   if (protocol.empty()) {
     standard = true;
   } else if (protocol.Is8Bit()) {
-    StringUTF8Adaptor utf8(protocol);
-    standard = url::IsStandard(utf8.data(), url::Component(0, utf8.size()));
+    StringUtf8Adaptor utf8(protocol);
+    standard = url::IsStandard(utf8.AsStringView());
   } else {
-    standard = url::IsStandard(protocol.Characters16(),
-                               url::Component(0, protocol.length()));
+    standard = url::IsStandard(protocol.View16());
   }
 
   // Do not enforce absolute pathnames here since we can't enforce it
@@ -432,25 +250,24 @@ String CanonicalizePathname(const String& protocol,
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
 
-  const auto canonicalize_path = [&](const auto* data, int length) {
-    if (standard) {
-      return url::CanonicalizePartialPath(data, url::Component(0, length),
-                                          &canon_output, &component);
-    }
-    url::CanonicalizePathURLPath(data, url::Component(0, length), &canon_output,
-                                 &component);
-    return true;
-  };
+  const auto canonicalize_path =
+      [&]<typename CharType>(std::basic_string_view<CharType> data) {
+        if (standard) {
+          return url::CanonicalizePartialPath(data, &canon_output, &component);
+        }
+        url::CanonicalizePathUrlPath(data, &canon_output, &component);
+        return true;
+      };
 
   if (input.Is8Bit()) {
-    StringUTF8Adaptor utf8(input);
-    result = canonicalize_path(utf8.data(), utf8.size());
+    StringUtf8Adaptor utf8(input);
+    result = canonicalize_path(utf8.AsStringView());
   } else {
-    result = canonicalize_path(input.Characters16(), input.length());
+    result = canonicalize_path(input.View16());
   }
 
   if (!result) {
-    exception_state.ThrowTypeError("Invalid pathname '" + input + "'.");
+    exception_state.ThrowTypeError(StrCat({"Invalid pathname '", input, "'."}));
     return String();
   }
 
@@ -460,6 +277,13 @@ String CanonicalizePathname(const String& protocol,
 String CanonicalizeSearch(const String& input,
                           ValueType type,
                           ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizeSearch(
+        input, static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        exception_state);
+  }
+
   // We allow the search input to optionally contain a "?" prefix.  Strip
   // this for both URL and pattern protocols.
   String stripped = MaybeStripPrefix(input, "?");
@@ -473,12 +297,11 @@ String CanonicalizeSearch(const String& input,
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
   if (stripped.Is8Bit()) {
-    StringUTF8Adaptor utf8(stripped);
-    url::CanonicalizeQuery(utf8.data(), url::Component(0, utf8.size()),
+    StringUtf8Adaptor utf8(stripped);
+    url::CanonicalizeQuery(utf8.AsStringView(),
                            /*converter=*/nullptr, &canon_output, &component);
   } else {
-    url::CanonicalizeQuery(stripped.Characters16(),
-                           url::Component(0, stripped.length()),
+    url::CanonicalizeQuery(stripped.View16(),
                            /*converter=*/nullptr, &canon_output, &component);
   }
 
@@ -488,6 +311,13 @@ String CanonicalizeSearch(const String& input,
 String CanonicalizeHash(const String& input,
                         ValueType type,
                         ExceptionState& exception_state) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kURLPatternDummyURLCanonicalization)) {
+    return blink::url_pattern_dummy_url_canon::CanonicalizeHash(
+        input, static_cast<blink::url_pattern_dummy_url_canon::ValueType>(type),
+        exception_state);
+  }
+
   // We allow the hash input to optionally contain a "#" prefix.  Strip
   // this for both URL and pattern protocols.
   String stripped = MaybeStripPrefix(input, "#");
@@ -501,13 +331,10 @@ String CanonicalizeHash(const String& input,
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
   if (stripped.Is8Bit()) {
-    StringUTF8Adaptor utf8(stripped);
-    url::CanonicalizeRef(utf8.data(), url::Component(0, utf8.size()),
-                         &canon_output, &component);
+    StringUtf8Adaptor utf8(stripped);
+    url::CanonicalizeRef(utf8.AsStringView(), &canon_output, &component);
   } else {
-    url::CanonicalizeRef(stripped.Characters16(),
-                         url::Component(0, stripped.length()), &canon_output,
-                         &component);
+    url::CanonicalizeRef(stripped.View16(), &canon_output, &component);
   }
 
   return StringFromCanonOutput(canon_output, component);

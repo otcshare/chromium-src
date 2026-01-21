@@ -4,9 +4,7 @@
 
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/themes/theme_service_aura_linux.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/theme_profile_key.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/cursor/cursor_factory.h"
@@ -18,6 +16,14 @@
 #include "ui/native_theme/native_theme.h"
 #include "ui/ozone/public/ozone_platform.h"
 
+#if BUILDFLAG(USE_DBUS)
+#include "chrome/browser/ui/views/dark_mode_manager_linux.h"
+#endif
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include "components/printing/common/print_dialog_linux_factory.h"
+#endif
+
 namespace {
 
 class LinuxUiGetterImpl : public ui::LinuxUiGetter {
@@ -25,11 +31,13 @@ class LinuxUiGetterImpl : public ui::LinuxUiGetter {
   LinuxUiGetterImpl() = default;
   ~LinuxUiGetterImpl() override = default;
   ui::LinuxUiTheme* GetForWindow(aura::Window* window) override {
-    return window ? GetForProfile(GetThemeProfileForWindow(window)) : nullptr;
+    return GetForProfile(GetThemeProfileForWindow(window));
   }
   ui::LinuxUiTheme* GetForProfile(Profile* profile) override {
-    return ui::GetLinuxUiTheme(
-        ThemeServiceAuraLinux::GetSystemThemeForProfile(profile));
+    return profile
+               ? ui::GetLinuxUiTheme(
+                     ThemeServiceAuraLinux::GetSystemThemeForProfile(profile))
+               : ui::GetDefaultLinuxUiTheme();
   }
 };
 
@@ -52,10 +60,14 @@ void ChromeBrowserMainExtraPartsViewsLinux::ToolkitInitialized() {
     // implementation). Start observing them once it's initialized.
     ui::CursorFactory::GetInstance()->ObserveThemeChanges();
   }
-  if (auto* linux_ui_theme = ui::GetDefaultLinuxUiTheme()) {
-    UMA_HISTOGRAM_ENUMERATION("Linux.SystemTheme.Default",
-                              linux_ui_theme->GetNativeTheme()->system_theme());
-  }
+
+#if BUILDFLAG(ENABLE_PRINTING)
+  print_dialog_factory_ = std::make_unique<printing::PrintDialogLinuxFactory>();
+#endif
+
+#if BUILDFLAG(USE_DBUS)
+  dark_mode_manager_ = std::make_unique<ui::DarkModeManagerLinux>();
+#endif
 }
 
 void ChromeBrowserMainExtraPartsViewsLinux::PreCreateThreads() {
@@ -67,6 +79,4 @@ void ChromeBrowserMainExtraPartsViewsLinux::PreCreateThreads() {
 }
 
 void ChromeBrowserMainExtraPartsViewsLinux::OnCurrentWorkspaceChanged(
-    const std::string& new_workspace) {
-  BrowserList::MoveBrowsersInWorkspaceToFront(new_workspace);
-}
+    const std::string& /*new_workspace*/) {}

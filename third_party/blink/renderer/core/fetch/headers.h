@@ -55,6 +55,7 @@ class CORE_EXPORT Headers final : public ScriptWrappable,
               ExceptionState&);
   void remove(ScriptState* script_state, const String& key, ExceptionState&);
   String get(const String& key, ExceptionState&);
+  Vector<String> getSetCookie();
   bool has(const String& key, ExceptionState&);
   void set(ScriptState* script_state,
            const String& key,
@@ -73,8 +74,12 @@ class CORE_EXPORT Headers final : public ScriptWrappable,
   // https://fetch.spec.whatwg.org/#concept-headers-remove-privileged-no-cors-request-headers
   void RemovePrivilegedNoCorsRequestHeaders();
 
-  FetchHeaderList* HeaderList() const { return header_list_; }
+  FetchHeaderList* HeaderList() const { return header_list_.Get(); }
   void Trace(Visitor*) const override;
+
+  void SetBypassRequestForbiddenHeaderCheck(bool bypass) {
+    bypass_request_forbidden_header_check_ = bypass;
+  }
 
  private:
   class HeadersIterationSource final
@@ -85,8 +90,7 @@ class CORE_EXPORT Headers final : public ScriptWrappable,
 
     bool FetchNextItem(ScriptState* script_state,
                        String& key,
-                       String& value,
-                       ExceptionState& exception) override;
+                       String& value) override;
 
     void Trace(Visitor*) const override;
 
@@ -110,9 +114,10 @@ class CORE_EXPORT Headers final : public ScriptWrappable,
 
   Member<FetchHeaderList> header_list_;
   Guard guard_;
+  // Allow setting forbidden headers on fetch() requests.
+  bool bypass_request_forbidden_header_check_ = false;
 
-  IterationSource* CreateIterationSource(ScriptState*,
-                                         ExceptionState&) override;
+  IterationSource* CreateIterationSource(ScriptState*) override;
 
   HeapHashSet<WeakMember<HeadersIterationSource>> iterators_;
 };

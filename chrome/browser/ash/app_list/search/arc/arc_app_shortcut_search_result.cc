@@ -17,16 +17,42 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/string_matching/fuzzy_tokenized_string_match.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 
 namespace app_list {
 
 namespace {
+
+using ::ash::string_matching::FuzzyTokenizedStringMatch;
+using ::ash::string_matching::TokenizedString;
+
 constexpr char kAppShortcutSearchPrefix[] = "appshortcutsearch://";
+
+// Parameters for FuzzyTokenizedStringMatch.
+constexpr bool kUseWeightedRatio = false;
+
+// Flag to enable/disable diacritics stripping
+constexpr bool kStripDiacritics = false;
+
+// Flag to enable/disable acronym matcher.
+constexpr bool kUseAcronymMatcher = false;
+
+// Get the fuzzy tokenized string matching relevance of this result based on the
+// title.
+double CalculateRelevance(const TokenizedString& tokenized_query,
+                          const std::u16string& title) {
+  const TokenizedString tokenized_label(title, TokenizedString::Mode::kWords);
+
+  FuzzyTokenizedStringMatch match;
+  return match.Relevance(tokenized_query, tokenized_label, kUseWeightedRatio,
+                         kStripDiacritics, kUseAcronymMatcher);
+}
+
 }  // namespace
 
 ArcAppShortcutSearchResult::ArcAppShortcutSearchResult(
@@ -34,7 +60,7 @@ ArcAppShortcutSearchResult::ArcAppShortcutSearchResult(
     Profile* profile,
     AppListControllerDelegate* list_controller,
     bool is_recommendation,
-    const std::u16string& query,
+    const TokenizedString& tokenized_query,
     const std::string& details)
     : data_(std::move(data)),
       profile_(profile),
@@ -49,6 +75,7 @@ ArcAppShortcutSearchResult::ArcAppShortcutSearchResult(
   SetDisplayType(ash::SearchResultDisplayType::kList);
   SetMetricsType(ash::PLAY_STORE_APP_SHORTCUT);
   SetIsRecommendation(is_recommendation);
+  set_relevance(CalculateRelevance(tokenized_query, title));
 
   if (!data_->icon || !data_->icon->icon_png_data ||
       data_->icon->icon_png_data->empty()) {
@@ -85,7 +112,9 @@ void ArcAppShortcutSearchResult::Open(int event_flags) {
 
 void ArcAppShortcutSearchResult::OnAppImageUpdated(
     const std::string& app_id,
-    const gfx::ImageSkia& image) {
+    const gfx::ImageSkia& image,
+    bool is_placeholder_icon,
+    const std::optional<gfx::ImageSkia>& badge_image) {
   SetBadgeIcon(ui::ImageModel::FromImageSkia(image));
 }
 
@@ -111,7 +140,7 @@ std::u16string ArcAppShortcutSearchResult::ComputeAccessibleName() const {
 }
 
 void ArcAppShortcutSearchResult::OnIconDecoded(const gfx::ImageSkia& icon) {
-  SetIcon(IconInfo(icon, kAppIconDimension));
+  SetIcon(IconInfo(ui::ImageModel::FromImageSkia(icon), kAppIconDimension));
 }
 
 }  // namespace app_list

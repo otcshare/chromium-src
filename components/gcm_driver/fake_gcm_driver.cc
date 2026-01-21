@@ -4,8 +4,8 @@
 
 #include "components/gcm_driver/fake_gcm_driver.h"
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 
@@ -27,12 +27,6 @@ void FakeGCMDriver::ValidateRegistration(
     ValidateRegistrationCallback callback) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), true /* is_valid */));
-}
-
-void FakeGCMDriver::OnSignedIn() {
-}
-
-void FakeGCMDriver::OnSignedOut() {
 }
 
 void FakeGCMDriver::AddConnectionObserver(GCMConnectionObserver* observer) {

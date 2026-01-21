@@ -70,17 +70,19 @@ class BackgroundSyncBrowserTest : public InProcessBrowserTest {
 
   // Runs the |script| in the current tab and writes the output to |*result|.
   bool RunScript(const std::string& script, std::string* result) {
-    return content::ExecuteScriptAndExtractString(browser()
-                                                      ->tab_strip_model()
-                                                      ->GetActiveWebContents()
-                                                      ->GetPrimaryMainFrame(),
-                                                  script, result);
+    *result = content::EvalJs(browser()
+                                  ->tab_strip_model()
+                                  ->GetActiveWebContents()
+                                  ->GetPrimaryMainFrame(),
+                              script)
+                  .ExtractString();
+    return true;
   }
 
   // Intercepts all requests.
   std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request) {
-    if (request.GetURL().query() == "syncreceived") {
+    if (request.GetURL().GetQuery() == "syncreceived") {
       time_when_sync_event_received_ = base::Time::Now();
     }
 

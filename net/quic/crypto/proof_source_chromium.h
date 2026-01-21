@@ -9,11 +9,14 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/files/file_util.h"
-#include "crypto/rsa_private_key.h"
+#include "crypto/keypair.h"
 #include "net/base/net_export.h"
 #include "net/cert/x509_certificate.h"
 #include "net/third_party/quiche/src/quiche/quic/core/crypto/proof_source.h"
+
+namespace base {
+class FilePath;
+}
 
 namespace net {
 
@@ -41,7 +44,7 @@ class NET_EXPORT_PRIVATE ProofSourceChromium : public quic::ProofSource {
                 const std::string& hostname,
                 const std::string& server_config,
                 quic::QuicTransportVersion quic_version,
-                absl::string_view chlo_hash,
+                std::string_view chlo_hash,
                 std::unique_ptr<Callback> callback) override;
 
   quiche::QuicheReferenceCountedPointer<Chain> GetCertChain(
@@ -55,7 +58,7 @@ class NET_EXPORT_PRIVATE ProofSourceChromium : public quic::ProofSource {
       const quic::QuicSocketAddress& client_address,
       const std::string& hostname,
       uint16_t signature_algorithm,
-      absl::string_view in,
+      std::string_view in,
       std::unique_ptr<SignatureCallback> callback) override;
 
   absl::InlinedVector<uint16_t, 8> SupportedTlsSignatureAlgorithms()
@@ -70,12 +73,16 @@ class NET_EXPORT_PRIVATE ProofSourceChromium : public quic::ProofSource {
       const std::string& hostname,
       const std::string& server_config,
       quic::QuicTransportVersion quic_version,
-      absl::string_view chlo_hash,
+      std::string_view chlo_hash,
       quiche::QuicheReferenceCountedPointer<quic::ProofSource::Chain>*
           out_chain,
       quic::QuicCryptoProof* proof);
 
-  std::unique_ptr<crypto::RSAPrivateKey> private_key_;
+  // Theoretically this should not be an optional since it doesn't make sense to
+  // have a ProofSource without a private key. The private key isn't available
+  // at construction time though, only during Initialize(), so this can be
+  // nullopt before Initialize() is called.
+  std::optional<crypto::keypair::PrivateKey> private_key_;
   CertificateList certs_in_file_;
   quiche::QuicheReferenceCountedPointer<quic::ProofSource::Chain> chain_;
   std::string signed_certificate_timestamp_;

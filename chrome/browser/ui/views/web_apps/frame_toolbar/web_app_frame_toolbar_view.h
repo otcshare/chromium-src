@@ -17,25 +17,30 @@
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/view_targeter_delegate.h"
 
+namespace {
+class WebAppFrameViewChromeOSTest;
+class LocationBarViewQuietNotificationInteractiveUITest;
+}  // namespace
+
 namespace views {
 class View;
-class ViewTargeterDelegate;
-class Widget;
 }  // namespace views
 
 class BrowserView;
 class ContentSettingImageView;
 class PageActionIconController;
+class PinnedToolbarActionsContainer;
 class WebAppNavigationButtonContainer;
 class WebAppToolbarButtonContainer;
+class WebAppFrameToolbarView;
 
 // A container for web app buttons in the title bar.
 class WebAppFrameToolbarView : public views::AccessiblePaneView,
-                               public ToolbarButtonProvider,
-                               public views::ViewTargeterDelegate {
+                               public ToolbarButtonProvider {
+  METADATA_HEADER(WebAppFrameToolbarView, views::AccessiblePaneView)
+
  public:
-  METADATA_HEADER(WebAppFrameToolbarView);
-  WebAppFrameToolbarView(views::Widget* widget, BrowserView* browser_view);
+  explicit WebAppFrameToolbarView(BrowserView* browser_view);
   WebAppFrameToolbarView(const WebAppFrameToolbarView&) = delete;
   WebAppFrameToolbarView& operator=(const WebAppFrameToolbarView&) = delete;
   ~WebAppFrameToolbarView() override;
@@ -56,35 +61,42 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
                                         int trailing_x,
                                         int y,
                                         int available_height);
+  gfx::Rect LayoutInContainer(gfx::Rect available_space);
+
+  // Determines how big the center container would be in a toolbar of
+  // `available_size` - this is the space in which elements like the title can
+  // be laid out.
+  gfx::Rect GetCenterContainerForSize(const gfx::Size& available_size) const;
 
   // Sets own bounds within the available_space.
   void LayoutForWindowControlsOverlay(gfx::Rect available_space);
 
-  absl::optional<SkColor> active_color_for_testing() const {
+  std::optional<SkColor> active_color_for_testing() const {
     return active_foreground_color_;
   }
 
   // ToolbarButtonProvider:
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainer() override;
+  ExtensionsToolbarDesktop* GetExtensionsToolbarDesktop() override;
+  PinnedToolbarActionsContainer* GetPinnedToolbarActionsContainer() override;
   gfx::Size GetToolbarButtonSize() const override;
   views::View* GetDefaultExtensionDialogAnchorView() override;
   PageActionIconView* GetPageActionIconView(PageActionIconType type) override;
+  IconLabelBubbleView* GetPageActionView(actions::ActionId action_id) override;
   AppMenuButton* GetAppMenuButton() override;
   gfx::Rect GetFindBarBoundingBox(int contents_bottom) override;
   void FocusToolbar() override;
   views::AccessiblePaneView* GetAsAccessiblePaneView() override;
-  views::View* GetAnchorView(PageActionIconType type) override;
+  views::View* GetAnchorView(
+      std::optional<actions::ActionId> action_id) override;
+  views::BubbleAnchor GetBubbleAnchor(
+      std::optional<actions::ActionId> action_id) override;
   void ZoomChangedForActiveTab(bool can_show_bubble) override;
-  SidePanelToolbarButton* GetSidePanelButton() override;
   AvatarToolbarButton* GetAvatarToolbarButton() override;
   ToolbarButton* GetBackButton() override;
-  ReloadButton* GetReloadButton() override;
+  ReloadControl* GetReloadButton() override;
   IntentChipButton* GetIntentChipButton() override;
-  DownloadToolbarButtonView* GetDownloadButton() override;
-
-  // views::ViewTargeterDelegate
-  bool DoesIntersectRect(const View* target,
-                         const gfx::Rect& rect) const override;
+  ToolbarButton* GetDownloadButton() override;
+  WebUIToolbarWebView* GetWebUIToolbarViewForTesting() override;
 
   void OnWindowControlsOverlayEnabledChanged();
   void UpdateBorderlessModeEnabled();
@@ -104,13 +116,16 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
   void OnThemeChanged() override;
 
  private:
-  friend class WebAppNonClientFrameViewAshTest;
+  class ViewTargeter;
+  friend class WebAppFrameToolbarViewTargeter;
   friend class ImmersiveModeControllerChromeosWebAppBrowserTest;
   friend class WebAppAshInteractiveUITest;
+  friend class WebAppFrameViewChromeOSTest;
+  friend class LocationBarViewQuietNotificationInteractiveUITest;
 
   views::View* GetContentSettingContainerForTesting();
 
-  const std::vector<ContentSettingImageView*>&
+  const std::vector<raw_ptr<ContentSettingImageView, VectorExperimental>>&
   GetContentSettingViewsForTesting() const;
 
   void UpdateCachedColors();
@@ -125,10 +140,10 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
 
   // Button and text colors.
   bool paint_as_active_ = true;
-  absl::optional<SkColor> active_background_color_;
-  absl::optional<SkColor> active_foreground_color_;
-  absl::optional<SkColor> inactive_background_color_;
-  absl::optional<SkColor> inactive_foreground_color_;
+  std::optional<SkColor> active_background_color_;
+  std::optional<SkColor> active_foreground_color_;
+  std::optional<SkColor> inactive_background_color_;
+  std::optional<SkColor> inactive_foreground_color_;
 
   // All remaining members are owned by the views hierarchy.
 

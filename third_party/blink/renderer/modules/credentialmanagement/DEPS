@@ -1,4 +1,5 @@
 include_rules = [
+  "+device/fido/public",
   "+mojo/public",
   "+services/metrics/public/cpp/metrics_utils.h",
   "+services/metrics/public/cpp/ukm_builders.h",
@@ -8,3 +9,12 @@ include_rules = [
   "+third_party/blink/renderer/modules/credentialmanagement",
   "+third_party/blink/renderer/modules/modules_export.h",
 ]
+
+specific_include_rules = {
+  "credential_manager_type_converters.cc": [
+    "+third_party/boringssl/src/include",
+  ],
+  ".*test\.cc": [
+    "+components/ukm/test_ukm_recorder.h",
+  ],
+}

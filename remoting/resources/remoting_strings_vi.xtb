@@ -28,7 +28,6 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="2329392777730037872">Không mở được <ph name="URL" /> trên ứng dụng.</translation>
 <translation id="2359808026110333948">Tiếp tục</translation>
 <translation id="2366718077645204424">Không thể kết nối với máy chủ. Điều này có thể do cấu hình của mạng bạn đang sử dụng.</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />  Nhìn thấy trực tuyến lần cuối <ph name="RELATIVE_TIMESTAMP" />.</translation>
 <translation id="2504109125669302160">Cấp quyền 'Hỗ trợ tiếp cận' cho <ph name="PRODUCT_NAME" /></translation>
 <translation id="2509394361235492552">Đã kết nối với <ph name="HOSTNAME" /></translation>
 <translation id="2540992418118313681">Bạn có muốn chia sẻ máy tính này cho một người dùng khác xem và kiểm soát không?</translation>
@@ -36,17 +35,18 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="2599300881200251572">Dịch vụ này kích hoạt các kết nối đến từ ứng dụng khách Chrome Remote Desktop.</translation>
 <translation id="2647232381348739934">Dịch vụ kết nối từ xa trên Chrome</translation>
 <translation id="2676780859508944670">Đang xử lý...</translation>
-<translation id="2692522824157224199">Bản quyền 2022 Google LLC. Bảo lưu mọi quyền.</translation>
 <translation id="2699970397166997657">Kết nối từ xa trên Chrome</translation>
 <translation id="2758123043070977469">Đã xảy ra lỗi khi xác thực, vui lòng đăng nhập lại.</translation>
 <translation id="2803375539583399270">Nhập mã PIN</translation>
 <translation id="2919669478609886916">Bạn hiện đang chia sẻ máy này với một người dùng khác. Bạn có muốn tiếp tục chia sẻ không?</translation>
+<translation id="2929683002824598593">Chia sẻ thiết bị</translation>
 <translation id="2939145106548231838">Xác thực với máy chủ lưu trữ</translation>
 <translation id="3027681561976217984">Chế độ cảm ứng</translation>
 <translation id="3106379468611574572">Máy tính từ xa không phản hồi yêu cầu kết nối. Vui lòng xác minh rằng máy tính đang trực tuyến và thử lại.</translation>
 <translation id="3150823315463303127">Máy chủ không đọc được chính sách.</translation>
 <translation id="3171922709365450819">Ứng dụng này không hỗ trợ thiết bị này do yêu cầu xác thực của bên thứ ba.</translation>
 <translation id="3197730452537982411">Máy tính từ xa</translation>
+<translation id="3236334139428307578">Bản quyền 2026 The Chromium Authors. Bảo lưu mọi quyền.</translation>
 <translation id="324272851072175193">Gửi những hướng dẫn này qua email</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> muốn thực hiện thay đổi.</translation>
 <translation id="3339299787263251426">Truy cập máy tính của bạn qua Internet một cách an toàn</translation>
@@ -54,7 +54,6 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="3423542133075182604">Xử lý từ xa bằng khóa bảo mật</translation>
 <translation id="3581045510967524389">Không thể kết nối với mạng. Vui lòng kiểm tra xem thiết bị của bạn đã được kết nối với mạng hay chưa.</translation>
 <translation id="3596628256176442606">Dịch vụ này kích hoạt các kết nối đến từ ứng dụng khách kết nối từ xa trên Chrome.</translation>
-<translation id="369442766917958684">Ngoại tuyến.</translation>
 <translation id="3695446226812920698">Tìm hiểu cách thức</translation>
 <translation id="3776024066357219166">Phiên Chrome Remote Desktop của bạn đã kết thúc.</translation>
 <translation id="3858860766373142691">Tên</translation>
@@ -73,7 +72,6 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="4257751272692708833">Trình chuyển tiếp URL của <ph name="PRODUCT_NAME" /></translation>
 <translation id="4277736576214464567">Mã truy cập không hợp lệ. Vui lòng thử lại.</translation>
 <translation id="4281844954008187215">Điều khoản dịch vụ</translation>
-<translation id="4372650392690220936">Bản quyền 2022 The Chromium Authors. Bảo lưu mọi quyền.</translation>
 <translation id="4405930547258349619">Thư viện trung tâm</translation>
 <translation id="443560535555262820">Mở tùy chọn Hỗ trợ tiếp cận</translation>
 <translation id="4450893287417543264">Không hiện lại</translation>
@@ -95,6 +93,7 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="4987330545941822761">Chrome Remote Desktop không thể xác định được trình duyệt để mở URL trên thiết bị. Vui lòng chọn trình duyệt trong danh sách dưới đây.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (ngoại tuyến)</translation>
 <translation id="507204348399810022">Bạn có chắc chắn muốn tắt kết nối từ xa với <ph name="HOSTNAME" /> không?</translation>
+<translation id="5095424396646120601">Báo cáo sự cố</translation>
 <translation id="5170982930780719864">Id máy chủ không hợp lệ.</translation>
 <translation id="5204575267916639804">Câu hỏi thường gặp</translation>
 <translation id="5222676887888702881">Đăng xuất</translation>
@@ -107,12 +106,12 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="5601503069213153581">Mã PIN</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">Máy tính của bạn hiện đang được chia sẻ với <ph name="USER" />.</translation>
-<translation id="5750083143895808682">Đã đăng nhập bằng địa chỉ <ph name="EMAIL_ADDRESS" />.</translation>
 <translation id="579702532610384533">Kết nối lại</translation>
 <translation id="5810269635982033450">Màn hình đóng vai trò như bàn di chuột</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> đã yêu cầu quyền truy cập để xem màn hình và điều khiển bàn phím cũng như chuột của bạn. Hãy nhấn ''<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />'' nếu bạn không biết yêu cầu này. Nếu bạn có biết, hãy chọn ''<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />'' để cho phép kết nối khi đã sẵn sàng.</translation>
 <translation id="5823658491130719298">Trên máy tính mà bạn muốn truy cập từ xa, hãy mở Chrome và truy cập vào <ph name="INSTALLATION_LINK" /></translation>
 <translation id="5841343754884244200">Tùy chọn hiển thị</translation>
+<translation id="5965133372831030509">Bản quyền 2026 Google LLC. Bảo lưu mọi quyền.</translation>
 <translation id="6033507038939587647">Tùy chọn bàn phím</translation>
 <translation id="6040143037577758943">Đóng</translation>
 <translation id="6062854958530969723">Khởi chạy máy chủ không thành công.</translation>
@@ -121,10 +120,12 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="6178645564515549384">Máy chủ nhắn tin gốc dành cho hỗ trợ từ xa</translation>
 <translation id="618120821413932081">Cập nhật độ phân giải từ xa để phù hợp với cửa sổ</translation>
 <translation id="6223301979382383752">Mở tùy chọn Ghi màn hình</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> đã yêu cầu quyền truy cập để xem màn hình và điều khiển bàn phím cũng như chuột của bạn. Bạn có muốn chia sẻ thiết bị của mình không?</translation>
 <translation id="6284412385303060032">Máy chủ chạy trên màn hình logic của bảng điều khiển đã tắt để hỗ trợ chế độ màn bằng cách chuyển sang máy chủ chạy trong phiên dành riêng cho người dùng.</translation>
 <translation id="6542902059648396432">Báo cáo sự cố…</translation>
 <translation id="6583902294974160967">Hỗ trợ</translation>
 <translation id="6612717000975622067">Gửi Ctrl-Alt-Del</translation>
+<translation id="6625262630437221505">{0,plural, =1{Nếu bạn không thực hiện hành động nào, thiết bị của bạn sẽ tự động bắt đầu chia sẻ sau # giây.}other{Nếu bạn không thực hiện hành động nào, thiết bị của bạn sẽ tự động bắt đầu chia sẻ sau # giây.}}</translation>
 <translation id="6654753848497929428">Chia sẻ</translation>
 <translation id="677755392401385740">Máy chủ đã khởi động cho người dùng: <ph name="HOST_USERNAME" />.</translation>
 <translation id="6902524959760471898">Ứng dụng trợ giúp để mở một URL trên máy khách của <ph name="PRODUCT_NAME" /></translation>
@@ -148,7 +149,7 @@ Nếu đã chọn '<ph name="SERVICE_SCRIPT_NAME" />', hãy bỏ chọn rồi ch
 <translation id="7535110896613603182">Mở phần Cài đặt ứng dụng mặc định</translation>
 <translation id="7628469622942688817">Nhớ mã PIN của tôi trên thiết bị này.</translation>
 <translation id="7649070708921625228">Trợ giúp</translation>
-<translation id="7658239707568436148">Hủy</translation>
+<translation id="7658239707568436148">Huỷ</translation>
 <translation id="7665369617277396874">Thêm tài khoản</translation>
 <translation id="7678209621226490279">Gắn vào bên trái</translation>
 <translation id="7693372326588366043">Làm mới danh sách máy chủ</translation>

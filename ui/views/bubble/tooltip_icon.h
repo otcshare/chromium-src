@@ -14,7 +14,9 @@
 #include "base/timer/timer.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/mouse_watcher.h"
+#include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -26,6 +28,8 @@ class InfoBubble;
 class VIEWS_EXPORT TooltipIcon : public ImageView,
                                  public MouseWatcherListener,
                                  public WidgetObserver {
+  METADATA_HEADER(TooltipIcon, ImageView)
+
  public:
   class Observer : public base::CheckedObserver {
    public:
@@ -36,8 +40,6 @@ class VIEWS_EXPORT TooltipIcon : public ImageView,
     virtual void OnTooltipIconDestroying(TooltipIcon* icon) = 0;
   };
 
-  METADATA_HEADER(TooltipIcon);
-
   explicit TooltipIcon(const std::u16string& tooltip,
                        int tooltip_icon_size = 16);
 
@@ -46,6 +48,14 @@ class VIEWS_EXPORT TooltipIcon : public ImageView,
 
   ~TooltipIcon() override;
 
+  // Sets and gets the bubble preferred width.
+  void SetBubbleWidth(int preferred_width);
+  int GetBubbleWidth() const;
+
+  // Sets and gets the point at which to anchor the tooltip.
+  void SetAnchorPointArrow(BubbleBorder::Arrow arrow);
+  BubbleBorder::Arrow GetAnchorPointArrow() const;
+
   // ImageView:
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
@@ -53,7 +63,6 @@ class VIEWS_EXPORT TooltipIcon : public ImageView,
   void OnFocus() override;
   void OnBlur() override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnThemeChanged() override;
 
   // MouseWatcherListener:
@@ -61,14 +70,6 @@ class VIEWS_EXPORT TooltipIcon : public ImageView,
 
   // WidgetObserver:
   void OnWidgetDestroyed(Widget* widget) override;
-
-  void set_bubble_width(int preferred_width) {
-    preferred_width_ = preferred_width;
-  }
-
-  void set_anchor_point_arrow(BubbleBorder::Arrow arrow) {
-    anchor_point_arrow_ = arrow;
-  }
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -115,6 +116,13 @@ class VIEWS_EXPORT TooltipIcon : public ImageView,
   base::ObserverList<Observer, /*check_empty=*/true> observers_;
 };
 
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, TooltipIcon, ImageView)
+VIEW_BUILDER_PROPERTY(int, BubbleWidth)
+VIEW_BUILDER_PROPERTY(BubbleBorder::Arrow, AnchorPointArrow)
+END_VIEW_BUILDER
+
 }  // namespace views
+
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, views::TooltipIcon)
 
 #endif  // UI_VIEWS_BUBBLE_TOOLTIP_ICON_H_

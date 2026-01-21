@@ -8,53 +8,57 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_forward.h"
 #include "base/callback_list.h"
 #include "base/check.h"
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/gtest_prod_util.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/favicon_base/favicon_callback.h"
+#include "components/favicon_base/favicon_types.h"
 #include "components/favicon_base/favicon_usage_data.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/keyword_id.h"
 #include "components/history/core/browser/url_row.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/sync/driver/sync_service.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync_device_info/device_info.h"
+#include "components/sync_device_info/device_info_tracker.h"
+#include "components/sync_device_info/local_device_info_provider.h"
 #include "sql/init_status.h"
 #include "ui/base/page_transition_types.h"
 
 class GURL;
 class HistoryQuickProviderTest;
-class HistoryURLProvider;
 class InMemoryURLIndexTest;
 class SkBitmap;
-
-namespace base {
-class FilePath;
-}  // namespace base
 
 namespace favicon {
 class FaviconServiceImpl;
 }
 
 namespace syncer {
-class ModelTypeControllerDelegate;
+class DataTypeControllerDelegate;
 class SyncableService;
 }  // namespace syncer
 
@@ -85,15 +89,20 @@ class WebHistoryService;
 
 // The history service records page titles, visit times, and favicons, as well
 // as information about downloads.
-class HistoryService : public KeyedService {
+class HistoryService : public KeyedService,
+                       public syncer::DeviceInfoTracker::Observer {
  public:
   // Must call Init after construction. The empty constructor provided only for
   // unit tests. When using the full constructor, `history_client` may only be
   // null during testing, while `visit_delegate` may be null if the embedder use
-  // another way to track visited links.
+  // another way to track visited links. `device_info_tracker` and
+  // `local_device_info_provider` may be null, but if non-null must outlive this
+  // class.
   HistoryService();
   HistoryService(std::unique_ptr<HistoryClient> history_client,
-                 std::unique_ptr<VisitDelegate> visit_delegate);
+                 std::unique_ptr<VisitDelegate> visit_delegate,
+                 syncer::DeviceInfoTracker* device_info_tracker,
+                 syncer::LocalDeviceInfoProvider* local_device_info_provider);
 
   HistoryService(const HistoryService&) = delete;
   HistoryService& operator=(const HistoryService&) = delete;
@@ -106,6 +115,9 @@ class HistoryService : public KeyedService {
   bool Init(const HistoryDatabaseParams& history_database_params) {
     return Init(false, history_database_params);
   }
+
+  // Returns the directory containing the History databases.
+  const base::FilePath& history_dir() const { return history_dir_; }
 
   // Triggers the backend to load if it hasn't already, and then returns whether
   // it's finished loading.
@@ -123,8 +135,8 @@ class HistoryService : public KeyedService {
 
   // Context ids are used to scope page IDs (see AddPage). These contexts
   // must tell us when they are being invalidated so that we can clear
-  // out any cached data associated with that context.
-  void ClearCachedDataForContextID(ContextID context_id);
+  // out any cached data associated with that context. Virtual for testing.
+  virtual void ClearCachedDataForContextID(ContextID context_id);
 
   // Clears all on-demand favicons from thumbnail database.
   void ClearAllOnDemandFavicons();
@@ -169,16 +181,12 @@ class HistoryService : public KeyedService {
   // should be the unique ID of the current navigation entry in the given
   // process.
   //
-  // TODO(avi): This is no longer true. 'page id' was removed years ago, and
-  // their uses replaced by globally-unique nav_entry_ids. Is ContextID still
-  // needed? https://crbug.com/859902
-  //
-  // 'redirects' is an array of redirect URLs leading to this page, with the
+  // `redirects` is an array of redirect URLs leading to this page, with the
   // page itself as the last item (so when there is no redirect, it will have
   // one entry). If there are no redirects, this array may also be empty for
   // the convenience of callers.
   //
-  // 'did_replace_entry' is true when the navigation entry for this page has
+  // `did_replace_entry` is true when the navigation entry for this page has
   // replaced the existing entry. A non-user initiated redirect causes such
   // replacement.
   //
@@ -191,13 +199,17 @@ class HistoryService : public KeyedService {
                const RedirectList& redirects,
                ui::PageTransition transition,
                VisitSource visit_source,
+               VisitResponseCodeCategory response_code_category,
                bool did_replace_entry);
 
-  // For adding pages to history where no tracking information can be done.
+  // For adding pages to history where no tracking information can be done
+  // (namely, `chrome.history.addUrl()`). NOTE: when adding to the
+  // VisitedLinkDatabase, this function will construct a "self-link" of
+  // `<url, url, url>`.
   void AddPage(const GURL& url, base::Time time, VisitSource visit_source);
 
   // All AddPage variants end up here.
-  void AddPage(const HistoryAddPageArgs& add_page_args);
+  void AddPage(HistoryAddPageArgs add_page_args);
 
   // Adds an entry for the specified url without creating a visit. This should
   // only be used when bookmarking a page, otherwise the row leaks in the
@@ -243,8 +255,8 @@ class HistoryService : public KeyedService {
       VisitContentAnnotations::PasswordState password_state);
 
   // Updates the history database with the content model annotations for the
-  // visit.
-  void AddContentModelAnnotationsForVisit(
+  // visit. Virtual for testing.
+  virtual void AddContentModelAnnotationsForVisit(
       const VisitContentModelAnnotations& model_annotations,
       VisitID visit_id);
 
@@ -254,36 +266,61 @@ class HistoryService : public KeyedService {
       const std::vector<std::string>& related_searches,
       VisitID visit_id);
 
-  // Updates the history database with the search metadata for a search-like
-  // visit.
-  void AddSearchMetadataForVisit(const GURL& search_normalized_url,
-                                 const std::u16string& search_terms,
-                                 VisitID visit_id);
+  // Returns the salt used to hash visited links from this origin. If we have
+  // not previously navigated to this origin, a new <origin, salt> pair will be
+  // added, and that new salt value is returned.
+  std::optional<uint64_t> GetOrAddOriginSalt(const url::Origin& origin);
 
-  // Updates the history database with additional page metadata.
-  void AddPageMetadataForVisit(const std::string& alternative_title,
-                               VisitID visit_id);
+  // Updates the history database with the search metadata for a search-like
+  // visit. Virtual for testing.
+  virtual void AddSearchMetadataForVisit(const GURL& search_normalized_url,
+                                         const std::u16string& search_terms,
+                                         VisitID visit_id);
+
+  // Updates the history database with additional page metadata. Virtual for
+  // testing.
+  virtual void AddPageMetadataForVisit(const std::string& alternative_title,
+                                       VisitID visit_id);
+
+  // Updates the history database by setting the `has_url_keyed_image` bit for
+  // the visit. Virtual for testing.
+  virtual void SetHasUrlKeyedImageForVisit(bool has_url_keyed_image,
+                                           VisitID visit_id);
 
   // Querying ------------------------------------------------------------------
 
   // Returns the information about the requested URL. If the URL is found,
-  // success will be true and the information will be in the URLRow parameter.
-  // On success, the visits, if requested, will be sorted by date. If they have
-  // not been requested, the pointer will be valid, but the vector will be
-  // empty.
+  // `success` will be true and the information will be in the URLRow parameter.
   //
-  // If success is false, neither the row nor the vector will be valid.
+  // If success is false, `row` will not be valid.
   using QueryURLCallback = base::OnceCallback<void(QueryURLResult)>;
+
+  // Returns the information about the requested URL. If the URL is found,
+  // `success` will be true and the information will be in the URLRow parameter.
+  // On success, `visits` will be sorted by date.
+  //
+  // If `success` is false, neither `row` nor the `visits` vector will be valid.
+  using QueryURLAndVisitsCallback =
+      base::OnceCallback<void(QueryURLAndVisitsResult)>;
 
   // Queries the basic information about the URL in the history database. If
   // the caller is interested in the visits (each time the URL is visited),
-  // set `want_visits` to true. If these are not needed, the function will be
-  // faster by setting this to false.
+  // use `QueryURLAndVisits()`. If visits are not needed, use this function, as
+  // it's faster.
   // Note: Virtual needed for mocking.
   virtual base::CancelableTaskTracker::TaskId QueryURL(
       const GURL& url,
-      bool want_visits,
       QueryURLCallback callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Queries the basic information about the URL in the history database, and
+  // includes the visits (each time the URL is visited). If visits are not
+  // needed, use `QueryURL()` instead, as it's faster.
+  // Note: Virtual needed for mocking.
+  virtual base::CancelableTaskTracker::TaskId QueryURLAndVisits(
+      const GURL& url,
+      VisitQuery404sPolicy policy_for_404s,
+      QueryURLAndVisitsCallback callback,
       base::CancelableTaskTracker* tracker);
 
   // Provides the result of a query. See QueryResults in history_types.h.
@@ -291,10 +328,10 @@ class HistoryService : public KeyedService {
   // the results out of the passed in parameter and take ownership of them.
   using QueryHistoryCallback = base::OnceCallback<void(QueryResults)>;
 
-  // Queries all history with the given options (see QueryOptions in
-  // history_types.h).  If empty, all results matching the given options
-  // will be returned.
-  base::CancelableTaskTracker::TaskId QueryHistory(
+  // Queries all history with the given options (see `QueryOptions` in
+  // history_types.h). If empty, all results matching the given options will be
+  // returned.
+  virtual base::CancelableTaskTracker::TaskId QueryHistory(
       const std::u16string& text_query,
       const QueryOptions& options,
       QueryHistoryCallback callback,
@@ -334,7 +371,7 @@ class HistoryService : public KeyedService {
   using GetVisibleVisitCountToHostCallback =
       base::OnceCallback<void(VisibleVisitCountToHostResult)>;
 
-  // TODO(crbug.com/1229440): Rename this function to use origin instead of
+  // TODO(crbug.com/40778368): Rename this function to use origin instead of
   // host.
   base::CancelableTaskTracker::TaskId GetVisibleVisitCountToHost(
       const GURL& url,
@@ -346,10 +383,13 @@ class HistoryService : public KeyedService {
   using QueryMostVisitedURLsCallback =
       base::OnceCallback<void(MostVisitedURLList)>;
 
-  base::CancelableTaskTracker::TaskId QueryMostVisitedURLs(
+  // Virtual for mocking.
+  virtual base::CancelableTaskTracker::TaskId QueryMostVisitedURLs(
       int result_count,
       QueryMostVisitedURLsCallback callback,
-      base::CancelableTaskTracker* tracker);
+      base::CancelableTaskTracker* tracker,
+      const std::optional<std::string>& recency_factor_name = std::nullopt,
+      std::optional<size_t> recency_window_days = std::nullopt);
 
   // Request `result_count` of the most repeated queries for the given keyword.
   // Used by TopSites.
@@ -370,67 +410,94 @@ class HistoryService : public KeyedService {
   base::CancelableTaskTracker::TaskId GetHistoryCount(
       const base::Time& begin_time,
       const base::Time& end_time,
+      VisitQuery404sPolicy policy_for_404_visits,
       GetHistoryCountCallback callback,
       base::CancelableTaskTracker* tracker);
-
-  // Returns, via a callback, the number of Hosts visited in the last month.
-  void CountUniqueHostsVisitedLastMonth(GetHistoryCountCallback callback,
-                                        base::CancelableTaskTracker* tracker);
 
   // For each of the continuous `number_of_days_to_report` midnights
   // immediately preceding `report_time` (inclusive), report (a subset of) the
   // last 1-day, 7-day and 28-day domain visit counts ending at that midnight.
   // The subset of metric types to report is specified by `metric_type_bitmask`.
+  // Visits with an HTTP response code of 404 will be counted or ignored
+  // according to `policy_for_404_visits`.
   void GetDomainDiversity(base::Time report_time,
                           int number_of_days_to_report,
                           DomainMetricBitmaskType metric_type_bitmask,
+                          VisitQuery404sPolicy policy_for_404_visits,
                           DomainDiversityCallback callback,
                           base::CancelableTaskTracker* tracker);
+
+  using GetUniqueDomainsVisitedCallback =
+      base::OnceCallback<void(DomainsVisitedResult)>;
+
+  // Returns, via a callback, unique domains (eTLD+1) visited within the time
+  // range [`begin_time`, `end_time`) for local and synced visits sorted in
+  // reverse-chronological order. Visits with an HTTP response code of 404 will
+  // be counted or ignored according to `policy_for_404_visits`.
+  virtual void GetUniqueDomainsVisited(
+      const base::Time begin_time,
+      const base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits,
+      GetUniqueDomainsVisitedCallback callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Gets all the app IDs used in the database entries. The callback will be
+  // invoked with a struct containing a vector of the IDs.
+  using GetAllAppIdsCallback = base::OnceCallback<void(GetAllAppIdsResult)>;
+
+  virtual void GetAllAppIds(GetAllAppIdsCallback callback,
+                            base::CancelableTaskTracker* tracker);
 
   using GetLastVisitCallback = base::OnceCallback<void(HistoryLastVisitResult)>;
 
   // Gets the last time any webpage on the given host was visited within the
   // time range [`begin_time`, `end_time`). If the given host has not been
   // visited in the given time range, the callback will be called with a null
-  // base::Time.
+  // `base::Time`. `policy_for_404_visits` determines whether a visit with an
+  // HTTP response code of 404 is counted as a visit; if set to `kExclude404s`,
+  // the callback will be called with the time of the most recent non-404 in the
+  // specified time range, or a null `base::Time` if there was none.
   virtual base::CancelableTaskTracker::TaskId GetLastVisitToHost(
       const std::string& host,
       base::Time begin_time,
       base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits,
       GetLastVisitCallback callback,
       base::CancelableTaskTracker* tracker);
 
-  // Same as the above, but for the given origin instead of host.
-  base::CancelableTaskTracker::TaskId GetLastVisitToOrigin(
+  // Same as the above, but for the given origin instead of host. Virtual for
+  // testing.
+  virtual base::CancelableTaskTracker::TaskId GetLastVisitToOrigin(
       const url::Origin& origin,
       base::Time begin_time,
       base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits,
       GetLastVisitCallback callback,
       base::CancelableTaskTracker* tracker);
 
-  // Gets the last time `url` was visited before `end_time`. If the given URL
-  // has not been visited in the past, the callback will be called with a null
-  // base::Time.
-  base::CancelableTaskTracker::TaskId GetLastVisitToURL(
-      const GURL& url,
-      base::Time end_time,
-      GetLastVisitCallback callback,
-      base::CancelableTaskTracker* tracker);
-
-  using GetDailyVisitsToHostCallback =
+  using GetDailyVisitsToOriginCallback =
       base::OnceCallback<void(DailyVisitsResult)>;
 
-  // TODO(crbug/1152592): Use this function.
+  // TODO(crbug.com/40158714): Use this function.
   // Gets counts for total visits and days visited for pages matching `host`'s
   // scheme, port, and host. Counts only user-visible visits (i.e. no redirects
   // or subframes) within the time range [`begin_time`, `end_time`).
-  // TODO(crbug.com/1229440): Rename this function to use origin instead of
-  // host.
-  base::CancelableTaskTracker::TaskId GetDailyVisitsToHost(
-      const GURL& host,
+  base::CancelableTaskTracker::TaskId GetDailyVisitsToOrigin(
+      const url::Origin& origin,
       base::Time begin_time,
       base::Time end_time,
-      GetDailyVisitsToHostCallback callback,
+      VisitQuery404sPolicy policy_for_404_visits,
+      GetDailyVisitsToOriginCallback callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Generic operations --------------------------------------------------------
+
+  // Returns the `URLRow` and most recent `VisitRow`s for `url`.
+  base::CancelableTaskTracker::TaskId GetMostRecentVisitsForGurl(
+      GURL url,
+      int max_visits,
+      VisitQuery404sPolicy policy_for_404_visits,
+      QueryURLAndVisitsCallback callback,
       base::CancelableTaskTracker* tracker);
 
   // Database management operations --------------------------------------------
@@ -446,8 +513,10 @@ class HistoryService : public KeyedService {
   // the expiration is complete. You may use null Time values to do an
   // unbounded delete in either direction.
   // If `restrict_urls` is not empty, only visits to the URLs in this set are
-  // removed.
+  // removed. Also, if `restrict_app_id` is present, only visits matching the
+  // passed app_id are removed.
   void ExpireHistoryBetween(const std::set<GURL>& restrict_urls,
+                            std::optional<std::string> restrict_app_id,
                             base::Time begin_time,
                             base::Time end_time,
                             bool user_initiated,
@@ -462,12 +531,6 @@ class HistoryService : public KeyedService {
                      base::OnceClosure callback,
                      base::CancelableTaskTracker* tracker);
 
-  // Expires all visits before and including the given time, updating the URLs
-  // accordingly.
-  void ExpireHistoryBeforeForTesting(base::Time end_time,
-                                     base::OnceClosure callback,
-                                     base::CancelableTaskTracker* tracker);
-
   // Mark all favicons as out of date that have been modified at or after
   // `begin` and before `end`. Calls `callback` when done.
   void SetFaviconsOutOfDateBetween(base::Time begin,
@@ -477,10 +540,12 @@ class HistoryService : public KeyedService {
 
   // Removes all visits to the given URLs in the specified time range. Calls
   // ExpireHistoryBetween() to delete local visits, and handles deletion of
-  // synced visits if appropriate.
+  // synced visits if appropriate. If app_id is present, restrict the visits
+  // to those matching the passed app_id only.
   void DeleteLocalAndRemoteHistoryBetween(WebHistoryService* web_history,
                                           base::Time begin_time,
                                           base::Time end_time,
+                                          std::optional<std::string> app_id,
                                           base::OnceClosure callback,
                                           base::CancelableTaskTracker* tracker);
 
@@ -566,16 +631,19 @@ class HistoryService : public KeyedService {
       VisitID visit_id,
       const VisitContextAnnotations& visit_context_annotations);
 
+  using GetAnnotatedVisitsCallback =
+      base::OnceCallback<void(std::vector<AnnotatedVisit>)>;
   // Gets a vector of reverse-chronological `AnnotatedVisit` instances based on
   // `options`. Uses the same de-duplication and visibility logic as
   // `HistoryService::QueryHistory()`.
   //
-  // If `limited_by_max_count` is non-nullptr, it will be set to true if the
-  // number of results was limited by `options.max_count`.
-  using GetAnnotatedVisitsCallback =
-      base::OnceCallback<void(std::vector<AnnotatedVisit>)>;
-  base::CancelableTaskTracker::TaskId GetAnnotatedVisits(
+  // If `compute_redirect_chain_start_properties` is true, the opener and
+  // referring visit IDs for the start of the redirect chain will be computed.
+  // Virtual for testing.
+  virtual base::CancelableTaskTracker::TaskId GetAnnotatedVisits(
       const QueryOptions& options,
+      bool compute_redirect_chain_start_properties,
+      bool get_unclustered_visits_only,
       GetAnnotatedVisitsCallback callback,
       base::CancelableTaskTracker* tracker) const;
 
@@ -587,14 +655,15 @@ class HistoryService : public KeyedService {
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
-  // Implemented and called by `ReserveNextClusterId()` below with the last
-  // cluster ID that was added to the database.
+  // Implemented and called by `ReserveNextClusterIdWithVisit()` below with the
+  // last cluster ID that was added to the database.
   using ClusterIdCallback = base::OnceCallback<void(int64_t)>;
 
-  // Adds a cluster with no visits and invokes `callback` with the ID of the
-  // new cluster.
-  // Virtual for testing.
-  virtual base::CancelableTaskTracker::TaskId ReserveNextClusterId(
+  // Adds a cluster with `cluster_visit` and invokes `callback` with the ID of
+  // the new cluster. It is expected for this to only be called for local
+  // visits. Virtual for testing.
+  virtual base::CancelableTaskTracker::TaskId ReserveNextClusterIdWithVisit(
+      const ClusterVisit& cluster_visit,
       base::OnceCallback<void(int64_t)> callback,
       base::CancelableTaskTracker* tracker);
 
@@ -603,6 +672,27 @@ class HistoryService : public KeyedService {
   virtual base::CancelableTaskTracker::TaskId AddVisitsToCluster(
       int64_t cluster_id,
       const std::vector<ClusterVisit>& visits,
+      base::OnceClosure callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Updates the triggerability attributes for `clusters`.
+  base::CancelableTaskTracker::TaskId UpdateClusterTriggerability(
+      const std::vector<history::Cluster>& clusters,
+      base::OnceClosure callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Sets scores of cluster visits to 0 to hide them from the webUI.
+  //  Virtual for testing.
+  virtual base::CancelableTaskTracker::TaskId HideVisits(
+      const std::vector<VisitID>& visit_ids,
+      base::OnceClosure callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Updates the details of the existing cluster visit that has the same visit
+  // ID as `new_cluster_visit`.
+  virtual base::CancelableTaskTracker::TaskId UpdateClusterVisit(
+      const history::ClusterVisit& new_cluster_visit,
+      base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
   // Get the most recent `Cluster`s within the constraints. The most recent
@@ -615,6 +705,7 @@ class HistoryService : public KeyedService {
       size_t max_clusters,
       size_t max_visits_soft_cap,
       base::OnceCallback<void(std::vector<Cluster>)> callback,
+      bool include_keywords_and_duplicates,
       base::CancelableTaskTracker* tracker);
 
   // Observers -----------------------------------------------------------------
@@ -625,12 +716,27 @@ class HistoryService : public KeyedService {
 
   // Generic Stuff -------------------------------------------------------------
 
+  // Tells the `HistoryBackend` whether or not foreign history should be
+  // added to segments data.
+  void SetCanAddForeignVisitsToSegmentsOnBackend(bool add_foreign_visits);
+
+  // syncer::DeviceInfoTracker::Observer overrides.
+  void OnDeviceInfoChange() override;
+
   // Schedules a HistoryDBTask for running on the history backend. See
   // HistoryDBTask for details on what this does. Takes ownership of `task`.
   virtual base::CancelableTaskTracker::TaskId ScheduleDBTask(
       const base::Location& from_here,
       std::unique_ptr<HistoryDBTask> task,
       base::CancelableTaskTracker* tracker);
+
+  // Called by the HistoryURLProvider class to schedule an autocomplete, or by
+  // the HistoryEmbeddingsService to fill in details for user searches. The
+  // `callback` will be called with the history database so it can query.
+  // See history_url_provider.h for a diagram. This is similar to above
+  // `ScheduleDBTask` but uses a callback instead of interface inheritance.
+  void ScheduleDBTaskForUI(
+      base::OnceCallback<void(HistoryBackend*, URLDatabase*)> callback);
 
   // Callback for when favicon data changes. Contains a std::set of page URLs
   // (e.g. http://www.google.com) for which the favicon data has changed and the
@@ -685,6 +791,8 @@ class HistoryService : public KeyedService {
   // The same as AddPageWithDetails() but takes a vector.
   void AddPagesWithDetails(const URLRows& info, VisitSource visit_source);
 
+  base::SafeRef<HistoryService> AsSafeRef();
+
   base::WeakPtr<HistoryService> AsWeakPtr();
 
   // For sync codebase only: returns the SyncableService API that implements
@@ -692,13 +800,8 @@ class HistoryService : public KeyedService {
   base::WeakPtr<syncer::SyncableService> GetDeleteDirectivesSyncableService();
 
   // For sync codebase only: instantiates a controller delegate to interact with
-  // TypedURLSyncBridge. Must be called from the UI thread.
-  std::unique_ptr<syncer::ModelTypeControllerDelegate>
-  GetTypedURLSyncControllerDelegate();
-
-  // For sync codebase only: instantiates a controller delegate to interact with
   // HistorySyncBridge. Must be called from the UI thread.
-  std::unique_ptr<syncer::ModelTypeControllerDelegate>
+  std::unique_ptr<syncer::DataTypeControllerDelegate>
   GetHistorySyncControllerDelegate();
 
   // Sends the SyncService's TransportState `state` to the backend, which will
@@ -711,10 +814,6 @@ class HistoryService : public KeyedService {
       scoped_refptr<base::SequencedTaskRunner> task_runner) {
     DCHECK(!backend_task_runner_);
     backend_task_runner_ = std::move(task_runner);
-  }
-
-  void set_origin_queried_closure_for_testing(base::OnceClosure closure) {
-    origin_queried_closure_for_testing_ = std::move(closure);
   }
 
  protected:
@@ -735,12 +834,12 @@ class HistoryService : public KeyedService {
   friend class HistoryQueryTest;
   friend class ::HistoryQuickProviderTest;
   friend class HistoryServiceTest;
-  friend class ::HistoryURLProvider;
   friend class HQPPerfTestOnePopularURL;
   friend class ::InMemoryURLIndexTest;
   friend std::unique_ptr<HistoryService> CreateHistoryService(
       const base::FilePath& history_dir,
       bool create_db);
+  FRIEND_TEST_ALL_PREFIXES(OrderingHistoryServiceTest, EnsureCorrectOrder);
 
   // Called on shutdown, this will tell the history backend to complete and
   // will release pointers to it. No other functions should be called once
@@ -757,22 +856,27 @@ class HistoryService : public KeyedService {
   // that is only set by unittests which causes the backend to not init its DB.
   bool Init(bool no_db, const HistoryDatabaseParams& history_database_params);
 
-  // Called by the HistoryURLProvider class to schedule an autocomplete, it will
-  // be called back with the history database so it can query. See
-  // history_url_provider.h for a diagram.
-  void ScheduleAutocomplete(
-      base::OnceCallback<void(HistoryBackend*, URLDatabase*)> callback);
-
   // Notification from the backend that it has finished loading. Sends
   // notification (NOTIFY_HISTORY_LOADED) and sets backend_loaded_ to true.
   void OnDBLoaded();
 
+  // Generic Stuff -------------------------------------------------------------
+
+  // Sets the history backend's local device Originator Cache GUID.
+  void SendLocalDeviceOriginatorCacheGuidToBackend();
+
   // Observers ----------------------------------------------------------------
 
-  // Notify all HistoryServiceObservers registered that there's a `new_visit`
-  // for `url_row`. This happens when the user visited the URL on this machine,
-  // or if Sync has brought over a remote visit onto this device.
-  void NotifyURLVisited(const URLRow& url_row, const VisitRow& new_visit);
+  // Notify all HistoryServiceObservers registered that there's a new visit.
+  // `visited_url_info` contains all the necessary information about
+  // the visit, including the url row, visit row, navigation ID, and response
+  // code category. This happens when the user visited the URL on this machine,
+  // or if Sync has brought over a remote visit onto this device. The
+  // `local_navigation_id` member of `visited_url_info` will contain the unique
+  // navigation id from `content::NavigationHandle` and will be populated only
+  // during local visits. The `reponse_code_category` member will indicate
+  // whether or not the visit had a 404 response.
+  void NotifyURLVisited(const VisitedURLInfo& visited_url_info);
 
   // Notify all HistoryServiceObservers registered that URLs have been added or
   // modified. `changed_urls` contains the list of affects URLs.
@@ -780,7 +884,17 @@ class HistoryService : public KeyedService {
 
   // Notify all HistoryServiceObservers registered that URLs have been deleted.
   // `deletion_info` describes the urls that have been removed from history.
-  void NotifyURLsDeleted(const DeletionInfo& deletion_info);
+  void NotifyDeletions(const DeletionInfo& deletion_info);
+
+  // A helper function which alerts `visit_delegate_` of partitioned visited
+  // links that should be added to the PartitionedVisitedLink hashtable. Links
+  // will not be added if they do not contain valid values for the
+  // triple-partition key: <link url, top-level site, frame origin>.
+  void AddPartitionedVisitedLinks(const HistoryAddPageArgs& args);
+
+  // Notify the `visit_delegate_` of partitioned visited links that have been
+  // deleted from the VisitedLinkDatabase.
+  void NotifyVisitedLinksDeleted(const std::vector<DeletedVisitedLink>& links);
 
   // Notify all HistoryServiceObservers registered that the
   // HistoryService has finished loading.
@@ -1007,7 +1121,14 @@ class HistoryService : public KeyedService {
   // HistoryClient::GetCanAddURLCallback().
   bool CanAddURL(const GURL& url);
 
+  // A helper function that records UMA metrics on the PageTransition type of
+  // each visit added to the VisitedLinks hashtable.
+  void LogTransitionMetricsForVisit(ui::PageTransition transition);
+
   SEQUENCE_CHECKER(sequence_checker_);
+
+  // The directory containing the History databases.
+  base::FilePath history_dir_;
 
   // The TaskRunner to which HistoryBackend tasks are posted. Nullptr once
   // Cleanup() is called.
@@ -1035,14 +1156,25 @@ class HistoryService : public KeyedService {
 
   // Has the backend finished loading? The backend is loaded once Init has
   // completed.
-  bool backend_loaded_;
+  bool backend_loaded_ = false;
 
   base::ObserverList<HistoryServiceObserver>::Unchecked observers_;
   FaviconsChangedCallbackList favicons_changed_callback_list_;
 
   std::unique_ptr<DeleteDirectiveHandler> delete_directive_handler_;
 
-  base::OnceClosure origin_queried_closure_for_testing_;
+  raw_ptr<syncer::DeviceInfoTracker> device_info_tracker_ = nullptr;
+
+  base::ScopedObservation<syncer::DeviceInfoTracker,
+                          syncer::DeviceInfoTracker::Observer>
+      device_info_tracker_observation_{this};
+
+  // Subscription for change notifications to local device information; notifies
+  // when local device information becomes available.
+  base::CallbackListSubscription local_device_info_available_subscription_;
+
+  raw_ptr<syncer::LocalDeviceInfoProvider> local_device_info_provider_ =
+      nullptr;
 
   // All vended weak pointers are invalidated in Cleanup().
   base::WeakPtrFactory<HistoryService> weak_ptr_factory_{this};

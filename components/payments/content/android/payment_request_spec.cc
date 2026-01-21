@@ -10,19 +10,21 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "components/payments/content/android/byte_buffer_helper.h"
-#include "components/payments/content/android/jni_headers/PaymentRequestSpec_jni.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/minimal_jni/PaymentRequestSpec_jni.h"
 
 namespace payments {
 namespace android {
 
 // static
-jlong JNI_PaymentRequestSpec_Create(
+static int64_t JNI_PaymentRequestSpec_Create(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& joptions_byte_buffer,
-    const base::android::JavaParamRef<jobject>& jdetails_byte_buffer,
-    const base::android::JavaParamRef<jobjectArray>& jmethod_data_byte_buffers,
-    const base::android::JavaParamRef<jstring>& japp_locale) {
+    const base::android::JavaRef<jobject>& joptions_byte_buffer,
+    const base::android::JavaRef<jobject>& jdetails_byte_buffer,
+    const base::android::JavaRef<jobjectArray>& jmethod_data_byte_buffers,
+    const base::android::JavaRef<jstring>& japp_locale) {
   mojom::PaymentOptionsPtr options;
   bool success =
       DeserializeFromJavaByteBuffer(env, joptions_byte_buffer, &options);
@@ -48,7 +50,7 @@ jlong JNI_PaymentRequestSpec_Create(
 base::WeakPtr<payments::PaymentRequestSpec>
 PaymentRequestSpec::FromJavaPaymentRequestSpec(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jpayment_request_spec) {
+    const base::android::JavaRef<jobject>& jpayment_request_spec) {
   return reinterpret_cast<PaymentRequestSpec*>(
              Java_PaymentRequestSpec_getNativePointer(env,
                                                       jpayment_request_spec))
@@ -61,7 +63,7 @@ PaymentRequestSpec::PaymentRequestSpec(
 
 void PaymentRequestSpec::UpdateWith(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jdetails_byte_buffer) {
+    const base::android::JavaRef<jobject>& jdetails_byte_buffer) {
   mojom::PaymentDetailsPtr details;
   bool success =
       DeserializeFromJavaByteBuffer(env, jdetails_byte_buffer, &details);
@@ -72,7 +74,7 @@ void PaymentRequestSpec::UpdateWith(
 
 void PaymentRequestSpec::Retry(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jvalidation_errors_buffer) {
+    const base::android::JavaRef<jobject>& jvalidation_errors_buffer) {
   mojom::PaymentValidationErrorsPtr validation_errors;
   bool success = DeserializeFromJavaByteBuffer(env, jvalidation_errors_buffer,
                                                &validation_errors);
@@ -120,3 +122,5 @@ PaymentRequestSpec::~PaymentRequestSpec() = default;
 
 }  // namespace android
 }  // namespace payments
+
+DEFINE_JNI(PaymentRequestSpec)

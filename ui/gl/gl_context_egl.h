@@ -25,8 +25,8 @@ class GL_EXPORT GLContextEGL : public GLContextReal {
   GLContextEGL& operator=(const GLContextEGL&) = delete;
 
   // Implement GLContext.
-  bool Initialize(GLSurface* compatible_surface,
-                  const GLContextAttribs& attribs) override;
+  bool InitializeImpl(GLSurface* compatible_surface,
+                      const GLContextAttribs& attribs) override;
   bool MakeCurrentImpl(GLSurface* surface) override;
   void ReleaseCurrent(GLSurface* surface) override;
   bool IsCurrent(GLSurface* surface) override;
@@ -35,13 +35,14 @@ class GL_EXPORT GLContextEGL : public GLContextReal {
   void SetUnbindFboOnMakeCurrent() override;
   void SetVisibility(bool visibility) override;
   GLDisplayEGL* GetGLDisplayEGL() override;
+  GLContextEGL* AsGLContextEGL() override;
+  bool CanShareTexturesWithContext(GLContext* other_context) override;
 
  protected:
   ~GLContextEGL() override;
 
  private:
   void Destroy();
-  void ReleaseBackpressureFences();
 
   EGLContext context_ = nullptr;
   raw_ptr<GLDisplayEGL> gl_display_ = nullptr;
@@ -49,6 +50,11 @@ class GL_EXPORT GLContextEGL : public GLContextReal {
   unsigned int graphics_reset_status_ = 0;  // GL_NO_ERROR;
   bool unbind_fbo_on_makecurrent_ = false;
   bool lost_ = false;
+
+  // Cached values used by |CanShareTexturesWithContext|.
+  bool global_texture_share_group_ = false;
+  AngleContextVirtualizationGroup angle_context_virtualization_group_number_ =
+      AngleContextVirtualizationGroup::kDefault;
 };
 
 }  // namespace gl

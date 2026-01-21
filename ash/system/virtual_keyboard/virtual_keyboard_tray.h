@@ -11,6 +11,7 @@
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/shell_observer.h"
 #include "ash/system/tray/tray_background_view.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
 namespace views {
@@ -24,9 +25,9 @@ class VirtualKeyboardTray : public TrayBackgroundView,
                             public AccessibilityObserver,
                             public KeyboardControllerObserver,
                             public ShellObserver {
- public:
-  METADATA_HEADER(VirtualKeyboardTray);
+  METADATA_HEADER(VirtualKeyboardTray, TrayBackgroundView)
 
+ public:
   VirtualKeyboardTray(Shelf* shelf, TrayBackgroundViewCatalogName catalog_name);
   VirtualKeyboardTray(const VirtualKeyboardTray&) = delete;
   VirtualKeyboardTray& operator=(const VirtualKeyboardTray&) = delete;
@@ -37,10 +38,11 @@ class VirtualKeyboardTray : public TrayBackgroundView,
 
   // TrayBackgroundView:
   void Initialize() override;
-  std::u16string GetAccessibleNameForTray() override;
   void HandleLocaleChange() override;
   void HideBubbleWithView(const TrayBubbleView* bubble_view) override;
-  void ClickedOutsideBubble() override;
+  void ClickedOutsideBubble(const ui::LocatedEvent& event) override;
+  void UpdateTrayItemColor(bool is_active) override;
+  void HideBubble(const TrayBubbleView* bubble_view) override;
 
   // AccessibilityObserver:
   void OnAccessibilityStatusChanged() override;
@@ -50,10 +52,10 @@ class VirtualKeyboardTray : public TrayBackgroundView,
 
  private:
   // Owned by the views hierarchy.
-  views::ImageView* icon_ = nullptr;
+  raw_ptr<views::ImageView> icon_ = nullptr;
 
   // Unowned.
-  Shelf* const shelf_;
+  const raw_ptr<Shelf> shelf_;
 };
 
 }  // namespace ash

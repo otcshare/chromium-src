@@ -11,9 +11,8 @@
 #include "android_webview/browser/safe_browsing/aw_url_checker_delegate_impl.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
 #include "base/containers/id_map.h"
-#include "base/supports_user_data.h"
+#include "base/functional/callback.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/javascript_dialog_manager.h"
@@ -41,6 +40,7 @@ namespace android_webview {
 // indirect refs from the Application (via callbacks) and so can outlive
 // webview, this class notifies it before being destroyed and to nullify
 // any references.
+// Lifetime: WebView
 class AwContentsClientBridge {
  public:
   // Used to package up information needed by OnReceivedHttpError for transfer
@@ -98,6 +98,7 @@ class AwContentsClientBridge {
                                 bool has_user_gesture,
                                 bool is_redirect,
                                 bool is_outermost_main_frame,
+                                const net::HttpRequestHeaders& request_headers,
                                 bool* ignore_navigation);
 
   bool SendBrowseIntent(const std::u16string& url);
@@ -135,24 +136,16 @@ class AwContentsClientBridge {
       const net::HttpResponseHeaders* response_headers);
 
   // Methods called from Java.
-  void ProceedSslError(JNIEnv* env,
-                       const base::android::JavaRef<jobject>& obj,
-                       jboolean proceed,
-                       jint id);
+  void ProceedSslError(JNIEnv* env, bool proceed, int32_t id);
   void ProvideClientCertificateResponse(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& object,
-      jint request_id,
+      int32_t request_id,
       const base::android::JavaRef<jobjectArray>& encoded_chain_ref,
       const base::android::JavaRef<jobject>& private_key_ref);
-  void ConfirmJsResult(JNIEnv*,
-                       const base::android::JavaRef<jobject>&,
-                       int id,
-                       const base::android::JavaRef<jstring>& prompt);
-  void CancelJsResult(JNIEnv*, const base::android::JavaRef<jobject>&, int id);
+  void ConfirmJsResult(JNIEnv*, int id, std::optional<std::u16string> prompt);
+  void CancelJsResult(JNIEnv*, int id);
 
   void TakeSafeBrowsingAction(JNIEnv*,
-                              const base::android::JavaRef<jobject>&,
                               int action,
                               bool reporting,
                               int request_id);

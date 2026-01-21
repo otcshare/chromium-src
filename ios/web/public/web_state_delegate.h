@@ -5,12 +5,15 @@
 #ifndef IOS_WEB_PUBLIC_WEB_STATE_DELEGATE_H_
 #define IOS_WEB_PUBLIC_WEB_STATE_DELEGATE_H_
 
-#include <set>
-
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#include "base/callback.h"
+#include <set>
+
+#include "base/functional/callback.h"
+#include "build/blink_buildflags.h"
+#import "ios/web/public/navigation/form_warning_type.h"
+#import "ios/web/public/permissions/permissions.h"
 #import "ios/web/public/web_state.h"
 
 @protocol CRWResponderInputView;
@@ -51,25 +54,46 @@ class WebStateDelegate {
   // method is not implemented then WebState will repost the form.
   virtual void ShowRepostFormWarningDialog(
       WebState* source,
+      FormWarningType warning_type,
       base::OnceCallback<void(bool)> callback);
+
+  // Called when a copy operation is initiated. The delegate must call
+  // `callback` with `true` to allow the copy or `false` to prevent it.
+  // By default, copy is allowed.
+  virtual void ShouldAllowCopy(WebState* source,
+                               base::OnceCallback<void(bool)> callback);
+
+  // Called when a paste operation is initiated. The delegate must call
+  // `callback` with `true` to allow the paste or `false` to prevent it.
+  // By default, paste is allowed.
+  virtual void ShouldAllowPaste(WebState* source,
+                                base::OnceCallback<void(bool)> callback);
+
+  // Called when a cut operation is initiated. The delegate must call
+  // `callback` with `true` to allow the cut or `false` to prevent it.
+  // By default, cut is allowed.
+  virtual void ShouldAllowCut(WebState* source,
+                              base::OnceCallback<void(bool)> callback);
+
+  // Called after the user or a script pasted content into the page.
+  virtual void DidFinishClipboardRead(WebState* source);
 
   // Returns a pointer to a service to manage dialogs. May return nullptr in
   // which case dialogs aren't shown.
-  // TODO(crbug.com/622084): Find better place for this method.
+  // TODO(crbug.com/40473860): Find better place for this method.
   virtual JavaScriptDialogPresenter* GetJavaScriptDialogPresenter(
       WebState* source);
 
-  // Returns whether the delegate is able to handle requests the user's
-  // permission to access `web::Permission`.
+  // Called when web resource requests the user's permission to access
+  // `web::Permission`.
   //
-  // If returned `true`, the delegate must use the `handler` function to answer
-  // to the permissions access request; otherwise, the delegate must NOT use the
-  // handler.
-  typedef void (^WebStatePermissionDecisionHandler)(BOOL allow);
-  virtual bool HandlePermissionsDecisionRequest(
+  // The delegate should use the `handler` function to answer to the request to
+  // grant, deny media permissions or show the default prompt that asks for
+  // permissions.
+  virtual void HandlePermissionsDecisionRequest(
       WebState* source,
       NSArray<NSNumber*>* permissions,
-      WebStatePermissionDecisionHandler handler) API_AVAILABLE(ios(15.0));
+      WebStatePermissionDecisionHandler handler);
 
   // Called when a request receives an authentication challenge specified by
   // `protection_space`, and is unable to respond using cached credentials.
@@ -80,7 +104,7 @@ class WebStateDelegate {
   virtual void OnAuthRequired(WebState* source,
                               NSURLProtectionSpace* protection_space,
                               NSURLCredential* proposed_credential,
-                              AuthCallback callback) = 0;
+                              AuthCallback callback);
 
   // Returns the UIView used to contain the WebView for sizing purposes. Can be
   // nil.
@@ -102,11 +126,18 @@ class WebStateDelegate {
   // more info.
   virtual id<CRWResponderInputView> GetResponderInputView(WebState* source);
 
+  // Provides an opportunity to the delegate to react to the creation of the web
+  // view.
+  virtual void OnNewWebViewCreated(WebState* source);
+
  protected:
   virtual ~WebStateDelegate();
 
  private:
   friend class WebStateImpl;
+#if BUILDFLAG(USE_BLINK)
+  friend class ContentWebState;
+#endif
 
   // Called when `this` becomes the WebStateDelegate for `source`.
   void Attach(WebState* source);

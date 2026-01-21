@@ -2,22 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/api/declarative_net_request/indexed_rule.h"
+
+#include <fuzzer/FuzzedDataProvider.h>
 #include <stdint.h>
 
-#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include <fuzzer/FuzzedDataProvider.h>
-
 #include "base/check.h"
 #include "base/json/json_reader.h"
-#include "base/strings/string_piece.h"
+#include "base/types/expected.h"
 #include "base/values.h"
-#include "extensions/browser/api/declarative_net_request/indexed_rule.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 using extensions::api::declarative_net_request::Rule;
@@ -28,22 +27,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   FuzzedDataProvider provider(data, size);
 
   // Make a random `Rule`.
-  absl::optional<base::Value> value =
-      base::JSONReader::Read(provider.ConsumeRandomLengthString());
-  if (!value || !value->is_dict())
-    return 0;
-  std::u16string error;
-  std::unique_ptr<Rule> rule = Rule::FromValue(*value, &error);
-  if (!rule) {
-    CHECK(!error.empty());
+  std::optional<base::Value> value =
+      base::JSONReader::Read(provider.ConsumeRandomLengthString(),
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value || !value->is_dict()) {
     return 0;
   }
-  CHECK(error.empty());
+  base::expected<Rule, std::u16string> rule = Rule::FromValue(value->GetDict());
+  if (!rule.has_value()) {
+    return 0;
+  }
 
   // Make a random `GURL`.
   const GURL url(provider.ConsumeRandomLengthString());
-  if (!url.is_valid())
+  if (!url.is_valid()) {
     return 0;
+  }
 
   // Make a random `RulesetID`.
   const RulesetID ruleset_id(provider.ConsumeIntegralInRange<int>(-1, 100));

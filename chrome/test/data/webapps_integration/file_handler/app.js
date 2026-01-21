@@ -3,10 +3,6 @@
 // found in the LICENSE file.
 
 
-const openedFilesContainer = document.getElementById(
-  "opened-files-container"
-);
-
 const makeFileViewer = async (launchFile) => {
   const readHandle = await launchFile.getFile();
 
@@ -28,18 +24,21 @@ const makeFileViewer = async (launchFile) => {
   return element;
 };
 
-var resolveLaunchFinished;
-
-var launchFinishedPromise = new Promise(resolve => {
+var launchFinishedPromise = new Promise((resolve, reject) => {
+  window.addEventListener("load", () => {
     window.launchQueue.setConsumer(async (launchParams) => {
       console.log("Launched with: ", launchParams);
       const viewersContainer = document.getElementById("viewers-container");
       if (!launchParams.files.length) {
         viewersContainer.innerText =
           "Oh poo, no files. Consider granting the permission next time!";
+        reject(new Error('No files found in launchParams.'));
         return;
       }
 
+      const openedFilesContainer = document.getElementById(
+        "opened-files-container"
+      );
       for (const launchFile of launchParams.files) {
         const editor = await makeFileViewer(launchFile);
         openedFilesContainer.appendChild(editor);
@@ -51,5 +50,6 @@ var launchFinishedPromise = new Promise(resolve => {
         results.push(fileContent.value);
       }
       resolve(results);
-    })
+    });
   });
+});

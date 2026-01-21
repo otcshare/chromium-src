@@ -7,6 +7,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/singleton.h"
 #include "base/synchronization/lock.h"
@@ -33,7 +34,7 @@ namespace device {
 class LocationApiAdapterAndroid {
  public:
   using OnGeopositionCB =
-      base::RepeatingCallback<void(const mojom::Geoposition&)>;
+      base::RepeatingCallback<void(mojom::GeopositionResultPtr)>;
 
   // Starts the underlying location provider.
   // Called on |task_runner_|.
@@ -53,8 +54,11 @@ class LocationApiAdapterAndroid {
                                      bool has_heading,
                                      double heading,
                                      bool has_speed,
-                                     double speed);
-  static void OnNewErrorAvailable(JNIEnv* env, jstring message);
+                                     double speed,
+                                     bool is_precise);
+  static void OnNewErrorAvailable(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& message);
 
   // Returns our singleton.
   static LocationApiAdapterAndroid* GetInstance();
@@ -65,7 +69,7 @@ class LocationApiAdapterAndroid {
   ~LocationApiAdapterAndroid();
 
   // Calls |on_geoposition_callback_| with the new location.
-  void NotifyNewGeoposition(const mojom::Geoposition& geoposition);
+  void NotifyNewGeoposition(mojom::GeopositionResultPtr result);
 
   base::android::ScopedJavaGlobalRef<jobject> java_location_provider_adapter_;
 

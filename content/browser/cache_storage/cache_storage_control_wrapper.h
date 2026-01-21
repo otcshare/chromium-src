@@ -7,6 +7,8 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/mojom/cache_storage_control.mojom.h"
 #include "content/browser/cache_storage/cache_storage_context_impl.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -45,13 +47,12 @@ class CacheStorageControlWrapper : public storage::mojom::CacheStorageControl {
       const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
           coep_reporter_remote,
+      const network::DocumentIsolationPolicy& document_isolation_policy,
+      mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+          dip_reporter_remote,
       const storage::BucketLocator& bucket,
       storage::mojom::CacheStorageOwner owner,
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) override;
-  void DeleteForStorageKey(const blink::StorageKey& storage_key) override;
-  void GetAllStorageKeysInfo(
-      storage::mojom::CacheStorageControl::GetAllStorageKeysInfoCallback
-          callback) override;
   void AddObserver(mojo::PendingRemote<storage::mojom::CacheStorageObserver>
                        observer) override;
   void ApplyPolicyUpdates(std::vector<storage::mojom::StoragePolicyUpdatePtr>
@@ -60,7 +61,7 @@ class CacheStorageControlWrapper : public storage::mojom::CacheStorageControl {
  private:
   SEQUENCE_CHECKER(sequence_checker_);
 
-  absl::optional<storage::StoragePolicyObserver> storage_policy_observer_;
+  std::optional<storage::StoragePolicyObserver> storage_policy_observer_;
 
   base::SequenceBound<CacheStorageContextImpl> cache_storage_context_;
   mojo::Remote<storage::mojom::CacheStorageControl> cache_storage_control_;

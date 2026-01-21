@@ -18,19 +18,6 @@ namespace blink {
 
 struct MatchedProperties;
 
-inline uint32_t EncodeMatchResultPosition(uint16_t block,
-                                          uint16_t declaration) {
-  return (static_cast<uint32_t>(block) << 16) | declaration;
-}
-
-inline wtf_size_t DecodeMatchedPropertiesIndex(uint32_t position) {
-  return (position >> 16) & 0xFFFF;
-}
-
-inline wtf_size_t DecodeDeclarationIndex(uint32_t position) {
-  return position & 0xFFFF;
-}
-
 // Used by the -inl.h file.
 CORE_EXPORT CascadeFilter
 CreateExpansionFilter(const MatchedProperties& matched_properties);
@@ -72,12 +59,14 @@ constexpr wtf_size_t kMaxMatchedPropertiesIndex =
 // Usage:
 //
 //   ExpandCascade(..., [](CascadePriority cascade_priority,
-//                         const CSSProperty& css_property,
-//                         const CSSPropertyName& name,
-//                         const CSSValue&
-//                         css_value, uint16_t tree_order) {
-//                           DoStuff(...)
-//                         }
+//                         const AtomicString& name) {
+//                           DoStuffWithCustomProperty(...)
+//                         },
+//                      [](CascadePriority cascade_priority,
+//                         CSSPropertyID id) {
+//                           DoStuffWithRegularProperty(...)
+//                         });
+//
 //
 // The css_property and name references are not guaranteed to live past the end
 // of the callback. The name is guaranteed to be identical to
@@ -86,11 +75,13 @@ constexpr wtf_size_t kMaxMatchedPropertiesIndex =
 //
 // The implementation is in cascade_expansion-inl.h, which you will need to
 // include if you use this function.
-template <class Callback>
+
+template <class CustomPropertyCallback, class RegularPropertyCallback>
 void ExpandCascade(const MatchedProperties& matched_properties,
                    const Document& document,
                    wtf_size_t matched_properties_index,
-                   Callback&& callback);
+                   CustomPropertyCallback&& custom_property_callback,
+                   RegularPropertyCallback&& regular_property_callback);
 
 }  // namespace blink
 

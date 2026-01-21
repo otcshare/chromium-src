@@ -2,21 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
-#include "chrome/browser/favicon/favicon_utils.h"
-#include "chrome/browser/ui/bookmarks/bookmark_drag_drop.h"
-
-#include "base/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/current_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
+#include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmark_drag_drop.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -25,13 +26,13 @@
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
-#include "components/bookmarks/browser/bookmark_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -102,14 +103,13 @@ class BookmarkDragImageSource : public gfx::CanvasImageSource {
                        cc::PaintFlags paint_flags,
                        gfx::Canvas* canvas) {
     // Draw bookmark count if more than 1 bookmark is dragged.
-    std::u16string count = base::NumberToString16(count_);
     std::unique_ptr<gfx::RenderText> render_text =
         gfx::RenderText::CreateRenderText();
     render_text->SetFontList(font_list);
     render_text->SetCursorEnabled(false);
     render_text->SetColor(
         color_provider_->GetColor(kColorBookmarkDragImageCountForeground));
-    render_text->SetText(count);
+    render_text->SetText(base::NumberToString16(count_));
     render_text->SetHorizontalAlignment(gfx::ALIGN_CENTER);
 
     // We measure the count text size to determine container width, as the
@@ -158,8 +158,8 @@ class BookmarkDragImageSource : public gfx::CanvasImageSource {
         kContainerRadius + kIconContainerRadius - kIconSize / 2);
 
     // Draw bookmark title.
-    gfx::FontList font_list = views::style::GetFont(
-        views::style::CONTEXT_LABEL, views::style::STYLE_PRIMARY);
+    gfx::FontList font_list = views::TypographyProvider::Get().GetFont(
+        views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4_EMPHASIS);
     gfx::Rect text_rect(kBookmarkDragImageSize);
     text_rect.Inset(gfx::Insets::TLBR(
         kCountContainerRadius,
@@ -229,8 +229,11 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
     bookmark_drag_data.Write(profile->GetPath(), drag_data_.get());
 
     operation_ = ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK;
-    if (bookmarks::CanAllBeEditedByUser(model_->client(), params.nodes))
+    if (chrome::CanAllBeEditedByUser(
+            ManagedBookmarkServiceFactory::GetForProfile(profile),
+            params.nodes)) {
       operation_ |= ui::DragDropTypes::DRAG_MOVE;
+    }
   }
 
   void Start(const BookmarkNode* drag_node) {
@@ -244,8 +247,9 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
       // BookmarkNodeFaviconChanged() will never be called (e.g unfortunate
       // bookmark deletion timing) and we intentionally leak at most one request
       // in these cases which will clean up next drag.
-      if (!drag_node->is_favicon_loaded())
+      if (!drag_node->is_favicon_loaded()) {
         return;
+      }
 
       icon = ui::ImageModel::FromImage(image);
     } else {
@@ -258,14 +262,20 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
 
   void OnBookmarkIconLoaded(const BookmarkNode* drag_node,
                             const ui::ImageModel& icon) {
+    // This function should not be called a second time, even if the icon
+    // changes repeatedly.
+    DCHECK(!icon_loaded_);
+    icon_loaded_ = true;
+
     auto weak_this = GetWeakPtr();
     if (web_contents_) {
       const auto& color_provider = web_contents_->GetColorProvider();
       gfx::ImageSkia drag_image(
           std::make_unique<BookmarkDragImageSource>(
               color_provider, drag_node->GetTitle(),
-              icon.IsEmpty() ? favicon::GetDefaultFavicon().AsImageSkia()
-                             : icon.Rasterize(&color_provider),
+              icon.IsEmpty()
+                  ? favicon::GetDefaultFaviconModel().Rasterize(&color_provider)
+                  : icon.Rasterize(&color_provider),
               count_),
           BookmarkDragImageSource::kBookmarkDragImageSize);
 
@@ -281,8 +291,9 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
 
     // The Run() call above could have spun a nested message loop resulting in
     // our deletion.  Be sure to avoid double-free.
-    if (weak_this)
+    if (weak_this) {
       delete this;
+    }
   }
 
   base::WeakPtr<BookmarkDragHelper> GetWeakPtr() {
@@ -292,12 +303,12 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
   // bookmarks::BaseBookmarkModelObserver overrides:
   void BookmarkModelChanged() override {}
 
-  void BookmarkModelBeingDeleted(BookmarkModel* model) override { delete this; }
+  void BookmarkModelBeingDeleted() override { delete this; }
 
-  void BookmarkNodeFaviconChanged(BookmarkModel* model,
-                                  const BookmarkNode* node) override {
-    if (node->id() != drag_node_id_)
+  void BookmarkNodeFaviconChanged(const BookmarkNode* node) override {
+    if (icon_loaded_ || node->id() != drag_node_id_) {
       return;
+    }
 
     const ui::ImageModel& image =
         ui::ImageModel::FromImage(model_->GetFavicon(node));
@@ -314,6 +325,7 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
   ui::mojom::DragEventSource source_;
   const gfx::Point start_point_;
   int operation_;
+  bool icon_loaded_ = false;
 
   DoBookmarkDragCallback do_drag_callback_;
 
@@ -349,8 +361,9 @@ void DragBookmarksImpl(Profile* profile,
                        DoBookmarkDragCallback do_drag_callback) {
   DCHECK(!params.nodes.empty());
   static base::NoDestructor<base::WeakPtr<BookmarkDragHelper>> g_drag_helper;
-  if (*g_drag_helper)
+  if (*g_drag_helper) {
     delete g_drag_helper->get();
+  }
 
   DCHECK(!*g_drag_helper);
 

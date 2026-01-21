@@ -4,17 +4,24 @@
 
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "components/crx_file/id_util.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/test/test_navigation_observer.h"
+#include "extensions/browser/browsertest_util.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/test/test_extension_dir.h"
@@ -43,7 +50,7 @@ ExtensionsToolbarUITest::LoadTestExtension(const std::string& path,
 
   // Loading an extension can result in the container changing visibility.
   // Allow it to finish laying out appropriately.
-  auto* container = GetExtensionsToolbarContainer();
+  auto* container = GetExtensionsToolbarDesktop();
   container->GetWidget()->LayoutRootViewIfNecessary();
   return extension;
 }
@@ -51,12 +58,12 @@ ExtensionsToolbarUITest::LoadTestExtension(const std::string& path,
 scoped_refptr<const extensions::Extension>
 ExtensionsToolbarUITest::ForceInstallExtension(const std::string& name) {
   scoped_refptr<const extensions::Extension> extension =
-      extensions::ExtensionBuilder("extension")
+      extensions::ExtensionBuilder(name)
           .SetLocation(extensions::mojom::ManifestLocation::kExternalPolicy)
+          .SetID(crx_file::id_util::GenerateId(name))
           .Build();
-  extensions::ExtensionSystem::Get(browser()->profile())
-      ->extension_service()
-      ->AddExtension(extension.get());
+  extensions::ExtensionRegistrar::Get(browser()->profile())
+      ->AddExtension(extension);
   return extension;
 }
 
@@ -120,10 +127,9 @@ void ExtensionsToolbarUITest::AppendExtension(
 
 void ExtensionsToolbarUITest::DisableExtension(
     const extensions::ExtensionId& extension_id) {
-  extensions::ExtensionSystem::Get(browser()->profile())
-      ->extension_service()
+  extensions::ExtensionRegistrar::Get(browser()->profile())
       ->DisableExtension(extension_id,
-                         extensions::disable_reason::DISABLE_USER_ACTION);
+                         {extensions::disable_reason::DISABLE_USER_ACTION});
 }
 
 void ExtensionsToolbarUITest::SetUpIncognitoBrowser() {
@@ -133,20 +139,18 @@ void ExtensionsToolbarUITest::SetUpIncognitoBrowser() {
 void ExtensionsToolbarUITest::SetUpOnMainThread() {
   DialogBrowserTest::SetUpOnMainThread();
   host_resolver()->AddRule("*", "127.0.0.1");
-  views::test::ReduceAnimationDuration(GetExtensionsToolbarContainer());
+  views::test::ReduceAnimationDuration(GetExtensionsToolbarDesktop());
 }
 
-ExtensionsToolbarContainer*
-ExtensionsToolbarUITest::GetExtensionsToolbarContainer() const {
-  return GetExtensionsToolbarContainerForBrowser(browser());
+ExtensionsToolbarDesktop* ExtensionsToolbarUITest::GetExtensionsToolbarDesktop()
+    const {
+  return GetExtensionsToolbarDesktopForBrowser(browser());
 }
 
-ExtensionsToolbarContainer*
-ExtensionsToolbarUITest::GetExtensionsToolbarContainerForBrowser(
+ExtensionsToolbarDesktop*
+ExtensionsToolbarUITest::GetExtensionsToolbarDesktopForBrowser(
     Browser* browser) const {
-  return BrowserView::GetBrowserViewForBrowser(browser)
-      ->toolbar()
-      ->extensions_container();
+  return browser->GetBrowserView().toolbar()->extensions_container();
 }
 
 std::vector<ToolbarActionView*> ExtensionsToolbarUITest::GetToolbarActionViews()
@@ -158,10 +162,11 @@ std::vector<ToolbarActionView*>
 ExtensionsToolbarUITest::GetToolbarActionViewsForBrowser(
     Browser* browser) const {
   std::vector<ToolbarActionView*> views;
-  for (auto* view :
-       GetExtensionsToolbarContainerForBrowser(browser)->children()) {
-    if (views::IsViewClass<ToolbarActionView>(view))
+  for (views::View* view :
+       GetExtensionsToolbarDesktopForBrowser(browser)->children()) {
+    if (views::IsViewClass<ToolbarActionView>(view)) {
       views.push_back(static_cast<ToolbarActionView*>(view));
+    }
   }
   return views;
 }
@@ -169,20 +174,52 @@ ExtensionsToolbarUITest::GetToolbarActionViewsForBrowser(
 std::vector<ToolbarActionView*>
 ExtensionsToolbarUITest::GetVisibleToolbarActionViews() const {
   auto views = GetToolbarActionViews();
-  base::EraseIf(views, [](views::View* view) { return !view->GetVisible(); });
+  std::erase_if(views, [](views::View* view) { return !view->GetVisible(); });
   return views;
 }
 
+ExtensionsToolbarButton* ExtensionsToolbarUITest::extensions_button() {
+  return GetExtensionsToolbarDesktop()->GetExtensionsButton();
+}
+
+ExtensionsMenuCoordinator* ExtensionsToolbarUITest::menu_coordinator() {
+  return GetExtensionsToolbarDesktop()
+      ->GetExtensionsMenuCoordinatorForTesting();
+}
+
+bool ExtensionsToolbarUITest::DidInjectScript(
+    content::WebContents* web_contents) {
+  return extensions::browsertest_util::DidChangeTitle(
+      *web_contents, /*original_title=*/u"OK",
+      /*changed_title=*/u"success");
+}
+
+void ExtensionsToolbarUITest::NavigateTo(const GURL& url) {
+  content::TestNavigationObserver observer(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_TRUE(observer.last_navigation_succeeded());
+}
+
+void ExtensionsToolbarUITest::AddHostAccessRequest(
+    const extensions::Extension& extension,
+    content::WebContents* web_contents) {
+  int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
+  extensions::PermissionsManager::Get(profile())->AddHostAccessRequest(
+      web_contents, tab_id, extension);
+}
+
 void ExtensionsToolbarUITest::ClickButton(views::Button* button) const {
-  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, 0);
+  ui::MouseEvent press_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), base::TimeTicks(),
+                             ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(press_event);
-  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, gfx::Point(),
+  ui::MouseEvent release_event(ui::EventType::kMouseReleased, gfx::Point(),
                                gfx::Point(), base::TimeTicks(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
 }
 
 void ExtensionsToolbarUITest::WaitForAnimation() {
-  views::test::WaitForAnimatingLayoutManager(GetExtensionsToolbarContainer());
+  views::test::WaitForAnimatingLayoutManager(GetExtensionsToolbarDesktop());
 }

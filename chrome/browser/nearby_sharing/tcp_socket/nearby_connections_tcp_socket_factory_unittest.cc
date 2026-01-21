@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -21,7 +21,7 @@
 
 namespace {
 
-uint32_t kBacklog = 10;
+constexpr uint32_t kBacklog = 10;
 const net::MutableNetworkTrafficAnnotationTag kAnnotation =
     net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
 const net::IPEndPoint kLocalAddress(net::IPAddress(192, 168, 86, 01),
@@ -45,18 +45,18 @@ class NearbyConnectionsTcpSocketFactoryTest : public ::testing::Test {
     // network::TestNetworkContext:
     void CreateTCPServerSocket(
         const net::IPEndPoint& local_addr,
-        uint32_t backlog,
+        network::mojom::TCPServerSocketOptionsPtr options,
         const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
         mojo::PendingReceiver<network::mojom::TCPServerSocket> socket,
         CreateTCPServerSocketCallback callback) override {
       EXPECT_EQ(kLocalAddress, local_addr);
-      EXPECT_EQ(kBacklog, backlog);
+      EXPECT_EQ(kBacklog, options->backlog);
       EXPECT_EQ(traffic_annotation, net::MutableNetworkTrafficAnnotationTag(
                                         TRAFFIC_ANNOTATION_FOR_TESTS));
       std::move(callback).Run(net::OK, local_addr);
     }
     void CreateTCPConnectedSocket(
-        const absl::optional<net::IPEndPoint>& local_addr,
+        const std::optional<net::IPEndPoint>& local_addr,
         const net::AddressList& remote_addr_list,
         network::mojom::TCPConnectedSocketOptionsPtr
             tcp_connected_socket_options,
@@ -108,7 +108,7 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, NetworkContextExists) {
         kBacklog, kAnnotation, /*receiver=*/mojo::NullReceiver(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr) {
+                        const std::optional<net::IPEndPoint>& local_addr) {
               EXPECT_EQ(net::OK, result);
               EXPECT_EQ(kLocalAddress, local_addr);
               run_loop.Quit();
@@ -125,8 +125,8 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, NetworkContextExists) {
         /*observer=*/mojo::NullRemote(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr,
-                        const absl::optional<net::IPEndPoint>& peer_addr,
+                        const std::optional<net::IPEndPoint>& local_addr,
+                        const std::optional<net::IPEndPoint>& peer_addr,
                         mojo::ScopedDataPipeConsumerHandle receive_stream,
                         mojo::ScopedDataPipeProducerHandle send_stream) {
               EXPECT_EQ(net::OK, result);
@@ -150,9 +150,9 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, NetworkContextDoesNotExist) {
         kBacklog, kAnnotation, /*receiver=*/mojo::NullReceiver(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr) {
+                        const std::optional<net::IPEndPoint>& local_addr) {
               EXPECT_EQ(net::ERR_FAILED, result);
-              EXPECT_EQ(absl::nullopt, local_addr);
+              EXPECT_EQ(std::nullopt, local_addr);
               run_loop.Quit();
             }));
     run_loop.Run();
@@ -167,13 +167,13 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, NetworkContextDoesNotExist) {
         /*observer=*/mojo::NullRemote(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr,
-                        const absl::optional<net::IPEndPoint>& peer_addr,
+                        const std::optional<net::IPEndPoint>& local_addr,
+                        const std::optional<net::IPEndPoint>& peer_addr,
                         mojo::ScopedDataPipeConsumerHandle receive_stream,
                         mojo::ScopedDataPipeProducerHandle send_stream) {
               EXPECT_EQ(net::ERR_FAILED, result);
-              EXPECT_EQ(absl::nullopt, local_addr);
-              EXPECT_EQ(absl::nullopt, peer_addr);
+              EXPECT_EQ(std::nullopt, local_addr);
+              EXPECT_EQ(std::nullopt, peer_addr);
               EXPECT_EQ(mojo::ScopedDataPipeConsumerHandle(), receive_stream);
               EXPECT_EQ(mojo::ScopedDataPipeProducerHandle(), send_stream);
               run_loop.Quit();
@@ -194,8 +194,8 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, ConnectTimeout) {
         /*observer=*/mojo::NullRemote(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr,
-                        const absl::optional<net::IPEndPoint>& peer_addr,
+                        const std::optional<net::IPEndPoint>& local_addr,
+                        const std::optional<net::IPEndPoint>& peer_addr,
                         mojo::ScopedDataPipeConsumerHandle receive_stream,
                         mojo::ScopedDataPipeProducerHandle send_stream) {
               EXPECT_EQ(net::OK, result);
@@ -221,13 +221,13 @@ TEST_F(NearbyConnectionsTcpSocketFactoryTest, ConnectTimeout) {
         /*observer=*/mojo::NullRemote(),
         base::BindLambdaForTesting(
             [&run_loop](int32_t result,
-                        const absl::optional<net::IPEndPoint>& local_addr,
-                        const absl::optional<net::IPEndPoint>& peer_addr,
+                        const std::optional<net::IPEndPoint>& local_addr,
+                        const std::optional<net::IPEndPoint>& peer_addr,
                         mojo::ScopedDataPipeConsumerHandle receive_stream,
                         mojo::ScopedDataPipeProducerHandle send_stream) {
               EXPECT_EQ(net::ERR_TIMED_OUT, result);
-              EXPECT_EQ(absl::nullopt, local_addr);
-              EXPECT_EQ(absl::nullopt, peer_addr);
+              EXPECT_EQ(std::nullopt, local_addr);
+              EXPECT_EQ(std::nullopt, peer_addr);
               EXPECT_EQ(mojo::ScopedDataPipeConsumerHandle(), receive_stream);
               EXPECT_EQ(mojo::ScopedDataPipeProducerHandle(), send_stream);
               run_loop.Quit();

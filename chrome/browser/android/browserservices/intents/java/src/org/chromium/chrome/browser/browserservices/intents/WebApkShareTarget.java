@@ -4,26 +4,31 @@
 
 package org.chromium.chrome.browser.browserservices.intents;
 
-import androidx.annotation.Nullable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.Arrays;
 
-/**
- * Stores information about the WebAPK's share intent handlers.
- */
+/** Stores information about the WebAPK's share intent handlers. */
+@NullMarked
 public class WebApkShareTarget {
     private static final int ACTION_INDEX = 0;
     private static final int PARAM_TITLE_INDEX = 1;
     private static final int PARAM_TEXT_INDEX = 2;
-    private String[] mData;
-    private boolean mIsShareMethodPost;
-    private boolean mIsShareEncTypeMultipart;
-    private String[] mFileNames;
-    private String[][] mFileAccepts;
+    private final String[] mData;
+    private final boolean mIsShareMethodPost;
+    private final boolean mIsShareEncTypeMultipart;
+    private final String[] mFileNames;
+    private final String[][] mFileAccepts;
 
-    public WebApkShareTarget(String action, String paramTitle, String paramText,
-            boolean isMethodPost, boolean isEncTypeMultipart, String[] fileNames,
-            String[][] fileAccepts) {
+    public WebApkShareTarget(
+            String action,
+            @Nullable String paramTitle,
+            @Nullable String paramText,
+            boolean isMethodPost,
+            boolean isEncTypeMultipart,
+            String @Nullable [] fileNames,
+            String @Nullable [][] fileAccepts) {
         mData = new String[3];
         mData[ACTION_INDEX] = replaceNullWithEmpty(action);
         mData[PARAM_TITLE_INDEX] = replaceNullWithEmpty(paramTitle);
@@ -43,7 +48,8 @@ public class WebApkShareTarget {
             return false;
         }
 
-        return Arrays.equals(s1.mData, s2.mData) && s1.mIsShareMethodPost == s2.mIsShareMethodPost
+        return Arrays.equals(s1.mData, s2.mData)
+                && s1.mIsShareMethodPost == s2.mIsShareMethodPost
                 && s1.mIsShareEncTypeMultipart == s2.mIsShareEncTypeMultipart
                 && Arrays.equals(s1.mFileNames, s2.mFileNames)
                 && Arrays.deepEquals(s1.mFileAccepts, s2.mFileAccepts);
@@ -78,7 +84,7 @@ public class WebApkShareTarget {
     }
 
     /** Returns the value if it is non-null. Returns an empty string otherwise. */
-    private static String replaceNullWithEmpty(String value) {
+    private static String replaceNullWithEmpty(@Nullable String value) {
         return (value == null) ? "" : value;
     }
 }

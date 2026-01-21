@@ -21,7 +21,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "media/test/pipeline_integration_test_base.h"
 
@@ -90,10 +90,7 @@ FFMPEG_TEST_CASE(Cr62127,
                  PIPELINE_ERROR_DECODE,
                  PIPELINE_ERROR_DECODE);
 FFMPEG_TEST_CASE(Cr93620, "security/93620.ogg", PIPELINE_OK, PIPELINE_OK);
-FFMPEG_TEST_CASE(Cr100492,
-                 "security/100492.webm",
-                 DECODER_ERROR_NOT_SUPPORTED,
-                 DECODER_ERROR_NOT_SUPPORTED);
+FFMPEG_TEST_CASE(Cr100492, "security/100492.webm", PIPELINE_OK, PIPELINE_OK);
 FFMPEG_TEST_CASE(Cr100543, "security/100543.webm", PIPELINE_OK, PIPELINE_OK);
 FFMPEG_TEST_CASE(Cr101458,
                  "security/101458.webm",
@@ -272,12 +269,18 @@ FFMPEG_TEST_CASE(MP4_9,
                  "security/smclockmp4aac_1_0.mp4",
                  DEMUXER_ERROR_COULD_NOT_OPEN,
                  DEMUXER_ERROR_COULD_NOT_OPEN);
-FFMPEG_TEST_CASE(MP4_11, "security/null1.mp4", PIPELINE_OK, PIPELINE_OK);
+FFMPEG_TEST_CASE(MP4_11,
+                 "security/null1.mp4",
+                 PIPELINE_ERROR_DECODE,
+                 PIPELINE_ERROR_DECODE);
 FFMPEG_TEST_CASE(MP4_16,
                  "security/looping2.mov",
                  DEMUXER_ERROR_COULD_NOT_OPEN,
                  DEMUXER_ERROR_COULD_NOT_OPEN);
-FFMPEG_TEST_CASE(MP4_17, "security/assert2.mov", PIPELINE_OK, PIPELINE_OK);
+FFMPEG_TEST_CASE(MP4_17,
+                 "security/assert2.mov",
+                 PIPELINE_ERROR_DECODE,
+                 PIPELINE_ERROR_DECODE);
 
 // This test is a valid file, so should always pass correctly.
 FFMPEG_TEST_CASE(MP4_18,
@@ -372,8 +375,8 @@ FFMPEG_TEST_CASE(WEBM_2,
                  DEMUXER_ERROR_NO_SUPPORTED_STREAMS);
 FFMPEG_TEST_CASE(WEBM_4,
                  "security/out.webm.68798.1929",
-                 DECODER_ERROR_NOT_SUPPORTED,
-                 DECODER_ERROR_NOT_SUPPORTED);
+                 PIPELINE_OK,
+                 PIPELINE_OK);
 FFMPEG_TEST_CASE(WEBM_5, "frame_size_change.webm", PIPELINE_OK, PIPELINE_OK);
 
 // General MKV test cases.

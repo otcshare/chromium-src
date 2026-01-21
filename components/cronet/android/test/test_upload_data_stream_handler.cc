@@ -10,13 +10,15 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "components/cronet/android/cronet_tests_jni_headers/TestUploadDataStreamHandler_jni.h"
+#include "base/functional/bind.h"
 #include "components/cronet/android/test/cronet_test_util.h"
 #include "net/base/net_errors.h"
 #include "net/log/net_log_with_source.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/cronet/android/cronet_test_apk_jni/TestUploadDataStreamHandler_jni.h"
+
+using base::android::JavaRef;
 
 namespace cronet {
 
@@ -25,8 +27,8 @@ static const size_t kReadBufferSize = 32768;
 TestUploadDataStreamHandler::TestUploadDataStreamHandler(
     std::unique_ptr<net::UploadDataStream> upload_data_stream,
     JNIEnv* env,
-    jobject jtest_upload_data_stream_handler,
-    jlong jcontext_adapter)
+    const JavaRef<jobject>& jtest_upload_data_stream_handler,
+    int64_t jcontext_adapter)
     : init_callback_invoked_(false),
       read_callback_invoked_(false),
       bytes_read_(0),
@@ -39,9 +41,7 @@ TestUploadDataStreamHandler::TestUploadDataStreamHandler(
 TestUploadDataStreamHandler::~TestUploadDataStreamHandler() {
 }
 
-void TestUploadDataStreamHandler::Destroy(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::Destroy(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->DeleteSoon(FROM_HERE, this);
 }
@@ -61,8 +61,7 @@ void TestUploadDataStreamHandler::OnReadCompleted(int res) {
   NotifyJavaReadCompleted();
 }
 
-void TestUploadDataStreamHandler::Init(JNIEnv* env,
-                                       const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::Init(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->PostTask(
       FROM_HERE,
@@ -70,8 +69,7 @@ void TestUploadDataStreamHandler::Init(JNIEnv* env,
                      base::Unretained(this)));
 }
 
-void TestUploadDataStreamHandler::Read(JNIEnv* env,
-                                       const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::Read(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->PostTask(
       FROM_HERE,
@@ -79,8 +77,7 @@ void TestUploadDataStreamHandler::Read(JNIEnv* env,
                      base::Unretained(this)));
 }
 
-void TestUploadDataStreamHandler::Reset(JNIEnv* env,
-                                        const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::Reset(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->PostTask(
       FROM_HERE,
@@ -88,9 +85,7 @@ void TestUploadDataStreamHandler::Reset(JNIEnv* env,
                      base::Unretained(this)));
 }
 
-void TestUploadDataStreamHandler::CheckInitCallbackNotInvoked(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::CheckInitCallbackNotInvoked(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->PostTask(
       FROM_HERE, base::BindOnce(&TestUploadDataStreamHandler::
@@ -98,9 +93,7 @@ void TestUploadDataStreamHandler::CheckInitCallbackNotInvoked(
                                 base::Unretained(this)));
 }
 
-void TestUploadDataStreamHandler::CheckReadCallbackNotInvoked(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
+void TestUploadDataStreamHandler::CheckReadCallbackNotInvoked(JNIEnv* env) {
   DCHECK(!network_thread_->BelongsToCurrentThread());
   network_thread_->PostTask(
       FROM_HERE, base::BindOnce(&TestUploadDataStreamHandler::
@@ -178,17 +171,20 @@ void TestUploadDataStreamHandler::NotifyJavaReadCompleted() {
       base::android::ConvertUTF8ToJavaString(env, data_read));
 }
 
-static jlong JNI_TestUploadDataStreamHandler_CreateTestUploadDataStreamHandler(
+static int64_t
+JNI_TestUploadDataStreamHandler_CreateTestUploadDataStreamHandler(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jtest_upload_data_stream_handler,
-    jlong jupload_data_stream,
-    jlong jcontext_adapter) {
+    const base::android::JavaRef<jobject>& jtest_upload_data_stream_handler,
+    int64_t jupload_data_stream,
+    int64_t jcontext_adapter) {
   std::unique_ptr<net::UploadDataStream> upload_data_stream(
       reinterpret_cast<net::UploadDataStream*>(jupload_data_stream));
   TestUploadDataStreamHandler* handler = new TestUploadDataStreamHandler(
       std::move(upload_data_stream), env, jtest_upload_data_stream_handler,
       jcontext_adapter);
-  return reinterpret_cast<jlong>(handler);
+  return reinterpret_cast<int64_t>(handler);
 }
 
 }  // namespace cronet
+
+DEFINE_JNI(TestUploadDataStreamHandler)

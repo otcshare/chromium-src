@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/metrics/histogram_base.h"
+
 #include <limits>
+#include <string_view>
 #include <vector>
 
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_base.h"
 #include "base/metrics/sample_vector.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/metrics/statistics_recorder.h"
@@ -40,10 +42,10 @@ class HistogramBaseTest : public testing::Test {
 };
 
 TEST_F(HistogramBaseTest, DeserializeHistogram) {
-  HistogramBase* histogram = Histogram::FactoryGet(
-      "TestHistogram", 1, 1000, 10,
-      (HistogramBase::kUmaTargetedHistogramFlag |
-      HistogramBase::kIPCSerializationSourceFlag));
+  HistogramBase* histogram =
+      Histogram::FactoryGet("TestHistogram", 1, 1000, 10,
+                            (HistogramBase::kUmaTargetedHistogramFlag |
+                             HistogramBase::kIPCSerializationSourceFlag));
 
   Pickle pickle;
   histogram->SerializeInfo(&pickle);
@@ -58,7 +60,7 @@ TEST_F(HistogramBaseTest, DeserializeHistogram) {
   deserialized = DeserializeHistogramInfo(&iter2);
   EXPECT_TRUE(deserialized);
   EXPECT_NE(histogram, deserialized);
-  EXPECT_EQ("TestHistogram", StringPiece(deserialized->histogram_name()));
+  EXPECT_EQ("TestHistogram", deserialized->histogram_name());
   EXPECT_TRUE(deserialized->HasConstructionArguments(1, 1000, 10));
 
   // kIPCSerializationSourceFlag will be cleared.
@@ -67,8 +69,7 @@ TEST_F(HistogramBaseTest, DeserializeHistogram) {
 
 TEST_F(HistogramBaseTest, DeserializeLinearHistogram) {
   HistogramBase* histogram = LinearHistogram::FactoryGet(
-      "TestHistogram", 1, 1000, 10,
-      HistogramBase::kIPCSerializationSourceFlag);
+      "TestHistogram", 1, 1000, 10, HistogramBase::kIPCSerializationSourceFlag);
 
   Pickle pickle;
   histogram->SerializeInfo(&pickle);
@@ -83,7 +84,7 @@ TEST_F(HistogramBaseTest, DeserializeLinearHistogram) {
   deserialized = DeserializeHistogramInfo(&iter2);
   EXPECT_TRUE(deserialized);
   EXPECT_NE(histogram, deserialized);
-  EXPECT_EQ("TestHistogram", StringPiece(deserialized->histogram_name()));
+  EXPECT_EQ("TestHistogram", deserialized->histogram_name());
   EXPECT_TRUE(deserialized->HasConstructionArguments(1, 1000, 10));
   EXPECT_EQ(0, deserialized->flags());
 }
@@ -105,13 +106,13 @@ TEST_F(HistogramBaseTest, DeserializeBooleanHistogram) {
   deserialized = DeserializeHistogramInfo(&iter2);
   EXPECT_TRUE(deserialized);
   EXPECT_NE(histogram, deserialized);
-  EXPECT_EQ("TestHistogram", StringPiece(deserialized->histogram_name()));
+  EXPECT_EQ("TestHistogram", deserialized->histogram_name());
   EXPECT_TRUE(deserialized->HasConstructionArguments(1, 2, 3));
   EXPECT_EQ(0, deserialized->flags());
 }
 
 TEST_F(HistogramBaseTest, DeserializeCustomHistogram) {
-  std::vector<HistogramBase::Sample> ranges;
+  std::vector<HistogramBase::Sample32> ranges;
   ranges.push_back(13);
   ranges.push_back(5);
   ranges.push_back(9);
@@ -132,7 +133,7 @@ TEST_F(HistogramBaseTest, DeserializeCustomHistogram) {
   deserialized = DeserializeHistogramInfo(&iter2);
   EXPECT_TRUE(deserialized);
   EXPECT_NE(histogram, deserialized);
-  EXPECT_EQ("TestHistogram", StringPiece(deserialized->histogram_name()));
+  EXPECT_EQ("TestHistogram", deserialized->histogram_name());
   EXPECT_TRUE(deserialized->HasConstructionArguments(5, 13, 4));
   EXPECT_EQ(0, deserialized->flags());
 }
@@ -154,51 +155,21 @@ TEST_F(HistogramBaseTest, DeserializeSparseHistogram) {
   deserialized = DeserializeHistogramInfo(&iter2);
   EXPECT_TRUE(deserialized);
   EXPECT_NE(histogram, deserialized);
-  EXPECT_EQ("TestHistogram", StringPiece(deserialized->histogram_name()));
+  EXPECT_EQ("TestHistogram", deserialized->histogram_name());
   EXPECT_EQ(0, deserialized->flags());
 }
 
-TEST_F(HistogramBaseTest, AddKilo) {
-  HistogramBase* histogram =
-      LinearHistogram::FactoryGet("TestAddKiloHistogram", 1, 1000, 100, 0);
-
-  histogram->AddKilo(100, 1000);
-  histogram->AddKilo(200, 2000);
-  histogram->AddKilo(300, 1500);
-
-  std::unique_ptr<HistogramSamples> samples = histogram->SnapshotSamples();
-  EXPECT_EQ(1, samples->GetCount(100));
-  EXPECT_EQ(2, samples->GetCount(200));
-  EXPECT_LE(1, samples->GetCount(300));
-  EXPECT_GE(2, samples->GetCount(300));
-}
-
-TEST_F(HistogramBaseTest, AddKiB) {
-  HistogramBase* histogram =
-      LinearHistogram::FactoryGet("TestAddKiBHistogram", 1, 1000, 100, 0);
-
-  histogram->AddKiB(100, 1024);
-  histogram->AddKiB(200, 2048);
-  histogram->AddKiB(300, 1536);
-
-  std::unique_ptr<HistogramSamples> samples = histogram->SnapshotSamples();
-  EXPECT_EQ(1, samples->GetCount(100));
-  EXPECT_EQ(2, samples->GetCount(200));
-  EXPECT_LE(1, samples->GetCount(300));
-  EXPECT_GE(2, samples->GetCount(300));
-}
-
 TEST_F(HistogramBaseTest, AddTimeMillisecondsGranularityOverflow) {
-  const HistogramBase::Sample sample_max =
-      std::numeric_limits<HistogramBase::Sample>::max() / 2;
+  const HistogramBase::Sample32 sample_max =
+      std::numeric_limits<HistogramBase::Sample32>::max() / 2;
   HistogramBase* histogram = LinearHistogram::FactoryGet(
       "TestAddTimeMillisecondsGranularity1", 1, sample_max, 100, 0);
   int64_t large_positive = std::numeric_limits<int64_t>::max();
   // |add_count| is the number of large values that have been added to the
   // histogram. We consider a number to be 'large' if it cannot be represented
-  // in a HistogramBase::Sample.
+  // in a HistogramBase::Sample32.
   int add_count = 0;
-  while (large_positive > std::numeric_limits<HistogramBase::Sample>::max()) {
+  while (large_positive > std::numeric_limits<HistogramBase::Sample32>::max()) {
     // Add the TimeDelta corresponding to |large_positive| milliseconds to the
     // histogram.
     histogram->AddTimeMillisecondsGranularity(Milliseconds(large_positive));
@@ -217,7 +188,7 @@ TEST_F(HistogramBaseTest, AddTimeMillisecondsGranularityOverflow) {
                                           1, sample_max, 100, 0);
   int64_t large_negative = std::numeric_limits<int64_t>::min();
   add_count = 0;
-  while (large_negative < std::numeric_limits<HistogramBase::Sample>::min()) {
+  while (large_negative < std::numeric_limits<HistogramBase::Sample32>::min()) {
     histogram->AddTimeMillisecondsGranularity(Milliseconds(large_negative));
     ++add_count;
     large_negative /= 7;
@@ -229,19 +200,20 @@ TEST_F(HistogramBaseTest, AddTimeMillisecondsGranularityOverflow) {
 
 TEST_F(HistogramBaseTest, AddTimeMicrosecondsGranularityOverflow) {
   // Nothing to test if we don't have a high resolution clock.
-  if (!TimeTicks::IsHighResolution())
+  if (!TimeTicks::IsHighResolution()) {
     return;
+  }
 
-  const HistogramBase::Sample sample_max =
-      std::numeric_limits<HistogramBase::Sample>::max() / 2;
+  const HistogramBase::Sample32 sample_max =
+      std::numeric_limits<HistogramBase::Sample32>::max() / 2;
   HistogramBase* histogram = LinearHistogram::FactoryGet(
       "TestAddTimeMicrosecondsGranularity1", 1, sample_max, 100, 0);
   int64_t large_positive = std::numeric_limits<int64_t>::max();
   // |add_count| is the number of large values that have been added to the
   // histogram. We consider a number to be 'large' if it cannot be represented
-  // in a HistogramBase::Sample.
+  // in a HistogramBase::Sample32.
   int add_count = 0;
-  while (large_positive > std::numeric_limits<HistogramBase::Sample>::max()) {
+  while (large_positive > std::numeric_limits<HistogramBase::Sample32>::max()) {
     // Add the TimeDelta corresponding to |large_positive| microseconds to the
     // histogram.
     histogram->AddTimeMicrosecondsGranularity(Microseconds(large_positive));
@@ -260,7 +232,7 @@ TEST_F(HistogramBaseTest, AddTimeMicrosecondsGranularityOverflow) {
                                           1, sample_max, 100, 0);
   int64_t large_negative = std::numeric_limits<int64_t>::min();
   add_count = 0;
-  while (large_negative < std::numeric_limits<HistogramBase::Sample>::min()) {
+  while (large_negative < std::numeric_limits<HistogramBase::Sample32>::min()) {
     histogram->AddTimeMicrosecondsGranularity(Microseconds(large_negative));
     ++add_count;
     large_negative /= 7;

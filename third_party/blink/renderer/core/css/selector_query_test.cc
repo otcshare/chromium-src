@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 // Uncomment to run the SelectorQueryTests for stats in a release build.
 // #define RELEASE_QUERY_STATS
@@ -43,10 +44,11 @@ void RunTests(ContainerNode& scope, const QueryTest (&test_cases)[length]) {
                                          : "querySelector('")
                  << selector << "')");
     if (test_case.query_all) {
-      StaticElementList* match_all = scope.QuerySelectorAll(selector);
+      StaticElementList* match_all =
+          scope.QuerySelectorAll(AtomicString(selector));
       EXPECT_EQ(test_case.matches, match_all->length());
     } else {
-      Element* match = scope.QuerySelector(selector);
+      Element* match = scope.QuerySelector(AtomicString(selector));
       EXPECT_EQ(test_case.matches, match ? 1u : 0u);
     }
 #if DCHECK_IS_ON() || defined(RELEASE_QUERY_STATS)
@@ -65,63 +67,66 @@ void RunTests(ContainerNode& scope, const QueryTest (&test_cases)[length]) {
 }  // namespace
 
 TEST(SelectorQueryTest, NotMatchingPseudoElement) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       Document::CreateForTest(execution_context.GetExecutionContext());
   auto* html = MakeGarbageCollected<HTMLHtmlElement>(*document);
   document->AppendChild(html);
-  document->documentElement()->setInnerHTML(
+  document->documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<body><style>span::before { content: 'X' }</style><span></span></body>");
 
   HeapVector<CSSSelector> arena;
   base::span<CSSSelector> selector_vector = CSSParser::ParseSelector(
       MakeGarbageCollected<CSSParserContext>(
-          *document, NullURL(), true /* origin_clean */, Referrer(),
-          WTF::TextEncoding(), CSSParserContext::kSnapshotProfile),
-      /*parent_rule_for_nesting=*/nullptr, nullptr, "span::before", arena);
+          *document, NullURL(), true /* origin_clean */, Referrer()),
+      CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr, nullptr,
+      "span::before", arena);
   CSSSelectorList* selector_list =
       CSSSelectorList::AdoptSelectorVector(selector_vector);
-  std::unique_ptr<SelectorQuery> query = SelectorQuery::Adopt(selector_list);
+  SelectorQuery* query = MakeGarbageCollected<SelectorQuery>(selector_list);
   Element* elm = query->QueryFirst(*document);
   EXPECT_EQ(nullptr, elm);
 
   selector_vector = CSSParser::ParseSelector(
       MakeGarbageCollected<CSSParserContext>(
-          *document, NullURL(), true /* origin_clean */, Referrer(),
-          WTF::TextEncoding(), CSSParserContext::kSnapshotProfile),
-      /*parent_rule_for_nesting=*/nullptr, nullptr, "span", arena);
+          *document, NullURL(), true /* origin_clean */, Referrer()),
+      CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr, nullptr,
+      "span", arena);
   selector_list = CSSSelectorList::AdoptSelectorVector(selector_vector);
-  query = SelectorQuery::Adopt(selector_list);
+  query = MakeGarbageCollected<SelectorQuery>(selector_list);
   elm = query->QueryFirst(*document);
   EXPECT_NE(nullptr, elm);
 }
 
 TEST(SelectorQueryTest, LastOfTypeNotFinishedParsing) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
   auto* html = MakeGarbageCollected<HTMLHtmlElement>(*document);
   document->AppendChild(html);
-  document->documentElement()->setInnerHTML(
-      "<body><p></p><p id=last></p></body>", ASSERT_NO_EXCEPTION);
+  document->documentElement()->SetInnerHTMLWithoutTrustedTypes(
+      "<body><p></p><p id=last></p></body>");
 
   document->body()->BeginParsingChildren();
 
   HeapVector<CSSSelector> arena;
   base::span<CSSSelector> selector_vector = CSSParser::ParseSelector(
       MakeGarbageCollected<CSSParserContext>(
-          *document, NullURL(), true /* origin_clean */, Referrer(),
-          WTF::TextEncoding(), CSSParserContext::kSnapshotProfile),
-      /*parent_rule_for_nesting=*/nullptr, nullptr, "p:last-of-type", arena);
+          *document, NullURL(), true /* origin_clean */, Referrer()),
+      CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr, nullptr,
+      "p:last-of-type", arena);
   CSSSelectorList* selector_list =
       CSSSelectorList::AdoptSelectorVector(selector_vector);
-  std::unique_ptr<SelectorQuery> query = SelectorQuery::Adopt(selector_list);
+  SelectorQuery* query = MakeGarbageCollected<SelectorQuery>(selector_list);
   Element* elm = query->QueryFirst(*document);
   ASSERT_TRUE(elm);
   EXPECT_EQ("last", elm->IdForStyleResolution());
 }
 
 TEST(SelectorQueryTest, StandardsModeFastPaths) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
@@ -147,6 +152,9 @@ TEST(SelectorQueryTest, StandardsModeFastPaths) {
       </body>
     </html>
   )HTML");
+
+  // NOTE: If StringHasher changes and we're unlucky,
+  // the values for .two and .B may need updating.
   static const struct QueryTest kTestCases[] = {
       // Id in right most selector fast path.
       {"#A", false, 1, {1, 1, 0, 0, 0, 0, 0}},
@@ -166,17 +174,17 @@ TEST(SelectorQueryTest, StandardsModeFastPaths) {
       {"span", true, 9, {14, 0, 0, 14, 0, 0, 0}},
 
       // Single selector class fast path.
-      {".two", false, 1, {6, 0, 6, 0, 0, 0, 0}},
-      {".two", true, 4, {14, 0, 14, 0, 0, 0, 0}},
+      {".two", false, 1, {5, 0, 5, 0, 0, 0, 0}},
+      {".two", true, 4, {13, 0, 13, 0, 0, 0, 0}},
 
       // Class in the right most selector fast path.
-      {"body .two", false, 1, {6, 0, 6, 0, 0, 0, 0}},
-      {"div .two", false, 1, {12, 0, 12, 0, 0, 0, 0}},
+      {"body .two", false, 1, {5, 0, 5, 0, 0, 0, 0}},
+      {"div .two", false, 1, {11, 0, 11, 0, 0, 0, 0}},
 
       // Classes in the right most selector for querySelectorAll use a fast
       // path.
-      {"body .two", true, 4, {14, 0, 14, 0, 0, 0, 0}},
-      {"div .two", true, 2, {14, 0, 14, 0, 0, 0, 0}},
+      {"body .two", true, 4, {13, 0, 13, 0, 0, 0, 0}},
+      {"div .two", true, 2, {13, 0, 13, 0, 0, 0, 0}},
 
       // TODO: We could use the fast class path to find the elements inside
       // the id scope instead of the fast scan.
@@ -228,6 +236,7 @@ TEST(SelectorQueryTest, StandardsModeFastPaths) {
 }
 
 TEST(SelectorQueryTest, FastPathScoped) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
@@ -249,24 +258,26 @@ TEST(SelectorQueryTest, FastPathScoped) {
       </body>
     </html>
   )HTML");
-  Element* scope = document->getElementById("first");
+  Element* scope = document->getElementById(AtomicString("first"));
   ASSERT_NE(nullptr, scope);
   ShadowRoot& shadowRoot =
-      scope->AttachShadowRootInternal(ShadowRootType::kOpen);
+      scope->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   // Make the inside the shadow root be identical to that of the outer document.
-  shadowRoot.appendChild(&document->documentElement()->CloneWithChildren(
-      CloneChildrenFlag::kClone));
+  shadowRoot.appendChild(document->documentElement()->cloneNode(/*deep*/ true));
+
+  // NOTE: If StringHasher changes and we're unlucky,
+  // the values for .c and .child may need updating.
   static const struct QueryTest kTestCases[] = {
       // Id in the right most selector.
       {"#first", false, 0, {0, 0, 0, 0, 0, 0, 0}},
 
       {"#B", false, 1, {1, 1, 0, 0, 0, 0, 0}},
       {"#multiple", false, 1, {1, 1, 0, 0, 0, 0, 0}},
-      {"#multiple.c", false, 1, {2, 2, 0, 0, 0, 0, 0}},
+      {"#multiple.c", false, 1, {1, 1, 0, 0, 0, 0, 0}},
 
       // Class in the right most selector.
       {".child", false, 1, {1, 0, 1, 0, 0, 0, 0}},
-      {".child", true, 4, {7, 0, 7, 0, 0, 0, 0}},
+      {".child", true, 4, {4, 0, 4, 0, 0, 0, 0}},
 
       // If an ancestor has the class name we fast scan all the descendants of
       // the scope.
@@ -290,13 +301,14 @@ TEST(SelectorQueryTest, FastPathScoped) {
     // Run all the tests a second time but with a scope inside a shadow root,
     // all the fast paths should behave the same.
     SCOPED_TRACE("Inside shadow root");
-    scope = shadowRoot.getElementById("first");
+    scope = shadowRoot.getElementById(AtomicString("first"));
     ASSERT_NE(nullptr, scope);
     RunTests(*scope, kTestCases);
   }
 }
 
 TEST(SelectorQueryTest, QuirksModeSlowPath) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
@@ -311,6 +323,9 @@ TEST(SelectorQueryTest, QuirksModeSlowPath) {
       </body>
     </html>
   )HTML");
+
+  // NOTE: If StringHasher changes and we're unlucky,
+  // the values for .two may need updating.
   static const struct QueryTest kTestCases[] = {
       // Quirks mode can't use the id fast path due to being case-insensitive.
       {"#one", false, 1, {5, 0, 0, 0, 5, 0, 0}},
@@ -324,22 +339,23 @@ TEST(SelectorQueryTest, QuirksModeSlowPath) {
       // Quirks can use the class and tag name fast paths though.
       {"span", false, 1, {4, 0, 0, 4, 0, 0, 0}},
       {"span", true, 3, {6, 0, 0, 6, 0, 0, 0}},
-      {".two", false, 1, {5, 0, 5, 0, 0, 0, 0}},
-      {".two", true, 2, {6, 0, 6, 0, 0, 0, 0}},
+      {".two", false, 1, {4, 0, 4, 0, 0, 0, 0}},
+      {".two", true, 2, {5, 0, 5, 0, 0, 0, 0}},
       {"body span", false, 1, {4, 0, 0, 0, 4, 0, 0}},
       {"body span", true, 3, {6, 0, 0, 0, 6, 0, 0}},
-      {"body .two", false, 1, {5, 0, 5, 0, 0, 0, 0}},
-      {"body .two", true, 2, {6, 0, 6, 0, 0, 0, 0}},
+      {"body .two", false, 1, {4, 0, 4, 0, 0, 0, 0}},
+      {"body .two", true, 2, {5, 0, 5, 0, 0, 0, 0}},
   };
   RunTests(*document, kTestCases);
 }
 
 TEST(SelectorQueryTest, DisconnectedSubtree) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
   Element* scope = document->CreateRawElement(html_names::kDivTag);
-  scope->setInnerHTML(R"HTML(
+  scope->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <section>
       <span id=first>
         <span id=A class=A></span>
@@ -349,13 +365,16 @@ TEST(SelectorQueryTest, DisconnectedSubtree) {
       </span>
     </section>
   )HTML");
+
+  // NOTE: If StringHasher changes and we're unlucky,
+  // the values for .child may need updating.
   static const struct QueryTest kTestCases[] = {
       {"#A", false, 1, {3, 0, 0, 0, 3, 0, 0}},
       {"#B", false, 1, {4, 0, 0, 0, 4, 0, 0}},
       {"#B", true, 1, {6, 0, 0, 0, 6, 0, 0}},
       {"#multiple", true, 2, {6, 0, 0, 0, 6, 0, 0}},
-      {".child", false, 1, {4, 0, 4, 0, 0, 0, 0}},
-      {".child", true, 2, {6, 0, 6, 0, 0, 0, 0}},
+      {".child", false, 1, {3, 0, 3, 0, 0, 0, 0}},
+      {".child", true, 2, {4, 0, 4, 0, 0, 0, 0}},
       {"#first span", false, 1, {3, 0, 0, 0, 3, 0, 0}},
       {"#first span", true, 4, {6, 0, 0, 0, 6, 0, 0}},
   };
@@ -364,13 +383,14 @@ TEST(SelectorQueryTest, DisconnectedSubtree) {
 }
 
 TEST(SelectorQueryTest, DisconnectedTreeScope) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
   Element* host = document->CreateRawElement(html_names::kDivTag);
   ShadowRoot& shadowRoot =
-      host->AttachShadowRootInternal(ShadowRootType::kOpen);
-  shadowRoot.setInnerHTML(R"HTML(
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadowRoot.SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <section>
       <span id=first>
         <span id=A class=A></span>
@@ -380,13 +400,16 @@ TEST(SelectorQueryTest, DisconnectedTreeScope) {
       </span>
     </section>
   )HTML");
+
+  // NOTE: If StringHasher changes and we're unlucky,
+  // the values for .child may need updating.
   static const struct QueryTest kTestCases[] = {
       {"#A", false, 1, {1, 1, 0, 0, 0, 0, 0}},
       {"#B", false, 1, {1, 1, 0, 0, 0, 0, 0}},
       {"#B", true, 1, {1, 1, 0, 0, 0, 0, 0}},
       {"#multiple", true, 2, {2, 2, 0, 0, 0, 0, 0}},
-      {".child", false, 1, {4, 0, 4, 0, 0, 0, 0}},
-      {".child", true, 2, {6, 0, 6, 0, 0, 0, 0}},
+      {".child", false, 1, {3, 0, 3, 0, 0, 0, 0}},
+      {".child", true, 2, {4, 0, 4, 0, 0, 0, 0}},
       {"#first span", false, 1, {2, 1, 0, 0, 1, 0, 0}},
       {"#first span", true, 4, {5, 1, 0, 0, 4, 0, 0}},
   };
@@ -395,6 +418,7 @@ TEST(SelectorQueryTest, DisconnectedTreeScope) {
 }
 
 TEST(SelectorQueryTest, QueryHasPseudoClass) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   auto* document =
       HTMLDocument::CreateForTest(execution_context.GetExecutionContext());
@@ -449,69 +473,92 @@ TEST(SelectorQueryTest, QueryHasPseudoClass) {
       </div>
     </main>
   )HTML");
-  Element* scope = document->getElementById("main");
+  Element* scope = document->getElementById(AtomicString("main"));
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(> .a ~ .b)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(> .a ~ .b)"));
     ASSERT_EQ(4U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div4");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject1"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject1")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div7");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject1"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject1")));
     EXPECT_EQ(result->item(2)->GetIdAttribute(), "div16");
-    EXPECT_TRUE(result->item(2)->ClassNames().Contains("subject1"));
+    EXPECT_TRUE(
+        result->item(2)->ClassNames().Contains(AtomicString("subject1")));
     EXPECT_EQ(result->item(3)->GetIdAttribute(), "div19");
-    EXPECT_TRUE(result->item(3)->ClassNames().Contains("subject1"));
+    EXPECT_TRUE(
+        result->item(3)->ClassNames().Contains(AtomicString("subject1")));
   }
 
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(+ .a > .b .c)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(+ .a > .b .c)"));
     ASSERT_EQ(2U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div5");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject2"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject2")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div17");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject2"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject2")));
   }
 
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(> .a .b)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(> .a .b)"));
     ASSERT_EQ(3U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div1");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject3"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject3")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div4");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject3"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject3")));
     EXPECT_EQ(result->item(2)->GetIdAttribute(), "div16");
-    EXPECT_TRUE(result->item(2)->ClassNames().Contains("subject3"));
+    EXPECT_TRUE(
+        result->item(2)->ClassNames().Contains(AtomicString("subject3")));
   }
 
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(> .a + .b .c)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(> .a + .b .c)"));
     ASSERT_EQ(3U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div4");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject4"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject4")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div7");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject4"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject4")));
     EXPECT_EQ(result->item(2)->GetIdAttribute(), "div19");
-    EXPECT_TRUE(result->item(2)->ClassNames().Contains("subject4"));
+    EXPECT_TRUE(
+        result->item(2)->ClassNames().Contains(AtomicString("subject4")));
   }
 
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(~ .a ~ .b .d)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(~ .a ~ .b .d)"));
     ASSERT_EQ(3U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div5");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject5"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject5")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div17");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject5"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject5")));
     EXPECT_EQ(result->item(2)->GetIdAttribute(), "div20");
-    EXPECT_TRUE(result->item(2)->ClassNames().Contains("subject5"));
+    EXPECT_TRUE(
+        result->item(2)->ClassNames().Contains(AtomicString("subject5")));
   }
 
   {
-    StaticElementList* result = scope->QuerySelectorAll(":has(+ .a + .b .d)");
+    StaticElementList* result =
+        scope->QuerySelectorAll(AtomicString(":has(+ .a + .b .d)"));
     ASSERT_EQ(2U, result->length());
     EXPECT_EQ(result->item(0)->GetIdAttribute(), "div5");
-    EXPECT_TRUE(result->item(0)->ClassNames().Contains("subject6"));
+    EXPECT_TRUE(
+        result->item(0)->ClassNames().Contains(AtomicString("subject6")));
     EXPECT_EQ(result->item(1)->GetIdAttribute(), "div20");
-    EXPECT_TRUE(result->item(1)->ClassNames().Contains("subject6"));
+    EXPECT_TRUE(
+        result->item(1)->ClassNames().Contains(AtomicString("subject6")));
   }
 }
 

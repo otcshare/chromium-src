@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/task_traits.h"
@@ -92,6 +92,9 @@ class NET_EXPORT_PRIVATE SerialWorker {
   // Executed on origin thread after `WorkItem` completes.
   // Must return true on success.
   virtual bool OnWorkFinished(std::unique_ptr<WorkItem> work_item) = 0;
+
+  // Returns the failure count for this job.
+  int GetFailureCount() const;
 
   base::WeakPtr<SerialWorker> AsWeakPtr();
 

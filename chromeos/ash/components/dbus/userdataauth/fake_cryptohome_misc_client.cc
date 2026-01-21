@@ -4,9 +4,11 @@
 
 #include "chromeos/ash/components/dbus/userdataauth/fake_cryptohome_misc_client.h"
 
+#include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
+#include "chromeos/ash/components/cryptohome/error_util.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 
 namespace ash {
@@ -43,7 +45,7 @@ void FakeCryptohomeMiscClient::GetSystemSalt(
 void FakeCryptohomeMiscClient::GetSanitizedUsername(
     const ::user_data_auth::GetSanitizedUsernameRequest& request,
     GetSanitizedUsernameCallback callback) {
-  absl::optional<::user_data_auth::GetSanitizedUsernameReply> reply;
+  std::optional<::user_data_auth::GetSanitizedUsernameReply> reply;
   reply = BlockingGetSanitizedUsername(request);
   ReturnProtobufMethodCallback(*reply, std::move(callback));
 }
@@ -59,9 +61,8 @@ void FakeCryptohomeMiscClient::LockToSingleUserMountUntilReboot(
     const ::user_data_auth::LockToSingleUserMountUntilRebootRequest& request,
     LockToSingleUserMountUntilRebootCallback callback) {
   ::user_data_auth::LockToSingleUserMountUntilRebootReply reply;
-  if (cryptohome_error_ ==
-      ::user_data_auth::CryptohomeErrorCode::CRYPTOHOME_ERROR_NOT_SET) {
-    reply.set_error(cryptohome_error_);
+  if (cryptohome_error_ == ::user_data_auth::CRYPTOHOME_ERROR_NOT_SET) {
+    reply.set_error(::user_data_auth::CRYPTOHOME_ERROR_NOT_SET);
     is_device_locked_to_single_user_ = true;
   } else {
     reply.set_error(::user_data_auth::CryptohomeErrorCode::
@@ -77,22 +78,8 @@ void FakeCryptohomeMiscClient::GetRsuDeviceId(
   reply.set_rsu_device_id(rsu_device_id_);
   ReturnProtobufMethodCallback(reply, std::move(callback));
 }
-void FakeCryptohomeMiscClient::CheckHealth(
-    const ::user_data_auth::CheckHealthRequest& request,
-    CheckHealthCallback callback) {
-  absl::optional<::user_data_auth::CheckHealthReply> reply;
-  if (cryptohome_error_ ==
-      ::user_data_auth::CryptohomeErrorCode::CRYPTOHOME_ERROR_NOT_SET) {
-    reply = ::user_data_auth::CheckHealthReply();
-    reply->set_requires_powerwash(requires_powerwash_);
-  }
-  // Note: In case cryptohome_error_ is set to anything else, we'll return as if
-  // the dbus call failed.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), reply));
-}
 
-absl::optional<::user_data_auth::GetSanitizedUsernameReply>
+std::optional<::user_data_auth::GetSanitizedUsernameReply>
 FakeCryptohomeMiscClient::BlockingGetSanitizedUsername(
     const ::user_data_auth::GetSanitizedUsernameRequest& request) {
   user_data_auth::GetSanitizedUsernameReply reply;
@@ -120,13 +107,15 @@ void FakeCryptohomeMiscClient::WaitForServiceToBeAvailable(
 
 void FakeCryptohomeMiscClient::SetServiceIsAvailable(bool is_available) {
   service_is_available_ = is_available;
-  if (!is_available)
+  if (!is_available) {
     return;
+  }
 
   std::vector<chromeos::WaitForServiceToBeAvailableCallback> callbacks;
   callbacks.swap(pending_wait_for_service_to_be_available_callbacks_);
-  for (auto& callback : callbacks)
+  for (auto& callback : callbacks) {
     std::move(callback).Run(true);
+  }
 }
 
 void FakeCryptohomeMiscClient::ReportServiceIsNotAvailable() {
@@ -135,8 +124,9 @@ void FakeCryptohomeMiscClient::ReportServiceIsNotAvailable() {
 
   std::vector<chromeos::WaitForServiceToBeAvailableCallback> callbacks;
   callbacks.swap(pending_wait_for_service_to_be_available_callbacks_);
-  for (auto& callback : callbacks)
+  for (auto& callback : callbacks) {
     std::move(callback).Run(false);
+  }
 }
 
 template <typename ReplyType>
@@ -150,8 +140,9 @@ void FakeCryptohomeMiscClient::ReturnProtobufMethodCallback(
 // static
 std::vector<uint8_t> FakeCryptohomeMiscClient::GetStubSystemSalt() {
   const char kStubSystemSalt[] = "stub_system_salt";
-  return std::vector<uint8_t>(kStubSystemSalt,
-                              kStubSystemSalt + std::size(kStubSystemSalt) - 1);
+  return std::vector<uint8_t>(
+      kStubSystemSalt,
+      UNSAFE_TODO(kStubSystemSalt + std::size(kStubSystemSalt) - 1));
 }
 
 }  // namespace ash

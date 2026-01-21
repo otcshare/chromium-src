@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/histogram_macros.h"
@@ -49,7 +50,7 @@ class SignalSenderVerificationTest : public testing::Test {
     bus_options.bus_type = Bus::SESSION;
     bus_options.connection_type = Bus::PRIVATE;
     bus_options.dbus_task_runner = dbus_thread_->task_runner();
-    bus_ = new Bus(bus_options);
+    bus_ = new Bus(std::move(bus_options));
     object_proxy_ = bus_->GetObjectProxy(
         test_service_->service_name(),
         ObjectPath("/org/chromium/TestObject"));
@@ -164,7 +165,7 @@ class SignalSenderVerificationTest : public testing::Test {
   std::unique_ptr<base::RunLoop> run_loop_;
   std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
-  raw_ptr<ObjectProxy> object_proxy_;
+  raw_ptr<ObjectProxy, AcrossTasksDanglingUntriaged> object_proxy_;
   std::unique_ptr<TestService> test_service_;
   std::unique_ptr<TestService> test_service2_;
   // Text message from "Test" signal.

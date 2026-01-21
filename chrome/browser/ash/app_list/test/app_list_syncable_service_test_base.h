@@ -26,8 +26,11 @@ class AppListSyncableServiceTestBase : public app_list::AppListTestBase {
 
   // AppListTestBase:
   void SetUp() override;
+  void TearDown() override;
 
  protected:
+  void RestartSyncableService();
+
   // Remove all existing sync items.
   void RemoveAllExistingItems();
 

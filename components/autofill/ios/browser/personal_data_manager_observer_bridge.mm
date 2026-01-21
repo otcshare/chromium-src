@@ -4,18 +4,16 @@
 
 #import "components/autofill/ios/browser/personal_data_manager_observer_bridge.h"
 
-#include "base/check.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/check.h"
 
 namespace autofill {
 
 PersonalDataManagerObserverBridge::PersonalDataManagerObserverBridge(
+    PersonalDataManager* personal_data_manager,
     id<PersonalDataManagerObserver> delegate)
     : delegate_(delegate) {
   DCHECK(delegate_);
+  scoped_observation_.Observe(personal_data_manager);
 }
 
 PersonalDataManagerObserverBridge::~PersonalDataManagerObserverBridge() {
@@ -23,11 +21,6 @@ PersonalDataManagerObserverBridge::~PersonalDataManagerObserverBridge() {
 
 void PersonalDataManagerObserverBridge::OnPersonalDataChanged() {
   [delegate_ onPersonalDataChanged];
-}
-
-void PersonalDataManagerObserverBridge::OnInsufficientFormData() {
-  if ([delegate_ respondsToSelector:@selector(onInsufficientFormData)])
-    [delegate_ onInsufficientFormData];
 }
 
 }  // namespace autofill

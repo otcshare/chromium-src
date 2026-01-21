@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.tab.state;
 
 import org.chromium.base.Callback;
 import org.chromium.base.task.PostTask;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.HashMap;
@@ -15,11 +17,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 
-/**
- * Mock implementation of {@link PersistedTabDataStorage} for tests
- */
+/** Mock implementation of {@link PersistedTabDataStorage} for tests */
+@NullMarked
 public class MockPersistedTabDataStorage implements PersistedTabDataStorage {
-    private Semaphore mSemaphore;
+    private @Nullable Semaphore mSemaphore;
     private final Map<String, ByteBuffer> mStorage = new HashMap<>();
 
     @Override
@@ -32,18 +33,25 @@ public class MockPersistedTabDataStorage implements PersistedTabDataStorage {
     }
 
     @Override
-    public void save(int tabId, String dataId, Serializer<ByteBuffer> serializer,
+    public void save(
+            int tabId,
+            String dataId,
+            Serializer<ByteBuffer> serializer,
             Callback<Integer> callback) {
         save(tabId, dataId, serializer);
         callback.onResult(0);
     }
 
     @Override
-    public void restore(int tabId, String tabDataId, Callback<ByteBuffer> callback) {
-        PostTask.runOrPostTask(UiThreadTaskTraits.DEFAULT, () -> {
-            callback.onResult(
-                    mStorage.get(getKey(tabId)) == null ? null : mStorage.get(getKey(tabId)));
-        });
+    public void restore(int tabId, String tabDataId, Callback<@Nullable ByteBuffer> callback) {
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    callback.onResult(
+                            mStorage.get(getKey(tabId)) == null
+                                    ? null
+                                    : mStorage.get(getKey(tabId)));
+                });
         if (mSemaphore != null) {
             mSemaphore.release();
         }
@@ -51,21 +59,21 @@ public class MockPersistedTabDataStorage implements PersistedTabDataStorage {
 
     // Unused
     @Override
-    public ByteBuffer restore(int tabId, String tabDataId) {
+    public @Nullable ByteBuffer restore(int tabId, String tabDataId) {
         return null;
     }
 
     @Override
-    public <U extends PersistedTabDataResult> U restore(
+    public <U extends PersistedTabDataResult> @Nullable U restore(
             int tabId, String dataId, PersistedTabDataMapper<U> mapper) {
-        assert false : "Restore with maapper currently unused in MockPersistedTabDataStorage";
+        assert false : "Restore with mapper currently unused in MockPersistedTabDataStorage";
         return null;
     }
 
     @Override
     public <U extends PersistedTabDataResult> void restore(
             int tabId, String dataId, Callback<U> callback, PersistedTabDataMapper<U> mapper) {
-        assert false : "Restore with maapper currently unused in MockPersistedTabDataStorage";
+        assert false : "Restore with mapper currently unused in MockPersistedTabDataStorage";
     }
 
     @Override
@@ -77,13 +85,8 @@ public class MockPersistedTabDataStorage implements PersistedTabDataStorage {
     }
 
     @Override
-    public String getUmaTag() {
-        return "MPTDS";
-    }
-
-    @Override
     public void performMaintenance(List<Integer> tabIds, String dataId) {
-        assert false : "perforMaintenance is not available in MockPersistedTabDataStorage";
+        assert false : "performMaintenance is not available in MockPersistedTabDataStorage";
     }
 
     private static String getKey(int tabId) {

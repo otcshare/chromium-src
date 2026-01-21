@@ -7,7 +7,7 @@
 #include <stddef.h>
 
 #include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/pickle.h"
 #include "crypto/openssl_util.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
@@ -19,28 +19,21 @@ namespace {
 
 class SecureHashSHA256 : public SecureHash {
  public:
-  SecureHashSHA256() {
-    // Ensure that CPU features detection is performed before using
-    // BoringSSL. This will enable hw accelerated implementations.
-    EnsureOpenSSLInit();
-    SHA256_Init(&ctx_);
-  }
+  SecureHashSHA256() { SHA256_Init(&ctx_); }
 
-  SecureHashSHA256(const SecureHashSHA256& other) {
-    memcpy(&ctx_, &other.ctx_, sizeof(ctx_));
-  }
+  SecureHashSHA256(const SecureHashSHA256& other) : ctx_(other.ctx_) {}
 
   ~SecureHashSHA256() override {
     OPENSSL_cleanse(&ctx_, sizeof(ctx_));
   }
 
-  void Update(const void* input, size_t len) override {
-    SHA256_Update(&ctx_, static_cast<const unsigned char*>(input), len);
+  void Update(base::span<const uint8_t> input) override {
+    SHA256_Update(&ctx_, input.data(), input.size());
   }
 
-  void Finish(void* output, size_t len) override {
-    ScopedOpenSSLSafeSizeBuffer<SHA256_DIGEST_LENGTH> result(
-        static_cast<unsigned char*>(output), len);
+  void Finish(base::span<uint8_t> output) override {
+    ScopedOpenSSLSafeSizeBuffer<SHA256_DIGEST_LENGTH> result(output.data(),
+                                                             output.size());
     SHA256_Final(result.safe_buffer(), &ctx_);
   }
 
@@ -56,26 +49,19 @@ class SecureHashSHA256 : public SecureHash {
 
 class SecureHashSHA512 : public SecureHash {
  public:
-  SecureHashSHA512() {
-    // Ensure that CPU features detection is performed before using
-    // BoringSSL. This will enable hw accelerated implementations.
-    EnsureOpenSSLInit();
-    SHA512_Init(&ctx_);
-  }
+  SecureHashSHA512() { SHA512_Init(&ctx_); }
 
-  SecureHashSHA512(const SecureHashSHA512& other) {
-    memcpy(&ctx_, &other.ctx_, sizeof(ctx_));
-  }
+  SecureHashSHA512(const SecureHashSHA512& other) : ctx_(other.ctx_) {}
 
   ~SecureHashSHA512() override { OPENSSL_cleanse(&ctx_, sizeof(ctx_)); }
 
-  void Update(const void* input, size_t len) override {
-    SHA512_Update(&ctx_, static_cast<const unsigned char*>(input), len);
+  void Update(base::span<const uint8_t> input) override {
+    SHA512_Update(&ctx_, input.data(), input.size());
   }
 
-  void Finish(void* output, size_t len) override {
-    ScopedOpenSSLSafeSizeBuffer<SHA512_DIGEST_LENGTH> result(
-        static_cast<unsigned char*>(output), len);
+  void Finish(base::span<uint8_t> output) override {
+    ScopedOpenSSLSafeSizeBuffer<SHA512_DIGEST_LENGTH> result(output.data(),
+                                                             output.size());
     SHA512_Final(result.safe_buffer(), &ctx_);
   }
 

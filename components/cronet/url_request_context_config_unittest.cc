@@ -5,15 +5,14 @@
 #include "components/cronet/url_request_context_config.h"
 
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/test/task_environment.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
@@ -30,6 +29,7 @@
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_config_service_fixed.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,13 +43,13 @@ namespace cronet {
 
 namespace {
 
-std::string WrapJsonHeader(base::StringPiece value) {
+std::string WrapJsonHeader(std::string_view value) {
   return base::StrCat({"[", value, "]"});
 }
 
 // Returns whether two JSON-encoded headers contain the same content, ignoring
 // irrelevant encoding issues like whitespace and map element ordering.
-bool JsonHeaderEquals(base::StringPiece expected, base::StringPiece actual) {
+bool JsonHeaderEquals(std::string_view expected, std::string_view actual) {
   return base::test::ParseJson(WrapJsonHeader(expected)) ==
          base::test::ParseJson(WrapJsonHeader(actual));
 }
@@ -63,14 +63,13 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
   // Create JSON for experimental options.
   base::Value::Dict options;
   options.SetByDottedPath("QUIC.max_server_configs_stored_in_properties", 2);
-  options.SetByDottedPath("QUIC.user_agent_id", "Custom QUIC UAID");
   options.SetByDottedPath("QUIC.idle_connection_timeout_seconds", 300);
   options.SetByDottedPath("QUIC.close_sessions_on_ip_change", true);
   options.SetByDottedPath("QUIC.connection_options", "TIME,TBBR,REJ");
   options.SetByDottedPath(
       "QUIC.set_quic_flags",
-      "FLAGS_quic_reloadable_flag_quic_testonly_default_false=true,"
-      "FLAGS_quic_restart_flag_quic_testonly_default_true=false");
+      "FLAGS_quiche_reloadable_flag_quic_testonly_default_false=true,"
+      "FLAGS_quiche_restart_flag_quic_testonly_default_true=false");
   options.SetByDottedPath("AsyncDNS.enable", true);
   options.SetByDottedPath("NetworkErrorLogging.enable", true);
   options.SetByDottedPath("NetworkErrorLogging.preloaded_report_to_headers",
@@ -139,20 +138,17 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
   // See http://crbug.com/696569.
   options.Set("disable_ipv6_on_wifi", true);
   options.Set("spdy_go_away_on_ip_change", true);
-  options.SetByDottedPath({"QUIC.ios_network_service_type"}, 2);
   std::string options_json;
   EXPECT_TRUE(base::JSONWriter::Write(options, &options_json));
 
   // Initialize QUIC flags set by the config.
-  FLAGS_quic_reloadable_flag_quic_testonly_default_false = false;
-  FLAGS_quic_restart_flag_quic_testonly_default_true = true;
+  FLAGS_quiche_reloadable_flag_quic_testonly_default_false = false;
+  FLAGS_quiche_restart_flag_quic_testonly_default_true = true;
 
   std::unique_ptr<URLRequestContextConfig> config =
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -179,10 +175,15 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>(42.0));
+          std::optional<double>(42.0),
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   EXPECT_FALSE(
       config->effective_experimental_options.contains("UnknownOption"));
   // Set a ProxyConfigService to avoid DCHECK failure when building.
@@ -199,11 +200,8 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
   EXPECT_EQ(quic_connection_options, quic_params->connection_options);
 
   // Check QUIC flags.
-  EXPECT_TRUE(FLAGS_quic_reloadable_flag_quic_testonly_default_false);
-  EXPECT_FALSE(FLAGS_quic_restart_flag_quic_testonly_default_true);
-
-  // Check Custom QUIC User Agent Id.
-  EXPECT_EQ("Custom QUIC UAID", quic_params->user_agent_id);
+  EXPECT_TRUE(FLAGS_quiche_reloadable_flag_quic_testonly_default_false);
+  EXPECT_FALSE(FLAGS_quiche_restart_flag_quic_testonly_default_true);
 
   // Check max_server_configs_stored_in_properties.
   EXPECT_EQ(2u, quic_params->max_server_configs_stored_in_properties);
@@ -213,12 +211,11 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
 
   EXPECT_TRUE(quic_params->close_sessions_on_ip_change);
   EXPECT_FALSE(quic_params->goaway_sessions_on_ip_change);
-  EXPECT_FALSE(quic_params->allow_server_migration);
+  EXPECT_TRUE(quic_params->allow_server_migration);
   EXPECT_FALSE(quic_params->migrate_sessions_on_network_change_v2);
   EXPECT_FALSE(quic_params->migrate_sessions_early_v2);
   EXPECT_FALSE(quic_params->migrate_idle_sessions);
   EXPECT_FALSE(quic_params->retry_on_alternate_network_before_handshake);
-  EXPECT_FALSE(quic_params->race_stale_dns_on_connection);
   EXPECT_TRUE(quic_params->allow_port_migration);
   EXPECT_FALSE(quic_params->disable_tls_zero_rtt);
   EXPECT_TRUE(quic_params->retry_without_alt_svc_on_quic_errors);
@@ -227,11 +224,8 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
   EXPECT_FALSE(quic_params->exponential_backoff_on_initial_delay.has_value());
   EXPECT_FALSE(quic_params->delay_main_job_with_available_spdy_session);
 
-  // Check network_service_type for iOS.
-  EXPECT_EQ(2, quic_params->ios_network_service_type);
-
 #if defined(ENABLE_BUILT_IN_DNS)
-  // Check AsyncDNS resolver is enabled (not supported on iOS).
+  // Check AsyncDNS resolver is enabled.
   EXPECT_TRUE(context->host_resolver()->GetDnsConfigAsValue());
 #endif  // defined(ENABLE_BUILT_IN_DNS)
 
@@ -303,12 +297,12 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
   std::unique_ptr<net::HostResolver::ResolveHostRequest> resolve_request =
       context->host_resolver()->CreateRequest(
           net::HostPortPair("abcde", 80), net::NetworkAnonymizationKey(),
-          net::NetLogWithSource(), absl::nullopt);
+          net::NetLogWithSource(), std::nullopt);
   EXPECT_EQ(net::OK, resolve_request->Start(
                          base::BindOnce([](int error) { NOTREACHED(); })));
 
   EXPECT_TRUE(config->network_thread_priority);
-  EXPECT_EQ(42.0, config->network_thread_priority.value());
+  EXPECT_EQ(42, config->network_thread_priority.value());
   EXPECT_FALSE(config->bidi_stream_detect_broken_connection);
 
   // When UseDnsHttpsSvcb option is not set, the value of net::features are
@@ -317,8 +311,6 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
       context->host_resolver()
           ->GetManagerForTesting()
           ->https_svcb_options_for_testing();
-  EXPECT_EQ(base::FeatureList::IsEnabled(net::features::kUseDnsHttpsSvcb),
-            https_svcb_options.enable);
   EXPECT_EQ(net::features::kUseDnsHttpsSvcbInsecureExtraTimeMax.Get(),
             https_svcb_options.insecure_extra_time_max);
   EXPECT_EQ(net::features::kUseDnsHttpsSvcbInsecureExtraTimePercent.Get(),
@@ -331,69 +323,6 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
             https_svcb_options.secure_extra_time_percent);
   EXPECT_EQ(net::features::kUseDnsHttpsSvcbSecureExtraTimeMin.Get(),
             https_svcb_options.secure_extra_time_min);
-  EXPECT_EQ(base::FeatureList::IsEnabled(net::features::kUseDnsHttpsSvcbAlpn),
-            params->use_dns_https_svcb_alpn);
-
-  EXPECT_FALSE(config->skip_logging);
-}
-
-TEST(URLRequestContextConfigTest, SetSupportedQuicVersion) {
-  // Note that this test covers the legacy mechanism which relies on
-  // QuicVersionToString. We should now be using ALPNs instead.
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  quic::ParsedQuicVersion version =
-      quic::AllSupportedVersionsWithQuicCrypto().front();
-  std::string experimental_options =
-      "{\"QUIC\":{\"quic_version\":\"" +
-      quic::QuicVersionToString(version.transport_version) +
-      "\",\"obsolete_versions_allowed2\":true}}";
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          experimental_options,
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  // Set a ProxyConfigService to avoid DCHECK failure when building.
-  builder.set_proxy_config_service(
-      std::make_unique<net::ProxyConfigServiceFixed>(
-          net::ProxyConfigWithAnnotation::CreateDirect()));
-  std::unique_ptr<net::URLRequestContext> context(builder.Build());
-  const net::QuicParams* quic_params = context->quic_context()->params();
-  EXPECT_EQ(quic_params->supported_versions.size(), 1u);
-  EXPECT_EQ(quic_params->supported_versions[0], version);
 }
 
 TEST(URLRequestContextConfigTest, SetSupportedQuicVersionByAlpn) {
@@ -409,8 +338,6 @@ TEST(URLRequestContextConfigTest, SetSupportedQuicVersionByAlpn) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -437,10 +364,15 @@ TEST(URLRequestContextConfigTest, SetSupportedQuicVersionByAlpn) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -459,8 +391,6 @@ TEST(URLRequestContextConfigTest, SetUnsupportedQuicVersion) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -487,10 +417,15 @@ TEST(URLRequestContextConfigTest, SetUnsupportedQuicVersion) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -511,8 +446,6 @@ TEST(URLRequestContextConfigTest, SetObsoleteQuicVersion) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -542,10 +475,15 @@ TEST(URLRequestContextConfigTest, SetObsoleteQuicVersion) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -556,62 +494,6 @@ TEST(URLRequestContextConfigTest, SetObsoleteQuicVersion) {
             net::DefaultSupportedQuicVersions());
 }
 
-TEST(URLRequestContextConfigTest, SetObsoleteQuicVersionWhenAllowed) {
-  // This test configures cronet with an obsolete QUIC version and explicitly
-  // allows it, then validates that cronet uses that version.
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          std::string("{\"QUIC\":{\"quic_version\":\"") +
-              quic::ParsedQuicVersionToString(
-                  net::ObsoleteQuicVersions().back()) +
-              "\",\"obsolete_versions_allowed2\":true}}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  // Set a ProxyConfigService to avoid DCHECK failure when building.
-  builder.set_proxy_config_service(
-      std::make_unique<net::ProxyConfigServiceFixed>(
-          net::ProxyConfigWithAnnotation::CreateDirect()));
-  std::unique_ptr<net::URLRequestContext> context(builder.Build());
-  const net::QuicParams* quic_params = context->quic_context()->params();
-  quic::ParsedQuicVersionVector supported_versions = {
-      net::ObsoleteQuicVersions().back()};
-  EXPECT_EQ(quic_params->supported_versions, supported_versions);
-}
-
 TEST(URLRequestContextConfigTest, SetQuicServerMigrationOptions) {
   base::test::TaskEnvironment task_environment_(
       base::test::TaskEnvironment::MainThreadType::IO);
@@ -620,8 +502,6 @@ TEST(URLRequestContextConfigTest, SetQuicServerMigrationOptions) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -640,7 +520,7 @@ TEST(URLRequestContextConfigTest, SetQuicServerMigrationOptions) {
           // User-Agent request header field.
           "fake agent",
           // JSON encoded experimental options.
-          "{\"QUIC\":{\"allow_server_migration\":true}}",
+          "{\"QUIC\":{\"allow_server_migration\":false}}",
           // MockCertVerifier to use for testing purposes.
           std::unique_ptr<net::CertVerifier>(),
           // Enable network quality estimator.
@@ -648,10 +528,15 @@ TEST(URLRequestContextConfigTest, SetQuicServerMigrationOptions) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -660,80 +545,13 @@ TEST(URLRequestContextConfigTest, SetQuicServerMigrationOptions) {
   const net::QuicParams* quic_params = context->quic_context()->params();
 
   EXPECT_FALSE(quic_params->close_sessions_on_ip_change);
-  EXPECT_TRUE(quic_params->allow_server_migration);
-}
-
-// Test that goaway_sessions_on_ip_change is set on by default for iOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_SetQuicGoAwaySessionsOnIPChangeByDefault \
-  SetQuicGoAwaySessionsOnIPChangeByDefault
-#else
-#define MAYBE_SetQuicGoAwaySessionsOnIPChangeByDefault \
-  DISABLED_SetQuicGoAwaySessionsOnIPChangeByDefault
-#endif
-TEST(URLRequestContextConfigTest,
-     MAYBE_SetQuicGoAwaySessionsOnIPChangeByDefault) {
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          "{\"QUIC\":{}}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  // Set a ProxyConfigService to avoid DCHECK failure when building.
-  builder.set_proxy_config_service(
-      std::make_unique<net::ProxyConfigServiceFixed>(
-          net::ProxyConfigWithAnnotation::CreateDirect()));
-  std::unique_ptr<net::URLRequestContext> context(builder.Build());
-  const net::QuicParams* quic_params = context->quic_context()->params();
-
-  EXPECT_FALSE(quic_params->close_sessions_on_ip_change);
-  EXPECT_TRUE(quic_params->goaway_sessions_on_ip_change);
+  EXPECT_FALSE(quic_params->allow_server_migration);
 }
 
 // Tests that goaway_sessions_on_ip_changes can be set on via
-// experimental options on non-iOS.
-#if !BUILDFLAG(IS_IOS)
-#define MAYBE_SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions \
-  SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions
-#else
-#define MAYBE_SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions \
-  DISABLED_SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions
-#endif
+// experimental options.
 TEST(URLRequestContextConfigTest,
-     MAYBE_SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions) {
+     SetQuicGoAwaySessionsOnIPChangeViaExperimentOptions) {
   base::test::TaskEnvironment task_environment_(
       base::test::TaskEnvironment::MainThreadType::IO);
 
@@ -741,8 +559,6 @@ TEST(URLRequestContextConfigTest,
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -769,10 +585,15 @@ TEST(URLRequestContextConfigTest,
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -784,67 +605,6 @@ TEST(URLRequestContextConfigTest,
   EXPECT_TRUE(quic_params->goaway_sessions_on_ip_change);
 }
 
-// Test that goaway_sessions_on_ip_change can be set to false via
-// experimental options on iOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_DisableQuicGoAwaySessionsOnIPChangeViaExperimentOptions \
-  DisableQuicGoAwaySessionsOnIPChangeViaExperimentOptions
-#else
-#define MAYBE_DisableQuicGoAwaySessionsOnIPChangeViaExperimentOptions \
-  DISABLED_DisableQuicGoAwaySessionsOnIPChangeViaExperimentOptions
-#endif
-TEST(URLRequestContextConfigTest,
-     MAYBE_DisableQuicGoAwaySessionsOnIPChangeViaExperimentOptions) {
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          "{\"QUIC\":{\"goaway_sessions_on_ip_change\":false}}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  // Set a ProxyConfigService to avoid DCHECK failure when building.
-  builder.set_proxy_config_service(
-      std::make_unique<net::ProxyConfigServiceFixed>(
-          net::ProxyConfigWithAnnotation::CreateDirect()));
-  std::unique_ptr<net::URLRequestContext> context(builder.Build());
-  const net::QuicParams* quic_params = context->quic_context()->params();
-
-  EXPECT_FALSE(quic_params->close_sessions_on_ip_change);
-  EXPECT_FALSE(quic_params->goaway_sessions_on_ip_change);
-}
-
 TEST(URLRequestContextConfigTest, SetQuicConnectionMigrationV2Options) {
   base::test::TaskEnvironment task_environment_(
       base::test::TaskEnvironment::MainThreadType::IO);
@@ -853,8 +613,6 @@ TEST(URLRequestContextConfigTest, SetQuicConnectionMigrationV2Options) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -873,11 +631,7 @@ TEST(URLRequestContextConfigTest, SetQuicConnectionMigrationV2Options) {
           // User-Agent request header field.
           "fake agent",
           // JSON encoded experimental options.
-          // Explicitly turn off "goaway_sessions_on_ip_change" which is default
-          // enabled on iOS but cannot be simultaneously set with migration
-          // option.
           "{\"QUIC\":{\"migrate_sessions_on_network_change_v2\":true,"
-          "\"goaway_sessions_on_ip_change\":false,"
           "\"migrate_sessions_early_v2\":true,"
           "\"retry_on_alternate_network_before_handshake\":true,"
           "\"migrate_idle_sessions\":true,"
@@ -893,10 +647,15 @@ TEST(URLRequestContextConfigTest, SetQuicConnectionMigrationV2Options) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -920,56 +679,6 @@ TEST(URLRequestContextConfigTest, SetQuicConnectionMigrationV2Options) {
             quic_params->supported_versions);
 }
 
-TEST(URLRequestContextConfigTest, SetQuicStaleDNSracing) {
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          "{\"QUIC\":{\"race_stale_dns_on_connection\":true}}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  // Set a ProxyConfigService to avoid DCHECK failure when building.
-  builder.set_proxy_config_service(
-      std::make_unique<net::ProxyConfigServiceFixed>(
-          net::ProxyConfigWithAnnotation::CreateDirect()));
-  std::unique_ptr<net::URLRequestContext> context(builder.Build());
-  const net::QuicParams* quic_params = context->quic_context()->params();
-
-  EXPECT_TRUE(quic_params->race_stale_dns_on_connection);
-}
-
 TEST(URLRequestContextConfigTest, SetQuicAllowPortMigration) {
   base::test::TaskEnvironment task_environment_(
       base::test::TaskEnvironment::MainThreadType::IO);
@@ -977,8 +686,6 @@ TEST(URLRequestContextConfigTest, SetQuicAllowPortMigration) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1005,10 +712,15 @@ TEST(URLRequestContextConfigTest, SetQuicAllowPortMigration) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1026,8 +738,6 @@ TEST(URLRequestContextConfigTest, DisableQuicRetryWithoutAltSvcOnQuicErrors) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1054,10 +764,15 @@ TEST(URLRequestContextConfigTest, DisableQuicRetryWithoutAltSvcOnQuicErrors) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1075,8 +790,6 @@ TEST(URLRequestContextConfigTest, BrokenAlternativeServiceDelayParams1) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1105,10 +818,15 @@ TEST(URLRequestContextConfigTest, BrokenAlternativeServiceDelayParams1) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1131,8 +849,6 @@ TEST(URLRequestContextConfigTest, BrokenAlternativeServiceDelayParams2) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1161,10 +877,15 @@ TEST(URLRequestContextConfigTest, BrokenAlternativeServiceDelayParams2) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1187,8 +908,6 @@ TEST(URLRequestContextConfigTest, DelayMainJobWithAvailableSpdySession) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1215,10 +934,15 @@ TEST(URLRequestContextConfigTest, DelayMainJobWithAvailableSpdySession) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1236,8 +960,6 @@ TEST(URLRequestContextConfigTest, SetDisableTlsZeroRtt) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1264,10 +986,15 @@ TEST(URLRequestContextConfigTest, SetDisableTlsZeroRtt) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1286,8 +1013,6 @@ TEST(URLRequestContextConfigTest, SetQuicHostWhitelist) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1314,10 +1039,15 @@ TEST(URLRequestContextConfigTest, SetQuicHostWhitelist) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1326,8 +1056,8 @@ TEST(URLRequestContextConfigTest, SetQuicHostWhitelist) {
   const net::HttpNetworkSessionParams* params =
       context->GetNetworkSessionParams();
 
-  EXPECT_TRUE(base::Contains(params->quic_host_allowlist, "www.example.com"));
-  EXPECT_TRUE(base::Contains(params->quic_host_allowlist, "www.example.org"));
+  EXPECT_TRUE(params->quic_host_allowlist.contains("www.example.com"));
+  EXPECT_TRUE(params->quic_host_allowlist.contains("www.example.org"));
 }
 
 TEST(URLRequestContextConfigTest, SetQuicMaxTimeBeforeCryptoHandshake) {
@@ -1338,8 +1068,6 @@ TEST(URLRequestContextConfigTest, SetQuicMaxTimeBeforeCryptoHandshake) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1367,10 +1095,15 @@ TEST(URLRequestContextConfigTest, SetQuicMaxTimeBeforeCryptoHandshake) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1390,8 +1123,6 @@ TEST(URLURLRequestContextConfigTest, SetQuicConnectionOptions) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1419,10 +1150,15 @@ TEST(URLURLRequestContextConfigTest, SetQuicConnectionOptions) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1450,8 +1186,6 @@ TEST(URLURLRequestContextConfigTest, SetAcceptLanguageAndUserAgent) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1478,10 +1212,15 @@ TEST(URLURLRequestContextConfigTest, SetAcceptLanguageAndUserAgent) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1500,8 +1239,6 @@ TEST(URLURLRequestContextConfigTest, TurningOffQuic) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           false,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1528,10 +1265,15 @@ TEST(URLURLRequestContextConfigTest, TurningOffQuic) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1549,7 +1291,10 @@ TEST(URLURLRequestContextConfigTest, DefaultEnableQuic) {
   URLRequestContextConfigBuilder config_builder;
   std::unique_ptr<URLRequestContextConfig> config = config_builder.Build();
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1568,8 +1313,6 @@ TEST(URLRequestContextConfigTest, SetSpdyGoAwayOnIPChange) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1596,10 +1339,15 @@ TEST(URLRequestContextConfigTest, SetSpdyGoAwayOnIPChange) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1618,8 +1366,6 @@ TEST(URLRequestContextConfigTest, WrongSpdyGoAwayOnIPChangeValue) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1646,10 +1392,15 @@ TEST(URLRequestContextConfigTest, WrongSpdyGoAwayOnIPChangeValue) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   EXPECT_FALSE(config->effective_experimental_options.contains(
       "spdy_go_away_on_ip_change"));
 }
@@ -1662,8 +1413,6 @@ TEST(URLRequestContextConfigTest, BidiStreamDetectBrokenConnection) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1690,10 +1439,15 @@ TEST(URLRequestContextConfigTest, BidiStreamDetectBrokenConnection) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   EXPECT_TRUE(config->effective_experimental_options.contains(
       "bidi_stream_detect_broken_connection"));
   EXPECT_TRUE(config->bidi_stream_detect_broken_connection);
@@ -1708,8 +1462,6 @@ TEST(URLRequestContextConfigTest, WrongBidiStreamDetectBrokenConnectionValue) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1736,10 +1488,15 @@ TEST(URLRequestContextConfigTest, WrongBidiStreamDetectBrokenConnectionValue) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
 
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   EXPECT_FALSE(config->effective_experimental_options.contains(
       "bidi_stream_detect_broken_connection"));
 }
@@ -1752,8 +1509,6 @@ TEST(URLRequestContextConfigTest, HttpsSvcbOptions) {
       URLRequestContextConfig::CreateURLRequestContextConfig(
           // Enable QUIC.
           true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
           // Enable SPDY.
           true,
           // Enable Brotli.
@@ -1788,9 +1543,14 @@ TEST(URLRequestContextConfigTest, HttpsSvcbOptions) {
           // Enable Public Key Pinning bypass for local trust anchors.
           true,
           // Optional network thread priority.
-          absl::optional<double>());
+          std::nullopt,
+          // Optional proxy options.
+          std::optional<cronet::proto::ProxyOptions>());
   net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
+  // It's safe to pass a null `network_tasks` since `config` does not specify
+  // `ProxyOptions`.
+  config->ConfigureURLRequestContextBuilder(&builder,
+                                            /*network_tasks=*/nullptr);
   // Set a ProxyConfigService to avoid DCHECK failure when building.
   builder.set_proxy_config_service(
       std::make_unique<net::ProxyConfigServiceFixed>(
@@ -1801,7 +1561,6 @@ TEST(URLRequestContextConfigTest, HttpsSvcbOptions) {
       context->host_resolver()
           ->GetManagerForTesting()
           ->https_svcb_options_for_testing();
-  EXPECT_TRUE(https_svcb_options.enable);
   EXPECT_EQ(base::Milliseconds(1), https_svcb_options.insecure_extra_time_max);
   EXPECT_EQ(2, https_svcb_options.insecure_extra_time_percent);
   EXPECT_EQ(base::Milliseconds(3), https_svcb_options.insecure_extra_time_min);
@@ -1812,92 +1571,6 @@ TEST(URLRequestContextConfigTest, HttpsSvcbOptions) {
   const net::HttpNetworkSessionParams* params =
       context->GetNetworkSessionParams();
   EXPECT_TRUE(params->use_dns_https_svcb_alpn);
-}
-
-TEST(URLRequestContextConfigTest, SkipLogging) {
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          "{\"skip_logging\":true}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  EXPECT_TRUE(config->effective_experimental_options.contains("skip_logging"));
-  EXPECT_TRUE(config->skip_logging);
-}
-
-TEST(URLRequestContextConfigTest, WrongSkipLoggingValue) {
-  base::test::TaskEnvironment task_environment_(
-      base::test::TaskEnvironment::MainThreadType::IO);
-
-  std::unique_ptr<URLRequestContextConfig> config =
-      URLRequestContextConfig::CreateURLRequestContextConfig(
-          // Enable QUIC.
-          true,
-          // QUIC User Agent ID.
-          "Default QUIC User Agent ID",
-          // Enable SPDY.
-          true,
-          // Enable Brotli.
-          false,
-          // Type of http cache.
-          URLRequestContextConfig::HttpCacheType::DISK,
-          // Max size of http cache in bytes.
-          1024000,
-          // Disable caching for HTTP responses. Other information may be stored
-          // in the cache.
-          false,
-          // Storage path for http cache and cookie storage.
-          "/data/data/org.chromium.net/app_cronet_test/test_storage",
-          // Accept-Language request header field.
-          "foreign-language",
-          // User-Agent request header field.
-          "fake agent",
-          // JSON encoded experimental options.
-          "{\"skip_logging\":10}",
-          // MockCertVerifier to use for testing purposes.
-          std::unique_ptr<net::CertVerifier>(),
-          // Enable network quality estimator.
-          false,
-          // Enable Public Key Pinning bypass for local trust anchors.
-          true,
-          // Optional network thread priority.
-          absl::optional<double>());
-
-  net::URLRequestContextBuilder builder;
-  config->ConfigureURLRequestContextBuilder(&builder);
-  EXPECT_FALSE(config->effective_experimental_options.contains("skip_logging"));
 }
 
 // See stale_host_resolver_unittest.cc for test of StaleDNS options.

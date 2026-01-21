@@ -7,17 +7,15 @@
 files.
 """
 
-from __future__ import print_function
-
 import collections
 import os
 import struct
 import sys
+
 if __name__ == '__main__':
   sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-import six
-
+from grit import constants
 from grit import util
 from grit.node import include
 from grit.node import message
@@ -40,7 +38,7 @@ class CorruptDataPack(Exception):
   pass
 
 
-class DataPackSizes(object):
+class DataPackSizes:
   def __init__(self, header, id_table, alias_table, data):
     self.header = header
     self.id_table = id_table
@@ -64,7 +62,7 @@ class DataPackSizes(object):
     return self.__class__.__name__ + repr(self.__dict__)
 
 
-class DataPackContents(object):
+class DataPackContents:
   def __init__(self, resources, encoding, version, aliases, sizes):
     # Map of resource_id -> str.
     self.resources = resources
@@ -78,8 +76,14 @@ class DataPackContents(object):
     self.sizes = sizes
 
 
-def Format(root, lang='en', output_dir='.'):
+def Format(root, lang='en', gender=constants.DEFAULT_GENDER, output_dir='.'):
   """Writes out the data pack file format (platform agnostic resource file)."""
+  assert gender is not None
+
+  return WriteDataPackToString(_FormatInternal(root, lang, gender), UTF8)
+
+
+def _FormatInternal(root, lang, gender):
   id_map = root.GetIdMap()
   data = {}
   root.info = []
@@ -87,13 +91,36 @@ def Format(root, lang='en', output_dir='.'):
     with node:
       if isinstance(node, (include.IncludeNode, message.MessageNode,
                            structure.StructureNode)):
-        value = node.GetDataPackValue(lang, util.BINARY)
+        value = _GetGenderDedupedValue(node, lang, gender)
         if value is not None:
           resource_id = id_map[node.GetTextualIds()[0]]
           data[resource_id] = value
           root.info.append('{},{},{}'.format(
               node.attrs.get('name'), resource_id, node.source))
-  return WriteDataPackToString(data, UTF8)
+  return data
+
+
+# Many strings don't get separate translations per gender. We don't want to
+# store 4 copies of every string if we don't need to. This function checks if a
+# string in a gender translation already exists in the default translation for
+# the given language, and if so, removes it. Chrome will attempt to find a
+# translation in the appropriate gender first, and if not found, it will fall
+# back to the default gender.
+#
+# TODO(crbug.com/413058329): consider also deduping strings that are identical
+# in the default language and a translated language.
+def _GetGenderDedupedValue(node, lang, gender):
+  value = node.GetDataPackValue(lang, gender, util.BINARY)
+  if gender == constants.DEFAULT_GENDER or value is None:
+    return value
+
+  default_value = node.GetDataPackValue(lang, constants.DEFAULT_GENDER,
+                                        util.BINARY)
+  assert default_value is not None
+  if value != default_value:
+    return value
+
+  return None
 
 
 def ReadDataPack(input_file):
@@ -180,7 +207,7 @@ def WriteDataPackToString(resources, encoding):
     if resource_id in alias_map:
       continue
     data = resources[resource_id]
-    if isinstance(data, six.text_type):
+    if isinstance(data, str):
       data = data.encode('utf-8')
     index_by_id[resource_id] = index
     ret.append(struct.pack('<HI', resource_id, data_offset))
@@ -211,7 +238,7 @@ def WriteDataPack(resources, output_file, encoding):
 
 def ReadGrdInfo(grd_file):
   info_dict = {}
-  with open(grd_file + '.info', 'rt') as f:
+  with open(grd_file + '.info') as f:
     for line in f:
       item = GrdInfoItem._make(line.strip().split(','))
       info_dict[int(item.id)] = item
@@ -246,7 +273,7 @@ def RePack(output_file,
     lines = util.ReadFile(allowlist_file, 'utf-8').strip().splitlines()
     if not lines:
       raise Exception('Allowlist file should not be empty')
-    allowlist = set(int(x) for x in lines)
+    allowlist = {int(x) for x in lines}
   inputs = [(p.resources, p.encoding) for p in input_data_packs]
   resources, encoding = RePackFromDataPackStrings(inputs, allowlist,
                                                   suppress_removed_key_output)
@@ -255,7 +282,7 @@ def RePack(output_file,
     output_info_filepath = output_file + '.info'
   with open(output_info_filepath, 'w') as output_info_file:
     for filename in input_info_files:
-      with open(filename, 'r') as info_file:
+      with open(filename) as info_file:
         output_info_file.writelines(info_file.readlines())
 
 
@@ -296,9 +323,9 @@ def RePackFromDataPackStrings(inputs,
                      ' vs ' + str(input_encoding))
 
     if allowlist:
-      allowlisted_resources = dict([(key, input_resources[key])
+      allowlisted_resources = {key: input_resources[key]
                                     for key in input_resources.keys()
-                                    if key in allowlist])
+                                    if key in allowlist}
       resources.update(allowlisted_resources)
       removed_keys = [
           key for key in input_resources.keys() if key not in allowlist

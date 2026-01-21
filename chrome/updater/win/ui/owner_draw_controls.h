@@ -9,27 +9,29 @@
 
 #include "base/win/atl.h"
 #include "chrome/updater/win/ui/ui_constants.h"
-
-// These headers must be included after base/win/atl.h.
-#include "./atlapp.h"
-#include "./atltypes.h"
-
+#include "third_party/wtl/include/atlapp.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 #pragma clang diagnostic ignored "-Wmissing-braces"
-#include "./atlctrls.h"
-#include "./atlframe.h"
+#include "third_party/wtl/include/atlctrls.h"
+#include "third_party/wtl/include/atlframe.h"
 #pragma clang diagnostic pop
 
-namespace updater {
-namespace ui {
+namespace updater::ui {
 
 class CaptionButton : public CWindowImpl<CaptionButton, WTL::CButton>,
                       public WTL::COwnerDraw<CaptionButton> {
  public:
+// This macro declares a static local variable that would get duplicated in
+// component builds. However, the updater is only meaningful in non-component
+// builds (docs/updater/dev_manual.md), so silence clang's warning.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunique-object-duplication"
   DECLARE_WND_CLASS_EX(_T("CaptionButton"),
                        CS_HREDRAW | CS_VREDRAW,
                        COLOR_WINDOW)
+#pragma clang diagnostic pop
+
   CaptionButton();
   CaptionButton(const CaptionButton&) = delete;
   CaptionButton& operator=(const CaptionButton&) = delete;
@@ -130,9 +132,15 @@ class OwnerDrawTitleBarWindow : public CWindowImpl<OwnerDrawTitleBarWindow> {
     kButtonMinimize,
   };
 
+// This macro declares a static local variable that would get duplicated in
+// component builds. However, the updater is only meaningful in non-component
+// builds (docs/updater/dev_manual.md), so silence clang's warning.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunique-object-duplication"
   DECLARE_WND_CLASS_EX(_T("OwnerDrawTitleBarWindow"),
                        CS_HREDRAW | CS_VREDRAW,
                        COLOR_WINDOW)
+#pragma clang diagnostic pop
 
   BEGIN_MSG_MAP(OwnerDrawTitleBarWindow)
     MESSAGE_HANDLER(WM_CREATE, OnCreate)
@@ -331,7 +339,6 @@ class CustomProgressBarCtrl : public CWindowImpl<CustomProgressBarCtrl> {
   WTL::CBrush empty_frame_brush_;
 };
 
-}  // namespace ui
-}  // namespace updater
+}  // namespace updater::ui
 
 #endif  // CHROME_UPDATER_WIN_UI_OWNER_DRAW_CONTROLS_H_

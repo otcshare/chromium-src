@@ -4,10 +4,12 @@
 
 #include "components/viz/service/frame_sinks/video_detector.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/quads/compositor_frame.h"
@@ -21,16 +23,15 @@
 
 namespace viz {
 
-constexpr base::TimeDelta VideoDetector::kVideoTimeout;
+constexpr base::TimeDelta VideoDetector::kMaxVideoTimeout;
+constexpr base::TimeDelta VideoDetector::kMinVideoTimeout;
 constexpr base::TimeDelta VideoDetector::kMinVideoDuration;
 
 // Stores information about updates to a client and determines whether it's
 // likely that a video is playing in it.
 class VideoDetector::ClientInfo {
  public:
-  ClientInfo()
-      : should_ignore_non_video_frames_(
-            features::ShouldVideoDetectorIgnoreNonVideoFrames()) {}
+  ClientInfo() = default;
 
   ClientInfo(const ClientInfo&) = delete;
   ClientInfo& operator=(const ClientInfo&) = delete;
@@ -38,7 +39,7 @@ class VideoDetector::ClientInfo {
   // Called when a Surface belonging to this client is drawn. Returns true if we
   // determine that video is playing in this client.
   bool ReportDrawnAndCheckForVideo(Surface* surface, base::TimeTicks now) {
-    uint64_t frame_index = surface->GetActiveFrameIndex();
+    uint32_t frame_index = surface->GetActiveFrameIndex();
 
     // If |frame_index| hasn't increased, then no new frame was submitted since
     // the last draw.
@@ -49,7 +50,7 @@ class VideoDetector::ClientInfo {
 
     const CompositorFrame& frame = surface->GetActiveFrame();
 
-    if (should_ignore_non_video_frames_ && !frame.metadata.may_contain_video) {
+    if (!frame.metadata.may_contain_video) {
       return false;
     }
 
@@ -96,13 +97,9 @@ class VideoDetector::ClientInfo {
   }
 
  private:
-  // If true, we'll only process frames that may contain videos, as determined
-  // by the frame's may_contain_video metadata.
-  bool should_ignore_non_video_frames_;
-
   // Circular buffer containing update times of the last (up to
   // |kMinFramesPerSecond|) video-sized updates to this client.
-  base::TimeTicks update_times_[kMinFramesPerSecond];
+  std::array<base::TimeTicks, kMinFramesPerSecond> update_times_;
 
   // Time at which the current sequence of updates that looks like video
   // started. Empty if video isn't currently playing.
@@ -117,7 +114,7 @@ class VideoDetector::ClientInfo {
   // Frame index of the last drawn Surface. We use this number to determine
   // whether a new frame was submitted since the last time the Surface was
   // drawn.
-  uint64_t last_drawn_frame_index_ = 0;
+  uint32_t last_drawn_frame_index_ = 0;
 };
 
 VideoDetector::VideoDetector(
@@ -166,7 +163,8 @@ void VideoDetector::OnFrameSinkIdInvalidated(const FrameSinkId& frame_sink_id) {
 }
 
 bool VideoDetector::OnSurfaceDamaged(const SurfaceId& surface_id,
-                                     const BeginFrameAck& ack) {
+                                     const BeginFrameAck& ack,
+                                     HandleInteraction handle_interaction) {
   return false;
 }
 
@@ -190,8 +188,13 @@ void VideoDetector::OnSurfaceWillBeDrawn(Surface* surface) {
   base::TimeTicks now = tick_clock_->NowTicks();
 
   if (it->second->ReportDrawnAndCheckForVideo(surface, now)) {
-    video_inactive_timer_.Start(FROM_HERE, kVideoTimeout, this,
-                                &VideoDetector::OnVideoActivityEnded);
+    // Avoid (re)starting the timer every frame since it has considerable
+    // overhead.
+    if (!video_inactive_timer_.IsRunning() ||
+        (video_inactive_timer_.desired_run_time() - now) < kMinVideoTimeout) {
+      video_inactive_timer_.Start(FROM_HERE, kMaxVideoTimeout, this,
+                                  &VideoDetector::OnVideoActivityEnded);
+    }
     if (!video_is_playing_) {
       video_is_playing_ = true;
       for (auto& observer : observers_) {

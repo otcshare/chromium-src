@@ -6,19 +6,7 @@
 
 #import "base/check_op.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace app_group {
-
-NSString* const kPendingLogFileSuffix = @"_PendingLog";
-
-NSString* const kPendingLogFileDirectory = @"ExtensionLogs";
-
-NSString* const kSearchExtensionDisplayCount = @"SearchExtensionDisplayCount";
-
-NSString* const kContentExtensionDisplayCount = @"ContentExtensionDisplayCount";
 
 NSString* const kCredentialExtensionDisplayCount =
     @"CredentialExtensionDisplayCount";
@@ -32,6 +20,12 @@ NSString* const kCredentialExtensionCopyURLCount =
 NSString* const kCredentialExtensionCopyUsernameCount =
     @"CredentialExtensionCopyUsernameCount";
 
+NSString* const kCredentialExtensionCopyUserDisplayNameCount =
+    @"CredentialExtensionCopyUserDisplayNameCount";
+
+NSString* const kCredentialExtensionCopyCreationDateCount =
+    @"CredentialExtensionCopyCreationDateCount";
+
 NSString* const kCredentialExtensionCopyPasswordCount =
     @"CredentialExtensionCopyPasswordCount";
 
@@ -44,8 +38,14 @@ NSString* const kCredentialExtensionSearchCount =
 NSString* const kCredentialExtensionPasswordUseCount =
     @"CredentialExtensionPasswordUseCount";
 
+NSString* const kCredentialExtensionPasskeyUseCount =
+    @"CredentialExtensionPasskeyUseCount";
+
 NSString* const kCredentialExtensionQuickPasswordUseCount =
     @"CredentialExtensionQuickPasswordUseCount";
+
+NSString* const kCredentialExtensionQuickPasskeyUseCount =
+    @"CredentialExtensionQuickPasskeyUseCount";
 
 NSString* const kCredentialExtensionFetchPasswordFailureCount =
     @"CredentialExtensionFetchPasswordFailureCount";
@@ -59,18 +59,8 @@ NSString* const kCredentialExtensionKeychainSavePasswordFailureCount =
 NSString* const kCredentialExtensionSaveCredentialFailureCount =
     @"CredentialExtensionSaveCredentialFailureCount";
 
-NSString* const kCredentialExtensionConsentVerifiedCount =
-    @"CredentialExtensionConsentVerifiedCount";
-
 NSString* HistogramCountKey(NSString* histogram, int bucket) {
   return [NSString stringWithFormat:@"%@.%i", histogram, bucket];
-}
-
-// To avoid collision between session_ids from chrome or external
-// components, the session ID is offset depending on the application.
-int AppGroupSessionID(int session_id, AppGroupApplications application) {
-  DCHECK_LT(session_id, 1 << 23);
-  return (1 << 23) * static_cast<int>(application) + session_id;
 }
 
 }  // namespace app_group

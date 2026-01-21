@@ -8,7 +8,6 @@
 #include <tuple>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/insets.h"
@@ -29,18 +28,6 @@ void NormalizedPoint::SetPoint(int main, int cross) {
 void NormalizedPoint::Offset(int delta_main, int delta_cross) {
   main_ += delta_main;
   cross_ += delta_cross;
-}
-
-bool NormalizedPoint::operator==(const NormalizedPoint& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedPoint::operator!=(const NormalizedPoint& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedPoint::operator<(const NormalizedPoint& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
 }
 
 std::string NormalizedPoint::ToString() const {
@@ -65,8 +52,8 @@ void NormalizedSize::SetToMax(int main, int cross) {
 }
 
 void NormalizedSize::SetToMin(int main, int cross) {
-  main_ = base::clamp(main, 0, main_);
-  cross_ = base::clamp(cross, 0, cross_);
+  main_ = std::clamp(main, 0, main_);
+  cross_ = std::clamp(cross, 0, cross_);
 }
 
 void NormalizedSize::SetToMax(const NormalizedSize& other) {
@@ -77,35 +64,11 @@ void NormalizedSize::SetToMin(const NormalizedSize& other) {
   SetToMin(other.main(), other.cross());
 }
 
-bool NormalizedSize::operator==(const NormalizedSize& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedSize::operator!=(const NormalizedSize& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedSize::operator<(const NormalizedSize& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
-}
-
 std::string NormalizedSize::ToString() const {
   return base::StringPrintf("%d x %d", main(), cross());
 }
 
 // NormalizedInsets ------------------------------------------------------------
-
-bool NormalizedInsets::operator==(const NormalizedInsets& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedInsets::operator!=(const NormalizedInsets& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedInsets::operator<(const NormalizedInsets& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
-}
 
 std::string NormalizedInsets::ToString() const {
   return base::StrCat(
@@ -132,14 +95,6 @@ void NormalizedSizeBounds::Expand(int main, int cross) {
 
 void NormalizedSizeBounds::Inset(const NormalizedInsets& insets) {
   Expand(-insets.main_size(), -insets.cross_size());
-}
-
-bool NormalizedSizeBounds::operator==(const NormalizedSizeBounds& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedSizeBounds::operator!=(const NormalizedSizeBounds& other) const {
-  return !(*this == other);
 }
 
 bool NormalizedSizeBounds::operator<(const NormalizedSizeBounds& other) const {
@@ -223,18 +178,6 @@ void NormalizedRect::Inset(int main_leading,
 
 void NormalizedRect::Offset(int main, int cross) {
   origin_.Offset(main, cross);
-}
-
-bool NormalizedRect::operator==(const NormalizedRect& other) const {
-  return std::tie(origin_, size_) == std::tie(other.origin_, other.size_);
-}
-
-bool NormalizedRect::operator!=(const NormalizedRect& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedRect::operator<(const NormalizedRect& other) const {
-  return std::tie(origin_, size_) < std::tie(other.origin_, other.size_);
 }
 
 std::string NormalizedRect::ToString() const {

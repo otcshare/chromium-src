@@ -195,9 +195,8 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::ReportStatistics(
     int bytes_decoded) {
   stats_.video_bytes_decoded = bytes_decoded;
 
-  if (keyframe_distance_average_.count()) {
-    stats_.video_keyframe_distance_average =
-        keyframe_distance_average_.Average();
+  if (keyframe_distance_average_.Count()) {
+    stats_.video_keyframe_distance_average = keyframe_distance_average_.Mean();
   } else {
     // Before we have enough keyframes to calculate the average distance, we
     // will assume the average keyframe distance is infinitely large.
@@ -256,9 +255,10 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::OnDecode(
   }
 
   frame_metadata_[buffer.timestamp()] = {
-      buffer.discard_padding().first == kInfiniteDuration,  // should_drop
-      buffer.duration(),                                    // duration
-      base::TimeTicks::Now(),                               // decode_begin_time
+      buffer.discard_padding().has_value() &&
+          buffer.discard_padding()->first == kInfiniteDuration,  // should_drop
+      buffer.duration(),                                         // duration
+      base::TimeTicks::Now(),  // decode_begin_time
   };
 
   if (!buffer.is_key_frame())
@@ -317,16 +317,6 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::OnOutputReady(
   // Tag buffer with elapsed time since creation.
   buffer->metadata().processing_time =
       base::TimeTicks::Now() - *buffer->metadata().decode_begin_time;
-}
-
-void DecoderStreamTraits<DemuxerStream::VIDEO>::SetPreferNonPlatformDecoders(
-    bool prefer) {
-  prefer_non_platform_decoders_ = prefer;
-}
-
-bool DecoderStreamTraits<DemuxerStream::VIDEO>::GetPreferNonPlatformDecoders()
-    const {
-  return prefer_non_platform_decoders_;
 }
 
 }  // namespace media

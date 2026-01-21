@@ -4,17 +4,20 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <algorithm>
+#include <iomanip>
 #include <ostream>
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
-#include "mojo/public/interfaces/bindings/tests/sample_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -53,8 +56,9 @@ FooPtr MakeFoo() {
   }
 
   std::vector<uint8_t> data(10);
-  for (size_t i = 0; i < data.size(); ++i)
+  for (size_t i = 0; i < data.size(); ++i) {
     data[i] = static_cast<uint8_t>(data.size() - i);
+  }
 
   std::vector<mojo::ScopedDataPipeConsumerHandle> input_streams(2);
   std::vector<mojo::ScopedDataPipeProducerHandle> output_streams(2);
@@ -74,8 +78,9 @@ FooPtr MakeFoo() {
   std::vector<std::vector<bool>> array_of_array_of_bools(2);
   for (size_t i = 0; i < 2; ++i) {
     std::vector<bool> array_of_bools(2);
-    for (size_t j = 0; j < 2; ++j)
+    for (size_t j = 0; j < 2; ++j) {
       array_of_bools[j] = j;
+    }
     array_of_array_of_bools[i] = std::move(array_of_bools);
   }
 
@@ -84,7 +89,7 @@ FooPtr MakeFoo() {
                   std::move(extra_bars), std::move(data),
                   std::move(pipe.handle1), std::move(input_streams),
                   std::move(output_streams), std::move(array_of_array_of_bools),
-                  absl::nullopt, absl::nullopt);
+                  std::nullopt, std::nullopt);
 }
 
 // Check that the given |Foo| is identical to the one made by |MakeFoo()|.
@@ -140,8 +145,9 @@ void CheckFoo(const Foo& foo) {
 }
 
 void PrintSpacer(int depth) {
-  for (int i = 0; i < depth; ++i)
+  for (int i = 0; i < depth; ++i) {
     std::cout << "   ";
+  }
 }
 
 void Print(int depth, const char* name, bool value) {
@@ -201,11 +207,12 @@ void Print(int depth, const char* name, const std::vector<T>& array) {
 template <typename T>
 void Print(int depth,
            const char* name,
-           const absl::optional<std::vector<T>>& array) {
-  if (array)
+           const std::optional<std::vector<T>>& array) {
+  if (array) {
     Print(depth, name, *array);
-  else
+  } else {
     Print(depth, name, std::vector<T>());
+  }
 }
 
 void Print(int depth, const char* name, const FooPtr& foo) {
@@ -233,17 +240,19 @@ void Print(int depth, const char* name, const FooPtr& foo) {
 void DumpHex(const uint8_t* bytes, size_t num_bytes) {
   for (size_t i = 0; i < num_bytes; ++i) {
     std::cout << std::setw(2) << std::setfill('0') << std::hex
-              << uint32_t(bytes[i]);
+              << uint32_t(UNSAFE_TODO(bytes[i]));
 
     if (i % 16 == 15) {
       std::cout << std::endl;
       continue;
     }
 
-    if (i % 2 == 1)
+    if (i % 2 == 1) {
       std::cout << " ";
-    if (i % 8 == 7)
+    }
+    if (i % 8 == 7) {
       std::cout << " ";
+    }
   }
 }
 
@@ -257,8 +266,9 @@ class ServiceImpl : public Service {
 
     // We mainly check that we're given the expected arguments.
     EXPECT_FALSE(foo.is_null());
-    if (!foo.is_null())
+    if (!foo.is_null()) {
       CheckFoo(*foo);
+    }
     EXPECT_EQ(BazOptions::EXTRA, baz);
 
     mojo::Remote<Port> port(std::move(pending_port));

@@ -2,18 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/audio/fuchsia/audio_output_stream_fuchsia.h"
 
 #include <fuchsia/media/cpp/fidl.h>
 #include <lib/sys/cpp/component_context.h>
 #include <zircon/syscalls.h>
 
-#include "base/bind.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/writable_shared_memory_region.h"
 #include "media/audio/fuchsia/audio_manager_fuchsia.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
 
@@ -23,7 +29,7 @@ namespace {
 
 const uint32_t kBufferId = 0;
 
-absl::optional<fuchsia::media::AudioRenderUsage> GetStreamUsage(
+std::optional<fuchsia::media::AudioRenderUsage> GetStreamUsage(
     const AudioParameters& parameters) {
   int usage_flags = parameters.effects() &
                     (AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND |
@@ -45,12 +51,13 @@ absl::optional<fuchsia::media::AudioRenderUsage> GetStreamUsage(
     case 0:
       // If the usage flags are not set then use COMMUNICATION for WebRTC and
       // MEDIA for everything else.
-      if (parameters.latency_tag() == AudioLatency::LATENCY_RTC)
+      if (parameters.latency_tag() == AudioLatency::Type::kRtc) {
         return fuchsia::media::AudioRenderUsage::COMMUNICATION;
+      }
       return fuchsia::media::AudioRenderUsage::MEDIA;
     default:
       DLOG(FATAL) << "More than one FUCHSIA_RENDER_USAGE flag is set";
-      return absl::nullopt;
+      return std::nullopt;
   }
 }
 
@@ -196,6 +203,13 @@ bool AudioOutputStreamFuchsia::InitializePayloadBuffer() {
 }
 
 void AudioOutputStreamFuchsia::OnMinLeadTimeChanged(int64_t min_lead_time) {
+  // AudioRenderer may initially send `min_lead_time=0`. This event can be
+  // ignored. It's expected to send a valid value soon after processing
+  // `SetPcmStreamType()`. See fxbug.dev/122532.
+  if (min_lead_time <= 0) {
+    return;
+  }
+
   bool min_lead_time_was_unknown = !min_lead_time_.has_value();
 
   min_lead_time_ = base::Nanoseconds(min_lead_time);

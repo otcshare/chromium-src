@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "ui/aura/test/aura_test_base.h"
+#include "ui/aura/test/test_window_builder.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/events/base_event_utils.h"
@@ -30,7 +31,12 @@ class RoundedWindowTargeterTest : public aura::test::AuraTestBase {
  protected:
   void SetUp() override {
     aura::test::AuraTestBase::SetUp();
-    window_.reset(CreateNormalWindow(1, root_window(), &delegate_));
+    window_ = aura::test::TestWindowBuilder({.delegate = &delegate_,
+                                             .parent = root_window(),
+                                             .bounds = {100, 100},
+                                             .window_id = 1})
+                  .AllowAllWindowStates()
+                  .Build();
   }
 
   void TearDown() override {
@@ -60,8 +66,9 @@ TEST_F(RoundedWindowTargeterTest, HitTestTopLeftCorner) {
   {
     // Without the RoundedWindowTargeter, the event in the top-left corner
     // should target the window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kTopLeftCorner, kTopLeftCorner,
-                        ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kTopLeftCorner,
+                        kTopLeftCorner, ui::EventTimeForNow(), ui::EF_NONE,
+                        ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
     ASSERT_FALSE(details.dispatcher_destroyed);
     EXPECT_EQ(window_.get(), move.target());
@@ -73,8 +80,9 @@ TEST_F(RoundedWindowTargeterTest, HitTestTopLeftCorner) {
   {
     // With the RoundedWindowTargeter, the event in the top-left corner should
     // fall through to the root window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kTopLeftCorner, kTopLeftCorner,
-                        ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kTopLeftCorner,
+                        kTopLeftCorner, ui::EventTimeForNow(), ui::EF_NONE,
+                        ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
     ASSERT_FALSE(details.dispatcher_destroyed);
     EXPECT_EQ(root_window(), move.target());
@@ -97,7 +105,7 @@ TEST_F(RoundedWindowTargeterTest, HitTestCenter) {
   {
     // Without the RoundedWindowTargeter, the event in the center should target
     // the window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kCenter, kCenter,
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kCenter, kCenter,
                         ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
     ASSERT_FALSE(details.dispatcher_destroyed);
@@ -110,7 +118,7 @@ TEST_F(RoundedWindowTargeterTest, HitTestCenter) {
   {
     // With the RoundedWindowTargeter, the event in the center should still
     // target the window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kCenter, kCenter,
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kCenter, kCenter,
                         ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
     ASSERT_FALSE(details.dispatcher_destroyed);
@@ -134,7 +142,7 @@ TEST_F(RoundedWindowTargeterTest, HitTestBottomRightCorner) {
   {
     // Without the RoundedWindowTargeter, the event in the bottom-right corner
     // should fall through to the root window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kBottomRightCorner,
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kBottomRightCorner,
                         kBottomRightCorner, ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -148,7 +156,7 @@ TEST_F(RoundedWindowTargeterTest, HitTestBottomRightCorner) {
   {
     // With the RoundedWindowTargeter, the event in the bottom-right corner
     // should also fall through to the root window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, kBottomRightCorner,
+    ui::MouseEvent move(ui::EventType::kMouseMoved, kBottomRightCorner,
                         kBottomRightCorner, ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);

@@ -7,29 +7,24 @@
 
 #include <stdint.h>
 
+#include <optional>
+
 #include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_chain.h"
+#include "net/base/session_usage.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 #include "net/socket/next_proto.h"
-#include "net/ssl/ssl_private_key.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace net {
 
-// Various TLS/SSL ProtocolVersion values encoded as uint16_t
-//      struct {
-//          uint8_t major;
-//          uint8_t minor;
-//      } ProtocolVersion;
-// The most significant byte is |major|, and the least significant byte
-// is |minor|.
+// Supported TLS ProtocolVersion values encoded as uint16_t.
 enum {
-  SSL_PROTOCOL_VERSION_TLS1 = 0x0301,
-  SSL_PROTOCOL_VERSION_TLS1_1 = 0x0302,
   SSL_PROTOCOL_VERSION_TLS1_2 = 0x0303,
   SSL_PROTOCOL_VERSION_TLS1_3 = 0x0304,
 };
@@ -44,10 +39,12 @@ NET_EXPORT extern const uint16_t kDefaultSSLVersionMax;
 struct NET_EXPORT SSLConfig {
   using ApplicationSettings = base::flat_map<NextProto, std::vector<uint8_t>>;
 
-  // Default to revocation checking.
   SSLConfig();
   SSLConfig(const SSLConfig& other);
+  SSLConfig(SSLConfig&& other);
   ~SSLConfig();
+  SSLConfig& operator=(const SSLConfig&);
+  SSLConfig& operator=(SSLConfig&&);
 
   // Returns true if |cert| is one of the certs in |allowed_bad_certs|.
   // The expected cert status is written to |cert_status|. |*cert_status| can
@@ -62,8 +59,8 @@ struct NET_EXPORT SSLConfig {
   // If specified, the minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined above.) If
   // unspecified, values from the SSLConfigService are used.
-  absl::optional<uint16_t> version_min_override;
-  absl::optional<uint16_t> version_max_override;
+  std::optional<uint16_t> version_min_override;
+  std::optional<uint16_t> version_max_override;
 
   // Whether early data is enabled on this connection. Note that early data has
   // weaker security properties than normal data and changes the
@@ -81,9 +78,6 @@ struct NET_EXPORT SSLConfig {
 
   // If true, causes only ECDHE cipher suites to be enabled.
   bool require_ecdhe = false;
-
-  // If true, causes SHA-1 signature algorithms in TLS 1.2 to be disabled.
-  bool disable_legacy_crypto = false;
 
   // TODO(wtc): move the following members to a new SSLParams structure.  They
   // are not SSL configuration settings.
@@ -127,11 +121,13 @@ struct NET_EXPORT SSLConfig {
   // The list of application-level protocols to enable renegotiation for.
   NextProtoVector renego_allowed_for_protos;
 
-  // ALPS TLS extension is enabled and corresponding data is sent to server
-  // for each NextProto in |application_settings|.  Data might be empty.
+  // ALPS data for each supported protocol in |alpn_protos|. Specifying a
+  // protocol in this map offers ALPS for that protocol and uses the
+  // corresponding value as the client settings string. The value may be empty.
+  // Keys which do not appear in |alpn_protos| are ignored.
   ApplicationSettings application_settings;
 
-  // If the PartitionSSLSessionsByNetworkIsolationKey feature is enabled, the
+  // If the PartitionConnectionsByNetworkIsolationKey feature is enabled, the
   // session cache is partitioned by this value.
   NetworkAnonymizationKey network_anonymization_key;
 
@@ -148,13 +144,36 @@ struct NET_EXPORT SSLConfig {
   // is moved into SSLClientContext. With client certificates are disabled, the
   // current session cache partitioning behavior will be needed to correctly
   // implement it. For now, it acts as an incomplete version of
-  // PartitionSSLSessionsByNetworkIsolationKey.
+  // PartitionConnectionsByNetworkIsolationKey.
   PrivacyMode privacy_mode = PRIVACY_MODE_DISABLED;
 
   // True if the post-handshake peeking of the transport should be skipped. This
   // logic ensures tickets are resolved early, but can interfere with some unit
   // tests.
   bool disable_post_handshake_peek_for_testing = false;
+
+  // The proxy chain involving this SSL session, and the session's position
+  // within that chain. If the session is to the destination, or (for QUIC) the
+  // proxy chain only includes a prefix of the proxies, then `proxy_chain_index`
+  // may be equal to `proxy_chain.length()`.
+  ProxyChain proxy_chain = ProxyChain::Direct();
+  size_t proxy_chain_index = 0;
+
+  // The usage of this session. This supports distinguishing connections to a
+  // proxy as an endpoint from connections to that same proxy as a proxy.
+  SessionUsage session_usage = SessionUsage::kDestination;
+
+  // If not nullopt, a list of TLS Trust Anchor IDs in wire format
+  // (https://tlswg.org/tls-trust-anchor-ids/draft-ietf-tls-trust-anchor-ids.html#name-tls-extension),
+  // i.e. a series of non-empty, 8-bit length-prefixed strings. These trust
+  // anchor IDs will be sent on the TLS ClientHello message to help the server
+  // select a certificate that the client will accept.
+  //
+  // If an empty vector, the Trust Anchor IDs extension will be sent, but with
+  // no trust anchors. This will signal to the server that the client is new
+  // enough to implement the extension and can process the server's list of
+  // available trust anchors.
+  std::optional<std::vector<uint8_t>> trust_anchor_ids;
 };
 
 }  // namespace net

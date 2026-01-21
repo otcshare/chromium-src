@@ -6,16 +6,20 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
+#include "media/base/media_switches.h"
 #include "media/mojo/mojom/renderer_extensions.mojom.h"
 #include "media/mojo/services/mojo_decryptor_service.h"
 #include "media/mojo/services/mojo_media_client.h"
 
 #if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
+#include "base/sequence_checker.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/threading/sequence_bound.h"
 #include "media/mojo/services/mojo_audio_decoder_service.h"
 #endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
 
@@ -29,7 +33,7 @@
 
 #if BUILDFLAG(ENABLE_MOJO_RENDERER) || BUILDFLAG(ENABLE_CAST_RENDERER) || \
     BUILDFLAG(IS_WIN)
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "media/base/renderer.h"
 #include "media/mojo/services/mojo_renderer_service.h"
 #endif
@@ -40,6 +44,92 @@
 #endif  // BUILDFLAG(ENABLE_MOJO_CDM)
 
 namespace media {
+
+#if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
+// The class creates MojoAudioDecoderService on caller's thread and runs the
+// decoder on a high priority background thread. This can help avoid audio
+// decoder underflow in audio renderer. In addition, it also improves video
+// decoder performance by moving busy audio tasks off video decoder thread.
+class InterfaceFactoryImpl::AudioDecoderReceivers {
+ public:
+  AudioDecoderReceivers(MojoMediaClient* mojo_media_client,
+                        MojoCdmServiceContext* mojo_cdm_service_context,
+                        base::RepeatingClosure disconnect_handler)
+      : task_runner_(
+            base::FeatureList::IsEnabled(
+                kUseTaskRunnerForMojoAudioDecoderService)
+                ? base::ThreadPool::CreateSingleThreadTaskRunner(
+                      {base::TaskPriority::USER_BLOCKING, base::MayBlock()})
+                : base::SingleThreadTaskRunner::GetCurrentDefault()),
+        receivers_(task_runner_),
+        mojo_media_client_(mojo_media_client),
+        mojo_cdm_service_context_(mojo_cdm_service_context),
+        disconnect_handler_(disconnect_handler) {
+    DCHECK(mojo_media_client_);
+    DCHECK(mojo_cdm_service_context_);
+
+    base::RepeatingClosure disconnect_cb =
+        base::BindRepeating(&AudioDecoderReceivers::OnReceiverDisconnect,
+                            weak_factory_.GetWeakPtr());
+    if (!task_runner_->RunsTasksInCurrentSequence()) {
+      disconnect_cb =
+          base::BindPostTaskToCurrentDefault(std::move(disconnect_cb));
+    }
+
+    receivers_
+        .AsyncCall(&mojo::UniqueReceiverSet<
+                   mojom::AudioDecoder>::set_disconnect_handler)
+        .WithArgs(std::move(disconnect_cb));
+  }
+
+  ~AudioDecoderReceivers() = default;
+
+  void CreateAudioDecoder(mojo::PendingReceiver<mojom::AudioDecoder> receiver) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+    typedef mojo::ReceiverId (
+        mojo::UniqueReceiverSet<mojom::AudioDecoder>::*AddFuncType)(
+        std::unique_ptr<mojom::AudioDecoder>,
+        mojo::PendingReceiver<mojom::AudioDecoder>,
+        scoped_refptr<base::SequencedTaskRunner>);
+
+    receivers_
+        .AsyncCall(base::IgnoreResult<AddFuncType>(
+            &mojo::UniqueReceiverSet<mojom::AudioDecoder>::Add))
+        .WithArgs(
+            std::make_unique<MojoAudioDecoderService>(
+                mojo_media_client_, mojo_cdm_service_context_, task_runner_),
+            std::move(receiver), task_runner_);
+    ++receiver_count_;
+  }
+
+  bool IsEmpty() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return receiver_count_ == 0;
+  }
+
+ private:
+  void OnReceiverDisconnect() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+    --receiver_count_;
+    disconnect_handler_.Run();
+  }
+
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  base::SequenceBound<mojo::UniqueReceiverSet<mojom::AudioDecoder>> receivers_;
+
+  // The following variables run on the caller thread.
+  const raw_ptr<MojoMediaClient> mojo_media_client_;
+  const raw_ptr<MojoCdmServiceContext> mojo_cdm_service_context_;
+  base::RepeatingClosure disconnect_handler_;
+  int receiver_count_ = 0;
+
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<AudioDecoderReceivers> weak_factory_{this};
+};
+#endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
 
 InterfaceFactoryImpl::InterfaceFactoryImpl(
     mojo::PendingRemote<mojom::FrameInterfaceFactory> frame_interfaces,
@@ -62,35 +152,54 @@ void InterfaceFactoryImpl::CreateAudioDecoder(
     mojo::PendingReceiver<mojom::AudioDecoder> receiver) {
   DVLOG(2) << __func__;
 #if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner(
-      base::SingleThreadTaskRunner::GetCurrentDefault());
-
-  std::unique_ptr<AudioDecoder> audio_decoder =
-      mojo_media_client_->CreateAudioDecoder(task_runner);
-  if (!audio_decoder) {
-    DLOG(ERROR) << "AudioDecoder creation failed.";
-    return;
+  if (!audio_decoder_receivers_) {
+    audio_decoder_receivers_ = std::make_unique<AudioDecoderReceivers>(
+        mojo_media_client_, &cdm_service_context_,
+        // Unretained is safe here because InterfaceFactoryImpl is
+        // DeferredDestroy and it will wait for all the mojo channel
+        // disconnection before destructing itself.
+        base::BindRepeating(&InterfaceFactoryImpl::OnReceiverDisconnect,
+                            base::Unretained(this)));
   }
 
-  audio_decoder_receivers_.Add(
-      std::make_unique<MojoAudioDecoderService>(&cdm_service_context_,
-                                                std::move(audio_decoder)),
-      std::move(receiver));
+  audio_decoder_receivers_->CreateAudioDecoder(std::move(receiver));
 #endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
 }
 
 void InterfaceFactoryImpl::CreateVideoDecoder(
     mojo::PendingReceiver<mojom::VideoDecoder> receiver,
-    mojo::PendingRemote<media::stable::mojom::StableVideoDecoder>
-        dst_video_decoder) {
+    mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder) {
   DVLOG(2) << __func__;
 #if BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
+#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+  // When out-of-process video decoding is enabled, we need to ensure that we
+  // know the supported video decoder configurations prior to creating the
+  // MojoVideoDecoderService. That way, the MojoVideoDecoderService won't need
+  // to talk to the out-of-process video decoder to find out the supported
+  // configurations (this would be a problem because the MojoVideoDecoderService
+  // may not have an easy way to talk to the out-of-process decoder at the time
+  // the supported configurations are needed).
+  mojo_media_client_->NotifyDecoderSupportKnown(
+      std::move(dst_video_decoder),
+      base::BindOnce(&InterfaceFactoryImpl::FinishCreatingVideoDecoder,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(receiver)));
+#else
   video_decoder_receivers_.Add(std::make_unique<MojoVideoDecoderService>(
                                    mojo_media_client_, &cdm_service_context_,
                                    std::move(dst_video_decoder)),
                                std::move(receiver));
+#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 #endif  // BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
 }
+
+#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+void InterfaceFactoryImpl::CreateVideoDecoderWithTracker(
+    mojo::PendingReceiver<mojom::VideoDecoder> receiver,
+    mojo::PendingRemote<mojom::VideoDecoderTracker> tracker) {
+  // The browser process ensures that this is not called in the GPU process.
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 
 void InterfaceFactoryImpl::CreateAudioEncoder(
     mojo::PendingReceiver<mojom::AudioEncoder> receiver) {
@@ -146,15 +255,6 @@ void InterfaceFactoryImpl::CreateCastRenderer(
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-void InterfaceFactoryImpl::CreateMediaPlayerRenderer(
-    mojo::PendingRemote<mojom::MediaPlayerRendererClientExtension>
-        client_extension_ptr,
-    mojo::PendingReceiver<mojom::Renderer> receiver,
-    mojo::PendingReceiver<mojom::MediaPlayerRendererExtension>
-        renderer_extension_receiver) {
-  NOTREACHED();
-}
-
 void InterfaceFactoryImpl::CreateFlingingRenderer(
     const std::string& audio_device_id,
     mojo::PendingRemote<mojom::FlingingRendererClientExtension>
@@ -169,15 +269,12 @@ void InterfaceFactoryImpl::CreateMediaFoundationRenderer(
     mojo::PendingRemote<mojom::MediaLog> media_log_remote,
     mojo::PendingReceiver<media::mojom::Renderer> receiver,
     mojo::PendingReceiver<media::mojom::MediaFoundationRendererExtension>
-        renderer_extension_receiver,
-    mojo::PendingRemote<media::mojom::MediaFoundationRendererClientExtension>
-        client_extension_remote) {
+        renderer_extension_receiver) {
   DVLOG(2) << __func__;
   auto renderer = mojo_media_client_->CreateMediaFoundationRenderer(
       base::SingleThreadTaskRunner::GetCurrentDefault(),
       frame_interfaces_.get(), std::move(media_log_remote),
-      std::move(renderer_extension_receiver),
-      std::move(client_extension_remote));
+      std::move(renderer_extension_receiver));
   if (!renderer) {
     DLOG(ERROR) << "MediaFoundationRenderer creation failed.";
     return;
@@ -185,7 +282,7 @@ void InterfaceFactoryImpl::CreateMediaFoundationRenderer(
 
   AddRenderer(std::move(renderer), std::move(receiver));
 }
-#endif  // defined (OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 void InterfaceFactoryImpl::CreateCdm(const CdmConfig& cdm_config,
                                      CreateCdmCallback callback) {
@@ -194,7 +291,7 @@ void InterfaceFactoryImpl::CreateCdm(const CdmConfig& cdm_config,
   CdmFactory* cdm_factory = GetCdmFactory();
   if (!cdm_factory) {
     std::move(callback).Run(mojo::NullRemote(), nullptr,
-                            "CDM Factory creation failed");
+                            CreateCdmStatus::kCdmFactoryCreationFailed);
     return;
   }
 
@@ -211,7 +308,7 @@ void InterfaceFactoryImpl::CreateCdm(const CdmConfig& cdm_config,
                      std::move(callback)));
 #else  // BUILDFLAG(ENABLE_MOJO_CDM)
   std::move(callback).Run(mojo::NullRemote(), nullptr,
-                          "Mojo CDM not supported");
+                          CreateCdmStatus::kCdmNotSupported);
 #endif
 }
 
@@ -225,8 +322,9 @@ void InterfaceFactoryImpl::OnDestroyPending(base::OnceClosure destroy_cb) {
 
 bool InterfaceFactoryImpl::IsEmpty() {
 #if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
-  if (!audio_decoder_receivers_.empty())
+  if (audio_decoder_receivers_ && !audio_decoder_receivers_->IsEmpty()) {
     return false;
+  }
 #endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
 
 #if BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
@@ -262,10 +360,6 @@ void InterfaceFactoryImpl::SetReceiverDisconnectHandler() {
   // disconnect handler should never be called.
   auto disconnect_cb = base::BindRepeating(
       &InterfaceFactoryImpl::OnReceiverDisconnect, base::Unretained(this));
-
-#if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
-  audio_decoder_receivers_.set_disconnect_handler(disconnect_cb);
-#endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER)
 
 #if BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
   video_decoder_receivers_.set_disconnect_handler(disconnect_cb);
@@ -319,7 +413,7 @@ void InterfaceFactoryImpl::OnCdmServiceInitialized(
     MojoCdmService* raw_mojo_cdm_service,
     CreateCdmCallback callback,
     mojom::CdmContextPtr cdm_context,
-    const std::string& error_message) {
+    CreateCdmStatus status) {
   DCHECK(raw_mojo_cdm_service);
 
   // Remove pending MojoCdmService from the mapping in all cases.
@@ -329,16 +423,32 @@ void InterfaceFactoryImpl::OnCdmServiceInitialized(
   pending_mojo_cdm_services_.erase(raw_mojo_cdm_service);
 
   if (!cdm_context) {
-    std::move(callback).Run(mojo::NullRemote(), nullptr, error_message);
+    std::move(callback).Run(mojo::NullRemote(), nullptr, status);
     return;
   }
 
   mojo::PendingRemote<mojom::ContentDecryptionModule> remote;
   cdm_receivers_.Add(std::move(mojo_cdm_service),
                      remote.InitWithNewPipeAndPassReceiver());
-  std::move(callback).Run(std::move(remote), std::move(cdm_context), "");
+  std::move(callback).Run(std::move(remote), std::move(cdm_context),
+                          CreateCdmStatus::kSuccess);
 }
 
 #endif  // BUILDFLAG(ENABLE_MOJO_CDM)
+
+#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+void InterfaceFactoryImpl::FinishCreatingVideoDecoder(
+    mojo::PendingReceiver<mojom::VideoDecoder> receiver,
+    mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder) {
+#if BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
+  video_decoder_receivers_.Add(std::make_unique<MojoVideoDecoderService>(
+                                   mojo_media_client_, &cdm_service_context_,
+                                   std::move(dst_video_decoder)),
+                               std::move(receiver));
+#else
+  NOTREACHED();
+#endif  // BUILDFLAG(ENABLE_MOJO_VIDEO_DECODER)
+}
+#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 
 }  // namespace media

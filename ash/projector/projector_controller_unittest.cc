@@ -2,49 +2,44 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/projector/projector_controller_impl.h"
-
+#include <array>
 #include <initializer_list>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "ash/annotator/annotator_controller.h"
 #include "ash/constants/ash_features.h"
 #include "ash/projector/model/projector_session_impl.h"
+#include "ash/projector/projector_controller_impl.h"
 #include "ash/projector/projector_metadata_controller.h"
 #include "ash/projector/projector_metrics.h"
 #include "ash/projector/test/mock_projector_metadata_controller.h"
-#include "ash/projector/test/mock_projector_ui_controller.h"
 #include "ash/public/cpp/projector/projector_new_screencast_precondition.h"
-#include "ash/public/cpp/projector/projector_session.h"
 #include "ash/public/cpp/projector/speech_recognition_availability.h"
 #include "ash/public/cpp/test/mock_projector_client.h"
 #include "ash/shell.h"
+#include "ash/system/tray/tray_container.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/webui/annotator/test/mock_annotator_client.h"
 #include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/safe_base_name.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/json/json_writer.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/audio/audio_node.h"
 #include "chromeos/ash/components/dbus/audio/fake_cras_audio_client.h"
 #include "media/mojo/mojom/speech_recognition_result.h"
-#include "media/mojo/mojom/speech_recognition_service.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/icu/source/common/unicode/locid.h"
-#include "third_party/icu/source/common/unicode/utypes.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
 namespace ash {
@@ -66,8 +61,14 @@ constexpr char kProjectorCreationFlowHistogramName[] =
 constexpr char kProjectorTranscriptsCountHistogramName[] =
     "Ash.Projector.TranscriptsCount.ClamshellMode";
 
+constexpr char kSpeechRecognitionEndStateOnDevice[] =
+    "Ash.Projector.SpeechRecognitionEndState.OnDevice";
+
+constexpr char kSpeechRecognitionEndStateServerBased[] =
+    "Ash.Projector.SpeechRecognitionEndState.ServerBased";
+
 constexpr char kMetadataFileName[] = "MyScreencast";
-constexpr char kProjectorExtension[] = "projector";
+constexpr char kProjectorV2Extension[] = "screencast";
 
 void NotifyControllerForFinalSpeechResult(ProjectorControllerImpl* controller) {
   media::SpeechRecognitionResult result;
@@ -78,8 +79,8 @@ void NotifyControllerForFinalSpeechResult(ProjectorControllerImpl* controller) {
   result.timing_information->audio_end_time = base::Milliseconds(3000);
 
   std::vector<media::HypothesisParts> hypothesis_parts;
-  std::string hypothesis_text[3] = {"transcript", "text", "1"};
-  int hypothesis_time[3] = {1000, 2000, 2500};
+  std::array<std::string, 3> hypothesis_text = {"transcript", "text", "1"};
+  std::array<int, 3> hypothesis_time = {1000, 2000, 2500};
   for (int i = 0; i < 3; i++) {
     hypothesis_parts.emplace_back(
         std::vector<std::string>({hypothesis_text[i]}),
@@ -135,16 +136,9 @@ class ProjectorControllerTest : public AshTestBase {
 
   // AshTestBase:
   void SetUp() override {
-    InitFeatureFlags();
     AshTestBase::SetUp();
-
     controller_ =
         static_cast<ProjectorControllerImpl*>(ProjectorController::Get());
-
-    auto mock_ui_controller =
-        std::make_unique<MockProjectorUiController>(controller_);
-    mock_ui_controller_ = mock_ui_controller.get();
-    controller_->SetProjectorUiControllerForTest(std::move(mock_ui_controller));
 
     auto mock_metadata_controller =
         std::make_unique<MockProjectorMetadataController>();
@@ -158,6 +152,9 @@ class ProjectorControllerTest : public AshTestBase {
     ON_CALL(mock_client_, GetSpeechRecognitionAvailability)
         .WillByDefault(testing::Return(availability));
     controller_->SetClient(&mock_client_);
+
+    auto* annotator_controller = Shell::Get()->annotator_controller();
+    annotator_controller->SetToolClient(&mock_annotator_client_);
   }
 
   void InitializeRealMetadataController() {
@@ -170,11 +167,6 @@ class ProjectorControllerTest : public AshTestBase {
   }
 
  protected:
-  virtual void InitFeatureFlags() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kProjector, features::kProjectorAnnotator}, {});
-  }
-
   void InitFakeMic(bool mic_present) {
     if (!mic_present) {
       CrasAudioHandler::Get()->SetActiveInputNodes({});
@@ -195,14 +187,15 @@ class ProjectorControllerTest : public AshTestBase {
     CrasAudioHandler::Get()->SetActiveInputNodes({kInternalMic->id});
   }
 
-  MockProjectorUiController* mock_ui_controller_ = nullptr;
-  MockProjectorMetadataController* mock_metadata_controller_ = nullptr;
-  ProjectorMetadataControllerForTest* metadata_controller_;
-  ProjectorControllerImpl* controller_;
+  raw_ptr<MockProjectorMetadataController, DanglingUntriaged>
+      mock_metadata_controller_ = nullptr;
+  raw_ptr<ProjectorMetadataControllerForTest, DanglingUntriaged>
+      metadata_controller_;
+  raw_ptr<ProjectorControllerImpl, DanglingUntriaged> controller_;
   MockProjectorClient mock_client_;
+  MockAnnotatorClient mock_annotator_client_;
   base::HistogramTester histogram_tester_;
   base::ScopedTempDir temp_dir_;
-
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -283,30 +276,22 @@ TEST_F(ProjectorControllerTest, OnSpeechRecognitionAvailabilityChanged) {
   controller_->OnSpeechRecognitionAvailabilityChanged();
 }
 
-TEST_F(ProjectorControllerTest, EnableAnnotatorTool) {
-  // Verify that |OnMarkerPressed| in |ProjectorUiController| is called.
-  EXPECT_CALL(*mock_ui_controller_, EnableAnnotatorTool());
-  controller_->EnableAnnotatorTool();
-}
-
-TEST_F(ProjectorControllerTest, SetAnnotatorTool) {
-  AnnotatorTool tool;
-  // Verify that |SetAnnotatorTool| in |ProjectorUiController| is called.
-  EXPECT_CALL(*mock_ui_controller_, SetAnnotatorTool(tool));
-  controller_->SetAnnotatorTool(tool);
-}
-
 TEST_F(ProjectorControllerTest, RecordingStarted) {
   EXPECT_CALL(mock_client_, StartSpeechRecognition());
   EXPECT_CALL(*mock_metadata_controller_, OnRecordingStarted());
-  // Verify that |ShowAnnotationTray| in |ProjectorUiController| is called.
-  auto* root = Shell::GetPrimaryRootWindow();
-  EXPECT_CALL(*mock_ui_controller_, ShowAnnotationTray(root)).Times(1);
 
-  controller_->OnRecordingStarted(root, /*is_in_projector_mode=*/true);
+  auto* root = Shell::GetPrimaryRootWindow();
+  controller_->projector_session()->Start(
+      base::SafeBaseName::Create("projector_data").value());
   histogram_tester_.ExpectUniqueSample(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kRecordingStarted, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kSessionStarted,
+      /*expected_bucket_count=*/1);
+  controller_->OnRecordingStarted(root);
+  histogram_tester_.ExpectBucketCount(
+      kProjectorCreationFlowHistogramName,
+      /*sample=*/ProjectorCreationFlow::kRecordingStarted,
+      /*expected_count=*/1);
 }
 
 TEST_F(ProjectorControllerTest, RecordingEnded) {
@@ -315,25 +300,24 @@ TEST_F(ProjectorControllerTest, RecordingEnded) {
   ON_CALL(mock_client_, IsDriveFsMounted())
       .WillByDefault(testing::Return(true));
 
-  // Verify that |HideAnnotationTray| in |ProjectorUiController| is
-  // called.
-  EXPECT_CALL(*mock_ui_controller_, HideAnnotationTray()).Times(1);
   EXPECT_CALL(mock_client_, OpenProjectorApp()).Times(0);
   EXPECT_CALL(mock_client_,
               OnNewScreencastPreconditionChanged(NewScreencastPrecondition(
                   NewScreencastPreconditionState::kDisabled,
                   {NewScreencastPreconditionReason::kInProjectorSession})));
 
-  controller_->projector_session()->Start("projector_data");
+  controller_->projector_session()->Start(
+      base::SafeBaseName::Create("projector_data").value());
   histogram_tester_.ExpectUniqueSample(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kSessionStarted, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kSessionStarted,
+      /*expected_bucket_count=*/1);
 
-  controller_->OnRecordingStarted(Shell::GetPrimaryRootWindow(),
-                                  /*is_in_projector_mode=*/true);
+  controller_->OnRecordingStarted(Shell::GetPrimaryRootWindow());
   histogram_tester_.ExpectBucketCount(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kRecordingStarted, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kRecordingStarted,
+      /*expected_count=*/1);
 
   base::RunLoop runLoop;
   controller_->CreateScreencastContainerFolder(base::BindLambdaForTesting(
@@ -347,12 +331,12 @@ TEST_F(ProjectorControllerTest, RecordingEnded) {
                 NewScreencastPreconditionState::kEnabled,
                 {NewScreencastPreconditionReason::kEnabledBySoda})))
             .Times(0);
-        EXPECT_CALL(mock_client_, StopSpeechRecognition())
-            .WillOnce(testing::Invoke(
-                [&]() { controller_->OnSpeechRecognitionStopped(); }));
+        EXPECT_CALL(mock_client_, StopSpeechRecognition()).WillOnce([&]() {
+          controller_->OnSpeechRecognitionStopped(/*forced=*/false);
+        });
         EXPECT_CALL(*mock_metadata_controller_, SaveMetadata(_)).Times(0);
 
-        controller_->OnRecordingEnded(/*is_in_projector_mode=*/true);
+        controller_->OnRecordingEnded();
         runLoop.Quit();
       }));
 
@@ -360,13 +344,25 @@ TEST_F(ProjectorControllerTest, RecordingEnded) {
 
   histogram_tester_.ExpectBucketCount(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kRecordingEnded, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kRecordingEnded, /*expected_count=*/1);
   histogram_tester_.ExpectTotalCount(kProjectorCreationFlowHistogramName,
-                                     /*count=*/3);
+                                     /*expected_count=*/3);
 }
 
+enum class RecognitionEndLatency {
+  // The speech recognition has ended even before recording
+  // has wrapped up dlp check.
+  kImmediate,
+  // The speech recognition ends after recording has wrapped up dlp check
+  // but fore the restricted timeout.
+  kDelayed,
+  // The speech recognition doesn't end and it causes a time out.
+  kDelayedCausingTimeout
+};
+
 class ProjectorOnDlpRestrictionCheckedAtVideoEndTest
-    : public ::testing::WithParamInterface<::testing::tuple<bool, bool>>,
+    : public ::testing::WithParamInterface<
+          ::testing::tuple<RecognitionEndLatency, bool>>,
       public ProjectorControllerTest {
  public:
   ProjectorOnDlpRestrictionCheckedAtVideoEndTest() = default;
@@ -378,9 +374,24 @@ class ProjectorOnDlpRestrictionCheckedAtVideoEndTest
 };
 
 TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
-  bool wrap_up_by_speech_stopped = std::get<0>(GetParam());
-  bool user_deleted_video_file = std::get<1>(GetParam());
+  bool wrap_up_by_speech_stopped;
+  bool transcript_end_timed_out;
+  switch (std::get<0>(GetParam())) {
+    case RecognitionEndLatency::kImmediate:
+      wrap_up_by_speech_stopped = false;
+      transcript_end_timed_out = false;
+      break;
+    case RecognitionEndLatency::kDelayed:
+      wrap_up_by_speech_stopped = true;
+      transcript_end_timed_out = false;
+      break;
+    case RecognitionEndLatency::kDelayedCausingTimeout:
+      wrap_up_by_speech_stopped = true;
+      transcript_end_timed_out = true;
+      break;
+  }
 
+  bool user_deleted_video_file = std::get<1>(GetParam());
   base::FilePath screencast_container_path;
   ASSERT_TRUE(mock_client_.GetBaseStoragePath(&screencast_container_path));
   ON_CALL(mock_client_, IsDriveFsMounted())
@@ -398,16 +409,18 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
   base::TimeDelta forward_by = start_time - base::Time::Now();
   task_environment()->AdvanceClock(forward_by);
 
-  controller_->projector_session()->Start("projector_data");
+  controller_->projector_session()->Start(
+      base::SafeBaseName::Create("projector_data").value());
   histogram_tester_.ExpectUniqueSample(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kSessionStarted, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kSessionStarted,
+      /*expected_bucket_count=*/1);
 
-  controller_->OnRecordingStarted(Shell::GetPrimaryRootWindow(),
-                                  /*is_in_projector_mode=*/true);
+  controller_->OnRecordingStarted(Shell::GetPrimaryRootWindow());
   histogram_tester_.ExpectBucketCount(
       kProjectorCreationFlowHistogramName,
-      /*sample=*/ProjectorCreationFlow::kRecordingStarted, /*count=*/1);
+      /*sample=*/ProjectorCreationFlow::kRecordingStarted,
+      /*expected_count=*/1);
 
   base::RunLoop runLoop;
   controller_->CreateScreencastContainerFolder(base::BindLambdaForTesting(
@@ -427,6 +440,7 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
                 .Append(expected_screencast_name)
                 // Screencast file name without extension.
                 .Append(expected_screencast_name);
+        controller_->OnRecordingEnded();
         if (!user_deleted_video_file) {
           // Verify that |SaveMetadata| in |ProjectorMetadataController| is
           // called with the expected path.
@@ -434,8 +448,9 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
           // Verify that save metadata only triggered once. The path will not
           // change as the clock advances.
           task_environment()->AdvanceClock(base::Minutes(1));
+          int expected_count = wrap_up_by_speech_stopped ? 2 : 1;
           EXPECT_CALL(*mock_metadata_controller_, SaveMetadata(expected_path))
-              .Times(1);
+              .Times(expected_count);
           // Verify that thumbnail file is saved.
           controller_->SetOnFileSavedCallbackForTest(base::BindLambdaForTesting(
               [&](const base::FilePath& path, bool success) {
@@ -447,7 +462,7 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
           EXPECT_CALL(*mock_metadata_controller_, SaveMetadata(_)).Times(0);
           // Expects notification gets resumed if recording deleted.
           const std::vector<base::FilePath> screencast_files = {
-              expected_path.AddExtension(kProjectorMetadataFileExtension),
+              expected_path.AddExtension(kProjectorV2MetadataFileExtension),
               expected_path.AddExtension(kProjectorMediaFileExtension),
               expected_path.DirName().Append(
                   kScreencastDefaultThumbnailFileName)};
@@ -464,15 +479,25 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
 
         auto image = gfx::test::CreateImageSkia(10, 10);
         if (wrap_up_by_speech_stopped) {
-          controller_->OnDlpRestrictionCheckedAtVideoEnd(
-              /*is_in_projector_mode=*/true,
+          controller_->OnVideoFileFinalized(
               /*user_deleted_video_file=*/user_deleted_video_file,
               /*thumbnail=*/image);
-          controller_->OnSpeechRecognitionStopped();
+          if (!transcript_end_timed_out) {
+            controller_->OnSpeechRecognitionStopped(/*forced=*/false);
+          } else {
+            EXPECT_CALL(mock_client_, ForceEndSpeechRecognition())
+                .Times(1)
+                .WillOnce([&]() {
+                  controller_->OnSpeechRecognitionStopped(/*forced=*/true);
+                });
+
+            // Simulate that the timer has fired.
+            EXPECT_TRUE(controller_->get_timer_for_testing()->IsRunning());
+            controller_->get_timer_for_testing()->FireNow();
+          }
         } else {
-          controller_->OnSpeechRecognitionStopped();
-          controller_->OnDlpRestrictionCheckedAtVideoEnd(
-              /*is_in_projector_mode=*/true,
+          controller_->OnSpeechRecognitionStopped(/*forced=*/false);
+          controller_->OnVideoFileFinalized(
               /*user_deleted_video_file=*/user_deleted_video_file,
               /*thumbnail=*/image);
         }
@@ -482,13 +507,17 @@ TEST_P(ProjectorOnDlpRestrictionCheckedAtVideoEndTest, WrapUpRecordingOnce) {
   runLoop.Run();
 
   histogram_tester_.ExpectTotalCount(kProjectorCreationFlowHistogramName,
-                                     /*count=*/3);
+                                     /*expected_count=*/4);
 }
 
-INSTANTIATE_TEST_SUITE_P(WrapUpRecordingOnce,
-                         ProjectorOnDlpRestrictionCheckedAtVideoEndTest,
-                         ::testing::Combine(::testing::Bool(),
-                                            ::testing::Bool()));
+INSTANTIATE_TEST_SUITE_P(
+    WrapUpRecordingOnce,
+    ProjectorOnDlpRestrictionCheckedAtVideoEndTest,
+    ::testing::Combine(
+        ::testing::ValuesIn({RecognitionEndLatency::kImmediate,
+                             RecognitionEndLatency::kDelayed,
+                             RecognitionEndLatency::kDelayedCausingTimeout}),
+        ::testing::Bool()));
 
 TEST_F(ProjectorControllerTest, NoTranscriptsTest) {
   InitializeRealMetadataController();
@@ -508,7 +537,7 @@ TEST_F(ProjectorControllerTest, NoTranscriptsTest) {
 
   // Verify the written metadata file size is between 0-100 bytes. Change this
   // limit as needed if you make significant changes to the metadata file.
-  base::File file(metadata_file.AddExtension(kProjectorExtension),
+  base::File file(metadata_file.AddExtension(kProjectorV2Extension),
                   base::File::FLAG_OPEN | base::File::FLAG_READ);
   EXPECT_GT(file.GetLength(), 0);
   EXPECT_LT(file.GetLength(), 100);
@@ -537,7 +566,36 @@ TEST_F(ProjectorControllerTest, TranscriptsTest) {
   // Verify the written metadata file size is between 400-500 bytes. This file
   // should be larger than the one in the NoTranscriptsTest above. Change this
   // limit as needed if you make significant changes to the metadata file.
-  base::File file(metadata_file.AddExtension(kProjectorExtension),
+  base::File file(metadata_file.AddExtension(kProjectorV2Extension),
+                  base::File::FLAG_OPEN | base::File::FLAG_READ);
+  EXPECT_GT(file.GetLength(), 400);
+  EXPECT_LT(file.GetLength(), 500);
+}
+
+TEST_F(ProjectorControllerTest, V2TranscriptsTest) {
+  InitializeRealMetadataController();
+  metadata_controller_->OnRecordingStarted();
+
+  base::RunLoop run_loop;
+  metadata_controller_->SetRunLoopQuitClosure(run_loop.QuitClosure());
+
+  // Simulate adding some transcripts.
+  NotifyControllerForFinalSpeechResult(controller_);
+  NotifyControllerForFinalSpeechResult(controller_);
+
+  // Simulate ending the recording and saving the metadata file.
+  ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+  base::FilePath metadata_file(temp_dir_.GetPath().Append(kMetadataFileName));
+  metadata_controller_->SaveMetadata(metadata_file);
+  run_loop.Run();
+
+  histogram_tester_.ExpectUniqueSample(kProjectorTranscriptsCountHistogramName,
+                                       /*sample=*/2, /*count=*/1);
+
+  // Verify the written metadata file size is between 400-500 bytes. This file
+  // should be larger than the one in the NoTranscriptsTest above. Change this
+  // limit as needed if you make significant changes to the metadata file.
+  base::File file(metadata_file.AddExtension(kProjectorV2Extension),
                   base::File::FLAG_OPEN | base::File::FLAG_READ);
   EXPECT_GT(file.GetLength(), 400);
   EXPECT_LT(file.GetLength(), 500);
@@ -565,7 +623,8 @@ TEST_F(ProjectorControllerTest, SuppressDriveNotification) {
   // The screencast name, which is used to form the screencast folder/files
   // paths, is generated on projector session starts
   auto* projector_session = controller_->projector_session();
-  projector_session->Start("projector_data");
+  projector_session->Start(
+      base::SafeBaseName::Create("projector_data").value());
   const base::FilePath expect_container_path =
       mounted_path.Append("root")
           .Append(projector_session->storage_dir())
@@ -576,7 +635,7 @@ TEST_F(ProjectorControllerTest, SuppressDriveNotification) {
 
   const std::vector<base::FilePath> screencast_files = {
       expected_path_with_no_extension.AddExtension(
-          kProjectorMetadataFileExtension),
+          kProjectorV2MetadataFileExtension),
       expected_path_with_no_extension.AddExtension(
           kProjectorMediaFileExtension),
       expect_container_path.Append(kScreencastDefaultThumbnailFileName)};
@@ -600,5 +659,86 @@ TEST_F(ProjectorControllerTest, SuppressDriveNotification) {
       }));
   run_loop.Run();
 }
+
+// Used to test SpeechRecognitionEndState metric for both on-device and
+// server based speech recognition.
+class ProjectorSpeechRecognitionEndTest
+    : public ::testing::WithParamInterface<bool>,
+      public ProjectorControllerTest {
+ public:
+  ProjectorSpeechRecognitionEndTest() = default;
+  ProjectorSpeechRecognitionEndTest(const ProjectorSpeechRecognitionEndTest&) =
+      delete;
+  ProjectorSpeechRecognitionEndTest& operator=(
+      const ProjectorSpeechRecognitionEndTest&) = delete;
+  ~ProjectorSpeechRecognitionEndTest() override = default;
+};
+
+TEST_P(ProjectorSpeechRecognitionEndTest, SpeechRecognitionEndMetric) {
+  SpeechRecognitionAvailability availability;
+  availability.on_device_availability =
+      OnDeviceRecognitionAvailability::kAvailable;
+  availability.server_based_availability =
+      ServerBasedRecognitionAvailability::kAvailable;
+  availability.use_on_device = GetParam();
+
+  ON_CALL(mock_client_, GetSpeechRecognitionAvailability)
+      .WillByDefault(testing::Return(availability));
+  const std::string histogram_name =
+      availability.use_on_device ? kSpeechRecognitionEndStateOnDevice
+                                 : kSpeechRecognitionEndStateServerBased;
+  auto* projector_session = controller_->projector_session();
+  projector_session->Start(
+      base::SafeBaseName::Create("projector_data").value());
+
+  auto* root = Shell::GetPrimaryRootWindow();
+
+  // Tests speech recognition encountering an error during session.
+  controller_->OnRecordingStarted(root);
+  controller_->OnTranscriptionError();
+  histogram_tester_.ExpectBucketCount(
+      histogram_name,
+      SpeechRecognitionEndState::kSpeechRecognitionEnounteredError,
+      /*expected_count=*/1);
+
+  // Tests speech recognition successfully stopping.
+  ON_CALL(mock_client_, StopSpeechRecognition).WillByDefault([&]() {
+    controller_->OnSpeechRecognitionStopped(/*forced=*/false);
+  });
+  controller_->OnRecordingStarted(root);
+  controller_->OnRecordingEnded();
+  histogram_tester_.ExpectBucketCount(
+      histogram_name,
+      SpeechRecognitionEndState::kSpeechRecognitionSuccessfullyStopped,
+      /*expected_count=*/1);
+
+  // Tests speech recognition forced stopped.
+  ON_CALL(mock_client_, StopSpeechRecognition).WillByDefault(testing::Return());
+  EXPECT_CALL(mock_client_, ForceEndSpeechRecognition())
+      .Times(1)
+      .WillOnce(
+          [&]() { controller_->OnSpeechRecognitionStopped(/*forced=*/true); });
+  controller_->OnRecordingStarted(root);
+  controller_->OnRecordingEnded();
+  controller_->get_timer_for_testing()->FireNow();
+  histogram_tester_.ExpectBucketCount(
+      histogram_name,
+      SpeechRecognitionEndState::kSpeechRecognitionForcedStopped,
+      /*expected_count=*/1);
+
+  // Tests speech recognition encountering error while stopping.
+  controller_->OnRecordingStarted(root);
+  controller_->OnRecordingEnded();
+  controller_->OnTranscriptionError();
+  histogram_tester_.ExpectBucketCount(
+      histogram_name,
+      SpeechRecognitionEndState::
+          kSpeechRecognitionEncounteredErrorWhileStopping,
+      /*expected_count=*/1);
+}
+
+INSTANTIATE_TEST_SUITE_P(SpeechRecognitionEndMetric,
+                         ProjectorSpeechRecognitionEndTest,
+                         /*use_on_device=*/::testing::Bool());
 
 }  // namespace ash

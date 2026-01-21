@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "remoting/protocol/desktop_capturer.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_and_cursor_composer.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_metadata.h"
@@ -39,6 +39,8 @@ class DesktopAndCursorConditionalComposer : public DesktopCapturer {
   void SetMouseCursor(
       std::unique_ptr<webrtc::MouseCursor> mouse_cursor) override;
   void SetMouseCursorPosition(const webrtc::DesktopVector& position) override;
+  void SetMaxFrameRate(uint32_t max_frame_rate) override;
+  bool SupportsFrameCallbacks() const override;
 #if defined(WEBRTC_USE_GIO)
   void GetMetadataAsync(base::OnceCallback<void(webrtc::DesktopCaptureMetadata)>
                             callback) override;
@@ -52,10 +54,8 @@ class DesktopAndCursorConditionalComposer : public DesktopCapturer {
 
   std::unique_ptr<webrtc::MouseCursor> mouse_cursor_;
   bool compose_enabled_ = false;
-#if defined(WEBRTC_USE_GIO)
   // Following pointer is not owned by |this| class.
   raw_ptr<DesktopCapturer> desktop_capturer_ = nullptr;
-#endif
   std::unique_ptr<webrtc::DesktopAndCursorComposer> capturer_;
 };
 

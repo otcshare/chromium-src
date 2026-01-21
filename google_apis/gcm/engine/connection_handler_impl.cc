@@ -7,8 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/task/sequenced_task_runner.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google_apis/gcm/base/mcs_util.h"
@@ -107,11 +109,11 @@ void ConnectionHandlerImpl::SendMessage(
 
   {
     io::CodedOutputStream coded_output_stream(output_stream_.get());
-    DVLOG(1) << "Writing proto of size " << message.ByteSize();
+    DVLOG(1) << "Writing proto of size " << message.ByteSizeLong();
     int tag = GetMCSProtoTag(message);
     DCHECK_NE(tag, -1);
     coded_output_stream.WriteRaw(&tag, 1);
-    coded_output_stream.WriteVarint32(message.ByteSize());
+    coded_output_stream.WriteVarint32(message.ByteSizeLong());
     message.SerializeToCodedStream(&coded_output_stream);
   }
 
@@ -133,7 +135,7 @@ void ConnectionHandlerImpl::Login(
     io::CodedOutputStream coded_output_stream(output_stream_.get());
     coded_output_stream.WriteRaw(version_byte, 1);
     coded_output_stream.WriteRaw(login_request_tag, 1);
-    coded_output_stream.WriteVarint32(login_request.ByteSize());
+    coded_output_stream.WriteVarint32(login_request.ByteSizeLong());
     login_request.SerializeToCodedStream(&coded_output_stream);
   }
 
@@ -418,9 +420,9 @@ void ConnectionHandlerImpl::OnGotMessageBytes() {
     const void* data_ptr = nullptr;
     int size = 0;
     input_stream_->Next(&data_ptr, &size);
-    payload_input_buffer_.insert(payload_input_buffer_.end(),
-                                 static_cast<const uint8_t*>(data_ptr),
-                                 static_cast<const uint8_t*>(data_ptr) + size);
+    payload_input_buffer_.insert(
+        payload_input_buffer_.end(), static_cast<const uint8_t*>(data_ptr),
+        UNSAFE_TODO(static_cast<const uint8_t*>(data_ptr) + size));
     DCHECK_LE(payload_input_buffer_.size(), message_size_);
 
     if (payload_input_buffer_.size() == message_size_) {

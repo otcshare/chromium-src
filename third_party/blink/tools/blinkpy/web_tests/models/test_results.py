@@ -26,6 +26,8 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from typing import Optional
+
 from blinkpy.web_tests.models import test_failures
 from blinkpy.web_tests.models.typ_types import (
     Artifacts,
@@ -39,8 +41,19 @@ def build_test_result(driver_output, test_name, failures=None, **kwargs):
     failures = failures or []
     if not failures and driver_output.error:
         failures.append(test_failures.PassWithStderr(driver_output))
+    if driver_output.trace_file:
+        failures.append(
+            test_failures.TraceFileArtifact(driver_output,
+                                            driver_output.trace_file,
+                                            '-trace'))
+    if driver_output.startup_trace_file:
+        failures.append(
+            test_failures.TraceFileArtifact(driver_output,
+                                            driver_output.startup_trace_file,
+                                            '-startup-trace'))
     kwargs.setdefault('command', driver_output.command)
     kwargs.setdefault('image_diff_stats', driver_output.image_diff_stats)
+    kwargs.setdefault('test_type', driver_output.test_type)
     return TestResult(test_name, failures=failures, **kwargs)
 
 
@@ -53,6 +66,7 @@ class TestResult(object):
                  test_name,
                  retry_attempt=0,
                  failures=None,
+                 expected=frozenset([ResultType.Pass]),
                  test_run_time=None,
                  reftest_type=None,
                  pid=None,
@@ -61,7 +75,8 @@ class TestResult(object):
                  crash_site=None,
                  command=None,
                  typ_host=None,
-                 image_diff_stats=None):
+                 image_diff_stats=None,
+                 test_type=None):
         self.test_name = test_name
         self.failures = failures or []
         self.test_run_time = test_run_time or 0  # The time taken to execute the test itself.
@@ -76,12 +91,18 @@ class TestResult(object):
         self.retry_attempt = retry_attempt
         self.command = command
         self.image_diff_stats = image_diff_stats
+        self.test_type = test_type or set()
 
-        results = set([f.result for f in self.failures] or [ResultType.Pass])
+        results = set([
+            f.result
+            for f in self.failures if f.result != test_failures.IGNORE_RESULT
+        ] or [ResultType.Pass])
         assert len(results) <= 2, (
             'single_test_runner.py incorrectly reported results %s for test %s'
             % (', '.join(results), test_name))
-        if len(results) == 2:
+        if self.device_failed:
+            self.type = ResultType.Timeout
+        elif len(results) == 2:
             assert results.issubset({ResultType.Timeout,
                                      ResultType.Failure,
                                      ResultType.Crash}), (
@@ -119,6 +140,20 @@ class TestResult(object):
                                    retry_attempt,
                                    ARTIFACTS_SUB_DIR,
                                    repeat_tests=self.repeat_tests)
+        # Default can be overwritten by the `WebTestRunner` (i.e., manager
+        # process).
+        self.expected = expected
+
+    @property
+    def is_expected(self) -> bool:
+        return self.type in self.expected
+
+    @property
+    def actual_image_hash(self) -> Optional[str]:
+        for failure in self.failures:
+            if isinstance(failure, test_failures.FailureImage):
+                return failure.actual_driver_output.image_hash
+        return None
 
     def create_artifacts(self):
         for failure in self.failures:

@@ -5,13 +5,14 @@
 #include "components/services/storage/indexed_db/transactional_leveldb/transactional_leveldb_factory.h"
 
 #include "base/memory/ptr_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/indexed_db/scopes/leveldb_scope.h"
 #include "components/services/storage/indexed_db/scopes/leveldb_scopes.h"
 #include "components/services/storage/indexed_db/transactional_leveldb/transactional_leveldb_database.h"
 #include "components/services/storage/indexed_db/transactional_leveldb/transactional_leveldb_iterator.h"
 #include "components/services/storage/indexed_db/transactional_leveldb/transactional_leveldb_transaction.h"
 
-namespace content {
+namespace content::indexed_db {
 
 std::unique_ptr<TransactionalLevelDBDatabase>
 DefaultTransactionalLevelDBFactory::CreateLevelDBDatabase(
@@ -47,4 +48,4 @@ DefaultTransactionalLevelDBFactory::CreateIterator(
       std::move(it), std::move(db), std::move(txn), std::move(snapshot)));
 }
 
-}  // namespace content
+}  // namespace content::indexed_db

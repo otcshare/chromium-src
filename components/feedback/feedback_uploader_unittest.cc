@@ -7,9 +7,8 @@
 #include <memory>
 #include <set>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -36,7 +35,7 @@ constexpr char kReportFive[] = "five";
 
 constexpr base::TimeDelta kRetryDelayForTest = base::Milliseconds(100);
 
-class MockFeedbackUploader : public FeedbackUploader {
+class MockFeedbackUploader final : public FeedbackUploader {
  public:
   MockFeedbackUploader(
       bool is_off_the_record,
@@ -46,6 +45,10 @@ class MockFeedbackUploader : public FeedbackUploader {
 
   MockFeedbackUploader(const MockFeedbackUploader&) = delete;
   MockFeedbackUploader& operator=(const MockFeedbackUploader&) = delete;
+
+  base::WeakPtr<FeedbackUploader> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
   void RunMessageLoop() {
     if (ProcessingComplete())
@@ -82,7 +85,7 @@ class MockFeedbackUploader : public FeedbackUploader {
 
   // FeedbackUploaderChrome:
   void StartDispatchingReport() override {
-    if (base::Contains(dispatched_reports_, report_being_dispatched()->data()))
+    if (dispatched_reports_.contains(report_being_dispatched()->data()))
       dispatched_reports_[report_being_dispatched()->data()]++;
     else
       dispatched_reports_[report_being_dispatched()->data()] = 1;
@@ -109,6 +112,7 @@ class MockFeedbackUploader : public FeedbackUploader {
   size_t dispatched_reports_count_ = 0;
   size_t expected_reports_ = 0;
   bool simulate_failure_ = false;
+  base::WeakPtrFactory<MockFeedbackUploader> weak_ptr_factory_{this};
 };
 
 }  // namespace
@@ -135,8 +139,11 @@ class FeedbackUploaderTest : public testing::Test {
         test_shared_loader_factory_);
   }
 
-  void QueueReport(const std::string& data, bool has_email = true) {
-    uploader_->QueueReport(std::make_unique<std::string>(data), has_email);
+  void QueueReport(const std::string& data,
+                   bool has_email = true,
+                   int product_id = 0) {
+    uploader_->QueueReport(std::make_unique<std::string>(data), has_email,
+                           product_id);
   }
 
   MockFeedbackUploader* uploader() const { return uploader_.get(); }

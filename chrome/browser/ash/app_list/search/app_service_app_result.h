@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/public/cpp/app_list/app_list_metrics.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/ash/app_list/search/app_result.h"
@@ -36,8 +37,6 @@ class AppServiceAppResult : public AppResult {
  private:
   // ChromeSearchResult overrides:
   void Open(int event_flags) override;
-  void GetContextMenuModel(GetMenuModelCallback callback) override;
-  AppContextMenu* GetAppContextMenu() override;
 
   // AppContextMenuDelegate overrides:
   void ExecuteLaunchCommand(int event_flags) override;
@@ -48,7 +47,7 @@ class AppServiceAppResult : public AppResult {
   void CallLoadIcon(bool chip, bool allow_placeholder_icon);
   void OnLoadIcon(bool chip, apps::IconValuePtr icon_value);
 
-  apps::IconLoader* const icon_loader_;
+  const raw_ptr<apps::IconLoader, DanglingUntriaged> icon_loader_;
 
   // When non-nullptr, signifies that this object is using the most recent icon
   // fetched from |icon_loader_|. When destroyed, informs |icon_loader_| that
@@ -58,8 +57,6 @@ class AppServiceAppResult : public AppResult {
   apps::AppType app_type_;
   bool is_platform_app_;
   bool show_in_launcher_;
-
-  std::unique_ptr<AppContextMenu> context_menu_;
 
   base::CancelableTaskTracker task_tracker_;
 

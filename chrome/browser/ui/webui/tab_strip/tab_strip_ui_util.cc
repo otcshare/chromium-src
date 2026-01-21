@@ -6,18 +6,23 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/tabs/tab_group.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/webui/tab_strip/tab_strip_ui.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/tab_groups/tab_group_id.h"
+#include "components/tabs/public/tab_group.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/custom_data_helper.h"
@@ -26,48 +31,110 @@
 
 namespace tab_strip_ui {
 
-absl::optional<tab_groups::TabGroupId> GetTabGroupIdFromString(
+std::optional<tab_groups::TabGroupId> GetTabGroupIdFromString(
     TabGroupModel* tab_group_model,
     std::string group_id_string) {
-  if (!tab_group_model)
-    return absl::nullopt;
+  if (!tab_group_model) {
+    return std::nullopt;
+  }
   for (tab_groups::TabGroupId candidate : tab_group_model->ListTabGroups()) {
     if (candidate.ToString() == group_id_string) {
-      return absl::optional<tab_groups::TabGroupId>{candidate};
+      return std::optional<tab_groups::TabGroupId>{candidate};
     }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-Browser* GetBrowserWithGroupId(Profile* profile, std::string group_id_string) {
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (profile && browser->profile() != profile) {
-      continue;
-    }
+BrowserWindowInterface* GetBrowserWithGroupId(Profile* profile,
+                                              std::string group_id_string) {
+  BrowserWindowInterface* browser_with_group = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        if (profile && browser->GetProfile() != profile) {
+          return true;
+        }
 
-    absl::optional<tab_groups::TabGroupId> group_id = GetTabGroupIdFromString(
-        browser->tab_strip_model()->group_model(), group_id_string);
-    if (group_id.has_value()) {
-      return browser;
-    }
+        std::optional<tab_groups::TabGroupId> group_id =
+            GetTabGroupIdFromString(browser->GetTabStripModel()->group_model(),
+                                    group_id_string);
+        if (group_id.has_value()) {
+          browser_with_group = browser;
+        }
+        return !browser_with_group;
+      });
+
+  return browser_with_group;
+}
+
+void MoveGroupAcrossWindows(BrowserWindowInterface* source_browser,
+                            BrowserWindowInterface* target_browser,
+                            int to_index,
+                            const tab_groups::TabGroupId& group_id) {
+  TabStripModel* const target_tab_strip = target_browser->GetTabStripModel();
+
+  if (!target_tab_strip->SupportsTabGroups()) {
+    return;
   }
 
-  return nullptr;
+  const std::optional<tab_groups::TabGroupId> next_tab_dst_group =
+      target_tab_strip->GetTabGroupForTab(to_index);
+  const std::optional<tab_groups::TabGroupId> prev_tab_dst_group =
+      target_tab_strip->GetTabGroupForTab(to_index - 1);
+
+  // Check whether group contiguity will be respected in the `target_browser`
+  // before performing the operation. Noop if the operation will result in a
+  // split tab group.
+  if (next_tab_dst_group.has_value() && prev_tab_dst_group.has_value() &&
+      next_tab_dst_group == prev_tab_dst_group) {
+    return;
+  }
+
+  tab_groups::TabGroupSyncService* const tab_group_service =
+      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+          source_browser->GetProfile());
+
+  std::unique_ptr<tab_groups::ScopedLocalObservationPauser> observation_pauser;
+  if (tab_group_service && tab_group_service->GetGroup(group_id)) {
+    observation_pauser = tab_group_service->CreateScopedLocalObserverPauser();
+  }
+
+  TabStripModel* const source_tab_strip = source_browser->GetTabStripModel();
+  std::unique_ptr<DetachedTabCollection> detached_group =
+      source_tab_strip->DetachTabGroupForInsertion(group_id);
+  target_tab_strip->InsertDetachedTabGroupAt(std::move(detached_group),
+                                             to_index);
 }
 
-void MoveTabAcrossWindows(Browser* source_browser,
+void MoveTabAcrossWindows(BrowserWindowInterface* source_browser,
                           int from_index,
-                          Browser* target_browser,
+                          BrowserWindowInterface* target_browser,
                           int to_index,
-                          absl::optional<tab_groups::TabGroupId> to_group_id) {
-  bool was_active =
-      source_browser->tab_strip_model()->active_index() == from_index;
-  bool was_pinned = source_browser->tab_strip_model()->IsTabPinned(from_index);
+                          std::optional<tab_groups::TabGroupId> to_group_id) {
+  TabStripModel* const source_tab_strip = source_browser->GetTabStripModel();
+  const bool was_active = source_tab_strip->active_index() == from_index;
+  const bool was_pinned = source_tab_strip->IsTabPinned(from_index);
 
-  std::unique_ptr<content::WebContents> detached_contents =
-      source_browser->tab_strip_model()->DetachWebContentsAtForInsertion(
-          from_index);
+  TabStripModel* const target_tab_strip = target_browser->GetTabStripModel();
+
+  if (target_tab_strip->SupportsTabGroups()) {
+    std::optional<tab_groups::TabGroupId> next_tab_dst_group =
+        target_tab_strip->GetTabGroupForTab(to_index);
+    std::optional<tab_groups::TabGroupId> prev_tab_dst_group =
+        target_tab_strip->GetTabGroupForTab(to_index - 1);
+
+    // Check whether group contiguity will be respected in the `target_browser`
+    // before performing the operation. Noop if the operation will result in a
+    // split tab group.
+    if (next_tab_dst_group.has_value() && prev_tab_dst_group.has_value() &&
+        next_tab_dst_group == prev_tab_dst_group &&
+        to_group_id != prev_tab_dst_group) {
+      return;
+    }
+  }
+
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      source_tab_strip->DetachTabAtForInsertion(from_index);
 
   int add_types = AddTabTypes::ADD_NONE;
   if (was_active) {
@@ -77,29 +144,33 @@ void MoveTabAcrossWindows(Browser* source_browser,
     add_types |= AddTabTypes::ADD_PINNED;
   }
 
-  target_browser->tab_strip_model()->InsertWebContentsAt(
-      to_index, std::move(detached_contents), add_types, to_group_id);
+  target_tab_strip->InsertDetachedTabAt(to_index, std::move(detached_tab),
+                                        add_types, to_group_id);
 }
 
 bool IsDraggedTab(const ui::OSExchangeData& drop_data) {
-  base::Pickle pickle;
-  drop_data.GetPickledData(ui::ClipboardFormatType::WebCustomDataType(),
-                           &pickle);
-  base::PickleIterator iter(pickle);
-
-  uint32_t entry_count = 0;
-  if (!iter.ReadUInt32(&entry_count))
+  std::optional<base::Pickle> pickle = drop_data.GetPickledData(
+      ui::ClipboardFormatType::DataTransferCustomType());
+  if (!pickle.has_value()) {
     return false;
+  }
+
+  base::PickleIterator iter(pickle.value());
+  uint32_t entry_count = 0;
+  if (!iter.ReadUInt32(&entry_count)) {
+    return false;
+  }
 
   for (uint32_t i = 0; i < entry_count; ++i) {
-    base::StringPiece16 type;
-    base::StringPiece16 data;
-    if (!iter.ReadStringPiece16(&type) || !iter.ReadStringPiece16(&data))
+    std::u16string_view type;
+    std::u16string_view data;
+    if (!iter.ReadStringPiece16(&type) || !iter.ReadStringPiece16(&data)) {
       return false;
+    }
 
-    if (type == base::ASCIIToUTF16(kWebUITabIdDataType) ||
-        type == base::ASCIIToUTF16(kWebUITabGroupIdDataType))
+    if (type == kWebUITabIdDataType || type == kWebUITabGroupIdDataType) {
       return true;
+    }
   }
 
   return false;
@@ -116,61 +187,74 @@ bool DropTabsInNewBrowser(Browser* new_browser,
 bool DropTabsInNewBrowser(Browser* new_browser,
                           const std::u16string& tab_id_str,
                           const std::u16string& group_id_str) {
-  if (tab_id_str.empty() && group_id_str.empty())
+  if (tab_id_str.empty() && group_id_str.empty()) {
     return false;
+  }
 
-  Browser* source_browser = nullptr;
+  BrowserWindowInterface* source_browser = nullptr;
   gfx::Range tab_indices_to_move;
-  absl::optional<tab_groups::TabGroupId> source_group_id;
+  std::optional<tab_groups::TabGroupId> source_group_id;
 
-  // TODO(https://crbug.com/1069869): de-duplicate with
+  // TODO(crbug.com/40126106): de-duplicate with
   // TabStripUIHandler::HandleMoveTab and
   // TabStripUIHandler::HandleMoveGroup.
 
   if (!tab_id_str.empty()) {
     int tab_id = -1;
-    if (!base::StringToInt(tab_id_str, &tab_id))
+    if (!base::StringToInt(tab_id_str, &tab_id)) {
       return false;
+    }
 
+    extensions::WindowController* source_window = nullptr;
     int source_index = -1;
     if (!extensions::ExtensionTabUtil::GetTabById(
-            tab_id, new_browser->profile(), /* include_incognito = */ false,
-            &source_browser, /* tab_strip = */ nullptr,
-            /* contents = */ nullptr, &source_index)) {
+            tab_id, new_browser->GetProfile(), /* include_incognito = */ false,
+            &source_window, /* contents = */ nullptr, &source_index) ||
+        !source_window) {
+      return false;
+    }
+    source_browser = source_window->GetBrowser();
+    if (!source_browser) {
       return false;
     }
     tab_indices_to_move = gfx::Range(source_index, source_index + 1);
   } else {
     std::string group_id_utf8 = base::UTF16ToUTF8(group_id_str);
     source_browser =
-        GetBrowserWithGroupId(new_browser->profile(), group_id_utf8);
-    if (!source_browser)
+        GetBrowserWithGroupId(new_browser->GetProfile(), group_id_utf8);
+    if (!source_browser) {
       return false;
-    TabGroupModel* source_group_model =
-        source_browser->tab_strip_model()->group_model();
-    if (!source_group_model)
+    }
+    TabGroupModel* const source_group_model =
+        source_browser->GetTabStripModel()->group_model();
+    if (!source_group_model) {
       return false;
+    }
     source_group_id =
         GetTabGroupIdFromString(source_group_model, group_id_utf8);
-    if (!source_group_id)
+    if (!source_group_id) {
       return false;
-    TabGroup* source_group = source_group_model->GetTabGroup(*source_group_id);
-    tab_indices_to_move = source_group->ListTabs();
+    }
 
-    TabGroupModel* new_group_model =
-        new_browser->tab_strip_model()->group_model();
-    if (!new_group_model)
+    TabStripModel* const new_tab_strip = new_browser->GetTabStripModel();
+    if (!new_tab_strip->group_model()) {
       return false;
-    new_group_model->AddTabGroup(*source_group_id,
-                                 *source_group->visual_data());
+    }
   }
 
-  const int source_index = tab_indices_to_move.start();
-  for (size_t i = 0; i < tab_indices_to_move.length(); ++i) {
-    MoveTabAcrossWindows(source_browser, source_index, new_browser, i,
-                         source_group_id);
+  if (source_group_id.has_value()) {
+    MoveGroupAcrossWindows(source_browser, new_browser, 0,
+                           source_group_id.value());
+  } else {
+    const int source_index = tab_indices_to_move.start();
+    for (size_t i = 0; i < tab_indices_to_move.length(); ++i) {
+      MoveTabAcrossWindows(source_browser, source_index, new_browser, i,
+                           source_group_id);
+    }
   }
-  new_browser->tab_strip_model()->ActivateTabAt(0);
+
+  TabStripModel* const new_tab_strip = new_browser->GetTabStripModel();
+  new_tab_strip->ActivateTabAt(0);
   return true;
 }
 
@@ -180,20 +264,27 @@ bool ExtractTabData(const ui::OSExchangeData& drop_data,
   DCHECK(tab_id_str);
   DCHECK(group_id_str);
 
-  base::Pickle pickle;
-  drop_data.GetPickledData(ui::ClipboardFormatType::WebCustomDataType(),
-                           &pickle);
-
-  ui::ReadCustomDataForType(pickle.data(), pickle.size(),
-                            base::ASCIIToUTF16(kWebUITabIdDataType),
-                            tab_id_str);
-  if (tab_id_str->empty()) {
-    ui::ReadCustomDataForType(pickle.data(), pickle.size(),
-                              base::ASCIIToUTF16(kWebUITabGroupIdDataType),
-                              group_id_str);
+  std::optional<base::Pickle> pickle = drop_data.GetPickledData(
+      ui::ClipboardFormatType::DataTransferCustomType());
+  if (!pickle.has_value()) {
+    return false;
   }
 
-  return !tab_id_str->empty() || !group_id_str->empty();
+  if (std::optional<std::u16string> maybe_tab_id =
+          ui::ReadCustomDataForType(pickle.value(), kWebUITabIdDataType);
+      maybe_tab_id && !maybe_tab_id->empty()) {
+    *tab_id_str = std::move(*maybe_tab_id);
+    return true;
+  }
+
+  if (std::optional<std::u16string> maybe_group_id =
+          ui::ReadCustomDataForType(pickle.value(), kWebUITabGroupIdDataType);
+      maybe_group_id && !maybe_group_id->empty()) {
+    *group_id_str = std::move(*maybe_group_id);
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace tab_strip_ui

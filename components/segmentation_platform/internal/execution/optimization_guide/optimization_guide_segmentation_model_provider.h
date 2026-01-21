@@ -8,13 +8,11 @@
 #include <memory>
 #include <vector>
 
-#include "components/optimization_guide/core/model_handler.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/optimization_guide/core/inference/model_handler.h"
 #include "components/segmentation_platform/public/model_provider.h"
 #include "components/segmentation_platform/public/proto/segmentation_platform.pb.h"
 
-namespace optimization_guide {
-class OptimizationGuideSegmentationModelProvider;
-}  // namespace optimization_guide
 
 namespace segmentation_platform {
 

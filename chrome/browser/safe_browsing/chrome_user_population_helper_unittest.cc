@@ -4,21 +4,25 @@
 
 #include "chrome/browser/safe_browsing/chrome_user_population_helper.h"
 
+#include "base/strings/strcat.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
+#include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
+#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/unified_consent/pref_names.h"
 #include "components/version_info/version_info.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 
 namespace safe_browsing {
 
@@ -31,7 +35,11 @@ std::unique_ptr<KeyedService> CreateTestSyncService(
 
 }  // namespace
 
-TEST(GetUserPopulationForProfileTest, PopulatesPopulation) {
+TEST(GetUserPopulationForProfileTest,
+     PopulatesPopulation_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   content::BrowserTaskEnvironment task_environment;
   TestingProfile profile;
   SetSafeBrowsingState(profile.GetPrefs(),
@@ -51,6 +59,38 @@ TEST(GetUserPopulationForProfileTest, PopulatesPopulation) {
   population = GetUserPopulationForProfile(&profile);
   EXPECT_EQ(population.user_population(),
             ChromeUserPopulation::EXTENDED_REPORTING);
+}
+
+TEST(GetUserPopulationForProfileTest, PopulatesPopulation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  SetSafeBrowsingState(profile.GetPrefs(),
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
+  EXPECT_EQ(population.user_population(), ChromeUserPopulation::SAFE_BROWSING);
+
+  SetSafeBrowsingState(profile.GetPrefs(),
+                       SafeBrowsingState::ENHANCED_PROTECTION);
+  population = GetUserPopulationForProfile(&profile);
+  EXPECT_EQ(population.user_population(),
+            ChromeUserPopulation::ENHANCED_PROTECTION);
+}
+
+TEST(GetUserPopulationForProfileTest, PopulatesPopulation_EsbIgnoresSberPref) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+
+  SetSafeBrowsingState(profile.GetPrefs(),
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  SetExtendedReportingPrefForTests(profile.GetPrefs(), true);
+  ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
+  EXPECT_EQ(population.user_population(), ChromeUserPopulation::SAFE_BROWSING);
 }
 
 TEST(GetUserPopulationForProfileTest, PopulatesMBB) {
@@ -88,45 +128,32 @@ TEST(GetUserPopulationForProfileTest, PopulatesSync) {
           &profile, base::BindRepeating(&CreateTestSyncService)));
 
   {
-    sync_service->SetTransportState(
-        syncer::SyncService::TransportState::ACTIVE);
-    sync_service->SetLocalSyncEnabled(false);
-    sync_service->GetUserSettings()->SetSelectedTypes(
-        /*sync_everything=*/true,
-        /*types=*/syncer::UserSelectableTypeSet::All());
-
+    ASSERT_TRUE(sync_service->GetActiveDataTypes().Has(
+        syncer::HISTORY_DELETE_DIRECTIVES));
     ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
     EXPECT_TRUE(population.is_history_sync_enabled());
   }
 
   {
-    sync_service->SetTransportState(
-        syncer::SyncService::TransportState::DISABLED);
-    sync_service->SetLocalSyncEnabled(false);
-    sync_service->GetUserSettings()->SetSelectedTypes(
-        /*sync_everything=*/true,
-        /*types=*/syncer::UserSelectableTypeSet::All());
+    sync_service->SetSignedOut();
 
     ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
     EXPECT_FALSE(population.is_history_sync_enabled());
   }
 
   {
-    sync_service->SetTransportState(
-        syncer::SyncService::TransportState::ACTIVE);
+    // Enabling local sync reports the sync service as signed-out, so this is
+    // consistent with the SetSignedOut() call above.
+    // TODO(crbug.com/350494796): TestSyncService should honor that.
     sync_service->SetLocalSyncEnabled(true);
-    sync_service->GetUserSettings()->SetSelectedTypes(
-        /*sync_everything=*/true,
-        /*types=*/syncer::UserSelectableTypeSet::All());
 
     ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
     EXPECT_FALSE(population.is_history_sync_enabled());
   }
 
   {
-    sync_service->SetTransportState(
-        syncer::SyncService::TransportState::ACTIVE);
     sync_service->SetLocalSyncEnabled(false);
+    sync_service->SetSignedIn(signin::ConsentLevel::kSignin);
     sync_service->GetUserSettings()->SetSelectedTypes(
         /*sync_everything=*/false,
         /*types=*/syncer::UserSelectableTypeSet());
@@ -176,10 +203,36 @@ TEST(GetUserPopulationForProfileTest, PopulatesUserAgent) {
   content::BrowserTaskEnvironment task_environment;
   TestingProfile profile;
   std::string user_agent =
-      version_info::GetProductNameAndVersionForUserAgent() + "/" +
-      version_info::GetOSType();
+      base::StrCat({version_info::GetProductNameAndVersionForUserAgent(), "/",
+                    version_info::GetOSType()});
   ChromeUserPopulation population = GetUserPopulationForProfile(&profile);
   EXPECT_EQ(population.user_agent(), user_agent);
+}
+
+TEST(GetPageLoadTokenForURLTest, PopulatesEmptyTokenForEmptyProfile) {
+  content::BrowserTaskEnvironment task_environment;
+  ChromeUserPopulation::PageLoadToken token =
+      GetPageLoadTokenForURL(nullptr, GURL(""));
+  EXPECT_FALSE(token.has_token_value());
+}
+
+TEST(GetPageLoadTokenForURLTest, PopulatesNewTokenValueForURL) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  ChromeUserPopulation::PageLoadToken token =
+      GetPageLoadTokenForURL(&profile, GURL("https://www.example.com"));
+  EXPECT_TRUE(token.has_token_value());
+}
+
+TEST(GetPageLoadTokenForURLTest, PopulatesExistingTokenValueForURL) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  VerdictCacheManager* cache_manager =
+      VerdictCacheManagerFactory::GetForProfile(&profile);
+  cache_manager->CreatePageLoadToken(profile.GetHomePage());
+  ChromeUserPopulation::PageLoadToken token =
+      GetPageLoadTokenForURL(&profile, profile.GetHomePage());
+  EXPECT_TRUE(token.has_token_value());
 }
 
 }  // namespace safe_browsing

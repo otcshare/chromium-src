@@ -5,12 +5,13 @@
 #ifndef UI_LATENCY_IPC_LATENCY_INFO_PARAM_TRAITS_MACROS_H_
 #define UI_LATENCY_IPC_LATENCY_INFO_PARAM_TRAITS_MACROS_H_
 
-#include "ipc/ipc_message_macros.h"
+#include "ipc/param_traits_macros.h"
 #include "ui/latency/latency_info.h"
+
+#undef IPC_MESSAGE_EXPORT
+#define IPC_MESSAGE_EXPORT
 
 IPC_ENUM_TRAITS_MAX_VALUE(ui::LatencyComponentType,
                           ui::LATENCY_COMPONENT_TYPE_LAST)
-
-IPC_ENUM_TRAITS_MAX_VALUE(ui::SourceEventType, ui::SourceEventType::LAST)
 
 #endif  // UI_LATENCY_IPC_LATENCY_INFO_PARAM_TRAITS_MACROS_H_

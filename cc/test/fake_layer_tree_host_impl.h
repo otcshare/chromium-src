@@ -35,16 +35,21 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
   ~FakeLayerTreeHostImpl() override;
 
   void ForcePrepareToDraw() {
-    LayerTreeHostImpl::FrameData frame_data;
+    FrameData frame_data;
     PrepareToDraw(&frame_data);
     DidDrawAllLayers(frame_data);
   }
 
   void CreatePendingTree() override;
+  void EnsureSyncTree();
 
-  void NotifyTileStateChanged(const Tile* tile) override;
+  void NotifyTileStateChanged(const Tile* tile,
+                              bool update_damage,
+                              bool set_needs_redraw) override;
   const viz::BeginFrameArgs& CurrentBeginFrameArgs() const override;
   void AdvanceToNextFrame(base::TimeDelta advance_by);
+  TargetColorParams GetTargetColorParams(
+      gfx::ContentColorUsage content_color_usage) const override;
 
   using LayerTreeHostImpl::ActivateSyncTree;
   using LayerTreeHostImpl::prepare_tiles_needed;
@@ -57,6 +62,10 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
   void set_notify_tile_state_changed_called(bool called) {
     notify_tile_state_changed_called_ = called;
   }
+  void set_target_color_params(
+      std::optional<TargetColorParams> target_color_params) {
+    target_color_params_ = target_color_params;
+  }
 
   AnimationHost* animation_host() const;
 
@@ -66,6 +75,7 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
   FakeLayerTreeHostImplClient client_;
   FakeRenderingStatsInstrumentation stats_instrumentation_;
   bool notify_tile_state_changed_called_;
+  std::optional<TargetColorParams> target_color_params_;
 };
 
 }  // namespace cc

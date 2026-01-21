@@ -9,37 +9,43 @@
  * components directly).
  */
 import '//resources/cr_elements/cr_button/cr_button.js';
-import '//resources/cr_elements/cr_hidden_style.css.js';
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import '//resources/cr_elements/cr_shared_vars.css.js';
+import '//resources/cr_elements/cr_icon/cr_icon.js';
 import '//resources/cr_elements/icons.html.js';
-import '//resources/polymer/v3_0/iron-icon/iron-icon.js';
 import './help_bubble_icons.html.js';
 
-import {CrButtonElement} from '//resources/cr_elements/cr_button/cr_button.js';
-import {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import {assert, assertNotReached} from '//resources/js/assert_ts.js';
+import type {CrButtonElement} from '//resources/cr_elements/cr_button/cr_button.js';
+import type {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import {assert, assertNotReached} from '//resources/js/assert.js';
 import {isWindows} from '//resources/js/platform.js';
-import {DomRepeatEvent, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {debounceEnd} from '//resources/js/util.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {InsetsF} from '//resources/mojo/ui/gfx/geometry/mojom/geometry.mojom-webui.js';
 
-import {getTemplate} from './help_bubble.html.js';
-import {HelpBubbleArrowPosition, HelpBubbleButtonParams, Progress} from './help_bubble.mojom-webui.js';
-
-const ANCHOR_HIGHLIGHT_CLASS = 'help-anchor-highlight';
+import {getCss} from './help_bubble.css.js';
+import {getHtml} from './help_bubble.html.js';
+import type {HelpBubbleButtonParams, Progress} from './help_bubble.mojom-webui.js';
+import {HelpBubbleArrowPosition} from './help_bubble.mojom-webui.js';
 
 const ACTION_BUTTON_ID_PREFIX = 'action-button-';
 
 export const HELP_BUBBLE_DISMISSED_EVENT = 'help-bubble-dismissed';
 export const HELP_BUBBLE_TIMED_OUT_EVENT = 'help-bubble-timed-out';
 
+export const HELP_BUBBLE_SCROLL_ANCHOR_OPTIONS: ScrollIntoViewOptions = {
+  behavior: 'smooth',
+  block: 'center',
+};
+
 export type HelpBubbleDismissedEvent = CustomEvent<{
-  nativeId: any,
+  nativeId: string,
   fromActionButton: boolean,
   buttonIndex?: number,
 }>;
 
 export type HelpBubbleTimedOutEvent = CustomEvent<{
-  nativeId: any,
+  nativeId: string,
 }>;
 
 export interface HelpBubbleElement {
@@ -57,43 +63,67 @@ export interface HelpBubbleElement {
   };
 }
 
-export class HelpBubbleElement extends PolymerElement {
+export class HelpBubbleElement extends CrLitElement {
   static get is() {
     return 'help-bubble';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
       nativeId: {
         type: String,
-        value: '',
-        reflectToAttribute: true,
+        reflect: true,
       },
       position: {
-        type: HelpBubbleArrowPosition,
-        value: HelpBubbleArrowPosition.TOP_CENTER,
-        reflectToAttribute: true,
+        type: Number,
+        reflect: true,
+      },
+      bodyIconName: {type: String},
+      bodyIconAltText: {type: String},
+      progress: {type: Object},
+      titleText: {type: String},
+      bodyText: {type: String},
+      buttons: {type: Array},
+      sortedButtons: {type: Array},
+      closeButtonAltText: {type: String},
+      closeButtonTabIndex: {type: Number},
+
+      progressData_: {
+        type: Array,
+        state: true,
       },
     };
   }
 
-  nativeId: any;
-  bodyText: string;
-  titleText: string;
-  closeButtonAltText: string;
-  closeButtonTabIndex: number = 0;
-  position: HelpBubbleArrowPosition;
-  buttons: HelpBubbleButtonParams[] = [];
-  progress: Progress|null = null;
-  bodyIconName: string|null;
-  bodyIconAltText: string;
-  forceCloseButton: boolean;
+  accessor nativeId: string = '';
+  accessor bodyText: string = '';
+  accessor titleText: string = '';
+  accessor closeButtonAltText: string = '';
+  accessor closeButtonTabIndex: number = 0;
+  accessor position: HelpBubbleArrowPosition =
+      HelpBubbleArrowPosition.TOP_CENTER;
+  accessor buttons: HelpBubbleButtonParams[] = [];
+  accessor sortedButtons: HelpBubbleButtonParams[] = [];
+  accessor progress: Progress|null = null;
+  accessor bodyIconName: string|null = null;
+  accessor bodyIconAltText: string = '';
+
   timeoutMs: number|null = null;
   timeoutTimerId: number|null = null;
+  debouncedUpdate: (() => void)|null = null;
+  padding: InsetsF = {top: 0, bottom: 0, left: 0, right: 0};
+  fixed: boolean = false;
+  focusAnchor: boolean = false;
+
+  private buttonListObserver_: MutationObserver|null = null;
 
   /**
    * HTMLElement corresponding to |this.nativeId|.
@@ -104,7 +134,21 @@ export class HelpBubbleElement extends PolymerElement {
    * Backing data for the dom-repeat that generates progress indicators.
    * The elements are placeholders only.
    */
-  private progressData_: void[] = [];
+  protected accessor progressData_: boolean[] = [];
+
+  /**
+   * Watches the offsetParent for resize events, allowing the bubble to be
+   * repositioned in response. Useful for when the content around a help bubble
+   * target can be filtered/expanded/repositioned.
+   */
+  private resizeObserver_: ResizeObserver|null = null;
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+    if (changedProperties.has('buttons')) {
+      this.sortedButtons = this.buttons.toSorted(this.buttonSortFunc_);
+    }
+  }
 
   /**
    * Shows the bubble.
@@ -115,6 +159,7 @@ export class HelpBubbleElement extends PolymerElement {
     // Set up the progress track.
     if (this.progress) {
       this.progressData_ = new Array(this.progress.total);
+      this.progressData_.fill(true);
     } else {
       this.progressData_ = [];
     }
@@ -129,19 +174,36 @@ export class HelpBubbleElement extends PolymerElement {
     // Reset the aria-hidden attribute as screen readers need to access the
     // contents of an opened bubble.
     this.style.display = 'block';
+    this.style.position = this.fixed ? 'fixed' : 'absolute';
+    this.style.visibility = 'visible';
     this.removeAttribute('aria-hidden');
     this.updatePosition_();
-    this.setAnchorHighlight_(true);
+
+    this.debouncedUpdate = debounceEnd(() => {
+      if (this.anchorElement_) {
+        this.updatePosition_();
+      }
+    }, 50);
+
+    this.buttonListObserver_ = new MutationObserver(this.debouncedUpdate);
+    this.buttonListObserver_.observe(this.$.buttons, {childList: true});
+    window.addEventListener('resize', this.debouncedUpdate);
 
     if (this.timeoutMs !== null) {
       const timedOutCallback = () => {
-        this.dispatchEvent(new CustomEvent(HELP_BUBBLE_TIMED_OUT_EVENT, {
-          detail: {
-            nativeId: this.nativeId,
-          },
-        }));
+        this.fire(HELP_BUBBLE_TIMED_OUT_EVENT, {
+          nativeId: this.nativeId,
+        });
       };
       this.timeoutTimerId = setTimeout(timedOutCallback, this.timeoutMs);
+    }
+
+    if (this.offsetParent && !this.fixed) {
+      this.resizeObserver_ = new ResizeObserver(() => {
+        this.updatePosition_();
+        this.anchorElement_?.scrollIntoView(HELP_BUBBLE_SCROLL_ANCHOR_OPTIONS);
+      });
+      this.resizeObserver_.observe(this.offsetParent);
     }
   }
 
@@ -154,13 +216,25 @@ export class HelpBubbleElement extends PolymerElement {
    * bubble will go away on hide.
    */
   hide() {
+    if (this.resizeObserver_) {
+      this.resizeObserver_.disconnect();
+      this.resizeObserver_ = null;
+    }
     this.style.display = 'none';
+    this.style.visibility = 'hidden';
     this.setAttribute('aria-hidden', 'true');
-    this.setAnchorHighlight_(false);
     this.anchorElement_ = null;
     if (this.timeoutTimerId !== null) {
       clearInterval(this.timeoutTimerId);
       this.timeoutTimerId = null;
+    }
+    if (this.buttonListObserver_) {
+      this.buttonListObserver_.disconnect();
+      this.buttonListObserver_ = null;
+    }
+    if (this.debouncedUpdate) {
+      window.removeEventListener('resize', this.debouncedUpdate);
+      this.debouncedUpdate = null;
     }
   }
 
@@ -181,6 +255,31 @@ export class HelpBubbleElement extends PolymerElement {
   }
 
   /**
+   * Focuses a button in the bubble.
+   */
+  override focus() {
+    // First try to focus either the default button or any action button.
+    const defaultButton =
+        this.$.buttons.querySelector<HTMLElement>('cr-button.default-button') ||
+        this.$.buttons.querySelector('cr-button');
+    if (defaultButton) {
+      defaultButton.focus();
+      return;
+    }
+
+    // As a fallback, focus the close button before trying to focus the anchor;
+    // this will allow the focus to stay on the close button if the anchor
+    // cannot be focused.
+    this.$.close.focus();
+
+    // Maybe try to focus the anchor. This is preferable to focusing the close
+    // button, but not every element can be focused.
+    if (this.anchorElement_ && this.focusAnchor) {
+      this.anchorElement_.focus();
+    }
+  }
+
+  /**
    * Returns whether the default button is leading (true on Windows) vs trailing
    * (all other platforms).
    */
@@ -188,46 +287,55 @@ export class HelpBubbleElement extends PolymerElement {
     return isWindows;
   }
 
-  private dismiss_() {
+  protected dismiss_() {
     assert(this.nativeId, 'Dismiss: expected help bubble to have a native id.');
-    this.dispatchEvent(new CustomEvent(HELP_BUBBLE_DISMISSED_EVENT, {
-      detail: {
-        nativeId: this.nativeId,
-        fromActionButton: false,
-      },
-    }));
+    this.fire(HELP_BUBBLE_DISMISSED_EVENT, {
+      nativeId: this.nativeId,
+      fromActionButton: false,
+    });
   }
 
-  private getProgressClass_(index: number): string {
+  /**
+   * Handles ESC keypress (dismiss bubble) and prevents it from propagating up
+   * to parent elements.
+   */
+  protected onKeyDown_(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      this.dismiss_();
+    }
+  }
+
+  /**
+   * Prevent event propagation. Attach to any event that should not bubble up
+   * out of the help bubble.
+   */
+  protected blockPropagation_(e: Event) {
+    e.stopPropagation();
+  }
+
+  protected getProgressClass_(index: number): string {
     return index < this.progress!.current ? 'current-progress' :
                                             'total-progress';
   }
 
-  private shouldShowTitleInTopContainer_(
-      progress: Progress|null, titleText: string): boolean {
-    return !!titleText && !progress;
+  protected shouldShowTitleInTopContainer_(): boolean {
+    return !!this.titleText && !this.progress;
   }
 
-  private shouldShowBodyInTopContainer_(
-      progress: Progress|null, titleText: string): boolean {
-    return !progress && !titleText;
+  protected shouldShowBodyInTopContainer_(): boolean {
+    return !this.progress && !this.titleText;
   }
 
-  private shouldShowBodyInMain_(progress: Progress|null, titleText: string):
-      boolean {
-    return !!progress || !!titleText;
+  protected shouldShowBodyInMain_(): boolean {
+    return !!this.progress || !!this.titleText;
   }
 
-  private shouldShowCloseButton_(
-      buttons: HelpBubbleButtonParams[], forceCloseButton: boolean): boolean {
-    return buttons.length === 0 || forceCloseButton;
+  protected shouldShowBodyIcon_(): boolean {
+    return this.bodyIconName !== null && this.bodyIconName !== '';
   }
 
-  private shouldShowBodyIcon_(bodyIconName: string): boolean {
-    return bodyIconName !== null && bodyIconName !== '';
-  }
-
-  private onButtonClick_(e: DomRepeatEvent<HelpBubbleButtonParams>) {
+  protected onButtonClick_(e: MouseEvent) {
     assert(
         this.nativeId,
         'Action button clicked: expected help bubble to have a native ID.');
@@ -235,25 +343,28 @@ export class HelpBubbleElement extends PolymerElement {
     // dom-repeat. However, the index is stored in the node's identifier.
     const index: number = parseInt(
         (e.target as Element).id.substring(ACTION_BUTTON_ID_PREFIX.length));
-    this.dispatchEvent(new CustomEvent(HELP_BUBBLE_DISMISSED_EVENT, {
-      detail: {
-        nativeId: this.nativeId,
-        fromActionButton: true,
-        buttonIndex: index,
-      },
-    }));
+    this.fire(HELP_BUBBLE_DISMISSED_EVENT, {
+      nativeId: this.nativeId,
+      fromActionButton: true,
+      buttonIndex: index,
+    });
   }
 
-  private getButtonId_(index: number): string {
+  protected getButtonId_(item: HelpBubbleButtonParams): string {
+    const index = this.buttons.indexOf(item);
+    assert(index > -1);
     return ACTION_BUTTON_ID_PREFIX + index;
   }
 
-  private getButtonClass_(isDefault: boolean): string {
-    return isDefault ? 'default-button' : '';
+  protected getButtonClass_(isDefault: boolean): string {
+    return isDefault ? 'default-button focus-outline-visible' :
+                       'focus-outline-visible';
   }
 
-  private getButtonTabIndex_(index: number, isDefault: boolean): number {
-    return isDefault ? 1 : index + 2;
+  protected getButtonTabIndex_(item: HelpBubbleButtonParams): number {
+    const index = this.buttons.indexOf(item);
+    assert(index > -1);
+    return item.isDefault ? 1 : index + 2;
   }
 
   private buttonSortFunc_(
@@ -273,10 +384,10 @@ export class HelpBubbleElement extends PolymerElement {
    * Determine classes that describe the arrow position relative to the
    * HelpBubble
    */
-  private getArrowClass_(position: HelpBubbleArrowPosition): string {
+  protected getArrowClass_(): string {
     let classList = '';
     // `*-edge` classes move arrow to a HelpBubble edge
-    switch (position) {
+    switch (this.position) {
       case HelpBubbleArrowPosition.TOP_LEFT:
       case HelpBubbleArrowPosition.TOP_CENTER:
       case HelpBubbleArrowPosition.TOP_RIGHT:
@@ -298,10 +409,10 @@ export class HelpBubbleElement extends PolymerElement {
         classList = 'right-edge ';
         break;
       default:
-        assertNotReached('Unknown help bubble position: ' + position);
+        assertNotReached('Unknown help bubble position: ' + this.position);
     }
     // `*-position` classes move arrow along the HelpBubble edge
-    switch (position) {
+    switch (this.position) {
       case HelpBubbleArrowPosition.TOP_LEFT:
       case HelpBubbleArrowPosition.BOTTOM_LEFT:
         classList += 'left-position';
@@ -327,7 +438,7 @@ export class HelpBubbleElement extends PolymerElement {
         classList += 'bottom-position';
         break;
       default:
-        assertNotReached('Unknown help bubble position: ' + position);
+        assertNotReached('Unknown help bubble position: ' + this.position);
     }
     return classList;
   }
@@ -348,107 +459,98 @@ export class HelpBubbleElement extends PolymerElement {
 
     // Inclusive of 8px visible arrow and 8px margin.
     const anchorRect = this.anchorElement_.getBoundingClientRect();
-    const helpBubbleRect = this.getBoundingClientRect();
     const anchorRectCenter = {
       x: anchorRect.left + (anchorRect.width / 2),
       y: anchorRect.top + (anchorRect.height / 2),
     };
+    const helpBubbleRect = this.getBoundingClientRect();
 
-    // component is inserted after anchor so start with a reset
-    let transform = `translateY(-${anchorRect.height}px) `;
+    // component is inserted at mixin root so start with anchor offsets
+    let offsetX = this.anchorElement_.offsetLeft;
+    let offsetY = this.anchorElement_.offsetTop;
 
     // Move HelpBubble to correct side of the anchorElement
     switch (this.position) {
       case HelpBubbleArrowPosition.TOP_LEFT:
       case HelpBubbleArrowPosition.TOP_CENTER:
       case HelpBubbleArrowPosition.TOP_RIGHT:
-        transform += `translateY(${
-          anchorRect.height
-        }px) translateY(${ANCHOR_OFFSET}px) `;
+        offsetY += anchorRect.height + ANCHOR_OFFSET + this.padding.bottom;
         break;
       case HelpBubbleArrowPosition.BOTTOM_LEFT:
       case HelpBubbleArrowPosition.BOTTOM_CENTER:
       case HelpBubbleArrowPosition.BOTTOM_RIGHT:
-        transform += `translateY(-100%) translateY(-${ANCHOR_OFFSET}px) `;
+        offsetY -= (helpBubbleRect.height + ANCHOR_OFFSET + this.padding.top);
         break;
       case HelpBubbleArrowPosition.LEFT_TOP:
       case HelpBubbleArrowPosition.LEFT_CENTER:
       case HelpBubbleArrowPosition.LEFT_BOTTOM:
-        transform += `translateX(${
-          anchorRect.width
-        }px) translateX(${ANCHOR_OFFSET}px) `;
+        offsetX += anchorRect.width + ANCHOR_OFFSET + this.padding.right;
         break;
       case HelpBubbleArrowPosition.RIGHT_TOP:
       case HelpBubbleArrowPosition.RIGHT_CENTER:
       case HelpBubbleArrowPosition.RIGHT_BOTTOM:
-        transform += `translateX(-100%) translateX(-${ANCHOR_OFFSET}px) `;
+        offsetX -= (helpBubbleRect.width + ANCHOR_OFFSET + this.padding.left);
         break;
       default:
         assertNotReached();
     }
+
     // Move HelpBubble along the anchorElement edge according to arrow position
     switch (this.position) {
       case HelpBubbleArrowPosition.TOP_LEFT:
       case HelpBubbleArrowPosition.BOTTOM_LEFT:
-        // If anchor element is small, point arrow to center of anchor element
+        // If anchor element width is small, point arrow to center of anchor
+        // element
         if ((anchorRect.left + ARROW_OFFSET_FROM_EDGE) > anchorRectCenter.x) {
-          transform += `translateX(${
-              (anchorRect.width / 2) - ARROW_OFFSET_FROM_EDGE}px)`;
+          offsetX += (anchorRect.width / 2) - ARROW_OFFSET_FROM_EDGE;
         }
         break;
       case HelpBubbleArrowPosition.TOP_CENTER:
       case HelpBubbleArrowPosition.BOTTOM_CENTER:
-        transform += `translateX(${
-          (anchorRect.width / 2) - (helpBubbleRect.width / 2)
-        }px)`;
+        offsetX += (anchorRect.width / 2) - (helpBubbleRect.width / 2);
         break;
       case HelpBubbleArrowPosition.TOP_RIGHT:
       case HelpBubbleArrowPosition.BOTTOM_RIGHT:
-        // If anchor element is small, point arrow to center of anchor element
+        // If anchor element width is small, point arrow to center of anchor
+        // element
         if ((anchorRect.right - ARROW_OFFSET_FROM_EDGE) < anchorRectCenter.x) {
-          transform += `translateX(${
-              (anchorRect.width / 2) -
-              (helpBubbleRect.width - ARROW_OFFSET_FROM_EDGE)}px)`;
+          offsetX += (anchorRect.width / 2) - helpBubbleRect.width +
+              ARROW_OFFSET_FROM_EDGE;
         } else {
           // Right-align bubble and anchor elements
-          transform +=
-              `translateX(${anchorRect.width - helpBubbleRect.width}px)`;
+          offsetX += anchorRect.width - helpBubbleRect.width;
         }
         break;
       case HelpBubbleArrowPosition.LEFT_TOP:
       case HelpBubbleArrowPosition.RIGHT_TOP:
-        transform += `translateY(${
-          (anchorRect.height / 2) - ARROW_OFFSET_FROM_EDGE
-        }px)`;
+        // If anchor element height is small, point arrow to center of anchor
+        // element
+        if ((anchorRect.top + ARROW_OFFSET_FROM_EDGE) > anchorRectCenter.y) {
+          offsetY += (anchorRect.height / 2) - ARROW_OFFSET_FROM_EDGE;
+        }
         break;
       case HelpBubbleArrowPosition.LEFT_CENTER:
       case HelpBubbleArrowPosition.RIGHT_CENTER:
-        transform += `translateY(${
-          (anchorRect.height / 2) - (helpBubbleRect.height / 2)
-        }px)`;
+        offsetY += (anchorRect.height / 2) - (helpBubbleRect.height / 2);
         break;
       case HelpBubbleArrowPosition.LEFT_BOTTOM:
       case HelpBubbleArrowPosition.RIGHT_BOTTOM:
-        transform += `translateY(${
-          (anchorRect.height / 2)
-          - (helpBubbleRect.height - ARROW_OFFSET_FROM_EDGE)
-        }px)`;
+        // If anchor element height is small, point arrow to center of anchor
+        // element
+        if ((anchorRect.bottom - ARROW_OFFSET_FROM_EDGE) < anchorRectCenter.y) {
+          offsetY += (anchorRect.height / 2) - helpBubbleRect.height +
+              ARROW_OFFSET_FROM_EDGE;
+        } else {
+          // Bottom-align bubble and anchor elements
+          offsetY += anchorRect.height - helpBubbleRect.height;
+        }
         break;
       default:
         assertNotReached();
     }
-    this.style.transform = transform;
-  }
 
-  /**
-   * Styles the anchor element to appear highlighted while the bubble is open,
-   * or removes the highlight.
-   */
-  private setAnchorHighlight_(highlight: boolean) {
-    assert(
-        this.anchorElement_,
-        'Set anchor highlight: expected valid anchor element.');
-    this.anchorElement_.classList.toggle(ANCHOR_HIGHLIGHT_CLASS, highlight);
+    this.style.top = offsetY.toString() + 'px';
+    this.style.left = offsetX.toString() + 'px';
   }
 }
 

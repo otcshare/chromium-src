@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "services/shape_detection/public/mojom/facedetection_provider.mojom-blink.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
@@ -16,15 +16,32 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_landmark.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_point_2d.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
-#include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
-#include "third_party/blink/renderer/modules/shapedetection/shape_detection_type_converter.h"
+#include "third_party/blink/renderer/modules/canvas/imagebitmap/image_bitmap_source_util.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+
+namespace {
+
+V8LandmarkType::Enum ToV8LandmarkType(
+    shape_detection::mojom::blink::LandmarkType landmark_type) {
+  using shape_detection::mojom::blink::LandmarkType;
+  switch (landmark_type) {
+    case LandmarkType::MOUTH:
+      return V8LandmarkType::Enum::kMouth;
+    case LandmarkType::EYE:
+      return V8LandmarkType::Enum::kEye;
+    case LandmarkType::NOSE:
+      return V8LandmarkType::Enum::kNose;
+  }
+  NOTREACHED();
+}
+
+}  // namespace
 
 FaceDetector* FaceDetector::Create(ExecutionContext* context,
                                    const FaceDetectorOptions* options) {
@@ -49,30 +66,44 @@ FaceDetector::FaceDetector(ExecutionContext* context,
       face_service_.BindNewPipeAndPassReceiver(task_runner),
       std::move(face_detector_options));
 
-  face_service_.set_disconnect_handler(WTF::BindOnce(
+  face_service_.set_disconnect_handler(BindOnce(
       &FaceDetector::OnFaceServiceConnectionError, WrapWeakPersistent(this)));
 }
 
-ScriptPromise FaceDetector::DoDetect(ScriptState* script_state,
-                                     SkBitmap bitmap,
-                                     ExceptionState& exception_state) {
-  if (!face_service_.is_bound()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Face detection service unavailable.");
-    return ScriptPromise();
+ScriptPromise<IDLSequence<DetectedFace>> FaceDetector::detect(
+    ScriptState* script_state,
+    const V8ImageBitmapSource* image_source,
+    ExceptionState& exception_state) {
+  std::optional<SkBitmap> bitmap = GetBitmapFromV8ImageBitmapSource(
+      script_state, image_source, exception_state);
+  if (!bitmap) {
+    return ScriptPromise<IDLSequence<DetectedFace>>();
   }
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<DetectedFace>>>(
+          script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
+  if (bitmap->isNull()) {
+    resolver->Resolve(HeapVector<Member<DetectedFace>>());
+    return promise;
+  }
+
+  if (!face_service_.is_bound()) {
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
+                                     "Face detection service unavailable.");
+    return promise;
+  }
   face_service_requests_.insert(resolver);
   face_service_->Detect(
-      std::move(bitmap),
-      WTF::BindOnce(&FaceDetector::OnDetectFaces, WrapPersistent(this),
-                    WrapPersistent(resolver)));
+      std::move(*bitmap),
+      BindOnce(&FaceDetector::OnDetectFaces, WrapPersistent(this),
+               WrapPersistent(resolver)));
   return promise;
 }
 
 void FaceDetector::OnDetectFaces(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLSequence<DetectedFace>>* resolver,
     Vector<shape_detection::mojom::blink::FaceDetectionResultPtr>
         face_detection_results) {
   DCHECK(face_service_requests_.Contains(resolver));
@@ -92,7 +123,7 @@ void FaceDetector::OnDetectFaces(
 
       Landmark* web_landmark = Landmark::Create();
       web_landmark->setLocations(locations);
-      web_landmark->setType(mojo::ConvertTo<String>(landmark->type));
+      web_landmark->setType(ToV8LandmarkType(landmark->type));
       landmarks.push_back(web_landmark);
     }
 
@@ -127,7 +158,7 @@ void FaceDetector::OnFaceServiceConnectionError() {
 }
 
 void FaceDetector::Trace(Visitor* visitor) const {
-  ShapeDetector::Trace(visitor);
+  ScriptWrappable::Trace(visitor);
   visitor->Trace(face_service_);
   visitor->Trace(face_service_requests_);
 }

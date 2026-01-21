@@ -4,14 +4,16 @@
 
 #include "chrome/browser/extensions/api/declarative_content/declarative_content_page_url_condition_tracker.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "components/url_matcher/url_matcher_factory.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative/declarative_constants.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -177,7 +179,7 @@ void DeclarativeContentPageUrlConditionTracker::TrackForWebContents(
     content::WebContents* contents) {
   per_web_contents_tracker_[contents] = std::make_unique<PerWebContentsTracker>(
       contents, &url_matcher_,
-      base::BindRepeating(&Delegate::RequestEvaluation,
+      base::BindRepeating(&Delegate::NotifyPredicateStateUpdated,
                           base::Unretained(delegate_)),
       base::BindOnce(&DeclarativeContentPageUrlConditionTracker::
                          DeletePerWebContentsTracker,
@@ -188,7 +190,7 @@ void DeclarativeContentPageUrlConditionTracker::TrackForWebContents(
 void DeclarativeContentPageUrlConditionTracker::OnWebContentsNavigation(
     content::WebContents* contents,
     content::NavigationHandle* navigation_handle) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_[contents]->UpdateMatchesForCurrentUrl(true);
 }
 
@@ -203,11 +205,11 @@ bool DeclarativeContentPageUrlConditionTracker::EvaluatePredicate(
   const DeclarativeContentPageUrlPredicate* typed_predicate =
       static_cast<const DeclarativeContentPageUrlPredicate*>(predicate);
   auto loc = per_web_contents_tracker_.find(tab);
-  DCHECK(loc != per_web_contents_tracker_.end());
+  CHECK(loc != per_web_contents_tracker_.end());
   const std::set<base::MatcherStringPattern::ID>& web_contents_id_matches =
       loc->second->matches();
-  return base::Contains(web_contents_id_matches,
-                        typed_predicate->url_matcher_condition_set()->id());
+  return web_contents_id_matches.contains(
+      typed_predicate->url_matcher_condition_set()->id());
 }
 
 bool DeclarativeContentPageUrlConditionTracker::IsEmpty() const {
@@ -216,7 +218,7 @@ bool DeclarativeContentPageUrlConditionTracker::IsEmpty() const {
 
 void DeclarativeContentPageUrlConditionTracker::DeletePerWebContentsTracker(
     content::WebContents* contents) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_.erase(contents);
 }
 

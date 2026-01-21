@@ -99,6 +99,10 @@ doc_feature_unlisted:
   desc: The name of the feature that indicates whether a policy is set from cloud
     without any user interface.
   text: Unlisted
+doc_feature_user_only:
+  desc: The name of the feature that indicates whether a policy can only be set with
+    signed in managed account.
+  text: User Only
 doc_group_intro:
   desc: Introduction text for the generated policy atomic group documentation
   text: Both Chromium and Google Chrome have some groups of policies that depend on
@@ -179,6 +183,11 @@ doc_schema_description_link:
     containing the information about schema and formatting.
   text: See <ph name="REFERENCE_URL">$6<ex>https://cloud.google.com/docs/chrome-enterprise/policies/?policy=WallpaperImage</ex></ph>
     for more information about schema and formatting.
+doc_sensitive:
+  desc: A flag that indicates that this policy is only supported for users that
+    are part of an Active Directory domain on Windows, managed on the Mac, or
+    enrolled in Chrome Enterprise Core.
+  text: Sensitive
 doc_since_version:
   desc: Text in the summary chart of a policy that specifies the version number in
     which the policy was introduced.

@@ -8,8 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <map>
+#include <deque>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -21,49 +22,52 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/discardable_memory_allocator.h"
 #include "base/memory/memory_pressure_listener.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/structured_shared_memory.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/observer_list.h"
+#include "base/process/process.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_log.h"
+#include "base/trace_event/trace_session_observer.h"
+#include "base/trace_event/typed_macros.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
-#include "cc/tiles/gpu_image_decode_cache.h"
-#include "components/attribution_reporting/os_support.mojom.h"
 #include "content/child/child_thread_impl.h"
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/content_export.h"
-#include "content/common/frame.mojom.h"
 #include "content/common/render_message_filter.mojom.h"
 #include "content/common/renderer.mojom.h"
 #include "content/common/renderer_host.mojom.h"
-#include "content/common/shared_storage_worklet_service.mojom.h"
 #include "content/public/renderer/render_thread.h"
+#include "content/renderer/blink_isolates_pressure_listener.h"
 #include "content/renderer/discardable_memory_utils.h"
+#include "content/renderer/memory_reclaimer_pressure_listener.h"
+#include "content/renderer/skia_graphics_pressure_listener.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "ipc/ipc_sync_channel.h"
 #include "media/media_buildflags.h"
+#include "media/mojo/clients/mojo_codec_factory.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_change_notifier.h"
 #include "net/nqe/effective_connection_type.h"
 #include "services/viz/public/mojom/compositing/compositing_mode_watcher.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+#include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom-forward.h"
+#include "third_party/blink/public/mojom/shared_storage/shared_storage_worklet_service.mojom.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_connection_type.h"
-#include "third_party/blink/public/web/web_memory_statistics.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace blink {
-class WebResourceRequestSenderDelegate;
 class WebVideoCaptureImplManager;
 }
 
@@ -74,16 +78,16 @@ class WaitableEvent;
 }
 
 namespace cc {
-class RasterContextProviderWrapper;
 class RasterDarkModeFilter;
 }  // namespace cc
 
 namespace gpu {
 class GpuChannelHost;
+class SharedImageInterface;
 }
 
 namespace media {
-class GpuVideoAcceleratorFactories;
+class MojoGpuVideoAcceleratorFactories;
 }
 
 namespace mojo {
@@ -98,15 +102,10 @@ class RasterContextProvider;
 
 namespace content {
 class AgentSchedulingGroup;
-class GpuVideoAcceleratorFactoriesImpl;
 class RenderFrameImpl;
 class RenderThreadObserver;
 class RendererBlinkPlatformImpl;
 class VariationsRenderThreadObserver;
-
-#if BUILDFLAG(IS_ANDROID)
-class StreamTextureFactory;
-#endif
 
 #if BUILDFLAG(IS_WIN)
 class DCOMPTextureFactory;
@@ -123,16 +122,10 @@ class CONTENT_EXPORT RenderThreadImpl
     : public RenderThread,
       public ChildThreadImpl,
       public mojom::Renderer,
-      public viz::mojom::CompositingModeWatcher {
+      public viz::mojom::CompositingModeWatcher,
+      public base::MemoryPressureListener {
  public:
   static RenderThreadImpl* current();
-  static mojom::RenderMessageFilter* current_render_message_filter();
-  static RendererBlinkPlatformImpl* current_blink_platform_impl();
-
-  static void SetRenderMessageFilterForTesting(
-      mojom::RenderMessageFilter* render_message_filter);
-  static void SetRendererBlinkPlatformImplForTesting(
-      RendererBlinkPlatformImpl* blink_platform_impl);
 
   // Returns the task runner for the main thread where the RenderThread lives.
   static scoped_refptr<base::SingleThreadTaskRunner>
@@ -160,40 +153,22 @@ class CONTENT_EXPORT RenderThreadImpl
   // RenderThread implementation:
   IPC::SyncChannel* GetChannel() override;
   std::string GetLocale() override;
-  IPC::SyncMessageFilter* GetSyncMessageFilter() override;
-  void AddRoute(int32_t routing_id, IPC::Listener* listener) override;
-  void AttachTaskRunnerToRoute(
-      int32_t routing_id,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner) override;
-  void RemoveRoute(int32_t routing_id) override;
-  int GenerateRoutingID() override;
+
   bool GenerateFrameRoutingID(int32_t& routing_id,
                               blink::LocalFrameToken& frame_token,
                               base::UnguessableToken& devtools_frame_token,
                               blink::DocumentToken& document_token) override;
-  void AddFilter(IPC::MessageFilter* filter) override;
-  void RemoveFilter(IPC::MessageFilter* filter) override;
   void AddObserver(RenderThreadObserver* observer) override;
   void RemoveObserver(RenderThreadObserver* observer) override;
-  void SetResourceRequestSenderDelegate(
-      blink::WebResourceRequestSenderDelegate* delegate) override;
-  blink::WebResourceRequestSenderDelegate* GetResourceRequestSenderDelegate() {
-    return resource_request_sender_delegate_;
-  }
   int PostTaskToAllWebWorkers(base::RepeatingClosure closure) override;
   base::WaitableEvent* GetShutdownEvent() override;
   int32_t GetClientId() override;
-  void SetRendererProcessType(
-      blink::scheduler::WebRendererProcessType type) override;
   blink::WebString GetUserAgent() override;
-  blink::WebString GetFullUserAgent() override;
-  blink::WebString GetReducedUserAgent() override;
   const blink::UserAgentMetadata& GetUserAgentMetadata() override;
   void WriteIntoTrace(
       perfetto::TracedProto<perfetto::protos::pbzero::RenderProcessHost> proto)
       override;
-  attribution_reporting::mojom::OsSupport GetOsSupportForAttributionReporting()
-      override;
+  blink::mojom::PerformanceTier GetCpuPerformanceTier() override;
 
   // IPC::Listener implementation via ChildThreadImpl:
   void OnAssociatedInterfaceRequest(
@@ -202,10 +177,11 @@ class CONTENT_EXPORT RenderThreadImpl
 
   blink::scheduler::WebThreadScheduler* GetWebMainThreadScheduler();
   bool IsLcdTextEnabled();
-  bool IsElasticOverscrollEnabled();
+  bool IsElasticOverscrollEnabledOnRoot();
+  bool IsElasticOverscrollSupported();
   bool IsScrollAnimatorEnabled();
 
-  // TODO(crbug.com/1111231): The `enable_scroll_animator` flag is currently
+  // TODO(crbug.com/40142495): The `enable_scroll_animator` flag is currently
   // being passed as part of `CreateViewParams`, despite it looking like a
   // global setting. It should probably be moved to some `mojom::Renderer` API
   // and this method should be removed.
@@ -222,6 +198,8 @@ class CONTENT_EXPORT RenderThreadImpl
   // the appropriate mode.
   bool IsGpuCompositingDisabled() const { return is_gpu_compositing_disabled_; }
 
+  bool IsGpuRemoteDisconnected();
+
   // Synchronously establish a channel to the GPU plugin if not previously
   // established or if it has been lost (for example if the GPU plugin crashed).
   // If there is a pending asynchronous request, it will be completed by the
@@ -232,8 +210,6 @@ class CONTENT_EXPORT RenderThreadImpl
   using EstablishGpuChannelCallback =
       base::OnceCallback<void(scoped_refptr<gpu::GpuChannelHost>)>;
   void EstablishGpuChannel(EstablishGpuChannelCallback callback);
-
-  gpu::GpuMemoryBufferManager* GetGpuMemoryBufferManager();
 
   blink::AssociatedInterfaceRegistry* GetAssociatedInterfaceRegistry();
 
@@ -262,24 +238,17 @@ class CONTENT_EXPORT RenderThreadImpl
     return url_loader_throttle_provider_.get();
   }
 
-#if BUILDFLAG(IS_ANDROID)
-  scoped_refptr<StreamTextureFactory> GetStreamTexureFactory();
-  bool EnableStreamTextureCopy();
-#endif
-
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<DCOMPTextureFactory> GetDCOMPTextureFactory();
   // The OverlayStateService is only available where Media Foundation for
   // clear is supported, otherwise GetOverlayStateServiceProvider will return
   // nullptr.
-  OverlayStateServiceProvider* GetOverlayStateServiceProvider();
+  scoped_refptr<OverlayStateServiceProvider> GetOverlayStateServiceProvider();
 #endif
 
   blink::WebVideoCaptureImplManager* video_capture_impl_manager() const {
     return vc_manager_.get();
   }
-
-  mojom::RenderMessageFilter* render_message_filter();
 
   // Get the GPU channel. Returns NULL if the channel is not established or
   // has been lost.
@@ -297,9 +266,12 @@ class CONTENT_EXPORT RenderThreadImpl
       GetVideoFrameCompositorContextProvider(
           scoped_refptr<viz::RasterContextProvider>);
 
+  scoped_refptr<gpu::SharedImageInterface>
+  GetRenderThreadSharedImageInterface();
+
   // Returns a worker context provider that will be bound on the compositor
   // thread.
-  scoped_refptr<cc::RasterContextProviderWrapper>
+  scoped_refptr<viz::RasterContextProvider>
   SharedCompositorWorkerContextProvider(
       cc::RasterDarkModeFilter* dark_mode_filter);
 
@@ -307,9 +279,6 @@ class CONTENT_EXPORT RenderThreadImpl
 
   scoped_refptr<viz::ContextProviderCommandBuffer>
   SharedMainThreadContextProvider();
-
-  scoped_refptr<viz::ContextProviderCommandBuffer>
-  PepperVideoDecodeContextProvider();
 
   // For producing custom V8 histograms. Custom histograms are produced if all
   // `blink::WebView`s share the same host, and the host is in the pre-specified
@@ -367,10 +336,6 @@ class CONTENT_EXPORT RenderThreadImpl
     return &histogram_customizer_;
   }
 
-  void RegisterPendingFrameCreate(
-      int routing_id,
-      mojo::PendingReceiver<mojom::Frame> frame);
-
   mojom::RendererHost* GetRendererHost();
 
   // Sets the current pipeline rendering color space.
@@ -385,7 +350,14 @@ class CONTENT_EXPORT RenderThreadImpl
     run_loop_start_time_ = run_loop_start_time;
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  // Provide private memory footprint for browser process.
+  void SetPrivateMemoryFootprint(uint64_t private_memory_footprint_bytes);
+#endif
+
  private:
+  FRIEND_TEST_ALL_PREFIXES(RenderThreadImplBrowserTest,
+                           TransferSharedLastForegroundTime);
   friend class RenderThreadImplBrowserTest;
   friend class AgentSchedulingGroup;
 
@@ -394,9 +366,15 @@ class CONTENT_EXPORT RenderThreadImpl
   void OnChannelError() override;
 
   // ChildThread
-  bool OnControlMessageReceived(const IPC::Message& msg) override;
   void RecordAction(const base::UserMetricsAction& action) override;
   void RecordComputedAction(const std::string& action) override;
+
+#if BUILDFLAG(IS_ANDROID)
+  // ChildThreadImpl
+  void OnMemoryPressureFromBrowserReceived(
+      base::MemoryPressureLevel level) override;
+#endif
+  void SetBatterySaverMode(bool battery_saver_mode_enabled) override;
 
   bool IsMainThread();
 
@@ -406,14 +384,12 @@ class CONTENT_EXPORT RenderThreadImpl
 
   // mojom::Renderer:
   void CreateAgentSchedulingGroup(
-      mojo::PendingReceiver<IPC::mojom::ChannelBootstrap> bootstrap,
-      mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker_remote)
-      override;
+      mojo::PendingReceiver<IPC::mojom::ChannelBootstrap> bootstrap) override;
   void CreateAssociatedAgentSchedulingGroup(
       mojo::PendingAssociatedReceiver<mojom::AgentSchedulingGroup>
-          agent_scheduling_group,
-      mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker_remote)
-      override;
+          agent_scheduling_group) override;
+  void TransferSharedLastForegroundTime(
+      base::ReadOnlySharedMemoryRegion last_foreground_time_region) override;
   void OnNetworkConnectionChanged(
       net::NetworkChangeNotifier::ConnectionType type,
       double max_bandwidth_mbps) override;
@@ -424,20 +400,19 @@ class CONTENT_EXPORT RenderThreadImpl
   void SetWebKitSharedTimersSuspended(bool suspend) override;
   void InitializeRenderer(
       const std::string& user_agent,
-      const std::string& full_user_agent,
-      const std::string& reduced_user_agent,
       const blink::UserAgentMetadata& user_agent_metadata,
       const std::vector<std::string>& cors_exempt_header_list,
-      attribution_reporting::mojom::OsSupport attribution_os_support) override;
+      blink::mojom::OriginTrialsSettingsPtr origin_trial_settings,
+      blink::mojom::PerformanceTier cpu_performance_tier,
+      uint64_t trace_id) override;
   void UpdateScrollbarTheme(
       mojom::UpdateScrollbarThemeParamsPtr params) override;
-  void OnSystemColorsChanged(int32_t aqua_color_variant,
-                             const std::string& highlight_text_color,
-                             const std::string& highlight_color) override;
+  void OnSystemColorsChanged(int32_t aqua_color_variant) override;
   void UpdateSystemColorInfo(
       mojom::UpdateSystemColorInfoParamsPtr params) override;
-  void PurgePluginListCache(bool reload_pages) override;
-  void SetProcessState(mojom::RenderProcessBackgroundState background_state,
+  void PurgePluginListCache() override;
+  void PurgeResourceCache(PurgeResourceCacheCallback callback) override;
+  void SetProcessState(base::Process::Priority priority,
                        mojom::RenderProcessVisibleState visible_state) override;
   void SetIsLockedToSite() override;
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
@@ -445,11 +420,12 @@ class CONTENT_EXPORT RenderThreadImpl
       WriteClangProfilingProfileCallback callback) override;
 #endif
   void SetIsCrossOriginIsolated(bool value) override;
+  void SetIsWebSecurityDisabled(bool value) override;
   void SetIsIsolatedContext(bool value) override;
-  void SetOsSupportForAttributionReporting(
-      attribution_reporting::mojom::OsSupport os_support) override;
+  void SetWebUIResourceUrlToCodeCacheMap(
+      const base::flat_map<GURL, int>& resource_map) override;
   void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
+      base::MemoryPressureLevel memory_pressure_level) override;
 
   bool RendererIsHidden() const;
   void OnRendererHidden();
@@ -459,13 +435,18 @@ class CONTENT_EXPORT RenderThreadImpl
   void OnRendererBackgrounded();
   void OnRendererForegrounded();
 
-  void ReleaseFreeMemory();
-
-  void OnSyncMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
-
   void OnRendererInterfaceReceiver(
       mojo::PendingAssociatedReceiver<mojom::Renderer> receiver);
+
+  std::unique_ptr<media::MojoCodecFactory> CreateMediaMojoCodecFactory(
+      scoped_refptr<viz::ContextProviderCommandBuffer> context_provider,
+      bool enable_video_decode_accelerator,
+      bool enable_video_encode_accelerator);
+
+  mojom::RenderMessageFilter* render_message_filter();
+  void RequestNewItemsForFrameRoutingCache();
+  void PopulateFrameRoutingCacheWithItems(
+      std::vector<mojom::FrameRoutingInfoPtr> infos);
 
   scoped_refptr<discardable_memory::ClientDiscardableSharedMemoryManager>
       discardable_memory_allocator_;
@@ -484,15 +465,19 @@ class CONTENT_EXPORT RenderThreadImpl
   // Used to keep track of the renderer's backgrounded and visibility state.
   // Updated via an IPC from the browser process. If nullopt, the browser
   // process has yet to send an update and the state is unknown.
-  absl::optional<mojom::RenderProcessBackgroundState> background_state_;
-  absl::optional<mojom::RenderProcessVisibleState> visible_state_;
+  std::optional<base::Process::Priority> process_priority_;
+  std::optional<mojom::RenderProcessVisibleState> visible_state_;
+
+  // A read-only mapping of a std::atomic<base::TimeTicks> set to
+  // TimeTicks::Now() by RenderProcessHostImpl when this process is foregrounded
+  // and back to a null TimeTicks when it's backgrounded. Used to track the
+  // exact state of this process without relying on IPC (which can itself be
+  // delayed) for use cases that require that precision.
+  std::optional<base::AtomicSharedMemory<base::TimeTicks>::ReadOnlyMapping>
+      last_foreground_time_mapping_;
 
   blink::WebString user_agent_;
-  blink::WebString full_user_agent_;
-  blink::WebString reduced_user_agent_;
   blink::UserAgentMetadata user_agent_metadata_;
-
-  attribution_reporting::mojom::OsSupport attribution_os_support_;
 
   // Sticky once true, indicates that compositing is done without Gpu, so
   // resources given to the compositor or to the viz service should be
@@ -503,7 +488,8 @@ class CONTENT_EXPORT RenderThreadImpl
   // TODO(dcastagna): This should be just one scoped_ptr once
   // http://crbug.com/580386 is fixed.
   // NOTE(dcastagna): At worst this accumulates a few bytes per context lost.
-  std::vector<std::unique_ptr<GpuVideoAcceleratorFactoriesImpl>> gpu_factories_;
+  std::vector<std::unique_ptr<media::MojoGpuVideoAcceleratorFactories>>
+      gpu_factories_;
 
   // Thread or sequenced task runner (depending on
   // kBlinkMediaIsPooledSequencedTaskRunner) for running multimedia operations
@@ -519,32 +505,33 @@ class CONTENT_EXPORT RenderThreadImpl
   // Thread to run the VideoFrameCompositor on.
   std::unique_ptr<base::Thread> video_frame_compositor_thread_;
 
-#if BUILDFLAG(IS_ANDROID)
-  scoped_refptr<StreamTextureFactory> stream_texture_factory_;
-#endif
-
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<DCOMPTextureFactory> dcomp_texture_factory_;
-  std::unique_ptr<OverlayStateServiceProviderImpl>
+  scoped_refptr<OverlayStateServiceProviderImpl>
       overlay_state_service_provider_;
 #endif
 
   scoped_refptr<viz::ContextProviderCommandBuffer> shared_main_thread_contexts_;
-
-  scoped_refptr<viz::ContextProviderCommandBuffer>
-      pepper_video_decode_contexts_;
 
   base::ObserverList<RenderThreadObserver>::Unchecked observers_;
 
   scoped_refptr<viz::RasterContextProvider>
       video_frame_compositor_context_provider_;
 
-  scoped_refptr<cc::RasterContextProviderWrapper>
-      shared_worker_context_provider_wrapper_;
+  scoped_refptr<viz::RasterContextProvider> shared_worker_context_provider_;
+
+  scoped_refptr<gpu::SharedImageInterface> shared_image_interface_;
 
   HistogramCustomizer histogram_customizer_;
 
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
+  std::unique_ptr<base::MemoryPressureListenerRegistration>
+      memory_pressure_listener_registration_;
+
+  MemoryReclaimerPressureListener memory_reclaimer_pressure_listener_;
+
+  SkiaGraphicsPressureListener skia_graphics_pressure_listener_;
+
+  BlinkIsolatesPressureListener blink_isolates_pressure_listener_;
 
   std::unique_ptr<viz::Gpu> gpu_;
 
@@ -553,16 +540,13 @@ class CONTENT_EXPORT RenderThreadImpl
   // Compositor settings.
   bool is_lcd_text_enabled_;
   bool is_partial_raster_enabled_;
-  bool is_elastic_overscroll_enabled_;
+  bool is_elastic_overscroll_enabled_on_root_;
+  bool is_elastic_overscroll_supported_;
   bool is_threaded_animation_enabled_;
   bool is_scroll_animator_enabled_;
 
   // Target rendering ColorSpace.
   gfx::ColorSpace rendering_color_space_;
-
-  // Used when AddRoute() is called and the RenderFrameImpl hasn't been created
-  // yet.
-  std::map<int, mojo::PendingReceiver<mojom::Frame>> pending_frames_;
 
   mojo::AssociatedRemote<mojom::RendererHost> renderer_host_;
 
@@ -570,7 +554,7 @@ class CONTENT_EXPORT RenderThreadImpl
 
   mojo::AssociatedReceiver<mojom::Renderer> renderer_receiver_{this};
 
-  mojo::AssociatedRemote<mojom::RenderMessageFilter> render_message_filter_;
+  mojo::Remote<mojom::RenderMessageFilter> render_message_filter_;
 
   std::set<std::unique_ptr<AgentSchedulingGroup>, base::UniquePtrComparator>
       agent_scheduling_groups_;
@@ -579,6 +563,8 @@ class CONTENT_EXPORT RenderThreadImpl
 
   int32_t client_id_;
 
+  bool is_context_result_fatal_ = false;
+
   // A mojo connection to the CompositingModeReporter service.
   mojo::Remote<viz::mojom::CompositingModeReporter> compositing_mode_reporter_;
   // The class is a CompositingModeWatcher, which is bound to mojo through
@@ -586,12 +572,25 @@ class CONTENT_EXPORT RenderThreadImpl
   mojo::Receiver<viz::mojom::CompositingModeWatcher>
       compositing_mode_watcher_receiver_{this};
 
-  // Delegate is expected to live as long as requests may be sent.
-  blink::WebResourceRequestSenderDelegate* resource_request_sender_delegate_ =
-      nullptr;
-
   // Tracks the time the run loop started for this thread.
   base::TimeTicks run_loop_start_time_;
+
+  // A small cache of pending frame routing IDs/tokens so we do not need to make
+  // a synchronous IPC call to retrieve one most of the time. If the cache is
+  // empty a synchronous IPC call will be made. Once the cache only has two
+  // items an asynchronous request to populate it will also be made.
+  std::deque<mojom::FrameRoutingInfoPtr> cached_frame_routing_;
+
+  // Keep track of it we have requested items or not as we do not want to fire
+  // off only one asynchronous request.
+  bool cached_items_requested_ = false;
+  bool use_cached_routing_table_ = false;
+
+  blink::mojom::PerformanceTier cpu_performance_tier_ =
+      blink::mojom::PerformanceTier::kUnknown;
+
+  std::optional<base::ThreadPoolInstance::ScopedRestrictedTasks>
+      restrict_thread_pool_;
 
   base::WeakPtrFactory<RenderThreadImpl> weak_factory_{this};
 };

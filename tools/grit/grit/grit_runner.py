@@ -7,7 +7,6 @@
 GRIT tools.
 """
 
-from __future__ import print_function
 
 import os
 import sys
@@ -196,7 +195,7 @@ Tools:
 """ % (tool_list))
 
 
-class Options(object):
+class Options:
   """Option storage and parsing."""
 
   def __init__(self):
@@ -325,9 +324,7 @@ if __name__ == '__main__':
               os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
           'diagnosis'))
   try:
-    import crbug_1001171
-    with crbug_1001171.DumpStateOnLookupError():
-      sys.exit(Main(sys.argv[1:]))
+    sys.exit(Main(sys.argv[1:]))
   except ImportError:
     pass
 

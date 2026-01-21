@@ -5,25 +5,22 @@
 #ifndef FUCHSIA_WEB_RUNNERS_CAST_CAST_RUNNER_H_
 #define FUCHSIA_WEB_RUNNERS_CAST_CAST_RUNNER_H_
 
+#include <chromium/cast/cpp/fidl.h>
 #include <fuchsia/component/runner/cpp/fidl.h>
 #include <fuchsia/web/cpp/fidl.h>
+
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/fuchsia/startup_context.h"
+#include "base/functional/callback.h"
 #include "fuchsia_web/runners/cast/cast_component.h"
-#include "fuchsia_web/runners/cast/fidl/fidl/chromium/cast/cpp/fidl.h"
 #include "fuchsia_web/runners/cast/pending_cast_component.h"
 #include "fuchsia_web/runners/common/web_content_runner.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-class FilteredServiceDirectory;
-}
 
 class WebInstanceHost;
 
@@ -59,21 +56,16 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
       fuchsia::component::runner::ComponentStartInfo start_info,
       fidl::InterfaceRequest<fuchsia::component::runner::ComponentController>
           controller) override;
+  void handle_unknown_method(uint64_t ordinal,
+                             bool method_has_response) override;
 
   // chromium::cast::DataReset implementation.
   void DeletePersistentData(DeletePersistentDataCallback callback) override;
 
   // Returns a connection request handler for the fuchsia.web.FrameHost
-  // protocol exposed by the main web_instance. This is available regardless
-  // of whether `enable_frame_host_component_` is set.
+  // protocol exposed by the main web_instance.
   fidl::InterfaceRequestHandler<fuchsia::web::FrameHost>
   GetFrameHostRequestHandler();
-
-  // Enables the special component that provides the fuchsia.web.FrameHost API,
-  // hosted using the same WebEngine instance as the main web.Context.
-  void set_enable_frame_host_component() {
-    enable_frame_host_component_ = true;
-  }
 
   // Disables use of the VULKAN feature when creating Contexts. Must be set
   // before calling StartComponent().
@@ -91,14 +83,14 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
   WebContentRunner::WebInstanceConfig
   GetIsolatedWebInstanceConfigWithFuchsiaDirs(
       std::vector<fuchsia::web::ContentDirectoryProvider> content_directories);
-  // TODO(crbug.com/1082821): Remove this once the CastStreamingReceiver
+  // TODO(crbug.com/40131115): Remove this once the CastStreamingReceiver
   // Component has been implemented.
   WebContentRunner::WebInstanceConfig
   GetIsolatedWebInstanceConfigForCastStreaming();
 
   // Returns CreateContextParams for |app_config|. Returns nullopt if there is
   // no need to create an isolated context.
-  absl::optional<WebContentRunner::WebInstanceConfig>
+  std::optional<WebContentRunner::WebInstanceConfig>
   GetWebInstanceConfigForAppConfig(
       chromium::cast::ApplicationConfig* app_config);
 
@@ -125,7 +117,7 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
   // Returns false if tha data directory cannot be cleaned-up.
   bool DeletePersistentDataInternal();
 
-  // TODO(crbug.com/1188780): Used to detect when the persisted cache directory
+  // TODO(crbug.com/40755074): Used to detect when the persisted cache directory
   // was erased. The sentinel file is created at the top-level of the cache
   // directory, so cannot be deleted by the Context, only by the cache being
   // erased.
@@ -145,12 +137,9 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
   // Holds the main fuchsia.web.Context used to host CastComponents.
   // Note that although |main_context_| is actually a WebContentRunner, that is
   // only being used to maintain the Context for the hosted components.
-  const std::unique_ptr<base::FilteredServiceDirectory> main_services_;
   const std::unique_ptr<WebContentRunner> main_context_;
 
-  const std::unique_ptr<base::FilteredServiceDirectory> isolated_services_;
-
-  // Holds fuchsia.web.Contexts used to host isolated components.
+  // Holds `fuchsia.web.Context`s used to host isolated components.
   base::flat_set<std::unique_ptr<WebContentRunner>, base::UniquePtrComparator>
       isolated_contexts_;
 
@@ -161,12 +150,9 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
                  base::UniquePtrComparator>
       pending_components_;
 
-  // True if this Runner should offer the fuchsia.web.FrameHost component.
-  bool enable_frame_host_component_ = false;
-
   // Used to fetch & cache the list of CORS exempt HTTP headers to configure
   // each web.Context with.
-  absl::optional<std::vector<std::vector<uint8_t>>> cors_exempt_headers_;
+  std::optional<std::vector<std::vector<uint8_t>>> cors_exempt_headers_;
   chromium::cast::CorsExemptHeaderProviderPtr cors_exempt_headers_provider_;
   std::vector<base::OnceClosure> on_have_cors_exempt_headers_;
 
@@ -179,7 +165,8 @@ class CastRunner final : public fuchsia::component::runner::ComponentRunner,
   bool data_reset_in_progress_ = false;
 
   // True if the cache sentinel file should exist.
-  // TODO(crbug.com/1188780): Remove once an explicit cache flush signal exists.
+  // TODO(crbug.com/40755074): Remove once an explicit cache flush signal
+  // exists.
   bool was_cache_sentinel_created_ = false;
 };
 

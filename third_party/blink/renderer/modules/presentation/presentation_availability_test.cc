@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/modules/presentation/presentation_request.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -21,18 +22,17 @@ namespace blink {
 namespace {
 
 TEST(PresentationAvailabilityTest, NoPageVisibilityChangeAfterDetach) {
+  test::TaskEnvironment task_environment;
   Page* page = nullptr;
   {
     V8TestingScope scope;
-    WTF::Vector<KURL> urls;
+    Vector<KURL> urls;
     urls.push_back(url_test_helpers::ToKURL("https://example.com"));
     urls.push_back(url_test_helpers::ToKURL("https://another.com"));
 
-    Persistent<PresentationAvailabilityProperty> resolver =
-        MakeGarbageCollected<PresentationAvailabilityProperty>(
-            scope.GetExecutionContext());
     Persistent<PresentationAvailability> availability =
-        PresentationAvailability::Take(resolver, urls, false);
+        PresentationAvailability::Take(scope.GetExecutionContext(), urls,
+                                       false);
 
     page = &scope.GetPage();
   }

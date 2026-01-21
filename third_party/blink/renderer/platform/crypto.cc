@@ -6,19 +6,16 @@
 
 #include "base/numerics/safe_conversions.h"
 #include "crypto/openssl_util.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
 namespace blink {
 
 Digestor::Digestor(HashAlgorithm algorithm) {
-  crypto::EnsureOpenSSLInit();
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   const EVP_MD* evp_md = nullptr;
   switch (algorithm) {
-    case kHashAlgorithmSha1:
-      evp_md = EVP_sha1();
-      break;
     case kHashAlgorithmSha256:
       evp_md = EVP_sha256();
       break;
@@ -46,9 +43,9 @@ bool Digestor::Update(base::span<const uint8_t> data) {
   return !has_failed_;
 }
 
-bool Digestor::UpdateUtf8(const String& string, WTF::UTF8ConversionMode mode) {
-  StringUTF8Adaptor utf8(string, mode);
-  return Update(base::as_bytes(base::make_span(utf8)));
+bool Digestor::UpdateUtf8(const String& string, Utf8ConversionMode mode) {
+  StringUtf8Adaptor utf8(string, mode);
+  return Update(base::as_byte_span(utf8));
 }
 
 bool Digestor::Finish(DigestValue& digest_result) {
@@ -68,11 +65,23 @@ bool Digestor::Finish(DigestValue& digest_result) {
 }
 
 bool ComputeDigest(HashAlgorithm algorithm,
-                   const char* digestable,
-                   size_t length,
+                   base::span<const uint8_t> digestable,
                    DigestValue& digest_result) {
   Digestor digestor(algorithm);
-  digestor.Update(base::as_bytes(base::make_span(digestable, length)));
+  digestor.Update(digestable);
+  digestor.Finish(digest_result);
+  return !digestor.has_failed();
+}
+
+bool ComputeDigest(HashAlgorithm algorithm,
+                   const SegmentedBuffer* buffer,
+                   DigestValue& digest_result) {
+  Digestor digestor(algorithm);
+  if (buffer) {
+    for (const auto& span : *buffer) {
+      digestor.Update(base::as_bytes(span));
+    }
+  }
   digestor.Finish(digest_result);
   return !digestor.has_failed();
 }

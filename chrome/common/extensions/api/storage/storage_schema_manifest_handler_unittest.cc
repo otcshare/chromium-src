@@ -12,11 +12,14 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/values.h"
 #include "components/version_info/version_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -25,7 +28,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
   StorageSchemaManifestHandlerTest()
       : scoped_channel_(version_info::Channel::DEV) {}
 
-  ~StorageSchemaManifestHandlerTest() override {}
+  ~StorageSchemaManifestHandlerTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -36,7 +39,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
   }
 
   scoped_refptr<Extension> CreateExtension(const std::string& schema) {
-    std::string error;
+    std::u16string error;
     scoped_refptr<Extension> extension = Extension::Create(
         temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked, manifest_,
         Extension::NO_FLAGS, "", &error);
@@ -46,8 +49,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
     if (schema.empty()) {
       base::DeleteFile(schema_path);
     } else {
-      if (base::WriteFile(schema_path, schema.data(), schema.size()) !=
-          static_cast<int>(schema.size())) {
+      if (!base::WriteFile(schema_path, schema)) {
         return nullptr;
       }
     }
@@ -58,7 +60,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
     scoped_refptr<Extension> extension = CreateExtension(schema);
     if (!extension.get())
       return testing::AssertionFailure() << "Failed to create test extension";
-    std::string error;
+    std::u16string error;
     std::vector<InstallWarning> warnings;
     if (file_util::ValidateExtension(extension.get(), &error, &warnings))
       return testing::AssertionSuccess();
@@ -86,9 +88,9 @@ TEST_F(StorageSchemaManifestHandlerTest, Parse) {
 }
 
 TEST_F(StorageSchemaManifestHandlerTest, Validate) {
-  base::ListValue permissions;
+  base::Value::List permissions;
   permissions.Append("storage");
-  manifest_.Set("permissions", permissions.Clone());
+  manifest_.Set("permissions", std::move(permissions));
 
   // Absolute path.
   manifest_.SetByDottedPath("storage.managed_schema", "/etc/passwd");

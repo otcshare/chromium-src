@@ -5,6 +5,7 @@
 // Functions to canonicalize "standard" URLs, which are ones that have an
 // authority section including a host name.
 
+#include "base/compiler_specific.h"
 #include "url/url_canon.h"
 #include "url/url_canon_internal.h"
 #include "url/url_constants.h"
@@ -13,16 +14,18 @@ namespace url {
 
 namespace {
 
-template <typename CHAR, typename UCHAR>
-bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
-                               const Parsed& parsed,
+template <typename CHAR>
+bool DoCanonicalizeStandardUrl(const Replacements<CHAR>& source,
                                SchemeType scheme_type,
                                CharsetConverter* query_converter,
                                CanonOutput* output,
                                Parsed* new_parsed) {
+  const Parsed& parsed = source.components();
+  DCHECK(!parsed.has_opaque_path);
+
   // Scheme: this will append the colon.
-  bool success = CanonicalizeScheme(source.scheme, parsed.scheme,
-                                    output, &new_parsed->scheme);
+  bool success =
+      CanonicalizeScheme(source.MaybeScheme(), output, &new_parsed->scheme);
 
   bool scheme_supports_user_info =
       (scheme_type == SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION);
@@ -47,14 +50,14 @@ bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
     // User info: the canonicalizer will handle the : and @.
     if (scheme_supports_user_info) {
       success &= CanonicalizeUserInfo(
-          source.username, parsed.username, source.password, parsed.password,
-          output, &new_parsed->username, &new_parsed->password);
+          source.MaybeUsername(), source.MaybePassword(), output,
+          &new_parsed->username, &new_parsed->password);
     } else {
       new_parsed->username.reset();
       new_parsed->password.reset();
     }
 
-    success &= CanonicalizeHost(source.host, parsed.host,
+    success &= CanonicalizeHost(source.SpecUntilHostOrEmpty(), parsed.host,
                                 output, &new_parsed->host);
 
     // Host must not be empty for standard URLs.
@@ -63,10 +66,10 @@ bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
 
     // Port: the port canonicalizer will handle the colon.
     if (scheme_supports_ports) {
-      int default_port = DefaultPortForScheme(
-          &output->data()[new_parsed->scheme.begin], new_parsed->scheme.len);
-      success &= CanonicalizePort(source.port, parsed.port, default_port,
-                                  output, &new_parsed->port);
+      int default_port =
+          DefaultPortForScheme(new_parsed->scheme.AsViewOn(output->view()));
+      success &= CanonicalizePort(source.MaybePort(), default_port, output,
+                                  &new_parsed->port);
     } else {
       new_parsed->port.reset();
     }
@@ -82,8 +85,7 @@ bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
 
   // Path
   if (parsed.path.is_valid()) {
-    success &= CanonicalizePath(source.path, parsed.path,
-                                output, &new_parsed->path);
+    success &= CanonicalizePath(source.MaybePath(), output, &new_parsed->path);
   } else if (have_authority ||
              parsed.query.is_valid() || parsed.ref.is_valid()) {
     // When we have an empty path, make up a path when we have an authority
@@ -97,11 +99,11 @@ bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
   }
 
   // Query
-  CanonicalizeQuery(source.query, parsed.query, query_converter,
-                    output, &new_parsed->query);
+  CanonicalizeQuery(source.MaybeQuery(), query_converter, output,
+                    &new_parsed->query);
 
   // Ref: ignore failure for this, since the page can probably still be loaded.
-  CanonicalizeRef(source.ref, parsed.ref, output, &new_parsed->ref);
+  CanonicalizeRef(source.MaybeRef(), output, &new_parsed->ref);
 
   // Carry over the flag for potentially dangling markup:
   if (parsed.potentially_dangling_markup)
@@ -117,53 +119,54 @@ bool DoCanonicalizeStandardURL(const URLComponentSource<CHAR>& source,
 //
 // Please keep blink::DefaultPortForProtocol and url::DefaultPortForProtocol in
 // sync.
-int DefaultPortForScheme(const char* scheme, int scheme_len) {
-  int default_port = PORT_UNSPECIFIED;
-  switch (scheme_len) {
+int DefaultPortForScheme(std::string_view scheme) {
+  switch (scheme.length()) {
     case 4:
-      if (!strncmp(scheme, kHttpScheme, scheme_len))
-        default_port = 80;
+      if (scheme == kHttpScheme) {
+        return 80;
+      }
       break;
     case 5:
-      if (!strncmp(scheme, kHttpsScheme, scheme_len))
-        default_port = 443;
+      if (scheme == kHttpsScheme) {
+        return 443;
+      }
       break;
     case 3:
-      if (!strncmp(scheme, kFtpScheme, scheme_len))
-        default_port = 21;
-      else if (!strncmp(scheme, kWssScheme, scheme_len))
-        default_port = 443;
+      if (scheme == kFtpScheme) {
+        return 21;
+      } else if (scheme == kWssScheme) {
+        return 443;
+      }
       break;
     case 2:
-      if (!strncmp(scheme, kWsScheme, scheme_len))
-        default_port = 80;
+      if (scheme == kWsScheme) {
+        return 80;
+      }
       break;
   }
-  return default_port;
+  return PORT_UNSPECIFIED;
 }
 
-bool CanonicalizeStandardURL(const char* spec,
-                             int spec_len,
+bool CanonicalizeStandardUrl(std::string_view spec,
                              const Parsed& parsed,
                              SchemeType scheme_type,
                              CharsetConverter* query_converter,
                              CanonOutput* output,
                              Parsed* new_parsed) {
-  return DoCanonicalizeStandardURL<char, unsigned char>(
-      URLComponentSource<char>(spec), parsed, scheme_type, query_converter,
-      output, new_parsed);
+  return DoCanonicalizeStandardUrl(Replacements<char>(spec, parsed),
+                                   scheme_type, query_converter, output,
+                                   new_parsed);
 }
 
-bool CanonicalizeStandardURL(const char16_t* spec,
-                             int spec_len,
+bool CanonicalizeStandardUrl(std::u16string_view spec,
                              const Parsed& parsed,
                              SchemeType scheme_type,
                              CharsetConverter* query_converter,
                              CanonOutput* output,
                              Parsed* new_parsed) {
-  return DoCanonicalizeStandardURL<char16_t, char16_t>(
-      URLComponentSource<char16_t>(spec), parsed, scheme_type, query_converter,
-      output, new_parsed);
+  return DoCanonicalizeStandardUrl(Replacements<char16_t>(spec, parsed),
+                                   scheme_type, query_converter, output,
+                                   new_parsed);
 }
 
 // It might be nice in the future to optimize this so unchanged components don't
@@ -175,23 +178,22 @@ bool CanonicalizeStandardURL(const char16_t* spec,
 //
 // You would also need to update DoReplaceComponents in url_util.cc which
 // relies on this re-checking everything (see the comment there for why).
-bool ReplaceStandardURL(const char* base,
+bool ReplaceStandardUrl(std::string_view base,
                         const Parsed& base_parsed,
                         const Replacements<char>& replacements,
                         SchemeType scheme_type,
                         CharsetConverter* query_converter,
                         CanonOutput* output,
                         Parsed* new_parsed) {
-  URLComponentSource<char> source(base);
-  Parsed parsed(base_parsed);
-  SetupOverrideComponents(base, replacements, &source, &parsed);
-  return DoCanonicalizeStandardURL<char, unsigned char>(
-      source, parsed, scheme_type, query_converter, output, new_parsed);
+  Replacements<char> overridden(base, base_parsed);
+  SetupOverrideComponents(replacements, overridden);
+  return DoCanonicalizeStandardUrl(overridden, scheme_type, query_converter,
+                                   output, new_parsed);
 }
 
 // For 16-bit replacements, we turn all the replacements into UTF-8 so the
 // regular code path can be used.
-bool ReplaceStandardURL(const char* base,
+bool ReplaceStandardUrl(std::string_view base,
                         const Parsed& base_parsed,
                         const Replacements<char16_t>& replacements,
                         SchemeType scheme_type,
@@ -199,11 +201,10 @@ bool ReplaceStandardURL(const char* base,
                         CanonOutput* output,
                         Parsed* new_parsed) {
   RawCanonOutput<1024> utf8;
-  URLComponentSource<char> source(base);
-  Parsed parsed(base_parsed);
-  SetupUTF16OverrideComponents(base, replacements, &utf8, &source, &parsed);
-  return DoCanonicalizeStandardURL<char, unsigned char>(
-      source, parsed, scheme_type, query_converter, output, new_parsed);
+  Replacements<char> overridden(base, base_parsed);
+  SetupUtf16OverrideComponents(replacements, utf8, overridden);
+  return DoCanonicalizeStandardUrl(overridden, scheme_type, query_converter,
+                                   output, new_parsed);
 }
 
 }  // namespace url

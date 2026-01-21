@@ -70,7 +70,7 @@ void ScreenInfoMetricsProvider::ProvideSystemProfileMetrics(
     SystemProfileProto* system_profile_proto) {
   // This may be called before the screen info has been initialized, such as
   // when the persistent system profile gets filled in initially.
-  const absl::optional<gfx::Size> display_size = GetScreenSize();
+  const std::optional<gfx::Size> display_size = GetScreenSize();
   if (!display_size.has_value())
     return;
 
@@ -87,21 +87,19 @@ void ScreenInfoMetricsProvider::ProvideSystemProfileMetrics(
 #endif
 }
 
-absl::optional<gfx::Size> ScreenInfoMetricsProvider::GetScreenSize() const {
-  auto* screen = display::Screen::GetScreen();
+std::optional<gfx::Size> ScreenInfoMetricsProvider::GetScreenSize() const {
+  auto* screen = display::Screen::Get();
   if (!screen)
-    return absl::nullopt;
-  return absl::make_optional(screen->GetPrimaryDisplay().GetSizeInPixel());
+    return std::nullopt;
+  return std::make_optional(screen->GetPrimaryDisplay().GetSizeInPixel());
 }
 
 float ScreenInfoMetricsProvider::GetScreenDeviceScaleFactor() const {
-  return display::Screen::GetScreen()
-      ->GetPrimaryDisplay()
-      .device_scale_factor();
+  return display::Screen::Get()->GetPrimaryDisplay().device_scale_factor();
 }
 
 int ScreenInfoMetricsProvider::GetScreenCount() const {
-  return display::Screen::GetScreen()->GetNumDisplays();
+  return display::Screen::Get()->GetNumDisplays();
 }
 
 }  // namespace metrics

@@ -13,19 +13,16 @@ namespace {
 // Fetch the path from the given url (i.e. "http://foo.bar/baz" -> "/baz")
 std::string UrlPath(const std::string& url) {
   GURL gurl(url);
-  return gurl.path();
+  return gurl.GetPath();
 }
 
 }  // namespace
 
-ReplayHttpClient::ReplayHttpClient(
-    const DevToolsEndpoint& endpoint,
-    network::mojom::URLLoaderFactory* factory,
-    std::unique_ptr<std::set<WebViewInfo::Type>> window_types,
-    const base::FilePath& log_path)
-    : DevToolsHttpClient(endpoint, factory, std::move(window_types)),
-      log_reader_(log_path) {}
-ReplayHttpClient::~ReplayHttpClient() {}
+ReplayHttpClient::ReplayHttpClient(const DevToolsEndpoint& endpoint,
+                                   network::mojom::URLLoaderFactory* factory,
+                                   const base::FilePath& log_path)
+    : DevToolsHttpClient(endpoint, factory), log_reader_(log_path) {}
+ReplayHttpClient::~ReplayHttpClient() = default;
 
 bool ReplayHttpClient::FetchUrlAndLog(const std::string& url,
                                       std::string* response) {

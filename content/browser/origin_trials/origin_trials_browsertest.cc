@@ -48,7 +48,6 @@ class OriginTrialsBrowserTest : public content::ContentBrowserTest {
   ~OriginTrialsBrowserTest() override {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kExposeInternalsForTesting);
   }
 
@@ -62,8 +61,7 @@ class OriginTrialsBrowserTest : public content::ContentBrowserTest {
         std::make_unique<URLLoaderInterceptor>(base::BindLambdaForTesting(
             [&](URLLoaderInterceptor::RequestParams* params) -> bool {
               URLLoaderInterceptor::WriteResponse(
-                  base::StrCat(
-                      {kBaseDataDir, params->url_request.url.path_piece()}),
+                  base::StrCat({kBaseDataDir, params->url_request.url.path()}),
                   params->client.get());
               return true;
             }));

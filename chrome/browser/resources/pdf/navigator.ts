@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BrowserApi} from './browser_api.js';
-import {OpenPdfParams, OpenPdfParamsParser} from './open_pdf_params_parser.js';
-import {Viewport} from './viewport.js';
+import type {BrowserApi} from './browser_api.js';
+import type {OpenPdfParams, OpenPdfParamsParser} from './open_pdf_params_parser.js';
+import type {Viewport} from './viewport.js';
 
 // NavigatorDelegate for calling browser-specific functions to do the actual
 // navigating.
@@ -24,6 +24,12 @@ export interface NavigatorDelegate {
    * Called when navigation should happen in the new window.
    */
   navigateInNewWindow(url: string): void;
+
+  /*
+   * Returns true if `url` should be allowed to access local files, false
+   * otherwise.
+   */
+  isAllowedLocalFileAccess(url: string): Promise<boolean>;
 }
 
 // NavigatorDelegate for calling browser-specific functions to do the actual
@@ -58,10 +64,32 @@ export class NavigatorDelegateImpl implements NavigatorDelegate {
       window.open(url, '_blank');
     }
   }
+
+
+  isAllowedLocalFileAccess(url: string): Promise<boolean> {
+    return new Promise(resolve => {
+      chrome.pdfViewerPrivate.isAllowedLocalFileAccess(
+          url, result => resolve(result));
+    });
+  }
+}
+
+// Interface for the Navigator that navigates to links inside or outside the
+// PDF.
+export interface PdfNavigator {
+  /**
+   * Function to navigate to the given URL. This might involve navigating
+   * within the PDF page or opening a new url (in the same tab or a new tab).
+   * @param disposition The window open disposition when navigating to the new
+   *     URL.
+   * @return When navigation has completed (used for testing).
+   */
+  navigate(urlString: string, disposition: WindowOpenDisposition):
+      Promise<void>;
 }
 
 // Navigator for navigating to links inside or outside the PDF.
-export class PdfNavigator {
+export class PdfNavigatorImpl implements PdfNavigator {
   private originalUrl_: URL|null = null;
   private viewport_: Viewport;
   private paramsParser_: OpenPdfParamsParser;
@@ -95,7 +123,7 @@ export class PdfNavigator {
    *     URL.
    * @return When navigation has completed (used for testing).
    */
-  navigate(urlString: string, disposition: WindowOpenDisposition):
+  async navigate(urlString: string, disposition: WindowOpenDisposition):
       Promise<void> {
     if (urlString.length === 0) {
       return Promise.resolve();
@@ -113,7 +141,7 @@ export class PdfNavigator {
 
     // If there's no scheme, then take a guess at the scheme.
     if (!urlString.includes('://') && !urlString.includes('mailto:')) {
-      urlString = this.guessUrlWithoutScheme_(urlString);
+      urlString = await this.guessUrlWithoutScheme_(urlString);
     }
 
     let url = null;
@@ -123,7 +151,7 @@ export class PdfNavigator {
       return Promise.reject(err);
     }
 
-    if (!this.isValidUrl_(url)) {
+    if (!(await this.isValidUrl_(url))) {
       return Promise.resolve();
     }
 
@@ -181,17 +209,19 @@ export class PdfNavigator {
   /**
    * Checks if the URL starts with a scheme and is not just a scheme.
    */
-  private isValidUrl_(url: URL): boolean {
+  private async isValidUrl_(url: URL): Promise<boolean> {
     // Make sure |url| starts with a valid scheme.
     const validSchemes = ['http:', 'https:', 'ftp:', 'file:', 'mailto:'];
     if (!validSchemes.includes(url.protocol)) {
       return false;
     }
 
-    // Navigations to file:-URLs are only allowed from file:-URLs.
+    // Navigations to file:-URLs are only allowed from file:-URLs or allowlisted
+    // domains.
     if (url.protocol === 'file:' && this.originalUrl_ &&
         this.originalUrl_.protocol !== 'file:') {
-      return false;
+      return this.navigatorDelegate_.isAllowedLocalFileAccess(
+          this.originalUrl_.toString());
     }
 
     return true;
@@ -202,13 +232,13 @@ export class PdfNavigator {
    * @return The URL with a scheme or the original URL if it is not
    *     possible to determine the scheme.
    */
-  private guessUrlWithoutScheme_(url: string): string {
+  private async guessUrlWithoutScheme_(url: string): Promise<string> {
     // If the original URL is mailto:, that does not make sense to start with,
     // and neither does adding |url| to it.
     // If the original URL is not a valid URL, this cannot make a valid URL.
     // In both cases, just bail out.
     if (!this.originalUrl_ || this.originalUrl_.protocol === 'mailto:' ||
-        !this.isValidUrl_(this.originalUrl_)) {
+        !(await this.isValidUrl_(this.originalUrl_))) {
       return url;
     }
 
@@ -259,4 +289,4 @@ export enum WindowOpenDisposition {
 
 // Export on |window| such that scripts injected from pdf_extension_test.cc can
 // access it.
-Object.assign(window, {PdfNavigator, WindowOpenDisposition});
+Object.assign(window, {PdfNavigatorImpl, WindowOpenDisposition});

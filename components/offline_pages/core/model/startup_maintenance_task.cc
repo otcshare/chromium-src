@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
@@ -24,6 +24,7 @@
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace offline_pages {
 
@@ -137,14 +138,6 @@ SyncOperationResult ClearLegacyPagesInPrivateDirSync(
   if (!DeleteFiles(files_to_delete))
     return SyncOperationResult::FILE_OPERATION_ERROR;
 
-  size_t headless_file_count =
-      files_to_delete.size() - offline_ids_to_delete.size();
-  if (headless_file_count > 0) {
-    UMA_HISTOGRAM_COUNTS_1M(
-        "OfflinePages.ConsistencyCheck.Legacy.DeletedHeadlessFileCount",
-        headless_file_count);
-  }
-
   return SyncOperationResult::SUCCESS;
 }
 
@@ -182,9 +175,6 @@ SyncOperationResult CheckTemporaryPageConsistencySync(
     // committed.
     if (!DeletePageTask::DeletePagesFromDbSync(offline_ids_to_delete, db))
       return SyncOperationResult::DB_OPERATION_ERROR;
-    UMA_HISTOGRAM_COUNTS_1M(
-        "OfflinePages.ConsistencyCheck.Temporary.PagesMissingArchiveFileCount",
-        base::saturated_cast<int32_t>(offline_ids_to_delete.size()));
   }
 
   if (!transaction.Commit())
@@ -202,9 +192,6 @@ SyncOperationResult CheckTemporaryPageConsistencySync(
   if (files_to_delete.size() > 0) {
     if (!DeleteFiles(files_to_delete))
       return SyncOperationResult::FILE_OPERATION_ERROR;
-    UMA_HISTOGRAM_COUNTS_1M(
-        "OfflinePages.ConsistencyCheck.Temporary.PagesMissingDbEntryCount",
-        static_cast<int32_t>(files_to_delete.size()));
   }
 
   return SyncOperationResult::SUCCESS;
@@ -217,13 +204,6 @@ void ReportStorageUsageSync(sql::Database* db) {
   for (const auto& name_space : GetAllPolicyNamespaces()) {
     sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql));
     statement.BindString(0, name_space);
-    int size_in_kib = 0;
-    while (statement.Step()) {
-      size_in_kib = base::saturated_cast<int>(statement.ColumnInt64(0) / 1024);
-    }
-    base::UmaHistogramCustomCounts(
-        "OfflinePages.ClearStoragePreRunUsage2." + name_space, size_in_kib, 1,
-        10000000, 50);
   }
 }
 
@@ -233,13 +213,10 @@ bool StartupMaintenanceSync(
     sql::Database* db) {
   // Clear temporary pages that are in legacy directory, which is also the
   // directory that serves as the 'private' directory.
-  SyncOperationResult result =
-      ClearLegacyPagesInPrivateDirSync(db, private_archives_dir);
+  ClearLegacyPagesInPrivateDirSync(db, private_archives_dir);
 
   // Clear temporary pages in cache directory.
-  result = CheckTemporaryPageConsistencySync(db, temporary_archives_dir);
-  UMA_HISTOGRAM_ENUMERATION("OfflinePages.ConsistencyCheck.Temporary.Result",
-                            result);
+  CheckTemporaryPageConsistencySync(db, temporary_archives_dir);
 
   // Report storage usage UMA, |temporary_namespaces| + |persistent_namespaces|
   // should be all namespaces. This is implicitly checked by the
@@ -261,8 +238,8 @@ StartupMaintenanceTask::StartupMaintenanceTask(OfflinePageMetadataStore* store,
 StartupMaintenanceTask::~StartupMaintenanceTask() = default;
 
 void StartupMaintenanceTask::Run() {
-  TRACE_EVENT_ASYNC_BEGIN0("offline_pages", "StartupMaintenanceTask running",
-                           this);
+  TRACE_EVENT_BEGIN("offline_pages", "StartupMaintenanceTask running",
+                    perfetto::Track::FromPointer(this));
   store_->Execute(
       base::BindOnce(&StartupMaintenanceSync,
                      archive_manager_->GetTemporaryArchivesDir(),
@@ -273,8 +250,10 @@ void StartupMaintenanceTask::Run() {
 }
 
 void StartupMaintenanceTask::OnStartupMaintenanceDone(bool result) {
-  TRACE_EVENT_ASYNC_END1("offline_pages", "StartupMaintenanceTask running",
-                         this, "result", result);
+  TRACE_EVENT_END(
+      "offline_pages",
+      /* StartupMaintenanceTask running */ perfetto::Track::FromPointer(this),
+      "result", result);
   TaskComplete();
 }
 

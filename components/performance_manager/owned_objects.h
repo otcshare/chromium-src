@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
 
@@ -47,7 +46,7 @@ template <typename OwnedType,
 class OwnedObjects {
  public:
   OwnedObjects() = default;
-  ~OwnedObjects() { DCHECK(objects_.empty()); }
+  ~OwnedObjects() { CHECK(objects_.empty()); }
 
   OwnedObjects(const OwnedObjects&) = delete;
   OwnedObjects& operator=(const OwnedObjects&) = delete;
@@ -56,10 +55,10 @@ class OwnedObjects {
   template <typename... ArgTypes>
   void PassObject(std::unique_ptr<OwnedType> object, ArgTypes... args) {
     auto* raw = object.get();
-    DCHECK(!base::Contains(objects_, raw));
+    CHECK(!objects_.contains(raw));
     objects_.insert(std::move(object));
     // We should stop using a flat_set at this point.
-    DCHECK_GE(100u, objects_.size());
+    CHECK_GE(100u, objects_.size());
     ((raw)->*(OnPassedMemberFunction))(std::forward<ArgTypes>(args)...);
   }
 
@@ -70,7 +69,7 @@ class OwnedObjects {
     std::unique_ptr<OwnedType> object;
     auto it = objects_.find(raw);
     if (it != objects_.end()) {
-      DCHECK_EQ(raw, it->get());
+      CHECK_EQ(raw, it->get());
       // base::flat_set doesn't yet support "extract", but this is the approved
       // way of doing this for now.
       object = std::move(*it);

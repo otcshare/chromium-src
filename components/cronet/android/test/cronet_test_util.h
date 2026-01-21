@@ -9,9 +9,11 @@
 
 #include "base/android/jni_android.h"
 #include "base/containers/flat_map.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/base/network_handle.h"
+#include "net/quic/quic_context.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_tag.h"
 
 namespace net {
 class URLRequest;
@@ -34,25 +36,28 @@ class TestUtil {
   // Returns SingleThreadTaskRunner for the network thread of the context
   // adapter.
   static scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(
-      jlong jcontext_adapter);
+      int64_t jcontext_adapter);
   // Returns underlying default URLRequestContext.
-  static net::URLRequestContext* GetURLRequestContext(jlong jcontext_adapter);
+  static net::URLRequestContext* GetURLRequestContext(int64_t jcontext_adapter);
   // Run |task| after URLRequestContext is initialized.
-  static void RunAfterContextInit(jlong jcontext_adapter,
+  static void RunAfterContextInit(int64_t jcontext_adapter,
                                   base::OnceClosure task);
 
   // CronetURLRequestAdapter manipulation:
 
   // Returns underlying URLRequest.
-  static net::URLRequest* GetURLRequest(jlong jrequest_adapter);
+  static net::URLRequest* GetURLRequest(int64_t jrequest_adapter);
 
   // Returns underlying network to URLRequestContext map.
   static base::flat_map<net::handles::NetworkHandle,
                         std::unique_ptr<net::URLRequestContext>>*
-  GetURLRequestContexts(jlong jcontext_adapter);
+  GetURLRequestContexts(int64_t jcontext_adapter);
+
+  static net::QuicParams& GetDefaultURLRequestQuicParams(
+      int64_t jcontext_adapter);
 
  private:
-  static void RunAfterContextInitOnNetworkThread(jlong jcontext_adapter,
+  static void RunAfterContextInitOnNetworkThread(int64_t jcontext_adapter,
                                                  base::OnceClosure task);
 };
 

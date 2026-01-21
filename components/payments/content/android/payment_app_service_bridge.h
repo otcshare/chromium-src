@@ -5,11 +5,10 @@
 #ifndef COMPONENTS_PAYMENTS_CONTENT_ANDROID_PAYMENT_APP_SERVICE_BRIDGE_H_
 #define COMPONENTS_PAYMENTS_CONTENT_ANDROID_PAYMENT_APP_SERVICE_BRIDGE_H_
 
-#include <map>
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app_factory.h"
 #include "content/public/browser/global_routing_id.h"
@@ -44,7 +43,7 @@ class PaymentAppServiceBridge : public PaymentAppFactory::Delegate {
       const GURL& top_origin,
       base::WeakPtr<PaymentRequestSpec> spec,
       const std::string& twa_package_name,
-      scoped_refptr<PaymentManifestWebDataService> web_data_service,
+      scoped_refptr<WebPaymentsWebDataService> web_data_service,
       bool is_off_the_record,
       base::WeakPtr<CSPChecker> csp_checker,
       CanMakePaymentCalculatedCallback can_make_payment_calculated_callback,
@@ -76,14 +75,15 @@ class PaymentAppServiceBridge : public PaymentAppFactory::Delegate {
       const override;
   std::unique_ptr<webauthn::InternalAuthenticator> CreateInternalAuthenticator()
       const override;
-  scoped_refptr<PaymentManifestWebDataService>
-  GetPaymentManifestWebDataService() const override;
+  scoped_refptr<WebPaymentsWebDataService> GetWebPaymentsWebDataService()
+      const override;
   bool IsOffTheRecord() const override;
+  bool PrefsCanMakePayment() const override;
   base::WeakPtr<ContentPaymentRequestDelegate> GetPaymentRequestDelegate()
       const override;
   void ShowProcessingSpinner() override;
   base::WeakPtr<PaymentRequestSpec> GetSpec() const override;
-  std::string GetTwaPackageName() const override;
+  void GetTwaPackageName(GetTwaPackageNameCallback callback) override;
   void OnPaymentAppCreated(std::unique_ptr<PaymentApp> app) override;
   void OnPaymentAppCreationError(
       const std::string& error_message,
@@ -92,6 +92,8 @@ class PaymentAppServiceBridge : public PaymentAppFactory::Delegate {
   void SetCanMakePaymentEvenWithoutApps() override;
   base::WeakPtr<CSPChecker> GetCSPChecker() override;
   void SetOptOutOffered() override;
+  std::optional<base::UnguessableToken> GetChromeOSTWAInstanceId()
+      const override;
 
  private:
   // Prevents direct instantiation. Callers should use Create() instead.
@@ -101,7 +103,7 @@ class PaymentAppServiceBridge : public PaymentAppFactory::Delegate {
       const GURL& top_origin,
       base::WeakPtr<PaymentRequestSpec> spec,
       const std::string& twa_package_name,
-      scoped_refptr<PaymentManifestWebDataService> web_data_service,
+      scoped_refptr<WebPaymentsWebDataService> web_data_service,
       bool is_off_the_record,
       base::WeakPtr<CSPChecker> csp_checker,
       CanMakePaymentCalculatedCallback can_make_payment_calculated_callback,
@@ -119,8 +121,7 @@ class PaymentAppServiceBridge : public PaymentAppFactory::Delegate {
   const url::Origin frame_security_origin_;
   base::WeakPtr<PaymentRequestSpec> spec_;
   const std::string twa_package_name_;
-  scoped_refptr<PaymentManifestWebDataService>
-      payment_manifest_web_data_service_;
+  scoped_refptr<WebPaymentsWebDataService> web_payments_web_data_service_;
   bool is_off_the_record_;
   base::WeakPtr<CSPChecker> csp_checker_;
 

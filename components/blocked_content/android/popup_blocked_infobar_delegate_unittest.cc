@@ -4,8 +4,7 @@
 
 #include "components/blocked_content/android/popup_blocked_infobar_delegate.h"
 
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
@@ -84,25 +83,25 @@ class PopupBlockedInfoBarDelegateTest
 TEST_F(PopupBlockedInfoBarDelegateTest, ReplacesInfobarOnSecondPopup) {
   EXPECT_TRUE(PopupBlockedInfoBarDelegate::Create(
       infobar_manager(), 1, settings_map(), base::NullCallback()));
-  EXPECT_EQ(infobar_manager()->infobar_count(), 1u);
+  EXPECT_EQ(infobar_manager()->infobars().size(), 1u);
   // First message should not contain "2";
-  EXPECT_FALSE(base::Contains(infobar_manager()
-                                  ->infobar_at(0)
-                                  ->delegate()
-                                  ->AsConfirmInfoBarDelegate()
-                                  ->GetMessageText(),
-                              u"2"));
+  EXPECT_FALSE(infobar_manager()
+                   ->infobars()[0]
+                   ->delegate()
+                   ->AsConfirmInfoBarDelegate()
+                   ->GetMessageText()
+                   .contains(u"2"));
 
   EXPECT_FALSE(PopupBlockedInfoBarDelegate::Create(
       infobar_manager(), 2, settings_map(), base::NullCallback()));
-  EXPECT_EQ(infobar_manager()->infobar_count(), 1u);
+  EXPECT_EQ(infobar_manager()->infobars().size(), 1u);
   // Second message blocks 2 popups, so should contain "2";
-  EXPECT_TRUE(base::Contains(infobar_manager()
-                                 ->infobar_at(0)
-                                 ->delegate()
-                                 ->AsConfirmInfoBarDelegate()
-                                 ->GetMessageText(),
-                             u"2"));
+  EXPECT_TRUE(infobar_manager()
+                  ->infobars()[0]
+                  ->delegate()
+                  ->AsConfirmInfoBarDelegate()
+                  ->GetMessageText()
+                  .contains(u"2"));
 }
 
 TEST_F(PopupBlockedInfoBarDelegateTest, ShowsBlockedPopups) {
@@ -118,7 +117,7 @@ TEST_F(PopupBlockedInfoBarDelegateTest, ShowsBlockedPopups) {
   EXPECT_FALSE(on_accept_called);
 
   EXPECT_TRUE(infobar_manager()
-                  ->infobar_at(0)
+                  ->infobars()[0]
                   ->delegate()
                   ->AsConfirmInfoBarDelegate()
                   ->Accept());

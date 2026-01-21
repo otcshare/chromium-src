@@ -5,7 +5,6 @@
 #include "base/environment.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/omnibox/omnibox_pedal_implementations.h"
 #include "components/omnibox/browser/actions/omnibox_pedal_provider.h"
 #include "components/omnibox/browser/autocomplete_input.h"
@@ -46,7 +45,9 @@ TEST(OmniboxPedals, DataLoadsForAllLocales) {
     // because the `OmniboxPedalProvider` ctor loads, parses, transforms, and
     // checks all trigger grit strings.
     client.set_pedal_provider(std::make_unique<OmniboxPedalProvider>(
-        client, GetPedalImplementations(client.IsOffTheRecord(), true)));
+        client,
+        GetPedalImplementations(client.IsIncognitoProfile(),
+                                client.IsGuestSession(), /*testing=*/true)));
     EXPECT_EQ(client.GetPedalProvider()->FindPedalMatch(u""), nullptr);
   }
 }

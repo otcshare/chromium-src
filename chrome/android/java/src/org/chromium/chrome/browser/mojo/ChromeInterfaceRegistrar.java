@@ -4,13 +4,16 @@
 
 package org.chromium.chrome.browser.mojo;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+
 import org.chromium.blink.mojom.Authenticator;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.digitalgoods.DigitalGoodsFactoryFactory;
 import org.chromium.chrome.browser.installedapp.InstalledAppProviderFactory;
 import org.chromium.chrome.browser.payments.ChromePaymentRequestFactory;
+import org.chromium.chrome.browser.webauthn.ChromeAuthenticatorFactory;
 import org.chromium.chrome.browser.webshare.ShareServiceImplementationFactory;
-import org.chromium.components.webauthn.AuthenticatorFactory;
 import org.chromium.content_public.browser.InterfaceRegistrar;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
@@ -21,6 +24,7 @@ import org.chromium.services.service_manager.InterfaceRegistry;
 import org.chromium.webshare.mojom.ShareService;
 
 /** Registers mojo interface implementations exposed to C++ code at the Chrome layer. */
+@NullMarked
 class ChromeInterfaceRegistrar {
     @CalledByNative
     private static void registerMojoInterfaces() {
@@ -33,7 +37,9 @@ class ChromeInterfaceRegistrar {
     private static class ChromeWebContentsInterfaceRegistrar
             implements InterfaceRegistrar<WebContents> {
         @Override
-        public void registerInterfaces(InterfaceRegistry registry, final WebContents webContents) {
+        public void registerInterfaces(
+                InterfaceRegistry registry, @Nullable final WebContents webContents) {
+            assert webContents != null;
             registry.addInterface(
                     ShareService.MANAGER, new ShareServiceImplementationFactory(webContents));
         }
@@ -43,12 +49,14 @@ class ChromeInterfaceRegistrar {
             implements InterfaceRegistrar<RenderFrameHost> {
         @Override
         public void registerInterfaces(
-                InterfaceRegistry registry, final RenderFrameHost renderFrameHost) {
+                InterfaceRegistry registry, @Nullable final RenderFrameHost renderFrameHost) {
+            assert renderFrameHost != null;
             registry.addInterface(
                     PaymentRequest.MANAGER, new ChromePaymentRequestFactory(renderFrameHost));
             registry.addInterface(
                     InstalledAppProvider.MANAGER, new InstalledAppProviderFactory(renderFrameHost));
-            registry.addInterface(Authenticator.MANAGER, new AuthenticatorFactory(renderFrameHost));
+            registry.addInterface(
+                    Authenticator.MANAGER, new ChromeAuthenticatorFactory(renderFrameHost));
             registry.addInterface(
                     DigitalGoodsFactory.MANAGER, new DigitalGoodsFactoryFactory(renderFrameHost));
         }

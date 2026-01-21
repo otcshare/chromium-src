@@ -3,10 +3,11 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/manifest/manifest_util.h"
+
+#include <string>
+
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/manifest/capture_links.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
-#include "url/gurl.h"
 
 namespace blink {
 
@@ -23,7 +24,7 @@ TEST(ManifestUtilTest, DisplayModeConversions) {
       {blink::mojom::DisplayMode::kWindowControlsOverlay,
        "window-controls-overlay"},
       {blink::mojom::DisplayMode::kTabbed, "tabbed"},
-      {blink::mojom::DisplayMode::kBorderless, "borderless"},
+      {blink::mojom::DisplayMode::kBorderless, "unframed"},
   };
 
   for (const ReversibleConversion& conversion : reversible_conversions) {
@@ -36,6 +37,10 @@ TEST(ManifestUtilTest, DisplayModeConversions) {
   // DisplayModeFromString() should work with non-lowercase strings.
   EXPECT_EQ(blink::mojom::DisplayMode::kFullscreen,
             DisplayModeFromString("Fullscreen"));
+
+  // TODO(crbug.com/466441366): Stop accepting "borderless".
+  EXPECT_EQ(blink::mojom::DisplayMode::kBorderless,
+            DisplayModeFromString("borderless"));
 
   // DisplayModeFromString() should return
   // DisplayMode::kUndefined if the string isn't known.
@@ -82,27 +87,9 @@ TEST(ManifestUtilTest, WebScreenOrientationLockTypeConversions) {
             WebScreenOrientationLockTypeFromString("random"));
 }
 
-TEST(ManifestUtilTest, CaptureLinksFromString) {
-  EXPECT_EQ(blink::mojom::CaptureLinks::kUndefined, CaptureLinksFromString(""));
-  EXPECT_EQ(blink::mojom::CaptureLinks::kNone, CaptureLinksFromString("none"));
-  EXPECT_EQ(blink::mojom::CaptureLinks::kNewClient,
-            CaptureLinksFromString("new-client"));
-  EXPECT_EQ(blink::mojom::CaptureLinks::kExistingClientNavigate,
-            CaptureLinksFromString("existing-client-navigate"));
-
-  // CaptureLinksFromString() should work with non-lowercase strings.
-  EXPECT_EQ(blink::mojom::CaptureLinks::kNewClient,
-            CaptureLinksFromString("NEW-CLIENT"));
-
-  // CaptureLinksFromString() should return CaptureLinks::kUndefined if the
-  // string isn't known.
-  EXPECT_EQ(blink::mojom::CaptureLinks::kUndefined,
-            CaptureLinksFromString("unknown-value"));
-}
-
 TEST(ManifestUtilTest, LaunchHandlerClientModeFromString) {
   using ClientMode = Manifest::LaunchHandler::ClientMode;
-  EXPECT_EQ(absl::nullopt, ClientModeFromString(""));
+  EXPECT_EQ(std::nullopt, ClientModeFromString(""));
   EXPECT_EQ(ClientMode::kAuto, ClientModeFromString("auto"));
   EXPECT_EQ(ClientMode::kNavigateNew, ClientModeFromString("navigate-new"));
   EXPECT_EQ(ClientMode::kNavigateExisting,
@@ -113,7 +100,7 @@ TEST(ManifestUtilTest, LaunchHandlerClientModeFromString) {
   EXPECT_EQ(ClientMode::kNavigateNew, ClientModeFromString("NAVIGATE-NEW"));
 
   // Unknown value.
-  EXPECT_EQ(absl::nullopt, ClientModeFromString("unknown-value"));
+  EXPECT_EQ(std::nullopt, ClientModeFromString("unknown-value"));
 }
 
 }  // namespace blink

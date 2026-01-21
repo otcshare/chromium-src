@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/components/hid_detection/hid_detection_manager_impl.h"
 
-#include "base/containers/contains.h"
 #include "base/no_destructor.h"
 #include "chromeos/ash/components/hid_detection/bluetooth_hid_detector_impl.h"
 #include "chromeos/ash/components/hid_detection/hid_detection_utils.h"
@@ -14,6 +13,11 @@ namespace ash::hid_detection {
 namespace {
 using BluetoothHidType = BluetoothHidDetector::BluetoothHidType;
 using InputState = HidDetectionManager::InputState;
+
+// In floss, a virtual device is created when a HID is bonded or paired.
+// We do not want to include this virtual device to our list of added devices.
+// (b/299955128)
+constexpr const char* kBlockedDeviceNames[] = {"VIRTUAL_SUSPEND_UHID"};
 
 HidDetectionManagerImpl::InputDeviceManagerBinder&
 GetInputDeviceManagerBinderOverride() {
@@ -88,6 +92,12 @@ HidDetectionManagerImpl::ComputeHidDetectionStatus() const {
 
 void HidDetectionManagerImpl::InputDeviceAdded(
     device::mojom::InputDeviceInfoPtr info) {
+  // Special case where the added device is a blocked device.
+  if (std::find(std::begin(kBlockedDeviceNames), std::end(kBlockedDeviceNames),
+                info->name) != std::end(kBlockedDeviceNames)) {
+    return;
+  }
+
   HID_LOG(EVENT) << "Input device added, id: " << info->id
                  << ", name: " << info->name;
   const std::string& device_id = info->id;
@@ -101,7 +111,7 @@ void HidDetectionManagerImpl::InputDeviceAdded(
 }
 
 void HidDetectionManagerImpl::InputDeviceRemoved(const std::string& id) {
-  if (!base::Contains(device_id_to_device_map_, id)) {
+  if (!device_id_to_device_map_.contains(id)) {
     // Some devices may be removed that were not registered in
     // InputDeviceAdded() or OnGetDevicesAndSetClient().
     HID_LOG(EVENT)
@@ -246,9 +256,9 @@ bool HidDetectionManagerImpl::AttemptSetDeviceAsConnectedHid(
 }
 
 HidDetectionManager::InputMetadata HidDetectionManagerImpl::GetInputMetadata(
-    const absl::optional<std::string>& connected_device_id,
+    const std::optional<std::string>& connected_device_id,
     BluetoothHidType input_type,
-    const absl::optional<BluetoothHidDetector::BluetoothHidMetadata>&
+    const std::optional<BluetoothHidDetector::BluetoothHidMetadata>&
         current_pairing_device) const {
   if (connected_device_id.has_value()) {
     const device::mojom::InputDeviceInfoPtr& device =

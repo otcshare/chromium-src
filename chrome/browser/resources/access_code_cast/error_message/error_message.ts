@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/icons.html.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {I18nMixinLit} from '//resources/cr_elements/i18n_mixin_lit.js';
+import {assertNotReachedCase} from '//resources/js/assert.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {AddSinkResultCode} from '../access_code_cast.mojom-webui.js';
 import {RouteRequestResultCode} from '../route_request_result_code.mojom-webui.js';
 
-import {getTemplate} from './error_message.html.js';
+import {getCss} from './error_message.css.js';
+import {getHtml} from './error_message.html.js';
 
 enum ErrorMessage {
   NO_ERROR,
@@ -19,10 +19,33 @@ enum ErrorMessage {
   NETWORK,
   PERMISSION,
   TOO_MANY_REQUESTS,
-  PROFILE_SYNC_ERROR
+  PROFILE_SYNC_ERROR,
+  DIFFERENT_NETWORK
 }
 
-export class ErrorMessageElement extends PolymerElement {
+const ErrorMessageElementBase = I18nMixinLit(CrLitElement);
+
+export class ErrorMessageElement extends ErrorMessageElementBase {
+  static get is() {
+    return 'c2c-error-message';
+  }
+
+  static override get styles() {
+    return getCss();
+  }
+
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
+    return {
+      messageCode: {type: Number},
+    };
+  }
+
+  protected accessor messageCode: ErrorMessage = ErrorMessage.NO_ERROR;
+
   private static readonly ADD_RESULT_MESSAGE_CODES:
       Array<[ErrorMessage, AddSinkResultCode[]]> = [
         [ErrorMessage.NO_ERROR, [AddSinkResultCode.OK]],
@@ -31,7 +54,6 @@ export class ErrorMessageElement extends PolymerElement {
           [
             AddSinkResultCode.UNKNOWN_ERROR,
             AddSinkResultCode.SINK_CREATION_ERROR,
-            AddSinkResultCode.CHANNEL_OPEN_ERROR,
             AddSinkResultCode.INTERNAL_MEDIA_ROUTER_ERROR,
           ],
         ],
@@ -57,6 +79,10 @@ export class ErrorMessageElement extends PolymerElement {
         [
           ErrorMessage.PROFILE_SYNC_ERROR,
           [AddSinkResultCode.PROFILE_SYNC_ERROR],
+        ],
+        [
+          ErrorMessage.DIFFERENT_NETWORK,
+          [AddSinkResultCode.CHANNEL_OPEN_ERROR],
         ],
       ];
 
@@ -92,19 +118,6 @@ export class ErrorMessageElement extends PolymerElement {
   private static readonly CAST_RESULT_MESSAGE_MAP =
       new Map(ErrorMessageElement.CAST_RESULT_MESSAGE_CODES);
 
-  // Needed for Polymer data binding
-  private errorMessageEnum = ErrorMessage;
-
-  static get is() {
-    return 'c2c-error-message';
-  }
-
-  static get template() {
-    return getTemplate();
-  }
-
-  private messageCode = ErrorMessage.NO_ERROR;
-
   setAddSinkError(resultCode: AddSinkResultCode) {
     this.messageCode = this.findErrorMessage(resultCode,
       ErrorMessageElement.ADD_RESULT_MESSAGE_MAP);
@@ -123,12 +136,27 @@ export class ErrorMessageElement extends PolymerElement {
     return this.messageCode;
   }
 
-  isEqual(a: ErrorMessage, b: ErrorMessage) {
-    return a === b;
-  }
-
-  isNotEqual(a: ErrorMessage, b: ErrorMessage) {
-    return a !== b;
+  protected getErrorMessage(): string {
+    switch (this.messageCode) {
+      case ErrorMessage.NO_ERROR:
+        return '';
+      case ErrorMessage.GENERIC:
+        return this.i18n('errorUnknown');
+      case ErrorMessage.ACCESS_CODE:
+        return this.i18n('errorAccessCode');
+      case ErrorMessage.NETWORK:
+        return this.i18n('errorNetwork');
+      case ErrorMessage.PERMISSION:
+        return this.i18n('errorPermission');
+      case ErrorMessage.TOO_MANY_REQUESTS:
+        return this.i18n('errorTooManyRequests');
+      case ErrorMessage.PROFILE_SYNC_ERROR:
+        return this.i18n('errorProfileSync');
+      case ErrorMessage.DIFFERENT_NETWORK:
+        return this.i18n('errorDifferentNetwork');
+      default:
+        assertNotReachedCase(this.messageCode);
+    }
   }
 
   private findErrorMessage(

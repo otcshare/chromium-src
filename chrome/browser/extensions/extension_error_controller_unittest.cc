@@ -6,17 +6,20 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/extension_error_ui.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/pref_names.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/value_builder.h"
 
 namespace extensions {
 
@@ -94,11 +97,10 @@ ExtensionErrorUI* CreateMockUI(ExtensionErrorUI::Delegate* delegate) {
 // Builds and returns a simple extension.
 scoped_refptr<const Extension> BuildExtension() {
   return ExtensionBuilder()
-      .SetManifest(DictionaryBuilder()
+      .SetManifest(base::Value::Dict()
                        .Set("name", "My Wonderful Extension")
                        .Set("version", "0.1.1.0")
-                       .Set("manifest_version", 2)
-                       .BuildDict())
+                       .Set("manifest_version", 2))
       .Build();
 }
 
@@ -111,6 +113,10 @@ class ExtensionErrorControllerUnitTest : public ExtensionServiceTestBase {
   // Add an extension to chrome, and mark it as blocklisted in the prefs.
   testing::AssertionResult AddBlocklistedExtension(const Extension* extension);
 
+  // Set enterprise policy to block `extension`. Use nullptr to not block any
+  // extension.
+  void SetBlockExtensionPolicy(const Extension* extension);
+
   // Return the ExtensionPrefs associated with the test.
   ExtensionPrefs* GetPrefs();
 };
@@ -122,9 +128,9 @@ void ExtensionErrorControllerUnitTest::SetUp() {
 
   // We don't want a first-run ExtensionService, since we ignore warnings
   // for new profiles.
-  ExtensionServiceInitParams params = CreateDefaultInitParams();
+  ExtensionServiceInitParams params;
   params.is_first_run = false;
-  InitializeExtensionService(params);
+  InitializeExtensionService(std::move(params));
 }
 
 testing::AssertionResult
@@ -132,7 +138,7 @@ ExtensionErrorControllerUnitTest::AddBlocklistedExtension(
     const Extension* extension) {
   blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
       extension->id(), BitMapBlocklistState::BLOCKLISTED_MALWARE, GetPrefs());
-  service_->AddExtension(extension);
+  registrar()->AddExtension(extension);
 
   // Make sure the extension is added to the blocklisted set.
   if (!ExtensionRegistry::Get(profile())->blocklisted_extensions().Contains(
@@ -142,6 +148,17 @@ ExtensionErrorControllerUnitTest::AddBlocklistedExtension(
   }
 
   return testing::AssertionSuccess();
+}
+
+void ExtensionErrorControllerUnitTest::SetBlockExtensionPolicy(
+    const Extension* extension) {
+  base::Value::List block_list;
+  if (extension) {
+    block_list.Append(extension->id());
+  }
+
+  testing_pref_service()->SetManagedPref(pref_names::kInstallDenyList,
+                                         std::move(block_list));
 }
 
 ExtensionPrefs* ExtensionErrorControllerUnitTest::GetPrefs() {
@@ -155,7 +172,7 @@ TEST_F(ExtensionErrorControllerUnitTest, ClosingAcknowledgesBlocklisted) {
   scoped_refptr<const Extension> extension = BuildExtension();
   ASSERT_TRUE(AddBlocklistedExtension(extension.get()));
 
-  service_->Init();
+  service()->Init();
 
   // Make sure that we created an error "ui" to warn about the blocklisted
   // extension.
@@ -184,7 +201,7 @@ TEST_F(ExtensionErrorControllerUnitTest, AcceptingAcknowledgesBlocklisted) {
   scoped_refptr<const Extension> extension = BuildExtension();
   ASSERT_TRUE(AddBlocklistedExtension(extension.get()));
 
-  service_->Init();
+  service()->Init();
 
   // Make sure that we created an error "ui" to warn about the blocklisted
   // extension.
@@ -205,11 +222,55 @@ TEST_F(ExtensionErrorControllerUnitTest, DontWarnForAcknowledgedBlocklisted) {
 
   GetPrefs()->AcknowledgeBlocklistedExtension(extension->id());
 
-  service_->Init();
+  service()->Init();
 
   // We should never have made an alert, because the extension should already
   // be acknowledged.
   ASSERT_FALSE(g_error_ui);
+}
+
+// Test there is no error ui if no extension is blocked by policy.
+TEST_F(ExtensionErrorControllerUnitTest,
+       ExtensionIsNotBlockedByEnterprisePolicy) {
+  scoped_refptr<const Extension> extension = BuildExtension();
+  service()->Init();
+  registrar()->AddExtension(extension);
+
+  EXPECT_FALSE(g_error_ui);
+}
+
+// Test error ui is presented and acknowledged when an extension is blocked by
+// policy.
+TEST_F(ExtensionErrorControllerUnitTest, ExtensionIsBlockedByEnterprisePolicy) {
+  scoped_refptr<const Extension> extension = BuildExtension();
+  service()->Init();
+  registrar()->AddExtension(extension);
+  SetBlockExtensionPolicy(extension.get());
+
+  ASSERT_TRUE(g_error_ui);
+
+  g_error_ui->Accept();
+  EXPECT_TRUE(GetPrefs()->IsBlocklistedExtensionAcknowledged(extension->id()));
+  EXPECT_FALSE(g_error_ui);
+}
+
+// Test the case that the error UI is accepted when we no longer need to show
+// error for a blocked extension. It includes the case that the policy is
+// updated or the extension is moved to the disabled list.
+TEST_F(ExtensionErrorControllerUnitTest, ExtensionIsUnblockedBeforeUIAccepted) {
+  scoped_refptr<const Extension> extension = BuildExtension();
+  service()->Init();
+  registrar()->AddExtension(extension);
+  SetBlockExtensionPolicy(extension.get());
+
+  ASSERT_TRUE(g_error_ui);
+
+  // Reset extension policy
+  SetBlockExtensionPolicy(nullptr);
+
+  g_error_ui->Accept();
+  EXPECT_TRUE(GetPrefs()->IsBlocklistedExtensionAcknowledged(extension->id()));
+  EXPECT_FALSE(g_error_ui);
 }
 
 }  // namespace extensions

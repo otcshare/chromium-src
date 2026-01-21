@@ -15,7 +15,6 @@ static_library("custom_handlers") {
   ]
 
   deps = [
-    "//build:chromeos_buildflags",
     "//components/keyed_service/content",
     "//components/keyed_service/core",
     "//components/pref_registry",
@@ -29,8 +28,10 @@ static_library("custom_handlers") {
     "//third_party/blink/public/common:headers",
   ]
 
-  if (!is_android) {
+  if (!is_android && !is_ios) {
     sources += [
+      "protocol_handler_navigation_throttle.cc",
+      "protocol_handler_navigation_throttle.h",
       "register_protocol_handler_permission_request.cc",
       "register_protocol_handler_permission_request.h",
     ]
@@ -83,6 +84,9 @@ source_set("browser_tests") {
   testonly = true
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
   sources = [ "protocol_handler_registry_browsertest.cc" ]
+  if (!is_android && !is_ios) {
+    sources += [ "protocol_handler_navigation_throttle_browsertest.cc" ]
+  }
   deps = [
     ":custom_handlers",
     ":test_support",
@@ -95,4 +99,10 @@ source_set("browser_tests") {
     "//testing/gmock",
     "//testing/gtest",
   ]
+  if (is_ios) {
+    deps += [
+      "//components/test:custom_handlers_test_bundle_data",
+      "//components/test:fenced_frames_test_bundle_data",
+    ]
+  }
 }

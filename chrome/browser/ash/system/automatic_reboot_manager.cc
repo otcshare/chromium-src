@@ -15,12 +15,13 @@
 #include <utility>
 
 #include "ash/constants/ash_paths.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
@@ -30,10 +31,10 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/time/clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/wall_clock_timer.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
@@ -48,7 +49,10 @@ namespace system {
 
 namespace {
 
-const int kMinRebootUptimeMs = 60 * 60 * 1000;     // 1 hour.
+constexpr base::TimeDelta kMinRebootUptime = base::Hours(1);  // 1 hour.
+constexpr char kMinRebootUptimeMsSwitch[] =
+    "min-reboot-uptime-ms";  // Switch to override |kMinRebootUptime| for
+                             // testing
 const int kLoginManagerIdleTimeoutMs = 60 * 1000;  // 60 seconds.
 const int kGracePeriodMs = 24 * 60 * 60 * 1000;    // 24 hours.
 const int kOneKilobyte = 1 << 10;                  // 1 kB in bytes.
@@ -127,8 +131,8 @@ struct SystemEventTimes {
 
   SystemEventTimes() = default;
 
-  absl::optional<base::TimeTicks> boot_time;
-  absl::optional<base::TimeTicks> update_reboot_needed_time;
+  std::optional<base::TimeTicks> boot_time;
+  std::optional<base::TimeTicks> update_reboot_needed_time;
 };
 
 SystemEventTimes GetSystemEventTimes() {
@@ -145,10 +149,13 @@ SystemEventTimes GetSystemEventTimes() {
 }  // namespace internal
 
 AutomaticRebootManager::AutomaticRebootManager(
+    PrefService* local_state,
     const base::Clock* clock,
     const base::TickClock* tick_clock)
-    : clock_(clock), tick_clock_(tick_clock) {
-  local_state_registrar_.Init(g_browser_process->local_state());
+    : clock_(clock),
+      tick_clock_(tick_clock),
+      local_state_(CHECK_DEREF(local_state)) {
+  local_state_registrar_.Init(&local_state_.get());
   local_state_registrar_.Add(
       prefs::kUptimeLimit,
       base::BindRepeating(&AutomaticRebootManager::Reschedule,
@@ -168,8 +175,7 @@ AutomaticRebootManager::AutomaticRebootManager(
   // idle. Start listening for user activity to determine whether the user is
   // idle or not.
   if (!session_manager::SessionManager::Get()->IsSessionStarted()) {
-    if (ui::UserActivityDetector::Get())
-      ui::UserActivityDetector::Get()->AddObserver(this);
+    ui::UserActivityDetector::Get()->AddObserver(this);
     session_manager_observation_.Observe(
         session_manager::SessionManager::Get());
     login_screen_idle_timer_ = std::make_unique<base::OneShotTimer>();
@@ -190,8 +196,7 @@ AutomaticRebootManager::~AutomaticRebootManager() {
 
   chromeos::PowerManagerClient::Get()->RemoveObserver(this);
   UpdateEngineClient::Get()->RemoveObserver(this);
-  if (ui::UserActivityDetector::Get())
-    ui::UserActivityDetector::Get()->RemoveObserver(this);
+  ui::UserActivityDetector::Get()->RemoveObserver(this);
 }
 
 void AutomaticRebootManager::AddObserver(
@@ -262,8 +267,7 @@ void AutomaticRebootManager::OnUserSessionStarted(bool is_primary_user) {
 
   // A session is starting. Stop listening for user activity as it no longer is
   // a relevant criterion.
-  if (ui::UserActivityDetector::Get())
-    ui::UserActivityDetector::Get()->RemoveObserver(this);
+  ui::UserActivityDetector::Get()->RemoveObserver(this);
   session_manager_observation_.Reset();
   login_screen_idle_timer_.reset();
 }
@@ -308,8 +312,8 @@ void AutomaticRebootManager::Reschedule() {
 
   // If an uptime limit is set, calculate the time at which it should cause a
   // reboot to be requested.
-  const base::TimeDelta uptime_limit = base::Seconds(
-      local_state_registrar_.prefs()->GetInteger(prefs::kUptimeLimit));
+  const base::TimeDelta uptime_limit =
+      base::Seconds(local_state_->GetInteger(prefs::kUptimeLimit));
   base::TimeTicks reboot_request_time = *boot_time_ + uptime_limit;
   bool have_reboot_request_time = !uptime_limit.is_zero();
   if (have_reboot_request_time)
@@ -320,7 +324,7 @@ void AutomaticRebootManager::Reschedule() {
   // requested to the minimum of its current value and the time when the reboot
   // became necessary.
   if (update_reboot_needed_time_ &&
-      local_state_registrar_.prefs()->GetBoolean(prefs::kRebootAfterUpdate) &&
+      local_state_->GetBoolean(prefs::kRebootAfterUpdate) &&
       (!have_reboot_request_time ||
        *update_reboot_needed_time_ < reboot_request_time)) {
     VLOG(1) << "Scheduling reboot because of OS update";
@@ -338,12 +342,27 @@ void AutomaticRebootManager::Reschedule() {
 
   // Safeguard against reboot loops: Ensure that the uptime after which a reboot
   // is actually requested and the grace period begins is never less than
-  // |kMinRebootUptimeMs|.
+  // |kMinRebootUptime| or the value passed in |kMinRebootUptimeMsSwitch|.
+  base::TimeDelta minRebootUptime = kMinRebootUptime;
+
+  if (auto* command_line = base::CommandLine::ForCurrentProcess();
+      command_line && command_line->HasSwitch(kMinRebootUptimeMsSwitch)) {
+    int parsed_value = 0;
+    std::string switch_value =
+        command_line->GetSwitchValueASCII(kMinRebootUptimeMsSwitch);
+
+    if (base::StringToInt(switch_value, &parsed_value)) {
+      minRebootUptime = base::Milliseconds(parsed_value);
+    } else {
+      LOG(WARNING) << "Failed to parse kMinRebootUptimeMsSwitch's value "
+                   << switch_value;
+    }
+  }
+
   const base::TimeTicks now = tick_clock_->NowTicks();
   const base::Time wall_clock_now = clock_->Now();
   const base::TimeTicks grace_start_time =
-      std::max(reboot_request_time,
-               *boot_time_ + base::Milliseconds(kMinRebootUptimeMs));
+      std::max(reboot_request_time, *boot_time_ + minRebootUptime);
 
   // Set up a timer for the start of the grace period. If the grace period
   // started in the past, the timer is still used with its delay set to zero.

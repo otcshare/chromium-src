@@ -35,10 +35,9 @@
 #include "third_party/blink/renderer/core/editing/ng_flat_tree_shorthands.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
-#include "third_party/blink/renderer/core/layout/api/line_layout_api_shim.h"
+#include "third_party/blink/renderer/core/layout/inline/caret_rect.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_caret_position.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
-#include "third_party/blink/renderer/core/layout/ng/inline/ng_caret_position.h"
-#include "third_party/blink/renderer/core/layout/ng/inline/ng_caret_rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace blink {
@@ -51,7 +50,7 @@ namespace {
 //  - A position before/after atomic inline element. Note: This function
 //    doesn't check whether anchor node is atomic inline level or not.
 template <typename Strategy>
-PositionWithAffinityTemplate<Strategy> AdjustForNGCaretPosition(
+PositionWithAffinityTemplate<Strategy> AdjustForInlineCaretPosition(
     const PositionWithAffinityTemplate<Strategy>& position_with_affinity) {
   switch (position_with_affinity.GetPosition().AnchorType()) {
     case PositionAnchorType::kAfterAnchor:
@@ -82,13 +81,12 @@ PositionWithAffinityTemplate<Strategy> AdjustForNGCaretPosition(
     }
   }
   NOTREACHED();
-  return position_with_affinity;
 }
 
 template <typename Strategy>
 LocalCaretRect LocalCaretRectOfPositionTemplate(
     const PositionWithAffinityTemplate<Strategy>& position,
-    LayoutUnit* extra_width_to_end_of_line,
+    CaretShape caret_shape,
     EditingBoundaryCrossingRule rule) {
   if (position.IsNull())
     return LocalCaretRect();
@@ -97,34 +95,36 @@ LocalCaretRect LocalCaretRectOfPositionTemplate(
   if (!layout_object)
     return LocalCaretRect();
 
+  // If the `position` is for `LayoutText` or before/after inline boxes, let
+  // `ComputeLocalCaretRect` compute.
   const PositionWithAffinityTemplate<Strategy>& adjusted =
       ComputeInlineAdjustedPosition(position, rule);
-
   if (adjusted.IsNotNull()) {
-    if (auto caret_position =
-            ComputeNGCaretPosition(AdjustForNGCaretPosition(adjusted)))
-      return ComputeLocalCaretRect(caret_position);
-
-    const InlineBoxPosition& box_position =
-        ComputeInlineBoxPositionForInlineAdjustedPosition(adjusted);
-
-    if (box_position.inline_box) {
-      const LayoutObject* box_layout_object =
-          LineLayoutAPIShim::LayoutObjectFrom(
-              box_position.inline_box->GetLineLayoutItem());
-      return LocalCaretRect(
-          box_layout_object,
-          box_layout_object->PhysicalLocalCaretRect(
-              box_position.inline_box, box_position.offset_in_box,
-              extra_width_to_end_of_line));
+    if (auto caret_position = ComputeInlineCaretPosition(
+            AdjustForInlineCaretPosition(adjusted))) {
+      return ComputeLocalCaretRect(caret_position, caret_shape);
     }
   }
 
-  // DeleteSelectionCommandTest.deleteListFromTable goes here.
+  // If the caret is in an empty `LayoutBlockFlow`, and if it is block-
+  // fragmented, set the first fragment to prevent rendering multiple carets in
+  // following fragments.
+  const PhysicalBoxFragment* root_box_fragment = nullptr;
+  if (position.GetPosition().IsOffsetInAnchor() &&
+      !position.GetPosition().OffsetInContainerNode()) {
+    if (const auto* block_flow = DynamicTo<LayoutBlockFlow>(layout_object)) {
+      if (!block_flow->FirstChild() &&
+          block_flow->PhysicalFragmentCount() >= 2) {
+        root_box_fragment = block_flow->GetPhysicalFragment(0);
+      }
+    }
+  }
+
   return LocalCaretRect(
-      layout_object, layout_object->PhysicalLocalCaretRect(
-                         nullptr, position.GetPosition().ComputeEditingOffset(),
-                         extra_width_to_end_of_line));
+      layout_object,
+      layout_object->LocalCaretRect(
+          position.GetPosition().ComputeEditingOffset(), caret_shape),
+      root_box_fragment);
 }
 
 // This function was added because the caret rect that is calculated by
@@ -144,48 +144,28 @@ LocalCaretRect LocalSelectionRectOfPositionTemplate(
     return LocalCaretRect();
 
   if (auto caret_position =
-          ComputeNGCaretPosition(AdjustForNGCaretPosition(adjusted)))
+          ComputeInlineCaretPosition(AdjustForInlineCaretPosition(adjusted))) {
     return ComputeLocalSelectionRect(caret_position);
-
-  const InlineBoxPosition& box_position =
-      ComputeInlineBoxPositionForInlineAdjustedPosition(adjusted);
-
-  if (!box_position.inline_box)
-    return LocalCaretRect();
-
-  LayoutObject* const layout_object = LineLayoutAPIShim::LayoutObjectFrom(
-      box_position.inline_box->GetLineLayoutItem());
-
-  LayoutRect rect = layout_object->LocalCaretRect(box_position.inline_box,
-                                                  box_position.offset_in_box);
-
-  if (rect.IsEmpty())
-    return LocalCaretRect();
-
-  const InlineBox* const box = box_position.inline_box;
-  if (layout_object->IsHorizontalWritingMode()) {
-    rect.SetY(box->Root().SelectionTop());
-    rect.SetHeight(box->Root().SelectionHeight());
-  } else {
-    rect.SetX(box->Root().SelectionTop());
-    rect.SetHeight(box->Root().SelectionHeight());
   }
-  return LocalCaretRect(layout_object, layout_object->FlipForWritingMode(rect));
+
+  return LocalCaretRect();
 }
 
 }  // namespace
 
 LocalCaretRect LocalCaretRectOfPosition(const PositionWithAffinity& position,
+                                        CaretShape shape,
                                         EditingBoundaryCrossingRule rule) {
-  return LocalCaretRectOfPositionTemplate<EditingStrategy>(position, nullptr,
+  return LocalCaretRectOfPositionTemplate<EditingStrategy>(position, shape,
                                                            rule);
 }
 
 LocalCaretRect LocalCaretRectOfPosition(
     const PositionInFlatTreeWithAffinity& position,
+    CaretShape shape,
     EditingBoundaryCrossingRule rule) {
   return LocalCaretRectOfPositionTemplate<EditingInFlatTreeStrategy>(
-      position, nullptr, rule);
+      position, shape, rule);
 }
 
 LocalCaretRect LocalSelectionRectOfPosition(
@@ -198,20 +178,19 @@ LocalCaretRect LocalSelectionRectOfPosition(
 template <typename Strategy>
 static gfx::Rect AbsoluteCaretBoundsOfAlgorithm(
     const PositionWithAffinityTemplate<Strategy>& position,
-    LayoutUnit* extra_width_to_end_of_line,
+    CaretShape shape,
     EditingBoundaryCrossingRule rule) {
-  const LocalCaretRect& caret_rect = LocalCaretRectOfPositionTemplate<Strategy>(
-      position, extra_width_to_end_of_line, rule);
+  const LocalCaretRect& caret_rect =
+      LocalCaretRectOfPositionTemplate<Strategy>(position, shape, rule);
   if (caret_rect.IsEmpty())
     return gfx::Rect();
   return gfx::ToEnclosingRect(LocalToAbsoluteQuadOf(caret_rect).BoundingBox());
 }
 
 gfx::Rect AbsoluteCaretBoundsOf(const PositionWithAffinity& position,
-                                LayoutUnit* extra_width_to_end_of_line,
+                                CaretShape shape,
                                 EditingBoundaryCrossingRule rule) {
-  return AbsoluteCaretBoundsOfAlgorithm<EditingStrategy>(
-      position, extra_width_to_end_of_line, rule);
+  return AbsoluteCaretBoundsOfAlgorithm<EditingStrategy>(position, shape, rule);
 }
 
 template <typename Strategy>
@@ -229,10 +208,10 @@ gfx::Rect AbsoluteSelectionBoundsOf(const VisiblePosition& visible_position) {
   return AbsoluteSelectionBoundsOfAlgorithm<EditingStrategy>(visible_position);
 }
 
-gfx::Rect AbsoluteCaretBoundsOf(
-    const PositionInFlatTreeWithAffinity& position) {
+gfx::Rect AbsoluteCaretBoundsOf(const PositionInFlatTreeWithAffinity& position,
+                                CaretShape shape) {
   return AbsoluteCaretBoundsOfAlgorithm<EditingInFlatTreeStrategy>(
-      position, nullptr, kCanCrossEditingBoundary);
+      position, shape, kCanCrossEditingBoundary);
 }
 
 }  // namespace blink

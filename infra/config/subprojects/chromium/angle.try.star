@@ -2,32 +2,33 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("//lib/builders.star", "cpu", "goma", "os", "xcode")
-load("//lib/builder_config.star", "builder_config")
-load("//lib/try.star", "try_")
+load("@chromium-luci//builder_config.star", "builder_config")
+load("@chromium-luci//builders.star", "cpu", "os")
+load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//try.star", "try_")
+load("//lib/siso.star", "siso")
+load("//lib/xcode.star", "xcode")
 
 try_.defaults.set(
     bucket = "try",
-    builder_group = "tryserver.chromium.angle",
     executable = "recipe:angle_chromium_trybot",
+    builder_group = "tryserver.chromium.angle",
+    pool = "luci.chromium.try",
     cores = 8,
     os = os.LINUX_DEFAULT,
     cpu = cpu.X86_64,
-    pool = "luci.chromium.try",
-    service_account = "chromium-try-gpu-builder@chops-service-accounts.iam.gserviceaccount.com",
     build_numbers = True,
-    caches = [
-        swarming.cache(
-            name = "win_toolchain",
-            path = "win_toolchain",
-        ),
-    ],
     cq_group = "cq",
     execution_timeout = 2 * time.hour,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
     # Max. pending time for builds. CQ considers builds pending >2h as timed
     # out: http://shortn/_8PaHsdYmlq. Keep this in sync.
     expiration_timeout = 2 * time.hour,
-    goma_backend = goma.backend.RBE_PROD,
+    service_account = "chromium-try-gpu-builder@chops-service-accounts.iam.gserviceaccount.com",
+    siso_project = siso.project.DEFAULT_UNTRUSTED,
+    siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
     subproject_list_view = "luci.chromium.try",
     task_template_canary_percentage = 5,
 )
@@ -35,12 +36,12 @@ try_.defaults.set(
 def angle_mac_builder(*, name, **kwargs):
     kwargs.setdefault("builderless", True)
     kwargs.setdefault("cores", None)
-    kwargs.setdefault("os", os.MAC_ANY)
+    kwargs.setdefault("os", os.MAC_DEFAULT)
     kwargs.setdefault("ssd", None)
     return try_.builder(name = name, **kwargs)
 
 def angle_ios_builder(*, name, **kwargs):
-    kwargs.setdefault("xcode", xcode.x14main)
+    kwargs.setdefault("xcode", xcode.xcode_default)
     return angle_mac_builder(name = name, **kwargs)
 
 angle_ios_builder(
@@ -49,8 +50,15 @@ angle_ios_builder(
         "ci/ios-angle-builder",
         "ci/ios-angle-intel",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
-    pool = "luci.chromium.gpu.mac.mini.intel.try",
+    gn_args = gn_args.config(
+        configs = [
+            "ci/ios-angle-builder",
+            "no_symbols",
+        ],
+    ),
+    pool = "luci.chromium.gpu.try",
+    max_concurrent_builds = 1,
 )

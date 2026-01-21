@@ -2,58 +2,78 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BrowserService, ForeignSession, QueryResult, RemoveVisitsRequest} from 'chrome://history/history.js';
-import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+import type {BrowserService, ForeignSession, HistoryIdentityState} from 'chrome://history/history.js';
+import {HistorySignInState, SyncState} from 'chrome://history/history.js';
+import {
+  PageCallbackRouter,
+  PageHandlerRemote,
+  type PageRemote,
+} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 import {assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
+import {TestMock} from 'chrome://webui-test/test_mock.js';
 
 import {createHistoryInfo} from './test_util.js';
 
 export class TestBrowserService extends TestBrowserProxy implements
     BrowserService {
+  handler: TestMock<PageHandlerRemote>&PageHandlerRemote;
+  callbackRouter: PageCallbackRouter;
+  pageRemote: PageRemote;
   histogramMap: {[key: string]: {[key: string]: number}} = {};
   actionMap: {[key: string]: number} = {};
-  private delayedRemove_: PromiseResolver<void>|null = null;
-  private delayedQueryResult_: PromiseResolver<QueryResult>|null = null;
-  private ignoreNextQuery_: boolean = false;
   private foreignSessions_: ForeignSession[] = [];
-  private queryResult_: QueryResult;
+  private initialIdentityState_: HistoryIdentityState;
 
   constructor() {
     super([
       'deleteForeignSession',
       'getForeignSessions',
+      'getInitialIdentityState',
       'historyLoaded',
       'navigateToUrl',
       'openForeignSessionTab',
       'otherDevicesInitialized',
-      'queryHistory',
-      'queryHistoryContinuation',
+      'recordBooleanHistogram',
       'recordHistogram',
       'recordLongTime',
-      'removeVisits',
+      'recordSigninPendingOffered',
       'startTurnOnSyncFlow',
     ]);
 
-    this.queryResult_ = {info: createHistoryInfo(), value: []};
+    this.handler = TestMock.fromClass(PageHandlerRemote);
+    this.callbackRouter = new PageCallbackRouter();
+    this.pageRemote = this.callbackRouter.$.bindNewPipeAndPassRemote();
+
+    this.initialIdentityState_ = {
+      signIn: HistorySignInState.SIGNED_OUT,
+      tabsSync: SyncState.TURNED_OFF,
+      historySync: SyncState.TURNED_OFF,
+    };
+
+    this.handler.setResultFor('queryHistory', Promise.resolve({
+      results: {
+        info: createHistoryInfo(''),
+        value: [],
+      },
+    }));
+
+    this.handler.setResultFor('requestAccountInfo', Promise.resolve({
+      accountInfo: {
+        name: 'Test User',
+        email: 'test@google.com',
+        accountImageSrc: {url: 'http://example.com/image.png'},
+      },
+    }));
+
+    // <if expr="not is_chromeos">
+    this.handler.setResultFor(
+        'shouldShowHistoryPageHistorySyncPromo', Promise.resolve({
+          shouldShow: false,
+        }));
+    // </if>
   }
 
-  // Will delay resolution of the queryHistory() promise until
-  // finishQueryHistory is called.
-  delayQueryResult() {
-    this.delayedQueryResult_ = new PromiseResolver();
-  }
-
-  // Will delay resolution of the removeVisits() promise until
-  // finishRemoveVisits is called.
-  delayDelete() {
-    this.delayedRemove_ = new PromiseResolver();
-  }
-
-  // Prevents a call to methodCalled for the next call to queryHistory.
-  ignoreNextQuery() {
-    this.ignoreNextQuery_ = true;
-  }
 
   deleteForeignSession(sessionTag: string) {
     this.methodCalled('deleteForeignSession', sessionTag);
@@ -64,29 +84,17 @@ export class TestBrowserService extends TestBrowserProxy implements
     return Promise.resolve(this.foreignSessions_);
   }
 
+  getInitialIdentityState(): Promise<HistoryIdentityState> {
+    this.methodCalled('getInitialIdentityState');
+    return Promise.resolve(this.initialIdentityState_);
+  }
+
+  setInitialIdentityState(identityState: HistoryIdentityState) {
+    this.initialIdentityState_ = identityState;
+  }
+
   setForeignSessions(sessions: ForeignSession[]) {
     this.foreignSessions_ = sessions;
-  }
-
-  removeVisits(removalList: RemoveVisitsRequest) {
-    this.methodCalled('removeVisits', removalList);
-    if (this.delayedRemove_) {
-      return this.delayedRemove_.promise;
-    }
-    return Promise.resolve();
-  }
-
-  // Resolves the removeVisits promise. delayRemove() must be called first.
-  finishRemoveVisits() {
-    this.delayedRemove_!.resolve();
-    this.delayedRemove_ = null;
-  }
-
-  // Resolves the queryHistory promise. delayQueryHistory() must be called
-  // first.
-  finishQueryHistory() {
-    this.delayedQueryResult_!.resolve(this.queryResult_);
-    this.delayedQueryResult_ = null;
   }
 
   historyLoaded() {
@@ -97,15 +105,11 @@ export class TestBrowserService extends TestBrowserProxy implements
     this.methodCalled('navigateToUrl', url);
   }
 
-  openClearBrowsingData() {}
-
   openForeignSessionAllTabs() {}
 
-  openForeignSessionTab(
-      sessionTag: string, windowId: number, tabId: number, e: MouseEvent) {
+  openForeignSessionTab(sessionTag: string, tabId: number, e: MouseEvent) {
     this.methodCalled('openForeignSessionTab', {
       sessionTag: sessionTag,
-      windowId: windowId,
       tabId: tabId,
       e: e,
     });
@@ -114,34 +118,12 @@ export class TestBrowserService extends TestBrowserProxy implements
   otherDevicesInitialized() {
     this.methodCalled('otherDevicesInitialized');
   }
-
-  setQueryResult(queryResult: QueryResult) {
-    this.queryResult_ = queryResult;
-  }
-
-  queryHistory(searchTerm: string) {
-    if (!this.ignoreNextQuery_) {
-      this.methodCalled('queryHistory', searchTerm);
-    } else {
-      this.ignoreNextQuery_ = false;
-    }
-    if (this.delayedQueryResult_) {
-      return this.delayedQueryResult_.promise;
-    }
-    return Promise.resolve(this.queryResult_);
-  }
-
-  queryHistoryContinuation() {
-    this.methodCalled('queryHistoryContinuation');
-    return Promise.resolve(this.queryResult_);
-  }
-
   recordAction(action: string) {
     if (!(action in this.actionMap)) {
       this.actionMap[action] = 0;
     }
 
-    this.actionMap[action]++;
+    this.actionMap[action]!++;
   }
 
   recordHistogram(histogram: string, value: number, max: number) {
@@ -155,8 +137,12 @@ export class TestBrowserService extends TestBrowserProxy implements
       this.histogramMap[histogram]![value] = 0;
     }
 
-    this.histogramMap[histogram]![value]++;
+    this.histogramMap[histogram]![value]!++;
     this.methodCalled('recordHistogram');
+  }
+
+  recordBooleanHistogram(histogram: string, value: boolean) {
+    this.methodCalled('recordBooleanHistogram', [histogram, value]);
   }
 
   recordTime() {}
@@ -165,6 +151,11 @@ export class TestBrowserService extends TestBrowserProxy implements
     this.methodCalled('recordLongTime', histogram, value);
   }
 
+  recordSigninPendingOffered() {
+    this.methodCalled('recordSigninPendingOffered');
+  }
+
   removeBookmark() {}
+
   startTurnOnSyncFlow() {}
 }

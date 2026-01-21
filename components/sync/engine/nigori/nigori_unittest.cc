@@ -45,37 +45,32 @@ class FakeTickClock : public base::TickClock {
 
 constexpr base::TimeDelta FakeTickClock::kTicksAdvanceAfterEachCall;
 
-TEST(SyncNigoriTest, Permute) {
+TEST(SyncNigoriTest, GetKeyName) {
   std::unique_ptr<Nigori> nigori = Nigori::CreateByDerivation(
       KeyDerivationParams::CreateForPbkdf2(), "password");
   ASSERT_THAT(nigori, NotNull());
 
-  std::string permuted;
-  EXPECT_TRUE(nigori->Permute(Nigori::Password, kNigoriKeyName, &permuted));
-
   std::string expected =
       "ibGL7ymU0Si+eYCXGS6SBHPFT+JCYiB6GDOYqj6vIwEi"
       "WJ7RENSHxmIQ8Q3rXd/UnZUmFHYB+jSIbthQADXvrQ==";
-  EXPECT_EQ(expected, permuted);
+  EXPECT_EQ(expected, nigori->GetKeyName());
 }
 
-TEST(SyncNigoriTest, PermuteIsConstant) {
+TEST(SyncNigoriTest, GetKeyNameIsConstant) {
   std::unique_ptr<Nigori> nigori1 = Nigori::CreateByDerivation(
       KeyDerivationParams::CreateForPbkdf2(), "password");
   ASSERT_THAT(nigori1, NotNull());
 
-  std::string permuted1;
-  EXPECT_TRUE(nigori1->Permute(Nigori::Password, kNigoriKeyName, &permuted1));
+  std::string keyname1 = nigori1->GetKeyName();
 
   std::unique_ptr<Nigori> nigori2 = Nigori::CreateByDerivation(
       KeyDerivationParams::CreateForPbkdf2(), "password");
   ASSERT_THAT(nigori2, NotNull());
 
-  std::string permuted2;
-  EXPECT_TRUE(nigori2->Permute(Nigori::Password, kNigoriKeyName, &permuted2));
+  std::string keyname2 = nigori2->GetKeyName();
 
-  EXPECT_LT(0U, permuted1.size());
-  EXPECT_EQ(permuted1, permuted2);
+  EXPECT_LT(0U, keyname1.size());
+  EXPECT_EQ(keyname1, keyname2);
 }
 
 TEST(SyncNigoriTest, EncryptDifferentIv) {
@@ -190,10 +185,9 @@ TEST(SyncNigoriTest, ExportImport) {
   EXPECT_TRUE(nigori1->Decrypt(nigori2->Encrypt(original), &plaintext));
   EXPECT_EQ(original, plaintext);
 
-  std::string permuted1, permuted2;
-  EXPECT_TRUE(nigori1->Permute(Nigori::Password, kNigoriKeyName, &permuted1));
-  EXPECT_TRUE(nigori2->Permute(Nigori::Password, kNigoriKeyName, &permuted2));
-  EXPECT_EQ(permuted1, permuted2);
+  std::string keyname1 = nigori1->GetKeyName();
+  EXPECT_FALSE(keyname1.empty());
+  EXPECT_EQ(keyname1, nigori2->GetKeyName());
 }
 
 TEST(SyncNigoriTest, CreateByDerivationSetsUserKey) {
@@ -246,15 +240,10 @@ TEST(SyncNigoriTest, CreateByDerivationShouldDeriveCorrectKeyUsingPbkdf2) {
   nigori->ExportKeys(&user_key, &encryption_key, &mac_key);
   // These are reference values obtained by running PBKDF2 with Nigori's
   // parameters and the input values given above.
-  EXPECT_EQ(
-      "025599e143c4923d77f65b99d97019a3",
-      base::ToLowerASCII(base::HexEncode(user_key.data(), user_key.size())));
+  EXPECT_EQ("025599e143c4923d77f65b99d97019a3", base::HexEncodeLower(user_key));
   EXPECT_EQ("4596bf346572497d92b2a0e2146d93c1",
-            base::ToLowerASCII(
-                base::HexEncode(encryption_key.data(), encryption_key.size())));
-  EXPECT_EQ(
-      "2292ad9db96fe590b22a58db50f6f545",
-      base::ToLowerASCII(base::HexEncode(mac_key.data(), mac_key.size())));
+            base::HexEncodeLower(encryption_key));
+  EXPECT_EQ("2292ad9db96fe590b22a58db50f6f545", base::HexEncodeLower(mac_key));
 }
 
 TEST(SyncNigoriTest, CreateByDerivationShouldDeriveCorrectKeyUsingScrypt) {
@@ -272,17 +261,12 @@ TEST(SyncNigoriTest, CreateByDerivationShouldDeriveCorrectKeyUsingScrypt) {
   // user_key is not used anymore, but is being set for backwards compatibility
   // (because legacy clients cannot import a Nigori node without one).
   // Therefore, we just initialize it to all zeroes.
-  EXPECT_EQ(
-      "00000000000000000000000000000000",
-      base::ToLowerASCII(base::HexEncode(user_key.data(), user_key.size())));
+  EXPECT_EQ("00000000000000000000000000000000", base::HexEncodeLower(user_key));
   // These are reference values obtained by running scrypt with Nigori's
   // parameters and the input values given above.
   EXPECT_EQ("8aa735e0091339a5e51da3b3dd1b328a",
-            base::ToLowerASCII(
-                base::HexEncode(encryption_key.data(), encryption_key.size())));
-  EXPECT_EQ(
-      "a7e73611968dfd2bca5b3382aed451ba",
-      base::ToLowerASCII(base::HexEncode(mac_key.data(), mac_key.size())));
+            base::HexEncodeLower(encryption_key));
+  EXPECT_EQ("a7e73611968dfd2bca5b3382aed451ba", base::HexEncodeLower(mac_key));
 }
 
 TEST(SyncNigoriTest, CreateByDerivationShouldReportPbkdf2DurationInHistogram) {
@@ -301,6 +285,8 @@ TEST(SyncNigoriTest, CreateByDerivationShouldReportPbkdf2DurationInHistogram) {
 }
 
 TEST(SyncNigoriTest, CreateByDerivationShouldReportScryptDurationInHistogram) {
+  Nigori::SetUseScryptCostParameterForTesting(true);
+
   FakeTickClock fake_tick_clock;
   base::HistogramTester histogram_tester;
 
@@ -314,6 +300,8 @@ TEST(SyncNigoriTest, CreateByDerivationShouldReportScryptDurationInHistogram) {
       "Sync.Crypto.NigoriKeyDerivationDuration.Scrypt8192",
       /*sample=*/FakeTickClock::kTicksAdvanceAfterEachCall.InMilliseconds(),
       /*expected_bucket_count=*/1);
+
+  Nigori::SetUseScryptCostParameterForTesting(false);
 }
 
 TEST(SyncNigoriTest, GenerateScryptSaltShouldReturnSaltOfCorrectSize) {

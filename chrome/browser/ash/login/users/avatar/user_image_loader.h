@@ -7,10 +7,10 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
-#include "chrome/browser/image_decoder/image_decoder.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/user_manager/user_image/user_image.h"
 #include "url/gurl.h"
 
 namespace base {
@@ -40,25 +40,23 @@ using LoadedCallback =
 void StartWithFilePath(
     scoped_refptr<base::SequencedTaskRunner> background_task_runner,
     const base::FilePath& file_path,
-    ImageDecoder::ImageCodec image_codec,
+    user_manager::UserImage::ImageFormat image_format,
     int pixels_per_side,
     LoadedCallback loaded_cb);
 void StartWithData(
     scoped_refptr<base::SequencedTaskRunner> background_task_runner,
     std::unique_ptr<std::string> data,
-    ImageDecoder::ImageCodec image_codec,
+    user_manager::UserImage::ImageFormat image_format,
     int pixels_per_side,
     LoadedCallback loaded_cb);
-
-// Loads user image from provided |data| bytes. If the image is animated, encode
-// with WebP encoder, otherwise encode with PNG encoder.
-void StartWithDataAnimated(base::StringPiece data, LoadedCallback loaded_cb);
 
 // Loads user image from |file_path|. If the image is animated, encode with WebP
 // encoder, otherwise encode with PNG encoder.
 // TODO(b/251083485): Add support for external image from file.
-void StartWithFilePathAnimated(const base::FilePath& file_path,
-                               LoadedCallback loaded_cb);
+void StartWithFilePathAnimated(
+    scoped_refptr<base::SequencedTaskRunner> background_task_runner,
+    const base::FilePath& file_path,
+    LoadedCallback loaded_cb);
 
 // Loads the default image fetched from |default_image_url|. If the image is
 // animated, encode with WebP encoder, otherwise encode with PNG encoder.

@@ -21,14 +21,14 @@ MockOverscrollControllerDelegateAura::MockOverscrollControllerDelegateAura(
 MockOverscrollControllerDelegateAura::~MockOverscrollControllerDelegateAura() {}
 
 gfx::Size MockOverscrollControllerDelegateAura::GetDisplaySize() const {
-  return display::Screen::GetScreen()
+  return display::Screen::Get()
       ->GetDisplayNearestView(rwhva_->GetNativeView())
       .size();
 }
 
-absl::optional<float>
+std::optional<float>
 MockOverscrollControllerDelegateAura::GetMaxOverscrollDelta() const {
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool MockOverscrollControllerDelegateAura::OnOverscrollUpdate(float, float) {

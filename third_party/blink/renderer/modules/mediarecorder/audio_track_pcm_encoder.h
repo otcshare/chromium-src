@@ -17,7 +17,9 @@ namespace blink {
 // back out again.
 class AudioTrackPcmEncoder : public AudioTrackEncoder {
  public:
-  explicit AudioTrackPcmEncoder(OnEncodedAudioCB on_encoded_audio_cb);
+  explicit AudioTrackPcmEncoder(
+      OnEncodedAudioCB on_encoded_audio_cb,
+      OnEncodedAudioErrorCB on_encoded_audio_error_cb);
 
   AudioTrackPcmEncoder(const AudioTrackPcmEncoder&) = delete;
   AudioTrackPcmEncoder& operator=(const AudioTrackPcmEncoder&) = delete;
@@ -25,10 +27,6 @@ class AudioTrackPcmEncoder : public AudioTrackEncoder {
   void OnSetFormat(const media::AudioParameters& params) override;
   void EncodeAudio(std::unique_ptr<media::AudioBus> input_bus,
                    base::TimeTicks capture_time) override;
-  void Shutdown() override {}
-
- private:
-  ~AudioTrackPcmEncoder() override {}
 };
 
 }  // namespace blink

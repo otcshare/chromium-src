@@ -4,9 +4,13 @@
 
 #include "crypto/unexportable_key.h"
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "build/build_config.h"
+#include "base/functional/bind.h"
+#if BUILDFLAG(IS_WIN)
+#include "crypto/unexportable_key_win.h"
+#elif BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_IOS_TVOS)
+#include "crypto/apple/unexportable_key_apple.h"
+#endif
 
 namespace crypto {
 
@@ -16,24 +20,54 @@ std::unique_ptr<UnexportableKeyProvider> (*g_mock_provider)() = nullptr;
 
 UnexportableSigningKey::~UnexportableSigningKey() = default;
 UnexportableKeyProvider::~UnexportableKeyProvider() = default;
+VirtualUnexportableSigningKey::~VirtualUnexportableSigningKey() = default;
+VirtualUnexportableKeyProvider::~VirtualUnexportableKeyProvider() = default;
 
-#if BUILDFLAG(IS_WIN)
-std::unique_ptr<UnexportableKeyProvider> GetUnexportableKeyProviderWin();
-#endif
+bool UnexportableSigningKey::IsHardwareBacked() const {
+  return false;
+}
 
-std::unique_ptr<UnexportableKeyProvider> GetUnexportableKeyProvider() {
+std::unique_ptr<UnexportableKeyProvider> GetUnexportableKeyProvider(
+    UnexportableKeyProvider::Config config) {
   if (g_mock_provider) {
     return g_mock_provider();
   }
 
 #if BUILDFLAG(IS_WIN)
   return GetUnexportableKeyProviderWin();
+#elif BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_IOS_TVOS)
+  return apple::GetUnexportableKeyProviderApple(std::move(config));
+#else
+  return nullptr;
+#endif
+}
+
+std::unique_ptr<UnexportableKeyProvider>
+GetMicrosoftSoftwareUnexportableKeyProvider() {
+  if (g_mock_provider) {
+    return g_mock_provider();
+  }
+#if BUILDFLAG(IS_WIN)
+  return GetMicrosoftSoftwareUnexportableKeyProviderWin();
+#else
+  return nullptr;
+#endif
+}
+
+std::unique_ptr<VirtualUnexportableKeyProvider>
+GetVirtualUnexportableKeyProvider_DO_NOT_USE_METRICS_ONLY() {
+#if BUILDFLAG(IS_WIN)
+  return GetVirtualUnexportableKeyProviderWin();
 #else
   return nullptr;
 #endif
 }
 
 namespace internal {
+
+bool HasScopedUnexportableKeyProvider() {
+  return g_mock_provider != nullptr;
+}
 
 void SetUnexportableKeyProviderForTesting(
     std::unique_ptr<UnexportableKeyProvider> (*func)()) {

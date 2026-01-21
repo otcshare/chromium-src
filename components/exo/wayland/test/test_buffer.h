@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "components/exo/wayland/clients/client_helper.h"
 
 namespace exo::wayland::test {
@@ -19,7 +20,8 @@ class BufferListener {
 
 class TestBuffer {
  public:
-  explicit TestBuffer(std::unique_ptr<wl_buffer> resource);
+  explicit TestBuffer(
+      std::unique_ptr<wl_buffer, decltype(&wl_buffer_destroy)> resource);
 
   TestBuffer(const TestBuffer&) = delete;
   TestBuffer& operator=(const TestBuffer&) = delete;
@@ -31,11 +33,13 @@ class TestBuffer {
 
   wl_buffer* resource() { return resource_.get(); }
 
+  wl_buffer* GetResourceAndRelease() { return resource_.release(); }
+
   static void OnRelease(void* data, wl_buffer* resource);
 
  private:
-  std::unique_ptr<wl_buffer> resource_;
-  BufferListener* listener_ = nullptr;
+  std::unique_ptr<wl_buffer, decltype(&wl_buffer_destroy)> resource_;
+  raw_ptr<BufferListener> listener_ = nullptr;
 };
 
 }  // namespace exo::wayland::test

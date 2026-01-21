@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/accelerators/spoken_feedback_toggler.h"
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_util.h"
@@ -17,7 +17,7 @@ using SpokenFeedbackTogglerTest = AshTestBase;
 
 TEST_F(SpokenFeedbackTogglerTest, Basic) {
   SpokenFeedbackToggler::ScopedEnablerForTest scoped;
-  AccessibilityControllerImpl* controller =
+  AccessibilityController* controller =
       Shell::Get()->accessibility_controller();
   ui::test::EventGenerator* generator = GetEventGenerator();
   EXPECT_FALSE(controller->spoken_feedback().enabled());
@@ -52,8 +52,8 @@ TEST_F(SpokenFeedbackTogglerTest, PassThroughEvents) {
   SpokenFeedbackToggler::ScopedEnablerForTest scoped;
 
   aura::test::EventCountDelegate delegate;
-  std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
-      &delegate, 0, gfx::Rect(0, 0, 100, 100)));
+  std::unique_ptr<aura::Window> window(CreateTestWindowInShell(
+      {.delegate = &delegate, .bounds = {0, 0, 100, 100}, .window_id = 0}));
   window->Focus();
 
   ui::test::EventGenerator* generator = GetEventGenerator();

@@ -17,7 +17,7 @@
   E_CPONLY(kColorBubbleExampleBackground2) \
   E_CPONLY(kColorBubbleExampleBackground3) \
   E_CPONLY(kColorBubbleExampleBackground4) \
-  E_CPONLY(kColorButtonExampleBackground) \
+  E_CPONLY(kColorButtonBackgroundFab) \
   E_CPONLY(kColorDesignerGrabHandle) \
   E_CPONLY(kColorDesignerGrid) \
   E_CPONLY(kColorFadeAnimationExampleBackground) \
@@ -76,7 +76,7 @@ enum ExamplesColorIds : ui::ColorId {
 
 // Note that this second include is not redundant. The second inclusion of the
 // .inc file serves to undefine the macros the first inclusion defined.
-#include "ui/color/color_id_macros.inc"  // NOLINT
+#include "ui/color/color_id_macros.inc"  // NOLINT(build/include)
 
 }  // namespace views::examples
 

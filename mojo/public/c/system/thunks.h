@@ -233,6 +233,11 @@ struct MojoSystemThunks2 {
   MojoResult (*SetDefaultProcessErrorHandler)(
       MojoDefaultProcessErrorHandler handler,
       const struct MojoSetDefaultProcessErrorHandlerOptions* options);
+
+  // Core ABI version 4 additions begin here.
+  MojoResult (*ReserveMessageCapacity)(MojoMessageHandle message,
+                                       uint32_t payload_buffer_size,
+                                       uint32_t* buffer_size);
 };
 
 // Hacks: This is a copy of the ABI from before it was switched to pointer-sized
@@ -436,10 +441,17 @@ struct MojoSystemThunks {
   MojoResult (*SetDefaultProcessErrorHandler)(
       MojoDefaultProcessErrorHandler handler,
       const struct MojoSetDefaultProcessErrorHandlerOptions* options);
+  MojoResult (*ReserveMessageCapacity)(MojoMessageHandle message,
+                                       uint32_t payload_buffer_size,
+                                       uint32_t* buffer_size);
 };
 #pragma pack(pop)
 
 typedef struct MojoSystemThunks MojoSystemThunks32;
+
+#ifdef __cplusplus
+extern "C" {
+#endif  // __cplusplus
 
 MOJO_SYSTEM_EXPORT const struct MojoSystemThunks2*
 MojoEmbedderGetSystemThunks2();
@@ -448,5 +460,9 @@ MOJO_SYSTEM_EXPORT const MojoSystemThunks32* MojoEmbedderGetSystemThunks32();
 
 MOJO_SYSTEM_EXPORT void MojoEmbedderSetSystemThunks(
     const struct MojoSystemThunks2* system_thunks);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
 
 #endif  // MOJO_PUBLIC_C_SYSTEM_THUNKS_H_

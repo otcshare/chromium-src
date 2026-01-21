@@ -7,8 +7,10 @@ source_set("password_util") {
     "password_util.h",
     "password_util.mm",
   ]
-  configs += [ "//build/config/compiler:enable_arc" ]
-  deps = [ "//base" ]
+  deps = [
+    "//base",
+    "//crypto",
+  ]
   frameworks = [
     "Security.framework",
     "Foundation.framework",
@@ -20,7 +22,6 @@ source_set("password_spec_fetcher") {
     "password_spec_fetcher.h",
     "password_spec_fetcher.mm",
   ]
-  configs += [ "//build/config/compiler:enable_arc" ]
   deps = [
     "//base",
     "//components/autofill/core/browser/proto",
@@ -42,5 +43,4 @@ source_set("unit_tests") {
     "//components/autofill/core/browser/proto",
     "//testing/gtest",
   ]
-  configs += [ "//build/config/compiler:enable_arc" ]
 }

@@ -4,8 +4,9 @@
 
 #include "mojo/public/cpp/system/handle_signal_tracker.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/system/handle_signals_state.h"
 
 namespace mojo {
@@ -68,8 +69,9 @@ void HandleSignalTracker::OnNotify(MojoResult result,
                                    const HandleSignalsState& state) {
   last_known_state_ = state;
   Arm();
-  if (notification_callback_)
+  if (notification_callback_) {
     notification_callback_.Run(state);
+  }
 }
 
 }  // namespace mojo

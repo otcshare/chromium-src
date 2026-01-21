@@ -5,7 +5,7 @@
 #ifndef REMOTING_TEST_FAKE_WEBRTC_CONNECTION_H_
 #define REMOTING_TEST_FAKE_WEBRTC_CONNECTION_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "remoting/protocol/webrtc_transport.h"
 
@@ -30,15 +30,17 @@ class FakeWebrtcConnection final
   // protocol::WebrtcTransport::EventHandler implementations.
   void OnWebrtcTransportConnecting() override;
   void OnWebrtcTransportConnected() override;
-  void OnWebrtcTransportError(protocol::ErrorCode error) override;
+  void OnWebrtcTransportError(protocol::ErrorCode error,
+                              std::string_view error_details,
+                              const base::Location& error_location) override;
   void OnWebrtcTransportProtocolChanged() override;
   void OnWebrtcTransportIncomingDataChannel(
       const std::string& name,
       std::unique_ptr<protocol::MessagePipe> pipe) override;
   void OnWebrtcTransportMediaStreamAdded(
-      rtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
   void OnWebrtcTransportMediaStreamRemoved(
-      rtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
   void OnWebrtcTransportRouteChanged(
       const protocol::TransportRoute& route) override;
 

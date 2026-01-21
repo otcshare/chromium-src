@@ -25,7 +25,9 @@
 
 #include "third_party/blink/renderer/modules/webaudio/deferred_task_handler.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
@@ -171,6 +173,16 @@ void DeferredTaskHandler::UpdateAutomaticPullNodes() {
     base::AutoTryLock try_locker(automatic_pull_handlers_lock_);
     if (try_locker.is_acquired()) {
       rendering_automatic_pull_handlers_.assign(automatic_pull_handlers_);
+
+      // In rare cases, it is possible for automatic pull nodes' output bus
+      // to become stale. Make sure update their rendering output counts.
+      // crbug.com/1505080.
+      for (auto& handler : rendering_automatic_pull_handlers_) {
+        for (unsigned i = 0; i < handler->NumberOfOutputs(); ++i) {
+          handler->Output(i).UpdateRenderingState();
+        }
+      }
+
       automatic_pull_handlers_need_updating_ = false;
     }
   }
@@ -186,6 +198,40 @@ void DeferredTaskHandler::ProcessAutomaticPullNodes(
          rendering_automatic_pull_handlers_) {
       rendering_automatic_pull_handler->ProcessIfNecessary(frames_to_process);
     }
+  }
+}
+
+void DeferredTaskHandler::RequestPullStatusUpdate(AudioHandler* handler) {
+  DCHECK(IsAudioThread());
+
+  deferred_pull_status_updates_.insert(handler);
+}
+
+void DeferredTaskHandler::UpdatePullStatusWithFeatureCheck(
+    AudioHandler* handler) {
+  DCHECK(IsAudioThread());
+
+  if (defer_pull_status_update_) {
+    RequestPullStatusUpdate(handler);
+  } else {
+    handler->UpdatePullStatusIfNeeded();
+  }
+}
+
+void DeferredTaskHandler::ProcessDeferredPullStatusUpdates() {
+  DCHECK(IsAudioThread());
+
+  if (deferred_pull_status_updates_.empty()) {
+    return;
+  }
+
+  // Move the set to a local variable so the member variable is clear for
+  // the upcoming rendering cycle.
+  HashSet<AudioHandler*> updates_to_process =
+      std::move(deferred_pull_status_updates_);
+
+  for (AudioHandler* handler : updates_to_process) {
+    handler->UpdatePullStatusIfNeeded();
   }
 }
 
@@ -293,12 +339,19 @@ void DeferredTaskHandler::UpdateChangedChannelInterpretation() {
 }
 
 DeferredTaskHandler::DeferredTaskHandler(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
-    : task_runner_(std::move(task_runner)), audio_thread_(0) {}
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    uint32_t render_quantum_frames)
+    : render_quantum_frames_(render_quantum_frames),
+      defer_pull_status_update_(base::FeatureList::IsEnabled(
+          features::kWebAudioDeferPullStatusUpdate)),
+      task_runner_(std::move(task_runner)),
+      audio_thread_(base::kInvalidThreadId) {}
 
 scoped_refptr<DeferredTaskHandler> DeferredTaskHandler::Create(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  return base::AdoptRef(new DeferredTaskHandler(std::move(task_runner)));
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    uint32_t render_quantum_frames) {
+  return base::AdoptRef(
+      new DeferredTaskHandler(std::move(task_runner), render_quantum_frames));
 }
 
 DeferredTaskHandler::~DeferredTaskHandler() = default;
@@ -308,6 +361,9 @@ void DeferredTaskHandler::HandleDeferredTasks() {
   UpdateChangedChannelInterpretation();
   HandleDirtyAudioSummingJunctions();
   HandleDirtyAudioNodeOutputs();
+  if (defer_pull_status_update_) {
+    ProcessDeferredPullStatusUpdates();
+  }
   UpdateAutomaticPullNodes();
   UpdateTailProcessingHandlers();
 }
@@ -355,7 +411,7 @@ void DeferredTaskHandler::RequestToDeleteHandlersOnMainThread() {
   PostCrossThreadTask(
       *task_runner_, FROM_HERE,
       CrossThreadBindOnce(&DeferredTaskHandler::DeleteHandlersOnMainThread,
-                          AsWeakPtr()));
+                          weak_ptr_factory_.GetWeakPtr()));
 }
 
 void DeferredTaskHandler::DeleteHandlersOnMainThread() {

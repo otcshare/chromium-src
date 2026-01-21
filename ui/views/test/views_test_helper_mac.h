@@ -6,12 +6,12 @@
 #define UI_VIEWS_TEST_VIEWS_TEST_HELPER_MAC_H_
 
 #include <memory>
+#include <optional>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/test/scoped_fake_full_keyboard_access.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/test_context_factories.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/test/views_test_helper.h"
 
 namespace ui::test {
@@ -31,14 +31,15 @@ class ViewsTestHelperMac : public ViewsTestHelper {
   // ViewsTestHelper:
   void SetUpTestViewsDelegate(
       TestViewsDelegate* delegate,
-      absl::optional<ViewsDelegate::NativeWidgetFactory> factory) override;
+      std::optional<ViewsDelegate::NativeWidgetFactory> factory) override;
+  void TearDownTestViewsDelegate(TestViewsDelegate* delegate) override;
 
  private:
   ui::TestContextFactories context_factories_{false};
 
   // Disable animations during tests.
-  ui::ScopedAnimationDurationScaleMode zero_duration_mode_{
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION};
+  gfx::ScopedAnimationDurationScaleMode zero_duration_mode_{
+      gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION};
 
   // When using desktop widgets on Mac, window activation is asynchronous
   // because the window server is involved. A window may also be deactivated by

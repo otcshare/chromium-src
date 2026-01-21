@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -19,6 +19,7 @@
 #include "media/base/cdm_context.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "media/cdm/default_cdm_factory.h"
 #include "media/mojo/clients/mojo_renderer.h"
 #include "media/mojo/common/media_type_converters.h"
@@ -49,7 +50,6 @@ namespace media {
 
 namespace {
 const int64_t kStartPlayingTimeInMs = 100;
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
 
 ACTION_P2(GetMediaTime, start_time, elapsed_timer) {
   return start_time + elapsed_timer->Elapsed();
@@ -175,7 +175,7 @@ class MojoRendererTest : public ::testing::Test {
   }
 
   void OnCdmServiceInitialized(mojom::CdmContextPtr cdm_context,
-                               const std::string& error_message) {
+                               CreateCdmStatus status) {
     cdm_context_.set_cdm_id(cdm_context->cdm_id);
   }
 
@@ -221,8 +221,9 @@ class MojoRendererTest : public ::testing::Test {
   std::unique_ptr<MojoCdmService> mojo_cdm_service_;
 
   // Service side mocks and helpers.
-  raw_ptr<StrictMock<MockRenderer>> mock_renderer_;
-  RendererClient* remote_renderer_client_;
+  raw_ptr<StrictMock<MockRenderer>, AcrossTasksDanglingUntriaged>
+      mock_renderer_;
+  raw_ptr<RendererClient, DanglingUntriaged> remote_renderer_client_;
 
   mojo::SelfOwnedReceiverRef<mojom::Renderer> renderer_receiver_;
 };
@@ -446,7 +447,8 @@ TEST_F(MojoRendererTest, OnEnded) {
 TEST_F(MojoRendererTest, Destroy_PendingInitialize) {
   CreateAudioStream();
   EXPECT_CALL(*mock_renderer_, OnInitialize(_, _, _))
-      .WillRepeatedly(RunOnceCallback<2>(PIPELINE_ERROR_ABORT));
+      .WillRepeatedly(
+          base::test::RunOnceCallbackRepeatedly<2>(PIPELINE_ERROR_ABORT));
   EXPECT_CALL(*this, OnInitialized(
                          HasStatusCode(PIPELINE_ERROR_INITIALIZATION_FAILED)));
   mojo_renderer_->Initialize(
@@ -457,7 +459,7 @@ TEST_F(MojoRendererTest, Destroy_PendingInitialize) {
 
 TEST_F(MojoRendererTest, Destroy_PendingFlush) {
   EXPECT_CALL(*mock_renderer_, OnSetCdm(_, _))
-      .WillRepeatedly(RunOnceCallback<1>(true));
+      .WillRepeatedly(base::test::RunOnceCallbackRepeatedly<1>(true));
   EXPECT_CALL(*this, OnCdmAttached(false));
   mojo_renderer_->SetCdm(
       &cdm_context_,

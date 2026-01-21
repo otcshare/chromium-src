@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
@@ -30,9 +30,10 @@ const base::FilePath::CharType* StreamTypeToStringType(
       return FILE_PATH_LITERAL("input");
     case media::AudioDebugRecordingStreamType::kOutput:
       return FILE_PATH_LITERAL("output");
+    case media::AudioDebugRecordingStreamType::kLoopback:
+      return FILE_PATH_LITERAL("loopback");
   }
   NOTREACHED();
-  return FILE_PATH_LITERAL("output");
 }
 
 // Asynchronously creates a file and passes it to |reply_callback|.

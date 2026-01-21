@@ -5,15 +5,20 @@
 package org.chromium.chrome.browser.omaha;
 
 import android.text.TextUtils;
-import android.util.Log;
 
+import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omaha.OmahaBase.VersionConfig;
 import org.chromium.chrome.browser.omaha.XMLParser.Node;
 
 /**
  * Parses XML responses from the Omaha Update Server.
  *
+ * <pre>
+ *
  * Expects XML formatted like:
+ *
  * <?xml version="1.0" encoding="UTF-8"?>
  *   <daystart elapsed_days="4804" elapsed_seconds="65524"/>
  *   <app appid="{appid}" status="ok">
@@ -23,10 +28,10 @@ import org.chromium.chrome.browser.omaha.XMLParser.Node;
  *       </urls>
  *       <manifest version="0.16.4130.199">
  *         <packages>
- *           <package hash="0" name="dummy.apk" required="true" size="0"/>
+ *           <package hash="0" name="placeholder.apk" required="true" size="0"/>
  *         </packages>
  *         <actions>
- *           <action event="install" run="dummy.apk"/>
+ *           <action event="install" run="placeholder.apk"/>
  *           <action event="postinstall"/>
  *         </actions>
  *       </manifest>
@@ -35,8 +40,11 @@ import org.chromium.chrome.browser.omaha.XMLParser.Node;
  *   </app>
  * </response>
  *
+ * </pre>
+ *
  * The appid is dependent on the variant of Chrome that is running.
  */
+@NullMarked
 public class ResponseParser {
     private static final String TAG = "ResponseParser";
 
@@ -57,13 +65,13 @@ public class ResponseParser {
     private final boolean mExpectUpdatecheck;
     private final boolean mStrictParsingMode;
 
-    private Integer mDaystartSeconds;
-    private Integer mDaystartDays;
-    private String mAppStatus;
+    private @Nullable Integer mDaystartSeconds;
+    private @Nullable Integer mDaystartDays;
+    private @Nullable String mAppStatus;
 
-    private String mUpdateStatus;
-    private String mNewVersion;
-    private String mUrl;
+    private @Nullable String mUpdateStatus;
+    private @Nullable String mNewVersion;
+    private @Nullable String mUrl;
 
     private boolean mParsedInstallEvent;
     private boolean mParsedPing;
@@ -73,13 +81,20 @@ public class ResponseParser {
         this(appId, expectInstallEvent, !expectInstallEvent, !expectInstallEvent);
     }
 
-    public ResponseParser(String appId, boolean expectInstallEvent, boolean expectPing,
+    public ResponseParser(
+            String appId,
+            boolean expectInstallEvent,
+            boolean expectPing,
             boolean expectUpdatecheck) {
         this(false, appId, expectInstallEvent, expectPing, expectUpdatecheck);
     }
 
-    public ResponseParser(boolean strictParsing, String appId, boolean expectInstallEvent,
-            boolean expectPing, boolean expectUpdatecheck) {
+    public ResponseParser(
+            boolean strictParsing,
+            String appId,
+            boolean expectInstallEvent,
+            boolean expectPing,
+            boolean expectUpdatecheck) {
         mStrictParsingMode = strictParsing;
         mAppId = appId;
         mExpectInstallEvent = expectInstallEvent;
@@ -104,19 +119,19 @@ public class ResponseParser {
         return mDaystartDays;
     }
 
-    public String getNewVersion() {
+    public @Nullable String getNewVersion() {
         return mNewVersion;
     }
 
-    public String getURL() {
+    public @Nullable String getURL() {
         return mUrl;
     }
 
-    public String getAppStatus() {
+    public @Nullable String getAppStatus() {
         return mAppStatus;
     }
 
-    public String getUpdateStatus() {
+    public @Nullable String getUpdateStatus() {
         return mUpdateStatus;
     }
 
@@ -225,7 +240,6 @@ public class ResponseParser {
     }
 
     private boolean parseUpdatecheck(Node node) throws RequestFailureException {
-        boolean success = true;
 
         mUpdateStatus = node.attributes.get("status");
         if (TextUtils.equals("ok", mUpdateStatus)) {

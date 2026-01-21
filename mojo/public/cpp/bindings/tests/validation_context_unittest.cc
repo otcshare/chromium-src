@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/lib/validation_context.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <limits>
 
+#include "base/dcheck_is_on.h"
 #include "mojo/public/cpp/bindings/lib/serialization_util.h"
-#include "mojo/public/cpp/bindings/lib/validation_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -23,7 +25,7 @@ const void* ToPtr(uintptr_t ptr) {
   return reinterpret_cast<const void*>(ptr);
 }
 
-#if defined(NDEBUG) && !defined(DCHECK_ALWAYS_ON)
+#if defined(OFFICIAL_BUILD) && !DCHECK_IS_ON()
 TEST(ValidationContextTest, ConstructorRangeOverflow) {
   {
     // Test memory range overflow.
@@ -36,8 +38,9 @@ TEST(ValidationContextTest, ConstructorRangeOverflow) {
         ToPtr(std::numeric_limits<uintptr_t>::max() - 3000), 1));
   }
 
-  if (sizeof(size_t) <= sizeof(uint32_t))
+  if (sizeof(size_t) <= sizeof(uint32_t)) {
     return;
+  }
 
   {
     // Test handle index range overflow.
@@ -49,8 +52,8 @@ TEST(ValidationContextTest, ConstructorRangeOverflow) {
     EXPECT_FALSE(context.ClaimHandle(
         Handle_Data(std::numeric_limits<uint32_t>::max() - 1)));
 
-    EXPECT_TRUE(context.ClaimHandle(
-        Handle_Data(internal::kEncodedInvalidHandleValue)));
+    EXPECT_TRUE(
+        context.ClaimHandle(Handle_Data(internal::kEncodedInvalidHandleValue)));
   }
 
   {
@@ -149,10 +152,10 @@ TEST(ValidationContextTest, ClaimHandle) {
     EXPECT_FALSE(context.ClaimHandle(Handle_Data(8)));
 
     // Should return true for invalid handle.
-    EXPECT_TRUE(context.ClaimHandle(
-        Handle_Data(internal::kEncodedInvalidHandleValue)));
-    EXPECT_TRUE(context.ClaimHandle(
-        Handle_Data(internal::kEncodedInvalidHandleValue)));
+    EXPECT_TRUE(
+        context.ClaimHandle(Handle_Data(internal::kEncodedInvalidHandleValue)));
+    EXPECT_TRUE(
+        context.ClaimHandle(Handle_Data(internal::kEncodedInvalidHandleValue)));
   }
 
   {
@@ -162,8 +165,8 @@ TEST(ValidationContextTest, ClaimHandle) {
     EXPECT_FALSE(context.ClaimHandle(Handle_Data(0)));
 
     // Should still return true for invalid handle.
-    EXPECT_TRUE(context.ClaimHandle(
-        Handle_Data(internal::kEncodedInvalidHandleValue)));
+    EXPECT_TRUE(
+        context.ClaimHandle(Handle_Data(internal::kEncodedInvalidHandleValue)));
   }
 
   {
@@ -181,8 +184,8 @@ TEST(ValidationContextTest, ClaimHandle) {
     EXPECT_FALSE(context.ClaimHandle(Handle_Data(0)));
 
     // Should still return true for invalid handle.
-    EXPECT_TRUE(context.ClaimHandle(
-        Handle_Data(internal::kEncodedInvalidHandleValue)));
+    EXPECT_TRUE(
+        context.ClaimHandle(Handle_Data(internal::kEncodedInvalidHandleValue)));
   }
 }
 

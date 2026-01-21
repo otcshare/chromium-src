@@ -7,11 +7,13 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
 
 #include "base/containers/lru_cache.h"
+#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "gpu/command_buffer/service/decoder_client.h"
@@ -20,17 +22,19 @@
 
 namespace gpu {
 
-class GpuProcessActivityFlags;
+class GpuProcessShmCount;
 
 namespace gles2 {
 
 // Program cache that stores binaries completely in-memory
-class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
+class GPU_GLES2_EXPORT MemoryProgramCache
+    : public ProgramCache,
+      public base::MemoryPressureListener {
  public:
   MemoryProgramCache(size_t max_cache_size_bytes,
                      bool disable_gpu_shader_disk_cache,
                      bool disable_program_caching_for_transform_feedback,
-                     GpuProcessActivityFlags* activity_flags);
+                     GpuProcessShmCount* use_shader_cache_shm_count);
 
   MemoryProgramCache(const MemoryProgramCache&) = delete;
   MemoryProgramCache& operator=(const MemoryProgramCache&) = delete;
@@ -58,8 +62,16 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
 
   size_t Trim(size_t limit) override;
 
+  // base::MemoryPressureListener:
+  void OnMemoryPressure(
+      base::MemoryPressureLevel memory_pressure_level) override;
+
  private:
   void ClearBackend() override;
+
+  // Return the current max_size_bytes(), which changes depending on the memory
+  // pressure level.
+  size_t GetCurrentMaxSizeBytes() const;
 
   class ProgramCacheValue : public base::RefCounted<ProgramCacheValue> {
    public:
@@ -67,14 +79,14 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
                       std::vector<uint8_t> data,
                       bool is_compressed,
                       GLsizei decompressed_length,
-                      const std::string& program_hash,
-                      const char* shader_0_hash,
+                      HashView program_hash,
+                      HashView shader_0_hash,
                       const AttributeMap& attrib_map_0,
                       const UniformMap& uniform_map_0,
                       const VaryingMap& varying_map_0,
                       const OutputVariableList& output_variable_list_0,
                       const InterfaceBlockMap& interface_block_map_0,
-                      const char* shader_1_hash,
+                      HashView shader_1_hash,
                       const AttributeMap& attrib_map_1,
                       const UniformMap& uniform_map_1,
                       const VaryingMap& varying_map_1,
@@ -95,9 +107,7 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
 
     GLsizei decompressed_length() const { return decompressed_length_; }
 
-    const std::string& shader_0_hash() const {
-      return shader_0_hash_;
-    }
+    const Hash& shader_0_hash() const { return shader_0_hash_; }
 
     const AttributeMap& attrib_map_0() const {
       return attrib_map_0_;
@@ -119,9 +129,7 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
       return interface_block_map_0_;
     }
 
-    const std::string& shader_1_hash() const {
-      return shader_1_hash_;
-    }
+    const Hash& shader_1_hash() const { return shader_1_hash_; }
 
     const AttributeMap& attrib_map_1() const {
       return attrib_map_1_;
@@ -152,14 +160,14 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
     const std::vector<uint8_t> data_;
     const bool is_compressed_;
     const GLsizei decompressed_length_;
-    const std::string program_hash_;
-    const std::string shader_0_hash_;
+    const Hash program_hash_;
+    const Hash shader_0_hash_;
     const AttributeMap attrib_map_0_;
     const UniformMap uniform_map_0_;
     const VaryingMap varying_map_0_;
     const OutputVariableList output_variable_list_0_;
     const InterfaceBlockMap interface_block_map_0_;
-    const std::string shader_1_hash_;
+    const Hash shader_1_hash_;
     const AttributeMap attrib_map_1_;
     const UniformMap uniform_map_1_;
     const VaryingMap varying_map_1_;
@@ -170,15 +178,18 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
 
   friend class ProgramCacheValue;
 
-  typedef base::LRUCache<std::string, scoped_refptr<ProgramCacheValue>>
-      ProgramLRUCache;
+  using ProgramLRUCache =
+      base::LRUCache<Hash, scoped_refptr<ProgramCacheValue>>;
 
   const bool disable_gpu_shader_disk_cache_;
   const bool disable_program_caching_for_transform_feedback_;
   const bool compress_program_binaries_;
   size_t curr_size_bytes_;
   ProgramLRUCache store_;
-  raw_ptr<GpuProcessActivityFlags> activity_flags_;
+  raw_ptr<GpuProcessShmCount> use_shader_cache_shm_count_;
+
+  base::AsyncMemoryPressureListenerRegistration
+      memory_pressure_listener_registration_;
 };
 
 }  // namespace gles2

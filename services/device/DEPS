@@ -1,12 +1,17 @@
 include_rules = [
   "+chromeos/crosapi",
-  "+chromeos/lacros",
+  "+components/dbus",
+  "+components/system_cpu",
   "+components/variations",
   "+device",
+  "+device/fido",
+  "+net/base",
   "+services/device/usb/jni_headers",
   "+services/network/public/cpp",
   "+services/network/test",
-  "+ui/gfx/native_widget_types.h",
+  "+testing/gmock/include/gmock/gmock.h",
+  "+third_party/ocmock",
+  "+ui/gfx/native_ui_types.h",
 ]
 
 specific_include_rules = {

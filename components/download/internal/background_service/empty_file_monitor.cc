@@ -4,12 +4,12 @@
 
 #include "components/download/internal/background_service/empty_file_monitor.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace download {
 
-EmptyFileMonitor::EmptyFileMonitor() {}
+EmptyFileMonitor::EmptyFileMonitor() = default;
 
 EmptyFileMonitor::~EmptyFileMonitor() = default;
 

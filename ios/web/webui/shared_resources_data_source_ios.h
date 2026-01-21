@@ -5,7 +5,6 @@
 #ifndef IOS_WEB_WEBUI_SHARED_RESOURCES_DATA_SOURCE_IOS_H_
 #define IOS_WEB_WEBUI_SHARED_RESOURCES_DATA_SOURCE_IOS_H_
 
-#include "base/compiler_specific.h"
 #include "ios/web/public/webui/url_data_source_ios.h"
 
 namespace web {
@@ -21,9 +20,9 @@ class SharedResourcesDataSourceIOS : public URLDataSourceIOS {
 
   // web::URLDataSourceIOS implementation.
   std::string GetSource() const override;
-  void StartDataRequest(const std::string& path,
+  void StartDataRequest(std::string_view path,
                         URLDataSourceIOS::GotDataCallback callback) override;
-  std::string GetMimeType(const std::string& path) const override;
+  std::string GetMimeType(std::string_view path) const override;
 
  private:
   ~SharedResourcesDataSourceIOS() override;

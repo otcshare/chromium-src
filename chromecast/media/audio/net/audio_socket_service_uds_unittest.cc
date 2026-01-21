@@ -8,9 +8,9 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/posix/unix_domain_socket.h"
 #include "base/run_loop.h"
@@ -27,7 +27,6 @@ namespace chromecast {
 namespace media {
 
 using ::testing::_;
-using ::testing::Invoke;
 
 namespace {
 
@@ -130,11 +129,11 @@ TEST_P(AudioSocketServiceTest, UseSocketDescriptor) {
   io_thread_->FlushForTesting();
 
   EXPECT_CALL(*delegate_, HandleAcceptedSocket(_))
-      .WillOnce(Invoke([this](std::unique_ptr<net::StreamSocket> socket) {
+      .WillOnce([this](std::unique_ptr<net::StreamSocket> socket) {
         EXPECT_TRUE(socket);
         EXPECT_TRUE(socket->IsConnected());
         run_loop_.Quit();
-      }));
+      });
 
   ConnectToAudioSocketService();
 }

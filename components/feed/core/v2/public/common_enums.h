@@ -11,6 +11,22 @@
 // Android.
 namespace feed {
 
+// Values for the UMA ContentSuggestions.Feed.FeedSignInUI histogram.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. This must be kept in sync with
+// FeedSignInUI in enums.xml.
+enum class FeedSignInUI : int {
+  // Histogram recorded when a sync half sheet is shown from Feed, when sign-in
+  // UI is not supported.
+  // kShowSyncHalfSheet = 0, (deprecated)
+  // Histogram recorded when a sign-in only flow is shown from Feed.
+  kShowSignInOnlyFlow = 1,
+  // Histogram recorded when a service disabled toast is shown from Feed.
+  kShowSignInDisableToast = 2,
+
+  kMaxValue = kShowSignInDisableToast,
+};
+
 // Values for the UMA ContentSuggestions.Feed.EngagementType
 // histogram. These values are persisted to logs. Entries should not be
 // renumbered and numeric values should never be reused. This must be kept
@@ -52,7 +68,7 @@ enum class FeedUserActionType {
   kTappedOpenInNewTab = 8,
   // User opened the back of card menu.
   kOpenedContextMenu = 9,
-  // User action not reported here. See Suggestions.SurfaceVisible.
+  // Action reported whenever the feed is visible.
   kOpenedFeedSurface = 10,
   // User opened the article in an incognito tab from the back of card menu.
   kTappedOpenInNewIncognitoTab = 11,
@@ -127,39 +143,37 @@ enum class FeedUserActionType {
   // User tapped the "Follow" button on the main menu. (Android)
   // User tapped the "Follow" option on the context menu. (IOS)
   kTappedFollowButton = 44,
+
+  // The following enum values are deprecated as a result of removing the feed
+  // header toggle.
   // User tapped on the Discover feed from the feed header.
-  kDiscoverFeedSelected = 45,
+  // kDiscoverFeedSelected = 45,
   // User tapped on the Following feed from the feed header.
-  kFollowingFeedSelected = 46,
+  // kFollowingFeedSelected = 46,
+
   // User tapped the "Unfollow" option on the context menu.
   kTappedUnfollowButton = 47,
-  // User action caused a follow succeed snackbar to be shown. User action not
-  // reported here. iOS only.
-  kShowFollowSucceedSnackbar = 48,
-  // User action caused a follow failed snackbar to be shown. User action not
-  // reported here. iOS only.
-  kShowFollowFailedSnackbar = 49,
-  // User action caused a unfollow succeed snackbar to be shown. User action not
-  // reported here. iOS only.
-  kShowUnfollowSucceedSnackbar = 50,
-  // User action caused a unfollow failed snackbar to be shown. User action not
-  // reported here. iOS only.
-  kShowUnfollowFailedSnackbar = 51,
+
+  // The following enum values are deprecated.
+  // kShowFollowSucceedSnackbar = 48,
+  // kShowFollowFailedSnackbar = 49,
+  // kShowUnfollowSucceedSnackbar = 50,
+  // kShowUnfollowFailedSnackbar = 51,
+
   // User tapped to go to Following feed using the snackbar 'go to Following'
   // option.
   kTappedGoToFeedOnSnackbar = 52,
+
   // User tapped the Crow button in the context menu.
-  kTappedCrowButton = 53,
-  // User action caused a first follow sheet to be shown. User action not
-  // reported here. iOS only.
-  kFirstFollowSheetShown = 54,
-  // User tapped the "Go To Feed" button on the first follow sheet. (IOS)
-  kFirstFollowSheetTappedGoToFeed = 55,
-  // User tapped the "Got It" button on the first follow sheet. (IOS)
-  kFirstFollowSheetTappedGotIt = 56,
-  // Page load caused a Follow Recommendation IPH to be shown. User action not
-  // reported here. iOS only.
-  kFollowRecommendationIPHShown = 57,
+  // No longer used after the removal of Crow.
+  // kTappedCrowButton = 53,
+
+  // First follow actions on iOS. No longer used after follow removal.
+  // kFirstFollowSheetShown = 54,
+  // kFirstFollowSheetTappedGoToFeed = 55,
+  // kFirstFollowSheetTappedGotIt = 56,
+  // kFollowRecommendationIPHShown = 57,
+
   // User opened the article in a new tab in group from the back of card menu.
   kTappedOpenInNewTabInGroup = 58,
   // User selected the "Group by Publisher" Following feed sort type.
@@ -176,11 +190,15 @@ enum class FeedUserActionType {
   // 'refresh' action.
   kTappedRefreshFollowingFeedOnSnackbar = 63,
   // User tapped on the "Continue" of the sign-in promote UI. iOS only.
-  kTappedFeedSignInPromoUIContinue = 64,
+  // Deprecated.
+  // kTappedFeedSignInPromoUIContinue = 64,
   // User tapped on the "Cancel" of the sign-in promote UI. iOS only.
-  kTappedFeedSignInPromoUICancel = 65,
+  // Deprecated.
+  // kTappedFeedSignInPromoUICancel = 65,
+  // User initiated non-swipe manual refresh of the feed.
+  kNonSwipeManualRefresh = 66,
 
-  kMaxValue = kTappedFeedSignInPromoUICancel,
+  kMaxValue = kNonSwipeManualRefresh,
 };
 
 // For testing and debugging only.
@@ -207,7 +225,7 @@ enum class ContentOrder : int {
 // ContentSuggestions.Feed.WebFeed.SortType* histograms.
 // These values are persisted to logs. Entries should never be reused.
 // This must be kept in sync with FeedSortType in enums.xml
-// TODO(crbug.com/1372865): should merge with ContentOrder.
+// TODO(crbug.com/40241876): should merge with ContentOrder.
 enum class FeedSortType : int {
   // Sort Type unspecified.
   kUnspecifiedSortType = 0,
@@ -217,6 +235,21 @@ enum class FeedSortType : int {
   kSortedByLatest = 2,
 
   kMaxValue = kSortedByLatest,
+};
+
+// Values for the UMA ContentSuggestions.Feed.FeedSyncPromo histogram.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. This must be kept in sync with
+// FeedSyncPromo in enums.xml.
+enum class FeedSyncPromo : int {
+  // Histogram recorded when a signed out user taps on the Feed sync promo
+  // and the sync flow is shown.
+  kShowSyncFlow = 0,
+  // Histogram recorded when a signed out user taps on the Feed sync promo
+  // and a service disabled toast is shown.
+  kShowDisableToast = 1,
+
+  kMaxValue = kShowDisableToast,
 };
 
 }  // namespace feed

@@ -7,11 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "mojo/public/cpp/system/functions.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/wait.h"
@@ -22,18 +22,16 @@ namespace test {
 
 bool WriteTextMessage(const MessagePipeHandle& handle,
                       const std::string& text) {
-  MojoResult rv = WriteMessageRaw(handle,
-                                  text.data(),
-                                  static_cast<uint32_t>(text.size()),
-                                  nullptr,
-                                  0,
-                                  MOJO_WRITE_MESSAGE_FLAG_NONE);
+  MojoResult rv =
+      WriteMessageRaw(handle, text.data(), static_cast<uint32_t>(text.size()),
+                      nullptr, 0, MOJO_WRITE_MESSAGE_FLAG_NONE);
   return rv == MOJO_RESULT_OK;
 }
 
 bool ReadTextMessage(const MessagePipeHandle& handle, std::string* text) {
-  if (Wait(handle, MOJO_HANDLE_SIGNAL_READABLE) != MOJO_RESULT_OK)
+  if (Wait(handle, MOJO_HANDLE_SIGNAL_READABLE) != MOJO_RESULT_OK) {
     return false;
+  }
 
   std::vector<uint8_t> bytes;
   std::vector<ScopedHandle> handles;
@@ -44,15 +42,16 @@ bool ReadTextMessage(const MessagePipeHandle& handle, std::string* text) {
 
   assert(handles.empty());
   text->resize(bytes.size());
-  base::ranges::copy(bytes, text->begin());
+  std::ranges::copy(bytes, text->begin());
   return true;
 }
 
 bool DiscardMessage(const MessagePipeHandle& handle) {
   MojoMessageHandle message;
   int rv = MojoReadMessage(handle.value(), nullptr, &message);
-  if (rv != MOJO_RESULT_OK)
+  if (rv != MOJO_RESULT_OK) {
     return false;
+  }
   MojoDestroyMessage(message);
   return true;
 }
@@ -69,8 +68,9 @@ void IterateAndReportPerf(const char* test_name,
   MojoTimeTicks end_time;
   size_t iterations = 0;
   do {
-    for (size_t i = 0; i < kGranularity; i++)
+    for (size_t i = 0; i < kGranularity; i++) {
       (*single_iteration)(closure);
+    }
     iterations += kGranularity;
 
     end_time = GetTimeTicksNow();
@@ -91,14 +91,16 @@ BadMessageObserver::~BadMessageObserver() {
 }
 
 std::string BadMessageObserver::WaitForBadMessage() {
-  if (!got_bad_message_)
+  if (!got_bad_message_) {
     run_loop_.Run();
+  }
   return last_error_for_bad_message_;
 }
 
 void BadMessageObserver::OnReportBadMessage(const std::string& message) {
-  if (got_bad_message_)
+  if (got_bad_message_) {
     return;
+  }
 
   last_error_for_bad_message_ = message;
   got_bad_message_ = true;

@@ -8,8 +8,10 @@
 #include <vector>
 
 #include "ash/webui/diagnostics_ui/mojom/input_data_provider.mojom.h"
-#include "ui/chromeos/events/event_rewriter_chromeos.h"
-#include "ui/chromeos/events/keyboard_capability.h"
+#include "base/memory/weak_ptr.h"
+#include "base/system/sys_info.h"
+#include "ui/events/ash/event_rewriter_ash.h"
+#include "ui/events/ash/keyboard_capability.h"
 
 namespace ash {
 namespace diagnostics {
@@ -55,11 +57,14 @@ class InputDataProviderKeyboard {
   void ProcessKeyboardTopRowLayout(
       const InputDeviceInformation* device_info,
       ui::KeyboardCapability::KeyboardTopRowLayout top_row_layout,
-      const base::flat_map<uint32_t,
-                           ui::EventRewriterChromeOS::MutableKeyState>&
-          scan_code_map,
+      const std::vector<uint32_t>& scan_code_map,
       std::vector<mojom::TopRowKey>* out_top_row_keys,
       AuxData* out_aux_data);
+
+  void OnGetHardwareInfo(base::SysInfo::HardwareInfo info);
+
+  base::SysInfo::HardwareInfo hardware_info_;
+  base::WeakPtrFactory<InputDataProviderKeyboard> weak_ptr_factory_{this};
 };
 
 }  // namespace diagnostics

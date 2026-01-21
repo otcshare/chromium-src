@@ -25,10 +25,10 @@ class FocusChangedObserver : public WebContentsObserver {
   FocusedNodeDetails Wait();
 
  private:
-  void OnFocusChangedInPage(FocusedNodeDetails*) override;
+  void OnFocusChangedInPage(const FocusedNodeDetails&) override;
 
   base::RunLoop run_loop_;
-  absl::optional<FocusedNodeDetails> observed_details_;
+  std::optional<FocusedNodeDetails> observed_details_;
 };
 
 }  // namespace content

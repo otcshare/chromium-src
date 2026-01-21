@@ -31,22 +31,17 @@ class CardUnmaskPromptViewAndroid : public CardUnmaskPromptView {
   CardUnmaskPromptViewAndroid& operator=(const CardUnmaskPromptViewAndroid&) =
       delete;
 
-  bool CheckUserInputValidity(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jstring>& response);
+  bool CheckUserInputValidity(JNIEnv* env,
+                              const std::u16string& response);
   void OnUserInput(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   const base::android::JavaParamRef<jstring>& cvc,
-                   const base::android::JavaParamRef<jstring>& month,
-                   const base::android::JavaParamRef<jstring>& year,
-                   jboolean enable_fido_auth);
-  void OnNewCardLinkClicked(JNIEnv* env,
-                            const base::android::JavaParamRef<jobject>& obj);
-  int GetExpectedCvcLength(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
-  void PromptDismissed(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj);
+                   const std::u16string& cvc,
+                   const std::u16string& month,
+                   const std::u16string& year,
+                   bool enable_fido_auth,
+                   bool was_checkbox_visible);
+  void OnNewCardLinkClicked(JNIEnv* env);
+  int GetExpectedCvcLength(JNIEnv* env);
+  void PromptDismissed(JNIEnv* env);
 
   // CardUnmaskPromptView implementation.
   void Show() override;

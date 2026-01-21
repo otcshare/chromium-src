@@ -30,14 +30,9 @@ getRootAXNode for main frame:
                 nativeSource : title
                 type : relatedElement
             }
-            [4] : {
-                attribute : title
-                superseded : true
-                type : attribute
-            }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
     properties : <object>
@@ -80,11 +75,6 @@ getRootAXNode for iframe:
                     type : computedString
                     value : Iframe with accessible name
                 }
-            }
-            [4] : {
-                attribute : title
-                superseded : true
-                type : attribute
             }
         ]
         type : computedString

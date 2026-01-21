@@ -7,12 +7,13 @@
 
 #include <va/va.h>
 
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "build/chromeos_buildflags.h"
 #include "media/gpu/h265_decoder.h"
 #include "media/gpu/h265_dpb.h"
 #include "media/gpu/vaapi/vaapi_video_decoder_delegate.h"
-#include "media/video/h265_parser.h"
+#include "media/parsers/h265_parser.h"
 
 // Verbatim from va/va.h, where typedef is used.
 typedef struct _VAPictureHEVC VAPictureHEVC;
@@ -26,7 +27,7 @@ class H265VaapiVideoDecoderDelegate : public H265Decoder::H265Accelerator,
                                       public VaapiVideoDecoderDelegate {
  public:
   H265VaapiVideoDecoderDelegate(
-      DecodeSurfaceHandler<VASurface>* vaapi_dec,
+      VaapiDecodeSurfaceHandler* vaapi_dec,
       scoped_refptr<VaapiWrapper> vaapi_wrapper,
       ProtectedSessionUpdateCB on_protected_session_update_cb,
       CdmContext* cdm_context,
@@ -40,11 +41,15 @@ class H265VaapiVideoDecoderDelegate : public H265Decoder::H265Accelerator,
 
   // H265Decoder::H265Accelerator implementation.
   scoped_refptr<H265Picture> CreateH265Picture() override;
-  Status SubmitFrameMetadata(const H265SPS* sps,
-                             const H265PPS* pps,
-                             const H265SliceHeader* slice_hdr,
-                             const H265Picture::Vector& ref_pic_list,
-                             scoped_refptr<H265Picture> pic) override;
+  Status SubmitFrameMetadata(
+      const H265SPS* sps,
+      const H265PPS* pps,
+      const H265SliceHeader* slice_hdr,
+      const H265Picture::Vector& ref_pic_list,
+      const H265Picture::Vector& ref_pic_set_lt_curr,
+      const H265Picture::Vector& ref_pic_set_st_curr_after,
+      const H265Picture::Vector& ref_pic_set_st_curr_before,
+      scoped_refptr<H265Picture> pic) override;
   Status SubmitSlice(const H265SPS* sps,
                      const H265PPS* pps,
                      const H265SliceHeader* slice_hdr,
@@ -67,7 +72,7 @@ class H265VaapiVideoDecoderDelegate : public H265Decoder::H265Accelerator,
  private:
   void FillVAPicture(VAPictureHEVC* va_pic, scoped_refptr<H265Picture> pic);
   void FillVARefFramesFromRefList(const H265Picture::Vector& ref_pic_list,
-                                  VAPictureHEVC* va_pics);
+                                  base::span<VAPictureHEVC> va_pics);
 
   // Returns |kInvalidRefPicIndex| if it cannot find a picture.
   int GetRefPicIndex(int poc);
@@ -90,11 +95,15 @@ class H265VaapiVideoDecoderDelegate : public H265Decoder::H265Accelerator,
   // one DecoderBuffer, so the memory will still be accessible until the frame
   // is done. |last_slice_data_| being non-null indicates we have a valid
   // |slice_param_| filled.
-  const uint8_t* last_slice_data_{nullptr};
+  raw_ptr<const uint8_t> last_slice_data_{nullptr};
   size_t last_slice_size_{0};
   std::string last_transcrypt_params_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // Indicate that a frame is dropped because it's not decodable
+  // (RASL frame). This is updated every SubmitFrameMetadata().
+  bool drop_frame_ = false;
+
+#if BUILDFLAG(IS_CHROMEOS)
   // We need to hold onto this memory here because it's referenced by the
   // mapped buffer in libva across calls. It is filled in SubmitSlice() and
   // stays alive until SubmitDecode() or Reset().
@@ -103,7 +112,7 @@ class H265VaapiVideoDecoderDelegate : public H265Decoder::H265Accelerator,
   // We need to retain this for the multi-slice case since that will aggregate
   // the encryption details across all the slices.
   VAEncryptionParameters crypto_params_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 }  // namespace media

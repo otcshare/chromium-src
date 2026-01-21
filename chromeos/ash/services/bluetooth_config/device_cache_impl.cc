@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_features.h"
 #include "chromeos/ash/services/bluetooth_config/device_conversion_util.h"
 #include "components/device_event_log/device_event_log.h"
 #include "device/bluetooth/chromeos/bluetooth_utils.h"
@@ -33,7 +33,7 @@ DeviceCacheImpl::DeviceCacheImpl(
       fast_pair_delegate_(fast_pair_delegate) {
   adapter_state_controller_observation_.Observe(adapter_state_controller());
   adapter_observation_.Observe(bluetooth_adapter_.get());
-  device_name_manager_observation_.Observe(device_name_manager_);
+  device_name_manager_observation_.Observe(device_name_manager_.get());
 
   FetchInitialDeviceLists();
 }
@@ -158,13 +158,18 @@ void DeviceCacheImpl::DeviceBatteryChanged(
 
 void DeviceCacheImpl::OnDeviceNicknameChanged(
     const std::string& device_id,
-    const absl::optional<std::string>& nickname) {
+    const std::optional<std::string>& nickname) {
   BLUETOOTH_LOG(DEBUG) << "Device nickname changed: " << device_id
                        << ", new nickname: "
                        << (nickname.has_value() ? nickname.value() : "null");
   for (device::BluetoothDevice* device : bluetooth_adapter_->GetDevices()) {
     if (device->GetIdentifier() != device_id)
       continue;
+
+    if (fast_pair_delegate_ && nickname.has_value()) {
+      fast_pair_delegate_->UpdateDeviceNickname(device->GetAddress(),
+                                                nickname.value());
+    }
 
     DeviceChanged(bluetooth_adapter_.get(), device);
     return;
@@ -202,6 +207,14 @@ bool DeviceCacheImpl::AttemptSetDeviceInPairedDeviceList(
   // Remove the old (stale) properties, if they exist.
   RemoveFromPairedDeviceList(device);
 
+  // Do not allow unsupported devices in the paired device list.
+  if (device::IsUnsupportedDevice(device)) {
+    BLUETOOTH_LOG(DEBUG) << "Attempted to set device in paired device list "
+                         << "but device is unsupported: "
+                         << device->GetAddress();
+    return false;
+  }
+
   paired_devices_.push_back(GeneratePairedBluetoothDeviceProperties(device));
   SortPairedDeviceList();
   return true;
@@ -223,7 +236,7 @@ bool DeviceCacheImpl::RemoveFromPairedDeviceList(
 
 bool DeviceCacheImpl::AttemptUpdatePairedDeviceMetadata(
     device::BluetoothDevice* device) {
-  bool device_found = base::Contains(
+  bool device_found = std::ranges::contains(
       paired_devices_, device->GetIdentifier(), [](const auto& paired_device) {
         return paired_device->device_properties->id;
       });
@@ -266,7 +279,7 @@ bool DeviceCacheImpl::AttemptSetDeviceInUnpairedDeviceList(
     return false;
   }
 
-  // Check if the device should be added to the unpaired device list.
+  // Do not allow unsupported devices in the unpaired device list.
   if (device::IsUnsupportedDevice(device)) {
     BLUETOOTH_LOG(DEBUG) << "Attempted to set device in unpaired device list "
                          << "but device is unsupported: "

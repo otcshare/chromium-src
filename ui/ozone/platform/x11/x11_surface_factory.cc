@@ -6,12 +6,12 @@
 
 #include <memory>
 
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/vulkan/buildflags.h"
 #include "ui/events/platform/x11/x11_event_source.h"
 #include "ui/gfx/linux/gbm_buffer.h"
-#include "ui/gfx/linux/gpu_memory_buffer_support_x11.h"
+#include "ui/gfx/linux/gbm_support_x11.h"
 #include "ui/gfx/linux/native_pixmap_dmabuf.h"
-#include "ui/gfx/x/connection.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/gl_surface_egl_x11_gles2.h"
@@ -29,6 +29,30 @@
 namespace ui {
 namespace {
 
+enum class NativePixmapSupportType {
+  // Importing native pixmaps not supported.
+  kNone,
+
+  // Native pixmaps are imported directly into EGL using the
+  // EGL_EXT_image_dma_buf_import extension.
+  kDMABuf,
+
+  // Native pixmaps are first imported as X11 pixmaps using DRI3 and then into
+  // EGL.
+  kX11Pixmap,
+};
+
+NativePixmapSupportType GetNativePixmapSupportType() {
+  if (gl::GLSurfaceEGL::GetGLDisplayEGL()
+          ->ext->b_EGL_EXT_image_dma_buf_import) {
+    return NativePixmapSupportType::kDMABuf;
+  } else if (NativePixmapEGLX11Binding::CanImportNativeGLXPixmap()) {
+    return NativePixmapSupportType::kX11Pixmap;
+  } else {
+    return NativePixmapSupportType::kNone;
+  }
+}
+
 class GLOzoneEGLX11 : public GLOzoneEGL {
  public:
   GLOzoneEGLX11() = default;
@@ -45,22 +69,21 @@ class GLOzoneEGLX11 : public GLOzoneEGL {
     return GLOzoneEGL::InitializeStaticGLBindings(implementation);
   }
 
-  bool CanImportNativePixmap() override {
-    return gl::GLSurfaceEGL::GetGLDisplayEGL()
-        ->ext->b_EGL_EXT_image_dma_buf_import;
-  }
+  bool CanImportNativePixmap(viz::SharedImageFormat format) override {
+    if (GetNativePixmapSupportType() == NativePixmapSupportType::kNone) {
+      return false;
+    }
 
-  std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
-      scoped_refptr<gfx::NativePixmap> pixmap,
-      gfx::BufferFormat plane_format,
-      gfx::BufferPlane plane,
-      gfx::Size plane_size,
-      const gfx::ColorSpace& color_space,
-      GLenum target,
-      GLuint texture_id) override {
-    return NativePixmapEGLBinding::Create(pixmap, plane_format, plane,
-                                          plane_size, color_space, target,
-                                          texture_id);
+    switch (GetNativePixmapSupportType()) {
+      case NativePixmapSupportType::kDMABuf: {
+        return NativePixmapEGLBinding::IsSharedImageFormatSupported(format);
+      }
+      case NativePixmapSupportType::kX11Pixmap: {
+        return NativePixmapEGLX11Binding::IsSharedImageFormatSupported(format);
+      }
+      default:
+        return false;
+    }
   }
 
   scoped_refptr<gl::GLSurface> CreateViewGLSurface(
@@ -84,7 +107,6 @@ class GLOzoneEGLX11 : public GLOzoneEGL {
               static_cast<x11::Window>(window)));
         default:
           NOTREACHED();
-          return nullptr;
       }
     }
   }
@@ -115,6 +137,29 @@ class GLOzoneEGLX11 : public GLOzoneEGL {
   }
 
  private:
+  std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
+      scoped_refptr<gfx::NativePixmap> pixmap,
+      viz::SharedImageFormat plane_format,
+      gfx::BufferPlane plane,
+      gfx::Size plane_size,
+      const gfx::ColorSpace& color_space,
+      GLenum target,
+      GLuint texture_id) override {
+    switch (GetNativePixmapSupportType()) {
+      case NativePixmapSupportType::kDMABuf: {
+        return NativePixmapEGLBinding::Create(pixmap, plane_format, plane,
+                                              plane_size, color_space, target,
+                                              texture_id);
+      }
+      case NativePixmapSupportType::kX11Pixmap: {
+        return NativePixmapEGLX11Binding::Create(
+            pixmap, plane_format, plane_size, target, texture_id);
+      }
+      default:
+        return nullptr;
+    }
+  }
+
   bool is_swiftshader_ = false;
 };
 
@@ -130,15 +175,13 @@ X11SurfaceFactory::~X11SurfaceFactory() = default;
 std::vector<gl::GLImplementationParts>
 X11SurfaceFactory::GetAllowedGLImplementations() {
   return std::vector<gl::GLImplementationParts>{
-      gl::GLImplementationParts(gl::kGLImplementationEGLGLES2),
       gl::GLImplementationParts(gl::kGLImplementationEGLANGLE),
-      gl::GLImplementationParts(gl::ANGLEImplementation::kSwiftShader)};
+  };
 }
 
 GLOzone* X11SurfaceFactory::GetGLOzone(
     const gl::GLImplementationParts& implementation) {
   switch (implementation.gl) {
-    case gl::kGLImplementationEGLGLES2:
     case gl::kGLImplementationEGLANGLE:
       return egl_implementation_.get();
     default:
@@ -171,14 +214,17 @@ scoped_refptr<gfx::NativePixmap> X11SurfaceFactory::CreateNativePixmap(
     gfx::AcceleratedWidget widget,
     gpu::VulkanDeviceQueue* device_queue,
     gfx::Size size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage,
-    absl::optional<gfx::Size> framebuffer_size) {
+    std::optional<gfx::Size> framebuffer_size) {
   scoped_refptr<gfx::NativePixmapDmaBuf> pixmap;
-  auto buffer = ui::GpuMemoryBufferSupportX11::GetInstance()->CreateBuffer(
-      format, size, usage);
+  auto buffer =
+      ui::GBMSupportX11::GetInstance()->CreateBuffer(format, size, usage);
   if (buffer) {
     gfx::NativePixmapHandle handle = buffer->ExportHandle();
+    if (handle.planes.empty()) {
+      return nullptr;
+    }
     pixmap = base::MakeRefCounted<gfx::NativePixmapDmaBuf>(size, format,
                                                            std::move(handle));
   }
@@ -189,40 +235,33 @@ scoped_refptr<gfx::NativePixmap> X11SurfaceFactory::CreateNativePixmap(
 }
 
 bool X11SurfaceFactory::CanCreateNativePixmapForFormat(
-    gfx::BufferFormat format) {
-  return ui::GpuMemoryBufferSupportX11::GetInstance()
-      ->CanCreateNativePixmapForFormat(format);
-}
-
-void X11SurfaceFactory::CreateNativePixmapAsync(
-    gfx::AcceleratedWidget widget,
-    gpu::VulkanDeviceQueue* device_queue,
-    gfx::Size size,
-    gfx::BufferFormat format,
-    gfx::BufferUsage usage,
-    NativePixmapCallback callback) {
-  // CreateNativePixmap is non-blocking operation. Thus, it is safe to call it
-  // and return the result with the provided callback.
-  std::move(callback).Run(
-      CreateNativePixmap(widget, device_queue, size, format, usage));
+    viz::SharedImageFormat format) {
+  return ui::GBMSupportX11::GetInstance()->CanCreateBufferForFormat(format);
 }
 
 scoped_refptr<gfx::NativePixmap>
 X11SurfaceFactory::CreateNativePixmapFromHandle(
     gfx::AcceleratedWidget widget,
     gfx::Size size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::NativePixmapHandle handle) {
   scoped_refptr<gfx::NativePixmapDmaBuf> pixmap;
-  auto buffer =
-      ui::GpuMemoryBufferSupportX11::GetInstance()->CreateBufferFromHandle(
-          size, format, std::move(handle));
+  auto buffer = ui::GBMSupportX11::GetInstance()->CreateBufferFromHandle(
+      size, format, std::move(handle));
   if (buffer) {
     gfx::NativePixmapHandle buffer_handle = buffer->ExportHandle();
+    if (buffer_handle.planes.empty()) {
+      return nullptr;
+    }
     pixmap = base::MakeRefCounted<gfx::NativePixmapDmaBuf>(
         size, format, std::move(buffer_handle));
   }
   return pixmap;
+}
+
+bool X11SurfaceFactory::IsFormatSupportedForTexturing(
+    viz::SharedImageFormat format) const {
+  return ui::GBMSupportX11::GetInstance()->CanCreateBufferForFormat(format);
 }
 
 }  // namespace ui

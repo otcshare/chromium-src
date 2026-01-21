@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/css/media_query.h"
-
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/core/css/container_selector.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/core/css/media_query.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -26,19 +25,24 @@ static void TestMediaQuery(const char* input,
   wtf_size_t j = 0;
   while (j < query_set.QueryVector().size()) {
     const MediaQuery& query = *query_set.QueryVector()[j];
-    if (!unknown_substitute.IsNull() && query.HasUnknown())
+    if (!unknown_substitute.IsNull() && query.ExpNode() &&
+        (ContainerSelector::CollectFeatureFlags(*query.ExpNode()) &
+         ContainerSelector::kFeatureUnknown)) {
       actual.Append(unknown_substitute);
-    else
+    } else {
       actual.Append(query.CssText());
+    }
     ++j;
-    if (j >= query_set.QueryVector().size())
+    if (j >= query_set.QueryVector().size()) {
       break;
+    }
     actual.Append(", ");
   }
-  if (output)
-    ASSERT_EQ(output, actual.ToString());
-  else
-    ASSERT_EQ(input, actual.ToString());
+  if (output) {
+    ASSERT_EQ(String(output), actual.ToString());
+  } else {
+    ASSERT_EQ(String(input), actual.ToString());
+  }
 }
 
 TEST(MediaQuerySetTest, Basic) {
@@ -102,8 +106,15 @@ TEST(MediaQuerySetTest, Basic) {
       {"print and (min-resolution: 300dpi)", nullptr},
       {"print and (min-resolution: 118dpcm)", nullptr},
       {"(resolution: 0.83333333333333333333dppx)",
-       "(resolution: 0.833333333333333dppx)"},
+       "(resolution: 0.833333dppx)"},
       {"(resolution: 2.4dppx)", nullptr},
+      {"(resolution: calc(1dppx))", "(resolution: calc(1dppx))"},
+      {"(resolution: calc(1x))", "(resolution: calc(1dppx))"},
+      {"(resolution: calc(96dpi))", "(resolution: calc(1dppx))"},
+      {"(resolution: calc(1x + 2x))", "(resolution: calc(3dppx))"},
+      {"(resolution: calc(3x - 2x))", "(resolution: calc(1dppx))"},
+      {"(resolution: calc(1x * 3))", "(resolution: calc(3dppx))"},
+      {"(resolution: calc(6x / 2))", "(resolution: calc(3dppx))"},
       {"all and(color)", "not all"},
       {"all and (", "not all"},
       {"test;,all", "not all, all"},
@@ -230,6 +241,10 @@ TEST(MediaQuerySetTest, Basic) {
       {"(block-size > 0px)", "not all"},
       {"(min-block-size: 0px)", "not all"},
       {"(max-block-size: 0px)", "not all"},
+      {"(device-aspect-ratio: calc(16.1)/calc(9.0))",
+       "(device-aspect-ratio: calc(16.1) / calc(9))"},
+      {"(device-aspect-ratio: calc(16.1)/9.0)",
+       "(device-aspect-ratio: calc(16.1) / 9)"},
   };
 
   for (const MediaQuerySetTestCase& test : test_cases) {

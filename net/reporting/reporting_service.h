@@ -6,15 +6,17 @@
 #define NET_REPORTING_REPORTING_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
 #include "net/base/net_export.h"
 #include "net/reporting/reporting_cache.h"
 #include "net/reporting/reporting_cache_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "net/reporting/reporting_target_type.h"
 
 class GURL;
 
@@ -67,18 +69,21 @@ class NET_EXPORT ReportingService {
   // |user_agent| is the User-Agent header that was used for the request.
   // |group| is the endpoint group to which the report should be delivered.
   // |type| is the type of the report. |body| is the body of the report.
+  // |target_type| is used to tag the report as either a web developer report
+  // or an enterprise report.
   //
   // The Reporting system will take ownership of |body|; all other parameters
   // will be copied.
   virtual void QueueReport(
       const GURL& url,
-      const absl::optional<base::UnguessableToken>& reporting_source,
+      const std::optional<base::UnguessableToken>& reporting_source,
       const NetworkAnonymizationKey& network_anonymization_key,
       const std::string& user_agent,
       const std::string& group,
       const std::string& type,
       base::Value::Dict body,
-      int depth) = 0;
+      int depth,
+      ReportingTargetType target_type) = 0;
 
   // Processes a Report-To header. |origin| is the Origin of the URL that the
   // header came from; |header_value| is the normalized value of the Report-To
@@ -127,7 +132,8 @@ class NET_EXPORT ReportingService {
 
   virtual base::Value StatusAsValue() const;
 
-  virtual std::vector<const ReportingReport*> GetReports() const = 0;
+  virtual std::vector<raw_ptr<const ReportingReport, VectorExperimental>>
+  GetReports() const = 0;
 
   virtual base::flat_map<url::Origin, std::vector<ReportingEndpoint>>
   GetV1ReportingEndpointsByOrigin() const = 0;

@@ -15,10 +15,12 @@
 #include "base/types/id_type.h"
 #include "base/values.h"
 #include "components/feed/core/proto/v2/store.pb.h"
+// #include "components/feed/core/proto/v2/wire/chrome_fulfillment_info.pb.h"
 #include "components/feed/core/proto/v2/wire/client_info.pb.h"
 #include "components/feed/core/proto/v2/wire/info_card.pb.h"
 #include "components/feed/core/proto/v2/wire/reliability_logging_enums.pb.h"
 #include "components/feed/core/v2/enums.h"
+#include "components/feed/core/v2/ios_shared_experiments_translator.h"
 #include "components/feed/core/v2/public/common_enums.h"
 #include "components/feed/core/v2/public/types.h"
 
@@ -55,13 +57,17 @@ struct RequestMetadata {
   std::string language_tag;
   std::string client_instance_id;
   std::string session_id;
+  std::string country;
   DisplayMetrics display_metrics{};
   ContentOrder content_order = ContentOrder::kUnspecified;
   bool notice_card_acknowledged = false;
-  bool autoplay_enabled = false;
   TabGroupEnabledState tab_group_enabled_state = TabGroupEnabledState::kNone;
   int followed_from_web_page_menu_count = 0;
   std::vector<feedwire::InfoCardTrackingState> info_card_tracking_states;
+  feedwire::ChromeSignInStatus::SignInStatus sign_in_status =
+      feedwire::ChromeSignInStatus::SIGNED_IN_STATUS_UNSPECIFIED;
+  feedwire::DefaultSearchEngine::SearchEngine default_search_engine =
+      feedwire::DefaultSearchEngine::ENGINE_UNSPECIFIED;
 };
 
 // Data internal to MetricsReporter which is persisted to Prefs.

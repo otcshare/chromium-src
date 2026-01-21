@@ -4,6 +4,8 @@
 
 #include "ash/login/ui/login_expanded_public_account_view.h"
 
+#include <algorithm>
+
 #include "ash/login/mock_login_screen_client.h"
 #include "ash/login/ui/arrow_button_view.h"
 #include "ash/login/ui/login_test_base.h"
@@ -12,8 +14,9 @@
 #include "ash/login/ui/views_utils.h"
 #include "ash/public/cpp/login_types.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "base/callback_helpers.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,6 +27,7 @@
 #include "ui/views/controls/link_fragment.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/test/combobox_test_api.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
@@ -84,8 +88,8 @@ class LoginExpandedPublicAccountViewTest
     container_ = new views::BoxLayoutView();
     container_->SetCrossAxisAlignment(
         views::BoxLayout::CrossAxisAlignment::kStart);
-    container_->AddChildView(public_account_);
-    container_->AddChildView(other_view_);
+    container_->AddChildViewRaw(public_account_.get());
+    container_->AddChildViewRaw(other_view_.get());
     auto widget = CreateWidgetWithContent(container_);
     switch (GetParam().orientation) {
       case Orientation::kLandscape:
@@ -97,6 +101,13 @@ class LoginExpandedPublicAccountViewTest
     }
     widget->LayoutRootViewIfNecessary();
     SetWidget(std::move(widget));
+  }
+
+  void TearDown() override {
+    container_ = nullptr;
+    other_view_ = nullptr;
+    public_account_ = nullptr;
+    LoginTestBase::TearDown();
   }
 
   // Add two fake language items, the first item is selected by default.
@@ -154,9 +165,9 @@ class LoginExpandedPublicAccountViewTest
   LoginUserInfo user_;
 
   // Owned by test widget view hierarchy.
-  views::BoxLayoutView* container_ = nullptr;
-  LoginExpandedPublicAccountView* public_account_ = nullptr;
-  views::View* other_view_ = nullptr;
+  raw_ptr<views::BoxLayoutView> container_ = nullptr;
+  raw_ptr<LoginExpandedPublicAccountView> public_account_ = nullptr;
+  raw_ptr<views::View> other_view_ = nullptr;
 };
 
 }  // namespace
@@ -176,7 +187,7 @@ TEST_P(LoginExpandedPublicAccountViewTest, ToggleAdvancedView) {
 
   // Advanced view is shown and the overall size does not change.
   EXPECT_TRUE(test_api.advanced_view()->GetVisible());
-  ui::MouseEvent fake_event(ui::EventType::ET_MOUSE_MOVED, gfx::Point(),
+  ui::MouseEvent fake_event(ui::EventType::kMouseMoved, gfx::Point(),
                             gfx::Point(), base::TimeTicks(), 0, 0);
   EXPECT_EQ(test_api.advanced_view_button()->GetCursor(fake_event),
             ui::mojom::CursorType::kHand);
@@ -199,9 +210,9 @@ TEST_P(LoginExpandedPublicAccountViewTest, ShowLearnMoreDialog) {
 
   // Tap on the learn more link.
   const auto& children = test_api.learn_more_label()->children();
-  const auto it =
-      base::ranges::find(children, views::LinkFragment::kViewClassName,
-                         &views::View::GetClassName);
+  const auto it = std::ranges::find_if(children, [](views::View* child) {
+    return views::IsViewClass<views::LinkFragment>(child);
+  });
   DCHECK(it != children.cend());
   TapOnView(*it);
   ASSERT_NE(test_api.learn_more_dialog(), nullptr);

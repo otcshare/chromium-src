@@ -4,8 +4,8 @@
 
 #include "chromeos/ash/components/dbus/cec_service/cec_service_client.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "chromeos/ash/components/dbus/cec_service/fake_cec_service_client.h"
@@ -42,7 +42,6 @@ CecServiceClient::PowerState ConvertDBusPowerState(int32_t power_state) {
       return CecServiceClient::PowerState::kUnknown;
     default:
       NOTREACHED() << "Received unknown state " << power_state;
-      return CecServiceClient::PowerState::kUnknown;
   }
 }
 

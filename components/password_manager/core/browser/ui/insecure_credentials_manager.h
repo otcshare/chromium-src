@@ -5,13 +5,12 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_UI_INSECURE_CREDENTIALS_MANAGER_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_UI_INSECURE_CREDENTIALS_MANAGER_H_
 
-#include <map>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/callback_helpers.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
@@ -20,17 +19,13 @@
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/strong_alias.h"
-#include "build/build_config.h"
-#include "components/password_manager/core/browser/insecure_credentials_table.h"
-#include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
-#include "components/password_manager/core/browser/password_store_interface.h"
 #include "components/password_manager/core/browser/ui/credential_utils.h"
 #include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
-#include "url/gurl.h"
 
 namespace password_manager {
 
 struct CredentialUIEntry;
+
 class LeakCheckCredential;
 
 // This class provides clients with saved insecure credentials and possibility
@@ -49,21 +44,22 @@ class InsecureCredentialsManager : public SavedPasswordsPresenter::Observer {
     virtual void OnInsecureCredentialsChanged() = 0;
   };
 
-  InsecureCredentialsManager(
-      SavedPasswordsPresenter* presenter,
-      scoped_refptr<PasswordStoreInterface> profile_store,
-      scoped_refptr<PasswordStoreInterface> account_store);
+  explicit InsecureCredentialsManager(SavedPasswordsPresenter* presenter);
   ~InsecureCredentialsManager() override;
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Computes reused credentials in a separate thread and then passes the result
+  // to OnReuseCheckDone.
+  void StartReuseCheck(base::OnceClosure on_check_done = base::DoNothing());
+
   // Computes weak credentials in a separate thread and then passes the result
   // to OnWeakCheckDone.
   void StartWeakCheck(base::OnceClosure on_check_done = base::DoNothing());
-#endif
 
   // Marks all saved credentials which have same username & password as
   // insecure.
-  void SaveInsecureCredential(const LeakCheckCredential& credential);
+  void SaveInsecureCredential(
+      const LeakCheckCredential& credential,
+      TriggerBackendNotification should_trigger_notification);
 
   // Attempts to mute |credential| from the password store.
   // Returns whether the mute succeeded.
@@ -85,28 +81,28 @@ class InsecureCredentialsManager : public SavedPasswordsPresenter::Observer {
   // were changed.
   void OnWeakCheckDone(base::ElapsedTimer timer_since_weak_check_start,
                        base::flat_set<std::u16string> weak_passwords);
+  void OnPartialWeakCheckDone(base::flat_set<std::u16string> weak_passwords);
+
+  // Updates |reused_passwords| set and notifies observers that insecure
+  // credentials were changed.
+  void OnReuseCheckDone(base::ElapsedTimer timer_since_reuse_check_start,
+                        base::flat_set<std::u16string> reused_passwords);
 
   // SavedPasswordsPresenter::Observer:
-  void OnEdited(const CredentialUIEntry& credential) override;
-  void OnSavedPasswordsChanged() override;
+  void OnSavedPasswordsChanged(const PasswordStoreChangeList& changes) override;
 
   // Notifies observers when insecure credentials have changed.
   void NotifyInsecureCredentialsChanged();
-
-  // Returns the `profile_store_` or `account_store_` if `form` is stored in the
-  // profile store of the account store accordingly.
-  PasswordStoreInterface& GetStoreFor(const PasswordForm& form);
 
   // A weak handle to the presenter used to join the list of insecure
   // credentials with saved passwords. Needs to outlive this instance.
   raw_ptr<SavedPasswordsPresenter> presenter_ = nullptr;
 
-  // The password stores containing the insecure credentials.
-  scoped_refptr<PasswordStoreInterface> profile_store_;
-  scoped_refptr<PasswordStoreInterface> account_store_;
-
   // Cache of the most recently obtained weak passwords.
   base::flat_set<std::u16string> weak_passwords_;
+
+  // Cache of the most recently obtained reused passwords.
+  base::flat_set<std::u16string> reused_passwords_;
 
   // A scoped observer for |presenter_|.
   base::ScopedObservation<SavedPasswordsPresenter,

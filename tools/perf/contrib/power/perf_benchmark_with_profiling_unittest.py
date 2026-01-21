@@ -3,8 +3,7 @@
 # found in the LICENSE file.
 
 import unittest
-
-import mock
+from unittest import mock
 
 from contrib.power.perf_benchmark_with_profiling \
     import PerfBenchmarkWithProfiling
@@ -65,4 +64,4 @@ class PerfBenchmarkWithProfilingTest(unittest.TestCase):
     self.assertIn('sampling_frequency: 1234', text_config)
     self.assertIn('target_cmdline: "org.chromium.chrome*"', text_config)
     self.assertIn('name: "org.chromium.trace_event"', text_config)
-    self.assertIn('name: "org.chromium.trace_metadata"', text_config)
+    self.assertIn('name: "org.chromium.trace_metadata2"', text_config)

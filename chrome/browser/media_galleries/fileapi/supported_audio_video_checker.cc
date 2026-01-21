@@ -9,17 +9,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/services/media_gallery_util/public/cpp/safe_audio_video_checker.h"
-#include "components/download/public/common/quarantine_connection.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/mime_util.h"
@@ -48,7 +46,7 @@ class SupportedAudioVideoExtensions {
       const SupportedAudioVideoExtensions&) = delete;
 
   bool HasSupportedAudioVideoExtension(const base::FilePath& file) {
-    return base::Contains(audio_video_extensions_, file.Extension());
+    return audio_video_extensions_.contains(file.Extension());
   }
 
  private:
@@ -66,7 +64,7 @@ base::File OpenBlocking(const base::FilePath& path) {
 
 }  // namespace
 
-SupportedAudioVideoChecker::~SupportedAudioVideoChecker() {}
+SupportedAudioVideoChecker::~SupportedAudioVideoChecker() = default;
 
 // static
 bool SupportedAudioVideoChecker::SupportsFileType(const base::FilePath& path) {
@@ -86,10 +84,19 @@ void SupportedAudioVideoChecker::StartPreWriteValidation(
                      weak_factory_.GetWeakPtr()));
 }
 
+void SupportedAudioVideoChecker::StartPostWriteValidation(
+    const base::FilePath& dest_platform_path,
+    ResultCallback result_callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+
+  // StartPostWriteValidation() implementation is required. So effectively do
+  // nothing here.
+  std::move(result_callback).Run(base::File::FILE_OK);
+}
+
 SupportedAudioVideoChecker::SupportedAudioVideoChecker(
-    const base::FilePath& path,
-    download::QuarantineConnectionCallback quarantine_connection_callback)
-    : AVScanningFileValidator(quarantine_connection_callback), path_(path) {}
+    const base::FilePath& path)
+    : path_(path) {}
 
 void SupportedAudioVideoChecker::OnFileOpen(base::File file) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);

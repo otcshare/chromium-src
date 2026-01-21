@@ -3,10 +3,17 @@
 // found in the LICENSE file.
 
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher.h"
+
+#include <optional>
+#include <string_view>
+
+#include "account_capabilities_fetcher.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
@@ -14,9 +21,9 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "google_apis/gaia/core_account_id.h"
+#include "google_apis/gaia/gaia_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include <jni.h>
@@ -25,7 +32,7 @@
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher_android.h"
 #include "components/signin/public/android/test_support_jni_headers/AccountCapabilitiesFetcherTestUtil_jni.h"
 #else
-#include "base/strings/string_piece.h"
+
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "components/prefs/testing_pref_service.h"
@@ -57,11 +64,11 @@ CoreAccountInfo GetTestAccountInfoByEmail(const std::string& email) {
 #if BUILDFLAG(IS_ANDROID)
 class TestSupportAndroid {
  public:
-  TestSupportAndroid() {
+  explicit TestSupportAndroid(bool is_get_all_visible_url_enabled /*unused*/) {
     JNIEnv* env = base::android::AttachCurrentThread();
     base::android::ScopedJavaLocalRef<jobject> java_ref =
         signin::Java_AccountCapabilitiesFetcherTestUtil_Constructor(env);
-    java_test_util_ref_.Reset(env, java_ref.obj());
+    java_test_util_ref_.Reset(env, java_ref);
   }
 
   ~TestSupportAndroid() {
@@ -71,17 +78,17 @@ class TestSupportAndroid {
   }
 
   void AddAccount(const CoreAccountInfo& account_info) {
-    JNIEnv* env = base::android::AttachCurrentThread();
     signin::Java_AccountCapabilitiesFetcherTestUtil_expectAccount(
-        env, java_test_util_ref_,
-        ConvertToJavaCoreAccountInfo(env, account_info));
+        base::android::AttachCurrentThread(), java_test_util_ref_,
+        account_info);
   }
 
   std::unique_ptr<AccountCapabilitiesFetcher> CreateFetcher(
       const CoreAccountInfo& account_info,
+      AccountCapabilitiesFetcher::FetchPriority fetch_priority,
       AccountCapabilitiesFetcher::OnCompleteCallback callback) {
     return std::make_unique<AccountCapabilitiesFetcherAndroid>(
-        account_info, std::move(callback));
+        account_info, fetch_priority, std::move(callback));
   }
 
   void ReturnAccountCapabilitiesFetchSuccess(
@@ -109,8 +116,7 @@ class TestSupportAndroid {
                           const AccountCapabilities& capabilities) {
     JNIEnv* env = base::android::AttachCurrentThread();
     signin::Java_AccountCapabilitiesFetcherTestUtil_returnCapabilities(
-        env, java_test_util_ref_,
-        ConvertToJavaCoreAccountInfo(env, account_info),
+        env, java_test_util_ref_, account_info,
         capabilities.ConvertToJavaAccountCapabilities(env));
   }
 
@@ -125,43 +131,59 @@ const char kAccountCapabilitiesResponseFormat[] =
     R"({"accountCapabilities": [%s]})";
 
 const char kSingleCapabilitiyResponseFormat[] =
-    R"({"name": "%s", "booleanValue": %s})";
+    R"({"name": "%.*s", "booleanValue": %s})";
 
 const char kCapabilityParamName[] = "names=";
 
 std::string GenerateValidAccountCapabilitiesResponse(bool capability_value) {
   std::vector<std::string> dict_array;
-  for (const std::string& name :
+  for (std::string_view name :
        AccountCapabilitiesTestMutator::GetSupportedAccountCapabilityNames()) {
-    dict_array.push_back(
-        base::StringPrintf(kSingleCapabilitiyResponseFormat, name.c_str(),
-                           capability_value ? "true" : "false"));
+    dict_array.push_back(base::StringPrintf(kSingleCapabilitiyResponseFormat,
+                                            name.size(), name.data(),
+                                            base::ToString(capability_value)));
   }
   return base::StringPrintf(kAccountCapabilitiesResponseFormat,
                             base::JoinString(dict_array, ",").c_str());
 }
 
-void VerifyAccountCapabilitiesRequest(const network::ResourceRequest& request) {
-  EXPECT_EQ(request.method, "POST");
-  base::StringPiece request_string = request.request_body->elements()
-                                         ->at(0)
-                                         .As<network::DataElementBytes>()
-                                         .AsStringPiece();
-  // The request body should look like:
-  // "names=Name1&names=Name2&names=Name3"
-  std::vector<std::string> requested_capabilities = base::SplitString(
-      request_string, "&", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
-  for (auto& name : requested_capabilities) {
-    EXPECT_TRUE(base::StartsWith(name, kCapabilityParamName));
-    name = name.substr(std::strlen(kCapabilityParamName));
+void VerifyAccountCapabilitiesRequest(const network::ResourceRequest& request,
+                                      bool is_get_all_visible_url_enabled) {
+  if (is_get_all_visible_url_enabled) {
+    EXPECT_EQ(
+        request.url,
+        GaiaUrls::GetInstance()->account_capabilities_get_all_visible_url());
+    EXPECT_EQ(request.method, "GET");
+    EXPECT_FALSE(request.headers.HasHeader("X-HTTP-Method-Override"));
+    EXPECT_FALSE(request.request_body);
+  } else {
+    EXPECT_EQ(request.url,
+              GaiaUrls::GetInstance()->account_capabilities_batch_get_url());
+    EXPECT_EQ(request.method, "POST");
+    EXPECT_EQ(request.headers.GetHeader("X-HTTP-Method-Override"), "GET");
+
+    std::string request_body = network::GetUploadData(request);
+    // The request body should look like:
+    // "names=Name1&names=Name2&names=Name3"
+    std::vector<std::string_view> requested_capabilities =
+        base::SplitStringPiece(request_body, "&", base::KEEP_WHITESPACE,
+                               base::SPLIT_WANT_ALL);
+    for (auto& name : requested_capabilities) {
+      EXPECT_TRUE(base::StartsWith(name, kCapabilityParamName));
+      name = name.substr(std::strlen(kCapabilityParamName));
+    }
+    EXPECT_THAT(
+        requested_capabilities,
+        ::testing::ContainerEq(AccountCapabilitiesTestMutator::
+                                   GetSupportedAccountCapabilityNames()));
   }
-  EXPECT_THAT(requested_capabilities,
-              ::testing::ContainerEq(AccountCapabilitiesTestMutator::
-                                         GetSupportedAccountCapabilityNames()));
 }
+
 class TestSupportGaia {
  public:
-  TestSupportGaia() : fake_oauth2_token_service_(&pref_service_) {
+  explicit TestSupportGaia(bool is_get_all_visible_url_enabled)
+      : is_get_all_visible_url_enabled_(is_get_all_visible_url_enabled),
+        fake_oauth2_token_service_(&pref_service_) {
     ProfileOAuth2TokenService::RegisterProfilePrefs(pref_service_.registry());
   }
 
@@ -174,11 +196,12 @@ class TestSupportGaia {
 
   std::unique_ptr<AccountCapabilitiesFetcher> CreateFetcher(
       const CoreAccountInfo& account_info,
+      AccountCapabilitiesFetcher::FetchPriority fetch_priority,
       AccountCapabilitiesFetcher::OnCompleteCallback callback) {
     return std::make_unique<AccountCapabilitiesFetcherGaia>(
         &fake_oauth2_token_service_,
         test_url_loader_factory_.GetSafeWeakWrapper(), account_info,
-        std::move(callback));
+        fetch_priority, std::move(callback));
   }
 
   void ReturnAccountCapabilitiesFetchSuccess(
@@ -186,15 +209,15 @@ class TestSupportGaia {
       bool capability_value) {
     IssueAccessToken(account_info.account_id);
     ReturnFetchResults(
-        GaiaUrls::GetInstance()->account_capabilities_url(), net::HTTP_OK,
+        GetAccountCapabilitiesUrl(), net::HTTP_OK,
         GenerateValidAccountCapabilitiesResponse(capability_value));
   }
 
   void ReturnAccountCapabilitiesFetchFailure(
       const CoreAccountInfo& account_info) {
     IssueAccessToken(account_info.account_id);
-    ReturnFetchResults(GaiaUrls::GetInstance()->account_capabilities_url(),
-                       net::HTTP_BAD_REQUEST, std::string());
+    ReturnFetchResults(GetAccountCapabilitiesUrl(), net::HTTP_BAD_REQUEST,
+                       std::string());
   }
 
   void SimulateIssueAccessTokenPersistentError(
@@ -206,6 +229,14 @@ class TestSupportGaia {
   }
 
  private:
+  GURL GetAccountCapabilitiesUrl() {
+    if (is_get_all_visible_url_enabled_) {
+      return GaiaUrls::GetInstance()
+          ->account_capabilities_get_all_visible_url();
+    }
+    return GaiaUrls::GetInstance()->account_capabilities_batch_get_url();
+  }
+
   void ReturnFetchResults(const GURL& url,
                           net::HttpStatusCode response_code,
                           const std::string& response_string) {
@@ -215,7 +246,8 @@ class TestSupportGaia {
     // them.
     while (test_url_loader_factory_.IsPending(url.spec())) {
       VerifyAccountCapabilitiesRequest(
-          test_url_loader_factory_.GetPendingRequest(/*index=*/0)->request);
+          test_url_loader_factory_.GetPendingRequest(/*index=*/0)->request,
+          is_get_all_visible_url_enabled_);
       test_url_loader_factory_.SimulateResponseForPendingRequest(
           url, network::URLLoaderCompletionStatus(net::OK),
           network::CreateURLResponseHead(response_code), response_string,
@@ -232,6 +264,7 @@ class TestSupportGaia {
                         .build());
   }
 
+  const bool is_get_all_visible_url_enabled_;
   TestingPrefServiceSimple pref_service_;
   FakeProfileOAuth2TokenService fake_oauth2_token_service_;
   network::TestURLLoaderFactory test_url_loader_factory_;
@@ -242,13 +275,25 @@ using TestSupport = TestSupportGaia;
 
 }  // namespace
 
-class AccountCapabilitiesFetcherTest : public ::testing::Test {
+class AccountCapabilitiesFetcherTest : public ::testing::TestWithParam<bool> {
  public:
+  AccountCapabilitiesFetcherTest()
+      : test_support_(IsGetAllVisibleUrlEnabled()) {
+    feature_list_.InitWithFeatureState(
+        gaia::features::kGetAccountCapabilitiesUsesGetAllVisibleUrl,
+        IsGetAllVisibleUrlEnabled());
+  }
+
   void SetUp() override { test_support_.AddAccount(account_info()); }
 
+  bool IsGetAllVisibleUrlEnabled() const { return GetParam(); }
+
   std::unique_ptr<AccountCapabilitiesFetcher> CreateFetcher(
-      AccountCapabilitiesFetcher::OnCompleteCallback callback) {
-    return test_support_.CreateFetcher(account_info(), std::move(callback));
+      AccountCapabilitiesFetcher::OnCompleteCallback callback,
+      AccountCapabilitiesFetcher::FetchPriority priority =
+          AccountCapabilitiesFetcher::FetchPriority::kForeground) {
+    return test_support_.CreateFetcher(account_info(), priority,
+                                       std::move(callback));
   }
 
   void ReturnAccountCapabilitiesFetchSuccess(bool capability_value) {
@@ -269,11 +314,12 @@ class AccountCapabilitiesFetcherTest : public ::testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
+  base::test::ScopedFeatureList feature_list_;
   CoreAccountInfo account_info_ = GetTestAccountInfoByEmail("test@gmail.com");
   TestSupport test_support_;
 };
 
-TEST_F(AccountCapabilitiesFetcherTest, Success_True) {
+TEST_P(AccountCapabilitiesFetcherTest, Success_True) {
   base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
   std::unique_ptr<AccountCapabilitiesFetcher> fetcher =
       CreateFetcher(callback.Get());
@@ -288,17 +334,42 @@ TEST_F(AccountCapabilitiesFetcherTest, Success_True) {
   ReturnAccountCapabilitiesFetchSuccess(true);
 
 #if !BUILDFLAG(IS_ANDROID)
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Success",
-                          1);
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Failure",
-                          0);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Success", 1);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Failure", 0);
   tester.ExpectUniqueSample(
-      "Signin.AccountCapabilities.FetchResult",
+      "Signin.AccountCapabilities.Foreground.FetchResult",
       AccountCapabilitiesFetcherGaia::FetchResult::kSuccess, 1);
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
 
-TEST_F(AccountCapabilitiesFetcherTest, Success_False) {
+TEST_P(AccountCapabilitiesFetcherTest, Success_True_Background) {
+  base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
+  std::unique_ptr<AccountCapabilitiesFetcher> fetcher = CreateFetcher(
+      callback.Get(), AccountCapabilitiesFetcher::FetchPriority::kBackground);
+  AccountCapabilities expected_capabilities;
+  AccountCapabilitiesTestMutator mutator(&expected_capabilities);
+  mutator.SetAllSupportedCapabilities(true);
+  base::HistogramTester tester;
+
+  fetcher->Start();
+  EXPECT_CALL(callback,
+              Run(account_id(), ::testing::Optional(expected_capabilities)));
+  ReturnAccountCapabilitiesFetchSuccess(true);
+
+#if !BUILDFLAG(IS_ANDROID)
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Background.FetchDuration.Success", 1);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Background.FetchDuration.Failure", 0);
+  tester.ExpectUniqueSample(
+      "Signin.AccountCapabilities.Background.FetchResult",
+      AccountCapabilitiesFetcherGaia::FetchResult::kSuccess, 1);
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
+
+TEST_P(AccountCapabilitiesFetcherTest, Success_False) {
   base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
   std::unique_ptr<AccountCapabilitiesFetcher> fetcher =
       CreateFetcher(callback.Get());
@@ -312,16 +383,16 @@ TEST_F(AccountCapabilitiesFetcherTest, Success_False) {
   ReturnAccountCapabilitiesFetchSuccess(false);
 }
 
-TEST_F(AccountCapabilitiesFetcherTest, FetchFailure) {
+TEST_P(AccountCapabilitiesFetcherTest, FetchFailure) {
   base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
   std::unique_ptr<AccountCapabilitiesFetcher> fetcher =
       CreateFetcher(callback.Get());
   base::HistogramTester tester;
 
   fetcher->Start();
-  absl::optional<AccountCapabilities> expected_capabilities;
+  std::optional<AccountCapabilities> expected_capabilities;
 #if BUILDFLAG(IS_ANDROID)
-  // Android never returns absl::nullopt even if the fetcher has failed to get
+  // Android never returns std::nullopt even if the fetcher has failed to get
   // all capabilities.
   expected_capabilities = AccountCapabilities();
 #endif
@@ -329,12 +400,12 @@ TEST_F(AccountCapabilitiesFetcherTest, FetchFailure) {
   ReturnAccountCapabilitiesFetchFailure();
 
 #if !BUILDFLAG(IS_ANDROID)
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Success",
-                          0);
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Failure",
-                          1);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Success", 0);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Failure", 1);
   tester.ExpectUniqueSample(
-      "Signin.AccountCapabilities.FetchResult",
+      "Signin.AccountCapabilities.Foreground.FetchResult",
       AccountCapabilitiesFetcherGaia::FetchResult::kOAuthError, 1);
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
@@ -342,27 +413,27 @@ TEST_F(AccountCapabilitiesFetcherTest, FetchFailure) {
 // Exclude Android because `AccountCapabilitiesFetcherAndroid` doesn't request
 // an access token.
 #if !BUILDFLAG(IS_ANDROID)
-TEST_F(AccountCapabilitiesFetcherTest, TokenFailure) {
+TEST_P(AccountCapabilitiesFetcherTest, TokenFailure) {
   base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
   std::unique_ptr<AccountCapabilitiesFetcher> fetcher =
       CreateFetcher(callback.Get());
   base::HistogramTester tester;
 
   fetcher->Start();
-  EXPECT_CALL(callback, Run(account_id(), Eq(absl::nullopt)));
+  EXPECT_CALL(callback, Run(account_id(), Eq(std::nullopt)));
   SimulateIssueAccessTokenPersistentError();
 
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Success",
-                          0);
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Failure",
-                          1);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Success", 0);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Failure", 1);
   tester.ExpectUniqueSample(
-      "Signin.AccountCapabilities.FetchResult",
+      "Signin.AccountCapabilities.Foreground.FetchResult",
       AccountCapabilitiesFetcherGaia::FetchResult::kGetTokenFailure, 1);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-TEST_F(AccountCapabilitiesFetcherTest, Cancelled) {
+TEST_P(AccountCapabilitiesFetcherTest, Cancelled) {
   base::MockCallback<AccountCapabilitiesFetcher::OnCompleteCallback> callback;
   std::unique_ptr<AccountCapabilitiesFetcher> fetcher =
       CreateFetcher(callback.Get());
@@ -373,12 +444,26 @@ TEST_F(AccountCapabilitiesFetcherTest, Cancelled) {
   fetcher.reset();
 
 #if !BUILDFLAG(IS_ANDROID)
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Success",
-                          0);
-  tester.ExpectTotalCount("Signin.AccountCapabilities.FetchDuration.Failure",
-                          1);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Success", 0);
+  tester.ExpectTotalCount(
+      "Signin.AccountCapabilities.Foreground.FetchDuration.Failure", 1);
   tester.ExpectUniqueSample(
-      "Signin.AccountCapabilities.FetchResult",
+      "Signin.AccountCapabilities.Foreground.FetchResult",
       AccountCapabilitiesFetcherGaia::FetchResult::kCancelled, 1);
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
+
+INSTANTIATE_TEST_SUITE_P(,
+                         AccountCapabilitiesFetcherTest,
+#if BUILDFLAG(IS_ANDROID)
+                         ::testing::Values(false)
+#else
+                         ::testing::Bool()
+#endif
+
+);
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(AccountCapabilitiesFetcherTestUtil)
+#endif

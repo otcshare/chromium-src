@@ -9,7 +9,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
 #include "services/network/trust_tokens/proto/public.pb.h"
 #include "services/network/trust_tokens/proto/storage.pb.h"
 #include "services/network/trust_tokens/suitable_trust_token_origin.h"
@@ -53,6 +52,8 @@ class InMemoryTrustTokenPersister : public TrustTokenPersister {
 
   base::flat_map<SuitableTrustTokenOrigin, int> GetStoredTrustTokenCounts()
       override;
+
+  IssuerRedemptionRecordMap GetRedemptionRecords() override;
 
  private:
   std::map<SuitableTrustTokenOrigin, std::unique_ptr<TrustTokenToplevelConfig>>

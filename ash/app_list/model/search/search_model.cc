@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace ash {
 
@@ -21,6 +21,10 @@ SearchModel::~SearchModel() {}
 
 void SearchModel::SetSearchEngineIsGoogle(bool is_google) {
   search_box_->SetSearchEngineIsGoogle(is_google);
+}
+
+void SearchModel::SetWouldTriggerLauncherSearchIph(bool would_trigger) {
+  search_box_->SetWouldTriggerIph(would_trigger);
 }
 
 std::vector<SearchResult*> SearchModel::FilterSearchResultsByFunction(

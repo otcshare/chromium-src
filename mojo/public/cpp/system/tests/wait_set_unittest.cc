@@ -4,15 +4,19 @@
 
 #include "mojo/public/cpp/system/wait_set.h"
 
+#include <array>
 #include <set>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/wait.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,7 +27,7 @@ namespace {
 using WaitSetTest = testing::Test;
 
 void WriteMessage(const ScopedMessagePipeHandle& handle,
-                  const base::StringPiece& message) {
+                  const std::string_view& message) {
   MojoResult rv = WriteMessageRaw(handle.get(), message.data(),
                                   static_cast<uint32_t>(message.size()),
                                   nullptr, 0, MOJO_WRITE_MESSAGE_FLAG_NONE);
@@ -204,20 +208,23 @@ TEST_F(WaitSetTest, CloseBeforeWaiting) {
   size_t num_ready_handles = 1;
   Handle ready_handle;
   MojoResult ready_result = MOJO_RESULT_UNKNOWN;
-  wait_set.Wait(nullptr, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(nullptr, &num_ready_handles, base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(1u, num_ready_handles);
   EXPECT_TRUE(ready_handle == handle0_value || ready_handle == handle1_value);
   EXPECT_EQ(MOJO_RESULT_CANCELLED, ready_result);
   EXPECT_EQ(MOJO_RESULT_NOT_FOUND, wait_set.RemoveHandle(handle0_value));
 
-  wait_set.Wait(nullptr, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(nullptr, &num_ready_handles, base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(1u, num_ready_handles);
   EXPECT_TRUE(ready_handle == handle0_value || ready_handle == handle1_value);
   EXPECT_EQ(MOJO_RESULT_CANCELLED, ready_result);
   EXPECT_EQ(MOJO_RESULT_NOT_FOUND, wait_set.RemoveHandle(handle0_value));
 
   // Nothing more to wait on.
-  wait_set.Wait(nullptr, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(nullptr, &num_ready_handles, base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(0u, num_ready_handles);
 }
 
@@ -267,7 +274,9 @@ TEST_F(WaitSetTest, EventOnly) {
   size_t num_ready_handles = 1;
   Handle ready_handle;
   MojoResult ready_result = MOJO_RESULT_UNKNOWN;
-  wait_set.Wait(&ready_event, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(&ready_event, &num_ready_handles,
+                base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(0u, num_ready_handles);
   EXPECT_EQ(&event, ready_event);
 }
@@ -289,7 +298,9 @@ TEST_F(WaitSetTest, EventAndHandle) {
   size_t num_ready_handles = 1;
   Handle ready_handle;
   MojoResult ready_result = MOJO_RESULT_UNKNOWN;
-  wait_set.Wait(&ready_event, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(&ready_event, &num_ready_handles,
+                base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(1u, num_ready_handles);
   EXPECT_EQ(nullptr, ready_event);
   EXPECT_EQ(p.handle1.get(), ready_handle);
@@ -306,7 +317,9 @@ TEST_F(WaitSetTest, EventAndHandle) {
       &event));
   signal_after_delay.Start();
 
-  wait_set.Wait(&ready_event, &num_ready_handles, &ready_handle, &ready_result);
+  wait_set.Wait(&ready_event, &num_ready_handles,
+                base::span_from_ref(ready_handle),
+                base::span_from_ref(ready_result));
   EXPECT_EQ(0u, num_ready_handles);
   EXPECT_EQ(&event, ready_event);
 }
@@ -321,7 +334,7 @@ TEST_F(WaitSetTest, NoStarvation) {
 
   WaitSet wait_set;
 
-  MessagePipe pipes[kNumTestPipes];
+  std::array<MessagePipe, kNumTestPipes> pipes;
   for (size_t i = 0; i < kNumTestPipes; ++i) {
     WriteMessage(pipes[i].handle0, kTestMessage);
     Wait(pipes[i].handle1.get(), MOJO_HANDLE_SIGNAL_READABLE);
@@ -353,10 +366,12 @@ TEST_F(WaitSetTest, NoStarvation) {
       size_t num_ready_handles = 1;
       Handle ready_handle;
       MojoResult ready_result = MOJO_RESULT_UNKNOWN;
-      wait_set.Wait(&ready_event, &num_ready_handles, &ready_handle,
-                    &ready_result);
-      if (ready_event)
+      wait_set.Wait(&ready_event, &num_ready_handles,
+                    base::span_from_ref(ready_handle),
+                    base::span_from_ref(ready_result));
+      if (ready_event) {
         ready_events.insert(ready_event);
+      }
 
       if (num_ready_handles) {
         EXPECT_EQ(1u, num_ready_handles);

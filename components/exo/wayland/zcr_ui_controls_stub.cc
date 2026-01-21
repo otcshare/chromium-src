@@ -6,6 +6,8 @@
 
 namespace exo::wayland {
 
+struct UiControls::UiControlsState {};
+
 UiControls::UiControls(Server* server) {}
 
 UiControls::~UiControls() = default;

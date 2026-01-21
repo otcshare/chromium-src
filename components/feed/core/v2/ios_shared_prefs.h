@@ -5,10 +5,16 @@
 #ifndef COMPONENTS_FEED_CORE_V2_IOS_SHARED_PREFS_H_
 #define COMPONENTS_FEED_CORE_V2_IOS_SHARED_PREFS_H_
 
+#include "components/feed/core/v2/ios_shared_experiments_translator.h"
+
 class PrefService;
 
 namespace feed {
+
+using ::feed::Experiments;
+
 namespace prefs {
+
 void SetLastFetchHadNoticeCard(PrefService& pref_service, bool value);
 bool GetLastFetchHadNoticeCard(const PrefService& pref_service);
 
@@ -25,6 +31,13 @@ void IncrementNoticeCardViewsCount(PrefService& pref_service);
 void IncrementNoticeCardClicksCount(PrefService& pref_service);
 int GetNoticeCardClicksCount(const PrefService& pref_service);
 int GetNoticeCardViewsCount(const PrefService& pref_service);
+
+// Set/get experiments into prefs.
+void SetExperiments(const Experiments& experiments, PrefService& pref_service);
+Experiments GetExperiments(PrefService& pref_service);
+
+void MigrateObsoleteFeedExperimentPref_Jun_2024(PrefService* prefs);
+
 }  // namespace prefs
 }  // namespace feed
 

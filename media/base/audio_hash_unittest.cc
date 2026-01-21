@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include <memory>
 
 #include "media/base/audio_bus.h"
@@ -136,8 +137,8 @@ TEST_F(AudioHashTest, HashIgnoresUpdateOrder) {
   const int channels = bus_one_->channels();
   std::unique_ptr<AudioBus> half_bus = AudioBus::CreateWrapper(channels);
   half_bus->set_frames(half_frames);
-  for (int i = 0; i < channels; ++i)
-    half_bus->SetChannelData(i, bus_one_->channel(i) + half_frames);
+  half_bus->SetAllChannels(
+      bus_one_->AllChannelsSubspan(half_frames, half_frames));
 
   half_hash.Update(half_bus.get(), half_bus->frames());
   EXPECT_EQ(full_hash.ToString(), half_hash.ToString());
@@ -149,7 +150,7 @@ TEST_F(AudioHashTest, VerifySimilarHash) {
   hash_one.Update(bus_one_.get(), bus_one_->frames());
 
   // Twiddle the values inside the first bus.
-  float* channel = bus_one_->channel(0);
+  auto channel = bus_one_->channel(0);
   for (int i = 0; i < bus_one_->frames(); i += bus_one_->frames() / 64)
     channel[i] += 0.0001f;
 

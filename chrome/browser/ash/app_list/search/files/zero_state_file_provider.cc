@@ -4,16 +4,16 @@
 
 #include "chrome/browser/ash/app_list/search/files/zero_state_file_provider.h"
 
+#include <optional>
 #include <string>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
-#include "base/bind.h"
 #include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -22,14 +22,13 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_list/search/files/file_result.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_keyed_service_factory.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_util.h"
 #include "chrome/browser/ash/app_list/search/files/justifications.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/drive/drive_pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using file_manager::file_tasks::FileTasksObserver;
 
@@ -54,10 +53,12 @@ bool IsDriveDisabled(Profile* profile) {
 }  // namespace
 
 ZeroStateFileProvider::ZeroStateFileProvider(Profile* profile)
-    : profile_(profile),
+    : SearchProvider(SearchCategory::kFiles),
+      profile_(profile),
       thumbnail_loader_(profile),
       file_suggest_service_(
-          FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile)),
+          ash::FileSuggestKeyedServiceFactory::GetInstance()->GetService(
+              profile)),
       downloads_path_(
           file_manager::util::GetDownloadsFolderForProfile(profile)) {
   DCHECK(profile_);
@@ -80,7 +81,7 @@ void ZeroStateFileProvider::StartZeroState() {
   }
 
   file_suggest_service_->GetSuggestFileData(
-      FileSuggestionType::kLocalFile,
+      ash::FileSuggestionType::kLocalFile,
       base::BindOnce(&ZeroStateFileProvider::OnSuggestFileDataFetched,
                      weak_factory_.GetWeakPtr()));
 }
@@ -91,25 +92,39 @@ void ZeroStateFileProvider::StopZeroState() {
 }
 
 void ZeroStateFileProvider::OnSuggestFileDataFetched(
-    const absl::optional<std::vector<FileSuggestData>>& suggest_results) {
+    const std::optional<std::vector<ash::FileSuggestData>>& suggest_results) {
   if (suggest_results)
     SetSearchResults(*suggest_results);
 }
 
 void ZeroStateFileProvider::SetSearchResults(
-    const std::vector<FileSuggestData>& results) {
+    const std::vector<ash::FileSuggestData>& results) {
+  const bool timestamp_based_score =
+      ash::features::UseMixedFileLauncherContinueSection();
+  const base::TimeDelta max_recency = ash::GetMaxFileSuggestionRecency();
+
   // Use valid results for search results.
   SearchProvider::Results new_results;
   for (size_t i = 0; i < std::min(results.size(), kMaxLocalFiles); ++i) {
     const auto& filepath = results[i].file_path;
     if (!IsScreenshot(filepath, downloads_path_)) {
       DCHECK(results[i].score.has_value());
+
+      const double score = timestamp_based_score ? ash::ToTimestampBasedScore(
+                                                       results[i], max_recency)
+                                                 : *results[i].score;
       auto result = std::make_unique<FileResult>(
-          /*id=*/kSchema + filepath.value(), filepath,
-          results[i].prediction_reason,
+          results[i].id, filepath, results[i].prediction_reason,
           ash::AppListSearchResultType::kZeroStateFile,
-          ash::SearchResultDisplayType::kContinue, results[i].score.value(),
-          std::u16string(), FileResult::Type::kFile, profile_);
+          ash::SearchResultDisplayType::kContinue, score, std::u16string(),
+          FileResult::Type::kFile, profile_, /*thumbnail_loader=*/nullptr);
+      if (results[i].modified_time) {
+        result->SetContinueFileSuggestionType(
+            ash::ContinueFileSuggestionType::kModifiedByCurrentUserFile);
+      } else if (results[i].viewed_time) {
+        result->SetContinueFileSuggestionType(
+            ash::ContinueFileSuggestionType::kViewedFile);
+      }
       new_results.push_back(std::move(result));
     }
   }
@@ -131,13 +146,15 @@ void ZeroStateFileProvider::AppendFakeSearchResults(Results* results) {
         /*id=*/kSchema + path.value(), path, u"-",
         ash::AppListSearchResultType::kZeroStateFile,
         ash::SearchResultDisplayType::kContinue, 0.1f, std::u16string(),
-        FileResult::Type::kFile, profile_));
+        FileResult::Type::kFile, profile_, /*thumbnail_loader=*/nullptr));
   }
 }
 
-void ZeroStateFileProvider::OnFileSuggestionUpdated(FileSuggestionType type) {
-  if (type == FileSuggestionType::kLocalFile)
+void ZeroStateFileProvider::OnFileSuggestionUpdated(
+    ash::FileSuggestionType type) {
+  if (type == ash::FileSuggestionType::kLocalFile) {
     StartZeroState();
+  }
 }
 
 }  // namespace app_list

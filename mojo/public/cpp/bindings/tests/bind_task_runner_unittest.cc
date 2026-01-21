@@ -5,9 +5,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
@@ -20,7 +20,7 @@
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/interfaces/bindings/tests/test_associated_interfaces.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_associated_interfaces.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -42,7 +42,6 @@ class TestTaskRunner : public base::SequencedTaskRunner {
                                   base::OnceClosure task,
                                   base::TimeDelta delay) override {
     NOTREACHED();
-    return false;
   }
 
   bool PostDelayedTask(const base::Location& from_here,
@@ -74,8 +73,9 @@ class TestTaskRunner : public base::SequencedTaskRunner {
           {
             base::AutoUnlock unlocker(lock_);
             std::move(task).Run();
-            if (quit_called_)
+            if (quit_called_) {
               return;
+            }
           }
         }
       }
@@ -136,10 +136,11 @@ class IntegerSenderImpl : public IntegerSender {
   void set_echo_handler(const EchoHandler& handler) { echo_handler_ = handler; }
 
   void Echo(int32_t value, EchoCallback callback) override {
-    if (echo_handler_.is_null())
+    if (echo_handler_.is_null()) {
       std::move(callback).Run(value);
-    else
+    } else {
       echo_handler_.Run(value, std::move(callback));
+    }
   }
   void Send(int32_t value) override { NOTREACHED(); }
 

@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_NO_CREDS_H_
 #define COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_NO_CREDS_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/secure_payment_confirmation_no_creds_model.h"
 
@@ -41,6 +41,7 @@ class SecurePaymentConfirmationNoCreds {
                   OptOutCallback opt_out_callback);
   void CloseDialog();
   bool ClickOptOutForTesting();
+  bool AcceptDialogForTesting();
 
  private:
   // On desktop, the SecurePaymentConfirmationNoCredsView object is memory

@@ -9,8 +9,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/strings/string_piece.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/win/async_operation.h"
@@ -56,7 +55,7 @@ using Microsoft::WRL::Make;
 FakeGattDeviceServiceWinrt::FakeGattDeviceServiceWinrt(
     BluetoothTestWinrt* bluetooth_test_winrt,
     ComPtr<FakeBluetoothLEDeviceWinrt> fake_device,
-    base::StringPiece uuid,
+    std::string_view uuid,
     uint16_t attribute_handle,
     bool allowed)
     : bluetooth_test_winrt_(bluetooth_test_winrt),
@@ -70,6 +69,13 @@ FakeGattDeviceServiceWinrt::FakeGattDeviceServiceWinrt(
 
 FakeGattDeviceServiceWinrt::~FakeGattDeviceServiceWinrt() {
   fake_device_->RemoveReference();
+}
+
+void FakeGattDeviceServiceWinrt::ClearBluetoothTestWinrt() {
+  bluetooth_test_winrt_ = nullptr;
+  for (const auto& characteristic : fake_characteristics_) {
+    characteristic->ClearBluetoothTestWinrt();
+  }
 }
 
 HRESULT FakeGattDeviceServiceWinrt::GetCharacteristics(
@@ -200,8 +206,11 @@ FakeGattDeviceServiceWinrt::GetIncludedServicesForUuidWithCacheModeAsync(
 }
 
 void FakeGattDeviceServiceWinrt::SimulateGattCharacteristic(
-    base::StringPiece uuid,
+    std::string_view uuid,
     int properties) {
+  if (!bluetooth_test_winrt_) {
+    return;
+  }
   // In order to ensure attribute handles are unique across the Gatt Server
   // we reserve sufficient address space for descriptors for each
   // characteristic. We allocate space for 32 descriptors, which should be

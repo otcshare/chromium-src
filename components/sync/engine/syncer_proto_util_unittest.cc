@@ -7,51 +7,53 @@
 #include <memory>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/time/time.h"
 #include "components/sync/engine/cycle/sync_cycle_context.h"
-#include "components/sync/protocol/bookmark_specifics.pb.h"
-#include "components/sync/protocol/password_specifics.pb.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync/test/data_type_test_util.h"
+#include "components/sync/test/fake_sync_scheduler.h"
 #include "components/sync/test/mock_connection_manager.h"
-#include "components/sync/test/model_type_test_util.h"
+#include "net/base/net_errors.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
 
 using sync_pb::ClientToServerMessage;
+using sync_pb::ClientToServerResponse;
 using sync_pb::CommitResponse_EntryResponse;
 
 namespace syncer {
 
 // Builds a ClientToServerResponse with some data type ids, including
 // invalid ones.  GetTypesToMigrate() should return only the valid
-// model types.
+// data types.
 TEST(SyncerProtoUtil, GetTypesToMigrate) {
   sync_pb::ClientToServerResponse response;
   response.add_migrated_data_type_id(
-      GetSpecificsFieldNumberFromModelType(BOOKMARKS));
+      GetSpecificsFieldNumberFromDataType(BOOKMARKS));
   response.add_migrated_data_type_id(
-      GetSpecificsFieldNumberFromModelType(HISTORY_DELETE_DIRECTIVES));
+      GetSpecificsFieldNumberFromDataType(HISTORY_DELETE_DIRECTIVES));
   response.add_migrated_data_type_id(-1);
-  EXPECT_EQ(ModelTypeSet(BOOKMARKS, HISTORY_DELETE_DIRECTIVES),
+  EXPECT_EQ(DataTypeSet({BOOKMARKS, HISTORY_DELETE_DIRECTIVES}),
             GetTypesToMigrate(response));
 }
 
 // Builds a ClientToServerResponse_Error with some error data type
 // ids, including invalid ones.  ConvertErrorPBToSyncProtocolError() should
-// return a SyncProtocolError with only the valid model types.
+// return a SyncProtocolError with only the valid data types.
 TEST(SyncerProtoUtil, ConvertErrorPBToSyncProtocolError) {
   sync_pb::ClientToServerResponse_Error error_pb;
   error_pb.set_error_type(sync_pb::SyncEnums::THROTTLED);
   error_pb.add_error_data_type_ids(
-      GetSpecificsFieldNumberFromModelType(BOOKMARKS));
+      GetSpecificsFieldNumberFromDataType(BOOKMARKS));
   error_pb.add_error_data_type_ids(
-      GetSpecificsFieldNumberFromModelType(HISTORY_DELETE_DIRECTIVES));
+      GetSpecificsFieldNumberFromDataType(HISTORY_DELETE_DIRECTIVES));
   error_pb.add_error_data_type_ids(-1);
   SyncProtocolError error = ConvertErrorPBToSyncProtocolError(error_pb);
-  EXPECT_EQ(ModelTypeSet(BOOKMARKS, HISTORY_DELETE_DIRECTIVES),
+  EXPECT_EQ(DataTypeSet({BOOKMARKS, HISTORY_DELETE_DIRECTIVES}),
             error.error_data_types);
 }
 
@@ -63,8 +65,7 @@ class SyncerProtoUtilTest : public testing::Test {
         /*extensions_activity=*/nullptr,
         /*listeners=*/std::vector<SyncEngineEventListener*>(),
         /*debug_info_getter=*/nullptr,
-        /*model_type_registry=*/nullptr,
-        /*invalidator_client_id=*/"",
+        /*data_type_registry=*/nullptr,
         /*cache_guid=*/"",
         /*birthday=*/"",
         /*bag_of_chips=*/"",
@@ -174,38 +175,39 @@ TEST_F(SyncerProtoUtilTest, VerifyEncryptionObsolete) {
   EXPECT_EQ(DISABLE_SYNC_ON_CLIENT, sync_protocol_error.action);
 }
 
-class DummyConnectionManager : public ServerConnectionManager {
+class FakeConnectionManager : public ServerConnectionManager {
  public:
-  DummyConnectionManager() = default;
+  explicit FakeConnectionManager(
+      const sync_pb::ClientToServerResponse& response)
+      : response_(response) {}
 
   HttpResponse PostBuffer(const std::string& buffer_in,
                           const std::string& access_token,
-                          bool allow_batching,
                           std::string* buffer_out) override {
     if (send_error_) {
-      return HttpResponse::ForIoError();
+      return HttpResponse::ForNetError(net::ERR_FAILED);
     }
 
-    sync_pb::ClientToServerResponse client_to_server_response;
-    client_to_server_response.SerializeToString(buffer_out);
+    response_.SerializeToString(buffer_out);
 
-    return HttpResponse::ForSuccess();
+    return HttpResponse::ForSuccessForTest();
   }
 
   void set_send_error(bool send) { send_error_ = send; }
 
  private:
+  const sync_pb::ClientToServerResponse response_;
   bool send_error_ = false;
 };
 
 TEST_F(SyncerProtoUtilTest, PostAndProcessHeaders) {
-  DummyConnectionManager dcm;
+  FakeConnectionManager dcm(ClientToServerResponse{});
   ClientToServerMessage msg;
   SyncerProtoUtil::SetProtocolVersion(&msg);
   msg.set_share("required");
   msg.set_message_contents(ClientToServerMessage::GET_UPDATES);
-  sync_pb::ClientToServerResponse response;
 
+  sync_pb::ClientToServerResponse response;
   base::HistogramTester histogram_tester;
   dcm.set_send_error(true);
   EXPECT_FALSE(SyncerProtoUtil::PostAndProcessHeaders(&dcm, msg, &response));

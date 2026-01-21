@@ -16,7 +16,7 @@
 ForegroundDurationUKMObserver::ForegroundDurationUKMObserver()
     : last_page_input_timing_(page_load_metrics::mojom::InputTiming::New()) {}
 
-ForegroundDurationUKMObserver::~ForegroundDurationUKMObserver() {}
+ForegroundDurationUKMObserver::~ForegroundDurationUKMObserver() = default;
 
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 ForegroundDurationUKMObserver::OnStart(
@@ -97,35 +97,16 @@ void ForegroundDurationUKMObserver::RecordUkmIfInForeground(
       GetDelegate().GetPageUkmSourceId());
   ukm::UkmRecorder* ukm_recorder = ukm::UkmRecorder::Get();
   ukm_builder.SetForegroundDuration(foreground_duration.InMilliseconds());
-  RecordInputTimingMetrics(&ukm_builder);
   ukm_builder.Record(ukm_recorder);
   currently_in_foreground_ = false;
 }
 
-void ForegroundDurationUKMObserver::RecordInputTimingMetrics(
-    ukm::builders::PageForegroundSession* ukm_builder) {
-  // TODO(hbsong): crbug.com/1105665
-  if (GetDelegate().GetPageInputTiming().total_input_delay.InMilliseconds() < 0)
-    return;
-
-  ukm_builder
-      ->SetForegroundNumInputEvents(
-          GetDelegate().GetPageInputTiming().num_input_events -
-          last_page_input_timing_->num_input_events)
-      .SetForegroundTotalInputDelay(
-          (GetDelegate().GetPageInputTiming().total_input_delay -
-           last_page_input_timing_->total_input_delay)
-              .InMilliseconds())
-      .SetForegroundTotalAdjustedInputDelay(
-          (GetDelegate().GetPageInputTiming().total_adjusted_input_delay -
-           last_page_input_timing_->total_adjusted_input_delay)
-              .InMilliseconds());
-  last_page_input_timing_ = GetDelegate().GetPageInputTiming().Clone();
-}
-
 void ForegroundDurationUKMObserver::DidActivatePrerenderedPage(
     content::NavigationHandle* navigation_handle) {
-  DCHECK(GetDelegate().WasPrerenderedThenActivatedInForeground());
-  last_time_shown_ = base::TimeTicks::Now();
-  currently_in_foreground_ = true;
+  if (GetDelegate().WasPrerenderedThenActivatedInForeground()) {
+    last_time_shown_ = base::TimeTicks::Now();
+    currently_in_foreground_ = true;
+  } else {
+    currently_in_foreground_ = false;
+  }
 }

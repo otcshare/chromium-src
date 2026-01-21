@@ -32,8 +32,7 @@ class DummySurface : public SurfaceOzoneCanvas {
   SkCanvas* GetCanvas() override { return surface_->getCanvas(); }
 
   void ResizeCanvas(const gfx::Size& viewport_size, float scale) override {
-    surface_ =
-        SkSurface::MakeNull(viewport_size.width(), viewport_size.height());
+    surface_ = SkSurfaces::Null(viewport_size.width(), viewport_size.height());
   }
 
   void PresentCanvas(const gfx::Rect& damage) override {}
@@ -59,12 +58,12 @@ class CastPixmap : public gfx::NativePixmap {
   size_t GetDmaBufOffset(size_t plane) const override { return 0; }
   size_t GetDmaBufPlaneSize(size_t plane) const override { return 0; }
   uint64_t GetBufferFormatModifier() const override { return 0; }
-  gfx::BufferFormat GetBufferFormat() const override {
-    return gfx::BufferFormat::BGRA_8888;
+  viz::SharedImageFormat GetSharedImageFormat() const override {
+    return viz::SinglePlaneFormat::kBGRA_8888;
   }
   size_t GetNumberOfPlanes() const override { return 1; }
   bool SupportsZeroCopyWebGPUImport() const override {
-    // TODO(crbug.com/1258986): Figure out how to import multi-planar pixmap
+    // TODO(crbug.com/40201271): Figure out how to import multi-planar pixmap
     // into WebGPU without copy.
     return false;
   }
@@ -78,7 +77,7 @@ class CastPixmap : public gfx::NativePixmap {
       std::vector<gfx::GpuFence> release_fences) override {
     return false;
   }
-  gfx::NativePixmapHandle ExportHandle() override {
+  gfx::NativePixmapHandle ExportHandle() const override {
     return gfx::NativePixmapHandle();
   }
 
@@ -103,16 +102,16 @@ SurfaceFactoryCast::~SurfaceFactoryCast() {}
 std::vector<gl::GLImplementationParts>
 SurfaceFactoryCast::GetAllowedGLImplementations() {
   std::vector<gl::GLImplementationParts> impls;
-  if (egl_implementation_)
-    impls.emplace_back(
-        gl::GLImplementationParts(gl::kGLImplementationEGLGLES2));
+  if (egl_implementation_) {
+    impls.push_back(gl::GLImplementationParts(gl::kGLImplementationEGLANGLE));
+  }
   return impls;
 }
 
 GLOzone* SurfaceFactoryCast::GetGLOzone(
     const gl::GLImplementationParts& implementation) {
   switch (implementation.gl) {
-    case gl::kGLImplementationEGLGLES2:
+    case gl::kGLImplementationEGLANGLE:
       return egl_implementation_.get();
     default:
       return nullptr;
@@ -131,9 +130,9 @@ scoped_refptr<gfx::NativePixmap> SurfaceFactoryCast::CreateNativePixmap(
     gfx::AcceleratedWidget widget,
     gpu::VulkanDeviceQueue* device_queue,
     gfx::Size size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage,
-    absl::optional<gfx::Size> framebuffer_size) {
+    std::optional<gfx::Size> framebuffer_size) {
   DCHECK(!framebuffer_size || framebuffer_size == size);
   return base::MakeRefCounted<CastPixmap>();
 }

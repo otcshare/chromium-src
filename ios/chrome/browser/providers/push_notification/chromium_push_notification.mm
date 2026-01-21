@@ -2,13 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import "base/task/sequenced_task_runner.h"
 #import "ios/public/provider/chrome/browser/push_notification/push_notification_api.h"
 
-#import "base/threading/sequenced_task_runner_handle.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+class GaiaId;
 
 namespace ios {
 namespace provider {
@@ -18,6 +15,20 @@ namespace {
 NSString* const kChromiumPushNotificationErrorDomain =
     @"chromium_push_notification_error_domain";
 
+// Helper method that asynchronously invoke `completion_handler`
+// with an `NSFeatureUnsupportedError` on the current sequence.
+void FailWithUnsupportedFeatureError(
+    PushNotificationService::CompletionHandler completion_handler) {
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(^() {
+        NSError* error =
+            [NSError errorWithDomain:kChromiumPushNotificationErrorDomain
+                                code:NSFeatureUnsupportedError
+                            userInfo:nil];
+        completion_handler(error);
+      }));
+}
+
 class ChromiumPushNotificationService final : public PushNotificationService {
  public:
   // PushNotificationService implementation.
@@ -25,11 +36,15 @@ class ChromiumPushNotificationService final : public PushNotificationService {
                       void (^completion_handler)(NSError* error)) final;
   void UnregisterDevice(void (^completion_handler)(NSError* error)) final;
   bool DeviceTokenIsSet() const final;
+  std::string GetRepresentativeTargetIdForGaiaId(const GaiaId& gaia_id) final;
 
  protected:
   // PushNotificationService implementation.
   void SetAccountsToDevice(NSArray<NSString*>* account_ids,
                            CompletionHandler completion_handler) final;
+  void SetPreferences(const GaiaId& account_id,
+                      PreferenceMap preference_map,
+                      CompletionHandler completion_handler) final;
 };
 
 void ChromiumPushNotificationService::RegisterDevice(
@@ -38,15 +53,7 @@ void ChromiumPushNotificationService::RegisterDevice(
   // Chromium does not initialize the device's connection to the push
   // notification server. As a result, the `completion_handler` is called with
   // a NSFeatureUnsupportedError.
-
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(^() {
-        NSError* error =
-            [NSError errorWithDomain:kChromiumPushNotificationErrorDomain
-                                code:NSFeatureUnsupportedError
-                            userInfo:nil];
-        completion_handler(error);
-      }));
+  FailWithUnsupportedFeatureError(completion_handler);
 }
 
 void ChromiumPushNotificationService::UnregisterDevice(
@@ -54,18 +61,16 @@ void ChromiumPushNotificationService::UnregisterDevice(
   // Chromium does not unregister the device on the push notification server. As
   // a result, the `completion_handler` is called with a
   // NSFeatureUnsupportedError.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(^() {
-        NSError* error =
-            [NSError errorWithDomain:kChromiumPushNotificationErrorDomain
-                                code:NSFeatureUnsupportedError
-                            userInfo:nil];
-        completion_handler(error);
-      }));
+  FailWithUnsupportedFeatureError(completion_handler);
 }
 
 bool ChromiumPushNotificationService::DeviceTokenIsSet() const {
   return false;
+}
+
+std::string ChromiumPushNotificationService::GetRepresentativeTargetIdForGaiaId(
+    const GaiaId& gaia_id) {
+  return "";
 }
 
 void ChromiumPushNotificationService::SetAccountsToDevice(
@@ -74,17 +79,18 @@ void ChromiumPushNotificationService::SetAccountsToDevice(
   // Chromium does not initialize the device's connection to the push
   // notification server. As a result, the `completion_handler` is called with
   // a NSFeatureUnsupportedError.
-
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(^() {
-        NSError* error =
-            [NSError errorWithDomain:kChromiumPushNotificationErrorDomain
-                                code:NSFeatureUnsupportedError
-                            userInfo:nil];
-        completion_handler(error);
-      }));
+  FailWithUnsupportedFeatureError(completion_handler);
 }
 
+void ChromiumPushNotificationService::SetPreferences(
+    const GaiaId& account_id,
+    PreferenceMap preference_map,
+    CompletionHandler completion_handler) {
+  // Chromium does not initialize the device's connection to the push
+  // notification server. As a result, the `completion_handler` is called with
+  // a NSFeatureUnsupportedError.
+  FailWithUnsupportedFeatureError(completion_handler);
+}
 }  // namespace
 
 std::unique_ptr<PushNotificationService> CreatePushNotificationService() {

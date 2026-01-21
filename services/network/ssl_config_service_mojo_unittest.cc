@@ -4,12 +4,13 @@
 
 #include "services/network/ssl_config_service_mojo.h"
 
+#include <array>
+
 #include "base/feature_list.h"
-#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/test/repeating_test_future.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "crypto/sha2.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -36,6 +37,7 @@
 #include "services/network/test/fake_test_cert_verifier_params_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/boringssl/src/include/openssl/ssl.h"
 
 namespace network {
 namespace {
@@ -49,14 +51,14 @@ class TestSSLConfigServiceObserver : public net::SSLConfigService::Observer {
   }
 
   ~TestSSLConfigServiceObserver() override {
-    EXPECT_TRUE(config_changed_calls_.IsEmpty())
+    EXPECT_FALSE(config_changed_call_.IsReady())
         << "Unexpected calls to OnSSLContextConfigChanged()";
     ssl_config_service_->RemoveObserver(this);
   }
 
   // net::SSLConfigService::Observer implementation:
   void OnSSLContextConfigChanged() override {
-    config_changed_calls_.AddValue(ssl_config_service_->GetSSLContextConfig());
+    config_changed_call_.SetValue(ssl_config_service_->GetSSLContextConfig());
   }
 
   // Waits for a SSLContextConfig change. The first time it's called, waits for
@@ -65,23 +67,23 @@ class TestSSLConfigServiceObserver : public net::SSLConfigService::Observer {
   // happens, and fails if more than once change happens between calls, or
   // during a call.
   net::SSLContextConfig WaitForChange() {
-    EXPECT_TRUE(config_changed_calls_.Wait())
+    EXPECT_TRUE(config_changed_call_.Wait())
         << "Missing call to OnSSLContextConfigChanged()";
-    return config_changed_calls_.Take();
+    return config_changed_call_.Take();
   }
 
  private:
   const raw_ptr<net::SSLConfigService> ssl_config_service_;
 
-  // All calls to OnSSLContextConfigChanged().
-  base::test::RepeatingTestFuture<net::SSLContextConfig> config_changed_calls_;
+  // Most recent call to OnSSLContextConfigChanged().
+  base::test::TestFuture<net::SSLContextConfig> config_changed_call_;
 };
 
 class TestCertVerifierConfigObserver : public net::CertVerifier {
  public:
   TestCertVerifierConfigObserver() = default;
   ~TestCertVerifierConfigObserver() override {
-    EXPECT_TRUE(set_config_calls_.IsEmpty())
+    EXPECT_FALSE(set_config_call_.IsReady())
         << "Unexpected call to SetConfig()";
   }
 
@@ -94,22 +96,34 @@ class TestCertVerifierConfigObserver : public net::CertVerifier {
     ADD_FAILURE() << "Verify should not be called by tests";
     return net::ERR_FAILED;
   }
-  void SetConfig(const Config& config) override {
-    set_config_calls_.AddValue(config);
+  void Verify2QwacBinding(
+      const std::string& binding,
+      const std::string& hostname,
+      const scoped_refptr<net::X509Certificate>& tls_cert,
+      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+          callback,
+      const net::NetLogWithSource& net_log) override {
+    ADD_FAILURE();
+    std::move(callback).Run(nullptr);
   }
+  void SetConfig(const Config& config) override {
+    set_config_call_.SetValue(config);
+  }
+  void AddObserver(Observer* observer) override {}
+  void RemoveObserver(Observer* observer) override {}
 
   // Waits for a SSLConfig change. The first time it's called, waits for the
   // first change, if one hasn't been observed already, the second time, waits
   // for the second, etc. Must be called once for each change that happens, and
   // fails it more than once change happens between calls, or during a call.
   net::CertVerifier::Config WaitForChange() {
-    EXPECT_TRUE(set_config_calls_.Wait()) << "Missing call to SetConfig()";
-    return set_config_calls_.Take();
+    EXPECT_TRUE(set_config_call_.Wait()) << "Missing call to SetConfig()";
+    return set_config_call_.Take();
   }
 
  private:
-  // All calls to SetConfig().
-  base::test::RepeatingTestFuture<Config> set_config_calls_;
+  // Most recent call to SetConfig().
+  base::test::TestFuture<Config> set_config_call_;
 };
 
 class NetworkServiceSSLConfigServiceTest : public testing::Test {
@@ -157,40 +171,32 @@ class NetworkServiceSSLConfigServiceTest : public testing::Test {
                           const net::SSLContextConfig& expected_net_config) {
     // The expected configuration must not be the default configuration, or the
     // change test won't send an event.
-    EXPECT_FALSE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        net::SSLContextConfig(), expected_net_config));
+    EXPECT_NE(net::SSLContextConfig(), expected_net_config);
 
     // Set up |mojo_config| as the initial configuration of a NetworkContext.
     mojom::NetworkContextParamsPtr network_context_params =
         mojom::NetworkContextParams::New();
     network_context_params->initial_ssl_config = mojo_config.Clone();
     SetUpNetworkContext(std::move(network_context_params));
-    EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        GetSSLContextConfig(), expected_net_config));
+    EXPECT_EQ(GetSSLContextConfig(), expected_net_config);
     // Sanity check.
-    EXPECT_FALSE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        GetSSLContextConfig(), net::SSLContextConfig()));
+    EXPECT_NE(GetSSLContextConfig(), net::SSLContextConfig());
 
     // Reset the configuration to the default ones, and check the results.
     TestSSLConfigServiceObserver observer(
         network_context_->url_request_context()->ssl_config_service());
     ssl_config_client_->OnSSLConfigUpdated(mojom::SSLConfig::New());
     net::SSLContextConfig config_during_change = observer.WaitForChange();
-    EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        GetSSLContextConfig(), net::SSLContextConfig()));
-    EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        config_during_change, net::SSLContextConfig()));
+    EXPECT_EQ(GetSSLContextConfig(), net::SSLContextConfig());
+    EXPECT_EQ(config_during_change, net::SSLContextConfig());
     // Sanity check.
-    EXPECT_FALSE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        GetSSLContextConfig(), expected_net_config));
+    EXPECT_NE(GetSSLContextConfig(), expected_net_config);
 
     // Set the configuration to |mojo_config| again, and check the results.
     ssl_config_client_->OnSSLConfigUpdated(mojo_config.Clone());
     config_during_change = observer.WaitForChange();
-    EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        GetSSLContextConfig(), expected_net_config));
-    EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-        config_during_change, expected_net_config));
+    EXPECT_EQ(GetSSLContextConfig(), expected_net_config);
+    EXPECT_EQ(config_during_change, expected_net_config);
   }
 
   // Runs two conversion tests for |mojo_config|.  Uses it as an initial
@@ -246,8 +252,7 @@ class NetworkServiceSSLConfigServiceTest : public testing::Test {
 // net::SSLConfig.
 TEST_F(NetworkServiceSSLConfigServiceTest, NoSSLConfig) {
   SetUpNetworkContext(mojom::NetworkContextParams::New());
-  EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-      GetSSLContextConfig(), net::SSLContextConfig()));
+  EXPECT_EQ(GetSSLContextConfig(), net::SSLContextConfig());
 
   // Make sure the default TLS version range is as expected.
   EXPECT_EQ(net::kDefaultSSLVersionMin, GetSSLContextConfig().version_min);
@@ -261,8 +266,7 @@ TEST_F(NetworkServiceSSLConfigServiceTest, Default) {
       mojom::NetworkContextParams::New();
   network_context_params->initial_ssl_config = mojom::SSLConfig::New();
   SetUpNetworkContext(std::move(network_context_params));
-  EXPECT_TRUE(net::SSLConfigService::SSLContextConfigsAreEqualForTesting(
-      GetSSLContextConfig(), net::SSLContextConfig()));
+  EXPECT_EQ(GetSSLContextConfig(), net::SSLContextConfig());
 
   // Make sure the default TLS version range is as expected.
   EXPECT_EQ(net::kDefaultSSLVersionMin, GetSSLContextConfig().version_min);
@@ -327,29 +331,15 @@ TEST_F(NetworkServiceSSLConfigServiceTest, Sha1LocalAnchorsEnabled) {
   RunCertConversionTests(*mojo_config, expected_net_config);
 }
 
-TEST_F(NetworkServiceSSLConfigServiceTest, SymantecEnforcementDisabled) {
-  net::CertVerifier::Config expected_net_config;
-  // Use the opposite of the default value.
-  expected_net_config.disable_symantec_enforcement =
-      !expected_net_config.disable_symantec_enforcement;
-
-  mojom::SSLConfigPtr mojo_config = mojom::SSLConfig::New();
-  mojo_config->symantec_enforcement_disabled =
-      expected_net_config.disable_symantec_enforcement;
-
-  RunCertConversionTests(*mojo_config, expected_net_config);
-}
-
 TEST_F(NetworkServiceSSLConfigServiceTest, SSLVersion) {
-  const struct {
+  struct VersionTable {
     mojom::SSLVersion mojo_ssl_version;
     int net_ssl_version;
-  } kVersionTable[] = {
-      {mojom::SSLVersion::kTLS1, net::SSL_PROTOCOL_VERSION_TLS1},
-      {mojom::SSLVersion::kTLS11, net::SSL_PROTOCOL_VERSION_TLS1_1},
+  };
+  const auto kVersionTable = std::to_array<VersionTable>({
       {mojom::SSLVersion::kTLS12, net::SSL_PROTOCOL_VERSION_TLS1_2},
       {mojom::SSLVersion::kTLS13, net::SSL_PROTOCOL_VERSION_TLS1_3},
-  };
+  });
 
   for (size_t min_index = 0; min_index < std::size(kVersionTable);
        ++min_index) {
@@ -450,6 +440,113 @@ TEST_F(NetworkServiceSSLConfigServiceTest, CanShareConnectionWithClientCerts) {
       config_service->CanShareConnectionWithClientCerts("example.com"));
   EXPECT_FALSE(
       config_service->CanShareConnectionWithClientCerts("example.net"));
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest,
+       NamedGroupsConfigPostQuantumDisabled) {
+  net::SSLContextConfig expected_net_config;
+  expected_net_config.supported_named_groups = {
+      {.group_id = SSL_GROUP_X25519, .send_key_share = true},
+      {.group_id = SSL_GROUP_SECP256R1, .send_key_share = false},
+      {.group_id = SSL_GROUP_SECP384R1, .send_key_share = false},
+  };
+
+  mojom::SSLConfigPtr mojo_config = mojom::SSLConfig::New();
+  mojo_config->post_quantum_key_agreement_enabled = false;
+
+  RunConversionTests(*mojo_config, expected_net_config);
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest, NamedGroupsDefaultPreset) {
+  mojom::NetworkContextParamsPtr network_context_params =
+      mojom::NetworkContextParams::New();
+  network_context_params->initial_ssl_config = mojom::SSLConfig::New();
+  EXPECT_EQ(network_context_params->initial_ssl_config->named_groups_preset,
+            network::mojom::SSLNamedGroupsPreset::kDefault);
+  SetUpNetworkContext(std::move(network_context_params));
+
+  net::SSLContextConfig net_config = GetSSLContextConfig();
+  std::vector<uint16_t> expected_supported_groups = {
+      SSL_GROUP_X25519_MLKEM768, SSL_GROUP_X25519, SSL_GROUP_SECP256R1,
+      SSL_GROUP_SECP384R1};
+  EXPECT_EQ(net_config.GetSupportedGroups(), expected_supported_groups);
+
+  std::vector<uint16_t> expected_key_shares = {SSL_GROUP_X25519_MLKEM768,
+                                               SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(/*key_shares_only=*/true),
+            expected_key_shares);
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest,
+       NamedGroupsDefaultPostQuantumDisabled) {
+  mojom::NetworkContextParamsPtr network_context_params =
+      mojom::NetworkContextParams::New();
+  network_context_params->initial_ssl_config = mojom::SSLConfig::New();
+  network_context_params->initial_ssl_config
+      ->post_quantum_key_agreement_enabled = false;
+  EXPECT_EQ(network_context_params->initial_ssl_config->named_groups_preset,
+            network::mojom::SSLNamedGroupsPreset::kDefault);
+  SetUpNetworkContext(std::move(network_context_params));
+
+  net::SSLContextConfig net_config = GetSSLContextConfig();
+  std::vector<uint16_t> expected_supported_groups = {
+      SSL_GROUP_X25519, SSL_GROUP_SECP256R1, SSL_GROUP_SECP384R1};
+  EXPECT_EQ(net_config.GetSupportedGroups(), expected_supported_groups);
+
+  std::vector<uint16_t> expected_key_shares = {SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(/*key_shares_only=*/true),
+            expected_key_shares);
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest, NamedGroupsCnsa2Preset) {
+  mojom::NetworkContextParamsPtr network_context_params =
+      mojom::NetworkContextParams::New();
+  network_context_params->initial_ssl_config = mojom::SSLConfig::New();
+  network_context_params->initial_ssl_config->named_groups_preset =
+      network::mojom::SSLNamedGroupsPreset::kCnsa2;
+  SetUpNetworkContext(std::move(network_context_params));
+
+  net::SSLContextConfig net_config = GetSSLContextConfig();
+  std::vector<uint16_t> expected_supported_groups = {
+      SSL_GROUP_MLKEM1024, SSL_GROUP_X25519_MLKEM768, SSL_GROUP_SECP384R1,
+      SSL_GROUP_SECP256R1, SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(), expected_supported_groups);
+
+  std::vector<uint16_t> expected_key_shares = {SSL_GROUP_X25519_MLKEM768,
+                                               SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(/*key_shares_only=*/true),
+            expected_key_shares);
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest,
+       NamedGroupsCnsa2PostQuantumDisabled) {
+  mojom::NetworkContextParamsPtr network_context_params =
+      mojom::NetworkContextParams::New();
+  network_context_params->initial_ssl_config = mojom::SSLConfig::New();
+  network_context_params->initial_ssl_config->named_groups_preset =
+      network::mojom::SSLNamedGroupsPreset::kCnsa2;
+  network_context_params->initial_ssl_config
+      ->post_quantum_key_agreement_enabled = false;
+  SetUpNetworkContext(std::move(network_context_params));
+
+  net::SSLContextConfig net_config = GetSSLContextConfig();
+  std::vector<uint16_t> expected_supported_groups = {
+      SSL_GROUP_SECP384R1, SSL_GROUP_SECP256R1, SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(), expected_supported_groups);
+
+  std::vector<uint16_t> expected_key_shares = {SSL_GROUP_X25519};
+  EXPECT_EQ(net_config.GetSupportedGroups(/*key_shares_only=*/true),
+            expected_key_shares);
+}
+
+TEST_F(NetworkServiceSSLConfigServiceTest, Tls13CipherPreferAes256) {
+  net::SSLContextConfig expected_net_config;
+  expected_net_config.tls13_cipher_prefer_aes_256 = true;
+
+  mojom::SSLConfigPtr mojo_config = mojom::SSLConfig::New();
+  mojo_config->tls13_cipher_prefer_aes_256 = true;
+
+  RunConversionTests(*mojo_config, expected_net_config);
 }
 
 }  // namespace

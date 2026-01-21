@@ -6,7 +6,7 @@
 #define CONTENT_RENDERER_WEBGRAPHICSCONTEXT3D_PROVIDER_IMPL_H_
 
 #include "base/containers/flat_map.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/raster_interface.h"
@@ -23,7 +23,6 @@ class ContextProviderCommandBuffer;
 
 namespace gpu {
 class ContextSupport;
-class GLHelper;
 }  // namespace gpu
 
 namespace content {
@@ -33,7 +32,8 @@ class WebGraphicsContext3DProviderImpl
       public viz::ContextLostObserver {
  public:
   WebGraphicsContext3DProviderImpl(
-      scoped_refptr<viz::ContextProviderCommandBuffer> provider);
+      scoped_refptr<viz::ContextProviderCommandBuffer> provider,
+      scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner = nullptr);
 
   WebGraphicsContext3DProviderImpl(const WebGraphicsContext3DProviderImpl&) =
       delete;
@@ -50,19 +50,14 @@ class WebGraphicsContext3DProviderImpl
   gpu::webgpu::WebGPUInterface* WebGPUInterface() override;
   gpu::ContextSupport* ContextSupport() override;
   bool IsContextLost() override;
-  GrDirectContext* GetGrContext() override;
   const gpu::Capabilities& GetCapabilities() const override;
   const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const override;
   const blink::WebglPreferences& GetWebglPreferences() const override;
-  gpu::GLHelper* GetGLHelper() override;
   void SetLostContextCallback(base::RepeatingClosure) override;
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t)>) override;
   cc::ImageDecodeCache* ImageDecodeCache(SkColorType color_type) override;
   gpu::SharedImageInterface* SharedImageInterface() override;
-  void CopyVideoFrame(media::PaintCanvasVideoRenderer* video_render,
-                      media::VideoFrame* video_frame,
-                      cc::PaintCanvas* canvas) override;
   viz::RasterContextProvider* RasterContextProvider() const override;
 
  private:
@@ -70,7 +65,7 @@ class WebGraphicsContext3DProviderImpl
   void OnContextLost() override;
 
   scoped_refptr<viz::ContextProviderCommandBuffer> provider_;
-  std::unique_ptr<gpu::GLHelper> gl_helper_;
+  scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner_;
   base::RepeatingClosure context_lost_callback_;
   base::flat_map<SkColorType, std::unique_ptr<cc::ImageDecodeCache>>
       image_decode_cache_map_;

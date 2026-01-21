@@ -10,10 +10,10 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -49,16 +49,6 @@ void NSSCertDatabaseChromeOS::ListCerts(
       std::move(callback));
 }
 
-void NSSCertDatabaseChromeOS::ListCertsInfo(ListCertsInfoCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-      base::BindOnce(&NSSCertDatabaseChromeOS::ListCertsInfoImpl,
-                     profile_filter_, /*slot=*/GetSystemSlot(),
-                     /*add_certs_info=*/true),
-      std::move(callback));
-}
-
 crypto::ScopedPK11Slot NSSCertDatabaseChromeOS::GetSystemSlot() const {
   if (system_slot_)
     return crypto::ScopedPK11Slot(PK11_ReferenceSlot(system_slot_.get()));
@@ -71,7 +61,7 @@ void NSSCertDatabaseChromeOS::ListModules(
   NSSCertDatabase::ListModules(modules, need_rw);
 
   const NSSProfileFilterChromeOS& profile_filter = profile_filter_;
-  base::EraseIf(*modules, [&profile_filter](crypto::ScopedPK11Slot& module) {
+  std::erase_if(*modules, [&profile_filter](crypto::ScopedPK11Slot& module) {
     return !profile_filter.IsModuleAllowed(module.get());
   });
 }
@@ -104,17 +94,6 @@ bool NSSCertDatabaseChromeOS::SetCertTrust(CERTCertificate* cert,
 // static
 ScopedCERTCertificateList NSSCertDatabaseChromeOS::ListCertsImpl(
     const NSSProfileFilterChromeOS& profile_filter) {
-  CertInfoList certs_info = ListCertsInfoImpl(
-      profile_filter, crypto::ScopedPK11Slot(), /*add_certs_info=*/false);
-
-  return ExtractCertificates(std::move(certs_info));
-}
-
-// static
-NSSCertDatabase::CertInfoList NSSCertDatabaseChromeOS::ListCertsInfoImpl(
-    const NSSProfileFilterChromeOS& profile_filter,
-    crypto::ScopedPK11Slot system_slot,
-    bool add_certs_info) {
   // This method may acquire the NSS lock or reenter this code via extension
   // hooks (such as smart card UI). To ensure threads are not starved or
   // deadlocked, the base::ScopedBlockingCall below increments the thread pool
@@ -122,22 +101,14 @@ NSSCertDatabase::CertInfoList NSSCertDatabaseChromeOS::ListCertsInfoImpl(
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
-  CertInfoList certs_info(NSSCertDatabase::ListCertsInfoImpl(
-      crypto::ScopedPK11Slot(), add_certs_info));
+  ScopedCERTCertificateList certs_info(
+      NSSCertDatabase::ListCertsImpl(crypto::ScopedPK11Slot()));
 
   // Filter certificate information according to user profile.
-  base::EraseIf(certs_info, [&profile_filter](CertInfo& cert_info) {
-    return !profile_filter.IsCertAllowed(cert_info.cert.get());
-  });
-
-  if (add_certs_info) {
-    // Add Chrome OS specific information.
-    for (auto& cert_info : certs_info) {
-      cert_info.device_wide =
-          IsCertificateOnSlot(cert_info.cert.get(), system_slot.get());
-      cert_info.hardware_backed = IsHardwareBacked(cert_info.cert.get());
-    }
-  }
+  std::erase_if(certs_info,
+                [&profile_filter](ScopedCERTCertificate& cert_info) {
+                  return !profile_filter.IsCertAllowed(cert_info.get());
+                });
 
   return certs_info;
 }

@@ -6,10 +6,10 @@
 #define COMPONENTS_POLICY_CORE_BROWSER_SIGNIN_USER_CLOUD_SIGNIN_RESTRICTION_POLICY_FETCHER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/cancelable_callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "components/policy/policy_export.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
@@ -31,6 +31,7 @@ class IdentityManager;
 namespace policy {
 
 class BrowserPolicyConnector;
+class ProfileSeparationPolicies;
 
 class POLICY_EXPORT UserCloudSigninRestrictionPolicyFetcher {
  public:
@@ -51,7 +52,8 @@ class POLICY_EXPORT UserCloudSigninRestrictionPolicyFetcher {
   void GetManagedAccountsSigninRestriction(
       signin::IdentityManager* identity_manager,
       const CoreAccountId& account_id,
-      base::OnceCallback<void(const std::string&)> callback);
+      base::OnceCallback<void(ProfileSeparationPolicies)> callback,
+      const std::string& response_for_testing = std::string());
 
   void SetURLLoaderFactoryForTesting(
       network::mojom::URLLoaderFactory* factory) {
@@ -74,14 +76,14 @@ class POLICY_EXPORT UserCloudSigninRestrictionPolicyFetcher {
   // policy using `access_token` for the authentication. Calls
   // `OnManagedAccountsSigninRestrictionResult` with the result from the API.
   void GetManagedAccountsSigninRestrictionInternal(
-      base::OnceCallback<void(const std::string&)> callback,
+      base::OnceCallback<void(ProfileSeparationPolicies)> callback,
       const std::string& access_token);
 
   // Retrieves the policy value from `response_body` and calls `callback` with
   // that value.
   void OnManagedAccountsSigninRestrictionResult(
-      base::OnceCallback<void(const std::string&)> callback,
-      std::unique_ptr<std::string> response_body);
+      base::OnceCallback<void(ProfileSeparationPolicies)> callback,
+      std::optional<std::string> response_body);
 
   GURL GetSecureConnectApiGetAccountSigninRestrictionUrl() const;
 
@@ -91,7 +93,6 @@ class POLICY_EXPORT UserCloudSigninRestrictionPolicyFetcher {
   raw_ptr<network::mojom::URLLoaderFactory> url_loader_factory_for_testing_ =
       nullptr;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
-  base::CancelableOnceCallback<void(const std::string&)> cancelable_callback_;
 };
 
 }  //  namespace policy

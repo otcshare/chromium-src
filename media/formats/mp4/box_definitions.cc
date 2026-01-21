@@ -4,12 +4,16 @@
 
 #include "media/formats/mp4/box_definitions.h"
 
+#include <bitset>
 #include <memory>
 #include <utility>
 
-#include "base/big_endian.h"
 #include "base/command_line.h"
+#include "base/containers/auto_spanification_helper.h"
+#include "base/containers/span.h"
+#include "base/containers/span_writer.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
@@ -18,18 +22,17 @@
 #include "media/base/video_types.h"
 #include "media/base/video_util.h"
 #include "media/formats/common/opus_constants.h"
+#include "media/formats/mp4/box_constants.h"
 #include "media/formats/mp4/es_descriptor.h"
 #include "media/formats/mp4/rcheck.h"
 #include "media/media_buildflags.h"
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
-#include "media/formats/mp4/avc.h"
-#include "media/video/h264_parser.h"  // nogncheck
+#include <optional>
 
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+#include "media/formats/mp4/avc.h"
 #include "media/formats/mp4/dolby_vision.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+#include "media/parsers/h264_parser.h"
 
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
 #include "media/formats/mp4/hevc.h"
@@ -44,29 +47,51 @@ namespace {
 const size_t kKeyIdSize = 16;
 const size_t kFlacMetadataBlockStreaminfoSize = 34;
 
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
-// Parse dvcC or dvvC box.
-absl::optional<DOVIDecoderConfigurationRecord> ParseDOVIConfig(
-    BoxReader* reader) {
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+// Try to parse dvcC or dvvC box if exists, return `video_info` and an optional
+// `dv_info` based on the configuration.
+std::tuple<CodecProfileLevel, std::optional<CodecProfileLevel>> MaybeParseDOVI(
+    BoxReader* reader,
+    CodecProfileLevel video_info) {
+  std::optional<DOVIDecoderConfigurationRecord> dovi_config;
+
   {
     DolbyVisionConfiguration dvcc;
     if (reader->HasChild(&dvcc) && reader->ReadChild(&dvcc)) {
+      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC)";
       DCHECK_LE(dvcc.dovi_config.dv_profile, 7);
-      return dvcc.dovi_config;
+      dovi_config = dvcc.dovi_config;
     }
   }
 
   {
     DolbyVisionConfiguration8 dvvc;
     if (reader->HasChild(&dvvc) && reader->ReadChild(&dvvc)) {
+      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvvC)";
       DCHECK_GT(dvvc.dovi_config.dv_profile, 7);
-      return dvvc.dovi_config;
+      dovi_config = dvvc.dovi_config;
     }
   }
 
-  return absl::nullopt;
+  if (!dovi_config.has_value()) {
+    return {video_info, std::nullopt};
+  }
+
+  constexpr int kHDR10CompatibilityId = 1;
+  constexpr int kSDRCompatibilityId = 2;
+  constexpr int kHLGCompatibilityId = 4;
+  CodecProfileLevel dv_info = {VideoCodec::kDolbyVision,
+                               dovi_config->codec_profile,
+                               dovi_config->dv_level};
+  if (dovi_config->dv_bl_signal_compatibility_id == kHDR10CompatibilityId ||
+      dovi_config->dv_bl_signal_compatibility_id == kSDRCompatibilityId ||
+      dovi_config->dv_bl_signal_compatibility_id == kHLGCompatibilityId) {
+    return {video_info, dv_info};
+  }
+  // If the buffer is not backward compatible, always treat it as Dolby Vision.
+  return {dv_info, std::nullopt};
 }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
 // Read color coordinate value as defined in the MasteringDisplayColorVolume
 // ('mdcv') box.  Each coordinate is a float encoded in uint16_t, with upper
@@ -110,35 +135,19 @@ bool ReadFixedPoint32(float fixed_point_divisor,
   return true;
 }
 
-VideoColorSpace ConvertColorParameterInformationToColorSpace(
-    const ColorParameterInformation& info) {
-  auto primary_id =
-      static_cast<VideoColorSpace::PrimaryID>(info.colour_primaries);
-  auto transfer_id =
-      static_cast<VideoColorSpace::TransferID>(info.transfer_characteristics);
-  auto matrix_id =
-      static_cast<VideoColorSpace::MatrixID>(info.matrix_coefficients);
-
-  // Note that we don't check whether the embedded ids are valid.  We rely on
-  // the underlying video decoder to reject any ids that it doesn't support.
-  return VideoColorSpace(primary_id, transfer_id, matrix_id,
-                         info.full_range ? gfx::ColorSpace::RangeID::FULL
-                                         : gfx::ColorSpace::RangeID::LIMITED);
-}
-
-gfx::ColorVolumeMetadata ConvertMdcvToColorVolumeMetadata(
+gfx::HdrMetadataSmpteSt2086 ConvertMdcvToColorVolumeMetadata(
     const MasteringDisplayColorVolume& mdcv) {
-  gfx::ColorVolumeMetadata color_volume_metadata;
-  color_volume_metadata.primaries = {
+  gfx::HdrMetadataSmpteSt2086 smpte_st_2086;
+  smpte_st_2086.primaries = {
       mdcv.display_primaries_rx, mdcv.display_primaries_ry,
       mdcv.display_primaries_gx, mdcv.display_primaries_gy,
       mdcv.display_primaries_bx, mdcv.display_primaries_by,
       mdcv.white_point_x,        mdcv.white_point_y,
   };
-  color_volume_metadata.luminance_max = mdcv.max_display_mastering_luminance;
-  color_volume_metadata.luminance_min = mdcv.min_display_mastering_luminance;
+  smpte_st_2086.luminance_max = mdcv.max_display_mastering_luminance;
+  smpte_st_2086.luminance_min = mdcv.min_display_mastering_luminance;
 
-  return color_volume_metadata;
+  return smpte_st_2086;
 }
 
 }  // namespace
@@ -164,7 +173,8 @@ bool ProtectionSystemSpecificHeader::Parse(BoxReader* reader) {
   // Don't bother validating the box's contents.
   // Copy the entire box, including the header, for passing to EME as initData.
   DCHECK(raw_box.empty());
-  raw_box.assign(reader->buffer(), reader->buffer() + reader->box_size());
+  base::span<const uint8_t> buffer = reader->buffer().first(reader->box_size());
+  raw_box.assign(buffer.begin(), buffer.end());
   return true;
 }
 
@@ -293,9 +303,8 @@ bool SampleEncryptionEntry::Parse(BufferReader* reader,
   // the constant IV must be ensured by the caller.
   RCHECK(iv_size == 0 || iv_size == 8 || iv_size == 16);
 
-  memset(initialization_vector, 0, sizeof(initialization_vector));
   for (uint8_t i = 0; i < iv_size; i++)
-    RCHECK(reader->Read1(initialization_vector + i));
+    RCHECK(reader->Read1(&initialization_vector[i]));
 
   if (!has_subsamples) {
     subsamples.clear();
@@ -339,8 +348,9 @@ FourCC SampleEncryption::BoxType() const {
 bool SampleEncryption::Parse(BoxReader* reader) {
   RCHECK(reader->ReadFullBoxHeader());
   use_subsample_encryption = (reader->flags() & kUseSubsampleEncryption) != 0;
-  sample_encryption_data.assign(reader->buffer() + reader->pos(),
-                                reader->buffer() + reader->box_size());
+  base::span<const uint8_t> buffer =
+      reader->buffer().first(reader->box_size()).subspan(reader->pos());
+  sample_encryption_data.assign(buffer.begin(), buffer.end());
   return true;
 }
 
@@ -370,7 +380,8 @@ TrackEncryption::TrackEncryption()
       default_iv_size(0),
       default_crypt_byte_block(0),
       default_skip_byte_block(0),
-      default_constant_iv_size(0) {}
+      default_constant_iv_size(0),
+      default_constant_iv() {}
 TrackEncryption::TrackEncryption(const TrackEncryption& other) = default;
 TrackEncryption::~TrackEncryption() = default;
 FourCC TrackEncryption::BoxType() const { return FOURCC_TENC; }
@@ -392,9 +403,8 @@ bool TrackEncryption::Parse(BoxReader* reader) {
     if (default_iv_size == 0) {
       RCHECK(reader->Read1(&default_constant_iv_size));
       RCHECK(default_constant_iv_size == 8 || default_constant_iv_size == 16);
-      memset(default_constant_iv, 0, sizeof(default_constant_iv));
       for (uint8_t i = 0; i < default_constant_iv_size; i++)
-        RCHECK(reader->Read1(default_constant_iv + i));
+        RCHECK(reader->Read1(&default_constant_iv[i]));
     } else {
       RCHECK(default_iv_size == 8 || default_iv_size == 16);
     }
@@ -491,6 +501,7 @@ TrackHeader::TrackHeader()
       layer(-1),
       alternate_group(-1),
       volume(-1),
+      display_matrix(kDisplayIdentityMatrix),
       width(0),
       height(0) {}
 TrackHeader::TrackHeader(const TrackHeader& other) = default;
@@ -686,8 +697,8 @@ bool AVCDecoderConfigurationRecord::Parse(BoxReader* reader) {
   return ParseInternal(reader, reader->media_log());
 }
 
-bool AVCDecoderConfigurationRecord::Parse(const uint8_t* data, int data_size) {
-  BufferReader reader(data, data_size);
+bool AVCDecoderConfigurationRecord::Parse(base::span<const uint8_t> data) {
+  BufferReader reader(data.data(), data.size());
   NullMediaLog media_log;
   return ParseInternal(&reader, &media_log);
 }
@@ -727,24 +738,60 @@ bool AVCDecoderConfigurationRecord::ParseInternal(BufferReader* reader,
            reader->ReadVec(&pps_list[i], pps_length));
   }
 
+  if (profile_indication == 100 || profile_indication == 110 ||
+      profile_indication == 122 || profile_indication == 144) {
+    if (!reader->HasBytes(4) || !ParseREXT(reader, media_log)) {
+      DVLOG(2) << __func__ << ": avcC REXT is missing or invalid";
+      chroma_format = 0;
+      bit_depth_luma_minus8 = 0;
+      bit_depth_chroma_minus8 = 0;
+      sps_ext_list.resize(0);
+    }
+  }
+
+  return true;
+}
+
+bool AVCDecoderConfigurationRecord::ParseREXT(BufferReader* reader,
+                                              MediaLog* media_log) {
+  RCHECK(reader->Read1(&chroma_format));
+  chroma_format &= 0x3;
+
+  RCHECK(reader->Read1(&bit_depth_luma_minus8));
+  bit_depth_luma_minus8 &= 0x7;
+  RCHECK(bit_depth_luma_minus8 <= 4);
+
+  RCHECK(reader->Read1(&bit_depth_chroma_minus8));
+  bit_depth_chroma_minus8 &= 0x7;
+  RCHECK(bit_depth_chroma_minus8 <= 4);
+
+  uint8_t num_sps_ext;
+  RCHECK(reader->Read1(&num_sps_ext));
+
+  sps_ext_list.resize(num_sps_ext);
+  for (int i = 0; i < num_sps_ext; i++) {
+    uint16_t sps_ext_length;
+    RCHECK(reader->Read2(&sps_ext_length) &&
+           reader->ReadVec(&sps_ext_list[i], sps_ext_length));
+  }
+
   return true;
 }
 
 bool AVCDecoderConfigurationRecord::Serialize(
     std::vector<uint8_t>& output) const {
-  // See ISO/IEC 14496-15 5.3.3.1.2 for the format description
-  constexpr uint8_t sps_list_size_mask = (1 << 5) - 1;  // 5 bits
-  if (sps_list.size() > sps_list_size_mask)
+  if (sps_list.size() > 0x1f) {
     return false;
+  }
 
-  constexpr uint8_t pps_list_size_mask = 0xff;
-  if (pps_list.size() > pps_list_size_mask)
+  if (pps_list.size() > 0xff) {
     return false;
+  }
 
-  if (length_size > 4)
+  if (length_size != 1 && length_size != 2 && length_size != 4) {
     return false;
+  }
 
-  // Calculating total size of the buffer we'll need for serialization
   size_t expected_size =
       1 +  // configurationVersion
       1 +  // AVCProfileIndication
@@ -754,53 +801,103 @@ bool AVCDecoderConfigurationRecord::Serialize(
       1 +  // numOfSequenceParameterSets, i.e. length of sps_list
       1;   // numOfPictureParameterSets, i.e. length of pps_list
 
-  constexpr size_t max_vector_size = (1 << 16) - 1;  // 2 bytes
   for (auto& sps : sps_list) {
-    expected_size += 2;  // 2 bytes for sequenceParameterSetLength
-    if (sps.size() > max_vector_size)
+    expected_size += 2;  // sequenceParameterSetLength
+    if (sps.size() > 0xffff) {
       return false;
+    }
     expected_size += sps.size();
   }
 
   for (auto& pps : pps_list) {
-    expected_size += 2;  // 2 bytes for pictureParameterSetLength;
-    if (pps.size() > max_vector_size)
+    expected_size += 2;  // pictureParameterSetLength
+    if (pps.size() > 0xffff) {
       return false;
+    }
     expected_size += pps.size();
+  }
+
+  if (profile_indication == 100 || profile_indication == 110 ||
+      profile_indication == 122 || profile_indication == 144) {
+    if (chroma_format > 0x3) {
+      return false;
+    }
+
+    if (bit_depth_luma_minus8 > 4) {
+      return false;
+    }
+
+    if (bit_depth_chroma_minus8 > 4) {
+      return false;
+    }
+
+    if (sps_ext_list.size() > 0xff) {
+      return false;
+    }
+
+    expected_size += 1 +  // chroma_format
+                     1 +  // bit_depth_luma_minus8
+                     1 +  // bit_depth_chroma_minus8
+                     1;   // numOfSequenceParameterSetExt
+
+    for (auto& sps_ext : sps_ext_list) {
+      expected_size += 2;  // sequenceParameterSetExtLength
+      if (sps_ext.size() > 0xffff) {
+        return false;
+      }
+      expected_size += sps_ext.size();
+    }
   }
 
   output.clear();
   output.resize(expected_size);
-  base::BigEndianWriter writer(reinterpret_cast<char*>(output.data()),
-                               output.size());
+  auto writer = base::SpanWriter(base::span(output));
   bool result = true;
 
   // configurationVersion
-  result &= writer.WriteU8(version);
+  result &= writer.WriteU8BigEndian(version);
   // AVCProfileIndication
-  result &= writer.WriteU8(profile_indication);
+  result &= writer.WriteU8BigEndian(profile_indication);
   // profile_compatibility
-  result &= writer.WriteU8(profile_compatibility);
+  result &= writer.WriteU8BigEndian(profile_compatibility);
   // AVCLevelIndication
-  result &= writer.WriteU8(avc_level);
+  result &= writer.WriteU8BigEndian(avc_level);
   // lengthSizeMinusOne
   uint8_t length_size_minus_one = (length_size - 1) | 0xfc;
-  result &= writer.WriteU8(length_size_minus_one);
+  result &= writer.WriteU8BigEndian(length_size_minus_one);
   // numOfSequenceParameterSets
-  uint8_t sps_size = sps_list.size() | ~sps_list_size_mask;
-  result &= writer.WriteU8(sps_size);
+  uint8_t sps_size = sps_list.size() | 0xe0;
+  result &= writer.WriteU8BigEndian(sps_size);
   // sequenceParameterSetNALUnits
   for (auto& sps : sps_list) {
-    result &= writer.WriteU16(sps.size());
-    writer.WriteBytes(sps.data(), sps.size());
+    result &= writer.WriteU16BigEndian(sps.size());
+    result &= writer.Write(sps);
   }
   // numOfPictureParameterSets
   uint8_t pps_size = pps_list.size();
-  result &= writer.WriteU8(pps_size);
+  result &= writer.WriteU8BigEndian(pps_size);
   // pictureParameterSetNALUnit
   for (auto& pps : pps_list) {
-    result &= writer.WriteU16(pps.size());
-    writer.WriteBytes(pps.data(), pps.size());
+    result &= writer.WriteU16BigEndian(pps.size());
+    result &= writer.Write(pps);
+  }
+
+  if (profile_indication == 100 || profile_indication == 110 ||
+      profile_indication == 122 || profile_indication == 144) {
+    // chroma_format
+    result &= writer.WriteU8BigEndian(chroma_format | 0xfc);
+    // bit_depth_luma_minus8
+    result &= writer.WriteU8BigEndian(bit_depth_luma_minus8 | 0xf8);
+    // bit_depth_chroma_minus8
+    result &= writer.WriteU8BigEndian(bit_depth_chroma_minus8 | 0xf8);
+    // numOfSequenceParameterSetExt
+    uint8_t sps_ext_size = sps_ext_list.size();
+    result &= writer.WriteU8BigEndian(sps_ext_size);
+    // sequenceParameterSetExtNALUnit
+    for (auto& sps_ext : sps_ext_list) {
+      result &= writer.WriteU16BigEndian(sps_ext.size());
+      result &= writer.Write(sps_ext);
+    }
   }
 
   return result;
@@ -1078,9 +1175,8 @@ VideoSampleEntry::VideoSampleEntry()
       width(0),
       height(0),
       alpha_mode(VideoDecoderConfig::AlphaMode::kIsOpaque),
-      video_codec(VideoCodec::kUnknown),
-      video_codec_profile(VIDEO_CODEC_PROFILE_UNKNOWN),
-      video_codec_level(kNoVideoCodecLevel) {}
+      video_info({VideoCodec::kUnknown, VIDEO_CODEC_PROFILE_UNKNOWN,
+                  kNoVideoCodecLevel}) {}
 
 VideoSampleEntry::VideoSampleEntry(const VideoSampleEntry& other) = default;
 
@@ -1089,6 +1185,17 @@ FourCC VideoSampleEntry::BoxType() const {
   DCHECK(false) << "VideoSampleEntry should be parsed according to the "
                 << "handler type recovered in its Media ancestor.";
   return FOURCC_NULL;
+}
+
+// static
+VideoColorSpace VideoSampleEntry::ConvertColorParameterInformationToColorSpace(
+    const ColorParameterInformation& info) {
+  // Note that we don't check whether the embedded ids are valid.  We rely on
+  // the underlying video decoder to reject any ids that it doesn't support.
+  return VideoColorSpace(info.colour_primaries, info.transfer_characteristics,
+                         info.matrix_coefficients,
+                         info.full_range ? gfx::ColorSpace::RangeID::FULL
+                                         : gfx::ColorSpace::RangeID::LIMITED);
 }
 
 bool VideoSampleEntry::Parse(BoxReader* reader) {
@@ -1122,135 +1229,110 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
     case FOURCC_AVC1:
     case FOURCC_AVC3: {
       DVLOG(2) << __func__ << " reading AVCDecoderConfigurationRecord (avcC)";
-      std::unique_ptr<AVCDecoderConfigurationRecord> avcConfig(
+      std::unique_ptr<AVCDecoderConfigurationRecord> avc_config(
           new AVCDecoderConfigurationRecord());
-      RCHECK(reader->ReadChild(avcConfig.get()));
-      video_codec = VideoCodec::kH264;
-      video_codec_profile = H264Parser::ProfileIDCToVideoCodecProfile(
-          avcConfig->profile_indication);
-
+      RCHECK(reader->ReadChild(avc_config.get()));
+      video_info.codec = VideoCodec::kH264;
+      video_info.profile = H264Parser::ProfileIDCToVideoCodecProfile(
+          avc_config->profile_indication);
+      video_info.level = avc_config->avc_level;
+      // It can be Dolby Vision stream if there is dvvC box.
+      std::tie(video_info, dv_info) = MaybeParseDOVI(reader, video_info);
       frame_bitstream_converter =
-          base::MakeRefCounted<AVCBitstreamConverter>(std::move(avcConfig));
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
-      // It can be Dolby Vision stream if there is DVCC box.
-      auto dv_config = ParseDOVIConfig(reader);
-      if (dv_config.has_value()) {
-        DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC/dvvC)";
-        video_codec = VideoCodec::kDolbyVision;
-        video_codec_profile = dv_config->codec_profile;
-        video_codec_level = dv_config->dv_level;
-      }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+          base::MakeRefCounted<AVCBitstreamConverter>(std::move(avc_config));
       break;
     }
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
     case FOURCC_HEV1:
     case FOURCC_HVC1: {
-      DVLOG(2) << __func__ << " parsing HEVCDecoderConfigurationRecord (hvcC)";
-      std::unique_ptr<HEVCDecoderConfigurationRecord> hevcConfig(
+      DVLOG(2) << __func__ << " reading HEVCDecoderConfigurationRecord (hvcC)";
+      std::unique_ptr<HEVCDecoderConfigurationRecord> hevc_config(
           new HEVCDecoderConfigurationRecord());
-      RCHECK(reader->ReadChild(hevcConfig.get()));
-      video_codec = VideoCodec::kHEVC;
-      video_codec_profile = hevcConfig->GetVideoProfile();
+      RCHECK(reader->ReadChild(hevc_config.get()));
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
-      video_color_space = hevcConfig->GetColorSpace();
-      hdr_metadata = hevcConfig->GetHDRMetadata();
-      alpha_mode = hevcConfig->GetAlphaMode();
+      video_color_space = hevc_config->GetColorSpace();
+      hdr_metadata = hevc_config->GetHDRMetadata();
+      alpha_mode = hevc_config->GetAlphaMode();
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+      video_info.codec = VideoCodec::kHEVC;
+      video_info.profile = hevc_config->GetVideoProfile();
+      // It can be Dolby Vision stream if there is dvcC/dvvC box.
+      std::tie(video_info, dv_info) = MaybeParseDOVI(reader, video_info);
       frame_bitstream_converter =
-          base::MakeRefCounted<HEVCBitstreamConverter>(std::move(hevcConfig));
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
-      // It can be Dolby Vision stream if there is DVCC box.
-      auto dv_config = ParseDOVIConfig(reader);
-      if (dv_config.has_value()) {
-        DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC/dvvC)";
-        video_codec = VideoCodec::kDolbyVision;
-        video_codec_profile = dv_config->codec_profile;
-        video_codec_level = dv_config->dv_level;
-      }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+          base::MakeRefCounted<HEVCBitstreamConverter>(std::move(hevc_config));
       break;
     }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
     case FOURCC_DVA1:
     case FOURCC_DVAV: {
       DVLOG(2) << __func__ << " reading AVCDecoderConfigurationRecord (avcC)";
-      std::unique_ptr<AVCDecoderConfigurationRecord> avcConfig(
+      std::unique_ptr<AVCDecoderConfigurationRecord> avc_config(
           new AVCDecoderConfigurationRecord());
-      RCHECK(reader->ReadChild(avcConfig.get()));
+      RCHECK(reader->ReadChild(avc_config.get()));
+      video_info.codec = VideoCodec::kH264;
+      video_info.profile = H264Parser::ProfileIDCToVideoCodecProfile(
+          avc_config->profile_indication);
+      std::tie(video_info, dv_info) = MaybeParseDOVI(reader, video_info);
       frame_bitstream_converter =
-          base::MakeRefCounted<AVCBitstreamConverter>(std::move(avcConfig));
-
-      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC/dvvC)";
-      auto dv_config = ParseDOVIConfig(reader);
-      RCHECK(dv_config.has_value());
-      video_codec = VideoCodec::kDolbyVision;
-      video_codec_profile = dv_config->codec_profile;
-      video_codec_level = dv_config->dv_level;
+          base::MakeRefCounted<AVCBitstreamConverter>(std::move(avc_config));
       break;
     }
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
     case FOURCC_DVH1:
     case FOURCC_DVHE: {
       DVLOG(2) << __func__ << " reading HEVCDecoderConfigurationRecord (hvcC)";
-      std::unique_ptr<HEVCDecoderConfigurationRecord> hevcConfig(
+      std::unique_ptr<HEVCDecoderConfigurationRecord> hevc_config(
           new HEVCDecoderConfigurationRecord());
-      RCHECK(reader->ReadChild(hevcConfig.get()));
+      RCHECK(reader->ReadChild(hevc_config.get()));
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
-      video_color_space = hevcConfig->GetColorSpace();
-      hdr_metadata = hevcConfig->GetHDRMetadata();
-      alpha_mode = hevcConfig->GetAlphaMode();
+      video_color_space = hevc_config->GetColorSpace();
+      hdr_metadata = hevc_config->GetHDRMetadata();
+      alpha_mode = hevc_config->GetAlphaMode();
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+      video_info.codec = VideoCodec::kHEVC;
+      video_info.profile = hevc_config->GetVideoProfile();
+      std::tie(video_info, dv_info) = MaybeParseDOVI(reader, video_info);
       frame_bitstream_converter =
-          base::MakeRefCounted<HEVCBitstreamConverter>(std::move(hevcConfig));
-      DVLOG(2) << __func__ << " reading DolbyVisionConfiguration (dvcC/dvvC)";
-      auto dv_config = ParseDOVIConfig(reader);
-      RCHECK(dv_config.has_value());
-      video_codec = VideoCodec::kDolbyVision;
-      video_codec_profile = dv_config->codec_profile;
-      video_codec_level = dv_config->dv_level;
+          base::MakeRefCounted<HEVCBitstreamConverter>(std::move(hevc_config));
       break;
     }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
     case FOURCC_VP09: {
-      DVLOG(2) << __func__ << " parsing VPCodecConfigurationRecord (vpcC)";
+      DVLOG(2) << __func__ << " reading VPCodecConfigurationRecord (vpcC)";
       std::unique_ptr<VPCodecConfigurationRecord> vp_config(
           new VPCodecConfigurationRecord());
       RCHECK(reader->ReadChild(vp_config.get()));
-      frame_bitstream_converter = nullptr;
-      video_codec = VideoCodec::kVP9;
-      video_codec_profile = vp_config->profile;
+      video_info.codec = VideoCodec::kVP9;
+      video_info.profile = vp_config->profile;
+      video_info.level = vp_config->level;
       video_color_space = vp_config->color_space;
-      video_codec_level = vp_config->level;
+      frame_bitstream_converter = nullptr;
 
       SMPTE2086MasteringDisplayMetadataBox color_volume;
       if (reader->HasChild(&color_volume)) {
         RCHECK(reader->ReadChild(&color_volume));
-        hdr_static_metadata.color_volume_metadata =
+        hdr_static_metadata.smpte_st_2086 =
             ConvertMdcvToColorVolumeMetadata(color_volume);
       }
 
       ContentLightLevel level_information;
       if (reader->HasChild(&level_information)) {
         RCHECK(reader->ReadChild(&level_information));
-        hdr_static_metadata.max_content_light_level =
-            level_information.max_content_light_level;
-        hdr_static_metadata.max_frame_average_light_level =
-            level_information.max_pic_average_light_level;
+        hdr_static_metadata.cta_861_3 = gfx::HdrMetadataCta861_3(
+            level_information.max_content_light_level,
+            level_information.max_pic_average_light_level);
       }
       break;
     }
 #if BUILDFLAG(ENABLE_AV1_DECODER)
     case FOURCC_AV01: {
-      DVLOG(2) << __func__ << " reading AV1 configuration.";
+      DVLOG(2) << __func__ << " reading AV1CodecConfigurationRecord (av1C)";
       AV1CodecConfigurationRecord av1_config;
       RCHECK(reader->ReadChild(&av1_config));
+      video_info.codec = VideoCodec::kAV1;
+      video_info.profile = av1_config.profile;
       frame_bitstream_converter = nullptr;
-      video_codec = VideoCodec::kAV1;
-      video_codec_profile = av1_config.profile;
       break;
     }
 #endif
@@ -1274,24 +1356,23 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
   MasteringDisplayColorVolume color_volume;
   if (reader->HasChild(&color_volume)) {
     RCHECK(reader->ReadChild(&color_volume));
-    hdr_static_metadata.color_volume_metadata =
+    hdr_static_metadata.smpte_st_2086 =
         ConvertMdcvToColorVolumeMetadata(color_volume);
   }
 
   ContentLightLevelInformation level_information;
   if (reader->HasChild(&level_information)) {
     RCHECK(reader->ReadChild(&level_information));
-    hdr_static_metadata.max_content_light_level =
-        level_information.max_content_light_level;
-    hdr_static_metadata.max_frame_average_light_level =
-        level_information.max_pic_average_light_level;
+    hdr_static_metadata.cta_861_3 =
+        gfx::HdrMetadataCta861_3(level_information.max_content_light_level,
+                                 level_information.max_pic_average_light_level);
   }
 
   if (hdr_static_metadata.IsValid()) {
     hdr_metadata = hdr_static_metadata;
   }
 
-  if (video_codec_profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
+  if (video_info.profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
     MEDIA_LOG(ERROR, reader->media_log()) << "Unrecognized video codec profile";
     return false;
   }
@@ -1309,15 +1390,11 @@ bool VideoSampleEntry::IsFormatValid() const {
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
     case FOURCC_HEV1:
     case FOURCC_HVC1:
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
     case FOURCC_DVH1:
     case FOURCC_DVHE:
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
     case FOURCC_DVA1:
     case FOURCC_DVAV:
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
     case FOURCC_VP09:
       return true;
@@ -1465,11 +1542,13 @@ bool OpusSpecificBox::Parse(BoxReader* reader) {
 #error The code below assumes little-endianness.
 #endif
 
-  memcpy(&extradata[OPUS_EXTRADATA_SKIP_SAMPLES_OFFSET], &codec_delay_in_frames,
-         sizeof(codec_delay_in_frames));
-  memcpy(&extradata[OPUS_EXTRADATA_SAMPLE_RATE_OFFSET], &sample_rate,
-         sizeof(sample_rate));
-  memcpy(&extradata[OPUS_EXTRADATA_GAIN_OFFSET], &gain_db, sizeof(gain_db));
+  auto extradata_span = base::span(extradata);
+  extradata_span.subspan(OPUS_EXTRADATA_SKIP_SAMPLES_OFFSET)
+      .copy_prefix_from(base::U16ToLittleEndian(codec_delay_in_frames));
+  extradata_span.subspan(OPUS_EXTRADATA_SAMPLE_RATE_OFFSET)
+      .copy_prefix_from(base::U32ToLittleEndian(sample_rate));
+  extradata_span.subspan(OPUS_EXTRADATA_GAIN_OFFSET)
+      .copy_prefix_from(base::I16ToLittleEndian(gain_db));
 
   channel_count = extradata[OPUS_EXTRADATA_CHANNELS_OFFSET];
 
@@ -1525,6 +1604,192 @@ bool DtsUhdSpecificBox::Parse(BoxReader* reader) {
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+EC3SpecificBox::EC3SpecificBox() {}
+
+EC3SpecificBox::EC3SpecificBox(const EC3SpecificBox& other) = default;
+
+EC3SpecificBox::~EC3SpecificBox() = default;
+
+FourCC EC3SpecificBox::BoxType() const {
+  return FOURCC_DEC3;
+}
+
+bool EC3SpecificBox::Parse(BoxReader* reader) {
+  // Read dec3 into buffer.
+  std::vector<uint8_t> eac3_data;
+
+  RCHECK(reader->ReadVec(&eac3_data, reader->box_size() - reader->pos()));
+  RCHECK(dec3.Parse(eac3_data, reader->media_log()));
+
+  return true;
+}
+
+AC3SpecificBox::AC3SpecificBox() {}
+
+AC3SpecificBox::AC3SpecificBox(const AC3SpecificBox& other) = default;
+
+AC3SpecificBox::~AC3SpecificBox() = default;
+
+FourCC AC3SpecificBox::BoxType() const {
+  return FOURCC_DAC3;
+}
+
+bool AC3SpecificBox::Parse(BoxReader* reader) {
+  // Read dac3 into buffer.
+  std::vector<uint8_t> ac3_data;
+
+  RCHECK(reader->ReadVec(&ac3_data, reader->box_size() - reader->pos()));
+  RCHECK(dac3.Parse(ac3_data, reader->media_log()));
+
+  return true;
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+AC4SpecificBox::AC4SpecificBox() {}
+
+AC4SpecificBox::AC4SpecificBox(const AC4SpecificBox& other) = default;
+
+AC4SpecificBox::~AC4SpecificBox() = default;
+
+FourCC AC4SpecificBox::BoxType() const {
+  return FOURCC_DAC4;
+}
+
+bool AC4SpecificBox::Parse(BoxReader* reader) {
+  // Read dac4 into buffer.
+  std::vector<uint8_t> ac4_data;
+
+  RCHECK(reader->ReadVec(&ac4_data, reader->box_size() - reader->pos()));
+  RCHECK(dac4.Parse(ac4_data, reader->media_log()));
+
+  return true;
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+enum IamfConfigObuType {
+  // The following enum values are mapped to their respective Config OBU
+  // values in the IAMF specification.
+  // https://aomediacodec.github.io/iamf/v1.0.0.html#obu-header-syntax.
+  kIamfConfigObuTypeCodecConfig = 0,
+  kIamfConfigObuTypeAudioElement = 1,
+  kIamfConfigObuTypeMixPresentation = 2,
+  kIamfConfigObuTypeSequenceHeader = 31,
+};
+
+IamfSpecificBox::IamfSpecificBox() = default;
+
+IamfSpecificBox::IamfSpecificBox(const IamfSpecificBox& other) = default;
+
+IamfSpecificBox::~IamfSpecificBox() = default;
+
+FourCC IamfSpecificBox::BoxType() const {
+  return FOURCC_IACB;
+}
+
+bool IamfSpecificBox::Parse(BoxReader* reader) {
+  uint8_t configuration_version;
+  RCHECK(reader->Read1(&configuration_version));
+  RCHECK(configuration_version == 0x01);
+
+  uint32_t config_obus_size;
+  RCHECK(ReadLeb128Value(reader, &config_obus_size));
+
+  base::span<const uint8_t> buffer =
+      reader->buffer().subspan(reader->pos(), config_obus_size);
+  ia_descriptors.assign(buffer.begin(), buffer.end());
+
+  RCHECK(reader->SkipBytes(config_obus_size));
+
+  BufferReader config_reader(ia_descriptors.data(), ia_descriptors.size());
+
+  while (config_reader.pos() < config_reader.buffer().size()) {
+    RCHECK(ReadOBU(&config_reader));
+  }
+
+  return true;
+}
+
+bool IamfSpecificBox::ReadOBU(BufferReader* reader) {
+  uint8_t obu_type;
+  uint32_t obu_size;
+  RCHECK(ReadOBUHeader(reader, &obu_type, &obu_size));
+  const size_t read_stop_pos = reader->pos() + obu_size;
+
+  switch (static_cast<int>(obu_type)) {
+    case kIamfConfigObuTypeCodecConfig:
+    case kIamfConfigObuTypeAudioElement:
+    case kIamfConfigObuTypeMixPresentation:
+      break;
+    case kIamfConfigObuTypeSequenceHeader:
+      uint32_t ia_code;
+      RCHECK(reader->Read4(&ia_code));
+      RCHECK(ia_code == FOURCC_IAMF);
+
+      RCHECK(reader->Read1(&profile));
+      RCHECK(profile <= 1);
+
+      break;
+    default:
+      DVLOG(1) << "Unhandled IAMF OBU type " << static_cast<int>(obu_type);
+      return false;
+  }
+
+  const size_t remaining_size = read_stop_pos - reader->pos();
+  RCHECK(reader->SkipBytes(remaining_size));
+  return true;
+}
+
+bool IamfSpecificBox::ReadOBUHeader(BufferReader* reader,
+                                    uint8_t* obu_type,
+                                    uint32_t* obu_size) {
+  uint8_t header_flags;
+  RCHECK(reader->Read1(&header_flags));
+  *obu_type = (header_flags >> 3) & 0x1f;
+
+  const bool obu_redundant_copy = (header_flags >> 2) & 1;
+  const bool obu_trimming_status_flag = (header_flags >> 1) & 1;
+  const bool obu_extension_flag = header_flags & 1;
+
+  redundant_copy |= obu_redundant_copy;
+
+  RCHECK(ReadLeb128Value(reader, obu_size));
+  RCHECK(reader->HasBytes(*obu_size));
+
+  RCHECK(!obu_trimming_status_flag);
+  if (obu_extension_flag) {
+    uint32_t extension_header_size;
+    const int last_reader_pos = reader->pos();
+    RCHECK(ReadLeb128Value(reader, &extension_header_size));
+    const int num_leb128_bytes_read = reader->pos() - last_reader_pos;
+    RCHECK(reader->SkipBytes(extension_header_size));
+    *obu_size -= (num_leb128_bytes_read + extension_header_size);
+  }
+  return true;
+}
+
+bool IamfSpecificBox::ReadLeb128Value(BufferReader* reader,
+                                      uint32_t* value) const {
+  DCHECK(reader);
+  DCHECK(value);
+  *value = 0;
+  bool error = true;
+  for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+    uint8_t byte;
+    RCHECK(reader->Read1(&byte));
+    *value |= ((byte & 0x7f) << (i * 7));
+    if (!(byte & 0x80)) {
+      error = false;
+      break;
+    }
+  }
+
+  return !error;
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+
 AudioSampleEntry::AudioSampleEntry()
     : format(FOURCC_NULL),
       data_reference_index(0),
@@ -1577,14 +1842,63 @@ bool AudioSampleEntry::Parse(BoxReader* reader) {
   }
 
 #if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
-  if (format == FOURCC_DTSC) {
+  if (format == FOURCC_DTSC || format == FOURCC_DTSE) {
     RCHECK_MEDIA_LOGGED(reader->ReadChild(&ddts), reader->media_log(),
                         "Failure parsing DtsSpecificBox (ddts)");
   } else if (format == FOURCC_DTSX) {
     RCHECK_MEDIA_LOGGED(reader->ReadChild(&udts), reader->media_log(),
                         "Failure parsing DtsUhdSpecificBox (udts)");
+    std::bitset<32> ch_bitset(udts.dtsx.GetChannelMask());
+    RCHECK_MEDIA_LOGGED(channelcount == ch_bitset.count(), reader->media_log(),
+                        "DTSX AudioSampleEntry channel count mismatches "
+                        "DtsUhdSpecificBox ChannelMask channel count");
   }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+  if (format == FOURCC_AC3 ||
+      (format == FOURCC_ENCA && sinf.format.format == FOURCC_AC3)) {
+    if (!(reader->ReadChild(&ac3))) {
+      MEDIA_LOG(ERROR, reader->media_log())
+          << "Failure parsing AC3SpecificBox (dac3)";
+      RCHECK_MEDIA_LOGGED(
+          channelcount != CHANNEL_LAYOUT_NONE, reader->media_log(),
+          "Channel configuration is undetermined. The primary "
+          "AC3SpecificBox(dac3) failed to parse, and the fallback "
+          "AudioSampleEntry channel count was zero (0), indicating no "
+          "valid channel information.");
+    }
+  }
+  if (format == FOURCC_EAC3 ||
+      (format == FOURCC_ENCA && sinf.format.format == FOURCC_EAC3)) {
+    if (!(reader->ReadChild(&eac3))) {
+      MEDIA_LOG(ERROR, reader->media_log())
+          << "Failure parsing EC3SpecificBox (dec3)";
+      RCHECK_MEDIA_LOGGED(
+          channelcount != CHANNEL_LAYOUT_NONE, reader->media_log(),
+          "Channel configuration is undetermined. The primary "
+          "EC3SpecificBox (dec3) failed to parse, and the fallback "
+          "AudioSampleEntry channel count was zero (0), indicating no "
+          "valid channel information.");
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+  if (format == FOURCC_AC4 ||
+      (format == FOURCC_ENCA && sinf.format.format == FOURCC_AC4)) {
+    RCHECK_MEDIA_LOGGED(reader->ReadChild(&ac4), reader->media_log(),
+                        "Failure parsing AC4SpecificBox (dac4)");
+  }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+  if (format == FOURCC_IAMF ||
+      (format == FOURCC_ENCA && sinf.format.format == FOURCC_IAMF)) {
+    RCHECK_MEDIA_LOGGED(reader->ReadChild(&iacb), reader->media_log(),
+                        "Failure parsing IamfSpecificBox (iacb)");
+  }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
 
   // Read the FLACSpecificBox, even if CENC is signalled.
   if (format == FOURCC_FLAC ||
@@ -1667,7 +1981,7 @@ std::string MediaHeader::language() const {
 
   if (lang_chars[0] < 'a' || lang_chars[0] > 'z' || lang_chars[1] < 'a' ||
       lang_chars[1] > 'z' || lang_chars[2] < 'a' || lang_chars[2] > 'z') {
-    // Got unexpected characteds in ISO 639-2/T language code. Something must be
+    // Got unexpected characters in ISO 639-2/T language code. Something must be
     // wrong with the input file, report 'und' language to be safe.
     DVLOG(2) << "Ignoring MDHD language_code (non ISO 639-2 compliant): "
              << lang_chars;
@@ -1992,7 +2306,8 @@ CencSampleEncryptionInfoEntry::CencSampleEncryptionInfoEntry()
       iv_size(0),
       crypt_byte_block(0),
       skip_byte_block(0),
-      constant_iv_size(0) {}
+      constant_iv_size(0),
+      constant_iv() {}
 CencSampleEncryptionInfoEntry::CencSampleEncryptionInfoEntry(
     const CencSampleEncryptionInfoEntry& other) = default;
 CencSampleEncryptionInfoEntry::~CencSampleEncryptionInfoEntry() = default;
@@ -2011,9 +2326,8 @@ bool CencSampleEncryptionInfoEntry::Parse(BoxReader* reader) {
     if (iv_size == 0) {
       RCHECK(reader->Read1(&constant_iv_size));
       RCHECK(constant_iv_size == 8 || constant_iv_size == 16);
-      memset(constant_iv, 0, sizeof(constant_iv));
       for (uint8_t i = 0; i < constant_iv_size; i++)
-        RCHECK(reader->Read1(constant_iv + i));
+        RCHECK(reader->Read1(&constant_iv[i]));
     } else {
       RCHECK(iv_size == 8 || iv_size == 16);
     }
@@ -2116,10 +2430,10 @@ MovieFragment::~MovieFragment() = default;
 FourCC MovieFragment::BoxType() const { return FOURCC_MOOF; }
 
 bool MovieFragment::Parse(BoxReader* reader) {
-  RCHECK(reader->ScanChildren() &&
-         reader->ReadChild(&header) &&
-         reader->ReadChildren(&tracks) &&
-         reader->MaybeReadChildren(&pssh));
+  RCHECK(reader->ScanChildren());
+  RCHECK(reader->ReadChild(&header));
+  RCHECK(reader->MaybeReadChildren(&tracks));
+  RCHECK(reader->MaybeReadChildren(&pssh));
   return true;
 }
 

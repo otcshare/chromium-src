@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 
-#include <string>
+#import <string>
 
 namespace autofill {
 
@@ -18,10 +18,13 @@ NSString* GetCreditCardName(const CreditCard& credit_card,
                             const std::string& locale);
 
 // Returns |credit_card| card identifier string as an autoreleased NSString.
-NSString* GetCreditCardIdentifierString(const CreditCard& credit_card);
+NSString* GetCreditCardNameAndLastFourDigits(const CreditCard& credit_card);
 
 // Returns |credit_card| nickname string as an autoreleased NSString.
 NSString* GetCreditCardNicknameString(const CreditCard& credit_card);
+
+// Returns `credit_card` CVC as an autoreleased NSString.
+NSString* GetCreditCardCvcString(const CreditCard& credit_card);
 
 // Returns |credit_card| expiration date as an autoreleased NSDateComponents.
 // Only |year| and |month| fields of the NSDateComponents are valid.

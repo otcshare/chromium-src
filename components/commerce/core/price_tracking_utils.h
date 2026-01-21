@@ -5,13 +5,16 @@
 #ifndef COMPONENTS_COMMERCE_CORE_PRICE_TRACKING_UTILS_H_
 #define COMPONENTS_COMMERCE_CORE_PRICE_TRACKING_UTILS_H_
 
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/commerce/core/commerce_types.h"
 #include "components/power_bookmarks/core/proto/power_bookmark_meta.pb.h"
 
 class PrefService;
@@ -21,19 +24,32 @@ class BookmarkModel;
 class BookmarkNode;
 }  // namespace bookmarks
 
+namespace power_bookmarks {
+class ShoppingSpecifics;
+}  // namespace power_bookmarks
+
 namespace commerce {
 
+struct CommerceSubscription;
 struct ProductInfo;
 class ShoppingService;
 
-// Return whether a bookmark is price tracked. This does not check the
-// subscriptions backend, only the flag in the bookmark meta.
-bool IsBookmarkPriceTracked(bookmarks::BookmarkModel* model,
-                            const bookmarks::BookmarkNode* node);
+// Return whether a bookmark is price tracked. The result is passed to
+// |callback|.
+void IsBookmarkPriceTracked(ShoppingService* service,
+                            bookmarks::BookmarkModel* model,
+                            const bookmarks::BookmarkNode* node,
+                            base::OnceCallback<void(bool)> callback);
 
 // Return whether the |node| is a product bookmark.
 bool IsProductBookmark(bookmarks::BookmarkModel* model,
                        const bookmarks::BookmarkNode* node);
+
+// Return the last timestamp when the product is successfully tracked or
+// untracked by the user.
+std::optional<int64_t> GetBookmarkLastSubscriptionChangeTime(
+    bookmarks::BookmarkModel* model,
+    const bookmarks::BookmarkNode* node);
 
 // Set the price tracking state for a particular cluster ID. This function
 // assumes that a bookmark with the specified cluster ID already exists and
@@ -51,12 +67,17 @@ void SetPriceTrackingStateForClusterId(ShoppingService* service,
 // if successful, all bookmarks with the same cluster ID will be updated.
 // |callback| will be called with a bool representing whether the operation was
 // successful iff all of |service|, |model|, and |node| are non-null and the
-// bookmark has been determined to be a product.
-void SetPriceTrackingStateForBookmark(ShoppingService* service,
-                                      bookmarks::BookmarkModel* model,
-                                      const bookmarks::BookmarkNode* node,
-                                      bool enabled,
-                                      base::OnceCallback<void(bool)> callback);
+// bookmark has been determined to be a product. ProductInfo can be passed
+// in optionally here and used as a fallback, in the event that ShoppingService
+// is unaware of ProductInfo.
+void SetPriceTrackingStateForBookmark(
+    ShoppingService* service,
+    bookmarks::BookmarkModel* model,
+    const bookmarks::BookmarkNode* node,
+    bool enabled,
+    base::OnceCallback<void(bool)> callback,
+    bool was_bookmark_created_by_price_tracking = false,
+    std::optional<ProductInfo> product_info = std::nullopt);
 
 // Get all bookmarks with the specified product cluster ID. If |max_count| is
 // specified, this function will return that number of bookmarks at most,
@@ -66,13 +87,18 @@ std::vector<const bookmarks::BookmarkNode*> GetBookmarksWithClusterId(
     uint64_t cluster_id,
     size_t max_count = 0);
 
-// Get all bookmarks that are price tracked. This only checks the bit in the
-// bookmark metadata and does not make a call to the backend. The returned
-// vector of BookmarkNodes is owned by the caller, but the nodes pointed to
-// are not -- those live for as long as the BookmarkModel (|model|) is alive
-// which has the same lifetime as the current BrowserContext.
-std::vector<const bookmarks::BookmarkNode*> GetAllPriceTrackedBookmarks(
-    bookmarks::BookmarkModel* model);
+// Gets all bookmarks that are price tracked. This method may make a call to the
+// subscriptions backend if the information is stale. The list of price tracked
+// bookmarks is provided as a param to the callback passed to this function.
+// Ownership of the vector of bookmark nodes is transferred to the caller, but
+// the individual bookmarks that the pointers reference are not -- those exist
+// only as long as the BookmarkModel does (which is bound to the browser
+// context).
+void GetAllPriceTrackedBookmarks(
+    ShoppingService* shopping_service,
+    bookmarks::BookmarkModel* bookmark_model,
+    base::OnceCallback<void(std::vector<const bookmarks::BookmarkNode*>)>
+        callback);
 
 // Get all shopping bookmarks. The returned vector of BookmarkNodes is owned by
 // the caller, but the nodes pointed to are not -- those live for as long as
@@ -92,9 +118,58 @@ bool PopulateOrUpdateBookmarkMetaIfNeeded(
 // a noop.
 void MaybeEnableEmailNotifications(PrefService* pref_service);
 
-// Whether the email notification is explicitly disabled by the user. Return
-// false if we are using the default preference value.
-bool IsEmailDisabledByUser(PrefService* pref_service);
+// Gets the user preference for price drop notifications. If not set, the
+// default value will be returned.
+bool GetEmailNotificationPrefValue(PrefService* pref_service);
+
+// Gets whether the price drop email notification preference has been explicitly
+// set by the user or is still in the default state.
+bool IsEmailNotificationPrefSetByUser(PrefService* pref_service);
+
+// Builds a user-managed price tracking subscription object for the provided
+// cluster ID. This does not change the state of the subscription, it only
+// creates the object representing the subscription.
+CommerceSubscription BuildUserSubscriptionForClusterId(uint64_t cluster_id);
+
+// Returns whether price tracking can be initiated given either a ProductInfo
+// or a ShoppingSpecifics object.
+bool CanTrackPrice(const ProductInfo& info);
+bool CanTrackPrice(const std::optional<ProductInfo>& info);
+bool CanTrackPrice(const power_bookmarks::ShoppingSpecifics& specifics);
+
+// If `url` is bookmarked, returns the name of the parent folder; otherwise
+// returns an empty string.
+std::optional<std::u16string> GetBookmarkParentName(
+    bookmarks::BookmarkModel* model,
+    const GURL& url);
+
+// Gets the explicit "shopping collection" bookmark folder.
+// The behavior depends on whether the user is signed in or syncing. When
+// syncing, this returns the syncing `other_node`. When signed in, this returns
+// the `account_other_node` if it exists, or null. The caller is responsible for
+// checking if the returned folder exists.
+const bookmarks::BookmarkNode* GetShoppingCollectionBookmarkFolder(
+    bookmarks::BookmarkModel* model,
+    bool create_if_needed = false);
+
+// Returns whether the provided node is the shopping collection folder.
+bool IsShoppingCollectionBookmarkFolder(const bookmarks::BookmarkNode* node);
+
+// Gets the product cluster ID for the bookmark represented by the provided URL.
+// If there is no bookmark or the bookmark doesn't have a cluster ID,
+// std::nullopt is returned.
+std::optional<uint64_t> GetProductClusterIdFromBookmark(
+    const GURL& url,
+    bookmarks::BookmarkModel* model);
+
+// Removes any subscriptions the user might have that are not tied to at least
+// one bookmark. The count of the number of dangling subscriptions will be
+// returned as part of the optionally provided callback.
+void RemoveDanglingSubscriptions(
+    ShoppingService* shopping_service,
+    bookmarks::BookmarkModel* bookmark_model,
+    base::OnceCallback<void(size_t)> completed_callback =
+        base::DoNothingAs<void(size_t)>());
 
 }  // namespace commerce
 

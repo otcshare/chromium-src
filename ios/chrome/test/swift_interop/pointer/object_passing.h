@@ -18,8 +18,8 @@ class Object {
 
 class ObjectPassing {
  public:
-  ObjectPassing(){};
-  ~ObjectPassing(){};
+  ObjectPassing() = default;
+  ~ObjectPassing() = default;
 
   int AddReferences(const Object& one, const Object& two) const {
     return one.GetValue() + two.GetValue();

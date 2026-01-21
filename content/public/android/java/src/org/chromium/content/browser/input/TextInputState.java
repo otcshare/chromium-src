@@ -5,11 +5,19 @@
 package org.chromium.content.browser.input;
 
 import android.os.Build;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextUtils;
 import android.view.inputmethod.SurroundingText;
+import android.view.inputmethod.InputConnection;
 
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.ContentFeatureMap;
 
 import java.util.Locale;
 
@@ -17,6 +25,7 @@ import java.util.Locale;
  * An immutable class to contain text, selection range, composition range, and whether
  * it's single line or multiple lines that are being edited.
  */
+@NullMarked
 public class TextInputState {
     private final CharSequence mText;
     private final Range mSelection;
@@ -46,7 +55,11 @@ public class TextInputState {
         }
     }
 
-    public TextInputState(CharSequence text, Range selection, Range composition, boolean singleLine,
+    public TextInputState(
+            CharSequence text,
+            Range selection,
+            Range composition,
+            boolean singleLine,
             boolean replyToRequest) {
         selection.clamp(0, text.length());
         if (composition.start() != -1 || composition.end() != -1) {
@@ -79,42 +92,64 @@ public class TextInputState {
         return mReplyToRequest;
     }
 
-    public CharSequence getSelectedText() {
-        if (mSelection.start() == mSelection.end()) return null;
-        return TextUtils.substring(mText, mSelection.start(), mSelection.end());
+    private static CharSequence subsequence(CharSequence source, int start, int end, int flags) {
+        if (ContentFeatureMap.isEnabled(ContentFeatureList.ACCESSIBILITY_IME_GET_FORMATTED_TEXT)
+                && flags == InputConnection.GET_TEXT_WITH_STYLES) {
+            return new SpannableStringBuilder(source, start, end);
+        }
+        return TextUtils.substring(source, start, end);
     }
 
-    public CharSequence getTextAfterSelection(int maxChars) {
+    public @Nullable CharSequence getSelectedText(int flags) {
+        if (mSelection.start() == mSelection.end()) return null;
+        return subsequence(mText, mSelection.start(), mSelection.end(), flags);
+    }
+
+    public CharSequence getTextAfterSelection(int maxChars, int flags) {
         // Clamp the maxChars to avoid integer overflow or negative value.
         maxChars = Math.max(0, Math.min(maxChars, mText.length() - mSelection.end()));
-        return TextUtils.substring(
-                mText, mSelection.end(), Math.min(mText.length(), mSelection.end() + maxChars));
+        int afterSelectionEnd = Math.min(mText.length(), mSelection.end() + maxChars);
+        return subsequence(mText, mSelection.end(), afterSelectionEnd, flags);
     }
 
-    public CharSequence getTextBeforeSelection(int maxChars) {
+    public CharSequence getTextBeforeSelection(int maxChars, int flags) {
         // Clamp the maxChars to the valid value.
         maxChars = Math.max(0, Math.min(maxChars, mSelection.start()));
-        return TextUtils.substring(
-                mText, Math.max(0, mSelection.start() - maxChars), mSelection.start());
+        int beforeSelectionStart = Math.max(0, mSelection.start() - maxChars);
+        return subsequence(mText, beforeSelectionStart, mSelection.start(), flags);
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    public SurroundingText getSurroundingText(int beforeLength, int afterLength) {
+    public SurroundingText getSurroundingText(int beforeLength, int afterLength, int flags) {
         SurroundingTextInternal surroundingText =
-                getSurroundingTextInternal(beforeLength, afterLength);
-        return new SurroundingText(surroundingText.mText, surroundingText.mSelectionStart,
-                surroundingText.mSelectionEnd, surroundingText.mOffset);
+                getSurroundingTextInternal(beforeLength, afterLength, flags);
+        return new SurroundingText(
+                surroundingText.mText,
+                surroundingText.mSelectionStart,
+                surroundingText.mSelectionEnd,
+                surroundingText.mOffset);
     }
 
     @VisibleForTesting
     /* package */ SurroundingTextInternal getSurroundingTextInternal(
-            int beforeLength, int afterLength) {
+            int beforeLength, int afterLength, int flags) {
         beforeLength = Math.max(0, Math.min(beforeLength, mSelection.start()));
         afterLength = Math.max(0, Math.min(afterLength, mText.length() - mSelection.end()));
-        CharSequence text = TextUtils.substring(
-                mText, mSelection.start() - beforeLength, mSelection.end() + afterLength);
+        int start = mSelection.start() - beforeLength;
+        int end = mSelection.end() + afterLength;
+        CharSequence text;
+        if ((ContentFeatureMap.isEnabled(ContentFeatureList.ACCESSIBILITY_IME_GET_FORMATTED_TEXT)
+                && flags == InputConnection.GET_TEXT_WITH_STYLES) || mText instanceof Spanned) {
+            text = new SpannableStringBuilder(mText, start, end);
+        } else {
+            text = mText.subSequence(start, end);
+        }
+
         return new SurroundingTextInternal(
-                text, beforeLength, mSelection.end() - (mSelection.start() - beforeLength), -1);
+                text,
+                /* selectionStart= */ beforeLength,
+                /* selectionEnd= */ beforeLength + mSelection.end() - mSelection.start(),
+                /* offset= */ start);
     }
 
     @Override
@@ -122,15 +157,20 @@ public class TextInputState {
         if (!(o instanceof TextInputState)) return false;
         TextInputState t = (TextInputState) o;
         if (t == this) return true;
-        return TextUtils.equals(mText, t.mText) && mSelection.equals(t.mSelection)
-                && mComposition.equals(t.mComposition) && mSingleLine == t.mSingleLine
+        return TextUtils.equals(mText, t.mText)
+                && mSelection.equals(t.mSelection)
+                && mComposition.equals(t.mComposition)
+                && mSingleLine == t.mSingleLine
                 && mReplyToRequest == t.mReplyToRequest;
     }
 
     @Override
     public int hashCode() {
-        return mText.hashCode() * 7 + mSelection.hashCode() * 11 + mComposition.hashCode() * 13
-                + (mSingleLine ? 19 : 0) + (mReplyToRequest ? 23 : 0);
+        return mText.hashCode() * 7
+                + mSelection.hashCode() * 11
+                + mComposition.hashCode() * 13
+                + (mSingleLine ? 19 : 0)
+                + (mReplyToRequest ? 23 : 0);
     }
 
     @SuppressWarnings("unused")
@@ -140,8 +180,13 @@ public class TextInputState {
 
     @Override
     public String toString() {
-        return String.format(Locale.US, "TextInputState {[%s] SEL%s COM%s %s%s}", mText, mSelection,
-                mComposition, mSingleLine ? "SIN" : "MUL",
+        return String.format(
+                Locale.US,
+                "TextInputState {[%s] SEL%s COM%s %s%s}",
+                mText,
+                mSelection,
+                mComposition,
+                mSingleLine ? "SIN" : "MUL",
                 mReplyToRequest ? " ReplyToRequest" : "");
     }
 }

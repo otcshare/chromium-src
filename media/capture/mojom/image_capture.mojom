@@ -7,7 +7,6 @@ module media.mojom;
 // Equivalent to idl MediaSettingsRange, arbitrary range representing the
 // allowed variations of a Capability or an Option.
 // https://w3c.github.io/mediacapture-image/#mediasettingsrange-section
-[Stable]
 struct Range {
   double max;
   double min;
@@ -15,23 +14,24 @@ struct Range {
   double step;
 };
 
-[Stable, Extensible]
 enum BackgroundBlurMode {
-  [Default]
   OFF,
   BLUR
 };
 
+enum EyeGazeCorrectionMode {
+  OFF,
+  ON,
+  STARE
+};
+
 // https://w3c.github.io/mediacapture-image/#meteringmode-section
-[Stable, Extensible]
 enum MeteringMode { NONE, MANUAL, SINGLE_SHOT, CONTINUOUS };
 
 // https://w3c.github.io/mediacapture-image/#redeyereduction-section
-[Stable, Extensible]
 enum RedEyeReduction { NEVER, ALWAYS, CONTROLLABLE };
 
 //  https://www.w3.org/TR/image-capture/#FillLightMode
-[Stable, Extensible]
 enum FillLightMode { OFF, AUTO, FLASH };
 
 // Equivalent to idl's MediaTrackCapabilities plus PhotoCapabilities and their
@@ -61,7 +61,6 @@ enum FillLightMode { OFF, AUTO, FLASH };
 // As non-nullable fields are only allowed in version 0 of a struct, non-POD
 // fields with version higher than 0 are nullable. That nullability should not
 // be utilised.
-[Stable]
 struct PhotoState {
   // https://w3c.github.io/mediacapture-image/#mediatrackcapabilities-section
   // and https://w3c.github.io/mediacapture-image/#mediatracksettings-section
@@ -158,27 +157,42 @@ struct PhotoState {
 
   // An array of unique supported values for
   // |PhotoSettings.background_blur_mode|.
-  // Should not be null (but is nullable for stable backward compatibility).
-  [MinVersion=1]
-  array<BackgroundBlurMode>? supported_background_blur_modes;
+  array<BackgroundBlurMode> supported_background_blur_modes;
   // The current background blur mode.
   // Only meaningful if |supported_background_blur_modes| is non-empty.
-  [MinVersion=1]
   BackgroundBlurMode background_blur_mode;
+  // An array of unique supported values for
+  // |PhotoSettings.current_face_framing_mode|.
+  array<MeteringMode> supported_face_framing_modes;
+  // The current face framing mode.
+  // Only meaningful if |supported_face_framing_modes| is non-empty.
+  MeteringMode current_face_framing_mode;
+  // An array of unique supported values for
+  // |PhotoSettings.current_eye_gaze_correction_mode|.
+  array<EyeGazeCorrectionMode> supported_eye_gaze_correction_modes;
+  // The current eye gaze correction mode.
+  // Only meaningful if |supported_eye_gaze_correction_modes| is non-empty.
+  EyeGazeCorrectionMode current_eye_gaze_correction_mode;
+  // An array of unique supported values for
+  // |PhotoSettings.background_segmentation_mask_state|.
+  array<bool> supported_background_segmentation_mask_states;
+  // The current background mask state.
+  // Only meaningful if |supported_background_segmentation_mask_states| is
+  // non-empty.
+  bool current_background_segmentation_mask_state;
 };
 
 // Equivalent to idl Point2D.
 // https://w3c.github.io/mediacapture-image/#point2d-section
 // TODO(mcasas): use gfx::mojom::PointF after https://crbug.com/640049.
-[Stable]
 struct Point2D {
   double x;
   double y;
 };
 
 // Equivalent to idl PhotoSettings + MediaTrackConstraintSet.
-// PODs cannot be nullable, i.e. uint32? bla doesn't work, use |has_bla| flags.
-[Stable]
+// Primitive types were not nullable in the past. This is the reason why older
+// fields in this struct have has_ flags, and newer fields are nullable.
 struct PhotoSettings {
   // https://w3c.github.io/mediacapture-image/#mediatracksettings-section and
   // https://w3c.github.io/mediacapture-image/#mediatrackconstraintset-section
@@ -232,14 +246,16 @@ struct PhotoSettings {
   bool red_eye_reduction;
 
   // W3C Media Capture Extensions
-  [MinVersion=1]
   bool has_background_blur_mode;
-  [MinVersion=1]
   BackgroundBlurMode background_blur_mode;
+  bool has_face_framing_mode;
+  MeteringMode face_framing_mode;
+  // TODO: crbug.com/453992558 - Remove ? added for backwards compatibility.
+  EyeGazeCorrectionMode? eye_gaze_correction_mode;
+  bool? background_segmentation_mask_state;
 };
 
 // This is a mojo move-only equivalent of a Blob, i.e. MIME type and Data.
-[Stable]
 struct Blob {
   string mime_type;
   array<uint8> data;
@@ -254,8 +270,7 @@ interface ImageCapture
         => (PhotoState state);
 
     // Sets the |settings| on the associated video capture device.
-    // https://www.w3.org/TR/image-capture/#dom-imagecapture-setoptions
-    SetOptions(string source_id, PhotoSettings settings)
+    SetPhotoOptions(string source_id, PhotoSettings settings)
         => (bool success);
 
     // Takes a Photo from the given |source_id|, returning it encoded in |blob|

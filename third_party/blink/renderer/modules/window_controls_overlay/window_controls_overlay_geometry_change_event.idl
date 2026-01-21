@@ -6,7 +6,7 @@
 
 [
     Exposed=Window,
-    RuntimeEnabled=WebAppWindowControlsOverlay
+    RuntimeEnabled=WindowControlsOverlay
 ] interface WindowControlsOverlayGeometryChangeEvent : Event {
     constructor(DOMString type, WindowControlsOverlayGeometryChangeEventInit eventInitDict);
     [SameObject] readonly attribute DOMRect titlebarAreaRect;

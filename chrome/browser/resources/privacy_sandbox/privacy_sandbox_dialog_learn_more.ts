@@ -4,7 +4,7 @@
 
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.js';
-import 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
+import 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
 
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -37,18 +37,19 @@ export class PrivacySandboxDialogLearnMoreElement extends PolymerElement {
     };
   }
 
+  declare title: string;
+  declare expanded: boolean;
+
   private onExpandedChanged_(expanded: boolean) {
     if (expanded) {
       this.scrollIntoCollapseElement_(this.$.collapse);
     }
-    // TODO(crbug.com/1378703): Hide scrollbar if it will be hidden when section
-    // is collapsed to avoid visual glitch.
   }
 
   private scrollIntoCollapseElement_(element: HTMLElement) {
     const computedStyle = window.getComputedStyle(element);
-    const duration = parseFloat(
-        computedStyle.getPropertyValue('--iron-collapse-transition-duration'));
+    const duration =
+        parseFloat(computedStyle.getPropertyValue('--collapse-duration'));
     // Wait for collapse section transition to complete 70%.
     setTimeout(() => {
       // ...and scroll the content area up to make the section content

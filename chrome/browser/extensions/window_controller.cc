@@ -7,11 +7,15 @@
 #include <stddef.h>
 
 #include <memory>
+#include <utility>
 
 #include "base/values.h"
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/windows.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -22,13 +26,13 @@ namespace extensions {
 WindowController::TypeFilter WindowController::GetAllWindowFilter() {
   // This needs to be updated if there is a change to
   // extensions::api::windows:WindowType.
-  static_assert(api::windows::WINDOW_TYPE_LAST == 5,
+  static_assert(std::to_underlying(api::windows::WindowType::kMaxValue) == 5,
                 "Update extensions WindowController to match WindowType");
-  return ((1 << api::windows::WINDOW_TYPE_NORMAL) |
-          (1 << api::windows::WINDOW_TYPE_PANEL) |
-          (1 << api::windows::WINDOW_TYPE_POPUP) |
-          (1 << api::windows::WINDOW_TYPE_APP) |
-          (1 << api::windows::WINDOW_TYPE_DEVTOOLS));
+  return ((1 << std::to_underlying(api::windows::WindowType::kNormal)) |
+          (1 << std::to_underlying(api::windows::WindowType::kPanel)) |
+          (1 << std::to_underlying(api::windows::WindowType::kPopup)) |
+          (1 << std::to_underlying(api::windows::WindowType::kApp)) |
+          (1 << std::to_underlying(api::windows::WindowType::kDevtools)));
 }
 
 // static
@@ -36,7 +40,7 @@ WindowController::TypeFilter WindowController::GetFilterFromWindowTypes(
     const std::vector<api::windows::WindowType>& types) {
   WindowController::TypeFilter filter = kNoWindowFilter;
   for (auto& window_type : types)
-    filter |= 1 << window_type;
+    filter |= 1 << std::to_underlying(window_type);
   return filter;
 }
 
@@ -44,12 +48,15 @@ WindowController::TypeFilter WindowController::GetFilterFromWindowTypes(
 WindowController::TypeFilter WindowController::GetFilterFromWindowTypesValues(
     const base::Value::List* types) {
   WindowController::TypeFilter filter = WindowController::kNoWindowFilter;
-  if (!types)
+  if (!types) {
     return filter;
+  }
   for (const base::Value& type : *types) {
-    if (!type.is_string())
+    if (!type.is_string()) {
       continue;
-    filter |= 1 << api::windows::ParseWindowType(type.GetString());
+    }
+    filter |= 1 << std::to_underlying(
+                  api::windows::ParseWindowType(type.GetString()));
   }
   return filter;
 }
@@ -58,20 +65,31 @@ WindowController::WindowController(ui::BaseWindow* window, Profile* profile)
     : window_(window), profile_(profile) {
 }
 
-WindowController::~WindowController() {
-}
+WindowController::~WindowController() = default;
 
-Browser* WindowController::GetBrowser() const {
+BrowserWindowInterface* WindowController::GetBrowserWindowInterface() {
   return nullptr;
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+Browser* WindowController::GetBrowser() const {
+  return nullptr;
+}
+#endif
+
 bool WindowController::MatchesFilter(TypeFilter filter) const {
-  TypeFilter type = 1 << api::windows::ParseWindowType(GetWindowTypeText());
+  TypeFilter type = 1 << std::to_underlying(
+                        api::windows::ParseWindowType(GetWindowTypeText()));
   return (type & filter) != 0;
 }
 
 void WindowController::NotifyWindowBoundsChanged() {
   WindowControllerList::GetInstance()->NotifyWindowBoundsChanged(this);
+}
+
+void WindowController::NotifyWindowFocusChanged(bool has_focus) {
+  WindowControllerList::GetInstance()->NotifyWindowFocusChanged(this,
+                                                                has_focus);
 }
 
 }  // namespace extensions

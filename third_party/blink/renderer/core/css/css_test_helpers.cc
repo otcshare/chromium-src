@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_css_style_sheet_init.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_property_definition.h"
 #include "third_party/blink/renderer/core/css/css_custom_ident_value.h"
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
@@ -16,6 +17,7 @@
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_local_context.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/parser/css_property_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_selector_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
@@ -28,9 +30,11 @@
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
 namespace blink {
@@ -52,7 +56,7 @@ CSSRuleList* TestStyleSheet::CssRules() {
 
 RuleSet& TestStyleSheet::GetRuleSet() {
   RuleSet& rule_set = style_sheet_->Contents()->EnsureRuleSet(
-      MediaQueryEvaluator(document_->GetFrame()), kRuleHasNoSpecialState);
+      MediaQueryEvaluator(document_->GetFrame()), /*mixins=*/{});
   rule_set.CompactRulesIfNeeded();
   return rule_set;
 }
@@ -60,15 +64,27 @@ RuleSet& TestStyleSheet::GetRuleSet() {
 void TestStyleSheet::AddCSSRules(const String& css_text, bool is_empty_sheet) {
   unsigned sheet_length = style_sheet_->length();
   style_sheet_->Contents()->ParseString(css_text);
-  if (!is_empty_sheet)
+  if (!is_empty_sheet) {
     ASSERT_GT(style_sheet_->length(), sheet_length);
-  else
+  } else {
     ASSERT_EQ(style_sheet_->length(), sheet_length);
+  }
 }
 
 CSSStyleSheet* CreateStyleSheet(Document& document) {
   return CSSStyleSheet::CreateInline(
-      document, NullURL(), TextPosition::MinimumPosition(), UTF8Encoding());
+      document, NullURL(), TextPosition::MinimumPosition(), Utf8Encoding());
+}
+
+RuleSet* CreateRuleSet(Document& document, String text) {
+  DummyExceptionStateForTesting exception_state;
+  auto* init = CSSStyleSheetInit::Create();
+  auto* media_query_evaluator =
+      MakeGarbageCollected<MediaQueryEvaluator>(document.GetFrame());
+  auto* sheet = CSSStyleSheet::Create(document, init, exception_state);
+  sheet->replaceSync(text, exception_state);
+  return &sheet->Contents()->EnsureRuleSet(*media_query_evaluator,
+                                           /*mixins=*/{});
 }
 
 PropertyRegistration* CreatePropertyRegistration(const String& name,
@@ -92,7 +108,7 @@ PropertyRegistration* CreateLengthRegistration(const String& name, int px) {
 void RegisterProperty(Document& document,
                       const String& name,
                       const String& syntax,
-                      const absl::optional<String>& initial_value,
+                      const std::optional<String>& initial_value,
                       bool is_inherited) {
   DummyExceptionStateForTesting exception_state;
   RegisterProperty(document, name, syntax, initial_value, is_inherited,
@@ -103,7 +119,7 @@ void RegisterProperty(Document& document,
 void RegisterProperty(Document& document,
                       const String& name,
                       const String& syntax,
-                      const absl::optional<String>& initial_value,
+                      const std::optional<String>& initial_value,
                       bool is_inherited,
                       ExceptionState& exception_state) {
   DCHECK(!initial_value || !initial_value.value().IsNull());
@@ -111,8 +127,9 @@ void RegisterProperty(Document& document,
   property_definition->setName(name);
   property_definition->setSyntax(syntax);
   property_definition->setInherits(is_inherited);
-  if (initial_value)
+  if (initial_value) {
     property_definition->setInitialValue(initial_value.value());
+  }
   PropertyRegistration::registerProperty(document.GetExecutionContext(),
                                          property_definition, exception_state);
 }
@@ -120,7 +137,7 @@ void RegisterProperty(Document& document,
 void DeclareProperty(Document& document,
                      const String& name,
                      const String& syntax,
-                     const absl::optional<String>& initial_value,
+                     const std::optional<String>& initial_value,
                      bool is_inherited) {
   StringBuilder builder;
   builder.Append("@property ");
@@ -141,51 +158,52 @@ void DeclareProperty(Document& document,
 
   // inherits:
   builder.Append("inherits:");
-  builder.Append(is_inherited ? "true" : "false");
+  builder.Append(String::Boolean(is_inherited));
   builder.Append(";");
 
   builder.Append(" }");
 
   auto* rule =
       DynamicTo<StyleRuleProperty>(ParseRule(document, builder.ToString()));
-  if (!rule)
+  if (!rule) {
     return;
+  }
   auto* registration = PropertyRegistration::MaybeCreateForDeclaredProperty(
       document, AtomicString(name), *rule);
-  if (!registration)
+  if (!registration) {
     return;
+  }
   document.EnsurePropertyRegistry().DeclareProperty(AtomicString(name),
                                                     *registration);
   document.GetStyleEngine().PropertyRegistryChanged();
 }
 
-scoped_refptr<CSSVariableData> CreateVariableData(String s) {
-  CSSTokenizer tokenizer(s);
-  auto tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
+CSSVariableData* CreateVariableData(String s) {
   bool is_animation_tainted = false;
+  bool is_attr_tainted = false;
   bool needs_variable_resolution = false;
-  return CSSVariableData::Create({range, StringView(s)}, is_animation_tainted,
+  return CSSVariableData::Create(s, is_animation_tainted, is_attr_tainted,
                                  needs_variable_resolution);
 }
 
-const CSSValue* CreateCustomIdent(AtomicString s) {
-  return MakeGarbageCollected<CSSCustomIdentValue>(s);
+const CSSValue* CreateCustomIdent(const char* s) {
+  return MakeGarbageCollected<CSSCustomIdentValue>(AtomicString(s));
 }
 
 const CSSValue* ParseLonghand(Document& document,
                               const CSSProperty& property,
                               const String& value) {
   const auto* longhand = DynamicTo<Longhand>(property);
-  if (!longhand)
+  if (!longhand) {
     return nullptr;
+  }
 
   const auto* context = MakeGarbageCollected<CSSParserContext>(document);
-  CSSParserLocalContext local_context;
-  auto tokens = CSSTokenizer(value).TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForTest();
 
-  return longhand->ParseSingleValue(range, *context, local_context);
+  CSSParserTokenStream stream(value);
+  return longhand->ParseSingleValue(stream, *context, local_context);
 }
 
 const CSSPropertyValueSet* ParseDeclarationBlock(const String& block_text,
@@ -197,35 +215,174 @@ const CSSPropertyValueSet* ParseDeclarationBlock(const String& block_text,
 }
 
 StyleRuleBase* ParseRule(Document& document, String text) {
+  return ParseNestedRule(document, text, CSSNestingType::kNone,
+                         /*parent_rule_for_nesting=*/nullptr);
+}
+
+StyleRuleBase* ParseNestedRule(Document& document,
+                               String text,
+                               CSSNestingType nesting_type,
+                               StyleRule* parent_rule_for_nesting) {
   auto* sheet = CSSStyleSheet::CreateInline(
-      document, NullURL(), TextPosition::MinimumPosition(), UTF8Encoding());
+      document, NullURL(), TextPosition::MinimumPosition(), Utf8Encoding());
   const auto* context = MakeGarbageCollected<CSSParserContext>(document);
-  return CSSParser::ParseRule(context, sheet->Contents(), text);
+  return CSSParser::ParseRule(context, sheet->Contents(), nesting_type,
+                              parent_rule_for_nesting, text);
 }
 
 const CSSValue* ParseValue(Document& document, String syntax, String value) {
   auto syntax_definition = CSSSyntaxStringParser(syntax).Parse();
-  if (!syntax_definition.has_value())
+  if (!syntax_definition.has_value()) {
     return nullptr;
+  }
   const auto* context = MakeGarbageCollected<CSSParserContext>(document);
-  CSSTokenizer tokenizer(value);
-  auto tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
-  return syntax_definition->Parse(range, *context,
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForTest();
+  return syntax_definition->Parse(value, *context, local_context,
                                   /* is_animation_tainted */ false);
 }
 
 CSSSelectorList* ParseSelectorList(const String& string) {
+  return ParseSelectorList(string, CSSNestingType::kNone,
+                           /*parent_rule_for_nesting=*/nullptr);
+}
+
+CSSSelectorList* ParseSelectorList(const String& string,
+                                   CSSNestingType nesting_type,
+                                   const StyleRule* parent_rule_for_nesting) {
   auto* context = MakeGarbageCollected<CSSParserContext>(
       kHTMLStandardMode, SecureContextMode::kInsecureContext);
   auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
-  CSSTokenizer tokenizer(string);
-  const auto tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
+  CSSParserTokenStream stream(string);
   HeapVector<CSSSelector> arena;
   base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-      range, context, /*parent_rule_for_nesting=*/nullptr, sheet, arena);
+      stream, context, nesting_type, parent_rule_for_nesting,
+      /* semicolon_aborts_nested_selector */ false, sheet, arena);
   return CSSSelectorList::AdoptSelectorVector(vector);
+}
+
+String ToString(PseudoId pseudo_id) {
+  switch (pseudo_id) {
+    case kPseudoIdNone:
+      return "kPseudoIdNone";
+    case kPseudoIdFirstLine:
+      return "kPseudoIdFirstLine";
+    case kPseudoIdFirstLetter:
+      return "kPseudoIdFirstLetter";
+    case kPseudoIdCheckMark:
+      return "kPseudoIdCheckMark";
+    case kPseudoIdBefore:
+      return "kPseudoIdBefore";
+    case kPseudoIdAfter:
+      return "kPseudoIdAfter";
+    case kPseudoIdPickerIcon:
+      return "kPseudoIdPickerIcon";
+    case kPseudoIdInterestHint:
+      return "kPseudoIdInterestHint";
+    case kPseudoIdMarker:
+      return "kPseudoIdMarker";
+    case kPseudoIdBackdrop:
+      return "kPseudoIdBackdrop";
+    case kPseudoIdSelection:
+      return "kPseudoIdSelection";
+    case kPseudoIdScrollbar:
+      return "kPseudoIdScrollbar";
+    case kPseudoIdScrollMarker:
+      return "kPseudoIdScrollMarker";
+    case kPseudoIdScrollMarkerGroup:
+      return "kPseudoIdScrollMarkerGroup";
+    case kPseudoIdScrollButton:
+      return "kPseudoIdScrollButton";
+    case kPseudoIdScrollButtonBlockStart:
+      return "kPseudoIdScrollButtonBlockStart";
+    case kPseudoIdScrollButtonInlineStart:
+      return "kPseudoIdScrollButtonInlineStart";
+    case kPseudoIdScrollButtonInlineEnd:
+      return "kPseudoIdScrollButtonInlineEnd";
+    case kPseudoIdScrollButtonBlockEnd:
+      return "kPseudoIdScrollButtonBlockEnd";
+    case kPseudoIdColumn:
+      return "kPseudoIdColumn";
+    case kPseudoIdSearchText:
+      return "kPseudoIdSearchText";
+    case kPseudoIdTargetText:
+      return "kPseudoIdTargetText";
+    case kPseudoIdHighlight:
+      return "kPseudoIdHighlight";
+    case kPseudoIdSpellingError:
+      return "kPseudoIdSpellingError";
+    case kPseudoIdGrammarError:
+      return "kPseudoIdGrammarError";
+    case kPseudoIdViewTransition:
+      return "kPseudoIdViewTransition";
+    case kPseudoIdViewTransitionGroup:
+      return "kPseudoIdViewTransitionGroup";
+    case kPseudoIdViewTransitionGroupChildren:
+      return "kPseudoIdViewTransitionGroupChildren";
+    case kPseudoIdViewTransitionImagePair:
+      return "kPseudoIdViewTransitionImagePair";
+    case kPseudoIdViewTransitionOld:
+      return "kPseudoIdViewTransitionOld";
+    case kPseudoIdViewTransitionNew:
+      return "kPseudoIdViewTransitionNew";
+    case kPseudoIdFirstLineInherited:
+      return "kPseudoIdFirstLineInherited";
+    case kPseudoIdScrollbarThumb:
+      return "kPseudoIdScrollbarThumb";
+    case kPseudoIdScrollbarButton:
+      return "kPseudoIdScrollbarButton";
+    case kPseudoIdScrollbarTrack:
+      return "kPseudoIdScrollbarTrack";
+    case kPseudoIdScrollbarTrackPiece:
+      return "kPseudoIdScrollbarTrackPiece";
+    case kPseudoIdScrollbarCorner:
+      return "kPseudoIdScrollbarCorner";
+    case kPseudoIdScrollMarkerGroupAfter:
+      return "kPseudoIdScrollMarkerGroupAfter";
+    case kPseudoIdScrollMarkerGroupBefore:
+      return "kPseudoIdScrollMarkerGroupBefore";
+    case kPseudoIdResizer:
+      return "kPseudoIdResizer";
+    case kPseudoIdInputListButton:
+      return "kPseudoIdInputListButton";
+    case kPseudoIdPlaceholder:
+      return "kPseudoIdPlaceholder";
+    case kPseudoIdFileSelectorButton:
+      return "kPseudoIdFileSelectorButton";
+    case kPseudoIdDetailsContent:
+      return "kPseudoIdDetailsContent";
+    case kPseudoIdPickerSelect:
+      return "kPseudoIdPickerSelect";
+    case kPseudoIdPermissionIcon:
+      return "kPseudoIdPermissionIcon";
+    case kAfterLastInternalPseudoId:
+      return "kAfterLastInternalPseudoId";
+    case kPseudoIdOverscrollAreaParent:
+      return "kPseudoIdOverscrollAreaParent";
+    case kPseudoIdInvalid:
+      return "kPseudoIdInvalid";
+  }
+}
+
+String ToString(const PseudoIdFlags& flags) {
+  StringBuilder builder;
+
+  builder.Append("[");
+
+  for (int i = PseudoIdFlags::kFirstValid; i <= PseudoIdFlags::kLastValid;
+       ++i) {
+    PseudoId pseudo_id = static_cast<PseudoId>(i);
+    if (flags.Has(pseudo_id)) {
+      if (builder.length() > 1) {
+        builder.Append(", ");
+      }
+      builder.Append(css_test_helpers::ToString(pseudo_id));
+    }
+  }
+
+  builder.Append("]");
+
+  return builder.ToString();
 }
 
 }  // namespace css_test_helpers

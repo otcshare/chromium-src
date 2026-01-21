@@ -11,7 +11,7 @@
 
 // Class used to store common test data used to validate the functioning of the
 // credential provider sign in dialog. This class stores the expected login
-// complte information that the dialog is supposed to received from the gaia
+// complete information that the dialog is supposed to received from the gaia
 // sign in as well as the expected values for any additional token / info
 // fetches needed to complete the sign in using the credential provider.
 // On a successful sign in result, we expect the final json result to match
@@ -21,41 +21,41 @@ class CredentialProviderSigninDialogTestDataStorage {
  public:
   CredentialProviderSigninDialogTestDataStorage();
 
-  static base::Value MakeSignInResponseValue(
+  static base::Value::Dict MakeSignInResponseValue(
       const std::string& id = std::string(),
       const std::string& password = std::string(),
       const std::string& email = std::string(),
       const std::string& access_token = std::string(),
       const std::string& refresh_token = std::string());
-  base::Value MakeValidSignInResponseValue() const;
+  base::Value::Dict MakeValidSignInResponseValue() const;
 
   void SetSigninPassword(const std::string& password);
 
-  std::string GetSuccessId() const {
+  const std::string& GetSuccessId() const {
     return expected_success_signin_result_.Find("id")->GetString();
   }
-  std::string GetSuccessPassword() const {
+  const std::string& GetSuccessPassword() const {
     return expected_success_signin_result_.Find("password")->GetString();
   }
-  std::string GetSuccessEmail() const {
+  const std::string& GetSuccessEmail() const {
     return expected_success_signin_result_.Find("email")->GetString();
   }
-  std::string GetSuccessAccessToken() const {
+  const std::string& GetSuccessAccessToken() const {
     return expected_success_signin_result_.Find("access_token")->GetString();
   }
-  std::string GetSuccessRefreshToken() const {
+  const std::string& GetSuccessRefreshToken() const {
     return expected_success_signin_result_.Find("refresh_token")->GetString();
   }
-  std::string GetSuccessTokenHandle() const {
+  const std::string& GetSuccessTokenHandle() const {
     return expected_success_fetch_result_.Find("token_handle")->GetString();
   }
-  std::string GetSuccessMdmIdToken() const {
+  const std::string& GetSuccessMdmIdToken() const {
     return expected_success_fetch_result_.Find("mdm_id_token")->GetString();
   }
-  std::string GetSuccessMdmAccessToken() const {
+  const std::string& GetSuccessMdmAccessToken() const {
     return expected_success_fetch_result_.Find("mdm_access_token")->GetString();
   }
-  std::string GetSuccessFullName() const {
+  const std::string& GetSuccessFullName() const {
     return expected_success_fetch_result_.Find("full_name")->GetString();
   }
 

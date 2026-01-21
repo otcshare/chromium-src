@@ -5,7 +5,7 @@
 package org.chromium.chrome.test.pagecontroller.utils;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Matchers.argThat;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.test.pagecontroller.utils.TestUtils.matchesByDepth;
@@ -15,11 +15,13 @@ import androidx.test.uiautomator.UiObject2;
 
 import org.junit.Before;
 import org.junit.FixMethodOrder;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -28,39 +30,29 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Tests for ChildIndexUi2Locator
- */
+/** Tests for ChildIndexUi2Locator */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class ChildIndexUi2LocatorTest {
-    @Mock
-    private UiDevice mDevice;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private UiDevice mDevice;
 
-    @Mock
-    private UiObject2 mNode0;
+    @Mock private UiObject2 mNode0;
 
-    @Mock
-    private UiObject2 mNode1;
+    @Mock private UiObject2 mNode1;
 
-    @Mock
-    private UiObject2 mNode00;
+    @Mock private UiObject2 mNode00;
 
-    @Mock
-    private UiObject2 mNode01;
+    @Mock private UiObject2 mNode01;
 
-    @Mock
-    private UiObject2 mNode10;
+    @Mock private UiObject2 mNode10;
 
-    @Mock
-    private UiObject2 mNode11;
+    @Mock private UiObject2 mNode11;
 
-    @Mock
-    private UiObject2 mNode110;
+    @Mock private UiObject2 mNode110;
 
-    @Mock
-    private UiObject2 mNode111;
+    @Mock private UiObject2 mNode111;
 
     private List<UiObject2> mNodeList;
     private List<UiObject2> mNode0Children;
@@ -73,8 +65,6 @@ public class ChildIndexUi2LocatorTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
         mNodeList = new ArrayList<>();
         mNodeList.add(mNode0);
         mNodeList.add(mNode1);

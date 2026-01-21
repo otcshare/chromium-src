@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
-
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -43,7 +43,7 @@ class VirtualKeyboardWaiter : public ui::VirtualKeyboardControllerObserver {
   }
   void OnKeyboardHidden() override { std::move(quit_closure_).Run(); }
 
-  ui::VirtualKeyboardController* controller_ = nullptr;
+  raw_ptr<ui::VirtualKeyboardController> controller_ = nullptr;
   base::RepeatingClosure quit_closure_;
 };
 
@@ -60,14 +60,14 @@ class BrowserAppMenuButtonVirtualKeyboardBrowserTest
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
-    GURL test_url =
-        ui_test_utils::GetTestUrl(base::FilePath("chromeos/virtual_keyboard"),
-                                  base::FilePath("form.html"));
+    GURL test_url = chrome_test_utils::GetTestUrl(
+        base::FilePath("chromeos/virtual_keyboard"),
+        base::FilePath("form.html"));
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url));
     web_contents_ = browser()->tab_strip_model()->GetActiveWebContents();
     ASSERT_TRUE(web_contents_);
 
-    // TODO(crbug.com/1349102): Make it work without needing a fake controller.
+    // TODO(crbug.com/40233608): Make it work without needing a fake controller.
     GetWebContentInputMethod()->SetVirtualKeyboardControllerForTesting(
         std::make_unique<ui::VirtualKeyboardControllerStub>());
 
@@ -89,7 +89,7 @@ class BrowserAppMenuButtonVirtualKeyboardBrowserTest
   }
 
  protected:
-  content::WebContents* web_contents_ = nullptr;
+  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_ = nullptr;
 };
 
 // Regression test for crbug.com/1334994.

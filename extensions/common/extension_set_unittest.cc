@@ -29,21 +29,21 @@ scoped_refptr<Extension> CreateTestExtension(const std::string& name,
 #endif
   path = path.AppendASCII(name);
 
-  base::Value::Dict manifest;
-  manifest.Set("name", name);
-  manifest.Set("version", "1");
-  manifest.Set("manifest_version", 2);
+  auto manifest = base::Value::Dict()
+                      .Set("name", name)
+                      .Set("version", "1")
+                      .Set("manifest_version", 2);
 
   if (!launch_url.empty())
     manifest.SetByDottedPath("app.launch.web_url", launch_url);
 
   if (!extent.empty()) {
-    base::Value urls(base::Value::Type::LIST);
+    base::Value::List urls;
     urls.Append(extent);
     manifest.SetByDottedPath("app.urls", std::move(urls));
   }
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(
       Extension::Create(path, mojom::ManifestLocation::kInternal, manifest,
                         Extension::NO_FLAGS, &error));
@@ -87,15 +87,12 @@ TEST(ExtensionSetTest, ExtensionSet) {
   EXPECT_EQ(3u, extensions.size());
 
   // Get extension by its chrome-extension:// URL
-  EXPECT_EQ(
-      ext2.get(),
-      extensions.GetExtensionOrAppByURL(ext2->GetResourceURL("test.html")));
-  EXPECT_EQ(
-      ext3.get(),
-      extensions.GetExtensionOrAppByURL(ext3->GetResourceURL("test.html")));
-  EXPECT_EQ(
-      ext4.get(),
-      extensions.GetExtensionOrAppByURL(ext4->GetResourceURL("test.html")));
+  EXPECT_EQ(ext2.get(), extensions.GetExtensionOrAppByURL(
+                            ext2->GetResourceURL("test.html")));
+  EXPECT_EQ(ext3.get(), extensions.GetExtensionOrAppByURL(
+                            ext3->GetResourceURL("test.html")));
+  EXPECT_EQ(ext4.get(), extensions.GetExtensionOrAppByURL(
+                            ext4->GetResourceURL("test.html")));
 
   // Get extension by a filesystem or blob URL within it.
   GURL ext2_filesystem_url =
@@ -124,7 +121,7 @@ TEST(ExtensionSetTest, ExtensionSet) {
                             GURL("filesystem:http://dev.chromium.org/foo")));
   EXPECT_EQ(nullptr, extensions.GetExtensionOrAppByURL(
                          GURL("filesystem:http://code.google.com/foo")));
-  // TODO(crbug/852162): Support blob URLs. This should return ext3.
+  // TODO(crbug.com/41394231): Support blob URLs. This should return ext3.
   EXPECT_EQ(nullptr, extensions.GetExtensionOrAppByURL(
                          GURL("blob:http://dev.chromium.org/abcd")));
 

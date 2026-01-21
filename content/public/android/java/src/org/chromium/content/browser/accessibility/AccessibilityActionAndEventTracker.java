@@ -7,28 +7,90 @@ package org.chromium.content.browser.accessibility;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
 
-import java.util.LinkedList;
+import androidx.annotation.IntDef;
 
-/**
- * Helper class for tracking accessibility actions and events for end-to-end tests.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+
+/** Helper class for tracking accessibility actions and events for end-to-end tests. */
+@NullMarked
 public class AccessibilityActionAndEventTracker {
-    private LinkedList<String> mEvents;
+    private final ArrayList<String> mEvents;
+    private final boolean mShouldFilterTrivialEvents;
     private boolean mTestComplete;
+    private @Nullable CountDownLatch mEventLatch;
 
     public AccessibilityActionAndEventTracker() {
-        this.mEvents = new LinkedList<String>();
-        this.mTestComplete = false;
+        mEvents = new ArrayList<String>();
+        mTestComplete = false;
+        mShouldFilterTrivialEvents = true;
     }
 
-    public void addEvent(AccessibilityEvent event) {
+    public AccessibilityActionAndEventTracker(boolean shouldFilterTrivialEvents) {
+        // TODO(crbug.com/414363686) this overloaded constructor should be removed after flakiness
+        // of event test with trivial events included is solved. mShouldFilterTrivialEvents should
+        // also be removed after fixing the flakiness.
+        mEvents = new ArrayList<String>();
+        mTestComplete = false;
+        mShouldFilterTrivialEvents = shouldFilterTrivialEvents;
+    }
+
+    // This interface allows us to store additional information about WINDOW_CONTENT_CHANGED events
+    // that do not have an assigned content type (i.e. LIVE_REGION_NODE_CHANGED events).
+    @IntDef({
+        WindowContentChangedSubtype.NONE,
+        WindowContentChangedSubtype.LIVE_REGION_NODE_CHANGED
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface WindowContentChangedSubtype {
+        int NONE = 0;
+        int LIVE_REGION_NODE_CHANGED = 1;
+    }
+
+    // WINDOW_CONTENT_CHANGED events are eligible to be tracked if they have a specific subtype.
+    public boolean shouldWindowContentChangedSubtypeBeTracked(
+            @WindowContentChangedSubtype int subtype) {
+        return subtype == WindowContentChangedSubtype.LIVE_REGION_NODE_CHANGED;
+    }
+
+    public void setEventLatch(@Nullable CountDownLatch latch) {
+        mEventLatch = latch;
+    }
+
+    public void addEvent(AccessibilityEvent event, @WindowContentChangedSubtype int subtype) {
         // In rare cases there may be a lingering event, so only add if the test is not complete.
         if (!mTestComplete) {
+            if (mShouldFilterTrivialEvents) {
+                // Convert event type to a human readable String (except TYPE_WINDOW_CONTENT_CHANGED
+                // with an ineligible subtype, no CONTENT_CHANGE_TYPE_STATE_DESCRIPTION flag, and no
+                // CONTENT_CHANGE_TYPE_PANE_TITLE flag)
+                if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+                    boolean hasNoStateDescriptionChange =
+                            (event.getContentChangeTypes()
+                                            & AccessibilityEvent
+                                                    .CONTENT_CHANGE_TYPE_STATE_DESCRIPTION)
+                                    == 0;
+                    boolean hasNoPaneTitleChange =
+                            (event.getContentChangeTypes()
+                                            & AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_TITLE)
+                                    == 0;
+                    if (hasNoStateDescriptionChange
+                            && hasNoPaneTitleChange
+                            && !shouldWindowContentChangedSubtypeBeTracked(subtype)) {
+                        return;
+                    }
+                }
+            }
             mEvents.add(eventToString(event));
         }
     }
 
-    public void addAction(int action, Bundle arguments) {
+    public void addAction(int action, @Nullable Bundle arguments) {
         // In rare cases there may be a lingering action, so only add if the test is not complete.
         if (!mTestComplete) {
             mEvents.add(actionToString(action, arguments));
@@ -38,7 +100,7 @@ public class AccessibilityActionAndEventTracker {
     public String results() {
         StringBuilder results = new StringBuilder();
 
-        for (String event : new LinkedList<String>(mEvents)) {
+        for (String event : new ArrayList<String>(mEvents)) {
             if (event != null && !event.isEmpty()) {
                 results.append(event);
                 results.append('\n');
@@ -48,18 +110,18 @@ public class AccessibilityActionAndEventTracker {
         return results.toString().trim();
     }
 
-    /**
-     * Helper method to signal the beginning of a given unit test.
-     */
+    /** Helper method to signal the beginning of a given unit test. */
     public void signalReadyForTest() {
         mTestComplete = false;
     }
 
-    /**
-     * Helper method to signal the end of a given unit test.
-     */
+    /** Helper method to signal the end of a given unit test. */
     public void signalEndOfTest() {
         mTestComplete = true;
+        // If a latch is waiting, signal it.
+        if (mEventLatch != null) {
+            mEventLatch.countDown();
+        }
     }
 
     /**
@@ -78,7 +140,7 @@ public class AccessibilityActionAndEventTracker {
      * @param arguments         Bundle arguments
      * @return                  String representation of the given action
      */
-    private String actionToString(int action, Bundle arguments) {
+    private String actionToString(int action, @Nullable Bundle arguments) {
         StringBuilder builder = new StringBuilder();
         builder.append(AccessibilityNodeInfoUtils.toString(action));
 
@@ -90,12 +152,8 @@ public class AccessibilityActionAndEventTracker {
             for (String key : arguments.keySet()) {
                 argsBuilder.append(" {");
                 argsBuilder.append(key);
-                // In case of null values, check what the key returns.
-                if (arguments.get(key) != null) {
-                    argsBuilder.append(arguments.get(key).toString());
-                } else {
-                    argsBuilder.append("null");
-                }
+                // In case of null values, use "null".
+                argsBuilder.append(arguments.get(key));
                 argsBuilder.append("},");
             }
             argsBuilder.append(" ]");
@@ -112,60 +170,69 @@ public class AccessibilityActionAndEventTracker {
      * For any events with significant info, we append this to the end of the string in square
      * braces. For example, for the TYPE_ANNOUNCEMENT events we append the announcement text.
      *
-     * @param event             AccessibilityEvent event to get a string for
-     * @return                  String representation of the given event
+     * @param event AccessibilityEvent event to get a string for
+     * @return String representation of the given event
      */
     private static String eventToString(AccessibilityEvent event) {
-        // Convert event type to a human readable String (except TYPE_WINDOW_CONTENT_CHANGED with no
-        // CONTENT_CHANGE_TYPE_STATE_DESCRIPTION flag)
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-                && (event.getContentChangeTypes()
-                           & AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION)
-                        == 0) {
-            return null;
-        }
-
+        // Convert event type to a human readable String
         StringBuilder builder = new StringBuilder();
         builder.append(AccessibilityEvent.eventTypeToString(event.getEventType()));
 
         // Add extra information based on eventType.
         switch (event.getEventType()) {
-            // For announcements, track the text announced to the user.
-            case AccessibilityEvent.TYPE_ANNOUNCEMENT: {
-                builder.append(" - [");
-                builder.append(event.getText().get(0).toString());
-                builder.append("]");
-                break;
-            }
-            // For text selection/traversal, track the To and From indices.
+                // For announcements, track the text announced to the user.
+            case AccessibilityEvent.TYPE_ANNOUNCEMENT:
+                {
+                    builder.append(" - [");
+                    builder.append(event.getText().get(0).toString());
+                    builder.append("]");
+                    break;
+                }
+
+            // For text selection, track the To and From indices if they are available.
+            case AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED:
+                {
+                    if (event.getFromIndex() != -1 && event.getToIndex() != -1) {
+                        builder.append(" - [");
+                        builder.append(event.getFromIndex());
+                        builder.append(", ");
+                        builder.append(event.getToIndex());
+                        builder.append("]");
+                    }
+                    break;
+                }
+
+            // For text traversal, track the To and From indices.
             case AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY:
-            case AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED: {
-                builder.append(" - [");
-                builder.append(event.getFromIndex());
-                builder.append(", ");
-                builder.append(event.getToIndex());
-                builder.append("]");
-                break;
-            }
+                {
+                    builder.append(" - [");
+                    builder.append(event.getFromIndex());
+                    builder.append(", ");
+                    builder.append(event.getToIndex());
+                    builder.append("]");
+                    break;
+                }
 
-            // For appearance of dialogs, track the content types.
-            case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED: {
-                builder.append(" - [contentTypes=");
-                builder.append(event.getContentChangeTypes());
-                builder.append("]");
-                break;
-            }
+                // For appearance of dialogs, track the content types.
+            case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
+                {
+                    builder.append(" - [contentTypes=");
+                    builder.append(event.getContentChangeTypes());
+                    builder.append("]");
+                    break;
+                }
 
-            // Any TYPE_WINDOW_CONTENT_CHANGED event here should have the
-            // CONTENT_CHANGE_TYPE_STATE_DESCRIPTION flag
-            case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED: {
-                builder.append(" - [contentTypes=");
-                builder.append(event.getContentChangeTypes());
-                builder.append("]");
-                break;
-            }
+                // Any TYPE_WINDOW_CONTENT_CHANGED event here should have the
+                // CONTENT_CHANGE_TYPE_STATE_DESCRIPTION flag
+            case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
+                {
+                    builder.append(" - [contentTypes=");
+                    builder.append(event.getContentChangeTypes());
+                    builder.append("]");
+                    break;
+                }
 
-            // Events that do not add extra information for unit tests
+                // Events that do not add extra information for unit tests
             case AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED:
             case AccessibilityEvent.TYPE_ASSIST_READING_CONTEXT:
             case AccessibilityEvent.TYPE_GESTURE_DETECTION_END:

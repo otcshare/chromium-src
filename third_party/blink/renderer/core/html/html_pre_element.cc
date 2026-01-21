@@ -42,10 +42,13 @@ bool HTMLPreElement::IsPresentationAttribute(const QualifiedName& name) const {
 void HTMLPreElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kWrapAttr) {
-    style->SetLonghandProperty(CSSPropertyID::kWhiteSpace,
-                               CSSValueID::kPreWrap);
+    // Longhands of `white-space: pre-wrap`.
+    AddPropertyToPresentationAttributeStyle(
+        style, CSSPropertyID::kWhiteSpaceCollapse, CSSValueID::kPreserve);
+    AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kTextWrapMode,
+                                            CSSValueID::kWrap);
   } else {
     HTMLElement::CollectStyleForPresentationAttribute(name, value, style);
   }

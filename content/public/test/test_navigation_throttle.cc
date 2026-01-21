@@ -4,16 +4,17 @@
 
 #include "content/public/test/test_navigation_throttle.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 
 namespace content {
 
-TestNavigationThrottle::TestNavigationThrottle(NavigationHandle* handle)
-    : NavigationThrottle(handle) {}
+TestNavigationThrottle::TestNavigationThrottle(
+    NavigationThrottleRegistry& registry)
+    : NavigationThrottle(registry) {}
 
 TestNavigationThrottle::~TestNavigationThrottle() {}
 
@@ -35,6 +36,11 @@ TestNavigationThrottle::WillFailRequest() {
 NavigationThrottle::ThrottleCheckResult
 TestNavigationThrottle::WillProcessResponse() {
   return ProcessMethod(WILL_PROCESS_RESPONSE);
+}
+
+NavigationThrottle::ThrottleCheckResult
+TestNavigationThrottle::WillCommitWithoutUrlLoader() {
+  return ProcessMethod(WILL_COMMIT_WITHOUT_URL_LOADER);
 }
 
 const char* TestNavigationThrottle::GetNameForLogging() {
@@ -79,8 +85,9 @@ void TestNavigationThrottle::OnWillRespond() {}
 NavigationThrottle::ThrottleCheckResult TestNavigationThrottle::ProcessMethod(
     ThrottleMethod method) {
   method_properties_[method].call_count++;
-  if (!method_properties_[method].callback.is_null())
+  if (!method_properties_[method].callback.is_null()) {
     method_properties_[method].callback.Run();
+  }
 
   NavigationThrottle::ThrottleCheckResult result =
       method_properties_[method].result;

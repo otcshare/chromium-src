@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "chromeos/ash/components/dbus/shill/shill_clients.h"
 #include "content/public/test/browser_task_environment.h"
@@ -21,7 +21,7 @@ constexpr char kNetworkServices[] = "network_services";
 
 class ShillLogSourceTest : public ::testing::Test {
  public:
-  ShillLogSourceTest() {}
+  ShillLogSourceTest() = default;
   ~ShillLogSourceTest() override = default;
   ShillLogSourceTest(const ShillLogSourceTest&) = delete;
   ShillLogSourceTest*& operator=(const ShillLogSourceTest&) = delete;
@@ -115,7 +115,7 @@ TEST_F(ShillLogSourceTest, NotScrubbed) {
 
 constexpr char kScrubbedDeviceStart[] = R"("/device/wifi1")";
 constexpr char kScrubbedDeviceExpected[] = R"("/device/wifi1": {
-      "Address": "23456789abcd",
+      "Address": "*** MASKED ***",
       "DBus.Object": "/device/wifi1",
       "DBus.Service": "org.freedesktop.ModemManager1",
       "IPConfigs": {

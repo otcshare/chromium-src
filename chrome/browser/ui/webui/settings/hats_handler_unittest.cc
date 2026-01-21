@@ -8,7 +8,10 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
@@ -22,12 +25,18 @@
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/test/test_web_ui.h"
+#include "services/metrics/public/cpp/metrics_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using ::testing::_;
 
 class Profile;
+
+using safe_browsing::SafeBrowsingState;
+using safe_browsing::SecuritySettingsBundleSetting;
 
 namespace settings {
 
@@ -37,14 +46,14 @@ class HatsHandlerTest : public ChromeRenderViewHostTestHarness {
     base::test::FeatureRefAndParams settings_privacy{
         features::kHappinessTrackingSurveysForDesktopSettingsPrivacy,
         {{"settings-time", "15s"}}};
-    base::test::FeatureRefAndParams privacy_sandbox{
-        features::kHappinessTrackingSurveysForDesktopPrivacySandbox,
-        {{"settings-time", "10s"}}};
     base::test::FeatureRefAndParams privacy_guide{
         features::kHappinessTrackingSurveysForDesktopPrivacyGuide,
         {{"settings-time", "15s"}}};
+    base::test::FeatureRefAndParams security_page{
+        features::kHappinessTrackingSurveysForSecurityPage,
+        {{"security-page-time", "15s"}}};
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {settings_privacy, privacy_sandbox, privacy_guide}, {});
+        {settings_privacy, privacy_guide, security_page}, {});
   }
 
   void SetUp() override {
@@ -80,8 +89,9 @@ class HatsHandlerTest : public ChromeRenderViewHostTestHarness {
 
   content::TestWebUI* web_ui() { return web_ui_.get(); }
   HatsHandler* handler() { return handler_.get(); }
-  raw_ptr<MockHatsService> mock_hats_service_;
-  raw_ptr<MockTrustSafetySentimentService> mock_sentiment_service_;
+  raw_ptr<MockHatsService, DanglingUntriaged> mock_hats_service_;
+  raw_ptr<MockTrustSafetySentimentService, DanglingUntriaged>
+      mock_sentiment_service_;
 
  protected:
   // This should only be accessed in the test constructor, to avoid race
@@ -94,20 +104,20 @@ class HatsHandlerTest : public ChromeRenderViewHostTestHarness {
 };
 
 TEST_F(HatsHandlerTest, PrivacySettingsHats) {
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetPrivacySandboxEnabled(false);
   profile()->GetPrefs()->SetInteger(
       prefs::kCookieControlsMode,
       static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty));
   SurveyBitsData expected_product_specific_data = {
-      {"3P cookies blocked", true}, {"Privacy Sandbox enabled", false}};
+      {"3P cookies blocked", true}};
 
   // Check that both interacting with the privacy card, and running Safety Check
   // result in a survey request with the appropriate product specific data.
-  EXPECT_CALL(*mock_hats_service_,
-              LaunchDelayedSurveyForWebContents(
-                  kHatsSurveyTriggerSettingsPrivacy, web_contents(), 15000,
-                  expected_product_specific_data, _, true))
+  EXPECT_CALL(
+      *mock_hats_service_,
+      LaunchDelayedSurveyForWebContents(
+          kHatsSurveyTriggerSettingsPrivacy, web_contents(), 15000,
+          expected_product_specific_data, _,
+          HatsService::NavigationBehavior::REQUIRE_SAME_ORIGIN, _, _, _, _))
       .Times(2);
   base::Value::List args;
   args.Append(
@@ -123,9 +133,11 @@ TEST_F(HatsHandlerTest, PrivacySettingsHats) {
 
 TEST_F(HatsHandlerTest, PrivacyGuideHats) {
   // Check that completing a privacy guide triggers a privacy guide hats.
-  EXPECT_CALL(*mock_hats_service_, LaunchDelayedSurveyForWebContents(
-                                       kHatsSurveyTriggerPrivacyGuide,
-                                       web_contents(), 15000, _, _, true))
+  EXPECT_CALL(
+      *mock_hats_service_,
+      LaunchDelayedSurveyForWebContents(
+          kHatsSurveyTriggerPrivacyGuide, web_contents(), 15000, _, _,
+          HatsService::NavigationBehavior::REQUIRE_SAME_ORIGIN, _, _, _, _))
       .Times(1);
   base::Value::List args;
   args.Append(static_cast<int>(
@@ -134,58 +146,109 @@ TEST_F(HatsHandlerTest, PrivacyGuideHats) {
   task_environment()->RunUntilIdle();
 }
 
-class HatsHandlerNoSandboxTest : public HatsHandlerTest {
- public:
-  HatsHandlerNoSandboxTest() {
-    scoped_feature_list_.Reset();
-    base::test::FeatureRefAndParams settings_privacy{
-        features::kHappinessTrackingSurveysForDesktopSettingsPrivacy,
-        {{"no-sandbox", "true"}}};
-    scoped_feature_list_.InitWithFeaturesAndParameters({settings_privacy}, {});
-  }
-};
+TEST_F(HatsHandlerTest,
+       HandleSecurityPageHatsRequest_NoSurveyIfSurveysDisabled) {
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingSurveysEnabled, false);
 
-TEST_F(HatsHandlerNoSandboxTest, PrivacySettings) {
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetPrivacySandboxEnabled(false);
-  profile()->GetPrefs()->SetInteger(
-      prefs::kCookieControlsMode,
-      static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty));
-  SurveyBitsData expected_product_specific_data = {
-      {"3P cookies blocked", true}, {"Privacy Sandbox enabled", false}};
-  // Enable targeting for users who have not seen the Privacy Sandbox page and
-  // ensure the handler does not attempt to launch the survey.
-  EXPECT_CALL(*mock_hats_service_,
-              LaunchDelayedSurveyForWebContents(_, _, _, _, _, _))
+  // Check that the survey is not launched if surveys are disabled by pref.
+  EXPECT_CALL(
+      *mock_hats_service_,
+      LaunchSurvey(kHatsSurveyTriggerSettingsSecurity, _, _, _, _, _, _))
       .Times(0);
 
-  profile()->GetPrefs()->SetBoolean(prefs::kPrivacySandboxPageViewed, true);
-
   base::Value::List args;
-  args.Append(
-      static_cast<int>(HatsHandler::TrustSafetyInteraction::USED_PRIVACY_CARD));
-  handler()->HandleTrustSafetyInteractionOccurred(args);
+  args.Append(base::Value::List());  // No interactions
+  args.Append(static_cast<int>(SafeBrowsingState::STANDARD_PROTECTION));
+  // Set the time spent on the page to 20,000 milliseconds, which is longer than
+  // the configured value from Finch, 15,000 milliseconds.
+  args.Append(20000);
+  args.Append(static_cast<int>(SecuritySettingsBundleSetting::STANDARD));
+
+  handler()->HandleSecurityPageHatsRequest(args);
   task_environment()->RunUntilIdle();
 }
 
-TEST_F(HatsHandlerTest, PrivacySandboxHats) {
-  // Check that the handler correctly forwards the survey request to the
-  // HaTS service and also includes the appropriate product specific data.
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetPrivacySandboxEnabled(false);
-  profile()->GetPrefs()->SetInteger(
-      prefs::kCookieControlsMode,
-      static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty));
-  SurveyBitsData expected_product_specific_data = {
-      {"3P cookies blocked", true}, {"Privacy Sandbox enabled", false}};
-  EXPECT_CALL(*mock_hats_service_,
-              LaunchDelayedSurveyForWebContents(
-                  kHatsSurveyTriggerPrivacySandbox, web_contents(), 10000,
-                  expected_product_specific_data, _, true));
+TEST_F(HatsHandlerTest,
+       HandleSecurityPageHatsRequest_NoSurveyIfInsufficientTimeOnPage) {
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingSurveysEnabled, true);
+
+  // Check that the survey is not launched if the user has not spent enough
+  // time on the page.
+  EXPECT_CALL(
+      *mock_hats_service_,
+      LaunchSurvey(kHatsSurveyTriggerSettingsSecurity, _, _, _, _, _, _))
+      .Times(0);
+
   base::Value::List args;
-  args.Append(static_cast<int>(
-      HatsHandler::TrustSafetyInteraction::OPENED_PRIVACY_SANDBOX));
-  handler()->HandleTrustSafetyInteractionOccurred(args);
+  args.Append(base::Value::List());  // No interactions
+  args.Append(static_cast<int>(SafeBrowsingState::STANDARD_PROTECTION));
+  // Set the time spent on the page to 10,000 milliseconds, which is shorter
+  // than the configured value from Finch, 15,000 milliseconds.
+  args.Append(10000);
+  args.Append(static_cast<int>(SecuritySettingsBundleSetting::STANDARD));
+
+  handler()->HandleSecurityPageHatsRequest(args);
+  task_environment()->RunUntilIdle();
+}
+
+TEST_F(HatsHandlerTest,
+       HandleSecurityPageHatsRequest_PassesArgumentsToHatsService) {
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingSurveysEnabled, true);
+
+  SurveyStringData expected_product_specific_data = {
+      {"Security page user actions",
+       "enhanced_bundle_radio_button_clicked, "
+       "safe_browsing_row_expanded, "
+       "enhanced_safe_browsing_radio_button_clicked"},
+      {"Safe browsing setting when security page opened",
+       "standard_protection"},
+      {"Security settings bundle setting when security page opened",
+       "standard_protection"},
+      {"Safe browsing setting when security page closed",
+       "enhanced_protection"},
+      {"Security settings bundle setting when security page closed",
+       "enhanced_protection"},
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+      {"Client channel", "stable"},
+#else
+      {"Client channel", "unknown"},
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      {"Time on page (bucketed seconds)",
+       base::NumberToString(ukm::GetExponentialBucketMinForUserTiming(20))},
+  };
+
+  // Check that triggering the security page handler function will trigger HaTS
+  // correctly.
+  EXPECT_CALL(*mock_hats_service_,
+              LaunchSurvey(kHatsSurveyTriggerSettingsSecurity, _, _, _,
+                           expected_product_specific_data, _, _))
+      .Times(1);
+
+  base::Value::List interactions;
+  interactions.Append(static_cast<int>(HatsHandler::SecurityPageV2Interaction::
+                                           ENHANCED_BUNDLE_RADIO_BUTTON_CLICK));
+  interactions.Append(static_cast<int>(
+      HatsHandler::SecurityPageV2Interaction::SAFE_BROWSING_ROW_EXPANDED));
+  interactions.Append(
+      static_cast<int>(HatsHandler::SecurityPageV2Interaction::
+                           ENHANCED_SAFE_BROWSING_RADIO_BUTTON_CLICK));
+
+  base::Value::List args;
+  args.Append(std::move(interactions));
+  args.Append(static_cast<int>(SafeBrowsingState::STANDARD_PROTECTION));
+  // Set the time spent on the page to 20,000 milliseconds, which is longer than
+  // the configured value from Finch, 15,000 milliseconds.
+  args.Append(20000);
+  args.Append(static_cast<int>(SecuritySettingsBundleSetting::STANDARD));
+
+  // The "current" settings prefs are read by the handler to determine the state
+  // of the page when the survey is requested.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
+  profile()->GetPrefs()->SetInteger(
+      prefs::kSecuritySettingsBundle,
+      static_cast<int>(SecuritySettingsBundleSetting::ENHANCED));
+
+  handler()->HandleSecurityPageHatsRequest(args);
   task_environment()->RunUntilIdle();
 }
 
@@ -203,25 +266,6 @@ TEST_F(HatsHandlerTest, TrustSafetySentimentInteractions) {
   EXPECT_CALL(*mock_sentiment_service_, RanSafetyCheck()).Times(1);
   args[0] = base::Value(
       static_cast<int>(HatsHandler::TrustSafetyInteraction::RAN_SAFETY_CHECK));
-  handler()->HandleTrustSafetyInteractionOccurred(args);
-}
-
-TEST_F(HatsHandlerNoSandboxTest, TrustSafetySentimentInteractions) {
-  // A profile & feature state that would exclude the user from receiving the
-  // Privacy Settings HaTS survey should not stop the sentiment service being
-  // informed that the interaction occurred.
-  // Check that interactions relevant to the T&S sentiment service are
-  // correctly reported.
-  EXPECT_CALL(*mock_sentiment_service_, RanSafetyCheck()).Times(1);
-  base::Value::List args;
-  args.Append(
-      static_cast<int>(HatsHandler::TrustSafetyInteraction::RAN_SAFETY_CHECK));
-  profile()->GetPrefs()->SetBoolean(prefs::kPrivacySandboxPageViewed, true);
-  handler()->HandleTrustSafetyInteractionOccurred(args);
-
-  EXPECT_CALL(*mock_sentiment_service_, OpenedPasswordManager(web_contents()));
-  args[0] = base::Value(static_cast<int>(
-      HatsHandler::TrustSafetyInteraction::OPENED_PASSWORD_MANAGER));
   handler()->HandleTrustSafetyInteractionOccurred(args);
 }
 

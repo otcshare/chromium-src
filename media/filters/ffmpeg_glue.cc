@@ -4,10 +4,17 @@
 
 #include "media/filters/ffmpeg_glue.h"
 
+#include <utility>
+
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/strings/string_util.h"
 #include "media/base/container_names.h"
+#include "media/base/media_switches.h"
+#include "media/base/supported_types.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 
 namespace media {
@@ -19,7 +26,15 @@ namespace media {
 enum { kBufferSize = 32 * 1024 };
 
 static int AVIOReadOperation(void* opaque, uint8_t* buf, int buf_size) {
-  return reinterpret_cast<FFmpegURLProtocol*>(opaque)->Read(buf_size, buf);
+  // Not sure this can happen, but it's unclear from the ffmpeg code, so guard
+  // against it.
+  if (buf_size < 0) {
+    return AVERROR(EIO);
+  }
+  // SAFETY: Buffer from FFMpeg. `buf` points to `buf_size` bytes.
+  auto buffer =
+      UNSAFE_BUFFERS(base::span(buf, base::checked_cast<size_t>(buf_size)));
+  return reinterpret_cast<FFmpegURLProtocol*>(opaque)->Read(buffer);
 }
 
 static int64_t AVIOSeekOperation(void* opaque, int64_t offset, int whence) {
@@ -59,9 +74,25 @@ static int64_t AVIOSeekOperation(void* opaque, int64_t offset, int whence) {
 
 static void LogContainer(bool is_local_file,
                          container_names::MediaContainerName container) {
-  base::UmaHistogramSparse("Media.DetectedContainer", container);
-  if (is_local_file)
-    base::UmaHistogramSparse("Media.DetectedContainer.Local", container);
+  base::UmaHistogramSparse("Media.DetectedContainer",
+                           std::to_underlying(container));
+  if (is_local_file) {
+    base::UmaHistogramSparse("Media.DetectedContainer.Local",
+                             std::to_underlying(container));
+  }
+}
+
+static const char* GetAllowedDemuxers() {
+  static const base::NoDestructor<std::string> kAllowedDemuxers([]() {
+    // This should match the configured lists in //third_party/ffmpeg.
+    std::vector<std::string> allowed_demuxers = {"ogg",  "matroska", "wav",
+                                                 "flac", "mp3",      "mov"};
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+    allowed_demuxers.push_back("aac");
+#endif
+    return base::JoinString(allowed_demuxers, ",");
+  }());
+  return kAllowedDemuxers->c_str();
 }
 
 FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
@@ -88,11 +119,30 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
   // Enable fast, but inaccurate seeks for MP3.
   format_context_->flags |= AVFMT_FLAG_FAST_SEEK;
 
+  // We don't allow H.264 parsing during demuxing since we have our own parser
+  // and the ffmpeg one increases memory usage unnecessarily.
+  format_context_->flags |= AVFMT_FLAG_NOH264PARSE;
+
   // Ensures format parsing errors will bail out. From an audit on 11/2017, all
   // instances were real failures. Solves bugs like http://crbug.com/710791.
   format_context_->error_recognition |= AV_EF_EXPLODE;
 
   format_context_->pb = avio_context_.get();
+
+  // Enhance security by forbidding ffmpeg from decoding / demuxing codecs and
+  // containers which should be unsupported.
+  //
+  // Normally these aren't even compiled in, but during codec/container
+  // deprecations and when an external ffmpeg is used this adds extra
+  // security.
+  //
+  // We also don't allow ffmpeg to use any video decoders during demuxing
+  // since it's unnecessary for the codecs we use and just increases
+  // memory usage.
+  //
+  // Note: FFmpeg will try to free these strings, so we must duplicate them.
+  format_context_->codec_whitelist = av_strdup(GetAllowedAudioDecoders());
+  format_context_->format_whitelist = av_strdup(GetAllowedDemuxers());
 }
 
 bool FFmpegGlue::OpenContext(bool is_local_file) {
@@ -102,10 +152,21 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
   // destruction path to avoid double frees.
   open_called_ = true;
 
+  // We need to set the WAV decoder max size to what it had previously been set
+  // to. The auto-selectable max size ends up at 64k, which is larger than the
+  // read size from a MultiBufferDataSource, causing demuxer init to never
+  // complete.
+  AVDictionary* options = nullptr;
+  av_dict_set(&options, "max_size", "4096", 0);
+
   // By passing nullptr for the filename (second parameter) we are telling
   // FFmpeg to use the AVIO context we setup from the AVFormatContext structure.
-  const int ret =
-      avformat_open_input(&format_context_, nullptr, nullptr, nullptr);
+  const int ret = avformat_open_input(&format_context_.AsEphemeralRawAddr(),
+                                      nullptr, nullptr, &options);
+
+  if (options) {
+    av_dict_free(&options);
+  }
 
   // If FFmpeg can't identify the file, read the first 8k and attempt to guess
   // at the container type ourselves. This way we can track emergent formats.
@@ -126,33 +187,36 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
     LogContainer(is_local_file, container_);
 
     detected_hls_ =
-        container_ == container_names::MediaContainerName::CONTAINER_HLS;
+        container_ == container_names::MediaContainerName::kContainerHLS;
     return false;
   } else if (ret < 0) {
     return false;
   }
 
-  // Rely on ffmpeg's parsing if we're able to succesfully open the file.
-  if (strcmp(format_context_->iformat->name, "mov,mp4,m4a,3gp,3g2,mj2") == 0)
-    container_ = container_names::CONTAINER_MOV;
-  else if (strcmp(format_context_->iformat->name, "flac") == 0)
-    container_ = container_names::CONTAINER_FLAC;
-  else if (strcmp(format_context_->iformat->name, "matroska,webm") == 0)
-    container_ = container_names::CONTAINER_WEBM;
-  else if (strcmp(format_context_->iformat->name, "ogg") == 0)
-    container_ = container_names::CONTAINER_OGG;
-  else if (strcmp(format_context_->iformat->name, "wav") == 0)
-    container_ = container_names::CONTAINER_WAV;
-  else if (strcmp(format_context_->iformat->name, "aac") == 0)
-    container_ = container_names::CONTAINER_AAC;
-  else if (strcmp(format_context_->iformat->name, "mp3") == 0)
-    container_ = container_names::CONTAINER_MP3;
-  else if (strcmp(format_context_->iformat->name, "amr") == 0)
-    container_ = container_names::CONTAINER_AMR;
-  else if (strcmp(format_context_->iformat->name, "avi") == 0)
-    container_ = container_names::CONTAINER_AVI;
+  // Rely on ffmpeg's parsing if we're able to successfully open the file.
+  std::string_view format_name = format_context_->iformat->name;
+  if (format_name == "mov,mp4,m4a,3gp,3g2,mj2") {
+    container_ = container_names::MediaContainerName::kContainerMOV;
+  } else if (format_name == "flac") {
+    container_ = container_names::MediaContainerName::kContainerFLAC;
+  } else if (format_name == "matroska,webm") {
+    container_ = container_names::MediaContainerName::kContainerWEBM;
+  } else if (format_name == "ogg") {
+    container_ = container_names::MediaContainerName::kContainerOgg;
+  } else if (format_name == "wav") {
+    container_ = container_names::MediaContainerName::kContainerWAV;
+  } else if (format_name == "aac") {
+    container_ = container_names::MediaContainerName::kContainerAAC;
+  } else if (format_name == "mp3") {
+    container_ = container_names::MediaContainerName::kContainerMP3;
+  } else if (format_name == "amr") {
+    container_ = container_names::MediaContainerName::kContainerAMR;
+  } else if (format_name == "avi") {
+    container_ = container_names::MediaContainerName::kContainerAVI;
+  }
 
-  DCHECK_NE(container_, container_names::CONTAINER_UNKNOWN);
+  // For a successfully opened file, we will get a container we've compiled in.
+  CHECK_NE(container_, container_names::MediaContainerName::kContainerUnknown);
   LogContainer(is_local_file, container_);
 
   return true;
@@ -175,7 +239,7 @@ FFmpegGlue::~FFmpegGlue() {
     return;
   }
 
-  avformat_close_input(&format_context_);
+  avformat_close_input(&format_context_.AsEphemeralRawAddr());
   av_free(avio_context_->buffer);
 }
 

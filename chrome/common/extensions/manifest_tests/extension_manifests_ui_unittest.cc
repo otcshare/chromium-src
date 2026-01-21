@@ -3,13 +3,15 @@
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
-class UIManifestTest : public ChromeManifestTest {
-};
+using UIManifestTest = ChromeManifestTest;
 
 TEST_F(UIManifestTest, DisallowMultipleUISurfaces) {
   LoadAndExpectError("multiple_ui_surfaces.json",

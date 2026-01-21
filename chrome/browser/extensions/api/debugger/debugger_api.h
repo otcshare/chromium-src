@@ -15,8 +15,12 @@
 #include "chrome/common/extensions/api/debugger.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::api::debugger::Debuggee;
+using extensions::api::debugger::DebuggerSession;
 
 // Base debugger function.
 
@@ -81,6 +85,8 @@ class DebuggerSendCommandFunction : public DebuggerFunction {
 
   // ExtensionFunction:
   ResponseAction Run() override;
+
+  DebuggerSession debugger_session_;
 };
 
 // Implements the debugger.getTargets() extension function.

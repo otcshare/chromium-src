@@ -3,15 +3,14 @@
 // found in the LICENSE file.
 
 import '//resources/cr_elements/cr_button/cr_button.js';
-import '//resources/cr_elements/policy/cr_policy_pref_indicator.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
-import '../settings_shared.css.js';
 
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrPolicyPrefMixin} from '/shared/settings/controls/cr_policy_pref_mixin.js';
+import {PrefControlMixin} from '/shared/settings/controls/pref_control_mixin.js';
 
 import {getTemplate} from './controlled_button.html.js';
-import {CrPolicyPrefMixin} from './cr_policy_pref_mixin.js';
-import {PrefControlMixin} from './pref_control_mixin.js';
 
 const ControlledButtonElementBase =
     CrPolicyPrefMixin(PrefControlMixin(PolymerElement));
@@ -51,11 +50,11 @@ export class ControlledButtonElement extends ControlledButtonElementBase {
     };
   }
 
-  endJustified: boolean;
-  label: string;
-  disabled: boolean;
-  private actionClass_: string;
-  private enforced_: boolean;
+  declare endJustified: boolean;
+  declare label: string;
+  declare disabled: boolean;
+  declare private actionClass_: string;
+  declare private enforced_: boolean;
 
   override connectedCallback() {
     super.connectedCallback();

@@ -44,39 +44,58 @@ class ChromePageInfoUiDelegate : public PageInfoUiDelegate {
 
 #if !BUILDFLAG(IS_ANDROID)
   // Returns "About this site" info for the active page.
-  absl::optional<page_info::proto::SiteInfo> GetAboutThisSiteInfo();
-
-  // Opens the source URL in a new tab.
-  void AboutThisSiteSourceClicked(GURL url, const ui::Event& event);
+  std::optional<page_info::proto::SiteInfo> GetAboutThisSiteInfo();
 
   // Handles opening the "More about this page" URL in a new tab.
   void OpenMoreAboutThisPageUrl(const GURL& url, const ui::Event& event);
 
   // If PageInfo should show a link to the site or app's settings page, this
-  // will return true and set the params to the appropriate resource IDs (IDS_*).
-  // Otherwise, it will return false.
+  // will return true and set the params to the appropriate resource IDs
+  // (IDS_*). Otherwise, it will return false.
   bool ShouldShowSiteSettings(int* link_text_id, int* tooltip_text_id);
 
   // The returned string, if non-empty, should be added as a sublabel that gives
   // extra details to the user concerning the granted permission.
   std::u16string GetPermissionDetail(ContentSettingsType type);
 
-  // Opens Privacy Sandbox's "Ad Personalzation" settings page.
-  void ShowPrivacySandboxAdPersonalization();
+  // Similar to GetPermissionDetail, if this returns true a sublabel should be
+  // added to give extra details to the user concerning the granted permission,
+  // with the difference being that this label includes an embedded link.
+  // `text_id` should be set to the resource ID for the overall
+  // label, with `link_id` being inserted into a place holder in the
+  // description as a clickable link. When the link is clicked,
+  // SettingsLinkClicked() is called.
+  bool ShouldShowSettingsLinkForPermission(ContentSettingsType type,
+                                           int* text_id,
+                                           int* link_id);
+
+  // Called when the link specified by ShouldShowSettingsLinkForPermission() is
+  // clicked.
+  void SettingsLinkClicked(ContentSettingsType type);
+
+  // Opens Privacy Sandbox settings page.
+  void ShowPrivacySandboxSettings();
 
   // PageInfoUiDelegate implementation
   bool IsBlockAutoPlayEnabled() override;
   bool IsMultipleTabsOpen() override;
+  void OpenSiteSettingsFileSystem() override;
+
+  void OpenMerchantTrustSidePanel(const GURL& url);
 #endif  // !BUILDFLAG(IS_ANDROID)
-  permissions::PermissionResult GetPermissionResult(
+  content::PermissionResult GetPermissionResult(
       blink::PermissionType permission) override;
-  absl::optional<permissions::PermissionResult> GetEmbargoResult(
+  std::optional<content::PermissionResult> GetEmbargoResult(
       ContentSettingsType type) override;
+
+  void GetMerchantTrustInfo(page_info::MerchantDataCallback callback) override;
+  void RecordMerchantTrustButtonShown();
+  void RecordMerchantTrustSidePanelOpened();
 
  private:
   Profile* GetProfile() const;
 
-  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
+  raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> web_contents_;
   GURL site_url_;
 };
 

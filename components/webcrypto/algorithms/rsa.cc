@@ -4,17 +4,20 @@
 
 #include "components/webcrypto/algorithms/rsa.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
 #include "components/webcrypto/algorithms/asymmetric_key_util.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/blink_key_handle.h"
 #include "components/webcrypto/generate_key_result.h"
 #include "components/webcrypto/jwk.h"
 #include "components/webcrypto/status.h"
+#include "crypto/evp.h"
+#include "crypto/keypair.h"
 #include "crypto/openssl_util.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
 #include "third_party/blink/public/platform/web_crypto_key_algorithm.h"
@@ -50,7 +53,7 @@ struct JwkRsaInfo {
 //     present.
 //   * expected_usages must be a subset of the JWK's "key_ops" if present.
 Status ReadRsaKeyJwk(base::span<const uint8_t> key_data,
-                     base::StringPiece expected_alg,
+                     std::string_view expected_alg,
                      bool expected_extractable,
                      blink::WebCryptoKeyUsageMask expected_usages,
                      JwkRsaInfo* result) {
@@ -106,6 +109,13 @@ Status ReadRsaKeyJwk(base::span<const uint8_t> key_data,
   return Status::Success();
 }
 
+// Converts a BIGNUM to a big endian byte array.
+std::vector<uint8_t> BIGNUMToVector(const BIGNUM* n) {
+  std::vector<uint8_t> v(BN_num_bytes(n));
+  BN_bn2bin(n, v.data());
+  return v;
+}
+
 // Creates a blink::WebCryptoAlgorithm having the modulus length and public
 // exponent  of |key|.
 Status CreateRsaHashedKeyAlgorithm(
@@ -119,18 +129,16 @@ Status CreateRsaHashedKeyAlgorithm(
   if (!rsa)
     return Status::ErrorUnexpected();
 
-  unsigned int modulus_length_bits = BN_num_bits(rsa->n);
+  unsigned int modulus_length_bits = RSA_bits(rsa);
 
   // Convert the public exponent to big-endian representation.
-  std::vector<uint8_t> e(BN_num_bytes(rsa->e));
-  if (e.size() == 0)
+  std::vector<uint8_t> e = BIGNUMToVector(RSA_get0_e(rsa));
+  if (e.empty()) {
     return Status::ErrorUnexpected();
-  if (e.size() != BN_bn2bin(rsa->e, &e[0]))
-    return Status::ErrorUnexpected();
+  }
 
   *key_algorithm = blink::WebCryptoKeyAlgorithm::CreateRsaHashed(
-      rsa_algorithm, modulus_length_bits, &e[0],
-      static_cast<unsigned int>(e.size()), hash_algorithm);
+      rsa_algorithm, modulus_length_bits, e, hash_algorithm);
 
   return Status::Success();
 }
@@ -176,25 +184,32 @@ Status ImportRsaPrivateKey(const blink::WebCryptoAlgorithm& algorithm,
                            blink::WebCryptoKeyUsageMask usages,
                            const JwkRsaInfo& params,
                            blink::WebCryptoKey* key) {
-  bssl::UniquePtr<RSA> rsa(RSA_new());
-
-  rsa->n = BN_bin2bn(params.n.data(), params.n.size(), nullptr);
-  rsa->e = BN_bin2bn(params.e.data(), params.e.size(), nullptr);
-  rsa->d = BN_bin2bn(params.d.data(), params.d.size(), nullptr);
-  rsa->p = BN_bin2bn(params.p.data(), params.p.size(), nullptr);
-  rsa->q = BN_bin2bn(params.q.data(), params.q.size(), nullptr);
-  rsa->dmp1 = BN_bin2bn(params.dp.data(), params.dp.size(), nullptr);
-  rsa->dmq1 = BN_bin2bn(params.dq.data(), params.dq.size(), nullptr);
-  rsa->iqmp = BN_bin2bn(params.qi.data(), params.qi.size(), nullptr);
-
-  if (!rsa->n || !rsa->e || !rsa->d || !rsa->p || !rsa->q || !rsa->dmp1 ||
-      !rsa->dmq1 || !rsa->iqmp) {
+  bssl::UniquePtr<BIGNUM> n(
+      BN_bin2bn(params.n.data(), params.n.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> e(
+      BN_bin2bn(params.e.data(), params.e.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> d(
+      BN_bin2bn(params.d.data(), params.d.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> p(
+      BN_bin2bn(params.p.data(), params.p.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> q(
+      BN_bin2bn(params.q.data(), params.q.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> dmp1(
+      BN_bin2bn(params.dp.data(), params.dp.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> dmq1(
+      BN_bin2bn(params.dq.data(), params.dq.size(), nullptr));
+  bssl::UniquePtr<BIGNUM> iqmp(
+      BN_bin2bn(params.qi.data(), params.qi.size(), nullptr));
+  if (!n || !e || !d || !p || !q || !dmp1 || !dmq1 || !iqmp) {
     return Status::OperationError();
   }
 
-  // TODO(eroman): This should be a DataError.
-  if (!RSA_check_key(rsa.get()))
-    return Status::OperationError();
+  bssl::UniquePtr<RSA> rsa(RSA_new_private_key(n.get(), e.get(), d.get(),
+                                               p.get(), q.get(), dmp1.get(),
+                                               dmq1.get(), iqmp.get()));
+  if (!rsa) {
+    return Status::DataError();
+  }
 
   // Create a corresponding EVP_PKEY.
   bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
@@ -212,29 +227,14 @@ Status ImportRsaPublicKey(const blink::WebCryptoAlgorithm& algorithm,
                           base::span<const uint8_t> n,
                           base::span<const uint8_t> e,
                           blink::WebCryptoKey* key) {
-  bssl::UniquePtr<RSA> rsa(RSA_new());
-
-  rsa->n = BN_bin2bn(n.data(), n.size(), nullptr);
-  rsa->e = BN_bin2bn(e.data(), e.size(), nullptr);
-
-  if (!rsa->n || !rsa->e)
+  auto pubkey = crypto::keypair::PublicKey::FromRsaPublicKeyComponents(n, e);
+  if (!pubkey) {
     return Status::OperationError();
-
-  // Create a corresponding EVP_PKEY.
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-  if (!pkey || !EVP_PKEY_set1_RSA(pkey.get(), rsa.get()))
-    return Status::OperationError();
+  }
 
   return CreateWebCryptoRsaPublicKey(
-      std::move(pkey), algorithm.Id(),
+      bssl::UpRef(pubkey->key()), algorithm.Id(),
       algorithm.RsaHashedImportParams()->GetHash(), extractable, usages, key);
-}
-
-// Converts a BIGNUM to a big endian byte array.
-std::vector<uint8_t> BIGNUMToVector(const BIGNUM* n) {
-  std::vector<uint8_t> v(BN_num_bytes(n));
-  BN_bn2bin(n, v.data());
-  return v;
 }
 
 // Synthesizes an import algorithm given a key algorithm, so that
@@ -269,23 +269,29 @@ Status RsaHashedAlgorithm::GenerateKey(
 
   // Limit the RSA key sizes to:
   //   * Multiple of 8 bits
-  //   * 256 bits to 16K bits
+  //   * 256 bits to 8K bits
   //
   // These correspond with limitations at the time there was an NSS WebCrypto
   // implementation. However in practice the upper bound is also helpful
-  // because generating large RSA keys is very slow.
-  if (modulus_length_bits < 256 || modulus_length_bits > 16384 ||
+  // because generating large RSA keys is very slow. In particular, generating
+  // keys > 8192 bits takes multiple minutes of compute time without providing
+  // any increase in realistic security level.
+  if (modulus_length_bits < 256 || modulus_length_bits > 8192 ||
       (modulus_length_bits % 8) != 0) {
     return Status::ErrorGenerateRsaUnsupportedModulus();
   }
 
-  unsigned int public_exponent = 0;
-  if (!params->ConvertPublicExponentToUnsigned(public_exponent))
+  std::optional<uint32_t> public_exponent = params->PublicExponentAsU32();
+  if (!public_exponent) {
     return Status::ErrorGenerateKeyPublicExponent();
+  }
 
-  // OpenSSL hangs when given bad public exponents. Use a whitelist.
-  if (public_exponent != 3 && public_exponent != 65537)
+  // The canonical RSA exponent is 65537, but 3 is also common. Use an allowlist
+  // because RSA key generation is a probabilistic process and may hang on
+  // invalid exponents.
+  if (*public_exponent != 3 && *public_exponent != 65537) {
     return Status::ErrorGenerateKeyPublicExponent();
+  }
 
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
@@ -293,7 +299,7 @@ Status RsaHashedAlgorithm::GenerateKey(
   bssl::UniquePtr<RSA> rsa_private_key(RSA_new());
   bssl::UniquePtr<BIGNUM> bn(BN_new());
   if (!rsa_private_key.get() || !bn.get() ||
-      !BN_set_word(bn.get(), public_exponent)) {
+      !BN_set_word(bn.get(), *public_exponent)) {
     return Status::OperationError();
   }
 
@@ -464,14 +470,16 @@ Status RsaHashedAlgorithm::ExportKeyPkcs8(const blink::WebCryptoKey& key,
                                           std::vector<uint8_t>* buffer) const {
   if (key.GetType() != blink::kWebCryptoKeyTypePrivate)
     return Status::ErrorUnexpectedKeyType();
-  return ExportPKeyPkcs8(GetEVP_PKEY(key), buffer);
+  *buffer = crypto::evp::PrivateKeyToBytes(GetEVP_PKEY(key));
+  return Status::Success();
 }
 
 Status RsaHashedAlgorithm::ExportKeySpki(const blink::WebCryptoKey& key,
                                          std::vector<uint8_t>* buffer) const {
   if (key.GetType() != blink::kWebCryptoKeyTypePublic)
     return Status::ErrorUnexpectedKeyType();
-  return ExportPKeySpki(GetEVP_PKEY(key), buffer);
+  *buffer = crypto::evp::PublicKeyToBytes(GetEVP_PKEY(key));
+  return Status::Success();
 }
 
 Status RsaHashedAlgorithm::ExportKeyJwk(const blink::WebCryptoKey& key,
@@ -569,10 +577,10 @@ Status RsaHashedAlgorithm::DeserializeKeyForClone(
 
   if (algorithm.RsaHashedParams()->PublicExponent().size() !=
           key->Algorithm().RsaHashedParams()->PublicExponent().size() ||
-      0 !=
-          memcmp(algorithm.RsaHashedParams()->PublicExponent().data(),
-                 key->Algorithm().RsaHashedParams()->PublicExponent().data(),
-                 key->Algorithm().RsaHashedParams()->PublicExponent().size())) {
+      0 != UNSAFE_TODO(memcmp(
+               algorithm.RsaHashedParams()->PublicExponent().data(),
+               key->Algorithm().RsaHashedParams()->PublicExponent().data(),
+               key->Algorithm().RsaHashedParams()->PublicExponent().size()))) {
     return Status::ErrorUnexpected();
   }
 

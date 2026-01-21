@@ -5,7 +5,12 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_TEST_OOBE_SCREENS_UTILS_H_
 #define CHROME_BROWSER_ASH_LOGIN_TEST_OOBE_SCREENS_UTILS_H_
 
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/welcome_screen.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 
@@ -19,6 +24,8 @@ void WaitForNetworkSelectionScreen();
 void TapNetworkSelectionNext();
 void WaitForUpdateScreen();
 void ExitUpdateScreenNoUpdate();
+void WaitForConsumerUpdateScreen();
+void ExitConsumerUpdateScreenNoUpdate();
 void WaitForFingerprintScreen();
 void ExitFingerprintPinSetupScreen();
 void WaitForPinSetupScreen();
@@ -26,12 +33,12 @@ void ExitPinSetupScreen();
 void SkipToEnrollmentOnRecovery();
 void WaitForEnrollmentScreen();
 void WaitForUserCreationScreen();
+void TapForPersonalUseCrRadioButton();
 void TapUserCreationNext();
+void WaitForGaiaInfoScreen();
 // Wait for OobeUI to finish loading.
 void WaitForOobeJSReady();
 
-void WaitForEulaScreen();
-void TapEulaAccept();
 void WaitForSyncConsentScreen();
 void ExitScreenSyncConsent();
 void WaitForConsolidatedConsentScreen();
@@ -43,6 +50,8 @@ void ClickSignInFatalScreenActionButton();
 
 bool IsScanningRequestedOnNetworkScreen();
 bool IsScanningRequestedOnErrorScreen();
+
+void SetFakeTouchpadDevice();
 
 class LanguageReloadObserver : public WelcomeScreen::Observer {
  public:
@@ -57,7 +66,7 @@ class LanguageReloadObserver : public WelcomeScreen::Observer {
   // WelcomeScreen::Observer:
   void OnLanguageListReloaded() override;
 
-  WelcomeScreen* const welcome_screen_;
+  const raw_ptr<WelcomeScreen> welcome_screen_;
   base::RunLoop run_loop_;
 };
 
@@ -80,11 +89,48 @@ class OobeUiDestroyedWaiter : public OobeUI::Observer {
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
+// Watches for a particular screen and records whether it has been shown during
+// this object's lifetime (as opposed to blocking until the screen is shown).
+template <typename TargetScreenViewT>
+class OobeScreenWatcher : public OobeUI::Observer {
+ public:
+  explicit OobeScreenWatcher(OobeUI* oobe_ui) {
+    oobe_ui_observation_.Observe(oobe_ui);
+    if (oobe_ui->current_screen() == TargetScreenViewT::kScreenId) {
+      has_target_screen_been_shown_ = true;
+    }
+  }
+
+  OobeScreenWatcher(const OobeScreenWatcher&) = delete;
+  OobeScreenWatcher operator=(const OobeScreenWatcher&) = delete;
+
+  ~OobeScreenWatcher() override = default;
+
+  bool has_target_screen_been_shown() const {
+    return has_target_screen_been_shown_;
+  }
+
+  // OobeUI::Observer:
+  void OnCurrentScreenChanged(OobeScreenId current_screen,
+                              OobeScreenId new_screen) override {
+    if (new_screen == TargetScreenViewT::kScreenId) {
+      has_target_screen_been_shown_ = true;
+    }
+  }
+
+  // OobeUI::Observer:
+  void OnDestroyingOobeUI() override { oobe_ui_observation_.Reset(); }
+
+ private:
+  bool has_target_screen_been_shown_ = false;
+  base::ScopedObservation<OobeUI, OobeUI::Observer> oobe_ui_observation_{this};
+};
+
 // Use this method when clicking/tapping on something that leads to the
 // destruction of the OobeUI. Currently used when clicking on things that
 // trigger a device restart/reset.
 void TapOnPathAndWaitForOobeToBeDestroyed(
-    std::initializer_list<base::StringPiece> element_ids);
+    std::initializer_list<std::string_view> element_ids);
 
 }  // namespace test
 }  // namespace ash

@@ -4,24 +4,28 @@
 
 package org.chromium.native_test;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Log;
 import org.chromium.base.StrictModeContext;
-import org.chromium.base.annotations.JNINamespace;
 
 import java.io.File;
 
-/**
- *  Helper for browser tests running inside a java Activity.
- */
+/** Helper for browser tests running inside a java Activity. */
 @JNINamespace("testing::android")
 public class NativeBrowserTest {
     private static final String TAG = "NativeBrowserTest";
 
+    private static Runnable sActivityTeardownCallback;
+
     // Set the command line flags to be passed to the C++ main() method. Each
     // browser tests Activity should ensure these are included.
     public static final String BROWSER_TESTS_FLAGS[] = {
-            // switches::kSingleProcessTests
-            "--single-process-tests"};
+        // switches::kSingleProcessTests
+        "--single-process-tests"
+    };
 
     /**
      * Deletes a file or directory along with any of its children.
@@ -63,8 +67,35 @@ public class NativeBrowserTest {
      * initialization and is ready for the test to run. This informs C++ to run the test.
      */
     public static void javaStartupTasksComplete() {
-        nativeJavaStartupTasksCompleteForBrowserTests();
+        NativeBrowserTestJni.get().javaStartupTasksCompleteForBrowserTests();
     }
 
-    private static native void nativeJavaStartupTasksCompleteForBrowserTests();
+    /**
+     * Sets the callback to tear down the Activity when the test finishes running. This is optional
+     * if tests do not want/need to tear down the Activity (eg. content shell tests).
+     */
+    public static void setActivityTeardownCallback(Runnable callback) {
+        sActivityTeardownCallback = callback;
+    }
+
+    @CalledByNative
+    private static void runActivityTeardownCallback() {
+        if (sActivityTeardownCallback != null) {
+            sActivityTeardownCallback.run();
+        } else {
+            activityTeardownComplete();
+        }
+        sActivityTeardownCallback = null;
+    }
+
+    public static void activityTeardownComplete() {
+        NativeBrowserTestJni.get().activityTeardownCompleteForBrowserTests();
+    }
+
+    @NativeMethods
+    interface Natives {
+        void javaStartupTasksCompleteForBrowserTests();
+
+        void activityTeardownCompleteForBrowserTests();
+    }
 }

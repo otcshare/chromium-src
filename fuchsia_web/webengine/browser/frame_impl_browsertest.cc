@@ -2,29 +2,38 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "fuchsia_web/webengine/browser/frame_impl.h"
+
 #include <fuchsia/element/cpp/fidl.h>
-#include <lib/ui/scenic/cpp/view_token_pair.h>
+#include <fuchsia/ui/views/cpp/fidl.h>
 #include <lib/zx/time.h>
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/mem_buffer_util.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
+#include "components/fuchsia_component_support/annotations_manager.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/test_utils.h"
 #include "fuchsia_web/common/string_util.h"
 #include "fuchsia_web/common/test/fit_adapter.h"
+#include "fuchsia_web/common/test/frame_for_test.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "fuchsia_web/common/test/test_navigation_listener.h"
 #include "fuchsia_web/webengine/browser/context_impl.h"
 #include "fuchsia_web/webengine/browser/fake_semantics_manager.h"
-#include "fuchsia_web/webengine/browser/frame_impl.h"
 #include "fuchsia_web/webengine/browser/frame_impl_browser_test_base.h"
-#include "fuchsia_web/webengine/test/frame_for_test.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/ozone/public/ozone_platform.h"
 
 using testing::_;
@@ -47,13 +56,11 @@ namespace {
 
 constexpr char kPage1Path[] = "/title1.html";
 constexpr char kPage2Path[] = "/title2.html";
-constexpr char kPage3Path[] = "/websql.html";
 constexpr char kReportCloseEventsPath[] = "/report_close_events.html";
 constexpr char kVisibilityPath[] = "/visibility.html";
 constexpr char kWaitSizePath[] = "/wait-size.html";
 constexpr char kPage1Title[] = "title 1";
 constexpr char kPage2Title[] = "title 2";
-constexpr char kPage3Title[] = "websql not available";
 constexpr char kDataUrl[] =
     "data:text/html;base64,PGI+SGVsbG8sIHdvcmxkLi4uPC9iPg==";
 
@@ -77,6 +84,21 @@ class MockWebContentsObserver : public content::WebContentsObserver {
                void(content::RenderViewHost* render_view_host));
 };
 
+std::string GetDocumentVisibilityState(fuchsia::web::Frame* frame) {
+  auto visibility = base::MakeRefCounted<base::RefCountedData<std::string>>();
+  base::RunLoop loop;
+  frame->ExecuteJavaScript(
+      {"*"}, base::MemBufferFromString("document.visibilityState;", "test"),
+      [visibility, quit_loop = loop.QuitClosure()](
+          fuchsia::web::Frame_ExecuteJavaScript_Result result) {
+        ASSERT_TRUE(result.is_response());
+        visibility->data = *base::StringFromMemBuffer(result.response().result);
+        quit_loop.Run();
+      });
+  loop.Run();
+  return visibility->data;
+}
+
 }  // namespace
 
 // Defines a suite of tests that exercise Frame-level functionality, such as
@@ -93,34 +115,10 @@ class FrameImplTest : public FrameImplTestBase {
                void(const net::test_server::HttpRequest& request));
 };
 
-std::string GetDocumentVisibilityState(fuchsia::web::Frame* frame) {
-  auto visibility = base::MakeRefCounted<base::RefCountedData<std::string>>();
-  base::RunLoop loop;
-  frame->ExecuteJavaScript(
-      {"*"}, base::MemBufferFromString("document.visibilityState;", "test"),
-      [visibility, quit_loop = loop.QuitClosure()](
-          fuchsia::web::Frame_ExecuteJavaScript_Result result) {
-        ASSERT_TRUE(result.is_response());
-        visibility->data = *base::StringFromMemBuffer(result.response().result);
-        quit_loop.Run();
-      });
-  loop.Run();
-  return visibility->data;
-}
-
-::fuchsia::ui::views::ViewRef CloneViewRef(
-    const ::fuchsia::ui::views::ViewRef& view_ref) {
-  ::fuchsia::ui::views::ViewRef dup;
-  zx_status_t status =
-      view_ref.reference.duplicate(ZX_RIGHT_SAME_RIGHTS, &dup.reference);
-  ZX_CHECK(status == ZX_OK, status) << "zx_object_duplicate";
-  return dup;
-}
-
 // Verifies that Frames are initially "hidden", changes to "visible" once the
 // View is attached to a Presenter and back to "hidden" when the View is
 // detached from the Presenter.
-// TODO(crbug.com/1377994): Re-enable this test on Arm64 when femu is available
+// TODO(crbug.com/42050537): Re-enable this test on Arm64 when femu is available
 // for that architecture. This test requires Vulkan and Scenic to properly
 // signal the Views visibility.
 #if defined(ARCH_CPU_ARM_FAMILY)
@@ -129,9 +127,9 @@ std::string GetDocumentVisibilityState(fuchsia::web::Frame* frame) {
 #define MAYBE_VisibilityState VisibilityState
 #endif
 IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_VisibilityState) {
-  // This test uses the `fuchsia.ui.gfx` variant of `Frame.CreateView*()`.
-  ASSERT_EQ(ui::OzonePlatform::GetInstance()->GetPlatformNameForTest(),
-            "scenic");
+  // This test uses the `fuchsia.ui.composition` variant of
+  // `Frame.CreateView*()`.
+  ASSERT_EQ(ui::OzonePlatform::GetPlatformNameForTest(), "flatland");
 
   net::test_server::EmbeddedTestServerHandle test_server_handle;
   ASSERT_TRUE(test_server_handle =
@@ -156,16 +154,22 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_VisibilityState) {
 
   // Query the document.visibilityState after creating the View, but without it
   // actually "attached" to the view tree.
-  auto view_tokens = scenic::ViewTokenPair::New();
-  auto view_ref_pair = scenic::ViewRefPair::New();
-  frame->CreateViewWithViewRef(std::move(view_tokens.view_token),
-                               std::move(view_ref_pair.control_ref),
-                               CloneViewRef(view_ref_pair.view_ref));
-
+  fuchsia::ui::views::ViewCreationToken view_token;
+  fuchsia::ui::views::ViewportCreationToken viewport_token;
+  auto status =
+      zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ASSERT_EQ(ZX_OK, status);
+  fuchsia::web::CreateView2Args create_view_args;
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame->CreateView2(std::move(create_view_args));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(GetDocumentVisibilityState(frame.ptr().get()), "\"hidden\"");
 
   // Attach the View to a Presenter, the page should be visible.
+  auto annotations_manager =
+      std::make_unique<fuchsia_component_support::AnnotationsManager>();
+  fuchsia::element::AnnotationControllerHandle annotation_controller;
+  annotations_manager->Connect(annotation_controller.NewRequest());
   auto presenter = base::ComponentContextForProcess()
                        ->svc()
                        ->Connect<::fuchsia::element::GraphicalPresenter>();
@@ -173,30 +177,22 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_VisibilityState) {
     ZX_LOG(ERROR, status) << "GraphicalPresenter disconnected.";
     ADD_FAILURE();
   });
-  ::fuchsia::element::ViewSpec view_spec;
-  view_spec.set_view_holder_token(std::move(view_tokens.view_holder_token));
-  view_spec.set_view_ref(std::move(view_ref_pair.view_ref));
-  ::fuchsia::element::ViewControllerPtr view_controller;
-  presenter->PresentView(std::move(view_spec), nullptr,
+  fuchsia::element::ViewSpec view_spec;
+  view_spec.set_viewport_creation_token(std::move(viewport_token));
+  view_spec.set_annotations({});
+  fuchsia::element::ViewControllerPtr view_controller;
+  presenter->PresentView(std::move(view_spec), std::move(annotation_controller),
                          view_controller.NewRequest(),
                          [](auto result) { EXPECT_FALSE(result.is_err()); });
   frame.navigation_listener().RunUntilTitleEquals("visible");
 
-  // Detach the ViewController, causing the View to be detached.
-  // This is a regression test for crbug.com/1141093, verifying that the page
-  // receives a "not visible" event as a result.
-  view_controller->Dismiss();
-  frame.navigation_listener().RunUntilTitleEquals("hidden");
-}
-
-void VerifyCanGoBackAndForward(FrameForTest& frame,
-                               bool can_go_back_expected,
-                               bool can_go_forward_expected) {
-  auto* state = frame.navigation_listener().current_state();
-  EXPECT_TRUE(state->has_can_go_back());
-  EXPECT_EQ(state->can_go_back(), can_go_back_expected);
-  EXPECT_TRUE(state->has_can_go_forward());
-  EXPECT_EQ(state->can_go_forward(), can_go_forward_expected);
+  // TODO(fxbug.dev/114431): Flatland does not support dismissing a view through
+  // the ViewController.
+  // Detach the ViewController, causing the View to be
+  // detached. This is a regression test for crbug.com/1141093, verifying that
+  // the page receives a "not visible" event as a result.
+  // view_controller->Dismiss();
+  // frame.navigation_listener().RunUntilTitleEquals("hidden");
 }
 
 // Verifies that the browser will navigate and generate a navigation listener
@@ -331,8 +327,14 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, ContextDeletedBeforeFrameWithView) {
   base::RunLoop().RunUntilIdle();
   FrameImpl* frame_impl = context_impl()->GetFrameImplForTest(&frame.ptr());
 
-  auto view_tokens = scenic::ViewTokenPair::New();
-  frame->CreateView(std::move(view_tokens.view_token));
+  fuchsia::ui::views::ViewCreationToken view_token;
+  fuchsia::ui::views::ViewportCreationToken viewport_token;
+  auto status =
+      zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ZX_CHECK(status == ZX_OK, status);
+  fuchsia::web::CreateView2Args create_view_args;
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame->CreateView2(std::move(create_view_args));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(frame_impl->has_view_for_test());
 
@@ -346,21 +348,19 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, ContextDeletedBeforeFrameWithView) {
   EXPECT_FALSE(frame.ptr());
 }
 
-// TODO(https://crbug.com/695592): Remove this test when WebSQL is removed from
-// Chrome.
-IN_PROC_BROWSER_TEST_F(FrameImplTest, EnsureWebSqlDisabled) {
-  auto frame = FrameForTest::Create(context(), {});
+namespace {
 
-  net::test_server::EmbeddedTestServerHandle test_server_handle;
-  ASSERT_TRUE(test_server_handle =
-                  embedded_test_server()->StartAndReturnHandle());
-  GURL title3(embedded_test_server()->GetURL(kPage3Path));
-
-  EXPECT_TRUE(LoadUrlAndExpectResponse(frame.GetNavigationController(),
-                                       fuchsia::web::LoadUrlParams(),
-                                       title3.spec()));
-  frame.navigation_listener().RunUntilUrlAndTitleEquals(title3, kPage3Title);
+void VerifyCanGoBackAndForward(FrameForTest& frame,
+                               bool can_go_back_expected,
+                               bool can_go_forward_expected) {
+  auto* state = frame.navigation_listener().current_state();
+  EXPECT_TRUE(state->has_can_go_back());
+  EXPECT_EQ(state->can_go_back(), can_go_back_expected);
+  EXPECT_TRUE(state->has_can_go_forward());
+  EXPECT_EQ(state->can_go_forward(), can_go_forward_expected);
 }
+
+}  // namespace
 
 IN_PROC_BROWSER_TEST_F(FrameImplTest, GoBackAndForward) {
   auto frame = FrameForTest::Create(context(), {});
@@ -411,6 +411,8 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, GoBackAndForward) {
   VerifyCanGoBackAndForward(frame, true, false);
 }
 
+namespace {
+
 // An HTTP response stream whose response payload can be sent as "chunks"
 // with indeterminate-length pauses in between.
 class ChunkedHttpTransaction {
@@ -443,8 +445,9 @@ class ChunkedHttpTransaction {
   }
 
   void EnsureSendCompleted() {
-    if (send_state_ == SendState::IDLE)
+    if (send_state_ == SendState::IDLE) {
       return;
+    }
 
     base::RunLoop run_loop;
     send_chunk_complete_callback_ = run_loop.QuitClosure();
@@ -482,8 +485,9 @@ class ChunkedHttpTransaction {
 
   void SendChunkCompleteOnUiThread() {
     send_state_ = SendState::IDLE;
-    if (send_chunk_complete_callback_)
+    if (send_chunk_complete_callback_) {
       std::move(send_chunk_complete_callback_).Run();
+    }
   }
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
@@ -519,30 +523,32 @@ class ChunkedHttpTransactionFactory : public net::test_server::HttpResponse {
     // The ChunkedHttpTransaction manages its own lifetime.
     new ChunkedHttpTransaction(delegate);
 
-    if (on_response_created_)
+    if (on_response_created_) {
       std::move(on_response_created_).Run();
+    }
   }
 
  private:
   base::OnceClosure on_response_created_;
 };
 
+}  // namespace
+
 IN_PROC_BROWSER_TEST_F(FrameImplTest, NavigationEventDuringPendingLoad) {
   auto frame = FrameForTest::Create(context(), {});
 
-  ChunkedHttpTransactionFactory* factory = new ChunkedHttpTransactionFactory;
+  auto factory = std::make_unique<ChunkedHttpTransactionFactory>();
   base::RunLoop transaction_created_run_loop;
   factory->SetOnResponseCreatedCallback(
       transaction_created_run_loop.QuitClosure());
   embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
       &net::test_server::HandlePrefixedRequest, "/pausable",
-      base::BindRepeating(
-          [](std::unique_ptr<ChunkedHttpTransactionFactory> out_factory,
-             const net::test_server::HttpRequest&)
+      base::BindLambdaForTesting(
+          [&](const net::test_server::HttpRequest&)
               -> std::unique_ptr<net::test_server::HttpResponse> {
-            return out_factory;
-          },
-          base::Passed(base::WrapUnique(factory)))));
+            CHECK(factory);
+            return std::move(factory);
+          })));
 
   net::test_server::EmbeddedTestServerHandle test_server_handle;
   ASSERT_TRUE(test_server_handle =
@@ -658,6 +664,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, NavigationState_RendererGone) {
   EXPECT_EQ(current_state->title(), kPage1Title);
   ASSERT_TRUE(current_state->has_page_type());
   EXPECT_EQ(current_state->page_type(), fuchsia::web::PageType::ERROR);
+  EXPECT_EQ(current_state->error_detail(), fuchsia::web::ErrorDetail::CRASH);
 }
 
 IN_PROC_BROWSER_TEST_F(FrameImplTest, NoNavigationObserverAttached) {
@@ -795,12 +802,16 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, DelayedNavigationEventAck) {
   frame.navigation_listener().RunUntilUrlAndTitleEquals(title1, kPage1Title);
 }
 
+namespace {
+
 // Observes events specific to the Stop() test case.
 struct WebContentsObserverForStop : public content::WebContentsObserver {
   using content::WebContentsObserver::Observe;
   MOCK_METHOD1(DidStartNavigation, void(content::NavigationHandle*));
   MOCK_METHOD0(NavigationStopped, void());
 };
+
+}  // namespace
 
 IN_PROC_BROWSER_TEST_F(FrameImplTest, Stop) {
   auto frame = FrameForTest::Create(context(), {});
@@ -847,27 +858,29 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Stop) {
                    ->web_contents_->IsLoading());
 }
 
-// TODO(crbug.com/1377994): Enable on ARM64 when bots support Vulkan.
+// TODO(crbug.com/42050537): Enable on ARM64 when bots support Vulkan.
 // This test requires Vulkan and Scenic to properly signal the Views visibility.
 #if defined(ARCH_CPU_ARM_FAMILY)
 #define MAYBE_SetPageScale DISABLED_SetPageScale
 #else
-// TODO(crbug.com/1239135): SetPageScale/ExecuteJavaScript is racey, causing
+// TODO(crbug.com/42050328): SetPageScale/ExecuteJavaScript is racey, causing
 // the test to flake.
 #define MAYBE_SetPageScale DISABLED_SetPageScale
 #endif
 IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
-  // This test uses the `fuchsia.ui.gfx` variant of `Frame.CreateView*()`.
   ASSERT_EQ(ui::OzonePlatform::GetInstance()->GetPlatformNameForTest(),
-            "scenic");
+            "flatland");
 
   auto frame = FrameForTest::Create(context(), {});
 
-  auto view_tokens = scenic::ViewTokenPair::New();
-  auto view_ref_pair = scenic::ViewRefPair::New();
-  frame->CreateViewWithViewRef(std::move(view_tokens.view_token),
-                               std::move(view_ref_pair.control_ref),
-                               CloneViewRef(view_ref_pair.view_ref));
+  fuchsia::ui::views::ViewCreationToken view_token;
+  fuchsia::ui::views::ViewportCreationToken viewport_token;
+  auto status =
+      zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ZX_CHECK(status == ZX_OK, status);
+  fuchsia::web::CreateView2Args create_view_args;
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame->CreateView2(std::move(create_view_args));
 
   // Attach the View to a Presenter, the page should be visible.
   auto presenter = base::ComponentContextForProcess()
@@ -879,8 +892,8 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   });
 
   ::fuchsia::element::ViewSpec view_spec;
-  view_spec.set_view_holder_token(std::move(view_tokens.view_holder_token));
-  view_spec.set_view_ref(std::move(view_ref_pair.view_ref));
+  view_spec.set_viewport_creation_token(std::move(viewport_token));
+  view_spec.set_annotations({});
   ::fuchsia::element::ViewControllerPtr view_controller;
   presenter->PresentView(std::move(view_spec), nullptr,
                          view_controller.NewRequest(),
@@ -896,7 +909,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
                                        url.spec()));
   frame.navigation_listener().RunUntilUrlAndTitleEquals(url, "done");
 
-  absl::optional<base::Value> default_dpr =
+  std::optional<base::Value> default_dpr =
       ExecuteJavaScript(frame.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(default_dpr);
 
@@ -908,7 +921,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   settings.set_page_scale(kZoomInScale);
   frame->SetContentAreaSettings(std::move(settings));
 
-  absl::optional<base::Value> scaled_dpr =
+  std::optional<base::Value> scaled_dpr =
       ExecuteJavaScript(frame.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(scaled_dpr);
 
@@ -918,13 +931,13 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   // so it will be loaded in a new renderer process. Page scale value should be
   // preserved.
   GURL url2 = embedded_test_server()->GetURL("localhost", kWaitSizePath);
-  EXPECT_NE(url.host(), url2.host());
+  EXPECT_NE(url.GetHost(), url2.GetHost());
   EXPECT_TRUE(LoadUrlAndExpectResponse(frame.GetNavigationController(),
                                        fuchsia::web::LoadUrlParams(),
                                        url2.spec()));
   frame.navigation_listener().RunUntilUrlAndTitleEquals(url2, "done");
 
-  absl::optional<base::Value> dpr_after_navigation =
+  std::optional<base::Value> dpr_after_navigation =
       ExecuteJavaScript(frame.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(scaled_dpr);
 
@@ -937,7 +950,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   settings2.set_page_scale(kDefaultScale);
   frame->SetContentAreaSettings(std::move(settings2));
 
-  absl::optional<base::Value> dpr_after_reset =
+  std::optional<base::Value> dpr_after_reset =
       ExecuteJavaScript(frame.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(dpr_after_reset);
 
@@ -949,7 +962,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   settings3.set_page_scale(kZoomOutScale);
   frame->SetContentAreaSettings(std::move(settings3));
 
-  absl::optional<base::Value> zoomed_out_dpr =
+  std::optional<base::Value> zoomed_out_dpr =
       ExecuteJavaScript(frame.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(zoomed_out_dpr);
 
@@ -958,15 +971,13 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
   // Create another frame. Verify that the scale factor is not applied to the
   // new frame.
   auto frame2 = FrameForTest::Create(context(), {});
+  status = zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ZX_CHECK(status == ZX_OK, status);
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame2->CreateView2(std::move(create_view_args));
 
-  view_tokens = scenic::ViewTokenPair::New();
-  view_ref_pair = scenic::ViewRefPair::New();
-  frame2->CreateViewWithViewRef(std::move(view_tokens.view_token),
-                                std::move(view_ref_pair.control_ref),
-                                CloneViewRef(view_ref_pair.view_ref));
-
-  view_spec.set_view_holder_token(std::move(view_tokens.view_holder_token));
-  view_spec.set_view_ref(std::move(view_ref_pair.view_ref));
+  view_spec.set_viewport_creation_token(std::move(viewport_token));
+  view_spec.set_annotations({});
   presenter->PresentView(std::move(view_spec), nullptr,
                          view_controller.NewRequest(), [](auto) {});
 
@@ -975,7 +986,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, MAYBE_SetPageScale) {
                                        url.spec()));
   frame2.navigation_listener().RunUntilUrlAndTitleEquals(url, "done");
 
-  absl::optional<base::Value> frame2_dpr =
+  std::optional<base::Value> frame2_dpr =
       ExecuteJavaScript(frame2.ptr().get(), "window.devicePixelRatio");
   ASSERT_TRUE(frame2_dpr);
 
@@ -1003,8 +1014,14 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, RecreateView) {
   frame.navigation_listener().RunUntilUrlAndTitleEquals(page1_url, kPage1Title);
 
   // Request a View from the Frame, and pump the loop to process the request.
-  auto view_tokens = scenic::ViewTokenPair::New();
-  frame->CreateView(std::move(view_tokens.view_token));
+  fuchsia::ui::views::ViewCreationToken view_token;
+  fuchsia::ui::views::ViewportCreationToken viewport_token;
+  auto status =
+      zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ZX_CHECK(status == ZX_OK, status);
+  fuchsia::web::CreateView2Args create_view_args;
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame->CreateView2(std::move(create_view_args));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(frame_impl->has_view_for_test());
 
@@ -1016,8 +1033,10 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, RecreateView) {
   frame.navigation_listener().RunUntilUrlAndTitleEquals(page2_url, kPage2Title);
 
   // Create new View tokens and request a new view.
-  auto view_tokens2 = scenic::ViewTokenPair::New();
-  frame->CreateView(std::move(view_tokens2.view_token));
+  status = zx::channel::create(0, &viewport_token.value, &view_token.value);
+  ZX_CHECK(status == ZX_OK, status);
+  create_view_args.set_view_creation_token(std::move(view_token));
+  frame->CreateView2(std::move(create_view_args));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(frame_impl->has_view_for_test());
 
@@ -1026,6 +1045,40 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, RecreateView) {
                                        fuchsia::web::LoadUrlParams(),
                                        page1_url.spec()));
   frame.navigation_listener().RunUntilUrlAndTitleEquals(page1_url, kPage1Title);
+}
+
+IN_PROC_BROWSER_TEST_F(FrameImplTest, CreateViewMissingArgs) {
+  auto frame = FrameForTest::Create(context(), {});
+
+  // Close the NavigationEventListener to avoid a test failure resulting, when
+  // it is disconnected as a result of the Frame closing.
+  frame.navigation_listener_binding().Close(ZX_OK);
+
+  // Create a view with GFX, without supplying a valid view token.
+  base::test::TestFuture<zx_status_t> frame_status;
+  frame.ptr().set_error_handler(
+      CallbackToFitFunction(frame_status.GetCallback()));
+
+  frame->CreateView({});
+
+  EXPECT_EQ(frame_status.Get(), ZX_ERR_INVALID_ARGS);
+}
+
+IN_PROC_BROWSER_TEST_F(FrameImplTest, CreateView2MissingArgs) {
+  auto frame = FrameForTest::Create(context(), {});
+
+  // Close the NavigationEventListener to avoid a test failure resulting, when
+  // it is disconnected as a result of the Frame closing.
+  frame.navigation_listener_binding().Close(ZX_OK);
+
+  // Create a view with GFX, without supplying a valid view token.
+  base::test::TestFuture<zx_status_t> frame_status;
+  frame.ptr().set_error_handler(
+      CallbackToFitFunction(frame_status.GetCallback()));
+
+  frame->CreateView2({});
+
+  EXPECT_EQ(frame_status.Get(), ZX_ERR_INVALID_ARGS);
 }
 
 IN_PROC_BROWSER_TEST_F(FrameImplTest, ChildFrameNavigationIgnored) {
@@ -1061,8 +1114,9 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, ChildFrameNavigationIgnored) {
                              OnNavigationStateChangedCallback callback) {
         // The child iframe's loading status should not affect the
         // is_main_document_loaded() bit.
-        if (change.has_is_main_document_loaded())
+        if (change.has_is_main_document_loaded()) {
           ADD_FAILURE();
+        }
 
         callback();
       }));
@@ -1102,12 +1156,8 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, ImmediateNavigationEvent) {
 
   // Attach a new navigation listener, we should get the new page state, even if
   // no new navigation occurred.
-  TestNavigationListener navigation_listener;
-  fidl::Binding<fuchsia::web::NavigationEventListener>
-      navigation_listener_binding(&navigation_listener);
-  frame.ptr()->SetNavigationEventListener2(
-      navigation_listener_binding.NewBinding(), /*flags=*/{});
-  navigation_listener.RunUntilUrlAndTitleEquals(page_url, kPage1Title);
+  frame.CreateAndAttachNavigationListener(/*flags=*/{});
+  frame.navigation_listener().RunUntilUrlAndTitleEquals(page_url, kPage1Title);
 }
 
 // Check loading an invalid URL in NavigationController.LoadUrl() sets the right
@@ -1258,6 +1308,8 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Close_BeforeNavigation) {
   loop.Run();
 }
 
+namespace {
+
 // Helper class for `Frame.Close()` tests, that navigates the `Frame` to an
 // event-recording page, and connects to accumulate the list of events it
 // receives.
@@ -1301,6 +1353,9 @@ class FrameForTestWithMessageLog : public FrameForTest {
     // tests to verify.
     ptr().set_error_handler(CallbackToFitFunction(epitaph_.GetCallback()));
 
+    // Don't error-out if the Frame disconnects.
+    navigation_listener_binding().set_error_handler([](zx_status_t) {});
+
     // Start reading messages from the port into a queue, until the port closes.
     message_port_.set_error_handler(
         [quit = loop_.QuitClosure()](zx_status_t) { std::move(quit).Run(); });
@@ -1314,6 +1369,10 @@ class FrameForTestWithMessageLog : public FrameForTest {
 
   const std::vector<std::string>& events() const { return events_; }
 
+  std::string EventsString() const {
+    return "[" + base::JoinString(events_, ", ") + "]";
+  }
+
  private:
   void OnMessage(fuchsia::web::WebMessage message) {
     events_.push_back(std::move(*base::StringFromMemBuffer(message.data())));
@@ -1326,6 +1385,12 @@ class FrameForTestWithMessageLog : public FrameForTest {
   std::vector<std::string> events_;
   base::test::TestFuture<zx_status_t> epitaph_;
 };
+
+constexpr char kBeforeUnloadEventName[] = "window.beforeunload";
+constexpr char kUnloadEventName[] = "window.unload";
+constexpr char kPageHideEventName[] = "window.pagehide";
+
+}  // namespace
 
 // Verifies that `Close()`ing a `Frame` without an explicit timeout allows
 // graceful teardown, including firing the expected set of events
@@ -1345,10 +1410,10 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Close_EventsWithDefaultTimeout) {
   frame.RunUntilMessagePortClosed();
 
   // Verify that the expected events were delivered!
-  ASSERT_EQ(frame.events().size(), 3u);
-  EXPECT_EQ(frame.events()[0], "window.beforeunload");
-  EXPECT_EQ(frame.events()[1], "window.pagehide");
-  EXPECT_EQ(frame.events()[2], "window.unload");
+  ASSERT_EQ(frame.events().size(), 3u) << frame.EventsString();
+  EXPECT_EQ(frame.events()[0], kBeforeUnloadEventName);
+  EXPECT_EQ(frame.events()[1], kPageHideEventName);
+  EXPECT_EQ(frame.events()[2], kUnloadEventName);
 
   EXPECT_EQ(frame.epitaph().Get(), ZX_OK);
 }
@@ -1373,10 +1438,10 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Close_EventsWithNonZeroTimeout) {
   frame.RunUntilMessagePortClosed();
 
   // Verify that the expected events were delivered!
-  ASSERT_EQ(frame.events().size(), 3u);
-  EXPECT_EQ(frame.events()[0], "window.beforeunload");
-  EXPECT_EQ(frame.events()[1], "window.pagehide");
-  EXPECT_EQ(frame.events()[2], "window.unload");
+  ASSERT_EQ(frame.events().size(), 3u) << frame.EventsString();
+  EXPECT_EQ(frame.events()[0], kBeforeUnloadEventName);
+  EXPECT_EQ(frame.events()[1], kPageHideEventName);
+  EXPECT_EQ(frame.events()[2], kUnloadEventName);
 
   EXPECT_EQ(frame.epitaph().Get(), ZX_OK);
 }
@@ -1395,7 +1460,7 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Close_WithInsufficientTimeout) {
   // Request to gracefully close the Frame, by specifying a non-zero timeout.
   // This can be arbitrarily short, since we are deliberately provoking timeout.
   frame->Close(std::move(fuchsia::web::FrameCloseRequest().set_timeout(
-      base::Milliseconds(1u).ToZxDuration())));
+      base::Microseconds(1u).ToZxDuration())));
 
   // Don't wait for the MessagePort to close, since that doesn't happen in
   // ASAN builds, for some reason (crbug.com/1400304).
@@ -1420,8 +1485,10 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Close_NoEventsWithZeroTimeout) {
 
   frame.RunUntilMessagePortClosed();
 
-  // Verify that no events were observed.
-  EXPECT_EQ(frame.events().size(), 0u);
+  // In practice it is possible for content to have time to receive & process
+  // visibility and unload events, so just check for "beforeunload".
+  EXPECT_THAT(frame.events(), Not(Contains(kBeforeUnloadEventName)))
+      << frame.EventsString();
 
   EXPECT_EQ(frame.epitaph().Get(), ZX_OK);
 }
@@ -1440,6 +1507,8 @@ IN_PROC_BROWSER_TEST_F(FrameImplTest, Disconnect_NoEvents) {
 
   frame.RunUntilMessagePortClosed();
 
-  // Verify that no events were observed.
-  EXPECT_EQ(frame.events().size(), 0u);
+  // In practice it is possible for content to have time to receive & process
+  // visibility and unload events, so just check for "beforeunload".
+  EXPECT_THAT(frame.events(), Not(Contains(kBeforeUnloadEventName)))
+      << frame.EventsString();
 }

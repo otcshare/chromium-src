@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/platform/wtf/allocator/partition_allocator.h"
 
-#include "base/allocator/partition_allocator/partition_alloc.h"
+#include "partition_alloc/partition_alloc.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 
-namespace WTF {
+namespace blink {
 
 void* PartitionAllocator::AllocateBacking(size_t size, const char* type_name) {
   return Partitions::BufferMalloc(size, type_name);
@@ -23,4 +23,4 @@ char* PartitionAllocator::AllocateVectorBacking<char>(size_t size) {
       AllocateBacking(size, "PartitionAllocator::allocateVectorBacking<char>"));
 }
 
-}  // namespace WTF
+}  // namespace blink

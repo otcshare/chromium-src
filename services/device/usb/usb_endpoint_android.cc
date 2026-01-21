@@ -4,8 +4,10 @@
 
 #include "services/device/usb/usb_endpoint_android.h"
 
-#include "services/device/usb/jni_headers/ChromeUsbEndpoint_jni.h"
 #include "services/device/usb/usb_descriptors.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/usb/jni_headers/ChromeUsbEndpoint_jni.h"
 
 namespace device {
 
@@ -24,3 +26,5 @@ mojom::UsbEndpointInfoPtr UsbEndpointAndroid::Convert(
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeUsbEndpoint)

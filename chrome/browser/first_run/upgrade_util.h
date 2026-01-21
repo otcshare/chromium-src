@@ -7,13 +7,11 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
-#error Not used on Android or ChromeOS
-#endif
+static_assert(!BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS),
+              "Not used on Android or ChromeOS");
 
 namespace base {
 class CommandLine;

@@ -4,22 +4,25 @@
 {
   include: [
     "//fuchsia_web/webinstance_host/web_instance_host.shard.cml",
-    "inspect/client.shard.cml",
-    "syslog/client.shard.cml",
+
+    // `main()` intantiates tracing directly.
+    // Although the protocol is technically optional, as in this shard, not
+    // providing it will result in log spam.
+    "trace/use.shard.cml",
+
     "vulkan/client.shard.cml",
   ],
   program: {
     runner: "elf",
     binary: "cast_runner_exe",
-    args: [ "--enable-cfv2" ],
-    // TODO(crbug.com/1280703): Remove once web_instance is a CFv2 component.
+    // Enable graceful teardown since the web_instance uses dynamic
+    // capabilities via this Component.
     lifecycle: { stop_event: "notify" },
   },
   capabilities: [
     {
       protocol: [
         "chromium.cast.DataReset",
-        "fuchsia.sys.Runner",
         "fuchsia.web.Debug",
         "fuchsia.web.FrameHost",
       ]
@@ -32,21 +35,11 @@
       runner: "cast-runner",
       path: "/svc/fuchsia.component.runner.ComponentRunner",
     },
-
-    // Used to host services provided by CFv1 and Modular, to offer to Cast
-    // activities under the cast-runner.
-    {
-      directory: "for_dynamic_component_host",
-      rights: [ "rw*" ],
-      path: "/for_dynamic_component_host",
-    },
-
   ],
   expose: [
     {
       protocol: [
         "chromium.cast.DataReset",
-        "fuchsia.sys.Runner",
         "fuchsia.web.Debug",
         "fuchsia.web.FrameHost",
       ],
@@ -66,6 +59,12 @@
       directory: "config-data",
       rights: [ "r*" ],
       path: "/config/data",
+      availability: "optional",
+    },
+    {
+      directory: "tzdata-icu",
+      rights: [ "r*" ],
+      path: "/config/tzdata/icu",
     },
     {
       // Capabilities used by the Runner itself.
@@ -83,35 +82,5 @@
       storage: "cache",
       path: "/cache",
     },
-  ],
-
-  // Sections used to host Cast activities for the fuchsia.sys.Runner.
-  collections: [
-    {
-      name: "v1-activities",
-      durability: "transient",
-      allowed_offers: "static_and_dynamic",
-      environment: "#cast-capable-env",
-    },
-  ],
-  environments: [
-    {
-      name: "cast-capable-env",
-      extends: "none",
-      __stop_timeout_ms: 10000,
-      resolvers: [
-        {
-          resolver: "cast-resolver",
-          from: "self",
-          scheme: "cast",
-	},
-      ],
-      runners: [
-        {
-          runner: "cast-runner",
-          from: "self",
-        },
-      ],
-   },
   ],
 }

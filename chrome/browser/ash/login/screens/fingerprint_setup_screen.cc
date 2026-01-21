@@ -6,6 +6,7 @@
 
 #include "ash/constants/ash_pref_names.h"
 #include "base/metrics/histogram_functions.h"
+#include "chrome/browser/ash/auth/legacy_fingerprint_engine.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/login/wizard_context.h"
@@ -14,6 +15,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/fingerprint_setup_screen_handler.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/device_service.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -88,13 +90,13 @@ std::string GetDefaultFingerprintName(int enrolled_finger_count) {
     default:
       NOTREACHED();
   }
-  return std::string();
 }
 
 }  // namespace
 
 // static
 std::string FingerprintSetupScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::DONE:
       return "Done";
@@ -103,6 +105,7 @@ std::string FingerprintSetupScreen::GetResultString(Result result) {
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 FingerprintSetupScreen::FingerprintSetupScreen(
@@ -111,7 +114,9 @@ FingerprintSetupScreen::FingerprintSetupScreen(
     : BaseScreen(FingerprintSetupScreenView::kScreenId,
                  OobeScreenPriority::DEFAULT),
       view_(std::move(view)),
-      exit_callback_(exit_callback) {
+      exit_callback_(exit_callback),
+      auth_performer_(UserDataAuthClient::Get()),
+      fp_engine_(&auth_performer_) {
   content::GetDeviceService().BindFingerprint(
       fp_service_.BindNewPipeAndPassReceiver());
   fp_service_->AddFingerprintObserver(receiver_.BindNewPipeAndPassRemote());
@@ -123,10 +128,10 @@ FingerprintSetupScreen::~FingerprintSetupScreen() = default;
 bool FingerprintSetupScreen::ShouldBeSkipped(
     const WizardContext& context) const {
   if (context.skip_post_login_screens_for_tests ||
-      !quick_unlock::IsFingerprintEnabled(
-          ProfileManager::GetActiveUserProfile(),
-          quick_unlock::Purpose::kAny) ||
-      chrome_user_manager_util::IsPublicSessionOrEphemeralLogin()) {
+      !fp_engine_.IsFingerprintEnabled(
+          *ProfileManager::GetActiveUserProfile()->GetPrefs(),
+          LegacyFingerprintEngine::Purpose::kAny) ||
+      chrome_user_manager_util::IsManagedGuestSessionOrEphemeralLogin()) {
     return true;
   }
   return false;
@@ -174,6 +179,12 @@ void FingerprintSetupScreen::OnUserAction(const base::Value::List& args) {
 
 void FingerprintSetupScreen::OnRestarted() {
   VLOG(1) << "Fingerprint session restarted.";
+}
+
+void FingerprintSetupScreen::OnStatusChanged(
+    device::mojom::BiometricsManagerStatus status) {
+  VLOG(1) << "Fingerprint status changed. New state="
+          << static_cast<int>(status);
 }
 
 void FingerprintSetupScreen::OnEnrollScanDone(

@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
@@ -21,7 +21,7 @@ class DemoSetupScreenView;
 // user to setup retail demo mode on the device.
 class DemoSetupScreen : public BaseScreen {
  public:
-  enum class Result { COMPLETED, CANCELED };
+  enum class Result { kCompleted, kCanceled };
 
   static std::string GetResultString(Result result);
 

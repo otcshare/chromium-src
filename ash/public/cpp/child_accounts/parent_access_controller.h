@@ -6,7 +6,7 @@
 #define ASH_PUBLIC_CPP_CHILD_ACCOUNTS_PARENT_ACCESS_CONTROLLER_H_
 
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 
 class AccountId;
@@ -25,8 +25,6 @@ enum class SupervisedAction {
   kUpdateTimezone,
   // Add user flow.
   kAddUser,
-  // Re-authentication flow.
-  kReauth,
 };
 
 // The result of parent access code validation.

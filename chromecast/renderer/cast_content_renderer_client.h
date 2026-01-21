@@ -17,6 +17,7 @@
 #include "content/public/renderer/content_renderer_client.h"
 #include "media/base/audio_codecs.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/key_systems_support_registration.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
 namespace cast_receiver {
@@ -24,7 +25,7 @@ class ContentRendererClientMixins;
 }  // namespace cast_receiver
 
 namespace chromecast {
-class MemoryPressureObserverImpl;
+
 namespace media {
 class MediaCapsObserverImpl;
 class SupportedCodecProfileLevelsMemo;
@@ -55,9 +56,11 @@ class CastContentRendererClient
   void RenderFrameCreated(content::RenderFrame* render_frame) override;
   void RunScriptsAtDocumentStart(content::RenderFrame* render_frame) override;
   void RunScriptsAtDocumentEnd(content::RenderFrame* render_frame) override;
-  void GetSupportedKeySystems(::media::GetSupportedKeySystemsCB cb) override;
-  bool IsSupportedAudioType(const ::media::AudioType& type) override;
-  bool IsSupportedVideoType(const ::media::VideoType& type) override;
+  std::unique_ptr<::media::KeySystemSupportRegistration> GetSupportedKeySystems(
+      content::RenderFrame* render_frame,
+      ::media::GetSupportedKeySystemsCB cb) override;
+  bool IsDecoderSupportedAudioType(const ::media::AudioType& type) override;
+  bool IsDecoderSupportedVideoType(const ::media::VideoType& type) override;
   bool IsSupportedBitstreamAudioCodec(::media::AudioCodec codec) override;
   std::unique_ptr<blink::WebPrescientNetworking> CreatePrescientNetworking(
       content::RenderFrame* render_frame) override;
@@ -75,7 +78,7 @@ class CastContentRendererClient
   std::unique_ptr<blink::URLLoaderThrottleProvider>
   CreateURLLoaderThrottleProvider(
       blink::URLLoaderThrottleProviderType type) override;
-  absl::optional<::media::AudioRendererAlgorithmParameters>
+  std::optional<::media::AudioRendererAlgorithmParameters>
   GetAudioRendererAlgorithmParameters(
       ::media::AudioParameters audio_parameters) override;
 
@@ -106,9 +109,6 @@ class CastContentRendererClient
   std::unique_ptr<media::SupportedCodecProfileLevelsMemo> supported_profiles_;
   mojo::Receiver<mojom::ApplicationMediaCapabilitiesObserver>
       app_media_capabilities_observer_receiver_{this};
-#if !BUILDFLAG(IS_ANDROID)
-  std::unique_ptr<MemoryPressureObserverImpl> memory_pressure_observer_;
-#endif
 
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<media::CastAudioDeviceFactory> cast_audio_device_factory_;

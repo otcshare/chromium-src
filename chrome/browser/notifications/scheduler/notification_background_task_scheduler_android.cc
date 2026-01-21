@@ -14,14 +14,12 @@
 #include "chrome/browser/notifications/scheduler/public/notification_background_task_scheduler.h"
 #include "chrome/browser/notifications/scheduler/public/notification_schedule_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/profiles/profile_key.h"
 
 // static
-void JNI_NotificationSchedulerTask_OnStartTask(
+static void JNI_NotificationSchedulerTask_OnStartTask(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_caller,
-    const base::android::JavaParamRef<jobject>& j_callback) {
+    const base::android::JavaRef<jobject>& j_callback) {
   ProfileKey* profile_key = ::android::GetLastUsedRegularProfileKey();
   auto* service = NotificationScheduleServiceFactory::GetForKey(profile_key);
   auto* handler = service->GetBackgroundTaskSchedulerHandler();
@@ -32,9 +30,7 @@ void JNI_NotificationSchedulerTask_OnStartTask(
 }
 
 // static
-jboolean JNI_NotificationSchedulerTask_OnStopTask(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_caller) {
+static bool JNI_NotificationSchedulerTask_OnStopTask(JNIEnv* env) {
   ProfileKey* profile_key = ::android::GetLastUsedRegularProfileKey();
   auto* service = NotificationScheduleServiceFactory::GetForKey(profile_key);
   auto* handler = service->GetBackgroundTaskSchedulerHandler();
@@ -53,11 +49,13 @@ void NotificationBackgroundTaskSchedulerAndroid::Schedule(
     base::TimeDelta window_end) {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_NotificationSchedulerTask_schedule(
-      env, base::saturated_cast<jlong>(window_start.InMilliseconds()),
-      base::saturated_cast<jlong>(window_end.InMilliseconds()));
+      env, base::saturated_cast<int64_t>(window_start.InMilliseconds()),
+      base::saturated_cast<int64_t>(window_end.InMilliseconds()));
 }
 
 void NotificationBackgroundTaskSchedulerAndroid::Cancel() {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_NotificationSchedulerTask_cancel(env);
 }
+
+DEFINE_JNI(NotificationSchedulerTask)

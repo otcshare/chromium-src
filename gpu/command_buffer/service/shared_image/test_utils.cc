@@ -7,10 +7,13 @@
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
-#include "third_party/skia/include/core/SkPromiseImageTexture.h"
-#include "third_party/skia/include/gpu/GrBackendSemaphore.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
+#include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
+#include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace gpu {
@@ -41,7 +44,7 @@ std::vector<uint8_t> ReadPixels(
   EXPECT_EQ(size.height(), backend_texture.height());
 
   // Create an Sk Image from GrBackendTexture.
-  auto sk_image = SkImage::MakeFromTexture(
+  auto sk_image = SkImages::BorrowTextureFrom(
       context_state->gr_context(), promise_texture->backendTexture(),
       kTopLeft_GrSurfaceOrigin, kRGBA_8888_SkColorType, kOpaque_SkAlphaType,
       nullptr);

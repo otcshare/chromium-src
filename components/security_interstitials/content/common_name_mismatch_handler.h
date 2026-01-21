@@ -6,11 +6,11 @@
 #define COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_COMMON_NAME_MISMATCH_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
@@ -85,13 +85,14 @@ class CommonNameMismatchHandler {
   void OnSimpleLoaderHandler(const GURL& final_url,
                              const network::mojom::URLResponseHead* head);
   void OnSimpleLoaderRedirect(
+      const GURL& url_before_redirect,
       const net::RedirectInfo& redirect_info,
       const network::mojom::URLResponseHead& response_head,
       std::vector<std::string>* to_be_removed_headers);
   void OnSimpleLoaderResponseStarted(
       const GURL& final_url,
       const network::mojom::URLResponseHead& response_head);
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   // Returns true if the check is currently running.
   bool IsCheckingSuggestedUrl() const;

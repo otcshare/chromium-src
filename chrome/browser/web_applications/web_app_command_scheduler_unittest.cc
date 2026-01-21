@@ -6,10 +6,17 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/test_future.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/common/pref_names.h"
+#include "components/policy/policy_constants.h"
+#include "components/prefs/pref_service.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -19,97 +26,95 @@ namespace {
 
 class WebAppCommandSchedulerTest : public WebAppTest {
  public:
-  void SetUp() override {
-    WebAppTest::SetUp();
-    provider_ = FakeWebAppProvider::Get(profile());
+  bool IsCommandQueued(std::string_view command_name) {
+    // Note: Accessing & using the debug value for tests is poor practice and
+    // should not be done, given how easily the format can be changed.
+    // TODO(b/318858671): Update logic to not read command errors from debug
+    // log.
+    base::Value::Dict log =
+        fake_provider().command_manager().ToDebugValue().TakeDict();
+    for (const base::Value& command : *log.FindList("command_queue")) {
+      if (*command.GetDict().FindDict("!metadata")->FindString("!name") ==
+          command_name) {
+        return true;
+      }
+    }
+    return false;
   }
-
-  FakeWebAppProvider* provider() { return provider_; }
-
-  void WaitForProviderReady() {
-    base::RunLoop run_loop;
-    provider()->on_registry_ready().Post(FROM_HERE, run_loop.QuitClosure());
-    run_loop.Run();
-  }
-
- private:
-  raw_ptr<FakeWebAppProvider> provider_;
 };
 
 TEST_F(WebAppCommandSchedulerTest, FetchManifestAndInstall) {
-  EXPECT_FALSE(provider()->is_registry_ready());
-  provider()->scheduler().FetchManifestAndInstall(
+  EXPECT_FALSE(fake_provider().is_registry_ready());
+  fake_provider().scheduler().FetchManifestAndInstall(
       webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON,
-      web_contents()->GetWeakPtr(),
-      /*bypass_service_worker_check=*/true, base::DoNothing(),
-      base::DoNothing(), /*use_fallback=*/true);
+      web_contents()->GetWeakPtr(), base::DoNothing(), base::DoNothing(),
+      FallbackBehavior::kCraftedManifestOnly);
 
-  provider()->StartWithSubsystems();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 0u);
+  fake_provider().StartWithSubsystems();
+  EXPECT_EQ(
+      fake_provider().command_manager().GetStartedCommandCountForTesting(), 0);
+  EXPECT_EQ(fake_provider().command_manager().GetCommandCountForTesting(), 1u);
 
-  WaitForProviderReady();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 1u);
-  base::Value::Dict log =
-      provider()->command_manager().ToDebugValue().TakeDict();
-  base::Value::List* command_queue = log.FindList("command_queue");
-
-  EXPECT_EQ(command_queue->size(), 1u);
-  EXPECT_EQ(*command_queue->front().GetDict().FindString("name"),
-            "FetchManifestAndInstallCommand");
+  EXPECT_TRUE(IsCommandQueued("FetchManifestAndInstallCommand"));
 }
 
 TEST_F(WebAppCommandSchedulerTest, PersistFileHandlersUserChoice) {
-  EXPECT_FALSE(provider()->is_registry_ready());
-  provider()->scheduler().PersistFileHandlersUserChoice(
+  EXPECT_FALSE(fake_provider().is_registry_ready());
+  fake_provider().scheduler().PersistFileHandlersUserChoice(
       "app id", /*allowed=*/true, base::DoNothing());
 
-  provider()->StartWithSubsystems();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 0u);
+  fake_provider().StartWithSubsystems();
+  EXPECT_EQ(
+      fake_provider().command_manager().GetStartedCommandCountForTesting(), 0);
+  EXPECT_EQ(fake_provider().command_manager().GetCommandCountForTesting(), 1u);
 
-  WaitForProviderReady();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 1u);
-  base::Value::Dict log =
-      provider()->command_manager().ToDebugValue().TakeDict();
-  base::Value::List* command_queue = log.FindList("command_queue");
+  EXPECT_TRUE(IsCommandQueued("UpdateFileHandlerCommand"));
 
-  EXPECT_EQ(command_queue->size(), 1u);
+  test::WaitUntilReady(&fake_provider());
+  fake_provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  EXPECT_FALSE(IsCommandQueued("UpdateFileHandlerCommand"));
 
-  const base::Value::Dict& command_log = command_queue->front().GetDict();
-  EXPECT_EQ(*command_log.FindString("name"), "UpdateFileHandlerCommand");
-  provider()->command_manager().AwaitAllCommandsCompleteForTesting();
-
-  provider()->Shutdown();
-  // commands don't get scheduled after shutdown.
-  provider()->scheduler().PersistFileHandlersUserChoice(
-      "app id", /*allowed=*/true, base::DoNothing());
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 0u);
+  fake_provider().Shutdown();
+  base::test::TestFuture<void> after_shutdown;
+  fake_provider().scheduler().PersistFileHandlersUserChoice(
+      "app id", /*allowed=*/true, after_shutdown.GetCallback());
+  EXPECT_EQ(fake_provider().command_manager().GetCommandCountForTesting(), 0u);
+  ASSERT_TRUE(after_shutdown.Wait());
 }
 
-TEST_F(WebAppCommandSchedulerTest, UpdateFileHandlerOsIntegration) {
-  EXPECT_FALSE(provider()->is_registry_ready());
-  provider()->scheduler().UpdateFileHandlerOsIntegration("app id",
-                                                         base::DoNothing());
+class WebAppCommandSchedulerPolicyDisabledTest
+    : public WebAppCommandSchedulerTest {
+ public:
+  void SetUp() override {
+    WebAppTest::SetUp();
 
-  provider()->StartWithSubsystems();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 0u);
+    // Set the policy preference before creating the policy manager
+    // This simulates the policy being set by enterprise policy.
+    profile()->GetPrefs()->SetBoolean(prefs::kWebAppInstallByUserEnabled,
+                                      false);
 
-  WaitForProviderReady();
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 1u);
-  base::Value::Dict log =
-      provider()->command_manager().ToDebugValue().TakeDict();
-  base::Value::List* command_queue = log.FindList("command_queue");
+    // Create and set the policy manager after setting the policy pref.
+    auto web_app_policy_manager =
+        std::make_unique<WebAppPolicyManager>(profile());
+    fake_provider().SetWebAppPolicyManager(std::move(web_app_policy_manager));
 
-  EXPECT_EQ(command_queue->size(), 1u);
+    // Start subsystems.
+    fake_provider().StartWithSubsystems();
+  }
+};
 
-  const base::Value::Dict& command_log = command_queue->front().GetDict();
-  EXPECT_EQ(*command_log.FindString("name"), "UpdateFileHandlerCommand");
-  provider()->command_manager().AwaitAllCommandsCompleteForTesting();
+TEST_F(WebAppCommandSchedulerPolicyDisabledTest,
+       InstallAppLocally_PolicyDisabled) {
+  const webapps::AppId app_id = "test_app_id";
+  fake_provider().scheduler().InstallAppLocally(app_id, base::DoNothing());
 
-  provider()->Shutdown();
-  // commands don't get scheduled after shutdown.
-  provider()->scheduler().PersistFileHandlersUserChoice(
-      "app id", /*allowed=*/true, base::DoNothing());
-  EXPECT_EQ(provider()->command_manager().GetCommandCountForTesting(), 0u);
+  // When policy is disabled, no command should be scheduled.
+  EXPECT_EQ(
+      fake_provider().command_manager().GetStartedCommandCountForTesting(), 0);
+  EXPECT_EQ(fake_provider().command_manager().GetCommandCountForTesting(), 0u);
+
+  EXPECT_FALSE(IsCommandQueued("InstallAppLocallyCommand"));
+  fake_provider().Shutdown();
 }
 
 }  // namespace

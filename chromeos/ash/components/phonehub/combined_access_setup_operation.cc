@@ -4,13 +4,12 @@
 
 #include "chromeos/ash/components/phonehub/combined_access_setup_operation.h"
 
+#include <algorithm>
 #include <array>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -35,7 +34,7 @@ constexpr std::array<CombinedAccessSetupOperation::Status, 8>
 
 // static
 bool CombinedAccessSetupOperation::IsFinalStatus(Status status) {
-  return base::Contains(kOperationFinishedStatus, status);
+  return std::ranges::contains(kOperationFinishedStatus, status);
 }
 
 CombinedAccessSetupOperation::CombinedAccessSetupOperation(
@@ -101,5 +100,4 @@ std::ostream& operator<<(std::ostream& stream,
   return stream;
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

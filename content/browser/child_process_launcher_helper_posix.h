@@ -7,9 +7,12 @@
 
 #include <map>
 #include <memory>
+#include <variant>
 
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/files/scoped_file.h"
+#include "content/public/common/child_process_id.h"
 
 namespace base {
 class CommandLine;
@@ -30,9 +33,10 @@ class PosixFileDescriptorInfo;
 namespace internal {
 
 std::unique_ptr<PosixFileDescriptorInfo> CreateDefaultPosixFilesToMap(
-    int child_process_id,
+    ChildProcessId child_process_id,
     const mojo::PlatformChannelEndpoint& mojo_channel_remote_endpoint,
-    std::map<std::string, base::FilePath> files_to_preload,
+    const std::map<std::string, std::variant<base::FilePath, base::ScopedFD>>&
+        files_to_preload,
     const std::string& process_type,
     base::CommandLine* command_line);
 

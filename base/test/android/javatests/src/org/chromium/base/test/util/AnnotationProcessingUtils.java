@@ -12,12 +12,12 @@ import org.junit.runner.Description;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
@@ -50,16 +50,16 @@ public abstract class AnnotationProcessingUtils {
     @SuppressWarnings("unchecked")
     public static <A extends Annotation> List<A> getAnnotations(
             Description description, Class<A> annotationType) {
-        return (List<A>) new AnnotationExtractor(annotationType)
-                .getMatchingAnnotations(description);
+        return (List<A>)
+                new AnnotationExtractor(annotationType).getMatchingAnnotations(description);
     }
 
     /** See {@link AnnotationExtractor} for details about the output sorting order. */
     @SuppressWarnings("unchecked")
     public static <A extends Annotation> List<A> getAnnotations(
             AnnotatedElement annotatedElement, Class<A> annotationType) {
-        return (List<A>) new AnnotationExtractor(annotationType)
-                .getMatchingAnnotations(annotatedElement);
+        return (List<A>)
+                new AnnotationExtractor(annotationType).getMatchingAnnotations(annotatedElement);
     }
 
     private static boolean isChromiumAnnotation(Annotation annotation) {
@@ -108,8 +108,10 @@ public abstract class AnnotationProcessingUtils {
             mAnnotationTypes = Collections.unmodifiableList(additionalTypes);
             mAnnotationTypeComparator =
                     (t1, t2) -> mAnnotationTypes.indexOf(t1) - mAnnotationTypes.indexOf(t2);
-            mAnnotationComparator = (t1, t2)
-                    -> mAnnotationTypeComparator.compare(t1.annotationType(), t2.annotationType());
+            mAnnotationComparator =
+                    (t1, t2) ->
+                            mAnnotationTypeComparator.compare(
+                                    t1.annotationType(), t2.annotationType());
         }
 
         public List<Annotation> getMatchingAnnotations(Description description) {
@@ -145,7 +147,7 @@ public abstract class AnnotationProcessingUtils {
 
         private List<Annotation> getMatchingAnnotations(AnnotatedNode annotatedNode) {
             List<Annotation> collectedAnnotations = new ArrayList<>();
-            Queue<Annotation> workingSet = new LinkedList<>();
+            Queue<Annotation> workingSet = new ArrayDeque<>();
             Set<Class<? extends Annotation>> visited = new HashSet<>();
 
             AnnotatedNode currentAnnotationLayer = annotatedNode;
@@ -167,8 +169,10 @@ public abstract class AnnotationProcessingUtils {
             workingSet.addAll(annotations);
         }
 
-        private void sweepAnnotations(List<Annotation> collectedAnnotations,
-                Queue<Annotation> workingSet, Set<Class<? extends Annotation>> visited) {
+        private void sweepAnnotations(
+                List<Annotation> collectedAnnotations,
+                Queue<Annotation> workingSet,
+                Set<Class<? extends Annotation>> visited) {
             // 1. Grab node at the front of the working set.
             Annotation annotation = workingSet.remove();
 
@@ -182,7 +186,8 @@ public abstract class AnnotationProcessingUtils {
             if (!isChromiumAnnotation(annotation)) return;
 
             // 4. Expand the working set
-            queueAnnotations(Arrays.asList(annotation.annotationType().getDeclaredAnnotations()),
+            queueAnnotations(
+                    Arrays.asList(annotation.annotationType().getDeclaredAnnotations()),
                     workingSet);
         }
     }

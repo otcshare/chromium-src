@@ -6,16 +6,13 @@
 #define GPU_COMMAND_BUFFER_SERVICE_SHARED_IMAGE_GL_TEXTURE_IMAGE_BACKING_H_
 
 #include "gpu/command_buffer/service/shared_image/gl_common_image_backing_factory.h"
-#include "gpu/command_buffer/service/shared_image/shared_image_format_utils.h"
+#include "gpu/command_buffer/service/shared_image/gl_texture_holder.h"
 
-namespace gl {
-class GLImageEGL;
-}
+class GrPromiseImageTexture;
 
 namespace gpu {
 
-// Implementation of SharedImageBacking that creates a GL Texture that is not
-// backed by a GLImage.
+// Implementation of SharedImageBacking that uses GL Textures as storage.
 class GLTextureImageBacking : public ClearTrackingSharedImageBacking {
  public:
   static bool SupportsPixelUploadWithFormat(viz::SharedImageFormat format);
@@ -27,22 +24,18 @@ class GLTextureImageBacking : public ClearTrackingSharedImageBacking {
                         const gfx::ColorSpace& color_space,
                         GrSurfaceOrigin surface_origin,
                         SkAlphaType alpha_type,
-                        uint32_t usage,
+                        SharedImageUsageSet usage,
+                        std::string debug_layer,
                         bool is_passthrough);
   GLTextureImageBacking(const GLTextureImageBacking&) = delete;
   GLTextureImageBacking& operator=(const GLTextureImageBacking&) = delete;
   ~GLTextureImageBacking() override;
 
   void InitializeGLTexture(
-      const GLCommonImageBackingFactory::FormatInfo& format_info,
-      bool is_cleared,
+      const std::vector<GLCommonImageBackingFactory::FormatInfo>& format_info,
+      base::span<const uint8_t> pixel_data,
+      gl::ProgressReporter* progress_reporter,
       bool framebuffer_attachment_angle);
-  void SetCompatibilitySwizzle(
-      const gles2::Texture::CompatibilitySwizzle* swizzle);
-
-  GLenum GetGLTarget() const;
-  GLuint GetGLServiceId() const;
-  void CreateEGLImage();
 
  private:
   // SharedImageBacking:
@@ -58,27 +51,28 @@ class GLTextureImageBacking : public ClearTrackingSharedImageBacking {
   std::unique_ptr<DawnImageRepresentation> ProduceDawn(
       SharedImageManager* manager,
       MemoryTypeTracker* tracker,
-      WGPUDevice device,
-      WGPUBackendType backend_type,
-      std::vector<WGPUTextureFormat> view_formats) final;
-  std::unique_ptr<SkiaImageRepresentation> ProduceSkia(
+      const wgpu::Device& device,
+      wgpu::BackendType backend_type,
+      std::vector<wgpu::TextureFormat> view_formats,
+      scoped_refptr<SharedContextState> context_state) final;
+  std::unique_ptr<SkiaGaneshImageRepresentation> ProduceSkiaGanesh(
       SharedImageManager* manager,
       MemoryTypeTracker* tracker,
       scoped_refptr<SharedContextState> context_state) override;
+  std::unique_ptr<VideoImageRepresentation> ProduceVideo(
+      SharedImageManager* manager,
+      MemoryTypeTracker* tracker,
+      VideoDevice device) override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
-  bool UploadFromMemory(const SkPixmap& pixmap) override;
-  bool ReadbackToMemory(SkPixmap& pixmap) override;
+  bool UploadFromMemory(const std::vector<SkPixmap>& pixmaps) override;
+  bool ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) override;
 
   bool IsPassthrough() const { return is_passthrough_; }
 
   const bool is_passthrough_;
-  gles2::Texture* texture_ = nullptr;
-  scoped_refptr<gles2::TexturePassthrough> passthrough_texture_;
 
-  GLFormatDesc format_desc_;
-
-  sk_sp<SkPromiseImageTexture> cached_promise_texture_;
-  scoped_refptr<gl::GLImageEGL> image_egl_;
+  std::vector<GLTextureHolder> textures_;
+  std::vector<sk_sp<GrPromiseImageTexture>> cached_promise_textures_;
 };
 
 }  // namespace gpu

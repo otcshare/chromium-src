@@ -14,9 +14,9 @@
 namespace safe_browsing {
 
 // static
-BinaryUploadService* CloudBinaryUploadServiceFactory::GetForProfile(
-    Profile* profile) {
-  return static_cast<BinaryUploadService*>(
+enterprise_connectors::BinaryUploadService*
+CloudBinaryUploadServiceFactory::GetForProfile(Profile* profile) {
+  return static_cast<enterprise_connectors::BinaryUploadService*>(
       GetInstance()->GetServiceForBrowserContext(profile, /* create= */
                                                  true));
 }
@@ -24,19 +24,29 @@ BinaryUploadService* CloudBinaryUploadServiceFactory::GetForProfile(
 // static
 CloudBinaryUploadServiceFactory*
 CloudBinaryUploadServiceFactory::GetInstance() {
-  return base::Singleton<CloudBinaryUploadServiceFactory>::get();
+  static base::NoDestructor<CloudBinaryUploadServiceFactory> instance;
+  return instance.get();
 }
 
 CloudBinaryUploadServiceFactory::CloudBinaryUploadServiceFactory()
     : ProfileKeyedServiceFactory(
           "CloudBinaryUploadService",
-          ProfileSelections::BuildForRegularAndIncognito()) {}
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {}
 
-KeyedService* CloudBinaryUploadServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+CloudBinaryUploadServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   // TODO(b/226679912): Add logic to select service based on analysis settings.
   Profile* profile = Profile::FromBrowserContext(context);
-  return new CloudBinaryUploadService(profile);
+  return std::make_unique<CloudBinaryUploadService>(profile);
 }
 
 }  // namespace safe_browsing

@@ -7,13 +7,15 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_section.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
 namespace ui {
@@ -32,6 +34,8 @@ class HoldingSpaceViewDelegate;
 
 // A section of holding space item views in a `HoldingSpaceTrayChildBubble`.
 class ASH_EXPORT HoldingSpaceItemViewsSection : public views::View {
+  METADATA_HEADER(HoldingSpaceItemViewsSection, views::View)
+
  public:
   HoldingSpaceItemViewsSection(HoldingSpaceViewDelegate* delegate,
                                HoldingSpaceSectionId section_id);
@@ -96,12 +100,8 @@ class ASH_EXPORT HoldingSpaceItemViewsSection : public views::View {
       const HoldingSpaceItem* item) = 0;
 
   // Invoked to create the `placeholder_` for this section which shows when
-  // `container_` is empty. The `placeholder_` can be destroyed via call to
-  // `DestroyPlaceholder()` if it is no longer needed to exist.
+  // `container_` is empty.
   virtual std::unique_ptr<views::View> CreatePlaceholder();
-
-  // Invoked to destroy `placeholder_`.
-  void DestroyPlaceholder();
 
   // Whether to display this section's contents: either its `container_` or its
   // `placeholder_` as applicable. Sections that have no concept of expanded
@@ -141,15 +141,16 @@ class ASH_EXPORT HoldingSpaceItemViewsSection : public views::View {
   void OnAnimateInCompleted(const ui::CallbackLayerAnimationObserver&);
   void OnAnimateOutCompleted(const ui::CallbackLayerAnimationObserver&);
 
-  HoldingSpaceViewDelegate* const delegate_;
-  const HoldingSpaceSection* const section_;
+  const raw_ptr<HoldingSpaceViewDelegate, DanglingUntriaged> delegate_;
+  const raw_ptr<const HoldingSpaceSection> section_;
 
   // Owned by view hierarchy.
-  views::View* header_ = nullptr;
-  views::View* container_ = nullptr;
-  views::View* placeholder_ = nullptr;
-  views::ScrollView* scroll_view_ = nullptr;
-  std::map<std::string, HoldingSpaceItemView*> views_by_item_id_;
+  raw_ptr<views::View> header_ = nullptr;
+  raw_ptr<views::View> container_ = nullptr;
+  raw_ptr<views::View, DanglingUntriaged> placeholder_ = nullptr;
+  raw_ptr<views::ScrollView> scroll_view_ = nullptr;
+  std::map<std::string, raw_ptr<HoldingSpaceItemView, CtnExperimental>>
+      views_by_item_id_;
 
   // Bit flag representation of current `AnimationState`. Note that it is
   // briefly possible to be both `kAnimatingIn` and `kAnimatingOut` when one

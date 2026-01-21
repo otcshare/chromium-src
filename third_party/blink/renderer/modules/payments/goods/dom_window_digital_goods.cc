@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -28,7 +28,7 @@ using blink::digital_goods_util::LogConsoleError;
 using payments::mojom::blink::CreateDigitalGoodsResponseCode;
 
 void OnCreateDigitalGoodsResponse(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<DigitalGoodsService>* resolver,
     CreateDigitalGoodsResponseCode code,
     mojo::PendingRemote<payments::mojom::blink::DigitalGoods> pending_remote) {
   if (code != CreateDigitalGoodsResponseCode::kOk) {
@@ -39,8 +39,8 @@ void OnCreateDigitalGoodsResponse(
   }
   DCHECK(pending_remote);
 
-  auto* digital_goods_service_ =
-      MakeGarbageCollected<DigitalGoodsService>(std::move(pending_remote));
+  auto* digital_goods_service_ = MakeGarbageCollected<DigitalGoodsService>(
+      resolver->GetExecutionContext(), std::move(pending_remote));
   resolver->Resolve(digital_goods_service_);
 }
 
@@ -48,29 +48,32 @@ void OnCreateDigitalGoodsResponse(
 
 const char DOMWindowDigitalGoods::kSupplementName[] = "DOMWindowDigitalGoods";
 
-DOMWindowDigitalGoods::DOMWindowDigitalGoods() : Supplement(nullptr) {}
+DOMWindowDigitalGoods::DOMWindowDigitalGoods(LocalDOMWindow& window)
+    : Supplement(window), mojo_service_(&window) {}
 
-ScriptPromise DOMWindowDigitalGoods::getDigitalGoodsService(
-    ScriptState* script_state,
-    LocalDOMWindow& window,
-    const String& payment_method,
-    ExceptionState& exception_state) {
+ScriptPromise<DigitalGoodsService>
+DOMWindowDigitalGoods::getDigitalGoodsService(ScriptState* script_state,
+                                              LocalDOMWindow& window,
+                                              const String& payment_method,
+                                              ExceptionState& exception_state) {
   return FromState(&window)->GetDigitalGoodsService(
       script_state, window, payment_method, exception_state);
 }
 
-ScriptPromise DOMWindowDigitalGoods::GetDigitalGoodsService(
-    ScriptState* script_state,
-    LocalDOMWindow& window,
-    const String& payment_method,
-    ExceptionState& exception_state) {
+ScriptPromise<DigitalGoodsService>
+DOMWindowDigitalGoods::GetDigitalGoodsService(ScriptState* script_state,
+                                              LocalDOMWindow& window,
+                                              const String& payment_method,
+                                              ExceptionState& exception_state) {
   if (!script_state->ContextIsValid()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The execution context is not valid.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<DigitalGoodsService>>(
+          script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
   auto* execution_context = ExecutionContext::From(script_state);
   DCHECK(execution_context);
@@ -82,8 +85,6 @@ ScriptPromise DOMWindowDigitalGoods::GetDigitalGoodsService(
     return promise;
   }
 
-  base::UmaHistogramBoolean("DigitalGoods.CrossSite",
-                            window.IsCrossSiteSubframeIncludingScheme());
   if (window.IsCrossSiteSubframeIncludingScheme()) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kNotAllowedError,
@@ -92,7 +93,7 @@ ScriptPromise DOMWindowDigitalGoods::GetDigitalGoodsService(
   }
 
   if (!execution_context->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kPayment)) {
+          network::mojom::PermissionsPolicyFeature::kPayment)) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kNotAllowedError,
         "Payment permissions policy not granted"));
@@ -107,17 +108,19 @@ ScriptPromise DOMWindowDigitalGoods::GetDigitalGoodsService(
 
   if (!mojo_service_) {
     execution_context->GetBrowserInterfaceBroker().GetInterface(
-        mojo_service_.BindNewPipeAndPassReceiver());
+        mojo_service_.BindNewPipeAndPassReceiver(
+            execution_context->GetTaskRunner(TaskType::kMiscPlatformAPI)));
   }
 
   mojo_service_->CreateDigitalGoods(
       payment_method,
-      WTF::BindOnce(&OnCreateDigitalGoodsResponse, WrapPersistent(resolver)));
+      BindOnce(&OnCreateDigitalGoodsResponse, WrapPersistent(resolver)));
 
   return promise;
 }
 
 void DOMWindowDigitalGoods::Trace(Visitor* visitor) const {
+  visitor->Trace(mojo_service_);
   Supplement<LocalDOMWindow>::Trace(visitor);
 }
 
@@ -127,7 +130,7 @@ DOMWindowDigitalGoods* DOMWindowDigitalGoods::FromState(
   DOMWindowDigitalGoods* supplement =
       Supplement<LocalDOMWindow>::From<DOMWindowDigitalGoods>(window);
   if (!supplement) {
-    supplement = MakeGarbageCollected<DOMWindowDigitalGoods>();
+    supplement = MakeGarbageCollected<DOMWindowDigitalGoods>(*window);
     ProvideTo(*window, supplement);
   }
 

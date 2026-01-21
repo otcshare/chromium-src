@@ -7,9 +7,11 @@
 #include <dlfcn.h>
 #include <elf.h>
 
+#include <optional>
+#include <string_view>
+
 #include "base/debug/elf_reader.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_ANDROID)
 extern "C" {
@@ -37,8 +39,9 @@ namespace {
 std::string GetUniqueBuildId(const void* module_addr) {
   debug::ElfBuildIdBuffer build_id;
   size_t build_id_length = debug::ReadElfBuildId(module_addr, true, build_id);
-  if (!build_id_length)
+  if (!build_id_length) {
     return std::string();
+  }
 
   // Append 0 for the age value.
   return std::string(build_id, build_id_length) + "0";
@@ -53,8 +56,9 @@ size_t GetLastExecutableOffset(const void* module_addr) {
   const size_t relocation_offset = debug::GetRelocationOffset(module_addr);
   size_t max_offset = 0;
   for (const Phdr& header : debug::GetElfProgramHeaders(module_addr)) {
-    if (header.p_type != PT_LOAD || !(header.p_flags & PF_X))
+    if (header.p_type != PT_LOAD || !(header.p_flags & PF_X)) {
       continue;
+    }
 
     max_offset = std::max(
         max_offset, static_cast<size_t>(
@@ -65,16 +69,34 @@ size_t GetLastExecutableOffset(const void* module_addr) {
   return max_offset;
 }
 
-FilePath GetDebugBasenameForModule(const void* base_address, const char* file) {
+FilePath GetDebugBasenameForModule(const void* base_address,
+                                   std::string_view file) {
 #if BUILDFLAG(IS_ANDROID)
   // Preferentially identify the library using its soname on Android. Libraries
   // mapped directly from apks have the apk filename in |dl_info.dli_fname|, and
   // this doesn't distinguish the particular library.
-  absl::optional<StringPiece> library_name =
+  std::optional<std::string_view> library_name =
       debug::ReadElfLibraryName(base_address);
-  if (library_name)
+  if (library_name) {
     return FilePath(*library_name);
+  }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // SetProcessTitleFromCommandLine() does not play well with dladdr(). In
+  // particular, after calling our setproctitle(), calling dladdr() with an
+  // address in the main binary will return the complete command line of the
+  // program, including all arguments, in dli_fname. If we get a complete
+  // command-line like "/opt/google/chrome/chrome --type=gpu-process
+  // --gpu-sandbox-failures-fatal=yes --enable-logging ...", strip off
+  // everything that looks like an argument. This is safe on ChromeOS, where we
+  // control the directory and file names and know that no chrome binary or
+  // system library will have a " --" in the path.
+  size_t pos = file.find(" --");
+  if (pos != std::string_view::npos) {
+    file = file.substr(0, pos);
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   return FilePath(file).BaseName();
 }

@@ -4,6 +4,7 @@
 
 #include "chrome/installer/util/app_commands.h"
 
+#include "base/check.h"
 #include "base/logging.h"
 #include "base/win/registry.h"
 #include "chrome/installer/util/google_update_constants.h"
@@ -13,9 +14,9 @@ using base::win::RegKey;
 
 namespace installer {
 
-AppCommands::AppCommands() {}
+AppCommands::AppCommands() = default;
 
-AppCommands::~AppCommands() {}
+AppCommands::~AppCommands() = default;
 
 bool AppCommands::Initialize(const base::win::RegKey& key, REGSAM wow64access) {
   if (!key.Valid()) {

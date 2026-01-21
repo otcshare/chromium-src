@@ -8,11 +8,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -36,8 +35,8 @@ const base::FilePath::CharType kOptOutFilename[] = FILE_PATH_LITERAL("OptOut");
 
 class OptOutStoreSQLTest : public testing::Test {
  public:
-  OptOutStoreSQLTest() {}
-  ~OptOutStoreSQLTest() override {}
+  OptOutStoreSQLTest() = default;
+  ~OptOutStoreSQLTest() override = default;
 
   // Called when |store_| is done loading.
   void OnLoaded(std::unique_ptr<BlocklistData> blocklist_data) {

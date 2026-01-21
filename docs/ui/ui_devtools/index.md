@@ -91,25 +91,16 @@ is read in from local files.
 
 ![sources panel]
 
-### View Bounds Highlighting
-
-Red border rectangles around each View element can be drawn using the command Ctrl+R (Meta+R for mac).
-The rectangles can be toggled off and on using the same command.
-
-![debug bounds rectangles]
-
 ### Bubble Locking
 
-In order to inspect a bubble, the command Ctrl+Shift+R (Meta+Shift+R for mac) locks bubbles to prevent
-them from dismissing upon losing focus. This allows a bubble's inner elements to be inspected. Bubble
-locking can be toggled off and on using the same command.
+In order to inspect a bubble, tick the "Bubble Locking" checkbox on chrome://inspect/#native-ui.
 
 ![lock and inspect bubble]
 
 ### UI Element Tree Search
 
 In the elements panel, Ctrl+F to open the search bar at the bottom. The search functionality allows
-developers to search the UI element tree quickly by name, tag <>, and style properties. 
+developers to search the UI element tree quickly by name, tag <>, and style properties.
 The search can do substring matches or exact matches (specified with quotations). The search returns
 all matches and highlights the specific nodes on the tree that are matched. The up and down arrows
 on the right of the search bar or ENTER are used to traverse through the matches.

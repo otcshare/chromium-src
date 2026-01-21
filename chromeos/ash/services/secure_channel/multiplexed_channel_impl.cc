@@ -4,8 +4,7 @@
 
 #include "chromeos/ash/services/secure_channel/multiplexed_channel_impl.h"
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -43,9 +42,8 @@ std::unique_ptr<MultiplexedChannel> MultiplexedChannelImpl::Factory::Create(
     bool success =
         channel->AddClientToChannel(std::move(client_connection_parameters));
     if (!success) {
-      PA_LOG(ERROR) << "MultiplexedChannelImpl::Factory::Create(): "
-                    << "Failed to add initial client.";
-      NOTREACHED();
+      NOTREACHED() << "MultiplexedChannelImpl::Factory::Create(): "
+                   << "Failed to add initial client.";
     }
   }
 
@@ -87,7 +85,7 @@ void MultiplexedChannelImpl::PerformAddClientToChannel(
 
   auto proxy = SingleClientProxyImpl::Factory::Create(
       this /* delegate */, std::move(client_connection_parameters));
-  DCHECK(!base::Contains(id_to_proxy_map_, proxy->GetProxyId()));
+  DCHECK(!id_to_proxy_map_.contains(proxy->GetProxyId()));
   id_to_proxy_map_[proxy->GetProxyId()] = std::move(proxy);
 }
 
@@ -105,6 +103,14 @@ void MultiplexedChannelImpl::OnMessageReceived(const std::string& feature,
                                                const std::string& payload) {
   for (auto& proxy_entry : id_to_proxy_map_)
     proxy_entry.second->HandleReceivedMessage(feature, payload);
+}
+
+void MultiplexedChannelImpl::OnNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  for (auto& proxy_entry : id_to_proxy_map_) {
+    proxy_entry.second->HandleNearbyConnectionStateChanged(step, result);
+  }
 }
 
 void MultiplexedChannelImpl::OnSendMessageRequested(
@@ -135,9 +141,8 @@ void MultiplexedChannelImpl::OnClientDisconnected(
     const base::UnguessableToken& proxy_id) {
   size_t num_entries_deleted = id_to_proxy_map_.erase(proxy_id);
   if (num_entries_deleted != 1u) {
-    PA_LOG(ERROR) << "MultiplexedChannelImpl::OnClientDisconnected(): Client "
-                  << "disconnected, but no entry in the map existed.";
-    NOTREACHED();
+    NOTREACHED() << "MultiplexedChannelImpl::OnClientDisconnected(): Client "
+                 << "disconnected, but no entry in the map existed.";
   }
 
   if (!id_to_proxy_map_.empty())

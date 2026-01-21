@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "extensions/browser/api/socket/socket_api.h"
+#include "extensions/browser/api/socket/write_quota_checker.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/shell/test/shell_test.h"
@@ -12,7 +14,7 @@ using extensions::api_test_utils::RunFunctionAndReturnSingleResult;
 
 namespace extensions {
 
-class SocketApiTest : public AppShellTest {};
+using SocketApiTest = AppShellTest;
 
 IN_PROC_BROWSER_TEST_F(SocketApiTest, SocketUDPCreateGood) {
   scoped_refptr<extensions::SocketCreateFunction> socket_create_function(
@@ -23,10 +25,10 @@ IN_PROC_BROWSER_TEST_F(SocketApiTest, SocketUDPCreateGood) {
   socket_create_function->set_extension(empty_extension.get());
   socket_create_function->set_has_callback(true);
 
-  absl::optional<base::Value> result(RunFunctionAndReturnSingleResult(
+  std::optional<base::Value> result(RunFunctionAndReturnSingleResult(
       socket_create_function.get(), "[\"udp\"]", browser_context()));
   const base::Value::Dict& value = result->GetDict();
-  absl::optional<int> socket_id = value.FindInt("socketId");
+  std::optional<int> socket_id = value.FindInt("socketId");
   ASSERT_TRUE(socket_id);
   EXPECT_GT(*socket_id, 0);
 }
@@ -40,10 +42,10 @@ IN_PROC_BROWSER_TEST_F(SocketApiTest, SocketTCPCreateGood) {
   socket_create_function->set_extension(empty_extension.get());
   socket_create_function->set_has_callback(true);
 
-  absl::optional<base::Value> result(RunFunctionAndReturnSingleResult(
+  std::optional<base::Value> result(RunFunctionAndReturnSingleResult(
       socket_create_function.get(), "[\"tcp\"]", browser_context()));
   const base::Value::Dict& value = result->GetDict();
-  absl::optional<int> socket_id = value.FindInt("socketId");
+  std::optional<int> socket_id = value.FindInt("socketId");
   ASSERT_TRUE(socket_id);
   ASSERT_GT(*socket_id, 0);
 }
@@ -57,13 +59,63 @@ IN_PROC_BROWSER_TEST_F(SocketApiTest, GetNetworkList) {
   socket_function->set_extension(empty_extension.get());
   socket_function->set_has_callback(true);
 
-  absl::optional<base::Value> result(RunFunctionAndReturnSingleResult(
+  std::optional<base::Value> result(RunFunctionAndReturnSingleResult(
       socket_function.get(), "[]", browser_context()));
 
   // If we're invoking socket tests, all we can confirm is that we have at
   // least one address, but not what it is.
   ASSERT_TRUE(result->is_list());
   ASSERT_FALSE(result->GetList().empty());
+}
+
+IN_PROC_BROWSER_TEST_F(SocketApiTest, WriteQuotaChecker) {
+  WriteQuotaChecker* checker = WriteQuotaChecker::Get(browser_context());
+
+  constexpr size_t kBytesLimit = 100;
+  WriteQuotaChecker::ScopedBytesLimitForTest scoped_limit(checker, kBytesLimit);
+
+  const ExtensionId extension_id = "test_extension_id";
+  const ExtensionId another_extension_id = "another_test_extension_id";
+
+  // Fails if a single request is too large.
+  EXPECT_FALSE(checker->TakeBytes(extension_id, kBytesLimit + 1));
+
+  // Fails if combined multiple requests are larger than limit.
+  EXPECT_TRUE(checker->TakeBytes(extension_id, kBytesLimit));
+  EXPECT_FALSE(checker->TakeBytes(extension_id, 1));
+
+  // Different extension is not affected.
+  EXPECT_TRUE(checker->TakeBytes(another_extension_id, kBytesLimit));
+
+  // Simulate a request is done and return bytes to the pool.
+  checker->ReturnBytes(extension_id, kBytesLimit);
+
+  // Writes are allowed again.
+  EXPECT_TRUE(checker->TakeBytes(extension_id, 1));
+}
+
+IN_PROC_BROWSER_TEST_F(SocketApiTest, ShutdownWithLingeringWriteQuota) {
+  // An arbitrary SocketApiFunction.
+  scoped_refptr<extensions::SocketWriteFunction> socket_function(
+      new extensions::SocketWriteFunction());
+  scoped_refptr<const Extension> empty_extension =
+      ExtensionBuilder("Test").Build();
+
+  socket_function->set_extension(empty_extension.get());
+
+  std::unique_ptr<ExtensionFunctionDispatcher> dispatcher(
+      new ExtensionFunctionDispatcher(browser_context()));
+  socket_function->SetDispatcher(dispatcher->AsWeakPtr());
+
+  // Uses some write quota.
+  ASSERT_TRUE(socket_function->TakeWriteQuota(100));
+
+  // Ensures the function has a null BrowserContext to simulate shutdown.
+  socket_function->SetDispatcher(nullptr);
+  ASSERT_FALSE(socket_function->browser_context());
+
+  // Resets write quota and it should not crash.
+  socket_function->ReturnWriteQuota();
 }
 
 }  //  namespace extensions

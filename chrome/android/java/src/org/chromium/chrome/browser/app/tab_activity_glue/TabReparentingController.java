@@ -4,15 +4,15 @@
 
 package org.chromium.chrome.browser.app.tab_activity_glue;
 
-import androidx.annotation.NonNull;
-
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.AsyncTabParamsManager;
 import org.chromium.chrome.browser.tabmodel.TabList;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabReparentingParams;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
@@ -25,14 +25,17 @@ import java.util.List;
  * - The layout switches between tablet/phone.
  * - (Keep this list up to date by adding future conditions here)
  */
+@NullMarked
 public class TabReparentingController {
     /** Provides data to {@link TabReparentingController} facilitate reparenting tabs. */
     public interface Delegate {
         /** Gets a {@link TabModelSelector} which is used to add the tab. */
         TabModelSelector getTabModelSelector();
 
-        /** @return Whether the given Url is an NTP url, exists solely to support unit testing. */
-        boolean isNTPUrl(GURL url);
+        /**
+         * @return Whether the given Url is an NTP url, exists solely to support unit testing.
+         */
+        boolean isNtpUrl(GURL url);
     }
 
     private static final String TAG =
@@ -43,24 +46,22 @@ public class TabReparentingController {
 
     /** Constructs a {@link TabReparentingController} with the given delegate. */
     public TabReparentingController(
-            @NonNull Delegate delegate, @NonNull AsyncTabParamsManager asyncTabParamsManager) {
+            Delegate delegate, AsyncTabParamsManager asyncTabParamsManager) {
         mDelegate = delegate;
         mAsyncTabParamsManager = asyncTabParamsManager;
     }
 
     /**
-
-     * Prepares the tabs for reparenting by,
-     * 1. Informing the {@link TabModelSelector} that reparenting is in progress.
-     * 2. Detaching each tab from the models.
-     * 3. For each tab that's detached, it's added to {@link AsyncTabParamsManager}.
-     *    These tabs are held in memory until an application restart.
+     * Prepares the tabs for reparenting by, 1. Informing the {@link TabModelSelector} that
+     * reparenting is in progress. 2. Detaching each tab from the models. 3. For each tab that's
+     * detached, it's added to {@link AsyncTabParamsManager}. These tabs are held in memory until an
+     * application restart.
      *
-     * On app restart, the tabs from AsyncTabParamsManager are reattached/enabled in
-     * {@link ChromeTabCreator}.
+     * <p>On app restart, the tabs from AsyncTabParamsManager are reattached/enabled in {@link
+     * ChromeTabCreator}.
      */
     public void prepareTabsForReparenting() {
-        // TODO(crbug.com/1065201): Make tab models detachable.
+        // TODO(crbug.com/40124038): Make tab models detachable.
         TabModelSelector selector = mDelegate.getTabModelSelector();
 
         // Close tabs pending closure before saving params.
@@ -80,7 +81,10 @@ public class TabReparentingController {
             Tab tab = tabs.get(i);
             if (tab.isLoading()) {
                 tab.stopLoading();
-                tab.getWebContents().getNavigationController().setNeedsReload();
+                WebContents webContents = tab.getWebContents();
+                if (webContents != null) {
+                    webContents.getNavigationController().setNeedsReload();
+                }
                 tabsStillLoading++;
             }
 
@@ -92,7 +96,7 @@ public class TabReparentingController {
             }
             // Intentionally skip new tab pages and allow them to reload and restore scroll
             // state themselves.
-            if (mDelegate.isNTPUrl(tab.getUrl())) continue;
+            if (mDelegate.isNtpUrl(tab.getUrl())) continue;
 
             TabReparentingParams params = new TabReparentingParams(tab, null);
             mAsyncTabParamsManager.add(tab.getId(), params);
@@ -101,18 +105,20 @@ public class TabReparentingController {
             tabsAwaitingReparenting++;
         }
 
-        // TODO(https://crbug.com/1252526): Remove logging once root cause of bug is identified &
+        // TODO(crbug.com/40793204): Remove logging once root cause of bug is identified &
         //  fixed.
-        Log.i(TAG,
+        Log.i(
+                TAG,
                 "#prepareTabsForReparenting, num tabs awaiting reparenting: "
                         + tabsAwaitingReparenting
-                        + ", num tabs still loading: " + tabsStillLoading);
+                        + ", num tabs still loading: "
+                        + tabsStillLoading);
     }
 
     protected static void populateComprehensiveTabsFromModel(TabModel model, List<Tab> outputTabs) {
         TabList tabList = model.getComprehensiveModel();
-        for (int i = 0; i < tabList.getCount(); i++) {
-            outputTabs.add(tabList.getTabAt(i));
+        for (Tab tab : tabList) {
+            outputTabs.add(tab);
         }
     }
 }

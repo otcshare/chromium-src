@@ -4,9 +4,7 @@
 
 #include "components/omnibox/browser/on_device_model_update_listener.h"
 
-#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
@@ -17,12 +15,10 @@
 namespace {
 
 static const char kHeadModelFilename[] = "on_device_head_test_model_index.bin";
-static const char kTailModelFilename[] = "test_tail_model.tflite";
-static const char kVocabFilename[] = "vocab_test.txt";
 
 const base::FilePath GetTestDataDir() {
   base::FilePath file_path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &file_path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &file_path);
   file_path = file_path.AppendASCII("components/test/data/omnibox");
   return file_path;
 }
@@ -53,21 +49,4 @@ TEST_F(OnDeviceModelUpdateListenerTest, OnHeadModelUpdate) {
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(base::EndsWith(listener_->head_model_filename(),
                              kHeadModelFilename, base::CompareCase::SENSITIVE));
-}
-
-TEST_F(OnDeviceModelUpdateListenerTest, OnTailModelUpdate) {
-  base::FilePath dir_path, model_path, vocab_path;
-  dir_path = GetTestDataDir();
-  model_path = dir_path.AppendASCII(kTailModelFilename);
-  vocab_path = dir_path.AppendASCII(kVocabFilename);
-
-  base::flat_set<base::FilePath> additional_files;
-  additional_files.insert(vocab_path);
-  listener_->OnTailModelUpdate(model_path, additional_files);
-
-  task_environment_.RunUntilIdle();
-  ASSERT_TRUE(base::EndsWith(listener_->tail_model_filename(),
-                             kTailModelFilename, base::CompareCase::SENSITIVE));
-  ASSERT_TRUE(base::EndsWith(listener_->vocab_filename(), kVocabFilename,
-                             base::CompareCase::SENSITIVE));
 }

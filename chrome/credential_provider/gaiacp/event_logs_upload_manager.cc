@@ -5,15 +5,18 @@
 #include "chrome/credential_provider/gaiacp/event_logs_upload_manager.h"
 
 #include <windows.h>
+
 #include <winevt.h>
 
 #include <memory>
 #include <unordered_map>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "chrome/credential_provider/gaiacp/event_logging_api_manager.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
@@ -228,9 +231,10 @@ bool EventLogReader::HasValidQueryResults() {
     PEVT_VARIANT query_statuses = &status_buffer[0];
 
     for (DWORD i = 0; i < query_names->Count; ++i) {
-      if (query_statuses->UInt32Arr[i] != ERROR_SUCCESS) {
+      if (UNSAFE_TODO(query_statuses->UInt32Arr[i]) != ERROR_SUCCESS) {
         LOGFN(ERROR) << "Query path " << query_names->StringArr[0]
-                     << " has error status " << query_statuses->UInt32Arr[i];
+                     << " has error status "
+                     << UNSAFE_TODO(query_statuses->UInt32Arr[i]);
         return false;
       }
     }
@@ -418,7 +422,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
   uint64_t chunk_id = 0;
   size_t log_entries_payload_size = 0;
   int num_upload_requests_made = 0;
-  std::unique_ptr<base::Value> log_entry_value_list;
+  std::unique_ptr<base::Value::List> log_entry_value_list;
   EventLogEntry log_entry;
 
   while (event_log_reader.GetNextEventLogEntry(&log_entry) &&
@@ -428,8 +432,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
 
     chunk_id = std::max(chunk_id, log_entry.event_id);
 
-    base::Value log_entry_value(base::Value::Type::DICTIONARY);
-    log_entry.ToValue(log_entry_value);
+    base::Value::Dict log_entry_value = log_entry.ToValue();
 
     // Get the JSON for the log to keep track of payload size.
     std::string log_entry_json;
@@ -440,8 +443,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
     }
 
     if (!log_entry_value_list) {
-      log_entry_value_list =
-          std::make_unique<base::Value>(base::Value::Type::LIST);
+      log_entry_value_list = std::make_unique<base::Value::List>();
     }
     log_entry_value_list->Append(std::move(log_entry_value));
 
@@ -458,7 +460,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
     }
   }
 
-  if (log_entry_value_list && !log_entry_value_list->GetList().empty()) {
+  if (log_entry_value_list && !log_entry_value_list->empty()) {
     upload_status_ = MakeUploadLogChunkRequest(access_token, chunk_id,
                                                std::move(log_entry_value_list));
     if (FAILED(upload_status_)) {
@@ -476,7 +478,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
 HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
     const std::string& access_token,
     uint64_t chunk_id,
-    std::unique_ptr<base::Value> log_entries_value_list) {
+    std::unique_ptr<base::Value::List> log_entries_value_list) {
   // The GCPW service uses serial number and machine GUID for identifying
   // the device entry.
   std::wstring serial_number = GetSerialNumber();
@@ -487,7 +489,7 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
     return hr;
   }
 
-  size_t num_events_to_upload = log_entries_value_list->GetList().size();
+  size_t num_events_to_upload = log_entries_value_list->size();
 
   base::Value::Dict request_dict;
   request_dict.Set(kRequestSerialNumberParameterName,
@@ -495,10 +497,9 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
   request_dict.Set(kRequestMachineGuidParameterName,
                    base::WideToUTF8(machine_guid));
   request_dict.Set(kRequestChunkIdParameterName, static_cast<int>(chunk_id));
-  base::Value log_entries =
-      base::Value::FromUniquePtrValue(std::move(log_entries_value_list));
+  base::Value log_entries = base::Value(std::move(*log_entries_value_list));
   request_dict.Set(kRequestLogEntriesParameterName, std::move(log_entries));
-  absl::optional<base::Value> request_result;
+  std::optional<base::Value::Dict> request_result;
 
   // Make the upload HTTP request.
   hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
@@ -519,16 +520,18 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
   return S_OK;
 }
 
-void EventLogsUploadManager::EventLogEntry::ToValue(base::Value& dict) const {
-  base::Value timestamp(base::Value::Type::DICTIONARY);
-  timestamp.SetIntKey(kEventLogTimeStampSecondsParameterName,
-                      created_ts.seconds);
-  timestamp.SetIntKey(kEventLogTimeStampNanosParameterName, created_ts.nanos);
-
-  dict.SetStringKey(kEventLogDataParameterName, base::WideToUTF8(data));
-  dict.SetIntKey(kEventLogEventIdParameterName, event_id);
-  dict.SetIntKey(kEventLogSeverityLevelParameterName, severity_level);
-  dict.SetKey(kEventLogTimeStampParameterName, std::move(timestamp));
+base::Value::Dict EventLogsUploadManager::EventLogEntry::ToValue() const {
+  return base::Value::Dict()
+      .Set(kEventLogDataParameterName, base::WideToUTF8(data))
+      .Set(kEventLogEventIdParameterName, static_cast<int>(event_id))
+      .Set(kEventLogSeverityLevelParameterName,
+           static_cast<int>(severity_level))
+      .Set(kEventLogTimeStampParameterName,
+           base::Value::Dict()
+               .Set(kEventLogTimeStampSecondsParameterName,
+                    static_cast<int>(created_ts.seconds))
+               .Set(kEventLogTimeStampNanosParameterName,
+                    static_cast<int>(created_ts.nanos)));
 }
 
 }  // namespace credential_provider

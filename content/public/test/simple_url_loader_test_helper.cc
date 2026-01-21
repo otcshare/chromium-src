@@ -4,9 +4,9 @@
 
 #include "content/public/test/simple_url_loader_test_helper.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 
 namespace content {
 
@@ -30,7 +30,7 @@ void SimpleURLLoaderTestHelper::WaitForCallback() {
 }
 
 void SimpleURLLoaderTestHelper::OnCompleteCallback(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK(!response_body_);
 
   response_body_ = std::move(response_body);

@@ -16,13 +16,12 @@ import org.mockito.Mockito;
 import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ui.BottomContainer;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 
-/**
- * Unit tests for {@link BadFlagsSnackbarManager}.
- */
+/** Unit tests for {@link BadFlagsSnackbarManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class BadFlagsSnackbarManagerTest {
     Activity mActivity;
@@ -30,7 +29,7 @@ public class BadFlagsSnackbarManagerTest {
     @Before
     public void setup() {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
-        mActivity.setTheme(org.chromium.chrome.R.style.Theme_BrowserUI_DayNight);
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
     }
 
     @Test
@@ -45,10 +44,14 @@ public class BadFlagsSnackbarManagerTest {
         Assert.assertNull("Snackbar controller should be null.", snackbar.getController());
         Assert.assertEquals(
                 "Snackbar text should match.", errorString, snackbar.getTextForTesting());
-        Assert.assertEquals("Snackbar identifier should match.", Snackbar.UMA_BAD_FLAGS,
+        Assert.assertEquals(
+                "Snackbar identifier should match.",
+                Snackbar.UMA_BAD_FLAGS,
                 snackbar.getIdentifierForTesting());
-        Assert.assertEquals("Snackbar dismiss duration is incorrect.",
-                SnackbarManager.DEFAULT_SNACKBAR_DURATION_LONG_MS, snackbar.getDuration());
+        Assert.assertEquals(
+                "Snackbar dismiss duration is incorrect.",
+                SnackbarManager.DEFAULT_SNACKBAR_DURATION_LONG_MS,
+                snackbar.getDuration());
         snackbarManager.dismissSnackbars(null);
     }
 

@@ -2,9 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "sandbox/win/src/sandbox_nt_util.h"
 
 #include <windows.h>
+
+#include <ntstatus.h>
+#include <winternl.h>
 
 #include <memory>
 #include <vector>
@@ -23,15 +31,6 @@ namespace sandbox {
 namespace {
 
 using ScopedUnicodeString = std::unique_ptr<UNICODE_STRING, NtAllocDeleter>;
-void InitUnicodeString(UNICODE_STRING* unistr, const wchar_t* wstr) {
-  static RtlInitUnicodeStringFunction rtl_init_unicode_string = nullptr;
-  if (!rtl_init_unicode_string) {
-    rtl_init_unicode_string =
-        reinterpret_cast<RtlInitUnicodeStringFunction>(::GetProcAddress(
-            ::GetModuleHandle(L"ntdll.dll"), "RtlInitUnicodeString"));
-  }
-  rtl_init_unicode_string(unistr, wstr);
-}
 
 TEST(SandboxNtUtil, IsSameProcessPseudoHandle) {
   HANDLE current_process_pseudo = GetCurrentProcess();
@@ -41,15 +40,17 @@ TEST(SandboxNtUtil, IsSameProcessPseudoHandle) {
 TEST(SandboxNtUtil, IsSameProcessNonPseudoHandle) {
   base::win::ScopedHandle current_process(
       OpenProcess(PROCESS_QUERY_INFORMATION, false, GetCurrentProcessId()));
-  ASSERT_TRUE(current_process.IsValid());
-  EXPECT_TRUE(IsSameProcess(current_process.Get()));
+  ASSERT_TRUE(current_process.is_valid());
+  EXPECT_TRUE(IsSameProcess(current_process.get()));
 }
 
 TEST(SandboxNtUtil, IsSameProcessDifferentProcess) {
   STARTUPINFO si = {sizeof(si)};
   PROCESS_INFORMATION pi = {};
-  wchar_t notepad[] = L"notepad";
-  ASSERT_TRUE(CreateProcessW(nullptr, notepad, nullptr, nullptr, false, 0,
+  // Calc is preferred over notepad because notepad will fail to launch on
+  // Windows if the store version is not installed.
+  wchar_t command_line[] = L"calc";
+  ASSERT_TRUE(CreateProcessW(nullptr, command_line, nullptr, nullptr, false, 0,
                              nullptr, nullptr, &si, &pi));
   base::win::ScopedProcessInformation process_info(pi);
 
@@ -246,62 +247,6 @@ TEST(SandboxNtUtil, ValidParameter) {
   EXPECT_TRUE(verify_buffer());
 }
 
-TEST(SandboxNtUtil, NtGetPathFromHandle) {
-  base::FilePath exe;
-  ASSERT_TRUE(base::PathService::Get(base::FILE_EXE, &exe));
-  base::File exe_file(exe, base::File::FLAG_OPEN);
-  ASSERT_TRUE(exe_file.IsValid());
-  std::unique_ptr<wchar_t, NtAllocDeleter> path;
-  EXPECT_TRUE(NtGetPathFromHandle(exe_file.GetPlatformFile(), &path));
-
-  // Basic sanity test, the functionality of NtGetPathFromHandle to return
-  // the correct value is already tested from win_utils_unittest.cc.
-  EXPECT_TRUE(base::EndsWith(base::AsStringPiece16(path.get()),
-                             base::AsStringPiece16(exe.BaseName().value()),
-                             base::CompareCase::INSENSITIVE_ASCII));
-
-  // Compare to GetNtPathFromWin32Path for extra check.
-  auto nt_path = GetNtPathFromWin32Path(exe.value());
-  EXPECT_TRUE(nt_path);
-  EXPECT_STREQ(path.get(), nt_path->c_str());
-}
-
-TEST(SandboxNtUtil, CopyNameAndAttributes) {
-  OBJECT_ATTRIBUTES object_attributes;
-  InitializeObjectAttributes(&object_attributes, nullptr, 0, nullptr, nullptr);
-  std::unique_ptr<wchar_t, NtAllocDeleter> name;
-  size_t name_len;
-  uint32_t attributes;
-  EXPECT_EQ(STATUS_UNSUCCESSFUL,
-            sandbox::CopyNameAndAttributes(&object_attributes, &name, &name_len,
-                                           &attributes));
-  UNICODE_STRING object_name = {};
-  InitializeObjectAttributes(&object_attributes, &object_name, 0,
-                             reinterpret_cast<HANDLE>(0x88), nullptr);
-  EXPECT_EQ(STATUS_UNSUCCESSFUL,
-            sandbox::CopyNameAndAttributes(&object_attributes, &name, &name_len,
-                                           &attributes));
-  wchar_t name_buffer[] = {L'A', L'B', L'C', L'D'};
-  object_name.Length = static_cast<USHORT>(sizeof(name_buffer));
-  object_name.MaximumLength = object_name.Length;
-  object_name.Buffer = name_buffer;
-
-  InitializeObjectAttributes(&object_attributes, &object_name, 0,
-                             reinterpret_cast<HANDLE>(0x88), nullptr);
-  EXPECT_EQ(STATUS_UNSUCCESSFUL,
-            sandbox::CopyNameAndAttributes(&object_attributes, &name, &name_len,
-                                           &attributes));
-  InitializeObjectAttributes(&object_attributes, &object_name, 0x12345678,
-                             nullptr, nullptr);
-  ASSERT_EQ(STATUS_SUCCESS,
-            sandbox::CopyNameAndAttributes(&object_attributes, &name, &name_len,
-                                           &attributes));
-  EXPECT_EQ(object_attributes.Attributes, attributes);
-  EXPECT_EQ(std::size(name_buffer), name_len);
-  EXPECT_EQ(0, wcsncmp(name.get(), name_buffer, std::size(name_buffer)));
-  EXPECT_EQ(L'\0', name.get()[name_len]);
-}
-
 TEST(SandboxNtUtil, GetNtExports) {
   const NtExports* exports = GetNtExports();
   ASSERT_TRUE(exports);
@@ -314,7 +259,7 @@ TEST(SandboxNtUtil, GetNtExports) {
 TEST(SandboxNtUtil, ExtractModuleName) {
   {
     UNICODE_STRING module_path = {};
-    InitUnicodeString(&module_path, L"no-path-sep");
+    ::RtlInitUnicodeString(&module_path, L"no-path-sep");
     ScopedUnicodeString result(ExtractModuleName(&module_path));
     EXPECT_TRUE(result);
     EXPECT_EQ(result->Length, module_path.Length);
@@ -322,7 +267,7 @@ TEST(SandboxNtUtil, ExtractModuleName) {
   }
   {
     UNICODE_STRING module_path = {};
-    InitUnicodeString(&module_path, L"c:\\has a\\path\\module.dll");
+    ::RtlInitUnicodeString(&module_path, L"c:\\has a\\path\\module.dll");
     ScopedUnicodeString result(ExtractModuleName(&module_path));
 
     EXPECT_TRUE(result);
@@ -331,14 +276,14 @@ TEST(SandboxNtUtil, ExtractModuleName) {
   }
   {
     UNICODE_STRING module_path = {};
-    InitUnicodeString(&module_path, L"c:\\only a\\path\\");
+    ::RtlInitUnicodeString(&module_path, L"c:\\only a\\path\\");
     ScopedUnicodeString result(ExtractModuleName(&module_path));
 
     EXPECT_FALSE(result);
   }
   {
     UNICODE_STRING module_path = {};
-    InitUnicodeString(&module_path, L"A");
+    ::RtlInitUnicodeString(&module_path, L"A");
     ScopedUnicodeString result(ExtractModuleName(&module_path));
 
     EXPECT_TRUE(result);
@@ -347,12 +292,35 @@ TEST(SandboxNtUtil, ExtractModuleName) {
   }
   {
     UNICODE_STRING module_path = {};
-    InitUnicodeString(&module_path, L"");
+    ::RtlInitUnicodeString(&module_path, L"");
     ScopedUnicodeString result(ExtractModuleName(&module_path));
 
     EXPECT_TRUE(result);
     EXPECT_EQ(result->Length, 0);
   }
+}
+
+TEST(SandboxNtUtil, GetCurrentClientId) {
+  CLIENT_ID client_id = GetCurrentClientId();
+  EXPECT_EQ(client_id.UniqueProcess,
+            reinterpret_cast<LPVOID>(::GetCurrentProcessId()));
+  EXPECT_EQ(client_id.UniqueThread,
+            reinterpret_cast<LPVOID>(::GetCurrentThreadId()));
+}
+
+TEST(SandboxNtUtil, EqualUnicodeString) {
+  EXPECT_TRUE(*EqualUnicodeString({}, {}));
+  EXPECT_TRUE(*EqualUnicodeString(L"", L""));
+  EXPECT_TRUE(*EqualUnicodeString(L"ABC", L"ABC"));
+  EXPECT_TRUE(*EqualUnicodeString(L"ABC", L"abc"));
+  EXPECT_FALSE(*EqualUnicodeString(L"ABC", L"XYZ"));
+  EXPECT_FALSE(*EqualUnicodeString(L"", L"ABC"));
+  EXPECT_FALSE(*EqualUnicodeString(L"ABC", L""));
+  std::wstring long_str(UINT16_MAX / sizeof(WCHAR), L'A');
+  EXPECT_TRUE(*EqualUnicodeString(long_str, long_str));
+  long_str += L"A";
+  EXPECT_FALSE(EqualUnicodeString(long_str, L"ABC"));
+  EXPECT_FALSE(EqualUnicodeString(L"ABC", long_str));
 }
 
 }  // namespace

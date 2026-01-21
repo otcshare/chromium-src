@@ -48,14 +48,14 @@ class NET_EXPORT_PRIVATE AddressSorterPosix
 
   struct SourceAddressInfo {
     // Values read from policy tables.
-    AddressScope scope;
-    unsigned label;
+    AddressScope scope = SCOPE_UNDEFINED;
+    unsigned label = 0;
 
     // Values from the OS, matter only if more than one source address is used.
-    size_t prefix_length;
-    bool deprecated;  // vs. preferred RFC4862
-    bool home;        // vs. care-of RFC6275
-    bool native;
+    size_t prefix_length = 0;
+    bool deprecated = false;  // vs. preferred RFC4862
+    bool home = false;        // vs. care-of RFC6275
+    bool native = false;
   };
 
   typedef std::map<IPAddress, SourceAddressInfo> SourceAddressMap;
@@ -76,7 +76,8 @@ class NET_EXPORT_PRIVATE AddressSorterPosix
   class SortContext;
 
   // NetworkChangeNotifier::IPAddressObserver:
-  void OnIPAddressChanged() override;
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override;
   // Fills |info| with values for |address| from policy tables.
   void FillPolicy(const IPAddress& address, SourceAddressInfo* info) const;
 

@@ -5,6 +5,8 @@
 #include "components/gcm_driver/instance_id/scoped_use_fake_instance_id_android.h"
 
 #include "base/android/jni_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/gcm_driver/instance_id/android/test_support_jni_headers/FakeInstanceIDWithSubtype_jni.h"
 
 using base::android::AttachCurrentThread;
@@ -23,3 +25,5 @@ ScopedUseFakeInstanceIDAndroid::~ScopedUseFakeInstanceIDAndroid() {
 }
 
 }  // namespace instance_id
+
+DEFINE_JNI(FakeInstanceIDWithSubtype)

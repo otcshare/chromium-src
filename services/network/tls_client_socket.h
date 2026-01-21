@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/address_family.h"
@@ -58,8 +57,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) TLSClientSocket
   void OnShutdown() override;
 
   const mojo::Remote<mojom::SocketObserver> observer_;
-  std::unique_ptr<SocketDataPump> socket_data_pump_;
+  // `socket_` must outlive `socket_data_pump_`.
   std::unique_ptr<net::SSLClientSocket> socket_;
+  std::unique_ptr<SocketDataPump> socket_data_pump_;
   mojom::TCPConnectedSocket::UpgradeToTLSCallback connect_callback_;
   bool send_ssl_info_ = false;
   const net::NetworkTrafficAnnotationTag traffic_annotation_;

@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/modules/xr/xr_plane_manager.h"
 
-#include "base/containers/contains.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/modules/xr/xr_plane.h"
 #include "third_party/blink/renderer/modules/xr/xr_plane_set.h"
@@ -18,7 +17,8 @@ XRPlaneManager::XRPlaneManager(base::PassKey<XRSession> pass_key,
 void XRPlaneManager::ProcessPlaneInformation(
     const device::mojom::blink::XRPlaneDetectionData* detected_planes_data,
     double timestamp) {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("xr.debug"), __func__);
+  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("xr.debug"),
+               "ProcessPlaneInformation");
 
   if (!detected_planes_data) {
     DVLOG(3) << __func__ << ": detected_planes_data is null";
@@ -40,7 +40,7 @@ void XRPlaneManager::ProcessPlaneInformation(
            << ", all planes size="
            << detected_planes_data->all_planes_ids.size();
 
-  HeapHashMap<uint64_t, Member<XRPlane>> updated_planes;
+  HeapHashMap<device::PlaneId, Member<XRPlane>> updated_planes;
 
   // First, process all planes that had their information updated (new planes
   // are also processed here).
@@ -63,9 +63,9 @@ void XRPlaneManager::ProcessPlaneInformation(
     // If the plane was already updated, there is nothing to do as it was
     // already moved to |updated_planes|. If it's not updated, just copy it over
     // as-is.
-    if (!base::Contains(updated_planes, plane_id)) {
+    if (!updated_planes.Contains(plane_id)) {
       auto it = plane_ids_to_planes_.find(plane_id);
-      DCHECK(it != plane_ids_to_planes_.end());
+      CHECK(it != plane_ids_to_planes_.end());
       updated_planes.insert(plane_id, it->value);
     }
   }

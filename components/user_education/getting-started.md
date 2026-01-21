@@ -1,32 +1,40 @@
 # Getting started with User Education
 
-How-to for Chrome and other platforms.
+User Education is currently supported on Desktop Chrome and ChromeOS, with
+support for other platforms in an exploratory phase. This site will mainly
+concern itself with the Desktop Chrome implementation; please contact the
+ChromeOS User Education developers for Ash-specific user education journeys.
 
-* [Desktop Chrome](/chrome/browser/ui/user_education/README.md)
+Before you begin, ensure that you have an appropriate design for your journey
+in your PRD which complies with the User Education Team's guidelines. Your UX
+and PM should have consulted the
+[Desktop User Education Homepage](https://sites.google.com/corp/google.com/desktopusereducation/home)
+to design this User Education journey. Once you have a specification, you can
+proceed with implementation.
 
-Currently the only supported platform is Desktop Chrome. See the
-[section](#Adding-User-Education-to-your-application) below to learn how
-to extend User Education to another platform.
+There are four different types of desktop user education journeys. Consult the
+link for the type(s) of journey your feature will use:
+* [Feature Promos, also known as in-product help (IPH)](feature-promos.md)
+* [Tutorials](tutorials.md)
+* ["New" Badge](https://goto.google.com/new-badge-how-to)
+* ["What's New" Page](https://sites.google.com/corp/google.com/desktopusereducation/implement/whats-new-page)
 
+## Help Bubbles
 
-# Adding User Education to your application
+IPH and Tutorials use the [Help Bubble](help-bubbles.md) system. This system
+attaches help bubbles to named elements in the UI. If the element you wish to
+attach a bubble to is in a WebUI in a tab or WebUI-based secondary UI, you will
+need to do additional work to prepare the WebUI to support help bubbles;
+[see here](./webui/README.md) for instructions. For instructions on how to
+create help bubbles with custom UI, [see here](./custom-help-bubbles.md).
 
-There are a number of virtual methods that must be implemented before you can
-use these User Education libraries in a new application, mostly centered around
-localization, accelerators, and global input focus.
+# Adding User Education to your non-Chrome-Desktop application
 
-Fortunately for Chromium developers, the browser already has the necessary
-support built in for Views, WebUI, and Mac-native context menus. You may refer
-to the following locations for an example that could be extended to other
-platforms such as ChromeOS:
-  * [UserEducationService](
-    /chrome/browser/ui/user_education/user_education_service.h) - sets up the
-    various registries and `TutorialService`.
-  * [BrowserView](/chrome/browser/ui/views/frame/browser_view.cc#831) - sets up
-    the `FeaturePromoController`.
-  * [browser_user_education_service](
-    /chrome/browser/ui/views/user_education/browser_user_education_service.h) -
-    registers Chrome-specific IPH and Tutorials.
-  * Concrete implementations of abstract User Education base classes can be
-    found in [c/b/ui/user_education](/chrome/browser/ui/user_education/) and
-    [c/b/ui/views/user_education](/chrome/browser/ui/views/user_education/).
+Please contact [Frizzle Team](mailto:frizzle-team@google.com) for guidance on
+how to use User Education on platforms outside Desktop Chrome.
+
+# Adding help bubbles to new presentation frameworks
+
+Please contact [Frizzle Team](mailto:frizzle-team@google.com) for guidance on
+how to extend the Help Bubble system to new presentation frameworks beyond Views
+and WebUI.

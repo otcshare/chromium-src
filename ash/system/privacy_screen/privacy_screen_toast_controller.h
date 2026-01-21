@@ -9,6 +9,7 @@
 #include "ash/display/privacy_screen_controller.h"
 #include "ash/system/privacy_screen/privacy_screen_toast_view.h"
 #include "ash/system/tray/tray_bubble_view.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 
 namespace ash {
@@ -42,6 +43,12 @@ class ASH_EXPORT PrivacyScreenToastController
   void StartAutoCloseTimer();
 
  private:
+  friend class PrivacyScreenToastControllerTest;
+
+  // Calculates the bubble's accessible name based on the state of the privacy
+  // screen.
+  static std::u16string CalculateAccessibleNameForBubble();
+
   // Updates the toast UI with the current privacy screen state.
   void UpdateToastView();
 
@@ -52,14 +59,15 @@ class ASH_EXPORT PrivacyScreenToastController
   void OnMouseEnteredView() override;
   void OnMouseExitedView() override;
   std::u16string GetAccessibleNameForBubble() override;
+  void HideBubble(const TrayBubbleView* bubble_view) override;
 
   // PrivacyScreenController::Observer:
   void OnPrivacyScreenSettingChanged(bool enabled, bool notify_ui) override;
 
-  UnifiedSystemTray* const tray_;
-  TrayBubbleView* bubble_view_ = nullptr;
-  views::Widget* bubble_widget_ = nullptr;
-  PrivacyScreenToastView* toast_view_ = nullptr;
+  const raw_ptr<UnifiedSystemTray> tray_;
+  raw_ptr<TrayBubbleView> bubble_view_ = nullptr;
+  raw_ptr<views::Widget> bubble_widget_ = nullptr;
+  raw_ptr<PrivacyScreenToastView, DanglingUntriaged> toast_view_ = nullptr;
   bool mouse_hovered_ = false;
   base::OneShotTimer close_timer_;
 };

@@ -6,10 +6,12 @@
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_METADATA_SYNCER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_device_sync_result.h"
@@ -20,7 +22,6 @@
 #include "chromeos/ash/services/device_sync/proto/cryptauth_better_together_device_metadata.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_devicesync.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_directive.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -105,8 +106,8 @@ class CryptAuthMetadataSyncerImpl : public CryptAuthMetadataSyncer {
   friend std::ostream& operator<<(std::ostream& stream,
                                   const GroupPublicKeyState& state);
 
-  static absl::optional<base::TimeDelta> GetTimeoutForState(State state);
-  static absl::optional<CryptAuthDeviceSyncResult::ResultCode>
+  static std::optional<base::TimeDelta> GetTimeoutForState(State state);
+  static std::optional<CryptAuthDeviceSyncResult::ResultCode>
   ResultCodeErrorFromTimeoutDuringState(State state);
 
   // CryptAuthMetadataSyncer:
@@ -138,12 +139,12 @@ class CryptAuthMetadataSyncerImpl : public CryptAuthMetadataSyncer {
 
   void EncryptLocalDeviceMetadata();
   void OnLocalDeviceMetadataEncrypted(
-      const absl::optional<std::string>& encrypted_metadata);
+      const std::optional<std::string>& encrypted_metadata);
   void CreateGroupKey();
   void OnGroupKeyCreated(
       const base::flat_map<CryptAuthKeyBundle::Name,
-                           absl::optional<CryptAuthKey>>& new_keys,
-      const absl::optional<CryptAuthKey>& client_ephemeral_dh);
+                           std::optional<CryptAuthKey>>& new_keys,
+      const std::optional<CryptAuthKey>& client_ephemeral_dh);
   void MakeSyncMetadataCall();
   void OnSyncMetadataSuccess(const cryptauthv2::SyncMetadataResponse& response);
   void OnSyncMetadataFailure(NetworkRequestError error);
@@ -154,9 +155,9 @@ class CryptAuthMetadataSyncerImpl : public CryptAuthMetadataSyncer {
   size_t num_sync_metadata_calls_ = 0;
   cryptauthv2::RequestContext request_context_;
   cryptauthv2::BetterTogetherDeviceMetadata local_device_metadata_;
-  absl::optional<std::string> encrypted_local_device_metadata_;
+  std::optional<std::string> encrypted_local_device_metadata_;
 
-  absl::optional<cryptauthv2::SyncMetadataResponse> sync_metadata_response_;
+  std::optional<cryptauthv2::SyncMetadataResponse> sync_metadata_response_;
 
   // The filtered map of DeviceMetadataPackets from the SyncMetadataResponse,
   // keyed by device ID. All DeviceMetadataPackets are guaranteed to have a
@@ -186,9 +187,9 @@ class CryptAuthMetadataSyncerImpl : public CryptAuthMetadataSyncer {
   base::TimeTicks last_state_change_timestamp_;
 
   State state_ = State::kNotStarted;
-  const CryptAuthKey* initial_group_key_;
-  CryptAuthClientFactory* client_factory_ = nullptr;
-  PrefService* pref_service_ = nullptr;
+  raw_ptr<const CryptAuthKey> initial_group_key_;
+  raw_ptr<CryptAuthClientFactory> client_factory_ = nullptr;
+  raw_ptr<PrefService> pref_service_ = nullptr;
   std::unique_ptr<base::OneShotTimer> timer_;
 };
 

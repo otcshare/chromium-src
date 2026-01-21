@@ -70,14 +70,13 @@ def make_constructors(cg_context):
     assert isinstance(cg_context, CodeGenContext)
 
     decls = ListNode([
-        CxxFuncDefNode(
-            name=cg_context.class_name,
-            arg_decls=["v8::Local<v8::Object> callback_object"],
-            return_type="",
-            explicit=True,
-            member_initializer_list=[
-                "${base_class_name}(callback_object, kSingleOperation)",
-            ]),
+        CxxFuncDefNode(name=cg_context.class_name,
+                       arg_decls=["v8::Local<v8::Object> callback_object"],
+                       return_type="",
+                       explicit=True,
+                       member_initializer_list=[
+                           "${base_class_name}(callback_object)",
+                       ]),
         CxxFuncDeclNode(name="~${class_name}",
                         arg_decls=[],
                         return_type="",
@@ -291,13 +290,20 @@ def generate_callback_interface(callback_interface_identifier):
         "third_party/blink/renderer/bindings/core/v8/generated_code_helper.h",
         "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h",
     ])
-    (header_forward_decls, header_include_headers, source_forward_decls,
-     source_include_headers) = collect_forward_decls_and_include_headers(
-         [callback_interface.operation_groups[0][0].return_type] + list(
-             map(lambda argument: argument.idl_type,
-                 callback_interface.operation_groups[0][0].arguments)))
+    (
+        header_forward_decls,
+        header_include_headers,
+        header_stdcpp_include_headers,
+        source_forward_decls,
+        source_include_headers,
+    ) = collect_forward_decls_and_include_headers(
+        [callback_interface.operation_groups[0][0].return_type] + list(
+            map(lambda argument: argument.idl_type,
+                callback_interface.operation_groups[0][0].arguments)))
     header_node.accumulator.add_class_decls(header_forward_decls)
     header_node.accumulator.add_include_headers(header_include_headers)
+    header_node.accumulator.add_stdcpp_include_headers(
+        header_stdcpp_include_headers)
     source_node.accumulator.add_class_decls(source_forward_decls)
     source_node.accumulator.add_include_headers(source_include_headers)
 

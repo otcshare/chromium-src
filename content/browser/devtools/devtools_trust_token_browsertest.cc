@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "build/build_config.h"
 #include "content/browser/devtools/protocol/devtools_protocol_test_support.h"
 #include "content/browser/devtools/protocol/network.h"
@@ -46,9 +48,10 @@ class DevToolsTrustTokenBrowsertest : public DevToolsProtocolTest,
     EXPECT_GT(tokens.size(), 0ul);
 
     for (const auto& token : tokens) {
-      const std::string* issuer = token.FindStringKey("issuerOrigin");
+      const auto& token_dict = token.GetDict();
+      const std::string* issuer = token_dict.FindString("issuerOrigin");
       if (*issuer == issuerOrigin) {
-        const absl::optional<int> actualCount = token.FindIntPath("count");
+        const std::optional<int> actualCount = token_dict.FindInt("count");
         EXPECT_THAT(actualCount, ::testing::Optional(expectedCount));
         return;
       }
@@ -68,13 +71,13 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest,
 
   EXPECT_EQ("Success",
             EvalJs(shell(), JsReplace(R"(fetch($1,
-        { trustToken: { type: 'token-request' } })
+        { privateToken: { version: 1, operation: 'token-request' } })
         .then(()=>'Success'); )",
                                       server_.GetURL("a.test", "/issue"))));
 
   EXPECT_EQ("Success",
             EvalJs(shell(), JsReplace(R"(fetch($1,
-        { trustToken: { type: 'token-redemption' } })
+        { privateToken: { version: 1, operation: 'token-redemption' } })
         .then(()=>'Success'); )",
                                       server_.GetURL("a.test", "/redeem"))));
 
@@ -88,7 +91,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest,
   // 3) Issue another redemption, and verify its served from cache.
   EXPECT_EQ("NoModificationAllowedError",
             EvalJs(shell(), JsReplace(R"(fetch($1,
-        { trustToken: { type: 'token-redemption' } })
+        { privateToken: { version: 1, operation: 'token-redemption' } })
         .catch(err => err.name); )",
                                       server_.GetURL("a.test", "/redeem"))));
 
@@ -128,9 +131,12 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, FetchEndToEnd) {
   // request.
   std::string command = R"(
   (async () => {
-    await fetch('/issue', {trustToken: {type: 'token-request'}});
-    await fetch('/redeem', {trustToken: {type: 'token-redemption'}});
-    await fetch('/sign', {trustToken: {type: 'send-redemption-record',
+    await fetch('/issue', {privateToken: {version: 1,
+                                        operation: 'token-request'}});
+    await fetch('/redeem', {privateToken: {version: 1,
+                                         operation: 'token-redemption'}});
+    await fetch('/sign', {privateToken: {version: 1,
+                                       operation: 'send-redemption-record',
                                   issuers: [$1]}});
     return 'Success'; })(); )";
 
@@ -164,8 +170,10 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, IframeEndToEnd) {
   // request.
   std::string command = R"(
   (async () => {
-    await fetch('/issue', {trustToken: {type: 'token-request'}});
-    await fetch('/redeem', {trustToken: {type: 'token-redemption'}});
+    await fetch('/issue', {privateToken: {version: 1,
+                                        operation: 'token-request'}});
+    await fetch('/redeem', {privateToken: {version: 1,
+                                         operation: 'token-redemption'}});
     return 'Success'; })(); )";
 
   // We use EvalJs here, not ExecJs, because EvalJs waits for promises to
@@ -176,14 +184,14 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, IframeEndToEnd) {
 
   // 3) Request and redeem a token, then use the redeemed token in a Signing
   // request.
-  auto execute_op_via_iframe = [&](base::StringPiece path,
-                                   base::StringPiece trust_token) {
+  auto execute_op_via_iframe = [&](std::string_view path,
+                                   std::string_view trust_token) {
     // It's important to set the trust token arguments before updating src, as
     // the latter triggers a load.
     EXPECT_TRUE(ExecJs(
         shell(), JsReplace(
                      R"( const myFrame = document.getElementById('test_iframe');
-                         myFrame.trustToken = $1;
+                         myFrame.privateToken = $1;
                          myFrame.src = $2;)",
                      trust_token, path)));
     TestNavigationObserver load_observer(shell()->web_contents());
@@ -191,7 +199,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, IframeEndToEnd) {
   };
 
   execute_op_via_iframe("/sign", JsReplace(
-                                     R"({"type": "send-redemption-record",
+                                     R"({"version": 1,
+                       "operation": "send-redemption-record",
               "issuers": [$1]})",
                                      IssuanceOriginFromHost("a.test")));
 
@@ -224,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest,
 
   // 3) Request some Trust Tokens.
   EXPECT_EQ("OperationError", EvalJs(shell(), R"(fetch('/issue',
-        { trustToken: { type: 'token-request' } })
+        { privateToken: { version: 1, operation: 'token-request' } })
         .then(()=>'Success').catch(err => err.name); )"));
 
   // 4) Verify that we received an Trust Token operation failed event.
@@ -251,7 +260,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, GetTrustTokens) {
   // 4) Request some Trust Tokens.
   std::string command = R"(
   (async () => {
-    await fetch('/issue', {trustToken: {type: 'token-request'}});
+    await fetch('/issue', {privateToken: {version: 1,
+                                        operation: 'token-request'}});
     return 'Success'; })(); )";
 
   // We use EvalJs here, not ExecJs, because EvalJs waits for promises to
@@ -275,7 +285,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, ClearTrustTokens) {
   // 3) Request some Trust Tokens.
   std::string command = R"(
   (async () => {
-    await fetch('/issue', {trustToken: {type: 'token-request'}});
+    await fetch('/issue', {privateToken: {version: 1,
+                                        operation: 'token-request'}});
     return 'Success'; })(); )";
 
   // We use EvalJs here, not ExecJs, because EvalJs waits for promises to
@@ -297,5 +308,4 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, ClearTrustTokens) {
   //    Token count must be 0.
   AssertTrustTokensViaProtocol(IssuanceOriginFromHost("a.test"), 0);
 }
-
 }  // namespace content

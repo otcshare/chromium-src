@@ -6,11 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/thread_pool.h"
+#include "base/timer/elapsed_timer.h"
 #include "components/services/font/public/cpp/mapped_font_file.h"
 #include "pdf/buildflags.h"
 
@@ -19,7 +22,7 @@ namespace internal {
 
 FontServiceThread::FontServiceThread()
     : task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
-          {base::TaskPriority::USER_VISIBLE, base::MayBlock()})) {}
+          {base::TaskPriority::USER_BLOCKING, base::MayBlock()})) {}
 
 FontServiceThread::~FontServiceThread() {
   // Ensure the remote is unbound on the appropriate sequence.
@@ -42,6 +45,9 @@ bool FontServiceThread::MatchFamilyName(
     SkFontStyle* out_style) {
   DCHECK(!task_runner_->RunsTasksInCurrentSequence());
   bool out_valid = false;
+
+  base::ElapsedTimer timer;
+
   // This proxies to the other thread, which proxies to mojo. Only on the reply
   // from mojo do we return from this.
   base::WaitableEvent done_event;
@@ -51,6 +57,9 @@ bool FontServiceThread::MatchFamilyName(
                      family_name, requested_style, &out_valid,
                      out_font_identity, out_family_name, out_style));
   done_event.Wait();
+
+  base::UmaHistogramMicrosecondsTimes(
+      "Blink.Fonts.FontServiceThread.MatchFamilyNameTime", timer.Elapsed());
 
   return out_valid;
 }
@@ -112,6 +121,17 @@ bool FontServiceThread::MatchFontByPostscriptNameOrFullFontName(
 }
 
 #if BUILDFLAG(ENABLE_PDF)
+std::vector<std::string> FontServiceThread::ListFamilies() {
+  DCHECK(!task_runner_->RunsTasksInCurrentSequence());
+  std::vector<std::string> families;
+  base::WaitableEvent done_event;
+  task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&FontServiceThread::ListFamiliesImpl, this,
+                                &done_event, &families));
+  done_event.Wait();
+  return families;
+}
+
 void FontServiceThread::MatchFontWithFallback(
     std::string family,
     bool is_bold,
@@ -134,6 +154,8 @@ scoped_refptr<MappedFontFile> FontServiceThread::OpenStream(
     const SkFontConfigInterface::FontIdentity& identity) {
   DCHECK(!task_runner_->RunsTasksInCurrentSequence());
 
+  base::ElapsedTimer timer;
+
   base::File stream_file;
   // This proxies to the other thread, which proxies to mojo. Only on the
   // reply from mojo do we return from this.
@@ -142,6 +164,9 @@ scoped_refptr<MappedFontFile> FontServiceThread::OpenStream(
       FROM_HERE, base::BindOnce(&FontServiceThread::OpenStreamImpl, this,
                                 &done_event, &stream_file, identity.fID));
   done_event.Wait();
+
+  base::UmaHistogramMicrosecondsTimes(
+      "Blink.Fonts.FontServiceThread.OpenStreamTime", timer.Elapsed());
 
   if (!stream_file.IsValid()) {
     // The font-service may have been killed.
@@ -371,6 +396,31 @@ void FontServiceThread::OnMatchFontByPostscriptNameOrFullFontNameComplete(
 }
 
 #if BUILDFLAG(ENABLE_PDF)
+void FontServiceThread::ListFamiliesImpl(base::WaitableEvent* done_event,
+                                         std::vector<std::string>* families) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  if (!font_service_.is_connected()) {
+    done_event->Signal();
+    return;
+  }
+
+  pending_waitable_events_.insert(done_event);
+  font_service_->ListFamilies(base::BindOnce(
+      &FontServiceThread::OnListFamiliesComplete, this, done_event, families));
+}
+
+void FontServiceThread::OnListFamiliesComplete(
+    base::WaitableEvent* done_event,
+    std::vector<std::string>* families,
+    const std::vector<std::string>& response) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  pending_waitable_events_.erase(done_event);
+  *families = response;
+  done_event->Signal();
+}
+
 void FontServiceThread::MatchFontWithFallbackImpl(
     base::WaitableEvent* done_event,
     std::string family,
@@ -407,7 +457,7 @@ void FontServiceThread::OnMatchFontWithFallbackComplete(
 #endif  // BUILDFLAG(ENABLE_PDF)
 
 void FontServiceThread::OnFontServiceDisconnected() {
-  std::set<base::WaitableEvent*> events;
+  std::set<raw_ptr<base::WaitableEvent, SetExperimental>> events;
   events.swap(pending_waitable_events_);
   for (base::WaitableEvent* event : events)
     event->Signal();

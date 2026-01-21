@@ -2,19 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import 'chrome://resources/cr_elements/cr_button/cr_button.js';
-import 'chrome://resources/cr_elements/cr_input/cr_input.js';
-import './shared_style.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
+import './shared_style.css.js';
 
-import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {getTemplate} from './browser_tabs_metadata_form.html.js';
 import {BrowserTabsMetadataModel, ImageType, imageTypeToStringMap} from './types.js';
 
 Polymer({
   is: 'browser-tabs-metadata-form',
 
-  _template: html`{__html_template__}`,
+  _template: getTemplate(),
 
   properties: {
     /** @type{BrowserTabsMetadataModel} */

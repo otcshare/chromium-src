@@ -8,9 +8,9 @@
 #include <list>
 #include <map>
 
-#include "base/callback_forward.h"
 #include "base/callback_list.h"
 #include "base/containers/lru_cache.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -84,12 +84,13 @@ class FaviconCache : public history::HistoryServiceObserver {
  private:
   FRIEND_TEST_ALL_PREFIXES(FaviconCacheTest, ClearIconsWithHistoryDeletions);
   FRIEND_TEST_ALL_PREFIXES(FaviconCacheTest, ExpireNullFaviconsByHistory);
+  FRIEND_TEST_ALL_PREFIXES(FaviconCacheTest, DoNotExpireNullFaviconsFor404);
   FRIEND_TEST_ALL_PREFIXES(FaviconCacheTest, ObserveFaviconsChanged);
 
   enum class RequestType {
-    BY_PAGE_URL,
-    BY_ICON_URL,
-    RAW_BY_PAGE_URL,
+    kByPageUrl,
+    kByIconUrl,
+    kRawByPageUrl,
   };
 
   struct Request {
@@ -122,10 +123,9 @@ class FaviconCache : public history::HistoryServiceObserver {
 
   // history::HistoryServiceObserver:
   void OnURLVisited(history::HistoryService* history_service,
-                    const history::URLRow& url_row,
-                    const history::VisitRow& new_visit) override;
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+                    const history::VisitedURLInfo& visited_url_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void OnFaviconsChanged(const std::set<GURL>& page_urls, const GURL& icon_url);
 
   // Non-owning pointer to a KeyedService.

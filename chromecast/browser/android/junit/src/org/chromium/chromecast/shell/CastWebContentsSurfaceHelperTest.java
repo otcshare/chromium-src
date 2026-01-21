@@ -8,7 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.any;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -19,13 +19,17 @@ import android.content.Intent;
 import android.net.Uri;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chromecast.base.Controller;
 import org.chromium.chromecast.base.Observer;
@@ -33,28 +37,28 @@ import org.chromium.chromecast.base.Scope;
 import org.chromium.chromecast.base.Unit;
 import org.chromium.chromecast.shell.CastWebContentsSurfaceHelper.MediaSessionGetter;
 import org.chromium.chromecast.shell.CastWebContentsSurfaceHelper.StartParams;
-import org.chromium.content.browser.MediaSessionImpl;
+import org.chromium.content_public.browser.MediaSession;
 import org.chromium.content_public.browser.WebContents;
 
 import java.util.function.Consumer;
 
-/**
- * Tests for CastWebContentsSurfaceHelper.
- */
+/** Tests for CastWebContentsSurfaceHelper. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class CastWebContentsSurfaceHelperTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     private @Mock Observer<WebContents> mWebContentsView;
     private @Mock Consumer<Uri> mFinishCallback;
     private CastWebContentsSurfaceHelper mSurfaceHelper;
     private @Mock MediaSessionGetter mMediaSessionGetter;
-    private @Mock MediaSessionImpl mMediaSessionImpl;
-    private Controller<Unit> mSurfaceAvailable = new Controller<>();
+    private @Mock MediaSession mMediaSession;
+    private final Controller<Unit> mSurfaceAvailable = new Controller<>();
 
     private static class StartParamsBuilder {
         private String mId = "0";
         private WebContents mWebContents = mock(WebContents.class);
-        private boolean mIsRemoteControlMode;
+        private boolean mShouldRequestAudioFocus;
         private boolean mIsTouchInputEnabled;
 
         public StartParamsBuilder withId(String id) {
@@ -67,8 +71,8 @@ public class CastWebContentsSurfaceHelperTest {
             return this;
         }
 
-        public StartParamsBuilder withIsRemoteControlMode(boolean isRemoteControlMode) {
-            mIsRemoteControlMode = isRemoteControlMode;
+        public StartParamsBuilder withShouldRequestAudioFocus(boolean shouldRequestAudioFocus) {
+            mShouldRequestAudioFocus = shouldRequestAudioFocus;
             return this;
         }
 
@@ -78,8 +82,11 @@ public class CastWebContentsSurfaceHelperTest {
         }
 
         public StartParams build() {
-            return new StartParams(CastWebContentsIntentUtils.getInstanceUri(mId), mWebContents,
-                    mIsRemoteControlMode, mIsTouchInputEnabled);
+            return new StartParams(
+                    CastWebContentsIntentUtils.getInstanceUri(mId),
+                    mWebContents,
+                    mShouldRequestAudioFocus,
+                    mIsTouchInputEnabled);
         }
     }
 
@@ -87,14 +94,25 @@ public class CastWebContentsSurfaceHelperTest {
         CastWebContentsIntentUtils.getLocalBroadcastManager().sendBroadcastSync(intent);
     }
 
+    private void sendSystemBroadcast(Intent intent) {
+        ContextUtils.getApplicationContext().sendBroadcast(intent);
+        // Two looper flushes are required: the first executes the broadcast, and the next executes
+        // the delayed tasks that were queued by the broadcast receivers.
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+    }
+
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        when(mMediaSessionGetter.get(any())).thenReturn(mMediaSessionImpl);
+        ContextUtils.initApplicationContextForTests(RuntimeEnvironment.application);
+        when(mMediaSessionGetter.get(any())).thenReturn(mMediaSession);
         when(mWebContentsView.open(any())).thenReturn(mock(Scope.class));
-        mSurfaceHelper = new CastWebContentsSurfaceHelper(
-                mWebContentsView, mFinishCallback, mSurfaceAvailable);
+        mSurfaceHelper =
+                new CastWebContentsSurfaceHelper(
+                        mWebContentsView, mFinishCallback, mSurfaceAvailable);
         mSurfaceHelper.setMediaSessionGetterForTesting(mMediaSessionGetter);
+        // Ensure the BroadcastReceivers are registered.
+        ShadowLooper.runUiThreadTasks();
     }
 
     @Test
@@ -106,23 +124,28 @@ public class CastWebContentsSurfaceHelperTest {
     }
 
     @Test
-    public void testRequestsAudioFocusOnNewStartParams() {
+    public void testRequestsAudioFocusWhenNewStartParamsAsk() {
         WebContents webContents = mock(WebContents.class);
-        StartParams params = new StartParamsBuilder().withWebContents(webContents).build();
+        StartParams params =
+                new StartParamsBuilder()
+                        .withWebContents(webContents)
+                        .withShouldRequestAudioFocus(true)
+                        .build();
         mSurfaceHelper.onNewStartParams(params);
-        verify(mMediaSessionImpl).requestSystemAudioFocus();
+        verify(mMediaSession).requestSystemAudioFocus();
     }
 
     @Test
-    public void testDoesNotTakeAudioFocusInRemoteControlMode() {
+    public void testDoesNotTakeAudioFocusWhenStartParamsAskNotTo() {
         WebContents webContents = mock(WebContents.class);
-        StartParams params = new StartParamsBuilder()
-                                     .withId("3")
-                                     .withWebContents(webContents)
-                                     .withIsRemoteControlMode(true)
-                                     .build();
+        StartParams params =
+                new StartParamsBuilder()
+                        .withId("3")
+                        .withWebContents(webContents)
+                        .withShouldRequestAudioFocus(false)
+                        .build();
         mSurfaceHelper.onNewStartParams(params);
-        verify(mMediaSessionImpl, never()).requestSystemAudioFocus();
+        verify(mMediaSession, never()).requestSystemAudioFocus();
     }
 
     @Test
@@ -148,16 +171,18 @@ public class CastWebContentsSurfaceHelperTest {
     public void testDoesNotRestartWebContentsIfNewStartParamsHasSameWebContents() {
         WebContents webContents = mock(WebContents.class);
         // Create two StartParams that have the same WebContents but different values.
-        StartParams params1 = new StartParamsBuilder()
-                                      .withId("1")
-                                      .withWebContents(webContents)
-                                      .enableTouchInput(false)
-                                      .build();
-        StartParams params2 = new StartParamsBuilder()
-                                      .withId("1")
-                                      .withWebContents(webContents)
-                                      .enableTouchInput(true)
-                                      .build();
+        StartParams params1 =
+                new StartParamsBuilder()
+                        .withId("1")
+                        .withWebContents(webContents)
+                        .enableTouchInput(false)
+                        .build();
+        StartParams params2 =
+                new StartParamsBuilder()
+                        .withId("1")
+                        .withWebContents(webContents)
+                        .enableTouchInput(true)
+                        .build();
         Scope scope = mock(Scope.class);
         when(mWebContentsView.open(webContents)).thenReturn(scope);
         mSurfaceHelper.onNewStartParams(params1);
@@ -195,8 +220,7 @@ public class CastWebContentsSurfaceHelperTest {
         Scope scope = mock(Scope.class);
         when(mWebContentsView.open(webContents)).thenReturn(scope);
         mSurfaceHelper.onNewStartParams(params);
-        // Send SCREEN_OFF broadcast.
-        sendBroadcastSync(new Intent(CastIntents.ACTION_SCREEN_OFF));
+        sendSystemBroadcast(new Intent(Intent.ACTION_SCREEN_OFF));
         verify(scope).close();
     }
 
@@ -228,7 +252,6 @@ public class CastWebContentsSurfaceHelperTest {
 
     @Test
     public void testEnableTouchInputIntentMutatesIsTouchInputEnabled() {
-        WebContents webContents = mock(WebContents.class);
         StartParams params = new StartParamsBuilder().withId("1").enableTouchInput(false).build();
         mSurfaceHelper.onNewStartParams(params);
         assertFalse(mSurfaceHelper.isTouchInputEnabled());
@@ -239,7 +262,6 @@ public class CastWebContentsSurfaceHelperTest {
 
     @Test
     public void testEnableTouchInputIntentWithWrongIdIsIgnored() {
-        WebContents webContents = mock(WebContents.class);
         StartParams params = new StartParamsBuilder().withId("1").enableTouchInput(false).build();
         mSurfaceHelper.onNewStartParams(params);
         assertFalse(mSurfaceHelper.isTouchInputEnabled());
@@ -250,7 +272,6 @@ public class CastWebContentsSurfaceHelperTest {
 
     @Test
     public void testDisableTouchInputIntent() {
-        WebContents webContents = mock(WebContents.class);
         StartParams params = new StartParamsBuilder().withId("1").enableTouchInput(true).build();
         mSurfaceHelper.onNewStartParams(params);
         assertTrue(mSurfaceHelper.isTouchInputEnabled());
@@ -272,8 +293,7 @@ public class CastWebContentsSurfaceHelperTest {
     public void testFinishLaterCallbackIsRunAfterScreenOff() {
         StartParams params = new StartParamsBuilder().withId("0").build();
         mSurfaceHelper.onNewStartParams(params);
-        sendBroadcastSync(new Intent(CastIntents.ACTION_SCREEN_OFF));
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        sendSystemBroadcast(new Intent(Intent.ACTION_SCREEN_OFF));
         verify(mFinishCallback).accept(CastWebContentsIntentUtils.getInstanceUri("0"));
     }
 

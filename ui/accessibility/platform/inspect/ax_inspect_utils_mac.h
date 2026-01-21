@@ -5,36 +5,61 @@
 #ifndef UI_ACCESSIBILITY_PLATFORM_INSPECT_AX_INSPECT_UTILS_MAC_H_
 #define UI_ACCESSIBILITY_PLATFORM_INSPECT_AX_INSPECT_UTILS_MAC_H_
 
-#import <Cocoa/Cocoa.h>
+#include <ApplicationServices/ApplicationServices.h>
 
-#include "base/callback_forward.h"
+#include <optional>
+
+#include "base/apple/scoped_cftyperef.h"
 #include "base/component_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
 
-using ui::AXTreeSelector;
-
 namespace ui {
+
+class AXPlatformNode;
+class AXPlatformTreeManager;
 
 // Returns true if the given accessibility attribute is valid, and could have
 // been exposed on certain accessibility objects.
 COMPONENT_EXPORT(AX_PLATFORM)
 bool IsValidAXAttribute(const std::string& attribute);
 
+// Return AXElement in a tree by a given accessibility role.
+COMPONENT_EXPORT(AX_PLATFORM)
+base::apple::ScopedCFTypeRef<AXUIElementRef> FindAXUIElement(
+    const AXUIElementRef node,
+    const char* role);
+
 // Return AXElement in a tree by a given criteria.
 using AXFindCriteria = base::RepeatingCallback<bool(const AXUIElementRef)>;
 COMPONENT_EXPORT(AX_PLATFORM)
-AXUIElementRef FindAXUIElement(const AXUIElementRef node,
-                               const AXFindCriteria& criteria);
+base::apple::ScopedCFTypeRef<AXUIElementRef> FindAXUIElement(
+    const AXUIElementRef node,
+    const AXFindCriteria& criteria);
 
 // Returns AXUIElement and its application process id by a given tree selector.
 COMPONENT_EXPORT(AX_PLATFORM)
-std::pair<AXUIElementRef, int> FindAXUIElement(const AXTreeSelector&);
+std::pair<base::apple::ScopedCFTypeRef<AXUIElementRef>, int> FindAXUIElement(
+    const AXTreeSelector&);
+
+// Returns application AXUIElement and its application process id by a given
+// tree selector.
+COMPONENT_EXPORT(AX_PLATFORM)
+std::pair<base::apple::ScopedCFTypeRef<AXUIElementRef>, int> FindAXApplication(
+    const AXTreeSelector&);
 
 // Returns AXUIElement for a window having title matching the given pattern.
 COMPONENT_EXPORT(AX_PLATFORM)
-AXUIElementRef FindAXWindowChild(AXUIElementRef parent,
-                                 const std::string& pattern);
+base::apple::ScopedCFTypeRef<AXUIElementRef> FindAXWindowChild(
+    AXUIElementRef parent,
+    const std::string& pattern);
+
+// Returns the corresponding AXPlatformNode for the given AXUIElementRef. If no
+// node is found, returns nullptr.
+COMPONENT_EXPORT(AX_PLATFORM)
+AXPlatformNode* GetAXPlatformNode(AXUIElementRef element,
+                                  base::WeakPtr<AXPlatformTreeManager> manager);
 
 }  // namespace ui
 

@@ -6,9 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/timer/timer.h"
 
 namespace remoting::protocol {
@@ -46,7 +45,6 @@ void WebrtcAudioModule::SetAudioTaskRunner(
 
 int32_t WebrtcAudioModule::ActiveAudioLayer(AudioLayer* audio_layer) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::RegisterAudioCallback(
@@ -113,7 +111,6 @@ int32_t WebrtcAudioModule::SetRecordingDevice(WindowsDeviceType device) {
 
 int32_t WebrtcAudioModule::PlayoutIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::InitPlayout() {
@@ -127,7 +124,6 @@ bool WebrtcAudioModule::PlayoutIsInitialized() const {
 
 int32_t WebrtcAudioModule::RecordingIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::InitRecording() {
@@ -142,8 +138,9 @@ int32_t WebrtcAudioModule::StartPlayout() {
   base::AutoLock auto_lock(lock_);
   if (!playing_ && audio_task_runner_) {
     audio_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&WebrtcAudioModule::StartPlayoutOnAudioThread,
-                                  rtc::scoped_refptr<WebrtcAudioModule>(this)));
+        FROM_HERE,
+        base::BindOnce(&WebrtcAudioModule::StartPlayoutOnAudioThread,
+                       webrtc::scoped_refptr<WebrtcAudioModule>(this)));
     playing_ = true;
   }
   return 0;
@@ -153,8 +150,9 @@ int32_t WebrtcAudioModule::StopPlayout() {
   base::AutoLock auto_lock(lock_);
   if (playing_) {
     audio_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&WebrtcAudioModule::StopPlayoutOnAudioThread,
-                                  rtc::scoped_refptr<WebrtcAudioModule>(this)));
+        FROM_HERE,
+        base::BindOnce(&WebrtcAudioModule::StopPlayoutOnAudioThread,
+                       webrtc::scoped_refptr<WebrtcAudioModule>(this)));
     playing_ = false;
   }
   return 0;
@@ -195,82 +193,66 @@ bool WebrtcAudioModule::MicrophoneIsInitialized() const {
 
 int32_t WebrtcAudioModule::SpeakerVolumeIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetSpeakerVolume(uint32_t volume) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerVolume(uint32_t* volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MaxSpeakerVolume(uint32_t* max_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MinSpeakerVolume(uint32_t* min_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneVolumeIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetMicrophoneVolume(uint32_t volume) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneVolume(uint32_t* volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MaxMicrophoneVolume(uint32_t* max_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MinMicrophoneVolume(uint32_t* min_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerMuteIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetSpeakerMute(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerMute(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneMuteIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetMicrophoneMute(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneMute(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::StereoPlayoutIsAvailable(bool* available) const {
@@ -285,7 +267,6 @@ int32_t WebrtcAudioModule::SetStereoPlayout(bool enable) {
 
 int32_t WebrtcAudioModule::StereoPlayout(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::StereoRecordingIsAvailable(bool* available) const {
@@ -299,7 +280,6 @@ int32_t WebrtcAudioModule::SetStereoRecording(bool enable) {
 
 int32_t WebrtcAudioModule::StereoRecording(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::PlayoutDelay(uint16_t* delay_ms) const {
@@ -321,30 +301,25 @@ bool WebrtcAudioModule::BuiltInNSIsAvailable() const {
 
 int32_t WebrtcAudioModule::EnableBuiltInAEC(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::EnableBuiltInAGC(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::EnableBuiltInNS(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 #if defined(WEBRTC_IOS)
 int WebrtcAudioModule::GetPlayoutAudioParameters(
     webrtc::AudioParameters* params) const {
   NOTREACHED();
-  return -1;
 }
 
 int WebrtcAudioModule::GetRecordAudioParameters(
     webrtc::AudioParameters* params) const {
   NOTREACHED();
-  return -1;
 }
 #endif  // WEBRTC_IOS
 
@@ -365,8 +340,9 @@ void WebrtcAudioModule::PollFromSource() {
   DCHECK(audio_task_runner_->BelongsToCurrentThread());
 
   base::AutoLock lock(lock_);
-  if (!audio_transport_)
+  if (!audio_transport_) {
     return;
+  }
 
   for (int i = 0; i < kPollInterval.InMilliseconds() / kFrameLengthMs; i++) {
     int64_t elapsed_time_ms = -1;

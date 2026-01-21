@@ -5,9 +5,10 @@
 #include "chrome/browser/support_tool/ash/network_health_data_collector.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/stringprintf.h"
@@ -16,10 +17,8 @@
 #include "chrome/browser/support_tool/data_collector.h"
 #include "chrome/browser/support_tool/system_log_source_data_collector_adaptor.h"
 #include "chromeos/ash/components/network/network_event_log.h"
-#include "components/feedback/pii_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/feedback/redaction_tool/pii_types.h"
 #include "third_party/re2/src/re2/re2.h"
-#include "third_party/re2/src/re2/stringpiece.h"
 
 namespace {
 
@@ -30,26 +29,26 @@ constexpr char kRegexPattern[] =
     "(?s)(.*?)Name: (?-s)(.+)\\nGUID: (?-s)(.+)\\n";
 
 // Looks for network names and GUID in `network_health_data` and adds the found
-// ones to `out_pii_map` under feedback::PIIType::kStableIdentifier category.
+// ones to `out_pii_map` under redaction::PIIType::kStableIdentifier category.
 void FindNetworkNamesAndAddToPIIMap(const std::string& network_health_data,
                                     PIIMap& out_pii_map) {
   // `network_health_data` stores every component in a new line. Network names
   // are stored in "Name: <name>\n" format in `network_health_data`. The GUID is
   // put on the line after network name and is in format "GUID: <guid>\n".
   re2::RE2 regex_pattern(kRegexPattern);
-  re2::StringPiece input(network_health_data);
+  std::string_view input(network_health_data);
 
-  re2::StringPiece skipped_part;
-  re2::StringPiece matched_network_name;
-  re2::StringPiece matched_guid;
+  std::string_view skipped_part;
+  std::string_view matched_network_name;
+  std::string_view matched_guid;
 
   while (re2::RE2::Consume(&input, regex_pattern, &skipped_part,
                            &matched_network_name, &matched_guid)) {
     if (matched_network_name != "N/A")
-      out_pii_map[feedback::PIIType::kStableIdentifier].emplace(
+      out_pii_map[redaction::PIIType::kStableIdentifier].emplace(
           matched_network_name);
     if (matched_guid != "N/A")
-      out_pii_map[feedback::PIIType::kStableIdentifier].emplace(matched_guid);
+      out_pii_map[redaction::PIIType::kStableIdentifier].emplace(matched_guid);
   }
 }
 
@@ -60,28 +59,28 @@ std::string RedactNetworkNames(const std::string& network_health_data) {
   // are stored in "Name: <name>\n" format in `network_health_data`. The GUID is
   // put on the line after network name and is in format "GUID: <guid>\n".
   re2::RE2 regex_pattern(kRegexPattern);
-  re2::StringPiece input(network_health_data);
+  std::string_view input(network_health_data);
 
-  re2::StringPiece skipped_part;
-  re2::StringPiece matched_network_name;
-  re2::StringPiece matched_guid;
+  std::string_view skipped_part;
+  std::string_view matched_network_name;
+  std::string_view matched_guid;
   std::string redacted;
 
   while (re2::RE2::Consume(&input, regex_pattern, &skipped_part,
                            &matched_network_name, &matched_guid)) {
-    skipped_part.AppendToString(&redacted);
+    redacted.append(skipped_part);
     if (matched_network_name == "N/A" || matched_network_name.empty() ||
         matched_guid == "N/A" || matched_guid.empty()) {
       redacted += "Name: N/A\nGUID: N/A\n";
       continue;
     }
-    std::string replacement = ash::NetworkGuidId(matched_guid.ToString());
+    std::string replacement = ash::NetworkGuidId(std::string(matched_guid));
     redacted += base::StringPrintf("Name: %s\nGUID: %s\n", replacement.c_str(),
                                    replacement.c_str());
   }
   // Append the rest of the input to `redacted`. Only the unmatched last part
   // will be present in the `input` as we're using Consume() function.
-  input.AppendToString(&redacted);
+  redacted.append(input);
   return redacted;
 }
 
@@ -99,7 +98,7 @@ NetworkHealthDataCollector::~NetworkHealthDataCollector() = default;
 void NetworkHealthDataCollector::CollectDataAndDetectPII(
     DataCollectorDoneCallback on_data_collected_callback,
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container) {
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container) {
   SystemLogSourceDataCollectorAdaptor::CollectDataAndDetectPII(
       base::BindOnce(&NetworkHealthDataCollector::
                          OnSystemLogSourceDataCollectorAdaptorCollectedData,
@@ -111,7 +110,7 @@ void NetworkHealthDataCollector::CollectDataAndDetectPII(
 void NetworkHealthDataCollector::
     OnSystemLogSourceDataCollectorAdaptorCollectedData(
         DataCollectorDoneCallback on_data_collected_callback,
-        absl::optional<SupportToolError> error) {
+        std::optional<SupportToolError> error) {
   // `system_logs::kNetworkHealthSnapshotEntry` contains network names and they
   // should be detected specially since
   // `SystemLogSourceDataCollectorAdaptor::CollectDataAndDetectPII()` can't
@@ -123,13 +122,12 @@ void NetworkHealthDataCollector::
 }
 
 void NetworkHealthDataCollector::ExportCollectedDataWithPII(
-    std::set<feedback::PIIType> pii_types_to_keep,
+    std::set<redaction::PIIType> pii_types_to_keep,
     base::FilePath target_directory,
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container,
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container,
     DataCollectorDoneCallback on_exported_callback) {
-  if (!base::Contains(pii_types_to_keep,
-                      feedback::PIIType::kStableIdentifier)) {
+  if (!pii_types_to_keep.contains(redaction::PIIType::kStableIdentifier)) {
     // `system_logs::kNetworkHealthSnapshotEntry` contains network names and
     // they should be anonymised specially since
     // `SystemLogSourceDataCollectorAdaptor::ExportCollectedDataWithPII()` can't

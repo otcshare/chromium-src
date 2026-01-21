@@ -11,6 +11,7 @@
 #include "components/permissions/permission_request_id.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permissions_client.h"
+#include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
 #include "components/permissions/test/test_permissions_client.h"
 #include "content/public/test/mock_render_process_host.h"
@@ -51,7 +52,7 @@ class NfcPermissionContextTests : public content::RenderViewHostTestHarness {
                             bool user_gesture);
 
   void PermissionResponse(const PermissionRequestID& id,
-                          ContentSetting content_setting);
+                          content::PermissionResult permission_result);
   void CheckPermissionMessageSent(int request_id, bool allowed);
   void CheckPermissionMessageSentInternal(MockRenderProcessHost* process,
                                           int request_id,
@@ -76,7 +77,7 @@ class NfcPermissionContextTests : public content::RenderViewHostTestHarness {
 
   // A map between renderer child id and a pair represending the bridge id and
   // whether the requested permission was allowed.
-  std::map<int,
+  std::map<content::ChildProcessId,
            std::pair<permissions::PermissionRequestID::RequestLocalId, bool>>
       responses_;
 };
@@ -92,7 +93,10 @@ void NfcPermissionContextTests::RequestNfcPermission(
     const GURL& requesting_frame,
     bool user_gesture) {
   nfc_permission_context_->RequestPermission(
-      id, requesting_frame, user_gesture,
+      std::make_unique<PermissionRequestData>(
+          std::make_unique<ContentSettingPermissionResolver>(
+              ContentSettingsType::MIDI_SYSEX),
+          id, user_gesture, requesting_frame),
       base::BindOnce(&NfcPermissionContextTests::PermissionResponse,
                      base::Unretained(this), id));
   content::RunAllTasksUntilIdle();
@@ -100,10 +104,10 @@ void NfcPermissionContextTests::RequestNfcPermission(
 
 void NfcPermissionContextTests::PermissionResponse(
     const PermissionRequestID& id,
-    ContentSetting content_setting) {
+    content::PermissionResult permission_result) {
   responses_[id.global_render_frame_host_id().child_id] =
       std::make_pair(id.request_local_id_for_testing(),
-                     content_setting == CONTENT_SETTING_ALLOW);
+                     permission_result.status == PermissionStatus::GRANTED);
 }
 
 void NfcPermissionContextTests::CheckPermissionMessageSent(int request_id,

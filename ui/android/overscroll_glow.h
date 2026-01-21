@@ -5,6 +5,7 @@
 #ifndef UI_ANDROID_OVERSCROLL_GLOW_H_
 #define UI_ANDROID_OVERSCROLL_GLOW_H_
 
+#include <array>
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
@@ -15,7 +16,7 @@
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
-namespace cc {
+namespace cc::slim {
 class Layer;
 }
 
@@ -61,7 +62,7 @@ class UI_ANDROID_EXPORT OverscrollGlow {
   // Returns true if the effect still needs animation ticks, with effect layers
   // attached to |parent_layer| if necessary.
   // Note: The effect will detach itself when no further animation is required.
-  bool Animate(base::TimeTicks current_time, cc::Layer* parent_layer);
+  bool Animate(base::TimeTicks current_time, cc::slim::Layer* parent_layer);
 
   // Update the effect according to the most recent display parameters,
   // Note: All dimensions are in device pixels.
@@ -86,7 +87,7 @@ class UI_ANDROID_EXPORT OverscrollGlow {
   // Returns whether the effect has been properly initialized.
   bool InitializeIfNecessary();
   bool CheckNeedsAnimate();
-  void UpdateLayerAttachment(cc::Layer* parent);
+  void UpdateLayerAttachment(cc::slim::Layer* parent);
   void Detach();
   void Pull(base::TimeTicks current_time,
             const gfx::Vector2dF& overscroll_delta,
@@ -100,15 +101,15 @@ class UI_ANDROID_EXPORT OverscrollGlow {
   EdgeEffect* GetOppositeEdge(int edge_index);
 
   raw_ptr<OverscrollGlowClient> client_;
-  std::unique_ptr<EdgeEffect> edge_effects_[EDGE_COUNT];
+  std::array<std::unique_ptr<EdgeEffect>, EDGE_COUNT> edge_effects_;
 
   gfx::SizeF viewport_size_;
-  float edge_offsets_[EDGE_COUNT];
+  std::array<float, EDGE_COUNT> edge_offsets_;
   bool initialized_;
   bool allow_horizontal_overscroll_;
   bool allow_vertical_overscroll_;
 
-  scoped_refptr<cc::Layer> root_layer_;
+  scoped_refptr<cc::slim::Layer> root_layer_;
 };
 
 }  // namespace ui

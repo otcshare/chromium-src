@@ -59,7 +59,7 @@ class EVENTS_EXPORT GestureProviderAura : public GestureProviderClient {
                        bool is_source_touch_event_set_blocking);
   const MotionEventAura& pointer_state() { return pointer_state_; }
   std::vector<std::unique_ptr<GestureEvent>> GetAndResetPendingGestures();
-  void OnTouchEnter(int pointer_id, float x, float y);
+  void OnTouchEnter(const TouchEvent& event);
 
   void ResetGestureHandlingState();
 
@@ -69,6 +69,7 @@ class EVENTS_EXPORT GestureProviderAura : public GestureProviderClient {
   // GestureProviderClient implementation
   void OnGestureEvent(const GestureEventData& gesture) override;
   bool RequiresDoubleTapGestureEvents() const override;
+  void OnUnconfirmedTapConvertedToTap();
 
  private:
   raw_ptr<GestureProviderAuraClient> client_;
@@ -78,7 +79,7 @@ class EVENTS_EXPORT GestureProviderAura : public GestureProviderClient {
   bool handling_event_;
   std::vector<std::unique_ptr<GestureEvent>> pending_gestures_;
 
-  // |gesture_consumer_| must outlive this object.
+  // The |gesture_consumer_| owns this provider.
   raw_ptr<GestureConsumer> gesture_consumer_;
 };
 

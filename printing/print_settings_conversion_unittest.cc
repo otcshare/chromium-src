@@ -4,7 +4,6 @@
 
 #include "printing/print_settings_conversion.h"
 
-#include "base/containers/contains.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -92,6 +91,42 @@ const char kPrinterSettingsWithImageableArea[] = R"({
   "dpiVertical": 300,
 })";
 
+#if !BUILDFLAG(IS_MAC)
+const char kPrinterSettingsWithNonSquarePixels[] = R"({
+  "headerFooterEnabled": false,
+  "title": "Test Doc",
+  "url": "http://localhost/",
+  "shouldPrintBackgrounds": false,
+  "shouldPrintSelectionOnly": false,
+  "mediaSize": {
+    "height_microns": 297000,
+    "imageable_area_bottom_microns": 1000,
+    "imageable_area_left_microns": 0,
+    "imageable_area_right_microns": 180000,
+    "imageable_area_top_microns": 297000,
+    "width_microns": 210000
+  },
+  "collate": false,
+  "copies": 1,
+  "color": 2,
+  "duplex": 0,
+  "landscape": false,
+  "deviceName": "printer",
+  "scaleFactor": 100,
+  "rasterizePDF": false,
+  "pagesPerSheet": 1,
+  "dpiHorizontal": 800,
+  "dpiVertical": 50,
+})";
+#endif  // !BUILDFLAG(IS_MAC)
+
+const char kCustomMargins[] = R"({
+  "marginBottom": 10,
+  "marginLeft": 30,
+  "marginRight": 20,
+  "marginTop": 80
+})";
+
 }  // namespace
 
 TEST(PrintSettingsConversionTest, InvalidSettings) {
@@ -141,9 +176,11 @@ TEST(PrintSettingsConversionTest, WithValidImageableArea) {
 #if BUILDFLAG(IS_MAC)
   static constexpr gfx::Size kExpectedSize{595, 842};
   static constexpr gfx::Rect kExpectedPrintableArea{0, 0, 510, 839};
+  const PageMargins kExpectedPageMargins(0, 3, 28, 85, 28, 28);
 #else
   static constexpr gfx::Size kExpectedSize{2480, 3508};
   static constexpr gfx::Rect kExpectedPrintableArea{0, 0, 2126, 3496};
+  const PageMargins kExpectedPageMargins(0, 12, 118, 354, 118, 118);
 #endif
 
   base::Value::Dict dict =
@@ -155,15 +192,19 @@ TEST(PrintSettingsConversionTest, WithValidImageableArea) {
   EXPECT_EQ(settings->page_setup_device_units().physical_size(), kExpectedSize);
   EXPECT_EQ(settings->page_setup_device_units().printable_area(),
             kExpectedPrintableArea);
+  EXPECT_EQ(settings->page_setup_device_units().effective_margins(),
+            kExpectedPageMargins);
 }
 
 TEST(PrintSettingsConversionTest, WithValidFlippedImageableArea) {
 #if BUILDFLAG(IS_MAC)
   static constexpr gfx::Size kExpectedSize{842, 595};
   static constexpr gfx::Rect kExpectedPrintableArea{0, 85, 839, 510};
+  const PageMargins kExpectedPageMargins(85, 0, 28, 28, 85, 28);
 #else
   static constexpr gfx::Size kExpectedSize{3508, 2480};
   static constexpr gfx::Rect kExpectedPrintableArea{0, 354, 3496, 2126};
+  const PageMargins kExpectedPageMargins(354, 0, 118, 118, 354, 118);
 #endif
 
   base::Value::Dict dict =
@@ -174,6 +215,8 @@ TEST(PrintSettingsConversionTest, WithValidFlippedImageableArea) {
   EXPECT_EQ(settings->page_setup_device_units().physical_size(), kExpectedSize);
   EXPECT_EQ(settings->page_setup_device_units().printable_area(),
             kExpectedPrintableArea);
+  EXPECT_EQ(settings->page_setup_device_units().effective_margins(),
+            kExpectedPageMargins);
 }
 
 TEST(PrintSettingsConversionTest, WithOutOfBoundsImageableArea) {
@@ -186,6 +229,8 @@ TEST(PrintSettingsConversionTest, WithOutOfBoundsImageableArea) {
   ASSERT_TRUE(settings);
   EXPECT_TRUE(settings->page_setup_device_units().physical_size().IsEmpty());
   EXPECT_TRUE(settings->page_setup_device_units().printable_area().IsEmpty());
+  EXPECT_EQ(settings->page_setup_device_units().effective_margins(),
+            PageMargins(0, 0, 0, 0, 0, 0));
 }
 
 TEST(PrintSettingsConversionTest, WithMissingImageableAreaValue) {
@@ -198,7 +243,52 @@ TEST(PrintSettingsConversionTest, WithMissingImageableAreaValue) {
   ASSERT_TRUE(settings);
   EXPECT_TRUE(settings->page_setup_device_units().physical_size().IsEmpty());
   EXPECT_TRUE(settings->page_setup_device_units().printable_area().IsEmpty());
+  EXPECT_EQ(settings->page_setup_device_units().effective_margins(),
+            PageMargins(0, 0, 0, 0, 0, 0));
 }
+
+TEST(PrintSettingsConversionTest, WithCustomMarginsAndImageableArea) {
+  // Test imageable area with custom margins.
+#if BUILDFLAG(IS_MAC)
+  static constexpr gfx::Size kExpectedSize{595, 842};
+  static constexpr gfx::Rect kExpectedPrintableArea{0, 0, 510, 839};
+  const PageMargins kExpectedPageMargins(0, 0, 30, 20, 80, 10);
+#else
+  static constexpr gfx::Size kExpectedSize{2480, 3508};
+  static constexpr gfx::Rect kExpectedPrintableArea{0, 0, 2126, 3496};
+  const PageMargins kExpectedPageMargins(0, 0, 125, 83, 333, 42);
+#endif
+
+  base::Value::Dict dict =
+      base::test::ParseJsonDict(kPrinterSettingsWithImageableArea);
+  dict.Set("marginsType", static_cast<int>(mojom::MarginType::kCustomMargins));
+  dict.Set("marginsCustom", base::test::ParseJson(kCustomMargins));
+  std::unique_ptr<PrintSettings> settings = PrintSettingsFromJobSettings(dict);
+  ASSERT_TRUE(settings);
+  const PageSetup& page_setup = settings->page_setup_device_units();
+  EXPECT_EQ(page_setup.physical_size(), kExpectedSize);
+  EXPECT_EQ(page_setup.printable_area(), kExpectedPrintableArea);
+  EXPECT_EQ(page_setup.effective_margins(), kExpectedPageMargins);
+}
+
+#if !BUILDFLAG(IS_MAC)
+TEST(PrintSettingsConversionTest, WithNonSquarePixels) {
+  // Check that physical size and printable area are scaled by the max DPI
+  // value. Not needed for macOS, which always has square pixels.
+  static constexpr gfx::Size kExpectedSize{6614, 9354};
+  static constexpr gfx::Rect kExpectedPrintableArea{0, 0, 5669, 9323};
+
+  base::Value::Dict dict =
+      base::test::ParseJsonDict(kPrinterSettingsWithNonSquarePixels);
+  std::unique_ptr<PrintSettings> settings = PrintSettingsFromJobSettings(dict);
+  ASSERT_TRUE(settings);
+  EXPECT_EQ(settings->dpi_horizontal(), 800);
+  EXPECT_EQ(settings->dpi_vertical(), 50);
+  EXPECT_EQ(settings->page_setup_device_units().physical_size(), kExpectedSize);
+  EXPECT_EQ(settings->page_setup_device_units().printable_area(),
+            kExpectedPrintableArea);
+}
+#endif  // !BUILDFLAG(IS_MAC)
 
 TEST(PrintSettingsConversionTest, MissingDeviceName) {
   base::Value::Dict dict = base::test::ParseJsonDict(kPrinterSettings);
@@ -233,7 +323,7 @@ TEST(PrintSettingsConversionTest, FilterNonJobSettings) {
   std::unique_ptr<PrintSettings> settings = PrintSettingsFromJobSettings(dict);
   ASSERT_TRUE(settings);
   EXPECT_EQ(settings->advanced_settings().size(), 1u);
-  ASSERT_TRUE(base::Contains(settings->advanced_settings(), "Foo"));
+  ASSERT_TRUE(settings->advanced_settings().contains("Foo"));
   EXPECT_EQ(settings->advanced_settings().at("Foo"), base::Value("Bar"));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS) || (BUILDFLAG(IS_LINUX) &&

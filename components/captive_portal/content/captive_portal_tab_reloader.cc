@@ -4,8 +4,8 @@
 
 #include "components/captive_portal/content/captive_portal_tab_reloader.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/captive_portal/core/captive_portal_types.h"
@@ -55,7 +55,7 @@ CaptivePortalTabReloader::CaptivePortalTabReloader(
       slow_ssl_load_time_(base::Seconds(kDefaultSlowSSLTimeSeconds)),
       open_login_tab_callback_(open_login_tab_callback) {}
 
-CaptivePortalTabReloader::~CaptivePortalTabReloader() {}
+CaptivePortalTabReloader::~CaptivePortalTabReloader() = default;
 
 void CaptivePortalTabReloader::OnLoadStart(bool is_ssl) {
   provisional_main_frame_load_ = true;
@@ -234,7 +234,6 @@ void CaptivePortalTabReloader::SetState(State new_state) {
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   state_ = new_state;

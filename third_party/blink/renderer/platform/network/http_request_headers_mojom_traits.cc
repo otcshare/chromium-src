@@ -5,23 +5,23 @@
 #include <memory>
 #include <utility>
 
-#include "mojo/public/cpp/bindings/array_traits_wtf_vector.h"
+#include "mojo/public/cpp/base/byte_string_mojom_traits.h"
 #include "third_party/blink/renderer/platform/network/http_request_headers_mojom_traits.h"
 
 namespace mojo {
 
 // static
-WTF::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr>
+blink::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr>
 StructTraits<network::mojom::HttpRequestHeadersDataView,
              blink::HTTPHeaderMap>::headers(const blink::HTTPHeaderMap& map) {
   std::unique_ptr<blink::CrossThreadHTTPHeaderMapData> headers = map.CopyData();
-  WTF::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr>
+  blink::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr>
       headers_out;
   for (const auto& header : *headers) {
     auto header_ptr =
         network::mojom::blink::HttpRequestHeaderKeyValuePair::New();
     header_ptr->key = header.first;
-    header_ptr->value = header.second;
+    header_ptr->value = header.second.Utf8();
     headers_out.push_back(std::move(header_ptr));
   }
   return headers_out;
@@ -32,13 +32,15 @@ bool StructTraits<
     network::mojom::HttpRequestHeadersDataView,
     blink::HTTPHeaderMap>::Read(network::mojom::HttpRequestHeadersDataView data,
                                 blink::HTTPHeaderMap* out) {
-  WTF::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr> headers;
+  blink::Vector<network::mojom::blink::HttpRequestHeaderKeyValuePairPtr>
+      headers;
   if (!data.ReadHeaders(&headers)) {
     return false;
   }
   out->Clear();
   for (const auto& header : headers) {
-    out->Set(AtomicString(header->key), AtomicString(header->value));
+    out->Set(blink::AtomicString(header->key),
+             blink::AtomicString(blink::String(header->value)));
   }
   return true;
 }

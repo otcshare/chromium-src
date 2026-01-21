@@ -8,15 +8,15 @@
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using ExtensionsInternalsTest = extensions::ExtensionBrowserTest;
 
@@ -26,30 +26,25 @@ IN_PROC_BROWSER_TEST_F(ExtensionsInternalsTest,
   base::FilePath test_data_dir;
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
   test_data_dir = test_data_dir.AppendASCII("extensions");
-  extensions::ChromeTestExtensionLoader loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader loader(profile());
   const extensions::Extension* extension =
       loader.LoadExtension(test_data_dir.AppendASCII("good.crx")).get();
   ASSERT_TRUE(extension);
 
   // First, check that navigation succeeds.
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
   GURL navigation_url(
       content::GetWebUIURL(chrome::kChromeUIExtensionsInternalsHost));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), navigation_url));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(web_contents);
+  ASSERT_TRUE(NavigateToURL(web_contents, navigation_url));
   EXPECT_EQ(navigation_url, web_contents->GetLastCommittedURL());
   EXPECT_FALSE(web_contents->IsCrashed());
 
   // Look for a bit of JSON that has the extension's unique ID.
-  bool has_text = false;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      web_contents,
-      base::StringPrintf("window.domAutomationController.send("
-                         "document.body.textContent && "
-                         "document.body.textContent.indexOf("
-                         "'\"id\": \"%s\"') >= 0);",
-                         extension->id().c_str()),
-      &has_text));
-  EXPECT_TRUE(has_text);
+  EXPECT_EQ(true, content::EvalJs(
+                      web_contents,
+                      base::StringPrintf("document.body.textContent && "
+                                         "document.body.textContent.indexOf("
+                                         "'\"id\": \"%s\"') >= 0;",
+                                         extension->id().c_str())));
 }

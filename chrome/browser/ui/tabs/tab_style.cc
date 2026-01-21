@@ -4,72 +4,283 @@
 
 #include "chrome/browser/ui/tabs/tab_style.h"
 
-#include "ui/base/pointer/touch_ui_controller.h"
+#include <array>
+
+#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_provider.h"
+#include "ui/gfx/color_utils.h"
 #include "ui/views/layout/layout_provider.h"
 
 namespace {
 
 // Thickness in DIPs of the separator painted on the left and right edges of
 // the tab.
-constexpr int kSeparatorThickness = 1;
+constexpr int kChromeRefreshSeparatorThickness = 2;
+constexpr int kChromeRefreshSeparatorHorizontalMargin = 2;
+// TODO (crbug.com/1451400): This constant should be in LayoutConstants.
+constexpr int kChromeRefreshSeparatorHeight = 16;
 
-// Returns the height of the separator between tabs.
-int GetSeparatorHeight() {
-  return ui::TouchUiController::Get()->touch_ui() ? 24 : 20;
-}
+// The padding from the top of the tab to the content area.
+constexpr int kChromeRefreshTabVerticalPadding = 6;
+constexpr int kChromeRefreshTabHorizontalPadding = 8;
+
+// The standard tab width is 232 DIP, excluding separators and overlap.
+constexpr int kTabWidth = 232;
 
 }  // namespace
 
 TabStyle::~TabStyle() = default;
 
-// static
-int TabStyle::GetStandardWidth() {
-  // The standard tab width is 240 DIP including both separators.
-  constexpr int kTabWidth = 240;
-  // The overlap includes one separator, so subtract it here.
-  return kTabWidth + GetTabOverlap() - kSeparatorThickness;
+int TabStyle::GetStandardHeight() const {
+  return GetLayoutConstant(LayoutConstant::kTabStripHeight);
 }
 
-// static
-int TabStyle::GetPinnedWidth() {
+int TabStyle::GetStandardWidth(const bool is_split) const {
+  if (is_split) {
+    // Split tabs appear as half width with one bottom extension. They also must
+    // include half the tab overlap as the tabs fill the space between them.
+    return kTabWidth / 2 + GetBottomCornerRadius() + GetTabOverlap() / 2;
+  } else {
+    // The full width includes two extensions with the bottom corner radius.
+    return kTabWidth + 2 * GetBottomCornerRadius();
+  }
+}
+
+int TabStyle::GetPinnedWidth(const bool is_split) const {
   constexpr int kTabPinnedContentWidth = 24;
-  return kTabPinnedContentWidth + GetContentsHorizontalInsetSize() * 2;
+  const int standard_pinned_width = kTabPinnedContentWidth +
+                                    GetContentsInsets().left() +
+                                    GetContentsInsets().right();
+  if (is_split) {
+    // Split tabs will recoup half of the tab overlap to reduce extra
+    // whitespace.
+    return standard_pinned_width - GetTabOverlap() / 2;
+  }
+  return standard_pinned_width;
 }
 
-// static
-int TabStyle::GetTabOverlap() {
-  return GetCornerRadius() * 2 + kSeparatorThickness;
+int TabStyle::GetMinimumActiveWidth(const bool is_split) const {
+  const int close_button_size =
+      GetLayoutConstant(LayoutConstant::kTabCloseButtonSize);
+  const gfx::Insets insets = GetContentsInsets();
+  const int min_active_width =
+      close_button_size + insets.left() + insets.right();
+
+  if (is_split) {
+    // Only have one set of horizontal padding between tabs in an active split.
+    return min_active_width - kChromeRefreshTabHorizontalPadding / 2;
+  }
+
+  return min_active_width;
 }
 
-// static
-int TabStyle::GetDragHandleExtension(int height) {
-  return (height - GetSeparatorHeight()) / 2 - 1;
+int TabStyle::GetMinimumInactiveWidth() const {
+  // Allow tabs to shrink until they appear to be 16 DIP wide excluding
+  // outer corners.
+  constexpr int kInteriorWidth = 16;
+  // The overlap contains the trailing separator that is part of the interior
+  // width; avoid double-counting it.
+  int min_inactive_width =
+      kInteriorWidth - GetSeparatorSize().width() + GetTabOverlap();
+
+  return min_inactive_width;
 }
 
-// static
-gfx::Insets TabStyle::GetTabInternalPadding() {
-  return gfx::Insets::VH(0, GetCornerRadius());
+int TabStyle::GetTopCornerRadius() const {
+  return 10;
 }
 
-// static
-gfx::Size TabStyle::GetSeparatorSize() {
-  return gfx::Size(kSeparatorThickness, GetSeparatorHeight());
+int TabStyle::GetBottomCornerRadius() const {
+  return 12;
 }
 
-// static
-gfx::Size TabStyle::GetPreviewImageSize() {
+int TabStyle::GetTabOverlap() const {
+  // The overlap removes the width and the margins of the separator.
+  const float total_separator_width =
+      GetSeparatorMargins().width() + GetSeparatorSize().width();
+  return 2 * GetBottomCornerRadius() - total_separator_width;
+}
+
+gfx::Size TabStyle::GetPreviewImageSize() const {
   constexpr float kTabHoverCardPreviewImageAspectRatio = 16.0f / 9.0f;
-  const int width = GetStandardWidth();
+  const int width = GetStandardWidth(/*is_split*/ false);
   return gfx::Size(width, width / kTabHoverCardPreviewImageAspectRatio);
 }
 
-// static
-int TabStyle::GetCornerRadius() {
-  return views::LayoutProvider::Get()->GetCornerRadiusMetric(
-      views::Emphasis::kHigh);
+gfx::Size TabStyle::GetSeparatorSize() const {
+  return gfx::Size(kChromeRefreshSeparatorThickness,
+                   kChromeRefreshSeparatorHeight);
+}
+
+gfx::Insets TabStyle::GetSeparatorMargins() const {
+  return gfx::Insets::TLBR(GetLayoutConstant(LayoutConstant::kTabStripPadding),
+                           kChromeRefreshSeparatorHorizontalMargin,
+                           GetLayoutConstant(LayoutConstant::kTabStripPadding),
+                           kChromeRefreshSeparatorHorizontalMargin);
+}
+
+int TabStyle::GetSeparatorCornerRadius() const {
+  return GetSeparatorSize().width() / 2;
+}
+
+int TabStyle::GetDragHandleExtension(int height) const {
+  return 6;
+}
+
+std::tuple<float, float, float, SkColor> TabStyle::GetContrastRatioValues(
+    bool frame_active,
+    const ui::ColorProvider* color_provider) const {
+  const SkColor inactive_bg =
+      GetTabBackgroundColor(TabStyle::TabSelectionState::kInactive,
+                            /*hovered=*/false, frame_active, color_provider);
+  const auto get_blend = [inactive_bg](SkColor target, float contrast) {
+    return color_utils::BlendForMinContrast(inactive_bg, inactive_bg, target,
+                                            contrast);
+  };
+
+  const SkColor active_bg =
+      GetTabBackgroundColor(TabStyle::TabSelectionState::kActive,
+                            /*hovered=*/false, frame_active, color_provider);
+  const auto get_hover_opacity = [active_bg, &get_blend](float contrast) {
+    return get_blend(active_bg, contrast).alpha / 255.0f;
+  };
+
+  // The contrast ratio for the hover effect on standard-width tabs.
+  // In the default color scheme, this corresponds to a hover opacity of 0.4.
+  constexpr float kStandardWidthContrast = 1.11f;
+  float hover_opacity_min_ = get_hover_opacity(kStandardWidthContrast);
+
+  // The contrast ratio for the hover effect on min-width tabs.
+  // In the default color scheme, this corresponds to a hover opacity of 0.65.
+  constexpr float kMinWidthContrast = 1.19f;
+  float hover_opacity_max_ = get_hover_opacity(kMinWidthContrast);
+
+  // The contrast ratio for the radial gradient effect on hovered tabs.
+  // In the default color scheme, this corresponds to a hover opacity of 0.45.
+  constexpr float kRadialGradientContrast = 1.13728f;
+  float radial_highlight_opacity_ = get_hover_opacity(kRadialGradientContrast);
+
+  const SkColor inactive_fg =
+      GetTabForegroundColor(false, frame_active, color_provider);
+  // The contrast ratio for the separator between inactive tabs.
+  constexpr float kTabSeparatorContrast = 2.5f;
+  SkColor separator_color_ =
+      get_blend(inactive_fg, kTabSeparatorContrast).color;
+
+  return {hover_opacity_min_, hover_opacity_max_, radial_highlight_opacity_,
+          separator_color_};
+}
+
+TabStyle::TabColors TabStyle::CalculateTargetColors(
+    const TabSelectionState state,
+    const bool apparently_active,
+    const bool hovered,
+    const bool frame_active,
+    const ui::ColorProvider* color_provider) const {
+  const SkColor foreground_color =
+      GetTabForegroundColor(apparently_active, frame_active, color_provider);
+  const SkColor background_color =
+      GetTabBackgroundColor(state, hovered, frame_active, color_provider);
+  const ui::ColorId focus_ring_color =
+      apparently_active ? kColorTabFocusRingActive : kColorTabFocusRingInactive;
+  const ui::ColorId close_button_focus_ring_color =
+      apparently_active ? kColorTabCloseButtonFocusRingActive
+                        : kColorTabCloseButtonFocusRingInactive;
+  return {foreground_color, background_color, focus_ring_color,
+          close_button_focus_ring_color};
+}
+
+SkColor TabStyle::GetTabForegroundColor(
+    const bool apparently_active,
+    const bool frame_active,
+    const ui::ColorProvider* color_provider) const {
+  if (!color_provider) {
+    return gfx::kPlaceholderColor;
+  }
+
+  static constexpr std::array<std::array<ChromeColorIds, 2>, 2> kColorIds = {
+      {{kColorTabForegroundInactiveFrameInactive,
+        kColorTabForegroundInactiveFrameActive},
+       {kColorTabForegroundActiveFrameInactive,
+        kColorTabForegroundActiveFrameActive}}};
+
+  return color_provider->GetColor(kColorIds[apparently_active][frame_active]);
+}
+
+SkColor TabStyle::GetTabBackgroundColor(
+    const TabSelectionState state,
+    const bool hovered,
+    const bool frame_active,
+    const ui::ColorProvider* color_provider) const {
+  if (!color_provider) {
+    return gfx::kPlaceholderColor;
+  }
+
+  switch (state) {
+    case TabStyle::TabSelectionState::kActive: {
+      constexpr std::array<ui::ColorId, 2> kActiveColorIds = {
+          kColorTabBackgroundActiveFrameInactive,
+          kColorTabBackgroundActiveFrameActive};
+      return color_provider->GetColor(kActiveColorIds[frame_active]);
+    }
+    case TabStyle::TabSelectionState::kSelected: {
+      constexpr std::array<std::array<ui::ColorId, 2>, 2> kSelectedColorIds = {
+          {{kColorTabBackgroundSelectedFrameInactive,
+            kColorTabBackgroundSelectedFrameActive},
+           {kColorTabBackgroundSelectedHoverFrameInactive,
+            kColorTabBackgroundSelectedHoverFrameActive}}};
+      return color_provider->GetColor(kSelectedColorIds[hovered][frame_active]);
+    }
+    case TabStyle::TabSelectionState::kInactive: {
+      constexpr std::array<std::array<ui::ColorId, 2>, 2> kInactiveColorIds = {
+          {{kColorTabBackgroundInactiveFrameInactive,
+            kColorTabBackgroundInactiveFrameActive},
+           {kColorTabBackgroundInactiveHoverFrameInactive,
+            kColorTabBackgroundInactiveHoverFrameActive}}};
+      return color_provider->GetColor(kInactiveColorIds[hovered][frame_active]);
+    }
+    default:
+      NOTREACHED();
+  }
+}
+
+SkColor TabStyle::GetCurrentTabBackgroundColor(
+    const TabSelectionState state,
+    const bool hovered,
+    float hover_animation_value,
+    const bool frame_active,
+    const ui::ColorProvider* color_provider) const {
+  const SkColor color =
+      GetTabBackgroundColor(state, hovered, frame_active, color_provider);
+  if (!hovered) {
+    return color;
+  }
+
+  const SkColor unhovered_color = GetTabBackgroundColor(
+      state, /*hovered=*/false, frame_active, color_provider);
+  return color_utils::AlphaBlend(color, unhovered_color, hover_animation_value);
+}
+
+gfx::Insets TabStyle::GetContentsInsets() const {
+  return gfx::Insets::TLBR(
+      kChromeRefreshTabVerticalPadding +
+          GetLayoutConstant(LayoutConstant::kTabStripPadding),
+      GetBottomCornerRadius() + kChromeRefreshTabHorizontalPadding,
+      kChromeRefreshTabVerticalPadding +
+          GetLayoutConstant(LayoutConstant::kTabStripPadding),
+      GetBottomCornerRadius() + kChromeRefreshTabHorizontalPadding);
+}
+
+float TabStyle::GetSelectedTabOpacity() const {
+  return kDefaultSelectedTabOpacity;
 }
 
 // static
-int TabStyle::GetContentsHorizontalInsetSize() {
-  return GetCornerRadius() * 2;
+const TabStyle* TabStyle::Get() {
+  static TabStyle* const tab_style = static_cast<TabStyle*>(new TabStyle());
+
+  return tab_style;
 }

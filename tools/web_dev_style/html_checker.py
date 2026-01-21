@@ -18,7 +18,7 @@ class HtmlChecker(object):
   def ClassesUseDashFormCheck(self, line_number, line):
     msg = "Classes should use dash-form."
     re = self.input_api.re
-    class_regex = re.compile("""
+    class_regex = re.compile(r"""
         (?:^|\s)                    # start of line or whitespace
         (class="[^"]*[A-Z_][^"]*")  # class contains caps or '_'
         """,
@@ -26,7 +26,7 @@ class HtmlChecker(object):
 
     # $i18n{...} messes with highlighting. Special path for this.
     if "$i18n{" in line:
-      match = re.search(class_regex, re.sub("\$i18n{[^}]+}", "", line))
+      match = re.search(class_regex, re.sub(r"\$i18n{[^}]+}", "", line))
       return "  line %d: %s" % (line_number, msg) if match else ""
 
     return regex_check.RegexCheck(re, line_number, line, class_regex, msg)
@@ -42,7 +42,7 @@ class HtmlChecker(object):
         "Do not use <br>; place blocking elements (<div>) as appropriate.")
 
   def DoNotUseInputTypeButtonCheck(self, line_number, line):
-    regex = self.input_api.re.compile("""
+    regex = self.input_api.re.compile(r"""
         (<input [^>]*  # "<input " followed by anything but ">"
         type="button"  # type="button"
         [^>]*>)        # anything but ">" then ">"
@@ -52,7 +52,7 @@ class HtmlChecker(object):
         'Use the button element instead of <input type="button">')
 
   def DoNotUseSingleQuotesCheck(self, line_number, line):
-    regex = self.input_api.re.compile("""
+    regex = self.input_api.re.compile(r"""
         <\S+                           # The tag name.
         (?:\s+\S+\$?="[^"]*"|\s+\S+)*  # Correctly quoted or non-value props.
         \s+(\S+\$?='[^']*')            # Find incorrectly quoted (foo='bar').
@@ -63,7 +63,7 @@ class HtmlChecker(object):
         'Use double quotes rather than single quotes in HTML properties')
 
   def I18nContentJavaScriptCaseCheck(self, line_number, line):
-    regex = self.input_api.re.compile("""
+    regex = self.input_api.re.compile(r"""
         (?:^|\s)                      # start of line or whitespace
         i18n-content="                # i18n-content="
         ([A-Z][^"]*|[^"]*[-_][^"]*)"  # starts with caps or contains '-' or '_'
@@ -72,15 +72,8 @@ class HtmlChecker(object):
     return regex_check.RegexCheck(self.input_api.re, line_number, line, regex,
         "For i18n-content use javaScriptCase.")
 
-  def ImportCorrectPolymerHtml(self, line_number, line):
-    bad_import_url = r"(chrome://resources/polymer/v1_0/polymer/polymer.html)"
-    regex = self.input_api.re.compile(bad_import_url)
-    return regex_check.RegexCheck(self.input_api.re, line_number, line, regex,
-        "Please import chrome://resources/html/polymer.html instead " +
-        "(to ensure your Polymer config is set up correctly)");
-
   def LabelCheck(self, line_number, line):
-    regex = self.input_api.re.compile("""
+    regex = self.input_api.re.compile(r"""
         (?:^|\s)     # start of line or whitespace
         <label[^>]+? # <label tag
         (for=)       # for=
@@ -118,7 +111,6 @@ class HtmlChecker(object):
                 self.DoNotUseBrElementCheck(line_number, line),
                 self.DoNotUseInputTypeButtonCheck(line_number, line),
                 self.I18nContentJavaScriptCaseCheck(line_number, line),
-                self.ImportCorrectPolymerHtml(line_number, line),
                 self.LabelCheck(line_number, line),
                 self.QuotePolymerBindings(line_number, line),
             ] if _f

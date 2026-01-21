@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/gpu/ipc/common/media_param_traits.h"
+
 #include <stddef.h>
 
 #include <sstream>
 
 #include "base/logging.h"
 #include "base/numerics/safe_math.h"
-#include "media/gpu/ipc/common/media_param_traits.h"
+#include "ipc/param_traits_utils.h"
 
 namespace IPC {
 
@@ -52,33 +54,4 @@ bool ParamTraits<media::BitstreamBuffer>::Read(const base::Pickle* m,
   return ReadParam(m, iter, &r->region_);
 }
 
-void ParamTraits<media::BitstreamBuffer>::Log(const param_type& p,
-                                              std::string* l) {
-  std::ostringstream oss;
-  oss << "id=" << p.id() << ", size=" << p.size() << ", presentation_timestamp="
-      << p.presentation_timestamp().ToInternalValue();
-  l->append(oss.str());
-}
-
-}  // namespace IPC
-
-// Generate param traits write methods.
-#include "ipc/param_traits_write_macros.h"
-namespace IPC {
-#undef MEDIA_GPU_IPC_COMMON_MEDIA_PARAM_TRAITS_MACROS_H_
-#include "media/gpu/ipc/common/media_param_traits_macros.h"
-}  // namespace IPC
-
-// Generate param traits read methods.
-#include "ipc/param_traits_read_macros.h"
-namespace IPC {
-#undef MEDIA_GPU_IPC_COMMON_MEDIA_PARAM_TRAITS_MACROS_H_
-#include "media/gpu/ipc/common/media_param_traits_macros.h"
-}  // namespace IPC
-
-// Generate param traits log methods.
-#include "ipc/param_traits_log_macros.h"
-namespace IPC {
-#undef MEDIA_GPU_IPC_COMMON_MEDIA_PARAM_TRAITS_MACROS_H_
-#include "media/gpu/ipc/common/media_param_traits_macros.h"
 }  // namespace IPC

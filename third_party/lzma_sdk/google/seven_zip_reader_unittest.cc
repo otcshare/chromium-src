@@ -32,6 +32,10 @@
 //
 //   echo "This is not an exe" > file.exe
 //   7z a -p encrypted.7z file.exe  # Provided 1234 as the password
+//
+//   echo "This is not an exe" > file.exe
+//   7z a  -mhe=on -p encrypted_header.7z file.exe
+//   Provided 1234 as the password
 
 #include "third_party/lzma_sdk/google/seven_zip_reader.h"
 
@@ -43,6 +47,7 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -63,7 +68,7 @@ using ::testing::Return;
 using ::testing::SetArgReferee;
 using ::testing::StrictMock;
 
-base::File OpenTestFile(base::FilePath::StringPieceType file_name) {
+base::File OpenTestFile(base::FilePath::StringViewType file_name) {
   base::FilePath path;
   if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path))
     return base::File();
@@ -101,7 +106,9 @@ TEST(SevenZipReaderTest, ReportsOpenErrorForInvalidArchive) {
   StrictMock<MockSevenZipDelegate> delegate;
   EXPECT_CALL(delegate, OnOpenError(Result::kMalformedArchive));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  EXPECT_FALSE(reader);
 }
 
 TEST(SevenZipReaderTest, ReportsFilePath) {
@@ -115,7 +122,10 @@ TEST(SevenZipReaderTest, ReportsFilePath) {
                       _))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, ReportsFileSize) {
@@ -126,7 +136,10 @@ TEST(SevenZipReaderTest, ReportsFileSize) {
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, ReportsFileModifiedTime) {
@@ -142,7 +155,10 @@ TEST(SevenZipReaderTest, ReportsFileModifiedTime) {
               _))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, ReportsDirectoryPath) {
@@ -155,7 +171,10 @@ TEST(SevenZipReaderTest, ReportsDirectoryPath) {
                                 base::FilePath(FILE_PATH_LITERAL("folder")))))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, ReportsDirectoryModifiedTime) {
@@ -171,7 +190,10 @@ TEST(SevenZipReaderTest, ReportsDirectoryModifiedTime) {
                           ))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, StopsExtractionOnDirectory) {
@@ -181,7 +203,10 @@ TEST(SevenZipReaderTest, StopsExtractionOnDirectory) {
   StrictMock<MockSevenZipDelegate> delegate;
   EXPECT_CALL(delegate, OnDirectory(_)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, StopsExtractionOnEntry) {
@@ -192,7 +217,10 @@ TEST(SevenZipReaderTest, StopsExtractionOnEntry) {
   EXPECT_CALL(delegate, OnDirectory(_)).WillOnce(Return(true));
   EXPECT_CALL(delegate, OnEntry(_, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, StopsExtractionOnEntryDone) {
@@ -205,10 +233,13 @@ TEST(SevenZipReaderTest, StopsExtractionOnEntryDone) {
       .WillOnce(Return(ByMove(OpenTemporaryFile())));
   EXPECT_CALL(delegate, OnDirectory(_)).WillOnce(Return(true));
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(_, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, ExtractsInTempBuffer) {
@@ -224,10 +255,13 @@ TEST(SevenZipReaderTest, ExtractsInTempBuffer) {
       .WillOnce(Return(ByMove(OpenTemporaryFile())));
   EXPECT_CALL(delegate, OnDirectory(_)).WillOnce(Return(true));
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(Result::kSuccess, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 
   EXPECT_EQ(std::string(buffer.begin(), buffer.end()), "This is not an exe\n");
 }
@@ -239,10 +273,13 @@ TEST(SevenZipReaderTest, ExtractsNoTempBuffer) {
   StrictMock<MockSevenZipDelegate> delegate;
   std::array<uint8_t, 19> buffer;
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(Result::kSuccess, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 
   EXPECT_EQ(std::string(buffer.begin(), buffer.end()), "This is not an exe\n");
 }
@@ -254,10 +291,13 @@ TEST(SevenZipReaderTest, BadCrc) {
   StrictMock<MockSevenZipDelegate> delegate;
   std::array<uint8_t, 19> buffer;
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(Result::kBadCrc, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, EmptyFile) {
@@ -267,10 +307,13 @@ TEST(SevenZipReaderTest, EmptyFile) {
   StrictMock<MockSevenZipDelegate> delegate;
   std::array<uint8_t, 0> buffer;
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 0), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(Result::kSuccess, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 class SevenZipReaderFakeCrcTableTest : public testing::Test {
@@ -279,6 +322,10 @@ class SevenZipReaderFakeCrcTableTest : public testing::Test {
 
   void SetUp() override {
     seven_zip::EnsureLzmaSdkInitialized();
+
+    // Use software-backed CRC instead of hardware
+    g_Crc_Algo = 1;
+
     for (size_t i = 0; i < 2048; i++) {
       crc_table_[i] = g_CrcTable[i];
     }
@@ -322,10 +369,13 @@ TEST_F(SevenZipReaderFakeCrcTableTest, EmptyCrcWithFakeTable) {
   StrictMock<MockSevenZipDelegate> delegate;
   std::array<uint8_t, 19> buffer;
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::file_size, 19), _))
-      .WillOnce(DoAll(SetArgReferee<1>(base::make_span(buffer)), Return(true)));
+      .WillOnce(DoAll(SetArgReferee<1>(base::span(buffer)), Return(true)));
   EXPECT_CALL(delegate, EntryDone(Result::kSuccess, _)).WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 
   EXPECT_EQ(std::string(buffer.begin(), buffer.end()), "This is not an exe\n");
 }
@@ -338,7 +388,10 @@ TEST(SevenZipReaderTest, EncryptedFile) {
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::is_encrypted, true), _))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
 }
 
 TEST(SevenZipReaderTest, UnencryptedFile) {
@@ -349,7 +402,22 @@ TEST(SevenZipReaderTest, UnencryptedFile) {
   EXPECT_CALL(delegate, OnEntry(Field(&EntryInfo::is_encrypted, false), _))
       .WillOnce(Return(false));
 
-  Extract(std::move(file), delegate);
+  std::unique_ptr<SevenZipReader> reader =
+      SevenZipReader::Create(std::move(file), delegate);
+  ASSERT_TRUE(reader);
+  reader->Extract();
+}
+
+TEST(SevenZipReaderTest, EncryptedHeaders) {
+  base::File file = OpenTestFile(FILE_PATH_LITERAL("encrypted_header.7z"));
+  ASSERT_TRUE(file.IsValid());
+
+  StrictMock<MockSevenZipDelegate> delegate;
+  EXPECT_CALL(delegate, OnOpenError(Result::kEncryptedHeaders));
+  EXPECT_CALL(delegate, OnTempFileRequest())
+      .WillOnce(Return(ByMove(OpenTemporaryFile())));
+
+  EXPECT_EQ(SevenZipReader::Create(std::move(file), delegate), nullptr);
 }
 
 }  // namespace seven_zip

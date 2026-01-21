@@ -8,7 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "components/spellcheck/common/spellcheck_decoration.h"
 #include "components/spellcheck/common/spellcheck_result.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,8 +22,7 @@ struct RemoteCheckTestCase {
 };
 
 SpellCheckResult MakeResult(int pos, int length) {
-  return SpellCheckResult(SpellCheckResult::Decoration::SPELLING, pos, length,
-                          u"");
+  return SpellCheckResult(spellcheck::Decoration::SPELLING, pos, length, u"");
 }
 
 class SpellingRequestRemoteCheckUnitTest

@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/metrics/histogram_macros.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/audio/audio_device_description.h"
 #include "media/mojo/mojom/audio_output_stream.mojom-blink.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -55,8 +56,8 @@ void MojoAudioOutputIPC::RequestDeviceAuthorization(
   DoRequestDeviceAuthorization(
       session_id, device_id,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-          WTF::BindOnce(&MojoAudioOutputIPC::ReceivedDeviceAuthorization,
-                        weak_factory_.GetWeakPtr(), base::TimeTicks::Now()),
+          blink::BindOnce(&MojoAudioOutputIPC::ReceivedDeviceAuthorization,
+                          weak_factory_.GetWeakPtr(), base::TimeTicks::Now()),
           static_cast<media::mojom::blink::OutputDeviceStatus>(
               media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_INTERNAL),
           media::AudioParameters::UnavailableDeviceParams(), String()));
@@ -76,7 +77,7 @@ void MojoAudioOutputIPC::CreateStream(media::AudioOutputIPCDelegate* delegate,
     DoRequestDeviceAuthorization(
         /*session_id=*/base::UnguessableToken(),
         media::AudioDeviceDescription::kDefaultDeviceId,
-        WTF::BindOnce(&TrivialAuthorizedCallback));
+        BindOnce(&TrivialAuthorizedCallback));
   }
 
   DCHECK_EQ(delegate_, delegate);
@@ -87,8 +88,8 @@ void MojoAudioOutputIPC::CreateStream(media::AudioOutputIPCDelegate* delegate,
   receiver_.Bind(client_remote.InitWithNewPipeAndPassReceiver());
   // Unretained is safe because |this| owns |receiver_|.
   receiver_.set_disconnect_with_reason_handler(
-      WTF::BindOnce(&MojoAudioOutputIPC::ProviderClientBindingDisconnected,
-                    WTF::Unretained(this)));
+      BindOnce(&MojoAudioOutputIPC::ProviderClientBindingDisconnected,
+               Unretained(this)));
   stream_provider_->Acquire(params, std::move(client_remote));
 }
 
@@ -119,7 +120,7 @@ void MojoAudioOutputIPC::CloseStream() {
   receiver_.reset();
   delegate_ = nullptr;
   expected_state_ = kPaused;
-  volume_ = absl::nullopt;
+  volume_ = std::nullopt;
 
   // Cancel any pending callbacks for this stream.
   weak_factory_.InvalidateWeakPtrs();
@@ -192,7 +193,7 @@ void MojoAudioOutputIPC::DoRequestDeviceAuthorization(
     // The AudioOutputIPCDelegate will call CloseStream as necessary.
     io_task_runner_->PostTask(
         FROM_HERE,
-        WTF::BindOnce([](AuthorizationCB cb) {}, std::move(callback)));
+        blink::BindOnce([](AuthorizationCB cb) {}, std::move(callback)));
     return;
   }
 
@@ -200,7 +201,7 @@ void MojoAudioOutputIPC::DoRequestDeviceAuthorization(
                 "sizeof(int) == sizeof(int32_t)");
   factory->RequestDeviceAuthorization(
       MakeProviderReceiver(),
-      session_id.is_empty() ? absl::optional<base::UnguessableToken>()
+      session_id.is_empty() ? std::optional<base::UnguessableToken>()
                             : session_id,
       String::FromUTF8(device_id), std::move(callback));
 }

@@ -1,4 +1,4 @@
-// Copyright 2021 TF.Text Authors.
+// Copyright 2025 TF.Text Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -72,24 +72,24 @@ class FastWordpieceTokenizer {
   //    text, in utf-8 bytes.
   //  * input_word_offset_in_text: The relative offset of the input word in
   //    the whole text. Only used when not using end-to-end tokenizer.
+  //  * error: If not null, this will be set to true if the tokenizer failed to
+  //    make progress in decoding the input.
   // Note: the start offsets are inclusive and the end offsets are exclusive.
   void Tokenize(absl::string_view input,
                 std::vector<std::string>* output_pieces,
                 std::vector<int>* output_ids,
                 std::vector<int>* output_start_offsets,
                 std::vector<int>* output_end_offsets,
-                int input_word_offset_in_text = 0) const;
+                int input_word_offset_in_text = 0, bool* error = nullptr) const;
 
   // An override not returning `output_pieces`.
-  void Tokenize(absl::string_view input,
-                std::vector<int>* output_ids,
+  void Tokenize(absl::string_view input, std::vector<int>* output_ids,
                 std::vector<int>* output_start_offsets,
                 std::vector<int>* output_end_offsets,
                 int input_word_offset_in_text = 0) const;
 
   // An override only returning `output_ids`.
-  void Tokenize(absl::string_view input,
-                std::vector<int>* output_ids,
+  void Tokenize(absl::string_view input, std::vector<int>* output_ids,
                 int input_word_offset_in_text = 0) const;
 
   // Detokenizes wordpiece ids into a vector of tokens.
@@ -127,7 +127,8 @@ class FastWordpieceTokenizer {
                         std::vector<std::string>* output_pieces,
                         std::vector<int>* output_ids,
                         std::vector<int>* output_start_offsets,
-                        std::vector<int>* output_end_offsets) const;
+                        std::vector<int>* output_end_offsets,
+                        bool* error) const;
 
   // Try following the failure link to make the transition when trie matching
   // fails.
@@ -153,12 +154,10 @@ class FastWordpieceTokenizer {
   //    after the new word piece tokens have been appended to the output.
   template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
   bool TryFollowFailureLinkAndCollectTokens(
-      absl::string_view input_word,
-      int input_word_offset_in_text,
+      absl::string_view input_word, int input_word_offset_in_text,
       int& cur_offset_in_input_word,
       trie_utils::DartsCloneTrieWrapper::TraversalCursor& node,
-      std::vector<std::string>* output_pieces,
-      std::vector<int>* output_ids,
+      std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
       std::vector<int>* output_start_offsets,
       std::vector<int>* output_end_offsets) const;
 
@@ -204,13 +203,10 @@ class FastWordpieceTokenizer {
   // outputs and appends unk_token at the end as expected.
   template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
   void HandleTheRemainingStringOnTriePath(
-      absl::string_view input_word,
-      int input_word_offset_in_text,
+      absl::string_view input_word, int input_word_offset_in_text,
       trie_utils::DartsCloneTrieWrapper::TraversalCursor& cur_node,
-      int& original_num_tokens,
-      int& cur_offset_in_input_word,
-      std::vector<std::string>* output_pieces,
-      std::vector<int>* output_ids,
+      int& original_num_tokens, int& cur_offset_in_input_word,
+      std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
       std::vector<int>* output_start_offsets,
       std::vector<int>* output_end_offsets) const;
 
@@ -229,11 +225,8 @@ class FastWordpieceTokenizer {
   //    after this method.
   template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
   void ResetOutputAppendUnknownToken(
-      int input_word_offset_in_text,
-      int input_size,
-      int& original_num_tokens,
-      std::vector<std::string>* output_pieces,
-      std::vector<int>* output_ids,
+      int input_word_offset_in_text, int input_size, int& original_num_tokens,
+      std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
       std::vector<int>* output_start_offsets,
       std::vector<int>* output_end_offsets) const;
 
@@ -242,13 +235,10 @@ class FastWordpieceTokenizer {
   // output_ids, and returns true. Otherwise, it does nothing and returns false.
   template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
   bool TryHandleTheInputWordBeingSuffixIndicatorItself(
-      absl::string_view input_word,
-      int input_word_offset_in_text,
+      absl::string_view input_word, int input_word_offset_in_text,
       const trie_utils::DartsCloneTrieWrapper::TraversalCursor& cur_node,
-      int& cur_offset_in_input_word,
-      int original_num_tokens,
-      std::vector<std::string>* output_pieces,
-      std::vector<int>* output_ids,
+      int& cur_offset_in_input_word, int original_num_tokens,
+      std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
       std::vector<int>* output_start_offsets,
       std::vector<int>* output_end_offsets) const;
 

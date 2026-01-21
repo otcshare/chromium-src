@@ -9,6 +9,7 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_menu_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/accelerators/accelerator.h"
 
@@ -53,7 +54,8 @@ ExistingWindowSubMenuModel::ExistingWindowSubMenuModel(
                                TabStripModel::CommandMoveTabsToNewWindow) {
   Build(IDS_TAB_CXMENU_MOVETOANOTHERNEWWINDOW,
         BuildMenuItemInfoVectorForBrowsers(
-            tab_menu_model_delegate->GetExistingWindowsForMoveMenu()));
+            tab_menu_model_delegate->GetOtherBrowserWindows(
+                model->delegate()->IsForWebApp())));
 }
 
 ExistingWindowSubMenuModel::~ExistingWindowSubMenuModel() = default;
@@ -89,6 +91,12 @@ bool ExistingWindowSubMenuModel::ShouldShowSubmenu(Profile* profile) {
   return chrome::GetTabbedBrowserCount(profile) > 1;
 }
 
+bool ExistingWindowSubMenuModel::ShouldShowSubmenuForApp(
+    TabMenuModelDelegate* tab_menu_model_delegate) {
+  return tab_menu_model_delegate->GetOtherBrowserWindows(/*is_app=*/true)
+             .size() >= 1;
+}
+
 // static:
 base::PassKey<ExistingWindowSubMenuModel>
 ExistingWindowSubMenuModel::GetPassKey() {
@@ -98,12 +106,13 @@ ExistingWindowSubMenuModel::GetPassKey() {
 // static:
 std::vector<ExistingBaseSubMenuModel::MenuItemInfo>
 ExistingWindowSubMenuModel::BuildMenuItemInfoVectorForBrowsers(
-    const std::vector<Browser*>& existing_browsers) {
+    const std::vector<BrowserWindowInterface*>& existing_browsers) {
   std::vector<MenuItemInfo> menu_item_infos;
   for (size_t i = 0; i < existing_browsers.size(); ++i) {
-    Browser* browser = existing_browsers[i];
+    BrowserWindowInterface* browser = existing_browsers[i];
     auto window_title =
-        browser->GetWindowTitleForMaxWidth(kWindowTitleForMenuMaxWidth);
+        browser->GetBrowserForMigrationOnly()->GetWindowTitleForMaxWidth(
+            kWindowTitleForMenuMaxWidth);
     menu_item_infos.emplace_back(window_title);
     menu_item_infos.back().may_have_mnemonics = false;
     menu_item_infos.back().target_index = i;

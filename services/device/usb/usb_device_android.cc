@@ -8,18 +8,20 @@
 #include <memory>
 #include <utility>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
-#include "services/device/usb/jni_headers/ChromeUsbDevice_jni.h"
 #include "services/device/usb/usb_configuration_android.h"
 #include "services/device/usb/usb_descriptors.h"
 #include "services/device/usb/usb_device_handle_android.h"
 #include "services/device/usb/usb_interface_android.h"
 #include "services/device/usb/usb_service_android.h"
 #include "services/device/usb/webusb_descriptors.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/usb/jni_headers/ChromeUsbDevice_jni.h"
 
 using base::android::ConvertJavaStringToUTF16;
 using base::android::JavaObjectArrayReader;
@@ -33,7 +35,6 @@ scoped_refptr<UsbDeviceAndroid> UsbDeviceAndroid::Create(
     JNIEnv* env,
     base::WeakPtr<UsbServiceAndroid> service,
     const JavaRef<jobject>& usb_device) {
-  auto* build_info = base::android::BuildInfo::GetInstance();
   ScopedJavaLocalRef<jobject> wrapper =
       Java_ChromeUsbDevice_create(env, usb_device);
 
@@ -53,7 +54,8 @@ scoped_refptr<UsbDeviceAndroid> UsbDeviceAndroid::Create(
   // targeting the Q SDK.
   std::u16string serial_number;
   if (service->HasDevicePermission(wrapper) ||
-      build_info->sdk_int() < base::android::SDK_VERSION_Q) {
+      base::android::android_info::sdk_int() <
+          base::android::android_info::SDK_VERSION_Q) {
     ScopedJavaLocalRef<jstring> serial_jstring =
         Java_ChromeUsbDevice_getSerialNumber(env, wrapper);
     if (!serial_jstring.is_null())
@@ -85,7 +87,7 @@ void UsbDeviceAndroid::RequestPermission(ResultCallback callback) {
 void UsbDeviceAndroid::Open(OpenCallback callback) {
   scoped_refptr<UsbDeviceHandle> device_handle;
   if (service_) {
-    JNIEnv* env = base::android::AttachCurrentThread();
+    JNIEnv* env = jni_zero::AttachCurrentThread();
     ScopedJavaLocalRef<jobject> connection =
         service_->OpenDevice(env, j_object_);
     if (!connection.is_null()) {
@@ -222,3 +224,5 @@ void UsbDeviceAndroid::OnReadWebUsbDescriptors(
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeUsbDevice)

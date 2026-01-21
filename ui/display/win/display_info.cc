@@ -5,60 +5,90 @@
 #include "ui/display/win/display_info.h"
 
 #include "base/hash/hash.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/display/win/display_config_helper.h"
+#include "ui/display/win/screen_win_headless.h"
 
 namespace display::win::internal {
 
 DisplayInfo::DisplayInfo(
+    std::optional<HMONITOR> hmonitor,
     const MONITORINFOEX& monitor_info,
     float device_scale_factor,
+    int color_depth,
     float sdr_white_level,
     Display::Rotation rotation,
-    int display_frequency,
+    float display_frequency,
     const gfx::Vector2dF& pixels_per_inch,
     DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY output_technology,
     const std::string& label)
-    : id_(DeviceIdFromDeviceName(monitor_info.szDevice)),
+    : id_(DisplayIdFromMonitorInfo(monitor_info)),
       screen_rect_(monitor_info.rcMonitor),
       screen_work_rect_(monitor_info.rcWork),
       device_scale_factor_(device_scale_factor),
+      color_depth_(color_depth),
       sdr_white_level_(sdr_white_level),
       rotation_(rotation),
       display_frequency_(display_frequency),
       pixels_per_inch_(pixels_per_inch),
       output_technology_(output_technology),
-      label_(label) {}
+      label_(label),
+      device_name_(FixedArrayToStringView(monitor_info.szDevice)),
+      hmonitor_(hmonitor) {}
 
-DisplayInfo::DisplayInfo(const DisplayInfo& other) {
-  id_ = other.id_;
-  screen_rect_ = other.screen_rect_;
-  screen_work_rect_ = other.screen_work_rect_;
-  device_scale_factor_ = other.device_scale_factor_;
-  sdr_white_level_ = other.sdr_white_level_;
-  rotation_ = other.rotation_;
-  display_frequency_ = other.display_frequency_;
-  pixels_per_inch_ = other.pixels_per_inch_;
-  output_technology_ = other.output_technology_;
-  label_ = other.label_;
+DisplayInfo::DisplayInfo(
+    int64_t id,
+    const MONITORINFOEX& monitor_info,
+    float device_scale_factor,
+    int color_depth,
+    float sdr_white_level,
+    Display::Rotation rotation,
+    float display_frequency,
+    const gfx::Vector2dF& pixels_per_inch,
+    DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY output_technology,
+    const std::string& label)
+    : id_(id),
+      screen_rect_(monitor_info.rcMonitor),
+      screen_work_rect_(monitor_info.rcWork),
+      device_scale_factor_(device_scale_factor),
+      color_depth_(color_depth),
+      sdr_white_level_(sdr_white_level),
+      rotation_(rotation),
+      display_frequency_(display_frequency),
+      pixels_per_inch_(pixels_per_inch),
+      output_technology_(output_technology),
+      label_(label),
+      device_name_(FixedArrayToStringView(monitor_info.szDevice)) {
+  CHECK(VerifyHeadlessDisplayDeviceName(id, monitor_info));
 }
+
+DisplayInfo::DisplayInfo(const DisplayInfo& other) = default;
 
 DisplayInfo::~DisplayInfo() = default;
 
 // static
-int64_t DisplayInfo::DeviceIdFromDeviceName(const wchar_t* device_name) {
-  return static_cast<int64_t>(
-      base::PersistentHash(base::WideToUTF8(device_name)));
+int64_t DisplayInfo::DisplayIdFromMonitorInfo(const MONITORINFOEX& monitor) {
+  // Derive a display ID from the adapter ID and per-adapter monitor ID.
+  // This seems to be broadly available, unique for each monitor of the device,
+  // and stable across display configuration changes, but not device restarts.
+  std::optional<DISPLAYCONFIG_PATH_INFO> config_path =
+      GetDisplayConfigPathInfo(monitor);
+  // Record if DISPLAYCONFIG_PATH_INFO is available or not.
+  if (config_path.has_value()) {
+    return static_cast<int64_t>(base::PersistentHash(base::StringPrintf(
+        "%lu/%li/%u", config_path->targetInfo.adapterId.LowPart,
+        config_path->targetInfo.adapterId.HighPart,
+        config_path->targetInfo.id)));
+  }
+  // MONITORINFOEX::szDevice is a plausible backup with some notable drawbacks.
+  // This value (e.g. "\\.\DISPLAY1") may change when adding/removing displays,
+  // and even be reassigned between physical monitors during those changes,
+  // which can cause subtle unexpected behavior.
+  return static_cast<int64_t>(base::PersistentHash(
+      base::WideToUTF8(FixedArrayToStringView(monitor.szDevice))));
 }
 
-bool DisplayInfo::operator==(const DisplayInfo& rhs) const {
-  return id_ == rhs.id_ && screen_rect_ == rhs.screen_rect_ &&
-         screen_work_rect_ == rhs.screen_work_rect_ &&
-         device_scale_factor_ == rhs.device_scale_factor_ &&
-         sdr_white_level_ == rhs.sdr_white_level_ &&
-         rotation_ == rhs.rotation_ &&
-         display_frequency_ == rhs.display_frequency_ &&
-         pixels_per_inch_ == rhs.pixels_per_inch_ &&
-         output_technology_ == rhs.output_technology_ && label_ == rhs.label_;
-}
+bool DisplayInfo::operator==(const DisplayInfo& rhs) const = default;
 
 }  // namespace display::win::internal

@@ -5,12 +5,15 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_KEYFRAME_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_KEYFRAME_H_
 
+#include <optional>
+
 #include "base/memory/scoped_refptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/animation/effect_model.h"
 #include "third_party/blink/renderer/core/animation/property_handle.h"
+#include "third_party/blink/renderer/core/animation/timeline_offset.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/animation/timing_function.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -23,6 +26,7 @@ using PropertyHandleSet = HashSet<PropertyHandle>;
 class Element;
 class ComputedStyle;
 class CompositorKeyframeValue;
+class TimelineRange;
 class V8ObjectBuilder;
 
 // A base class representing an animation keyframe.
@@ -62,22 +66,95 @@ class V8ObjectBuilder;
 // FIXME: Make Keyframe immutable
 class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
  public:
+  struct EndIterator {};
+
+  class VirtualPropertyIterator
+      : public GarbageCollected<VirtualPropertyIterator> {
+   public:
+    virtual ~VirtualPropertyIterator() = default;
+    virtual void Advance(const Keyframe* keyframe) = 0;
+    virtual PropertyHandle Deref(const Keyframe* keyframe) const = 0;
+    virtual bool AtEnd(const Keyframe* keyframe) const = 0;
+    virtual void Trace(Visitor* visitor) const {}
+  };
+
+  class CORE_EXPORT PropertyIteratorWrapper {
+    STACK_ALLOCATED();
+
+   public:
+    explicit PropertyIteratorWrapper(const Keyframe* keyframe,
+                                     VirtualPropertyIterator* impl)
+        : keyframe_(keyframe), impl_(impl) {}
+
+    bool operator==(EndIterator other) const { return impl_->AtEnd(keyframe_); }
+
+    PropertyIteratorWrapper& operator++() {
+      impl_->Advance(keyframe_);
+      return *this;
+    }
+
+    PropertyHandle operator*() const { return impl_->Deref(keyframe_); }
+
+   private:
+    const Keyframe* keyframe_;
+    VirtualPropertyIterator* impl_;
+  };
+
+  class CORE_EXPORT IterableProperties
+      : public GarbageCollected<IterableProperties> {
+   public:
+    IterableProperties() = default;
+    virtual ~IterableProperties() = default;
+    virtual PropertyIteratorWrapper begin() const = 0;
+    EndIterator end() const { return EndIterator(); }
+    virtual size_t size() const = 0;
+    bool empty() const { return begin() == end(); }
+    virtual void Trace(Visitor*) const {}
+    virtual bool IsTransitionProperties() const { return false; }
+  };
+
   Keyframe(const Keyframe&) = delete;
   Keyframe& operator=(const Keyframe&) = delete;
   virtual ~Keyframe() = default;
 
+  static const double kNullComputedOffset;
+
   // TODO(smcgruer): The keyframe offset should be immutable.
-  void SetOffset(absl::optional<double> offset) { offset_ = offset; }
-  absl::optional<double> Offset() const { return offset_; }
-  double CheckedOffset() const { return offset_.value(); }
+  void SetOffset(std::optional<double> offset) { offset_ = offset; }
+  std::optional<double> Offset() const { return offset_; }
+
+  // Offsets are computed for programmatic keyframes that do not have a
+  // specified offset (either as a percentage or timeline offset). These are
+  // explicitly stored in the keyframe rather than computed on demand since
+  // keyframes can be reordered to accommodate changes to the resolved timeline
+  // offsets and computed offsets need to be sorted into the correct position.
+  void SetComputedOffset(std::optional<double> offset) {
+    computed_offset_ = offset;
+  }
+  std::optional<double> ComputedOffset() const { return computed_offset_; }
+
+  // In order to have a valid computed offset, it must be evaluated and finite.
+  // NaN Is used as the null value for computed offset. Note as NaN != NaN we
+  // cannot check that the value matches kNullComputedOffset.
+  bool HasComputedOffset() const {
+    return computed_offset_ && !std::isnan(computed_offset_.value());
+  }
+
+  double CheckedOffset() const { return offset_.value_or(-1); }
+
+  void SetTimelineOffset(std::optional<TimelineOffset> timeline_offset) {
+    timeline_offset_ = timeline_offset;
+  }
+  const std::optional<TimelineOffset>& GetTimelineOffset() const {
+    return timeline_offset_;
+  }
 
   // TODO(smcgruer): The keyframe composite operation should be immutable.
   void SetComposite(EffectModel::CompositeOperation composite) {
     composite_ = composite;
   }
-  bool HasComposite() const { return composite_.has_value(); }
-  EffectModel::CompositeOperation Composite() const {
-    return composite_.value();
+  std::optional<EffectModel::CompositeOperation> Composite() const {
+    return composite_;
   }
 
   void SetEasing(scoped_refptr<TimingFunction> easing) {
@@ -89,8 +166,18 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
   TimingFunction& Easing() const { return *easing_; }
   void CopyEasing(const Keyframe& other) { SetEasing(other.easing_); }
 
-  // Returns a set of the properties represented in this keyframe.
-  virtual PropertyHandleSet Properties() const = 0;
+  // Track the original positioning in the list for tiebreaking during sort
+  // when two keyframes have the same offset.
+  void SetIndex(int index) { original_index_ = index; }
+  std::optional<int> Index() { return original_index_; }
+
+  // Returns an iterable collection of the properties represented in this
+  // keyframe.
+  const IterableProperties& Properties() const { return *properties_; }
+
+  // Returns a copy of the properties represented in this keyframe.
+  // Prefer iterating over Properties() when a copy is not needed.
+  Vector<PropertyHandle> PropertiesVector() const;
 
   // Creates a clone of this keyframe.
   //
@@ -99,12 +186,15 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
   // subclass-specific data.
   virtual Keyframe* Clone() const = 0;
 
-  // Helper function to create a clone of this keyframe with a specific offset.
-  Keyframe* CloneWithOffset(double offset) const {
-    Keyframe* the_clone = Clone();
-    the_clone->SetOffset(offset);
-    return the_clone;
-  }
+  // Comparator for stable sorting keyframes by offset. In the event of a tie
+  // we sort by original index of the keyframe if specified.
+  static bool LessThan(const Member<Keyframe>& a, const Member<Keyframe>& b);
+
+  // Compute the offset if dependent on a timeline range.  Returns true if the
+  // offset changed.
+  bool ResolveTimelineOffset(const TimelineRange&,
+                             double range_start,
+                             double range_end);
 
   // Add the properties represented by this keyframe to the given V8 object.
   //
@@ -116,7 +206,7 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
   virtual bool IsStringKeyframe() const { return false; }
   virtual bool IsTransitionKeyframe() const { return false; }
 
-  virtual void Trace(Visitor*) const {}
+  virtual void Trace(Visitor* visitor) const { visitor->Trace(properties_); }
 
   // Represents a property-specific keyframe as defined in the spec. Refer to
   // the Keyframe class-level documentation for more details.
@@ -139,7 +229,6 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
     virtual bool IsNeutral() const = 0;
     virtual bool IsRevert() const = 0;
     virtual bool IsRevertLayer() const = 0;
-    virtual PropertySpecificKeyframe* CloneWithOffset(double offset) const = 0;
 
     // FIXME: Remove this once CompositorAnimations no longer depends on
     // CompositorKeyframeValues
@@ -155,15 +244,18 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
         const = 0;
 
     virtual bool IsCSSPropertySpecificKeyframe() const { return false; }
-    virtual bool IsSVGPropertySpecificKeyframe() const { return false; }
     virtual bool IsTransitionPropertySpecificKeyframe() const { return false; }
 
     virtual PropertySpecificKeyframe* NeutralKeyframe(
         double offset,
         scoped_refptr<TimingFunction> easing) const = 0;
+    // Creates an interpolation between this keyframe and 'end'.
+    // 'final_keyframe' is the keyframe at offset 1.0; it may differ from 'end'
+    // in multi-keyframe animations and it is used for iteration accumulation.
     virtual Interpolation* CreateInterpolation(
         const PropertyHandle&,
-        const Keyframe::PropertySpecificKeyframe& end) const;
+        const Keyframe::PropertySpecificKeyframe& end,
+        const Keyframe::PropertySpecificKeyframe* final_keyframe) const;
 
     virtual void Trace(Visitor*) const {}
 
@@ -190,21 +282,48 @@ class CORE_EXPORT Keyframe : public GarbageCollected<Keyframe> {
       double offset) const = 0;
 
  protected:
-  Keyframe()
-      : offset_(), composite_(), easing_(LinearTimingFunction::Shared()) {}
-  Keyframe(absl::optional<double> offset,
-           absl::optional<EffectModel::CompositeOperation> composite,
+  explicit Keyframe(IterableProperties* properties)
+      : properties_(properties), easing_(LinearTimingFunction::Shared()) {}
+  Keyframe(IterableProperties* properties,
+           std::optional<double> offset,
+           std::optional<TimelineOffset> timeline_offset,
+           std::optional<EffectModel::CompositeOperation> composite,
            scoped_refptr<TimingFunction> easing)
-      : offset_(offset), composite_(composite), easing_(std::move(easing)) {
+      : properties_(properties),
+        offset_(offset),
+        timeline_offset_(timeline_offset),
+        composite_(composite),
+        easing_(std::move(easing)) {
     if (!easing_)
       easing_ = LinearTimingFunction::Shared();
   }
 
-  absl::optional<double> offset_;
+  Member<IterableProperties> properties_;
+
+  // Either the specified offset or the offset resolved from a timeline offset.
+  std::optional<double> offset_;
+  // The computed offset will equal the specified or resolved timeline offset
+  // if non-null. The computed offset is null if the keyframe has an unresolved
+  // timeline offset. Otherwise, it is calculated based on a rule to equally
+  // space within an anchored range.
+  // See KeyframeEffectModelBase::GetComputedOffsets.
+  std::optional<double> computed_offset_;
+  // Offsets of the form <name> <percent>. These offsets are layout depending
+  // and need to be re-resolved on a style change affecting the corresponding
+  // timeline range. If the effect is not associated with an animation that is
+  // attached to a timeline with a non-empty timeline range,
+  // then the offset and computed offset will be null.
+  std::optional<TimelineOffset> timeline_offset_;
+
+  // The original index in the keyframe list is used to resolve ties in the
+  // offset when sorting, and to conditionally recover the original order when
+  // reporting.
+  std::optional<int> original_index_;
+
   // To avoid having multiple CompositeOperation enums internally (one with
-  // 'auto' and one without), we use a absl::optional for composite_. A
-  // absl::nullopt value represents 'auto'.
-  absl::optional<EffectModel::CompositeOperation> composite_;
+  // 'auto' and one without), we use a std::optional for composite_. A
+  // std::nullopt value represents 'auto'.
+  std::optional<EffectModel::CompositeOperation> composite_;
   scoped_refptr<TimingFunction> easing_;
 };
 

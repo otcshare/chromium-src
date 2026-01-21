@@ -26,9 +26,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_SELECTOR_LIST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_SELECTOR_LIST_H_
 
+#include "base/compiler_specific.h"
 #include "base/types/pass_key.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_selector.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
@@ -57,9 +59,9 @@ namespace blink {
 //   index = IndexOfNextSelectorAfter(index);
 // } while (index != kNotFound);
 //
-// Use CSSSelector::TagHistory() and CSSSelector::IsLastInTagHistory()
-// to traverse through each sequence of simple selectors,
-// from .c3 to #ident; from span to .c2; from div to .c1
+// Use CSSSelector::NextSimpleSelector() and
+// CSSSelector::IsLastInComplexSelector() to traverse through each sequence of
+// simple selectors, from .c3 to #ident; from span to .c2; from div to .c1
 //
 // StyleRule stores its selectors in an identical memory layout,
 // but not as part of a CSSSelectorList (see its class comments).
@@ -75,7 +77,8 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
   explicit CSSSelectorList(base::PassKey<CSSSelectorList>) {}
 
   CSSSelectorList(CSSSelectorList&& o) {
-    memcpy(this, o.first_selector_, ComputeLength() * sizeof(CSSSelector));
+    UNSAFE_BUFFERS(
+        memcpy(this, o.first_selector_, ComputeLength() * sizeof(CSSSelector)));
   }
   ~CSSSelectorList() = default;
 
@@ -85,21 +88,29 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
                                   CSSSelector* selector_array);
 
   CSSSelectorList* Copy() const;
+  static HeapVector<CSSSelector> Copy(const CSSSelector* selector_list);
 
-  bool IsValid() const {
-    return first_selector_[0].Match() != CSSSelector::kInvalidList;
+  static bool IsValid(const CSSSelector& first) {
+    return first.Match() != CSSSelector::kInvalidList;
   }
+  bool IsValid() const { return IsValid(*first_selector_); }
   const CSSSelector* First() const {
     return IsValid() ? first_selector_ : nullptr;
   }
   static const CSSSelector* Next(const CSSSelector&);
   static CSSSelector* Next(CSSSelector&);
 
-  // The CSS selector represents a single sequence of simple selectors.
-  bool HasOneSelector() const { return IsValid() && !Next(*first_selector_); }
+  // Returns true when there is exactly one complex selector in the list,
+  // and false otherwise.
+  static bool IsSingleComplexSelector(const CSSSelector& first) {
+    return IsValid(first) && !Next(first);
+  }
+  bool IsSingleComplexSelector() const {
+    return IsSingleComplexSelector(*first_selector_);
+  }
   const CSSSelector& SelectorAt(wtf_size_t index) const {
     DCHECK(IsValid());
-    return first_selector_[index];
+    return UNSAFE_BUFFERS(first_selector_[index]);
   }
 
   wtf_size_t SelectorIndex(const CSSSelector& selector) const {
@@ -110,8 +121,9 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
   wtf_size_t IndexOfNextSelectorAfter(wtf_size_t index) const {
     const CSSSelector& current = SelectorAt(index);
     const CSSSelector* next = Next(current);
-    if (!next)
+    if (!next) {
       return kNotFound;
+    }
     return SelectorIndex(*next);
   }
 
@@ -125,6 +137,21 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
   // Return the specificity of the selector with the highest specificity.
   unsigned MaximumSpecificity() const;
 
+  // Re-nest each simple selector in `selector_list` into `result`,
+  // falling back to the original simple selector when CSSSelector::Renest
+  // returns no value, and returning 'true' if at least one simple selector
+  // needed re-nesting.
+  //
+  // See also CSSSelector::Renest.
+  static bool Renest(const CSSSelector* selector_list,
+                     StyleRule* new_parent,
+                     HeapVector<CSSSelector>& result);
+
+  // Returns a re-nested selector list (see CSSSelector::Renest),
+  // or `this` if no re-nested was required.
+  CSSSelectorList* Renest(StyleRule* new_parent);
+  const CSSSelectorList* Renest(StyleRule* new_parent) const;
+
   CSSSelectorList(const CSSSelectorList&) = delete;
   CSSSelectorList& operator=(const CSSSelectorList&) = delete;
 
@@ -134,7 +161,7 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
   // All of the remaining CSSSelector objects are allocated on
   // AdditionalBytes, and thus live immediately after this object. The length
   // is not stored explicitly anywhere: End of a multipart selector is
-  // indicated by is_last_in_tag_history_ bit in the last item. End of the
+  // indicated by is_last_in_complexlector_ bit in the last item. End of the
   // array is indicated by is_last_in_selector_list_ bit in the last item.
   CSSSelector first_selector_[1];
 };
@@ -146,9 +173,10 @@ inline const CSSSelector* CSSSelectorList::Next(const CSSSelector& current) {
 inline CSSSelector* CSSSelectorList::Next(CSSSelector& current) {
   // Skip subparts of compound selectors.
   CSSSelector* last = &current;
-  while (!last->IsLastInTagHistory())
-    last++;
-  return last->IsLastInSelectorList() ? nullptr : last + 1;
+  while (!last->IsLastInComplexSelector()) {
+    UNSAFE_BUFFERS(last++);
+  }
+  return last->IsLastInSelectorList() ? nullptr : UNSAFE_BUFFERS(last + 1);
 }
 
 }  // namespace blink

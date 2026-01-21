@@ -4,6 +4,7 @@ include_rules = [
   "+ui/base",
   "+ui/base/cursor",
   "+ui/base/ime",
+  "+ui/display/types",
   "+ui/gfx",
   "+ui/native_theme",
   "+ui/shell_dialogs",
@@ -14,5 +15,13 @@ specific_include_rules = {
     "+ui/color",
     "+ui/gtk",
     "+ui/qt",
+  ],
+  "fallback_linux_ui.cc": [
+    "+ui/events/keycodes",
+    "+ui/views/controls",
+  ],
+  "display_server_utils.cc": [
+    "+ui/ozone",
+    "+third_party/angle"
   ],
 }

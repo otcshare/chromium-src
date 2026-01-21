@@ -20,7 +20,7 @@
 namespace ash {
 namespace quick_pair {
 
-struct Device;
+class Device;
 class FastPairFeatureUsageMetricsLogger;
 
 // Observes pairing, scanning and UI events and logs corresponding metrics.
@@ -45,7 +45,7 @@ class QuickPairMetricsLogger : public PairerBroker::Observer,
   void OnHandshakeComplete(scoped_refptr<Device> device) override;
   void OnDevicePaired(scoped_refptr<Device> device) override;
   void OnAccountKeyWrite(scoped_refptr<Device> device,
-                         absl::optional<AccountKeyFailure> error) override;
+                         std::optional<AccountKeyFailure> error) override;
   void OnPairingComplete(scoped_refptr<Device> device) override;
   void OnPairFailure(scoped_refptr<Device> device,
                      PairFailure failure) override;
@@ -75,6 +75,12 @@ class QuickPairMetricsLogger : public PairerBroker::Observer,
   // Internal method called by BluetoothAdapterFactory to provide the adapter
   // object.
   void OnGetAdapter(scoped_refptr<device::BluetoothAdapter> adapter);
+
+  // Helper function called to get the Bluetooth Device that corresponds with
+  // the address saved in |device|. Returns nullptr if the adapter_ is not
+  // initialized or the device is not found.
+  const device::BluetoothDevice* GetBluetoothDevice(
+      scoped_refptr<Device> device) const;
 
   // Map of devices to the time at which a pairing was initiated. This is used
   // to calculate the time between the user electing to pair the device and

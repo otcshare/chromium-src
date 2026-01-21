@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views_win.h"
 
+#include <windows.h>
+
 #include "apps/ui/views/app_window_frame_view.h"
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration_win.h"
 #include "chrome/browser/ui/views/apps/app_window_desktop_native_widget_aura_win.h"
-#include "chrome/browser/ui/views/apps/glass_app_window_frame_view_win.h"
+#include "chrome/browser/ui/views/apps/app_window_frame_view_win.h"
 #include "chrome/browser/web_applications/extensions/web_app_extension_shortcut.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/chrome_switches.h"
@@ -23,11 +24,9 @@
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/win/hwnd_util.h"
 
-ChromeNativeAppWindowViewsWin::ChromeNativeAppWindowViewsWin()
-    : glass_frame_view_(nullptr), is_translucent_(false) {}
+ChromeNativeAppWindowViewsWin::ChromeNativeAppWindowViewsWin() = default;
 
-ChromeNativeAppWindowViewsWin::~ChromeNativeAppWindowViewsWin() {
-}
+ChromeNativeAppWindowViewsWin::~ChromeNativeAppWindowViewsWin() = default;
 
 HWND ChromeNativeAppWindowViewsWin::GetNativeAppWindowHWND() const {
   return views::HWNDForWidget(widget()->GetTopLevelWidget());
@@ -59,8 +58,9 @@ void ChromeNativeAppWindowViewsWin::InitializeDefaultWindow(
   ChromeNativeAppWindowViewsAura::InitializeDefaultWindow(create_params);
 
   const extensions::Extension* extension = app_window()->GetExtension();
-  if (!extension)
+  if (!extension) {
     return;
+  }
 
   std::string app_name =
       web_app::GenerateApplicationNameFromAppId(extension->id());
@@ -73,20 +73,16 @@ void ChromeNativeAppWindowViewsWin::InitializeDefaultWindow(
   ui::win::SetAppIdForWindow(app_model_id_, hwnd);
   web_app::UpdateRelaunchDetailsForApp(profile, extension, hwnd);
 
-  if (!create_params.alpha_enabled)
+  if (!create_params.alpha_enabled) {
     EnsureCaptionStyleSet();
+  }
 }
 
-std::unique_ptr<views::NonClientFrameView>
+std::unique_ptr<views::FrameView>
 ChromeNativeAppWindowViewsWin::CreateStandardDesktopAppFrame() {
-  if (ui::win::IsAeroGlassEnabled()) {
-    auto glass_frame_view =
-        std::make_unique<GlassAppWindowFrameViewWin>(widget());
-    glass_frame_view_ = glass_frame_view.get();
-    return glass_frame_view;
-  }
-  glass_frame_view_ = nullptr;
-  return ChromeNativeAppWindowViewsAura::CreateStandardDesktopAppFrame();
+  auto frame_view = std::make_unique<AppWindowFrameViewWin>(widget());
+  frame_view_ = frame_view.get();
+  return frame_view;
 }
 
 bool ChromeNativeAppWindowViewsWin::CanMinimize() const {

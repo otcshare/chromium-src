@@ -4,7 +4,12 @@
 
 #include "components/speech/upstream_loader.h"
 
+#include <string>
+
+#include "base/containers/span.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/speech/upstream_loader_client.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace speech {
@@ -21,12 +26,13 @@ UpstreamLoader::UpstreamLoader(
   receiver_set_.Add(this, data_remote.InitWithNewPipeAndPassReceiver());
   resource_request->request_body =
       base::MakeRefCounted<network::ResourceRequestBody>();
+  resource_request->request_body->SetAllowHTTP1ForStreamingUpload(true);
   resource_request->request_body->SetToChunkedDataPipe(
       std::move(data_remote),
       network::ResourceRequestBody::ReadOnlyOnce(false));
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), upstream_traffic_annotation);
-  simple_url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+  simple_url_loader_->DownloadHeadersOnly(
       url_loader_factory,
       base::BindOnce(&UpstreamLoader::OnComplete, base::Unretained(this)));
 }
@@ -46,11 +52,13 @@ void UpstreamLoader::SendData() {
     return;
 
   // Since kMaxUploadWrite is a uint32_t, no overflow occurs in this downcast.
-  uint32_t write_bytes = std::min(upload_body_.length() - upload_position_,
-                                  static_cast<size_t>(kMaxUploadWrite));
-  MojoResult result =
-      upload_pipe_->WriteData(upload_body_.data() + upload_position_,
-                              &write_bytes, MOJO_WRITE_DATA_FLAG_NONE);
+  base::span<const uint8_t> bytes_to_write =
+      base::as_byte_span(upload_body_).subspan(upload_position_);
+  bytes_to_write =
+      bytes_to_write.first(std::min(bytes_to_write.size(), kMaxUploadWrite));
+  size_t actually_written_bytes = 0;
+  MojoResult result = upload_pipe_->WriteData(
+      bytes_to_write, MOJO_WRITE_DATA_FLAG_NONE, actually_written_bytes);
 
   // Wait for the pipe to have more capacity available, if needed.
   if (result == MOJO_RESULT_SHOULD_WAIT) {
@@ -64,7 +72,7 @@ void UpstreamLoader::SendData() {
   if (result != MOJO_RESULT_OK)
     return;
 
-  upload_position_ += write_bytes;
+  upload_position_ += actually_written_bytes;
   // If more data is available, arm the watcher again. Don't write again in a
   // loop, even if WriteData would allow it, to avoid blocking the current
   // thread.
@@ -94,15 +102,14 @@ void UpstreamLoader::OnUploadPipeWriteable(MojoResult unused) {
   SendData();
 }
 
-void UpstreamLoader::OnComplete(std::unique_ptr<std::string> response_body) {
+void UpstreamLoader::OnComplete(
+    scoped_refptr<net::HttpResponseHeaders> headers) {
   int response_code = -1;
-  if (simple_url_loader_->ResponseInfo() &&
-      simple_url_loader_->ResponseInfo()->headers) {
-    response_code =
-        simple_url_loader_->ResponseInfo()->headers->response_code();
+  if (headers) {
+    response_code = headers->response_code();
   }
-  upstream_loader_client_->OnUpstreamDataComplete(response_body != nullptr,
-                                                  response_code);
+  bool success = simple_url_loader_->NetError() == net::OK;
+  upstream_loader_client_->OnUpstreamDataComplete(success, response_code);
 }
 
 void UpstreamLoader::GetSize(GetSizeCallback get_size_callback) {

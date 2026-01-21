@@ -68,13 +68,13 @@ const AtomicString& TextTrack::MetadataKeyword() {
   return metadata;
 }
 
-TextTrack::TextTrack(const AtomicString& kind,
+TextTrack::TextTrack(const V8TextTrackKind& kind,
                      const AtomicString& label,
                      const AtomicString& language,
                      HTMLElement& source_element,
                      const AtomicString& id,
                      TextTrackType type)
-    : TrackBase(WebMediaPlayer::kTextTrack, kind, label, language, id),
+    : TrackBase(WebMediaPlayer::kTextTrack, label, language, id),
       active_cues_(nullptr),
       track_list_(nullptr),
       source_element_(source_element),
@@ -82,7 +82,8 @@ TextTrack::TextTrack(const AtomicString& kind,
       readiness_state_(kNotLoaded),
       track_index_(kInvalidTrackIndex),
       rendered_track_index_(kInvalidTrackIndex),
-      has_been_configured_(false) {}
+      has_been_configured_(false),
+      kind_(kind.AsEnum()) {}
 
 TextTrack::~TextTrack() = default;
 
@@ -110,11 +111,12 @@ void TextTrack::SetTrackList(TextTrackList* track_list) {
 }
 
 bool TextTrack::IsVisualKind() const {
-  return kind() == SubtitlesKeyword() || kind() == CaptionsKeyword();
+  return kind() == V8TextTrackKind::Enum::kSubtitles ||
+         kind() == V8TextTrackKind::Enum::kCaptions;
 }
 
 bool TextTrack::IsSpokenKind() const {
-  return kind() == DescriptionsKeyword();
+  return kind() == V8TextTrackKind::Enum::kDescriptions;
 }
 
 void TextTrack::setMode(const V8TextTrackMode& mode) {
@@ -203,7 +205,7 @@ TextTrackCueList* TextTrack::activeCues() {
   }
 
   cues_->CollectActiveCues(*active_cues_);
-  return active_cues_;
+  return active_cues_.Get();
 }
 
 void TextTrack::addCue(TextTrackCue* cue) {
@@ -386,7 +388,7 @@ void TextTrack::Trace(Visitor* visitor) const {
   visitor->Trace(style_sheets_);
   visitor->Trace(source_element_);
   TrackBase::Trace(visitor);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
 }
 
 }  // namespace blink

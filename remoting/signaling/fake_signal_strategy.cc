@@ -6,9 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "remoting/signaling/signaling_id_util.h"
@@ -53,8 +54,9 @@ void FakeSignalStrategy::SetState(State state) {
     return;
   }
   state_ = state;
-  for (auto& observer : listeners_)
+  for (auto& observer : listeners_) {
     observer.OnSignalStrategyStateChange(state_);
+  }
 }
 
 void FakeSignalStrategy::SetPeerCallback(const PeerCallback& peer_callback) {
@@ -148,13 +150,15 @@ void FakeSignalStrategy::RemoveListener(Listener* listener) {
   listeners_.RemoveObserver(listener);
 }
 
-bool FakeSignalStrategy::SendStanza(std::unique_ptr<jingle_xmpp::XmlElement> stanza) {
+bool FakeSignalStrategy::SendStanza(
+    std::unique_ptr<jingle_xmpp::XmlElement> stanza) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   address_.SetInMessage(stanza.get(), SignalingAddress::FROM);
 
-  if (peer_callback_.is_null())
+  if (peer_callback_.is_null()) {
     return false;
+  }
 
   if (send_delay_.is_zero()) {
     peer_callback_.Run(std::move(stanza));
@@ -168,7 +172,7 @@ bool FakeSignalStrategy::SendStanza(std::unique_ptr<jingle_xmpp::XmlElement> sta
 
 bool FakeSignalStrategy::SendMessage(
     const SignalingAddress& destination_address,
-    const ftl::ChromotingMessage& message) {
+    SignalingMessage&& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   NOTIMPLEMENTED();
   return false;
@@ -200,9 +204,8 @@ void FakeSignalStrategy::NotifyListeners(
   jingle_xmpp::XmlElement* stanza_ptr = stanza.get();
   received_messages_.push_back(std::move(stanza));
 
-  std::string to_error;
   SignalingAddress to =
-      SignalingAddress::Parse(stanza_ptr, SignalingAddress::TO, &to_error);
+      SignalingAddress::Parse(stanza_ptr, SignalingAddress::TO);
   if (to != address_) {
     LOG(WARNING) << "Dropping stanza that is addressed to " << to.id()
                  << ". Local address: " << address_.id()
@@ -211,8 +214,9 @@ void FakeSignalStrategy::NotifyListeners(
   }
 
   for (auto& listener : listeners_) {
-    if (listener.OnSignalStrategyIncomingStanza(stanza_ptr))
+    if (listener.OnSignalStrategyIncomingStanza(stanza_ptr)) {
       break;
+    }
   }
 }
 

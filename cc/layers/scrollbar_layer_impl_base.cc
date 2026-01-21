@@ -6,7 +6,8 @@
 
 #include <algorithm>
 
-#include "base/cxx17_backports.h"
+#include "cc/base/math_util.h"
+#include "cc/input/scroll_utils.h"
 #include "cc/trees/effect_node.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/scroll_node.h"
@@ -28,7 +29,8 @@ ScrollbarLayerImplBase::ScrollbarLayerImplBase(
       scroll_layer_length_(0.f),
       orientation_(orientation),
       is_left_side_vertical_scrollbar_(is_left_side_vertical_scrollbar),
-      vertical_adjust_(0.f) {}
+      vertical_adjust_(0.f),
+      has_find_in_page_tickmarks_(false) {}
 
 ScrollbarLayerImplBase::~ScrollbarLayerImplBase() {
   layer_tree_impl()->UnregisterScrollbar(this);
@@ -38,8 +40,27 @@ void ScrollbarLayerImplBase::PushPropertiesTo(LayerImpl* layer) {
   LayerImpl::PushPropertiesTo(layer);
   DCHECK(layer->IsScrollbarLayer());
   ScrollbarLayerImplBase* scrollbar_layer = ToScrollbarLayer(layer);
+  scrollbar_layer->SetHasFindInPageTickmarks(has_find_in_page_tickmarks_);
   scrollbar_layer->set_is_overlay_scrollbar(is_overlay_scrollbar_);
+  scrollbar_layer->set_is_web_test(is_web_test_);
   scrollbar_layer->SetScrollElementId(scroll_element_id());
+}
+
+DamageReasonSet ScrollbarLayerImplBase::GetDamageReasons() const {
+  DamageReasonSet reasons;
+  if (opacity_changed_for_fade_out_animation_) {
+    reasons.Put(DamageReason::kScrollbarFadeOutAnimation);
+  }
+  if (property_changed_for_other_reasons_ || !update_rect().IsEmpty()) {
+    reasons.Put(DamageReason::kCompositorScroll);
+  }
+  return reasons;
+}
+
+void ScrollbarLayerImplBase::ResetChangeTracking() {
+  LayerImpl::ResetChangeTracking();
+  opacity_changed_for_fade_out_animation_ = false;
+  property_changed_for_other_reasons_ = false;
 }
 
 bool ScrollbarLayerImplBase::IsScrollbarLayer() const {
@@ -59,28 +80,9 @@ bool ScrollbarLayerImplBase::SetCurrentPos(float current_pos) {
   if (current_pos_ == current_pos)
     return false;
   current_pos_ = current_pos;
+  property_changed_for_other_reasons_ = true;
   NoteLayerPropertyChanged();
   return true;
-}
-
-float ScrollbarLayerImplBase::current_pos() const {
-  DCHECK(!layer_tree_impl()->ScrollbarGeometriesNeedUpdate());
-  return current_pos_;
-}
-
-float ScrollbarLayerImplBase::clip_layer_length() const {
-  DCHECK(!layer_tree_impl()->ScrollbarGeometriesNeedUpdate());
-  return clip_layer_length_;
-}
-
-float ScrollbarLayerImplBase::scroll_layer_length() const {
-  DCHECK(!layer_tree_impl()->ScrollbarGeometriesNeedUpdate());
-  return scroll_layer_length_;
-}
-
-float ScrollbarLayerImplBase::vertical_adjust() const {
-  DCHECK(!layer_tree_impl()->ScrollbarGeometriesNeedUpdate());
-  return vertical_adjust_;
 }
 
 bool ScrollbarLayerImplBase::CanScrollOrientation() const {
@@ -95,19 +97,13 @@ bool ScrollbarLayerImplBase::CanScrollOrientation() const {
   if (!scroll_node)
     return false;
 
-  if (orientation() == ScrollbarOrientation::HORIZONTAL) {
+  if (orientation() == ScrollbarOrientation::kHorizontal) {
     if (!scroll_node->user_scrollable_horizontal)
       return false;
   } else {
     if (!scroll_node->user_scrollable_vertical)
       return false;
   }
-
-  // Ensure the clip_layer_length and scroll_layer_length values are up-to-date.
-  // TODO(pdr): Instead of using the clip and scroll layer lengths which require
-  // an update, refactor to use the scroll tree (ScrollTree::MaxScrollOffset
-  // as in LayerTreeHostImpl::TryScroll).
-  layer_tree_impl()->UpdateScrollbarGeometries();
 
   // Ensure clip_layer_length is smaller than scroll_layer_length, not including
   // small deltas due to floating point error.
@@ -120,6 +116,7 @@ void ScrollbarLayerImplBase::SetVerticalAdjust(float vertical_adjust) {
   if (vertical_adjust_ == vertical_adjust)
     return;
   vertical_adjust_ = vertical_adjust;
+  property_changed_for_other_reasons_ = true;
   NoteLayerPropertyChanged();
 }
 
@@ -127,21 +124,31 @@ void ScrollbarLayerImplBase::SetClipLayerLength(float clip_layer_length) {
   if (clip_layer_length_ == clip_layer_length)
     return;
   clip_layer_length_ = clip_layer_length;
+  property_changed_for_other_reasons_ = true;
   NoteLayerPropertyChanged();
+  if (GetScrollbarAnimator() == LayerTreeSettings::AURA_OVERLAY) {
+    layer_tree_impl()->RequestShowScrollbars(scroll_element_id_);
+  }
 }
 
 void ScrollbarLayerImplBase::SetScrollLayerLength(float scroll_layer_length) {
   if (scroll_layer_length_ == scroll_layer_length)
     return;
   scroll_layer_length_ = scroll_layer_length;
+  property_changed_for_other_reasons_ = true;
   NoteLayerPropertyChanged();
-  return;
+  if (GetScrollbarAnimator() == LayerTreeSettings::AURA_OVERLAY &&
+      // We don't show fluent scrollbars when the contents change size.
+      !IsFluentOverlayScrollbarEnabled()) {
+    layer_tree_impl()->RequestShowScrollbars(scroll_element_id_);
+  }
 }
 
 void ScrollbarLayerImplBase::SetThumbThicknessScaleFactor(float factor) {
   if (thumb_thickness_scale_factor_ == factor)
     return;
   thumb_thickness_scale_factor_ = factor;
+  property_changed_for_other_reasons_ = true;
   NoteLayerPropertyChanged();
 }
 
@@ -211,14 +218,14 @@ gfx::Rect ScrollbarLayerImplBase::ComputeThumbQuadRectWithThumbThicknessScale(
   float track_length = TrackLength();
   int thumb_length = ThumbLength();
   int thumb_thickness = ThumbThickness();
-  // TODO(crbug.com/1239770): This is a speculative fix.
+  // TODO(crbug.com/40194000): This is a speculative fix.
   float maximum = std::max(scroll_layer_length() - clip_layer_length(), 0.0f);
-  // TODO(crbug.com/1239510): Re-enable the following DCHECK once the
+  // TODO(crbug.com/40193888): Re-enable the following DCHECK once the
   // underlying issue is resolved.
   // DCHECK(scroll_layer_length() >= clip_layer_length());
 
   // With the length known, we can compute the thumb's position.
-  float clamped_current_pos = base::clamp(current_pos(), 0.0f, maximum);
+  float clamped_current_pos = std::clamp(current_pos(), 0.0f, maximum);
 
   int thumb_offset = TrackStart();
   if (maximum > 0) {
@@ -231,7 +238,7 @@ gfx::Rect ScrollbarLayerImplBase::ComputeThumbQuadRectWithThumbThicknessScale(
       thumb_thickness * (1.f - thumb_thickness_scale_factor);
 
   gfx::RectF thumb_rect;
-  if (orientation_ == ScrollbarOrientation::HORIZONTAL) {
+  if (orientation_ == ScrollbarOrientation::kHorizontal) {
     thumb_rect = gfx::RectF(thumb_offset,
                             vertical_adjust_ + thumb_thickness_adjustment,
                             thumb_length,
@@ -249,7 +256,8 @@ gfx::Rect ScrollbarLayerImplBase::ComputeThumbQuadRectWithThumbThicknessScale(
   return gfx::ToEnclosingRect(thumb_rect);
 }
 
-gfx::Rect ScrollbarLayerImplBase::ComputeExpandedThumbQuadRect() const {
+gfx::Rect ScrollbarLayerImplBase::ComputeHitTestableExpandedThumbQuadRect()
+    const {
   DCHECK(is_overlay_scrollbar());
   return ComputeThumbQuadRectWithThumbThicknessScale(1.f);
 }
@@ -264,23 +272,32 @@ gfx::Rect ScrollbarLayerImplBase::ComputeHitTestableThumbQuadRect() const {
 }
 
 void ScrollbarLayerImplBase::SetOverlayScrollbarLayerOpacityAnimated(
-    float opacity) {
+    float opacity,
+    bool fade_out_animation) {
   DCHECK(is_overlay_scrollbar());
   if (!layer_tree_impl())
     return;
+
+  if (layer_tree_impl()->settings().trees_in_viz_in_viz_process &&
+      !layer_tree_impl()->settings().TreeAnimationsInVizInVizProcess()) {
+    return;
+  }
 
   PropertyTrees* property_trees = layer_tree_impl()->property_trees();
 
   EffectNode* node =
       property_trees->effect_tree_mutable().Node(effect_tree_index());
-  if (node->opacity == opacity)
+  if (node->opacity == opacity) {
     return;
+  }
 
   node->opacity = opacity;
   node->effect_changed = true;
   property_trees->set_changed(true);
   property_trees->effect_tree_mutable().set_needs_update(true);
   layer_tree_impl()->set_needs_update_draw_properties();
+  opacity_changed_for_fade_out_animation_ |= fade_out_animation;
+  property_changed_for_other_reasons_ |= !fade_out_animation;
 }
 
 LayerTreeSettings::ScrollbarAnimator
@@ -288,8 +305,18 @@ ScrollbarLayerImplBase::GetScrollbarAnimator() const {
   return layer_tree_impl()->settings().scrollbar_animator;
 }
 
-bool ScrollbarLayerImplBase::HasFindInPageTickmarks() const {
-  return false;
+float ScrollbarLayerImplBase::GetIdleThicknessScale() const {
+  return layer_tree_impl()->settings().idle_thickness_scale;
+}
+
+void ScrollbarLayerImplBase::SetHasFindInPageTickmarks(
+    bool has_find_in_page_tickmarks) {
+  if (has_find_in_page_tickmarks_ == has_find_in_page_tickmarks) {
+    return;
+  }
+  has_find_in_page_tickmarks_ = has_find_in_page_tickmarks;
+  property_changed_for_other_reasons_ = true;
+  NoteLayerPropertyChanged();
 }
 
 float ScrollbarLayerImplBase::OverlayScrollbarOpacity() const {
@@ -306,6 +333,16 @@ bool ScrollbarLayerImplBase::JumpOnTrackClick() const {
 
 bool ScrollbarLayerImplBase::IsFluentScrollbarEnabled() const {
   return layer_tree_impl()->settings().enable_fluent_scrollbar;
+}
+
+bool ScrollbarLayerImplBase::IsFluentOverlayScrollbarEnabled() const {
+  return layer_tree_impl()->settings().enable_fluent_overlay_scrollbar;
+}
+
+int32_t ScrollbarLayerImplBase::ThumbLength() const {
+  return ScrollUtils::CalculateScrollbarThumbLength(
+      scroll_layer_length(), clip_layer_length(), TrackLength(),
+      MinimumThumbLength());
 }
 
 gfx::Rect ScrollbarLayerImplBase::BackButtonRect() const {
@@ -331,24 +368,24 @@ ScrollbarPart ScrollbarLayerImplBase::IdentifyScrollbarPart(
   const gfx::Point pointer_location(position_in_widget.x(),
                                     position_in_widget.y());
   if (BackButtonRect().Contains(pointer_location))
-    return ScrollbarPart::BACK_BUTTON;
+    return ScrollbarPart::kBackButton;
 
   if (ForwardButtonRect().Contains(pointer_location))
-    return ScrollbarPart::FORWARD_BUTTON;
+    return ScrollbarPart::kForwardButton;
 
   if (ComputeHitTestableThumbQuadRect().Contains(pointer_location))
-    return ScrollbarPart::THUMB;
+    return ScrollbarPart::kThumb;
 
   if (BackTrackRect().Contains(pointer_location))
-    return ScrollbarPart::BACK_TRACK;
+    return ScrollbarPart::kBackTrack;
 
   if (ForwardTrackRect().Contains(pointer_location))
-    return ScrollbarPart::FORWARD_TRACK;
+    return ScrollbarPart::kForwardTrack;
 
   // TODO(arakeri): Once crbug.com/952314 is fixed, add a DCHECK to verify that
   // the point that is passed in is within the TrackRect. Also, please note that
   // hit testing other scrollbar parts is not yet implemented.
-  return ScrollbarPart::NO_PART;
+  return ScrollbarPart::kNoPart;
 }
 
 }  // namespace cc

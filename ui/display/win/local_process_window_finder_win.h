@@ -5,18 +5,14 @@
 #ifndef UI_DISPLAY_WIN_LOCAL_PROCESS_WINDOW_FINDER_WIN_H_
 #define UI_DISPLAY_WIN_LOCAL_PROCESS_WINDOW_FINDER_WIN_H_
 
-#include <shobjidl.h>
-#include <wrl/client.h>
-
 #include <set>
 
 #include "base/memory/raw_ptr.h"
 #include "ui/display/win/base_window_finder_win.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
-namespace display {
-namespace win {
+namespace display::win {
 
 class ScreenWin;
 
@@ -45,19 +41,15 @@ class LocalProcessWindowFinder : public BaseWindowFinderWin {
   // Position of the mouse in pixel coordinates.
   gfx::Point screen_loc_;
 
-  // The resulting window. This is initially null but set to true in
-  // ShouldStopIterating if an appropriate window is found.
-  HWND result_;
+  // The resulting window. This is set to true in ShouldStopIterating if an
+  // appropriate window is found.
+  HWND result_ = nullptr;
 
   // ScreenWin we're looking on. Used to access WindowTreeHost, which
   // ui/display code can't access directly.
   raw_ptr<ScreenWin> screen_win_;
-
-  // Only used on Win10+.
-  Microsoft::WRL::ComPtr<IVirtualDesktopManager> virtual_desktop_manager_;
 };
 
-}  // namespace win
-}  // namespace display
+}  // namespace display::win
 
 #endif  // UI_DISPLAY_WIN_LOCAL_PROCESS_WINDOW_FINDER_WIN_H_

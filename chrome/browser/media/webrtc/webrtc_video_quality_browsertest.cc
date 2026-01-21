@@ -6,6 +6,8 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -19,7 +21,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_perf.h"
@@ -31,7 +32,6 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
@@ -130,9 +130,8 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
     ASSERT_TRUE(base::Base64Decode(base64_encoded_video, &recorded_video));
     base::File video_file(webm_video_filename,
                           base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    size_t written =
-        video_file.Write(0, recorded_video.c_str(), recorded_video.length());
-    ASSERT_EQ(recorded_video.length(), written);
+    ASSERT_TRUE(
+        video_file.WriteAndCheck(0, base::as_byte_span(recorded_video)));
   }
 
   // Runs ffmpeg on the captured webm video and writes it to a yuv video file.
@@ -232,7 +231,7 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
                  << output;
       return false;
     }
-    // TODO(http://crbug.com/1874811): Enable this and drop the printf above
+    // TODO(http://crbug.com/923564): Enable this and drop the printf above
     // when ready to switch to histogram sets.
     // if (!test::WriteCompareVideosOutputAsHistogram(test_label, output))
     //  return false;
@@ -311,14 +310,14 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
  private:
   base::FilePath GetSourceDir() {
     base::FilePath source_dir;
-    base::PathService::Get(base::DIR_SOURCE_ROOT, &source_dir);
+    base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_dir);
     return source_dir;
   }
 
   base::FilePath GetTestBinaryDir() {
     base::FilePath browser_dir;
     EXPECT_TRUE(
-        base::PathService::Get(base::DIR_GEN_TEST_DATA_ROOT, &browser_dir));
+        base::PathService::Get(base::DIR_OUT_TEST_DATA_ROOT, &browser_dir));
     return browser_dir;
   }
 
@@ -345,7 +344,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
 
 // Flaky on windows and WebRTC's frame_analyzer doesn't build from a Chromium's
 // component build.
-// TODO(crbug.com/1008766): re-enable when flakiness is investigated, diagnosed
+// TODO(crbug.com/40100787): re-enable when flakiness is investigated, diagnosed
 // and resolved.
 #if BUILDFLAG(IS_WIN) || defined(COMPONENT_BUILD)
 #define MAYBE_MANUAL_TestVideoQualityVp9 DISABLED_MANUAL_TestVideoQualityVp9
@@ -372,11 +371,11 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
                        MAYBE_MANUAL_TestVideoQualityH264) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   // Only run test if run-time feature corresponding to |rtc_use_h264| is on.
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kWebRtcH264WithOpenH264FFmpeg)) {
-    LOG(WARNING) << "Run-time feature WebRTC-H264WithOpenH264FFmpeg disabled. "
-        "Skipping WebRtcVideoQualityBrowserTest.MANUAL_TestVideoQualityH264 "
-        "(test \"OK\")";
+  if (!base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder)) {
+    LOG(WARNING)
+        << "Run-time feature OpenH264SoftwareEncoder disabled. "
+           "Skipping WebRtcVideoQualityBrowserTest.MANUAL_TestVideoQualityH264 "
+           "(test \"OK\")";
     return;
   }
   TestVideoQuality("H264", true /* prefer_hw_video_codec */);

@@ -3,11 +3,16 @@
 // found in the LICENSE file.
 
 #include "ash/login/ui/login_base_bubble_view.h"
+
 #include "ash/login/ui/login_test_base.h"
-#include "ash/style/ash_color_provider.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -19,8 +24,19 @@ namespace {
 // Total width of the bubble view.
 constexpr int kBubbleTotalWidthDp = 192;
 
-class AnchorView : public views::View,
-                   public base::SupportsWeakPtr<AnchorView> {};
+class AnchorView : public views::View {
+ public:
+  base::WeakPtr<AnchorView> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  METADATA_HEADER(AnchorView, views::View)
+  base::WeakPtrFactory<AnchorView> weak_ptr_factory_{this};
+};
+
+BEGIN_METADATA(AnchorView)
+END_METADATA
 
 }  // namespace
 
@@ -42,7 +58,7 @@ class LoginBaseBubbleViewTest : public LoginTestBase {
     container_ = new views::View();
     container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
-    container_->AddChildView(anchor_);
+    container_->AddChildViewRaw(anchor_.get());
 
     SetWidget(CreateWidgetWithContent(container_));
 
@@ -52,14 +68,22 @@ class LoginBaseBubbleViewTest : public LoginTestBase {
                                    views::style::STYLE_PRIMARY);
     bubble_->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
-    bubble_->AddChildView(label);
+    bubble_->AddChildViewRaw(label);
 
-    container_->AddChildView(bubble_);
+    container_->AddChildViewRaw(bubble_.get());
   }
 
-  LoginBaseBubbleView* bubble_;
-  views::View* container_;
-  AnchorView* anchor_;
+  // LoginTestBase:
+  void TearDown() override {
+    bubble_ = nullptr;
+    container_ = nullptr;
+    anchor_ = nullptr;
+    LoginTestBase::TearDown();
+  }
+
+  raw_ptr<LoginBaseBubbleView> bubble_;
+  raw_ptr<views::View> container_;
+  raw_ptr<AnchorView> anchor_;
 };
 
 TEST_F(LoginBaseBubbleViewTest, BasicProperties) {
@@ -69,9 +93,8 @@ TEST_F(LoginBaseBubbleViewTest, BasicProperties) {
   EXPECT_TRUE(bubble_->GetVisible());
 
   EXPECT_EQ(bubble_->width(), kBubbleTotalWidthDp);
-  SkColor background_color = AshColorProvider::Get()->GetBaseLayerColor(
-      AshColorProvider::BaseLayerType::kTransparent80);
-  EXPECT_EQ(bubble_->background()->get_color(), background_color);
+  EXPECT_EQ(bubble_->background()->color(),
+            cros_tokens::kCrosSysSystemBaseElevated);
 
   bubble_->Hide();
   EXPECT_FALSE(bubble_->GetVisible());

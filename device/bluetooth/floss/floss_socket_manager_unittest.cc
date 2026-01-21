@@ -4,10 +4,11 @@
 
 #include "device/bluetooth/floss/floss_socket_manager.h"
 
+#include <utility>
+
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/mock_bus.h"
@@ -35,6 +36,10 @@ class FlossSocketManagerTest : public testing::Test {
  public:
   FlossSocketManagerTest() = default;
 
+  base::Version GetCurrVersion() {
+    return floss::version::GetMaximalSupportedVersion();
+  }
+
   void SetUpMocks() {
     adapter_path_ = FlossDBusClient::GenerateAdapterPath(adapter_index_);
     sockmgr_proxy_ = base::MakeRefCounted<::dbus::MockObjectProxy>(
@@ -55,7 +60,7 @@ class FlossSocketManagerTest : public testing::Test {
 
     // Handle method calls on the object proxy.
     ON_CALL(*sockmgr_proxy_.get(),
-            DoCallMethodWithErrorResponse(
+            CallMethodWithErrorResponse(
                 HasMemberOf(socket_manager::kRegisterCallback), _, _))
         .WillByDefault(
             Invoke(this, &FlossSocketManagerTest::HandleRegisterCallback));
@@ -64,20 +69,35 @@ class FlossSocketManagerTest : public testing::Test {
   void SetUp() override {
     ::dbus::Bus::Options options;
     options.bus_type = ::dbus::Bus::BusType::SYSTEM;
-    bus_ = base::MakeRefCounted<::dbus::MockBus>(options);
+    bus_ = base::MakeRefCounted<::dbus::MockBus>(std::move(options));
     sockmgr_ = FlossSocketManager::Create();
 
     SetUpMocks();
   }
 
   void TearDown() override {
+    // Expected call to UnregisterCallback when client is destroyed
+    EXPECT_CALL(*sockmgr_proxy_.get(),
+                CallMethodWithErrorResponse(
+                    HasMemberOf(socket_manager::kUnregisterCallback), _, _))
+        .WillOnce([this](::dbus::MethodCall* method_call, int timeout_ms,
+                         ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
+          dbus::MessageReader msg(method_call);
+          // D-Bus method call should have 1 parameter.
+          uint32_t param1;
+          ASSERT_TRUE(FlossDBusClient::ReadAllDBusParams(&msg, &param1));
+          EXPECT_EQ(this->callback_id_ctr_ - 1, param1);
+          EXPECT_FALSE(msg.HasMoreData());
+        });
+
     // Clean up the socket manager first to get rid of all references to various
     // buses, object proxies, etc.
     sockmgr_.reset();
   }
 
   void Init() {
-    sockmgr_->Init(bus_.get(), kSocketManagerInterface, adapter_index_);
+    sockmgr_->Init(bus_.get(), kSocketManagerInterface, adapter_index_,
+                   GetCurrVersion(), base::DoNothing());
   }
 
   void SetupListeningSocket() {
@@ -85,7 +105,7 @@ class FlossSocketManagerTest : public testing::Test {
     // map.
     EXPECT_CALL(
         *sockmgr_proxy_.get(),
-        DoCallMethodWithErrorResponse(
+        CallMethodWithErrorResponse(
             HasMemberOf(socket_manager::kListenUsingRfcommWithServiceRecord), _,
             _))
         .WillOnce(
@@ -104,10 +124,9 @@ class FlossSocketManagerTest : public testing::Test {
     // Opting not to simply because we have it mocked away...
   }
 
-  void HandleRegisterCallback(
-      ::dbus::MethodCall* method_call,
-      int timeout_ms,
-      ::dbus::ObjectProxy::ResponseOrErrorCallback* cb) {
+  void HandleRegisterCallback(::dbus::MethodCall* method_call,
+                              int timeout_ms,
+                              ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
     auto response = ::dbus::Response::CreateEmpty();
     ::dbus::MessageWriter msg(response.get());
     FlossDBusClient::WriteAllDBusParams(&msg, callback_id_ctr_);
@@ -115,13 +134,13 @@ class FlossSocketManagerTest : public testing::Test {
     // Increment callback counter for next call.
     callback_id_ctr_++;
 
-    std::move(*cb).Run(response.get(), nullptr);
+    std::move(cb).Run(response.get(), nullptr);
   }
 
   void HandleReturnSocketResult(
       ::dbus::MethodCall* method_call,
       int timeout_ms,
-      ::dbus::ObjectProxy::ResponseOrErrorCallback* cb) {
+      ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
     auto response = ::dbus::Response::CreateEmpty();
     ::dbus::MessageWriter msg(response.get());
     FlossSocketManager::SocketResult result = {
@@ -132,25 +151,25 @@ class FlossSocketManagerTest : public testing::Test {
 
     socket_id_ctr_++;
 
-    std::move(*cb).Run(response.get(), nullptr);
+    std::move(cb).Run(response.get(), nullptr);
   }
 
   void HandleReturnSuccess(::dbus::MethodCall* method_call,
                            int timeout_ms,
-                           ::dbus::ObjectProxy::ResponseOrErrorCallback* cb) {
+                           ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
     auto response = ::dbus::Response::CreateEmpty();
     ::dbus::MessageWriter msg(response.get());
 
     BtifStatus status = BtifStatus::kSuccess;
     FlossDBusClient::WriteAllDBusParams(&msg, status);
 
-    std::move(*cb).Run(response.get(), nullptr);
+    std::move(cb).Run(response.get(), nullptr);
   }
 
   void SendOutgoingConnectionResult(
       FlossSocketManager::SocketId id,
       BtifStatus status,
-      const absl::optional<FlossSocketManager::FlossSocket>& socket,
+      const std::optional<FlossSocketManager::FlossSocket>& socket,
       dbus::ExportedObject::ResponseSender response) {
     dbus::MethodCall method_call(socket_manager::kCallbackInterface,
                                  socket_manager::kOnOutgoingConnectionResult);
@@ -254,6 +273,10 @@ TEST_F(FlossSocketManagerTest, ListenOnSockets) {
       {socket_manager::kListenUsingInsecureL2capChannel, Security::kInsecure},
       {socket_manager::kListenUsingL2capChannel, Security::kSecure},
   };
+  std::map<std::string, Security> l2cap_le_apis = {
+      {socket_manager::kListenUsingInsecureL2capLeChannel, Security::kInsecure},
+      {socket_manager::kListenUsingL2capLeChannel, Security::kSecure},
+  };
   std::map<std::string, Security> rfcomm_apis = {
       {socket_manager::kListenUsingInsecureRfcommWithServiceRecord,
        Security::kInsecure},
@@ -263,7 +286,7 @@ TEST_F(FlossSocketManagerTest, ListenOnSockets) {
   // Exercise all security paths.
   for (auto kv : l2cap_apis) {
     EXPECT_CALL(*sockmgr_proxy_.get(),
-                DoCallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
         .WillOnce(
             Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
 
@@ -279,10 +302,28 @@ TEST_F(FlossSocketManagerTest, ListenOnSockets) {
 
     EXPECT_EQ(BtifStatus::kSuccess, last_status_);
   }
+  for (auto kv : l2cap_le_apis) {
+    EXPECT_CALL(*sockmgr_proxy_.get(),
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+        .WillOnce(
+            Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
+
+    last_status_ = BtifStatus::kNotReady;
+    sockmgr_->ListenUsingL2capLe(
+        kv.second,
+        base::BindOnce(&FlossSocketManagerTest::SockStatusCb,
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::BindRepeating(&FlossSocketManagerTest::SockConnectionStateChanged,
+                            weak_ptr_factory_.GetWeakPtr()),
+        base::BindRepeating(&FlossSocketManagerTest::SockConnectionAccepted,
+                            weak_ptr_factory_.GetWeakPtr()));
+
+    EXPECT_EQ(BtifStatus::kSuccess, last_status_);
+  }
 
   for (auto kv : rfcomm_apis) {
     EXPECT_CALL(*sockmgr_proxy_.get(),
-                DoCallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
         .WillOnce(
             Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
 
@@ -308,6 +349,11 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
       {socket_manager::kCreateL2capChannel, Security::kSecure},
   };
 
+  std::map<std::string, Security> l2cap_le_apis = {
+      {socket_manager::kCreateInsecureL2capLeChannel, Security::kInsecure},
+      {socket_manager::kCreateL2capLeChannel, Security::kSecure},
+  };
+
   std::map<std::string, Security> rfcomm_apis = {
       {socket_manager::kCreateInsecureRfcommSocketToServiceRecord,
        Security::kInsecure},
@@ -325,7 +371,7 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
 
   for (auto kv : l2cap_apis) {
     EXPECT_CALL(*sockmgr_proxy_.get(),
-                DoCallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
         .WillOnce(
             Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
 
@@ -338,7 +384,7 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
         base::BindOnce(
             [](bool* complete, BtifStatus* cb_status, int* fpsm,
                BtifStatus status,
-               absl::optional<FlossSocketManager::FlossSocket>&& socket) {
+               std::optional<FlossSocketManager::FlossSocket>&& socket) {
               *complete = true;
               *cb_status = status;
               if (socket) {
@@ -352,7 +398,52 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
     EXPECT_FALSE(callback_completed);
     EXPECT_EQ(BtifStatus::kNotReady, callback_status);
 
-    absl::optional<FlossSocketManager::FlossSocket> sock =
+    std::optional<FlossSocketManager::FlossSocket> sock =
+        FlossSocketManager::FlossSocket();
+    sock->id = socket_id_ctr_ - 1;
+    sock->port = psm;
+
+    // Trigger the callback completion. We don't care about socket itself.
+    SendOutgoingConnectionResult(
+        socket_id_ctr_ - 1, BtifStatus::kSuccess, std::move(sock),
+        base::BindOnce(&FlossSocketManagerTest::ExpectNormalResponse,
+                       weak_ptr_factory_.GetWeakPtr()));
+
+    EXPECT_TRUE(callback_completed);
+    EXPECT_EQ(BtifStatus::kSuccess, callback_status);
+    EXPECT_EQ(psm, found_psm);
+  }
+
+  for (auto kv : l2cap_le_apis) {
+    EXPECT_CALL(*sockmgr_proxy_.get(),
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+        .WillOnce(
+            Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
+
+    bool callback_completed = false;
+    BtifStatus callback_status = BtifStatus::kNotReady;
+    int found_psm = -1;
+
+    sockmgr_->ConnectUsingL2capLe(
+        remote_device, psm, kv.second,
+        base::BindOnce(
+            [](bool* complete, BtifStatus* cb_status, int* fpsm,
+               BtifStatus status,
+               std::optional<FlossSocketManager::FlossSocket>&& socket) {
+              *complete = true;
+              *cb_status = status;
+              if (socket) {
+                *fpsm = socket->port;
+              }
+            },
+            &callback_completed, &callback_status, &found_psm));
+
+    // Status shouldn't be updated yet since we get callback update AFTER we
+    // send outgoing result.
+    EXPECT_FALSE(callback_completed);
+    EXPECT_EQ(BtifStatus::kNotReady, callback_status);
+
+    std::optional<FlossSocketManager::FlossSocket> sock =
         FlossSocketManager::FlossSocket();
     sock->id = socket_id_ctr_ - 1;
     sock->port = psm;
@@ -370,7 +461,7 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
 
   for (auto kv : rfcomm_apis) {
     EXPECT_CALL(*sockmgr_proxy_.get(),
-                DoCallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
+                CallMethodWithErrorResponse(HasMemberOf(kv.first), _, _))
         .WillOnce(
             Invoke(this, &FlossSocketManagerTest::HandleReturnSocketResult));
 
@@ -383,7 +474,7 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
         base::BindOnce(
             [](bool* complete, BtifStatus* cb_status, device::BluetoothUUID* uu,
                BtifStatus status,
-               absl::optional<FlossSocketManager::FlossSocket>&& socket) {
+               std::optional<FlossSocketManager::FlossSocket>&& socket) {
               *complete = true;
               *cb_status = status;
               if (socket && socket->uuid) {
@@ -397,7 +488,7 @@ TEST_F(FlossSocketManagerTest, ConnectToSockets) {
     EXPECT_FALSE(callback_completed);
     EXPECT_EQ(BtifStatus::kNotReady, callback_status);
 
-    absl::optional<FlossSocketManager::FlossSocket> sock =
+    std::optional<FlossSocketManager::FlossSocket> sock =
         FlossSocketManager::FlossSocket();
     sock->id = socket_id_ctr_ - 1;
     sock->uuid = uuid;
@@ -420,7 +511,7 @@ TEST_F(FlossSocketManagerTest, AcceptAndCloseConnection) {
 
   EXPECT_CALL(
       *sockmgr_proxy_.get(),
-      DoCallMethodWithErrorResponse(HasMemberOf(socket_manager::kAccept), _, _))
+      CallMethodWithErrorResponse(HasMemberOf(socket_manager::kAccept), _, _))
       .WillOnce(Invoke(this, &FlossSocketManagerTest::HandleReturnSuccess));
 
   last_status_ = BtifStatus::kNotReady;
@@ -431,7 +522,7 @@ TEST_F(FlossSocketManagerTest, AcceptAndCloseConnection) {
 
   EXPECT_CALL(
       *sockmgr_proxy_.get(),
-      DoCallMethodWithErrorResponse(HasMemberOf(socket_manager::kClose), _, _))
+      CallMethodWithErrorResponse(HasMemberOf(socket_manager::kClose), _, _))
       .WillOnce(Invoke(this, &FlossSocketManagerTest::HandleReturnSuccess));
 
   last_status_ = BtifStatus::kNotReady;

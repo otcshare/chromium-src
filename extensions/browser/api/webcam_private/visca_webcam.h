@@ -10,13 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
-#include "base/memory/weak_ptr.h"
+#include "base/functional/callback.h"
 #include "extensions/browser/api/serial/serial_connection.h"
 #include "extensions/browser/api/webcam_private/webcam.h"
 #include "extensions/common/api/serial.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "extensions/common/extension_id.h"
 
 namespace extensions {
 
@@ -31,9 +30,9 @@ class ViscaWebcam : public Webcam {
 
   // Open and initialize the web camera. This is done by the following three
   // steps (in order): 1. Open the serial port; 2. Request address; 3. Clear the
-  // command buffer. After these three steps completes, |open_callback| will be
+  // command buffer. After these three steps completes, `open_callback` will be
   // called.
-  void Open(const std::string& extension_id,
+  void Open(const ExtensionId& extension_id,
             api::SerialPortManager* port_manager,
             const std::string& path,
             const OpenCompleteCallback& open_callback);
@@ -128,7 +127,7 @@ class ViscaWebcam : public Webcam {
   // Used only in unit tests in place of Open().
   void OpenForTesting(std::unique_ptr<SerialConnection> serial_connection);
 
-  // Used only in unit tests to retrieve |serial_connection_| since this class
+  // Used only in unit tests to retrieve `serial_connection_` since this class
   // owns it.
   SerialConnection* GetSerialConnectionForTesting();
 
@@ -141,7 +140,7 @@ class ViscaWebcam : public Webcam {
   base::circular_deque<std::pair<std::vector<char>, CommandCompleteCallback>>
       commands_;
 
-  // Visca webcam always get/set pan-tilt together. |pan| and |tilt| are used to
+  // Visca webcam always get/set pan-tilt together. `pan` and `tilt` are used to
   // store the current value of pan and tilt positions.
   int pan_ = 0;
   int tilt_ = 0;

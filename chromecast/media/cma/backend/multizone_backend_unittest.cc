@@ -10,10 +10,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
@@ -169,6 +170,7 @@ class MultizoneBackendTest : public testing::TestWithParam<TestParams> {
   base::test::TaskEnvironment task_environment_;
   std::vector<std::unique_ptr<BufferFeeder>> effects_feeders_;
   std::unique_ptr<BufferFeeder> audio_feeder_;
+  base::RunLoop loop_;
 };
 
 namespace {
@@ -246,7 +248,7 @@ void BufferFeeder::FeedBuffer() {
           pushed_us_when_rate_changed_ + playback_rate_change_interval_us_) {
     pushed_us_when_rate_changed_ = pushed_us_;
     ++current_rate_index_;
-    playback_rate_ = rate_change_sequence_[current_rate_index_];
+    playback_rate_ = UNSAFE_TODO(rate_change_sequence_[current_rate_index_]);
     LOG(INFO) << "Change playback rate to " << playback_rate_;
     ASSERT_TRUE(backend_->SetPlaybackRate(playback_rate_));
     // Changing the playback rate will change the rendering delay on devices
@@ -266,9 +268,10 @@ void BufferFeeder::FeedBuffer() {
         size_bytes / (config_.bytes_per_channel * config_.channel_number);
     last_push_length_us_ = num_samples * base::Time::kMicrosecondsPerSecond /
                            (config_.samples_per_second * playback_rate_);
-    scoped_refptr<::media::DecoderBuffer> silence_buffer(
-        new ::media::DecoderBuffer(size_bytes));
-    memset(silence_buffer->writable_data(), 0, silence_buffer->data_size());
+    auto silence_buffer =
+        base::MakeRefCounted<::media::DecoderBuffer>(size_bytes);
+    UNSAFE_TODO(
+        memset(silence_buffer->writable_data(), 0, silence_buffer->size()));
     pending_buffer_ = new media::DecoderBufferAdapter(silence_buffer);
     pending_buffer_->set_timestamp(base::Microseconds(pushed_us_));
   }
@@ -373,7 +376,7 @@ void MultizoneBackendTest::Start() {
     feeder->Start();
   CHECK(audio_feeder_);
   audio_feeder_->Start();
-  base::RunLoop().Run();
+  loop_.Run();
 }
 
 void MultizoneBackendTest::OnEndOfStream() {
@@ -381,7 +384,7 @@ void MultizoneBackendTest::OnEndOfStream() {
   for (auto& feeder : effects_feeders_)
     feeder->Stop();
 
-  base::RunLoop::QuitCurrentWhenIdleDeprecated();
+  loop_.QuitWhenIdle();
 
   EXPECT_LT(audio_feeder_->GetMaxRenderingDelayErrorUs(),
             kMaxRenderingDelayErrorUs);

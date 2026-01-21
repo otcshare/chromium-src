@@ -8,17 +8,17 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "extensions/common/mojom/host_id.mojom-forward.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/user_script.h"
 #include "extensions/renderer/injection_host.h"
 #include "extensions/renderer/script_injector.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "v8/include/v8-forward.h"
 
 namespace content {
@@ -32,10 +32,10 @@ struct ScriptsRunInfo;
 // and contains the implementation to do so.
 class ScriptInjection {
  public:
-  enum InjectionResult {
-    INJECTION_FINISHED,
-    INJECTION_BLOCKED,
-    INJECTION_WAITING
+  enum class InjectionResult {
+    kFinished,
+    kBlocked,
+    kWaiting,
   };
 
   // Represents the purpose of calling StatusUpdatedCallback.
@@ -64,21 +64,22 @@ class ScriptInjection {
 
   ~ScriptInjection();
 
-  // Try to inject the script at the |current_location|. This returns
-  // INJECTION_FINISHED if injection has injected or will never inject, returns
-  // INJECTION_BLOCKED if injection is running asynchronously and has not
-  // finished yet, returns INJECTION_WAITING if injections is delayed (either
-  // for permission purposes or because |current_location| is not the designated
-  // |run_location_|).
-  // If INJECTION_BLOCKED or INJECTION_WAITING is returned,
-  // |async_updated_callback| will be called upon the status updated.
+  // Try to inject the script at the `current_location`. This returns
+  // InjectionResult::kFinished if injection has injected or will never inject,
+  // returns InjectionResult::kBlocked if injection is running asynchronously
+  // and has not finished yet, returns InjectionResult::kWaiting if injections
+  // is delayed (either for permission purposes or because `current_location` is
+  // not the designated `run_location_`). If InjectionResult::kBlocked or
+  // InjectionResult::kWaiting is returned, `async_updated_callback` will be
+  // called upon the status updated.
   InjectionResult TryToInject(mojom::RunLocation current_location,
                               ScriptsRunInfo* scripts_run_info,
                               StatusUpdatedCallback async_updated_callback);
 
   // Called when permission for the given injection has been granted.
-  // Returns INJECTION_FINISHED if injection has injected or will never inject,
-  // returns INJECTION_BLOCKED if injection is ran asynchronously.
+  // Returns InjectionResult::kFinished if injection has injected or will never
+  // inject, returns InjectionResult::kBlocked if injection is ran
+  // asynchronously.
   InjectionResult OnPermissionGranted(ScriptsRunInfo* scripts_run_info);
 
   // Resets the pointer of the injection host when the host is gone.
@@ -93,24 +94,24 @@ class ScriptInjection {
 
   // Called when JS injection for the given frame has been completed or
   // cancelled.
-  void OnJsInjectionCompleted(absl::optional<base::Value> value,
+  void OnJsInjectionCompleted(std::optional<base::Value> value,
                               base::TimeTicks start_time);
 
  private:
   class FrameWatcher;
 
   // Sends a message to the browser to request permission to inject.
-  // |async_updated_callback| should be called if the permission is handled.
+  // `async_updated_callback` should be called if the permission is handled.
   void RequestPermissionFromBrowser(
       StatusUpdatedCallback async_updated_callback);
 
-  // Handles the injection permission calling |async_updated_callback| if
-  // |granted| is true.
+  // Handles the injection permission calling `async_updated_callback` if
+  // `granted` is true.
   void HandlePermission(StatusUpdatedCallback async_updated_callback,
                         bool granted);
 
-  // Injects the script. Returns INJECTION_FINISHED if injection has finished,
-  // otherwise INJECTION_BLOCKED.
+  // Injects the script. Returns InjectionResult::kFinished if injection has
+  // finished, otherwise InjectionResult::kBlocked.
   InjectionResult Inject(ScriptsRunInfo* scripts_run_info);
 
   // Inject any JS scripts into the frame for the injection.
@@ -128,7 +129,7 @@ class ScriptInjection {
   std::unique_ptr<ScriptInjector> injector_;
 
   // The RenderFrame into which this should inject the script.
-  content::RenderFrame* render_frame_;
+  raw_ptr<content::RenderFrame, DanglingUntriaged> render_frame_;
 
   // The associated injection host.
   std::unique_ptr<const InjectionHost> injection_host_;
@@ -139,9 +140,6 @@ class ScriptInjection {
   // This injection's request id. This will be -1 unless the injection is
   // currently waiting on permission.
   int64_t request_id_;
-
-  // Identifies the frame we're injecting into.
-  ukm::SourceIdObj ukm_source_id_;
 
   // Whether or not the injection is complete, either via injecting the script
   // or because it will never complete.
@@ -154,7 +152,7 @@ class ScriptInjection {
   bool log_activity_;
 
   // Results storage.
-  absl::optional<base::Value> execution_result_;
+  std::optional<base::Value> execution_result_;
 
   // The callback to run upon the status updated asynchronously. It's used for
   // the reply of the permission handling or script injection completion.

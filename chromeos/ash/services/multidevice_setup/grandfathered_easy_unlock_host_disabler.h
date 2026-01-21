@@ -7,16 +7,14 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/public/mojom/device_sync.mojom.h"
 #include "chromeos/ash/services/multidevice_setup/host_backend_delegate.h"
 
 class PrefRegistrySimple;
 class PrefService;
-
-namespace base {
-class OneShotTimer;
-}  // namespace base
 
 namespace ash {
 
@@ -90,14 +88,14 @@ class GrandfatheredEasyUnlockHostDisabler
       multidevice::RemoteDeviceRef device,
       device_sync::mojom::NetworkRequestResult result_code);
   void SetPotentialEasyUnlockHostToDisable(
-      absl::optional<multidevice::RemoteDeviceRef> device);
-  absl::optional<multidevice::RemoteDeviceRef> GetEasyUnlockHostToDisable();
+      std::optional<multidevice::RemoteDeviceRef> device);
+  std::optional<multidevice::RemoteDeviceRef> GetEasyUnlockHostToDisable();
 
-  HostBackendDelegate* host_backend_delegate_;
-  device_sync::DeviceSyncClient* device_sync_client_;
-  PrefService* pref_service_;
+  raw_ptr<HostBackendDelegate> host_backend_delegate_;
+  raw_ptr<device_sync::DeviceSyncClient> device_sync_client_;
+  raw_ptr<PrefService> pref_service_;
   std::unique_ptr<base::OneShotTimer> timer_;
-  absl::optional<multidevice::RemoteDeviceRef> current_better_together_host_;
+  std::optional<multidevice::RemoteDeviceRef> current_better_together_host_;
 
   base::WeakPtrFactory<GrandfatheredEasyUnlockHostDisabler> weak_ptr_factory_{
       this};

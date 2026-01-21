@@ -7,9 +7,10 @@
 #include "ash/quick_pair/common/logging.h"
 #include "ash/quick_pair/repository/fast_pair/device_metadata_fetcher.h"
 #include "ash/quick_pair/repository/fast_pair/fast_pair_image_decoder.h"
+#include "base/strings/string_view_util.h"
 #include "chromeos/ash/services/quick_pair/public/cpp/account_key_filter.h"
 #include "components/image_fetcher/core/image_fetcher.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/public/cpp/bluetooth_address.h"
 
@@ -19,13 +20,19 @@ namespace {
 
 constexpr int kBluetoothAddressSize = 6;
 FastPairRepository* g_instance = nullptr;
+FastPairRepository* g_test_instance = nullptr;
 
 }  // namespace
 
 // static
 FastPairRepository* FastPairRepository::Get() {
-  // b/240621764 team members have seen g_instance return null during testing.
-  // Fail loudly if that happens to avoid undefined behavior.
+  if (g_test_instance) {
+    return g_test_instance;
+  }
+  // This fails for component builds, however, production builds are not
+  // component builds and we have not seen any production crashes here. If
+  // crashes start appearing in production, we should re-evaluate the
+  // FastPairRepository setup.
   CHECK(g_instance);
   return g_instance;
 }
@@ -40,10 +47,8 @@ std::string FastPairRepository::GenerateSha256OfAccountKeyAndMacAddress(
 
   concat_bytes.insert(concat_bytes.end(), mac_address_bytes.begin(),
                       mac_address_bytes.end());
-  std::array<uint8_t, crypto::kSHA256Length> hashed =
-      crypto::SHA256Hash(concat_bytes);
 
-  return std::string(hashed.begin(), hashed.end());
+  return std::string(base::as_string_view(crypto::hash::Sha256(concat_bytes)));
 }
 
 // static
@@ -52,13 +57,13 @@ void FastPairRepository::SetInstance(FastPairRepository* instance) {
   g_instance = instance;
 }
 
-FastPairRepository::FastPairRepository() {
-  SetInstance(this);
+// static
+void FastPairRepository::SetInstanceForTesting(FastPairRepository* instance) {
+  g_test_instance = instance;
 }
 
-FastPairRepository::~FastPairRepository() {
-  SetInstance(nullptr);
-}
+FastPairRepository::FastPairRepository() = default;
+FastPairRepository::~FastPairRepository() = default;
 
 }  // namespace quick_pair
 }  // namespace ash

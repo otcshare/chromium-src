@@ -13,10 +13,8 @@
 DevicePermissionsDialogController::DevicePermissionsDialogController(
     content::RenderFrameHost* owner,
     scoped_refptr<extensions::DevicePermissionsPrompt::Prompt> prompt)
-    : ChooserController(CreateExtensionAwareChooserTitle(
+    : ChooserController(CreateChooserTitle(
           owner,
-          prompt->multiple() ? IDS_DEVICE_PERMISSIONS_PROMPT_MULTIPLE_SELECTION
-                             : IDS_DEVICE_PERMISSIONS_PROMPT_SINGLE_SELECTION,
           prompt->multiple() ? IDS_DEVICE_PERMISSIONS_PROMPT_MULTIPLE_SELECTION
                              : IDS_DEVICE_PERMISSIONS_PROMPT_SINGLE_SELECTION)),
       prompt_(prompt) {
@@ -59,7 +57,7 @@ std::u16string DevicePermissionsDialogController::GetOption(
     size_t index) const {
   std::u16string device_name = prompt_->GetDeviceName(index);
   const auto& it = device_name_map_.find(device_name);
-  DCHECK(it != device_name_map_.end());
+  CHECK(it != device_name_map_.end());
   return it->second == 1
              ? device_name
              : l10n_util::GetStringFUTF16(

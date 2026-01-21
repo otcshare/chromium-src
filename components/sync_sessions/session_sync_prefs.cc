@@ -10,15 +10,13 @@
 namespace sync_sessions {
 namespace {
 
-// Legacy GUID to identify this client, no longer newly populated by modern
-// clients but honored if present.
-const char kLegacySyncSessionsGUID[] = "sync.session_sync_guid";
+const char kLocalDataOutOfSync[] = "sync.local_data_out_of_sync";
 
 }  // namespace
 
 // static
 void SessionSyncPrefs::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterStringPref(kLegacySyncSessionsGUID, std::string());
+  registry->RegisterBooleanPref(kLocalDataOutOfSync, false);
 }
 
 SessionSyncPrefs::SessionSyncPrefs(PrefService* pref_service)
@@ -28,17 +26,12 @@ SessionSyncPrefs::SessionSyncPrefs(PrefService* pref_service)
 
 SessionSyncPrefs::~SessionSyncPrefs() = default;
 
-std::string SessionSyncPrefs::GetLegacySyncSessionsGUID() const {
-  return pref_service_->GetString(kLegacySyncSessionsGUID);
+bool SessionSyncPrefs::GetLocalDataOutOfSync() {
+  return pref_service_->GetBoolean(kLocalDataOutOfSync);
 }
 
-void SessionSyncPrefs::ClearLegacySyncSessionsGUID() {
-  pref_service_->ClearPref(kLegacySyncSessionsGUID);
-}
-
-void SessionSyncPrefs::SetLegacySyncSessionsGUIDForTesting(
-    const std::string& guid) {
-  pref_service_->SetString(kLegacySyncSessionsGUID, guid);
+void SessionSyncPrefs::SetLocalDataOutOfSync(bool local_data_out_of_sync) {
+  pref_service_->SetBoolean(kLocalDataOutOfSync, local_data_out_of_sync);
 }
 
 }  // namespace sync_sessions

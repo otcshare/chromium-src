@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests RemoteObject.getProperties on localStorage object. 66215\n`);
   await TestRunner.evaluateInPagePromise(`
       localStorage.testProperty = "testPropertyValue";
   `);
 
-  var result = await TestRunner.RuntimeAgent.evaluate('localStorage');
+  var {result} = await TestRunner.RuntimeAgent.invoke_evaluate({expression: 'localStorage'});
   var localStorageHandle = TestRunner.runtimeModel.createRemoteObject(result);
   localStorageHandle.getOwnProperties(false).then(step2);
 

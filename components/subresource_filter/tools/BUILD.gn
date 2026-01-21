@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/compiled_action.gni")
+import("//build/config/features.gni")
 
 static_library("tools_lib") {
   sources = [
@@ -12,7 +13,6 @@ static_library("tools_lib") {
     "indexing_tool.h",
   ]
   deps = [
-    "../core/browser",
     "../core/common",
     "//base",
     "//components/url_pattern_index",
@@ -42,7 +42,7 @@ source_set("unit_tests") {
   ]
 }
 
-if (!is_ios) {
+if (use_blink) {
   executable("subresource_filter_tool") {
     # Production code should not depend on this.
     testonly = true

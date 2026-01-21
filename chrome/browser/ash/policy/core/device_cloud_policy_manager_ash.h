@@ -9,23 +9,27 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/scoped_observation_traits.h"
-#include "chrome/browser/ash/cert_provisioning/cert_provisioning_scheduler.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
+#include "components/policy/core/common/schema_registry.h"
+#include "components/user_manager/user_manager.h"
 
 namespace reporting {
 class MetricReportingManager;
+class OsUpdatesReporter;
 class UserAddedRemovedReporter;
+class UserEventReporterHelper;
+class UserSessionActivityReporter;
 }  // namespace reporting
 
 namespace ash {
 namespace attestation {
-class AttestationPolicyObserver;
 class EnrollmentCertificateUploader;
 class EnrollmentIdUploadManager;
 class MachineCertificateUploader;
@@ -46,23 +50,28 @@ class PrefService;
 
 namespace policy {
 
+class StartCrdSessionJobDelegate;
 class DeviceCloudPolicyStoreAsh;
 class EuiccStatusUploader;
 class ForwardingSchemaRegistry;
 class HeartbeatScheduler;
+class LookupKeyUploader;
 class ManagedSessionService;
+class ReportingUserTracker;
 class SchemaRegistry;
 class StatusUploader;
 class SystemLogUploader;
-class LookupKeyUploader;
+class EventBasedLogManager;
 
-enum class ZeroTouchEnrollmentMode { DISABLED, ENABLED, FORCED, HANDS_OFF };
+BASE_DECLARE_FEATURE(kEnableUserSessionActivityReporting);
 
 // CloudPolicyManager specialization for device policy in Ash.
-class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
+class DeviceCloudPolicyManagerAsh : public CloudPolicyManager,
+                                    public user_manager::UserManager::Observer {
  public:
   class Observer {
    public:
+    virtual ~Observer() = default;
     // Invoked when the device cloud policy manager connects.
     virtual void OnDeviceCloudPolicyManagerConnected() = 0;
     // Invoked when the device cloud policy manager obtains schema registry.
@@ -72,10 +81,11 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // |task_runner| is the runner for policy refresh, heartbeat, and status
   // upload tasks.
   DeviceCloudPolicyManagerAsh(
-      std::unique_ptr<DeviceCloudPolicyStoreAsh> store,
+      std::unique_ptr<DeviceCloudPolicyStoreAsh> device_store,
       std::unique_ptr<CloudExternalDataManager> external_data_manager,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      ServerBackedStateKeysBroker* state_keys_broker);
+      ServerBackedStateKeysBroker* state_keys_broker,
+      StartCrdSessionJobDelegate& crd_delegate);
 
   DeviceCloudPolicyManagerAsh(const DeviceCloudPolicyManagerAsh&) = delete;
   DeviceCloudPolicyManagerAsh& operator=(const DeviceCloudPolicyManagerAsh&) =
@@ -98,14 +108,6 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // Pref registration helper.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
-  // Returns the mode for using zero-touch enrollment.
-  static ZeroTouchEnrollmentMode GetZeroTouchEnrollmentMode();
-
-  // Returns the robot 'email address' associated with the device robot
-  // account (sometimes called a service account) associated with this device
-  // during enterprise enrollment.
-  std::string GetRobotAccountId();
-
   // Starts the connection via |client_to_connect|.
   void StartConnection(std::unique_ptr<CloudPolicyClient> client_to_connect,
                        ash::InstallAttributes* install_attributes);
@@ -113,13 +115,14 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // Called when policy store is ready.
   void OnPolicyStoreReady(ash::InstallAttributes* install_attributes);
 
-  bool IsConnected() const { return core()->service() != nullptr; }
+  bool IsConnected() const { return core()->IsConnected(); }
 
-  bool HasSchemaRegistry() const {
-    return signin_profile_forwarding_schema_registry_ != nullptr;
-  }
+  bool HasSchemaRegistry() const;
 
   DeviceCloudPolicyStoreAsh* device_store() { return device_store_.get(); }
+  ReportingUserTracker* reporting_user_tracker() {
+    return reporting_user_tracker_.get();
+  }
 
   // Return the StatusUploader used to communicate device status to the
   // policy server.
@@ -131,12 +134,13 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
     return syslog_uploader_.get();
   }
 
-  // Passes the pointer to the schema registry that corresponds to the signin
-  // profile.
-  //
-  // After this method is called, the component cloud policy manager becomes
-  // associated with this schema registry.
+  // Sets the SchemaRegistry that corresponds to the [sign-in screen / lock
+  // screen] profile. The device-wide ComponentCloudPolicyService will be
+  // associated with a schema registry that combines the sign-in screen profile
+  // and lock screen profile schema registries. It will only be initialized when
+  // at least one of these has been invoked.
   void SetSigninProfileSchemaRegistry(SchemaRegistry* schema_registry);
+  void SetLockProfileSchemaRegistry(SchemaRegistry* schema_registry);
 
   // Sets whether the component cloud policy should be disabled (by skipping
   // the component cloud policy service creation).
@@ -152,6 +156,22 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   GetMachineCertificateUploader() {
     return machine_certificate_uploader_.get();
   }
+
+  // Called when UserManager is created.
+  void OnUserManagerCreated(user_manager::UserManager* user_manager);
+  // Called just before UserManager is destroyed.
+  void OnUserManagerWillBeDestroyed();
+
+  // user_manager::UserManager::Observer:
+  void OnUserToBeRemoved(const AccountId& account_id) override;
+  void OnUserRemoved(const AccountId& account_id,
+                     user_manager::UserRemovalReason reason) override;
+
+  HeartbeatScheduler* GetHeartbeatSchedulerForTesting() const;
+
+  reporting::OsUpdatesReporter* GetOsUpdatesReporter() const;
+
+  reporting::MetricReportingManager* GetMetricReportingManager();
 
  protected:
   // Object that monitors managed session related events used by reporting
@@ -171,12 +191,25 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // testing.
   std::unique_ptr<ash::reporting::LockUnlockReporter> lock_unlock_reporter_;
 
+  // Object that handles reporting of ChromeOS updates, protected for
+  // testing.
+  std::unique_ptr<reporting::OsUpdatesReporter> os_updates_reporter_;
+
+  // Object that reports user active/idle times during a session.
+  std::unique_ptr<reporting::UserSessionActivityReporter>
+      user_session_activity_reporter_;
+
  private:
+  // Caches removed users. Passed to the reporter, when it is created.
+  struct RemovedUser {
+    std::string user_email;  // Maybe empty, if the user should not be reported.
+    user_manager::UserRemovalReason reason;
+  };
+
   // Saves the state keys received from |session_manager_client_|.
   void OnStateKeysUpdated();
 
   void NotifyConnected();
-  void NotifyDisconnected();
   void NotifyGotRegistry();
 
   // Factory function to create the StatusUploader.
@@ -187,14 +220,16 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // |lock_unlock_reporter_|.
   void CreateManagedSessionServiceAndReporters();
 
-  // Points to the same object as the base CloudPolicyManager::store(), but with
-  // actual device policy specific type.
-  std::unique_ptr<DeviceCloudPolicyStoreAsh> device_store_;
+  // Points to the object owned by the base CloudPolicyManager, but with actual
+  // device policy specific type.
+  raw_ptr<DeviceCloudPolicyStoreAsh> device_store_;
 
   // Manages external data referenced by device policies.
   std::unique_ptr<CloudExternalDataManager> external_data_manager_;
 
-  ServerBackedStateKeysBroker* state_keys_broker_;
+  raw_ptr<ServerBackedStateKeysBroker, DanglingUntriaged> state_keys_broker_;
+
+  raw_ptr<StartCrdSessionJobDelegate, DanglingUntriaged> crd_delegate_;
 
   // Helper object that handles updating the server with our current device
   // state.
@@ -210,13 +245,18 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   // Object that initiates device metrics collection and reporting.
   std::unique_ptr<reporting::MetricReportingManager> metric_reporting_manager_;
 
+  // Helper object that handles the event based log uploads.
+  std::unique_ptr<EventBasedLogManager> event_based_log_manager_;
+
   // The TaskRunner used to do device status and log uploads.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
+  // PrefService instance to read the policy refresh rate from.
+  raw_ptr<PrefService, DanglingUntriaged> local_state_;
+
   base::CallbackListSubscription state_keys_update_subscription_;
 
-  // PrefService instance to read the policy refresh rate from.
-  PrefService* local_state_;
+  std::unique_ptr<ReportingUserTracker> reporting_user_tracker_;
 
   std::unique_ptr<ash::attestation::EnrollmentCertificateUploader>
       enrollment_certificate_uploader_;
@@ -224,8 +264,6 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
       enrollment_id_upload_manager_;
   std::unique_ptr<ash::attestation::MachineCertificateUploader>
       machine_certificate_uploader_;
-  std::unique_ptr<ash::attestation::AttestationPolicyObserver>
-      attestation_policy_observer_;
   std::unique_ptr<EuiccStatusUploader> euicc_status_uploader_;
 
   // Uploader for remote server unlock related lookup keys.
@@ -236,11 +274,26 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager {
   std::unique_ptr<ForwardingSchemaRegistry>
       signin_profile_forwarding_schema_registry_;
 
+  // Combined schema registry that tracks both the signin and lock profile
+  // schema registries, if they exist.
+  std::unique_ptr<CombinedSchemaRegistry> auth_screens_schema_registry_;
+
   // Whether the component cloud policy should be disabled (by skipping the
   // component cloud policy service creation).
   bool component_policy_disabled_for_testing_ = false;
 
+  // Caches users being removed.
+  base::flat_map<AccountId, bool> users_to_be_removed_;
+
+  std::vector<RemovedUser> removed_users_;
+
+  std::unique_ptr<reporting::UserEventReporterHelper> helper_;
+
   base::ObserverList<Observer, true>::Unchecked observers_;
+
+  base::ScopedObservation<user_manager::UserManager,
+                          DeviceCloudPolicyManagerAsh>
+      user_manager_observation_{this};
 };
 
 }  // namespace policy

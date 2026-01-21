@@ -19,21 +19,21 @@
 
 #include <stdint.h>
 
-#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/observer_list_types.h"
 #include "base/supports_user_data.h"
+#include "build/build_config.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
-#include "components/download/public/common/download_item_rename_progress_update.h"
 #include "components/download/public/common/download_source.h"
 #include "net/base/isolation_info.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/page_transition_types.h"
 #include "url/origin.h"
 
@@ -126,7 +126,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
 
   // Interface that observers of a particular download must implement in order
   // to receive updates to the download's status.
-  class COMPONENTS_DOWNLOAD_EXPORT Observer {
+  class COMPONENTS_DOWNLOAD_EXPORT Observer : public base::CheckedObserver {
    public:
     virtual void OnDownloadUpdated(DownloadItem* download) {}
     virtual void OnDownloadOpened(DownloadItem* download) {}
@@ -137,7 +137,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
     // down.
     virtual void OnDownloadDestroyed(DownloadItem* download) {}
 
-    virtual ~Observer() {}
+    ~Observer() override;
   };
 
   // A slice of the target file that has been received so far, used when
@@ -163,7 +163,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
 
   using ReceivedSlices = std::vector<DownloadItem::ReceivedSlice>;
 
-  ~DownloadItem() override {}
+  ~DownloadItem() override = default;
 
   // Observation ---------------------------------------------------------------
 
@@ -179,15 +179,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // Called when the user has validated the download of an insecure file.
   virtual void ValidateInsecureDownload() = 0;
 
-  // Called to acquire a dangerous download. If |delete_file_afterward| is true,
-  // invokes |callback| on the UI thread with the path to the downloaded file,
-  // and removes the DownloadItem from views and history if appropriate.
-  // Otherwise, makes a temp copy of the download file, and invokes |callback|
-  // with the path to the temp copy. The caller is responsible for cleanup.
-  // Note: It is important for |callback| to be valid since the downloaded file
-  // will not be cleaned up if the callback fails.
-  virtual void StealDangerousDownload(bool delete_file_afterward,
-                                      AcquireFileCallback callback) = 0;
+  // Called to acquire a dangerous download. Mmakes a temp copy of the
+  // download file, and invokes |callback| with the path to the temp
+  // copy. The caller is responsible for cleanup.  Note: It is important
+  // for |callback| to be valid since the downloaded file will not be
+  // cleaned up if the callback fails.
+  virtual void CopyDownload(AcquireFileCallback callback) = 0;
 
   // Pause a download.  Will have no effect if the download is already
   // paused.
@@ -232,13 +229,16 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   virtual uint32_t GetId() const = 0;
 
   // Retrieve the GUID for this download. The returned string is never empty and
-  // will satisfy base::IsValidGUID() and uniquely identifies the download
-  // during its lifetime.
+  // will satisfy `base::Uuid::ParseCaseInsensitive().is_valid()` and uniquely
+  // identifies the download during its lifetime.
   virtual const std::string& GetGuid() const = 0;
 
   // Get the current state of the download. See DownloadState for descriptions
   // of each download state.
   virtual DownloadState GetState() const = 0;
+
+  virtual void SetStateForTesting(DownloadState state);
+  virtual void SetDownloadUrlForTesting(const GURL& url);
 
   // Returns the most recent interrupt reason for this download. Returns
   // |DOWNLOAD_INTERRUPT_REASON_NONE| if there is no previous interrupt reason.
@@ -276,9 +276,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // user triggered resumption.
   virtual int32_t GetAutoResumeCount() const = 0;
 
-  // Whether the download is off the record.
-  virtual bool IsOffTheRecord() const = 0;
-
   //    Origin State accessors -------------------------------------------------
 
   // Final URL. The primary resource being downloaded is from this URL. This is
@@ -310,7 +307,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   virtual const GURL& GetTabReferrerUrl() const = 0;
 
   // Origin of the original originator of this download, before redirects, etc.
-  virtual const absl::optional<url::Origin>& GetRequestInitiator() const = 0;
+  virtual const std::optional<url::Origin>& GetRequestInitiator() const = 0;
 
   // For downloads initiated via <a download>, this is the suggested download
   // filename from the download attribute.
@@ -359,8 +356,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   virtual ::network::mojom::CredentialsMode GetCredentialsMode() const = 0;
 
   // The isolation mode of the request.
-  virtual const absl::optional<net::IsolationInfo>& GetIsolationInfo()
-      const = 0;
+  virtual const std::optional<net::IsolationInfo>& GetIsolationInfo() const = 0;
 
   //    Destination State accessors --------------------------------------------
 
@@ -443,14 +439,20 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // Gets the pointer to the DownloadFile owned by this object.
   virtual DownloadFile* GetDownloadFile() = 0;
 
-  // Gets a handler to perform the rename for a download item.  If no special
-  // rename handling is required, this function returns null and the default
-  // rename handling is performed.  The caller does not own the returned
-  // pointer.
+  // Gets a handler to perform the rename for a download item. Returns nullptr
+  // if no special rename handling is required.
   virtual DownloadItemRenameHandler* GetRenameHandler() = 0;
 
-  // Gets the metadata needed to recover rename handler state.
-  virtual const DownloadItemRerouteInfo& GetRerouteInfo() const = 0;
+#if BUILDFLAG(IS_ANDROID)
+  // Gets whether the download is triggered from external app.
+  virtual bool IsFromExternalApp() = 0;
+
+  // Whether the original URL can be auto opened after download. Certain
+  // download shouldn't be auto-opened after completion, e.g. triggered by
+  // context menu or from the download service, or has "content-disposition:
+  // attachment" in header.
+  virtual bool AllowAutoOpenAfterCompletion() = 0;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   //    Progress State accessors -----------------------------------------------
 
@@ -474,7 +476,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // final name.
   virtual bool AllDataSaved() const = 0;
 
-  // Total number of expected bytes. Returns -1 if the total size is unknown.
+  // Total number of expected bytes. Returns 0 if the total size is unknown.
   virtual int64_t GetTotalBytes() const = 0;
 
   // Total number of bytes that have been received and written to the download
@@ -484,6 +486,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // Return the slices that have been received so far, ordered by their offset.
   // This is only used when parallel downloading is enabled.
   virtual const std::vector<ReceivedSlice>& GetReceivedSlices() const = 0;
+
+  // Total number of bytes that have been uploaded to the cloud.
+  virtual int64_t GetUploadedBytes() const = 0;
 
   // Time the download was first started. This timestamp is always valid and
   // doesn't change.
@@ -546,8 +551,8 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItem : public base::SupportsUserData {
   // the test are available. This should only be called after AllDataSaved() is
   // true. If |reason| is not DOWNLOAD_INTERRUPT_REASON_NONE, then the download
   // file should be blocked.
-  // TODO(crbug.com/733291): Move DownloadInterruptReason out of here and add a
-  // new  Interrupt method instead. Same for other methods supporting
+  // TODO(crbug.com/40525770): Move DownloadInterruptReason out of here and add
+  // a new  Interrupt method instead. Same for other methods supporting
   // interruptions.
   virtual void OnContentCheckCompleted(DownloadDangerType danger_type,
                                        DownloadInterruptReason reason) = 0;

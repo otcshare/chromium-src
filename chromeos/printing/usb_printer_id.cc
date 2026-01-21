@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/strings/string_split.h"
 
 namespace chromeos {
@@ -19,30 +18,36 @@ const char kModel[] = "MODEL";
 const char kModelAbbr[] = "MDL";
 const char kCommandSet[] = "COMMAND SET";
 const char kCommandSetAbbr[] = "CMD";
+const char kChromeOsRawId[] = "CHROMEOS_RAW_ID";
 
 UsbPrinterId::UsbPrinterId(base::span<const uint8_t> device_id_data) {
   // Build mapping.
   id_mappings_ = BuildDeviceIdMapping(device_id_data);
 
+  // Save original ID.
+  if (id_mappings_.contains(kChromeOsRawId)) {
+    raw_id_ = id_mappings_[kChromeOsRawId].front();
+  }
+
   // Save required mappings.
   // Save make_.
-  if (base::Contains(id_mappings_, kManufacturer)) {
+  if (id_mappings_.contains(kManufacturer)) {
     make_ = id_mappings_[kManufacturer].front();
-  } else if (base::Contains(id_mappings_, kManufacturerAbbr)) {
+  } else if (id_mappings_.contains(kManufacturerAbbr)) {
     make_ = id_mappings_[kManufacturerAbbr].front();
   }
 
   // Save model_.
-  if (base::Contains(id_mappings_, kModel)) {
+  if (id_mappings_.contains(kModel)) {
     model_ = id_mappings_[kModel].front();
-  } else if (base::Contains(id_mappings_, kModelAbbr)) {
+  } else if (id_mappings_.contains(kModelAbbr)) {
     model_ = id_mappings_[kModelAbbr].front();
   }
 
   // Save command_set_.
-  if (base::Contains(id_mappings_, kCommandSet)) {
+  if (id_mappings_.contains(kCommandSet)) {
     command_set_ = id_mappings_[kCommandSet];
-  } else if (base::Contains(id_mappings_, kCommandSetAbbr)) {
+  } else if (id_mappings_.contains(kCommandSetAbbr)) {
     command_set_ = id_mappings_[kCommandSetAbbr];
   }
 }
@@ -81,6 +86,7 @@ std::map<std::string, std::vector<std::string>> BuildDeviceIdMapping(
 
     ret[term.first] = values;
   }
+  ret[kChromeOsRawId].emplace_back(std::move(printer_id));
 
   return ret;
 }

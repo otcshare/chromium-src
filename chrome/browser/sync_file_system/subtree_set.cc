@@ -5,7 +5,6 @@
 #include "chrome/browser/sync_file_system/subtree_set.h"
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 #include "storage/common/file_system/file_system_util.h"
 
@@ -22,18 +21,18 @@ SubtreeSet::Node::Node(bool contained_as_subtree_root,
       number_of_subtrees_below(number_of_subtrees_below) {
 }
 
-SubtreeSet::SubtreeSet() {}
+SubtreeSet::SubtreeSet() = default;
 SubtreeSet::SubtreeSet(const SubtreeSet& other) = default;
-SubtreeSet::~SubtreeSet() {}
+SubtreeSet::~SubtreeSet() = default;
 
 bool SubtreeSet::IsDisjointWith(const base::FilePath& subtree_root) const {
   base::FilePath::StringType normalized_subtree_root =
       storage::VirtualPath::GetNormalizedFilePath(subtree_root);
 
   // Check if |subtree_root| contains any of subtrees in the container.
-  if (base::Contains(inclusive_ancestors_of_subtree_roots_,
-                     normalized_subtree_root))
+  if (inclusive_ancestors_of_subtree_roots_.contains(normalized_subtree_root)) {
     return false;
+  }
 
   base::FilePath path(normalized_subtree_root);
   while (!storage::VirtualPath::IsRootPath(path)) {
@@ -90,7 +89,6 @@ bool SubtreeSet::erase(const base::FilePath& subtree_root) {
     auto found = inclusive_ancestors_of_subtree_roots_.find(path.value());
     if (found == inclusive_ancestors_of_subtree_roots_.end()) {
       NOTREACHED();
-      continue;
     }
 
     DCHECK(!found->second.contained_as_subtree_root);

@@ -5,14 +5,14 @@
 #ifndef CHROME_BROWSER_MEDIA_WEBRTC_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
 #define CHROME_BROWSER_MEDIA_WEBRTC_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
+#include "chrome/browser/media/webrtc/select_audio_output_picker.h"
 #include "components/webrtc/media_stream_device_enumerator_impl.h"
 #include "content/public/browser/media_observer.h"
 #include "content/public/browser/media_stream_request.h"
@@ -20,9 +20,10 @@
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
+class Browser;
+class DesktopCaptureAccessHandler;
 class MediaAccessHandler;
 class MediaStreamCaptureIndicator;
-class Profile;
 
 namespace extensions {
 class Extension;
@@ -60,7 +61,7 @@ class MediaCaptureDevicesDispatcher
     virtual void OnCreatingAudioStream(int render_process_id,
                                        int render_frame_id) {}
 
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   static MediaCaptureDevicesDispatcher* GetInstance();
@@ -89,15 +90,22 @@ class MediaCaptureDevicesDispatcher
                                  content::MediaResponseCallback callback,
                                  const extensions::Extension* extension);
 
+#if defined(TOOLKIT_VIEWS)
+  void ProcessSelectAudioOutputRequest(
+      Browser* browser,
+      const content::SelectAudioOutputRequest& request,
+      content::SelectAudioOutputCallback callback);
+#endif
+
   // Method called from WebCapturerDelegate implementations to check media
   // access permission. Note that this does not query the user.
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
-                                  const GURL& security_origin,
+                                  const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type);
 
   // Same as above but for an |extension|, which may not be NULL.
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
-                                  const GURL& security_origin,
+                                  const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type,
                                   const extensions::Extension* extension);
 
@@ -106,23 +114,17 @@ class MediaCaptureDevicesDispatcher
   // signleton.
   void DisableDeviceEnumerationForTesting();
 
-  // Helper to get default device IDs. If the returned value is an empty string,
-  // it means that there is no default device for the given device |type|. The
-  // only supported |type| values are
-  // blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE and
-  // blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE.
-  // Must be called on the UI thread.
-  std::string GetDefaultDeviceIDForProfile(Profile* profile,
-                                           blink::mojom::MediaStreamType type);
-
   // webrtc::MediaStreamDeviceEnumeratorImpl:
   const blink::MediaStreamDevices& GetAudioCaptureDevices() const override;
   const blink::MediaStreamDevices& GetVideoCaptureDevices() const override;
-  void GetDefaultDevicesForBrowserContext(
-      content::BrowserContext* context,
-      bool audio,
-      bool video,
-      blink::mojom::StreamDevices& devices) override;
+  const std::optional<blink::MediaStreamDevice>
+  GetPreferredAudioDeviceForBrowserContext(
+      content::BrowserContext* browser_context,
+      const std::vector<std::string>& eligible_audio_device_ids) const override;
+  const std::optional<blink::MediaStreamDevice>
+  GetPreferredVideoDeviceForBrowserContext(
+      content::BrowserContext* browser_context,
+      const std::vector<std::string>& eligible_video_device_ids) const override;
 
   // content::MediaObserver:
   void OnAudioCaptureDevicesChanged() override;
@@ -152,6 +154,10 @@ class MediaCaptureDevicesDispatcher
   // Only for testing.
   void SetTestAudioCaptureDevices(const blink::MediaStreamDevices& devices);
   void SetTestVideoCaptureDevices(const blink::MediaStreamDevices& devices);
+
+  DesktopCaptureAccessHandler* desktop_capture_access_handler_for_test() {
+    return desktop_capture_access_handler_for_test_;
+  }
 
  private:
   friend class MediaCaptureDevicesDispatcherTest;
@@ -190,10 +196,16 @@ class MediaCaptureDevicesDispatcher
   // Flag used by unittests to disable device enumeration.
   bool is_device_enumeration_disabled_;
 
+  std::unique_ptr<SelectAudioOutputPicker> picker_views_;
+
   scoped_refptr<MediaStreamCaptureIndicator> media_stream_capture_indicator_;
 
   // Handlers for processing media access requests.
   std::vector<std::unique_ptr<MediaAccessHandler>> media_access_handlers_;
+
+  // Only for testing, the desktop capture access handler, if one exists.
+  raw_ptr<DesktopCaptureAccessHandler>
+      desktop_capture_access_handler_for_test_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_MEDIA_WEBRTC_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_

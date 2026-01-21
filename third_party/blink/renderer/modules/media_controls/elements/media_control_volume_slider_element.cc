@@ -84,10 +84,10 @@ MediaControlVolumeSliderElement::MediaControlVolumeSliderElement(
     : MediaControlSliderElement(media_controls),
       wheel_event_listener_(
           MakeGarbageCollected<WheelEventListener>(this, container)) {
-  setAttribute(html_names::kMaxAttr, "1");
-  setAttribute(html_names::kAriaValuemaxAttr, "100");
-  setAttribute(html_names::kAriaValueminAttr, "0");
-  setAttribute(html_names::kAriaLabelAttr, "volume");
+  setAttribute(html_names::kMaxAttr, AtomicString("1"));
+  setAttribute(html_names::kAriaValuemaxAttr, AtomicString("100"));
+  setAttribute(html_names::kAriaValueminAttr, AtomicString("0"));
+  setAttribute(html_names::kAriaLabelAttr, AtomicString("volume"));
   SetShadowPseudoId(AtomicString("-webkit-media-controls-volume-slider"));
   SetVolumeInternal(MediaElement().volume());
 
@@ -104,12 +104,12 @@ void MediaControlVolumeSliderElement::SetVolume(double volume) {
 
 void MediaControlVolumeSliderElement::OpenSlider() {
   wheel_event_listener_->StartListening();
-  classList().Remove(kClosedCSSClass);
+  classList().Remove(AtomicString(kClosedCSSClass));
 }
 
 void MediaControlVolumeSliderElement::CloseSlider() {
   wheel_event_listener_->StopListening();
-  classList().Add(kClosedCSSClass);
+  classList().Add(AtomicString(kClosedCSSClass));
 }
 
 bool MediaControlVolumeSliderElement::WillRespondToMouseMoveEvents() const {
@@ -171,7 +171,7 @@ void MediaControlVolumeSliderElement::SetVolumeInternal(double volume) {
   SetAfterSegmentPosition(MediaControlSliderElement::Position(0, volume));
   int percent_vol = 100 * volume;
   setAttribute(html_names::kAriaValuenowAttr,
-               WTF::AtomicString::Number(percent_vol));
+               AtomicString::Number(percent_vol));
 }
 
 bool MediaControlVolumeSliderElement::KeepEventInNode(

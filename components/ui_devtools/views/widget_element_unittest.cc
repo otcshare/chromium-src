@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "components/ui_devtools/protocol.h"
 #include "components/ui_devtools/root_element.h"
 #include "components/ui_devtools/ui_devtools_unittest_utils.h"
@@ -46,7 +47,8 @@ class WidgetElementTest : public views::ViewsTestBase {
 
     widget_ = new views::Widget;
     views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW);
+        CreateParams(views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+                     views::Widget::InitParams::TYPE_WINDOW);
     params.name = kWidgetName;
     widget_->Init(std::move(params));
 
@@ -81,7 +83,7 @@ class WidgetElementTest : public views::ViewsTestBase {
   }
 
  private:
-  views::Widget* widget_ = nullptr;
+  raw_ptr<views::Widget, DanglingUntriaged> widget_ = nullptr;
   std::unique_ptr<WidgetElement> element_;
   std::unique_ptr<MockWidgetElementDelegate> delegate_;
 };
@@ -157,6 +159,13 @@ TEST_F(WidgetElementTest, GetNodeWindowAndScreenBounds) {
       element()->GetNodeWindowAndScreenBounds();
   EXPECT_EQ(widget()->GetNativeWindow(), window_and_bounds.first);
   EXPECT_EQ(widget()->GetWindowBoundsInScreen(), window_and_bounds.second);
+}
+
+TEST_F(WidgetElementTest, GetNodeBoundsInScreen) {
+  gfx::Rect test_bounds(10, 20, 300, 400);
+  widget()->SetBounds(test_bounds);
+  EXPECT_EQ(widget()->GetWindowBoundsInScreen(),
+            element()->GetNodeBoundsInScreen());
 }
 
 TEST_F(WidgetElementTest, TrackNonParentedElementLifetime) {

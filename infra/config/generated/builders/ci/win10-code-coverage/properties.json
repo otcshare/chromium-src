@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/ci/win10-code-coverage/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -10,8 +13,7 @@
               "project": "chromium"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-fyi-archive",
-              "builder_group": "chromium.fyi",
+              "builder_group": "chromium.coverage",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
                 "apply_configs": [
@@ -19,7 +21,8 @@
                 ],
                 "build_config": "Release",
                 "config": "chromium",
-                "target_bits": 64
+                "target_bits": 64,
+                "target_platform": "win"
               },
               "legacy_gclient_config": {
                 "apply_configs": [
@@ -37,7 +40,14 @@
           "builder": "win10-code-coverage",
           "project": "chromium"
         }
-      ]
+      ],
+      "mirroring_builder_group_and_names": [
+        {
+          "builder": "win10-code-coverage",
+          "group": "tryserver.chromium.win"
+        }
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/ci/win10-code-coverage/targets"
     }
   },
   "$build/code_coverage": {
@@ -48,10 +58,16 @@
     "export_coverage_to_zoss": true,
     "use_clang_coverage": true
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-trusted",
-    "jobs": 250,
-    "metrics_project": "chromium-reclient-metrics"
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-trusted",
+    "remote_jobs": 250
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -60,6 +76,6 @@
       "v.test_suite"
     ]
   },
-  "builder_group": "chromium.fyi",
+  "builder_group": "chromium.coverage",
   "recipe": "chromium"
 }

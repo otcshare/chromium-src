@@ -4,36 +4,45 @@
 
 #include "components/memory_pressure/multi_source_memory_pressure_monitor.h"
 
+#include <optional>
+
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace memory_pressure {
 
+TEST(MultiSourceMemoryPressureMonitorTest, NoEvaluatorUponConstruction) {
+  MultiSourceMemoryPressureMonitor monitor;
+  EXPECT_FALSE(monitor.system_evaluator_for_testing());
+}
+
 TEST(MultiSourceMemoryPressureMonitorTest, RunDispatchCallback) {
+#if BUILDFLAG(IS_FUCHSIA)
+  // On Fuchsia, the previous SingleThreadTaskEnvironment was sufficient.
   base::test::SingleThreadTaskEnvironment task_environment(
       base::test::TaskEnvironment::MainThreadType::IO);
+#else
+  // On other platforms (like Mac), the full TaskEnvironment is needed for the
+  // ThreadPool.
+  base::test::TaskEnvironment task_environment;
+#endif
 
   MultiSourceMemoryPressureMonitor monitor;
-  monitor.Start();
-  auto* aggregator = monitor.aggregator_for_testing();
-
   bool callback_called = false;
-  monitor.SetDispatchCallback(base::BindLambdaForTesting(
-      [&](base::MemoryPressureListener::MemoryPressureLevel) {
-        callback_called = true;
-      }));
-  aggregator->OnVoteForTesting(
-      absl::nullopt, base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE);
+  monitor.SetDispatchCallbackForTesting(base::BindLambdaForTesting(
+      [&](base::MemoryPressureLevel) { callback_called = true; }));
+  monitor.MaybeStartPlatformVoter();
+  auto* const aggregator = monitor.aggregator_for_testing();
+
+  aggregator->OnVoteForTesting(std::nullopt, base::MEMORY_PRESSURE_LEVEL_NONE);
   aggregator->NotifyListenersForTesting();
   EXPECT_TRUE(callback_called);
 
   // Clear vote so aggregator's destructor doesn't think there are loose voters.
-  aggregator->OnVoteForTesting(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE, absl::nullopt);
+  aggregator->OnVoteForTesting(base::MEMORY_PRESSURE_LEVEL_NONE, std::nullopt);
 }
 
 }  // namespace memory_pressure

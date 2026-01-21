@@ -6,8 +6,9 @@
 
 #include <dlfcn.h>
 
-#include "base/lazy_instance.h"
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "third_party/apple_apsl/dnsinfo.h"
 
 namespace {
@@ -51,8 +52,8 @@ class DnsInfoApi {
 };
 
 const DnsInfoApi& GetDnsInfoApi() {
-  static base::LazyInstance<DnsInfoApi>::Leaky api = LAZY_INSTANCE_INITIALIZER;
-  return api.Get();
+  static base::NoDestructor<DnsInfoApi> api;
+  return *api;
 }
 
 struct DnsConfigTDeleter {
@@ -75,7 +76,14 @@ bool DnsConfigWatcher::Watch(
                         callback);
 }
 
-// static
+// `dns_config->resolver` contains an array of pointers but is not correctly
+// aligned. Pointers, on 64-bit, have 8-byte alignment but everything in
+// dnsinfo.h is modified to have 4-byte alignment with pragma pack. Those
+// pragmas are not sufficient to realign the `dns_resolver_t*` elements of
+// `dns_config->resolver`. The header would need to be patched to replace
+// `dns_resolver_t**` with, say, a `dns_resolver_ptr*` where `dns_resolver_ptr`
+// is a less aligned `dns_resolver_t*` type.
+NO_SANITIZE("alignment")
 bool DnsConfigWatcher::CheckDnsConfig(bool& out_unhandled_options) {
   if (!GetDnsInfoApi().dns_configuration_copy)
     return false;
@@ -88,11 +96,12 @@ bool DnsConfigWatcher::CheckDnsConfig(bool& out_unhandled_options) {
   // DnsClient can't handle domain-specific unscoped resolvers.
   unsigned num_resolvers = 0;
   for (int i = 0; i < dns_config->n_resolver; ++i) {
-    dns_resolver_t* resolver = dns_config->resolver[i];
+    dns_resolver_t* resolver = UNSAFE_TODO(dns_config->resolver[i]);
     if (!resolver->n_nameserver)
       continue;
-    if (resolver->options && !strcmp(resolver->options, "mdns"))
+    if (resolver->options && !UNSAFE_TODO(strcmp(resolver->options, "mdns"))) {
       continue;
+    }
     ++num_resolvers;
   }
 

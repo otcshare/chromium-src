@@ -11,6 +11,7 @@
 #include "base/files/scoped_file.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "mojo/core/ipcz_driver/validate_enum.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "third_party/ipcz/include/ipcz/ipcz.h"
 
@@ -23,9 +24,10 @@
 
 #if BUILDFLAG(IS_APPLE)
 #include <mach/mach.h>
+#include <sys/fileport.h>
 
-#include "base/mac/mach_logging.h"
-#include "base/mac/scoped_mach_port.h"
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
 #endif
 
 namespace mojo::core::ipcz_driver {
@@ -50,6 +52,14 @@ enum class WrapperType : uint32_t {
   // back to a file descriptor.
   kIndirectFileDescriptor,
 #endif
+
+  // For ValidateEnum().
+  kMinValue = kTransmissible,
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_APPLE)
+  kMaxValue = kIndirectFileDescriptor,
+#else
+  kMaxValue = kTransmissible,
+#endif
 };
 
 // Header for a serialized WrappedPlatformHandle object.
@@ -60,6 +70,8 @@ struct IPCZ_ALIGN(8) WrappedPlatformHandleHeader {
   // Indicates what specific type of handle is wrapped.
   WrapperType type;
 };
+static_assert(sizeof(WrappedPlatformHandleHeader) == 8,
+              "Invalid WrappedPlatformHandleHeader size");
 
 #if BUILDFLAG(IS_FUCHSIA)
 PlatformHandle MakeFDTransmissible(base::ScopedFD fd) {
@@ -84,15 +96,11 @@ base::ScopedFD RecoverFDFromTransmissible(PlatformHandle handle) {
   return fd;
 }
 #elif BUILDFLAG(IS_APPLE)
-extern "C" {
-kern_return_t fileport_makeport(int fd, mach_port_t*);
-int fileport_makefd(mach_port_t);
-}  // extern "C"
 
 PlatformHandle MakeFDTransmissible(base::ScopedFD fd) {
-  base::mac::ScopedMachSendRight port;
+  base::apple::ScopedMachSendRight port;
   kern_return_t kr = fileport_makeport(
-      fd.get(), base::mac::ScopedMachSendRight::Receiver(port).get());
+      fd.get(), base::apple::ScopedMachSendRight::Receiver(port).get());
   if (kr != KERN_SUCCESS) {
     MACH_LOG(ERROR, kr) << "fileport_makeport";
     return {};
@@ -169,7 +177,11 @@ scoped_refptr<WrappedPlatformHandle> WrappedPlatformHandle::Deserialize(
 
   const auto& header =
       *reinterpret_cast<const WrappedPlatformHandleHeader*>(data.data());
-  if (header.size < sizeof(header)) {
+  const size_t header_size = header.size;
+  if (header_size < sizeof(header) || header_size % 8 != 0) {
+    return nullptr;
+  }
+  if (!ValidateEnum(header.type)) {
     return nullptr;
   }
 
@@ -185,7 +197,8 @@ scoped_refptr<WrappedPlatformHandle> WrappedPlatformHandle::Deserialize(
 #endif
 
     default:
-      return nullptr;
+      // Validated at head of function.
+      NOTREACHED();
   }
 
   if (!handle.is_valid()) {

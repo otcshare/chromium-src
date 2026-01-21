@@ -6,17 +6,20 @@
 #define COMPONENTS_POLICY_CORE_COMMON_CLOUD_CLOUD_POLICY_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/component_cloud_policy_service.h"
+#include "components/policy/core/common/cloud/dm_token.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_export.h"
 #include "components/prefs/pref_member.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 
 namespace base {
@@ -44,7 +47,8 @@ class POLICY_EXPORT CloudPolicyManager
   CloudPolicyManager(
       const std::string& policy_type,
       const std::string& settings_entity_id,
-      CloudPolicyStore* cloud_policy_store,
+      std::unique_ptr<CloudPolicyStore> cloud_policy_store,
+      std::unique_ptr<CloudPolicyStore> extension_install_store,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner,
       network::NetworkConnectionTrackerGetter
           network_connection_tracker_getter);
@@ -58,16 +62,29 @@ class POLICY_EXPORT CloudPolicyManager
     return component_policy_service_.get();
   }
 
+  // Returns the DM Token, if it exists.
+  std::optional<policy::DMToken> GetDMToken() const;
+
+  // Returns the client ID, if it exists.
+  std::optional<std::string> GetClientId() const;
+
   // Returns true if the underlying CloudPolicyClient is already registered.
   // Virtual for mocking.
   virtual bool IsClientRegistered() const;
+
+  virtual void Connect(PrefService* local_state,
+                       std::unique_ptr<CloudPolicyClient> client) {}
+
+  // Shuts down the CloudPolicyManager (removes and stops refreshing any
+  // cached cloud policy).
+  virtual void DisconnectAndRemovePolicy() {}
 
   // ConfigurationPolicyProvider:
   void Init(SchemaRegistry* registry) override;
   void Shutdown() override;
   bool IsInitializationComplete(PolicyDomain domain) const override;
   bool IsFirstPolicyLoadComplete(PolicyDomain domain) const override;
-  void RefreshPolicies() override;
+  void RefreshPolicies(PolicyFetchReason reason) override;
 
   // CloudPolicyStore::Observer:
   void OnStoreLoaded(CloudPolicyStore* cloud_policy_store) override;
@@ -77,6 +94,9 @@ class POLICY_EXPORT CloudPolicyManager
   void OnComponentCloudPolicyUpdated() override;
 
  protected:
+  // Returns true if policy can be published now.
+  bool CanPublishPolicy() const;
+
   // Check whether fully initialized and if so, publish policy by calling
   // ConfigurationPolicyStore::UpdatePolicy().
   void CheckAndPublishPolicy();
@@ -85,6 +105,12 @@ class POLICY_EXPORT CloudPolicyManager
   // by subclasses that want to post-process policy before publishing it. The
   // default implementation just copies over |store()->policy_map()|.
   virtual void GetChromePolicy(PolicyMap* policy_map);
+
+  // Writes extension install policy into |policy_map|. This is intended to be
+  // overridden by subclasses that want to post-process policy before
+  // publishing it. The default implementation just copies over
+  // |extension_install_store()->policy_map()|.
+  virtual void GetExtensionInstallPolicy(PolicyMap* policy_map);
 
   void CreateComponentCloudPolicyService(
       const std::string& policy_type,
@@ -97,17 +123,39 @@ class POLICY_EXPORT CloudPolicyManager
   // Convenience accessors to core() components.
   CloudPolicyClient* client() { return core_.client(); }
   const CloudPolicyClient* client() const { return core_.client(); }
-  CloudPolicyStore* store() { return core_.store(); }
-  const CloudPolicyStore* store() const { return core_.store(); }
+  CloudPolicyStore* store() { return store_.get(); }
+  const CloudPolicyStore* store() const { return store_.get(); }
+  CloudPolicyStore* extension_install_store() {
+    return extension_install_store_.get();
+  }
+  const CloudPolicyStore* extension_install_store() const {
+    return extension_install_store_.get();
+  }
   CloudPolicyService* service() { return core_.service(); }
   const CloudPolicyService* service() const { return core_.service(); }
+
+  CloudPolicyService* extension_install_service() {
+    return core_.extension_install_service();
+  }
+  const CloudPolicyService* extension_install_service() const {
+    return core_.extension_install_service();
+  }
 
  private:
   // Completion handler for policy refresh operations.
   void OnRefreshComplete(bool success);
 
+  std::unique_ptr<CloudPolicyStore> store_;
+  std::unique_ptr<CloudPolicyStore> extension_install_store_;
   CloudPolicyCore core_;
   std::unique_ptr<ComponentCloudPolicyService> component_policy_service_;
+
+  // Has component policy ever been published.
+  //
+  // Note that this flag is put here instead of ComponentCloudPolicyService
+  // because it's policy provider's duty to publish latest policy values. Hence
+  // lower level class doesn't need to know or maintain such state.
+  bool is_component_policy_published_ = false;
 
   // Whether there's a policy refresh operation pending, in which case all
   // policy update notifications are deferred until after it completes.

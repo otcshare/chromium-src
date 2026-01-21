@@ -5,7 +5,6 @@
 #include "components/metrics/metrics_provider.h"
 
 #include "base/notreached.h"
-#include "components/metrics/metrics_features.h"
 #include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
 namespace metrics {
@@ -28,9 +27,7 @@ bool MetricsProvider::ProvideHistograms() {
 }
 
 void MetricsProvider::OnDidCreateMetricsLog() {
-  if (base::FeatureList::IsEnabled(features::kEmitHistogramsEarlier)) {
-    emitted_ = ProvideHistograms();
-  }
+  emitted_ = ProvideHistograms();
 }
 
 void MetricsProvider::OnRecordingEnabled() {
@@ -44,11 +41,14 @@ void MetricsProvider::OnClientStateCleared() {}
 void MetricsProvider::OnAppEnterBackground() {
 }
 
+void MetricsProvider::OnPageLoadStarted() {}
+
 bool MetricsProvider::HasIndependentMetrics() {
   return false;
 }
 
 void MetricsProvider::ProvideIndependentMetrics(
+    base::OnceClosure serialize_log_callback,
     base::OnceCallback<void(bool)> done_callback,
     ChromeUserMetricsExtension* uma_proto,
     base::HistogramSnapshotManager* snapshot_manager) {
@@ -80,8 +80,7 @@ void MetricsProvider::ProvideCurrentSessionData(
     ChromeUserMetricsExtension* uma_proto) {
   ProvideStabilityMetrics(uma_proto->mutable_system_profile());
 
-  if (!base::FeatureList::IsEnabled(features::kEmitHistogramsEarlier) ||
-      !emitted_) {
+  if (!emitted_) {
     ProvideHistograms();
   }
 }

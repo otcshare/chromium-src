@@ -4,23 +4,22 @@
 
 #include "components/paint_preview/player/player_compositor_delegate.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
-#include "base/memory/memory_pressure_monitor.h"
-#include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "base/unguessable_token.h"
+#include "base/version.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/browser/warm_compositor.h"
 #include "components/paint_preview/common/proto/paint_preview.pb.h"
@@ -30,8 +29,10 @@
 #include "components/paint_preview/public/paint_preview_compositor_client.h"
 #include "components/paint_preview/public/paint_preview_compositor_service.h"
 #include "components/services/paint_preview_compositor/public/mojom/paint_preview_compositor.mojom.h"
+#include "components/version_info/version_info.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -41,10 +42,17 @@ namespace {
 
 std::pair<base::UnguessableToken, std::unique_ptr<HitTester>> BuildHitTester(
     const PaintPreviewFrameProto& proto) {
-  std::pair<base::UnguessableToken, std::unique_ptr<HitTester>> out(
+  std::optional<base::UnguessableToken> embedding_token =
       base::UnguessableToken::Deserialize(proto.embedding_token_high(),
-                                          proto.embedding_token_low()),
-      std::make_unique<HitTester>());
+                                          proto.embedding_token_low());
+  // TODO(crbug.com/40252979): Investigate whether a deserialization
+  // failure can actually occur here and if it can, add a comment discussing how
+  // this can happen.
+  if (!embedding_token.has_value()) {
+    embedding_token = base::UnguessableToken::Create();
+  }
+  std::pair<base::UnguessableToken, std::unique_ptr<HitTester>> out(
+      embedding_token.value(), std::make_unique<HitTester>());
   out.second->Build(proto);
   return out;
 }
@@ -65,21 +73,6 @@ BuildHitTesters(std::unique_ptr<PaintPreviewProto> proto) {
       std::move(hit_testers));
 }
 
-absl::optional<base::ReadOnlySharedMemoryRegion> ToReadOnlySharedMemory(
-    paint_preview::PaintPreviewProto&& proto) {
-  TRACE_EVENT0("paint_preview", "PaintPreviewProto ToReadOnlySharedMemory");
-  auto region = base::WritableSharedMemoryRegion::Create(proto.ByteSizeLong());
-  if (!region.IsValid())
-    return absl::nullopt;
-
-  auto mapping = region.Map();
-  if (!mapping.IsValid())
-    return absl::nullopt;
-
-  proto.SerializeToArray(mapping.memory(), mapping.size());
-  return base::WritableSharedMemoryRegion::ConvertToReadOnly(std::move(region));
-}
-
 paint_preview::mojom::PaintPreviewBeginCompositeRequestPtr
 PrepareCompositeRequest(std::unique_ptr<CaptureResult> capture_result) {
   TRACE_EVENT0("paint_preview", "PaintPreview PrepareCompositeRequest");
@@ -92,13 +85,8 @@ PrepareCompositeRequest(std::unique_ptr<CaptureResult> capture_result) {
   if (begin_composite_request->recording_map.empty())
     return nullptr;
 
-  auto read_only_proto =
-      ToReadOnlySharedMemory(std::move(map_and_proto.second));
-  if (!read_only_proto) {
-    DVLOG(1) << "Failed to read proto to read-only shared memory.";
-    return nullptr;
-  }
-  begin_composite_request->proto = std::move(read_only_proto.value());
+  begin_composite_request->preview =
+      mojo_base::ProtoWrapper(std::move(map_and_proto.second));
   return begin_composite_request;
 }
 
@@ -127,24 +115,11 @@ void PlayerCompositorDelegate::Initialize(
     bool main_frame_mode,
     CompositorErrorCallback compositor_error,
     base::TimeDelta timeout_duration,
-    std::array<size_t, PressureLevelCount::kLevels> max_requests_map) {
+    int max_requests) {
   TRACE_EVENT0("paint_preview", "PlayerCompositorDelegate::Initialize");
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("paint_preview",
-                                    "PlayerCompositorDelegate CreateCompositor",
-                                    TRACE_ID_LOCAL(this));
-  auto* memory_monitor = memory_pressure_monitor();
-  // If the device is already under moderate memory pressure abort right away.
-  if (memory_monitor &&
-      memory_monitor->GetCurrentPressureLevel() >=
-          base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE) {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(compositor_error),
-                       static_cast<int>(
-                           CompositorStatus::SKIPPED_DUE_TO_MEMORY_PRESSURE)));
-    return;
-  }
-
+  TRACE_EVENT_BEGIN("paint_preview",
+                    "PlayerCompositorDelegate CreateCompositor",
+                    perfetto::Track::FromPointer(this));
   paint_preview_compositor_service_ =
       WarmCompositor::GetInstance()->GetOrStartCompositorService(base::BindOnce(
           &PlayerCompositorDelegate::OnCompositorServiceDisconnected,
@@ -152,7 +127,7 @@ void PlayerCompositorDelegate::Initialize(
 
   InitializeInternal(paint_preview_service, expected_url, key, main_frame_mode,
                      std::move(compositor_error), timeout_duration,
-                     std::move(max_requests_map));
+                     max_requests);
 }
 
 void PlayerCompositorDelegate::SetCaptureResult(
@@ -167,7 +142,7 @@ void PlayerCompositorDelegate::InitializeWithFakeServiceForTest(
     bool main_frame_mode,
     CompositorErrorCallback compositor_error,
     base::TimeDelta timeout_duration,
-    std::array<size_t, PressureLevelCount::kLevels> max_requests_map,
+    int max_requests,
     std::unique_ptr<PaintPreviewCompositorService, base::OnTaskRunnerDeleter>
         fake_compositor_service) {
   paint_preview_compositor_service_ = std::move(fake_compositor_service);
@@ -177,7 +152,7 @@ void PlayerCompositorDelegate::InitializeWithFakeServiceForTest(
 
   InitializeInternal(paint_preview_service, expected_url, key, main_frame_mode,
                      std::move(compositor_error), timeout_duration,
-                     std::move(max_requests_map));
+                     max_requests);
 }
 
 void PlayerCompositorDelegate::InitializeInternal(
@@ -187,10 +162,8 @@ void PlayerCompositorDelegate::InitializeInternal(
     bool main_frame_mode,
     CompositorErrorCallback compositor_error,
     base::TimeDelta timeout_duration,
-    std::array<size_t, PressureLevelCount::kLevels> max_requests_map) {
-  max_requests_map_ = max_requests_map;
-  max_requests_ = max_requests_map_
-      [base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE];
+    int max_requests) {
+  max_requests_ = max_requests;
   main_frame_mode_ = main_frame_mode;
   compositor_error_ = std::move(compositor_error);
   paint_preview_service_ = paint_preview_service;
@@ -204,10 +177,6 @@ void PlayerCompositorDelegate::InitializeInternal(
       base::BindOnce(&PlayerCompositorDelegate::OnCompositorClientDisconnected,
                      weak_factory_.GetWeakPtr()));
 
-  memory_pressure_ = std::make_unique<base::MemoryPressureListener>(
-      FROM_HERE, base::DoNothing(),
-      base::BindRepeating(&PlayerCompositorDelegate::OnMemoryPressure,
-                          weak_factory_.GetWeakPtr()));
   if (!timeout_duration.is_inf() && !timeout_duration.is_zero()) {
     timeout_.Reset(
         base::BindOnce(&PlayerCompositorDelegate::OnCompositorTimeout,
@@ -218,7 +187,7 @@ void PlayerCompositorDelegate::InitializeInternal(
 }
 
 int32_t PlayerCompositorDelegate::RequestBitmap(
-    const absl::optional<base::UnguessableToken>& frame_guid,
+    const std::optional<base::UnguessableToken>& frame_guid,
     const gfx::Rect& clip_rect,
     float scale_factor,
     base::OnceCallback<void(mojom::PaintPreviewCompositor::BitmapStatus,
@@ -280,42 +249,22 @@ std::vector<const GURL*> PlayerCompositorDelegate::OnClick(
   return urls;
 }
 
-void PlayerCompositorDelegate::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  TRACE_EVENT1("paint_preview", "PlayerCompositorDelegate::OnMemoryPressure",
-               "memory_pressure_level",
-               static_cast<int>(memory_pressure_level));
+void PlayerCompositorDelegate::OnAllocationFailure() {
+  if (paint_preview_compositor_client_) {
+    paint_preview_compositor_client_.reset();
+  }
+
   if (paint_preview_compositor_service_) {
-    paint_preview_compositor_service_->OnMemoryPressure(memory_pressure_level);
+    paint_preview_compositor_service_.reset();
   }
 
-  DCHECK(memory_pressure_level >= 0 &&
-         static_cast<size_t>(memory_pressure_level) <
-             PressureLevelCount::kLevels);
-  max_requests_ = max_requests_map_[memory_pressure_level];
-  if (max_requests_ == 0 ||
-      memory_pressure_level ==
-          base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-    if (paint_preview_compositor_client_)
-      paint_preview_compositor_client_.reset();
-
-    if (paint_preview_compositor_service_)
-      paint_preview_compositor_service_.reset();
-
-    if (compositor_error_) {
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE,
-          base::BindOnce(
-              std::move(compositor_error_),
-              static_cast<int>(
-                  CompositorStatus::STOPPED_DUE_TO_MEMORY_PRESSURE)));
-    }
+  if (compositor_error_) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(compositor_error_),
+                       static_cast<int>(
+                           CompositorStatus::STOPPED_DUE_TO_MEMORY_PRESSURE)));
   }
-}
-
-base::MemoryPressureMonitor*
-PlayerCompositorDelegate::memory_pressure_monitor() {
-  return base::MemoryPressureMonitor::Get();
 }
 
 void PlayerCompositorDelegate::OnCompositorReadyStatusAdapter(
@@ -357,12 +306,12 @@ void PlayerCompositorDelegate::OnCompositorServiceDisconnected() {
 void PlayerCompositorDelegate::OnCompositorClientCreated(
     const GURL& expected_url,
     const DirectoryKey& key) {
-  TRACE_EVENT_NESTABLE_ASYNC_END0("paint_preview",
-                                  "PlayerCompositorDelegate CreateCompositor",
-                                  TRACE_ID_LOCAL(this));
+  TRACE_EVENT_END("paint_preview",
+                  /* PlayerCompositorDelegate CreateCompositor */
+                  perfetto::Track::FromPointer(this));
   if (!capture_result_) {
     paint_preview_service_->GetFileMixin()->GetCapturedPaintPreviewProto(
-        key, absl::nullopt,
+        key, std::nullopt,
         base::BindOnce(&PlayerCompositorDelegate::OnProtoAvailable,
                        weak_factory_.GetWeakPtr(), expected_url));
   } else {
@@ -421,7 +370,6 @@ void PlayerCompositorDelegate::ValidateProtoAndLoadAXTree(
     OnCompositorReady(CompositorStatus::UNEXPECTED_VERSION, nullptr, 0.0,
                       nullptr);
     NOTREACHED();
-    return;
   }
 
   auto proto_url = GURL(capture_result_->proto.metadata().url());
@@ -444,11 +392,12 @@ void PlayerCompositorDelegate::ValidateProtoAndLoadAXTree(
   // If the current Chrome version doesn't match the one in proto, we can't
   // use the AXTreeUpdate.
   auto chrome_version = capture_result_->proto.metadata().chrome_version();
+  const auto& current_chrome_version = version_info::GetVersion();
   if (capture_result_->proto.metadata().has_chrome_version() &&
-      chrome_version.major() == CHROME_VERSION_MAJOR &&
-      chrome_version.minor() == CHROME_VERSION_MINOR &&
-      chrome_version.build() == CHROME_VERSION_BUILD &&
-      chrome_version.patch() == CHROME_VERSION_PATCH) {
+      chrome_version.major() == current_chrome_version.components()[0] &&
+      chrome_version.minor() == current_chrome_version.components()[1] &&
+      chrome_version.build() == current_chrome_version.components()[2] &&
+      chrome_version.patch() == current_chrome_version.components()[3]) {
     paint_preview_service_->GetFileMixin()->GetAXTreeUpdate(
         key_, base::BindOnce(&PlayerCompositorDelegate::OnAXTreeUpdateAvailable,
                              weak_factory_.GetWeakPtr()));
@@ -479,7 +428,7 @@ void PlayerCompositorDelegate::SendCompositeRequest(
     mojom::PaintPreviewBeginCompositeRequestPtr begin_composite_request) {
   TRACE_EVENT0("paint_preview",
                "PlayerCompositorDelegate::SendCompositeRequest");
-  // TODO(crbug.com/1021590): Handle initialization errors.
+  // TODO(crbug.com/40106234): Handle initialization errors.
   if (!begin_composite_request) {
     OnCompositorReady(CompositorStatus::INVALID_REQUEST, nullptr, 0.0, nullptr);
     return;

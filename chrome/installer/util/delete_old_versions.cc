@@ -9,7 +9,6 @@
 #include <set>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/file_version_info.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
@@ -40,7 +39,8 @@ base::FilePath GetExecutableVersionDirName(const base::FilePath& exe_path) {
 // directories named after the version of chrome.exe or new_chrome.exe are
 // excluded.
 DirectorySet GetOldVersionDirectories(const base::FilePath& install_dir) {
-  // TODO(crbug/1182976): Delete old version directory from all known locations.
+  // TODO(crbug.com/40171016): Delete old version directory from all known
+  // locations.
   const base::FilePath new_chrome_exe_version_dir_name =
       GetExecutableVersionDirName(install_dir.Append(kChromeNewExe));
   const base::FilePath chrome_exe_version_dir_name =
@@ -88,7 +88,7 @@ bool DeleteDirectoriesWithoutMatchingExecutable(
   bool success = true;
   for (const base::FilePath& directory_name : directories) {
     // Delete the directory if it doesn't have a matching executable.
-    if (!base::Contains(executables, directory_name)) {
+    if (!executables.contains(directory_name)) {
       const base::FilePath directory_path = install_dir.Append(directory_name);
       LOG(WARNING) << "Attempting to delete stray directory "
                    << directory_path.value();
@@ -114,8 +114,9 @@ bool DeleteExecutablesWithoutMatchingDirectory(
     const auto& executables_for_version = version_and_executables.second;
 
     // Don't delete the executables if they have a matching directory.
-    if (base::Contains(directories, version_dir_name))
+    if (directories.contains(version_dir_name)) {
       continue;
+    }
 
     // Delete executables for version |version_dir_name|.
     for (const auto& executable_path : executables_for_version) {

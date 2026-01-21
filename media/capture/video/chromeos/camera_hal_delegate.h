@@ -7,25 +7,27 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 
 #include "base/containers/flat_map.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/threading/sequence_bound.h"
 #include "base/threading/thread.h"
 #include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
+#include "media/capture/video/chromeos/mojo_service_manager_observer.h"
 #include "media/capture/video/chromeos/mojom/camera3.mojom.h"
 #include "media/capture/video/chromeos/mojom/camera_common.mojom.h"
 #include "media/capture/video/chromeos/vendor_tag_ops_delegate.h"
 #include "media/capture/video/video_capture_device_factory.h"
 #include "media/capture/video_capture_types.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
-#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace media {
 
@@ -45,6 +47,33 @@ class VideoCaptureDeviceChromeOSDelegate;
 class CAPTURE_EXPORT CameraHalDelegate final
     : public cros::mojom::CameraModuleCallbacks {
  public:
+  // Top 20 Popular Camera peripherals from go/usb-popularity-study. Since
+  // 4 cameras of Sonix have the same vids and pids, they are
+  // aggregated to |kCam_Sonix|. Original hex strings in the format of
+  // 0123:abcd are decoded to integers. These are the same values as
+  // PopularCamPeriphModuleID in tools/metrics/histograms/enums.xml
+  enum class PopularCamPeriphModuleID {
+    kOthers = 0,
+    kLifeCamHD3000_Microsoft = 73271312,   // 045e:0810
+    kC270_Logitech = 74254373,             // 046d:0825
+    kHDC615_Logitech = 74254380,           // 046d:082c
+    kHDProC920_Logitech = 74254381,        // 046d:082d
+    kC930e_Logitech = 74254403,            // 046d:0843
+    kC925e_Logitech = 74254427,            // 046d:085b
+    kC922ProStream_Logitech = 74254428,    // 046d:085c
+    kBRIOUltraHD_Logitech = 74254430,      // 046d:085e
+    kC920HDPro_Logitech = 74254482,        // 046d:0892
+    kC920PROHD_Logitech = 74254565,        // 046d:08e5
+    kCam_ARC = 94606129,                   // 05a3:9331
+    kLiveStreamer313_Sunplus = 130691386,  // 07ca:313a
+    kVitadeAF_Microdia = 205874022,        // 0c45:6366
+    kCam_Sonix = 205874027,                // 0c45:636b
+    kVZR_IPEVO = 393793569,                // 1778:d021
+    k808Camera9_Generalplus = 457121794,   // 1b3f:2002
+    kNexiGoN60FHD_2MUVC = 493617411,       // 1d6c:0103
+    kMaxValue = kNexiGoN60FHD_2MUVC,
+  };
+
   explicit CameraHalDelegate(
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
 
@@ -56,15 +85,13 @@ class CAPTURE_EXPORT CameraHalDelegate final
   CameraHalDelegate(const CameraHalDelegate&) = delete;
   CameraHalDelegate& operator=(const CameraHalDelegate&) = delete;
 
-  // Registers the camera client observer to the CameraHalDispatcher instance.
-  // Returns true if successful, false if failed (e.g., authentication failure).
-  bool RegisterCameraClient();
+  // Start observing the status of the CrosCameraService service on the Mojo
+  // Service Manager. Once the CrosCameraService service is registered,
+  // CameraHalDelegate will request camera module from it.
+  void BootStrapCameraServiceConnection();
 
   void SetCameraModule(
       mojo::PendingRemote<cros::mojom::CameraModule> camera_module);
-
-  // Resets various mojo bindings, WaitableEvents, and cached information.
-  void Reset();
 
   // Delegation methods for the VideoCaptureDeviceFactory interface.  These
   // methods are called by VideoCaptureDeviceFactoryChromeOS directly.  They
@@ -97,16 +124,23 @@ class CAPTURE_EXPORT CameraHalDelegate final
   using OpenDeviceCallback = base::OnceCallback<void(int32_t)>;
   void OpenDevice(
       int32_t camera_id,
+      const std::string& model_id,
       mojo::PendingReceiver<cros::mojom::Camera3DeviceOps> device_ops_receiver,
       OpenDeviceCallback callback);
 
   // Gets camera id from device id. Returns -1 on error.
   int GetCameraIdFromDeviceId(const std::string& device_id);
 
- private:
-  class PowerManagerClientProxy;
+  // Waiting for the camera module to be ready for testing.
+  bool WaitForCameraModuleReadyForTesting();
 
-  friend class base::RefCountedThreadSafe<CameraHalDelegate>;
+ private:
+  class SystemEventMonitorProxy;
+  class VCDInfoMonitorImpl;
+  class VideoCaptureDeviceDelegateMap;
+  class CameraModuleConnector;
+
+  void NotifyVideoCaptureDevicesChanged();
 
   void OnRegisteredCameraHalClient(int32_t result);
 
@@ -143,6 +177,11 @@ class CAPTURE_EXPORT CameraHalDelegate final
   // |vendor_tag_ops_delegate_|.
   void OnGotVendorTagOpsOnIpcThread();
 
+  // Changes hex string |module_id| into decimal integer and check if
+  // |module_id| is one of the popular camera peripherals. If it is, it returns
+  // the decimal integer and if not, it returns 0.
+  int32_t GetMaskedModuleID(const std::string& module_id);
+
   using GetCameraInfoCallback =
       base::OnceCallback<void(int32_t, cros::mojom::CameraInfoPtr)>;
   void GetCameraInfoOnIpcThread(int32_t camera_id,
@@ -155,6 +194,7 @@ class CAPTURE_EXPORT CameraHalDelegate final
   // This method runs on |ipc_task_runner_|.
   void OpenDeviceOnIpcThread(
       int32_t camera_id,
+      const std::string& model_id,
       mojo::PendingReceiver<cros::mojom::Camera3DeviceOps> device_ops_receiver,
       OpenDeviceCallback callback);
 
@@ -165,9 +205,6 @@ class CAPTURE_EXPORT CameraHalDelegate final
   void TorchModeStatusChange(int32_t camera_id,
                              cros::mojom::TorchModeStatus new_status) final;
 
-  base::WaitableEvent camera_hal_client_registered_;
-  bool authenticated_;
-
   base::WaitableEvent camera_module_has_been_set_;
 
   // Signaled when |num_builtin_cameras_| and |camera_info_| are updated.
@@ -177,7 +214,7 @@ class CAPTURE_EXPORT CameraHalDelegate final
 
   // Signaled/Reset when |pending_external_camera_info_.empty()| is changed.
   base::WaitableEvent external_camera_info_updated_;
-  std::unordered_set<int> pending_external_camera_info_;
+  absl::flat_hash_set<int> pending_external_camera_info_;
 
   // Signaled/Reset when |camera_info_.empty()| is changed.
   base::WaitableEvent has_camera_connected_;
@@ -193,7 +230,7 @@ class CAPTURE_EXPORT CameraHalDelegate final
   // |camera_info_lock_|.
   base::Lock camera_info_lock_;
   size_t num_builtin_cameras_ GUARDED_BY(camera_info_lock_);
-  std::unordered_map<int, cros::mojom::CameraInfoPtr> camera_info_
+  absl::flat_hash_map<int, cros::mojom::CameraInfoPtr> camera_info_
       GUARDED_BY(camera_info_lock_);
 
   // A map from |VideoCaptureDeviceDescriptor.device_id| to camera id, which is
@@ -232,13 +269,16 @@ class CAPTURE_EXPORT CameraHalDelegate final
   std::unique_ptr<VendorTagOpsDelegate> vendor_tag_ops_delegate_;
 
   // A map from camera id to corresponding delegate instance.
-  base::flat_map<int, std::unique_ptr<VideoCaptureDeviceChromeOSDelegate>>
-      vcd_delegate_map_;
+  std::unique_ptr<VideoCaptureDeviceDelegateMap> vcd_delegate_map_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   std::vector<std::unique_ptr<CameraClientObserver>> local_client_observers_;
 
-  // Proxy for communicating with PowerManagerClient.
-  std::unique_ptr<PowerManagerClientProxy> power_manager_client_proxy_;
+  std::unique_ptr<SystemEventMonitorProxy> system_event_monitor_proxy_;
+
+  base::SequenceBound<VCDInfoMonitorImpl> vcd_info_monitor_impl_;
+
+  base::SequenceBound<CameraModuleConnector> camera_module_connector_;
 
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 };

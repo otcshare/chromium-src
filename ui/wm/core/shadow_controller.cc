@@ -4,25 +4,26 @@
 
 #include "ui/wm/core/shadow_controller.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
-#include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_multi_source_observation.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/env_observer.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/class_property.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor_extra/shadow.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/wm/core/shadow_controller_delegate.h"
 #include "ui/wm/core/shadow_types.h"
 #include "ui/wm/core/window_util.h"
@@ -31,7 +32,7 @@
 using std::make_pair;
 
 DEFINE_UI_CLASS_PROPERTY_TYPE(ui::Shadow*)
-DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ui::Shadow, kShadowLayerKey, nullptr)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ui::Shadow, kShadowLayerKey)
 
 namespace wm {
 
@@ -54,8 +55,10 @@ int GetShadowElevationForActiveState(aura::Window* window) {
 int GetShadowElevationForWindowLosingActive(aura::Window* losing_active,
                                             aura::Window* gaining_active) {
   if (gaining_active && GetHideOnDeactivate(gaining_active)) {
-    if (base::Contains(GetTransientChildren(losing_active), gaining_active))
+    if (std::ranges::contains(GetTransientChildren(losing_active),
+                              gaining_active)) {
       return kShadowElevationActiveWindow;
+    }
   }
   return kShadowElevationInactiveWindow;
 }
@@ -89,8 +92,7 @@ class ShadowController::Impl :
   void OnWindowInitialized(aura::Window* window) override;
 
   // aura::WindowObserver overrides:
-  void OnWindowParentChanged(aura::Window* window,
-                             aura::Window* parent) override;
+  void OnWindowHierarchyChanged(const HierarchyChangeParams& params) override;
   void OnWindowPropertyChanged(aura::Window* window,
                                const void* key,
                                intptr_t old) override;
@@ -100,6 +102,7 @@ class ShadowController::Impl :
                              const gfx::Rect& new_bounds,
                              ui::PropertyChangeReason reason) override;
   void OnWindowDestroyed(aura::Window* window) override;
+  void OnWindowOcclusionChanged(aura::Window* window) override;
 
  private:
   friend class base::RefCounted<Impl>;
@@ -118,6 +121,9 @@ class ShadowController::Impl :
   // Checks if |window| is visible and contains a property requesting a shadow.
   bool ShouldShowShadowForWindow(aura::Window* window) const;
 
+  // Sets rounded corner on the shadow for the `window`.
+  void MaybeSetShadowRadiusForWindow(aura::Window* window) const;
+
   // Updates the shadow for windows when activation changes.
   void HandleWindowActivationChange(aura::Window* gaining_active,
                                     aura::Window* losing_active);
@@ -130,6 +136,8 @@ class ShadowController::Impl :
   // key.
   // The shadow's bounds are initialized and it is added to the window's layer.
   void CreateShadowForWindow(aura::Window* window);
+
+  bool IsObservingWindowForTest(aura::Window* window) const;  // IN-TEST
 
   const raw_ptr<aura::Env> env_;
   base::ScopedMultiSourceObservation<aura::Window, aura::WindowObserver>
@@ -161,17 +169,28 @@ void ShadowController::Impl::UpdateShadowForWindow(aura::Window* window) {
 }
 
 void ShadowController::Impl::OnWindowInitialized(aura::Window* window) {
-  // During initialization, the window can't reliably tell whether it will be a
-  // root window. That must be checked in the first visibility change
+  if (delegate_ && !delegate_->ShouldObserveWindow(window)) {
+    return;
+  }
   DCHECK(!window->parent());
   DCHECK(!window->TargetVisibility());
   observation_manager_.AddObservation(window);
 }
 
-void ShadowController::Impl::OnWindowParentChanged(aura::Window* window,
-                                                   aura::Window* parent) {
-  if (parent && window->IsVisible())
-    HandlePossibleShadowVisibilityChange(window);
+void ShadowController::Impl::OnWindowHierarchyChanged(
+    const HierarchyChangeParams& params) {
+  // Skip if the parent is null there is no need to update it during
+  // destruction.
+  if (!params.new_parent) {
+    return;
+  }
+  // Update the shadow if the observing window is visible and its parent has
+  // changed.
+  const bool parent_changed = params.target == params.receiver &&
+                              params.new_parent != params.old_parent;
+  if (parent_changed && params.target->IsVisible()) {
+    HandlePossibleShadowVisibilityChange(params.target);
+  }
 }
 
 void ShadowController::Impl::OnWindowPropertyChanged(aura::Window* window,
@@ -182,13 +201,24 @@ void ShadowController::Impl::OnWindowPropertyChanged(aura::Window* window,
 
   if (key == aura::client::kShowStateKey) {
     shadow_will_change = window->GetProperty(aura::client::kShowStateKey) !=
-                         static_cast<ui::WindowShowState>(old);
+                         static_cast<ui::mojom::WindowShowState>(old);
   }
+
+  if (key == aura::client::kWindowRoundedCornersKey) {
+    shadow_will_change =
+        *window->GetProperty(aura::client::kWindowRoundedCornersKey) !=
+        static_cast<gfx::RoundedCornersF>(old);
+  }
+
+  shadow_will_change |=
+      delegate_ &&
+      delegate_->ShouldUpdateShadowOnWindowPropertyChange(window, key, old);
 
   // Check the target visibility. IsVisible() may return false if a parent layer
   // is hidden, but |this| only observes calls to Show()/Hide() on |window|.
-  if (shadow_will_change && window->TargetVisibility())
+  if (shadow_will_change && window->TargetVisibility()) {
     HandlePossibleShadowVisibilityChange(window);
+  }
 }
 
 void ShadowController::Impl::OnWindowVisibilityChanging(aura::Window* window,
@@ -243,6 +273,10 @@ void ShadowController::Impl::OnWindowActivated(ActivationReason reason,
 
 bool ShadowController::Impl::ShouldShowShadowForWindow(
     aura::Window* window) const {
+  if (window->GetOcclusionState() == aura::Window::OcclusionState::OCCLUDED) {
+    return false;
+  }
+
   if (delegate_) {
     const bool should_show = delegate_->ShouldShowShadowForWindow(window);
     if (should_show)
@@ -250,14 +284,43 @@ bool ShadowController::Impl::ShouldShowShadowForWindow(
     return should_show;
   }
 
-  ui::WindowShowState show_state =
+  ui::mojom::WindowShowState show_state =
       window->GetProperty(aura::client::kShowStateKey);
-  if (show_state == ui::SHOW_STATE_FULLSCREEN ||
-      show_state == ui::SHOW_STATE_MAXIMIZED) {
+  if (show_state == ui::mojom::WindowShowState::kFullscreen ||
+      show_state == ui::mojom::WindowShowState::kMaximized) {
     return false;
   }
 
   return GetShadowElevationConvertDefault(window) > 0;
+}
+
+void ShadowController::Impl::OnWindowOcclusionChanged(aura::Window* window) {
+  ui::Shadow* shadow = GetShadowForWindow(window);
+  if (!shadow) {
+    return;
+  }
+  HandlePossibleShadowVisibilityChange(window);
+}
+
+void ShadowController::Impl::MaybeSetShadowRadiusForWindow(
+    aura::Window* window) const {
+  ui::Shadow* shadow = GetShadowForWindow(window);
+  CHECK(shadow);
+
+  if (delegate_ && !delegate_->ShouldRoundShadowForWindow(window)) {
+    shadow->SetRoundedCornerRadius(0);
+    return;
+  }
+
+  gfx::RoundedCornersF* rounded_corners =
+      window->GetProperty(aura::client::kWindowRoundedCornersKey);
+
+  // If `aura::client::kWindowRoundedCornersKey` is not set, it means
+  // unspecified radius. i.e window server may want to apply rounded corners
+  // implicitly.
+  if (rounded_corners) {
+    shadow->SetRoundedCornerRadius(rounded_corners->upper_left());
+  }
 }
 
 void ShadowController::Impl::HandlePossibleShadowVisibilityChange(
@@ -266,7 +329,10 @@ void ShadowController::Impl::HandlePossibleShadowVisibilityChange(
   ui::Shadow* shadow = GetShadowForWindow(window);
   if (shadow) {
     shadow->SetElevation(GetShadowElevationForActiveState(window));
-    shadow->layer()->SetVisible(should_show);
+    MaybeSetShadowRadiusForWindow(window);
+    if (shadow->layer()->GetTargetVisibility() != should_show) {
+      shadow->layer()->SetVisible(should_show);
+    }
   } else if (should_show) {
     CreateShadowForWindow(window);
   }
@@ -277,18 +343,26 @@ void ShadowController::Impl::CreateShadowForWindow(aura::Window* window) {
   ui::Shadow* shadow =
       window->SetProperty(kShadowLayerKey, std::make_unique<ui::Shadow>());
 
-  int corner_radius = window->GetProperty(aura::client::kWindowCornerRadiusKey);
-  if (corner_radius >= 0)
-    shadow->SetRoundedCornerRadius(corner_radius);
-
+  MaybeSetShadowRadiusForWindow(window);
   shadow->Init(GetShadowElevationForActiveState(window));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   shadow->SetShadowStyle(gfx::ShadowStyle::kChromeOSSystemUI);
 #endif
   shadow->SetContentBounds(gfx::Rect(window->bounds().size()));
   shadow->layer()->SetVisible(ShouldShowShadowForWindow(window));
   window->layer()->Add(shadow->layer());
   window->layer()->StackAtBottom(shadow->layer());
+
+  window->TrackOcclusionState();
+
+  if (delegate_) {
+    delegate_->ApplyColorThemeToWindowShadow(window);
+  }
+}
+
+bool ShadowController::Impl::IsObservingWindowForTest(
+    aura::Window* window) const {
+  return observation_manager_.IsObservingSource(window);
 }
 
 ShadowController::Impl::Impl(aura::Env* env)
@@ -313,6 +387,25 @@ ShadowController::Impl::GetInstances() {
 
 ui::Shadow* ShadowController::GetShadowForWindow(aura::Window* window) {
   return window->GetProperty(kShadowLayerKey);
+}
+
+ui::Shadow::ElevationToColorsMap ShadowController::GenerateShadowColorsMap(
+    const ui::ColorProvider* color_provider) {
+  ui::Shadow::ElevationToColorsMap color_map;
+  color_map[kShadowElevationPopup] = std::make_pair(
+      color_provider->GetColor(ui::kColorShadowValueKeyShadowElevationFour),
+      color_provider->GetColor(
+          ui::kColorShadowValueAmbientShadowElevationFour));
+  color_map[kShadowElevationInactiveWindow] = std::make_pair(
+      color_provider->GetColor(ui::kColorShadowValueKeyShadowElevationTwelve),
+      color_provider->GetColor(
+          ui::kColorShadowValueAmbientShadowElevationTwelve));
+  color_map[kShadowElevationActiveWindow] = std::make_pair(
+      color_provider->GetColor(
+          ui::kColorShadowValueKeyShadowElevationTwentyFour),
+      color_provider->GetColor(
+          ui::kColorShadowValueAmbientShadowElevationTwentyFour));
+  return color_map;
 }
 
 ShadowController::ShadowController(
@@ -343,6 +436,10 @@ void ShadowController::OnWindowActivated(ActivationReason reason,
                                          aura::Window* gained_active,
                                          aura::Window* lost_active) {
   impl_->OnWindowActivated(reason, gained_active, lost_active);
+}
+
+bool ShadowController::IsObservingWindowForTest(aura::Window* window) const {
+  return impl_->IsObservingWindowForTest(window);  // IN-TEST
 }
 
 }  // namespace wm

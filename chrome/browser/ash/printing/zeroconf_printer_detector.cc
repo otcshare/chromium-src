@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/ash/printing/zeroconf_printer_detector.h"
 
+#include <algorithm>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/hash/md5.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -19,14 +21,22 @@
 #include "chrome/browser/local_discovery/service_discovery_shared_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/device_event_log/device_event_log.h"
+#include "crypto/obsolete/md5.h"
 
 namespace ash {
+
+namespace printing {
+crypto::obsolete::Md5 MakeMd5HasherForZeroconf() {
+  return {};
+}
+}  // namespace printing
 
 // Supported service names for printers.
 const char ZeroconfPrinterDetector::kIppServiceName[] = "_ipp._tcp.local";
 const char ZeroconfPrinterDetector::kIppsServiceName[] = "_ipps._tcp.local";
 const char ZeroconfPrinterDetector::kSocketServiceName[] =
     "_pdl-datastream._tcp.local";
+const char ZeroconfPrinterDetector::kLpdServiceName[] = "_printer._tcp.local";
 
 // IppEverywhere printers are also required to advertise these services.
 const char ZeroconfPrinterDetector::kIppEverywhereServiceName[] =
@@ -36,13 +46,30 @@ const char ZeroconfPrinterDetector::kIppsEverywhereServiceName[] =
 
 // These service names are ordered in priority. In other words, earlier
 // service types in this list will be used preferentially over later ones.
-constexpr std::array<const char*, 5> kServiceNames = {
+constexpr std::array<const char*, 6> kServiceNames = {
     ZeroconfPrinterDetector::kIppsEverywhereServiceName,
     ZeroconfPrinterDetector::kIppEverywhereServiceName,
     ZeroconfPrinterDetector::kIppsServiceName,
     ZeroconfPrinterDetector::kIppServiceName,
     ZeroconfPrinterDetector::kSocketServiceName,
+    ZeroconfPrinterDetector::kLpdServiceName,
 };
+
+// Certain printers advertise IPP/IPPS but are known not to work with that
+// protocol.  Don't allow IPP/IPPS connections for printers in this list.
+// Printers in this list should be all lowercase.  See b/268531843 for more
+// context.
+constexpr auto kIppRejectList = base::MakeFixedFlatSet<std::string_view>({
+    "brother mfc-9340cdw",
+    "canon e480 series",
+    "canon ib4000 series",
+    "canon mb2000 series",
+    "canon mb2300 series",
+    "canon mb5000 series",
+    "canon mb5300 series",
+    "canon mg3000 series",
+    "canon mx490 series",
+});
 
 namespace {
 
@@ -75,14 +102,11 @@ class ParsedMetadata {
   // Parse out metadata from sd to fill this structure.
   explicit ParsedMetadata(const ServiceDescription& sd) {
     for (const std::string& m : sd.metadata) {
-      size_t equal_pos = m.find('=');
-      if (equal_pos == std::string::npos) {
-        // Malformed, skip it.
+      auto parts = base::SplitStringOnce(m, '=');
+      if (!parts) {
         continue;
       }
-      base::StringPiece key(m.data(), equal_pos);
-      base::StringPiece value(m.data() + equal_pos + 1,
-                              m.length() - (equal_pos + 1));
+      auto [key, value] = *parts;
       if (key == "note") {
         note = std::string(value);
       } else if (key == "pdl") {
@@ -122,19 +146,15 @@ class ParsedMetadata {
 // all to be considered the same printer.
 std::string ZeroconfPrinterId(const ServiceDescription& service,
                               const ParsedMetadata& metadata) {
-  base::MD5Context ctx;
-  base::MD5Init(&ctx);
-  base::MD5Update(&ctx, service.instance_name());
-  base::MD5Update(&ctx, metadata.product);
-  base::MD5Update(&ctx, metadata.UUID);
-  base::MD5Update(&ctx, metadata.usb_MFG);
-  base::MD5Update(&ctx, metadata.usb_MDL);
-  base::MD5Update(&ctx, metadata.ty);
-  base::MD5Update(&ctx, metadata.rp);
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &ctx);
-  return base::StringPrintf("zeroconf-%s",
-                            base::MD5DigestToBase16(digest).c_str());
+  auto md5 = ash::printing::MakeMd5HasherForZeroconf();
+  md5.Update(service.instance_name());
+  md5.Update(metadata.product);
+  md5.Update(metadata.UUID);
+  md5.Update(metadata.usb_MFG);
+  md5.Update(metadata.usb_MDL);
+  md5.Update(metadata.ty);
+  md5.Update(metadata.rp);
+  return base::StringPrintf("zeroconf-%s", base::HexEncodeLower(md5.Finish()));
 }
 
 // Attempt to fill |detected_printer| using the information in
@@ -152,17 +172,23 @@ bool ConvertToPrinter(const std::string& service_type,
                        << " printer with missing service name.";
     return false;
   }
-  if (service_description.ip_address.empty()) {
-    PRINTER_LOG(ERROR) << "Found zeroconf " << service_type
-                       << " printer named '" << service_description.service_name
-                       << "' with missing IP address.";
+  if (service_description.address.port() == 0) {
+    // Bonjour printers are required to register the _printer._tcp name even if
+    // they don't support LPD.  If they don't support LPD, they use a port of 0
+    // to indicate this, so it is not an error.
+    if (service_type != ZeroconfPrinterDetector::kLpdServiceName) {
+      PRINTER_LOG(ERROR) << "Found zeroconf " << service_type
+                         << " printer named '"
+                         << service_description.service_name
+                         << "' with invalid port.";
+    }
     return false;
   }
-  if (service_description.address.port() == 0) {
-    PRINTER_LOG(ERROR) << "Found zeroconf " << service_type
-                       << " printer named '" << service_description.service_name
-                       << "' with invalid port.";
-    return false;
+  if (service_description.ip_address.empty()) {
+    PRINTER_LOG(DEBUG) << "Zeroconf " << service_type << " printer named '"
+                       << service_description.service_name
+                       << "' is missing IP address.  Continuing with hostname: "
+                       << service_description.address.HostForURL();
   }
 
   chromeos::Printer& printer = detected_printer->printer;
@@ -186,12 +212,13 @@ bool ConvertToPrinter(const std::string& service_type,
     // If the "rp" key is present in a Socket TXT record, the key/value MUST
     // be ignored.
     rp.clear();
+  } else if (service_type == ZeroconfPrinterDetector::kLpdServiceName) {
+    uri.SetScheme("lpd");
   } else {
     // Since we only register for these services, we should never get back
     // a service other than the ones above.
     NOTREACHED() << "Zeroconf printer with unknown service type "
                  << service_description.service_type();
-    return false;
   }
 
   if (!uri.SetHostEncoded(service_description.address.HostForURL()) ||
@@ -228,17 +255,17 @@ bool ConvertToPrinter(const std::string& service_type,
   if (!metadata.pdl.empty()) {
     // Per Bonjour Printer Spec v1.2 section 9.2.8, it is invalid for the pdl to
     // end with a comma.
-    auto media_types = base::SplitString(
+    auto media_types = base::SplitStringPiece(
         metadata.pdl, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     if (!media_types.empty() && !media_types.back().empty()) {
       // Prune any empty splits.
-      base::EraseIf(media_types, [](base::StringPiece s) { return s.empty(); });
+      std::erase_if(media_types, [](std::string_view s) { return s.empty(); });
 
-      std::transform(
-          media_types.begin(), media_types.end(),
+      std::ranges::transform(
+          media_types,
           std::back_inserter(
               detected_printer->ppd_search_data.supported_document_formats),
-          [](base::StringPiece s) { return base::ToLowerASCII(s); });
+          [](std::string_view s) { return base::ToLowerASCII(s); });
     }
   }
 
@@ -252,7 +279,8 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
  public:
   // Normal constructor, connects to service discovery.
   ZeroconfPrinterDetectorImpl()
-      : discovery_client_(ServiceDiscoverySharedClient::GetInstance()) {
+      : discovery_client_(ServiceDiscoverySharedClient::GetInstance()),
+        reject_ipp_printers_(kIppRejectList.begin(), kIppRejectList.end()) {
     for (const char* service_type : kServiceNames) {
       CreateDeviceLister(service_type);
     }
@@ -261,7 +289,9 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
   // Testing constructor, uses injected backends.
   explicit ZeroconfPrinterDetectorImpl(
       std::map<std::string, std::unique_ptr<ServiceDiscoveryDeviceLister>>*
-          device_listers) {
+          device_listers,
+      base::flat_set<std::string> ipp_reject_list)
+      : reject_ipp_printers_(std::move(ipp_reject_list)) {
     device_listers_.swap(*device_listers);
     for (auto& entry : device_listers_) {
       entry.second->Start();
@@ -269,7 +299,7 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
     }
   }
 
-  ~ZeroconfPrinterDetectorImpl() override {}
+  ~ZeroconfPrinterDetectorImpl() override = default;
 
   // PrinterDetector override.
   void RegisterPrintersFoundCallback(OnPrintersFoundCallback cb) override {
@@ -295,6 +325,15 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
     if (!ConvertToPrinter(service_type, service_description, metadata,
                           &printer)) {
       return;
+    }
+    if ((service_type == kIppServiceName || service_type == kIppsServiceName)) {
+      const std::string lowercase_key =
+          base::ToLowerASCII(printer.printer.make_and_model());
+      if (reject_ipp_printers_.contains(lowercase_key)) {
+        PRINTER_LOG(EVENT) << "Rejecting " << lowercase_key
+                           << " for service type " << service_type;
+        return;
+      }
     }
     base::AutoLock auto_lock(printers_lock_);
     printers_[service_type][service_description.instance_name()] = printer;
@@ -344,6 +383,8 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
     lister_entry->second->DiscoverNewDevices();
   }
 
+  void OnPermissionRejected() override {}
+
   // Create a new device lister for the given |service_type| and add it
   // to the ones managed by this object.
   void CreateDeviceLister(const std::string& service_type) {
@@ -351,7 +392,7 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
         this, discovery_client_.get(), service_type);
     lister->Start();
     lister->DiscoverNewDevices();
-    DCHECK(!base::Contains(device_listers_, service_type));
+    DCHECK(!device_listers_.contains(service_type));
     device_listers_[service_type] = std::move(lister);
   }
 
@@ -359,14 +400,14 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
   // Requires that printers_lock_ be held.
   std::vector<DetectedPrinter> GetPrintersLocked() {
     printers_lock_.AssertAcquired();
-    std::map<std::string, DetectedPrinter> unified;
+    std::map<std::string_view, DetectedPrinter> unified;
     // The order in which we look through these maps defines priority -- earlier
     // service types in this list will be used preferentially over later ones.
     // This depends on the fact that map::insert will fail if the entry already
     // exists.
     for (const char* service_type : kServiceNames) {
       for (const auto& entry : printers_[service_type]) {
-        unified.insert({entry.first, entry.second});
+        unified.emplace(entry.first, entry.second);
       }
     }
     std::vector<DetectedPrinter> ret;
@@ -389,7 +430,7 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
   bool IsPrintersEmpty() const {
     printers_lock_.AssertAcquired();
     for (const char* service_type : kServiceNames) {
-      DCHECK(base::Contains(printers_, service_type));
+      DCHECK(printers_.contains(service_type));
       if (!printers_.at(service_type).empty()) {
         return false;
       }
@@ -412,6 +453,9 @@ class ZeroconfPrinterDetectorImpl : public ZeroconfPrinterDetector {
       device_listers_;
 
   OnPrintersFoundCallback on_printers_found_callback_;
+
+  // A set of printers known not to work with IPP/IPPS protocol.
+  const base::flat_set<std::string> reject_ipp_printers_;
 };
 
 }  // namespace
@@ -425,8 +469,10 @@ std::unique_ptr<ZeroconfPrinterDetector> ZeroconfPrinterDetector::Create() {
 std::unique_ptr<ZeroconfPrinterDetector>
 ZeroconfPrinterDetector::CreateForTesting(
     std::map<std::string, std::unique_ptr<ServiceDiscoveryDeviceLister>>*
-        device_listers) {
-  return std::make_unique<ZeroconfPrinterDetectorImpl>(device_listers);
+        device_listers,
+    base::flat_set<std::string> ipp_reject_list) {
+  return std::make_unique<ZeroconfPrinterDetectorImpl>(
+      device_listers, std::move(ipp_reject_list));
 }
 
 }  // namespace ash

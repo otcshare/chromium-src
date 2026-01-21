@@ -61,6 +61,7 @@ xsltEvalXPathPredicate(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
     int oldNsNr;
     xmlNsPtr *oldNamespaces;
     xmlNodePtr oldInst;
+    xmlNodePtr oldNode;
     int oldProximityPosition, oldContextSize;
 
     if ((ctxt == NULL) || (ctxt->inst == NULL)) {
@@ -69,6 +70,7 @@ xsltEvalXPathPredicate(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
         return(0);
     }
 
+    oldNode = ctxt->xpathCtxt->node;
     oldContextSize = ctxt->xpathCtxt->contextSize;
     oldProximityPosition = ctxt->xpathCtxt->proximityPosition;
     oldNsNr = ctxt->xpathCtxt->nsNr;
@@ -96,8 +98,9 @@ xsltEvalXPathPredicate(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
 	ctxt->state = XSLT_STATE_STOPPED;
 	ret = 0;
     }
-    ctxt->xpathCtxt->nsNr = oldNsNr;
 
+    ctxt->xpathCtxt->node = oldNode;
+    ctxt->xpathCtxt->nsNr = oldNsNr;
     ctxt->xpathCtxt->namespaces = oldNamespaces;
     ctxt->inst = oldInst;
     ctxt->xpathCtxt->contextSize = oldContextSize;
@@ -137,7 +140,7 @@ xsltEvalXPathStringNs(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
     }
 
     oldInst = ctxt->inst;
-    oldNode = ctxt->node;
+    oldNode = ctxt->xpathCtxt->node;
     oldPos = ctxt->xpathCtxt->proximityPosition;
     oldSize = ctxt->xpathCtxt->contextSize;
     oldNsNr = ctxt->xpathCtxt->nsNr;
@@ -151,7 +154,7 @@ xsltEvalXPathStringNs(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
     if (res != NULL) {
 	if (res->type != XPATH_STRING)
 	    res = xmlXPathConvertString(res);
-	if (res->type == XPATH_STRING) {
+	if ((res != NULL) && (res->type == XPATH_STRING)) {
             ret = res->stringval;
 	    res->stringval = NULL;
 	} else {
@@ -167,7 +170,7 @@ xsltEvalXPathStringNs(xsltTransformContextPtr ctxt, xmlXPathCompExprPtr comp,
 	 "xsltEvalXPathString: returns %s\n", ret));
 #endif
     ctxt->inst = oldInst;
-    ctxt->node = oldNode;
+    ctxt->xpathCtxt->node = oldNode;
     ctxt->xpathCtxt->contextSize = oldSize;
     ctxt->xpathCtxt->proximityPosition = oldPos;
     ctxt->xpathCtxt->nsNr = oldNsNr;
@@ -229,7 +232,7 @@ xsltEvalTemplateString(xsltTransformContextPtr ctxt,
     insert = xmlNewDocNode(ctxt->output, NULL,
 	                   (const xmlChar *)"fake", NULL);
     if (insert == NULL) {
-	xsltTransformError(ctxt, NULL, contextNode,
+	xsltTransformError(ctxt, NULL, inst,
 		"Failed to create temporary node\n");
 	return(NULL);
     }

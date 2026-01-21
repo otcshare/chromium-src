@@ -47,13 +47,19 @@ enum class OnTransferSizeUpdatedFrom {
   kWorkerMainScriptLoader = 34,
   kWorkerScriptFetcher = 35,
   kWorkerScriptLoader = 36,
-  kMaxValue = kWorkerScriptLoader,
+  kServiceWorkerRaceNetworkRequest = 37,
+  kMaxValue = kServiceWorkerRaceNetworkRequest,
 };
 
+COMPONENT_EXPORT(NETWORK_CPP)
 inline void RecordOnTransferSizeUpdatedUMA(
     OnTransferSizeUpdatedFrom class_name) {
+// Disabled due to performance reasons but kept around as a diagnostic metric
+// to monitor number of OnTransferSizeUpdated IPCs in the future.
+#if 0
   UMA_HISTOGRAM_ENUMERATION(
       "Net.OnTransferSizeUpdated.Experimental.OverridenBy", class_name);
+#endif
 }
 
 }  // namespace network

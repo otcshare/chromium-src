@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -43,7 +42,7 @@ class MAYBE_WebRtcDataBrowserTest : public WebRtcContentBrowserTestBase {
 
  protected:
   // Convenience function since most peerconnection-call.html tests just load
-  // the page, kick off some javascript and wait for the title to change to OK.
+  // the page, and execute some javascript.
   void MakeTypicalPeerConnectionCall(const std::string& javascript) {
     MakeTypicalCall(javascript, "/media/peerconnection-call-data.html");
   }
@@ -53,8 +52,9 @@ IN_PROC_BROWSER_TEST_F(MAYBE_WebRtcDataBrowserTest, CallWithSctpDataOnly) {
   MakeTypicalPeerConnectionCall("callWithSctpDataOnly();");
 }
 
-#if defined(MEMORY_SANITIZER)
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_ANDROID)
 // Fails under MemorySanitizer: http://crbug.com/405951
+// Fails on Android: http://crbug.com/427258783
 #define MAYBE_CallWithSctpDataAndMedia DISABLED_CallWithSctpDataAndMedia
 #else
 #define MAYBE_CallWithSctpDataAndMedia CallWithSctpDataAndMedia

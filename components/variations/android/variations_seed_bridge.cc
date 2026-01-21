@@ -4,15 +4,14 @@
 
 #include "components/variations/android/variations_seed_bridge.h"
 
-#include <jni.h>
-#include <stdint.h>
-
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/time/time.h"
-#include "components/variations/jni/VariationsSeedBridge_jni.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/variations/android/variations_seed_jni/VariationsSeedBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
@@ -30,9 +29,9 @@ std::unique_ptr<variations::SeedResponse> GetVariationsFirstRunSeed() {
       Java_VariationsSeedBridge_getVariationsFirstRunSeedSignature(env);
   ScopedJavaLocalRef<jstring> j_seed_country =
       Java_VariationsSeedBridge_getVariationsFirstRunSeedCountry(env);
-  jlong j_response_date =
+  int64_t j_response_date =
       Java_VariationsSeedBridge_getVariationsFirstRunSeedDate(env);
-  jboolean j_is_gzip_compressed =
+  bool j_is_gzip_compressed =
       Java_VariationsSeedBridge_getVariationsFirstRunSeedIsGzipCompressed(env);
 
   auto seed = std::make_unique<variations::SeedResponse>();
@@ -41,7 +40,8 @@ std::unique_ptr<variations::SeedResponse> GetVariationsFirstRunSeed() {
   }
   seed->signature = ConvertJavaStringToUTF8(j_seed_signature);
   seed->country = ConvertJavaStringToUTF8(j_seed_country);
-  seed->date = base::Time::FromJavaTime(static_cast<long>(j_response_date));
+  seed->date = base::Time::FromMillisecondsSinceUnixEpoch(
+      static_cast<int64_t>(j_response_date));
   seed->is_gzip_compressed = static_cast<bool>(j_is_gzip_compressed);
   return seed;
 }
@@ -59,15 +59,15 @@ void MarkVariationsSeedAsStored() {
 void SetJavaFirstRunPrefsForTesting(const std::string& seed_data,
                                     const std::string& seed_signature,
                                     const std::string& seed_country,
-                                    long response_date,
+                                    int64_t response_date,
                                     bool is_gzip_compressed) {
   JNIEnv* env = AttachCurrentThread();
   Java_VariationsSeedBridge_setVariationsFirstRunSeed(
       env, base::android::ToJavaByteArray(env, seed_data),
       ConvertUTF8ToJavaString(env, seed_signature),
       ConvertUTF8ToJavaString(env, seed_country),
-      static_cast<jlong>(response_date),
-      static_cast<jboolean>(is_gzip_compressed));
+      static_cast<int64_t>(response_date),
+      static_cast<bool>(is_gzip_compressed));
 }
 
 bool HasMarkedPrefsForTesting() {
@@ -77,3 +77,5 @@ bool HasMarkedPrefsForTesting() {
 
 }  // namespace android
 }  // namespace variations
+
+DEFINE_JNI(VariationsSeedBridge)

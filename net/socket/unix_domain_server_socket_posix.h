@@ -11,7 +11,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "net/base/completion_once_callback.h"
@@ -58,7 +58,9 @@ class NET_EXPORT UnixDomainServerSocket : public ServerSocket {
                                  Credentials* credentials);
 
   // ServerSocket implementation.
-  int Listen(const IPEndPoint& address, int backlog) override;
+  int Listen(const IPEndPoint& address,
+             int backlog,
+             std::optional<bool> ipv6_only) override;
   int ListenWithAddressAndPort(const std::string& address_string,
                                uint16_t port,
                                int backlog) override;

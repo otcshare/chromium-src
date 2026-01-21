@@ -39,7 +39,8 @@ base::Value::Dict ReadConfigFile(const base::FilePath& path) {
   bool loaded = base::ReadFileToString(path, &file_content);
   CHECK(loaded) << "Couldn't read config file: " << path;
 
-  auto parsed = base::JSONReader::ReadAndReturnValueWithError(file_content);
+  auto parsed = base::JSONReader::ReadAndReturnValueWithError(
+      file_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   CHECK(parsed.has_value())
       << "Failed to parse " << path << ": " << parsed.error().message;
   CHECK(parsed->is_dict()) << "Config is not a JSON dictionary: " << path;
@@ -47,11 +48,10 @@ base::Value::Dict ReadConfigFile(const base::FilePath& path) {
   return std::move(parsed->GetDict());
 }
 
-absl::optional<base::Value::Dict> ReadConfigsFromDir(
-    const base::FilePath& dir) {
+std::optional<base::Value::Dict> ReadConfigsFromDir(const base::FilePath& dir) {
   base::FileEnumerator configs(dir, false, base::FileEnumerator::FILES,
                                "*.json");
-  absl::optional<base::Value::Dict> config;
+  std::optional<base::Value::Dict> config;
   for (base::FilePath path; !(path = configs.Next()).empty();) {
     base::Value::Dict path_config = ReadConfigFile(path);
     if (config) {
@@ -67,16 +67,16 @@ absl::optional<base::Value::Dict> ReadConfigsFromDir(
 
 }  // namespace
 
-const absl::optional<base::Value::Dict>& LoadPackageConfig() {
+const std::optional<base::Value::Dict>& LoadPackageConfig() {
   // Package configurations do not change at run-time, so read the configuration
   // on the first call and cache the result.
-  static base::NoDestructor<absl::optional<base::Value::Dict>> config(
+  static base::NoDestructor<std::optional<base::Value::Dict>> config(
       ReadConfigsFromDir(base::FilePath("/config/data")));
 
   return *config;
 }
 
-absl::optional<base::Value::Dict> LoadConfigFromDirForTest(  // IN-TEST
+std::optional<base::Value::Dict> LoadConfigFromDirForTest(  // IN-TEST
     const base::FilePath& dir) {
   return ReadConfigsFromDir(dir);
 }

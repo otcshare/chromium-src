@@ -9,9 +9,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
@@ -109,8 +109,9 @@ TEST(Yama, GetStatus) {
   EXPECT_EQ(static_cast<bool>(status1 & Yama::STATUS_PRESENT),
             Yama::IsPresent());
 
-  fprintf(stdout, "Yama present: %s - enforcing: %s\n",
-          Yama::IsPresent() ? "Y" : "N", Yama::IsEnforcing() ? "Y" : "N");
+  UNSAFE_TODO(fprintf(stdout, "Yama present: %s - enforcing: %s\n",
+                      Yama::IsPresent() ? "Y" : "N",
+                      Yama::IsEnforcing() ? "Y" : "N"));
 }
 
 SANDBOX_TEST(Yama, RestrictPtraceSucceedsWhenYamaPresent) {

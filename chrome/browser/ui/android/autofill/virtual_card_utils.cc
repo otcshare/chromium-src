@@ -5,10 +5,15 @@
 #include "chrome/browser/ui/android/autofill/virtual_card_utils.h"
 
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/VirtualCardEnrollmentFields_jni.h"
+#include "chrome/browser/android/resource_mapper.h"
+#include "components/autofill/core/browser/ui/autofill_resource_utils.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
+#include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/VirtualCardEnrollmentFields_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
@@ -21,14 +26,20 @@ ScopedJavaLocalRef<jobject> CreateVirtualCardEnrollmentFieldsJavaObject(
     autofill::VirtualCardEnrollmentFields* virtual_card_enrollment_fields) {
   JNIEnv* env = AttachCurrentThread();
   // Create VirtualCardEnrollmentFields java object.
+  ScopedJavaLocalRef<jstring> card_name = ConvertUTF16ToJavaString(
+      env,
+      virtual_card_enrollment_fields->credit_card.CardNameForAutofillDisplay());
+  ScopedJavaLocalRef<jstring> card_number = ConvertUTF16ToJavaString(
+      env, virtual_card_enrollment_fields->credit_card
+               .ObfuscatedNumberWithVisibleLastFourDigits());
+  int network_icon_id = ResourceMapper::MapToJavaDrawableId(
+      GetIconResourceID(virtual_card_enrollment_fields->credit_card
+                            .CardIconForAutofillSuggestion()));
+  ScopedJavaLocalRef<jobject> card_art_url = url::GURLAndroid::FromNativeGURL(
+      env, virtual_card_enrollment_fields->credit_card.card_art_url());
   ScopedJavaLocalRef<jobject> java_object =
-      Java_VirtualCardEnrollmentFields_create(
-          env,
-          ConvertUTF16ToJavaString(
-              env, virtual_card_enrollment_fields->credit_card
-                       .CardIdentifierStringForAutofillDisplay()),
-          gfx::ConvertToJavaBitmap(
-              *virtual_card_enrollment_fields->card_art_image->bitmap()));
+      Java_VirtualCardEnrollmentFields_create(env, card_name, card_number,
+                                              network_icon_id, card_art_url);
   // Add Google legal messages.
   for (const auto& legal_message_line :
        virtual_card_enrollment_fields->google_legal_message) {
@@ -57,3 +68,5 @@ ScopedJavaLocalRef<jobject> CreateVirtualCardEnrollmentFieldsJavaObject(
 }
 
 }  // namespace autofill
+
+DEFINE_JNI(VirtualCardEnrollmentFields)

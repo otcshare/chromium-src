@@ -8,10 +8,12 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -19,8 +21,6 @@
 #include "base/types/strong_alias.h"
 #include "content/common/content_export.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "url/gurl.h"
 #include "v8/include/v8-forward.h"
 
@@ -68,6 +68,10 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
                                     v8::Local<v8::Context> context,
                                     std::vector<std::string>& errors) const;
 
+    // Returns true if this Result is a null value, and false otherwise. Returns
+    // false if Result is an error.
+    bool IsNull() const;
+
    private:
     // Private methods are called by DirectFromSellerSignalsRequester.
     friend DirectFromSellerSignalsRequester;
@@ -97,13 +101,13 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
     //
     // Default-constructed, this will be a null scoped_refptr<ResponseString>.
     using ResponseOrError =
-        absl::variant<scoped_refptr<ResponseString>, ErrorString>;
+        std::variant<scoped_refptr<ResponseString>, ErrorString>;
 
     // Constructs a Result based on the result of the network download.
     Result(GURL signals_url,
-           std::unique_ptr<std::string> response_body,
+           std::optional<std::string> response_body,
            scoped_refptr<net::HttpResponseHeaders> headers,
-           absl::optional<std::string> error);
+           std::optional<std::string> error);
 
     // The copy constructor is used for internal caching, and for passing
     // results to every pending caller when a coalesced download completes.
@@ -143,7 +147,7 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
                      const GURL& signals_url);
 
     // Methods to run the callback synchronously and asynchronously (by posting
-    // to the SequencedTaskRunnerHandle).
+    // to the SequencedTaskRunner::CurrentDefaultHandle).
     //
     // The async version uses WeakPtr, so it will be cancelled if this Request
     // object is destroyed. The sync version should only be used after a
@@ -154,8 +158,7 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
     void RunCallbackSync(Result result);
     void RunCallbackAsync(Result result);
 
-    void set_coalesce_iterator(
-        std::list<raw_ptr<Request, DanglingUntriaged>>::iterator it) {
+    void set_coalesce_iterator(std::list<raw_ptr<Request>>::iterator it) {
       DCHECK_EQ(*it, this);
       maybe_coalesce_iterator_ = it;
     }
@@ -174,7 +177,7 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
     // NOTE: This can be nullopt if serving from cache, or if the download
     // already completed -- it will have a value when there is still an
     // outstanding request for `signals_url_`.
-    absl::optional<std::list<raw_ptr<Request, DanglingUntriaged>>::iterator>
+    std::optional<std::list<raw_ptr<Request>>::iterator>
         maybe_coalesce_iterator_;
 
     // Must appear after all other members.
@@ -222,7 +225,7 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
     //
     // This guarantees that none of these raw pointers ever point to destroyed
     // Requests.
-    std::list<raw_ptr<Request, DanglingUntriaged>> requests;
+    std::list<raw_ptr<Request>> requests;
   };
 
   // Called only when the AuctionDownloader loads new signals.
@@ -231,9 +234,9 @@ class CONTENT_EXPORT DirectFromSellerSignalsRequester {
   // Result objects in `coalesced_downloads_` that are waiting on the URL.
   void OnSignalsDownloaded(GURL signals_url,
                            base::TimeTicks start_time,
-                           std::unique_ptr<std::string> response_body,
+                           std::optional<std::string> response_body,
                            scoped_refptr<net::HttpResponseHeaders> headers,
-                           absl::optional<std::string> error);
+                           std::optional<std::string> error);
 
   void OnRequestDestroyed(Request& request);
 

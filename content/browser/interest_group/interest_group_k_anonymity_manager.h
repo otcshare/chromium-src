@@ -5,48 +5,27 @@
 #ifndef CONTENT_BROWSER_INTEREST_GROUP_INTEREST_GROUP_K_ANONYMITY_MANAGER_H_
 #define CONTENT_BROWSER_INTEREST_GROUP_INTEREST_GROUP_K_ANONYMITY_MANAGER_H_
 
+#include <vector>
+
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
+#include "content/browser/interest_group/interest_group_caching_storage.h"
+#include "content/browser/interest_group/interest_group_update.h"
 #include "content/browser/interest_group/storage_interest_group.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/k_anonymity_service_delegate.h"
 #include "third_party/blink/public/common/interest_group/interest_group.h"
 
-class GURL;
-
 namespace content {
 class InterestGroupManagerImpl;
 
-// Calculates the k-anonymity key for an interest group from the owner and name
-std::string CONTENT_EXPORT KAnonKeyFor(const url::Origin& owner,
-                                       const std::string& name);
+// Maximum number of IDs to send in a single query call. Public for testing.
+constexpr size_t kQueryBatchSizeLimit = 1000;
 
-// Calculates the k-anonymity key for an Ad that is used for determining if an
-// ad is k-anonymous for the purposes of bidding and winning an auction.
-// We want to avoid providing too much identifying information for event level
-// reporting in reportWin. This key is used to check that providing the interest
-// group owner and ad URL to the bidding script doesn't identify the user. It is
-// used to gate whether an ad can participate in a FLEDGE auction because event
-// level reports need to include both the owner and ad URL for the purposes of
-// an auction.
-// TODO(behamilton): Use a different key for ad components.
-std::string CONTENT_EXPORT KAnonKeyForAdBid(const blink::InterestGroup& group,
-                                            const GURL& ad_url);
-
-// Given a key computed by KAnonKeyForAdBid, returns the `render_url` of the
-// ad that was used to produce it.
-GURL CONTENT_EXPORT RenderUrlFromKAnonKeyForAdBid(const std::string& key);
-
-// Calculates the k-anonymity key for reporting the interest group name in
-// reportWin along with the given Ad.
-// We want to avoid providing too much identifying information for event level
-// reporting in reportWin. This key is used to check if including the interest
-// group name along with the interest group owner and ad URL would make the user
-// too identifiable. If this key is not k-anonymous then we do not provide the
-// interest group name to reportWin.
-std::string CONTENT_EXPORT
-KAnonKeyForAdNameReporting(const blink::InterestGroup& group,
-                           const blink::InterestGroup::Ad& ad);
+// Returns whether `last_updated` is less than 7 days ago.
+bool CONTENT_EXPORT IsKAnonDataExpired(const base::Time last_updated,
+                                       const base::Time now);
 
 // Manages k-anonymity updates. Checks last updated times in the database
 // to limit updates (joins and queries) to once per day. Called by the
@@ -55,55 +34,99 @@ KAnonKeyForAdNameReporting(const blink::InterestGroup& group,
 // interest group updates.
 class CONTENT_EXPORT InterestGroupKAnonymityManager {
  public:
+  using GetKAnonymityServiceDelegateCallback =
+      base::RepeatingCallback<KAnonymityServiceDelegate*()>;
+
   InterestGroupKAnonymityManager(
       InterestGroupManagerImpl* interest_group_manager,
-      KAnonymityServiceDelegate* k_anonymity_service);
+      InterestGroupCachingStorage* caching_storage,
+      GetKAnonymityServiceDelegateCallback k_anonymity_service_callback);
   ~InterestGroupKAnonymityManager();
 
-  // Requests the k-anonymity status of elements of the interest group that
+  // Requests k-anonymity updates for all interest groups owned by `owners` that
   // haven't been updated in 24 hours or more. Results are passed to
-  // interest_group_manater_->UpdateKAnonymity.
-  void QueryKAnonymityForInterestGroup(
-      const StorageInterestGroup& storage_group);
+  // interest_group_manager_->UpdateKAnonymity.
+  void QueryKAnonymityOfOwners(base::span<const url::Origin> owners);
+
+  // Requests the k-anonymity status of elements of `k_anon_data` that
+  // haven't been updated in 24 hours or more. Results are passed to
+  // interest_group_manager_->UpdateKAnonymity.
+  void QueryKAnonymityData(
+      const blink::InterestGroupKey& interest_group_key,
+      const InterestGroupKanonUpdateParameter& k_anon_data);
 
   // Notify the k-anonymity service that these ad keys won an auction.
   // Internally this calls RegisterIDAsJoined().
-  void RegisterAdKeysAsJoined(base::flat_set<std::string> keys);
+  void RegisterAdKeysAsJoined(base::flat_set<std::string> hashed_keys);
 
  private:
-  // Callback from k-anonymity service QuerySets(). Saves the updated results to
-  // the database by calling interest_group_manager_->UpdateKAnonymity for each
-  // URL in query with the corresponding k-anonymity status from status.
+  friend class InterestGroupKAnonymityManagerTestPeer;
+
+  struct InProgressQueryState {
+    InProgressQueryState(base::Time update_time, bool replace_existing_values);
+    InProgressQueryState(const InProgressQueryState&);
+    ~InProgressQueryState();
+    base::Time update_time;
+    bool replace_existing_values;
+    size_t remaining_responses{0};
+    std::vector<std::string> positive_hashed_keys_from_received_responses;
+  };
+
+  // Callback from QueryKAnonymityOfOwners
+  void OnGotInterestGroupsOfOwner(scoped_refptr<StorageInterestGroups> groups);
+
+  // Callback from LoadPositiveHashedKAnonymityKeysFromCache
+  void FetchUncachedKAnonymityData(
+      base::Time update_time,
+      const blink::InterestGroupKey& interest_group_key,
+      InterestGroupStorage::KAnonymityCacheResponse cache_response);
+
+  // Callback from k-anonymity service QuerySets().
   void QuerySetsCallback(std::vector<std::string> query,
                          base::Time update_time,
+                         const blink::InterestGroupKey& interest_group_key,
                          std::vector<bool> status);
 
   // Starts fetching the LastKAnonymityReported time for `url` from the
   // database.
-  void RegisterIDAsJoined(const std::string& key);
+  void RegisterIDAsJoined(const std::string& hashed_key);
 
   // Called by the database when the update time for `url` has been retrieved.
   // If the last reported time is too long ago, calls JoinSet() on the
   // k-anonymity service.
-  void OnGotLastReportedTime(std::string key,
-                             absl::optional<base::Time> last_update_time);
+  void OnGotLastReportedTime(std::string hashed_key,
+                             std::optional<base::Time> last_update_time);
 
   // Callback from k-anonymity service JoinSet(). Updates the LastReported time
   // for key in the database, regardless of status (fail close).
-  void JoinSetCallback(std::string key, bool status);
+  void JoinSetCallback(std::string hashed_key, bool status);
 
   // An unowned pointer to the InterestGroupManagerImpl that owns this
   // InterestGroupUpdateManager. Used as an intermediary to talk to the
   // database.
   raw_ptr<InterestGroupManagerImpl> interest_group_manager_;
 
-  raw_ptr<KAnonymityServiceDelegate> k_anonymity_service_;
+  // An unowned pointer to the interest_group_manager_'s
+  // InterestGroupCachingStorage. Used to talk to the database directly for
+  // fetching and storing cached hashed keys only.
+  raw_ptr<InterestGroupCachingStorage> caching_storage_;
+
+  GetKAnonymityServiceDelegateCallback k_anonymity_service_callback_;
 
   // We keep track of joins in progress because the joins that haven't completed
   // are still marked as eligible but it would be incorrect to join them
-  // multiple times. We don't do this for query because the size of the request
-  // could expose membership in overlapping groups through traffic analysis.
-  base::flat_set<std::string> joins_in_progress;
+  // multiple times. We don't do this for query because the
+  // size of the request could expose membership in overlapping groups through
+  // traffic analysis.
+  base::flat_set<std::string> joins_in_progress_;
+
+  // Keep track of updates for which we have not yet written values back to the
+  // database. When we receive a new QueryKAnonymityData for an interest group
+  // while there's an outstanding query for the same interest group, we may
+  // choose to replace the query in progress or add more k-anonymity keys onto
+  // it.
+  base::flat_map<blink::InterestGroupKey, InProgressQueryState>
+      queries_in_progress_;
 
   base::WeakPtrFactory<InterestGroupKAnonymityManager> weak_ptr_factory_;
 };

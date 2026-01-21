@@ -14,23 +14,29 @@
 #include "base/base_paths.h"
 #include "base/base_paths_win.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/test/test_shortcut_win.h"
 #include "base/win/registry.h"
 #include "base/win/shortcut.h"
-#include "base/win/windows_version.h"
+#include "build/branding_buildflags.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/util_constants.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "chrome/install_static/google_chrome_install_modes.h"
+#include "chrome/install_static/test/scoped_install_details.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 namespace {
 
@@ -62,19 +68,19 @@ class ShellUtilShortcutTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     chrome_exe_ = temp_dir_.GetPath().Append(installer::kChromeExe);
-    EXPECT_EQ(0, base::WriteFile(chrome_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(chrome_exe_, ""));
 
     chrome_proxy_exe_ = temp_dir_.GetPath().Append(installer::kChromeProxyExe);
-    EXPECT_EQ(0, base::WriteFile(chrome_proxy_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(chrome_proxy_exe_, ""));
 
     manganese_exe_ = temp_dir_.GetPath().Append(kManganeseExe);
-    EXPECT_EQ(0, base::WriteFile(manganese_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(manganese_exe_, ""));
 
     iron_exe_ = temp_dir_.GetPath().Append(kIronExe);
-    EXPECT_EQ(0, base::WriteFile(iron_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(iron_exe_, ""));
 
     other_ico_ = temp_dir_.GetPath().Append(kOtherIco);
-    EXPECT_EQ(0, base::WriteFile(other_ico_, "", 0));
+    EXPECT_TRUE(base::WriteFile(other_ico_, ""));
 
     ASSERT_TRUE(fake_user_desktop_.CreateUniqueTempDir());
     ASSERT_TRUE(fake_common_desktop_.CreateUniqueTempDir());
@@ -136,13 +142,6 @@ class ShellUtilShortcutTest : public testing::Test {
                             ? fake_start_menu_.GetPath()
                             : fake_common_start_menu_.GetPath();
         break;
-      case ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED:
-        expected_path = (properties.level == ShellUtil::CURRENT_USER)
-                            ? fake_start_menu_.GetPath()
-                            : fake_common_start_menu_.GetPath();
-        expected_path = expected_path.Append(
-            InstallUtil::GetChromeShortcutDirNameDeprecated());
-        break;
       default:
         ADD_FAILURE() << "Unknown location";
         return base::FilePath();
@@ -185,7 +184,7 @@ class ShellUtilShortcutTest : public testing::Test {
     if (properties.has_icon()) {
       expected_properties.set_icon(properties.icon, properties.icon_index);
     } else {
-      int icon_index = install_static::GetIconResourceIndex();
+      int icon_index = install_static::GetAppIconResourceIndex();
       expected_properties.set_icon(chrome_exe_, icon_index);
     }
 
@@ -251,19 +250,6 @@ TEST_F(ShellUtilShortcutTest, GetShortcutPath) {
                                  ShellUtil::CURRENT_USER, &path));
   EXPECT_EQ(fake_user_quick_launch_.GetPath(), path);
 
-  std::wstring start_menu_subfolder =
-      InstallUtil::GetChromeShortcutDirNameDeprecated();
-  ASSERT_TRUE(ShellUtil::GetShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::CURRENT_USER, &path));
-  EXPECT_EQ(fake_start_menu_.GetPath().Append(start_menu_subfolder), path);
-
-  ASSERT_TRUE(ShellUtil::GetShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::SYSTEM_LEVEL, &path));
-  EXPECT_EQ(fake_common_start_menu_.GetPath().Append(start_menu_subfolder),
-            path);
-
   ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
                                          ShellUtil::SYSTEM_LEVEL, &path));
   EXPECT_EQ(fake_common_startup_.GetPath(), path);
@@ -271,32 +257,6 @@ TEST_F(ShellUtilShortcutTest, GetShortcutPath) {
   ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
                                          ShellUtil::CURRENT_USER, &path));
   EXPECT_EQ(fake_user_startup_.GetPath(), path);
-}
-
-TEST_F(ShellUtilShortcutTest, MoveExistingShortcut) {
-  test_properties_.set_shortcut_name(L"Bobo le shortcut");
-  test_properties_.level = ShellUtil::SYSTEM_LEVEL;
-  base::FilePath old_shortcut_path(GetExpectedShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_));
-
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
-  ASSERT_TRUE(base::PathExists(old_shortcut_path.DirName()));
-  ASSERT_TRUE(base::PathExists(old_shortcut_path));
-
-  ASSERT_TRUE(ShellUtil::MoveExistingShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_ROOT, test_properties_));
-
-  ValidateChromeShortcut(ShellUtil::SHORTCUT_LOCATION_START_MENU_ROOT,
-                         test_properties_);
-  ASSERT_FALSE(base::PathExists(old_shortcut_path));
-  ASSERT_FALSE(base::PathExists(old_shortcut_path.DirName()));
 }
 
 // Test the basic mechanism of TranslateShortcutCreationOrUpdateInfo.
@@ -328,17 +288,6 @@ TEST_F(ShellUtilShortcutTest, CreateChromeExeShortcutWithDefaultProperties) {
       ShellUtil::SHORTCUT_LOCATION_DESKTOP, properties,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
   ValidateChromeShortcut(ShellUtil::SHORTCUT_LOCATION_DESKTOP, properties);
-}
-
-TEST_F(ShellUtilShortcutTest, CreateStartMenuShortcutWithAllProperties) {
-  test_properties_.set_shortcut_name(L"Bobo le shortcut");
-  test_properties_.level = ShellUtil::SYSTEM_LEVEL;
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
 }
 
 TEST_F(ShellUtilShortcutTest, ReplaceSystemLevelDesktopShortcut) {
@@ -410,15 +359,6 @@ TEST_F(ShellUtilShortcutTest, CreateIfNoSystemLevelWithSystemLevelPresent) {
       ShellUtil::SHELL_SHORTCUT_CREATE_IF_NO_SYSTEM_LEVEL));
   ASSERT_FALSE(
       base::PathExists(fake_user_desktop_.GetPath().Append(shortcut_name)));
-}
-
-TEST_F(ShellUtilShortcutTest, CreateIfNoSystemLevelStartMenu) {
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_IF_NO_SYSTEM_LEVEL));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
 }
 
 TEST_F(ShellUtilShortcutTest, CreateAlwaysUserWithSystemLevelPresent) {
@@ -993,43 +933,21 @@ TEST_F(ShellUtilShortcutTest, ShortcutsAreNotHidden) {
 
 TEST_F(ShellUtilShortcutTest, CreateMultipleStartMenuShortcutsAndRemoveFolder) {
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
       ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_APPS_DIR, test_properties_,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
   test_properties_.set_shortcut_name(L"A second shortcut");
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
       ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_APPS_DIR, test_properties_,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
 
-  base::FilePath chrome_shortcut_folder(fake_start_menu_.GetPath().Append(
-      InstallUtil::GetChromeShortcutDirNameDeprecated()));
   base::FilePath chrome_apps_shortcut_folder(fake_start_menu_.GetPath().Append(
       InstallUtil::GetChromeAppsShortcutDirName()));
-
-  base::FileEnumerator chrome_file_counter(chrome_shortcut_folder, false,
-                                           base::FileEnumerator::FILES);
-  int count = 0;
-  while (!chrome_file_counter.Next().empty())
-    ++count;
-  EXPECT_EQ(2, count);
-
   base::FileEnumerator chrome_apps_file_counter(
       chrome_apps_shortcut_folder, false, base::FileEnumerator::FILES);
-  count = 0;
+  int count = 0;
   while (!chrome_apps_file_counter.Next().empty())
     ++count;
   EXPECT_EQ(2, count);
-
-  ASSERT_TRUE(base::PathExists(chrome_shortcut_folder));
-  ASSERT_TRUE(ShellUtil::RemoveShortcuts(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::CURRENT_USER, {chrome_exe_}));
-  ASSERT_FALSE(base::PathExists(chrome_shortcut_folder));
 
   ASSERT_TRUE(base::PathExists(chrome_apps_shortcut_folder));
   ASSERT_TRUE(ShellUtil::RemoveShortcuts(
@@ -1065,7 +983,7 @@ TEST_F(ShellUtilShortcutTest, DontRemoveChromeShortcutIfPointsToAnotherChrome) {
   ASSERT_TRUE(other_exe_dir.CreateUniqueTempDir());
   base::FilePath other_chrome_exe =
       other_exe_dir.GetPath().Append(installer::kChromeExe);
-  EXPECT_EQ(0, base::WriteFile(other_chrome_exe, "", 0));
+  EXPECT_TRUE(base::WriteFile(other_chrome_exe, ""));
 
   test_properties_.set_target(other_chrome_exe);
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
@@ -1119,7 +1037,7 @@ class ShellUtilRegistryTest : public testing::Test {
   static const std::set<std::wstring> FileExtensions() {
     std::set<std::wstring> file_extensions;
     for (size_t i = 0; i < std::size(kTestFileExtensions); ++i)
-      file_extensions.insert(kTestFileExtensions[i]);
+      file_extensions.insert(UNSAFE_TODO(kTestFileExtensions[i]));
     return file_extensions;
   }
 
@@ -1153,16 +1071,13 @@ TEST_F(ShellUtilRegistryTest, AddFileAssociations) {
   EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", value);
 
-  // The Application subkey and values are only required by Windows 8 and later.
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    ASSERT_EQ(ERROR_SUCCESS,
-              key.Open(HKEY_CURRENT_USER,
-                       L"Software\\Classes\\TestApp\\Application", KEY_READ));
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
-    EXPECT_EQ(L"Test Application", value);
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
-    EXPECT_EQ(L"D:\\test.ico,0", value);
-  }
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER,
+                     L"Software\\Classes\\TestApp\\Application", KEY_READ));
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
+  EXPECT_EQ(L"Test Application", value);
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
+  EXPECT_EQ(L"D:\\test.ico,0", value);
 
   // .test1 should not be default-associated with our test app. Programmatically
   // becoming the default handler can be surprising to users, and risks
@@ -1261,16 +1176,13 @@ TEST_F(ShellUtilRegistryTest, AddApplicationClass) {
   EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", value);
 
-  // The Application subkey and values are only required by Windows 8 and later.
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    ASSERT_EQ(ERROR_SUCCESS,
-              key.Open(HKEY_CURRENT_USER,
-                       L"Software\\Classes\\TestApp\\Application", KEY_READ));
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
-    EXPECT_EQ(L"Test Application", value);
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
-    EXPECT_EQ(L"D:\\test.ico,0", value);
-  }
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER,
+                     L"Software\\Classes\\TestApp\\Application", KEY_READ));
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
+  EXPECT_EQ(L"Test Application", value);
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
+  EXPECT_EQ(L"D:\\test.ico,0", value);
 }
 
 TEST_F(ShellUtilRegistryTest, DeleteApplicationClass) {
@@ -1293,8 +1205,7 @@ TEST_F(ShellUtilRegistryTest, GetAppName) {
   EXPECT_TRUE(empty_app_name.empty());
 
   // Add file associations and test that GetAppName returns the registered app
-  // name. Pass kTestApplicationName for the open command, to handle the Win 7
-  // case, which returns the open command executable name as the app_name.
+  // name.
   ASSERT_TRUE(ShellUtil::AddFileAssociations(
       kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath), FileExtensions()));
@@ -1324,8 +1235,7 @@ TEST_F(ShellUtilRegistryTest, GetApplicationInfoForProgId) {
 
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", app_info.command_line);
 
-  if (base::win::GetVersion() >= base::win::Version::WIN8)
-    EXPECT_EQ(L"", app_info.app_id);
+  EXPECT_EQ(L"", app_info.app_id);
 
   EXPECT_EQ(kTestApplicationName, app_info.application_name);
   EXPECT_EQ(kTestApplicationDescription, app_info.application_description);
@@ -1336,10 +1246,6 @@ TEST_F(ShellUtilRegistryTest, GetApplicationInfoForProgId) {
 }
 
 TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations) {
-  // App protocol handlers are not supported on Windows 7.
-  if (base::win::GetVersion() <= base::win::Version::WIN7)
-    return;
-
   // Create test protocol associations.
   const std::wstring app_progid = L"app_progid1";
   const std::vector<std::wstring> app_protocols = {L"web+test", L"mailto"};
@@ -1405,7 +1311,7 @@ TEST_F(ShellUtilRegistryTest, ToAndFromCommandLineArgument) {
   EXPECT_EQ(L"mailto:app_progid2,web+test:app_progid1", command_line);
 
   // Ensure the above command line arguments parse correctly.
-  absl::optional<ShellUtil::ProtocolAssociations> parsed_protocol_associations =
+  std::optional<ShellUtil::ProtocolAssociations> parsed_protocol_associations =
       ShellUtil::ProtocolAssociations::FromCommandLineArgument(command_line);
   ASSERT_TRUE(parsed_protocol_associations.has_value());
   EXPECT_EQ(protocol_associations.associations,
@@ -1415,10 +1321,6 @@ TEST_F(ShellUtilRegistryTest, ToAndFromCommandLineArgument) {
 }
 
 TEST_F(ShellUtilRegistryTest, RemoveAppProtocolAssociations) {
-  // App protocol handlers are not supported on Windows 7.
-  if (base::win::GetVersion() <= base::win::Version::WIN7)
-    return;
-
   // Create test protocol associations.
   const std::wstring app_progid = L"app_progid1";
   const std::vector<std::wstring> app_protocols = {L"web+test"};
@@ -1540,92 +1442,4 @@ TEST(ShellUtilTest, GetOldUserSpecificRegistrySuffix) {
   ASSERT_NE(0, ::GetUserName(user_name, &size));
   ASSERT_GE(size, 1U);
   ASSERT_STREQ(user_name, suffix.substr(1).c_str());
-}
-
-TEST(ShellUtilTest, HashComputationTest) {
-  // Random selection of data to validate hash behavior.
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0xad, 0x02, 0x99, 0xd7, 0xe6, 0xae, 0x58, 0xb2}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0x09dea6a1, 0x4a8fc186, 0xbc7c90a4, 0xca06d9a3}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0xdf, 0x5e, 0xaa, 0x78, 0xb2, 0xad, 0x92, 0x2f, 0x2a, 0xdc,
-                  0xcd, 0xaf, 0xda, 0xd3, 0x4e, 0x86}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xaf9b175d, 0xcc68a9ce, 0x8f9f7b8b, 0x895cd714}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0xdc, 0x94, 0xa7, 0x6f, 0x94, 0xd7, 0x6c, 0xf6, 0xca, 0x95,
-                  0xc7, 0xf3, 0x54, 0x39, 0xb1, 0xac, 0xb3, 0xa2, 0x7a, 0xa7,
-                  0x6f, 0xbe, 0xb3, 0xe1, 0xbd, 0x42, 0x22, 0xe3}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xec3767a8, 0x1e115388, 0x94e1a5fc, 0x9217bd7c}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(
-                  std::vector<uint8_t>{0x2e, 0x64, 0x7e, 0x26, 0xab, 0xec, 0xe5,
-                                       0xb4, 0x54, 0x16, 0xb1, 0xa2}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xc5b56876, 0x472a21c8, 0x642c79f7, 0x7214ae18}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(
-                  std::vector<uint8_t>{0x15, 0xb2, 0xc1, 0x91, 0x5f, 0x8f, 0x12,
-                                       0xad, 0xd4, 0x4c, 0xa7, 0x30}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xae9a26cd, 0x82769b2e, 0x85ef1ecd, 0x6c94e1a4}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0x9f, 0xf3, 0xdc, 0x20, 0xef, 0xbb, 0x28, 0x29, 0x58, 0x0b,
-                  0xc0, 0xb3, 0x40, 0xa5, 0x30, 0xb2, 0x32, 0x1c, 0x54, 0xf2}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xe9765ccb, 0x828b33ad, 0x619d1e26, 0x6e3645c9}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0x45, 0xb4, 0xe8, 0x81, 0x65, 0x6f, 0x6c, 0x76}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0x33c1d050, 0x79fdc457, 0xe677ddba, 0x2eb1dcee}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0x04, 0xbb, 0xd6, 0x1a, 0x8d, 0x40, 0xa6, 0xfd,
-                  0x79, 0x80, 0x26, 0xc0, 0xfc, 0x8b, 0x4e, 0xc4,
-                  0x60, 0x0b, 0x44, 0x0e, 0x27, 0x71, 0x0f, 0x57}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0x355884a8, 0x0760d56d, 0xd602215c, 0xe5792b0c}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-                  0x4a, 0xca, 0x02, 0x1f, 0xd4, 0xf0, 0xfd, 0x2c, 0x88, 0x09,
-                  0xee, 0xf6, 0xeb, 0xd9, 0xf4, 0x8b}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{
-                  0xe11db6db, 0x3c2728d2, 0xc65e3481, 0x10d6e545}));
-  EXPECT_THAT(
-      ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{
-          0x9c, 0x05, 0x18, 0x01, 0xb0, 0x92, 0x8c, 0xec, 0x67, 0x6a, 0xd1,
-          0x81, 0xed, 0x6a, 0xb6, 0xf8, 0xad, 0xb0, 0x41, 0xf4, 0x21, 0x34,
-          0x30, 0xca, 0x7f, 0x51, 0x47, 0xc4, 0x1c, 0xcf, 0x06, 0x91}),
-      ::testing::ContainerEq(std::array<uint32_t, 4>{0xec0c887c, 0x36538d64,
-                                                     0x302c1cdf, 0x0fe7c73d}));
-
-  // Invalid data that should hash to zeros.
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{}));
-  EXPECT_THAT(
-      ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{0x00, 0x01}),
-      ::testing::ContainerEq(std::array<uint32_t, 4>{}));
-  EXPECT_THAT(
-      ShellUtil::ComputeHashForTesting(std::vector<uint8_t>{0x00, 0x01, 0x02}),
-      ::testing::ContainerEq(std::array<uint32_t, 4>{}));
-  EXPECT_THAT(ShellUtil::ComputeHashForTesting(
-                  std::vector<uint8_t>{0x00, 0x01, 0x02, 0x03}),
-              ::testing::ContainerEq(std::array<uint32_t, 4>{}));
-}
-
-TEST(ShellUtilTest, UserChoiceHashComputationTest) {
-  // User Choice hashing is only available on Win10 or above.
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    GTEST_SKIP();
-
-  // If these tests fail, investigate if the salt changed or if the hash
-  // function changed.
-  EXPECT_EQ(
-      L"EYe0ErlvGho=",
-      ShellUtil::ComputeUserChoiceHashForTesting(
-          L".htm", L"S-1-5-21-2745944652-1798522384-4190209206-1001",
-          L"ChromiumHTM.77HL62E3NQOIRZILVHSWMGHIQE", L"01d88bf3ee5fd000"));
-  EXPECT_EQ(
-      L"w4oUasKJq/Y=",
-      ShellUtil::ComputeUserChoiceHashForTesting(
-          L".html", L"S-1-5-21-2745944652-1798522384-4190209206-1001",
-          L"ChromiumHTM.77HL62E3NQOIRZILVHSWMGHIQE", L"01d88bf3ee5fd000"));
 }

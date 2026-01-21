@@ -7,17 +7,17 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/autofill/payments/webauthn_dialog_controller.h"
-#include "components/autofill/core/browser/autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "content/public/browser/page_user_data.h"
 
 namespace autofill {
 
 class WebauthnDialogModel;
-class WebauthnDialogView;
+class WebauthnDialog;
 enum class WebauthnDialogState;
 
 // Implementation of the per-outermost primary page controller to control the
-// WebauthnDialogView. Lazily initialized when used.
+// WebauthnDialog. Lazily initialized when used.
 class WebauthnDialogControllerImpl
     : public WebauthnDialogController,
       public content::PageUserData<WebauthnDialogControllerImpl> {
@@ -27,10 +27,11 @@ class WebauthnDialogControllerImpl
       delete;
   ~WebauthnDialogControllerImpl() override;
 
-  void ShowOfferDialog(
-      AutofillClient::WebauthnDialogCallback offer_dialog_callback);
+  void ShowOfferDialog(payments::PaymentsAutofillClient::WebauthnDialogCallback
+                           offer_dialog_callback);
   void ShowVerifyPendingDialog(
-      AutofillClient::WebauthnDialogCallback verify_pending_dialog_callback);
+      payments::PaymentsAutofillClient::WebauthnDialogCallback
+          verify_pending_dialog_callback);
   bool CloseDialog();
   void UpdateDialog(WebauthnDialogState dialog_state);
 
@@ -40,7 +41,7 @@ class WebauthnDialogControllerImpl
   void OnDialogClosed() override;
   content::WebContents* GetWebContents() override;
 
-  WebauthnDialogView* dialog_view() { return dialog_view_; }
+  WebauthnDialog* dialog() { return dialog_; }
 
  protected:
   explicit WebauthnDialogControllerImpl(content::Page& page);
@@ -52,10 +53,10 @@ class WebauthnDialogControllerImpl
   // will invoke this repeating callback. Note this repeating callback can
   // be run twice, since after the accept button in the offer dialog is
   // clicked, the dialog stays and the cancel button is still clickable.
-  AutofillClient::WebauthnDialogCallback callback_;
+  payments::PaymentsAutofillClient::WebauthnDialogCallback callback_;
 
   raw_ptr<WebauthnDialogModel> dialog_model_ = nullptr;
-  raw_ptr<WebauthnDialogView> dialog_view_ = nullptr;
+  raw_ptr<WebauthnDialog> dialog_ = nullptr;
 
   PAGE_USER_DATA_KEY_DECL();
 };

@@ -9,12 +9,14 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/history/top_sites_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "components/history/core/browser/top_sites.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -24,8 +26,9 @@ TopSitesGetFunction::~TopSitesGetFunction() = default;
 ExtensionFunction::ResponseAction TopSitesGetFunction::Run() {
   scoped_refptr<history::TopSites> ts = TopSitesFactory::GetForProfile(
       Profile::FromBrowserContext(browser_context()));
-  if (!ts)
+  if (!ts) {
     return RespondNow(Error(kUnknownErrorDoNotUse));
+  }
 
   ts->GetMostVisitedURLs(
       base::BindOnce(&TopSitesGetFunction::OnMostVisitedURLsAvailable, this));
@@ -51,7 +54,7 @@ void TopSitesGetFunction::OnMostVisitedURLsAvailable(
     }
   }
 
-  Respond(OneArgument(base::Value(std::move(pages_value))));
+  Respond(WithArguments(std::move(pages_value)));
 }
 
 }  // namespace extensions

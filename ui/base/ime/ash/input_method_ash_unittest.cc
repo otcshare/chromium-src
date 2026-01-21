@@ -11,11 +11,15 @@
 #include <queue>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "ash/constants/ash_features.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/char_iterator.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -26,20 +30,27 @@
 #include "ui/base/ime/ash/text_input_method.h"
 #include "ui/base/ime/composition_text.h"
 #include "ui/base/ime/dummy_text_input_client.h"
+#include "ui/base/ime/events.h"
 #include "ui/base/ime/fake_text_input_client.h"
 #include "ui/base/ime/ime_key_event_dispatcher.h"
 #include "ui/base/ime/text_input_client.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/events/ozone/events_ozone.h"
 #include "ui/events/test/keyboard_layout.h"
 #include "ui/gfx/geometry/rect.h"
 
-using base::UTF16ToUTF8;
+namespace ash {
 
-namespace ui {
 namespace {
+
+using ::base::UTF16ToUTF8;
+using ::ui::CompositionText;
+using ::ui::FakeTextInputClient;
+using ::ui::TextInputClient;
 
 const std::u16string kSampleText = u"あいうえお";
 
@@ -49,8 +60,9 @@ uint32_t GetOffsetInUTF16(const std::u16string& utf16_string,
                           uint32_t utf8_offset) {
   DCHECK_LT(utf8_offset, utf16_string.size());
   base::i18n::UTF16CharIterator char_iterator(utf16_string);
-  for (size_t i = 0; i < utf8_offset; ++i)
+  for (size_t i = 0; i < utf8_offset; ++i) {
     char_iterator.Advance();
+  }
   return char_iterator.array_pos();
 }
 
@@ -59,13 +71,16 @@ uint32_t GetOffsetInUTF16(const std::u16string& utf16_string,
 class TestableInputMethodAsh : public InputMethodAsh {
  public:
   explicit TestableInputMethodAsh(
-      ImeKeyEventDispatcher* ime_key_event_dispatcher)
+      ui::ImeKeyEventDispatcher* ime_key_event_dispatcher)
       : InputMethodAsh(ime_key_event_dispatcher),
         process_key_event_post_ime_call_count_(0) {}
 
   struct ProcessKeyEventPostIMEArgs {
     ProcessKeyEventPostIMEArgs()
-        : event(ET_UNKNOWN, VKEY_UNKNOWN, DomCode::NONE, EF_NONE),
+        : event(ui::EventType::kUnknown,
+                ui::VKEY_UNKNOWN,
+                ui::DomCode::NONE,
+                ui::EF_NONE),
           handled_state(ui::ime::KeyEventHandledState::kNotHandled) {}
     ui::KeyEvent event;
     ui::ime::KeyEventHandledState handled_state;
@@ -143,8 +158,7 @@ class SetSurroundingTextVerifier {
   const uint32_t expected_anchor_position_;
 };
 
-class TestInputMethodManager
-    : public ash::input_method::MockInputMethodManager {
+class TestInputMethodManager : public input_method::MockInputMethodManager {
   class TestState : public MockInputMethodManager::State {
    public:
     TestState() { Reset(); }
@@ -203,20 +217,22 @@ class TestInputMethodManager
   }
 };
 
-class NiceMockIMEEngine : public ash::MockIMEEngineHandler {
+class NiceMockIMEEngine : public MockIMEEngineHandler {
  public:
   MOCK_METHOD1(Focus, void(const InputContext&));
   MOCK_METHOD0(Blur, void());
-  MOCK_METHOD4(SetSurroundingText,
-               void(const std::u16string&, uint32_t, uint32_t, uint32_t));
+  MOCK_METHOD3(SetSurroundingText,
+               void(const std::u16string&, gfx::Range, uint32_t));
 };
 
-class InputMethodAshTest : public ImeKeyEventDispatcher,
+class InputMethodAshTest : public ui::ImeKeyEventDispatcher,
                            public testing::Test,
-                           public DummyTextInputClient {
+                           public ui::DummyTextInputClient {
  public:
   InputMethodAshTest()
-      : dispatched_key_event_(ui::ET_UNKNOWN, ui::VKEY_UNKNOWN, ui::EF_NONE),
+      : dispatched_key_event_(ui::EventType::kUnknown,
+                              ui::VKEY_UNKNOWN,
+                              ui::EF_NONE),
         stop_propagation_post_ime_(false) {
     ResetFlags();
   }
@@ -227,11 +243,11 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
   ~InputMethodAshTest() override = default;
 
   void SetUp() override {
-    mock_ime_engine_handler_ = std::make_unique<ash::MockIMEEngineHandler>();
+    mock_ime_engine_handler_ = std::make_unique<MockIMEEngineHandler>();
     IMEBridge::Get()->SetCurrentEngineHandler(mock_ime_engine_handler_.get());
 
     mock_ime_candidate_window_handler_ =
-        std::make_unique<ash::MockIMECandidateWindowHandler>();
+        std::make_unique<MockIMECandidateWindowHandler>();
     IMEBridge::Get()->SetCandidateWindowHandler(
         mock_ime_candidate_window_handler_.get());
 
@@ -240,18 +256,19 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
 
     // InputMethodManager owns and delete it in InputMethodManager::Shutdown().
     input_method_manager_ = new TestInputMethodManager();
-    ash::input_method::InputMethodManager::Initialize(input_method_manager_);
+    input_method::InputMethodManager::Initialize(input_method_manager_);
   }
 
   void TearDown() override {
-    if (input_method_ash_.get())
+    if (input_method_ash_.get()) {
       input_method_ash_->SetFocusedTextInputClient(nullptr);
+    }
     input_method_ash_.reset();
     IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
     IMEBridge::Get()->SetCandidateWindowHandler(nullptr);
     mock_ime_engine_handler_.reset();
     mock_ime_candidate_window_handler_.reset();
-    ash::input_method::InputMethodManager::Shutdown();
+    input_method::InputMethodManager::Shutdown();
 
     ResetFlags();
   }
@@ -260,8 +277,9 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
   ui::EventDispatchDetails DispatchKeyEventPostIME(
       ui::KeyEvent* event) override {
     dispatched_key_event_ = *event;
-    if (stop_propagation_post_ime_)
+    if (stop_propagation_post_ime_) {
       event->StopPropagation();
+    }
     return ui::EventDispatchDetails();
   }
 
@@ -285,12 +303,12 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
       TextInputClient::InsertTextCursorBehavior cursor_behavior) override {
     inserted_text_ = text;
   }
-  void InsertChar(const KeyEvent& event) override {
+  void InsertChar(const ui::KeyEvent& event) override {
     inserted_char_ = event.GetCharacter();
     inserted_char_flags_ = event.flags();
   }
-  TextInputType GetTextInputType() const override { return input_type_; }
-  TextInputMode GetTextInputMode() const override { return input_mode_; }
+  ui::TextInputType GetTextInputType() const override { return input_type_; }
+  ui::TextInputMode GetTextInputMode() const override { return input_mode_; }
   bool CanComposeInline() const override { return can_compose_inline_; }
   gfx::Rect GetCaretBounds() const override { return caret_bounds_; }
   bool HasCompositionText() const override {
@@ -322,9 +340,10 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
   bool SetAutocorrectRange(const gfx::Range& range) override {
     // TODO(crbug.com/1277388): This is a workaround to ensure that the range is
     // valid in the text. Change to use FakeTextInputClient instead of
-    // DummyTextInputClient so that the text contents can be queried accurately.
+    // `ui::DummyTextInputClient` so that the text contents can be queried
+    // accurately.
     if (!inserted_text_.empty() || inserted_char_ != 0) {
-      return DummyTextInputClient::SetAutocorrectRange(range);
+      return ui::DummyTextInputClient::SetAutocorrectRange(range);
     }
     return range.is_empty();
   }
@@ -333,7 +352,7 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
 
   void ResetFlags() {
     dispatched_key_event_ =
-        ui::KeyEvent(ui::ET_UNKNOWN, ui::VKEY_UNKNOWN, ui::EF_NONE);
+        ui::KeyEvent(ui::EventType::kUnknown, ui::VKEY_UNKNOWN, ui::EF_NONE);
 
     composition_text_ = CompositionText();
     confirmed_text_ = CompositionText();
@@ -342,8 +361,8 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
     inserted_char_flags_ = 0;
     on_input_method_changed_call_count_ = 0;
 
-    input_type_ = TEXT_INPUT_TYPE_NONE;
-    input_mode_ = TEXT_INPUT_MODE_DEFAULT;
+    input_type_ = ui::TEXT_INPUT_TYPE_NONE;
+    input_mode_ = ui::TEXT_INPUT_MODE_DEFAULT;
     can_compose_inline_ = true;
     caret_bounds_ = gfx::Rect();
 
@@ -366,46 +385,59 @@ class InputMethodAshTest : public ImeKeyEventDispatcher,
   int inserted_char_flags_;
 
   // Variables that will be returned from the ui::TextInputClient functions.
-  TextInputType input_type_;
-  TextInputMode input_mode_;
+  ui::TextInputType input_type_;
+  ui::TextInputMode input_mode_;
   bool can_compose_inline_;
   gfx::Rect caret_bounds_;
   gfx::Range text_range_;
   gfx::Range selection_range_;
   std::u16string surrounding_text_;
 
-  std::unique_ptr<ash::MockIMEEngineHandler> mock_ime_engine_handler_;
-  std::unique_ptr<ash::MockIMECandidateWindowHandler>
+  std::unique_ptr<MockIMEEngineHandler> mock_ime_engine_handler_;
+  std::unique_ptr<MockIMECandidateWindowHandler>
       mock_ime_candidate_window_handler_;
 
   bool stop_propagation_post_ime_;
 
-  TestInputMethodManager* input_method_manager_;
+  raw_ptr<TestInputMethodManager, DanglingUntriaged> input_method_manager_;
 
   base::test::TaskEnvironment task_environment_;
 };
 
-// Tests public APIs in ui::InputMethod first.
+// Tests public APIs in `ui::InputMethod` first.
 
 TEST_F(InputMethodAshTest, GetInputTextType) {
   InputMethodAsh ime(this);
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
-  EXPECT_EQ(ime.GetTextInputType(), TEXT_INPUT_TYPE_TEXT);
+  EXPECT_EQ(ime.GetTextInputType(), ui::TEXT_INPUT_TYPE_TEXT);
 
   ime.SetFocusedTextInputClient(nullptr);
 }
 
 TEST_F(InputMethodAshTest, OnTextInputTypeChangedChangesInputType) {
   InputMethodAsh ime(this);
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
-  fake_text_input_client.set_text_input_type(TEXT_INPUT_TYPE_PASSWORD);
+  fake_text_input_client.set_text_input_type(ui::TEXT_INPUT_TYPE_PASSWORD);
 
   ime.OnTextInputTypeChanged(&fake_text_input_client);
 
-  EXPECT_EQ(ime.GetTextInputType(), TEXT_INPUT_TYPE_PASSWORD);
+  EXPECT_EQ(ime.GetTextInputType(), ui::TEXT_INPUT_TYPE_PASSWORD);
+
+  ime.SetFocusedTextInputClient(nullptr);
+}
+
+TEST_F(InputMethodAshTest, HasBeenPasswordShouldTriggerPassowrd) {
+  InputMethodAsh ime(this);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
+  fake_text_input_client.SetFlags(ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD);
+
+  ime.SetFocusedTextInputClient(&fake_text_input_client);
+
+  EXPECT_EQ(mock_ime_engine_handler_->last_text_input_context().type,
+            ui::TEXT_INPUT_TYPE_PASSWORD);
 
   ime.SetFocusedTextInputClient(nullptr);
 }
@@ -417,21 +449,22 @@ TEST_F(InputMethodAshTest, GetTextInputClient) {
 }
 
 TEST_F(InputMethodAshTest, GetInputTextType_WithoutFocusedClient) {
-  EXPECT_EQ(TEXT_INPUT_TYPE_NONE, input_method_ash_->GetTextInputType());
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_NONE, input_method_ash_->GetTextInputType());
   input_method_ash_->SetFocusedTextInputClient(nullptr);
-  input_type_ = TEXT_INPUT_TYPE_PASSWORD;
+  input_type_ = ui::TEXT_INPUT_TYPE_PASSWORD;
   input_method_ash_->OnTextInputTypeChanged(this);
   // The OnTextInputTypeChanged() call above should be ignored since |this| is
   // not the current focused client.
-  EXPECT_EQ(TEXT_INPUT_TYPE_NONE, input_method_ash_->GetTextInputType());
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_NONE, input_method_ash_->GetTextInputType());
 
   input_method_ash_->SetFocusedTextInputClient(this);
   input_method_ash_->OnTextInputTypeChanged(this);
-  EXPECT_EQ(TEXT_INPUT_TYPE_PASSWORD, input_method_ash_->GetTextInputType());
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_PASSWORD,
+            input_method_ash_->GetTextInputType());
 }
 
 TEST_F(InputMethodAshTest, OnWillChangeFocusedClientClearAutocorrectRange) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->SetFocusedTextInputClient(this);
   input_method_ash_->CommitText(
       u"hello",
@@ -449,14 +482,14 @@ TEST_F(InputMethodAshTest, Focus_Text) {
   // A context shouldn't be created since the daemon is not running.
   EXPECT_EQ(0U, on_input_method_changed_call_count_);
   // Click a text input form.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   // Since a form has focus, IBusClient::Focus() should be called.
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
-  EXPECT_EQ(1,
-            mock_ime_candidate_window_handler_->set_cursor_bounds_call_count());
+  EXPECT_EQ(1, mock_ime_candidate_window_handler_
+                   ->set_cursor_and_composition_bounds_call_count());
   // ui::TextInputClient::OnInputMethodChanged() should be called when
-  // ui::InputMethodAsh connects/disconnects to/from ibus-daemon and the
+  // `InputMethodAsh` connects/disconnects to/from ibus-daemon and the
   // current text input type is not NONE.
   EXPECT_EQ(1U, on_input_method_changed_call_count_);
 }
@@ -465,7 +498,7 @@ TEST_F(InputMethodAshTest, Focus_Text) {
 // input_type_ is PASSWORD.
 TEST_F(InputMethodAshTest, Focus_Password) {
   EXPECT_EQ(0U, on_input_method_changed_call_count_);
-  input_type_ = TEXT_INPUT_TYPE_PASSWORD;
+  input_type_ = ui::TEXT_INPUT_TYPE_PASSWORD;
   input_method_ash_->OnTextInputTypeChanged(this);
   // InputMethodEngine::Focus() should be called even for password field.
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
@@ -474,11 +507,11 @@ TEST_F(InputMethodAshTest, Focus_Password) {
 
 // Confirm that IBusClient::Blur is called as expected.
 TEST_F(InputMethodAshTest, Blur_None) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(0, mock_ime_engine_handler_->focus_out_call_count());
-  input_type_ = TEXT_INPUT_TYPE_NONE;
+  input_type_ = ui::TEXT_INPUT_TYPE_NONE;
   input_method_ash_->OnTextInputTypeChanged(this);
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_out_call_count());
@@ -486,11 +519,11 @@ TEST_F(InputMethodAshTest, Blur_None) {
 
 // Confirm that IBusClient::Blur is called as expected.
 TEST_F(InputMethodAshTest, Blur_Password) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(0, mock_ime_engine_handler_->focus_out_call_count());
-  input_type_ = TEXT_INPUT_TYPE_PASSWORD;
+  input_type_ = ui::TEXT_INPUT_TYPE_PASSWORD;
   input_method_ash_->OnTextInputTypeChanged(this);
   EXPECT_EQ(2, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_out_call_count());
@@ -501,42 +534,42 @@ TEST_F(InputMethodAshTest, Focus_Scenario) {
   // Confirm that both Focus and Blur are NOT called.
   EXPECT_EQ(0, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(0, mock_ime_engine_handler_->focus_out_call_count());
-  EXPECT_EQ(TEXT_INPUT_TYPE_NONE,
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_NONE,
             mock_ime_engine_handler_->last_text_input_context().type);
-  EXPECT_EQ(TEXT_INPUT_MODE_DEFAULT,
+  EXPECT_EQ(ui::TEXT_INPUT_MODE_DEFAULT,
             mock_ime_engine_handler_->last_text_input_context().mode);
 
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
-  input_mode_ = TEXT_INPUT_MODE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  input_mode_ = ui::TEXT_INPUT_MODE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   // Confirm that only Focus is called, the TextInputType is TEXT and the
   // TextInputMode is LATIN..
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(0, mock_ime_engine_handler_->focus_out_call_count());
-  EXPECT_EQ(TEXT_INPUT_TYPE_TEXT,
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_TEXT,
             mock_ime_engine_handler_->last_text_input_context().type);
-  EXPECT_EQ(TEXT_INPUT_MODE_TEXT,
+  EXPECT_EQ(ui::TEXT_INPUT_MODE_TEXT,
             mock_ime_engine_handler_->last_text_input_context().mode);
 
-  input_mode_ = TEXT_INPUT_MODE_SEARCH;
+  input_mode_ = ui::TEXT_INPUT_MODE_SEARCH;
   input_method_ash_->OnTextInputTypeChanged(this);
   // Confirm that both Focus and Blur are called for mode change.
   EXPECT_EQ(2, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(1, mock_ime_engine_handler_->focus_out_call_count());
-  EXPECT_EQ(TEXT_INPUT_TYPE_TEXT,
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_TEXT,
             mock_ime_engine_handler_->last_text_input_context().type);
-  EXPECT_EQ(TEXT_INPUT_MODE_SEARCH,
+  EXPECT_EQ(ui::TEXT_INPUT_MODE_SEARCH,
             mock_ime_engine_handler_->last_text_input_context().mode);
 
-  input_type_ = TEXT_INPUT_TYPE_URL;
+  input_type_ = ui::TEXT_INPUT_TYPE_URL;
   input_method_ash_->OnTextInputTypeChanged(this);
   // Confirm that both Focus and Blur are called and the TextInputType is
   // changed to URL.
   EXPECT_EQ(3, mock_ime_engine_handler_->focus_in_call_count());
   EXPECT_EQ(2, mock_ime_engine_handler_->focus_out_call_count());
-  EXPECT_EQ(TEXT_INPUT_TYPE_URL,
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_URL,
             mock_ime_engine_handler_->last_text_input_context().type);
-  EXPECT_EQ(TEXT_INPUT_MODE_SEARCH,
+  EXPECT_EQ(ui::TEXT_INPUT_MODE_SEARCH,
             mock_ime_engine_handler_->last_text_input_context().mode);
 
   // Confirm that Blur is called when set focus to NULL client.
@@ -551,24 +584,24 @@ TEST_F(InputMethodAshTest, Focus_Scenario) {
 
 // Test if the new |caret_bounds_| is correctly sent to ibus-daemon.
 TEST_F(InputMethodAshTest, OnCaretBoundsChanged) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
-  EXPECT_EQ(1,
-            mock_ime_candidate_window_handler_->set_cursor_bounds_call_count());
+  EXPECT_EQ(1, mock_ime_candidate_window_handler_
+                   ->set_cursor_and_composition_bounds_call_count());
   caret_bounds_ = gfx::Rect(1, 2, 3, 4);
   input_method_ash_->OnCaretBoundsChanged(this);
-  EXPECT_EQ(2,
-            mock_ime_candidate_window_handler_->set_cursor_bounds_call_count());
+  EXPECT_EQ(2, mock_ime_candidate_window_handler_
+                   ->set_cursor_and_composition_bounds_call_count());
   caret_bounds_ = gfx::Rect(0, 2, 3, 4);
   input_method_ash_->OnCaretBoundsChanged(this);
-  EXPECT_EQ(3,
-            mock_ime_candidate_window_handler_->set_cursor_bounds_call_count());
+  EXPECT_EQ(3, mock_ime_candidate_window_handler_
+                   ->set_cursor_and_composition_bounds_call_count());
   caret_bounds_ = gfx::Rect(0, 2, 3, 4);  // unchanged
   input_method_ash_->OnCaretBoundsChanged(this);
   // Current InputMethodAsh implementation performs the IPC
   // regardless of the bounds are changed or not.
-  EXPECT_EQ(4,
-            mock_ime_candidate_window_handler_->set_cursor_bounds_call_count());
+  EXPECT_EQ(4, mock_ime_candidate_window_handler_
+                   ->set_cursor_and_composition_bounds_call_count());
 }
 
 TEST_F(InputMethodAshTest, ExtractCompositionTextTest_NoAttribute) {
@@ -596,10 +629,10 @@ TEST_F(InputMethodAshTest, ExtractCompositionTextTest_NoAttribute) {
 
 TEST_F(InputMethodAshTest, SetCompositionTextFails) {
   InputMethodAsh ime(this);
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
-  EXPECT_EQ(ime.GetTextInputType(), TEXT_INPUT_TYPE_TEXT);
+  EXPECT_EQ(ime.GetTextInputType(), ui::TEXT_INPUT_TYPE_TEXT);
   // Intentionally have a range start that does not exist.
   EXPECT_FALSE(ime.SetCompositionRange(10000, 5, {}));
 
@@ -612,10 +645,10 @@ TEST_F(InputMethodAshTest, ExtractCompositionTextTest_SingleUnderline) {
   // Set up Ash composition text with one underline attribute.
   CompositionText composition_text;
   composition_text.text = kSampleText;
-  ImeTextSpan underline(ImeTextSpan::Type::kComposition, 1UL, 4UL,
-                        ui::ImeTextSpan::Thickness::kThin,
-                        ui::ImeTextSpan::UnderlineStyle::kSolid,
-                        SK_ColorTRANSPARENT);
+  ui::ImeTextSpan underline(ui::ImeTextSpan::Type::kComposition, 1UL, 4UL,
+                            ui::ImeTextSpan::Thickness::kThin,
+                            ui::ImeTextSpan::UnderlineStyle::kSolid,
+                            SK_ColorTRANSPARENT);
   composition_text.ime_text_spans.push_back(underline);
 
   CompositionText composition_text2 =
@@ -644,10 +677,10 @@ TEST_F(InputMethodAshTest, ExtractCompositionTextTest_DoubleUnderline) {
   // Set up Ash composition text with one underline attribute.
   CompositionText composition_text;
   composition_text.text = kSampleText;
-  ImeTextSpan underline(ImeTextSpan::Type::kComposition, 1UL, 4UL,
-                        ui::ImeTextSpan::Thickness::kThick,
-                        ui::ImeTextSpan::UnderlineStyle::kSolid,
-                        SK_ColorTRANSPARENT);
+  ui::ImeTextSpan underline(ui::ImeTextSpan::Type::kComposition, 1UL, 4UL,
+                            ui::ImeTextSpan::Thickness::kThick,
+                            ui::ImeTextSpan::UnderlineStyle::kSolid,
+                            SK_ColorTRANSPARENT);
   composition_text.ime_text_spans.push_back(underline);
 
   CompositionText composition_text2 =
@@ -676,10 +709,10 @@ TEST_F(InputMethodAshTest, ExtractCompositionTextTest_ErrorUnderline) {
   // Set up Ash composition text with one underline attribute.
   CompositionText composition_text;
   composition_text.text = kSampleText;
-  ImeTextSpan underline(ImeTextSpan::Type::kComposition, 1UL, 4UL,
-                        ui::ImeTextSpan::Thickness::kThin,
-                        ui::ImeTextSpan::UnderlineStyle::kSolid,
-                        SK_ColorTRANSPARENT);
+  ui::ImeTextSpan underline(ui::ImeTextSpan::Type::kComposition, 1UL, 4UL,
+                            ui::ImeTextSpan::Thickness::kThin,
+                            ui::ImeTextSpan::UnderlineStyle::kSolid,
+                            SK_ColorTRANSPARENT);
   underline.underline_color = SK_ColorRED;
   composition_text.ime_text_spans.push_back(underline);
 
@@ -791,7 +824,7 @@ TEST_F(InputMethodAshTest, ExtractCompositionTextTest_SelectionEndWithCursor) {
 
 TEST_F(InputMethodAshTest, SurroundingText_NoSelectionTest) {
   // Click a text input form.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Set the TextInputClient behaviors.
@@ -808,13 +841,13 @@ TEST_F(InputMethodAshTest, SurroundingText_NoSelectionTest) {
   EXPECT_EQ(1, mock_ime_engine_handler_->set_surrounding_text_call_count());
   EXPECT_EQ(surrounding_text_,
             mock_ime_engine_handler_->last_set_surrounding_text());
-  EXPECT_EQ(3U, mock_ime_engine_handler_->last_set_surrounding_cursor_pos());
-  EXPECT_EQ(3U, mock_ime_engine_handler_->last_set_surrounding_anchor_pos());
+  EXPECT_EQ(gfx::Range(3),
+            mock_ime_engine_handler_->last_set_selection_range());
 }
 
 TEST_F(InputMethodAshTest, SurroundingText_SelectionTest) {
   // Click a text input form.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Set the TextInputClient behaviors.
@@ -831,13 +864,13 @@ TEST_F(InputMethodAshTest, SurroundingText_SelectionTest) {
   EXPECT_EQ(1, mock_ime_engine_handler_->set_surrounding_text_call_count());
   EXPECT_EQ(surrounding_text_,
             mock_ime_engine_handler_->last_set_surrounding_text());
-  EXPECT_EQ(2U, mock_ime_engine_handler_->last_set_surrounding_cursor_pos());
-  EXPECT_EQ(5U, mock_ime_engine_handler_->last_set_surrounding_anchor_pos());
+  EXPECT_EQ(gfx::Range(2, 5),
+            mock_ime_engine_handler_->last_set_selection_range());
 }
 
 TEST_F(InputMethodAshTest, SurroundingText_PartialText) {
   // Click a text input form.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Set the TextInputClient behaviors.
@@ -852,13 +885,13 @@ TEST_F(InputMethodAshTest, SurroundingText_PartialText) {
   // Set the verifier for SetSurroundingText mock call.
   // Here (2, 4) is selection range in expected surrounding text coordinates.
   EXPECT_EQ(u"fghij", mock_ime_engine_handler_->last_set_surrounding_text());
-  EXPECT_EQ(2U, mock_ime_engine_handler_->last_set_surrounding_cursor_pos());
-  EXPECT_EQ(4U, mock_ime_engine_handler_->last_set_surrounding_anchor_pos());
+  EXPECT_EQ(gfx::Range(2, 4),
+            mock_ime_engine_handler_->last_set_selection_range());
 }
 
 TEST_F(InputMethodAshTest, SurroundingText_BecomeEmptyText) {
   // Click a text input form.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Set the TextInputClient behaviors.
@@ -893,7 +926,7 @@ TEST_F(InputMethodAshTest, SurroundingText_EventOrder) {
     text_range_ = gfx::Range(0, 1);
     selection_range_ = gfx::Range(0, 0);
 
-    input_type_ = TEXT_INPUT_TYPE_TEXT;
+    input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
     input_method_ash_->OnWillChangeFocusedClient(nullptr, this);
     input_method_ash_->OnDidChangeFocusedClient(nullptr, this);
   }
@@ -909,7 +942,7 @@ TEST_F(InputMethodAshTest, SurroundingText_EventOrder) {
     text_range_ = gfx::Range(0, 1);
     selection_range_ = gfx::Range(0, 0);
 
-    input_type_ = TEXT_INPUT_TYPE_EMAIL;
+    input_type_ = ui::TEXT_INPUT_TYPE_EMAIL;
     input_method_ash_->OnTextInputTypeChanged(this);
   }
   IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
@@ -917,7 +950,7 @@ TEST_F(InputMethodAshTest, SurroundingText_EventOrder) {
 
 TEST_F(InputMethodAshTest, SetCompositionRange_InvalidRange) {
   // Focus on a text field.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Insert some text and place the cursor.
@@ -931,7 +964,7 @@ TEST_F(InputMethodAshTest, SetCompositionRange_InvalidRange) {
 
 TEST_F(InputMethodAshTest,
        SetCompositionRangeWithSelectedTextAccountsForSelection) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   fake_text_input_client.SetTextAndSelection(u"01234", gfx::Range(1, 4));
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
@@ -948,7 +981,7 @@ TEST_F(InputMethodAshTest,
 
 TEST_F(InputMethodAshTest, ConfirmComposition_NoComposition) {
   // Focus on a text field.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   input_method_ash_->ConfirmComposition(/* reset_engine */ true);
@@ -959,7 +992,7 @@ TEST_F(InputMethodAshTest, ConfirmComposition_NoComposition) {
 
 TEST_F(InputMethodAshTest, ConfirmComposition_SetComposition) {
   // Focus on a text field.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   CompositionText composition_text;
@@ -973,7 +1006,7 @@ TEST_F(InputMethodAshTest, ConfirmComposition_SetComposition) {
 
 TEST_F(InputMethodAshTest, ConfirmComposition_SetCompositionRange) {
   // Focus on a text field.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Place some text.
@@ -989,7 +1022,7 @@ TEST_F(InputMethodAshTest, ConfirmComposition_SetCompositionRange) {
 }
 
 TEST_F(InputMethodAshTest, SetAutocorrectRange_SuccessfulSet) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   InsertText(u"a",
@@ -1012,7 +1045,7 @@ TEST_F(InputMethodAshTest, SetAutocorrectRange_SuccessfulSet) {
 }
 
 TEST_F(InputMethodAshTest, SetAutocorrectRange_FailedSet) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   bool callback_called = false;
@@ -1045,10 +1078,10 @@ class InputMethodAshKeyEventTest : public InputMethodAshTest {
 
 TEST_F(InputMethodAshKeyEventTest, KeyEventDelayResponseTest) {
   const int kFlags = ui::EF_SHIFT_DOWN;
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, kFlags);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, kFlags);
 
   // Do key event.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   input_method_ash_->DispatchKeyEvent(&event);
 
@@ -1087,11 +1120,11 @@ TEST_F(InputMethodAshKeyEventTest, MultiKeyEventDelayResponseTest) {
   ui::ScopedKeyboardLayout keyboard_layout(ui::KEYBOARD_LAYOUT_ENGLISH_US);
 
   // Preparation
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   const int kFlags = ui::EF_SHIFT_DOWN;
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_B, kFlags);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_B, kFlags);
 
   // Do key event.
   input_method_ash_->DispatchKeyEvent(&event);
@@ -1104,7 +1137,7 @@ TEST_F(InputMethodAshKeyEventTest, MultiKeyEventDelayResponseTest) {
       mock_ime_engine_handler_->last_passed_callback();
 
   // Do key event again.
-  ui::KeyEvent event2(ui::ET_KEY_PRESSED, ui::VKEY_C, kFlags);
+  ui::KeyEvent event2(ui::EventType::kKeyPressed, ui::VKEY_C, kFlags);
 
   input_method_ash_->DispatchKeyEvent(&event2);
   const ui::KeyEvent* key_event2 =
@@ -1155,12 +1188,12 @@ TEST_F(InputMethodAshKeyEventTest, MultiKeyEventDelayResponseTest) {
 
 TEST_F(InputMethodAshKeyEventTest, StopPropagationTest) {
   // Preparation
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
   // Do key event with event being stopped propagation.
   stop_propagation_post_ime_ = true;
-  ui::KeyEvent eventA(ui::ET_KEY_PRESSED, ui::VKEY_A, EF_NONE);
+  ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE);
   eventA.set_character(L'A');
   input_method_ash_->DispatchKeyEvent(&eventA);
   mock_ime_engine_handler_->last_passed_callback().Run(
@@ -1183,32 +1216,238 @@ TEST_F(InputMethodAshKeyEventTest, StopPropagationTest) {
 }
 
 TEST_F(InputMethodAshKeyEventTest, DeadKeyPressTest) {
-  // Preparation.
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
 
-  ui::KeyEvent eventA(ET_KEY_PRESSED,
-                      VKEY_OEM_4,  // '['
-                      DomCode::BRACKET_LEFT, 0,
-                      DomKey::DeadKeyFromCombiningCharacter('^'),
-                      EventTimeForNow());
+  ui::KeyEvent eventA(ui::EventType::kKeyPressed,
+                      ui::VKEY_OEM_4,  // '['
+                      ui::DomCode::BRACKET_LEFT, 0,
+                      ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                      ui::EventTimeForNow());
   input_method_ash_->ProcessKeyEventPostIME(
       &eventA, ui::ime::KeyEventHandledState::kHandledByIME, true);
 
   const ui::KeyEvent& key_event = dispatched_key_event_;
 
-  EXPECT_EQ(ET_KEY_PRESSED, key_event.type());
-  EXPECT_EQ(VKEY_PROCESSKEY, key_event.key_code());
+  EXPECT_EQ(ui::EventType::kKeyPressed, key_event.type());
+  EXPECT_EQ(eventA.key_code(), key_event.key_code());
   EXPECT_EQ(eventA.code(), key_event.code());
   EXPECT_EQ(eventA.flags(), key_event.flags());
-  EXPECT_EQ(DomKey::PROCESS, key_event.GetDomKey());
+  EXPECT_EQ(eventA.GetDomKey(), key_event.GetDomKey());
   EXPECT_EQ(eventA.time_stamp(), key_event.time_stamp());
+}
+
+TEST_F(InputMethodAshTest, UnhandledDeadKeyForNonTerminalSendsDeadKeys) {
+  for (const GURL& url : {
+           GURL("chrome-untrusted://emoji"),
+           GURL("chrome://crosh"),
+           GURL("chrome://terminal"),
+       }) {
+    FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
+    fake_text_input_client.SetUrl(url);
+    InputMethodAsh ime(this);
+    ime.SetFocusedTextInputClient(&fake_text_input_client);
+
+    ui::KeyEvent key_press(ui::EventType::kKeyPressed,
+                           ui::VKEY_OEM_4,  // '['
+                           ui::DomCode::BRACKET_LEFT, 0,
+                           ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                           ui::EventTimeForNow());
+    ime.DispatchKeyEvent(&key_press);
+    std::move(mock_ime_engine_handler_->last_passed_callback())
+        .Run(ui::ime::KeyEventHandledState::kNotHandled);
+    const ui::KeyEvent dispatched_key_press = dispatched_key_event_;
+
+    ui::KeyEvent key_release(ui::EventType::kKeyReleased,
+                             ui::VKEY_OEM_4,  // '['
+                             ui::DomCode::BRACKET_LEFT, 0,
+                             ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                             ui::EventTimeForNow());
+    ime.DispatchKeyEvent(&key_release);
+    std::move(mock_ime_engine_handler_->last_passed_callback())
+        .Run(ui::ime::KeyEventHandledState::kNotHandled);
+    const ui::KeyEvent dispatched_key_release = dispatched_key_event_;
+
+    EXPECT_EQ(dispatched_key_press.type(), ui::EventType::kKeyPressed);
+    EXPECT_EQ(dispatched_key_press.key_code(), ui::VKEY_OEM_4);
+    EXPECT_EQ(dispatched_key_press.code(), ui::DomCode::BRACKET_LEFT);
+    EXPECT_EQ(dispatched_key_press.GetDomKey(),
+              ui::DomKey::DeadKeyFromCombiningCharacter('^'));
+    EXPECT_EQ(dispatched_key_release.type(), ui::EventType::kKeyReleased);
+    EXPECT_EQ(dispatched_key_release.key_code(), ui::VKEY_OEM_4);
+    EXPECT_EQ(dispatched_key_release.code(), ui::DomCode::BRACKET_LEFT);
+    EXPECT_EQ(dispatched_key_release.GetDomKey(),
+              ui::DomKey::DeadKeyFromCombiningCharacter('^'));
+  }
+}
+
+TEST_F(InputMethodAshTest, UnhandledDeadKeyForTerminalSendsDeadKeys) {
+  for (const GURL& url : {
+           GURL("chrome-untrusted://crosh"),
+           GURL("chrome-untrusted://croshy"),
+           GURL("chrome-untrusted://crosh/"),
+           GURL("chrome-untrusted://crosh/a?b=1&c=2#d"),
+           GURL("chrome-untrusted://terminal"),
+           GURL("chrome-untrusted://terminaly"),
+           GURL("chrome-untrusted://terminal/"),
+           GURL("chrome-untrusted://terminal/a?b=1&c=2#d"),
+       }) {
+    FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
+    fake_text_input_client.SetUrl(url);
+    InputMethodAsh ime(this);
+    ime.SetFocusedTextInputClient(&fake_text_input_client);
+
+    ui::KeyEvent key_press(ui::EventType::kKeyPressed,
+                           ui::VKEY_OEM_4,  // '['
+                           ui::DomCode::BRACKET_LEFT, 0,
+                           ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                           ui::EventTimeForNow());
+    ime.DispatchKeyEvent(&key_press);
+    std::move(mock_ime_engine_handler_->last_passed_callback())
+        .Run(ui::ime::KeyEventHandledState::kNotHandled);
+    const ui::KeyEvent dispatched_key_press = dispatched_key_event_;
+
+    ui::KeyEvent key_release(ui::EventType::kKeyReleased,
+                             ui::VKEY_OEM_4,  // '['
+                             ui::DomCode::BRACKET_LEFT, 0,
+                             ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                             ui::EventTimeForNow());
+    ime.DispatchKeyEvent(&key_release);
+    std::move(mock_ime_engine_handler_->last_passed_callback())
+        .Run(ui::ime::KeyEventHandledState::kNotHandled);
+    const ui::KeyEvent dispatched_key_release = dispatched_key_event_;
+
+    EXPECT_EQ(dispatched_key_press.type(), ui::EventType::kKeyPressed);
+    EXPECT_EQ(dispatched_key_press.key_code(), ui::VKEY_OEM_4);
+    EXPECT_EQ(dispatched_key_press.code(), ui::DomCode::BRACKET_LEFT);
+    EXPECT_EQ(dispatched_key_press.GetDomKey(),
+              ui::DomKey::DeadKeyFromCombiningCharacter('^'));
+    EXPECT_EQ(dispatched_key_release.type(), ui::EventType::kKeyReleased);
+    EXPECT_EQ(dispatched_key_release.key_code(), ui::VKEY_OEM_4);
+    EXPECT_EQ(dispatched_key_release.code(), ui::DomCode::BRACKET_LEFT);
+    EXPECT_EQ(dispatched_key_release.GetDomKey(),
+              ui::DomKey::DeadKeyFromCombiningCharacter('^'));
+  }
+}
+
+TEST_F(InputMethodAshTest, DeadKeyHandledByAssistiveSendsProcessKey) {
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
+  fake_text_input_client.SetUrl(GURL("chrome-untrusted://crosh"));
+  InputMethodAsh ime(this);
+  ime.SetFocusedTextInputClient(&fake_text_input_client);
+
+  ui::KeyEvent key_press(ui::EventType::kKeyPressed,
+                         ui::VKEY_OEM_4,  // '['
+                         ui::DomCode::BRACKET_LEFT, 0,
+                         ui::DomKey::DeadKeyFromCombiningCharacter('^'),
+                         ui::EventTimeForNow());
+  ime.DispatchKeyEvent(&key_press);
+  std::move(mock_ime_engine_handler_->last_passed_callback())
+      .Run(ui::ime::KeyEventHandledState::kHandledByAssistiveSuggester);
+  const ui::KeyEvent dispatched_key_press = dispatched_key_event_;
+
+  EXPECT_EQ(dispatched_key_press.type(), ui::EventType::kKeyPressed);
+  EXPECT_EQ(dispatched_key_press.key_code(), ui::VKEY_PROCESSKEY);
+  EXPECT_EQ(dispatched_key_press.code(), ui::DomCode::BRACKET_LEFT);
+  EXPECT_EQ(dispatched_key_press.GetDomKey(), ui::DomKey::PROCESS);
+}
+
+TEST_F(InputMethodAshKeyEventTest, KeyboardImeFlags) {
+  // Preparation.
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  input_method_ash_->OnTextInputTypeChanged(this);
+
+  {
+    ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A,
+                        ui::DomCode::US_A, 0, ui::DomKey::FromCharacter('a'),
+                        ui::EventTimeForNow());
+    input_method_ash_->ProcessKeyEventPostIME(
+        &eventA, ui::ime::KeyEventHandledState::kHandledByIME, true);
+
+    const ui::KeyEvent& key_event = dispatched_key_event_;
+    EXPECT_EQ(ui::kPropertyKeyboardImeHandledFlag,
+              ui::GetKeyboardImeFlags(key_event));
+  }
+
+  {
+    ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A,
+                        ui::DomCode::US_A, 0, ui::DomKey::FromCharacter('a'),
+                        ui::EventTimeForNow());
+    input_method_ash_->ProcessKeyEventPostIME(
+        &eventA, ui::ime::KeyEventHandledState::kNotHandled, true);
+
+    const ui::KeyEvent& key_event = dispatched_key_event_;
+    EXPECT_EQ(ui::kPropertyKeyboardImeIgnoredFlag,
+              ui::GetKeyboardImeFlags(key_event));
+  }
+}
+
+TEST_F(InputMethodAshKeyEventTest, HandledKeyEventDoesNotSuppressAutoRepeat) {
+  // Preparation.
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  input_method_ash_->OnTextInputTypeChanged(this);
+
+  {
+    ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A,
+                        ui::DomCode::US_A, 0, ui::DomKey::FromCharacter('a'),
+                        ui::EventTimeForNow());
+    input_method_ash_->ProcessKeyEventPostIME(
+        &eventA, ui::ime::KeyEventHandledState::kHandledByIME,
+        /*stopped_propagation=*/true);
+
+    EXPECT_FALSE(
+        ui::HasKeyEventSuppressAutoRepeat(*dispatched_key_event_.properties()));
+  }
+
+  {
+    ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A,
+                        ui::DomCode::US_A, 0, ui::DomKey::FromCharacter('a'),
+                        ui::EventTimeForNow());
+    input_method_ash_->ProcessKeyEventPostIME(
+        &eventA, ui::ime::KeyEventHandledState::kHandledByAssistiveSuggester,
+        /*stopped_propagation=*/true);
+
+    EXPECT_FALSE(
+        ui::HasKeyEventSuppressAutoRepeat(*dispatched_key_event_.properties()));
+  }
+}
+
+TEST_F(InputMethodAshKeyEventTest,
+       NotHandledKeyEventDoesNotSuppressAutoRepeat) {
+  // Preparation.
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  input_method_ash_->OnTextInputTypeChanged(this);
+
+  ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                      0, ui::DomKey::FromCharacter('a'), ui::EventTimeForNow());
+  input_method_ash_->ProcessKeyEventPostIME(
+      &eventA, ui::ime::KeyEventHandledState::kNotHandled,
+      /*stopped_propagation=*/false);
+
+  EXPECT_FALSE(
+      ui::HasKeyEventSuppressAutoRepeat(*dispatched_key_event_.properties()));
+}
+
+TEST_F(InputMethodAshKeyEventTest,
+       NotHandledSuppressKeyEventSuppressesAutoRepeat) {
+  // Preparation.
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  input_method_ash_->OnTextInputTypeChanged(this);
+
+  ui::KeyEvent eventA(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                      0, ui::DomKey::FromCharacter('a'), ui::EventTimeForNow());
+  input_method_ash_->ProcessKeyEventPostIME(
+      &eventA, ui::ime::KeyEventHandledState::kNotHandledSuppressAutoRepeat,
+      /*stopped_propagation=*/false);
+
+  EXPECT_TRUE(
+      ui::HasKeyEventSuppressAutoRepeat(*dispatched_key_event_.properties()));
 }
 
 TEST_F(InputMethodAshKeyEventTest,
        SingleCharAssistiveSuggesterKeyEventDispatchesProcessKey) {
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, EF_NONE);
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE);
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
 
   input_method_ash_->OnTextInputTypeChanged(this);
   input_method_ash_->DispatchKeyEvent(&event);
@@ -1220,43 +1459,51 @@ TEST_F(InputMethodAshKeyEventTest,
       .Run(ui::ime::KeyEventHandledState::kHandledByAssistiveSuggester);
 
   const ui::KeyEvent& key_event = dispatched_key_event_;
-  EXPECT_EQ(ET_KEY_PRESSED, key_event.type());
-  EXPECT_EQ(VKEY_PROCESSKEY, key_event.key_code());
+  EXPECT_EQ(ui::EventType::kKeyPressed, key_event.type());
+  EXPECT_EQ(ui::VKEY_PROCESSKEY, key_event.key_code());
   EXPECT_EQ(event.code(), key_event.code());
   EXPECT_EQ(event.flags(), key_event.flags());
-  EXPECT_EQ(DomKey::PROCESS, key_event.GetDomKey());
+  EXPECT_EQ(ui::DomKey::PROCESS, key_event.GetDomKey());
   EXPECT_EQ(event.time_stamp(), key_event.time_stamp());
+  EXPECT_EQ(ui::kPropertyKeyboardImeHandledFlag,
+            ui::GetKeyboardImeFlags(key_event));
 }
 
 TEST_F(InputMethodAshKeyEventTest, JP106KeyTest) {
-  ui::KeyEvent eventConvert(ET_KEY_PRESSED, VKEY_CONVERT, EF_NONE);
+  ui::KeyEvent eventConvert(ui::EventType::kKeyPressed, ui::VKEY_CONVERT,
+                            ui::EF_NONE);
   input_method_ash_->DispatchKeyEvent(&eventConvert);
   EXPECT_FALSE(input_method_manager_->state()->is_jp_kbd());
   EXPECT_TRUE(input_method_manager_->state()->is_jp_ime());
 
-  ui::KeyEvent eventNonConvert(ET_KEY_PRESSED, VKEY_NONCONVERT, EF_NONE);
+  ui::KeyEvent eventNonConvert(ui::EventType::kKeyPressed, ui::VKEY_NONCONVERT,
+                               ui::EF_NONE);
   input_method_ash_->DispatchKeyEvent(&eventNonConvert);
   EXPECT_TRUE(input_method_manager_->state()->is_jp_kbd());
   EXPECT_FALSE(input_method_manager_->state()->is_jp_ime());
 
-  ui::KeyEvent eventDbeSbc(ET_KEY_PRESSED, VKEY_DBE_SBCSCHAR, EF_NONE);
+  ui::KeyEvent eventDbeSbc(ui::EventType::kKeyPressed, ui::VKEY_DBE_SBCSCHAR,
+                           ui::EF_NONE);
   input_method_ash_->DispatchKeyEvent(&eventDbeSbc);
   EXPECT_FALSE(input_method_manager_->state()->is_jp_kbd());
   EXPECT_TRUE(input_method_manager_->state()->is_jp_ime());
 
-  ui::KeyEvent eventDbeDbc(ET_KEY_PRESSED, VKEY_DBE_DBCSCHAR, EF_NONE);
+  ui::KeyEvent eventDbeDbc(ui::EventType::kKeyPressed, ui::VKEY_DBE_DBCSCHAR,
+                           ui::EF_NONE);
   input_method_ash_->DispatchKeyEvent(&eventDbeDbc);
   EXPECT_TRUE(input_method_manager_->state()->is_jp_kbd());
   EXPECT_FALSE(input_method_manager_->state()->is_jp_ime());
 }
 
 TEST_F(InputMethodAshKeyEventTest, SetAutocorrectRangeRunsAfterKeyEvent) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   input_method_ash_->CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   input_method_ash_->DispatchKeyEvent(&event);
 
   bool callback_called = false;
@@ -1280,9 +1527,9 @@ TEST_F(InputMethodAshKeyEventTest, SetAutocorrectRangeRunsAfterKeyEvent) {
 }
 
 TEST_F(InputMethodAshKeyEventTest, SetAutocorrectRangeRunsAfterCommitText) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE);
   input_method_ash_->DispatchKeyEvent(&event);
 
   input_method_ash_->CommitText(
@@ -1305,7 +1552,7 @@ TEST_F(InputMethodAshKeyEventTest, SetAutocorrectRangeRunsAfterCommitText) {
 
 TEST_F(InputMethodAshKeyEventTest,
        SetAutocorrectRangeCallsCallbackOnFailureAfterKeyEvent) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   input_method_ash_->CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
@@ -1313,7 +1560,9 @@ TEST_F(InputMethodAshKeyEventTest,
   // Disable autocorrect range to make it return false.
   set_autocorrect_enabled(false);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   input_method_ash_->DispatchKeyEvent(&event);
 
   bool callback_called = false;
@@ -1339,12 +1588,14 @@ TEST_F(InputMethodAshKeyEventTest,
 TEST_F(
     InputMethodAshKeyEventTest,
     LatestSetAutocorrectRangeOverridesPreviousRequestsWhileHandlingKeyEvent) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
   input_method_ash_->OnTextInputTypeChanged(this);
   input_method_ash_->CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   input_method_ash_->DispatchKeyEvent(&event);
 
   bool first_set_callback_called = false;
@@ -1381,11 +1632,13 @@ TEST_F(
 
 TEST_F(InputMethodAshKeyEventTest,
        MultipleCommitTextsWhileHandlingKeyEventCoalescesIntoOne) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   ime.DispatchKeyEvent(&event);
   ime.CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
@@ -1402,11 +1655,13 @@ TEST_F(InputMethodAshKeyEventTest,
 
 TEST_F(InputMethodAshKeyEventTest,
        MultipleCommitTextsWhileHandlingKeyEventCoalescesByCaretBehavior) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   ime.DispatchKeyEvent(&event);
   ime.CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorBeforeText);
@@ -1426,14 +1681,16 @@ TEST_F(InputMethodAshKeyEventTest,
 }
 
 TEST_F(InputMethodAshKeyEventTest, CommitTextEmptyRunsAfterKeyEvent) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
   ui::CompositionText composition;
   composition.text = u"hello";
   ime.UpdateCompositionText(composition, /*cursor_pos=*/5, /*visible=*/true);
 
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
   ime.DispatchKeyEvent(&event);
   ime.CommitText(
       u"", TextInputClient::InsertTextCursorBehavior::kMoveCursorBeforeText);
@@ -1446,7 +1703,7 @@ TEST_F(InputMethodAshKeyEventTest, CommitTextEmptyRunsAfterKeyEvent) {
 }
 
 TEST_F(InputMethodAshTest, CommitTextReplacesSelection) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   fake_text_input_client.SetTextAndSelection(u"hello", gfx::Range(0, 5));
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
@@ -1458,7 +1715,7 @@ TEST_F(InputMethodAshTest, CommitTextReplacesSelection) {
 }
 
 TEST_F(InputMethodAshTest, ResetsEngineWithComposition) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   fake_text_input_client.SetTextAndSelection(u"hello ", gfx::Range(6, 6));
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
@@ -1472,7 +1729,7 @@ TEST_F(InputMethodAshTest, ResetsEngineWithComposition) {
 }
 
 TEST_F(InputMethodAshTest, DoesNotResetEngineWithNoComposition) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
@@ -1485,14 +1742,16 @@ TEST_F(InputMethodAshTest, DoesNotResetEngineWithNoComposition) {
 }
 
 TEST_F(InputMethodAshTest, CommitTextThenKeyEventOnlyInsertsOnce) {
-  FakeTextInputClient fake_text_input_client(TEXT_INPUT_TYPE_TEXT);
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
   InputMethodAsh ime(this);
   ime.SetFocusedTextInputClient(&fake_text_input_client);
 
   ime.CommitText(
       u"a", TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
-  ui::KeyEvent key(ET_KEY_PRESSED, VKEY_A, EF_NONE);
-  ime.DispatchKeyEvent(&key);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                     ui::EF_NONE, ui::DomKey::FromCharacter('a'),
+                     ui::EventTimeForNow());
+  ime.DispatchKeyEvent(&event);
   std::move(mock_ime_engine_handler_->last_passed_callback())
       .Run(ui::ime::KeyEventHandledState::kHandledByIME);
 
@@ -1500,8 +1759,8 @@ TEST_F(InputMethodAshTest, CommitTextThenKeyEventOnlyInsertsOnce) {
 }
 
 TEST_F(InputMethodAshTest, AddsAndClearsGrammarFragments) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
-  std::vector<GrammarFragment> fragments;
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  std::vector<ui::GrammarFragment> fragments;
   fragments.emplace_back(gfx::Range(0, 1), "fake");
   fragments.emplace_back(gfx::Range(3, 10), "test");
   input_method_ash_->AddGrammarFragments(fragments);
@@ -1511,8 +1770,8 @@ TEST_F(InputMethodAshTest, AddsAndClearsGrammarFragments) {
 }
 
 TEST_F(InputMethodAshTest, GetsGrammarFragments) {
-  input_type_ = TEXT_INPUT_TYPE_TEXT;
-  GrammarFragment fragment(gfx::Range(0, 5), "fake");
+  input_type_ = ui::TEXT_INPUT_TYPE_TEXT;
+  ui::GrammarFragment fragment(gfx::Range(0, 5), "fake");
   input_method_ash_->AddGrammarFragments({fragment});
 
   input_method_ash_->SetEditableSelectionRange(gfx::Range(3, 3));
@@ -1521,9 +1780,9 @@ TEST_F(InputMethodAshTest, GetsGrammarFragments) {
   EXPECT_EQ(input_method_ash_->GetGrammarFragmentAtCursor(), fragment);
 
   input_method_ash_->SetEditableSelectionRange(gfx::Range(7, 7));
-  EXPECT_EQ(input_method_ash_->GetGrammarFragmentAtCursor(), absl::nullopt);
+  EXPECT_EQ(input_method_ash_->GetGrammarFragmentAtCursor(), std::nullopt);
   input_method_ash_->SetEditableSelectionRange(gfx::Range(4, 7));
-  EXPECT_EQ(input_method_ash_->GetGrammarFragmentAtCursor(), absl::nullopt);
+  EXPECT_EQ(input_method_ash_->GetGrammarFragmentAtCursor(), std::nullopt);
 }
 
-}  // namespace ui
+}  // namespace ash

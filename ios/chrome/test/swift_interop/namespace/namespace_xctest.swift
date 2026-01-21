@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import Namespace
-import UIKit
 import XCTest
 
 class NamespaceTest: XCTestCase {

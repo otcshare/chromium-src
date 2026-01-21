@@ -11,63 +11,28 @@
 const NODE_MODULES = [
   '..', '..', '..', 'third_party', 'js_code_coverage', 'node_modules'];
 
-const {createHash} = require('crypto');
-const {join, normalize} = require('path');
-const {readdir, readFile, writeFile, mkdir} = require('fs').promises;
-const V8ToIstanbul = require(join(...NODE_MODULES, 'v8-to-istanbul'));
+const {Worker} = require('worker_threads');
+const {join} = require('path');
+const {readFile, mkdir} = require('fs').promises;
 const {ArgumentParser} = require(join(...NODE_MODULES, 'argparse'));
 
-/**
- * Extracts the raw coverage data from the v8 coverage reports and converts
- * them into IstanbulJS compliant reports.
- * @param {string} coverageDirectory Directory containing the raw v8 output.
- * @param {string} instrumentedDirectoryRoot Directory containing the source
- *    files where the coverage was instrumented from.
- * @param {string} outputDir Directory to store the istanbul coverage reports.
- * @param {!Map<string, string>} urlToPathMap A mapping of URL observed during
- *    test execution to the on-disk location created in previous steps.
- */
-async function extractCoverage(
-    coverageDirectory, instrumentedDirectoryRoot, outputDir, urlToPathMap) {
-  const coverages = await readdir(coverageDirectory);
-
-  for (const fileName of coverages) {
-    if (!fileName.endsWith('.cov.json'))
-      continue;
-
-    const filePath = join(coverageDirectory, fileName);
-    const contents = await readFile(filePath, 'utf-8');
-
-    const {result: scriptCoverages} = JSON.parse(contents);
-    if (!scriptCoverages)
-      throw new Error(`result key missing for file: ${filePath}`);
-
-    for (const coverage of scriptCoverages) {
-      if (!urlToPathMap[coverage.url])
-        continue;
-
-      const instrumentedFilePath =
-          join(instrumentedDirectoryRoot, urlToPathMap[coverage.url]);
-      const converter = V8ToIstanbul(instrumentedFilePath);
-      await converter.load();
-      converter.applyCoverage(coverage.functions);
-      const convertedCoverage = converter.toIstanbul();
-
-      const jsonString = JSON.stringify(convertedCoverage);
-      await writeFile(
-          join(outputDir, createSHA1HashFromFileContents(jsonString) + '.json'),
-          jsonString);
-    }
-  }
-}
-
-/**
- * Helper function to provide a unique file name for resultant istanbul reports.
- * @param {string} str File contents
- * @return {string} A sha1 hash to be used as a file name.
- */
-function createSHA1HashFromFileContents(contents) {
-  return createHash('sha1').update(contents).digest('hex');
+function createWorker(coverageDir, sourceDir, outputDir, urlToPathMap) {
+  return new Promise(function(resolve, reject) {
+    const worker = new Worker(join(__dirname, 'coverage_worker.js'), {
+      workerData: {
+        coverageDir: coverageDir,
+        sourceDir: sourceDir,
+        outputDir: outputDir,
+        urlToPathMap: urlToPathMap
+      },
+    });
+    worker.on('message', (data) => {
+      resolve(data);
+    });
+    worker.on('error', (msg) => {
+      reject(`An error ocurred: ${msg}`);
+    });
+  });
 }
 
 /**
@@ -79,13 +44,17 @@ async function main(args) {
   const urlToPathMapFile =
       await readFile(join(args.source_dir, 'parsed_scripts.json'));
   const urlToPathMap = JSON.parse(urlToPathMapFile.toString());
-
   const outputDir = join(args.output_dir, 'istanbul')
   await mkdir(outputDir, {recursive: true});
-  for (const coverageDir of args.raw_coverage_dirs)
-    await extractCoverage(
-        coverageDir, args.source_dir, outputDir, urlToPathMap);
 
+  const workerPromises = [];
+  for (const coverageDir of args.raw_coverage_dirs) {
+    workerPromises.push(
+        createWorker(coverageDir, args.source_dir, outputDir, urlToPathMap));
+  }
+
+  const results = await Promise.all(workerPromises);
+  console.log(`Result from workers: ${results}`)
   return outputDir;
 }
 

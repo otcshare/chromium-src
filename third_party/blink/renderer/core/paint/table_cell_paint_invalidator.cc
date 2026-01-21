@@ -4,24 +4,21 @@
 
 #include "third_party/blink/renderer/core/paint/table_cell_paint_invalidator.h"
 
-#include "third_party/blink/renderer/core/layout/layout_table.h"
-#include "third_party/blink/renderer/core/layout/layout_table_cell.h"
-#include "third_party/blink/renderer/core/layout/layout_table_col.h"
-#include "third_party/blink/renderer/core/layout/layout_table_row.h"
-#include "third_party/blink/renderer/core/layout/layout_table_section.h"
+#include "third_party/blink/renderer/core/layout/table/layout_table.h"
+#include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/core/paint/block_paint_invalidator.h"
-#include "third_party/blink/renderer/core/paint/object_paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 
 namespace blink {
 
-static bool DisplayItemClientIsFullyInvalidated(
-    const DisplayItemClient& client) {
+namespace {
+
+bool DisplayItemClientIsFullyInvalidated(const DisplayItemClient& client) {
   return IsFullPaintInvalidationReason(client.GetPaintInvalidationReason());
 }
 
-void TableCellPaintInvalidator::InvalidateContainerForCellGeometryChange(
+void InvalidateContainerForCellGeometryChange(
     const LayoutObject& container,
     const PaintInvalidatorContext& container_context) {
   // We only need to do this if the container hasn't been fully invalidated.
@@ -34,41 +31,37 @@ void TableCellPaintInvalidator::InvalidateContainerForCellGeometryChange(
   container.InvalidateDisplayItemClients(PaintInvalidationReason::kLayout);
 }
 
+}  // namespace
+
 void TableCellPaintInvalidator::InvalidatePaint() {
   // The cell's containing row and section paint backgrounds behind the cell,
   // and the row or table paints collapsed borders. If the cell's geometry
   // changed and the containers which will paint backgrounds and/or collapsed
   // borders haven't been full invalidated, invalidate the containers.
   if (context_.old_paint_offset != context_.fragment_data->PaintOffset() ||
-      cell_.Size() != cell_.PreviousSize()) {
-    const auto& row = *cell_.Row();
-    const auto& section = *row.Section();
-    const auto& table = *section.Table();
+      cell_.StitchedSize() != cell_.PreviousSize()) {
+    // Table row background is painted inside cell's geometry.
+    const auto& row = *cell_.Parent();
+    DCHECK(row.IsTableRow());
     if (!DisplayItemClientIsFullyInvalidated(row) &&
-        (row.StyleRef().HasBackground() || table.HasCollapsedBorders())) {
-      InvalidateContainerForCellGeometryChange(row, *context_.ParentContext());
-      // Mark the table as needing repaint, in order to paint collapsed borders.
-      context_.ParentContext()
-          ->ParentContext()
-          ->ParentContext()
-          ->painting_layer->SetNeedsRepaint();
+        row.StyleRef().HasBackground()) {
+      InvalidateContainerForCellGeometryChange(row, *context_.parent_context);
     }
-
-    if (!DisplayItemClientIsFullyInvalidated(section)) {
-      bool section_paints_background = section.StyleRef().HasBackground();
-      if (!section_paints_background) {
-        auto col_and_colgroup = section.Table()->ColElementAtAbsoluteColumn(
-            cell_.AbsoluteColumnIndex());
-        if ((col_and_colgroup.col &&
-             col_and_colgroup.col->StyleRef().HasBackground()) ||
-            (col_and_colgroup.colgroup &&
-             col_and_colgroup.colgroup->StyleRef().HasBackground()))
-          section_paints_background = true;
-      }
-      if (section_paints_background) {
-        InvalidateContainerForCellGeometryChange(
-            section, *context_.ParentContext()->ParentContext());
-      }
+    // Table section background is painted inside cell's geometry.
+    const auto& section = *row.Parent();
+    DCHECK(section.IsTableSection());
+    if (!DisplayItemClientIsFullyInvalidated(section) &&
+        section.StyleRef().HasBackground()) {
+      InvalidateContainerForCellGeometryChange(
+          section, *context_.parent_context->parent_context);
+    }
+    // Table paints its background, and column backgrounds inside cell's
+    // geometry.
+    const auto& table = *cell_.Table();
+    if (!DisplayItemClientIsFullyInvalidated(table) &&
+        (table.HasBackgroundForPaint() || table.HasCollapsedBorders())) {
+      InvalidateContainerForCellGeometryChange(
+          table, *context_.parent_context->parent_context->parent_context);
     }
   }
 

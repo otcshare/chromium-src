@@ -5,13 +5,16 @@
 #include "content/browser/aggregation_service/aggregatable_report_scheduler.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
+#include "base/metrics/histogram_base.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/threading/sequence_bound.h"
@@ -26,14 +29,13 @@
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 
 namespace {
 
 using testing::_;
-using testing::Invoke;
+using testing::Field;
 using testing::Property;
 
 // Will be used to verify the sequence of expected function calls.
@@ -41,7 +43,8 @@ using Checkpoint = ::testing::MockFunction<void(int)>;
 
 // TODO(alexmt): Consider changing tests to avoid the assumption that this time
 // is after `base::Time::Now()`.
-const base::Time kExampleTime = base::Time::FromJavaTime(1652984901234);
+constexpr auto kExampleTime =
+    base::Time::FromMillisecondsSinceUnixEpoch(1652984901234);
 
 }  // namespace
 
@@ -58,12 +61,22 @@ class AggregatableReportSchedulerTest : public testing::Test {
   }
 
  protected:
+  void VerifyHistograms(base::HistogramBase::Count32 timer_fired_count) {
+    histograms_.ExpectTotalCount(
+        "PrivacySandbox.AggregationService.Scheduler.TimerFireDelay",
+        timer_fired_count);
+    histograms_.ExpectTotalCount(
+        "PrivacySandbox.AggregationService.Storage.RequestsRetrievalTime",
+        timer_fired_count);
+  }
+
   base::test::TaskEnvironment task_environment_;
   TestAggregationServiceStorageContext storage_context_;
   base::MockRepeatingCallback<void(
       std::vector<AggregationServiceStorage::RequestAndId>)>
       mock_callback_;
   std::unique_ptr<AggregatableReportScheduler> scheduler_;
+  base::HistogramTester histograms_;
 };
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -76,8 +89,9 @@ TEST_F(AggregatableReportSchedulerTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   AggregatableReportRequest expected_request =
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value();
 
   {
@@ -85,7 +99,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -104,13 +118,13 @@ TEST_F(AggregatableReportSchedulerTest,
     EXPECT_CALL(checkpoint, Call(1));
     EXPECT_CALL(mock_callback_, Run)
         .WillOnce(
-            Invoke([&expected_request](
-                       std::vector<AggregationServiceStorage::RequestAndId>
-                           requests_and_ids) {
+            [&expected_request](
+                std::vector<AggregationServiceStorage::RequestAndId>
+                    requests_and_ids) {
               ASSERT_EQ(requests_and_ids.size(), 1u);
               EXPECT_TRUE(aggregation_service::ReportRequestsEqual(
                   requests_and_ids[0].request, expected_request));
-            }));
+            });
   }
 
   scheduler_->ScheduleRequest(
@@ -121,7 +135,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -141,7 +155,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -155,6 +169,8 @@ TEST_F(AggregatableReportSchedulerTest,
   checkpoint.Call(1);
 
   task_environment_.FastForwardBy(base::Microseconds(1));
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -167,8 +183,9 @@ TEST_F(AggregatableReportSchedulerTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   scheduler_->ScheduleRequest(
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value());
 
   EXPECT_CALL(mock_callback_, Run);
@@ -182,7 +199,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -201,7 +218,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -211,6 +228,8 @@ TEST_F(AggregatableReportSchedulerTest,
 
     run_loop.Run();
   }
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -223,8 +242,9 @@ TEST_F(AggregatableReportSchedulerTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   scheduler_->ScheduleRequest(
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value());
 
   EXPECT_CALL(mock_callback_, Run);
@@ -238,7 +258,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -259,7 +279,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -269,6 +289,8 @@ TEST_F(AggregatableReportSchedulerTest,
 
     run_loop.Run();
   }
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -282,8 +304,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
   auto request = AggregatableReportRequest::Create(
       example_request.payload_contents(), std::move(expected_shared_info),
-      /*reporting_path=*/"", /*debug_key=*/absl::nullopt,
-      /*failed_send_attempts=*/0);
+      AggregatableReportRequest::DelayType::ScheduledWithReducedDelay);
   scheduler_->ScheduleRequest(std::move(request.value()));
 
   base::TimeDelta fast_forward_required = kExampleTime - base::Time::Now();
@@ -332,12 +353,18 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
-              EXPECT_EQ(requests_and_ids.size(), 1u);
-              EXPECT_EQ(requests_and_ids[0].request.failed_send_attempts(), 1);
+              EXPECT_THAT(
+                  requests_and_ids,
+                  testing::ElementsAre(Field(
+                      "request",
+                      &AggregationServiceStorage::RequestAndId::request,
+                      Property("failed_send_attempts()",
+                               &AggregatableReportRequest::failed_send_attempts,
+                               1))));
               run_loop.Quit();
             }));
 
@@ -362,6 +389,8 @@ TEST_F(AggregatableReportSchedulerTest,
   // It should not retry anymore
   EXPECT_FALSE(scheduler_->NotifyInProgressRequestFailed(
       AggregationServiceStorage::RequestId(1), /*previous_failed_attempts=*/2));
+
+  VerifyHistograms(/*timer_fired_count=*/3);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -380,8 +409,8 @@ TEST_F(AggregatableReportSchedulerTest,
     EXPECT_CALL(mock_callback_, Run).Times(0);
     EXPECT_CALL(checkpoint, Call(1));
     EXPECT_CALL(mock_callback_, Run)
-        .WillOnce(Invoke([](std::vector<AggregationServiceStorage::RequestAndId>
-                                requests_and_ids) {
+        .WillOnce([](std::vector<AggregationServiceStorage::RequestAndId>
+                         requests_and_ids) {
           ASSERT_EQ(requests_and_ids.size(), 2u);
 
           // Ignore request ordering. Storage IDs should be incremented from 1
@@ -390,15 +419,15 @@ TEST_F(AggregatableReportSchedulerTest,
                     base::flat_set<AggregationServiceStorage::RequestId>(
                         {AggregationServiceStorage::RequestId(1),
                          AggregationServiceStorage::RequestId(2)}));
-        }));
+        });
     EXPECT_CALL(checkpoint, Call(2));
     EXPECT_CALL(mock_callback_, Run)
-        .WillOnce(Invoke([](std::vector<AggregationServiceStorage::RequestAndId>
-                                requests_and_ids) {
+        .WillOnce([](std::vector<AggregationServiceStorage::RequestAndId>
+                         requests_and_ids) {
           ASSERT_EQ(requests_and_ids.size(), 1u);
           EXPECT_EQ(requests_and_ids[0].id,
                     AggregationServiceStorage::RequestId(3));
-        }));
+        });
   }
 
   for (base::Time scheduled_report_time : scheduled_report_times) {
@@ -407,8 +436,9 @@ TEST_F(AggregatableReportSchedulerTest,
     expected_shared_info.scheduled_report_time = scheduled_report_time;
 
     scheduler_->ScheduleRequest(
-        AggregatableReportRequest::Create(example_request.payload_contents(),
-                                          std::move(expected_shared_info))
+        AggregatableReportRequest::Create(
+            example_request.payload_contents(), std::move(expected_shared_info),
+            AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
             .value());
   }
 
@@ -417,7 +447,7 @@ TEST_F(AggregatableReportSchedulerTest,
 
     storage_context_.GetStorage()
         .AsyncCall(&AggregationServiceStorage::GetRequestsReportingOnOrBefore)
-        .WithArgs(base::Time::Max(), /*limit=*/absl::nullopt)
+        .WithArgs(base::Time::Max(), /*limit=*/std::nullopt)
         .Then(base::BindLambdaForTesting(
             [&run_loop](std::vector<AggregationServiceStorage::RequestAndId>
                             requests_and_ids) {
@@ -435,6 +465,8 @@ TEST_F(AggregatableReportSchedulerTest,
   checkpoint.Call(2);
 
   task_environment_.FastForwardBy(base::Hours(1));
+
+  VerifyHistograms(/*timer_fired_count=*/2);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -453,8 +485,8 @@ TEST_F(AggregatableReportSchedulerTest,
     EXPECT_CALL(mock_callback_, Run).Times(0);
     EXPECT_CALL(checkpoint, Call(1));
     EXPECT_CALL(mock_callback_, Run)
-        .WillOnce(Invoke([](std::vector<AggregationServiceStorage::RequestAndId>
-                                requests_and_ids) {
+        .WillOnce([](std::vector<AggregationServiceStorage::RequestAndId>
+                         requests_and_ids) {
           ASSERT_EQ(requests_and_ids.size(), 2u);
 
           // Ordered correctly. Storage IDs should be incremented from 1.
@@ -462,11 +494,11 @@ TEST_F(AggregatableReportSchedulerTest,
                     AggregationServiceStorage::RequestId(1));
           EXPECT_EQ(requests_and_ids[1].id,
                     AggregationServiceStorage::RequestId(3));
-        }));
+        });
     EXPECT_CALL(checkpoint, Call(2));
     EXPECT_CALL(mock_callback_, Run)
-        .WillOnce(Invoke([](std::vector<AggregationServiceStorage::RequestAndId>
-                                requests_and_ids) {
+        .WillOnce([](std::vector<AggregationServiceStorage::RequestAndId>
+                         requests_and_ids) {
           ASSERT_EQ(requests_and_ids.size(), 2u);
 
           // Ordered correctly. Storage IDs should be incremented from 1.
@@ -474,7 +506,7 @@ TEST_F(AggregatableReportSchedulerTest,
                     AggregationServiceStorage::RequestId(4));
           EXPECT_EQ(requests_and_ids[1].id,
                     AggregationServiceStorage::RequestId(2));
-        }));
+        });
   }
 
   for (base::Time scheduled_report_time : scheduled_report_times) {
@@ -483,8 +515,9 @@ TEST_F(AggregatableReportSchedulerTest,
     expected_shared_info.scheduled_report_time = scheduled_report_time;
 
     scheduler_->ScheduleRequest(
-        AggregatableReportRequest::Create(example_request.payload_contents(),
-                                          std::move(expected_shared_info))
+        AggregatableReportRequest::Create(
+            example_request.payload_contents(), std::move(expected_shared_info),
+            AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
             .value());
   }
 
@@ -502,6 +535,8 @@ TEST_F(AggregatableReportSchedulerTest,
   // request.
   task_environment_.AdvanceClock(base::Hours(2));
   task_environment_.RunUntilIdle();
+
+  VerifyHistograms(/*timer_fired_count=*/2);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -517,8 +552,9 @@ TEST_F(AggregatableReportSchedulerTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   scheduler_->ScheduleRequest(
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value());
 
   base::TimeDelta fast_forward_required = kExampleTime - base::Time::Now();
@@ -545,6 +581,8 @@ TEST_F(AggregatableReportSchedulerTest,
   // through that delay to trigger the report.
   task_environment_.FastForwardBy(
       AggregatableReportScheduler::kOfflineReportTimeMaximumDelay);
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -560,8 +598,9 @@ TEST_F(AggregatableReportSchedulerTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   scheduler_->ScheduleRequest(
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value());
 
   Checkpoint checkpoint;
@@ -591,6 +630,8 @@ TEST_F(AggregatableReportSchedulerTest,
   // report was only delayed by 0 or 1 microsecond, but this flake is rare
   // enough to ignore (1 in 30 million runs).
   task_environment_.FastForwardBy(base::TimeDelta());
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 TEST_F(AggregatableReportSchedulerTest,
@@ -606,8 +647,9 @@ TEST_F(AggregatableReportSchedulerTest,
     expected_shared_info.scheduled_report_time = kExampleTime;
 
     scheduler_->ScheduleRequest(
-        AggregatableReportRequest::Create(example_request.payload_contents(),
-                                          std::move(expected_shared_info))
+        AggregatableReportRequest::Create(
+            example_request.payload_contents(), std::move(expected_shared_info),
+            AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
             .value());
   }
 
@@ -617,6 +659,8 @@ TEST_F(AggregatableReportSchedulerTest,
       Run(Property(&std::vector<AggregationServiceStorage::RequestAndId>::size,
                    AggregationService::kMaxStoredReportsPerReportingOrigin)));
   task_environment_.FastForwardBy(kExampleTime - base::Time::Now());
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 class AggregatableReportSchedulerDeveloperModeTest
@@ -641,8 +685,9 @@ TEST_F(AggregatableReportSchedulerDeveloperModeTest,
   expected_shared_info.scheduled_report_time = kExampleTime;
 
   scheduler_->ScheduleRequest(
-      AggregatableReportRequest::Create(example_request.payload_contents(),
-                                        std::move(expected_shared_info))
+      AggregatableReportRequest::Create(
+          example_request.payload_contents(), std::move(expected_shared_info),
+          AggregatableReportRequest::DelayType::ScheduledWithReducedDelay)
           .value());
 
   base::TimeDelta fast_forward_required = kExampleTime - base::Time::Now();
@@ -668,6 +713,8 @@ TEST_F(AggregatableReportSchedulerDeveloperModeTest,
   // With the developer mode flag, the report should be sent immediately, so all
   // we need to do is run any pending tasks.
   task_environment_.RunUntilIdle();
+
+  VerifyHistograms(/*timer_fired_count=*/1);
 }
 
 }  // namespace content

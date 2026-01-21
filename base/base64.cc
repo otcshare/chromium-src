@@ -6,9 +6,15 @@
 
 #include <stddef.h>
 
+#include <string_view>
+#include <utility>
+
 #include "base/check.h"
+#include "base/features.h"
 #include "base/numerics/checked_math.h"
+#include "base/simdutf_shim.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "third_party/modp_b64/modp_b64.h"
 
 namespace base {
@@ -24,6 +30,49 @@ ModpDecodePolicy GetModpPolicy(Base64DecodePolicy policy) {
   }
 }
 
+void Base64EncodeAppendModpB64(span<const uint8_t> input, std::string* output) {
+  // Ensure `modp_b64_encode_data_len` will not overflow.
+  CHECK_LE(input.size(), MODP_B64_MAX_INPUT_LEN);
+
+  size_t encode_data_len = modp_b64_encode_data_len(input.size());
+
+  const size_t after_size =
+      CheckAdd(encode_data_len, output->size()).ValueOrDie();
+  output->resize(after_size);
+
+  span<const char> read = as_chars(input);
+  span<char> write = span(*output).last(encode_data_len);
+
+  const size_t written_size = modp_b64_encode_data(
+      write.data(),  // This must point to `encode_data_len` many chars.
+      read.data(), read.size());
+  // If this failed, it would indicate modp_b64_encode_data() wrote OOB or left
+  // bytes uninitialized. It's possible for this to be elided by the compiler,
+  // since writing OOB is UB.
+  CHECK_EQ(written_size, write.size());
+}
+
+void Base64EncodeAppendSimdutf(span<const uint8_t> input, std::string* output) {
+  // Ensure `modp_b64_encode_data_len` will not overflow.
+  // For now, use this with simdutf as well for consistency.
+  CHECK_LE(input.size(), MODP_B64_MAX_INPUT_LEN);
+
+  size_t encode_data_len =
+      internal::simdutf_base64_length_from_binary(input.size());
+
+  const size_t after_size =
+      CheckAdd(encode_data_len, output->size()).ValueOrDie();
+  output->resize(after_size);
+
+  span<char> write = span(*output).last(encode_data_len);
+
+  const size_t written_size = internal::simdutf_binary_to_base64(input, write);
+  // If this failed, it would indicate simdutf wrote OOB or left bytes
+  // uninitialized. It's possible for this to be elided by the compiler, since
+  // writing OOB is UB.
+  CHECK_EQ(written_size, write.size());
+}
+
 }  // namespace
 
 std::string Base64Encode(span<const uint8_t> input) {
@@ -33,33 +82,33 @@ std::string Base64Encode(span<const uint8_t> input) {
 }
 
 void Base64EncodeAppend(span<const uint8_t> input, std::string* output) {
-  // Ensure `modp_b64_encode_data_len` will not overflow.
-  CHECK_LE(input.size(), MODP_B64_MAX_INPUT_LEN);
-  size_t encode_data_len = modp_b64_encode_data_len(input.size());
+  if (FeatureList::IsEnabled(features::kSimdutfBase64Encode)) {
+    Base64EncodeAppendSimdutf(input, output);
+    return;
+  }
 
-  size_t prefix_len = output->size();
-  output->resize(base::CheckAdd(encode_data_len, prefix_len).ValueOrDie());
-
-  const size_t output_size = modp_b64_encode_data(
-      output->data() + prefix_len, reinterpret_cast<const char*>(input.data()),
-      input.size());
-  CHECK_EQ(output->size(), prefix_len + output_size);
+  Base64EncodeAppendModpB64(input, output);
 }
 
-void Base64Encode(StringPiece input, std::string* output) {
-  *output = Base64Encode(base::as_bytes(base::make_span(input)));
+std::string Base64Encode(std::string_view input) {
+  return Base64Encode(as_byte_span(input));
 }
 
-bool Base64Decode(StringPiece input,
+BASE_EXPORT std::string Base64EncodeEarlyStartup(span<const uint8_t> input) {
+  std::string output;
+  Base64EncodeAppendModpB64(input, &output);
+  return output;
+}
+
+bool Base64Decode(std::string_view input,
                   std::string* output,
                   Base64DecodePolicy policy) {
-  std::string temp;
-  temp.resize(modp_b64_decode_len(input.size()));
+  std::string decode_buf;
+  decode_buf.resize(modp_b64_decode_len(input.size()));
 
-  // does not null terminate result since result is binary data!
-  size_t input_size = input.size();
-  size_t output_size = modp_b64_decode(&(temp[0]), input.data(), input_size,
-                                       GetModpPolicy(policy));
+  // Does not NUL-terminate result since result is binary data!
+  size_t written_size = modp_b64_decode(decode_buf.data(), input.data(),
+                                        input.size(), GetModpPolicy(policy));
 
   // Forgiving mode requires whitespace to be stripped prior to decoding.
   // We don't do that in the above code to ensure that the "happy path" of
@@ -67,37 +116,53 @@ bool Base64Decode(StringPiece input,
   // will always cause `modp_b64_decode` to fail, just handle whitespace
   // stripping on failure. This is not much slower than just scanning for
   // whitespace first, even for input with whitespace.
-  if (output_size == MODP_B64_ERROR &&
+  if (written_size == MODP_B64_ERROR &&
       policy == Base64DecodePolicy::kForgiving) {
     // We could use `output` here to avoid an allocation when decoding is done
     // in-place, but it violates the API contract that `output` is only modified
     // on success.
     std::string input_without_whitespace;
-    RemoveChars(input, kInfraAsciiWhitespace, &input_without_whitespace);
-    output_size =
-        modp_b64_decode(&(temp[0]), input_without_whitespace.data(),
+    RemoveChars(input, base::as_string_view(kInfraAsciiWhitespace),
+                &input_without_whitespace);
+    // This means that the required size to decode is at most what was needed
+    // above, which means `decode_buf` will fit the decoded bytes at its current
+    // size and we don't need to call `modp_b64_decode_len()` again.
+    CHECK_LE(input_without_whitespace.size(), input.size());
+    written_size =
+        modp_b64_decode(decode_buf.data(), input_without_whitespace.data(),
                         input_without_whitespace.size(), GetModpPolicy(policy));
   }
 
-  if (output_size == MODP_B64_ERROR)
+  if (written_size == MODP_B64_ERROR) {
     return false;
+  }
 
-  temp.resize(output_size);
-  output->swap(temp);
+  // If this failed it would indicate we wrote OOB. It's possible for this to be
+  // elided by the compiler, since writing OOB is UB.
+  CHECK_LE(written_size, decode_buf.size());
+
+  // Shrinks the buffer and makes it NUL-terminated.
+  decode_buf.resize(written_size);
+  *output = std::move(decode_buf);
   return true;
 }
 
-absl::optional<std::vector<uint8_t>> Base64Decode(StringPiece input) {
-  std::vector<uint8_t> ret(modp_b64_decode_len(input.size()));
+std::optional<std::vector<uint8_t>> Base64Decode(std::string_view input) {
+  std::vector<uint8_t> write_buf(modp_b64_decode_len(input.size()));
+  span<char> write = base::as_writable_chars(base::span(write_buf));
 
-  size_t input_size = input.size();
-  size_t output_size = modp_b64_decode(reinterpret_cast<char*>(ret.data()),
-                                       input.data(), input_size);
-  if (output_size == MODP_B64_ERROR)
-    return absl::nullopt;
+  size_t written_size =
+      modp_b64_decode(write.data(), input.data(), input.size());
+  if (written_size == MODP_B64_ERROR) {
+    return std::nullopt;
+  }
 
-  ret.resize(output_size);
-  return ret;
+  // If this failed it would indicate we wrote OOB. It's possible for this to be
+  // elided by the compiler, since writing OOB is UB.
+  CHECK_LE(written_size, write.size());
+
+  write_buf.resize(written_size);
+  return write_buf;
 }
 
 }  // namespace base

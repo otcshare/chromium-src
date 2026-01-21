@@ -4,29 +4,193 @@
 
 #include "remoting/host/setup/start_host_as_root.h"
 
+#include <errno.h>
+#include <grp.h>
 #include <pwd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/process/launch.h"
+#include "base/strings/string_split.h"
 
 namespace remoting {
+
+namespace {
+
+constexpr char kChromotingGroupName[] = "chrome-remote-desktop";
+constexpr std::string_view kUserNameSwitch = "user-name";
+constexpr std::string_view kCorpUserSwitch = "corp-user";
+constexpr std::string_view kCloudUserSwitch = "cloud-user";
+
+void PrintGroupMembershipError(const char* user_name) {
+  std::cerr << user_name << " is not a member of the `" << kChromotingGroupName
+            << "` group.\n"
+            << "  Please add them using this command:\n"
+            << "  sudo usermod -G " << kChromotingGroupName << " " << user_name
+            << "\n";
+}
+
+bool CheckChromotingGroupMembership(const char* user_name,
+                                    gid_t user_group_id) {
+  errno = 0;
+  group* chromoting_group = getgrnam(kChromotingGroupName);
+  if (!chromoting_group) {
+    // The installer creates this group so this condition is unexpected but we
+    // check here in case the machine is in a bad state or our installer was
+    // modified (broken) in some way such that the group does not exist.
+    std::cerr << "Failed to retrieve group info for `" << kChromotingGroupName
+              << "`. errno = " << strerror(errno) << "(" << errno << ")\n"
+              << "  Please create this group using this command:\n"
+              << "  sudo addgroup --system chrome-remote-desktop\n";
+    return false;
+  }
+
+  // Figure out how many groups the user is in.
+  int group_count = 0;
+  getgrouplist(user_name, user_group_id, nullptr, &group_count);
+
+  if (group_count < 1) {
+    PrintGroupMembershipError(user_name);
+    return false;
+  }
+
+  // Retrieve the groups.
+  std::vector<gid_t> groups(group_count);
+  getgrouplist(user_name, user_group_id, groups.data(), &group_count);
+  if (!std::ranges::contains(groups, chromoting_group->gr_gid)) {
+    PrintGroupMembershipError(user_name);
+    return false;
+  }
+
+  std::cout << "Verified that " << user_name << " is a member of "
+            << kChromotingGroupName << "\n";
+  return true;
+}
+
+bool ValidateCommandLine(const base::CommandLine& command_line) {
+  bool has_username = command_line.HasSwitch(kUserNameSwitch);
+  bool has_corp_user = command_line.HasSwitch(kCorpUserSwitch);
+  bool has_cloud_user = command_line.HasSwitch(kCloudUserSwitch);
+
+  if (!has_username && !has_corp_user && !has_cloud_user) {
+    std::cerr << "At least one of the following args must be provided:\n"
+              << "  --user-name=<username>\n"
+              << "  --corp-user=<username>\n"
+              << "  --cloud-user=<email>\n";
+    return false;
+  } else if (has_corp_user && has_cloud_user) {
+    std::cerr << "'--corp-user' and '--cloud-user' flags cannot be used "
+                 "together.\n";
+    return false;
+  } else if (has_cloud_user) {
+    std::string arg_value = command_line.GetSwitchValueASCII(kCloudUserSwitch);
+    if (!base::SplitStringOnce(arg_value, '@')) {
+      std::cerr << "The --cloud-user flag requires an email address.\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+std::string ExtractUsernameFromCommandLine(
+    const base::CommandLine& command_line) {
+  // The 'user-name' flag contains the local account to run the host as.
+  // If '--user-name' is not provided, then we will try to extract it from
+  // either '--cloud-user' or '--corp-user'.
+  // Note, it is expected that the switch contents have been validated via
+  // ValidateCommandLine() before calling this function.
+  std::string user_name;
+  if (command_line.HasSwitch(kUserNameSwitch)) {
+    user_name = command_line.GetSwitchValueASCII(kUserNameSwitch);
+  } else if (command_line.HasSwitch(kCorpUserSwitch)) {
+    // For compat reasons, we support either email or username for this param.
+    // TODO: joedow - Remove support for the email param in M139.
+    std::string arg_value = command_line.GetSwitchValueASCII(kCorpUserSwitch);
+    auto parts = base::SplitStringOnce(arg_value, '@');
+    if (!parts) {
+      user_name = std::move(arg_value);
+    } else {
+      user_name = std::string(parts->first);
+    }
+  } else if (command_line.HasSwitch(kCloudUserSwitch)) {
+    std::string arg_value = command_line.GetSwitchValueASCII(kCloudUserSwitch);
+    user_name = base::SplitStringOnce(arg_value, '@')->first;
+  }
+
+  return user_name;
+}
+
+}  // namespace
 
 int StartHostAsRoot(int argc, char** argv) {
   DCHECK(getuid() == 0);
 
   base::CommandLine command_line(argc, argv);
-  std::string user_name = command_line.GetSwitchValueASCII("user-name");
-  if (user_name.empty()) {
-    fprintf(stderr,
-            "Must specify the --user-name option when running as root.\n");
+  if (!ValidateCommandLine(command_line)) {
     return 1;
+  }
+  std::string user_name = ExtractUsernameFromCommandLine(command_line);
+  if (user_name.empty()) {
+    std::cerr << "A username and/or email must be provided from one of the "
+                 "following switches:\n"
+              << "  --user-name=<username>\n"
+              << "  --corp-user=<username>\n"
+              << "  --cloud-user=<email>\n";
+    return 1;
+  }
+  std::cout << "Configuring the host service to run as local account: "
+            << user_name << "\n";
+
+  errno = 0;
+  const passwd* user_struct = getpwnam(user_name.c_str());
+  if (!user_struct) {
+    std::cerr << "Failed to retrieve passwd struct for " << user_name
+              << ". errno = " << strerror(errno) << "(" << errno << ")\n"
+              << "Does this user account exist on the machine?\n";
+    return -1;
+  }
+
+  std::string home_dir = user_struct->pw_dir ?: "";
+  base::FilePath home_dir_path = base::FilePath(home_dir);
+  if (!base::DirectoryExists(home_dir_path)) {
+    std::cerr << "[WARNING] Can't find home directory (" << home_dir << ") for "
+              << user_name << "(" << user_struct->pw_uid << ").\n"
+              << "Please run the 'mkhomedir_helper' utility, or similar, to "
+                 "create a home directory for the user.\n"
+              << "The host setup process will not complete successfully "
+                 "without one.\n";
+  } else {
+    std::cout << "Verified that home directory (" << home_dir << ") exists for "
+              << user_name << "(" << user_struct->pw_uid << ")\n";
+  }
+
+  // This switch is provided for environments where systemd is not being used.
+  bool use_sysvinit = command_line.HasSwitch("sysvinit");
+  if (use_sysvinit) {
+    std::cout << "Checking sysvinit configuration requirements.\n";
+    if (!CheckChromotingGroupMembership(user_struct->pw_name,
+                                        user_struct->pw_gid)) {
+      return -1;
+    }
   }
 
   int return_value = 1;
-  command_line.RemoveSwitch("user-name");
+  command_line.RemoveSwitch(kUserNameSwitch);
+  command_line.RemoveSwitch("sysvinit");
   command_line.AppendSwitch("no-start");
   std::vector<std::string> create_config_command_line{
       "/usr/bin/sudo",
@@ -45,21 +209,28 @@ int StartHostAsRoot(int argc, char** argv) {
       base::LaunchProcess(create_config_command_line, options);
   close(stdin_dup);
   if (!create_config_process.WaitForExit(&return_value) || return_value != 0) {
-    fprintf(stderr, "Failed to set new config.\n");
+    std::cerr << "Failed to set new config.\n";
     return return_value;
+  }
+
+  std::vector<std::string> start_service_command_line{
+      "systemctl", "enable", "--now",
+      std::string("chrome-remote-desktop@") + user_name};
+  if (use_sysvinit) {
+    // Using sysvinit is much less common that using systemd so we optimize for
+    // that codepath and reset the vector if needed.
+    start_service_command_line = {"/etc/init.d/chrome-remote-desktop", "start",
+                                  user_name};
   }
 
   return_value = 1;
-  std::vector<std::string> systemctl_command_line{
-      "systemctl", "enable", "--now",
-      std::string("chrome-remote-desktop@") + user_name};
-  auto systemctl_process =
-      base::LaunchProcess(systemctl_command_line, base::LaunchOptions());
-  if (!systemctl_process.WaitForExit(&return_value) || return_value != 0) {
-    fprintf(stderr, "Failed to enable host service.\n");
+  auto start_service_process =
+      base::LaunchProcess(start_service_command_line, base::LaunchOptions());
+  if (!start_service_process.WaitForExit(&return_value) || return_value != 0) {
+    std::cerr << "Failed to enable host service.\n";
     return return_value;
   }
-
+  std::cout << "Host service started successfully.\n";
   return 0;
 }
 

@@ -20,27 +20,27 @@
 
 #include "third_party/blink/renderer/core/svg/svg_symbol_element.h"
 
+#include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_hidden_container.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_viewport_container.h"
+#include "third_party/blink/renderer/core/svg/svg_animated_length.h"
+#include "third_party/blink/renderer/core/svg/svg_animated_preserve_aspect_ratio.h"
+#include "third_party/blink/renderer/core/svg/svg_animated_rect.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 
 namespace blink {
 
 SVGSymbolElement::SVGSymbolElement(Document& document)
-    : SVGElement(svg_names::kSymbolTag, document), SVGFitToViewBox(this) {}
+    : SVGViewportContainerElement(svg_names::kSymbolTag, document) {}
 
 void SVGSymbolElement::Trace(Visitor* visitor) const {
-  SVGElement::Trace(visitor);
-  SVGFitToViewBox::Trace(visitor);
+  SVGViewportContainerElement::Trace(visitor);
 }
 
-void SVGSymbolElement::SvgAttributeChanged(
-    const SvgAttributeChangedParams& params) {
-  if (SVGFitToViewBox::IsKnownAttribute(params.name))
-    InvalidateInstances();
-}
-
-LayoutObject* SVGSymbolElement::CreateLayoutObject(const ComputedStyle&,
-                                                   LegacyLayout) {
+LayoutObject* SVGSymbolElement::CreateLayoutObject(const ComputedStyle&) {
+  if (InUseShadowTree() && IsAtShadowBoundary(this)) {
+    return MakeGarbageCollected<LayoutSVGViewportContainer>(this);
+  }
   return MakeGarbageCollected<LayoutSVGHiddenContainer>(this);
 }
 

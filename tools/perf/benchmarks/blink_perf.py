@@ -380,7 +380,10 @@ class _BlinkPerfBenchmark(perf_benchmark.PerfBenchmark):
                                   extra_tags=self.TAGS)
 
 
-@benchmark.Info(emails=['aleventhal@chromium.org'],
+@benchmark.Info(emails=[
+                    'gregoryd@google.com',
+                    'lucasradaelli@google.com'
+                ],
                 component='Blink>Accessibility',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfAccessibility(_BlinkPerfBenchmark):
@@ -392,16 +395,15 @@ class BlinkPerfAccessibility(_BlinkPerfBenchmark):
     return 'blink_perf.accessibility'
 
   def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs([
-        '--force-renderer-accessibility', '--disable-features=DeferredShaping'
-    ])
+    options.AppendExtraBrowserArgs(['--force-renderer-accessibility=complete'])
 
 
-@benchmark.Info(
-    component='Blink>Bindings',
-    emails=['jbroman@chromium.org', 'yukishiino@chromium.org',
-            'haraken@chromium.org'],
-    documentation_url='https://bit.ly/blink-perf-benchmarks')
+@benchmark.Info(component='Blink>Bindings',
+                emails=[
+                    'jbroman@chromium.org', 'japhet@chromium.org',
+                    'haraken@chromium.org'
+                ],
+                documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfBindings(_BlinkPerfBenchmark):
   SUBDIR = 'bindings'
   TAGS = _BlinkPerfBenchmark.TAGS + ['all']
@@ -481,12 +483,12 @@ class ServiceWorkerRequestHandler(
     return None
 
 
-@benchmark.Info(
-    component='Blink>ServiceWorker',
-    emails=[
-        'shimazu@chromium.org', 'falken@chromium.org', 'ting.shao@intel.com'
-    ],
-    documentation_url='https://bit.ly/blink-perf-benchmarks')
+@benchmark.Info(component='Blink>ServiceWorker',
+                emails=[
+                    'yyanagisawa@chromium.org',
+                    'chrome-worker@google.com',
+                ],
+                documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfServiceWorker(_BlinkPerfBenchmark):
   SUBDIR = 'service_worker'
 
@@ -559,7 +561,7 @@ class BlinkPerfEvents(_BlinkPerfBenchmark):
     return 'blink_perf.events'
 
 
-@benchmark.Info(emails=['cblume@chromium.org'],
+@benchmark.Info(emails=['dalecurtis@chromium.org', 'vmpstr@chromium.org'],
                 component='Internals>Images>Codecs',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfImageDecoder(_BlinkPerfBenchmark):
@@ -589,7 +591,19 @@ class BlinkPerfLayout(_BlinkPerfBenchmark):
     return 'blink_perf.layout'
 
 
-@benchmark.Info(emails=['dmurph@chromium.org'],
+@benchmark.Info(emails=['pmeenan@chromium.org', 'kouhei@chromium.org'],
+                component='Blink>Loader',
+                documentation_url='https://bit.ly/blink-perf-benchmarks')
+class BlinkPerfLoading(_BlinkPerfBenchmark):
+  SUBDIR = 'loading'
+  TAGS = _BlinkPerfBenchmark.TAGS + ['all']
+
+  @classmethod
+  def Name(cls):
+    return 'UNSCHEDULED_blink_perf.loading'
+
+
+@benchmark.Info(emails=['ayui@chromium.org'],
                 component='Blink>Storage',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfOWPStorage(_BlinkPerfBenchmark):
@@ -621,11 +635,8 @@ class BlinkPerfPaint(_BlinkPerfBenchmark):
   def Name(cls):
     return 'blink_perf.paint'
 
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs(['--disable-features=DeferredShaping'])
 
-
-@benchmark.Info(emails=['yoavweiss@chromium.org'],
+@benchmark.Info(emails=['sullivan@chromium.org'],
                 component='Blink>PerformanceAPIs',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfPerformanceAPIs(_BlinkPerfBenchmark):
@@ -647,23 +658,6 @@ class BlinkPerfParser(_BlinkPerfBenchmark):
   @classmethod
   def Name(cls):
     return 'blink_perf.parser'
-
-
-@benchmark.Info(component='Blink>Security>SanitizerAPI',
-                emails=['lyf@chromium.org'],
-                documentation_url='https://bit.ly/blink-perf-benchmarks')
-class BlinkPerfSanitizerAPI(_BlinkPerfBenchmark):
-  SUBDIR = 'sanitizer-api'
-  TAGS = _BlinkPerfBenchmark.TAGS + ['all']
-
-  @classmethod
-  def Name(cls):
-    return 'blink_perf.sanitizer-api'
-
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs([
-        '--enable-blink-features=SanitizerAPI',
-    ])
 
 
 @benchmark.Info(emails=['fs@opera.com', 'pdr@chromium.org'],
@@ -690,7 +684,7 @@ class BlinkPerfShadowDOM(_BlinkPerfBenchmark):
     return 'blink_perf.shadow_dom'
 
 
-@benchmark.Info(emails=['vmpstr@chromium.org'],
+@benchmark.Info(emails=['vmpstr@chromium.org', 'pdr@chromium.org'],
                 component='Blink>Paint',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfDisplayLocking(_BlinkPerfBenchmark):
@@ -699,7 +693,7 @@ class BlinkPerfDisplayLocking(_BlinkPerfBenchmark):
 
   @classmethod
   def Name(cls):
-    return 'blink_perf.display_locking'
+    return 'UNSCHEDULED_blink_perf.display_locking'
 
   def SetExtraBrowserOptions(self, options):
     options.AppendExtraBrowserArgs(
@@ -718,7 +712,7 @@ class BlinkPerfWebAudio(_BlinkPerfBenchmark):
     return 'blink_perf.webaudio'
 
 
-@benchmark.Info(emails=['media-dev@chromium.org'],
+@benchmark.Info(emails=['media-dev@chromium.org', 'eugene@chromium.org'],
                 component='Blink>WebCodecs',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfWebCodecs(_BlinkPerfBenchmark):
@@ -730,72 +724,98 @@ class BlinkPerfWebCodecs(_BlinkPerfBenchmark):
     return 'blink_perf.webcodecs'
 
 
-@benchmark.Info(
-    emails=['kbr@chromium.org', 'enga@chromium.org', 'webgl-team@google.com'],
-    component='Blink>WebGL',
-    documentation_url='https://bit.ly/blink-perf-benchmarks')
+@benchmark.Info(emails=[
+    'kbr@chromium.org',
+    'kainino@chromium.org',
+    'webgl-team@google.com',
+],
+                component='Blink>WebGL',
+                documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfWebGL(_BlinkPerfBenchmark):
   SUBDIR = 'webgl'
-  SUPPORTED_PLATFORMS = [story.expectations.ALL]
 
   @classmethod
   def Name(cls):
     return 'blink_perf.webgl'
 
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs(['--disable-features=V8TurboFastApiCalls'])
-
 
 @benchmark.Info(emails=[
-    'kbr@chromium.org', 'enga@chromium.org', 'mslekova@chromium.org',
-    'junov@chromium.org', 'webgl-team@google.com'
-],
-                component='Blink>WebGL',
-                documentation_url='https://bit.ly/blink-perf-benchmarks')
-class BlinkPerfWebGLFastCall(_BlinkPerfBenchmark):
-  SUBDIR = 'webgl'
-  SUPPORTED_PLATFORMS = [story.expectations.ALL]
-
-  @classmethod
-  def Name(cls):
-    return 'blink_perf.webgl_fast_call'
-
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs(['--enable-features=V8TurboFastApiCalls'])
-
-
-@benchmark.Info(emails=[
-    'enga@chromium.org', 'cwallez@chromium.org', 'webgpu-developers@google.com'
+    'kainino@chromium.org',
+    'cwallez@chromium.org',
+    'webgpu-dev-team@google.com',
 ],
                 component='Blink>WebGPU',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
 class BlinkPerfWebGPU(_BlinkPerfBenchmark):
+  # Run the WebGPU perf tests ONLY on core-capable adapters.
   SUBDIR = 'webgpu'
-  SUPPORTED_PLATFORMS = [story.expectations.WIN_10, story.expectations.ALL_MAC]
 
   @classmethod
   def Name(cls):
     return 'blink_perf.webgpu'
 
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs(
-        ['--enable-unsafe-webgpu', '--disable-features=V8TurboFastApiCalls'])
+  def SetExtraBrowserOptionsWithBrowser(self, options, possible_browser):
+    # Make sure WebGPU is enabled if possible, even if not shipped.
+    # The test itself ensures it won't use a fallback (software) backend.
+    options.AppendExtraBrowserArgs(['--enable-unsafe-webgpu'])
+
+    if possible_browser.platform.GetOSName() == 'linux':
+      # Flags to make sure Chromium is in the correct mode to run WebGPU.
+      # TODO(442791440): TODO(40218893): Remove these flags and switch to
+      # testing the backend we get by default. Or, if needed, test both.
+      options.AppendExtraBrowserArgs([
+          '--enable-features=Vulkan,VulkanFromANGLE',
+          '--use-angle=vulkan',
+          '--ozone-platform=x11',
+      ])
 
 
 @benchmark.Info(emails=[
-    'enga@chromium.org', 'cwallez@chromium.org', 'mslekova@chromium.org',
-    'junov@chromium.org', 'webgpu-developers@google.com'
+    'kainino@chromium.org',
+    'cwallez@chromium.org',
+    'webgpu-dev-team@google.com',
 ],
                 component='Blink>WebGPU',
                 documentation_url='https://bit.ly/blink-perf-benchmarks')
-class BlinkPerfWebGPUFastCall(_BlinkPerfBenchmark):
+class BlinkPerfWebGPUCompat(_BlinkPerfBenchmark):
+  # Run the WebGPU perf tests ONLY on core-INcapable adapters.
   SUBDIR = 'webgpu'
-  SUPPORTED_PLATFORMS = [story.expectations.WIN_10, story.expectations.ALL_MAC]
+  # Currently, Android is the only production target platform for WebGPU
+  # Compat's core-incapable backend(s). Enable other Compat configs as needed.
+  SUPPORTED_PLATFORMS = [story.expectations.ALL_ANDROID]
+  # TODO(crbug.com/443111618): Schedule this benchmark.
+  SCHEDULED = False
 
   @classmethod
   def Name(cls):
-    return 'blink_perf.webgpu_fast_call'
+    return 'blink_perf.webgpu_compat'
 
-  def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs(
-        ['--enable-unsafe-webgpu', '--enable-features=V8TurboFastApiCalls'])
+  def CreateStorySet(self, options):
+    path = os.path.join(BLINK_PERF_BASE_DIR, self.SUBDIR)
+    return CreateStorySetFromPath(path,
+                                  SKIPPED_FILE,
+                                  extra_tags=self.TAGS,
+                                  append_query='compatonly')
+
+  def SetExtraBrowserOptionsWithBrowser(self, options, possible_browser):
+    # Make sure WebGPU is enabled if possible, even if not shipped.
+    # The test itself ensures it won't use a fallback (software) backend.
+    options.AppendExtraBrowserArgs(['--enable-unsafe-webgpu'])
+
+    # Make sure we're only using the GLES backend. Change this if different
+    # flags are needed on other Core-incapable configs.
+    options.AppendExtraBrowserArgs(['--use-webgpu-adapter=opengles'])
+
+
+@benchmark.Info(emails=[
+    'bokan@chromium.org', 'khushalsagar@chromium.org', 'vmpstr@chromium.org'
+],
+                component='Blink>ViewTransitions',
+                documentation_url='https://bit.ly/blink-perf-benchmarks')
+class BlinkPerfViewTransitions(_BlinkPerfBenchmark):
+  SUBDIR = 'view_transitions'
+  TAGS = _BlinkPerfBenchmark.TAGS + ['all']
+
+  @classmethod
+  def Name(cls):
+    return 'UNSCHEDULED_blink_perf.view_transitions'

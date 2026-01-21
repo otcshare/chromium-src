@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -22,10 +22,10 @@ namespace {
 
 // Returns corresponding HKEY according to the RegistryHive, return nullopt if
 // hive is missing or unsupported.
-absl::optional<HKEY> ConvertHiveToHKey(
-    const absl::optional<device_signals::RegistryHive> hive) {
-  if (hive == absl::nullopt) {
-    return absl::nullopt;
+std::optional<HKEY> ConvertHiveToHKey(
+    const std::optional<device_signals::RegistryHive> hive) {
+  if (hive == std::nullopt) {
+    return std::nullopt;
   }
 
   switch (hive.value()) {
@@ -48,8 +48,8 @@ std::vector<device_signals::SettingsItem> GetSettingsItems(
     collected_item.key = option.key;
     collected_item.hive = option.hive;
 
-    absl::optional<HKEY> hive_hkey = ConvertHiveToHKey(option.hive);
-    if (hive_hkey == absl::nullopt) {
+    std::optional<HKEY> hive_hkey = ConvertHiveToHKey(option.hive);
+    if (hive_hkey == std::nullopt) {
       collected_item.presence = device_signals::PresenceValue::kNotFound;
       collected_items.push_back(collected_item);
       continue;
@@ -95,13 +95,11 @@ std::vector<device_signals::SettingsItem> GetSettingsItems(
       // Handle the REG_SZ type, note this does not include REG_MULTI_SZ or
       // REG_EXPAND_SZ.
       std::wstring out_value_sz;
-      std::string out_value_json;
       if (registry_settings_key.ReadValue(request_key_wide.c_str(),
                                           &out_value_sz) == ERROR_SUCCESS) {
-        base::JSONWriter::Write(
-            base::ValueView(base::SysWideToUTF8(out_value_sz)),
-            &out_value_json);
-        collected_item.setting_json_value = out_value_json;
+        collected_item.setting_json_value =
+            base::WriteJson(base::ValueView(base::SysWideToUTF8(out_value_sz)))
+                .value_or("");
       }
     }
     collected_item.presence = device_signals::PresenceValue::kFound;

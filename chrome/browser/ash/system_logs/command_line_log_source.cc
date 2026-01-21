@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/system/sys_info.h"
@@ -83,8 +83,7 @@ namespace system_logs {
 CommandLineLogSource::CommandLineLogSource() : SystemLogsSource("CommandLine") {
 }
 
-CommandLineLogSource::~CommandLineLogSource() {
-}
+CommandLineLogSource::~CommandLineLogSource() = default;
 
 void CommandLineLogSource::Fetch(SysLogsSourceCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);

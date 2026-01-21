@@ -5,18 +5,14 @@
 #include "ui/webui/examples/browser/browser_context.h"
 
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
 
 namespace webui_examples {
 
 BrowserContext::BrowserContext(const base::FilePath& temp_dir_path)
-    : temp_dir_path_(temp_dir_path),
-      resource_context_(std::make_unique<content::ResourceContext>()) {}
+    : temp_dir_path_(temp_dir_path) {}
 
 BrowserContext::~BrowserContext() {
   NotifyWillBeDestroyed();
-  content::BrowserThread::DeleteSoon(content::BrowserThread::IO, FROM_HERE,
-                                     resource_context_.release());
   ShutdownStoragePartitions();
 }
 
@@ -27,16 +23,12 @@ BrowserContext::CreateZoomLevelDelegate(const base::FilePath& partition_path) {
   return nullptr;
 }
 
-base::FilePath BrowserContext::GetPath() {
+base::FilePath BrowserContext::GetPath() const {
   return temp_dir_path_;
 }
 
 bool BrowserContext::IsOffTheRecord() {
   return false;
-}
-
-content::ResourceContext* BrowserContext::GetResourceContext() {
-  return resource_context_.get();
 }
 
 content::DownloadManagerDelegate* BrowserContext::GetDownloadManagerDelegate() {

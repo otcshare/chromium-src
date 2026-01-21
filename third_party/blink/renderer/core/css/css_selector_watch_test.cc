@@ -33,7 +33,7 @@ void CSSSelectorWatchTest::ClearAddedRemoved(CSSSelectorWatch& watch) {
 }
 
 TEST_F(CSSSelectorWatchTest, RecalcOnDocumentChange) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <div>
       <span id='x' class='a'></span>
       <span id='y' class='b'><span></span></span>
@@ -57,16 +57,16 @@ TEST_F(CSSSelectorWatchTest, RecalcOnDocumentChange) {
 
   UpdateAllLifecyclePhasesForTest();
 
-  Element* x = GetDocument().getElementById("x");
-  Element* y = GetDocument().getElementById("y");
-  Element* z = GetDocument().getElementById("z");
+  Element* x = GetDocument().getElementById(AtomicString("x"));
+  Element* y = GetDocument().getElementById(AtomicString("y"));
+  Element* z = GetDocument().getElementById(AtomicString("z"));
   ASSERT_TRUE(x);
   ASSERT_TRUE(y);
   ASSERT_TRUE(z);
 
   x->removeAttribute(html_names::kClassAttr);
   y->removeAttribute(html_names::kClassAttr);
-  z->setAttribute(html_names::kClassAttr, "c");
+  z->setAttribute(html_names::kClassAttr, AtomicString("c"));
 
   ClearAddedRemoved(watch);
 
@@ -83,16 +83,15 @@ TEST_F(CSSSelectorWatchTest, RecalcOnDocumentChange) {
   EXPECT_TRUE(RemovedSelectors(watch).Contains(".b"));
 }
 
-class CSSSelectorWatchCQTest : public CSSSelectorWatchTest,
-                               private ScopedLayoutNGForTest {
+class CSSSelectorWatchCQTest : public CSSSelectorWatchTest {
  protected:
-  CSSSelectorWatchCQTest() : ScopedLayoutNGForTest(true) {}
+  CSSSelectorWatchCQTest() = default;
 };
 
 TEST_F(CSSSelectorWatchCQTest, ContainerQueryDisplayNone) {
   CSSSelectorWatch& watch = CSSSelectorWatch::From(GetDocument());
 
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       .c #container {
         container-name: c1;
@@ -121,7 +120,7 @@ TEST_F(CSSSelectorWatchCQTest, ContainerQueryDisplayNone) {
   // #container a container 'c1' which is flipping the span back to
   // display:inline.
   ClearAddedRemoved(watch);
-  GetDocument().body()->setAttribute(html_names::kClassAttr, "c");
+  GetDocument().body()->setAttribute(html_names::kClassAttr, AtomicString("c"));
   UpdateAllLifecyclePhasesForTest();
 
   // Element::UpdateCallbackSelectors() will both remove and add #inner in the

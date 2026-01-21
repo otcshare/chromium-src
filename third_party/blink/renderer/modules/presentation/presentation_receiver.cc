@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/modules/presentation/presentation_receiver.h"
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -32,7 +33,8 @@ PresentationReceiver::PresentationReceiver(LocalDOMWindow* window)
       presentation_receiver_receiver_.BindNewPipeAndPassRemote(task_runner));
 }
 
-ScriptPromise PresentationReceiver::connectionList(ScriptState* script_state) {
+ScriptPromise<PresentationConnectionList> PresentationReceiver::connectionList(
+    ScriptState* script_state) {
   if (!connection_list_property_) {
     connection_list_property_ = MakeGarbageCollected<ConnectionListProperty>(
         ExecutionContext::From(script_state));
@@ -57,16 +59,12 @@ void PresentationReceiver::RemoveConnection(
 }
 
 void PresentationReceiver::OnReceiverConnectionAvailable(
-    mojom::blink::PresentationInfoPtr info,
-    mojo::PendingRemote<mojom::blink::PresentationConnection>
-        controller_connection,
-    mojo::PendingReceiver<mojom::blink::PresentationConnection>
-        receiver_connection_receiver) {
+    mojom::blink::PresentationConnectionResultPtr result) {
   // Take() will call PresentationReceiver::registerConnection()
   // and register the connection.
-  auto* connection = ReceiverPresentationConnection::Take(
-      this, *info, std::move(controller_connection),
-      std::move(receiver_connection_receiver));
+  auto* connection = ReceiverPresentationConnection::Create(
+      this, *result->presentation_info, std::move(result->connection_remote),
+      std::move(result->connection_receiver));
 
   // Only notify receiver.connectionList property if it has been acccessed
   // previously.

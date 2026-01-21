@@ -4,6 +4,8 @@
 
 #include "extensions/renderer/bindings/api_signature.h"
 
+#include <string_view>
+
 #include "base/values.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
@@ -11,7 +13,6 @@
 #include "extensions/renderer/bindings/api_type_reference_map.h"
 #include "extensions/renderer/bindings/argument_spec.h"
 #include "extensions/renderer/bindings/argument_spec_builder.h"
-#include "extensions/renderer/bindings/binding_access_checker.h"
 #include "extensions/renderer/bindings/returns_async_builder.h"
 #include "gin/converter.h"
 #include "gin/dictionary.h"
@@ -33,8 +34,8 @@ using ReturnsAsync = APISignature::ReturnsAsync;
 std::unique_ptr<APISignature> OneString() {
   SpecVector specs;
   specs.push_back(ArgumentSpecBuilder(ArgumentType::STRING, "string").Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
 SpecVector StringAndIntSpec() {
@@ -46,8 +47,7 @@ SpecVector StringAndIntSpec() {
 
 std::unique_ptr<APISignature> StringAndInt() {
   return std::make_unique<APISignature>(StringAndIntSpec(),
-                                        nullptr /*returns_async*/,
-                                        nullptr /*access_checker*/);
+                                        nullptr /*returns_async*/);
 }
 
 SpecVector StringOptionalIntAndBoolSpec() {
@@ -61,8 +61,7 @@ SpecVector StringOptionalIntAndBoolSpec() {
 
 std::unique_ptr<APISignature> StringOptionalIntAndBool() {
   return std::make_unique<APISignature>(StringOptionalIntAndBoolSpec(),
-                                        nullptr /*returns_async*/,
-                                        nullptr /*access_checker*/);
+                                        nullptr /*returns_async*/);
 }
 
 SpecVector StringAndOptionalIntSpec() {
@@ -83,27 +82,27 @@ std::unique_ptr<APISignature> OneObject() {
               "prop2",
               ArgumentSpecBuilder(ArgumentType::STRING).MakeOptional().Build())
           .Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
 std::unique_ptr<APISignature> NoArgs() {
-  return std::make_unique<APISignature>(SpecVector(), nullptr /*returns_async*/,
-                                        nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(SpecVector(),
+                                        nullptr /*returns_async*/);
 }
 
 std::unique_ptr<APISignature> IntAndCallback() {
   SpecVector specs;
   specs.push_back(ArgumentSpecBuilder(ArgumentType::INTEGER, "int").Build());
   return std::make_unique<APISignature>(std::move(specs),
-                                        ReturnsAsyncBuilder().Build(), nullptr);
+                                        ReturnsAsyncBuilder().Build());
 }
 
 std::unique_ptr<APISignature> IntAndOptionalCallback() {
   SpecVector specs;
   specs.push_back(ArgumentSpecBuilder(ArgumentType::INTEGER, "int").Build());
   return std::make_unique<APISignature>(
-      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build(), nullptr);
+      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build());
 }
 
 std::unique_ptr<APISignature> OptionalIntAndCallback() {
@@ -111,12 +110,12 @@ std::unique_ptr<APISignature> OptionalIntAndCallback() {
   specs.push_back(
       ArgumentSpecBuilder(ArgumentType::INTEGER, "int").MakeOptional().Build());
   return std::make_unique<APISignature>(std::move(specs),
-                                        ReturnsAsyncBuilder().Build(), nullptr);
+                                        ReturnsAsyncBuilder().Build());
 }
 
 std::unique_ptr<APISignature> OptionalCallback() {
   return std::make_unique<APISignature>(
-      SpecVector(), ReturnsAsyncBuilder().MakeOptional().Build(), nullptr);
+      SpecVector(), ReturnsAsyncBuilder().MakeOptional().Build());
 }
 
 std::unique_ptr<APISignature> IntAnyOptionalObjectOptionalCallback() {
@@ -131,23 +130,23 @@ std::unique_ptr<APISignature> IntAnyOptionalObjectOptionalCallback() {
           .MakeOptional()
           .Build());
   return std::make_unique<APISignature>(
-      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build(), nullptr);
+      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build());
 }
 
 std::unique_ptr<APISignature> RefObj() {
   SpecVector specs;
   specs.push_back(
       ArgumentSpecBuilder(ArgumentType::REF, "obj").SetRef("refObj").Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
 std::unique_ptr<APISignature> RefEnum() {
   SpecVector specs;
   specs.push_back(
       ArgumentSpecBuilder(ArgumentType::REF, "enum").SetRef("refEnum").Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
 std::unique_ptr<APISignature> OptionalObjectAndOptionalCallback() {
@@ -160,8 +159,7 @@ std::unique_ptr<APISignature> OptionalObjectAndOptionalCallback() {
           .MakeOptional()
           .Build());
   return std::make_unique<APISignature>(
-      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build(),
-      nullptr /*access_checker*/);
+      std::move(specs), ReturnsAsyncBuilder().MakeOptional().Build());
 }
 
 std::unique_ptr<APISignature> OptionalIntAndNumber() {
@@ -169,8 +167,8 @@ std::unique_ptr<APISignature> OptionalIntAndNumber() {
   specs.push_back(
       ArgumentSpecBuilder(ArgumentType::INTEGER, "int").MakeOptional().Build());
   specs.push_back(ArgumentSpecBuilder(ArgumentType::DOUBLE, "num").Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
 std::unique_ptr<APISignature> OptionalIntAndInt() {
@@ -178,18 +176,18 @@ std::unique_ptr<APISignature> OptionalIntAndInt() {
   specs.push_back(
       ArgumentSpecBuilder(ArgumentType::INTEGER, "int").MakeOptional().Build());
   specs.push_back(ArgumentSpecBuilder(ArgumentType::INTEGER, "int2").Build());
-  return std::make_unique<APISignature>(
-      std::move(specs), nullptr /*returns_async*/, nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(specs),
+                                        nullptr /*returns_async*/);
 }
 
-std::vector<v8::Local<v8::Value>> StringToV8Vector(
-    v8::Local<v8::Context> context,
-    const char* args) {
+v8::LocalVector<v8::Value> StringToV8Vector(v8::Local<v8::Context> context,
+                                            const char* args) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> v8_args = V8ValueFromScriptSource(context, args);
   EXPECT_FALSE(v8_args.IsEmpty());
   EXPECT_TRUE(v8_args->IsArray());
-  std::vector<v8::Local<v8::Value>> vector_args;
-  EXPECT_TRUE(gin::ConvertFromV8(context->GetIsolate(), v8_args, &vector_args));
+  v8::LocalVector<v8::Value> vector_args(isolate);
+  EXPECT_TRUE(gin::ConvertFromV8(isolate, v8_args, &vector_args));
   return vector_args;
 }
 
@@ -224,27 +222,27 @@ class APISignatureTest : public APIBindingTest {
   }
 
   void ExpectPass(const APISignature& signature,
-                  base::StringPiece arg_values,
-                  base::StringPiece expected_parsed_args,
+                  std::string_view arg_values,
+                  std::string_view expected_parsed_args,
                   binding::AsyncResponseType expected_response_type) {
     RunTest(signature, arg_values, expected_parsed_args, expected_response_type,
             true, std::string());
   }
 
   void ExpectFailure(const APISignature& signature,
-                     base::StringPiece arg_values,
+                     std::string_view arg_values,
                      const std::string& expected_error) {
-    RunTest(signature, arg_values, base::StringPiece(),
+    RunTest(signature, arg_values, std::string_view(),
             binding::AsyncResponseType::kNone, false, expected_error);
   }
 
   void ExpectResponsePass(const APISignature& signature,
-                          base::StringPiece arg_values) {
-    RunResponseTest(signature, arg_values, absl::nullopt);
+                          std::string_view arg_values) {
+    RunResponseTest(signature, arg_values, std::nullopt);
   }
 
   void ExpectResponseFailure(const APISignature& signature,
-                             base::StringPiece arg_values,
+                             std::string_view arg_values,
                              const std::string& expected_error) {
     RunResponseTest(signature, arg_values, expected_error);
   }
@@ -253,8 +251,8 @@ class APISignatureTest : public APIBindingTest {
 
  private:
   void RunTest(const APISignature& signature,
-               base::StringPiece arg_values,
-               base::StringPiece expected_parsed_args,
+               std::string_view arg_values,
+               std::string_view expected_parsed_args,
                binding::AsyncResponseType expected_response_type,
                bool should_succeed,
                const std::string& expected_error) {
@@ -263,7 +261,7 @@ class APISignatureTest : public APIBindingTest {
     v8::Local<v8::Value> v8_args = V8ValueFromScriptSource(context, arg_values);
     ASSERT_FALSE(v8_args.IsEmpty());
     ASSERT_TRUE(v8_args->IsArray());
-    std::vector<v8::Local<v8::Value>> vector_args;
+    v8::LocalVector<v8::Value> vector_args(isolate());
     ASSERT_TRUE(gin::ConvertFromV8(isolate(), v8_args, &vector_args));
 
     APISignature::JSONParseResult parse_result =
@@ -282,14 +280,14 @@ class APISignatureTest : public APIBindingTest {
   }
 
   void RunResponseTest(const APISignature& signature,
-                       base::StringPiece arg_values,
-                       absl::optional<std::string> expected_error) {
+                       std::string_view arg_values,
+                       std::optional<std::string> expected_error) {
     SCOPED_TRACE(arg_values);
     v8::Local<v8::Context> context = MainContext();
     v8::Local<v8::Value> v8_args = V8ValueFromScriptSource(context, arg_values);
     ASSERT_FALSE(v8_args.IsEmpty());
     ASSERT_TRUE(v8_args->IsArray());
-    std::vector<v8::Local<v8::Value>> vector_args;
+    v8::LocalVector<v8::Value> vector_args(isolate());
     ASSERT_TRUE(gin::ConvertFromV8(isolate(), v8_args, &vector_args));
 
     std::string error;
@@ -514,7 +512,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
   {
     // Test with providing an optional callback.
     auto signature = IntAndOptionalCallback();
-    std::vector<v8::Local<v8::Value>> v8_args =
+    v8::LocalVector<v8::Value> v8_args =
         StringToV8Vector(context, "[1, function() {}]");
     APISignature::JSONParseResult parse_result =
         signature->ConvertArgumentsIgnoringSchema(context, v8_args);
@@ -528,9 +526,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
   {
     // Test with omitting the optional callback.
     auto signature = IntAndOptionalCallback();
-    std::vector<v8::Local<v8::Value>> v8_args =
-        StringToV8Vector(context, "[1, null]");
-    v8::Local<v8::Function> callback;
+    v8::LocalVector<v8::Value> v8_args = StringToV8Vector(context, "[1, null]");
     APISignature::JSONParseResult parse_result =
         signature->ConvertArgumentsIgnoringSchema(context, v8_args);
     EXPECT_FALSE(parse_result.error);
@@ -544,7 +540,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
     // Test with providing something completely different than the spec, which
     // is (unfortunately) allowed and used.
     auto signature = OneString();
-    std::vector<v8::Local<v8::Value>> v8_args =
+    v8::LocalVector<v8::Value> v8_args =
         StringToV8Vector(context, "[{not: 'a string'}]");
     APISignature::JSONParseResult parse_result =
         signature->ConvertArgumentsIgnoringSchema(context, v8_args);
@@ -558,7 +554,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
 
   {
     auto signature = OneObject();
-    std::vector<v8::Local<v8::Value>> v8_args = StringToV8Vector(
+    v8::LocalVector<v8::Value> v8_args = StringToV8Vector(
         context, "[{prop1: 'foo', other: 'bar', nullProp: null}]");
     APISignature::JSONParseResult parse_result =
         signature->ConvertArgumentsIgnoringSchema(context, v8_args);
@@ -575,7 +571,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
     // order to match existing JS bindings behavior.
     // See https://crbug.com/924045.
     auto signature = OneString();
-    std::vector<v8::Local<v8::Value>> v8_args =
+    v8::LocalVector<v8::Value> v8_args =
         StringToV8Vector(context, "[1, undefined, 1/0]");
     APISignature::JSONParseResult parse_result =
         signature->ConvertArgumentsIgnoringSchema(context, v8_args);
@@ -590,25 +586,16 @@ TEST_F(APISignatureTest, ParseIgnoringSchema) {
 TEST_F(APISignatureTest, ParseIgnoringSchemaWithPromises) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
-  bool context_allows_promises = true;
-  auto promises_available = base::BindRepeating(
-      [](bool* flag, v8::Local<v8::Context> context) { return *flag; },
-      &context_allows_promises);
-  auto api_available =
-      base::BindRepeating([](v8::Local<v8::Context> context,
-                             const std::string& name) { return true; });
-  BindingAccessChecker access_checker(api_available, promises_available);
 
   SpecVector specs;
   specs.push_back(ArgumentSpecBuilder(ArgumentType::INTEGER, "int").Build());
   auto int_and_optional_callback = std::make_unique<APISignature>(
       std::move(specs),
-      ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build(),
-      &access_checker);
+      ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build());
 
   {
     // Test with providing an optional callback.
-    std::vector<v8::Local<v8::Value>> v8_args =
+    v8::LocalVector<v8::Value> v8_args =
         StringToV8Vector(context, "[1, function() {}]");
     APISignature::JSONParseResult parse_result =
         int_and_optional_callback->ConvertArgumentsIgnoringSchema(context,
@@ -623,9 +610,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchemaWithPromises) {
 
   {
     // Test with omitting the optional callback.
-    std::vector<v8::Local<v8::Value>> v8_args =
-        StringToV8Vector(context, "[1, null]");
-    v8::Local<v8::Function> callback;
+    v8::LocalVector<v8::Value> v8_args = StringToV8Vector(context, "[1, null]");
     APISignature::JSONParseResult parse_result =
         int_and_optional_callback->ConvertArgumentsIgnoringSchema(context,
                                                                   v8_args);
@@ -639,7 +624,7 @@ TEST_F(APISignatureTest, ParseIgnoringSchemaWithPromises) {
   {
     // Test with providing something completely different than the spec, which
     // is (unfortunately) allowed and used.
-    std::vector<v8::Local<v8::Value>> v8_args =
+    v8::LocalVector<v8::Value> v8_args =
         StringToV8Vector(context, "[{not: 'an int'}, null]");
     APISignature::JSONParseResult parse_result =
         int_and_optional_callback->ConvertArgumentsIgnoringSchema(context,
@@ -650,23 +635,6 @@ TEST_F(APISignatureTest, ParseIgnoringSchemaWithPromises) {
               ValueToString(*parse_result.arguments_list));
     EXPECT_TRUE(parse_result.callback.IsEmpty());
     EXPECT_EQ(binding::AsyncResponseType::kPromise, parse_result.async_type);
-  }
-
-  {
-    // If promises are not available and the optional callback is omitted, we
-    // should not get a promise response type.
-    context_allows_promises = false;
-    std::vector<v8::Local<v8::Value>> v8_args =
-        StringToV8Vector(context, "[1, null]");
-    v8::Local<v8::Function> callback;
-    APISignature::JSONParseResult parse_result =
-        int_and_optional_callback->ConvertArgumentsIgnoringSchema(context,
-                                                                  v8_args);
-    EXPECT_FALSE(parse_result.error);
-    ASSERT_TRUE(parse_result.arguments_list);
-    EXPECT_EQ("[1]", ValueToString(*parse_result.arguments_list));
-    EXPECT_TRUE(parse_result.callback.IsEmpty());
-    EXPECT_EQ(binding::AsyncResponseType::kNone, parse_result.async_type);
   }
 }
 
@@ -688,8 +656,7 @@ TEST_F(APISignatureTest, ParseArgumentsToV8) {
         },
         prop2: 'baz'
       }])";
-  std::vector<v8::Local<v8::Value>> args =
-      StringToV8Vector(context, kTrickyArgs);
+  v8::LocalVector<v8::Value> args = StringToV8Vector(context, kTrickyArgs);
 
   APISignature::V8ParseResult parse_result =
       signature->ParseArgumentsToV8(context, args, type_refs());
@@ -717,24 +684,13 @@ TEST_F(APISignatureTest, ParseArgumentsToV8WithUnspecifiedOptionalCallback) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
-  bool context_allows_promises = true;
-  auto promises_available = base::BindRepeating(
-      [](bool* flag, v8::Local<v8::Context> context) { return *flag; },
-      &context_allows_promises);
-  auto api_available =
-      base::BindRepeating([](v8::Local<v8::Context> context,
-                             const std::string& name) { return true; });
-  BindingAccessChecker access_checker(api_available, promises_available);
-
   SpecVector specs;
   specs.push_back(ArgumentSpecBuilder(ArgumentType::INTEGER, "int").Build());
   auto signature = std::make_unique<APISignature>(
       std::move(specs),
-      ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build(),
-      &access_checker);
+      ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build());
 
-  std::vector<v8::Local<v8::Value>> args =
-      StringToV8Vector(context, R"([1337])");
+  v8::LocalVector<v8::Value> args = StringToV8Vector(context, R"([1337])");
 
   APISignature::V8ParseResult parse_result =
       signature->ParseArgumentsToV8(context, args, type_refs());
@@ -742,7 +698,7 @@ TEST_F(APISignatureTest, ParseArgumentsToV8WithUnspecifiedOptionalCallback) {
 
   ASSERT_EQ(2u, parse_result.arguments->size());
   int int_value = -1;
-  gin::ConvertFromV8(context->GetIsolate(), (*parse_result.arguments)[0],
+  gin::ConvertFromV8(v8::Isolate::GetCurrent(), (*parse_result.arguments)[0],
                      &int_value);
   EXPECT_EQ(1337, int_value);
   ASSERT_FALSE((*parse_result.arguments)[1].IsEmpty());
@@ -755,7 +711,7 @@ TEST_F(APISignatureTest, ValidateResponse) {
 
   {
     auto signature = std::make_unique<APISignature>(
-        SpecVector(), ReturnsAsyncBuilder(StringAndIntSpec()).Build(), nullptr);
+        SpecVector(), ReturnsAsyncBuilder(StringAndIntSpec()).Build());
     ExpectResponsePass(*signature, "['hello', 42]");
     ExpectResponseFailure(
         *signature, "['hello', 'goodbye']",
@@ -765,7 +721,7 @@ TEST_F(APISignatureTest, ValidateResponse) {
   {
     auto signature = std::make_unique<APISignature>(
         SpecVector(),
-        ReturnsAsyncBuilder(StringOptionalIntAndBoolSpec()).Build(), nullptr);
+        ReturnsAsyncBuilder(StringOptionalIntAndBoolSpec()).Build());
     ExpectResponsePass(*signature, "['hello', 42, true]");
     ExpectResponsePass(*signature, "['hello', null, true]");
     // Responses are not allowed to omit optional inner parameters.
@@ -776,8 +732,7 @@ TEST_F(APISignatureTest, ValidateResponse) {
 
   {
     auto signature = std::make_unique<APISignature>(
-        SpecVector(), ReturnsAsyncBuilder(StringAndOptionalIntSpec()).Build(),
-        nullptr);
+        SpecVector(), ReturnsAsyncBuilder(StringAndOptionalIntSpec()).Build());
     // Responses *are* allowed to omit optional trailing parameters (which will
     // then be `undefined` to the caller).
     ExpectResponsePass(*signature, "['hello']");
@@ -791,23 +746,11 @@ TEST_F(APISignatureTest, ValidateResponse) {
 // Tests signature parsing when promise-based responses are supported.
 TEST_F(APISignatureTest, PromisesSupport) {
   v8::HandleScope handle_scope(isolate());
-  auto api_available =
-      base::BindRepeating([](v8::Local<v8::Context> context,
-                             const std::string& name) { return true; });
-  // Set up a boolean we can flip to simulate if a context supports promises.
-  // For clarity, this should be explicitly set before each testcase below.
-  bool context_allows_promises = true;
-  auto promises_available = base::BindRepeating(
-      [](bool* flag, v8::Local<v8::Context> context) { return *flag; },
-      &context_allows_promises);
-  BindingAccessChecker access_checker(api_available, promises_available);
 
   {
     // Test a signature with a required callback.
-    context_allows_promises = true;
-
     auto required_callback_signature = std::make_unique<APISignature>(
-        SpecVector(), ReturnsAsyncBuilder().Build(), &access_checker);
+        SpecVector(), ReturnsAsyncBuilder().Build());
     // By default, APIs don't support promises, and passing in no arguments
     // should fail.
     ExpectFailure(*required_callback_signature, "[]", NoMatchingSignature());
@@ -815,12 +758,9 @@ TEST_F(APISignatureTest, PromisesSupport) {
 
   {
     // If we allow promises on the API, parsing the arguments should succeed
-    // (with a promise-based response type) if the context supports promises.
-    context_allows_promises = true;
-
+    // (with a promise-based response type).
     auto required_callback_signature = std::make_unique<APISignature>(
-        SpecVector(), ReturnsAsyncBuilder().AddPromiseSupport().Build(),
-        &access_checker);
+        SpecVector(), ReturnsAsyncBuilder().AddPromiseSupport().Build());
     ExpectPass(*required_callback_signature, "[]", "[]",
                binding::AsyncResponseType::kPromise);
 
@@ -829,20 +769,12 @@ TEST_F(APISignatureTest, PromisesSupport) {
     // signature. See: http://crbug.com/1350315
     ExpectFailure(*required_callback_signature, "['foo']",
                   NoMatchingSignature());
-
-    // If the context doesn't support promises, parsing should fail if the
-    // required callback is left off.
-    context_allows_promises = false;
-    ExpectFailure(*required_callback_signature, "[]", NoMatchingSignature());
   }
 
   {
     // Next, try an optional callback.
-    context_allows_promises = true;
-
     auto optional_callback_signature = std::make_unique<APISignature>(
-        SpecVector(), ReturnsAsyncBuilder().MakeOptional().Build(),
-        &access_checker);
+        SpecVector(), ReturnsAsyncBuilder().MakeOptional().Build());
     // Even if promises aren't supported, parsing should succeed, because the
     // callback is optional.
     ExpectPass(*optional_callback_signature, "[]", "[]",
@@ -852,19 +784,11 @@ TEST_F(APISignatureTest, PromisesSupport) {
   {
     // If we allow promises on the API, parsing the arguments should succeed,
     // with a promise-based response type.
-    context_allows_promises = true;
-
     auto optional_callback_signature = std::make_unique<APISignature>(
         SpecVector(),
-        ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build(),
-        &access_checker);
+        ReturnsAsyncBuilder().MakeOptional().AddPromiseSupport().Build());
     ExpectPass(*optional_callback_signature, "[]", "[]",
                binding::AsyncResponseType::kPromise);
-    // If the context doesn't support promises, the call should still pass, but
-    // there shouldn't be a promise response type.
-    context_allows_promises = false;
-    ExpectPass(*optional_callback_signature, "[]", "[]",
-               binding::AsyncResponseType::kNone);
   }
 }
 

@@ -2,19 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ssl/security_state_tab_helper.h"
+#include <algorithm>
+#include <optional>
 
 #include "base/base64.h"
 #include "base/base_paths.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,14 +24,18 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/policy_test_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
+#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
+#include "chrome/browser/ssl/https_upgrades_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -76,8 +82,8 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "net/base/features.h"
+#include "net/base/hash_value.h"
 #include "net/base/net_errors.h"
 #include "net/cert/cert_database.h"
 #include "net/cert/cert_status_flags.h"
@@ -96,7 +102,7 @@
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "net/test/test_data_directory.h"
 #include "services/network/public/cpp/features.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
@@ -107,14 +113,16 @@ using safe_browsing::LoginReputationClientResponse;
 using safe_browsing::RequestOutcome;
 
 const char kCreateFilesystemUrlJavascript[] =
-    "window.webkitRequestFileSystem(window.TEMPORARY, 4096, function(fs) {"
-    "  fs.root.getFile('test.html', {create: true}, function(fileEntry) {"
-    "    fileEntry.createWriter(function(writer) {"
-    "      writer.onwriteend = function(e) {"
-    "        window.domAutomationController.send(fileEntry.toURL());"
-    "      };"
-    "      var blob = new Blob(['<html>hello</html>'], {type: 'text/html'});"
-    "      writer.write(blob);"
+    "new Promise(resolve => {"
+    "  window.webkitRequestFileSystem(window.TEMPORARY, 4096, function(fs) {"
+    "    fs.root.getFile('test.html', {create: true}, function(fileEntry) {"
+    "      fileEntry.createWriter(function(writer) {"
+    "        writer.onwriteend = function(e) {"
+    "          resolve(fileEntry.toURL());"
+    "        };"
+    "        var blob = new Blob(['<html>hello</html>'], {type: 'text/html'});"
+    "        writer.write(blob);"
+    "      });"
     "    });"
     "  });"
     "});";
@@ -122,20 +130,9 @@ const char kCreateFilesystemUrlJavascript[] =
 const char kCreateBlobUrlJavascript[] =
     "var blob = new Blob(['<html>hello</html>'],"
     "                    {type: 'text/html'});"
-    "window.domAutomationController.send(URL.createObjectURL(blob));";
+    "URL.createObjectURL(blob);";
 
 enum CertificateStatus { VALID_CERTIFICATE, INVALID_CERTIFICATE };
-
-bool IsShowingInterstitial(content::WebContents* tab) {
-  security_interstitials::SecurityInterstitialTabHelper* helper =
-      security_interstitials::SecurityInterstitialTabHelper::FromWebContents(
-          tab);
-  if (!helper) {
-    return false;
-  }
-  return helper->GetBlockingPageForCurrentlyCommittedNavigationForTesting() !=
-         nullptr;
-}
 
 // Inject a script into every frame in the active page. Used by tests that check
 // for visible password fields to wait for notifications about these fields.
@@ -148,10 +145,7 @@ void InjectScript(content::WebContents* contents) {
   // sent.
   contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
       [](content::RenderFrameHost* frame) {
-        bool js_result = false;
-        EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-            frame, "window.domAutomationController.send(true);", &js_result));
-        EXPECT_TRUE(js_result);
+        EXPECT_EQ(true, content::EvalJs(frame, "true;"));
       });
 }
 
@@ -174,14 +168,14 @@ class SecurityStyleTestObserver : public content::WebContentsObserver {
 
   void WaitForDidChangeVisibleSecurityState() { run_loop_.Run(); }
 
-  absl::optional<security_state::SecurityLevel> latest_security_level() const {
+  std::optional<security_state::SecurityLevel> latest_security_level() const {
     return latest_security_level_;
   }
 
-  void ClearLatestSecurityLevel() { latest_security_level_ = absl::nullopt; }
+  void ClearLatestSecurityLevel() { latest_security_level_ = std::nullopt; }
 
  private:
-  absl::optional<security_state::SecurityLevel> latest_security_level_;
+  std::optional<security_state::SecurityLevel> latest_security_level_;
   base::RunLoop run_loop_;
 };
 
@@ -277,7 +271,7 @@ class SecurityStateTabHelperTest : public CertVerifierBrowserTest {
 
   ~SecurityStateTabHelperTest() override {
     SystemNetworkContextManager::SetEnableCertificateTransparencyForTesting(
-        absl::nullopt);
+        std::nullopt);
   }
 
   void SetUpOnMainThread() override {
@@ -327,9 +321,8 @@ class SecurityStateTabHelperTest : public CertVerifierBrowserTest {
             "/empty.html")));
 
     // Create a URL and navigate to it.
-    std::string blob_or_filesystem_url;
-    EXPECT_TRUE(content::ExecuteScriptAndExtractString(
-        contents, javascript, &blob_or_filesystem_url));
+    std::string blob_or_filesystem_url =
+        content::EvalJs(contents, javascript).ExtractString();
     EXPECT_TRUE(GURL(blob_or_filesystem_url).SchemeIs(scheme));
 
     ASSERT_TRUE(
@@ -451,44 +444,6 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest, DevToolsPage) {
   EXPECT_TRUE(visible_security_state->is_devtools);
 }
 
-// Tests that interstitial.ssl.visited_site_after_warning is being logged to
-// correctly.
-IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest, UMALogsVisitsAfterWarning) {
-  const char kHistogramName[] = "interstitial.ssl.visited_site_after_warning";
-  base::HistogramTester histograms;
-  SetUpMockCertVerifierForHttpsServer(net::CERT_STATUS_DATE_INVALID,
-                                      net::ERR_CERT_DATE_INVALID);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server_.GetURL("/ssl/google.html")));
-  // Histogram shouldn't log before clicking through interstitial.
-  histograms.ExpectTotalCount(kHistogramName, 0);
-  ProceedThroughInterstitial(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  // Histogram should log after clicking through.
-  histograms.ExpectTotalCount(kHistogramName, 1);
-  histograms.ExpectBucketCount(kHistogramName, true, 1);
-}
-
-// Tests that interstitial.ssl.visited_site_after_warning is being logged
-// on ERR_CERT_UNABLE_TO_CHECK_REVOCATION (which previously did not show an
-// interstitial.)
-IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest,
-                       UMALogsVisitsAfterRevocationCheckFailureWarning) {
-  const char kHistogramName[] = "interstitial.ssl.visited_site_after_warning";
-  base::HistogramTester histograms;
-  SetUpMockCertVerifierForHttpsServer(
-      net::CERT_STATUS_UNABLE_TO_CHECK_REVOCATION,
-      net::ERR_CERT_UNABLE_TO_CHECK_REVOCATION);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server_.GetURL("/ssl/google.html")));
-  // Histogram shouldn't log before clicking through interstitial.
-  histograms.ExpectTotalCount(kHistogramName, 0);
-  ProceedThroughInterstitial(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  // Histogram should log after clicking through.
-  histograms.ExpectUniqueSample(kHistogramName, true, 1);
-}
-
 // Test security state after clickthrough for a SHA-1 certificate that is
 // blocked by default.
 IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest, SHA1CertificateBlocked) {
@@ -571,11 +526,9 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTestWithAutoupgradesDisabled,
       security_state::SECURE, false, false, false,
       false /* expect cert status error */);
   // Load the insecure image.
-  bool js_result = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), "loadBadImage();",
-      &js_result));
-  EXPECT_TRUE(js_result);
+  EXPECT_EQ(true, content::EvalJs(
+                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      "loadBadImage();"));
   CheckSecurityInfoForSecure(
       browser()->tab_strip_model()->GetActiveWebContents(),
       security_state::WARNING, false, true, false,
@@ -633,7 +586,7 @@ class
 
 // Checks that the proper security state is displayed when the passive mixed
 // content warning feature is enabled.
-// TODO(crbug.com/1026464): Once that launch is finished and other tests run
+// TODO(crbug.com/40108287): Once that launch is finished and other tests run
 // with the feature enabled this test and the class will be redundant and can be
 // removed.
 IN_PROC_BROWSER_TEST_F(
@@ -664,11 +617,9 @@ IN_PROC_BROWSER_TEST_F(
       security_state::SECURE, false, false, false,
       false /* expect cert status error */);
   // Load the insecure image.
-  bool js_result = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), "loadBadImage();",
-      &js_result));
-  EXPECT_TRUE(js_result);
+  EXPECT_EQ(true, content::EvalJs(
+                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      "loadBadImage();"));
   CheckSecurityInfoForSecure(
       browser()->tab_strip_model()->GetActiveWebContents(),
       security_state::WARNING, false, true, false,
@@ -794,11 +745,9 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTestWithAutoupgradesDisabled,
       security_state::NONE, true, false, false,
       false /* expect cert status error */);
   // Load the insecure image.
-  bool js_result = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), "loadBadImage();",
-      &js_result));
-  EXPECT_TRUE(js_result);
+  EXPECT_EQ(true, content::EvalJs(
+                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      "loadBadImage();"));
   CheckSecurityInfoForSecure(
       browser()->tab_strip_model()->GetActiveWebContents(),
       security_state::NONE, true, true, false,
@@ -1042,12 +991,13 @@ class PKPModelClientTest : public SecurityStateTabHelperTest {
   }
 
   void TearDownOnMainThread() override {
-    mojo::ScopedAllowSyncCallForTesting allow_sync_call;
-
     mojo::Remote<network::mojom::NetworkServiceTest> network_service_test;
-    content::GetNetworkService()->BindTestInterface(
+    content::GetNetworkService()->BindTestInterfaceForTesting(
         network_service_test.BindNewPipeAndPassReceiver());
-    network_service_test->SetTransportSecurityStateSource(0);
+    base::test::TestFuture<void> future;
+    network_service_test->SetTransportSecurityStateTestSource(
+        false, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
 
     // This test class intentionally does not call the parent
     // TearDownOnMainThread.
@@ -1055,17 +1005,25 @@ class PKPModelClientTest : public SecurityStateTabHelperTest {
 
  private:
   void EnableStaticPins() {
-    mojo::ScopedAllowSyncCallForTesting allow_sync_call;
-
     mojo::Remote<network::mojom::NetworkServiceTest> network_service_test;
-    content::GetNetworkService()->BindTestInterface(
+    content::GetNetworkService()->BindTestInterfaceForTesting(
         network_service_test.BindNewPipeAndPassReceiver());
     // The tests don't depend on reporting, so the port doesn't matter.
-    network_service_test->SetTransportSecurityStateSource(80);
+    {
+      base::test::TestFuture<void> future;
+      network_service_test->SetTransportSecurityStateTestSource(
+          true, future.GetCallback());
+      EXPECT_TRUE(future.Wait());
+    }
 
     content::StoragePartition* partition =
         browser()->profile()->GetDefaultStoragePartition();
-    partition->GetNetworkContext()->EnableStaticKeyPinningForTesting();
+    {
+      base::test::TestFuture<void> future;
+      partition->GetNetworkContext()->EnableStaticKeyPinningForTesting(
+          future.GetCallback());
+      EXPECT_TRUE(future.Wait());
+    }
   }
 };
 
@@ -1080,8 +1038,8 @@ IN_PROC_BROWSER_TEST_F(PKPModelClientTest, PKPBypass) {
   verify_result.is_issued_by_known_root = false;
   verify_result.verified_cert = cert;
   // Public key hash which does not match the value in the static pin.
-  net::HashValue hash(net::HASH_VALUE_SHA256);
-  memset(hash.data(), 1, hash.size());
+  net::SHA256HashValue hash;
+  std::ranges::fill(hash, 1);
   verify_result.public_key_hashes.push_back(hash);
 
   mock_cert_verifier()->AddResultForCert(cert, verify_result, net::OK);
@@ -1105,8 +1063,8 @@ IN_PROC_BROWSER_TEST_F(PKPModelClientTest, PKPEnforced) {
   verify_result.is_issued_by_known_root = true;
   verify_result.verified_cert = cert;
   // Public key hash which does not match the value in the static pin.
-  net::HashValue hash(net::HASH_VALUE_SHA256);
-  memset(hash.data(), 1, hash.size());
+  net::SHA256HashValue hash;
+  std::ranges::fill(hash, 1);
   verify_result.public_key_hashes.push_back(hash);
 
   mock_cert_verifier()->AddResultForCert(cert, verify_result, net::OK);
@@ -1124,7 +1082,7 @@ class SecurityStateLoadingTest : public SecurityStateTabHelperTest {
   SecurityStateLoadingTest(const SecurityStateLoadingTest&) = delete;
   SecurityStateLoadingTest& operator=(const SecurityStateLoadingTest&) = delete;
 
-  ~SecurityStateLoadingTest() override {}
+  ~SecurityStateLoadingTest() override = default;
 
  protected:
   void SetUpOnMainThread() override {
@@ -1148,9 +1106,11 @@ IN_PROC_BROWSER_TEST_F(SecurityStateLoadingTest, NavigationStateChanges) {
 
   // Navigate to a page that doesn't finish loading. Test that the
   // security state is neutral while the page is loading.
-  browser()->OpenURL(content::OpenURLParams(
-      embedded_test_server()->GetURL("/title1.html"), content::Referrer(),
-      WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false));
+  browser()->OpenURL(
+      content::OpenURLParams(
+          embedded_test_server()->GetURL("/title1.html"), content::Referrer(),
+          WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false),
+      /*navigation_handle_callback=*/{});
   CheckSecurityInfoForNonCommitted(
       browser()->tab_strip_model()->GetActiveWebContents());
 }
@@ -1200,7 +1160,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest, AddedTab) {
       content::WebContents::Create(
           content::WebContents::CreateParams(tab->GetBrowserContext()));
   content::NavigationController& controller = new_contents->GetController();
-  SecurityStateTabHelper::CreateForWebContents(new_contents.get());
+  ChromeSecurityStateTabHelper::CreateForWebContents(new_contents.get());
   CheckSecurityInfoForNonCommitted(new_contents.get());
   controller.LoadURL(https_server_.GetURL("/title1.html"), content::Referrer(),
                      ui::PAGE_TRANSITION_TYPED, std::string());
@@ -1272,7 +1232,8 @@ IN_PROC_BROWSER_TEST_F(
 
   // An interstitial should show, and an event for the lock icon on the
   // interstitial should fire.
-  ASSERT_TRUE(IsShowingInterstitial(web_contents));
+  ASSERT_TRUE(
+      chrome_browser_interstitials::IsShowingInterstitial(web_contents));
   EXPECT_EQ(security_state::SecurityLevel::DANGEROUS,
             observer.latest_security_level());
 
@@ -1286,7 +1247,8 @@ IN_PROC_BROWSER_TEST_F(
   // After going back to the interstitial, an event for a broken lock
   // icon should fire again.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), expired_url));
-  ASSERT_TRUE(IsShowingInterstitial(web_contents));
+  ASSERT_TRUE(
+      chrome_browser_interstitials::IsShowingInterstitial(web_contents));
   EXPECT_EQ(security_state::SecurityLevel::DANGEROUS,
             observer.latest_security_level());
 
@@ -1337,7 +1299,8 @@ IN_PROC_BROWSER_TEST_F(DidChangeVisibleSecurityStateTest,
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), https_url_different_host));
 
-  ASSERT_TRUE(IsShowingInterstitial(web_contents));
+  ASSERT_TRUE(
+      chrome_browser_interstitials::IsShowingInterstitial(web_contents));
   EXPECT_EQ(security_state::SecurityLevel::DANGEROUS,
             observer.latest_security_level());
   ProceedThroughInterstitial(web_contents);
@@ -1361,6 +1324,10 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperIncognitoTest, HttpErrorPage) {
       SecurityStateTabHelper::FromWebContents(contents);
   ASSERT_TRUE(helper);
 
+  // Disable HTTPS upgrades on nonexistent.test for this test to work.
+  ScopedAllowHttpForHostnamesForTesting scoped_allow_http(
+      {"nonexistent.test"}, browser()->profile()->GetPrefs());
+
   // Navigate to a URL that results in an error page. Even though the displayed
   // URL is http://, there shouldn't be a Not Secure warning because the browser
   // hasn't really navigated to an http:// page.
@@ -1376,36 +1343,6 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperIncognitoTest, HttpErrorPage) {
   ASSERT_EQ(content::PAGE_TYPE_ERROR, entry->GetPageType());
 
   EXPECT_EQ(security_state::NONE, helper->GetSecurityLevel());
-}
-
-// Tests that the security level form submission histogram is logged correctly.
-IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest, FormSecurityLevelHistogram) {
-  const char kHistogramName[] = "Security.SecurityLevel.FormSubmission";
-  SetUpMockCertVerifierForHttpsServer(0, net::OK);
-  base::HistogramTester histograms;
-  // Create a server with an expired certificate for the form to target.
-  net::EmbeddedTestServer broken_https_server(
-      net::EmbeddedTestServer::TYPE_HTTPS);
-  broken_https_server.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
-  broken_https_server.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
-  ASSERT_TRUE(broken_https_server.Start());
-
-  // Make the form target the expired certificate server.
-  net::HostPortPair host_port_pair = net::HostPortPair::FromURL(
-      broken_https_server.GetURL("/ssl/google.html"));
-  std::string replacement_path = GetFilePathWithHostAndPortReplacement(
-      "/ssl/page_with_form_targeting_insecure_url.html", host_port_pair);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server_.GetURL(replacement_path)));
-  content::TestNavigationObserver navigation_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  ASSERT_TRUE(content::ExecuteScript(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      "document.getElementById('submit').click();"));
-  navigation_observer.Wait();
-  // Check that the histogram count logs the security level of the page
-  // containing the form, not of the form target page.
-  histograms.ExpectUniqueSample(kHistogramName, security_state::SECURE, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest,
@@ -1494,8 +1431,16 @@ IN_PROC_BROWSER_TEST_F(SignedExchangeSecurityStateTest, SecurityLevelIsSecure) {
       false /* expect_ran_mixed_content */, false /* expect_cert_error */);
 }
 
+// TODO(crbug.com/40921701): This test is failing on Mac12 Tests.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_SecurityLevelIsSecureAfterPrefetch \
+  DISABLED_SecurityLevelIsSecureAfterPrefetch
+#else
+#define MAYBE_SecurityLevelIsSecureAfterPrefetch \
+  SecurityLevelIsSecureAfterPrefetch
+#endif  // BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(SignedExchangeSecurityStateTest,
-                       SecurityLevelIsSecureAfterPrefetch) {
+                       MAYBE_SecurityLevelIsSecureAfterPrefetch) {
   embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1522,7 +1467,7 @@ IN_PROC_BROWSER_TEST_F(SignedExchangeSecurityStateTest,
     content::TitleWatcher title_watcher(contents, expected_title);
     // Execute the JavaScript code to trigger the followup navigation from the
     // current page.
-    EXPECT_TRUE(content::ExecuteScript(
+    EXPECT_TRUE(content::ExecJs(
         contents,
         base::StringPrintf("location.href = '%s';", sxg_url.spec().c_str())));
     // The inner content of test.example.org_test.sxg has
@@ -1557,7 +1502,7 @@ class SecurityStateTabHelperPrerenderTest : public SecurityStateTabHelperTest {
       const SecurityStateTabHelperPrerenderTest&) = delete;
 
   void SetUp() override {
-    prerender_helper_.SetUp(&https_server_);
+    prerender_helper_.RegisterServerRequestMonitor(&https_server_);
     SecurityStateTabHelperTest::SetUp();
   }
 
@@ -1581,7 +1526,8 @@ class SecurityStateTabHelperPrerenderTest : public SecurityStateTabHelperTest {
   content::WebContents* web_contents() { return web_contents_; }
 
  protected:
-  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_ = nullptr;
+  raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> web_contents_ =
+      nullptr;
   content::test::PrerenderTestHelper prerender_helper_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -1631,7 +1577,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperPrerenderTest, InvalidPrerender) {
   // Ensure that the prerender has started.
   registry_observer.WaitForTrigger(prerender_url);
   auto prerender_id = prerender_helper_.GetHostForUrl(prerender_url);
-  EXPECT_NE(content::RenderFrameHost::kNoFrameTreeNodeId, prerender_id);
+  EXPECT_TRUE(prerender_id);
   content::test::PrerenderHostObserver host_observer(*web_contents(),
                                                      prerender_id);
 
@@ -1644,8 +1590,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperPrerenderTest, InvalidPrerender) {
   // The prerender should be abandoned since the it commits an interstitial,
   // wait for the PrerenderHost to be destroyed.
   host_observer.WaitForDestroyed();
-  EXPECT_EQ(content::RenderFrameHost::kNoFrameTreeNodeId,
-            prerender_helper_.GetHostForUrl(prerender_url));
+  EXPECT_TRUE(prerender_helper_.GetHostForUrl(prerender_url).is_null());
 
   // Navigate to prerender_url and expect cert error.
   prerender_helper_.NavigatePrimaryPage(prerender_url);
@@ -1683,7 +1628,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperPrerenderTest,
       test_server->GetURL("/ssl/page_displays_insecure_content.html");
   prerender_helper_.AddPrerender(prerender_url);
   auto prerender_id = prerender_helper_.GetHostForUrl(prerender_url);
-  EXPECT_NE(content::RenderFrameHost::kNoFrameTreeNodeId, prerender_id);
+  EXPECT_TRUE(prerender_id);
   content::test::PrerenderHostObserver host_observer(*web_contents(),
                                                      prerender_id);
 

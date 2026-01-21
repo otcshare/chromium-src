@@ -11,30 +11,16 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#endif
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
-#include <winternl.h>
-#endif
+
+#include "base/win/security_util.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace mojo {
 namespace {
-#if BUILDFLAG(IS_WIN)
-bool GetGrantedAccess(HANDLE handle, DWORD* flags) {
-  static const auto nt_query_object =
-      reinterpret_cast<decltype(&NtQueryObject)>(
-          GetProcAddress(GetModuleHandle(L"ntdll.dll"), "NtQueryObject"));
-  PUBLIC_OBJECT_BASIC_INFORMATION info;
-  ULONG len = sizeof(info);
-  ULONG consumed = 0;
-  auto ret =
-      nt_query_object(handle, ObjectBasicInformation, &info, len, &consumed);
-  if (ret)
-    return false;
-  *flags = info.GrantedAccess;
-  return true;
-}
-#endif  // BUILDFLAG(IS_WIN)
 
 // True if the underlying handle is only readable. Where possible this excludes
 // deletion, writing, truncation, append and other operations that might modify
@@ -43,17 +29,17 @@ bool GetGrantedAccess(HANDLE handle, DWORD* flags) {
 bool IsReadOnlyFile(base::File& file) {
   bool is_readonly = true;
 #if BUILDFLAG(IS_WIN)
-  DWORD flags = 0;
-  if (!GetGrantedAccess(file.GetPlatformFile(), &flags))
+  std::optional<ACCESS_MASK> flags =
+      base::win::GetGrantedAccess(file.GetPlatformFile());
+  if (!flags.has_value()) {
     return false;
-
+  }
   // Cannot use GENERIC_WRITE as that includes SYNCHRONIZE.
   // This is ~(all the writable permissions).
-  is_readonly =
-      !(flags & (FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA |
-                 FILE_WRITE_EA | WRITE_DAC | WRITE_OWNER | DELETE));
-#elif BUILDFLAG(IS_FUCHSIA) || \
-    (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_AIX))
+  is_readonly = !(flags.value() &
+                  (FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA |
+                   FILE_WRITE_EA | WRITE_DAC | WRITE_OWNER | DELETE));
+#elif BUILDFLAG(IS_FUCHSIA) || (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AIX))
   is_readonly =
       (fcntl(file.GetPlatformFile(), F_GETFL) & O_ACCMODE) == O_RDONLY;
 #endif
@@ -69,8 +55,9 @@ bool IsPhysicalFile(base::File& file) {
   // This may block but in practice this is unlikely for already opened
   // physical files.
   struct stat st;
-  if (fstat(file.GetPlatformFile(), &st) != 0)
+  if (fstat(file.GetPlatformFile(), &st) != 0) {
     return false;
+  }
   return S_ISREG(st.st_mode);
 #endif
 }
@@ -79,7 +66,7 @@ bool IsPhysicalFile(base::File& file) {
 
 mojo::PlatformHandle StructTraits<mojo_base::mojom::ReadOnlyFileDataView,
                                   base::File>::fd(base::File& file) {
-  DCHECK(file.IsValid());
+  CHECK(file.IsValid());
   // For now we require real files as on some platforms it is too difficult to
   // be sure that more general handles cannot be written or made writable. This
   // could be relaxed if an interface needs readonly pipes. This check may block

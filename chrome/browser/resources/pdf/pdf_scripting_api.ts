@@ -80,12 +80,12 @@ export class PdfScriptingApi {
   private loadState_: LoadState = LoadState.LOADING;
   private pendingScriptingMessages_: Array<{type: string}> = [];
 
-  private viewportChangedCallback_: ViewportChangedCallback;
-  private loadCompleteCallback_: (completed: boolean) => void;
-  private selectedTextCallback_: ((text: string) => void)|null;
-  private keyEventCallback_: (e: KeyboardEvent) => void;
+  private viewportChangedCallback_?: ViewportChangedCallback;
+  private loadCompleteCallback_?: (completed: boolean) => void;
+  private selectedTextCallback_?: ((text: string) => void)|null;
+  private keyEventCallback_?: (e: KeyboardEvent) => void;
 
-  private plugin_: Window|null;
+  private plugin_: Window|null = null;
 
   /**
    * @param window the window of the page containing the pdf viewer.
@@ -131,6 +131,8 @@ export class PdfScriptingApi {
           if (this.keyEventCallback_) {
             this.keyEventCallback_(deserializeKeyEvent(event.data.keyEvent));
           }
+          break;
+        default:
           break;
       }
     }, false);
@@ -292,7 +294,8 @@ export function pdfCreateOutOfProcessPlugin(
     src: string, baseUrl: string): PdfPlugin {
   const client = new PdfScriptingApi(window, null);
   const iframe = window.document.createElement('iframe') as PdfPlugin;
-  iframe.setAttribute('src', baseUrl + '/index.html?' + src);
+  const url = baseUrl.endsWith('html') ? baseUrl : baseUrl + '/index.html';
+  iframe.setAttribute('src', `${url}?${src}`);
 
   iframe.onload = function() {
     client.setPlugin(iframe.contentWindow);

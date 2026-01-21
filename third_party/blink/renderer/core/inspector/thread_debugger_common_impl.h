@@ -9,6 +9,7 @@
 
 #include "third_party/blink/renderer/platform/bindings/thread_debugger.h"
 #include "third_party/blink/renderer/platform/timer.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -36,7 +37,7 @@ class ThreadDebuggerCommonImpl : public ThreadDebugger {
   unsigned PromiseRejected(v8::Local<v8::Context>,
                            const String& error_message,
                            v8::Local<v8::Value> exception,
-                           std::unique_ptr<SourceLocation>) override;
+                           SourceLocation*) override;
   void PromiseRejectionRevoked(v8::Local<v8::Context>,
                                unsigned promise_rejection_id) override;
 
@@ -74,9 +75,10 @@ class ThreadDebuggerCommonImpl : public ThreadDebugger {
  private:
   // V8InspectorClient implementation.
   void beginUserGesture() override;
-  std::unique_ptr<v8_inspector::WebDriverValue> serializeToWebDriverValue(
+  std::unique_ptr<v8_inspector::DeepSerializationResult> deepSerialize(
       v8::Local<v8::Value> v8_value,
-      int max_depth) override;
+      int max_depth,
+      v8::Local<v8::Object> additional_parameters) override;
   std::unique_ptr<v8_inspector::StringBuffer> valueSubtype(
       v8::Local<v8::Value>) override;
   std::unique_ptr<v8_inspector::StringBuffer> descriptionForValueSubtype(
@@ -84,9 +86,17 @@ class ThreadDebuggerCommonImpl : public ThreadDebugger {
       v8::Local<v8::Value>) override;
   double currentTimeMS() override;
   bool isInspectableHeapObject(v8::Local<v8::Object>) override;
-  void consoleTime(const v8_inspector::StringView& title) override;
-  void consoleTimeEnd(const v8_inspector::StringView& title) override;
-  void consoleTimeStamp(const v8_inspector::StringView& title) override;
+  void consoleTime(v8::Isolate* isolate, v8::Local<v8::String> label) override;
+  void consoleTimeEnd(v8::Isolate* isolate,
+                      v8::Local<v8::String> label) override;
+  void consoleTimeStamp(v8::Isolate* isolate,
+                        v8::Local<v8::String> label) override;
+
+  void consoleTimeStampWithArgs(
+      v8::Isolate* isolate,
+      v8::Local<v8::String> label,
+      const v8::LocalVector<v8::Value>& args) override;
+
   void startRepeatingTimer(double,
                            v8_inspector::V8InspectorClient::TimerCallback,
                            void* data) override;
@@ -115,15 +125,5 @@ class ThreadDebuggerCommonImpl : public ThreadDebugger {
 };
 
 }  // namespace blink
-
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<v8_inspector::V8StackTraceId> {
-  typedef v8_inspector::V8StackTraceId Type;
-  static Type Copy(const Type& id) { return id; }
-};
-
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_THREAD_DEBUGGER_COMMON_IMPL_H_

@@ -5,11 +5,11 @@
 # found in the LICENSE file.
 
 import argparse
-import os
 import shutil
 import sys
 
 from util import build_utils
+import action_helpers  # build_utils adds //build to sys.path.
 
 
 def main(args):
@@ -23,12 +23,14 @@ def main(args):
   # eu-strip's output keeps mode from source file which might not be writable
   # thus it fails to override its output on the next run. AtomicOutput fixes
   # the issue.
-  with build_utils.AtomicOutput(options.stripped_output_path) as out:
+  with action_helpers.atomic_output(options.stripped_output_path) as out:
     cmd = [
         options.strip_path,
-        options.input_path,
+        '--strip-debug',
+        '--strip-unneeded',
         '-o',
         out.name,
+        options.input_path,
     ]
     build_utils.CheckOutput(cmd)
   shutil.copyfile(options.input_path, options.unstripped_output_path)

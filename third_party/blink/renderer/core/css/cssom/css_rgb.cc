@@ -11,14 +11,30 @@
 
 namespace blink {
 
-CSSRGB::CSSRGB(const Color& input_color) {
-  double r, g, b, a;
-  input_color.GetRGBA(r, g, b, a);
-  r_ = CSSUnitValue::Create(r * 100, CSSPrimitiveValue::UnitType::kPercentage);
-  g_ = CSSUnitValue::Create(g * 100, CSSPrimitiveValue::UnitType::kPercentage);
-  b_ = CSSUnitValue::Create(b * 100, CSSPrimitiveValue::UnitType::kPercentage);
-  alpha_ =
-      CSSUnitValue::Create(a * 100, CSSPrimitiveValue::UnitType::kPercentage);
+CSSRGB::CSSRGB(const Color& input_color, Color::ColorSpace color_space) {
+  Color rgb_color = input_color;
+  rgb_color.ConvertToColorSpace(color_space);
+
+  double r = rgb_color.Param0();
+  double g = rgb_color.Param1();
+  double b = rgb_color.Param2();
+
+  auto rgb_unit_type = CSSPrimitiveValue::UnitType::kUnknown;
+  if (color_space == Color::ColorSpace::kSRGBLegacy) {
+    rgb_unit_type = CSSPrimitiveValue::UnitType::kNumber;
+  } else {
+    CHECK_EQ(color_space, Color::ColorSpace::kSRGB);
+    r *= 100.0;
+    g *= 100.0;
+    b *= 100.0;
+    rgb_unit_type = CSSPrimitiveValue::UnitType::kPercentage;
+  }
+
+  r_ = CSSUnitValue::Create(r, rgb_unit_type);
+  g_ = CSSUnitValue::Create(g, rgb_unit_type);
+  b_ = CSSUnitValue::Create(b, rgb_unit_type);
+  alpha_ = CSSUnitValue::Create(rgb_color.Alpha() * 100.0,
+                                CSSPrimitiveValue::UnitType::kPercentage);
 }
 
 CSSRGB::CSSRGB(CSSNumericValue* r,
@@ -27,12 +43,11 @@ CSSRGB::CSSRGB(CSSNumericValue* r,
                CSSNumericValue* alpha)
     : r_(r), g_(g), b_(b), alpha_(alpha) {}
 
-CSSRGB* CSSRGB::Create(
-    const V8CSSNumberish* red,
-    const V8CSSNumberish* green,
-    const V8CSSNumberish* blue,
-    const V8CSSNumberish* alpha,
-    ExceptionState& exception_state) {
+CSSRGB* CSSRGB::Create(const V8CSSNumberish* red,
+                       const V8CSSNumberish* green,
+                       const V8CSSNumberish* blue,
+                       const V8CSSNumberish* alpha,
+                       ExceptionState& exception_state) {
   CSSNumericValue* r;
   CSSNumericValue* g;
   CSSNumericValue* b;
@@ -68,9 +83,7 @@ V8CSSNumberish* CSSRGB::alpha() const {
   return MakeGarbageCollected<V8CSSNumberish>(alpha_);
 }
 
-void CSSRGB::setR(
-    const V8CSSNumberish* red,
-    ExceptionState& exception_state) {
+void CSSRGB::setR(const V8CSSNumberish* red, ExceptionState& exception_state) {
   if (auto* value = ToNumberOrPercentage(red)) {
     r_ = value;
   } else {
@@ -79,9 +92,8 @@ void CSSRGB::setR(
   }
 }
 
-void CSSRGB::setG(
-    const V8CSSNumberish* green,
-    ExceptionState& exception_state) {
+void CSSRGB::setG(const V8CSSNumberish* green,
+                  ExceptionState& exception_state) {
   if (auto* value = ToNumberOrPercentage(green)) {
     g_ = value;
   } else {
@@ -90,9 +102,7 @@ void CSSRGB::setG(
   }
 }
 
-void CSSRGB::setB(
-    const V8CSSNumberish* blue,
-    ExceptionState& exception_state) {
+void CSSRGB::setB(const V8CSSNumberish* blue, ExceptionState& exception_state) {
   if (auto* value = ToNumberOrPercentage(blue)) {
     b_ = value;
   } else {
@@ -101,9 +111,8 @@ void CSSRGB::setB(
   }
 }
 
-void CSSRGB::setAlpha(
-    const V8CSSNumberish* alpha,
-    ExceptionState& exception_state) {
+void CSSRGB::setAlpha(const V8CSSNumberish* alpha,
+                      ExceptionState& exception_state) {
   if (auto* value = ToPercentage(alpha)) {
     alpha_ = value;
   } else {

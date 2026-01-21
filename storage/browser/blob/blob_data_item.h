@@ -14,13 +14,15 @@
 #include "base/component_export.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "components/file_access/scoped_file_access.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom.h"
 #include "net/base/io_buffer.h"
 #include "storage/browser/blob/shareable_file_reference.h"
 #include "storage/browser/file_system/file_system_url.h"
-#include "url/gurl.h"
 
 namespace storage {
 class BlobDataBuilder;
@@ -83,13 +85,14 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
   static scoped_refptr<BlobDataItem> CreateBytes(
       base::span<const uint8_t> bytes);
   static scoped_refptr<BlobDataItem> CreateBytesDescription(size_t length);
-  static scoped_refptr<BlobDataItem> CreateFile(base::FilePath path);
   static scoped_refptr<BlobDataItem> CreateFile(
       base::FilePath path,
       uint64_t offset,
       uint64_t length,
       base::Time expected_modification_time = base::Time(),
-      scoped_refptr<ShareableFileReference> file_ref = nullptr);
+      scoped_refptr<ShareableFileReference> file_ref = nullptr,
+      file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+          file_access = base::NullCallback());
   static scoped_refptr<BlobDataItem> CreateFutureFile(uint64_t offset,
                                                       uint64_t length,
                                                       uint64_t file_id);
@@ -98,7 +101,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
       uint64_t offset,
       uint64_t length,
       base::Time expected_modification_time,
-      scoped_refptr<FileSystemContext> file_system_context);
+      scoped_refptr<FileSystemContext> file_system_context,
+      file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+          file_access = base::NullCallback());
   static scoped_refptr<BlobDataItem> CreateReadableDataHandle(
       scoped_refptr<DataHandle> data_handle,
       uint64_t offset,
@@ -112,7 +117,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
 
   base::span<const uint8_t> bytes() const {
     DCHECK_EQ(type_, Type::kBytes);
-    return base::make_span(bytes_);
+    return base::span(bytes_);
   }
 
   const base::FilePath& path() const {
@@ -146,6 +151,12 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
   // Returns |file_id| given to CreateFutureFile.
   uint64_t GetFutureFileID() const;
 
+  file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+  file_access() const {
+    DCHECK(type_ == Type::kFile || type_ == Type::kFileFilesystem);
+    return file_access_;
+  }
+
  private:
   friend class BlobBuilderFromStream;
   friend class BlobDataBuilder;
@@ -159,7 +170,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
 
   base::span<uint8_t> mutable_bytes() {
     DCHECK_EQ(type_, Type::kBytes);
-    return base::make_span(bytes_);
+    return base::span(bytes_);
   }
 
   void AllocateBytes();
@@ -195,6 +206,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataItem
 
   scoped_refptr<FileSystemContext>
       file_system_context_;  // For Type::kFileFilesystem.
+
+  file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+      file_access_;  // For Type::kFile and kFileFilesystem.
 };
 
 COMPONENT_EXPORT(STORAGE_BROWSER)

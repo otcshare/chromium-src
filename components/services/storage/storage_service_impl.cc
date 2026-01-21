@@ -4,12 +4,15 @@
 
 #include "components/services/storage/storage_service_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/not_fatal_until.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "build/build_config.h"
+#include "components/services/storage/dom_storage/local_storage_impl.h"
+#include "components/services/storage/dom_storage/session_storage_impl.h"
 #include "components/services/storage/dom_storage/storage_area_impl.h"
 #include "components/services/storage/filesystem_proxy_factory.h"
-#include "components/services/storage/partition_impl.h"
 #include "components/services/storage/public/cpp/filesystem/filesystem_proxy.h"
 #include "components/services/storage/sandboxed_vfs_delegate.h"
 #include "components/services/storage/test_api_stubs.h"
@@ -78,12 +81,6 @@ void StorageServiceImpl::SetDataDirectory(
                           weak_ptr_factory_.GetWeakPtr()),
       base::SequencedTaskRunner::GetCurrentDefault()));
 
-  // Prevent SQLite from trying to use mmap, as SandboxedVfs does not currently
-  // support this.
-  //
-  // TODO(crbug.com/1117049): Configure this per Database instance.
-  sql::Database::DisableMmapByDefault();
-
   // SQLite needs our VFS implementation to work over a FilesystemProxy. This
   // installs it as the default implementation for the service process.
   sql::SandboxedVfs::Register(
@@ -92,29 +89,70 @@ void StorageServiceImpl::SetDataDirectory(
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-void StorageServiceImpl::BindPartition(
-    const absl::optional<base::FilePath>& path,
-    mojo::PendingReceiver<mojom::Partition> receiver) {
+void StorageServiceImpl::BindLocalStorageControl(
+    const std::optional<base::FilePath>& path,
+    mojo::PendingReceiver<mojom::LocalStorageControl> receiver) {
   if (path.has_value()) {
     if (!path->IsAbsolute()) {
-      // Refuse to bind Partitions for relative paths.
+      // Refuse to bind LocalStorage for relative paths.
       return;
     }
 
-    // If this is a persistent partition that already exists, bind to it and
-    // we're done.
-    auto iter = persistent_partition_map_.find(*path);
-    if (iter != persistent_partition_map_.end()) {
-      iter->second->BindReceiver(std::move(receiver));
-      return;
+    // TODO(crbug.com/396030877): Remove this workaround to remove the
+    // pre-existing LocalStorage once the issue is resolved.
+    auto iter = persistent_local_storage_map_.find(*path);
+    if (iter != persistent_local_storage_map_.end()) {
+      ShutDownAndRemoveLocalStorage(iter->second);
     }
   }
 
-  auto new_partition = std::make_unique<PartitionImpl>(this, path);
-  new_partition->BindReceiver(std::move(receiver));
-  if (path.has_value())
-    persistent_partition_map_[*path] = new_partition.get();
-  partitions_.insert(std::move(new_partition));
+  auto new_local_storage = std::make_unique<LocalStorageImpl>(
+      path.value_or(base::FilePath()),
+      base::BindOnce(&StorageServiceImpl::ShutDownAndRemoveLocalStorage,
+                     weak_ptr_factory_.GetWeakPtr()),
+      std::move(receiver));
+  if (path.has_value()) {
+    persistent_local_storage_map_[*path] = new_local_storage.get();
+  }
+  local_storages_.insert(std::move(new_local_storage));
+}
+
+void StorageServiceImpl::BindSessionStorageControl(
+    const std::optional<base::FilePath>& path,
+    mojo::PendingReceiver<mojom::SessionStorageControl> receiver) {
+  if (path.has_value()) {
+    if (!path->IsAbsolute()) {
+      // Refuse to bind SessionStorage for relative paths.
+      return;
+    }
+
+    // TODO(crbug.com/396030877): Remove this workaround to remove the
+    // pre-existing SessionStorage once the issue is resolved.
+    auto iter = persistent_session_storage_map_.find(*path);
+    if (iter != persistent_session_storage_map_.end()) {
+      ShutDownAndRemoveSessionStorage(iter->second);
+    }
+  }
+
+  auto new_session_storage = std::make_unique<SessionStorageImpl>(
+      path.value_or(base::FilePath()),
+#if BUILDFLAG(IS_ANDROID)
+      // On Android there is no support for session storage restoring, and since
+      // the restoring code is responsible for database cleanup, we must
+      // manually delete the old database here before we open a new one.
+      SessionStorageImpl::BackingMode::kClearDiskStateOnOpen,
+#else
+      path.has_value() ? SessionStorageImpl::BackingMode::kRestoreDiskState
+                       : SessionStorageImpl::BackingMode::kNoDisk,
+#endif
+      base::OnceCallback<void(SessionStorageImpl*)>(
+          base::BindOnce(&StorageServiceImpl::ShutDownAndRemoveSessionStorage,
+                         weak_ptr_factory_.GetWeakPtr())),
+      std::move(receiver));
+  if (path.has_value()) {
+    persistent_session_storage_map_[*path] = new_session_storage.get();
+  }
+  session_storages_.insert(std::move(new_session_storage));
 }
 
 void StorageServiceImpl::BindTestApi(
@@ -122,13 +160,30 @@ void StorageServiceImpl::BindTestApi(
   GetTestApiBinderForTesting().Run(std::move(test_api_receiver));
 }
 
-void StorageServiceImpl::RemovePartition(PartitionImpl* partition) {
-  if (partition->path().has_value())
-    persistent_partition_map_.erase(partition->path().value());
+void StorageServiceImpl::ShutDownAndRemoveSessionStorage(
+    SessionStorageImpl* storage) {
+  if (!storage->GetStoragePartitionDirectory().empty()) {
+    persistent_session_storage_map_.erase(
+        storage->GetStoragePartitionDirectory());
+  }
 
-  auto iter = partitions_.find(partition);
-  if (iter != partitions_.end())
-    partitions_.erase(iter);
+  auto it = session_storages_.find(storage);
+  if (it != session_storages_.end()) {
+    session_storages_.erase(it);
+  }
+}
+
+void StorageServiceImpl::ShutDownAndRemoveLocalStorage(
+    LocalStorageImpl* storage) {
+  if (!storage->GetStoragePartitionDirectory().empty()) {
+    persistent_local_storage_map_.erase(
+        storage->GetStoragePartitionDirectory());
+  }
+
+  auto it = local_storages_.find(storage);
+  if (it != local_storages_.end()) {
+    local_storages_.erase(it);
+  }
 }
 
 #if !BUILDFLAG(IS_ANDROID)

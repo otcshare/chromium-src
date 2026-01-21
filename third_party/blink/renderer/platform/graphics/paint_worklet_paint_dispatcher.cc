@@ -7,8 +7,9 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
@@ -48,7 +49,7 @@ void PaintWorkletPaintDispatcher::RegisterPaintWorkletPainter(
                "PaintWorkletPaintDispatcher::RegisterPaintWorkletPainter");
 
   int worklet_id = painter->GetWorkletId();
-  DCHECK(painter_map_.find(worklet_id) == painter_map_.end());
+  DCHECK(!painter_map_.Contains(worklet_id));
   painter_map_.insert(worklet_id, std::make_pair(painter, painter_runner));
 }
 
@@ -58,7 +59,7 @@ void PaintWorkletPaintDispatcher::UnregisterPaintWorkletPainter(
   TRACE_EVENT0("cc",
                "PaintWorkletPaintDispatcher::"
                "UnregisterPaintWorkletPainter");
-  DCHECK(painter_map_.find(worklet_id) != painter_map_.end());
+  DCHECK(painter_map_.Contains(worklet_id));
   painter_map_.erase(worklet_id);
 }
 
@@ -81,7 +82,7 @@ void PaintWorkletPaintDispatcher::DispatchWorklets(
 
   scoped_refptr<base::SingleThreadTaskRunner> runner =
       GetCompositorTaskRunner();
-  WTF::CrossThreadClosure on_done = CrossThreadBindRepeating(
+  CrossThreadClosure on_done = CrossThreadBindRepeating(
       [](base::WeakPtr<PaintWorkletPaintDispatcher> dispatcher,
          scoped_refptr<base::SingleThreadTaskRunner> runner) {
         PostCrossThreadTask(
@@ -116,22 +117,33 @@ void PaintWorkletPaintDispatcher::DispatchWorklets(
 
     PaintWorkletPainter* painter = it->value.first;
     scoped_refptr<base::SingleThreadTaskRunner> task_runner = it->value.second;
-    DCHECK(!task_runner->BelongsToCurrentThread());
 
-    PostCrossThreadTask(
-        *task_runner, FROM_HERE,
-        CrossThreadBindOnce(
-            [](PaintWorkletPainter* painter,
-               scoped_refptr<cc::PaintWorkletJobVector> jobs,
-               std::unique_ptr<base::ScopedClosureRunner> on_done_runner) {
-              for (cc::PaintWorkletJob& job : jobs->data) {
-                job.SetOutput(painter->Paint(job.input().get(),
-                                             job.GetAnimatedPropertyValues()));
-              }
-              on_done_runner->RunAndReset();
-            },
-            WrapCrossThreadPersistent(painter), std::move(jobs),
-            std::move(on_done_runner)));
+    if (task_runner) {
+      DCHECK(!task_runner->BelongsToCurrentThread());
+
+      PostCrossThreadTask(
+          *task_runner, FROM_HERE,
+          CrossThreadBindOnce(
+              [](PaintWorkletPainter* painter,
+                 scoped_refptr<cc::PaintWorkletJobVector> jobs,
+                 std::unique_ptr<base::ScopedClosureRunner> on_done_runner) {
+                for (cc::PaintWorkletJob& job : jobs->data) {
+                  job.SetOutput(painter->Paint(
+                      job.input().get(), job.GetAnimatedPropertyValues()));
+                }
+                on_done_runner->RunAndReset();
+              },
+              WrapCrossThreadPersistent(painter), std::move(jobs),
+              std::move(on_done_runner)));
+    } else {
+      // A native paint worklet can run on the compsitor thread provided it does
+      // not require garbage collection.
+      for (cc::PaintWorkletJob& native_job : jobs->data) {
+        native_job.SetOutput(painter->Paint(
+            native_job.input().get(), native_job.GetAnimatedPropertyValues()));
+      }
+      on_done_runner->RunAndReset();
+    }
   }
 }
 

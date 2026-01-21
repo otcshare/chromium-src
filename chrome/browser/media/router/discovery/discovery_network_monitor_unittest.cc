@@ -7,7 +7,7 @@
 #include <functional>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "content/public/test/browser_task_environment.h"
@@ -18,7 +18,6 @@ namespace media_router {
 namespace {
 
 using testing::_;
-using testing::Invoke;
 
 class MockDiscoveryObserver : public DiscoveryNetworkMonitor::Observer {
  public:
@@ -70,8 +69,7 @@ TEST_F(DiscoveryNetworkMonitorTest, NetworkIdIsConsistent) {
         current_network_id = network_id;
       };
   discovery_network_monitor->AddObserver(&mock_observer);
-  EXPECT_CALL(mock_observer, OnNetworksChanged(_))
-      .WillOnce(Invoke(capture_network_id));
+  EXPECT_CALL(mock_observer, OnNetworksChanged(_)).WillOnce(capture_network_id);
 
   ChangeConnectionType(network::mojom::ConnectionType::CONNECTION_ETHERNET);
   task_environment.RunUntilIdle();
@@ -79,23 +77,20 @@ TEST_F(DiscoveryNetworkMonitorTest, NetworkIdIsConsistent) {
   std::string ethernet_network_id = current_network_id;
 
   fake_network_info.clear();
-  EXPECT_CALL(mock_observer, OnNetworksChanged(_))
-      .WillOnce(Invoke(capture_network_id));
+  EXPECT_CALL(mock_observer, OnNetworksChanged(_)).WillOnce(capture_network_id);
 
   ChangeConnectionType(network::mojom::ConnectionType::CONNECTION_NONE);
   task_environment.RunUntilIdle();
 
   fake_network_info = fake_wifi_info;
-  EXPECT_CALL(mock_observer, OnNetworksChanged(_))
-      .WillOnce(Invoke(capture_network_id));
+  EXPECT_CALL(mock_observer, OnNetworksChanged(_)).WillOnce(capture_network_id);
 
   ChangeConnectionType(network::mojom::ConnectionType::CONNECTION_WIFI);
   task_environment.RunUntilIdle();
 
   std::string wifi_network_id = current_network_id;
   fake_network_info = fake_ethernet_info;
-  EXPECT_CALL(mock_observer, OnNetworksChanged(_))
-      .WillOnce(Invoke(capture_network_id));
+  EXPECT_CALL(mock_observer, OnNetworksChanged(_)).WillOnce(capture_network_id);
 
   ChangeConnectionType(network::mojom::ConnectionType::CONNECTION_ETHERNET);
   task_environment.RunUntilIdle();

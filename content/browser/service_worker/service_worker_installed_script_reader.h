@@ -10,7 +10,6 @@
 #include "base/memory/raw_ptr.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
 #include "mojo/public/cpp/base/big_buffer.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
@@ -42,7 +41,7 @@ class ServiceWorkerInstalledScriptReader {
    public:
     virtual void OnStarted(
         network::mojom::URLResponseHeadPtr response_head,
-        absl::optional<mojo_base::BigBuffer> metadata,
+        std::optional<mojo_base::BigBuffer> metadata,
         mojo::ScopedDataPipeConsumerHandle body_handle,
         mojo::ScopedDataPipeConsumerHandle meta_data_handle) = 0;
     // Called after both body and metadata have finished being written to the
@@ -65,10 +64,10 @@ class ServiceWorkerInstalledScriptReader {
   void OnReadResponseHeadComplete(
       int result,
       network::mojom::URLResponseHeadPtr response_head,
-      absl::optional<mojo_base::BigBuffer> metadata);
+      std::optional<mojo_base::BigBuffer> metadata);
   void OnReadDataPrepared(
       network::mojom::URLResponseHeadPtr response_head,
-      absl::optional<mojo_base::BigBuffer> metadata,
+      std::optional<mojo_base::BigBuffer> metadata,
       mojo::ScopedDataPipeConsumerHandle body_consumer_handle);
   void OnMetaDataSent(bool success);
   void OnReaderDisconnected();

@@ -5,24 +5,47 @@
 #ifndef CHROME_BROWSER_HEADLESS_HEADLESS_MODE_BROWSERTEST_H_
 #define CHROME_BROWSER_HEADLESS_HEADLESS_MODE_BROWSERTEST_H_
 
+#include <memory>
+
 #include "base/command_line.h"
+#include "base/files/file_path.h"
+#include "base/files/scoped_temp_dir.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/size.h"
+
+namespace content {
+class WebContents;
+}
+
+namespace headless {
+class HeadlessModeHandle;
 
 class HeadlessModeBrowserTest : public InProcessBrowserTest {
  public:
-  static constexpr char kHeadlessSwitchValue[] = "new";
-
-  HeadlessModeBrowserTest() = default;
+  HeadlessModeBrowserTest();
 
   HeadlessModeBrowserTest(const HeadlessModeBrowserTest&) = delete;
   HeadlessModeBrowserTest& operator=(const HeadlessModeBrowserTest&) = delete;
 
-  ~HeadlessModeBrowserTest() override = default;
+  ~HeadlessModeBrowserTest() override;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
+
+ protected:
+  virtual bool IsIncognito();
+
+  bool headful_mode() const { return headful_mode_; }
+
+  void AppendHeadlessCommandLineSwitches(base::CommandLine* command_line);
+
+  content::WebContents* GetActiveWebContents();
+
+ private:
+  bool headful_mode_ = false;
+  std::unique_ptr<HeadlessModeHandle> headless_mode_handle_;
 };
 
 enum StartWindowMode {
@@ -36,12 +59,6 @@ class HeadlessModeBrowserTestWithStartWindowMode
       public testing::WithParamInterface<StartWindowMode> {
  public:
   HeadlessModeBrowserTestWithStartWindowMode() = default;
-
-  HeadlessModeBrowserTestWithStartWindowMode(
-      const HeadlessModeBrowserTestWithStartWindowMode&) = delete;
-  HeadlessModeBrowserTestWithStartWindowMode& operator=(
-      const HeadlessModeBrowserTestWithStartWindowMode&) = delete;
-
   ~HeadlessModeBrowserTestWithStartWindowMode() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
@@ -51,5 +68,7 @@ class HeadlessModeBrowserTestWithStartWindowMode
 
 // Toggles browser fullscreen mode synchronously.
 void ToggleFullscreenModeSync(Browser* browser);
+
+}  // namespace headless
 
 #endif  // CHROME_BROWSER_HEADLESS_HEADLESS_MODE_BROWSERTEST_H_

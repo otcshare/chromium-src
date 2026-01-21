@@ -4,84 +4,89 @@
 
 #include "chrome/browser/ui/browser_finder.h"
 
-#include "ash/public/cpp/multi_user_window_manager.h"
+#include <optional>
+
+#include "ash/multi_user/multi_user_window_manager.h"
+#include "ash/shell.h"
 #include "base/memory/ptr_util.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ui/ash/multi_user/multi_profile_support.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_helper.h"
+#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_browser_adaptor.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/test_browser_window_aura.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/account_id/account_id.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/user_manager/user.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "ui/base/ui_base_features.h"
 
 namespace test {
 
 namespace {
 
-const char kTestAccount1[] = "user1@test.com";
-const char kTestAccount2[] = "user2@test.com";
+constexpr auto kTestAccountId1 =
+    AccountId::Literal::FromUserEmailGaiaId("user1@test.com",
+                                            GaiaId::Literal("fakegaia"));
+constexpr auto kTestAccountId2 =
+    AccountId::Literal::FromUserEmailGaiaId("user2@test.com",
+                                            GaiaId::Literal("fakegaia2"));
 
 }  // namespace
 
 class BrowserFinderChromeOSTest : public BrowserWithTestWindowTest {
  protected:
-  BrowserFinderChromeOSTest()
-      : fake_user_manager_(new ash::FakeChromeUserManager),
-        user_manager_enabler_(base::WrapUnique(fake_user_manager_)) {}
-
+  BrowserFinderChromeOSTest() = default;
   BrowserFinderChromeOSTest(const BrowserFinderChromeOSTest&) = delete;
   BrowserFinderChromeOSTest& operator=(const BrowserFinderChromeOSTest&) =
       delete;
 
-  TestingProfile* CreateMultiUserProfile(const AccountId& account_id) {
-    TestingProfile* profile =
-        profile_manager()->CreateTestingProfile(account_id.GetUserEmail());
-    const user_manager::User* user = fake_user_manager_->AddUser(account_id);
-    ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(
-        const_cast<user_manager::User*>(user), profile);
-    ash::ProfileHelper::Get()->SetProfileToUserMappingForTesting(
-        const_cast<user_manager::User*>(user));
-    // Force creation of MultiProfileSupport.
-    GetMultiUserWindowManager();
-    MultiProfileSupport::GetInstanceForTest()->AddUser(profile);
-    return profile;
-  }
-
-  ash::MultiUserWindowManager* GetMultiUserWindowManager() {
-    if (!MultiUserWindowManagerHelper::GetInstance())
-      MultiUserWindowManagerHelper::CreateInstanceForTest(test_account_id1_);
-    return MultiUserWindowManagerHelper::GetWindowManager();
-  }
-
-  AccountId test_account_id1_ = EmptyAccountId();
-  AccountId test_account_id2_ = EmptyAccountId();
-
  private:
   void SetUp() override {
-    test_account_id1_ = AccountId::FromUserEmail(kTestAccount1);
-    test_account_id2_ = AccountId::FromUserEmail(kTestAccount2);
     BrowserWithTestWindowTest::SetUp();
-    second_profile_ = CreateMultiUserProfile(test_account_id2_);
+    ash::ProfileHelper::Get();  // Instantiate.
+
+    // Create secondary user/profile.
+    LogIn(kTestAccountId2.GetUserEmail(), kTestAccountId2.GetGaiaId());
+    second_profile_ =
+        CreateProfile(std::string(kTestAccountId2.GetUserEmail()));
+
+    browser_controller_.emplace();
   }
 
   void TearDown() override {
-    MultiUserWindowManagerHelper::DeleteInstance();
+    browser_controller_.reset();
+    second_profile_ = nullptr;
+    multi_user_window_manager_browser_adaptor_.reset();
     BrowserWithTestWindowTest::TearDown();
   }
 
-  TestingProfile* CreateProfile() override {
-    return CreateMultiUserProfile(test_account_id1_);
+  // BrowserWithTestWindow:
+  void OnAshTestHelperCreated() override {
+    multi_user_window_manager_browser_adaptor_ =
+        std::make_unique<ash::MultiUserWindowManagerBrowserAdaptor>(
+            ash::Shell::Get()->multi_user_window_manager());
   }
 
-  TestingProfile* second_profile_;
+  std::optional<std::string> GetDefaultProfileName() override {
+    return std::string(kTestAccountId1.GetUserEmail());
+  }
 
-  // |fake_user_manager_| is owned by |user_manager_enabler_|
-  ash::FakeChromeUserManager* fake_user_manager_;
-  user_manager::ScopedUserManager user_manager_enabler_;
+  TestingProfile* CreateProfile(const std::string& profile_name) override {
+    auto* profile = BrowserWithTestWindowTest::CreateProfile(profile_name);
+    auto* user = user_manager()->FindUserAndModify(
+        AccountId::FromUserEmail(profile_name));
+    ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(user, profile);
+
+    multi_user_window_manager_browser_adaptor_->AddUser(user->GetAccountId());
+    return profile;
+  }
+
+  std::unique_ptr<ash::MultiUserWindowManagerBrowserAdaptor>
+      multi_user_window_manager_browser_adaptor_;
+  raw_ptr<TestingProfile> second_profile_;
+  std::optional<ash::BrowserControllerImpl> browser_controller_;
 };
 
 TEST_F(BrowserFinderChromeOSTest, IncognitoBrowserMatchTest) {
@@ -89,7 +94,7 @@ TEST_F(BrowserFinderChromeOSTest, IncognitoBrowserMatchTest) {
   EXPECT_EQ(1u, chrome::GetBrowserCount(profile()));
   EXPECT_TRUE(chrome::FindAnyBrowser(profile(), true));
   EXPECT_TRUE(chrome::FindAnyBrowser(profile(), false));
-  set_browser(nullptr);
+  release_browser();
 
   // Create an incognito browser.
   Browser::CreateParams params(
@@ -104,21 +109,21 @@ TEST_F(BrowserFinderChromeOSTest, IncognitoBrowserMatchTest) {
 }
 
 TEST_F(BrowserFinderChromeOSTest, FindBrowserOwnedByAnotherProfile) {
-  set_browser(nullptr);
+  release_browser();
 
   Browser::CreateParams params(profile()->GetOriginalProfile(), true);
   std::unique_ptr<Browser> browser(
       chrome::CreateBrowserWithViewsTestWindowForParams(params));
-  GetMultiUserWindowManager()->SetWindowOwner(
-      browser->window()->GetNativeWindow(), test_account_id1_);
+  ash::Shell::Get()->multi_user_window_manager()->SetWindowOwner(
+      browser->window()->GetNativeWindow(), kTestAccountId1);
   EXPECT_EQ(1u, chrome::GetBrowserCount(profile()));
   EXPECT_TRUE(chrome::FindAnyBrowser(profile(), true));
   EXPECT_TRUE(chrome::FindAnyBrowser(profile(), false));
 
   // Move the browser window to another user's desktop. Then no window should
   // be available for the current profile.
-  GetMultiUserWindowManager()->ShowWindowForUser(
-      browser->window()->GetNativeWindow(), test_account_id2_);
+  ash::Shell::Get()->multi_user_window_manager()->ShowWindowForUser(
+      browser->window()->GetNativeWindow(), kTestAccountId2);
   // ShowWindowForUser() notifies chrome async. FlushBindings() to ensure all
   // the changes happen.
   EXPECT_EQ(0u, chrome::GetBrowserCount(profile()));

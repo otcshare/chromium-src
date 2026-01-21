@@ -35,6 +35,7 @@
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/v8_external_memory_accounter.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -72,7 +73,7 @@ class PeriodicWave final : public ScriptWrappable {
 
   void Trace(Visitor*) const final;
 
-  PeriodicWaveImpl* impl() { return periodic_wave_impl_; }
+  PeriodicWaveImpl* impl() { return periodic_wave_impl_.Get(); }
 
  private:
   const Member<PeriodicWaveImpl> periodic_wave_impl_;
@@ -97,19 +98,21 @@ class PeriodicWaveImpl final : public GarbageCollected<PeriodicWaveImpl> {
   // the higher wave.  Interpolation between these two tables can be made
   // according to tableInterpolationFactor.
   // Where values from 0 -> 1 interpolate between lower -> higher.
-  void WaveDataForFundamentalFrequency(float,
-                                       float*& lower_wave_data,
-                                       float*& higher_wave_data,
-                                       float& table_interpolation_factor);
+  void WaveDataForFundamentalFrequency(
+      float,
+      base::span<const float>& lower_wave_data,
+      base::span<const float>& higher_wave_data,
+      float& table_interpolation_factor);
 
   // Like the above, except we compute accept 4 frequencies at a time and return
   // 4 lower/higher wave data tables and the 4 corresponding table interpolation
   // factors.  Intended for use with the OscillatorNode for faster a-rate
   // processing.
-  void WaveDataForFundamentalFrequency(const float fundamental_frequency[4],
-                                       float* lower_wave_data[4],
-                                       float* higher_wave_data[4],
-                                       float table_interpolation_factor[4]);
+  void WaveDataForFundamentalFrequency(
+      const std::array<float, 4> fundamental_frequency,
+      std::array<base::span<const float>, 4>& lower_wave_data,
+      std::array<base::span<const float>, 4>& higher_wave_data,
+      std::array<float, 4>& table_interpolation_factor);
 
   // Returns the scalar multiplier to the oscillator frequency to calculate wave
   // buffer phase increment.
@@ -123,8 +126,6 @@ class PeriodicWaveImpl final : public GarbageCollected<PeriodicWaveImpl> {
 
  private:
   void GenerateBasicWaveform(int);
-
-  size_t v8_external_memory_ = 0;
 
   float sample_rate_;
   unsigned number_of_ranges_;
@@ -142,8 +143,6 @@ class PeriodicWaveImpl final : public GarbageCollected<PeriodicWaveImpl> {
 
   unsigned NumberOfPartialsForRange(unsigned range_index) const;
 
-  void AdjustV8ExternalMemory(int64_t delta);
-
   // Creates tables based on numberOfComponents Fourier coefficients.
   void CreateBandLimitedTables(const float* real,
                                const float* imag,
@@ -152,6 +151,8 @@ class PeriodicWaveImpl final : public GarbageCollected<PeriodicWaveImpl> {
   Vector<std::unique_ptr<AudioFloatArray>> band_limited_tables_;
 
   friend class PeriodicWave;
+
+  V8ExternalMemoryAccounter external_memory_accounter_;
 };
 
 }  // namespace blink

@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "net/network_error_logging/network_error_logging_service.h"
 #include "url/origin.h"
 
@@ -116,8 +116,6 @@ class MockPersistentNelStore
 };
 
 bool operator==(const MockPersistentNelStore::Command& lhs,
-                const MockPersistentNelStore::Command& rhs);
-bool operator!=(const MockPersistentNelStore::Command& lhs,
                 const MockPersistentNelStore::Command& rhs);
 
 }  // namespace net

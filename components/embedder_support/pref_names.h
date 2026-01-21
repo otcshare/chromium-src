@@ -10,9 +10,9 @@
 
 namespace embedder_support {
 
-extern const char kAlternateErrorPagesEnabled[];
-extern const char kForceMajorVersionToMinorPosition[];
-extern const char kReduceUserAgentMinorVersion[];
+// A boolean pref set to true if we're using Link Doctor error pages.
+inline constexpr char kAlternateErrorPagesEnabled[] =
+    "alternate_error_pages.enabled";
 
 }  // namespace embedder_support
 

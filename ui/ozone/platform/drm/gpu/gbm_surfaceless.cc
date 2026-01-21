@@ -7,11 +7,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/notreached.h"
+#include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
+#include "ui/gfx/gpu_fence.h"
 #include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gl/gl_bindings.h"
@@ -41,12 +41,10 @@ GbmSurfaceless::GbmSurfaceless(GbmSurfaceFactory* surface_factory,
                                gl::GLDisplayEGL* display,
                                std::unique_ptr<DrmWindowProxy> window,
                                gfx::AcceleratedWidget widget)
-    : Presenter(display, gfx::Size()),
-      surface_factory_(surface_factory),
+    : surface_factory_(surface_factory),
       window_(std::move(window)),
       widget_(widget),
-      has_implicit_external_sync_(
-          display->ext->b_EGL_ARM_implicit_external_sync) {
+      display_(display) {
   surface_factory_->RegisterSurface(window_->widget(), this);
   supports_plane_gpu_fences_ = window_->SupportsGpuFences();
   unsubmitted_frames_.push_back(std::make_unique<PendingFrame>());
@@ -55,12 +53,6 @@ GbmSurfaceless::GbmSurfaceless(GbmSurfaceFactory* surface_factory,
 void GbmSurfaceless::QueueOverlayPlane(DrmOverlayPlane plane) {
   is_on_external_drm_device_ = !plane.buffer->drm_device()->is_primary_device();
   planes_.push_back(std::move(plane));
-}
-
-bool GbmSurfaceless::Initialize(gl::GLSurfaceFormat format) {
-  if (!SurfacelessEGL::Initialize(format))
-    return false;
-  return true;
 }
 
 bool GbmSurfaceless::ScheduleOverlayPlane(
@@ -76,10 +68,7 @@ bool GbmSurfaceless::Resize(const gfx::Size& size,
                             float scale_factor,
                             const gfx::ColorSpace& color_space,
                             bool has_alpha) {
-  if (window_)
-    window_->SetColorSpace(color_space);
-
-  return SurfacelessEGL::Resize(size, scale_factor, color_space, has_alpha);
+  return true;
 }
 
 bool GbmSurfaceless::SupportsPlaneGpuFences() const {
@@ -99,7 +88,7 @@ void GbmSurfaceless::Present(SwapCompletionCallback completion_callback,
     return;
   }
 
-  if (!supports_plane_gpu_fences_ || requires_gl_flush_on_swap_buffers_) {
+  if (!supports_plane_gpu_fences_) {
     glFlush();
   }
 
@@ -130,7 +119,7 @@ void GbmSurfaceless::Present(SwapCompletionCallback completion_callback,
 
   // TODO: the following should be replaced by a per surface flush as it gets
   // implemented in GL drivers.
-  EGLSyncKHR fence = InsertFence(has_implicit_external_sync_);
+  EGLSyncKHR fence = InsertFence();
   CHECK_NE(fence, EGL_NO_SYNC_KHR) << "eglCreateSyncKHR failed";
 
   base::OnceClosure fence_wait_task =
@@ -145,44 +134,17 @@ void GbmSurfaceless::Present(SwapCompletionCallback completion_callback,
       std::move(fence_wait_task), std::move(fence_retired_callback));
 }
 
-EGLConfig GbmSurfaceless::GetConfig() {
-  if (!config_) {
-    EGLint config_attribs[] = {EGL_BUFFER_SIZE,
-                               32,
-                               EGL_ALPHA_SIZE,
-                               8,
-                               EGL_BLUE_SIZE,
-                               8,
-                               EGL_GREEN_SIZE,
-                               8,
-                               EGL_RED_SIZE,
-                               8,
-                               EGL_RENDERABLE_TYPE,
-                               EGL_OPENGL_ES2_BIT,
-                               EGL_SURFACE_TYPE,
-                               EGL_DONT_CARE,
-                               EGL_NONE};
-    config_ = ChooseEGLConfig(GetEGLDisplay(), config_attribs);
-  }
-  return config_;
-}
-
 void GbmSurfaceless::SetRelyOnImplicitSync() {
   use_egl_fence_sync_ = false;
 }
 
-void GbmSurfaceless::SetForceGlFlushOnSwapBuffers() {
-  requires_gl_flush_on_swap_buffers_ = true;
-}
-
 GbmSurfaceless::~GbmSurfaceless() {
-  Destroy();  // The EGL surface must be destroyed before SurfaceOzone.
   surface_factory_->UnregisterSurface(window_->widget());
 }
 
-GbmSurfaceless::PendingFrame::PendingFrame() {}
+GbmSurfaceless::PendingFrame::PendingFrame() = default;
 
-GbmSurfaceless::PendingFrame::~PendingFrame() {}
+GbmSurfaceless::PendingFrame::~PendingFrame() = default;
 
 bool GbmSurfaceless::PendingFrame::ScheduleOverlayPlanes(
     gfx::AcceleratedWidget widget) {
@@ -200,7 +162,6 @@ void GbmSurfaceless::SubmitFrame() {
       if (overlay.z_order() == 0 && overlay.gpu_fence()) {
         submitted_frame_gpu_fence_ = std::make_unique<gfx::GpuFence>(
             overlay.gpu_fence()->GetGpuFenceHandle().Clone());
-        break;
       }
     }
     submitted_frame_ = std::move(unsubmitted_frames_.front());
@@ -225,12 +186,23 @@ void GbmSurfaceless::SubmitFrame() {
   }
 }
 
-EGLSyncKHR GbmSurfaceless::InsertFence(bool implicit) {
+EGLSyncKHR GbmSurfaceless::InsertFence() {
+  const bool has_global_fence = display_->ext->b_EGL_ANGLE_global_fence_sync;
+  const bool has_implicit_external_fence =
+      display_->ext->b_EGL_ARM_implicit_external_sync;
+
+  // Prefer EGL_ANGLE_global_fence_sync as it guarantees synchronization with
+  // past submissions from all contexts, rather than the current context.
+  const EGLenum syncType =
+      has_global_fence ? EGL_SYNC_GLOBAL_FENCE_ANGLE : EGL_SYNC_FENCE_KHR;
+  const bool use_implicit_external_sync =
+      has_implicit_external_fence && !has_global_fence;
   const EGLint attrib_list[] = {EGL_SYNC_CONDITION_KHR,
                                 EGL_SYNC_PRIOR_COMMANDS_IMPLICIT_EXTERNAL_ARM,
                                 EGL_NONE};
-  return eglCreateSyncKHR(GetEGLDisplay(), EGL_SYNC_FENCE_KHR,
-                          implicit ? attrib_list : NULL);
+
+  return eglCreateSyncKHR(GetEGLDisplay(), syncType,
+                          use_implicit_external_sync ? attrib_list : nullptr);
 }
 
 void GbmSurfaceless::FenceRetired(PendingFrame* frame) {
@@ -270,6 +242,10 @@ void GbmSurfaceless::OnPresentation(const gfx::PresentationFeedback& feedback) {
   }
 
   SubmitFrame();
+}
+
+EGLDisplay GbmSurfaceless::GetEGLDisplay() {
+  return display_->GetDisplay();
 }
 
 }  // namespace ui

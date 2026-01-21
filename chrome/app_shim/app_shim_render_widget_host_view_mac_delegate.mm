@@ -9,24 +9,29 @@
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
+#include "ui/gfx/native_ui_types.h"
 
 @interface AppShimRenderWidgetHostViewMacDelegate () <HistorySwiperDelegate>
 @end
 
-@implementation AppShimRenderWidgetHostViewMacDelegate
+@implementation AppShimRenderWidgetHostViewMacDelegate {
+  uint64_t _nsviewIDThatWantsHistoryOverlay;
+
+  // Responsible for 2-finger swipes history navigation.
+  HistorySwiper* __strong _historySwiper;
+}
 
 - (instancetype)initWithRenderWidgetHostNSViewID:
     (uint64_t)renderWidgetHostNSViewID {
   if (self = [super init]) {
     _nsviewIDThatWantsHistoryOverlay = renderWidgetHostNSViewID;
-    _historySwiper.reset([[HistorySwiper alloc] initWithDelegate:self]);
+    _historySwiper = [[HistorySwiper alloc] initWithDelegate:self];
   }
   return self;
 }
 
 - (void)dealloc {
-  [_historySwiper setDelegate:nil];
-  [super dealloc];
+  _historySwiper.delegate = nil;
 }
 
 // Handle an event. All incoming key and mouse events flow through this
@@ -37,14 +42,6 @@
 }
 
 // NSWindow events.
-
-- (void)beginGestureWithEvent:(NSEvent*)event {
-  [_historySwiper beginGestureWithEvent:event];
-}
-
-- (void)endGestureWithEvent:(NSEvent*)event {
-  [_historySwiper endGestureWithEvent:event];
-}
 
 // This is a low level API which provides touches associated with an event.
 // It is used in conjunction with gestures to determine finger placement
@@ -63,11 +60,6 @@
 
 - (void)touchesEndedWithEvent:(NSEvent*)event {
   [_historySwiper touchesEndedWithEvent:event];
-}
-
-- (void)rendererHandledWheelEvent:(const blink::WebMouseWheelEvent&)event
-                         consumed:(BOOL)consumed {
-  [_historySwiper rendererHandledWheelEvent:event consumed:consumed];
 }
 
 - (void)rendererHandledGestureScrollEvent:(const blink::WebGestureEvent&)event
@@ -92,9 +84,10 @@
 - (BOOL)canNavigateInDirection:(history_swiper::NavigationDirection)direction
                       onWindow:(NSWindow*)window {
   auto* bridge =
-      remote_cocoa::NativeWidgetNSWindowBridge::GetFromNativeWindow(window);
-  if (!bridge)
+      remote_cocoa::NativeWidgetNSWindowBridge::GetFromNSWindow(window);
+  if (!bridge) {
     return NO;
+  }
 
   if (direction == history_swiper::kForwards) {
     return bridge->CanGoForward();
@@ -106,9 +99,10 @@
 - (void)navigateInDirection:(history_swiper::NavigationDirection)direction
                    onWindow:(NSWindow*)window {
   auto* bridge =
-      remote_cocoa::NativeWidgetNSWindowBridge::GetFromNativeWindow(window);
-  if (!bridge)
+      remote_cocoa::NativeWidgetNSWindowBridge::GetFromNSWindow(window);
+  if (!bridge) {
     return;
+  }
 
   bool was_executed = false;
   if (direction == history_swiper::kForwards) {
@@ -119,6 +113,12 @@
                                    false, &was_executed);
   }
   DCHECK(was_executed);
+}
+
+- (void)backwardsSwipeNavigationLikely {
+  // TODO(mcnee): It's unclear whether preloading predictions would be useful in
+  // this context. For now we don't do any prediction. See
+  // https://crbug.com/1422266 for context.
 }
 
 @end

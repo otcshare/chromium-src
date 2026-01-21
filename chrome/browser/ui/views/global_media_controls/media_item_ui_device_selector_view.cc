@@ -4,18 +4,16 @@
 
 #include "chrome/browser/ui/views/global_media_controls/media_item_ui_device_selector_view.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include <algorithm>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/global_media_controls/media_item_ui_device_selector_delegate.h"
 #include "chrome/browser/ui/global_media_controls/media_item_ui_metrics.h"
-#include "chrome/browser/ui/media_router/cast_dialog_model.h"
-#include "chrome/browser/ui/media_router/ui_media_sink.h"
 #include "chrome/browser/ui/views/global_media_controls/media_item_ui_device_selector_observer.h"
-#include "chrome/browser/ui/views/media_router/cast_dialog_sink_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/global_media_controls/public/views/media_item_ui_view.h"
 #include "components/media_message_center/media_notification_item.h"
@@ -40,6 +38,8 @@
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 
 using media_router::MediaRouterMetrics;
 using media_router::mojom::MediaRouteProviderId;
@@ -47,8 +47,9 @@ using media_router::mojom::MediaRouteProviderId;
 namespace {
 
 // Constants for the MediaItemUIDeviceSelectorView
+const int kExpandButtonStripWidth = 400;
+const int kExpandButtonStripHeight = 30;
 constexpr auto kExpandButtonStripInsets = gfx::Insets::VH(6, 15);
-constexpr gfx::Size kExpandButtonStripSize{400, 30};
 constexpr auto kExpandButtonBorderInsets = gfx::Insets::VH(4, 8);
 
 // Constant for DropdownButton
@@ -62,54 +63,9 @@ constexpr gfx::Insets kDropdownButtonBorderInsets{4};
 // devices.
 const int kAudioDevicesCountHistogramMax = 30;
 
-media_router::MediaRouterDialogActivationLocation ConvertToOrigin(
-    global_media_controls::GlobalMediaControlsEntryPoint entry_point) {
-  switch (entry_point) {
-    case global_media_controls::GlobalMediaControlsEntryPoint::kPresentation:
-      return media_router::MediaRouterDialogActivationLocation::PAGE;
-    case global_media_controls::GlobalMediaControlsEntryPoint::kSystemTray:
-      return media_router::MediaRouterDialogActivationLocation::SYSTEM_TRAY;
-    case global_media_controls::GlobalMediaControlsEntryPoint::kToolbarIcon:
-      return media_router::MediaRouterDialogActivationLocation::TOOLBAR;
-  }
-}
-
-void RecordCastDeviceCountMetrics(
-    global_media_controls::GlobalMediaControlsEntryPoint entry_point,
-    std::vector<CastDeviceEntryView*> entries) {
-  MediaRouterMetrics::RecordDeviceCount(entries.size());
-
-  std::map<MediaRouteProviderId, std::map<bool, int>> counts = {
-      {MediaRouteProviderId::CAST, {{true, 0}, {false, 0}}},
-      {MediaRouteProviderId::DIAL, {{true, 0}, {false, 0}}},
-      {MediaRouteProviderId::WIRED_DISPLAY, {{true, 0}, {false, 0}}}};
-  for (const CastDeviceEntryView* entry : entries) {
-    if (entry->sink().provider != MediaRouteProviderId::TEST) {
-      counts.at(entry->sink().provider).at(entry->GetEnabled())++;
-    }
-  }
-  for (auto provider : {MediaRouteProviderId::CAST, MediaRouteProviderId::DIAL,
-                        MediaRouteProviderId::WIRED_DISPLAY}) {
-    for (bool is_available : {true, false}) {
-      int count = counts.at(provider).at(is_available);
-      MediaRouterMetrics::RecordGmcDeviceCount(ConvertToOrigin(entry_point),
-                                               provider, is_available, count);
-    }
-  }
-}
-
-absl::optional<media_router::MediaCastMode> GetPreferredCastMode(
-    media_router::CastModeSet cast_mode) {
-  if (base::Contains(cast_mode, media_router::MediaCastMode::PRESENTATION)) {
-    return media_router::MediaCastMode::PRESENTATION;
-  } else if (base::Contains(cast_mode,
-                            media_router::MediaCastMode::REMOTE_PLAYBACK)) {
-    return media_router::MediaCastMode::REMOTE_PLAYBACK;
-  }
-  return absl::nullopt;
-}
-
 class ExpandDeviceSelectorLabel : public views::Label {
+  METADATA_HEADER(ExpandDeviceSelectorLabel, views::Label)
+
  public:
   explicit ExpandDeviceSelectorLabel(
       global_media_controls::GlobalMediaControlsEntryPoint entry_point);
@@ -118,7 +74,12 @@ class ExpandDeviceSelectorLabel : public views::Label {
   void OnColorsChanged(SkColor foreground_color, SkColor background_color);
 };
 
+BEGIN_METADATA(ExpandDeviceSelectorLabel)
+END_METADATA
+
 class ExpandDeviceSelectorButton : public views::ToggleImageButton {
+  METADATA_HEADER(ExpandDeviceSelectorButton, views::ToggleImageButton)
+
  public:
   explicit ExpandDeviceSelectorButton(PressedCallback callback,
                                       SkColor background_color);
@@ -126,6 +87,9 @@ class ExpandDeviceSelectorButton : public views::ToggleImageButton {
 
   void OnColorsChanged(SkColor foreground_color);
 };
+
+BEGIN_METADATA(ExpandDeviceSelectorButton)
+END_METADATA
 
 }  // namespace
 
@@ -139,7 +103,7 @@ ExpandDeviceSelectorLabel::ExpandDeviceSelectorLabel(
     SetText(l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_DEVICES_LABEL));
   }
   auto size = GetPreferredSize();
-  size.set_height(kExpandButtonStripSize.height());
+  size.set_height(kExpandButtonStripHeight);
   size.set_width(size.width() + kExpandButtonBorderInsets.width());
   SetPreferredSize(size);
 }
@@ -152,7 +116,7 @@ void ExpandDeviceSelectorLabel::OnColorsChanged(SkColor foreground_color,
 
 ExpandDeviceSelectorButton::ExpandDeviceSelectorButton(PressedCallback callback,
                                                        SkColor foreground_color)
-    : ToggleImageButton(callback) {
+    : ToggleImageButton(std::move(callback)) {
   SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   SetBorder(views::CreateEmptyBorder(kDropdownButtonBorderInsets));
 
@@ -173,9 +137,10 @@ void ExpandDeviceSelectorButton::OnColorsChanged(SkColor foreground_color) {
   // When the button is not toggled, the device list is collapsed and the arrow
   // is pointing up. Otherwise, the device list is expanded and the arrow is
   // pointing down.
-  SetImage(views::Button::STATE_NORMAL,
-           gfx::CreateVectorIcon(vector_icons::kCaretDownIcon,
-                                 kDropdownButtonIconSize, foreground_color));
+  SetImageModel(views::Button::STATE_NORMAL,
+                ui::ImageModel::FromVectorIcon(vector_icons::kCaretDownIcon,
+                                               foreground_color,
+                                               kDropdownButtonIconSize));
   const auto caret_down_image = ui::ImageModel::FromVectorIcon(
       vector_icons::kCaretUpIcon, foreground_color, kDropdownButtonIconSize);
   SetToggledImageModel(views::Button::STATE_NORMAL, caret_down_image);
@@ -185,15 +150,27 @@ void ExpandDeviceSelectorButton::OnColorsChanged(SkColor foreground_color) {
 MediaItemUIDeviceSelectorView::MediaItemUIDeviceSelectorView(
     const std::string& item_id,
     MediaItemUIDeviceSelectorDelegate* delegate,
-    std::unique_ptr<media_router::CastDialogController> cast_controller,
+    mojo::PendingRemote<global_media_controls::mojom::DeviceListHost>
+        device_list_host,
+    mojo::PendingReceiver<global_media_controls::mojom::DeviceListClient>
+        receiver,
     bool has_audio_output,
     global_media_controls::GlobalMediaControlsEntryPoint entry_point,
-    bool show_expand_button)
-    : item_id_(item_id), delegate_(delegate), entry_point_(entry_point) {
+    bool show_devices,
+    std::optional<media_message_center::MediaColorTheme> media_color_theme)
+    : item_id_(item_id),
+      delegate_(delegate),
+      entry_point_(entry_point),
+      media_color_theme_(media_color_theme),
+      device_list_host_(std::move(device_list_host)),
+      receiver_(this, std::move(receiver)) {
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
 
-  CreateExpandButtonStrip(show_expand_button);
+  // Do not create the expand button strip if this device selector view is used
+  // on Chrome OS ash.
+  CreateExpandButtonStrip(
+      /*show_expand_button=*/!media_color_theme_.has_value());
 
   device_entry_views_container_ = AddChildView(std::make_unique<views::View>());
   device_entry_views_container_->SetLayoutManager(
@@ -201,14 +178,11 @@ MediaItemUIDeviceSelectorView::MediaItemUIDeviceSelectorView(
           views::BoxLayout::Orientation::kVertical));
   device_entry_views_container_->SetVisible(false);
 
-  if (entry_point_ ==
-      global_media_controls::GlobalMediaControlsEntryPoint::kPresentation) {
+  if (show_devices) {
     ShowDevices();
   }
   SetBackground(views::CreateSolidBackground(background_color_));
-  // Set the size of this view
-  SetPreferredSize(kExpandButtonStripSize);
-  Layout();
+  DeprecatedLayoutImmediately();
 
   // This view will become visible when devices are discovered.
   SetVisible(false);
@@ -217,20 +191,16 @@ MediaItemUIDeviceSelectorView::MediaItemUIDeviceSelectorView(
                               media::kGlobalMediaControlsSeamlessTransfer)) {
     RegisterAudioDeviceCallbacks();
   }
-
-  if (cast_controller) {
-    cast_controller_ = std::move(cast_controller);
-    cast_controller_->AddObserver(this);
-  }
 }
 
 void MediaItemUIDeviceSelectorView::UpdateCurrentAudioDevice(
     const std::string& current_device_id) {
-  if (current_audio_device_entry_view_)
+  if (current_audio_device_entry_view_) {
     current_audio_device_entry_view_->SetHighlighted(false);
+  }
 
   // Find DeviceEntryView* from |device_entry_ui_map_| with |current_device_id|.
-  auto it = base::ranges::find(
+  auto it = std::ranges::find(
       device_entry_ui_map_, current_device_id,
       [](const auto& pair) { return pair.second->raw_device_id(); });
 
@@ -245,7 +215,7 @@ void MediaItemUIDeviceSelectorView::UpdateCurrentAudioDevice(
   current_audio_device_entry_view_->SetHighlighted(true);
   device_entry_views_container_->ReorderChildView(
       current_audio_device_entry_view_, 0);
-  current_audio_device_entry_view_->Layout();
+  current_audio_device_entry_view_->DeprecatedLayoutImmediately();
 }
 
 MediaItemUIDeviceSelectorView::~MediaItemUIDeviceSelectorView() {
@@ -267,7 +237,7 @@ void MediaItemUIDeviceSelectorView::UpdateAvailableAudioDevices(
   current_audio_device_entry_view_ = nullptr;
 
   bool current_device_still_exists = false;
-  for (auto description : device_descriptions) {
+  for (const auto& description : device_descriptions) {
     auto device_entry_view = std::make_unique<AudioDeviceEntryView>(
         base::BindRepeating(
             &MediaItemUIDeviceSelectorDelegate::OnAudioSinkChosen,
@@ -278,10 +248,10 @@ void MediaItemUIDeviceSelectorView::UpdateAvailableAudioDevices(
     device_entry_ui_map_[device_entry_view->tag()] = device_entry_view.get();
     device_entry_views_container_->AddChildView(std::move(device_entry_view));
     if (!current_device_still_exists &&
-        description.unique_id == current_device_id_)
+        description.unique_id == current_device_id_) {
       current_device_still_exists = true;
+    }
   }
-
   // If the current device no longer exists, fallback to the default device
   UpdateCurrentAudioDevice(
       current_device_still_exists
@@ -289,8 +259,13 @@ void MediaItemUIDeviceSelectorView::UpdateAvailableAudioDevices(
           : media::AudioDeviceDescription::kDefaultDeviceId);
 
   UpdateVisibility();
-  for (auto& observer : observers_)
-    observer.OnMediaItemUIDeviceSelectorUpdated(device_entry_ui_map_);
+  observers_.Notify(
+      &MediaItemUIDeviceSelectorObserver::OnMediaItemUIDeviceSelectorUpdated,
+      device_entry_ui_map_);
+  if (media_item_ui_) {
+    media_item_ui_->OnDeviceSelectorViewDevicesChanged(
+        device_entry_views_container_->children().size() > 0);
+  }
 }
 
 void MediaItemUIDeviceSelectorView::SetMediaItemUIView(
@@ -309,8 +284,9 @@ void MediaItemUIDeviceSelectorView::OnColorsChanged(SkColor foreground_color,
   }
 
   expand_label_->OnColorsChanged(foreground_color_, background_color_);
-  if (dropdown_button_)
+  if (dropdown_button_) {
     dropdown_button_->OnColorsChanged(foreground_color_);
+  }
   SchedulePaint();
 }
 
@@ -328,9 +304,14 @@ SkColor MediaItemUIDeviceSelectorView::GetIconLabelBubbleBackgroundColor()
 void MediaItemUIDeviceSelectorView::ShowDevices() {
   DCHECK(!is_expanded_);
   is_expanded_ = true;
-  NotifyAccessibilityEvent(ax::mojom::Event::kExpandedChanged, true);
-  GetViewAccessibility().AnnounceText(
-      l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_SHOW_DEVICE_LIST));
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kExpandedChanged, true);
+
+  // When this device selector view is used on Chrome OS ash, accessibility text
+  // will be handled by MediaItemUIDetailedView instead of here.
+  if (!media_color_theme_.has_value()) {
+    GetViewAccessibility().AnnounceText(
+        l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_SHOW_DEVICE_LIST));
+  }
 
   if (!have_devices_been_shown_) {
     base::UmaHistogramExactLinear(
@@ -338,20 +319,31 @@ void MediaItemUIDeviceSelectorView::ShowDevices() {
         device_entry_views_container_->children().size(),
         kAudioDevicesCountHistogramMax);
     base::UmaHistogramBoolean(kDeviceSelectorOpenedHistogramName, true);
-    RecordCastDeviceCountAfterDelay();
     have_devices_been_shown_ = true;
   }
 
   device_entry_views_container_->SetVisible(true);
   PreferredSizeChanged();
+
+  // When this device selector view is used on Chrome OS ash, focus the first
+  // available device when the device list is shown for accessibility.
+  if (media_color_theme_.has_value() &&
+      device_entry_views_container_->children().size() > 0) {
+    device_entry_views_container_->children()[0]->RequestFocus();
+  }
 }
 
 void MediaItemUIDeviceSelectorView::HideDevices() {
   DCHECK(is_expanded_);
   is_expanded_ = false;
-  NotifyAccessibilityEvent(ax::mojom::Event::kExpandedChanged, true);
-  GetViewAccessibility().AnnounceText(
-      l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_HIDE_DEVICE_LIST));
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kExpandedChanged, true);
+
+  // When this device selector view is used on Chrome OS ash, accessibility text
+  // will be handled by MediaItemUIDetailedView instead of here.
+  if (!media_color_theme_.has_value()) {
+    GetViewAccessibility().AnnounceText(
+        l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_HIDE_DEVICE_LIST));
+  }
 
   device_entry_views_container_->SetVisible(false);
   PreferredSizeChanged();
@@ -365,22 +357,25 @@ void MediaItemUIDeviceSelectorView::UpdateVisibility() {
     has_expand_button_been_shown_ = true;
   }
 
-  if (media_item_ui_)
-    media_item_ui_->OnDeviceSelectorViewSizeChanged();
+  if (media_item_ui_) {
+    media_item_ui_->OnListViewSizeChanged();
+  }
 }
 
 bool MediaItemUIDeviceSelectorView::ShouldBeVisible() const {
-  if (has_cast_device_)
+  if (has_cast_device_) {
     return true;
-  if (!is_audio_device_switching_enabled_)
+  }
+  if (!is_audio_device_switching_enabled_) {
     return false;
+  }
   // The UI should be visible if there are more than one unique devices. That is
   // when:
   // * There are at least three devices
   // * Or, there are two devices and one of them has the default ID but not the
   // default name.
   if (device_entry_views_container_->children().size() == 2) {
-    return base::ranges::any_of(
+    return std::ranges::any_of(
         device_entry_views_container_->children(), [this](views::View* view) {
           DeviceEntryUI* entry = GetDeviceEntryUI(view);
           return entry->raw_device_id() ==
@@ -394,16 +389,13 @@ bool MediaItemUIDeviceSelectorView::ShouldBeVisible() const {
 
 void MediaItemUIDeviceSelectorView::CreateExpandButtonStrip(
     bool show_expand_button) {
-  expand_button_strip_ = AddChildView(std::make_unique<views::View>());
-  auto* expand_button_strip_layout =
-      expand_button_strip_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal,
-          kExpandButtonStripInsets));
-  expand_button_strip_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kStart);
-  expand_button_strip_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  expand_button_strip_->SetPreferredSize(kExpandButtonStripSize);
+  expand_button_strip_ = AddChildView(
+      views::Builder<views::BoxLayoutView>()
+          .SetInsideBorderInsets(kExpandButtonStripInsets)
+          .SetMainAxisAlignment(views::BoxLayout::MainAxisAlignment::kStart)
+          .SetCrossAxisAlignment(views::BoxLayout::CrossAxisAlignment::kCenter)
+          .SetVisible(show_expand_button)
+          .Build());
 
   expand_label_ = expand_button_strip_->AddChildView(
       std::make_unique<ExpandDeviceSelectorLabel>(entry_point_));
@@ -419,9 +411,6 @@ void MediaItemUIDeviceSelectorView::CreateExpandButtonStrip(
                 base::Unretained(this)),
             foreground_color_));
   }
-
-  if (!show_expand_button)
-    expand_button_strip_->SetVisible(false);
 }
 
 void MediaItemUIDeviceSelectorView::ShowOrHideDeviceList() {
@@ -430,17 +419,20 @@ void MediaItemUIDeviceSelectorView::ShowOrHideDeviceList() {
   } else {
     ShowDevices();
   }
-  dropdown_button_->SetToggled(is_expanded_);
+  if (dropdown_button_) {
+    dropdown_button_->SetToggled(is_expanded_);
+  }
 
-  if (media_item_ui_)
-    media_item_ui_->OnDeviceSelectorViewSizeChanged();
+  if (media_item_ui_) {
+    media_item_ui_->OnListViewSizeChanged();
+  }
 }
 
 void MediaItemUIDeviceSelectorView::UpdateIsAudioDeviceSwitchingEnabled(
     bool enabled) {
-  if (enabled == is_audio_device_switching_enabled_)
+  if (enabled == is_audio_device_switching_enabled_) {
     return;
-
+  }
   is_audio_device_switching_enabled_ = enabled;
   UpdateVisibility();
 }
@@ -448,7 +440,7 @@ void MediaItemUIDeviceSelectorView::UpdateIsAudioDeviceSwitchingEnabled(
 void MediaItemUIDeviceSelectorView::RemoveDevicesOfType(
     DeviceEntryUIType type) {
   std::vector<views::View*> views_to_remove;
-  for (auto* view : device_entry_views_container_->children()) {
+  for (views::View* view : device_entry_views_container_->children()) {
     if (GetDeviceEntryUI(view)->GetType() == type) {
       views_to_remove.push_back(view);
     }
@@ -463,53 +455,60 @@ void MediaItemUIDeviceSelectorView::RemoveDevicesOfType(
 DeviceEntryUI* MediaItemUIDeviceSelectorView::GetDeviceEntryUI(
     views::View* view) const {
   auto it = device_entry_ui_map_.find(static_cast<views::Button*>(view)->tag());
-  DCHECK(it != device_entry_ui_map_.end());
+  CHECK(it != device_entry_ui_map_.end());
   return it->second;
 }
 
-void MediaItemUIDeviceSelectorView::OnModelUpdated(
-    const media_router::CastDialogModel& model) {
+void MediaItemUIDeviceSelectorView::OnDevicesUpdated(
+    std::vector<global_media_controls::mojom::DevicePtr> devices) {
   RemoveDevicesOfType(DeviceEntryUIType::kCast);
   has_cast_device_ = false;
-  for (auto sink : model.media_sinks()) {
-    if (!base::Contains(sink.cast_modes,
-                        media_router::MediaCastMode::PRESENTATION) &&
-        !base::Contains(sink.cast_modes,
-                        media_router::MediaCastMode::REMOTE_PLAYBACK)) {
-      continue;
-    }
+  for (const auto& device : devices) {
     has_cast_device_ = true;
-    auto device_entry_view = std::make_unique<CastDeviceEntryView>(
-        base::BindRepeating(&MediaItemUIDeviceSelectorView::StartCastSession,
-                            base::Unretained(this)),
-        foreground_color_, background_color_, sink);
-    device_entry_view->set_tag(next_tag_++);
-    device_entry_ui_map_[device_entry_view->tag()] = device_entry_view.get();
-    auto* entry = device_entry_views_container_->AddChildView(
-        std::move(device_entry_view));
-    // After the |device_entry_view| is added, its icon color will change
-    // according to the system theme. So we need to override the system color.
-    entry->OnColorsChanged(foreground_color_, background_color_);
+    if (media_color_theme_.has_value()) {
+      auto device_entry_view = std::make_unique<CastDeviceEntryViewAsh>(
+          base::BindRepeating(
+              &MediaItemUIDeviceSelectorView::OnCastDeviceSelected,
+              base::Unretained(this), device->id),
+          media_color_theme_.value().primary_foreground_color_id,
+          media_color_theme_.value().secondary_foreground_color_id, device);
+      device_entry_view->set_tag(next_tag_++);
+      device_entry_ui_map_[device_entry_view->tag()] = device_entry_view.get();
+      device_entry_views_container_->AddChildView(std::move(device_entry_view));
+    } else {
+      auto device_entry_view = std::make_unique<CastDeviceEntryView>(
+          base::BindRepeating(
+              &MediaItemUIDeviceSelectorView::OnCastDeviceSelected,
+              base::Unretained(this), device->id),
+          foreground_color_, background_color_, device);
+      device_entry_view->set_tag(next_tag_++);
+      device_entry_ui_map_[device_entry_view->tag()] = device_entry_view.get();
+      auto* entry = device_entry_views_container_->AddChildView(
+          std::move(device_entry_view));
+      // After the |device_entry_view| is added, its icon color will change
+      // according to the system theme. So we need to override the system color.
+      entry->OnColorsChanged(foreground_color_, background_color_);
+    }
   }
-  device_entry_views_container_->Layout();
+  device_entry_views_container_->DeprecatedLayoutImmediately();
 
   UpdateVisibility();
-  for (auto& observer : observers_)
-    observer.OnMediaItemUIDeviceSelectorUpdated(device_entry_ui_map_);
-}
-
-void MediaItemUIDeviceSelectorView::OnControllerInvalidated() {
-  cast_controller_.reset();
+  observers_.Notify(
+      &MediaItemUIDeviceSelectorObserver::OnMediaItemUIDeviceSelectorUpdated,
+      device_entry_ui_map_);
+  if (media_item_ui_) {
+    media_item_ui_->OnDeviceSelectorViewDevicesChanged(
+        device_entry_views_container_->children().size() > 0);
+  }
 }
 
 void MediaItemUIDeviceSelectorView::OnDeviceSelected(int tag) {
   auto it = device_entry_ui_map_.find(tag);
-  DCHECK(it != device_entry_ui_map_.end());
+  CHECK(it != device_entry_ui_map_.end());
 
-  if (it->second->GetType() == DeviceEntryUIType::kAudio)
+  if (it->second->GetType() == DeviceEntryUIType::kAudio) {
     delegate_->OnAudioSinkChosen(item_id_, it->second->raw_device_id());
-  else
-    StartCastSession(static_cast<CastDeviceEntryView*>(it->second));
+  }
 }
 
 void MediaItemUIDeviceSelectorView::OnDropdownButtonClicked() {
@@ -528,6 +527,16 @@ bool MediaItemUIDeviceSelectorView::OnMousePressed(
   }
   // Stop the mouse click event from bubbling to parent views.
   return true;
+}
+
+gfx::Size MediaItemUIDeviceSelectorView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  int height = GetLayoutManager()->GetPreferredHeightForWidth(
+      this, kExpandButtonStripWidth);
+  int expand_button_strip_height =
+      expand_button_strip_->GetVisible() ? kExpandButtonStripHeight : 0;
+  return gfx::Size(kExpandButtonStripWidth,
+                   std::max(expand_button_strip_height, height));
 }
 
 void MediaItemUIDeviceSelectorView::AddObserver(
@@ -559,86 +568,22 @@ bool MediaItemUIDeviceSelectorView::GetDeviceEntryViewVisibilityForTesting() {
   return device_entry_views_container_->GetVisible();
 }
 
-std::vector<media_router::CastDialogSinkButton*>
-MediaItemUIDeviceSelectorView::GetCastSinkButtonsForTesting() {
-  std::vector<media_router::CastDialogSinkButton*> buttons;
-  for (auto* view : device_entry_views_container_->children()) {
+std::vector<CastDeviceEntryView*>
+MediaItemUIDeviceSelectorView::GetCastDeviceEntryViewsForTesting() {
+  std::vector<CastDeviceEntryView*> buttons;
+  for (views::View* view : device_entry_views_container_->children()) {
     if (GetDeviceEntryUI(view)->GetType() == DeviceEntryUIType::kCast) {
-      buttons.push_back(static_cast<media_router::CastDialogSinkButton*>(view));
+      buttons.push_back(static_cast<CastDeviceEntryView*>(view));
     }
   }
   return buttons;
 }
 
-void MediaItemUIDeviceSelectorView::StartCastSession(
-    CastDeviceEntryView* entry) {
-  if (!cast_controller_)
-    return;
-  const media_router::UIMediaSink& sink = entry->sink();
-  // Clicking on the device entry with an issue will clear the issue without
-  // starting casting.
-  if (sink.issue) {
-    cast_controller_->ClearIssue(sink.issue->id());
-    return;
+void MediaItemUIDeviceSelectorView::OnCastDeviceSelected(
+    const std::string& device_id) {
+  if (device_list_host_) {
+    device_list_host_->SelectDevice(device_id);
   }
-  // When users click on a CONNECTED sink,
-  // if it is a CAST sink, a new cast session will replace the existing cast
-  // session.
-  // if it is a DIAL sink, the existing session will be terminated and users
-  // need to click on the sink again to start a new session.
-  // TODO(crbug.com/1206830): implement "terminate existing route and start a
-  // new session" in DIAL MRP.
-  if (sink.state == media_router::UIMediaSinkState::AVAILABLE) {
-    DoStartCastSession(sink);
-  } else if (sink.state == media_router::UIMediaSinkState::CONNECTED) {
-    // We record stopping casting here even if we are starting casting, because
-    // the existing session is being stopped and replaced by a new session.
-    if (GetPreferredCastMode(sink.cast_modes)) {
-      MediaItemUIMetrics::RecordStopCastingMetrics(
-          GetPreferredCastMode(sink.cast_modes).value(), entry_point_);
-    }
-    if (sink.provider == MediaRouteProviderId::DIAL) {
-      DCHECK(sink.route);
-      cast_controller_->StopCasting(sink.route->media_route_id());
-    } else {
-      DoStartCastSession(sink);
-    }
-  }
-}
-
-void MediaItemUIDeviceSelectorView::DoStartCastSession(
-    media_router::UIMediaSink sink) {
-  auto cast_mode = GetPreferredCastMode(sink.cast_modes);
-  if (!cast_mode) {
-    NOTREACHED() << "Cast mode is not supported.";
-    return;
-  }
-  cast_controller_->StartCasting(sink.id, cast_mode.value());
-  if (cast_mode.value() == media_router::MediaCastMode::REMOTE_PLAYBACK) {
-    delegate_->OnMediaRemotingRequested(item_id_);
-  }
-
-  MediaItemUIMetrics::RecordStartCastingMetrics(
-      sink.icon_type, cast_mode.value(), entry_point_);
-}
-
-void MediaItemUIDeviceSelectorView::RecordCastDeviceCountAfterDelay() {
-  content::GetUIThreadTaskRunner({})->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&MediaItemUIDeviceSelectorView::RecordCastDeviceCount,
-                     weak_ptr_factory_.GetWeakPtr()),
-      MediaRouterMetrics::kDeviceCountMetricDelay);
-}
-
-void MediaItemUIDeviceSelectorView::RecordCastDeviceCount() {
-  std::vector<CastDeviceEntryView*> entries;
-  for (views::View* view : device_entry_views_container_->children()) {
-    DeviceEntryUI* entry = GetDeviceEntryUI(view);
-    if (entry->GetType() == DeviceEntryUIType::kCast) {
-      entries.push_back(static_cast<CastDeviceEntryView*>(entry));
-    }
-  }
-  RecordCastDeviceCountMetrics(entry_point_, entries);
 }
 
 void MediaItemUIDeviceSelectorView::RegisterAudioDeviceCallbacks() {
@@ -657,5 +602,5 @@ void MediaItemUIDeviceSelectorView::RegisterAudioDeviceCallbacks() {
                                         weak_ptr_factory_.GetWeakPtr()));
 }
 
-BEGIN_METADATA(MediaItemUIDeviceSelectorView, views::View)
+BEGIN_METADATA(MediaItemUIDeviceSelectorView)
 END_METADATA

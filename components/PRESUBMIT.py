@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-USE_PYTHON3 = True
-
 def CheckChangeOnUpload(input_api, output_api):
   return _CommonChecks(input_api, output_api)
 
@@ -45,5 +43,6 @@ def _CommonChecks(input_api, output_api):
   results += _CheckSvgsOptimized(input_api, output_api)
   results += _CheckWebDevStyle(input_api, output_api)
   results += input_api.canned_checks.CheckPatchFormatted(input_api, output_api,
-                                                         check_js=True)
+                                                         check_js=True,
+                                                         check_python=False)
   return results

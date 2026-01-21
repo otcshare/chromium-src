@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
@@ -19,7 +19,8 @@
 #include "rlz/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_RLZ)
-#include "components/rlz/rlz_tracker.h"
+#include "components/rlz/rlz_tracker.h"  // nogncheck
+#include "content/public/browser/browser_thread.h"
 #endif
 
 namespace ash {

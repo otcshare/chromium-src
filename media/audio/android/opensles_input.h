@@ -9,6 +9,7 @@
 #include <SLES/OpenSLES_Android.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
 #include "base/compiler_specific.h"
@@ -18,6 +19,7 @@
 #include "base/time/time.h"
 #include "media/audio/android/opensles_util.h"
 #include "media/audio/audio_io.h"
+#include "media/base/amplitude_peak_detector.h"
 #include "media/base/audio_parameters.h"
 
 namespace media {
@@ -77,6 +79,8 @@ class OpenSLESInputStream : public AudioInputStream {
 
   base::ThreadChecker thread_checker_;
 
+  AmplitudePeakDetector peak_detector_;
+
   // Protects |callback_|, |active_buffer_index_|, |audio_data_|,
   // |buffer_size_bytes_| and |simple_buffer_queue_|.
   base::Lock lock_;
@@ -98,7 +102,7 @@ class OpenSLESInputStream : public AudioInputStream {
 
   // Audio buffers that are allocated in the constructor based on
   // info from audio parameters.
-  uint8_t* audio_data_[kMaxNumOfBuffersInQueue];
+  std::array<uint8_t*, kMaxNumOfBuffersInQueue> audio_data_;
 
   int active_buffer_index_;
   int buffer_size_bytes_;

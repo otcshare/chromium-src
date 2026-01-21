@@ -6,15 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "components/google/core/common/google_util.h"
-#include "components/variations/net/omnibox_http_headers.h"
 #include "components/variations/variations_features.h"
 #include "components/variations/variations_ids_provider.h"
 #include "net/base/isolation_info.h"
@@ -22,6 +19,7 @@
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
@@ -88,11 +86,13 @@ void LogRequestContextHistogram(RequestContextCategory result) {
 // is passed. This is needed for tests as EmbeddedTestServer is only
 // accessible using 127.0.0.1. See crrev.com/c/3507791 for details.
 URLValidationResult GetUrlValidationResult(const GURL& url) {
-  if (!url.is_valid())
+  if (!url.is_valid()) {
     return URLValidationResult::kNotValidInvalidUrl;
+  }
 
-  if (!url.SchemeIsHTTPOrHTTPS())
+  if (!url.SchemeIsHTTPOrHTTPS()) {
     return URLValidationResult::kNotValidNeitherHttpHttps;
+  }
 
 #if BUILDFLAG(IS_IOS)
   if (net::IsLocalhost(url) &&
@@ -102,14 +102,16 @@ URLValidationResult GetUrlValidationResult(const GURL& url) {
   }
 #endif  // BUILDFLAG(IS_IOS)
 
-  if (!google_util::IsGoogleAssociatedDomainUrl(url))
+  if (!google_util::IsGoogleAssociatedDomainUrl(url)) {
     return URLValidationResult::kNotValidNotGoogleDomain;
+  }
 
   // HTTPS is checked here, rather than before the IsGoogleAssociatedDomainUrl()
   // check, to know how many Google domains are rejected by the change to append
   // headers to only HTTPS requests.
-  if (!url.SchemeIs(url::kHttpsScheme))
+  if (!url.SchemeIs(url::kHttpsScheme)) {
     return URLValidationResult::kNotValidIsGoogleNotHttps;
+  }
 
   return URLValidationResult::kShouldAppend;
 }
@@ -175,7 +177,7 @@ bool IsFirstPartyContext(Owner owner,
         &resource_request.trusted_params->isolation_info;
 
     if (isolation_info->IsEmpty()) {
-      // TODO(crbug/1094303): If TrustedParams are present, it appears that
+      // TODO(crbug.com/40135370): If TrustedParams are present, it appears that
       // IsolationInfo is too. Maybe deprecate kNoIsolationInfo if this bucket
       // is never used.
       LogRequestContextHistogram(kNoIsolationInfo);
@@ -206,24 +208,17 @@ bool IsFirstPartyContext(Owner owner,
   return false;
 }
 
-// Returns GoogleWebVisibility::FIRST_PARTY if kRestrictGoogleWebVisibility is
-// enabled and the request is from a first-party context; otherwise, returns
-// GoogleWebVisibility::ANY.
+// Returns GoogleWebVisibility::FIRST_PARTY if the request is from a first-party
+// context; otherwise, returns GoogleWebVisibility::ANY.
 variations::mojom::GoogleWebVisibility GetVisibilityKey(
     Owner owner,
     const network::ResourceRequest& resource_request) {
-  bool use_first_party_visibility =
-      IsFirstPartyContext(owner, resource_request) &&
-      base::FeatureList::IsEnabled(internal::kRestrictGoogleWebVisibility);
-
-  return use_first_party_visibility
+  return IsFirstPartyContext(owner, resource_request)
              ? variations::mojom::GoogleWebVisibility::FIRST_PARTY
              : variations::mojom::GoogleWebVisibility::ANY;
 }
 
-// Returns a variations header from |variations_headers|. When
-// kRestrictGoogleWebVisibility is enabled, the request context is considered
-// and may be used to select a header with a more limited set of IDs.
+// Returns a variations header from |variations_headers|.
 std::string SelectVariationsHeader(
     variations::mojom::VariationsHeadersPtr variations_headers,
     Owner owner,
@@ -257,8 +252,6 @@ class VariationsHeaderHelper {
   VariationsHeaderHelper& operator=(const VariationsHeaderHelper&) = delete;
 
   bool AppendHeaderIfNeeded(const GURL& url, InIncognito incognito) {
-    AppendOmniboxOnDeviceSuggestionsHeaderIfNeeded(url, resource_request_);
-
     // Note the criteria for attaching client experiment headers:
     // 1. We only transmit to Google owned domains which can evaluate
     // experiments.
@@ -269,11 +262,13 @@ class VariationsHeaderHelper {
     // 2. Only transmit for non-Incognito profiles.
     // 3. For the X-Client-Data header, only include non-empty variation IDs.
     if ((incognito == InIncognito::kYes) ||
-        !ShouldAppendVariationsHeader(url, "Append"))
+        !ShouldAppendVariationsHeader(url, "Append")) {
       return false;
+    }
 
-    if (variations_header_.empty())
+    if (variations_header_.empty()) {
       return false;
+    }
 
     // Set the variations header to cors_exempt_headers rather than headers to
     // be exempted from CORS checks, and to avoid exposing the header to service
@@ -285,9 +280,6 @@ class VariationsHeaderHelper {
 
  private:
   // Returns a variations header containing IDs appropriate for |signed_in|.
-  // When kRestrictGoogleWebVisibility is enabled, the request context is
-  // considered and may be used to select a header with a more limited set of
-  // IDs.
   //
   // Can be used only by code running in the browser process, which is where
   // the populated VariationsIdsProvider exists.
@@ -299,8 +291,9 @@ class VariationsHeaderHelper {
         VariationsIdsProvider::GetInstance()->GetClientDataHeaders(
             signed_in == SignedIn::kYes);
 
-    if (variations_headers.is_null())
+    if (variations_headers.is_null()) {
       return "";
+    }
     return variations_headers->headers_map.at(
         GetVisibilityKey(owner, resource_request));
   }
@@ -315,7 +308,7 @@ bool AppendVariationsHeader(const GURL& url,
                             InIncognito incognito,
                             SignedIn signed_in,
                             network::ResourceRequest* request) {
-  // TODO(crbug.com/1094303): Consider passing the Owner if we can get it.
+  // TODO(crbug.com/40135370): Consider passing the Owner if we can get it.
   // However, we really only care about having the owner for requests initiated
   // on the renderer side.
   return VariationsHeaderHelper(signed_in, request)
@@ -337,7 +330,7 @@ bool AppendVariationsHeaderWithCustomValue(
 bool AppendVariationsHeaderUnknownSignedIn(const GURL& url,
                                            InIncognito incognito,
                                            network::ResourceRequest* request) {
-  // TODO(crbug.com/1094303): Consider passing the Owner if we can get it.
+  // TODO(crbug.com/40135370): Consider passing the Owner if we can get it.
   // However, we really only care about having the owner for requests initiated
   // on the renderer side.
   return VariationsHeaderHelper(SignedIn::kNo, request)
@@ -348,8 +341,9 @@ void RemoveVariationsHeaderIfNeeded(
     const net::RedirectInfo& redirect_info,
     const network::mojom::URLResponseHead& response_head,
     std::vector<std::string>* to_be_removed_headers) {
-  if (!ShouldAppendVariationsHeader(redirect_info.new_url, "Remove"))
+  if (!ShouldAppendVariationsHeader(redirect_info.new_url, "Remove")) {
     to_be_removed_headers->push_back(kClientDataHeader);
+  }
 }
 
 std::unique_ptr<network::SimpleURLLoader>
@@ -363,8 +357,14 @@ CreateSimpleURLLoaderWithVariationsHeader(
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader =
       network::SimpleURLLoader::Create(std::move(request), annotation_tag);
   if (variations_headers_added) {
-    simple_url_loader->SetOnRedirectCallback(
-        base::BindRepeating(&RemoveVariationsHeaderIfNeeded));
+    simple_url_loader->SetOnRedirectCallback(base::BindRepeating(
+        [](const GURL& url_before_redirect,
+           const net::RedirectInfo& redirect_info,
+           const network::mojom::URLResponseHead& response_head,
+           std::vector<std::string>* to_be_removed_headers) {
+          RemoveVariationsHeaderIfNeeded(redirect_info, response_head,
+                                         to_be_removed_headers);
+        }));
   }
   return simple_url_loader;
 }
@@ -379,9 +379,18 @@ CreateSimpleURLLoaderWithVariationsHeaderUnknownSignedIn(
 }
 
 bool HasVariationsHeader(const network::ResourceRequest& request) {
-  // Note: kOmniboxOnDeviceSuggestionsHeader is not listed because this function
-  // is only used for testing.
-  return request.cors_exempt_headers.HasHeader(kClientDataHeader);
+  std::string unused_header;
+  return GetVariationsHeader(request, &unused_header);
+}
+
+bool GetVariationsHeader(const network::ResourceRequest& request,
+                         std::string* out) {
+  std::optional<std::string> header_value =
+      request.cors_exempt_headers.GetHeader(kClientDataHeader);
+  if (header_value) {
+    out->swap(header_value.value());
+  }
+  return header_value.has_value();
 }
 
 bool ShouldAppendVariationsHeaderForTesting(
@@ -393,11 +402,6 @@ bool ShouldAppendVariationsHeaderForTesting(
 void UpdateCorsExemptHeaderForVariations(
     network::mojom::NetworkContextParams* params) {
   params->cors_exempt_header_list.push_back(kClientDataHeader);
-
-  if (base::FeatureList::IsEnabled(kReportOmniboxOnDeviceSuggestionsHeader)) {
-    params->cors_exempt_header_list.push_back(
-        kOmniboxOnDeviceSuggestionsHeader);
-  }
 }
 
 }  // namespace variations

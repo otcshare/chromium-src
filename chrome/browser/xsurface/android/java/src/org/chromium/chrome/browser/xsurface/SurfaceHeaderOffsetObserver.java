@@ -4,13 +4,18 @@
 
 package org.chromium.chrome.browser.xsurface;
 
+import org.jspecify.annotations.NullMarked;
+
 /**
+ * Implemented internally.
+ *
  * Interface to listen to the offset events from the scrollable container of the current Surface.
  * Certain layouts may simulate scrolls by translating views on and offscreen. This interface tracks
  * those changes by providing a vertical offset which represents the delta from the original
  * position that is currently rendered onscreen.
  * @see org.chromium.chrome.browser.feed.ScrollListener
  */
+@NullMarked
 public interface SurfaceHeaderOffsetObserver {
     /**
      * Called when the vertical offset of the header (1st item) in the scrollable container changes.

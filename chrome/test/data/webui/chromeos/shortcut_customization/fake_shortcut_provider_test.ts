@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-test/mojo_webui_test_support.js';
+import 'chrome://webui-test/chromeos/mojo_webui_test_support.js';
 
 import {fakeAcceleratorConfig, fakeLayoutInfo} from 'chrome://shortcut-customization/js/fake_data.js';
 import {FakeShortcutProvider} from 'chrome://shortcut-customization/js/fake_shortcut_provider.js';
-import {AcceleratorConfigResult, AcceleratorSource, MojoLayoutInfo} from 'chrome://shortcut-customization/js/shortcut_types.js';
+import type {Accelerator, MojoAcceleratorConfig, MojoLayoutInfo} from 'chrome://shortcut-customization/js/shortcut_types.js';
+import {AcceleratorConfigResult, AcceleratorSource} from 'chrome://shortcut-customization/js/shortcut_types.js';
+import type {AcceleratorResultData} from 'chrome://shortcut-customization/mojom-webui/shortcut_customization.mojom-webui.js';
+import {AcceleratorsUpdatedObserverRemote, PolicyUpdatedObserverRemote} from 'chrome://shortcut-customization/mojom-webui/shortcut_customization.mojom-webui.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 suite('fakeShortcutProviderTest', function() {
@@ -20,9 +23,26 @@ suite('fakeShortcutProviderTest', function() {
     provider = null;
   });
 
+  // Fake class that overrides the `onAcceleratorsUpdated` function. This
+  // allows us to intercept the request send from the remote and validate
+  // the data received.
+  class FakeAcceleratorsUpdatedRemote extends
+      AcceleratorsUpdatedObserverRemote {
+    override onAcceleratorsUpdated(config: MojoAcceleratorConfig) {
+      assertDeepEquals(fakeAcceleratorConfig, config);
+    }
+  }
+
+  // Fake class that overrides the `onCustomizationPolicyUpdated` function. This
+  // allows us to intercept the request send from the remote and validate
+  // the data received.
+  class FakePolicyUpdatedRemote extends PolicyUpdatedObserverRemote {
+    override onCustomizationPolicyUpdated() {}
+  }
+
   function getProvider(): FakeShortcutProvider {
     assertTrue(!!provider);
-    return provider as FakeShortcutProvider;
+    return provider;
   }
   test('GetAcceleratorsEmpty', () => {
     const expected = {};
@@ -56,6 +76,28 @@ suite('fakeShortcutProviderTest', function() {
     });
   });
 
+  test('ObserveAcceleratorsUpdated', () => {
+    // Set the expected value to be returned when `onAcceleratorsUpdated()` is
+    // called.
+    getProvider().setFakeAcceleratorsUpdated([fakeAcceleratorConfig]);
+
+    const remote = new FakeAcceleratorsUpdatedRemote();
+    getProvider().addObserver(remote);
+    // Simulate `onAcceleratorsUpdated()` being called by an observer.
+    return getProvider().getAcceleratorsUpdatedPromiseForTesting();
+  });
+
+  test('ObservePolicyUpdated', () => {
+    // Set the expected value to be returned when
+    // `onCustomizationPolicyUpdated()` is called.
+    getProvider().setFakePolicyUpdated();
+
+    const remote = new FakePolicyUpdatedRemote();
+    getProvider().addPolicyObserver(remote);
+    // Simulate `onCustomizationPolicyUpdated()` being called by an observer.
+    return getProvider().getPolicyUpdatedPromiseForTesting();
+  });
+
   test('IsMutableDefaultFake', () => {
     // TODO(jimmyxgong): Remove this test once real data is ready.
     // AcceleratorSource.kAsh is a mutable source.
@@ -70,36 +112,73 @@ suite('fakeShortcutProviderTest', function() {
     });
   });
 
-  test('AddUserAcceleratorFake', () => {
+  test('AddAcceleratorFake', () => {
     // TODO(jimmyxgong): Remove this test once real data is ready.
-    return getProvider().addUserAccelerator().then((result) => {
-      assertEquals(AcceleratorConfigResult.SUCCESS, result);
-    });
+    const fakeResult: AcceleratorResultData = {
+      result: AcceleratorConfigResult.kSuccess,
+      shortcutName: null,
+    };
+
+    getProvider().setFakeAddAcceleratorResult(fakeResult);
+
+    return getProvider()
+        .addAccelerator(
+            AcceleratorSource.kAsh,
+            /*action_id=*/ 0, {} as Accelerator)
+        .then(({result}) => {
+          assertEquals(AcceleratorConfigResult.kSuccess, result.result);
+        });
   });
 
   test('ReplaceAcceleratorFake', () => {
+    const fakeResult: AcceleratorResultData = {
+      result: AcceleratorConfigResult.kSuccess,
+      shortcutName: null,
+    };
+
+    getProvider().setFakeReplaceAcceleratorResult(fakeResult);
+
     // TODO(jimmyxgong): Remove this test once real data is ready.
-    return getProvider().replaceAccelerator().then((result) => {
-      assertEquals(AcceleratorConfigResult.SUCCESS, result);
-    });
+    return getProvider()
+        .replaceAccelerator(
+            AcceleratorSource.kAsh, /*action_id=*/ 0, {} as Accelerator,
+            {} as Accelerator)
+        .then(({result}) => {
+          assertEquals(AcceleratorConfigResult.kSuccess, result.result);
+        });
   });
 
   test('RemoveAcceleratorFake', () => {
-    // TODO(jimmyxgong): Remove this test once real data is ready.
-    return getProvider().removeAccelerator().then((result) => {
-      assertEquals(AcceleratorConfigResult.SUCCESS, result);
+    const fakeResult: AcceleratorResultData = {
+      result: AcceleratorConfigResult.kSuccess,
+      shortcutName: null,
+    };
+
+    getProvider().setFakeRemoveAcceleratorResult(fakeResult);
+
+    return getProvider().removeAccelerator().then(({result}) => {
+      assertEquals(AcceleratorConfigResult.kSuccess, result.result);
     });
   });
 
   test('RestoreAllDefaultsFake', () => {
-    return getProvider().restoreAllDefaults().then((result) => {
-      assertEquals(AcceleratorConfigResult.SUCCESS, result);
+    return getProvider().restoreAllDefaults().then(({result}) => {
+      assertEquals(AcceleratorConfigResult.kSuccess, result.result);
     });
   });
 
-  test('RestoreActionDefaultsFake', () => {
-    return getProvider().restoreActionDefaults().then((result) => {
-      assertEquals(AcceleratorConfigResult.SUCCESS, result);
-    });
+  test('RestoreDefaultFake', () => {
+    const fakeResult: AcceleratorResultData = {
+      result: AcceleratorConfigResult.kSuccess,
+      shortcutName: null,
+    };
+
+    getProvider().setFakeRestoreDefaultResult(fakeResult);
+
+    return getProvider()
+        .restoreDefault(AcceleratorSource.kAsh, 0)
+        .then(({result}) => {
+          assertEquals(AcceleratorConfigResult.kSuccess, result.result);
+        });
   });
 });

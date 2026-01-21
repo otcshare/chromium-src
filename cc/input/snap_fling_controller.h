@@ -26,6 +26,7 @@ class SnapFlingCurve;
 class SnapFlingClient {
  public:
   virtual bool GetSnapFlingInfoAndSetAnimatingSnapTarget(
+      const gfx::Vector2dF& current_delta,
       const gfx::Vector2dF& natural_displacement,
       gfx::PointF* out_initial_position,
       gfx::PointF* out_target_position) const = 0;
@@ -47,6 +48,7 @@ class CC_EXPORT SnapFlingController {
   struct GestureScrollUpdateInfo {
     gfx::Vector2dF delta;
     bool is_in_inertial_phase;
+    bool is_overscroll;
     base::TimeTicks event_time;
   };
 

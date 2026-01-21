@@ -9,6 +9,7 @@
 #include "content/web_test/browser/web_test_control_host.h"
 #include "content/web_test/browser/web_test_javascript_dialog_manager.h"
 #include "content/web_test/common/web_test_switches.h"
+#include "third_party/blink/public/mojom/input/pointer_lock_result.mojom.h"
 
 namespace content {
 
@@ -41,17 +42,17 @@ WebTestShellPlatformDelegate::CreateJavaScriptDialogManager(Shell* shell) {
   return std::make_unique<WebTestJavaScriptDialogManager>();
 }
 
-bool WebTestShellPlatformDelegate::HandleRequestToLockMouse(
+bool WebTestShellPlatformDelegate::HandlePointerLockRequest(
     Shell* shell,
     WebContents* web_contents,
     bool user_gesture,
     bool last_unlocked_by_target) {
   if (!user_gesture && !last_unlocked_by_target) {
-    web_contents->GotResponseToLockMouseRequest(
+    web_contents->GotResponseToPointerLockRequest(
         blink::mojom::PointerLockResult::kRequiresUserGesture);
   }
 
-  WebTestControlHost::Get()->RequestToLockMouse(web_contents);
+  WebTestControlHost::Get()->RequestPointerLock(web_contents);
   // Always indicate that we have handled the request to lock the mouse.
   return true;
 }

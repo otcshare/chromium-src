@@ -8,7 +8,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/ui/webui/connectors_internals/connectors_internals.mojom.h"
+#include "components/enterprise/connectors/connectors_internals.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
@@ -34,10 +34,17 @@ class ConnectorsInternalsPageHandler
  private:
   // connectors_internals::mojom::ConnectorsInternalsPageHandler
   void GetDeviceTrustState(GetDeviceTrustStateCallback callback) override;
+  void DeleteDeviceTrustKey(DeleteDeviceTrustKeyCallback callback) override;
+  void GetClientCertificateState(
+      GetClientCertificateStateCallback callback) override;
+  void GetSignalsReportingState(
+      GetSignalsReportingStateCallback callback) override;
 
+#if !BUILDFLAG(IS_ANDROID)
   void OnSignalsCollected(GetDeviceTrustStateCallback callback,
                           bool is_device_trust_enabled,
                           const base::Value::Dict signals);
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   mojo::Receiver<connectors_internals::mojom::PageHandler> receiver_;
   raw_ptr<Profile> profile_;

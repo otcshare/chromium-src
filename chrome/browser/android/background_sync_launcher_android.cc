@@ -8,12 +8,8 @@
 
 #include "base/android/callback_android.h"
 #include "base/barrier_closure.h"
-#include "base/bind.h"
 #include "base/feature_list.h"
-#include "chrome/android/chrome_jni_headers/BackgroundSyncBackgroundTaskScheduler_jni.h"
-#include "chrome/android/chrome_jni_headers/BackgroundSyncBackgroundTask_jni.h"
-#include "chrome/android/chrome_jni_headers/GooglePlayServicesChecker_jni.h"
-#include "chrome/android/chrome_jni_headers/PeriodicBackgroundSyncChromeWakeUpTask_jni.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/background_sync_context.h"
@@ -21,6 +17,12 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/BackgroundSyncBackgroundTaskScheduler_jni.h"
+#include "chrome/android/chrome_jni_headers/BackgroundSyncBackgroundTask_jni.h"
+#include "chrome/android/chrome_jni_headers/GooglePlayServicesChecker_jni.h"
+#include "chrome/android/chrome_jni_headers/PeriodicBackgroundSyncChromeWakeUpTask_jni.h"
 
 using content::BrowserThread;
 
@@ -42,24 +44,25 @@ int GetBackgroundTaskType(blink::mojom::BackgroundSyncType sync_type) {
 }  // namespace
 
 // static
-void JNI_BackgroundSyncBackgroundTask_FireOneShotBackgroundSyncEvents(
+static void JNI_BackgroundSyncBackgroundTask_FireOneShotBackgroundSyncEvents(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_runnable) {
-
+    const base::android::JavaRef<jobject>& j_runnable) {
   BackgroundSyncLauncherAndroid::Get()->FireBackgroundSyncEvents(
       blink::mojom::BackgroundSyncType::ONE_SHOT, j_runnable);
 }
 
-void JNI_PeriodicBackgroundSyncChromeWakeUpTask_FirePeriodicBackgroundSyncEvents(
+static void
+JNI_PeriodicBackgroundSyncChromeWakeUpTask_FirePeriodicBackgroundSyncEvents(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_runnable) {
+    const base::android::JavaRef<jobject>& j_runnable) {
   BackgroundSyncLauncherAndroid::Get()->FireBackgroundSyncEvents(
       blink::mojom::BackgroundSyncType::PERIODIC, j_runnable);
 }
 
-void JNI_BackgroundSyncBackgroundTaskScheduler_SetPlayServicesVersionCheckDisabledForTests(
+static void
+JNI_BackgroundSyncBackgroundTaskScheduler_SetPlayServicesVersionCheckDisabledForTests(
     JNIEnv* env,
-    jboolean disabled) {
+    bool disabled) {
   BackgroundSyncLauncherAndroid::SetPlayServicesVersionCheckDisabledForTests(
       disabled);
 }
@@ -128,7 +131,7 @@ void BackgroundSyncLauncherAndroid::CancelBrowserWakeupImpl(
 
 void BackgroundSyncLauncherAndroid::FireBackgroundSyncEvents(
     blink::mojom::BackgroundSyncType sync_type,
-    const base::android::JavaParamRef<jobject>& j_runnable) {
+    const base::android::JavaRef<jobject>& j_runnable) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   auto* profile = ProfileManager::GetLastUsedProfile();
@@ -150,3 +153,8 @@ BackgroundSyncLauncherAndroid::BackgroundSyncLauncherAndroid() {
 BackgroundSyncLauncherAndroid::~BackgroundSyncLauncherAndroid() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
+
+DEFINE_JNI(BackgroundSyncBackgroundTaskScheduler)
+DEFINE_JNI(BackgroundSyncBackgroundTask)
+DEFINE_JNI(GooglePlayServicesChecker)
+DEFINE_JNI(PeriodicBackgroundSyncChromeWakeUpTask)

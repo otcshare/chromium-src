@@ -4,9 +4,10 @@
 
 #include "chromeos/ash/components/dbus/arc/arcvm_data_migrator_client.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chromeos/ash/components/dbus/arc/fake_arcvm_data_migrator_client.h"
@@ -51,6 +52,36 @@ class ArcVmDataMigratorClientImpl : public ArcVmDataMigratorClient {
       delete;
 
   // ArcVmDataMigratorClient overrides:
+  void HasDataToMigrate(
+      const arc::data_migrator::HasDataToMigrateRequest& request,
+      chromeos::DBusMethodCallback<bool> callback) override {
+    dbus::MethodCall method_call(
+        arc::data_migrator::kArcVmDataMigratorInterface,
+        arc::data_migrator::kHasDataToMigrateMethod);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendProtoAsArrayOfBytes(request);
+    proxy_->CallMethod(
+        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::BindOnce(&ArcVmDataMigratorClientImpl::OnBoolMethod,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+  }
+
+  void GetAndroidDataInfo(
+      const arc::data_migrator::GetAndroidDataInfoRequest& request,
+      GetAndroidDataInfoCallback callback) override {
+    dbus::MethodCall method_call(
+        arc::data_migrator::kArcVmDataMigratorInterface,
+        arc::data_migrator::kGetAndroidDataInfoMethod);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendProtoAsArrayOfBytes(request);
+    proxy_->CallMethod(
+        &method_call,
+        kArcVmDataMigratorGetAndroidDataInfoTimeout.InMilliseconds(),
+        base::BindOnce(
+            &ArcVmDataMigratorClientImpl::OnGetAndroidDataInfoResponse,
+            weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+  }
+
   void StartMigration(const arc::data_migrator::StartMigrationRequest& request,
                       chromeos::VoidDBusMethodCallback callback) override {
     dbus::MethodCall method_call(
@@ -91,8 +122,40 @@ class ArcVmDataMigratorClientImpl : public ArcVmDataMigratorClient {
     std::move(callback).Run(response);
   }
 
+  void OnBoolMethod(chromeos::DBusMethodCallback<bool> callback,
+                    dbus::Response* response) {
+    if (!response) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    dbus::MessageReader reader(response);
+    bool result = false;
+    if (!reader.PopBool(&result)) {
+      LOG(ERROR) << "Invalid response: " << response->ToString();
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    std::move(callback).Run(result);
+  }
+
+  void OnGetAndroidDataInfoResponse(GetAndroidDataInfoCallback callback,
+                                    dbus::Response* response) {
+    if (!response) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    dbus::MessageReader reader(response);
+    arc::data_migrator::GetAndroidDataInfoResponse proto;
+    if (!reader.PopArrayOfBytesAsProto(&proto)) {
+      LOG(ERROR) << "Invalid response: " << response->ToString();
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    std::move(callback).Run(std::move(proto));
+  }
+
   base::ObserverList<Observer> observers_;
-  dbus::ObjectProxy* proxy_;
+  raw_ptr<dbus::ObjectProxy> proxy_;
   base::WeakPtrFactory<ArcVmDataMigratorClientImpl> weak_ptr_factory_{this};
 };
 

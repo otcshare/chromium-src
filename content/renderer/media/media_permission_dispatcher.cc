@@ -4,10 +4,13 @@
 
 #include "content/renderer/media/media_permission_dispatcher.h"
 
-#include "base/bind.h"
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/notreached.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
-#include "media/base/bind_to_current_loop.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "url/gurl.h"
 
@@ -19,20 +22,18 @@ blink::mojom::PermissionDescriptorPtr MediaPermissionTypeToPermissionDescriptor(
     Type type) {
   auto descriptor = blink::mojom::PermissionDescriptor::New();
   switch (type) {
-    case Type::PROTECTED_MEDIA_IDENTIFIER:
+    case Type::kProtectedMediaIdentifier:
       descriptor->name =
           blink::mojom::PermissionName::PROTECTED_MEDIA_IDENTIFIER;
       break;
-    case Type::AUDIO_CAPTURE:
+    case Type::kAudioCapture:
       descriptor->name = blink::mojom::PermissionName::AUDIO_CAPTURE;
       break;
-    case Type::VIDEO_CAPTURE:
+    case Type::kVideoCapture:
       descriptor->name = blink::mojom::PermissionName::VIDEO_CAPTURE;
       break;
     default:
-      NOTREACHED() << type;
-      descriptor->name =
-          blink::mojom::PermissionName::PROTECTED_MEDIA_IDENTIFIER;
+      NOTREACHED() << std::to_underlying(type);
   }
   return descriptor;
 }
@@ -54,13 +55,13 @@ MediaPermissionDispatcher::~MediaPermissionDispatcher() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   // Clean up pending requests.
-  OnConnectionError();
+  OnPermissionServiceConnectionError();
 }
 
 void MediaPermissionDispatcher::OnNavigation() {
   // Behave as if there were a connection error. The browser process will be
   // closing the connection imminently.
-  OnConnectionError();
+  OnPermissionServiceConnectionError();
 }
 
 void MediaPermissionDispatcher::HasPermission(
@@ -68,10 +69,10 @@ void MediaPermissionDispatcher::HasPermission(
     PermissionStatusCB permission_status_cb) {
   if (!task_runner_->RunsTasksInCurrentSequence()) {
     task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            &MediaPermissionDispatcher::HasPermission, weak_ptr_, type,
-            media::BindToCurrentLoop(std::move(permission_status_cb))));
+        FROM_HERE, base::BindOnce(&MediaPermissionDispatcher::HasPermission,
+                                  weak_ptr_, type,
+                                  base::BindPostTaskToCurrentDefault(
+                                      std::move(permission_status_cb))));
     return;
   }
 
@@ -91,10 +92,10 @@ void MediaPermissionDispatcher::RequestPermission(
     PermissionStatusCB permission_status_cb) {
   if (!task_runner_->RunsTasksInCurrentSequence()) {
     task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            &MediaPermissionDispatcher::RequestPermission, weak_ptr_, type,
-            media::BindToCurrentLoop(std::move(permission_status_cb))));
+        FROM_HERE, base::BindOnce(&MediaPermissionDispatcher::RequestPermission,
+                                  weak_ptr_, type,
+                                  base::BindPostTaskToCurrentDefault(
+                                      std::move(permission_status_cb))));
     return;
   }
 
@@ -128,10 +129,11 @@ uint32_t MediaPermissionDispatcher::RegisterCallback(
 blink::mojom::PermissionService*
 MediaPermissionDispatcher::GetPermissionService() {
   if (!permission_service_) {
-    render_frame_->GetBrowserInterfaceBroker()->GetInterface(
+    render_frame_->GetBrowserInterfaceBroker().GetInterface(
         permission_service_.BindNewPipeAndPassReceiver());
     permission_service_.set_disconnect_handler(base::BindOnce(
-        &MediaPermissionDispatcher::OnConnectionError, base::Unretained(this)));
+        &MediaPermissionDispatcher::OnPermissionServiceConnectionError,
+        base::Unretained(this)));
   }
 
   return permission_service_.get();
@@ -144,7 +146,7 @@ void MediaPermissionDispatcher::OnPermissionStatus(
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   auto iter = requests_.find(request_id);
-  DCHECK(iter != requests_.end()) << "Request not found.";
+  CHECK(iter != requests_.end());
 
   PermissionStatusCB permission_status_cb = std::move(iter->second);
   requests_.erase(iter);
@@ -153,7 +155,32 @@ void MediaPermissionDispatcher::OnPermissionStatus(
       .Run(status == blink::mojom::PermissionStatus::GRANTED);
 }
 
-void MediaPermissionDispatcher::OnConnectionError() {
+#if BUILDFLAG(IS_WIN)
+void MediaPermissionDispatcher::IsHardwareSecureDecryptionAllowed(
+    IsHardwareSecureDecryptionAllowedCB cb) {
+  GetMediaFoundationPreferences()->IsHardwareSecureDecryptionAllowed(
+      std::move(cb));
+}
+
+media::mojom::MediaFoundationPreferences*
+MediaPermissionDispatcher::GetMediaFoundationPreferences() {
+  if (!mf_preferences_) {
+    render_frame_->GetBrowserInterfaceBroker().GetInterface(
+        mf_preferences_.BindNewPipeAndPassReceiver());
+    mf_preferences_.set_disconnect_handler(base::BindOnce(
+        &MediaPermissionDispatcher::OnMediaFoundationPreferencesConnectionError,
+        base::Unretained(this)));
+  }
+
+  return mf_preferences_.get();
+}
+
+void MediaPermissionDispatcher::OnMediaFoundationPreferencesConnectionError() {
+  mf_preferences_.reset();
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+void MediaPermissionDispatcher::OnPermissionServiceConnectionError() {
   permission_service_.reset();
 
   // Fire all pending callbacks with |false|.

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/notimplemented.h"
 #include "remoting/codec/video_encoder.h"
 #include "remoting/protocol/audio_source.h"
 #include "remoting/protocol/audio_stream.h"
@@ -39,6 +40,8 @@ void FakeVideoStream::SetMouseCursor(
 void FakeVideoStream::SetMouseCursorPosition(
     const webrtc::DesktopVector& position) {}
 
+void FakeVideoStream::SetTargetFramerate(int framerate) {}
+
 webrtc::ScreenId FakeVideoStream::selected_source() const {
   return selected_source_;
 }
@@ -56,8 +59,13 @@ void FakeConnectionToClient::SetEventHandler(EventHandler* event_handler) {
   event_handler_ = event_handler;
 }
 
+void FakeConnectionToClient::ApplyNetworkSettings(
+    const NetworkSettings& settings) {
+  network_settings_ = settings;
+}
+
 std::unique_ptr<VideoStream> FakeConnectionToClient::StartVideoStream(
-    const std::string& stream_name,
+    webrtc::ScreenId screen_id,
     std::unique_ptr<DesktopCapturer> desktop_capturer) {
   desktop_capturer_ = std::move(desktop_capturer);
   if (video_stub_ && video_encode_task_runner_) {
@@ -86,13 +94,16 @@ ClientStub* FakeConnectionToClient::client_stub() {
   return client_stub_;
 }
 
-void FakeConnectionToClient::Disconnect(ErrorCode disconnect_error) {
+void FakeConnectionToClient::Disconnect(ErrorCode disconnect_error,
+                                        std::string_view error_details,
+                                        const SourceLocation& error_location) {
   CHECK(is_connected_);
 
   is_connected_ = false;
   disconnect_error_ = disconnect_error;
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnConnectionClosed(disconnect_error_);
+  }
 }
 
 Session* FakeConnectionToClient::session() {

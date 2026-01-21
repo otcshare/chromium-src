@@ -5,8 +5,15 @@
 #ifndef UI_ACCESSIBILITY_AX_TREE_OBSERVER_H_
 #define UI_ACCESSIBILITY_AX_TREE_OBSERVER_H_
 
+#include <stdint.h>
+
+#include <string>
+#include <vector>
+
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_export.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -126,6 +133,8 @@ class AX_EXPORT AXTreeObserver : public base::CheckedObserver {
 
   // Called after all tree mutations have occurred or during tree teardown,
   // notifying that a single node has been deleted from the tree.
+  // TODO(crbug.com/366338645): Migrate AXTree observers to use
+  // OnNodeWillBeDeleted.
   virtual void OnNodeDeleted(AXTree* tree, AXNodeID node_id) {}
 
   // Same as |OnNodeCreated|, but called for nodes that have been reparented.
@@ -137,6 +146,10 @@ class AX_EXPORT AXTreeObserver : public base::CheckedObserver {
   // updating.
   virtual void OnNodeChanged(AXTree* tree, AXNode* node) {}
 
+  // Called when a child tree hosted by `host_node` is connected or
+  // disconnected.
+  virtual void OnChildTreeConnectionChanged(AXNode* host_node) {}
+
   // Called just before a tree manager is removed from the AXTreeManagerMap.
   //
   // Why is this needed?
@@ -145,6 +158,9 @@ class AX_EXPORT AXTreeObserver : public base::CheckedObserver {
   // observers list of that AXTree might need to be notified of that change to
   // remove themselves from the list, if needed.
   virtual void OnTreeManagerWillBeRemoved(AXTreeID previous_tree_id) {}
+
+  virtual void OnTextDeletionOrInsertion(const AXNode& node,
+                                         const AXNodeData& new_data) {}
 
   enum ChangeType {
     NODE_CREATED,
@@ -162,6 +178,20 @@ class AX_EXPORT AXTreeObserver : public base::CheckedObserver {
     raw_ptr<AXNode> node;
     ChangeType type;
   };
+
+  // Called just before the atomic update is committed. This is the last
+  // notification, after all individual nodes and subtree are notified of
+  // upcoming operations. Observers will receive a list of nodes to be deleted
+  // in `deleting_nodes` and a list of nodes to be reparented in
+  // `reparenting_nodes`. Here they have a last chance to clear any pointers
+  // they may be holding to AXNodes. After this call nodes may be deleted or
+  // reparented at any point, thus making node pointers to dangle. After the
+  // update happens, the changes applied will be available in
+  // `OnAtomicUpdateFinished()`.
+  virtual void OnAtomicUpdateStarting(
+      AXTree* tree,
+      const absl::flat_hash_set<AXNodeID>& deleting_nodes,
+      const absl::flat_hash_set<AXNodeID>& reparenting_nodes) {}
 
   // Called at the end of the update operation. Every node that was added
   // or changed will be included in |changes|, along with an enum indicating

@@ -17,12 +17,12 @@ using AmbientContainerViewTest = AmbientAshTestBase;
 
 // Tests that AmbientContainerView window should be fullscreen.
 TEST_F(AmbientContainerViewTest, WindowFullscreenSize) {
-  ShowAmbientScreen();
+  SetAmbientShownAndWaitForWidgets();
   for (const auto* container : GetContainerViews()) {
     const views::Widget* widget = container->GetWidget();
 
     gfx::Rect root_window_bounds =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayNearestWindow(
                 widget->GetNativeWindow()->GetRootWindow())
             .bounds();

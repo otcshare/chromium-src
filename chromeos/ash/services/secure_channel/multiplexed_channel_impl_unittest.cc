@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/services/secure_channel/connection_details.h"
@@ -51,7 +51,7 @@ class FakeSingleClientProxyImplFactory : public SingleClientProxyImpl::Factory {
   // Contains all created FakeSingleClientProxy pointers which have not
   // yet been deleted.
   std::unordered_map<base::UnguessableToken,
-                     FakeSingleClientProxy*,
+                     raw_ptr<FakeSingleClientProxy, CtnExperimental>,
                      base::UnguessableTokenHash>&
   id_to_active_proxy_map() {
     return id_to_active_proxy_map_;
@@ -89,9 +89,10 @@ class FakeSingleClientProxyImplFactory : public SingleClientProxyImpl::Factory {
     EXPECT_EQ(1u, num_deleted);
   }
 
-  SingleClientProxy::Delegate* expected_delegate_ = nullptr;
+  raw_ptr<SingleClientProxy::Delegate, DanglingUntriaged> expected_delegate_ =
+      nullptr;
   std::unordered_map<base::UnguessableToken,
-                     FakeSingleClientProxy*,
+                     raw_ptr<FakeSingleClientProxy, CtnExperimental>,
                      base::UnguessableTokenHash>
       id_to_active_proxy_map_;
 };
@@ -191,7 +192,7 @@ class SecureChannelMultiplexedChannelImplTest : public testing::Test {
   }
 
   bool HasMessageBeenSent(int message_counter) {
-    return base::Contains(sent_message_counters_, message_counter);
+    return sent_message_counters_.contains(message_counter);
   }
 
   void DisconnectClientAndVerifyState(FakeSingleClientProxy* sending_proxy,
@@ -204,7 +205,7 @@ class SecureChannelMultiplexedChannelImplTest : public testing::Test {
     base::UnguessableToken proxy_id = sending_proxy->GetProxyId();
 
     // All relevant parties should still indicate that the connection is valid.
-    EXPECT_TRUE(base::Contains(id_to_active_proxy_map(), proxy_id));
+    EXPECT_TRUE(id_to_active_proxy_map().contains(proxy_id));
     EXPECT_FALSE(
         fake_authenticated_channel_->has_disconnection_been_requested());
     EXPECT_FALSE(multiplexed_channel_->IsDisconnecting());
@@ -213,7 +214,7 @@ class SecureChannelMultiplexedChannelImplTest : public testing::Test {
 
     // Disconnecting the client should result in the proxy being deleted.
     sending_proxy->NotifyClientDisconnected();
-    EXPECT_FALSE(base::Contains(id_to_active_proxy_map(), proxy_id));
+    EXPECT_FALSE(id_to_active_proxy_map().contains(proxy_id));
 
     if (!is_last_client)
       return;
@@ -280,7 +281,7 @@ class SecureChannelMultiplexedChannelImplTest : public testing::Test {
   }
 
   std::unordered_map<base::UnguessableToken,
-                     FakeSingleClientProxy*,
+                     raw_ptr<FakeSingleClientProxy, CtnExperimental>,
                      base::UnguessableTokenHash>&
   id_to_active_proxy_map() {
     return fake_proxy_factory_->id_to_active_proxy_map();
@@ -311,7 +312,8 @@ class SecureChannelMultiplexedChannelImplTest : public testing::Test {
 
   std::vector<std::unique_ptr<ClientConnectionParameters>> initial_client_list_;
 
-  FakeAuthenticatedChannel* fake_authenticated_channel_ = nullptr;
+  raw_ptr<FakeAuthenticatedChannel, DanglingUntriaged>
+      fake_authenticated_channel_ = nullptr;
   std::unique_ptr<FakeMultiplexedChannelDelegate> fake_delegate_;
 
   std::unique_ptr<MultiplexedChannel> multiplexed_channel_;

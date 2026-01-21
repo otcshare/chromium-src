@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/command_buffer/service/raster_decoder_unittest_base.h"
 
 #include <stddef.h>
@@ -13,11 +18,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "components/viz/common/resources/resource_format_utils.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/common/raster_cmd_format.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -26,9 +30,7 @@
 #include "gpu/command_buffer/service/copy_texture_chromium_mock.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/program_manager.h"
-#include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/gl_texture_image_backing_factory.h"
 #include "gpu/command_buffer/service/test_helper.h"
@@ -78,7 +80,9 @@ void RasterDecoderTestBase::CacheBlob(gpu::GpuDiskCacheType type,
 void RasterDecoderTestBase::OnFenceSyncRelease(uint64_t release) {}
 void RasterDecoderTestBase::OnDescheduleUntilFinished() {}
 void RasterDecoderTestBase::OnRescheduleAfterFinished() {}
-void RasterDecoderTestBase::OnSwapBuffers(uint64_t swap_id, uint32_t flags) {}
+bool RasterDecoderTestBase::ShouldYield() {
+  return false;
+}
 
 void RasterDecoderTestBase::SetUp() {
   InitDecoder(InitState());
@@ -112,6 +116,9 @@ void RasterDecoderTestBase::InitDecoder(const InitState& init) {
   // in turn initialize FeatureInfo, which needs a context to determine
   // extension support.
   context_ = new StrictMock<GLContextMock>();
+  // The stub ctx needs to be initialized so that the gl::GLContext can
+  // store the offscreen stub |surface|.
+  context_->Initialize(surface_.get(), {});
   context_->SetExtensionsString(all_extensions.c_str());
   context_->SetGLVersionString(init.gl_version.c_str());
 
@@ -124,8 +131,7 @@ void RasterDecoderTestBase::InitDecoder(const InitState& init) {
       gl_.get(), all_extensions.c_str(), "", init.gl_version.c_str(),
       context_type);
   feature_info_->Initialize(context_type,
-                            gpu_preferences_.use_passthrough_cmd_decoder &&
-                                gles2::PassthroughCommandDecoderSupported(),
+                            gpu_preferences_.use_passthrough_cmd_decoder,
                             gles2::DisallowedFeatures());
 
   // Setup expectations for SharedContextState::InitializeGL().
@@ -152,21 +158,16 @@ void RasterDecoderTestBase::InitDecoder(const InitState& init) {
 
   command_buffer_service_ = std::make_unique<FakeCommandBufferServiceBase>();
 
-  decoder_.reset(RasterDecoder::Create(
+  decoder_ = RasterDecoder::Create(
       this, command_buffer_service_.get(), &outputter_, gpu_feature_info,
-      gpu_preferences_, nullptr /* memory_tracker */, &shared_image_manager_,
-      shared_context_state_, true /* is_privileged */));
+      gpu_preferences_, /*memory_tracker=*/nullptr, &shared_image_manager_,
+      shared_context_state_, /*is_privileged=*/true);
   decoder_->SetIgnoreCachedStateForTest(ignore_cached_state_for_test_);
   decoder_->DisableFlushWorkaroundForTest();
   decoder_->GetLogger()->set_log_synthesized_gl_errors(false);
 
-  ContextCreationAttribs attribs;
-  attribs.lose_context_when_out_of_memory =
-      init.lose_context_when_out_of_memory;
-  attribs.context_type = context_type;
-
-  ASSERT_EQ(decoder_->Initialize(surface_, shared_context_state_->context(),
-                                 true, gles2::DisallowedFeatures(), attribs),
+  ASSERT_EQ(decoder_->Initialize(/*lose_context_when_out_of_memory=*/init
+                                     .lose_context_when_out_of_memory),
             gpu::ContextResult::kSuccess);
 
   EXPECT_CALL(*context_, MakeCurrentImpl(surface_.get()))

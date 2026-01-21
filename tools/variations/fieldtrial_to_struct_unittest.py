@@ -2,10 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import os
 import unittest
 
 import fieldtrial_to_struct
-import os
 
 
 class FieldTrialToStruct(unittest.TestCase):
@@ -18,112 +18,6 @@ class FieldTrialToStruct(unittest.TestCase):
     return base_path + relative_path
 
   def test_FieldTrialToDescription(self):
-    config = {
-      'Trial1': [
-        {
-          'platforms': ['windows'],
-          'experiments': [
-            {
-              'name': 'Group1',
-              'params': {
-                'x': '1',
-                'y': '2'
-              },
-              'enable_features': ['A', 'B'],
-              'disable_features': ['C']
-            },
-            {
-              'name': 'Group2',
-              'params': {
-                'x': '3',
-                'y': '4'
-              },
-              'enable_features': ['D', 'E'],
-              'disable_features': ['F']
-            },
-          ]
-        }
-      ],
-      'Trial2': [
-        {
-          'platforms': ['windows'],
-          'experiments': [{'name': 'OtherGroup'}]
-        }
-      ],
-      'TrialWithForcingFlag':  [
-        {
-          'platforms': ['windows'],
-          'experiments': [
-            {
-              'name': 'ForcedGroup',
-              'forcing_flag': "my-forcing-flag"
-            }
-          ]
-        }
-      ]
-    }
-    result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        config, ['windows'], False)
-    expected = {
-      'elements': {
-        'kFieldTrialConfig': {
-          'studies': [
-            {
-              'name': 'Trial1',
-              'experiments': [
-                {
-                  'name': 'Group1',
-                  'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'params': [
-                    {'key': 'x', 'value': '1'},
-                    {'key': 'y', 'value': '2'}
-                  ],
-                  'enable_features': ['A', 'B'],
-                  'disable_features': ['C'],
-                  'form_factors': [],
-                },
-                {
-                  'name': 'Group2',
-                  'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'params': [
-                    {'key': 'x', 'value': '3'},
-                    {'key': 'y', 'value': '4'}
-                  ],
-                  'enable_features': ['D', 'E'],
-                  'disable_features': ['F'],
-                  'form_factors': [],
-                },
-              ],
-            },
-            {
-              'name': 'Trial2',
-              'experiments': [
-                {
-                  'name': 'OtherGroup',
-                  'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'form_factors': [],
-                }
-              ]
-            },
-            {
-              'name': 'TrialWithForcingFlag',
-              'experiments': [
-                  {
-                    'name': 'ForcedGroup',
-                    'platforms': ['Study::PLATFORM_WINDOWS'],
-                    'forcing_flag': "my-forcing-flag",
-                    'form_factors': [],
-                  }
-              ]
-            },
-          ]
-        }
-      }
-    }
-    self.maxDiff = None
-    self.assertEqual(expected, result)
-
-  def test_FieldTrialToDescriptionInvert(self):
     config = {
         'Trial1': [{
             'platforms': ['windows'],
@@ -158,12 +52,12 @@ class FieldTrialToStruct(unittest.TestCase):
             'platforms': ['windows'],
             'experiments': [{
                 'name': 'ForcedGroup',
-                'forcing_flag': "my-forcing-flag"
+                'forcing_flag': 'my-forcing-flag'
             }]
         }]
     }
     result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        config, ['windows'], True)
+        config, ['windows'])
     expected = {
         'elements': {
             'kFieldTrialConfig': {
@@ -183,8 +77,8 @@ class FieldTrialToStruct(unittest.TestCase):
                                     'key': 'y',
                                     'value': '2'
                                 }],
-                                'enable_features': ['C'],
-                                'disable_features': ['A', 'B'],
+                                'enable_features': ['A', 'B'],
+                                'disable_features': ['C'],
                                 'form_factors': [],
                             },
                             {
@@ -198,8 +92,8 @@ class FieldTrialToStruct(unittest.TestCase):
                                     'key': 'y',
                                     'value': '4'
                                 }],
-                                'enable_features': ['F'],
-                                'disable_features': ['D', 'E'],
+                                'enable_features': ['D', 'E'],
+                                'disable_features': ['F'],
                                 'form_factors': [],
                             },
                         ],
@@ -219,7 +113,7 @@ class FieldTrialToStruct(unittest.TestCase):
                         'experiments': [{
                             'name': 'ForcedGroup',
                             'platforms': ['Study::PLATFORM_WINDOWS'],
-                            'forcing_flag': "my-forcing-flag",
+                            'forcing_flag': 'my-forcing-flag',
                             'form_factors': [],
                         }]
                     },
@@ -275,7 +169,7 @@ class FieldTrialToStruct(unittest.TestCase):
 
   def test_FieldTrialToDescriptionMultipleSinglePlatformMultipleTrial(self):
     result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        self._MULTIPLE_PLATFORM_CONFIG, ['ios'], False)
+        self._MULTIPLE_PLATFORM_CONFIG, ['ios'])
     expected = {
       'elements': {
         'kFieldTrialConfig': {
@@ -323,7 +217,7 @@ class FieldTrialToStruct(unittest.TestCase):
 
   def test_FieldTrialToDescriptionMultipleSinglePlatformSingleTrial(self):
     result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        self._MULTIPLE_PLATFORM_CONFIG, ['mac'], False)
+        self._MULTIPLE_PLATFORM_CONFIG, ['mac'])
     expected = {
       'elements': {
         'kFieldTrialConfig': {
@@ -364,7 +258,7 @@ class FieldTrialToStruct(unittest.TestCase):
 
   def test_FieldTrialToDescriptionMultipleFormFactorsTrial(self):
     result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        self._MULTIPLE_FORM_FACTORS_CONFIG, ['windows'], False)
+        self._MULTIPLE_FORM_FACTORS_CONFIG, ['windows'])
     expected = {
       'elements': {
         'kFieldTrialConfig': {
@@ -396,91 +290,77 @@ class FieldTrialToStruct(unittest.TestCase):
     self.maxDiff = None
     self.assertEqual(expected, result)
 
-  _MULTIPLE_OVERRIDE_UI_STRING_CONFIG = {
-    'Trial1': [
-      {
-        'platforms': ['windows'],
-        'experiments': [
-          {
-            'name': 'Group1',
-            'override_ui_strings': {
-              'IDS_NEW_TAB_TITLE': 'test1',
-              'IDS_SAD_TAB_TITLE': 'test2',
-            },
-          },
-        ]
-      }
-    ],
-    'Trial2': [
-      {
-        'platforms': ['windows'],
-        'experiments': [
-          {
-            'name': 'Group2',
-            'override_ui_strings': {
-              'IDS_DEFAULT_TAB_TITLE': 'test3',
-            },
-          }
-        ]
-      }
-    ]
+  _DISABLE_BENCHMARKING_CONFIG = {
+      'Trial1': [{
+          'platforms': ['windows'],
+          'experiments': [
+              {
+                  'name': 'Group1',
+                  'disable_benchmarking': True,
+              },
+          ]
+      }],
+      'Trial2': [{
+          'platforms': ['windows'],
+          'experiments': [{
+              'name': 'Group2',
+              'disable_benchmarking': False,
+          }]
+      }],
+      'Trial3': [{
+          'platforms': ['windows'],
+          'experiments': [{
+              'name': 'Group3',
+          }]
+      }]
   }
 
-  def test_FieldTrialToDescriptionMultipleOverrideUIStringTrial(self):
+  def test_FieldTrialToDescriptionWithDisableBenchmarkingTrial(self):
     result = fieldtrial_to_struct._FieldTrialConfigToDescription(
-        self._MULTIPLE_OVERRIDE_UI_STRING_CONFIG, ['windows'], False)
+        self._DISABLE_BENCHMARKING_CONFIG, ['windows'])
     expected = {
-      'elements': {
-        'kFieldTrialConfig': {
-          'studies': [
-            {
-              'name': 'Trial1',
-              'experiments': [
-                {
-                  'name': 'Group1',
-                  'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'override_ui_string': [
-                    {
-                      'name_hash':
-                        4045341670,
-                      'value': 'test1'
-                    },
-                    {
-                      'name_hash':
-                        1173727369,
-                      'value': 'test2'
-                    },
-                  ],
-                  'form_factors': [],
-                },
-              ],
-            },
-            {
-              'name': 'Trial2',
-              'experiments': [
-                {
-                  'name': 'Group2',
-                  'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'override_ui_string': [
-                    {
-                      'name_hash':
-                        3477264953,
-                      'value': 'test3'
-                    },
-                  ],
-                  'form_factors': [],
-                },
-              ],
+        'elements': {
+            'kFieldTrialConfig': {
+                'studies': [{
+                    'name':
+                    'Trial1',
+                    'experiments': [
+                        {
+                            'name': 'Group1',
+                            'platforms': ['Study::PLATFORM_WINDOWS'],
+                            'disable_benchmarking': True,
+                            'form_factors': [],
+                        },
+                    ],
+                }, {
+                    'name':
+                    'Trial2',
+                    'experiments': [
+                        {
+                            'name': 'Group2',
+                            'platforms': ['Study::PLATFORM_WINDOWS'],
+                            'form_factors': [],
+                        },
+                    ],
+                }, {
+                    'name':
+                    'Trial3',
+                    'experiments': [
+                        {
+                            'name': 'Group3',
+                            'platforms': ['Study::PLATFORM_WINDOWS'],
+                            'form_factors': [],
+                        },
+                    ],
+                }]
             }
-          ]
         }
-      }
     }
     self.maxDiff = None
     self.assertEqual(expected, result)
 
   def test_FieldTrialToStructMain(self):
-
+    self.maxDiff = None
     schema = self.FullRelativePath(
               '/../../components/variations/field_trial_config/'
               'field_trial_testing_config_schema.json')

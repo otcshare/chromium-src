@@ -7,8 +7,8 @@
 
 #include "build/build_config.h"
 #include "components/spellcheck/common/spellcheck.mojom.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "components/spellcheck/browser/spellchecker_session_bridge_android.h"
@@ -35,7 +35,6 @@ class SpellCheckHostImpl : public spellcheck::mojom::SpellCheckHost {
 
  protected:
   // spellcheck::mojom::SpellCheckHost:
-  void RequestDictionary() override;
   void NotifyChecked(const std::u16string& word, bool misspelled) override;
 
 #if BUILDFLAG(USE_RENDERER_SPELLCHECKER)
@@ -44,15 +43,10 @@ class SpellCheckHostImpl : public spellcheck::mojom::SpellCheckHost {
 #endif  // BUILDFLAG(USE_RENDERER_SPELLCHECKER)
 
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER) && !BUILDFLAG(ENABLE_SPELLING_SERVICE)
-  void RequestTextCheck(const std::u16string& text,
-                        int route_id,
-                        RequestTextCheckCallback callback) override;
-
-  void CheckSpelling(const std::u16string& word,
-                     int route_id,
-                     CheckSpellingCallback callback) override;
-  void FillSuggestionList(const std::u16string& word,
-                          FillSuggestionListCallback callback) override;
+  void RequestTextCheck(
+      const std::u16string& text,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+      RequestTextCheckCallback callback) override;
 
 #if BUILDFLAG(IS_WIN)
   void InitializeDictionaries(InitializeDictionariesCallback callback) override;

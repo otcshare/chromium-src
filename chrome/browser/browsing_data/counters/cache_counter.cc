@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/browsing_data/counters/cache_counter.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/browsing_data/content/conditional_cache_counting_helper.h"
 #include "components/browsing_data/core/pref_names.h"
@@ -22,12 +22,11 @@ CacheCounter::CacheResult::CacheResult(const CacheCounter* source,
       cache_size_(cache_size),
       is_upper_limit_(is_upper_limit) {}
 
-CacheCounter::CacheResult::~CacheResult() {}
+CacheCounter::CacheResult::~CacheResult() = default;
 
 CacheCounter::CacheCounter(Profile* profile) : profile_(profile) {}
 
-CacheCounter::~CacheCounter() {
-}
+CacheCounter::~CacheCounter() = default;
 
 const char* CacheCounter::GetPrefName() const {
   return GetTab() == browsing_data::ClearBrowsingDataTab::BASIC

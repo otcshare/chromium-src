@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "media/audio/mock_audio_debug_recording_manager.h"
 #include "media/base/audio_parameters.h"
 
@@ -79,11 +79,6 @@ void MockAudioManager::RemoveOutputDeviceChangeListener(
     AudioDeviceListener* listener) {
 }
 
-AudioParameters MockAudioManager::GetDefaultOutputStreamParameters() {
-  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-  return default_output_params_;
-}
-
 AudioParameters MockAudioManager::GetOutputStreamParameters(
       const std::string& device_id) {
   DCHECK(GetTaskRunner()->BelongsToCurrentThread());
@@ -146,8 +141,8 @@ void MockAudioManager::SetAecDumpRecordingManager(
   // This is no-op by default.
 }
 
-const char* MockAudioManager::GetName() {
-  return nullptr;
+const std::string_view MockAudioManager::GetName() {
+  return "Mock";
 }
 
 void MockAudioManager::SetMakeOutputStreamCB(MakeOutputStreamCallback cb) {
@@ -195,4 +190,4 @@ void MockAudioManager::SetAssociatedOutputDeviceIDCallback(
   get_associated_output_device_id_cb_ = std::move(callback);
 }
 
-}  // namespace media.
+}  // namespace media

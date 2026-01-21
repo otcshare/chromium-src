@@ -4,7 +4,7 @@
 
 #include "chrome/browser/sessions/session_restore_test_helper.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -15,8 +15,7 @@ SessionRestoreTestHelper::SessionRestoreTestHelper()
                           weak_ptr_factory.GetWeakPtr()));
 }
 
-SessionRestoreTestHelper::~SessionRestoreTestHelper() {
-}
+SessionRestoreTestHelper::~SessionRestoreTestHelper() = default;
 
 void SessionRestoreTestHelper::Wait() {
   if (restore_notification_seen_)

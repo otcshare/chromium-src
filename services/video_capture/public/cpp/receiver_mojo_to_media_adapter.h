@@ -17,21 +17,21 @@ namespace video_capture {
 // a media::VideoFrameReceiver.
 class ReceiverMojoToMediaAdapter : public media::VideoFrameReceiver {
  public:
-  ReceiverMojoToMediaAdapter(mojo::Remote<mojom::VideoFrameHandler> handler);
+  explicit ReceiverMojoToMediaAdapter(
+      mojo::Remote<mojom::VideoFrameHandler> handler);
   ~ReceiverMojoToMediaAdapter() override;
 
   base::WeakPtr<media::VideoFrameReceiver> GetWeakPtr();
 
   // media::VideoFrameReceiver implementation.
+  void OnCaptureConfigurationChanged() override;
   void OnNewBuffer(int buffer_id,
                    media::mojom::VideoBufferHandlePtr buffer_handle) override;
-  void OnFrameReadyInBuffer(
-      media::ReadyFrameInBuffer frame,
-      std::vector<media::ReadyFrameInBuffer> scaled_frames) override;
+  void OnFrameReadyInBuffer(media::ReadyFrameInBuffer frame) override;
   void OnBufferRetired(int buffer_id) override;
   void OnError(media::VideoCaptureError error) override;
   void OnFrameDropped(media::VideoCaptureFrameDropReason reason) override;
-  void OnNewCropVersion(uint32_t crop_version) override;
+  void OnNewCaptureVersion(media::CaptureVersion capture_version) override;
   void OnFrameWithEmptyRegionCapture() override;
   void OnLog(const std::string& message) override;
   void OnStarted() override;

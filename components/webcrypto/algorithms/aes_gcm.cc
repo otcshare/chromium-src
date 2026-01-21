@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "components/webcrypto/algorithms/aes.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/blink_key_handle.h"
@@ -38,7 +37,7 @@ Status AesGcmEncryptDecrypt(EncryptOrDecrypt mode,
                             base::span<const uint8_t> data,
                             std::vector<uint8_t>* buffer) {
   const std::vector<uint8_t>& raw_key = GetSymmetricKeyData(key);
-  const blink::WebCryptoAesGcmParams* params = algorithm.AesGcmParams();
+  const blink::WebCryptoAeadParams* params = algorithm.AeadParams();
 
   // The WebCrypto spec defines the default value for the tag length, as well as
   // the allowed values for tag length.

@@ -13,8 +13,6 @@ PasswordBubbleControllerBase::PasswordBubbleControllerBase(
     base::WeakPtr<PasswordsModelDelegate> delegate,
     password_manager::metrics_util::UIDisplayDisposition display_disposition)
     : metrics_recorder_(delegate->GetPasswordFormMetricsRecorder()),
-      are_passwords_revealed_when_bubble_is_opened_(
-          delegate->ArePasswordsRevealedWhenBubbleIsOpened()),
       delegate_(std::move(delegate)) {
   if (metrics_recorder_) {
     metrics_recorder_->RecordPasswordBubbleShown(
@@ -31,18 +29,31 @@ PasswordBubbleControllerBase::~PasswordBubbleControllerBase() {
 }
 
 void PasswordBubbleControllerBase::OnBubbleClosing() {
-  // This method can be reentered from OnBubbleHidden() below. Reset the things
-  // before calling it.
-  if (!std::exchange(interaction_reported_, true))
+  if (!std::exchange(interaction_reported_, true)) {
     ReportInteractions();
-  if (delegate_)
+  }
+  if (delegate_) {
     std::exchange(delegate_, nullptr)->OnBubbleHidden();
+  }
+}
+
+void PasswordBubbleControllerBase::OnMouseEntered() {
+  if (delegate_) {
+    delegate_->OnMouseEntered();
+  }
+}
+
+void PasswordBubbleControllerBase::OnMouseExited() {
+  if (delegate_) {
+    delegate_->OnMouseExited();
+  }
 }
 
 Profile* PasswordBubbleControllerBase::GetProfile() const {
   content::WebContents* web_contents = GetWebContents();
-  if (!web_contents)
+  if (!web_contents) {
     return nullptr;
+  }
   return Profile::FromBrowserContext(web_contents->GetBrowserContext());
 }
 

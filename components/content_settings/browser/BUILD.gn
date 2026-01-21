@@ -11,10 +11,11 @@ source_set("browser") {
   ]
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
     "//components/browsing_data/content",
+    "//components/browsing_data/core",
     "//components/content_settings/common:mojom",
     "//components/content_settings/core/browser",
+    "//components/content_settings/core/browser:cookie_settings",
     "//components/content_settings/core/common",
     "//components/page_load_metrics/browser",
     "//components/prefs",
@@ -45,6 +46,8 @@ source_set("unit_tests") {
     ":browser",
     ":test_support",
     "//base",
+    "//components/browsing_data/content",
+    "//components/browsing_data/core",
     "//components/content_settings/core/browser",
     "//components/security_state/core",
     "//components/services/storage/public/cpp",

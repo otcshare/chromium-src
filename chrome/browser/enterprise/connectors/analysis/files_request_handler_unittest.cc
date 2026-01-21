@@ -9,38 +9,39 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
-#include "base/run_loop.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/strings/to_string.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "chrome/browser/enterprise/connectors/analysis/content_analysis_delegate.h"
-#include "chrome/browser/enterprise/connectors/analysis/fake_content_analysis_delegate.h"
-#include "chrome/browser/enterprise/connectors/analysis/fake_files_request_handler.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_info.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
+#include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
+#include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
+#include "chrome/browser/enterprise/connectors/test/fake_files_request_handler.h"
 #include "chrome/browser/policy/dm_token_utils.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_test_utils.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
-#include "components/prefs/scoped_user_pref_update.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
+#include "components/file_access/test/mock_scoped_file_access_delegate.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/safe_browsing/core/common/features.h"
-#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
@@ -52,6 +53,8 @@ namespace {
 
 constexpr char kDmToken[] = "dm_token";
 constexpr char kUserActionId[] = "123";
+constexpr char kTabTitle[] = "tab_title";
+constexpr char kContentTransferMethod[] = "content_transfer_method";
 constexpr char kTestUrl[] = "http://example.com/";
 base::TimeDelta kResponseDelay = base::Seconds(0);
 
@@ -91,6 +94,7 @@ constexpr char kBlockingScansForMalware[] = R"(
   "block_until_verdict": 1
 })";
 
+#if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 constexpr char kLocalServiceProvider[] = R"(
 {
   "service_provider": "local_user_agent",
@@ -101,6 +105,7 @@ constexpr char kLocalServiceProvider[] = R"(
     }
   ]
 })";
+#endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 
 constexpr char kNothingEnabled[] = R"({ "service_provider": "google" })";
 
@@ -110,7 +115,7 @@ class ScopedSetDMToken {
     SetDMTokenForTesting(dm_token);
   }
   ~ScopedSetDMToken() {
-    SetDMTokenForTesting(policy::DMToken::CreateEmptyTokenForTesting());
+    SetDMTokenForTesting(policy::DMToken::CreateEmptyToken());
   }
 };
 
@@ -121,16 +126,6 @@ class BaseTest : public testing::Test {
     profile_ = profile_manager_.CreateTestingProfile("test-user");
   }
 
-  void EnableFeatures() {
-    scoped_feature_list_.Reset();
-    scoped_feature_list_.InitWithFeatures({kEnterpriseConnectorsEnabled}, {});
-  }
-
-  void DisableFeatures() {
-    scoped_feature_list_.Reset();
-    scoped_feature_list_.InitWithFeatures({}, {kEnterpriseConnectorsEnabled});
-  }
-
   [[nodiscard]] std::vector<base::FilePath> CreateFilesForTest(
       const std::vector<base::FilePath::StringType>& file_names,
       const std::string& content = "content") {
@@ -139,7 +134,7 @@ class BaseTest : public testing::Test {
     for (const auto& file_name : file_names) {
       base::FilePath path = temp_dir_.GetPath().Append(file_name);
       base::File file(path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-      file.WriteAtCurrentPos(content.data(), content.size());
+      file.WriteAtCurrentPos(base::as_byte_span(content));
       paths.emplace_back(path);
     }
     return paths;
@@ -147,17 +142,13 @@ class BaseTest : public testing::Test {
 
   Profile* profile() { return profile_; }
 
-  void RunUntilDone() { run_loop_.Run(); }
-
  protected:
   content::BrowserTaskEnvironment task_environment_;
-  base::test::ScopedFeatureList scoped_feature_list_;
   TestingPrefServiceSimple pref_service_;
   TestingProfileManager profile_manager_;
   raw_ptr<TestingProfile> profile_;
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<FakeFilesRequestHandler> fake_files_request_handler_;
-  base::RunLoop run_loop_;
+  std::unique_ptr<test::FakeFilesRequestHandler> fake_files_request_handler_;
 };
 
 MATCHER_P3(MatchesRequestHandlerResult, complies, final_result, tag, "") {
@@ -168,6 +159,58 @@ MATCHER_P3(MatchesRequestHandlerResult, complies, final_result, tag, "") {
   return complies_matches && final_result_matches && tag_matches;
 }
 
+class TestContentAnalysisInfo : public ContentAnalysisInfo {
+ public:
+  explicit TestContentAnalysisInfo(
+      const enterprise_connectors::AnalysisSettings& settings,
+      int user_action_requests_count)
+      : settings_(settings),
+        user_action_requests_count_(user_action_requests_count) {}
+
+  const AnalysisSettings& settings() const override { return settings_.get(); }
+
+  signin::IdentityManager* identity_manager() const override { return nullptr; }
+
+  // These methods correspond to fields in `BinaryUploadRequest`.
+  int user_action_requests_count() const override {
+    return user_action_requests_count_;
+  }
+
+  std::string tab_title() const override { return kTabTitle; }
+
+  std::string user_action_id() const override { return kUserActionId; }
+
+  std::string email() const override { return "test@user.com"; }
+
+  const GURL& url() const override { return tab_url(); }
+
+  const GURL& tab_url() const override {
+    static GURL url(kTestUrl);
+    return url;
+  }
+
+  ContentAnalysisRequest::Reason reason() const override {
+    return ContentAnalysisRequest::FILE_PICKER_DIALOG;
+  }
+
+  google::protobuf::RepeatedPtrField<::safe_browsing::ReferrerChainEntry>
+  referrer_chain() const override {
+    return google::protobuf::RepeatedPtrField<
+        ::safe_browsing::ReferrerChainEntry>();
+  }
+
+  google::protobuf::RepeatedPtrField<std::string> frame_url_chain()
+      const override {
+    return {};
+  }
+
+  content::WebContents* web_contents() const override { return nullptr; }
+
+ private:
+  const raw_ref<const enterprise_connectors::AnalysisSettings> settings_;
+  int user_action_requests_count_ = 0;
+};
+
 }  // namespace
 
 // Make a RequestHandlerResult show nicely in google tests.
@@ -177,7 +220,7 @@ MATCHER_P3(MatchesRequestHandlerResult, complies, final_result, tag, "") {
 void PrintTo(const RequestHandlerResult& request_handler_result,
              std::ostream* os) {
   *os << "RequestHandlerResult: (";
-  *os << "complies: " << (request_handler_result.complies ? "true" : "false")
+  *os << "complies: " << base::ToString(request_handler_result.complies)
       << ", ";
 
   *os << "final_result: "
@@ -185,6 +228,9 @@ void PrintTo(const RequestHandlerResult& request_handler_result,
   switch (request_handler_result.final_result) {
     case FinalContentAnalysisResult::FAILURE:
       *os << "FAILURE";
+      break;
+    case FinalContentAnalysisResult::FAIL_CLOSED:
+      *os << "FAIL_CLOSED";
       break;
     case FinalContentAnalysisResult::LARGE_FILES:
       *os << "LARGE_FILES";
@@ -198,6 +244,9 @@ void PrintTo(const RequestHandlerResult& request_handler_result,
     case FinalContentAnalysisResult::SUCCESS:
       *os << "SUCCESS";
       break;
+    case FinalContentAnalysisResult::FORCE_SAVE_TO_CLOUD:
+      *os << "FORCE_SAVE_TO_CLOUD";
+      break;
   }
   *os << "), tag: \"" << request_handler_result.tag << "\")";
 }
@@ -207,32 +256,37 @@ class FilesRequestHandlerTest : public BaseTest {
   FilesRequestHandlerTest() = default;
 
  protected:
-  void ScanUpload(const std::vector<base::FilePath>& paths,
-                  FilesRequestHandler::CompletionCallback callback) {
+  std::optional<std::vector<RequestHandlerResult>> ScanUpload(
+      const std::vector<base::FilePath>& paths) {
     // The settings need to exist until the "scanning" has completed, we can
-    // thus not pass it into FakeFilesRequestHandler as a rvalue reference.
-    AnalysisSettings settings = GetSettings();
+    // thus not pass it into test::FakeFilesRequestHandler as a rvalue
+    // reference.
+    std::optional<AnalysisSettings> settings = GetSettings();
+    if (!settings.has_value()) {
+      return std::nullopt;
+    }
 
+    using ResultFuture =
+        base::test::TestFuture<std::vector<RequestHandlerResult>>;
+    ResultFuture future;
+
+    TestContentAnalysisInfo info(*settings, paths.size());
     // The access point is only used for metrics, so its value doesn't affect
     // the tests in this file and can always be the same.
-    fake_files_request_handler_ = std::make_unique<FakeFilesRequestHandler>(
-        base::BindRepeating(
-            &FilesRequestHandlerTest::FakeFileUploadCallback,
-            weak_ptr_factory_.GetWeakPtr(),
-            settings.cloud_or_local_settings.is_cloud_analysis()),
-        /*upload_service=*/nullptr, profile_, settings, GURL(kTestUrl), "", "",
-        kUserActionId, safe_browsing::DeepScanAccessPoint::UPLOAD, paths,
-        base::BindOnce(
-            [](base::RepeatingClosure runloop_closure,
-               FilesRequestHandler::CompletionCallback callback,
-               std::vector<RequestHandlerResult> result) {
-              std::move(callback).Run(std::move(result));
-              runloop_closure.Run();
-            },
-            run_loop_.QuitClosure(), std::move(callback)));
+    fake_files_request_handler_ =
+        std::make_unique<test::FakeFilesRequestHandler>(
+            base::BindRepeating(
+                &FilesRequestHandlerTest::FakeFileUploadCallback,
+                weak_ptr_factory_.GetWeakPtr(),
+                settings->cloud_or_local_settings.is_cloud_analysis()),
+            /*content_analysis_info=*/&info,
+            /*upload_service=*/nullptr, profile_, GURL(kTestUrl), "", "",
+            kContentTransferMethod, DeepScanAccessPoint::UPLOAD, paths,
+            future.GetCallback());
 
     fake_files_request_handler_->UploadData();
-    RunUntilDone();
+
+    EXPECT_TRUE(future.Wait()) << "Scanning did not finish successfully";
 
     EXPECT_GE(paths.size(),
               fake_files_request_handler_->request_tokens_to_ack_final_actions()
@@ -241,23 +295,25 @@ class FilesRequestHandlerTest : public BaseTest {
          fake_files_request_handler_->request_tokens_to_ack_final_actions()) {
       EXPECT_FALSE(token_and_action.first.empty());
     }
+
+    return future.Take();
   }
 
-  enterprise_connectors::AnalysisSettings GetSettings() {
+  std::optional<enterprise_connectors::AnalysisSettings> GetSettings() {
     auto* service =
         enterprise_connectors::ConnectorsServiceFactory::GetForBrowserContext(
             profile());
     // If the corresponding Connector policy isn't set, no scans can be
     // performed.
-    EXPECT_TRUE(service);
+    if (!service) {
+      return std::nullopt;
+    }
     EXPECT_TRUE(service->IsConnectorEnabled(AnalysisConnector::FILE_ATTACHED));
 
     // Check that `url` matches the appropriate URL patterns by getting
     // settings. No settings means no matches were found.
-    auto settings = service->GetAnalysisSettings(
-        GURL(kTestUrl), AnalysisConnector::FILE_ATTACHED);
-    EXPECT_TRUE(settings.has_value());
-    return std::move(settings.value());
+    return service->GetAnalysisSettings(GURL(kTestUrl),
+                                        AnalysisConnector::FILE_ATTACHED);
   }
 
   void SetDLPResponse(ContentAnalysisResponse response) {
@@ -278,39 +334,41 @@ class FilesRequestHandlerTest : public BaseTest {
     include_malware_ = malware;
 
     if (include_dlp_ && include_malware_) {
-      safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                          AnalysisConnector::FILE_ATTACHED,
-                                          kBlockingScansForDlpAndMalware);
+      enterprise_connectors::test::SetAnalysisConnector(
+          profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+          kBlockingScansForDlpAndMalware);
     } else if (include_dlp_) {
-      safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                          AnalysisConnector::FILE_ATTACHED,
-                                          kBlockingScansForDlp);
+      enterprise_connectors::test::SetAnalysisConnector(
+          profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+          kBlockingScansForDlp);
     } else if (include_malware_) {
-      safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                          AnalysisConnector::FILE_ATTACHED,
-                                          kBlockingScansForMalware);
+      enterprise_connectors::test::SetAnalysisConnector(
+          profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+          kBlockingScansForMalware);
     } else {
-      safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                          AnalysisConnector::FILE_ATTACHED,
-                                          kNothingEnabled);
+      enterprise_connectors::test::SetAnalysisConnector(
+          profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+          kNothingEnabled);
     }
   }
 
   void SetUp() override {
     BaseTest::SetUp();
 
-    EnableFeatures();
-    safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                        AnalysisConnector::FILE_ATTACHED,
-                                        kBlockingScansForDlpAndMalware);
+    enterprise_connectors::test::SetAnalysisConnector(
+        profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+        kBlockingScansForDlpAndMalware);
+
+    scoped_feature_list_.InitAndEnableFeature(
+        safe_browsing::kEnhancedFieldsForSecOps);
   }
 
   void FakeFileUploadCallback(
       bool is_cloud_analysis,
-      safe_browsing::BinaryUploadService::Result result,
+      ScanRequestUploadResult result,
       const base::FilePath& path,
-      std::unique_ptr<safe_browsing::BinaryUploadService::Request> request,
-      FakeFilesRequestHandler::FakeFileRequestCallback callback) {
+      std::unique_ptr<BinaryUploadRequest> request,
+      test::FakeFilesRequestHandler::FakeFileRequestCallback callback) {
     EXPECT_FALSE(path.empty());
     if (is_cloud_analysis) {
       EXPECT_EQ(request->device_token(), kDmToken);
@@ -318,13 +376,15 @@ class FilesRequestHandlerTest : public BaseTest {
       EXPECT_EQ(request->user_action_requests_count(),
                 expected_user_action_requests_count_);
       EXPECT_EQ(request->user_action_id(), kUserActionId);
+      EXPECT_EQ(request->tab_title(), kTabTitle);
     }
+
+    upload_performed_ = true;
 
     // Simulate a response.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
-        base::BindOnce(std::move(callback), path,
-                       safe_browsing::BinaryUploadService::Result::SUCCESS,
+        base::BindOnce(std::move(callback), path, result,
                        ConnectorStatusCallback(path)),
         kResponseDelay);
   }
@@ -335,12 +395,14 @@ class FilesRequestHandlerTest : public BaseTest {
     ContentAnalysisResponse response =
         it != failures_.end()
             ? it->second
-            : FakeContentAnalysisDelegate::SuccessfulResponse([this]() {
+            : test::FakeContentAnalysisDelegate::SuccessfulResponse([this]() {
                 std::set<std::string> tags;
-                if (include_dlp_ && !dlp_response_.has_value())
+                if (include_dlp_ && !dlp_response_.has_value()) {
                   tags.insert("dlp");
-                if (include_malware_)
+                }
+                if (include_malware_) {
                   tags.insert("malware");
+                }
                 return tags;
               }());
 
@@ -353,9 +415,11 @@ class FilesRequestHandlerTest : public BaseTest {
     return response;
   }
 
+  bool was_upload_performed() { return upload_performed_; }
+
  private:
   ScopedSetDMToken scoped_dm_token_{
-      policy::DMToken::CreateValidTokenForTesting(kDmToken)};
+      policy::DMToken::CreateValidToken(kDmToken)};
   bool include_dlp_ = true;
   bool include_malware_ = true;
 
@@ -364,11 +428,13 @@ class FilesRequestHandlerTest : public BaseTest {
   std::map<base::FilePath, ContentAnalysisResponse> failures_;
 
   // DLP response to ovewrite in the callback if present.
-  absl::optional<ContentAnalysisResponse> dlp_response_ = absl::nullopt;
+  std::optional<ContentAnalysisResponse> dlp_response_ = std::nullopt;
 
   // To verify user action requests count in local content analysis request is
   // set correctly.
   uint64_t expected_user_action_requests_count_ = 0;
+  base::test::ScopedFeatureList scoped_feature_list_;
+  bool upload_performed_ = false;
 
   base::WeakPtrFactory<FilesRequestHandlerTest> weak_ptr_factory_{this};
 };
@@ -377,16 +443,27 @@ TEST_F(FilesRequestHandlerTest, Empty) {
   GURL url(kTestUrl);
   std::vector<base::FilePath> paths;
 
-  bool called = false;
-  ScanUpload(paths,
-             base::BindOnce(
-                 [](bool* called, std::vector<RequestHandlerResult> results) {
-                   EXPECT_EQ(0u, results.size());
-                   *called = true;
-                 },
-                 &called));
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(0u, results->size());
+}
 
-  EXPECT_TRUE(called);
+TEST_F(FilesRequestHandlerTest, ZeroLengthFileSucceeds) {
+  GURL url(kTestUrl);
+
+  std::vector<base::FilePath> paths =
+      CreateFilesForTest({FILE_PATH_LITERAL("zerolength.doc")}, "");
+  PathFailsDeepScan(
+      paths[0],
+      test::FakeContentAnalysisDelegate::MalwareResponse(TriggeredRule::BLOCK));
+
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareAndDlpVerdicts) {
@@ -395,21 +472,13 @@ TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareAndDlpVerdicts) {
   std::vector<base::FilePath> paths =
       CreateFilesForTest({FILE_PATH_LITERAL("foo.doc")});
 
-  bool called = false;
-  ScanUpload(paths,
-             base::BindOnce(
-                 [](bool* called, std::vector<RequestHandlerResult> results) {
-                   EXPECT_EQ(1u, results.size());
-                   EXPECT_THAT(
-                       results[0],
-                       MatchesRequestHandlerResult(
-                           true, FinalContentAnalysisResult::SUCCESS, ""));
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
 
-                   *called = true;
-                 },
-                 &called));
-
-  EXPECT_TRUE(called);
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareAndDlpVerdicts2) {
@@ -418,23 +487,15 @@ TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareAndDlpVerdicts2) {
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("foo.doc"), FILE_PATH_LITERAL("bar.doc")});
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareVerdict) {
@@ -444,30 +505,23 @@ TEST_F(FilesRequestHandlerTest, FileDataPositiveMalwareVerdict) {
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("good2.doc")});
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
 
 TEST_F(FilesRequestHandlerTest, FileIsEncrypted) {
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
 
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED, R"(
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      R"(
     {
       "service_provider": "google",
       "enable": [
@@ -489,31 +543,24 @@ TEST_F(FilesRequestHandlerTest, FileIsEncrypted) {
                  .AppendASCII("encrypted.zip");
   paths.emplace_back(test_zip);
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(1u, results.size());
-            EXPECT_THAT(
-                results[0],
-                MatchesRequestHandlerResult(
-                    false, FinalContentAnalysisResult::ENCRYPTED_FILES, ""));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::ENCRYPTED_FILES, ""));
+  EXPECT_FALSE(was_upload_performed());
 }
 
 // With a local service provider, a scan should not terminate early due to
 // encryption.
+#if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 TEST_F(FilesRequestHandlerTest, FileIsEncrypted_LocalAnalysis) {
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
 
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED,
-                                      kLocalServiceProvider);
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      kLocalServiceProvider);
   GURL url(kTestUrl);
   std::vector<base::FilePath> paths;
 
@@ -525,27 +572,21 @@ TEST_F(FilesRequestHandlerTest, FileIsEncrypted_LocalAnalysis) {
   paths.emplace_back(test_zip);
   SetExpectedUserActionRequestsCount(1);
 
-  bool called = false;
-  ScanUpload(paths,
-             base::BindOnce(
-                 [](bool* called, std::vector<RequestHandlerResult> results) {
-                   EXPECT_EQ(1u, results.size());
-                   EXPECT_THAT(
-                       results[0],
-                       MatchesRequestHandlerResult(
-                           true, FinalContentAnalysisResult::SUCCESS, ""));
-                   *called = true;
-                 },
-                 &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
+#endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 
 TEST_F(FilesRequestHandlerTest, FileIsEncrypted_PolicyAllows) {
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
 
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED, R"(
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      R"(
     {
       "service_provider": "google",
       "enable": [
@@ -567,89 +608,147 @@ TEST_F(FilesRequestHandlerTest, FileIsEncrypted_PolicyAllows) {
                  .AppendASCII("encrypted.zip");
   paths.emplace_back(test_zip);
 
-  bool called = false;
-  ScanUpload(paths,
-             base::BindOnce(
-                 [](bool* called, std::vector<RequestHandlerResult> results) {
-                   EXPECT_EQ(1u, results.size());
-                   EXPECT_THAT(
-                       results[0],
-                       MatchesRequestHandlerResult(
-                           true, FinalContentAnalysisResult::SUCCESS, ""));
-                   *called = true;
-                 },
-                 &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  // When the resumable upload protocol is in use and the policy does not block
+  // encrypted files by default, the file's metadata is uploaded for scanning.
+  EXPECT_TRUE(was_upload_performed());
 }
 
-// With a local service provider, a scan should not terminate early due to
-// size.
-TEST_F(FilesRequestHandlerTest, FileIsLarge_LocalAnalysis) {
+TEST_F(FilesRequestHandlerTest, FileIsLarge) {
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
 
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED,
-                                      kLocalServiceProvider);
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      R"(
+    {
+      "service_provider": "google",
+      "enable": [
+        {
+          "url_list": ["*"],
+          "tags": ["dlp", "malware"]
+        }
+      ],
+      "block_until_verdict": 1,
+      "block_large_files": true
+    })");
   GURL url(kTestUrl);
   std::vector<base::FilePath> paths;
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   base::FilePath file_path = temp_dir.GetPath().AppendASCII("large.doc");
-  std::string contents(
-      safe_browsing::BinaryUploadService::kMaxUploadSizeBytes + 1, 'a');
-  base::WriteFile(file_path, contents.data(), contents.size());
+  std::string contents(BinaryUploadService::kMaxUploadSizeBytes + 1, 'a');
+  base::WriteFile(file_path, contents);
   paths.emplace_back(file_path);
   SetExpectedUserActionRequestsCount(1);
 
-  bool called = false;
-  ScanUpload(paths,
-             base::BindOnce(
-                 [](bool* called, std::vector<RequestHandlerResult> results) {
-                   EXPECT_EQ(1u, results.size());
-                   EXPECT_THAT(
-                       results[0],
-                       MatchesRequestHandlerResult(
-                           true, FinalContentAnalysisResult::SUCCESS, ""));
-                   *called = true;
-                 },
-                 &called));
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::LARGE_FILES, ""));
+  EXPECT_FALSE(was_upload_performed());
+}
 
-  EXPECT_TRUE(called);
+// With a local service provider, a scan should not terminate early due to
+// size.
+#if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
+TEST_F(FilesRequestHandlerTest, FileIsLarge_LocalAnalysis) {
+  content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
+
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      kLocalServiceProvider);
+  GURL url(kTestUrl);
+  std::vector<base::FilePath> paths;
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("large.doc");
+  std::string contents(BinaryUploadService::kMaxUploadSizeBytes + 1, 'a');
+  base::WriteFile(file_path, contents);
+  paths.emplace_back(file_path);
+  SetExpectedUserActionRequestsCount(1);
+
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+}
+#endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
+
+TEST_F(FilesRequestHandlerTest, FileIsLarge_PolicyAllows) {
+  content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
+
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      R"(
+    {
+      "service_provider": "google",
+      "enable": [
+        {
+          "url_list": ["*"],
+          "tags": ["dlp", "malware"]
+        }
+      ],
+      "block_until_verdict": 1,
+      "block_large_files": false
+    })");
+  GURL url(kTestUrl);
+  std::vector<base::FilePath> paths;
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("large.doc");
+  std::string contents(BinaryUploadService::kMaxUploadSizeBytes + 1, 'a');
+  base::WriteFile(file_path, contents);
+  paths.emplace_back(file_path);
+  SetExpectedUserActionRequestsCount(1);
+
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(1u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  // When the resumable upload protocol is in use and the policy does not block
+  // large files by default, the file's metadata is uploaded for scanning.
+  EXPECT_TRUE(was_upload_performed());
 }
 
 // With a local service provider, multiple file uploads should result in
 // multiple analysis requests.
+#if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 TEST_F(FilesRequestHandlerTest, MultipleFilesUpload_LocalAnalysis) {
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
 
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED,
-                                      kLocalServiceProvider);
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      kLocalServiceProvider);
   GURL url(kTestUrl);
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("good2.doc")});
   SetExpectedUserActionRequestsCount(2);
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
+#endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 
 TEST_F(FilesRequestHandlerTest, FileDataNegativeMalwareVerdict) {
   SetScanPolicies(/*dlp=*/false, /*malware=*/true);
@@ -657,27 +756,19 @@ TEST_F(FilesRequestHandlerTest, FileDataNegativeMalwareVerdict) {
 
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("bad.doc")});
-  PathFailsDeepScan(paths[1], FakeContentAnalysisDelegate::MalwareResponse(
-                                  TriggeredRule::BLOCK));
+  PathFailsDeepScan(
+      paths[1],
+      test::FakeContentAnalysisDelegate::MalwareResponse(TriggeredRule::BLOCK));
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            EXPECT_THAT(
-                results[1],
-                MatchesRequestHandlerResult(
-                    false, FinalContentAnalysisResult::FAILURE, "malware"));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "malware"));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataPositiveDlpVerdict) {
@@ -687,26 +778,43 @@ TEST_F(FilesRequestHandlerTest, FileDataPositiveDlpVerdict) {
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("good2.doc")});
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
 
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+}
 
-            *called = true;
-          },
-          &called));
+TEST_F(FilesRequestHandlerTest, FileDataPositiveDlpVerdictDataControls) {
+  file_access::MockScopedFileAccessDelegate scoped_files_access_delegate;
 
-  EXPECT_TRUE(called);
+  EXPECT_CALL(scoped_files_access_delegate, RequestFilesAccessForSystem)
+      .WillOnce(base::test::RunOnceCallback<1>(
+          file_access::ScopedFileAccess::Allowed()));
+
+  SetScanPolicies(/*dlp=*/true, /*malware=*/false);
+  GURL url(kTestUrl);
+
+  std::vector<base::FilePath> paths = CreateFilesForTest(
+      {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("good2.doc")});
+
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataNegativeDlpVerdict) {
@@ -716,27 +824,19 @@ TEST_F(FilesRequestHandlerTest, FileDataNegativeDlpVerdict) {
   std::vector<base::FilePath> paths = CreateFilesForTest(
       {FILE_PATH_LITERAL("good.doc"), FILE_PATH_LITERAL("bad.doc")});
 
-  PathFailsDeepScan(paths[1], FakeContentAnalysisDelegate::DlpResponse(
+  PathFailsDeepScan(paths[1], test::FakeContentAnalysisDelegate::DlpResponse(
                                   ContentAnalysisResponse::Result::SUCCESS,
                                   "rule", TriggeredRule::BLOCK));
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            false, FinalContentAnalysisResult::FAILURE, "dlp"));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "dlp"));
 }
 
 TEST_F(FilesRequestHandlerTest, FileDataNegativeMalwareAndDlpVerdicts) {
@@ -748,32 +848,23 @@ TEST_F(FilesRequestHandlerTest, FileDataNegativeMalwareAndDlpVerdicts) {
 
   PathFailsDeepScan(
       paths[1],
-      FakeContentAnalysisDelegate::MalwareAndDlpResponse(
+      test::FakeContentAnalysisDelegate::MalwareAndDlpResponse(
           TriggeredRule::BLOCK, ContentAnalysisResponse::Result::SUCCESS,
           "rule", TriggeredRule::BLOCK));
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(2u, results.size());
-            EXPECT_THAT(results[0],
-                        MatchesRequestHandlerResult(
-                            true, FinalContentAnalysisResult::SUCCESS, ""));
-            // In this case, we expect either a "malware" or a "dlp" tag.
-            EXPECT_THAT(
-                results[1],
-                testing::AnyOf(
-                    MatchesRequestHandlerResult(
-                        false, FinalContentAnalysisResult::FAILURE, "malware"),
-                    MatchesRequestHandlerResult(
-                        false, FinalContentAnalysisResult::FAILURE, "dlp")));
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(2u, results->size());
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  true, FinalContentAnalysisResult::SUCCESS, ""));
+  // In this case, we expect either a "malware" or a "dlp" tag.
+  EXPECT_THAT(
+      (*results)[1],
+      testing::AnyOf(MatchesRequestHandlerResult(
+                         false, FinalContentAnalysisResult::FAILURE, "malware"),
+                     MatchesRequestHandlerResult(
+                         false, FinalContentAnalysisResult::FAILURE, "dlp")));
 }
 
 TEST_F(FilesRequestHandlerTest, NoDelay) {
@@ -781,8 +872,9 @@ TEST_F(FilesRequestHandlerTest, NoDelay) {
   // Note that this behavior is different compared to the
   // ContentAnalysisDelegateUnittest which checks that the Delegate allows
   // access to all data for block_until_verdict==0.
-  safe_browsing::SetAnalysisConnector(profile_->GetPrefs(),
-                                      AnalysisConnector::FILE_ATTACHED, R"(
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile_->GetPrefs(), AnalysisConnector::FILE_ATTACHED,
+      R"(
     {
       "service_provider": "google",
       "enable": [
@@ -803,52 +895,44 @@ TEST_F(FilesRequestHandlerTest, NoDelay) {
                           FILE_PATH_LITERAL("foo_fail_dlp_rule.doc")});
 
   // Mark all files and text with failed scans.
-  SetDLPResponse(FakeContentAnalysisDelegate::DlpResponse(
+  SetDLPResponse(test::FakeContentAnalysisDelegate::DlpResponse(
       ContentAnalysisResponse::Result::SUCCESS, "rule", TriggeredRule::BLOCK));
-  PathFailsDeepScan(paths[0], FakeContentAnalysisDelegate::MalwareResponse(
-                                  TriggeredRule::BLOCK));
-  PathFailsDeepScan(paths[1], FakeContentAnalysisDelegate::MalwareResponse(
-                                  TriggeredRule::WARN));
-  PathFailsDeepScan(paths[2], FakeContentAnalysisDelegate::MalwareResponse(
-                                  TriggeredRule::BLOCK));
-  PathFailsDeepScan(paths[3], FakeContentAnalysisDelegate::DlpResponse(
+  PathFailsDeepScan(
+      paths[0],
+      test::FakeContentAnalysisDelegate::MalwareResponse(TriggeredRule::BLOCK));
+  PathFailsDeepScan(
+      paths[1],
+      test::FakeContentAnalysisDelegate::MalwareResponse(TriggeredRule::WARN));
+  PathFailsDeepScan(
+      paths[2],
+      test::FakeContentAnalysisDelegate::MalwareResponse(TriggeredRule::BLOCK));
+  PathFailsDeepScan(paths[3], test::FakeContentAnalysisDelegate::DlpResponse(
                                   ContentAnalysisResponse::Result::FAILURE, "",
                                   TriggeredRule::REPORT_ONLY));
-  PathFailsDeepScan(paths[4], FakeContentAnalysisDelegate::DlpResponse(
+  PathFailsDeepScan(paths[4], test::FakeContentAnalysisDelegate::DlpResponse(
                                   ContentAnalysisResponse::Result::SUCCESS,
                                   "dlp", TriggeredRule::BLOCK));
 
-  bool called = false;
-  ScanUpload(
-      paths,
-      base::BindOnce(
-          [](bool* called, std::vector<RequestHandlerResult> results) {
-            EXPECT_EQ(5u, results.size());
+  auto results = ScanUpload(paths);
+  ASSERT_TRUE(results.has_value());
+  EXPECT_EQ(5u, results->size());
 
-            EXPECT_THAT(
-                results[0],
-                MatchesRequestHandlerResult(
-                    false, FinalContentAnalysisResult::FAILURE, "malware"));
-            // Dlp response (block) should overrule malware response (warning).
-            EXPECT_THAT(results[1],
-                        MatchesRequestHandlerResult(
-                            false, FinalContentAnalysisResult::FAILURE, "dlp"));
-            EXPECT_THAT(
-                results[2],
-                MatchesRequestHandlerResult(
-                    false, FinalContentAnalysisResult::FAILURE, "malware"));
-            EXPECT_THAT(results[3],
-                        MatchesRequestHandlerResult(
-                            false, FinalContentAnalysisResult::FAILURE, "dlp"));
-            EXPECT_THAT(results[4],
-                        MatchesRequestHandlerResult(
-                            false, FinalContentAnalysisResult::FAILURE, "dlp"));
-
-            *called = true;
-          },
-          &called));
-
-  EXPECT_TRUE(called);
+  EXPECT_THAT((*results)[0],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "malware"));
+  // Dlp response (block) should overrule malware response (warning).
+  EXPECT_THAT((*results)[1],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "dlp"));
+  EXPECT_THAT((*results)[2],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "malware"));
+  EXPECT_THAT((*results)[3],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "dlp"));
+  EXPECT_THAT((*results)[4],
+              MatchesRequestHandlerResult(
+                  false, FinalContentAnalysisResult::FAILURE, "dlp"));
 }
 
 }  // namespace enterprise_connectors

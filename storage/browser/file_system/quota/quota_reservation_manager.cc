@@ -9,7 +9,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "storage/browser/file_system/quota/quota_reservation.h"
 #include "storage/browser/file_system/quota/quota_reservation_buffer.h"
 
@@ -64,13 +64,12 @@ QuotaReservationManager::GetReservationBuffer(const url::Origin& origin,
                                               FileSystemType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!origin.opaque());
-  QuotaReservationBuffer** buffer =
-      &reservation_buffers_[std::make_pair(origin, type)];
-  if (!*buffer) {
-    *buffer = new QuotaReservationBuffer(weak_ptr_factory_.GetWeakPtr(), origin,
-                                         type);
+  auto& buffer = reservation_buffers_[std::make_pair(origin, type)];
+  if (!buffer) {
+    buffer = new QuotaReservationBuffer(weak_ptr_factory_.GetWeakPtr(), origin,
+                                        type);
   }
-  return base::WrapRefCounted(*buffer);
+  return base::WrapRefCounted(buffer);
 }
 
 void QuotaReservationManager::ReleaseReservationBuffer(

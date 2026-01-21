@@ -6,21 +6,25 @@
 #define REMOTING_PROTOCOL_WEBRTC_VIDEO_ENCODER_WRAPPER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/thread_annotations.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/running_samples.h"
 #include "remoting/base/session_options.h"
 #include "remoting/codec/webrtc_video_encoder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/webrtc/api/video/video_codec_type.h"
 #include "third_party/webrtc/api/video_codecs/sdp_video_format.h"
 #include "third_party/webrtc/api/video_codecs/video_encoder.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
+#include "third_party/webrtc/modules/desktop_capture/shared_desktop_frame.h"
 
 namespace remoting::protocol {
 
@@ -57,6 +61,8 @@ class WebrtcVideoEncoderWrapper : public webrtc::VideoEncoder {
   void OnRttUpdate(int64_t rtt_ms) override;
   webrtc::VideoEncoder::EncoderInfo GetEncoderInfo() const override;
 
+  static base::TimeDelta GetKeepAliveIntervalForTesting();
+
  private:
   static constexpr int kStatsWindow = 5;
 
@@ -85,6 +91,16 @@ class WebrtcVideoEncoderWrapper : public webrtc::VideoEncoder {
   // |pending_frame_| contains valid frame data.
   void DropPendingFrame();
 
+  // Encodes a desktop frame. Only one frame can be encoded at a time.
+  void EncodeDesktopFrame(std::unique_ptr<webrtc::DesktopFrame> desktop_frame);
+
+  // If `top_off_active_` is true, (re)starts the top-off extrapolation timer
+  // with a recalculated interval, otherwise stops the timer.
+  void UpdateTopOffExtrapolationTimer();
+
+  // Re-encodes the last capturer-fed frame.
+  void ExtrapolateFrame();
+
   std::unique_ptr<WebrtcVideoEncoder> encoder_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
@@ -98,7 +114,8 @@ class WebrtcVideoEncoderWrapper : public webrtc::VideoEncoder {
   uint32_t rtp_timestamp_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // FrameStats taken from the input VideoFrameAdapter, then added to the
-  // EncodedFrame when encoding is complete.
+  // EncodedFrame when encoding is complete. This is also used for top-off and
+  // keep-alive extrapolation.
   std::unique_ptr<WebrtcVideoEncoder::FrameStats> frame_stats_;
 
   // Bandwidth estimate from SetRates(), which is expected to be called before
@@ -111,6 +128,23 @@ class WebrtcVideoEncoderWrapper : public webrtc::VideoEncoder {
 
   // True when encoding unchanged frames for top-off.
   bool top_off_active_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
+
+  // Timer to extrapolate top-off frames in a reasonable interval, until
+  // `top_off_active_` is false. It will be suppressed if either a capturer-fed
+  // frame or a keep-alive frame is encoded within the top-off interval.
+  base::RetainingOneShotTimer top_off_timer_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  // Timer to extrapolate keep-alive frames. It will be suppressed if either a
+  // capturer-fed frame or a top-off frame is encoded within the keep-alive
+  // interval.
+  base::RetainingOneShotTimer keep_alive_timer_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  // The last capturer-fed desktop frame, used for top-off and keep-alive
+  // extrapolation.
+  std::unique_ptr<webrtc::SharedDesktopFrame> last_capturer_fed_frame_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   webrtc::VideoCodecType codec_type_ GUARDED_BY_CONTEXT(sequence_checker_);
 
@@ -164,14 +198,15 @@ class WebrtcVideoEncoderWrapper : public webrtc::VideoEncoder {
   // TaskRunner used for scheduling encoding tasks.
   scoped_refptr<base::SingleThreadTaskRunner> encode_task_runner_;
 
-  // Stores the target frame rate used for capture and encode scheduling. May be
-  // changed by the client using SDP format parameters for the selected codec.
-  int target_frame_rate_ = kTargetFrameRate;
-  base::TimeDelta target_frame_interval_;
+  // Stores the current frame interval, updated for each frame received.
+  base::TimeDelta current_frame_interval_ = base::Hertz(kTargetFrameRate);
+
+  // Stores the timestamp of the last frame that was sent for encoding.
+  base::Time last_frame_received_timestamp_;
 
   // Represents the screen which is being encoded by this instance. Initialized
   // after the first captured frame has been received.
-  absl::optional<webrtc::ScreenId> screen_id_;
+  std::optional<webrtc::ScreenId> screen_id_;
 
   base::WeakPtr<VideoStreamEventRouter> video_stream_event_router_;
 

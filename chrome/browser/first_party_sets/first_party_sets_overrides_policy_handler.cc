@@ -60,10 +60,11 @@ std::string ParseWarningTypeToString(
 }  // namespace
 
 FirstPartySetsOverridesPolicyHandler::FirstPartySetsOverridesPolicyHandler(
+    const char* policy_name,
     const policy::Schema& schema)
     : policy::SchemaValidatingPolicyHandler(
-          policy::key::kFirstPartySetsOverrides,
-          schema.GetKnownProperty(policy::key::kFirstPartySetsOverrides),
+          policy_name,
+          schema.GetKnownProperty(policy_name),
           policy::SchemaOnErrorStrategy::SCHEMA_ALLOW_UNKNOWN) {}
 
 FirstPartySetsOverridesPolicyHandler::~FirstPartySetsOverridesPolicyHandler() =
@@ -81,21 +82,20 @@ bool FirstPartySetsOverridesPolicyHandler::CheckPolicySettings(
 
   // Output error and return false if any of the sets provided in the
   // "replacements" or "additions" list are not valid First-Party Sets.
-  std::pair<absl::optional<ParseError>, std::vector<ParseWarning>>
-      opt_error_and_warnings =
-          content::FirstPartySetsHandler::ValidateEnterprisePolicy(
-              policy_value->GetDict());
+  auto [success, warnings] =
+      content::FirstPartySetsHandler::ValidateEnterprisePolicy(
+          policy_value->GetDict());
 
   // Output warnings that occur when parsing the policy.
-  for (ParseWarning parse_warning : opt_error_and_warnings.second) {
+  for (const ParseWarning& parse_warning : warnings) {
     errors->AddError(policy_name(), IDS_POLICY_SCHEMA_VALIDATION_ERROR,
                      ParseWarningTypeToString(parse_warning.type()),
                      parse_warning.path(),
                      policy::PolicyMap::MessageType::kWarning);
   }
 
-  if (opt_error_and_warnings.first.has_value()) {
-    ParseError parse_error = opt_error_and_warnings.first.value();
+  if (!success.has_value()) {
+    ParseError parse_error = success.error();
     errors->AddError(policy_name(), IDS_POLICY_SCHEMA_VALIDATION_ERROR,
                      ParseErrorTypeToString(parse_error.type()),
                      parse_error.path());
@@ -110,7 +110,7 @@ void FirstPartySetsOverridesPolicyHandler::ApplyPolicySettings(
   std::unique_ptr<base::Value> value;
   policy::SchemaValidatingPolicyHandler::CheckAndGetValue(policies, nullptr,
                                                           &value);
-  prefs->SetValue(first_party_sets::kFirstPartySetsOverrides,
+  prefs->SetValue(first_party_sets::kRelatedWebsiteSetsOverrides,
                   base::Value::FromUniquePtrValue(std::move(value)));
 }
 

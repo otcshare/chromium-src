@@ -7,12 +7,13 @@
 #include <memory>
 #include <string>
 
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/test/fake_app_instance.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_test.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_service_impl.h"
@@ -61,16 +62,19 @@ class ArcKeyPermissionsManagerDelegateTest : public testing::Test {
     policy_provider_->SetDefaultReturns(
         /*is_initialization_complete_return=*/true,
         /*is_first_policy_load_complete_return=*/true);
-    std::vector<policy::ConfigurationPolicyProvider*> providers = {
-        policy_provider_.get()};
+    std::vector<
+        raw_ptr<policy::ConfigurationPolicyProvider, VectorExperimental>>
+        providers = {policy_provider_.get()};
     auto policy_service_ =
         std::make_unique<policy::PolicyServiceImpl>(providers);
+
+    arc_app_test_.PreProfileSetUp();
 
     TestingProfile::Builder builder;
     builder.SetPolicyService(std::move(policy_service_));
     profile_ = builder.Build();
 
-    arc_app_test_.SetUp(profile_.get());
+    arc_app_test_.PostProfileSetUp(profile_.get());
     app_instance_ = std::make_unique<arc::FakeAppInstance>(
         arc_app_test_.arc_app_list_prefs());
 
@@ -82,12 +86,13 @@ class ArcKeyPermissionsManagerDelegateTest : public testing::Test {
   }
 
   void TearDown() override {
-    arc_app_test_.TearDown();
+    arc_app_test_.PreProfileTearDown();
     if (primary_user_delegate_) {
       ShutDownPrimaryUserDelegate();
     }
     system_delegate_.reset();
     profile_.reset();
+    arc_app_test_.PostProfileTearDown();
   }
 
  protected:
@@ -103,18 +108,16 @@ class ArcKeyPermissionsManagerDelegateTest : public testing::Test {
 
   void SetCorporateUsageInPolicyForPackage(const std::string& package_name,
                                            bool allowed) {
-    auto corporate_key_usage = std::make_unique<base::DictionaryValue>();
-    corporate_key_usage->SetPath("allowCorporateKeyUsage",
-                                 base::Value(allowed));
+    base::Value::Dict corporate_key_usage;
+    corporate_key_usage.SetByDottedPath("allowCorporateKeyUsage", allowed);
 
-    base::DictionaryValue policy_value;
-    policy_value.SetKey(package_name, base::Value::FromUniquePtrValue(
-                                          std::move(corporate_key_usage)));
+    base::Value::Dict policy_value;
+    policy_value.Set(package_name, base::Value(std::move(corporate_key_usage)));
 
     policy::PolicyMap policy_map;
     policy_map.Set(policy::key::kKeyPermissions, policy::POLICY_LEVEL_MANDATORY,
                    policy::POLICY_SCOPE_MACHINE, policy::POLICY_SOURCE_PLATFORM,
-                   policy_value.Clone(), nullptr);
+                   base::Value(policy_value.Clone()), nullptr);
 
     policy_provider_->UpdateChromePolicy(policy_map);
   }

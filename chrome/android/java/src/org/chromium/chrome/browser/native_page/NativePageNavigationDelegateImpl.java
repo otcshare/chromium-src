@@ -4,53 +4,69 @@
 
 package org.chromium.chrome.browser.native_page;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.app.Activity;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.offlinepages.DownloadUiActionFlags;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.offlinepages.RequestCoordinatorBridge;
+import org.chromium.chrome.browser.preloading.AndroidPrerenderManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.document.TabDelegate;
+import org.chromium.chrome.browser.tabmodel.document.ChromeAsyncTabLauncher;
 import org.chromium.chrome.browser.ui.native_page.NativePageHost;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.mojom.WindowOpenDisposition;
 
-/**
- * {@link NativePageNavigationDelegate} implementation.
- */
+/** {@link NativePageNavigationDelegate} implementation. */
+@NullMarked
 public class NativePageNavigationDelegateImpl implements NativePageNavigationDelegate {
-    private static final String TAG = "PageNavDelegate";
     private final Profile mProfile;
-    private final TabModelSelector mTabModelSelector;
-    private final Tab mTab;
 
+    protected final TabModelSelector mTabModelSelector;
+    protected final Tab mTab;
     protected final Activity mActivity;
     protected final NativePageHost mHost;
+    private final MultiInstanceManager mMultiInstanceManager;
 
-    public NativePageNavigationDelegateImpl(Activity activity, Profile profile, NativePageHost host,
-            TabModelSelector tabModelSelector, Tab tab) {
+    public NativePageNavigationDelegateImpl(
+            Activity activity,
+            Profile profile,
+            NativePageHost host,
+            TabModelSelector tabModelSelector,
+            Tab tab,
+            MultiInstanceManager multiInstanceManager) {
         mActivity = activity;
         mProfile = profile;
         mHost = host;
         mTabModelSelector = tabModelSelector;
         mTab = tab;
+        mMultiInstanceManager = multiInstanceManager;
     }
 
     @Override
-    public boolean isOpenInNewWindowEnabled() {
+    public boolean isOpenInIncognitoEnabled() {
+        return IncognitoUtils.isIncognitoModeEnabled(mProfile);
+    }
+
+    @Override
+    public boolean isOpenInAnotherWindowEnabled() {
         return MultiWindowUtils.getInstance().isOpenInOtherWindowSupported(mActivity)
-                || MultiWindowUtils.getInstance().canEnterMultiWindowMode(mActivity);
+                || MultiWindowUtils.getInstance().canEnterMultiWindowMode();
     }
 
     @Override
-    @Nullable
-    public Tab openUrl(int windowOpenDisposition, LoadUrlParams loadUrlParams) {
+    public @Nullable Tab openUrl(int windowOpenDisposition, LoadUrlParams loadUrlParams) {
         Tab loadingTab = null;
 
         switch (windowOpenDisposition) {
@@ -68,7 +84,18 @@ public class NativePageNavigationDelegateImpl implements NativePageNavigationDel
                 mHost.loadUrl(loadUrlParams, true);
                 break;
             case WindowOpenDisposition.NEW_WINDOW:
-                openUrlInNewWindow(loadUrlParams);
+                if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+                    mMultiInstanceManager.openUrlInOtherWindow(
+                            loadUrlParams,
+                            mHost.getParentId(),
+                            /* preferNew= */ false,
+                            mTab.isIncognitoBranded()
+                                    ? PersistedInstanceType.ACTIVE
+                                            | PersistedInstanceType.OFF_THE_RECORD
+                                    : PersistedInstanceType.ACTIVE | PersistedInstanceType.REGULAR);
+                } else {
+                    openUrlInNewWindow(loadUrlParams);
+                }
                 break;
             case WindowOpenDisposition.SAVE_TO_DISK:
                 saveUrlForOffline(loadUrlParams.getUrl());
@@ -82,14 +109,24 @@ public class NativePageNavigationDelegateImpl implements NativePageNavigationDel
 
     @Override
     public Tab openUrlInGroup(int windowOpenDisposition, LoadUrlParams loadUrlParams) {
-        return mTabModelSelector.openNewTab(loadUrlParams,
-                TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP, mTab, /* incognito = */ false);
+        Tab newTab =
+                mTabModelSelector.openNewTab(
+                        loadUrlParams,
+                        TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP,
+                        mTab,
+                        /* incognito= */ false);
+        return newTab;
     }
 
     private void openUrlInNewWindow(LoadUrlParams loadUrlParams) {
-        TabDelegate tabDelegate = new TabDelegate(false);
-        tabDelegate.createTabInOtherWindow(loadUrlParams, mActivity, mHost.getParentId(),
-                MultiWindowUtils.getAdjacentWindowActivity(mActivity));
+        ChromeAsyncTabLauncher chromeAsyncTabLauncher = new ChromeAsyncTabLauncher(false);
+        chromeAsyncTabLauncher.launchTabInOtherWindow(
+                loadUrlParams,
+                mActivity,
+                mHost.getParentId(),
+                MultiWindowUtils.getForegroundWindowActivity(mActivity),
+                NewWindowAppSource.OTHER,
+                /* preferNew= */ false);
     }
 
     private Tab openUrlInNewTab(LoadUrlParams loadUrlParams, int windowOpenDisposition) {
@@ -98,16 +135,28 @@ public class NativePageNavigationDelegateImpl implements NativePageNavigationDel
             tabLaunchType = TabLaunchType.FROM_LONGPRESS_FOREGROUND;
         }
         return mTabModelSelector.openNewTab(
-                loadUrlParams, tabLaunchType, mTab, /* incognito = */ false);
+                loadUrlParams, tabLaunchType, mTab, /* incognito= */ false);
     }
 
     private void saveUrlForOffline(String url) {
         if (mTab != null) {
-            OfflinePageBridge.getForProfile(mProfile).scheduleDownload(mTab.getWebContents(),
-                    OfflinePageBridge.NTP_SUGGESTIONS_NAMESPACE, url, DownloadUiActionFlags.ALL);
+            var bridge = assumeNonNull(OfflinePageBridge.getForProfile(mProfile));
+            bridge.scheduleDownload(
+                    mTab.getWebContents(),
+                    OfflinePageBridge.NTP_SUGGESTIONS_NAMESPACE,
+                    url,
+                    DownloadUiActionFlags.ALL);
         } else {
-            RequestCoordinatorBridge.getForProfile(mProfile).savePageLater(
-                    url, OfflinePageBridge.NTP_SUGGESTIONS_NAMESPACE, true /* userRequested */);
+            var bridge = assumeNonNull(RequestCoordinatorBridge.getForProfile(mProfile));
+            bridge.savePageLater(
+                    url, OfflinePageBridge.NTP_SUGGESTIONS_NAMESPACE, /* userRequested= */ true);
+        }
+    }
+
+    @Override
+    public void initAndroidPrerenderManager(AndroidPrerenderManager androidPrerenderManager) {
+        if (mTab != null) {
+            androidPrerenderManager.initializeWithTab(mTab);
         }
     }
 }

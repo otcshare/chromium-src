@@ -28,10 +28,11 @@ class BatteryLevelProviderChromeOS : public base::BatteryLevelProvider {
   // base::BatteryLevelProvider:
   void GetBatteryState(
       base::OnceCallback<
-          void(const absl::optional<base::BatteryLevelProvider::BatteryState>&)>
+          void(const std::optional<base::BatteryLevelProvider::BatteryState>&)>
           callback) override;
 
-  raw_ptr<chromeos::PowerManagerClient> power_manager_client_;
+  raw_ptr<chromeos::PowerManagerClient, DanglingUntriaged>
+      power_manager_client_;
 };
 
 }  // namespace performance_manager::power

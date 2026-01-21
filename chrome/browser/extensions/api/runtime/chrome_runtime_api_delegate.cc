@@ -9,39 +9,60 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "components/update_client/update_query_params.h"
-#include "content/public/browser/notification_service.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
+#include "extensions/browser/delayed_install_manager.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/notification_types.h"
+#include "extensions/browser/view_type_utils.h"
 #include "extensions/browser/warning_service.h"
 #include "extensions/browser/warning_set.h"
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 #include "net/base/backoff_entry.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/components/kiosk/kiosk_utils.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #endif
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
+#else
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#endif
+
+namespace {
 
 using extensions::Extension;
 using extensions::ExtensionSystem;
@@ -49,15 +70,13 @@ using extensions::ExtensionUpdater;
 
 using extensions::api::runtime::PlatformInfo;
 
-namespace {
-
 // If an extension reloads itself within this many milliseconds of reloading
 // itself, the reload is considered suspiciously fast.
-const int kFastReloadTime = 10000;
+constexpr int kFastReloadTime = 10000;
 
 // Same as above, but we shorten the fast reload interval for unpacked
 // extensions for ease of testing.
-const int kUnpackedFastReloadTime = 1000;
+constexpr int kUnpackedFastReloadTime = 1000;
 
 // A holder class for the policy we use for exponential backoff of update check
 // requests.
@@ -86,7 +105,7 @@ BackoffPolicy::BackoffPolicy() {
 
       // initial_delay_ms (note that we set 'always_use_initial_delay' to false
       // below)
-      1000 * extensions::kDefaultUpdateFrequencySeconds,
+      extensions::kDefaultUpdateFrequency.InMilliseconds(),
 
       // multiply_factor
       1,
@@ -105,7 +124,7 @@ BackoffPolicy::BackoffPolicy() {
   };
 }
 
-BackoffPolicy::~BackoffPolicy() {}
+BackoffPolicy::~BackoffPolicy() = default;
 
 // static
 const net::BackoffEntry::Policy* BackoffPolicy::Get() {
@@ -125,15 +144,11 @@ struct ChromeRuntimeAPIDelegate::UpdateCheckInfo {
 ChromeRuntimeAPIDelegate::ChromeRuntimeAPIDelegate(
     content::BrowserContext* context)
     : browser_context_(context), registered_for_updates_(false) {
-  registrar_.Add(this,
-                 extensions::NOTIFICATION_EXTENSION_UPDATE_FOUND,
-                 content::NotificationService::AllSources());
   extension_registry_observation_.Observe(
       extensions::ExtensionRegistry::Get(browser_context_));
 }
 
-ChromeRuntimeAPIDelegate::~ChromeRuntimeAPIDelegate() {
-}
+ChromeRuntimeAPIDelegate::~ChromeRuntimeAPIDelegate() = default;
 
 // static
 void ChromeRuntimeAPIDelegate::set_tick_clock_for_tests(
@@ -144,22 +159,18 @@ void ChromeRuntimeAPIDelegate::set_tick_clock_for_tests(
 void ChromeRuntimeAPIDelegate::AddUpdateObserver(
     extensions::UpdateObserver* observer) {
   registered_for_updates_ = true;
-  ExtensionSystem::Get(browser_context_)
-      ->extension_service()
-      ->AddUpdateObserver(observer);
+  ExtensionUpdater::Get(browser_context_)->AddObserver(observer);
 }
 
 void ChromeRuntimeAPIDelegate::RemoveUpdateObserver(
     extensions::UpdateObserver* observer) {
   if (registered_for_updates_) {
-    ExtensionSystem::Get(browser_context_)
-        ->extension_service()
-        ->RemoveUpdateObserver(observer);
+    ExtensionUpdater::Get(browser_context_)->RemoveObserver(observer);
   }
 }
 
 void ChromeRuntimeAPIDelegate::ReloadExtension(
-    const std::string& extension_id) {
+    const extensions::ExtensionId& extension_id) {
   const Extension* extension =
       extensions::ExtensionRegistry::Get(browser_context_)
           ->GetInstalledExtension(extension_id);
@@ -192,9 +203,8 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
                            reload_info.second);
   reload_info.first = now;
 
-  extensions::ExtensionService* service =
-      ExtensionSystem::Get(browser_context_)->extension_service();
-
+  extensions::ExtensionRegistrar* registrar =
+      extensions::ExtensionRegistrar::Get(browser_context_);
   if (reload_info.second >= fast_reload_count) {
     // Unloading an extension clears all warnings, so first terminate the
     // extension, and then add the warning. Since this is called from an
@@ -203,33 +213,35 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
     // post both tasks.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&extensions::ExtensionService::TerminateExtension,
-                       service->AsExtensionServiceWeakPtr(), extension_id));
+        base::BindOnce(&extensions::ExtensionRegistrar::TerminateExtension,
+                       registrar->GetWeakPtr(), extension_id));
     extensions::WarningSet warnings;
     warnings.insert(
-        extensions::Warning::CreateReloadTooFrequentWarning(
-            extension_id));
+        extensions::Warning::CreateReloadTooFrequentWarning(extension_id));
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&extensions::WarningService::NotifyWarningsOnUI,
-                       browser_context_, warnings));
+                       // TODO(crbug.com/40061562): Remove
+                       // `UnsafeDanglingUntriaged`
+                       base::UnsafeDanglingUntriaged(browser_context_),
+                       warnings));
   } else {
     // We can't call ReloadExtension directly, since when this method finishes
     // it tries to decrease the reference count for the extension, which fails
     // if the extension has already been reloaded; so instead we post a task.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&extensions::ExtensionService::ReloadExtension,
-                       service->AsExtensionServiceWeakPtr(), extension_id));
+        base::BindOnce(&extensions::ExtensionRegistrar::ReloadExtension,
+                       registrar->GetWeakPtr(), extension_id));
   }
 }
 
-bool ChromeRuntimeAPIDelegate::CheckForUpdates(const std::string& extension_id,
-                                               UpdateCheckCallback callback) {
-  ExtensionSystem* system = ExtensionSystem::Get(browser_context_);
-  extensions::ExtensionService* service = system->extension_service();
-  ExtensionUpdater* updater = service->updater();
-  if (!updater) {
+bool ChromeRuntimeAPIDelegate::CheckForUpdates(
+    const extensions::ExtensionId& extension_id,
+    UpdateCheckCallback callback) {
+  Profile* profile = Profile::FromBrowserContext(browser_context_);
+  ExtensionUpdater* updater = ExtensionUpdater::Get(profile);
+  if (!updater->enabled()) {
     return false;
   }
 
@@ -239,7 +251,7 @@ bool ChromeRuntimeAPIDelegate::CheckForUpdates(const std::string& extension_id,
   // return a status of throttled.
   if (info.backoff->ShouldRejectRequest() || info.callbacks.size() >= 10) {
     UpdateCheckResult result = UpdateCheckResult(
-        extensions::api::runtime::REQUEST_UPDATE_CHECK_STATUS_THROTTLED, "");
+        extensions::api::runtime::RequestUpdateCheckStatus::kThrottled, "");
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
   } else {
@@ -247,6 +259,9 @@ bool ChromeRuntimeAPIDelegate::CheckForUpdates(const std::string& extension_id,
 
     extensions::ExtensionUpdater::CheckParams params;
     params.ids = {extension_id};
+    params.update_found_callback =
+        base::BindRepeating(&ChromeRuntimeAPIDelegate::OnExtensionUpdateFound,
+                            base::Unretained(this));
     params.callback =
         base::BindOnce(&ChromeRuntimeAPIDelegate::UpdateCheckComplete,
                        base::Unretained(this), extension_id);
@@ -257,70 +272,128 @@ bool ChromeRuntimeAPIDelegate::CheckForUpdates(const std::string& extension_id,
 
 void ChromeRuntimeAPIDelegate::OpenURL(const GURL& uninstall_url) {
   Profile* profile = Profile::FromBrowserContext(browser_context_);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   Browser* browser = chrome::FindLastActiveWithProfile(profile);
-  if (!browser)
+  if (!browser) {
     browser = Browser::Create(Browser::CreateParams(profile, false));
-  if (!browser)
+  }
+  if (!browser) {
     return;
+  }
 
   NavigateParams params(browser, uninstall_url,
                         ui::PAGE_TRANSITION_CLIENT_REDIRECT);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   params.user_gesture = false;
   Navigate(&params);
+#else
+  TabModel* tab_model = nullptr;
+  for (TabModel* model : TabModelList::models()) {
+    if (model->GetProfile() == profile) {
+      tab_model = model;
+      break;
+    }
+  }
+
+  if (!tab_model) {
+    return;
+  }
+
+  std::unique_ptr<content::WebContents> contents = content::WebContents::Create(
+      content::WebContents::CreateParams(browser_context_));
+  content::WebContents* raw_web_contents = contents.get();
+  tab_model->CreateTab(nullptr, std::move(contents), TabModel::kInvalidIndex,
+                       TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
+                       /*should_pin=*/false);
+
+  content::NavigationController::LoadURLParams load_params(uninstall_url);
+  load_params.transition_type = ui::PAGE_TRANSITION_FROM_API;
+  base::WeakPtr<content::NavigationHandle> navigation_handle =
+      raw_web_contents->GetController().LoadURLWithParams(load_params);
+  // Navigation can fail for any number of reasons at the content layer.
+  // Unfortunately, we can't provide a detailed error message here, because
+  // there are too many possible triggers. At least add a log for diagnostics.
+  if (!navigation_handle) {
+    LOG(ERROR) << "navigation rejected for uninstall_url"
+               << uninstall_url.spec();
+  }
+#endif
+}
+
+// Helper function for GetPlatformInfo(). nacl_arch is deprecated, so
+// please do not add any new values here.
+extensions::api::runtime::PlatformNaclArch GetPlatformInfoNaClArch() {
+// Return no value on Android, since it never supported extensions
+// while NaCl was relevant.
+#if BUILDFLAG(IS_ANDROID)
+  return extensions::api::runtime::PlatformNaclArch::kNone;
+#else
+#if defined(ARCH_CPU_X86_FAMILY)
+#if defined(ARCH_CPU_X86_64)
+  return extensions::api::runtime::PlatformNaclArch::kX86_64;
+#elif BUILDFLAG(IS_WIN)
+  return base::win::OSInfo::GetInstance()->IsWowX86OnAMD64()
+             ? extensions::api::runtime::PlatformNaclArch::kX86_64
+             : extensions::api::runtime::PlatformNaclArch::kX86_32;
+#else
+  return extensions::api::runtime::PlatformNaclArch::kX86_32;
+#endif
+#elif defined(ARCH_CPU_ARM_FAMILY)
+  return extensions::api::runtime::PlatformNaclArch::kArm;
+#elif defined(ARCH_CPU_MIPSEL)
+  return extensions::api::runtime::PlatformNaclArch::kMips;
+#elif defined(ARCH_CPU_MIPS64EL)
+  return extensions::api::runtime::PlatformNaclArch::kMips64;
+#else
+  // NOTE: Other architectures did not support extensions at the time
+  // of NaCl removal.
+  return extensions::api::runtime::PlatformNaclArch::kNone;
+#endif
+#endif
 }
 
 bool ChromeRuntimeAPIDelegate::GetPlatformInfo(PlatformInfo* info) {
-  const char* os = update_client::UpdateQueryParams::GetOS();
-  if (strcmp(os, "mac") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_MAC;
-  } else if (strcmp(os, "win") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_WIN;
-  } else if (strcmp(os, "cros") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_CROS;
-  } else if (strcmp(os, "linux") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_LINUX;
-  } else if (strcmp(os, "openbsd") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_OPENBSD;
-  } else if (strcmp(os, "fuchsia") == 0) {
-    info->os = extensions::api::runtime::PLATFORM_OS_FUCHSIA;
+  const std::string_view os = update_client::UpdateQueryParams::GetOS();
+  if (os == "mac") {
+    info->os = extensions::api::runtime::PlatformOs::kMac;
+  } else if (os == "win") {
+    info->os = extensions::api::runtime::PlatformOs::kWin;
+  } else if (os == "cros") {
+    info->os = extensions::api::runtime::PlatformOs::kCros;
+  } else if (os == "linux") {
+    info->os = extensions::api::runtime::PlatformOs::kLinux;
+  } else if (os == "openbsd") {
+    info->os = extensions::api::runtime::PlatformOs::kOpenbsd;
+  } else if (os == "android") {
+    info->os = extensions::api::runtime::PlatformOs::kAndroid;
   } else {
     NOTREACHED() << "Platform not supported: " << os;
-    return false;
   }
 
-  const char* arch = update_client::UpdateQueryParams::GetArch();
-  if (strcmp(arch, "arm") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_ARM;
-  } else if (strcmp(arch, "arm64") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_ARM64;
-  } else if (strcmp(arch, "x86") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_X86_32;
-  } else if (strcmp(arch, "x64") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_X86_64;
-  } else if (strcmp(arch, "mipsel") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_MIPS;
-  } else if (strcmp(arch, "mips64el") == 0) {
-    info->arch = extensions::api::runtime::PLATFORM_ARCH_MIPS64;
+  const std::string_view arch = update_client::UpdateQueryParams::GetArch();
+  if (arch == "arm") {
+    info->arch = extensions::api::runtime::PlatformArch::kArm;
+  } else if (arch == "arm64") {
+    info->arch = extensions::api::runtime::PlatformArch::kArm64;
+  } else if (arch == "x86") {
+    info->arch = extensions::api::runtime::PlatformArch::kX86_32;
+  } else if (arch == "x64") {
+    info->arch = extensions::api::runtime::PlatformArch::kX86_64;
+  } else if (arch == "mipsel") {
+    info->arch = extensions::api::runtime::PlatformArch::kMips;
+  } else if (arch == "mips64el") {
+    info->arch = extensions::api::runtime::PlatformArch::kMips64;
+  } else if (arch == "riscv64") {
+    info->arch = extensions::api::runtime::PlatformArch::kRiscv64;
   } else {
     NOTREACHED();
-    return false;
   }
 
-  const char* nacl_arch = update_client::UpdateQueryParams::GetNaclArch();
-  if (strcmp(nacl_arch, "arm") == 0) {
-    info->nacl_arch = extensions::api::runtime::PLATFORM_NACL_ARCH_ARM;
-  } else if (strcmp(nacl_arch, "x86-32") == 0) {
-    info->nacl_arch = extensions::api::runtime::PLATFORM_NACL_ARCH_X86_32;
-  } else if (strcmp(nacl_arch, "x86-64") == 0) {
-    info->nacl_arch = extensions::api::runtime::PLATFORM_NACL_ARCH_X86_64;
-  } else if (strcmp(nacl_arch, "mips32") == 0) {
-    info->nacl_arch = extensions::api::runtime::PLATFORM_NACL_ARCH_MIPS;
-  } else if (strcmp(nacl_arch, "mips64") == 0) {
-    info->nacl_arch = extensions::api::runtime::PLATFORM_NACL_ARCH_MIPS64;
-  } else {
-    NOTREACHED();
-    return false;
+  // Only include nacl_arch in the info if it's supported. The field is
+  // optional in the schema specification, so it's okay to omit it.
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kApiRuntimeGetPlatformInfoNaClArch)) {
+    info->nacl_arch = GetPlatformInfoNaClArch();
   }
 
   return true;
@@ -328,7 +401,7 @@ bool ChromeRuntimeAPIDelegate::GetPlatformInfo(PlatformInfo* info) {
 
 bool ChromeRuntimeAPIDelegate::RestartDevice(std::string* error_message) {
 #if BUILDFLAG(IS_CHROMEOS)
-  if (profiles::IsKioskSession()) {
+  if (chromeos::IsKioskSession()) {
     chromeos::PowerManagerClient::Get()->RequestRestart(
         power_manager::REQUEST_RESTART_API, "chrome.runtime API");
     return true;
@@ -342,24 +415,54 @@ bool ChromeRuntimeAPIDelegate::RestartDevice(std::string* error_message) {
 bool ChromeRuntimeAPIDelegate::OpenOptionsPage(
     const Extension* extension,
     content::BrowserContext* browser_context) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   return extensions::ExtensionTabUtil::OpenOptionsPageFromAPI(extension,
                                                               browser_context);
+#else
+  // TODO(crbug.com/383366125): Implement this when options page for extensions
+  // becomes available for desktop android.
+  NOTIMPLEMENTED_LOG_ONCE();
+  return false;
+#endif
 }
 
-void ChromeRuntimeAPIDelegate::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(extensions::NOTIFICATION_EXTENSION_UPDATE_FOUND, type);
-  using UpdateDetails = const std::pair<std::string, base::Version>;
-  const std::string& id = content::Details<UpdateDetails>(details)->first;
-  const base::Version& version =
-      content::Details<UpdateDetails>(details)->second;
+int ChromeRuntimeAPIDelegate::GetDeveloperToolsWindowId(
+    content::WebContents* developer_tools_web_contents) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  // For developer tools contexts, first check the docked state. If the
+  // developer tools are docked, return the window ID of the inspected web
+  // contents. Otherwise, return the window ID of the developer tools window.
+  CHECK_EQ(extensions::GetViewType(developer_tools_web_contents),
+           extensions::mojom::ViewType::kDeveloperTools);
+  CHECK(DevToolsWindow::IsDevToolsWindow(developer_tools_web_contents));
+
+  DevToolsWindow* devtools_window =
+      DevToolsWindow::AsDevToolsWindow(developer_tools_web_contents);
+  content::WebContents* inspected_web_contents =
+      devtools_window->GetInspectedWebContents();
+  bool is_docked = devtools_window->IsDocked();
+  DCHECK_EQ(is_docked,
+            inspected_web_contents->GetTopLevelNativeWindow() ==
+                developer_tools_web_contents->GetTopLevelNativeWindow());
+
+  content::WebContents* web_contents_to_use =
+      is_docked ? inspected_web_contents : developer_tools_web_contents;
+  return extensions::ExtensionTabUtil::GetWindowIdOfTab(web_contents_to_use);
+#else
+  // TODO(crbug.com/383366125): Implement this function for desktop android.
+  NOTIMPLEMENTED();
+  return -1;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+}
+
+void ChromeRuntimeAPIDelegate::OnExtensionUpdateFound(
+    const extensions::ExtensionId& extension_id,
+    const base::Version& version) {
   if (version.IsValid()) {
     UpdateCheckResult result = UpdateCheckResult(
-        extensions::api::runtime::REQUEST_UPDATE_CHECK_STATUS_UPDATE_AVAILABLE,
+        extensions::api::runtime::RequestUpdateCheckStatus::kUpdateAvailable,
         version.GetString());
-    CallUpdateCallbacks(id, std::move(result));
+    CallUpdateCallbacks(extension_id, std::move(result));
   }
 }
 
@@ -367,8 +470,9 @@ void ChromeRuntimeAPIDelegate::OnExtensionInstalled(
     content::BrowserContext* browser_context,
     const Extension* extension,
     bool is_update) {
-  if (!is_update)
+  if (!is_update) {
     return;
+  }
   auto info = update_check_info_.find(extension->id());
   if (info != update_check_info_.end()) {
     info->second.backoff->Reset();
@@ -376,10 +480,10 @@ void ChromeRuntimeAPIDelegate::OnExtensionInstalled(
 }
 
 void ChromeRuntimeAPIDelegate::UpdateCheckComplete(
-    const std::string& extension_id) {
-  ExtensionSystem* system = ExtensionSystem::Get(browser_context_);
-  extensions::ExtensionService* service = system->extension_service();
-  const Extension* update = service->GetPendingExtensionUpdate(extension_id);
+    const extensions::ExtensionId& extension_id) {
+  const Extension* update =
+      extensions::DelayedInstallManager::Get(browser_context_)
+          ->GetPendingExtensionUpdate(extension_id);
   UpdateCheckInfo& info = update_check_info_[extension_id];
 
   // We always inform the BackoffEntry of a "failure" here, because we only
@@ -390,22 +494,23 @@ void ChromeRuntimeAPIDelegate::UpdateCheckComplete(
 
   if (update) {
     UpdateCheckResult result = UpdateCheckResult(
-        extensions::api::runtime::REQUEST_UPDATE_CHECK_STATUS_UPDATE_AVAILABLE,
+        extensions::api::runtime::RequestUpdateCheckStatus::kUpdateAvailable,
         update->VersionString());
     CallUpdateCallbacks(extension_id, std::move(result));
   } else {
     UpdateCheckResult result = UpdateCheckResult(
-        extensions::api::runtime::REQUEST_UPDATE_CHECK_STATUS_NO_UPDATE, "");
+        extensions::api::runtime::RequestUpdateCheckStatus::kNoUpdate, "");
     CallUpdateCallbacks(extension_id, std::move(result));
   }
 }
 
 void ChromeRuntimeAPIDelegate::CallUpdateCallbacks(
-    const std::string& extension_id,
+    const extensions::ExtensionId& extension_id,
     const UpdateCheckResult& result) {
   auto it = update_check_info_.find(extension_id);
-  if (it == update_check_info_.end())
+  if (it == update_check_info_.end()) {
     return;
+  }
   std::vector<UpdateCheckCallback> callbacks;
   it->second.callbacks.swap(callbacks);
   for (auto& callback : callbacks) {

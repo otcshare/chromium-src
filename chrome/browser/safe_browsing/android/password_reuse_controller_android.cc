@@ -5,9 +5,13 @@
 #include "chrome/browser/safe_browsing/android/password_reuse_controller_android.h"
 
 #include <memory>
+#include <string>
 
-#include "base/callback.h"
+#include "base/android/device_info.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/ui/android/safe_browsing/password_reuse_dialog_view_android.h"
+#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/android/window_android.h"
@@ -18,10 +22,12 @@ namespace safe_browsing {
 PasswordReuseControllerAndroid::PasswordReuseControllerAndroid(
     content::WebContents* web_contents,
     ChromePasswordProtectionService* service,
+    PrefService* pref_service,
     ReusedPasswordAccountType password_type,
     OnWarningDone done_callback)
     : content::WebContentsObserver(web_contents),
       service_(service),
+      pref_service_(pref_service),
       url_(web_contents->GetLastCommittedURL()),
       password_type_(password_type),
       window_android_(web_contents->GetTopLevelNativeWindow()),
@@ -73,8 +79,15 @@ std::u16string PasswordReuseControllerAndroid::GetPrimaryButtonText() const {
   if (password_type_.account_type() == ReusedPasswordAccountType::GMAIL &&
       password_type_.is_account_syncing()) {
     return l10n_util::GetStringUTF16(IDS_PAGE_INFO_PROTECT_ACCOUNT_BUTTON);
-  } else if (password_type_.account_type() ==
-             ReusedPasswordAccountType::SAVED_PASSWORD) {
+  }
+  // The modal can be shown on automotive, but should not lead users to the
+  // GMSCore Password Check UI, as that is not optimized for automotive.
+  if (base::android::device_info::is_automotive()) {
+    return l10n_util::GetStringUTF16(IDS_CLOSE);
+  }
+
+  if (password_type_.account_type() ==
+      ReusedPasswordAccountType::SAVED_PASSWORD) {
     return l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHECK_PASSWORDS_BUTTON);
   }
 
@@ -82,10 +95,19 @@ std::u16string PasswordReuseControllerAndroid::GetPrimaryButtonText() const {
 }
 
 std::u16string PasswordReuseControllerAndroid::GetSecondaryButtonText() const {
-  if ((password_type_.account_type() == ReusedPasswordAccountType::GMAIL &&
-       password_type_.is_account_syncing()) ||
-      (password_type_.account_type() ==
-       ReusedPasswordAccountType::SAVED_PASSWORD)) {
+  if (password_type_.account_type() == ReusedPasswordAccountType::GMAIL &&
+      password_type_.is_account_syncing()) {
+    return l10n_util::GetStringUTF16(
+        IDS_PAGE_INFO_IGNORE_PASSWORD_WARNING_BUTTON);
+  }
+  // The modal can be shown on automotive, but without any call to action as
+  // those are not optimized for automotive.
+  if (base::android::device_info::is_automotive()) {
+    return std::u16string();
+  }
+
+  if (password_type_.account_type() ==
+      ReusedPasswordAccountType::SAVED_PASSWORD) {
     return l10n_util::GetStringUTF16(
         IDS_PAGE_INFO_IGNORE_PASSWORD_WARNING_BUTTON);
   }

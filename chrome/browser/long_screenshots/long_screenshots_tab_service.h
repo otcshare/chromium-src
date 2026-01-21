@@ -10,14 +10,15 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/browser/paint_preview_policy.h"
+#include "components/paint_preview/common/mojom/paint_preview_types.mojom.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "third_party/re2/src/re2/re2.h"
 
 namespace content {
@@ -42,11 +43,6 @@ class LongScreenshotsTabService
 
   // Define a list of statuses to describe the calling of paint preview and
   // generation of the bitmap.
-  //
-  // When updating this, also update LongScreenshotsMetrics in
-  // /chrome/browser/share/android/java/src/org/chromium/chrome/browser/share/long_screenshots/LongScreenshotsMetrics.java
-  // and SharingLongScreenshotsEvent in enums.xml
-  // and logCaptureResultStatus() in ./bitmap_generation/BitmapGenerator.java
   //
   // A Java counterpart will be generated for this enum.
   // GENERATED_JAVA_ENUM_PACKAGE: (
@@ -73,29 +69,37 @@ class LongScreenshotsTabService
   // clip_width: How wide of a capture relative to clip_x.
   // clip_height: How wide of a capture relative to clip_y.
   // in_memory: Use in memory capture mode.
-  void CaptureTab(int tab_id,
-                  std::unique_ptr<GURL> url,
-                  content::WebContents* contents,
-                  int clip_x,
-                  int clip_y,
-                  int clip_width,
-                  int clip_height,
-                  bool in_memory);
+  // clip_x_coord_override: How to override the clip_x coordinate in the
+  // renderer, if at all.
+  // clip_y_coord_override: How to override the clip_y coordinate in the
+  // renderer, if at all.
+  void CaptureTab(
+      int tab_id,
+      const GURL& url,
+      content::WebContents* contents,
+      int clip_x,
+      int clip_y,
+      int clip_width,
+      int clip_height,
+      bool in_memory,
+      paint_preview::mojom::ClipCoordOverride clip_x_coord_override,
+      paint_preview::mojom::ClipCoordOverride clip_y_coord_override);
 
   // Delete all old long screenshot files.
   void DeleteAllLongScreenshotFiles();
 
   // JNI wrapped versions of the above methods
-  void CaptureTabAndroid(
-      JNIEnv* env,
-      jint j_tab_id,
-      const base::android::JavaParamRef<jobject>& j_gurl,
-      const base::android::JavaParamRef<jobject>& j_web_contents,
-      jint clip_x,
-      jint clip_y,
-      jint clip_width,
-      jint clip_height,
-      jboolean in_memory);
+  void CaptureTabAndroid(JNIEnv* env,
+                         int32_t j_tab_id,
+                         const base::android::JavaRef<jobject>& j_gurl,
+                         const base::android::JavaRef<jobject>& j_web_contents,
+                         int32_t clip_x,
+                         int32_t clip_y,
+                         int32_t clip_width,
+                         int32_t clip_height,
+                         bool in_memory,
+                         int32_t override_x_coordinate,
+                         int32_t override_y_coordinate);
   void LongScreenshotsClosedAndroid(JNIEnv* env);
 
   base::android::ScopedJavaGlobalRef<jobject> GetJavaRef() { return java_ref_; }
@@ -106,15 +110,18 @@ class LongScreenshotsTabService
   // Retrieves the content::WebContents from the |frame_tree_node_id|
   // (confirming that the contents are alive using the |frame_routing_id|).
   // Calls PaintPreviewBaseService to retrieve the bitmap and write it to file.
-  void CaptureTabInternal(int tab_id,
-                          int frame_tree_node_id,
-                          content::GlobalRenderFrameHostId frame_routing_id,
-                          int clip_x,
-                          int clip_y,
-                          int clip_width,
-                          int clip_height,
-                          bool in_memory,
-                          const absl::optional<base::FilePath>& file_path);
+  void CaptureTabInternal(
+      int tab_id,
+      content::FrameTreeNodeId frame_tree_node_id,
+      content::GlobalRenderFrameHostId frame_routing_id,
+      int clip_x,
+      int clip_y,
+      int clip_width,
+      int clip_height,
+      bool in_memory,
+      paint_preview::mojom::ClipCoordOverride clip_x_coord_override,
+      paint_preview::mojom::ClipCoordOverride clip_y_coord_override,
+      const std::optional<base::FilePath>& file_path);
 
   void OnCaptured(paint_preview::PaintPreviewBaseService::CaptureStatus status,
                   std::unique_ptr<paint_preview::CaptureResult> result);

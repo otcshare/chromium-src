@@ -10,8 +10,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/one_shot_event.h"
 #include "build/chromeos_buildflags.h"
+#include "extensions/browser/content_verifier/content_verifier.h"
 #include "extensions/browser/extension_system.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "components/user_manager/scoped_user_manager.h"
+#endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -24,12 +31,6 @@ namespace content {
 class BrowserContext;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-namespace user_manager {
-class ScopedUserManager;
-}  // namespace user_manager
-#endif
-
 namespace value_store {
 class TestingValueStore;
 class TestValueStoreFactory;
@@ -40,6 +41,31 @@ namespace extensions {
 // Test ExtensionSystem, for use with TestingProfile.
 class TestExtensionSystem : public ExtensionSystem {
  public:
+  struct InitParams {
+    InitParams();
+    // Allows callers to specify each field.
+    InitParams(base::CommandLine* command_line,
+               base::FilePath install_directory,
+               base::FilePath unpacked_install_directory,
+               bool autoupdate_enabled,
+               bool enable_extensions);
+    ~InitParams();
+
+    // The commandline to use. If not provided, the commandline for the current
+    // process will be used.
+    raw_ptr<base::CommandLine> command_line = nullptr;
+    // The install directory to use. If not provided, one associated with the
+    // path for the associated Profile will be used.
+    std::optional<base::FilePath> install_directory;
+    // The unpacked install directory to use. If not provided, one associated
+    // with the path for the associated Profile will be used.
+    std::optional<base::FilePath> unpacked_install_directory;
+    // Whether autoupdate is enabled for the test.
+    bool autoupdate_enabled = false;
+    // Whether extensions are enabled for the profile.
+    bool enable_extensions = true;
+  };
+
   using InstallUpdateCallback = ExtensionSystem::InstallUpdateCallback;
   explicit TestExtensionSystem(Profile* profile);
   ~TestExtensionSystem() override;
@@ -47,11 +73,25 @@ class TestExtensionSystem : public ExtensionSystem {
   // KeyedService implementation.
   void Shutdown() override;
 
+  // Initializes the TestExtensionSystem and the broader extensions platform.
+  void Init();
+  void Init(const InitParams& init_params);
+
   // Creates an ExtensionService initialized with the testing profile and
   // returns it, and creates ExtensionPrefs if it hasn't been created yet.
+  // DEPRECATED: Prefer Init().
   ExtensionService* CreateExtensionService(
       const base::CommandLine* command_line,
       const base::FilePath& install_directory,
+      bool autoupdate_enabled,
+      bool enable_extensions = true);
+  // Similar to the above, but also allows specifying unpacked install directory
+  // if needed.
+  // DEPRECATED: Prefer Init().
+  ExtensionService* CreateExtensionService(
+      const base::CommandLine* command_line,
+      const base::FilePath& install_directory,
+      const base::FilePath& unpacked_install_directory,
       bool autoupdate_enabled,
       bool enable_extensions = true);
 
@@ -61,7 +101,6 @@ class TestExtensionSystem : public ExtensionSystem {
   void CreateUserScriptManager();
 
   void InitForRegularProfile(bool extensions_enabled) override {}
-  void SetExtensionService(ExtensionService* service);
   ExtensionService* extension_service() override;
   ManagementPolicy* management_policy() override;
   ServiceWorkerManager* service_worker_manager() override;
@@ -71,7 +110,6 @@ class TestExtensionSystem : public ExtensionSystem {
   StateStore* dynamic_user_scripts_store() override;
   scoped_refptr<value_store::ValueStoreFactory> store_factory() override;
   value_store::TestingValueStore* value_store();
-  InfoMap* info_map() override;
   QuotaService* quota_service() override;
   AppSorting* app_sorting() override;
   const base::OneShotEvent& ready() const override;
@@ -86,9 +124,7 @@ class TestExtensionSystem : public ExtensionSystem {
                      InstallUpdateCallback install_update_callback) override;
   void PerformActionBasedOnOmahaAttributes(
       const std::string& extension_id,
-      const base::Value& attributes) override;
-  bool FinishDelayedInstallationIfReady(const std::string& extension_id,
-                                        bool install_immediately) override;
+      const base::Value::Dict& attributes) override;
 
   // Note that you probably want to use base::RunLoop().RunUntilIdle() right
   // after this to run all the accumulated tasks.
@@ -102,6 +138,10 @@ class TestExtensionSystem : public ExtensionSystem {
   // code).
   void RecreateAppSorting();
 
+  void set_content_verifier(ContentVerifier* verifier) {
+    content_verifier_ = verifier;
+  }
+
  protected:
   raw_ptr<Profile> profile_;
 
@@ -110,19 +150,20 @@ class TestExtensionSystem : public ExtensionSystem {
   // This depends on store_factory_.
   std::unique_ptr<StateStore> state_store_;
   std::unique_ptr<ManagementPolicy> management_policy_;
+
   std::unique_ptr<ExtensionService> extension_service_;
-  scoped_refptr<InfoMap> info_map_;
-  std::unique_ptr<QuotaService> quota_service_;
+
   std::unique_ptr<AppSorting> app_sorting_;
+
+  std::unique_ptr<QuotaService> quota_service_;
+
   std::unique_ptr<UserScriptManager> user_script_manager_;
   base::OneShotEvent ready_;
 
   std::unique_ptr<data_decoder::test::InProcessDataDecoder>
       in_process_data_decoder_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-#endif
+  scoped_refptr<ContentVerifier> content_verifier_;
 };
 
 }  // namespace extensions

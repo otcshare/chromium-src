@@ -9,7 +9,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/byte_count.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
@@ -29,12 +30,14 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
   // Below are the types of callbacks that are invoked on the UI thread upon
   // completion of corresponding refresh tasks on the worker thread.
   using OnCpuRefreshCallback = base::RepeatingCallback<void(double)>;
-  using OnSwappedMemRefreshCallback = base::RepeatingCallback<void(int64_t)>;
+  using OnSwappedMemRefreshCallback =
+      base::RepeatingCallback<void(base::ByteSize)>;
   using OnIdleWakeupsCallback = base::RepeatingCallback<void(int)>;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   using OnOpenFdCountCallback = base::RepeatingCallback<void(int)>;
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
-  using OnProcessPriorityCallback = base::RepeatingCallback<void(bool)>;
+  using OnProcessPriorityCallback =
+      base::RepeatingCallback<void(base::Process::Priority)>;
 
   TaskGroupSampler(
       base::Process process,
@@ -60,12 +63,12 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
 
   // The refresh calls that will be done on the worker thread.
   double RefreshCpuUsage();
-  int64_t RefreshSwappedMem();
+  base::ByteSize RefreshSwappedMem();
   int RefreshIdleWakeupsPerSecond();
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   int RefreshOpenFdCount();
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
-  bool RefreshProcessPriority();
+  base::Process::Priority RefreshProcessPriority();
 
   // The process that holds the handle that we own so that we can use it for
   // creating the ProcessMetrics.

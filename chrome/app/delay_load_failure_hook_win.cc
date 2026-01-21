@@ -9,11 +9,7 @@
 
 #include <delayimp.h>
 
-#include "base/check.h"
-#include "base/debug/alias.h"
-#include "base/strings/string_util.h"
-
-namespace chrome {
+#include "chrome/common/win/delay_load_failure_support.h"
 
 namespace {
 
@@ -27,13 +23,7 @@ FARPROC WINAPI DelayLoadFailureHookEXE(unsigned reason,
   if (!g_hooks_enabled)
     return 0;
 
-  char dll_name[MAX_PATH];
-  base::strlcpy(dll_name, dll_info->szDll, std::size(dll_name));
-
-  base::debug::Alias(&dll_name);
-  CHECK(false);
-
-  return 0;
+  return HandleDelayLoadFailureCommon(reason, dll_info);
 }
 
 }  // namespace
@@ -42,13 +32,10 @@ void DisableDelayLoadFailureHooksForMainExecutable() {
   g_hooks_enabled = false;
 }
 
-}  // namespace chrome
-
 // Set the delay load failure hook to the function above.
 //
 // The |__pfnDliFailureHook2| failure notification hook gets called
 // automatically by the delay load runtime in case of failure, see
 // https://docs.microsoft.com/en-us/cpp/build/reference/failure-hooks?view=vs-2019
 // for more information about this.
-extern "C" const PfnDliHook __pfnDliFailureHook2 =
-    chrome::DelayLoadFailureHookEXE;
+extern "C" const PfnDliHook __pfnDliFailureHook2 = DelayLoadFailureHookEXE;

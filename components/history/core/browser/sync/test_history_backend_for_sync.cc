@@ -4,7 +4,9 @@
 
 #include "components/history/core/browser/sync/test_history_backend_for_sync.h"
 
-#include "base/containers/cxx20_erase_vector.h"
+#include <vector>
+
+#include "components/history/core/browser/history_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace history {
@@ -50,11 +52,25 @@ bool TestHistoryBackendForSync::UpdateVisit(VisitRow row) {
   return false;
 }
 
+void TestHistoryBackendForSync::AddOrReplaceContentAnnotation(
+    VisitID visit_id,
+    const VisitContentAnnotations& content_annotation) {
+  DCHECK_NE(visit_id, 0);
+  content_annotations_[visit_id] = content_annotation;
+}
+
+void TestHistoryBackendForSync::AddOrReplaceVisitSource(
+    VisitID visit_id,
+    VisitSource visit_source) {
+  DCHECK_NE(visit_id, 0);
+  visit_sources_[visit_id] = visit_source;
+}
+
 void TestHistoryBackendForSync::RemoveURLAndVisits(URLID url_id) {
-  base::EraseIf(visits_, [url_id](const VisitRow& visit) {
+  std::erase_if(visits_, [url_id](const VisitRow& visit) {
     return visit.url_id == url_id;
   });
-  base::EraseIf(urls_,
+  std::erase_if(urls_,
                 [url_id](const URLRow& url) { return url.id() == url_id; });
 }
 
@@ -110,10 +126,32 @@ bool TestHistoryBackendForSync::GetVisitByID(VisitID visit_id,
   return false;
 }
 
-bool TestHistoryBackendForSync::GetMostRecentVisitForURL(URLID id,
-                                                         VisitRow* visit_row) {
+bool TestHistoryBackendForSync::GetVisitSource(const VisitID visit_id,
+                                               VisitSource* source) {
+  if (visit_sources_.count(visit_id)) {
+    *source = visit_sources_[visit_id];
+    return true;
+  }
+  *source = VisitSource::SOURCE_BROWSED;
+  return false;
+}
+
+bool TestHistoryBackendForSync::GetMostRecentVisitForURL(
+    URLID id,
+    VisitRow* visit_row,
+    VisitQuery404sPolicy policy_for_404_visits) {
   *visit_row = VisitRow();
   for (const VisitRow& candidate : visits_) {
+    VisitContextAnnotations context_annotations;
+    if (context_annotations_.count(candidate.visit_id)) {
+      context_annotations = context_annotations_[candidate.visit_id];
+
+      int http_response_code = context_annotations.on_visit.response_code;
+      if (policy_for_404_visits == VisitQuery404sPolicy::kExclude404s &&
+          http_response_code == 404) {
+        continue;
+      }
+    }
     if (candidate.url_id == id &&
         (candidate.visit_time > visit_row->visit_time ||
          (candidate.visit_time == visit_row->visit_time &&
@@ -149,7 +187,7 @@ VisitVector TestHistoryBackendForSync::GetRedirectChain(VisitRow visit) {
     }
     result.push_back(visit);
   }
-  std::reverse(result.begin(), result.end());
+  std::ranges::reverse(result);
   return result;
 }
 
@@ -169,8 +207,10 @@ bool TestHistoryBackendForSync::GetForeignVisit(
   return false;
 }
 
-std::vector<AnnotatedVisit> TestHistoryBackendForSync::ToAnnotatedVisits(
-    const VisitVector& visit_rows) {
+std::vector<AnnotatedVisit>
+TestHistoryBackendForSync::ToAnnotatedVisitsFromRows(
+    const VisitVector& visit_rows,
+    bool compute_redirect_chain_start_properties) {
   std::vector<AnnotatedVisit> annotated_visits;
   for (const VisitRow& visit_row : visit_rows) {
     URLRow url_row;
@@ -194,8 +234,8 @@ VisitID TestHistoryBackendForSync::AddSyncedVisit(
     const std::u16string& title,
     bool hidden,
     const VisitRow& visit,
-    const absl::optional<VisitContextAnnotations>& context_annotations,
-    const absl::optional<VisitContentAnnotations>& content_annotations) {
+    const std::optional<VisitContextAnnotations>& context_annotations,
+    const std::optional<VisitContentAnnotations>& content_annotations) {
   const URLRow& url_row = FindOrAddURL(url, title, hidden);
 
   VisitRow visit_to_add = visit;
@@ -217,8 +257,8 @@ VisitID TestHistoryBackendForSync::UpdateSyncedVisit(
     const std::u16string& title,
     bool hidden,
     const VisitRow& visit,
-    const absl::optional<VisitContextAnnotations>& context_annotations,
-    const absl::optional<VisitContentAnnotations>& content_annotations) {
+    const std::optional<VisitContextAnnotations>& context_annotations,
+    const std::optional<VisitContentAnnotations>& content_annotations) {
   for (URLRow& existing_url : urls_) {
     if (existing_url.url() == url) {
       existing_url.set_title(title);
@@ -283,17 +323,41 @@ bool TestHistoryBackendForSync::UpdateVisitReferrerOpenerIDs(
   return false;
 }
 
+void TestHistoryBackendForSync::AddVisitToSyncedCluster(
+    const ClusterVisit& cluster_visit,
+    const std::string& originator_cache_guid,
+    int64_t cluster_id) {
+  ++add_visit_to_synced_cluster_count_;
+}
+
+int64_t TestHistoryBackendForSync::GetClusterIdContainingVisit(
+    VisitID visit_id) {
+  // For testing purposes, just put every visit in a different cluster.
+  return 1000 + static_cast<int64_t>(visit_id);
+}
+
 std::vector<GURL> TestHistoryBackendForSync::GetFaviconURLsForURL(
     const GURL& page_url) {
   // For the unit tests based on this class, favicon URLs aren't required.
   return {};
 }
 
-bool TestHistoryBackendForSync::DeleteAllForeignVisits() {
+void TestHistoryBackendForSync::MarkVisitAsKnownToSync(VisitID visit_id) {
+  for (auto& visit : visits_) {
+    if (visit.visit_id == visit_id) {
+      // This persists into the vector because we're operating on a reference.
+      visit.is_known_to_sync = true;
+    }
+  }
+}
+
+void TestHistoryBackendForSync::DeleteAllForeignVisitsAndResetIsKnownToSync() {
   ++delete_all_foreign_visits_call_count_;
 
   for (auto it = visits_.begin(); it != visits_.end();) {
-    const VisitRow& visit = *it;
+    VisitRow& visit = *it;
+    visit.is_known_to_sync = false;
+
     if (visit.originator_cache_guid.empty()) {
       // Local visit, leave it.
       ++it;
@@ -308,7 +372,6 @@ bool TestHistoryBackendForSync::DeleteAllForeignVisits() {
       // but currently isn't necessary for the unit tests that use this class.
     }
   }
-  return true;
 }
 
 void TestHistoryBackendForSync::AddObserver(HistoryBackendObserver* observer) {

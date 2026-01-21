@@ -6,11 +6,12 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
@@ -92,7 +93,7 @@ class UserAddedRemovedReporterTest : public ::testing::Test {
   }
 
   std::unique_ptr<TestingProfile> LoginRegularProfile(
-      base::StringPiece user_email,
+      std::string_view user_email,
       policy::ManagedSessionService* managed_session_service) {
     const AccountId account_id =
         AccountId::FromUserEmail(std::string(user_email));
@@ -120,13 +121,13 @@ class UserAddedRemovedReporterTest : public ::testing::Test {
   }
 
   std::unique_ptr<TestingProfile> LoginKioskProfile(
-      base::StringPiece user_email,
+      std::string_view user_email,
       policy::ManagedSessionService* managed_session_service) {
     const AccountId account_id =
         AccountId::FromUserEmail(std::string(user_email));
     TestingProfile::Builder profile_builder;
     auto profile = profile_builder.Build();
-    auto* const user = user_manager_->AddKioskAppUser(account_id);
+    auto* const user = user_manager_->AddKioskChromeAppUser(account_id);
     user_manager_->LoginUser(account_id, true);
     ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(user,
                                                                  profile.get());
@@ -134,13 +135,13 @@ class UserAddedRemovedReporterTest : public ::testing::Test {
     return profile;
   }
 
-  ::reporting::MockReportQueueStrict* mock_queue_;
+  raw_ptr<::reporting::MockReportQueueStrict, DanglingUntriaged> mock_queue_;
 
   std::unique_ptr<base::WeakPtrFactory<::reporting::MockReportQueueStrict>>
       weak_mock_queue_factory_;
 
  private:
-  ash::FakeChromeUserManager* user_manager_;
+  raw_ptr<ash::FakeChromeUserManager, DanglingUntriaged> user_manager_;
 
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
 
@@ -159,7 +160,7 @@ TEST_F(UserAddedRemovedReporterTest, TestAffiliatedUserAdded) {
   ::reporting::Priority priority;
   EXPECT_CALL(*mock_queue, AddRecord)
       .WillOnce(
-          [&record, &priority](base::StringPiece record_string,
+          [&record, &priority](std::string_view record_string,
                                ::reporting::Priority event_priority,
                                ::reporting::ReportQueue::EnqueueCallback) {
             record.ParseFromString(std::string(record_string));
@@ -174,7 +175,8 @@ TEST_F(UserAddedRemovedReporterTest, TestAffiliatedUserAdded) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   LoginRegularProfile(user_email, managed_session_service.get());
 
@@ -197,7 +199,7 @@ TEST_F(UserAddedRemovedReporterTest, TestUnaffiliatedUserAdded) {
   ::reporting::Priority priority;
   EXPECT_CALL(*mock_queue, AddRecord)
       .WillOnce(
-          [&record, &priority](base::StringPiece record_string,
+          [&record, &priority](std::string_view record_string,
                                ::reporting::Priority event_priority,
                                ::reporting::ReportQueue::EnqueueCallback) {
             record.ParseFromString(std::string(record_string));
@@ -212,7 +214,8 @@ TEST_F(UserAddedRemovedReporterTest, TestUnaffiliatedUserAdded) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   LoginRegularProfile(user_email, managed_session_service.get());
 
@@ -242,7 +245,8 @@ TEST_F(UserAddedRemovedReporterTest, TestReportingDisabled) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   auto profile = LoginRegularProfile(user_email, managed_session_service.get());
   managed_session_service->OnUserToBeRemoved(account_id);
@@ -267,7 +271,8 @@ TEST_F(UserAddedRemovedReporterTest, TestExistingUserLogin) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   LoginRegularProfile(user_email, managed_session_service.get());
 }
@@ -288,7 +293,8 @@ TEST_F(UserAddedRemovedReporterTest, TestGuestSessionLogsIn) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   LoginGuestProfile(managed_session_service.get());
 }
@@ -312,7 +318,8 @@ TEST_F(UserAddedRemovedReporterTest, TestKioskUserLogsIn) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   LoginKioskProfile(user_email, managed_session_service.get());
 }
@@ -331,7 +338,7 @@ TEST_F(UserAddedRemovedReporterTest, TestAffiliatedUserRemoval) {
   ::reporting::Priority priority;
   EXPECT_CALL(*mock_queue, AddRecord)
       .WillOnce(
-          [&record, &priority](base::StringPiece record_string,
+          [&record, &priority](std::string_view record_string,
                                ::reporting::Priority event_priority,
                                ::reporting::ReportQueue::EnqueueCallback) {
             record.ParseFromString(std::string(record_string));
@@ -346,7 +353,8 @@ TEST_F(UserAddedRemovedReporterTest, TestAffiliatedUserRemoval) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   auto profile = LoginRegularProfile(user_email, managed_session_service.get());
   managed_session_service->OnUserToBeRemoved(account_id);
@@ -377,7 +385,7 @@ TEST_F(UserAddedRemovedReporterTest, TestUnaffiliatedUserRemoval) {
   ::reporting::Priority priority;
   EXPECT_CALL(*mock_queue, AddRecord)
       .WillOnce(
-          [&record, &priority](base::StringPiece record_string,
+          [&record, &priority](std::string_view record_string,
                                ::reporting::Priority event_priority,
                                ::reporting::ReportQueue::EnqueueCallback) {
             record.ParseFromString(std::string(record_string));
@@ -392,7 +400,8 @@ TEST_F(UserAddedRemovedReporterTest, TestUnaffiliatedUserRemoval) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   auto profile = LoginRegularProfile(user_email, managed_session_service.get());
   managed_session_service->OnUserToBeRemoved(account_id);
@@ -426,7 +435,8 @@ TEST_F(UserAddedRemovedReporterTest, TestKioskUserRemoved) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
 
   auto profile = LoginKioskProfile(user_email, managed_session_service.get());
   managed_session_service->OnUserToBeRemoved(account_id);
@@ -436,8 +446,6 @@ TEST_F(UserAddedRemovedReporterTest, TestKioskUserRemoved) {
 
 TEST_F(UserAddedRemovedReporterTest, TestRemoteRemoval) {
   static constexpr char user_email[] = "user@managed.org";
-  ash::ChromeUserManager::Get()->CacheRemovedUser(
-      user_email, user_manager::UserRemovalReason::REMOTE_ADMIN_INITIATED);
 
   auto dummy_queue =
       std::unique_ptr<::reporting::ReportQueue, base::OnTaskRunnerDeleter>(
@@ -449,7 +457,7 @@ TEST_F(UserAddedRemovedReporterTest, TestRemoteRemoval) {
   ::reporting::Priority priority;
   EXPECT_CALL(*mock_queue, AddRecord)
       .WillOnce(
-          [&record, &priority](base::StringPiece record_string,
+          [&record, &priority](std::string_view record_string,
                                ::reporting::Priority event_priority,
                                ::reporting::ReportQueue::EnqueueCallback) {
             record.ParseFromString(std::string(record_string));
@@ -464,7 +472,10 @@ TEST_F(UserAddedRemovedReporterTest, TestRemoteRemoval) {
       std::make_unique<policy::ManagedSessionService>();
 
   auto reporter = UserAddedRemovedReporter::CreateForTesting(
-      std::move(test_helper), managed_session_service.get());
+      std::move(test_helper), /*users_to_be_removed=*/{},
+      managed_session_service.get());
+  reporter->ProcessRemovedUser(
+      user_email, user_manager::UserRemovalReason::REMOTE_ADMIN_INITIATED);
 
   EXPECT_THAT(priority, testing::Eq(::reporting::Priority::IMMEDIATE));
   EXPECT_TRUE(record.has_event_timestamp_sec());

@@ -10,9 +10,9 @@
 #include <cmath>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "chromecast/media/audio/audio_fader.h"
 #include "chromecast/media/audio/audio_log.h"
@@ -22,6 +22,7 @@
 #include "chromecast/media/cma/backend/mixer/filter_group.h"
 #include "chromecast/media/cma/backend/mixer/post_processing_pipeline.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/multi_channel_resampler.h"
 
@@ -33,6 +34,7 @@ namespace {
 const int64_t kMicrosecondsPerSecond = 1000 * 1000;
 const int kDefaultSlewTimeMs = 50;
 const int kDefaultFillBufferFrames = 2048;
+constexpr int kMaxChannels = 32;
 
 int RoundUpMultiple(int value, int multiple) {
   return multiple * ((value + (multiple - 1)) / multiple);
@@ -70,14 +72,15 @@ MixerInput::MixerInput(Source* source, FilterGroup* filter_group)
       output_samples_per_second_ != input_samples_per_second_) {
     if (source_->require_clock_rate_simulation()) {
       // Minimize latency.
-      source_read_size_ = ::media::SincResampler::kKernelSize * 2;
+      source_read_size_ = ::media::SincResampler::kSmallRequestSize;
     } else {
-      // Round up to nearest multiple of SincResampler::kKernelSize. The read
-      // size must be > kKernelSize, so we round up to at least 2 * kKernelSize.
-      source_read_size_ =
-          RoundUpMultiple(std::max(source_->desired_read_size(),
-                                   ::media::SincResampler::kKernelSize + 1),
-                          ::media::SincResampler::kKernelSize);
+      // Round up to nearest multiple of SincResampler::kMaxKernelSize. The read
+      // size must be > kMaxKernelSize, so we round up to at least 2 *
+      // kMaxKernelSize.
+      source_read_size_ = RoundUpMultiple(
+          std::max(static_cast<size_t>(source_->desired_read_size()),
+                   ::media::SincResampler::kMaxKernelSize + 1),
+          ::media::SincResampler::kMaxKernelSize);
     }
     resample_ratio_ = static_cast<double>(input_samples_per_second_) /
                       output_samples_per_second_;
@@ -208,10 +211,7 @@ void MixerInput::RemoveAudioOutputRedirector(
                   << ")";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(redirector);
-  audio_output_redirectors_.erase(
-      std::remove(audio_output_redirectors_.begin(),
-                  audio_output_redirectors_.end(), redirector),
-      audio_output_redirectors_.end());
+  std::erase(audio_output_redirectors_, redirector);
 }
 
 bool MixerInput::Render(
@@ -274,7 +274,8 @@ void MixerInput::RenderInterleaved(int num_output_frames) {
     // Keep only the samples from the selected channel.
     float* dest = interleaved_.data();
     for (int f = 0; f < num_output_frames; ++f) {
-      dest[f] = data[f * num_channels_ + playout_channel_];
+      UNSAFE_TODO(dest[f]) =
+          UNSAFE_TODO(data[f * num_channels_ + playout_channel_]);
     }
     data = dest;
   }
@@ -308,9 +309,10 @@ int MixerInput::FillAudioData(int num_frames,
     redirected = true;
   }
 
-  float* channels[num_channels_];
+  CHECK_LE(num_channels_, kMaxChannels);
+  float* channels[kMaxChannels];
   for (int c = 0; c < num_channels_; ++c) {
-    channels[c] = dest->channel(c);
+    UNSAFE_TODO(channels[c]) = dest->channel(c).data();
   }
   if (first_buffer_ && redirected) {
     // If the first buffer is redirected, don't provide any data to the mixer
@@ -351,7 +353,7 @@ int MixerInput::FillBuffer(int num_frames,
     // Based on testing, the buffered frames reported by SincResampler does not
     // include the delay incurred by the filter kernel, so add it explicitly.
     resampler_buffered_frames_ =
-        resampler_->BufferedFrames() + ::media::SincResampler::kKernelSize / 2;
+        resampler_->BufferedFrames() + resampler_->KernelSize() / 2;
     filled_for_resampler_ = 0;
     tried_to_fill_resampler_ = false;
     resampler_->Resample(num_frames, dest);
@@ -499,13 +501,13 @@ void MixerInput::SetMuted(bool muted) {
 float MixerInput::TargetVolume() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   float output_volume = stream_volume_multiplier_ * type_volume_multiplier_;
-  float clamped_volume = base::clamp(output_volume, volume_min_, volume_max_);
+  float clamped_volume = std::clamp(output_volume, volume_min_, volume_max_);
   float limited_volume = std::min(clamped_volume, output_volume_limit_);
   float muted_volume = limited_volume * mute_volume_multiplier_;
   // Volume is clamped after all gains have been multiplied, to avoid clipping.
   // TODO(kmackay): Consider removing this clamp and use a postprocessor filter
   // to avoid clipping instead.
-  return base::clamp(muted_volume, 0.0f, 1.0f);
+  return std::clamp(muted_volume, 0.0f, 1.0f);
 }
 
 float MixerInput::InstantaneousVolume() {

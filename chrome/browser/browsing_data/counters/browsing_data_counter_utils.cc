@@ -7,21 +7,45 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
+#include "base/feature_list.h"
+#include "base/i18n/number_formatting.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browsing_data/counters/cache_counter.h"
 #include "chrome/browser/browsing_data/counters/signin_data_counter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
+#include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/browsing_data/core/features.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/identity_utils.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/sync/base/features.h"
+#include "components/sync/service/sync_service.h"
+#include "google_apis/gaia/core_account_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "components/sync/service/sync_user_settings.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#include "ui/strings/grit/ui_strings.h"
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/browsing_data/counters/tabs_counter.h"
+#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "base/numerics/safe_conversions.h"
@@ -43,23 +67,43 @@ namespace {
 // A helper function to display the size of cache in units of MB or higher.
 // We need this, as 1 MB is the lowest nonzero cache size displayed by the
 // counter.
-std::u16string FormatBytesMBOrHigher(ResultInt bytes) {
-  if (ui::GetByteDisplayUnits(bytes) >= ui::DataUnits::DATA_UNITS_MEBIBYTE)
+std::u16string FormatBytesMBOrHigher(base::ByteSize bytes) {
+  if (ui::GetByteDisplayUnits(bytes) >= ui::DataUnits::kMebibyte) {
     return ui::FormatBytes(bytes);
+  }
 
-  return ui::FormatBytesWithUnits(
-      bytes, ui::DataUnits::DATA_UNITS_MEBIBYTE, true);
+  return ui::FormatBytesWithUnits(bytes, ui::DataUnits::kMebibyte, true);
 }
 }  // namespace
 
 bool ShouldShowCookieException(Profile* profile) {
   if (AccountConsistencyModeManager::IsMirrorEnabledForProfile(profile)) {
+    signin::ConsentLevel consent_level =
+        base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+            ? signin::ConsentLevel::kSignin
+            : signin::ConsentLevel::kSync;
     auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
-    return identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSync);
+    return identity_manager->HasPrimaryAccount(consent_level);
   }
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   if (AccountConsistencyModeManager::IsDiceEnabledForProfile(profile)) {
-    return GetSyncStatusMessageType(profile) == SyncStatusMessageType::kSynced;
+    const syncer::SyncService* service =
+        SyncServiceFactory::GetForProfile(profile);
+    if (!service || !service->HasSyncConsent()) {
+      return false;
+    }
+#if BUILDFLAG(IS_CHROMEOS)
+    if (service->GetUserSettings()->IsSyncFeatureDisabledViaDashboard()) {
+      return false;
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    syncer::SyncService::UserActionableError error =
+        service->GetUserActionableError();
+    return error == syncer::SyncService::UserActionableError::kNone ||
+           error == syncer::SyncService::UserActionableError::
+                        kTrustedVaultRecoverabilityDegradedForPasswords ||
+           error == syncer::SyncService::UserActionableError::
+                        kTrustedVaultRecoverabilityDegradedForEverything;
   }
 #endif
   return false;
@@ -80,25 +124,46 @@ std::u16string GetChromeCounterTextFromResult(
     // Cache counter.
     const auto* cache_result =
         static_cast<const CacheCounter::CacheResult*>(result);
-    int64_t cache_size_bytes = cache_result->cache_size();
+    base::ByteSize cache_size_bytes = base::ByteSize(
+        base::checked_cast<uint64_t>(cache_result->cache_size()));
     bool is_upper_limit = cache_result->is_upper_limit();
     bool is_basic_tab = pref_name == browsing_data::prefs::kDeleteCacheBasic;
 
     // Three cases: Nonzero result for the entire cache, nonzero result for
     // a subset of cache (i.e. a finite time interval), and almost zero (< 1MB).
-    static const int kBytesInAMegabyte = 1024 * 1024;
-    if (cache_size_bytes >= kBytesInAMegabyte) {
+    if (cache_size_bytes >= base::MiBU(1)) {
       std::u16string formatted_size = FormatBytesMBOrHigher(cache_size_bytes);
       if (!is_upper_limit) {
+#if BUILDFLAG(IS_ANDROID)
+        if (!is_basic_tab) {
+          return l10n_util::GetStringFUTF16(
+              IDS_ANDROID_DEL_CACHE_COUNTER_ADVANCED, formatted_size);
+        }
+#endif
         return is_basic_tab ? l10n_util::GetStringFUTF16(
                                   IDS_DEL_CACHE_COUNTER_BASIC, formatted_size)
                             : formatted_size;
       }
+
+#if BUILDFLAG(IS_ANDROID)
+      if (!is_basic_tab) {
+        return l10n_util::GetStringFUTF16(
+            IDS_ANDROID_DEL_CACHE_COUNTER_ADVANCED_UPPER_ESTIMATE,
+            formatted_size);
+      }
+#endif
       return l10n_util::GetStringFUTF16(
           is_basic_tab ? IDS_DEL_CACHE_COUNTER_UPPER_ESTIMATE_BASIC
                        : IDS_DEL_CACHE_COUNTER_UPPER_ESTIMATE,
           formatted_size);
     }
+
+#if BUILDFLAG(IS_ANDROID)
+    if (!is_basic_tab) {
+      return l10n_util::GetStringUTF16(
+          IDS_ANDROID_DEL_CACHE_COUNTER_ADVANCED_ALMOST_EMPTY);
+    }
+#endif
     return l10n_util::GetStringUTF16(
         is_basic_tab ? IDS_DEL_CACHE_COUNTER_ALMOST_EMPTY_BASIC
                      : IDS_DEL_CACHE_COUNTER_ALMOST_EMPTY);
@@ -113,13 +178,61 @@ std::u16string GetChromeCounterTextFromResult(
         static_cast<const BrowsingDataCounter::FinishedResult*>(result)
             ->Value();
 
+#if BUILDFLAG(IS_ANDROID)
+    return l10n_util::GetPluralStringFUTF16(
+        IDS_ANDROID_DEL_COOKIES_COUNTER_ADVANCED, origins);
+#else
     // Determines whether or not to show the count with exception message.
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+    // Notes:
+    // * `ShouldShowCookieException()` returns true if the exception footer is
+    //   shown. This is a sufficient condition to use the exception string,
+    // * `AreGoogleCookiesRebuiltAfterClearingWhenSignedIn()` may return false
+    //   when the user is signed out and always return false if syncing. The
+    //   counter should only be shown if the user is signed in, non-syncing, and
+    //   has no error.
+    bool is_signed_in = false;
+    if (identity_manager) {
+      CoreAccountId account_id =
+          identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
+      if (!account_id.empty() &&
+          !identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
+              account_id)) {
+        is_signed_in = true;
+      }
+    }
+
+#if !BUILDFLAG(IS_CHROMEOS)
+    if (base::FeatureList::IsEnabled(
+            browsing_data::features::kDbdRevampDesktop)) {
+      std::u16string cookies_counter_text = l10n_util::GetPluralStringFUTF16(
+          IDS_DEL_COOKIES_COUNTER_ADVANCED, origins);
+
+      if (origins > 0 &&
+          ChromeSigninClientFactory::GetForProfile(profile)
+              ->IsClearPrimaryAccountAllowed() &&
+          (ShouldShowCookieException(profile) ||
+           (is_signed_in &&
+            signin::AreGoogleCookiesRebuiltAfterClearingWhenSignedIn(
+                *identity_manager, *profile->GetPrefs())))) {
+        cookies_counter_text +=
+            (l10n_util::GetStringUTF16(IDS_SENTENCE_END) + u" " +
+             l10n_util::GetStringUTF16(IDS_DEL_GOOGLE_COOKIES_SIGNOUT_LINK));
+      }
+      return cookies_counter_text;
+    }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
     int del_cookie_counter_msg_id =
-        ShouldShowCookieException(profile)
-            ? IDS_DEL_COOKIES_COUNTER_ADVANCED_WITH_EXCEPTION
+        ShouldShowCookieException(profile) ||
+                (is_signed_in &&
+                 signin::AreGoogleCookiesRebuiltAfterClearingWhenSignedIn(
+                     *identity_manager, *profile->GetPrefs()))
+            ? IDS_DEL_COOKIES_COUNTER_ADVANCED_WITH_SIGNED_IN_EXCEPTION
             : IDS_DEL_COOKIES_COUNTER_ADVANCED;
 
     return l10n_util::GetPluralStringFUTF16(del_cookie_counter_msg_id, origins);
+#endif
   }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -168,7 +281,7 @@ std::u16string GetChromeCounterTextFromResult(
     ResultInt signin_data_count = signin_result->WebAuthnCredentialsValue();
 
     std::vector<std::u16string> counts;
-    // TODO(crbug.com/1086433): If there are profile passwords, account
+    // TODO(crbug.com/40132590): If there are profile passwords, account
     // passwords and other sign-in data, these are combined as
     // "<1>; <2>; <3>" by recursively applying a "<1>; <2>" message.
     // Maybe we should do something more pretty?
@@ -192,8 +305,28 @@ std::u16string GetChromeCounterTextFromResult(
       default:
         NOTREACHED();
     }
-    NOTREACHED();
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  if (pref_name == browsing_data::prefs::kCloseTabs) {
+    const TabsCounter::TabsResult* tabs_result =
+        static_cast<const TabsCounter::TabsResult*>(result);
+    BrowsingDataCounter::ResultInt tab_count = tabs_result->Value();
+    BrowsingDataCounter::ResultInt window_count = tabs_result->window_count();
+
+    if (window_count > 1) {
+      std::u16string tabs_counter_string =
+          l10n_util::GetPluralStringFUTF16(IDS_TABS_COUNT, tab_count);
+      std::u16string windows_counter_string =
+          l10n_util::GetPluralStringFUTF16(IDS_WINDOWS_COUNT, window_count);
+      return l10n_util::GetStringFUTF16(IDS_DEL_TABS_MULTIWINDOW_COUNTER,
+                                        tabs_counter_string,
+                                        windows_counter_string);
+    } else {
+      return l10n_util::GetPluralStringFUTF16(IDS_DEL_TABS_COUNTER, tab_count);
+    }
+  }
+#endif
 
   return browsing_data::GetCounterTextFromResult(result);
 }

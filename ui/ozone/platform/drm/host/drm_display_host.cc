@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
@@ -33,6 +33,27 @@ DrmDisplayHost::~DrmDisplayHost() {
 void DrmDisplayHost::UpdateDisplaySnapshot(
     std::unique_ptr<display::DisplaySnapshot> params) {
   snapshot_ = std::move(params);
+}
+
+void DrmDisplayHost::SetHdcpKeyProp(const std::string& key,
+                                    display::SetHdcpKeyPropCallback callback) {
+  set_hdcp_key_prop_callback_ = std::move(callback);
+  if (!sender_->GpuSetHdcpKeyProp(snapshot_->display_id(), key)) {
+    OnHdcpKeyPropSetReceived(false);
+  }
+}
+
+void DrmDisplayHost::OnHdcpKeyPropSetReceived(bool success) {
+  if (!set_hdcp_key_prop_callback_.is_null()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(set_hdcp_key_prop_callback_), success));
+  } else {
+    LOG(ERROR) << "Got unexpected event for display "
+               << snapshot_->display_id();
+  }
+
+  set_hdcp_key_prop_callback_.Reset();
 }
 
 void DrmDisplayHost::GetHDCPState(display::GetHDCPStateCallback callback) {
@@ -80,15 +101,19 @@ void DrmDisplayHost::OnHDCPStateUpdated(bool status) {
   set_hdcp_callback_.Reset();
 }
 
-void DrmDisplayHost::SetColorMatrix(const std::vector<float>& color_matrix) {
-  sender_->GpuSetColorMatrix(snapshot_->display_id(), color_matrix);
+void DrmDisplayHost::SetColorTemperatureAdjustment(
+    const display::ColorTemperatureAdjustment& cta) {
+  sender_->GpuSetColorTemperatureAdjustment(snapshot_->display_id(), cta);
 }
 
-void DrmDisplayHost::SetGammaCorrection(
-    const std::vector<display::GammaRampRGBEntry>& degamma_lut,
-    const std::vector<display::GammaRampRGBEntry>& gamma_lut) {
-  sender_->GpuSetGammaCorrection(snapshot_->display_id(), degamma_lut,
-                                 gamma_lut);
+void DrmDisplayHost::SetColorCalibration(
+    const display::ColorCalibration& calibration) {
+  sender_->GpuSetColorCalibration(snapshot_->display_id(), calibration);
+}
+
+void DrmDisplayHost::SetGammaAdjustment(
+    const display::GammaAdjustment& adjustment) {
+  sender_->GpuSetGammaAdjustment(snapshot_->display_id(), adjustment);
 }
 
 void DrmDisplayHost::SetPrivacyScreen(
@@ -96,6 +121,12 @@ void DrmDisplayHost::SetPrivacyScreen(
     display::SetPrivacyScreenCallback callback) {
   sender_->GpuSetPrivacyScreen(snapshot_->display_id(), enabled,
                                std::move(callback));
+}
+
+void DrmDisplayHost::GetSeamlessRefreshRates(
+    display::GetSeamlessRefreshRatesCallback callback) const {
+  sender_->GpuGetSeamlessRefreshRates(snapshot_->display_id(),
+                                      std::move(callback));
 }
 
 void DrmDisplayHost::OnGpuProcessLaunched() {}

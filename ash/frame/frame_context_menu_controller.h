@@ -6,6 +6,8 @@
 #define ASH_FRAME_FRAME_CONTEXT_MENU_CONTROLLER_H_
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/views/context_menu_controller.h"
 
@@ -22,7 +24,7 @@ class MenuRunner;
 namespace ash {
 
 // FrameContextMenuController is used to house the common code for displaying
-// the context menu of frames like `NonClientFrameViewAsh` and `WideFrameView`.
+// the context menu of frames like `FrameViewAsh` and `WideFrameView`.
 class ASH_EXPORT FrameContextMenuController
     : public views::ContextMenuController {
  public:
@@ -38,24 +40,25 @@ class ASH_EXPORT FrameContextMenuController
     virtual ~Delegate() = default;
   };
 
-  FrameContextMenuController(views::Widget* frame, Delegate* delegate);
+  FrameContextMenuController(views::Widget* widget, Delegate* delegate);
   FrameContextMenuController(const FrameContextMenuController&) = delete;
   FrameContextMenuController& operator=(const FrameContextMenuController&) =
       delete;
   ~FrameContextMenuController() override;
 
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(views::View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
 
  private:
   // The widget that `this` controls the context menu for.
-  views::Widget* frame_;
+  raw_ptr<views::Widget> widget_;
 
   // A delegate who is responsible for determining whether the context menu
   // should be shown at a point.
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   std::unique_ptr<chromeos::MoveToDesksMenuModel> move_to_desks_menu_model_;
   std::unique_ptr<views::MenuRunner> menu_runner_;

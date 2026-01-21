@@ -7,26 +7,20 @@
 #include "base/auto_reset.h"
 #include "base/logging.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 
 #if BUILDFLAG(IS_APPLE)
 #include <mach/thread_policy.h>
 
-#include "base/mac/mach_logging.h"
-#include "base/mac/scoped_mach_port.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
+#include "base/apple/scoped_nsautorelease_pool.h"
 #include "base/threading/threading_features.h"
 #endif
 
 namespace base {
-
-namespace {
-
-#if BUILDFLAG(IS_APPLE)
-bool g_use_thread_qos = false;
-#endif
-
-}  // namespace
 
 MessagePumpDefault::MessagePumpDefault()
     : keep_running_(true),
@@ -42,28 +36,54 @@ void MessagePumpDefault::Run(Delegate* delegate) {
 
   for (;;) {
 #if BUILDFLAG(IS_APPLE)
-    mac::ScopedNSAutoreleasePool autorelease_pool;
+    apple::ScopedNSAutoreleasePool autorelease_pool;
 #endif
 
     Delegate::NextWorkInfo next_work_info = delegate->DoWork();
     bool has_more_immediate_work = next_work_info.is_immediate();
-    if (!keep_running_)
+    if (!keep_running_) {
       break;
+    }
 
-    if (has_more_immediate_work)
+    if (has_more_immediate_work) {
       continue;
+    }
 
-    has_more_immediate_work = delegate->DoIdleWork();
-    if (!keep_running_)
+    delegate->DoIdleWork();
+    if (!keep_running_) {
       break;
+    }
 
-    if (has_more_immediate_work)
-      continue;
+    base::TimeTicks before;
+    bool may_busy_loop = max_busy_loop_time_.is_positive();
+    if (may_busy_loop) {
+      before = base::TimeTicks::Now();
+    }
 
     if (next_work_info.delayed_run_time.is_max()) {
-      event_.Wait();
+      if (ShouldBusyLoop()) {
+        bool signaled = BusyWaitOnEvent(before);
+        if (!signaled) {
+          event_.Wait();
+        }
+      } else {
+        event_.Wait();
+      }
     } else {
-      event_.TimedWait(next_work_info.remaining_delay());
+      // Not handling shorter sleeps to keep the code as simple as possible.
+      if (ShouldBusyLoop() &&
+          next_work_info.remaining_delay() > max_busy_loop_time_) {
+        bool signaled = BusyWaitOnEvent(before);
+        if (!signaled) {
+          next_work_info.recent_now = base::TimeTicks::Now();
+          event_.TimedWait(next_work_info.remaining_delay());
+        }
+      } else {
+        event_.TimedWait(next_work_info.remaining_delay());
+      }
+    }
+    if (may_busy_loop) {
+      RecordWaitTime(base::TimeTicks::Now() - before);
     }
     // Since event_ is auto-reset, we don't need to do anything special here
     // other than service each delegate method.
@@ -89,38 +109,45 @@ void MessagePumpDefault::ScheduleDelayedWork(
   // this way (bit.ly/merge-message-pump-do-work).
 }
 
-#if BUILDFLAG(IS_APPLE)
-void MessagePumpDefault::SetTimerSlack(TimerSlack timer_slack) {
-  if (!g_use_thread_qos) {
-    thread_latency_qos_policy_data_t policy{};
-    policy.thread_latency_qos_tier = timer_slack == TIMER_SLACK_MAXIMUM
-                                         ? LATENCY_QOS_TIER_3
-                                         : LATENCY_QOS_TIER_UNSPECIFIED;
-    mac::ScopedMachSendRight thread_port(mach_thread_self());
-    kern_return_t kr =
-        thread_policy_set(thread_port.get(), THREAD_LATENCY_QOS_POLICY,
-                          reinterpret_cast<thread_policy_t>(&policy),
-                          THREAD_LATENCY_QOS_POLICY_COUNT);
-    MACH_DVLOG_IF(1, kr != KERN_SUCCESS, kr) << "thread_policy_set";
-  }
+void MessagePumpDefault::RecordWaitTime(base::TimeDelta wait_time) {
+  last_wait_time_ = wait_time;
+  constexpr float kAlpha = .9;
+  wait_time_exponential_moving_average_ =
+      kAlpha * wait_time_exponential_moving_average_ +
+      (1. - kAlpha) * wait_time;
 }
 
-// static
-void MessagePumpDefault::InitFeaturesPostFieldTrial() {
-  // Since kUseThreadQoSMac is not constexpr (forbidden for Features), it cannot
-  // be used to initialize |g_use_thread_qos| at compile time. At least DCHECK
-  // that its initial value matches the default value of the feature here.
-  DCHECK_EQ(g_use_thread_qos,
-            kUseThreadQoSMac.default_state == FEATURE_ENABLED_BY_DEFAULT);
-
-  // A DCHECK is triggered on FeatureList initialization if the state of a
-  // feature has been checked before. To avoid triggering this DCHECK in unit
-  // tests that call this before initializing the FeatureList, only check the
-  // state of the feature if the FeatureList is initialized.
-  if (FeatureList::GetInstance()) {
-    g_use_thread_qos = FeatureList::IsEnabled(kUseThreadQoSMac);
-  }
+bool MessagePumpDefault::ShouldBusyLoop() const {
+  // Should only busy loop when the expected wait time is short. Of course, we
+  // don't know whether it will be, but we have two crude heuristics here:
+  // - Last wait was short, maybe the next one will. Not that if this one is
+  //   wrong, it only impacts a single wait.
+  // - Recent waits were short (burst of small tasks with waiting in-between)
+  //
+  // The second one is laggy, both to start and to stop, which is why the first
+  // one is there too, to start busy looping faster.
+  //
+  // One important part though is that to avoid wasting too much power, we
+  // should not busy wait for regular sleeps, for instance animations updating
+  // at 60Hz.
+  return max_busy_loop_time_.is_positive() &&
+         (last_wait_time_ < max_busy_loop_time_ ||
+          wait_time_exponential_moving_average_ < max_busy_loop_time_);
 }
-#endif
+
+bool MessagePumpDefault::BusyWaitOnEvent(base::TimeTicks before) {
+  bool signaled = false;
+  {
+    TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("base"), "BusyWait",
+                "last_wait_time_ms", last_wait_time_.InMillisecondsF(),
+                "wait_time_exponential_moving_average_ms",
+                wait_time_exponential_moving_average_.InMillisecondsF());
+    do {
+      signaled = event_.TimedWait(base::TimeDelta());
+    } while (!signaled &&
+             (base::TimeTicks::Now() - before) < max_busy_loop_time_);
+  }
+  return signaled;
+}
 
 }  // namespace base

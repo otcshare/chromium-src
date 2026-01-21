@@ -26,7 +26,10 @@
 #include "third_party/blink/renderer/platform/graphics/deferred_image_decoder.h"
 
 #include <memory>
+
+#include "base/compiler_specific.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -40,6 +43,7 @@
 #include "third_party/blink/renderer/platform/graphics/test/mock_image_decoder.h"
 #include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_skia.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
@@ -85,7 +89,8 @@ class DeferredImageDecoderTest : public testing::Test,
   void SetUp() override {
     paint_image_id_ = PaintImage::GetNextId();
     ImageDecodingStore::Instance().SetCacheLimitInBytes(1024 * 1024);
-    data_ = SharedBuffer::Create(kWhitePNG, sizeof(kWhitePNG));
+    data_ = SharedBuffer::Create(kWhitePNG);
+    original_data_ = data_->CopyAs<Vector<char>>();
     frame_count_ = 1;
     auto decoder = std::make_unique<MockImageDecoder>(this);
     actual_decoder_ = decoder.get();
@@ -117,16 +122,16 @@ class DeferredImageDecoderTest : public testing::Test,
   gfx::Size DecodedSize() const override { return decoded_size_; }
 
   PaintImage CreatePaintImage(
-      PaintImage::CompletionState state = PaintImage::CompletionState::DONE) {
+      PaintImage::CompletionState state = PaintImage::CompletionState::kDone) {
     return CreatePaintImage(lazy_decoder_.get(), state);
   }
 
   PaintImage CreatePaintImage(
       DeferredImageDecoder* decoder,
-      PaintImage::CompletionState state = PaintImage::CompletionState::DONE) {
+      PaintImage::CompletionState state = PaintImage::CompletionState::kDone) {
     PaintImage::AnimationType type = FrameCount() > 1
-                                         ? PaintImage::AnimationType::ANIMATED
-                                         : PaintImage::AnimationType::STATIC;
+                                         ? PaintImage::AnimationType::kAnimated
+                                         : PaintImage::AnimationType::kStatic;
 
     return PaintImageBuilder::WithDefault()
         .set_id(paint_image_id_)
@@ -142,14 +147,16 @@ class DeferredImageDecoderTest : public testing::Test,
         MockImageDecoderFactory::Create(this, decoded_size_));
   }
 
+  test::TaskEnvironment task_environment_;
   // Don't own this but saves the pointer to query states.
   PaintImage::Id paint_image_id_;
-  MockImageDecoder* actual_decoder_;
+  raw_ptr<MockImageDecoder> actual_decoder_;
   std::unique_ptr<DeferredImageDecoder> lazy_decoder_;
   SkBitmap bitmap_;
   std::unique_ptr<cc::PaintCanvas> canvas_;
   int decode_request_count_;
   scoped_refptr<SharedBuffer> data_;
+  Vector<char> original_data_;
   wtf_size_t frame_count_;
   int repetition_count_;
   ImageFrame::Status status_;
@@ -176,15 +183,15 @@ TEST_F(DeferredImageDecoderTest, drawIntoPaintRecord) {
 }
 
 TEST_F(DeferredImageDecoderTest, drawIntoPaintRecordProgressive) {
-  scoped_refptr<SharedBuffer> partial_data =
-      SharedBuffer::Create(data_->Data(), data_->size() - 10);
+  scoped_refptr<SharedBuffer> partial_data = SharedBuffer::Create(
+      base::span(original_data_).first(original_data_.size() - 10));
 
   // Received only half the file.
   lazy_decoder_->SetData(partial_data, false /* all_data_received */);
   PaintRecorder recorder;
   cc::PaintCanvas* temp_canvas = recorder.beginRecording();
   PaintImage image =
-      CreatePaintImage(PaintImage::CompletionState::PARTIALLY_DONE);
+      CreatePaintImage(PaintImage::CompletionState::kPartiallyDone);
   ASSERT_TRUE(image);
   temp_canvas->drawImage(image, 0, 0);
   canvas_->drawPicture(recorder.finishRecordingAsPicture());
@@ -212,8 +219,8 @@ TEST_F(DeferredImageDecoderTest, allDataReceivedPriorToDecodeNonIncrementally) {
 TEST_F(DeferredImageDecoderTest, allDataReceivedPriorToDecodeIncrementally) {
   // The image is received in two parts, but a PaintImageGenerator is created
   // only after all the data is received.
-  scoped_refptr<SharedBuffer> partial_data =
-      SharedBuffer::Create(data_->Data(), data_->size() - 10);
+  scoped_refptr<SharedBuffer> partial_data = SharedBuffer::Create(
+      base::span(original_data_).first(original_data_.size() - 10));
   lazy_decoder_->SetData(partial_data, false /* all_data_received */);
   lazy_decoder_->SetData(data_, true /* all_data_received */);
   PaintImage image = CreatePaintImage();
@@ -227,11 +234,11 @@ TEST_F(DeferredImageDecoderTest, notAllDataReceivedPriorToDecode) {
   // The image is received in two parts, and a PaintImageGenerator is created
   // for each one. In real usage, it's likely that the software image decoder
   // will start working with partial data.
-  scoped_refptr<SharedBuffer> partial_data =
-      SharedBuffer::Create(data_->Data(), data_->size() - 10);
+  scoped_refptr<SharedBuffer> partial_data = SharedBuffer::Create(
+      base::span(original_data_).first(original_data_.size() - 10));
   lazy_decoder_->SetData(partial_data, false /* all_data_received */);
   PaintImage image =
-      CreatePaintImage(PaintImage::CompletionState::PARTIALLY_DONE);
+      CreatePaintImage(PaintImage::CompletionState::kPartiallyDone);
   ASSERT_TRUE(image);
   ASSERT_TRUE(image.GetImageHeaderMetadata());
   EXPECT_FALSE(
@@ -291,7 +298,7 @@ TEST_F(DeferredImageDecoderTest, singleFrameImageLoading) {
   EXPECT_TRUE(actual_decoder_);
 
   status_ = ImageFrame::kFrameComplete;
-  data_->Append(" ", 1u);
+  data_->Append(base::span_from_cstring(" "));
   lazy_decoder_->SetData(data_, true /* all_data_received */);
   EXPECT_FALSE(actual_decoder_);
   EXPECT_TRUE(lazy_decoder_->FrameIsReceivedAtIndex(0));
@@ -311,13 +318,13 @@ TEST_F(DeferredImageDecoderTest, multiFrameImageLoading) {
   PaintImage image = CreatePaintImage();
   ASSERT_TRUE(image);
   EXPECT_FALSE(lazy_decoder_->FrameIsReceivedAtIndex(0));
-  // Anything <= 10ms is clamped to 100ms. See the implementaiton for details.
+  // Anything <= 10ms is clamped to 100ms. See the implementation for details.
   EXPECT_EQ(base::Milliseconds(100), lazy_decoder_->FrameDurationAtIndex(0));
 
   frame_count_ = 2;
   frame_duration_ = base::Milliseconds(20);
   status_ = ImageFrame::kFrameComplete;
-  data_->Append(" ", 1u);
+  data_->Append(base::span_from_cstring(" "));
   lazy_decoder_->SetData(data_, false /* all_data_received */);
 
   image = CreatePaintImage();
@@ -376,12 +383,12 @@ TEST_F(DeferredImageDecoderTest, smallerFrameCount) {
 TEST_F(DeferredImageDecoderTest, frameOpacity) {
   for (bool test_gif : {false, true}) {
     if (test_gif)
-      data_ = SharedBuffer::Create(kWhiteGIF, sizeof(kWhiteGIF));
+      data_ = SharedBuffer::Create(kWhiteGIF);
 
     std::unique_ptr<DeferredImageDecoder> decoder =
         DeferredImageDecoder::Create(data_, true,
                                      ImageDecoder::kAlphaPremultiplied,
-                                     ColorBehavior::TransformToSRGB());
+                                     ColorBehavior::kTransformToSRGB);
 
     SkImageInfo pix_info = SkImageInfo::MakeN32Premul(1, 1);
 
@@ -412,16 +419,17 @@ TEST_F(DeferredImageDecoderTest, frameOpacity) {
 }
 
 TEST_F(DeferredImageDecoderTest, data) {
+  Vector<char> data_binary = data_->CopyAs<Vector<char>>();
   scoped_refptr<SharedBuffer> original_buffer =
-      SharedBuffer::Create(data_->Data(), data_->size());
-  EXPECT_EQ(original_buffer->size(), data_->size());
+      SharedBuffer::Create(data_binary);
+  EXPECT_EQ(original_buffer->size(), data_binary.size());
   lazy_decoder_->SetData(original_buffer, false /* all_data_received */);
   scoped_refptr<SharedBuffer> new_buffer = lazy_decoder_->Data();
   EXPECT_EQ(original_buffer->size(), new_buffer->size());
   const Vector<char> original_data = original_buffer->CopyAs<Vector<char>>();
   const Vector<char> new_data = new_buffer->CopyAs<Vector<char>>();
-  EXPECT_EQ(0, std::memcmp(original_data.data(), new_data.data(),
-                           new_buffer->size()));
+  UNSAFE_TODO(EXPECT_EQ(0, std::memcmp(original_data.data(), new_data.data(),
+                                       new_buffer->size())));
 }
 
 class MultiFrameDeferredImageDecoderTest : public DeferredImageDecoderTest {

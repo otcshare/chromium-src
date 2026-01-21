@@ -30,24 +30,64 @@
 
 #include "third_party/blink/renderer/core/svg/svg_animated_length.h"
 
+#include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/svg/svg_length.h"
 
 namespace blink {
 
+namespace {
+
+bool RequireNonNegative(CSSPropertyID property_id) {
+  // This should include more properties ('r', 'rx' and 'ry').
+  return property_id == CSSPropertyID::kWidth ||
+         property_id == CSSPropertyID::kHeight;
+}
+
+}  // namespace
+
 SVGParsingError SVGAnimatedLength::AttributeChanged(const String& value) {
-  SVGParsingError parse_status =
-      SVGAnimatedProperty<SVGLength>::AttributeChanged(value);
+  // TODO: Use correct validator when we can set proper initial
+  // values on error (for example 'auto' for 'rx' and 'ry').
+
+  SVGParsingError parse_status = UpdateBaseValueFromAttribute(
+      *BaseValue(), value,
+      [](const SVGLength&) { return SVGParseStatus::kNoError; },
+      ContextElement()
+          ->GetDocument()
+          .ElementSheet()
+          .Contents()
+          ->ParserContext());
 
   if (SVGLength::NegativeValuesForbiddenForAnimatedLengthAttribute(
           AttributeName())) {
-    // TODO(crbug.com/982425): Pass |kValueRangeNonNegative| to property parser
-    // to handle range checking on math functions correctly, and also to avoid
-    // this ad hoc range checking.
-    if (BaseValue()->IsNegativeNumericLiteral())
+    // TODO(crbug.com/982425): Pass |kValueRangeNonNegative| to property
+    // parser to handle range checking on math functions correctly, and also
+    // to avoid this ad hoc range checking.
+    if (BaseValue()->IsNegativeNumericLiteral()) {
       parse_status = SVGParseStatus::kNegativeValue;
+    }
   }
 
   return parse_status;
+}
+
+const CSSValue* SVGAnimatedLength::CssValue() const {
+  DCHECK(HasPresentationAttributeMapping());
+  // SVG allows negative numbers for these attributes but CSS doesn't allow
+  // negative <length> values for the corresponding CSS properties. So remove
+  // negative values here.
+  if (RequireNonNegative(CssPropertyId())) {
+    // TODO(fs): This doesn't handle calc expressions. For that, we'd probably
+    // need to rewrap the CSSMathExpressionNode with a kValueRangeNonNegative
+    // range specification.
+    if (CurrentValue()->IsNegativeNumericLiteral()) {
+      return nullptr;
+    }
+  }
+  return &CurrentValue()->AsCSSValue();
 }
 
 void SVGAnimatedLength::Trace(Visitor* visitor) const {

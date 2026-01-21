@@ -9,60 +9,53 @@
 
 namespace features {
 
+namespace {
+
+constexpr base::FeatureState kFeatureEnabledOnlyOnAndroid =
+    BUILDFLAG(IS_ANDROID) ? base::FEATURE_ENABLED_BY_DEFAULT
+                          : base::FEATURE_DISABLED_BY_DEFAULT;
+
+}  // namespace
+
 // Whether local predictions should be used to make preconnect predictions.
 BASE_FEATURE(kLoadingPredictorUseLocalPredictions,
-             "LoadingPredictorUseLocalPredictions",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Modifies loading predictor so that it only learns about subresources and
 // origins that are high priority.
 BASE_FEATURE(kLoadingOnlyLearnHighPriorityResources,
-             "LoadingOnlyLearnHighPriorityResources",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Configures the loading predictor table size and other base parameters.
-BASE_FEATURE(kLoadingPredictorTableConfig,
-             "LoadingPredictorTableConfig",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kLoadingPredictorTableConfig, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Modifies loading predictor so that the predictions also contain origins of
 // the redirect target of the navigation.
 BASE_FEATURE(kLoadingPreconnectToRedirectTarget,
-             "LoadingPreconnectToRedirectTarget",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Modifies loading predictor so that the value of the |always_access_network|
 // attribute is not used when computing the predicting score for an origin.
 BASE_FEATURE(kLoadingPredictorDisregardAlwaysAccessesNetwork,
-             "LoadingPredictorDisregardAlwaysAccessesNetwork",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-const base::FeatureState
-    kLoadingPredictorUseOptimizationGuideDefaultFeatureState =
-#if BUILDFLAG(IS_ANDROID)
-        base::FEATURE_ENABLED_BY_DEFAULT;
-#else
-        base::FEATURE_DISABLED_BY_DEFAULT;
-#endif
 
 // Modifies loading predictor so that it can also use predictions coming from
 // the optimization guide.
 BASE_FEATURE(kLoadingPredictorUseOptimizationGuide,
-             "LoadingPredictorUseOptimizationGuide",
-             kLoadingPredictorUseOptimizationGuideDefaultFeatureState);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::FeatureState kLoadingPredictorPrefetchDefaultFeatureState =
-#if BUILDFLAG(IS_ANDROID)
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#else
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#endif
+constexpr base::FeatureState kLoadingPredictorPrefetchDefaultFeatureState =
+    kFeatureEnabledOnlyOnAndroid;
 
 // Modifies loading predictor so that it does prefetches of subresources instead
 // of preconnects.
 BASE_FEATURE(kLoadingPredictorPrefetch,
-             "LoadingPredictorPrefetch",
              kLoadingPredictorPrefetchDefaultFeatureState);
+
+// Use the kURLLoadOptionReadAndDiscardBody option to URLLoader to avoid
+// unnecessarily copying response body data.
+BASE_FEATURE(kLoadingPredictorPrefetchUseReadAndDiscardBody,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 const base::FeatureParam<PrefetchSubresourceType>::Option
     kPrefetchSubresourceTypeParamOptions[] = {
@@ -74,10 +67,6 @@ const base::FeatureParam<PrefetchSubresourceType>
     kLoadingPredictorPrefetchSubresourceType{
         &kLoadingPredictorPrefetch, "subresource_type",
         PrefetchSubresourceType::kAll, &kPrefetchSubresourceTypeParamOptions};
-
-BASE_FEATURE(kLoadingPredictorInflightPredictiveActions,
-             "kLoadingPredictorInflightPredictiveActions",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool ShouldUseLocalPredictions() {
   return base::FeatureList::IsEnabled(kLoadingPredictorUseLocalPredictions);
@@ -97,10 +86,7 @@ bool ShouldAlwaysRetrieveOptimizationGuidePredictions() {
       false);
 }
 
-size_t GetMaxInflightPrefetches() {
-  return static_cast<size_t>(base::GetFieldTrialParamByFeatureAsInt(
-      kLoadingPredictorInflightPredictiveActions, "max_inflight_prefetches",
-      3));
-}
+BASE_FEATURE(kPrefetchManagerUseNetworkContextPrefetch,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features

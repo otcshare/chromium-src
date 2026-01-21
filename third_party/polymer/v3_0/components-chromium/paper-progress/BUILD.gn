@@ -8,8 +8,7 @@ import("//third_party/closure_compiler/compile_js.gni")
 
 js_library("paper-progress") {
   deps = [
-    "../iron-range-behavior:iron-range-behavior",
-    "../paper-styles:color",
+    "../iron-range-behavior",
     "../polymer:polymer_bundled",
   ]
 }

@@ -18,9 +18,9 @@ class Label;
 
 // Class to create and manage an information bubble for errors or tooltips.
 class VIEWS_EXPORT InfoBubble : public BubbleDialogDelegateView {
- public:
-  METADATA_HEADER(InfoBubble);
+  METADATA_HEADER(InfoBubble, BubbleDialogDelegateView)
 
+ public:
   InfoBubble(View* anchor,
              BubbleBorder::Arrow arrow,
              const std::u16string& message);
@@ -37,9 +37,9 @@ class VIEWS_EXPORT InfoBubble : public BubbleDialogDelegateView {
   void Hide();
 
   // BubbleDialogDelegateView:
-  std::unique_ptr<NonClientFrameView> CreateNonClientFrameView(
-      Widget* widget) override;
-  gfx::Size CalculatePreferredSize() const override;
+  std::unique_ptr<FrameView> CreateFrameView(Widget* widget) override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
   void OnWidgetBoundsChanged(Widget* widget,
                              const gfx::Rect& new_bounds) override;
 

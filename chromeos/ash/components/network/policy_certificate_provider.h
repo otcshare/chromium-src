@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chromeos/components/onc/certificate_scope.h"
 
 namespace net {
@@ -33,6 +33,9 @@ class PolicyCertificateProvider {
     // Called every time the list of policy-set server and authority
     // certificates changes.
     virtual void OnPolicyProvidedCertsChanged() = 0;
+    // Called when the PolicyCertificateProvider is being destroyed.
+    // Observers should unregister themselves.
+    virtual void OnPolicyCertificateProviderDestroying() {}
   };
 
   virtual void AddPolicyProvidedCertsObserver(Observer* observer) = 0;

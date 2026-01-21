@@ -5,8 +5,11 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_diagnostics.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -23,7 +26,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
-#include "chromeos/ash/components/dbus/concierge/concierge_service.pb.h"
+#include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
 #include "components/prefs/pref_service.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -39,9 +42,9 @@ std::string CapitalizedBoardName() {
   const std::string uppercase = base::SysInfo::HardwareModelName();
 
   CHECK_GE(uppercase.size(), 1u);
-  base::StringPiece uppercase_first_char(uppercase.c_str(), 1);
-  base::StringPiece uppercase_remaining(uppercase.c_str() + 1,
-                                        uppercase.length() - 1);
+  std::string_view uppercase_first_char(uppercase.c_str(), 1);
+  std::string_view uppercase_remaining(UNSAFE_TODO(uppercase.c_str() + 1),
+                                       uppercase.length() - 1);
 
   return base::StrCat(
       {uppercase_first_char, base::ToLowerASCII(uppercase_remaining)});
@@ -166,6 +169,9 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
         case PolicyConfigured::kErrorLicenseNotSetUp:
           entry.SetFail(IDS_VM_STATUS_PAGE_LICENSE_NOT_SET_UP_EXPLANATION);
           break;
+        case PolicyConfigured::kErrorVirtualMachinesNotAllowed:
+          entry.SetFail(IDS_VM_STATUS_PAGE_VMS_NOT_ALLOWED_EXPLANATION);
+          break;
       }
       if (set_standard_top_error) {
         entry.OverrideTopError(IDS_VM_STATUS_PAGE_INCORRECT_POLICIES_ERROR);
@@ -179,15 +185,14 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
 
   void CheckDefaultVmExists(bool plugin_vm_is_allowed) {
     if (!plugin_vm_is_allowed) {
-      OnListVmDisks(false, absl::nullopt);
+      OnListVmDisks(false, std::nullopt);
       return;
     }
 
     vm_tools::concierge::ListVmDisksRequest request;
     request.set_cryptohome_id(
         ash::ProfileHelper::GetUserIdHashFromProfile(active_profile_));
-    request.set_storage_location(
-        vm_tools::concierge::STORAGE_CRYPTOHOME_PLUGINVM);
+    request.set_all_locations(true);
 
     ash::ConciergeClient::Get()->ListVmDisks(
         std::move(request),
@@ -197,7 +202,7 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
 
   void OnListVmDisks(
       bool plugin_vm_is_allowed,
-      absl::optional<vm_tools::concierge::ListVmDisksResponse> response) {
+      std::optional<vm_tools::concierge::ListVmDisksResponse> response) {
     EntryBuilder entry(l10n_util::GetStringFUTF8(
         IDS_VM_STATUS_PAGE_DEFAULT_VM_EXISTS_REQUIREMENT,
         l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)));
@@ -205,17 +210,33 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
     if (plugin_vm_is_allowed) {
       if (!response.has_value()) {
         entry.SetFail(IDS_VM_STATUS_PAGE_FAILED_TO_CHECK_VM_EXPLANATION);
-      } else if (!HasDefaultVm(response->images())) {
-        entry.SetFail(GetMissingDefaultVmExplanation(response->images()))
-            .OverrideTopError(
-                l10n_util::GetStringFUTF8(
-                    IDS_VM_STATUS_PAGE_MISSING_DEFAULT_VM_ERROR,
-                    l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)),
-                /*learn_more_link=*/
-                GURL(
-                    "https://support.google.com/chromebook?p=parallels_setup"));
       } else {
-        // Everything is good. Do nothing.
+        const ImageListType& images = response->images();
+        auto iter =
+            std::find_if(images.begin(), images.end(), [](const auto& info) {
+              return info.name() == plugin_vm::kPluginVmName;
+            });
+        if (iter == images.end()) {
+          entry.SetFail(GetMissingDefaultVmExplanation(response->images()))
+              .OverrideTopError(
+                  l10n_util::GetStringFUTF8(
+                      IDS_VM_STATUS_PAGE_MISSING_DEFAULT_VM_ERROR,
+                      l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)),
+                  /*learn_more_link=*/
+                  GURL("https://support.google.com/"
+                       "chromebook?p=parallels_setup"));
+        } else if (iter->storage_location() !=
+                   vm_tools::concierge::STORAGE_CRYPTOHOME_PLUGINVM) {
+          entry.SetFail(l10n_util::GetStringFUTF8(
+                            IDS_VM_STATUS_PAGE_INVALID_DEFAULT_VM_ERROR,
+                            base::UTF8ToUTF16(iter->name()),
+                            l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)),
+                        /*learn_more_link=*/
+                        GURL("https://support.google.com/"
+                             "chromebook?p=parallels_setup"));
+        } else {
+          // Everything is good. Do nothing.
+        }
       }
     } else {  // !plugin_vm_is_allowed.
       entry.SetNotApplicable();
@@ -231,45 +252,38 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
         FROM_HERE, base::BindOnce(std::move(callback_), builder_.Build()));
   }
 
-  bool HasDefaultVm(const ImageListType& images) {
-    for (auto& image : images) {
-      if (image.name() == plugin_vm::kPluginVmName) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   std::string GetMissingDefaultVmExplanation(const ImageListType& images) {
+    std::stringstream stream;
+    int count = 0;
+
+    // If we can locate VMs in the plugin VM area, we will put them into the
+    // second placeholder VM_NAME_LIST. The substitute should look like this:
+    // `"vm1", "vm2"`. Note that the l10n tooling does not support formatting a
+    // list of strings, which is why we have to do the formatting by ourselves
+    // here. The formatting might not be ideal for all languages, but it should
+    // be good enough for its purpose.
+    for (auto& image : images) {
+      if (image.storage_location() !=
+          vm_tools::concierge::STORAGE_CRYPTOHOME_PLUGINVM) {
+        continue;
+      }
+      if (count++) {
+        stream << ", ";
+      }
+      stream << '"' << image.name() << '"';
+    }
+
     std::string string_template = l10n_util::GetPluralStringFUTF8(
-        IDS_VM_STATUS_PAGE_MISSING_DEFAULT_VM_EXPLANATION, images.size());
+        IDS_VM_STATUS_PAGE_MISSING_DEFAULT_VM_EXPLANATION, count);
     std::vector<std::string> subs{
         l10n_util::GetStringUTF8(IDS_PLUGIN_VM_APP_NAME)};
-
-    if (images.size() > 0) {
-      // In this case, we have a second placeholder VM_NAME_LIST. The substitute
-      // should looke like this: `"vm1", "vm2"`. Note that the l10n tooling does
-      // not support formatting a list of strings, which is why we have to do
-      // the formatting by ourselves here. The formatting might not be ideal for
-      // all languages, but it should be good enough for its purpose.
-      std::stringstream stream;
-      bool first_vm = true;
-      for (auto& image : images) {
-        if (!first_vm) {
-          stream << ", ";
-        }
-        stream << '"' << image.name() << '"';
-
-        first_vm = false;
-      }
-
+    if (count > 0) {
       subs.push_back(stream.str());
     }
-
     return base::ReplaceStringPlaceholders(string_template, subs, nullptr);
   }
 
-  Profile* const active_profile_;
+  const raw_ptr<Profile> active_profile_;
   DiagnosticsCallback callback_;
   guest_os::DiagnosticsBuilder builder_;
 };

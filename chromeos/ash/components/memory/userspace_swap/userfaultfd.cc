@@ -15,9 +15,10 @@
 #include <linux/userfaultfd.h>
 #endif
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/posix/eintr_wrapper.h"
@@ -25,7 +26,6 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "chromeos/ash/components/memory/aligned_memory.h"
 
 namespace ash {
@@ -269,7 +269,9 @@ bool UserfaultFD::DrainPendingFaults() {
             pending_fault.arg.pagefault.flags & UFFD_PAGEFAULT_FLAG_WRITE
                 ? UserfaultFDHandler::PagefaultFlags::kWriteFault
                 : UserfaultFDHandler::PagefaultFlags::kReadFault,
-            pending_fault.arg.pagefault.feat.ptid)) {
+            base::PlatformThreadId(
+                static_cast<base::PlatformThreadId::UnderlyingType>(
+                    pending_fault.arg.pagefault.feat.ptid)))) {
       // It'll get retried later (it wasn't popped).
       return false;
     }
@@ -293,7 +295,7 @@ void UserfaultFD::UserfaultFDReadable() {
   base::ReleasableAutoLock read_locker(&read_lock_);
 
   do {
-    memset(&msg, 0, sizeof(msg));
+    UNSAFE_TODO(memset(&msg, 0, sizeof(msg)));
 
     // We start by draining all messages and then we process them in order.
     int bytes_read = HANDLE_EINTR(read(fd_.get(), &msg, sizeof(msg)));

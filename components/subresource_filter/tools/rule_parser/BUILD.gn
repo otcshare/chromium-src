@@ -12,11 +12,11 @@ source_set("rule_parser") {
     "rule_parser.cc",
     "rule_parser.h",
   ]
-  public_deps = [ "//components/url_pattern_index" ]
-  deps = [
+  public_deps = [
     "//base",
-    "//third_party/protobuf:protobuf_lite",
+    "//components/url_pattern_index",
   ]
+  deps = [ "//third_party/protobuf:protobuf_lite" ]
 }
 
 source_set("unit_tests") {
@@ -32,6 +32,10 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//third_party/protobuf:protobuf_lite",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 fuzzer_test("subresource_filter_rule_parser_fuzzer") {

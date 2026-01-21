@@ -46,7 +46,9 @@ void AudioInputStreamDataInterceptor::Stop() {
 
 void AudioInputStreamDataInterceptor::Close() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  stream_->Close();
+  AudioInputStream* stream_to_close = stream_;
+  stream_ = nullptr;
+  stream_to_close->Close();
   delete this;
 }
 
@@ -86,10 +88,12 @@ void AudioInputStreamDataInterceptor::SetOutputDeviceForAec(
   return stream_->SetOutputDeviceForAec(output_device_id);
 }
 
-void AudioInputStreamDataInterceptor::OnData(const AudioBus* source,
-                                             base::TimeTicks capture_time,
-                                             double volume) {
-  callback_->OnData(source, capture_time, volume);
+void AudioInputStreamDataInterceptor::OnData(
+    const AudioBus* source,
+    base::TimeTicks capture_time,
+    double volume,
+    const AudioGlitchInfo& audio_glitch_info) {
+  callback_->OnData(source, capture_time, volume, audio_glitch_info);
   debug_recorder_->OnData(source);
 }
 

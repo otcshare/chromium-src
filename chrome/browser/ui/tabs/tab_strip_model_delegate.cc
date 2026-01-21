@@ -4,9 +4,14 @@
 
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 
-#include "content/public/browser/web_contents.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 
 TabStripModelDelegate::NewStripContents::NewStripContents() = default;
 TabStripModelDelegate::NewStripContents::~NewStripContents() = default;
 TabStripModelDelegate::NewStripContents::NewStripContents(NewStripContents&&) =
     default;
+
+#if BUILDFLAG(ENABLE_GLIC)
+void TabStripModelDelegate::GlicUnpinTabsFromAllConversations(
+    base::span<const tabs::TabHandle> tab_handles) {}
+#endif

@@ -7,23 +7,23 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "media/audio/audio_manager.h"
 #include "media/base/audio_parameters.h"
-#include "media/base/user_input_monitor.h"
 #include "media/mojo/mojom/audio_processing.mojom.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "services/audio/input_sync_writer.h"
-#include "services/audio/user_input_monitor.h"
-#include "third_party/abseil-cpp/absl/utility/utility.h"
+#include "services/audio/reference_signal_provider.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace audio {
 
@@ -46,10 +46,19 @@ const char* ErrorCodeToString(InputController::ErrorCode error) {
       return "STREAM_OPEN_SYSTEM_PERMISSIONS_ERROR";
     case (InputController::STREAM_OPEN_DEVICE_IN_USE_ERROR):
       return "STREAM_OPEN_DEVICE_IN_USE_ERROR";
+    case (InputController::REFERENCE_STREAM_ERROR):
+      return "REFERENCE_STREAM_ERROR";
+    case (InputController::REFERENCE_STREAM_CREATE_ERROR):
+      return "REFERENCE_STREAM_CREATE_ERROR";
+    case (InputController::REFERENCE_STREAM_OPEN_ERROR):
+      return "REFERENCE_STREAM_OPEN_ERROR";
+    case (InputController::REFERENCE_STREAM_OPEN_SYSTEM_PERMISSIONS_ERROR):
+      return "REFERENCE_STREAM_OPEN_SYSTEM_PERMISSIONS_ERROR";
+    case (InputController::REFERENCE_STREAM_OPEN_DEVICE_IN_USE_ERROR):
+      return "REFERENCE_STREAM_OPEN_DEVICE_IN_USE_ERROR";
     default:
       NOTREACHED();
   }
-  return "UNKNOWN_ERROR";
 }
 
 std::string GetCtorLogString(const std::string& device_id,
@@ -71,12 +80,13 @@ InputStream::InputStream(
     mojo::PendingReceiver<media::mojom::AudioInputStream> receiver,
     mojo::PendingRemote<media::mojom::AudioInputStreamClient> client,
     mojo::PendingRemote<media::mojom::AudioInputStreamObserver> observer,
-    mojo::PendingRemote<media::mojom::AudioLog> log,
+    mojo::SharedRemote<media::mojom::AudioLog> log,
     media::AudioManager* audio_manager,
     media::AecdumpRecordingManager* aecdump_recording_manager,
-    std::unique_ptr<UserInputMonitor> user_input_monitor,
-    DeviceOutputListener* device_output_listener,
+    raw_ptr<MlModelManager> ml_model_manager,
+    std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
     media::mojom::AudioProcessingConfigPtr processing_config,
+    LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb,
     const std::string& device_id,
     const media::AudioParameters& params,
     uint32_t shared_memory_count,
@@ -95,24 +105,24 @@ InputStream::InputStream(
                : base::DoNothing(),
           shared_memory_count,
           params,
-          &foreign_socket_)),
-      user_input_monitor_(std::move(user_input_monitor)) {
+          &foreign_socket_)) {
   DCHECK(audio_manager);
   DCHECK(receiver_.is_bound());
   DCHECK(client_);
   DCHECK(created_callback_);
   DCHECK(delete_callback_);
   DCHECK(params.IsValid());
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("audio", "audio::InputStream", this);
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN2("audio", "InputStream", this, "device id",
-                                    device_id, "params",
-                                    params.AsHumanReadableString());
+  TRACE_EVENT_BEGIN("audio", "audio::InputStream",
+                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("audio", "InputStream", perfetto::Track::FromPointer(this),
+                    "device id", device_id, "params",
+                    params.AsHumanReadableString());
   SendLogMessage("%s", GetCtorLogString(device_id, params, enable_agc).c_str());
 
   // |this| owns these objects, so unretained is safe.
   base::RepeatingClosure error_handler =
       base::BindRepeating(&InputStream::OnStreamError, base::Unretained(this),
-                          absl::optional<DisconnectReason>());
+                          std::optional<DisconnectReason>());
   receiver_.set_disconnect_handler(error_handler);
   client_.set_disconnect_handler(error_handler);
 
@@ -135,9 +145,9 @@ InputStream::InputStream(
   }
 
   controller_ = InputController::Create(
-      audio_manager, this, writer_.get(), user_input_monitor_.get(),
-      device_output_listener, aecdump_recording_manager,
-      std::move(processing_config), params, device_id, enable_agc);
+      audio_manager, this, writer_.get(), std::move(reference_signal_provider),
+      aecdump_recording_manager, ml_model_manager, std::move(processing_config),
+      std::move(maybe_create_loopback_mixin_cb), params, device_id, enable_agc);
 }
 
 InputStream::~InputStream() {
@@ -156,7 +166,7 @@ InputStream::~InputStream() {
   if (created_callback_) {
     // Didn't manage to create the stream. Call the callback anyways as mandated
     // by mojo.
-    std::move(created_callback_).Run(nullptr, false, absl::nullopt);
+    std::move(created_callback_).Run(nullptr, false, std::nullopt);
   }
 
   if (!controller_) {
@@ -164,12 +174,14 @@ InputStream::~InputStream() {
     return;
   }
 
-  // TODO(https://crbug.com/803102): remove InputController::Close() after
+  // TODO(crbug.com/40558532): remove InputController::Close() after
   // content/ streams are removed, destructor should suffice.
   controller_->Close();
 
-  TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "InputStream", this);
-  TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "audio::InputStream", this);
+  TRACE_EVENT_END("audio",
+                  /* InputStream */ perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("audio",
+                  /* audio::InputStream */ perfetto::Track::FromPointer(this));
 }
 
 void InputStream::SetOutputDeviceForAec(const std::string& output_device_id) {
@@ -183,7 +195,7 @@ void InputStream::SetOutputDeviceForAec(const std::string& output_device_id) {
 void InputStream::Record() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   DCHECK(controller_);
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "Record", this);
+  TRACE_EVENT_INSTANT("audio", "Record", perfetto::Track::FromPointer(this));
   SendLogMessage("%s()", __func__);
   controller_->Record();
   if (observer_)
@@ -195,8 +207,8 @@ void InputStream::Record() {
 void InputStream::SetVolume(double volume) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   DCHECK(controller_);
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT1("audio", "SetVolume", this, "volume",
-                                      volume);
+  TRACE_EVENT_INSTANT("audio", "SetVolume", perfetto::Track::FromPointer(this),
+                      "volume", volume);
 
   if (volume < 0 || volume > 1) {
     receiver_.ReportBadMessage("Invalid volume");
@@ -210,13 +222,13 @@ void InputStream::SetVolume(double volume) {
 }
 
 void InputStream::OnCreated(bool initially_muted) {
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT1("audio", "Created", this,
-                                      "initially muted", initially_muted);
+  TRACE_EVENT_INSTANT("audio", "Created", perfetto::Track::FromPointer(this),
+                      "initially muted", initially_muted);
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   SendLogMessage("%s({muted=%s})", __func__,
-                 initially_muted ? "true" : "false");
+                 base::ToString(initially_muted).c_str());
 
-  base::ReadOnlySharedMemoryRegion shared_memory_region =
+  base::UnsafeSharedMemoryRegion shared_memory_region =
       writer_->TakeSharedMemoryRegion();
   if (!shared_memory_region.IsValid()) {
     OnStreamPlatformError();
@@ -227,7 +239,7 @@ void InputStream::OnCreated(bool initially_muted) {
   DCHECK(socket_handle.is_valid());
 
   std::move(created_callback_)
-      .Run({absl::in_place, std::move(shared_memory_region),
+      .Run({std::in_place, std::move(shared_memory_region),
             std::move(socket_handle)},
            initially_muted, id_);
 }
@@ -259,18 +271,18 @@ InputStreamErrorCode InputControllerErrorToStreamError(
 
 void InputStream::OnError(InputController::ErrorCode error_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "Error", this);
+  TRACE_EVENT_INSTANT("audio", "Error", perfetto::Track::FromPointer(this));
 
   client_->OnError(InputControllerErrorToStreamError(error_code));
   if (log_)
     log_->OnError();
-  SendLogMessage("%s({error_code=%s})", __func__,
-                 ErrorCodeToString(error_code));
+  UNSAFE_TODO(SendLogMessage("%s({error_code=%s})", __func__,
+                             ErrorCodeToString(error_code)));
   OnStreamError(InputErrorToDisconnectReason(error_code));
 }
 
-void InputStream::OnLog(base::StringPiece message) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
+void InputStream::OnLog(std::string_view message) {
+  // No sequence check: |log_| is thread-safe and id_ is const.
   if (log_)
     log_->OnLogMessage(std::string(message) + " [id=" + id_.ToString() + "]");
 }
@@ -285,9 +297,10 @@ void InputStream::OnStreamPlatformError() {
 }
 
 void InputStream::OnStreamError(
-    absl::optional<DisconnectReason> reason_to_report) {
+    std::optional<DisconnectReason> reason_to_report) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "OnStreamError", this);
+  TRACE_EVENT_INSTANT("audio", "OnStreamError",
+                      perfetto::Track::FromPointer(this));
 
   if (reason_to_report.has_value()) {
     if (observer_) {
@@ -316,8 +329,9 @@ void InputStream::SendLogMessage(const char* format, ...) {
     return;
   va_list args;
   va_start(args, format);
-  log_->OnLogMessage("audio::IS::" + base::StringPrintV(format, args) +
-                     base::StringPrintf(" [id=%s]", id_.ToString().c_str()));
+  log_->OnLogMessage(
+      "audio::IS::" + UNSAFE_TODO(base::StringPrintV(format, args)) +
+      base::StringPrintf(" [id=%s]", id_.ToString().c_str()));
   va_end(args);
 }
 

@@ -14,13 +14,16 @@
 #include "chrome/common/extensions/api/windows.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 TabsWindowsAPI::TabsWindowsAPI(content::BrowserContext* context)
-    : browser_context_(context),
-      windows_event_router_(
-          new WindowsEventRouter(Profile::FromBrowserContext(context))) {
+    : browser_context_(context) {
+  windows_event_router_ = std::make_unique<WindowsEventRouter>(
+      Profile::FromBrowserContext(browser_context_));
   EventRouter* event_router = EventRouter::Get(browser_context_);
 
   // Tabs API Events.
@@ -49,19 +52,19 @@ TabsWindowsAPI::TabsWindowsAPI(content::BrowserContext* context)
                                  api::windows::OnBoundsChanged::kEventName);
 }
 
-TabsWindowsAPI::~TabsWindowsAPI() {
-}
+TabsWindowsAPI::~TabsWindowsAPI() = default;
 
 // static
 TabsWindowsAPI* TabsWindowsAPI::Get(content::BrowserContext* context) {
   return BrowserContextKeyedAPIFactory<TabsWindowsAPI>::Get(context);
 }
 
+void TabsWindowsAPI::InitTabsEventRouter() {
+  tabs_event_router_ = std::make_unique<TabsEventRouter>(
+      Profile::FromBrowserContext(browser_context_));
+}
+
 TabsEventRouter* TabsWindowsAPI::tabs_event_router() {
-  if (!tabs_event_router_.get()) {
-    tabs_event_router_ = std::make_unique<TabsEventRouter>(
-        Profile::FromBrowserContext(browser_context_));
-  }
   return tabs_event_router_.get();
 }
 
@@ -83,7 +86,7 @@ TabsWindowsAPI::GetFactoryInstance() {
 
 void TabsWindowsAPI::OnListenerAdded(const EventListenerInfo& details) {
   // Initialize the event routers.
-  tabs_event_router();
+  InitTabsEventRouter();
   EventRouter::Get(browser_context_)->UnregisterObserver(this);
 }
 

@@ -146,7 +146,7 @@ void BluetoothRemoteGattServiceBlueZ::GattServicePropertyChanged(
 
 void BluetoothRemoteGattServiceBlueZ::GattCharacteristicAdded(
     const dbus::ObjectPath& object_path) {
-  if (characteristics_.find(object_path.value()) != characteristics_.end()) {
+  if (characteristics_.contains(object_path.value())) {
     DVLOG(1) << "Remote GATT characteristic already exists: "
              << object_path.value();
     return;

@@ -15,6 +15,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
+#include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_file_factory.h"
 #include "components/download/public/common/download_item_impl_delegate.h"
@@ -52,6 +53,7 @@ class COMPONENTS_DOWNLOAD_EXPORT InProgressDownloadManager
   using StartDownloadItemCallback =
       base::OnceCallback<void(std::unique_ptr<DownloadCreateInfo> info,
                               DownloadItemImpl*,
+                              const base::FilePath&,
                               bool /* should_persist_new_download */)>;
   using DisplayNames = std::unique_ptr<
       std::map<std::string /*content URI*/, base::FilePath /* display name*/>>;
@@ -129,7 +131,8 @@ class COMPONENTS_DOWNLOAD_EXPORT InProgressDownloadManager
       mojo::ScopedDataPipeConsumerHandle response_body,
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
       std::unique_ptr<network::PendingSharedURLLoaderFactory>
-          pending_url_loader_factory);
+          pending_url_loader_factory,
+      bool is_transient);
 
   void StartDownload(std::unique_ptr<DownloadCreateInfo> info,
                      std::unique_ptr<InputStream> stream,
@@ -242,6 +245,7 @@ class COMPONENTS_DOWNLOAD_EXPORT InProgressDownloadManager
       DownloadJob::CancelRequestCallback cancel_request_callback,
       std::unique_ptr<DownloadCreateInfo> info,
       DownloadItemImpl* download,
+      const base::FilePath& duplicate_download_file_path,
       bool should_persist_new_download);
 
   // Called when downloads are initialized.

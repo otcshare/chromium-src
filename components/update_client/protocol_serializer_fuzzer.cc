@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/update_client/protocol_serializer.h"
+
+#include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <fuzzer/FuzzedDataProvider.h>
 
 #include "base/check.h"
 #include "base/command_line.h"
@@ -18,8 +20,6 @@
 #include "base/json/json_reader.h"
 #include "base/strings/string_util.h"
 #include "components/update_client/protocol_handler.h"
-#include "components/update_client/protocol_serializer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 struct Environment {
   Environment() { CHECK(base::CommandLine::Init(0, nullptr)); }
@@ -46,7 +46,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       GetUtf8String() /* prod_id */, GetUtf8String() /* browser_version */,
       GetUtf8String() /* channel */, GetUtf8String() /* os_long_name */,
       GetUtf8String() /* download_preference */,
-      absl::nullopt /* domain_joined */, additional_attributes,
+      std::nullopt /* domain_joined */, additional_attributes,
       {} /*updater_state_attributes*/, std::move(apps));
 
   update_client::ProtocolHandlerFactoryJSON factory;
@@ -54,7 +54,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::string request_serialized = serializer->Serialize(request);
 
   // Any request we serialize should be valid JSON.
-  CHECK(base::JSONReader::Read(request_serialized));
+  CHECK(base::JSONReader::Read(request_serialized,
+                               base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   return 0;
 }
 }  // namespace update_client

@@ -9,9 +9,10 @@
 #include <ostream>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_device_notifier.h"
@@ -67,7 +68,7 @@ class CryptAuthDeviceNotifierImpl : public CryptAuthDeviceNotifier {
 
   friend std::ostream& operator<<(std::ostream& stream, const State& state);
 
-  static absl::optional<base::TimeDelta> GetTimeoutForState(State state);
+  static std::optional<base::TimeDelta> GetTimeoutForState(State state);
 
   struct Request {
     Request(const base::flat_set<std::string>& device_ids,
@@ -107,7 +108,7 @@ class CryptAuthDeviceNotifierImpl : public CryptAuthDeviceNotifier {
   void OnBatchNotifyGroupDevicesSuccess(
       const cryptauthv2::BatchNotifyGroupDevicesResponse& response);
   void OnBatchNotifyGroupDevicesFailure(NetworkRequestError error);
-  void FinishAttempt(absl::optional<NetworkRequestError> error);
+  void FinishAttempt(std::optional<NetworkRequestError> error);
 
   State state_ = State::kIdle;
   base::TimeTicks last_state_change_timestamp_;
@@ -115,7 +116,7 @@ class CryptAuthDeviceNotifierImpl : public CryptAuthDeviceNotifier {
 
   std::string instance_id_;
   std::string instance_id_token_;
-  CryptAuthClientFactory* client_factory_ = nullptr;
+  raw_ptr<CryptAuthClientFactory> client_factory_ = nullptr;
   std::unique_ptr<CryptAuthClient> cryptauth_client_;
   std::unique_ptr<base::OneShotTimer> timer_;
   base::WeakPtrFactory<CryptAuthDeviceNotifierImpl> weak_ptr_factory_{this};

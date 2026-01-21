@@ -10,6 +10,7 @@
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_management.h"
+#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "chrome/browser/extensions/preinstalled_apps.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
@@ -25,20 +26,12 @@ namespace {
 
 const char* g_preinstalled_app_for_testing = nullptr;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
-const char kMobilityPrintExtensionId[] = "alhngdkjgnedakdlnamimgfihgkmenbh";
-
-BASE_FEATURE(kChromeAppsDeprecationExcludeForceInstalls,
-             "ChromeAppsDeprecationExcludeForceInstalls",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-base::FeatureParam<std::string> kChromeAppAllowlist{
-    &features::kChromeAppsDeprecation, "allow_list", kMobilityPrintExtensionId};
-#endif
-
 }  // namespace
 
 namespace extensions {
+namespace testing {
+bool g_enable_chrome_apps_for_testing = false;
+}
 
 bool IsExtensionBlockedByPolicy(content::BrowserContext* context,
                                 const std::string& extension_id) {
@@ -50,12 +43,12 @@ bool IsExtensionBlockedByPolicy(content::BrowserContext* context,
   const Extension* extension = registry->GetInstalledExtension(extension_id);
   ExtensionManagement* management =
       ExtensionManagementFactory::GetForBrowserContext(context);
-  ExtensionManagement::InstallationMode mode =
+  ManagedInstallationMode mode =
       extension ? management->GetInstallationMode(extension)
                 : management->GetInstallationMode(extension_id,
                                                   /*update_url=*/std::string());
-  return mode == ExtensionManagement::INSTALLATION_BLOCKED ||
-         mode == ExtensionManagement::INSTALLATION_REMOVED;
+  return mode == ManagedInstallationMode::kBlocked ||
+         mode == ManagedInstallationMode::kRemoved;
 }
 
 bool IsExtensionInstalled(content::BrowserContext* context,
@@ -101,24 +94,14 @@ bool IsExternalExtensionUninstalled(content::BrowserContext* context,
   return prefs && prefs->IsExternalExtensionUninstalled(extension_id);
 }
 
-bool ClearExternalExtensionUninstalled(content::BrowserContext* context,
-                                       const std::string& extension_id) {
-  return ExtensionPrefs::Get(context)->ClearExternalExtensionUninstalled(
-      extension_id);
-}
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 bool IsExtensionUnsupportedDeprecatedApp(content::BrowserContext* context,
                                          const std::string& extension_id) {
-  if (!base::FeatureList::IsEnabled(features::kChromeAppsDeprecation))
+  if (testing::g_enable_chrome_apps_for_testing) {
     return false;
+  }
 
   if (extension_id == extensions::kWebStoreAppId)
-    return false;
-
-  const auto* prefs = Profile::FromBrowserContext(context)->GetPrefs();
-  if (prefs->GetBoolean(pref_names::kChromeAppsEnabled))
     return false;
 
   auto* registry = ExtensionRegistry::Get(context);
@@ -130,36 +113,6 @@ bool IsExtensionUnsupportedDeprecatedApp(content::BrowserContext* context,
       extension_id, extensions::ExtensionRegistry::EVERYTHING);
   if (!app || !app->is_app())
     return false;
-
-  bool force_installed =
-      IsExtensionForceInstalled(context, extension_id, nullptr);
-  bool preinstalled = IsPreinstalledAppId(extension_id);
-
-  // This feature allows us to keep chrome apps that are force installed AND
-  // preinstalled.
-  if (base::FeatureList::IsEnabled(
-          features::kKeepForceInstalledPreinstalledApps) &&
-      force_installed && preinstalled) {
-    return false;
-  }
-
-  if (base::FeatureList::IsEnabled(
-          kChromeAppsDeprecationExcludeForceInstalls) &&
-      force_installed) {
-    return false;
-  }
-
-  // This feature parameter can specify specific extension ids to continue
-  // allowing.
-  if (!kChromeAppAllowlist.Get().empty()) {
-    std::vector<std::string> allowed_extension_ids =
-        base::SplitString(kChromeAppAllowlist.Get(), ",", base::TRIM_WHITESPACE,
-                          base::SPLIT_WANT_NONEMPTY);
-    for (std::string allowed_extension_id : allowed_extension_ids) {
-      if (extension_id == allowed_extension_id)
-        return false;
-    }
-  }
 
   return true;
 }

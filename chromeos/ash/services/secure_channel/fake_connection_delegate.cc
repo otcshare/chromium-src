@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/services/secure_channel/fake_connection_delegate.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace ash::secure_channel {
 
@@ -33,9 +33,13 @@ void FakeConnectionDelegate::OnConnectionAttemptFailure(
 
 void FakeConnectionDelegate::OnConnection(
     mojo::PendingRemote<mojom::Channel> channel,
-    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver) {
+    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver,
+    mojo::PendingReceiver<mojom::NearbyConnectionStateListener>
+        nearby_connection_state_listener_receiver) {
   channel_.Bind(std::move(channel));
   message_receiver_receiver_ = std::move(message_receiver_receiver);
+  nearby_connection_state_listener_receiver_ =
+      std::move(nearby_connection_state_listener_receiver);
 
   if (closure_for_next_delegate_callback_)
     std::move(closure_for_next_delegate_callback_).Run();

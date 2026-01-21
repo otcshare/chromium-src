@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 #include "components/autofill/core/browser/geo/alternative_state_name_map.h"
+
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/proto/states.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace autofill {
-namespace test {
+namespace autofill::test {
 
 // Tests that map is not empty when an entry has been added to it.
 TEST(AlternativeStateNameMapTest, IsEntryAddedToMap) {
@@ -31,15 +32,15 @@ TEST(AlternativeStateNameMapTest, StateCanonicalString) {
     SCOPED_TRACE(valid_match);
     EXPECT_NE(AlternativeStateNameMap::GetCanonicalStateName(
                   "DE", base::ASCIIToUTF16(valid_match)),
-              absl::nullopt);
+              std::nullopt);
   }
 
   EXPECT_EQ(AlternativeStateNameMap::GetCanonicalStateName("US", u"Bavaria"),
-            absl::nullopt);
+            std::nullopt);
   EXPECT_EQ(AlternativeStateNameMap::GetCanonicalStateName("DE", u""),
-            absl::nullopt);
+            std::nullopt);
   EXPECT_EQ(AlternativeStateNameMap::GetCanonicalStateName("", u""),
-            absl::nullopt);
+            std::nullopt);
 }
 
 // Tests that the separate entries are created in the map for the different
@@ -49,9 +50,9 @@ TEST(AlternativeStateNameMapTest, SeparateEntryForDifferentCounties) {
   test::PopulateAlternativeStateNameMapForTesting("DE");
   test::PopulateAlternativeStateNameMapForTesting("US");
   EXPECT_NE(AlternativeStateNameMap::GetCanonicalStateName("DE", u"Bavaria"),
-            absl::nullopt);
+            std::nullopt);
   EXPECT_NE(AlternativeStateNameMap::GetCanonicalStateName("US", u"Bavaria"),
-            absl::nullopt);
+            std::nullopt);
 }
 
 // Tests that |AlternativeStateNameMap::NormalizeStateName()| removes "-", " "
@@ -84,11 +85,11 @@ TEST(AlternativeStateNameMapTest, GetEntry) {
   EXPECT_EQ(alternative_state_name_map->GetEntry(
                 AlternativeStateNameMap::CountryCode("DE"),
                 AlternativeStateNameMap::StateName(u"Random")),
-            absl::nullopt);
+            std::nullopt);
   auto entry = alternative_state_name_map->GetEntry(
       AlternativeStateNameMap::CountryCode("DE"),
       AlternativeStateNameMap::StateName(u"Bavaria"));
-  EXPECT_NE(entry, absl::nullopt);
+  EXPECT_NE(entry, std::nullopt);
   ASSERT_TRUE(entry->has_canonical_name());
   EXPECT_EQ(entry->canonical_name(), "Bavaria");
   EXPECT_THAT(entry->abbreviations(),
@@ -97,5 +98,4 @@ TEST(AlternativeStateNameMapTest, GetEntry) {
               testing::UnorderedElementsAreArray({"Bayern"}));
 }
 
-}  // namespace test
-}  // namespace autofill
+}  // namespace autofill::test

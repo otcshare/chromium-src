@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -18,6 +18,8 @@
 #include "base/win/scoped_handle.h"
 #include "services/device/usb/scoped_winusb_handle.h"
 #include "services/device/usb/usb_device_handle.h"
+
+struct _USB_NODE_CONNECTION_INFORMATION_EX;
 
 namespace base {
 class RefCountedBytes;
@@ -191,7 +193,7 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
   std::unique_ptr<Request> UnlinkRequest(Request* request);
   void GotNodeConnectionInformation(
       TransferCallback callback,
-      void* node_connection_info,
+      std::unique_ptr<_USB_NODE_CONNECTION_INFORMATION_EX> node_connection_info,
       scoped_refptr<base::RefCountedBytes> buffer,
       std::pair<DWORD, DWORD> result_and_bytes_transferred);
   void GotDescriptorFromNodeConnection(

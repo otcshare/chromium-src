@@ -6,15 +6,16 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "gin/v8_initializer.h"
 #include "headless/lib/browser/headless_browser_impl.h"
@@ -29,10 +30,23 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "services/device/public/cpp/test/fake_geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
+#include "services/device/public/cpp/test/fake_geolocation_system_permission_manager.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "components/password_manager/core/browser/password_manager_switches.h"
+#endif
+
+#if BUILDFLAG(IS_APPLE)
+#include "components/os_crypt/common/os_crypt_switches.h"
 #endif
 
 namespace headless {
+
+namespace {
+inline constexpr char kResetResults[] = "reset-results";
+}  // namespace
 
 HeadlessBrowserTest::HeadlessBrowserTest() {
 #if BUILDFLAG(IS_MAC)
@@ -41,7 +55,8 @@ HeadlessBrowserTest::HeadlessBrowserTest() {
   base::FilePath dir_exe_path;
   CHECK(base::PathService::Get(base::DIR_EXE, &dir_exe_path));
   dir_exe_path = dir_exe_path.Append("../../");
-  CHECK(base::PathService::Override(base::DIR_SOURCE_ROOT, dir_exe_path));
+  CHECK(
+      base::PathService::Override(base::DIR_SRC_TEST_DATA_ROOT, dir_exe_path));
 #endif  // BUILDFLAG(IS_MAC)
   base::FilePath headless_test_data(FILE_PATH_LITERAL("headless/test/data"));
   CreateTestServer(headless_test_data);
@@ -54,6 +69,25 @@ void HeadlessBrowserTest::SetUp() {
   command_line->AppendSwitch(switches::kUseGpuInTests);
   SetUpCommandLine(command_line);
   BrowserTestBase::SetUp();
+}
+
+void HeadlessBrowserTest::SetUpCommandLine(base::CommandLine* command_line) {
+  BrowserTestBase::SetUpCommandLine(command_line);
+
+  if (ShouldEnableSitePerProcess()) {
+    command_line->AppendSwitch(::switches::kSitePerProcess);
+  }
+
+  // Don't use the native password stores since they may prompt for additional
+  // UI during tests and cause timeouts.
+#if BUILDFLAG(IS_LINUX)
+  if (!command_line->HasSwitch(password_manager::kPasswordStore)) {
+    command_line->AppendSwitchASCII(password_manager::kPasswordStore, "basic");
+  }
+#endif
+#if BUILDFLAG(IS_APPLE)
+  command_line->AppendSwitch(os_crypt::switches::kUseMockKeychain);
+#endif
 }
 
 void HeadlessBrowserTest::SetUpWithoutGPU() {
@@ -95,12 +129,14 @@ void HeadlessBrowserTest::PostRunTestOnMainThread() {
 #if BUILDFLAG(IS_MAC)
 void HeadlessBrowserTest::CreatedBrowserMainParts(
     content::BrowserMainParts* parts) {
-  auto fake_geolocation_manager =
-      std::make_unique<device::FakeGeolocationManager>();
-  fake_geolocation_manager->SetSystemPermission(
+  auto fake_geolocation_system_permission_manager =
+      std::make_unique<device::FakeGeolocationSystemPermissionManager>();
+  fake_geolocation_system_permission_manager->SetSystemPermission(
       device::LocationSystemPermissionStatus::kAllowed);
-  static_cast<HeadlessBrowserMainParts*>(parts)
-      ->SetGeolocationManagerForTesting(std::move(fake_geolocation_manager));
+
+  CHECK(!device::GeolocationSystemPermissionManager::GetInstance());
+  device::GeolocationSystemPermissionManager::SetInstance(
+      std::move(fake_geolocation_system_permission_manager));
 }
 #endif
 
@@ -110,6 +146,11 @@ HeadlessBrowser* HeadlessBrowserTest::browser() const {
 
 HeadlessBrowser::Options* HeadlessBrowserTest::options() const {
   return HeadlessContentMainDelegate::GetInstance()->browser()->options();
+}
+
+bool HeadlessBrowserTest::ShouldEnableSitePerProcess() {
+  // Make sure the navigations spawn new processes by default.
+  return true;
 }
 
 void HeadlessBrowserTest::RunAsynchronousTest() {
@@ -122,6 +163,10 @@ void HeadlessBrowserTest::RunAsynchronousTest() {
 
 void HeadlessBrowserTest::FinishAsynchronousTest() {
   run_loop_->Quit();
+}
+
+bool HeadlessBrowserTest::ShouldUpdateExpectations() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(kResetResults);
 }
 
 }  // namespace headless

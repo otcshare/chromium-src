@@ -9,14 +9,13 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
-#include "base/bind.h"
 #include "base/containers/id_map.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "cc/resources/ui_resource_client.h"
-#include "ui/gfx/geometry/size.h"
-#include "ui/gfx/geometry/transform.h"
+#include "components/tab_groups/tab_group_id.h"
 
-namespace cc {
+namespace cc::slim {
 class Layer;
 }
 
@@ -26,7 +25,8 @@ class ResourceManager;
 
 namespace android {
 
-class DecorationTitle;
+class DecorationTabTitle;
+class DecorationIconTitle;
 
 // A native component of the Java LayerTitleCache class.  This class
 // will build and maintain layers that represent the cached titles in
@@ -37,12 +37,17 @@ class LayerTitleCache {
       const base::android::JavaRef<jobject>& jobj);
 
   LayerTitleCache(JNIEnv* env,
-                  jobject jobj,
-                  jint fade_width,
-                  jint favicon_start_padding,
-                  jint favicon_end_padding,
-                  jint spinner_resource_id,
-                  jint spinner_incognito_resource_id,
+                  const jni_zero::JavaRef<jobject>& obj,
+                  int32_t fade_width,
+                  int32_t icon_start_padding,
+                  int32_t icon_end_padding,
+                  int32_t spinner_resource_id,
+                  int32_t spinner_incognito_resource_id,
+                  int32_t bubble_inner_dimension,
+                  int32_t bubble_outer_dimension,
+                  int32_t bubble_offset,
+                  int32_t bubble_inner_tint,
+                  int32_t bubble_outer_tint,
                   ui::ResourceManager* resource_manager);
 
   LayerTitleCache(const LayerTitleCache&) = delete;
@@ -50,42 +55,70 @@ class LayerTitleCache {
 
   void Destroy(JNIEnv* env);
 
-  // Called from Java, updates a native cc::Layer based on the new texture
+  // Called from Java, updates a native cc::slim::Layer based on the new texture
   // information.
   void UpdateLayer(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint tab_id,
-                   jint title_resource_id,
-                   jint favicon_resource_id,
+                   int32_t tab_id,
+                   int32_t title_resource_id,
+                   int32_t icon_resource_id,
                    bool is_incognito,
-                   bool is_rtl);
+                   bool is_rtl,
+                   bool show_bubble);
 
-  // Called from Java, updates favicon.
-  void UpdateFavicon(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj,
-                     jint tab_id,
-                     jint favicon_resource_id);
+  // Called from Java, updates a native cc::slim::Layer based on the new texture
+  // information.
+  void UpdateGroupLayer(JNIEnv* env,
+                        const base::android::JavaRef<jobject>& group_token,
+                        int32_t title_resource_id,
+                        int32_t avatar_resource_id,
+                        int32_t avatar_padding,
+                        bool is_incognito,
+                        bool is_rtl);
 
-  void ClearExcept(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint except_id);
+  // Called from Java, updates icon.
+  void UpdateIcon(JNIEnv* env,
+                  int32_t tab_id,
+                  int32_t icon_resource_id,
+                  bool show_bubble);
+
+  // Called from Java, updates tab bubble if a shared tab is updated by
+  // collaborators.
+  void UpdateTabBubble(JNIEnv* env, int32_t tab_id, bool show_bubble);
 
   // Returns the layer that represents the title of tab of tab_id.
   // Returns NULL if no layer can be found.
-  DecorationTitle* GetTitleLayer(int tab_id);
+  DecorationTabTitle* GetTitleLayer(int tab_id);
+
+  // Returns the layer that represents the title of group of group_token.
+  // Returns NULL if no layer can be found.
+  DecorationIconTitle* GetGroupTitleLayer(
+      const tab_groups::TabGroupId& group_token,
+      bool incognito);
 
  private:
+  const int kEmptyWidth = 0;
+
   virtual ~LayerTitleCache();
 
-  base::IDMap<std::unique_ptr<DecorationTitle>> layer_cache_;
+  base::IDMap<std::unique_ptr<DecorationTabTitle>> layer_cache_;
+  std::unordered_map<tab_groups::TabGroupId,
+                     std::unique_ptr<DecorationIconTitle>,
+                     tab_groups::TabGroupIdHash>
+      group_layer_cache_;
 
   JavaObjectWeakGlobalRef weak_java_title_cache_;
   int fade_width_;
-  int favicon_start_padding_;
-  int favicon_end_padding_;
+  int icon_start_padding_;
+  int icon_end_padding_;
 
   int spinner_resource_id_;
   int spinner_incognito_resource_id_;
+
+  int bubble_inner_dimension_;
+  int bubble_outer_dimension_;
+  int bubble_offset_;
+  int bubble_inner_tint_;
+  int bubble_outer_tint_;
 
   raw_ptr<ui::ResourceManager> resource_manager_;
 };

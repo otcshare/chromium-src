@@ -5,18 +5,19 @@
 #ifndef UI_ACCESSIBILITY_PLATFORM_AX_SYSTEM_CARET_WIN_H_
 #define UI_ACCESSIBILITY_PLATFORM_AX_SYSTEM_CARET_WIN_H_
 
-#include <type_traits>
-
 #include <oleacc.h>
 #include <wrl/client.h>
+
+#include <type_traits>
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_data.h"
-#include "ui/accessibility/platform/ax_platform_node_delegate_base.h"
+#include "ui/accessibility/platform/ax_platform_node_delegate.h"
+#include "ui/accessibility/platform/ax_unique_id.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -27,7 +28,7 @@ class AXPlatformNodeWin;
 // caret and because some assistive software still relies on specific
 // accessibility APIs to retrieve the caret position.
 class COMPONENT_EXPORT(AX_PLATFORM) AXSystemCaretWin
-    : private AXPlatformNodeDelegateBase {
+    : private AXPlatformNodeDelegate {
  public:
   explicit AXSystemCaretWin(gfx::AcceleratedWidget event_target);
 
@@ -36,7 +37,8 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXSystemCaretWin
 
   ~AXSystemCaretWin() override;
 
-  Microsoft::WRL::ComPtr<IAccessible> GetCaret() const;
+  // Returns an unowned pointer to the caret's IAccessible interface.
+  IAccessible* GetCaret() const;
   void MoveCaretTo(const gfx::Rect& bounds_physical_pixels);
   void Hide();
 
@@ -49,17 +51,16 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXSystemCaretWin
                           AXOffscreenResult* offscreen_result) const override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
   bool ShouldIgnoreHoveredStateForTesting() override;
-  const ui::AXUniqueId& GetUniqueId() const override;
+  AXPlatformNodeId GetUniqueId() const override;
 
-  static void AXPlatformNodeWinDeleter(AXPlatformNodeWin* ptr);
+  const AXUniqueId unique_id_{AXUniqueId::Create()};
+  const gfx::AcceleratedWidget event_target_;
+  AXPlatformNode::Pointer caret_;
 
-  using deleter = std::integral_constant<
-      decltype(AXSystemCaretWin::AXPlatformNodeWinDeleter)*,
-      AXSystemCaretWin::AXPlatformNodeWinDeleter>;
-  std::unique_ptr<AXPlatformNodeWin, deleter> caret_;
-  gfx::AcceleratedWidget event_target_;
+  // The IAccessible of the caret's parent HWND. Created lazily on first use.
+  mutable Microsoft::WRL::ComPtr<IAccessible> parent_;
+
   AXNodeData data_;
-  ui::AXUniqueId unique_id_;
 
   friend class AXPlatformNodeWin;
 };

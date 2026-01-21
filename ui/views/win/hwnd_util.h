@@ -7,7 +7,7 @@
 
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/views_export.h"
 
 namespace views {
@@ -30,6 +30,9 @@ VIEWS_EXPORT HWND HWNDForNativeWindow(const gfx::NativeWindow window);
 VIEWS_EXPORT gfx::Rect GetWindowBoundsForClientBounds(
     View* view,
     const gfx::Rect& client_bounds);
+
+// Returns the headless window bounds for the specified HWND.
+VIEWS_EXPORT gfx::Rect GetHeadlessWindowBounds(HWND window);
 
 // Shows |window|'s system menu (at a specified |point| in screen physical
 // coordinates).

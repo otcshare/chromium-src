@@ -8,6 +8,7 @@ import glob
 import json
 import copy
 import os
+import re
 import sys
 
 # This script runs in Chromium and ChromiumOS.
@@ -30,6 +31,13 @@ except ImportError:
   # to know which version of pyyaml to use.
   import yaml as pyyaml
 
+def _SafeListDir(directory):
+  '''Wrapper around os.listdir() that ignores files created by Finder.app.'''
+  # On macOS, Finder.app creates .DS_Store files when a user visit a
+  # directory causing failure of the script laters on because there
+  # are no such group as .DS_Store. Skip the file to prevent the error.
+  return filter(lambda name:(name != '.DS_Store'),sorted(os.listdir(directory)))
+
 TEMPLATES_PATH =  os.path.join(
   os.path.dirname(__file__), 'templates')
 
@@ -37,6 +45,36 @@ DEFAULT_TEMPLATES_GEN_PATH =  os.path.join(
   os.path.dirname(__file__), 'policy_templates.json')
 
 POLICY_DEFINITIONS_KEY = 'policy_definitions'
+
+# Notices will be appended to sensitive policy descriptions
+# in the order they appear here.
+# LINT.IfChange(sensitive_policy_notices)
+SENSITIVE_POLICY_NOTICES = {
+  'win':
+  ('On <ph name="MS_WIN_NAME">Microsoft® Windows®</ph>, this policy '
+    'is only available on instances that are joined to a <ph '
+    'name="MS_AD_NAME">Microsoft® Active Directory®</ph> domain, '
+    'joined to <ph name="MS_AAD_NAME">Microsoft® Azure® Active '
+    'Directory®</ph> or enrolled in <ph '
+    'name="CHROME_ENTERPRISE_CORE_NAME">Chrome Enterprise '
+    'Core</ph>.'),
+  'mac':
+  ('On <ph name="MAC_OS_NAME">macOS</ph>, this policy is only '
+   'available on instances that are managed via MDM, joined to a '
+   'domain via MCX or enrolled in <ph '
+   'name="CHROME_ENTERPRISE_CORE_NAME">Chrome Enterprise '
+   'Core</ph>.')
+}
+# LINT.ThenChange(/docs/enterprise/description_guidelines.md:sensitive_policy_notices)
+
+# Used to detect sensitive policies that already have notices
+# manually added to their descriptions.
+SENSITIVE_POLICIES_WITH_MANUAL_NOTICE_PATTERN = {
+  'win': (r"^\s*On <ph name=\"MS_WIN_NAME\">Microsoft® Windows®</ph>, this "
+          r"policy is only available on instances"),
+  'mac': (r"^\s*On <ph name=\"MAC_OS_NAME\">macOS</ph>, this policy is only "
+          r"available on instances")
+}
 
 
 def _SubstituteSchemaRefNames(node, child_key, common_schema, parent_refs,
@@ -60,9 +98,9 @@ def _SubstituteSchemaRefNames(node, child_key, common_schema, parent_refs,
       node[child_key]['id'] = ref_name
     refs_seen.add(ref_name)
 
-  for ck in node[child_key].keys():
-    # Copy parents ref so that parents are unique for each child branch and do not mix with sibling
-    # nodes.
+  for ck in sorted(node[child_key].keys()):
+    # Copy parents ref so that parents are unique for each child branch and do
+    # not mix with sibling nodes.
     _SubstituteSchemaRefNames(node[child_key], ck, common_schema,
                               parent_refs.copy(), refs_seen)
 
@@ -71,19 +109,53 @@ def _SubstituteSchemaRefs(policies, common_schema):
   '''Converts objects with the key '$ref' into their actual schema.
 
     Args:
-      policies: List of policiesal.
+      policies: List of policies.
       common_schema: Dictionary of schemas by their ref names.'''
-  list_dict_policies = [policy for policy in policies if 'schema' in policy]
+  policy_list = [policy for policy in policies if 'schema' in policy]
 
   refs_seen = set()
-  for policy in list_dict_policies:
+  for policy in sorted(policy_list, key=lambda policy: policy['id']):
     parent_refs = set()
     _SubstituteSchemaRefNames(policy, 'schema', common_schema, parent_refs,
                               refs_seen)
-  for policy in list_dict_policies:
     parent_refs = set()
     _SubstituteSchemaRefNames(policy, 'validation_schema', common_schema,
                               parent_refs, refs_seen)
+
+
+def _ContainsSensitivePolicyNotices(policy):
+  '''
+  Returns True if the sensitive policy contains
+  any of the required notices in its description.
+  '''
+
+  for pattern in SENSITIVE_POLICIES_WITH_MANUAL_NOTICE_PATTERN.values():
+    if re.search(pattern, policy['desc'], re.MULTILINE):
+      return True
+
+  return False
+
+
+def _AppendSensitivePolicyNotices(policy):
+  '''
+  Appends required notices to the description of
+  the given sensitive policy, based on the platforms
+  it supports or where it's under development.
+  '''
+
+  vspace = "\n\n"
+
+  supported_platforms = " ".join(
+    policy.get('supported_on', []) + policy.get('future_on', [])
+  )
+
+  is_supported = lambda platform : (
+    'chrome.*' in supported_platforms or platform in supported_platforms
+  )
+
+  for platform, notice in SENSITIVE_POLICY_NOTICES.items():
+    if is_supported(platform):
+      policy['desc'] += vspace + notice
 
 
 def _BuildPolicyTemplate(data):
@@ -108,7 +180,8 @@ def _BuildPolicyTemplate(data):
         "[A-Za-z]": { "desc": "string", "text": "String" }
       }
     },
-    //components/policy/resources/templates/device_policy_proto_map.yaml
+    //components/policy/resources/templates/manual_device_policy_proto_map.yaml
+    // Includes policies where generate_device_proto is true.
     "device_policy_proto_map": {
       "type": "Object",
       "patternProperties": {
@@ -153,6 +226,12 @@ def _BuildPolicyTemplate(data):
     },
     "highest_id_currently_used": {  "type": "number" },
     "highest_atomic_group_id_currently_used": {  "type": "number" },
+    // A list of sensitive policies that already have notices
+    // manually added to their descriptions.
+    "sensitive_policies_with_manual_notices": {
+      "type": "list",
+      "items": "string"
+    },
   }
   '''
 
@@ -169,10 +248,17 @@ def _BuildPolicyTemplate(data):
         'policies': list(group['policies'])
     } for group_name, group in data[POLICY_DEFINITIONS_KEY].items()]
 
+  sensitive_policies_with_manual_notices = []
   policies = []
   atomic_groups = []
   for group in data[POLICY_DEFINITIONS_KEY].values():
     for policy_name, policy in group['policies'].items():
+      if policy.get('sensitive', False):
+        if _ContainsSensitivePolicyNotices(policy):
+          sensitive_policies_with_manual_notices.append(policy_name)
+        else:
+          _AppendSensitivePolicyNotices(policy)
+
       policies.append({
         'id': policy_name_id[policy_name],
         'name': policy_name, **policy
@@ -183,6 +269,17 @@ def _BuildPolicyTemplate(data):
         'id': atomic_group_name_id[name],
         'name': name, **atomic_group
       })
+
+  device_policy_proto_map = data['manual_device_policy_proto_map'].copy()
+
+  for policy in policies:
+    if not policy.get('device_only', False):
+      continue
+
+    if not policy.get('generate_device_proto', True):
+      continue
+
+    device_policy_proto_map[policy['name']] = policy['name'] + '.value'
 
   result = {
       POLICY_DEFINITIONS_KEY: policies + policy_groups,
@@ -198,10 +295,13 @@ def _BuildPolicyTemplate(data):
       len(data['policies']['atomic_groups']),
       'placeholders': [],
       'legacy_device_policy_proto_map': [],
-      'device_policy_proto_map': data['device_policy_proto_map'],
+      'device_policy_proto_map': device_policy_proto_map,
       'messages': data['messages'],
       'risk_tag_definitions': [{'name': name, **value}
-        for name, value in data['risk_tag_definitions'].items()]
+        for name, value in data['risk_tag_definitions'].items()],
+      'sensitive_policies_with_manual_notices': (
+        sorted(sensitive_policies_with_manual_notices)
+      )
   }
   for key, values in data['legacy_device_policy_proto_map'].items():
     for item in values:
@@ -216,7 +316,7 @@ def _GetMetadata():
   '''Returns an object containing the policy metadata in order to build the
      policy definition template.'''
   result = {}
-  for file in os.listdir(TEMPLATES_PATH):
+  for file in _SafeListDir(TEMPLATES_PATH):
     filename = os.fsdecode(file)
     file_basename, file_extension = os.path.splitext(filename)
     if not file_extension == ".yaml":
@@ -232,13 +332,13 @@ def _GetPoliciesAndGroups():
   '''
   result = {}
   policy_definitions_path = os.path.join(TEMPLATES_PATH, POLICY_DEFINITIONS_KEY)
-  for group_name in os.listdir(policy_definitions_path):
+  for group_name in _SafeListDir(policy_definitions_path):
     result[group_name] = {'policies': {}, 'policy_atomic_groups': {}}
     group_path = os.path.join(policy_definitions_path, group_name)
     if not os.path.isdir(group_path):
       continue
 
-    for file in os.listdir(group_path):
+    for file in _SafeListDir(group_path):
       filename = os.fsdecode(file)
       file_basename, file_extension = os.path.splitext(filename)
       file_path = os.path.join(group_path, filename)
@@ -304,8 +404,8 @@ def _LoadPolicies():
         }
       }
     },
-    // components/policy/resources/templates/device_policy_proto_map.yaml
-    "device_policy_proto_map": {
+    // components/policy/resources/templates/manual_device_policy_proto_map.yaml
+    "manual_device_policy_proto_map": {
       "type": "Object",
       "patternProperties": {
         "[A-Za-z]": { "type": "Object", "properties": "String" }

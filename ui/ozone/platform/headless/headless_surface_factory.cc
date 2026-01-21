@@ -6,13 +6,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -21,7 +22,7 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/core/SkSurfaceProps.h"
-#include "ui/gfx/buffer_format_util.h"
+#include "ui/gfx/buffer_types.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/native_pixmap.h"
@@ -55,9 +56,10 @@ base::FilePath GetPathForWidget(const base::FilePath& base_path,
 
 void WriteDataToFile(const base::FilePath& location, const SkBitmap& bitmap) {
   DCHECK(!location.empty());
-  std::vector<unsigned char> png_data;
-  gfx::PNGCodec::FastEncodeBGRASkBitmap(bitmap, true, &png_data);
-  if (!base::WriteFile(location, png_data)) {
+  std::optional<std::vector<uint8_t>> png_data =
+      gfx::PNGCodec::FastEncodeBGRASkBitmap(bitmap,
+                                            /*discard_transparency=*/true);
+  if (!png_data || !base::WriteFile(location, png_data.value())) {
     static bool logged_once = false;
     LOG_IF(ERROR, !logged_once)
         << "Failed to write frame to file. "
@@ -75,10 +77,10 @@ class FileSurface : public SurfaceOzoneCanvas {
   // SurfaceOzoneCanvas overrides:
   void ResizeCanvas(const gfx::Size& viewport_size, float scale) override {
     SkSurfaceProps props = skia::LegacyDisplayGlobals::GetSkSurfaceProps();
-    surface_ = SkSurface::MakeRaster(
-        SkImageInfo::MakeN32Premul(viewport_size.width(),
-                                   viewport_size.height()),
-        &props);
+    surface_ =
+        SkSurfaces::Raster(SkImageInfo::MakeN32Premul(viewport_size.width(),
+                                                      viewport_size.height()),
+                           &props);
   }
   SkCanvas* GetCanvas() override { return surface_->getCanvas(); }
   void PresentCanvas(const gfx::Rect& damage) override {
@@ -142,7 +144,7 @@ class FileGLSurface : public GLSurfaceEglReadback {
 
 class TestPixmap : public gfx::NativePixmap {
  public:
-  explicit TestPixmap(gfx::BufferFormat format) : format_(format) {}
+  explicit TestPixmap(viz::SharedImageFormat format) : format_(format) {}
 
   TestPixmap(const TestPixmap&) = delete;
   TestPixmap& operator=(const TestPixmap&) = delete;
@@ -153,10 +155,10 @@ class TestPixmap : public gfx::NativePixmap {
   size_t GetDmaBufOffset(size_t plane) const override { return 0; }
   size_t GetDmaBufPlaneSize(size_t plane) const override { return 0; }
   uint64_t GetBufferFormatModifier() const override { return 0; }
-  gfx::BufferFormat GetBufferFormat() const override { return format_; }
-  size_t GetNumberOfPlanes() const override {
-    return gfx::NumberOfPlanesForLinearBufferFormat(format_);
+  viz::SharedImageFormat GetSharedImageFormat() const override {
+    return format_;
   }
+  size_t GetNumberOfPlanes() const override { return format_.NumberOfPlanes(); }
   bool SupportsZeroCopyWebGPUImport() const override { return false; }
   gfx::Size GetBufferSize() const override { return gfx::Size(); }
   uint32_t GetUniqueId() const override { return 0; }
@@ -167,14 +169,14 @@ class TestPixmap : public gfx::NativePixmap {
       std::vector<gfx::GpuFence> release_fences) override {
     return true;
   }
-  gfx::NativePixmapHandle ExportHandle() override {
+  gfx::NativePixmapHandle ExportHandle() const override {
     return gfx::NativePixmapHandle();
   }
 
  private:
   ~TestPixmap() override {}
 
-  gfx::BufferFormat format_;
+  viz::SharedImageFormat format_;
 };
 
 class GLOzoneEGLHeadless : public GLOzoneEGL {
@@ -232,9 +234,7 @@ HeadlessSurfaceFactory::~HeadlessSurfaceFactory() = default;
 std::vector<gl::GLImplementationParts>
 HeadlessSurfaceFactory::GetAllowedGLImplementations() {
   return std::vector<gl::GLImplementationParts>{
-      gl::GLImplementationParts(gl::ANGLEImplementation::kSwiftShader),
-      gl::GLImplementationParts(gl::kGLImplementationEGLGLES2),
-      gl::GLImplementationParts(gl::ANGLEImplementation::kDefault),
+      gl::GLImplementationParts(gl::kGLImplementationEGLANGLE),
   };
 }
 
@@ -259,9 +259,9 @@ scoped_refptr<gfx::NativePixmap> HeadlessSurfaceFactory::CreateNativePixmap(
     gfx::AcceleratedWidget widget,
     gpu::VulkanDeviceQueue* device_queue,
     gfx::Size size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage,
-    absl::optional<gfx::Size> framebuffer_size) {
+    std::optional<gfx::Size> framebuffer_size) {
   return new TestPixmap(format);
 }
 

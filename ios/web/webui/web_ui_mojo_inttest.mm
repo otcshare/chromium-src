@@ -5,10 +5,11 @@
 #import <memory>
 #import <string>
 
-#import "base/bind.h"
+#import "base/functional/bind.h"
+#import "base/memory/raw_ptr.h"
 #import "base/run_loop.h"
+#import "base/task/single_thread_task_runner.h"
 #import "base/test/ios/wait_util.h"
-#import "base/threading/thread_task_runner_handle.h"
 #import "base/time/time.h"
 #import "ios/web/grit/ios_web_resources.h"
 #import "ios/web/public/navigation/navigation_manager.h"
@@ -18,7 +19,7 @@
 #import "ios/web/public/webui/web_ui_ios_controller_factory.h"
 #import "ios/web/public/webui/web_ui_ios_data_source.h"
 #import "ios/web/test/grit/test_resources.h"
-#import "ios/web/test/mojo_test.mojom.h"
+#import "ios/web/test/mojo_test.test-mojom.h"
 #import "ios/web/test/test_url_constants.h"
 #import "ios/web/test/web_int_test.h"
 #import "mojo/public/cpp/bindings/pending_remote.h"
@@ -26,10 +27,6 @@
 #import "mojo/public/cpp/bindings/remote.h"
 #import "url/gurl.h"
 #import "url/scheme_host_port.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace web {
 
@@ -50,7 +47,7 @@ constexpr base::TimeDelta kMessageTimeout = base::Seconds(5);
 // Once "fin" is received `IsFinReceived()` call will return true, indicating
 // that communication was successful. See test WebUI page code here:
 // ios/web/test/data/mojo_test.js
-class TestUIHandler : public TestUIHandlerMojo {
+class TestUIHandler : public mojom::TestUIHandlerMojo {
  public:
   TestUIHandler() {}
   ~TestUIHandler() override {}
@@ -59,16 +56,28 @@ class TestUIHandler : public TestUIHandlerMojo {
   bool IsFinReceived() { return fin_received_; }
 
   // TestUIHandlerMojo overrides.
-  void SetClientPage(mojo::PendingRemote<TestPage> page) override {
+  void SetClientPage(mojo::PendingRemote<mojom::TestPage> page) override {
     page_.Bind(std::move(page));
   }
+
+  void HandleJsMessageWithCallback(
+      const std::string& message,
+      HandleJsMessageWithCallbackCallback callback) override {
+    auto result = mojom::NativeMessageResultMojo::New();
+    result->message = "ack2";
+    // Replay via PostTask to check it also works well.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
+  }
+
   void HandleJsMessage(const std::string& message) override {
     if (message == "syn") {
       // Received "syn" message from WebUI page, send "ack" as reply.
       DCHECK(!syn_received_);
       DCHECK(!fin_received_);
       syn_received_ = true;
-      NativeMessageResultMojoPtr result(NativeMessageResultMojo::New());
+      mojom::NativeMessageResultMojoPtr result(
+          mojom::NativeMessageResultMojo::New());
       result->message = "ack";
       page_->HandleNativeMessage(std::move(result));
     } else if (message == "fin") {
@@ -81,13 +90,14 @@ class TestUIHandler : public TestUIHandlerMojo {
     }
   }
 
-  void BindTestHandler(mojo::PendingReceiver<TestUIHandlerMojo> receiver) {
+  void BindTestHandler(
+      mojo::PendingReceiver<mojom::TestUIHandlerMojo> receiver) {
     receivers_.Add(this, std::move(receiver));
   }
 
  private:
-  mojo::ReceiverSet<TestUIHandlerMojo> receivers_;
-  mojo::Remote<TestPage> page_;
+  mojo::ReceiverSet<mojom::TestUIHandlerMojo> receivers_;
+  mojo::Remote<mojom::TestPage> page_;
   // `true` if "syn" has been received.
   bool syn_received_ = false;
   // `true` if "fin" has been received.
@@ -106,7 +116,7 @@ class TestUI : public WebUIIOSController {
 
     source->AddResourcePath("mojo_test.js", IDR_MOJO_TEST_JS);
     source->AddResourcePath("mojo_bindings.js", IDR_IOS_MOJO_BINDINGS_JS);
-    source->AddResourcePath("mojo_test.mojom.js", IDR_MOJO_TEST_MOJO_JS);
+    source->AddResourcePath("mojo_test.test-mojom.js", IDR_MOJO_TEST_MOJO_JS);
     source->SetDefaultResource(IDR_MOJO_TEST_HTML);
 
     web::WebState* web_state = web_ui->GetWebState();
@@ -131,21 +141,23 @@ class TestWebUIControllerFactory : public WebUIIOSControllerFactory {
   std::unique_ptr<WebUIIOSController> CreateWebUIIOSControllerForURL(
       WebUIIOS* web_ui,
       const GURL& url) const override {
-    if (!url.SchemeIs(kTestWebUIScheme))
+    if (!url.SchemeIs(kTestWebUIScheme)) {
       return nullptr;
-    DCHECK_EQ(url.host(), kTestWebUIURLHost);
-    return std::make_unique<TestUI>(web_ui, url.host(), ui_handler_);
+    }
+    DCHECK_EQ(url.GetHost(), kTestWebUIURLHost);
+    return std::make_unique<TestUI>(web_ui, url.GetHost(), ui_handler_);
   }
 
   NSInteger GetErrorCodeForWebUIURL(const GURL& url) const override {
-    if (url.SchemeIs(kTestWebUIScheme))
+    if (url.SchemeIs(kTestWebUIScheme)) {
       return 0;
+    }
     return NSURLErrorUnsupportedURL;
   }
 
  private:
   // UI handler class which communicates with test WebUI page.
-  TestUIHandler* ui_handler_;
+  raw_ptr<TestUIHandler, DanglingUntriaged> ui_handler_;
 };
 }  // namespace
 
@@ -202,7 +214,7 @@ TEST_F(WebUIMojoTest, MessageExchange) {
     GURL url(tuple.Serialize());
     test::LoadUrl(web_state(), url);
     // LoadIfNecessary is needed because the view is not created (but needed)
-    // when loading the page. TODO(crbug.com/705819): Remove this call.
+    // when loading the page. TODO(crbug.com/41309809): Remove this call.
     web_state()->GetNavigationManager()->LoadIfNecessary();
 
     // Wait until `TestUIHandler` receives "fin" message from WebUI page.
@@ -212,11 +224,11 @@ TEST_F(WebUIMojoTest, MessageExchange) {
           // RunUntilIdle() is incompatible with mojo::SimpleWatcher's
           // automatic arming behavior, which Mojo JS still depends upon.
           //
-          // TODO(crbug.com/701875): Introduce the full watcher API to JS and
+          // TODO(crbug.com/41307566): Introduce the full watcher API to JS and
           // get rid of this hack.
           base::RunLoop loop;
-          base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                        loop.QuitClosure());
+          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE, loop.QuitClosure());
           loop.Run();
           return test_ui_handler()->IsFinReceived();
         });

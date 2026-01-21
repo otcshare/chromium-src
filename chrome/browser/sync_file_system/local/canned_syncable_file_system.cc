@@ -6,19 +6,19 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/uuid.h"
 #include "chrome/browser/sync_file_system/file_change.h"
 #include "chrome/browser/sync_file_system/local/local_file_change_tracker.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_context.h"
@@ -155,7 +155,7 @@ class DirectoryHelper {
                        bool has_more) {
     DCHECK(entries_out);
     entries_out->reserve(entries_out->size() + entries.size());
-    base::ranges::copy(entries, std::back_inserter(*entries_out));
+    std::ranges::copy(entries, std::back_inserter(*entries_out));
 
     if (!has_more)
       std::move(callback_).Run(error);
@@ -172,9 +172,10 @@ class WriteHelper {
               const std::string& blob_data)
       : bytes_written_(0),
         blob_storage_context_(std::move(blob_storage_context)),
-        blob_data_(new ScopedTextBlob(blob_storage_context_.get(),
-                                      base::GenerateGUID(),
-                                      blob_data)) {}
+        blob_data_(new ScopedTextBlob(
+            blob_storage_context_.get(),
+            base::Uuid::GenerateRandomV4().AsLowercaseString(),
+            blob_data)) {}
 
   WriteHelper(const WriteHelper&) = delete;
   WriteHelper& operator=(const WriteHelper&) = delete;
@@ -255,7 +256,7 @@ void CannedSyncableFileSystem::SetUp() {
       quota_manager_.get(), io_task_runner_.get());
 
   std::vector<std::string> additional_allowed_schemes;
-  additional_allowed_schemes.push_back(origin_.scheme());
+  additional_allowed_schemes.push_back(origin_.GetScheme());
   storage::FileSystemOptions options(
       storage::FileSystemOptions::PROFILE_MODE_NORMAL, in_memory_file_system_,
       additional_allowed_schemes);
@@ -468,8 +469,10 @@ File::Error CannedSyncableFileSystem::DeleteFileSystem() {
   EXPECT_TRUE(is_filesystem_set_up_);
   return RunOnThread<File::Error>(
       io_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&FileSystemContext::DeleteFileSystem, file_system_context_,
-                     blink::StorageKey(url::Origin::Create(origin_)), type_));
+      base::BindOnce(
+          &FileSystemContext::DeleteFileSystem, file_system_context_,
+          blink::StorageKey::CreateFirstParty(url::Origin::Create(origin_)),
+          type_));
 }
 
 blink::mojom::QuotaStatusCode CannedSyncableFileSystem::GetUsageAndQuota(
@@ -529,9 +532,9 @@ void CannedSyncableFileSystem::DoOpenFileSystem(
   EXPECT_TRUE(io_task_runner_->RunsTasksInCurrentSequence());
   EXPECT_FALSE(is_filesystem_opened_);
   file_system_context_->OpenFileSystem(
-      blink::StorageKey(url::Origin::Create(origin_)), /*bucket=*/absl::nullopt,
-      type_, storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT,
-      std::move(callback));
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(origin_)),
+      /*bucket=*/std::nullopt, type_,
+      storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT, std::move(callback));
 }
 
 void CannedSyncableFileSystem::DoCreateDirectory(const FileSystemURL& url,
@@ -682,7 +685,7 @@ void CannedSyncableFileSystem::DoGetUsageAndQuota(
   EXPECT_TRUE(is_filesystem_opened_);
   DCHECK(quota_manager_.get());
   quota_manager_->GetUsageAndQuota(
-      blink::StorageKey(url::Origin::Create(origin_)), storage_type(),
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(origin_)),
       base::BindOnce(&DidGetUsageAndQuota, std::move(callback), usage, quota));
 }
 

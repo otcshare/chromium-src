@@ -3,16 +3,24 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_event_histogram_value.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/management.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
@@ -37,7 +45,7 @@ class WebstoreDomainBrowserTest : public ExtensionApiTest,
     // Override the test server SSL config with the webstore domain under test
     // and two other non-webstore domains used in the tests.
     net::EmbeddedTestServer::ServerCertificateConfig cert_config;
-    cert_config.dns_names = {GetParam().host(), "foo.com", "bar.com"};
+    cert_config.dns_names = {GetParam().GetHost(), "foo.com", "bar.com"};
     embedded_test_server()->SetSSLConfig(cert_config);
     // Add the extensions directory to the test server as it has a /webstore/
     // directory to serve files from, which the webstore hosted app requires as
@@ -66,37 +74,74 @@ class WebstoreDomainBrowserTest : public ExtensionApiTest,
   }
 };
 
-// Tests that webstorePrivate and management are exposed to the webstore domain,
-// but not to a non-webstore domain.
+// Tests that webstorePrivate, management and runtime are exposed to the
+// webstore domain, but not to a non-webstore domain.
+// Note: Although we don't explicitly provide runtime to the webstore domain in
+// the case of it being a "web page" context, it is granted implicitly by the
+// NativeExtensionBindingsSystem due to other extension APIs (webstorePrivate
+// and management) being exposed to the web page.
 IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, ExpectedAvailability) {
   const GURL webstore_url = GetParam().Resolve("/webstore/mock_store.html");
   const GURL not_webstore_url = GURL(kNonWebstoreURL1).Resolve("/empty.html");
 
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* web_contents = GetActiveWebContents();
 
   auto is_api_available = [web_contents](const std::string& api_name) {
-    constexpr char kScript[] =
-        R"({
-             domAutomationController.send(chrome.hasOwnProperty($1));
-           })";
-    bool result = false;
-    EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-        web_contents, content::JsReplace(kScript, api_name), &result));
-    return result;
+    constexpr char kScript[] = "chrome.hasOwnProperty($1);";
+    return content::EvalJs(web_contents, content::JsReplace(kScript, api_name))
+        .ExtractBool();
   };
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), webstore_url));
+  ASSERT_TRUE(NavigateToURL(web_contents, webstore_url));
   EXPECT_EQ(web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
             webstore_url);
   EXPECT_TRUE(is_api_available("webstorePrivate"));
   EXPECT_TRUE(is_api_available("management"));
+  EXPECT_TRUE(is_api_available("runtime"));
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), not_webstore_url));
+  ASSERT_TRUE(NavigateToURL(web_contents, not_webstore_url));
   EXPECT_EQ(web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
             not_webstore_url);
   EXPECT_FALSE(is_api_available("management"));
   EXPECT_FALSE(is_api_available("webstorePrivate"));
+  EXPECT_FALSE(is_api_available("runtime"));
+}
+
+// Test that the webstore can register and receive management events. Normally
+// we have a check that the receiver of an extension event can never be a
+// webpage context. The old webstore gets around this by appearing as a hosted
+// app extension context, but the new webstore has the APIs exposed directly to
+// the webpage context it uses. Regression test for crbug.com/1441136.
+IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, CanReceiveEvents) {
+  const GURL webstore_url = GetParam().Resolve("/webstore/mock_store.html");
+
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  ASSERT_TRUE(NavigateToURL(web_contents, webstore_url));
+  EXPECT_EQ(web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
+            webstore_url);
+  constexpr char kAddListener[] = R"(
+    chrome.management.onInstalled.addListener(() => {
+      domAutomationController.send('received event');
+    });
+    'listener added';
+  )";
+  ASSERT_EQ("listener added", content::EvalJs(web_contents, kAddListener));
+
+  content::DOMMessageQueue message_queue(web_contents);
+  // Directly broadcast the management.onInstalled event from the EventRouter
+  // and verify it arrived to the page without causing a crash.
+  EventRouter* event_router = EventRouter::Get(profile());
+  api::management::ExtensionInfo info;
+  info.install_type = api::management::ExtensionInstallType::kNormal;
+  info.type = api::management::ExtensionType::kExtension;
+  event_router->BroadcastEvent(std::make_unique<Event>(
+      events::FOR_TEST, api::management::OnInstalled::kEventName,
+      api::management::OnInstalled::Create(info)));
+
+  std::string message;
+  EXPECT_TRUE(message_queue.WaitForMessage(&message));
+  EXPECT_EQ("\"received event\"", message);
 }
 
 // Tests that a webstore page with misconfigured or missing X-Frame-Options
@@ -105,9 +150,8 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, ExpectedAvailability) {
 IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, FrameWebstorePageBlocked) {
   GURL outer_frame_url = GURL(kNonWebstoreURL1).Resolve("/empty.html");
 
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), outer_frame_url));
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, outer_frame_url));
   EXPECT_EQ(outer_frame_url, web_contents->GetLastCommittedURL());
 
   constexpr char kScript[] =
@@ -131,10 +175,12 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, FrameWebstorePageBlocked) {
     content::RenderFrameHost* subframe =
         content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
     ASSERT_TRUE(subframe);
-    const net::HttpResponseHeaders* headers =
-        subframe->GetLastResponseHeaders();
-    ASSERT_TRUE(headers);
-    EXPECT_TRUE(headers->HasHeaderValue("X-Frame-Options", "foo"));
+    const network::mojom::URLResponseHead* response_head =
+        subframe->GetLastResponseHead();
+    ASSERT_TRUE(response_head);
+    ASSERT_TRUE(response_head->headers);
+    EXPECT_TRUE(
+        response_head->headers->HasHeaderValue("X-Frame-Options", "foo"));
 
     // The subframe should have loaded fine.
     EXPECT_EQ(non_webstore_url, subframe->GetLastCommittedURL());
@@ -154,10 +200,12 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, FrameWebstorePageBlocked) {
     content::RenderFrameHost* subframe =
         content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 1);
     ASSERT_TRUE(subframe);
-    const net::HttpResponseHeaders* headers =
-        subframe->GetLastResponseHeaders();
-    ASSERT_TRUE(headers);
-    EXPECT_TRUE(headers->HasHeaderValue("X-Frame-Options", "SAMEORIGIN"));
+    const network::mojom::URLResponseHead* response_head =
+        subframe->GetLastResponseHead();
+    ASSERT_TRUE(response_head);
+    ASSERT_TRUE(response_head->headers);
+    EXPECT_TRUE(response_head->headers->HasHeaderValue("X-Frame-Options",
+                                                       "SAMEORIGIN"));
 
     // The subframe load should fail due to XFO.
     EXPECT_EQ(webstore_url, subframe->GetLastCommittedURL());
@@ -177,10 +225,12 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, FrameWebstorePageBlocked) {
     content::RenderFrameHost* subframe =
         content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 2);
     ASSERT_TRUE(subframe);
-    const net::HttpResponseHeaders* headers =
-        subframe->GetLastResponseHeaders();
-    ASSERT_TRUE(headers);
-    EXPECT_TRUE(headers->HasHeaderValue("X-Frame-Options", "SAMEORIGIN"));
+    const network::mojom::URLResponseHead* response_head =
+        subframe->GetLastResponseHead();
+    ASSERT_TRUE(response_head);
+    ASSERT_TRUE(response_head->headers);
+    EXPECT_TRUE(response_head->headers->HasHeaderValue("X-Frame-Options",
+                                                       "SAMEORIGIN"));
 
     // The subframe load should fail due to XFO.
     EXPECT_EQ(webstore_url, subframe->GetLastCommittedURL());

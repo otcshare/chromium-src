@@ -10,7 +10,7 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -40,6 +40,7 @@ class CONTENT_EXPORT DragDownloadFile : public ui::DownloadFileProvider {
                    const GURL& url,
                    const Referrer& referrer,
                    const std::string& referrer_encoding,
+                   std::optional<url::Origin> initiator_origin,
                    WebContents* web_contents);
 
   DragDownloadFile(const DragDownloadFile&) = delete;

@@ -13,7 +13,9 @@
 #include "build/buildflag.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "media/base/decoder_factory.h"
+#include "media/base/media_log.h"
 #include "media/base/media_switches.h"
+#include "media/base/supported_types.h"
 #include "media/media_buildflags.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 
@@ -40,6 +42,10 @@
 
 #if BUILDFLAG(ENABLE_LIBVPX)
 #include "media/filters/vpx_video_decoder.h"
+#endif
+
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+#include "media/filters/symphonia_audio_decoder.h"
 #endif
 
 namespace media {
@@ -72,6 +78,13 @@ void DefaultDecoderFactory::CreateAudioDecoders(
       std::make_unique<PassthroughDTSAudioDecoder>(task_runner, media_log));
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO) && BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+  if (base::FeatureList::IsEnabled(kSymphoniaAudioDecoding)) {
+    audio_decoders->push_back(
+        std::make_unique<SymphoniaAudioDecoder>(task_runner, media_log));
+  }
+#endif
+
 #if BUILDFLAG(ENABLE_FFMPEG)
   audio_decoders->push_back(
       std::make_unique<FFmpegAudioDecoder>(task_runner, media_log));
@@ -91,15 +104,16 @@ void DefaultDecoderFactory::CreateVideoDecoders(
     const gfx::ColorSpace& target_color_space,
     std::vector<std::unique_ptr<VideoDecoder>>* video_decoders) {
   base::AutoLock auto_lock(shutdown_lock_);
-  if (is_shutdown_)
+  if (is_shutdown_) {
     return;
+  }
 
 #if !BUILDFLAG(IS_ANDROID)
   video_decoders->push_back(
       std::make_unique<DecryptingVideoDecoder>(task_runner, media_log));
 #endif
 
-  // Perfer an external decoder since one will only exist if it is hardware
+  // Prefer an external decoder since one will only exist if it is hardware
   // accelerated.
   if (external_decoder_factory_ && gpu_factories &&
       gpu_factories->IsGpuVideoDecodeAcceleratorEnabled()) {
@@ -119,7 +133,7 @@ void DefaultDecoderFactory::CreateVideoDecoders(
 
 #if BUILDFLAG(ENABLE_DAV1D_DECODER)
   video_decoders->push_back(
-      std::make_unique<OffloadingDav1dVideoDecoder>(media_log));
+      std::make_unique<OffloadingDav1dVideoDecoder>(media_log->Clone()));
 #endif
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)

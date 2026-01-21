@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ash/extensions/gfx_utils.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
+#include "base/containers/flat_map.h"
 #include "base/lazy_instance.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -12,7 +14,7 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/app_icon_resources.h"
+#include "chrome/grit/chromeos_app_icon_resources.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
@@ -102,8 +104,8 @@ const struct {
 class AppDualBadgeMap {
  public:
   using ArcAppToExtensionsMap =
-      std::unordered_map<std::string, std::vector<std::string>>;
-  using ExtensionToArcAppMap = std::unordered_map<std::string, std::string>;
+      base::flat_map<std::string, std::vector<std::string>>;
+  using ExtensionToArcAppMap = base::flat_map<std::string, std::string>;
 
   AppDualBadgeMap() {
     for (auto dual_badge : kDualBadgeMap) {
@@ -187,7 +189,7 @@ const std::vector<std::string> GetEquivalentInstalledExtensions(
   if (extension_ids.empty())
     return std::vector<std::string>();
 
-  base::EraseIf(extension_ids, [registry](std::string extension_id) {
+  std::erase_if(extension_ids, [registry](const std::string& extension_id) {
     return !registry->GetInstalledExtension(extension_id);
   });
   return extension_ids;

@@ -5,7 +5,7 @@
 #ifndef MEDIA_CAPTURE_VIDEO_CHROMEOS_VIDEO_CAPTURE_JPEG_DECODER_H_
 #define MEDIA_CAPTURE_VIDEO_CHROMEOS_VIDEO_CAPTURE_JPEG_DECODER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/video_frame_receiver.h"
@@ -25,13 +25,11 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoder {
                    // decode error.
   };
 
-  using DecodeDoneCB =
-      base::RepeatingCallback<void(ReadyFrameInBuffer,
-                                   std::vector<ReadyFrameInBuffer>)>;
+  using DecodeDoneCB = base::RepeatingCallback<void(ReadyFrameInBuffer)>;
 
   virtual ~VideoCaptureJpegDecoder() {}
 
-  // Creates and intializes decoder asynchronously.
+  // Creates and initializes decoder asynchronously.
   virtual void Initialize() = 0;
 
   // Returns initialization status.

@@ -15,28 +15,24 @@
 #include "chrome/browser/ui/webui/translate_internals/chrome_translate_internals_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/dev_ui_browser_resources.h"
+#include "components/grit/translate_internals_resources.h"
+#include "components/grit/translate_internals_resources_map.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/translate/translate_internals/translate_internals_handler.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/webui/webui_util.h"
 
 namespace {
 
-content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
-  content::WebUIDataSource* source =
-      content::WebUIDataSource::Create(chrome::kChromeUITranslateInternalsHost);
+void CreateAndAddTranslateInternalsHTMLSource(Profile* profile) {
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      profile, chrome::kChromeUITranslateInternalsHost);
 
-  source->SetDefaultResource(IDR_TRANSLATE_INTERNALS_HTML);
-  source->UseStringsJs();
-  source->AddResourcePath("translate_internals.css",
-                          IDR_TRANSLATE_INTERNALS_CSS);
-  source->AddResourcePath("translate_internals.js", IDR_TRANSLATE_INTERNALS_JS);
-  source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::TrustedTypes,
-      "trusted-types static-types;");
+  webui::SetupWebUIDataSource(source, kTranslateInternalsResources,
+                              IDR_TRANSLATE_INTERNALS_TRANSLATE_INTERNALS_HTML);
 
   base::Value::Dict langs =
       translate::TranslateInternalsHandler::GetLanguages();
@@ -49,12 +45,10 @@ content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
 
   if (translate::IsTFLiteLanguageDetectionEnabled()) {
     source->AddString("model-version", "TFLite_v1");
-    return source;
+  } else {
+    // The default language detection model is "CLD3".
+    source->AddString("model-version", "CLD3");
   }
-  // The default language detection model is "CLD3".
-  source->AddString("model-version", "CLD3");
-
-  return source;
 }
 
 }  // namespace
@@ -64,6 +58,5 @@ TranslateInternalsUI::TranslateInternalsUI(content::WebUI* web_ui)
   web_ui->AddMessageHandler(
       std::make_unique<ChromeTranslateInternalsHandler>());
 
-  Profile* profile = Profile::FromWebUI(web_ui);
-  content::WebUIDataSource::Add(profile, CreateTranslateInternalsHTMLSource());
+  CreateAndAddTranslateInternalsHTMLSource(Profile::FromWebUI(web_ui));
 }

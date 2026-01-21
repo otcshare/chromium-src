@@ -7,8 +7,8 @@
 
 #include <memory>
 
+#include "base/component_export.h"
 #include "base/time/time.h"
-#include "ui/gfx/gfx_export.h"
 #include "ui/gfx/gpu_fence_handle.h"
 
 namespace gfx {
@@ -53,6 +53,9 @@ struct SwapTimings {
   // When GPU scheduler removed the last required dependency.
   base::TimeTicks gpu_task_ready;
 
+  // When the GPU thread started scheduling overlays.
+  base::TimeTicks gpu_started_overlay;
+
   bool is_null() const { return swap_start.is_null() && swap_end.is_null(); }
 };
 
@@ -65,7 +68,7 @@ struct SwapResponse {
   uint64_t swap_id;
 
   // Indicates whether the swap succeeded or not.
-  // TODO(https://crbug.com/894929): It may be more reasonable to add
+  // TODO(crbug.com/40597949): It may be more reasonable to add
   // a full SwapCompletionResult as a member.
   SwapResult result;
 
@@ -73,8 +76,8 @@ struct SwapResponse {
   SwapTimings timings;
 };
 
-// Sent by GLImages to their GLImage::SwapCompletionCallbacks.
-struct GFX_EXPORT SwapCompletionResult {
+// Sent as part of finishing a swap.
+struct COMPONENT_EXPORT(GFX) SwapCompletionResult {
   explicit SwapCompletionResult(gfx::SwapResult swap_result);
   SwapCompletionResult(gfx::SwapResult swap_result,
                        gfx::GpuFenceHandle release_fence);

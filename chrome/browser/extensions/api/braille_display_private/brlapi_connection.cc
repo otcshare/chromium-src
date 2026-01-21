@@ -6,11 +6,13 @@
 
 #include <errno.h>
 
+#include <array>
 #include <string>
 
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/logging.h"
 #include "base/memory/free_deleter.h"
+#include "base/memory/raw_ptr.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -26,7 +28,7 @@ namespace {
 // TODO(plundblad): Find a way to detect the controlling terminal of the
 // X server.
 static const int kDefaultTtyLinux = 7;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // The GUI is always running on vt1 in Chrome OS.
 static const int kDefaultTtyChromeOS = 1;
 #endif
@@ -54,7 +56,7 @@ class BrlapiConnectionImpl : public BrlapiConnection {
   bool CheckConnected();
   ConnectResult ConnectResultForError();
 
-  LibBrlapiLoader* libbrlapi_loader_;
+  raw_ptr<LibBrlapiLoader> libbrlapi_loader_;
   std::unique_ptr<brlapi_handle_t, base::FreeDeleter> handle_;
   std::unique_ptr<base::FileDescriptorWatcher::Controller> fd_controller_;
 };
@@ -77,16 +79,16 @@ BrlapiConnection::ConnectResult BrlapiConnectionImpl::Connect(
     VLOG(1) << "Error connecting to brlapi: " << BrlapiStrError();
     return ConnectResultForError();
   }
-  int path[2] = {0, 0};
+  std::array path = {0, 0};
   int pathElements = 0;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (base::SysInfo::IsRunningOnChromeOS())
     path[pathElements++] = kDefaultTtyChromeOS;
 #endif
   if (pathElements == 0 && getenv("WINDOWPATH") == nullptr)
     path[pathElements++] = kDefaultTtyLinux;
   if (libbrlapi_loader_->brlapi__enterTtyModeWithPath(
-          handle_.get(), path, pathElements, nullptr) < 0) {
+          handle_.get(), &path[0], pathElements, nullptr) < 0) {
     LOG(ERROR) << "brlapi: couldn't enter tty mode: " << BrlapiStrError();
     Disconnect();
     return CONNECT_ERROR_RETRY;

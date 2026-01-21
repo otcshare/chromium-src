@@ -6,10 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/win/post_async_results.h"
@@ -206,7 +208,7 @@ void BluetoothRemoteGattCharacteristicWinrt::ReadRemoteCharacteristic(
 }
 
 void BluetoothRemoteGattCharacteristicWinrt::WriteRemoteCharacteristic(
-    const std::vector<uint8_t>& value,
+    base::span<const uint8_t> value,
     WriteType write_type,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
@@ -232,7 +234,7 @@ void BluetoothRemoteGattCharacteristicWinrt::WriteRemoteCharacteristic(
   }
 
   ComPtr<IBuffer> buffer;
-  hr = base::win::CreateIBufferFromData(value.data(), value.size(), &buffer);
+  hr = base::win::CreateIBufferFromData(value, &buffer);
   if (FAILED(hr)) {
     BLUETOOTH_LOG(DEBUG) << "base::win::CreateIBufferFromData failed: "
                          << logging::SystemErrorCodeToString(hr);
@@ -288,7 +290,7 @@ void BluetoothRemoteGattCharacteristicWinrt::WriteRemoteCharacteristic(
 }
 
 void BluetoothRemoteGattCharacteristicWinrt::
-    DeprecatedWriteRemoteCharacteristic(const std::vector<uint8_t>& value,
+    DeprecatedWriteRemoteCharacteristic(base::span<const uint8_t> value,
                                         base::OnceClosure callback,
                                         ErrorCallback error_callback) {
   if (!(GetProperties() & PROPERTY_WRITE) &&
@@ -526,9 +528,8 @@ void BluetoothRemoteGattCharacteristicWinrt::OnReadValue(
     return;
   }
 
-  uint8_t* data = nullptr;
-  uint32_t length = 0;
-  hr = base::win::GetPointerToBufferData(value.Get(), &data, &length);
+  base::span<uint8_t> data_span;
+  hr = base::win::GetPointerToBufferData(value.Get(), data_span);
   if (FAILED(hr)) {
     BLUETOOTH_LOG(DEBUG) << "Getting Pointer To Buffer Data failed: "
                          << logging::SystemErrorCodeToString(hr);
@@ -538,8 +539,8 @@ void BluetoothRemoteGattCharacteristicWinrt::OnReadValue(
     return;
   }
 
-  value_.assign(data, data + length);
-  std::move(pending_read_callback).Run(/*error_code=*/absl::nullopt, value_);
+  value_.assign(data_span.begin(), data_span.end());
+  std::move(pending_read_callback).Run(/*error_code=*/std::nullopt, value_);
 }
 
 void BluetoothRemoteGattCharacteristicWinrt::OnWriteValueWithResultAndOption(
@@ -595,16 +596,15 @@ void BluetoothRemoteGattCharacteristicWinrt::OnValueChanged(
     return;
   }
 
-  uint8_t* data = nullptr;
-  uint32_t length = 0;
-  hr = base::win::GetPointerToBufferData(value.Get(), &data, &length);
+  base::span<uint8_t> data_span;
+  hr = base::win::GetPointerToBufferData(value.Get(), data_span);
   if (FAILED(hr)) {
     BLUETOOTH_LOG(DEBUG) << "Getting Pointer To Buffer Data failed: "
                          << logging::SystemErrorCodeToString(hr);
     return;
   }
 
-  value_.assign(data, data + length);
+  value_.assign(data_span.begin(), data_span.end());
   service_->GetDevice()->GetAdapter()->NotifyGattCharacteristicValueChanged(
       this, value_);
 }

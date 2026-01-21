@@ -5,6 +5,7 @@
 #include "media/formats/webm/webm_video_client.h"
 
 #include "media/base/video_decoder_config.h"
+#include "media/formats/mp4/box_definitions.h"
 #include "media/formats/webm/webm_constants.h"
 #include "media/media_buildflags.h"
 
@@ -27,6 +28,22 @@ media::VideoCodecProfile GetVP9CodecProfile(const std::vector<uint8_t>& data,
   return static_cast<VideoCodecProfile>(
       static_cast<size_t>(VP9PROFILE_PROFILE0) + data[2]);
 }
+
+#if BUILDFLAG(ENABLE_AV1_DECODER)
+media::VideoCodecProfile GetAV1CodecProfile(const std::vector<uint8_t>& data) {
+  if (data.empty()) {
+    return AV1PROFILE_PROFILE_MAIN;
+  }
+
+  mp4::AV1CodecConfigurationRecord av1_config;
+  if (av1_config.Parse(data.data(), data.size())) {
+    return av1_config.profile;
+  }
+
+  DLOG(WARNING) << "Failed to parser AV1 extra data for profile.";
+  return AV1PROFILE_PROFILE_MAIN;
+}
+#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
 
 // Values for "StereoMode" are spec'd here:
 // https://www.matroska.org/technical/elements.html#StereoMode
@@ -59,8 +76,10 @@ void WebMVideoClient::Reset() {
   display_unit_ = -1;
   alpha_mode_ = -1;
   colour_parsed_ = false;
+  colour_parser_.Reset();
   stereo_mode_ = -1;
   projection_parsed_ = false;
+  projection_parser_.Reset();
 }
 
 bool WebMVideoClient::InitializeConfig(
@@ -75,11 +94,15 @@ bool WebMVideoClient::InitializeConfig(
   if (colour_parsed_) {
     WebMColorMetadata color_metadata = colour_parser_.GetWebMColorMetadata();
     color_space = color_metadata.color_space;
-    if (color_metadata.hdr_metadata.has_value())
-      config->set_hdr_metadata(*color_metadata.hdr_metadata);
+    if (!color_metadata.hdr_metadata.IsEmpty()) {
+      config->set_hdr_metadata(color_metadata.hdr_metadata);
+    }
     is_8bit = color_metadata.BitsPerChannel <= 8;
   }
 
+  VideoTransformation transformation =
+      projection_parsed_ ? projection_parser_.GetVideoTransformation()
+                         : kNoTransformation;
   VideoCodec video_codec = VideoCodec::kUnknown;
   VideoCodecProfile profile = VIDEO_CODEC_PROFILE_UNKNOWN;
   if (codec_id == "V_VP8") {
@@ -88,15 +111,12 @@ bool WebMVideoClient::InitializeConfig(
   } else if (codec_id == "V_VP9") {
     video_codec = VideoCodec::kVP9;
     profile = GetVP9CodecProfile(
-        codec_private, color_space.ToGfxColorSpace().IsHDR() ||
-                           config->hdr_metadata().has_value() || !is_8bit);
+        codec_private, color_space.GuessGfxColorSpace().IsHDR() ||
+                           !config->hdr_metadata().IsEmpty() || !is_8bit);
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   } else if (codec_id == "V_AV1") {
-    // TODO(dalecurtis): AV1 profiles in WebM are not finalized, this needs
-    // updating to read the actual profile and configuration before enabling for
-    // release. http://crbug.com/784993
     video_codec = VideoCodec::kAV1;
-    profile = AV1PROFILE_PROFILE_MAIN;
+    profile = GetAV1CodecProfile(codec_private);
 #endif
   } else {
     MEDIA_LOG(ERROR, media_log_) << "Unsupported video codec_id " << codec_id;
@@ -149,7 +169,7 @@ bool WebMVideoClient::InitializeConfig(
                      alpha_mode_ == 1
                          ? VideoDecoderConfig::AlphaMode::kHasAlpha
                          : VideoDecoderConfig::AlphaMode::kIsOpaque,
-                     color_space, kNoTransformation, coded_size, visible_rect,
+                     color_space, transformation, coded_size, visible_rect,
                      natural_size, codec_private, encryption_scheme);
 
   return config->IsValidConfig();
@@ -165,7 +185,7 @@ WebMParserClient* WebMVideoClient::OnListStart(int id) {
     if (projection_parsed_ == true) {
       MEDIA_LOG(ERROR, media_log_)
           << "Unexpected multiple Projection elements.";
-      return NULL;
+      return nullptr;
     }
     return &projection_parser_;
   }
@@ -186,7 +206,7 @@ bool WebMVideoClient::OnListEnd(int id) {
 }
 
 bool WebMVideoClient::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdPixelWidth:

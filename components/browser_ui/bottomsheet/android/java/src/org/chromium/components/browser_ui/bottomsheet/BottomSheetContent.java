@@ -4,13 +4,18 @@
 
 package org.chromium.components.browser_ui.bottomsheet;
 
+import android.content.Context;
+import android.graphics.Color;
 import android.view.View;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 
-import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -19,6 +24,7 @@ import java.lang.annotation.RetentionPolicy;
  * An interface defining content that can be displayed inside of the bottom sheet for Chrome
  * Home.
  */
+@NullMarked
 public interface BottomSheetContent {
     /** The different possible height modes for a given state. */
     @IntDef({HeightMode.DEFAULT, HeightMode.WRAP_CONTENT, HeightMode.DISABLED})
@@ -30,11 +36,13 @@ public interface BottomSheetContent {
          * exception that uses the feature's toolbar height.
          */
         int DEFAULT = 0;
+
         /**
          * The sheet will set its height so the content is completely visible. This mode cannot
          * be used for the peek state.
          */
         int WRAP_CONTENT = -1;
+
         /**
          * The state this mode is used for will be disabled. For example, disabling the peek state
          * would cause the sheet to automatically expand when triggered.
@@ -50,27 +58,20 @@ public interface BottomSheetContent {
         int LOW = 1;
     }
 
-    /** Interface to listen when the size of a BottomSheetContent changes. */
-    interface ContentSizeListener {
-        /** Called when the size of the view has changed. */
-        void onSizeChanged(int width, int height, int oldWidth, int oldHeight);
-    }
-
     /**
-     * Gets the {@link View} that holds the content to be displayed in the Chrome Home bottom
-     * sheet.
+     * Gets the {@link View} that holds the content to be displayed in the Chrome Home bottom sheet.
+     *
      * @return The content view.
      */
     View getContentView();
 
     /**
-     * Get the {@link View} that contains the toolbar specific to the content being
-     * displayed. If null is returned, the omnibox is used.
+     * Get the {@link View} that contains the toolbar specific to the content being displayed. If
+     * null is returned, the omnibox is used.
      *
      * @return The toolbar view.
      */
-    @Nullable
-    View getToolbarView();
+    @Nullable View getToolbarView();
 
     /**
      * @return The vertical scroll offset of the content view.
@@ -102,11 +103,21 @@ public interface BottomSheetContent {
      */
     default boolean skipHalfStateOnScrollingDown() {
         return true;
-    };
+    }
 
     /**
-     * @return Whether this content owns its lifecycle. If false, the content will be hidden
-     *         when the user navigates away from the page or switches tab.
+     * @return Whether this content owns its lifecycle. If false, the content will be dismissed
+     *         when the user navigates away from the page, switches tabs, or a layout change
+     *         occurs.
+     *
+     * If a BottomSheetContent ever needs to suppress across a layout state change rather than
+     * being dismissed this can be addressed by:
+     * * Registering a LayoutStateObserver to re-request to be shown when the correct LayoutType
+     *   finishes showing.
+     * * For LayoutType.BROWSING also registering a TabModelSelectorObserver to dismiss if
+     *   a tab switch occurs.
+     * * The client is responsible for restoring any previous state of the BottomSheetContent
+     *   and the View's it hosts.
      */
     default boolean hasCustomLifecycle() {
         return false;
@@ -121,13 +132,38 @@ public interface BottomSheetContent {
     }
 
     /**
-     * @return The height of the peeking state for the content in px or one of the values in
-     *         {@link HeightMode}. If {@link HeightMode#DEFAULT}, the system expects
-     *         {@link #getToolbarView} to be non-null, where it will then use its height as the
-     *         peeking height. This method cannot return {@link HeightMode#WRAP_CONTENT}.
+     * Returns whether this sheet content has a solid background color. Return false when the sheet
+     * is showing complex content like tab content / a page preview.
+     */
+    default boolean hasSolidBackgroundColor() {
+        return true;
+    }
+
+    /**
+     * Whether the sheet uses a custom background color. If color is not overridden (default to
+     * {@link Color.TRANSPARENT}), the BottomSheetController will set a default background color for
+     * the sheet.
+     *
+     * <p>Note: This color only used if {@link #hasSolidBackgroundColor()} returns true.
+     *
+     * @return The custom background color of the sheet.
+     */
+    default @ColorInt int getSheetBackgroundColorOverride() {
+        return Color.TRANSPARENT;
+    }
+
+    /**
+     * The height of bottom sheet in PEEK mode. The sheet content that wants to show content as PEEK
+     * can override this method and provide a non-negative height. This interface by default
+     * supplies {@link HeightMode#DISABLED}.
+     *
+     * @return The height of the peeking state for the content in px or one of the values in {@link
+     *     HeightMode}. If {@link HeightMode#DEFAULT}, the system expects {@link #getToolbarView} to
+     *     be non-null, where it will then use its height as the peeking height. This method cannot
+     *     return {@link HeightMode#WRAP_CONTENT}.
      */
     default int getPeekHeight() {
-        return HeightMode.DEFAULT;
+        return HeightMode.DISABLED;
     }
 
     /**
@@ -155,19 +191,7 @@ public interface BottomSheetContent {
     }
 
     /**
-     * Set a {@link ContentSizeListener} that should be notified when the size of the content
-     * has changed. This will be called only if {@link #getFullHeightRatio()} returns {@link
-     * HeightMode#WRAP_CONTENT}. Note that you need to implement this method only if the content
-     * view height changes are animated.
-     *
-     * @return Whether the listener was correctly set.
-     */
-    default boolean setContentSizeListener(@Nullable ContentSizeListener listener) {
-        return false;
-    }
-
-    /**
-     * @return Whether the sheet should be hidden when it is in the PEEK state and the user
+     * @return Whether the sheet should be hidden when it is in the PEEK/HALF state and the user
      *         scrolls down the page.
      */
     default boolean hideOnScroll() {
@@ -186,13 +210,11 @@ public interface BottomSheetContent {
 
     /**
      * @return An observable supplier that will hold true if the content will intercept and handle a
-     *         back press event, false otherwise. If left {@code false}, the sheet will collapse to
-     *         its minimum state on back press or do nothing if in the minimum / peeking state.
+     *     back press event, false otherwise. If left {@code false}, the sheet will collapse to its
+     *     minimum state on back press or do nothing if in the minimum / peeking state.
      */
-    default ObservableSupplierImpl<Boolean> getBackPressStateChangedSupplier() {
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(false);
-        return supplier;
+    default NonNullObservableSupplier<Boolean> getBackPressStateChangedSupplier() {
+        return ObservableSuppliers.alwaysFalse();
     }
 
     /**
@@ -202,46 +224,52 @@ public interface BottomSheetContent {
     default void onBackPressed() {}
 
     /**
-     * @return The resource id of the content description for the bottom sheet. This is
-     *         generally the name of the feature/content that is showing. 'Swipe down to close.'
-     *         will be automatically appended after the content description.
+     * Returns the content description for the bottom sheet. This is generally the name of the
+     * feature/content that is showing. It can be a dynamic string. 'Swipe down to close.' will be
+     * automatically appended after the content description.
      */
-    int getSheetContentDescriptionStringId();
+    @Nullable String getSheetContentDescription(Context context);
 
     /**
-     * @return The resource id of the string announced when the sheet is opened at half height.
-     *         This is typically the name of your feature followed by 'opened at half height'.
+     * @return The resource id of the string announced when the sheet is opened at half height. This
+     *     is typically the name of your feature followed by 'opened at half height'.
      */
+    @StringRes
     int getSheetHalfHeightAccessibilityStringId();
 
     /**
-     * @return The resource id of the string announced when the sheet is opened at full height.
-     *         This is typically the name of your feature followed by 'opened at full height'.
+     * @return The resource id of the string announced when the sheet is opened at full height. This
+     *     is typically the name of your feature followed by 'opened at full height'.
      */
+    @StringRes
     int getSheetFullHeightAccessibilityStringId();
 
     /**
-     * @return The resource id of the string announced when the sheet is closed. This is
-     *         typically the name of your feature followed by 'closed'.
+     * @return The resource id of the string announced when the sheet is closed. This is typically
+     *     the name of your feature followed by 'closed'.
      */
+    @StringRes
     int getSheetClosedAccessibilityStringId();
 
     /**
-     * Return {@code true} if the content expects {@link #setOffsetController} to be called.
-     *
-     * This is an experimental feature. Use it at your own risks. TODO(b/177037825): Remove or
-     * cleanup.
+     * @return True if this content should hide when higher-priority content is requested to be
+     *     shown, even if the sheet is expanded. Otherwise the new content will only be shown after
+     *     the sheet is dismissed. If returning true here, this content's priority should be LOW.
      */
-    default boolean contentControlsOffset() {
+    default boolean canSuppressInAnyState() {
         return false;
     }
 
     /**
-     * Set or reset the set offset callback.
+     * Whether long press gestures should move the bottom sheet.
      *
-     * The active content can use this callback to move the sheet to the given offset.
+     * <p>Should NOT be overridden to return `true` if the bottom sheet contains any UI that
+     * responds to long presses. Otherwise bugs will occur when long press is used. See
+     * crbug.com/41384419.
      *
-     * Only called if {@link #contentControlsOffset} returns {@code true}.
+     * @return True if long press should move the bottom sheet.
      */
-    default void setOffsetController(@Nullable Callback<Integer> setOffset) {}
+    default boolean shouldLongPressMoveSheet() {
+        return false;
+    }
 }

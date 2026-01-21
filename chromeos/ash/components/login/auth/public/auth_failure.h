@@ -48,6 +48,8 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH_PUBLIC) AuthFailure {
     UNRECOVERABLE_CRYPTOHOME = 16,    // cryptohome is corrupted.
     // Failed interaction with cryptohome recovery service.
     CRYPTOHOME_RECOVERY_SERVICE_ERROR = 17,
+    // Failed to fetch OAuth2 token for cryptohome recovery service.
+    CRYPTOHOME_RECOVERY_OAUTH_TOKEN_ERROR = 18,
     NUM_FAILURE_REASONS,  // This has to be the last item.
   };
 
@@ -96,6 +98,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH_PUBLIC) AuthFailure {
 enum SuccessReason {
   OFFLINE_AND_ONLINE = 0,
   OFFLINE_ONLY = 1,
+  ONLINE_ONLY = 2,
   NUM_SUCCESS_REASONS,  // This has to be the last item.
 };
 

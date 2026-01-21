@@ -5,10 +5,9 @@
 #ifndef COMPONENTS_SERVICES_UNZIP_CONTENT_UNZIP_SERVICE_H_
 #define COMPONENTS_SERVICES_UNZIP_CONTENT_UNZIP_SERVICE_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/services/unzip/public/mojom/unzipper.mojom-forward.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 
 namespace unzip {
 

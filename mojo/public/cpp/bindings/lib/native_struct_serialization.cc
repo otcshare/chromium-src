@@ -4,10 +4,11 @@
 
 #include "mojo/public/cpp/bindings/lib/native_struct_serialization.h"
 
+#include "base/compiler_specific.h"
 #include "ipc/ipc_message_attachment.h"
 #include "ipc/ipc_message_attachment_set.h"
-#include "ipc/native_handle_type_converters.h"
 #include "mojo/public/cpp/bindings/lib/message_fragment.h"
+#include "mojo/public/cpp/bindings/lib/native_handle_type_converters.h"
 #include "mojo/public/cpp/bindings/lib/serialization.h"
 #include "mojo/public/cpp/bindings/lib/serialization_forward.h"
 
@@ -18,8 +19,9 @@ namespace internal {
 void UnmappedNativeStructSerializerImpl::Serialize(
     const native::NativeStructPtr& input,
     MessageFragment<native::internal::NativeStruct_Data>& fragment) {
-  if (!input)
+  if (!input) {
     return;
+  }
 
   fragment.Allocate();
   MessageFragment<Array_Data<uint8_t>> data_fragment(fragment.message());
@@ -64,8 +66,8 @@ void UnmappedNativeStructSerializerImpl::SerializeMessageContents(
   // Allocate a uint8 array, initialize its header, and copy the Pickle in.
   MessageFragment<Array_Data<uint8_t>> data_fragment(fragment.message());
   data_fragment.AllocateArrayData(ipc_message->payload_size());
-  memcpy(data_fragment->storage(), ipc_message->payload(),
-         ipc_message->payload_size());
+  UNSAFE_TODO(memcpy(data_fragment->storage(), ipc_message->payload(),
+                     ipc_message->payload_size()));
   fragment->data.Set(data_fragment.data());
 
   if (ipc_message->attachment_set()->empty()) {
@@ -98,14 +100,16 @@ bool UnmappedNativeStructSerializerImpl::DeserializeMessageAttachments(
     native::internal::NativeStruct_Data* data,
     Message* message,
     IPC::Message* ipc_message) {
-  if (data->handles.is_null())
+  if (data->handles.is_null()) {
     return true;
+  }
 
   auto* handles_data = data->handles.Get();
   for (size_t i = 0; i < handles_data->size(); ++i) {
     auto* handle_data = handles_data->at(i).Get();
-    if (!handle_data)
+    if (!handle_data) {
       return false;
+    }
     ScopedHandle handle;
     internal::Serializer<ScopedHandle, ScopedHandle>::Deserialize(
         &handle_data->the_handle, &handle, message);

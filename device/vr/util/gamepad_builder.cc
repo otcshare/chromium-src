@@ -1,9 +1,11 @@
 // Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "device/vr/util/gamepad_builder.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 
@@ -56,11 +58,11 @@ bool GamepadBuilder::IsValid() const {
   NOTREACHED();
 }
 
-absl::optional<Gamepad> GamepadBuilder::GetGamepad() {
+std::optional<Gamepad> GamepadBuilder::GetGamepad() {
   if (IsValid())
     return gamepad_;
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void GamepadBuilder::AddButton(const GamepadButton& button) {

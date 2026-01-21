@@ -7,24 +7,27 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "base/trace_event/trace_event.h"
 #include "components/gcm_driver/gcm_account_mapper.h"
 #include "components/gcm_driver/gcm_app_handler.h"
 #include "components/gcm_driver/gcm_client_factory.h"
 #include "components/gcm_driver/gcm_delayed_task_controller.h"
 #include "components/gcm_driver/instance_id/instance_id_impl.h"
 #include "components/gcm_driver/system_encryptor.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "google_apis/gcm/engine/account_mapping.h"
 #include "net/base/ip_endpoint.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
@@ -73,16 +76,17 @@ class GCMDriverDesktop::IOWorker : public GCMClient::Delegate {
       std::unique_ptr<GCMClientFactory> gcm_client_factory,
       const GCMClient::ChromeBuildInfo& chrome_build_info,
       const base::FilePath& store_path,
-      bool remove_account_mappings_with_email_key,
       base::RepeatingCallback<void(
           mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>)>
           get_socket_factory_callback,
       std::unique_ptr<network::PendingSharedURLLoaderFactory>
           pending_loader_factory,
       network::NetworkConnectionTracker* network_connection_tracker,
-      const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
+      os_crypt_async::Encryptor encryptor);
   void Start(GCMClient::StartMode start_mode,
-             const base::WeakPtr<GCMDriverDesktop>& service);
+             const base::WeakPtr<GCMDriverDesktop>& service,
+             base::TimeTicks time_task_posted);
   void Stop();
   void Register(const std::string& app_id,
                 const std::vector<std::string>& sender_ids);
@@ -130,6 +134,7 @@ class GCMDriverDesktop::IOWorker : public GCMClient::Delegate {
   base::WeakPtr<GCMDriverDesktop> service_;
 
   std::unique_ptr<GCMClient> gcm_client_;
+  std::optional<GCMClient::StartMode> start_mode_;
 };
 
 GCMDriverDesktop::IOWorker::IOWorker(
@@ -147,27 +152,33 @@ void GCMDriverDesktop::IOWorker::Initialize(
     std::unique_ptr<GCMClientFactory> gcm_client_factory,
     const GCMClient::ChromeBuildInfo& chrome_build_info,
     const base::FilePath& store_path,
-    bool remove_account_mappings_with_email_key,
     base::RepeatingCallback<void(
         mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>)>
         get_socket_factory_callback,
     std::unique_ptr<network::PendingSharedURLLoaderFactory>
         pending_loader_factory,
     network::NetworkConnectionTracker* network_connection_tracker,
-    const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner) {
+    const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
+    os_crypt_async::Encryptor encryptor) {
   DCHECK(io_thread_->RunsTasksInCurrentSequence());
 
-  gcm_client_ = gcm_client_factory->BuildInstance();
+  auto gcm_client = gcm_client_factory->BuildInstance();
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_for_io =
       network::SharedURLLoaderFactory::Create(
           std::move(pending_loader_factory));
 
-  gcm_client_->Initialize(
-      chrome_build_info, store_path, remove_account_mappings_with_email_key,
-      blocking_task_runner, io_thread_, std::move(get_socket_factory_callback),
-      url_loader_factory_for_io, network_connection_tracker,
-      std::make_unique<SystemEncryptor>(), this);
+  gcm_client->Initialize(
+      chrome_build_info, store_path, blocking_task_runner, io_thread_,
+      std::move(get_socket_factory_callback), url_loader_factory_for_io,
+      network_connection_tracker,
+      std::make_unique<SystemEncryptor>(std::move(encryptor)), this);
+  gcm_client_ = std::move(gcm_client);
+
+  if (start_mode_) {
+    gcm_client_->Start(*start_mode_);
+    start_mode_ = std::nullopt;
+  }
 }
 
 void GCMDriverDesktop::IOWorker::OnRegisterFinished(
@@ -309,17 +320,29 @@ void GCMDriverDesktop::IOWorker::OnStoreReset() {
 
 void GCMDriverDesktop::IOWorker::Start(
     GCMClient::StartMode start_mode,
-    const base::WeakPtr<GCMDriverDesktop>& service) {
+    const base::WeakPtr<GCMDriverDesktop>& service,
+    base::TimeTicks time_task_posted) {
   DCHECK(io_thread_->RunsTasksInCurrentSequence());
 
+  // Record for how long current task has been delayed. This is important during
+  // the browser startup when some best effort tasks are postponed.
+  base::UmaHistogramMediumTimes("GCM.ClientStartDelay",
+                                base::TimeTicks::Now() - time_task_posted);
+
   service_ = service;
-  gcm_client_->Start(start_mode);
+  if (gcm_client_) {
+    gcm_client_->Start(start_mode);
+  } else {
+    start_mode_ = start_mode;
+  }
 }
 
 void GCMDriverDesktop::IOWorker::Stop() {
   DCHECK(io_thread_->RunsTasksInCurrentSequence());
 
-  gcm_client_->Stop();
+  if (gcm_client_) {
+    gcm_client_->Stop();
+  }
 }
 
 void GCMDriverDesktop::IOWorker::Register(
@@ -499,7 +522,6 @@ GCMDriverDesktop::GCMDriverDesktop(
     const GCMClient::ChromeBuildInfo& chrome_build_info,
     PrefService* prefs,
     const base::FilePath& store_path,
-    bool remove_account_mappings_with_email_key,
     base::RepeatingCallback<void(
         mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>)>
         get_socket_factory_callback,
@@ -507,9 +529,9 @@ GCMDriverDesktop::GCMDriverDesktop(
     network::NetworkConnectionTracker* network_connection_tracker,
     const scoped_refptr<base::SequencedTaskRunner>& ui_thread,
     const scoped_refptr<base::SequencedTaskRunner>& io_thread,
-    const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner)
+    const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
+    os_crypt_async::OSCryptAsync* os_crypt_async)
     : GCMDriver(store_path, blocking_task_runner),
-      signed_in_(false),
       gcm_started_(false),
       connected_(false),
       account_mapper_(new GCMAccountMapper(this)),
@@ -522,17 +544,19 @@ GCMDriverDesktop::GCMDriverDesktop(
   // Create and initialize the GCMClient. Note that this does not initiate the
   // GCM check-in.
   io_worker_ = std::make_unique<IOWorker>(ui_thread, io_thread);
-  io_thread_->PostTask(
-      FROM_HERE,
+  os_crypt_async->GetInstance(
       base::BindOnce(
-          &GCMDriverDesktop::IOWorker::Initialize,
-          base::Unretained(io_worker_.get()), std::move(gcm_client_factory),
-          chrome_build_info, store_path, remove_account_mappings_with_email_key,
-          std::move(get_socket_factory_callback),
-          // ->Clone() permits creation of an equivalent
-          // SharedURLLoaderFactory on IO thread.
-          url_loader_factory_for_ui->Clone(),
-          base::Unretained(network_connection_tracker), blocking_task_runner));
+          &GCMDriverDesktop::OnOsCryptReady, weak_ptr_factory_.GetWeakPtr(),
+          base::BindOnce(&GCMDriverDesktop::IOWorker::Initialize,
+                         base::Unretained(io_worker_.get()),
+                         std::move(gcm_client_factory), chrome_build_info,
+                         store_path, std::move(get_socket_factory_callback),
+                         // ->Clone() permits creation of an equivalent
+                         // SharedURLLoaderFactory on IO thread.
+                         url_loader_factory_for_ui->Clone(),
+                         base::Unretained(network_connection_tracker),
+                         blocking_task_runner)),
+      os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
 }
 
 GCMDriverDesktop::~GCMDriverDesktop() = default;
@@ -575,6 +599,13 @@ void GCMDriverDesktop::ValidateRegistration(
                          std::move(callback));
 }
 
+void GCMDriverDesktop::OnOsCryptReady(
+    base::OnceCallback<void(os_crypt_async::Encryptor)> io_callback,
+    os_crypt_async::Encryptor encryptor) {
+  io_thread_->PostTask(
+      FROM_HERE, base::BindOnce(std::move(io_callback), std::move(encryptor)));
+}
+
 void GCMDriverDesktop::DoValidateRegistration(
     scoped_refptr<RegistrationInfo> registration_info,
     const std::string& registration_id,
@@ -594,14 +625,6 @@ void GCMDriverDesktop::Shutdown() {
   GCMDriver::Shutdown();
 
   io_thread_->DeleteSoon(FROM_HERE, io_worker_.release());
-}
-
-void GCMDriverDesktop::OnSignedIn() {
-  signed_in_ = true;
-}
-
-void GCMDriverDesktop::OnSignedOut() {
-  signed_in_ = false;
 }
 
 void GCMDriverDesktop::AddAppHandler(const std::string& app_id,
@@ -1025,11 +1048,11 @@ void GCMDriverDesktop::GetInstanceIDData(const std::string& app_id,
   DCHECK(ui_thread_->RunsTasksInCurrentSequence());
 
   GCMClient::Result result = EnsureStarted(GCMClient::IMMEDIATE_START);
-  // TODO(crbug/1028761): This method is only used by InstanceIDImpl to get the
-  // current instance ID from the store. As this method doesn't support error
-  // codes, the instance ID will assume no current ID and generate a new one
-  // if the gcm client is not ready and we pass an empty string to the callback
-  // below. We should fix this!
+  // TODO(crbug.com/40109289): This method is only used by InstanceIDImpl to get
+  // the current instance ID from the store. As this method doesn't support
+  // error codes, the instance ID will assume no current ID and generate a new
+  // one if the gcm client is not ready and we pass an empty string to the
+  // callback below. We should fix this!
   if (result != GCMClient::SUCCESS) {
     DLOG(ERROR)
         << "Unable to get the InstanceID data: cannot start the GCM Client";
@@ -1064,7 +1087,7 @@ void GCMDriverDesktop::GetInstanceIDDataFinished(
     const std::string& instance_id,
     const std::string& extra_data) {
   auto iter = get_instance_id_data_callbacks_.find(app_id);
-  DCHECK(iter != get_instance_id_data_callbacks_.end());
+  CHECK(iter != get_instance_id_data_callbacks_.end());
 
   base::queue<GetInstanceIDDataCallback>& callbacks = iter->second;
   std::move(callbacks.front()).Run(instance_id, extra_data);
@@ -1080,6 +1103,7 @@ void GCMDriverDesktop::GetTokenFinished(const std::string& app_id,
                                         const std::string& scope,
                                         const std::string& token,
                                         GCMClient::Result result) {
+  TRACE_EVENT0("identity", "GCMDriverDesktop::GetTokenFinished");
   TokenTuple tuple_key(app_id, authorized_entity, scope);
   auto callback_iter = get_token_callbacks_.find(tuple_key);
   if (callback_iter == get_token_callbacks_.end()) {
@@ -1182,7 +1206,8 @@ GCMClient::Result GCMDriverDesktop::EnsureStarted(
   io_thread_->PostTask(
       FROM_HERE, base::BindOnce(&GCMDriverDesktop::IOWorker::Start,
                                 base::Unretained(io_worker_.get()), start_mode,
-                                weak_ptr_factory_.GetWeakPtr()));
+                                weak_ptr_factory_.GetWeakPtr(),
+                                /*time_task_posted=*/base::TimeTicks::Now()));
 
   return GCMClient::SUCCESS;
 }
@@ -1252,8 +1277,6 @@ void GCMDriverDesktop::GCMClientReady(
     const std::vector<AccountMapping>& account_mappings,
     const base::Time& last_token_fetch_time) {
   DCHECK(ui_thread_->RunsTasksInCurrentSequence());
-
-  UMA_HISTOGRAM_BOOLEAN("GCM.UserSignedIn", signed_in_);
 
   gcm_started_ = true;
 

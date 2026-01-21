@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/attestation/machine_certificate_uploader_impl.h"
+
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/attestation/attestation_key_payload.pb.h"
-#include "chrome/browser/ash/attestation/machine_certificate_uploader_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chromeos/ash/components/attestation/fake_certificate.h"
 #include "chromeos/ash/components/attestation/mock_attestation_flow.h"
@@ -23,7 +25,6 @@
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::_;
 using testing::Invoke;
@@ -62,9 +63,20 @@ void CertCallbackNotAvailableFailure(
       base::BindOnce(std::move(callback), ATTESTATION_NOT_AVAILABLE, ""));
 }
 
-void StatusCallbackSuccess(policy::CloudPolicyClient::StatusCallback callback) {
+void ResultCallbackSuccess(policy::CloudPolicyClient::ResultCallback callback) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
+      FROM_HERE,
+      base::BindOnce(std::move(callback), policy::CloudPolicyClient::Result(
+                                              policy::DM_STATUS_SUCCESS)));
+}
+
+void ResultCallbackNotRegistered(
+    policy::CloudPolicyClient::ResultCallback callback) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback),
+                     policy::CloudPolicyClient::Result(
+                         policy::CloudPolicyClient::NotRegistered())));
 }
 
 class CallbackObserver {
@@ -94,7 +106,7 @@ class MockableFakeAttestationFlow : public MockAttestationFlow {
       bool force_new_key,
       ::attestation::KeyType key_crypto_type,
       const std::string& key_name,
-      const absl::optional<AttestationFlow::CertProfileSpecificData>&
+      const std::optional<AttestationFlow::CertProfileSpecificData>&
           profile_specific_data,
       CertificateCallback callback) {
     std::string certificate;
@@ -129,7 +141,9 @@ class MachineCertificateUploaderTestBase : public ::testing::Test {
   enum MockOptions {
     MOCK_KEY_EXISTS = 1,           // Configure so a certified key exists.
     MOCK_KEY_UPLOADED = (1 << 1),  // Configure so an upload has occurred.
-    MOCK_NEW_KEY = (1 << 2)        // Configure expecting new key generation.
+    MOCK_NEW_KEY = (1 << 2),       // Configure expecting new key generation.
+    MOCK_UNREGISTERED_CLIENT =
+        (1 << 3)  // Configure to fake an unregistered cloud policy client.
   };
 
   // The derived fixture has different needs to control this function's
@@ -164,10 +178,17 @@ class MachineCertificateUploaderTestBase : public ::testing::Test {
     // status in the key payload matches the upload operation.
     bool new_key = GetShouldRefreshCert() || (mock_options & MOCK_NEW_KEY);
     if (new_key || !key_uploaded) {
-      EXPECT_CALL(policy_client_,
-                  UploadEnterpriseMachineCertificate(
-                      new_key ? kFakeCertificate : certificate, _))
-          .WillOnce(WithArgs<1>(Invoke(StatusCallbackSuccess)));
+      if (mock_options & MOCK_UNREGISTERED_CLIENT) {
+        EXPECT_CALL(policy_client_,
+                    UploadEnterpriseMachineCertificate(
+                        new_key ? kFakeCertificate : certificate, _))
+            .WillOnce(WithArgs<1>(ResultCallbackNotRegistered));
+      } else {
+        EXPECT_CALL(policy_client_,
+                    UploadEnterpriseMachineCertificate(
+                        new_key ? kFakeCertificate : certificate, _))
+            .WillOnce(WithArgs<1>(ResultCallbackSuccess));
+      }
     }
 
     // Setup expected key generations.  Again use WillOnce().  Key generation is
@@ -178,7 +199,8 @@ class MachineCertificateUploaderTestBase : public ::testing::Test {
     }
   }
 
-  void RunUploader() {
+  void RunUploader(
+      base::OnceCallback<void(bool)> upload_callback = base::DoNothing()) {
     MachineCertificateUploaderImpl uploader(&policy_client_,
                                             &attestation_flow_);
     uploader.set_retry_limit_for_testing(kRetryLimit);
@@ -186,7 +208,7 @@ class MachineCertificateUploaderTestBase : public ::testing::Test {
     if (GetShouldRefreshCert())
       uploader.RefreshAndUploadCertificate(base::DoNothing());
     else
-      uploader.UploadCertificateIfNeeded(base::DoNothing());
+      uploader.UploadCertificateIfNeeded(std::move(upload_callback));
 
     base::RunLoop().RunUntilIdle();
   }
@@ -219,19 +241,19 @@ TEST_P(MachineCertificateUploaderTest, UnregisteredPolicyClient) {
 
 TEST_P(MachineCertificateUploaderTest, GetCertificateUnspecifiedFailure) {
   EXPECT_CALL(attestation_flow_, GetCertificate(_, _, _, _, _, _, _, _))
-      .WillRepeatedly(WithArgs<7>(Invoke(CertCallbackUnspecifiedFailure)));
+      .WillRepeatedly(WithArgs<7>(CertCallbackUnspecifiedFailure));
   RunUploader();
 }
 
 TEST_P(MachineCertificateUploaderTest, GetCertificateBadRequestFailure) {
   EXPECT_CALL(attestation_flow_, GetCertificate(_, _, _, _, _, _, _, _))
-      .WillOnce(WithArgs<7>(Invoke(CertCallbackBadRequestFailure)));
+      .WillOnce(WithArgs<7>(CertCallbackBadRequestFailure));
   RunUploader();
 }
 
 TEST_P(MachineCertificateUploaderTest, GetCertificateNotAvailableFailure) {
   EXPECT_CALL(attestation_flow_, GetCertificate(_, _, _, _, _, _, _, _))
-      .WillOnce(WithArgs<7>(Invoke(CertCallbackNotAvailableFailure)));
+      .WillOnce(WithArgs<7>(CertCallbackNotAvailableFailure));
   RunUploader();
 }
 
@@ -279,7 +301,7 @@ TEST_P(MachineCertificateUploaderTest, WaitForUploadComplete) {
 
 TEST_P(MachineCertificateUploaderTest, WaitForUploadFail) {
   EXPECT_CALL(attestation_flow_, GetCertificate(_, _, _, _, _, _, _, _))
-      .WillOnce(WithArgs<7>(Invoke(CertCallbackBadRequestFailure)));
+      .WillOnce(WithArgs<7>(CertCallbackBadRequestFailure));
 
   StrictMock<CallbackObserver> waiting_callback_observer;
   MachineCertificateUploaderImpl uploader(&policy_client_, &attestation_flow_);
@@ -344,6 +366,20 @@ TEST_P(MachineCertificateUploaderTest, KeyExistsCertExpired) {
 TEST_P(MachineCertificateUploaderTest, IgnoreUnknownCertFormat) {
   SetupMocks(MOCK_KEY_EXISTS | MOCK_KEY_UPLOADED, "unsupported");
   RunUploader();
+}
+
+TEST_P(MachineCertificateUploaderTest,
+       UnregisterPolicyClientDuringCallsReturnsUploadFailure) {
+  // We might get unregistered during asynchronous calls. Fake that behaviour
+  // here by letting the mock return unregistered.
+  SetupMocks(MOCK_NEW_KEY | MOCK_UNREGISTERED_CLIENT, "");
+
+  bool upload_success = false;
+  RunUploader(base::BindOnce(
+      [](bool* upload_success, bool success) { *upload_success = success; },
+      (&upload_success)));
+
+  EXPECT_FALSE(upload_success);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

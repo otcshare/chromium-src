@@ -8,9 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "base/types/expected.h"
+#include "build/build_config.h"
+#include "components/password_manager/core/browser/passkey_credential.h"
 #include "components/password_manager/core/browser/webauthn_credentials_delegate.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace password_manager {
 
@@ -24,20 +26,28 @@ class MockWebAuthnCredentialsDelegate : public WebAuthnCredentialsDelegate {
   MockWebAuthnCredentialsDelegate& operator=(
       const MockWebAuthnCredentialsDelegate&) = delete;
 
-  MOCK_METHOD(bool, IsWebAuthnAutofillEnabled, (), (const, override));
-  MOCK_METHOD(void, LaunchWebAuthnFlow, (), (override));
+  MOCK_METHOD(void, LaunchSecurityKeyOrHybridFlow, (), (override));
   MOCK_METHOD(void,
-              SelectWebAuthnCredential,
-              (std::string backend_id),
+              SelectPasskey,
+              (const std::string&,
+               WebAuthnCredentialsDelegate::OnPasskeySelectedCallback),
               (override));
-  MOCK_METHOD(const absl::optional<std::vector<autofill::Suggestion>>&,
-              GetWebAuthnSuggestions,
+  MOCK_METHOD((base::expected<const std::vector<PasskeyCredential>*,
+                              PasskeysUnavailableReason>),
+              GetPasskeys,
               (),
               (const override));
+  MOCK_METHOD(void, NotifyForPasskeysDisplay, (), (override));
+  MOCK_METHOD(bool, IsSecurityKeyOrHybridFlowAvailable, (), (const override));
   MOCK_METHOD(void,
-              RetrieveWebAuthnSuggestions,
+              RequestNotificationWhenPasskeysReady,
               (base::OnceClosure),
               (override));
+  MOCK_METHOD(bool, HasPendingPasskeySelection, (), (override));
+  base::WeakPtr<WebAuthnCredentialsDelegate> AsWeakPtr() override;
+
+ private:
+  base::WeakPtrFactory<MockWebAuthnCredentialsDelegate> weak_ptr_factory_{this};
 };
 
 }  // namespace password_manager

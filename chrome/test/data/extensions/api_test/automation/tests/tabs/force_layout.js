@@ -7,10 +7,13 @@ var allTests = [
     var node = rootNode.find({ role: 'button'});
     assertEq('button', node.role);
     rootNode.addEventListener('focus', (evt) => {
+      if (evt.target.role !== 'button') {
+        return;
+      }
+
       // The underlying DOM button has not changed, but its layout has. This
       // listener ensures we at least get a focus event on a new valid
       // accessibility object.
-      assertEq(evt.target, node);
       assertEq('button', evt.target.role);
       chrome.test.succeed();
     });
@@ -18,4 +21,4 @@ var allTests = [
   }
 ];
 
-setUpAndRunTests(allTests, 'force_layout.html');
+setUpAndRunTabsTests(allTests, 'force_layout.html');

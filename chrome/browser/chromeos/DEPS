@@ -1,7 +1,17 @@
 include_rules = [
   # See README.md.
   "-ash",
-  "-chrome/browser/ash",
 
   "+ash/constants",
+
+  # ChromeOS should not depend on //chrome. See //docs/chromeos/code.md for
+  # details.
+  "-chrome",
+
+  # Browser abstraction for use by ChromeOS feature code. Will eventually be
+  # moved out of chrome/.
+  "+chrome/common/webui_url_constants.h",
+  "+chrome/browser/ash/browser_delegate/browser_controller.h",
+  "+chrome/browser/ash/browser_delegate/browser_delegate.h",
+  "+chrome/browser/ash/browser_delegate/browser_type.h",
 ]

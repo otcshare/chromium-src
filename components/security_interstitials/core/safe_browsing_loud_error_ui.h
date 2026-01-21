@@ -27,7 +27,6 @@ class SafeBrowsingLoudErrorUI
  public:
   SafeBrowsingLoudErrorUI(
       const GURL& request_url,
-      const GURL& main_frame_url,
       BaseSafeBrowsingErrorUI::SBInterstitialReason reason,
       const BaseSafeBrowsingErrorUI::SBErrorDisplayOptions& display_options,
       const std::string& app_locale,
@@ -55,6 +54,13 @@ class SafeBrowsingLoudErrorUI
   void PopulatePhishingLoadTimeData(base::Value::Dict& load_time_data);
   void PopulateBillingLoadTimeData(base::Value::Dict& load_time_data);
   void PopulateEnhancedProtectionMessage(base::Value::Dict& load_time_data);
+
+  // Handle update to interstitial_interaction_data_ when a command occurs.
+  void UpdateInterstitialInteractionData(SecurityInterstitialCommand command);
+
+  void OpenHelpCenter(bool always_open_in_new_tab);
+  void OpenDiagnostic(bool always_open_in_new_tab);
+  void ReportPhishingError(bool always_open_in_new_tab);
 
   const bool created_prior_to_navigation_;
 };

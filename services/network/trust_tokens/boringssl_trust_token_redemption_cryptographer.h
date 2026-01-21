@@ -5,10 +5,17 @@
 #ifndef SERVICES_NETWORK_TRUST_TOKENS_BORINGSSL_TRUST_TOKEN_REDEMPTION_CRYPTOGRAPHER_H_
 #define SERVICES_NETWORK_TRUST_TOKENS_BORINGSSL_TRUST_TOKEN_REDEMPTION_CRYPTOGRAPHER_H_
 
+#include <memory>
+#include <optional>
+#include <string_view>
+
+#include "services/network/public/mojom/trust_tokens.mojom-shared.h"
 #include "services/network/trust_tokens/trust_token_request_redemption_helper.h"
-#include "third_party/boringssl/src/include/openssl/base.h"
+#include "third_party/boringssl/src/include/openssl/trust_token.h"
 
 namespace network {
+
+class BoringsslTrustTokenState;
 
 // Executes one instance of a Trust Tokens redemption operation by calling the
 // appropriate BoringSSL methods.
@@ -21,15 +28,15 @@ class BoringsslTrustTokenRedemptionCryptographer
   // TrustTokenRequestRedemptionHelper::Cryptographer implementation:
   bool Initialize(mojom::TrustTokenProtocolVersion issuer_configured_version,
                   int issuer_configured_batch_size) override;
-  absl::optional<std::string> BeginRedemption(
+  std::optional<std::string> BeginRedemption(
       TrustToken token,
       const url::Origin& top_level_origin) override;
-  absl::optional<std::string> ConfirmRedemption(
-      base::StringPiece response_header) override;
+  std::optional<std::string> ConfirmRedemption(
+      std::string_view response_header) override;
 
  private:
   // Maintains Trust Tokens protocol state.
-  bssl::UniquePtr<TRUST_TOKEN_CLIENT> ctx_;
+  std::unique_ptr<BoringsslTrustTokenState> state_;
 };
 
 }  // namespace network

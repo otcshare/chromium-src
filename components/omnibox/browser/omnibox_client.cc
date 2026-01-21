@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/strings/string_util.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "ui/gfx/image/image.h"
 
 bool OmniboxClient::CurrentPageExists() const {
@@ -25,6 +26,10 @@ gfx::Image OmniboxClient::GetFavicon() const {
   return gfx::Image();
 }
 
+ukm::SourceId OmniboxClient::GetUKMSourceId() const {
+  return ukm::kInvalidSourceId;
+}
+
 bool OmniboxClient::IsLoading() const {
   return false;
 }
@@ -41,15 +46,15 @@ bookmarks::BookmarkModel* OmniboxClient::GetBookmarkModel() {
   return nullptr;
 }
 
-OmniboxControllerEmitter* OmniboxClient::GetOmniboxControllerEmitter() {
-  return nullptr;
-}
-
 TemplateURLService* OmniboxClient::GetTemplateURLService() {
   return nullptr;
 }
 
 AutocompleteClassifier* OmniboxClient::GetAutocompleteClassifier() {
+  return nullptr;
+}
+
+omnibox::OmniboxPopupCloser* OmniboxClient::GetOmniboxPopupCloser() {
   return nullptr;
 }
 
@@ -61,12 +66,21 @@ int OmniboxClient::GetHttpsPortForTesting() const {
   return 0;
 }
 
+metrics::OmniboxEventProto::PageClassification
+OmniboxClient::GetOmniboxComposeboxPageClassification() const {
+  return metrics::OmniboxEventProto::INVALID_SPEC;
+}
+
 bool OmniboxClient::IsUsingFakeHttpsForHttpsUpgradeTesting() const {
   return false;
 }
 
-gfx::Image OmniboxClient::GetIconIfExtensionMatch(
-    const AutocompleteMatch& match) const {
+gfx::Image OmniboxClient::GetExtensionIcon(
+    const TemplateURL* template_url) const {
+  return gfx::Image();
+}
+
+gfx::Image OmniboxClient::GetSizedIcon(const SkBitmap* bitmap) const {
   return gfx::Image();
 }
 
@@ -79,12 +93,22 @@ gfx::Image OmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
   return gfx::Image();
 }
 
-bool OmniboxClient::ProcessExtensionKeyword(const std::u16string& text,
-                                            const TemplateURL* template_url,
-                                            const AutocompleteMatch& match,
-                                            WindowOpenDisposition disposition) {
-  return false;
+std::optional<lens::proto::LensOverlaySuggestInputs>
+OmniboxClient::GetLensOverlaySuggestInputs() const {
+  return std::nullopt;
 }
+
+std::optional<lens::ContextualInputData> OmniboxClient::GetContextualInputData()
+    const {
+  return std::nullopt;
+}
+
+void OmniboxClient::ProcessExtensionMatch(const std::u16string& text,
+                                          const TemplateURL* template_url,
+                                          const AutocompleteMatch& match,
+                                          WindowOpenDisposition disposition) {}
+
+void OmniboxClient::OnUserPastedInOmniboxResultingInValidURL() {}
 
 gfx::Image OmniboxClient::GetFaviconForPageUrl(
     const GURL& page_url,
@@ -101,4 +125,16 @@ gfx::Image OmniboxClient::GetFaviconForKeywordSearchProvider(
     const TemplateURL* template_url,
     FaviconFetchedCallback on_favicon_fetched) {
   return gfx::Image();
+}
+
+bool OmniboxClient::IsHistoryEmbeddingsEnabled() const {
+  return false;
+}
+
+bool OmniboxClient::IsAimPopupEnabled() const {
+  return false;
+}
+
+omnibox::ToolMode OmniboxClient::AimToolMode() const {
+  return omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
 }

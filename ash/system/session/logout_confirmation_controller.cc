@@ -10,14 +10,15 @@
 
 #include "ash/constants/ash_pref_names.h"
 #include "ash/login_status.h"
+#include "ash/metrics/demo_session_metrics_recorder.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/shell_observer.h"
 #include "ash/system/session/logout_confirmation_dialog.h"
 #include "ash/wm/desks/desks_util.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/metrics/user_metrics.h"
 #include "base/time/default_tick_clock.h"
@@ -43,7 +44,8 @@ std::vector<int> GetLastWindowClosedContainerIds() {
 void SignOut(LogoutConfirmationController::Source source) {
   if (Shell::Get()->session_controller()->IsDemoSession() &&
       source == LogoutConfirmationController::Source::kShelfExitButton) {
-    base::RecordAction(base::UserMetricsAction("DemoMode.ExitFromShelf"));
+    DemoSessionMetricsRecorder::RecordExitSessionAction(
+        DemoSessionMetricsRecorder::ExitSessionFrom::kShelf);
   }
   Shell::Get()->session_controller()->RequestSignOut();
 }
@@ -175,6 +177,7 @@ void LogoutConfirmationController::ConfirmLogout(base::TimeTicks logout_time,
   logout_time_ = logout_time;
 
   if (!dialog_) {
+    observers_.Notify(&Observer::OnLogoutConfirmationStarted);
     // Show confirmation dialog unless this is a unit test without a Shell.
     if (Shell::HasInstance())
       dialog_ = new LogoutConfirmationDialog(this, logout_time_);
@@ -217,8 +220,16 @@ void LogoutConfirmationController::OnLogoutConfirmed() {
 
 void LogoutConfirmationController::OnDialogClosed() {
   logout_time_ = base::TimeTicks();
-  dialog_ = NULL;
+  dialog_ = nullptr;
   logout_timer_.Stop();
+}
+
+void LogoutConfirmationController::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void LogoutConfirmationController::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 void LogoutConfirmationController::SetClockForTesting(

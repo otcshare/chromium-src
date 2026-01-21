@@ -4,13 +4,16 @@
 
 #include "third_party/blink/renderer/modules/webrtc/webrtc_audio_device_impl.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/audio_sample_types.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "media/base/sample_rates.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
 #include "third_party/blink/renderer/modules/mediastream/processed_local_audio_source.h"
@@ -50,19 +53,34 @@ WebRtcAudioDeviceImpl::~WebRtcAudioDeviceImpl() {
   DCHECK(!initialized_) << "Terminate must have been called.";
 }
 
-void WebRtcAudioDeviceImpl::RenderData(media::AudioBus* audio_bus,
-                                       int sample_rate,
-                                       base::TimeDelta audio_delay,
-                                       base::TimeDelta* current_time) {
-  TRACE_EVENT2("audio", "WebRtcAudioDeviceImpl::RenderData", "sample_rate",
-               sample_rate, "audio_delay_ms", audio_delay.InMilliseconds());
+void WebRtcAudioDeviceImpl::RenderData(
+    media::AudioBus* audio_bus,
+    int sample_rate,
+    base::TimeDelta audio_delay,
+    base::TimeDelta* current_time,
+    const media::AudioGlitchInfo& glitch_info) {
+  TRACE_EVENT("audio", "WebRtcAudioDeviceImpl::RenderData", "sample_rate",
+              sample_rate, "playout_delay (ms)", audio_delay.InMillisecondsF());
   {
     base::AutoLock auto_lock(lock_);
+    cumulative_glitch_info_ += glitch_info;
+    total_samples_count_ += audio_bus->frames();
+    // |total_playout_delay_| refers to the sum of playout delays for all
+    // samples, so we add the delay multiplied by the number of samples. See
+    // https://w3c.github.io/webrtc-stats/#dom-rtcaudioplayoutstats-totalplayoutdelay
+    total_playout_delay_ += audio_delay * audio_bus->frames();
+    // |total_samples_duration_| is the total duration (in seconds) of all audio
+    // samples that have been played out. Includes both synthesized and
+    // non-synthesized samples.
+    total_samples_duration_ += (media::AudioTimestampHelper::FramesToTime(
+                                    audio_bus->frames(), sample_rate) +
+                                glitch_info.duration);
 #if DCHECK_IS_ON()
     DCHECK(!renderer_ || renderer_->CurrentThreadIsRenderingThread());
     if (!audio_renderer_thread_checker_.CalledOnValidThread()) {
-      for (auto* sink : playout_sinks_)
+      for (WebRtcPlayoutDataSource::Sink* sink : playout_sinks_) {
         sink->OnRenderThreadChanged();
+      }
     }
 #endif
     if (!playing_ || audio_bus->channels() > 8) {
@@ -111,8 +129,9 @@ void WebRtcAudioDeviceImpl::RenderData(media::AudioBus* audio_bus,
 
   // Pass the render data to the playout sinks.
   base::AutoLock auto_lock(lock_);
-  for (auto* sink : playout_sinks_)
+  for (WebRtcPlayoutDataSource::Sink* sink : playout_sinks_) {
     sink->OnPlayoutData(audio_bus, sample_rate, audio_delay);
+  }
 }
 
 void WebRtcAudioDeviceImpl::RemoveAudioRenderer(
@@ -121,8 +140,9 @@ void WebRtcAudioDeviceImpl::RemoveAudioRenderer(
   base::AutoLock auto_lock(lock_);
   DCHECK_EQ(renderer, renderer_.get());
   // Notify the playout sink of the change.
-  for (auto* sink : playout_sinks_)
+  for (WebRtcPlayoutDataSource::Sink* sink : playout_sinks_) {
     sink->OnPlayoutDataSourceChanged();
+  }
 
   renderer_ = nullptr;
 }
@@ -133,8 +153,10 @@ void WebRtcAudioDeviceImpl::AudioRendererThreadStopped() {
   // Notify the playout sink of the change.
   // Not holding |lock_| because the caller must guarantee that the audio
   // renderer thread is dead, so no race is possible with |playout_sinks_|
-  for (auto* sink : TS_UNCHECKED_READ(playout_sinks_))
+  for (WebRtcPlayoutDataSource::Sink* sink :
+       TS_UNCHECKED_READ(playout_sinks_)) {
     sink->OnPlayoutDataSourceChanged();
+  }
 }
 
 void WebRtcAudioDeviceImpl::SetOutputDeviceForAec(
@@ -142,9 +164,11 @@ void WebRtcAudioDeviceImpl::SetOutputDeviceForAec(
   DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
   SendLogMessage(base::StringPrintf("%s({output_device_id=%s})", __func__,
                                     output_device_id.Utf8().c_str()));
+  DVLOG(1) << __func__ << " current id=[" << output_device_id_for_aec_
+           << "], new id [" << output_device_id << "]";
   output_device_id_for_aec_ = output_device_id;
   base::AutoLock lock(lock_);
-  for (auto* capturer : capturers_) {
+  for (ProcessedLocalAudioSource* capturer : capturers_) {
     capturer->SetOutputDeviceForAec(output_device_id.Utf8());
   }
 }
@@ -354,7 +378,7 @@ void WebRtcAudioDeviceImpl::AddAudioCapturer(
   DCHECK(!capturer->device().id.empty());
 
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(capturers_, capturer));
+  DCHECK(!std::ranges::contains(capturers_, capturer));
   capturers_.push_back(capturer);
   capturer->SetOutputDeviceForAec(output_device_id_for_aec_.Utf8());
 }
@@ -374,7 +398,7 @@ void WebRtcAudioDeviceImpl::AddPlayoutSink(
   DVLOG(1) << "WebRtcAudioDeviceImpl::AddPlayoutSink()";
   DCHECK(sink);
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(playout_sinks_, sink));
+  DCHECK(!std::ranges::contains(playout_sinks_, sink));
   playout_sinks_.push_back(sink);
 }
 
@@ -385,6 +409,19 @@ void WebRtcAudioDeviceImpl::RemovePlayoutSink(
   DCHECK(sink);
   base::AutoLock auto_lock(lock_);
   playout_sinks_.remove(sink);
+}
+
+std::optional<webrtc::AudioDeviceModule::Stats>
+WebRtcAudioDeviceImpl::GetStats() const {
+  base::AutoLock auto_lock(lock_);
+  return std::optional<webrtc::AudioDeviceModule::Stats>(
+      webrtc::AudioDeviceModule::Stats{
+          .synthesized_samples_duration_s =
+              cumulative_glitch_info_.duration.InSecondsF(),
+          .synthesized_samples_events = cumulative_glitch_info_.count,
+          .total_samples_duration_s = total_samples_duration_.InSecondsF(),
+          .total_playout_delay_s = total_playout_delay_.InSecondsF(),
+          .total_samples_count = total_samples_count_});
 }
 
 base::UnguessableToken

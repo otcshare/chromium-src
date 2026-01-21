@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/ozone/platform/drm/gpu/drm_framebuffer.h"
 
@@ -29,7 +30,7 @@ class DrmDumbBuffer {
     GEM_CLOSE,
   };
 
-  DrmDumbBuffer(const scoped_refptr<DrmDevice>& drm);
+  explicit DrmDumbBuffer(const scoped_refptr<DrmDevice>& drm);
 
   DrmDumbBuffer(const DrmDumbBuffer&) = delete;
   DrmDumbBuffer& operator=(const DrmDumbBuffer&) = delete;
@@ -65,7 +66,8 @@ class DrmDumbBuffer {
   HandleCloser handle_closer_ = HandleCloser::DESTROY_DUMB;
 
   // Base address for memory mapping.
-  void* mmap_base_ = 0;
+  // RAW_PTR_EXCLUSION: not managed by PartitionAlloc.
+  RAW_PTR_EXCLUSION void* mmap_base_ = nullptr;
 
   // Size for memory mapping.
   size_t mmap_size_ = 0;

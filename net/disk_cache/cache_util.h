@@ -7,8 +7,8 @@
 
 #include <stdint.h>
 
-#include "base/callback_forward.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_forward.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/disk_cache.h"
 
@@ -18,9 +18,10 @@ class FilePath;
 
 namespace disk_cache {
 
-// Experiment to increase the cache size to see the impact on various
-// performance metrics.
-NET_EXPORT_PRIVATE BASE_DECLARE_FEATURE(kChangeDiskCacheSizeExperiment);
+// Experiment to increase the generated code cache size to see the impact on
+// various performance metrics.
+NET_EXPORT_PRIVATE BASE_DECLARE_FEATURE(
+    kChangeGeneratedCodeCacheSizeExperiment);
 
 // Moves the cache files from the given path to another location.
 // Fails if the destination exists already, or if it doesn't have

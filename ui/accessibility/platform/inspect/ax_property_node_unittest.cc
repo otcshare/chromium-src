@@ -4,8 +4,9 @@
 
 #include "ui/accessibility/platform/inspect/ax_property_node.h"
 
+#include <optional>
+
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
 
 using ui::AXPropertyFilter;
@@ -97,15 +98,15 @@ TEST_F(AXPropertyNodeTest, ParseProperty) {
       "forward");
   EXPECT_EQ(GetArgumentNode("Text({start: :1, dir: forward})")
                 .FindStringKey("notexists"),
-            absl::nullopt);
+            std::nullopt);
 
   // Dict: FindIntKey
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("loc"), 3);
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("len"), 2);
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("notexists"),
-            absl::nullopt);
+            std::nullopt);
 
-  // Dict: FindKey
+  // `AXPropertyNode::FindKey()`
   EXPECT_EQ(GetArgumentNode("Text({anchor: {:1, 0, up}})")
                 .FindKey("anchor")
                 ->ToFlatString(),

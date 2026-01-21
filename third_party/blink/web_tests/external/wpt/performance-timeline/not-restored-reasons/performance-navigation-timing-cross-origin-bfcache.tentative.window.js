@@ -6,6 +6,7 @@
 // META: script=/html/browsers/browsing-the-web/back-forward-cache/resources/rc-helper.js
 // META: script=/html/browsers/browsing-the-web/remote-context-helper/resources/remote-context-helper.js
 // META: script=/websockets/constants.sub.js
+// META: timeout=long
 
 'use strict';
 
@@ -19,7 +20,7 @@ promise_test(async t => {
   const rc1_url = await rc1.executeScript(() => {
     return location.href;
   });
-  // Add a cross-origin iframe and use BroadcastChannel.
+  // Add a cross-origin iframe.
   const rc1_child = await rc1.addIframe(
       /*extraConfig=*/ {
         origin: 'HTTP_REMOTE_ORIGIN',
@@ -30,7 +31,6 @@ promise_test(async t => {
   );
   // Use WebSocket to block BFCache.
   await useWebSocket(rc1_child);
-
   const rc1_child_url = await rc1_child.executeScript(() => {
     return location.href;
   });
@@ -41,22 +41,20 @@ promise_test(async t => {
   });
 
   // Check the BFCache result and the reported reasons.
-  await assertBFCache(rc1, /*shouldRestoreFromBFCache=*/ false);
+  await assertBFCacheEligibility(rc1, /*shouldRestoreFromBFCache=*/ false);
   await assertNotRestoredReasonsEquals(
       rc1,
-      /*blocked=*/ false,
       /*url=*/ rc1_url,
-      /*src=*/ '',
-      /*id=*/ '',
-      /*name=*/ '',
-      /*reasons=*/[],
+      /*src=*/ null,
+      /*id=*/ null,
+      /*name=*/ null,
+      /*reasons=*/[{'reason': "masked"}],
       /*children=*/[{
-        'blocked': true,
-        'url': '',
-        'src': '',
-        'id': '',
-        'name': '',
-        'reasons': [],
-        'children': []
+        'url': null,
+        'src': rc1_child_url,
+        'id': 'test-id',
+        'name': null,
+        'reasons': null,
+        'children': null
       }]);
 });

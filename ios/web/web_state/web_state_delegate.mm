@@ -4,9 +4,6 @@
 
 #import "ios/web/public/web_state_delegate.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace web {
 
@@ -37,20 +34,40 @@ WebState* WebStateDelegate::OpenURLFromWebState(
 
 void WebStateDelegate::ShowRepostFormWarningDialog(
     WebState*,
+    FormWarningType warning_type,
     base::OnceCallback<void(bool)> callback) {
   std::move(callback).Run(true);
 }
+
+void WebStateDelegate::ShouldAllowCopy(
+    WebState* source,
+    base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::ShouldAllowPaste(
+    WebState* source,
+    base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::ShouldAllowCut(WebState* source,
+                                      base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::DidFinishClipboardRead(WebState* source) {}
 
 JavaScriptDialogPresenter* WebStateDelegate::GetJavaScriptDialogPresenter(
     WebState*) {
   return nullptr;
 }
 
-bool WebStateDelegate::HandlePermissionsDecisionRequest(
+void WebStateDelegate::HandlePermissionsDecisionRequest(
     WebState* source,
     NSArray<NSNumber*>* permissions,
     WebStatePermissionDecisionHandler handler) {
-  return false;
+  handler(PermissionDecisionShowDefaultPrompt);
 }
 
 void WebStateDelegate::OnAuthRequired(WebState* source,
@@ -65,12 +82,12 @@ UIView* WebStateDelegate::GetWebViewContainer(WebState* source) {
 }
 
 void WebStateDelegate::Attach(WebState* source) {
-  DCHECK(attached_states_.find(source) == attached_states_.end());
+  DCHECK(!attached_states_.contains(source));
   attached_states_.insert(source);
 }
 
 void WebStateDelegate::Detach(WebState* source) {
-  DCHECK(attached_states_.find(source) != attached_states_.end());
+  DCHECK(attached_states_.contains(source));
   attached_states_.erase(source);
 }
 
@@ -90,4 +107,6 @@ id<CRWResponderInputView> WebStateDelegate::GetResponderInputView(
   return nil;
 }
 
-}  // web
+void WebStateDelegate::OnNewWebViewCreated(WebState* source) {}
+
+}  // namespace web

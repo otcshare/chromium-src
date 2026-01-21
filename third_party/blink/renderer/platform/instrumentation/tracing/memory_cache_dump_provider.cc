@@ -17,23 +17,27 @@ bool MemoryCacheDumpProvider::OnMemoryDump(
     const base::trace_event::MemoryDumpArgs& args,
     base::trace_event::ProcessMemoryDump* memory_dump) {
   DCHECK(IsMainThread());
-  if (!client_)
-    return false;
+  if (!client_) {
+    // A client may not have been set yet, for instance in the case of spare
+    // renderers that haven't been used for loading a document. Return true so
+    // that the provider is not disabled. For more info see
+    // crbug.com/40880513#comment7.
+    return true;
+  }
 
   WebMemoryDumpLevelOfDetail level;
   switch (args.level_of_detail) {
-    case base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND:
+    case base::trace_event::MemoryDumpLevelOfDetail::kBackground:
       level = blink::WebMemoryDumpLevelOfDetail::kBackground;
       break;
-    case base::trace_event::MemoryDumpLevelOfDetail::LIGHT:
+    case base::trace_event::MemoryDumpLevelOfDetail::kLight:
       level = blink::WebMemoryDumpLevelOfDetail::kLight;
       break;
-    case base::trace_event::MemoryDumpLevelOfDetail::DETAILED:
+    case base::trace_event::MemoryDumpLevelOfDetail::kDetailed:
       level = blink::WebMemoryDumpLevelOfDetail::kDetailed;
       break;
     default:
       NOTREACHED();
-      return false;
   }
 
   WebProcessMemoryDump dump(args.level_of_detail, memory_dump);

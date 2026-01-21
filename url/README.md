@@ -73,3 +73,32 @@ restriction has been relaxed somewhat. Blink still provides its own URL object
 using its own string type, so the insulation that the Utility layer provides is
 still useful. But some STL strings and calls to base functions have gradually
 been added in places where doing so is possible.
+
+## Unsafe buffer usages
+
+To ensure that the valid length of a buffer is always reliably conveyed, we are
+in the process of migrating functions that take a raw pointer and a size for
+string data. These functions are being updated to accept `std::string_view` or
+`std::u16string_view` instead. This change also applies to functions that only
+accept a raw pointer, which are being updated to take a `string_view` to
+prevent buffer overflows.
+
+Currently, the codebase contains a mix of both the old, unsafe functions and
+the new, safer `string_view`-based functions. Our goal is to eventually
+convert all of them. This ongoing effort is tracked in crbug.com/350788890.
+
+## Caution for terminologies
+
+Due to historical usage, the term "Standard URL" is currently used within the
+code to represent "[Special URLs][1]", except for "file:" scheme URL, as defined
+in the URL Standard. However, this terminology is outdated and can lead to
+confusion, particularly now that we are supporting [non-special URLs][2] as well
+([crbug/1416006][3]). For the sake of consistency and clarity, it is recommended
+to switch to the more accurate term "Special URL" throughout the codebase.
+However, this change should be carefully planned and executed due to the
+widespread use of the current terminology in both internal and third-party code.
+For a while, "Standard URL" and "Special URL" are used interchangeably.
+
+[1]: https://url.spec.whatwg.org/#is-special
+[2]: https://url.spec.whatwg.org/#is-not-special
+[3]: https://crbug.com/1416006

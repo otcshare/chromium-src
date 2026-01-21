@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/task/cancelable_task_tracker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/bluetooth_socket.h"
@@ -61,7 +62,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothSocketFloss
   virtual void Listen(
       scoped_refptr<device::BluetoothAdapter> adapter,
       FlossSocketManager::SocketType socket_type,
-      const absl::optional<device::BluetoothUUID>& uuid,
+      const std::optional<device::BluetoothUUID>& uuid,
       const device::BluetoothAdapter::ServiceOptions& service_options,
       base::OnceClosure success_callback,
       ErrorCompletionCallback error_callback);
@@ -88,11 +89,10 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothSocketFloss
                       DBusResult<FlossDBusClient::BtifStatus> result);
 
   // Callback that handles completion of a socket connection.
-  void CompleteConnect(
-      base::OnceClosure success_callback,
-      ErrorCompletionCallback error_callback,
-      FlossDBusClient::BtifStatus status,
-      absl::optional<FlossSocketManager::FlossSocket>&& socket);
+  void CompleteConnect(base::OnceClosure success_callback,
+                       ErrorCompletionCallback error_callback,
+                       FlossDBusClient::BtifStatus status,
+                       std::optional<FlossSocketManager::FlossSocket>&& socket);
 
   // Callback that handles completion of socket accept.
   void CompleteAccept(DBusResult<FlossDBusClient::BtifStatus> result);
@@ -113,7 +113,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothSocketFloss
       base::OnceClosure success_callback,
       ErrorCompletionCallback error_callback,
       FlossDBusClient::BtifStatus status,
-      absl::optional<FlossSocketManager::FlossSocket>&& socket);
+      std::optional<FlossSocketManager::FlossSocket>&& socket);
 
  private:
   struct AcceptRequest {
@@ -137,12 +137,16 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothSocketFloss
   std::string device_address_;
 
   // Information about a listening socket. Empty if this socket isn't listening.
-  absl::optional<FlossSocketManager::FlossListeningSocket>
+  std::optional<FlossSocketManager::FlossListeningSocket>
       listening_socket_info_;
 
   // Is this socket currently accepting? This status reflects what the listening
   // socket is currently doing on the Floss daemon side.
   bool is_accepting_ = false;
+
+  // Hold the listen callbacks and invoke them in DoConnectionStateChanged.
+  base::OnceClosure pending_listen_ready_callback_;
+  base::OnceClosure pending_listen_close_callback_;
 
   // Information about a connecting socket. Check |is_valid| before using.
   FlossSocketManager::FlossSocket connecting_socket_info_;

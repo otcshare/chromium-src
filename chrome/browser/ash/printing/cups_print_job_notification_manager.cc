@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/printing/cups_print_job_notification_manager.h"
 
-#include "base/containers/contains.h"
+#include "base/containers/map_util.h"
 #include "chrome/browser/ash/printing/cups_print_job.h"
 #include "chrome/browser/ash/printing/cups_print_job_manager.h"
 #include "chrome/browser/ash/printing/cups_print_job_notification.h"
@@ -29,8 +29,9 @@ void CupsPrintJobNotificationManager::OnPrintJobCreated(
     base::WeakPtr<CupsPrintJob> job) {
   if (!job)
     return;
-  if (base::Contains(notification_map_, job.get()))
+  if (notification_map_.contains(job.get())) {
     return;
+  }
   notification_map_[job.get()] =
       std::make_unique<CupsPrintJobNotification>(this, job, profile_);
 }
@@ -72,24 +73,24 @@ void CupsPrintJobNotificationManager::OnPrintJobCancelled(
 
 void CupsPrintJobNotificationManager::OnPrintJobNotificationRemoved(
     CupsPrintJobNotification* notification) {
-  // |notification|.print_job_ might be a nullptr at this moment, so we iterate
-  // through |notification_map_| to find |notification|.
-  auto it = notification_map_.begin();
-  for (; it != notification_map_.end(); it++) {
-    if (it->second.get() == notification)
-      break;
-  }
-
-  if (it != notification_map_.end())
-    notification_map_.erase(it);
+  std::erase_if(notification_map_, [&](const auto& entry) {
+    return entry.second.get() == notification;
+  });
 }
 
 void CupsPrintJobNotificationManager::UpdateNotification(
     base::WeakPtr<CupsPrintJob> job) {
-  if (!job)
+  if (!job) {
     return;
-  DCHECK(base::Contains(notification_map_, job.get()));
-  notification_map_[job.get()]->OnPrintJobStatusUpdated();
+  }
+  if (auto* notification = base::FindPtrOrNull(notification_map_, job.get())) {
+    notification->OnPrintJobStatusUpdated();
+  }
+}
+
+CupsPrintJobNotification*
+CupsPrintJobNotificationManager::GetNotificationForTesting(CupsPrintJob* job) {
+  return base::FindPtrOrNull(notification_map_, job);
 }
 
 }  // namespace ash

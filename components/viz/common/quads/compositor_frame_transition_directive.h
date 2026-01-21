@@ -9,14 +9,16 @@
 #include <vector>
 
 #include "base/time/time.h"
-#include "base/unguessable_token.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/view_transition_element_resource_id.h"
 #include "components/viz/common/viz_common_export.h"
+#include "ui/gfx/display_color_spaces.h"
+
+namespace base::trace_event {
+class TracedValue;
+}  // namespace base::trace_event
 
 namespace viz {
-
-using NavigationID = base::UnguessableToken;
 
 // This is a transition directive that can be associated with a compositor
 // frame. The intent is to be able to animate a compositor frame into the right
@@ -51,8 +53,10 @@ class VIZ_COMMON_EXPORT CompositorFrameTransitionDirective {
     SharedElement(SharedElement&&);
     SharedElement& operator=(SharedElement&&);
 
-    bool operator==(const SharedElement& other) const;
-    bool operator!=(const SharedElement& other) const;
+    friend bool operator==(const SharedElement&,
+                           const SharedElement&) = default;
+
+    void AsValueInto(base::trace_event::TracedValue* value) const;
 
     // The render pass corresponding to a DOM element. The id is scoped to the
     // same frame that the directive corresponds to.
@@ -63,22 +67,34 @@ class VIZ_COMMON_EXPORT CompositorFrameTransitionDirective {
     ViewTransitionElementResourceId view_transition_element_resource_id;
   };
 
+  // This is public only for mojo deserialization.
   CompositorFrameTransitionDirective();
 
-  // Constructs a new directive. Note that if type is `kSave`, the effect should
-  // be specified for a desired effect. These are ignored for the `kAnimate`
-  // type.
-  CompositorFrameTransitionDirective(
-      NavigationID navigation_id,
+  static CompositorFrameTransitionDirective CreateSave(
+      const blink::ViewTransitionToken& transition_token,
+      bool maybe_cross_frame_sink,
       uint32_t sequence_id,
-      Type type,
-      std::vector<SharedElement> shared_elements = {});
+      std::vector<SharedElement> shared_elements,
+      const gfx::DisplayColorSpaces& display_color_spaces,
+      bool delay_layer_tree_view_deletion);
+  static CompositorFrameTransitionDirective CreateAnimate(
+      const blink::ViewTransitionToken& transition_token,
+      bool maybe_cross_frame_sink,
+      uint32_t sequence_id,
+      bool delay_layer_tree_view_deletion);
+  static CompositorFrameTransitionDirective CreateRelease(
+      const blink::ViewTransitionToken& transition_token,
+      bool maybe_cross_frame_sink,
+      uint32_t sequence_id,
+      bool delay_layer_tree_view_deletion);
 
   CompositorFrameTransitionDirective(const CompositorFrameTransitionDirective&);
   ~CompositorFrameTransitionDirective();
 
   CompositorFrameTransitionDirective& operator=(
       const CompositorFrameTransitionDirective&);
+
+  void AsValueInto(base::trace_event::TracedValue* value) const;
 
   // A monotonically increasing sequence_id for a given communication channel
   // (i.e. surface). This is used to distinguish new directives from directives
@@ -88,21 +104,45 @@ class VIZ_COMMON_EXPORT CompositorFrameTransitionDirective {
   // The type of this directive.
   Type type() const { return type_; }
 
-  NavigationID navigation_id() const { return navigation_id_; }
+  blink::ViewTransitionToken transition_token() const {
+    return transition_token_;
+  }
 
   // Shared elements.
   const std::vector<SharedElement>& shared_elements() const {
     return shared_elements_;
   }
 
+  bool maybe_cross_frame_sink() const { return maybe_cross_frame_sink_; }
+
+  const gfx::DisplayColorSpaces& display_color_spaces() const {
+    return display_color_spaces_;
+  }
+  bool delay_layer_tree_view_deletion() const {
+    return delay_layer_tree_view_deletion_;
+  }
+
  private:
-  NavigationID navigation_id_;
+  CompositorFrameTransitionDirective(
+      const blink::ViewTransitionToken& transition_token,
+      bool maybe_cross_frame_sink,
+      uint32_t sequence_id,
+      Type type,
+      std::vector<SharedElement> shared_elements = {},
+      const gfx::DisplayColorSpaces& display_color_spaces = {},
+      bool delay_layer_tree_view_deletion = false);
+
+  blink::ViewTransitionToken transition_token_;
+  bool maybe_cross_frame_sink_ = false;
 
   uint32_t sequence_id_ = 0;
 
   Type type_ = Type::kSave;
 
   std::vector<SharedElement> shared_elements_;
+
+  gfx::DisplayColorSpaces display_color_spaces_;
+  bool delay_layer_tree_view_deletion_ = false;
 };
 
 }  // namespace viz

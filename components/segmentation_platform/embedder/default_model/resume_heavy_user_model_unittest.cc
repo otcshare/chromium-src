@@ -8,6 +8,8 @@
 
 namespace segmentation_platform {
 
+using Feature = ResumeHeavyUserModel::Feature;
+
 class ResumeHeavyUserModelTest : public DefaultModelTestBase {
  public:
   ResumeHeavyUserModelTest()
@@ -17,19 +19,30 @@ class ResumeHeavyUserModelTest : public DefaultModelTestBase {
 
 TEST_F(ResumeHeavyUserModelTest, InitAndFetchModel) {
   ExpectInitAndFetchModel();
+  ASSERT_TRUE(fetched_metadata_);
 }
 
 TEST_F(ResumeHeavyUserModelTest, ExecuteModelWithInput) {
+  ExpectInitAndFetchModel();
+  ASSERT_TRUE(fetched_metadata_);
+
+  EXPECT_FALSE(ExecuteWithInput(/*inputs=*/{}));
+
+  ModelProvider::Request input(Feature::kFeatureCount, 0);
   // Input arguments in order: bookmarks_opened, mv_tiles_clicked,
   // opened_ntp_from_tab_groups, opened_item_from_history
-  ExpectExecutionWithInput(/*inputs=*/{0, 0, 0, 0, 0}, /*expected_error=*/false,
-                           /*expected_result=*/{0});
-  ExpectExecutionWithInput(/*inputs=*/{1, 0, 0, 0, 0}, /*expected_error=*/false,
-                           /*expected_result=*/{0});
-  ExpectExecutionWithInput(/*inputs=*/{2, 0, 0, 0, 0}, /*expected_error=*/false,
-                           /*expected_result=*/{1});
-  ExpectExecutionWithInput(/*inputs=*/{0, 3, 0, 0, 0}, /*expected_error=*/false,
-                           /*expected_result=*/{1});
+  ExpectClassifierResults(input, {kLegacyNegativeLabel});
+  input[Feature::kFeatureMobileBookmarkManagerOpen] = 1;
+  ExpectClassifierResults(input, {kLegacyNegativeLabel});
+  input[Feature::kFeatureMobileBookmarkManagerOpen] = 2;
+  ExpectClassifierResults(
+      input,
+      {SegmentIdToHistogramVariant(SegmentId::RESUME_HEAVY_USER_SEGMENT)});
+  input[Feature::kFeatureMobileBookmarkManagerOpen] = 0;
+  input[Feature::kFeatureNewTabPageMostVisitedClicked] = 3;
+  ExpectClassifierResults(
+      input,
+      {SegmentIdToHistogramVariant(SegmentId::RESUME_HEAVY_USER_SEGMENT)});
 }
 
 }  // namespace segmentation_platform

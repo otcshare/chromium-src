@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
@@ -21,9 +22,10 @@ class Value;
 
 namespace ash {
 
+class CrosSettingsHolder;
 class FakeOwnerSettingsService;
-class ScopedTestCrosSettings;
 class ScopedTestDeviceSettingsService;
+class UserLoginPermissionTracker;
 
 // Helps in a variety of ways with setting up CrosSettings for testing.
 // This class is overly complex for most use-cases - if possible, prefer to
@@ -92,20 +94,15 @@ class ScopedCrosSettingsTestHelper {
   std::unique_ptr<ScopedStubInstallAttributes> test_install_attributes_;
   std::unique_ptr<ScopedTestDeviceSettingsService>
       test_device_settings_service_;
-  std::unique_ptr<ScopedTestCrosSettings> test_cros_settings_;
+  std::unique_ptr<CrosSettingsHolder> cros_settings_holder_;
   std::unique_ptr<CrosSettingsProvider> real_settings_provider_;
   std::unique_ptr<CrosSettingsProvider> stub_settings_provider_;
-  StubCrosSettingsProvider* stub_settings_provider_ptr_;
+  raw_ptr<StubCrosSettingsProvider> stub_settings_provider_ptr_;
+  std::unique_ptr<UserLoginPermissionTracker> user_login_permission_tracker_;
 
   void Initialize(bool create_settings_service);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::ScopedCrosSettingsTestHelper;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_SCOPED_CROS_SETTINGS_TEST_HELPER_H_

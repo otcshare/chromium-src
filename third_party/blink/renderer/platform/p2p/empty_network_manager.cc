@@ -4,10 +4,9 @@
 
 #include "third_party/blink/renderer/platform/p2p/empty_network_manager.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "third_party/blink/renderer/platform/p2p/ipc_network_manager.h"
 
 namespace blink {
@@ -20,19 +19,22 @@ EmptyNetworkManager::EmptyNetworkManager(IpcNetworkManager* network_manager)
 // Doing so would bind its WeakFactory to the constructing thread (main thread)
 // instead of the thread `this` lives in (signaling thread).
 EmptyNetworkManager::EmptyNetworkManager(
-    rtc::NetworkManager* network_manager,
-    base::WeakPtr<rtc::NetworkManager> network_manager_for_signaling_thread)
+    webrtc::NetworkManager* network_manager,
+    base::WeakPtr<webrtc::NetworkManager> network_manager_for_signaling_thread)
     : network_manager_for_signaling_thread_(
           network_manager_for_signaling_thread) {
   DCHECK(network_manager);
   DETACH_FROM_THREAD(thread_checker_);
   set_enumeration_permission(ENUMERATION_BLOCKED);
-  network_manager->SignalNetworksChanged.connect(
-      this, &EmptyNetworkManager::OnNetworksChanged);
+  network_manager->SubscribeNetworksChanged(this,
+                                            [this]() { OnNetworksChanged(); });
 }
 
 EmptyNetworkManager::~EmptyNetworkManager() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (network_manager_for_signaling_thread_) {
+    network_manager_for_signaling_thread_->UnsubscribeNetworksChanged(this);
+  }
 }
 
 void EmptyNetworkManager::StartUpdating() {
@@ -52,14 +54,14 @@ void EmptyNetworkManager::StopUpdating() {
   DCHECK_GE(start_count_, 0);
 }
 
-std::vector<const rtc::Network*> EmptyNetworkManager::GetNetworks() const {
+std::vector<const webrtc::Network*> EmptyNetworkManager::GetNetworks() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return {};
 }
 
 bool EmptyNetworkManager::GetDefaultLocalAddress(
     int family,
-    rtc::IPAddress* ipaddress) const {
+    webrtc::IPAddress* ipaddress) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(network_manager_for_signaling_thread_);
   return network_manager_for_signaling_thread_->GetDefaultLocalAddress(
@@ -72,7 +74,7 @@ void EmptyNetworkManager::OnNetworksChanged() {
   if (!start_count_)
     return;
 
-  SignalNetworksChanged();
+  NotifyNetworksChanged();
 }
 
 }  // namespace blink

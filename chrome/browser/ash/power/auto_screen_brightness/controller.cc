@@ -9,10 +9,8 @@
 #include "chrome/browser/ash/power/auto_screen_brightness/als_reader.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/brightness_monitor_impl.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/gaussian_trainer.h"
-#include "chrome/browser/ash/power/auto_screen_brightness/metrics_reporter.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/model_config_loader_impl.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/modeller_impl.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "components/session_manager/core/session_manager.h"
@@ -67,9 +65,6 @@ void Controller::InitializeComponents() {
       chromeos::PowerManagerClient::Get();
   DCHECK(power_manager_client);
 
-  metrics_reporter_ = std::make_unique<MetricsReporter>(
-      power_manager_client, g_browser_process->local_state());
-
   als_reader_ = std::make_unique<AlsReader>();
   als_reader_->Init();
 
@@ -89,7 +84,7 @@ void Controller::InitializeComponents() {
 
   adapter_ = std::make_unique<Adapter>(
       profile, als_reader_.get(), brightness_monitor_.get(), modeller_.get(),
-      model_config_loader_.get(), metrics_reporter_.get());
+      model_config_loader_.get());
   adapter_->Init();
 }
 

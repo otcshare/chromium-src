@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/installer/mini_installer/regkey.h"
 
 #include "build/branding_buildflags.h"
@@ -50,12 +55,6 @@ LONG RegKey::ReadDWValue(const wchar_t* value_name, DWORD* value) const {
     }
   }
   return result;
-}
-
-LONG RegKey::WriteSZValue(const wchar_t* value_name, const wchar_t* value) {
-  return ::RegSetValueEx(key_, value_name, 0, REG_SZ,
-                         reinterpret_cast<const BYTE*>(value),
-                         (lstrlen(value) + 1) * sizeof(wchar_t));
 }
 
 LONG RegKey::WriteDWValue(const wchar_t* value_name, DWORD value) {

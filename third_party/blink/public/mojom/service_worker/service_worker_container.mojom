@@ -8,6 +8,7 @@ import "mojo/public/mojom/base/file_path.mojom";
 import "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom";
 import "third_party/blink/public/mojom/messaging/transferable_message.mojom";
 import "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom";
+import "third_party/blink/public/mojom/service_worker/service_worker_embedded_worker_status.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_error_type.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_object.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom";
@@ -42,8 +43,8 @@ struct ServiceWorkerContainerInfoForClient {
 //       Associated with SharedWorkerFactory, which is on a dedicated message
 //       pipe.
 // - For documents:
-//       Associated with NavigationClient/FrameNavigationControl, which is on
-//       the channel-associated interface to the renderer process.
+//       Associated with NavigationClient, which is on the channel-associated
+//       interface to the renderer process.
 interface ServiceWorkerContainerHost {
   // Corresponds to navigator.serviceWorker.register().
   // Registers a service worker from |script_url| with |options|.

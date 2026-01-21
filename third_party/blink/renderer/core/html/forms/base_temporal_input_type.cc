@@ -42,8 +42,8 @@
 
 namespace blink {
 
-static const int kMsecPerMinute = 60 * 1000;
-static const int kMsecPerSecond = 1000;
+static constexpr int kMsecPerMinute = base::Minutes(1).InMilliseconds();
+static constexpr int kMsecPerSecond = base::Seconds(1).InMilliseconds();
 
 String BaseTemporalInputType::BadInputText() const {
   return GetLocale().QueryString(IDS_FORM_VALIDATION_BAD_INPUT_DATETIME);
@@ -67,7 +67,7 @@ double BaseTemporalInputType::ValueAsDate() const {
 }
 
 void BaseTemporalInputType::SetValueAsDate(
-    const absl::optional<base::Time>& value,
+    const std::optional<base::Time>& value,
     ExceptionState&) const {
   GetElement().SetValue(SerializeWithDate(value));
 }
@@ -82,8 +82,7 @@ void BaseTemporalInputType::SetValueAsDouble(
     double new_value,
     TextFieldEventBehavior event_behavior,
     ExceptionState& exception_state) const {
-  SetValueAsDecimal(Decimal::FromDouble(new_value), event_behavior,
-                    exception_state);
+  SetValueAsDecimal(Decimal::FromDouble(new_value), event_behavior);
 }
 
 bool BaseTemporalInputType::TypeMismatchFor(const String& value) const {
@@ -167,10 +166,11 @@ String BaseTemporalInputType::SerializeWithComponents(
 }
 
 String BaseTemporalInputType::SerializeWithDate(
-    const absl::optional<base::Time>& value) const {
+    const std::optional<base::Time>& value) const {
   if (!value)
     return g_empty_string;
-  return Serialize(Decimal::FromDouble(value->ToJsTimeIgnoringNull()));
+  return Serialize(
+      Decimal::FromDouble(value->InMillisecondsFSinceUnixEpochIgnoringNull()));
 }
 
 String BaseTemporalInputType::LocalizeValue(
@@ -214,12 +214,12 @@ bool BaseTemporalInputType::MayTriggerVirtualKeyboard() const {
 
 bool BaseTemporalInputType::ShouldHaveSecondField(
     const DateComponents& date) const {
+  static constexpr int kMillisecondsPerMinute =
+      static_cast<int>(base::Minutes(1).InMilliseconds());
   StepRange step_range = CreateStepRange(kAnyIsDefaultStep);
   return date.Second() || date.Millisecond() ||
-         !step_range.Minimum()
-              .Remainder(static_cast<int>(kMsPerMinute))
-              .IsZero() ||
-         !step_range.Step().Remainder(static_cast<int>(kMsPerMinute)).IsZero();
+         !step_range.Minimum().Remainder(kMillisecondsPerMinute).IsZero() ||
+         !step_range.Step().Remainder(kMillisecondsPerMinute).IsZero();
 }
 
 }  // namespace blink

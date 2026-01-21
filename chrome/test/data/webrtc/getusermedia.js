@@ -48,15 +48,24 @@ $ = function(id) {
  * @param {!object} constraints Defines what to be requested, with mandatory
  *     and optional constraints defined. The contents of this parameter depends
  *     on the WebRTC version.
+ * @param {integer} optionalTimeoutSeconds when provided, specifies the
+ *     maximum time to wait for the get user media request to complete. Resolves
+ *     the returned promise with 'request-timedout' when the timeout occurs.
  */
-function doGetUserMedia(constraints) {
+function doGetUserMedia(constraints, optionalTimeoutSeconds) {
   if (!navigator.getUserMedia) {
-    returnToTest('Browser does not support WebRTC.');
-    return;
+    return logAndReturn('Browser does not support WebRTC.');
+  }
+
+  let timeoutDebugMessage = '';
+  if (optionalTimeoutSeconds) {
+    timeoutDebugMessage = ` with ${optionalTimeoutSeconds} second timeout`;
   }
   debug(
       'Requesting doGetUserMedia: constraints: ' +
-      JSON.stringify(constraints, null, 0).replace(/[\r\n]/g, ''));
+      JSON.stringify(constraints, null, 0).replace(/[\r\n]/g, '') +
+      timeoutDebugMessage);
+
   var gumPromise = new Promise(function(resolve) {
     navigator.mediaDevices.getUserMedia(constraints)
         .then(function(stream) {
@@ -69,11 +78,19 @@ function doGetUserMedia(constraints) {
           resolve('request-callback-denied');
         });
   });
-  var timeoutPromise = new Promise(function(resolve) {
-    setTimeout(() => resolve('request-timedout'), 4000);
-  });
-  Promise.race([gumPromise, timeoutPromise]).then(function(value) {
-    returnToTest(value);
+
+  let promises = [gumPromise];
+
+  if (optionalTimeoutSeconds) {
+    let timeoutPromise = new Promise(function(resolve) {
+      setTimeout(
+          () => resolve('request-timedout'), optionalTimeoutSeconds * 1000);
+    });
+    promises.push(timeoutPromise);
+  }
+
+  return Promise.race(promises).then(function(value) {
+    return logAndReturn(value);
   });
 }
 
@@ -85,11 +102,10 @@ function doGetUserMedia(constraints) {
  *     callback) depending on which callback got called by WebRTC.
  */
 function obtainGetUserMediaResult() {
-  returnToTest(gRequestWebcamAndMicrophoneResult);
   var ret = gRequestWebcamAndMicrophoneResult;
   // Reset for the next call.
   gRequestWebcamAndMicrophoneResult = 'not-called-yet';
-  return ret;
+  return logAndReturn(ret);
 }
 
 /**
@@ -97,7 +113,7 @@ function obtainGetUserMediaResult() {
  */
 function stopLocalStream() {
   if (gLocalStream == null)
-    throw failTest(
+    throw new Error(
         'Tried to stop local stream, ' +
         'but media access is not granted.');
 
@@ -109,7 +125,7 @@ function stopLocalStream() {
   });
   gLocalStream = null;
   gRequestWebcamAndMicrophoneResult = 'not-called-yet';
-  returnToTest('ok-stopped');
+  return logAndReturn('ok-stopped');
 }
 
 // Functions callable from other JavaScript modules.
@@ -120,13 +136,13 @@ function stopLocalStream() {
  */
 function addLocalStreamToPeerConnection(peerConnection) {
   if (gLocalStream == null)
-    throw failTest(
+    throw new Error(
         'Tried to add local stream to peer connection, ' +
         'but there is no stream yet.');
   try {
     peerConnection.addStream(gLocalStream, gAddStreamConstraints);
   } catch (exception) {
-    throw failTest(
+    throw new Error(
         'Failed to add stream with constraints ' + gAddStreamConstraints +
         ': ' + exception);
   }
@@ -189,12 +205,14 @@ function getUserMediaFailedCallback_(error) {
 }
 
 function openDesktopMediaStream() {
-  window.addEventListener('message', function(event) {
-    // Only trigger if streamId is present (callback from, not to, extension).
-    if (typeof event.data.streamId !== 'undefined') {
-      returnToTest(event.data.streamId);
-    }
-  });
+  return new Promise(resolve => {
+    window.addEventListener('message', function(event) {
+      // Only trigger if streamId is present (callback from, not to, extension).
+      if (typeof event.data.streamId !== 'undefined') {
+        return resolve(logAndReturn(event.data.streamId));
+      }
+    });
 
-  window.postMessage({desktopSourceTypes: ['window', 'screen', 'tab']}, '*');
+    window.postMessage({desktopSourceTypes: ['window', 'screen', 'tab']}, '*');
+  });
 }

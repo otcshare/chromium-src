@@ -9,8 +9,10 @@
 
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/extensions/extension_error_controller.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/test_extension_service.h"
@@ -26,6 +28,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/pref_names.h"
@@ -36,7 +39,6 @@
 using extensions::Extension;
 
 using testing::_;
-using testing::Invoke;
 using testing::WithArg;
 
 constexpr char kExemptExtensionId[] = "abcdefghijklmnopabcdefghijklmnop";
@@ -53,16 +55,20 @@ class MockExtensionService : public extensions::ExtensionService {
   MockExtensionService(Profile* profile,
                        const base::CommandLine* command_line,
                        const base::FilePath& install_directory,
+                       const base::FilePath& unpacked_install_directory,
                        extensions::ExtensionPrefs* extension_prefs,
                        extensions::Blocklist* blocklist,
+                       extensions::ExtensionErrorController* error_controller,
                        bool autoupdate_enabled,
                        bool extensions_enabled,
                        base::OneShotEvent* ready)
       : extensions::ExtensionService(profile,
                                      command_line,
                                      install_directory,
+                                     unpacked_install_directory,
                                      extension_prefs,
                                      blocklist,
+                                     error_controller,
                                      autoupdate_enabled,
                                      extensions_enabled,
                                      ready) {}
@@ -122,27 +128,25 @@ class ExtensionCleanupHandlerUnittest : public testing::Test {
 
   void TearDown() override {
     extension_cleanup_handler_.reset();
-    extensions::ExtensionSystem::Get(mock_profile_)->Shutdown();
     testing::Test::TearDown();
   }
 
   void SetupExemptList() {
-    base::Value::List exempt_list;
-    exempt_list.Append(kExemptExtensionId);
     mock_prefs_->SetManagedPref(
         prefs::kRestrictedManagedGuestSessionExtensionCleanupExemptList,
-        base::Value(std::move(exempt_list)));
+        base::Value::List().Append(kExemptExtensionId));
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  sync_preferences::TestingPrefServiceSyncable* mock_prefs_;
+  raw_ptr<sync_preferences::TestingPrefServiceSyncable, DanglingUntriaged>
+      mock_prefs_;
   TestingProfileManager mock_profile_manager_;
-  FakeChromeUserManager* fake_user_manager_;
+  raw_ptr<FakeChromeUserManager, DanglingUntriaged> fake_user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
   std::unique_ptr<ExtensionCleanupHandler> extension_cleanup_handler_;
-  MockExtensionService* extension_service_;
-  extensions::ExtensionRegistry* extension_registry_;
-  TestingProfile* mock_profile_;
+  raw_ptr<MockExtensionService> extension_service_;
+  raw_ptr<extensions::ExtensionRegistry> extension_registry_;
+  raw_ptr<TestingProfile> mock_profile_;
 };
 
 scoped_refptr<const Extension> MakeExtensionNamed(const std::string& name,
@@ -151,33 +155,30 @@ scoped_refptr<const Extension> MakeExtensionNamed(const std::string& name,
 }
 
 TEST_F(ExtensionCleanupHandlerUnittest, Cleanup) {
-  extensions::ExtensionSystem::Get(mock_profile_)
-      ->extension_service()
-      ->AddExtension(MakeExtensionNamed("foo", kExemptExtensionId).get());
-  extensions::ExtensionSystem::Get(mock_profile_)
-      ->extension_service()
-      ->AddExtension(MakeExtensionNamed("bar", kExtensionId1).get());
-  extensions::ExtensionSystem::Get(mock_profile_)
-      ->extension_service()
-      ->AddExtension(MakeExtensionNamed("baz", kExtensionId2).get());
+  extensions::ExtensionRegistrar::Get(mock_profile_)
+      ->AddExtension(MakeExtensionNamed("foo", kExemptExtensionId));
+  extensions::ExtensionRegistrar::Get(mock_profile_)
+      ->AddExtension(MakeExtensionNamed("bar", kExtensionId1));
+  extensions::ExtensionRegistrar::Get(mock_profile_)
+      ->AddExtension(MakeExtensionNamed("baz", kExtensionId2));
 
   SetupExemptList();
-  std::unique_ptr<extensions::ExtensionSet> all_installed_extensions =
+  extensions::ExtensionSet all_installed_extensions =
       extension_registry_->GenerateInstalledExtensionsSet();
-  EXPECT_EQ(all_installed_extensions->size(), 3u);
+  EXPECT_EQ(all_installed_extensions.size(), 3u);
 
   base::RunLoop run_loop;
   extension_cleanup_handler_->Cleanup(
-      base::BindLambdaForTesting([&](const absl::optional<std::string>& error) {
-        EXPECT_EQ(error, absl::nullopt);
+      base::BindLambdaForTesting([&](const std::optional<std::string>& error) {
+        EXPECT_EQ(error, std::nullopt);
         run_loop.QuitClosure().Run();
       }));
   run_loop.Run();
 
   all_installed_extensions =
       extension_registry_->GenerateInstalledExtensionsSet();
-  EXPECT_EQ(all_installed_extensions->size(), 1u);
-  EXPECT_TRUE(all_installed_extensions->Contains(kExemptExtensionId));
+  EXPECT_EQ(all_installed_extensions.size(), 1u);
+  EXPECT_TRUE(all_installed_extensions.Contains(kExemptExtensionId));
 }
 
 }  // namespace chromeos

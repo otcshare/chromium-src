@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ref.h"
 #include "content/browser/mojo_binder_policy_map_impl.h"
@@ -56,6 +56,12 @@ class CONTENT_EXPORT MojoBinderPolicyApplier {
   // that triggered the prerendering are same origin.
   static std::unique_ptr<MojoBinderPolicyApplier>
   CreateForSameOriginPrerendering(
+      base::OnceCallback<void(const std::string& interface_name)>
+          cancel_closure);
+
+  // Returns the instance used by BrowserInterfaceBrokerImpl for preview mode.
+  // This is used when a page is shown in preview mode.
+  static std::unique_ptr<MojoBinderPolicyApplier> CreateForPreview(
       base::OnceCallback<void(const std::string& interface_name)>
           cancel_closure);
 

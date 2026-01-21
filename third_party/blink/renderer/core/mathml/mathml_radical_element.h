@@ -19,16 +19,11 @@ class CORE_EXPORT MathMLRadicalElement : public MathMLRowElement {
   bool HasIndex() const;
 
  private:
-  LayoutObject* CreateLayoutObject(const ComputedStyle&,
-                                   LegacyLayout legacy) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
   bool IsGroupingElement() const final { return false; }
 };
 
-template <>
-inline bool IsElementOfType<const MathMLRadicalElement>(const Node& node) {
-  return IsA<MathMLRadicalElement>(node);
-}
 template <>
 struct DowncastTraits<MathMLRadicalElement> {
   static bool AllowFrom(const Node& node) {

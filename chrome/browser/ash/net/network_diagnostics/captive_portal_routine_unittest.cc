@@ -10,13 +10,13 @@
 namespace ash {
 namespace network_diagnostics {
 
-// TODO(https://crbug.com/1164001): remove when migrated to namespace ash.
 namespace mojom = ::chromeos::network_diagnostics::mojom;
 
 class CaptivePortalRoutineTest : public NetworkDiagnosticsTestHelper {
  public:
   CaptivePortalRoutineTest() {
-    captive_portal_routine_ = std::make_unique<CaptivePortalRoutine>();
+    captive_portal_routine_ = std::make_unique<CaptivePortalRoutine>(
+        mojom::RoutineCallSource::kDiagnosticsUI);
   }
 
   CaptivePortalRoutineTest(const CaptivePortalRoutineTest&) = delete;

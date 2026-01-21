@@ -9,18 +9,18 @@
 #include <string>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/process/kill.h"
 #include "base/process/process.h"
-#include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/process_proxy/process_proxy_registry.h"
 
 namespace chromeos {
@@ -35,12 +35,6 @@ const char kCatCommand[] = "cat";
 const char kFakeUserHash[] = "0123456789abcdef";
 const char kStdoutType[] = "stdout";
 const int kTestLineNum = 100;
-
-void RunOnTaskRunner(
-    base::OnceClosure closure,
-    const scoped_refptr<base::SequencedTaskRunner>& task_runner) {
-  task_runner->PostTask(FROM_HERE, std::move(closure));
-}
 
 class TestRunner {
  public:
@@ -59,7 +53,7 @@ class TestRunner {
 
  protected:
   std::string id_;
-  raw_ptr<const base::Process> process_;
+  raw_ptr<const base::Process, AcrossTasksDanglingUntriaged> process_;
 
   base::OnceClosure done_read_closure_;
 };
@@ -121,15 +115,16 @@ class RegistryTestRunner : public TestRunner {
   bool ProcessReceivedCharacter(char received, size_t stream) {
     if (stream >= std::size(left_to_check_index_))
       return false;
-    bool success = left_to_check_index_[stream] < expected_line_.length() &&
-        expected_line_[left_to_check_index_[stream]] == received;
+    bool success =
+        UNSAFE_TODO(left_to_check_index_[stream]) < expected_line_.length() &&
+        expected_line_[UNSAFE_TODO(left_to_check_index_[stream])] == received;
     if (success)
-      left_to_check_index_[stream]++;
-    if (left_to_check_index_[stream] == expected_line_.length() &&
+      UNSAFE_TODO(left_to_check_index_[stream])++;
+    if (UNSAFE_TODO(left_to_check_index_[stream]) == expected_line_.length() &&
         lines_left_ > 0) {
       // Take another line to test for this stream, if there are any lines left.
       // If not, this stream is done.
-      left_to_check_index_[stream] = 0;
+      UNSAFE_TODO(left_to_check_index_[stream]) = 0;
       lines_left_--;
     }
     return success;
@@ -234,26 +229,24 @@ class ProcessProxyTest : public testing::Test {
   }
 
   void RunTest() {
-    base::RunLoop init_registry_waiter;
+    base::test::TestFuture<void> init_registry_waiter;
     ProcessProxyRegistry::GetTaskRunner()->PostTask(
         FROM_HERE,
-        base::BindOnce(
-            &ProcessProxyTest::InitRegistryTest, base::Unretained(this),
-            base::BindOnce(&RunOnTaskRunner, init_registry_waiter.QuitClosure(),
-                           base::SequencedTaskRunner::GetCurrentDefault())));
+        base::BindOnce(&ProcessProxyTest::InitRegistryTest,
+                       base::Unretained(this),
+                       init_registry_waiter.GetSequenceBoundCallback()));
     // Wait until all data from output watcher is received (QuitTask will be
     // fired on watcher thread).
-    init_registry_waiter.Run();
+    ASSERT_TRUE(init_registry_waiter.Wait());
 
-    base::RunLoop end_registry_waiter;
+    base::test::TestFuture<void> end_registry_waiter;
     ProcessProxyRegistry::GetTaskRunner()->PostTask(
         FROM_HERE,
-        base::BindOnce(
-            &ProcessProxyTest::EndRegistryTest, base::Unretained(this),
-            base::BindOnce(&RunOnTaskRunner, end_registry_waiter.QuitClosure(),
-                           base::SequencedTaskRunner::GetCurrentDefault())));
+        base::BindOnce(&ProcessProxyTest::EndRegistryTest,
+                       base::Unretained(this),
+                       end_registry_waiter.GetSequenceBoundCallback()));
     // Wait until we clean up the process proxy.
-    end_registry_waiter.Run();
+    ASSERT_TRUE(end_registry_waiter.Wait());
   }
 
   std::unique_ptr<TestRunner> test_runner_;
@@ -264,7 +257,7 @@ class ProcessProxyTest : public testing::Test {
 
   raw_ptr<ProcessProxyRegistry> registry_;
   std::string id_;
-  raw_ptr<const base::Process> process_ = nullptr;
+  raw_ptr<const base::Process, AcrossTasksDanglingUntriaged> process_ = nullptr;
 
   base::test::TaskEnvironment task_environment_;
 };

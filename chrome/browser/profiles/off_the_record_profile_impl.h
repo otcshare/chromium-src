@@ -14,16 +14,16 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "components/domain_reliability/clear_mode.h"
-#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/host_zoom_map.h"
 
 namespace sync_preferences {
 class PrefServiceSyncable;
 }
+
+class ScopedProfileKeepAlive;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -54,18 +54,17 @@ class OffTheRecordProfileImpl : public Profile {
   Profile* GetOriginalProfile() override;
   const Profile* GetOriginalProfile() const override;
   bool IsChild() const override;
-  bool AllowsBrowserWindows() const override;
   ExtensionSpecialStoragePolicy* GetExtensionSpecialStoragePolicy() override;
   PrefService* GetPrefs() override;
   const PrefService* GetPrefs() const override;
   policy::SchemaRegistryService* GetPolicySchemaRegistryService() override;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   policy::UserCloudPolicyManagerAsh* GetUserCloudPolicyManagerAsh() override;
-  policy::ActiveDirectoryPolicyManager* GetActiveDirectoryPolicyManager()
-      override;
 #else
   policy::UserCloudPolicyManager* GetUserCloudPolicyManager() override;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  policy::ProfileCloudPolicyManager* GetProfileCloudPolicyManager() override;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  policy::CloudPolicyManager* GetCloudPolicyManager() override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   bool IsSameOrParent(Profile* profile) override;
   base::Time GetStartTime() const override;
@@ -77,11 +76,11 @@ class OffTheRecordProfileImpl : public Profile {
   void set_last_selected_directory(const base::FilePath& path) override;
   bool WasCreatedByVersionOrLater(const std::string& version) override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void ChangeAppLocale(const std::string& locale, AppLocaleChangedVia) override;
   void OnLogin() override;
   void InitChromeOSPreferences() override;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Returns whether the wrapped underlying profile is new.
   bool IsNewProfile() const override;
@@ -90,18 +89,11 @@ class OffTheRecordProfileImpl : public Profile {
   void SetCreationTimeForTesting(base::Time creation_time) override;
 
   // content::BrowserContext implementation:
-  base::FilePath GetPath() override;
   base::FilePath GetPath() const override;
   base::Time GetCreationTime() const override;
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
   scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() override;
-  bool IsOffTheRecord() override;
-  bool IsOffTheRecord() const override;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  bool IsMainProfile() const override;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-  const OTRProfileID& GetOTRProfileID() const override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
   storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
@@ -129,6 +121,8 @@ class OffTheRecordProfileImpl : public Profile {
   GetFederatedIdentityPermissionContext() override;
   content::FederatedIdentityApiPermissionContextDelegate*
   GetFederatedIdentityApiPermissionContext() override;
+  content::FederatedIdentityAutoReauthnPermissionContextDelegate*
+  GetFederatedIdentityAutoReauthnPermissionContext() override;
   content::KAnonymityServiceDelegate* GetKAnonymityServiceDelegate() override;
 
  protected:
@@ -148,8 +142,6 @@ class OffTheRecordProfileImpl : public Profile {
   raw_ptr<Profile> profile_;
   // Prevent |profile_| from being destroyed first.
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive_;
-
-  const OTRProfileID otr_profile_id_;
 
   std::unique_ptr<sync_preferences::PrefServiceSyncable> prefs_;
 

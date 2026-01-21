@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
+#include "base/power_monitor/power_observer.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
@@ -24,7 +26,8 @@ class SampledProfile;
 // mode, or user logging in, which it forwards to the registered collectors.
 class ProfileProvider : public chromeos::PowerManagerClient::Observer,
                         public ash::LoginState::Observer,
-                        public content::JankMonitor::Observer {
+                        public content::JankMonitor::Observer,
+                        public base::PowerThermalObserver {
  public:
   ProfileProvider();
 
@@ -63,6 +66,11 @@ class ProfileProvider : public chromeos::PowerManagerClient::Observer,
   void OnJankStarted() override;
   void OnJankStopped() override;
 
+  // base::PowerThermalObserver overrides.
+  void OnThermalStateChange(
+      base::PowerThermalObserver::DeviceThermalState new_state) override;
+  void OnSpeedLimitChange(int new_limit) override;
+
   // For testing.
   scoped_refptr<content::JankMonitor> jank_monitor() const {
     return jank_monitor_;
@@ -89,6 +97,12 @@ class ProfileProvider : public chromeos::PowerManagerClient::Observer,
   base::TimeTicks last_jank_start_time_;
 
   const base::TimeDelta jankiness_collection_min_interval_;
+
+  base::ScopedObservation<ash::LoginState, ash::LoginState::Observer>
+      login_state_observer_{this};
+  base::ScopedObservation<chromeos::PowerManagerClient,
+                          chromeos::PowerManagerClient::Observer>
+      power_manager_client_observer_{this};
 
   // To pass around the "this" pointer across threads safely.
   base::WeakPtrFactory<ProfileProvider> weak_factory_{this};

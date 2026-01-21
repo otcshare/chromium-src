@@ -4,8 +4,10 @@
 
 #include "chrome/browser/ash/app_restore/arc_app_single_restore_handler.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/ash/app_restore/app_restore_arc_task_handler_factory.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_handler.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -30,12 +32,11 @@ bool IsAppReadyForLaunch(Profile* profile, const std::string& app_id) {
 }
 
 float GetDisplayScaleFactor(int64_t display_id) {
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   float scale_factor = 1;
   if (screen) {
-    scale_factor =
-        display::Screen::GetScreen()->GetPrimaryDisplay().device_scale_factor();
-    for (auto disp : display::Screen::GetScreen()->GetAllDisplays()) {
+    scale_factor = screen->GetPrimaryDisplay().device_scale_factor();
+    for (auto disp : screen->GetAllDisplays()) {
       if (disp.id() == display_id)
         scale_factor = disp.device_scale_factor();
     }
@@ -60,8 +61,10 @@ void ArcAppSingleRestoreHandler::LaunchGhostWindowWithApp(
     arc::mojom::WindowInfoPtr window_info) {
   // Activate ARC in case still not active. ArcSessionManager may null in test
   // env.
-  if (arc::ArcSessionManager::Get())
-    arc::ArcSessionManager::Get()->AllowActivation();
+  if (arc::ArcSessionManager::Get()) {
+    arc::ArcSessionManager::Get()->AllowActivation(
+        arc::ArcSessionManager::AllowActivationReason::kRestoreApps);
+  }
 
   // The ghost window and corresponding shelf item need to be added after ash
   // shelf ready.
@@ -85,28 +88,32 @@ void ArcAppSingleRestoreHandler::LaunchGhostWindowWithApp(
   // Unit test use injected window handler.
   if (!ghost_window_handler_) {
     ghost_window_handler_ =
-        AppRestoreArcTaskHandler::GetForProfile(profile)->window_handler();
+        AppRestoreArcTaskHandlerFactory::GetForProfile(profile)
+            ->window_handler();
   }
   DCHECK(ghost_window_handler_);
 
   // Fill restore data by launch parameter to reuse full restore related
   // functions.
   ::app_restore::AppRestoreData restore_data;
-  restore_data.current_bounds = restore_data.bounds_in_root =
-      window_info->bounds;
+  restore_data.window_info.current_bounds = window_info->bounds;
+  restore_data.window_info.arc_extra_info = {.bounds_in_root =
+                                                 window_info->bounds};
 
   // TODO: Remove this workaround.
   // Currently `ArcGhostWindowHandler::LaunchArcGhostWindow` assume all launch
   // bounds is from "recording data" in ash wm side, so it will reduce the top
   // caption bar size when launch ghost window. However, if here use the bounds
   // from Android side, the bounds should be added a "caption" size.
-  if (restore_data.bounds_in_root.has_value()) {
-    restore_data.bounds_in_root->Inset(gfx::Insets().set_top(
-        -views::GetCaptionButtonLayoutSize(
-             views::CaptionButtonLayoutSize::kNonBrowserCaption)
-             .height()));
+  if (restore_data.window_info.arc_extra_info->bounds_in_root.has_value()) {
+    restore_data.window_info.arc_extra_info->bounds_in_root->Inset(
+        gfx::Insets().set_top(
+            -views::GetCaptionButtonLayoutSize(
+                 views::CaptionButtonLayoutSize::kNonBrowserCaption)
+                 .height()));
   }
-  restore_data.window_state_type =
+
+  restore_data.window_info.window_state_type =
       static_cast<chromeos::WindowStateType>(window_info->state);
   restore_data.event_flag = event_flags;
   restore_data.display_id = window_info->display_id;
@@ -133,8 +140,8 @@ void ArcAppSingleRestoreHandler::LaunchGhostWindowWithApp(
 
   ghost_window_handler_->LaunchArcGhostWindow(app_id, window_info->window_id,
                                               &restore_data);
-  ghost_window_handler_->UpdateArcGhostWindowType(
-      window_info->window_id, arc::GhostWindowType::kAppLaunch);
+  ghost_window_handler_->UpdateArcGhostWindowType(window_info->window_id,
+                                                  window_type);
 
   // TODO: Add initial launch type on `LaunchArcGhostWindow`, rather update ARC
   // app states manually here.

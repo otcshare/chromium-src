@@ -4,20 +4,17 @@
 
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_extensions_core)
 
 source_set("install") {
   sources = [
     "crx_install_error.cc",
     "crx_install_error.h",
-    "extension_install_ui.cc",
-    "extension_install_ui.h",
     "sandboxed_unpacker_failure_reason.h",
   ]
 
   deps = [
     "//base",
-    "//ui/gfx:native_widget_types",
+    "//ui/gfx:native_ui_types",
   ]
 }

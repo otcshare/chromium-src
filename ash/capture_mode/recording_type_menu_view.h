@@ -15,6 +15,8 @@ class Rect;
 
 namespace ash {
 
+class SystemShadow;
+
 // Defines a view that will be the contents view of the recording type menu
 // widget, from which users can pick the desired recording format.
 class ASH_EXPORT RecordingTypeMenuView : public CaptureModeMenuGroup,
@@ -28,10 +30,13 @@ class ASH_EXPORT RecordingTypeMenuView : public CaptureModeMenuGroup,
 
   // Returns the ideal bounds of the widget hosting this view, relative to the
   // `capture_label_widget_screen_bounds` which hosts the drop down button that
-  // opens the recording type menu widget. If `contents_view` is provided, its
-  // preferred size will be used, otherwise, the default size will be used.
+  // opens the recording type menu widget. `target_display_screen_bounds` will
+  // be used to ensure the resulting bounds are contained within the target
+  // display. If `contents_view` is provided, its preferred size will be used,
+  // otherwise, the default size will be used.
   static gfx::Rect GetIdealScreenBounds(
       const gfx::Rect& capture_label_widget_screen_bounds,
+      const gfx::Rect& target_display_screen_bounds,
       views::View* contents_view = nullptr);
 
   // CaptureModeMenuGroup::Delegate:
@@ -47,6 +52,8 @@ class ASH_EXPORT RecordingTypeMenuView : public CaptureModeMenuGroup,
   // the recording type has been set on the `CaptureModeController`. This is
   // bound to a function in the `CaptureModeSession` that closes the menu.
   base::RepeatingClosure on_option_selected_callback_;
+
+  std::unique_ptr<SystemShadow> shadow_;
 };
 
 }  // namespace ash

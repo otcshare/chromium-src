@@ -2,24 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "storage/browser/blob/blob_reader.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_runner.h"
@@ -32,7 +40,6 @@
 #include "net/base/test_completion_callback.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_data_handle.h"
-#include "storage/browser/blob/blob_reader.h"
 #include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "storage/browser/file_system/file_system_context.h"
@@ -73,15 +80,13 @@ class FakeFileStreamReader : public FileStreamReader {
  public:
   explicit FakeFileStreamReader(const std::string& contents)
       : buffer_(base::MakeRefCounted<DrainableIOBuffer>(
-            base::MakeRefCounted<net::StringIOBuffer>(
-                std::make_unique<std::string>(contents)),
+            base::MakeRefCounted<net::StringIOBuffer>(contents),
             contents.size())),
         net_error_(net::OK),
         size_(contents.size()) {}
   FakeFileStreamReader(const std::string& contents, uint64_t size)
       : buffer_(base::MakeRefCounted<DrainableIOBuffer>(
-            base::MakeRefCounted<net::StringIOBuffer>(
-                std::make_unique<std::string>(contents)),
+            base::MakeRefCounted<net::StringIOBuffer>(contents),
             contents.size())),
         net_error_(net::OK),
         size_(size) {}
@@ -150,7 +155,7 @@ class FakeFileStreamReader : public FileStreamReader {
                net::CompletionOnceCallback done) {
     CHECK_GE(buf_length, 0);
     int length = std::min(buf_length, buffer_->BytesRemaining());
-    memcpy(buf->data(), buffer_->data(), length);
+    UNSAFE_TODO(memcpy(buf->data(), buffer_->data(), length));
     buffer_->DidConsume(length);
     if (done.is_null()) {
       return length;
@@ -218,6 +223,7 @@ class BlobReaderTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    provider_ = nullptr;
     reader_.reset();
     blob_handle_.reset();
     base::RunLoop().RunUntilIdle();
@@ -278,7 +284,8 @@ class BlobReaderTest : public ::testing::Test {
   }
 
   scoped_refptr<net::IOBuffer> CreateBuffer(uint64_t size) {
-    return base::MakeRefCounted<net::IOBuffer>(static_cast<size_t>(size));
+    return base::MakeRefCounted<net::IOBufferWithSize>(
+        static_cast<size_t>(size));
   }
 
   bool IsReaderTotalSizeCalculated() {
@@ -289,8 +296,8 @@ class BlobReaderTest : public ::testing::Test {
 
   BlobStorageContext context_;
   std::unique_ptr<BlobDataHandle> blob_handle_;
-  raw_ptr<MockFileStreamReaderProvider> provider_ = nullptr;
   std::unique_ptr<BlobReader> reader_;
+  raw_ptr<MockFileStreamReaderProvider> provider_ = nullptr;
   scoped_refptr<FileSystemContext> file_system_context_;
 };
 
@@ -308,8 +315,7 @@ TEST_F(BlobReaderTest, BasicMemory) {
   EXPECT_TRUE(reader_->IsInMemory());
   CheckSizeCalculatedSynchronously(kDataSize, size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kDataSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kDataSize);
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -319,7 +325,7 @@ TEST_F(BlobReaderTest, BasicMemory) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kDataSize, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "Hello!!!", kDataSize));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "Hello!!!", kDataSize)));
 }
 
 TEST_F(BlobReaderTest, BasicFile) {
@@ -340,8 +346,7 @@ TEST_F(BlobReaderTest, BasicFile) {
   EXPECT_FALSE(reader_->IsInMemory());
   CheckSizeCalculatedSynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -351,7 +356,8 @@ TEST_F(BlobReaderTest, BasicFile) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kData.size(), static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size()));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size())));
 }
 
 TEST_F(BlobReaderTest, BasicFileSystem) {
@@ -375,8 +381,7 @@ TEST_F(BlobReaderTest, BasicFileSystem) {
 
   CheckSizeCalculatedSynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -386,7 +391,8 @@ TEST_F(BlobReaderTest, BasicFileSystem) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kData.size(), static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size()));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size())));
 }
 
 TEST_F(BlobReaderTest, BasicReadableDataHandle) {
@@ -404,8 +410,7 @@ TEST_F(BlobReaderTest, BasicReadableDataHandle) {
 
   EXPECT_FALSE(reader_->has_side_data());
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -415,7 +420,8 @@ TEST_F(BlobReaderTest, BasicReadableDataHandle) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kData.size(), static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "Test Blob Data", kData.size()));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "Test Blob Data", kData.size())));
 }
 
 TEST_F(BlobReaderTest, ReadableDataHandleWithSideData) {
@@ -459,8 +465,7 @@ TEST_F(BlobReaderTest, BufferLargerThanMemory) {
                                           &SetValue<int>, &size_result)));
   CheckSizeCalculatedSynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -470,7 +475,7 @@ TEST_F(BlobReaderTest, BufferLargerThanMemory) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kDataSize, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "Hello!!!", kDataSize));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "Hello!!!", kDataSize)));
 }
 
 TEST_F(BlobReaderTest, MemoryRange) {
@@ -499,7 +504,7 @@ TEST_F(BlobReaderTest, MemoryRange) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kReadLength, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "llo!", kReadLength));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "llo!", kReadLength)));
 }
 
 TEST_F(BlobReaderTest, BufferSmallerThanMemory) {
@@ -515,8 +520,7 @@ TEST_F(BlobReaderTest, BufferSmallerThanMemory) {
                                           &SetValue<int>, &size_result)));
   CheckSizeCalculatedSynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -526,7 +530,7 @@ TEST_F(BlobReaderTest, BufferSmallerThanMemory) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kBufferSize, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "Hell", kBufferSize));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "Hell", kBufferSize)));
 
   bytes_read = 0;
   EXPECT_EQ(BlobReader::Status::DONE,
@@ -535,7 +539,7 @@ TEST_F(BlobReaderTest, BufferSmallerThanMemory) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kBufferSize, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "o!!!", kBufferSize));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "o!!!", kBufferSize)));
 }
 
 TEST_F(BlobReaderTest, SegmentedBufferAndMemory) {
@@ -546,11 +550,11 @@ TEST_F(BlobReaderTest, SegmentedBufferAndMemory) {
   const size_t kTotalSize = kNumItems * kItemSize;
   char current_value = 0;
   for (size_t i = 0; i < kNumItems; i++) {
-    char buf[kItemSize];
+    std::array<char, kItemSize> buf;
     for (size_t j = 0; j < kItemSize; j++) {
       buf[j] = current_value++;
     }
-    b->AppendData(std::string(buf, kItemSize));
+    b->AppendData(std::string(buf.data(), kItemSize));
   }
   this->InitializeReader(std::move(b));
 
@@ -560,8 +564,7 @@ TEST_F(BlobReaderTest, SegmentedBufferAndMemory) {
                                           &SetValue<int>, &size_result)));
   CheckSizeCalculatedSynchronously(kTotalSize, size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
 
   current_value = 0;
   for (size_t i = 0; i < kTotalSize / kBufferSize; i++) {
@@ -574,7 +577,7 @@ TEST_F(BlobReaderTest, SegmentedBufferAndMemory) {
     EXPECT_EQ(kBufferSize, static_cast<size_t>(bytes_read));
     EXPECT_EQ(0, async_bytes_read);
     for (size_t j = 0; j < kBufferSize; j++) {
-      EXPECT_EQ(current_value, buffer->data()[j]);
+      UNSAFE_TODO(EXPECT_EQ(current_value, buffer->data()[j]));
       current_value++;
     }
   }
@@ -604,8 +607,7 @@ TEST_F(BlobReaderTest, FileAsync) {
   base::RunLoop().RunUntilIdle();
   CheckSizeCalculatedAsynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -616,7 +618,8 @@ TEST_F(BlobReaderTest, FileAsync) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kData.size(), static_cast<size_t>(async_bytes_read));
   EXPECT_EQ(0, bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size()));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size())));
 }
 
 TEST_F(BlobReaderTest, FileSystemAsync) {
@@ -645,8 +648,7 @@ TEST_F(BlobReaderTest, FileSystemAsync) {
   base::RunLoop().RunUntilIdle();
   CheckSizeCalculatedAsynchronously(kData.size(), size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -657,7 +659,8 @@ TEST_F(BlobReaderTest, FileSystemAsync) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kData.size(), static_cast<size_t>(async_bytes_read));
   EXPECT_EQ(0, bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size()));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "FileData!!!", kData.size())));
 }
 
 TEST_F(BlobReaderTest, ReadableDataHandleSingle) {
@@ -683,22 +686,24 @@ TEST_F(BlobReaderTest, ReadableDataHandleSingle) {
   MojoResult pipe_result = mojo::CreateDataPipe(nullptr, producer, consumer);
   ASSERT_EQ(MOJO_RESULT_OK, pipe_result);
 
-  int bytes_read = net::ERR_UNEXPECTED;
-  reader_->ReadSingleMojoDataItem(
-      std::move(producer),
-      base::BindLambdaForTesting([&](int result) { bytes_read = result; }));
-  base::RunLoop().RunUntilIdle();
+  std::optional<int> read_result;
+  base::RunLoop read_loop;
+  reader_->ReadSingleMojoDataItem(std::move(producer),
+                                  base::BindLambdaForTesting([&](int result) {
+                                    read_result = result;
+                                    read_loop.Quit();
+                                  }));
+  read_loop.Run();
 
-  ASSERT_EQ(kData.size(), static_cast<size_t>(bytes_read));
+  ASSERT_TRUE(read_result.has_value());
+  EXPECT_EQ(*read_result, net::OK);
 
-  std::vector<uint8_t> buffer(bytes_read);
-  uint32_t num_bytes = bytes_read;
+  size_t num_bytes = kData.size();
+  std::vector<uint8_t> buffer(num_bytes);
   MojoReadDataFlags flags = MOJO_READ_DATA_FLAG_ALL_OR_NONE;
-  MojoResult read_result = consumer->ReadData(buffer.data(), &num_bytes, flags);
-  ASSERT_EQ(MOJO_RESULT_OK, read_result);
-  ASSERT_EQ(kData.size(), num_bytes);
+  EXPECT_EQ(MOJO_RESULT_OK, consumer->ReadData(flags, buffer, num_bytes));
 
-  EXPECT_EQ(0, memcmp(buffer.data(), kData.c_str(), kData.size()));
+  EXPECT_EQ(base::as_string_view(base::as_byte_span(buffer)), kData);
 }
 
 // This test is the same as ReadableDataHandleSingle, but adds the
@@ -730,23 +735,26 @@ TEST_F(BlobReaderTest, ReadableDataHandleSingleRange) {
   MojoResult pipe_result = mojo::CreateDataPipe(nullptr, producer, consumer);
   ASSERT_EQ(MOJO_RESULT_OK, pipe_result);
 
-  int bytes_read = net::ERR_UNEXPECTED;
-  reader_->ReadSingleMojoDataItem(
-      std::move(producer),
-      base::BindLambdaForTesting([&](int result) { bytes_read = result; }));
-  base::RunLoop().RunUntilIdle();
+  std::optional<int> read_result;
+  base::RunLoop read_loop;
+  reader_->ReadSingleMojoDataItem(std::move(producer),
+                                  base::BindLambdaForTesting([&](int result) {
+                                    read_result = result;
+                                    read_loop.Quit();
+                                  }));
+  read_loop.Run();
 
-  ASSERT_EQ(range_length, static_cast<uint64_t>(bytes_read));
+  ASSERT_TRUE(read_result.has_value());
+  EXPECT_EQ(*read_result, net::OK);
 
-  std::vector<uint8_t> buffer(bytes_read);
-  uint32_t num_bytes = bytes_read;
+  size_t num_bytes = range_length;
+  std::vector<uint8_t> buffer(num_bytes);
   MojoReadDataFlags flags = MOJO_READ_DATA_FLAG_ALL_OR_NONE;
-  MojoResult read_result = consumer->ReadData(buffer.data(), &num_bytes, flags);
-  ASSERT_EQ(MOJO_RESULT_OK, read_result);
-  ASSERT_EQ(range_length, num_bytes);
+  EXPECT_EQ(MOJO_RESULT_OK, consumer->ReadData(flags, buffer, num_bytes));
 
-  EXPECT_EQ(0,
-            memcmp(buffer.data(), kData.c_str() + range_start, range_length));
+  EXPECT_EQ(
+      base::as_string_view(base::as_byte_span(buffer)).substr(0, num_bytes),
+      kData.substr(range_start, range_length));
 }
 
 TEST_F(BlobReaderTest, ReadableDataHandleMultipleSlices) {
@@ -775,8 +783,7 @@ TEST_F(BlobReaderTest, ReadableDataHandleMultipleSlices) {
   // Verify this condition while we are here.
   EXPECT_FALSE(reader_->IsSingleMojoDataItem());
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
 
   int bytes_read = 0;
   int async_bytes_read = 0;
@@ -788,7 +795,7 @@ TEST_F(BlobReaderTest, ReadableDataHandleMultipleSlices) {
   EXPECT_EQ(0, async_bytes_read);
   EXPECT_EQ(kData.size(), static_cast<size_t>(bytes_read));
 
-  EXPECT_EQ(0, memcmp(buffer->data(), kData.data(), kData.size()));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), kData.data(), kData.size())));
 }
 
 TEST_F(BlobReaderTest, FileRange) {
@@ -833,7 +840,7 @@ TEST_F(BlobReaderTest, FileRange) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kReadLength, static_cast<size_t>(async_bytes_read));
   EXPECT_EQ(0, bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "leD", kReadLength));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "leD", kReadLength)));
 }
 
 TEST_F(BlobReaderTest, ReadableDataHandleRange) {
@@ -861,7 +868,7 @@ TEST_F(BlobReaderTest, ReadableDataHandleRange) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(kReadLength, static_cast<size_t>(bytes_read));
   EXPECT_EQ(0, async_bytes_read);
-  EXPECT_EQ(0, memcmp(buffer->data(), "st ", kReadLength));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer->data(), "st ", kReadLength)));
 }
 
 TEST_F(BlobReaderTest, FileSomeAsyncSegmentedOffsetsUnknownSizes) {
@@ -892,15 +899,15 @@ TEST_F(BlobReaderTest, FileSomeAsyncSegmentedOffsetsUnknownSizes) {
   current_value = 0;
   for (size_t i = 0; i < kNumItems; i++) {
     uint64_t offset = i % 3 == 0 ? 1 : 0;
-    std::unique_ptr<char[]> buf(new char[kItemSize + offset]);
+    auto buf = base::HeapArray<char>::Uninit(kItemSize + offset);
     if (offset > 0) {
-      memset(buf.get(), 7, offset);
+      UNSAFE_TODO(memset(buf.data(), 7, offset));
     }
     for (size_t j = 0; j < kItemSize; j++) {
-      buf.get()[j + offset] = current_value++;
+      UNSAFE_TODO(buf.data()[j + offset]) = current_value++;
     }
     std::unique_ptr<FakeFileStreamReader> reader(new FakeFileStreamReader(
-        std::string(buf.get() + offset, kItemSize), kItemSize + offset));
+        std::string(UNSAFE_TODO(buf.data() + offset), kItemSize), buf.size()));
     if (i % 4 != 0) {
       reader->SetAsyncRunner(
           base::SingleThreadTaskRunner::GetCurrentDefault().get());
@@ -919,8 +926,7 @@ TEST_F(BlobReaderTest, FileSomeAsyncSegmentedOffsetsUnknownSizes) {
   base::RunLoop().RunUntilIdle();
   CheckSizeCalculatedAsynchronously(kTotalSize, size_result);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
 
   current_value = 0;
   for (size_t i = 0; i < kTotalSize / kBufferSize; i++) {
@@ -934,7 +940,7 @@ TEST_F(BlobReaderTest, FileSomeAsyncSegmentedOffsetsUnknownSizes) {
     EXPECT_EQ(0, bytes_read);
     EXPECT_EQ(kBufferSize, static_cast<size_t>(async_bytes_read));
     for (size_t j = 0; j < kBufferSize; j++) {
-      EXPECT_EQ(current_value, buffer->data()[j]);
+      UNSAFE_TODO(EXPECT_EQ(current_value, buffer->data()[j]));
       current_value++;
     }
   }
@@ -989,8 +995,9 @@ TEST_F(BlobReaderTest, MixedContent) {
   EXPECT_EQ(net::OK, reader_->net_error());
   EXPECT_EQ(0, bytes_read);
   EXPECT_EQ(kDataSize, static_cast<size_t>(async_bytes_read));
-  EXPECT_EQ(0, memcmp(buffer->data(), "Hello there. This is multi-content.",
-                      kDataSize));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer->data(), "Hello there. This is multi-content.",
+                          kDataSize)));
 }
 
 TEST_F(BlobReaderTest, StateErrors) {
@@ -1062,8 +1069,7 @@ TEST_F(BlobReaderTest, FileErrorsSync) {
                                           &SetValue<int>, &size_result)));
   reader->SetReturnError(net::ERR_FILE_NOT_FOUND);
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
   int bytes_read = 0;
   int async_bytes_read = 0;
   EXPECT_EQ(BlobReader::Status::NET_ERROR,
@@ -1108,8 +1114,7 @@ TEST_F(BlobReaderTest, FileErrorsAsync) {
   reader->SetAsyncRunner(
       base::SingleThreadTaskRunner::GetCurrentDefault().get());
 
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kData.size());
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
   int bytes_read = 0;
   int async_bytes_read = 0;
   EXPECT_EQ(BlobReader::Status::IO_PENDING,
@@ -1176,7 +1181,7 @@ TEST_F(BlobReaderTest, HandleBeforeAsyncCancel) {
   context_.CancelBuildingBlob(kUuid,
                               BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS);
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(net::ERR_FAILED, size_result);
+  EXPECT_EQ(net::ERR_BLOB_INVALID_CONSTRUCTION_ARGUMENTS, size_result);
 }
 
 TEST_F(BlobReaderTest, ReadFromIncompleteBlob) {
@@ -1201,13 +1206,12 @@ TEST_F(BlobReaderTest, ReadFromIncompleteBlob) {
       BlobReader::Status::IO_PENDING,
       reader_->CalculateSize(base::BindOnce(&SetValue<int>, &size_result)));
   EXPECT_FALSE(reader_->IsInMemory());
-  future_data.Populate(base::as_bytes(base::make_span(kData.data(), kDataSize)),
-                       0);
+  future_data.Populate(
+      base::as_bytes(UNSAFE_TODO(base::span(kData.data(), kDataSize))), 0);
   context_.NotifyTransportComplete(kUuid);
   base::RunLoop().RunUntilIdle();
   CheckSizeCalculatedAsynchronously(kDataSize, size_result);
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kDataSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kDataSize);
 
   int bytes_read = 0;
   int async_bytes_read = 0;

@@ -4,52 +4,48 @@
 
 package org.chromium.components.browser_ui.contacts_picker;
 
-import android.content.ContentResolver;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 
+import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.blink.mojom.ContactIconBlob;
+import org.chromium.build.annotations.NullMarked;
 
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 
-/**
- * A worker task to retrieve images for contacts.
- */
+/** A worker task to retrieve images for contacts. */
+@NullMarked
 public class CompressContactIconsWorkerTask extends AsyncTask<Void> {
-    private ContentResolver mContentResolver;
-    private Set<String> mNoIconIds;
-    private HashMap<String, Bitmap> mBitmaps;
-    private List<ContactDetails> mSelectedContacts;
-    private CompressContactIconsCallback mCallback;
+    private static final String TAG = "CompressIconsTask";
+
+    private final Set<String> mNoIconIds;
+    private final HashMap<String, Bitmap> mBitmaps;
+    private final List<ContactDetails> mSelectedContacts;
+    private final CompressContactIconsCallback mCallback;
 
     public static boolean sDisableForTesting;
 
-    /**
-     * An interface to use to communicate back the results to the client.
-     */
+    /** An interface to use to communicate back the results to the client. */
     public interface CompressContactIconsCallback {
-        /**
-         * @param selectedContacts The list of selected contacts with their icons.
-         */
+        /** @param selectedContacts The list of selected contacts with their icons. */
         void iconsCompressed(List<ContactDetails> selectedContacts);
     }
 
     /**
-     * @param contentResolver The context's content resolver.
      * @param bitmapCache The bitmap cache holding the icon bitmaps.
      * @param selectedContacts The list of contacts selected by the user.
      * @param callback The callback to return the results to.
      */
-    public CompressContactIconsWorkerTask(ContentResolver contentResolver,
+    public CompressContactIconsWorkerTask(
             PickerCategoryView.ContactsBitmapCache bitmapCache,
-            List<ContactDetails> selectedContacts, CompressContactIconsCallback callback) {
-        mContentResolver = contentResolver;
+            List<ContactDetails> selectedContacts,
+            CompressContactIconsCallback callback) {
         mNoIconIds = bitmapCache.noIconIds;
         mBitmaps = new HashMap<>();
         for (ContactDetails contact : selectedContacts) {
@@ -77,8 +73,7 @@ public class CompressContactIconsWorkerTask extends AsyncTask<Void> {
                 if (drawable != null && drawable instanceof BitmapDrawable) {
                     icon = ((BitmapDrawable) drawable).getBitmap();
                 } else if (!contact.isSelf()) {
-                    icon = new FetchIconWorkerTask(contact.getId(), mContentResolver, null)
-                                   .doInBackground();
+                    Log.e(TAG, "Icons of non-self contacts should be already tried to load");
                 }
             }
 
@@ -100,6 +95,7 @@ public class CompressContactIconsWorkerTask extends AsyncTask<Void> {
 
     /**
      * Communicates the results back to the client. Called on the UI thread.
+     *
      * @param result Unused Void variable.
      */
     @Override

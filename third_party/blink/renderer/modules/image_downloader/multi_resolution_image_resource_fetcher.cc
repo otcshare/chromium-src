@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_http_body.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -69,14 +69,14 @@ class MultiResolutionImageResourceFetcher::ClientImpl
     DCHECK(!completed_);
     response_ = response;
   }
-  void DidReceiveData(const char* data, int data_length) override {
+  void DidReceiveData(base::span<const char> data) override {
     // The WebAssociatedURLLoader will continue after a load failure.
     // For example, for an Access Control error.
     if (completed_)
       return;
-    DCHECK_GT(data_length, 0);
+    DCHECK_GT(data.size(), 0u);
 
-    data_.append(data, data_length);
+    data_.append(data.data(), data.size());
   }
   void DidFinishLoading() override {
     // The WebAssociatedURLLoader will continue after a load failure.
@@ -133,8 +133,8 @@ MultiResolutionImageResourceFetcher::MultiResolutionImageResourceFetcher(
 
   Start(frame, is_favicon, network::mojom::RequestMode::kNoCors,
         network::mojom::CredentialsMode::kInclude,
-        WTF::BindOnce(&MultiResolutionImageResourceFetcher::OnURLFetchComplete,
-                      WTF::Unretained(this)));
+        BindOnce(&MultiResolutionImageResourceFetcher::OnURLFetchComplete,
+                 Unretained(this)));
 }
 
 MultiResolutionImageResourceFetcher::~MultiResolutionImageResourceFetcher() {

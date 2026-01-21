@@ -31,6 +31,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_PROPERTIES_SVG_PROPERTY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_PROPERTIES_SVG_PROPERTY_H_
 
+#include <concepts>
+
 #include "third_party/blink/renderer/core/svg/properties/svg_property_info.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -49,11 +51,6 @@ class SVGPropertyBase : public GarbageCollected<SVGPropertyBase> {
   SVGPropertyBase& operator=(const SVGPropertyBase&) = delete;
 
   virtual ~SVGPropertyBase() = default;
-
-  // FIXME: remove this in WebAnimations transition.
-  // This is used from SVGAnimatedNewPropertyAnimator for its animate-by-string
-  // implementation.
-  virtual SVGPropertyBase* CloneForAnimation(const String&) const = 0;
 
   virtual String ValueAsString() const = 0;
 
@@ -83,6 +80,12 @@ class SVGPropertyBase : public GarbageCollected<SVGPropertyBase> {
 
  protected:
   SVGPropertyBase() = default;
+};
+
+template <typename T>
+  requires(std::derived_from<T, SVGPropertyBase>)
+struct ThreadingTrait<T> {
+  static constexpr ThreadAffinity kAffinity = kMainThreadOnly;
 };
 
 }  // namespace blink

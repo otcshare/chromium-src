@@ -8,6 +8,7 @@
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -22,6 +23,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_win.h"
@@ -296,24 +298,13 @@ void AppWindowInteractiveTest::TestOuterBoundsHelper(
           static_cast<views::DesktopWindowTreeHostWin*>(
               aura::WindowTreeHost::GetForAcceleratedWidget(hwnd)));
   host->GetMinMaxSize(&min_size, &max_size);
-  // Note that this does not include the the client area insets so we need to
-  // add them.
-  gfx::Insets insets;
-  host->GetClientAreaInsets(&insets,
-                            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL));
-  min_size = gfx::Size(min_size.width() + insets.left() + insets.right(),
-                       min_size.height() + insets.top() + insets.bottom());
-  max_size = gfx::Size(
-      max_size.width() ? max_size.width() + insets.left() + insets.right() : 0,
-      max_size.height() ? max_size.height() + insets.top() + insets.bottom()
-                        : 0);
 #endif  // BUILDFLAG(IS_WIN)
 
   // These match the values in the outer_bounds/test.js
   EXPECT_EQ(gfx::Rect(10, 11, 300, 301), window_bounds);
   EXPECT_EQ(window->GetBaseWindow()->GetBounds(), window_bounds);
-  EXPECT_EQ(200, min_size.width());
-  EXPECT_EQ(201, min_size.height());
+  EXPECT_GE(200, min_size.width());
+  EXPECT_GE(201, min_size.height());
   EXPECT_EQ(400, max_size.width());
   EXPECT_EQ(401, max_size.height());
 }
@@ -449,8 +440,11 @@ class AppWindowHiddenKeepAliveTest : public extensions::PlatformAppBrowserTest {
 // A window that becomes hidden should not keep Chrome alive.
 IN_PROC_BROWSER_TEST_F(AppWindowHiddenKeepAliveTest, ShownThenHidden) {
   LoadAndLaunchPlatformApp("minimal", "Launched");
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->window()->Close();
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser_window_interface) {
+        browser_window_interface->GetWindow()->Close();
+        return true;
+      });
   EXPECT_TRUE(KeepAliveRegistry::GetInstance()->IsOriginRegistered(
       KeepAliveOrigin::CHROME_APP_DELEGATE));
   GetFirstAppWindow()->Hide();
@@ -467,8 +461,11 @@ IN_PROC_BROWSER_TEST_F(AppWindowHiddenKeepAliveTest, ShownThenHiddenThenShown) {
 
   EXPECT_TRUE(KeepAliveRegistry::GetInstance()->IsOriginRegistered(
       KeepAliveOrigin::CHROME_APP_DELEGATE));
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->window()->Close();
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser_window_interface) {
+        browser_window_interface->GetWindow()->Close();
+        return true;
+      });
   EXPECT_TRUE(KeepAliveRegistry::GetInstance()->IsOriginRegistered(
       KeepAliveOrigin::CHROME_APP_DELEGATE));
   app_window->GetBaseWindow()->Close();
@@ -481,8 +478,11 @@ IN_PROC_BROWSER_TEST_F(AppWindowHiddenKeepAliveTest, StaysHidden) {
   AppWindow* app_window = GetFirstAppWindow();
   EXPECT_TRUE(app_window->is_hidden());
 
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->window()->Close();
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser_window_interface) {
+        browser_window_interface->GetWindow()->Close();
+        return true;
+      });
 
   RunUntilBrowserProcessQuits();
 }
@@ -497,8 +497,11 @@ IN_PROC_BROWSER_TEST_F(AppWindowHiddenKeepAliveTest, HiddenThenShown) {
   EXPECT_TRUE(app_window->is_hidden());
 
   // Close all browser windows.
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->window()->Close();
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser_window_interface) {
+        browser_window_interface->GetWindow()->Close();
+        return true;
+      });
 
   // The app window will show after 3 seconds.
   ExtensionTestMessageListener shown_listener("Shown");

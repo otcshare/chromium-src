@@ -9,9 +9,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "ui/display/display_export.h"
 
 namespace gfx {
@@ -73,16 +73,15 @@ struct DISPLAY_EXPORT DisplayPlacement {
   DisplayPlacement(const DisplayPlacement&);
   DisplayPlacement& operator=(const DisplayPlacement&);
 
-  bool operator==(const DisplayPlacement& other) const;
-  bool operator!=(const DisplayPlacement& other) const;
+  friend bool operator==(const DisplayPlacement&,
+                         const DisplayPlacement&) = default;
 
   DisplayPlacement& Swap();
 
   std::string ToString() const;
 
   static std::string PositionToString(Position position);
-  static bool StringToPosition(const base::StringPiece& string,
-                               Position* position);
+  static bool StringToPosition(std::string_view string, Position* position);
 };
 
 class DISPLAY_EXPORT DisplayLayout final {
@@ -124,7 +123,7 @@ class DISPLAY_EXPORT DisplayLayout final {
   // as mirrored, primary_id are ignored.
   bool HasSamePlacementList(const DisplayLayout& layout) const;
 
-  // Removes the display placemenats created for `display_id_list`.
+  // Removes the display placements created for `display_id_list`.
   void RemoveDisplayPlacements(const DisplayIdList& display_id_list);
 
   // Returns string representation of the layout for debugging/testing.

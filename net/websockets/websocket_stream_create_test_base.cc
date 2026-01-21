@@ -3,24 +3,31 @@
 // found in the LICENSE file.
 
 #include "net/websockets/websocket_stream_create_test_base.h"
-#include "base/memory/raw_ptr.h"
+
+#include <stddef.h>
 
 #include <utility>
 
-#include "base/callback.h"
-#include "net/base/ip_endpoint.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/timer/timer.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/log/net_log_with_source.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
-#include "net/websockets/websocket_basic_handshake_stream.h"
 #include "net/websockets/websocket_handshake_request_info.h"
 #include "net/websockets/websocket_handshake_response_info.h"
 #include "net/websockets/websocket_stream.h"
-#include "url/gurl.h"
-#include "url/origin.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace net {
+class IPEndPoint;
+class SiteForCookies;
 
 using HeaderKeyValuePair = WebSocketStreamCreateTestBase::HeaderKeyValuePair;
 
@@ -38,6 +45,14 @@ class WebSocketStreamCreateTestBase::TestConnectDelegate
     owner_->url_request_ = request;
   }
 
+  int OnURLRequestConnected(URLRequest* request,
+                            const TransportInfo& info,
+                            CompletionOnceCallback callback) override {
+    owner_->on_url_request_connected_callback_ = std::move(callback);
+    owner_->run_loop_waiting_on_url_request_connected_.Quit();
+    return owner_->on_url_request_connected_rv_;
+  }
+
   void OnSuccess(
       std::unique_ptr<WebSocketStream> stream,
       std::unique_ptr<WebSocketHandshakeResponseInfo> response) override {
@@ -50,7 +65,7 @@ class WebSocketStreamCreateTestBase::TestConnectDelegate
 
   void OnFailure(const std::string& message,
                  int net_error,
-                 absl::optional<int> response_code) override {
+                 std::optional<int> response_code) override {
     owner_->has_failed_ = true;
     owner_->failure_message_ = message;
     owner_->failure_response_code_ = response_code.value_or(-1);
@@ -79,7 +94,7 @@ class WebSocketStreamCreateTestBase::TestConnectDelegate
                      scoped_refptr<HttpResponseHeaders> response_headers,
                      const IPEndPoint& remote_endpoint,
                      base::OnceCallback<void(const AuthCredentials*)> callback,
-                     absl::optional<AuthCredentials>* credentials) override {
+                     std::optional<AuthCredentials>* credentials) override {
     owner_->run_loop_waiting_for_on_auth_required_.Quit();
     owner_->auth_challenge_info_ = auth_info;
     *credentials = owner_->auth_credentials_;
@@ -101,6 +116,7 @@ void WebSocketStreamCreateTestBase::CreateAndConnectStream(
     const std::vector<std::string>& sub_protocols,
     const url::Origin& origin,
     const SiteForCookies& site_for_cookies,
+    StorageAccessApiStatus storage_access_api_status,
     const IsolationInfo& isolation_info,
     const HttpRequestHeaders& additional_headers,
     std::unique_ptr<base::OneShotTimer> timer) {
@@ -108,10 +124,10 @@ void WebSocketStreamCreateTestBase::CreateAndConnectStream(
       this, connect_run_loop_.QuitClosure());
   auto api_delegate = std::make_unique<TestWebSocketStreamRequestAPI>();
   stream_request_ = WebSocketStream::CreateAndConnectStreamForTesting(
-      socket_url, sub_protocols, origin, site_for_cookies, isolation_info,
-      additional_headers, url_request_context_host_.GetURLRequestContext(),
-      NetLogWithSource(), TRAFFIC_ANNOTATION_FOR_TESTS,
-      std::move(connect_delegate),
+      socket_url, sub_protocols, origin, site_for_cookies,
+      storage_access_api_status, isolation_info, additional_headers,
+      url_request_context_host_.GetURLRequestContext(), NetLogWithSource(),
+      TRAFFIC_ANNOTATION_FOR_TESTS, std::move(connect_delegate),
       timer ? std::move(timer) : std::make_unique<base::OneShotTimer>(),
       std::move(api_delegate));
 }
@@ -143,6 +159,10 @@ void WebSocketStreamCreateTestBase::WaitUntilConnectDone() {
 
 void WebSocketStreamCreateTestBase::WaitUntilOnAuthRequired() {
   run_loop_waiting_for_on_auth_required_.Run();
+}
+
+void WebSocketStreamCreateTestBase::WaitUntilOnURLRequestConnected() {
+  run_loop_waiting_on_url_request_connected_.Run();
 }
 
 std::vector<std::string> WebSocketStreamCreateTestBase::NoSubProtocols() {

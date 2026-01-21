@@ -4,14 +4,14 @@
 
 #include "ash/system/accessibility/autoclick_menu_view.h"
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/system/accessibility/floating_menu_button.h"
 #include "ash/system/tray/tray_constants.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
@@ -26,6 +26,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 
@@ -226,7 +227,7 @@ void AutoclickMenuView::OnPositionButtonPressed() {
       "Accessibility.CrosAutoclick.TrayMenu.ChangePosition"));
 }
 
-BEGIN_METADATA(AutoclickMenuView, views::BoxLayoutView)
+BEGIN_METADATA(AutoclickMenuView)
 END_METADATA
 
 }  // namespace ash

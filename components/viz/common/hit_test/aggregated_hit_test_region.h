@@ -9,7 +9,6 @@
 
 #include "components/viz/common/hit_test/hit_test_region_list.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
-#include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -46,6 +45,9 @@ struct AggregatedHitTestRegion {
               !!async_hit_test_reasons);
   }
 
+  friend bool operator==(const AggregatedHitTestRegion&,
+                         const AggregatedHitTestRegion&) = default;
+
   // The FrameSinkId corresponding to this region.  Events that match
   // are routed to this surface.
   FrameSinkId frame_sink_id;
@@ -65,17 +67,6 @@ struct AggregatedHitTestRegion {
   int32_t child_count = 0;
 
   gfx::Transform transform;
-
-  bool operator==(const AggregatedHitTestRegion& rhs) const {
-    return (frame_sink_id == rhs.frame_sink_id && flags == rhs.flags &&
-            async_hit_test_reasons == rhs.async_hit_test_reasons &&
-            rect == rhs.rect && child_count == rhs.child_count &&
-            transform == rhs.transform);
-  }
-
-  bool operator!=(const AggregatedHitTestRegion& other) const {
-    return !(*this == other);
-  }
 };
 
 }  // namespace viz

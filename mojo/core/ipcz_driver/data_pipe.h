@@ -8,9 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/containers/span.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "mojo/core/ipcz_driver/object.h"
@@ -19,7 +21,6 @@
 #include "mojo/core/scoped_ipcz_handle.h"
 #include "mojo/public/c/system/data_pipe.h"
 #include "mojo/public/c/system/types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/ipcz/include/ipcz/ipcz.h"
 
 namespace mojo::core::ipcz_driver {
@@ -30,7 +31,7 @@ class Transport;
 // wrapping a shared memory ring buffer and using ipcz portals to communicate
 // read and write quantities end-to-end.
 //
-// TODO(https://crbug.com/1299283): Once everything is transitioned to mojo-ipcz
+// TODO(crbug.com/40058840): Once everything is transitioned to mojo-ipcz
 // this object (and builtin data pipe bindings support in general) can be
 // deprecated in favor of a mojom-based library implementation of data pipes,
 // built directly on ipcz portals. For now they're implemented as ipcz driver
@@ -41,6 +42,9 @@ class DataPipe : public Object<DataPipe> {
   enum class EndpointType : uint32_t {
     kProducer,
     kConsumer,
+    // For ValidateEnum().
+    kMinValue = kProducer,
+    kMaxValue = kConsumer,
   };
 
   struct Config {
@@ -96,21 +100,26 @@ class DataPipe : public Object<DataPipe> {
   // could not be allocated.
   struct Pair {
     Pair();
-    Pair(const Pair&);
-    Pair& operator=(const Pair&);
+
+    // Move-only type to avoid ref-chrun on unintentional copy.
+    Pair(const Pair&) = delete;
+    Pair(Pair&&);
+    Pair& operator=(const Pair&) = delete;
+    Pair& operator=(Pair&&);
     ~Pair();
 
     scoped_refptr<DataPipe> consumer;
     scoped_refptr<DataPipe> producer;
   };
-  static absl::optional<Pair> CreatePair(const Config& config);
+  static std::optional<Pair> CreatePair(const Config& config);
 
   bool is_producer() const { return endpoint_type_ == EndpointType::kProducer; }
   bool is_consumer() const { return endpoint_type_ == EndpointType::kConsumer; }
 
   // Provides this DataPipe instance with a portal to own and use for I/O. Must
-  // only be called on a DataPipe that does not already have a portal.
-  void AdoptPortal(ScopedIpczHandle portal);
+  // only be called on a DataPipe that does not already have a portal. Returns
+  // true if successful or false if `portal` is not a valid portal handle.
+  bool AdoptPortal(ScopedIpczHandle portal);
 
   // Returns a reference to the underlying portal which can be safely used from
   // any thread. May return null if no portal has been adopted by this DataPipe
@@ -150,13 +159,19 @@ class DataPipe : public Object<DataPipe> {
       base::span<PlatformHandle> handles);
 
   // Returns Mojo signals to reflect the effective state of this DataPipe and
-  // its control portal.
-  MojoHandleSignalsState GetSignals();
+  // its control portal within `signals_state`. Returns true on success or false
+  // if the DataPipe's signal state is unspecified due to impending closure. In
+  // the latter case `signals_state` is zeroed out.
+  bool GetSignals(MojoHandleSignalsState& signals_state);
+
+  // Flushes any incoming status updates from the peer. Note that this may
+  // trigger trap events before returning, since it can modify the state of the
+  // control portal.
+  void FlushUpdatesFromPeer() LOCKS_EXCLUDED(lock_);
 
  private:
   ~DataPipe() override;
 
-  void FlushUpdatesFromPeer() LOCKS_EXCLUDED(lock_);
   bool DeserializeRingBuffer(const RingBuffer::SerializedState& state);
 
   const EndpointType endpoint_type_;
@@ -174,8 +189,8 @@ class DataPipe : public Object<DataPipe> {
   // data pipe endpoint's local cache of the buffer state.
   scoped_refptr<SharedBuffer> buffer_ GUARDED_BY(lock_);
   RingBuffer data_ GUARDED_BY(lock_);
-  absl::optional<RingBuffer::DirectWriter> two_phase_writer_;
-  absl::optional<RingBuffer::DirectReader> two_phase_reader_;
+  std::optional<RingBuffer::DirectWriter> two_phase_writer_;
+  std::optional<RingBuffer::DirectReader> two_phase_reader_;
 
   // Indicates whether this endpoint is in the process of being serialized and
   // transmitted elsewhere.

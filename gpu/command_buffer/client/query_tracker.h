@@ -12,16 +12,17 @@
 
 #include <bitset>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 #include "base/atomicops.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "gles2_impl_export.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace gpu {
 
@@ -41,7 +42,7 @@ class GLES2_IMPL_EXPORT QuerySyncManager {
 
     void FreePendingSyncs();
 
-    raw_ptr<QuerySync> syncs;
+    raw_ptr<QuerySync, AllowPtrArithmetic> syncs;
     int32_t shm_id;
     uint32_t base_shm_offset;
     std::bitset<kSyncsPerBucket> in_use_query_syncs;
@@ -55,13 +56,14 @@ class GLES2_IMPL_EXPORT QuerySyncManager {
 
   struct QueryInfo {
     QueryInfo(Bucket* bucket, uint32_t index)
-        : bucket(bucket), sync(bucket->syncs + index) {}
+        : bucket(bucket), sync(UNSAFE_TODO(bucket->syncs + index)) {}
     QueryInfo() = default;
 
     uint32_t index() const { return sync - bucket->syncs.get(); }
 
     raw_ptr<Bucket, DanglingUntriaged> bucket = nullptr;
-    raw_ptr<QuerySync, DanglingUntriaged> sync = nullptr;
+    // AllowPtrArithmetic because it is assigned an AllowPtrArithmetic pointer.
+    raw_ptr<QuerySync, DanglingUntriaged | AllowPtrArithmetic> sync = nullptr;
     int32_t submit_count = 0;
   };
 
@@ -200,7 +202,7 @@ class GLES2_IMPL_EXPORT QueryTracker {
     uint64_t client_begin_time_us_;  // Only used for latency query target.
     uint64_t result_;
 
-    absl::optional<base::OnceClosure> on_completed_callback_;
+    std::optional<base::OnceClosure> on_completed_callback_;
   };
 
   explicit QueryTracker(MappedMemoryManager* manager);

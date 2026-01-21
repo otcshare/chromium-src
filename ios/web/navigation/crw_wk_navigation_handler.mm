@@ -4,13 +4,18 @@
 
 #import "ios/web/navigation/crw_wk_navigation_handler.h"
 
+#import "base/apple/foundation_util.h"
 #import "base/feature_list.h"
 #import "base/ios/ns_error_util.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
+#import "base/metrics/user_metrics.h"
+#import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/task/thread_pool.h"
 #import "base/timer/timer.h"
-#import "ios/net/http_response_headers_util.h"
+#import "components/security_interstitials/core/insecure_form_util.h"
+#import "ios/components/security_interstitials/https_only_mode/feature.h"
 #import "ios/net/protocol_handler_util.h"
 #import "ios/net/url_scheme_util.h"
 #import "ios/web/common/features.h"
@@ -31,30 +36,26 @@
 #import "ios/web/navigation/wk_navigation_util.h"
 #import "ios/web/public/browser_state.h"
 #import "ios/web/public/download/download_controller.h"
+#import "ios/web/public/navigation/form_warning_type.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/security/crw_cert_verification_controller.h"
 #import "ios/web/security/wk_web_view_security_util.h"
 #import "ios/web/session/session_certificate_policy_cache_impl.h"
+#import "ios/web/util/content_type_util.h"
+#import "ios/web/util/error_translation_util.h"
+#import "ios/web/util/wk_security_origin_util.h"
+#import "ios/web/util/wk_web_view_util.h"
 #import "ios/web/web_state/ui/crw_web_controller.h"
 #import "ios/web/web_state/user_interaction_state.h"
 #import "ios/web/web_state/web_state_impl.h"
-#import "ios/web/web_view/content_type_util.h"
-#import "ios/web/web_view/error_translation_util.h"
-#import "ios/web/web_view/wk_security_origin_util.h"
-#import "ios/web/web_view/wk_web_view_util.h"
-#import "net/base/mac/url_conversions.h"
+#import "net/base/apple/http_response_headers_util.h"
+#import "net/base/apple/url_conversions.h"
 #import "net/base/net_errors.h"
 #import "net/cert/x509_util_apple.h"
 #import "net/http/http_content_disposition.h"
 #import "url/gurl.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 using web::wk_navigation_util::kReferrerHeaderName;
-using web::wk_navigation_util::IsRestoreSessionUrl;
-using web::wk_navigation_util::IsWKInternalUrl;
 
 namespace {
 // Maximum number of errors to store in cert verification errors cache.
@@ -84,6 +85,36 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return context->GetItem()->GetHttpsUpgradeType();
   }
   return web::HttpsUpgradeType::kNone;
+}
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class ErrorPagePresentationFailed {
+  kUnknown,
+  kWebViewReleased,
+  kJavaScriptExceptionOccurred,
+  kOtherWKErrorDomain,
+  kMaxValue = kOtherWKErrorDomain
+};
+
+void LogPresentingErrorPageFailedWithError(NSError* error) {
+  ErrorPagePresentationFailed failure_type =
+      ErrorPagePresentationFailed::kUnknown;
+
+  if ([WKErrorDomain isEqualToString:error.domain]) {
+    if (error.code == WKErrorWebViewInvalidated ||
+        error.code == WKErrorWebContentProcessTerminated ||
+        error.code == WKErrorJavaScriptResultTypeIsUnsupported) {
+      failure_type = ErrorPagePresentationFailed::kWebViewReleased;
+    } else if (error.code == WKErrorJavaScriptExceptionOccurred) {
+      failure_type = ErrorPagePresentationFailed::kJavaScriptExceptionOccurred;
+    } else {
+      failure_type = ErrorPagePresentationFailed::kOtherWKErrorDomain;
+    }
+  }
+
+  base::UmaHistogramEnumeration("IOS.Web.ErrorPagePresentationFailed",
+                                failure_type);
 }
 
 }  // namespace
@@ -133,7 +164,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 @implementation CRWWKNavigationHandler
 
 - (instancetype)initWithDelegate:(id<CRWWKNavigationHandlerDelegate>)delegate {
-  if (self = [super init]) {
+  if ((self = [super init])) {
     _navigationStates = [[CRWWKNavigationStates alloc] init];
     // Load phase when no WebView present is 'loaded' because this represents
     // the idle state.
@@ -143,7 +174,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
         std::make_unique<web::CertVerificationErrorsCacheType>(
             kMaxCertErrorsCount);
 
-    _nativeTaskBridges = [NSMutableSet new];
+    _nativeTaskBridges = [[NSMutableSet alloc] init];
 
     _shouldPerformDownload = NO;
 
@@ -166,8 +197,18 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                         preferences:(WKWebpagePreferences*)preferences
                     decisionHandler:(void (^)(WKNavigationActionPolicy,
                                               WKWebpagePreferences*))handler {
-  GURL requestURL = net::GURLWithNSURL(action.request.URL);
+  // Check if OS lockdown mode is enabled and update the preference value.
+  if (!self.beingDestroyed) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      if (@available(iOS 16.0, *)) {
+        web::GetWebClient()->SetOSLockdownModeEnabled(
+            preferences.lockdownModeEnabled);
+      }
+    });
+  }
 
+  GURL requestURL = net::GURLWithNSURL(action.request.URL);
   const web::UserAgentType userAgentType =
       [self userAgentForNavigationAction:action webView:webView];
 
@@ -187,7 +228,8 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     }
 
     if (action.navigationType == WKNavigationTypeReload &&
-        web::wk_navigation_util::URLNeedsUserAgentType(URLForUserAgent)) {
+        web::wk_navigation_util::URLNeedsUserAgentType(URLForUserAgent) &&
+        webView.backForwardList.currentItem) {
       // When reloading the page, the UserAgent will be updated to the one for
       // the new page.
       web::NavigationItem* item = [[CRWNavigationItemHolder
@@ -195,9 +237,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
           navigationItem];
       if (item) {
         item->SetUserAgentType(userAgentType);
-        if (web::wk_navigation_util::IsRestoreSessionUrl(item->GetURL())) {
-          self.webStateImpl->SetUserAgent(userAgentType);
-        }
       }
     }
 
@@ -214,15 +253,16 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   BOOL isMainFrameNavigationAction = [self isMainFrameNavigationAction:action];
   auto decisionHandler = ^(WKNavigationActionPolicy policy) {
     preferences.preferredContentMode = contentMode;
-#if defined(__IPHONE_16_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_16_0
     if (@available(iOS 16.0, *)) {
-      if ((policy == WKNavigationActionPolicyAllow) &&
-          isMainFrameNavigationAction) {
-        UMA_HISTOGRAM_BOOLEAN("IOS.MainFrameNavigationIsInLockdownMode",
-                              preferences.lockdownModeEnabled);
+      if (!self.beingDestroyed) {
+        bool browser_lockdown_mode_enabled =
+            web::GetWebClient()->IsBrowserLockdownModeEnabled();
+
+        if (browser_lockdown_mode_enabled) {
+          preferences.lockdownModeEnabled = true;
+        }
       }
     }
-#endif  // defined (__IPHONE_16_0)
     handler(policy, preferences);
   };
 
@@ -255,12 +295,14 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
   // If this is a error navigation, pass through.
   if ([CRWErrorPageHelper isErrorPageFileURL:requestURL]) {
-    if (action.sourceFrame.mainFrame) {
-      // Disallow renderer initiated navigations to error URLs.
-      decisionHandler(WKNavigationActionPolicyCancel);
-    } else {
-      decisionHandler(WKNavigationActionPolicyAllow);
-    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+    return;
+  }
+
+  // Always disallow navigations to fido URLs. See crbug.com/371929521.
+  constexpr char kFidoScheme[] = "fido";
+  if (requestURL.SchemeIs(kFidoScheme)) {
+    decisionHandler(WKNavigationActionPolicyCancel);
     return;
   }
 
@@ -342,12 +384,13 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       web::GetWebClient()->IsAppSpecificURL(requestURL) ||
       requestURL.SchemeIs(url::kFileScheme) ||
       requestURL.SchemeIs(url::kAboutScheme) ||
-      requestURL.SchemeIs(url::kBlobScheme);
+      requestURL.SchemeIs(url::kBlobScheme) ||
+      (requestURL.SchemeIs(web::kMarketplaceKitScheme) &&
+       base::FeatureList::IsEnabled(
+           web::features::kWebKitHandlesMarketplaceKitLinks));
 
   _shouldPerformDownload = NO;
-  if (@available(iOS 15, *)) {
-    _shouldPerformDownload = action.shouldPerformDownload;
-  }
+  _shouldPerformDownload = action.shouldPerformDownload;
 
   __weak CRWWKNavigationHandler* weakSelf = self;
   auto callback =
@@ -375,20 +418,42 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return;
   }
 
-  BOOL userInteractedWithRequestMainFrame =
-      self.userInteractionState->HasUserTappedRecently(webView) &&
-      net::GURLWithNSURL(action.request.mainDocumentURL) ==
-          self.userInteractionState->LastUserInteraction()->main_document_url;
+  BOOL isUserInitiated = [self.delegate isUserInitiatedAction:action];
+  BOOL hasTappedRecently =
+      self.userInteractionState->HasUserTappedRecently(webView);
+
   BOOL isCrossOriginTargetFrame = NO;
   if (action.sourceFrame && action.targetFrame &&
+      action.sourceFrame.webView == action.targetFrame.webView &&
       action.sourceFrame != action.targetFrame) {
-    isCrossOriginTargetFrame = !url::IsSameOriginWith(
-        web::GURLOriginWithWKSecurityOrigin(action.sourceFrame.securityOrigin),
-        web::GURLOriginWithWKSecurityOrigin(action.targetFrame.securityOrigin));
+    isCrossOriginTargetFrame =
+        !web::OriginWithWKSecurityOrigin(action.sourceFrame.securityOrigin)
+             .IsSameOriginWith(web::OriginWithWKSecurityOrigin(
+                 action.targetFrame.securityOrigin));
   }
+
+  BOOL isCrossOriginCrossWindow = NO;
+  if (action.sourceFrame && action.targetFrame &&
+      action.sourceFrame.webView != action.targetFrame.webView) {
+    url::Origin sourceOrigin =
+        web::OriginWithWKSecurityOrigin(action.sourceFrame.securityOrigin);
+    url::Origin targetOrigin =
+        web::OriginWithWKSecurityOrigin(action.targetFrame.securityOrigin);
+    isCrossOriginCrossWindow = !sourceOrigin.IsSameOriginWith(targetOrigin);
+  }
+
+  // Ref: crbug.com/1408799
+  if (base::FeatureList::IsEnabled(
+          web::features::kPreventNavigationWithoutUserInteraction) &&
+      isMainFrameNavigationAction && isCrossOriginTargetFrame &&
+      !isUserInitiated) {
+    decisionHandler(WKNavigationActionPolicyCancel);
+    return;
+  }
+
   const web::WebStatePolicyDecider::RequestInfo requestInfo(
       transition, isMainFrameNavigationAction, isCrossOriginTargetFrame,
-      userInteractedWithRequestMainFrame);
+      isCrossOriginCrossWindow, isUserInitiated, hasTappedRecently);
 
   self.webStateImpl->ShouldAllowRequest(action.request, requestInfo,
                                         std::move(callback));
@@ -404,6 +469,10 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   GURL responseURL = net::GURLWithNSURL(WKResponse.response.URL);
   if ([CRWErrorPageHelper isErrorPageFileURL:responseURL]) {
     handler(WKNavigationResponsePolicyAllow);
+    // Set the mime type for error pages. This allows them to be treated as
+    // HTML.
+    [self updatePendingNavigationInfoFromNavigationResponse:WKResponse
+                                                HTTPHeaders:nullptr];
     return;
   }
 
@@ -452,20 +521,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return;
   }
 
-  if (@available(iOS 15, *)) {
-    handler(WKNavigationResponsePolicyDownload);
-    return;
-  }
-
-  if (web::UrlHasWebScheme(responseURL)) {
-    [self createDownloadTaskForResponse:WKResponse HTTPHeaders:headers.get()];
-  } else {
-    // DownloadTask only supports web schemes, so do nothing.
-  }
-  // Discard the pending item to ensure that the current URL is not different
-  // from what is displayed on the view.
-  self.navigationManagerImpl->DiscardNonCommittedItems();
-  std::move(callback).Run(web::WebStatePolicyDecider::PolicyDecision::Cancel());
+  handler(WKNavigationResponsePolicyDownload);
 }
 
 - (void)webView:(WKWebView*)webView
@@ -496,7 +552,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     }
 
     if (![CRWErrorPageHelper isErrorPageFileURL:webViewURL] &&
-        !IsWKInternalUrl(webViewURL) && context->GetUrl() != webViewURL) {
+        context->GetUrl() != webViewURL) {
       web::NavigationItem* item =
           web::GetItemWithUniqueID(self.navigationManagerImpl, context);
 
@@ -514,8 +570,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     }
 
     self.webStateImpl->OnNavigationStarted(context);
-    self.webStateImpl->GetNavigationManagerImpl().OnNavigationStarted(
-        webViewURL);
     return;
   }
 
@@ -530,16 +584,12 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   bool exemptedAppSpecificLoad = false;
   bool isBackForward =
       self.pendingNavigationInfo.navigationType == WKNavigationTypeBackForward;
-  bool isRestoringSession = IsRestoreSessionUrl(self.documentURL);
-  exemptedAppSpecificLoad =
-      isBackForward || isRestoringSession || self.webStateImpl->HasWebUI();
+  exemptedAppSpecificLoad = isBackForward || self.webStateImpl->HasWebUI();
 
   if (!web::GetWebClient()->IsAppSpecificURL(webViewURL) ||
       !exemptedAppSpecificLoad) {
     self.webStateImpl->ClearWebUI();
   }
-
-  self.webStateImpl->GetNavigationManagerImpl().OnNavigationStarted(webViewURL);
 
   std::unique_ptr<web::NavigationContextImpl> navigationContext =
       [self.delegate navigationHandler:self
@@ -568,11 +618,14 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
   web::NavigationContextImpl* context =
       [self.navigationStates contextForNavigation:navigation];
-  if (!context)
+  if (!context) {
     return;
+  }
 
-  if (webViewURL.SchemeIs(url::kDataScheme)) {
-    // Redirecting to a data url is always unsafe.
+  // Redirecting to a data url is always unsafe.
+  if (webViewURL.SchemeIs(url::kDataScheme) ||
+      // Block redirects to JavaScript schemes. Ref: crbug.com/1509267
+      webViewURL.SchemeIs(url::kJavaScriptScheme)) {
     self.pendingNavigationInfo.unsafeRedirect = YES;
   } else {
     context->SetUrl(webViewURL);
@@ -584,8 +637,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   // navigation. WKWebView allows multiple provisional navigations, while
   // Navigation Manager has only one pending navigation.
   if (item) {
-    if (!IsWKInternalUrl(webViewURL) &&
-        !self.pendingNavigationInfo.unsafeRedirect) {
+    if (!self.pendingNavigationInfo.unsafeRedirect) {
       item->SetVirtualURL(webViewURL);
       item->SetURL(webViewURL);
     }
@@ -622,11 +674,27 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     // If there was a redirect, change the URL to have the URL of the first
     // page.
     NSMutableDictionary* userInfo = [error.userInfo mutableCopy];
-    userInfo[NSURLErrorFailingURLStringErrorKey] =
-        base::SysUTF8ToNSString(navigationContext->GetUrl().spec());
+    userInfo[NSURLErrorFailingURLErrorKey] =
+        net::NSURLWithGURL(navigationContext->GetUrl());
     error = [NSError errorWithDomain:error.domain
                                 code:error.code
                             userInfo:userInfo];
+  }
+
+  if (@available(iOS 26, *)) {
+    if ([error.domain isEqualToString:@(web::kWebKitErrorDomain)] &&
+        error.code == web::kWebKitErrorCannotShowUrl &&
+        !error.userInfo[NSURLErrorFailingURLErrorKey]) {
+      // URL is expected in these errors, but it broke on iOS 26. Apply
+      // workaround until WebKit fix is shipped.
+      // TODO(crbug.com/441372052): Remove workaround.
+      NSURL* url = net::NSURLWithGURL(navigationContext->GetUrl());
+      NSMutableDictionary* userInfo = [error.userInfo mutableCopy];
+      userInfo[NSURLErrorFailingURLErrorKey] = url;
+      error = [NSError errorWithDomain:error.domain
+                                  code:error.code
+                              userInfo:userInfo];
+    }
   }
 
   // Handle load cancellation for directly cancelled navigations without
@@ -680,8 +748,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   // navigation is already finished, stop processing
   // (https://crbug.com/818796#c2).
   if ([self.navigationStates stateForNavigation:navigation] ==
-      web::WKNavigationState::FINISHED)
+      web::WKNavigationState::FINISHED) {
     return;
+  }
 
   BOOL committedNavigation =
       [self.navigationStates isCommittedNavigation:navigation];
@@ -704,26 +773,25 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   UMA_HISTOGRAM_BOOLEAN("IOS.CommittedURLMatchesCurrentItem",
                         webViewURL == currentWKItemURL);
 
-  // TODO(crbug.com/787497): Always use webView.backForwardList.currentItem.URL
-  // to obtain lastCommittedURL once loadHTML: is no longer user for WebUI.
+  // TODO(crbug.com/41356827): Always use
+  // webView.backForwardList.currentItem.URL to obtain lastCommittedURL once
+  // loadHTML: is no longer user for WebUI.
   if (webViewURL.is_empty()) {
     // It is possible for `webView.URL` to be nil, in which case
     // webView.backForwardList.currentItem.URL will return the right committed
     // URL (crbug.com/784480).
     webViewURL = currentWKItemURL;
-  } else if (context &&
-             context->GetUrl() == currentWKItemURL) {
+  } else if (context && context->GetUrl() == currentWKItemURL) {
     // If webView.backForwardList.currentItem.URL matches `context`, then this
     // is a known edge case where `webView.URL` is wrong.
-    // TODO(crbug.com/826013): Remove this workaround.
+    // TODO(crbug.com/41379040): Remove this workaround.
     webViewURL = currentWKItemURL;
   }
 
   if (context) {
-    if (self.pendingNavigationInfo.MIMEType)
-      context->SetMimeType(self.pendingNavigationInfo.MIMEType);
-    if (self.pendingNavigationInfo.HTTPHeaders)
+    if (self.pendingNavigationInfo.HTTPHeaders) {
       context->SetResponseHeaders(self.pendingNavigationInfo.HTTPHeaders);
+    }
   }
 
   [self.delegate navigationHandlerDisplayWebView:self];
@@ -734,17 +802,34 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     web::NavigationManager* navigationManager =
         self.webStateImpl->GetNavigationManager();
     GURL pendingURL;
+    web::NavigationItem* pendingItem = nullptr;
     if (navigationManager->GetPendingItemIndex() == -1) {
-      if (context->GetItem()) {
-        // Item may not exist if navigation was stopped (see
-        // crbug.com/969915).
-        pendingURL = context->GetItem()->GetURL();
-      }
+      // Item may not exist if navigation was stopped (see
+      // crbug.com/969915).
+      pendingItem = context->GetItem();
     } else {
-      if (navigationManager->GetPendingItem()) {
-        pendingURL = navigationManager->GetPendingItem()->GetURL();
-      }
+      pendingItem = navigationManager->GetPendingItem();
     }
+
+    if (pendingItem) {
+      pendingURL = pendingItem->GetURL();
+    }
+
+    if (self.pendingNavigationInfo.MIMEType) {
+      context->SetMimeType(self.pendingNavigationInfo.MIMEType);
+    } else if (pendingItem && !context->GetMimeType()) {
+      // For navigations handled directly by WebKit's back/forward cache, such
+      // as swipe-triggered navigations, `pendingNavigationInfo` will not get
+      // populated since there is no `decidePolicyForNavigationResponse`
+      // callback. The context's MIME type will also not get set when creating
+      // the navigation, since swipe-triggered navigations are directly
+      // initiated by WebKit. In this case, use the MIME type stored with the
+      // navigation item.
+      context->SetMimeType(
+          web::WKBackForwardListItemHolder::FromNavigationItem(pendingItem)
+              ->mime_type());
+    }
+
     if ((pendingURL == webViewURL) || (context->IsLoadingHtmlString())) {
       // Commit navigation if at least one of these is true:
       //  - Navigation has pending item (this should always be true, but
@@ -774,8 +859,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     // In unit tests MIME type will be empty, because loadHTML:forURL: does
     // not notify web view delegate about received response, so web controller
     // does not get a chance to properly update MIME type.
-    [self.webStateImpl->GetWebController() injectWindowID];
-
     self.webStateImpl->RetrieveExistingFrames();
   }
 
@@ -831,11 +914,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
   // The actual navigation item will not be committed until the native content
   // or WebUI is shown.
-  if (context &&
-      !context->GetUrl().SchemeIs(url::kAboutScheme) &&
-      !IsRestoreSessionUrl(context->GetUrl())) {
+  if (context && !context->GetUrl().SchemeIs(url::kAboutScheme)) {
     [self.delegate webViewHandlerUpdateSSLStatusForCurrentNavigationItem:self];
-    if (!context->IsLoadingErrorPage() && !IsRestoreSessionUrl(webViewURL)) {
+    if (!context->IsLoadingErrorPage()) {
       [self setLastCommittedNavigationItemTitle:webView.title];
     }
   }
@@ -876,8 +957,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       context ? web::GetItemWithUniqueID(self.navigationManagerImpl, context)
               : nullptr;
   // Item may not exist if navigation was stopped (see crbug.com/969915).
-
-  DCHECK(context);
   UMA_HISTOGRAM_BOOLEAN("IOS.FinishedNavigationHasContext", context);
   UMA_HISTOGRAM_BOOLEAN("IOS.FinishedNavigationHasItem", item);
 
@@ -885,11 +964,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     if (context->GetUrl() == currentWKItemURL) {
       // If webView.backForwardList.currentItem.URL matches `context`, then this
       // is a known edge case where `webView.URL` is wrong.
-      // TODO(crbug.com/826013): Remove this workaround.
+      // TODO(crbug.com/41379040): Remove this workaround.
       webViewURL = currentWKItemURL;
     }
 
-    if (!IsWKInternalUrl(currentWKItemURL) && currentWKItemURL == webViewURL &&
+    if (currentWKItemURL == webViewURL &&
         currentWKItemURL != context->GetUrl() &&
         item == self.navigationManagerImpl->GetLastCommittedItem() &&
         item->GetURL().DeprecatedGetOriginAsURL() ==
@@ -910,6 +989,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     }
   }
 
+  [self updateStateForNavigation:navigation toFinishedWithContext:context];
+}
+
+- (void)updateStateForNavigation:(WKNavigation*)navigation
+           toFinishedWithContext:(web::NavigationContextImpl*)context {
   [self.navigationStates setState:web::WKNavigationState::FINISHED
                     forNavigation:navigation];
 
@@ -942,6 +1026,30 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return;
   }
 
+  // `webView:didFailNavigation:withError:` may be called when rendering an
+  // office document which should be ignored because the `webView` will already
+  // be displaying its own error. Additionally, in these cases, JavaScript can
+  // not be run on these pages (in order to display our own error message). See
+  // crbug.com/1489167 for more details.
+  if ([error.domain isEqualToString:@"OfficeImportErrorDomain"]) {
+    [self.navigationStates setState:web::WKNavigationState::FINISHED
+                      forNavigation:navigation];
+    self.webStateImpl->RemoveAllWebFrames();
+    _certVerificationErrors->Clear();
+    return;
+  }
+
+  if ([error.domain isEqualToString:@(web::kWebKitErrorDomain)] &&
+      error.code == web::kWebKitErrorPlugInLoadFailed) {
+    // In cases where a Plug-in handles the load, mark the navigation as
+    // successful even though it is reported as a failed navigation.
+    web::NavigationContextImpl* navigationContext =
+        [self.navigationStates contextForNavigation:navigation];
+    [self updateStateForNavigation:navigation
+             toFinishedWithContext:navigationContext];
+    return;
+  }
+
   [self.navigationStates setState:web::WKNavigationState::FAILED
                     forNavigation:navigation];
 
@@ -962,22 +1070,22 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   [self didReceiveWKNavigationDelegateCallback];
 
   NSString* authMethod = challenge.protectionSpace.authenticationMethod;
-  if ([authMethod isEqual:NSURLAuthenticationMethodHTTPBasic] ||
-      [authMethod isEqual:NSURLAuthenticationMethodNTLM] ||
-      [authMethod isEqual:NSURLAuthenticationMethodHTTPDigest]) {
+  if ([authMethod isEqualToString:NSURLAuthenticationMethodHTTPBasic] ||
+      [authMethod isEqualToString:NSURLAuthenticationMethodNTLM] ||
+      [authMethod isEqualToString:NSURLAuthenticationMethodHTTPDigest]) {
     [self handleHTTPAuthForChallenge:challenge
                    completionHandler:completionHandler];
     return;
   }
 
-  if (![authMethod isEqual:NSURLAuthenticationMethodServerTrust]) {
+  if (![authMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
     completionHandler(NSURLSessionAuthChallengeRejectProtectionSpace, nil);
     return;
   }
 
   SecTrustRef trust = challenge.protectionSpace.serverTrust;
-  base::ScopedCFTypeRef<SecTrustRef> scopedTrust(trust,
-                                                 base::scoped_policy::RETAIN);
+  base::apple::ScopedCFTypeRef<SecTrustRef> scopedTrust(
+      trust, base::scoped_policy::RETAIN);
   __weak CRWWKNavigationHandler* weakSelf = self;
   [self.certVerificationController
       decideLoadPolicyForTrust:scopedTrust
@@ -1030,7 +1138,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
 - (void)webView:(WKWebView*)webView
      navigationAction:(WKNavigationAction*)navigationAction
-    didBecomeDownload:(WKDownload*)WKDownload API_AVAILABLE(ios(15)) {
+    didBecomeDownload:(WKDownload*)WKDownload {
   // As Chromium never return WKNavigationResponsePolicyDownload
   // when deciding the policy for an action, WebKit should never
   // invoke this delegate method.
@@ -1039,7 +1147,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
 - (void)webView:(WKWebView*)webView
     navigationResponse:(WKNavigationResponse*)navigationResponse
-     didBecomeDownload:(WKDownload*)WKDownload API_AVAILABLE(ios(15)) {
+     didBecomeDownload:(WKDownload*)WKDownload {
   // Send navigation callback if the download occurs in the main frame.
   if (navigationResponse.forMainFrame) {
     const GURL responseURL =
@@ -1072,12 +1180,13 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 // in CRWWkNavigationHandler so method can interact with WKWebView. Returns NO
 // if the download cannot be started.
 - (BOOL)onDownloadNativeTaskBridgeReadyForDownload:
-    (DownloadNativeTaskBridge*)bridge API_AVAILABLE(ios(15)) {
-  __attribute__((objc_precise_lifetime))
+    (DownloadNativeTaskBridge*)bridge {
+  NS_VALID_UNTIL_END_OF_SCOPE
   DownloadNativeTaskBridge* nativeTaskBridge = bridge;
   [_nativeTaskBridges removeObject:bridge];
-  if (!self.webStateImpl)
+  if (!self.webStateImpl) {
     return NO;
+  }
 
   const GURL responseURL = net::GURLWithNSURL(bridge.response.URL);
   const int64_t contentLength = bridge.response.expectedContentLength;
@@ -1090,22 +1199,31 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     headers = net::CreateHeadersFromNSHTTPURLResponse(
         static_cast<NSHTTPURLResponse*>(bridge.response));
     if (headers) {
-      headers->GetNormalizedHeader("content-disposition", &contentDisposition);
+      contentDisposition = headers->GetNormalizedHeader("content-disposition")
+                               .value_or(std::string());
     }
   }
+
+  NSString* originatingHost = nil;
+#if defined(__IPHONE_18_2) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_18_2
+  if (@available(iOS 18.2, *)) {
+    WKDownload* download = bridge.download;
+    originatingHost = download.originatingFrame.securityOrigin.host;
+  }
+#endif
 
   NSString* HTTPMethod = bridge.download.originalRequest.HTTPMethod;
   web::DownloadController::FromBrowserState(
       self.webStateImpl->GetBrowserState())
       ->CreateNativeDownloadTask(self.webStateImpl, [NSUUID UUID].UUIDString,
-                                 responseURL, HTTPMethod, contentDisposition,
-                                 contentLength, MIMEType, bridge);
+                                 responseURL, originatingHost, HTTPMethod,
+                                 contentDisposition, contentLength, MIMEType,
+                                 bridge);
   return YES;
 }
 
 - (void)resumeDownloadNativeTask:(NSData*)data
-               completionHandler:(void (^)(WKDownload*))completionHandler
-    API_AVAILABLE(ios(15)) {
+               completionHandler:(void (^)(WKDownload*))completionHandler {
   [self.delegate resumeDownloadWithData:data
                       completionHandler:completionHandler];
 }
@@ -1127,8 +1245,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
         navigationItem];
     // In some cases, the associated item isn't found. In that case, follow the
     // code path for the non-backforward navigations. See crbug.com/1121950.
-    if (item)
+    if (item) {
       userAgentType = item->GetUserAgentType();
+    }
   }
   if (!item) {
     // Get the visible item. There is no guarantee that the pending item belongs
@@ -1139,8 +1258,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     // pending item explicitly as the visible item might be the committed item
     // if the pending navigation isn't user triggered.
     item = self.navigationManagerImpl->GetPendingItem();
-    if (!item)
+    if (!item) {
       item = self.navigationManagerImpl->GetVisibleItem();
+    }
 
     if (item && item->GetTransitionType() & ui::PAGE_TRANSITION_FORWARD_BACK) {
       // When navigating forward to a restored page, the WKNavigationAction is
@@ -1256,8 +1376,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                                            (ui::PageTransition)pageTransition {
   GURL requestURL = net::GURLWithNSURL(action.request.URL);
   DCHECK(web::GetWebClient()->IsAppSpecificURL(requestURL));
-  if (web::GetWebClient()->IsAppSpecificURL(
-          self.webStateImpl->GetLastCommittedURL())) {
+  web::NavigationItem* lastItem =
+      self.webStateImpl->GetNavigationManager()->GetLastCommittedItem();
+  if (lastItem &&
+      (web::GetWebClient()->IsAppSpecificURL(lastItem->GetVirtualURL()) ||
+       web::GetWebClient()->IsAppSpecificURL(lastItem->GetURL()))) {
     // Last committed page is also app specific and navigation should be
     // allowed.
     return YES;
@@ -1268,24 +1391,25 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return YES;
   }
 
-  if (ui::PageTransitionTypeIncludingQualifiersIs(pageTransition,
-                                                  ui::PAGE_TRANSITION_TYPED)) {
+  if (pageTransition & ui::PAGE_TRANSITION_RELOAD) {
+    // Allow reload navigations.
     return YES;
   }
 
-  if (ui::PageTransitionTypeIncludingQualifiersIs(
-          pageTransition, ui::PAGE_TRANSITION_GENERATED)) {
-    return YES;
-  }
+  // Allow navigating to chrome:// pages if the navigation happens due to
+  //  - user typing the url in the omnibox,
+  //  - user tapping on a suggestion in the omnibox,
+  //  - user tapping on a bookmark.
+  static constexpr ui::PageTransition kAllowedTypes[] = {
+      ui::PAGE_TRANSITION_TYPED,
+      ui::PAGE_TRANSITION_GENERATED,
+      ui::PAGE_TRANSITION_AUTO_BOOKMARK,
+  };
 
-  if (ui::PageTransitionTypeIncludingQualifiersIs(
-          pageTransition, ui::PAGE_TRANSITION_AUTO_BOOKMARK)) {
-    return YES;
-  }
-
-  // If the session is being restored, allow the navigation.
-  if (IsRestoreSessionUrl(self.documentURL)) {
-    return YES;
+  for (const ui::PageTransition allowedType : kAllowedTypes) {
+    if (ui::PageTransitionCoreTypeIs(pageTransition, allowedType)) {
+      return YES;
+    }
   }
 
   // Allow navigation to WebUI pages from error pages.
@@ -1293,12 +1417,13 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return YES;
   }
 
-  GURL mainDocumentURL = net::GURLWithNSURL(action.request.mainDocumentURL);
-  if (web::GetWebClient()->IsAppSpecificURL(mainDocumentURL) &&
-      !action.sourceFrame.mainFrame) {
+  if (!action.sourceFrame.mainFrame) {
     // AppSpecific URLs are allowed inside iframe if the main frame is also
     // app specific page.
-    return YES;
+    GURL mainDocumentURL = net::GURLWithNSURL(action.request.mainDocumentURL);
+    if (web::GetWebClient()->IsAppSpecificURL(mainDocumentURL)) {
+      return YES;
+    }
   }
 
   return NO;
@@ -1332,12 +1457,10 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     // case insensitive, so it's enough to test the lower case only.
     if ([request valueForHTTPHeaderField:cookieHeaderName]) {
       // Case insensitive search in `headers`.
-      NSSet* cookieKeys = [item->GetHttpRequestHeaders()
-          keysOfEntriesPassingTest:^(id key, id obj, BOOL* stop) {
-            NSString* header = (NSString*)key;
+      NSSet<NSString*>* cookieKeys = [item->GetHttpRequestHeaders()
+          keysOfEntriesPassingTest:^(NSString* key, NSString* obj, BOOL* stop) {
             const BOOL found =
-                [header caseInsensitiveCompare:cookieHeaderName] ==
-                NSOrderedSame;
+                [key caseInsensitiveCompare:cookieHeaderName] == NSOrderedSame;
             *stop = found;
             return found;
           }];
@@ -1371,8 +1494,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 - (BOOL)shouldRenderResponse:(WKNavigationResponse*)WKResponse
                  HTTPHeaders:(net::HttpResponseHeaders*)headers {
   if (headers) {
-    std::string contentDisposition;
-    headers->GetNormalizedHeader("content-disposition", &contentDisposition);
+    std::string contentDisposition =
+        headers->GetNormalizedHeader("content-disposition")
+            .value_or(std::string());
     net::HttpContentDisposition parsedContentDisposition(contentDisposition,
                                                          std::string());
     if (parsedContentDisposition.is_attachment()) {
@@ -1388,18 +1512,16 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return NO;
   }
 
-  // TODO(crbug.com/1308875): Remove this when `canShowMIMEType` is fixed.
+  // TODO(crbug.com/40219220): Remove this when `canShowMIMEType` is fixed.
   // On iOS 15 `canShowMIMEType` returns true for AR files although WebKit is
   // not capable of displaying them natively.
-  if (@available(iOS 15, *)) {
-    NSString* MIMEType = WKResponse.response.MIMEType;
-    if ([MIMEType isEqual:@"model/vnd.pixar.usd"] ||
-        [MIMEType isEqual:@"model/usd"] ||
-        [MIMEType isEqual:@"model/vnd.usdz+zip"] ||
-        [MIMEType isEqual:@"model/vnd.pixar.usd"] ||
-        [MIMEType isEqual:@"model/vnd.reality"]) {
-      return NO;
-    }
+  NSString* MIMEType = WKResponse.response.MIMEType;
+  if ([MIMEType isEqualToString:@"model/vnd.pixar.usd"] ||
+      [MIMEType isEqualToString:@"model/usd"] ||
+      [MIMEType isEqualToString:@"model/vnd.usdz+zip"] ||
+      [MIMEType isEqualToString:@"model/vnd.pixar.usd"] ||
+      [MIMEType isEqualToString:@"model/vnd.reality"]) {
+    return NO;
   }
 
   GURL responseURL = net::GURLWithNSURL(WKResponse.response.URL);
@@ -1431,51 +1553,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   return YES;
 }
 
-// Creates DownloadTask for the given navigation response. Headers are passed
-// as argument to avoid extra NSDictionary -> net::HttpResponseHeaders
-// conversion.
-- (void)createDownloadTaskForResponse:(WKNavigationResponse*)WKResponse
-                          HTTPHeaders:(net::HttpResponseHeaders*)headers {
-  const GURL responseURL = net::GURLWithNSURL(WKResponse.response.URL);
-  const int64_t contentLength = WKResponse.response.expectedContentLength;
-  const std::string MIMEType =
-      base::SysNSStringToUTF8(WKResponse.response.MIMEType);
-
-  std::string contentDisposition;
-  if (headers) {
-    headers->GetNormalizedHeader("content-disposition", &contentDisposition);
-  }
-
-  NSString* HTTPMethod = @"GET";
-  if (WKResponse.forMainFrame) {
-    web::NavigationContextImpl* context =
-        [self contextForPendingMainFrameNavigationWithURL:responseURL];
-    // Context lookup fails in rare cases (f.e. after certain redirects,
-    // when WKWebView.URL did not change to redirected page inside
-    // webView:didReceiveServerRedirectForProvisionalNavigation:
-    // as happened in crbug.com/820375). In that case it's not possible
-    // to locate correct context to update `HTTPMethod` and call
-    // WebStateObserver::DidFinishNavigation. Download will fail with incorrect
-    // HTTPMethod, which is better than a crash on null pointer dereferencing.
-    // Missing DidFinishNavigation for download navigation does not cause any
-    // major issues, and it's also better than a crash.
-    if (context) {
-      context->SetIsDownload(true);
-      context->ReleaseItem();
-      if (context->IsPost()) {
-        HTTPMethod = @"POST";
-      }
-      // Navigation callbacks can only be called for the main frame.
-      self.webStateImpl->OnNavigationFinished(context);
-    }
-  }
-  web::DownloadController::FromBrowserState(
-      self.webStateImpl->GetBrowserState())
-      ->CreateDownloadTask(self.webStateImpl, [NSUUID UUID].UUIDString,
-                           responseURL, HTTPMethod, contentDisposition,
-                           contentLength, MIMEType);
-}
-
 // WKNavigation objects are used as a weak key to store web::NavigationContext.
 // WKWebView manages WKNavigation lifetime and destroys them after the
 // navigation is finished. However for window opening navigations WKWebView
@@ -1483,8 +1560,31 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 // used to store web::NavigationContext. Those "null" navigations have to be
 // cleaned up manually by calling this method.
 - (void)forgetNullWKNavigation:(WKNavigation*)navigation {
-  if (!navigation)
+  if (!navigation) {
     [self.navigationStates removeNavigation:navigation];
+  }
+}
+
+// Returns the warning type to be shown for <form> posts, or kNone if no warning
+// should be shown.
+- (web::FormWarningType)formWarningType:(WKNavigationAction*)action {
+  if (action.navigationType == WKNavigationTypeFormResubmitted) {
+    return web::FormWarningType::kRepost;
+  }
+  if (web::GetWebClient()->IsInsecureFormWarningEnabled(
+          self.webStateImpl->GetBrowserState()) &&
+      action.navigationType == WKNavigationTypeFormSubmitted) {
+    if (action.sourceFrame) {
+      url::Origin source_origin =
+          web::OriginWithWKSecurityOrigin(action.sourceFrame.securityOrigin);
+      GURL form_action_url = net::GURLWithNSURL(action.request.URL);
+      if (security_interstitials::IsInsecureFormActionOnSecureSource(
+              source_origin, form_action_url)) {
+        return web::FormWarningType::kInsecureForm;
+      }
+    }
+  }
+  return web::FormWarningType::kNone;
 }
 
 // This method should be called on deciding policy for navigation action. It
@@ -1500,10 +1600,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
      forceBlockUniversalLinks:(BOOL)forceBlockUniversalLinks {
   if (policyDecision.ShouldAllowNavigation()) {
     if ([[action.request HTTPMethod] isEqualToString:@"POST"]) {
+      web::FormWarningType warning_type = [self formWarningType:action];
       // Display the confirmation dialog if a form repost is detected.
-      if (action.navigationType == WKNavigationTypeFormResubmitted) {
+      if (warning_type != web::FormWarningType::kNone) {
         self.webStateImpl->ShowRepostFormWarningDialog(
-            base::BindOnce(^(bool shouldContinue) {
+            warning_type, base::BindOnce(^(bool shouldContinue) {
               if (self.beingDestroyed) {
                 decisionHandler(WKNavigationActionPolicyCancel);
               } else if (shouldContinue) {
@@ -1520,10 +1621,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
       web::NavigationItemImpl* item =
           self.navigationManagerImpl->GetCurrentItemImpl();
-      // TODO(crbug.com/570699): Remove this check once it's no longer
+      // TODO(crbug.com/40449786): Remove this check once it's no longer
       // possible to have no current entries.
-      if (item)
+      if (item) {
         [self cachePOSTDataForRequest:action.request inNavigationItem:item];
+      }
     }
   } else {
     if (action.targetFrame.mainFrame) {
@@ -1598,31 +1700,63 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return;
   }
 
-  if (policy != web::CERT_ACCEPT_POLICY_ALLOW &&
-      SecTrustGetCertificateCount(trust)) {
-    // The cert is invalid and the user has not agreed to proceed. Cache the
-    // cert verification result in `_certVerificationErrors`, so that it can
-    // later be reused inside `didFailProvisionalNavigation:`.
-    // The leaf cert is used as the key, because the chain provided by
-    // `didFailProvisionalNavigation:` will differ (it is the server-supplied
-    // chain), thus if intermediates were considered, the keys would mismatch.
-    scoped_refptr<net::X509Certificate> leafCert =
-        net::x509_util::CreateX509CertificateFromSecCertificate(
-            base::ScopedCFTypeRef<SecCertificateRef>(
-                SecTrustGetCertificateAtIndex(trust, 0),
-                base::scoped_policy::RETAIN),
-            {});
-    if (leafCert) {
-      bool is_recoverable =
-          policy == web::CERT_ACCEPT_POLICY_RECOVERABLE_ERROR_UNDECIDED_BY_USER;
-      std::string host =
-          base::SysNSStringToUTF8(challenge.protectionSpace.host);
-      _certVerificationErrors->Put(
-          web::CertHostPair(leafCert, host),
-          web::CertVerificationError(is_recoverable, certStatus));
+  // SecTrustEvaluate performs trust evaluation synchronously, possibly making
+  // network requests. The UI thread should not be blocked by that operation.
+  __weak __typeof(self) weakSelf = self;
+  auto verify_certificate = ^{
+    if (policy != web::CERT_ACCEPT_POLICY_ALLOW &&
+        SecTrustGetCertificateCount(trust)) {
+      // The cert is invalid and the user has not agreed to proceed. Cache
+      // the cert verification result in `_certVerificationErrors`, so that
+      // it can later be reused inside `didFailProvisionalNavigation:`. The
+      // leaf cert is used as the key, because the chain provided by
+      // `didFailProvisionalNavigation:` will differ (it is the
+      // server-supplied chain), thus if intermediates were considered, the
+      // keys would mismatch.
+
+      scoped_refptr<net::X509Certificate> leafCert = nil;
+      base::apple::ScopedCFTypeRef<CFArrayRef> certificateChain(
+          SecTrustCopyCertificateChain(trust));
+      SecCertificateRef secCertificate =
+          base::apple::CFCastStrict<SecCertificateRef>(
+              CFArrayGetValueAtIndex(certificateChain.get(), 0));
+      leafCert = net::x509_util::CreateX509CertificateFromSecCertificate(
+          base::apple::ScopedCFTypeRef<SecCertificateRef>(
+              secCertificate, base::scoped_policy::RETAIN),
+          {});
+
+      if (leafCert) {
+        bool is_recoverable =
+            policy ==
+            web::CERT_ACCEPT_POLICY_RECOVERABLE_ERROR_UNDECIDED_BY_USER;
+        std::string host =
+            base::SysNSStringToUTF8(challenge.protectionSpace.host);
+
+        // TODO(crbug.com/40588591): This should use PostTask to post to
+        // WebThread::UI with BLOCK_SHUTDOWN once shutdown behaviors are
+        // supported on the UI thread. BLOCK_SHUTDOWN is necessary because
+        // WKWebView throws an exception if the completion handler doesn't
+        // run.
+        dispatch_async(dispatch_get_main_queue(), ^{
+          __strong __typeof(self) strongSelf = weakSelf;
+          if (strongSelf) {
+            strongSelf->_certVerificationErrors->Put(
+                web::CertHostPair(leafCert, host),
+                web::CertVerificationError(is_recoverable, certStatus));
+          }
+          completionHandler(NSURLSessionAuthChallengeRejectProtectionSpace,
+                            nil);
+        });
+        return;
+      }
     }
-  }
-  completionHandler(NSURLSessionAuthChallengeRejectProtectionSpace, nil);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      completionHandler(NSURLSessionAuthChallengeRejectProtectionSpace, nil);
+    });
+  };
+  base::ThreadPool::PostTask(FROM_HERE,
+                             {base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+                             base::BindOnce(verify_certificate));
 }
 
 // Used in webView:didReceiveAuthenticationChallenge:completionHandler: to reply
@@ -1632,10 +1766,12 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                      (void (^)(NSURLSessionAuthChallengeDisposition,
                                NSURLCredential*))completionHandler {
   NSURLProtectionSpace* space = challenge.protectionSpace;
-  DCHECK(
-      [space.authenticationMethod isEqual:NSURLAuthenticationMethodHTTPBasic] ||
-      [space.authenticationMethod isEqual:NSURLAuthenticationMethodNTLM] ||
-      [space.authenticationMethod isEqual:NSURLAuthenticationMethodHTTPDigest]);
+  DCHECK([space.authenticationMethod
+             isEqualToString:NSURLAuthenticationMethodHTTPBasic] ||
+         [space.authenticationMethod
+             isEqualToString:NSURLAuthenticationMethodNTLM] ||
+         [space.authenticationMethod
+             isEqualToString:NSURLAuthenticationMethodHTTPDigest]);
 
   self.webStateImpl->OnAuthRequired(
       space, challenge.proposedCredential,
@@ -1688,8 +1824,19 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
         contextError, policyDecisionCancellationError);
   }
 
+  if (!navigation) {
+    base::RecordAction(base::UserMetricsAction("IOS.NilWKNavigationOnError"));
+    return;
+  }
+
   web::NavigationContextImpl* navigationContext =
       [self.navigationStates contextForNavigation:navigation];
+  if (!navigationContext) {
+    base::RecordAction(
+        base::UserMetricsAction("IOS.NilNavigationContextOnError"));
+    return;
+  }
+
   web::HttpsUpgradeType failed_upgrade_type = GetFailedHttpsUpgradeType(
       error, navigationContext, policyDecisionCancellationError);
   if (failed_upgrade_type != web::HttpsUpgradeType::kNone) {
@@ -1703,16 +1850,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
   navigationContext->SetError(contextError);
   navigationContext->SetIsPost([self isCurrentNavigationItemPOST]);
-  // TODO(crbug.com/803631) DCHECK that self.currentNavItem is the navigation
+  // TODO(crbug.com/41365797) DCHECK that self.currentNavItem is the navigation
   // item associated with navigationContext.
 
-  if ([error.domain isEqual:base::SysUTF8ToNSString(web::kWebKitErrorDomain)]) {
-    if (error.code == web::kWebKitErrorPlugInLoadFailed) {
-      // In cases where a Plug-in handles the load do not take any further
-      // action.
-      return;
-    }
-
+  if ([error.domain
+          isEqualToString:base::SysUTF8ToNSString(web::kWebKitErrorDomain)]) {
     if (error.code == web::kWebKitErrorUrlBlockedByContentFilter) {
       DCHECK(provisionalLoad);
       // If URL is blocked due to Restriction, do not take any further
@@ -1778,6 +1920,32 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     return;
   }
 
+  // This error occurs following a file path lookup when restoring navigation
+  // to a private file path. Restore the file if it has been previously stored
+  // as a bookmark.
+  if ([error.domain isEqualToString:NSPOSIXErrorDomain] &&
+      navigationContext->GetUrl().SchemeIsFile() &&
+      item->GetSecurityScopedFileResource()) {
+    BOOL bookmarkDataIsStale = false;
+    GURL bookmarkURL = net::GURLWithNSURL([NSURL
+        URLByResolvingBookmarkData:item->GetSecurityScopedFileResource()
+                           options:NSURLBookmarkResolutionWithoutUI
+                     relativeToURL:nil
+               bookmarkDataIsStale:&bookmarkDataIsStale
+                             error:nil]);
+    if (bookmarkURL.is_valid() && !bookmarkDataIsStale) {
+      web::NavigationManager::WebLoadParams params(bookmarkURL);
+      params.transition_type = navigationContext->GetPageTransition();
+      params.virtual_url = item->GetVirtualURL();
+      params.is_renderer_initiated = navigationContext->IsRendererInitiated();
+      self.webStateImpl->GetNavigationManager()->LoadURLWithParams(params);
+      return;
+    }
+    // Clear the security scoped file resource if it is invalid or stale to
+    // short-circuit future invalid PDF page loads.
+    item->SetSecurityScopedFileResource(nil);
+  }
+
   WKNavigation* errorNavigation =
       [self displayErrorPageWithError:error
                             inWebView:webView
@@ -1788,8 +1956,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   originalContext->SetLoadingErrorPage(true);
   [self.navigationStates setContext:std::move(originalContext)
                       forNavigation:errorNavigation];
-  // Return as the context was moved.
-  return;
 }
 
 // Displays an error page with details from `error` in `webView`. The error page
@@ -1802,11 +1968,11 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 
   // Error page needs the URL string in the error's userInfo for proper
   // display.
-  if (!error.userInfo[NSURLErrorFailingURLStringErrorKey]) {
+  if (!error.userInfo[NSURLErrorFailingURLErrorKey]) {
     NSMutableDictionary* updatedUserInfo = [[NSMutableDictionary alloc] init];
     [updatedUserInfo addEntriesFromDictionary:error.userInfo];
-    [updatedUserInfo setObject:blockedNSURL.absoluteString
-                        forKey:NSURLErrorFailingURLStringErrorKey];
+    [updatedUserInfo setObject:blockedNSURL
+                        forKey:NSURLErrorFailingURLErrorKey];
 
     error = [NSError errorWithDomain:error.domain
                                 code:error.code
@@ -1821,7 +1987,8 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   self.navigationManagerImpl->AddPendingItem(
       blockedURL, web::Referrer(), transition,
       web::NavigationInitiationType::BROWSER_INITIATED,
-      /*is_post_navigation=*/false, web::HttpsUpgradeType::kNone);
+      /*is_post_navigation=*/false, /*is_error_navigation=*/true,
+      web::HttpsUpgradeType::kNone);
 
   // Create context.
   std::unique_ptr<web::NavigationContextImpl> context =
@@ -1831,6 +1998,8 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
           /*is_renderer_initiated=*/false);
   std::unique_ptr<web::NavigationItemImpl> item =
       self.navigationManagerImpl->ReleasePendingItem();
+  CHECK(item);
+
   context->SetNavigationItemUniqueID(item->GetUniqueID());
   context->SetItem(std::move(item));
   context->SetError(error);
@@ -1856,13 +2025,12 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       failedNavigationURLFromErrorPageFileURL:backForwardGURL];
   bool isSameURLFromWebClient = web::GetWebClient()->IsPointingToSameDocument(
       failedURL, net::GURLWithNSURL(errorPage.failedNavigationURL));
-  // There are 4 possible scenarios here:
+  // There are 3 possible scenarios here:
   //   1. Current nav item is an error page for failed URL;
   //   2. Current nav item has a failed URL. This may happen when
   //      back/forward/refresh on a loaded page;
   //   3. Current nav item is an irrelevant page.
-  //   4. Current nav item is a session restoration.
-  // For 1, 2 and 4, load an empty string to remove existing JS code. The URL is
+  // For 1 and 2, load an empty string to remove existing JS code. The URL is
   // also updated to the URL of the page that failed to allow back/forward
   // navigations even on navigations originating from pushstate. See
   // crbug.com/1153261.
@@ -1873,8 +2041,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       ![errorPage
           isErrorPageFileURLForFailedNavigationURL:backForwardItem.URL] &&
       !isSameURLFromWebClient &&
-      ![backForwardItem.URL isEqual:errorPage.failedNavigationURL] &&
-      !web::wk_navigation_util::IsRestoreSessionUrl(backForwardItem.URL)) {
+      ![backForwardItem.URL isEqual:errorPage.failedNavigationURL]) {
     errorNavigation = [webView loadFileURL:errorPage.errorPageFileURL
                    allowingReadAccessToURL:errorPage.errorPageFileURL];
   } else {
@@ -1910,18 +2077,18 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
     self.navigationManagerImpl->DiscardNonCommittedItems();
   }
 
-    if (provisionalLoad) {
-      // TODO(crbug.com/973653): Remove this workaround when WebKit bug is
-      // fixed.
-      if (!navigationContext) {
-        // It is likely that `navigationContext` is null because
-        // didStartProvisionalNavigation: was not called with this WKNavigation
-        // object. Do not call OnNavigationFinished() to avoid crash on null
-        // pointer dereferencing. See crbug.com/973653 for details.
-      } else {
-        self.webStateImpl->OnNavigationFinished(navigationContext.get());
-      }
+  if (provisionalLoad) {
+    // TODO(crbug.com/40631880): Remove this workaround when WebKit bug is
+    // fixed.
+    if (!navigationContext) {
+      // It is likely that `navigationContext` is null because
+      // didStartProvisionalNavigation: was not called with this WKNavigation
+      // object. Do not call OnNavigationFinished() to avoid crash on null
+      // pointer dereferencing. See crbug.com/973653 for details.
+    } else {
+      self.webStateImpl->OnNavigationFinished(navigationContext.get());
     }
+  }
 }
 
 // Used to decide whether a load that generates errors with the
@@ -1929,13 +2096,15 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 - (BOOL)shouldCancelLoadForCancelledError:(NSError*)error
                           provisionalLoad:(BOOL)provisionalLoad {
   DCHECK(error.code == NSURLErrorCancelled ||
-         error.code == web::kWebKitErrorFrameLoadInterruptedByPolicyChange);
+         error.code == web::kWebKitErrorFrameLoadInterruptedByPolicyChange)
+      << base::SysNSStringToUTF8(error.description);
   // Do not cancel the load if it is for an app specific URL, as such errors
   // are produced during the app specific URL load process.
   const GURL errorURL =
       net::GURLWithNSURL(error.userInfo[NSURLErrorFailingURLErrorKey]);
-  if (web::GetWebClient()->IsAppSpecificURL(errorURL))
+  if (web::GetWebClient()->IsAppSpecificURL(errorURL)) {
     return NO;
+  }
 
   return provisionalLoad;
 }
@@ -1951,7 +2120,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   DCHECK_EQ(item->GetUniqueID(), context->GetNavigationItemUniqueID());
 
   net::SSLInfo info;
-  absl::optional<net::SSLInfo> ssl_info = absl::nullopt;
+  std::optional<net::SSLInfo> ssl_info = std::nullopt;
 
   if (web::IsWKWebViewSSLCertError(error)) {
     web::GetSSLInfoFromWKWebViewSSLCertError(error, &info);
@@ -1962,7 +2131,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       // `didReceiveAuthenticationChallenge:` is the OS constructed chain, while
       // `chain` is the chain from the server.
       NSArray* chain = error.userInfo[web::kNSErrorPeerCertificateChainKey];
-      NSURL* requestURL = error.userInfo[web::kNSErrorFailingURLKey];
+      NSURL* requestURL = error.userInfo[NSURLErrorFailingURLErrorKey];
       NSString* host = requestURL.host;
       scoped_refptr<net::X509Certificate> leafCert;
       if (chain.count && host.length) {
@@ -1982,19 +2151,23 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                                 cacheHit);
         }
       }
-      ssl_info = absl::make_optional<net::SSLInfo>(info);
+      ssl_info = info;
     }
   }
-  NSString* failingURLString =
-      error.userInfo[NSURLErrorFailingURLStringErrorKey];
-  GURL failingURL(base::SysNSStringToUTF8(failingURLString));
+  GURL failingURL =
+      net::GURLWithNSURL(error.userInfo[NSURLErrorFailingURLErrorKey]);
   GURL itemURL = item->GetURL();
-  if (itemURL != failingURL)
+  if (itemURL != failingURL) {
     item->SetVirtualURL(failingURL);
+  }
   web::GetWebClient()->PrepareErrorPage(
       self.webStateImpl, failingURL, error, context->IsPost(),
       self.webStateImpl->GetBrowserState()->IsOffTheRecord(), ssl_info,
       context->GetNavigationId(), base::BindOnce(^(NSString* errorHTML) {
+        if (self.navigationStates.lastAddedNavigation != navigation) {
+          // Do not show the stale error page if the page has since navigated.
+          return;
+        }
         if (errorHTML) {
           CRWErrorPageHelper* errorPageHelper =
               [[CRWErrorPageHelper alloc] initWithError:context->GetError()];
@@ -2004,6 +2177,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                                          addAutomaticReload:YES]
                completionHandler:^(id result, NSError* nserror) {
                  if (nserror) {
+                   LogPresentingErrorPageFailedWithError(nserror);
                    // WKErrorJavaScriptResultTypeIsUnsupported can be received
                    // if the WKWebView is released during this call.
                    DCHECK(nserror.code == WKErrorWebViewInvalidated ||
@@ -2016,7 +2190,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
                }];
         }
 
-        // TODO(crbug.com/973765): This is a workaround because `item` might
+        // TODO(crbug.com/41464714): This is a workaround because `item` might
         // get released after
         // `self.navigationManagerImpl->
         // CommitPendingItem(context->ReleaseItem()`.
@@ -2071,7 +2245,6 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 }
 
 - (void)loadCancelled {
-  // TODO(crbug.com/821995):  Check if this function should be removed.
   if (self.navigationState != web::WKNavigationState::FINISHED) {
     self.navigationState = web::WKNavigationState::FINISHED;
     if (!self.beingDestroyed) {
@@ -2103,8 +2276,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 }
 
 - (BOOL)isCurrentNavigationBackForward {
-  if (!self.currentNavItem)
+  if (!self.currentNavItem) {
     return NO;
+  }
   WKNavigationType currentNavigationType =
       self.currentBackForwardListItemHolder->navigation_type();
   return currentNavigationType == WKNavigationTypeBackForward;
@@ -2117,7 +2291,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       self.pendingNavigationInfo
           ? self.pendingNavigationInfo.HTTPMethod
           : self.currentBackForwardListItemHolder->http_method();
-  if ([HTTPMethod isEqual:@"POST"]) {
+  if ([HTTPMethod isEqualToString:@"POST"]) {
     return YES;
   }
   if (!self.currentNavItem) {
@@ -2150,8 +2324,8 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
 // Updates the WKBackForwardListItemHolder navigation item.
 - (void)updateCurrentBackForwardListItemHolderInWebView:(WKWebView*)webView {
   if (!self.currentNavItem) {
-    // TODO(crbug.com/925304): Pending item (which stores the holder) should be
-    // owned by NavigationContext object. Pending item should never be null.
+    // TODO(crbug.com/41437377): Pending item (which stores the holder) should
+    // be owned by NavigationContext object. Pending item should never be null.
     return;
   }
 
@@ -2169,8 +2343,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   // as part of this pending load. It will be nil when doing a fast
   // back/forward navigation, for instance, because the callback that would
   // populate it is not called in that flow.
-  if (self.pendingNavigationInfo.MIMEType)
+  if (self.pendingNavigationInfo.MIMEType) {
     holder->set_mime_type(self.pendingNavigationInfo.MIMEType);
+  }
 }
 
 - (web::Referrer)currentReferrer {
@@ -2180,11 +2355,12 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   NSString* referrerString = _currentReferrerString;
 
   // In case of an error evaluating the JavaScript simply return empty string.
-  if (referrerString.length == 0)
+  if (referrerString.length == 0) {
     return web::Referrer();
+  }
 
   web::NavigationItem* item = self.currentNavItem;
-  GURL navigationURL = item ? item->GetVirtualURL() : GURL::EmptyGURL();
+  GURL navigationURL = item ? item->GetVirtualURL() : GURL();
   NSString* previousURLString = base::SysUTF8ToNSString(navigationURL.spec());
   // Check if the referrer is equal to the previous URL minus the hash symbol.
   // L'#' is used to convert the char '#' to a unichar.
@@ -2198,8 +2374,8 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   // is the post-policy value, and the source policy is no longer available,
   // the policy is set to Always so that whatever WebKit decided to send will be
   // re-sent when replaying the entry.
-  // TODO(crbug.com/227769): When possible, get the real referrer and policy in
-  // advance and use that instead.
+  // TODO(crbug.com/41004475): When possible, get the real referrer and policy
+  // in advance and use that instead.
   return web::Referrer(GURL(base::SysNSStringToUTF8(referrerString)),
                        web::ReferrerPolicyAlways);
 }
@@ -2208,8 +2384,9 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   DCHECK(title);
   web::NavigationItem* item =
       self.navigationManagerImpl->GetLastCommittedItem();
-  if (!item)
+  if (!item) {
     return;
+  }
 
   item->SetTitle(base::SysNSStringToUTF16(title));
   self.webStateImpl->OnTitleChanged();
@@ -2231,7 +2408,7 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
       // The "Other" type covers a variety of very different cases, which may
       // or may not be the result of user actions. For now, guess based on
       // whether there's been an interaction since the last URL change.
-      // TODO(crbug.com/549301): See if this heuristic can be improved.
+      // TODO(crbug.com/41213462): See if this heuristic can be improved.
       return self.userInteractionState
                      ->UserInteractionRegisteredSinceLastUrlChange()
                  ? ui::PAGE_TRANSITION_LINK
@@ -2247,13 +2424,13 @@ web::HttpsUpgradeType GetFailedHttpsUpgradeType(
   // be extracted from the landing page.)
   web::NavigationItem* currentItem = self.currentNavItem;
 
-  // TODO(crbug.com/925304): Pending item (which should be used here) should be
-  // owned by NavigationContext object. Pending item should never be null.
+  // TODO(crbug.com/41437377): Pending item (which should be used here) should
+  // be owned by NavigationContext object. Pending item should never be null.
   if (currentItem && !currentItem->GetReferrer().url.is_valid()) {
     currentItem->SetReferrer(referrer);
   }
 
-  // TODO(crbug.com/956511): This shouldn't be called for push/replaceState.
+  // TODO(crbug.com/40624624): This shouldn't be called for push/replaceState.
   [self resetDocumentSpecificState];
 
   [self.delegate navigationHandlerDidStartLoading:self];

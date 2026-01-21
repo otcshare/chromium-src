@@ -8,10 +8,10 @@
  * */
 import 'chrome://extensions/extensions.js';
 
-import {SitePermissionsEditPermissionsDialogElement} from 'chrome://extensions/extensions.js';
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {SitePermissionsEditPermissionsDialogElement} from 'chrome://extensions/extensions.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
+import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestService} from './test_service.js';
 import {createExtensionInfo} from './test_util.js';
@@ -41,8 +41,12 @@ suite('SitePermissionsEditPermissionsDialog', function() {
   ];
 
   const matchingExtensionsInfo = [
-    {id: 'test_1', siteAccess: HostAccess.ON_CLICK},
-    {id: 'test_2', siteAccess: HostAccess.ON_SPECIFIC_SITES},
+    {id: 'test_1', siteAccess: HostAccess.ON_CLICK, canRequestAllSites: true},
+    {
+      id: 'test_2',
+      siteAccess: HostAccess.ON_SPECIFIC_SITES,
+      canRequestAllSites: true,
+    },
   ];
 
   const changeHostAccess =
@@ -53,9 +57,15 @@ suite('SitePermissionsEditPermissionsDialog', function() {
       };
 
   setup(function() {
+    loadTimeData.overrideValues({'enableUserPermittedSites': true});
+
     delegate = new TestService();
     delegate.matchingExtensionsInfo = matchingExtensionsInfo;
 
+    setupElement();
+  });
+
+  function setupElement() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     element =
         document.createElement('site-permissions-edit-permissions-dialog');
@@ -64,23 +74,32 @@ suite('SitePermissionsEditPermissionsDialog', function() {
     element.site = 'http://example.com';
     element.originalSiteSet = SiteSet.USER_PERMITTED;
     document.body.appendChild(element);
+  }
+
+  test('extra text shown if site matches subdomains', async () => {
+    assertEquals('http://example.com', element.$.site.innerText);
+    assertFalse(isVisible(element.$.includesSubdomains));
+
+    element.site = '*.example.com';
+    await microtasksFinished();
+
+    assertEquals('example.com', element.$.site.innerText);
+    assertTrue(isVisible(element.$.includesSubdomains));
   });
 
   test('editing current site set', async function() {
-    flush();
     const siteSetRadioGroup =
-        element.shadowRoot!.querySelector('cr-radio-group');
-
+        element.shadowRoot.querySelector('cr-radio-group');
     assertTrue(!!siteSetRadioGroup);
     assertEquals(SiteSet.USER_PERMITTED, siteSetRadioGroup.selected);
 
     const restrictSiteRadioButton =
-        element.shadowRoot!.querySelector<HTMLElement>(
+        element.shadowRoot.querySelector<HTMLElement>(
             `cr-radio-button[name=${SiteSet.USER_RESTRICTED}]`);
     assertTrue(!!restrictSiteRadioButton);
     restrictSiteRadioButton.click();
+    await eventToPromise('selected-changed', siteSetRadioGroup);
 
-    flush();
     assertEquals(SiteSet.USER_RESTRICTED, siteSetRadioGroup.selected);
 
     const whenClosed = eventToPromise('close', element);
@@ -98,30 +117,28 @@ suite('SitePermissionsEditPermissionsDialog', function() {
       'list of matching extensions shown when changing options',
       async function() {
         element.site = 'example.com';
-        flush();
+        await microtasksFinished();
         const siteSetRadioGroup =
-            element.shadowRoot!.querySelector('cr-radio-group');
+            element.shadowRoot.querySelector('cr-radio-group');
         assertTrue(!!siteSetRadioGroup);
 
         let extensionSiteAccessRows =
-            element!.shadowRoot!.querySelectorAll<HTMLElement>(
-                '.extension-row');
+            element!.shadowRoot.querySelectorAll<HTMLElement>('.extension-row');
         assertEquals(0, extensionSiteAccessRows.length);
 
         const extensionSpecifiedRadioButton =
-            element.shadowRoot!.querySelector<HTMLElement>(
+            element.shadowRoot.querySelector<HTMLElement>(
                 `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
         assertTrue(!!extensionSpecifiedRadioButton);
         extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
 
         const site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('*://example.com/', site);
-        flush();
 
         assertEquals(SiteSet.EXTENSION_SPECIFIED, siteSetRadioGroup.selected);
         extensionSiteAccessRows =
-            element!.shadowRoot!.querySelectorAll<HTMLElement>(
-                '.extension-row');
+            element!.shadowRoot.querySelectorAll<HTMLElement>('.extension-row');
         assertEquals(2, extensionSiteAccessRows.length);
 
         const whenClosed = eventToPromise('close', element);
@@ -141,48 +158,61 @@ suite('SitePermissionsEditPermissionsDialog', function() {
 
   test(
       'radio buttons not shown for site matching subdomains', async function() {
-        flush();
         const extensionSpecifiedRadioButton =
-            element.shadowRoot!.querySelector<HTMLElement>(
+            element.shadowRoot.querySelector<HTMLElement>(
                 `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
+        const siteSetRadioGroup =
+            element.shadowRoot.querySelector('cr-radio-group');
+
         assertTrue(!!extensionSpecifiedRadioButton);
+        assertTrue(!!siteSetRadioGroup);
         extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
         const site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('http://example.com/', site);
 
-        flush();
         assertTrue(
-            isVisible(element.shadowRoot!.querySelector('cr-radio-group')));
+            isVisible(element.shadowRoot.querySelector('cr-radio-group')));
 
         element.site = '*.etld.com';
-        flush();
+        await microtasksFinished();
 
         assertFalse(
-            isVisible(element.shadowRoot!.querySelector('cr-radio-group')));
+            isVisible(element.shadowRoot.querySelector('cr-radio-group')));
       });
 
   test(
       'list of extensions changes in response to extensions updating',
       async function() {
-        flush();
         const extensionSpecifiedRadioButton =
-            element.shadowRoot!.querySelector<HTMLElement>(
+            element.shadowRoot.querySelector<HTMLElement>(
                 `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
+        const siteSetRadioGroup =
+            element.shadowRoot.querySelector('cr-radio-group');
         assertTrue(!!extensionSpecifiedRadioButton);
+        assertTrue(!!siteSetRadioGroup);
         extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
         let site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('http://example.com/', site);
 
-        flush();
-
+        await microtasksFinished();
         let extensionSiteAccessSelects =
-            element.shadowRoot!.querySelectorAll('select');
+            element.shadowRoot.querySelectorAll('select');
         assertEquals(2, extensionSiteAccessSelects.length);
         assertEquals(HostAccess.ON_CLICK, extensionSiteAccessSelects[0]!.value);
 
         delegate.matchingExtensionsInfo = [
-          {id: 'test_1', siteAccess: HostAccess.ON_ALL_SITES},
-          {id: 'test_2', siteAccess: HostAccess.ON_SPECIFIC_SITES},
+          {
+            id: 'test_1',
+            siteAccess: HostAccess.ON_ALL_SITES,
+            canRequestAllSites: true,
+          },
+          {
+            id: 'test_2',
+            siteAccess: HostAccess.ON_SPECIFIC_SITES,
+            canRequestAllSites: true,
+          },
         ];
 
         element.extensions = [
@@ -202,10 +232,10 @@ suite('SitePermissionsEditPermissionsDialog', function() {
         // getMatchingExtensionsForSite.
         site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('http://example.com/', site);
-        flush();
+        await microtasksFinished();
 
         extensionSiteAccessSelects =
-            element.shadowRoot!.querySelectorAll('select');
+            element.shadowRoot.querySelectorAll('select');
         assertEquals(2, extensionSiteAccessSelects.length);
 
         // Test that the value displayed for the first extension matches the
@@ -218,26 +248,33 @@ suite('SitePermissionsEditPermissionsDialog', function() {
     element.site = 'example.com';
     delegate.matchingExtensionsInfo = [
       ...matchingExtensionsInfo,
-      {id: 'test_3', siteAccess: HostAccess.ON_ALL_SITES},
+      {
+        id: 'test_3',
+        siteAccess: HostAccess.ON_ALL_SITES,
+        canRequestAllSites: true,
+      },
     ];
 
-    flush();
+    await microtasksFinished();
     const extensionSpecifiedRadioButton =
-        element.shadowRoot!.querySelector<HTMLElement>(
+        element.shadowRoot.querySelector<HTMLElement>(
             `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
     assertTrue(!!extensionSpecifiedRadioButton);
+    const siteSetRadioGroup =
+        element.shadowRoot.querySelector('cr-radio-group');
+    assertTrue(!!siteSetRadioGroup);
     extensionSpecifiedRadioButton.click();
+    await eventToPromise('selected-changed', siteSetRadioGroup);
 
     const site = await delegate.whenCalled('getMatchingExtensionsForSite');
     assertEquals('*://example.com/', site);
-    flush();
 
     const extensionSiteAccessRows =
-        element.shadowRoot!.querySelectorAll<HTMLElement>('.extension-row');
+        element.shadowRoot.querySelectorAll<HTMLElement>('.extension-row');
     assertEquals(3, extensionSiteAccessRows.length);
 
     const siteAccessSelectMenus =
-        element.shadowRoot!.querySelectorAll<HTMLSelectElement>(
+        element.shadowRoot.querySelectorAll<HTMLSelectElement>(
             '.extension-host-access');
     assertEquals(3, siteAccessSelectMenus.length);
 
@@ -280,22 +317,29 @@ suite('SitePermissionsEditPermissionsDialog', function() {
         element.site = 'http://example.com';
         delegate.matchingExtensionsInfo = [
           ...matchingExtensionsInfo,
-          {id: 'test_3', siteAccess: HostAccess.ON_ALL_SITES},
+          {
+            id: 'test_3',
+            siteAccess: HostAccess.ON_ALL_SITES,
+            canRequestAllSites: true,
+          },
         ];
 
-        flush();
+        await microtasksFinished();
         const extensionSpecifiedRadioButton =
-            element.shadowRoot!.querySelector<HTMLElement>(
+            element.shadowRoot.querySelector<HTMLElement>(
                 `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
         assertTrue(!!extensionSpecifiedRadioButton);
+        const siteSetRadioGroup =
+            element.shadowRoot.querySelector('cr-radio-group');
+        assertTrue(!!siteSetRadioGroup);
         extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
 
         let site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('http://example.com/', site);
-        flush();
 
         const siteAccessSelectMenus =
-            element.shadowRoot!.querySelectorAll<HTMLSelectElement>(
+            element.shadowRoot.querySelectorAll<HTMLSelectElement>(
                 '.extension-host-access');
         assertEquals(3, siteAccessSelectMenus.length);
 
@@ -309,8 +353,16 @@ suite('SitePermissionsEditPermissionsDialog', function() {
         // `test_1` is now the same as what was edited and `test_3` no longer
         // exists.
         delegate.matchingExtensionsInfo = [
-          {id: 'test_1', siteAccess: HostAccess.ON_SPECIFIC_SITES},
-          {id: 'test_2', siteAccess: HostAccess.ON_SPECIFIC_SITES},
+          {
+            id: 'test_1',
+            siteAccess: HostAccess.ON_SPECIFIC_SITES,
+            canRequestAllSites: true,
+          },
+          {
+            id: 'test_2',
+            siteAccess: HostAccess.ON_SPECIFIC_SITES,
+            canRequestAllSites: true,
+          },
         ];
 
         element.extensions = [
@@ -330,7 +382,6 @@ suite('SitePermissionsEditPermissionsDialog', function() {
         // getMatchingExtensionsForSite.
         site = await delegate.whenCalled('getMatchingExtensionsForSite');
         assertEquals('http://example.com/', site);
-        flush();
 
         const whenClosed = eventToPromise('close', element);
         element.$.submit.click();
@@ -349,5 +400,129 @@ suite('SitePermissionsEditPermissionsDialog', function() {
 
         await whenClosed;
         assertFalse(element.$.dialog.open);
+      });
+
+  test(
+      'permitted sites not visible when enableUserPermittedSites flag is false',
+      async () => {
+        loadTimeData.overrideValues({'enableUserPermittedSites': false});
+
+        // set up the element again to capture the updated value of
+        // enableUserPermittedSites.
+        setupElement();
+
+        await microtasksFinished();
+
+        // Only the user restricted and extension specified radio buttons should
+        // be visible.
+        const permittedSiteRadioButton =
+            element.shadowRoot.querySelector<HTMLElement>(
+                `cr-radio-button[name=${SiteSet.USER_PERMITTED}]`);
+        assertFalse(isVisible(permittedSiteRadioButton));
+
+        const restrictedSiteRadioButton =
+            element.shadowRoot.querySelector<HTMLElement>(
+                `cr-radio-button[name=${SiteSet.USER_RESTRICTED}]`);
+        assertTrue(isVisible(restrictedSiteRadioButton));
+
+        const extensionSiteRadioButton =
+            element.shadowRoot.querySelector<HTMLElement>(
+                `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
+        assertTrue(isVisible(extensionSiteRadioButton));
+      });
+
+  test(
+      'changing site access disabled for extensions installed by policy',
+      async function() {
+        // Set the second extension to be installed by policy.
+        element.extensions = [
+          createExtensionInfo({
+            id: 'test_1',
+            name: 'test_1',
+            iconUrl: 'icon_url',
+          }),
+          createExtensionInfo({
+            id: 'test_2',
+            name: 'test_2',
+            iconUrl: 'icon_url',
+            controlledInfo: {text: 'policy'},
+          }),
+        ];
+
+        await microtasksFinished();
+
+        const extensionSpecifiedRadioButton =
+            element.shadowRoot.querySelector<HTMLElement>(
+                `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
+        assertTrue(!!extensionSpecifiedRadioButton);
+        const siteSetRadioGroup =
+            element.shadowRoot.querySelector('cr-radio-group');
+        assertTrue(!!siteSetRadioGroup);
+        extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
+
+        const site = await delegate.whenCalled('getMatchingExtensionsForSite');
+        assertEquals('http://example.com/', site);
+
+        const siteAccessSelectMenus =
+            element.shadowRoot.querySelectorAll<HTMLSelectElement>(
+                '.extension-host-access');
+        assertEquals(2, siteAccessSelectMenus.length);
+
+        // The second extension's site access selector should be disabled
+        // since it's installed by policy.
+        assertFalse(siteAccessSelectMenus[0]!.disabled);
+        assertTrue(siteAccessSelectMenus[1]!.disabled);
+      });
+
+  test(
+      'all sites option hidden for extensions that do not request to all sites',
+      async function() {
+        delegate.matchingExtensionsInfo = [
+          {
+            id: 'test_1',
+            siteAccess: HostAccess.ON_SPECIFIC_SITES,
+            canRequestAllSites: true,
+          },
+          {
+            id: 'test_2',
+            siteAccess: HostAccess.ON_SPECIFIC_SITES,
+            canRequestAllSites: false,
+          },
+        ];
+
+        await microtasksFinished();
+
+        const extensionSpecifiedRadioButton =
+            element.shadowRoot.querySelector<HTMLElement>(
+                `cr-radio-button[name=${SiteSet.EXTENSION_SPECIFIED}]`);
+        assertTrue(!!extensionSpecifiedRadioButton);
+        const siteSetRadioGroup =
+            element.shadowRoot.querySelector('cr-radio-group');
+        assertTrue(!!siteSetRadioGroup);
+        extensionSpecifiedRadioButton.click();
+        await eventToPromise('selected-changed', siteSetRadioGroup);
+
+        // Changing `element.extensions` causes a call to
+        // getMatchingExtensionsForSite.
+        const site = await delegate.whenCalled('getMatchingExtensionsForSite');
+        assertEquals('http://example.com/', site);
+        await microtasksFinished();
+
+        const siteAccessSelectMenus =
+            element.shadowRoot.querySelectorAll<HTMLSelectElement>(
+                '.extension-host-access');
+        assertEquals(2, siteAccessSelectMenus.length);
+
+        // First select menu should have all options enabled, second menu
+        // should have `ON_ALL_SITES` disabled.
+        assertFalse(
+            siteAccessSelectMenus[0]!
+                .querySelector<HTMLSelectElement>(
+                    `option[value=${HostAccess.ON_ALL_SITES}]`)!.disabled);
+        assertTrue(
+            siteAccessSelectMenus[1]!
+                .querySelector<HTMLSelectElement>(
+                    `option[value=${HostAccess.ON_ALL_SITES}]`)!.disabled);
       });
 });

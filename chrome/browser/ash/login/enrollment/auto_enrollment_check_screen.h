@@ -7,15 +7,19 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/enrollment/auto_enrollment_check_screen_view.h"
-#include "chrome/browser/ash/login/enrollment/auto_enrollment_controller.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/error_screen.h"
 #include "chrome/browser/ash/login/screens/network_error.h"
+#include "chrome/browser/ash/policy/enrollment/auto_enrollment_state.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
+
+namespace policy {
+class AutoEnrollmentController;
+}  // namespace policy
 
 namespace ash {
 
@@ -48,11 +52,8 @@ class AutoEnrollmentCheckScreen : public BaseScreen,
 
   static std::string GetResultString(Result result);
 
-  // Clears the cached state causing the forced enrollment check to be retried.
-  void ClearState();
-
   void set_auto_enrollment_controller(
-      AutoEnrollmentController* auto_enrollment_controller) {
+      policy::AutoEnrollmentController* auto_enrollment_controller) {
     auto_enrollment_controller_ = auto_enrollment_controller;
   }
 
@@ -76,7 +77,7 @@ class AutoEnrollmentCheckScreen : public BaseScreen,
   // Runs `exit_callback_` - used to prevent `exit_callback_` from running after
   // `this` has been destroyed (by wrapping it with a callback bound to a weak
   // ptr).
-  void RunExitCallback(Result result) { exit_callback_.Run(result); }
+  void RunExitCallback(Result result);
 
  private:
   // Handles update notifications regarding the auto-enrollment check.
@@ -87,12 +88,12 @@ class AutoEnrollmentCheckScreen : public BaseScreen,
 
   // Configures the UI to reflect the updated captive portal state.
   // Returns true if a UI change has been made.
-  bool UpdateCaptivePortalState(
+  bool ShowCaptivePortalState(
       NetworkState::PortalState new_captive_portal_state);
 
   // Configures the UI to reflect `new_auto_enrollment_state`. Returns true if
   // and only if a UI change has been made.
-  bool UpdateAutoEnrollmentState(
+  bool ShowAutoEnrollmentState(
       policy::AutoEnrollmentState new_auto_enrollment_state);
 
   // Configures the error screen.
@@ -113,23 +114,19 @@ class AutoEnrollmentCheckScreen : public BaseScreen,
   // The user requested a connection attempt to be performed.
   void OnConnectRequested();
 
-  // Returns true if an error response from the server should cause a network
-  // error screen to be displayed and block the wizard from continuing. If false
-  // is returned, an error response from the server is treated as "no enrollment
-  // necessary".
-  bool ShouldBlockOnServerError() const;
+  // Clears the cached state so that the check can be retried.
+  void ClearState();
 
   base::WeakPtr<AutoEnrollmentCheckScreenView> view_;
-  ErrorScreen* error_screen_;
+  raw_ptr<ErrorScreen> error_screen_;
   base::RepeatingCallback<void(Result result)> exit_callback_;
-  base::raw_ptr<AutoEnrollmentController> auto_enrollment_controller_ = nullptr;
+  raw_ptr<policy::AutoEnrollmentController> auto_enrollment_controller_ =
+      nullptr;
 
   base::CallbackListSubscription auto_enrollment_progress_subscription_;
 
   NetworkState::PortalState captive_portal_state_ =
       NetworkState::PortalState::kUnknown;
-  policy::AutoEnrollmentState auto_enrollment_state_ =
-      policy::AutoEnrollmentState::kIdle;
 
   std::unique_ptr<ErrorScreensHistogramHelper> histogram_helper_;
 

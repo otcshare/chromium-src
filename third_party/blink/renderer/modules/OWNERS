@@ -6,3 +6,10 @@ kinuko@chromium.org
 # Reviewers for inspector-related code:
 dgozman@chromium.org
 caseq@chromium.org
+
+# Reviewers for graphics code:
+blundell@chromium.org
+
+# This is for the common case of adding or renaming files. If you're doing
+# structural changes, use usual OWNERS rules.
+per-file BUILD.gn=*

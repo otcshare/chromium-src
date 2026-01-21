@@ -4,48 +4,54 @@
 
 package org.chromium.chrome.browser.payments;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.text.TextUtils;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
+import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.EditableOption;
 import org.chromium.payments.mojom.PayerDetail;
 
-/**
- * The locally stored contact details.
- */
+/** The locally stored contact details. */
+@NullMarked
 public class AutofillContact extends EditableOption {
     private final AutofillProfile mProfile;
     private final Context mContext;
     private int mCompletionStatus;
-    private boolean mRequestName;
-    private boolean mRequestPhone;
-    private boolean mRequestEmail;
-    @Nullable private String mPayerName;
-    @Nullable private String mPayerPhone;
-    @Nullable private String mPayerEmail;
+    private final boolean mRequestName;
+    private final boolean mRequestPhone;
+    private final boolean mRequestEmail;
+    private @Nullable String mPayerName;
+    private @Nullable String mPayerPhone;
+    private @Nullable String mPayerEmail;
 
     /**
      * Builds contact details.
      *
-     * @param context          The application context.
-     * @param profile          The autofill profile where this contact data lives.
-     * @param name             The payer name. If not empty, this will be the primary label.
-     * @param phone            The phone number. If name is empty, this will be the primary label.
-     * @param email            The email address. If name and phone are empty, this will be the
-     *                         primary label.
+     * @param context The application context.
+     * @param profile The autofill profile where this contact data lives.
+     * @param name The payer name. If not empty, this will be the primary label.
+     * @param phone The phone number. If name is empty, this will be the primary label.
+     * @param email The email address. If name and phone are empty, this will be the primary label.
      * @param completionStatus The completion status of this contact.
-     * @param requestName      Whether the merchant requests a payer name.
-     * @param requestPhone     Whether the merchant requests a payer phone number.
-     * @param requestEmail     Whether the merchant requests a payer email address.
+     * @param requestName Whether the merchant requests a payer name.
+     * @param requestPhone Whether the merchant requests a payer phone number.
+     * @param requestEmail Whether the merchant requests a payer email address.
      */
-    public AutofillContact(Context context, AutofillProfile profile, @Nullable String name,
-            @Nullable String phone, @Nullable String email,
-            @ContactEditor.CompletionStatus int completionStatus, boolean requestName,
-            boolean requestPhone, boolean requestEmail) {
+    public AutofillContact(
+            Context context,
+            AutofillProfile profile,
+            @Nullable String name,
+            @Nullable String phone,
+            @Nullable String email,
+            @ContactEditor.CompletionStatus int completionStatus,
+            boolean requestName,
+            boolean requestPhone,
+            boolean requestEmail) {
         super(profile.getGUID(), null, null, null, null);
         mContext = context;
         mProfile = profile;
@@ -57,19 +63,22 @@ public class AutofillContact extends EditableOption {
         updateCompletionStatus(completionStatus);
     }
 
-    /** @return Payer name. Null if the merchant did not request it or data is incomplete. */
-    @Nullable public String getPayerName() {
+    /**
+     * @return Payer name. Null if the merchant did not request it or data is incomplete.
+     */
+    public @Nullable String getPayerName() {
         return mPayerName;
     }
 
-    /** @return Phone number. Null if the merchant did not request it or data is incomplete. */
-    @Nullable public String getPayerPhone() {
+    /**
+     * @return Phone number. Null if the merchant did not request it or data is incomplete.
+     */
+    public @Nullable String getPayerPhone() {
         return mPayerPhone;
     }
 
     /** @return Email address. Null if the merchant did not request it or data is incomplete. */
-    @Nullable
-    public String getPayerEmail() {
+    public @Nullable String getPayerEmail() {
         return mPayerEmail;
     }
 
@@ -107,8 +116,8 @@ public class AutofillContact extends EditableOption {
      * @param email The new email address to use. If email and phone are empty, this will be the
      *              primary label.
      */
-    public void completeContact(String guid, @Nullable String name,
-            @Nullable String phone, @Nullable String email) {
+    public void completeContact(
+            String guid, @Nullable String name, @Nullable String phone, @Nullable String email) {
         setContactInfo(guid, name, phone, email);
         updateCompletionStatus(ContactEditor.COMPLETE);
     }
@@ -128,7 +137,8 @@ public class AutofillContact extends EditableOption {
         // 2- The field values are not equal.
         if (mRequestName) {
             if (mPayerName == null && contact.mPayerName != null) return false;
-            if (mPayerName != null && contact.mPayerName != null
+            if (mPayerName != null
+                    && contact.mPayerName != null
                     && !mPayerName.equalsIgnoreCase(contact.mPayerName)) {
                 return false;
             }
@@ -136,7 +146,8 @@ public class AutofillContact extends EditableOption {
 
         if (mRequestPhone) {
             if (mPayerPhone == null && contact.mPayerPhone != null) return false;
-            if (mPayerPhone != null && contact.mPayerPhone != null
+            if (mPayerPhone != null
+                    && contact.mPayerPhone != null
                     && !TextUtils.equals(mPayerPhone, contact.mPayerPhone)) {
                 return false;
             }
@@ -144,7 +155,8 @@ public class AutofillContact extends EditableOption {
 
         if (mRequestEmail) {
             if (mPayerEmail == null && contact.mPayerEmail != null) return false;
-            if (mPayerEmail != null && contact.mPayerEmail != null
+            if (mPayerEmail != null
+                    && contact.mPayerEmail != null
                     && !mPayerEmail.equalsIgnoreCase(contact.mPayerEmail)) {
                 return false;
             }
@@ -167,17 +179,21 @@ public class AutofillContact extends EditableOption {
         return score;
     }
 
-    private void setContactInfo(String guid, @Nullable String name,
-            @Nullable String phone, @Nullable String email) {
+    private void setContactInfo(
+            String guid, @Nullable String name, @Nullable String phone, @Nullable String email) {
         mPayerName = TextUtils.isEmpty(name) ? null : name;
         mPayerPhone = TextUtils.isEmpty(phone) ? null : phone;
         mPayerEmail = TextUtils.isEmpty(email) ? null : email;
 
         if (mPayerName == null) {
-            updateIdentifierAndLabels(guid, mPayerPhone == null ? mPayerEmail : mPayerPhone,
+            updateIdentifierAndLabels(
+                    guid,
+                    mPayerPhone == null ? assumeNonNull(mPayerEmail) : mPayerPhone,
                     mPayerPhone == null ? null : mPayerEmail);
         } else {
-            updateIdentifierAndLabels(guid, mPayerName,
+            updateIdentifierAndLabels(
+                    guid,
+                    mPayerName,
                     mPayerPhone == null ? mPayerEmail : mPayerPhone,
                     mPayerPhone == null ? null : mPayerEmail);
         }

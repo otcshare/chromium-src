@@ -4,6 +4,8 @@
 
 #include "cc/paint/paint_shader.h"
 
+#include <limits>
+
 #include "cc/paint/draw_image.h"
 #include "cc/paint/image_provider.h"
 #include "cc/paint/paint_image_builder.h"
@@ -12,7 +14,18 @@
 #include "cc/test/skia_common.h"
 #include "cc/test/test_skcanvas.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
+#include "third_party/skia/include/core/SkMatrix.h"
+#include "third_party/skia/include/core/SkPixmap.h"
+#include "third_party/skia/include/core/SkRect.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkShader.h"
+#include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/core/SkTileMode.h"
 
 namespace cc {
 namespace {
@@ -23,13 +36,8 @@ class MockImageGenerator : public FakePaintImageGenerator {
       : FakePaintImageGenerator(
             SkImageInfo::MakeN32Premul(size.width(), size.height())) {}
 
-  MOCK_METHOD6(GetPixels,
-               bool(const SkImageInfo&,
-                    void*,
-                    size_t,
-                    size_t,
-                    PaintImage::GeneratorClientId,
-                    uint32_t));
+  MOCK_METHOD4(GetPixels,
+               bool(SkPixmap, size_t, PaintImage::GeneratorClientId, uint32_t));
 };
 
 class MockImageProvider : public ImageProvider {
@@ -45,7 +53,7 @@ class MockImageProvider : public ImageProvider {
     SkBitmap bitmap;
     bitmap.allocN32Pixels(10, 10);
     bitmap.eraseColor(SK_ColorBLACK);
-    sk_sp<SkImage> image = SkImage::MakeFromBitmap(bitmap);
+    sk_sp<SkImage> image = SkImages::RasterFromBitmap(bitmap);
     return ScopedResult(DecodedDrawImage(image, nullptr, SkSize::MakeEmpty(),
                                          SkSize::Make(1.0f, 1.0f),
                                          draw_image.filter_quality(), true));
@@ -114,13 +122,43 @@ TEST(PaintShaderTest, DecodePaintRecord) {
 
   // The rasterization of the shader is internal to skia, so use a raster canvas
   // to verify that the decoded paint does not have the encoded image.
-  auto surface = SkSurface::MakeRaster(SkImageInfo::MakeN32Premul(100, 100));
+  auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(100, 100));
   surface->getCanvas()->drawPaint(canvas.paint_);
 
   // Using the shader requests decode for images at the correct scale.
-  EXPECT_EQ(image_provider.draw_image().paint_image(), paint_image);
+  EXPECT_TRUE(
+      image_provider.draw_image().paint_image().IsSameForTesting(paint_image));
   EXPECT_EQ(image_provider.draw_image().scale().width(), 0.25f);
   EXPECT_EQ(image_provider.draw_image().scale().height(), 0.25f);
+}
+
+TEST(PaintShaderTest, GradientSingleStopValidTest) {
+  SkPoint points[] = {
+    SkPoint::Make(0, 0),
+    SkPoint::Make(100, 100)
+  };
+  SkColor4f colors[] = {
+      SkColor4f::FromColor(SK_ColorGREEN),
+  };
+  SkScalar positions[] = {0.0f};
+  auto shader = PaintShader::MakeLinearGradient(points, colors, positions, 1,
+                                                SkTileMode::kClamp);
+  EXPECT_TRUE(shader->IsValid());
+}
+
+TEST(PaintShaderTest, InfinityStopShouldBeValid) {
+  float infinity = std::numeric_limits<float>::infinity();
+
+  SkPoint points[] = {SkPoint::Make(-infinity, -infinity),
+                      SkPoint::Make(infinity, infinity)};
+  SkColor4f colors[] = {
+      SkColor4f::FromColor(SK_ColorGREEN),
+      SkColor4f::FromColor(SK_ColorYELLOW),
+  };
+  SkScalar positions[] = {0.0f, 1.0f};
+  auto shader = PaintShader::MakeLinearGradient(points, colors, positions, 2,
+                                                SkTileMode::kClamp);
+  EXPECT_TRUE(shader->GetSkShader(PaintFlags::FilterQuality::kNone));
 }
 
 }  // namespace cc

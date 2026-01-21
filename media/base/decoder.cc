@@ -20,7 +20,7 @@ bool Decoder::SupportsDecryption() const {
   return false;
 }
 
-std::string GetDecoderName(VideoDecoderType type) {
+const char* GetDecoderName(VideoDecoderType type) {
   switch (type) {
     case VideoDecoderType::kUnknown:
       return "Unknown Video Decoder";
@@ -52,10 +52,14 @@ std::string GetDecoderName(VideoDecoderType type) {
       return "V4L2VideoDecoder";
     case VideoDecoderType::kTesting:
       return "Testing or Mock Video decoder";
+    case VideoDecoderType::kOutOfProcess:
+      return "OOPVideoDecoder";
+    case VideoDecoderType::kVideoToolbox:
+      return "VideoToolboxVideoDecoder";
   }
 }
 
-std::string GetDecoderName(AudioDecoderType type) {
+const char* GetDecoderName(AudioDecoderType type) {
   switch (type) {
     case AudioDecoderType::kUnknown:
       return "Unknown Audio Decoder";
@@ -77,6 +81,8 @@ std::string GetDecoderName(AudioDecoderType type) {
       return "AudioToolboxAudioDecoder";
     case AudioDecoderType::kMediaFoundation:
       return "MediaFoundationAudioDecoder";
+    case AudioDecoderType::kSymphonia:
+      return "SymphoniaAudioDecoder";
   }
 }
 

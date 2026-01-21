@@ -4,32 +4,33 @@
 
 #include "chrome/browser/idle/idle_detection_permission_context.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/rand_util.h"
 #include "chrome/browser/visibility_timer_tab_helper.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_id.h"
 #include "content/public/browser/browser_context.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "url/gurl.h"
 
 IdleDetectionPermissionContext::IdleDetectionPermissionContext(
     content::BrowserContext* browser_context)
-    : PermissionContextBase(
+    : ContentSettingPermissionContextBase(
           browser_context,
           ContentSettingsType::IDLE_DETECTION,
-          blink::mojom::PermissionsPolicyFeature::kIdleDetection) {}
+          network::mojom::PermissionsPolicyFeature::kIdleDetection) {}
 
 IdleDetectionPermissionContext::~IdleDetectionPermissionContext() = default;
 
 void IdleDetectionPermissionContext::UpdateTabContext(
-    const permissions::PermissionRequestID& id,
-    const GURL& requesting_frame,
+    const permissions::PermissionRequestData& request_data,
     bool allowed) {
   content_settings::PageSpecificContentSettings* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
-          id.global_render_frame_host_id());
+          request_data.id.global_render_frame_host_id());
   if (!content_settings)
     return;
 
@@ -40,10 +41,7 @@ void IdleDetectionPermissionContext::UpdateTabContext(
 }
 
 void IdleDetectionPermissionContext::DecidePermission(
-    const permissions::PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
-    bool user_gesture,
+    std::unique_ptr<permissions::PermissionRequestData> request_data,
     permissions::BrowserPermissionCallback callback) {
   // Idle detection permission is always denied in incognito. To prevent sites
   // from using that to detect whether incognito mode is active, we deny after a
@@ -53,8 +51,8 @@ void IdleDetectionPermissionContext::DecidePermission(
   // PermissionMenuModel::PermissionMenuModel which prevents users from manually
   // allowing the permission.
   if (browser_context()->IsOffTheRecord()) {
-    content::RenderFrameHost* rfh =
-        content::RenderFrameHost::FromID(id.global_render_frame_host_id());
+    content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
+        request_data->id.global_render_frame_host_id());
 
     content::WebContents* web_contents =
         content::WebContents::FromRenderFrameHost(rfh);
@@ -65,16 +63,27 @@ void IdleDetectionPermissionContext::DecidePermission(
     VisibilityTimerTabHelper::FromWebContents(web_contents)
         ->PostTaskAfterVisibleDelay(
             FROM_HERE,
-            base::BindOnce(&IdleDetectionPermissionContext::NotifyPermissionSet,
-                           weak_factory_.GetWeakPtr(), id, requesting_origin,
-                           embedding_origin, std::move(callback),
-                           /*persist=*/true, CONTENT_SETTING_BLOCK,
-                           /*is_one_time=*/false, /*is_final_decision=*/true),
+            base::BindOnce(
+                [](base::WeakPtr<IdleDetectionPermissionContext> context,
+                   std::unique_ptr<permissions::PermissionRequestData>
+                       request_data,
+                   permissions::BrowserPermissionCallback callback) {
+                  if (context) {
+                    context->NotifyPermissionSet(
+                        *request_data, std::move(callback),
+                        /*persist=*/true,
+                        permissions::PermissionPromptDecision{
+                            .overall_decision = PermissionDecision::kDeny,
+                            .prompt_options = std::monostate(),
+                            .is_final = true});
+                  }
+                },
+                weak_factory_.GetWeakPtr(), std::move(request_data),
+                std::move(callback)),
             base::Seconds(delay_seconds));
     return;
   }
 
-  PermissionContextBase::DecidePermission(id, requesting_origin,
-                                          embedding_origin, user_gesture,
-                                          std::move(callback));
+  ContentSettingPermissionContextBase::DecidePermission(std::move(request_data),
+                                                        std::move(callback));
 }

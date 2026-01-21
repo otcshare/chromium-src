@@ -7,22 +7,21 @@ package org.chromium.ui.resources.dynamics;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 
-import androidx.annotation.Nullable;
-
 import org.chromium.base.Callback;
+import org.chromium.base.ObserverList;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.resources.Resource;
 import org.chromium.ui.resources.ResourceFactory;
 
-/**
- * A basic implementation of {@link DynamicResource} to handle updatable bitmaps.
- */
+/** A basic implementation of {@link DynamicResource} to handle updatable bitmaps. */
+@NullMarked
 public class BitmapDynamicResource implements DynamicResource {
     private final int mResId;
-    private Bitmap mBitmap;
+    private @Nullable Bitmap mBitmap;
     private final Rect mSize = new Rect();
 
-    @Nullable
-    private Callback<Resource> mOnResourceReady;
+    private final ObserverList<Callback<Resource>> mOnResourceReadyObservers = new ObserverList<>();
 
     public BitmapDynamicResource(int resourceId) {
         mResId = resourceId;
@@ -38,7 +37,7 @@ public class BitmapDynamicResource implements DynamicResource {
     /**
      * @param bitmap A bitmap to update this resource.
      */
-    public void setBitmap(Bitmap bitmap) {
+    public void setBitmap(@Nullable Bitmap bitmap) {
         // Not updating bitmap is still bad, but better than a crash. We will still crash if there
         // is no bitmap to start with. See http://crbug.com/471234 for more.
         if (bitmap == null) return;
@@ -48,16 +47,24 @@ public class BitmapDynamicResource implements DynamicResource {
 
     @Override
     public void onResourceRequested() {
-        if (mOnResourceReady != null && mBitmap != null) {
-            Resource resource = new DynamicResourceSnapshot(
-                    mBitmap, false, mSize, ResourceFactory.createBitmapResource(null));
-            mOnResourceReady.onResult(resource);
+        if (!mOnResourceReadyObservers.isEmpty() && mBitmap != null) {
+            Resource resource =
+                    new DynamicResourceSnapshot(
+                            mBitmap, mSize, ResourceFactory.createBitmapResource(null));
+            for (Callback<Resource> observer : mOnResourceReadyObservers) {
+                observer.onResult(resource);
+            }
             mBitmap = null;
         }
     }
 
     @Override
-    public void setOnResourceReadyCallback(Callback<Resource> onResourceReady) {
-        mOnResourceReady = onResourceReady;
+    public void addOnResourceReadyCallback(Callback<Resource> onResourceReady) {
+        mOnResourceReadyObservers.addObserver(onResourceReady);
+    }
+
+    @Override
+    public void removeOnResourceReadyCallback(Callback<Resource> onResourceReady) {
+        mOnResourceReadyObservers.removeObserver(onResourceReady);
     }
 }

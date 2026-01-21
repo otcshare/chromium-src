@@ -4,7 +4,9 @@
 
 #include "chromeos/ash/components/dbus/hermes/hermes_profile_client.h"
 
-#include "base/bind.h"
+#include "ash/constants/ash_features.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/dbus/hermes/constants.h"
 #include "chromeos/ash/components/dbus/hermes/fake_hermes_profile_client.h"
@@ -21,7 +23,7 @@ namespace dbus {
 // hermes::profile::State enum.
 template <>
 Property<hermes::profile::State>::Property()
-    : value_(hermes::profile::State::kInactive) {}
+    : value_(hermes::profile::State::kPending) {}
 
 template <>
 bool Property<hermes::profile::State>::PopValueFromReader(
@@ -39,7 +41,6 @@ bool Property<hermes::profile::State>::PopValueFromReader(
       return true;
   }
   NOTREACHED() << "Received invalid hermes profile state " << int_value;
-  return false;
 }
 
 template <>
@@ -70,7 +71,6 @@ bool Property<hermes::profile::ProfileClass>::PopValueFromReader(
       return true;
   }
   NOTREACHED() << "Received invalid hermes profile class " << int_value;
-  return false;
 }
 
 template <>
@@ -201,7 +201,7 @@ class HermesProfileClientImpl : public HermesProfileClient {
     std::move(callback).Run(HermesResponseStatus::kSuccess);
   }
 
-  dbus::Bus* bus_;
+  raw_ptr<dbus::Bus> bus_;
   ObjectMap object_map_;
   base::WeakPtrFactory<HermesProfileClientImpl> weak_ptr_factory_{this};
 };

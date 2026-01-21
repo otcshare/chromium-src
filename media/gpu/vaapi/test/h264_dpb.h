@@ -11,7 +11,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "media/gpu/vaapi/test/shared_va_surface.h"
-#include "media/video/h264_parser.h"
+#include "media/parsers/h264_parser.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace media::vaapi_test {
@@ -22,6 +22,8 @@ namespace media::vaapi_test {
 // compressed slice data buffers memory.
 class H264Picture : public base::RefCountedThreadSafe<H264Picture> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   using Vector = std::vector<scoped_refptr<H264Picture>>;
 
   enum Field {
@@ -77,7 +79,8 @@ class H264Picture : public base::RefCountedThreadSafe<H264Picture> {
   // memory management after finishing this picture.
   bool long_term_reference_flag = false;
   bool adaptive_ref_pic_marking_mode_flag = false;
-  H264DecRefPicMarking ref_pic_marking[H264SliceHeader::kRefListSize];
+  std::array<H264DecRefPicMarking, H264SliceHeader::kRefListSize>
+      ref_pic_marking;
 
   // Position in DPB (i.e. index in DPB).
   int dpb_position = 0;
@@ -135,6 +138,9 @@ class H264DPB {
 
   // Return a long-term reference picture by its long_term_pic_num.
   scoped_refptr<H264Picture> GetLongRefPicByLongTermPicNum(int pic_num);
+
+  // Return a long-term reference picture by its long term reference index.
+  scoped_refptr<H264Picture> GetLongRefPicByLongTermIdx(int idx);
 
   // Return the short reference picture with lowest frame_num. Used for sliding
   // window memory management.

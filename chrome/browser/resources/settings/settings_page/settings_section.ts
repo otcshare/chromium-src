@@ -7,15 +7,14 @@
  * 'settings-section' shows a paper material themed section with a header
  * which shows its page title.
  *
- * The section can expand vertically to fill its container's padding edge.
- *
  * Example:
  *
- *    <settings-section page-title="[[pageTitle]]" section="privacy">
+ *    <settings-section page-title="[[pageTitle]]">
  *      <!-- Insert your section controls here -->
  *    </settings-section>
  */
 
+import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
 
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -34,13 +33,6 @@ export class SettingsSectionElement extends PolymerElement {
   static get properties() {
     return {
       /**
-       * The section name should match a name specified in route.js. The
-       * MainPageBeMixin will expand this section if this section name matches
-       * currentRoute.section.
-       */
-      section: String,
-
-      /**
        * Title for the section header. Initialize so we can use the
        * getTitleHiddenStatus_ method for accessibility.
        */
@@ -50,20 +42,18 @@ export class SettingsSectionElement extends PolymerElement {
       },
 
       /**
-       * A CSS attribute used for temporarily hiding a SETTINGS-SECTION for the
-       * purposes of searching.
+       * When this attribute is enabled, a send feedback button will be shown
+       * that emits a 'send-feedback' event.
        */
-      hiddenBySearch: {
+      showSendFeedbackButton: {
         type: Boolean,
         value: false,
-        reflectToAttribute: true,
       },
     };
   }
 
-  section: string;
-  pageTitle: string;
-  hiddenBySearch: boolean;
+  declare pageTitle: string;
+  declare showSendFeedbackButton: boolean;
 
   /**
    * Get the value to which to set the aria-hidden attribute of the section
@@ -78,6 +68,11 @@ export class SettingsSectionElement extends PolymerElement {
 
   override focus() {
     this.shadowRoot!.querySelector<HTMLElement>('.title')!.focus();
+  }
+
+  private onSendFeedbackClick_() {
+    this.dispatchEvent(
+        new CustomEvent('send-feedback', {bubbles: true, composed: true}));
   }
 }
 

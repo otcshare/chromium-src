@@ -4,8 +4,11 @@
 
 #include "components/speech/downstream_loader.h"
 
-#include "base/callback.h"
+#include <string_view>
+
+#include "base/functional/callback.h"
 #include "components/speech/downstream_loader_client.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace speech {
@@ -24,7 +27,7 @@ DownstreamLoader::DownstreamLoader(
 
 DownstreamLoader::~DownstreamLoader() = default;
 
-void DownstreamLoader::OnDataReceived(base::StringPiece string_piece,
+void DownstreamLoader::OnDataReceived(std::string_view string_piece,
                                       base::OnceClosure resume) {
   downstream_loader_client_->OnDownstreamDataReceived(string_piece);
   std::move(resume).Run();

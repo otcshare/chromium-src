@@ -4,10 +4,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/installed_payment_apps_finder.h"
@@ -104,12 +103,12 @@ class PaymentAppBrowserTest : public ContentBrowserTest {
   }
 
   std::string RunScript(const std::string& script) {
-    return EvalJs(shell()->web_contents(), script,
-                  EXECUTE_SCRIPT_USE_MANUAL_REPLY)
-        .ExtractString();
+    return EvalJs(shell()->web_contents(), script).ExtractString();
   }
 
-  std::string PopConsoleString() { return RunScript("resultQueue.pop()"); }
+  std::string PopConsoleString() {
+    return RunScript("resultQueue.pop().then(result => String(result))");
+  }
 
   void RegisterPaymentApp() {
     SkBitmap app_icon;
@@ -320,17 +319,10 @@ IN_PROC_BROWSER_TEST_F(PaymentAppBrowserTest, CanMakePayment) {
       registrationIds[0], GetTestServerOrigin(), "id", "basic-card");
   ASSERT_TRUE(can_make_payment);
 
-  EXPECT_EQ("https://example.test/", PopConsoleString() /* topOrigin */);
-  EXPECT_EQ("https://example.test/",
-            PopConsoleString() /* paymentRequestOrigin */);
-  EXPECT_EQ("[{\"supportedMethods\":\"basic-card\"}]",
-            PopConsoleString() /* methodData */);
-  EXPECT_EQ(
-      "[{\"additionalDisplayItems\":[],\"supportedMethods\":\"basic-card\","
-      "\"total\":{\"amount\":{\"currency\":\"USD\","
-      "\"value\":\"55\"},\"label\":\"\",\"pending\":false}}"
-      "]",
-      PopConsoleString() /* modifiers */);
+  EXPECT_EQ("undefined", PopConsoleString() /* topOrigin */);
+  EXPECT_EQ("undefined", PopConsoleString() /* paymentRequestOrigin */);
+  EXPECT_EQ("undefined", PopConsoleString() /* methodData */);
+  EXPECT_EQ("undefined", PopConsoleString() /* modifiers */);
 
   ClearStoragePartitionData();
 }

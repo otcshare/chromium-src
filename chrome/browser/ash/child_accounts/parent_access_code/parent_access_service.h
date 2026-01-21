@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_PARENT_ACCESS_CODE_PARENT_ACCESS_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,6 @@
 #include "base/observer_list_types.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/config_source.h"
 #include "components/account_id/account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 
@@ -38,7 +38,7 @@ class ParentAccessService {
     // specifically to the account identified by the parameter.
     virtual void OnAccessCodeValidation(
         ParentCodeValidationResult result,
-        absl::optional<AccountId> account_id) = 0;
+        std::optional<AccountId> account_id) = 0;
   };
 
   // Registers preferences.
@@ -47,8 +47,11 @@ class ParentAccessService {
   // Gets the service singleton.
   static ParentAccessService& Get();
 
+  // `local_state` must be non-null, and must outlive `this`.
+  explicit ParentAccessService(PrefService* local_state);
   ParentAccessService(const ParentAccessService&) = delete;
   ParentAccessService& operator=(const ParentAccessService&) = delete;
+  ~ParentAccessService();
 
   // Checks if the provided |action| requires parental approval to be performed.
   // Requires owner_account_id to be available in the UserManager, so if calling
@@ -65,18 +68,15 @@ class ParentAccessService {
       const std::string& access_code,
       base::Time validation_time);
 
-  // Reloads config for the provided user.
-  void LoadConfigForUser(const user_manager::User* user);
+  // Updates and reloads config for the provided user. If `config` is null, the
+  // config will be removed.
+  void UpdateConfigForUser(const AccountId& account_id,
+                           std::optional<base::Value::Dict> config);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
  private:
-  friend class base::NoDestructor<ParentAccessService>;
-
-  ParentAccessService();
-  ~ParentAccessService();
-
   void NotifyObservers(ParentCodeValidationResult validation_result,
                        const AccountId& account_id);
 

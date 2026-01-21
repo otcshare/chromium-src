@@ -5,6 +5,7 @@
 #include "components/speech/audio_buffer.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 
 AudioChunk::AudioChunk(int bytes_per_sample)
     : bytes_per_sample_(bytes_per_sample) {}
@@ -20,6 +21,15 @@ AudioChunk::AudioChunk(const uint8_t* data, size_t length, int bytes_per_sample)
   DCHECK_EQ(length % bytes_per_sample, 0U);
 }
 
+AudioChunk::AudioChunk(base::span<const uint8_t> data_span,
+                       int bytes_per_sample)
+    : data_string_(data_span.begin(), data_span.end()),
+      bytes_per_sample_(bytes_per_sample) {
+  DCHECK_EQ(data_span.size() % bytes_per_sample, 0U);
+}
+
+AudioChunk::~AudioChunk() = default;
+
 bool AudioChunk::IsEmpty() const {
   return data_string_.empty();
 }
@@ -33,12 +43,19 @@ const std::string& AudioChunk::AsString() const {
 }
 
 int16_t AudioChunk::GetSample16(size_t index) const {
+  DCHECK_EQ(static_cast<size_t>(bytes_per_sample_), sizeof(int16_t));
   DCHECK(index < (data_string_.size() / sizeof(int16_t)));
-  return SamplesData16()[index];
+  return SamplesData16AsSpan()[index];
 }
 
-const int16_t* AudioChunk::SamplesData16() const {
-  return reinterpret_cast<const int16_t*>(data_string_.data());
+base::span<const int16_t> AudioChunk::SamplesData16AsSpan() const {
+  // SAFETY: SamplesData16 returns a pointer to data_ data.
+  // The only concern would be if the length is not multiple of sizeof(int16_t),
+  // which we CHECK below.
+  CHECK_EQ(data_string_.size() % sizeof(int16_t), 0u);
+  return UNSAFE_BUFFERS(base::span<const int16_t>(
+      reinterpret_cast<const int16_t*>(data_string_.data()),
+      data_string_.size() / sizeof(int16_t)));
 }
 
 AudioBuffer::AudioBuffer(int bytes_per_sample)
@@ -74,8 +91,9 @@ scoped_refptr<AudioChunk> AudioBuffer::DequeueAll() {
       new AudioChunk(resulting_length, bytes_per_sample_));
   uint8_t* dest = chunk->writable_data();
   for (it = chunks_.begin(); it != chunks_.end(); ++it) {
-    memcpy(dest, (*it)->AsString().data(), (*it)->AsString().length());
-    dest += (*it)->AsString().length();
+    UNSAFE_TODO(
+        memcpy(dest, (*it)->AsString().data(), (*it)->AsString().length()));
+    UNSAFE_TODO(dest += (*it)->AsString().length());
   }
   Clear();
   return chunk;

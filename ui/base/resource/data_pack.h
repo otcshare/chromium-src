@@ -14,15 +14,22 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/component_export.h"
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
-#include "build/chromeos_buildflags.h"
-#include "ui/base/resource/data_pack_export.h"
+#include "base/types/expected.h"
+#include "build/build_config.h"
 #include "ui/base/resource/resource_handle.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#endif
 
 namespace base {
 class FilePath;
@@ -32,7 +39,7 @@ class RefCountedStaticMemory;
 namespace ui {
 enum ResourceScaleFactor : int;
 
-class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
+class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
  public:
   explicit DataPack(ResourceScaleFactor resource_scale_factor);
 
@@ -41,7 +48,14 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
 
   ~DataPack() override;
 
-#pragma pack(push, 2)
+// Pack Entry and Alias. This removes padding between fields, and alignment
+// requirements, which makes the structs usable for aliasing into the input
+// buffer directly.
+//
+// TODO(davidben): Ideally we would load these structures through memcpy, or
+// a little-endian variant of base/big_endian.h, rather than type-punning
+// pointers. This code currently depends on Chromium disabling strict aliasing.
+#pragma pack(push, 1)
   struct Entry {
     static int CompareById(const void* void_key, const void* void_entry);
 
@@ -61,15 +75,15 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
   };
 #pragma pack(pop)
 
-  // Pair of resource id and string piece data.
+  // Pair of resource id and string view data.
   struct ResourceData {
-    explicit ResourceData(uint16_t id, base::StringPiece data)
+    explicit ResourceData(uint16_t id, std::string_view data)
         : id(id), data(data) {}
 
     // Resource ID.
     uint16_t id;
     // Resource data.
-    base::StringPiece data;
+    std::string_view data;
   };
 
   // Iterator for ResourceData in `resource_table_`.
@@ -83,15 +97,12 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
 
     const ResourceData& operator*() { return *resource_data_; }
     Iterator& operator++() {
-      ++entry_;
+      UNSAFE_TODO(++entry_);  // Should be UNSAFE_BUFFER_USAGE, too.
       UpdateResourceData();
       return *this;
     }
     bool operator==(const Iterator& other) const {
       return entry_ == other.entry_;
-    }
-    bool operator!=(const Iterator& other) const {
-      return entry_ != other.entry_;
     }
 
    private:
@@ -103,9 +114,9 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
 
     void UpdateResourceData();
 
-    const uint8_t* data_source_;
+    raw_ptr<const uint8_t> data_source_;
     raw_ptr<ResourceData> resource_data_;
-    raw_ptr<const Entry> entry_;
+    raw_ptr<const Entry, AllowPtrArithmetic> entry_;
   };
 
   Iterator begin() const;
@@ -126,15 +137,40 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
   // memory, with the mapping owned by |data_source_|.
   bool LoadFromPath(const base::FilePath& path);
 
-  // The static part of the implementation in LoadFromPath().
-  static std::unique_ptr<DataSource> LoadFromPathInternal(
+  enum class FailureReason {
+    kOpenFile,
+    kMapFile,
+    kUnzip,
+    kIncompleteHeader,
+    kBadPakVersion,
+    kBadEncodingType,
+    kTooShort,
+    kBoundsExceeded,
+    kOrderingViolation,
+    kAliasTableCorrupt,
+  };
+
+  struct ErrorState {
+    FailureReason reason;
+#if BUILDFLAG(IS_WIN)
+    DWORD error;
+#else
+    int error;
+#endif
+    base::File::Error file_error;
+
+    friend bool operator==(const ErrorState& lhs,
+                           const ErrorState& rhs) = default;
+  };
+
+  // As LoadFromPath, but returns an ErrorState on failure.
+  base::expected<void, DataPack::ErrorState> LoadFromPathWithError(
       const base::FilePath& path);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Load a pack file for shared resource from |path|, returning false on error.
-  // Similar to LoadFromPath(), but the file format is different.
-  bool LoadSharedResourceFromPath(const base::FilePath& path);
-#endif
+  // The static part of the implementation in LoadFromPath().
+  static base::expected<std::unique_ptr<DataPack::DataSource>,
+                        DataPack::ErrorState>
+  LoadFromPathInternal(const base::FilePath& path);
 
   // Invokes LoadFromFileRegion with the entire contents of |file|. Compressed
   // files are not supported.
@@ -155,13 +191,13 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
   // |textEncodingType| specified. If no text resources are present, please
   // indicate BINARY.
   static bool WritePack(const base::FilePath& path,
-                        const std::map<uint16_t, base::StringPiece>& resources,
+                        const std::map<uint16_t, std::string_view>& resources,
                         TextEncodingType textEncodingType);
 
   // ResourceHandle implementation:
   bool HasResource(uint16_t resource_id) const override;
-  bool GetStringPiece(uint16_t resource_id,
-                      base::StringPiece* data) const override;
+  std::optional<std::string_view> GetStringView(
+      uint16_t resource_id) const override;
   base::RefCountedStaticMemory* GetStaticMemory(
       uint16_t resource_id) const override;
   TextEncodingType GetTextEncodingType() const override;
@@ -175,10 +211,10 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
 
   // Return Entry or Alias by index of resource or alias table.
   const Entry* GetEntryByResourceTableIndex(size_t index) const {
-    return &resource_table_[index];
+    return UNSAFE_TODO(&resource_table_[index]);
   }
   const Alias* GetAliasByAliasTableIndex(size_t index) const {
-    return &alias_table_[index];
+    return UNSAFE_TODO(&alias_table_[index]);
   }
   // Return the size of the alias table.
   size_t GetAliasTableSize() const { return alias_count_; }
@@ -195,7 +231,8 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
 
   // Does the actual loading of a pack file.
   // Called by Load and LoadFromFile and LoadFromBuffer.
-  bool LoadImpl(std::unique_ptr<DataSource> data_source);
+  base::expected<void, DataPack::FailureReason> LoadImpl(
+      std::unique_ptr<DataSource> data_source);
   const Entry* LookupEntryById(uint16_t resource_id) const;
 
   // Sanity check the file. If it passed the check, register `resource_table_`
@@ -203,23 +240,23 @@ class UI_DATA_PACK_EXPORT DataPack : public ResourceHandle {
   // `margin_to_skip` represents the size of the margin in bytes before
   // resource_table information starts.
   // If there is no extra data in data pack, `margin_to_skip` is equal to the
-  // length of file header.
-  bool SanityCheckFileAndRegisterResources(size_t margin_to_skip,
-                                           const uint8_t* data,
-                                           size_t data_length);
+  // length of file header. Returns std::nullopt on success or a FailureReason
+  // on failure.
+  base::expected<void, DataPack::FailureReason>
+  SanityCheckFileAndRegisterResources(size_t margin_to_skip,
+                                      const uint8_t* data,
+                                      size_t data_length);
 
-  // Get string data from file offset in bytes.
-  // Returns string between `target_offset` and `next_offset` in data pack.
-  static void GetStringPieceFromOffset(uint32_t target_offset,
-                                       uint32_t next_offset,
-                                       const uint8_t* data_source,
-                                       base::StringPiece* data);
+  // Returns the string between `target_offset` and `next_offset` in data pack.
+  static std::string_view GetStringViewFromOffset(uint32_t target_offset,
+                                                  uint32_t next_offset,
+                                                  const uint8_t* data_source);
 
   std::unique_ptr<DataSource> data_source_;
 
-  raw_ptr<const Entry> resource_table_;
+  raw_ptr<const Entry, AllowPtrArithmetic> resource_table_;
   size_t resource_count_;
-  raw_ptr<const Alias> alias_table_;
+  raw_ptr<const Alias, AllowPtrArithmetic> alias_table_;
   size_t alias_count_;
 
   // Type of encoding for text resources.

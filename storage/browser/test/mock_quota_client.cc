@@ -4,15 +4,16 @@
 
 #include "storage/browser/test/mock_quota_client.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/singleton.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/services/storage/public/cpp/buckets/bucket_locator.h"
@@ -30,10 +31,8 @@ MockQuotaClient::MockQuotaClient(
     : quota_manager_proxy_(std::move(quota_manager_proxy)),
       client_type_(client_type) {
   for (auto& mock_storage_key_data : mock_data) {
-    unmigrated_storage_key_data_[{blink::StorageKey::CreateFromStringForTesting(
-                                      mock_storage_key_data.origin),
-                                  mock_storage_key_data.type}] =
-        mock_storage_key_data.usage;
+    unmigrated_storage_key_data_[blink::StorageKey::CreateFromStringForTesting(
+        mock_storage_key_data.origin)] = mock_storage_key_data.usage;
   }
 }
 
@@ -47,7 +46,7 @@ void MockQuotaClient::AddBucketsData(
 void MockQuotaClient::ModifyBucketAndNotify(const BucketLocator& bucket,
                                             int64_t delta) {
   auto it = bucket_data_.find(bucket);
-  DCHECK(it != bucket_data_.end());
+  CHECK(it != bucket_data_.end());
   it->second += delta;
   DCHECK_GE(it->second, 0);
   quota_manager_proxy_->NotifyBucketModified(
@@ -61,24 +60,24 @@ void MockQuotaClient::AddBucketToErrorSet(const BucketLocator& bucket) {
 
 base::Time MockQuotaClient::IncrementMockTime() {
   ++mock_time_counter_;
-  return base::Time::FromDoubleT(mock_time_counter_ * 10.0);
+  return base::Time::FromSecondsSinceUnixEpoch(mock_time_counter_ * 10.0);
 }
 
 void MockQuotaClient::GetBucketUsage(const BucketLocator& bucket,
                                      GetBucketUsageCallback callback) {
+  ++get_bucket_usage_call_count_;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&MockQuotaClient::RunGetBucketUsage,
                      weak_factory_.GetWeakPtr(), bucket, std::move(callback)));
 }
 
-void MockQuotaClient::GetStorageKeysForType(
-    blink::mojom::StorageType type,
-    GetStorageKeysForTypeCallback callback) {
+void MockQuotaClient::GetDefaultStorageKeys(
+    GetDefaultStorageKeysCallback callback) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
-      base::BindOnce(&MockQuotaClient::RunGetStorageKeysForType,
-                     weak_factory_.GetWeakPtr(), type, std::move(callback)));
+      base::BindOnce(&MockQuotaClient::RunGetDefaultStorageKeys,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MockQuotaClient::DeleteBucketData(const BucketLocator& bucket,
@@ -90,7 +89,6 @@ void MockQuotaClient::DeleteBucketData(const BucketLocator& bucket,
 }
 
 void MockQuotaClient::PerformStorageCleanup(
-    blink::mojom::StorageType type,
     PerformStorageCleanupCallback callback) {
   std::move(callback).Run();
 }
@@ -105,13 +103,11 @@ void MockQuotaClient::RunGetBucketUsage(const BucketLocator& bucket,
   }
 }
 
-void MockQuotaClient::RunGetStorageKeysForType(
-    blink::mojom::StorageType type,
-    GetStorageKeysForTypeCallback callback) {
+void MockQuotaClient::RunGetDefaultStorageKeys(
+    GetDefaultStorageKeysCallback callback) {
   std::vector<blink::StorageKey> storage_keys;
-  for (const auto& storage_key_type_usage : unmigrated_storage_key_data_) {
-    if (type == storage_key_type_usage.first.second)
-      storage_keys.push_back(storage_key_type_usage.first.first);
+  for (const auto& storage_key_usage : unmigrated_storage_key_data_) {
+    storage_keys.push_back(storage_key_usage.first);
   }
   std::move(callback).Run(std::move(storage_keys));
 }

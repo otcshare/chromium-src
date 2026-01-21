@@ -7,8 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/guid.h"
+#include "base/compiler_specific.h"
+#include "base/uuid.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/device/public/cpp/hid/hid_blocklist.h"
@@ -68,11 +68,12 @@ void FakeHidConnection::Read(ReadCallback callback) {
   uint8_t report_id = device_->has_report_id ? 1 : 0;
 
   if (!allow_fido_reports_ && IsFidoReport(report_id, *device_)) {
-    std::move(callback).Run(false, 0, absl::nullopt);
+    std::move(callback).Run(false, 0, std::nullopt);
     return;
   }
 
-  std::vector<uint8_t> buffer(kResult, kResult + sizeof(kResult) - 1);
+  std::vector<uint8_t> buffer(kResult,
+                              UNSAFE_TODO(kResult + sizeof(kResult) - 1));
 
   std::move(callback).Run(true, report_id, buffer);
 }
@@ -97,7 +98,8 @@ void FakeHidConnection::Write(uint8_t report_id,
     return;
   }
 
-  if (memcmp(buffer.data(), kExpected, sizeof(kExpected) - 1) != 0) {
+  if (UNSAFE_TODO(memcmp(buffer.data(), kExpected, sizeof(kExpected) - 1)) !=
+      0) {
     std::move(callback).Run(false);
     return;
   }
@@ -108,13 +110,13 @@ void FakeHidConnection::Write(uint8_t report_id,
 void FakeHidConnection::GetFeatureReport(uint8_t report_id,
                                          GetFeatureReportCallback callback) {
   if (!allow_fido_reports_ && IsFidoReport(report_id, *device_)) {
-    std::move(callback).Run(false, absl::nullopt);
+    std::move(callback).Run(false, std::nullopt);
     return;
   }
 
   uint8_t expected_report_id = device_->has_report_id ? 1 : 0;
   if (report_id != expected_report_id) {
-    std::move(callback).Run(false, absl::nullopt);
+    std::move(callback).Run(false, std::nullopt);
     return;
   }
 
@@ -122,7 +124,8 @@ void FakeHidConnection::GetFeatureReport(uint8_t report_id,
   std::vector<uint8_t> buffer;
   if (device_->has_report_id)
     buffer.push_back(report_id);
-  buffer.insert(buffer.end(), kResult, kResult + sizeof(kResult) - 1);
+  buffer.insert(buffer.end(), kResult,
+                UNSAFE_TODO(kResult + sizeof(kResult) - 1));
 
   std::move(callback).Run(true, buffer);
 }
@@ -147,7 +150,8 @@ void FakeHidConnection::SendFeatureReport(uint8_t report_id,
     return;
   }
 
-  if (memcmp(buffer.data(), kExpected, sizeof(kExpected) - 1) != 0) {
+  if (UNSAFE_TODO(memcmp(buffer.data(), kExpected, sizeof(kExpected) - 1)) !=
+      0) {
     std::move(callback).Run(false);
     return;
   }
@@ -195,7 +199,7 @@ void FakeHidManager::Connect(
     bool allow_protected_reports,
     bool allow_fido_reports,
     ConnectCallback callback) {
-  if (!base::Contains(devices_, device_guid)) {
+  if (!devices_.contains(device_guid)) {
     std::move(callback).Run(mojo::NullRemote());
     return;
   }
@@ -237,7 +241,7 @@ mojom::HidDeviceInfoPtr FakeHidManager::CreateAndAddDeviceWithTopLevelUsage(
   collection->input_reports.push_back(mojom::HidReportDescription::New());
 
   auto device = mojom::HidDeviceInfo::New();
-  device->guid = base::GenerateGUID();
+  device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   device->physical_device_id = physical_device_id;
   device->vendor_id = vendor_id;
   device->product_id = product_id;
@@ -265,7 +269,7 @@ mojom::HidDeviceInfoPtr FakeHidManager::CreateAndAddDeviceWithTopLevelUsage(
 
 void FakeHidManager::AddDevice(mojom::HidDeviceInfoPtr device) {
   std::string guid = device->guid;
-  DCHECK(!base::Contains(devices_, guid));
+  DCHECK(!devices_.contains(guid));
   devices_[guid] = std::move(device);
 
   const mojom::HidDeviceInfoPtr& device_info = devices_[guid];
@@ -274,7 +278,7 @@ void FakeHidManager::AddDevice(mojom::HidDeviceInfoPtr device) {
 }
 
 void FakeHidManager::RemoveDevice(const std::string& guid) {
-  if (base::Contains(devices_, guid)) {
+  if (devices_.contains(guid)) {
     const mojom::HidDeviceInfoPtr& device_info = devices_[guid];
     for (auto& client : clients_)
       client->DeviceRemoved(device_info->Clone());
@@ -283,7 +287,7 @@ void FakeHidManager::RemoveDevice(const std::string& guid) {
 }
 
 void FakeHidManager::ChangeDevice(mojom::HidDeviceInfoPtr device) {
-  DCHECK(base::Contains(devices_, device->guid));
+  DCHECK(devices_.contains(device->guid));
   mojom::HidDeviceInfoPtr& device_info = devices_[device->guid];
   device_info = std::move(device);
   for (auto& client : clients_)

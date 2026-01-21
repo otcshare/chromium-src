@@ -3,10 +3,10 @@
 File::File()
 {
   hFile=FILE_BAD_HANDLE;
-  *FileName=0;
   NewFile=false;
   LastWrite=false;
   HandleType=FILE_HANDLENORMAL;
+  LineInput=false;
   SkipClose=false;
   ErrorType=FILE_SUCCESS;
   OpenShared=false;
@@ -14,14 +14,14 @@ File::File()
   AllowExceptions=true;
   PreserveAtime=false;
 #ifdef _WIN_ALL
-  NoSequentialRead=false;
-  CreateMode=FMF_UNDEFINED;
+  // CreateMode=FMF_UNDEFINED;
 #endif
   ReadErrorMode=FREM_ASK;
   TruncatedAfterReadError=false;
+  CurFilePos=0;
 
 #ifdef CHROMIUM_UNRAR
-  hOpenFile=FILE_BAD_HANDLE;
+  reader_delegate_ = nullptr;
 #endif
 }
 
@@ -43,12 +43,12 @@ void File::operator = (File &SrcFile)
   LastWrite=SrcFile.LastWrite;
   HandleType=SrcFile.HandleType;
   TruncatedAfterReadError=SrcFile.TruncatedAfterReadError;
-  wcsncpyz(FileName,SrcFile.FileName,ASIZE(FileName));
+  FileName=SrcFile.FileName;
   SrcFile.SkipClose=true;
 }
 
 
-bool File::Open(const wchar *Name,uint Mode)
+bool File::Open(const std::wstring &Name,uint Mode)
 {
   ErrorType=FILE_SUCCESS;
   FileHandle hNewFile;
@@ -58,8 +58,8 @@ bool File::Open(const wchar *Name,uint Mode)
 #ifdef _WIN_ALL
 #if defined(CHROMIUM_UNRAR)
   // Do not open a file handle since the sandbox doesn't allow it. Use the
-  // handle provided by the caller.
-  hNewFile = hOpenFile;
+  // delegate provided by the caller.
+  return reader_delegate_;
 #else
   uint Access=WriteMode ? GENERIC_WRITE:GENERIC_READ;
   if (UpdateMode)
@@ -67,21 +67,21 @@ bool File::Open(const wchar *Name,uint Mode)
   uint ShareMode=(Mode & FMF_OPENEXCLUSIVE) ? 0 : FILE_SHARE_READ;
   if (OpenShared)
     ShareMode|=FILE_SHARE_WRITE;
-  uint Flags=NoSequentialRead ? 0:FILE_FLAG_SEQUENTIAL_SCAN;
+  uint Flags=FILE_FLAG_SEQUENTIAL_SCAN;
   FindData FD;
   if (PreserveAtime)
     Access|=FILE_WRITE_ATTRIBUTES; // Needed to preserve atime.
-  hNewFile=CreateFile(Name,Access,ShareMode,NULL,OPEN_EXISTING,Flags,NULL);
+  hNewFile=CreateFile(Name.c_str(),Access,ShareMode,NULL,OPEN_EXISTING,Flags,NULL);
 
   DWORD LastError;
   if (hNewFile==FILE_BAD_HANDLE)
   {
     LastError=GetLastError();
 
-    wchar LongName[NM];
-    if (GetWinLongPath(Name,LongName,ASIZE(LongName)))
+    std::wstring LongName;
+    if (GetWinLongPath(Name,LongName))
     {
-      hNewFile=CreateFile(LongName,Access,ShareMode,NULL,OPEN_EXISTING,Flags,NULL);
+      hNewFile=CreateFile(LongName.c_str(),Access,ShareMode,NULL,OPEN_EXISTING,Flags,NULL);
 
       // For archive names longer than 260 characters first CreateFile
       // (without \\?\) fails and sets LastError to 3 (access denied).
@@ -112,10 +112,16 @@ bool File::Open(const wchar *Name,uint Mode)
 
 #if defined(CHROMIUM_UNRAR)
   // Do not open a file handle since the sandbox doesn't allow it. Use the
-  // handle provided by the caller.
-  int handle = hOpenFile;
+  // delegate provided by the caller.
+  return reader_delegate_;
 #else
   int flags=UpdateMode ? O_RDWR:(WriteMode ? O_WRONLY:O_RDONLY);
+
+  // 2025.06.09: We can't just set O_DIRECT for Unix like we set
+  // FILE_FLAG_SEQUENTIAL_SCAN for Windows to minimize disk caching.
+  // O_DIRECT might impose alignment requirements for data size, data address
+  // and file offset. Also it might not be supported by some file systems
+  // and fail with an error.
 #ifdef O_BINARY
   flags|=O_BINARY;
 #if defined(_AIX) && defined(_LARGE_FILE_API)
@@ -127,11 +133,10 @@ bool File::Open(const wchar *Name,uint Mode)
   if (PreserveAtime)
     flags|=O_NOATIME;
 #endif
-  char NameA[NM];
-  WideToChar(Name,NameA,ASIZE(NameA));
+  std::string NameA;
+  WideToChar(Name,NameA);
 
-  int handle=open(NameA,flags);
-#endif  // defined(CHROMIUM_UNRAR)
+  int handle=open(NameA.c_str(),flags);
 
 #ifdef LOCK_EX
 
@@ -165,15 +170,16 @@ bool File::Open(const wchar *Name,uint Mode)
   if (Success)
   {
     hFile=hNewFile;
-    wcsncpyz(FileName,Name,ASIZE(FileName));
+    FileName=Name;
     TruncatedAfterReadError=false;
   }
   return Success;
+#endif  // defined(CHROMIUM_UNRAR)
 }
 
 
 #if !defined(SFX_MODULE)
-void File::TOpen(const wchar *Name)
+void File::TOpen(const std::wstring &Name)
 {
   if (!WOpen(Name))
     ErrHandler.Exit(RARX_OPEN);
@@ -181,7 +187,7 @@ void File::TOpen(const wchar *Name)
 #endif
 
 
-bool File::WOpen(const wchar *Name)
+bool File::WOpen(const std::wstring &Name)
 {
   if (Open(Name))
     return true;
@@ -190,13 +196,13 @@ bool File::WOpen(const wchar *Name)
 }
 
 
-bool File::Create(const wchar *Name,uint Mode)
+bool File::Create(const std::wstring &Name,uint Mode)
 {
 #if defined(CHROMIUM_UNRAR)
-  // Since the Chromium sandbox does not allow the creation of files, use the
-  // provided file.
-  hFile = hOpenFile;
+  // Since the Chromium sandbox does not allow the creation of files.
+  return true;
 #else
+  // 2025.09.03: Likely outdated info, see https://www.illumos.org/issues/2000
   // OpenIndiana based NAS and CIFS shares fail to set the file time if file
   // was created in read+write mode and some data was written and not flushed
   // before SetFileTime call. So we should use the write only mode if we plan
@@ -204,47 +210,47 @@ bool File::Create(const wchar *Name,uint Mode)
   bool WriteMode=(Mode & FMF_WRITE)!=0;
   bool ShareRead=(Mode & FMF_SHAREREAD)!=0 || File::OpenShared;
 #ifdef _WIN_ALL
-  CreateMode=Mode;
+  // CreateMode=Mode;
   uint Access=WriteMode ? GENERIC_WRITE:GENERIC_READ|GENERIC_WRITE;
   DWORD ShareMode=ShareRead ? FILE_SHARE_READ:0;
 
   // Windows automatically removes dots and spaces in the end of file name,
   // So we detect such names and process them with \\?\ prefix.
-  wchar *LastChar=PointToLastChar(Name);
-  bool Special=*LastChar=='.' || *LastChar==' ';
+  wchar LastChar=GetLastChar(Name);
+  bool Special=LastChar=='.' || LastChar==' ';
   
   if (Special && (Mode & FMF_STANDARDNAMES)==0)
     hFile=FILE_BAD_HANDLE;
   else
-    hFile=CreateFile(Name,Access,ShareMode,NULL,CREATE_ALWAYS,0,NULL);
+    hFile=CreateFile(Name.c_str(),Access,ShareMode,NULL,CREATE_ALWAYS,0,NULL);
 
   if (hFile==FILE_BAD_HANDLE)
   {
-    wchar LongName[NM];
-    if (GetWinLongPath(Name,LongName,ASIZE(LongName)))
-      hFile=CreateFile(LongName,Access,ShareMode,NULL,CREATE_ALWAYS,0,NULL);
+    std::wstring LongName;
+    if (GetWinLongPath(Name,LongName))
+      hFile=CreateFile(LongName.c_str(),Access,ShareMode,NULL,CREATE_ALWAYS,0,NULL);
   }
 
 #else
-  char NameA[NM];
-  WideToChar(Name,NameA,ASIZE(NameA));
 #ifdef FILE_USE_OPEN
-  hFile=open(NameA,(O_CREAT|O_TRUNC) | (WriteMode ? O_WRONLY : O_RDWR),0666);
+  std::string NameA;
+  WideToChar(Name,NameA);
+  hFile=open(NameA.c_str(),(O_CREAT|O_TRUNC) | (WriteMode ? O_WRONLY : O_RDWR),0666);
 #else
-  hFile=fopen(NameA,WriteMode ? WRITEBINARY:CREATEBINARY);
+  hFile=fopen(NameA.c_str(),WriteMode ? WRITEBINARY:CREATEBINARY);
 #endif
 #endif
 #endif  // defined(CHROMIUM_UNRAR)
   NewFile=true;
   HandleType=FILE_HANDLENORMAL;
   SkipClose=false;
-  wcsncpyz(FileName,Name,ASIZE(FileName));
+  FileName=Name;
   return hFile!=FILE_BAD_HANDLE;
 }
 
 
 #if !defined(SFX_MODULE)
-void File::TCreate(const wchar *Name,uint Mode)
+void File::TCreate(const std::wstring &Name,uint Mode)
 {
   if (!WCreate(Name,Mode))
     ErrHandler.Exit(RARX_FATAL);
@@ -252,7 +258,7 @@ void File::TCreate(const wchar *Name,uint Mode)
 #endif
 
 
-bool File::WCreate(const wchar *Name,uint Mode)
+bool File::WCreate(const std::wstring &Name,uint Mode)
 {
   if (Create(Name,Mode))
     return true;
@@ -263,19 +269,20 @@ bool File::WCreate(const wchar *Name,uint Mode)
 
 bool File::Close()
 {
+#if defined(CHROMIUM_UNRAR)
+  return reader_delegate_;
+#endif
   bool Success=true;
 
   if (hFile!=FILE_BAD_HANDLE)
   {
     if (!SkipClose)
     {
-#if !defined(CHROMIUM_UNRAR)
-// unrar should not close the file handle since it wasn't opened by unrar.
 #ifdef _WIN_ALL
       // We use the standard system handle for stdout in Windows
       // and it must not be closed here.
       if (HandleType==FILE_HANDLENORMAL)
-        Success=CloseHandle(hFile)==TRUE;
+        Success=CloseHandle(hFile)!=FALSE;
 #else
 #ifdef FILE_USE_OPEN
       Success=close(hFile)!=-1;
@@ -283,7 +290,6 @@ bool File::Close()
       Success=fclose(hFile)!=EOF;
 #endif
 #endif
-#endif  // defined(CHROMIUM_UNRAR)
     }
     hFile=FILE_BAD_HANDLE;
   }
@@ -306,16 +312,16 @@ bool File::Delete()
 }
 
 
-bool File::Rename(const wchar *NewName)
+bool File::Rename(const std::wstring &NewName)
 {
   // No need to rename if names are already same.
-  bool Success=wcscmp(FileName,NewName)==0;
+  bool Success=(NewName==FileName);
 
   if (!Success)
     Success=RenameFile(FileName,NewName);
 
   if (Success)
-    wcsncpyz(FileName,NewName,ASIZE(FileName));
+    FileName=NewName;
 
   return Success;
 }
@@ -353,13 +359,13 @@ bool File::Write(const void *Data,size_t Size)
       const size_t MaxSize=0x4000;
       for (size_t I=0;I<Size;I+=MaxSize)
       {
-        Success=WriteFile(hFile,(byte *)Data+I,(DWORD)Min(Size-I,MaxSize),&Written,NULL)==TRUE;
+        Success=WriteFile(hFile,(byte *)Data+I,(DWORD)Min(Size-I,MaxSize),&Written,NULL)!=FALSE;
         if (!Success)
           break;
       }
     }
     else
-      Success=WriteFile(hFile,Data,(DWORD)Size,&Written,NULL)==TRUE;
+      Success=WriteFile(hFile,Data,(DWORD)Size,&Written,NULL)!=FALSE;
 #else
 #ifdef FILE_USE_OPEN
     ssize_t Written=write(hFile,Data,Size);
@@ -388,7 +394,7 @@ bool File::Write(const void *Data,size_t Size)
           Seek(Tell()-Written,SEEK_SET);
         continue;
       }
-      ErrHandler.WriteError(NULL,FileName);
+      ErrHandler.WriteError(L"",FileName);
     }
     break;
   }
@@ -406,10 +412,11 @@ int File::Read(void *Data,size_t Size)
 
   if (ReadErrorMode==FREM_IGNORE)
     FilePos=Tell();
-  int ReadSize;
+  int TotalRead=0;
   while (true)
   {
-    ReadSize=DirectRead(Data,Size);
+    int ReadSize=DirectRead(Data,Size);
+
     if (ReadSize==-1)
     {
       ErrorType=FILE_READERROR;
@@ -423,12 +430,14 @@ int File::Read(void *Data,size_t Size)
             size_t SizeToRead=Min(Size-I,512);
             int ReadCode=DirectRead(Data,SizeToRead);
             ReadSize+=(ReadCode==-1) ? 512:ReadCode;
+            if (ReadSize!=-1)
+              TotalRead+=ReadSize;
           }
         }
         else
         {
           bool Ignore=false,Retry=false,Quit=false;
-          if (ReadErrorMode==FREM_ASK && HandleType==FILE_HANDLENORMAL)
+          if (ReadErrorMode==FREM_ASK && HandleType==FILE_HANDLENORMAL && IsOpened())
           {
             ErrHandler.AskRepeatRead(FileName,Ignore,Retry,Quit);
             if (Retry)
@@ -442,15 +451,41 @@ int File::Read(void *Data,size_t Size)
           ErrHandler.ReadError(FileName);
         }
     }
+    TotalRead+=ReadSize; // If ReadSize is -1, TotalRead is also set to -1 here.
+
+    if (HandleType==FILE_HANDLESTD && !LineInput && ReadSize>0 && (uint)ReadSize<Size)
+    {
+      // Unlike regular files, for pipe we can read only as much as was
+      // written at the other end of pipe. We had seen data coming in small
+      // ~80 byte chunks when piping from 'type arc.rar'. Extraction code
+      // would fail if we read an incomplete archive header from stdin.
+      // So here we ensure that requested size is completely read.
+      // But we return the available data immediately in "line input" mode,
+      // when processing user's input in console prompts. Otherwise apps
+      // piping user responses to multiple Ask() prompts can hang if no more
+      // data is available yet and pipe isn't closed.
+      Data=(byte*)Data+ReadSize;
+      Size-=ReadSize;
+      continue;
+    }
     break;
   }
-  return ReadSize; // It can return -1 only if AllowExceptions is disabled.
+  if (TotalRead>0) // Can be -1 for error and AllowExceptions disabled.
+    CurFilePos+=TotalRead;
+  return TotalRead; // It can return -1 only if AllowExceptions is disabled.
 }
 
 
 // Returns -1 in case of error.
 int File::DirectRead(void *Data,size_t Size)
 {
+#if defined(CHROMIUM_UNRAR)
+  if (reader_delegate_) {
+    int64_t ret = reader_delegate_->Read(
+        base::span<uint8_t>((uint8_t*)Data, Size));
+    return (ret < 0) ? -1 : (int)ret;
+  }
+#endif
 #ifdef _WIN_ALL
   const size_t MaxDeviceRead=20000;
   const size_t MaxLockedRead=32768;
@@ -524,8 +559,53 @@ void File::Seek(int64 Offset,int Method)
 
 bool File::RawSeek(int64 Offset,int Method)
 {
+#if defined(CHROMIUM_UNRAR)
+  if (reader_delegate_) {
+    int64_t absolute_offset = Offset;
+    if (Method == SEEK_CUR) {
+      int64_t current = reader_delegate_->Tell();
+      if (current == -1) return false;
+      absolute_offset += current;
+    } else if (Method == SEEK_END) {
+      int64_t len = reader_delegate_->GetLength();
+      if (len == -1) return false;
+      absolute_offset += len;
+    }
+    return reader_delegate_->Seek(absolute_offset);
+  }
+#endif
   if (hFile==FILE_BAD_HANDLE)
     return true;
+  if (!IsSeekable()) // To extract archives from stdin with -si.
+  {
+    // We tried to dynamically allocate 32 KB buffer here, but it improved
+    // speed in Windows 10 by mere ~1.5%.
+    byte Buf[4096];
+    if (Method==SEEK_CUR || Method==SEEK_SET && Offset>=CurFilePos)
+    {
+      uint64 SkipSize=Method==SEEK_CUR ? Offset:Offset-CurFilePos;
+      while (SkipSize>0) // Reading to emulate seek forward.
+      {
+        int ReadSize=Read(Buf,(size_t)Min(SkipSize,ASIZE(Buf)));
+        if (ReadSize<=0)
+          return false;
+        SkipSize-=ReadSize;
+        CurFilePos+=ReadSize;
+      }
+      return true;
+    }
+    // May need it in FileLength() in Archive::UnexpEndArcMsg() when unpacking
+    // RAR 4.x archives without the end of archive block created with -en.
+    if (Method==SEEK_END)
+    {
+      int ReadSize;
+      while ((ReadSize=Read(Buf,ASIZE(Buf)))>0)
+        CurFilePos+=ReadSize;
+      return true;
+    }
+
+    return false; // Backward seek on unseekable file.
+  }
   if (Offset<0 && Method!=SEEK_SET)
   {
     Offset=(Method==SEEK_CUR ? Tell():FileLength())+Offset;
@@ -555,11 +635,16 @@ bool File::RawSeek(int64 Offset,int Method)
 
 int64 File::Tell()
 {
+#if defined(CHROMIUM_UNRAR)
+  if (reader_delegate_) return reader_delegate_->Tell();
+#endif
   if (hFile==FILE_BAD_HANDLE)
     if (AllowExceptions)
       ErrHandler.SeekError(FileName);
     else
       return -1;
+  if (!IsSeekable())
+    return CurFilePos;
 #ifdef _WIN_ALL
   LONG HighDist=0;
   uint LowDist=SetFilePointer(hFile,0,&HighDist,FILE_CURRENT);
@@ -618,7 +703,7 @@ void File::PutByte(byte Byte)
 bool File::Truncate()
 {
 #ifdef _WIN_ALL
-  return SetEndOfFile(hFile)==TRUE;
+  return SetEndOfFile(hFile)!=FALSE;
 #else
   return ftruncate(GetFD(),(off_t)Tell())==0;
 #endif
@@ -644,8 +729,10 @@ void File::SetOpenFileTime(RarTime *ftm,RarTime *ftc,RarTime *fta)
   // Workaround for OpenIndiana NAS time bug. If we cannot create a file
   // in write only mode, we need to flush the write buffer before calling
   // SetFileTime or file time will not be changed.
-  if (CreateMode!=FMF_UNDEFINED && (CreateMode & FMF_WRITE)==0)
-    FlushFileBuffers(hFile);
+  // 2025.09.03: Removed this code as likely redundant now,
+  // see https://www.illumos.org/issues/2000
+  // if (CreateMode!=FMF_UNDEFINED && (CreateMode & FMF_WRITE)==0)
+  //  FlushFileBuffers(hFile);
 
   bool sm=ftm!=NULL && ftm->IsSet();
   bool sc=ftc!=NULL && ftc->IsSet();
@@ -676,15 +763,15 @@ void File::SetCloseFileTime(RarTime *ftm,RarTime *fta)
 }
 
 
-void File::SetCloseFileTimeByName(const wchar *Name,RarTime *ftm,RarTime *fta)
+void File::SetCloseFileTimeByName(const std::wstring &Name,RarTime *ftm,RarTime *fta)
 {
 #ifdef _UNIX
   bool setm=ftm!=NULL && ftm->IsSet();
   bool seta=fta!=NULL && fta->IsSet();
   if (setm || seta)
   {
-    char NameA[NM];
-    WideToChar(Name,NameA,ASIZE(NameA));
+    std::string NameA;
+    WideToChar(Name,NameA);
 
 #ifdef UNIX_TIME_NS
     timespec times[2];
@@ -692,7 +779,7 @@ void File::SetCloseFileTimeByName(const wchar *Name,RarTime *ftm,RarTime *fta)
     times[0].tv_nsec=seta ? long(fta->GetUnixNS()%1000000000) : UTIME_NOW;
     times[1].tv_sec=setm ? ftm->GetUnix() : 0;
     times[1].tv_nsec=setm ? long(ftm->GetUnixNS()%1000000000) : UTIME_NOW;
-    utimensat(AT_FDCWD,NameA,times,0);
+    utimensat(AT_FDCWD,NameA.c_str(),times,0);
 #else
     utimbuf ut;
     if (setm)
@@ -703,30 +790,56 @@ void File::SetCloseFileTimeByName(const wchar *Name,RarTime *ftm,RarTime *fta)
       ut.actime=fta->GetUnix();
     else
       ut.actime=ut.modtime; // Need to set something, cannot left it 0.
-    utime(NameA,&ut);
+    utime(NameA.c_str(),&ut);
 #endif
   }
 #endif
 }
 
 
-void File::GetOpenFileTime(RarTime *ft)
+#ifdef _UNIX
+void File::StatToRarTime(struct stat &st,RarTime *ftm,RarTime *ftc,RarTime *fta)
+{
+#ifdef UNIX_TIME_NS
+#if defined(_APPLE)
+  if (ftm!=NULL) ftm->SetUnixNS(st.st_mtimespec.tv_sec*(uint64)1000000000+st.st_mtimespec.tv_nsec);
+  if (ftc!=NULL) ftc->SetUnixNS(st.st_ctimespec.tv_sec*(uint64)1000000000+st.st_ctimespec.tv_nsec);
+  if (fta!=NULL) fta->SetUnixNS(st.st_atimespec.tv_sec*(uint64)1000000000+st.st_atimespec.tv_nsec);
+#else
+  if (ftm!=NULL) ftm->SetUnixNS(st.st_mtim.tv_sec*(uint64)1000000000+st.st_mtim.tv_nsec);
+  if (ftc!=NULL) ftc->SetUnixNS(st.st_ctim.tv_sec*(uint64)1000000000+st.st_ctim.tv_nsec);
+  if (fta!=NULL) fta->SetUnixNS(st.st_atim.tv_sec*(uint64)1000000000+st.st_atim.tv_nsec);
+#endif
+#else
+  if (ftm!=NULL) ftm->SetUnix(st.st_mtime);
+  if (ftc!=NULL) ftc->SetUnix(st.st_ctime);
+  if (fta!=NULL) fta->SetUnix(st.st_atime);
+#endif
+}
+#endif
+
+
+void File::GetOpenFileTime(RarTime *ftm,RarTime *ftc,RarTime *fta)
 {
 #ifdef _WIN_ALL
-  FILETIME FileTime;
-  GetFileTime(hFile,NULL,NULL,&FileTime);
-  ft->SetWinFT(&FileTime);
-#endif
-#if defined(_UNIX) || defined(_EMX)
+  FILETIME ctime,atime,mtime;
+  GetFileTime(hFile,&ctime,&atime,&mtime);
+  if (ftm!=NULL) ftm->SetWinFT(&mtime);
+  if (ftc!=NULL) ftc->SetWinFT(&ctime);
+  if (fta!=NULL) fta->SetWinFT(&atime);
+#elif defined(_UNIX)
   struct stat st;
   fstat(GetFD(),&st);
-  ft->SetUnix(st.st_mtime);
+  StatToRarTime(st,ftm,ftc,fta);
 #endif
 }
 
 
 int64 File::FileLength()
 {
+#if defined(CHROMIUM_UNRAR)
+  if (reader_delegate_) return reader_delegate_->GetLength();
+#endif
   int64 SavePos=Tell();
   Seek(0,SEEK_END);
   int64 Length=Tell();
@@ -737,6 +850,9 @@ int64 File::FileLength()
 
 bool File::IsDevice()
 {
+#if defined(CHROMIUM_UNRAR)
+  return false;
+#else
   if (hFile==FILE_BAD_HANDLE)
     return false;
 #ifdef _WIN_ALL
@@ -745,21 +861,30 @@ bool File::IsDevice()
 #else
   return isatty(GetFD());
 #endif
+#endif  // defined(CHROMIUM_UNRAR)
 }
 
 
 #ifndef SFX_MODULE
 int64 File::Copy(File &Dest,int64 Length)
 {
-  Array<byte> Buffer(File::CopyBufferSize());
-  int64 CopySize=0;
   bool CopyAll=(Length==INT64NDF);
+
+  // Adjust the buffer size to data size. So we do not waste too much time
+  // to vector initialization when copying many small data blocks like
+  // when updating an archive with many small files.
+  size_t BufSize=File::CopyBufferSize();
+  if (!CopyAll && Length<(int64)BufSize)
+    BufSize=(size_t)Length;
+
+  std::vector<byte> Buffer(BufSize);
+  int64 CopySize=0;
 
   while (CopyAll || Length>0)
   {
     Wait();
-    size_t SizeToRead=(!CopyAll && Length<(int64)Buffer.Size()) ? (size_t)Length:Buffer.Size();
-    byte *Buf=&Buffer[0];
+    size_t SizeToRead=(!CopyAll && Length<(int64)Buffer.size()) ? (size_t)Length:Buffer.size();
+    byte *Buf=Buffer.data();
     int ReadSize=Read(Buf,SizeToRead);
     if (ReadSize==0)
       break;
@@ -788,7 +913,7 @@ int64 File::Copy(File &Dest,int64 Length)
 #endif
 
 #if defined(CHROMIUM_UNRAR)
-void File::SetFileHandle(FileHandle hF) {
-  hOpenFile = hF;
+void File::SetReaderDelegate(third_party_unrar::RarReaderDelegate* delegate) {
+  reader_delegate_ = delegate;
 }
 #endif  // defined(CHROMIUM_UNRAR)

@@ -11,8 +11,9 @@
 #include <type_traits>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/pickle.h"
-#include "ipc/ipc_param_traits.h"
+#include "ipc/param_traits.h"
 #include "mojo/public/cpp/bindings/lib/serialization_forward.h"
 #include "mojo/public/cpp/bindings/native_enum.h"
 
@@ -35,8 +36,9 @@ struct NativeEnumSerializerImpl {
 
     CHECK_GE(sizeof(int32_t), pickle.payload_size());
     *output = 0;
-    memcpy(reinterpret_cast<char*>(output), pickle.payload(),
-           pickle.payload_size());
+    UNSAFE_TODO(memcpy(reinterpret_cast<char*>(output),
+                       pickle.payload_bytes().data(),
+                       pickle.payload_bytes().size()));
   }
 
   struct PickleData {
@@ -47,8 +49,8 @@ struct NativeEnumSerializerImpl {
 
   static bool Deserialize(int32_t input, UserType* output) {
     PickleData data = {sizeof(int32_t), input};
-    base::Pickle pickle_view(reinterpret_cast<const char*>(&data),
-                             sizeof(PickleData));
+    base::Pickle pickle_view =
+        base::Pickle::WithUnownedBuffer(base::byte_span_from_ref(data));
     base::PickleIterator iter(pickle_view);
     return Traits::Read(&pickle_view, &iter, output);
   }

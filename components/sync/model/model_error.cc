@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 #include "components/sync/model/model_error.h"
-#include "components/sync/model/sync_error.h"
+
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace syncer {
 
-ModelError::ModelError(const base::Location& location,
-                       const std::string& message)
-    : location_(location), message_(message) {}
+ModelError::ModelError(const base::Location& location, Type model_error_type)
+    : location_(location), type_(model_error_type) {}
 
 ModelError::~ModelError() = default;
 
@@ -17,21 +17,13 @@ const base::Location& ModelError::location() const {
   return location_;
 }
 
-const std::string& ModelError::message() const {
-  return message_;
+ModelError::Type ModelError::type() const {
+  return type_;
 }
 
 std::string ModelError::ToString() const {
-  return location_.ToString() + std::string(": ") + message_;
-}
-
-// TODO(https://crbug.com/1057577): Remove this once ProcessSyncChanges in
-// SyncableService has been refactored.
-absl::optional<ModelError> ConvertToModelError(const SyncError& sync_error) {
-  if (sync_error.IsSet()) {
-    return ModelError(sync_error.location(), sync_error.message());
-  }
-  return absl::nullopt;
+  return absl::StrFormat("%s - Model error type: %d", location_.ToString(),
+                         static_cast<int>(type_));
 }
 
 }  // namespace syncer

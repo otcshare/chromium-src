@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/input_method/autocorrect_enums.h"
 #include "chrome/browser/ash/input_method/input_method_options_observer.h"
@@ -45,14 +46,14 @@ class PrefChangeRecorder {
   // options page.
   InputMethodOptionsObserver input_method_options_observer_;
 
-  // This container holds all of the autocorrrect preferences (for both PK and
+  // This container holds all of the autocorrect preferences (for both PK and
   // VK) previously captured by this class. It is used to detect what has
   // changed when a user updates their autocorrect preferences in the settings
   // page.
   AutocorrectPrefs autocorrect_prefs_;
 
   // PrefService* must outlive the lifetime of this instance.
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
 
   base::WeakPtrFactory<PrefChangeRecorder> weak_ptr_factory_{this};
 };

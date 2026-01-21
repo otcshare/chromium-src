@@ -5,9 +5,10 @@
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/strings/strcat.h"
-#include "components/optimization_guide/core/hints_processing_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
 
 namespace {
@@ -15,7 +16,7 @@ namespace {
 // TODO(rajendrant): Verify if all debug messages before browser startup are
 // getting saved without being dropped, when some hints fetching and model
 // downloading happens.
-constexpr size_t kMaxRecentLogMessages = 100;
+constexpr size_t kMaxRecentLogMessages = 700;
 
 }  // namespace
 
@@ -39,7 +40,7 @@ OptimizationGuideLogger::LogMessageBuilder::~LogMessageBuilder() {
   std::string message = base::StrCat(messages_);
   optimization_guide_logger_->OnLogMessageAdded(
       base::Time::Now(), log_source_, source_file_, source_line_, message);
-  DVLOG(0) << source_file_ << "(" << source_line_ << ") " << message;
+  DVLOG(1) << source_file_ << "(" << source_line_ << ") " << message;
 }
 
 OptimizationGuideLogger::LogMessageBuilder&
@@ -71,30 +72,6 @@ OptimizationGuideLogger::LogMessageBuilder::operator<<(
 
 OptimizationGuideLogger::LogMessageBuilder&
 OptimizationGuideLogger::LogMessageBuilder::operator<<(
-    optimization_guide::proto::OptimizationType optimization_type) {
-  messages_.push_back(
-      optimization_guide::GetStringNameForOptimizationType(optimization_type));
-  return *this;
-}
-
-OptimizationGuideLogger::LogMessageBuilder&
-OptimizationGuideLogger::LogMessageBuilder::operator<<(
-    optimization_guide::OptimizationTypeDecision optimization_type_decision) {
-  messages_.push_back(
-      base::NumberToString(static_cast<int>(optimization_type_decision)));
-  return *this;
-}
-
-OptimizationGuideLogger::LogMessageBuilder&
-OptimizationGuideLogger::LogMessageBuilder::operator<<(
-    optimization_guide::OptimizationGuideDecision optimization_guide_decision) {
-  messages_.push_back(
-      GetStringForOptimizationGuideDecision(optimization_guide_decision));
-  return *this;
-}
-
-OptimizationGuideLogger::LogMessageBuilder&
-OptimizationGuideLogger::LogMessageBuilder::operator<<(
     optimization_guide::proto::OptimizationTarget optimization_target) {
   messages_.push_back(
       optimization_guide::proto::OptimizationTarget_Name(optimization_target));
@@ -113,9 +90,18 @@ OptimizationGuideLogger::LogMessage::LogMessage(
       source_line(source_line),
       message(message) {}
 
-OptimizationGuideLogger::OptimizationGuideLogger() {
-  if (optimization_guide::switches::IsDebugLogsEnabled())
+// static
+OptimizationGuideLogger* OptimizationGuideLogger::GetInstance() {
+  static base::NoDestructor<OptimizationGuideLogger> instance;
+  return instance.get();
+}
+
+OptimizationGuideLogger::OptimizationGuideLogger()
+    : command_line_flag_enabled_(
+          optimization_guide::switches::IsDebugLogsEnabled()) {
+  if (command_line_flag_enabled_) {
     recent_log_messages_.reserve(kMaxRecentLogMessages);
+  }
 }
 
 OptimizationGuideLogger::~OptimizationGuideLogger() = default;
@@ -123,7 +109,7 @@ OptimizationGuideLogger::~OptimizationGuideLogger() = default;
 void OptimizationGuideLogger::AddObserver(
     OptimizationGuideLogger::Observer* observer) {
   observers_.AddObserver(observer);
-  if (optimization_guide::switches::IsDebugLogsEnabled()) {
+  if (command_line_flag_enabled_) {
     for (const auto& message : recent_log_messages_) {
       for (Observer& obs : observers_) {
         obs.OnLogMessageAdded(message.event_time, message.log_source,
@@ -145,18 +131,19 @@ void OptimizationGuideLogger::OnLogMessageAdded(
     const std::string& source_file,
     int source_line,
     const std::string& message) {
-  if (optimization_guide::switches::IsDebugLogsEnabled()) {
+  if (command_line_flag_enabled_) {
     recent_log_messages_.emplace_back(event_time, log_source, source_file,
                                       source_line, message);
-    if (recent_log_messages_.size() > kMaxRecentLogMessages)
+    if (recent_log_messages_.size() > kMaxRecentLogMessages) {
       recent_log_messages_.pop_front();
+    }
   }
-  for (Observer& obs : observers_)
+  for (Observer& obs : observers_) {
     obs.OnLogMessageAdded(event_time, log_source, source_file, source_line,
                           message);
+  }
 }
 
 bool OptimizationGuideLogger::ShouldEnableDebugLogs() const {
-  return !observers_.empty() ||
-         optimization_guide::switches::IsDebugLogsEnabled();
+  return !observers_.empty() || command_line_flag_enabled_;
 }

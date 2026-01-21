@@ -4,12 +4,11 @@
 
 #include "chrome/browser/ash/arc/sharesheet/arc_sharesheet_bridge.h"
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/browser_thread.h"
 
 // Enable VLOG level 1.
@@ -66,6 +65,11 @@ ArcSharesheetBridge::ArcSharesheetBridge(content::BrowserContext* context,
 ArcSharesheetBridge::~ArcSharesheetBridge() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   arc_bridge_service_->sharesheet()->SetHost(nullptr);
+}
+
+// static
+void ArcSharesheetBridge::EnsureFactoryBuilt() {
+  ArcSharesheetBridgeFactory::GetInstance();
 }
 
 }  // namespace arc

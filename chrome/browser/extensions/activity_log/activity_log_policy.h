@@ -7,15 +7,14 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/activity_log/activity_actions.h"
@@ -23,7 +22,10 @@
 #include "chrome/browser/extensions/activity_log/activity_log_task_runner.h"
 #include "chrome/common/extensions/api/activity_log_private.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class GURL;
@@ -102,7 +104,7 @@ class ActivityLogPolicy {
 
     // Serialize a Value as a JSON string.  Returns an empty string if value is
     // null.
-    static std::string Serialize(absl::optional<base::ValueView> value);
+    static std::string Serialize(std::optional<base::ValueView> value);
 
     // Removes potentially privacy-sensitive data that should not be logged.
     // This should generally be called on an Action before logging, unless

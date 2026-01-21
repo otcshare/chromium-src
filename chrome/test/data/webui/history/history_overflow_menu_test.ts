@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {ActionMenuModel, BrowserServiceImpl, CrActionMenuElement, ensureLazyLoaded, HistoryListElement} from 'chrome://history/history.js';
+import type {ActionMenuModel, CrActionMenuElement, HistoryListElement} from 'chrome://history/history.js';
+import {BrowserServiceImpl} from 'chrome://history/history.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {eventToPromise} from 'chrome://webui-test/test_util.js';
+import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestBrowserService} from './test_browser_service.js';
 import {createHistoryEntry} from './test_util.js';
@@ -16,26 +17,20 @@ suite('#overflow-menu', function() {
   let target1: HTMLElement;
   let target2: HTMLElement;
 
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     const testService = new TestBrowserService();
     BrowserServiceImpl.setInstance(testService);
 
     const app = document.createElement('history-app');
     document.body.appendChild(app);
-    return Promise
-        .all([
-          testService.whenCalled('queryHistory'),
-          ensureLazyLoaded(),
-        ])
-        .then(function() {
-          listContainer = app.$.history;
-          target1 = document.createElement('div');
-          target2 = document.createElement('div');
-          document.body.appendChild(target1);
-          document.body.appendChild(target2);
-          sharedMenu = listContainer.$.sharedMenu.get();
-        });
+    await testService.handler.whenCalled('queryHistory');
+    listContainer = app.$.history;
+    target1 = document.createElement('div');
+    target2 = document.createElement('div');
+    document.body.appendChild(target1);
+    document.body.appendChild(target2);
+    sharedMenu = listContainer.$.sharedMenu.get();
   });
 
   test('opening and closing menu', async function() {
@@ -46,6 +41,7 @@ suite('#overflow-menu', function() {
     };
     listContainer.dispatchEvent(new CustomEvent(
         'open-menu', {bubbles: true, composed: true, detail: detail1}));
+    await microtasksFinished();
     assertTrue(sharedMenu.open);
 
     const moreButton = sharedMenu.querySelector<HTMLElement>('#menuMoreButton');
@@ -69,6 +65,7 @@ suite('#overflow-menu', function() {
     };
     listContainer.dispatchEvent(new CustomEvent(
         'open-menu', {bubbles: true, composed: true, detail: detail2}));
+    await microtasksFinished();
     assertTrue(sharedMenu.open);
 
     // Ensure that the menu corresponds to the newly clicked item.

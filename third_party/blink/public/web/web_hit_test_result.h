@@ -26,9 +26,9 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_HIT_TEST_RESULT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_HIT_TEST_RESULT_H_
 
+#include "cc/paint/element_id.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
-#include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
 
@@ -54,6 +54,13 @@ class BLINK_EXPORT WebHitTestResult {
   // The node that was hit (only one for point-based tests).
   WebNode GetNode() const;
 
+  // The node or pseudo-node that was hit (only one for point-based tests).
+  WebNode GetNodeOrPseudoNode() const;
+
+  // The element containing the node that was hit (only one for point-based
+  // tests).
+  WebElement GetElement() const;
+
   // If a link (eg. anchor or area tag) is hit, return the element.
   // Return null otheriwse.
   WebElement UrlElement() const;
@@ -69,7 +76,7 @@ class BLINK_EXPORT WebHitTestResult {
 
   // Return the ElementId of the first scrollable containing block ancestor
   // of the target, including the target itself if it is scrollable
-  uint64_t GetScrollableContainerId() const;
+  cc::ElementId GetScrollableContainerId() const;
 
 #if INSIDE_BLINK
   WebHitTestResult(const HitTestResult&);
@@ -77,7 +84,7 @@ class BLINK_EXPORT WebHitTestResult {
 #endif
 
  protected:
-  WebPrivatePtr<WebHitTestResultPrivate> private_;
+  WebPrivatePtrForGC<WebHitTestResultPrivate> private_;
 };
 
 }  // namespace blink

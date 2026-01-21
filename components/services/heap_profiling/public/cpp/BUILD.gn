@@ -33,14 +33,6 @@ static_library("cpp") {
       "merge_samples.h",
     ]
   }
-
-  if (!is_ios) {
-    sources += [
-      "heap_profiling_trace_source.cc",
-      "heap_profiling_trace_source.h",
-    ]
-    deps += [ "//services/tracing/public/cpp:cpp" ]
-  }
 }
 
 source_set("unit_tests") {
@@ -56,15 +48,5 @@ source_set("unit_tests") {
 
   if (!is_ios || use_allocator_shim) {
     sources += [ "merge_samples_unittests.cc" ]
-  }
-
-  if (!is_ios) {
-    sources += [ "heap_profiling_trace_source_unittest.cc" ]
-    deps += [
-      "//services/tracing:test_utils",
-      "//services/tracing/public/cpp:cpp",
-      "//third_party/perfetto/protos/perfetto/trace:lite",
-      "//third_party/perfetto/protos/perfetto/trace/profiling:lite",
-    ]
   }
 }

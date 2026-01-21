@@ -4,9 +4,12 @@
 
 #include "ui/base/text/bytes_formatting.h"
 
-#include <ostream>
+#include <array>
 
+#include "base/byte_size.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/i18n/number_formatting.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -19,99 +22,90 @@ namespace ui {
 namespace {
 
 // Byte suffix string constants. These both must match the DataUnits enum.
-const int kByteStrings[] = {
-  IDS_APP_BYTES,
-  IDS_APP_KIBIBYTES,
-  IDS_APP_MEBIBYTES,
-  IDS_APP_GIBIBYTES,
-  IDS_APP_TEBIBYTES,
-  IDS_APP_PEBIBYTES
-};
+constexpr int kByteStrings[] = {IDS_APP_BYTES,     IDS_APP_KIBIBYTES,
+                                IDS_APP_MEBIBYTES, IDS_APP_GIBIBYTES,
+                                IDS_APP_TEBIBYTES, IDS_APP_PEBIBYTES};
 
-const int kSpeedStrings[] = {
-  IDS_APP_BYTES_PER_SECOND,
-  IDS_APP_KIBIBYTES_PER_SECOND,
-  IDS_APP_MEBIBYTES_PER_SECOND,
-  IDS_APP_GIBIBYTES_PER_SECOND,
-  IDS_APP_TEBIBYTES_PER_SECOND,
-  IDS_APP_PEBIBYTES_PER_SECOND
-};
+constexpr int kSpeedStrings[] = {
+    IDS_APP_BYTES_PER_SECOND,     IDS_APP_KIBIBYTES_PER_SECOND,
+    IDS_APP_MEBIBYTES_PER_SECOND, IDS_APP_GIBIBYTES_PER_SECOND,
+    IDS_APP_TEBIBYTES_PER_SECOND, IDS_APP_PEBIBYTES_PER_SECOND};
 
-std::u16string FormatBytesInternal(int64_t bytes,
+std::u16string FormatBytesInternal(base::ByteSize bytes,
                                    DataUnits units,
                                    bool show_units,
-                                   const int* const suffix) {
-  DCHECK(units >= DATA_UNITS_BYTE && units <= DATA_UNITS_PEBIBYTE);
-  if (bytes < 0) {
-    NOTREACHED() << "Negative bytes value";
-    return std::u16string();
-  }
+                                   const base::span<const int> suffix) {
+  DCHECK(units >= DataUnits::kByte && units <= DataUnits::kPebibyte);
 
   // Put the quantity in the right units.
-  double unit_amount = static_cast<double>(bytes);
-  for (int i = 0; i < units; ++i)
+  double unit_amount = bytes.InBytesF();
+  for (int i = 0; i < static_cast<int>(units); ++i) {
     unit_amount /= 1024.0;
+  }
 
   int fractional_digits = 0;
-  if (bytes != 0 && units != DATA_UNITS_BYTE && unit_amount < 100)
+  if (!bytes.is_zero() && units != DataUnits::kByte && unit_amount < 100) {
     fractional_digits = 1;
+  }
 
   std::u16string result = base::FormatDouble(unit_amount, fractional_digits);
 
-  if (show_units)
-    result = l10n_util::GetStringFUTF16(suffix[units], result);
+  if (show_units) {
+    result = l10n_util::GetStringFUTF16(
+        suffix[static_cast<unsigned int>(units)], result);
+  }
 
   return result;
 }
 
 }  // namespace
 
-DataUnits GetByteDisplayUnits(int64_t bytes) {
+DataUnits GetByteDisplayUnits(base::ByteSize bytes) {
   // The byte thresholds at which we display amounts. A byte count is displayed
   // in unit U when kUnitThresholds[U] <= bytes < kUnitThresholds[U+1].
   // This must match the DataUnits enum.
-  static const int64_t kUnitThresholds[] = {
-      0,                // DATA_UNITS_BYTE,
-      3 * (1LL << 10),  // DATA_UNITS_KIBIBYTE,
-      2 * (1LL << 20),  // DATA_UNITS_MEBIBYTE,
-      1LL << 30,        // DATA_UNITS_GIBIBYTE,
-      1LL << 40,        // DATA_UNITS_TEBIBYTE,
-      1LL << 50         // DATA_UNITS_PEBIBYTE,
-  };
+  static constexpr auto kUnitThresholds = std::to_array<base::ByteSize>({
+      base::ByteSize(0),  // DataUnits::kByte,
+      base::KiBU(3),      // DataUnits::kKibibyte,
+      base::MiBU(2),      // DataUnits::kMebibyte,
+      base::GiBU(1),      // DataUnits::kGibibyte,
+      base::TiBU(1),      // DataUnits::kTebibyte,
+      base::PiBU(1)       // DataUnits::kPebibyte,
+  });
+  static constexpr auto kUnitThresholdsSpan = base::span(kUnitThresholds);
 
-  if (bytes < 0) {
-    NOTREACHED() << "Negative bytes value";
-    return DATA_UNITS_BYTE;
-  }
-
-  int unit_index = std::size(kUnitThresholds);
+  size_t unit_index = kUnitThresholdsSpan.size();
   while (--unit_index > 0) {
-    if (bytes >= kUnitThresholds[unit_index])
+    if (bytes >= kUnitThresholdsSpan[unit_index]) {
       break;
+    }
   }
 
-  DCHECK(unit_index >= DATA_UNITS_BYTE && unit_index <= DATA_UNITS_PEBIBYTE);
-  return DataUnits(unit_index);
+  DataUnits units = static_cast<DataUnits>(unit_index);
+  DCHECK(units >= DataUnits::kByte && units <= DataUnits::kPebibyte);
+  return units;
 }
 
-std::u16string FormatBytesWithUnits(int64_t bytes,
+std::u16string FormatBytesWithUnits(base::ByteSize bytes,
                                     DataUnits units,
                                     bool show_units) {
   return FormatBytesInternal(bytes, units, show_units, kByteStrings);
 }
 
-std::u16string FormatSpeedWithUnits(int64_t bytes,
+std::u16string FormatSpeedWithUnits(base::ByteSize bytes,
                                     DataUnits units,
                                     bool show_units) {
   return FormatBytesInternal(bytes, units, show_units, kSpeedStrings);
 }
 
-std::u16string FormatBytes(int64_t bytes) {
-  return FormatBytesWithUnits(bytes, GetByteDisplayUnits(bytes), true);
+std::u16string FormatBytes(base::ByteSize bytes) {
+  return FormatBytesWithUnits(bytes, GetByteDisplayUnits(bytes),
+                              /*show_units=*/true);
 }
 
-std::u16string FormatSpeed(int64_t bytes) {
-  return FormatSpeedWithUnits(bytes, GetByteDisplayUnits(bytes), true);
+std::u16string FormatSpeed(base::ByteSize bytes) {
+  return FormatSpeedWithUnits(bytes, GetByteDisplayUnits(bytes),
+                              /*show_units=*/true);
 }
 
 }  // namespace ui

@@ -81,12 +81,7 @@ class ThemeProperties {
   };
 
   // Background tiling choices.
-  enum Tiling {
-    NO_REPEAT = 0,
-    REPEAT_X = 1,
-    REPEAT_Y = 2,
-    REPEAT = 3
-  };
+  enum Tiling { NO_REPEAT = 0, REPEAT_X = 1, REPEAT_Y = 2, REPEAT = 3 };
 
   // --------------------------------------------------------------------------
   // The int value of the properties in NotOverwritableByUserThemeProperties
@@ -162,8 +157,6 @@ class ThemeProperties {
 
     COLOR_NTP_LOGO,
     COLOR_NTP_SECTION_BORDER,
-    // Color for the background of the most visited/custom link tile.
-    COLOR_NTP_SHORTCUT,
     COLOR_NTP_TEXT_LIGHT,
 
 #if BUILDFLAG(IS_WIN)
@@ -240,9 +233,7 @@ class ThemeProperties {
 
   // Returns the default color for the given color |id| COLOR_* enum value.
   // Returns gfx::kPlaceholderColor if |id| is invalid.
-  static SkColor GetDefaultColor(int id,
-                                 bool incognito,
-                                 bool dark_mode = false);
+  static SkColor GetDefaultColor(int id, bool incognito);
 };
 
 #endif  // CHROME_BROWSER_THEMES_THEME_PROPERTIES_H_

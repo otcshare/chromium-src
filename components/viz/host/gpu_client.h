@@ -5,13 +5,12 @@
 #ifndef COMPONENTS_VIZ_HOST_GPU_CLIENT_H_
 #define COMPONENTS_VIZ_HOST_GPU_CLIENT_H_
 
-#include <map>
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process_handle.h"
-#include "build/chromeos_buildflags.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/viz/host/gpu_client_delegate.h"
 #include "components/viz/host/gpu_host_impl.h"
 #include "components/viz/host/viz_host_export.h"
@@ -19,11 +18,11 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/viz/public/mojom/gpu.mojom.h"
+#include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 
 namespace viz {
 
-class VIZ_HOST_EXPORT GpuClient : public mojom::GpuMemoryBufferFactory,
-                                  public mojom::Gpu {
+class VIZ_HOST_EXPORT GpuClient : public mojom::Gpu {
  public:
   using ConnectionErrorHandlerClosure =
       base::OnceCallback<void(GpuClient* client)>;
@@ -32,6 +31,7 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::GpuMemoryBufferFactory,
   GpuClient(std::unique_ptr<GpuClientDelegate> delegate,
             int client_id,
             uint64_t client_tracing_id,
+            bool enable_extra_handles_validation,
             scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
   GpuClient(const GpuClient&) = delete;
@@ -52,34 +52,20 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::GpuMemoryBufferFactory,
   void SetDiskCacheHandle(const gpu::GpuDiskCacheHandle& handle);
   void RemoveDiskCacheHandles();
 
-  void SetConnectionErrorHandler(
-      ConnectionErrorHandlerClosure connection_error_handler);
-
   base::WeakPtr<GpuClient> GetWeakPtr();
+  void BindWebNNContextProvider(
+      mojo::PendingReceiver<webnn::mojom::WebNNContextProvider> receiver);
 
-  // mojom::GpuMemoryBufferFactory overrides:
-  void CreateGpuMemoryBuffer(
-      gfx::GpuMemoryBufferId id,
-      const gfx::Size& size,
-      gfx::BufferFormat format,
-      gfx::BufferUsage usage,
-      mojom::GpuMemoryBufferFactory::CreateGpuMemoryBufferCallback callback)
-      override;
-  void DestroyGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
-                              const gpu::SyncToken& sync_token) override;
-  void CopyGpuMemoryBuffer(gfx::GpuMemoryBufferHandle buffer_handle,
-                           base::UnsafeSharedMemoryRegion shared_memory,
-                           CopyGpuMemoryBufferCallback callback) override;
-  // mojom::Gpu overrides:
-  void CreateGpuMemoryBufferFactory(
-      mojo::PendingReceiver<mojom::GpuMemoryBufferFactory> receiver) override;
   void EstablishGpuChannel(EstablishGpuChannelCallback callback) override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  void SetEstablishGpuChannelCallbackForTesting(
+      base::OnceCallback<void(bool)> callback);
+
+#if BUILDFLAG(IS_CHROMEOS)
   void CreateJpegDecodeAccelerator(
       mojo::PendingReceiver<chromeos_camera::mojom::MjpegDecodeAccelerator>
           jda_receiver) override;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   void CreateVideoEncodeAcceleratorProvider(
       mojo::PendingReceiver<media::mojom::VideoEncodeAcceleratorProvider>
           vea_provider_receiver) override;
@@ -92,33 +78,27 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::GpuMemoryBufferFactory,
     kConnectionLost
   };
   void OnError(ErrorReason reason);
-  void OnEstablishGpuChannel(mojo::ScopedMessagePipeHandle channel_handle,
-                             const gpu::GPUInfo& gpu_info,
-                             const gpu::GpuFeatureInfo& gpu_feature_info,
-                             GpuHostImpl::EstablishChannelStatus status);
-  void OnCreateGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
-                               gfx::GpuMemoryBufferHandle handle);
+  void OnEstablishGpuChannel(
+      mojo::ScopedMessagePipeHandle channel_handle,
+      const gpu::GPUInfo& gpu_info,
+      const gpu::GpuFeatureInfo& gpu_feature_info,
+      const gpu::SharedImageCapabilities& shared_image_capabilities,
+      GpuHostImpl::EstablishChannelStatus status);
   void ClearCallback();
 
   std::unique_ptr<GpuClientDelegate> delegate_;
   const int client_id_;
   const uint64_t client_tracing_id_;
+  const bool enable_extra_handles_validation_;
 
-  // Note that this map is placed before the ReceiverSet below, because pending
-  // response callbacks cannot be destroyed while their originating connection
-  // is still active.
-  std::map<gfx::GpuMemoryBufferId, CreateGpuMemoryBufferCallback>
-      pending_create_callbacks_;
-
-  mojo::ReceiverSet<mojom::GpuMemoryBufferFactory>
-      gpu_memory_buffer_factory_receivers_;
   mojo::ReceiverSet<mojom::Gpu> gpu_receivers_;
   bool gpu_channel_requested_ = false;
   EstablishGpuChannelCallback callback_;
+  base::OnceCallback<void(bool)> callback_for_testing_;
   mojo::ScopedMessagePipeHandle channel_handle_;
   gpu::GPUInfo gpu_info_;
   gpu::GpuFeatureInfo gpu_feature_info_;
-  ConnectionErrorHandlerClosure connection_error_handler_;
+  gpu::SharedImageCapabilities shared_image_capabilities_;
   // |task_runner_| is associated with the thread |gpu_bindings_| is bound
   // on. GpuClient instance is bound to this thread, and must be destroyed on
   // this thread.

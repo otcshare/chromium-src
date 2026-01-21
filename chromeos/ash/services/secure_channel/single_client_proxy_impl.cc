@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/services/secure_channel/single_client_proxy_impl.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/services/secure_channel/file_transfer_update_callback.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
@@ -44,7 +44,8 @@ SingleClientProxyImpl::SingleClientProxyImpl(
   DCHECK(client_connection_parameters_);
   client_connection_parameters_->SetConnectionSucceeded(
       channel_->GenerateRemote(),
-      message_receiver_remote_.BindNewPipeAndPassReceiver());
+      message_receiver_remote_.BindNewPipeAndPassReceiver(),
+      nearby_connection_state_listener_remote_.BindNewPipeAndPassReceiver());
 }
 
 SingleClientProxyImpl::~SingleClientProxyImpl() = default;
@@ -60,6 +61,13 @@ void SingleClientProxyImpl::HandleReceivedMessage(const std::string& feature,
     return;
 
   message_receiver_remote_->OnMessageReceived(payload);
+}
+
+void SingleClientProxyImpl::HandleNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  nearby_connection_state_listener_remote_->OnNearbyConnectionStateChanged(
+      step, result);
 }
 
 void SingleClientProxyImpl::HandleRemoteDeviceDisconnection() {

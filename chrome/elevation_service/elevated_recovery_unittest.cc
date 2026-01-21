@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/elevation_service/elevated_recovery_impl.h"
-
 #include <windows.h>
+
 #include <wrl/implements.h>
 
 #include <memory>
@@ -16,7 +15,9 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/win/scoped_com_initializer.h"
-#include "chrome/elevation_service/scoped_mock_context.h"
+#include "chrome/elevation_service/elevated_recovery_impl.h"
+#include "chrome/windows_services/service_program/test_support/scoped_mock_context.h"
+#include "components/crx_file/crx_verifier.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace elevation_service {
@@ -191,8 +192,7 @@ TEST(ElevatedRecoveryCleanupTest, Do_CleanupChromeRecoveryDirectory) {
 
   EXPECT_EQ(S_OK, elevation_service::CleanupChromeRecoveryDirectory());
 
-  EXPECT_TRUE(base::PathExists(recovery_dir));
-  EXPECT_TRUE(base::IsDirectoryEmpty(recovery_dir));
+  EXPECT_FALSE(base::PathExists(recovery_dir));
 }
 
 }  // namespace elevation_service

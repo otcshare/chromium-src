@@ -10,9 +10,9 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "mojo/public/cpp/system/handle.h"
 
 namespace mojo {
@@ -54,7 +54,7 @@ class StructWithTraitsImpl {
   uint64_t get_uint64() const { return uint64_; }
 
   void set_string(std::string value) { string_ = value; }
-  base::StringPiece get_string_as_string_piece() const { return string_; }
+  std::string_view get_string_as_string_piece() const { return string_; }
   const std::string& get_string() const { return string_; }
 
   const std::vector<std::string>& get_string_array() const {
@@ -62,9 +62,7 @@ class StructWithTraitsImpl {
   }
   std::vector<std::string>& get_mutable_string_array() { return string_array_; }
 
-  const std::set<std::string>& get_string_set() const {
-    return string_set_;
-  }
+  const std::set<std::string>& get_string_set() const { return string_set_; }
   std::set<std::string>& get_mutable_string_set() { return string_set_; }
 
   const NestedStructWithTraitsImpl& get_struct() const { return struct_; }

@@ -13,20 +13,20 @@
 namespace content {
 
 TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequence) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 2, "y": 3,
                              "button": 0},
                             {"type": "pointerUp", "x": 2, "y": 3,
                              "button": 0}],
                 "parameters": {"pointerType": "mouse"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticPointerActionListParams action_list_params =
-      static_cast<const SyntheticPointerActionListParams&>(
-          actions_parser.gesture_params());
+      actions_parser.pointer_action_params();
   EXPECT_EQ(content::mojom::GestureSourceType::kMouseInput,
             action_list_params.gesture_source_type);
   EXPECT_EQ(2U, action_list_params.params.size());
@@ -41,7 +41,7 @@ TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequence) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequence) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3, "y": 5},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -53,13 +53,13 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequence) {
                             {"type": "pointerMove", "x": 50, "y": 50},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "touch"},
-                "id": "pointer2"}] )JSON");
+                "id": "pointer2"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticPointerActionListParams action_list_params =
-      static_cast<const SyntheticPointerActionListParams&>(
-          actions_parser.gesture_params());
+      actions_parser.pointer_action_params();
   EXPECT_EQ(content::mojom::GestureSourceType::kTouchInput,
             action_list_params.gesture_source_type);
   EXPECT_EQ(3U, action_list_params.params.size());
@@ -75,7 +75,7 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequence) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceWithPause) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3, "y": 5},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -86,13 +86,13 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceWithPause) {
                 "actions":[{"type":"pause", "duration":0},
                            {"type":"pause", "duration":50},
                            {"type":"pause", "duration":0}],
-                "id":"0"}] )JSON");
+                "id":"0"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticPointerActionListParams action_list_params =
-      static_cast<const SyntheticPointerActionListParams&>(
-          actions_parser.gesture_params());
+      actions_parser.pointer_action_params();
   EXPECT_EQ(content::mojom::GestureSourceType::kTouchInput,
             action_list_params.gesture_source_type);
   EXPECT_EQ(5U, action_list_params.params.size());
@@ -125,7 +125,7 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceWithPause) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceIdNotString) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 0, "y": 0},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -137,7 +137,8 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceIdNotString) {
                             {"type": "pointerMove", "x": 50, "y": 50},
                             {"type": "pointerUp"}],
                 "parameters": {"pointerType": "touch"},
-                "id": 2}] )JSON");
+                "id": 2}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -146,7 +147,7 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceIdNotString) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceDuplicateId) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 0, "y": 0},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -158,7 +159,8 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceDuplicateId) {
                             {"type": "pointerMove", "x": 50, "y": 50},
                             {"type": "pointerUp"}],
                 "parameters": {"pointerType": "touch"},
-                "id": "pointer1"}] )JSON");
+                "id": "pointer1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -166,19 +168,19 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceDuplicateId) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequenceNoParameters) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 2, "y": 3,
                              "button": 0},
                             {"type": "pointerUp", "x": 2, "y": 3,
                              "button": 0}],
-                "id": "pointer1"}] )JSON");
+                "id": "pointer1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticPointerActionListParams action_list_params =
-      static_cast<const SyntheticPointerActionListParams&>(
-          actions_parser.gesture_params());
+      actions_parser.pointer_action_params();
   EXPECT_EQ(content::mojom::GestureSourceType::kMouseInput,
             action_list_params.gesture_source_type);
   EXPECT_EQ(2U, action_list_params.params.size());
@@ -194,14 +196,15 @@ TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequenceNoParameters) {
 
 TEST(ActionsParserTestDriverTest,
      ParseMousePointerActionSequenceNoPointerType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 2, "y": 3,
                              "button": 0},
                             {"type": "pointerUp", "x": 2, "y": 3,
                              "button": 0}],
                 "parameters": {},
-                "id": "pointer1"}] )JSON");
+                "id": "pointer1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -210,9 +213,10 @@ TEST(ActionsParserTestDriverTest,
 }
 
 TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequenceNoAction) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer", "parameters": {"pointerType": "mouse"},
-                "id": "pointer1"}] )JSON");
+                "id": "pointer1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -222,14 +226,15 @@ TEST(ActionsParserTestDriverTest, ParseMousePointerActionSequenceNoAction) {
 
 TEST(ActionsParserTestDriverTest,
      ParseMousePointerActionSequenceUnsupportedButton) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 2, "y": 3,
                              "button": -1},
                             {"type": "pointerUp", "x": 2, "y": 3,
                              "button": 0}],
                 "parameters": {"pointerType": "mouse"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -239,13 +244,14 @@ TEST(ActionsParserTestDriverTest,
 
 TEST(ActionsParserTestDriverTest,
      ParseTouchPointerActionSequenceMultiActionsType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "key",
                 "actions": [{"type":"keyDown","value":"p"},
                             {"type":"keyUp","value":"p"},
                             {"type":"keyDown","value":"a"},
                             {"type":"keyUp","value":"a"}],
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -255,7 +261,7 @@ TEST(ActionsParserTestDriverTest,
 
 TEST(ActionsParserTestDriverTest,
      ParseTouchPointerActionSequenceMultiPointerType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3, "y": 5},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -267,7 +273,8 @@ TEST(ActionsParserTestDriverTest,
                             {"type": "pointerMove", "x": 50, "y": 50},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "mouse"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -276,7 +283,7 @@ TEST(ActionsParserTestDriverTest,
 }
 
 TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceMultiMouse) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3, "y": 5},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -288,7 +295,8 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceMultiMouse) {
                             {"type": "pointerMove", "x": 50, "y": 50},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "mouse"},
-                "id": "2"}] )JSON");
+                "id": "2"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -297,16 +305,16 @@ TEST(ActionsParserTestDriverTest, ParseTouchPointerActionSequenceMultiMouse) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollAction) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "wheel",
                 "actions": [{"type": "scroll", "x": 10, "y": 10,
-                             "deltaX": 30, "deltaY": 50}]}] )JSON");
+                             "deltaX": 30, "deltaY": 50}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticSmoothScrollGestureParams scroll_gesture_params =
-      static_cast<const SyntheticSmoothScrollGestureParams&>(
-          actions_parser.gesture_params());
+      actions_parser.smooth_scroll_params();
   EXPECT_EQ(content::mojom::GestureSourceType::kMouseInput,
             scroll_gesture_params.gesture_source_type);
   EXPECT_EQ(gfx::PointF(10, 10), scroll_gesture_params.anchor);
@@ -321,10 +329,11 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollAction) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollActionNoSourceType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{
             "actions": [{"type": "scroll", "x": 10, "y": 10,
-                         "deltaX": 30, "deltaY": 50}]}] )JSON");
+                         "deltaX": 30, "deltaY": 50}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -333,10 +342,11 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollActionNoSourceType) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollActionInvalidDelta) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "wheel",
                 "actions": [{"type": "scroll", "x": 10, "y": 10,
-                             "deltaX": 30.2, "deltaY": 50}]}] )JSON");
+                             "deltaX": 30.2, "deltaY": 50}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -345,10 +355,11 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollActionInvalidDelta) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollNoActionType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "wheel",
                 "actions": [{"x": 10, "y": 10,
-                             "deltaX": 30, "deltaY": 50}]}] )JSON");
+                             "deltaX": 30, "deltaY": 50}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -357,10 +368,11 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollNoActionType) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollInvalidActionType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "wheel",
                 "actions": [{"type": "zoom", "x": 10, "y": 10,
-                             "deltaX": 30, "deltaY": 30}]}] )JSON");
+                             "deltaX": 30, "deltaY": 30}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -371,12 +383,13 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollInvalidActionType) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseWheelScrollInvalidActionList) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "wheel",
                 "actions": [{"type": "scroll", "x": 10, "y": 10,
                              "deltaX": 30, "deltaY": 50},
                             {"type": "scroll", "x": 10, "y": 10,
-                             "deltaX": 30, "deltaY": 50}]}] )JSON");
+                             "deltaX": 30, "deltaY": 50}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -387,7 +400,7 @@ TEST(ActionsParserTestDriverTest, ParseWheelScrollInvalidActionList) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseMultiInputSource) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3, "y": 5},
                             {"type": "pointerMove", "x": 30, "y": 30},
@@ -402,7 +415,8 @@ TEST(ActionsParserTestDriverTest, ParseMultiInputSource) {
                             {"type": "pause", "duration": 10 },
                             {"type": "keyDown", "value": "a"},
                             {"type": "keyUp", "value": "a"}],
-                "id": "2"}] )JSON");
+                "id": "2"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -411,10 +425,11 @@ TEST(ActionsParserTestDriverTest, ParseMultiInputSource) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidInputSourceType) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "touchpad",
                 "actions": [{"type": "scroll", "x": 10, "y": 10,
-                             "deltaX": 30, "deltaY": 30}]}] )JSON");
+                             "deltaX": 30, "deltaY": 30}]}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -423,13 +438,14 @@ TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidInputSourceType) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseActionSequenceWithoutY) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerDown", "x": 3},
                             {"type": "pointerMove", "x": 30, "y": 30},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "mouse"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -438,7 +454,7 @@ TEST(ActionsParserTestDriverTest, ParseActionSequenceWithoutY) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseActionSequencePenProperties) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerMove", "x": 10, "y": 5},
                             {"type": "pointerDown", "x": 10, "y": 5,
@@ -447,13 +463,13 @@ TEST(ActionsParserTestDriverTest, ParseActionSequencePenProperties) {
                             {"type": "pointerMove", "x": 30, "y": 20},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "pen"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_TRUE(actions_parser.Parse());
   SyntheticPointerActionListParams action_list_params =
-      static_cast<const SyntheticPointerActionListParams&>(
-          actions_parser.gesture_params());
+      actions_parser.pointer_action_params();
   EXPECT_EQ(mojom::GestureSourceType::kPenInput,
             action_list_params.gesture_source_type);
   EXPECT_EQ(4U, action_list_params.params.size());
@@ -469,7 +485,7 @@ TEST(ActionsParserTestDriverTest, ParseActionSequencePenProperties) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidForce) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerMove", "x": 10, "y": 10},
                             {"type": "pointerDown", "x": 10, "y": 10,
@@ -477,7 +493,8 @@ TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidForce) {
                             {"type": "pointerMove", "x": 30, "y": 30},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "pen"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());
@@ -488,7 +505,7 @@ TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidForce) {
 }
 
 TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidTiltX) {
-  absl::optional<base::Value> value = base::JSONReader::Read(
+  std::optional<base::Value> value = base::JSONReader::Read(
       R"JSON( [{"type": "pointer",
                 "actions": [{"type": "pointerMove", "x": 10, "y": 10},
                             {"type": "pointerDown", "x": 10, "y": 10,
@@ -496,7 +513,8 @@ TEST(ActionsParserTestDriverTest, ParseActionSequenceInvalidTiltX) {
                             {"type": "pointerMove", "x": 30, "y": 30},
                             {"type": "pointerUp" }],
                 "parameters": {"pointerType": "pen"},
-                "id": "1"}] )JSON");
+                "id": "1"}] )JSON",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ActionsParser actions_parser(std::move(value.value()));
   EXPECT_FALSE(actions_parser.Parse());

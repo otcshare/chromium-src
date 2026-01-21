@@ -26,6 +26,10 @@ struct COMPONENT_EXPORT(DISPLAY_SHARED_MOJOM_TRAITS)
 
   static int depth(const display::ScreenInfo& r) { return r.depth; }
 
+  static int handwriting_radius(const display::ScreenInfo& r) {
+    return r.handwriting_radius;
+  }
+
   static int depth_per_component(const display::ScreenInfo& r) {
     return r.depth_per_component;
   }
@@ -34,19 +38,10 @@ struct COMPONENT_EXPORT(DISPLAY_SHARED_MOJOM_TRAITS)
     return r.is_monochrome;
   }
 
-  static int display_frequency(const display::ScreenInfo& r) {
-    return r.display_frequency;
-  }
-
   static const gfx::Rect& rect(const display::ScreenInfo& r) { return r.rect; }
 
   static const gfx::Rect& available_rect(const display::ScreenInfo& r) {
     return r.available_rect;
-  }
-
-  static const absl::optional<gfx::Size>& size_override(
-      const display::ScreenInfo& r) {
-    return r.size_override;
   }
 
   static display::mojom::ScreenOrientation orientation_type(

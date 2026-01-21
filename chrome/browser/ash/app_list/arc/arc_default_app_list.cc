@@ -9,11 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_util.h"
 #include "base/barrier_closure.h"
-#include "base/bind.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
@@ -28,6 +27,8 @@
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_registry.h"
@@ -56,11 +57,11 @@ bool use_test_apps_directory = false;
 
 std::unique_ptr<ArcDefaultAppList::AppInfoMap> ReadAppsFromFileThread(
     const base::FilePath& base_path) {
-  base::FilePath root_dir;
   // FileEnumerator does not work with a symbolic link dir. So map link
   // to real folder in case |base_path| specifies a symbolic link.
-  if (!base::ReadSymbolicLink(base_path, &root_dir))
-    root_dir = base_path;
+  std::optional<base::FilePath> link_target =
+      base::ReadSymbolicLinkAbsolute(base_path);
+  base::FilePath root_dir = link_target.value_or(base_path);
 
   std::unique_ptr<ArcDefaultAppList::AppInfoMap> apps =
       std::make_unique<ArcDefaultAppList::AppInfoMap>();
@@ -86,14 +87,13 @@ std::unique_ptr<ArcDefaultAppList::AppInfoMap> ReadAppsFromFileThread(
               << file.value() << ".";
       continue;
     }
-    base::Value app_info =
-        base::Value::FromUniquePtrValue(std::move(app_info_ptr));
+    base::Value::Dict app_info = std::move(app_info_ptr->GetDict());
 
-    auto* name = app_info.GetDict().FindString(kName);
-    auto* package_name = app_info.GetDict().FindString(kPackageName);
-    auto* activity = app_info.GetDict().FindString(kActivity);
-    auto* app_path = app_info.GetDict().FindString(kAppPath);
-    bool oem = app_info.FindBoolPath(kOem).value_or(false);
+    auto* name = app_info.FindString(kName);
+    auto* package_name = app_info.FindString(kPackageName);
+    auto* activity = app_info.FindString(kActivity);
+    auto* app_path = app_info.FindString(kAppPath);
+    bool oem = app_info.FindBool(kOem).value_or(false);
 
     if (!name || !package_name || !activity || !app_path || name->empty() ||
         package_name->empty() || activity->empty() || app_path->empty()) {
@@ -138,13 +138,14 @@ std::string GetBoardName(const base::FilePath& build_prop_path) {
       content, "\n", base::WhitespaceHandling::KEEP_WHITESPACE,
       base::SplitResult::SPLIT_WANT_ALL);
   for (const auto& line : lines) {
-    if (!base::StartsWith(line, kKeyToFind, base::CompareCase::SENSITIVE))
-      continue;
-    const std::string board = line.substr(strlen(kKeyToFind));
-    VLOG(2) << "Current board is " << board;
-    return board;
+    std::optional<std::string_view> remainder =
+        base::RemovePrefix(line, kKeyToFind);
+    if (remainder) {
+      std::string board(*remainder);
+      VLOG(2) << "Current board is " << board;
+      return board;
+    }
   }
-
   LOG(ERROR) << "Failed to find " << kKeyToFind << " in " << build_prop_path;
   return std::string();
 }
@@ -356,4 +357,4 @@ ArcDefaultAppList::AppInfo::AppInfo(const std::string& name,
       oem(oem),
       app_path(app_path) {}
 
-ArcDefaultAppList::AppInfo::~AppInfo() {}
+ArcDefaultAppList::AppInfo::~AppInfo() = default;

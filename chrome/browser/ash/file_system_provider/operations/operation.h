@@ -10,24 +10,24 @@
 #include <vector>
 
 #include "base/files/file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/file_system_provider/request_manager.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "storage/browser/file_system/async_file_util.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 class ProvidedFileSystemInfo;
-class EventDispatcher;
+class RequestDispatcher;
 
 namespace operations {
 
 // Base class for operation bridges between fileapi and providing extensions.
 class Operation : public RequestManager::HandlerInterface {
  public:
-  Operation(EventDispatcher* dispatcher,
+  Operation(RequestDispatcher* dispatcher,
             const ProvidedFileSystemInfo& file_system_info);
 
   Operation(const Operation&) = delete;
@@ -38,10 +38,10 @@ class Operation : public RequestManager::HandlerInterface {
   // RequestManager::HandlerInterface overrides.
   bool Execute(int request_id) override = 0;
   void OnSuccess(int request_id,
-                 std::unique_ptr<RequestValue> result,
+                 const RequestValue& result,
                  bool has_more) override = 0;
   void OnError(int request_id,
-               std::unique_ptr<RequestValue> result,
+               const RequestValue& result,
                base::File::Error error) override = 0;
   void OnAbort(int request_id) override;
 
@@ -56,11 +56,10 @@ class Operation : public RequestManager::HandlerInterface {
   ProvidedFileSystemInfo file_system_info_;
 
  private:
-  raw_ptr<EventDispatcher> event_dispatcher_;
+  raw_ptr<RequestDispatcher, DanglingUntriaged> request_dispatcher_;
 };
 
 }  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_OPERATIONS_OPERATION_H_

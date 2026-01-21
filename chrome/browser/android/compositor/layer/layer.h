@@ -6,9 +6,7 @@
 #define CHROME_BROWSER_ANDROID_COMPOSITOR_LAYER_LAYER_H_
 
 #include "base/memory/ref_counted.h"
-#include "cc/layers/layer.h"
-#include "cc/paint/filter_operations.h"
-#include "ui/gfx/geometry/size.h"
+#include "cc/slim/layer.h"
 
 namespace android {
 
@@ -19,11 +17,11 @@ class Layer : public base::RefCounted<Layer> {
   Layer(const Layer&) = delete;
   Layer& operator=(const Layer&) = delete;
 
-  virtual scoped_refptr<cc::Layer> layer() = 0;
+  virtual scoped_refptr<cc::slim::Layer> layer() = 0;
 
  protected:
-  Layer() {}
-  virtual ~Layer() {}
+  Layer() = default;
+  virtual ~Layer() = default;
 
  private:
   friend class base::RefCounted<Layer>;

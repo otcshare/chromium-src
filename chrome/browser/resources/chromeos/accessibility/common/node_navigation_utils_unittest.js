@@ -8,16 +8,6 @@ GEN_INCLUDE(['../select_to_speak/select_to_speak_e2e_test_base.js']);
  * Test fixture for navigation_utils.js.
  */
 SelectToSpeakNodeNavigationUtilsUnitTest = class extends SelectToSpeakE2ETest {
-  /** @override */
-  async setUpDeferred() {
-    await super.setUpDeferred();
-    await importModule(
-        'NodeNavigationUtils', '/common/node_navigation_utils.js');
-    await importModule('ParagraphUtils', '/common/paragraph_utils.js');
-    await importModule(
-        ['createMockNode', 'generateTestNodeGroup'],
-        '/common/testing/test_node_generator.js');
-  }
 };
 
 AX_TEST_F(

@@ -33,7 +33,6 @@ proto_library("libpuffin-proto") {
 
 static_library("libpuffpatch") {
   configs += [ ":target_defaults" ]
-  complete_static_lib = true
   deps = [
     ":libpuffin-proto",
     "//base",
@@ -121,6 +120,10 @@ executable("puffin_unittest") {
     ":libpuffdiff",
     ":libpuffpatch",
     "//base",
-    "//testing/gtest:gtest",
+    "//testing/gtest",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

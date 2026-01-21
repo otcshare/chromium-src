@@ -6,13 +6,12 @@
 
 #include <wrl/module.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/scoped_hstring.h"
 #include "base/win/vector.h"
-#include "base/win/windows_version.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ABI::Windows::ApplicationModel::DataTransfer::DataPackage;
@@ -96,16 +95,9 @@ class FakeDataPackagePropertySet final
   // IDataPackagePropertySet
   IFACEMETHODIMP get_ApplicationListingUri(IUriRuntimeClass** value) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
-  IFACEMETHODIMP get_ApplicationName(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
-  IFACEMETHODIMP get_Description(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP get_ApplicationName(HSTRING* value) final { NOTREACHED(); }
+  IFACEMETHODIMP get_Description(HSTRING* value) final { NOTREACHED(); }
   IFACEMETHODIMP get_FileTypes(IVector<HSTRING>** value) final {
     if (!file_types_)
       file_types_ = Make<base::win::Vector<HSTRING>>();
@@ -115,12 +107,8 @@ class FakeDataPackagePropertySet final
   }
   IFACEMETHODIMP get_Thumbnail(IRandomAccessStreamReference** value) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
-  IFACEMETHODIMP get_Title(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP get_Title(HSTRING* value) final { NOTREACHED(); }
   IFACEMETHODIMP put_ApplicationListingUri(IUriRuntimeClass* value) final {
     return S_OK;
   }
@@ -136,14 +124,12 @@ class FakeDataPackagePropertySet final
   }
 
   // IDataPackagePropertySet3
-  IFACEMETHODIMP get_EnterpriseId(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP get_EnterpriseId(HSTRING* value) final { NOTREACHED(); }
   IFACEMETHODIMP put_EnterpriseId(HSTRING value) final { return S_OK; }
 
  private:
-  const raw_ref<FakeDataTransferManager::DataRequestedContent>
+  const raw_ref<FakeDataTransferManager::DataRequestedContent,
+                DanglingUntriaged>
       data_requested_content_;
   ComPtr<base::win::Vector<HSTRING>> file_types_;
 };
@@ -172,18 +158,13 @@ class FakeDataPackage final
       ITypedEventHandler<DataPackage*, IInspectable*>* handler,
       EventRegistrationToken* token) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP add_OperationCompleted(
       ITypedEventHandler<DataPackage*, OperationCompletedEventArgs*>* handler,
       EventRegistrationToken* token) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
-  IFACEMETHODIMP GetView(IDataPackageView** result) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP GetView(IDataPackageView** result) final { NOTREACHED(); }
   IFACEMETHODIMP get_Properties(IDataPackagePropertySet** value) final {
     if (!properties_)
       properties_ = Make<FakeDataPackagePropertySet>(*data_requested_content_);
@@ -193,23 +174,19 @@ class FakeDataPackage final
   }
   IFACEMETHODIMP get_RequestedOperation(DataPackageOperation* value) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP get_ResourceMap(
       IMap<HSTRING, RandomAccessStreamReference*>** value) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP put_RequestedOperation(DataPackageOperation value) final {
     return S_OK;
   }
   IFACEMETHODIMP remove_Destroyed(EventRegistrationToken token) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP remove_OperationCompleted(EventRegistrationToken token) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP SetBitmap(IRandomAccessStreamReference* value) final {
     return S_OK;
@@ -286,7 +263,8 @@ class FakeDataPackage final
   }
 
  private:
-  const raw_ref<FakeDataTransferManager::DataRequestedContent>
+  const raw_ref<FakeDataTransferManager::DataRequestedContent,
+                DanglingUntriaged>
       data_requested_content_;
   ComPtr<IDataPackagePropertySet> properties_;
 };
@@ -321,10 +299,7 @@ class FakeDataRequest final
   ~FakeDataRequest() final = default;
 
   // IDataRequest
-  IFACEMETHODIMP FailWithDisplayText(HSTRING value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP FailWithDisplayText(HSTRING value) final { NOTREACHED(); }
   IFACEMETHODIMP get_Data(IDataPackage** value) final {
     if (!data_package_)
       data_package_ = Make<FakeDataPackage>(data_requested_content_);
@@ -333,10 +308,7 @@ class FakeDataRequest final
     return hr;
   }
   IFACEMETHODIMP
-  get_Deadline(DateTime* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  get_Deadline(DateTime* value) final { NOTREACHED(); }
   IFACEMETHODIMP GetDeferral(IDataRequestDeferral** value) final {
     if (!data_request_deferral_)
       data_request_deferral_ = Make<FakeDataRequestDeferral>(this);
@@ -403,10 +375,6 @@ class FakeDataRequestedEventArgs final
 }  // namespace
 
 // static
-bool FakeDataTransferManager::IsSupportedEnvironment() {
-  return base::win::GetVersion() >= base::win::Version::WIN10;
-}
-
 FakeDataTransferManager::FakeDataTransferManager() {
   post_data_requested_callback_ = base::DoNothing();
 }
@@ -454,14 +422,12 @@ IFACEMETHODIMP FakeDataTransferManager::add_TargetApplicationChosen(
         eventHandler,
     EventRegistrationToken* event_cookie) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP
 FakeDataTransferManager::remove_TargetApplicationChosen(
     EventRegistrationToken event_cookie) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 base::OnceClosure FakeDataTransferManager::GetDataRequestedInvoker() {

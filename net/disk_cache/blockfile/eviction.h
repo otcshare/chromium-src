@@ -5,6 +5,8 @@
 #ifndef NET_DISK_CACHE_BLOCKFILE_EVICTION_H_
 #define NET_DISK_CACHE_BLOCKFILE_EVICTION_H_
 
+#include <array>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/disk_cache/blockfile/rankings.h"
@@ -35,7 +37,7 @@ class Eviction {
   void TrimCache(bool empty);
 
   // Updates the ranking information for an entry.
-  void UpdateRank(EntryImpl* entry, bool modified);
+  void UpdateRank(EntryImpl* entry);
 
   // Notifications of interesting events for a given entry.
   void OnOpenEntry(EntryImpl* entry);
@@ -48,6 +50,8 @@ class Eviction {
   void TrimDeletedList(bool empty);
 
  private:
+  static constexpr int kListsToSearch = 3;
+
   void PostDelayedTrim();
   void DelayedTrim();
   bool ShouldTrim();
@@ -60,7 +64,7 @@ class Eviction {
   // new eviction algorithm. This code will replace the original methods when
   // finished.
   void TrimCacheV2(bool empty);
-  void UpdateRankV2(EntryImpl* entry, bool modified);
+  void UpdateRankV2(EntryImpl* entry);
   void OnOpenEntryV2(EntryImpl* entry);
   void OnCreateEntryV2(EntryImpl* entry);
   void OnDoomEntryV2(EntryImpl* entry);
@@ -70,12 +74,15 @@ class Eviction {
   bool RemoveDeletedNode(CacheRankingsBlock* node);
 
   bool NodeIsOldEnough(CacheRankingsBlock* node, int list);
-  int SelectListByLength(Rankings::ScopedRankingsBlock* next);
-  void ReportListStats();
+  int SelectListByLength(
+      std::array<Rankings::ScopedRankingsBlock, kListsToSearch>& next);
 
   raw_ptr<BackendImpl> backend_ = nullptr;
   raw_ptr<Rankings> rankings_;
-  raw_ptr<IndexHeader> header_;
+
+  // May point to a mapped file's unmapped memory at destruction time.
+  raw_ptr<IndexHeader, DisableDanglingPtrDetection> header_;
+
   int max_size_;
   int trim_delays_;
   int index_size_;

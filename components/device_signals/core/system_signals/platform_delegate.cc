@@ -34,15 +34,25 @@ bool PlatformDelegate::ProductMetadata::operator==(
   return name == other.name && version == other.version;
 }
 
-absl::optional<PlatformDelegate::ProductMetadata>
+std::optional<PlatformDelegate::ProductMetadata>
 PlatformDelegate::GetProductMetadata(const base::FilePath& file_path) {
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<std::vector<std::string>>
-PlatformDelegate::GetSigningCertificatesPublicKeyHashes(
+std::optional<PlatformDelegate::SigningCertificatesPublicKeys>
+PlatformDelegate::GetSigningCertificatesPublicKeys(
     const base::FilePath& file_path) {
-  return absl::nullopt;
+  return std::nullopt;
 }
+
+PlatformDelegate::SigningCertificatesPublicKeys::
+    SigningCertificatesPublicKeys() = default;
+PlatformDelegate::SigningCertificatesPublicKeys::SigningCertificatesPublicKeys(
+    const PlatformDelegate::SigningCertificatesPublicKeys&) = default;
+PlatformDelegate::SigningCertificatesPublicKeys&
+PlatformDelegate::SigningCertificatesPublicKeys::operator=(
+    const PlatformDelegate::SigningCertificatesPublicKeys&) = default;
+PlatformDelegate::SigningCertificatesPublicKeys::
+    ~SigningCertificatesPublicKeys() = default;
 
 }  // namespace device_signals

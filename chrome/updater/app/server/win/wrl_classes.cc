@@ -10,7 +10,6 @@
 namespace updater {
 
 #pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-braces"
 #pragma clang diagnostic ignored "-Wc++98-compat-extra-semi"
 
 // CoCreatableClassWithFactoryEx takes three parameters, `className`, `factory`,
@@ -34,6 +33,10 @@ CoCreatableClassWithFactoryEx(UpdaterSystemClass,
                               ActiveSystem);
 CoCreatableClassWithFactoryEx(
     GoogleUpdate3WebSystemClass,
+    Microsoft::WRL::SimpleClassFactory<LegacyOnDemandImpl>,
+    ActiveSystem);
+CoCreatableClassWithFactoryEx(
+    GoogleUpdate3WebServiceClass,
     Microsoft::WRL::SimpleClassFactory<LegacyOnDemandImpl>,
     ActiveSystem);
 CoCreatableClassWithFactoryEx(

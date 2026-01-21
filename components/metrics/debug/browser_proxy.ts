@@ -4,6 +4,8 @@
 
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
 
+import type {CwtKeyInfo} from './private_metrics.js';
+
 /**
  * @fileoverview A helper object used by the chrome://metrics-internals page to
  * interact with the browser.
@@ -34,7 +36,7 @@ export interface LogEvent {
  * lifetime. The |type| field is only set for UMA logs (i.e., ongoing,
  * independent, or stability). The |compressed_data| field (i.e., its proto
  * data) is only set when exporting.
- * TODO(crbug/1363747): Change name of |type| to something else, since it is
+ * TODO(crbug.com/40238818): Change name of |type| to something else, since it is
  * confusing and can be mistaken for |logType| in LogData (UMA or UKM).
  */
 export interface Log {
@@ -54,6 +56,46 @@ export interface LogData {
   logs: Log[];
 }
 
+/**
+ * A study or group name along with its hex hash.
+ */
+export interface HashNamed {
+  // `undefined` if we only know the hash.
+  name: string|undefined;
+  hash: string;
+}
+
+/**
+ * A Field Trial Group.
+ */
+export interface Group extends HashNamed {
+  forceEnabled: boolean;
+  enabled: boolean;
+}
+
+/**
+ * A Field Trial.
+ */
+export interface Trial extends HashNamed {
+  groups: Group[];
+}
+
+/**
+ * Maps some hashes to their study/group names.
+ */
+export interface HashNameMap {
+  [hash: string]: string;
+}
+
+
+/**
+ * State of all field trials.
+ */
+export interface FieldTrialState {
+  trials: Trial[];
+  restartRequired: boolean;
+}
+
 export interface MetricsInternalsBrowserProxy {
   /**
    * Gets UMA log data. |includeLogProtoData| determines whether or not the
@@ -67,6 +109,11 @@ export interface MetricsInternalsBrowserProxy {
   fetchVariationsSummary(): Promise<KeyValue[]>;
 
   /**
+   * Fetches the stored seed info.
+   */
+  fetchStoredSeedInfo(seedType: string): Promise<KeyValue[]>;
+
+  /**
    * Fetches a summary of UMA info.
    */
   fetchUmaSummary(): Promise<KeyValue[]>;
@@ -76,7 +123,38 @@ export interface MetricsInternalsBrowserProxy {
    * service or is owned by the page.
    */
   isUsingMetricsServiceObserver(): Promise<boolean>;
+
+  /**
+   * Overrides the enroll state of a field trial which will be realized after a
+   * restart.
+   */
+  setTrialEnrollState(
+      trialHash: string, groupHash: string,
+      forceEnable: boolean): Promise<boolean>;
+
+  /**
+   * Fetches the current state of the field trials.
+   */
+  fetchTrialState(): Promise<FieldTrialState>;
+
+  /**
+   * Given a trial name, group name, or combination with a [/.-:] separator,
+   * returns any name hashes associated with that trial or group.
+   */
+  lookupTrialOrGroupName(name: string): Promise<HashNameMap>;
+
+  /**
+   * Fetches the encryption public key.
+   */
+  fetchEncryptionPublicKey(): Promise<CwtKeyInfo>;
+
+  /**
+   * Restarts the browser.
+   */
+  restart(): Promise<void>;
 }
+
+export type SeedType = 'Latest'|'Safe';
 
 export class MetricsInternalsBrowserProxyImpl implements
     MetricsInternalsBrowserProxy {
@@ -88,12 +166,39 @@ export class MetricsInternalsBrowserProxyImpl implements
     return sendWithPromise('fetchVariationsSummary');
   }
 
+  fetchStoredSeedInfo(seedType: SeedType): Promise<KeyValue[]> {
+    return sendWithPromise(`fetchStored${seedType}SeedInfo`);
+  }
+
   fetchUmaSummary(): Promise<KeyValue[]> {
     return sendWithPromise('fetchUmaSummary');
   }
 
   isUsingMetricsServiceObserver(): Promise<boolean> {
     return sendWithPromise('isUsingMetricsServiceObserver');
+  }
+
+  setTrialEnrollState(
+      trialHash: string, groupHash: string,
+      forceEnable: boolean): Promise<boolean> {
+    return sendWithPromise(
+        'setTrialEnrollState', trialHash, groupHash, forceEnable);
+  }
+
+  fetchTrialState(): Promise<FieldTrialState> {
+    return sendWithPromise('fetchTrialState');
+  }
+
+  lookupTrialOrGroupName(name: string): Promise<HashNameMap> {
+    return sendWithPromise('lookupTrialOrGroupName', name);
+  }
+
+  fetchEncryptionPublicKey(): Promise<CwtKeyInfo> {
+    return sendWithPromise('fetchEncryptionPublicKey');
+  }
+
+  restart(): Promise<void> {
+    return sendWithPromise('restart');
   }
 
   static getInstance(): MetricsInternalsBrowserProxy {

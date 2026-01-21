@@ -27,7 +27,7 @@ inline std::u16string TruncateWStringToUTF16(const wchar_t* src) {
   std::u16string str;
   int length = static_cast<int>(wcslen(src));
   for (int i = 0; i < length; ++i) {
-    str.push_back(static_cast<char16_t>(src[i]));
+    str.push_back(static_cast<char16_t>(UNSAFE_TODO(src[i])));
   }
   return str;
 }

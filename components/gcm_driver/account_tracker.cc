@@ -4,7 +4,6 @@
 
 #include "components/gcm_driver/account_tracker.h"
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/observer_list.h"
 #include "base/trace_event/trace_event.h"
@@ -35,6 +34,8 @@ void AccountTracker::RemoveObserver(Observer* observer) {
 }
 
 std::vector<CoreAccountInfo> AccountTracker::GetAccounts() const {
+  // TODO(crbug.com/40067875): Delete account-tracking code, latest when
+  // ConsentLevel::kSync is cleaned up from the codebase.
   const CoreAccountId active_account_id =
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSync);
   std::vector<CoreAccountInfo> accounts;
@@ -64,6 +65,8 @@ void AccountTracker::OnRefreshTokenUpdatedForAccount(
                "account_id", account_info.account_id.ToString());
 
   // Ignore refresh tokens if there is no active account ID at all.
+  // TODO(crbug.com/40067875): Delete account-tracking code, latest when
+  // ConsentLevel::kSync is cleaned up from the codebase.
   if (!identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSync))
     return;
 
@@ -81,11 +84,19 @@ void AccountTracker::OnRefreshTokenRemovedForAccount(
   UpdateSignInState(account_id, /*is_signed_in=*/false);
 }
 
+void AccountTracker::OnIdentityManagerShutdown(
+    signin::IdentityManager* identity_manager) {
+  // Needs to be shutdown before IdentityManager.
+  NOTREACHED(base::NotFatalUntil::M142);
+}
+
 void AccountTracker::OnPrimaryAccountChanged(
     const signin::PrimaryAccountChangeEvent& event) {
+  // TODO(crbug.com/40067875): Delete account-tracking code, latest when
+  // ConsentLevel::kSync is cleaned up from the codebase.
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSync)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet: {
-      TRACE_EVENT0("identity", "AccountTracker::OnPrimaryAccountSet");
+      TRACE_EVENT0("identity", "AccountTracker::OnPrimaryAccountChanged");
       std::vector<CoreAccountInfo> accounts =
           identity_manager_->GetAccountsWithRefreshTokens();
       DVLOG(1) << "LOGIN " << accounts.size() << " accounts available.";
@@ -108,10 +119,10 @@ void AccountTracker::OnPrimaryAccountChanged(
 
 void AccountTracker::UpdateSignInState(const CoreAccountId& account_id,
                                        bool is_signed_in) {
-  if (!is_signed_in && !base::Contains(accounts_, account_id))
+  if (!is_signed_in && !accounts_.contains(account_id))
     return;
 
-  DCHECK(base::Contains(accounts_, account_id));
+  DCHECK(accounts_.contains(account_id));
   AccountState& account = accounts_[account_id];
   if (account.is_signed_in == is_signed_in)
     return;
@@ -122,7 +133,7 @@ void AccountTracker::UpdateSignInState(const CoreAccountId& account_id,
 }
 
 void AccountTracker::StartTrackingAccount(const CoreAccountInfo& account) {
-  if (base::Contains(accounts_, account.account_id))
+  if (accounts_.contains(account.account_id))
     return;
 
   DVLOG(1) << "StartTracking " << account.account_id;
@@ -134,7 +145,7 @@ void AccountTracker::StartTrackingAccount(const CoreAccountInfo& account) {
 
 void AccountTracker::StopTrackingAccount(const CoreAccountId account_id) {
   DVLOG(1) << "StopTracking " << account_id;
-  if (base::Contains(accounts_, account_id)) {
+  if (accounts_.contains(account_id)) {
     UpdateSignInState(account_id, /*is_signed_in=*/false);
     accounts_.erase(account_id);
   }

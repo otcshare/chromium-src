@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/memory/platform_shared_memory_region.h"
 #include "base/memory/raw_ptr.h"
@@ -33,7 +34,7 @@ class MOJO_SYSTEM_IMPL_EXPORT SharedBufferMapping
   size_t size() const { return mapping_->size(); }
 
   base::span<uint8_t> bytes() const {
-    return base::make_span(static_cast<uint8_t*>(memory()), size());
+    return UNSAFE_TODO(base::span(static_cast<uint8_t*>(memory()), size()));
   }
 
   static scoped_refptr<SharedBufferMapping> Create(

@@ -10,35 +10,37 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/hash/sha1.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
-#include "chrome/browser/certificate_provider/certificate_provider.h"
-#include "chrome/browser/certificate_provider/certificate_provider_service.h"
-#include "chrome/browser/certificate_provider/certificate_provider_service_factory.h"
-#include "chrome/browser/certificate_provider/test_certificate_provider_extension.h"
+#include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
+#include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
+#include "chrome/browser/ash/certificate_provider/test_certificate_provider_extension.h"
 #include "chrome/browser/extensions/api/certificate_provider/certificate_provider_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/notifications/request_pin_view_chromeos.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/components/certificate_provider/certificate_provider.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
@@ -46,15 +48,18 @@
 #include "components/policy/policy_constants.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
-#include "crypto/rsa_private_key.h"
+#include "crypto/hash.h"
 #include "extensions/browser/api/test/test_api_observer.h"
 #include "extensions/browser/api/test/test_api_observer_registry.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_test_helper.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/process_manager.h"
@@ -84,34 +89,25 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/lacros/cert/cert_db_initializer_factory.h"
-#endif
-
 using testing::Return;
 using testing::_;
 
 namespace {
 
-void StoreDigest(std::vector<uint8_t>* digest,
-                 base::OnceClosure callback,
-                 base::Value value) {
-  ASSERT_TRUE(value.is_blob()) << "Unexpected value in StoreDigest";
-  digest->assign(value.GetBlob().begin(), value.GetBlob().end());
-  std::move(callback).Run();
-}
-
+// TODO(https://issues.chromium.org/issues/434006732): switch to
+// crypto::sign::Sign() once that supports all the algorithms needed here.
 bool RsaSignRawData(uint16_t openssl_signature_algorithm,
                     const std::vector<uint8_t>& input,
-                    crypto::RSAPrivateKey* key,
+                    crypto::keypair::PrivateKey key,
                     std::vector<uint8_t>* signature) {
   const EVP_MD* const digest_algorithm =
       SSL_get_signature_algorithm_digest(openssl_signature_algorithm);
   bssl::ScopedEVP_MD_CTX ctx;
   EVP_PKEY_CTX* pkey_ctx = nullptr;
   if (!EVP_DigestSignInit(ctx.get(), &pkey_ctx, digest_algorithm,
-                          /*ENGINE* e=*/nullptr, key->key()))
+                          /*ENGINE* e=*/nullptr, key.key())) {
     return false;
+  }
   if (SSL_is_signature_algorithm_rsa_pss(openssl_signature_algorithm)) {
     // For RSA-PSS, configure the special padding and set the salt length to be
     // equal to the hash size.
@@ -132,11 +128,11 @@ bool RsaSignRawData(uint16_t openssl_signature_algorithm,
 
 bool RsaSignPrehashed(uint16_t openssl_signature_algorithm,
                       const std::vector<uint8_t>& digest,
-                      crypto::RSAPrivateKey* key,
+                      crypto::keypair::PrivateKey key,
                       std::vector<uint8_t>* signature) {
   // RSA-PSS is not supported for prehashed data.
   EXPECT_FALSE(SSL_is_signature_algorithm_rsa_pss(openssl_signature_algorithm));
-  RSA* rsa_key = EVP_PKEY_get0_RSA(key->key());
+  RSA* rsa_key = EVP_PKEY_get0_RSA(key.key());
   if (!rsa_key)
     return false;
   const int digest_algorithm_nid = EVP_MD_type(
@@ -165,19 +161,14 @@ std::string JsUint8Array(const std::vector<uint8_t>& bytes) {
 }
 
 std::string GetPageTextContent(content::WebContents* web_contents) {
-  std::string text_content;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractString(
-      web_contents->GetPrimaryMainFrame(),
-      "domAutomationController.send(document.body.textContent);",
-      &text_content));
-  return text_content;
+  return content::EvalJs(web_contents->GetPrimaryMainFrame(),
+                         "document.body.textContent;")
+      .ExtractString();
+  ;
 }
 
 std::string GetCertFingerprint1(const net::X509Certificate& cert) {
-  unsigned char hash[base::kSHA1Length];
-  base::SHA1HashBytes(CRYPTO_BUFFER_data(cert.cert_buffer()),
-                      CRYPTO_BUFFER_len(cert.cert_buffer()), hash);
-  return base::ToLowerASCII(base::HexEncode(hash, base::kSHA1Length));
+  return base::HexEncodeLower(crypto::hash::Sha256(cert.cert_span()));
 }
 
 // Generates a gtest failure whenever extension JS reports failure.
@@ -203,7 +194,7 @@ class JsFailureObserver : public extensions::TestApiObserver {
 
 class CertificateProviderApiTest : public extensions::ExtensionApiTest {
  public:
-  CertificateProviderApiTest() {}
+  CertificateProviderApiTest() = default;
 
   void SetUpInProcessBrowserTestFixture() override {
     provider_.SetDefaultReturns(
@@ -225,13 +216,13 @@ class CertificateProviderApiTest : public extensions::ExtensionApiTest {
     // certificate selection dialog.
     const std::string autoselect_pattern = R"({"pattern": "*", "filter": {}})";
 
-    base::Value autoselect_policy(base::Value::Type::LIST);
+    base::Value::List autoselect_policy;
     autoselect_policy.Append(autoselect_pattern);
 
     policy_map_.Set(policy::key::kAutoSelectCertificateForUrls,
                     policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-                    policy::POLICY_SOURCE_CLOUD, std::move(autoselect_policy),
-                    nullptr);
+                    policy::POLICY_SOURCE_CLOUD,
+                    base::Value(std::move(autoselect_policy)), nullptr);
     provider_.UpdateChromePolicy(policy_map_);
 
     content::RunAllPendingInMessageLoop();
@@ -278,17 +269,17 @@ class CertificateProviderApiTest : public extensions::ExtensionApiTest {
 
   std::vector<scoped_refptr<net::X509Certificate>>
   GetAllProvidedCertificates() {
-    base::RunLoop run_loop;
-    std::unique_ptr<chromeos::CertificateProvider> cert_provider =
-        cert_provider_service_->CreateCertificateProvider();
+    std::unique_ptr<chromeos::certificate_provider::CertificateProvider>
+        cert_provider = cert_provider_service_->CreateCertificateProvider();
+
+    base::test::TestFuture<net::ClientCertIdentityList> get_certificates_future;
+    cert_provider->GetCertificates(get_certificates_future.GetCallback());
+
     std::vector<scoped_refptr<net::X509Certificate>> all_provided_certificates;
-    auto callback = base::BindLambdaForTesting(
-        [&](net::ClientCertIdentityList cert_identity_list) {
-          for (const auto& cert_identity : cert_identity_list)
-            all_provided_certificates.push_back(cert_identity->certificate());
-        });
-    cert_provider->GetCertificates(callback.Then(run_loop.QuitClosure()));
-    run_loop.Run();
+    for (const auto& cert_identity : get_certificates_future.Get()) {
+      all_provided_certificates.push_back(cert_identity->certificate());
+    }
+
     return all_provided_certificates;
   }
 
@@ -298,7 +289,7 @@ class CertificateProviderApiTest : public extensions::ExtensionApiTest {
 
  protected:
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
-  raw_ptr<chromeos::CertificateProviderService, DanglingUntriaged>
+  raw_ptr<chromeos::CertificateProviderService, AcrossTasksDanglingUntriaged>
       cert_provider_service_ = nullptr;
   policy::PolicyMap policy_map_;
 
@@ -329,15 +320,6 @@ class CertificateProviderApiTest : public extensions::ExtensionApiTest {
 class CertificateProviderApiMockedExtensionTest
     : public CertificateProviderApiTest {
  public:
-  void SetUpInProcessBrowserTestFixture() override {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)  // Needed for ClientCertStoreLacros
-    CertDbInitializerFactory::GetInstance()
-        ->SetCreateWithBrowserContextForTesting(
-            /*should_create=*/true);
-#endif
-    CertificateProviderApiTest::SetUpInProcessBrowserTestFixture();
-  }
-
   void SetUpOnMainThread() override {
     CertificateProviderApiTest::SetUpOnMainThread();
 
@@ -346,7 +328,7 @@ class CertificateProviderApiMockedExtensionTest
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), extension_->GetResourceURL("basic.html")));
 
-    extension_contents_ = browser()->tab_strip_model()->GetActiveWebContents();
+    extension_contents_ = GetActiveWebContents();
 
     std::string raw_certificate = GetCertificateData();
     std::vector<uint8_t> certificate_bytes(raw_certificate.begin(),
@@ -359,27 +341,24 @@ class CertificateProviderApiMockedExtensionTest
   }
 
   void ExecuteJavascript(const std::string& function) const {
-    ASSERT_TRUE(content::ExecuteScript(GetExtensionMainFrame(), function));
+    ASSERT_TRUE(content::ExecJs(GetExtensionMainFrame(), function));
   }
 
-  // Calls |function| in the extension. |function| needs to return a bool. If
-  // that happens at the end of a callback, this will wait for the callback to
-  // complete.
+  // Calls |function| in the extension. |function| needs to return a bool or a
+  // Promise<bool>. If it returns a Promise<bool>, this waits for the promise to
+  // resolve.
   void ExecuteJavascriptAndWaitForCallback(const std::string& function) const {
-    bool success = false;
-    ASSERT_TRUE(content::ExecuteScriptAndExtractBool(GetExtensionMainFrame(),
-                                                     function, &success));
-    ASSERT_TRUE(success);
+    ASSERT_EQ(true, content::EvalJs(GetExtensionMainFrame(), function));
   }
 
   const extensions::Extension* extension() const { return extension_; }
 
-  std::string GetKeyPk8() const {
-    std::string key_pk8;
+  std::vector<uint8_t> GetKeyPk8() const {
     base::ScopedAllowBlockingForTesting allow_io;
-    EXPECT_TRUE(base::ReadFileToString(
-        extension_path_.AppendASCII("l1_leaf.pk8"), &key_pk8));
-    return key_pk8;
+    std::optional<std::vector<uint8_t>> key_pk8 =
+        base::ReadFileToBytes(extension_path_.AppendASCII("l1_leaf.pk8"));
+    CHECK(key_pk8);
+    return *key_pk8;
   }
 
   // Returns the certificate stored in
@@ -387,7 +366,7 @@ class CertificateProviderApiMockedExtensionTest
   scoped_refptr<net::X509Certificate> GetCertificate() const {
     std::string raw_certificate = GetCertificateData();
     return net::X509Certificate::CreateFromBytes(
-        base::as_bytes(base::make_span(raw_certificate)));
+        base::as_byte_span(raw_certificate));
   }
 
   // Tests the api by navigating to a webpage that requests to perform a
@@ -410,10 +389,9 @@ class CertificateProviderApiMockedExtensionTest
     ui_test_utils::NavigateToURLWithDisposition(
         browser(), GetHttpsClientCertUrl(),
         WindowOpenDisposition::NEW_FOREGROUND_TAB,
-        ui_test_utils::BROWSER_TEST_NONE);
+        ui_test_utils::BROWSER_TEST_NO_WAIT);
 
-    content::WebContents* const https_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+    content::WebContents* const https_contents = GetActiveWebContents();
 
     // Wait for the extension to receive the sign request.
     ASSERT_TRUE(sign_digest_listener.WaitUntilSatisfied());
@@ -426,35 +404,29 @@ class CertificateProviderApiMockedExtensionTest
     CheckCertificateProvidedByExtension(*certificate, *extension());
 
     // Fetch the data from the sign request.
-    const std::string request_algorithm =
-        ExecuteScriptAndGetValue(GetExtensionMainFrame(),
-                                 "signatureRequestAlgorithm;")
-            .GetString();
-    EXPECT_EQ(expected_request_signature_algorithm, request_algorithm);
-    std::vector<uint8_t> request_data;
-    {
-      base::RunLoop run_loop;
-      GetExtensionMainFrame()->ExecuteJavaScriptForTests(
-          u"signatureRequestData;",
-          base::BindOnce(&StoreDigest, &request_data, run_loop.QuitClosure()));
-      run_loop.Run();
-    }
+    EXPECT_EQ(
+        expected_request_signature_algorithm,
+        content::EvalJs(GetExtensionMainFrame(), "signatureRequestAlgorithm;"));
+
+    base::test::TestFuture<base::Value> exec_js_future;
+    GetExtensionMainFrame()->ExecuteJavaScriptForTests(
+        u"signatureRequestData;", exec_js_future.GetCallback(),
+        content::ISOLATED_WORLD_ID_GLOBAL);
+    std::vector<uint8_t> request_data(exec_js_future.Get().GetBlob());
 
     // Load the private key.
-    std::string key_pk8 = GetKeyPk8();
-    std::unique_ptr<crypto::RSAPrivateKey> key(
-        crypto::RSAPrivateKey::CreateFromPrivateKeyInfo(
-            base::as_bytes(base::make_span(key_pk8))));
+    std::optional<crypto::keypair::PrivateKey> key =
+        crypto::keypair::PrivateKey::FromPrivateKeyInfo(GetKeyPk8());
     ASSERT_TRUE(key);
 
     // Sign using the private key.
     std::vector<uint8_t> signature;
     if (is_raw_data) {
       EXPECT_TRUE(RsaSignRawData(openssl_signature_algorithm, request_data,
-                                 key.get(), &signature));
+                                 *key, &signature));
     } else {
       EXPECT_TRUE(RsaSignPrehashed(openssl_signature_algorithm, request_data,
-                                   key.get(), &signature));
+                                   *key, &signature));
     }
 
     // Inject the signature back to the extension and let it reply.
@@ -479,16 +451,13 @@ class CertificateProviderApiMockedExtensionTest
   void SetInterstitialBypass() {
     // Navigate to the test server in a new tab (to not clobber the test
     // fixture setup.
-    ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GetHttpsClientCertUrl(),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
-        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-    auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
+    NavigateToURLInNewTab(GetHttpsClientCertUrl());
+    auto* tab = GetActiveWebContents();
 
     // Proceed through the interstitial to set an SSL bypass for this host.
     content::TestNavigationObserver nav_observer(tab,
                                                  /*number_of_navigations=*/1);
-    ASSERT_TRUE(content::ExecuteScript(
+    ASSERT_TRUE(content::ExecJs(
         tab, "window.certificateErrorPageController.proceed();"));
     nav_observer.Wait();
 
@@ -507,9 +476,10 @@ class CertificateProviderApiMockedExtensionTest
     return certificate_data;
   }
 
-  raw_ptr<content::WebContents, DanglingUntriaged> extension_contents_ =
-      nullptr;
-  raw_ptr<const extensions::Extension, DanglingUntriaged> extension_ = nullptr;
+  raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged>
+      extension_contents_ = nullptr;
+  raw_ptr<const extensions::Extension, AcrossTasksDanglingUntriaged>
+      extension_ = nullptr;
   base::FilePath extension_path_;
 };
 
@@ -615,7 +585,8 @@ class CertificateProviderRequestPinTest : public CertificateProviderApiTest {
     extension_ = LoadExtension(extension_path);
   }
 
-  raw_ptr<const extensions::Extension, DanglingUntriaged> extension_ = nullptr;
+  raw_ptr<const extensions::Extension, AcrossTasksDanglingUntriaged>
+      extension_ = nullptr;
   std::unique_ptr<ExtensionTestMessageListener> command_request_listener_;
 };
 
@@ -658,10 +629,8 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiMockedExtensionTest,
                                                /*is_raw_data=*/false);
 
   // Replying to the signature request a second time must fail.
-  bool success = true;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      GetExtensionMainFrame(), "replyWithSignatureSecondTime();", &success));
-  ASSERT_FALSE(success);
+  ASSERT_EQ(false, content::EvalJs(GetExtensionMainFrame(),
+                                   "replyWithSignatureSecondTime();"));
 }
 
 // Tests an extension that provides certificates both proactively with
@@ -951,14 +920,10 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest,
 
   // Navigate again to the page with the client authentication. The extension
   // gets awakened and handles the request.
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetHttpsClientCertUrl(),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  NavigateToURLInNewTab(GetHttpsClientCertUrl());
   EXPECT_EQ(test_certificate_provider_extension.certificate_request_count(), 2);
-  EXPECT_EQ(
-      GetPageTextContent(browser()->tab_strip_model()->GetActiveWebContents()),
-      "got client cert with fingerprint: " + client_cert_fingerprint);
+  EXPECT_EQ(GetPageTextContent(GetActiveWebContents()),
+            "got client cert with fingerprint: " + client_cert_fingerprint);
 }
 
 // User enters the correct PIN.
@@ -1265,10 +1230,9 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderRequestPinTest, ExtensionDisable) {
   extensions::TestExtensionRegistryObserver registry_observer(
       extensions::ExtensionRegistry::Get(profile()),
       pin_request_extension_id());
-  extensions::ExtensionSystem::Get(profile())
-      ->extension_service()
-      ->DisableExtension(pin_request_extension_id(),
-                         extensions::disable_reason::DISABLE_USER_ACTION);
+  extensions::ExtensionRegistrar::Get(profile())->DisableExtension(
+      pin_request_extension_id(),
+      {extensions::disable_reason::DISABLE_USER_ACTION});
   registry_observer.WaitForExtensionUnloaded();
   // Let the events from the extensions subsystem propagate to the code that
   // manages the PIN dialog.

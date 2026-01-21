@@ -9,7 +9,6 @@
 #include "ui/ozone/platform/wayland/test/mock_pointer.h"
 #include "ui/ozone/platform/wayland/test/mock_surface.h"
 #include "ui/ozone/platform/wayland/test/test_keyboard.h"
-#include "ui/ozone/platform/wayland/test/test_util.h"
 #include "ui/ozone/platform/wayland/test/wayland_test.h"
 #include "ui/ozone/test/mock_platform_window_delegate.h"
 
@@ -42,7 +41,7 @@ class WaylandWindowManagerTest : public WaylandTest {
 };
 
 TEST_P(WaylandWindowManagerTest, GetWindow) {
-  MockWaylandPlatformWindowDelegate delegate;
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
 
   auto window1 = CreateWaylandWindowWithParams(PlatformWindowType::kWindow,
                                                kDefaultBounds, &delegate);
@@ -60,7 +59,7 @@ TEST_P(WaylandWindowManagerTest, GetWindow) {
 }
 
 TEST_P(WaylandWindowManagerTest, GetWindowWithLargestBounds) {
-  MockWaylandPlatformWindowDelegate delegate;
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
 
   auto window1 = CreateWaylandWindowWithParams(PlatformWindowType::kWindow,
                                                kDefaultBounds, &delegate);
@@ -73,7 +72,7 @@ TEST_P(WaylandWindowManagerTest, GetWindowWithLargestBounds) {
 }
 
 TEST_P(WaylandWindowManagerTest, GetCurrentFocusedWindow) {
-  MockWaylandPlatformWindowDelegate delegate;
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
 
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     wl_seat_send_capabilities(server->seat()->resource(),
@@ -86,7 +85,7 @@ TEST_P(WaylandWindowManagerTest, GetCurrentFocusedWindow) {
   // When window is shown, it automatically gets keyboard focus. Reset it.
   connection_->window_manager()->SetKeyboardFocusedWindow(nullptr);
 
-  wl::SyncDisplay(connection_->display_wrapper(), *connection_->display());
+  WaylandTestBase::SyncDisplay();
 
   EXPECT_FALSE(manager_->GetCurrentFocusedWindow());
   EXPECT_FALSE(manager_->GetCurrentKeyboardFocusedWindow());
@@ -124,7 +123,7 @@ TEST_P(WaylandWindowManagerTest, GetCurrentFocusedWindow) {
 }
 
 TEST_P(WaylandWindowManagerTest, GetCurrentKeyboardFocusedWindow) {
-  MockWaylandPlatformWindowDelegate delegate;
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
 
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     wl_seat_send_capabilities(server->seat()->resource(),
@@ -137,7 +136,7 @@ TEST_P(WaylandWindowManagerTest, GetCurrentKeyboardFocusedWindow) {
   // When window is shown, it automatically gets keyboard focus. Reset it.
   connection_->window_manager()->SetKeyboardFocusedWindow(nullptr);
 
-  wl::SyncDisplay(connection_->display_wrapper(), *connection_->display());
+  WaylandTestBase::SyncDisplay();
 
   EXPECT_FALSE(manager_->GetCurrentKeyboardFocusedWindow());
 
@@ -169,7 +168,7 @@ TEST_P(WaylandWindowManagerTest, GetCurrentKeyboardFocusedWindow) {
 }
 
 TEST_P(WaylandWindowManagerTest, GetAllWindows) {
-  MockWaylandPlatformWindowDelegate delegate;
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
 
   // There is a default window created by WaylandTest.
   auto windows = manager_->GetAllWindows();

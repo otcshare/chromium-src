@@ -8,24 +8,22 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 class PrefRegistrySimple;
 class Profile;
 
 namespace base {
-// TODO(crbug.com/1187061): Refactor this to remove base::DictionaryValue.
-class DictionaryValue;
 class FilePath;
 }  // namespace base
 
@@ -155,7 +153,9 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   static void RegisterPrefs(PrefRegistrySimple* registry);
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
-  static const char kManifestUrl[];
+  // Template URL where to fetch OEM services customization manifest from.
+  static constexpr char kManifestUrl[] =
+      "https://ssl.gstatic.com/chrome/chromeos-customization/%s.json";
 
   // Return true if the customization was applied. Customization is applied only
   // once per machine.
@@ -179,7 +179,7 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   bool GetDefaultWallpaperUrl(GURL* out_url) const;
 
   // Returns list of default apps.
-  absl::optional<base::Value::Dict> GetDefaultApps() const;
+  std::optional<base::Value::Dict> GetDefaultApps() const;
 
   // Creates an extensions::ExternalLoader that will provide OEM default apps.
   // Cache of OEM default apps stored in profile preferences.
@@ -233,7 +233,7 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   // Overriden from CustomizationDocument:
   bool LoadManifestFromString(const std::string& manifest) override;
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   // Initiate file fetching. Wait for online status.
   void StartFileFetch();
@@ -306,8 +306,9 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   // Manifest fetch is already in progress.
   bool load_started_;
 
-  // Delay between checks for network online state.
-  base::TimeDelta network_delay_;
+  // Delay between checks for network online state. If the optional is empty,
+  // the default value for delay is used.
+  std::optional<base::TimeDelta> custom_network_delay_ = std::nullopt;
 
   // Known external loaders.
   ExternalLoaders external_loaders_;

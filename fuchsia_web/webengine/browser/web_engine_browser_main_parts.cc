@@ -4,16 +4,15 @@
 
 #include "fuchsia_web/webengine/browser/web_engine_browser_main_parts.h"
 
-#include <fuchsia/ui/scenic/cpp/fidl.h>
 #include <fuchsia/web/cpp/fidl.h>
+#include <lib/async/default.h>
+#include <lib/inspect/component/cpp/component.h>
 #include <lib/sys/cpp/component_context.h>
 #include <lib/sys/cpp/outgoing_directory.h>
-#include <lib/sys/inspect/cpp/component.h>
+
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/important_file_writer_cleaner.h"
@@ -22,9 +21,13 @@
 #include "base/fuchsia/intl_profile_watcher.h"
 #include "base/fuchsia/koid.h"
 #include "base/fuchsia/process_context.h"
+#include "base/fuchsia/process_lifecycle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
@@ -32,6 +35,8 @@
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "components/fuchsia_component_support/inspect.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/browser/posix_key_provider.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/histogram_fetcher.h"
@@ -47,7 +52,7 @@
 #include "fuchsia_web/webengine/browser/web_engine_memory_inspector.h"
 #include "fuchsia_web/webengine/switches.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
-#include "media/fuchsia/cdm/service/fuchsia_cdm_manager.h"
+#include "media/mojo/services/fuchsia_cdm_manager.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -140,7 +145,7 @@ std::unique_ptr<media::FuchsiaCdmManager> CreateCdmManager() {
   std::string cdm_data_directory =
       command_line->GetSwitchValueASCII(switches::kCdmDataDirectory);
 
-  absl::optional<uint64_t> cdm_data_quota_bytes;
+  std::optional<uint64_t> cdm_data_quota_bytes;
   if (command_line->HasSwitch(switches::kCdmDataQuotaBytes)) {
     uint64_t value = 0;
     CHECK(base::StringToUint64(
@@ -152,24 +157,6 @@ std::unique_ptr<media::FuchsiaCdmManager> CreateCdmManager() {
   return std::make_unique<media::FuchsiaCdmManager>(
       std::move(create_key_system_callbacks),
       base::FilePath(cdm_data_directory), cdm_data_quota_bytes);
-}
-
-// Checks the supported ozone platform with Scenic if no arg is specified
-// already.
-void MaybeSetOzonePlatformArg(base::CommandLine* launch_args) {
-  if (launch_args->HasSwitch(switches::kOzonePlatform))
-    return;
-
-  fuchsia::ui::scenic::ScenicSyncPtr scenic;
-  zx_status_t status =
-      base::ComponentContextForProcess()->svc()->Connect(scenic.NewRequest());
-  ZX_CHECK(status == ZX_OK, status) << "Couldn't connect to Scenic.";
-
-  bool scenic_uses_flatland = false;
-  status = scenic->UsesFlatland(&scenic_uses_flatland);
-  ZX_CHECK(status == ZX_OK, status) << "UsesFlatland()";
-  launch_args->AppendSwitchNative(switches::kOzonePlatform,
-                                  scenic_uses_flatland ? "flatland" : "scenic");
 }
 
 }  // namespace
@@ -195,11 +182,6 @@ WebEngineBrowserMainParts::browser_contexts() const {
   return contexts;
 }
 
-int WebEngineBrowserMainParts::PreEarlyInitialization() {
-  MaybeSetOzonePlatformArg(base::CommandLine::ForCurrentProcess());
-  return content::BrowserMainParts::PreEarlyInitialization();
-}
-
 void WebEngineBrowserMainParts::PostEarlyInitialization() {
   base::ImportantFileWriterCleaner::GetInstance().Initialize();
 }
@@ -207,11 +189,23 @@ void WebEngineBrowserMainParts::PostEarlyInitialization() {
 int WebEngineBrowserMainParts::PreMainMessageLoopRun() {
   DCHECK_EQ(context_bindings_.size(), 0u);
 
+  auto key_provider = std::make_unique<os_crypt_async::PosixKeyProvider>();
+  std::vector<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
+      key_providers;
+  key_providers.emplace_back(/*precedence=*/5u, std::move(key_provider));
+  os_crypt_async_ =
+      std::make_unique<os_crypt_async::OSCryptAsync>(std::move(key_providers));
+  // Trigger async initialization of OSCrypt key providers.
+  os_crypt_async_->GetInstance(
+      base::DoNothing(), os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+
+  network_connection_tracker_ = content::GetNetworkConnectionTracker();
+
   // Initialize the |component_inspector_| to allow diagnostics to be published.
-  component_inspector_ = std::make_unique<sys::ComponentInspector>(
-      base::ComponentContextForProcess());
+  component_inspector_ = std::make_unique<inspect::ComponentInspector>(
+      async_get_default_dispatcher(), inspect::PublishOptions{});
   fuchsia_component_support::PublishVersionInfoToInspect(
-      component_inspector_.get());
+      &component_inspector_->root());
 
   // Add a node providing memory details for this whole web instance.
   memory_inspector_ =
@@ -268,7 +262,7 @@ int WebEngineBrowserMainParts::PreMainMessageLoopRun() {
                           base::Unretained(this)));
 
   // Configure Ozone with an Aura implementation of the Screen abstraction.
-  screen_ = std::make_unique<aura::ScopedScreenOzone>();
+  screen_ = std::make_unique<aura::ScreenOzone>();
 
   // Create the FuchsiaCdmManager at startup rather than on-demand, to allow it
   // to perform potentially expensive startup work in the background.
@@ -290,9 +284,6 @@ int WebEngineBrowserMainParts::PreMainMessageLoopRun() {
       fidl::InterfaceRequestHandler<fuchsia::web::FrameHost>(fit::bind_member(
           this, &WebEngineBrowserMainParts::HandleFrameHostRequest)));
 
-  // TODO(crbug.com/1315601): Create a base::ProcessLifecycle instance here, to
-  // trigger graceful shutdown on component stop, when migrated to CFv2.
-
   // Manage network-quality signals and send them to renderers. Provides input
   // for networking-related Client Hints.
   network_quality_tracker_ = std::make_unique<network::NetworkQualityTracker>(
@@ -300,11 +291,7 @@ int WebEngineBrowserMainParts::PreMainMessageLoopRun() {
   network_quality_observer_ =
       content::CreateNetworkQualityObserver(network_quality_tracker_.get());
 
-  // Now that all services have been published, it is safe to start processing
-  // requests to the service directory.
-  base::ComponentContextForProcess()->outgoing()->ServeFromStartupInfo();
-
-  // TODO(crbug.com/1163073): Update tests to make a service connection to the
+  // TODO(crbug.com/40162984): Update tests to make a service connection to the
   // Context and remove this workaround.
   fidl::InterfaceRequest<fuchsia::web::Context>& request = GetTestRequest();
   if (request)
@@ -315,6 +302,15 @@ int WebEngineBrowserMainParts::PreMainMessageLoopRun() {
 
 void WebEngineBrowserMainParts::WillRunMainMessageLoop(
     std::unique_ptr<base::RunLoop>& run_loop) {
+  // Allow the browser to teardown gracefully when explicitly destroyed by the
+  // framework.
+  lifecycle_ =
+      std::make_unique<base::ProcessLifecycle>(run_loop->QuitClosure());
+
+  // Now that all services have been published, it is safe to start processing
+  // requests to the service directory.
+  base::ComponentContextForProcess()->outgoing()->ServeFromStartupInfo();
+
   quit_closure_ = run_loop->QuitClosure();
 }
 
@@ -370,11 +366,13 @@ void WebEngineBrowserMainParts::HandleContextRequest(
   std::unique_ptr<WebEngineBrowserContext> browser_context;
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kIncognito)) {
     browser_context = WebEngineBrowserContext::CreateIncognito(
-        network_quality_tracker_.get());
+        network_quality_tracker_.get(), os_crypt_async_.get(),
+        network_connection_tracker_);
   } else {
     browser_context = WebEngineBrowserContext::CreatePersistent(
         base::FilePath(base::kPersistedDataDirectoryPath),
-        network_quality_tracker_.get());
+        network_quality_tracker_.get(), os_crypt_async_.get(),
+        network_connection_tracker_);
   }
 
   auto inspect_node_name =
@@ -411,7 +409,8 @@ void WebEngineBrowserMainParts::HandleFrameHostRequest(
   frame_host_bindings_.AddBinding(
       std::make_unique<FrameHostImpl>(
           component_inspector_->root().CreateChild(inspect_node_name),
-          devtools_controller_.get(), network_quality_tracker_.get()),
+          devtools_controller_.get(), network_quality_tracker_.get(),
+          os_crypt_async_.get(), network_connection_tracker_),
       std::move(request));
 }
 

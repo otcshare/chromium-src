@@ -4,6 +4,8 @@
 
 #include "media/capture/video/video_capture_metrics.h"
 
+#include <algorithm>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
@@ -140,10 +142,19 @@ VideoResolutionDesignation ResolutionNameFromSize(gfx::Size frame_size) {
     frame_size.set_width(frame_size.height());
     frame_size.set_width(tmp);
   }
-  auto* it = kResolutions.find(frame_size);
+  auto it = kResolutions.find(frame_size);
   return it != kResolutions.end() ? it->second
                                   : VideoResolutionDesignation::kUnknown;
 }
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class VideoEffectStatus {
+  kUnsupported = 0,
+  kSupported = 1,
+  kEnabled = 2,
+  kMaxValue = kEnabled
+};
 
 }  // namespace
 
@@ -175,6 +186,70 @@ void LogCaptureDeviceMetrics(
       }
     }
   }
+}
+
+VideoEffectStatus GetStatus(bool is_supported, bool is_enabled) {
+  if (!is_supported) {
+    return VideoEffectStatus::kUnsupported;
+  }
+  return is_enabled ? VideoEffectStatus::kEnabled
+                    : VideoEffectStatus::kSupported;
+}
+
+void LogCaptureDeviceEffects(mojom::PhotoStatePtr photo_state) {
+  const bool has_background_blur =
+      std::ranges::contains(photo_state->supported_background_blur_modes,
+                            mojom::BackgroundBlurMode::BLUR);
+  const bool background_blur_enabled =
+      photo_state->background_blur_mode != mojom::BackgroundBlurMode::OFF;
+  UMA_HISTOGRAM_ENUMERATION(
+      "Media.VideoCapture.Device.Effect2.BackgroundBlur",
+      GetStatus(has_background_blur, background_blur_enabled));
+
+  const bool has_face_framing =
+      photo_state->supported_face_framing_modes.size() > 0;
+  const bool face_framing_enabled =
+      photo_state->current_face_framing_mode != mojom::MeteringMode::NONE;
+  UMA_HISTOGRAM_ENUMERATION("Media.VideoCapture.Device.Effect2.FaceFraming",
+                            GetStatus(has_face_framing, face_framing_enabled));
+
+  const bool has_eye_gaze_correction =
+
+      std::ranges::contains(photo_state->supported_eye_gaze_correction_modes,
+                            mojom::EyeGazeCorrectionMode::ON) ||
+      std::ranges::contains(photo_state->supported_eye_gaze_correction_modes,
+                            mojom::EyeGazeCorrectionMode::STARE);
+  const bool eye_gaze_correction_enabled =
+      photo_state->current_eye_gaze_correction_mode !=
+      mojom::EyeGazeCorrectionMode::OFF;
+  UMA_HISTOGRAM_ENUMERATION(
+      "Media.VideoCapture.Device.Effect2.EyeGazeCorrection",
+      GetStatus(has_eye_gaze_correction, eye_gaze_correction_enabled));
+}
+
+void LogCaptureCurrentDeviceResolution(int width, int height) {
+  // This method combines width and height into a single uint32_t value.
+  constexpr int kMinValue = 0;
+  constexpr int kMaxValue = 65535;
+  uint32_t result = 0;
+
+  // Check if width and height are valid, otherwise metric will be 0.
+  if (width > kMinValue && width <= kMaxValue && height > kMinValue &&
+      height <= kMaxValue) {
+    // Store the width in the first 16 bits
+    result |= static_cast<uint16_t>(width) << 16;
+    // Store the height in the last 16 bits
+    result |= static_cast<uint16_t>(height);
+  }
+  base::UmaHistogramSparse("Media.VideoCapture.Device.Opened.Resolution",
+                           result);
+}
+
+void LogCaptureCurrentDevicePixelFormat(
+    const media::VideoPixelFormat pixel_format) {
+  base::UmaHistogramEnumeration("Media.VideoCapture.Device.Opened.PixelFormat",
+                                pixel_format,
+                                media::VideoPixelFormat::PIXEL_FORMAT_MAX);
 }
 
 }  // namespace media

@@ -14,14 +14,12 @@
 
 namespace ash {
 
-using ::chromeos::ImmersiveFullscreenController;
-
 ImmersiveContextAsh::ImmersiveContextAsh() = default;
 
 ImmersiveContextAsh::~ImmersiveContextAsh() = default;
 
 void ImmersiveContextAsh::OnEnteringOrExitingImmersive(
-    ImmersiveFullscreenController* controller,
+    chromeos::ImmersiveFullscreenController* controller,
     bool entering) {
   aura::Window* window = controller->widget()->GetNativeWindow();
   WindowState* window_state = WindowState::Get(window);
@@ -33,9 +31,8 @@ void ImmersiveContextAsh::OnEnteringOrExitingImmersive(
 }
 
 gfx::Rect ImmersiveContextAsh::GetDisplayBoundsInScreen(views::Widget* widget) {
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
-          widget->GetNativeWindow());
+  display::Display display = display::Screen::Get()->GetDisplayNearestWindow(
+      widget->GetNativeWindow());
   return display.bounds();
 }
 

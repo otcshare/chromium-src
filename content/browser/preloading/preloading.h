@@ -5,9 +5,10 @@
 #ifndef CONTENT_BROWSER_PRELOADING_PRELOADING_H_
 #define CONTENT_BROWSER_PRELOADING_PRELOADING_H_
 
-#include "content/public/browser/preloading.h"
+#include <string_view>
 
-#include "content/common/content_export.h"
+#include "content/public/browser/preloading.h"
+#include "content/public/browser/preloading_trigger_type.h"
 
 namespace content {
 
@@ -21,26 +22,43 @@ namespace content {
 // go/preloading-dashboard-updates to update the mapping reflected in
 // dashboard, or if you are not a Googler, please file an FYI bug on
 // https://crbug.new with component Internals>Preload.
-enum class ContentPreloadingPredictor {
-  // Numbering starts from `kPreloadingPredictorContentStart` defined in
-  // //content/public/preloading.h. Advance numbering by +1 after adding a new
-  // element.
+//
+// LINT.IfChange
+namespace content_preloading_predictor {
+// Advance numbering by +1 when adding a new element.
+//
+// Please limit content-internal `PreloadingPredictor` between 50 to 99
+// (inclusive) as 0 to 49 are reserved for content-public definitions, and 100
+// and beyond are reserved for embedder definitions. Both the value and the name
+// should be unique across all the namespaces.
 
-  // This API allows an origin to list possible navigation URLs that the user
-  // might navigate to in order to perform preloading operations.
-  // For more details please see:
-  // https://wicg.github.io/nav-speculation/prerendering.html#speculation-rules
-  kSpeculationRules =
-      static_cast<int>(PreloadingPredictor::kPreloadingPredictorContentStart),
+// This API allows an origin to list possible navigation URLs that the user
+// might navigate to in order to perform preloading operations.
+// For more details please see:
+// https://wicg.github.io/nav-speculation/prerendering.html#speculation-rules
+inline constexpr PreloadingPredictor kSpeculationRules(50, "SpeculationRules");
 
-  // TODO(crbug.com/1309934): Add more predictors as we integrate Preloading
-  // logging.
-};
+// When a mouse down of a mouse back button is seen.
+inline constexpr PreloadingPredictor kMouseBackButton(51, "MouseBackButton");
 
-// Helper method to convert ContentPreloadingPredictor to
-// content::PreloadingPredictor to avoid casting.
-PreloadingPredictor CONTENT_EXPORT
-ToPreloadingPredictor(ContentPreloadingPredictor predictor);
+// Same with the kSpeculationRules, but the rules are injected from an isolated
+// world, i.e. extensions or embedder's built-in features.
+inline constexpr PreloadingPredictor kSpeculationRulesFromIsolatedWorld(
+    52,
+    "SpeculationRulesFromIsolatedWorld");
+
+// Same with the kSpeculationRules, but the rules are injected by the browser
+// as part of the auto speculation rules feature.
+inline constexpr PreloadingPredictor kSpeculationRulesFromAutoSpeculationRules(
+    53,
+    "SpeculationRulesFromAutoSpeculationRules");
+}  // namespace content_preloading_predictor
+// LINT.ThenChange()
+
+CONTENT_EXPORT std::string_view PreloadingTypeToString(PreloadingType type);
+
+CONTENT_EXPORT PreloadingPredictor
+GetPredictorForPreloadingTriggerType(PreloadingTriggerType trigger_type);
 
 }  // namespace content
 

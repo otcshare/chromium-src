@@ -8,11 +8,11 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/webui/scanning/scanning_app_delegate.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -20,8 +20,9 @@
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 
 namespace {
 
@@ -90,17 +91,16 @@ void ScanningHandler::RegisterMessages() {
                           base::Unretained(this)));
 }
 
-void ScanningHandler::FileSelected(const base::FilePath& path,
-                                   int index,
-                                   void* params) {
+void ScanningHandler::FileSelected(const ui::SelectedFileInfo& file,
+                                   int index) {
   DCHECK(IsJavascriptAllowed());
 
   select_file_dialog_ = nullptr;
   ResolveJavascriptCallback(base::Value(scan_location_callback_id_),
-                            CreateSelectedPathValue(path));
+                            CreateSelectedPathValue(file.path()));
 }
 
-void ScanningHandler::FileSelectionCanceled(void* params) {
+void ScanningHandler::FileSelectionCanceled() {
   DCHECK(IsJavascriptAllowed());
 
   select_file_dialog_ = nullptr;
@@ -136,7 +136,6 @@ void ScanningHandler::HandleOpenFilesInMediaApp(const base::Value::List& args) {
     return;
 
   CHECK_EQ(1U, args.size());
-  DCHECK(args[0].is_list());
   const base::Value::List& value_list = args[0].GetList();
   DCHECK(!value_list.empty());
 
@@ -163,7 +162,7 @@ void ScanningHandler::HandleRequestScanToLocation(
   content::WebContents* web_contents = web_ui()->GetWebContents();
   gfx::NativeWindow owning_window =
       web_contents ? web_contents->GetTopLevelNativeWindow()
-                   : gfx::kNullNativeWindow;
+                   : gfx::NativeWindow();
   select_file_dialog_ = ui::SelectFileDialog::Create(
       this, scanning_app_delegate_->CreateChromeSelectFilePolicy());
   select_file_dialog_->SelectFile(
@@ -171,8 +170,7 @@ void ScanningHandler::HandleRequestScanToLocation(
       l10n_util::GetStringUTF16(IDS_SCANNING_APP_SELECT_DIALOG_TITLE),
       base::FilePath() /* default_path */, nullptr /* file_types */,
       0 /* file_type_index */,
-      base::FilePath::StringType() /* default_extension */, owning_window,
-      nullptr /* params */);
+      base::FilePath::StringType() /* default_extension */, owning_window);
 }
 
 void ScanningHandler::HandleShowFileInLocation(const base::Value::List& args) {

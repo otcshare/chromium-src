@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ui/chromeos/events/event_rewriter_chromeos.h"
+#include "ui/events/ash/event_rewriter_ash.h"
 
 namespace ui {
 class Event;
@@ -27,7 +27,7 @@ class ASH_EXPORT EventRewriterController {
 
   // Initializes this controller after ash::Shell finishes initialization.
   virtual void Initialize(
-      ui::EventRewriterChromeOS::Delegate* event_rewriter_delegate,
+      ui::EventRewriterAsh::Delegate* event_rewriter_delegate,
       AccessibilityEventRewriterDelegate*
           accessibility_event_rewriter_delegate) = 0;
 
@@ -44,7 +44,6 @@ class ASH_EXPORT EventRewriterController {
   virtual void SetArrowToTabRewritingEnabled(bool enabled) = 0;
 
   // Continue dispatch of key events that were unhandled by ChromeVox.
-  // TODO(crbug.com/839541): ChromeVox should not repost unhandled events.
   virtual void OnUnhandledSpokenFeedbackEvent(
       std::unique_ptr<ui::Event> event) = 0;
 
@@ -53,6 +52,13 @@ class ASH_EXPORT EventRewriterController {
 
   // Sends mouse events to accessibility component extensions when true.
   virtual void SetSendMouseEvents(bool value) = 0;
+
+  // Either propagates or cancels a stored key event for ChromeVox in mv3.
+  virtual void ProcessPendingSpokenFeedbackEvent(unsigned int id,
+                                                 bool propagate) = 0;
+
+  // Enables or disables key event handling for the ChromeVox in mv3.
+  virtual void SetSpokenFeedbackMv3KeyHandlingEnabled(bool enabled) = 0;
 
  protected:
   virtual ~EventRewriterController() {}

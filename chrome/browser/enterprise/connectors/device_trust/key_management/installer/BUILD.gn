@@ -5,6 +5,7 @@
 source_set("elevated_rotation") {
   public = [
     "key_rotation_manager.h",
+    "key_rotation_types.h",
     "metrics_util.h",
   ]
 
@@ -16,15 +17,21 @@ source_set("elevated_rotation") {
   ]
 
   deps = [
+    "//chrome/browser/enterprise/connectors/device_trust:features",
     "//chrome/browser/enterprise/connectors/device_trust/key_management/core",
-    "//chrome/browser/enterprise/connectors/device_trust/key_management/core/network",
+    "//chrome/browser/enterprise/connectors/device_trust/key_management/core/network:common",
     "//chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence",
+    "//components/enterprise/client_certificates/core",
     "//components/policy/proto",
     "//crypto",
     "//url",
   ]
 
   public_deps = [ "//base" ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("unit_tests") {
@@ -34,9 +41,12 @@ source_set("unit_tests") {
   deps = [
     ":elevated_rotation",
     "//base/test:test_support",
+    "//chrome/browser/enterprise/connectors/device_trust:features",
     "//chrome/browser/enterprise/connectors/device_trust/key_management/core",
     "//chrome/browser/enterprise/connectors/device_trust/key_management/core/network:test_support",
     "//chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence:test_support",
+    "//components/enterprise/client_certificates/core",
+    "//components/enterprise/client_certificates/core:test_support",
     "//crypto",
     "//testing/gmock",
     "//testing/gtest",

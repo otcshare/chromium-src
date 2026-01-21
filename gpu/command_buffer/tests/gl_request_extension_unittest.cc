@@ -51,7 +51,7 @@ TEST_P(RequestExtensionCHROMIUMTest, Basic) {
                           base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)
             .size();
 
-    if (extension_string.find(to_request + " ") != std::string::npos) {
+    if (extension_string.contains(to_request + " ")) {
       // Somewhat counterintuitively, requestable extensions contain every
       // extension available.
       continue;
@@ -92,6 +92,7 @@ TEST_P(RequestExtensionCHROMIUMTest, Basic) {
     EXPECT_GE(extensions.size(), extensions_size_before_request);
   }
 }
+
 INSTANTIATE_TEST_SUITE_P(WithContextTypes,
                          RequestExtensionCHROMIUMTest,
                          ::testing::Values(CONTEXT_TYPE_WEBGL1,

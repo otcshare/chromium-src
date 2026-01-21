@@ -33,14 +33,15 @@ component("webview") {
 
   deps = [
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
+    "//components/input",
     "//ipc",
     "//skia",
     "//ui/accessibility",
-    "//ui/base",
+    "//ui/base/interaction",
     "//ui/content_accelerators",
     "//ui/events",
     "//ui/events:events_base",
+    "//ui/gfx:native_ui_types",
     "//ui/web_dialogs",
     "//url",
   ]
@@ -75,7 +76,6 @@ static_library("test_support") {
     "//base",
     "//content",
     "//content/test:test_support",
-    "//ipc:test_support",
     "//skia",
     "//testing/gtest",
     "//ui/base",

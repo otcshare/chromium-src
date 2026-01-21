@@ -8,6 +8,7 @@
 #include "ash/ash_export.h"
 #include "ash/frame/frame_context_menu_controller.h"
 #include "ash/wm/overview/overview_observer.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ui/frame/caption_buttons/caption_button_model.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_delegate.h"
 #include "ui/aura/window_observer.h"
@@ -33,8 +34,8 @@ namespace ash {
 //
 // TODO(oshima): Currently client is responsible for hooking this up to
 // the target widget because ImmersiveFullscreenController is not owned by
-// NonClientFrameViewAsh. Investigate if we integrate this into
-// NonClientFrameViewAsh.
+// FrameViewAsh. Investigate if we integrate this into
+// FrameViewAsh.
 class ASH_EXPORT WideFrameView
     : public views::WidgetDelegateView,
       public aura::WindowObserver,
@@ -63,7 +64,7 @@ class ASH_EXPORT WideFrameView
   static gfx::Rect GetFrameBounds(views::Widget* target);
 
   // views::View:
-  void Layout() override;
+  void Layout(PassKey) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
 
   // aura::WindowObserver:
@@ -88,13 +89,13 @@ class ASH_EXPORT WideFrameView
   chromeos::HeaderView* GetTargetHeaderView();
 
   // The target widget this frame will control.
-  views::Widget* target_;
+  raw_ptr<views::Widget> target_;
 
   std::unique_ptr<views::Widget> widget_;
 
   display::ScopedDisplayObserver display_observer_{this};
 
-  chromeos::HeaderView* header_view_ = nullptr;
+  raw_ptr<chromeos::HeaderView> header_view_ = nullptr;
 
   std::unique_ptr<FrameContextMenuController> frame_context_menu_controller_;
 

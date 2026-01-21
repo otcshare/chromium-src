@@ -4,11 +4,12 @@
 
 #include "components/viz/service/display/overlay_candidate.h"
 
+#include <variant>
+
 #include "cc/base/math_util.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
-#include "components/viz/common/quads/yuv_video_draw_quad.h"
 #include "components/viz/service/debugger/viz_debugger.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -42,39 +43,23 @@ bool OverlayCandidate::IsInvisibleQuad(const DrawQuad* quad) {
 }
 
 // static
-bool OverlayCandidate::IsOccluded(const OverlayCandidate& candidate,
-                                  QuadList::ConstIterator quad_list_begin,
-                                  QuadList::ConstIterator quad_list_end) {
-  // The rects are rounded as they're snapped by the compositor to pixel unless
-  // it is AA'ed, in which case, it won't be overlaid.
-  gfx::Rect target_rect =
-      gfx::ToRoundedRect(DisplayRectInTargetSpace(candidate));
-
-  // Check that no visible quad overlaps the candidate.
-  for (auto overlap_iter = quad_list_begin; overlap_iter != quad_list_end;
-       ++overlap_iter) {
-    gfx::Rect overlap_rect = gfx::ToRoundedRect(cc::MathUtil::MapClippedRect(
-        overlap_iter->shared_quad_state->quad_to_target_transform,
-        gfx::RectF(overlap_iter->rect)));
-
-    if (!OverlayCandidate::IsInvisibleQuad(*overlap_iter) &&
-        target_rect.Intersects(overlap_rect)) {
-      return true;
-    }
+bool OverlayCandidate::QuadHasRoundedDisplayMasks(const DrawQuad* quad) {
+  if (const auto* texture_quad = quad->DynamicCast<TextureDrawQuad>()) {
+    return !texture_quad->rounded_display_masks_info.IsEmpty();
   }
+
   return false;
 }
 
 // static
 void OverlayCandidate::ApplyClip(OverlayCandidate& candidate,
                                  const gfx::RectF& clip_rect) {
-  DCHECK(absl::holds_alternative<gfx::OverlayTransform>(candidate.transform));
+  DCHECK(std::holds_alternative<gfx::OverlayTransform>(candidate.transform));
   if (!clip_rect.Contains(candidate.display_rect)) {
     // Apply the buffer transform to the candidate's |uv_rect| so that it is
     // in the same orientation as |display_rect| when applying the clip.
     gfx::Transform buffer_transform = gfx::OverlayTransformToTransform(
-        absl::get<gfx::OverlayTransform>(candidate.transform),
-        gfx::SizeF(1, 1));
+        std::get<gfx::OverlayTransform>(candidate.transform), gfx::SizeF(1, 1));
     candidate.uv_rect = buffer_transform.MapRect(candidate.uv_rect);
 
     gfx::RectF intersect_clip_display = clip_rect;
@@ -100,9 +85,6 @@ bool OverlayCandidate::RequiresOverlay(const DrawQuad* quad) {
                  OverlayPriority::kRequired;
     case DrawQuad::Material::kVideoHole:
       return true;
-    case DrawQuad::Material::kYuvVideoContent:
-      return YUVVideoDrawQuad::MaterialCast(quad)->protected_video_type ==
-             gfx::ProtectedVideoType::kHardwareProtected;
     default:
       return false;
   }
@@ -111,8 +93,8 @@ bool OverlayCandidate::RequiresOverlay(const DrawQuad* quad) {
 // static
 gfx::RectF OverlayCandidate::DisplayRectInTargetSpace(
     const OverlayCandidate& candidate) {
-  if (absl::holds_alternative<gfx::Transform>(candidate.transform)) {
-    return absl::get<gfx::Transform>(candidate.transform)
+  if (std::holds_alternative<gfx::Transform>(candidate.transform)) {
+    return std::get<gfx::Transform>(candidate.transform)
         .MapRect(candidate.display_rect);
   }
   return candidate.display_rect;

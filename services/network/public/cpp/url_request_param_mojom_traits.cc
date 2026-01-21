@@ -4,6 +4,7 @@
 
 #include "services/network/public/cpp/url_request_param_mojom_traits.h"
 
+#include "base/notreached.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "net/base/request_priority.h"
 #include "net/url_request/referrer_policy.h"
@@ -30,7 +31,6 @@ EnumTraits<network::mojom::RequestPriority, net::RequestPriority>::ToMojom(
       return network::mojom::RequestPriority::kHighest;
   }
   NOTREACHED();
-  return static_cast<network::mojom::RequestPriority>(priority);
 }
 
 bool EnumTraits<network::mojom::RequestPriority, net::RequestPriority>::
@@ -57,8 +57,6 @@ bool EnumTraits<network::mojom::RequestPriority, net::RequestPriority>::
   }
 
   NOTREACHED();
-  *out = static_cast<net::RequestPriority>(in);
-  return true;
 }
 
 network::mojom::URLRequestReferrerPolicy
@@ -89,7 +87,6 @@ EnumTraits<network::mojom::URLRequestReferrerPolicy,
       return network::mojom::URLRequestReferrerPolicy::kNoReferrer;
   }
   NOTREACHED();
-  return static_cast<network::mojom::URLRequestReferrerPolicy>(policy);
 }
 
 bool EnumTraits<network::mojom::URLRequestReferrerPolicy, net::ReferrerPolicy>::
@@ -129,7 +126,6 @@ bool EnumTraits<network::mojom::URLRequestReferrerPolicy, net::ReferrerPolicy>::
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

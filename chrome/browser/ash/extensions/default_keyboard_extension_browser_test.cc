@@ -12,11 +12,9 @@
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/render_view_host.h"
-#include "content/public/browser/render_widget_host.h"
-#include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -58,7 +56,7 @@ DefaultKeyboardExtensionBrowserTestConfig::
       url_(kVirtualKeyboardURL) {}
 
 DefaultKeyboardExtensionBrowserTestConfig::
-    ~DefaultKeyboardExtensionBrowserTestConfig() {}
+    ~DefaultKeyboardExtensionBrowserTestConfig() = default;
 
 void DefaultKeyboardExtensionBrowserTest::SetUpCommandLine(
     base::CommandLine* command_line) {
@@ -83,7 +81,7 @@ void DefaultKeyboardExtensionBrowserTest::RunTest(
                    base::FilePath(config.base_framework_));
   InjectJavascript(base::FilePath(config.test_dir_), file);
 
-  ASSERT_TRUE(content::ExecuteScript(web_contents, utf8_content_));
+  ASSERT_TRUE(content::ExecJs(web_contents, utf8_content_));
 
   // Inject DOM-automation test harness and run tests.
   EXPECT_TRUE(ExecuteWebUIResourceTest(web_contents));
@@ -98,20 +96,14 @@ DefaultKeyboardExtensionBrowserTest::GetKeyboardWebContents(
   client->ShowKeyboard();
 
   GURL url = extensions::Extension::GetBaseURLFromExtensionId(id);
-  std::unique_ptr<content::RenderWidgetHostIterator> widgets(
-      content::RenderWidgetHost::GetRenderWidgetHosts());
-  while (content::RenderWidgetHost* widget = widgets->GetNextHost()) {
-    content::RenderViewHost* view = content::RenderViewHost::From(widget);
-    if (!view)
-      continue;
-    content::WebContents* wc = content::WebContents::FromRenderViewHost(view);
-    if (wc &&
-        url == wc->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL()) {
+  for (content::WebContents* wc : content::GetAllWebContents()) {
+    if (url == wc->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL()) {
       // Waits for virtual keyboard to load.
       EXPECT_TRUE(content::WaitForLoadStop(wc));
       return wc;
     }
   }
+
   LOG(ERROR) << "Extension not found:" << url;
   return nullptr;
 }
@@ -119,7 +111,7 @@ DefaultKeyboardExtensionBrowserTest::GetKeyboardWebContents(
 void DefaultKeyboardExtensionBrowserTest::InjectJavascript(
     const base::FilePath& dir,
     const base::FilePath& file) {
-  base::FilePath path = ui_test_utils::GetTestFilePath(dir, file);
+  base::FilePath path = chrome_test_utils::GetTestFilePath(dir, file);
   std::string library_content;
   {
     base::ScopedAllowBlockingForTesting allow_io;
@@ -153,13 +145,9 @@ IN_PROC_BROWSER_TEST_F(DefaultKeyboardExtensionBrowserTest,
 IN_PROC_BROWSER_TEST_F(DefaultKeyboardExtensionBrowserTest, IsKeyboardLoaded) {
   content::WebContents* keyboard_wc = GetKeyboardWebContents(kExtensionId);
   ASSERT_TRUE(keyboard_wc);
-  bool loaded = false;
   std::string script = "!!chrome.virtualKeyboardPrivate";
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      keyboard_wc, "window.domAutomationController.send(" + script + ");",
-      &loaded));
   // Catches the regression in crbug.com/308653.
-  ASSERT_TRUE(loaded);
+  ASSERT_EQ(true, content::EvalJs(keyboard_wc, script));
 }
 
 IN_PROC_BROWSER_TEST_F(DefaultKeyboardExtensionBrowserTest, EndToEndTest) {
@@ -173,14 +161,14 @@ IN_PROC_BROWSER_TEST_F(DefaultKeyboardExtensionBrowserTest, EndToEndTest) {
   ASSERT_TRUE(browser_wc);
 
   // Set up the test page.
-  GURL url = ui_test_utils::GetTestUrl(
+  GURL url = chrome_test_utils::GetTestUrl(
       base::FilePath(),
       base::FilePath(FILE_PATH_LITERAL(
           "chromeos/virtual_keyboard/default_extension/end_to_end_test.html")));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   // Press 'a' on keyboard.
-  base::FilePath path = ui_test_utils::GetTestFilePath(
+  base::FilePath path = chrome_test_utils::GetTestFilePath(
       base::FilePath(kVirtualKeyboardExtensionTestDir),
       base::FilePath(FILE_PATH_LITERAL("end_to_end_test.js")));
   std::string script;
@@ -188,12 +176,11 @@ IN_PROC_BROWSER_TEST_F(DefaultKeyboardExtensionBrowserTest, EndToEndTest) {
     base::ScopedAllowBlockingForTesting allow_io;
     ASSERT_TRUE(base::ReadFileToString(path, &script));
   }
-  EXPECT_TRUE(content::ExecuteScript(keyboard_wc, script));
+  EXPECT_TRUE(content::ExecJs(keyboard_wc, script));
   // Verify 'a' appeared on test page.
-  bool success = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser_wc, "success ? verifyInput('a') : waitForInput('a');", &success));
-  ASSERT_TRUE(success);
+  ASSERT_EQ(true,
+            content::EvalJs(browser_wc,
+                            "success ? verifyInput('a') : waitForInput('a');"));
 }
 
 // TODO(kevers|rsadam|bshe):  Add UI tests for remaining virtual keyboard

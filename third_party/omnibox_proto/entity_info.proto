@@ -10,6 +10,8 @@ option java_outer_classname = 'EntityInfoProto';
 
 package omnibox;
 
+import "chrome_searchbox_stats.proto";
+
 // Entity Suggest rendering data.
 message EntityInfo {
   // The entity id.
@@ -19,9 +21,6 @@ message EntityInfo {
   // For some clients (e.g. desktop) this is used as the part which is to the
   // right of the emdash.
   optional string annotation = 2;
-
-  // The query to submit when clicking the suggestion.
-  optional string query_to_submit = 3;
 
   // Image Url.
   // Will replace the suggestion icon
@@ -38,4 +37,64 @@ message EntityInfo {
   // Encoding of how search behavior should be modified when clicking the entity
   // suggestion (gs_ssp).
   optional string suggest_search_parameters = 10;
+
+  // List of possible actions for this entity.
+  repeated ActionInfo action_suggestions = 12;
+
+  // List of categories this entity belongs to.
+  repeated CategoryInfo.Category category = 14;
+
+  // The entity's official website uri.
+  optional string website_uri = 17;
+}
+
+// Entity Suggestion Action descriptor.
+message ActionInfo {
+  enum ActionType {
+    DIRECTIONS = 2;
+    CALL = 3;
+    REVIEWS = 20;
+  }
+
+  // The URI to open when the action is invoked.
+  optional string action_uri = 3;
+
+  // Action type for logging.
+  optional .omnibox.metrics.ActionInfo.ActionType logs_action_type = 4;
+
+  // Action type.
+  optional ActionType action_type = 8;
+
+  // If non-empty, the action must result in navigation to the SRP accompanied
+  // with these additional request parameters to help force a certain SRP.
+  map<string, string> search_parameters = 9;
+}
+
+// Entity Suggestion Category info.
+message CategoryInfo {
+  enum Category {
+    reserved 22;
+
+    UNKNOWN = 0;
+    MUSIC = 2;
+    GAMES = 4;
+    PEOPLE = 6;
+    SPORTS = 7;
+    BOOKS = 9;
+    GEO = 12;
+    NATURAL_WORLD = 13;
+    FOOD = 15;
+    PRODUCTS = 16;
+    UNIVERSITIES = 17;
+    CARS_US = 18;
+    TV = 19;
+    MOVIES = 20;
+    CARS_MODEL_US = 21;
+    COMPANIES = 23;
+    PRODUCT_LINES = 24;
+    LOCAL_POI = 25;
+    LOCALITY = 26;
+    FICTIONAL_CHARACTERS = 27;
+    MOTORCYCLES = 28;
+  }
 }

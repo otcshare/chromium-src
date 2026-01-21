@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_MEDIA_WEBRTC_DESKTOP_MEDIA_LIST_H_
 #define CHROME_BROWSER_MEDIA_WEBRTC_DESKTOP_MEDIA_LIST_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 #include "content/public/browser/desktop_media_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/image/image_skia.h"
 
 class DesktopMediaListObserver;
@@ -24,8 +24,6 @@ class WebContents;
 // tabs), and their thumbnails, to the desktop media picker dialog. It
 // transparently updates the list in the background, and notifies the desktop
 // media picker when something changes.
-//
-// TODO(crbug.com/987001): Consider renaming this class.
 class DesktopMediaList {
  public:
   // Reflects content::DesktopMediaID::Type, but can decorate it with additional
@@ -69,6 +67,9 @@ class DesktopMediaList {
     std::u16string name;
 
     // The thumbnail for the source.
+    //
+    // This is sometimes a thumbnail and sometimes a favicon.
+    // TODO(https://crbug.com/466978541): Sort this out.
     gfx::ImageSkia thumbnail;
 
     // A preview for this source, used when both a thumbnail and preview are
@@ -78,7 +79,7 @@ class DesktopMediaList {
 
   using UpdateCallback = base::OnceClosure;
 
-  virtual ~DesktopMediaList() {}
+  virtual ~DesktopMediaList() = default;
 
   // Sets time interval between updates. By default list of sources and their
   // thumbnail are updated once per second. If called after StartUpdating() then
@@ -117,7 +118,7 @@ class DesktopMediaList {
   // Set or clear the id of a single source which needs a preview image
   // generating in addition to its thumbnail.
   virtual void SetPreviewedSource(
-      const absl::optional<content::DesktopMediaID>& id) = 0;
+      const std::optional<content::DesktopMediaID>& id) = 0;
 
   // Returns true if this DesktopMediaList wraps some other object (usually a
   // DesktopCapturer), that takes responsibility for showing its own source
@@ -142,6 +143,11 @@ class DesktopMediaList {
   // important when IsSourceDelegated() returns true, as it helps to notify the
   // delegated source list when it should be hidden.
   virtual void HideList() = 0;
+
+  // Show the delegated source list. This is intended to be used for delegated
+  // source lists that need to be displayed independently from when the
+  // DesktopMediaList gains focus.
+  virtual void ShowDelegatedList() = 0;
 };
 
 #endif  // CHROME_BROWSER_MEDIA_WEBRTC_DESKTOP_MEDIA_LIST_H_

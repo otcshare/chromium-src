@@ -2,25 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "fuchsia_web/runners/cast/api_bindings_client.h"
+
 #include <fuchsia/web/cpp/fidl.h>
 #include <lib/fidl/cpp/binding.h>
 
 #include "base/barrier_closure.h"
-#include "base/files/file_util.h"
 #include "base/fuchsia/mem_buffer_util.h"
 #include "base/path_service.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "components/cast/message_port/fuchsia/create_web_message.h"
 #include "components/cast/message_port/fuchsia/message_port_fuchsia.h"
 #include "content/public/test/browser_test.h"
 #include "fuchsia_web/common/test/fit_adapter.h"
+#include "fuchsia_web/common/test/frame_for_test.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "fuchsia_web/common/test/test_navigation_listener.h"
-#include "fuchsia_web/runners/cast/api_bindings_client.h"
-#include "fuchsia_web/runners/cast/fake_api_bindings.h"
 #include "fuchsia_web/runners/cast/named_message_port_connector_fuchsia.h"
-#include "fuchsia_web/webengine/test/frame_for_test.h"
+#include "fuchsia_web/runners/cast/test/fake_api_bindings.h"
 #include "fuchsia_web/webengine/test/web_engine_browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -72,7 +73,15 @@ class ApiBindingsClientTest : public WebEngineBrowserTest {
 
   void TearDownOnMainThread() override {
     // Destroy |client_| before the MessageLoop is destroyed.
-    client_.reset();
+    client_ = nullptr;
+
+    // Destroy the NamedMessagePortConnector before the Frame.
+    connector_ = nullptr;
+
+    // Destroy the Frame before the test terminates
+    frame_ = {};
+
+    WebEngineBrowserTest::TearDownOnMainThread();
   }
 
   FrameForTest frame_;
@@ -136,7 +145,7 @@ IN_PROC_BROWSER_TEST_F(ApiBindingsClientTest, EndToEnd) {
   port->ReceiveMessage(CallbackToFitFunction(response.GetCallback()));
   ASSERT_TRUE(response.Wait());
 
-  absl::optional<std::string> response_string =
+  std::optional<std::string> response_string =
       base::StringFromMemBuffer(response.Get().data());
   ASSERT_TRUE(response_string.has_value());
   EXPECT_EQ("ack ping", *response_string);

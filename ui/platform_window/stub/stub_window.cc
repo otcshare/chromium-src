@@ -5,7 +5,7 @@
 #include "ui/platform_window/stub/stub_window.h"
 
 #include "base/memory/scoped_refptr.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/platform_window/platform_window_delegate.h"
@@ -32,6 +32,13 @@ void StubWindow::InitDelegate(PlatformWindowDelegate* delegate,
     delegate_->OnAcceleratedWidgetAvailable(gfx::kNullAcceleratedWidget);
 }
 
+void StubWindow::InitDelegateWithWidget(PlatformWindowDelegate* delegate,
+                                        gfx::AcceleratedWidget widget) {
+  DCHECK(delegate);
+  delegate_ = delegate;
+  delegate_->OnAcceleratedWidgetAvailable(widget);
+}
+
 void StubWindow::Show(bool inactive) {}
 
 void StubWindow::Hide() {}
@@ -41,7 +48,6 @@ void StubWindow::Close() {
 }
 
 bool StubWindow::IsVisible() const {
-  NOTIMPLEMENTED_LOG_ONCE();
   return true;
 }
 
@@ -95,11 +101,17 @@ PlatformWindowState StubWindow::GetPlatformWindowState() const {
 }
 
 void StubWindow::Activate() {
-  NOTIMPLEMENTED_LOG_ONCE();
+  if (activation_state_ != ActivationState::kActive) {
+    activation_state_ = ActivationState::kActive;
+    delegate_->OnActivationChanged(/*active=*/true);
+  }
 }
 
 void StubWindow::Deactivate() {
-  NOTIMPLEMENTED_LOG_ONCE();
+  if (activation_state_ != ActivationState::kInactive) {
+    activation_state_ = ActivationState::kInactive;
+    delegate_->OnActivationChanged(/*active=*/false);
+  }
 }
 
 void StubWindow::SetUseNativeFrame(bool use_native_frame) {}

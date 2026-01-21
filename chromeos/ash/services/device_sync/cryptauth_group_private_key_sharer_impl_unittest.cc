@@ -5,11 +5,12 @@
 #include "chromeos/ash/services/device_sync/cryptauth_group_private_key_sharer_impl.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/timer/mock_timer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_client.h"
@@ -26,9 +27,7 @@
 #include "chromeos/ash/services/device_sync/proto/cryptauth_common.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_devicesync.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_v2_test_util.h"
-#include "crypto/sha2.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
@@ -158,7 +157,7 @@ class DeviceSyncCryptAuthGroupPrivateKeySharerImplTest
       const std::string& payload = id_payload_and_key_pair.second.payload;
       const std::string& encrypting_key = id_payload_and_key_pair.second.key;
 
-      EXPECT_TRUE(base::Contains(expected_device_ids, id));
+      EXPECT_TRUE(expected_device_ids.contains(id));
 
       // Verify that encryptor inputs agrees with ShareGroupPrivateKey() inputs.
       const auto it = id_to_encrypting_key_map_.find(id);
@@ -169,9 +168,9 @@ class DeviceSyncCryptAuthGroupPrivateKeySharerImplTest
       EXPECT_EQ(group_key_->private_key(), payload);
 
       id_to_encrypted_group_private_key_map_[id] =
-          base::Contains(device_ids_to_fail, id)
-              ? absl::nullopt
-              : absl::make_optional<std::string>(
+          device_ids_to_fail.contains(id)
+              ? std::nullopt
+              : std::make_optional<std::string>(
                     MakeFakeEncryptedString(payload, encrypting_key));
     }
 
@@ -271,7 +270,7 @@ class DeviceSyncCryptAuthGroupPrivateKeySharerImplTest
   CryptAuthGroupPrivateKeySharer::IdToEncryptingKeyMap
       id_to_encrypting_key_map_;
 
-  absl::optional<cryptauthv2::ShareGroupPrivateKeyRequest>
+  std::optional<cryptauthv2::ShareGroupPrivateKeyRequest>
       share_group_private_key_request_;
   CryptAuthClient::ShareGroupPrivateKeyCallback
       share_group_private_key_success_callback_;
@@ -279,13 +278,12 @@ class DeviceSyncCryptAuthGroupPrivateKeySharerImplTest
 
   CryptAuthEciesEncryptor::IdToOutputMap id_to_encrypted_group_private_key_map_;
 
-  absl::optional<CryptAuthDeviceSyncResult::ResultCode>
-      device_sync_result_code_;
+  std::optional<CryptAuthDeviceSyncResult::ResultCode> device_sync_result_code_;
 
   std::unique_ptr<MockCryptAuthClientFactory> client_factory_;
   std::unique_ptr<FakeCryptAuthEciesEncryptorFactory>
       fake_cryptauth_ecies_encryptor_factory_;
-  base::MockOneShotTimer* timer_;
+  raw_ptr<base::MockOneShotTimer, DanglingUntriaged> timer_;
 
   std::unique_ptr<CryptAuthGroupPrivateKeySharer> sharer_;
 };

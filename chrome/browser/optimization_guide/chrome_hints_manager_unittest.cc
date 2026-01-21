@@ -12,12 +12,12 @@
 #include "chrome/browser/optimization_guide/optimization_guide_tab_url_provider.h"
 #include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/optimization_guide/content/browser/optimization_guide_decider.h"
-#include "components/optimization_guide/core/hints_fetcher.h"
+#include "components/optimization_guide/core/hints/hints_fetcher.h"
+#include "components/optimization_guide/core/hints/optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/optimization_guide_store.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_store.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/proto_database_provider_test_base.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -56,14 +56,9 @@ class ChromeHintsManagerFetchingTest
  public:
   ChromeHintsManagerFetchingTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{
-             optimization_guide::features::kRemoteOptimizationGuideFetching,
-             {{"max_concurrent_page_navigation_fetches", "2"}},
-         },
-         {optimization_guide::features::kOptimizationHints,
+        {{optimization_guide::features::kOptimizationHints,
           {{"max_host_keyed_hint_cache_size", "1"}}}},
-        {optimization_guide::features::
-             kRemoteOptimizationGuideFetchingAnonymousDataConsent});
+        {});
   }
   ChromeHintsManagerFetchingTest(const ChromeHintsManagerFetchingTest&) =
       delete;
@@ -98,7 +93,7 @@ class ChromeHintsManagerFetchingTest
 
     hint_store_ = std::make_unique<optimization_guide::OptimizationGuideStore>(
         db_provider_.get(), temp_dir(),
-        task_environment_.GetMainThreadTaskRunner(), /*pref_service=*/nullptr);
+        task_environment_.GetMainThreadTaskRunner());
 
     tab_url_provider_ = std::make_unique<FakeTabUrlProvider>();
 
@@ -108,7 +103,7 @@ class ChromeHintsManagerFetchingTest
         url_loader_factory_,
         OptimizationGuideKeyedService::MaybeCreatePushNotificationManager(
             &testing_profile_),
-        &optimization_guide_logger_);
+        /*identity_manager=*/nullptr, &optimization_guide_logger_);
     hints_manager_->SetClockForTesting(task_environment_.GetMockClock());
 
     // Run until hint cache is initialized and the ChromeHintsManager is ready
@@ -133,6 +128,19 @@ class ChromeHintsManagerFetchingTest
     content::WebContents* web_contents =
         web_contents_factory_->CreateWebContents(&testing_profile_);
     OptimizationGuideWebContentsObserver::CreateForWebContents(web_contents);
+    std::unique_ptr<content::MockNavigationHandle> navigation_handle =
+        std::make_unique<::testing::NiceMock<content::MockNavigationHandle>>(
+            web_contents);
+    navigation_handle->set_url(url);
+    return navigation_handle;
+  }
+
+  // Creates a navigation handle WITHOUT the
+  // OptimizationGuideWebContentsObserver attached.
+  std::unique_ptr<content::MockNavigationHandle> CreateMockNavigationHandle(
+      const GURL& url) {
+    content::WebContents* web_contents =
+        web_contents_factory_->CreateWebContents(&testing_profile_);
     std::unique_ptr<content::MockNavigationHandle> navigation_handle =
         std::make_unique<::testing::NiceMock<content::MockNavigationHandle>>(
             web_contents);
@@ -170,7 +178,7 @@ class ChromeHintsManagerFetchingTest
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::test::ScopedFeatureList scoped_feature_list_;
-  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
   TestingProfile testing_profile_;
   std::unique_ptr<content::TestWebContentsFactory> web_contents_factory_;
@@ -212,10 +220,14 @@ TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP_DuplicatesRemoved) {
     // Ensure that we only include 2 hosts in the request. These would be
     // foo.com and bar.com.
     histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount", 2, 1);
+        "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount."
+        "BatchUpdateGoogleSRP",
+        2, 1);
     // Ensure that we include all URLs in the request.
     histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 4, 1);
+        "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+        "BatchUpdateGoogleSRP",
+        4, 1);
     RunUntilIdle();
   }
 
@@ -226,7 +238,9 @@ TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP_DuplicatesRemoved) {
 
     // Ensure that URLs are not re-fetched.
     histogram_tester.ExpectTotalCount(
-        "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 0);
+        "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+        "BatchUpdateGoogleSRP",
+        0);
   }
 }
 
@@ -256,10 +270,14 @@ TEST_F(ChromeHintsManagerFetchingTest,
   // Ensure that we include both web hosts in the request. These would be
   // foo.com and httppage.com.
   histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount", 2, 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount."
+      "BatchUpdateGoogleSRP",
+      2, 1);
   // Ensure that we only include 2 URLs in the request.
   histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 2, 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+      "BatchUpdateGoogleSRP",
+      2, 1);
 }
 
 TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP) {
@@ -282,9 +300,13 @@ TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP) {
   hints_manager()->OnPredictionUpdated(prediction);
   FetchHintsUsingWebContentsObserverURLs(web_contents);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount", 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount."
+      "BatchUpdateGoogleSRP",
+      1);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+      "BatchUpdateGoogleSRP",
+      1);
 }
 
 TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP_GoogleLinksIgnored) {
@@ -308,9 +330,13 @@ TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtSRP_GoogleLinksIgnored) {
   hints_manager()->OnPredictionUpdated(prediction);
   FetchHintsUsingWebContentsObserverURLs(web_contents);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount", 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount."
+      "BatchUpdateGoogleSRP",
+      1);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 1);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+      "BatchUpdateGoogleSRP",
+      1);
 }
 
 TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtNonSRP) {
@@ -333,41 +359,44 @@ TEST_F(ChromeHintsManagerFetchingTest, HintsFetched_AtNonSRP) {
   hints_manager()->OnPredictionUpdated(prediction);
   FetchHintsUsingWebContentsObserverURLs(web_contents);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount", 0);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount."
+      "BatchUpdateGoogleSRP",
+      0);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount", 0);
+      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount."
+      "BatchUpdateGoogleSRP",
+      0);
 }
 
-class ChromeHintsManagerPushEnabledTest
-    : public ChromeHintsManagerFetchingTest {
- public:
-  ChromeHintsManagerPushEnabledTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        optimization_guide::features::kPushNotifications);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(ChromeHintsManagerPushEnabledTest, PushManagerSet) {
+TEST_F(ChromeHintsManagerFetchingTest, PushManagerSet) {
+#if BUILDFLAG(IS_ANDROID)
   EXPECT_TRUE(hints_manager()->push_notification_manager());
-}
-
-class ChromeHintsManagerPushDisabledTest
-    : public ChromeHintsManagerFetchingTest {
- public:
-  ChromeHintsManagerPushDisabledTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        optimization_guide::features::kPushNotifications);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(ChromeHintsManagerPushDisabledTest, PushManagerSet) {
+#else
   EXPECT_FALSE(hints_manager()->push_notification_manager());
+#endif
 }
 
+TEST_F(ChromeHintsManagerFetchingTest, NoOptimizationGuideWebContentsObserver) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      optimization_guide::switches::kDisableCheckingUserPermissionsForTesting);
+  hints_manager()->RegisterOptimizationTypes(
+      {optimization_guide::proto::DEFER_ALL_SCRIPT});
+
+  std::vector<GURL> sorted_predicted_urls;
+  sorted_predicted_urls.emplace_back("https://foo.com/page1.html");
+
+  GURL url("https://www.google.com/search?q=a");
+  auto navigation_handle = CreateMockNavigationHandle(url);
+  content::WebContents* web_contents = navigation_handle->GetWebContents();
+
+  NavigationPredictorKeyedService::Prediction prediction(
+      web_contents, url,
+      NavigationPredictorKeyedService::PredictionSource::
+          kAnchorElementsParsedFromWebPage,
+      sorted_predicted_urls);
+
+  // Calling `OnPredictionUpdated` without having a valid
+  // `OptimizationGuideWebContentsObserver` should not cause a crash.
+  hints_manager()->OnPredictionUpdated(prediction);
+}
 }  // namespace optimization_guide

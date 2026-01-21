@@ -4,8 +4,9 @@
 
 #include "third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h"
 
+#include "base/metrics/histogram_functions.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/idle_deadline.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -18,7 +19,9 @@
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/scheduler/idle_deadline.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "ui/gfx/range/range.h"
 
 namespace blink {
 
@@ -70,9 +73,47 @@ SpellCheckRequester& ColdModeSpellCheckRequester::GetSpellCheckRequester()
   return window_->GetSpellChecker().GetSpellCheckRequester();
 }
 
-const Element* ColdModeSpellCheckRequester::CurrentFocusedEditable() const {
+const Element* ColdModeSpellCheckRequester::QualifyingEditable() const {
+  // We can skip this pass if the page isn't being interacted with and
+  // `kRestrictSpellingAndGrammarHighlightsChangedContents` is enabled.
+  // This isn't the ideal signal, as it has a 5 second timeout, but it's
+  // enough to prevent a user focused field from being taken advantage of.
+  // For more see:
+  // https://explainers-by-googlers.github.io/user-dictionary-leaks/
+  bool skip_due_to_contents = false;
+  if (base::FeatureList::IsEnabled(
+          features::kRestrictSpellingAndGrammarHighlights) &&
+      features::kRestrictSpellingAndGrammarHighlightsChangedContents.Get()) {
+    skip_due_to_contents =
+        !LocalFrame::HasTransientUserActivation(window_->GetFrame());
+  }
+  base::UmaHistogramBoolean(
+      "WebCore.Editing.SpellCheckUserActionLimitation.Cold.Contents",
+      skip_due_to_contents);
+
+  // We can skip this pass if the selection isn't the result of a user gesture
+  // and `kRestrictSpellingAndGrammarHighlightsChangedSelection` is enabled.
+  // For more see:
+  // https://explainers-by-googlers.github.io/user-dictionary-leaks/
+  bool skip_due_to_selection = false;
+  if (base::FeatureList::IsEnabled(
+          features::kRestrictSpellingAndGrammarHighlights) &&
+      features::kRestrictSpellingAndGrammarHighlightsChangedSelection.Get()) {
+    const Element* focused_element = window_->document()->FocusedElement();
+    skip_due_to_selection =
+        focused_element && !focused_element->WasLastFocusFromUserGesture();
+  }
+  base::UmaHistogramBoolean(
+      "WebCore.Editing.SpellCheckUserActionLimitation.Cold.Selection",
+      skip_due_to_selection);
+
+  // We wait until here to reject to ensure that histograms are recorded.
+  if (skip_due_to_contents || skip_due_to_selection) {
+    return nullptr;
+  }
+
   const Position position =
-      window_->GetFrame()->Selection().GetSelectionInDOMTree().Extent();
+      window_->GetFrame()->Selection().GetSelectionInDOMTree().Focus();
   if (position.IsNull())
     return nullptr;
 
@@ -93,19 +134,19 @@ void ColdModeSpellCheckRequester::Invoke(IdleDeadline* deadline) {
   // TODO(xiaochengh): Figure out if this has any performance impact.
   window_->document()->UpdateStyleAndLayout(DocumentUpdateReason::kSpellCheck);
 
-  const Element* current_focused = CurrentFocusedEditable();
-  if (!current_focused) {
+  const Element* editable = QualifyingEditable();
+  if (!editable) {
     ClearProgress();
     return;
   }
 
-  switch (AccumulateTextDeltaAndComputeCheckingType(*current_focused)) {
+  switch (AccumulateTextDeltaAndComputeCheckingType(*editable)) {
     case CheckingType::kNone:
       return;
     case CheckingType::kLocal:
-      return RequestLocalChecking(*current_focused);
+      return RequestLocalChecking(*editable);
     case CheckingType::kFull:
-      return RequestFullChecking(*current_focused, deadline);
+      return RequestFullChecking(*editable, deadline);
   }
 }
 
@@ -150,8 +191,9 @@ void ColdModeSpellCheckRequester::SetHasFullyCheckedCurrentRootEditable() {
   DCHECK(!fully_checked_root_editables_.Contains(root_editable_));
 
   fully_checked_root_editables_.Set(
-      root_editable_,
-      FullyCheckedEditableEntry{TotalTextLength(*root_editable_), 0});
+      root_editable_, FullyCheckedEditableEntry{
+                          TotalTextLength(*root_editable_), 0,
+                          root_editable_->GetDocument().DomTreeVersion()});
   last_chunk_index_ = kInvalidChunkIndex;
   if (!remaining_check_range_)
     return;
@@ -189,7 +231,9 @@ bool ColdModeSpellCheckRequester::RequestCheckingForNextChunk() {
           : std::min(extended_end, remaining_range.EndPosition());
   const EphemeralRange check_range(chunk_start, check_end);
 
-  GetSpellCheckRequester().RequestCheckingFor(check_range, chunk_index);
+  GetSpellCheckRequester().RequestCheckingFor(
+      check_range, /*spelling_markers=*/{}, chunk_index,
+      /*should_force_refresh=*/false);
 
   last_chunk_index_ = chunk_index;
   remaining_check_range_->setStart(check_range.EndPosition());
@@ -204,14 +248,21 @@ ColdModeSpellCheckRequester::AccumulateTextDeltaAndComputeCheckingType(
   if (iter == fully_checked_root_editables_.end())
     return CheckingType::kFull;
 
+  uint64_t dom_tree_version = element_to_check.GetDocument().DomTreeVersion();
+
+  // Nothing to check, because nothing has changed.
+  if (dom_tree_version == iter->value.previous_checked_dom_tree_version) {
+    return CheckingType::kNone;
+  }
+  iter->value.previous_checked_dom_tree_version =
+      element_to_check.GetDocument().DomTreeVersion();
+
+  // Compute the amount of text change heuristically. Invoke a full check if
+  // the accumulated change is above a threshold; or a local check otherwise.
+
   int current_text_length = TotalTextLength(element_to_check);
   int delta =
       std::abs(current_text_length - iter->value.previous_checked_length);
-
-  // Cold mode checking is not needed without plain text change (for example,
-  // after moving caret, changing text style, etc).
-  if (!delta)
-    return CheckingType::kNone;
 
   iter->value.accumulated_delta += delta;
   iter->value.previous_checked_length = current_text_length;
@@ -231,7 +282,7 @@ void ColdModeSpellCheckRequester::RequestLocalChecking(
   const EphemeralRange& full_range =
       EphemeralRange::RangeOfContents(element_to_check);
   const Position position =
-      window_->GetFrame()->Selection().GetSelectionInDOMTree().Extent();
+      window_->GetFrame()->Selection().GetSelectionInDOMTree().Focus();
   DCHECK(position.IsNotNull());
 
   TextIteratorBehavior behavior =
@@ -253,6 +304,12 @@ void ColdModeSpellCheckRequester::RequestLocalChecking(
       ExpandRangeToSentenceBoundary(EphemeralRange(chunk_start, chunk_end));
 
   GetSpellCheckRequester().RequestCheckingFor(checking_range);
+}
+
+void ColdModeSpellCheckRequester::ElementRemoved(Element* element) {
+  if (root_editable_ == element) {
+    ClearProgress();
+  }
 }
 
 }  // namespace blink

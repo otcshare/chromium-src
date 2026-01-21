@@ -10,12 +10,14 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
 #include "net/base/completion_once_callback.h"
-#include "net/base/proxy_server.h"
+#include "net/base/proxy_chain.h"
 #include "net/http/proxy_client_socket.h"
 #include "net/quic/quic_chromium_client_session.h"
 #include "net/quic/quic_chromium_client_stream.h"
 #include "net/spdy/spdy_read_queue.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace net {
@@ -34,7 +36,8 @@ class NET_EXPORT_PRIVATE QuicProxyClientSocket : public ProxyClientSocket {
   QuicProxyClientSocket(
       std::unique_ptr<QuicChromiumClientStream::Handle> stream,
       std::unique_ptr<QuicChromiumClientSession::Handle> session,
-      const ProxyServer& proxy_server,
+      const ProxyChain& proxy_chain,
+      size_t proxy_chain_index,
       const std::string& user_agent,
       const HostPortPair& endpoint,
       const NetLogWithSource& net_log,
@@ -60,7 +63,6 @@ class NET_EXPORT_PRIVATE QuicProxyClientSocket : public ProxyClientSocket {
   bool IsConnectedAndIdle() const override;
   const NetLogWithSource& NetLog() const override;
   bool WasEverUsed() const override;
-  bool WasAlpnNegotiated() const override;
   NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(SSLInfo* ssl_info) override;
   int64_t GetTotalReceivedBytes() const override;
@@ -84,10 +86,15 @@ class NET_EXPORT_PRIVATE QuicProxyClientSocket : public ProxyClientSocket {
     STATE_DISCONNECTED,
     STATE_GENERATE_AUTH_TOKEN,
     STATE_GENERATE_AUTH_TOKEN_COMPLETE,
+    STATE_CALCULATE_HEADERS,
+    STATE_CALCULATE_HEADERS_COMPLETE,
     STATE_SEND_REQUEST,
     STATE_SEND_REQUEST_COMPLETE,
     STATE_READ_REPLY,
     STATE_READ_REPLY_COMPLETE,
+    STATE_PROCESS_RESPONSE_HEADERS,
+    STATE_PROCESS_RESPONSE_HEADERS_COMPLETE,
+    STATE_PROCESS_RESPONSE_CODE,
     STATE_CONNECT_COMPLETE
   };
 
@@ -97,15 +104,24 @@ class NET_EXPORT_PRIVATE QuicProxyClientSocket : public ProxyClientSocket {
 
   // Callback for stream_->ReadInitialHeaders()
   void OnReadResponseHeadersComplete(int result);
-  int ProcessResponseHeaders(const spdy::Http2HeaderBlock& headers);
+  int ProcessResponseHeaders(const quiche::HttpHeaderBlock& headers);
+
+  // Callback for proxy_delegate_->OnBeforeTunnelRequest().
+  void OnBeforeTunnelRequestComplete(
+      base::expected<HttpRequestHeaders, Error> result);
 
   int DoLoop(int last_io_result);
   int DoGenerateAuthToken();
   int DoGenerateAuthTokenComplete(int result);
+  int DoCalculateHeaders();
+  int DoCalculateHeadersComplete(int result);
   int DoSendRequest();
   int DoSendRequestComplete(int result);
   int DoReadReply();
   int DoReadReplyComplete(int result);
+  int DoProcessResponseHeaders();
+  int DoProcessResponseHeadersComplete(int result);
+  int DoProcessResponseCode();
 
   State next_state_ = STATE_DISCONNECTED;
 
@@ -130,14 +146,18 @@ class NET_EXPORT_PRIVATE QuicProxyClientSocket : public ProxyClientSocket {
   HttpRequestInfo request_;
   HttpResponseInfo response_;
 
-  spdy::Http2HeaderBlock response_header_block_;
+  HttpRequestHeaders authorization_headers_;
+  HttpRequestHeaders proxy_delegate_headers_;
+
+  quiche::HttpHeaderBlock response_header_block_;
 
   // The hostname and port of the endpoint.  This is not necessarily the one
   // specified by the URL, due to Alternate-Protocol or fixed testing ports.
   const HostPortPair endpoint_;
   scoped_refptr<HttpAuthController> auth_;
 
-  const ProxyServer proxy_server_;
+  const ProxyChain proxy_chain_;
+  const size_t proxy_chain_index_;
 
   // This delegate must outlive this proxy client socket.
   const raw_ptr<ProxyDelegate> proxy_delegate_;

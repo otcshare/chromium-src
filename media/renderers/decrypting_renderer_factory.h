@@ -5,8 +5,8 @@
 #ifndef MEDIA_RENDERERS_DECRYPTING_RENDERER_FACTORY_H_
 #define MEDIA_RENDERERS_DECRYPTING_RENDERER_FACTORY_H_
 
-#include "base/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/base/media_export.h"
 #include "media/base/renderer_factory.h"
 
@@ -18,9 +18,6 @@ class MediaLog;
 // underlying factory, and returns it as a DecryptingRenderer.
 //
 // See DecryptingRenderer for more information.
-//
-// The caller must guarantee that the returned DecryptingRenderer will never
-// be initialized with a |media_resource| of type MediaResource::Type::URL.
 class MEDIA_EXPORT DecryptingRendererFactory final : public RendererFactory {
  public:
   DecryptingRendererFactory(

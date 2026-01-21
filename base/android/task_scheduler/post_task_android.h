@@ -21,9 +21,8 @@ class BASE_EXPORT PostTaskAndroid {
   // APIs. Invoked once the C++ PostTask APIs are fully initialized.
   static void SignalNativeSchedulerReady();
 
-  // Signals that the C++ PostTask APIs have shutdown. Needed to make unit tests
-  // that repeatedly create and destroy the scheduler work.
-  static void SignalNativeSchedulerShutdownForTesting();
+  // Called to resets all the task runners for after each unit test.
+  static void ResetTaskRunnerForTesting();
 };
 
 }  // namespace base

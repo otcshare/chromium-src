@@ -7,10 +7,9 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/sequence_checker.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
@@ -48,7 +47,7 @@ class DataURLBlobReader : public mojo::DataPipeDrainer::Client {
   void Start(base::OnceClosure callback);
 
   // mojo::DataPipeDrainer:
-  void OnDataAvailable(const void* data, size_t num_bytes) override;
+  void OnDataAvailable(base::span<const uint8_t> data) override;
   void OnDataComplete() override;
 
   // Called when failed to read from blob.

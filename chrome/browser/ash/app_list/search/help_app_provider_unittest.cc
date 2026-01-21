@@ -6,20 +6,20 @@
 
 #include <memory>
 
-#include "ash/constants/ash_features.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/webui/help_app_ui/search/search_handler.h"
 #include "ash/webui/help_app_ui/search/search_tag_registry.h"
 #include "ash/webui/help_app_ui/url_constants.h"
-#include "base/feature_list.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/app_list_test_util.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "components/services/app_service/public/cpp/stub_icon_loader.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
+#include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -69,7 +69,7 @@ class MockSearchHandler : public ash::help_app::SearchHandler {
     results_ = std::move(results);
   }
 
-  ash::help_app::SearchTagRegistry* search_tag_registry_;
+  raw_ptr<ash::help_app::SearchTagRegistry> search_tag_registry_;
   std::vector<SearchResultPtr> results_;
 };
 }  // namespace
@@ -83,11 +83,7 @@ class HelpAppProviderTest : public AppListTestBase {
                 /*for_testing=*/true)),
         search_tag_registry_(local_search_service_proxy_.get()),
         mock_handler_(&search_tag_registry_,
-                      local_search_service_proxy_.get()) {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{ash::features::kReleaseNotesSuggestionChip},
-        /*disabled_features=*/{});
-  }
+                      local_search_service_proxy_.get()) {}
   ~HelpAppProviderTest() override = default;
 
   void SetUp() override {
@@ -98,34 +94,44 @@ class HelpAppProviderTest : public AppListTestBase {
     proxy_->OverrideInnerIconLoaderForTesting(&stub_icon_loader);
 
     // Insert dummy map values so that the stub_icon_loader knows of the app.
-    stub_icon_loader.timelines_by_app_id_[web_app::kHelpAppId] = 1;
+    stub_icon_loader.update_version_by_app_id_[ash::kHelpAppId] = 1;
 
-    auto provider =
-        std::make_unique<HelpAppProvider>(profile(), &mock_handler_);
+    auto provider = std::make_unique<HelpAppProvider>(profile());
+    provider->MaybeInitialize(&mock_handler_);
     provider_ = provider.get();
-    search_controller_.AddProvider(std::move(provider));
+    search_controller_ = std::make_unique<TestSearchController>();
+    search_controller_->AddProvider(std::move(provider));
+  }
+
+  void TearDown() override {
+    provider_ = nullptr;
+    search_controller_.reset();
+
+    proxy_ = nullptr;
+    AppListTestBase::TearDown();
   }
 
   // Starts a search and waits for the query to be sent.
   void StartSearch(const std::u16string& query) {
-    provider_->Start(query);
+    search_controller_->StartSearch(query);
     task_environment()->RunUntilIdle();
   }
 
   const app_list::Results& GetLatestResults() {
-    return search_controller_.last_results();
+    return search_controller_->last_results();
   }
 
   MockSearchHandler* mock_handler() { return &mock_handler_; }
 
  private:
-  TestSearchController search_controller_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   std::unique_ptr<ash::local_search_service::LocalSearchServiceProxy>
       local_search_service_proxy_;
   ash::help_app::SearchTagRegistry search_tag_registry_;
-  HelpAppProvider* provider_ = nullptr;
-  apps::AppServiceProxy* proxy_;
-  base::test::ScopedFeatureList scoped_feature_list_;
+  raw_ptr<apps::AppServiceProxy> proxy_ = nullptr;
+  raw_ptr<HelpAppProvider> provider_ = nullptr;
+  std::unique_ptr<TestSearchController> search_controller_;
   MockSearchHandler mock_handler_;
 };
 

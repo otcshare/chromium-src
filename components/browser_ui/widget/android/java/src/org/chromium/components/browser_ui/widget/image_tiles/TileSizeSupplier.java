@@ -7,18 +7,16 @@ package org.chromium.components.browser_ui.widget.image_tiles;
 import android.content.Context;
 import android.content.res.Resources;
 
-import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.widget.R;
 import org.chromium.components.browser_ui.widget.image_tiles.TileSizeSupplier.TileSize;
 
-/**
- * A helper class to compute dimensions for the carousel layout.
- */
+import java.util.function.Supplier;
+
+/** A helper class to compute dimensions for the carousel layout. */
+@NullMarked
 class TileSizeSupplier implements Supplier<TileSize> {
-    /**
-     * Contains details to be used by the grid layout when placing items.
-     */
+    /** Contains details to be used by the grid layout when placing items. */
     public static class TileSize {
         public int width;
         public int interTilePadding;
@@ -47,13 +45,13 @@ class TileSizeSupplier implements Supplier<TileSize> {
     }
 
     /**
-     * Given a desired cell width, computes the actual item width feasible. Should be
-     * invoked after a orientation change as well.
-     * @return The {@link TileSize} containing results of the computation.
+     * Given a desired cell width, computes the actual item width feasible. Should be invoked after
+     * a orientation change as well.
      */
     public void recompute() {
-        double idealSpanCount = (double) (getAvailableWidth() + mInterTilePadding)
-                / (mIdealTileWidth + mInterTilePadding);
+        double idealSpanCount =
+                (double) (getAvailableWidth() + mInterTilePadding)
+                        / (mIdealTileWidth + mInterTilePadding);
         double delta = idealSpanCount - Math.floor(idealSpanCount);
 
         // For carousel, we need to have the last cell peeking out of the screen. So clamp the last
@@ -63,16 +61,10 @@ class TileSizeSupplier implements Supplier<TileSize> {
 
         double tileWidthToUse =
                 (getAvailableWidth() - mInterTilePadding * Math.floor(adjustedSpanCount))
-                / adjustedSpanCount;
+                        / adjustedSpanCount;
 
         mComputedTileSize.interTilePadding = mInterTilePadding;
         mComputedTileSize.width = (int) tileWidthToUse;
-
-        int tileWidthToUseInDp = (int) (tileWidthToUse / mResources.getDisplayMetrics().density);
-        RecordHistogram.recordLinearCountHistogram(
-                "Search.QueryTiles.TileWidth", tileWidthToUseInDp, 50, 150, 101);
-        RecordHistogram.recordLinearCountHistogram(
-                "Search.QueryTiles.TilesFitPerRow", (int) adjustedSpanCount, 0, 20, 21);
     }
 
     private int getAvailableWidth() {

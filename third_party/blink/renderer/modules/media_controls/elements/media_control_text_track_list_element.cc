@@ -15,11 +15,13 @@
 #include "third_party/blink/renderer/core/html/track/text_track.h"
 #include "third_party/blink/renderer/core/html/track/text_track_list.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_toggle_closed_captions_button_element.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_text_track_manager.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace blink {
 
@@ -32,7 +34,7 @@ const QualifiedName& TrackIndexAttrName() {
   // Save the track index in an attribute to avoid holding a pointer to the text
   // track.
   DEFINE_STATIC_LOCAL(QualifiedName, track_index_attr,
-                      (g_null_atom, "data-track-index", g_null_atom));
+                      (AtomicString("data-track-index")));
   return track_index_attr;
 }
 
@@ -55,9 +57,9 @@ bool HasDuplicateLabel(TextTrack* current_track) {
 MediaControlTextTrackListElement::MediaControlTextTrackListElement(
     MediaControlsImpl& media_controls)
     : MediaControlPopupMenuElement(media_controls) {
-  setAttribute(html_names::kRoleAttr, "menu");
+  setAttribute(html_names::kRoleAttr, AtomicString("menu"));
   setAttribute(html_names::kAriaLabelAttr,
-               WTF::AtomicString(GetLocale().QueryString(
+               AtomicString(GetLocale().QueryString(
                    IDS_MEDIA_OVERFLOW_MENU_CLOSED_CAPTIONS_SUBMENU_TITLE)));
   SetShadowPseudoId(AtomicString("-internal-media-controls-text-track-list"));
 }
@@ -84,7 +86,7 @@ void MediaControlTextTrackListElement::DefaultEventHandler(Event& event) {
     event.SetDefaultHandled();
   } else if (event.type() == event_type_names::kChange) {
     // Identify which input element was selected and set track to showing
-    Node* target = event.target()->ToNode();
+    Node* target = event.RawTarget()->ToNode();
     if (!target || !target->IsElementNode())
       return;
 
@@ -114,26 +116,26 @@ Element* MediaControlTextTrackListElement::CreateTextTrackListItem(
   auto* track_item = MakeGarbageCollected<HTMLLabelElement>(GetDocument());
   track_item->SetShadowPseudoId(
       AtomicString("-internal-media-controls-text-track-list-item"));
-  auto* track_item_input = MakeGarbageCollected<HTMLInputElement>(
-      GetDocument(), CreateElementFlags());
+  auto* track_item_input =
+      MakeGarbageCollected<HTMLInputElement>(GetDocument());
   track_item_input->SetShadowPseudoId(
       AtomicString("-internal-media-controls-text-track-list-item-input"));
-  track_item_input->setAttribute(html_names::kAriaHiddenAttr, "true");
+  track_item_input->setAttribute(html_names::kAriaHiddenAttr, keywords::kTrue);
   track_item_input->setType(input_type_names::kCheckbox);
   track_item_input->SetIntegralAttribute(TrackIndexAttrName(), track_index);
   if (!MediaElement().TextTracksVisible()) {
     if (!track) {
       track_item_input->SetChecked(true);
-      track_item->setAttribute(html_names::kAriaCheckedAttr, "true");
+      track_item->setAttribute(html_names::kAriaCheckedAttr, keywords::kTrue);
     }
   } else {
     // If there are multiple text tracks set to showing, they must all have
     // checkmarks displayed.
     if (track && track->mode() == TextTrackMode::kShowing) {
       track_item_input->SetChecked(true);
-      track_item->setAttribute(html_names::kAriaCheckedAttr, "true");
+      track_item->setAttribute(html_names::kAriaCheckedAttr, keywords::kTrue);
     } else {
-      track_item->setAttribute(html_names::kAriaCheckedAttr, "false");
+      track_item->setAttribute(html_names::kAriaCheckedAttr, keywords::kFalse);
     }
   }
 
@@ -147,9 +149,9 @@ Element* MediaControlTextTrackListElement::CreateTextTrackListItem(
       GetMediaControls().GetTextTrackManager().GetTextTrackLabel(track);
   auto* track_label_span = MakeGarbageCollected<HTMLSpanElement>(GetDocument());
   track_label_span->setInnerText(track_label);
-  track_label_span->setAttribute(html_names::kAriaHiddenAttr, "true");
+  track_label_span->setAttribute(html_names::kAriaHiddenAttr, keywords::kTrue);
   track_item->setAttribute(html_names::kAriaLabelAttr,
-                           WTF::AtomicString(track_label));
+                           AtomicString(track_label));
   track_item->ParserAppendChild(track_label_span);
   track_item->ParserAppendChild(track_item_input);
 
@@ -158,16 +160,16 @@ Element* MediaControlTextTrackListElement::CreateTextTrackListItem(
   if (track && (track->label().empty() || HasDuplicateLabel(track))) {
     auto* track_kind_marker =
         MakeGarbageCollected<HTMLSpanElement>(GetDocument());
-    if (track->kind() == track->CaptionsKeyword()) {
+    if (track->kind() == V8TextTrackKind::Enum::kCaptions) {
       track_kind_marker->SetShadowPseudoId(AtomicString(
           "-internal-media-controls-text-track-list-kind-captions"));
-    } else if (track->kind() == track->DescriptionsKeyword()) {
+    } else if (track->kind() == V8TextTrackKind::Enum::kDescriptions) {
       track_kind_marker->SetShadowPseudoId(AtomicString(
           "-internal-media-controls-text-track-list-kind-descriptions"));
     } else {
       // Aside from Captions and Descriptions, Subtitles is the only other
       // supported keyword.
-      DCHECK_EQ(track->kind(), track->SubtitlesKeyword());
+      DCHECK_EQ(track->kind(), V8TextTrackKind::Enum::kSubtitles);
       track_kind_marker->SetShadowPseudoId(AtomicString(
           "-internal-media-controls-text-track-list-kind-subtitles"));
     }
@@ -179,12 +181,12 @@ Element* MediaControlTextTrackListElement::CreateTextTrackListItem(
 Element* MediaControlTextTrackListElement::CreateTextTrackHeaderItem() {
   auto* header_item = MakeGarbageCollected<HTMLLabelElement>(GetDocument());
   header_item->SetShadowPseudoId(
-      "-internal-media-controls-text-track-list-header");
+      AtomicString("-internal-media-controls-text-track-list-header"));
   header_item->ParserAppendChild(
       Text::Create(GetDocument(),
                    GetLocale().QueryString(
                        IDS_MEDIA_OVERFLOW_MENU_CLOSED_CAPTIONS_SUBMENU_TITLE)));
-  header_item->setAttribute(html_names::kRoleAttr, "button");
+  header_item->setAttribute(html_names::kRoleAttr, AtomicString("button"));
   header_item->setAttribute(html_names::kAriaLabelAttr,
                             AtomicString(GetLocale().QueryString(
                                 IDS_AX_MEDIA_BACK_TO_OPTIONS_BUTTON)));
@@ -199,7 +201,7 @@ void MediaControlTextTrackListElement::RefreshTextTrackListMenu() {
   }
 
   EventDispatchForbiddenScope::AllowUserAgentEvents allow_events;
-  RemoveChildren(kOmitSubtreeModifiedEvent);
+  RemoveChildren();
 
   ParserAppendChild(CreateTextTrackHeaderItem());
 
@@ -209,10 +211,11 @@ void MediaControlTextTrackListElement::RefreshTextTrackListMenu() {
   // createTextTrackListItem to create the "Off" track item.
   auto* off_track = CreateTextTrackListItem(nullptr);
   off_track->setAttribute(html_names::kAriaSetsizeAttr,
-                          WTF::AtomicString::Number(track_list->length() + 1));
+                          AtomicString::Number(track_list->length() + 1));
   off_track->setAttribute(html_names::kAriaPosinsetAttr,
-                          WTF::AtomicString::Number(1));
-  off_track->setAttribute(html_names::kRoleAttr, "menuitemcheckbox");
+                          AtomicString::Number(1));
+  off_track->setAttribute(html_names::kRoleAttr,
+                          AtomicString("menuitemcheckbox"));
   ParserAppendChild(off_track);
 
   for (unsigned i = 0; i < track_list->length(); i++) {
@@ -220,15 +223,15 @@ void MediaControlTextTrackListElement::RefreshTextTrackListMenu() {
     if (!track->CanBeRendered())
       continue;
     auto* track_item = CreateTextTrackListItem(track);
-    track_item->setAttribute(
-        html_names::kAriaSetsizeAttr,
-        WTF::AtomicString::Number(track_list->length() + 1));
+    track_item->setAttribute(html_names::kAriaSetsizeAttr,
+                             AtomicString::Number(track_list->length() + 1));
     // We set the position with an offset of 2 because we want to start the
     // count at 1 (versus 0), and the "Off" track item holds the first position
     // and isnt included in this loop.
     track_item->setAttribute(html_names::kAriaPosinsetAttr,
-                             WTF::AtomicString::Number(i + 2));
-    track_item->setAttribute(html_names::kRoleAttr, "menuitemcheckbox");
+                             AtomicString::Number(i + 2));
+    track_item->setAttribute(html_names::kRoleAttr,
+                             AtomicString("menuitemcheckbox"));
     ParserAppendChild(track_item);
   }
 }

@@ -4,11 +4,12 @@
 
 #include "chrome/browser/webauthn/local_credential_management.h"
 
+#include <string_view>
+
 #include "base/i18n/string_compare.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 
@@ -54,8 +55,8 @@ std::u16string CredentialComparator::ETLDPlus1(const std::string& rp_id) {
 }
 
 std::u16string CredentialComparator::LabelReverse(const std::string& rp_id) {
-  std::vector<base::StringPiece> parts = base::SplitStringPiece(
+  std::vector<std::string_view> parts = base::SplitStringPiece(
       rp_id, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  std::reverse(parts.begin(), parts.end());
+  std::ranges::reverse(parts);
   return base::UTF8ToUTF16(base::JoinString(parts, "."));
 }

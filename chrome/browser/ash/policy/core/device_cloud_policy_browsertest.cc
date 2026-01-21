@@ -3,22 +3,30 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/dir_reader_posix.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
+#include "base/strings/string_util.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/test/embedded_policy_test_server_mixin.h"
+#include "chrome/browser/ash/extensions/authentication_screen_extensions_external_loader.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
+#include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_store_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
+#include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
@@ -30,7 +38,9 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/ownership/owner_key_util.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
@@ -43,7 +53,6 @@
 #include "components/policy/proto/chrome_extension_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "content/public/test/browser_test.h"
-#include "crypto/rsa_private_key.h"
 #include "crypto/sha2.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -56,7 +65,6 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace policy {
@@ -67,7 +75,14 @@ namespace {
 //
 // The test is performed against a test policy server, which is set up for
 // rotating the policy key automatically with each policy fetch.
-class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
+struct FeaturesTestParam {
+  std::vector<base::test::FeatureRef> enabled_features;
+  std::vector<base::test::FeatureRef> disabled_features;
+};
+
+class KeyRotationDeviceCloudPolicyTest
+    : public DevicePolicyCrosBrowserTest,
+      public testing::WithParamInterface<FeaturesTestParam> {
  public:
   KeyRotationDeviceCloudPolicyTest(const KeyRotationDeviceCloudPolicyTest&) =
       delete;
@@ -82,6 +97,10 @@ class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
 
   KeyRotationDeviceCloudPolicyTest() {
     UpdateBuiltTestPolicyValue(kInitialPolicyValue);
+    const FeaturesTestParam& features_test_param = GetParam();
+    scoped_feature_list_.InitWithFeatures(
+        features_test_param.enabled_features,
+        features_test_param.disabled_features);
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -100,6 +119,17 @@ class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
     DevicePolicyCrosBrowserTest::TearDownOnMainThread();
   }
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    // The verification key was replaced from the original to the
+    // testing key by the super class. However this class uses the
+    // policy data provided by signature_provider.cc which still
+    // gives data validated by the original verification key. Thus
+    // the flag needs to be removed so that these tests use the
+    // original verification key.
+    DevicePolicyCrosBrowserTest::SetUpCommandLine(command_line);
+    command_line->RemoveSwitch(switches::kPolicyVerificationKey);
+  }
+
   void UpdateBuiltTestPolicyValue(int test_policy_value) {
     device_policy()
         ->payload()
@@ -116,7 +146,7 @@ class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
     g_browser_process->platform_part()
         ->browser_policy_connector_ash()
         ->GetDeviceCloudPolicyManager()
-        ->RefreshPolicies();
+        ->RefreshPolicies(PolicyFetchReason::kTest);
   }
 
   std::string GetOwnerPublicKey() const {
@@ -147,8 +177,9 @@ class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
   }
 
   void WaitForInstalledPolicyValue(int expected_policy_value) {
-    if (GetInstalledPolicyValue() == expected_policy_value)
+    if (GetInstalledPolicyValue() == expected_policy_value) {
       return;
+    }
     awaited_policy_value_ = expected_policy_value;
     // The run loop will be terminated by OnPolicyChanged() once the policy
     // value becomes equal to the awaited value.
@@ -197,11 +228,12 @@ class KeyRotationDeviceCloudPolicyTest : public DevicePolicyCrosBrowserTest {
   std::unique_ptr<PolicyChangeRegistrar> policy_change_registrar_;
   int awaited_policy_value_ = -1;
   std::unique_ptr<base::RunLoop> policy_change_waiting_run_loop_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(KeyRotationDeviceCloudPolicyTest, Basic) {
+IN_PROC_BROWSER_TEST_P(KeyRotationDeviceCloudPolicyTest, Basic) {
   // The policy has the initial value from the cache.
   EXPECT_EQ(kInitialPolicyValue, GetInstalledPolicyValue());
 
@@ -231,6 +263,14 @@ IN_PROC_BROWSER_TEST_F(KeyRotationDeviceCloudPolicyTest, Basic) {
   EXPECT_NE(owner_public_key, GetOwnerPublicKey());
   EXPECT_EQ(key_version + 1, GetInstalledPolicyKeyVersion());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    KeyRotationDeviceCloudPolicyTest,
+    KeyRotationDeviceCloudPolicyTest,
+    ::testing::Values(
+        FeaturesTestParam{.enabled_features = {policy::kPolicyFetchWithSha256}},
+        FeaturesTestParam{
+            .disabled_features = {policy::kPolicyFetchWithSha256}}));
 
 namespace {
 
@@ -269,12 +309,8 @@ class SigninExtensionsDeviceCloudPolicyBrowserTest
     command_line->AppendSwitch(ash::switches::kLoginManager);
     command_line->AppendSwitch(ash::switches::kForceLoginManagerInTests);
     // The test app has to be allowlisted for sign-in screen.
-    // This test is intentionally not migrated to the new
-    // kAllowlistedExtensionID switch to test that the deprecated one keeps
-    // working.
     command_line->AppendSwitchASCII(
-        extensions::switches::kDEPRECATED_AllowlistedExtensionID,
-        kTestExtensionId);
+        extensions::switches::kAllowlistedExtensionID, kTestExtensionId);
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -311,8 +347,9 @@ class SigninExtensionsDeviceCloudPolicyBrowserTest
   // Intercepts the request for the test extension update manifest.
   std::unique_ptr<net::test_server::HttpResponse> InterceptUpdateManifest(
       const net::test_server::HttpRequest& request) {
-    if (request.GetURL().path() != kTestExtensionUpdateManifestPath)
+    if (request.GetURL().GetPath() != kTestExtensionUpdateManifestPath) {
       return nullptr;
+    }
 
     // Create update manifest for the test extension, setting the extension URL
     // with a test server URL pointing to the extension under the test data
@@ -338,11 +375,13 @@ class SigninExtensionsDeviceCloudPolicyBrowserTest
   std::unique_ptr<net::test_server::HttpResponse> InterceptComponentPolicy(
       bool hang,
       const net::test_server::HttpRequest& request) {
-    if (request.relative_url != kFakePolicyPath)
+    if (request.relative_url != kFakePolicyPath) {
       return nullptr;
+    }
 
-    if (hang)
+    if (hang) {
       return std::make_unique<net::test_server::HungResponse>();
+    }
 
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();
     response->set_content(kFakePolicy);
@@ -389,6 +428,28 @@ class SigninExtensionsDeviceCloudPolicyBrowserTest
 
 }  // namespace
 
+class SigninExtensionsDeviceCloudPolicyBrowserParamTest
+    : public SigninExtensionsDeviceCloudPolicyBrowserTest,
+      public testing::WithParamInterface<FeaturesTestParam> {
+ public:
+  SigninExtensionsDeviceCloudPolicyBrowserParamTest() {
+    const FeaturesTestParam& features_test_param = GetParam();
+    scoped_feature_list_.InitWithFeatures(
+        features_test_param.enabled_features,
+        features_test_param.disabled_features);
+  }
+
+  SigninExtensionsDeviceCloudPolicyBrowserParamTest(
+      const SigninExtensionsDeviceCloudPolicyBrowserParamTest&) = delete;
+  SigninExtensionsDeviceCloudPolicyBrowserParamTest& operator=(
+      const SigninExtensionsDeviceCloudPolicyBrowserParamTest&) = delete;
+
+  ~SigninExtensionsDeviceCloudPolicyBrowserParamTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
 // The ManagedStorage test is done in two steps:
 //  1. Test that fetches the component policy and verifies that the fetched
 //     policy is exposed to a test extension installed into the sign-in profile.
@@ -396,7 +457,7 @@ class SigninExtensionsDeviceCloudPolicyBrowserTest
 //     extension installed into the sign-in profile can access the component
 //     policy downloaded during the first step.
 // PRE_ManagedStorage test handles the first step.
-IN_PROC_BROWSER_TEST_F(SigninExtensionsDeviceCloudPolicyBrowserTest,
+IN_PROC_BROWSER_TEST_P(SigninExtensionsDeviceCloudPolicyBrowserParamTest,
                        PRE_ManagedStorage) {
   // The test app will be installed via policy, at which point its
   // background page will be loaded.
@@ -407,9 +468,9 @@ IN_PROC_BROWSER_TEST_F(SigninExtensionsDeviceCloudPolicyBrowserTest,
 
 // The second step of the ManagedStorage test, which blocks component policy
 // download and verifies that a cached component policy is available to the test
-// extenion.
+// extension.
 // See PRE_ManagedStorage test.
-IN_PROC_BROWSER_TEST_F(SigninExtensionsDeviceCloudPolicyBrowserTest,
+IN_PROC_BROWSER_TEST_P(SigninExtensionsDeviceCloudPolicyBrowserParamTest,
                        ManagedStorage) {
   // The test app will be installed via policy, at which point its
   // background page will be loaded. Note that the app will not be installed
@@ -418,6 +479,81 @@ IN_PROC_BROWSER_TEST_F(SigninExtensionsDeviceCloudPolicyBrowserTest,
   // cached app version is the latest.
   extensions::ResultCatcher result_catcher;
   StartTestServer(true /*hang_component_policy_fetch*/);
+  EXPECT_TRUE(result_catcher.GetNextResult());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SigninExtensionsDeviceCloudPolicyBrowserTest,
+    SigninExtensionsDeviceCloudPolicyBrowserParamTest,
+    ::testing::Values(
+        FeaturesTestParam{.enabled_features = {policy::kPolicyFetchWithSha256}},
+        FeaturesTestParam{
+            .disabled_features = {policy::kPolicyFetchWithSha256}}));
+
+// Tests how component policy is handled for extensions installed on the lock
+// screen.
+class LockExtensionsDeviceCloudPolicyBrowserTest
+    : public SigninExtensionsDeviceCloudPolicyBrowserTest {
+ public:
+  LockExtensionsDeviceCloudPolicyBrowserTest() {
+    // Don't shut down when no browser is open, since it breaks the test and
+    // since it's not the real Chrome OS behavior.
+    set_exit_when_last_browser_closes(false);
+  }
+
+  LockExtensionsDeviceCloudPolicyBrowserTest(
+      const SigninExtensionsDeviceCloudPolicyBrowserTest&) = delete;
+  LockExtensionsDeviceCloudPolicyBrowserTest& operator=(
+      const SigninExtensionsDeviceCloudPolicyBrowserTest&) = delete;
+
+  ~LockExtensionsDeviceCloudPolicyBrowserTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SigninExtensionsDeviceCloudPolicyBrowserTest::SetUpCommandLine(
+        command_line);
+    // Skip showing post-login screens.
+    command_line->AppendSwitch(ash::switches::kOobeSkipPostLogin);
+  }
+
+  void LogIn() {
+    login_manager_mixin_.LoginAsNewRegularUser();
+    login_manager_mixin_.WaitForActiveSession();
+  }
+
+ private:
+  ash::LoginManagerMixin login_manager_mixin_{&mixin_host_};
+  base::test::ScopedFeatureList scoped_feature_list_{
+      chromeos::features::kLockScreenBadgeAuth};
+};
+
+// Test that fetches the component policy and verifies that the fetched
+// policy is exposed to a test extension installed into the lock profile.
+IN_PROC_BROWSER_TEST_F(LockExtensionsDeviceCloudPolicyBrowserTest,
+                       ManagedStorage) {
+  chromeos::AuthenticationScreenExtensionsExternalLoader::
+      SetTestBadgeAuthExtensionIdForTesting(kTestExtensionId);
+
+  StartTestServer(/*hang_component_policy_fetch=*/false);
+
+  LogIn();
+  // Ensure that the Lock Screen profile exists.
+  if (!ash::BrowserContextHelper::Get()->GetLockScreenBrowserContext()) {
+    base::test::TestFuture<Profile*> profile_future;
+    g_browser_process->profile_manager()->CreateProfileAsync(
+        ash::ProfileHelper::GetLockScreenProfileDir(),
+        profile_future.GetCallback());
+    ASSERT_TRUE(profile_future.Take());
+  }
+  // The test app will be installed via policy, at which point its
+  // background page will be loaded. Note that the app will not be installed
+  // before the test server is started, even if the app is installed from the
+  // extension cache - the server will be pinged at least to check whether the
+  // cached app version is the latest.
+  extensions::ResultCatcher result_catcher;
+  if (!ash::ScreenLockerTester().IsLocked()) {
+    ash::ScreenLockerTester().Lock();
+  }
+
   EXPECT_TRUE(result_catcher.GetNextResult());
 }
 

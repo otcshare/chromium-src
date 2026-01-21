@@ -20,6 +20,11 @@ struct StructTraits<viz::mojom::FrameTimingDetailsDataView,
     return frame_timing_details.received_compositor_frame_timestamp;
   }
 
+  static base::TimeTicks embedded_frame_timestamp(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.embedded_frame_timestamp;
+  }
+
   static base::TimeTicks draw_start_timestamp(
       const viz::FrameTimingDetails& frame_timing_details) {
     return frame_timing_details.draw_start_timestamp;
@@ -33,6 +38,31 @@ struct StructTraits<viz::mojom::FrameTimingDetailsDataView,
   static gfx::PresentationFeedback presentation_feedback(
       const viz::FrameTimingDetails& frame_timing_details) {
     return frame_timing_details.presentation_feedback;
+  }
+
+  static viz::BeginFrameId frame_id(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.frame_id;
+  }
+
+  static base::TimeTicks start_update_display_tree(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.start_update_display_tree;
+  }
+
+  static base::TimeTicks start_prepare_to_draw(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.start_prepare_to_draw;
+  }
+
+  static base::TimeTicks start_draw_layers(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.start_draw_layers;
+  }
+
+  static base::TimeTicks submit_compositor_frame(
+      const viz::FrameTimingDetails& frame_timing_details) {
+    return frame_timing_details.submit_compositor_frame;
   }
 
   static bool Read(viz::mojom::FrameTimingDetailsDataView data,

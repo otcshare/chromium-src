@@ -7,8 +7,8 @@
 
 #include "base/cancelable_callback.h"
 #include "base/containers/flat_map.h"
-#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 
@@ -23,7 +23,6 @@ class MEDIA_EXPORT PendingOperations {
   class PendingOperation {
    public:
     PendingOperation(
-        const std::string& uma_prefix,
         std::string uma_str,
         std::unique_ptr<base::CancelableOnceClosure> timeout_closure);
     // Records task timing UMA if it hasn't already timed out.
@@ -34,8 +33,7 @@ class MEDIA_EXPORT PendingOperations {
     PendingOperation(const PendingOperation&) = delete;
     PendingOperation& operator=(const PendingOperation&) = delete;
 
-    void UmaHistogramOpTime(const std::string& op_name,
-                            base::TimeDelta duration);
+    void UmaHistogramOpTime(base::TimeDelta duration);
 
     // Trigger UMA recording for timeout.
     void OnTimeout();
@@ -43,7 +41,6 @@ class MEDIA_EXPORT PendingOperations {
    private:
     friend class VideoDecodeStatsDBImplTest;
     friend class WebrtcVideoStatsDBImplTest;
-    const raw_ref<const std::string> uma_prefix_;
     const std::string uma_str_;
     std::unique_ptr<base::CancelableOnceClosure> timeout_closure_;
     const base::TimeTicks start_ticks_;
@@ -56,7 +53,7 @@ class MEDIA_EXPORT PendingOperations {
   // map. Returns Id for newly started operation. Callers must later call
   // Complete() with this id to destroy the PendingOperation and finalize timing
   // UMA.
-  Id Start(std::string uma_str);
+  Id Start(std::string_view uma_str);
 
   // Removes PendingOperation from `pending_ops_` using `op_id_` as a key. This
   // destroys the object and triggers timing UMA.

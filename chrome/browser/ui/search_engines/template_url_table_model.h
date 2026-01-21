@@ -6,16 +6,46 @@
 #define CHROME_BROWSER_UI_SEARCH_ENGINES_TEMPLATE_URL_TABLE_MODEL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "base/i18n/string_compare.h"
 #include "base/memory/raw_ptr.h"
 #include "components/search_engines/template_url_service_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/models/table_model.h"
 
 class TemplateURL;
 class TemplateURLService;
+
+namespace search_engines {
+enum class ChoiceMadeLocation;
+}
+
+namespace internal {
+
+// Allows sorting site search engines by group (either created by the
+// SiteSearchSettings policy, or not created by policy) and alphabetically
+// inside each group.
+//
+// Alphabetical comparison is case-insensitive according to the current locale.
+// In case of loading errors for ICU, fallback to regular string comparison.
+class OrderByManagedAndAlphabetically {
+ public:
+  OrderByManagedAndAlphabetically();
+  OrderByManagedAndAlphabetically(const OrderByManagedAndAlphabetically& other);
+  ~OrderByManagedAndAlphabetically();
+
+  bool operator()(const TemplateURL* lhs, const TemplateURL* rhs) const;
+
+  // Exposed for testing
+  std::string GetShortNameSortKey(const std::u16string& short_name) const;
+
+ private:
+  std::unique_ptr<icu::Collator> collator_;
+};
+
+}  // namespace internal
 
 // TemplateURLTableModel is the TableModel implementation used by
 // KeywordEditorView to show the keywords in a TableView.
@@ -28,9 +58,10 @@ class TemplateURLService;
 // together) and are followed by generated keywords.
 
 class TemplateURLTableModel : public ui::TableModel,
-                                     TemplateURLServiceObserver {
+                              TemplateURLServiceObserver {
  public:
-  explicit TemplateURLTableModel(TemplateURLService* template_url_service);
+  TemplateURLTableModel(TemplateURLService* template_url_service,
+                        bool ai_mode_enabled);
 
   TemplateURLTableModel(const TemplateURLTableModel&) = delete;
   TemplateURLTableModel& operator=(const TemplateURLTableModel&) = delete;
@@ -70,11 +101,13 @@ class TemplateURLTableModel : public ui::TableModel,
 
   // Returns the index of the TemplateURL, or nullopt if it the TemplateURL is
   // not found.
-  absl::optional<size_t> IndexOfTemplateURL(const TemplateURL* template_url);
+  std::optional<size_t> IndexOfTemplateURL(const TemplateURL* template_url);
 
   // Make the TemplateURL at |index| the default.  Returns the new index, or -1
   // if the index is invalid or it is already the default.
-  void MakeDefaultTemplateURL(size_t index);
+  void MakeDefaultTemplateURL(
+      size_t index,
+      search_engines::ChoiceMadeLocation choice_location);
 
   // Activates the TemplateURL at the specified index if `is_active` is true and
   // deactivates if false. When the TemplateURL is active, it can be invoked by
@@ -99,7 +132,7 @@ class TemplateURLTableModel : public ui::TableModel,
   raw_ptr<ui::TableModelObserver> observer_;
 
   // The entries.
-  std::vector<TemplateURL*> entries_;
+  std::vector<raw_ptr<TemplateURL, VectorExperimental>> entries_;
 
   // The model we're displaying entries from.
   raw_ptr<TemplateURLService> template_url_service_;
@@ -116,7 +149,9 @@ class TemplateURLTableModel : public ui::TableModel,
   // Index of the last other engine in entries_. This is used to determine the
   // group boundaries.
   size_t last_other_engine_index_;
-};
 
+  // Whether to show the @aimode keyword. This depends on user eligibility.
+  bool ai_mode_enabled_;
+};
 
 #endif  // CHROME_BROWSER_UI_SEARCH_ENGINES_TEMPLATE_URL_TABLE_MODEL_H_

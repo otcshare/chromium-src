@@ -10,6 +10,7 @@
 #include "components/password_manager/core/browser/credentials_filter.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/version_info/channel.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace password_manager {
@@ -18,6 +19,21 @@ StubPasswordManagerClient::StubPasswordManagerClient()
     : ukm_source_id_(ukm::UkmRecorder::GetNewSourceID()) {}
 
 StubPasswordManagerClient::~StubPasswordManagerClient() = default;
+
+bool StubPasswordManagerClient::IsSavingAndFillingEnabled(
+    const GURL& url) const {
+  return true;
+}
+
+bool StubPasswordManagerClient::IsFillingEnabled(const GURL& url) const {
+  return true;
+}
+
+bool StubPasswordManagerClient::IsFieldFilledWithOtp(
+    autofill::FormGlobalId form_id,
+    autofill::FieldGlobalId field_id) {
+  return false;
+}
 
 bool StubPasswordManagerClient::PromptUserToSaveOrUpdatePassword(
     std::unique_ptr<PasswordFormManagerForUI> form_to_save,
@@ -47,6 +63,11 @@ bool StubPasswordManagerClient::PromptUserToChooseCredentials(
   return false;
 }
 
+bool StubPasswordManagerClient::IsReauthBeforeFillingRequired(
+    device_reauth::DeviceAuthenticator* authenticator) {
+  return false;
+}
+
 void StubPasswordManagerClient::NotifyUserAutoSignin(
     std::vector<std::unique_ptr<PasswordForm>> local_forms,
     const url::Origin& origin) {}
@@ -57,10 +78,17 @@ void StubPasswordManagerClient::NotifyUserCouldBeAutoSignedIn(
 void StubPasswordManagerClient::NotifySuccessfulLoginWithExistingPassword(
     std::unique_ptr<PasswordFormManagerForUI> submitted_manager) {}
 
+bool StubPasswordManagerClient::IsPasswordChangeOngoing() {
+  return false;
+}
+
 void StubPasswordManagerClient::NotifyStorePasswordCalled() {}
 
+void StubPasswordManagerClient::NotifyKeychainError() {}
+
 void StubPasswordManagerClient::AutomaticPasswordSave(
-    std::unique_ptr<PasswordFormManagerForUI> saved_manager) {}
+    std::unique_ptr<PasswordFormManagerForUI> saved_manager,
+    bool is_update_confirmation) {}
 
 PrefService* StubPasswordManagerClient::GetPrefs() const {
   return nullptr;
@@ -71,6 +99,11 @@ PrefService* StubPasswordManagerClient::GetLocalStatePrefs() const {
 }
 
 const syncer::SyncService* StubPasswordManagerClient::GetSyncService() const {
+  return nullptr;
+}
+
+affiliations::AffiliationService*
+StubPasswordManagerClient::GetAffiliationService() {
   return nullptr;
 }
 
@@ -89,9 +122,14 @@ PasswordReuseManager* StubPasswordManagerClient::GetPasswordReuseManager()
   return nullptr;
 }
 
-MockPasswordChangeSuccessTracker*
-StubPasswordManagerClient::GetPasswordChangeSuccessTracker() {
-  return &password_change_success_tracker_;
+PasswordChangeServiceInterface*
+StubPasswordManagerClient::GetPasswordChangeService() const {
+  return nullptr;
+}
+
+const PasswordManagerInterface* StubPasswordManagerClient::GetPasswordManager()
+    const {
+  return nullptr;
 }
 
 const GURL& StubPasswordManagerClient::GetLastCommittedURL() const {
@@ -107,7 +145,7 @@ const CredentialsFilter* StubPasswordManagerClient::GetStoreResultFilter()
   return &credentials_filter_;
 }
 
-autofill::LogManager* StubPasswordManagerClient::GetLogManager() {
+autofill::LogManager* StubPasswordManagerClient::GetCurrentLogManager() {
   return &log_manager_;
 }
 
@@ -121,26 +159,18 @@ StubPasswordManagerClient::GetPasswordFeatureManager() {
   return &password_feature_manager_;
 }
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE) || BUILDFLAG(IS_IOS)
 safe_browsing::PasswordProtectionService*
 StubPasswordManagerClient::GetPasswordProtectionService() const {
   return nullptr;
 }
+#endif
 
-#if defined(ON_FOCUS_PING_ENABLED)
+#if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 void StubPasswordManagerClient::CheckSafeBrowsingReputation(
     const GURL& form_action,
     const GURL& frame_url) {}
 #endif
-
-void StubPasswordManagerClient::CheckProtectedPasswordEntry(
-    metrics_util::PasswordType reused_password_type,
-    const std::string& username,
-    const std::vector<MatchingReusedCredential>& matching_reused_credentials,
-    bool password_field_exists,
-    uint64_t reused_password_hash,
-    const std::string& domain) {}
-
-void StubPasswordManagerClient::LogPasswordReuseDetectedEvent() {}
 
 ukm::SourceId StubPasswordManagerClient::GetUkmSourceId() {
   return ukm_source_id_;
@@ -154,7 +184,22 @@ StubPasswordManagerClient::GetMetricsRecorder() {
   return base::OptionalToPtr(metrics_recorder_);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+FirstCctPageLoadPasswordsUkmRecorder*
+StubPasswordManagerClient::GetFirstCctPageLoadUkmRecorder() {
+  return nullptr;
+}
+
+void StubPasswordManagerClient::PotentialSaveFormSubmitted() {}
+
+#endif
+
 signin::IdentityManager* StubPasswordManagerClient::GetIdentityManager() {
+  return nullptr;
+}
+
+const signin::IdentityManager* StubPasswordManagerClient::GetIdentityManager()
+    const {
   return nullptr;
 }
 
@@ -176,12 +221,36 @@ bool StubPasswordManagerClient::IsNewTabPage() const {
   return false;
 }
 
-FieldInfoManager* StubPasswordManagerClient::GetFieldInfoManager() const {
-  return nullptr;
-}
-
 version_info::Channel StubPasswordManagerClient::GetChannel() const {
   return version_info::Channel::UNKNOWN;
+}
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_CHROMEOS)
+void StubPasswordManagerClient::OpenPasswordDetailsBubble(
+    const password_manager::PasswordForm& form) {}
+void StubPasswordManagerClient::MaybeShowSavePasswordPrimingPromo(
+    const GURL& current_url) {}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_IOS)
+std::unique_ptr<
+    password_manager::PasswordCrossDomainConfirmationPopupController>
+StubPasswordManagerClient::ShowCrossDomainConfirmationPopup(
+    const gfx::RectF& element_bounds,
+    base::i18n::TextDirection text_direction,
+    const GURL& domain,
+    const std::u16string& password_hostname,
+    bool show_warning_text,
+    base::OnceClosure confirmation_callback) {
+  return nullptr;
+}
+#endif  // !BUILDFLAG(IS_IOS)
+
+password_manager::UndoPasswordChangeController*
+StubPasswordManagerClient::GetUndoPasswordChangeController() {
+  return &undo_password_change_controller_;
 }
 
 }  // namespace password_manager

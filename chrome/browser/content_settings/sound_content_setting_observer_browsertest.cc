@@ -166,7 +166,7 @@ class MultipleFramesObserver : public content::WebContentsObserver {
   // it searches for the main frame and return it. Otherwise, it returns a
   // sub frame.
   TestAutoplayConfigurationClient* GetTestClient(bool request_main_frame) {
-    return GetTestClient(base::BindLambdaForTesting(
+    return GetTestClientWithFilter(base::BindLambdaForTesting(
         [&request_main_frame](content::RenderFrameHost* rfh) {
           bool is_main_frame = rfh->GetMainFrame() == rfh;
           return request_main_frame ? is_main_frame : !is_main_frame;
@@ -174,19 +174,10 @@ class MultipleFramesObserver : public content::WebContentsObserver {
   }
 
   TestAutoplayConfigurationClient* GetTestClientForFencedFrame() {
-    return GetTestClient(
-        [](content::RenderFrameHost* rfh) { return rfh->IsFencedFrameRoot(); });
-  }
-
-  using Filter = base::RepeatingCallback<bool(content::RenderFrameHost*)>;
-  TestAutoplayConfigurationClient* GetTestClient(Filter filter) {
-    for (auto& client : frame_to_client_map_) {
-      if (filter.Run(client.first)) {
-        return client.second.get();
-      }
-    }
-    NOTREACHED();
-    return nullptr;
+    return GetTestClientWithFilter(
+        base::BindLambdaForTesting([](content::RenderFrameHost* rfh) {
+          return rfh->IsFencedFrameRoot();
+        }));
   }
 
  private:
@@ -197,6 +188,16 @@ class MultipleFramesObserver : public content::WebContentsObserver {
             blink::mojom::AutoplayConfigurationClient::Name_,
             base::BindRepeating(&TestAutoplayConfigurationClient::BindReceiver,
                                 base::Unretained(client)));
+  }
+
+  using Filter = base::RepeatingCallback<bool(content::RenderFrameHost*)>;
+  TestAutoplayConfigurationClient* GetTestClientWithFilter(Filter filter) {
+    for (auto& client : frame_to_client_map_) {
+      if (filter.Run(client.first)) {
+        return client.second.get();
+      }
+    }
+    NOTREACHED();
   }
 
   std::map<content::RenderFrameHost*,
@@ -254,8 +255,7 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   base::RunLoop run_loop;
   TestAudioStateObserver audio_state_observer(web_contents(),
                                               run_loop.QuitClosure());
-  EXPECT_EQ("OK", content::EvalJs(web_contents(), "StartOscillator();",
-                                  content::EXECUTE_SCRIPT_USE_MANUAL_REPLY));
+  EXPECT_EQ("OK", content::EvalJs(web_contents(), "StartOscillator();"));
   run_loop.Run();
 
   SoundContentSettingObserver* observer =
@@ -265,7 +265,8 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
 
   // Loads a page in the prerender.
   auto prerender_url = embedded_test_server()->GetURL("/simple.html");
-  int host_id = prerender_helper()->AddPrerender(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   // The prerendering should not affect the current status.
   EXPECT_TRUE(observer->HasLoggedSiteMutedUkmForTesting());
@@ -311,7 +312,8 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   // Loads a page in the prerender.
   prerender_helper()->AddPrerenderAsync(prerender_url);
   registry_observer.WaitForTrigger(prerender_url);
-  auto host_id = prerender_helper()->GetHostForUrl(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_helper()->GetHostForUrl(prerender_url);
 
   // Adds the expected url and flag for the main frame.
   observer.GetTestClient(true)->AddExpectedOriginAndFlags(
@@ -353,6 +355,12 @@ class SoundContentSettingObserverFencedFrameBrowserTest
   SoundContentSettingObserverFencedFrameBrowserTest() = default;
   ~SoundContentSettingObserverFencedFrameBrowserTest() override = default;
 
+  // TODO(crbug.com/40285326): This fails with the field trial testing config.
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch("disable-field-trial-config");
+  }
+
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     https_server_.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
@@ -393,13 +401,22 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverFencedFrameBrowserTest,
 
   auto fenced_frame_url = https_server().GetURL("/fenced_frames/title1.html");
 
+  // Create a blank fenced frame.
+  EXPECT_TRUE(fenced_frame_test_helper().CreateFencedFrame(
+      web_contents()->GetPrimaryMainFrame(), GURL()));
+
   // Creates MultipleFramesObserver to observe fenced frame creation and
   // intercept AddAutoplayFlags() for it.
   MultipleFramesObserver observer{web_contents(), 1};
 
-  // Create a fenced frame and wait for the autoplay flag to be set.
-  fenced_frame_test_helper().CreateFencedFrameAsync(
-      web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
+  // Navigate a fenced frame and wait for the autoplay flag to be set.
+  content::ExecuteScriptAsync(web_contents()->GetPrimaryMainFrame(),
+                              content::JsReplace(R"(
+                              document.getElementsByTagName('fencedframe')[0].
+                              config = new FencedFrameConfig($1);
+                           )",
+                                                 fenced_frame_url));
+
   observer.WaitForFencedFrame();
   observer.GetTestClientForFencedFrame()->AddExpectedOriginAndFlags(
       url::Origin::Create(fenced_frame_url),

@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/reporting/proto/synced/record.pb.h"
 #include "components/reporting/proto/synced/record_constants.pb.h"
 #include "components/reporting/storage/storage_module_interface.h"
@@ -25,9 +25,9 @@ TestStorageModuleStrict::TestStorageModuleStrict() {
           Invoke(this, &TestStorageModuleStrict::AddRecordSuccessfully));
   ON_CALL(*this, Flush)
       .WillByDefault(
-          WithArg<1>(Invoke([](StorageModuleInterface::FlushCallback callback) {
+          WithArg<1>([](StorageModuleInterface::FlushCallback callback) {
             std::move(callback).Run(Status::StatusOK());
-          })));
+          }));
 }
 
 TestStorageModuleStrict::~TestStorageModuleStrict() = default;

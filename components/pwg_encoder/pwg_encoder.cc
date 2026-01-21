@@ -10,8 +10,10 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/big_endian.h"
+#include "base/check.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
 #include "components/pwg_encoder/bitmap_image.h"
 
 namespace pwg_encoder {
@@ -83,43 +85,44 @@ void EncodePixelToMonochrome(const void* pixel, std::string* output) {
 
 std::string EncodePageHeader(const BitmapImage& image,
                              const PwgHeaderInfo& pwg_header_info) {
-  char header[kHeaderSize];
-  memset(header, 0, kHeaderSize);
+  uint8_t header_buf[kHeaderSize] = {};
+  auto header = base::span(header_buf);
 
   uint32_t num_colors =
       pwg_header_info.color_space == PwgHeaderInfo::SGRAY ? 1 : 3;
   uint32_t bits_per_pixel = num_colors * kBitsPerColor;
 
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsDuplex,
-                                 pwg_header_info.duplex ? 1 : 0);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsHwResolutionHorizontal,
-                                 pwg_header_info.dpi.width());
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsHwResolutionVertical,
-                                 pwg_header_info.dpi.height());
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsTumble,
-                                 pwg_header_info.tumble ? 1 : 0);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsWidth,
-                                 image.size().width());
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsHeight,
-                                 image.size().height());
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsBitsPerColor,
-                                 kBitsPerColor);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsBitsPerPixel,
-                                 bits_per_pixel);
-  base::WriteBigEndian<uint32_t>(
-      header + kHeaderCupsBytesPerLine,
-      (bits_per_pixel * image.size().width() + 7) / 8);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsColorOrder, kColorOrder);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsColorSpace,
-                                 pwg_header_info.color_space);
-  base::WriteBigEndian<uint32_t>(header + kHeaderCupsNumColors, num_colors);
-  base::WriteBigEndian<uint32_t>(header + kHeaderPwgCrossFeedTransform,
-                                 pwg_header_info.flipx ? -1 : 1);
-  base::WriteBigEndian<uint32_t>(header + kHeaderPwgFeedTransform,
-                                 pwg_header_info.flipy ? -1 : 1);
-  base::WriteBigEndian<uint32_t>(header + kHeaderPwgTotalPageCount,
-                                 pwg_header_info.total_pages);
-  return std::string(header, kHeaderSize);
+  header.subspan<kHeaderCupsDuplex, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.duplex ? 1 : 0));
+  header.subspan<kHeaderCupsHwResolutionHorizontal, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.dpi.width()));
+  header.subspan<kHeaderCupsHwResolutionVertical, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.dpi.height()));
+  header.subspan<kHeaderCupsTumble, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.tumble ? 1 : 0));
+  header.subspan<kHeaderCupsWidth, 4u>().copy_from(
+      base::U32ToBigEndian(image.size().width()));
+  header.subspan<kHeaderCupsHeight, 4u>().copy_from(
+      base::U32ToBigEndian(image.size().height()));
+  header.subspan<kHeaderCupsBitsPerColor, 4u>().copy_from(
+      base::U32ToBigEndian(kBitsPerColor));
+  header.subspan<kHeaderCupsBitsPerPixel, 4u>().copy_from(
+      base::U32ToBigEndian(bits_per_pixel));
+  header.subspan<kHeaderCupsBytesPerLine, 4u>().copy_from(
+      base::U32ToBigEndian((bits_per_pixel * image.size().width() + 7) / 8));
+  header.subspan<kHeaderCupsColorOrder, 4u>().copy_from(
+      base::U32ToBigEndian(kColorOrder));
+  header.subspan<kHeaderCupsColorSpace, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.color_space));
+  header.subspan<kHeaderCupsNumColors, 4u>().copy_from(
+      base::U32ToBigEndian(num_colors));
+  header.subspan<kHeaderPwgCrossFeedTransform, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.flipx ? -1 : 1));
+  header.subspan<kHeaderPwgFeedTransform, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.flipy ? -1 : 1));
+  header.subspan<kHeaderPwgTotalPageCount, 4u>().copy_from(
+      base::U32ToBigEndian(pwg_header_info.total_pages));
+  return std::string(header.begin(), header.end());
 }
 
 template <typename InputStruct, class RandomAccessIterator>
@@ -140,7 +143,9 @@ void EncodeRow(RandomAccessIterator pos,
   // NOTE: the algorithm is not optimal especially in case of monochrome.
   while (pos != row_end) {
     RandomAccessIterator it = pos + 1;
-    RandomAccessIterator end = std::min(pos + kPwgMaxPackedPixels, row_end);
+    RandomAccessIterator end = (row_end - pos > kPwgMaxPackedPixels)
+                                   ? pos + kPwgMaxPackedPixels
+                                   : row_end;
 
     // Counts how many identical pixels (up to 128).
     while (it != end && *pos == *it) {
@@ -148,10 +153,11 @@ void EncodeRow(RandomAccessIterator pos,
     }
     if (it != pos + 1) {  // More than one pixel
       output->push_back(static_cast<char>((it - pos) - 1));
-      if (monochrome)
+      if (monochrome) {
         EncodePixelToMonochrome<InputStruct>(&*pos, output);
-      else
+      } else {
         EncodePixelToRGB<InputStruct>(&*pos, output);
+      }
       pos = it;
     } else {
       // Finds how many pixels there are each different from the previous one.
@@ -170,19 +176,15 @@ void EncodeRow(RandomAccessIterator pos,
       }
       output->push_back(static_cast<char>(1 - (it - pos)));
       while (pos != it) {
-        if (monochrome)
+        if (monochrome) {
           EncodePixelToMonochrome<InputStruct>(&*pos, output);
-        else
+        } else {
           EncodePixelToRGB<InputStruct>(&*pos, output);
+        }
         ++pos;
       }
     }
   }
-}
-
-const uint8_t* GetRow(const BitmapImage& image, int row, bool flipy) {
-  return image.GetPixel(
-      gfx::Point(0, flipy ? image.size().height() - 1 - row : row));
 }
 
 template <typename InputStruct>
@@ -193,37 +195,30 @@ std::string EncodePageWithColorspace(const BitmapImage& image,
 
   // Ensure no integer overflow.
   CHECK(image.size().width() < INT_MAX / image.channels());
-  int row_size = image.size().width() * image.channels();
 
   int row_number = 0;
   while (row_number < image.size().height()) {
-    const uint8_t* current_row =
-        GetRow(image, row_number++, pwg_header_info.flipy);
+    base::span<const uint32_t> current_row =
+        image.GetRow(row_number++, pwg_header_info.flipy);
     int num_identical_rows = 1;
     // We count how many times the current row is repeated.
     while (num_identical_rows < kPwgMaxPackedRows &&
            row_number < image.size().height() &&
-           !memcmp(current_row,
-                   GetRow(image, row_number, pwg_header_info.flipy),
-                   row_size)) {
+           current_row == image.GetRow(row_number, pwg_header_info.flipy)) {
       num_identical_rows++;
       row_number++;
     }
     output.push_back(static_cast<char>(num_identical_rows - 1));
 
     // Both supported colorspaces have a 32-bit pixels information.
-    // Converts the list of uint8_t to uint32_t as every pixels contains 4 bytes
-    // of information and comparison of elements is easier. The actual
     // Management of the bytes of the pixel is done by pixel_encoder function
     // on the original array to avoid endian problems.
-    const uint32_t* pos = reinterpret_cast<const uint32_t*>(current_row);
-    const uint32_t* row_end = pos + image.size().width();
     if (!pwg_header_info.flipx) {
-      EncodeRow<InputStruct>(pos, row_end, monochrome, &output);
+      EncodeRow<InputStruct>(current_row.begin(), current_row.end(), monochrome,
+                             &output);
     } else {
       // We reverse the iterators.
-      EncodeRow<InputStruct>(std::reverse_iterator<const uint32_t*>(row_end),
-                             std::reverse_iterator<const uint32_t*>(pos),
+      EncodeRow<InputStruct>(current_row.rbegin(), current_row.rend(),
                              monochrome, &output);
     }
   }

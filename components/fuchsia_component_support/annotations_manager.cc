@@ -8,6 +8,7 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -17,7 +18,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 
 namespace fuchsia_component_support {
 
@@ -26,8 +26,8 @@ using AnnotationKeySet =
     std::set<fuchsia::element::AnnotationKey, AnnotationKeyCompare>;
 }  // namespace
 
-fuchsia::element::Annotation MakeAnnotation(base::StringPiece key,
-                                            base::StringPiece value) {
+fuchsia::element::Annotation MakeAnnotation(std::string_view key,
+                                            std::string_view value) {
   fuchsia::element::Annotation result;
   result.key.namespace_ = "global";
   result.key.value = std::string(key);
@@ -42,14 +42,14 @@ fuchsia::element::Annotation MakeAnnotation(base::StringPiece key,
   return result;
 }
 
-fuchsia::element::Annotation MakeBoolAnnotation(base::StringPiece key,
+fuchsia::element::Annotation MakeBoolAnnotation(std::string_view key,
                                                 bool value) {
-  static constexpr base::StringPiece kTrue("true");
-  static constexpr base::StringPiece kFalse("false");
+  static constexpr std::string_view kTrue("true");
+  static constexpr std::string_view kFalse("false");
   return MakeAnnotation(key, value ? kTrue : kFalse);
 }
 
-fuchsia::element::Annotation MakeIntAnnotation(base::StringPiece key,
+fuchsia::element::Annotation MakeIntAnnotation(std::string_view key,
                                                int value) {
   return MakeAnnotation(key, base::NumberToString(value));
 }
@@ -87,31 +87,23 @@ class AnnotationsManager::ControllerImpl
   }
   void WatchAnnotations(WatchAnnotationsCallback callback) override {
     DVLOG(2) << __func__;
-    if (first_watch_) {
-      first_watch_ = false;
+
+    if (have_changes_) {
+      have_changes_ = false;
       callback(fpromise::ok(manager_->GetAnnotations()));
       return;
     }
-    if (changed_.empty()) {
-      if (on_annotations_changed_) {
-        manager_->bindings_.CloseBinding(this, ZX_ERR_BAD_STATE);
-        return;
-      }
-      on_annotations_changed_ = std::move(callback);
+
+    if (on_annotations_changed_) {
+      manager_->bindings_.CloseBinding(this, ZX_ERR_BAD_STATE);
       return;
     }
 
-    std::vector<fuchsia::element::Annotation> result;
-    result.reserve(changed_.size());
-    for (const auto& key : std::exchange(changed_, {})) {
-      result.push_back(manager_->GetAnnotation(key));
-    }
-    callback(fpromise::ok(std::move(result)));
+    on_annotations_changed_ = std::move(callback);
   }
 
-  void OnAnnotationsChanged(const AnnotationKeySet& changed) {
-    changed_.merge(AnnotationKeySet(changed));
-    DCHECK(!changed_.empty());
+  void OnAnnotationsChanged() {
+    have_changes_ = true;
     if (on_annotations_changed_) {
       WatchAnnotations(std::exchange(on_annotations_changed_, {}));
     }
@@ -120,8 +112,10 @@ class AnnotationsManager::ControllerImpl
  private:
   const raw_ref<AnnotationsManager> manager_;
 
-  bool first_watch_ = true;
-  AnnotationKeySet changed_;
+  // Initially true so that the first call to WatchAnnotations() will
+  // return results immediately.
+  bool have_changes_ = true;
+
   WatchAnnotationsCallback on_annotations_changed_;
 };
 
@@ -152,7 +146,7 @@ bool AnnotationsManager::UpdateAnnotations(
 
   if (!changed.empty()) {
     for (auto& binding : bindings_.bindings()) {
-      binding->impl()->OnAnnotationsChanged(changed);
+      binding->impl()->OnAnnotationsChanged();
     }
   }
 
@@ -166,16 +160,6 @@ std::vector<fuchsia::element::Annotation> AnnotationsManager::GetAnnotations()
   for (const auto& [key, value] : annotations_) {
     result.push_back(fuchsia::element::Annotation{.key = key});
     zx_status_t status = value.Clone(&result.back().value);
-    ZX_CHECK(status == ZX_OK, status);
-  }
-  return result;
-}
-
-fuchsia::element::Annotation AnnotationsManager::GetAnnotation(
-    const fuchsia::element::AnnotationKey& key) const {
-  fuchsia::element::Annotation result{.key = key};
-  if (auto it = annotations_.find(key); it != annotations_.end()) {
-    zx_status_t status = it->second.Clone(&result.value);
     ZX_CHECK(status == ZX_OK, status);
   }
   return result;

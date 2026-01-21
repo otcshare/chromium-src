@@ -20,11 +20,13 @@ const char kDeviceStateMode[] = "device_mode";
 const char kDeviceStateDisabledMessage[] = "disabled_message";
 const char kDeviceStatePackagedLicense[] = "packaged_license";
 const char kDeviceStateLicenseType[] = "license_type";
+const char kDeviceStateAssignedUpgradeType[] = "assigned_upgrade_type";
 
 // Modes for a device after initial state determination.
 const char kDeviceStateInitialModeEnrollmentEnforced[] = "enrollment-enforced";
 const char kDeviceStateInitialModeEnrollmentZeroTouch[] =
     "enrollment-zero-touch";
+const char kDeviceStateInitialModeTokenEnrollment[] = "token-enrollment";
 // Modes for a device after secondary state determination (FRE).
 const char kDeviceStateRestoreModeReEnrollmentRequested[] =
     "re-enrollment-requested";
@@ -38,6 +40,11 @@ const char kDeviceStateLicenseTypeEducation[] = "education";
 const char kDeviceStateLicenseTypeTerminal[] = "terminal";
 // Modes for a device after either initial or secondary state determination.
 const char kDeviceStateModeDisabled[] = "disabled";
+
+// Assigned upgrades for a device after initial state determination.
+const char kDeviceStateAssignedUpgradeTypeChromeEnterprise[] =
+    "enterprise";
+const char kDeviceStateAssignedUpgradeTypeKiosk[] = "kiosk";
 
 DeviceStateMode GetDeviceStateMode() {
   const std::string* device_state_mode =
@@ -58,9 +65,11 @@ DeviceStateMode GetDeviceStateMode() {
     return INITIAL_MODE_ENROLLMENT_ENFORCED;
   if (*device_state_mode == kDeviceStateInitialModeEnrollmentZeroTouch)
     return INITIAL_MODE_ENROLLMENT_ZERO_TOUCH;
+  if (*device_state_mode == kDeviceStateInitialModeTokenEnrollment) {
+    return INITIAL_MODE_ENROLLMENT_TOKEN_ENROLLMENT;
+  }
 
   NOTREACHED();
-  return RESTORE_MODE_NONE;
 }
 
 }  // namespace policy

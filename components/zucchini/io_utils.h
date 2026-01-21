@@ -7,13 +7,14 @@
 
 #include <stdint.h>
 
-#include <cctype>
 #include <istream>
 #include <ostream>
 #include <sstream>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ref.h"
+#include "base/strings/string_util.h"
 
 namespace zucchini {
 
@@ -73,7 +74,8 @@ std::ostream& operator<<(std::ostream& os, const AsHex<N, T>& as_hex) {
   buf[N] = '\0';
   T value = as_hex.value;
   for (int i = N - 1; i >= 0; --i, value >>= 4)
-    buf[i] = "0123456789ABCDEF"[static_cast<int>(value & 0x0F)];
+    UNSAFE_TODO(buf[i]) =
+        UNSAFE_TODO("0123456789ABCDEF"[static_cast<int>(value & 0x0F)]);
   if (value)
     os << "...";  // To indicate data truncation, or negative values.
   os << buf;
@@ -126,7 +128,7 @@ class StrictUInt {
   StrictUInt(const StrictUInt&) = default;
 
   friend std::istream& operator>>(std::istream& istr, StrictUInt<T> obj) {
-    if (!istr.fail() && !::isdigit(istr.peek())) {
+    if (!istr.fail() && !base::IsAsciiDigit(istr.peek())) {
       istr.setstate(std::ios_base::failbit);
       return istr;
     }

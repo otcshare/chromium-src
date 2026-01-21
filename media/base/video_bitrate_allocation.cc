@@ -4,6 +4,7 @@
 
 #include "video_bitrate_allocation.h"
 
+#include <array>
 #include <cstring>
 #include <limits>
 #include <numeric>
@@ -23,6 +24,8 @@ static media::Bitrate MakeReplacementBitrate(const media::Bitrate& old,
       return media::Bitrate::ConstantBitrate(target_bps);
     case media::Bitrate::Mode::kVariable:
       return media::Bitrate::VariableBitrate(target_bps, peak_bps);
+    case media::Bitrate::Mode::kExternal:
+      return media::Bitrate::ExternalRateControl();
   }
 }
 
@@ -42,6 +45,11 @@ VideoBitrateAllocation::VideoBitrateAllocation(Bitrate::Mode mode) {
       // For variable bitrates, the peak must not be zero as enforced by
       // Bitrate.
       sum_bitrate_ = Bitrate::VariableBitrate(0u, 1u);
+      break;
+    case Bitrate::Mode::kExternal:
+      // For variable bitrates, the peak must not be zero as enforced by
+      // Bitrate.
+      sum_bitrate_ = Bitrate::ExternalRateControl();
       break;
   }
 }
@@ -108,7 +116,7 @@ Bitrate::Mode VideoBitrateAllocation::GetMode() const {
 
 std::string VideoBitrateAllocation::ToString() const {
   size_t num_active_spatial_layers = 0;
-  size_t num_temporal_layers[kMaxSpatialLayers] = {};
+  std::array<size_t, kMaxSpatialLayers> num_temporal_layers = {};
   for (size_t sid = 0; sid < kMaxSpatialLayers; ++sid) {
     for (size_t tid = 0; tid < kMaxTemporalLayers; ++tid) {
       if (bitrates_[sid][tid] > 0)
@@ -151,16 +159,16 @@ std::string VideoBitrateAllocation::ToString() const {
     case Bitrate::Mode::kVariable:
       ss << "VBR with peak bps " << sum_bitrate_.peak_bps();
       break;
+    case Bitrate::Mode::kExternal:
+      ss << "External rate control";
+      break;
   }
   return ss.str();
 }
 
 bool VideoBitrateAllocation::operator==(
     const VideoBitrateAllocation& other) const {
-  if (sum_bitrate_ != other.sum_bitrate_) {
-    return false;
-  }
-  return memcmp(bitrates_, other.bitrates_, sizeof(bitrates_)) == 0;
+  return sum_bitrate_ == other.sum_bitrate_ && bitrates_ == other.bitrates_;
 }
 
 }  // namespace media

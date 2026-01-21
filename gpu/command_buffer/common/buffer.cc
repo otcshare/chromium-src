@@ -6,10 +6,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <ostream>
 
 #include "base/atomic_sequence_num.h"
+#include "base/bits.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/format_macros.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_math.h"
@@ -34,17 +38,20 @@ base::UnguessableToken BufferBacking::GetGUID() const {
   return base::UnguessableToken();
 }
 
-MemoryBufferBacking::MemoryBufferBacking(uint32_t size)
-    : memory_(new char[size]), size_(size) {}
+MemoryBufferBacking::MemoryBufferBacking(uint32_t size, uint32_t alignment)
+    : memory_(base::AlignedUninit<uint8_t>(size, alignment)) {}
 
 MemoryBufferBacking::~MemoryBufferBacking() = default;
 
-void* MemoryBufferBacking::GetMemory() const {
-  return memory_.get();
+const void* MemoryBufferBacking::GetMemory() const {
+  return memory_.data();
 }
 
+base::span<const uint8_t> MemoryBufferBacking::as_byte_span() const {
+  return memory_.as_span();
+}
 uint32_t MemoryBufferBacking::GetSize() const {
-  return size_;
+  return memory_.size();
 }
 
 SharedMemoryBufferBacking::SharedMemoryBufferBacking(
@@ -67,8 +74,12 @@ base::UnguessableToken SharedMemoryBufferBacking::GetGUID() const {
   return shared_memory_region_.GetGUID();
 }
 
-void* SharedMemoryBufferBacking::GetMemory() const {
+const void* SharedMemoryBufferBacking::GetMemory() const {
   return shared_memory_mapping_.memory();
+}
+
+base::span<const uint8_t> SharedMemoryBufferBacking::as_byte_span() const {
+  return base::span(shared_memory_mapping_);
 }
 
 uint32_t SharedMemoryBufferBacking::GetSize() const {
@@ -76,34 +87,41 @@ uint32_t SharedMemoryBufferBacking::GetSize() const {
 }
 
 Buffer::Buffer(std::unique_ptr<BufferBacking> backing)
-    : backing_(std::move(backing)),
-      memory_(backing_->GetMemory()),
-      size_(backing_->GetSize()) {
-  DCHECK(memory_) << "The memory must be mapped to create a Buffer";
+    : backing_(std::move(backing)) {
+  DCHECK(!backing_->as_byte_span().empty())
+      << "The memory must be mapped to create a Buffer";
 }
 
 Buffer::~Buffer() = default;
 
-void* Buffer::GetDataAddress(uint32_t data_offset, uint32_t data_size) const {
+base::span<uint8_t> Buffer::GetSpanData(uint32_t data_offset,
+                                        uint32_t data_size) const {
   base::CheckedNumeric<uint32_t> end = data_offset;
   end += data_size;
-  if (!end.IsValid() || end.ValueOrDie() > static_cast<uint32_t>(size_))
-    return nullptr;
-  return static_cast<uint8_t*>(memory_) + data_offset;
+  if (!end.IsValid() || end.ValueOrDie() > size()) {
+    return {};
+  }
+  return backing_->as_byte_span().subspan(data_offset, data_size);
+}
+
+void* Buffer::GetDataAddress(uint32_t data_offset, uint32_t data_size) const {
+  return GetSpanData(data_offset, data_size).data();
 }
 
 void* Buffer::GetDataAddressAndSize(uint32_t data_offset,
                                     uint32_t* data_size) const {
-  if (data_offset > static_cast<uint32_t>(size_))
+  if (data_offset > size()) {
     return nullptr;
+  }
   *data_size = GetRemainingSize(data_offset);
-  return static_cast<uint8_t*>(memory_) + data_offset;
+  return backing_->as_byte_span().subspan(data_offset, *data_size).data();
 }
 
 uint32_t Buffer::GetRemainingSize(uint32_t data_offset) const {
-  if (data_offset > static_cast<uint32_t>(size_))
+  if (data_offset > size()) {
     return 0;
-  return static_cast<uint32_t>(size_) - data_offset;
+  }
+  return size() - data_offset;
 }
 
 int32_t GetNextBufferId() {

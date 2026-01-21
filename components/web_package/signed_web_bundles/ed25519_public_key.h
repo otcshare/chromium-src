@@ -7,17 +7,14 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/types/expected.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace mojo {
-struct DefaultConstructTraits;
-}  // namespace mojo
+#include "mojo/public/cpp/bindings/default_construct_tag.h"
 
 namespace web_package {
 
@@ -48,28 +45,25 @@ class Ed25519PublicKey {
 
   ~Ed25519PublicKey();
 
-  bool operator==(const Ed25519PublicKey&) const;
-  bool operator!=(const Ed25519PublicKey&) const;
+  friend bool operator==(const Ed25519PublicKey&,
+                         const Ed25519PublicKey&) = default;
 
   const std::array<uint8_t, kLength>& bytes() const { return *bytes_; }
 
+  explicit Ed25519PublicKey(mojo::DefaultConstruct::Tag) {}
+
  private:
-  friend mojo::DefaultConstructTraits;
   FRIEND_TEST_ALL_PREFIXES(StructTraitsTest, Ed25519PublicKey);
+
+  Ed25519PublicKey() = default;
 
   explicit Ed25519PublicKey(std::array<uint8_t, kLength> bytes);
 
-  // The default constructor is only present so that this class can be used as
-  // part of mojom `StructTraits`, which require a class to be
-  // default-constructible. `mojo::DefaultConstructTraits` allows us to at least
-  // make the default constructor private.
-  Ed25519PublicKey() = default;
-
-  // This field is `absl::nullopt` only when the default constructor is used,
+  // This field is `std::nullopt` only when the default constructor is used,
   // which only happens as part of mojom `StructTraits`. All methods of this
-  // class can safely assume that this field is never `absl::nullopt` and should
+  // class can safely assume that this field is never `std::nullopt` and should
   // `CHECK` if it is.
-  absl::optional<std::array<uint8_t, kLength>> bytes_;
+  std::optional<std::array<uint8_t, kLength>> bytes_;
 };
 
 }  // namespace web_package

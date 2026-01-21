@@ -39,7 +39,7 @@ cast_source_set("activity_url_filter") {
     "//base",
     "//components/url_matcher",
     "//services/network/public/cpp:cpp_base",
-    "//third_party/blink/public/common:common",
+    "//third_party/blink/public/common",
     "//third_party/blink/public/common:headers",
     "//url",
   ]
@@ -58,13 +58,16 @@ test("cast_common_unittests") {
   sources = [
     "activity_url_filter_unittest.cc",
     "cors_exempt_headers_unittest.cc",
+    "user_agent_unittest.cc",
   ]
 
   deps = [
     ":activity_url_filter",
+    ":common",
     ":cors_exempt_headers",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/version_info",
     "//testing/gmock",
     "//testing/gtest",
     "//url",
@@ -89,6 +92,12 @@ cast_source_set("common") {
     "user_agent.h",
   ]
 
+  if (is_android) {
+    sources += [ "user_agent_android.cc" ]
+  } else {
+    sources += [ "user_agent_default.cc" ]
+  }
+
   public_deps = [ "//base" ]
 
   deps = [
@@ -97,21 +106,33 @@ cast_source_set("common") {
     "//chromecast/base:cast_version",
     "//chromecast/common/media",
     "//components/cast/common:constants",
-    "//components/cdm/common:common",
-    "//components/version_info",
+    "//components/embedder_support:user_agent",
     "//content/public/common",
     "//media:media_buildflags",
     "//third_party/widevine/cdm:buildflags",
     "//ui/base",
-    "//url:url",
+    "//url",
   ]
 
   if (!is_fuchsia) {
     deps += [ "//components/services/heap_profiling/public/cpp" ]
   }
 
+  if (is_android || is_fuchsia) {
+    deps += [ "//components/cdm/common" ]
+  }
+
   if (enable_library_cdms) {
     deps += [ "//media/cdm:cdm_paths" ]  # Needed by cast_content_client.cc
   }
+
   defines = [ "DEVICE_USER_AGENT_SUFFIX=\"${device_user_agent_suffix}\"" ]
+}
+
+cast_source_set("timing_tracker") {
+  sources = [
+    "timing_tracker.cc",
+    "timing_tracker.h",
+  ]
+  deps = [ "//base" ]
 }

@@ -14,6 +14,7 @@
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "ui/base/idle/idle.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -29,9 +30,13 @@ class COMPONENT_EXPORT(UI_BASE_IDLE) IdlePollingService {
  public:
   static IdlePollingService* GetInstance();
 
+  static constexpr base::TimeDelta kPollInterval = base::Seconds(15);
+
   struct State {
     bool locked;
     base::TimeDelta idle_time;
+
+    bool operator==(const State& other) const = default;
   };
 
   class Observer : public base::CheckedObserver {
@@ -48,6 +53,7 @@ class COMPONENT_EXPORT(UI_BASE_IDLE) IdlePollingService {
   const State& GetIdleState();
 
   void SetProviderForTest(std::unique_ptr<IdleTimeProvider> provider);
+  void SetPollIntervalForTest(base::TimeDelta interval);
   bool IsPollingForTest();
   void SetTaskRunnerForTest(
       scoped_refptr<base::SequencedTaskRunner> task_runner);
@@ -58,12 +64,17 @@ class COMPONENT_EXPORT(UI_BASE_IDLE) IdlePollingService {
   IdlePollingService();
   ~IdlePollingService();
 
+  void OnLockStateChanged(bool locked);
+
+  State CreateCurrentIdleState() const;
   void PollIdleState();
 
+  base::TimeDelta poll_interval_;
   base::RepeatingTimer timer_;
   std::unique_ptr<IdleTimeProvider> provider_;
   State last_state_;
   base::ObserverList<Observer> observers_;
+  base::CallbackListSubscription lock_state_subscription_;
 };
 
 }  // namespace ui

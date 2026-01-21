@@ -5,10 +5,8 @@
 #include "chromeos/ash/components/phonehub/fake_notification_manager.h"
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 FakeNotificationManager::InlineReplyMetadata::InlineReplyMetadata(
     int64_t notification_id,
@@ -31,7 +29,7 @@ void FakeNotificationManager::RemoveNotification(int64_t id) {
 }
 
 void FakeNotificationManager::DismissNotification(int64_t notification_id) {
-  DCHECK(base::Contains(id_to_notification_map_, notification_id));
+  DCHECK(id_to_notification_map_.contains(notification_id));
   dismissed_notification_ids_.push_back(notification_id);
   NotifyNotificationsRemoved(base::flat_set<int64_t>{notification_id});
 }
@@ -39,9 +37,8 @@ void FakeNotificationManager::DismissNotification(int64_t notification_id) {
 void FakeNotificationManager::SendInlineReply(
     int64_t notification_id,
     const std::u16string& inline_reply_text) {
-  DCHECK(base::Contains(id_to_notification_map_, notification_id));
+  DCHECK(id_to_notification_map_.contains(notification_id));
   inline_replies_.emplace_back(notification_id, inline_reply_text);
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

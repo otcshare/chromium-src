@@ -11,13 +11,12 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
-#include "build/chromeos_buildflags.h"
 #include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "content/public/browser/web_contents.h"
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#endif
+
+namespace ash {
+class VideoConferenceManagerAsh;
+}  // namespace ash
 
 namespace video_conference {
 
@@ -35,7 +34,9 @@ struct VideoConferencePermissions;
 class VideoConferenceManagerClientImpl
     : public crosapi::mojom::VideoConferenceManagerClient {
  public:
-  VideoConferenceManagerClientImpl();
+  // The passed `video_conference_manager_ash` must outlive this instance.
+  explicit VideoConferenceManagerClientImpl(
+      ash::VideoConferenceManagerAsh* video_conference_manager_ash);
 
   VideoConferenceManagerClientImpl(const VideoConferenceManagerClientImpl&) =
       delete;
@@ -57,6 +58,12 @@ class VideoConferenceManagerClientImpl
   // current VC apps and notifies the manager if a field has changed.
   void HandleMediaUsageUpdate();
 
+  // Notifies VCManager of media device usage while the device is system
+  // disabled.
+  void HandleDeviceUsedWhileDisabled(
+      crosapi::mojom::VideoConferenceMediaDevice device,
+      const std::u16string& app_name);
+
   // crosapi::mojom::VideoConferenceManagerClient overrides
   void GetMediaApps(GetMediaAppsCallback callback) override;
   void ReturnToApp(const base::UnguessableToken& id,
@@ -65,6 +72,7 @@ class VideoConferenceManagerClientImpl
       crosapi::mojom::VideoConferenceMediaDevice device,
       bool disabled,
       SetSystemMediaDeviceStatusCallback callback) override;
+  void StopAllScreenShare() override;
 
  protected:
   // Sends VcManager the updated `VideoConferenceMediaUsageStatus`. Can be
@@ -79,17 +87,16 @@ class VideoConferenceManagerClientImpl
   // from all VC apps on the client.
   VideoConferencePermissions GetAggregatedPermissions();
 
+  // Sends a new client update to the VC Manager. Uses mojo for lacros-chrome
+  // clients.
+  void SendClientUpdate(crosapi::mojom::VideoConferenceClientUpdatePtr update);
+
   // Unique id associated with this client. It is used by the VcManager to
   // identify clients.
   const base::UnguessableToken client_id_;
 
   // Previous status
   crosapi::mojom::VideoConferenceMediaUsageStatusPtr status_;
-
-  // The following two fields are true if the camera/microphone is system-wide
-  // software disabled OR disabled via a hardware switch.
-  bool camera_system_disabled_{false};
-  bool microphone_system_disabled_{false};
 
   std::unique_ptr<VideoConferenceMediaListener> media_listener_;
 
@@ -101,10 +108,7 @@ class VideoConferenceManagerClientImpl
   std::map<base::UnguessableToken, raw_ptr<content::WebContents>>
       id_to_webcontents_;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  mojo::Remote<crosapi::mojom::VideoConferenceManager> remote_;
-  mojo::Receiver<crosapi::mojom::VideoConferenceManagerClient> receiver_{this};
-#endif
+  const raw_ref<ash::VideoConferenceManagerAsh> video_conference_manager_ash_;
 
   // Any `VideoConferenceWebApp` created by the client gets passed a callback
   // bound to `RemoveMediaApp`. In order to guard against situations where that

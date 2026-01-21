@@ -8,8 +8,10 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -26,6 +28,8 @@ class FakeAuthenticator;
 
 class FakeSession : public Session {
  public:
+  using Session::Close;
+
   FakeSession();
 
   FakeSession(const FakeSession&) = delete;
@@ -51,19 +55,24 @@ class FakeSession : public Session {
 
   // Session interface.
   void SetEventHandler(EventHandler* event_handler) override;
-  ErrorCode error() override;
+  ErrorCode error() const override;
   const std::string& jid() override;
   const SessionConfig& config() override;
+  const Authenticator& authenticator() const override;
   void SetTransport(Transport* transport) override;
-  void Close(ErrorCode error) override;
+  void Close(ErrorCode error,
+             std::string_view error_details,
+             const SourceLocation& error_location) override;
   void AddPlugin(SessionPlugin* plugin) override;
 
  private:
   // Callback provided to the |transport_|.
-  void SendTransportInfo(std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
+  void SendTransportInfo(
+      std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
 
   // Called by the |peer_| to deliver incoming |transport_info|.
-  void ProcessTransportInfo(std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
+  void ProcessTransportInfo(
+      std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
 
   raw_ptr<EventHandler> event_handler_ = nullptr;
   std::unique_ptr<SessionConfig> config_;
@@ -71,9 +80,9 @@ class FakeSession : public Session {
   std::string jid_;
 
   std::unique_ptr<FakeAuthenticator> authenticator_;
-  raw_ptr<Transport> transport_;
+  raw_ptr<Transport, DanglingUntriaged> transport_;
 
-  ErrorCode error_ = OK;
+  ErrorCode error_ = ErrorCode::OK;
   bool closed_ = false;
 
   base::WeakPtr<FakeSession> peer_;

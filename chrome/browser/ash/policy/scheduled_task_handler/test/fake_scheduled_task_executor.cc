@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -43,7 +43,7 @@ void FakeScheduledTaskExecutor::Start(
   // only be one outstanding task to start the timer. If there is a failure
   // the wake lock is released and acquired again when this task runs.
   base::Time cur_time = GetCurrentTime();
-  absl::optional<base::TimeDelta> delay_to_next_schedule =
+  std::optional<base::TimeDelta> delay_to_next_schedule =
       scheduled_task_util::CalculateNextScheduledTaskTimerDelay(
           *scheduled_task_data, cur_time, GetTimeZone());
   if (simulate_calculate_next_update_check_failure_ ||

@@ -1,6 +1,7 @@
 // META: global=window,worker
 // META: script=/common/get-host-info.sub.js
 // META: script=resources/webtransport-test-helpers.sub.js
+// META: script=/common/utils.js
 
 const BAD_URLS = [
   null,
@@ -18,6 +19,44 @@ for (const url of BAD_URLS) {
     assert_throws_dom('SyntaxError', () => new WebTransport(url),
                       'constructor should throw');
   }, `WebTransport constructor should reject URL '${url}'`);
+}
+
+const BAD_PROTOCOL_LISTS = [
+  [''],
+  ['\u8AA4'],
+  ['test', 'test'],
+  ['a'.repeat(513)],
+];
+
+for (const protocols of BAD_PROTOCOL_LISTS) {
+  test(() => {
+    assert_throws_dom('SyntaxError', () => new WebTransport(
+                                               webtransport_url(`echo.py`),
+                                               { protocols : protocols }),
+                      'constructor should throw');
+  }, `WebTransport constructor should reject protocol list '${protocols}'`);
+}
+
+const OPTIONS = [
+  { allowPooling: true },
+  { requireUnreliable: true },
+  { allowPooling: true, requireUnreliable: true },
+  { congestionControl: "default" },
+  { congestionControl: "throughput" },
+  { congestionControl: "low-latency" },
+  { protocols: ["test"] },
+  { protocols: ["a", "b", "c"] },
+  { allowPooling: true, requireUnreliable: true, congestionControl: "low-latency" },
+  // XXX Need to test serverCertificateHashes
+];
+
+for (const options of OPTIONS) {
+  promise_test(async t => {
+    const id = token();
+    const wt = new WebTransport(webtransport_url(`client-close.py?token=${id}`), options );
+    await wt.ready;
+    wt.close();
+  }, "WebTransport constructor should allow options " + JSON.stringify(options));
 }
 
 promise_test(async t => {

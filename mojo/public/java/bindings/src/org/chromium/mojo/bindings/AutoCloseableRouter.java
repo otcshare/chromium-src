@@ -4,6 +4,8 @@
 
 package org.chromium.mojo.bindings;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.mojo.system.Core;
 import org.chromium.mojo.system.MessagePipeHandle;
 
@@ -14,15 +16,12 @@ import java.util.concurrent.Executor;
  * connection without a try-with-resources statement. If the callsite isn't using try-with-resources
  * mechanism, it needs to call close() explicitly.
  */
+@NullMarked
 class AutoCloseableRouter implements Router {
-    /**
-     * The underlying router.
-     */
+    /** The underlying router. */
     private final Router mRouter;
 
-    /**
-     * The executor to close the underlying router.
-     */
+    /** The executor to close the underlying router. */
     private final Executor mExecutor;
 
     /**
@@ -31,26 +30,19 @@ class AutoCloseableRouter implements Router {
      */
     private final Exception mAllocationException;
 
-    /**
-     * Flags to keep track if this router has been correctly closed.
-     */
+    /** Flags to keep track if this router has been correctly closed. */
     private boolean mClosed;
 
-    /**
-     * Constructor.
-     */
-    public AutoCloseableRouter(Core core, Router router) {
+    /** Constructor. */
+    public AutoCloseableRouter(@Nullable Core core, Router router) {
         mRouter = router;
         mExecutor = ExecutorFactory.getExecutorForCurrentThread(core);
         mAllocationException = new Exception("AutocloseableRouter allocated at:");
     }
 
-    /**
-     * @see Router#setIncomingMessageReceiver(MessageReceiverWithResponder)
-     */
     @Override
-    public void setIncomingMessageReceiver(MessageReceiverWithResponder incomingMessageReceiver) {
-        mRouter.setIncomingMessageReceiver(incomingMessageReceiver);
+    public void setPrimaryStub(Stub stub) throws BadMessageException {
+        mRouter.setPrimaryStub(stub);
     }
 
     /**
@@ -65,7 +57,7 @@ class AutoCloseableRouter implements Router {
      * @see MessageReceiver#accept(Message)
      */
     @Override
-    public boolean accept(Message message) {
+    public boolean accept(Message message) throws BadMessageException {
         return mRouter.accept(message);
     }
 
@@ -73,9 +65,9 @@ class AutoCloseableRouter implements Router {
      * @see MessageReceiverWithResponder#acceptWithResponder(Message, MessageReceiver)
      */
     @Override
-    public boolean acceptWithResponder(Message message, MessageReceiver responder) {
+    public boolean acceptWithResponder(Message message, MessageReceiver responder)
+            throws BadMessageException {
         return mRouter.acceptWithResponder(message, responder);
-
     }
 
     /**
@@ -107,16 +99,19 @@ class AutoCloseableRouter implements Router {
      * @see Object#finalize()
      */
     @Override
+    @SuppressWarnings("Finalize") // TODO(crbug.com/40286193): Use LifetimeAssert instead.
     protected void finalize() throws Throwable {
         if (!mClosed) {
-            mExecutor.execute(new Runnable() {
+            mExecutor.execute(
+                    new Runnable() {
 
-                @Override
-                public void run() {
-                    close();
-                }
-            });
-            throw new IllegalStateException("Warning: Router objects should be explicitly closed "
+                        @Override
+                        public void run() {
+                            close();
+                        }
+                    });
+            throw new IllegalStateException(
+                    "Warning: Router objects should be explicitly closed "
                             + "when no longer required otherwise you may leak handles.",
                     mAllocationException);
         }

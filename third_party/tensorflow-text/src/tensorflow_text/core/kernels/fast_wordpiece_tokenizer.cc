@@ -1,4 +1,4 @@
-// Copyright 2021 TF.Text Authors.
+// Copyright 2025 TF.Text Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include "tensorflow_text/core/kernels/fast_wordpiece_tokenizer.h"
+
+#include <memory>
 
 #include "absl/base/attributes.h"
 #include "absl/status/status.h"
@@ -54,7 +56,7 @@ FastWordpieceTokenizer::Create(const void* config_flatbuffer) {
         "FastWordpieceTokenizerConfig.trie_array.");
   }
   tokenizer.trie_ =
-      absl::make_unique<trie_utils::DartsCloneTrieWrapper>(*std::move(trie_or));
+      std::make_unique<trie_utils::DartsCloneTrieWrapper>(*std::move(trie_or));
   return std::move(tokenizer);
 }
 
@@ -63,12 +65,13 @@ void FastWordpieceTokenizer::Tokenize(absl::string_view input,
                                       std::vector<int>* output_ids,
                                       std::vector<int>* output_start_offsets,
                                       std::vector<int>* output_end_offsets,
-                                      int input_word_offset_in_text) const {
+                                      int input_word_offset_in_text,
+                                      bool* error) const {
   if (config_->end_to_end()) {
     TokenizeTextImpl</*kGetPieces=*/true, /*kGetIds=*/true,
                      /*kGetOffsets=*/true>(input, output_pieces, output_ids,
                                            output_start_offsets,
-                                           output_end_offsets);
+                                           output_end_offsets, error);
   } else {
     TokenizeSingleWordImpl</*kGetPieces=*/true, /*kGetIds=*/true,
                            /*kGetOffsets=*/true>(
@@ -84,9 +87,9 @@ void FastWordpieceTokenizer::Tokenize(absl::string_view input,
                                       int input_word_offset_in_text) const {
   if (config_->end_to_end()) {
     TokenizeTextImpl</*kGetPieces=*/false, /*kGetIds=*/true,
-                     /*kGetOffsets=*/true>(input, /*output_pieces=*/nullptr,
-                                           output_ids, output_start_offsets,
-                                           output_end_offsets);
+                     /*kGetOffsets=*/true>(
+        input, /*output_pieces=*/nullptr, output_ids, output_start_offsets,
+        output_end_offsets, /*error=*/nullptr);
   } else {
     TokenizeSingleWordImpl</*kGetPieces=*/false, /*kGetIds=*/true,
                            /*kGetOffsets=*/true>(
@@ -100,10 +103,10 @@ void FastWordpieceTokenizer::Tokenize(absl::string_view input,
                                       int input_word_offset_in_text) const {
   if (config_->end_to_end()) {
     TokenizeTextImpl</*kGetPieces=*/false, /*kGetIds=*/true,
-                     /*kGetOffsets=*/false>(input, /*output_pieces=*/nullptr,
-                                            output_ids,
-                                            /*output_start_offsets=*/nullptr,
-                                            /*output_end_offsets=*/nullptr);
+                     /*kGetOffsets=*/false>(
+        input, /*output_pieces=*/nullptr, output_ids,
+        /*output_start_offsets=*/nullptr,
+        /*output_end_offsets=*/nullptr, /*error=*/nullptr);
   } else {
     TokenizeSingleWordImpl</*kGetPieces=*/false, /*kGetIds=*/true,
                            /*kGetOffsets=*/false>(
@@ -155,8 +158,7 @@ absl::StatusOr<std::string> FastWordpieceTokenizer::Detokenize(
 }
 
 int FastWordpieceTokenizer::SkipTheRemainingOfWordAndTrailingWhiteSpaces(
-    absl::string_view input,
-    int& cur_pos) const {
+    absl::string_view input, int& cur_pos) const {
   const int input_size = input.size();
   UChar32 cur_unicode_char;
   int next_pos;
@@ -183,17 +185,16 @@ int FastWordpieceTokenizer::SkipTheRemainingOfWordAndTrailingWhiteSpaces(
 
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 void FastWordpieceTokenizer::TokenizeTextImpl(
-    absl::string_view input_text,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
-    std::vector<int>* output_start_offsets,
-    std::vector<int>* output_end_offsets) const {
+    absl::string_view input_text, std::vector<std::string>* output_pieces,
+    std::vector<int>* output_ids, std::vector<int>* output_start_offsets,
+    std::vector<int>* output_end_offsets, bool* error) const {
   static_assert(kGetPieces || kGetIds,
                 "At least one of `kGetPieces` and `kGetIds` should be true.");
   if (input_text.empty()) {
     return;
   }
   const int input_size = input_text.size();
+  int prev_pos = -1;
   int next_pos = 0;
   int cur_pos = 0;
   int original_num_tokens =
@@ -201,6 +202,13 @@ void FastWordpieceTokenizer::TokenizeTextImpl(
   UChar32 prev_unicode_char;
   UChar32 cur_unicode_char;
   while (cur_pos < input_size) {
+    // Prevent looping without progress in cur_pos.
+    if (prev_pos == cur_pos && error != nullptr) {
+      *error = true;
+      return;
+    }
+    prev_pos = cur_pos;
+
     int cur_offset_in_input_word = 0;
     // Tokenize the word starting at the current position.
     auto cur_node = trie_->CreateTraversalCursorPointToRoot();
@@ -211,7 +219,15 @@ void FastWordpieceTokenizer::TokenizeTextImpl(
     //  1. it steps over the input boundary, or
     //  2. the length of the current word reaches 'max_bytes_per_token', or
     //  3. it sees a whitespace / punctuation / unknown character.
+    int prev_pos_inner = -1;
     while (cur_pos < input_size) {
+      // Prevent looping without progress in cur_pos.
+      if (prev_pos_inner == cur_pos && error != nullptr) {
+        *error = true;
+        return;
+      }
+      prev_pos_inner = cur_pos;
+
       prev_unicode_char = cur_unicode_char;
       next_pos = cur_pos;
       U8_NEXT(input_text, next_pos, input_text.length(), cur_unicode_char);
@@ -262,15 +278,24 @@ void FastWordpieceTokenizer::TokenizeTextImpl(
                         prev_unicode_char))) {
       // If the current Unicode character is a valid word boundary, collect the
       // remaining tokens stored on a path on the trie.
+      absl::string_view cur_str = absl::string_view(
+          input_substr.data(), cur_pos - input_word_offset_in_text);
       HandleTheRemainingStringOnTriePath<kGetPieces, kGetIds, kGetOffsets>(
-          absl::string_view(input_substr.data(),
-                            cur_pos - input_word_offset_in_text),
-          input_word_offset_in_text, cur_node, original_num_tokens,
+          cur_str, input_word_offset_in_text, cur_node, original_num_tokens,
           cur_offset_in_input_word, output_pieces, output_ids,
           output_start_offsets, output_end_offsets);
-      // Skip the whitespace.
-      if (is_white_space)
+      if (is_white_space) {
+        // Skip the whitespace.
         cur_pos = next_pos;
+      } else if (cur_str.empty()) {
+        // If the remaining tokens are empty, it means we encountered an
+        // unmappable separator, so output an unknown token and continue.
+        cur_pos = next_pos;
+        ResetOutputAppendUnknownToken<kGetPieces, kGetIds, kGetOffsets>(
+            input_word_offset_in_text, (cur_pos - input_word_offset_in_text),
+            original_num_tokens, output_pieces, output_ids,
+            output_start_offsets, output_end_offsets);
+      }
       // Continue in the outer while loop to process the remaining input.
       continue;
     }
@@ -340,10 +365,8 @@ void FastWordpieceTokenizer::TokenizeTextImpl(
 //    immediately identifies the next matching token as "##efz".
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 void FastWordpieceTokenizer::TokenizeSingleWordImpl(
-    absl::string_view input_word,
-    int input_word_offset_in_text,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    absl::string_view input_word, int input_word_offset_in_text,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   static_assert(kGetPieces || kGetIds,
@@ -486,12 +509,10 @@ void FastWordpieceTokenizer::TokenizeSingleWordImpl(
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 ABSL_ATTRIBUTE_ALWAYS_INLINE bool
 FastWordpieceTokenizer::TryFollowFailureLinkAndCollectTokens(
-    absl::string_view input_word,
-    int input_word_offset_in_text,
+    absl::string_view input_word, int input_word_offset_in_text,
     int& cur_offset_in_input_word,
     trie_utils::DartsCloneTrieWrapper::TraversalCursor& node,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   int cur_node_data;
@@ -539,12 +560,9 @@ FastWordpieceTokenizer::TryFollowFailureLinkAndCollectTokens(
 
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 void FastWordpieceTokenizer::AppendTokenToOutput(
-    absl::string_view input_word,
-    int input_word_offset_in_text,
-    int& cur_offset_in_input_word,
-    int encoded_token_value,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    absl::string_view input_word, int input_word_offset_in_text,
+    int& cur_offset_in_input_word, int encoded_token_value,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   auto token_id =
@@ -595,13 +613,10 @@ void FastWordpieceTokenizer::AppendTokenToOutput(
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 ABSL_ATTRIBUTE_ALWAYS_INLINE void
 FastWordpieceTokenizer::HandleTheRemainingStringOnTriePath(
-    absl::string_view input_word,
-    int input_word_offset_in_text,
+    absl::string_view input_word, int input_word_offset_in_text,
     trie_utils::DartsCloneTrieWrapper::TraversalCursor& cur_node,
-    int& original_num_tokens,
-    int& cur_offset_in_input_word,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    int& original_num_tokens, int& cur_offset_in_input_word,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   if (cur_node.node_id == trie_utils::DartsCloneTrieWrapper::kRootNodeId) {
@@ -656,11 +671,8 @@ FastWordpieceTokenizer::HandleTheRemainingStringOnTriePath(
 
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 void FastWordpieceTokenizer::ResetOutputAppendUnknownToken(
-    int input_word_offset_in_text,
-    int input_size,
-    int& original_num_tokens,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    int input_word_offset_in_text, int input_size, int& original_num_tokens,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   if constexpr (kGetPieces) {
@@ -686,13 +698,10 @@ void FastWordpieceTokenizer::ResetOutputAppendUnknownToken(
 template <bool kGetPieces, bool kGetIds, bool kGetOffsets>
 ABSL_ATTRIBUTE_ALWAYS_INLINE bool
 FastWordpieceTokenizer::TryHandleTheInputWordBeingSuffixIndicatorItself(
-    absl::string_view input_word,
-    int input_word_offset_in_text,
+    absl::string_view input_word, int input_word_offset_in_text,
     const trie_utils::DartsCloneTrieWrapper::TraversalCursor& cur_node,
-    int& cur_offset_in_input_word,
-    int original_num_tokens,
-    std::vector<std::string>* output_pieces,
-    std::vector<int>* output_ids,
+    int& cur_offset_in_input_word, int original_num_tokens,
+    std::vector<std::string>* output_pieces, std::vector<int>* output_ids,
     std::vector<int>* output_start_offsets,
     std::vector<int>* output_end_offsets) const {
   // Handle the special case where the input word is the suffix indicator (e.g.,

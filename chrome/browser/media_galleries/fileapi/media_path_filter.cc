@@ -6,16 +6,13 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
+#include "base/containers/span.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "net/base/mime_util.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
-
-#if BUILDFLAG(IS_WIN)
-#include <windows.h>
-#endif
 
 namespace {
 
@@ -89,7 +86,7 @@ std::vector<base::FilePath::StringType> GetMediaExtensionList(
     const std::string& mime_type) {
   std::vector<base::FilePath::StringType> extensions;
   net::GetExtensionsForMimeType(mime_type, &extensions);
-  base::EraseIf(extensions, &IsUnsupportedExtension);
+  std::erase_if(extensions, &IsUnsupportedExtension);
   return extensions;
 }
 
@@ -109,12 +106,6 @@ bool MediaPathFilter::ShouldSkip(const base::FilePath& path) {
   if (base_name == FILE_PATH_LITERAL("__MACOSX"))
     return true;
 
-#if BUILDFLAG(IS_WIN)
-  DWORD file_attributes = ::GetFileAttributes(path.value().c_str());
-  if ((file_attributes != INVALID_FILE_ATTRIBUTES) &&
-      ((file_attributes & FILE_ATTRIBUTE_HIDDEN) != 0))
-    return true;
-#else
   // Windows always creates a recycle bin folder in the attached device to store
   // all the deleted contents. On non-windows operating systems, there is no way
   // to get the hidden attribute of windows recycle bin folders that are present
@@ -129,9 +120,9 @@ bool MediaPathFilter::ShouldSkip(const base::FilePath& path) {
       base::StartsWith(base_name, win_xp_recycle_bin_name,
                        base::CompareCase::INSENSITIVE_ASCII) ||
       base::StartsWith(base_name, win_vista_recycle_bin_name,
-                       base::CompareCase::INSENSITIVE_ASCII))
+                       base::CompareCase::INSENSITIVE_ASCII)) {
     return true;
-#endif  // BUILDFLAG(IS_WIN)
+  }
   return false;
 }
 
@@ -140,8 +131,7 @@ MediaPathFilter::MediaPathFilter()
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
-MediaPathFilter::~MediaPathFilter() {
-}
+MediaPathFilter::~MediaPathFilter() = default;
 
 bool MediaPathFilter::Match(const base::FilePath& path) {
   return GetType(path) != MEDIA_GALLERY_FILE_TYPE_UNKNOWN;
@@ -170,15 +160,12 @@ void MediaPathFilter::EnsureInitialized() {
                                        MEDIA_GALLERY_FILE_TYPE_AUDIO);
   AddExtensionsToMediaFileExtensionMap(GetMediaExtensionList("video/*"),
                                        MEDIA_GALLERY_FILE_TYPE_VIDEO);
-  AddAdditionalExtensionsToMediaFileExtensionMap(
-      kExtraSupportedImageExtensions, std::size(kExtraSupportedImageExtensions),
-      MEDIA_GALLERY_FILE_TYPE_IMAGE);
-  AddAdditionalExtensionsToMediaFileExtensionMap(
-      kExtraSupportedAudioExtensions, std::size(kExtraSupportedAudioExtensions),
-      MEDIA_GALLERY_FILE_TYPE_AUDIO);
-  AddAdditionalExtensionsToMediaFileExtensionMap(
-      kExtraSupportedVideoExtensions, std::size(kExtraSupportedVideoExtensions),
-      MEDIA_GALLERY_FILE_TYPE_VIDEO);
+  AddAdditionalExtensionsToMediaFileExtensionMap(kExtraSupportedImageExtensions,
+                                                 MEDIA_GALLERY_FILE_TYPE_IMAGE);
+  AddAdditionalExtensionsToMediaFileExtensionMap(kExtraSupportedAudioExtensions,
+                                                 MEDIA_GALLERY_FILE_TYPE_AUDIO);
+  AddAdditionalExtensionsToMediaFileExtensionMap(kExtraSupportedVideoExtensions,
+                                                 MEDIA_GALLERY_FILE_TYPE_VIDEO);
 
   initialized_ = true;
 }
@@ -191,11 +178,11 @@ void MediaPathFilter::AddExtensionsToMediaFileExtensionMap(
 }
 
 void MediaPathFilter::AddAdditionalExtensionsToMediaFileExtensionMap(
-    const base::FilePath::CharType* const* extensions_list,
-    size_t extensions_list_size,
+    base::span<const base::FilePath::CharType* const> extensions_list,
     MediaGalleryFileType type) {
-  for (size_t i = 0; i < extensions_list_size; ++i)
-    AddExtensionToMediaFileExtensionMap(extensions_list[i], type);
+  for (auto* extension : extensions_list) {
+    AddExtensionToMediaFileExtensionMap(extension, type);
+  }
 }
 
 void MediaPathFilter::AddExtensionToMediaFileExtensionMap(

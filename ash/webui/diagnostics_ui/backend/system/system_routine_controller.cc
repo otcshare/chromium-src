@@ -4,15 +4,21 @@
 
 #include "ash/webui/diagnostics_ui/backend/system/system_routine_controller.h"
 
+#include <optional>
+
+#include "ash/constants/ash_features.h"
+#include "ash/system/diagnostics/diagnostics_log_controller.h"
 #include "ash/system/diagnostics/routine_log.h"
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
 #include "ash/webui/diagnostics_ui/backend/common/routine_properties.h"
 #include "ash/webui/diagnostics_ui/backend/system/cros_healthd_helpers.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -24,7 +30,6 @@
 #include "chromeos/ash/services/cros_healthd/public/mojom/nullable_primitives.mojom.h"
 #include "content/public/browser/device_service.h"
 #include "services/device/public/mojom/wake_lock_provider.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash::diagnostics {
 
@@ -74,7 +79,6 @@ mojom::StandardRoutineResult TestStatusToResult(
     case healthd::DiagnosticRoutineStatusEnum::kCancelling:
     case healthd::DiagnosticRoutineStatusEnum::kUnknown:
       NOTREACHED();
-      return mojom::StandardRoutineResult::kExecutionError;
   }
 }
 
@@ -105,13 +109,13 @@ std::string ReadMojoHandleToJsonString(mojo::PlatformHandle handle) {
   return std::string(contents.begin(), contents.end());
 }
 
+bool IsLoggingEnabled() {
+  return diagnostics::DiagnosticsLogController::IsInitialized();
+}
+
 }  // namespace
 
-SystemRoutineController::SystemRoutineController()
-    : SystemRoutineController(/*routine_log_ptr=*/nullptr) {}
-
-SystemRoutineController::SystemRoutineController(RoutineLog* routine_log_ptr)
-    : routine_log_ptr_(routine_log_ptr) {
+SystemRoutineController::SystemRoutineController() {
   inflight_routine_timer_ = std::make_unique<base::OneShotTimer>();
 }
 
@@ -126,7 +130,8 @@ SystemRoutineController::~SystemRoutineController() {
         inflight_routine_id_, healthd::DiagnosticRoutineCommandEnum::kCancel,
         /*should_include_output=*/false, base::DoNothing());
     if (IsLoggingEnabled() && inflight_routine_type_.has_value()) {
-      routine_log_ptr_->LogRoutineCancelled(inflight_routine_type_.value());
+      DiagnosticsLogController::Get()->GetRoutineLog().LogRoutineCancelled(
+          inflight_routine_type_.value());
     }
   }
 
@@ -192,8 +197,8 @@ void SystemRoutineController::OnAvailableRoutinesFetched(
   base::flat_set<healthd::DiagnosticRoutineEnum> healthd_routines(
       available_routines);
   for (size_t i = 0; i < kRoutinePropertiesLength; i++) {
-    const RoutineProperties& routine = kRoutineProperties[i];
-    if (base::Contains(healthd_routines, routine.healthd_type)) {
+    const RoutineProperties& routine = UNSAFE_TODO(kRoutineProperties[i]);
+    if (healthd_routines.contains(routine.healthd_type)) {
       supported_routines_.push_back(routine.type);
     }
   }
@@ -319,6 +324,7 @@ void SystemRoutineController::ExecuteRoutine(mojom::RoutineType routine_type) {
     case mojom::RoutineType::kMemory:
       AcquireWakeLock();
       diagnostics_service_->RunMemoryRoutine(
+          std::nullopt,
           base::BindOnce(&SystemRoutineController::OnRoutineStarted,
                          weak_factory_.GetWeakPtr(), routine_type));
       memory_routine_start_timestamp_ = base::Time::Now();
@@ -330,7 +336,8 @@ void SystemRoutineController::ExecuteRoutine(mojom::RoutineType routine_type) {
       break;
   }
   if (IsLoggingEnabled()) {
-    routine_log_ptr_->LogRoutineStarted(routine_type);
+    DiagnosticsLogController::Get()->GetRoutineLog().LogRoutineStarted(
+        routine_type);
   }
 }
 
@@ -572,21 +579,13 @@ void SystemRoutineController::OnPowerRoutineResultFetched(
     return;
   }
 
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      file_contents,
-      base::BindOnce(&SystemRoutineController::OnPowerRoutineJsonParsed,
-                     weak_factory_.GetWeakPtr(), routine_type));
-  return;
-}
-
-void SystemRoutineController::OnPowerRoutineJsonParsed(
-    mojom::RoutineType routine_type,
-    data_decoder::DataDecoder::ValueOrError result) {
+  std::optional<base::Value> result = base::JSONReader::Read(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!result.has_value()) {
     OnPowerRoutineResult(routine_type,
                          mojom::StandardRoutineResult::kExecutionError,
                          /*percent_change=*/0, /*seconds_elapsed=*/0);
-    DVLOG(2) << "JSON parsing failed: " << result.error();
+    DVLOG(2) << "JSON parsing failed";
     return;
   }
 
@@ -609,7 +608,7 @@ void SystemRoutineController::OnPowerRoutineJsonParsed(
     return;
   }
 
-  absl::optional<double> charge_percent_opt =
+  std::optional<double> charge_percent_opt =
       routine_type == mojom::RoutineType::kBatteryCharge
           ? result_details_dict->FindDouble(kChargePercentKey)
           : result_details_dict->FindDouble(kDischargePercentKey);
@@ -639,7 +638,8 @@ void SystemRoutineController::OnStandardRoutineResult(
                                        memory_routine_start_timestamp_);
   }
   if (IsLoggingEnabled()) {
-    routine_log_ptr_->LogRoutineCompleted(routine_type, result);
+    DiagnosticsLogController::Get()->GetRoutineLog().LogRoutineCompleted(
+        routine_type, result);
   }
 }
 
@@ -654,19 +654,21 @@ void SystemRoutineController::OnPowerRoutineResult(
   SendRoutineResult(std::move(result_info));
   metrics::EmitRoutineResult(routine_type, result);
   if (IsLoggingEnabled()) {
-    routine_log_ptr_->LogRoutineCompleted(routine_type, result);
+    DiagnosticsLogController::Get()->GetRoutineLog().LogRoutineCompleted(
+        routine_type, result);
   }
 }
 
 void SystemRoutineController::SendRoutineResult(
     mojom::RoutineResultInfoPtr result_info) {
-  // Added as part of investigation of crash reported in crbug/1316648 to test
-  // if crash is related to memory resource allocation. Remove if crash
-  // continues to occur.
-  if (!result_info.is_null() && !result_info->result.is_null()) {
+  if (inflight_routine_runner_ && !result_info.is_null() &&
+      !result_info->result.is_null()) {
     inflight_routine_runner_->OnRoutineResult(std::move(result_info));
   } else {
-    LOG(ERROR) << "RoutineResult is null";
+    LOG(ERROR) << (inflight_routine_runner_
+                       ? "Do not send routine result since it's null."
+                       : "Not able to call OnRoutineResult() since the "
+                         "inflight_routine_runner_ is null.");
   }
 
   inflight_routine_runner_.reset();
@@ -714,7 +716,8 @@ void SystemRoutineController::OnInflightRoutineRunnerDisconnected() {
   inflight_routine_id_ = kInvalidRoutineId;
 
   if (IsLoggingEnabled() && inflight_routine_type_.has_value()) {
-    routine_log_ptr_->LogRoutineCancelled(inflight_routine_type_.value());
+    DiagnosticsLogController::Get()->GetRoutineLog().LogRoutineCancelled(
+        inflight_routine_type_.value());
   }
 }
 
@@ -728,10 +731,6 @@ void SystemRoutineController::OnRoutineCancelAttempted(
     DVLOG(2) << "Failed to cancel routine.";
     return;
   }
-}
-
-bool SystemRoutineController::IsLoggingEnabled() const {
-  return routine_log_ptr_ != nullptr;
 }
 
 void SystemRoutineController::AcquireWakeLock() {

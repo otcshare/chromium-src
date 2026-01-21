@@ -15,11 +15,54 @@
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
 #include "ui/gfx/geometry/size.h"
 
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+#include "base/numerics/safe_conversions.h"
+#endif
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "mojo/public/mojom/base/values.mojom.h"
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "printing/printing_features.h"
+#endif
+
 namespace mojo {
+
+namespace {
+
+bool IsCustomOrPrecomputedMargins(printing::mojom::MarginType margin_type) {
+  if (margin_type == printing::mojom::MarginType::kCustomMargins) {
+    return true;
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (margin_type ==
+          printing::mojom::MarginType::kPrecomputedMarginsForBackend &&
+      base::FeatureList::IsEnabled(
+          printing::features::kApiPrintingMarginsAndScale)) {
+    return true;
+  }
+#endif
+  return false;
+}
+
+void SetMarginsToPrintSettings(printing::mojom::MarginType margin_type,
+                               const printing::PageMargins& margins,
+                               printing::PrintSettings* settings) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (margin_type ==
+          printing::mojom::MarginType::kPrecomputedMarginsForBackend &&
+      base::FeatureList::IsEnabled(
+          printing::features::kApiPrintingMarginsAndScale)) {
+    settings->SetCustomMarginsForBackend(margins);
+    return;
+  }
+#endif
+  CHECK_EQ(margin_type, printing::mojom::MarginType::kCustomMargins);
+  settings->SetCustomMargins(margins);
+}
+
+}  // namespace
 
 // static
 bool StructTraits<printing::mojom::PageMarginsDataView, printing::PageMargins>::
@@ -61,8 +104,9 @@ bool StructTraits<printing::mojom::PageSetupDataView, printing::PageSetup>::
     return false;
   if (page_setup.content_area() != content_area)
     return false;
-  if (!effective_margins.Equals(page_setup.effective_margins()))
+  if (page_setup.effective_margins() != effective_margins) {
     return false;
+  }
 
   *out = page_setup;
   return true;
@@ -88,7 +132,19 @@ bool StructTraits<
   out->set_ranges(ranges);
 
   out->set_selection_only(data.selection_only());
-  out->set_margin_type(data.margin_type());
+  // Precomputed margins for backend can be set only via
+  // SetCustomMarginsForBackend, which is done below.
+  bool must_set_margin_type = true;
+#if BUILDFLAG(IS_CHROMEOS)
+  must_set_margin_type =
+      !base::FeatureList::IsEnabled(
+          printing::features::kApiPrintingMarginsAndScale) ||
+      data.margin_type() !=
+          printing::mojom::MarginType::kPrecomputedMarginsForBackend;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  if (must_set_margin_type) {
+    out->set_margin_type(data.margin_type());
+  }
 
   std::u16string title;
   if (!data.ReadTitle(&title))
@@ -117,10 +173,21 @@ bool StructTraits<
     return false;
   out->set_requested_media(requested_media);
 
+  // Must set orientation before page setup, otherwise it can introduce an extra
+  // flipping of landscape page size dimensions.
+  out->SetOrientation(data.landscape());
   printing::PageSetup page_setup;
   if (!data.ReadPageSetupDeviceUnits(&page_setup))
     return false;
   out->set_page_setup_device_units(page_setup);
+
+  std::string media_type;
+  if (!data.ReadMediaType(&media_type)) {
+    return false;
+  }
+  out->set_media_type(media_type);
+
+  out->set_borderless(data.borderless());
 
   gfx::Size dpi;
   if (!data.ReadDpi(&dpi))
@@ -130,20 +197,23 @@ bool StructTraits<
   out->set_scale_factor(data.scale_factor());
   out->set_rasterize_pdf(data.rasterize_pdf());
 
-  out->SetOrientation(data.landscape());
-  out->set_supports_alpha_blend(data.supports_alpha_blend());
 #if BUILDFLAG(IS_WIN)
   out->set_printer_language_type(data.printer_language_type());
 #endif  // BUILDFLAG(IS_WIN)
   out->set_is_modifiable(data.is_modifiable());
 
-  // `SetCustomMargins()` has side effect of explicitly setting `margin_type_`
-  // so only want to apply this if the type was for `kCustomMargins`.
-  if (data.margin_type() == printing::mojom::MarginType::kCustomMargins) {
+  // `SetCustomMargins()` and `SetCustomMarginsForBackend()` have side effect of
+  // explicitly setting `margin_type_` so only want to apply this if the type
+  // was for `kCustomMargins` or `kPrecomputedMarginsForBackend` (the last one
+  // is only available on ChromeOS).
+  const bool is_custom_or_precomputed_margins =
+      IsCustomOrPrecomputedMargins(data.margin_type());
+  if (is_custom_or_precomputed_margins) {
     printing::PageMargins requested_margins;
-    if (!data.ReadRequestedCustomMarginsInPoints(&requested_margins))
+    if (!data.ReadRequestedCustomMarginsInMicrons(&requested_margins)) {
       return false;
-    out->SetCustomMargins(requested_margins);
+    }
+    SetMarginsToPrintSettings(data.margin_type(), requested_margins, out);
   }
 
   out->set_pages_per_sheet(data.pages_per_sheet());
@@ -165,6 +235,110 @@ bool StructTraits<
     return false;
   out->set_pin_value(pin_value);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+  base::Value::Dict system_print_dialog_data;
+  if (!data.ReadSystemPrintDialogData(&system_print_dialog_data)) {
+    return false;
+  }
+  // If doing system print then a dialog invoked in-browser needs to provide
+  // the settings that were specified.  Such data is platform-specific.
+  if (!system_print_dialog_data.empty()) {
+#if BUILDFLAG(IS_MAC)
+    // The dictionary must contain the destination type, page format, and
+    // print settings.
+    std::optional<int> destination_type = system_print_dialog_data.FindInt(
+        printing::kMacSystemPrintDialogDataDestinationType);
+    if (!destination_type.has_value()) {
+      return false;
+    }
+    const base::Value::BlobStorage* page_format =
+        system_print_dialog_data.FindBlob(
+            printing::kMacSystemPrintDialogDataPageFormat);
+    if (!page_format || page_format->empty()) {
+      return false;
+    }
+    const base::Value::BlobStorage* print_settings =
+        system_print_dialog_data.FindBlob(
+            printing::kMacSystemPrintDialogDataPrintSettings);
+    if (!print_settings || print_settings->empty()) {
+      return false;
+    }
+    size_t dictionary_entries = 3;
+
+    // Destination type must be uint16.
+    if (!base::IsValueInRangeForNumericType<uint16_t>(*destination_type)) {
+      return false;
+    }
+
+    // Destination format and location are optional.  If present, they must be
+    // strings.
+    const base::Value* destination_format = system_print_dialog_data.Find(
+        printing::kMacSystemPrintDialogDataDestinationFormat);
+    if (destination_format) {
+      if (!destination_format->is_string()) {
+        return false;
+      }
+      ++dictionary_entries;
+    }
+    const base::Value* destination_location = system_print_dialog_data.Find(
+        printing::kMacSystemPrintDialogDataDestinationFileUrl);
+    if (destination_location) {
+      if (!destination_location->is_string()) {
+        return false;
+      }
+      ++dictionary_entries;
+    }
+
+    // There should not be any other keys present.
+    if (system_print_dialog_data.size() != dictionary_entries) {
+      return false;
+    }
+#elif BUILDFLAG(IS_LINUX)
+    // The dictionary should either contain the GTK print dialog data or the
+    // portal print dialog data, but not a mix of both.
+    if (system_print_dialog_data.size() == 3) {
+      // GTK print dialog data.
+      if (!system_print_dialog_data.FindString(
+              printing::kLinuxSystemPrintDialogDataPrinter)) {
+        return false;
+      }
+      if (!system_print_dialog_data.FindString(
+              printing::kLinuxSystemPrintDialogDataPrintSettings)) {
+        return false;
+      }
+      if (!system_print_dialog_data.FindString(
+              printing::kLinuxSystemPrintDialogDataPageSetup)) {
+        return false;
+      }
+    } else if (system_print_dialog_data.size() == 4) {
+      // Portal print dialog data.
+      if (!system_print_dialog_data.FindBlob(
+              printing::kLinuxSystemPrintDialogDataPrintSettingsBin)) {
+        return false;
+      }
+      if (!system_print_dialog_data.FindBlob(
+              printing::kLinuxSystemPrintDialogDataPageSetupBin)) {
+        return false;
+      }
+      if (!system_print_dialog_data.FindString(
+              printing::kLinuxSystemPrintDialogDataPrintToken)) {
+        return false;
+      }
+      if (!system_print_dialog_data.FindString(
+              printing::kLinuxSystemPrintDialogDataParentHandle)) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+#else
+#error "System print dialog support not implemented for this platform."
+#endif
+  }
+
+  out->set_system_print_dialog_data(std::move(system_print_dialog_data));
+#endif  // BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
 
   return true;
 }

@@ -7,10 +7,10 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_VALUE_VALIDATOR_H_
 #define GPU_COMMAND_BUFFER_SERVICE_VALUE_VALIDATOR_H_
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/containers/span.h"
 
 namespace gpu {
 
@@ -20,9 +20,7 @@ class ValueValidator {
  public:
   ValueValidator() = default;
 
-  ValueValidator(const T* valid_values, int num_values) {
-    AddValues(valid_values, num_values);
-  }
+  ValueValidator(base::span<const T> valid_values) { AddValues(valid_values); }
 
   void AddValue(const T value) {
     if (!IsValid(value)) {
@@ -30,24 +28,24 @@ class ValueValidator {
     }
   }
 
-  void AddValues(const T* valid_values, int num_values) {
-    for (int ii = 0; ii < num_values; ++ii) {
-      AddValue(valid_values[ii]);
+  void AddValues(base::span<const T> valid_values) {
+    for (const T& value : valid_values) {
+      AddValue(value);
     }
   }
 
-  void RemoveValues(const T* invalid_values, int num_values) {
-    for (int ii = 0; ii < num_values; ++ii) {
-      auto iter = base::ranges::find(valid_values_, invalid_values[ii]);
+  void RemoveValues(base::span<const T> invalid_values) {
+    for (const auto& value : invalid_values) {
+      auto iter = std::ranges::find(valid_values_, value);
       if (iter != valid_values_.end()) {
         valid_values_.erase(iter);
-        DCHECK(!IsValid(invalid_values[ii]));
+        DCHECK(!IsValid(value));
       }
     }
   }
 
   bool IsValid(const T value) const {
-    return base::Contains(valid_values_, value);
+    return std::ranges::contains(valid_values_, value);
   }
 
   const std::vector<T>& GetValues() const { return valid_values_; }

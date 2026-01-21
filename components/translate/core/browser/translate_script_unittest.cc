@@ -4,12 +4,11 @@
 
 #include "components/translate/core/browser/translate_script.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/common/translate_switches.h"
@@ -71,7 +70,7 @@ class TranslateScriptTest : public testing::Test {
   // Sets up the task scheduling/task-runner environment for each test.
   base::test::TaskEnvironment task_environment_;
 
-  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
 
   // The translate script.
@@ -96,13 +95,14 @@ TEST_F(TranslateScriptTest, CheckScriptParameters) {
   EXPECT_TRUE(url.is_valid());
   EXPECT_EQ(expected_url.DeprecatedGetOriginAsURL().spec(),
             url.DeprecatedGetOriginAsURL().spec());
-  EXPECT_EQ(expected_url.path(), url.path());
+  EXPECT_EQ(expected_url.GetPath(), url.GetPath());
 
   EXPECT_EQ(network::mojom::CredentialsMode::kOmit,
             last_resource_request.credentials_mode);
 
   std::string expected_extra_headers =
-      base::StringPrintf("%s\r\n\r\n", TranslateScript::kRequestHeader);
+      base::StringPrintf("%s: %s\r\n\r\n", TranslateScript::kRequestHeaderName,
+                         TranslateScript::kRequestHeaderValue);
   net::HttpRequestHeaders extra_headers = last_resource_request.headers;
   EXPECT_EQ(expected_extra_headers, extra_headers.ToString());
 
@@ -154,7 +154,7 @@ TEST_F(TranslateScriptTest, CheckScriptURL) {
   EXPECT_TRUE(url.is_valid());
   EXPECT_EQ(expected_url.DeprecatedGetOriginAsURL().spec(),
             url.DeprecatedGetOriginAsURL().spec());
-  EXPECT_EQ(expected_url.path(), url.path());
+  EXPECT_EQ(expected_url.GetPath(), url.GetPath());
 }
 
 TEST_F(TranslateScriptTest, CheckResponse) {

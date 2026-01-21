@@ -6,13 +6,12 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 
 namespace aura {
 
 ScopedSimpleKeyboardHook::ScopedSimpleKeyboardHook(
-    absl::optional<base::flat_set<ui::DomCode>> dom_codes)
+    std::optional<base::flat_set<ui::DomCode>> dom_codes)
     : dom_codes_(std::move(dom_codes)) {}
 
 ScopedSimpleKeyboardHook::~ScopedSimpleKeyboardHook() = default;
@@ -21,7 +20,7 @@ bool ScopedSimpleKeyboardHook::IsKeyLocked(ui::DomCode dom_code) {
   if (dom_code == ui::DomCode::NONE)
     return false;
 
-  return !dom_codes_ || base::Contains(dom_codes_.value(), dom_code);
+  return !dom_codes_ || dom_codes_.value().contains(dom_code);
 }
 
 }  // namespace aura

@@ -5,19 +5,19 @@
 #include "chrome/browser/ui/views/frame/immersive_mode_controller_stub.h"
 
 #include "base/notreached.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 
-void ImmersiveModeControllerStub::Init(BrowserView* browser_view) {
-}
+ImmersiveModeControllerStub::ImmersiveModeControllerStub(
+    BrowserWindowInterface* browser)
+    : ImmersiveModeController(browser) {}
+
+void ImmersiveModeControllerStub::Init(BrowserView* browser_view) {}
 
 void ImmersiveModeControllerStub::SetEnabled(bool enabled) {
   NOTREACHED();
 }
 
 bool ImmersiveModeControllerStub::IsEnabled() const {
-  return false;
-}
-
-bool ImmersiveModeControllerStub::ShouldHideTopViews() const {
   return false;
 }
 
@@ -36,13 +36,19 @@ ImmersiveModeControllerStub::GetRevealedLock(AnimateReveal animate_reveal) {
 }
 
 void ImmersiveModeControllerStub::OnFindBarVisibleBoundsChanged(
-    const gfx::Rect& new_visible_bounds_in_screen) {
-}
+    const gfx::Rect& new_visible_bounds_in_screen) {}
 
 bool ImmersiveModeControllerStub::ShouldStayImmersiveAfterExitingFullscreen() {
   return false;
 }
 
-void ImmersiveModeControllerStub::OnWidgetActivationChanged(
-    views::Widget* widget,
-    bool active) {}
+int ImmersiveModeControllerStub::GetMinimumContentOffset() const {
+  return 0;
+}
+
+int ImmersiveModeControllerStub::GetExtraInfobarOffset() const {
+  return 0;
+}
+
+void ImmersiveModeControllerStub::OnContentFullscreenChanged(
+    bool is_content_fullscreen) {}

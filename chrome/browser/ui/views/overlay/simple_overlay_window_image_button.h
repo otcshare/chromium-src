@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_OVERLAY_SIMPLE_OVERLAY_WINDOW_IMAGE_BUTTON_H_
 #define CHROME_BROWSER_UI_VIEWS_OVERLAY_SIMPLE_OVERLAY_WINDOW_IMAGE_BUTTON_H_
 
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/views/overlay/overlay_window_image_button.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
@@ -14,9 +15,9 @@ struct VectorIcon;
 
 // A simple image button with a custom icon and label.
 class SimpleOverlayWindowImageButton : public OverlayWindowImageButton {
- public:
-  METADATA_HEADER(SimpleOverlayWindowImageButton);
+  METADATA_HEADER(SimpleOverlayWindowImageButton, OverlayWindowImageButton)
 
+ public:
   explicit SimpleOverlayWindowImageButton(PressedCallback callback,
                                           const gfx::VectorIcon& icon,
                                           std::u16string label);
@@ -36,7 +37,7 @@ class SimpleOverlayWindowImageButton : public OverlayWindowImageButton {
  private:
   void UpdateImage();
 
-  const gfx::VectorIcon& icon_;
+  const raw_ref<const gfx::VectorIcon> icon_;
 
   // Last visible size of the image button.
   gfx::Size last_visible_size_;

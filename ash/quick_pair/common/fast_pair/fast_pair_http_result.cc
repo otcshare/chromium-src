@@ -5,17 +5,17 @@
 #include "ash/quick_pair/common/fast_pair/fast_pair_http_result.h"
 
 #include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/header_util.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 FastPairHttpResult::FastPairHttpResult(
     const int net_error,
     const network::mojom::URLResponseHead* head) {
-  absl::optional<int> http_response_code;
+  std::optional<int> http_response_code;
   if (head && head->headers)
     http_response_code = head->headers->response_code();
   bool net_success = (net_error == net::OK ||
@@ -60,13 +60,11 @@ std::string FastPairHttpResult::ToString() const {
 
   std::string response_error =
       http_response_error_.has_value()
-          ? net::GetHttpReasonPhrase(
-                static_cast<net::HttpStatusCode>(*http_response_error_))
+          ? std::string(net::GetHttpReasonPhrase(*http_response_error_))
           : "[null]";
 
   return "status=" + status + ", net_error=" + net_error +
          ", http_response_error=" + response_error;
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

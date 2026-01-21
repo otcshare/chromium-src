@@ -26,21 +26,23 @@
 
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
 
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/window_event_context.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/events/touch_event.h"
 #include "third_party/blink/renderer/core/events/touch_event_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/input/touch.h"
 #include "third_party/blink/renderer/core/input/touch_list.h"
-#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 
 namespace blink {
 
 EventTarget& EventPath::EventTargetRespectingTargetRules(Node& reference_node) {
-  if (reference_node.IsPseudoElement()) {
+  if (reference_node.IsPseudoElement() &&
+      !reference_node.IsScrollControlPseudoElement() &&
+      !reference_node.IsInterestHintPseudoElement()) {
     DCHECK(reference_node.parentNode());
     return *reference_node.parentNode();
   }
@@ -70,7 +72,7 @@ void EventPath::InitializeWith(Node& node, Event* event) {
 }
 
 static inline bool EventPathShouldBeEmptyFor(Node& node) {
-  // Event path should be empty for orphaned pseudo elements, and nodes
+  // Event path should be empty for orphaned pseudo-elements, and nodes
   // whose document is stopped. In corner cases (crbug.com/1210480), the node
   // document can get detached before we can remove event listeners.
   return (node.IsPseudoElement() && !node.parentElement()) ||
@@ -86,84 +88,23 @@ void EventPath::Initialize() {
   CalculateTreeOrderAndSetNearestAncestorClosedTree();
 }
 
-EventPath::NodePath EventPath::CalculateNodePath(Node& node) {
-  // Given a node, find all the nodes the event path might traverse.
-  NodePath node_path;
-  Node* current = &node;
-
-  node_path.push_back(current);
-  while (current) {
-    if (current->IsChildOfShadowHost() && !current->IsPseudoElement()) {
-      if (HTMLSlotElement* slot = current->AssignedSlot()) {
-        current = slot;
-        node_path.push_back(current);
-        continue;
-      }
-    }
-    if (auto* shadow_root = DynamicTo<ShadowRoot>(current)) {
-      current = current->OwnerShadowHost();
-      node_path.push_back(current);
-    } else {
-      current = current->parentNode();
-      if (current)
-        node_path.push_back(current);
-    }
-  }
-  return node_path;
-}
-
-static bool EventNodePathCachingEnabled() {
-  // Cache the feature value since checking for each event path regresses
-  // performance.
-  static const bool kEnabled =
-      base::FeatureList::IsEnabled(features::kDocumentEventNodePathCaching);
-  return kEnabled;
-}
-
 void EventPath::CalculatePath() {
-  // TODO(crbug.com/1394555): This histogram should be removed once the UMA
-  // study DocumentEventNodePathCaching is complete.
-  SCOPED_BLINK_UMA_HISTOGRAM_TIMER_HIGHRES("Blink.EventPath.CalculateTime");
-
   DCHECK(node_);
   DCHECK(node_event_contexts_.empty());
 
-  if (EventNodePathCachingEnabled())
-    CalculatePathCachingEnabled();
-  else
-    CalculatePathCachingDisabled();
-}
-
-void EventPath::CalculatePathCachingEnabled() {
-  // Find the cached CalculateNodePath result
-  const NodePath& node_path =
-      node_->GetDocument().GetOrCalculateEventNodePath(*node_);
-  // We need to do the KeepEventInNode and ShouldStopAtShadowRoot checks
-  // outside of CalculateNodePath as they depend on the dispatched event.
-  for (Node* node_in_path : node_path) {
-    DCHECK(node_in_path);
-    node_event_contexts_.push_back(NodeEventContext(
-        *node_in_path, EventTargetRespectingTargetRules(*node_in_path)));
-    if (!event_)
-      continue;
-    if (node_in_path->KeepEventInNode(*event_))
-      break;
-    if (auto* shadow_root = DynamicTo<ShadowRoot>(node_in_path)) {
-      if (ShouldStopAtShadowRoot(*event_, *shadow_root, *node_))
-        break;
-    }
-  }
-}
-
-// TODO(crbug.com/329788): This function should be removed once the
-// kDocumentEventNodePathCaching experiment is fully enabled.
-void EventPath::CalculatePathCachingDisabled() {
   // For performance and memory usage reasons we want to store the
   // path using as few bytes as possible and with as few allocations
   // as possible which is why we gather the data on the stack before
   // storing it in a perfectly sized node_event_contexts_ Vector.
   HeapVector<Member<Node>, 64> nodes_in_path;
   Node* current = node_;
+  // Don't expose pseudo-element in the event path.
+  if (auto* pseudo = DynamicTo<PseudoElement>(node_.Get())) {
+    if (event_) {
+      event_->SetPseudoElementTarget(pseudo);
+    }
+    current = &pseudo->UltimateOriginatingElement();
+  }
 
   nodes_in_path.push_back(current);
   while (current) {
@@ -187,13 +128,12 @@ void EventPath::CalculatePathCachingDisabled() {
         nodes_in_path.push_back(current);
     }
   }
-
-  node_event_contexts_.reserve(nodes_in_path.size());
-  for (Node* node_in_path : nodes_in_path) {
-    DCHECK(node_in_path);
-    node_event_contexts_.push_back(NodeEventContext(
-        *node_in_path, EventTargetRespectingTargetRules(*node_in_path)));
-  }
+  node_event_contexts_ = HeapVector<NodeEventContext>(
+      nodes_in_path, [](Node* node_in_path) -> NodeEventContext {
+        DCHECK(node_in_path);
+        return NodeEventContext(
+            *node_in_path, EventTargetRespectingTargetRules(*node_in_path));
+      });
 }
 
 void EventPath::CalculateTreeOrderAndSetNearestAncestorClosedTree() {
@@ -317,6 +257,15 @@ void EventPath::AdjustForRelatedTarget(Node& target,
   Node* related_target_node = related_target->ToNode();
   if (!related_target_node)
     return;
+  // If the related target is a pseudo-element without a parent element,
+  // we don't need to adjust the related target.
+  // This is because pseudo-elements shouldn't be exposed to the web
+  // and when they don't have a parent element in the DOM tree, we can't
+  // retarget them.
+  if (related_target_node->IsPseudoElement() &&
+      !related_target_node->parentNode()) {
+    return;
+  }
   if (target.GetDocument() != related_target_node->GetDocument())
     return;
   RetargetRelatedTarget(*related_target_node);

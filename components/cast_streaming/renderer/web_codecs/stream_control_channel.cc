@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/task/sequenced_task_runner.h"
+
 namespace cast_streaming::webcodecs {
 
 StreamControlChannel::StreamControlChannel(

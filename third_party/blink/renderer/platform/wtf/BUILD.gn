@@ -2,7 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-assert(!is_ios)
+import("//build/config/features.gni")
+
+assert(use_blink)
 
 import("//build/buildflag_header.gni")
 import("//build/config/compiler/compiler.gni")
@@ -36,6 +38,8 @@ config("wtf_config") {
 }
 
 component("wtf") {
+  output_name = "blink_platform_wtf"
+
   sources = [
     "allocator/allocator.h",
     "allocator/partition_allocator.cc",
@@ -45,12 +49,12 @@ component("wtf") {
     "assertions.h",
     "atomic_operations.cc",
     "atomic_operations.h",
+    "bind_post_task.h",
     "bit_field.h",
     "bloom_filter.h",
     "casting.h",
-    "conditional_destructor.h",
+    "construct_traits.h",
     "container_annotations.h",
-    "cross_thread_copier.cc",
     "cross_thread_copier.h",
     "cross_thread_copier_base.h",
     "cross_thread_copier_gfx.h",
@@ -60,6 +64,7 @@ component("wtf") {
     "cross_thread_copier_public.h",
     "cross_thread_copier_skia.h",
     "cross_thread_copier_std.h",
+    "cross_thread_copier_url.h",
     "cross_thread_functional.h",
     "date_math.cc",
     "date_math.h",
@@ -73,17 +78,18 @@ component("wtf") {
     "dynamic_annotations.h",
     "forward.h",
     "functional.h",
-    "gc_plugin_ignore.h",
+    "functional_internal.h",
+    "gc_plugin.h",
     "get_ptr.h",
     "hash_counted_set.h",
     "hash_functions.h",
-    "hash_iterators.h",
     "hash_map.h",
     "hash_set.h",
     "hash_table.cc",
     "hash_table.h",
     "hash_table_deleted_value_type.h",
     "hash_traits.h",
+    "key_value_pair.h",
     "leak_annotations.h",
     "linked_hash_set.h",
     "math_extras.h",
@@ -103,12 +109,12 @@ component("wtf") {
     "stack_util.h",
     "static_constructors.h",
     "std_lib_extras.h",
-    "text/ascii_ctype.cc",
     "text/ascii_ctype.h",
+    "text/ascii_fast_path.cc",
     "text/ascii_fast_path.h",
+    "text/ascii_lower_hash_reader.h",
     "text/atomic_string.cc",
     "text/atomic_string.h",
-    "text/atomic_string_cf.cc",
     "text/atomic_string_encoding.h",
     "text/atomic_string_hash.h",
     "text/atomic_string_table.cc",
@@ -121,9 +127,11 @@ component("wtf") {
     "text/character_names.h",
     "text/character_visitor.h",
     "text/code_point_iterator.h",
+    "text/convert_to_8bit_hash_reader.h",
     "text/copy_lchars_from_uchar_source.h",
     "text/encoding_tables.cc",
     "text/encoding_tables.h",
+    "text/ignoring_ascii_case_hash.h",
     "text/integer_to_string_conversion.h",
     "text/line_ending.cc",
     "text/line_ending.h",
@@ -131,16 +139,22 @@ component("wtf") {
     "text/math_transform.h",
     "text/number_parsing_options.h",
     "text/parsing_utilities.h",
+    "text/strcat.cc",
+    "text/strcat.h",
     "text/string_buffer.h",
     "text/string_builder.cc",
     "text/string_builder.h",
+    "text/string_builder_stream.cc",
+    "text/string_builder_stream.h",
     "text/string_concatenate.cc",
     "text/string_concatenate.h",
     "text/string_hash.h",
     "text/string_hasher.h",
     "text/string_impl.cc",
     "text/string_impl.h",
+    "text/string_internal.h",
     "text/string_operators.h",
+    "text/string_operators_atomic.h",
     "text/string_statics.cc",
     "text/string_statics.h",
     "text/string_to_number.cc",
@@ -174,10 +188,10 @@ component("wtf") {
     "text/text_offset_map.h",
     "text/text_position.cc",
     "text/text_position.h",
-    "text/text_stream.cc",
-    "text/text_stream.h",
     "text/unicode.h",
     "text/unicode_string.h",
+    "text/utf16.cc",
+    "text/utf16.h",
     "text/utf8.cc",
     "text/utf8.h",
     "text/wtf_string.cc",
@@ -216,9 +230,9 @@ component("wtf") {
 
   deps = [
     "//base/allocator:buildflags",
-    "//build:chromeos_buildflags",
-    "//third_party/blink/public/common:common",
+    "//third_party/blink/public/common",
     "//third_party/modp_b64",
+    "//third_party/rapidhash",
 
     # TODO(tkent): WTF should not depend on it.
     "//third_party/blink/public/common:headers",
@@ -236,15 +250,11 @@ component("wtf") {
   # Rules changing the |sources| list are temporarily commented out, until
   # those files are actually moved to here.
 
-  if (is_mac) {
+  if (is_apple) {
     sources += [
-      "text/string_impl_mac.mm",
-      "text/string_mac.mm",
+      "text/string_apple.mm",
+      "text/string_impl_apple.mm",
     ]
-  }
-
-  if (!is_mac && (current_cpu == "x86" || current_cpu == "x64")) {
-    sources += [ "text/copy_lchars_from_uchar_source.cc" ]
   }
 
   if (is_win) {
@@ -265,13 +275,11 @@ component("wtf") {
     libs = [ "log" ]
   }
 
-  if (is_mac) {
+  if (is_apple) {
     frameworks = [
       "CoreFoundation.framework",
       "Foundation.framework",
     ]
-  } else {
-    sources -= [ "text/atomic_string_cf.cc" ]
   }
 
   if (using_mismatched_sample_profile) {
@@ -294,11 +302,12 @@ source_set("wtf_unittests_sources") {
   sources = [
     "allocator/allocator_test.cc",
     "allocator/partitions_test.cc",
-    "ascii_ctype_test.cc",
     "assertions_test.cc",
     "atomic_operations_test.cc",
+    "bind_post_task_test.cc",
     "bit_field_test.cc",
     "bloom_filter_test.cc",
+    "casting_test.cc",
     "cross_thread_functional_test.cc",
     "decimal_test.cc",
     "deque_test.cc",
@@ -319,15 +328,19 @@ source_set("wtf_unittests_sources") {
     "sequence_bound_test.cc",
     "shared_buffer_test.cc",
     "testing/run_all_tests.cc",
+    "text/ascii_ctype_test.cc",
+    "text/ascii_fast_path_test.cc",
     "text/atomic_string_table_test.cc",
     "text/atomic_string_test.cc",
     "text/base64_test.cc",
     "text/case_map_test.cc",
     "text/code_point_iterator_test.cc",
     "text/encoding_tables_test.cc",
+    "text/ignoring_ascii_case_hash_test.cc",
     "text/integer_to_string_conversion_test.cc",
     "text/line_ending_test.cc",
     "text/math_transform_test.cc",
+    "text/strcat_test.cc",
     "text/string_buffer_test.cc",
     "text/string_builder_test.cc",
     "text/string_hasher_test.cc",
@@ -336,16 +349,22 @@ source_set("wtf_unittests_sources") {
     "text/string_view_test.cc",
     "text/text_codec_cjk_test.cc",
     "text/text_codec_icu_test.cc",
+    "text/text_codec_latin1_test.cc",
     "text/text_codec_replacement_test.cc",
     "text/text_codec_test.cc",
     "text/text_codec_utf8_test.cc",
     "text/text_encoding_test.cc",
+    "text/text_offset_map_test.cc",
+    "text/utf16_test.cc",
+    "text/utf8_test.cc",
     "text/wtf_string_test.cc",
     "threading_primitives_test.cc",
     "type_traits_test.cc",
     "uuid_test.cc",
     "vector_backed_linked_list_test.cc",
     "vector_test.cc",
+    "wtf_test_helper.cc",
+    "wtf_test_helper.h",
   ]
 
   if (is_win) {
@@ -364,4 +383,8 @@ source_set("wtf_unittests_sources") {
     "//testing/gmock",
     "//testing/gtest",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

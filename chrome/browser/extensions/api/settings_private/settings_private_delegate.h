@@ -7,20 +7,17 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
 #include "chrome/common/extensions/api/settings_private.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/extension_function.h"
 
 class Profile;
-
-namespace base {
-class Value;
-}
 
 namespace extensions {
 
@@ -43,13 +40,13 @@ class SettingsPrivateDelegate : public KeyedService {
                                                   const base::Value* value);
 
   // Gets the value of the pref with the given |name|.
-  base::Value GetPref(const std::string& name);
+  std::optional<base::Value::Dict> GetPref(const std::string& name);
 
   // Gets the values of all allowlisted prefs.
-  virtual std::unique_ptr<base::Value> GetAllPrefs();
+  virtual base::Value::List GetAllPrefs();
 
   // Gets the value.
-  virtual std::unique_ptr<base::Value> GetDefaultZoom();
+  virtual base::Value GetDefaultZoom();
 
   // Sets the pref.
   virtual settings_private::SetPrefResult SetDefaultZoom(double zoom);

@@ -7,18 +7,20 @@
  * 'privacy-guide-cookies-fragment' is the fragment in a privacy
  * guide card that contains the cookie settings and their descriptions.
  */
-import '../../prefs/prefs.js';
-import './privacy_guide_description_item.js';
-import './privacy_guide_fragment_shared.css.js';
-import '../../controls/settings_radio_group.js';
-import '../../privacy_page/collapse_radio_button.js';
 
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import '/shared/settings/prefs/prefs.js';
+import './privacy_guide_fragment_shared.css.js';
+import '../../controls/collapse_radio_button.js';
+import '../../controls/settings_radio_group.js';
+import '../../icons.html.js';
+
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {loadTimeData} from '../../i18n_setup.js';
-import {MetricsBrowserProxy, MetricsBrowserProxyImpl, PrivacyGuideSettingsStates} from '../../metrics_browser_proxy.js';
-import {PrefsMixin} from '../../prefs/prefs_mixin.js';
-import {CookiePrimarySetting} from '../../site_settings/site_settings_prefs_browser_proxy.js';
+import type {MetricsBrowserProxy} from '../../metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached} from '../../metrics_browser_proxy.js';
+import {ThirdPartyCookieBlockingSetting} from '../../site_settings/site_settings_browser_proxy.js';
 
 import {getTemplate} from './privacy_guide_cookies_fragment.html.js';
 
@@ -36,25 +38,10 @@ export class PrivacyGuideCookiesFragmentElement extends
 
   static get properties() {
     return {
-      /**
-       * Preferences state.
-       */
-      prefs: {
+      /* Third party cookie blocking settings for use in bindings. */
+      thirdPartyCookieBlockingSettingEnum_: {
         type: Object,
-        notify: true,
-      },
-
-      /**
-       * Primary cookie control states for use in bindings.
-       */
-      cookiePrimarySettingEnum_: {
-        type: Object,
-        value: CookiePrimarySetting,
-      },
-
-      enablePrivacyGuide2_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('privacyGuide2Enabled'),
+        value: ThirdPartyCookieBlockingSetting,
       },
     };
   }
@@ -70,19 +57,27 @@ export class PrivacyGuideCookiesFragmentElement extends
   }
 
   override focus() {
+    // The fragment element is focused when it becomes visible. Move the focus
+    // to the fragment header, so that the newly shown content of the fragment
+    // is downwards from the focus position. This allows users of screen readers
+    // to continue navigating the screen reader position downwards through the
+    // newly visible content.
     this.shadowRoot!.querySelector<HTMLElement>('[focus-element]')!.focus();
   }
 
   private onViewEnterStart_() {
     this.startStateBlock3PIncognito_ =
-        this.getPref('generated.cookie_primary_setting').value ===
-        CookiePrimarySetting.BLOCK_THIRD_PARTY_INCOGNITO;
+        this.getPref('generated.third_party_cookie_blocking_setting').value ===
+        ThirdPartyCookieBlockingSetting.INCOGNITO_ONLY;
+    this.metricsBrowserProxy_
+        .recordPrivacyGuideStepsEligibleAndReachedHistogram(
+            PrivacyGuideStepsEligibleAndReached.COOKIES_REACHED);
   }
 
   private onViewExitFinish_() {
     const endStateBlock3PIncognito =
-        this.getPref('generated.cookie_primary_setting').value ===
-        CookiePrimarySetting.BLOCK_THIRD_PARTY_INCOGNITO;
+        this.getPref('generated.third_party_cookie_blocking_setting').value ===
+        ThirdPartyCookieBlockingSetting.INCOGNITO_ONLY;
 
     let state: PrivacyGuideSettingsStates|null = null;
     if (this.startStateBlock3PIncognito_) {
@@ -94,7 +89,7 @@ export class PrivacyGuideCookiesFragmentElement extends
           PrivacyGuideSettingsStates.BLOCK_3P_TO_3P_INCOGNITO :
           PrivacyGuideSettingsStates.BLOCK_3P_TO_3P;
     }
-    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state!);
+    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state);
   }
 
   private onCookies3pIncognitoClick_() {
@@ -106,19 +101,12 @@ export class PrivacyGuideCookiesFragmentElement extends
     this.metricsBrowserProxy_.recordAction(
         'Settings.PrivacyGuide.ChangeCookiesBlock3P');
   }
-
-  private onRadioGroupKeyDown_(event: KeyboardEvent) {
-    switch (event.key) {
-      case 'ArrowLeft':
-      case 'ArrowRight':
-        // This event got consumed by the radio group to change the radio button
-        // selection. Do not propagate further, to not cause a privacy guide
-        // navigation.
-        event.stopPropagation();
-        break;
-    }
-  }
 }
 
+declare global {
+  interface HTMLElementTagNameMap {
+    'privacy-guide-cookies-fragment': PrivacyGuideCookiesFragmentElement;
+  }
+}
 customElements.define(
     PrivacyGuideCookiesFragmentElement.is, PrivacyGuideCookiesFragmentElement);

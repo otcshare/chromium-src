@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/services/secure_channel/pending_connection_manager_impl.h"
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/services/secure_channel/authenticated_channel.h"
@@ -100,12 +99,11 @@ void PendingConnectionManagerImpl::HandleConnectionRequest(
 void PendingConnectionManagerImpl::OnConnectionAttemptSucceeded(
     const ConnectionDetails& connection_details,
     std::unique_ptr<AuthenticatedChannel> authenticated_channel) {
-  if (!base::Contains(details_to_attempt_details_map_, connection_details)) {
-    PA_LOG(ERROR) << "PendingConnectionManagerImpl::"
-                  << "OnConnectionAttemptSucceeded(): Attempt succeeded, but "
-                  << "there was no corresponding map entry. "
-                  << "Details: " << connection_details;
-    NOTREACHED();
+  if (!details_to_attempt_details_map_.contains(connection_details)) {
+    NOTREACHED() << "PendingConnectionManagerImpl::"
+                 << "OnConnectionAttemptSucceeded(): Attempt succeeded, but "
+                 << "there was no corresponding map entry. "
+                 << "Details: " << connection_details;
   }
 
   std::vector<std::unique_ptr<ClientConnectionParameters>> all_clients;
@@ -163,8 +161,8 @@ void PendingConnectionManagerImpl::HandleBleInitiatorRequest(
     ConnectionPriority connection_priority) {
   // If no ConnectionAttempt exists to this device in the initiator role, create
   // one.
-  if (!base::Contains(id_pair_to_ble_initiator_connection_attempts_,
-                      connection_attempt_details.device_id_pair())) {
+  if (!id_pair_to_ble_initiator_connection_attempts_.contains(
+          connection_attempt_details.device_id_pair())) {
     id_pair_to_ble_initiator_connection_attempts_[connection_attempt_details
                                                       .device_id_pair()] =
         BleInitiatorConnectionAttempt::Factory::Create(
@@ -182,10 +180,9 @@ void PendingConnectionManagerImpl::HandleBleInitiatorRequest(
           connection_attempt.get() /* delegate */, bluetooth_adapter_));
 
   if (!success) {
-    PA_LOG(ERROR) << "PendingConnectionManagerImpl::"
-                  << "HandleBleInitiatorRequest(): Not able to handle request. "
-                  << "Details: " << connection_attempt_details;
-    NOTREACHED();
+    NOTREACHED() << "PendingConnectionManagerImpl::"
+                 << "HandleBleInitiatorRequest(): Not able to handle request. "
+                 << "Details: " << connection_attempt_details;
   }
 }
 
@@ -195,8 +192,8 @@ void PendingConnectionManagerImpl::HandleBleListenerRequest(
     ConnectionPriority connection_priority) {
   // If no ConnectionAttempt exists to this device in the listener role, create
   // one.
-  if (!base::Contains(id_pair_to_ble_listener_connection_attempts_,
-                      connection_attempt_details.device_id_pair())) {
+  if (!id_pair_to_ble_listener_connection_attempts_.contains(
+          connection_attempt_details.device_id_pair())) {
     id_pair_to_ble_listener_connection_attempts_[connection_attempt_details
                                                      .device_id_pair()] =
         BleListenerConnectionAttempt::Factory::Create(
@@ -214,10 +211,9 @@ void PendingConnectionManagerImpl::HandleBleListenerRequest(
           connection_attempt.get() /* delegate */, bluetooth_adapter_));
 
   if (!success) {
-    PA_LOG(ERROR) << "PendingConnectionManagerImpl::"
-                  << "HandleBleListenerRequest(): Not able to handle request. "
-                  << "Details: " << connection_attempt_details;
-    NOTREACHED();
+    NOTREACHED() << "PendingConnectionManagerImpl::"
+                 << "HandleBleListenerRequest(): Not able to handle request. "
+                 << "Details: " << connection_attempt_details;
   }
 }
 
@@ -235,7 +231,6 @@ void PendingConnectionManagerImpl::HandleNearbyRequest(
       NOTREACHED()
           << "PendingConnectionManagerImpl::HandleConnectionRequest(): "
           << "Nearby Connections is not supported in the listener role.";
-      break;
   }
 }
 
@@ -245,8 +240,8 @@ void PendingConnectionManagerImpl::HandleNearbyInitiatorRequest(
     ConnectionPriority connection_priority) {
   // If no ConnectionAttempt exists to this device in the initiator role, create
   // one.
-  if (!base::Contains(id_pair_to_nearby_initiator_connection_attempts_,
-                      connection_attempt_details.device_id_pair())) {
+  if (!id_pair_to_nearby_initiator_connection_attempts_.contains(
+          connection_attempt_details.device_id_pair())) {
     id_pair_to_nearby_initiator_connection_attempts_[connection_attempt_details
                                                          .device_id_pair()] =
         NearbyInitiatorConnectionAttempt::Factory::Create(
@@ -263,11 +258,10 @@ void PendingConnectionManagerImpl::HandleNearbyInitiatorRequest(
           connection_attempt.get() /* delegate */, bluetooth_adapter_));
 
   if (!success) {
-    PA_LOG(ERROR)
+    NOTREACHED()
         << "PendingConnectionManagerImpl::"
         << "HandleNearbyInitiatorRequest(): Not able to handle request. "
         << "Details: " << connection_attempt_details;
-    NOTREACHED();
   }
 }
 
@@ -304,7 +298,6 @@ PendingConnectionManagerImpl::ExtractClientConnectionParameters(
         // Nearby listener:
         case ConnectionRole::kListenerRole:
           NOTREACHED() << "Nearby listener connections are not implemented.";
-          return std::vector<std::unique_ptr<ClientConnectionParameters>>();
       }
   }
 }
@@ -325,12 +318,11 @@ void PendingConnectionManagerImpl::RemoveMapEntriesForFinishedConnectionAttempt(
       details_to_attempt_details_map_[connection_details].erase(
           connection_attempt_details_copy);
   if (num_deleted != 1u) {
-    PA_LOG(ERROR) << "PendingConnectionManagerImpl::"
-                  << "RemoveMapEntriesForFinishedConnectionAttempt(): "
-                  << "Tried to remove ConnectionAttemptDetails, but they were"
-                  << "not present in the map. Details: "
-                  << connection_attempt_details_copy;
-    NOTREACHED();
+    NOTREACHED() << "PendingConnectionManagerImpl::"
+                 << "RemoveMapEntriesForFinishedConnectionAttempt(): "
+                 << "Tried to remove ConnectionAttemptDetails, but they were"
+                 << "not present in the map. Details: "
+                 << connection_attempt_details_copy;
   }
 
   // If |connection_attempt_details_copy| was the last entry, remove the entire
@@ -351,10 +343,9 @@ void PendingConnectionManagerImpl::
               id_pair_to_ble_initiator_connection_attempts_.erase(
                   connection_attempt_details.device_id_pair());
           if (num_deleted != 1u) {
-            PA_LOG(ERROR) << "Tried to remove failed BLE initiator "
-                          << "ConnectionAttempt, but it was not present in the "
-                          << "map. Details: " << connection_attempt_details;
-            NOTREACHED();
+            NOTREACHED() << "Tried to remove failed BLE initiator "
+                         << "ConnectionAttempt, but it was not present in the "
+                         << "map. Details: " << connection_attempt_details;
           }
           break;
         }
@@ -365,10 +356,9 @@ void PendingConnectionManagerImpl::
               id_pair_to_ble_listener_connection_attempts_.erase(
                   connection_attempt_details.device_id_pair());
           if (num_deleted != 1u) {
-            PA_LOG(ERROR) << "Tried to remove failed BLE listener "
-                          << "ConnectionAttempt, but it was not present in the "
-                          << "map. Details: " << connection_attempt_details;
-            NOTREACHED();
+            NOTREACHED() << "Tried to remove failed BLE listener "
+                         << "ConnectionAttempt, but it was not present in the "
+                         << "map. Details: " << connection_attempt_details;
           }
           break;
         }
@@ -383,17 +373,15 @@ void PendingConnectionManagerImpl::
               id_pair_to_nearby_initiator_connection_attempts_.erase(
                   connection_attempt_details.device_id_pair());
           if (num_deleted != 1u) {
-            PA_LOG(ERROR) << "Tried to remove failed Nearby initiator "
-                          << "ConnectionAttempt, but it was not present in the "
-                          << "map. Details: " << connection_attempt_details;
-            NOTREACHED();
+            NOTREACHED() << "Tried to remove failed Nearby initiator "
+                         << "ConnectionAttempt, but it was not present in the "
+                         << "map. Details: " << connection_attempt_details;
           }
           break;
         }
 
         case ConnectionRole::kListenerRole:
           NOTREACHED();
-          break;
       }
       break;
   }

@@ -8,24 +8,16 @@
 #include <stdint.h>
 
 #include "build/build_config.h"
+#include "net/base/hash_value.h"
 #include "net/base/net_export.h"
 
 namespace net {
-
-class HashValue;
 
 // Returns a value within the NetRootCert histogram enum indicating the
 // ID of the trust anchor whose subjectPublicKeyInfo hash is |spki_hash|, or
 // 0 if it cannot be found.
 NET_EXPORT int32_t
-GetNetTrustAnchorHistogramIdForSPKI(const HashValue& spki_hash);
-
-// Returns true if the CA identified by |spki_hash| is known as a Legacy CA,
-// which means that they are known as a well-known root, but are not trusted
-// on the ChromiumOS or Android platforms. This indicates a CA that either has
-// been removed from public trust (generally, voluntarily) or has not (or not
-// yet) undergone a public review and discussion for broad public trust.
-NET_EXPORT bool IsLegacyPubliclyTrustedCA(const HashValue& spki_hash);
+GetNetTrustAnchorHistogramIdForSPKI(const SHA256HashValue& spki_hash);
 
 }  // namespace net
 

@@ -7,22 +7,68 @@ package org.chromium.chrome.browser.tab;
 import android.content.Context;
 import android.view.View;
 
+import androidx.annotation.Nullable;
+
+import org.mockito.Mockito;
+
 import org.chromium.base.ObserverList;
 import org.chromium.base.ObserverList.RewindableIterator;
+import org.chromium.base.ThreadUtils;
+import org.chromium.content_public.browser.ChildProcessImportance;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_public.common.ResourceRequestBody;
 import org.chromium.url.GURL;
 
-/**
- * Exposes helper functions to be used in tests to instrument tab interaction.
- */
+/** Exposes helper functions to be used in tests to instrument tab interaction. */
 public class TabTestUtils {
     /**
      * @return The observers registered for the given tab.
      */
     public static ObserverList.RewindableIterator<TabObserver> getTabObservers(Tab tab) {
         return ((TabImpl) tab).getTabObservers();
+    }
+
+    /**
+     * Initializes {@link Tab} with {@code webContents}. If {@code webContents} is {@code null} a
+     * new {@link WebContents} will be created for this {@link Tab}.
+     *
+     * @see TabImpl#initialize()
+     */
+    public static void initialize(
+            Tab tab,
+            Tab parent,
+            @Nullable @TabCreationState Integer creationState,
+            @Nullable LoadUrlParams loadUrlParams,
+            @Nullable String titleForLazyLoad,
+            WebContents webContents,
+            @Nullable TabDelegateFactory delegateFactory,
+            boolean initiallyHidden,
+            TabState tabState,
+            boolean initializeRenderer,
+            boolean isPinned) {
+        ((TabImpl) tab)
+                .initialize(
+                        parent,
+                        creationState,
+                        loadUrlParams,
+                        titleForLazyLoad,
+                        webContents,
+                        delegateFactory,
+                        initiallyHidden,
+                        tabState,
+                        initializeRenderer,
+                        isPinned);
+    }
+
+    /** Set the last hidden timestamp. */
+    public static void setLastNavigationCommittedTimestampMillis(Tab tab, long ts) {
+        ((TabImpl) tab).setLastNavigationCommittedTimestampMillis(ts);
+    }
+
+    /** Set a new {@link WebContentsState} to a given tab. */
+    public static void setWebContentsState(Tab tab, WebContentsState webContentsState) {
+        ((TabImpl) tab).setWebContentsState(webContentsState);
     }
 
     /**
@@ -69,17 +115,24 @@ public class TabTestUtils {
         if (!show && isShowing) {
             SadTab.get(tab).removeIfPresent();
         } else if (show && !isShowing) {
-            SadTab sadTab = new SadTab(tab) {
-                @Override
-                public View createView(Context context, Runnable suggestionAction,
-                        Runnable buttonAction, boolean showSendFeedbackView, boolean isIncognito) {
-                    return new View(context);
-                }
-            };
-            TestThreadUtils.runOnUiThreadBlocking(() -> {
-                SadTab.initForTesting(tab, sadTab);
-                sadTab.show(((TabImpl) tab).getThemedApplicationContext(), () -> {}, () -> {});
-            });
+            SadTab sadTab =
+                    new SadTab(tab) {
+                        @Override
+                        public View createView(
+                                Context context,
+                                Runnable suggestionAction,
+                                Runnable buttonAction,
+                                boolean showSendFeedbackView,
+                                boolean isIncognito) {
+                            return new View(context);
+                        }
+                    };
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        SadTab.initForTesting(tab, sadTab);
+                        sadTab.show(
+                                ((TabImpl) tab).getThemedApplicationContext(), () -> {}, () -> {});
+                    });
         }
     }
 
@@ -100,18 +153,6 @@ public class TabTestUtils {
      */
     public static void restoreFieldsFromState(Tab tab, TabState state) {
         ((TabImpl) tab).restoreFieldsFromState(state);
-    }
-
-    /**
-     * Swap {@link WebContents} object being used in a tab.
-     * @param tab {@link Tab} object.
-     * @param webContents {@link WebContents} to swap in.
-     * @param didStartLoad Whether the content started loading.
-     * @param didFinishLoad Whether the content finished loading.
-     */
-    public static void swapWebContents(
-            Tab tab, WebContents webContents, boolean didStartLoad, boolean didFinishLoad) {
-        ((TabImpl) tab).swapWebContents(webContents, didStartLoad, didFinishLoad);
     }
 
     /**
@@ -148,26 +189,47 @@ public class TabTestUtils {
      *                            //ui/base/mojo/window_open_disposition.mojom.
      * @param isRendererInitiated Whether or not the renderer initiated this action.
      */
-    public static void openNewTab(Tab tab, GURL url, String extraHeaders,
-            ResourceRequestBody postData, int disposition, boolean isRendererInitiated) {
-        getTabWebContentsDelegate(tab).openNewTab(
-                url, extraHeaders, postData, disposition, isRendererInitiated);
+    public static void openNewTab(
+            Tab tab,
+            GURL url,
+            String extraHeaders,
+            ResourceRequestBody postData,
+            int disposition,
+            boolean isRendererInitiated) {
+        getTabWebContentsDelegate(tab)
+                .openNewTab(url, extraHeaders, postData, disposition, isRendererInitiated);
     }
 
     /**
-     * Show {@link org.chromium.chrome.browser.infobar.FrameBustBlockInfoBar}.
-     */
-    public static void showFramebustBlockInfobarForTesting(Tab tab, String url) {
-        getTabWebContentsDelegate(tab).showFramebustBlockInfobarForTesting(url);
-    }
-
-    /**
-     * Sets whether the tab is showing an error page.  This is reset whenever the tab finishes a
+     * Sets whether the tab is showing an error page. This is reset whenever the tab finishes a
      * navigation.
+     *
      * @param tab {@link Tab} object.
      * @param isShowingErrorPage Whether the tab shows an error page.
      */
     public static void setIsShowingErrorPage(Tab tab, boolean isShowingErrorPage) {
         ((TabImpl) tab).setIsShowingErrorPage(isShowingErrorPage);
+    }
+
+    /** Mock Tab interface impl JNI for testing. */
+    public static void mockTabJni() {
+        TabImpl.Natives tabImplJni = Mockito.mock(TabImpl.Natives.class);
+        TabImplJni.setInstanceForTesting(tabImplJni);
+    }
+
+    /**
+     * @param tab {@link Tab} object.
+     * @return {@link @ChildProcessImportance int} object for a given tab.
+     */
+    public static @ChildProcessImportance int getImportance(Tab tab) {
+        return ((TabImpl) tab).getImportance();
+    }
+
+    /**
+     * @param tab {@link Tab} object.
+     * @return {@link WebContents} object for a given tab.
+     */
+    public static @Nullable WebContents getWebContents(Tab tab) {
+        return ((TabImpl) tab).getWebContents();
     }
 }

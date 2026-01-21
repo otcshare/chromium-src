@@ -2,22 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "services/device/generic_sensor/platform_sensor_android.h"
 
-#include "base/bind.h"
-#include "base/metrics/field_trial_params.h"
-#include "services/device/generic_sensor/jni_headers/PlatformSensor_jni.h"
-#include "services/device/public/cpp/device_features.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/functional/bind.h"
 
-using base::android::AttachCurrentThread;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/generic_sensor/jni_headers/PlatformSensor_jni.h"
+
 using base::android::JavaRef;
+using jni_zero::AttachCurrentThread;
 
 namespace device {
 namespace {
 void StartSensorBlocking(base::android::ScopedJavaGlobalRef<jobject> j_object,
                          double frequency) {
-  device::Java_PlatformSensor_startSensor2(AttachCurrentThread(), j_object,
-                                           frequency);
+  device::Java_PlatformSensor_startSensor(AttachCurrentThread(), j_object,
+                                          frequency);
 }
 
 void StopSensorBlocking(base::android::ScopedJavaGlobalRef<jobject> j_object) {
@@ -29,14 +31,14 @@ void StopSensorBlocking(base::android::ScopedJavaGlobalRef<jobject> j_object) {
 scoped_refptr<PlatformSensorAndroid> PlatformSensorAndroid::Create(
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider,
+    base::WeakPtr<PlatformSensorProvider> provider,
     const JavaRef<jobject>& java_provider) {
   auto sensor = base::MakeRefCounted<PlatformSensorAndroid>(
-      type, reading_buffer, provider);
+      type, reading_buffer, std::move(provider));
   JNIEnv* env = AttachCurrentThread();
   sensor->j_object_.Reset(
-      Java_PlatformSensor_create(env, java_provider, static_cast<jint>(type),
-                                 reinterpret_cast<jlong>(sensor.get())));
+      Java_PlatformSensor_create(env, java_provider, static_cast<int32_t>(type),
+                                 reinterpret_cast<int64_t>(sensor.get())));
   if (!sensor->j_object_) {
     return nullptr;
   }
@@ -47,14 +49,12 @@ scoped_refptr<PlatformSensorAndroid> PlatformSensorAndroid::Create(
 PlatformSensorAndroid::PlatformSensorAndroid(
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider)
-    : PlatformSensor(type, reading_buffer, provider) {}
+    base::WeakPtr<PlatformSensorProvider> provider)
+    : PlatformSensor(type, reading_buffer, std::move(provider)) {}
 
 PlatformSensorAndroid::~PlatformSensorAndroid() {
   if (j_object_) {
-    if (base::FeatureList::IsEnabled(features::kAsyncSensorCalls)) {
-      StopSensor();
-    }
+    StopSensor();
     Java_PlatformSensor_sensorDestroyed(AttachCurrentThread(), j_object_);
   }
 }
@@ -79,23 +79,21 @@ double PlatformSensorAndroid::GetMaximumSupportedFrequency() {
 
 bool PlatformSensorAndroid::StartSensor(
     const PlatformSensorConfiguration& configuration) {
-  if (base::FeatureList::IsEnabled(features::kAsyncSensorCalls)) {
-    sequenced_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&StartSensorBlocking, j_object_,
-                                  configuration.frequency()));
-    return true;
-  } else {
-    return Java_PlatformSensor_startSensor(AttachCurrentThread(), j_object_,
-                                           configuration.frequency());
-  }
+  sequenced_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&StartSensorBlocking, j_object_,
+                                configuration.frequency()));
+  return true;
 }
 
+// TODO(crbug.com/444059028): Basically j_object_ must not be nullptr.
+// However, there are reports that a crash occurred because j_object_
+// was nullptr. Add a TODO to track the issue.
 void PlatformSensorAndroid::StopSensor() {
-  if (base::FeatureList::IsEnabled(features::kAsyncSensorCalls)) {
+  if (j_object_) {
     sequenced_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&StopSensorBlocking, j_object_));
   } else {
-    Java_PlatformSensor_stopSensor(AttachCurrentThread(), j_object_);
+    base::debug::DumpWithoutCrashing();
   }
 }
 
@@ -106,22 +104,23 @@ bool PlatformSensorAndroid::CheckSensorConfiguration(
       env, j_object_, configuration.frequency());
 }
 
-void PlatformSensorAndroid::NotifyPlatformSensorError(
-    JNIEnv*,
-    const JavaRef<jobject>& caller) {
+void PlatformSensorAndroid::NotifyPlatformSensorError(JNIEnv*) {
+  // This function may be called from Java while this object's destructor is
+  // being invoked, however we know that to reach this point we must be before
+  // the completion of the call to Java_PlatformSensor_sensorDestroyed(). This
+  // means that the WeakPtrFactory is still valid. The WeakPtr will detect
+  // completion of the destructor.
   PostTaskToMainSequence(
       FROM_HERE,
-      base::BindOnce(&PlatformSensorAndroid::NotifySensorError, this));
+      base::BindOnce(&PlatformSensorAndroid::NotifySensorError, AsWeakPtr()));
 }
 
-void PlatformSensorAndroid::UpdatePlatformSensorReading(
-    JNIEnv*,
-    const base::android::JavaRef<jobject>& caller,
-    jdouble timestamp,
-    jdouble value1,
-    jdouble value2,
-    jdouble value3,
-    jdouble value4) {
+void PlatformSensorAndroid::UpdatePlatformSensorReading(JNIEnv*,
+                                                        jdouble timestamp,
+                                                        jdouble value1,
+                                                        jdouble value2,
+                                                        jdouble value3,
+                                                        jdouble value4) {
   SensorReading reading;
   reading.raw.timestamp = timestamp;
   reading.raw.values[0] = value1;
@@ -132,4 +131,13 @@ void PlatformSensorAndroid::UpdatePlatformSensorReading(
   UpdateSharedBufferAndNotifyClients(reading);
 }
 
+void PlatformSensorAndroid::SimulateSensorEventFromJavaForTesting(
+    base::android::ScopedJavaGlobalRef<jobject> j_object_,
+    int32_t reading_values_length) {
+  Java_PlatformSensor_simulateSensorEventForTesting(  // IN-TEST
+      AttachCurrentThread(), j_object_, reading_values_length);
+}
+
 }  // namespace device
+
+DEFINE_JNI(PlatformSensor)

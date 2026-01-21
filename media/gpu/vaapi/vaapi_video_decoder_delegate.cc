@@ -4,46 +4,43 @@
 
 #include "media/gpu/vaapi/vaapi_video_decoder_delegate.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/default_tick_clock.h"
-#include "build/chromeos_buildflags.h"
-#include "media/base/bind_to_current_loop.h"
+#include "build/build_config.h"
 #include "media/base/cdm_context.h"
-#include "media/gpu/decode_surface_handler.h"
-#include "media/gpu/vaapi/va_surface.h"
+#include "media/gpu/vaapi/vaapi_decode_surface_handler.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // gn check does not account for BUILDFLAG(), so including these headers will
-// make gn check fail for builds other than ash-chrome. See gn help nogncheck
+// make gn check fail for builds other than ChromeOS. See gn help nogncheck
 // for more information.
 #include "chromeos/components/cdm_factory_daemon/chromeos_cdm_context.h"  // nogncheck
 #include "chromeos/components/cdm_factory_daemon/chromeos_cdm_factory.h"  // nogncheck
 
 namespace {
-// During playback of protected content, we need to request the keys at an
-// interval no greater than this. This allows updating of key usage data.
-constexpr base::TimeDelta kKeyRetrievalMaxPeriod = base::Minutes(1);
 // This increments the lower 64 bit counter of an 128 bit IV.
 void ctr128_inc64(uint8_t* counter) {
   uint32_t n = 16;
   do {
-    if (++counter[--n] != 0)
+    if (UNSAFE_TODO(++counter[--n]) != 0) {
       return;
+    }
   } while (n > 8);
 }
 
 }  // namespace
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace media {
 
 VaapiVideoDecoderDelegate::VaapiVideoDecoderDelegate(
-    DecodeSurfaceHandler<VASurface>* const vaapi_dec,
+    VaapiDecodeSurfaceHandler* const vaapi_dec,
     scoped_refptr<VaapiWrapper> vaapi_wrapper,
     ProtectedSessionUpdateCB on_protected_session_update_cb,
     CdmContext* cdm_context,
@@ -58,17 +55,16 @@ VaapiVideoDecoderDelegate::VaapiVideoDecoderDelegate(
   DCHECK(vaapi_wrapper_);
   DCHECK(vaapi_dec_);
   DETACH_FROM_SEQUENCE(sequence_checker_);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (cdm_context)
     chromeos_cdm_context_ = cdm_context->GetChromeOsCdmContext();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   transcryption_ = cdm_context && VaapiWrapper::GetImplementationType() ==
                                       VAImplementation::kMesaGallium;
 }
 
 VaapiVideoDecoderDelegate::~VaapiVideoDecoderDelegate() {
-  // TODO(mcasas): consider enabling the checker, https://crbug.com/789160
-  // DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Also destroy the protected session on destruction of the accelerator
   // delegate. That way if a new delegate is created, when it tries to create a
   // new protected session it won't overwrite the existing one.
@@ -106,7 +102,7 @@ bool VaapiVideoDecoderDelegate::SetDecryptConfig(
   return true;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 VaapiVideoDecoderDelegate::ProtectedSessionState
 VaapiVideoDecoderDelegate::SetupDecryptDecode(
     bool full_sample,
@@ -129,7 +125,7 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
     }
     // We need to start the creation of this, first part requires getting the
     // hw config data from the daemon.
-    chromeos_cdm_context_->GetHwConfigData(BindToCurrentLoop(
+    chromeos_cdm_context_->GetHwConfigData(base::BindPostTaskToCurrentDefault(
         base::BindOnce(&VaapiVideoDecoderDelegate::OnGetHwConfigData,
                        weak_factory_.GetWeakPtr())));
     protected_session_state_ = ProtectedSessionState::kInProcess;
@@ -164,8 +160,9 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
     segment_info.segment_length = segment_info.init_byte_length = size;
     if (decrypt_config_) {
       // We need to specify the IV even if the segment is clear.
-      memcpy(segment_info.aes_cbc_iv_or_ctr, decrypt_config_->iv().data(),
-             DecryptConfig::kDecryptionKeySize);
+      UNSAFE_TODO(memcpy(segment_info.aes_cbc_iv_or_ctr,
+                         decrypt_config_->iv().data(),
+                         DecryptConfig::kDecryptionKeySize));
     }
     segments->emplace_back(std::move(segment_info));
     crypto_params->num_segments++;
@@ -188,34 +185,16 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
   DCHECK(decrypt_config_);
   // We also need to make sure we have the key data for the active
   // DecryptConfig now that the protected session exists.
-  if (!base::Contains(hw_key_data_map_, decrypt_config_->key_id())) {
+  if (!hw_key_data_map_.contains(decrypt_config_->key_id())) {
     DVLOG(1) << "Looking up the key data for: " << decrypt_config_->key_id();
     chromeos_cdm_context_->GetHwKeyData(
         decrypt_config_.get(), hw_identifier_,
-        BindToCurrentLoop(base::BindOnce(
+        base::BindPostTaskToCurrentDefault(base::BindOnce(
             &VaapiVideoDecoderDelegate::OnGetHwKeyData,
             weak_factory_.GetWeakPtr(), decrypt_config_->key_id())));
-    last_key_retrieval_time_ =
-        base::DefaultTickClock::GetInstance()->NowTicks();
     // Don't change our state here because we are created, but we just return
     // kInProcess for now to trigger a wait/retry state.
     return ProtectedSessionState::kInProcess;
-  }
-
-  // We may also need to request the key in order to update key usage times in
-  // OEMCrypto. We do care about the return value, because it will indicate key
-  // validity for us.
-  if (base::DefaultTickClock::GetInstance()->NowTicks() -
-          last_key_retrieval_time_ >
-      kKeyRetrievalMaxPeriod) {
-    chromeos_cdm_context_->GetHwKeyData(
-        decrypt_config_.get(), hw_identifier_,
-        BindToCurrentLoop(base::BindOnce(
-            &VaapiVideoDecoderDelegate::OnGetHwKeyData,
-            weak_factory_.GetWeakPtr(), decrypt_config_->key_id())));
-
-    last_key_retrieval_time_ =
-        base::DefaultTickClock::GetInstance()->NowTicks();
   }
 
   crypto_params->num_segments += subsamples.size();
@@ -236,8 +215,8 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
     VAEncryptionSegmentInfo segment_info = {};
     segment_info.segment_start_offset = offset;
     segment_info.segment_length = entry.clear_bytes + entry.cypher_bytes;
-    memcpy(segment_info.aes_cbc_iv_or_ctr, iv.data(),
-           DecryptConfig::kDecryptionKeySize);
+    UNSAFE_TODO(memcpy(segment_info.aes_cbc_iv_or_ctr, iv.data(),
+                       DecryptConfig::kDecryptionKeySize));
     if (ctr) {
       size_t partial_block_size =
           (DecryptConfig::kDecryptionKeySize -
@@ -261,14 +240,14 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
     offset += entry.clear_bytes + entry.cypher_bytes;
     segments->emplace_back(std::move(segment_info));
   }
-  memcpy(crypto_params->wrapped_decrypt_blob,
-         hw_key_data_map_[decrypt_config_->key_id()].data(),
-         DecryptConfig::kDecryptionKeySize);
+  UNSAFE_TODO(memcpy(crypto_params->wrapped_decrypt_blob,
+                     hw_key_data_map_[decrypt_config_->key_id()].data(),
+                     DecryptConfig::kDecryptionKeySize));
   crypto_params->key_blob_size = DecryptConfig::kDecryptionKeySize;
   crypto_params->segment_info = &segments->front();
   return protected_session_state_;
 }
-#endif  // if BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // if BUILDFLAG(IS_CHROMEOS)
 
 bool VaapiVideoDecoderDelegate::NeedsProtectedSessionRecovery() {
   if (!IsEncryptedSession() || !vaapi_wrapper_->IsProtectedSessionDead() ||
@@ -319,7 +298,7 @@ void VaapiVideoDecoderDelegate::OnGetHwKeyData(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // There's a special case here where we are updating usage times/checking on
   // key validity, and in that case the key is already in the map.
-  if (base::Contains(hw_key_data_map_, key_id)) {
+  if (hw_key_data_map_.contains(key_id)) {
     if (status == Decryptor::Status::kSuccess)
       return;
     // This key is no longer valid, decryption will fail, so stop playback
@@ -357,16 +336,22 @@ void VaapiVideoDecoderDelegate::RecoverProtectedSession() {
   protected_session_state_ = ProtectedSessionState::kNeedsRecovery;
   hw_key_data_map_.clear();
   hw_identifier_.clear();
+#if BUILDFLAG(IS_CHROMEOS)
+  CHECK(chromeos_cdm_context_);
+  // ARC will not re-seek, so we cannot do the VAContext recreation for it.
+  if (!chromeos_cdm_context_->UsingArcCdm()) {
+    OnVAContextDestructionSoon();
+    vaapi_wrapper_->DestroyContext();
+  }
   vaapi_wrapper_->DestroyProtectedSession();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (chromeos_cdm_context_ && chromeos_cdm_context_->UsingArcCdm()) {
+  if (chromeos_cdm_context_->UsingArcCdm()) {
     // The ARC decoder doesn't handle the WaitingCB that'll get invoked so we
     // need to trigger a protected update ourselves in order to get decoding
     // running again.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindRepeating(on_protected_session_update_cb_, true));
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace media

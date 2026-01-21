@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/**
- * Content provider for testing content URLs.
- */
-
+/** Content provider for testing content URLs. */
 package org.chromium.chrome.test;
 
 import android.content.ContentProvider;
@@ -15,9 +12,8 @@ import android.database.AbstractCursor;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
-import android.util.Log;
 
-import org.chromium.build.annotations.MainDex;
+import org.chromium.base.Log;
 
 import java.io.File;
 import java.io.IOException;
@@ -48,7 +44,6 @@ import java.util.Map;
  * The second one is moving the TestContentProvider to the ChromeTestSuport apk. This
  * seems a lot better path than above.
  */
-@MainDex
 public class TestContentProvider extends ContentProvider {
     private static final String ANDROID_DATA_FILE_PATH = "android/";
     private static final String AUTHORITY = "org.chromium.chrome.test.TestContentProvider";
@@ -129,8 +124,7 @@ public class TestContentProvider extends ContentProvider {
     }
 
     @Override
-    public int update(Uri uri, ContentValues values, String where,
-                      String[] whereArgs) {
+    public int update(Uri uri, ContentValues values, String where, String[] whereArgs) {
         return 0;
     }
 
@@ -144,9 +138,7 @@ public class TestContentProvider extends ContentProvider {
         return null;
     }
 
-    /**
-     * Cursor object for retrieving resource request counters.
-     */
+    /** Cursor object for retrieving resource request counters. */
     private static class ProviderStateCursor extends AbstractCursor {
         private final int mResourceRequestCount;
 
@@ -166,8 +158,9 @@ public class TestContentProvider extends ContentProvider {
 
         @Override
         public int getType(int columnIndex) {
-            return columnIndex == EXPECTED_COLUMN_INDEX ? Cursor.FIELD_TYPE_INTEGER
-                                                        : Cursor.FIELD_TYPE_NULL;
+            return columnIndex == EXPECTED_COLUMN_INDEX
+                    ? Cursor.FIELD_TYPE_INTEGER
+                    : Cursor.FIELD_TYPE_NULL;
         }
 
         private void unsupported() {
@@ -210,21 +203,27 @@ public class TestContentProvider extends ContentProvider {
 
         @Override
         public String[] getColumnNames() {
-            return new String[] { GET_RESOURCE_REQUEST_COUNT };
+            return new String[] {GET_RESOURCE_REQUEST_COUNT};
         }
     }
 
     @Override
-    public Cursor query(Uri uri, String[] projection, String selection,
-                        String[] selectionArgs, String sortOrder) {
+    public Cursor query(
+            Uri uri,
+            String[] projection,
+            String selection,
+            String[] selectionArgs,
+            String sortOrder) {
         synchronized (mLock) {
             String action = uri.getLastPathSegment();
             String resource = uri.getQuery();
             if (GET_RESOURCE_REQUEST_COUNT.equals(action)) {
-                return new ProviderStateCursor(mResourceRequestCount.containsKey(resource)
-                        ? mResourceRequestCount.get(resource) : 0);
+                return new ProviderStateCursor(
+                        mResourceRequestCount.containsKey(resource)
+                                ? mResourceRequestCount.get(resource)
+                                : 0);
             } else if (RESET_RESOURCE_REQUEST_COUNTS.equals(action)) {
-                mResourceRequestCount = new HashMap<String, Integer>();
+                mResourceRequestCount = new HashMap<>();
             } else if (SET_DATA_PATH.equals(action)) {
                 mDataFilePath = resource;
             }

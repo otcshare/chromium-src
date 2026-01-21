@@ -12,7 +12,10 @@
 #include "base/android/jni_string.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/gcm_driver/android/jni_headers/GCMDriver_jni.h"
 
 using base::android::AppendJavaStringArrayToStringVector;
@@ -20,7 +23,7 @@ using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaByteArrayToString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 namespace gcm {
 
@@ -39,10 +42,9 @@ GCMDriverAndroid::~GCMDriverAndroid() {
 
 void GCMDriverAndroid::OnRegisterFinished(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& j_app_id,
-    const JavaParamRef<jstring>& j_registration_id,
-    jboolean success) {
+    const JavaRef<jstring>& j_app_id,
+    const JavaRef<jstring>& j_registration_id,
+    bool success) {
   std::string app_id = ConvertJavaStringToUTF8(env, j_app_id);
   std::string registration_id = ConvertJavaStringToUTF8(env, j_registration_id);
   GCMClient::Result result =
@@ -53,11 +55,9 @@ void GCMDriverAndroid::OnRegisterFinished(
   RegisterFinished(app_id, registration_id, result);
 }
 
-void GCMDriverAndroid::OnUnregisterFinished(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& j_app_id,
-    jboolean success) {
+void GCMDriverAndroid::OnUnregisterFinished(JNIEnv* env,
+                                            const JavaRef<jstring>& j_app_id,
+                                            bool success) {
   std::string app_id = ConvertJavaStringToUTF8(env, j_app_id);
   GCMClient::Result result =
       success ? GCMClient::SUCCESS : GCMClient::UNKNOWN_ERROR;
@@ -69,13 +69,12 @@ void GCMDriverAndroid::OnUnregisterFinished(
 
 void GCMDriverAndroid::OnMessageReceived(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& j_app_id,
-    const JavaParamRef<jstring>& j_sender_id,
-    const JavaParamRef<jstring>& j_message_id,
-    const JavaParamRef<jstring>& j_collapse_key,
-    const JavaParamRef<jbyteArray>& j_raw_data,
-    const JavaParamRef<jobjectArray>& j_data_keys_and_values) {
+    const JavaRef<jstring>& j_app_id,
+    const JavaRef<jstring>& j_sender_id,
+    const JavaRef<jstring>& j_message_id,
+    const JavaRef<jstring>& j_collapse_key,
+    const JavaRef<jbyteArray>& j_raw_data,
+    const JavaRef<jobjectArray>& j_data_keys_and_values) {
   std::string app_id = ConvertJavaStringToUTF8(env, j_app_id);
 
   int message_byte_size = 0;
@@ -84,9 +83,9 @@ void GCMDriverAndroid::OnMessageReceived(
   message.sender_id = ConvertJavaStringToUTF8(env, j_sender_id);
 
   if (!j_message_id.is_null())
-    ConvertJavaStringToUTF8(env, j_message_id, &message.message_id);
+    message.message_id = ConvertJavaStringToUTF8(env, j_message_id);
   if (!j_collapse_key.is_null())
-    ConvertJavaStringToUTF8(env, j_collapse_key, &message.collapse_key);
+    message.collapse_key = ConvertJavaStringToUTF8(env, j_collapse_key);
 
   // Expand j_data_keys_and_values from array to map.
   std::vector<std::string> data_keys_and_values;
@@ -118,10 +117,6 @@ void GCMDriverAndroid::ValidateRegistration(
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), true /* is_valid */));
 }
-
-void GCMDriverAndroid::OnSignedIn() {}
-
-void GCMDriverAndroid::OnSignedOut() {}
 
 void GCMDriverAndroid::AddAppHandler(const std::string& app_id,
                                      GCMAppHandler* handler) {
@@ -273,3 +268,5 @@ void GCMDriverAndroid::RecordDecryptionFailure(const std::string& app_id,
 }
 
 }  // namespace gcm
+
+DEFINE_JNI(GCMDriver)

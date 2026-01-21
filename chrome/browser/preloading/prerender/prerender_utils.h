@@ -5,31 +5,20 @@
 #ifndef CHROME_BROWSER_PRELOADING_PRERENDER_PRERENDER_UTILS_H_
 #define CHROME_BROWSER_PRELOADING_PRERENDER_PRERENDER_UTILS_H_
 
-#include "base/feature_list.h"
-
 // This file is used to manage some static functions and constants for
 // prerender2. Some typical cases can be:
 // * Indicates whether a prerender2-related feature is enabled.
 // * Stores the constants to avoid hardcoded strings.
 namespace prerender_utils {
 
-// This is a temporal flag added for supporting a workaround that allows
-// prerender2 to stop the location bar from the displaying prefetch flag, we
-// will turn if off after we confirm the prerendered document will handle it by
-// themselves.
-BASE_DECLARE_FEATURE(kHidePrefetchParameter);
-
+// LINT.IfChange(PreloadingEmbedderTriggerType)
+extern const char kPrewarmDefaultSearchEngineMetricSuffix[];
 extern const char kDefaultSearchEngineMetricSuffix[];
 extern const char kDirectUrlInputMetricSuffix[];
-
-bool IsDirectUrlInputPrerenderEnabled();
-
-bool IsSearchSuggestionPrerenderEnabled();
-
-bool ShouldUpdateCacheEntryManually();
-
-// Whether supporting upgrading a prefetch response to prerender page.
-bool SearchPrefetchUpgradeToPrerenderIsEnabled();
+extern const char kBookmarkBarMetricSuffix[];
+extern const char kNewTabPageMetricSuffix[];
+extern const char kLinkPreviewMetricsSuffix[];
+// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/histograms.xml:PagePreloadingTriggerType, //tools/metrics/histograms/metadata/page/histograms.xml:PagePreloadingTriggerType)
 
 }  // namespace prerender_utils
 

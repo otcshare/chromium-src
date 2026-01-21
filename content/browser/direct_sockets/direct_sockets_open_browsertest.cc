@@ -3,9 +3,12 @@
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram.h"
@@ -13,10 +16,11 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/values.h"
 #include "content/browser/direct_sockets/direct_sockets_service_impl.h"
 #include "content/browser/direct_sockets/direct_sockets_test_utils.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/direct_sockets_delegate.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -36,7 +40,7 @@
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_udp_socket.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/direct_sockets/direct_sockets.mojom.h"
 #include "url/gurl.h"
 
@@ -49,7 +53,7 @@ namespace content {
 
 namespace {
 
-using ProtocolType = blink::mojom::DirectSocketProtocolType;
+using ProtocolType = DirectSocketsDelegate::ProtocolType;
 
 struct RecordedCall {
   ProtocolType protocol_type;
@@ -76,6 +80,8 @@ constexpr char kUDPNetworkFailuresHistogramName[] =
 class MockOpenNetworkContext : public content::test::MockNetworkContext {
  public:
   explicit MockOpenNetworkContext(net::Error result) : result_(result) {}
+  MockOpenNetworkContext(net::Error result, std::string_view host_mapping_rules)
+      : MockNetworkContext(host_mapping_rules), result_(result) {}
 
   ~MockOpenNetworkContext() override = default;
 
@@ -87,7 +93,7 @@ class MockOpenNetworkContext : public content::test::MockNetworkContext {
 
   // network::TestNetworkContext:
   void CreateTCPConnectedSocket(
-      const absl::optional<net::IPEndPoint>& local_addr,
+      const std::optional<net::IPEndPoint>& local_addr,
       const net::AddressList& remote_addr_list,
       network::mojom::TCPConnectedSocketOptionsPtr tcp_connected_socket_options,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
@@ -113,7 +119,6 @@ class MockOpenNetworkContext : public content::test::MockNetworkContext {
 
  private:
   std::unique_ptr<content::test::MockUDPSocket> CreateMockUDPSocket(
-      mojo::PendingReceiver<network::mojom::UDPSocket> receiver,
       mojo::PendingRemote<network::mojom::UDPSocketListener> listener) override;
 
   const net::Error result_;
@@ -124,10 +129,8 @@ class MockOpenUDPSocket : public content::test::MockUDPSocket {
  public:
   MockOpenUDPSocket(
       MockOpenNetworkContext* network_context,
-      mojo::PendingReceiver<network::mojom::UDPSocket> receiver,
       mojo::PendingRemote<network::mojom::UDPSocketListener> listener)
-      : MockUDPSocket(std::move(receiver), std::move(listener)),
-        network_context_(network_context) {}
+      : MockUDPSocket(std::move(listener)), network_context_(network_context) {}
 
   ~MockOpenUDPSocket() override = default;
 
@@ -138,7 +141,7 @@ class MockOpenUDPSocket : public content::test::MockUDPSocket {
     const net::Error result = (remote_addr.port() == 0)
                                   ? net::ERR_INVALID_ARGUMENT
                                   : network_context_->result();
-    network_context_->Record(RecordedCall{ProtocolType::kUdp,
+    network_context_->Record(RecordedCall{ProtocolType::kConnectedUdp,
                                           remote_addr.address().ToString(),
                                           remote_addr.port(),
                                           socket_options->send_buffer_size,
@@ -157,18 +160,14 @@ class MockOpenUDPSocket : public content::test::MockUDPSocket {
 
 std::unique_ptr<content::test::MockUDPSocket>
 MockOpenNetworkContext::CreateMockUDPSocket(
-    mojo::PendingReceiver<network::mojom::UDPSocket> receiver,
     mojo::PendingRemote<network::mojom::UDPSocketListener> listener) {
-  return std::make_unique<MockOpenUDPSocket>(this, std::move(receiver),
-                                             std::move(listener));
+  return std::make_unique<MockOpenUDPSocket>(this, std::move(listener));
 }
 
 }  // anonymous namespace
 
 class DirectSocketsOpenBrowserTest : public ContentBrowserTest {
  public:
-  ~DirectSocketsOpenBrowserTest() override = default;
-
   GURL GetTestOpenPageURL() {
     return embedded_test_server()->GetURL("/direct_sockets/open.html");
   }
@@ -179,8 +178,6 @@ class DirectSocketsOpenBrowserTest : public ContentBrowserTest {
 
     client_ = std::make_unique<test::IsolatedWebAppContentBrowserClient>(
         url::Origin::Create(GetTestOpenPageURL()));
-    scoped_client_ =
-        std::make_unique<ScopedContentBrowserClientSetting>(client_.get());
 
     ASSERT_TRUE(NavigateToURL(shell(), GetTestOpenPageURL()));
   }
@@ -193,10 +190,7 @@ class DirectSocketsOpenBrowserTest : public ContentBrowserTest {
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_{features::kIsolatedWebApps};
-
   std::unique_ptr<test::IsolatedWebAppContentBrowserClient> client_;
-  std::unique_ptr<ScopedContentBrowserClientSetting> scoped_client_;
 };
 
 IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenTcp_Success_Hostname) {
@@ -205,8 +199,7 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenTcp_Success_Hostname) {
   const std::string mapping_rules =
       base::StringPrintf("MAP %s %s", kExampleHostname, kExampleAddress);
 
-  MockOpenNetworkContext mock_network_context(net::OK);
-  mock_network_context.set_host_mapping_rules(mapping_rules);
+  MockOpenNetworkContext mock_network_context(net::OK, mapping_rules);
   DirectSocketsServiceImpl::SetNetworkContextForTesting(&mock_network_context);
   const std::string expected_result = base::StringPrintf(
       "openTcp succeeded: {remoteAddress: \"%s\", remotePort: 993}",
@@ -226,7 +219,8 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest,
               ::testing::HasSubstr("keepAliveDelay must be no less than"));
 }
 
-IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenTcp_OptionsOne) {
+IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest,
+                       DISABLED_OpenTcp_OptionsOne) {
   base::HistogramTester histogram_tester;
   histogram_tester.ExpectUniqueSample(kTCPNetworkFailuresHistogramName,
                                       -net::Error::ERR_PROXY_CONNECTION_FAILED,
@@ -336,8 +330,7 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenUdp_Success_Hostname) {
   const std::string mapping_rules =
       base::StringPrintf("MAP %s %s", kExampleHostname, kExampleAddress);
 
-  MockOpenNetworkContext mock_network_context(net::OK);
-  mock_network_context.set_host_mapping_rules(mapping_rules);
+  MockOpenNetworkContext mock_network_context(net::OK, mapping_rules);
   DirectSocketsServiceImpl::SetNetworkContextForTesting(&mock_network_context);
   const std::string expected_result = base::StringPrintf(
       "openUdp succeeded: {remoteAddress: \"%s\", remotePort: 993}",
@@ -384,7 +377,7 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenUdp_OptionsOne) {
 
   ASSERT_EQ(1U, mock_network_context.history().size());
   const RecordedCall& call = mock_network_context.history()[0];
-  EXPECT_EQ(ProtocolType::kUdp, call.protocol_type);
+  EXPECT_EQ(ProtocolType::kConnectedUdp, call.protocol_type);
   EXPECT_EQ("12.34.56.78", call.remote_address);
   EXPECT_EQ(9012, call.remote_port);
   EXPECT_EQ(3456, call.send_buffer_size);
@@ -414,11 +407,352 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenUdp_OptionsTwo) {
 
   DCHECK_EQ(1U, mock_network_context.history().size());
   const RecordedCall& call = mock_network_context.history()[0];
-  EXPECT_EQ(ProtocolType::kUdp, call.protocol_type);
+  EXPECT_EQ(ProtocolType::kConnectedUdp, call.protocol_type);
   EXPECT_EQ("fedc:ba98:7654:3210:fedc:ba98:7654:3210", call.remote_address);
   EXPECT_EQ(789, call.remote_port);
   EXPECT_EQ(1243, call.send_buffer_size);
   EXPECT_EQ(1234, call.receive_buffer_size);
 }
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest,
+                       OpenUdp_RemoteLocalOptions) {
+  {
+    const std::string script = R"(
+      openUdp({
+        remoteAddress: '192.168.0.1',
+      })
+    )";
+    EXPECT_THAT(
+        EvalJs(shell(), script).ExtractString(),
+        testing::HasSubstr("remoteAddress and remotePort should either"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({
+        remotePort: 228,
+      })
+    )";
+    EXPECT_THAT(
+        EvalJs(shell(), script).ExtractString(),
+        testing::HasSubstr("remoteAddress and remotePort should either"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({
+        remoteAddress: '192.168.0.1',
+        remotePort: 228,
+        localAddress: '127.0.0.1',
+      })
+    )";
+
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("remoteAddress and localAddress cannot be "
+                                   "specified at the same time"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({
+        localAddress: 'direct-sockets.com',
+      })
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("localAddress must be a valid IP address"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({
+        localPort: 228,
+      })
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr(
+                    "localPort cannot be specified without localAddress"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({})
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("neither remoteAddress nor "
+                                   "localAddress specified"));
+  }
+
+  {
+    const std::string script = R"(
+      openUdp({
+        localAddress: "127.0.0.1",
+        dnsQueryType: "ipv4",
+      })
+    )";
+    EXPECT_THAT(
+        EvalJs(shell(), script).ExtractString(),
+        testing::HasSubstr(
+            "dnsQueryType is only relevant when remoteAddress is specified"));
+  }
+}
+
+class MockOpenNetworkContextWithDnsQueryType : public MockOpenNetworkContext {
+ public:
+  MockOpenNetworkContextWithDnsQueryType(net::Error result,
+                                         std::string_view host_mapping_rules)
+      : MockOpenNetworkContext(result, host_mapping_rules) {}
+
+  // MockOpenNetworkContext:
+  void ResolveHost(
+      network::mojom::HostResolverHostPtr host,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      network::mojom::ResolveHostParametersPtr optional_parameters,
+      mojo::PendingRemote<network::mojom::ResolveHostClient>
+          pending_response_client) override {
+    ASSERT_TRUE(expected_dns_query_type_);
+    ASSERT_TRUE(optional_parameters);
+    ASSERT_EQ(optional_parameters->dns_query_type, expected_dns_query_type_);
+    ResolveHostImpl(std::move(host), network_anonymization_key,
+                    std::move(optional_parameters),
+                    std::move(pending_response_client));
+  }
+
+  void set_expected_dns_query_type(
+      std::optional<net::DnsQueryType> dns_query_type) {
+    expected_dns_query_type_ = std::move(dns_query_type);
+  }
+
+ private:
+  std::optional<net::DnsQueryType> expected_dns_query_type_;
+};
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, Open_DnsQueryType) {
+  constexpr std::string_view kHostname = "direct-sockets.com";
+
+  MockOpenNetworkContextWithDnsQueryType mock_network_context(
+      net::OK, base::StringPrintf("MAP %s 98.76.54.32", kHostname.data()));
+  DirectSocketsServiceImpl::SetNetworkContextForTesting(&mock_network_context);
+
+  constexpr auto kDnsQueryTypeMapping =
+      base::MakeFixedFlatMap<net::DnsQueryType, std::string_view>({
+          {net::DnsQueryType::A, "ipv4"},
+          {net::DnsQueryType::AAAA, "ipv6"},
+      });
+
+  for (const auto& [expected_dns_query_type, dns_query_type_str] :
+       kDnsQueryTypeMapping) {
+    mock_network_context.set_expected_dns_query_type(expected_dns_query_type);
+    {
+      const std::string script = R"(
+        openUdp({
+          remoteAddress: $1,
+          remotePort: 53,
+          dnsQueryType: $2,
+        })
+      )";
+      EXPECT_THAT(
+          EvalJs(shell(), JsReplace(script, kHostname, dns_query_type_str))
+              .ExtractString(),
+          testing::HasSubstr("openUdp succeeded"));
+    }
+    {
+      const std::string script = R"(
+        openTcp($1, 53, {
+          dnsQueryType: $2,
+        })
+      )";
+      EXPECT_THAT(
+          EvalJs(shell(), JsReplace(script, kHostname, dns_query_type_str))
+              .ExtractString(),
+          testing::HasSubstr("openTcp succeeded"));
+    }
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsOpenBrowserTest, OpenTcpServerOptions) {
+  {
+    const std::string script = R"(
+      openTcpServer('direct-sockets.com');
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("localAddress must be a valid IP address"));
+  }
+
+  {
+    const std::string script = R"(
+      openTcpServer('127.0.0.1', {
+        localPort: 0,
+      });
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("localPort must be greater than zero"));
+  }
+
+  {
+    const std::string script = R"(
+      openTcpServer('127.0.0.1', {
+        backlog: 0,
+      });
+    )";
+    EXPECT_THAT(EvalJs(shell(), script).ExtractString(),
+                testing::HasSubstr("backlog must be greater than zero"));
+  }
+
+  {
+    const std::string script = R"(
+      openTcpServer('127.0.0.1', {
+        ipv6Only: true,
+      });
+    )";
+    EXPECT_THAT(
+        EvalJs(shell(), script).ExtractString(),
+        testing::HasSubstr(
+            "ipv6Only can only be specified when localAddress is [::]"));
+  }
+}
+
+enum class WorkerType { kShared, kService };
+enum class FeatureState { kDefault, kDisabled, kEnabled };
+
+template <WorkerType worker_type>
+class DirectSocketsWorkerExposureBrowserTest
+    : public DirectSocketsOpenBrowserTest,
+      public testing::WithParamInterface<FeatureState> {
+ public:
+  DirectSocketsWorkerExposureBrowserTest() {
+    switch (GetFeatureState()) {
+      case FeatureState::kDefault:
+        break;
+      case FeatureState::kEnabled:
+        InitWith(&base::test::ScopedFeatureList::InitAndEnableFeature);
+        break;
+      case FeatureState::kDisabled:
+        InitWith(&base::test::ScopedFeatureList::InitAndDisableFeature);
+        break;
+    }
+  }
+
+  void SetUp() override {
+    embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
+        &DirectSocketsWorkerExposureBrowserTest::HandleRequest,
+        base::Unretained(this)));
+    DirectSocketsOpenBrowserTest::SetUp();
+  }
+
+  bool ShouldBeExposed() { return GetFeatureState() == FeatureState::kEnabled; }
+
+ private:
+  FeatureState GetFeatureState() { return GetParam(); }
+
+  void InitWith(auto init) {
+    switch (worker_type) {
+      case WorkerType::kService:
+        std::invoke(init, features_,
+                    blink::features::kDirectSocketsInServiceWorkers);
+        break;
+      case WorkerType::kShared:
+        std::invoke(init, features_,
+                    blink::features::kDirectSocketsInSharedWorkers);
+        break;
+    }
+  }
+
+  std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
+      const net::test_server::HttpRequest& request) {
+    if (request.relative_url.ends_with("shared_worker.js")) {
+      auto response = WorkerScriptResponse();
+      response->set_content(R"(
+        onconnect = e => {
+          const port = e.ports[0];
+          port.start();
+          port.postMessage({
+            'TCPSocket': typeof TCPSocket,
+            'UDPSocket': typeof UDPSocket,
+            'TCPServerSocket': typeof TCPServerSocket,
+          });
+        };
+      )");
+      return response;
+    }
+    if (request.relative_url.ends_with("service_worker.js")) {
+      auto response = WorkerScriptResponse();
+      response->set_content(R"(
+        addEventListener('message', e => {
+          e.source.postMessage({
+            'TCPSocket': typeof TCPSocket,
+            'UDPSocket': typeof UDPSocket,
+            'TCPServerSocket': typeof TCPServerSocket,
+          });
+        });
+      )");
+      return response;
+    }
+    return nullptr;
+  }
+
+  std::unique_ptr<net::test_server::BasicHttpResponse> WorkerScriptResponse() {
+    auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+    response->set_code(net::HTTP_OK);
+    response->set_content_type("application/javascript");
+    response->AddCustomHeader("Cross-Origin-Embedder-Policy", "require-corp");
+    response->AddCustomHeader("Cross-Origin-Resource-Policy", "same-origin");
+    return response;
+  }
+
+  base::test::ScopedFeatureList features_;
+};
+
+using DirectSocketsSharedWorkerExposureBrowserTest =
+    DirectSocketsWorkerExposureBrowserTest<WorkerType::kShared>;
+
+IN_PROC_BROWSER_TEST_P(DirectSocketsSharedWorkerExposureBrowserTest, Exposure) {
+  static constexpr char kSharedWorkerStart[] = R"(
+    new Promise(resolve => {
+      const worker = new SharedWorker('/shared_worker.js');
+      worker.port.onmessage = e => resolve(e.data);
+    });
+  )";
+
+  std::string expected_typeof = ShouldBeExposed() ? "function" : "undefined";
+  EXPECT_EQ(EvalJs(shell(), kSharedWorkerStart),
+            base::Value::Dict()
+                .Set("TCPSocket", expected_typeof)
+                .Set("UDPSocket", expected_typeof)
+                .Set("TCPServerSocket", expected_typeof));
+}
+
+using DirectSocketsServiceWorkerExposureBrowserTest =
+    DirectSocketsWorkerExposureBrowserTest<WorkerType::kService>;
+
+IN_PROC_BROWSER_TEST_P(DirectSocketsServiceWorkerExposureBrowserTest,
+                       Exposure) {
+  static constexpr char kServiceWorkerStart[] = R"(
+    new Promise(async (resolve) => {
+      await navigator.serviceWorker.register('/service_worker.js');
+      navigator.serviceWorker.addEventListener('message', e => resolve(e.data));
+      const reg = await navigator.serviceWorker.ready;
+      reg.active.postMessage(null);
+    });
+  )";
+
+  std::string expected_typeof = ShouldBeExposed() ? "function" : "undefined";
+  EXPECT_EQ(EvalJs(shell(), kServiceWorkerStart),
+            base::Value::Dict()
+                .Set("TCPSocket", expected_typeof)
+                .Set("UDPSocket", expected_typeof)
+                .Set("TCPServerSocket", expected_typeof));
+}
+
+INSTANTIATE_TEST_SUITE_P(/**/,
+                         DirectSocketsSharedWorkerExposureBrowserTest,
+                         testing::Values(FeatureState::kDefault,
+                                         FeatureState::kEnabled,
+                                         FeatureState::kDisabled));
+
+INSTANTIATE_TEST_SUITE_P(/**/,
+                         DirectSocketsServiceWorkerExposureBrowserTest,
+                         testing::Values(FeatureState::kDefault,
+                                         FeatureState::kEnabled,
+                                         FeatureState::kDisabled));
 
 }  // namespace content

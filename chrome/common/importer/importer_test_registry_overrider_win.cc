@@ -7,11 +7,12 @@
 #include <windows.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/environment.h"
-#include "base/guid.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/uuid.h"
 #include "base/win/registry.h"
 
 namespace {
@@ -27,11 +28,13 @@ const char kTestHKCUOverrideEnvironmentVariable[] =
 // Returns true if the variable was successfully read.
 bool GetTestKeyFromEnvironment(std::wstring* key) {
   std::unique_ptr<base::Environment> env(base::Environment::Create());
-  std::string value;
-  bool result = env->GetVar(kTestHKCUOverrideEnvironmentVariable, &value);
-  if (result)
-    *key = base::UTF8ToWide(value);
-  return result;
+  std::optional<std::string> value =
+      env->GetVar(kTestHKCUOverrideEnvironmentVariable);
+  if (value.has_value()) {
+    *key = base::UTF8ToWide(value.value());
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -41,7 +44,8 @@ bool GetTestKeyFromEnvironment(std::wstring* key) {
 
 ImporterTestRegistryOverrider::ImporterTestRegistryOverrider()
     : temporary_key_(kTestHKCUOverrideKeyPrefix +
-                     base::UTF8ToWide(base::GenerateGUID())) {
+                     base::UTF8ToWide(
+                         base::Uuid::GenerateRandomV4().AsLowercaseString())) {
   DCHECK(!GetTestKeyFromEnvironment(NULL));
 
   std::unique_ptr<base::Environment> env(base::Environment::Create());

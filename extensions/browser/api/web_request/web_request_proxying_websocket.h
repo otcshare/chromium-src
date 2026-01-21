@@ -5,27 +5,30 @@
 #ifndef EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_PROXYING_WEBSOCKET_H_
 #define EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_PROXYING_WEBSOCKET_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
+#include "extensions/browser/api/web_request/extension_web_request_event_router.h"
 #include "extensions/browser/api/web_request/web_request_api.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace net {
 class IPEndPoint;
@@ -50,9 +53,9 @@ class WebRequestProxyingWebSocket
       mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
           handshake_client,
       bool has_extra_headers,
+      bool has_security_info,
       int process_id,
       int render_frame_id,
-      ukm::SourceIdObj ukm_source_id,
       content::BrowserContext* browser_context,
       WebRequestAPI::RequestIDGenerator* request_id_generator,
       WebRequestAPI::ProxySet* proxies);
@@ -87,23 +90,29 @@ class WebRequestProxyingWebSocket
                            OnBeforeSendHeadersCallback callback) override;
   void OnHeadersReceived(const std::string& headers,
                          const net::IPEndPoint& endpoint,
+                         const std::optional<net::SSLInfo>& ssl_info,
                          OnHeadersReceivedCallback callback) override;
+
+  // WebRequestAPI::Proxy:
+  void OnDNRExtensionUnloaded(const Extension* extension) override;
 
   static void StartProxying(
       WebSocketFactory factory,
       const GURL& url,
       const net::SiteForCookies& site_for_cookies,
-      const absl::optional<std::string>& user_agent,
+      const std::optional<std::string>& user_agent,
       mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
           handshake_client,
       bool has_extra_headers,
+      bool has_security_info,
       int process_id,
       int render_frame_id,
-      ukm::SourceIdObj ukm_source_id,
       WebRequestAPI::RequestIDGenerator* request_id_generator,
       const url::Origin& origin,
       content::BrowserContext* browser_context,
       WebRequestAPI::ProxySet* proxies);
+
+  static void EnsureAssociatedFactoryBuilt();
 
  private:
   void OnBeforeRequestComplete(int error_code);
@@ -113,8 +122,7 @@ class WebRequestProxyingWebSocket
   void ContinueToStartRequest(int error_code);
   void OnHeadersReceivedComplete(int error_code);
   void ContinueToHeadersReceived();
-  void OnAuthRequiredComplete(
-      ExtensionWebRequestEventRouter::AuthRequiredResponse rv);
+  void OnAuthRequiredComplete(WebRequestEventRouter::AuthRequiredResponse rv);
   void OnHeadersReceivedCompleteForAuth(const net::AuthChallengeInfo& auth_info,
                                         int rv);
   void ContinueToCompleted();
@@ -154,6 +162,7 @@ class WebRequestProxyingWebSocket
   GURL redirect_url_;
   bool is_done_ = false;
   bool has_extra_headers_;
+  bool has_security_info_;
   mojo::PendingRemote<network::mojom::WebSocket> websocket_;
   mojo::PendingReceiver<network::mojom::WebSocketClient> client_receiver_;
   network::mojom::WebSocketHandshakeResponsePtr handshake_response_ = nullptr;

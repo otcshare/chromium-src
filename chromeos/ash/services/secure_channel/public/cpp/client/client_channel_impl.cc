@@ -4,9 +4,9 @@
 
 #include "chromeos/ash/services/secure_channel/public/cpp/client/client_channel_impl.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -19,14 +19,17 @@ ClientChannelImpl::Factory* ClientChannelImpl::Factory::test_factory_ = nullptr;
 // static
 std::unique_ptr<ClientChannel> ClientChannelImpl::Factory::Create(
     mojo::PendingRemote<mojom::Channel> channel,
-    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver) {
+    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver,
+    mojo::PendingReceiver<mojom::NearbyConnectionStateListener>
+        nearby_connection_state_listener_receiver) {
   if (test_factory_) {
     return test_factory_->CreateInstance(std::move(channel),
                                          std::move(message_receiver_receiver));
   }
 
   return base::WrapUnique(new ClientChannelImpl(
-      std::move(channel), std::move(message_receiver_receiver)));
+      std::move(channel), std::move(message_receiver_receiver),
+      std::move(nearby_connection_state_listener_receiver)));
 }
 
 // static
@@ -38,9 +41,14 @@ ClientChannelImpl::Factory::~Factory() = default;
 
 ClientChannelImpl::ClientChannelImpl(
     mojo::PendingRemote<mojom::Channel> channel,
-    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver)
+    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver,
+    mojo::PendingReceiver<mojom::NearbyConnectionStateListener>
+        nearby_connection_state_listener_receiver)
     : channel_(std::move(channel)),
-      receiver_(this, std::move(message_receiver_receiver)) {
+      receiver_(this, std::move(message_receiver_receiver)),
+      nearby_connection_state_listener_receiver_(
+          this,
+          std::move(nearby_connection_state_listener_receiver)) {
   channel_.set_disconnect_with_reason_handler(
       base::BindOnce(&ClientChannelImpl::OnChannelDisconnected,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -62,6 +70,12 @@ void ClientChannelImpl::PerformGetConnectionMetadata(
 
 void ClientChannelImpl::OnMessageReceived(const std::string& message) {
   NotifyMessageReceived(message);
+}
+
+void ClientChannelImpl::OnNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  NotifyNearbyConnectionStateChanged(step, result);
 }
 
 void ClientChannelImpl::OnGetConnectionMetadata(

@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_DEVICE_SIGNALS_CORE_BROWSER_MOCK_SIGNALS_COLLECTOR_H_
 #define COMPONENTS_DEVICE_SIGNALS_CORE_BROWSER_MOCK_SIGNALS_COLLECTOR_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
 #include "components/device_signals/core/browser/signals_collector.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -25,6 +25,7 @@ class MockSignalsCollector : public SignalsCollector {
   MOCK_METHOD(void,
               GetSignal,
               (SignalName signal_name,
+               UserPermission permission,
                const SignalsAggregationRequest& request,
                SignalsAggregationResponse& response,
                base::OnceClosure done_closure),

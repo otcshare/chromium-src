@@ -10,10 +10,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 #include "base/bit_cast.h"
+#include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -78,8 +81,9 @@ TEST(StringNumberConversionsTest, Uint64ToString) {
       {std::numeric_limits<uint64_t>::max(), "18446744073709551615"},
   };
 
-  for (const auto& i : cases)
+  for (const auto& i : cases) {
     EXPECT_EQ(i.output, NumberToString(i.input));
+  }
 }
 
 TEST(StringNumberConversionsTest, SizeTToString) {
@@ -90,19 +94,20 @@ TEST(StringNumberConversionsTest, SizeTToString) {
     size_t input;
     std::string output;
   } cases[] = {
-    {0, "0"},
-    {9, "9"},
-    {42, "42"},
-    {INT_MAX, "2147483647"},
-    {2147483648U, "2147483648"},
+      {0, "0"},
+      {9, "9"},
+      {42, "42"},
+      {INT_MAX, "2147483647"},
+      {2147483648U, "2147483648"},
 #if SIZE_MAX > 4294967295U
-    {99999999999U, "99999999999"},
+      {99999999999U, "99999999999"},
 #endif
-    {size_t_max, size_t_max_string},
+      {size_t_max, size_t_max_string},
   };
 
-  for (const auto& i : cases)
+  for (const auto& i : cases) {
     EXPECT_EQ(i.output, NumberToString(i.input));
+  }
 }
 
 TEST(StringNumberConversionsTest, StringToInt) {
@@ -385,38 +390,38 @@ TEST(StringNumberConversionsTest, StringToSizeT) {
     size_t output;
     bool success;
   } cases[] = {
-    {"0", 0, true},
-    {"42", 42, true},
-    {"-2147483648", 0, false},
-    {"2147483647", INT_MAX, true},
-    {"-2147483649", 0, false},
-    {"-99999999999", 0, false},
-    {"2147483648", 2147483648U, true},
+      {"0", 0, true},
+      {"42", 42, true},
+      {"-2147483648", 0, false},
+      {"2147483647", INT_MAX, true},
+      {"-2147483649", 0, false},
+      {"-99999999999", 0, false},
+      {"2147483648", 2147483648U, true},
 #if SIZE_MAX > 4294967295U
-    {"99999999999", 99999999999U, true},
+      {"99999999999", 99999999999U, true},
 #endif
-    {"-9223372036854775808", 0, false},
-    {"09", 9, true},
-    {"-09", 0, false},
-    {"", 0, false},
-    {" 42", 42, false},
-    {"42 ", 42, false},
-    {"0x42", 0, false},
-    {"\t\n\v\f\r 42", 42, false},
-    {"blah42", 0, false},
-    {"42blah", 42, false},
-    {"blah42blah", 0, false},
-    {"-273.15", 0, false},
-    {"+98.6", 98, false},
-    {"--123", 0, false},
-    {"++123", 0, false},
-    {"-+123", 0, false},
-    {"+-123", 0, false},
-    {"-", 0, false},
-    {"-9223372036854775809", 0, false},
-    {"-99999999999999999999", 0, false},
-    {"999999999999999999999999", size_t_max, false},
-    {size_t_max_string, size_t_max, true},
+      {"-9223372036854775808", 0, false},
+      {"09", 9, true},
+      {"-09", 0, false},
+      {"", 0, false},
+      {" 42", 42, false},
+      {"42 ", 42, false},
+      {"0x42", 0, false},
+      {"\t\n\v\f\r 42", 42, false},
+      {"blah42", 0, false},
+      {"42blah", 42, false},
+      {"blah42blah", 0, false},
+      {"-273.15", 0, false},
+      {"+98.6", 98, false},
+      {"--123", 0, false},
+      {"++123", 0, false},
+      {"-+123", 0, false},
+      {"+-123", 0, false},
+      {"-", 0, false},
+      {"-9223372036854775809", 0, false},
+      {"-99999999999999999999", 0, false},
+      {"999999999999999999999999", size_t_max, false},
+      {size_t_max_string, size_t_max, true},
   };
 
   for (const auto& i : cases) {
@@ -696,12 +701,13 @@ TEST(StringNumberConversionsTest, HexStringToUInt64) {
 
 // Tests for HexStringToBytes, HexStringToString, HexStringToSpan.
 TEST(StringNumberConversionsTest, HexStringToBytesStringSpan) {
-  static const struct {
+  struct Cases {
     const std::string input;
     const char* output;
     size_t output_len;
     bool success;
-  } cases[] = {
+  };
+  static const auto cases = std::to_array<Cases>({
       {"0", "", 0, false},  // odd number of characters fails
       {"00", "\0", 1, true},
       {"42", "\x42", 1, true},
@@ -719,7 +725,7 @@ TEST(StringNumberConversionsTest, HexStringToBytesStringSpan) {
       {"0123456789ABCDEF", "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8, true},
       {"0123456789ABCDEF012345", "\x01\x23\x45\x67\x89\xAB\xCD\xEF\x01\x23\x45",
        11, true},
-  };
+  });
 
   for (size_t test_i = 0; test_i < std::size(cases); ++test_i) {
     const auto& test = cases[test_i];
@@ -753,7 +759,7 @@ TEST(StringNumberConversionsTest, HexStringToBytesStringSpan) {
       // On failure the output will only have been partially written (with
       // everything after the failure being 0).
       for (size_t i = 0; i < test.output_len; ++i) {
-        EXPECT_EQ(test.output[i], static_cast<char>(output[i]))
+        EXPECT_EQ(UNSAFE_TODO(test.output[i]), static_cast<char>(output[i]))
             << test_i << ": " << test.input;
       }
       for (size_t i = test.output_len; i < output.size(); ++i) {
@@ -765,8 +771,9 @@ TEST(StringNumberConversionsTest, HexStringToBytesStringSpan) {
     // Test HexStringToSpan() with an output that is 1 byte too small.
     {
       std::vector<uint8_t> output;
-      if (test.input.size() > 1)
+      if (test.input.size() > 1) {
         output.resize(test.input.size() / 2 - 1);
+      }
 
       EXPECT_FALSE(HexStringToSpan(test.input, output))
           << test_i << ": " << test.input;
@@ -784,11 +791,12 @@ TEST(StringNumberConversionsTest, HexStringToBytesStringSpan) {
 }
 
 TEST(StringNumberConversionsTest, StringToDouble) {
-  static const struct {
+  struct Cases {
     std::string input;
     double output;
     bool success;
-  } cases[] = {
+  };
+  static const auto cases = std::to_array<Cases>({
       // Test different forms of zero.
       {"0", 0.0, true},
       {"+0", 0.0, true},
@@ -862,7 +870,7 @@ TEST(StringNumberConversionsTest, StringToDouble) {
       // crbug.org/588726
       {"-0.0010000000000000000000000000000000000000001e-256",
        -1.0000000000000001e-259, true},
-  };
+  });
 
   for (size_t i = 0; i < std::size(cases); ++i) {
     SCOPED_TRACE(
@@ -870,8 +878,9 @@ TEST(StringNumberConversionsTest, StringToDouble) {
     double output;
     errno = 1;
     EXPECT_EQ(cases[i].success, StringToDouble(cases[i].input, &output));
-    if (cases[i].success)
+    if (cases[i].success) {
       EXPECT_EQ(1, errno) << i;  // confirm that errno is unchanged.
+    }
     EXPECT_DOUBLE_EQ(cases[i].output, output);
   }
 
@@ -910,21 +919,75 @@ TEST(StringNumberConversionsTest, DoubleToString) {
   // The following two values were seen in crashes in the wild.
   const char input_bytes[8] = {0, 0, 0, 0, '\xee', '\x6d', '\x73', '\x42'};
   double input = 0;
-  memcpy(&input, input_bytes, std::size(input_bytes));
+  UNSAFE_TODO(memcpy(&input, input_bytes, std::size(input_bytes)));
   EXPECT_EQ("1.335179083776e+12", NumberToString(input));
   const char input_bytes2[8] = {0,      0,      0,      '\xa0',
                                 '\xda', '\x6c', '\x73', '\x42'};
   input = 0;
-  memcpy(&input, input_bytes2, std::size(input_bytes2));
+  UNSAFE_TODO(memcpy(&input, input_bytes2, std::size(input_bytes2)));
   EXPECT_EQ("1.33489033216e+12", NumberToString(input));
 }
 
+TEST(StringNumberConversionsTest, DoubleToStringFixedPrecision) {
+  static const struct {
+    double input;
+    int digits;
+    const char* expected;
+  } cases[] = {
+      {0.0, 0, "0"},      {0.0, 3, "0.000"},     {0.5, 3, "0.500"},
+      {1.25, 3, "1.250"}, {1.33518, 3, "1.335"}, {1.33578, 3, "1.336"},
+  };
+
+  for (const auto& i : cases) {
+    EXPECT_EQ(i.expected, NumberToStringWithFixedPrecision(i.input, i.digits));
+    EXPECT_EQ(i.expected, UTF16ToUTF8(NumberToString16WithFixedPrecision(
+                              i.input, i.digits)));
+  }
+}
+
+TEST(StringNumberConversionsTest, AppendHexEncodedByte) {
+  std::string hex;
+  AppendHexEncodedByte(0, hex);
+  AppendHexEncodedByte(0, hex, false);
+  AppendHexEncodedByte(1, hex);
+  AppendHexEncodedByte(1, hex, false);
+  AppendHexEncodedByte(0xf, hex);
+  AppendHexEncodedByte(0xf, hex, false);
+  AppendHexEncodedByte(0x8a, hex);
+  AppendHexEncodedByte(0x8a, hex, false);
+  AppendHexEncodedByte(0xe0, hex);
+  AppendHexEncodedByte(0xe0, hex, false);
+  AppendHexEncodedByte(0xff, hex);
+  AppendHexEncodedByte(0xff, hex, false);
+  EXPECT_EQ(hex, "000001010F0f8A8aE0e0FFff");
+}
+
 TEST(StringNumberConversionsTest, HexEncode) {
-  std::string hex(HexEncode(nullptr, 0));
-  EXPECT_EQ(hex.length(), 0U);
-  unsigned char bytes[] = {0x01, 0xff, 0x02, 0xfe, 0x03, 0x80, 0x81};
-  hex = HexEncode(bytes, sizeof(bytes));
-  EXPECT_EQ(hex.compare("01FF02FE038081"), 0);
+  EXPECT_EQ(HexEncode(nullptr, 0), "");
+  EXPECT_EQ(HexEncode(base::span<uint8_t>()), "");
+  EXPECT_EQ(HexEncode(std::string()), "");
+  EXPECT_EQ(HexEncodeLower(base::span<uint8_t>()), "");
+  EXPECT_EQ(HexEncodeLower(std::string()), "");
+
+  const auto kBytes = std::to_array<uint8_t>({
+      0x01,
+      0xff,
+      0x02,
+      0xfe,
+      0x03,
+      0x80,
+      0x81,
+  });
+  EXPECT_EQ(HexEncode(kBytes.data(), sizeof(kBytes)), "01FF02FE038081");
+  // Implicit span conversion:
+  EXPECT_EQ(HexEncode(kBytes), "01FF02FE038081");
+  EXPECT_EQ(HexEncodeLower(kBytes), "01ff02fe038081");
+
+  const std::string kString = "\x01\xff";
+  EXPECT_EQ(HexEncode(kString.c_str(), kString.size()), "01FF");
+  // Implicit std::string_view conversion:
+  EXPECT_EQ(HexEncode(kString), "01FF");
+  EXPECT_EQ(HexEncodeLower(kString), "01ff");
 }
 
 // Test cases of known-bad strtod conversions that motivated the use of dmg_fp.

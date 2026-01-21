@@ -12,7 +12,6 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
@@ -20,7 +19,6 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.JniMocker;
 
 /** Unit tests for {@link PrefService}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -28,18 +26,14 @@ import org.chromium.base.test.util.JniMocker;
 public class PrefServiceTest {
     private static final String PREF = "42";
     private static final long NATIVE_HANDLE = 117;
-
-    @Rule
-    public JniMocker mocker = new JniMocker();
-    @Mock
-    private PrefService.Natives mNativeMock;
+    @Mock private PrefService.Natives mNativeMock;
 
     PrefService mPrefService;
 
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        mocker.mock(PrefServiceJni.TEST_HOOKS, mNativeMock);
+        PrefServiceJni.setInstanceForTesting(mNativeMock);
         mPrefService = new PrefService(NATIVE_HANDLE);
     }
 
@@ -80,6 +74,42 @@ public class PrefServiceTest {
     }
 
     @Test
+    public void testGetDouble() {
+        double expected = 1.23;
+
+        doReturn(expected).when(mNativeMock).getDouble(NATIVE_HANDLE, PREF);
+
+        assertEquals(expected, mPrefService.getDouble(PREF), 0.01f);
+    }
+
+    @Test
+    public void testSetDouble() {
+        double value = 12.34;
+
+        mPrefService.setDouble(PREF, value);
+
+        verify(mNativeMock).setDouble(eq(NATIVE_HANDLE), eq(PREF), eq(value));
+    }
+
+    @Test
+    public void testGetLong() {
+        long expected = 123L;
+
+        doReturn(expected).when(mNativeMock).getLong(NATIVE_HANDLE, PREF);
+
+        assertEquals(expected, mPrefService.getLong(PREF));
+    }
+
+    @Test
+    public void testSetLong() {
+        long value = 123L;
+
+        mPrefService.setLong(PREF, value);
+
+        verify(mNativeMock).setLong(eq(NATIVE_HANDLE), eq(PREF), eq(value));
+    }
+
+    @Test
     public void testGetString() {
         String expected = "foo";
 
@@ -99,11 +129,34 @@ public class PrefServiceTest {
 
     @Test
     public void testIsManaged() {
-        boolean expected = true;
+        for (boolean expected : new boolean[] {false, true}) {
+            doReturn(expected).when(mNativeMock).isManagedPreference(NATIVE_HANDLE, PREF);
+            assertEquals(expected, mPrefService.isManagedPreference(PREF));
+        }
+    }
 
-        doReturn(expected).when(mNativeMock).isManagedPreference(NATIVE_HANDLE, PREF);
+    @Test
+    public void testHasRecommendation() {
+        for (boolean expected : new boolean[] {false, true}) {
+            doReturn(expected).when(mNativeMock).hasRecommendation(NATIVE_HANDLE, PREF);
+            assertEquals(expected, mPrefService.hasRecommendation(PREF));
+        }
+    }
 
-        assertEquals(expected, mPrefService.isManagedPreference(PREF));
+    @Test
+    public void testIsFollowingRecommendation() {
+        for (boolean expected : new boolean[] {false, true}) {
+            doReturn(expected).when(mNativeMock).isFollowingRecommendation(NATIVE_HANDLE, PREF);
+            assertEquals(expected, mPrefService.isFollowingRecommendation(PREF));
+        }
+    }
+
+    @Test
+    public void testIsRecommended() {
+        for (boolean expected : new boolean[] {false, true}) {
+            doReturn(expected).when(mNativeMock).isRecommendedPreference(NATIVE_HANDLE, PREF);
+            assertEquals(expected, mPrefService.isRecommendedPreference(PREF));
+        }
     }
 
     @Test

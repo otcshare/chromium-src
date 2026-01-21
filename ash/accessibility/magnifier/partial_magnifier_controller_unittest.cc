@@ -8,6 +8,7 @@
 #include "ash/accessibility/magnifier/magnifier_glass.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/events/test/event_generator.h"
@@ -43,7 +44,7 @@ class PartialMagnifierControllerTestApi {
   }
 
  private:
-  PartialMagnifierController* controller_;
+  raw_ptr<PartialMagnifierController> controller_;
 };
 
 class PartialMagnifierControllerTest : public AshTestBase {
@@ -154,15 +155,6 @@ TEST_F(PartialMagnifierControllerTest, ActivatesOnlyForPointer) {
   EXPECT_FALSE(GetTestApi().is_active());
 }
 
-// The magnifier activates for mouse events.
-TEST_F(PartialMagnifierControllerTest, ActivatesForMouseEvents) {
-  GetController()->SetEnabled(true);
-  GetController()->set_allow_mouse_following(true);
-  ui::test::EventGenerator* event_generator = GetEventGenerator();
-  event_generator->MoveMouseBy(1, 1);
-  EXPECT_TRUE(GetTestApi().is_active());
-}
-
 // The magnifier is always located at pointer.
 TEST_F(PartialMagnifierControllerTest, MagnifierFollowsPointer) {
   ui::test::EventGenerator* event_generator = GetEventGenerator();
@@ -205,7 +197,7 @@ TEST_F(PartialMagnifierControllerTest, MagnifierAppearsCorrectDisplay) {
   event_generator->EnterPenPointerMode();
   UpdateDisplay("800x600,800x600");
   GetController()->SetEnabled(true);
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
 
   event_generator->PressTouch(gfx::Point(400, 300));
   EXPECT_EQ(GetPrimaryDisplay(),
@@ -223,7 +215,7 @@ TEST_F(PartialMagnifierControllerTest, MagnifierAppearsUnderPen) {
   ui::test::EventGenerator* event_generator = GetEventGenerator();
   UpdateDisplay("800x600,800x600");
   GetController()->SetEnabled(true);
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
 
   // Hold pen on primary; use mouse to move pointer to secondary
   event_generator->EnterPenPointerMode();

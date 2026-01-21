@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/public/test/browser_test_utils.h"
+
 #include "base/test/scoped_run_loop_timeout.h"
+#include "base/values.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -17,6 +19,7 @@
 namespace content {
 
 using ::testing::Eq;
+using ::testing::Optional;
 
 class NavigationObserver: public WebContentsObserver {
  public:
@@ -97,13 +100,13 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsErrors) {
     EXPECT_FALSE(0 == result);
     EXPECT_FALSE(1 == result);
     EXPECT_FALSE("}}" == result);  // EXPECT_EQ should fail
-    EXPECT_FALSE("}}" != result);  // As should EXPECT_NE
-    EXPECT_FALSE(nullptr == result);
+    EXPECT_TRUE("}}" != result);
+    EXPECT_FALSE(base::Value() == result);
 
     std::string expected_error =
         "a JavaScript error: \"SyntaxError: Unexpected token '}'\"\n";
     EXPECT_FALSE(expected_error == result);
-    EXPECT_EQ(expected_error, result.error);
+    EXPECT_THAT(result, EvalJsResult::ErrorIs(expected_error));
   }
 
   {
@@ -119,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsErrors) {
                    ^^^^^
 )";
     EXPECT_FALSE(expected_error == result);
-    EXPECT_EQ(expected_error, result.error);
+    EXPECT_THAT(result, EvalJsResult::ErrorIs(expected_error));
   }
 
   {
@@ -138,7 +141,7 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsErrors) {
         "            var y = z + x;\n"
         "                    ^^^^^\n";
     EXPECT_FALSE(expected_error == result);
-    EXPECT_EQ(expected_error, result.error);
+    EXPECT_THAT(result, EvalJsResult::ErrorIs(expected_error));
   }
 }
 
@@ -151,23 +154,25 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsAfterLifecycleUpdateErrors) {
     // Test syntax errors.
     auto result = EvalJsAfterLifecycleUpdate(shell(), "}}", "'hi'");
 
-    EXPECT_TRUE(result.value.is_none());
+    EXPECT_FALSE(result.is_ok());
     EXPECT_THAT(
-        result.error,
-        Eq("a JavaScript error: \"SyntaxError: Unexpected token '}'\n"
-           "    at eval (<anonymous>)\n"
-           "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
-           ":3:27\"\n"));
+        result,
+        EvalJsResult::ErrorIs(
+            Eq("a JavaScript error: \"SyntaxError: Unexpected token '}'\n"
+               "    at eval (<anonymous>)\n"
+               "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
+               ":3:27\"\n")));
 
     auto result2 = EvalJsAfterLifecycleUpdate(shell(), "'hi'", "]]");
 
-    EXPECT_TRUE(result2.value.is_none());
+    EXPECT_FALSE(result.is_ok());
     EXPECT_THAT(
-        result2.error,
-        Eq("a JavaScript error: \"SyntaxError: Unexpected token ']'\n"
-           "    at eval (<anonymous>)\n"
-           "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
-           ":5:37\"\n"));
+        result2,
+        EvalJsResult::ErrorIs(
+            Eq("a JavaScript error: \"SyntaxError: Unexpected token ']'\n"
+               "    at eval (<anonymous>)\n"
+               "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
+               ":5:37\"\n")));
   }
 
   {
@@ -175,51 +180,43 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsAfterLifecycleUpdateErrors) {
     auto result = EvalJsAfterLifecycleUpdate(
         shell(), "55; throw new Error('whoops');", "'hi'");
 
-    EXPECT_TRUE(result.value.is_none());
+    EXPECT_FALSE(result.is_ok());
     EXPECT_THAT(
-        result.error,
-        Eq("a JavaScript error: \"Error: whoops\n"
-           "    at eval (__const_std::string&_script__:1:11)\n"
-           "    at eval (<anonymous>)\n"
-           "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
-           ":3:27\"\n"));
+        result,
+        EvalJsResult::ErrorIs(
+            Eq("a JavaScript error: \"Error: whoops\n"
+               "    at eval (__const_std::string&_script__:1:11)\n"
+               "    at eval (<anonymous>)\n"
+               "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
+               ":3:27\"\n")));
 
     auto result2 = EvalJsAfterLifecycleUpdate(
         shell(), "'hi'", "55; throw new Error('whoopsie');");
 
-    EXPECT_TRUE(result2.value.is_none());
+    EXPECT_FALSE(result.is_ok());
     EXPECT_THAT(
-        result2.error,
-        Eq("a JavaScript error: \"Error: whoopsie\n"
-           "    at eval (__const_std::string&_script__:1:11)\n"
-           "    at eval (<anonymous>)\n"
-           "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
-           ":5:37\"\n"));
+        result2,
+        EvalJsResult::ErrorIs(
+            Eq("a JavaScript error: \"Error: whoopsie\n"
+               "    at eval (__const_std::string&_script__:1:11)\n"
+               "    at eval (<anonymous>)\n"
+               "    at \"__const_std::string&_EvalJsAfterLifecycleUpdate__\""
+               ":5:37\"\n")));
   }
 }
 
-IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsWithManualReply) {
+IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsWithDomAutomationController) {
   ASSERT_TRUE(embedded_test_server()->Start());
   EXPECT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title2.html")));
 
   std::string script = "window.domAutomationController.send(20); 'hi';";
 
-  // Calling domAutomationController is required for
-  // EXECUTE_SCRIPT_USE_MANUAL_REPLY.
-  EXPECT_EQ(20, EvalJs(shell(), script, EXECUTE_SCRIPT_USE_MANUAL_REPLY));
-
-  // Calling domAutomationController is an error with EvalJs.
-  auto result = EvalJs(shell(), script);
-  EXPECT_FALSE(20 == result);
-  EXPECT_FALSE("hi" == result);
-  EXPECT_THAT(result.error,
-              ::testing::EndsWith(
-                  "Calling domAutomationController.send is only allowed "
-                  "when using EXECUTE_SCRIPT_USE_MANUAL_REPLY. When "
-                  "using EvalJs(), the completion value is the value of "
-                  "the last executed statement. When using ExecJs(), "
-                  "there is no result value."));
+  // Calling domAutomationController is allowed with EvalJs, but doesn't
+  // influence the completion value.
+  EvalJsResult result = EvalJs(shell(), script);
+  EXPECT_NE(20, result);
+  EXPECT_EQ("hi", result);
 }
 
 IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsTimeout) {
@@ -232,12 +229,13 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsTimeout) {
 
   // Store the promise resolve function so it doesn't get GC'd.
   static std::string script = "new Promise(resolve => {window.r = resolve})";
-  static std::string error;
+  static std::optional<EvalJsResult> result;
   static Shell* shell_ptr = shell();
-  EXPECT_FATAL_FAILURE(error = EvalJs(shell_ptr, script).error,
-                       "RunLoop::Run() timed out.");
+  EXPECT_NONFATAL_FAILURE(result.emplace(EvalJs(shell_ptr, script)),
+                          "RunLoop::Run() timed out.");
 
-  EXPECT_THAT(error, Eq("Timeout waiting for Javascript to execute."));
+  EXPECT_THAT(result, Optional(EvalJsResult::ErrorIs(
+                          Eq("Timeout waiting for Javascript to execute."))));
 }
 
 IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, EvalJsNotBlockedByCSP) {
@@ -258,14 +256,25 @@ IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest,
                    "/set-header?Content-Security-Policy: script-src 'self'")));
 
   auto result = EvalJsAfterLifecycleUpdate(shell(), "'hi'", "");
-  EXPECT_TRUE(result.value.is_none());
+  EXPECT_FALSE(result.is_ok());
   EXPECT_THAT(
-      result.error,
-      ::testing::StartsWith(
+      result,
+      EvalJsResult::ErrorIs(::testing::StartsWith(
           "EvalJsAfterLifecycleUpdate encountered an EvalError, because eval() "
           "is blocked by the document's CSP on this page. To test content that "
           "is protected by CSP, consider using EvalJsAfterLifecycleUpdate in "
-          "an isolated world. Details:"));
+          "an isolated world. Details:")));
+}
+
+IN_PROC_BROWSER_TEST_F(EvalJsBrowserTest, ExecJsWithDomAutomationController) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title2.html")));
+
+  std::string script = "window.domAutomationController.send(20); 'hi';";
+
+  // Calling domAutomationController is allowed with ExecJs.
+  EXPECT_TRUE(ExecJs(shell(), script));
 }
 
 }  // namespace content

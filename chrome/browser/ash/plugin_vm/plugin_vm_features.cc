@@ -9,11 +9,12 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/guest_os/virtual_machines/virtual_machines_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
 
@@ -78,6 +79,11 @@ PolicyConfigured CheckPolicyConfigured(const Profile* profile) {
       ash::ProfileHelper::Get()->GetUserByProfile(profile);
   if (user == nullptr || !user->IsAffiliated()) {
     return PolicyConfigured::kErrorUserNotAffiliated;
+  }
+
+  // Check that VirtualMachines are allowed by policy.
+  if (!virtual_machines::AreVirtualMachinesAllowedByPolicy()) {
+    return PolicyConfigured::kErrorVirtualMachinesNotAllowed;
   }
 
   // Check that PluginVm is allowed to run by policy.
@@ -148,6 +154,8 @@ std::string PluginVmFeatures::IsAllowedDiagnostics::GetTopError() const {
       return "VMs are disallowed by policy";
     case PolicyConfigured::kErrorLicenseNotSetUp:
       return "License for the product is not set up in policy";
+    case PolicyConfigured::kErrorVirtualMachinesNotAllowed:
+      return "No Virtual Machines are allowed on this device";
   }
 
   return "";

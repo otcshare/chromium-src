@@ -8,7 +8,13 @@
 #include <GLES3/gl3.h>
 #include <stdint.h>
 
-#include "base/cxx17_backports.h"
+#include <algorithm>
+#include <array>
+
+#include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "build/build_config.h"
+#include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
 #include "gpu/config/gpu_test_config.h"
@@ -24,17 +30,17 @@ namespace {
 template <int factor, int index>
 float Weight(float /*dst*/[4], float src[4], float src1[4]) {
   if (factor == GL_SRC_COLOR)
-    return src[index];
+    return UNSAFE_TODO(src[index]);
   if (factor == GL_SRC_ALPHA)
-    return src[3];
+    return UNSAFE_TODO(src[3]);
   if (factor == GL_SRC1_COLOR_EXT)
-    return src1[index];
+    return UNSAFE_TODO(src1[index]);
   if (factor == GL_SRC1_ALPHA_EXT)
-    return src1[3];
+    return UNSAFE_TODO(src1[3]);
   if (factor == GL_ONE_MINUS_SRC1_COLOR_EXT)
-    return 1.0f - src1[index];
+    return 1.0f - UNSAFE_TODO(src1[index]);
   if (factor == GL_ONE_MINUS_SRC1_ALPHA_EXT)
-    return 1.0f - src1[3];
+    return 1.0f - UNSAFE_TODO(src1[3]);
   return 0.0f;
 }
 
@@ -44,18 +50,18 @@ void BlendEquationFuncAdd(float dst[4],
                           float src[4],
                           float src1[4],
                           uint8_t result[4]) {
-  float r[4];
+  std::array<float, 4> r;
   r[0] = src[0] * Weight<RGBs, 0>(dst, src, src1) +
          dst[0] * Weight<RGBd, 0>(dst, src, src1);
-  r[1] = src[1] * Weight<RGBs, 1>(dst, src, src1) +
-         dst[1] * Weight<RGBd, 1>(dst, src, src1);
-  r[2] = src[2] * Weight<RGBs, 2>(dst, src, src1) +
-         dst[2] * Weight<RGBd, 2>(dst, src, src1);
-  r[3] = src[3] * Weight<As, 3>(dst, src, src1) +
-         dst[3] * Weight<Ad, 3>(dst, src, src1);
+  r[1] = UNSAFE_TODO(src[1]) * Weight<RGBs, 1>(dst, src, src1) +
+         UNSAFE_TODO(dst[1]) * Weight<RGBd, 1>(dst, src, src1);
+  r[2] = UNSAFE_TODO(src[2]) * Weight<RGBs, 2>(dst, src, src1) +
+         UNSAFE_TODO(dst[2]) * Weight<RGBd, 2>(dst, src, src1);
+  r[3] = UNSAFE_TODO(src[3]) * Weight<As, 3>(dst, src, src1) +
+         UNSAFE_TODO(dst[3]) * Weight<Ad, 3>(dst, src, src1);
   for (int i = 0; i < 4; ++i) {
-    result[i] = static_cast<uint8_t>(
-        std::floor(base::clamp(r[i], 0.0f, 1.0f) * 255.0f));
+    UNSAFE_TODO(result[i]) =
+        static_cast<uint8_t>(std::floor(std::clamp(r[i], 0.0f, 1.0f) * 255.0f));
   }
 }
 
@@ -100,7 +106,15 @@ class EXTBlendFuncExtendedDrawTest : public testing::TestWithParam<bool> {
   }
 
   bool IsApplicable() const {
+#if BUILDFLAG(IS_ANDROID)
+    // Skip on Android due to Qualcomm driver bugs with implicitly assigned
+    // output locations and multiple render buffers. This extension is still
+    // used by Skia but Skia works around these bugs.
+    // http://anglebug.com/42267082
+    return false;
+#else
     return GLTestHelper::HasExtension("GL_EXT_blend_func_extended");
+#endif
   }
 
   virtual const char* GetVertexShader() {
@@ -220,7 +234,7 @@ TEST_P(EXTBlendFuncExtendedDrawTest, ESSL1FragColor) {
           });
   // clang-format on
   CreateProgramWithFragmentShader(kFragColorShader);
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
@@ -248,13 +262,21 @@ TEST_P(EXTBlendFuncExtendedDrawTest, ESSL1FragData) {
           });
   // clang-format on
   CreateProgramWithFragmentShader(kFragDataShader);
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
 class EXTBlendFuncExtendedES3DrawTest : public EXTBlendFuncExtendedDrawTest {
  protected:
   void SetUp() override {
+#if BUILDFLAG(IS_ANDROID)
+    auto* command_line = base::CommandLine::ForCurrentProcess();
+    if (!gles2::UsePassthroughCommandDecoder(command_line)) {
+      // TODO(crbug.com/40160681): remove suppression when passthrough ships.
+      GTEST_SKIP();
+    }
+#endif
+
     GLManager::Options options;
     options.size = gfx::Size(kWidth, kHeight);
     options.context_type = CONTEXT_TYPE_OPENGLES3;
@@ -297,7 +319,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ESSL3Var) {
   // clang-format on
   CreateProgramWithFragmentShader(kFragColorShader);
   glBindFragDataLocationIndexedEXT(program_, 0, 1, "SecondaryFragColor");
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
@@ -330,7 +352,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ESSL3BindArrayWithSimpleName) {
   CreateProgramWithFragmentShader(kFragDataShader);
   glBindFragDataLocationEXT(program_, 0, "FragData");
   glBindFragDataLocationIndexedEXT(program_, 0, 1, "SecondaryFragData");
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
@@ -398,7 +420,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ESSL3BindArrayAsArray) {
   CreateProgramWithFragmentShader(kFragDataShader);
   glBindFragDataLocationEXT(program_, 0, "FragData[0]");
   glBindFragDataLocationIndexedEXT(program_, 0, 1, "SecondaryFragData[0]");
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
@@ -434,7 +456,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ES3Getters) {
   EXPECT_EQ(static_cast<GLenum>(GL_INVALID_OPERATION), glGetError());
   index = glGetFragDataIndexEXT(program_, "SecondaryFragColor");
   EXPECT_EQ(static_cast<GLenum>(GL_INVALID_OPERATION), glGetError());
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
 
   // Getters return location and index after linking. Run twice to confirm that
   // setters do not affect the getters until next link.
@@ -460,7 +482,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ES3Getters) {
     glBindFragDataLocationIndexedEXT(program_, 0, 1, "FragColor");
   }
 
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
 
   location = glGetFragDataLocation(program_, "FragColor");
   EXPECT_EQ(0, location);
@@ -485,7 +507,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ES3Getters) {
   // Reset the settings and verify that the driver gets them correct.
   glBindFragDataLocationEXT(program_, 0, "FragColor");
   glBindFragDataLocationIndexedEXT(program_, 0, 1, "SecondaryFragColor");
-  LinkProgram();
+  EXPECT_TRUE(LinkProgram());
   DrawAndVerify();
 }
 
@@ -565,7 +587,7 @@ TEST_P(EXTBlendFuncExtendedES3DrawTest, ES3GettersArray) {
     }
 
     EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
-    LinkProgram();
+    EXPECT_TRUE(LinkProgram());
     EXPECT_EQ(kFragData0Location, glGetFragDataLocation(program_, "FragData"));
     EXPECT_EQ(0, glGetFragDataIndexEXT(program_, "FragData"));
     EXPECT_EQ(kFragData0Location,

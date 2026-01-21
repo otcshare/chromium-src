@@ -7,10 +7,12 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "third_party/blink/public/platform/media/multi_buffer.h"
+#include "third_party/blink/renderer/platform/media/multi_buffer.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace base {
@@ -39,6 +41,7 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
       MultiBuffer* multibuffer,
       int64_t start,
       int64_t end,
+      bool is_client_audio_element,
       base::RepeatingCallback<void(int64_t, int64_t)> progress_callback,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
@@ -63,11 +66,11 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
   // Tries to read |len| bytes from position |pos|.
   // Returns number of bytes read.
   // Safe to call from any thread.
-  int64_t TryReadAt(int64_t pos, uint8_t* data, int64_t len);
+  int64_t TryReadAt(int64_t pos, base::span<uint8_t> data);
 
   // Tries to read |len| bytes and update current position.
   // Returns number of bytes read.
-  int64_t TryRead(uint8_t* data, int64_t len);
+  int64_t TryRead(base::span<uint8_t>);
 
   // Wait until |len| bytes are available for reading.
   // Returns net::OK if |len| bytes are already available, otherwise it will
@@ -104,11 +107,6 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
   int64_t preload_high() const { return preload_high_; }
   int64_t preload_low() const { return preload_low_; }
 
-  // Setters
-  void SetIsClientAudioElement(bool is_client_audio_element) {
-    is_client_audio_element_ = is_client_audio_element;
-  }
-
  private:
   friend class MultiBufferDataSourceTest;
 
@@ -144,7 +142,7 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
   void Call(base::OnceClosure cb) const;
 
   // The multibuffer we're wrapping, not owned.
-  MultiBuffer* multibuffer_;
+  raw_ptr<MultiBuffer> multibuffer_;
 
   // We're not interested in reading past this position.
   int64_t end_;

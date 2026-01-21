@@ -5,15 +5,17 @@
 #include "extensions/renderer/api/runtime_hooks_delegate.h"
 
 #include <memory>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/values.h"
 #include "components/crx_file/id_util.h"
-#include "content/public/common/child_process_host.h"
-#include "extensions/common/api/messaging/serialization_format.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/extension_messages.h"
-#include "extensions/common/value_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/mojom/frame.mojom.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/renderer/api/messaging/message_target.h"
 #include "extensions/renderer/api/messaging/native_renderer_messaging_service.h"
 #include "extensions/renderer/api/messaging/send_message_tester.h"
@@ -27,12 +29,12 @@ namespace extensions {
 namespace {
 
 void CallAPIAndExpectError(v8::Local<v8::Context> context,
-                           base::StringPiece method_name,
-                           base::StringPiece args) {
+                           std::string_view method_name,
+                           std::string_view args) {
   SCOPED_TRACE(base::StringPrintf("Args: `%s`", args.data()));
   constexpr char kTemplate[] = "(function() { chrome.runtime.%s(%s); })";
 
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
   // Just verify some error was thrown. Expecting the exact error message
   // tends to rely too much on our argument spec code, which is tested
@@ -63,7 +65,8 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
     messaging_service_ =
         std::make_unique<NativeRendererMessagingService>(bindings_system());
 
-    bindings_system()->api_system()->GetHooksForAPI("runtime")->SetDelegate(
+    bindings_system()->api_system()->RegisterHooksDelegate(
+        "runtime",
         std::make_unique<RuntimeHooksDelegate>(messaging_service_.get()));
 
     extension_ = BuildExtension();
@@ -72,12 +75,13 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
     v8::HandleScope handle_scope(isolate());
     v8::Local<v8::Context> context = MainContext();
 
-    script_context_ = CreateScriptContext(context, extension_.get(),
-                                          Feature::BLESSED_EXTENSION_CONTEXT);
+    script_context_ = CreateScriptContext(
+        context, extension_.get(), mojom::ContextType::kPrivilegedExtension);
     script_context_->set_url(extension_->url());
     bindings_system()->UpdateBindingsForContext(script_context_);
   }
   void TearDown() override {
+    messaging_service_->InvalidatePorts(script_context_);
     script_context_ = nullptr;
     extension_ = nullptr;
     messaging_service_.reset();
@@ -86,7 +90,10 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
   bool UseStrictIPCMessageSender() override { return true; }
 
   virtual scoped_refptr<const Extension> BuildExtension() {
-    return ExtensionBuilder("foo").Build();
+    // TODO(https://crbug.com/40804030): Update this to use MV3.
+    // SendMessageTester needs to be updated since runtime.sendMessage() now
+    // returns a promise.
+    return ExtensionBuilder("foo").SetManifestVersion(2).Build();
   }
 
   NativeRendererMessagingService* messaging_service() {
@@ -98,7 +105,7 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  private:
   std::unique_ptr<NativeRendererMessagingService> messaging_service_;
 
-  ScriptContext* script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 
@@ -110,7 +117,7 @@ TEST_F(RuntimeHooksDelegateTest, RuntimeId) {
     scoped_refptr<const Extension> connectable_extension =
         ExtensionBuilder("connectable")
             .SetManifestPath("externally_connectable.matches",
-                             ListBuilder().Append("*://example.com/*").Build())
+                             base::Value::List().Append("*://example.com/*"))
             .Build();
     RegisterExtension(connectable_extension);
   }
@@ -131,7 +138,7 @@ TEST_F(RuntimeHooksDelegateTest, RuntimeId) {
     // an associated connectable extension, so pretend to be example.com.
     v8::Local<v8::Context> web_context = AddContext();
     ScriptContext* script_context =
-        CreateScriptContext(web_context, nullptr, Feature::WEB_PAGE_CONTEXT);
+        CreateScriptContext(web_context, nullptr, mojom::ContextType::kWebPage);
     script_context->set_url(GURL("http://example.com"));
     bindings_system()->UpdateBindingsForContext(script_context);
     v8::Local<v8::Value> id = get_id(web_context);
@@ -151,6 +158,20 @@ TEST_F(RuntimeHooksDelegateTest, GetManifest) {
   ASSERT_TRUE(manifest->IsObject());
   EXPECT_EQ(ValueToString(*extension()->manifest()->value()),
             V8ToString(manifest, context));
+}
+
+TEST_F(RuntimeHooksDelegateTest, GetVersion) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  v8::Local<v8::Function> get_version = FunctionFromString(
+      context, "(function() { return chrome.runtime.getVersion(); })");
+  v8::Local<v8::Value> version =
+      RunFunction(get_version, context, 0, nullptr);
+  ASSERT_FALSE(version.IsEmpty());
+  ASSERT_TRUE(version->IsString());
+  EXPECT_EQ(extension()->VersionString(),
+            V8ToBaseValue(version, context)->GetString());
 }
 
 TEST_F(RuntimeHooksDelegateTest, GetURL) {
@@ -224,17 +245,20 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   SendMessageTester tester(ipc_message_sender(), script_context(), 0,
                            "runtime");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   MessageTarget self_target = MessageTarget::ForExtension(extension()->id());
-  tester.TestSendMessage("''", R"("")", self_target, SendMessageTester::CLOSED);
+  tester.TestSendMessage("''", R"("")", self_target, SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendMessage("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, {includeTlsChannelId: true}",
                          kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage(
       "{data: 'hello'}, {includeTlsChannelId: true}, function() {}",
       kStandardMessage, self_target, SendMessageTester::OPEN);
@@ -245,13 +269,13 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
 
   tester.TestSendMessage(base::StringPrintf("'%s', {data: 'hello'}", other_id),
                          kStandardMessage, other_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage(
       base::StringPrintf("'%s', {data: 'hello'}, function() {}", other_id),
       kStandardMessage, other_target, SendMessageTester::OPEN);
   tester.TestSendMessage(base::StringPrintf("'%s', 'string message'", other_id),
                          R"("string message")", other_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   // The sender could omit the ID by passing null or undefined explicitly.
   // Regression tests for https://crbug.com/828664.
@@ -261,7 +285,7 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   tester.TestSendMessage("null, 'test', function() {}", R"("test")",
                          self_target, SendMessageTester::OPEN);
   tester.TestSendMessage("null, 'test'", R"("test")", self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("undefined, 'test', function() {}", R"("test")",
                          self_target, SendMessageTester::OPEN);
 
@@ -278,8 +302,7 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   // But probably not worth it at this time.
   tester.TestSendMessage(
       base::StringPrintf("'%s', {includeTlsChannelId: true}", other_id),
-      R"({"includeTlsChannelId":true})", other_target,
-      SendMessageTester::CLOSED);
+      R"({"includeTlsChannelId":true})", other_target, SendMessageTester::OPEN);
   tester.TestSendMessage(
       base::StringPrintf("'%s', {includeTlsChannelId: true}, function() {}",
                          other_id),
@@ -291,7 +314,7 @@ TEST_F(RuntimeHooksDelegateTest, SendMessageErrors) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
-  auto send_message = [context](base::StringPiece args) {
+  auto send_message = [context](std::string_view args) {
     CallAPIAndExpectError(context, "sendMessage", args);
   };
 
@@ -349,7 +372,7 @@ class RuntimeHooksDelegateNativeMessagingTest
   ~RuntimeHooksDelegateNativeMessagingTest() override {}
 
   scoped_refptr<const Extension> BuildExtension() override {
-    return ExtensionBuilder("foo").AddPermission("nativeMessaging").Build();
+    return ExtensionBuilder("foo").AddAPIPermission("nativeMessaging").Build();
   }
 };
 
@@ -369,12 +392,14 @@ TEST_F(RuntimeHooksDelegateNativeMessagingTest, ConnectNative) {
         "(function() { return chrome.runtime.connectNative(%s); })";
     PortId expected_port_id(script_context()->context_id(),
                             next_context_port_id++, true,
-                            SerializationFormat::kJson);
+                            mojom::SerializationFormat::kJson);
     MessageTarget expected_target(
         MessageTarget::ForNativeApp(expected_app_name));
-    EXPECT_CALL(*ipc_message_sender(),
-                SendOpenMessageChannel(script_context(), expected_port_id,
-                                       expected_target, kEmptyExpectedChannel));
+    EXPECT_CALL(
+        *ipc_message_sender(),
+        SendOpenMessageChannel(script_context(), expected_port_id,
+                               expected_target, mojom::ChannelType::kNative,
+                               kEmptyExpectedChannel, testing::_, testing::_));
 
     v8::Local<v8::Function> add_port = FunctionFromString(
         context, base::StringPrintf(kAddPortTemplate, args.c_str()));
@@ -387,7 +412,7 @@ TEST_F(RuntimeHooksDelegateNativeMessagingTest, ConnectNative) {
   run_connect_native("'native_app'", "native_app");
   run_connect_native("'some_other_native_app'", "some_other_native_app");
 
-  auto connect_native_error = [context](base::StringPiece args) {
+  auto connect_native_error = [context](std::string_view args) {
     CallAPIAndExpectError(context, "connectNative", args);
   };
   connect_native_error("'native_app', {name: 'name'}");
@@ -406,7 +431,7 @@ TEST_F(RuntimeHooksDelegateNativeMessagingTest, SendNativeMessage) {
       "'another_native_app', {alpha: 2}, function() {}", R"({"alpha":2})",
       "another_native_app");
 
-  auto send_native_message_error = [context](base::StringPiece args) {
+  auto send_native_message_error = [context](std::string_view args) {
     CallAPIAndExpectError(context, "sendNativeMessage", args);
   };
 
@@ -559,7 +584,7 @@ class RuntimeHooksDelegateNativeMessagingMV3Test
   scoped_refptr<const Extension> BuildExtension() override {
     return ExtensionBuilder("foo")
         .SetManifestKey("manifest_version", 3)
-        .AddPermission("nativeMessaging")
+        .AddAPIPermission("nativeMessaging")
         .Build();
   }
 };
@@ -590,7 +615,7 @@ TEST_F(RuntimeHooksDelegateNativeMessagingMV3Test, SendNativeMessage) {
     EXPECT_TRUE(result->IsUndefined());
   }
 
-  auto send_native_message_error = [context](base::StringPiece args) {
+  auto send_native_message_error = [context](std::string_view args) {
     CallAPIAndExpectError(context, "sendNativeMessage", args);
   };
 

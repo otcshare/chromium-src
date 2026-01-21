@@ -6,7 +6,7 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/animation/css_interpolation_environment.h"
-#include "third_party/blink/renderer/core/animation/css_interpolation_types_map.h"
+#include "third_party/blink/renderer/core/animation/interpolation_types_map.h"
 #include "third_party/blink/renderer/core/animation/invalidatable_interpolation.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 #include "third_party/blink/renderer/core/css/cssom/css_keyword_value.h"
@@ -88,13 +88,14 @@ void EnsureInterpolatedValueCached(ActiveInterpolations* interpolations,
   // document.GetStyleResolver().ResolveStyle(element). However that would
   // require our callers to properly register every animation they pass in
   // here, which the current tests do not do.
-  auto style = document.GetStyleResolver().CreateComputedStyle();
+  const ComputedStyle& initial_style =
+      document.GetStyleResolver().InitialStyle();
   StyleResolverState state(document, *element, nullptr /* StyleRecalcContext */,
-                           StyleRequest(style.get()));
-  state.SetStyle(style);
+                           StyleRequest(&initial_style));
+  state.CreateNewClonedStyle(initial_style);
 
   ActiveInterpolationsMap map;
-  map.Set(PropertyHandle("--unused"), interpolations);
+  map.Set(PropertyHandle(AtomicString("--unused")), interpolations);
 
   StyleCascade cascade(state);
   cascade.AddInterpolations(&map, CascadeOrigin::kAnimation);

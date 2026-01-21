@@ -7,19 +7,21 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/audio_renderer.h"
-#include "media/base/bind_to_current_loop.h"
+#include "media/base/media_client.h"
 #include "media/base/media_log.h"
 #include "media/base/media_resource.h"
 #include "media/base/media_switches.h"
@@ -28,6 +30,7 @@
 #include "media/base/video_decoder_config.h"
 #include "media/base/video_renderer.h"
 #include "media/base/wall_clock_time_source.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
 
@@ -69,7 +72,7 @@ class RendererImpl::RendererClientInternal final : public RendererClient {
     DCHECK(type_ == DemuxerStream::VIDEO);
     renderer_->OnVideoOpacityChange(opaque);
   }
-  void OnVideoFrameRateChange(absl::optional<int> fps) override {
+  void OnVideoFrameRateChange(std::optional<int> fps) override {
     DCHECK(type_ == DemuxerStream::VIDEO);
     renderer_->OnVideoFrameRateChange(fps);
   }
@@ -140,8 +143,8 @@ void RendererImpl::Initialize(MediaResource* media_resource,
   DCHECK_EQ(state_, STATE_UNINITIALIZED);
   DCHECK(init_cb);
   DCHECK(client);
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("media", "RendererImpl::Initialize",
-                                    TRACE_ID_LOCAL(this));
+  TRACE_EVENT_BEGIN("media", "RendererImpl::Initialize",
+                    perfetto::Track::FromPointer(this));
 
   client_ = client;
   media_resource_ = media_resource;
@@ -182,8 +185,7 @@ void RendererImpl::SetCdm(CdmContext* cdm_context,
   InitializeAudioRenderer();
 }
 
-void RendererImpl::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+void RendererImpl::SetLatencyHint(std::optional<base::TimeDelta> latency_hint) {
   DVLOG(1) << __func__;
   DCHECK(!latency_hint || (*latency_hint >= base::TimeDelta()));
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
@@ -203,14 +205,23 @@ void RendererImpl::SetPreservesPitch(bool preserves_pitch) {
     audio_renderer_->SetPreservesPitch(preserves_pitch);
 }
 
-void RendererImpl::SetWasPlayedWithUserActivation(
-    bool was_played_with_user_activation) {
+void RendererImpl::SetRenderMutedAudio(bool render_muted_audio) {
+  DVLOG(1) << __func__;
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  if (audio_renderer_) {
+    audio_renderer_->SetRenderMutedAudio(render_muted_audio);
+  }
+}
+
+void RendererImpl::SetWasPlayedWithUserActivationAndHighMediaEngagement(
+    bool was_played_with_user_activation_and_high_media_engagement) {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   if (audio_renderer_)
-    audio_renderer_->SetWasPlayedWithUserActivation(
-        was_played_with_user_activation);
+    audio_renderer_->SetWasPlayedWithUserActivationAndHighMediaEngagement(
+        was_played_with_user_activation_and_high_media_engagement);
 }
 
 void RendererImpl::Flush(base::OnceClosure flush_cb) {
@@ -218,11 +229,11 @@ void RendererImpl::Flush(base::OnceClosure flush_cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!flush_cb_);
   DCHECK(!(pending_audio_track_change_ || pending_video_track_change_));
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("media", "RendererImpl::Flush",
-                                    TRACE_ID_LOCAL(this));
+  TRACE_EVENT_BEGIN("media", "RendererImpl::Flush",
+                    perfetto::Track::FromPointer(this));
 
   if (state_ == STATE_FLUSHED) {
-    flush_cb_ = BindToCurrentLoop(std::move(flush_cb));
+    flush_cb_ = base::BindPostTaskToCurrentDefault(std::move(flush_cb));
     FinishFlush();
     return;
   }
@@ -354,7 +365,7 @@ bool RendererImpl::HasEncryptedStream() {
   std::vector<DemuxerStream*> demuxer_streams =
       media_resource_->GetAllStreams();
 
-  for (auto* stream : demuxer_streams) {
+  for (media::DemuxerStream* stream : demuxer_streams) {
     if (stream->type() == DemuxerStream::AUDIO &&
         stream->audio_decoder_config().is_encrypted())
       return true;
@@ -368,16 +379,15 @@ bool RendererImpl::HasEncryptedStream() {
 
 void RendererImpl::FinishInitialization(PipelineStatus status) {
   DCHECK(init_cb_);
-  TRACE_EVENT_NESTABLE_ASYNC_END1("media", "RendererImpl::Initialize",
-                                  TRACE_ID_LOCAL(this), "status",
-                                  PipelineStatusToString(status));
+  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+                  PipelineStatusToString(status));
   std::move(init_cb_).Run(status);
 }
 
 void RendererImpl::FinishFlush() {
   DCHECK(flush_cb_);
-  TRACE_EVENT_NESTABLE_ASYNC_END0("media", "RendererImpl::Flush",
-                                  TRACE_ID_LOCAL(this));
+  TRACE_EVENT_END("media", /*"RendererImpl::Flush"*/
+                  perfetto::Track::FromPointer(this));
   std::move(flush_cb_).Run();
 }
 
@@ -392,7 +402,9 @@ void RendererImpl::InitializeAudioRenderer() {
   DemuxerStream* audio_stream =
       media_resource_->GetFirstStream(DemuxerStream::AUDIO);
 
-  if (!audio_stream) {
+  MediaClient* media_client = GetMediaClient();
+  if (!audio_stream ||
+      (media_client && media_client->ShouldSuppressAudioTracks())) {
     audio_renderer_.reset();
     task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&RendererImpl::OnAudioRendererInitializeDone,
@@ -445,6 +457,14 @@ void RendererImpl::InitializeVideoRenderer() {
 
   if (!video_stream) {
     video_renderer_.reset();
+
+    // Something has disabled all audio and video streams, so fail
+    // initialization.
+    if (!audio_renderer_) {
+      FinishInitialization(PIPELINE_ERROR_COULD_NOT_RENDER);
+      return;
+    }
+
     task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&RendererImpl::OnVideoRendererInitializeDone,
                                   weak_this_, PIPELINE_OK));
@@ -661,6 +681,7 @@ void RendererImpl::RestartAudioRenderer(
     return;
   }
 
+  time_source_->SetMediaTime(time);
   {
     base::AutoLock lock(restarting_audio_lock_);
     audio_playing_ = true;
@@ -826,7 +847,6 @@ void RendererImpl::PausePlayback() {
     case STATE_INIT_PENDING_CDM:
     case STATE_INITIALIZING:
       NOTREACHED() << "Invalid state: " << state_;
-      break;
 
     case STATE_ERROR:
       // An error state may occur at any time.
@@ -964,7 +984,7 @@ void RendererImpl::OnVideoOpacityChange(bool opaque) {
   client_->OnVideoOpacityChange(opaque);
 }
 
-void RendererImpl::OnVideoFrameRateChange(absl::optional<int> fps) {
+void RendererImpl::OnVideoFrameRateChange(std::optional<int> fps) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   client_->OnVideoFrameRateChange(fps);
 }
@@ -980,79 +1000,74 @@ void RendererImpl::CleanUpTrackChange(base::OnceClosure on_finished,
   std::move(on_finished).Run();
 }
 
-void RendererImpl::OnSelectedVideoTracksChanged(
-    const std::vector<DemuxerStream*>& enabled_tracks,
-    base::OnceClosure change_completed_cb) {
+void RendererImpl::OnTracksChanged(DemuxerStream::Type track_type,
+                                   DemuxerStream* stream,
+                                   base::OnceClosure change_completed_cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  TRACE_EVENT0("media", "RendererImpl::OnSelectedVideoTracksChanged");
-
-  DCHECK_LT(enabled_tracks.size(), 2u);
-  DemuxerStream* stream = enabled_tracks.empty() ? nullptr : enabled_tracks[0];
-
-  if (!stream && !video_playing_) {
-    std::move(change_completed_cb).Run();
-    return;
-  }
-
+  TRACE_EVENT1("media", "RendererImpl::OnTracksChanged", "track_type",
+               track_type);
   // 'fixing' the stream -> restarting if its the same stream,
   //                        reinitializing if it is different.
   base::OnceClosure fix_stream_cb;
-  if (stream && stream != current_video_stream_) {
-    fix_stream_cb =
-        base::BindOnce(&RendererImpl::ReinitializeVideoRenderer, weak_this_,
-                       stream, GetMediaTime(), std::move(change_completed_cb));
-  } else {
-    fix_stream_cb = base::BindOnce(
-        &RendererImpl::RestartVideoRenderer, weak_this_, current_video_stream_,
-        GetMediaTime(), std::move(change_completed_cb));
+  switch (track_type) {
+    case DemuxerStream::AUDIO: {
+      if (!stream && !audio_playing_) {
+        std::move(change_completed_cb).Run();
+        return;
+      }
+
+      if (stream && stream != current_audio_stream_) {
+        fix_stream_cb = base::BindOnce(&RendererImpl::ReinitializeAudioRenderer,
+                                       weak_this_, stream, GetMediaTime(),
+                                       std::move(change_completed_cb));
+      } else {
+        fix_stream_cb =
+            base::BindOnce(&RendererImpl::RestartAudioRenderer, weak_this_,
+                           current_audio_stream_, GetMediaTime(),
+                           std::move(change_completed_cb));
+      }
+
+      {
+        base::AutoLock lock(restarting_audio_lock_);
+        pending_audio_track_change_ = true;
+        restarting_audio_time_ = time_source_->CurrentMediaTime();
+      }
+
+      if (audio_playing_) {
+        PausePlayback();
+      }
+
+      audio_renderer_->Flush(base::BindOnce(
+          &RendererImpl::CleanUpTrackChange, weak_this_,
+          std::move(fix_stream_cb), &audio_ended_, &audio_playing_));
+      return;
+    }
+    case DemuxerStream::VIDEO: {
+      if (!stream && !video_playing_) {
+        std::move(change_completed_cb).Run();
+        return;
+      }
+
+      if (stream && stream != current_video_stream_) {
+        fix_stream_cb = base::BindOnce(&RendererImpl::ReinitializeVideoRenderer,
+                                       weak_this_, stream, GetMediaTime(),
+                                       std::move(change_completed_cb));
+      } else {
+        fix_stream_cb =
+            base::BindOnce(&RendererImpl::RestartVideoRenderer, weak_this_,
+                           current_video_stream_, GetMediaTime(),
+                           std::move(change_completed_cb));
+      }
+
+      pending_video_track_change_ = true;
+      video_renderer_->Flush(base::BindOnce(
+          &RendererImpl::CleanUpTrackChange, weak_this_,
+          std::move(fix_stream_cb), &video_ended_, &video_playing_));
+      return;
+    }
+    default:
+      NOTREACHED();
   }
-
-  pending_video_track_change_ = true;
-  video_renderer_->Flush(base::BindOnce(&RendererImpl::CleanUpTrackChange,
-                                        weak_this_, std::move(fix_stream_cb),
-                                        &video_ended_, &video_playing_));
-}
-
-void RendererImpl::OnEnabledAudioTracksChanged(
-    const std::vector<DemuxerStream*>& enabled_tracks,
-    base::OnceClosure change_completed_cb) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  TRACE_EVENT0("media", "RendererImpl::OnEnabledAudioTracksChanged");
-
-  DCHECK_LT(enabled_tracks.size(), 2u);
-  DemuxerStream* stream = enabled_tracks.empty() ? nullptr : enabled_tracks[0];
-
-  if (!stream && !audio_playing_) {
-    std::move(change_completed_cb).Run();
-    return;
-  }
-
-  // 'fixing' the stream -> restarting if its the same stream,
-  //                        reinitializing if it is different.
-  base::OnceClosure fix_stream_cb;
-
-  if (stream && stream != current_audio_stream_) {
-    fix_stream_cb =
-        base::BindOnce(&RendererImpl::ReinitializeAudioRenderer, weak_this_,
-                       stream, GetMediaTime(), std::move(change_completed_cb));
-  } else {
-    fix_stream_cb = base::BindOnce(
-        &RendererImpl::RestartAudioRenderer, weak_this_, current_audio_stream_,
-        GetMediaTime(), std::move(change_completed_cb));
-  }
-
-  {
-    base::AutoLock lock(restarting_audio_lock_);
-    pending_audio_track_change_ = true;
-    restarting_audio_time_ = time_source_->CurrentMediaTime();
-  }
-
-  if (audio_playing_)
-    PausePlayback();
-
-  audio_renderer_->Flush(base::BindOnce(&RendererImpl::CleanUpTrackChange,
-                                        weak_this_, std::move(fix_stream_cb),
-                                        &audio_ended_, &audio_playing_));
 }
 
 RendererType RendererImpl::GetRendererType() {

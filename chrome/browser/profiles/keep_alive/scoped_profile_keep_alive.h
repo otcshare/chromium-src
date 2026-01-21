@@ -5,7 +5,9 @@
 #ifndef CHROME_BROWSER_PROFILES_KEEP_ALIVE_SCOPED_PROFILE_KEEP_ALIVE_H_
 #define CHROME_BROWSER_PROFILES_KEEP_ALIVE_SCOPED_PROFILE_KEEP_ALIVE_H_
 
-#include "base/memory/raw_ptr.h"
+#include <memory>
+
+#include "base/memory/weak_ptr.h"
 
 class Profile;
 enum class ProfileKeepAliveOrigin;
@@ -25,25 +27,38 @@ enum class ProfileKeepAliveOrigin;
 // off-the-record Profile triggers a DCHECK.
 class ScopedProfileKeepAlive {
  public:
-  ScopedProfileKeepAlive(const Profile* profile, ProfileKeepAliveOrigin origin);
+  // Same as the constructor, but returns nullptr if the keepalive count could
+  // not be incremented.
+  //
+  // TODO(crbug.com/368360956): Migrate existing call-sites to this, and remove
+  // the public constructor.
+  [[nodiscard]] static std::unique_ptr<ScopedProfileKeepAlive> TryAcquire(
+      Profile* profile,
+      ProfileKeepAliveOrigin origin);
+
+  ScopedProfileKeepAlive(Profile* profile, ProfileKeepAliveOrigin origin);
   ~ScopedProfileKeepAlive();
 
   ScopedProfileKeepAlive(const ScopedProfileKeepAlive&) = delete;
   ScopedProfileKeepAlive& operator=(const ScopedProfileKeepAlive&) = delete;
 
-  const Profile* profile() { return profile_; }
-  ProfileKeepAliveOrigin origin() { return origin_; }
+  Profile* profile() { return profile_.get(); }
+  ProfileKeepAliveOrigin origin() const { return origin_; }
 
  private:
+  // For TryAcquire().
+  ScopedProfileKeepAlive();
+
   // Called after the ScopedProfileKeepAlive has been deleted, so this is a
   // static method where we pass parameters manually.
-  static void RemoveKeepAliveOnUIThread(const Profile* profile,
+  static void RemoveKeepAliveOnUIThread(base::WeakPtr<Profile> profile,
                                         ProfileKeepAliveOrigin origin);
 
-  // TODO(crbug.com/1298696): unit_tests breaks with MTECheckedPtr
-  // enabled. Triage.
-  const raw_ptr<const Profile, DegradeToNoOpWhenMTE> profile_;
-  const ProfileKeepAliveOrigin origin_;
+  // Helper for TryAcquire() and the constructor.
+  static bool AddKeepAlive(Profile* profile, ProfileKeepAliveOrigin origin);
+
+  base::WeakPtr<Profile> profile_;
+  ProfileKeepAliveOrigin origin_;
 };
 
 #endif  // CHROME_BROWSER_PROFILES_KEEP_ALIVE_SCOPED_PROFILE_KEEP_ALIVE_H_

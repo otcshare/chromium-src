@@ -26,6 +26,8 @@
 #include <memory>
 
 #include "base/check.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/container_names.h"
 #include "media/base/media_export.h"
 #include "media/ffmpeg/ffmpeg_deleters.h"
@@ -39,7 +41,7 @@ class MEDIA_EXPORT FFmpegURLProtocol {
  public:
   // Read the given amount of bytes into data, returns the number of bytes read
   // if successful, kReadError otherwise.
-  virtual int Read(int size, uint8_t* data) = 0;
+  virtual int Read(base::span<uint8_t> data) = 0;
 
   // Returns true and the current file position for this file, false if the
   // file position could not be retrieved.
@@ -84,10 +86,14 @@ class MEDIA_EXPORT FFmpegGlue {
  private:
   bool open_called_ = false;
   bool detected_hls_ = false;
-  AVFormatContext* format_context_ = nullptr;
+
+  // DanglingUntriaged: We seem to get a dangling pointer warning
+  // if avformat_open_input fails. It seems spurious, possibly this pointer
+  // is meant to be owning?
+  raw_ptr<AVFormatContext, DanglingUntriaged> format_context_ = nullptr;
   std::unique_ptr<AVIOContext, ScopedPtrAVFree> avio_context_;
   container_names::MediaContainerName container_ =
-      container_names::CONTAINER_UNKNOWN;
+      container_names::MediaContainerName::kContainerUnknown;
 };
 
 }  // namespace media

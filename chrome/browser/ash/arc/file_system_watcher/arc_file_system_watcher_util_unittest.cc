@@ -118,16 +118,6 @@ TEST(ArcFileSystemWatcherUtilTest, GetAndroidPath) {
                 .value());
 }
 
-TEST(ArcFileSystemWatcherUtilTest, AndroidSupportedMediaExtensionsSorted) {
-  const auto less_comparator = [](const char* a, const char* b) {
-    return strcmp(a, b) < 0;
-  };
-  EXPECT_TRUE(std::is_sorted(
-      kAndroidSupportedMediaExtensions,
-      kAndroidSupportedMediaExtensions + kAndroidSupportedMediaExtensionsSize,
-      less_comparator));
-}
-
 TEST(ArcFileSystemWatcherUtilTest, HasAndroidSupportedMediaExtension) {
   EXPECT_TRUE(HasAndroidSupportedMediaExtension(
       base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.3g2"))));
@@ -139,6 +129,10 @@ TEST(ArcFileSystemWatcherUtilTest, HasAndroidSupportedMediaExtension) {
       base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.xmf"))));
   EXPECT_TRUE(HasAndroidSupportedMediaExtension(
       base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.nef"))));
+  EXPECT_TRUE(HasAndroidSupportedMediaExtension(
+      base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.txt"))));
+  EXPECT_TRUE(HasAndroidSupportedMediaExtension(
+      base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.pdf"))));
 
   EXPECT_TRUE(HasAndroidSupportedMediaExtension(
       base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.JPEG"))));
@@ -148,7 +142,7 @@ TEST(ArcFileSystemWatcherUtilTest, HasAndroidSupportedMediaExtension) {
       base::FilePath(FILE_PATH_LITERAL("/tmp/.kitten.jpg"))));
 
   EXPECT_FALSE(HasAndroidSupportedMediaExtension(
-      base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.txt"))));
+      base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.zip"))));
   EXPECT_FALSE(HasAndroidSupportedMediaExtension(
       base::FilePath(FILE_PATH_LITERAL("/tmp/kitten.jpg.exe"))));
   EXPECT_FALSE(HasAndroidSupportedMediaExtension(

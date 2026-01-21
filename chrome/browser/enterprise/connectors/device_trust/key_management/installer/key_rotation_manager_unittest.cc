@@ -5,11 +5,13 @@
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/key_rotation_manager.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -18,13 +20,13 @@
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/mock_key_persistence_delegate.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/signing_key_pair.h"
+#include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/key_rotation_types.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/metrics_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
-#include "crypto/scoped_mock_unexportable_key_provider.h"
+#include "crypto/scoped_fake_unexportable_key_provider.h"
 #include "crypto/unexportable_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 using BPKUR = enterprise_management::BrowserPublicKeyUploadRequest;
@@ -32,7 +34,6 @@ using testing::_;
 using testing::ByMove;
 using testing::ElementsAre;
 using testing::InSequence;
-using testing::Invoke;
 using testing::Not;
 using testing::Pair;
 using testing::Return;
@@ -68,29 +69,27 @@ constexpr char kHistogramPrefix[] = "Enterprise.DeviceTrust.RotateSigningKey";
 
 // All use-cases of upload failures resulting in the key rotation manager
 // attempting to rollback any local state.
-constexpr std::array<std::tuple<HttpResponseCode,
-                                RotationStatus,
-                                KeyRotationManager::Result,
-                                bool>,
-                     6>
+constexpr std::array<
+    std::tuple<HttpResponseCode, RotationStatus, KeyRotationResult, bool>,
+    6>
     kUploadFailureTestCases = {{
         {kHardFailureCode, RotationStatus::FAILURE_CANNOT_UPLOAD_KEY,
-         KeyRotationManager::Result::FAILED, true},
+         KeyRotationResult::kFailed, true},
         {kTransientFailureCode,
          RotationStatus::FAILURE_CANNOT_UPLOAD_KEY_TRIES_EXHAUSTED,
-         KeyRotationManager::Result::FAILED, true},
+         KeyRotationResult::kFailed, true},
         {kKeyConflictFailureCode, RotationStatus::FAILURE_CANNOT_UPLOAD_KEY,
-         KeyRotationManager::Result::FAILED_KEY_CONFLICT, true},
+         KeyRotationResult::kFailedKeyConflict, true},
         {kHardFailureCode,
          RotationStatus::FAILURE_CANNOT_UPLOAD_KEY_RESTORE_FAILED,
-         KeyRotationManager::Result::FAILED, false},
+         KeyRotationResult::kFailed, false},
         {kTransientFailureCode,
          RotationStatus::
              FAILURE_CANNOT_UPLOAD_KEY_TRIES_EXHAUSTED_RESTORE_FAILED,
-         KeyRotationManager::Result::FAILED, false},
+         KeyRotationResult::kFailed, false},
         {kKeyConflictFailureCode,
          RotationStatus::FAILURE_CANNOT_UPLOAD_KEY_RESTORE_FAILED,
-         KeyRotationManager::Result::FAILED_KEY_CONFLICT, false},
+         KeyRotationResult::kFailedKeyConflict, false},
     }};
 
 }  // namespace
@@ -98,7 +97,7 @@ constexpr std::array<std::tuple<HttpResponseCode,
 class KeyRotationManagerTest : public testing::Test {
  protected:
   KeyRotationManagerTest()
-      : key_provider_(crypto::GetUnexportableKeyProvider()) {
+      : key_provider_(crypto::GetUnexportableKeyProvider(/*config=*/{})) {
     ResetHistograms();
     auto mock_network_delegate =
         std::make_unique<StrictMock<MockKeyNetworkDelegate>>();
@@ -120,26 +119,27 @@ class KeyRotationManagerTest : public testing::Test {
   void SetUploadCode(HttpResponseCode response_code) {
     EXPECT_CALL(*mock_network_delegate_,
                 SendPublicKeyToDmServer(GURL(kDmServerUrl), kDmToken, _, _))
-        .WillOnce(Invoke(
-            [&, response_code](const GURL& url, const std::string& dm_token,
-                               const std::string& body,
-                               base::OnceCallback<void(int)> callback) {
-              captured_upload_body_ = body;
-              std::move(callback).Run(response_code);
-            }));
+        .WillOnce([&, response_code](const GURL& url,
+                                     const std::string& dm_token,
+                                     const std::string& body,
+                                     base::OnceCallback<void(int)> callback) {
+          captured_upload_body_ = body;
+          std::move(callback).Run(response_code);
+        });
   }
 
   void SetUpOldKey(bool exists = true) {
     if (exists) {
-      auto old_key = std::make_unique<SigningKeyPair>(
+      old_key_pair_ = base::MakeRefCounted<SigningKeyPair>(
           CreateHardwareKey(), BPKUR::CHROME_BROWSER_HW_KEY);
-      old_key_pair_ = old_key.get();
-      EXPECT_CALL(*mock_persistence_delegate_, LoadKeyPair())
-          .WillOnce(Return(ByMove(std::move(old_key))));
+      EXPECT_CALL(*mock_persistence_delegate_,
+                  LoadKeyPair(KeyStorageType::kPermanent, _))
+          .WillOnce(Return(old_key_pair_));
     } else {
-      old_key_pair_ = nullptr;
-      EXPECT_CALL(*mock_persistence_delegate_, LoadKeyPair())
-          .WillOnce(Invoke([]() { return nullptr; }));
+      old_key_pair_.reset();
+      EXPECT_CALL(*mock_persistence_delegate_,
+                  LoadKeyPair(KeyStorageType::kPermanent, _))
+          .WillOnce([]() { return nullptr; });
     }
   }
 
@@ -150,14 +150,14 @@ class KeyRotationManagerTest : public testing::Test {
 
   void SetUpNewKeyCreation(bool success = true) {
     if (success) {
-      auto new_key = std::make_unique<SigningKeyPair>(
+      new_key_pair_ = base::MakeRefCounted<SigningKeyPair>(
           CreateHardwareKey(), BPKUR::CHROME_BROWSER_HW_KEY);
-      new_key_pair_ = new_key.get();
       EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair())
-          .WillOnce(Return(ByMove(std::move(new_key))));
+          .WillOnce(Return(new_key_pair_));
     } else {
-      EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair())
-          .WillOnce(Invoke([]() { return nullptr; }));
+      EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair()).WillOnce([]() {
+        return nullptr;
+      });
     }
   }
 
@@ -190,9 +190,8 @@ class KeyRotationManagerTest : public testing::Test {
         .WillOnce(Return(success));
   }
 
-  void RunRotate(KeyRotationManager::Result expected_result,
-                 bool with_nonce = false) {
-    base::test::TestFuture<KeyRotationManager::Result> future;
+  void RunRotate(KeyRotationResult expected_result, bool with_nonce = false) {
+    base::test::TestFuture<KeyRotationResult> future;
     key_rotation_manager_->Rotate(GURL(kDmServerUrl), kDmToken,
                                   with_nonce ? kFakeNonce : std::string(),
                                   future.GetCallback());
@@ -203,18 +202,19 @@ class KeyRotationManagerTest : public testing::Test {
     histogram_tester_ = std::make_unique<base::HistogramTester>();
   }
 
-  //   test::ScopedKeyPersistenceDelegateFactory scoped_factory_;
   base::test::TaskEnvironment task_environment_;
-  crypto::ScopedMockUnexportableKeyProvider scoped_key_provider_;
+  crypto::ScopedFakeUnexportableKeyProvider scoped_key_provider_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider_;
 
-  raw_ptr<StrictMock<MockKeyNetworkDelegate>> mock_network_delegate_;
-  raw_ptr<StrictMock<MockKeyPersistenceDelegate>> mock_persistence_delegate_;
+  raw_ptr<StrictMock<MockKeyNetworkDelegate>, DanglingUntriaged>
+      mock_network_delegate_;
+  raw_ptr<StrictMock<MockKeyPersistenceDelegate>, DanglingUntriaged>
+      mock_persistence_delegate_;
 
-  raw_ptr<SigningKeyPair> old_key_pair_;
-  raw_ptr<SigningKeyPair> new_key_pair_;
-  absl::optional<std::string> captured_upload_body_;
+  scoped_refptr<SigningKeyPair> old_key_pair_;
+  scoped_refptr<SigningKeyPair> new_key_pair_;
+  std::optional<std::string> captured_upload_body_;
 
   std::unique_ptr<KeyRotationManager> key_rotation_manager_;
 };
@@ -222,10 +222,10 @@ class KeyRotationManagerTest : public testing::Test {
 TEST_F(KeyRotationManagerTest, Rotate_InvalidDMServerURL) {
   SetUpOldKey(/*exists=*/true);
 
-  base::test::TestFuture<KeyRotationManager::Result> future;
+  base::test::TestFuture<KeyRotationResult> future;
   key_rotation_manager_->Rotate(GURL(), kDmToken, kFakeNonce,
                                 future.GetCallback());
-  EXPECT_EQ(KeyRotationManager::Result::FAILED, future.Get());
+  EXPECT_EQ(KeyRotationResult::kFailed, future.Get());
 
   histogram_tester_->ExpectUniqueSample(
       kRotateStatusWithNonceHistogram,
@@ -241,10 +241,10 @@ TEST_F(KeyRotationManagerTest, Rotate_InvalidDmToken) {
   // Create a DM token that has 5000 characters.
   std::string long_dm_token(5000, 'a');
 
-  base::test::TestFuture<KeyRotationManager::Result> future;
+  base::test::TestFuture<KeyRotationResult> future;
   key_rotation_manager_->Rotate(GURL(kDmServerUrl), long_dm_token, kFakeNonce,
                                 future.GetCallback());
-  EXPECT_EQ(KeyRotationManager::Result::FAILED, future.Get());
+  EXPECT_EQ(KeyRotationResult::kFailed, future.Get());
 
   histogram_tester_->ExpectUniqueSample(kRotateStatusWithNonceHistogram,
                                         RotationStatus::FAILURE_INVALID_DMTOKEN,
@@ -257,7 +257,7 @@ TEST_F(KeyRotationManagerTest, Rotate_InvalidDmToken) {
 TEST_F(KeyRotationManagerTest, Rotate_MissingNonce) {
   SetUpOldKey(/*exists=*/true);
 
-  RunRotate(KeyRotationManager::Result::FAILED, /*with_nonce=*/false);
+  RunRotate(KeyRotationResult::kFailed, /*with_nonce=*/false);
 
   histogram_tester_->ExpectUniqueSample(
       kRotateStatusWithNonceHistogram,
@@ -271,7 +271,7 @@ TEST_F(KeyRotationManagerTest, CreateKey_InvalidPermissions) {
   SetUpOldKey(/*exists=*/false);
   SetRotationPermissions(false);
 
-  RunRotate(KeyRotationManager::Result::FAILED);
+  RunRotate(KeyRotationResult::kInsufficientPermissions);
 
   histogram_tester_->ExpectUniqueSample(
       kRotateStatusNoNonceHistogram,
@@ -286,7 +286,7 @@ TEST_F(KeyRotationManagerTest, CreateKey_CreationFailure) {
   SetRotationPermissions();
   SetUpNewKeyCreation(/*success=*/false);
 
-  RunRotate(KeyRotationManager::Result::FAILED);
+  RunRotate(KeyRotationResult::kFailed);
 
   histogram_tester_->ExpectUniqueSample(
       kRotateStatusNoNonceHistogram,
@@ -302,7 +302,7 @@ TEST_F(KeyRotationManagerTest, CreateKey_StoreFailed) {
   SetUpNewKeyCreation();
   SetUpStoreKey(/*expect_new_key=*/true, /*success=*/false);
 
-  RunRotate(KeyRotationManager::Result::FAILED);
+  RunRotate(KeyRotationResult::kFailed);
 
   histogram_tester_->ExpectUniqueSample(
       kRotateStatusNoNonceHistogram, RotationStatus::FAILURE_CANNOT_STORE_KEY,
@@ -320,7 +320,7 @@ TEST_F(KeyRotationManagerTest, CreateKey_Success) {
   SetUploadCode(kSuccessCode);
   ExpectFinalCleanup();
 
-  RunRotate(KeyRotationManager::Result::SUCCEEDED);
+  RunRotate(KeyRotationResult::kSucceeded);
 
   // Validate body.
   // TODO(b:254072094): Improve body content validation logic.
@@ -353,7 +353,7 @@ TEST_F(KeyRotationManagerTest, RotateKey_Success) {
   SetUploadCode(kSuccessCode);
   ExpectFinalCleanup();
 
-  RunRotate(KeyRotationManager::Result::SUCCEEDED, /*with_nonce=*/true);
+  RunRotate(KeyRotationResult::kSucceeded, /*with_nonce=*/true);
 
   // Validate body.
   // TODO(b:254072094): Improve body content validation logic.

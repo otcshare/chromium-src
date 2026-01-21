@@ -4,6 +4,7 @@
 
 #include "components/ui_devtools/views/widget_element.h"
 
+#include "base/strings/to_string.h"
 #include "components/ui_devtools/protocol.h"
 #include "components/ui_devtools/ui_element_delegate.h"
 #include "components/ui_devtools/views/devtools_event_util.h"
@@ -74,13 +75,17 @@ void WidgetElement::SetVisible(bool visible) {
 
 std::vector<std::string> WidgetElement::GetAttributes() const {
   return {"name", widget_->GetName(), "active",
-          widget_->IsActive() ? "true" : "false"};
+          base::ToString(widget_->IsActive())};
 }
 
 std::pair<gfx::NativeWindow, gfx::Rect>
 WidgetElement::GetNodeWindowAndScreenBounds() const {
   return std::make_pair(widget_->GetNativeWindow(),
                         widget_->GetWindowBoundsInScreen());
+}
+
+gfx::Rect WidgetElement::GetNodeBoundsInScreen() const {
+  return widget_->GetWindowBoundsInScreen();
 }
 
 // static
@@ -97,7 +102,7 @@ int UIElement::FindUIElementIdForBackendElement<views::Widget>(
           element) {
     return node_id_;
   }
-  for (auto* child : children_) {
+  for (ui_devtools::UIElement* child : children_) {
     int ui_element_id = child->FindUIElementIdForBackendElement(element);
     if (ui_element_id)
       return ui_element_id;

@@ -8,13 +8,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/version.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/update_service.h"
+#include "components/policy/core/common/policy_types.h"
 
 namespace updater {
 
@@ -32,12 +34,13 @@ class UpdateServiceImplInactive : public UpdateService {
         FROM_HERE, base::BindOnce(std::move(callback), base::Version()));
   }
 
-  void FetchPolicies(base::OnceCallback<void(int)> callback) override {
+  void FetchPolicies(policy::PolicyFetchReason reason,
+                     base::OnceCallback<void(int)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     std::move(callback).Run(-1);
   }
 
-  void RegisterApp(const RegistrationRequest& request,
+  void RegisterApp(const RegistrationRequest& /*request*/,
                    base::OnceCallback<void(int)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -57,31 +60,50 @@ class UpdateServiceImplInactive : public UpdateService {
     std::move(callback).Run();
   }
 
-  void UpdateAll(StateChangeCallback state_update, Callback callback) override {
+  void CheckForUpdate(
+      const std::string& /*app_id*/,
+      Priority /*priority*/,
+      PolicySameVersionUpdate /*policy_same_version_update*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
   }
 
-  void Update(const std::string& /*app_id*/,
-              const std::string& /*install_data_index*/,
-              Priority /*priority*/,
-              PolicySameVersionUpdate /*policy_same_version_update*/,
-              StateChangeCallback /*state_update*/,
-              Callback callback) override {
+  void Update(
+      const std::string& /*app_id*/,
+      const std::string& /*install_data_index*/,
+      Priority /*priority*/,
+      PolicySameVersionUpdate /*policy_same_version_update*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
   }
 
-  void Install(const RegistrationRequest& /*registration*/,
-               const std::string& /*client_install_data*/,
-               const std::string& /*install_data_index*/,
-               Priority /*priority*/,
-               StateChangeCallback /*state_update*/,
-               Callback callback) override {
+  void UpdateAll(
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
+  }
+
+  void Install(
+      const RegistrationRequest& /*registration*/,
+      const std::string& /*client_install_data*/,
+      const std::string& /*install_data_index*/,
+      Priority /*priority*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -92,17 +114,33 @@ class UpdateServiceImplInactive : public UpdateService {
     VLOG(1) << __func__ << " (Inactive)";
   }
 
-  void RunInstaller(const std::string& /*app_id*/,
-                    const base::FilePath& /*installer_path*/,
-                    const std::string& /*install_args*/,
-                    const std::string& /*install_data*/,
-                    const std::string& /*install_settings*/,
-                    StateChangeCallback /*state_update*/,
-                    Callback callback) override {
+  void RunInstaller(
+      const std::string& /*app_id*/,
+      const base::FilePath& /*installer_path*/,
+      const std::string& /*install_args*/,
+      const std::string& /*install_data*/,
+      const std::string& /*install_settings*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
     VLOG(1) << __func__ << " (Inactive)";
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
+  }
+
+  void GetUpdaterState(
+      base::OnceCallback<void(const UpdaterState&)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), UpdaterState()));
+  }
+
+  void GetPoliciesJson(
+      base::OnceCallback<void(const std::string&)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::string()));
   }
 
  private:

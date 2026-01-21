@@ -8,22 +8,21 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/threading/thread_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/sync/engine/net/http_post_provider.h"
 #include "components/sync/engine/net/http_post_provider_factory.h"
+#include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
-
-class HttpBridgeTest;
 
 namespace net {
 class HttpResponseHeaders;
@@ -42,6 +41,7 @@ namespace syncer {
 class HttpBridge : public HttpPostProvider {
  public:
   HttpBridge(const std::string& user_agent,
+             scoped_refptr<base::SequencedTaskRunner> network_task_runner,
              std::unique_ptr<network::PendingSharedURLLoaderFactory>
                  pending_url_loader_factory);
 
@@ -49,12 +49,11 @@ class HttpBridge : public HttpPostProvider {
   HttpBridge& operator=(const HttpBridge&) = delete;
 
   // HttpPostProvider implementation.
-  void SetExtraRequestHeaders(const char* headers) override;
+  void SetExtraRequestHeaders(const net::HttpRequestHeaders& headers) override;
   void SetURL(const GURL& url) override;
   void SetPostPayload(const char* content_type,
                       int content_length,
                       const char* content) override;
-  void SetAllowBatching(bool allow_batching) override;
   bool MakeSynchronousPost(int* net_error_code, int* http_status_code) override;
   void Abort() override;
 
@@ -67,33 +66,21 @@ class HttpBridge : public HttpPostProvider {
   const std::string GetResponseHeaderValue(
       const std::string& name) const override;
 
-  void OnURLLoadComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoadComplete(std::optional<std::string> response_body);
   void OnURLLoadUploadProgress(uint64_t position, uint64_t total);
-
-  static void SetIOCapableTaskRunnerForTest(
-      scoped_refptr<base::SequencedTaskRunner> task_runner);
 
  protected:
   ~HttpBridge() override;
 
-  // Protected virtual so the unit test can override to shunt network requests.
+  // Protected virtual for testing.
+  virtual scoped_refptr<network::SharedURLLoaderFactory>
+  CreateSharedURLLoader();
   virtual void MakeAsynchronousPost();
 
-  void set_url_loader_factory_for_testing(
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-    url_loader_factory_ = url_loader_factory;
-  }
-
  private:
-  FRIEND_TEST_ALL_PREFIXES(SyncHttpBridgeTest,
-                           AbortAndReleaseBeforeFetchComplete);
-  // Test is disabled on Android.
-  FRIEND_TEST_ALL_PREFIXES(DISABLED_SyncHttpBridgeTest,
-                           AbortAndReleaseBeforeFetchComplete);
   friend class ShuntedHttpBridge;
-  friend class ::HttpBridgeTest;
 
-  // Called on the IO loop to issue the network request. The extra level
+  // Called on the IO thread to issue the network request. The extra level
   // of indirection is so that the unit test can override this behavior but we
   // still have a function to statically pass to PostTask.
   void CallMakeAsynchronousPost() { MakeAsynchronousPost(); }
@@ -102,25 +89,16 @@ class HttpBridge : public HttpPostProvider {
   void OnURLLoadCompleteInternal(int http_status_code,
                                  int net_error_code,
                                  const GURL& final_url,
-                                 std::unique_ptr<std::string> response_body);
-
-  // Used to destroy a fetcher when the bridge is Abort()ed, to ensure that
-  // a reference to |this| is held while flushing any pending fetch completion
-  // callbacks coming from the IO thread en route to finally destroying the
-  // fetcher.
-  void DestroyURLLoaderOnIOThread(
-      std::unique_ptr<network::SimpleURLLoader> loader,
-      std::unique_ptr<base::DelayTimer> loader_timer);
+                                 std::optional<std::string> response_body);
 
   // Helper method to abort the request if we timed out.
   void OnURLLoadTimedOut();
 
-  // Used to check whether a method runs on the thread that we were created on.
-  // This is the thread that will block on MakeSynchronousPost while the IO
-  // thread fetches data from the network.
-  // This should be the main syncer thread (SyncerThread) which is what blocks
-  // on network IO through curl_easy_perform.
-  base::ThreadChecker thread_checker_;
+  // Used to check whether a method runs on the sequence that this object was
+  // created on. This is the sequence that will block on MakeSynchronousPost
+  // while the IO thread fetches data from the network. This should be the "sync
+  // thread" (really just a SequencedTaskRunner) in practice.
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // The user agent for all requests.
   const std::string user_agent_;
@@ -131,26 +109,21 @@ class HttpBridge : public HttpPostProvider {
   // POST payload information.
   std::string content_type_;
   std::string request_content_;
-  std::string extra_headers_;
-
-  // When true `fetch_state_.url_loader` is configured so that it can be
-  // batched in the network layer. See the comment in
-  // network::SimpleURLLoader::SetAllowBatching().
-  bool allow_batching_ = false;
+  net::HttpRequestHeaders extra_headers_;
 
   // A waitable event we use to provide blocking semantics to
-  // MakeSynchronousPost. We block created_on_loop_ while the IO loop fetches
-  // network request.
+  // MakeSynchronousPost. We block the Sync thread while the IO thread processes
+  // the network request.
   base::WaitableEvent http_post_completed_;
 
   struct URLFetchState {
     URLFetchState();
     ~URLFetchState();
-    // Our hook into the network layer is a URLFetcher. USED ONLY ON THE IO
-    // LOOP, so we can block created_on_loop_ while the fetch is in progress.
-    // NOTE: This is not a unique_ptr for a reason. It must be deleted on the
-    // same thread that created it, which isn't the same thread |this| gets
-    // deleted on. We must manually delete url_poster_ on the IO loop.
+    // Our hook into the network layer is a SimpleURLLoader. USED ONLY ON THE IO
+    // THREAD, so we can block the Sync thread while the fetch is in progress.
+    // NOTE: This must be deleted on the same thread that created it, which
+    // isn't the same thread `this` gets deleted on. We must manually delete
+    // url_loader on the IO thread.
     std::unique_ptr<network::SimpleURLLoader> url_loader;
 
     // Start and finish time of request. Set immediately before sending
@@ -159,13 +132,13 @@ class HttpBridge : public HttpPostProvider {
     base::Time end_time;
 
     // Used to support 'Abort' functionality.
-    bool aborted;
+    bool aborted = false;
 
     // Cached response data.
-    bool request_completed;
-    bool request_succeeded;
-    int http_status_code;
-    int net_error_code;
+    bool request_completed = false;
+    bool request_succeeded = false;
+    int http_status_code = -1;
+    int net_error_code = -1;
     std::string response_content;
     scoped_refptr<net::HttpResponseHeaders> response_headers;
 
@@ -175,12 +148,12 @@ class HttpBridge : public HttpPostProvider {
   };
 
   // This lock synchronizes use of state involved in the flow to load a URL
-  // using URLLoader, including |fetch_state_| on any thread, for example,
+  // using URLLoader, including `fetch_state_` on any thread, for example,
   // this flow needs to be synchronized to gracefully
-  // clean up URLFetcher and return appropriate values in |error_code|.
+  // clean up URLFetcher and return appropriate values in `error_code`.
   //
-  // TODO(crbug.com/844968): Check whether we can get rid of |fetch_state_lock_|
-  // altogether after the migration to SimpleURLLoader.
+  // TODO(crbug.com/41390139): Check whether we can get rid of
+  // `fetch_state_lock_` altogether after the migration to SimpleURLLoader.
   mutable base::Lock fetch_state_lock_;
   URLFetchState fetch_state_;
 

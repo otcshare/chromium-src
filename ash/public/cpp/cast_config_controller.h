@@ -29,7 +29,6 @@ struct ASH_PUBLIC_EXPORT CastSink {
 
   std::string id;
   std::string name;
-  std::string domain;
 
   // Icon which describes the type of sink media is being routed to.
   SinkIconType sink_icon_type = SinkIconType::kGeneric;
@@ -39,6 +38,11 @@ enum class ContentSource {
   kUnknown,
   kTab,
   kDesktop,
+};
+
+struct FreezeInfo {
+  bool can_freeze = false;
+  bool is_frozen = false;
 };
 
 struct ASH_PUBLIC_EXPORT CastRoute {
@@ -51,6 +55,10 @@ struct ASH_PUBLIC_EXPORT CastRoute {
   // What is source of the content? For example, we could be DIAL casting a
   // tab or mirroring the entire desktop.
   ContentSource content_source = ContentSource::kUnknown;
+
+  // The state of freeze for the route. Is the route able to be frozen, and
+  // is it currently frozen?
+  FreezeInfo freeze_info;
 };
 
 struct ASH_PUBLIC_EXPORT SinkAndRoute {
@@ -110,6 +118,11 @@ class ASH_PUBLIC_EXPORT CastConfigController {
 
   // A user-initiated request to stop the given cast session.
   virtual void StopCasting(const std::string& route_id) = 0;
+
+  // Freezes and Unfreezes a cast mirroring route (Displayed to users as
+  // pause/resume).
+  virtual void FreezeRoute(const std::string& route_id) = 0;
+  virtual void UnfreezeRoute(const std::string& route_id) = 0;
 
  protected:
   CastConfigController();

@@ -8,15 +8,14 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece_forward.h"
 #include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/fido_authenticator.h"
-#include "device/fido/fido_transport_protocol.h"
 #include "device/fido/mac/credential_store.h"
 #include "device/fido/mac/operation.h"
+#include "device/fido/public/fido_transport_protocol.h"
 
 namespace device::fido::mac {
 
@@ -56,18 +55,15 @@ class COMPONENT_EXPORT(DEVICE_FIDO) TouchIdAuthenticator
   void GetAssertion(CtapGetAssertionRequest request,
                     CtapGetAssertionOptions options,
                     GetAssertionCallback callback) override;
-  void GetNextAssertion(GetAssertionCallback callback) override;
-  void GetCredentialInformationForRequest(
+  void GetPlatformCredentialInfoForRequest(
       const CtapGetAssertionRequest& request,
-      GetCredentialInformationForRequestCallback callback) override;
+      const CtapGetAssertionOptions& options,
+      GetPlatformCredentialInfoForRequestCallback callback) override;
   void Cancel() override;
-  Type GetType() const override;
+  AuthenticatorType GetType() const override;
   std::string GetId() const override;
-  const absl::optional<AuthenticatorSupportedOptions>& Options() const override;
-  absl::optional<FidoTransportProtocol> AuthenticatorTransport() const override;
-  bool IsInPairingMode() const override;
-  bool IsPaired() const override;
-  bool RequiresBlePairingPin() const override;
+  const AuthenticatorSupportedOptions& Options() const override;
+  std::optional<FidoTransportProtocol> AuthenticatorTransport() const override;
   void GetTouch(base::OnceClosure callback) override;
   base::WeakPtr<FidoAuthenticator> GetWeakPtr() override;
 

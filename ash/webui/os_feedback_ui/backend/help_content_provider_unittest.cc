@@ -7,18 +7,17 @@
 #include <memory>
 #include <string>
 
-#include "ash/webui/os_feedback_ui/mojom/os_feedback_ui.mojom-test-utils.h"
 #include "ash/webui/os_feedback_ui/mojom/os_feedback_ui.mojom.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
 #include "content/public/test/browser_task_environment.h"
 #include "google_apis/google_api_keys.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -28,9 +27,7 @@
 namespace ash {
 namespace feedback {
 
-using data_decoder::test::InProcessDataDecoder;
 using os_feedback_ui::mojom::HelpContent;
-using os_feedback_ui::mojom::HelpContentProviderAsyncWaiter;
 using os_feedback_ui::mojom::HelpContentPtr;
 using os_feedback_ui::mojom::HelpContentType;
 using os_feedback_ui::mojom::SearchRequest;
@@ -69,10 +66,6 @@ class HelpContentProviderTest : public testing::Test {
   }
   ~HelpContentProviderTest() override = default;
 
-  void SetUp() override {
-    in_process_data_decoder_ = std::make_unique<InProcessDataDecoder>();
-  }
-
   const std::string GetApiUrl() const {
     return base::StrCat(
         {"https://scone-pa.clients6.google.com/v1/search/list?key=",
@@ -82,10 +75,10 @@ class HelpContentProviderTest : public testing::Test {
   // Call the GetHelpContents of the remote provider async and return the
   // response.
   SearchResponsePtr GetHelpContentsAndWait(SearchRequestPtr request) {
-    SearchResponsePtr response;
-    HelpContentProviderAsyncWaiter(provider_remote_.get())
-        .GetHelpContents(std::move(request), &response);
-    return response;
+    base::test::TestFuture<SearchResponsePtr> response;
+    provider_remote_->GetHelpContents(std::move(request),
+                                      response.GetCallback());
+    return response.Take();
   }
 
   // Initialize provider.
@@ -98,7 +91,8 @@ class HelpContentProviderTest : public testing::Test {
   // Parse the json and call PopulateSearchResponse if successful.
   void PopulateSearchResponseHelper(const std::string& json,
                                     SearchResponsePtr& search_response) {
-    absl::optional<base::Value> search_result = base::JSONReader::Read(json);
+    std::optional<base::Value> search_result =
+        base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (search_result) {
       PopulateSearchResponse("en-gb", /*is_child_account=*/false, 5u,
                              search_result.value(), search_response);
@@ -108,8 +102,6 @@ class HelpContentProviderTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_;
 
-  std::unique_ptr<data_decoder::test::InProcessDataDecoder>
-      in_process_data_decoder_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
 

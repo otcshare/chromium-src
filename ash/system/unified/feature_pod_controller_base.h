@@ -12,26 +12,18 @@
 
 namespace ash {
 
-class FeaturePodButton;
 class FeatureTile;
 
 // Base class for controllers of feature pod buttons.
 // To add a new feature pod button, implement this class, and add to the list in
-// UnifiedSystemTrayController::InitFeaturePods().
+// UnifiedSystemTrayController::InitFeatureTiles().
 class ASH_EXPORT FeaturePodControllerBase {
  public:
   virtual ~FeaturePodControllerBase() {}
 
-  // Create the view. Subclasses instantiate FeaturePodButton.
-  // The view will be owned by views hierarchy. The view will be always deleted
-  // after the controller is destructed (UnifiedSystemTrayBubble guarantees
-  // this).
-  virtual FeaturePodButton* CreateButton() = 0;
-
-  // Creates FeatureTile view.
-  // TODO(b/252871301): Make this function pure virtual after implementing
-  // every feature tile.
-  virtual std::unique_ptr<FeatureTile> CreateTile();
+  // Creates FeatureTile view. `compact` determines whether to present a Primary
+  // or Compact tile.
+  virtual std::unique_ptr<FeatureTile> CreateTile(bool compact) = 0;
 
   // Returns the feature catalog name which is used for UMA tracking. Please
   // remember to call the corresponding tracking method (`TrackToggleUMA` and

@@ -9,7 +9,8 @@ import android.net.Uri;
 
 import androidx.core.util.Pair;
 
-import org.chromium.base.CollectionUtil;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.offline_items_collection.OfflineItem;
 import org.chromium.components.offline_items_collection.OfflineItemShareInfo;
 
@@ -19,6 +20,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 /** Helper class containing utility methods to make sharing {@link OfflineItem}s easier. */
+@NullMarked
 public class ShareUtils {
     private static final String DEFAULT_MIME_TYPE = "*/*";
     private static final String MIME_TYPE_DELIMITER = "/";
@@ -37,7 +39,8 @@ public class ShareUtils {
      *              directly.
      * @see         OfflineContentProvider#getShareInfoForItem(ContentId, ShareCallback)
      */
-    public static Intent createIntent(Collection<Pair<OfflineItem, OfflineItemShareInfo>> items) {
+    public static @Nullable Intent createIntent(
+            Collection<Pair<OfflineItem, OfflineItemShareInfo>> items) {
         ArrayList<Uri> uris = new ArrayList<>();
         Set<String> mimeTypes = new HashSet<>();
         StringBuilder urls = new StringBuilder();
@@ -90,11 +93,11 @@ public class ShareUtils {
         Set<String> firstParts = new HashSet<>();
         Set<String> secondParts = new HashSet<>();
 
-        CollectionUtil.forEach(mimeTypes, mimeType -> {
+        for (String mimeType : mimeTypes) {
             String[] parts = mimeType.split(MIME_TYPE_DELIMITER);
             firstParts.add(parts[0]);
             secondParts.add(parts[1]);
-        });
+        }
 
         if (firstParts.size() == 1) {
             String secondPart = secondParts.size() > 1 ? "*" : secondParts.iterator().next();

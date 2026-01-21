@@ -8,11 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/sequence_checker.h"
 #include "base/threading/thread_checker.h"
 #include "components/search_provider_logos/logo_common.h"
 

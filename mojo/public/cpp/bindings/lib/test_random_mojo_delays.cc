@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/lib/test_random_mojo_delays.h"
+
 #include <list>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
@@ -16,7 +18,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/lib/binding_state.h"
-#include "mojo/public/cpp/bindings/lib/test_random_mojo_delays.h"
 
 namespace mojo {
 namespace internal {

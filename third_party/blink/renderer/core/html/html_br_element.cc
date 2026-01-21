@@ -25,8 +25,8 @@
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/layout/layout_br.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/core/layout/layout_object_factory.h"
 
 namespace blink {
 
@@ -42,7 +42,7 @@ bool HTMLBRElement::IsPresentationAttribute(const QualifiedName& name) const {
 void HTMLBRElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kClearAttr) {
     // If the string is empty, then don't add the clear property.
     // <br clear> and <br clear=""> are just treated like <br> by Gecko, Mac IE,
@@ -61,12 +61,11 @@ void HTMLBRElement::CollectStyleForPresentationAttribute(
   }
 }
 
-LayoutObject* HTMLBRElement::CreateLayoutObject(const ComputedStyle& style,
-                                                LegacyLayout legacy) {
-  if (style.ContentBehavesAsNormal())
-    return LayoutObjectFactory::CreateBR(this, legacy);
-
-  return LayoutObject::CreateObject(this, style, legacy);
+LayoutObject* HTMLBRElement::CreateLayoutObject(const ComputedStyle& style) {
+  if (ShouldUseContentDataForElement(style.GetContentData())) {
+    return LayoutObject::CreateObject(this, style);
+  }
+  return MakeGarbageCollected<LayoutBR>(*this);
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {session, dp} = await testRunner.startURL(
       '../resources/empty.html',
       'Tests that device emulation affects fenced frames.');
@@ -12,7 +12,9 @@
   // Create and navigate inside a fenced frame.
   session.evaluate(function() {
     let ff = document.createElement('fencedframe');
-    ff.src = '../fenced-frame/resources/page-with-title.php';
+    const url = new URL('../fenced-frame/resources/page-with-title.php',
+        location.href);
+    ff.config = new FencedFrameConfig(url);
     document.body.appendChild(ff);
   });
 
@@ -20,13 +22,13 @@
   let ffSession = session.createChild(sessionId);
   let ffdp = ffSession.protocol;
 
-  // Disable MockScreenOrientation.
-  await ffSession.evaluate('testRunner.disableMockScreenOrientation()');
-
   // Wait for FF to finish loading.
   await ffdp.Page.enable();
   ffdp.Page.setLifecycleEventsEnabled({enabled: true});
   await ffdp.Page.onceLifecycleEvent(event => event.params.name === 'load');
+
+  // Disable MockScreenOrientation.
+  await ffSession.evaluate('testRunner.disableMockScreenOrientation()');
 
   function dumpMetrics() {
     return {

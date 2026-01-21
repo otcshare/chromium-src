@@ -4,88 +4,175 @@
 
 package org.chromium.content_public.browser;
 
-import org.chromium.base.FeatureList;
-import org.chromium.content.browser.ContentFeatureListImpl;
+import android.os.Build;
 
-/**
- * Static public methods for ContentFeatureList.
- */
+import org.chromium.base.MutableBooleanParamWithSafeDefault;
+import org.chromium.base.MutableFlagWithSafeDefault;
+import org.chromium.base.MutableIntParamWithSafeDefault;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.cached_flags.CachedFlag;
+import org.chromium.content.common.ContentInternalFeatures;
+import org.chromium.content_public.common.ContentFeatures;
+import org.chromium.ui.accessibility.AccessibilityFeatures;
+
+import java.util.List;
+
+/** Convenience static methods to access {@link ContentFeatureMap}. */
+@NullMarked
 public class ContentFeatureList {
     private ContentFeatureList() {}
 
-    /**
-     * Returns whether the specified feature is enabled or not.
-     *
-     * @param featureName The name of the feature to query.
-     * @return Whether the feature is enabled or not.
-     */
-    public static boolean isEnabled(String featureName) {
-        Boolean testValue = FeatureList.getTestValueForFeature(featureName);
-        if (testValue != null) return testValue;
-        return ContentFeatureListImpl.isEnabled(featureName);
-    }
-
-    /**
-     * Returns a field trial param as an int for the specified feature.
-     *
-     * @param featureName The name of the feature to retrieve a param for.
-     * @param paramName The name of the param for which to get as an integer.
-     * @param defaultValue The integer value to use if the param is not available.
-     * @return The parameter value as an int. Default value if the feature does not exist or the
-     *         specified parameter does not exist or its string value does not represent an int.
-     */
-    public static int getFieldTrialParamByFeatureAsInt(
-            String featureName, String paramName, int defaultValue) {
-        String testValue = FeatureList.getTestValueForFieldTrialParam(featureName, paramName);
-        if (testValue != null) return Integer.valueOf(testValue);
-        if (FeatureList.hasTestFeatures()) return defaultValue;
-        assert FeatureList.isInitialized();
-        return ContentFeatureListImpl.getFieldTrialParamByFeatureAsInt(
-                featureName, paramName, defaultValue);
-    }
-
-    /**
-     * Returns a field trial param as a boolean for the specified feature.
-     *
-     * @param featureName The name of the feature to retrieve a param for.
-     * @param paramName The name of the param for which to get as a boolean.
-     * @param defaultValue The boolean value to use if the param is not available.
-     * @return The parameter value as a boolean. Default value if the feature does not exist or the
-     *         specified parameter does not exist or its string value is neither "true" nor "false".
-     */
-    public static boolean getFieldTrialParamByFeatureAsBoolean(
-            String featureName, String paramName, boolean defaultValue) {
-        String testValue = FeatureList.getTestValueForFieldTrialParam(featureName, paramName);
-        if (testValue != null) return Boolean.valueOf(testValue);
-        if (FeatureList.hasTestFeatures()) return defaultValue;
-        assert FeatureList.isInitialized();
-        return ContentFeatureListImpl.getFieldTrialParamByFeatureAsBoolean(
-                featureName, paramName, defaultValue);
-    }
+    // TODO(crbug.com/40268884): Use generated constants in ContentFeatures and other generated
+    // Features files, then remove the constants below.
 
     // Alphabetical:
-    public static final String ACCESSIBILITY_PAGE_ZOOM = "AccessibilityPageZoom";
+    public static final String ACCESSIBILITY_ATOMIC_LIVE_REGIONS = "AccessibilityAtomicLiveRegions";
 
-    public static final String AUTO_DISABLE_ACCESSIBILITY = "AutoDisableAccessibility";
+    public static final String ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE =
+            "AccessibilityDeprecateTypeAnnounce";
 
-    public static final String AUTO_DISABLE_ACCESSIBILITY_V2 = "AutoDisableAccessibilityV2";
+    public static final String ACCESSIBILITY_EXTENDED_SELECTION = "AccessibilityExtendedSelection";
 
-    public static final String BACKGROUND_MEDIA_RENDERER_HAS_MODERATE_BINDING =
-            "BackgroundMediaRendererHasModerateBinding";
+    public static final String ACCESSIBILITY_IME_GET_FORMATTED_TEXT =
+            "AccessibilityImeGetFormattedText";
 
-    public static final String COMPUTE_AX_MODE = "ComputeAXMode";
+    public static final String ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE =
+            "AccessibilityImproveLiveRegionAnnounce";
 
-    public static final String ON_DEMAND_ACCESSIBILITY_EVENTS = "OnDemandAccessibilityEvents";
+    public static final String ACCESSIBILITY_PAGE_ZOOM_V2 = "AccessibilityPageZoomV2";
 
-    public static final String PROCESS_SHARING_WITH_STRICT_SITE_INSTANCES =
-            "ProcessSharingWithStrictSiteInstances";
+    public static final String ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API =
+            "AccessibilityPopulateSupplementalDescriptionApi";
 
-    public static final String REQUEST_DESKTOP_SITE_ADDITIONS = "RequestDesktopSiteAdditions";
+    public static final String ACCESSIBILITY_SEQUENTIAL_FOCUS = "AccessibilitySequentialFocus";
 
-    public static final String REQUEST_DESKTOP_SITE_EXCEPTIONS = "RequestDesktopSiteExceptions";
+    public static final String ACCESSIBILITY_SET_SELECTABLE_ON_ALL_NODES_WITH_TEXT =
+            "AccessibilitySetSelectableOnAllNodesWithText";
+
+    public static final String ACCESSIBILITY_UNIFIED_SNAPSHOTS = "AccessibilityUnifiedSnapshots";
+    public static final String ACCESSIBILITY_MANAGE_BROADCAST_RECEIVER_ON_BACKGROUND =
+            "AccessibilityManageBroadcastReceiverOnBackground";
+
+    public static final String ANDROID_CAPTURE_KEY_EVENTS = "AndroidCaptureKeyEvents";
+    public static final String ANDROID_CARET_BROWSING = "AndroidCaretBrowsing";
+
+    public static final String ANDROID_DEV_TOOLS_FRONTEND = "AndroidDevToolsFrontend";
+
+    public static final String ANDROID_MEDIA_INSERTION = "AndroidMediaInsertion";
+
+    public static final String ANDROID_PK_AUTOCORRECT_UNDERLINE = "AndroidPkAutocorrectUnderline";
+
+    public static final String ANDROID_SPELLING_UNDERLINE_IN_COMPOSITION_MODE =
+            "AndroidSpellingUnderlineInCompositionMode";
+
+    public static final String HIDE_PASTE_POPUP_ON_GSB = "HidePastePopupOnGSB";
+
+    public static final String JAVALESS_RENDERERS = "JavalessRenderers";
+
+    public static final String INPUT_ON_VIZ = "InputOnViz";
+
+    public static final String ONE_TIME_PERMISSION = "OneTimePermission";
+
+    public static final String CONTINUE_GESTURE_ON_LOSING_FOCUS = "ContinueGestureOnLosingFocus";
+
+    public static final String SMART_ZOOM = "SmartZoom";
 
     public static final String WEB_BLUETOOTH_NEW_PERMISSIONS_BACKEND =
             "WebBluetoothNewPermissionsBackend";
 
-    public static final String WEB_NFC = "WebNFC";
+    public static final String WEB_IDENTITY_DIGITAL_CREDENTIALS = "WebIdentityDigitalCredentials";
+
+    public static final String WEB_IDENTITY_DIGITAL_CREDENTIALS_CREATION =
+            "WebIdentityDigitalCredentialsCreation";
+
+    public static final String DIPS_TTL = "DIPSTtl";
+
+    private static final MutableFlagWithSafeDefault sAccessibilityCheckJavaNodeCacheFreshness =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentFeatures.ACCESSIBILITY_CHECK_JAVA_NODE_CACHE_FRESHNESS,
+                    false);
+
+    /**
+     * Checks "AccessibilityCheckJavaNodeCacheFreshness" feature flag, including that current
+     * environment is at least required Android SDK 33 (Tiramisu).
+     */
+    public static boolean enabledAccessibilityCheckJavaNodeCacheFreshness() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && sAccessibilityCheckJavaNodeCacheFreshness.isEnabled();
+    }
+
+    public static final MutableFlagWithSafeDefault sAccessibilityDeprecateJavaNodeCache =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentFeatures.ACCESSIBILITY_DEPRECATE_JAVA_NODE_CACHE,
+                    false);
+
+    public static final MutableBooleanParamWithSafeDefault
+            sAccessibilityDeprecateJavaNodeCacheOptimizeScroll =
+                    sAccessibilityDeprecateJavaNodeCache.newBooleanParam("optimize_scroll", false);
+
+    public static final MutableBooleanParamWithSafeDefault
+            sAccessibilityDeprecateJavaNodeCacheDisableCache =
+                    sAccessibilityDeprecateJavaNodeCache.newBooleanParam("disable_cache", false);
+
+    public static final MutableFlagWithSafeDefault sAccessibilityMagnificationFollowsFocus =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    AccessibilityFeatures.ACCESSIBILITY_MAGNIFICATION_FOLLOWS_FOCUS,
+                    true);
+
+    public static final MutableFlagWithSafeDefault sAndroidCaretBrowsing =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(), ContentFeatures.ANDROID_CARET_BROWSING, false);
+
+    public static final MutableFlagWithSafeDefault sStrictHighRankProcessLRU =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentInternalFeatures.STRICT_HIGH_RANK_PROCESS_LRU,
+                    false);
+
+    public static final MutableFlagWithSafeDefault sRemoveCachedProcessFromBindingManager =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentInternalFeatures.REMOVE_CACHED_PROCESS_FROM_BINDING_MANAGER,
+                    false);
+
+    public static final MutableFlagWithSafeDefault sSpareRendererProcessPriority =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentFeatures.SPARE_RENDERER_PROCESS_PRIORITY,
+                    false);
+
+    // Add a non-perceptible binding on Android to decrease the chance of the spare process getting
+    // killed before it is taken.
+    public static final MutableBooleanParamWithSafeDefault sSpareRendererAddNotPerceptibleBinding =
+            sSpareRendererProcessPriority.newBooleanParam("not-perceptible-binding", false);
+
+    // Make the spare renderer of the lowest priority so as not to kill other processes during OOM.
+    public static final MutableBooleanParamWithSafeDefault sSpareRendererLowestRanking =
+            sSpareRendererProcessPriority.newBooleanParam("lowest-ranking", false);
+
+    // Skip the timeout when removing the VISIBLE and STRONG binding for the spare renderer.
+    public static final MutableBooleanParamWithSafeDefault sSpareRendererRemoveBindingNoTimeout =
+            sSpareRendererProcessPriority.newBooleanParam("remove-binding-no-timeout", false);
+
+    // Use a CachedFlag as this is often checked before native is loaded, and must stay consistent
+    // once decided upon.
+    public static final CachedFlag sJavalessRenderers =
+            new CachedFlag(ContentFeatureMap.getInstance(), JAVALESS_RENDERERS, false, true);
+
+    public static final MutableFlagWithSafeDefault sAndroidDesktopZoomScaling =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING,
+                    false);
+
+    public static final MutableIntParamWithSafeDefault sAndroidDesktopZoomScalingFactor =
+            sAndroidDesktopZoomScaling.newIntParam("desktop-zoom-scaling-factor", 100);
+
+    public static final MutableIntParamWithSafeDefault sAndroidMonitorZoomScalingFactor =
+            sAndroidDesktopZoomScaling.newIntParam("monitor-zoom-scaling-factor", 100);
+
+    public static final List<CachedFlag> sCachedFlags = List.of(sJavalessRenderers);
 }

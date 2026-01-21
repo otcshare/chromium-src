@@ -12,17 +12,25 @@
 #include <set>
 #include <vector>
 
+#include "ash/accelerators/accelerator_capslock_state_machine.h"
 #include "ash/accelerators/accelerator_history_impl.h"
+#include "ash/accelerators/accelerator_launcher_state_machine.h"
+#include "ash/accelerators/accelerator_prefs.h"
+#include "ash/accelerators/accelerator_shift_disable_capslock_state_machine.h"
 #include "ash/accelerators/accelerator_table.h"
 #include "ash/accelerators/ash_accelerator_configuration.h"
 #include "ash/accelerators/exit_warning_handler.h"
+#include "ash/accelerators/suspend_state_machine.h"
 #include "ash/accelerators/tablet_volume_controller.h"
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accelerators/top_row_key_usage_recorder.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/ui/accessibility_confirmation_dialog.h"
 #include "ash/ash_export.h"
 #include "ash/public/cpp/accelerators.h"
+#include "ash/system/input_device_settings/input_device_settings_notification_controller.h"
 #include "base/files/file_path.h"
-#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/accelerator_map.h"
 #include "ui/base/ime/ash/input_method_manager.h"
@@ -42,8 +50,20 @@ class ExitWarningHandler;
 class ASH_EXPORT AcceleratorControllerImpl
     : public ui::AcceleratorTarget,
       public AcceleratorController,
-      public input_method::InputMethodManager::Observer {
+      public input_method::InputMethodManager::Observer,
+      public AshAcceleratorConfiguration::Observer,
+      public AcceleratorPrefs::Observer {
  public:
+  // Used to record the keyboard type which triggers a screenshot action via the
+  // overview key. Do not reorder values of this enum.
+  enum class OverviewBasedScreenshotKeyboardType {
+    kNonChromeOSKeyboard,
+    kChromeOSKeyboardWithScreenshot,
+    kChromeOSKeyboardWithoutScreenshot,
+    kMinValue = kNonChromeOSKeyboard,
+    kMaxValue = kChromeOSKeyboardWithoutScreenshot,
+  };
+
   // TestApi is used for tests to get internal implementation details.
   class TestApi {
    public:
@@ -60,6 +80,9 @@ class ASH_EXPORT AcceleratorControllerImpl
 
     // Registers the specified accelerators.
     void RegisterAccelerators(base::span<const AcceleratorData> accelerators);
+
+    // Start observing changes made to the ash accelerator list.
+    void ObserveAcceleratorUpdates();
 
     // Returns whether the action for this accelerator is enabled.
     bool IsActionForAcceleratorEnabled(const ui::Accelerator& accelerator);
@@ -81,8 +104,11 @@ class ASH_EXPORT AcceleratorControllerImpl
     void SetSideVolumeButtonLocation(const std::string& region,
                                      const std::string& side);
 
+    void SetCanHandleLauncher(bool can_handle);
+    void SetCanHandleCapsLock(bool can_handle);
+
    private:
-    AcceleratorControllerImpl* controller_;  // Not owned.
+    raw_ptr<AcceleratorControllerImpl> controller_;  // Not owned.
   };
 
   explicit AcceleratorControllerImpl(AshAcceleratorConfiguration* config);
@@ -111,6 +137,12 @@ class ASH_EXPORT AcceleratorControllerImpl
                           Profile* profile,
                           bool show_message) override;
 
+  // AshAcceleratorConfiguration::Observer overrides:
+  void OnAcceleratorsUpdated() override;
+
+  // AcceleratorPrefs::Observer overrides:
+  void OnShortcutPolicyUpdated() override;
+
   // Registers global keyboard accelerators for the specified target. If
   // multiple targets are registered for any given accelerator, a target
   // registered later has higher priority.
@@ -134,6 +166,7 @@ class ASH_EXPORT AcceleratorControllerImpl
   AcceleratorHistoryImpl* GetAcceleratorHistory() override;
   bool DoesAcceleratorMatchAction(const ui::Accelerator& accelerator,
                                   AcceleratorAction action) override;
+  void ApplyAcceleratorForTesting(const ui::Accelerator& accelerator) override;
 
   // Returns true if the |accelerator| is preferred. A preferred accelerator
   // is handled before being passed to an window/web contents, unless
@@ -206,13 +239,24 @@ class ASH_EXPORT AcceleratorControllerImpl
       AcceleratorAction action,
       const ui::Accelerator& accelerator) const;
 
+  // Records when the user changes the output volume via keyboard to metrics.
+  void RecordVolumeSource();
+
   std::unique_ptr<ui::AcceleratorManager> accelerator_manager_;
 
   // A tracker for the current and previous accelerators.
   std::unique_ptr<AcceleratorHistoryImpl> accelerator_history_;
+  std::unique_ptr<AcceleratorLauncherStateMachine> launcher_state_machine_;
+  std::unique_ptr<AcceleratorCapslockStateMachine> capslock_state_machine_;
+  std::unique_ptr<AcceleratorShiftDisableCapslockStateMachine>
+      shift_disable_state_machine_;
+  std::unique_ptr<SuspendStateMachine> suspend_state_machine_;
+
+  // Metrics recorders that listen to the input stream to emit metrics.
+  std::unique_ptr<TopRowKeyUsageRecorder> top_row_key_usage_recorder_;
 
   // Manages all accelerator mappings.
-  AshAcceleratorConfiguration* accelerator_configuration_;
+  raw_ptr<AshAcceleratorConfiguration> accelerator_configuration_;
 
   // Handles the exit accelerator which requires a double press to exit and
   // shows a popup with an explanation.
@@ -246,6 +290,13 @@ class ASH_EXPORT AcceleratorControllerImpl
 
   // Prevents the processing of all KB shortcuts in the controller.
   bool prevent_processing_accelerators_ = false;
+
+  // Timer used to prevent the input gain from recording each time the user
+  // presses a volume key while setting the desired volume.
+  base::DelayTimer output_volume_metric_delay_timer_;
+
+  std::unique_ptr<InputDeviceSettingsNotificationController>
+      notification_controller_;
 };
 
 }  // namespace ash

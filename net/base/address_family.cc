@@ -4,6 +4,8 @@
 
 #include "net/base/address_family.h"
 
+#include <string_view>
+
 #include "base/notreached.h"
 #include "net/base/ip_address.h"
 #include "net/base/sys_addrinfo.h"
@@ -30,7 +32,6 @@ int ConvertAddressFamily(AddressFamily address_family) {
       return AF_INET6;
   }
   NOTREACHED();
-  return AF_UNSPEC;
 }
 
 AddressFamily ToAddressFamily(int family) {
@@ -43,7 +44,18 @@ AddressFamily ToAddressFamily(int family) {
       return ADDRESS_FAMILY_UNSPECIFIED;
   }
   NOTREACHED();
-  return ADDRESS_FAMILY_UNSPECIFIED;
+}
+
+std::string_view AddressFamilyToString(AddressFamily address_family) {
+  switch (address_family) {
+    case ADDRESS_FAMILY_UNSPECIFIED:
+      return "Unspecified";
+    case ADDRESS_FAMILY_IPV4:
+      return "IPv4";
+    case ADDRESS_FAMILY_IPV6:
+      return "IPv6";
+  }
+  NOTREACHED();
 }
 
 }  // namespace net

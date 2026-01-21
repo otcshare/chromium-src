@@ -6,7 +6,6 @@
 #define ASH_SEARCH_BOX_SEARCH_BOX_CONSTANTS_H_
 
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/gfx/color_palette.h"
 
 namespace ash {
 
@@ -27,12 +26,6 @@ constexpr int kExpandedSearchBoxCornerRadius = 28;
 
 // Preferred height of search box.
 constexpr int kSearchBoxPreferredHeight = 48;
-
-// The size of the icon in the search box.
-constexpr int kClassicSearchBoxIconSize = 24;
-
-// The size of the image button in the search box.
-constexpr int kClassicSearchBoxButtonSizeDip = 40;
 
 // The size of the icon in the search box.
 constexpr int kBubbleLauncherSearchBoxIconSize = 20;

@@ -4,14 +4,14 @@
 
 #include "content/browser/renderer_host/media/peer_connection_tracker_host.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/power_monitor/power_monitor.h"
-#include "base/ranges/algorithm.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -75,10 +75,11 @@ PeerConnectionTrackerHost::PeerConnectionTrackerHost(RenderFrameHost* frame)
       peer_pid_(frame->GetProcess()->GetProcess().Pid()) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RegisterHost(this);
-  base::PowerMonitor::AddPowerSuspendObserver(this);
+  auto* power_monitor = base::PowerMonitor::GetInstance();
+  power_monitor->AddPowerSuspendObserver(this);
   // Ensure that the initial thermal state is known by the |tracker_|.
   base::PowerThermalObserver::DeviceThermalState initial_thermal_state =
-      base::PowerMonitor::AddPowerStateObserverAndReturnPowerThermalState(this);
+      power_monitor->AddPowerStateObserverAndReturnPowerThermalState(this);
 
   frame->GetRemoteInterfaces()->GetInterface(
       tracker_.BindNewPipeAndPassReceiver());
@@ -90,9 +91,15 @@ PeerConnectionTrackerHost::PeerConnectionTrackerHost(RenderFrameHost* frame)
 
 PeerConnectionTrackerHost::~PeerConnectionTrackerHost() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  for (int lid : peer_connection_lids_) {
+    for (auto& observer : GetObserverList()) {
+      observer.OnPeerConnectionRemoved(frame_id_, lid);
+    }
+  }
   RemoveHost(this);
-  base::PowerMonitor::RemovePowerSuspendObserver(this);
-  base::PowerMonitor::RemovePowerThermalObserver(this);
+  auto* power_monitor = base::PowerMonitor::GetInstance();
+  power_monitor->RemovePowerSuspendObserver(this);
+  power_monitor->RemovePowerThermalObserver(this);
 }
 
 void PeerConnectionTrackerHost::AddPeerConnection(
@@ -100,17 +107,19 @@ void PeerConnectionTrackerHost::AddPeerConnection(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   const std::string& url =
-      (info->url == absl::nullopt) ? std::string() : *info->url;
+      (info->url == std::nullopt) ? std::string() : *info->url;
 
+  peer_connection_lids_.insert(info->lid);
   for (auto& observer : GetObserverList()) {
     observer.OnPeerConnectionAdded(frame_id_, info->lid, peer_pid_, url,
-                                   info->rtc_configuration, info->constraints);
+                                   info->rtc_configuration);
   }
 }
 
 void PeerConnectionTrackerHost::RemovePeerConnection(int lid) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  peer_connection_lids_.erase(lid);
   for (auto& observer : GetObserverList()) {
     observer.OnPeerConnectionRemoved(frame_id_, lid);
   }
@@ -142,15 +151,6 @@ void PeerConnectionTrackerHost::AddStandardStats(int lid,
 
   for (auto& observer : GetObserverList()) {
     observer.OnAddStandardStats(frame_id_, lid, value.Clone());
-  }
-}
-
-void PeerConnectionTrackerHost::AddLegacyStats(int lid,
-                                               base::Value::List value) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  for (auto& observer : GetObserverList()) {
-    observer.OnAddLegacyStats(frame_id_, lid, value.Clone());
   }
 }
 
@@ -256,11 +256,6 @@ void PeerConnectionTrackerHost::OnThermalStateChange(
       static_cast<blink::mojom::DeviceThermalState>(new_state));
 }
 
-void PeerConnectionTrackerHost::OnSpeedLimitChange(int new_limit) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  tracker_->OnSpeedLimitChange(new_limit);
-}
-
 void PeerConnectionTrackerHost::StartEventLog(int lid, int output_period_ms) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   tracker_->StartEventLog(lid, output_period_ms);
@@ -271,14 +266,35 @@ void PeerConnectionTrackerHost::StopEventLog(int lid) {
   tracker_->StopEventLog(lid);
 }
 
+void PeerConnectionTrackerHost::StartDataChannelLog(int lid) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  tracker_->StartDataChannelLog(lid);
+}
+
+void PeerConnectionTrackerHost::StopDataChannelLog(int lid) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  tracker_->StopDataChannelLog(lid);
+}
+
+void PeerConnectionTrackerHost::WebRtcDataChannelLogWrite(
+    int lid,
+    const std::vector<uint8_t>& output) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  std::string message(output.begin(), output.end());
+  for (auto& observer : GetObserverList()) {
+    observer.OnWebRtcDataChannelLogWrite(frame_id_, lid, message);
+  }
+}
+
 void PeerConnectionTrackerHost::GetStandardStats() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   tracker_->GetStandardStats();
 }
 
-void PeerConnectionTrackerHost::GetLegacyStats() {
+void PeerConnectionTrackerHost::GetCurrentState() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  tracker_->GetLegacyStats();
+  tracker_->GetCurrentState();
 }
 
 void PeerConnectionTrackerHost::BindReceiver(

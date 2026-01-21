@@ -4,12 +4,14 @@
 
 #include "chrome/browser/download/download_target_determiner.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -30,26 +32,26 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_target_info.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/download/download_stats.h"
-#include "components/safe_browsing/content/common/file_type_policies.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/browser/safe_browsing_metrics_collector.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/common/buildflags.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "net/base/filename_util.h"
 #include "net/http/http_content_disposition.h"
-#include "ppapi/buildflags/buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/webstore_installer.h"
 #include "extensions/common/feature_switch.h"
 #endif
@@ -62,14 +64,25 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
-#include "chrome/browser/ui/pdf/adobe_reader_info_win.h"
 #include "ui/shell_dialogs/select_file_utils_win.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/policy/dlp/dlp_files_controller.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/policy/dlp/dlp_files_controller_ash.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_file_destination.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
+#include "components/download/public/common/base_file.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/download/public/common/download_file.h"
+#include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
+#endif
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "components/safe_browsing/content/browser/download/download_stats.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
 #endif
 
 using content::BrowserThread;
@@ -92,11 +105,6 @@ void VisitCountsToVisitedBefore(base::OnceCallback<void(bool)> callback,
       result.success && result.count > 0 &&
       (result.first_visit.LocalMidnight() < base::Time::Now().LocalMidnight()));
 }
-
-#if BUILDFLAG(IS_WIN)
-// Keeps track of whether Adobe Reader is up to date.
-bool g_is_adobe_reader_up_to_date_ = false;
-#endif
 
 // For the `new_path`, generates a new safe file name if needed. Keep its
 // extension if it is empty or matches that of the `old_extension`. Otherwise,
@@ -186,15 +194,14 @@ void DownloadTargetDeterminer::DoLoop() {
       case STATE_DETERMINE_MIME_TYPE:
         result = DoDetermineMimeType();
         break;
-      case STATE_DETERMINE_IF_HANDLED_SAFELY_BY_BROWSER:
-        result = DoDetermineIfHandledSafely();
-        break;
-      case STATE_DETERMINE_IF_ADOBE_READER_UP_TO_DATE:
-        result = DoDetermineIfAdobeReaderUpToDate();
-        break;
       case STATE_CHECK_DOWNLOAD_URL:
         result = DoCheckDownloadUrl();
         break;
+#if BUILDFLAG(IS_ANDROID)
+      case STATE_CHECK_APP_VERIFICATION:
+        result = DoCheckAppVerification();
+        break;
+#endif
       case STATE_CHECK_VISITED_REFERRER_BEFORE:
         result = DoCheckVisitedReferrerBefore();
         break;
@@ -203,7 +210,6 @@ void DownloadTargetDeterminer::DoLoop() {
         break;
       case STATE_NONE:
         NOTREACHED();
-        return;
     }
   } while (result == CONTINUE);
   // Note that if a callback completes synchronously, the handler will still
@@ -244,7 +250,6 @@ DownloadTargetDeterminer::Result
       return QUIT_DOLOOP;
     }
 
-    conflict_action_ = DownloadPathReservationTracker::OVERWRITE;
     DCHECK(virtual_path_.IsAbsolute());
     return CONTINUE;
   }
@@ -284,8 +289,8 @@ DownloadTargetDeterminer::Result
       RecordDownloadPathGeneration(
           DownloadPathGenerationEvent::USE_DEFAULTL_DOWNLOAD_DIRECTORY, false);
     }
-    virtual_path_ = target_directory.Append(generated_filename);
     should_notify_extensions_ = true;
+    virtual_path_ = target_directory.Append(generated_filename);
     DCHECK(virtual_path_.IsAbsolute());
   } else {
     conflict_action_ = DownloadPathReservationTracker::OVERWRITE;
@@ -322,12 +327,14 @@ base::FilePath DownloadTargetDeterminer::GenerateFileName() const {
       download_->GetURL(), download_->GetContentDisposition(), referrer_charset,
       suggested_filename, sniffed_mime_type, default_filename);
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   // We don't replace the file extension if sfafe browsing consider the file
   // extension to be unsafe. Just let safe browsing scan the generated file.
   if (safe_browsing::FileTypePolicies::GetInstance()->IsCheckedBinaryFile(
           generated_filename)) {
     return generated_filename;
   }
+#endif
 
   // If no mime type or explicitly specified a name, don't replace file
   // extension.
@@ -416,6 +423,12 @@ void DownloadTargetDeterminer::NotifyExtensionsDone(
   // Extensions should not call back here more than once.
   DCHECK_EQ(STATE_RESERVE_VIRTUAL_PATH, next_state_);
 
+  // Ignore path suggestion for file URLs.
+  if (download_->GetURL().SchemeIsFile()) {
+    DoLoop();
+    return;
+  }
+
   if (!suggested_path.empty()) {
     // If an extension overrides the filename, then the target directory will be
     // forced to download_prefs_->DownloadPath() since extensions cannot place
@@ -427,24 +440,14 @@ void DownloadTargetDeterminer::NotifyExtensionsDone(
     base::FilePath new_path(download_prefs_->DownloadPath().Append(
         suggested_path).NormalizePathSeparators());
 
-    // If this is a local file, don't allow extensions to override its
-    // name.
-    if (download_->GetURL().SchemeIsFile()) {
-      base::FilePath file_path;
-      net::FileURLToFilePath(download_->GetURL(), &file_path);
-      base::FilePath file_name = file_path.BaseName();
-      // Check if file name is a dir.
-      if (file_name.BaseName() != file_name.DirName())
-        new_path = new_path.DirName().Append(file_name);
-    } else {
-      // If the (Chrome) extension does not suggest an file extension, or if the
-      // suggested extension matches that of the |virtual_path_|, do not
-      // pass a mime type to GenerateSafeFileName so that it does not force the
-      // filename to have an extension or generate a different one. Otherwise,
-      // correct the file extension in case it is wrongly given.
-      GenerateSafeFileName(&new_path, virtual_path_.Extension(),
-                           download_->GetMimeType());
-    }
+    // If the (Chrome) extension does not suggest an file extension, or if the
+    // suggested extension matches that of the |virtual_path_|, do not
+    // pass a mime type to GenerateSafeFileName so that it does not force the
+    // filename to have an extension or generate a different one. Otherwise,
+    // correct the file extension in case it is wrongly given.
+    GenerateSafeFileName(&new_path, virtual_path_.Extension(),
+                         download_->GetMimeType());
+
     virtual_path_ = new_path;
     create_target_directory_ = true;
   }
@@ -484,7 +487,7 @@ void DownloadTargetDeterminer::ReserveVirtualPathDone(
         << "Transient download should not ask the user for confirmation.";
     DCHECK(result != download::PathValidationResult::CONFLICT)
         << "Transient download"
-           "should always overwrite the file.";
+           "should always overwrite or uniquify the file.";
     switch (result) {
       case download::PathValidationResult::PATH_NOT_WRITABLE:
       case download::PathValidationResult::NAME_TOO_LONG:
@@ -495,10 +498,14 @@ void DownloadTargetDeterminer::ReserveVirtualPathDone(
             download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED);
         return;
       case download::PathValidationResult::SUCCESS:
-      case download::PathValidationResult::SAME_AS_SOURCE:
-        DCHECK_EQ(virtual_path_, path) << "Transient download path should not"
-                                          "be changed.";
+      case download::PathValidationResult::SUCCESS_RESOLVED_CONFLICT:
+        DCHECK(virtual_path_ == path ||
+               conflict_action_ == DownloadPathReservationTracker::UNIQUIFY);
         break;
+      case download::PathValidationResult::SAME_AS_SOURCE:
+        ScheduleCallbackAndDeleteSelf(
+            download::DOWNLOAD_INTERRUPT_REASON_FILE_SAME_AS_SOURCE);
+        return;
       case download::PathValidationResult::COUNT:
         NOTREACHED();
     }
@@ -507,7 +514,16 @@ void DownloadTargetDeterminer::ReserveVirtualPathDone(
 
     switch (result) {
       case download::PathValidationResult::SUCCESS:
+        break;
+
       case download::PathValidationResult::SAME_AS_SOURCE:
+        ScheduleCallbackAndDeleteSelf(
+            download::DOWNLOAD_INTERRUPT_REASON_FILE_SAME_AS_SOURCE);
+        return;
+
+      // TODO(crbug.com/40863725): This should trigger a duplicate download
+      // prompt.
+      case download::PathValidationResult::SUCCESS_RESOLVED_CONFLICT:
         break;
 
       case download::PathValidationResult::PATH_NOT_WRITABLE:
@@ -549,8 +565,15 @@ DownloadTargetDeterminer::Result
 DownloadTargetDeterminer::DoRequestConfirmation() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!virtual_path_.empty());
+#if BUILDFLAG(IS_ANDROID)
+  DCHECK(!download_->IsTransient() ||
+         confirmation_reason_ == DownloadConfirmationReason::NONE ||
+         // On Android we return here a second time after prompting the user.
+         confirmation_reason_ == DownloadConfirmationReason::PREFERENCE);
+#else
   DCHECK(!download_->IsTransient() ||
          confirmation_reason_ == DownloadConfirmationReason::NONE);
+#endif
 
   next_state_ = STATE_DETERMINE_LOCAL_PATH;
 
@@ -577,13 +600,22 @@ DownloadTargetDeterminer::DoRequestConfirmation() {
       // file name first.
       std::wstring sanitized_name = ui::RemoveEnvVarFromFileName<wchar_t>(
           virtual_path_.BaseName().value(), L"%");
+      // remove leading "." to avoid resorting to potential extension
+      // bug: 41486690
+      while (!sanitized_name.empty() && sanitized_name.back() == L'.') {
+          sanitized_name.pop_back();
+      }
+      // trim trailing whitespace (space, tab, NBSP) to prevent stale extensions
+      base::TrimWhitespace(sanitized_name, base::TrimPositions::TRIM_TRAILING, &sanitized_name);
       if (sanitized_name.empty()) {
         sanitized_name = base::UTF8ToWide(
             l10n_util::GetStringUTF8(IDS_DEFAULT_DOWNLOAD_FILENAME));
       }
       sanitized_path =
           virtual_path_.DirName().Append(base::FilePath(sanitized_name));
-      GenerateSafeFileName(&sanitized_path, virtual_path_.Extension(),
+      const base::FilePath::StringType post_sanitize_ext =
+          base::FilePath(sanitized_name).Extension();
+      GenerateSafeFileName(&sanitized_path, post_sanitize_ext,
                            download_->GetMimeType());
 #endif  // BUILDFLAG(IS_WIN)
       delegate_->RequestConfirmation(
@@ -598,8 +630,8 @@ DownloadTargetDeterminer::DoRequestConfirmation() {
           content::DownloadItemUtils::GetBrowserContext(download_);
       bool isOffTheRecord =
           Profile::FromBrowserContext(browser_context)->IsOffTheRecord();
-      if (base::FeatureList::IsEnabled(features::kIncognitoDownloadsWarning) &&
-          isOffTheRecord) {
+      if (isOffTheRecord && (!download_->IsTransient() ||
+                             !download_->AllowAutoOpenAfterCompletion())) {
         delegate_->RequestIncognitoWarningConfirmation(base::BindOnce(
             &DownloadTargetDeterminer::RequestIncognitoWarningConfirmationDone,
             weak_ptr_factory_.GetWeakPtr()));
@@ -614,10 +646,13 @@ DownloadTargetDeterminer::DoRequestConfirmation() {
 
 void DownloadTargetDeterminer::RequestConfirmationDone(
     DownloadConfirmationResult result,
-    const base::FilePath& virtual_path) {
+    const ui::SelectedFileInfo& selected_file_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!download_->IsTransient());
+
+  base::FilePath virtual_path = selected_file_info.path();
   DVLOG(20) << "User selected path:" << virtual_path.AsUTF8Unsafe();
+
 #if BUILDFLAG(IS_ANDROID)
   is_checking_dialog_confirmed_path_ = false;
 #endif
@@ -637,12 +672,17 @@ void DownloadTargetDeterminer::RequestConfirmationDone(
     confirmation_reason_ = DownloadConfirmationReason::NONE;
 
   virtual_path_ = virtual_path;
+#if BUILDFLAG(IS_MAC)
+  file_tags_ = selected_file_info.file_tags;
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
   if (result == DownloadConfirmationResult::CONFIRMED_WITH_DIALOG) {
     // Double check the user-selected path is valid by looping back.
     is_checking_dialog_confirmed_path_ = true;
-    confirmation_reason_ = DownloadConfirmationReason::NONE;
+    if (confirmation_reason_ != DownloadConfirmationReason::PREFERENCE) {
+      confirmation_reason_ = DownloadConfirmationReason::NONE;
+    }
     next_state_ = STATE_RESERVE_VIRTUAL_PATH;
   }
 #endif
@@ -702,7 +742,7 @@ DownloadTargetDeterminer::Result
   DCHECK(!local_path_.empty());
   DCHECK(mime_type_.empty());
 
-  next_state_ = STATE_DETERMINE_IF_HANDLED_SAFELY_BY_BROWSER;
+  next_state_ = STATE_CHECK_DOWNLOAD_URL;
   if (virtual_path_ == local_path_
 #if BUILDFLAG(IS_ANDROID)
       || local_path_.IsContentUri()
@@ -722,203 +762,56 @@ void DownloadTargetDeterminer::DetermineMimeTypeDone(
     const std::string& mime_type) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DVLOG(20) << "MIME type: " << mime_type;
-  DCHECK_EQ(STATE_DETERMINE_IF_HANDLED_SAFELY_BY_BROWSER, next_state_);
+  DCHECK_EQ(STATE_CHECK_DOWNLOAD_URL, next_state_);
+  DCHECK(!local_path_.empty());
+  DCHECK(!is_filetype_handled_safely_);
 
   mime_type_ = mime_type;
+  if (!mime_type_.empty()) {
+    is_filetype_handled_safely_ =
+        DetermineIfHandledSafelyHelper(download_, local_path_, mime_type_);
+    DVLOG(20) << "Is file type handled safely: " << is_filetype_handled_safely_;
+  }
+
   DoLoop();
 }
 
-#if BUILDFLAG(ENABLE_PLUGINS)
-// The code below is used by DoDetermineIfHandledSafely to determine if the
-// file type is handled by a sandboxed plugin.
-namespace {
-
-void InvokeClosureAfterGetPluginCallback(
-    base::OnceClosure closure,
-    const std::vector<content::WebPluginInfo>& unused) {
-  std::move(closure).Run();
-}
-
-enum ActionOnStalePluginList {
-  RETRY_IF_STALE_PLUGIN_LIST,
-  IGNORE_IF_STALE_PLUGIN_LIST
-};
-
-void IsHandledBySafePlugin(content::BrowserContext* browser_context,
-                           const GURL& url,
-                           const std::string& mime_type,
-                           ActionOnStalePluginList stale_plugin_action,
-                           base::OnceCallback<void(bool)> callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!mime_type.empty());
-  using content::WebPluginInfo;
-
-  std::string actual_mime_type;
-  bool is_stale = false;
-  WebPluginInfo plugin_info;
-
-  content::PluginService* plugin_service =
-      content::PluginService::GetInstance();
-  bool plugin_found =
-      plugin_service->GetPluginInfo(browser_context, url, mime_type, false,
-                                    &is_stale, &plugin_info, &actual_mime_type);
-  if (is_stale && stale_plugin_action == RETRY_IF_STALE_PLUGIN_LIST) {
-    // The GetPlugins call causes the plugin list to be refreshed. Once that's
-    // done we can retry the GetPluginInfo call. We break out of this cycle
-    // after a single retry in order to avoid retrying indefinitely.
-    plugin_service->GetPlugins(base::BindOnce(
-        &InvokeClosureAfterGetPluginCallback,
-        base::BindOnce(&IsHandledBySafePlugin, browser_context, url, mime_type,
-                       IGNORE_IF_STALE_PLUGIN_LIST, std::move(callback))));
-    return;
-  }
-  // In practice, we assume that retrying once is enough.
-  DCHECK(!is_stale);
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback),
-                                /*is_handled_safely=*/plugin_found));
-}
-
-bool IsHandledBySafePluginSynchronous(content::BrowserContext* browser_context,
-                                      const GURL& url,
-                                      const std::string& mime_type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!mime_type.empty());
-  using content::WebPluginInfo;
-
-  std::string actual_mime_type;
-  bool is_stale = false;
-  WebPluginInfo plugin_info;
-
-  content::PluginService* plugin_service =
-      content::PluginService::GetInstance();
-  bool plugin_found =
-      plugin_service->GetPluginInfo(browser_context, url, mime_type, false,
-                                    &is_stale, &plugin_info, &actual_mime_type);
-  if (is_stale) {
-    plugin_service->GetPluginsSynchronous();
-    plugin_found = plugin_service->GetPluginInfo(
-        browser_context, url, mime_type, false, &is_stale, &plugin_info,
-        &actual_mime_type);
-  }
-  // In practice, we assume that retrying once is enough.
-  DCHECK(!is_stale);
-  return plugin_found;
-}
-
-}  // namespace
-#endif  // BUILDFLAG(ENABLE_PLUGINS)
-
-void DownloadTargetDeterminer::DetermineIfHandledSafelyHelper(
-    download::DownloadItem* download,
-    const base::FilePath& local_path,
-    const std::string& mime_type,
-    base::OnceCallback<void(bool)> callback) {
-  if (blink::IsSupportedMimeType(mime_type)) {
-    std::move(callback).Run(true);
-    return;
-  }
-
-#if BUILDFLAG(ENABLE_PLUGINS)
-  IsHandledBySafePlugin(content::DownloadItemUtils::GetBrowserContext(download),
-                        net::FilePathToFileURL(local_path), mime_type,
-                        RETRY_IF_STALE_PLUGIN_LIST, std::move(callback));
-
-#else
-  std::move(callback).Run(false);
-#endif
-}
-
-bool DownloadTargetDeterminer::DetermineIfHandledSafelyHelperSynchronous(
+bool DownloadTargetDeterminer::DetermineIfHandledSafelyHelper(
     download::DownloadItem* download,
     const base::FilePath& local_path,
     const std::string& mime_type) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
   if (blink::IsSupportedMimeType(mime_type)) {
     return true;
   }
 
 #if BUILDFLAG(ENABLE_PLUGINS)
-  return IsHandledBySafePluginSynchronous(
+  DCHECK(!mime_type.empty());
+  auto* plugin_service = content::PluginService::GetInstance();
+  plugin_service->GetPlugins();
+  return plugin_service->HasPlugin(
       content::DownloadItemUtils::GetBrowserContext(download),
       net::FilePathToFileURL(local_path), mime_type);
-
 #else
   return false;
 #endif
 }
 
 DownloadTargetDeterminer::Result
-    DownloadTargetDeterminer::DoDetermineIfHandledSafely() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!virtual_path_.empty());
-  DCHECK(!local_path_.empty());
-  DCHECK(!is_filetype_handled_safely_);
-
-  next_state_ = STATE_DETERMINE_IF_ADOBE_READER_UP_TO_DATE;
-
-  if (mime_type_.empty())
-    return CONTINUE;
-
-  DetermineIfHandledSafelyHelper(
-      download_, local_path_, mime_type_,
-      base::BindOnce(&DownloadTargetDeterminer::DetermineIfHandledSafelyDone,
-                     weak_ptr_factory_.GetWeakPtr()));
-  return QUIT_DOLOOP;
-}
-
-void DownloadTargetDeterminer::DetermineIfHandledSafelyDone(
-    bool is_handled_safely) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DVLOG(20) << "Is file type handled safely: " << is_filetype_handled_safely_;
-  DCHECK_EQ(STATE_DETERMINE_IF_ADOBE_READER_UP_TO_DATE, next_state_);
-  is_filetype_handled_safely_ = is_handled_safely;
-  DoLoop();
-}
-
-DownloadTargetDeterminer::Result
-    DownloadTargetDeterminer::DoDetermineIfAdobeReaderUpToDate() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  next_state_ = STATE_CHECK_DOWNLOAD_URL;
-
-#if BUILDFLAG(IS_WIN)
-  if (!local_path_.MatchesExtension(FILE_PATH_LITERAL(".pdf")))
-    return CONTINUE;
-  if (!IsAdobeReaderDefaultPDFViewer()) {
-    g_is_adobe_reader_up_to_date_ = false;
-    return CONTINUE;
-  }
-
-  // IsAdobeReaderUpToDate() needs to be run with COM as it makes COM calls via
-  // AssocQueryString() in IsAdobeReaderDefaultPDFViewer().
-  base::ThreadPool::CreateCOMSTATaskRunner({base::MayBlock()})
-      ->PostTaskAndReplyWithResult(
-          FROM_HERE, base::BindOnce(&::IsAdobeReaderUpToDate),
-          base::BindOnce(
-              &DownloadTargetDeterminer::DetermineIfAdobeReaderUpToDateDone,
-              weak_ptr_factory_.GetWeakPtr()));
-  return QUIT_DOLOOP;
-#else
-  return CONTINUE;
-#endif
-}
-
-#if BUILDFLAG(IS_WIN)
-void DownloadTargetDeterminer::DetermineIfAdobeReaderUpToDateDone(
-    bool adobe_reader_up_to_date) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DVLOG(20) << "Is Adobe Reader Up To Date: " << adobe_reader_up_to_date;
-  DCHECK_EQ(STATE_CHECK_DOWNLOAD_URL, next_state_);
-  g_is_adobe_reader_up_to_date_ = adobe_reader_up_to_date;
-  DoLoop();
-}
-#endif
-
-DownloadTargetDeterminer::Result
     DownloadTargetDeterminer::DoCheckDownloadUrl() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!virtual_path_.empty());
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(
+          safe_browsing::kGooglePlayProtectReducesWarnings)) {
+    next_state_ = STATE_CHECK_APP_VERIFICATION;
+  } else {
+    next_state_ = STATE_CHECK_VISITED_REFERRER_BEFORE;
+  }
+#else
   next_state_ = STATE_CHECK_VISITED_REFERRER_BEFORE;
+#endif
 
   // If user has validated a dangerous download, don't check.
   if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED)
@@ -935,10 +828,41 @@ void DownloadTargetDeterminer::CheckDownloadUrlDone(
     download::DownloadDangerType danger_type) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DVLOG(20) << "URL Check Result:" << danger_type;
+#if BUILDFLAG(IS_ANDROID)
+  DCHECK_EQ(base::FeatureList::IsEnabled(
+                safe_browsing::kGooglePlayProtectReducesWarnings)
+                ? STATE_CHECK_APP_VERIFICATION
+                : STATE_CHECK_VISITED_REFERRER_BEFORE,
+            next_state_);
+#else
   DCHECK_EQ(STATE_CHECK_VISITED_REFERRER_BEFORE, next_state_);
+#endif
   danger_type_ = danger_type;
   DoLoop();
 }
+
+#if BUILDFLAG(IS_ANDROID)
+DownloadTargetDeterminer::Result
+DownloadTargetDeterminer::DoCheckAppVerification() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  next_state_ = STATE_CHECK_VISITED_REFERRER_BEFORE;
+  safe_browsing::SafeBrowsingApiHandlerBridge::GetInstance()
+      .StartIsVerifyAppsEnabled(
+          base::BindOnce(&DownloadTargetDeterminer::CheckAppVerificationDone,
+                         weak_ptr_factory_.GetWeakPtr()));
+  return QUIT_DOLOOP;
+}
+
+void DownloadTargetDeterminer::CheckAppVerificationDone(
+    safe_browsing::VerifyAppsEnabledResult result) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  DCHECK_EQ(STATE_CHECK_VISITED_REFERRER_BEFORE, next_state_);
+  is_app_verification_enabled_ =
+      result == safe_browsing::VerifyAppsEnabledResult::SUCCESS_ENABLED;
+  DoLoop();
+}
+#endif
 
 DownloadTargetDeterminer::Result
     DownloadTargetDeterminer::DoCheckVisitedReferrerBefore() {
@@ -965,6 +889,14 @@ DownloadTargetDeterminer::Result
     return CONTINUE;
 
   if (danger_level_ == DownloadFileType::ALLOW_ON_USER_GESTURE) {
+#if BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(
+            safe_browsing::kGooglePlayProtectReducesWarnings) &&
+        is_app_verification_enabled_) {
+      return CONTINUE;
+    }
+#endif
+
     // HistoryServiceFactory redirects incognito profiles to on-record profiles.
     // There's no history for on-record profiles in unit_tests.
     history::HistoryService* history_service =
@@ -996,12 +928,14 @@ void DownloadTargetDeterminer::CheckVisitedReferrerBeforeDone(
     bool visited_referrer_before) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_EQ(STATE_DETERMINE_INTERMEDIATE_PATH, next_state_);
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   safe_browsing::RecordDownloadFileTypeAttributes(
       safe_browsing::FileTypePolicies::GetInstance()->GetFileDangerLevel(
           virtual_path_.BaseName(), download_->GetURL(),
           GetProfile()->GetPrefs()),
       download_->HasUserGesture(), visited_referrer_before,
       GetLastDownloadBypassTimestamp());
+#endif
   danger_level_ = GetDangerLevel(
       visited_referrer_before ? VISITED_REFERRER : NO_VISITS_TO_REFERRER);
   if (danger_level_ != DownloadFileType::NOT_DANGEROUS &&
@@ -1082,15 +1016,13 @@ DownloadTargetDeterminer::Result
 
   // Dangerous downloads receive a random intermediate name that looks like:
   // 'Unconfirmed <random>.crdownload'.
-  const char kUnconfirmedFormatSuffix[] = " %d.crdownload";
+  static constexpr char kUnconfirmedFormatSuffix[] = " %d.crdownload";
   // Range of the <random> uniquifier.
-  const int kUnconfirmedUniquifierRange = 1000000;
-  std::string unconfirmed_format =
-      l10n_util::GetStringUTF8(IDS_DOWNLOAD_UNCONFIRMED_PREFIX);
-  unconfirmed_format.append(kUnconfirmedFormatSuffix);
+  constexpr int kUnconfirmedUniquifierRange = 1000000;
 
   std::string file_name =
-      base::StringPrintf(unconfirmed_format.c_str(),
+      l10n_util::GetStringUTF8(IDS_DOWNLOAD_UNCONFIRMED_PREFIX) +
+      base::StringPrintf(kUnconfirmedFormatSuffix,
                          base::RandInt(0, kUnconfirmedUniquifierRange));
   intermediate_path_ =
       local_path_.DirName().Append(base::FilePath::FromUTF8Unsafe(file_name));
@@ -1098,7 +1030,7 @@ DownloadTargetDeterminer::Result
 }
 
 void DownloadTargetDeterminer::ScheduleCallbackAndDeleteSelf(
-    download::DownloadInterruptReason result) {
+    download::DownloadInterruptReason interrupt_reason) {
   DCHECK(download_);
   DVLOG(20) << "Scheduling callback. Virtual:" << virtual_path_.AsUTF8Unsafe()
             << " Local:" << local_path_.AsUTF8Unsafe()
@@ -1106,32 +1038,38 @@ void DownloadTargetDeterminer::ScheduleCallbackAndDeleteSelf(
             << " Confirmation reason:" << static_cast<int>(confirmation_reason_)
             << " Danger type:" << danger_type_
             << " Danger level:" << danger_level_
-            << " Result:" << static_cast<int>(result);
-  std::unique_ptr<DownloadTargetInfo> target_info(new DownloadTargetInfo);
+            << " Interrupt reason:" << static_cast<int>(interrupt_reason);
+  download::DownloadTargetInfo target_info;
 
-  target_info->target_path = local_path_;
-  target_info->result = result;
-  target_info->target_disposition =
+  target_info.target_path = local_path_;
+  target_info.intermediate_path = intermediate_path_;
+#if BUILDFLAG(IS_ANDROID)
+  // If |virtual_path_| is content URI, there is no need to prompt the user.
+  if (local_path_.IsContentUri() && !virtual_path_.IsContentUri()) {
+    target_info.display_name = virtual_path_.BaseName();
+  } else if (download_->GetDownloadFile() &&
+             download_->GetDownloadFile()->IsMemoryFile()) {
+    // Memory file doesn't have a proper display name. Generate one here.
+    target_info.display_name = GenerateFileName();
+  }
+#endif
+  target_info.mime_type = mime_type_;
+#if BUILDFLAG(IS_MAC)
+  target_info.file_tags = file_tags_;
+#endif
+  target_info.is_filetype_handled_safely = is_filetype_handled_safely_;
+  target_info.target_disposition =
       (HasPromptedForPath() ||
                confirmation_reason_ != DownloadConfirmationReason::NONE
            ? DownloadItem::TARGET_DISPOSITION_PROMPT
            : DownloadItem::TARGET_DISPOSITION_OVERWRITE);
-  target_info->danger_type = danger_type_;
-  target_info->danger_level = danger_level_;
-  target_info->intermediate_path = intermediate_path_;
-  target_info->mime_type = mime_type_;
-  target_info->is_filetype_handled_safely = is_filetype_handled_safely_;
-  target_info->insecure_download_status = insecure_download_status_;
-#if BUILDFLAG(IS_ANDROID)
-  // If |virtual_path_| is content URI, there is no need to prompt the user.
-  if (local_path_.IsContentUri() && !virtual_path_.IsContentUri()) {
-    target_info->display_name = virtual_path_.BaseName();
-  }
-#endif
+  target_info.danger_type = danger_type_;
+  target_info.interrupt_reason = interrupt_reason;
+  target_info.insecure_download_status = insecure_download_status_;
 
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(std::move(completion_callback_), std::move(target_info)));
+      FROM_HERE, base::BindOnce(std::move(completion_callback_),
+                                std::move(target_info), danger_level_));
   delete this;
 }
 
@@ -1190,8 +1128,8 @@ DownloadConfirmationReason DownloadTargetDeterminer::NeedsConfirmation(
       DownloadItem::TARGET_DISPOSITION_PROMPT)
     return DownloadConfirmationReason::SAVE_AS;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Don't prompt for extension downloads if the installation site is white
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // Don't prompt for extension downloads if the installation site is allow
   // listed.
   if (download_crx_util::IsTrustedExtensionDownload(GetProfile(), *download_))
     return DownloadConfirmationReason::NONE;
@@ -1215,7 +1153,7 @@ DownloadConfirmationReason DownloadTargetDeterminer::NeedsConfirmation(
 
 bool DownloadTargetDeterminer::IsDownloadDlpBlocked(
     const base::FilePath& download_path) const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   auto* web_contents =
       download_ ? content::DownloadItemUtils::GetWebContents(download_)
                 : nullptr;
@@ -1225,15 +1163,18 @@ bool DownloadTargetDeterminer::IsDownloadDlpBlocked(
       policy::DlpRulesManagerFactory::GetForPrimaryProfile();
   if (!rules_manager)
     return false;
-  policy::DlpFilesController* files_controller =
-      rules_manager->GetDlpFilesController();
+  policy::DlpFilesControllerAsh* files_controller =
+      static_cast<policy::DlpFilesControllerAsh*>(
+          rules_manager->GetDlpFilesController());
   if (!files_controller)
     return false;
   const GURL authority_url = download::BaseFile::GetEffectiveAuthorityURL(
       download_->GetURL(), download_->GetReferrerUrl());
+  if (!authority_url.is_valid()) {
+    return true;
+  }
   return files_controller->ShouldPromptBeforeDownload(
-      policy::DlpFilesController::DlpFileDestination(authority_url.spec()),
-      download_path);
+      policy::DlpFileDestination(authority_url), download_path);
 #else
   return false;
 #endif
@@ -1248,14 +1189,6 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
     PriorVisitsToReferrer visits) const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  // If the user has has been prompted or will be, assume that the user has
-  // approved the download. A programmatic download is considered safe unless it
-  // contains malware.
-  if (HasPromptedForPath() ||
-      confirmation_reason_ != DownloadConfirmationReason::NONE ||
-      !download_->GetForcedFilePath().empty())
-    return DownloadFileType::NOT_DANGEROUS;
-
   // User-initiated extension downloads from pref-whitelisted sources are not
   // considered dangerous.
   if (download_->HasUserGesture() &&
@@ -1263,15 +1196,47 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
     return DownloadFileType::NOT_DANGEROUS;
   }
 
-  // Anything the user has marked auto-open is OK if it's user-initiated.
-  if (download_prefs_->IsAutoOpenEnabled(download_->GetURL(), virtual_path_) &&
-      download_->HasUserGesture())
-    return DownloadFileType::NOT_DANGEROUS;
-
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   DownloadFileType::DangerLevel danger_level =
       safe_browsing::FileTypePolicies::GetInstance()->GetFileDangerLevel(
           virtual_path_.BaseName(), download_->GetURL(),
           GetProfile()->GetPrefs());
+  policy::DownloadRestriction download_restriction =
+      static_cast<policy::DownloadRestriction>(
+          GetProfile()->GetPrefs()->GetInteger(
+              policy::policy_prefs::kDownloadRestrictions));
+
+  // If the user has has been prompted or will be, assume that the user has
+  // approved the download. A programmatic download is considered safe unless it
+  // contains malware.
+  bool user_approved_path =
+      !download_->GetForcedFilePath().empty() &&
+      // Drag and drop download paths are not approved by the user. See
+      // https://crbug.com/1513639
+      download_->GetDownloadSource() != download::DownloadSource::DRAG_AND_DROP;
+  if (HasPromptedForPath() ||
+      confirmation_reason_ != DownloadConfirmationReason::NONE ||
+      user_approved_path) {
+    // If the "DownloadRestrictions" enterprise policy explicitly disallows the
+    // download, don't let the user gesture bypass the dangerous verdict.
+    //
+    // TODO(chlily) Need to verify how DownloadRestrictions policy functions
+    // when there is no Safe Browsing in the build. The policy (or at least
+    // the dangerous file types part of it) should still be active even if
+    // Safe Browsing is unavailable. (!BUILDFLAG(SAFE_BROWSING_AVAILABLE))
+    if ((download_restriction == policy::DownloadRestriction::DANGEROUS_FILES ||
+         download_restriction ==
+             policy::DownloadRestriction::POTENTIALLY_DANGEROUS_FILES) &&
+        danger_level != DownloadFileType::NOT_DANGEROUS) {
+      return DownloadFileType::DANGEROUS;
+    }
+    return DownloadFileType::NOT_DANGEROUS;
+  }
+
+  // Anything the user has marked auto-open is OK if it's user-initiated.
+  if (download_prefs_->IsAutoOpenEnabled(download_->GetURL(), virtual_path_) &&
+      download_->HasUserGesture())
+    return DownloadFileType::NOT_DANGEROUS;
 
   // A danger level of ALLOW_ON_USER_GESTURE is used to label potentially
   // dangerous file types that have a high frequency of legitimate use. We would
@@ -1292,9 +1257,12 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
        (download_->HasUserGesture() && visits == VISITED_REFERRER)))
     return DownloadFileType::NOT_DANGEROUS;
   return danger_level;
+#else
+  return DownloadFileType::NOT_DANGEROUS;
+#endif
 }
 
-absl::optional<base::Time>
+std::optional<base::Time>
 DownloadTargetDeterminer::GetLastDownloadBypassTimestamp() const {
   safe_browsing::SafeBrowsingMetricsCollector* metrics_collector =
       safe_browsing::SafeBrowsingMetricsCollectorFactory::GetForProfile(
@@ -1303,7 +1271,7 @@ DownloadTargetDeterminer::GetLastDownloadBypassTimestamp() const {
   return metrics_collector ? metrics_collector->GetLatestEventTimestamp(
                                  safe_browsing::SafeBrowsingMetricsCollector::
                                      EventType::DANGEROUS_DOWNLOAD_BYPASS)
-                           : absl::nullopt;
+                           : std::nullopt;
 }
 
 void DownloadTargetDeterminer::OnDownloadDestroyed(
@@ -1334,10 +1302,3 @@ base::FilePath DownloadTargetDeterminer::GetCrDownloadPath(
     const base::FilePath& suggested_path) {
   return base::FilePath(suggested_path.value() + kCrdownloadSuffix);
 }
-
-#if BUILDFLAG(IS_WIN)
-// static
-bool DownloadTargetDeterminer::IsAdobeReaderUpToDate() {
-  return g_is_adobe_reader_up_to_date_;
-}
-#endif

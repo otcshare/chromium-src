@@ -8,7 +8,6 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
@@ -21,22 +20,6 @@
 #include "url/origin.h"
 
 namespace {
-
-// Suffix for a mute notification action. Should match suffixes of the
-// Notifications.Blocker.ScreenCapture.* metrics in
-// metadata/notifications/histograms.xml
-std::string MutedActionSuffix(MutedNotificationHandler::Action action) {
-  switch (action) {
-    case MutedNotificationHandler::Action::kUserClose:
-      return "Close";
-    case MutedNotificationHandler::Action::kBodyClick:
-      return "Body";
-    case MutedNotificationHandler::Action::kShowClick:
-      return "Show";
-    case MutedNotificationHandler::Action::kSnoozeClick:
-      return "Snooze";
-  }
-}
 
 void RecordScreenCaptureCount(const std::string& suffix, int count) {
   base::UmaHistogramCounts100(
@@ -69,7 +52,7 @@ bool ScreenCaptureNotificationBlocker::ShouldBlockNotification(
     return false;
 
   // Otherwise block all notifications that belong to non-capturing origins.
-  return base::ranges::none_of(
+  return std::ranges::none_of(
       capturing_web_contents_,
       [&notification](content::WebContents* web_contents) {
         return url::IsSameOriginWith(notification.origin_url(),
@@ -101,7 +84,6 @@ void ScreenCaptureNotificationBlocker::OnAction(
     MutedNotificationHandler::Action action) {
   DCHECK(state_ == NotifyState::kNotifyMuted);
   CloseMuteNotification();
-  ReportMuteNotificationAction(action);
 
   switch (action) {
     case MutedNotificationHandler::Action::kUserClose:
@@ -161,20 +143,6 @@ void ScreenCaptureNotificationBlocker::ReportSessionMetrics(bool revealed) {
   RecordScreenCaptureCount("SnoozedCount", snoozed_notification_count_);
 
   reported_session_metrics_ = true;
-}
-
-void ScreenCaptureNotificationBlocker::ReportMuteNotificationAction(
-    MutedNotificationHandler::Action action) {
-  std::string action_suffix = MutedActionSuffix(action);
-  RecordScreenCaptureCount(
-      base::StrCat({"Action.", action_suffix}),
-      muted_notification_count_ + replaced_notification_count_);
-
-  auto elapsed_time = base::TimeTicks::Now() - last_mute_notification_time_;
-  base::UmaHistogramMediumTimes(
-      base::StrCat(
-          {"Notifications.Blocker.ScreenCapture.ActionTiming.", action_suffix}),
-      elapsed_time);
 }
 
 void ScreenCaptureNotificationBlocker::DisplayMuteNotification() {

@@ -4,25 +4,29 @@
 
 #include "base/types/optional_ref.h"
 
+#include <compare>
+#include <concepts>
 #include <cstddef>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
 #include "base/test/gtest_util.h"
+#include "base/test/memory/dangling_ptr_instrumentation.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
 namespace {
 
-// Construction from `std::nullptr_t` is disallowed; `absl::nullopt` must be
+// Construction from `std::nullptr_t` is disallowed; `std::nullopt` must be
 // used to construct an empty `optional_ref`.
 static_assert(!std::is_constructible_v<optional_ref<int>, std::nullptr_t>);
 
 // No-compile asserts for various const -> mutable conversions.
 static_assert(
-    !std::is_constructible_v<optional_ref<int>, const absl::optional<int>&>);
+    !std::is_constructible_v<optional_ref<int>, const std::optional<int>&>);
 static_assert(!std::is_constructible_v<optional_ref<int>, const int*>);
 static_assert(!std::is_constructible_v<optional_ref<int>, const int&>);
 static_assert(!std::is_constructible_v<optional_ref<int>, int&&>);
@@ -56,13 +60,13 @@ class TestClass {
 };
 
 TEST(OptionalRefTest, FromNullopt) {
-  [](optional_ref<const int> r) { EXPECT_FALSE(r.has_value()); }(absl::nullopt);
+  [](optional_ref<const int> r) { EXPECT_FALSE(r.has_value()); }(std::nullopt);
 
-  [](optional_ref<int> r) { EXPECT_FALSE(r.has_value()); }(absl::nullopt);
+  [](optional_ref<int> r) { EXPECT_FALSE(r.has_value()); }(std::nullopt);
 }
 
 TEST(OptionalRefTest, FromConstEmptyOptional) {
-  const absl::optional<int> optional_int;
+  const std::optional<int> optional_int;
 
   [](optional_ref<const int> r) { EXPECT_FALSE(r.has_value()); }(optional_int);
 
@@ -70,7 +74,7 @@ TEST(OptionalRefTest, FromConstEmptyOptional) {
 }
 
 TEST(OptionalRefTest, FromMutableEmptyOptional) {
-  absl::optional<int> optional_int;
+  std::optional<int> optional_int;
 
   [](optional_ref<const int> r) { EXPECT_FALSE(r.has_value()); }(optional_int);
 
@@ -78,7 +82,7 @@ TEST(OptionalRefTest, FromMutableEmptyOptional) {
 }
 
 TEST(OptionalRefTest, FromConstOptional) {
-  const absl::optional<int> optional_int(6);
+  const std::optional<int> optional_int(6);
 
   [](optional_ref<const int> r) {
     EXPECT_TRUE(r.has_value());
@@ -89,7 +93,7 @@ TEST(OptionalRefTest, FromConstOptional) {
 }
 
 TEST(OptionalRefTest, FromMutableOptional) {
-  absl::optional<int> optional_int(6);
+  std::optional<int> optional_int(6);
 
   [](optional_ref<const int> r) {
     EXPECT_TRUE(r.has_value());
@@ -212,7 +216,7 @@ TEST(OptionalRefTest, FromMutableEmptyOptionalRefTest) {
   }
 
   {
-    optional_ref<int> r1(absl::nullopt);
+    optional_ref<int> r1(std::nullopt);
     [](optional_ref<int> r2) { EXPECT_FALSE(r2.has_value()); }(r1);
   }
 }
@@ -314,6 +318,18 @@ TEST(OptionalRefTest, Star) {
   }
 }
 
+TEST(OptionalRefTest, BoolConversion) {
+  {
+    optional_ref<int> r;
+    EXPECT_FALSE(r);
+  }
+  {
+    int i;
+    base::optional_ref<int> r = i;
+    EXPECT_TRUE(r);
+  }
+}
+
 TEST(OptionalRefTest, Value) {
   // has_value() and value() are generally covered by the construction tests.
   // Make sure value() doesn't somehow break const-ness here.
@@ -370,45 +386,213 @@ TEST(OptionalRefTest, AsPtr) {
 
 TEST(OptionalRefTest, CopyAsOptional) {
   optional_ref<int> r1;
-  absl::optional<int> o1 = r1.CopyAsOptional();
-  EXPECT_EQ(absl::nullopt, o1);
+  std::optional<int> o1 = r1.CopyAsOptional();
+  EXPECT_EQ(std::nullopt, o1);
 
   int value = 6;
   optional_ref<int> r2(value);
-  absl::optional<int> o2 = r2.CopyAsOptional();
+  std::optional<int> o2 = r2.CopyAsOptional();
   EXPECT_EQ(6, o2);
+}
+
+TEST(OptionalRefTest, EqualityComparisonWithNullOpt) {
+  {
+    optional_ref<int> r;
+    EXPECT_EQ(r, std::nullopt);
+    EXPECT_EQ(std::nullopt, r);
+  }
+
+  {
+    int value = 5;
+    optional_ref<int> r(value);
+    EXPECT_NE(r, std::nullopt);
+    EXPECT_NE(std::nullopt, r);
+  }
+}
+
+class Comparable {
+ public:
+  explicit Comparable(bool b, int i) : b_(b), i_(i) {}
+
+  Comparable(const Comparable&) = delete;
+  Comparable(Comparable&&) = delete;
+  Comparable& operator=(const Comparable&) = delete;
+  Comparable& operator=(Comparable&&) = delete;
+
+  friend auto operator<=>(const Comparable&, const Comparable&) = default;
+
+ private:
+  bool b_;
+  int i_;
+};
+
+static_assert(!std::is_copy_assignable<Comparable>());
+static_assert(!std::is_copy_constructible<Comparable>());
+static_assert(std::equality_comparable<optional_ref<Comparable>>);
+static_assert(std::equality_comparable<optional_ref<const Comparable>>);
+static_assert(std::three_way_comparable<optional_ref<Comparable>>);
+static_assert(std::three_way_comparable<optional_ref<const Comparable>>);
+
+TEST(OptionalRefTest, EqualityComparison) {
+  int value = 5;
+
+  {
+    // Nulls.
+    optional_ref<int> r;
+    optional_ref<int> s;
+    EXPECT_EQ(r, s);
+    EXPECT_EQ(s, r);
+    EXPECT_EQ(r, r);
+    EXPECT_EQ(s, s);
+
+    std::optional<int> opt = 5;
+
+    EXPECT_NE(r, value);
+    EXPECT_NE(r, opt);
+    EXPECT_NE(value, r);
+    EXPECT_NE(opt, r);
+  }
+
+  {
+    // Populated values.
+    int other_value = 5;
+    std::optional<int> opt = 7;
+
+    optional_ref<int> r(value);
+    optional_ref<int> s(other_value);
+    EXPECT_EQ(r, s);
+    EXPECT_EQ(s, r);
+    EXPECT_EQ(r, r);
+    EXPECT_EQ(s, s);
+
+    EXPECT_EQ(s, 5);
+    EXPECT_EQ(s, value);
+
+    EXPECT_NE(s, 6);
+    EXPECT_NE(s, opt);
+  }
+
+  {
+    // Mismatched const-qualification.
+    optional_ref<int> r(value);
+    optional_ref<const int> s(value);
+    EXPECT_EQ(r, s);
+    EXPECT_EQ(s, r);
+    EXPECT_EQ(r, r);
+    EXPECT_EQ(s, s);
+  }
+
+  {
+    // Use with references.
+    Comparable comp(true, 5);
+    optional_ref<Comparable> r(comp);
+    optional_ref<const Comparable> s(comp);
+
+    EXPECT_EQ(comp, r);
+    EXPECT_EQ(r, comp);
+    EXPECT_EQ(comp, s);
+    EXPECT_EQ(s, comp);
+
+    EXPECT_EQ(r, s);
+    EXPECT_EQ(s, r);
+    EXPECT_EQ(r, r);
+    EXPECT_EQ(s, s);
+
+    EXPECT_NE(Comparable(false, 5), r);
+    EXPECT_NE(r, Comparable(false, 5));
+    EXPECT_NE(Comparable(false, 5), s);
+    EXPECT_NE(s, Comparable(false, 5));
+  }
+}
+
+TEST(OptionalRefTest, ThreeWayComparison) {
+  int value = 5;
+  int other_value = 7;
+
+  {
+    // Nulls.
+    optional_ref<int> r;
+    optional_ref<int> s;
+    EXPECT_EQ(r <=> s, std::strong_ordering::equal);
+
+    optional_ref<int> t(value);
+    EXPECT_LT(r, t);
+    EXPECT_GT(t, r);
+  }
+
+  {
+    // Populated values.
+    optional_ref<int> r(value);
+    optional_ref<int> s(other_value);
+    EXPECT_LT(r, s);
+    EXPECT_GT(s, r);
+  }
+
+  {
+    // Mismatched const-qualification.
+    optional_ref<int> r(value);
+    optional_ref<const int> s(other_value);
+    EXPECT_LT(r, s);
+  }
+}
+
+class Noncomparable {};
+
+static_assert(!std::equality_comparable<Noncomparable>);
+static_assert(!std::equality_comparable<optional_ref<Noncomparable>>);
+static_assert(!std::three_way_comparable<Noncomparable>);
+static_assert(!std::three_way_comparable<optional_ref<Noncomparable>>);
+
+class PartiallyComparable {
+ public:
+  friend std::partial_ordering operator<=>(const PartiallyComparable&,
+                                           const PartiallyComparable&) =
+      default;
+};
+
+static_assert(std::three_way_comparable<PartiallyComparable>);
+static_assert(std::three_way_comparable<optional_ref<PartiallyComparable>>);
+
+TEST(OptionalRefTest, CompatibilityWithOptionalMatcher) {
+  using ::testing::Optional;
+
+  int x = 45;
+  optional_ref<int> r(x);
+  EXPECT_THAT(r, Optional(x));
+  EXPECT_THAT(r, Optional(45));
+  EXPECT_THAT(r, ::testing::Not(Optional(46)));
 }
 
 TEST(OptionalRefDeathTest, ArrowOnEmpty) {
   [](optional_ref<const TestClass> r) {
     EXPECT_CHECK_DEATH(r->ConstMethod());
-  }(absl::nullopt);
+  }(std::nullopt);
 
   [](optional_ref<TestClass> r) {
     EXPECT_CHECK_DEATH(r->ConstMethod());
     EXPECT_CHECK_DEATH(r->MutableMethod());
-  }(absl::nullopt);
+  }(std::nullopt);
 }
 
 TEST(OptionalRefDeathTest, StarOnEmpty) {
   [](optional_ref<const TestClass> r) {
     EXPECT_CHECK_DEATH((*r).ConstMethod());
-  }(absl::nullopt);
+  }(std::nullopt);
 
   [](optional_ref<TestClass> r) {
     EXPECT_CHECK_DEATH((*r).ConstMethod());
     EXPECT_CHECK_DEATH((*r).MutableMethod());
-  }(absl::nullopt);
+  }(std::nullopt);
 }
 
 TEST(OptionalRefDeathTest, ValueOnEmpty) {
   [](optional_ref<const TestClass> r) {
     EXPECT_CHECK_DEATH(r.value());
-  }(absl::nullopt);
+  }(std::nullopt);
 
   [](optional_ref<TestClass> r) {
     EXPECT_CHECK_DEATH(r.value());
-  }(absl::nullopt);
+  }(std::nullopt);
 }
 
 TEST(OptionalRefTest, ClassTemplateArgumentDeduction) {
@@ -426,17 +610,17 @@ TEST(OptionalRefTest, ClassTemplateArgumentDeduction) {
     static_assert(std::is_same_v<decltype(optional_ref(i)), optional_ref<int>>);
   }
 
-  static_assert(std::is_same_v<decltype(optional_ref(absl::optional<int>())),
+  static_assert(std::is_same_v<decltype(optional_ref(std::optional<int>())),
                                optional_ref<const int>>);
 
   {
-    const absl::optional<int> o;
+    const std::optional<int> o;
     static_assert(
         std::is_same_v<decltype(optional_ref(o)), optional_ref<const int>>);
   }
 
   {
-    absl::optional<int> o;
+    std::optional<int> o;
     static_assert(std::is_same_v<decltype(optional_ref(o)), optional_ref<int>>);
   }
 
@@ -450,6 +634,48 @@ TEST(OptionalRefTest, ClassTemplateArgumentDeduction) {
     int* p = nullptr;
     static_assert(std::is_same_v<decltype(optional_ref(p)), optional_ref<int>>);
   }
+}
+
+// TODO(dcheng): It's not yet clear if it's desirable to have optional_ref embed
+// a raw_ptr. While it is certainly nice from a certain perspective, there is
+// also separate guidance to use native C++ pointers when passing things as
+// arguments, and `base::optional_ref` is intended to be an argument type.
+TEST(OptionalRefTest, DanglingPointerDetector) {
+  auto instrumentation = test::DanglingPtrInstrumentation::Create();
+  if (!instrumentation.has_value()) {
+    GTEST_SKIP() << instrumentation.error();
+  }
+  {
+    auto owned = std::make_unique<int>();
+    optional_ref<int> ref = *owned;
+    EXPECT_EQ(instrumentation->dangling_ptr_detected(), 0u);
+    EXPECT_EQ(instrumentation->dangling_ptr_released(), 0u);
+
+    owned.reset();
+    EXPECT_EQ(instrumentation->dangling_ptr_detected(), 1u);
+    EXPECT_EQ(instrumentation->dangling_ptr_released(), 0u);
+  }
+  EXPECT_EQ(instrumentation->dangling_ptr_detected(), 1u);
+  EXPECT_EQ(instrumentation->dangling_ptr_released(), 1u);
+}
+
+TEST(OptionalRefTest, DanglingUntriaged) {
+  auto instrumentation = test::DanglingPtrInstrumentation::Create();
+  if (!instrumentation.has_value()) {
+    GTEST_SKIP() << instrumentation.error();
+  }
+  {
+    auto owned = std::make_unique<int>();
+    optional_ref<int, DanglingUntriaged> ref = *owned;
+    EXPECT_EQ(instrumentation->dangling_ptr_detected(), 0u);
+    EXPECT_EQ(instrumentation->dangling_ptr_released(), 0u);
+
+    owned.reset();
+    EXPECT_EQ(instrumentation->dangling_ptr_detected(), 0u);
+    EXPECT_EQ(instrumentation->dangling_ptr_released(), 0u);
+  }
+  EXPECT_EQ(instrumentation->dangling_ptr_detected(), 0u);
+  EXPECT_EQ(instrumentation->dangling_ptr_released(), 0u);
 }
 
 }  // namespace

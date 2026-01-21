@@ -7,7 +7,6 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
@@ -15,8 +14,11 @@
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/test_management_policy.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/result_catcher.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -30,7 +32,7 @@ const char kNoPac[] = "";
 
 class ProxySettingsApiTest : public ExtensionApiTest {
  public:
-  ProxySettingsApiTest() {}
+  ProxySettingsApiTest() = default;
 
   ProxySettingsApiTest(const ProxySettingsApiTest&) = delete;
   ProxySettingsApiTest& operator=(const ProxySettingsApiTest&) = delete;
@@ -46,8 +48,6 @@ class ProxySettingsApiTest : public ExtensionApiTest {
     ASSERT_TRUE(pref != nullptr);
     EXPECT_TRUE(pref->IsExtensionControlled());
 
-    // TODO(https://crbug.com/1348219) This should call
-    // `PrefService::GetDict`.
     ProxyConfigDictionary dict(
         pref_service->GetDict(proxy_config::prefs::kProxy).Clone());
 
@@ -87,8 +87,8 @@ class ProxySettingsApiTest : public ExtensionApiTest {
 
   bool SetIsIncognitoEnabled(bool enabled) {
     ResultCatcher catcher;
-    extensions::util::SetIsIncognitoEnabled(
-        GetSingleLoadedExtension()->id(), browser()->profile(), enabled);
+    extensions::util::SetIsIncognitoEnabled(GetSingleLoadedExtension()->id(),
+                                            profile(), enabled);
     if (!catcher.GetNextResult()) {
       message_ = catcher.message();
       return false;
@@ -109,16 +109,14 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyDirectSettings) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 
   // As the extension is executed with incognito permission, the settings
   // should propagate to incognito mode.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 }
@@ -132,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, SettingsChangeOnDisableEnable) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 
@@ -153,7 +151,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, SettingsRemovedOnUninstall) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 
@@ -172,7 +170,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 
@@ -200,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
 // Tests that proxy settings corresponding to an extension take effect again
 // on browser restart, when the extension is removed from the policy blocklist.
 IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, SettingsRemovedOnPolicyBlocklist) {
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_DIRECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 }
@@ -212,7 +210,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyAutoSettings) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_AUTO_DETECT, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 }
@@ -223,16 +221,14 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyPacScript) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_PAC_SCRIPT, kNoServer, kNoBypass,
                    "http://wpad/windows.pac", pref_service);
 
   // As the extension is not executed with incognito permission, the settings
   // should not propagate to incognito mode.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ExpectNoSettings(pref_service);
 
   // Now we enable the extension in incognito mode and verify that settings
@@ -256,7 +252,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyPacDataUrl) {
        "data:;base64,ZnVuY3Rpb24gRmluZFByb3h5R"
        "m9yVVJMKHVybCwgaG9zdCkgewogIGlmIChob3N0ID09ICdmb29iYXIuY29tJykKICAgIHJl"
        "dHVybiAnUFJPWFkgYmxhY2tob2xlOjgwJzsKICByZXR1cm4gJ0RJUkVDVCc7Cn0=";
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_PAC_SCRIPT, kNoServer, kNoBypass,
                    url, pref_service);
 }
@@ -270,7 +266,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyPacData) {
       "data:application/x-ns-proxy-autoconfig;base64,ZnVuY3Rpb24gRmluZFByb3h5R"
       "m9yVVJMKHVybCwgaG9zdCkgewogIGlmIChob3N0ID09ICdmb29iYXIuY29tJykKICAgIHJl"
       "dHVybiAnUFJPWFkgYmxhY2tob2xlOjgwJzsKICByZXR1cm4gJ0RJUkVDVCc7Cn0=";
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_PAC_SCRIPT, kNoServer, kNoBypass,
                    url, pref_service);
 }
@@ -281,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyFixedSingle) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                  "127.0.0.1:100",
                  kNoBypass,
@@ -295,7 +291,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxySystem) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_SYSTEM, kNoServer, kNoBypass, kNoPac,
                    pref_service);
 }
@@ -308,29 +304,23 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyFixedIndividual) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
-                   "http=quic://1.1.1.1:443;"
-                       "https=2.2.2.2:80;"  // http:// is pruned.
-                       "ftp=3.3.3.3:9000;"  // http:// is pruned.
-                       "socks=socks4://4.4.4.4:9090",
-                   kNoBypass,
-                   kNoPac,
-                   pref_service);
+                   "http=1.1.1.1:80;"   // http:// is pruned.
+                   "https=2.2.2.2:80;"  // http:// is pruned.
+                   "ftp=3.3.3.3:9000;"  // http:// is pruned.
+                   "socks=socks4://4.4.4.4:9090",
+                   kNoBypass, kNoPac, pref_service);
 
   // Now check the incognito preferences.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
-                   "http=quic://1.1.1.1:443;"
-                       "https=2.2.2.2:80;"
-                       "ftp=3.3.3.3:9000;"
-                       "socks=socks4://4.4.4.4:9090",
-                   kNoBypass,
-                   kNoPac,
-                   pref_service);
+                   "http=1.1.1.1:80;"
+                   "https=2.2.2.2:80;"
+                   "ftp=3.3.3.3:9000;"
+                   "socks=socks4://4.4.4.4:9090",
+                   kNoBypass, kNoPac, pref_service);
 }
 
 // Tests setting values only for incognito mode
@@ -342,14 +332,12 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ExpectNoSettings(pref_service);
 
   // Now check the incognito preferences.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                    "http=1.1.1.1:80;"
                        "https=socks5://2.2.2.2:1080;"
@@ -369,7 +357,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                    "http=1.1.1.1:80;"
                        "https=socks5://2.2.2.2:1080;"
@@ -380,10 +368,8 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
                    pref_service);
 
   // Now check the incognito preferences.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                    "http=5.5.5.5:80;"
                        "https=socks5://6.6.6.6:1080;"
@@ -400,7 +386,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest, ProxyFixedIndividualRemove) {
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ExpectNoSettings(pref_service);
 }
 
@@ -412,7 +398,7 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
   const Extension* extension = GetSingleLoadedExtension();
   ASSERT_TRUE(extension);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = profile()->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                    "http=1.1.1.1:80",
                    "localhost,::1,foo.bar,<local>",
@@ -420,10 +406,8 @@ IN_PROC_BROWSER_TEST_F(ProxySettingsApiTest,
                    pref_service);
 
   // Now check the incognito preferences.
-  pref_service = browser()
-                     ->profile()
-                     ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
-                     ->GetPrefs();
+  pref_service =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)->GetPrefs();
   ValidateSettings(ProxyPrefs::MODE_FIXED_SERVERS,
                    "http=1.1.1.1:80",
                    "localhost,::1,foo.bar,<local>",

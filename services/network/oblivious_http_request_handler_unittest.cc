@@ -6,9 +6,13 @@
 #include <cstdint>
 
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/test_support/fake_message_dispatch_context.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "net/http/http_status_code.h"
+#include "net/log/test_net_log.h"
+#include "net/log/test_net_log_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/third_party/quiche/src/quiche/binary_http/binary_http_message.h"
 #include "net/third_party/quiche/src/quiche/common/quiche_data_writer.h"
 #include "net/third_party/quiche/src/quiche/oblivious_http/oblivious_http_gateway.h"
@@ -66,29 +70,85 @@ testing::Matcher<net::HttpRequestHeaders::HeaderVector> UnorderedHeadersAre(
 
 class TestOhttpClient : public network::mojom::ObliviousHttpClient {
  public:
-  TestOhttpClient(absl::optional<std::string> expected_body,
-                  int expected_status)
-      : expected_body_(std::move(expected_body)),
-        expected_status_(expected_status),
-        receiver_(this) {}
+  enum class ResponseType { kSuccess, kNetError, kOuterResponseErrorCode };
+
+  TestOhttpClient() : receiver_(this) {}
+
+  void SetExpectedNetError(int expected_net_error) {
+    expected_response_type_ = ResponseType::kNetError;
+    expected_net_error_ = expected_net_error;
+  }
+
+  void SetExpectedOuterResponseErrorCode(
+      int expected_outer_response_error_code) {
+    expected_response_type_ = ResponseType::kOuterResponseErrorCode;
+    expected_outer_response_error_code_ = expected_outer_response_error_code;
+  }
+
+  void SetExpectedInnerResponse(
+      int expected_inner_response_code,
+      std::string expected_body,
+      std::multimap<std::string, std::string> expected_headers) {
+    expected_response_type_ = ResponseType::kSuccess;
+    expected_inner_response_code_ = expected_inner_response_code;
+    expected_body_ = expected_body;
+    expected_headers_ = std::move(expected_headers);
+  }
 
   mojo::PendingRemote<network::mojom::ObliviousHttpClient>
   CreatePendingRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
 
-  void OnCompleted(const absl::optional<std::string>& response,
-                   int net_error) override {
-    EXPECT_EQ(expected_body_, response);
-    EXPECT_EQ(expected_status_, net_error);
+  void OnCompleted(
+      network::mojom::ObliviousHttpCompletionResultPtr status) override {
+    is_on_completed_called_ = true;
+    switch (expected_response_type_) {
+      case ResponseType::kSuccess: {
+        ASSERT_TRUE(status->is_inner_response());
+        EXPECT_EQ(expected_inner_response_code_,
+                  status->get_inner_response()->response_code);
+        EXPECT_EQ(expected_body_, status->get_inner_response()->response_body);
+        // Verify headers.
+        size_t iter = 0;
+        std::string name;
+        std::string value;
+        std::multimap<std::string, std::string> actual_headers;
+        while (status->get_inner_response()->headers->EnumerateHeaderLines(
+            &iter, &name, &value)) {
+          actual_headers.insert(
+              std::pair<std::string, std::string>(name, value));
+        }
+        EXPECT_EQ(expected_headers_, actual_headers);
+        break;
+      }
+      case ResponseType::kNetError: {
+        ASSERT_TRUE(status->is_net_error());
+        EXPECT_EQ(expected_net_error_, status->get_net_error());
+        break;
+      }
+      case ResponseType::kOuterResponseErrorCode: {
+        ASSERT_TRUE(status->is_outer_response_error_code());
+        EXPECT_EQ(expected_outer_response_error_code_,
+                  status->get_outer_response_error_code());
+        break;
+      }
+    }
     run_loop_.Quit();
   }
 
   void WaitForCall() { run_loop_.Run(); }
 
+  bool IsOnCompletedCalled() { return is_on_completed_called_; }
+
  private:
-  const absl::optional<std::string> expected_body_;
-  const int expected_status_;
+  ResponseType expected_response_type_;
+  int expected_inner_response_code_ = 0;
+  std::string expected_body_;
+  std::multimap<std::string, std::string> expected_headers_;
+  int expected_outer_response_error_code_ = 0;
+  int expected_net_error_ = 0;
+  bool is_on_completed_called_ = false;
   mojo::Receiver<network::mojom::ObliviousHttpClient> receiver_;
   base::RunLoop run_loop_;
 };
@@ -98,7 +158,9 @@ class TestOhttpClient : public network::mojom::ObliviousHttpClient {
 class TestObliviousHttpRequestHandler : public testing::Test {
  public:
   TestObliviousHttpRequestHandler()
-      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
+      : task_environment_(
+            base::test::TaskEnvironment::MainThreadType::IO,
+            base::test::SingleThreadTaskEnvironment::TimeSource::MOCK_TIME),
         network_service_(network::NetworkService::CreateForTesting()),
         loader_factory_receiver_(&loader_factory_) {
     network::mojom::NetworkContextParamsPtr context_params =
@@ -135,13 +197,14 @@ class TestObliviousHttpRequestHandler : public testing::Test {
     return handler;
   }
 
-  std::string DecryptRequest(std::string cipher_text) {
+  std::string DecryptRequest(std::string_view cipher_text) {
     auto request = ohttp_gateway_->DecryptObliviousHttpRequest(cipher_text);
     EXPECT_TRUE(request.ok()) << request.status();
     return std::string(request->GetPlaintextData());
   }
 
   void RespondToPendingRequest(std::string body,
+                               std::multimap<std::string, std::string> headers,
                                GURL relay_url = GURL(kRelayURL),
                                net::HttpStatusCode status = net::HTTP_OK) {
     const network::ResourceRequest* pending_request;
@@ -149,13 +212,12 @@ class TestObliviousHttpRequestHandler : public testing::Test {
         loader_factory()->IsPending(relay_url.spec(), &pending_request));
 
     ASSERT_TRUE(pending_request->request_body);
-    ASSERT_EQ(1u, pending_request->request_body->elements()->size());
+    const std::vector<network::DataElement>& elements =
+        *pending_request->request_body->elements();
+    ASSERT_EQ(1u, elements.size());
 
-    std::string request_body =
-        std::string(pending_request->request_body->elements()
-                        ->at(0)
-                        .As<network::DataElementBytes>()
-                        .AsStringPiece());
+    std::string_view request_body =
+        elements[0].As<network::DataElementBytes>().AsStringView();
 
     auto request = ohttp_gateway_->DecryptObliviousHttpRequest(request_body);
     ASSERT_TRUE(request.ok()) << request.status();
@@ -163,6 +225,9 @@ class TestObliviousHttpRequestHandler : public testing::Test {
 
     quiche::BinaryHttpResponse bhttp_response(status);
     bhttp_response.set_body(std::move(body));
+    for (auto kv : headers) {
+      bhttp_response.AddHeaderField({kv.first, kv.second});
+    }
     auto payload = bhttp_response.Serialize();
     ASSERT_TRUE(payload.ok()) << payload.status();
 
@@ -195,6 +260,14 @@ class TestObliviousHttpRequestHandler : public testing::Test {
 
   network::mojom::ObliviousHttpRequestPtr CreateRequest() {
     network::mojom::ObliviousHttpRequestPtr request =
+        CreateRequestWithoutBody();
+    request->request_body = network::mojom::ObliviousHttpRequestBody::New(
+        /*content=*/"test data", /*content_type=*/"application/testdata");
+    return request;
+  }
+
+  network::mojom::ObliviousHttpRequestPtr CreateRequestWithoutBody() {
+    network::mojom::ObliviousHttpRequestPtr request =
         network::mojom::ObliviousHttpRequest::New();
     request->relay_url = GURL(kRelayURL);
     request->key_config = CreateTestKeyConfig();
@@ -202,13 +275,59 @@ class TestObliviousHttpRequestHandler : public testing::Test {
     request->method = net::HttpRequestHeaders::kGetMethod;
     request->traffic_annotation =
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
-    request->request_body = network::mojom::ObliviousHttpRequestBody::New(
-        /*content=*/"test data", /*content_type=*/"application/testdata");
     return request;
   }
 
+  void FastForward(base::TimeDelta delta) {
+    task_environment_.FastForwardBy(delta);
+    task_environment_.RunUntilIdle();
+  }
+
+  void VerifyNetLog(const net::RecordingNetLogObserver& net_log_observer,
+                    bool expected_has_response_data_and_headers,
+                    int expected_net_error,
+                    std::optional<int> expected_outer_response_error_code,
+                    std::optional<int> expected_inner_response_code) {
+    auto entries = net_log_observer.GetEntries();
+    size_t pos = net::ExpectLogContainsSomewhereAfter(
+        entries, /*start_offset=*/0,
+        net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST,
+        net::NetLogEventPhase::BEGIN);
+    pos = net::ExpectLogContainsSomewhere(
+        entries, /*start_offset=*/pos + 1,
+        net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST_DATA,
+        net::NetLogEventPhase::NONE);
+    EXPECT_TRUE(
+        net::GetOptionalIntegerValueFromParams(entries[pos], "byte_count"));
+    if (expected_has_response_data_and_headers) {
+      pos = net::ExpectLogContainsSomewhereAfter(
+          entries, /*start_offset=*/pos + 1,
+          net::NetLogEventType::OBLIVIOUS_HTTP_RESPONSE_DATA,
+          net::NetLogEventPhase::NONE);
+      EXPECT_TRUE(
+          net::GetOptionalIntegerValueFromParams(entries[pos], "byte_count"));
+      pos = net::ExpectLogContainsSomewhereAfter(
+          entries, /*start_offset=*/pos + 1,
+          net::NetLogEventType::OBLIVIOUS_HTTP_RESPONSE_HEADERS,
+          net::NetLogEventPhase::NONE);
+      EXPECT_TRUE(entries[pos].params.FindList("headers"));
+    }
+    pos = net::ExpectLogContainsSomewhereAfter(
+        entries, /*start_offset=*/pos + 1,
+        net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST,
+        net::NetLogEventPhase::END);
+    EXPECT_EQ(expected_net_error,
+              net::GetOptionalNetErrorCodeFromParams(entries[pos]));
+    EXPECT_EQ(expected_outer_response_error_code,
+              net::GetOptionalIntegerValueFromParams(
+                  entries[pos], "outer_response_error_code"));
+    EXPECT_EQ(expected_inner_response_code,
+              net::GetOptionalIntegerValueFromParams(entries[pos],
+                                                     "inner_response_code"));
+  }
+
  private:
-  absl::optional<quiche::ObliviousHttpGateway> ohttp_gateway_;
+  std::optional<quiche::ObliviousHttpGateway> ohttp_gateway_;
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<network::NetworkService> network_service_;
   mojo::Remote<network::mojom::NetworkContext> network_context_remote_;
@@ -221,14 +340,34 @@ TEST_F(TestObliviousHttpRequestHandler, TestDisconnect) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client("", net::OK);
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"",
+        /*expected_headers=*/{});
     handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
   }
 
   {
-    TestOhttpClient client("", net::OK);
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"",
+        /*expected_headers=*/{});
     handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
-    RespondToPendingRequest("");
+    RespondToPendingRequest("", {});
+    client.WaitForCall();
+  }
+  // Empty body
+  {
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"",
+        /*expected_headers=*/{});
+    handler->StartRequest(CreateRequestWithoutBody(),
+                          client.CreatePendingRemote());
+    RespondToPendingRequest("", {});
     client.WaitForCall();
   }
 }
@@ -239,7 +378,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_URL);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_URL);
     network::mojom::ObliviousHttpRequestPtr request =
         network::mojom::ObliviousHttpRequest::New();
 
@@ -249,7 +389,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_URL);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_URL);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->relay_url = GURL();
 
@@ -259,7 +400,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_URL);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_URL);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->resource_url = GURL();
 
@@ -269,7 +411,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_ARGUMENT);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_ARGUMENT);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->traffic_annotation = net::MutableNetworkTrafficAnnotationTag();
 
@@ -279,7 +422,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_ARGUMENT);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_ARGUMENT);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->method = std::string(17, 'A');
 
@@ -289,9 +433,10 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_ARGUMENT);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_ARGUMENT);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
-    request->request_body->content = std::string(10 * 1024 + 1, ' ');
+    request->request_body->content = std::string(5 * 1024 * 1024 + 1, ' ');
 
     handler->StartRequest(std::move(request), client.CreatePendingRemote());
     EXPECT_EQ("Request body too large", obs.WaitForBadMessage());
@@ -299,7 +444,8 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   {
     mojo::FakeMessageDispatchContext context;
     mojo::test::BadMessageObserver obs;
-    TestOhttpClient client(absl::nullopt, net::ERR_INVALID_ARGUMENT);
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_ARGUMENT);
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->request_body->content_type = std::string(257, ' ');
 
@@ -308,11 +454,29 @@ TEST_F(TestObliviousHttpRequestHandler, TestInvalidArguments) {
   }
 }
 
+TEST_F(TestObliviousHttpRequestHandler, TestEmptyKeyConfig) {
+  std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
+      CreateHandler();
+  network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
+  request->key_config = "";
+
+  TestOhttpClient client;
+  client.SetExpectedNetError(net::ERR_INVALID_ARGUMENT);
+  handler->StartRequest(std::move(request), client.CreatePendingRemote());
+  client.WaitForCall();
+}
+
 TEST_F(TestObliviousHttpRequestHandler, TestRequestFormat) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client("response body", net::OK);
+    net::RecordingNetLogObserver net_log_observer;
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"response body",
+        /*expected_headers=*/
+        {{"cache-control", "s-maxage=3600"}, {"content-type", "text/html"}});
 
     handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
     const network::ResourceRequest* pending_request;
@@ -330,12 +494,11 @@ TEST_F(TestObliviousHttpRequestHandler, TestRequestFormat) {
             {net::HttpRequestHeaders::kContentType, "message/ohttp-req"},
         }));
     ASSERT_TRUE(pending_request->request_body);
-    ASSERT_EQ(1u, pending_request->request_body->elements()->size());
-
-    std::string body = std::string(pending_request->request_body->elements()
-                                       ->at(0)
-                                       .As<network::DataElementBytes>()
-                                       .AsStringPiece());
+    const std::vector<network::DataElement>& elements =
+        *pending_request->request_body->elements();
+    ASSERT_EQ(1u, elements.size());
+    std::string_view body =
+        elements[0].As<network::DataElementBytes>().AsStringView();
     std::string plain_text_body = DecryptRequest(body);
 
     auto maybe_request = quiche::BinaryHttpRequest::Create(plain_text_body);
@@ -352,8 +515,55 @@ TEST_F(TestObliviousHttpRequestHandler, TestRequestFormat) {
                     {"content-type", "application/testdata"},
                 }));
     EXPECT_EQ(request.body(), "test data");
-    RespondToPendingRequest("response body");
+    RespondToPendingRequest(
+        "response body",
+        {{"cache-control", "s-maxage=3600"}, {"content-type", "text/html"}});
     client.WaitForCall();
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/true,
+                 /*expected_net_error=*/net::OK,
+                 /*expected_outer_response_error_code=*/std::nullopt,
+                 /*expected_inner_response_code=*/net::HTTP_OK);
+  }
+}
+
+TEST_F(TestObliviousHttpRequestHandler, TestTimeout) {
+  std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
+      CreateHandler();
+  // Default timeout.
+  {
+    net::RecordingNetLogObserver net_log_observer;
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_TIMED_OUT);
+
+    handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
+
+    FastForward(base::Seconds(59));
+    EXPECT_FALSE(client.IsOnCompletedCalled());
+    FastForward(base::Seconds(1));
+    EXPECT_TRUE(client.IsOnCompletedCalled());
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/false,
+                 /*expected_net_error=*/net::ERR_TIMED_OUT,
+                 /*expected_outer_response_error_code=*/std::nullopt,
+                 /*expected_inner_response_code=*/std::nullopt);
+  }
+  // Configured timeout.
+  {
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_TIMED_OUT);
+
+    network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
+    request->timeout_duration = base::Seconds(3);
+
+    handler->StartRequest(std::move(request), client.CreatePendingRemote());
+
+    FastForward(base::Seconds(2));
+    EXPECT_FALSE(client.IsOnCompletedCalled());
+    FastForward(base::Seconds(1));
+    EXPECT_TRUE(client.IsOnCompletedCalled());
   }
 }
 
@@ -361,11 +571,41 @@ TEST_F(TestObliviousHttpRequestHandler, HandlesOuterHttpError) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
+    net::RecordingNetLogObserver net_log_observer;
     loader_factory()->AddResponse(kRelayURL, "", net::HTTP_NOT_FOUND);
-    TestOhttpClient client(absl::nullopt, net::ERR_HTTP_RESPONSE_CODE_FAILURE);
+    TestOhttpClient client;
+    client.SetExpectedOuterResponseErrorCode(net::HTTP_NOT_FOUND);
 
     handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
     client.WaitForCall();
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/false,
+                 /*expected_net_error=*/net::ERR_HTTP_RESPONSE_CODE_FAILURE,
+                 /*expected_outer_response_error_code=*/net::HTTP_NOT_FOUND,
+                 /*expected_inner_response_code=*/std::nullopt);
+  }
+  {
+    net::RecordingNetLogObserver net_log_observer;
+    loader_factory()->AddResponse(
+        GURL(kRelayURL), network::CreateURLResponseHead(net::HTTP_OK), "",
+        network::URLLoaderCompletionStatus(net::ERR_CONNECTION_RESET),
+        network::TestURLLoaderFactory::Redirects(),
+        network::TestURLLoaderFactory::ResponseProduceFlags::
+            kSendHeadersOnNetworkError);
+    TestOhttpClient client;
+    // The outer HTTP error code should be set only when the net error is
+    // ERR_HTTP_RESPONSE_CODE_FAILURE. Otherwise, log the net error instead.
+    client.SetExpectedNetError(net::ERR_CONNECTION_RESET);
+
+    handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
+    client.WaitForCall();
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/false,
+                 /*expected_net_error=*/net::ERR_CONNECTION_RESET,
+                 /*expected_outer_response_error_code=*/std::nullopt,
+                 /*expected_inner_response_code=*/std::nullopt);
   }
 }
 
@@ -373,11 +613,44 @@ TEST_F(TestObliviousHttpRequestHandler, HandlesInnerHttpError) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client(absl::nullopt, net::ERR_HTTP_RESPONSE_CODE_FAILURE);
+    net::RecordingNetLogObserver net_log_observer;
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_NOT_FOUND,
+        /*expected_body=*/"",
+        /*expected_headers=*/
+        {{"cache-control", "s-maxage=60"}});
 
     handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
-    RespondToPendingRequest("", GURL(kRelayURL), net::HTTP_NOT_FOUND);
+    RespondToPendingRequest("", {{"cache-control", "s-maxage=60"}},
+                            GURL(kRelayURL), net::HTTP_NOT_FOUND);
     client.WaitForCall();
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/true,
+                 /*expected_net_error=*/net::OK,
+                 /*expected_outer_response_error_code=*/std::nullopt,
+                 /*expected_inner_response_code=*/net::HTTP_NOT_FOUND);
+  }
+  {
+    net::RecordingNetLogObserver net_log_observer;
+    TestOhttpClient client;
+    client.SetExpectedNetError(net::ERR_INVALID_RESPONSE);
+
+    handler->StartRequest(CreateRequest(), client.CreatePendingRemote());
+    ASSERT_TRUE(loader_factory()->IsPending(kRelayURL));
+    EXPECT_TRUE(loader_factory()->SimulateResponseForPendingRequest(
+        /*url=*/GURL(kRelayURL),
+        /*completion_status=*/network::URLLoaderCompletionStatus(),
+        /*response_head=*/network::CreateURLResponseHead(net::HTTP_OK),
+        /*content=*/"malformed inner response"));
+    client.WaitForCall();
+
+    VerifyNetLog(net_log_observer,
+                 /*expected_has_response_data_and_headers=*/false,
+                 /*expected_net_error=*/net::ERR_INVALID_RESPONSE,
+                 /*expected_outer_response_error_code=*/std::nullopt,
+                 /*expected_inner_response_code=*/std::nullopt);
   }
 }
 
@@ -385,19 +658,28 @@ TEST_F(TestObliviousHttpRequestHandler, HandlesMultipleRequests) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client_a("Response a", net::OK);
+    TestOhttpClient client_a;
+    client_a.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"Response a",
+        /*expected_headers=*/{{"cache-control", "s-maxage=60"}});
     network::mojom::ObliviousHttpRequestPtr request_a = CreateRequest();
-    TestOhttpClient client_b("Response b", net::OK);
+    TestOhttpClient client_b;
+    client_b.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"Response b",
+        /*expected_headers=*/{{"cache-control", "s-maxage=600"}});
     network::mojom::ObliviousHttpRequestPtr request_b = CreateRequest();
     request_b->relay_url = GURL("https://another.relay.test");
 
     handler->StartRequest(std::move(request_a), client_a.CreatePendingRemote());
     handler->StartRequest(std::move(request_b), client_b.CreatePendingRemote());
 
-    RespondToPendingRequest("Response b", GURL("https://another.relay.test"));
+    RespondToPendingRequest("Response b", {{"cache-control", "s-maxage=600"}},
+                            GURL("https://another.relay.test"));
     client_b.WaitForCall();
 
-    RespondToPendingRequest("Response a");
+    RespondToPendingRequest("Response a", {{"cache-control", "s-maxage=60"}});
     client_a.WaitForCall();
   }
 }
@@ -406,7 +688,11 @@ TEST_F(TestObliviousHttpRequestHandler, PadsUpToNextPowerOfTwo) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client("response body", net::OK);
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"response body",
+        /*expected_headers=*/{});
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->padding_params =
         network::mojom::ObliviousHttpPaddingParameters::New(
@@ -417,12 +703,11 @@ TEST_F(TestObliviousHttpRequestHandler, PadsUpToNextPowerOfTwo) {
     const network::ResourceRequest* pending_request;
     ASSERT_TRUE(loader_factory()->IsPending(kRelayURL, &pending_request));
     ASSERT_TRUE(pending_request->request_body);
-    ASSERT_EQ(1u, pending_request->request_body->elements()->size());
-
-    std::string body = std::string(pending_request->request_body->elements()
-                                       ->at(0)
-                                       .As<network::DataElementBytes>()
-                                       .AsStringPiece());
+    const std::vector<network::DataElement>& elements =
+        *pending_request->request_body->elements();
+    ASSERT_EQ(1u, elements.size());
+    std::string_view body =
+        elements[0].As<network::DataElementBytes>().AsStringView();
     std::string plain_text_body = DecryptRequest(body);
 
     EXPECT_EQ(256u, plain_text_body.size());
@@ -434,7 +719,11 @@ TEST_F(TestObliviousHttpRequestHandler, DoesntPadsIfAlreadyPowerOfTwo) {
   std::unique_ptr<network::ObliviousHttpRequestHandler> handler =
       CreateHandler();
   {
-    TestOhttpClient client("response body", net::OK);
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"response body",
+        /*expected_headers=*/{});
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->padding_params =
         network::mojom::ObliviousHttpPaddingParameters::New(
@@ -448,12 +737,11 @@ TEST_F(TestObliviousHttpRequestHandler, DoesntPadsIfAlreadyPowerOfTwo) {
     const network::ResourceRequest* pending_request;
     ASSERT_TRUE(loader_factory()->IsPending(kRelayURL, &pending_request));
     ASSERT_TRUE(pending_request->request_body);
-    ASSERT_EQ(1u, pending_request->request_body->elements()->size());
-
-    std::string body = std::string(pending_request->request_body->elements()
-                                       ->at(0)
-                                       .As<network::DataElementBytes>()
-                                       .AsStringPiece());
+    const std::vector<network::DataElement>& elements =
+        *pending_request->request_body->elements();
+    ASSERT_EQ(1u, elements.size());
+    std::string_view body =
+        elements[0].As<network::DataElementBytes>().AsStringView();
     std::string plain_text_body = DecryptRequest(body);
 
     EXPECT_EQ(512u, plain_text_body.size());
@@ -469,7 +757,11 @@ TEST_F(TestObliviousHttpRequestHandler, PadsExponentiallyRandomly) {
   double accum_size_squared = 0;
   for (size_t i = 0; i < kNumRuns; i++) {
     {
-      TestOhttpClient client("response body", net::OK);
+      TestOhttpClient client;
+      client.SetExpectedInnerResponse(
+          /*expected_inner_response_code=*/net::HTTP_OK,
+          /*expected_body=*/"response body",
+          /*expected_headers=*/{});
       network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
       request->padding_params =
           network::mojom::ObliviousHttpPaddingParameters::New(
@@ -508,7 +800,11 @@ TEST_F(TestObliviousHttpRequestHandler,
       CreateHandler();
   base::flat_set<size_t> sizes_seen;
   while (sizes_seen.size() < 2) {
-    TestOhttpClient client("response body", net::OK);
+    TestOhttpClient client;
+    client.SetExpectedInnerResponse(
+        /*expected_inner_response_code=*/net::HTTP_OK,
+        /*expected_body=*/"response body",
+        /*expected_headers=*/{});
     network::mojom::ObliviousHttpRequestPtr request = CreateRequest();
     request->padding_params =
         network::mojom::ObliviousHttpPaddingParameters::New(
@@ -523,13 +819,11 @@ TEST_F(TestObliviousHttpRequestHandler,
     const network::ResourceRequest* pending_request;
     ASSERT_TRUE(loader_factory()->IsPending(kRelayURL, &pending_request));
     ASSERT_TRUE(pending_request->request_body);
-    ASSERT_EQ(1u, pending_request->request_body->elements()->size());
-
-    std::string body = std::string(pending_request->request_body->elements()
-                                       ->at(0)
-                                       .As<network::DataElementBytes>()
-                                       .AsStringPiece());
-
+    const std::vector<network::DataElement>& elements =
+        *pending_request->request_body->elements();
+    ASSERT_EQ(1u, elements.size());
+    std::string_view body =
+        elements[0].As<network::DataElementBytes>().AsStringView();
     std::string plain_text_body = DecryptRequest(body);
     size_t body_size = plain_text_body.size();
     sizes_seen.insert(body_size);

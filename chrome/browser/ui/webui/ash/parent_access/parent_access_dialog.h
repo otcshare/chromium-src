@@ -8,12 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/webui/ash/parent_access/parent_access_ui.mojom.h"
 #include "chrome/browser/ui/webui/ash/parent_access/parent_access_ui_handler_delegate.h"
-#include "chrome/browser/ui/webui/ash/system_web_dialog_delegate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 
 namespace ash {
 
@@ -21,7 +21,7 @@ class WindowDimmer;
 
 // Dialog which embeds the Parent Access UI, which verifies a
 // parent during a child session.
-class ParentAccessDialog : public ParentAccessUIHandlerDelegate,
+class ParentAccessDialog : public ParentAccessUiHandlerDelegate,
                            public SystemWebDialogDelegate {
  public:
   struct Result {
@@ -30,6 +30,7 @@ class ParentAccessDialog : public ParentAccessUIHandlerDelegate,
       kApproved,  // The parent was verified and they approved.
       kDeclined,  // The request was explicitly declined by the parent.
       kCanceled,  // The request was canceled/dismissed by the parent.
+      kDisabled,  // Making a request has been disabled by the parent.
       kError,     // An error occurred while handling the request.
     };
     Status status = Status::kCanceled;
@@ -50,17 +51,20 @@ class ParentAccessDialog : public ParentAccessUIHandlerDelegate,
   ParentAccessDialog& operator=(const ParentAccessDialog&) = delete;
 
   // ui::WebDialogDelegate:
-  ui::ModalType GetDialogModalType() const override;
+  ui::mojom::ModalType GetDialogModalType() const override;
   void GetDialogSize(gfx::Size* size) const override;
   bool ShouldCloseDialogOnEscape() const override;
+  bool ShouldShowDialogTitle() const override;
+  bool ShouldShowCloseButton() const override;
 
-  // ParentAccessUIHandlerDelegate:
+  // ParentAccessUiHandlerDelegate:
   parent_access_ui::mojom::ParentAccessParamsPtr CloneParentAccessParams()
       override;
   void SetApproved(const std::string& parent_access_token,
                    const base::Time& expire_timestamp) override;
   void SetDeclined() override;
   void SetCanceled() override;
+  void SetDisabled() override;
   void SetError() override;
 
   parent_access_ui::mojom::ParentAccessParams* GetParentAccessParamsForTest()
@@ -128,14 +132,7 @@ class ParentAccessDialogProvider {
     kNotAChildUser = 2,
     kMaxValue = kNotAChildUser
   };
-
-  // Returns the name of parent access widget error histogram for a flow type.
-  static const std::string
-  GetParentAccessWidgetShowDialogErrorHistogramForFlowType(
-      absl::optional<parent_access_ui::mojom::ParentAccessParams::FlowType>
-          flow_type);
 };
-
 }  // namespace ash
 
 #endif  // CHROME_BROWSER_UI_WEBUI_ASH_PARENT_ACCESS_PARENT_ACCESS_DIALOG_H_

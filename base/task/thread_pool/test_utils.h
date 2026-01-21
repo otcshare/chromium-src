@@ -6,10 +6,11 @@
 #define BASE_TASK_THREAD_POOL_TEST_UTILS_H_
 
 #include <atomic>
-#include <memory>
+#include <variant>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/task/common/checked_lock.h"
 #include "base/task/post_job.h"
 #include "base/task/task_features.h"
@@ -21,7 +22,6 @@
 #include "base/task/thread_pool/task_tracker.h"
 #include "base/task/thread_pool/thread_group.h"
 #include "base/task/thread_pool/worker_thread_observer.h"
-#include "base/thread_annotations.h"
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -43,14 +43,14 @@ class MockWorkerThreadObserver : public WorkerThreadObserver {
   void WaitCallsOnMainExit();
 
   // WorkerThreadObserver:
-  MOCK_METHOD0(OnWorkerThreadMainEntry, void());
-  // This doesn't use MOCK_METHOD0 because some tests need to wait for all calls
+  MOCK_METHOD(void, OnWorkerThreadMainEntry, (), (override));
+  // This doesn't use MOCK_METHOD because some tests need to wait for all calls
   // to happen, which isn't possible with gmock.
   void OnWorkerThreadMainExit() override;
 
  private:
   CheckedLock lock_;
-  std::unique_ptr<ConditionVariable> on_main_exit_cv_ GUARDED_BY(lock_);
+  ConditionVariable on_main_exit_cv_ GUARDED_BY(lock_);
   int allowed_calls_on_main_exit_ GUARDED_BY(lock_) = 0;
 };
 
@@ -86,7 +86,7 @@ class MockPooledTaskRunnerDelegate : public PooledTaskRunnerDelegate {
 class MockJobTask : public base::RefCountedThreadSafe<MockJobTask> {
  public:
   // Gives |worker_task| to requesting workers |num_tasks_to_run| times.
-  MockJobTask(base::RepeatingCallback<void(JobDelegate*)> worker_task,
+  MockJobTask(RepeatingCallback<void(JobDelegate*)> worker_task,
               size_t num_tasks_to_run);
 
   // Gives |worker_task| to a single requesting worker.
@@ -97,9 +97,7 @@ class MockJobTask : public base::RefCountedThreadSafe<MockJobTask> {
 
   // Updates the remaining number of time |worker_task| runs to
   // |num_tasks_to_run|.
-  void SetNumTasksToRun(size_t num_tasks_to_run) {
-    remaining_num_tasks_to_run_ = num_tasks_to_run;
-  }
+  void SetNumTasksToRun(size_t num_tasks_to_run);
 
   size_t GetMaxConcurrency(size_t worker_count) const;
   void Run(JobDelegate* delegate);
@@ -114,7 +112,7 @@ class MockJobTask : public base::RefCountedThreadSafe<MockJobTask> {
 
   ~MockJobTask();
 
-  base::RepeatingCallback<void(JobDelegate*)> worker_task_;
+  std::variant<OnceClosure, RepeatingCallback<void(JobDelegate*)>> task_;
   std::atomic_size_t remaining_num_tasks_to_run_;
 };
 
@@ -124,7 +122,7 @@ class MockJobTask : public base::RefCountedThreadSafe<MockJobTask> {
 scoped_refptr<Sequence> CreateSequenceWithTask(
     Task task,
     const TaskTraits& traits,
-    scoped_refptr<TaskRunner> task_runner = nullptr,
+    scoped_refptr<SequencedTaskRunner> task_runner = nullptr,
     TaskSourceExecutionMode execution_mode =
         TaskSourceExecutionMode::kParallel);
 

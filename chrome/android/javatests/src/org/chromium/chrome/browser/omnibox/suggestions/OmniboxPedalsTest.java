@@ -4,580 +4,313 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions;
 
-import static org.chromium.base.test.util.CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL;
-import static org.chromium.base.test.util.CriteriaHelper.DEFAULT_POLLING_INTERVAL;
+import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.action.ViewActions.pressKey;
+import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withId;
+
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeHistoryUrl;
+import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.app.Activity;
-import android.support.test.InstrumentationRegistry;
 import android.view.KeyEvent;
 
 import androidx.fragment.app.Fragment;
 import androidx.test.filters.MediumTest;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.FeatureList;
+import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.metrics.HistogramTestRule;
-import org.chromium.base.test.params.ParameterAnnotations;
-import org.chromium.base.test.params.ParameterSet;
-import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.chrome.R;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.ImportantFormFactors;
+import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.autofill.settings.AutofillPaymentMethodsFragment;
-import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataTabsFragment;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.history.HistoryActivity;
-import org.chromium.chrome.browser.omnibox.LocationBarLayout;
-import org.chromium.chrome.browser.omnibox.OmniboxSuggestionType;
-import org.chromium.chrome.browser.omnibox.action.OmniboxActionType;
-import org.chromium.chrome.browser.omnibox.action.OmniboxPedalType;
-import org.chromium.chrome.browser.omnibox.suggestions.pedal.PedalSuggestionView;
-import org.chromium.chrome.browser.password_manager.settings.PasswordSettings;
-import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
+import org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxPedal;
+import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionView;
+import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
 import org.chromium.chrome.browser.settings.MainSettings;
 import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
-import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
+import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ActivityTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils.SuggestionInfo;
-import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
 import org.chromium.components.browser_ui.accessibility.AccessibilitySettings;
 import org.chromium.components.browser_ui.site_settings.SiteSettings;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.AutocompleteResult;
-import org.chromium.components.omnibox.action.HistoryClustersAction;
-import org.chromium.components.omnibox.action.OmniboxPedal;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.content_public.browser.test.util.TestTouchUtils;
+import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxPedalId;
 import org.chromium.ui.base.DeviceFormFactor;
-import org.chromium.url.GURL;
+import org.chromium.ui.modaldialog.DialogDismissalCause;
+import org.chromium.ui.test.util.DeviceRestriction;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Tests of the Omnibox Pedals feature.
- */
-@RunWith(ParameterizedRunner.class)
+/** Tests of the Omnibox Pedals feature. */
+@RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
-@ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
+@DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
 public class OmniboxPedalsTest {
-    @ParameterAnnotations.ClassParameter
-    private static List<ParameterSet> sClassParams =
-            Arrays.asList(new ParameterSet().value(false).name("RegularTab"),
-                    new ParameterSet().value(true).name("IncognitoTab"));
-
-    @ClassRule
-    public static ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
-
     @Rule
-    public HistogramTestRule mHistogramTester = new HistogramTestRule();
+    public ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
+            ChromeTransitTestRules.blankPageStartReusedActivityRule();
 
+    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+
+    private WebPageStation mStartingPage;
     private OmniboxTestUtils mOmniboxUtils;
-    private boolean mIncognito;
-    private LocationBarLayout mLocationBarLayout;
-    private Activity mTargetActivity;
-
-    public OmniboxPedalsTest(boolean incognito) {
-        mIncognito = incognito;
-    }
-
-    @BeforeClass
-    public static void beforeClass() {
-        FeatureList.TestValues featureTestValues = new FeatureList.TestValues();
-        featureTestValues.addFeatureFlagOverride(ChromeFeatureList.HISTORY_JOURNEYS, true);
-        FeatureList.setTestValues(featureTestValues);
-        FeatureList.setTestCanUseDefaultsForTesting();
-
-        sActivityTestRule.startMainActivityOnBlankPage();
-        sActivityTestRule.waitForActivityNativeInitializationComplete();
-        sActivityTestRule.waitForDeferredStartup();
-    }
+    private SettingsActivity mTargetActivity;
 
     @Before
     public void setUp() throws InterruptedException {
-        if (mIncognito) {
-            sActivityTestRule.newIncognitoTabFromMenu();
-        }
-        sActivityTestRule.loadUrl("about:blank");
-        mOmniboxUtils = new OmniboxTestUtils(sActivityTestRule.getActivity());
-        mLocationBarLayout =
-                (LocationBarLayout) sActivityTestRule.getActivity().findViewById(R.id.location_bar);
+        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
+        mStartingPage = mActivityTestRule.start();
+        mOmniboxUtils = new OmniboxTestUtils(mStartingPage.getActivity());
     }
 
     @After
     public void tearDown() throws Exception {
-        if (mOmniboxUtils.getFocus()) {
-            mOmniboxUtils.clearFocus();
-        }
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { IncognitoTabHostUtils.closeAllIncognitoTabs(); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    IncognitoTabHostUtils.closeAllIncognitoTabs();
+                });
         if (mTargetActivity != null) {
             ApplicationTestUtils.finishActivity(mTargetActivity);
         }
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mActivityTestRule
+                                .getActivity()
+                                .getModalDialogManager()
+                                .dismissAllDialogs(DialogDismissalCause.NEGATIVE_BUTTON_CLICKED));
+        AutocompleteControllerJni.setInstanceForTesting(null);
     }
 
     /**
-     * Type the |text| into |activity|'s url_bar.
+     * Apply suggestions to the Omnibox. Requires at least one of the suggestions to include at
+     * least one OmniboxAction. Verifies that suggestions - and actions - are shown.
      *
-     * @param activity The Activity which url_bar is in.
-     * @param text The text will be typed into url_bar.
+     * @param matches the matches to show
      */
-    private void typeInOmnibox(String text) throws InterruptedException {
+    private void setSuggestions(AutocompleteMatch... matches) {
         mOmniboxUtils.requestFocus();
-        mOmniboxUtils.setText("");
-        mOmniboxUtils.typeText(text, false);
-        mOmniboxUtils.waitForAutocomplete();
+        // Ensure we start from empty suggestions list; don't carry over suggestions from previous
+        // run.
+        mOmniboxUtils.setSuggestions(AutocompleteResult.fromCache(null, null));
+
+        mOmniboxUtils.setSuggestions(AutocompleteResult.fromCache(Arrays.asList(matches), null));
         mOmniboxUtils.checkSuggestionsShown();
+        SuggestionInfo<BaseSuggestionView> info = mOmniboxUtils.findSuggestionWithActionChips();
+        Assert.assertNotNull("No suggestions with actions", info);
     }
 
-    /**
-     * Find the Omnibox Pedal suggestion which suggests the |pedalType|, and return the
-     * suggestion. This method needs to run on the UI thread.
-     *
-     * @param pedalType The Omnibox pedal type to be found.
-     * @return The suggesstion which suggests the matching OmniboxPedalType.
-     */
-    private AutocompleteMatch findOmniboxPedalSuggestion(@OmniboxPedalType int pedalType) {
-        ThreadUtils.assertOnUiThread();
-        AutocompleteCoordinator coordinator = mLocationBarLayout.getAutocompleteCoordinator();
-        // Find the first matching suggestion.
-        for (int i = 0; i < coordinator.getSuggestionCount(); ++i) {
-            AutocompleteMatch suggestion = coordinator.getSuggestionAt(i);
-            if (suggestion != null && suggestion.getOmniboxPedal() != null
-                    && suggestion.getOmniboxPedal().getPedalID() == pedalType) {
-                return suggestion;
-            }
-        }
-        return null;
-    }
-
-    private void clickOnPedal() {
-        SuggestionInfo<PedalSuggestionView> info =
-                mOmniboxUtils.getSuggestionByType(OmniboxSuggestionUiType.PEDAL_SUGGESTION);
-        CriteriaHelper.pollUiThread(() -> {
-            TestTouchUtils.performClickOnMainSync(
-                    InstrumentationRegistry.getInstrumentation(), info.view.getPedalChipView());
-        }, DEFAULT_MAX_TIME_TO_POLL * 5, DEFAULT_POLLING_INTERVAL);
-    }
-
-    /**
-     * Check whether the |pedalType| pedal suggestion was shown.
-     *
-     * @param pedalType The Omnibox pedal type to be found.
-     * @param expectShown expect pedal is shown or not.
-     */
-    private void checkPedalWasShown(@OmniboxPedalType int pedalType, boolean expectShown) {
-        CriteriaHelper.pollUiThread(() -> {
-            AutocompleteMatch matchSuggestion = findOmniboxPedalSuggestion(pedalType);
-            Criteria.checkThat(
-                    matchSuggestion, expectShown ? Matchers.notNullValue() : Matchers.nullValue());
-        });
-    }
-
-    /**
-     * click on the pedal to open the SettingsActivity, and return the SettingsActivity.
-     *
-     * @param activityType The class type of the activity.
-     * @param pedalType The Omnibox pedal type to be found.
-     * @return The opened SettingsActivity.
-     */
-    private <T> T clickOnPedalToSettings(
-            final Class<T> activityType, @OmniboxPedalType int pedalType) {
-        mTargetActivity = (Activity) ActivityTestUtils.waitForActivity(
-                InstrumentationRegistry.getInstrumentation(), activityType, () -> clickOnPedal());
-
-        return (T) mTargetActivity;
-    }
-
-    /**
-     * Ensure the histogram for the pedal suggestion was recorded.
-     *
-     * @param pedalType The Omnibox pedal type.
-     */
-    private void verifyHistogram(@OmniboxPedalType int pedalType) {
-        Assert.assertEquals(
-                1, mHistogramTester.getHistogramValueCount("Omnibox.PedalShown", pedalType));
-        Assert.assertEquals(1,
-                mHistogramTester.getHistogramValueCount("Omnibox.SuggestionUsed.Pedal", pedalType));
-    }
-
-    /**
-     * Check the settings fragment is shownm, and the Omnibox did not hold the focus.
-     *
-     * @param settingsActivity A Settings activity containing the fragment been shown.
-     * @param fragmentClass The fragment should be shown.
-     */
-    private void checkSettingsWasShownAndOmniboxNoFocus(
-            SettingsActivity settingsActivity, Class<? extends Fragment> fragmentClass) {
-        CriteriaHelper.pollUiThread(() -> {
-            Fragment fragment =
-                    settingsActivity.getSupportFragmentManager().findFragmentById(R.id.content);
-            Criteria.checkThat(fragment, Matchers.instanceOf(fragmentClass));
-        });
-        mOmniboxUtils.checkFocus(false);
-    }
-
-    /**
-     * Build a dummy suggestions list.
-     * @param count How many suggestions to create.
-     * @param hasPostData If suggestions contain post data.
-     *
-     * @return List of suggestions.
-     */
-    private List<AutocompleteMatch> buildDummySuggestionsList(int count, String prefix) {
-        List<AutocompleteMatch> list = new ArrayList<>();
-        for (int index = 0; index < count; ++index) {
-            list.add(AutocompleteMatchBuilder.searchWithType(OmniboxSuggestionType.SEARCH_SUGGEST)
-                             .setDisplayText(prefix + (index + 1))
-                             .build());
-        }
-
-        return list;
-    }
-
-    /**
-     * Create a dummy pedal suggestion.
-     * @param name The dummy suggestion name.
-     * @param id The Omnibox pedal type to be created.
-     *
-     * @return a dummy pedal suggestion.
-     */
-    private AutocompleteMatch createDummyPedalSuggestion(String name, @OmniboxPedalType int id) {
+    private AutocompleteMatch createPedalSuggestion(@OmniboxPedalId int pedalId) {
         return AutocompleteMatchBuilder.searchWithType(OmniboxSuggestionType.SEARCH_SUGGEST)
-                .setDisplayText(name)
-                .setOmniboxPedal(new OmniboxPedal(id, "hints", "suggestionContents",
-                        "accessibilitySuffix", "accessibilityHint", GURL.emptyGURL()))
+                .setDisplayText("Suggestion")
+                .setActions(
+                        List.of(new OmniboxPedal(pedalId, "hint", "accessibilityHint", pedalId)))
                 .build();
     }
 
-    private AutocompleteMatch createDummyHistoryClustersAction(String name) {
-        return AutocompleteMatchBuilder.searchWithType(OmniboxSuggestionType.SEARCH_SUGGEST)
-                .setDisplayText(name)
-                .setOmniboxPedal(new HistoryClustersAction(OmniboxActionType.HISTORY_CLUSTERS,
-                        "hints", "suggestionContents", "accessibilitySuffix", "accessibilityHint",
-                        GURL.emptyGURL(), name))
-                .build();
+    /**
+     * Click on the pedal to open the SettingsActivity, and confirm Settings activity is shown
+     * presenting the expected fragment.
+     *
+     * @param fragmentType The class type of the displayed settings fragment.
+     */
+    private void clickOnPedalToSettings(Runnable activate, Class<? extends Fragment> fragmentType) {
+        mTargetActivity =
+                ActivityTestUtils.waitForActivity(
+                        InstrumentationRegistry.getInstrumentation(),
+                        SettingsActivity.class,
+                        activate);
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Fragment fragment =
+                            mTargetActivity
+                                    .getSupportFragmentManager()
+                                    .findFragmentById(R.id.content);
+                    Criteria.checkThat(fragment, Matchers.instanceOf(fragmentType));
+                });
     }
 
     @Test
     @MediumTest
-    public void testClearBrowsingDataOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the clear browsing data pedal.
-        typeInOmnibox("Clear data");
+    public void testClearBrowsingData_withQuickDeleteEnabled() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.CLEAR_BROWSING_DATA));
+        mOmniboxUtils.clickOnAction(0, 0);
 
-        checkPedalWasShown(OmniboxPedalType.CLEAR_BROWSING_DATA, /*expectShown=*/!mIncognito);
-
-        if (mIncognito) {
-            // In incognito mode, no pedal shows, so the test can stop here.
-            return;
-        }
-
-        SettingsActivity settingsActivity = clickOnPedalToSettings(
-                SettingsActivity.class, OmniboxPedalType.CLEAR_BROWSING_DATA);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(
-                settingsActivity, ClearBrowsingDataTabsFragment.class);
-
-        verifyHistogram(OmniboxPedalType.CLEAR_BROWSING_DATA);
+        onViewWaiting(withId(R.id.quick_delete_spinner)).check(matches(isDisplayed()));
     }
 
     @Test
     @MediumTest
-    public void testManagePasswordsOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the manage passwords pedal.
-        typeInOmnibox("Manage passwords");
-
-        checkPedalWasShown(OmniboxPedalType.MANAGE_PASSWORDS, /*expectShown=*/true);
-
-        SettingsActivity settingsActivity =
-                clickOnPedalToSettings(SettingsActivity.class, OmniboxPedalType.MANAGE_PASSWORDS);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(settingsActivity, PasswordSettings.class);
-
-        verifyHistogram(OmniboxPedalType.MANAGE_PASSWORDS);
+    @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+    public void testManagePaymentMethods() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.UPDATE_CREDIT_CARD));
+        clickOnPedalToSettings(
+                () -> mOmniboxUtils.clickOnAction(0, 0), AutofillPaymentMethodsFragment.class);
     }
 
     @Test
     @MediumTest
-    public void testManagePaymentMethodsOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the manage payment methods pedal.
-        typeInOmnibox("Manage payment methods");
+    @Restriction(DeviceFormFactor.PHONE)
+    @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
+    public void testOpenIncognitoTab_Phone() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.LAUNCH_INCOGNITO));
 
-        checkPedalWasShown(OmniboxPedalType.UPDATE_CREDIT_CARD, /*expectShown=*/true);
-
-        SettingsActivity settingsActivity =
-                clickOnPedalToSettings(SettingsActivity.class, OmniboxPedalType.UPDATE_CREDIT_CARD);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(
-                settingsActivity, AutofillPaymentMethodsFragment.class);
-
-        verifyHistogram(OmniboxPedalType.UPDATE_CREDIT_CARD);
+        mOmniboxUtils.clickOnAction(0, 0);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Tab tab = mActivityTestRule.getActivity().getActivityTab();
+                    Criteria.checkThat(tab, Matchers.notNullValue());
+                    Criteria.checkThat(tab.isIncognito(), Matchers.is(true));
+                });
     }
 
     @Test
     @MediumTest
-    public void testOpenIncognitoTabOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the open incognito pedal.
-        typeInOmnibox("Open Incognito");
+    @ImportantFormFactors(DeviceFormFactor.ONLY_TABLET)
+    @Restriction({
+        DeviceFormFactor.ONLY_TABLET,
+        DeviceRestriction.RESTRICTION_TYPE_NON_AUTO,
+        DeviceRestriction.RESTRICTION_TYPE_NON_FOLDABLE
+    })
+    @EnableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
+    public void testOpenIncognitoTab_Tablet() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.LAUNCH_INCOGNITO));
 
-        checkPedalWasShown(OmniboxPedalType.LAUNCH_INCOGNITO, /*expectShown=*/true);
-
-        clickOnPedal();
-
-        CriteriaHelper.pollUiThread(() -> {
-            Tab tab = sActivityTestRule.getActivity().getActivityTab();
-            Criteria.checkThat(tab, Matchers.notNullValue());
-            Criteria.checkThat(tab.isIncognito(), Matchers.is(true));
-        });
-
-        verifyHistogram(OmniboxPedalType.LAUNCH_INCOGNITO);
+        mOmniboxUtils.clickOnAction(0, 0);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    List<Activity> activities = ApplicationStatus.getRunningActivities();
+                    ChromeTabbedActivity cta = null;
+                    int regularCta = 0;
+                    int incognitoCta = 0;
+                    for (Activity activity : activities) {
+                        if (activity instanceof ChromeTabbedActivity) {
+                            cta = (ChromeTabbedActivity) activity;
+                            if (cta.getSupportedProfileType() == SupportedProfileType.REGULAR) {
+                                regularCta++;
+                            }
+                            if (cta.getSupportedProfileType()
+                                    == SupportedProfileType.OFF_THE_RECORD) {
+                                incognitoCta++;
+                            }
+                        }
+                    }
+                    return regularCta == 1 && incognitoCta == 1;
+                });
     }
 
     @Test
     @MediumTest
-    public void testRunChromeSafetyCheckOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the run chrome safety check pedal.
-        typeInOmnibox("Run safety check");
+    @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+    public void testOpenChromeSafetyHub() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.RUN_CHROME_SAFETY_CHECK));
 
-        checkPedalWasShown(OmniboxPedalType.RUN_CHROME_SAFETY_CHECK, /*expectShown=*/true);
-
-        SettingsActivity settingsActivity = clickOnPedalToSettings(
-                SettingsActivity.class, OmniboxPedalType.RUN_CHROME_SAFETY_CHECK);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(settingsActivity, SafetyCheckSettingsFragment.class);
-
-        verifyHistogram(OmniboxPedalType.RUN_CHROME_SAFETY_CHECK);
-
-        // Make sure the safety check was ran.
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(
-                    mHistogramTester.getHistogramTotalCount("Settings.SafetyCheck.UpdatesResult"),
-                    Matchers.is(1));
-        });
+        clickOnPedalToSettings(() -> mOmniboxUtils.clickOnAction(0, 0), SafetyHubFragment.class);
     }
 
     @Test
     @MediumTest
-    public void testManageSiteSettingsOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the manage site setting pedal.
-        typeInOmnibox("Change site permissions");
-
-        checkPedalWasShown(OmniboxPedalType.MANAGE_SITE_SETTINGS, /*expectShown=*/true);
-
-        SettingsActivity settingsActivity = clickOnPedalToSettings(
-                SettingsActivity.class, OmniboxPedalType.MANAGE_SITE_SETTINGS);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(settingsActivity, SiteSettings.class);
-
-        verifyHistogram(OmniboxPedalType.MANAGE_SITE_SETTINGS);
+    public void testManageSiteSettings() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.MANAGE_SITE_SETTINGS));
+        clickOnPedalToSettings(() -> mOmniboxUtils.clickOnAction(0, 0), SiteSettings.class);
     }
 
     @Test
     @MediumTest
-    public void testManageChromeSettingsOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the manage chrome settings pedal.
-        typeInOmnibox("manage settings");
+    @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+    public void testManageChromeSettings() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.MANAGE_CHROME_SETTINGS));
 
-        checkPedalWasShown(OmniboxPedalType.MANAGE_CHROME_SETTINGS, /*expectShown=*/true);
-
-        SettingsActivity settingsActivity = clickOnPedalToSettings(
-                SettingsActivity.class, OmniboxPedalType.MANAGE_CHROME_SETTINGS);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(settingsActivity, MainSettings.class);
-
-        verifyHistogram(OmniboxPedalType.MANAGE_CHROME_SETTINGS);
+        clickOnPedalToSettings(() -> mOmniboxUtils.clickOnAction(0, 0), MainSettings.class);
     }
 
     @Test
     @MediumTest
-    public void testViewYourChromeHistoryOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the view chrome history pedal.
-        typeInOmnibox("view chrome history");
+    public void testViewYourChromeHistory() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.VIEW_CHROME_HISTORY));
 
-        checkPedalWasShown(OmniboxPedalType.VIEW_CHROME_HISTORY, /*expectShown=*/true);
-
-        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(sActivityTestRule.getActivity())) {
-            // On the phone, the history setting page will be shown as a {@link Fragment}, but on
-            // the tablet, the history setting page will be shown as a native url. So we need to
-            // have a different way to verify if the history setting page is opened.
-            clickOnPedal();
-            CriteriaHelper.pollUiThread(() -> {
-                Tab tab = sActivityTestRule.getActivity().getActivityTab();
-                Criteria.checkThat(tab, Matchers.notNullValue());
-                Criteria.checkThat(tab.getUrl().getSpec(),
-                        Matchers.startsWith(UrlConstants.NATIVE_HISTORY_URL));
-            });
-
-            verifyHistogram(OmniboxPedalType.VIEW_CHROME_HISTORY);
-            return;
-        }
-
-        HistoryActivity historyActivity =
-                clickOnPedalToSettings(HistoryActivity.class, OmniboxPedalType.VIEW_CHROME_HISTORY);
-
-        // Make sure the history setting page was opened.
-        Assert.assertNotNull("Could not find the history activity", historyActivity);
-
-        verifyHistogram(OmniboxPedalType.VIEW_CHROME_HISTORY);
+        mOmniboxUtils.clickOnAction(0, 0);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Tab tab = mActivityTestRule.getActivity().getActivityTab();
+                    Criteria.checkThat(tab, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            tab.getUrl().getSpec(),
+                            Matchers.startsWith(getOriginalNativeHistoryUrl()));
+                });
     }
 
     @Test
     @MediumTest
-    public void testManageAccessibilitySettingsOmniboxPedalSuggestion()
-            throws InterruptedException {
-        // Generate the manage accessibility setting pedal.
-        typeInOmnibox("Chrome accessibility");
-
-        checkPedalWasShown(OmniboxPedalType.MANAGE_CHROME_ACCESSIBILITY,
-                /*expectShown=*/true);
-
-        SettingsActivity settingsActivity = clickOnPedalToSettings(
-                SettingsActivity.class, OmniboxPedalType.MANAGE_CHROME_ACCESSIBILITY);
-        Assert.assertNotNull("Could not find the Settings activity", settingsActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(settingsActivity, AccessibilitySettings.class);
-
-        verifyHistogram(OmniboxPedalType.MANAGE_CHROME_ACCESSIBILITY);
+    public void testManageAccessibilitySettings() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.MANAGE_CHROME_ACCESSIBILITY));
+        clickOnPedalToSettings(
+                () -> mOmniboxUtils.clickOnAction(0, 0), AccessibilitySettings.class);
     }
 
     @Test
     @MediumTest
-    public void testPedalsStartedOnCtrlEnterKeyStroke() throws Exception {
-        typeInOmnibox("Chrome accessibility");
-        SuggestionInfo<PedalSuggestionView> pedal =
-                mOmniboxUtils.getSuggestionByType(OmniboxSuggestionUiType.PEDAL_SUGGESTION);
-        Assert.assertNotNull(pedal.view);
-        mOmniboxUtils.focusSuggestion(pedal.index);
+    public void testPedalsStartedOnTabEnterKeyStroke() throws Exception {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.MANAGE_CHROME_ACCESSIBILITY));
 
-        // Select Pedal with the TAB key and activate it with an ENTER key.
-        mOmniboxUtils.sendKey(KeyEvent.KEYCODE_TAB);
-
-        mTargetActivity = ActivityTestUtils.waitForActivity(
-                InstrumentationRegistry.getInstrumentation(), SettingsActivity.class,
-                () -> mOmniboxUtils.sendKey(KeyEvent.KEYCODE_ENTER));
-        Assert.assertNotNull("Could not find the Settings activity", mTargetActivity);
-
-        checkSettingsWasShownAndOmniboxNoFocus(
-                (SettingsActivity) mTargetActivity, AccessibilitySettings.class);
-
-        verifyHistogram(OmniboxPedalType.MANAGE_CHROME_ACCESSIBILITY);
+        onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_DPAD_DOWN));
+        onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_TAB));
+        clickOnPedalToSettings(
+                () -> {
+                    onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_ENTER));
+                },
+                AccessibilitySettings.class);
     }
 
     @Test
     @MediumTest
-    public void testPlayChromeDinoGameOmniboxPedalSuggestion() throws InterruptedException {
-        // Generate the play chrome dino game pedal.
-        typeInOmnibox("Dino game");
+    public void testPlayChromeDinoGame() throws InterruptedException {
+        setSuggestions(createPedalSuggestion(OmniboxPedalId.PLAY_CHROME_DINO_GAME));
 
-        checkPedalWasShown(OmniboxPedalType.PLAY_CHROME_DINO_GAME, /*expectShown=*/true);
-
-        // Click the pedal.
-        clickOnPedal();
-
-        CriteriaHelper.pollUiThread(() -> {
-            Tab tab = sActivityTestRule.getActivity().getActivityTab();
-            Criteria.checkThat(tab, Matchers.notNullValue());
-            Criteria.checkThat(
-                    tab.getUrl().getSpec(), Matchers.startsWith(UrlConstants.CHROME_DINO_URL));
-        });
-
-        verifyHistogram(OmniboxPedalType.PLAY_CHROME_DINO_GAME);
-    }
-
-    @Test(expected = AssertionError.class)
-    @MediumTest
-    public void testNoPedalSuggestionAfterTop3() {
-        mOmniboxUtils.requestFocus();
-        List<AutocompleteMatch> suggestionsList = buildDummySuggestionsList(3, "Suggestion");
-        suggestionsList.add(
-                createDummyPedalSuggestion("pedal", OmniboxPedalType.CLEAR_BROWSING_DATA));
-
-        mOmniboxUtils.setSuggestions(
-                AutocompleteResult.fromCache(suggestionsList, null), "Suggestion");
-        mOmniboxUtils.checkSuggestionsShown();
-
-        SuggestionInfo<PedalSuggestionView> info =
-                mOmniboxUtils.getSuggestionByType(OmniboxSuggestionUiType.PEDAL_SUGGESTION);
-        Assert.assertNull(
-                "Should not show pedals if the suggestion is not in top 3 suggestions", info);
-    }
-
-    @Test
-    @MediumTest
-    public void testShownPedalSuggestionInTop3() {
-        mOmniboxUtils.requestFocus();
-        List<AutocompleteMatch> suggestionsList = buildDummySuggestionsList(2, "Suggestion");
-        suggestionsList.add(
-                createDummyPedalSuggestion("pedal", OmniboxPedalType.CLEAR_BROWSING_DATA));
-
-        mOmniboxUtils.setSuggestions(
-                AutocompleteResult.fromCache(suggestionsList, null), "Suggestion");
-        mOmniboxUtils.checkSuggestionsShown();
-
-        SuggestionInfo<PedalSuggestionView> info =
-                mOmniboxUtils.getSuggestionByType(OmniboxSuggestionUiType.PEDAL_SUGGESTION);
-        Assert.assertNotNull("Should show a pedal if the suggestion is in top 3 suggestions", info);
-    }
-
-    @Test
-    @MediumTest
-    @EnableFeatures({ChromeFeatureList.HISTORY_JOURNEYS})
-    public void testHistoryClustersAction() throws Exception {
-        if (mIncognito) return;
-        mOmniboxUtils.requestFocus();
-        List<AutocompleteMatch> suggestionsList = buildDummySuggestionsList(2, "Suggestion");
-        suggestionsList.add(createDummyHistoryClustersAction("query"));
-
-        mOmniboxUtils.setSuggestions(
-                AutocompleteResult.fromCache(suggestionsList, null), "Suggestion");
-        mOmniboxUtils.checkSuggestionsShown();
-
-        SuggestionInfo<PedalSuggestionView> info =
-                mOmniboxUtils.getSuggestionByType(OmniboxSuggestionUiType.PEDAL_SUGGESTION);
-        Assert.assertNotNull("Should show", info);
-
-        clickOnPedal();
-
-        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(sActivityTestRule.getActivity())) {
-            CriteriaHelper.pollUiThread(() -> {
-                Tab tab = sActivityTestRule.getActivity().getActivityTab();
-                Criteria.checkThat(tab, Matchers.notNullValue());
-                Criteria.checkThat(
-                        tab.getUrl().getSpec(), Matchers.startsWith("chrome://history/journeys"));
-            });
-        } else {
-            mTargetActivity = ActivityTestUtils.waitForActivity(
-                    InstrumentationRegistry.getInstrumentation(), HistoryActivity.class);
-            Assert.assertNotNull("Could not find the history activity", mTargetActivity);
-        }
+        mOmniboxUtils.clickOnAction(0, 0);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Tab tab = mActivityTestRule.getActivity().getActivityTab();
+                    Criteria.checkThat(tab, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            tab.getUrl().getSpec(), Matchers.equalTo(UrlConstants.CHROME_DINO_URL));
+                });
     }
 }

@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
-
 #include "remoting/host/continue_window.h"
 
-#include "base/bind.h"
+#include <memory>
+#include <optional>
+
+#include "base/functional/bind.h"
 #include "remoting/base/string_resources.h"
 #include "remoting/host/chromeos/message_box.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -53,6 +54,7 @@ void ContinueWindowAura::ShowUi() {
       l10n_util::GetStringUTF16(IDS_CONTINUE_PROMPT),      // dialog label
       l10n_util::GetStringUTF16(IDS_CONTINUE_BUTTON),      // ok label
       l10n_util::GetStringUTF16(IDS_STOP_SHARING_BUTTON),  // cancel label
+      std::nullopt,                                        // icon
       base::BindOnce(&ContinueWindowAura::OnMessageBoxResult,
                      base::Unretained(this)));
   message_box_->Show();

@@ -12,10 +12,11 @@
 #include "ash/shell.h"
 #include "ash/system/power/power_event_observer_test_api.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/wallpaper/wallpaper_widget_controller.h"
+#include "ash/wallpaper/views/wallpaper_widget_controller.h"
 #include "ash/wm/lock_state_controller.h"
 #include "ash/wm/lock_state_controller_test_api.h"
-#include "ash/wm/test_session_state_animator.h"
+#include "ash/wm/test/test_session_state_animator.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/feature_usage/feature_usage_metrics.h"
@@ -25,8 +26,8 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
-#include "ui/display/fake/fake_display_snapshot.h"
+#include "ui/display/manager/test/fake_display_snapshot.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 
@@ -45,12 +46,15 @@ class PowerEventObserverTest : public AshTestBase {
     observer_ = Shell::Get()->power_event_observer();
   }
 
-  void TearDown() override { AshTestBase::TearDown(); }
+  void TearDown() override {
+    observer_ = nullptr;
+    AshTestBase::TearDown();
+  }
 
  protected:
   int GetNumVisibleCompositors() {
     int result = 0;
-    for (auto* window : Shell::GetAllRootWindows()) {
+    for (aura::Window* window : Shell::GetAllRootWindows()) {
       if (window->GetHost()->compositor()->IsVisible())
         ++result;
     }
@@ -64,7 +68,7 @@ class PowerEventObserverTest : public AshTestBase {
     return Shell::Get()->session_controller()->IsScreenLocked();
   }
 
-  PowerEventObserver* observer_ = nullptr;
+  raw_ptr<PowerEventObserver> observer_ = nullptr;
 };
 
 TEST_F(PowerEventObserverTest, LockBeforeSuspend) {
@@ -91,10 +95,10 @@ TEST_F(PowerEventObserverTest, LockBeforeSuspend) {
   test_api.CompositingDidCommit(compositor);
   observer_->OnLockAnimationsComplete();
 
-  // Verify that CompositingStarted and CompositingEnded observed before
+  // Verify that CompositingStarted and CompositingAckDeprecated observed before
   // CompositingDidCommit are ignored.
   test_api.CompositingStarted(compositor);
-  test_api.CompositingEnded(compositor);
+  test_api.CompositingAckDeprecated(compositor);
   EXPECT_EQ(1, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(1, GetNumVisibleCompositors());
 
@@ -108,7 +112,7 @@ TEST_F(PowerEventObserverTest, LockBeforeSuspend) {
   EXPECT_EQ(1, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(1, GetNumVisibleCompositors());
 
-  test_api.CompositingEnded(compositor);
+  test_api.CompositingAckDeprecated(compositor);
   EXPECT_EQ(0, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(0, GetNumVisibleCompositors());
 
@@ -255,7 +259,7 @@ TEST_F(PowerEventObserverTest, DelaySuspendForCompositing_MultiDisplay) {
   observer_->OnLockAnimationsComplete();
 
   test_api.CompositingStarted(secondary_compositor);
-  test_api.CompositingEnded(secondary_compositor);
+  test_api.CompositingAckDeprecated(secondary_compositor);
 
   EXPECT_EQ(1, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(2, GetNumVisibleCompositors());
@@ -266,7 +270,7 @@ TEST_F(PowerEventObserverTest, DelaySuspendForCompositing_MultiDisplay) {
   test_api.CompositeFrame(secondary_compositor);
 
   // Even though compositing for one display is done, changes to compositor
-  // visibility, and suspend readines state should be delayed until compositing
+  // visibility, and suspend readiness state should be delayed until compositing
   // for the other display finishes.
   EXPECT_EQ(1, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(2, GetNumVisibleCompositors());
@@ -302,7 +306,7 @@ TEST_F(PowerEventObserverTest,
   test_api.CompositeFrame(primary_compositor);
 
   // Even though compositing for one display is done, changes to compositor
-  // visibility, and suspend readines state should be delayed until compositing
+  // visibility, and suspend readiness state should be delayed until compositing
   // for the other display finishes.
   EXPECT_EQ(1, client->num_pending_suspend_readiness_callbacks());
   EXPECT_EQ(2, GetNumVisibleCompositors());
@@ -382,34 +386,8 @@ TEST_F(PowerEventObserverTest, ImmediateLockAnimations) {
   EXPECT_FALSE(lock_state_test_api.is_animating_lock());
 }
 
-// Tests that the lock screen is dismissed after a resume from hibernate.
-TEST_F(PowerEventObserverTest, HibernateDismissesLockScreen) {
-  SetCanLockScreen(true);
-  SetShouldLockScreenAutomatically(true);
-  ASSERT_FALSE(GetLockedState());
-
-  // First check that the screen locks after a regular suspend/resume.
-  power_manager::SuspendDone suspend_done = power_manager::SuspendDone();
-  observer_->SuspendImminent(power_manager::SuspendImminent_Reason_OTHER);
-  EXPECT_TRUE(GetLockedState());
-  observer_->SuspendDoneEx(suspend_done);
-  EXPECT_TRUE(GetLockedState());
-
-  // Then check that a suspend and resume from hibernate unlocks the screen.
-  observer_->SuspendImminent(power_manager::SuspendImminent_Reason_OTHER);
-  EXPECT_TRUE(GetLockedState());
-  suspend_done.set_deepest_state(
-      power_manager::SuspendDone_SuspendState_TO_DISK);
-  observer_->SuspendDoneEx(suspend_done);
-  EXPECT_FALSE(GetLockedState());
-}
-
-// Tests that displays will not be considered ready to suspend until the
-// animated wallpaper change finishes (if the wallpaper is being animated to
-// another wallpaper after the screen is locked).
-// Flaky: https://crbug.com/1293178
 TEST_F(PowerEventObserverTest,
-       DISABLED_DisplaysNotReadyForSuspendUntilWallpaperAnimationEnds) {
+       DisplaysNotReadyForSuspendUntilWallpaperAnimationEnds) {
   chromeos::FakePowerManagerClient* client =
       chromeos::FakePowerManagerClient::Get();
   ASSERT_EQ(0, client->num_pending_suspend_readiness_callbacks());
@@ -419,8 +397,8 @@ TEST_F(PowerEventObserverTest,
 
   // Set up animation state so wallpaper widget animations are not ended on
   // their creation.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Lock screen - this is expected to start wallpaper change (e.g. to a
   // widget with a blurred wallpaper).
@@ -470,8 +448,8 @@ TEST_F(PowerEventObserverTest, EndWallpaperAnimationOnSuspendWhileLocked) {
 
   // Set up animation state so wallpaper widget animations are not ended on
   // their creation.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Lock screen - this is expected to start wallpaper change (e.g. to a
   // widget with a blurred wallpaper).
@@ -512,8 +490,8 @@ TEST_F(PowerEventObserverTest, EndWallpaperAnimationOnSuspendWhileLocking) {
 
   // Set up animation state so wallpaper widget animations are not ended on
   // their creation.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Lock screen - this is expected to start wallpaper change (e.g. to a
   // widget with a blurred wallpaper).
@@ -555,8 +533,8 @@ TEST_F(PowerEventObserverTest, EndWallpaperAnimationAfterLockDueToSuspend) {
 
   // Set up animation state so wallpaper widget animations are not ended on
   // their creation.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Start suspend (which should start screen lock) - verify that wallpaper is
   // not animating after the screen lock animations are reported as complete.
@@ -596,8 +574,8 @@ TEST_F(PowerEventObserverTest, DisplayRemovedDuringWallpaperAnimation) {
 
   // Set up animation state so wallpaper widget animations are not ended on
   // their creation.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Lock screen - this is expected to start wallpaper change (e.g. to a
   // widget with a blurred wallpaper).
@@ -609,7 +587,7 @@ TEST_F(PowerEventObserverTest, DisplayRemovedDuringWallpaperAnimation) {
   base::RunLoop().RunUntilIdle();
 
   // Start suspend and verify the suspend proceeds when the primary window's
-  // compositors go throug two compositing cycles.
+  // compositors go through two compositing cycles.
   observer_->SuspendImminent(power_manager::SuspendImminent_Reason_OTHER);
 
   ui::Compositor* compositor =
@@ -671,11 +649,13 @@ TEST_F(PowerEventObserverTest, LockOnLidCloseWhenDocked) {
           .Build();
 
   auto set_docked = [&](bool docked) {
-    std::vector<display::DisplaySnapshot*> displays({internal_display.get()});
+    std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> displays(
+        {internal_display.get()});
     if (docked) {
       displays.push_back(external_display.get());
     }
-    Shell::Get()->projecting_observer()->OnDisplayModeChanged(displays);
+    Shell::Get()->projecting_observer()->OnDisplayConfigurationChanged(
+        displays);
   };
 
   SetCanLockScreen(true);
@@ -733,7 +713,14 @@ TEST_F(LockOnSuspendUsageTest, LockOnSuspendUsage) {
               1)));
 }
 
-TEST_F(LockOnSuspendUsageTest, No_ShouldLockScreenAutomatically) {
+// TODO(crbug.com/40898491): Test is failing on "Linux ChromiumOS MSan Tests".
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_No_ShouldLockScreenAutomatically \
+  DISABLED_No_ShouldLockScreenAutomatically
+#else
+#define MAYBE_No_ShouldLockScreenAutomatically No_ShouldLockScreenAutomatically
+#endif
+TEST_F(LockOnSuspendUsageTest, MAYBE_No_ShouldLockScreenAutomatically) {
   SetCanLockScreen(true);
   SetShouldLockScreenAutomatically(false);
 

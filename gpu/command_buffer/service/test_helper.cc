@@ -8,8 +8,13 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
@@ -131,25 +136,25 @@ void TestHelper::SetupTextureInitializationExpectations(
     kServiceBlackRectangleTextureId,
     kServiceDefaultRectangleTextureId };
 
-  const GLuint* texture_ids = nullptr;
+  base::span<const GLuint> texture_ids = {};
   switch (target) {
     case GL_TEXTURE_2D:
-      texture_ids = &texture_2d_ids[0];
+      texture_ids = texture_2d_ids;
       break;
     case GL_TEXTURE_3D:
-      texture_ids = &texture_3d_ids[0];
+      texture_ids = texture_3d_ids;
       break;
     case GL_TEXTURE_2D_ARRAY:
-      texture_ids = &texture_2d_array_ids[0];
+      texture_ids = texture_2d_array_ids;
       break;
     case GL_TEXTURE_CUBE_MAP:
-      texture_ids = &texture_cube_map_ids[0];
+      texture_ids = texture_cube_map_ids;
       break;
     case GL_TEXTURE_EXTERNAL_OES:
-      texture_ids = &texture_external_oes_ids[0];
+      texture_ids = texture_external_oes_ids;
       break;
-    case GL_TEXTURE_RECTANGLE_ARB:
-      texture_ids = &texture_rectangle_arb_ids[0];
+    case GL_TEXTURE_RECTANGLE_ANGLE:
+      texture_ids = texture_rectangle_arb_ids;
       break;
     default:
       NOTREACHED();
@@ -158,23 +163,24 @@ void TestHelper::SetupTextureInitializationExpectations(
   int array_size = use_default_textures ? 2 : 1;
 
   EXPECT_CALL(*gl, GenTextures(array_size, _))
-      .WillOnce(SetArrayArgument<1>(texture_ids,
-                                    texture_ids + array_size))
-          .RetiresOnSaturation();
+      .WillOnce(SetArrayArgument<1>(
+          texture_ids.data(),
+          texture_ids.subspan(base::checked_cast<size_t>(array_size)).data()))
+      .RetiresOnSaturation();
   for (int ii = 0; ii < array_size; ++ii) {
     EXPECT_CALL(*gl, BindTexture(target, texture_ids[ii]))
         .Times(1)
         .RetiresOnSaturation();
     if (needs_initialization) {
       if (needs_faces) {
-        static GLenum faces[] = {
-          GL_TEXTURE_CUBE_MAP_POSITIVE_X,
-          GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
-          GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
-          GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
-          GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
-          GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
-        };
+        static auto faces = std::to_array<GLenum>({
+            GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+            GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+            GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+            GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+            GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
+            GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+        });
         for (size_t face = 0; face < std::size(faces); ++face) {
           EXPECT_CALL(*gl, TexImage2D(faces[face], 0, GL_RGBA, 1, 1, 0, GL_RGBA,
                                       GL_UNSIGNED_BYTE, _))
@@ -205,7 +211,6 @@ void TestHelper::SetupTextureManagerInitExpectations(
     ::gl::MockGLInterface* gl,
     bool is_es3_enabled,
     bool is_es3_capable,
-    bool is_desktop_core_profile,
     const gfx::ExtensionSet& extensions,
     bool use_default_textures) {
   InSequence sequence;
@@ -230,17 +235,16 @@ void TestHelper::SetupTextureManagerInitExpectations(
 
   bool ext_image_external =
       gfx::HasExtension(extensions, "GL_OES_EGL_image_external");
-  bool arb_texture_rectangle =
-      is_desktop_core_profile ||
-      gfx::HasExtension(extensions, "GL_ARB_texture_rectangle");
+  bool angle_texture_rectangle =
+      gfx::HasExtension(extensions, "GL_ANGLE_texture_rectangle");
 
   if (ext_image_external) {
     SetupTextureInitializationExpectations(
         gl, GL_TEXTURE_EXTERNAL_OES, use_default_textures);
   }
-  if (arb_texture_rectangle) {
-    SetupTextureInitializationExpectations(
-        gl, GL_TEXTURE_RECTANGLE_ARB, use_default_textures);
+  if (angle_texture_rectangle) {
+    SetupTextureInitializationExpectations(gl, GL_TEXTURE_RECTANGLE_ANGLE,
+                                           use_default_textures);
   }
 }
 
@@ -268,7 +272,7 @@ void TestHelper::SetupTextureDestructionExpectations(
     case GL_TEXTURE_EXTERNAL_OES:
       texture_id = kServiceDefaultExternalTextureId;
       break;
-    case GL_TEXTURE_RECTANGLE_ARB:
+    case GL_TEXTURE_RECTANGLE_ANGLE:
       texture_id = kServiceDefaultRectangleTextureId;
       break;
     default:
@@ -283,7 +287,6 @@ void TestHelper::SetupTextureDestructionExpectations(
 void TestHelper::SetupTextureManagerDestructionExpectations(
     ::gl::MockGLInterface* gl,
     bool is_es3_enabled,
-    bool is_desktop_core_profile,
     const gfx::ExtensionSet& extensions,
     bool use_default_textures) {
   SetupTextureDestructionExpectations(gl, GL_TEXTURE_2D, use_default_textures);
@@ -299,17 +302,16 @@ void TestHelper::SetupTextureManagerDestructionExpectations(
 
   bool ext_image_external =
       gfx::HasExtension(extensions, "GL_OES_EGL_image_external");
-  bool arb_texture_rectangle =
-      is_desktop_core_profile ||
-      gfx::HasExtension(extensions, "GL_ARB_texture_rectangle");
+  bool angle_texture_rectangle =
+      gfx::HasExtension(extensions, "GL_ANGLE_texture_rectangle");
 
   if (ext_image_external) {
     SetupTextureDestructionExpectations(
         gl, GL_TEXTURE_EXTERNAL_OES, use_default_textures);
   }
-  if (arb_texture_rectangle || is_desktop_core_profile) {
-    SetupTextureDestructionExpectations(
-        gl, GL_TEXTURE_RECTANGLE_ARB, use_default_textures);
+  if (angle_texture_rectangle) {
+    SetupTextureDestructionExpectations(gl, GL_TEXTURE_RECTANGLE_ANGLE,
+                                        use_default_textures);
   }
 
   EXPECT_CALL(*gl, DeleteTextures(TextureManager::kNumDefaultTextures, _))
@@ -319,11 +321,9 @@ void TestHelper::SetupTextureManagerDestructionExpectations(
 
 void TestHelper::SetupContextGroupInitExpectations(
     ::gl::MockGLInterface* gl,
-    const DisallowedFeatures& disallowed_features,
     const char* extensions,
     const char* gl_version,
-    ContextType context_type,
-    bool bind_generates_resource) {
+    ContextType context_type) {
   InSequence sequence;
 
   bool enable_es3 = !(context_type == CONTEXT_TYPE_OPENGLES2 ||
@@ -337,11 +337,10 @@ void TestHelper::SetupContextGroupInitExpectations(
   EXPECT_CALL(*gl, GetIntegerv(GL_MAX_RENDERBUFFER_SIZE, _))
       .WillOnce(SetArgPointee<1>(kMaxRenderbufferSize))
       .RetiresOnSaturation();
-  if (gfx::HasExtension(extension_set, "GL_ARB_framebuffer_object") ||
-      gfx::HasExtension(extension_set, "GL_EXT_framebuffer_multisample") ||
+  if (gfx::HasExtension(extension_set, "GL_EXT_framebuffer_multisample") ||
       gfx::HasExtension(extension_set,
                         "GL_EXT_multisampled_render_to_texture") ||
-      gl_info.is_es3 || gl_info.is_desktop_core_profile) {
+      gl_info.is_es3) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_SAMPLES, _))
         .WillOnce(SetArgPointee<1>(kMaxSamples))
         .RetiresOnSaturation();
@@ -354,30 +353,24 @@ void TestHelper::SetupContextGroupInitExpectations(
 
   if (enable_es3 ||
       (!enable_es3 &&
-       (gl_info.is_desktop_core_profile ||
-        gfx::HasExtension(extension_set, "GL_EXT_draw_buffers") ||
-        gfx::HasExtension(extension_set, "GL_ARB_draw_buffers") ||
+       (gfx::HasExtension(extension_set, "GL_EXT_draw_buffers") ||
         (gl_info.is_es3 &&
          gfx::HasExtension(extension_set, "GL_NV_draw_buffers"))))) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_COLOR_ATTACHMENTS_EXT, _))
         .WillOnce(SetArgPointee<1>(8))
         .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_DRAW_BUFFERS_ARB, _))
+    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_DRAW_BUFFERS, _))
         .WillOnce(SetArgPointee<1>(8))
         .RetiresOnSaturation();
   }
 
-  if (gl_info.IsAtLeastGL(3, 3) ||
-      (gl_info.IsAtLeastGL(3, 2) &&
-       gfx::HasExtension(extension_set, "GL_ARB_blend_func_extended")) ||
-      (gl_info.is_es &&
-       gfx::HasExtension(extension_set, "GL_EXT_blend_func_extended"))) {
+  if (gfx::HasExtension(extension_set, "GL_EXT_blend_func_extended")) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_DUAL_SOURCE_DRAW_BUFFERS_EXT, _))
         .WillOnce(SetArgPointee<1>(8))
         .RetiresOnSaturation();
   }
 
-  if (gl_info.is_es3_capable) {
+  if (gl_info.IsAtLeastGLES(3, 0)) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS, _))
         .WillOnce(SetArgPointee<1>(kMaxTransformFeedbackSeparateAttribs))
         .RetiresOnSaturation();
@@ -401,19 +394,18 @@ void TestHelper::SetupContextGroupInitExpectations(
   EXPECT_CALL(*gl, GetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, _))
       .WillOnce(SetArgPointee<1>(kMaxCubeMapTextureSize))
       .RetiresOnSaturation();
-  if (gl_info.is_es3_capable) {
+  if (gl_info.IsAtLeastGLES(3, 0)) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_3D_TEXTURE_SIZE, _))
         .WillOnce(SetArgPointee<1>(kMax3DTextureSize))
         .RetiresOnSaturation();
   }
-  if (gl_info.is_es3_capable) {
+  if (gl_info.IsAtLeastGLES(3, 0)) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, _))
         .WillOnce(SetArgPointee<1>(kMaxArrayTextureLayers))
         .RetiresOnSaturation();
   }
-  if (gfx::HasExtension(extension_set, "GL_ARB_texture_rectangle") ||
-      gl_info.is_desktop_core_profile) {
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_RECTANGLE_TEXTURE_SIZE, _))
+  if (gfx::HasExtension(extension_set, "GL_ANGLE_texture_rectangle")) {
+    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_RECTANGLE_TEXTURE_SIZE_ANGLE, _))
         .WillOnce(SetArgPointee<1>(kMaxRectangleTextureSize))
         .RetiresOnSaturation();
   }
@@ -424,27 +416,15 @@ void TestHelper::SetupContextGroupInitExpectations(
       .WillOnce(SetArgPointee<1>(kMaxVertexTextureImageUnits))
       .RetiresOnSaturation();
 
-  if (gl_info.is_es || gl_info.is_desktop_core_profile) {
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, _))
-        .WillOnce(SetArgPointee<1>(kMaxFragmentUniformVectors))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VARYING_VECTORS, _))
-        .WillOnce(SetArgPointee<1>(kMaxVaryingVectors))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, _))
-        .WillOnce(SetArgPointee<1>(kMaxVertexUniformVectors))
-        .RetiresOnSaturation();
-  } else {
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, _))
-        .WillOnce(SetArgPointee<1>(kMaxFragmentUniformComponents))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VARYING_FLOATS, _))
-        .WillOnce(SetArgPointee<1>(kMaxVaryingFloats))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VERTEX_UNIFORM_COMPONENTS, _))
-        .WillOnce(SetArgPointee<1>(kMaxVertexUniformComponents))
-        .RetiresOnSaturation();
-  }
+  EXPECT_CALL(*gl, GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, _))
+      .WillOnce(SetArgPointee<1>(kMaxFragmentUniformVectors))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VARYING_VECTORS, _))
+      .WillOnce(SetArgPointee<1>(kMaxVaryingVectors))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, _))
+      .WillOnce(SetArgPointee<1>(kMaxVertexUniformVectors))
+      .RetiresOnSaturation();
 
   EXPECT_CALL(*gl, GetIntegerv(GL_MAX_VERTEX_OUTPUT_COMPONENTS, _))
       .Times(testing::Between(0, 1))
@@ -463,16 +443,16 @@ void TestHelper::SetupContextGroupInitExpectations(
       .WillRepeatedly(SetArgPointee<1>(kMinProgramTexelOffset))
       .RetiresOnSaturation();
 
-  bool use_default_textures = bind_generates_resource;
-  SetupTextureManagerInitExpectations(gl, enable_es3, gl_info.is_es3_capable,
-                                      gl_info.is_desktop_core_profile,
+  bool use_default_textures = false;
+  SetupTextureManagerInitExpectations(gl, enable_es3,
+                                      gl_info.IsAtLeastGLES(3, 0),
                                       extension_set, use_default_textures);
 }
 
 void TestHelper::SetupFeatureInfoInitExpectations(::gl::MockGLInterface* gl,
                                                   const char* extensions) {
-  SetupFeatureInfoInitExpectationsWithGLVersion(gl, extensions, "", "",
-      CONTEXT_TYPE_OPENGLES2);
+  SetupFeatureInfoInitExpectationsWithGLVersion(
+      gl, extensions, "ANGLE", "OpenGL ES 2.0", CONTEXT_TYPE_OPENGLES2);
 }
 
 void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
@@ -486,34 +466,14 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
   bool enable_es3 = context_type == CONTEXT_TYPE_WEBGL2 ||
       context_type == CONTEXT_TYPE_OPENGLES3;
 
-  EXPECT_CALL(*gl, GetString(GL_VERSION))
-      .WillOnce(Return(reinterpret_cast<const uint8_t*>(gl_version)))
-      .RetiresOnSaturation();
-
-  EXPECT_CALL(*gl, GetString(GL_RENDERER))
-      .WillOnce(Return(reinterpret_cast<const uint8_t*>(gl_renderer)))
-      .RetiresOnSaturation();
-
   gfx::ExtensionSet extension_set(gfx::MakeExtensionSet(extensions));
   // Persistent storage is needed for the split extension string.
   split_extensions_ =
       std::vector<std::string>(extension_set.begin(), extension_set.end());
   gl::GLVersionInfo gl_info(gl_version, gl_renderer, extension_set);
-  if (!gl_info.is_es && gl_info.major_version >= 3) {
-    EXPECT_CALL(*gl, GetIntegerv(GL_NUM_EXTENSIONS, _))
-        .WillOnce(SetArgPointee<1>(split_extensions_.size()))
-        .RetiresOnSaturation();
-    for (size_t ii = 0; ii < split_extensions_.size(); ++ii) {
-      EXPECT_CALL(*gl, GetStringi(GL_EXTENSIONS, ii))
-          .WillOnce(Return(
-              reinterpret_cast<const uint8_t*>(split_extensions_[ii].c_str())))
-          .RetiresOnSaturation();
-    }
-  } else {
-    EXPECT_CALL(*gl, GetString(GL_EXTENSIONS))
-        .WillOnce(Return(reinterpret_cast<const uint8_t*>(extensions)))
-        .RetiresOnSaturation();
-  }
+  EXPECT_CALL(*gl, GetString(GL_EXTENSIONS))
+      .WillOnce(Return(reinterpret_cast<const uint8_t*>(extensions)))
+      .RetiresOnSaturation();
 
   EXPECT_CALL(*gl, GetString(GL_VERSION))
       .WillOnce(Return(reinterpret_cast<const uint8_t*>(gl_version)))
@@ -522,7 +482,7 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
       .WillOnce(Return(reinterpret_cast<const uint8_t*>(gl_renderer)))
       .RetiresOnSaturation();
 
-  if (gl_info.is_es3 || gl_info.is_desktop_core_profile ||
+  if (gl_info.is_es3 ||
       gfx::HasExtension(extension_set, "GL_ARB_pixel_buffer_object") ||
       gfx::HasExtension(extension_set, "GL_NV_pixel_buffer_object")) {
     EXPECT_CALL(*gl, GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, _))
@@ -530,13 +490,12 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
       .RetiresOnSaturation();
   }
 
-  if ((gfx::HasExtension(extension_set, "GL_ARB_texture_float") ||
-       gl_info.is_desktop_core_profile) ||
+  if (gfx::HasExtension(extension_set, "GL_ARB_texture_float") ||
       (gl_info.is_es3 &&
        gfx::HasExtension(extension_set, "GL_OES_texture_float") &&
        gfx::HasExtension(extension_set, "GL_EXT_color_buffer_float"))) {
-    static const GLuint tx_ids[] = {101, 102};
-    static const GLuint fb_ids[] = {103, 104};
+    static const auto tx_ids = std::to_array<GLuint>({101, 102});
+    static const auto fb_ids = std::to_array<GLuint>({103, 104});
     const GLsizei width = 16;
     EXPECT_CALL(*gl, GetIntegerv(GL_FRAMEBUFFER_BINDING, _))
         .WillOnce(SetArgPointee<1>(fb_ids[0]))
@@ -545,10 +504,14 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         .WillOnce(SetArgPointee<1>(tx_ids[0]))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, GenTextures(1, _))
-        .WillOnce(SetArrayArgument<1>(tx_ids + 1, tx_ids + 2))
+        .WillOnce(SetArrayArgument<1>(
+            base::span<const GLuint>(tx_ids).subspan(1u).data(),
+            base::span<const GLuint>(tx_ids).subspan(2u).data()))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, GenFramebuffersEXT(1, _))
-        .WillOnce(SetArrayArgument<1>(fb_ids + 1, fb_ids + 2))
+        .WillOnce(SetArrayArgument<1>(
+            base::span<const GLuint>(fb_ids).subspan(1u).data(),
+            base::span<const GLuint>(fb_ids).subspan(2u).data()))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, BindTexture(GL_TEXTURE_2D, tx_ids[1]))
         .Times(1)
@@ -632,7 +595,7 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
     }
     if (!enable_es3 &&
         !gfx::HasExtension(extension_set, "GL_EXT_color_buffer_half_float") &&
-        (gl_info.IsAtLeastGLES(3, 0) || gl_info.IsAtLeastGL(3, 0))) {
+        gl_info.IsAtLeastGLES(3, 0)) {
       EXPECT_CALL(*gl, TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, width, 0,
                                   GL_RGBA, GL_HALF_FLOAT, nullptr))
           .Times(1)
@@ -663,31 +626,32 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
 
   if (enable_es3 ||
       (!enable_es3 &&
-       (gl_info.is_desktop_core_profile ||
-        gfx::HasExtension(extension_set, "GL_EXT_draw_buffers") ||
+       (gfx::HasExtension(extension_set, "GL_EXT_draw_buffers") ||
         gfx::HasExtension(extension_set, "GL_ARB_draw_buffers") ||
         (gl_info.is_es3 &&
          gfx::HasExtension(extension_set, "GL_NV_draw_buffers"))))) {
     EXPECT_CALL(*gl, GetIntegerv(GL_MAX_COLOR_ATTACHMENTS_EXT, _))
         .WillOnce(SetArgPointee<1>(8))
         .RetiresOnSaturation();
-    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_DRAW_BUFFERS_ARB, _))
+    EXPECT_CALL(*gl, GetIntegerv(GL_MAX_DRAW_BUFFERS, _))
         .WillOnce(SetArgPointee<1>(8))
         .RetiresOnSaturation();
   }
 
-#if !BUILDFLAG(IS_MAC)
-  if (gl_info.is_es3 || gl_info.is_desktop_core_profile ||
-      gfx::HasExtension(extension_set, "GL_EXT_texture_rg") ||
+  // These expectations are for IsGL_REDSupportedOnFBOs(), which is
+  // skipped universally on macOS, and by default (with a Finch
+  // kill-switch) on Android.
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+  if (gl_info.is_es3 || gfx::HasExtension(extension_set, "GL_EXT_texture_rg") ||
       (gfx::HasExtension(extension_set, "GL_ARB_texture_rg"))) {
 #if DCHECK_IS_ON()
     EXPECT_CALL(*gl, GetError())
         .WillOnce(Return(GL_NO_ERROR))
         .RetiresOnSaturation();
 #endif
-    static const GLuint tx_ids[] = {101, 102};
-    static const GLuint fb_ids[] = {103, 104};
-    const GLsizei width = 1;
+    static const auto tx_ids = std::to_array<GLuint>({101, 102});
+    static const auto fb_ids = std::to_array<GLuint>({103, 104});
+    const GLsizei width = 8;
     EXPECT_CALL(*gl, GetIntegerv(GL_FRAMEBUFFER_BINDING, _))
         .WillOnce(SetArgPointee<1>(fb_ids[0]))
         .RetiresOnSaturation();
@@ -695,7 +659,9 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         .WillOnce(SetArgPointee<1>(tx_ids[0]))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, GenTextures(1, _))
-        .WillOnce(SetArrayArgument<1>(tx_ids + 1, tx_ids + 2))
+        .WillOnce(SetArrayArgument<1>(
+            base::span<const GLuint>(tx_ids).subspan(1u).data(),
+            base::span<const GLuint>(tx_ids).subspan(2u).data()))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, BindTexture(GL_TEXTURE_2D, tx_ids[1]))
         .Times(1)
@@ -705,7 +671,9 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         .Times(1)
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, GenFramebuffersEXT(1, _))
-        .WillOnce(SetArrayArgument<1>(fb_ids + 1, fb_ids + 2))
+        .WillOnce(SetArrayArgument<1>(
+            base::span<const GLuint>(fb_ids).subspan(1u).data(),
+            base::span<const GLuint>(fb_ids).subspan(2u).data()))
         .RetiresOnSaturation();
     EXPECT_CALL(*gl, BindFramebufferEXT(GL_FRAMEBUFFER, fb_ids[1]))
         .Times(1)
@@ -738,107 +706,6 @@ void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
 #endif  // !BUILDFLAG(IS_MAC)
 }
 
-void TestHelper::SetupExpectationsForClearingUniforms(::gl::MockGLInterface* gl,
-                                                      UniformInfo* uniforms,
-                                                      size_t num_uniforms) {
-  for (size_t ii = 0; ii < num_uniforms; ++ii) {
-    const UniformInfo& info = uniforms[ii];
-    switch (info.type) {
-    case GL_FLOAT:
-      EXPECT_CALL(*gl, Uniform1fv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_VEC2:
-      EXPECT_CALL(*gl, Uniform2fv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_VEC3:
-      EXPECT_CALL(*gl, Uniform3fv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_VEC4:
-      EXPECT_CALL(*gl, Uniform4fv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_INT:
-    case GL_BOOL:
-    case GL_SAMPLER_2D:
-    case GL_SAMPLER_CUBE:
-    case GL_SAMPLER_EXTERNAL_OES:
-    case GL_SAMPLER_3D_OES:
-    case GL_SAMPLER_2D_RECT_ARB:
-    case GL_SAMPLER_2D_ARRAY:
-      EXPECT_CALL(*gl, Uniform1iv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_UNSIGNED_INT:
-      EXPECT_CALL(*gl, Uniform1uiv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_INT_VEC2:
-    case GL_BOOL_VEC2:
-      EXPECT_CALL(*gl, Uniform2iv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_UNSIGNED_INT_VEC2:
-      EXPECT_CALL(*gl, Uniform2uiv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_INT_VEC3:
-    case GL_BOOL_VEC3:
-      EXPECT_CALL(*gl, Uniform3iv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_UNSIGNED_INT_VEC3:
-      EXPECT_CALL(*gl, Uniform3uiv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_INT_VEC4:
-    case GL_BOOL_VEC4:
-      EXPECT_CALL(*gl, Uniform4iv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_UNSIGNED_INT_VEC4:
-      EXPECT_CALL(*gl, Uniform4uiv(info.real_location, info.size, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_MAT2:
-      EXPECT_CALL(*gl, UniformMatrix2fv(
-          info.real_location, info.size, false, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_MAT3:
-      EXPECT_CALL(*gl, UniformMatrix3fv(
-          info.real_location, info.size, false, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    case GL_FLOAT_MAT4:
-      EXPECT_CALL(*gl, UniformMatrix4fv(
-          info.real_location, info.size, false, _))
-          .Times(1)
-          .RetiresOnSaturation();
-      break;
-    default:
-      NOTREACHED();
-      break;
-    }
-  }
-}
-
 void TestHelper::SetupProgramSuccessExpectations(
     ::gl::MockGLInterface* gl,
     const FeatureInfo* feature_info,
@@ -848,8 +715,7 @@ void TestHelper::SetupProgramSuccessExpectations(
     size_t num_uniforms,
     VaryingInfo* varyings,
     size_t num_varyings,
-    ProgramOutputInfo* program_outputs,
-    size_t num_program_outputs,
+    base::span<ProgramOutputInfo> program_outputs,
     GLuint service_id) {
   EXPECT_CALL(*gl, GetProgramiv(service_id, GL_LINK_STATUS, _))
       .WillOnce(SetArgPointee<2>(1))
@@ -862,7 +728,7 @@ void TestHelper::SetupProgramSuccessExpectations(
       .RetiresOnSaturation();
   size_t max_attrib_len = 0;
   for (size_t ii = 0; ii < num_attribs; ++ii) {
-    size_t len = strlen(attribs[ii].name) + 1;
+    size_t len = strlen(UNSAFE_TODO(attribs[ii]).name) + 1;
     max_attrib_len = std::max(max_attrib_len, len);
   }
   EXPECT_CALL(*gl, GetProgramiv(service_id, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, _))
@@ -870,13 +736,14 @@ void TestHelper::SetupProgramSuccessExpectations(
       .RetiresOnSaturation();
 
   for (size_t ii = 0; ii < num_attribs; ++ii) {
-    const AttribInfo& info = attribs[ii];
+    const AttribInfo& info = UNSAFE_TODO(attribs[ii]);
     EXPECT_CALL(*gl,
                 GetActiveAttrib(service_id, ii, max_attrib_len, _, _, _, _))
         .WillOnce(DoAll(
             SetArgPointee<3>(strlen(info.name)), SetArgPointee<4>(info.size),
             SetArgPointee<5>(info.type),
-            SetArrayArgument<6>(info.name, info.name + strlen(info.name) + 1)))
+            SetArrayArgument<6>(
+                info.name, UNSAFE_TODO(info.name + strlen(info.name) + 1))))
         .RetiresOnSaturation();
     if (!ProgramManager::HasBuiltInPrefix(info.name)) {
       EXPECT_CALL(*gl, GetAttribLocation(service_id, StrEq(info.name)))
@@ -891,21 +758,21 @@ void TestHelper::SetupProgramSuccessExpectations(
   if (num_uniforms > 0) {
     size_t max_uniform_len = 0;
     for (size_t ii = 0; ii < num_uniforms; ++ii) {
-      size_t len = strlen(uniforms[ii].name) + 1;
+      size_t len = strlen(UNSAFE_TODO(uniforms[ii]).name) + 1;
       max_uniform_len = std::max(max_uniform_len, len);
     }
     EXPECT_CALL(*gl, GetProgramiv(service_id, GL_ACTIVE_UNIFORM_MAX_LENGTH, _))
         .WillOnce(SetArgPointee<2>(max_uniform_len))
         .RetiresOnSaturation();
     for (size_t ii = 0; ii < num_uniforms; ++ii) {
-      const UniformInfo& info = uniforms[ii];
+      const UniformInfo& info = UNSAFE_TODO(uniforms[ii]);
       EXPECT_CALL(*gl,
                   GetActiveUniform(service_id, ii, max_uniform_len, _, _, _, _))
-          .WillOnce(DoAll(SetArgPointee<3>(strlen(info.name)),
-                          SetArgPointee<4>(info.size),
-                          SetArgPointee<5>(info.type),
-                          SetArrayArgument<6>(
-                              info.name, info.name + strlen(info.name) + 1)))
+          .WillOnce(DoAll(
+              SetArgPointee<3>(strlen(info.name)), SetArgPointee<4>(info.size),
+              SetArgPointee<5>(info.type),
+              SetArrayArgument<6>(
+                  info.name, UNSAFE_TODO(info.name + strlen(info.name) + 1))))
           .RetiresOnSaturation();
 
       // Corresponds to early out in Program::UpdateUniforms
@@ -934,10 +801,9 @@ void TestHelper::SetupProgramSuccessExpectations(
     }
   }
 
-  if (feature_info->gl_version_info().is_es3_capable &&
+  if (feature_info->gl_version_info().IsAtLeastGLES(3, 0) &&
       !feature_info->disable_shader_translator()) {
-    for (size_t ii = 0; ii < num_program_outputs; ++ii) {
-      ProgramOutputInfo& info = program_outputs[ii];
+    for (auto& info : program_outputs) {
       if (ProgramManager::HasBuiltInPrefix(info.name))
         continue;
 
@@ -969,8 +835,8 @@ void TestHelper::SetupShaderExpectations(::gl::MockGLInterface* gl,
   EXPECT_CALL(*gl, LinkProgram(service_id)).Times(1).RetiresOnSaturation();
 
   SetupProgramSuccessExpectations(gl, feature_info, attribs, num_attribs,
-                                  uniforms, num_uniforms, nullptr, 0, nullptr,
-                                  0, service_id);
+                                  uniforms, num_uniforms, nullptr, 0, {},
+                                  service_id);
 }
 
 void TestHelper::SetupShaderExpectationsWithVaryings(
@@ -982,8 +848,7 @@ void TestHelper::SetupShaderExpectationsWithVaryings(
     size_t num_uniforms,
     VaryingInfo* varyings,
     size_t num_varyings,
-    ProgramOutputInfo* program_outputs,
-    size_t num_program_outputs,
+    base::span<ProgramOutputInfo> program_outputs,
     GLuint service_id) {
   InSequence s;
 
@@ -992,9 +857,9 @@ void TestHelper::SetupShaderExpectationsWithVaryings(
       .Times(1)
       .RetiresOnSaturation();
 
-  SetupProgramSuccessExpectations(
-      gl, feature_info, attribs, num_attribs, uniforms, num_uniforms, varyings,
-      num_varyings, program_outputs, num_program_outputs, service_id);
+  SetupProgramSuccessExpectations(gl, feature_info, attribs, num_attribs,
+                                  uniforms, num_uniforms, varyings,
+                                  num_varyings, program_outputs, service_id);
 }
 
 void TestHelper::DoBufferData(::gl::MockGLInterface* gl,

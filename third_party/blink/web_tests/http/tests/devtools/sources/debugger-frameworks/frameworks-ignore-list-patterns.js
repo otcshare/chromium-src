@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
+import * as Workspace from 'devtools/models/workspace/workspace.js';
+
 (async function() {
   TestRunner.addResult(`Tests framework ignore list patterns for various URLs.\n`);
   await TestRunner.showPanel('sources');
@@ -34,7 +38,7 @@
   for (var i = 0; i < testCases.length; i += 2) {
     var url = testCases[i];
     TestRunner.addResult('Testing "' + url + '"');
-    var regexValue = Bindings.ignoreListManager.urlToRegExpString(url);
+    var regexValue = Workspace.IgnoreListManager.IgnoreListManager.instance().urlToRegExpString(url);
     TestRunner.assertEquals(testCases[i + 1], regexValue);
     if (!regexValue)
       continue;

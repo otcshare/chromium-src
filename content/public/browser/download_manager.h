@@ -30,23 +30,22 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
-#include "components/download/public/common/download_stream.mojom-forward.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/download/public/common/input_stream.h"
 #include "components/download/public/common/simple_download_manager.h"
 #include "content/common/content_export.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 class GURL;
@@ -147,7 +146,7 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data,
       const StoragePartitionConfig& storage_partition_config,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
-      const absl::optional<url::Origin>& request_initiator,
+      const std::optional<url::Origin>& request_initiator,
       const std::string& mime_type,
       const std::string& original_mime_type,
       base::Time start_time,
@@ -186,11 +185,11 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data,
   // is too slow, use an AllDownloadItemNotifier to count in-progress items.
   virtual int InProgressCount() = 0;
 
-  // The number of in progress (including paused) downloads.
+  // The number of in progress (including paused) downloads that should block
+  // shutdown. This excludes downloads that are marked as malicious.
   // Performance note: this loops over all items. If profiling finds that this
   // is too slow, use an AllDownloadItemNotifier to count in-progress items.
-  // This excludes downloads that are marked as malicious.
-  virtual int NonMaliciousInProgressCount() = 0;
+  virtual int BlockingShutdownCount() = 0;
 
   virtual BrowserContext* GetBrowserContext() = 0;
 

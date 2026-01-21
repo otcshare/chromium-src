@@ -7,12 +7,6 @@ GEN_INCLUDE(['testing/common_e2e_test_base.js']);
 /** Test fixture for automation_predicate.js. */
 AccessibilityExtensionAutomationPredicateTest =
     class extends CommonE2ETestBase {
-  /**@override */
-  async setUpDeferred() {
-    await super.setUpDeferred();
-    await importModule(
-        'AutomationPredicate', '/common/automation_predicate.js');
-  }
 };
 
 AX_TEST_F(
@@ -49,4 +43,41 @@ AX_TEST_F(
               `Textfield with combo box should match predicate ${key}`);
         }
       }
+    });
+
+AX_TEST_F(
+    'AccessibilityExtensionAutomationPredicateTest',
+    'ClickableContainersWithNoActionableDescendants', async function() {
+      const site = `
+      <div>
+        <div aria-label="outer">
+          <div aria-label='test'></div>
+          <button />
+        </div>
+      </div>
+    `;
+      const root = await this.runWithLoadedTree(site);
+      // Get the top level generic container.
+      const container =
+          root.find({role: chrome.automation.RoleType.GENERIC_CONTAINER});
+      const button = root.find({role: chrome.automation.RoleType.BUTTON});
+      // Make the button "clickable".
+      Object.defineProperty(container, 'clickable', {value: true});
+      // Arc++ doesn't set default action verb on buttons. ARC uses clickable
+      // instead.
+      assertEquals('press', button.defaultActionVerb);
+      // Remove default action verb.
+      Object.defineProperty(button, 'defaultActionVerb', {value: undefined});
+      // Arc++ doesn't set default action verb on buttons.
+      assertEquals(undefined, button.defaultActionVerb);
+      assertFalse(AutomationPredicate.container(container));
+    });
+
+AX_TEST_F(
+    'AccessibilityExtensionAutomationPredicateTest', 'PdfRootRoleAsContainer',
+    async function() {
+      const pdfRoot =
+          createMockNode({role: chrome.automation.RoleType.PDF_ROOT});
+      assertTrue(!!pdfRoot);
+      assertTrue(AutomationPredicate.container(pdfRoot));
     });

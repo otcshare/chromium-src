@@ -53,12 +53,11 @@ TEST(HistoryClustersConfigTest, LocaleOrLanguageAllowlist) {
   base::test::ScopedFeatureList features;
   features.InitWithFeaturesAndParameters(
       {{
-           internal::kJourneys,
-           // Test that we're tolerant of spaces, colons, whole locales, as well
-           // as primary language subcodes.
-           {{"JourneysLocaleOrLanguageAllowlist", "en, fr:de:zh-TW"}},
-       },
-       {internal::kOmniboxAction, {}}},
+          internal::kJourneys,
+          // Test that we're tolerant of spaces, colons, whole locales, as well
+          // as primary language subcodes.
+          {{"JourneysLocaleOrLanguageAllowlist", "en, fr:de:zh-TW"}},
+      }},
       {});
 
   const struct {
@@ -80,30 +79,6 @@ TEST(HistoryClustersConfigTest, LocaleOrLanguageAllowlist) {
               IsApplicationLocaleSupportedByJourneys(test.locale))
         << test.locale;
   }
-}
-
-TEST(HistoryClustersConfigTest, ValidMidBlocklist) {
-  base::test::ScopedFeatureList features;
-  features.InitWithFeaturesAndParameters(
-      {{
-          internal::kHistoryClustersKeywordFiltering,
-          {{"JourneysMidBlocklist", {"/g/midstr1, /m/midstr2"}}},
-      }},
-      {});
-
-  EXPECT_THAT(JourneysMidBlocklist(), ElementsAre("/g/midstr1", "/m/midstr2"));
-}
-
-TEST(HistoryClustersConfigTest, EmptyMidBlocklist) {
-  base::test::ScopedFeatureList features;
-  features.InitWithFeaturesAndParameters(
-      {{
-          internal::kHistoryClustersKeywordFiltering,
-          {{"JourneysMidBlocklist", ""}},
-      }},
-      {});
-
-  EXPECT_EQ(JourneysMidBlocklist(), base::flat_set<std::string>());
 }
 
 }  // namespace history_clusters

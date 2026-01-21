@@ -7,7 +7,7 @@
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -19,6 +19,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
@@ -89,10 +90,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, TestUnload) {
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   GURL initial_tab_url =
       browser()->tab_strip_model()->GetWebContentsAt(0)->GetLastCommittedURL();
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), extension->GetResourceURL("page.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  NavigateToURLInNewTab(extension->GetResourceURL("page.html"));
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
   DisableExtension(id);
   // There should only be one remaining web contents - the initial one.
@@ -114,17 +112,18 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, UnloadWithContentScripts) {
   std::string id = extension->id();
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   GURL test_url = embedded_test_server()->GetURL("/title1.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url));
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), test_url));
 
   // The content script sends an XHR with the webpage's (rather than
   // extension's) Origin header - this should succeed (given that
   // xhr.txt.mock-http-headers says `Access-Control-Allow-Origin: *`).
   const char kSendXhrScript[] = "document.getElementById('xhrButton').click();";
-  bool xhr_result = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), kSendXhrScript,
-      &xhr_result));
-  EXPECT_TRUE(xhr_result);
+  content::DOMMessageQueue message_queue;
+  EXPECT_TRUE(content::ExecJs(
+      browser()->tab_strip_model()->GetActiveWebContents(), kSendXhrScript));
+  std::string ack;
+  EXPECT_TRUE(message_queue.WaitForMessage(&ack));
+  EXPECT_EQ("true", ack);
 
   DisableExtension(id);
 
@@ -137,10 +136,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, UnloadWithContentScripts) {
   // The content script sends an XHR with the webpage's (rather than
   // extension's) Origin header - this should succeed (given that
   // xhr.txt.mock-http-headers says `Access-Control-Allow-Origin: *`).
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), kSendXhrScript,
-      &xhr_result));
-  EXPECT_TRUE(xhr_result);
+  EXPECT_TRUE(content::ExecJs(
+      browser()->tab_strip_model()->GetActiveWebContents(), kSendXhrScript));
+  EXPECT_TRUE(message_queue.WaitForMessage(&ack));
+  EXPECT_EQ("true", ack);
 
   // Ensure the process has not been killed.
   EXPECT_TRUE(browser()
@@ -187,8 +186,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, OpenedOpaqueWindows) {
 
   TestTabStripModelObserver test_tab_strip_model_observer(
       browser()->tab_strip_model());
-  extension_service()->DisableExtension(extension->id(),
-                                        disable_reason::DISABLE_USER_ACTION);
+  extension_registrar()->DisableExtension(
+      extension->id(), {disable_reason::DISABLE_USER_ACTION});
   test_tab_strip_model_observer.WaitForTabCount(1);
 
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
@@ -208,9 +207,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, CrashedTabs) {
       LoadExtension(test_dir.UnpackedPath()));
   ASSERT_TRUE(extension);
   const GURL page_url = extension->GetResourceURL("page.html");
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), page_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  NavigateToURLInNewTab(page_url);
 
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
 
@@ -238,8 +235,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionUnloadBrowserTest, CrashedTabs) {
   // still the extension's origin.
   TestTabStripModelObserver test_tab_strip_model_observer(
       browser()->tab_strip_model());
-  extension_service()->DisableExtension(extension->id(),
-                                        disable_reason::DISABLE_USER_ACTION);
+  extension_registrar()->DisableExtension(
+      extension->id(), {disable_reason::DISABLE_USER_ACTION});
   test_tab_strip_model_observer.WaitForTabCount(1);
 
   EXPECT_EQ(1, browser()->tab_strip_model()->count());

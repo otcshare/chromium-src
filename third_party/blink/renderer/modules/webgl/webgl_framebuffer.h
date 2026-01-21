@@ -26,24 +26,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_WEBGL_FRAMEBUFFER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_WEBGL_FRAMEBUFFER_H_
 
-#include "third_party/blink/renderer/modules/webgl/webgl_context_object.h"
-#include "third_party/blink/renderer/modules/webgl/webgl_shared_object.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_object.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
-
-namespace gpu {
-namespace gles2 {
-class GLES2Interface;
-}
-}
 
 namespace blink {
 
 class WebGLRenderbuffer;
 class WebGLTexture;
 
-class WebGLFramebuffer final : public WebGLContextObject {
+class WebGLFramebuffer final : public WebGLObject {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -52,8 +45,8 @@ class WebGLFramebuffer final : public WebGLContextObject {
    public:
     ~WebGLAttachment() override = default;
 
-    virtual WebGLSharedObject* Object() const = 0;
-    virtual bool IsSharedObject(WebGLSharedObject*) const = 0;
+    virtual WebGLObject* Object() const = 0;
+    virtual bool IsObject(WebGLObject*) const = 0;
     virtual bool Valid() const = 0;
     virtual void OnDetached(gpu::gles2::GLES2Interface*) = 0;
     virtual void Attach(gpu::gles2::GLES2Interface*,
@@ -69,16 +62,15 @@ class WebGLFramebuffer final : public WebGLContextObject {
     WebGLAttachment();
   };
 
-  explicit WebGLFramebuffer(WebGLRenderingContextBase*, bool opaque = false);
+  explicit WebGLFramebuffer(WebGLContextObjectSupport*, bool opaque = false);
   ~WebGLFramebuffer() override;
 
   // An opaque framebuffer is one whose attachments are created and managed by
   // the browser and not inspectable or alterable via Javascript. This is
   // primarily used by the VRWebGLLayer interface.
-  static WebGLFramebuffer* CreateOpaque(WebGLRenderingContextBase*,
+  static WebGLFramebuffer* CreateOpaque(WebGLContextObjectSupport*,
+                                        bool has_depth,
                                         bool has_stencil);
-
-  GLuint Object() const { return object_; }
 
   // For a non-multiview attachment, set the num_views parameter to 0. For a
   // multiview attachment, set the layer to the base view index.
@@ -93,8 +85,8 @@ class WebGLFramebuffer final : public WebGLContextObject {
                                         GLenum attachment,
                                         WebGLRenderbuffer*);
   // If an object is attached to the currently bound framebuffer, remove it.
-  void RemoveAttachmentFromBoundFramebuffer(GLenum target, WebGLSharedObject*);
-  WebGLSharedObject* GetAttachmentObject(GLenum) const;
+  void RemoveAttachmentFromBoundFramebuffer(GLenum target, WebGLObject*);
+  WebGLObject* GetAttachmentObject(GLenum) const;
 
   // WebGL 1 specific:
   //   1) can't allow depth_stencil for depth/stencil attachments, and vice
@@ -106,6 +98,7 @@ class WebGLFramebuffer final : public WebGLContextObject {
 
   void SetHasEverBeenBound() { has_ever_been_bound_ = true; }
 
+  bool HasDepthBuffer() const;
   bool HasStencilBuffer() const;
 
   bool HaveContentsChanged() { return contents_changed_; }
@@ -113,6 +106,7 @@ class WebGLFramebuffer final : public WebGLContextObject {
 
   bool Opaque() const { return opaque_; }
   void MarkOpaqueBufferComplete(bool complete) { opaque_complete_ = complete; }
+  void SetOpaqueHasDepth(bool has_depth) { opaque_has_depth_ = has_depth; }
   void SetOpaqueHasStencil(bool has_stencil) {
     opaque_has_stencil_ = has_stencil;
   }
@@ -122,15 +116,20 @@ class WebGLFramebuffer final : public WebGLContextObject {
 
   GLenum GetDrawBuffer(GLenum);
 
+  // WEBGL_shader_pixel_local_storage.
+  void SetPLSTexture(GLint plane, WebGLTexture*);
+  WebGLTexture* GetPLSTexture(GLint plane) const;
+
   void ReadBuffer(const GLenum color_buffer) { read_buffer_ = color_buffer; }
 
   GLenum GetReadBuffer() const { return read_buffer_; }
 
   void Trace(Visitor*) const override;
-  const char* NameInHeapSnapshot() const override { return "WebGLFramebuffer"; }
+  const char* GetHumanReadableName() const override {
+    return "WebGLFramebuffer";
+  }
 
  protected:
-  bool HasObject() const override { return object_ != 0; }
   void DeleteObjectImpl(gpu::gles2::GLES2Interface*) override;
 
  private:
@@ -158,8 +157,6 @@ class WebGLFramebuffer final : public WebGLContextObject {
 
   void CommitWebGL1DepthStencilIfConsistent(GLenum target);
 
-  GLuint object_;
-
   typedef HeapHashMap<GLenum, Member<WebGLAttachment>> AttachmentMap;
 
   AttachmentMap attachments_;
@@ -168,11 +165,17 @@ class WebGLFramebuffer final : public WebGLContextObject {
   bool web_gl1_depth_stencil_consistent_;
   bool contents_changed_ = false;
   const bool opaque_;
+  bool opaque_has_depth_ = false;
   bool opaque_has_stencil_ = false;
   bool opaque_complete_ = false;
 
   Vector<GLenum> draw_buffers_;
   Vector<GLenum> filtered_draw_buffers_;
+
+  // WEBGL_shader_pixel_local_storage.
+  typedef HeapHashMap<GLint, Member<WebGLTexture>> PLSTextureMap;
+
+  PLSTextureMap pls_textures_;
 
   GLenum read_buffer_;
 };

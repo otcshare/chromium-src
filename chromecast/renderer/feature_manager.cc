@@ -34,7 +34,7 @@ FeatureManager::FeatureManager(content::RenderFrame* render_frame)
     : content::RenderFrameObserver(render_frame),
       configured_(false),
       can_install_bindings_(false),
-      dev_origin_(GURL::EmptyGURL()),
+      dev_origin_(GURL()),
       secure_origin_set_(false) {
   registry_.AddInterface(base::BindRepeating(
       &FeatureManager::OnFeatureManagerRequest, base::Unretained(this)));
@@ -80,12 +80,12 @@ void FeatureManager::ConfigureFeatures(
 
 void FeatureManager::ConfigureFeaturesInternal() {
   if (FeatureEnabled(feature::kEnableDevMode)) {
-    base::Value& dev_mode_config =
+    const base::Value::Dict& dev_mode_config =
         (features_map_.find(feature::kEnableDevMode)->second)->config;
-    base::Value* dev_mode_origin =
-        dev_mode_config.FindKey(feature::kDevModeOrigin);
+    const std::string* dev_mode_origin =
+        dev_mode_config.FindString(feature::kDevModeOrigin);
     DCHECK(dev_mode_origin);
-    dev_origin_ = GURL(dev_mode_origin->GetString());
+    dev_origin_ = GURL(*dev_mode_origin);
     DCHECK(dev_origin_.is_valid());
   }
 
@@ -135,13 +135,13 @@ void FeatureManager::OnFeatureManagerRequest(
 }
 
 bool FeatureManager::FeatureEnabled(const std::string& feature) const {
-  return features_map_.find(feature) != features_map_.end();
+  return features_map_.contains(feature);
 }
 
 const chromecast::shell::mojom::FeaturePtr& FeatureManager::GetFeature(
     const std::string& feature) const {
   auto itor = features_map_.find(feature);
-  DCHECK(itor != features_map_.end());
+  CHECK(itor != features_map_.end());
   return itor->second;
 }
 

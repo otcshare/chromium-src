@@ -5,8 +5,10 @@
 #include "chrome/browser/ui/views/crostini/crostini_uninstaller_view.h"
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_base.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
@@ -23,6 +25,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 
 class CrostiniUninstallerViewBrowserTest : public CrostiniDialogBrowserTest {
  public:
@@ -33,8 +36,8 @@ class CrostiniUninstallerViewBrowserTest : public CrostiniDialogBrowserTest {
 
     void StopVm(
         const vm_tools::concierge::StopVmRequest& request,
-        chromeos::DBusMethodCallback<vm_tools::concierge::StopVmResponse>
-            callback) override {
+        chromeos::DBusMethodCallback<
+            vm_tools::concierge::SuccessFailureResponse> callback) override {
       ash::FakeConciergeClient::StopVm(request, std::move(callback));
       if (closure_) {
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -90,7 +93,8 @@ class CrostiniUninstallerViewBrowserTest : public CrostiniDialogBrowserTest {
   }
 
  protected:
-  WaitingFakeConciergeClient* waiting_fake_concierge_client_;
+  raw_ptr<WaitingFakeConciergeClient, DanglingUntriaged>
+      waiting_fake_concierge_client_;
 };
 
 class CrostiniUninstalledUninstallerViewBrowserTest
@@ -115,8 +119,9 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstallerViewBrowserTest, UninstallFlow) {
 
   ShowUi("default");
   EXPECT_NE(nullptr, ActiveView());
-  EXPECT_EQ(ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL,
-            ActiveView()->GetDialogButtons());
+  EXPECT_EQ(static_cast<int>(ui::mojom::DialogButton::kOk) |
+                static_cast<int>(ui::mojom::DialogButton::kCancel),
+            ActiveView()->buttons());
 
   EXPECT_TRUE(HasAcceptButton());
   EXPECT_TRUE(HasCancelButton());
@@ -130,7 +135,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstallerViewBrowserTest, UninstallFlow) {
 
   histogram_tester.ExpectUniqueSample(
       "Crostini.UninstallResult",
-      static_cast<base::HistogramBase::Sample>(
+      static_cast<base::HistogramBase::Sample32>(
           CrostiniUninstallerView::UninstallResult::kSuccess),
       1);
 }
@@ -144,8 +149,9 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstalledUninstallerViewBrowserTest,
   ShowUi("default");
   EXPECT_NE(nullptr, ActiveView());
   EXPECT_FALSE(ActiveView()->GetWidget()->IsClosed());
-  EXPECT_EQ(ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL,
-            ActiveView()->GetDialogButtons());
+  EXPECT_EQ(static_cast<int>(ui::mojom::DialogButton::kOk) |
+                static_cast<int>(ui::mojom::DialogButton::kCancel),
+            ActiveView()->buttons());
 
   EXPECT_TRUE(HasAcceptButton());
   EXPECT_TRUE(HasCancelButton());
@@ -156,7 +162,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstalledUninstallerViewBrowserTest,
 
   histogram_tester.ExpectUniqueSample(
       "Crostini.UninstallResult",
-      static_cast<base::HistogramBase::Sample>(
+      static_cast<base::HistogramBase::Sample32>(
           CrostiniUninstallerView::UninstallResult::kSuccess),
       1);
 }
@@ -172,7 +178,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstallerViewBrowserTest, Cancel) {
 
   histogram_tester.ExpectUniqueSample(
       "Crostini.UninstallResult",
-      static_cast<base::HistogramBase::Sample>(
+      static_cast<base::HistogramBase::Sample32>(
           CrostiniUninstallerView::UninstallResult::kCancelled),
       1);
 }
@@ -181,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstallerViewBrowserTest, ErrorThenCancel) {
   base::HistogramTester histogram_tester;
   ShowUi("default");
   EXPECT_NE(nullptr, ActiveView());
-  vm_tools::concierge::StopVmResponse response;
+  vm_tools::concierge::SuccessFailureResponse response;
   response.set_success(false);
   waiting_fake_concierge_client_->set_stop_vm_response(std::move(response));
 
@@ -194,7 +200,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstallerViewBrowserTest, ErrorThenCancel) {
 
   histogram_tester.ExpectUniqueSample(
       "Crostini.UninstallResult",
-      static_cast<base::HistogramBase::Sample>(
+      static_cast<base::HistogramBase::Sample32>(
           CrostiniUninstallerView::UninstallResult::kError),
       1);
 }

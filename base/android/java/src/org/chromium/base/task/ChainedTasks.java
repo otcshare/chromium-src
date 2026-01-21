@@ -4,11 +4,11 @@
 
 package org.chromium.base.task;
 
-import android.util.Pair;
-
 import org.chromium.base.TraceEvent;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-import java.util.LinkedList;
+import java.util.ArrayDeque;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -16,57 +16,86 @@ import javax.annotation.concurrent.GuardedBy;
  * Allows chaining multiple tasks on arbitrary threads, with the next task posted when one
  * completes.
  *
- * How this differs from SequencedTaskRunner:
- * Deferred posting of subsequent tasks allows more time for Android framework tasks to run
- * (e.g. input events). As such, this class really only makes sense when submitting tasks to
- * SingleThreadTaskRunners.
+ * <p>How this differs from SequencedTaskRunner: Deferred posting of subsequent tasks allows more
+ * time for Android framework tasks to run (e.g. input events). As such, this class really only
+ * makes sense when submitting tasks to the UI thread.
  *
- * Threading:
- * - This class is threadsafe and all methods may be called from any thread.
- * - Tasks may run with arbitrary TaskTraits, unless tasks are coalesced, in which case all tasks
- *   must run on the same thread.
+ * <p>Threading: - This class is threadsafe and all methods may be called from any thread. - Tasks
+ * may run with arbitrary TaskTraits, unless tasks are coalesced, in which case all tasks must run
+ * on the same thread.
  */
+@NullMarked
 public class ChainedTasks {
-    private final LinkedList<Pair<TaskTraits, Runnable>> mTasks = new LinkedList<>();
+    private final ArrayDeque<ChainedTask> mTasks = new ArrayDeque<>();
+
     @GuardedBy("mTasks")
     private boolean mFinalized;
+
     private volatile boolean mCanceled;
-    private int mIterationIdForTesting = PostTask.sTestIterationForTesting;
+    private final int mIterationIdForTesting = PostTask.sTestIterationForTesting;
 
-    private final Runnable mRunAndPost = new Runnable() {
-        @Override
-        @SuppressWarnings("NoDynamicStringsInTraceEventCheck")
-        public void run() {
-            if (mIterationIdForTesting != PostTask.sTestIterationForTesting) {
-                cancel();
-            }
-            if (mCanceled) return;
-
-            Pair<TaskTraits, Runnable> pair = mTasks.pop();
-            try (TraceEvent e = TraceEvent.scoped(
-                         "ChainedTask.run: " + pair.second.getClass().getName())) {
-                pair.second.run();
-            }
-            if (!mTasks.isEmpty()) PostTask.postTask(mTasks.peek().first, this);
+    private void runAndPost() {
+        if (mIterationIdForTesting != PostTask.sTestIterationForTesting) {
+            cancel();
         }
-    };
+        if (mCanceled) return;
+
+        ChainedTask task = mTasks.pop();
+        task.run();
+        if (!mTasks.isEmpty()) {
+            ChainedTask nextTask = mTasks.peek();
+            PostTask.postTask(nextTask.mTaskTraits, this::runAndPost, nextTask.mLocation);
+        }
+    }
+
+    private static class ChainedTask implements Runnable {
+        private final @TaskTraits int mTaskTraits;
+        private final Runnable mRunnable;
+        private final @Nullable Location mLocation;
+
+        ChainedTask(@TaskTraits int traits, Runnable runnable, @Nullable Location location) {
+            mTaskTraits = traits;
+            mRunnable = runnable;
+            mLocation = location;
+        }
+
+        @Override
+        public void run() {
+            // TODO(anandrv): Remove trace event once location rewriting is enabled by default
+            try (TraceEvent e =
+                    TraceEvent.scoped(
+                            "ChainedTask.run", (mLocation != null) ? mLocation.toString() : null)) {
+                mRunnable.run();
+            }
+        }
+    }
 
     /**
      * Adds a task to the list of tasks to run. Cannot be called once {@link start()} has been
      * called.
      */
-    public void add(TaskTraits traits, Runnable task) {
-        assert mIterationIdForTesting == PostTask.sTestIterationForTesting;
-
-        synchronized (mTasks) {
-            assert !mFinalized : "Must not call add() after start()";
-            mTasks.add(new Pair<>(traits, task));
-        }
+    public void add(@TaskTraits int traits, Runnable task) {
+        add(traits, task, null);
     }
 
     /**
-     * Cancels the remaining tasks.
+     * Do not call this method directly unless forwarding a location object. Use {@link #add(int,
+     * Runnable)} instead.
+     *
+     * <p>Overload of {@link #add(int, Runnable)} for the Java location rewriter.
      */
+    public void add(@TaskTraits int traits, Runnable task, @Nullable Location location) {
+        assert mIterationIdForTesting == PostTask.sTestIterationForTesting;
+        if (PostTask.ENABLE_TASK_ORIGINS) {
+            task = PostTask.populateTaskOrigin(new TaskOriginException(), task);
+        }
+        synchronized (mTasks) {
+            assert !mFinalized : "Must not call add() after start()";
+            mTasks.add(new ChainedTask(traits, task, location));
+        }
+    }
+
+    /** Cancels the remaining tasks. */
     public void cancel() {
         synchronized (mTasks) {
             mFinalized = true;
@@ -82,21 +111,24 @@ public class ChainedTasks {
      */
     public void start(final boolean coalesceTasks) {
         synchronized (mTasks) {
-            assert !mFinalized :"Cannot call start() several times";
+            assert !mFinalized : "Cannot call start() several times";
             mFinalized = true;
         }
         if (mTasks.isEmpty()) return;
+
+        ChainedTask nextTask = mTasks.peek();
         if (coalesceTasks) {
-            TaskTraits traits = mTasks.peek().first;
-            PostTask.runOrPostTask(traits, () -> {
-                for (Pair<TaskTraits, Runnable> pair : mTasks) {
-                    assert PostTask.canRunTaskImmediately(pair.first);
-                    pair.second.run();
-                    if (mCanceled) return;
-                }
-            });
+            PostTask.runOrPostTask(
+                    nextTask.mTaskTraits,
+                    () -> {
+                        for (ChainedTask task : mTasks) {
+                            assert PostTask.canRunTaskImmediately(task.mTaskTraits);
+                            task.run();
+                            if (mCanceled) return;
+                        }
+                    });
         } else {
-            PostTask.postTask(mTasks.peek().first, mRunAndPost);
+            PostTask.postTask(nextTask.mTaskTraits, this::runAndPost, nextTask.mLocation);
         }
     }
 }

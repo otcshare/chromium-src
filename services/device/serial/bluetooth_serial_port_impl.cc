@@ -8,14 +8,28 @@
 
 #include <algorithm>
 
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
+#include "components/device_event_log/device_event_log.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/io_buffer.h"
 #include "services/device/public/cpp/bluetooth/bluetooth_utils.h"
-#include "services/device/public/cpp/serial/serial_switches.h"
 
 namespace device {
+
+namespace {
+
+void RecordOpenSocketResult(bool success) {
+  static constexpr std::string_view kOpenSocketResult =
+      "Bluetooth.Serial.OpenSocketResult";
+  base::UmaHistogramBoolean(kOpenSocketResult, success);
+}
+
+}  // namespace
 
 // static
 void BluetoothSerialPortImpl::Open(
@@ -26,9 +40,6 @@ void BluetoothSerialPortImpl::Open(
     mojo::PendingRemote<mojom::SerialPortClient> client,
     mojo::PendingRemote<mojom::SerialPortConnectionWatcher> watcher,
     OpenCallback callback) {
-  DCHECK(base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableBluetoothSerialPortProfileInSerialApi));
-
   // This BluetoothSerialPortImpl is owned by its |receiver_| and |watcher_| and
   // will self-destruct on connection failure.
   auto* port = new BluetoothSerialPortImpl(
@@ -58,6 +69,11 @@ BluetoothSerialPortImpl::BluetoothSerialPortImpl(
 }
 
 BluetoothSerialPortImpl::~BluetoothSerialPortImpl() {
+  if (open_callback_) {
+    BLUETOOTH_LOG(ERROR) << "Callback pending at destruction: address: "
+                         << address_;
+    std::move(open_callback_).Run(mojo::NullRemote());
+  }
   if (bluetooth_socket_)
     bluetooth_socket_->Disconnect(base::DoNothing());
 }
@@ -72,19 +88,16 @@ void BluetoothSerialPortImpl::OpenSocket(const BluetoothUUID& service_class_id,
     return;
   }
 
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
+  open_callback_ = std::move(callback);
   device->ConnectToService(
       service_class_id,
       base::BindOnce(&BluetoothSerialPortImpl::OnSocketConnected,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     std::move(split_callback.first)),
+                     weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&BluetoothSerialPortImpl::OnSocketConnectedError,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     std::move(split_callback.second)));
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void BluetoothSerialPortImpl::OnSocketConnected(
-    OpenCallback callback,
     scoped_refptr<BluetoothSocket> socket) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(socket);
@@ -94,14 +107,19 @@ void BluetoothSerialPortImpl::OnSocketConnected(
   receiver_.set_disconnect_handler(
       base::BindOnce([](BluetoothSerialPortImpl* self) { delete self; },
                      base::Unretained(this)));
-  std::move(callback).Run(std::move(port));
+  std::move(open_callback_).Run(std::move(port));
+  RecordOpenSocketResult(/*success=*/true);
 }
 
 void BluetoothSerialPortImpl::OnSocketConnectedError(
-    OpenCallback callback,
     const std::string& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(mojo::NullRemote());
+  SERIAL_LOG(DEBUG) << "Bluetooth Serial: Failed to connect socket: address: "
+                    << address_ << ", message: " << message;
+  BLUETOOTH_LOG(ERROR) << "Failed to connect socket: address: " << address_
+                       << ", message: " << message;
+  std::move(open_callback_).Run(mojo::NullRemote());
+  RecordOpenSocketResult(/*success=*/false);
   delete this;
 }
 
@@ -196,11 +214,11 @@ void BluetoothSerialPortImpl::ReadMore() {
   DCHECK(out_stream_.is_valid());
   DCHECK(!read_pending_);
 
-  void* buffer = nullptr;
-  uint32_t buffer_num_bytes = 0;
+  base::span<uint8_t> buffer;
   // The |buffer| is owned by |out_stream_|.
-  MojoResult result = out_stream_->BeginWriteData(&buffer, &buffer_num_bytes,
-                                                  MOJO_WRITE_DATA_FLAG_NONE);
+  MojoResult result =
+      out_stream_->BeginWriteData(mojo::DataPipeProducerHandle::kNoSizeHint,
+                                  MOJO_WRITE_DATA_FLAG_NONE, buffer);
   if (result == MOJO_RESULT_SHOULD_WAIT) {
     out_stream_watcher_.ArmOrNotify();
     return;
@@ -219,26 +237,22 @@ void BluetoothSerialPortImpl::ReadMore() {
   if (receive_buffer_) {
     const size_t num_remaining_bytes =
         receive_buffer_size_ - receive_buffer_next_byte_pos_;
-    const size_t bytes_to_copy =
-        std::min(num_remaining_bytes, size_t{buffer_num_bytes});
-    std::copy(
-        receive_buffer_->data() + receive_buffer_next_byte_pos_,
-        receive_buffer_->data() + receive_buffer_next_byte_pos_ + bytes_to_copy,
-        reinterpret_cast<char*>(buffer));
+    const size_t bytes_to_copy = std::min(num_remaining_bytes, buffer.size());
+    buffer.copy_prefix_from(receive_buffer_->span().subspan(
+        receive_buffer_next_byte_pos_, bytes_to_copy));
     out_stream_->EndWriteData(bytes_to_copy);
     if (bytes_to_copy == num_remaining_bytes) {  // If copied the last byte.
       ResetReceiveBuffer();
     } else {
-      receive_buffer_next_byte_pos_ += buffer_num_bytes;
+      receive_buffer_next_byte_pos_ += bytes_to_copy;
     }
     out_stream_watcher_.ArmOrNotify();
     return;
   }
   read_pending_ = true;
-  pending_write_buffer_ =
-      base::make_span(reinterpret_cast<char*>(buffer), buffer_num_bytes);
+  pending_write_buffer_ = base::as_writable_chars(buffer);
   bluetooth_socket_->Receive(
-      buffer_num_bytes,
+      base::checked_cast<int>(buffer.size()),
       base::BindOnce(&BluetoothSerialPortImpl::OnBluetoothSocketReceive,
                      weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&BluetoothSerialPortImpl::OnBluetoothSocketReceiveError,
@@ -275,7 +289,8 @@ void BluetoothSerialPortImpl::OnBluetoothSocketReceive(
   DCHECK(out_stream_);
   size_t bytes_to_copy = std::min(pending_write_buffer_.size(),
                                   static_cast<size_t>(num_bytes_received));
-  std::copy(receive_buffer->data(), receive_buffer->data() + bytes_to_copy,
+  std::copy(receive_buffer->data(),
+            UNSAFE_TODO(receive_buffer->data() + bytes_to_copy),
             pending_write_buffer_.data());
   out_stream_->EndWriteData(bytes_to_copy);
   if (pending_write_buffer_.size() < static_cast<size_t>(num_bytes_received)) {
@@ -292,6 +307,8 @@ void BluetoothSerialPortImpl::OnBluetoothSocketReceiveError(
     BluetoothSocket::ErrorReason error_reason,
     const std::string& error_message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  SERIAL_LOG(DEBUG) << "Bluetooth Serial: Receive error: address: " << address_
+                    << ", message: " << error_message;
 
   read_pending_ = false;
   ResetPendingWriteBuffer();
@@ -305,7 +322,6 @@ void BluetoothSerialPortImpl::OnBluetoothSocketReceiveError(
           break;
         case BluetoothSocket::ErrorReason::kIOPending:
           NOTREACHED();
-          break;
         case BluetoothSocket::ErrorReason::kSystemError:
           client_->OnReadError(mojom::SerialReceiveError::SYSTEM_ERROR);
           break;
@@ -351,11 +367,10 @@ void BluetoothSerialPortImpl::WriteMore() {
   DCHECK(in_stream_.is_valid());
   DCHECK(!write_pending_);
 
-  const void* buffer = nullptr;
-  uint32_t buffer_size = 0;
+  base::span<const uint8_t> buffer;
   // |buffer| is owned by |in_stream_|.
-  MojoResult result = in_stream_->BeginReadData(&buffer, &buffer_size,
-                                                MOJO_WRITE_DATA_FLAG_NONE);
+  MojoResult result =
+      in_stream_->BeginReadData(MOJO_WRITE_DATA_FLAG_NONE, buffer);
   if (result == MOJO_RESULT_SHOULD_WAIT) {
     in_stream_watcher_.ArmOrNotify();
     return;
@@ -381,13 +396,12 @@ void BluetoothSerialPortImpl::WriteMore() {
   write_pending_ = true;
   // Copying the buffer because we might want to close in_stream_, thus
   // invalidating |buffer|, which is passed to Send().
-  auto io_buffer = base::MakeRefCounted<net::IOBuffer>(buffer_size);
-  std::copy(static_cast<const char*>(buffer),
-            static_cast<const char*>(buffer) + buffer_size, io_buffer->data());
+  auto io_buffer = base::MakeRefCounted<net::IOBufferWithSize>(buffer.size());
+  io_buffer->span().copy_from(buffer);
 
   // The call to EndReadData() will be delayed until after Send() completes.
   bluetooth_socket_->Send(
-      io_buffer, buffer_size,
+      io_buffer, base::checked_cast<int>(buffer.size()),
       base::BindOnce(&BluetoothSerialPortImpl::OnBluetoothSocketSend,
                      weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&BluetoothSerialPortImpl::OnBluetoothSocketSendError,
@@ -415,6 +429,8 @@ void BluetoothSerialPortImpl::OnBluetoothSocketSend(int num_bytes_sent) {
 void BluetoothSerialPortImpl::OnBluetoothSocketSendError(
     const std::string& error_message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  SERIAL_LOG(DEBUG) << "Bluetooth Serial: Send error: address: " << address_
+                    << ", message: " << error_message;
 
   write_pending_ = false;
   flush_next_write_ = false;

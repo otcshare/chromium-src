@@ -43,7 +43,7 @@ ExecutionContext* DocumentPictureInPicture::GetExecutionContext() const {
   return GetSupplementable();
 }
 
-ScriptPromise DocumentPictureInPicture::requestWindow(
+ScriptPromise<DOMWindow> DocumentPictureInPicture::requestWindow(
     ScriptState* script_state,
     DocumentPictureInPictureOptions* options,
     ExceptionState& exception_state) {
@@ -51,39 +51,42 @@ ScriptPromise DocumentPictureInPicture::requestWindow(
   if (!dom_window) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Internal error: no window");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  if (dom_window->GetFrame() && !dom_window->GetFrame()->IsMainFrame()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kNotAllowedError,
-        "Opening a PiP window from iframe is not allowed");
-    return ScriptPromise();
+  if (dom_window->GetFrame() &&
+      !dom_window->GetFrame()->IsOutermostMainFrame()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotAllowedError,
+                                      "Opening a PiP window is only allowed "
+                                      "from a top-level browsing context");
+    return EmptyPromise();
   }
 
   if (dom_window->IsPictureInPictureWindow()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotAllowedError,
         "Opening a PiP window from a PiP window is not allowed");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   if (!script_state->ContextIsValid()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
                                       "Document not attached");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<DOMWindow>>(
+      script_state, exception_state.GetContext());
   // |dom_window->document()| should always exist after document construction.
   auto* document = dom_window->document();
   DCHECK(document);
 
+  auto promise = resolver->Promise();
   PictureInPictureControllerImpl::From(*document)
       .CreateDocumentPictureInPictureWindow(script_state, *dom_window, options,
-                                            resolver, exception_state);
+                                            resolver);
 
-  return resolver->Promise();
+  return promise;
 }
 
 DOMWindow* DocumentPictureInPicture::window(ScriptState* script_state) const {
@@ -98,7 +101,7 @@ DOMWindow* DocumentPictureInPicture::window(ScriptState* script_state) const {
 }
 
 void DocumentPictureInPicture::Trace(Visitor* visitor) const {
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   Supplement<LocalDOMWindow>::Trace(visitor);
 }
 

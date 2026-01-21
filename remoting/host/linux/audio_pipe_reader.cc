@@ -10,11 +10,15 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace remoting {
 
@@ -52,8 +56,7 @@ AudioPipeReader::AudioPipeReader(
     const base::FilePath& pipe_path)
     : task_runner_(task_runner),
       pipe_path_(pipe_path),
-      observers_(new base::ObserverListThreadSafe<StreamObserver>()) {
-}
+      observers_(new base::ObserverListThreadSafe<StreamObserver>()) {}
 
 AudioPipeReader::~AudioPipeReader() = default;
 
@@ -156,13 +159,14 @@ void AudioPipeReader::DoCapture() {
   data.resize(pos + bytes_to_read);
 
   while (pos < data.size()) {
-    int read_result =
-        pipe_.ReadAtCurrentPos(std::data(data) + pos, data.size() - pos);
-    if (read_result > 0) {
-      pos += read_result;
+    const std::optional<size_t> read_bytes =
+        pipe_.ReadAtCurrentPos(base::as_writable_byte_span(data).subspan(pos));
+    if (read_bytes.value_or(0) > 0) {
+      pos += *read_bytes;
     } else {
-      if (read_result < 0 && errno != EWOULDBLOCK && errno != EAGAIN)
+      if (!read_bytes && errno != EWOULDBLOCK && errno != EAGAIN) {
         PLOG(ERROR) << "read";
+      }
       break;
     }
   }
@@ -185,8 +189,9 @@ void AudioPipeReader::DoCapture() {
   // to read |bytes_to_read| bytes, but in case it's misbehaving we need to make
   // sure that |stream_position_bytes| doesn't go out of sync with the current
   // stream position.
-  if (stream_position_bytes - last_capture_position_ > pipe_buffer_size_)
+  if (stream_position_bytes - last_capture_position_ > pipe_buffer_size_) {
     last_capture_position_ = stream_position_bytes - pipe_buffer_size_;
+  }
   DCHECK_LE(last_capture_position_, stream_position_bytes);
 
   // Dispatch asynchronous notification to the stream observers.

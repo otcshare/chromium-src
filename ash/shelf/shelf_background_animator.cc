@@ -12,15 +12,14 @@
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_background_animator_observer.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/time/time.h"
-#include "shelf_widget.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/animation/tween.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 
@@ -186,7 +185,7 @@ void ShelfBackgroundAnimator::CreateAnimator(
 
   animator_ = std::make_unique<gfx::SlideAnimation>(this);
   animator_->SetSlideDuration(
-      ui::ScopedAnimationDurationScaleMode::duration_multiplier() * duration);
+      gfx::ScopedAnimationDurationScaleMode::duration_multiplier() * duration);
 }
 
 void ShelfBackgroundAnimator::StopAnimator() {
@@ -228,7 +227,7 @@ SkColor ShelfBackgroundAnimator::GetBackgroundColor(
       break;
     case ShelfBackgroundType::kOverview:
       shelf_target_color =
-          Shell::Get()->tablet_mode_controller()->InTabletMode()
+          display::Screen::Get()->InTabletMode()
               ? ShelfConfig::Get()->GetMaximizedShelfColor(shelf_widget)
               : ShelfConfig::Get()->GetDefaultShelfColor(shelf_widget);
       break;

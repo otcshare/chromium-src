@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/message.h"
+
 #include <stdint.h>
 
 #include <algorithm>
 #include <tuple>
 #include <vector>
 
-#include "mojo/public/cpp/bindings/message.h"
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -25,8 +27,13 @@ void CreateTestMessagePayload(std::vector<uint8_t>* bytes,
   Message message(kTestMessageName, kTestMessageFlags, 0, kTestPayloadSize,
                   nullptr);
   message.header()->trace_nonce = 0;
+  if (message.version() >= 3) {
+    message.header_v3()->creation_timeticks_us = 0;
+  }
+
   bytes->resize(message.data_num_bytes());
-  std::copy(message.data(), message.data() + message.data_num_bytes(),
+  std::copy(message.data(),
+            UNSAFE_TODO(message.data() + message.data_num_bytes()),
             bytes->begin());
 
   MessagePipe pipe;
@@ -47,8 +54,9 @@ TEST(BindingsMessageTest, ConstructFromPayload) {
   WriteMessageRaw(pipe.handle0.get(), in_bytes1.data(), in_bytes1.size(),
                   reinterpret_cast<const MojoHandle*>(in_handles1.data()),
                   in_handles1.size(), MOJO_WRITE_MESSAGE_FLAG_NONE);
-  for (auto& handle : in_handles1)
+  for (auto& handle : in_handles1) {
     std::ignore = handle.release();
+  }
 
   // Now construct a Message object from the same payload and feed that into the
   // pipe.

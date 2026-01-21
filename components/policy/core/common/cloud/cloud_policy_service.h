@@ -5,18 +5,19 @@
 #ifndef COMPONENTS_POLICY_CORE_COMMON_CLOUD_CLOUD_POLICY_SERVICE_H_
 #define COMPONENTS_POLICY_CORE_COMMON_CLOUD_CLOUD_POLICY_SERVICE_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/policy_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace policy {
 
@@ -41,7 +42,7 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
     // was successful.
     virtual void OnPolicyRefreshed(bool success) {}
 
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   // |client| and |store| must remain valid for the object life time.
@@ -55,7 +56,25 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
 
   // Refreshes policy. |callback| will be invoked after the operation completes
   // or aborts because of errors.
-  virtual void RefreshPolicy(RefreshPolicyCallback callback);
+  //
+  // The |reason| parameter will be used to tag the request to DMServer. This
+  // will allow for more targeted monitoring and alerting.
+  virtual void RefreshPolicy(RefreshPolicyCallback callback,
+                             PolicyFetchReason reason);
+
+  // Fetches the extension install policy for the given extension id and
+  // version. The |callback| will be invoked with the extension install
+  // decision.
+  virtual void FetchExtensionInstallPolicy(
+      const std::string& policy_type,
+      const ExtensionIdAndVersion& extension_id_and_version,
+      PolicyFetchReason reason,
+      base::OnceCallback<void(ExtensionInstallDecision)> callback);
+
+  void HandleExtensionInstallPolicyFetchResult(
+      ExtensionIdAndVersion extension_id_and_version,
+      base::OnceCallback<void(ExtensionInstallDecision)> callback,
+      DMServerJobResult result);
 
   // Adds/Removes an Observer for this object.
   void AddObserver(Observer* observer);
@@ -63,14 +82,13 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
 
   // CloudPolicyClient::Observer:
   void OnPolicyFetched(CloudPolicyClient* client) override;
-  void OnRegistrationStateChanged(CloudPolicyClient* client) override;
   void OnClientError(CloudPolicyClient* client) override;
 
   // CloudPolicyStore::Observer:
   void OnStoreLoaded(CloudPolicyStore* store) override;
   void OnStoreError(CloudPolicyStore* store) override;
 
-  void ReportValidationResult(CloudPolicyStore* store);
+  void ReportValidationResult(CloudPolicyStore* store, ValidationAction action);
 
   bool IsInitializationComplete() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -80,7 +98,7 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
   // If initial policy refresh was completed returns its result.
   // This allows ChildPolicyObserver to know whether policy was fetched before
   // profile creation.
-  absl::optional<bool> initial_policy_refresh_result() const {
+  std::optional<bool> initial_policy_refresh_result() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return initial_policy_refresh_result_;
   }
@@ -127,7 +145,7 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
 
   // Set to true if initial policy refresh was successful. Set to false
   // otherwise.
-  absl::optional<bool> initial_policy_refresh_result_;
+  std::optional<bool> initial_policy_refresh_result_;
 
   // Observers who will receive notifications when the service has finished
   // initializing.
@@ -137,6 +155,8 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
   // reported once if the validated policy's data signature matches with this
   // one. Will be cleared once we send the validation report.
   std::string policy_pending_validation_signature_;
+
+  base::WeakPtrFactory<CloudPolicyService> weak_ptr_factory_{this};
 };
 
 }  // namespace policy

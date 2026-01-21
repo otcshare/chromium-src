@@ -4,8 +4,8 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
@@ -27,7 +27,7 @@ class SyncWebSocketImplTest : public testing::Test {
  protected:
   SyncWebSocketImplTest()
       : client_thread_("ClientThread"), long_timeout_(base::Minutes(1)) {}
-  ~SyncWebSocketImplTest() override {}
+  ~SyncWebSocketImplTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(client_thread_.StartWithOptions(
@@ -53,7 +53,7 @@ TEST_F(SyncWebSocketImplTest, CreateDestroy) {
   SyncWebSocketImpl sock(context_getter_.get());
 }
 
-// TODO(crbug.com/1177142) Re-enable test
+// TODO(crbug.com/40168673) Re-enable test
 TEST_F(SyncWebSocketImplTest, DISABLED_Connect) {
   SyncWebSocketImpl sock(context_getter_.get());
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
@@ -92,7 +92,8 @@ TEST_F(SyncWebSocketImplTest, DetermineRecipient) {
             sock.ReceiveNextMessage(&message, long_timeout()));
 
   // Getting message id and method
-  absl::optional<base::Value> message_value = base::JSONReader::Read(message);
+  std::optional<base::Value> message_value =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(message_value.has_value());
   base::Value::Dict* message_dict = message_value->GetIfDict();
   ASSERT_TRUE(message_dict);
@@ -110,8 +111,7 @@ TEST_F(SyncWebSocketImplTest, SendReceiveTimeout) {
   base::WaitableEvent server_reply_allowed(
       base::WaitableEvent::ResetPolicy::AUTOMATIC,
       base::WaitableEvent::InitialState::NOT_SIGNALED);
-  server_.SetMessageCallback(base::BindOnce(
-      &base::WaitableEvent::Wait, base::Unretained(&server_reply_allowed)));
+  server_.SetMessageCallback(server_reply_allowed.GetWaitCallbackForTesting());
 
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
   ASSERT_TRUE(sock.Send("hi"));

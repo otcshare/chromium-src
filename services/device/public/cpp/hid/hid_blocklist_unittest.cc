@@ -4,11 +4,12 @@
 
 #include "services/device/public/cpp/hid/hid_blocklist.h"
 
+#include <string_view>
+
 #include "base/command_line.h"
-#include "base/guid.h"
 #include "base/memory/raw_ref.h"
-#include "base/strings/string_piece.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/uuid.h"
 #include "services/device/public/cpp/hid/hid_switches.h"
 #include "services/device/public/cpp/test/hid_test_util.h"
 #include "services/device/public/cpp/test/test_report_descriptors.h"
@@ -37,7 +38,7 @@ class HidBlocklistTest : public testing::Test {
 
   const HidBlocklist& list() { return *blocklist_; }
 
-  void SetDynamicBlocklist(base::StringPiece list) {
+  void SetDynamicBlocklist(std::string_view list) {
     feature_list_.Reset();
 
     std::map<std::string, std::string> params;
@@ -72,7 +73,7 @@ class HidBlocklistTest : public testing::Test {
       collection->feature_reports.push_back(std::move(report));
 
     auto device = mojom::HidDeviceInfo::New();
-    device->guid = base::GenerateGUID();
+    device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
     device->vendor_id = vendor_id;
     device->product_id = product_id;
     device->has_report_id = has_report_id;
@@ -125,7 +126,7 @@ class HidBlocklistTest : public testing::Test {
     }
 
     auto device = mojom::HidDeviceInfo::New();
-    device->guid = base::GenerateGUID();
+    device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
     device->vendor_id = vendor_id;
     device->product_id = product_id;
     device->has_report_id = true;
@@ -223,7 +224,7 @@ TEST_F(HidBlocklistTest, UnexcludedDevice) {
 
 TEST_F(HidBlocklistTest, UnexcludedDeviceWithNoCollections) {
   auto device = mojom::HidDeviceInfo::New();
-  device->guid = base::GenerateGUID();
+  device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   device->vendor_id = kTestVendorId;
   device->product_id = kTestProductId;
   EXPECT_FALSE(device->is_excluded_by_blocklist);

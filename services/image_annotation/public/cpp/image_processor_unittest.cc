@@ -7,13 +7,14 @@
 #include <cmath>
 #include <limits>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "services/image_annotation/image_annotation_metrics.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/skia/src/core/SkEndian.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 
 namespace image_annotation {
@@ -39,12 +40,11 @@ SkBitmap GenCheckerboardBitmap(const int dim) {
   for (int row = 0; row < dim; ++row) {
     for (int col = 0; col < dim; ++col) {
       const bool black = ((row / check_dim + col / check_dim) % 2) == 1;
-      uint8_t* const byte_pos =
-          pixels + row * out.rowBytes() + col * out.bytesPerPixel();
+      uint8_t* const byte_pos = UNSAFE_TODO(pixels + row * out.rowBytes() +
+                                            col * out.bytesPerPixel());
 
-      // RGBA refers to big endian ordering.
       *reinterpret_cast<uint32_t*>(byte_pos) =
-          black ? SkEndian_SwapBE32(0x000000FF) : 0xFFFFFFFF;
+          black ? SK_ColorBLACK : SK_ColorWHITE;
     }
   }
 
@@ -64,7 +64,8 @@ double CalcImageError(const SkBitmap& orig, const SkBitmap& comp) {
       const auto comp_col = SkColor4f::FromColor(comp.getColor(col, row));
 
       for (int i = 0; i < 4; ++i) {
-        sum += std::pow(orig_col.vec()[i] - comp_col.vec()[i], 2);
+        sum += std::pow(
+            UNSAFE_TODO(orig_col.vec()[i]) - UNSAFE_TODO(comp_col.vec()[i]), 2);
       }
     }
   }
@@ -79,12 +80,11 @@ void OutputImageError(double* const error,
                       const std::vector<uint8_t>& result,
                       const int32_t width,
                       const int32_t height) {
-  const std::unique_ptr<SkBitmap> comp =
-      gfx::JPEGCodec::Decode(result.data(), result.size());
-  CHECK(comp);
+  SkBitmap comp = gfx::JPEGCodec::Decode(result);
+  CHECK(!comp.isNull());
 
   *error = width == expected.width() && height == expected.height()
-               ? CalcImageError(expected, *comp)
+               ? CalcImageError(expected, comp)
                : std::numeric_limits<double>::infinity();
 }
 

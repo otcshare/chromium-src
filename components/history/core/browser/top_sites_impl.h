@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -25,6 +25,7 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/history/core/browser/top_sites_backend.h"
+#include "components/history/core/browser/top_sites_constants.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -38,9 +39,6 @@ namespace history {
 
 class TopSitesImplTest;
 struct SitesAndQueriesRequest;
-
-// How many top sites to store in the cache.
-static constexpr size_t kTopSitesNumber = 10;
 
 // This class allows requests for most visited urls on any thread. All other
 // methods must be invoked on the UI thread. All mutations to internal state
@@ -76,6 +74,7 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   PrepopulatedPageList GetPrepopulatedPages() override;
   bool loaded() const override;
   void OnNavigationCommitted(const GURL& url) override;
+  int NumBlockedSites() const override;
 
   // RefcountedKeyedService:
   void ShutdownOnUIThread() override;
@@ -183,8 +182,8 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   void SetTopSitesFromHistory(scoped_refptr<SitesAndQueriesRequest> request);
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(HistoryService* history_service,
-                     const DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(HistoryService* history_service,
+                          const DeletionInfo& deletion_info) override;
 
   // Ensures that non thread-safe methods are called on the correct thread.
   base::ThreadChecker thread_checker_;
@@ -233,10 +232,6 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
 
   // Are we loaded?
   bool loaded_;
-
-  // Have the SetTopSites execution time related histograms been recorded?
-  // The histogram should only be recorded once for each Chrome execution.
-  static bool histogram_recorded_;
 
   base::ScopedObservation<HistoryService, HistoryServiceObserver>
       history_service_observation_{this};

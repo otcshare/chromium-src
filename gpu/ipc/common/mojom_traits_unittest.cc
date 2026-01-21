@@ -10,7 +10,7 @@
 #include "gpu/config/gpu_feature_type.h"
 #include "gpu/ipc/common/gpu_feature_info.mojom.h"
 #include "gpu/ipc/common/gpu_feature_info_mojom_traits.h"
-#include "gpu/ipc/common/traits_test_service.mojom.h"
+#include "gpu/ipc/common/traits_test_service.test-mojom.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,11 +35,6 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
  private:
   // TraitsTestService:
-  void EchoDxDiagNode(const DxDiagNode& d,
-                      EchoDxDiagNodeCallback callback) override {
-    std::move(callback).Run(d);
-  }
-
   void EchoGpuDevice(const GPUInfo::GPUDevice& g,
                      EchoGpuDeviceCallback callback) override {
     std::move(callback).Run(g);
@@ -51,11 +46,6 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
   void EchoMailbox(const Mailbox& m, EchoMailboxCallback callback) override {
     std::move(callback).Run(m);
-  }
-
-  void EchoMailboxHolder(const MailboxHolder& r,
-                         EchoMailboxHolderCallback callback) override {
-    std::move(callback).Run(r);
   }
 
   void EchoSyncToken(const SyncToken& s,
@@ -91,18 +81,6 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 };
 
 }  // namespace
-
-TEST_F(StructTraitsTest, DxDiagNode) {
-  gpu::DxDiagNode input;
-  input.values["abc"] = "123";
-  mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
-  gpu::DxDiagNode output;
-  remote->EchoDxDiagNode(input, &output);
-
-  gpu::DxDiagNode test_dx_diag_node;
-  test_dx_diag_node.values["abc"] = "123";
-  EXPECT_EQ(test_dx_diag_node.values, output.values);
-}
 
 TEST_F(StructTraitsTest, GPUDevice) {
   gpu::GPUInfo::GPUDevice input;
@@ -162,7 +140,8 @@ TEST_F(StructTraitsTest, GpuInfo) {
   const std::string gl_ws_version = "gl_ws_version";
   const std::string gl_ws_extensions = "gl_ws_extensions";
   const uint32_t gl_reset_notification_strategy = 0xbeef;
-  const bool software_rendering = true;
+  const gl::GLImplementationParts gl_implementation_parts(
+      gl::ANGLEImplementation::kSwiftShader);
   const std::string direct_rendering_version = "DRI1";
   const bool sandboxed = true;
   const bool in_process_gpu = true;
@@ -172,7 +151,9 @@ TEST_F(StructTraitsTest, GpuInfo) {
   const bool supports_overlays = true;
   const OverlaySupport yuy2_overlay_support = OverlaySupport::kScaling;
   const OverlaySupport nv12_overlay_support = OverlaySupport::kNone;
-  const DxDiagNode dx_diagnostics;
+  const OverlaySupport bgra8_overlay_support = OverlaySupport::kDirect;
+  const OverlaySupport rgb10a2_overlay_support = OverlaySupport::kScaling;
+  const OverlaySupport p010_overlay_support = OverlaySupport::kScaling;
 #endif
   const VideoDecodeAcceleratorSupportedProfiles
       video_decode_accelerator_supported_profiles;
@@ -201,7 +182,7 @@ TEST_F(StructTraitsTest, GpuInfo) {
   input.gl_ws_version = gl_ws_version;
   input.gl_ws_extensions = gl_ws_extensions;
   input.gl_reset_notification_strategy = gl_reset_notification_strategy;
-  input.software_rendering = software_rendering;
+  input.gl_implementation_parts = gl_implementation_parts;
   input.direct_rendering_version = direct_rendering_version;
   input.sandboxed = sandboxed;
   input.in_process_gpu = in_process_gpu;
@@ -211,7 +192,9 @@ TEST_F(StructTraitsTest, GpuInfo) {
   input.overlay_info.supports_overlays = supports_overlays;
   input.overlay_info.yuy2_overlay_support = yuy2_overlay_support;
   input.overlay_info.nv12_overlay_support = nv12_overlay_support;
-  input.dx_diagnostics = dx_diagnostics;
+  input.overlay_info.bgra8_overlay_support = bgra8_overlay_support;
+  input.overlay_info.rgb10a2_overlay_support = rgb10a2_overlay_support;
+  input.overlay_info.p010_overlay_support = p010_overlay_support;
 #endif
   input.video_decode_accelerator_supported_profiles =
       video_decode_accelerator_supported_profiles;
@@ -264,7 +247,7 @@ TEST_F(StructTraitsTest, GpuInfo) {
   EXPECT_EQ(gl_ws_extensions, output.gl_ws_extensions);
   EXPECT_EQ(gl_reset_notification_strategy,
             output.gl_reset_notification_strategy);
-  EXPECT_EQ(software_rendering, output.software_rendering);
+  EXPECT_EQ(gl_implementation_parts, output.gl_implementation_parts);
   EXPECT_EQ(direct_rendering_version, output.direct_rendering_version);
   EXPECT_EQ(sandboxed, output.sandboxed);
   EXPECT_EQ(in_process_gpu, output.in_process_gpu);
@@ -274,7 +257,10 @@ TEST_F(StructTraitsTest, GpuInfo) {
   EXPECT_EQ(supports_overlays, output.overlay_info.supports_overlays);
   EXPECT_EQ(yuy2_overlay_support, output.overlay_info.yuy2_overlay_support);
   EXPECT_EQ(nv12_overlay_support, output.overlay_info.nv12_overlay_support);
-  EXPECT_EQ(dx_diagnostics.values, output.dx_diagnostics.values);
+  EXPECT_EQ(bgra8_overlay_support, output.overlay_info.bgra8_overlay_support);
+  EXPECT_EQ(rgb10a2_overlay_support,
+            output.overlay_info.rgb10a2_overlay_support);
+  EXPECT_EQ(p010_overlay_support, output.overlay_info.p010_overlay_support);
 #endif
   for (size_t i = 0; i < video_decode_accelerator_supported_profiles.size();
        i++) {
@@ -308,35 +294,6 @@ TEST_F(StructTraitsTest, Mailbox) {
   gpu::Mailbox test_mailbox;
   test_mailbox.SetName(mailbox_name);
   EXPECT_EQ(test_mailbox, output);
-}
-
-TEST_F(StructTraitsTest, MailboxHolder) {
-  gpu::MailboxHolder input;
-
-  const int8_t mailbox_name[GL_MAILBOX_SIZE_CHROMIUM] = {
-      0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 7, 5, 3, 1, 2};
-  gpu::Mailbox mailbox;
-  mailbox.SetName(mailbox_name);
-
-  const gpu::CommandBufferNamespace namespace_id = gpu::IN_PROCESS;
-  const gpu::CommandBufferId command_buffer_id(
-      gpu::CommandBufferId::FromUnsafeValue(0xdeadbeef));
-  const uint64_t release_count = 0xdeadbeefdeadL;
-  gpu::SyncToken sync_token(namespace_id, command_buffer_id, release_count);
-  sync_token.SetVerifyFlush();
-
-  const uint32_t texture_target = 1337;
-
-  input.mailbox = mailbox;
-  input.sync_token = sync_token;
-  input.texture_target = texture_target;
-
-  mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
-  gpu::MailboxHolder output;
-  remote->EchoMailboxHolder(input, &output);
-  EXPECT_EQ(mailbox, output.mailbox);
-  EXPECT_EQ(sync_token, output.sync_token);
-  EXPECT_EQ(texture_target, output.texture_target);
 }
 
 TEST_F(StructTraitsTest, SyncToken) {
@@ -441,15 +398,13 @@ TEST_F(StructTraitsTest, GpuFeatureInfo) {
       gpu::kGpuFeatureStatusBlocklisted;
   input.status_values[GPU_FEATURE_TYPE_ACCELERATED_WEBGL] =
       gpu::kGpuFeatureStatusUndefined;
-  input.status_values[GPU_FEATURE_TYPE_GPU_RASTERIZATION] =
+  input.status_values[GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION] =
       gpu::kGpuFeatureStatusDisabled;
 
   GpuFeatureInfo output;
   ASSERT_TRUE(mojom::GpuFeatureInfo::Deserialize(
       mojom::GpuFeatureInfo::Serialize(&input), &output));
-  EXPECT_TRUE(std::equal(input.status_values,
-                         input.status_values + NUMBER_OF_GPU_FEATURE_TYPES,
-                         output.status_values));
+  EXPECT_EQ(input.status_values, output.status_values);
 }
 
 }  // namespace gpu

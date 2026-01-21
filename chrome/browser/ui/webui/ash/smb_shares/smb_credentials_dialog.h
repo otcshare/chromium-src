@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "chrome/browser/ui/webui/ash/system_web_dialog_delegate.h"
+#include "base/functional/callback.h"
+#include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/webui_config.h"
 #include "content/public/common/url_constants.h"
@@ -48,7 +48,6 @@ class SmbCredentialsDialog : public SystemWebDialogDelegate {
   bool ShouldShowCloseButton() const override;
 
  private:
-  const std::string mount_id_;
   const std::string share_path_;
   RequestCallback callback_;
 };
@@ -76,6 +75,7 @@ class SmbCredentialsDialogUI : public ui::WebDialogUI {
  private:
   void OnUpdateCredentials(const std::string& username,
                            const std::string& password);
+  WEB_UI_CONTROLLER_TYPE_DECL();
 };
 
 }  // namespace ash::smb_dialog

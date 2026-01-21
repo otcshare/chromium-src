@@ -8,7 +8,17 @@
 
 namespace blink {
 
-WTF::String StringFromASCIIAndUTF8(const char* message) {
-  return WTF::String::FromUTF8WithLatin1Fallback(message, strlen(message));
+String StringFromASCIIAndUTF8(std::string_view message) {
+  return String::FromUTF8WithLatin1Fallback(message);
 }
+
+std::string UTF8StringFromUSVStringWithNullReplacedByReplacementCodePoint(
+    const String& s) {
+  constexpr UChar kNullCodePoint = 0x0;
+  constexpr UChar kReplacementCodePoint = 0xFFFD;
+
+  String temp(s);
+  return temp.Replace(kNullCodePoint, kReplacementCodePoint).Utf8();
+}
+
 }  // namespace blink

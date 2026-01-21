@@ -4,64 +4,85 @@
 
 #include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <variant>
+
+#include "base/auto_reset.h"
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/extension_id.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-const char kSidePanelRegistryKey[] = "side_panel_registry_key";
+DEFINE_USER_DATA(SidePanelRegistry);
 
-SidePanelRegistry::SidePanelRegistry() = default;
+SidePanelRegistry::SidePanelRegistry(tabs::TabInterface* tab_interface)
+    : SidePanelEntryScope(SidePanelEntryScope::ScopeType::kTab),
+      owner_(tab_interface),
+      scoped_unowned_user_data_(tab_interface->GetUnownedUserDataHost(),
+                                *this) {
+  CHECK(tab_interface);
+}
+
+SidePanelRegistry::SidePanelRegistry(
+    BrowserWindowInterface* browser_window_interface)
+    : SidePanelEntryScope(SidePanelEntryScope::ScopeType::kBrowser),
+      owner_(browser_window_interface),
+      scoped_unowned_user_data_(
+          browser_window_interface->GetUnownedUserDataHost(),
+          *this) {
+  CHECK(browser_window_interface);
+}
 
 SidePanelRegistry::~SidePanelRegistry() = default;
 
 // static
-SidePanelRegistry* SidePanelRegistry::Get(content::WebContents* web_contents) {
-  if (!web_contents)
-    return nullptr;
-  SidePanelRegistry* registry = static_cast<SidePanelRegistry*>(
-      web_contents->GetUserData(kSidePanelRegistryKey));
-  if (!registry) {
-    auto new_registry = std::make_unique<SidePanelRegistry>();
-    registry = new_registry.get();
-    web_contents->SetUserData(kSidePanelRegistryKey, std::move(new_registry));
-  }
-  return registry;
+SidePanelRegistry* SidePanelRegistry::GetDeprecated(
+    content::WebContents* web_contents) {
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
+  return tab->GetTabFeatures()->side_panel_registry();
+}
+
+// static
+SidePanelRegistry* SidePanelRegistry::From(
+    BrowserWindowInterface* browser_window_interface) {
+  return Get(browser_window_interface->GetUnownedUserDataHost());
 }
 
 SidePanelEntry* SidePanelRegistry::GetEntryForKey(
     const SidePanelEntry::Key& entry_key) {
-  auto it = base::ranges::find(entries_, entry_key, &SidePanelEntry::key);
+  auto it = std::ranges::find(entries_, entry_key, &SidePanelEntry::key);
   return it == entries_.end() ? nullptr : it->get();
 }
 
-void SidePanelRegistry::ResetActiveEntry() {
-  active_entry_.reset();
+void SidePanelRegistry::ResetActiveEntryFor(SidePanelEntry::PanelType type) {
+  active_entries_[type].reset();
 }
 
-void SidePanelRegistry::ClearCachedEntryViews() {
+void SidePanelRegistry::ClearCachedEntryViews(SidePanelEntry::PanelType type) {
   for (auto const& entry : entries_) {
-    if (!active_entry_.has_value() || entry.get() != active_entry_.value())
+    if (entry->type() == type &&
+        (!active_entries_[type].has_value() ||
+         entry.get() != active_entries_[type].value())) {
       entry.get()->ClearCachedView();
+    }
   }
 }
 
-void SidePanelRegistry::AddObserver(SidePanelRegistryObserver* observer) {
-  observers_.AddObserver(observer);
-}
-
-void SidePanelRegistry::RemoveObserver(SidePanelRegistryObserver* observer) {
-  observers_.RemoveObserver(observer);
-}
-
 bool SidePanelRegistry::Register(std::unique_ptr<SidePanelEntry> entry) {
-  if (GetEntryForKey(entry->key()))
+  if (GetEntryForKey(entry->key())) {
     return false;
-  for (SidePanelRegistryObserver& observer : observers_)
-    observer.OnEntryRegistered(entry.get());
+  }
+  // It's important to add `this` as an observer to `entry` before notifying
+  // SidePanelRegistryObservers of the entry's registration because some
+  // registry observers can call SidePanelEntryObserver methods for `entry`.
+  entry->set_scope(this);
   entry->AddObserver(this);
   entries_.push_back(std::move(entry));
   return true;
@@ -69,34 +90,71 @@ bool SidePanelRegistry::Register(std::unique_ptr<SidePanelEntry> entry) {
 
 bool SidePanelRegistry::Deregister(const SidePanelEntry::Key& key) {
   auto* entry = GetEntryForKey(key);
-  if (!entry)
+
+  // An observer can trigger this to be called while a deregister for the key
+  // is ongoing. An example is an observer listening to `OnSidePanelDidClose()`
+  // since a sidepanel can be closed during the deregistering process.
+  if (!entry || (deregistering_entry_key_.has_value() &&
+                 deregistering_entry_key_.value() == key)) {
     return false;
+  }
+  SidePanelEntry::PanelType panel_type = entry->type();
+
+  base::AutoReset<std::optional<SidePanelEntryKey>> deregistering_entry_key(
+      &deregistering_entry_key_, key);
 
   entry->RemoveObserver(this);
-  if (active_entry_.has_value() &&
-      entry->key().id() == active_entry_.value()->key().id()) {
-    active_entry_.reset();
+  entry->set_scope(nullptr);
+  if (active_entries_[panel_type].has_value() &&
+      entry->key() == active_entries_[panel_type].value()->key()) {
+    active_entries_[panel_type].reset();
   }
-  for (SidePanelRegistryObserver& observer : observers_) {
-    observer.OnEntryWillDeregister(entry);
+
+  // TODO(https://crbug.com/360163254): This is nullptr in
+  // BrowserWithTestWindowTest. When the test suite goes away the nullptr check
+  // can be removed.
+  if (auto* const side_panel_ui =
+          GetBrowserWindowInterface().GetFeatures().side_panel_ui()) {
+    const bool for_tab =
+        get_scope_type() == SidePanelEntryScope::ScopeType::kTab;
+    // If the entry with the same key and scope is showing, synchronously close.
+    if (side_panel_ui->IsSidePanelEntryShowing(key, for_tab)) {
+      side_panel_ui->Close(panel_type,
+                           SidePanelEntryHideReason::kSidePanelClosed,
+                           /*suppress_animations=*/true);
+    }
   }
-  RemoveEntry(entry);
+
+  auto it = std::find_if(entries_.begin(), entries_.end(),
+                         base::MatchesUniquePtr(entry));
+  if (it != entries_.end()) {
+    entries_.erase(it);
+  }
   return true;
 }
 
 void SidePanelRegistry::SetActiveEntry(SidePanelEntry* entry) {
-  active_entry_ = entry;
+  active_entries_[entry->type()] = entry;
+}
+
+std::optional<SidePanelEntry*> SidePanelRegistry::GetActiveEntryFor(
+    SidePanelEntry::PanelType type) {
+  return active_entries_[type];
 }
 
 void SidePanelRegistry::OnEntryShown(SidePanelEntry* entry) {
-  active_entry_ = entry;
+  active_entries_[entry->type()] = entry;
 }
 
-void SidePanelRegistry::OnEntryIconUpdated(SidePanelEntry* entry) {
-  for (SidePanelRegistryObserver& observer : observers_)
-    observer.OnEntryIconUpdated(entry);
+const tabs::TabInterface& SidePanelRegistry::GetTabInterface() const {
+  CHECK_EQ(SidePanelEntryScope::ScopeType::kTab, get_scope_type());
+  return *std::get<tabs::TabInterface*>(owner_);
 }
 
-void SidePanelRegistry::RemoveEntry(SidePanelEntry* entry) {
-  base::EraseIf(entries_, base::MatchesUniquePtr(entry));
+const BrowserWindowInterface& SidePanelRegistry::GetBrowserWindowInterface()
+    const {
+  return get_scope_type() == SidePanelEntryScope::ScopeType::kTab
+             ? *std::get<tabs::TabInterface*>(owner_)
+                    ->GetBrowserWindowInterface()
+             : *std::get<BrowserWindowInterface*>(owner_);
 }

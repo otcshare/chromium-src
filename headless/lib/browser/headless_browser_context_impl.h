@@ -16,15 +16,18 @@
 #include "components/keyed_service/core/simple_factory_key.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
-#include "content/public/browser/resource_context.h"
 #include "headless/lib/browser/headless_browser_context_options.h"
 #include "headless/lib/browser/headless_request_context_manager.h"
 #include "headless/public/headless_browser_context.h"
 #include "headless/public/headless_export.h"
-#include "mojo/public/cpp/bindings/remote.h"
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace headless {
 class HeadlessBrowserImpl;
+class HeadlessClientHintsControllerDelegate;
 class HeadlessWebContentsImpl;
 
 class HEADLESS_EXPORT HeadlessBrowserContextImpl final
@@ -48,26 +51,14 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
   // HeadlessBrowserContext implementation:
   HeadlessWebContents::Builder CreateWebContentsBuilder() override;
   std::vector<HeadlessWebContents*> GetAllWebContents() override;
-  HeadlessWebContents* GetWebContentsForDevToolsAgentHostId(
-      const std::string& devtools_agent_host_id) override;
   void Close() override;
   const std::string& Id() override;
-
-  void SetDevToolsFrameToken(int render_process_id,
-                             int render_frame_routing_id,
-                             const base::UnguessableToken& devtools_frame_token,
-                             int frame_tree_node_id);
-
-  void RemoveDevToolsFrameToken(int render_process_id,
-                                int render_frame_routing_id,
-                                int frame_tree_node_id);
 
   // BrowserContext implementation:
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
-  base::FilePath GetPath() override;
+  base::FilePath GetPath() const override;
   bool IsOffTheRecord() override;
-  content::ResourceContext* GetResourceContext() override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
   ::storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
@@ -95,20 +86,11 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
   void RegisterWebContents(
       std::unique_ptr<HeadlessWebContentsImpl> web_contents);
   void DestroyWebContents(HeadlessWebContentsImpl* web_contents);
+  HeadlessWebContentsImpl* GetHeadlessWebContents(
+      const content::WebContents* web_contents);
 
   HeadlessBrowserImpl* browser() const;
   const HeadlessBrowserContextOptions* options() const;
-
-  // Returns the DevTools frame token for the corresponding RenderFrameHost or
-  // null if can't be found. Can be called on any thread.
-  const base::UnguessableToken* GetDevToolsFrameToken(
-      int render_process_id,
-      int render_frame_id) const;
-
-  // Returns the DevTools frame token for the corresponding frame tree node id
-  // or null if can't be found. Can be called on any thread.
-  const base::UnguessableToken* GetDevToolsFrameTokenForFrameTreeNodeId(
-      int frame_tree_node_id) const;
 
   void ConfigureNetworkContextParams(
       bool in_memory,
@@ -130,18 +112,8 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
   std::unique_ptr<HeadlessBrowserContextOptions> context_options_;
   base::FilePath path_;
 
-  std::unordered_map<std::string, std::unique_ptr<HeadlessWebContents>>
+  std::unordered_map<uintptr_t, std::unique_ptr<HeadlessWebContentsImpl>>
       web_contents_map_;
-
-  // Guards |devtools_frame_token_map_| from being concurrently written on the
-  // UI thread and read on the IO thread.
-  // TODO(alexclarke): Remove if we can add DevTools frame token ID to
-  // ResourceRequestInfo. See https://crbug.com/715541
-  mutable base::Lock devtools_frame_token_map_lock_;
-  base::flat_map<content::GlobalRenderFrameHostId, base::UnguessableToken>
-      devtools_frame_token_map_;
-  base::flat_map<int, base::UnguessableToken>
-      frame_tree_node_id_to_devtools_frame_token_map_;
 
   std::unique_ptr<content::PermissionControllerDelegate>
       permission_controller_delegate_;
@@ -151,6 +123,8 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
 
   std::unique_ptr<content::OriginTrialsControllerDelegate>
       origin_trials_controller_delegate_;
+
+  std::unique_ptr<HeadlessClientHintsControllerDelegate> hints_delegate_;
 };
 
 }  // namespace headless

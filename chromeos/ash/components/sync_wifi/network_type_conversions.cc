@@ -4,12 +4,21 @@
 
 #include "chromeos/ash/components/sync_wifi/network_type_conversions.h"
 
+#include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
+#include "components/device_event_log/device_event_log.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
+
+namespace ash::network_config {
+namespace mojom = ::chromeos::network_config::mojom;
+}
+
+namespace ash::sync_wifi {
 
 namespace {
 
@@ -28,13 +37,8 @@ bool IsAutoconnectEnabled(
 
 }  // namespace
 
-// TODO(https://crbug.com/1164001): remove after migrating to ash.
-namespace ash::network_config {
-namespace mojom = ::chromeos::network_config::mojom;
-}
-
-namespace ash::sync_wifi {
-
+// Returns an empty string when |base_16| is unable to be decoded from a
+// hex string to bytes. This may signify an improperly encoded SSID.
 std::string DecodeHexString(const std::string& base_16) {
   std::string decoded;
   DCHECK_EQ(base_16.size() % 2, 0u) << "Must be a multiple of 2";
@@ -42,9 +46,11 @@ std::string DecodeHexString(const std::string& base_16) {
 
   std::vector<uint8_t> v;
   if (!base::HexStringToBytes(base_16, &v)) {
-    NOTREACHED();
+    NET_LOG(EVENT) << "Failed to decode hex encoded SSID.";
+    return std::string();
   }
-  decoded.assign(reinterpret_cast<const char*>(&v[0]), v.size());
+
+  decoded.assign(reinterpret_cast<const char*>(v.data()), v.size());
   return decoded;
 }
 
@@ -67,11 +73,10 @@ std::string SecurityTypeStringFromProto(
     case sync_pb::WifiConfigurationSpecifics::SECURITY_TYPE_PSK:
       return shill::kSecurityClassPsk;
     case sync_pb::WifiConfigurationSpecifics::SECURITY_TYPE_WEP:
-      return shill::kSecurityWep;
+      return shill::kSecurityClassWep;
     default:
       // Only PSK and WEP secured networks are supported by sync.
       NOTREACHED();
-      return "";
   }
 }
 
@@ -85,7 +90,6 @@ sync_pb::WifiConfigurationSpecifics_SecurityType SecurityTypeProtoFromMojo(
     default:
       // Only PSK and WEP secured networks are supported by sync.
       NOTREACHED();
-      return sync_pb::WifiConfigurationSpecifics::SECURITY_TYPE_NONE;
   }
 }
 
@@ -208,7 +212,6 @@ network_config::mojom::SecurityType MojoSecurityTypeFromProto(
     default:
       // Only PSK and WEP secured networks are supported by sync.
       NOTREACHED();
-      return network_config::mojom::SecurityType::kNone;
   }
 }
 
@@ -279,6 +282,13 @@ network_config::mojom::ConfigPropertiesPtr MojoNetworkConfigFromProto(
   auto wifi = network_config::mojom::WiFiConfigProperties::New();
 
   wifi->ssid = DecodeHexString(specifics.hex_ssid());
+  if (wifi->ssid->empty()) {
+    // Return early instead of populating the other fields for a WifiConfig
+    // because the SSID is the primary key for the network, so without this,
+    // the rest of the properties are irrelevant.
+    return nullptr;
+  }
+
   wifi->security = MojoSecurityTypeFromProto(specifics.security_type());
   wifi->passphrase = specifics.passphrase();
   wifi->hidden_ssid = network_config::mojom::HiddenSsidMode::kDisabled;
@@ -325,12 +335,14 @@ network_config::mojom::ConfigPropertiesPtr MojoNetworkConfigFromProto(
     config->name_servers_config_type = onc::network_config::kIPConfigTypeDHCP;
   }
 
-  if (specifics.has_proxy_configuration() &&
-      specifics.proxy_configuration().proxy_option() !=
-          sync_pb::WifiConfigurationSpecifics_ProxyConfiguration::
-              PROXY_OPTION_UNSPECIFIED) {
-    config->proxy_settings =
-        MojoProxySettingsFromProto(specifics.proxy_configuration());
+  if (base::FeatureList::IsEnabled(features::kWifiSyncApplyProxyConfigs)) {
+    if (specifics.has_proxy_configuration() &&
+        specifics.proxy_configuration().proxy_option() !=
+            sync_pb::WifiConfigurationSpecifics_ProxyConfiguration::
+                PROXY_OPTION_UNSPECIFIED) {
+      config->proxy_settings =
+          MojoProxySettingsFromProto(specifics.proxy_configuration());
+    }
   }
 
   return config;

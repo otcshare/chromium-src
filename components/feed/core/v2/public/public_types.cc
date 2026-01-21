@@ -11,7 +11,7 @@
 namespace feed {
 
 AccountInfo::AccountInfo() = default;
-AccountInfo::AccountInfo(const std::string& gaia, const std::string& email)
+AccountInfo::AccountInfo(const GaiaId& gaia, const std::string& email)
     : gaia(gaia), email(email) {}
 AccountInfo::AccountInfo(CoreAccountInfo account_info)
     : gaia(std::move(account_info.gaia)),
@@ -19,9 +19,6 @@ AccountInfo::AccountInfo(CoreAccountInfo account_info)
 bool AccountInfo::IsEmpty() const {
   DCHECK_EQ(gaia.empty(), email.empty());
   return gaia.empty();
-}
-bool AccountInfo::operator==(const AccountInfo& rhs) const {
-  return tie(gaia, email) == tie(rhs.gaia, rhs.email);
 }
 
 std::ostream& operator<<(std::ostream& os, const AccountInfo& o) {
@@ -124,6 +121,23 @@ std::ostream& operator<<(std::ostream& out,
   }
 }
 
+std::ostream& operator<<(std::ostream& out, WebFeedQueryRequestStatus value) {
+  switch (value) {
+    case WebFeedQueryRequestStatus::kUnknown:
+      return out << "kUnknown";
+    case WebFeedQueryRequestStatus::kSuccess:
+      return out << "kSuccess";
+    case WebFeedQueryRequestStatus::kFailedOffline:
+      return out << "kFailedOffline";
+    case WebFeedQueryRequestStatus::kFailedUnknownError:
+      return out << "kFailedUnknownError";
+    case WebFeedQueryRequestStatus::kFailedInvalidUrl:
+      return out << "kFailedInvalidUrl";
+    case WebFeedQueryRequestStatus::kAbortWebFeedQueryPendingClearAll:
+      return out << "kAbortWebFeedQueryPendingClearAll";
+  }
+}
+
 std::ostream& operator<<(std::ostream& out, WebFeedAvailabilityStatus value) {
   switch (value) {
     case WebFeedAvailabilityStatus::kStateUnspecified:
@@ -163,6 +177,21 @@ std::ostream& operator<<(std::ostream& out,
       return out << "kFollowRecommendation";
     case WebFeedPageInformationRequestReason::kMenuItemPresentation:
       return out << "kMenuItemPresentation";
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, SingleWebFeedEntryPoint value) {
+  switch (value) {
+    case SingleWebFeedEntryPoint::kMenu:
+      return out << "kMenu";
+    case SingleWebFeedEntryPoint::kAttribution:
+      return out << "kAttribution";
+    case SingleWebFeedEntryPoint::kRecommendation:
+      return out << "kRecommendation";
+    case SingleWebFeedEntryPoint::kGroupHeader:
+      return out << "kGroupHeader";
+    case SingleWebFeedEntryPoint::kOther:
+      return out << "kOther";
   }
 }
 

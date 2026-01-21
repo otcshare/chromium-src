@@ -6,6 +6,9 @@
 
 #include <stddef.h>
 
+#include <string>
+#include <utility>
+
 #include "base/i18n/break_iterator.h"
 #include "base/i18n/case_conversion.h"
 #include "base/logging.h"
@@ -18,8 +21,8 @@ namespace ash::string_matching {
 
 using ::base::i18n::BreakIterator;
 
-TokenizedString::TokenizedString(const std::u16string& text, Mode mode)
-    : text_(text) {
+TokenizedString::TokenizedString(std::u16string text, Mode mode)
+    : text_(std::move(text)) {
   switch (mode) {
     case Mode::kCamelCase:
       Tokenize();
@@ -37,14 +40,13 @@ TokenizedString::~TokenizedString() = default;
 void TokenizedString::Tokenize() {
   BreakIterator break_iter(text_, BreakIterator::BREAK_WORD);
   if (!break_iter.Init()) {
-    NOTREACHED() << "BreakIterator init failed"
-                 << ", text=\"" << text_ << "\"";
-    return;
+    NOTREACHED() << "BreakIterator init failed" << ", text=\"" << text_ << "\"";
   }
 
   while (break_iter.Advance()) {
-    if (!break_iter.IsWord())
+    if (!break_iter.IsWord()) {
       continue;
+    }
 
     const std::u16string word(break_iter.GetString());
     const size_t word_start = break_iter.prev();
@@ -60,9 +62,7 @@ void TokenizedString::Tokenize() {
 void TokenizedString::TokenizeWords() {
   BreakIterator break_iter(text_, BreakIterator::BREAK_WORD);
   if (!break_iter.Init()) {
-    NOTREACHED() << "BreakIterator init failed"
-                 << ", text=\"" << text_ << "\"";
-    return;
+    NOTREACHED() << "BreakIterator init failed" << ", text=\"" << text_ << "\"";
   }
 
   // The token to be generated will be in [start, end) of |text_|.

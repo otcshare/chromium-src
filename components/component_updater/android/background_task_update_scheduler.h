@@ -8,7 +8,7 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/component_updater/update_scheduler.h"
 
@@ -27,16 +27,15 @@ class BackgroundTaskUpdateScheduler : public UpdateScheduler {
   ~BackgroundTaskUpdateScheduler() override;
 
   // UpdateScheduler:
-  void Schedule(const base::TimeDelta& initial_delay,
-                const base::TimeDelta& delay,
+  void Schedule(base::TimeDelta initial_delay,
+                base::TimeDelta delay,
                 const UserTask& user_task,
                 const OnStopTaskCallback& on_stop) override;
   void Stop() override;
 
   // JNI:
-  void OnStartTask(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj);
-  void OnStopTask(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void OnStartTask(JNIEnv* env);
+  void OnStopTask(JNIEnv* env);
 
  private:
   void OnStartTaskDelayed();

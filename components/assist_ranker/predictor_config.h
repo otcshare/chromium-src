@@ -45,9 +45,9 @@ struct PredictorConfig {
   const char* const logging_name;
   const char* const uma_prefix;
   const LogType log_type;
-  const base::flat_set<std::string>* feature_allowlist;
-  const base::Feature* field_trial;
-  const base::FeatureParam<std::string>* field_trial_url_param;
+  raw_ptr<const base::flat_set<std::string>> feature_allowlist;
+  raw_ptr<const base::Feature> field_trial;
+  raw_ptr<const base::FeatureParam<std::string>> field_trial_url_param;
   const float field_trial_threshold_replacement_param;
 };
 

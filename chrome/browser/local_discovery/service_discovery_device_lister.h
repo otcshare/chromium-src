@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_LOCAL_DISCOVERY_SERVICE_DISCOVERY_DEVICE_LISTER_H_
 #define CHROME_BROWSER_LOCAL_DISCOVERY_SERVICE_DISCOVERY_DEVICE_LISTER_H_
 
-#include <map>
 #include <memory>
 #include <string>
 
@@ -28,6 +27,7 @@ class ServiceDiscoveryDeviceLister {
     virtual void OnDeviceRemoved(const std::string& service_type,
                                  const std::string& service_name) = 0;
     virtual void OnDeviceCacheFlushed(const std::string& service_type) = 0;
+    virtual void OnPermissionRejected() = 0;
   };
 
   virtual ~ServiceDiscoveryDeviceLister() = default;

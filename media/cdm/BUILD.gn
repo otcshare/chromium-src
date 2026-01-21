@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//media/media_options.gni")
+import("//testing/test.gni")
 
 source_set("cdm_api") {
   sources = [ "api/content_decryption_module.h" ]
@@ -17,7 +18,7 @@ source_set("cdm_type_conversion") {
     ]
     configs += [ "//media:subcomponent_config" ]
   } else {
-    visibility = [ "//media/cdm/library_cdm/clear_key_cdm:clear_key_cdm" ]
+    visibility = [ "//media/cdm/library_cdm/clear_key_cdm" ]
   }
 
   sources = [
@@ -38,10 +39,9 @@ source_set("cdm") {
   visibility = [
     "//media",
 
-    # TODO(crbug.com/583067): These files should not be in //media/base.
+    # TODO(crbug.com/41237623): These files should not be in //media/base.
     "//media/base/android",
     "//media/filters",
-    "//media/fuchsia/cdm",
   ]
 
   sources = [
@@ -51,8 +51,6 @@ source_set("cdm") {
     "aes_decryptor.h",
     "cbcs_decryptor.cc",
     "cbcs_decryptor.h",
-    "cdm_capability.cc",
-    "cdm_capability.h",
     "cdm_context_ref_impl.cc",
     "cdm_context_ref_impl.h",
     "cenc_decryptor.cc",
@@ -67,7 +65,10 @@ source_set("cdm") {
     "supported_audio_codecs.h",
   ]
 
-  public_deps = [ ":cdm_type" ]
+  public_deps = [
+    ":cdm_type",
+    ":clear_key_cdm_common",
+  ]
 
   deps = [
     "//crypto",
@@ -123,8 +124,8 @@ source_set("cdm") {
     deps += [
       ":cdm_api",
       ":cdm_type_conversion",
-      "//components/crash/core/common:crash_key",
     ]
+    public_deps += [ "//components/crash/core/common:crash_key" ]
   }
 
   if (is_win) {
@@ -141,14 +142,37 @@ source_set("cdm") {
       "win/media_foundation_cdm_session.h",
       "win/media_foundation_cdm_util.cc",
       "win/media_foundation_cdm_util.h",
+      "win/pmp_host_app_impl.cc",
+      "win/pmp_host_app_impl.h",
     ]
 
-    libs = [ "Propsys.lib" ]
+    libs = [
+      "mfuuid.lib",
+      "propsys.lib",
+    ]
 
     deps += [
       ":cdm_paths",
       "//media/base/win:media_foundation_util",
     ]
+  }
+
+  if (is_fuchsia) {
+    sources += [
+      "fuchsia/fuchsia_cdm.cc",
+      "fuchsia/fuchsia_cdm.h",
+      "fuchsia/fuchsia_cdm_context.h",
+      "fuchsia/fuchsia_cdm_factory.cc",
+      "fuchsia/fuchsia_cdm_factory.h",
+      "fuchsia/fuchsia_cdm_provider.h",
+      "fuchsia/fuchsia_decryptor.cc",
+      "fuchsia/fuchsia_decryptor.h",
+      "fuchsia/fuchsia_stream_decryptor.cc",
+      "fuchsia/fuchsia_stream_decryptor.h",
+    ]
+
+    public_deps += [ "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.media.drm:fuchsia.media.drm_hlcpp" ]
+    deps += [ "//media/fuchsia/common" ]
   }
 }
 
@@ -157,8 +181,6 @@ if (enable_library_cdms) {
     public = [ "cdm_paths.h" ]
 
     sources = [ "cdm_paths.cc" ]
-
-    public_deps = [ ":cdm_type" ]
 
     deps = [
       "//base",
@@ -172,6 +194,12 @@ source_set("cdm_type") {
   deps = [ "//base" ]
 }
 
+source_set("clear_key_cdm_common") {
+  sources = [ "clear_key_cdm_common.h" ]
+  public_deps = [ ":cdm_type" ]
+  deps = [ "//media:media_buildflags" ]
+}
+
 source_set("unit_tests") {
   testonly = true
   sources = [
@@ -179,12 +207,12 @@ source_set("unit_tests") {
     "aes_decryptor_unittest.cc",
     "cbcs_decryptor_unittest.cc",
     "cenc_decryptor_unittest.cc",
+    "cenc_utils_unittest.cc",
     "json_web_key_unittest.cc",
   ]
 
   deps = [
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
     "//crypto",
     "//media:test_support",
     "//testing/gmock",
@@ -211,6 +239,7 @@ source_set("unit_tests") {
       "simple_cdm_allocator_unittest.cc",
       "simple_cdm_buffer.cc",
       "simple_cdm_buffer.h",
+      "supported_cdm_versions_unittest.cc",
     ]
 
     data_deps += [ "//media/cdm/library_cdm/clear_key_cdm" ]
@@ -223,16 +252,32 @@ source_set("unit_tests") {
     ]
   }
 
-  if (proprietary_codecs) {
-    sources += [ "cenc_utils_unittest.cc" ]
-  }
-
   if (is_win) {
     sources += [
       "win/media_foundation_cdm_factory_unittest.cc",
       "win/media_foundation_cdm_session_unittest.cc",
       "win/media_foundation_cdm_unittest.cc",
+      "win/media_foundation_cdm_util_unittest.cc",
     ]
-    deps += [ "//media/base/win:media_foundation_util" ]
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
   }
+}
+
+test("aes_decryptor_fuzztests") {
+  sources = [ "aes_decryptor_fuzztests.cc" ]
+
+  fuzztests = [
+    "AesDecryptorFuzzTests.CreateSessionDoesNotCrash",
+    "AesDecryptorFuzzTests.UpdateSessionDoesNotCrash",
+    "AesDecryptorFuzzTests.DecryptDoesNotCrash",
+  ]
+
+  deps = [
+    "//base/test:test_support",
+    "//media:test_support",
+    "//third_party/fuzztest:fuzztest_gtest_main",
+  ]
 }

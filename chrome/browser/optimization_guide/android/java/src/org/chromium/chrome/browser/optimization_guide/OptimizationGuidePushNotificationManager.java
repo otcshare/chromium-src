@@ -4,19 +4,22 @@
 
 package org.chromium.chrome.browser.optimization_guide;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.util.Base64;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.flags.IntCachedFieldTrialParameter;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.components.optimization_guide.proto.HintsProto.OptimizationType;
 import org.chromium.components.optimization_guide.proto.PushNotificationProto.HintNotificationPayload;
 
@@ -33,9 +36,9 @@ import java.util.Set;
  * native is down are persisted to prefs, up to an experimentally controlled limit. Such overflows
  * are detected and also forwarded to native.
  */
+@NullMarked
 public class OptimizationGuidePushNotificationManager {
-    private static Boolean sNativeIsInitialized;
-    private static OptimizationGuideBridgeFactory sBridgeFactory;
+    private static @Nullable Boolean sNativeIsInitialized;
 
     private static final String TAG = "OGPNotificationMngr";
 
@@ -45,8 +48,12 @@ public class OptimizationGuidePushNotificationManager {
     // Should be in sync with the enum "OptimizationGuideReadCacheResult" in
     // tools/metrics/histograms/enums.xml.
     @SuppressWarnings("unused")
-    @IntDef({ReadCacheResult.UNKNOWN, ReadCacheResult.SUCCESS, ReadCacheResult.INVALID_PROTO_ERROR,
-            ReadCacheResult.BASE64_ERROR})
+    @IntDef({
+        ReadCacheResult.UNKNOWN,
+        ReadCacheResult.SUCCESS,
+        ReadCacheResult.INVALID_PROTO_ERROR,
+        ReadCacheResult.BASE64_ERROR
+    })
     @Retention(RetentionPolicy.SOURCE)
     private @interface ReadCacheResult {
         int UNKNOWN = 0;
@@ -63,27 +70,17 @@ public class OptimizationGuidePushNotificationManager {
     /** A sentinel Set that is set when the pref for a specific OptimizationType overflows. */
     private static final Set<String> OVERFLOW_SENTINEL_SET = Set.of("__overflow");
 
-    /** The default cache size in Java for push notification. */
-    public static final IntCachedFieldTrialParameter MAX_CACHE_SIZE =
-            new IntCachedFieldTrialParameter(
-                    ChromeFeatureList.OPTIMIZATION_GUIDE_PUSH_NOTIFICATIONS, "max_cache_size", 100);
-
     /**
      * Called when a new push notification is received.
+     *
      * @param payload the incoming payload.
      */
     public static void onPushNotification(HintNotificationPayload payload) {
-        if (!ChromeFeatureList.sOptimizationGuidePushNotifications.isEnabled()) {
-            // In case the feature has become disabled after once being enabled, clear everything.
-            clearCacheForAllTypes();
-            return;
-        }
-
         if (nativeIsInitialized()) {
-            if (sBridgeFactory == null) {
-                sBridgeFactory = new OptimizationGuideBridgeFactory();
-            }
-            sBridgeFactory.create().onNewPushNotification(payload);
+            var optimizationGuideBridge =
+                    OptimizationGuideBridgeFactory.getForProfile(
+                            ProfileManager.getLastUsedRegularProfile());
+            assumeNonNull(optimizationGuideBridge).onNewPushNotification(payload);
             return;
         }
 
@@ -105,14 +102,7 @@ public class OptimizationGuidePushNotificationManager {
      * @param optimizationType the optimization type to clear
      */
     public static void clearCacheForOptimizationType(OptimizationType optimizationType) {
-        SharedPreferencesManager.getInstance().removeKey(cacheKey(optimizationType));
-    }
-
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
-    public static void clearCacheForAllTypes() {
-        for (OptimizationType type : OptimizationType.values()) {
-            clearCacheForOptimizationType(type);
-        }
+        ChromeSharedPreferences.getInstance().removeKey(cacheKey(optimizationType));
     }
 
     /**
@@ -121,29 +111,35 @@ public class OptimizationGuidePushNotificationManager {
      * @param optimizationType the optimization type to get cached notifications for
      * @return a possibly null array of persisted notifications
      */
-    @Nullable
-    public static HintNotificationPayload[] getNotificationCacheForOptimizationType(
+    public static HintNotificationPayload @Nullable [] getNotificationCacheForOptimizationType(
             OptimizationType optimizationType) {
         Set<String> cache = getStringCacheForOptimizationType(optimizationType);
         if (checkForOverflow(cache)) return null;
 
         Iterator<String> cache_iter = cache.iterator();
 
-        List<HintNotificationPayload> notifications = new ArrayList<HintNotificationPayload>();
+        List<HintNotificationPayload> notifications = new ArrayList<>();
         for (int i = 0; i < cache.size(); i++) {
             try {
-                HintNotificationPayload payload = HintNotificationPayload.parseFrom(
-                        Base64.decode(cache_iter.next(), Base64.DEFAULT));
+                HintNotificationPayload payload =
+                        HintNotificationPayload.parseFrom(
+                                Base64.decode(cache_iter.next(), Base64.DEFAULT));
                 notifications.add(payload);
-                RecordHistogram.recordEnumeratedHistogram(READ_CACHE_RESULT_HISTOGRAM,
-                        ReadCacheResult.SUCCESS, ReadCacheResult.NUM_ENTRIES);
+                RecordHistogram.recordEnumeratedHistogram(
+                        READ_CACHE_RESULT_HISTOGRAM,
+                        ReadCacheResult.SUCCESS,
+                        ReadCacheResult.NUM_ENTRIES);
             } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-                RecordHistogram.recordEnumeratedHistogram(READ_CACHE_RESULT_HISTOGRAM,
-                        ReadCacheResult.INVALID_PROTO_ERROR, ReadCacheResult.NUM_ENTRIES);
+                RecordHistogram.recordEnumeratedHistogram(
+                        READ_CACHE_RESULT_HISTOGRAM,
+                        ReadCacheResult.INVALID_PROTO_ERROR,
+                        ReadCacheResult.NUM_ENTRIES);
                 Log.e(TAG, Log.getStackTraceString(e));
             } catch (IllegalArgumentException e) {
-                RecordHistogram.recordEnumeratedHistogram(READ_CACHE_RESULT_HISTOGRAM,
-                        ReadCacheResult.BASE64_ERROR, ReadCacheResult.NUM_ENTRIES);
+                RecordHistogram.recordEnumeratedHistogram(
+                        READ_CACHE_RESULT_HISTOGRAM,
+                        ReadCacheResult.BASE64_ERROR,
+                        ReadCacheResult.NUM_ENTRIES);
                 Log.e(TAG, Log.getStackTraceString(e));
             }
         }
@@ -156,7 +152,7 @@ public class OptimizationGuidePushNotificationManager {
 
     private static Set<String> getStringCacheForOptimizationType(
             OptimizationType optimizationType) {
-        return SharedPreferencesManager.getInstance().readStringSet(cacheKey(optimizationType));
+        return ChromeSharedPreferences.getInstance().readStringSet(cacheKey(optimizationType));
     }
 
     /**
@@ -164,10 +160,9 @@ public class OptimizationGuidePushNotificationManager {
      * types with overflowed caches are not included.
      */
     public static List<OptimizationType> getOptTypesWithPushNotifications() {
-        List<OptimizationType> types = new ArrayList<OptimizationType>();
+        List<OptimizationType> types = new ArrayList<>();
         for (OptimizationType type : OptimizationType.values()) {
-            Set<String> cache =
-                    SharedPreferencesManager.getInstance().readStringSet(cacheKey(type));
+            Set<String> cache = ChromeSharedPreferences.getInstance().readStringSet(cacheKey(type));
             if (cache != null && cache.size() > 0 && !checkForOverflow(cache)) {
                 types.add(type);
             }
@@ -179,7 +174,7 @@ public class OptimizationGuidePushNotificationManager {
      * Returns a list of all the optimization types that overflowed their push notification caches.
      */
     public static List<OptimizationType> getOptTypesThatOverflowedPushNotifications() {
-        List<OptimizationType> overflows = new ArrayList<OptimizationType>();
+        List<OptimizationType> overflows = new ArrayList<>();
         for (OptimizationType type : OptimizationType.values()) {
             if (checkForOverflow(getStringCacheForOptimizationType(type))) {
                 overflows.add(type);
@@ -191,12 +186,13 @@ public class OptimizationGuidePushNotificationManager {
     @VisibleForTesting
     public static String cacheKey(OptimizationType optimizationType) {
         return ChromePreferenceKeys.OPTIMIZATION_GUIDE_PUSH_NOTIFICATION_CACHE.createKey(
-                optimizationType.toString());
+                optimizationType.name());
     }
 
-    @VisibleForTesting
     public static void setNativeIsInitializedForTesting(Boolean nativeIsInitialized) {
+        var oldValue = sNativeIsInitialized;
         sNativeIsInitialized = nativeIsInitialized;
+        ResettersForTesting.register(() -> sNativeIsInitialized = oldValue);
     }
 
     private static boolean nativeIsInitialized() {
@@ -207,6 +203,9 @@ public class OptimizationGuidePushNotificationManager {
     private static boolean checkForOverflow(Set<String> cache) {
         return cache != null && cache.equals(OVERFLOW_SENTINEL_SET);
     }
+
+    // Public for testing.
+    public static final int OPTIMIZATION_GUIDE_PUSH_NOTIFICATIONS_MAX_CACHE_SIZE = 100;
 
     private static void persistNotificationPayload(HintNotificationPayload payload) {
         if (!payload.hasOptimizationType()) return;
@@ -219,17 +218,18 @@ public class OptimizationGuidePushNotificationManager {
         if (checkForOverflow(cache)) return;
 
         // Check if we would overflow the cache by writing the new element.
-        if (cache.size() >= MAX_CACHE_SIZE.getValue() - 1) {
-            SharedPreferencesManager.getInstance().writeStringSet(
-                    cacheKey(payload.getOptimizationType()), OVERFLOW_SENTINEL_SET);
+        if (cache.size() >= OPTIMIZATION_GUIDE_PUSH_NOTIFICATIONS_MAX_CACHE_SIZE - 1) {
+            ChromeSharedPreferences.getInstance()
+                    .writeStringSet(cacheKey(payload.getOptimizationType()), OVERFLOW_SENTINEL_SET);
             return;
         }
 
         // The notification's payload isn't used so it can be stripped to preserve memory space.
         HintNotificationPayload slim_payload =
                 HintNotificationPayload.newBuilder(payload).clearPayload().build();
-        SharedPreferencesManager.getInstance().addToStringSet(
-                cacheKey(slim_payload.getOptimizationType()),
-                Base64.encodeToString(slim_payload.toByteArray(), Base64.DEFAULT));
+        ChromeSharedPreferences.getInstance()
+                .addToStringSet(
+                        cacheKey(slim_payload.getOptimizationType()),
+                        Base64.encodeToString(slim_payload.toByteArray(), Base64.DEFAULT));
     }
 }

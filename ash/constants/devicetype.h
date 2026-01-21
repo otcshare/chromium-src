@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/component_export.h"
+#include "chromeos/constants/devicetype.h"
 
 namespace ash {
 
@@ -17,15 +18,13 @@ namespace ash {
 COMPONENT_EXPORT(ASH_CONSTANTS)
 std::string GetDeviceBluetoothName(const std::string& bluetooth_address);
 
+// Returns the name of the provided Chrome device type.
+COMPONENT_EXPORT(ASH_CONSTANTS)
+std::string DeviceTypeToString(chromeos::DeviceType device_type);
+
 // Returns true if the device is Google branded.
 COMPONENT_EXPORT(ASH_CONSTANTS) bool IsGoogleBrandedDevice();
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the Chrome OS source code
-// directory migration is finished.
-namespace chromeos {
-using ::ash::IsGoogleBrandedDevice;
-}  // namespace chromeos
 
 #endif  // ASH_CONSTANTS_DEVICETYPE_H_

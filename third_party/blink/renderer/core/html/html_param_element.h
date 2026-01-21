@@ -35,11 +35,6 @@ class HTMLParamElement final : public HTMLElement {
 
   const AtomicString& GetName() const;
   const AtomicString& Value() const;
-
-  static bool IsURLParameter(const String&);
-
- private:
-  bool IsURLAttribute(const Attribute&) const override;
 };
 
 }  // namespace blink

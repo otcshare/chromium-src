@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './strings.m.js';
+import '/strings.m.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {getRequiredElement} from 'chrome://resources/js/util_ts.js';
+import {getRequiredElement} from 'chrome://resources/js/util.js';
 
 const HIDDEN_CLASS: string = 'hidden';
 
@@ -38,6 +38,8 @@ function setupEvents() {
       break;
     case '#' + loadTimeData.getInteger('certExpired'):
       toggleHidden('details-clock', 'details-clock-button');
+      break;
+    default:
       break;
   }
 }

@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "services/device/public/mojom/nfc.mojom-blink.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
@@ -34,7 +33,6 @@ namespace blink {
 
 using mojom::blink::PermissionName;
 using mojom::blink::PermissionService;
-using mojom::blink::PermissionStatus;
 
 namespace {
 
@@ -63,8 +61,6 @@ v8::Local<v8::Value> NDEFErrorTypeToDOMException(
           isolate, DOMExceptionCode::kNetworkError, error_message);
   }
   NOTREACHED();
-  // Don't need to handle the case after a NOTREACHED().
-  return v8::Local<v8::Value>();
 }
 
 v8::Local<v8::Value> NDEFErrorPtrToDOMException(
@@ -103,41 +99,37 @@ class NDEFReader::ReadAbortAlgorithm final : public AbortSignal::Algorithm {
 
 class NDEFReader::WriteAbortAlgorithm final : public AbortSignal::Algorithm {
  public:
-  WriteAbortAlgorithm(NDEFReader* ndef_reader, AbortSignal* signal)
-      : ndef_reader_(ndef_reader), abort_signal_(signal) {}
+  explicit WriteAbortAlgorithm(NDEFReader* ndef_reader)
+      : ndef_reader_(ndef_reader) {}
   ~WriteAbortAlgorithm() override = default;
 
-  void Run() override { ndef_reader_->WriteAbort(abort_signal_); }
+  void Run() override { ndef_reader_->WriteAbort(); }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(ndef_reader_);
-    visitor->Trace(abort_signal_);
     Algorithm::Trace(visitor);
   }
 
  private:
   Member<NDEFReader> ndef_reader_;
-  Member<AbortSignal> abort_signal_;
 };
 
 class NDEFReader::MakeReadOnlyAbortAlgorithm final
     : public AbortSignal::Algorithm {
  public:
-  MakeReadOnlyAbortAlgorithm(NDEFReader* ndef_reader, AbortSignal* signal)
-      : ndef_reader_(ndef_reader), abort_signal_(signal) {}
+  explicit MakeReadOnlyAbortAlgorithm(NDEFReader* ndef_reader)
+      : ndef_reader_(ndef_reader) {}
   ~MakeReadOnlyAbortAlgorithm() override = default;
 
-  void Run() override { ndef_reader_->MakeReadOnlyAbort(abort_signal_); }
+  void Run() override { ndef_reader_->MakeReadOnlyAbort(); }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(ndef_reader_);
-    visitor->Trace(abort_signal_);
     Algorithm::Trace(visitor);
   }
 
  private:
   Member<NDEFReader> ndef_reader_;
-  Member<AbortSignal> abort_signal_;
 };
 
 // static
@@ -149,11 +141,10 @@ NDEFReader* NDEFReader::Create(ExecutionContext* context) {
 }
 
 NDEFReader::NDEFReader(ExecutionContext* context)
-    : ExecutionContextLifecycleObserver(context), permission_service_(context) {
-  // Call GetNFCProxy to create a proxy. This guarantees no allocation will
-  // be needed when calling HasPendingActivity later during gc tracing.
-  GetNfcProxy();
-}
+    : ActiveScriptWrappable<NDEFReader>({}),
+      ExecutionContextLifecycleObserver(context),
+      nfc_proxy_(NFCProxy::From(*DomWindow())),
+      permission_service_(context) {}
 
 NDEFReader::~NDEFReader() = default;
 
@@ -166,20 +157,20 @@ ExecutionContext* NDEFReader::GetExecutionContext() const {
 }
 
 bool NDEFReader::HasPendingActivity() const {
-  return GetExecutionContext() && GetNfcProxy()->IsReading(this) &&
+  return GetExecutionContext() && nfc_proxy_->IsReading(this) &&
          HasEventListeners();
 }
 
 // https://w3c.github.io/web-nfc/#the-scan-method
-ScriptPromise NDEFReader::scan(ScriptState* script_state,
-                               const NDEFScanOptions* options,
-                               ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> NDEFReader::scan(ScriptState* script_state,
+                                             const NDEFScanOptions* options,
+                                             ExceptionState& exception_state) {
   // https://w3c.github.io/web-nfc/#security-policies
   // WebNFC API must be only accessible from top level browsing context.
   if (!DomWindow() || !DomWindow()->GetFrame()->IsMainFrame()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kChildFrameErrorMessage);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   if (scan_signal_ && scan_abort_handle_) {
@@ -189,31 +180,33 @@ ScriptPromise NDEFReader::scan(ScriptState* script_state,
   scan_signal_ = options->getSignalOr(nullptr);
   if (scan_signal_) {
     if (scan_signal_->aborted()) {
-      return ScriptPromise::Reject(script_state,
-                                   scan_signal_->reason(script_state));
+      return ScriptPromise<IDLUndefined>::Reject(
+          script_state, scan_signal_->reason(script_state));
     }
     scan_abort_handle_ = scan_signal_->AddAlgorithm(
         MakeGarbageCollected<ReadAbortAlgorithm>(this, scan_signal_));
   }
 
   // Reject promise when there's already an ongoing scan.
-  if (scan_resolver_ || GetNfcProxy()->IsReading(this)) {
+  if (scan_resolver_ || nfc_proxy_->IsReading(this)) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "A scan() operation is ongoing.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  scan_resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  scan_resolver_ = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
   GetPermissionService()->RequestPermission(
       CreatePermissionDescriptor(PermissionName::NFC),
       LocalFrame::HasTransientUserActivation(DomWindow()->GetFrame()),
-      WTF::BindOnce(&NDEFReader::ReadOnRequestPermission, WrapPersistent(this),
-                    WrapPersistent(options)));
+      BindOnce(&NDEFReader::ReadOnRequestPermission, WrapPersistent(this),
+               WrapPersistent(options)));
   return scan_resolver_->Promise();
 }
 
-void NDEFReader::ReadOnRequestPermission(const NDEFScanOptions* options,
-                                         PermissionStatus status) {
+void NDEFReader::ReadOnRequestPermission(
+    const NDEFScanOptions* options,
+    mojom::blink::PermissionStatus status) {
   if (!scan_resolver_)
     return;
 
@@ -225,21 +218,17 @@ void NDEFReader::ReadOnRequestPermission(const NDEFScanOptions* options,
     return;
   }
 
-  ScriptState::Scope script_state_scope(script_state);
-
-  if (status != PermissionStatus::GRANTED) {
-    scan_resolver_->Reject(V8ThrowDOMException::CreateOrDie(
-        script_state->GetIsolate(), DOMExceptionCode::kNotAllowedError,
-        "NFC permission request denied."));
+  if (status != mojom::blink::PermissionStatus::GRANTED) {
+    scan_resolver_->RejectWithDOMException(DOMExceptionCode::kNotAllowedError,
+                                           "NFC permission request denied.");
     scan_resolver_.Clear();
     return;
   }
 
   DCHECK(!scan_signal_ || !scan_signal_->aborted());
 
-  GetNfcProxy()->StartReading(
-      this,
-      WTF::BindOnce(&NDEFReader::ReadOnRequestCompleted, WrapPersistent(this)));
+  nfc_proxy_->StartReading(this, BindOnce(&NDEFReader::ReadOnRequestCompleted,
+                                          WrapPersistent(this)));
 }
 
 void NDEFReader::ReadOnRequestCompleted(
@@ -269,7 +258,7 @@ void NDEFReader::ReadOnRequestCompleted(
 
 void NDEFReader::OnReading(const String& serial_number,
                            const device::mojom::blink::NDEFMessage& message) {
-  DCHECK(GetNfcProxy()->IsReading(this));
+  DCHECK(nfc_proxy_->IsReading(this));
   DispatchEvent(*MakeGarbageCollected<NDEFReadingEvent>(
       event_type_names::kReading, serial_number,
       MakeGarbageCollected<NDEFMessage>(message)));
@@ -286,19 +275,12 @@ void NDEFReader::OnReadingError(const String& message) {
 }
 
 void NDEFReader::ContextDestroyed() {
-  GetNfcProxy()->StopReading(this);
+  nfc_proxy_->StopReading(this);
   scan_abort_handle_.Clear();
 }
 
 void NDEFReader::ReadAbort(AbortSignal* signal) {
-  if (!base::FeatureList::IsEnabled(features::kAbortSignalHandleBasedRemoval)) {
-    // There is no RemoveAlgorithm() method on AbortSignal so compare the signal
-    // bound to this callback to the one last passed to scan().
-    if (scan_signal_ != signal)
-      return;
-  }
-
-  GetNfcProxy()->StopReading(this);
+  nfc_proxy_->StopReading(this);
   scan_abort_handle_.Clear();
 
   if (!scan_resolver_)
@@ -320,29 +302,28 @@ void NDEFReader::ReadAbort(AbortSignal* signal) {
 
 // https://w3c.github.io/web-nfc/#writing-content
 // https://w3c.github.io/web-nfc/#the-write-method
-ScriptPromise NDEFReader::write(ScriptState* script_state,
-                                const V8NDEFMessageSource* write_message,
-                                const NDEFWriteOptions* options,
-                                ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> NDEFReader::write(
+    ScriptState* script_state,
+    const V8NDEFMessageSource* write_message,
+    const NDEFWriteOptions* options,
+    ExceptionState& exception_state) {
   // https://w3c.github.io/web-nfc/#security-policies
   // WebNFC API must be only accessible from top level browsing context.
   if (!DomWindow() || !DomWindow()->GetFrame()->IsMainFrame()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kChildFrameErrorMessage);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  write_signal_ = options->getSignalOr(nullptr);
   std::unique_ptr<ScopedAbortState> scoped_abort_state = nullptr;
-  if (write_signal_) {
-    if (write_signal_->aborted()) {
-      return ScriptPromise::Reject(script_state,
-                                   write_signal_->reason(script_state));
+  if (auto* signal = options->getSignalOr(nullptr)) {
+    if (signal->aborted()) {
+      return ScriptPromise<IDLUndefined>::Reject(script_state,
+                                                 signal->reason(script_state));
     }
-    auto* handle = write_signal_->AddAlgorithm(
-        MakeGarbageCollected<WriteAbortAlgorithm>(this, write_signal_));
-    scoped_abort_state =
-        std::make_unique<ScopedAbortState>(write_signal_, handle);
+    auto* handle =
+        signal->AddAlgorithm(MakeGarbageCollected<WriteAbortAlgorithm>(this));
+    scoped_abort_state = std::make_unique<ScopedAbortState>(signal, handle);
   }
 
   // Step 11.2: Run "create NDEF message", if this throws an exception,
@@ -350,35 +331,36 @@ ScriptPromise NDEFReader::write(ScriptState* script_state,
   NDEFMessage* ndef_message =
       NDEFMessage::Create(script_state, write_message, exception_state);
   if (exception_state.HadException()) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   auto message = device::mojom::blink::NDEFMessage::From(ndef_message);
   DCHECK(message);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
   write_requests_.insert(resolver);
 
   // Add the writer to proxy's writer list for Mojo connection error
   // notification.
-  GetNfcProxy()->AddWriter(this);
+  nfc_proxy_->AddWriter(this);
 
   GetPermissionService()->RequestPermission(
       CreatePermissionDescriptor(PermissionName::NFC),
       LocalFrame::HasTransientUserActivation(DomWindow()->GetFrame()),
-      WTF::BindOnce(&NDEFReader::WriteOnRequestPermission, WrapPersistent(this),
-                    WrapPersistent(resolver), std::move(scoped_abort_state),
-                    WrapPersistent(options), std::move(message)));
+      BindOnce(&NDEFReader::WriteOnRequestPermission, WrapPersistent(this),
+               WrapPersistent(resolver), std::move(scoped_abort_state),
+               WrapPersistent(options), std::move(message)));
 
   return resolver->Promise();
 }
 
 void NDEFReader::WriteOnRequestPermission(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLUndefined>* resolver,
     std::unique_ptr<ScopedAbortState> scoped_abort_state,
     const NDEFWriteOptions* options,
     device::mojom::blink::NDEFMessagePtr message,
-    PermissionStatus status) {
+    mojom::blink::PermissionStatus status) {
   DCHECK(resolver);
 
   ScriptState* script_state = resolver->GetScriptState();
@@ -390,28 +372,29 @@ void NDEFReader::WriteOnRequestPermission(
 
   ScriptState::Scope script_state_scope(script_state);
 
-  if (status != PermissionStatus::GRANTED) {
-    resolver->Reject(V8ThrowDOMException::CreateOrDie(
-        script_state->GetIsolate(), DOMExceptionCode::kNotAllowedError,
-        "NFC permission request denied."));
+  if (status != mojom::blink::PermissionStatus::GRANTED) {
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotAllowedError,
+                                     "NFC permission request denied.");
     return;
   }
 
-  if (write_signal_ && write_signal_->aborted()) {
-    resolver->Reject(write_signal_->reason(script_state));
+  AbortSignal* signal =
+      scoped_abort_state ? scoped_abort_state->Signal() : nullptr;
+  if (signal && signal->aborted()) {
+    resolver->Reject(signal->reason(script_state));
     return;
   }
 
   auto callback =
-      WTF::BindOnce(&NDEFReader::WriteOnRequestCompleted, WrapPersistent(this),
-                    WrapPersistent(resolver), std::move(scoped_abort_state));
-  GetNfcProxy()->Push(std::move(message),
-                      device::mojom::blink::NDEFWriteOptions::From(options),
-                      std::move(callback));
+      BindOnce(&NDEFReader::WriteOnRequestCompleted, WrapPersistent(this),
+               WrapPersistent(resolver), std::move(scoped_abort_state));
+  nfc_proxy_->Push(std::move(message),
+                   device::mojom::blink::NDEFWriteOptions::From(options),
+                   std::move(callback));
 }
 
 void NDEFReader::WriteOnRequestCompleted(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLUndefined>* resolver,
     std::unique_ptr<ScopedAbortState> scoped_abort_state,
     device::mojom::blink::NDEFErrorPtr error) {
   DCHECK(write_requests_.Contains(resolver));
@@ -440,66 +423,58 @@ void NDEFReader::WriteOnRequestCompleted(
   }
 }
 
-void NDEFReader::WriteAbort(AbortSignal* signal) {
-  if (!base::FeatureList::IsEnabled(features::kAbortSignalHandleBasedRemoval)) {
-    // There is no RemoveAlgorithm() method on AbortSignal so compare the signal
-    // bound to this callback to the one last passed to write().
-    if (write_signal_ != signal)
-      return;
-  }
-
+void NDEFReader::WriteAbort() {
   // WriteOnRequestCompleted() should always be called whether the push
   // operation is cancelled successfully or not.
-  GetNfcProxy()->CancelPush();
+  nfc_proxy_->CancelPush();
 }
 
-ScriptPromise NDEFReader::makeReadOnly(ScriptState* script_state,
-                                       const NDEFMakeReadOnlyOptions* options,
-                                       ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> NDEFReader::makeReadOnly(
+    ScriptState* script_state,
+    const NDEFMakeReadOnlyOptions* options,
+    ExceptionState& exception_state) {
   // https://w3c.github.io/web-nfc/#security-policies
   // WebNFC API must be only accessible from top level browsing context.
   if (!DomWindow() || !DomWindow()->GetFrame()->IsMainFrame()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kChildFrameErrorMessage);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  make_read_only_signal_ = options->getSignalOr(nullptr);
   std::unique_ptr<ScopedAbortState> scoped_abort_state = nullptr;
-  if (make_read_only_signal_) {
-    if (make_read_only_signal_->aborted()) {
-      return ScriptPromise::Reject(
-          script_state, make_read_only_signal_->reason(script_state));
+  if (auto* signal = options->getSignalOr(nullptr)) {
+    if (signal->aborted()) {
+      return ScriptPromise<IDLUndefined>::Reject(script_state,
+                                                 signal->reason(script_state));
     }
-    auto* handle = make_read_only_signal_->AddAlgorithm(
-        MakeGarbageCollected<MakeReadOnlyAbortAlgorithm>(
-            this, make_read_only_signal_));
-    scoped_abort_state =
-        std::make_unique<ScopedAbortState>(make_read_only_signal_, handle);
+    auto* handle = signal->AddAlgorithm(
+        MakeGarbageCollected<MakeReadOnlyAbortAlgorithm>(this));
+    scoped_abort_state = std::make_unique<ScopedAbortState>(signal, handle);
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
   make_read_only_requests_.insert(resolver);
 
   // Add the writer to proxy's writer list for Mojo connection error
   // notification.
-  GetNfcProxy()->AddWriter(this);
+  nfc_proxy_->AddWriter(this);
 
   GetPermissionService()->RequestPermission(
       CreatePermissionDescriptor(PermissionName::NFC),
       LocalFrame::HasTransientUserActivation(DomWindow()->GetFrame()),
-      WTF::BindOnce(&NDEFReader::MakeReadOnlyOnRequestPermission,
-                    WrapPersistent(this), WrapPersistent(resolver),
-                    std::move(scoped_abort_state), WrapPersistent(options)));
+      BindOnce(&NDEFReader::MakeReadOnlyOnRequestPermission,
+               WrapPersistent(this), WrapPersistent(resolver),
+               std::move(scoped_abort_state), WrapPersistent(options)));
 
   return resolver->Promise();
 }
 
 void NDEFReader::MakeReadOnlyOnRequestPermission(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLUndefined>* resolver,
     std::unique_ptr<ScopedAbortState> scoped_abort_state,
     const NDEFMakeReadOnlyOptions* options,
-    PermissionStatus status) {
+    mojom::blink::PermissionStatus status) {
   DCHECK(resolver);
 
   ScriptState* script_state = resolver->GetScriptState();
@@ -511,26 +486,27 @@ void NDEFReader::MakeReadOnlyOnRequestPermission(
 
   ScriptState::Scope script_state_scope(resolver->GetScriptState());
 
-  if (status != PermissionStatus::GRANTED) {
-    resolver->Reject(V8ThrowDOMException::CreateOrDie(
-        script_state->GetIsolate(), DOMExceptionCode::kNotAllowedError,
-        "NFC permission request denied."));
+  if (status != mojom::blink::PermissionStatus::GRANTED) {
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotAllowedError,
+                                     "NFC permission request denied.");
     return;
   }
 
-  if (make_read_only_signal_ && make_read_only_signal_->aborted()) {
-    resolver->Reject(make_read_only_signal_->reason(script_state));
+  AbortSignal* signal =
+      scoped_abort_state ? scoped_abort_state->Signal() : nullptr;
+  if (signal && signal->aborted()) {
+    resolver->Reject(signal->reason(script_state));
     return;
   }
 
-  auto callback = WTF::BindOnce(&NDEFReader::MakeReadOnlyOnRequestCompleted,
-                                WrapPersistent(this), WrapPersistent(resolver),
-                                std::move(scoped_abort_state));
-  GetNfcProxy()->MakeReadOnly(std::move(callback));
+  auto callback = BindOnce(&NDEFReader::MakeReadOnlyOnRequestCompleted,
+                           WrapPersistent(this), WrapPersistent(resolver),
+                           std::move(scoped_abort_state));
+  nfc_proxy_->MakeReadOnly(std::move(callback));
 }
 
 void NDEFReader::MakeReadOnlyOnRequestCompleted(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLUndefined>* resolver,
     std::unique_ptr<ScopedAbortState> scoped_abort_state,
     device::mojom::blink::NDEFErrorPtr error) {
   DCHECK(make_read_only_requests_.Contains(resolver));
@@ -559,36 +535,27 @@ void NDEFReader::MakeReadOnlyOnRequestCompleted(
   }
 }
 
-void NDEFReader::MakeReadOnlyAbort(AbortSignal* signal) {
-  if (!base::FeatureList::IsEnabled(features::kAbortSignalHandleBasedRemoval)) {
-    // There is no RemoveAlgorithm() method on AbortSignal so compare the signal
-    // bound to this callback to the one last passed to makeReadOnly().
-    if (make_read_only_signal_ != signal)
-      return;
-  }
-
+void NDEFReader::MakeReadOnlyAbort() {
   // MakeReadOnlyOnRequestCompleted() should always be called whether the
   // makeReadOnly operation is cancelled successfully or not.
-  GetNfcProxy()->CancelMakeReadOnly();
-}
-
-NFCProxy* NDEFReader::GetNfcProxy() const {
-  DCHECK(DomWindow());
-  return NFCProxy::From(*DomWindow());
+  nfc_proxy_->CancelMakeReadOnly();
 }
 
 void NDEFReader::Trace(Visitor* visitor) const {
+  visitor->Trace(nfc_proxy_);
   visitor->Trace(permission_service_);
   visitor->Trace(scan_resolver_);
   visitor->Trace(scan_signal_);
   visitor->Trace(scan_abort_handle_);
   visitor->Trace(write_requests_);
-  visitor->Trace(write_signal_);
   visitor->Trace(make_read_only_requests_);
-  visitor->Trace(make_read_only_signal_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ActiveScriptWrappable::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
+}
+
+void NDEFReader::Dispose() {
+  nfc_proxy_->StopReading(this);
 }
 
 PermissionService* NDEFReader::GetPermissionService() {
@@ -629,9 +596,9 @@ void NDEFReader::WriteOnMojoConnectionError() {
 
   // Script may execute during a call to Reject(). Swap these sets to prevent
   // concurrent modification.
-  HeapHashSet<Member<ScriptPromiseResolver>> write_requests;
+  HeapHashSet<Member<ScriptPromiseResolver<IDLUndefined>>> write_requests;
   write_requests_.swap(write_requests);
-  for (ScriptPromiseResolver* resolver : write_requests) {
+  for (ScriptPromiseResolverBase* resolver : write_requests) {
     DCHECK(resolver);
 
     ScriptState* script_state = resolver->GetScriptState();
@@ -656,9 +623,10 @@ void NDEFReader::MakeReadOnlyOnMojoConnectionError() {
 
   // Script may execute during a call to Reject(). Swap these sets to prevent
   // concurrent modification.
-  HeapHashSet<Member<ScriptPromiseResolver>> make_read_only_requests;
+  HeapHashSet<Member<ScriptPromiseResolver<IDLUndefined>>>
+      make_read_only_requests;
   make_read_only_requests_.swap(make_read_only_requests);
-  for (ScriptPromiseResolver* resolver : make_read_only_requests) {
+  for (ScriptPromiseResolverBase* resolver : make_read_only_requests) {
     DCHECK(resolver);
 
     ScriptState* script_state = resolver->GetScriptState();

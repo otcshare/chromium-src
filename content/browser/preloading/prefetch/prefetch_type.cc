@@ -4,41 +4,42 @@
 
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 
-#include <tuple>
+#include <optional>
 
 #include "base/check.h"
+#include "content/browser/preloading/prefetch/prefetch_params.h"
+#include "content/browser/preloading/preloading_trigger_type_impl.h"
 
 namespace content {
 
-PrefetchType::PrefetchType(bool use_isolated_network_context,
+PrefetchType::PrefetchType(PreloadingTriggerType non_speculation_trigger_type,
                            bool use_prefetch_proxy)
-    : use_isolated_network_context_(use_isolated_network_context),
+    : trigger_type_(non_speculation_trigger_type),
       use_prefetch_proxy_(use_prefetch_proxy) {
-  // Checks that the given dimensions are a supported prefetch type.
-  DCHECK(!(!use_isolated_network_context && use_prefetch_proxy));
+  CHECK(!IsSpeculationRuleType(non_speculation_trigger_type));
 }
 
-PrefetchType::~PrefetchType() = default;
-PrefetchType::PrefetchType(const PrefetchType& prefetch_type) = default;
-PrefetchType& PrefetchType::operator=(const PrefetchType& prefetch_type) =
-    default;
+PrefetchType::PrefetchType(PreloadingTriggerType trigger_type,
+                           bool use_prefetch_proxy,
+                           blink::mojom::SpeculationEagerness eagerness)
+    : trigger_type_(trigger_type),
+      use_prefetch_proxy_(use_prefetch_proxy),
+      eagerness_(eagerness) {
+  CHECK(IsSpeculationRuleType(trigger_type));
+}
 
 void PrefetchType::SetProxyBypassedForTest() {
   DCHECK(use_prefetch_proxy_);
   proxy_bypassed_for_testing_ = true;
 }
 
-bool operator==(const PrefetchType& prefetch_type_1,
-                const PrefetchType& prefetch_type_2) {
-  return std::tie(prefetch_type_1.use_isolated_network_context_,
-                  prefetch_type_1.use_prefetch_proxy_) ==
-         std::tie(prefetch_type_2.use_isolated_network_context_,
-                  prefetch_type_2.use_prefetch_proxy_);
+blink::mojom::SpeculationEagerness PrefetchType::GetEagerness() const {
+  CHECK(IsSpeculationRuleType(trigger_type_));
+  return eagerness_.value();
 }
 
-bool operator!=(const PrefetchType& prefetch_type_1,
-                const PrefetchType& prefetch_type_2) {
-  return !(prefetch_type_1 == prefetch_type_2);
+bool PrefetchType::IsRendererInitiated() const {
+  return IsSpeculationRuleType(trigger_type_);
 }
 
 }  // namespace content

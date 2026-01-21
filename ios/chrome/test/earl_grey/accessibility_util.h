@@ -11,9 +11,9 @@ namespace chrome_test_util {
 
 // Verifies that all interactive elements on screen (or at least one of their
 // descendants) are accessible.
-BOOL VerifyAccessibilityForCurrentScreen(NSError* error);
+BOOL VerifyAccessibilityForCurrentScreen(NSError* __strong* error);
 
-// TODO(crbug.com/922813): Remove the method after update tests in
+// TODO(crbug.com/40609912): Remove the method after update tests in
 // "//ios_internal"
 void VerifyAccessibilityForCurrentScreen();
 

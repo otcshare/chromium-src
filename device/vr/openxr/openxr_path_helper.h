@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "device/vr/openxr/openxr_interaction_profiles.h"
+#include "device/vr/public/mojom/openxr_interaction_profile_type.mojom.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 
 namespace device {
@@ -19,21 +20,23 @@ class OpenXRPathHelper {
   OpenXRPathHelper();
   ~OpenXRPathHelper();
 
-  XrResult Initialize(XrInstance instance, XrSystemId system);
+  XrResult Initialize(XrInstance instance, const std::string& system_name);
 
   std::vector<std::string> GetInputProfiles(
-      OpenXrInteractionProfileType interaction_profile) const;
+      mojom::OpenXrInteractionProfileType interaction_profile,
+      bool hand_joints_enabled) const;
 
-  OpenXrInteractionProfileType GetInputProfileType(
+  mojom::OpenXrInteractionProfileType GetInputProfileType(
       XrPath interaction_profile) const;
 
-  XrPath GetInteractionProfileXrPath(OpenXrInteractionProfileType type) const;
+  XrPath GetInteractionProfileXrPath(
+      mojom::OpenXrInteractionProfileType type) const;
 
  private:
   bool initialized_{false};
   std::string system_name_;
 
-  std::unordered_map<OpenXrInteractionProfileType, XrPath>
+  std::unordered_map<mojom::OpenXrInteractionProfileType, XrPath>
       declared_interaction_profile_paths_;
 };
 

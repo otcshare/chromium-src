@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/system/sys_info.h"
 #include "base/values.h"
 #include "chrome/common/pref_names.h"
@@ -29,7 +29,7 @@ NetworkThrottlingObserver::NetworkThrottlingObserver(PrefService* local_state)
                              throttle_callback);
 }
 
-NetworkThrottlingObserver::~NetworkThrottlingObserver() {}
+NetworkThrottlingObserver::~NetworkThrottlingObserver() = default;
 
 void NetworkThrottlingObserver::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kNetworkThrottlingEnabled);

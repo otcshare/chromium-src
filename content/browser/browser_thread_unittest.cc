@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump.h"
@@ -16,6 +16,7 @@
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "base/task/sequence_manager/sequence_manager.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/mock_callback.h"
@@ -26,8 +27,8 @@
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/scheduler/browser_io_thread_delegate.h"
 #include "content/browser/scheduler/browser_task_executor.h"
+#include "content/browser/scheduler/browser_task_priority.h"
 #include "content/browser/scheduler/browser_ui_thread_scheduler.h"
-#include "content/public/browser/browser_task_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -35,13 +36,13 @@ namespace content {
 
 namespace {
 
-using ::testing::Invoke;
-
 class SequenceManagerThreadDelegate : public base::Thread::Delegate {
  public:
   SequenceManagerThreadDelegate() {
-    ui_sequence_manager_ =
-        base::sequence_manager::CreateUnboundSequenceManager();
+    ui_sequence_manager_ = base::sequence_manager::CreateUnboundSequenceManager(
+        base::sequence_manager::SequenceManager::Settings::Builder()
+            .SetPrioritySettings(internal::CreateBrowserTaskPrioritySettings())
+            .Build());
     auto browser_ui_thread_scheduler =
         BrowserUIThreadScheduler::CreateForTesting(ui_sequence_manager_.get());
 
@@ -69,11 +70,13 @@ class SequenceManagerThreadDelegate : public base::Thread::Delegate {
     return default_task_runner_;
   }
 
-  void BindToCurrentThread(base::TimerSlack timer_slack) override {
+  void BindToCurrentThread() override {
     ui_sequence_manager_->BindToMessagePump(
         base::MessagePump::Create(base::MessagePumpType::DEFAULT));
-    ui_sequence_manager_->SetTimerSlack(timer_slack);
-    BrowserTaskExecutor::BindToUIThreadForTesting();
+  }
+
+  void AddTaskObserver(base::TaskObserver* observer) override {
+    ui_sequence_manager_->AddTaskObserver(observer);
   }
 
  private:
@@ -194,19 +197,9 @@ class UIThreadDestructionObserver
 
 TEST_F(BrowserThreadTest, PostTask) {
   base::RunLoop run_loop;
-  EXPECT_TRUE(
-      GetIOThreadTaskRunner({NonNestable()})
-          ->PostTask(FROM_HERE, base::BindOnce(&BasicFunction,
-                                               run_loop.QuitWhenIdleClosure(),
-                                               BrowserThread::IO)));
-  run_loop.Run();
-}
-
-TEST_F(BrowserThreadTest, Release) {
-  base::RunLoop run_loop;
-  ExpectRelease(run_loop.QuitWhenIdleClosure());
-  BrowserThread::ReleaseSoon(BrowserThread::IO, FROM_HERE,
-                             base::WrapRefCounted(this));
+  EXPECT_TRUE(GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(&BasicFunction, run_loop.QuitWhenIdleClosure(),
+                                BrowserThread::IO)));
   run_loop.Run();
 }
 
@@ -273,7 +266,9 @@ class BrowserThreadWithCustomSchedulerTest : public testing::Test {
       : public base::test::TaskEnvironment {
    public:
     TaskEnvironmentWithCustomScheduler()
-        : base::test::TaskEnvironment(SubclassCreatesDefaultTaskRunner{}) {
+        : base::test::TaskEnvironment(
+              internal::CreateBrowserTaskPrioritySettings(),
+              SubclassCreatesDefaultTaskRunner{}) {
       std::unique_ptr<BrowserUIThreadScheduler> browser_ui_thread_scheduler =
           BrowserUIThreadScheduler::CreateForTesting(sequence_manager());
       DeferredInitFromSubclass(
@@ -323,9 +318,7 @@ TEST_F(BrowserThreadWithCustomSchedulerTest, PostBestEffortTask) {
 
   BrowserTaskExecutor::OnStartupComplete();
   base::RunLoop run_loop;
-  EXPECT_CALL(best_effort_task, Run).WillOnce(Invoke([&]() {
-    run_loop.Quit();
-  }));
+  EXPECT_CALL(best_effort_task, Run).WillOnce([&]() { run_loop.Quit(); });
   run_loop.Run();
 }
 

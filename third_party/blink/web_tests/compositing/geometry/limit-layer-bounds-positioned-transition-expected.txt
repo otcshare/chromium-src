@@ -8,17 +8,15 @@ Text here
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='compositing'",
+      "name": "LayoutBlockFlow (positioned) DIV class='compositing'",
       "bounds": [100, 100],
-      "contentsOpaqueForText": true,
       "drawsContent": false,
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='indicator'",
+      "name": "LayoutBlockFlow (positioned) DIV class='indicator'",
       "position": [0, 8],
       "bounds": [429, 142],
-      "contentsOpaqueForText": true,
       "backgroundColor": "#008000"
     }
   ],

@@ -15,49 +15,64 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
-#include "components/signin/core/browser/account_reconcilor.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class PrefService;
 
 namespace extension_browsing_data_api_constants {
 
 // Parameter name keys.
-extern const char kDataRemovalPermittedKey[];
-extern const char kDataToRemoveKey[];
-extern const char kOptionsKey[];
+inline constexpr char kDataRemovalPermittedKey[] = "dataRemovalPermitted";
+inline constexpr char kDataToRemoveKey[] = "dataToRemove";
+inline constexpr char kOptionsKey[] = "options";
 
 // Type keys.
-extern const char kCacheKey[];
-extern const char kCookiesKey[];
-extern const char kDownloadsKey[];
-extern const char kFileSystemsKey[];
-extern const char kFormDataKey[];
-extern const char kHistoryKey[];
-extern const char kIndexedDBKey[];
-extern const char kPluginDataKey[];
-extern const char kLocalStorageKey[];
-extern const char kPasswordsKey[];
-extern const char kServiceWorkersKey[];
-extern const char kCacheStorageKey[];
-extern const char kWebSQLKey[];
+inline constexpr char kCacheKey[] = "cache";
+inline constexpr char kCookiesKey[] = "cookies";
+inline constexpr char kDownloadsKey[] = "downloads";
+inline constexpr char kFileSystemsKey[] = "fileSystems";
+inline constexpr char kFormDataKey[] = "formData";
+inline constexpr char kHistoryKey[] = "history";
+inline constexpr char kIndexedDBKey[] = "indexedDB";
+inline constexpr char kLocalStorageKey[] = "localStorage";
+inline constexpr char kPasswordsKeyDeprecated[] = "passwords";
+inline constexpr char kPluginDataKeyDeprecated[] = "pluginData";
+inline constexpr char kServiceWorkersKey[] = "serviceWorkers";
+inline constexpr char kCacheStorageKey[] = "cacheStorage";
 
 // Option keys.
-extern const char kExtensionsKey[];
-extern const char kOriginTypesKey[];
-extern const char kProtectedWebKey[];
-extern const char kSinceKey[];
-extern const char kUnprotectedWebKey[];
+inline constexpr char kExtensionsKey[] = "extension";
+inline constexpr char kOriginTypesKey[] = "originTypes";
+inline constexpr char kProtectedWebKey[] = "protectedWeb";
+inline constexpr char kSinceKey[] = "since";
+inline constexpr char kOriginsKey[] = "origins";
+inline constexpr char kExcludeOriginsKey[] = "excludeOrigins";
+inline constexpr char kUnprotectedWebKey[] = "unprotectedWeb";
 
 // Errors!
-extern const char kBadDataTypeDetails[];
-extern const char kDeleteProhibitedError[];
-extern const char kNonFilterableError[];
-extern const char kIncompatibleFilterError[];
-extern const char kInvalidOriginError[];
+// The placeholder will be filled by the name of the affected data type (e.g.,
+// "history").
+inline constexpr char kBadDataTypeDetails[] =
+    "Invalid value for data type '%s'.";
+inline constexpr char kDeleteProhibitedError[] =
+    "Browsing history and downloads are not "
+    "permitted to be removed.";
+inline constexpr char kNonFilterableError[] =
+    "At least one data type doesn't support filtering by origin.";
+inline constexpr char kIncompatibleFilterError[] =
+    "Don't set both 'origins' and 'excludeOrigins' at the same time.";
+inline constexpr char kInvalidOriginError[] = "'%s' is not a valid origin.";
+inline constexpr char kUnsupportedDataTypeWarning[] =
+    "Requested data type(s) are not supported: %s.";
+inline constexpr char kDeprecatedDataTypeError[] =
+    "Requested data type is deprecated.";
 
 }  // namespace extension_browsing_data_api_constants
 
@@ -72,16 +87,16 @@ class BrowsingDataSettingsFunction : public ExtensionFunction {
   ~BrowsingDataSettingsFunction() override = default;
 
  private:
-  // Sets a boolean value in the |selected_dict| with the |data_type| as a key,
+  // Sets a boolean value in the `selected_dict` with the `data_type` as a key,
   // indicating whether the data type is both selected and permitted to be
-  // removed; and a value in the |permitted_dict| with the |data_type| as a
+  // removed; and a value in the `permitted_dict` with the `data_type` as a
   // key, indicating only whether the data type is permitted to be removed.
   void SetDetails(base::Value::Dict* selected_dict,
                   base::Value::Dict* permitted_dict,
                   const char* data_type,
                   bool is_selected);
 
-  // Returns whether |data_type| is currently selected for deletion on |tab|.
+  // Returns whether `data_type` is currently selected for deletion on `tab`.
   bool isDataTypeSelected(browsing_data::BrowsingDataType data_type,
                           browsing_data::ClearBrowsingDataTab tab);
 
@@ -110,11 +125,14 @@ class BrowsingDataRemoverFunction
  protected:
   ~BrowsingDataRemoverFunction() override;
 
+  // Writes a console log warning when a datatype is unsupported.
+  void LogUnsupportedDataTypeWarning(const std::string& data_type);
+
  private:
   // Children should override this method to provide the proper removal mask
   // based on the API call they represent.
   // Returns whether or not removal mask retrieval was successful.
-  // |removal_mask| is populated with the result, if successful.
+  // `removal_mask` is populated with the result, if successful.
   virtual bool GetRemovalMask(uint64_t* removal_mask) = 0;
 
   // Returns true if the data removal is allowed to pause Sync. Returns true by
@@ -123,25 +141,29 @@ class BrowsingDataRemoverFunction
   // pausing Sync would prevent the data from being deleted on the server.
   virtual bool IsPauseSyncAllowed();
 
-  // Parse the developer-provided |origin_types| object into |origin_type_mask|
+  // Returns true if the data removal is not allowed because the datatype is
+  // deprecated.
+  virtual bool IsRemovalDeprecated();
+
+  // Parse the developer-provided `origin_types` object into `origin_type_mask`
   // that can be used with the BrowsingDataRemover.
   // Returns true if parsing was successful.
   // Pre-condition: `options` is a dictionary.
   bool ParseOriginTypeMask(const base::Value::Dict& options,
                            uint64_t* origin_type_mask);
 
-  // Parses the developer-provided list of origins into |result|.
+  // Parses the developer-provided list of origins into `result`.
   // Returns whether or not parsing was successful. In case of parse failure,
-  // |error_response| will contain the error response.
-  bool ParseOrigins(const base::Value::List& list_value,
-                    std::vector<url::Origin>* result,
-                    ResponseValue* error_response);
+  // `error_response` will contain the error response.
+  using OriginParsingResult =
+      base::expected<std::vector<url::Origin>, ResponseValue>;
+  OriginParsingResult ParseOrigins(const base::Value::List& list_value);
 
   // Called when we're ready to start removing data.
   void StartRemoving();
 
   // Called when a task is finished. Will finish the extension call when
-  // |pending_tasks_| reaches zero.
+  // `pending_tasks_` reaches zero.
   void OnTaskFinished();
 
   base::Time remove_since_;
@@ -154,8 +176,6 @@ class BrowsingDataRemoverFunction
   base::ScopedObservation<content::BrowsingDataRemover,
                           content::BrowsingDataRemover::Observer>
       observation_{this};
-  std::unique_ptr<AccountReconcilor::ScopedSyncedDataDeletion>
-      synced_data_deletion_;
 };
 
 class BrowsingDataRemoveAppcacheFunction : public BrowsingDataRemoverFunction {
@@ -303,6 +323,7 @@ class BrowsingDataRemovePasswordsFunction : public BrowsingDataRemoverFunction {
 
   // BrowsingDataRemoverFunction:
   bool GetRemovalMask(uint64_t* removal_mask) override;
+  bool IsRemovalDeprecated() override;
 };
 
 class BrowsingDataRemoveServiceWorkersFunction

@@ -15,7 +15,7 @@ const char kDeviceEventLogEntry[] = "device_event_log";
 DeviceEventLogSource::DeviceEventLogSource()
     : SystemLogsSource("DeviceEvent") {}
 
-DeviceEventLogSource::~DeviceEventLogSource() {}
+DeviceEventLogSource::~DeviceEventLogSource() = default;
 
 void DeviceEventLogSource::Fetch(SysLogsSourceCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -25,10 +25,10 @@ void DeviceEventLogSource::Fetch(SysLogsSourceCallback callback) {
   const int kMaxDeviceEventsForAboutSystem = 4000;
   (*response)[kNetworkEventLogEntry] = device_event_log::GetAsString(
       device_event_log::OLDEST_FIRST, "unixtime,file,level", "network",
-      device_event_log::kDefaultLogLevel, kMaxDeviceEventsForAboutSystem);
+      device_event_log::LOG_LEVEL_EVENT, kMaxDeviceEventsForAboutSystem);
   (*response)[kDeviceEventLogEntry] = device_event_log::GetAsString(
       device_event_log::OLDEST_FIRST, "unixtime,file,type,level", "non-network",
-      device_event_log::LOG_LEVEL_DEBUG, kMaxDeviceEventsForAboutSystem);
+      device_event_log::LOG_LEVEL_EVENT, kMaxDeviceEventsForAboutSystem);
   std::move(callback).Run(std::move(response));
 }
 

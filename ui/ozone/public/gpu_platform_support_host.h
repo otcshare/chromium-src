@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
+#include "base/functional/callback_forward.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace ui {
@@ -32,6 +32,10 @@ class COMPONENT_EXPORT(OZONE_BASE) GpuPlatformSupportHost {
 
   GpuPlatformSupportHost();
   virtual ~GpuPlatformSupportHost();
+
+  // Called when the HDR state changes or is first received.
+  // This is called from browser UI thread.
+  virtual void OnHdrEnabledChanged(bool hdr_enabled);
 
   // Called when the GPU process is destroyed.
   // This is called from browser UI thread.

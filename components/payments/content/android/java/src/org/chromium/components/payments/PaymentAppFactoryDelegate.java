@@ -4,10 +4,13 @@
 
 package org.chromium.components.payments;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * Interface for providing information to a payment app factory and receiving the list of payment
  * apps.
  */
+@NullMarked
 public interface PaymentAppFactoryDelegate {
     /** @return The information that a factory needs to create payment apps. */
     PaymentAppFactoryParams getParams();
@@ -31,9 +34,9 @@ public interface PaymentAppFactoryDelegate {
      * Called when a payment app factory has failed to create a payment app.
      *
      * @param errorMessage The error message for the web developer, e.g., "Failed to download the
-     * web app manifest file."
+     *     web app manifest file."
      * @param errorReason The reason for the error, used internally to decide on specific failure
-     * handling behavior.
+     *     handling behavior.
      */
     default void onPaymentAppCreationError(
             String errorMessage, @AppCreationFailureReason int errorReason) {}
@@ -47,17 +50,23 @@ public interface PaymentAppFactoryDelegate {
     default void onDoneCreatingPaymentApps(PaymentAppFactoryInterface factory) {}
 
     /**
-     * Forces canMakePayment() and hasEnrolledInstrument() to return true even when no payment
-     * app is created.
+     * Forces canMakePayment() and hasEnrolledInstrument() to return true even when no payment app
+     * is created.
      */
     default void setCanMakePaymentEvenWithoutApps() {}
 
-    /**
-     * Records that an Opt Out experience will be offered to the user in the
-     * current UI flow.
-     */
+    /** Records that an Opt Out experience will be offered to the user in the current UI flow. */
     default void setOptOutOffered() {}
 
-    /** @return The Content-Security-Policy (CSP) checker. */
-    CSPChecker getCSPChecker();
+    /**
+     * Returns true if an internal payment app factory has been registered.
+     *
+     * <p>Note that this is not part of {@link PaymentAppFactoryParams} because the layer that
+     * provides that information does not know if an internal factory has been registered.
+     *
+     * <p>TODO(crbug.com/400531531): Stop special-casing internal payment apps in Chrome.
+     */
+    default boolean internalPaymentAppFactoryPresent() {
+        return false;
+    }
 }

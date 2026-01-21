@@ -6,11 +6,12 @@
 #define CONTENT_BROWSER_INDEXED_DB_INDEXED_DB_DATA_FORMAT_VERSION_H_
 
 #include <cstdint>
+#include <optional>
 
-#include "base/check_op.h"
+#include "base/numerics/safe_conversions.h"
 #include "content/common/content_export.h"
 
-namespace content {
+namespace content::indexed_db {
 
 // Contains version data for the wire format used for encoding IndexedDB values.
 // A version tuple (a, b) is at least as new as (a', b')
@@ -30,13 +31,8 @@ class IndexedDBDataFormatVersion {
   uint32_t v8_version() const { return v8_version_; }
   uint32_t blink_version() const { return blink_version_; }
 
-  bool operator==(const IndexedDBDataFormatVersion& other) const {
-    return v8_version_ == other.v8_version_ &&
-           blink_version_ == other.blink_version_;
-  }
-  bool operator!=(const IndexedDBDataFormatVersion& other) const {
-    return !operator==(other);
-  }
+  friend bool operator==(const IndexedDBDataFormatVersion&,
+                         const IndexedDBDataFormatVersion&) = default;
 
   bool IsAtLeast(const IndexedDBDataFormatVersion& other) const {
     return v8_version_ >= other.v8_version_ &&
@@ -50,12 +46,15 @@ class IndexedDBDataFormatVersion {
     // Since negative values are considered invalid, this scheme will only work
     // as long as the v8 version would not overflow int32_t.  We check both
     // components, to be consistent.
-    DCHECK_GE(static_cast<int32_t>(v8_version_), 0);
-    DCHECK_GE(static_cast<int32_t>(blink_version_), 0);
+    base::checked_cast<int32_t>(v8_version_);
+    base::checked_cast<int32_t>(blink_version_);
+
     return (static_cast<int64_t>(v8_version_) << 32) | blink_version_;
   }
-  static IndexedDBDataFormatVersion Decode(int64_t encoded) {
-    DCHECK_GE(encoded, 0);
+  static std::optional<IndexedDBDataFormatVersion> Decode(int64_t encoded) {
+    if (encoded < 0) {
+      return std::nullopt;
+    }
     return IndexedDBDataFormatVersion(encoded >> 32, encoded);
   }
 
@@ -66,6 +65,6 @@ class IndexedDBDataFormatVersion {
   CONTENT_EXPORT static IndexedDBDataFormatVersion current_;
 };
 
-}  // namespace content
+}  // namespace content::indexed_db
 
 #endif  // CONTENT_BROWSER_INDEXED_DB_INDEXED_DB_DATA_FORMAT_VERSION_H_

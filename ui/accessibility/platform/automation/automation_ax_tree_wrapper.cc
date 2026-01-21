@@ -4,8 +4,9 @@
 
 #include "ui/accessibility/platform/automation/automation_ax_tree_wrapper.h"
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <map>
+#include <vector>
+
 #include "base/no_destructor.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
@@ -42,11 +43,22 @@ std::map<std::string, std::vector<AppNodeInfo>>& GetAppIDToTreeNodeMap() {
 }
 
 AutomationAXTreeWrapper::AutomationAXTreeWrapper(
-    AXTreeID tree_id,
     AutomationTreeManagerOwner* owner)
-    : AXTreeManager(tree_id, std::make_unique<AXTree>()), owner_(owner) {}
+    : AXTreeManager(std::make_unique<AXTree>()), owner_(owner) {}
 
-AutomationAXTreeWrapper::~AutomationAXTreeWrapper() = default;
+AutomationAXTreeWrapper::~AutomationAXTreeWrapper() {
+  // Code paths, when not exiting gracefully, may leave a reference to an
+  // invalid pointer in the map (which is static). One known case is tests that
+  // create a tree with a child tree and do not destroy the objects through
+  // automation standard ways (resetting automation, disabling an individual
+  // tree).
+  std::map<AXTreeID, AutomationAXTreeWrapper*>& child_tree_id_reverse_map =
+      GetChildTreeIDReverseMap();
+  const auto& child_tree_ids = ax_tree_->GetAllChildTreeIds();
+  std::erase_if(child_tree_id_reverse_map, [&child_tree_ids](auto& pair) {
+    return child_tree_ids.count(pair.first);
+  });
+}
 
 // static
 AutomationAXTreeWrapper* AutomationAXTreeWrapper::GetParentOfTreeId(
@@ -64,12 +76,11 @@ bool AutomationAXTreeWrapper::OnAccessibilityEvents(
     const AXTreeID& tree_id,
     const std::vector<AXTreeUpdate>& updates,
     const std::vector<AXEvent>& events,
-    gfx::Point mouse_location,
-    bool is_active_profile) {
+    gfx::Point mouse_location) {
   TRACE_EVENT0("accessibility",
                "AutomationAXTreeWrapper::OnAccessibilityEvents");
 
-  absl::optional<gfx::Rect> previous_accessibility_focused_global_bounds =
+  std::optional<gfx::Rect> previous_accessibility_focused_global_bounds =
       owner_->GetAccessibilityFocusedLocation();
 
   std::map<AXTreeID, AutomationAXTreeWrapper*>& child_tree_id_reverse_map =
@@ -80,7 +91,7 @@ bool AutomationAXTreeWrapper::OnAccessibilityEvents(
   // there are no entries in this map for a given child tree to |this|, if this
   // is the first event from |this| tree or if |this| was destroyed and (and
   // then reset).
-  base::EraseIf(child_tree_id_reverse_map, [child_tree_ids](auto& pair) {
+  std::erase_if(child_tree_id_reverse_map, [&child_tree_ids](auto& pair) {
     return child_tree_ids.count(pair.first);
   });
 
@@ -97,26 +108,18 @@ bool AutomationAXTreeWrapper::OnAccessibilityEvents(
       return false;
     }
 
-    if (is_active_profile) {
       owner_->SendNodesRemovedEvent(ax_tree(), deleted_node_ids_);
 
       if (update.nodes.size() && did_send_tree_change_during_unserialization_) {
         owner_->SendTreeChangeEvent(ax::mojom::Mutation::kSubtreeUpdateEnd,
                                     ax_tree(), ax_tree_->root());
       }
-    }
   }
 
   // Refresh child tree id  mappings.
   for (const AXTreeID& child_tree_id : ax_tree_->GetAllChildTreeIds()) {
-    DCHECK(!base::Contains(child_tree_id_reverse_map, child_tree_id));
+    DCHECK(!child_tree_id_reverse_map.contains(child_tree_id));
     child_tree_id_reverse_map.insert(std::make_pair(child_tree_id, this));
-  }
-
-  // Exit early if this isn't the active profile.
-  if (!is_active_profile) {
-    event_generator_.ClearEvents();
-    return true;
   }
 
   // Perform language detection first thing if we see a load complete event.
@@ -149,16 +152,17 @@ bool AutomationAXTreeWrapper::OnAccessibilityEvents(
   // Send auto-generated AXEventGenerator events.
   for (const auto& targeted_event : event_generator_) {
     if (ShouldIgnoreGeneratedEventForAutomation(
-            targeted_event.event_params.event))
+            targeted_event.event_params->event)) {
       continue;
+    }
     AXEvent generated_event;
     generated_event.id = targeted_event.node_id;
-    generated_event.event_from = targeted_event.event_params.event_from;
+    generated_event.event_from = targeted_event.event_params->event_from;
     generated_event.event_from_action =
-        targeted_event.event_params.event_from_action;
-    generated_event.event_intents = targeted_event.event_params.event_intents;
+        targeted_event.event_params->event_from_action;
+    generated_event.event_intents = targeted_event.event_params->event_intents;
     owner_->SendAutomationEvent(tree_id, mouse_location, generated_event,
-                                targeted_event.event_params.event);
+                                targeted_event.event_params->event);
   }
   event_generator_.ClearEvents();
 
@@ -310,6 +314,8 @@ void AutomationAXTreeWrapper::EventListenerAdded(
     const std::tuple<ax::mojom::Event, AXEventGenerator::Event>& event_type,
     AXNode* node) {
   node_id_to_events_[node->id()].insert(event_type);
+
+  event_generator_.RegisterEventOnNode(std::get<1>(event_type), node->id());
 }
 
 void AutomationAXTreeWrapper::EventListenerRemoved(
@@ -321,6 +327,8 @@ void AutomationAXTreeWrapper::EventListenerRemoved(
     if (it->second.empty())
       node_id_to_events_.erase(it);
   }
+
+  event_generator_.UnregisterEventOnNode(std::get<1>(event_type), node->id());
 }
 
 bool AutomationAXTreeWrapper::HasEventListener(
@@ -390,7 +398,15 @@ std::vector<AXNode*> AutomationAXTreeWrapper::GetChildTreeNodesForAppID(
     if (!wrapper)
       continue;
 
-    nodes.push_back(wrapper->ax_tree()->GetFromId(app_node_info.node_id));
+    AXNode* node = wrapper->ax_tree()->GetFromId(app_node_info.node_id);
+    // We don't expect this to ever be null, however in crbug.com/269669313 we
+    // see that it is occasionally null. This DCHECK might help sus out what's
+    // going on, meanwhile don't add the node to the result if it is null to
+    // avoid crashes in non-debug builds.
+    DCHECK(node);
+    if (node != nullptr) {
+      nodes.push_back(node);
+    }
   }
 
   return nodes;
@@ -424,7 +440,7 @@ void AutomationAXTreeWrapper::OnStringAttributeChanged(
     if (new_value.empty()) {
       auto it = GetAppIDToTreeNodeMap().find(old_value);
       if (it != GetAppIDToTreeNodeMap().end()) {
-        base::EraseIf(it->second, [node](const AppNodeInfo& app_node_info) {
+        std::erase_if(it->second, [node](const AppNodeInfo& app_node_info) {
           return app_node_info.node_id == node->id();
         });
         if (it->second.empty()) {
@@ -457,7 +473,7 @@ void AutomationAXTreeWrapper::OnNodeWillBeDeleted(AXTree* tree, AXNode* node) {
         node->GetStringAttribute(ax::mojom::StringAttribute::kAppId);
     auto it = GetAppIDToTreeNodeMap().find(app_id);
     if (it != GetAppIDToTreeNodeMap().end()) {
-      base::EraseIf(it->second, [node](const AppNodeInfo& app_node_info) {
+      std::erase_if(it->second, [node](const AppNodeInfo& app_node_info) {
         return app_node_info.node_id == node->id();
       });
 
@@ -547,15 +563,8 @@ bool AutomationAXTreeWrapper::IsTreeIgnored() {
   return false;
 }
 
-AXNode* AutomationAXTreeWrapper::GetNodeFromTree(const AXTreeID& tree_id,
-                                                 const AXNodeID node_id) const {
-  AutomationAXTreeWrapper* tree_wrapper =
-      owner_->GetAutomationAXTreeWrapperFromTreeID(tree_id);
-  return tree_wrapper ? tree_wrapper->GetNode(node_id) : nullptr;
-}
-
 AXTreeID AutomationAXTreeWrapper::GetParentTreeID() const {
-  AutomationAXTreeWrapper* parent_tree = GetParentOfTreeId(ax_tree_id_);
+  AutomationAXTreeWrapper* parent_tree = GetParentOfTreeId(GetTreeID());
   return parent_tree ? parent_tree->GetTreeID() : AXTreeIDUnknown();
 }
 

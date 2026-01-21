@@ -5,11 +5,11 @@
 #ifndef COMPONENTS_MEDIA_ROUTER_COMMON_MEDIA_SOURCE_H_
 #define COMPONENTS_MEDIA_ROUTER_COMMON_MEDIA_SOURCE_H_
 
+#include <optional>
 #include <ostream>
 #include <string>
 
 #include "base/hash/hash.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace media {
@@ -82,10 +82,10 @@ class MediaSource {
 
   bool operator<(const MediaSource& other) const { return id_ < other.id(); }
 
-  // Compare operator for absl::optional<MediaSource>
+  // Compare operator for std::optional<MediaSource>
   struct Cmp {
-    bool operator()(const absl::optional<MediaSource>& source1,
-                    const absl::optional<MediaSource>& source2) const {
+    bool operator()(const std::optional<MediaSource>& source1,
+                    const std::optional<MediaSource>& source2) const {
       Id id1 = (source1.has_value()) ? (source1->id()) : "";
       Id id2 = (source2.has_value()) ? (source2->id()) : "";
       return id1 < id2;
@@ -102,9 +102,8 @@ class MediaSource {
                                        media::AudioCodec audio_codec);
 
   // Creates a media source for a specific desktop.
-  // |registered_desktop_stream_id| is the string returned by
-  // content::DesktopStreamsRegistry::RegisterStream().
-  static MediaSource ForDesktop(const std::string& registered_desktop_stream_id,
+  // `desktop_media_id` is the string representing content::DesktopMediaID.
+  static MediaSource ForDesktop(const std::string& desktop_media_id,
                                 bool with_audio);
 
   // Creates a media source representing a yet-to-be-chosen desktop, screen or
@@ -114,8 +113,7 @@ class MediaSource {
   // desktop/screen/window.
   static MediaSource ForUnchosenDesktop();
 
-  // Returns true if source outputs its content via tab mirroring and isn't a
-  // local file.
+  // Returns true if source outputs its content via tab mirroring.
   bool IsTabMirroringSource() const;
 
   // Returns true if source outputs its content via desktop mirroring.
@@ -129,22 +127,25 @@ class MediaSource {
 
   // Parses the ID and returns the SessionTabHelper tab ID referencing a source
   // tab.  Don't rely on this method returning something useful without first
-  // calling IsTabMirroringSource(); it will return 0 for for ForLocalFile()
-  // source and -1 for non-tab sources or the ForAnyTab() source.
-  int TabId() const;
+  // calling IsTabMirroringSource(); Returns std::nullopt for non-tab sources
+  // or the ForAnyTab() source.
+  std::optional<int> TabId() const;
 
-  // When this source was created by ForDesktop(), returns the stream ID to pass
-  // to content::DesktopStreamsRegistry::RequestMediaForStreamId(). Otherwise,
-  // returns absl::nullopt.
-  absl::optional<std::string> DesktopStreamId() const;
+  // Parse the tab ID from the RemotePlayback source. Returns std::nullopt for
+  // non-RemotePlayback sources or invalid formats.
+  std::optional<int> TabIdFromRemotePlaybackSource() const;
+
+  // When this source was created by ForDesktop(), returns the string
+  // representing content::DesktopMediaID. Otherwise, returns std::nullopt.
+  std::optional<std::string> DesktopStreamId() const;
 
   // Returns true if this source represents desktop capture that also provides
   // audio loopback capture. Returns false otherwise.
   bool IsDesktopSourceWithAudio() const;
 
   // Returns true this source outputs its content via DIAL.
-  // TODO(crbug.com/804419): Move this to in-browser DIAL/Cast MRP when we have
-  // one.
+  // TODO(crbug.com/41366226): Move this to in-browser DIAL/Cast MRP when we
+  // have one.
   bool IsDialSource() const;
 
   // Returns empty string if this source is not DIAL media source, or is not a
@@ -153,6 +154,15 @@ class MediaSource {
 
   // Returns a shortened copy of the media source ID suitable for logging.
   std::string TruncateForLogging(size_t max_length) const;
+
+  // Append the "&tab_id=xxx" string to the presentation url. The `tab_id` is
+  // used for MediaDialogView to associate the local media session notification
+  // with a Reote Playback MediaRoute so that users can control Remote Playback
+  // session from GMC.
+  // TODO(crbug.com/1491212): remove the `tab_id` field from the MediaSource
+  // and use the MVC model in GMC to handle Remote Playback UI presentation
+  // logic.
+  void AppendTabIdToRemotePlaybackUrlQuery(int tab_id);
 
  private:
   MediaSource::Id id_;

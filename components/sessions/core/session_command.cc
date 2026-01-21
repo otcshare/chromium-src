@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/sessions/core/session_command.h"
+
 #include <algorithm>
 #include <limits>
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/pickle.h"
-#include "components/sessions/core/session_command.h"
 
 namespace sessions {
 
@@ -20,7 +23,7 @@ SessionCommand::SessionCommand(id_type id, const base::Pickle& pickle)
     : id_(id),
       contents_(pickle.size(), 0) {
   DCHECK(pickle.size() < std::numeric_limits<size_type>::max());
-  memcpy(contents(), pickle.data(), pickle.size());
+  contents().copy_from(pickle);
 }
 
 SessionCommand::size_type SessionCommand::GetSerializedSize() const {
@@ -34,12 +37,12 @@ SessionCommand::size_type SessionCommand::GetSerializedSize() const {
 bool SessionCommand::GetPayload(void* dest, size_t count) const {
   if (size() != count)
     return false;
-  memcpy(dest, &(contents_[0]), count);
+  UNSAFE_TODO(memcpy(dest, &(contents_[0]), count));
   return true;
 }
 
-std::unique_ptr<base::Pickle> SessionCommand::PayloadAsPickle() const {
-  return std::make_unique<base::Pickle>(contents(), static_cast<int>(size()));
+base::Pickle SessionCommand::PayloadAsPickle() const {
+  return base::Pickle::WithUnownedBuffer(base::as_byte_span(contents_));
 }
 
 }  // namespace sessions

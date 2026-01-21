@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
 
 namespace app_list {
@@ -61,12 +62,14 @@ inline void InsertBin(Bins& bins, double lower_divider, double count) {
 ScoreNormalizer::ScoreNormalizer(ScoreNormalizer::Proto proto,
                                  const Params& params)
     : proto_(std::move(proto)), params_(params) {
-  proto_.RegisterOnRead(base::BindOnce(&ScoreNormalizer::OnProtoRead,
-                                       weak_factory_.GetWeakPtr()));
+  // `proto_` is a class member so it is safe to call `RegisterOnInitUnsafe()`.
+  proto_.RegisterOnInitUnsafe(
+      base::BindOnce(&ScoreNormalizer::OnProtoInit, base::Unretained(this)));
+
   proto_.Init();
 }
 
-ScoreNormalizer::~ScoreNormalizer() {}
+ScoreNormalizer::~ScoreNormalizer() = default;
 
 double ScoreNormalizer::Normalize(const std::string& name, double score) const {
   // If we haven't finished initializing, return a default score.
@@ -87,6 +90,12 @@ double ScoreNormalizer::Normalize(const std::string& name, double score) const {
   // If we only have zero or one bins, there's no reasonable normalized score to
   // return, so use the default.
   if (size < 2) {
+    return kDefaultScore;
+  }
+
+  // If all bins expect the first have the same lower divider, the normalized
+  // score is meaningless, so use the default.
+  if (size > 2 && bins[1].lower_divider() == bins[size - 1].lower_divider()) {
     return kDefaultScore;
   }
 
@@ -238,7 +247,7 @@ void ScoreNormalizer::Update(const std::string& name, double score) {
   proto_.QueueWrite();
 }
 
-void ScoreNormalizer::OnProtoRead(ReadStatus status) {
+void ScoreNormalizer::OnProtoInit() {
   DCHECK(proto_.initialized());
 
   if ((proto_->has_model_version() &&

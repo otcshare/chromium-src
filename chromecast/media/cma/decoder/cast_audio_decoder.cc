@@ -7,12 +7,15 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
@@ -23,6 +26,7 @@
 #include "chromecast/media/common/base/decoder_config_logging.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/cdm_context.h"
 #include "media/base/channel_layout.h"
 #include "media/base/decoder_buffer.h"
@@ -30,7 +34,6 @@
 #include "media/base/sample_format.h"
 #include "media/base/status.h"
 #include "media/filters/ffmpeg_audio_decoder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromecast {
 namespace media {
@@ -41,23 +44,17 @@ namespace {
 // This class does not take the ownership of the data. The DecoderBufferBase
 // is still responsible for deleting the data. This class holds a reference
 // to the DecoderBufferBase so that it lives longer than this DecoderBuffer.
-class DecoderBuffer : public ::media::DecoderBuffer {
+class DecoderBufferExternalMemory
+    : public ::media::DecoderBuffer::ExternalMemory {
  public:
-  DecoderBuffer(scoped_refptr<DecoderBufferBase> buffer)
-      : ::media::DecoderBuffer(
-            std::unique_ptr<uint8_t[]>(const_cast<uint8_t*>(buffer->data())),
-            buffer->data_size()),
-        buffer_(std::move(buffer)) {
-    set_timestamp(::base::Microseconds(buffer_->timestamp()));
+  explicit DecoderBufferExternalMemory(scoped_refptr<DecoderBufferBase> buffer)
+      : buffer_(std::move(buffer)) {}
+
+  const base::span<const uint8_t> Span() const override {
+    return UNSAFE_TODO({buffer_->data(), buffer_->data_size()});
   }
 
  private:
-  ~DecoderBuffer() override {
-    // Releases the data to prevent it from being deleted.
-    DCHECK_EQ(data_.get(), buffer_->data());
-    data_.release();
-  }
-
   scoped_refptr<DecoderBufferBase> buffer_;
 };
 
@@ -147,12 +144,19 @@ class CastAudioDecoderImpl : public CastAudioDecoder {
 
     // FFmpegAudioDecoder requires a timestamp to be set.
     base::TimeDelta timestamp = base::Microseconds(data->timestamp());
-    if (timestamp == ::media::kNoTimestamp)
-      data->set_timestamp(base::TimeDelta());
+    if (timestamp == ::media::kNoTimestamp) {
+      timestamp = base::TimeDelta();
+      data->set_timestamp(timestamp);
+    }
 
     decode_pending_ = true;
     pending_decode_callback_ = std::move(decode_callback);
-    decoder_->Decode(base::WrapRefCounted(new DecoderBuffer(std::move(data))),
+
+    auto media_buffer = ::media::DecoderBuffer::FromExternalMemory(
+        std::make_unique<DecoderBufferExternalMemory>(std::move(data)));
+    media_buffer->set_timestamp(timestamp);
+
+    decoder_->Decode(std::move(media_buffer),
                      base::BindRepeating(&CastAudioDecoderImpl::OnDecodeStatus,
                                          weak_this_, timestamp));
   }
@@ -281,9 +285,9 @@ class CastAudioDecoderImpl : public CastAudioDecoder {
       // Data in an AudioBus is already in planar float format; just copy each
       // channel into the result buffer in order.
       float* ptr = reinterpret_cast<float*>(result->writable_data());
-      for (int c = 0; c < bus->channels(); ++c) {
-        std::copy_n(bus->channel(c), num_frames, ptr);
-        ptr += num_frames;
+      for (auto channel : bus->AllChannels()) {
+        std::copy_n(channel.data(), num_frames, ptr);
+        UNSAFE_TODO(ptr += num_frames);
       }
     } else {
       NOTREACHED();
@@ -347,7 +351,6 @@ int CastAudioDecoder::OutputFormatSizeInBytes(
       return 4;
   }
   NOTREACHED();
-  return 1;
 }
 
 }  // namespace media

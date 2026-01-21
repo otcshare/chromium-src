@@ -5,35 +5,42 @@
 #ifndef COMPONENTS_DOM_DISTILLER_CORE_DOM_DISTILLER_FEATURES_H_
 #define COMPONENTS_DOM_DISTILLER_CORE_DOM_DISTILLER_FEATURES_H_
 
+#include "base/component_export.h"
 #include "base/feature_list.h"
-
-class PrefService;
-
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
 
 namespace dom_distiller {
 
-BASE_DECLARE_FEATURE(kReaderMode);
-
-void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
-
 // Returns true when flag enable-dom-distiller is set or reader mode is enabled
 // from flags or Finch.
-bool IsDomDistillerEnabled();
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool IsDomDistillerEnabled();
 
-// Returns true when reader mode flag is enabled and the flag parameter to add
-// "offer reader mode" in chrome://settings is set.
-bool OfferReaderModeInSettings();
-
-// Returns true if a user should be shown the option to view pages in reader
-// mode, when available. This happens when either:
-// A. OfferReaderModeInSettings is true and kOfferReaderMode pref is enabled,
-// B. or OfferReaderModeInSettings is false, but IsDomDistillerEnabled is true.
-bool ShowReaderModeOption(PrefService* pref_service);
-
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
 bool ShouldStartDistillabilityService();
+
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeUseReadability);
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool ShouldUseReadabilityDistiller();
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool ShouldUseReadabilityHeuristic();
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) int GetReadabilityHeuristicMinScore();
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+int GetReadabilityHeuristicMinContentLength();
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+int GetMinimumAllowableDistilledContentLength();
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeSupportNewFonts);
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+// Feature declarations below -- alphabetical order.
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeDistillInApp);
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeDistillInAppFastFollows);
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeImprovements);
+#endif
 
 }  // namespace dom_distiller
 

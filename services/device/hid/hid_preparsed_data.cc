@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "base/compiler_specific.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
@@ -302,11 +303,13 @@ HidPreparsedData::GetReportItems(HIDP_REPORT_TYPE report_type) const {
 
   const auto* data = reinterpret_cast<const uint8_t*>(preparsed_data_);
   const auto* items = reinterpret_cast<const PreparsedDataItem*>(
-      data + sizeof(PreparsedDataHeader));
+      UNSAFE_TODO(data + sizeof(PreparsedDataHeader)));
   std::vector<ReportItem> report_items;
   for (size_t i = min_index; i < min_index + item_count; ++i) {
-    if (ValidatePreparsedDataItem(items[i]))
-      report_items.push_back(MakeReportItemFromPreparsedData(items[i]));
+    if (ValidatePreparsedDataItem(UNSAFE_TODO(items[i]))) {
+      report_items.push_back(
+          MakeReportItemFromPreparsedData(UNSAFE_TODO(items[i])));
+    }
   }
 
   return report_items;

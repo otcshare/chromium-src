@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "base/compiler_specific.h"
 #include "ui/events/devices/x11/events_devices_x11_export.h"
 
 namespace ui {
@@ -14,13 +15,13 @@ namespace ui {
 EVENTS_DEVICES_X11_EXPORT
 inline void SetXinputMask(void* mask, unsigned int opcode) {
   const auto bit = 1 << (opcode & 7);
-  static_cast<uint8_t*>(mask)[opcode / 8] |= bit;
+  UNSAFE_TODO(static_cast<uint8_t*>(mask)[opcode / 8]) |= bit;
 }
 
 EVENTS_DEVICES_X11_EXPORT
 inline bool IsXinputMaskSet(const void* mask, unsigned int opcode) {
   const auto bit = 1 << (opcode & 7);
-  return static_cast<const uint8_t*>(mask)[opcode / 8] & bit;
+  return UNSAFE_TODO(static_cast<const uint8_t*>(mask)[opcode / 8]) & bit;
 }
 
 }  // namespace ui

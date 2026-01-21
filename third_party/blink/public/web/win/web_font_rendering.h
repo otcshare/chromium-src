@@ -10,16 +10,12 @@
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 
-class SkFontMgr;
-class SkTypeface;
-
 namespace blink {
 
 class WebFontRenderingClient;
 
 class BLINK_EXPORT WebFontRendering {
  public:
-  static void SetSkiaFontManager(sk_sp<SkFontMgr>);
   // Set an instance of |WebFontPrewarmer|. The instance must be kept alive
   // until the process exits.
   static void SetFontPrewarmer(WebFontPrewarmer*);
@@ -27,7 +23,6 @@ class BLINK_EXPORT WebFontRendering {
   // alive until the process exits.
   static void SetFontRenderingClient(WebFontRenderingClient*);
   static WebFontPrewarmer* GetFontPrewarmer();
-  static void AddSideloadedFontForTesting(sk_sp<SkTypeface>);
   static void SetMenuFontMetrics(const WebString& family_name,
                                  int32_t font_height);
   static void SetSmallCaptionFontMetrics(const WebString& family_name,
@@ -36,7 +31,6 @@ class BLINK_EXPORT WebFontRendering {
                                    int32_t font_height);
   static void SetAntialiasedTextEnabled(bool);
   static void SetLCDTextEnabled(bool);
-  static void SetUseSkiaFontFallback(bool);
 };
 
 }  // namespace blink

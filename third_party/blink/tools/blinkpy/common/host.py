@@ -27,7 +27,9 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import functools
 import logging
+import os
 
 from blinkpy.common.checkout.git import Git
 from blinkpy.common.net import web
@@ -36,16 +38,16 @@ from blinkpy.common.net.results_fetcher import TestResultsFetcher
 from blinkpy.common.system.system_host import SystemHost
 from blinkpy.web_tests.builder_list import BuilderList
 from blinkpy.web_tests.port.factory import PortFactory
+from blinkpy.w3c.chromium_configs import ChromiumWPTConfig
 
 _log = logging.getLogger(__name__)
 
 
 class Host(SystemHost):
-    def __init__(self):
+    def __init__(self, project_config_factory=ChromiumWPTConfig):
         SystemHost.__init__(self)
         self.web = web.Web()
-
-        self._git = None
+        self.project_config = project_config_factory(self.filesystem)
 
         # FIXME: Unfortunately Port objects are currently the central-dispatch objects of the NRWT world.
         # In order to instantiate a port correctly, we have to pass it at least an executive, user, git, and filesystem
@@ -57,16 +59,14 @@ class Host(SystemHost):
         self.builders = BuilderList.load_default_builder_list(self.filesystem)
         self.results_fetcher = TestResultsFetcher.from_host(self)
 
-    def git(self, path=None):
-        if path:
-            return Git(
-                cwd=path,
-                executive=self.executive,
-                filesystem=self.filesystem,
-                platform=self.platform)
-        if not self._git:
-            self._git = Git(
-                filesystem=self.filesystem,
-                executive=self.executive,
-                platform=self.platform)
-        return self._git
+    def git(self, path: os.PathLike | None = None) -> Git | None:
+        return _cached_git(cwd=path,
+                           executive=self.executive,
+                           filesystem=self.filesystem,
+                           platform=self.platform)
+
+
+@functools.cache
+def _cached_git(**kwargs) -> Git | None:
+    git = Git(**kwargs)
+    return git if git.checkout_root else None

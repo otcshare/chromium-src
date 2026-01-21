@@ -5,24 +5,27 @@
 #include "chrome/browser/media/cast_mirroring_service_host.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/cast_remoting_connector.h"
 #include "chrome/browser/media/router/discovery/access_code/access_code_cast_feature.h"
+#include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_ui.h"
 #include "components/access_code_cast/common/access_code_cast_metrics.h"
 #include "components/mirroring/browser/single_client_video_capture_host.h"
@@ -43,14 +46,17 @@
 #include "content/public/browser/web_contents.h"
 #include "media/audio/audio_device_description.h"
 #include "media/base/media_switches.h"
+#include "media/capture/mojom/video_capture.mojom.h"
+#include "media/capture/video_capture_types.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom.h"
 #include "media/mojo/mojom/audio_input_stream.mojom.h"
 #include "media/mojo/mojom/audio_processing.mojom.h"
+#include "media/mojo/services/mojo_video_encoder_metrics_provider_service.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/viz/public/mojom/gpu.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -72,27 +78,42 @@ constexpr gfx::Size kMaxResolution(1920, 1080);
 // Command line arguments that should be passed to the mirroring service.
 static const char* kPassthroughSwitches[]{
     switches::kCastStreamingForceEnableHardwareH264,
-    switches::kCastStreamingForceDisableHardwareH264,
     switches::kCastStreamingForceEnableHardwareVp8,
-    switches::kCastStreamingForceDisableHardwareVp8};
+    switches::kCastStreamingForceEnableHardwareVp9,
+    switches::kCastStreamingForceDisableHardwareH264,
+    switches::kCastStreamingForceDisableHardwareVp8,
+    switches::kCastStreamingForceDisableHardwareVp9};
 
-void CreateVideoCaptureHostOnIO(
+mojo::SelfOwnedReceiverRef<media::mojom::VideoCaptureHost>
+CreateVideoCaptureHostOnIO(
     const std::string& device_id,
     blink::mojom::MediaStreamType type,
     mojo::PendingReceiver<media::mojom::VideoCaptureHost> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  scoped_refptr<base::SingleThreadTaskRunner> device_task_runner =
-      base::ThreadPool::CreateSingleThreadTaskRunner(
-          {base::TaskPriority::USER_BLOCKING,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-          base::SingleThreadTaskRunnerThreadMode::DEDICATED);
-  mojo::MakeSelfOwnedReceiver(
+  return mojo::MakeSelfOwnedReceiver(
       std::make_unique<SingleClientVideoCaptureHost>(
           device_id, type,
           base::BindRepeating(&content::VideoCaptureDeviceLauncher::
-                                  CreateInProcessVideoCaptureDeviceLauncher,
-                              std::move(device_task_runner))),
+                                  CreateDeviceLauncherFromMediaStreamManager)),
       std::move(receiver));
+}
+
+void PauseVideoCaptureHostOnIO(media::mojom::VideoCaptureHost* host,
+                               base::UnguessableToken device_id,
+                               base::OnceClosure on_paused_callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  host->Pause(device_id);
+  std::move(on_paused_callback).Run();
+}
+
+void ResumeVideoCaptureHostOnIO(media::mojom::VideoCaptureHost* host,
+                                base::UnguessableToken device_id,
+                                base::UnguessableToken session_id,
+                                media::VideoCaptureParams params,
+                                base::OnceClosure on_resumed_callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  host->Resume(device_id, session_id, params);
+  std::move(on_resumed_callback).Run();
 }
 
 blink::mojom::MediaStreamType ConvertVideoStreamType(
@@ -119,77 +140,35 @@ content::WebContents* GetContents(
                                        id.main_render_frame_id));
 }
 
+// Gets the profile associated with `web_contents`, if it exists. Else, gets the
+// last used profile if it is loaded.
+Profile* GetProfileOrLastUsedProfile(content::WebContents* web_contents) {
+  if (web_contents) {
+    return Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  }
+  return ProfileManager::GetLastUsedProfileIfLoaded();
+}
+
 // Returns true if this user is allowed to use Access Codes & QR codes to
 // discover cast devices, and AccessCodeCastTabSwitchingUI flag is enabled.
 bool IsAccessCodeCastTabSwitchingUIEnabled(
     const content::WebContentsMediaCaptureId& id) {
-  auto* web_contents = GetContents(id);
-  return web_contents &&
-         media_router::IsAccessCodeCastTabSwitchingUiEnabled(
-             Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+  Profile* profile = GetProfileOrLastUsedProfile(GetContents(id));
+  return media_router::IsAccessCodeCastTabSwitchingUiEnabled(profile);
 }
 
-content::DesktopMediaID BuildMediaIdForWebContents(
-    content::WebContents* contents) {
-  content::DesktopMediaID media_id;
-  if (!contents)
-    return media_id;
-  media_id.type = content::DesktopMediaID::TYPE_WEB_CONTENTS;
-  media_id.web_contents_id = content::WebContentsMediaCaptureId(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetID(),
-      contents->GetPrimaryMainFrame()->GetRoutingID(),
-      true /* disable_local_echo */);
-  return media_id;
-}
-
-// Returns the size of the primary display in pixels, or absl::nullopt if it
+// Returns the size of the primary display in pixels, or std::nullopt if it
 // cannot be determined.
-absl::optional<gfx::Size> GetScreenResolution() {
-  display::Screen* screen = display::Screen::GetScreen();
+std::optional<gfx::Size> GetScreenResolution() {
+  display::Screen* screen = display::Screen::Get();
   if (!screen) {
     DVLOG(1) << "Cannot get the Screen object.";
-    return absl::nullopt;
+    return std::nullopt;
   }
   return screen->GetPrimaryDisplay().GetSizeInPixel();
 }
 
 }  // namespace
-
-// static
-void CastMirroringServiceHost::GetForTab(
-    content::WebContents* target_contents,
-    mojo::PendingReceiver<mojom::MirroringServiceHost> receiver) {
-  if (target_contents) {
-    const content::DesktopMediaID media_id =
-        BuildMediaIdForWebContents(target_contents);
-    mojo::MakeSelfOwnedReceiver(
-        std::make_unique<CastMirroringServiceHost>(media_id),
-        std::move(receiver));
-  }
-}
-
-// static
-void CastMirroringServiceHost::GetForDesktop(
-    const content::DesktopMediaID& media_id,
-    mojo::PendingReceiver<mojom::MirroringServiceHost> receiver) {
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<CastMirroringServiceHost>(media_id),
-      std::move(receiver));
-}
-
-// static
-void CastMirroringServiceHost::GetForOffscreenTab(
-    content::BrowserContext* context,
-    const GURL& presentation_url,
-    const std::string& presentation_id,
-    mojo::PendingReceiver<mojom::MirroringServiceHost> receiver) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  auto host =
-      std::make_unique<CastMirroringServiceHost>(content::DesktopMediaID());
-  host->OpenOffscreenTab(context, presentation_url, presentation_id);
-  mojo::MakeSelfOwnedReceiver(std::move(host), std::move(receiver));
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-}
 
 CastMirroringServiceHost::CastMirroringServiceHost(
     content::DesktopMediaID source_media_id)
@@ -197,6 +176,7 @@ CastMirroringServiceHost::CastMirroringServiceHost(
       gpu_client_(nullptr, base::OnTaskRunnerDeleter(nullptr)),
       tab_switching_ui_enabled_(IsAccessCodeCastTabSwitchingUIEnabled(
           source_media_id.web_contents_id)) {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
   // Observe the target WebContents for Tab mirroring.
   if (source_media_id_.type == content::DesktopMediaID::TYPE_WEB_CONTENTS)
     Observe(GetContents(source_media_id_.web_contents_id));
@@ -210,7 +190,9 @@ void CastMirroringServiceHost::Start(
     mojom::SessionParametersPtr session_params,
     mojo::PendingRemote<mojom::SessionObserver> observer,
     mojo::PendingRemote<mojom::CastMessageChannel> outbound_channel,
-    mojo::PendingReceiver<mojom::CastMessageChannel> inbound_channel) {
+    mojo::PendingReceiver<mojom::CastMessageChannel> inbound_channel,
+    const std::string& sink_name) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Start() should not be called in the middle of a mirroring session.
   if (mirroring_service_) {
     LOG(WARNING) << "Unexpected Start() call during an active"
@@ -245,22 +227,37 @@ void CastMirroringServiceHost::Start(
       std::move(observer), std::move(provider), std::move(outbound_channel),
       std::move(inbound_channel));
 
+  sink_name_ = base::UTF8ToUTF16(
+      base::TrimWhitespaceASCII(sink_name, base::TrimPositions::TRIM_ALL));
   ShowCaptureIndicator();
 }
 
-void CastMirroringServiceHost::GetTabSourceId(
-    GetTabSourceIdCallback get_tab_source_id_callback) {
+std::optional<content::FrameTreeNodeId>
+CastMirroringServiceHost::GetTabSourceId() const {
   if (web_contents()) {
-    std::move(get_tab_source_id_callback)
-        .Run(web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId());
-  } else {
-    std::move(get_tab_source_id_callback).Run(-1);
+    return web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId();
   }
+  return std::nullopt;
+}
+
+// static
+content::DesktopMediaID CastMirroringServiceHost::BuildMediaIdForWebContents(
+    content::WebContents* contents) {
+  content::DesktopMediaID media_id;
+  if (!contents) {
+    return media_id;
+  }
+  media_id.type = content::DesktopMediaID::TYPE_WEB_CONTENTS;
+  media_id.web_contents_id = content::WebContentsMediaCaptureId(
+      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+      contents->GetPrimaryMainFrame()->GetRoutingID(),
+      true /* disable_local_echo */);
+  return media_id;
 }
 
 // static
 gfx::Size CastMirroringServiceHost::GetCaptureResolutionConstraint() {
-  absl::optional<gfx::Size> screen_resolution = GetScreenResolution();
+  std::optional<gfx::Size> screen_resolution = GetScreenResolution();
   if (screen_resolution) {
     return GetClampedResolution(screen_resolution.value());
   } else {
@@ -299,17 +296,33 @@ gfx::Size CastMirroringServiceHost::GetClampedResolution(
 
 void CastMirroringServiceHost::BindGpu(
     mojo::PendingReceiver<viz::mojom::Gpu> receiver) {
-  gpu_client_ =
-      content::CreateGpuClient(std::move(receiver), base::DoNothing());
+  gpu_client_ = content::CreateGpuClient(
+      std::move(receiver), /*enable_extra_handles_validation=*/false);
 }
 
 void CastMirroringServiceHost::GetVideoCaptureHost(
     mojo::PendingReceiver<media::mojom::VideoCaptureHost> receiver) {
-  content::GetIOThreadTaskRunner({})->PostTask(
+  content::GetIOThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&CreateVideoCaptureHostOnIO, source_media_id_.ToString(),
                      ConvertVideoStreamType(source_media_id_.type),
-                     std::move(receiver)));
+                     std::move(receiver)),
+      // Setting the video capture host inside of the
+      // CastMirroringServiceHost class is handled by the browser thread.
+      base::BindOnce(&CastMirroringServiceHost::SetVideoCaptureHost,
+                     weak_factory_for_ui_.GetWeakPtr()));
+}
+
+void CastMirroringServiceHost::GetVideoEncoderMetricsProvider(
+    mojo::PendingReceiver<media::mojom::VideoEncoderMetricsProvider> receiver) {
+  media::MojoVideoEncoderMetricsProviderService::Create(ukm::NoURLSourceId(),
+                                                        std::move(receiver));
+}
+
+void CastMirroringServiceHost::SetVideoCaptureHost(
+    mojo::SelfOwnedReceiverRef<media::mojom::VideoCaptureHost>
+        video_capture_host) {
+  video_capture_host_ = video_capture_host;
 }
 
 void CastMirroringServiceHost::GetNetworkContext(
@@ -404,7 +417,7 @@ void CastMirroringServiceHost::CreateAudioStreamForTab(
           [](mojo::PendingRemote<mojom::AudioStreamCreatorClient> requestor,
              mojo::PendingRemote<AudioInputStream> stream,
              mojo::PendingReceiver<AudioInputStreamClient> client,
-             media::mojom::ReadOnlyAudioDataPipePtr data_pipe) {
+             media::mojom::ReadWriteAudioDataPipePtr data_pipe) {
             mojo::Remote<mojom::AudioStreamCreatorClient>(std::move(requestor))
                 ->StreamCreated(std::move(stream), std::move(client),
                                 std::move(data_pipe));
@@ -425,6 +438,19 @@ void CastMirroringServiceHost::CreateAudioStreamForDesktop(
   mojo::MessagePipe pipe_to_audio_service;
   mojo::MessagePipe pipe_to_mirroring_service;
 
+  // Temporary logic to make the launch of CatapAudioInputStream for Cast
+  // independent of the launch of the same feature for getDisplayMedia().
+  // TODO(https://crbug.com/425902990): Remove the usage of
+  // `kLoopbackWithMuteDeviceIdCast` once CatapAudioInputStream is launched for
+  // both Cast and getDisplayMedia().
+#if BUILDFLAG(IS_MAC)
+  const char* loopback_id =
+      media::AudioDeviceDescription::kLoopbackWithMuteDeviceIdCast;
+#else  // IS_MAC
+  const char* loopback_id =
+      media::AudioDeviceDescription::kLoopbackWithMuteDeviceId;
+#endif
+
   // This does the mostly the same thing as the similar insane glob of code in
   // the CreateAudioStreamForTab() method. Here, system-wide audio is requested
   // from the platform, and so the CreateInputStream() API is used instead of
@@ -439,15 +465,14 @@ void CastMirroringServiceHost::CreateAudioStreamForDesktop(
           std::move(pipe_to_audio_service.handle1)),
       mojo::PendingRemote<AudioInputStreamClient>(
           std::move(pipe_to_mirroring_service.handle0), 0),
-      mojo::NullRemote(), mojo::NullRemote(),
-      media::AudioDeviceDescription::kLoopbackWithMuteDeviceId, params,
-      total_segments, false, base::ReadOnlySharedMemoryRegion(), nullptr,
+      mojo::NullRemote(), mojo::NullRemote(), loopback_id, params,
+      base::UnguessableToken::Create(), total_segments, false, nullptr,
       base::BindOnce(
           [](mojo::PendingRemote<mojom::AudioStreamCreatorClient> requestor,
              mojo::PendingRemote<AudioInputStream> stream,
              mojo::PendingReceiver<AudioInputStreamClient> client,
-             media::mojom::ReadOnlyAudioDataPipePtr data_pipe, bool,
-             const absl::optional<base::UnguessableToken>&) {
+             media::mojom::ReadWriteAudioDataPipePtr data_pipe, bool,
+             const std::optional<base::UnguessableToken>&) {
             mojo::Remote<mojom::AudioStreamCreatorClient>(std::move(requestor))
                 ->StreamCreated(std::move(stream), std::move(client),
                                 std::move(data_pipe));
@@ -477,6 +502,7 @@ void CastMirroringServiceHost::WebContentsDestroyed() {
   audio_stream_factory_.reset();
   gpu_client_.reset();
   RecordTabUIUsageMetricsIfNeededAndReset();
+  video_capture_host_ = nullptr;
 }
 
 void CastMirroringServiceHost::ShowCaptureIndicator() {
@@ -505,7 +531,8 @@ void CastMirroringServiceHost::ShowCaptureIndicator() {
                          ->GetMediaStreamCaptureIndicator()
                          ->RegisterMediaStream(web_contents(), devices);
   media_stream_ui_->OnStarted(
-      base::RepeatingClosure(), content::MediaStreamUI::SourceCallback(),
+      /*stop_callback=*/base::DoNothing(),
+      content::MediaStreamUI::SourceCallback(),
       /*label=*/std::string(), /*screen_capture_ids=*/{},
       content::MediaStreamUI::StateChangeCallback());
 }
@@ -526,10 +553,10 @@ void CastMirroringServiceHost::ShowTabSharingUI(
       web_contents()->GetPrimaryMainFrame()->GetGlobalId();
 
   std::unique_ptr<MediaStreamUI> notification_ui =
-      TabSharingUI::Create(capturer_id, source_media_id_, std::u16string(),
-                           /*favicons_used_for_switch_to_tab_button=*/false,
+      TabSharingUI::Create(capturer_id, source_media_id_, sink_name_,
                            /*app_preferred_current_tab=*/false,
-                           TabSharingInfoBarDelegate::TabShareType::CAST);
+                           TabSharingInfoBarDelegate::TabShareType::CAST,
+                           /*captured_surface_control_active=*/false);
 
   media_stream_ui_ = MediaCaptureDevicesDispatcher::GetInstance()
                          ->GetMediaStreamCaptureIndicator()
@@ -549,9 +576,17 @@ void CastMirroringServiceHost::ShowTabSharingUI(
 }
 
 void CastMirroringServiceHost::SwitchMirroringSourceTab(
-    const content::DesktopMediaID& media_id) {
+    const content::DesktopMediaID& media_id,
+    bool captured_surface_control_active) {
+  DCHECK(!captured_surface_control_active) << "CSC not supported for casting.";
+
   source_media_id_ = media_id;
   source_media_id_.web_contents_id.disable_local_echo = true;
+
+  // Drop the reference to the VideoCaptureHost, since the weak_ptr will be
+  // invalidated. A new VideoCaptureHost will be created for the new source tab
+  // by the Mirroring Service.
+  video_capture_host_ = nullptr;
 
   // Observe the target WebContents for tab mirroring.
   DCHECK_EQ(source_media_id_.type, content::DesktopMediaID::TYPE_WEB_CONTENTS);
@@ -583,7 +618,6 @@ void CastMirroringServiceHost::RecordTabUIUsageMetricsIfNeededAndReset() {
   tab_switching_count_.reset();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 void CastMirroringServiceHost::DestroyTab(OffscreenTab* tab) {
   if (offscreen_tab_ && (offscreen_tab_.get() == tab))
     offscreen_tab_.reset();
@@ -601,6 +635,37 @@ void CastMirroringServiceHost::OpenOffscreenTab(
   DCHECK_EQ(content::DesktopMediaID::TYPE_WEB_CONTENTS, source_media_id_.type);
   Observe(offscreen_tab_->web_contents());
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+void CastMirroringServiceHost::Pause(base::OnceClosure on_paused_callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (video_capture_host_) {
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(&PauseVideoCaptureHostOnIO, video_capture_host_->impl(),
+                       ignored_token_, std::move(on_paused_callback)));
+  }
+}
+
+void CastMirroringServiceHost::Resume(base::OnceClosure on_resumed_callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (video_capture_host_) {
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(&ResumeVideoCaptureHostOnIO, video_capture_host_->impl(),
+                       ignored_token_, ignored_token_, ignored_params_,
+                       std::move(on_resumed_callback)));
+  }
+}
+
+void CastMirroringServiceHost::GetMirroringStats(
+    base::OnceCallback<void(const base::Value)> json_stats_cb) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!mirroring_service_.is_bound()) {
+    std::move(json_stats_cb).Run(base::Value());
+    return;
+  }
+
+  mirroring_service_->GetMirroringStats(std::move(json_stats_cb));
+}
 
 }  // namespace mirroring

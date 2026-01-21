@@ -4,7 +4,9 @@
 
 #include "third_party/blink/renderer/core/layout/layout_quote.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/css/style_sheet_list.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+
 namespace blink {
 
 class LayoutQuoteTest : public RenderingTest {
@@ -55,12 +57,12 @@ TEST_F(LayoutQuoteTest, Locale) {
   )HTML");
 
   // The "ja" element should be "ja".
-  // Its `::before`/`::after` pseudo elements should be parent lang "en".
+  // Its `::before`/`::after` pseudo-elements should be parent lang "en".
   // Its text child should be "ja".
   LayoutQuoteTest::CheckQuoteLayoutObjectChildrenLang("ja", "ja", "en");
 
   // The "fr" element should be "fr".
-  // Its pseudo elements should be parent lang "ja".
+  // Its pseudo-elements should be parent lang "ja".
   // Its text child should be "fr".
   LayoutQuoteTest::CheckQuoteLayoutObjectChildrenLang("fr", "fr", "ja");
 

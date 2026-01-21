@@ -6,14 +6,15 @@
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_FAKE_CRYPTAUTH_GROUP_PRIVATE_KEY_SHARER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_device_sync_result.h"
 #include "chromeos/ash/services/device_sync/cryptauth_group_private_key_sharer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_group_private_key_sharer_impl.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_devicesync.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 namespace device_sync {
@@ -35,7 +36,7 @@ class FakeCryptAuthGroupPrivateKeySharer
 
   // The RequestContext passed to ShareGroupPrivateKey(). Returns null if
   // ShareGroupPrivateKey() has not been called yet.
-  const absl::optional<cryptauthv2::RequestContext>& request_context() const {
+  const std::optional<cryptauthv2::RequestContext>& request_context() const {
     return request_context_;
   }
 
@@ -45,7 +46,7 @@ class FakeCryptAuthGroupPrivateKeySharer
 
   // The device ID to encrypting key map passed to ShareGroupPrivateKey().
   // Returns null if ShareGroupPrivateKey() has not been called yet.
-  const absl::optional<IdToEncryptingKeyMap>& id_to_encrypting_key_map() const {
+  const std::optional<IdToEncryptingKeyMap>& id_to_encrypting_key_map() const {
     return id_to_encrypting_key_map_;
   }
 
@@ -59,9 +60,9 @@ class FakeCryptAuthGroupPrivateKeySharer
       const CryptAuthKey& group_key,
       const IdToEncryptingKeyMap& id_to_encrypting_key_map) override;
 
-  absl::optional<cryptauthv2::RequestContext> request_context_;
+  std::optional<cryptauthv2::RequestContext> request_context_;
   std::unique_ptr<CryptAuthKey> group_key_;
-  absl::optional<IdToEncryptingKeyMap> id_to_encrypting_key_map_;
+  std::optional<IdToEncryptingKeyMap> id_to_encrypting_key_map_;
 };
 
 class FakeCryptAuthGroupPrivateKeySharerFactory
@@ -78,7 +79,9 @@ class FakeCryptAuthGroupPrivateKeySharerFactory
 
   // Returns a vector of all FakeCryptAuthGroupPrivateKeySharer instances
   // created by CreateInstance().
-  const std::vector<FakeCryptAuthGroupPrivateKeySharer*>& instances() const {
+  const std::vector<
+      raw_ptr<FakeCryptAuthGroupPrivateKeySharer, VectorExperimental>>&
+  instances() const {
     return instances_;
   }
 
@@ -93,8 +96,9 @@ class FakeCryptAuthGroupPrivateKeySharerFactory
       CryptAuthClientFactory* client_factory,
       std::unique_ptr<base::OneShotTimer> timer) override;
 
-  std::vector<FakeCryptAuthGroupPrivateKeySharer*> instances_;
-  CryptAuthClientFactory* last_client_factory_ = nullptr;
+  std::vector<raw_ptr<FakeCryptAuthGroupPrivateKeySharer, VectorExperimental>>
+      instances_;
+  raw_ptr<CryptAuthClientFactory> last_client_factory_ = nullptr;
 };
 
 }  // namespace device_sync

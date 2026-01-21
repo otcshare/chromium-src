@@ -3,29 +3,31 @@
 // found in the LICENSE file.
 
 #include "base/cpu.h"
-#include "base/containers/contains.h"
+
+#include <string>
+
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/memory/protected_memory_buildflags.h"
 #include "base/strings/string_util.h"
+#include "base/test/gtest_util.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // Tests whether we can run extended instructions represented by the CPU
 // information. This test actually executes some extended instructions (such as
 // MMX, SSE, etc.) supported by the CPU and sees we can run them without
-// "undefined instruction" exceptions. That is, this test succeeds when this
-// test finishes without a crash.
+// "undefined instruction" exceptions. That is, this test succeeds when it
+// finishes without a crash.
 TEST(CPU, RunExtendedInstructions) {
   // Retrieve the CPU information.
   base::CPU cpu;
 #if defined(ARCH_CPU_X86_FAMILY)
-
   ASSERT_TRUE(cpu.has_mmx());
   ASSERT_TRUE(cpu.has_sse());
   ASSERT_TRUE(cpu.has_sse2());
   ASSERT_TRUE(cpu.has_sse3());
 
-// GCC and clang instruction test.
-#if defined(COMPILER_GCC)
   // Execute an MMX instruction.
   __asm__ __volatile__("emms\n" : : : "mm0");
 
@@ -73,6 +75,30 @@ TEST(CPU, RunExtendedInstructions) {
     __asm__ __volatile__("vpunpcklbw %%ymm0, %%ymm0, %%ymm0\n" : : : "xmm0");
   }
 
+  if (cpu.has_avx_vnni()) {
+    // Execute an AVX VNNI instruction. {vex} prevents EVEX encoding, which
+    // would shift it to AVX512 VNNI.
+    __asm__ __volatile__("%{vex%} vpdpbusd %%ymm0, %%ymm0, %%ymm0\n"
+                         :
+                         :
+                         : "ymm0");
+  }
+
+  if (cpu.has_avx512_f()) {
+    // Execute an AVX-512 Foundation (F) instruction.
+    __asm__ __volatile__("vpxorq %%zmm0, %%zmm0, %%zmm0\n" : : : "zmm0");
+  }
+
+  if (cpu.has_avx512_bw()) {
+    // Execute an AVX-512 Byte & Word (BW) instruction.
+    __asm__ __volatile__("vpabsw %%zmm0, %%zmm0\n" : : : "zmm0");
+  }
+
+  if (cpu.has_avx512_vnni()) {
+    // Execute an AVX-512 VNNI instruction.
+    __asm__ __volatile__("vpdpbusd %%zmm0, %%zmm0, %%zmm0\n" : : : "zmm0");
+  }
+
   if (cpu.has_pku()) {
     // rdpkru
     uint32_t pkru;
@@ -80,57 +106,6 @@ TEST(CPU, RunExtendedInstructions) {
                          : "=a"(pkru)
                          : "c"(0), "d"(0));
   }
-// Visual C 32 bit and ClangCL 32/64 bit test.
-#elif defined(COMPILER_MSVC) && (defined(ARCH_CPU_32_BITS) || \
-      (defined(ARCH_CPU_64_BITS) && defined(__clang__)))
-
-  // Execute an MMX instruction.
-  __asm emms;
-
-  // Execute an SSE instruction.
-  __asm xorps xmm0, xmm0;
-
-  // Execute an SSE 2 instruction.
-  __asm psrldq xmm0, 0;
-
-  // Execute an SSE 3 instruction.
-  __asm addsubpd xmm0, xmm0;
-
-  if (cpu.has_ssse3()) {
-    // Execute a Supplimental SSE 3 instruction.
-    __asm psignb xmm0, xmm0;
-  }
-
-  if (cpu.has_sse41()) {
-    // Execute an SSE 4.1 instruction.
-    __asm pmuldq xmm0, xmm0;
-  }
-
-  if (cpu.has_sse42()) {
-    // Execute an SSE 4.2 instruction.
-    __asm crc32 eax, eax;
-  }
-
-  if (cpu.has_popcnt()) {
-    // Execute a POPCNT instruction.
-    __asm popcnt eax, eax;
-  }
-
-  if (cpu.has_avx()) {
-    // Execute an AVX instruction.
-    __asm vzeroupper;
-  }
-
-  if (cpu.has_fma3()) {
-    // Execute an AVX instruction.
-    __asm vfmadd132ps xmm0, xmm0, xmm0;
-  }
-
-  if (cpu.has_avx2()) {
-    // Execute an AVX 2 instruction.
-    __asm vpunpcklbw ymm0, ymm0, ymm0
-  }
-#endif  // defined(COMPILER_GCC)
 #endif  // defined(ARCH_CPU_X86_FAMILY)
 
 #if defined(ARCH_CPU_ARM64)
@@ -163,8 +138,8 @@ TEST(CPU, RunExtendedInstructions) {
 // For https://crbug.com/249713
 TEST(CPU, BrandAndVendorContainsNoNUL) {
   base::CPU cpu;
-  EXPECT_FALSE(base::Contains(cpu.cpu_brand(), '\0'));
-  EXPECT_FALSE(base::Contains(cpu.vendor_name(), '\0'));
+  EXPECT_FALSE(cpu.cpu_brand().contains('\0'));
+  EXPECT_FALSE(cpu.vendor_name().contains('\0'));
 }
 
 #if defined(ARCH_CPU_X86_FAMILY)
@@ -203,18 +178,24 @@ TEST(CPU, X86FamilyAndModel) {
 }
 #endif  // defined(ARCH_CPU_X86_FAMILY)
 
-#if defined(ARCH_CPU_ARM_FAMILY) && \
-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS))
-TEST(CPU, ARMImplementerAndPartNumber) {
-  base::CPU cpu;
-
-  const std::string& cpu_brand = cpu.cpu_brand();
-
-  // Some devices, including on the CQ, do not report a cpu_brand
-  // https://crbug.com/1166533 and https://crbug.com/1167123.
-  EXPECT_EQ(cpu_brand, base::TrimWhitespaceASCII(cpu_brand, base::TRIM_ALL));
-  EXPECT_GT(cpu.implementer(), 0u);
-  EXPECT_GT(cpu.part_number(), 0u);
+#if BUILDFLAG(PROTECTED_MEMORY_ENABLED)
+TEST(CPUDeathTest, VerifyModifyingCPUInstanceNoAllocationCrashes) {
+  const base::CPU& cpu = base::CPU::GetInstanceNoAllocation();
+  // SAFETY: This test explicitly checks the functionality of protected memory.
+  // Any write to any byte of CPU should crash. Thus this test is used to
+  // precisely manipulate and target the memory to cause a crash. Here we just
+  // wrap it into a span for convenience.
+  // TODO(sergiosolano): Use base::byte_span_from_ref() here once base::CPU is
+  // trivially copyable.
+  const base::span<uint8_t> bytes = UNSAFE_BUFFERS(
+      base::span(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(&cpu)),
+                 sizeof(cpu)));
+  // We try and flip a couple of bits and expect the test to die immediately.
+  // Checks are limited to every 15th byte, otherwise the tests run into
+  // time-outs.
+  for (size_t byte_index = 0; byte_index < sizeof(cpu); byte_index += 15) {
+    const size_t local_bit_index = byte_index % 8;
+    EXPECT_CHECK_DEATH_WITH(bytes[byte_index] ^= (0x01 << local_bit_index), "");
+  }
 }
-#endif  // defined(ARCH_CPU_ARM_FAMILY) && (BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS))
+#endif

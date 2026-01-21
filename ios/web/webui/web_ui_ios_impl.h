@@ -7,22 +7,17 @@
 
 #include <map>
 #include <memory>
+#include <string_view>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/memory/weak_ptr.h"
+#import "base/memory/raw_ptr.h"
 #include "base/values.h"
 #import "ios/web/public/web_state.h"
 #include "ios/web/public/webui/web_ui_ios.h"
 
 namespace web {
-class WebFrame;
-}
 
-namespace web {
-
-class WebUIIOSImpl : public web::WebUIIOS,
-                     public base::SupportsWeakPtr<WebUIIOSImpl> {
+class WebUIIOSImpl : public web::WebUIIOS {
  public:
   explicit WebUIIOSImpl(WebState* web_state);
 
@@ -37,12 +32,12 @@ class WebUIIOSImpl : public web::WebUIIOS,
   void SetController(std::unique_ptr<WebUIIOSController> controller) override;
   void AddMessageHandler(
       std::unique_ptr<WebUIIOSMessageHandler> handler) override;
-  void RegisterMessageCallback(base::StringPiece message,
+  void RegisterMessageCallback(std::string_view message,
                                MessageCallback callback) override;
   void ProcessWebUIIOSMessage(const GURL& source_url,
-                              base::StringPiece message,
+                              std::string_view message,
                               const base::Value::List& args) override;
-  void CallJavascriptFunction(base::StringPiece function_name,
+  void CallJavascriptFunction(std::string_view function_name,
                               base::span<const base::ValueView> args) override;
   void ResolveJavascriptCallback(const base::ValueView callback_id,
                                  const base::ValueView response) override;
@@ -51,11 +46,6 @@ class WebUIIOSImpl : public web::WebUIIOS,
   void FireWebUIListenerSpan(base::span<const base::ValueView> values) override;
 
  private:
-  void OnJsMessage(const base::Value& message,
-                   const GURL& page_url,
-                   bool user_is_interacting,
-                   web::WebFrame* sender_frame);
-
   // Executes JavaScript asynchronously on the page.
   void ExecuteJavascript(const std::u16string& javascript);
 
@@ -64,14 +54,11 @@ class WebUIIOSImpl : public web::WebUIIOS,
       std::map<std::string, MessageCallback, std::less<>>;
   MessageCallbackMap message_callbacks_;
 
-  // The WebUIIOSMessageHandlers we own.
-  std::vector<std::unique_ptr<WebUIIOSMessageHandler>> handlers_;
-
-  // Subscription for JS message.
-  base::CallbackListSubscription subscription_;
-
   // Non-owning pointer to the WebState this WebUIIOS is associated with.
-  WebState* web_state_;
+  raw_ptr<WebState> web_state_;
+
+  // A list of WebUIIOSMessageHandlers owned by this WebUIIOS implementation.
+  std::vector<std::unique_ptr<WebUIIOSMessageHandler>> handlers_;
 
   std::unique_ptr<WebUIIOSController> controller_;
 };

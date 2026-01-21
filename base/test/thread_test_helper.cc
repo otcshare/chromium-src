@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/threading/thread_restrictions.h"
 
@@ -29,7 +29,9 @@ bool ThreadTestHelper::Run() {
   return test_result_;
 }
 
-void ThreadTestHelper::RunTest() { set_test_result(true); }
+void ThreadTestHelper::RunTest() {
+  set_test_result(true);
+}
 
 ThreadTestHelper::~ThreadTestHelper() = default;
 

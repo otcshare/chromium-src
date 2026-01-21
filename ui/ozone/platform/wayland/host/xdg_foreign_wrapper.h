@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_window_observer.h"
@@ -49,9 +49,13 @@ class XdgForeignWrapper : public wl::GlobalObjectRegistrar<XdgForeignWrapper>,
   void ExportSurfaceToForeign(WaylandWindow* window, OnHandleExported cb);
 
  private:
+  explicit XdgForeignWrapper(WaylandConnection* connection);
+
   // WaylandWindowObserver:
   void OnWindowRemoved(WaylandWindow* window) override;
 
+  base::ScopedObservation<WaylandWindowManager, WaylandWindowObserver>
+      window_removal_observer_{this};
   std::unique_ptr<XdgForeignWrapperInternal> impl_;
 };
 

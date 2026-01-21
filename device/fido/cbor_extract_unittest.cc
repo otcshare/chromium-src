@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 #include "device/fido/cbor_extract.h"
-#include "base/bind.h"
-#include "base/callback.h"
+
+#include <algorithm>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr_exclusion.h"
-#include "base/ranges/algorithm.h"
 #include "components/cbor/values.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -137,10 +139,10 @@ TEST(CBORExtract, Basic) {
   MakeCredRequest make_cred_request;
   ASSERT_TRUE(cbor_extract::Extract<MakeCredRequest>(
       &make_cred_request, kMakeCredParseSteps, make_cred));
-  EXPECT_TRUE(base::ranges::equal(*make_cred_request.client_data_hash,
-                                  kClientDataHash));
+  EXPECT_TRUE(
+      std::ranges::equal(*make_cred_request.client_data_hash, kClientDataHash));
   EXPECT_EQ(*make_cred_request.rp_id, "example.com");
-  EXPECT_TRUE(base::ranges::equal(*make_cred_request.user_id, kUserId));
+  EXPECT_TRUE(std::ranges::equal(*make_cred_request.user_id, kUserId));
   EXPECT_EQ(make_cred_request.cred_params->size(), 2u);
   EXPECT_EQ(make_cred_request.excluded_credentials->size(), 3u);
   EXPECT_TRUE(*make_cred_request.resident_key);
@@ -163,12 +165,14 @@ TEST(CBORExtract, Basic) {
           },
           base::Unretained(&algs))));
 
-  EXPECT_TRUE(base::ranges::equal(algs, kAlgs));
+  EXPECT_TRUE(std::ranges::equal(algs, kAlgs));
 }
 
 TEST(CBORExtract, MissingRequired) {
   struct Dummy {
-    const int64_t* value;
+    // This field is not a raw_ptr<> because ELEMENT() treats the raw_ptr<T> as
+    // a void*.
+    RAW_PTR_EXCLUSION const int64_t* value;
   };
 
   static constexpr cbor_extract::StepOrByte<Dummy> kSteps[] = {
@@ -184,7 +188,9 @@ TEST(CBORExtract, MissingRequired) {
 
 TEST(CBORExtract, WrongType) {
   struct Dummy {
-    const int64_t* value;
+    // This field is not a raw_ptr<> because ELEMENT() treats the raw_ptr<T> as
+    // a void*.
+    RAW_PTR_EXCLUSION const int64_t* value;
   };
 
   static constexpr cbor_extract::StepOrByte<Dummy> kSteps[] = {
@@ -202,7 +208,9 @@ TEST(CBORExtract, WrongType) {
 
 TEST(CBORExtract, RequiredInOptionalMap) {
   struct Dummy {
-    const int64_t* value;
+    // This field is not a raw_ptr<> because ELEMENT() treats the raw_ptr<T> as
+    // a void*.
+    RAW_PTR_EXCLUSION const int64_t* value;
   };
 
   static constexpr cbor_extract::StepOrByte<Dummy> kSteps[] = {

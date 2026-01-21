@@ -6,18 +6,19 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_executor.h"
-#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/thread_local.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "remoting/base/auto_thread_task_runner.h"
+#include "third_party/abseil-cpp/absl/base/dynamic_annotations.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include "base/files/file_descriptor_watcher_posix.h"
@@ -45,7 +46,7 @@ std::unique_ptr<base::win::ScopedCOMInitializer> CreateComInitializer(
 }
 #endif
 
-}
+}  // namespace
 
 // Used to pass data to ThreadMain.  This structure is allocated on the stack
 // from within StartWithType.
@@ -66,20 +67,33 @@ struct AutoThread::StartupData {
 };
 
 // static
-scoped_refptr<AutoThreadTaskRunner> AutoThread::CreateWithType(
+scoped_refptr<AutoThreadTaskRunner> AutoThread::CreateWithPreInitCallback(
     const char* name,
-    scoped_refptr<AutoThreadTaskRunner> joiner,
-    base::MessagePumpType type) {
+    scoped_refptr<base::SequencedTaskRunner> joiner,
+    base::MessagePumpType pump_type,
+    base::OnceClosure pre_init_callback) {
   AutoThread* thread = new AutoThread(name, joiner.get());
-  scoped_refptr<AutoThreadTaskRunner> task_runner = thread->StartWithType(type);
-  if (!task_runner.get())
+  thread->pre_init_callback_ = std::move(pre_init_callback);
+  scoped_refptr<AutoThreadTaskRunner> task_runner =
+      thread->StartWithType(pump_type);
+  if (!task_runner.get()) {
     delete thread;
+  }
   return task_runner;
 }
 
 // static
+scoped_refptr<AutoThreadTaskRunner> AutoThread::CreateWithType(
+    const char* name,
+    scoped_refptr<base::SequencedTaskRunner> joiner,
+    base::MessagePumpType type) {
+  return CreateWithPreInitCallback(name, joiner, type, base::NullCallback());
+}
+
+// static
 scoped_refptr<AutoThreadTaskRunner> AutoThread::Create(
-    const char* name, scoped_refptr<AutoThreadTaskRunner> joiner) {
+    const char* name,
+    scoped_refptr<base::SequencedTaskRunner> joiner) {
   return CreateWithType(name, joiner, base::MessagePumpType::DEFAULT);
 }
 
@@ -87,15 +101,16 @@ scoped_refptr<AutoThreadTaskRunner> AutoThread::Create(
 // static
 scoped_refptr<AutoThreadTaskRunner> AutoThread::CreateWithLoopAndComInitTypes(
     const char* name,
-    scoped_refptr<AutoThreadTaskRunner> joiner,
+    scoped_refptr<base::SequencedTaskRunner> joiner,
     base::MessagePumpType pump_type,
     ComInitType com_init_type) {
   AutoThread* thread = new AutoThread(name, joiner.get());
   thread->SetComInitType(com_init_type);
   scoped_refptr<AutoThreadTaskRunner> task_runner =
       thread->StartWithType(pump_type);
-  if (!task_runner.get())
+  if (!task_runner.get()) {
     delete thread;
+  }
   return task_runner;
 }
 #endif
@@ -111,7 +126,8 @@ AutoThread::AutoThread(const char* name)
   thread_checker_.DetachFromThread();
 }
 
-AutoThread::AutoThread(const char* name, AutoThreadTaskRunner* joiner)
+AutoThread::AutoThread(const char* name,
+                       scoped_refptr<base::SequencedTaskRunner> joiner)
     : startup_data_(nullptr),
 #if BUILDFLAG(IS_WIN)
       com_init_type_(COM_INIT_NONE),
@@ -191,6 +207,10 @@ void AutoThread::JoinAndDeleteThread() {
 }
 
 void AutoThread::ThreadMain() {
+  if (!pre_init_callback_.is_null()) {
+    std::move(pre_init_callback_).Run();
+  }
+
   // Bind |thread_checker_| to the current thread.
   DCHECK(thread_checker_.CalledOnValidThread());
 
@@ -200,7 +220,7 @@ void AutoThread::ThreadMain() {
 
   // Complete the initialization of our AutoThread object.
   base::PlatformThread::SetName(name_);
-  ANNOTATE_THREAD_NAME(name_.c_str());  // Tell the name to race detector.
+  ABSL_ANNOTATE_THREAD_NAME(name_.c_str());  // Tell the name to race detector.
 
   // Return an AutoThreadTaskRunner that will cleanly quit this thread when
   // no more references to it remain.
@@ -232,4 +252,4 @@ void AutoThread::ThreadMain() {
   DCHECK(was_quit_properly_);
 }
 
-}  // namespace base
+}  // namespace remoting

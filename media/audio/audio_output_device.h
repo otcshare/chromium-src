@@ -66,7 +66,7 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/synchronization/waitable_event.h"
@@ -129,13 +129,13 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
                        bool play_automatically) override;
   void OnIPCClosed() override;
 
- protected:
-  // Magic required by ref_counted.h to avoid any code deleting the object
-  // accidentally while there are references to it.
-  friend class base::RefCountedThreadSafe<AudioOutputDevice>;
-  ~AudioOutputDevice() override;
+  AudioOutputIPC* GetIpcForTesting() { return ipc_.get(); }
 
  private:
+  // Required by ref_counted.h to avoid any code deleting the object
+  // accidentally while there are references to it.
+  ~AudioOutputDevice() override;
+
   enum StartupState {
     IDLE,                       // Authorization not requested.
     AUTHORIZATION_REQUESTED,    // Sent (possibly completed) device
@@ -160,7 +160,7 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // upon state changes.
   void RequestDeviceAuthorizationOnIOThread();
   void InitializeOnIOThread(const AudioParameters& params,
-                            RenderCallback* callback);
+                            MayBeDangling<RenderCallback> callback);
   void CreateStreamOnIOThread();
   void PlayOnIOThread();
   void PauseOnIOThread();

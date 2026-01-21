@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ash/arc/input_method_manager/input_method_prefs.h"
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "chrome/common/pref_names.h"
@@ -29,7 +30,7 @@ void InputMethodPrefs::UpdateEnabledImes(
   std::vector<std::string> enabled_ime_list = base::SplitString(
       enabled_ime_ids, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
-  base::EraseIf(enabled_ime_list, [](const auto& id) {
+  std::erase_if(enabled_ime_list, [](const auto& id) {
     return ash::extension_ime_util::IsArcIME(id);
   });
   for (const auto& descriptor : enabled_arc_imes)
@@ -41,13 +42,15 @@ void InputMethodPrefs::UpdateEnabledImes(
   const std::string current_ime =
       prefs->GetString(prefs::kLanguageCurrentInputMethod);
   if (ce::IsArcIME(current_ime) &&
-      !base::Contains(enabled_ime_list, current_ime))
+      !std::ranges::contains(enabled_ime_list, current_ime)) {
     prefs->SetString(prefs::kLanguageCurrentInputMethod, std::string());
+  }
   const std::string previous_ime =
       prefs->GetString(prefs::kLanguagePreviousInputMethod);
   if (ce::IsArcIME(previous_ime) &&
-      !base::Contains(enabled_ime_list, previous_ime))
+      !std::ranges::contains(enabled_ime_list, previous_ime)) {
     prefs->SetString(prefs::kLanguagePreviousInputMethod, std::string());
+  }
 }
 
 std::set<std::string> InputMethodPrefs::GetEnabledImes() const {

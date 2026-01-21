@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,20 +10,12 @@ namespace page_info {
 
 // Returns true if kPageInfoAboutThisSiteMoreInfo and dependent features are
 // enabled.
-bool IsMoreAboutThisSiteFeatureEnabled();
+bool IsAboutThisSiteFeatureEnabled();
 
-// Returns true if kPageInfoAboutThisSiteDescriptionPlaceholder and dependent
-// features are enabled.
-bool IsDescriptionPlaceholderFeatureEnabled();
+// Enables the privacy policy insights Learning Experiment UI.
+BASE_DECLARE_FEATURE(kPrivacyPolicyInsights);
 
-#if !BUILDFLAG(IS_ANDROID)
-// Returns true if kAboutThisSitePersistentSidePanelEntry and dependent
-// features are enabled.
-bool IsPersistentSidePanelEntryFeatureEnabled();
-
-// Enables the persistent "About this site" entry in the side panel.
-BASE_DECLARE_FEATURE(kAboutThisSitePersistentSidePanelEntry);
-#endif
+bool IsMerchantTrustFeatureEnabled();
 
 }  // namespace page_info
 

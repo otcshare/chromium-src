@@ -6,9 +6,9 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/values.h"
@@ -19,14 +19,15 @@
 #if BUILDFLAG(IS_APPLE)
 #include <CoreFoundation/CoreFoundation.h>
 
-#include "base/mac/scoped_cftyperef.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/memory/scoped_policy.h"
 #endif
 
 namespace policy {
 
-PolicyDetailsMap::PolicyDetailsMap() {}
+PolicyDetailsMap::PolicyDetailsMap() = default;
 
-PolicyDetailsMap::~PolicyDetailsMap() {}
+PolicyDetailsMap::~PolicyDetailsMap() = default;
 
 GetChromePolicyDetailsCallback PolicyDetailsMap::GetCallback() const {
   return base::BindRepeating(&PolicyDetailsMap::Lookup, base::Unretained(this));
@@ -39,7 +40,7 @@ void PolicyDetailsMap::SetDetails(const std::string& policy,
 
 const PolicyDetails* PolicyDetailsMap::Lookup(const std::string& policy) const {
   auto it = map_.find(policy);
-  return it == map_.end() ? NULL : it->second;
+  return it == map_.end() ? NULL : it->second.get();
 }
 
 bool PolicyServiceIsEmpty(const PolicyService* service) {
@@ -58,61 +59,75 @@ bool PolicyServiceIsEmpty(const PolicyService* service) {
 }
 
 #if BUILDFLAG(IS_APPLE)
-CFPropertyListRef ValueToProperty(const base::Value& value) {
-  switch (value.type()) {
-    case base::Value::Type::NONE:
-      return kCFNull;
+base::apple::ScopedCFTypeRef<CFPropertyListRef> ValueToProperty(
+    const base::Value& value) {
+  base::apple::ScopedCFTypeRef<CFPropertyListRef> result;
 
-    case base::Value::Type::BOOLEAN:
-      return value.GetBool() ? kCFBooleanTrue : kCFBooleanFalse;
+  switch (value.type()) {
+    case base::Value::Type::NONE: {
+      result.reset(kCFNull, base::scoped_policy::RETAIN);
+      break;
+    }
+
+    case base::Value::Type::BOOLEAN: {
+      result.reset(value.GetBool() ? kCFBooleanTrue : kCFBooleanFalse,
+                   base::scoped_policy::RETAIN);
+      break;
+    }
 
     case base::Value::Type::INTEGER: {
       const int int_value = value.GetInt();
-      return CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &int_value);
+      result.reset(
+          CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &int_value));
+      break;
     }
 
     case base::Value::Type::DOUBLE: {
       const double double_value = value.GetDouble();
-      return CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType,
-                            &double_value);
+      result.reset(CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType,
+                                  &double_value));
+      break;
     }
 
     case base::Value::Type::STRING: {
       const std::string& string_value = value.GetString();
-      return base::SysUTF8ToCFStringRef(string_value).release();
+      result = base::SysUTF8ToCFStringRef(string_value);
+      break;
     }
 
-    case base::Value::Type::DICTIONARY: {
-      // |dict| is owned by the caller.
-      CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
-          kCFAllocatorDefault, value.DictSize(), &kCFTypeDictionaryKeyCallBacks,
-          &kCFTypeDictionaryValueCallBacks);
-      for (const auto key_value_pair : value.DictItems()) {
-        // CFDictionaryAddValue() retains both |key| and |value|, so make sure
-        // the references are balanced.
-        base::ScopedCFTypeRef<CFStringRef> key(
-            base::SysUTF8ToCFStringRef(key_value_pair.first));
-        base::ScopedCFTypeRef<CFPropertyListRef> cf_value(
-            ValueToProperty(key_value_pair.second));
-        if (cf_value)
-          CFDictionaryAddValue(dict, key, cf_value);
+    case base::Value::Type::DICT: {
+      const base::Value::Dict& value_dict = value.GetDict();
+      base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> cf_dict(
+          CFDictionaryCreateMutable(kCFAllocatorDefault, value_dict.size(),
+                                    &kCFTypeDictionaryKeyCallBacks,
+                                    &kCFTypeDictionaryValueCallBacks));
+      for (const auto [dict_key, dict_value] : value_dict) {
+        base::apple::ScopedCFTypeRef<CFStringRef> cf_key =
+            base::SysUTF8ToCFStringRef(dict_key);
+        base::apple::ScopedCFTypeRef<CFPropertyListRef> cf_value =
+            ValueToProperty(dict_value);
+        if (cf_value) {
+          CFDictionaryAddValue(cf_dict.get(), cf_key.get(), cf_value.get());
+        }
       }
-      return dict;
+      result = cf_dict;
+      break;
     }
 
     case base::Value::Type::LIST: {
       const base::Value::List& list = value.GetList();
-      CFMutableArrayRef array =
-          CFArrayCreateMutable(NULL, list.size(), &kCFTypeArrayCallBacks);
+      base::apple::ScopedCFTypeRef<CFMutableArrayRef> cf_array(
+          CFArrayCreateMutable(kCFAllocatorDefault, list.size(),
+                               &kCFTypeArrayCallBacks));
       for (const base::Value& entry : list) {
-        // CFArrayAppendValue() retains |cf_value|, so make sure the reference
-        // created by ValueToProperty() is released.
-        base::ScopedCFTypeRef<CFPropertyListRef> cf_value(
-            ValueToProperty(entry));
-        if (cf_value)
-          CFArrayAppendValue(array, cf_value);
+        base::apple::ScopedCFTypeRef<CFPropertyListRef> cf_value =
+            ValueToProperty(entry);
+        if (cf_value) {
+          CFArrayAppendValue(cf_array.get(), cf_value.get());
+        }
       }
-      return array;
+      result = cf_array;
+      break;
     }
 
     case base::Value::Type::BINARY:
@@ -122,7 +137,7 @@ CFPropertyListRef ValueToProperty(const base::Value& value) {
       break;
   }
 
-  return NULL;
+  return result;
 }
 #endif  // BUILDFLAG(IS_APPLE)
 
@@ -162,6 +177,8 @@ std::ostream& operator<<(std::ostream& os, PolicyDomain domain) {
       return os << "POLICY_DOMAIN_EXTENSIONS";
     case POLICY_DOMAIN_SIGNIN_EXTENSIONS:
       return os << "POLICY_DOMAIN_SIGNIN_EXTENSIONS";
+    case POLICY_DOMAIN_EXTENSION_INSTALL:
+      return os << "POLICY_DOMAIN_EXTENSION_INSTALL";
     case POLICY_DOMAIN_SIZE:
       break;
   }

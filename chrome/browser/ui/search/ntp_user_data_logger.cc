@@ -22,18 +22,33 @@
 #include "components/ntp_tiles/metrics.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace {
 
 constexpr char kUIEventCategory[] = "ui";
 
 // Logs CustomizedShortcutSettings on the NTP.
-void LogCustomizedShortcutSettings(bool using_most_visited, bool is_visible) {
+void LogCustomizedShortcutSettings(bool using_most_visited,
+                                   bool using_custom_links,
+                                   bool using_enterprise_shortcuts,
+                                   bool is_visible) {
   CustomizedShortcutSettings setting;
-  if (is_visible && using_most_visited) {
+  if (!is_visible) {
+    setting = CustomizedShortcutSettings::CUSTOMIZED_SHORTCUT_SETTINGS_HIDDEN;
+  } else if (using_enterprise_shortcuts && using_most_visited) {
+    setting = CustomizedShortcutSettings::
+        CUSTOMIZED_SHORTCUT_SETTINGS_ENTERPRISE_SHORTCUTS_AND_MOST_VISITED;
+  } else if (using_enterprise_shortcuts && using_custom_links) {
+    setting = CustomizedShortcutSettings::
+        CUSTOMIZED_SHORTCUT_SETTINGS_ENTERPRISE_SHORTCUTS_AND_CUSTOM_LINKS;
+  } else if (using_enterprise_shortcuts) {
+    setting = CustomizedShortcutSettings::
+        CUSTOMIZED_SHORTCUT_SETTINGS_ENTERPRISE_SHORTCUTS;
+  } else if (using_most_visited) {
     setting =
         CustomizedShortcutSettings::CUSTOMIZED_SHORTCUT_SETTINGS_MOST_VISITED;
-  } else if (is_visible && !using_most_visited) {
+  } else if (using_custom_links) {
     setting =
         CustomizedShortcutSettings::CUSTOMIZED_SHORTCUT_SETTINGS_CUSTOM_LINKS;
   } else {
@@ -55,7 +70,6 @@ CustomizedFeature LoggingEventToCustomizedFeature(NTPLoggingEventType event) {
   }
 
   NOTREACHED();
-  return CustomizedFeature::CUSTOMIZED_FEATURE_BACKGROUND;
 }
 
 // Converts |NTPLoggingEventType| to a |CustomizeChromeBackgroundAction|.
@@ -79,8 +93,6 @@ CustomizeChromeBackgroundAction LoggingEventToCustomizeChromeBackgroundAction(
   }
 
   NOTREACHED();
-  return CustomizeChromeBackgroundAction::
-      CUSTOMIZE_CHROME_BACKGROUND_ACTION_SELECT_COLLECTION;
 }
 
 // Converts |NTPLoggingEventType| to a |CustomizeLocalImageBackgroundAction|.
@@ -98,8 +110,6 @@ LoggingEventToCustomizeLocalImageBackgroundAction(NTPLoggingEventType event) {
   }
 
   NOTREACHED();
-  return CustomizeLocalImageBackgroundAction::
-      CUSTOMIZE_LOCAL_IMAGE_BACKGROUND_ACTION_CANCEL;
 }
 
 // Converts |NTPLoggingEventType| to a |CustomizeShortcutAction|.
@@ -125,12 +135,33 @@ CustomizeShortcutAction LoggingEventToCustomizeShortcutAction(
     case NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY:
       return CustomizeShortcutAction::
           CUSTOMIZE_SHORTCUT_ACTION_TOGGLE_VISIBILITY;
+    case NTP_CUSTOMIZE_PERSONAL_SHORTCUT_TOGGLE_VISIBILITY:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_PERSONAL_SHORTCUT_ACTION_TOGGLE_VISIBILITY;
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UPDATE:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_ENTERPRISE_SHORTCUT_ACTION_UPDATE;
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_REMOVE:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_ENTERPRISE_SHORTCUT_ACTION_REMOVE;
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UNDO:
+      return CustomizeShortcutAction::CUSTOMIZE_ENTERPRISE_SHORTCUT_ACTION_UNDO;
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_RESTORE_ALL:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_ENTERPRISE_SHORTCUT_ACTION_RESTORE_ALL;
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_TOGGLE_VISIBILITY:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_ENTERPRISE_SHORTCUT_ACTION_TOGGLE_VISIBILITY;
+    case NTP_SHORTCUTS_AUTO_REMOVE:
+      return CustomizeShortcutAction::CUSTOMIZE_SHORTCUT_ACTION_AUTO_REMOVE;
+    case NTP_SHORTCUTS_AUTO_REMOVE_UNDO:
+      return CustomizeShortcutAction::
+          CUSTOMIZE_SHORTCUT_ACTION_AUTO_REMOVE_UNDO;
     default:
       break;
   }
 
   NOTREACHED();
-  return CustomizeShortcutAction::CUSTOMIZE_SHORTCUT_ACTION_REMOVE;
 }
 
 // Converts a richer picker background related |NTPLoggingEventType|
@@ -161,7 +192,6 @@ const char* LoggingEventToBackgroundUserActionName(NTPLoggingEventType event) {
       return "NTPRicherPicker.Backgrounds.DailyRefreshEnabled";
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -177,7 +207,6 @@ const char* LoggingEventToMenuUserActionName(NTPLoggingEventType event) {
       return "NTPRicherPicker.DoneClicked";
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -193,7 +222,6 @@ const char* LoggingEventToShortcutUserActionName(NTPLoggingEventType event) {
       return "NTPRicherPicker.Shortcuts.VisibilityToggleClicked";
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -235,7 +263,6 @@ LogoClickType LoggingEventToLogoClick(NTPLoggingEventType event) {
       return LOGO_CLICK_TYPE_ANIMATED;
     default:
       NOTREACHED();
-      return LOGO_CLICK_TYPE_MAX;
   }
 }
 
@@ -254,7 +281,7 @@ NTPUserDataLogger::NTPUserDataLogger(Profile* profile,
     : during_startup_(!AfterStartupTaskUtils::IsBrowserStartupComplete()),
       ntp_url_(ntp_url),
       profile_(profile),
-      // TODO(https://crbug.com/1280310): Migrate NTP navigation startup time
+      // TODO(crbug.com/40811386): Migrate NTP navigation startup time
       // from base::Time to base::TimeTicks to avoid time glitches.
       ntp_navigation_start_time_(
           base::TimeTicks::UnixEpoch() +
@@ -266,14 +293,14 @@ NTPUserDataLogger::~NTPUserDataLogger() = default;
 void NTPUserDataLogger::LogOneGoogleBarFetchDuration(
     bool success,
     const base::TimeDelta& duration) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.OneGoogleBar.RequestLatency",
-                             duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+      "NewTabPage.OneGoogleBar.RequestLatency", duration);
   if (success) {
-    UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.OneGoogleBar.RequestLatency.Success",
-                               duration);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+        "NewTabPage.OneGoogleBar.RequestLatency.Success", duration);
   } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.OneGoogleBar.RequestLatency.Failure",
-                               duration);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+        "NewTabPage.OneGoogleBar.RequestLatency.Failure", duration);
   }
 }
 
@@ -336,6 +363,14 @@ void NTPUserDataLogger::LogEvent(NTPLoggingEventType event,
     case NTP_CUSTOMIZE_SHORTCUT_RESTORE_ALL:
     case NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE:
     case NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY:
+    case NTP_CUSTOMIZE_PERSONAL_SHORTCUT_TOGGLE_VISIBILITY:
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UPDATE:
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_REMOVE:
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UNDO:
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_RESTORE_ALL:
+    case NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_TOGGLE_VISIBILITY:
+    case NTP_SHORTCUTS_AUTO_REMOVE:
+    case NTP_SHORTCUTS_AUTO_REMOVE_UNDO:
       UMA_HISTOGRAM_ENUMERATION("NewTabPage.CustomizeShortcutAction",
                                 LoggingEventToCustomizeShortcutAction(event));
       break;
@@ -379,8 +414,11 @@ void NTPUserDataLogger::LogEvent(NTPLoggingEventType event,
 
 void NTPUserDataLogger::LogMostVisitedLoaded(base::TimeDelta time,
                                              bool using_most_visited,
+                                             bool using_custom_links,
+                                             bool using_enterprise_shortcuts,
                                              bool is_visible) {
-  EmitNtpStatistics(time, using_most_visited, is_visible);
+  EmitNtpStatistics(time, using_most_visited, using_custom_links,
+                    using_enterprise_shortcuts, is_visible);
 }
 
 void NTPUserDataLogger::LogMostVisitedImpression(
@@ -412,6 +450,8 @@ bool NTPUserDataLogger::CustomBackgroundIsConfigured() const {
 
 void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
                                           bool using_most_visited,
+                                          bool using_custom_links,
+                                          bool using_enterprise_shortcuts,
                                           bool is_visible) {
   // We only send statistics once per page.
   if (has_emitted_) {
@@ -419,7 +459,7 @@ void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
   }
 
   int tiles_count = 0;
-  for (const absl::optional<ntp_tiles::NTPTileImpression>& impression :
+  for (const std::optional<ntp_tiles::NTPTileImpression>& impression :
        logged_impressions_) {
     if (!impression.has_value()) {
       break;
@@ -455,9 +495,10 @@ void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
   }
 
   if (is_google) {
-    LogCustomizedShortcutSettings(using_most_visited, is_visible);
+    LogCustomizedShortcutSettings(using_most_visited, using_custom_links,
+                                  using_enterprise_shortcuts, is_visible);
 
-    if (!using_most_visited) {
+    if (using_custom_links) {
       UMA_HISTOGRAM_ENUMERATION(
           "NewTabPage.Customized",
           LoggingEventToCustomizedFeature(NTP_SHORTCUT_CUSTOMIZED));
@@ -476,12 +517,11 @@ void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
 
 void NTPUserDataLogger::EmitNtpTraceEvent(const char* event_name,
                                           base::TimeDelta duration) {
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(kUIEventCategory, event_name,
-                                                   TRACE_ID_LOCAL(this),
-                                                   ntp_navigation_start_time_);
-  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0(
-      kUIEventCategory, event_name, TRACE_ID_LOCAL(this),
-      ntp_navigation_start_time_ + duration);
+  TRACE_EVENT_BEGIN(kUIEventCategory, perfetto::DynamicString(event_name),
+                    perfetto::Track::FromPointer(this),
+                    ntp_navigation_start_time_);
+  TRACE_EVENT_END(kUIEventCategory, perfetto::Track::FromPointer(this),
+                  ntp_navigation_start_time_ + duration);
 }
 
 void NTPUserDataLogger::RecordDoodleImpression(base::TimeDelta time,
@@ -502,14 +542,15 @@ void NTPUserDataLogger::RecordDoodleImpression(base::TimeDelta time,
   }
 
   if (should_record_doodle_load_time_) {
-    UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.LogoShownTime2", time);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.LogoShownTime2", time);
     should_record_doodle_load_time_ = false;
   }
 }
 
 void NTPUserDataLogger::RecordAction(const char* action) {
-  if (!action || !DefaultSearchProviderIsGoogle())
+  if (!action || !DefaultSearchProviderIsGoogle()) {
     return;
+  }
 
   base::RecordAction(base::UserMetricsAction(action));
 }

@@ -10,16 +10,20 @@
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
 import '../settings_shared.css.js';
 import './credit_card_list_entry.js';
+import './iban_list_entry.js';
+import './pay_over_time_issuer_list_entry.js';
 import './passwords_shared.css.js';
-import './upi_id_list_entry.js';
 
+import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 
+import type {SettingsCreditCardListEntryElement} from './credit_card_list_entry.js';
+import type {SettingsIbanListEntryElement} from './iban_list_entry.js';
 import {getTemplate} from './payments_list.html.js';
 
-class SettingsPaymentsListElement extends PolymerElement {
+export class SettingsPaymentsListElement extends PolymerElement {
   static get is() {
     return 'settings-payments-list';
   }
@@ -36,28 +40,33 @@ class SettingsPaymentsListElement extends PolymerElement {
       creditCards: Array,
 
       /**
-       * An array of all saved UPI Virtual Payment Addresses.
+       * An array of all saved IBANs.
        */
-      upiIds: Array,
+      ibans: Array,
 
       /**
-       * True if displaying UPI IDs in settings is enabled.
+       * An array of all saved Pay Over Time issuers.
        */
-      enableUpiIds_: {
+      payOverTimeIssuers: Array,
+
+      /**
+       * True if displaying IBANs in settings is enabled.
+       */
+      enableIbans_: {
         type: Boolean,
         value() {
-          return loadTimeData.getBoolean('showUpiIdSettings');
+          return loadTimeData.getBoolean('showIbansSettings');
         },
       },
 
       /**
-       * True iff both credit cards and UPI IDs will be shown.
+       * True if displaying Pay Over Time in settings is enabled.
        */
-      showCreditCardUpiSeparator_: {
+      enablePayOverTime_: {
         type: Boolean,
-        value: false,
-        computed: 'computeShowCreditCardUpiSeparator_(' +
-            'creditCards, upiIds, enableUpiIds_)',
+        value() {
+          return loadTimeData.getBoolean('shouldShowPayOverTimeSettings');
+        },
       },
 
       /**
@@ -66,17 +75,83 @@ class SettingsPaymentsListElement extends PolymerElement {
       showAnyPaymentMethods_: {
         type: Boolean,
         value: false,
-        computed:
-            'computeShowAnyPaymentMethods_(creditCards, upiIds, enableUpiIds_)',
+        computed: 'computeShowAnyPaymentMethods_(' +
+            'creditCards, ibans, enableIbans_, payOverTimeIssuers, enablePayOverTime_)',
       },
     };
   }
 
-  creditCards: chrome.autofillPrivate.CreditCardEntry[];
-  upiIds: string[];
-  private enableUpiIds_: boolean;
-  private showCreditCardUpiSeparator_: boolean;
-  private showAnyPaymentMethods_: boolean;
+  declare creditCards: chrome.autofillPrivate.CreditCardEntry[];
+  declare ibans: chrome.autofillPrivate.IbanEntry[];
+  declare payOverTimeIssuers: chrome.autofillPrivate.PayOverTimeIssuerEntry[];
+  declare private enableIbans_: boolean;
+  declare private enablePayOverTime_: boolean;
+  declare private showAnyPaymentMethods_: boolean;
+
+  /**
+   * Focuses the next most appropriate element after removing a specific
+   * credit card. Returns `false` if it could not find such an element,
+   * in this case the focus is supposed to be handled by someone else.
+   */
+  updateFocusBeforeCreditCardRemoval(cardIndex: number): boolean {
+    // The focused element is to be reset only if the last element is deleted,
+    // when the number of "dom-repeat" nodes changes and the focus get lost.
+    if (cardIndex === this.creditCards.length - 1) {
+      return this.updateFocusBeforeRemoval_(this.getCreditCardId_(cardIndex));
+    } else {
+      return true;
+    }
+  }
+
+  /**
+   * Focuses the next most appropriate element after removing a specific
+   * iban. Returns `false` if it could not find such an element,
+   * in this case the focus is supposed to be handled by someone else.
+   */
+  updateFocusBeforeIbanRemoval(ibanIndex: number): boolean {
+    // The focused element is to be reset only if the last element is deleted,
+    // when the number of "dom-repeat" nodes changes and the focus get lost.
+    if (ibanIndex === this.ibans.length - 1) {
+      return this.updateFocusBeforeRemoval_(this.getIbanId_(ibanIndex));
+    } else {
+      return true;
+    }
+  }
+
+  /**
+   * Handles focus resetting across all payment method lists. Returns `false`
+   * only when the last payment method is removed, in other cases sets the focus
+   * to either the next or previous payment method.
+   */
+  private updateFocusBeforeRemoval_(id: string): boolean {
+    const paymentMethods =
+        this.shadowRoot!.querySelectorAll<SettingsCreditCardListEntryElement|
+                                          SettingsIbanListEntryElement>(
+            '.payment-method');
+
+    if (paymentMethods.length <= 1) {
+      return false;
+    }
+
+    const index = [...paymentMethods].findIndex((element) => element.id === id);
+    const isLastItem = index === paymentMethods.length - 1;
+    const indexToFocus = index + (isLastItem ? -1 : +1);
+    const menu = paymentMethods[indexToFocus].dotsMenu;
+    if (menu) {
+      focusWithoutInk(menu);
+      return true;
+    }
+
+    return false;
+  }
+
+  private getCreditCardId_(index: number): string {
+    return `card-${index}`;
+  }
+
+  private getIbanId_(index: number): string {
+    return `iban-${index}`;
+  }
 
   /**
    * @return Whether the list exists and has items.
@@ -93,24 +168,31 @@ class SettingsPaymentsListElement extends PolymerElement {
   }
 
   /**
-   * @return true iff both credit cards and UPI IDs will be shown.
+   * @return true iff there are IBANs to be shown.
    */
-  private computeShowCreditCardUpiSeparator_(): boolean {
-    return this.showCreditCards_() && this.showUpiIds_();
+  private showIbans_(): boolean {
+    return this.enableIbans_ && this.hasSome_(this.ibans);
   }
 
   /**
-   * @return true iff there UPI IDs and they should be shown.
+   * @return true iff there are Pay Over Time issuers to be shown.
    */
-  private showUpiIds_(): boolean {
-    return this.enableUpiIds_ && this.hasSome_(this.upiIds);
+  private showPayOverTimeIssuers_(): boolean {
+    return this.enablePayOverTime_ && this.hasSome_(this.payOverTimeIssuers);
   }
 
   /**
    * @return true iff any payment methods will be shown.
    */
   private computeShowAnyPaymentMethods_(): boolean {
-    return this.showCreditCards_() || this.showUpiIds_();
+    return this.showCreditCards_() || this.showIbans_() ||
+        this.showPayOverTimeIssuers_();
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'settings-payments-list': SettingsPaymentsListElement;
   }
 }
 

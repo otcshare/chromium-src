@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/views/chrome_views_delegate.h"
 
 #include "base/environment.h"
+#include "base/feature_list.h"
 #include "base/nix/xdg_util.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
@@ -12,7 +13,10 @@
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "components/version_info/channel.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/linux/linux_ui.h"
+#include "ui/ozone/public/ozone_platform.h"
+#include "ui/views/widget/widget_delegate.h"
 
 namespace {
 
@@ -45,17 +49,31 @@ NativeWidgetType GetNativeWidgetTypeForInitParams(
   // otherwise it's possible for things like menus to obscure the view.
   if (params.z_order &&
       params.z_order.value() == ui::ZOrderLevel::kSecuritySurface) {
-    return NativeWidgetType::DESKTOP_NATIVE_WIDGET_AURA;
+    return NativeWidgetType::kDesktopNativeWidgetAura;
   }
 
-  if (params.requires_accelerated_widget)
-    return NativeWidgetType::DESKTOP_NATIVE_WIDGET_AURA;
+  const bool default_desktop_bubble =
+      (params.type == views::Widget::InitParams::TYPE_BUBBLE ||
+       params.type == views::Widget::InitParams::TYPE_POPUP) &&
+      base::FeatureList::IsEnabled(features::kOzoneBubblesUsePlatformWidgets) &&
+      ui::OzonePlatform::GetInstance()
+          ->GetPlatformRuntimeProperties()
+          .supports_subwindows_as_accelerated_widgets;
+
+  if (!params.child &&
+      params.use_accelerated_widget_override.value_or(default_desktop_bubble)) {
+    return NativeWidgetType::kDesktopNativeWidgetAura;
+  }
+
+  if (params.delegate && params.delegate->use_desktop_widget_override()) {
+    return NativeWidgetType::kDesktopNativeWidgetAura;
+  }
 
   return (params.parent &&
           params.type != views::Widget::InitParams::TYPE_MENU &&
           params.type != views::Widget::InitParams::TYPE_TOOLTIP)
-             ? NativeWidgetType::NATIVE_WIDGET_AURA
-             : NativeWidgetType::DESKTOP_NATIVE_WIDGET_AURA;
+             ? NativeWidgetType::kNativeWidgetAura
+             : NativeWidgetType::kDesktopNativeWidgetAura;
 }
 
 }  // namespace
@@ -80,8 +98,9 @@ bool ChromeViewsDelegate::WindowManagerProvidesTitleBar(bool maximized) {
   //
   // TODO(thomasanderson,crbug.com/784010): Consider using the
   // _UNITY_SHELL wm hint when support for Ubuntu Trusty is dropped.
-  if (!maximized)
+  if (!maximized) {
     return false;
+  }
   static bool is_desktop_environment_unity = IsDesktopEnvironmentUnity();
   return is_desktop_environment_unity;
 }

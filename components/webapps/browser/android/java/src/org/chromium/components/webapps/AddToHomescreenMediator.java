@@ -4,52 +4,55 @@
 
 package org.chromium.components.webapps;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.graphics.Bitmap;
 import android.util.Pair;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.StringRes;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /**
  * The mediator class in the MVC architecture of the add-to-homescreen component. The C++
- * counterpart of this class calls various Java set methods ({@link #setIcon},
- * {@link #setWebAppInfo}, {@link #setWebAppInfoWithIcon}, and {@link #setNativeAppInfo}) when more
+ * counterpart of this class calls various Java set methods ({@link #setIcon}, {@link
+ * #setWebAppInfo}, {@link #setWebAppInfoWithIcon}, and {@link #setNativeAppInfo}) when more
  * information about the app is available. These methods modify the model that lives on the Java
  * side.
  */
 @JNINamespace("webapps")
+@NullMarked
 class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
     private long mNativeAddToHomescreenMediator;
-    private PropertyModel mModel;
-    private WindowAndroid mWindowAndroid;
-    private AppData mNativeAppData;
+    private final PropertyModel mModel;
+    private final WindowAndroid mWindowAndroid;
+    private @Nullable AppData mNativeAppData;
+    private final Runnable mOnFlowCompleted;
 
-    AddToHomescreenMediator(PropertyModel model, WindowAndroid windowAndroid) {
+    AddToHomescreenMediator(
+            PropertyModel model,
+            WindowAndroid windowAndroid,
+            WebContents webContents,
+            Runnable onFlowCompleted) {
         mModel = model;
         mWindowAndroid = windowAndroid;
-        mNativeAddToHomescreenMediator = AddToHomescreenMediatorJni.get().initialize(this);
-    }
-
-    void startForAppMenu(@NonNull WebContents webContents, @StringRes int titleId) {
-        if (mNativeAddToHomescreenMediator == 0) return;
-
-        AddToHomescreenMediatorJni.get().startForAppMenu(
-                mNativeAddToHomescreenMediator, webContents, titleId);
+        mNativeAddToHomescreenMediator =
+                AddToHomescreenMediatorJni.get().initialize(this, webContents);
+        mOnFlowCompleted = onFlowCompleted;
     }
 
     @CalledByNative
-    void setIcon(Bitmap icon, boolean isAdaptive, boolean needToAddPadding) {
+    void setIcon(Bitmap icon, boolean isAdaptive) {
         Bitmap iconToShow = icon;
-        if (needToAddPadding) {
-            assert isAdaptive;
-            iconToShow = WebappsIconUtils.createHomeScreenIconFromWebIcon(icon, true /*maskable*/);
+        if (isAdaptive) {
+            iconToShow =
+                    WebappsIconUtils.createHomeScreenIconFromWebIcon(icon, /* maskable= */ true);
         }
 
         mModel.set(AddToHomescreenProperties.ICON, new Pair<>(iconToShow, isAdaptive));
@@ -57,10 +60,10 @@ class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
     }
 
     @CalledByNative
-    void setWebAppInfo(String title, String url, boolean isWebApk) {
+    void setWebAppInfo(String title, String url, @AppType int appType) {
         mModel.set(AddToHomescreenProperties.TITLE, title);
         mModel.set(AddToHomescreenProperties.URL, url);
-        mModel.set(AddToHomescreenProperties.TYPE, isWebApk ? AppType.WEBAPK : AppType.SHORTCUT);
+        mModel.set(AddToHomescreenProperties.TYPE, appType);
     }
 
     @CalledByNative
@@ -70,7 +73,8 @@ class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
         mModel.set(AddToHomescreenProperties.TYPE, AppType.NATIVE);
         mModel.set(AddToHomescreenProperties.NATIVE_APP_RATING, nativeAppData.rating());
         mModel.set(AddToHomescreenProperties.CAN_SUBMIT, true);
-        mModel.set(AddToHomescreenProperties.NATIVE_INSTALL_BUTTON_TEXT,
+        mModel.set(
+                AddToHomescreenProperties.NATIVE_INSTALL_BUTTON_TEXT,
                 nativeAppData.installButtonText());
     }
 
@@ -83,7 +87,7 @@ class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
         if (mNativeAddToHomescreenMediator == 0) return;
 
         AddToHomescreenMediatorJni.get().addToHomescreen(mNativeAddToHomescreenMediator, title);
-        destroyNative();
+        onFlowCompleted();
     }
 
     @Override
@@ -92,6 +96,7 @@ class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
             return false;
         }
 
+        assumeNonNull(mNativeAppData);
         mWindowAndroid.showIntent(mNativeAppData.detailsIntent(), null, null);
 
         if (mNativeAddToHomescreenMediator != 0) {
@@ -105,24 +110,28 @@ class AddToHomescreenMediator implements AddToHomescreenViewDelegate {
         if (mNativeAddToHomescreenMediator == 0) return;
 
         AddToHomescreenMediatorJni.get().onUiDismissed(mNativeAddToHomescreenMediator);
-        destroyNative();
+        onFlowCompleted();
     }
 
-    private void destroyNative() {
-        if (mNativeAddToHomescreenMediator == 0) return;
+    private void onFlowCompleted() {
+        if (mNativeAddToHomescreenMediator != 0) {
+            AddToHomescreenMediatorJni.get().destroy(mNativeAddToHomescreenMediator);
+            mNativeAddToHomescreenMediator = 0;
+        }
 
-        AddToHomescreenMediatorJni.get().destroy(mNativeAddToHomescreenMediator);
-        mNativeAddToHomescreenMediator = 0;
+        mOnFlowCompleted.run();
     }
 
     @NativeMethods
     interface Natives {
-        long initialize(AddToHomescreenMediator instance);
-        void startForAppMenu(long nativeAddToHomescreenMediator, WebContents webContents,
-                @StringRes int titleId);
+        long initialize(AddToHomescreenMediator instance, WebContents webContents);
+
         void addToHomescreen(long nativeAddToHomescreenMediator, String title);
+
         void onNativeDetailsShown(long nativeAddToHomescreenMediator);
+
         void onUiDismissed(long nativeAddToHomescreenMediator);
+
         void destroy(long nativeAddToHomescreenMediator);
     }
 }

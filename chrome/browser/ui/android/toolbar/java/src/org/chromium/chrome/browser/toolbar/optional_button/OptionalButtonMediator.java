@@ -5,14 +5,16 @@
 package org.chromium.chrome.browser.toolbar.optional_button;
 
 import android.content.res.ColorStateList;
-import android.view.ViewGroup;
+
+import androidx.annotation.ColorInt;
 
 import org.chromium.base.Callback;
-import org.chromium.chrome.browser.toolbar.ButtonData;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.toolbar.optional_button.OptionalButtonProperties.OnBeforeWidthTransitionCallback;
 import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.function.BooleanSupplier;
-
+@NullMarked
 class OptionalButtonMediator {
     private final PropertyModel mModel;
 
@@ -20,49 +22,68 @@ class OptionalButtonMediator {
         mModel = model;
     }
 
-    void updateButton(ButtonData buttonData) {
+    void updateButton(@Nullable ButtonData buttonData) {
         mModel.set(OptionalButtonProperties.BUTTON_DATA, buttonData);
         if (buttonData != null) {
             mModel.set(OptionalButtonProperties.IS_ENABLED, buttonData.isEnabled());
         }
     }
 
-    void setTransitionRoot(ViewGroup transitionRoot) {
-        mModel.set(OptionalButtonProperties.TRANSITION_ROOT, transitionRoot);
-    }
-
     void setTransitionStartedCallback(Callback<Integer> transitionStartedCallback) {
         mModel.set(OptionalButtonProperties.TRANSITION_STARTED_CALLBACK, transitionStartedCallback);
     }
 
-    void setTransitionFinishedCallback(Callback<Integer> transitionFinishedCallback) {
-        mModel.set(
-                OptionalButtonProperties.TRANSITION_FINISHED_CALLBACK, transitionFinishedCallback);
-    }
-
-    void setIconForegroundColor(ColorStateList colorStateList) {
+    void setIconForegroundColor(@Nullable ColorStateList colorStateList) {
         mModel.set(OptionalButtonProperties.ICON_TINT_LIST, colorStateList);
     }
 
-    void setBackgroundColorFilter(int backgroundColor) {
+    void setOnBeforeWidthTransitionCallback(OnBeforeWidthTransitionCallback callback) {
+        mModel.set(OptionalButtonProperties.ON_BEFORE_WIDTH_TRANSITION_CALLBACK, callback);
+    }
+
+    void setBackgroundColorFilter(@ColorInt int backgroundColor) {
         mModel.set(OptionalButtonProperties.ICON_BACKGROUND_COLOR, backgroundColor);
     }
 
+    void setBackgroundAlpha(int alpha) {
+        mModel.set(OptionalButtonProperties.ICON_BACKGROUND_ALPHA, alpha);
+    }
+
+    void setIsIncognitoBranded(boolean isIncognitoBranded) {
+        mModel.set(OptionalButtonProperties.IS_INCOGNITO_BRANDED, isIncognitoBranded);
+    }
+
+    void setCanChangeVisibility(boolean canChange) {
+        mModel.set(OptionalButtonProperties.CAN_CHANGE_VISIBILITY, canChange);
+    }
+
     public void setOnBeforeHideTransitionCallback(Runnable onBeforeHideTransitionCallback) {
-        mModel.set(OptionalButtonProperties.ON_BEFORE_HIDE_TRANSITION_CALLBACK,
+        mModel.set(
+                OptionalButtonProperties.ON_BEFORE_HIDE_TRANSITION_CALLBACK,
                 onBeforeHideTransitionCallback);
+    }
+
+    public void setOnBeforeShowTransitionCallback(Runnable onBeforeShowTransitionCallback) {
+        mModel.set(
+                OptionalButtonProperties.ON_BEFORE_SHOW_TRANSITION_CALLBACK,
+                onBeforeShowTransitionCallback);
+    }
+
+    public void setOnBeforeDelayedTransitionCallback(Runnable onBeforeDelayedTransitionCallback) {
+        mModel.set(
+                OptionalButtonProperties.ON_BEFORE_DELAYED_TRANSITION_CALLBACK,
+                onBeforeDelayedTransitionCallback);
     }
 
     public void setPaddingStart(int paddingStart) {
         mModel.set(OptionalButtonProperties.PADDING_START, paddingStart);
     }
 
-    public void cancelTransition() {
-        mModel.set(OptionalButtonProperties.TRANSITION_CANCELLATION_REQUESTED, true);
+    public void setCollapsedStateWidth(int width) {
+        mModel.set(OptionalButtonProperties.COLLAPSED_STATE_WIDTH, width);
     }
 
-    public void setIsAnimationAllowedPredicate(BooleanSupplier isAnimationAllowedPredicate) {
-        mModel.set(OptionalButtonProperties.IS_ANIMATION_ALLOWED_PREDICATE,
-                isAnimationAllowedPredicate);
+    public void cancelTransition() {
+        mModel.set(OptionalButtonProperties.TRANSITION_CANCELLATION_REQUESTED, true);
     }
 }

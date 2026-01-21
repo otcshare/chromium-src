@@ -12,7 +12,7 @@
 namespace web {
 class FindInPageManager;
 class WebState;
-}
+}  // namespace web
 
 // Class which conforms to CRWFindInPageManagerDelegate protocol.
 @interface CRWFakeFindInPageManagerDelegate
@@ -27,6 +27,7 @@ class WebState;
     didSelectMatchAtIndex:(NSInteger)index
         withContextString:(NSString*)contextString
               forWebState:(web::WebState*)webState;
+- (void)userDismissedFindNavigatorForManager:(web::FindInPageManager*)manager;
 
 // The last web::WebState received in delegate method calls.
 @property(nonatomic, readonly) web::WebState* webState;
@@ -38,6 +39,8 @@ class WebState;
 @property(nonatomic, readonly) NSInteger index;
 // The last `contextString` passed in `didSelectMatchAtIndex:`.
 @property(nonatomic, readonly) NSString* contextString;
+// Whether `userDismissedFindNavigatorForManager` has been called.
+@property(nonatomic, readonly) BOOL userDismissedFindNavigator;
 
 @end
 

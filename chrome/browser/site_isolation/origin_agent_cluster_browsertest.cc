@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/metrics/metrics_memory_details.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/network_session_configurator/common/network_switches.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
 #include "components/variations/active_field_trials.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -49,14 +50,14 @@ class TestMemoryDetails : public MetricsMemoryDetails {
 
   int GetTotalProcessCount() {
     std::vector<Bucket> buckets = uma_->GetAllSamples(
-        "Memory.RenderProcessHost.Count.InitializedAndNotDead");
+        "Memory.RenderProcessHost.Count2.InitializedAndNotDead");
     DCHECK(buckets.size() == 1U);
     return buckets[0].min;
   }
 
   int GetOacProcessCount() {
     std::vector<Bucket> buckets = uma_->GetAllSamples(
-        "Memory.RenderProcessHost.Count.OriginAgentClusterOverhead");
+        "Memory.RenderProcessHost.Count2.OriginAgentClusterOverhead");
     // The bucket size will be zero when testing with OriginAgentCluster
     // disabled.
     CHECK(buckets.size() == 1U || buckets.size() == 0U);
@@ -117,7 +118,6 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
                             base::Unretained(this)));
     ASSERT_TRUE(https_server()->Start());
 
-    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
     std::string origin_list =
         https_server()->GetURL("isolated.foo.com", "/").spec();
     command_line->AppendSwitchASCII(switches::kIsolateOrigins, origin_list);
@@ -132,12 +132,13 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(https_server()->ShutdownAndWaitUntilComplete());
   }
 
-  net::EmbeddedTestServer* https_server() { return &https_server_; }
+  net::EmbeddedTestServer* https_server() {
+    return &embedded_https_test_server();
+  }
 
  protected:
   explicit OriginAgentClusterBrowserTest(bool enable_oac)
-      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS),
-        enable_origin_agent_cluster_(enable_oac) {
+      : enable_origin_agent_cluster_(enable_oac) {
     // To keep the tests easier to reason about, turn off both the spare
     // renderer process and process reuse for subframes in different
     // BrowsingInstances.
@@ -176,7 +177,10 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
     return nullptr;
   }
 
-  net::EmbeddedTestServer https_server_;
+  // TODO(https://crbug.com/423465927): Explore a better approach to make the
+  // existing tests run with the prewarm feature enabled.
+  test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
   base::test::ScopedFeatureList feature_list_;
   bool enable_origin_agent_cluster_;
 };
@@ -217,28 +221,6 @@ IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest, Navigations) {
   EXPECT_TRUE(NavigateIframeToURL(web_contents, "test", origin_keyed_url));
 
   web_feature_waiter->Wait();
-}
-
-IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
-                       SyntheticTrialActivation) {
-  const std::string kSyntheticTrialName =
-      "ProcessIsolatedOriginAgentClusterActive";
-  const std::string kSyntheticTrialGroup = "Enabled";
-
-  GURL start_url(https_server()->GetURL("foo.com", "/iframe.html"));
-  GURL origin_keyed_url(
-      https_server()->GetURL("origin-keyed.foo.com", "/origin_key_me"));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
-  // We won't have an active synthetic trial until we navigate to
-  // `origin_keyed_url`.
-  EXPECT_FALSE(variations::HasSyntheticTrial(kSyntheticTrialName));
-  EXPECT_TRUE(NavigateIframeToURL(web_contents, "test", origin_keyed_url));
-  EXPECT_TRUE(variations::IsInSyntheticTrialGroup(kSyntheticTrialName,
-                                                  kSyntheticTrialGroup));
 }
 
 IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
@@ -307,6 +289,8 @@ IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
 // We expect the OAC overhead to be zero when no OAC origins are present.
 IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
                        ProcessCountMetricsNoOACs) {
+  bool origin_keyed_processes_by_default =
+      content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
   GURL start_url(https_server()->GetURL("foo.com", "/iframe.html"));
   GURL sub_origin_url(https_server()->GetURL("sub.foo.com", "/title1.html"));
 
@@ -320,9 +304,18 @@ IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
   scoped_refptr<TestMemoryDetails> details = new TestMemoryDetails();
   details->StartFetchAndWait();
 
-  EXPECT_EQ(1, details->GetTotalProcessCount());
-  EXPECT_EQ(0, details->GetOacProcessCount());
-  EXPECT_EQ(0, details->GetOacProcessCountPercent());
+  if (origin_keyed_processes_by_default) {
+    // Even though sub.foo.com doesn't have an OAC opt-in header, it will still
+    // be isolated in this case due to the Origin Isolation mode, and thus it
+    // should still count as overhead.
+    EXPECT_EQ(2, details->GetTotalProcessCount());
+    EXPECT_EQ(1, details->GetOacProcessCount());
+    EXPECT_EQ(50, details->GetOacProcessCountPercent());
+  } else {
+    EXPECT_EQ(1, details->GetTotalProcessCount());
+    EXPECT_EQ(0, details->GetOacProcessCount());
+    EXPECT_EQ(0, details->GetOacProcessCountPercent());
+  }
 }
 
 // Two distinct OAC sub-origins with a base-origin should have an overhead of

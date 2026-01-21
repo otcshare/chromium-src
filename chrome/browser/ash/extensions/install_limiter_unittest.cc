@@ -6,6 +6,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/demo_mode/demo_mode_test_helper.h"
@@ -61,9 +62,11 @@ class InstallLimiterShouldDeferInstallTest
 
   ~InstallLimiterShouldDeferInstallTest() override = default;
 
+ protected:
+  ash::ScopedStubInstallAttributes test_install_attributes_;
+
  private:
   content::BrowserTaskEnvironment task_environment_;
-  ash::ScopedStubInstallAttributes test_install_attributes_;
   user_manager::ScopedUserManager scoped_user_manager_;
 };
 
@@ -72,8 +75,10 @@ TEST_P(InstallLimiterShouldDeferInstallTest, ShouldDeferInstall) {
       extension_misc::kScreensaverAppId, extension_misc::kNewAttractLoopAppId};
 
   ash::DemoModeTestHelper demo_mode_test_helper;
-  if (GetParam() != ash::DemoSession::DemoModeConfig::kNone)
+  if (GetParam() != ash::DemoSession::DemoModeConfig::kNone) {
+    test_install_attributes_.Get()->SetDemoMode();
     demo_mode_test_helper.InitializeSession(GetParam());
+  }
 
   // In demo mode, all apps larger than 1MB except for the screensaver
   // should be deferred.
@@ -113,15 +118,20 @@ class InstallLimiterTest : public extensions::ExtensionServiceTestBase {
   void SetUp() override {
     extensions::ExtensionServiceTestBase::SetUp();
 
-    extensions::ExtensionServiceTestBase::ExtensionServiceInitParams params =
-        CreateDefaultInitParams();
+    ExtensionServiceInitParams params;
     params.enable_install_limiter = true;
-    InitializeExtensionService(params);
+    InitializeExtensionService(std::move(params));
 
     install_limiter_ = InstallLimiter::Get(profile());
 
     mock_installer_ =
-        base::MakeRefCounted<extensions::MockCrxInstaller>(service());
+        base::MakeRefCounted<extensions::MockCrxInstaller>(profile());
+  }
+
+  void TearDown() override {
+    mock_installer_.reset();
+    install_limiter_ = nullptr;
+    extensions::ExtensionServiceTestBase::TearDown();
   }
 
   extensions::CRXFileInfo CreateTestExtensionCrx(const base::FilePath& path,
@@ -133,7 +143,7 @@ class InstallLimiterTest : public extensions::ExtensionServiceTestBase {
     return crx_info;
   }
 
-  InstallLimiter* install_limiter_;
+  raw_ptr<InstallLimiter> install_limiter_;
   scoped_refptr<extensions::MockCrxInstaller> mock_installer_;
 };
 
@@ -228,17 +238,17 @@ TEST_F(InstallLimiterTest, InstallSmallBeforeLargeExtensions) {
     testing::InSequence s;
 
     EXPECT_CALL(*mock_installer_, AddInstallerCallback(_))
-        .WillOnce(Invoke([&](CrxInstaller::InstallerResultCallback callback) {
+        .WillOnce([&](CrxInstaller::InstallerResultCallback callback) {
           installer_callback = std::move(callback);
-        }));
+        });
     EXPECT_CALL(
         *mock_installer_,
         InstallCrxFile(Field(&extensions::CRXFileInfo::path, crx_path_small)))
-        .WillOnce(Invoke([&] {
-          absl::optional<CrxInstallError> error;
+        .WillOnce([&] {
+          std::optional<CrxInstallError> error;
           task_environment()->GetMainThreadTaskRunner()->PostTask(
               FROM_HERE, base::BindOnce(std::move(installer_callback), error));
-        }));
+        });
 
     EXPECT_CALL(*mock_installer_, AddInstallerCallback(_));
     EXPECT_CALL(

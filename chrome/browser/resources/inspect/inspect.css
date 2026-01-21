@@ -52,7 +52,7 @@ img {
 #navigation {
   flex-shrink: 0;
   padding-top: 20px;
-  width: 150px;
+  width: 200px;
 }
 
 #content {
@@ -312,8 +312,14 @@ img {
 }
 
 .settings-bar label {
-  display: inline-block;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
   width: 35ex;
+
+  &.full-width {
+    width: 100%;
+  }
 }
 
 .settings-bar button {
@@ -321,7 +327,11 @@ img {
 }
 
 .node-frontend-action {
+  background-color: transparent;
+  border: none;
+  font-size: inherit;
   margin: 6px 4px;
+  padding: 0;
 }
 
 dialog.config::backdrop {
@@ -450,6 +460,15 @@ dialog.target-discovery .port-forwarding {
   flex-grow: 1
 }
 
+#bubble-locking-label {
+  width: unset;
+}
+
+.remote-debugging-text {
+  padding: 5px 0;
+  max-width: 500px;
+}
+
 @media (forced-colors: active) {
   .content-header {
     background: Canvas;
@@ -493,4 +512,15 @@ dialog.target-discovery .port-forwarding {
     border-color: ButtonText;
     outline: none;
   }
+}
+
+.extended-lifetime-label {
+  background-color: var(--google-grey-300);
+  border-radius: 3px;
+  color: var(--google-grey-900);
+  display: inline-block;
+  font-size: 0.8em;
+  margin-left: 4px;
+  padding: 1px 4px;
+  vertical-align: middle;
 }

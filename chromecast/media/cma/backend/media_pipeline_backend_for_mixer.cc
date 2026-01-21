@@ -8,7 +8,7 @@
 
 #include <limits>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -22,7 +22,7 @@ namespace {
 
 // Delay video playback to achieve AV sync when video starts.
 // This value is based on experimental calculation.
-int64_t kSyncedPlaybackStartDelayUs = 20000;
+constexpr int64_t kSyncedPlaybackStartDelayUs = 20000;
 
 }  // namespace
 

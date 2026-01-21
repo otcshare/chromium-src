@@ -70,8 +70,8 @@ class BASE_EXPORT IATPatchFunction {
  private:
   HMODULE module_handle_ = nullptr;
   raw_ptr<void> intercept_function_ = nullptr;
-  void* original_function_ = nullptr;
-  IMAGE_THUNK_DATA* iat_thunk_ = nullptr;
+  raw_ptr<void> original_function_ = nullptr;
+  raw_ptr<IMAGE_THUNK_DATA> iat_thunk_ = nullptr;
 };
 
 }  // namespace win

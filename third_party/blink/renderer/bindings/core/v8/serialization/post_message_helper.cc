@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -34,8 +35,9 @@ scoped_refptr<SerializedScriptValue> PostMessageHelper::SerializeMessageByMove(
   scoped_refptr<SerializedScriptValue> serialized_message =
       SerializedScriptValue::Serialize(isolate, message.V8Value(),
                                        serialize_options, exception_state);
-  if (exception_state.HadException())
+  if (exception_state.HadException()) {
     return nullptr;
+  }
 
   serialized_message->UnregisterMemoryAllocatedWithCurrentScriptContext();
   return serialized_message;
@@ -119,10 +121,10 @@ scoped_refptr<const SecurityOrigin> PostMessageHelper::GetTargetOrigin(
   // It doesn't make sense target a postMessage at an opaque origin
   // because there's no way to represent an opaque origin in a string.
   if (target->IsOpaque()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
-                                      "Invalid target origin '" +
-                                          target_origin +
-                                          "' in a call to 'postMessage'.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kSyntaxError,
+        StrCat({"Invalid target origin '", target_origin,
+                "' in a call to 'postMessage'."}));
     return nullptr;
   }
   return target;

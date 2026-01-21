@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/display_lock/display_lock_document_state.h"
 
 #include "base/trace_event/trace_event.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_context.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -14,10 +15,9 @@
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer_entry.h"
-#include "third_party/blink/renderer/core/layout/deferred_shaping.h"
-#include "third_party/blink/renderer/core/layout/deferred_shaping_controller.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_utils.h"
 
 namespace {
@@ -121,17 +121,18 @@ IntersectionObserver& DisplayLockDocumentState::EnsureIntersectionObserver() {
     // Paint containment requires using the overflow clip edge. To do otherwise
     // results in overflow-clip-margin not being painted in certain scenarios.
     intersection_observer_ = IntersectionObserver::Create(
-        {Length::Percent(kViewportMarginPercentage)},
-        {std::numeric_limits<float>::min()}, document_,
-        WTF::BindRepeating(
+        *document_,
+        BindRepeating(
             &DisplayLockDocumentState::ProcessDisplayLockActivationObservation,
             WrapWeakPersistent(this)),
         LocalFrameUkmAggregator::kDisplayLockIntersectionObserver,
-        IntersectionObserver::kDeliverDuringPostLayoutSteps,
-        IntersectionObserver::kFractionOfTarget, 0 /* delay */,
-        false /* track_visibility */, false /* always report_root_bounds */,
-        IntersectionObserver::kApplyMarginToTarget,
-        true /* use_overflow_clip_edge */);
+        IntersectionObserver::Params{
+            .margin = {Length::Percent(kViewportMarginPercentage)},
+            .margin_target = IntersectionObserver::kApplyMarginToTarget,
+            .thresholds = {std::numeric_limits<float>::min()},
+            .behavior = IntersectionObserver::kDeliverDuringPostLayoutSteps,
+            .use_overflow_clip_edge = true,
+        });
   }
   return *intersection_observer_;
 }
@@ -147,12 +148,12 @@ void DisplayLockDocumentState::ProcessDisplayLockActivationObservation(
     if (context->HadAnyViewportIntersectionNotifications()) {
       if (entry->isIntersecting()) {
         document_->View()->EnqueueStartOfLifecycleTask(
-            WTF::BindOnce(&DisplayLockContext::NotifyIsIntersectingViewport,
-                          WrapWeakPersistent(context)));
+            BindOnce(&DisplayLockContext::NotifyIsIntersectingViewport,
+                     WrapWeakPersistent(context)));
       } else {
         document_->View()->EnqueueStartOfLifecycleTask(
-            WTF::BindOnce(&DisplayLockContext::NotifyIsNotIntersectingViewport,
-                          WrapWeakPersistent(context)));
+            BindOnce(&DisplayLockContext::NotifyIsNotIntersectingViewport,
+                     WrapWeakPersistent(context)));
       }
       had_asynchronous_notifications = true;
     } else {
@@ -172,8 +173,8 @@ void DisplayLockDocumentState::ProcessDisplayLockActivationObservation(
     // lifecycle).
     document_->GetTaskRunner(TaskType::kInternalFrameLifecycleControl)
         ->PostTask(FROM_HERE,
-                   WTF::BindOnce(&DisplayLockDocumentState::ScheduleAnimation,
-                                 WrapWeakPersistent(this)));
+                   BindOnce(&DisplayLockDocumentState::ScheduleAnimation,
+                            WrapWeakPersistent(this)));
   }
 }
 
@@ -209,8 +210,11 @@ void DisplayLockDocumentState::ElementAddedToTopLayer(Element* element) {
     return;
   }
 
-  if (MarkAncestorContextsHaveTopLayerElement(element))
+  if (MarkAncestorContextsHaveTopLayerElement(element)) {
+    StyleEngine& style_engine = document_->GetStyleEngine();
+    StyleEngine::DetachLayoutTreeScope detach_scope(style_engine);
     element->DetachLayoutTree();
+  }
 }
 
 void DisplayLockDocumentState::ElementRemovedFromTopLayer(Element*) {
@@ -251,40 +255,31 @@ bool DisplayLockDocumentState::MarkAncestorContextsHaveTopLayerElement(
   return had_locked_ancestor;
 }
 
-void DisplayLockDocumentState::NotifySharedElementPseudoTreeChanged() {
-  // Note that this function doesn't use
-  // DisplayLockContext::DetermineIfInSharedElementTransitionChain, since that
-  // would mean we have to call UpdateSharedElementAncestorLocks for each lock.
-  // This function only calls it once by hoisting it out of the context calls.
-
-  // Reset the flag and determine if the ancestor is shared element.
+void DisplayLockDocumentState::NotifyViewTransitionPseudoTreeChanged() {
+  // Reset the view transition element flag.
+  // TODO(vmpstr): This should be optimized to keep track of elements that
+  // actually have this flag set.
   for (auto context : display_lock_contexts_)
-    context->ResetAndDetermineIfAncestorIsSharedElement();
+    context->ResetDescendantIsViewTransitionElement();
 
-  // Also process the shared elements to check if the shared element's ancestors
-  // are locks. These two parts give us the full chain (either locks are
-  // ancestors of shared or shared are ancestor of locks).
-  UpdateSharedElementAncestorLocks();
+  // Process the view transition elements to check if their ancestors are
+  // locks that need to be made relevant.
+  UpdateViewTransitionElementAncestorLocks();
 }
 
-void DisplayLockDocumentState::UpdateSharedElementAncestorLocks() {
-  auto* transition = ViewTransitionUtils::GetActiveTransition(*document_);
+void DisplayLockDocumentState::UpdateViewTransitionElementAncestorLocks() {
+  auto* transition = ViewTransitionUtils::GetTransition(*document_);
   if (!transition)
     return;
 
-  const auto& shared_elements = transition->GetTransitioningElements();
-  for (auto element : shared_elements) {
+  const auto& transitioning_elements = transition->GetTransitioningElements();
+  for (auto element : transitioning_elements) {
     auto* ancestor = element.Get();
-    // When the element which has c-v:auto is itself a shared element, marking
-    // it as such could go in either walk (from the function naming) but it
-    // happens in the ancestor chain check and skipped here. This DCHECK
-    // verifies this.
-    DCHECK(!element->GetDisplayLockContext() ||
-           element->GetDisplayLockContext()->IsInSharedElementAncestorChain());
-
+    // When the element which has c-v:auto is itself a view transition element,
+    // we keep it locked. So start with the parent.
     while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor))) {
       if (auto* context = ancestor->GetDisplayLockContext())
-        context->SetInSharedElementTransitionChain();
+        context->SetDescendantIsViewTransitionElement();
     }
   }
 }
@@ -357,38 +352,11 @@ void DisplayLockDocumentState::ForcedNodeInfo::ForceLockIfNeeded(
 
 void DisplayLockDocumentState::ForcedRangeInfo::ForceLockIfNeeded(
     Element* new_locked_element) {
-  // TODO(crbug.com/1256849): Combine this with the range loop in
-  //   DisplayLockUtilities::ScopedForcedUpdate::Impl::Impl.
-  // Ranges use NodeTraversal::Next to go in between their start and end nodes,
-  // and will access the layout information of each of those nodes. In order to
-  // ensure that each of these nodes has unlocked layout information, we have to
-  // do a scoped unlock for each of those nodes by unlocking all of their flat
-  // tree ancestors.
-  for (Node* node = range_->FirstNode(); node != range_->PastLastNode();
-       node = NodeTraversal::Next(*node)) {
-    if (node->IsChildOfShadowHost()) {
-      // This node may be slotted into another place in the flat tree, so we
-      // have to do a flat tree parent traversal for it.
-      for (Node* ancestor = node; ancestor;
-           ancestor = FlatTreeTraversal::Parent(*ancestor)) {
-        if (ancestor == new_locked_element) {
-          chain_->AddForcedUpdateScopeForContext(
-              new_locked_element->GetDisplayLockContext());
-          return;
-        }
-      }
-    } else if (node == new_locked_element) {
+  for (Element* element :
+       DisplayLockUtilities::InclusiveAncestorsOfRange(*range_)) {
+    if (element == new_locked_element) {
       chain_->AddForcedUpdateScopeForContext(
           new_locked_element->GetDisplayLockContext());
-      return;
-    }
-  }
-  for (Node* node = range_->FirstNode(); node;
-       node = FlatTreeTraversal::Parent(*node)) {
-    if (node == new_locked_element) {
-      chain_->AddForcedUpdateScopeForContext(
-          new_locked_element->GetDisplayLockContext());
-      return;
     }
   }
 }
@@ -402,7 +370,9 @@ DisplayLockDocumentState::ScopedForceActivatableDisplayLocks::
       if (context->HasElement()) {
         context->DidForceActivatableDisplayLocks();
       } else {
-        NOTREACHED()
+        // This used to be a DUMP_WILL_BE_NOTREACHED(), but the crash volume was
+        // too high. See crbug.com/41494130
+        DCHECK(false)
             << "The DisplayLockContext's element has been garbage collected or"
             << " otherwise deleted, but the DisplayLockContext is still alive!"
             << " This shouldn't happen and could cause a crash. See"
@@ -455,13 +425,10 @@ void DisplayLockDocumentState::IssueForcedRenderWarning(Element* element) {
         RuntimeEnabledFeatures::WarnOnContentVisibilityRenderAccessEnabled()
             ? mojom::blink::ConsoleMessageLevel::kWarning
             : mojom::blink::ConsoleMessageLevel::kVerbose;
-    auto* console_message = MakeGarbageCollected<ConsoleMessage>(
+    element->AddConsoleMessage(
         mojom::blink::ConsoleMessageSource::kJavaScript, level,
         forced_render_warnings_ == kMaxConsoleMessages ? kForcedRenderingMax
                                                        : kForcedRendering);
-    console_message->SetNodes(document_->GetFrame(),
-                              {DOMNodeIds::IdForNode(element)});
-    document_->AddConsoleMessage(console_message);
   }
 }
 

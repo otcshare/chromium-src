@@ -10,6 +10,8 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window_observer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/events/event_handler.h"
@@ -77,13 +79,6 @@ class ASH_EXPORT FullscreenMagnifierController
   // Returns if the screen magnifier is enabled or not.
   bool IsEnabled() const;
 
-  // Enables or disables the feature for keeping the text input focus centered.
-  void SetKeepFocusCentered(bool keep_focus_centered);
-
-  // Returns true if magnifier will keep the focus centered in screen for text
-  // input.
-  bool KeepFocusCentered() const;
-
   // Sets the magnification ratio. 1.0f means no magnification.
   void SetScale(float scale, bool animate);
 
@@ -142,7 +137,13 @@ class ASH_EXPORT FullscreenMagnifierController
   // Returns the current number of touch points.
   int32_t GetTouchPointsForTesting() const { return touch_points_; }
 
+  void set_cursor_moved_callback_for_testing(
+      base::RepeatingCallback<void(const gfx::Point&)> callback) {
+    cursor_moved_callback_for_testing_ = std::move(callback);
+  }
+
  private:
+  friend class FullscreenMagnifierControllerTest;
   class GestureProviderClient;
 
   // ui::ImplicitAnimationObserver overrides:
@@ -200,7 +201,10 @@ class ASH_EXPORT FullscreenMagnifierController
                                   bool animate,
                                   bool ignore_mouse_change);
 
-  void OnMouseMove(const gfx::Point& location);
+  // Takes mouse root `location` in floating-point DIP. Note at higher zoom
+  // levels, the floating point values matter more, because the ratio of px to
+  // DIP increases.
+  void OnMouseMove(const gfx::PointF& location);
 
   // Move the mouse cursot to the given point. Actual move will be done when
   // the animation is completed. This should be called after animation is
@@ -244,8 +248,11 @@ class ASH_EXPORT FullscreenMagnifierController
   // to center the |rect| in that dimension.
   void MoveMagnifierWindowFollowRect(const gfx::Rect& rect);
 
+  // Moves the cursor to the given location in the root window.
+  void MoveCursorTo(const gfx::Point& root_location);
+
   // Target root window. This must not be NULL.
-  aura::Window* root_window_;
+  raw_ptr<aura::Window> root_window_;
 
   // True if the magnified window is currently animating a change. Otherwise,
   // false.
@@ -285,10 +292,10 @@ class ASH_EXPORT FullscreenMagnifierController
   // Number of touch points on the screen.
   int32_t touch_points_ = 0;
 
-  // Map for holding ET_TOUCH_PRESS events. Those events are used to dispatch
-  // ET_TOUCH_CANCELLED events. Events will be removed from this map when press
-  // events are cancelled, i.e. size of this map can be different from number of
-  // touches on the screen. Key is pointer id.
+  // Map for holding EventType::kTouchPress events. Those events are used to
+  // dispatch EventType::kTouchCancelled events. Events will be removed from
+  // this map when press events are cancelled, i.e. size of this map can be
+  // different from number of touches on the screen. Key is pointer id.
   std::map<int32_t, std::unique_ptr<ui::TouchEvent>> press_event_map_;
 
   std::unique_ptr<GestureProviderClient> gesture_provider_client_;
@@ -306,6 +313,10 @@ class ASH_EXPORT FullscreenMagnifierController
   // Flag to draw a preview box around magnifier viewport area instead of
   // magnifying the screen for debugging.
   bool magnifier_debug_draw_rect_ = false;
+
+  // Called every time MoveCursorTo is called, when set in tests.
+  base::RepeatingCallback<void(const gfx::Point&)>
+      cursor_moved_callback_for_testing_;
 };
 
 }  // namespace ash

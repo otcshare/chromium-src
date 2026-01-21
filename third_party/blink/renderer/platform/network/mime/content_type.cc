@@ -30,25 +30,26 @@
 
 namespace blink {
 
-ContentType::ContentType(const String& content_type) : type_(content_type) {}
+ContentType::ContentType(const String& content_type)
+    : type_(content_type.StripWhiteSpace()) {}
 
 static bool IsASCIIQuote(UChar c) {
   return c == '"';
 }
 
-String ContentType::Parameter(const String& parameter_name) const {
-  Vector<String> parameters;
-  ParseParameters(parameters);
+String ContentType::Parameter(StringView parameter_name) const {
+  Vector<StringView> parameters = ParseParameters();
 
   for (auto& parameter : parameters) {
-    String stripped_parameter = parameter.StripWhiteSpace();
+    StringView stripped_parameter = parameter.StripWhiteSpace();
     wtf_size_t separator_pos = stripped_parameter.find('=');
     if (separator_pos != kNotFound) {
-      String attribute =
-          stripped_parameter.Left(separator_pos).StripWhiteSpace();
+      StringView attribute =
+          StringView(stripped_parameter, 0, separator_pos).StripWhiteSpace();
       if (EqualIgnoringASCIICase(attribute, parameter_name)) {
-        return stripped_parameter.Substring(separator_pos + 1)
+        return StringView(stripped_parameter, separator_pos + 1)
             .StripWhiteSpace()
+            .ToString()
             .RemoveCharacters(IsASCIIQuote);
       }
     }
@@ -58,39 +59,37 @@ String ContentType::Parameter(const String& parameter_name) const {
 }
 
 String ContentType::GetType() const {
-  String stripped_type = type_.StripWhiteSpace();
-
   // "type" can have parameters after a semi-colon, strip them
-  wtf_size_t semi = stripped_type.find(';');
-  if (semi != kNotFound)
-    stripped_type = stripped_type.Left(semi).StripWhiteSpace();
-
-  return stripped_type;
+  const wtf_size_t semicolon_index = type_.find(';');
+  if (semicolon_index != kNotFound) {
+    return type_.Left(semicolon_index).StripWhiteSpace();
+  }
+  return type_;
 }
 
-void ContentType::ParseParameters(Vector<String>& result) const {
-  String stripped_type = type_.StripWhiteSpace();
-
+Vector<StringView> ContentType::ParseParameters() const {
+  Vector<StringView> result;
   unsigned cur_pos = 0;
-  unsigned end_pos = stripped_type.length();
+  unsigned end_pos = type_.length();
   unsigned start_pos = 0;
   bool is_quote = false;
 
   while (cur_pos < end_pos) {
-    if (!is_quote && stripped_type[cur_pos] == ';') {
+    const UChar ch = type_[cur_pos];
+    if (!is_quote && ch == ';') {
       if (cur_pos != start_pos) {
-        result.push_back(
-            stripped_type.Substring(start_pos, cur_pos - start_pos));
+        result.push_back(StringView(type_, start_pos, cur_pos - start_pos));
       }
       start_pos = cur_pos + 1;
-    } else if (stripped_type[cur_pos] == '"') {
+    } else if (ch == '"') {
       is_quote = !is_quote;
     }
     cur_pos++;
   }
 
   if (start_pos != end_pos)
-    result.push_back(stripped_type.Substring(start_pos));
+    result.push_back(StringView(type_, start_pos));
+  return result;
 }
 
 }  // namespace blink

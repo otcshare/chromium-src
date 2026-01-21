@@ -16,8 +16,10 @@ WebContentsObserver::WebContentsObserver(WebContents* web_contents) {
 WebContentsObserver::WebContentsObserver() = default;
 
 WebContentsObserver::~WebContentsObserver() {
-  if (web_contents_)
+  if (web_contents_) {
     static_cast<WebContentsImpl*>(web_contents_)->RemoveObserver(this);
+  }
+  CHECK(!IsInObserverList());
 }
 
 WebContents* WebContentsObserver::web_contents() const {
@@ -35,12 +37,6 @@ void WebContentsObserver::Observe(WebContents* web_contents) {
   if (web_contents_) {
     static_cast<WebContentsImpl*>(web_contents_)->AddObserver(this);
   }
-}
-
-bool WebContentsObserver::OnMessageReceived(
-    const IPC::Message& message,
-    RenderFrameHost* render_frame_host) {
-  return false;
 }
 
 void WebContentsObserver::ResetWebContents() {

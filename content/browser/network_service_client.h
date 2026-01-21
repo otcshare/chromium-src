@@ -9,10 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/memory_pressure_listener.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
-#include "content/browser/buildflags.h"
 #include "content/browser/network/socket_broker_impl.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -34,7 +32,7 @@ class WebRtcConnectionsObserver;
 
 class NetworkServiceClient
     : public network::mojom::URLLoaderNetworkServiceObserver,
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
       public net::NetworkChangeNotifier::ConnectionTypeObserver,
       public net::NetworkChangeNotifier::MaxBandwidthObserver,
       public net::NetworkChangeNotifier::IPAddressObserver,
@@ -55,10 +53,8 @@ class NetworkServiceClient
   void OnNetworkServiceInitialized(network::mojom::NetworkService* service);
 
   // net::CertDatabase::Observer implementation:
-  void OnCertDBChanged() override;
-
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_presure_level);
+  void OnTrustStoreChanged() override;
+  void OnClientCertStoreChanged() override;
 
   // Called when there is a change in the count of media connections that
   // require low network latency.
@@ -66,7 +62,9 @@ class NetworkServiceClient
 
 #if BUILDFLAG(IS_ANDROID)
   void OnApplicationStateChange(base::android::ApplicationState state);
+#endif
 
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
   // net::NetworkChangeNotifier::ConnectionTypeObserver implementation:
   void OnConnectionTypeChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
@@ -77,10 +75,11 @@ class NetworkServiceClient
       net::NetworkChangeNotifier::ConnectionType type) override;
 
   // net::NetworkChangeNotifier::IPAddressObserver implementation:
-  void OnIPAddressChanged() override;
-#endif  // BUILDFLAG(IS_ANDROID)
+  void OnIPAddressChanged(
+      net::NetworkChangeNotifier::IPAddressChangeType change_type) override;
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 
-#if BUILDFLAG(USE_SOCKET_BROKER)
+#if BUILDFLAG(IS_WIN)
   // Called when the network service sandbox is enabled.
   mojo::PendingRemote<network::mojom::SocketBroker> BindSocketBroker();
 #endif
@@ -93,47 +92,70 @@ class NetworkServiceClient
                              bool fatal,
                              OnSSLCertificateErrorCallback response) override;
   void OnCertificateRequested(
-      const absl::optional<base::UnguessableToken>& window_id,
+      const std::optional<base::UnguessableToken>& window_id,
       const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
       mojo::PendingRemote<network::mojom::ClientCertificateResponder>
           cert_responder) override;
   void OnAuthRequired(
-      const absl::optional<base::UnguessableToken>& window_id,
-      uint32_t request_id,
+      const std::optional<base::UnguessableToken>& window_id,
+      int32_t request_id,
       const GURL& url,
       bool first_auth_attempt,
       const net::AuthChallengeInfo& auth_info,
       const scoped_refptr<net::HttpResponseHeaders>& head_headers,
       mojo::PendingRemote<network::mojom::AuthChallengeResponder>
           auth_challenge_responder) override;
+  void OnLocalNetworkAccessPermissionRequired(
+      network::mojom::TransportType type,
+      network::mojom::IPAddressSpace ip_address_space,
+      OnLocalNetworkAccessPermissionRequiredCallback callback) override;
   void OnClearSiteData(
       const GURL& url,
       const std::string& header_value,
       int load_flags,
-      const absl::optional<net::CookiePartitionKey>& cookie_partition_key,
+      const std::optional<net::CookiePartitionKey>& cookie_partition_key,
+      bool partitioned_state_allowed_only,
       OnClearSiteDataCallback callback) override;
   void OnLoadingStateUpdate(network::mojom::LoadInfoPtr info,
                             OnLoadingStateUpdateCallback callback) override;
   void OnDataUseUpdate(int32_t network_traffic_annotation_id_hash,
-                       int64_t recv_bytes,
-                       int64_t sent_bytes) override;
+                       base::ByteSize recv_bytes,
+                       base::ByteSize sent_bytes) override;
+  void OnSharedStorageHeaderReceived(
+      const url::Origin& request_origin,
+      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+          methods_with_options,
+      const std::optional<std::string>& with_lock,
+      OnSharedStorageHeaderReceivedCallback callback) override;
+  void OnAdAuctionEventRecordHeaderReceived(
+      network::AdAuctionEventRecord event_record,
+      const std::optional<url::Origin>& top_frame_origin) override;
   void Clone(
       mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
           listener) override;
-
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
+  void OnWebSocketConnectedToPrivateNetwork(
+      const GURL& request_url,
+      network::mojom::IPAddressSpace ip_address_space) override;
+  void OnUrlLoaderConnectedToPrivateNetwork(
+      const GURL& request_url,
+      network::mojom::IPAddressSpace response_address_space,
+      network::mojom::IPAddressSpace client_address_space,
+      network::mojom::IPAddressSpace target_address_space) override;
 
   std::unique_ptr<WebRtcConnectionsObserver> webrtc_connections_observer_;
 
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<base::android::ApplicationStatusListener>
       app_status_listener_;
+#endif
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
   mojo::Remote<network::mojom::NetworkChangeManager> network_change_manager_;
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(USE_SOCKET_BROKER)
+#if BUILDFLAG(IS_WIN)
   SocketBrokerImpl socket_broker_;
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
   mojo::ReceiverSet<network::mojom::URLLoaderNetworkServiceObserver>
       url_loader_network_service_observers_;

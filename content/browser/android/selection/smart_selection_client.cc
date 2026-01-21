@@ -6,15 +6,17 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/supports_user_data.h"
-#include "content/public/android/content_jni_headers/SmartSelectionClient_jni.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/SmartSelectionClient_jni.h"
+
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace content {
@@ -37,10 +39,10 @@ class UserData : public base::SupportsUserData::Data {
 };
 }
 
-jlong JNI_SmartSelectionClient_Init(
+static int64_t JNI_SmartSelectionClient_Init(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& jweb_contents) {
+    const JavaRef<jobject>& obj,
+    const JavaRef<jobject>& jweb_contents) {
   WebContents* web_contents = WebContents::FromJavaWebContents(jweb_contents);
   CHECK(web_contents)
       << "A SmartSelectionClient should be created with a valid WebContents.";
@@ -74,7 +76,6 @@ SmartSelectionClient::~SmartSelectionClient() {
 
 void SmartSelectionClient::RequestSurroundingText(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
     int num_extra_characters,
     int callback_data) {
   RenderFrameHost* focused_frame = web_contents_->GetFocusedFrame();
@@ -89,9 +90,7 @@ void SmartSelectionClient::RequestSurroundingText(
       num_extra_characters);
 }
 
-void SmartSelectionClient::CancelAllRequests(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void SmartSelectionClient::CancelAllRequests(JNIEnv* env) {
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
@@ -109,3 +108,5 @@ void SmartSelectionClient::OnSurroundingTextReceived(int callback_data,
 }
 
 }  // namespace content
+
+DEFINE_JNI(SmartSelectionClient)

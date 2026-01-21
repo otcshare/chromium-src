@@ -6,19 +6,18 @@
 
 #include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/task_traits.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_checker.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "gpu/command_buffer/client/raster_interface.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/video_frame_pool.h"
 #include "media/base/video_util.h"
 #include "media/base/wait_and_replace_sync_token_client.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_data_init.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+#include "third_party/blink/renderer/modules/webcodecs/video_frame_rect_util.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_util.h"
@@ -28,62 +27,39 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace {
 bool CanUseRgbReadback(media::VideoFrame& frame) {
-  return media::IsRGB(frame.format()) && (frame.NumTextures() == 1);
+  return media::IsRGB(frame.format()) && frame.HasSharedImage();
 }
 
 SkImageInfo GetImageInfoForFrame(const media::VideoFrame& frame,
                                  const gfx::Size& size) {
   SkColorType color_type =
-      SkColorTypeForPlane(frame.format(), media::VideoFrame::kARGBPlane);
+      SkColorTypeForPlane(frame.format(), media::VideoFrame::Plane::kARGB);
   SkAlphaType alpha_type = kUnpremul_SkAlphaType;
   return SkImageInfo::Make(size.width(), size.height(), color_type, alpha_type);
 }
 
 gpu::raster::RasterInterface* GetSharedGpuRasterInterface() {
   auto wrapper = blink::SharedGpuContext::ContextProviderWrapper();
-  if (wrapper && wrapper->ContextProvider()) {
-    auto* raster_provider = wrapper->ContextProvider()->RasterContextProvider();
+  if (wrapper) {
+    auto* raster_provider = wrapper->ContextProvider().RasterContextProvider();
     if (raster_provider)
       return raster_provider->RasterInterface();
   }
   return nullptr;
 }
 
-// Controls how asyc VideoFrame.copyTo() works
-// Enabled - RI::ReadbackARGBPixelsAsync()
-// Disabled - simply call sync readback on a separate thread.
-BASE_FEATURE(kTrullyAsyncRgbVideoFrameCopyTo,
-             "TrullyAsyncRgbVideoFrameCopyTo",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 }  // namespace
-
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<blink::VideoFrameLayout>
-    : public CrossThreadCopierPassThrough<blink::VideoFrameLayout> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-template <>
-struct CrossThreadCopier<base::span<uint8_t>>
-    : public CrossThreadCopierPassThrough<base::span<uint8_t>> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-}  // namespace WTF
 
 namespace blink {
 
 // This is a part of BackgroundReadback that lives and dies on the worker's
 // thread and does all the actual work of creating GPU context and calling
 // sync readback functions.
-class SyncReadbackThread
-    : public WTF::ThreadSafeRefCounted<SyncReadbackThread> {
+class SyncReadbackThread : public ThreadSafeRefCounted<SyncReadbackThread> {
  public:
   SyncReadbackThread();
   scoped_refptr<media::VideoFrame> ReadbackToFrame(
@@ -149,8 +125,7 @@ void BackgroundReadback::ReadbackTextureBackedFrameToBuffer(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(txt_frame);
 
-  if (base::FeatureList::IsEnabled(kTrullyAsyncRgbVideoFrameCopyTo) &&
-      CanUseRgbReadback(*txt_frame)) {
+  if (CanUseRgbReadback(*txt_frame)) {
     ReadbackRGBTextureBackedFrameToBuffer(txt_frame, src_rect, dest_layout,
                                           dest_buffer, std::move(done_cb));
     return;
@@ -199,35 +174,37 @@ void BackgroundReadback::ReadbackRGBTextureBackedFrameToMemory(
 
   auto* ri = GetSharedGpuRasterInterface();
   if (!ri || !result) {
-    media::BindToCurrentLoop(std::move(std::move(result_cb))).Run(nullptr);
+    base::BindPostTaskToCurrentDefault(std::move(std::move(result_cb)))
+        .Run(nullptr);
     return;
   }
 
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
-      "media", "ReadbackRGBTextureBackedFrameToMemory", txt_frame.get(),
-      "timestamp", txt_frame->timestamp());
+  TRACE_EVENT_BEGIN("media", "ReadbackRGBTextureBackedFrameToMemory",
+                    perfetto::Track::FromPointer(txt_frame.get()), "timestamp",
+                    txt_frame->timestamp());
 
-  uint8_t* dst_pixels =
-      result->GetWritableVisibleData(media::VideoFrame::kARGBPlane);
-  int rgba_stide = result->stride(media::VideoFrame::kARGBPlane);
+  base::span<uint8_t> dst_pixels =
+      result->GetWritableVisiblePlaneData(media::VideoFrame::Plane::kARGB);
+  int rgba_stide = result->stride(media::VideoFrame::Plane::kARGB);
   DCHECK_GT(rgba_stide, 0);
 
-  auto origin = txt_frame->metadata().texture_origin_is_top_left
-                    ? kTopLeft_GrSurfaceOrigin
-                    : kBottomLeft_GrSurfaceOrigin;
-
   gfx::Point src_point;
-  gpu::MailboxHolder mailbox_holder = txt_frame->mailbox_holder(0);
-  ri->WaitSyncTokenCHROMIUM(mailbox_holder.sync_token.GetConstData());
+  auto shared_image = txt_frame->shared_image();
+  auto origin = shared_image->surface_origin();
+  std::unique_ptr<gpu::RasterScopedAccess> ri_access =
+      shared_image->BeginRasterAccess(ri, txt_frame->acquire_sync_token(),
+                                      /*readonly=*/true);
 
   gfx::Size texture_size = txt_frame->coded_size();
   ri->ReadbackARGBPixelsAsync(
-      mailbox_holder.mailbox, mailbox_holder.texture_target, origin,
+      shared_image->mailbox(), shared_image->GetTextureTarget(), origin,
       texture_size, src_point, info, base::saturated_cast<GLuint>(rgba_stide),
       dst_pixels,
-      WTF::BindOnce(&BackgroundReadback::OnARGBPixelsFrameReadCompleted,
-                    MakeUnwrappingCrossThreadHandle(this), std::move(result_cb),
-                    std::move(txt_frame), std::move(result)));
+      blink::BindOnce(&BackgroundReadback::OnARGBPixelsFrameReadCompleted,
+                      WrapWeakPersistent(this), std::move(result_cb), txt_frame,
+                      std::move(result)));
+  media::WaitAndReplaceSyncTokenClient client(ri, std::move(ri_access));
+  txt_frame->UpdateReleaseSyncToken(&client);
 }
 
 void BackgroundReadback::OnARGBPixelsFrameReadCompleted(
@@ -235,24 +212,19 @@ void BackgroundReadback::OnARGBPixelsFrameReadCompleted(
     scoped_refptr<media::VideoFrame> txt_frame,
     scoped_refptr<media::VideoFrame> result_frame,
     bool success) {
-  TRACE_EVENT_NESTABLE_ASYNC_END1("media",
-                                  "ReadbackRGBTextureBackedFrameToMemory",
-                                  txt_frame.get(), "success", success);
+  TRACE_EVENT_END("media", perfetto::Track::FromPointer(txt_frame.get()),
+                  "success", success);
   if (!success) {
     ReadbackOnThread(std::move(txt_frame), std::move(result_cb));
     return;
   }
-  if (auto* ri = GetSharedGpuRasterInterface()) {
-    media::WaitAndReplaceSyncTokenClient client(ri);
-    txt_frame->UpdateReleaseSyncToken(&client);
-  } else {
-    success = false;
-  }
+
+  auto* ri = GetSharedGpuRasterInterface();
 
   result_frame->set_color_space(txt_frame->ColorSpace());
   result_frame->metadata().MergeMetadataFrom(txt_frame->metadata());
-  result_frame->metadata().ClearTextureFrameMedatada();
-  std::move(result_cb).Run(success ? std::move(result_frame) : nullptr);
+  result_frame->metadata().ClearTextureFrameMetadata();
+  std::move(result_cb).Run(ri ? std::move(result_frame) : nullptr);
 }
 
 void BackgroundReadback::ReadbackRGBTextureBackedFrameToBuffer(
@@ -264,48 +236,47 @@ void BackgroundReadback::ReadbackRGBTextureBackedFrameToBuffer(
   if (dest_layout.NumPlanes() != 1) {
     NOTREACHED()
         << "This method shouldn't be called on anything but RGB frames";
-    media::BindToCurrentLoop(std::move(std::move(done_cb))).Run(false);
-    return;
   }
 
   auto* ri = GetSharedGpuRasterInterface();
   if (!ri) {
-    media::BindToCurrentLoop(std::move(std::move(done_cb))).Run(false);
+    base::BindPostTaskToCurrentDefault(std::move(std::move(done_cb)))
+        .Run(false);
     return;
   }
 
   uint32_t offset = dest_layout.Offset(0);
   uint32_t stride = dest_layout.Stride(0);
 
-  uint8_t* dst_pixels = dest_buffer.data() + offset;
+  base::span<uint8_t> dst_pixels = dest_buffer.subspan(offset);
   size_t max_bytes_written = stride * src_rect.height();
   if (stride <= 0 || max_bytes_written > dest_buffer.size()) {
     DLOG(ERROR) << "Buffer is not sufficiently large for readback";
-    media::BindToCurrentLoop(std::move(std::move(done_cb))).Run(false);
+    base::BindPostTaskToCurrentDefault(std::move(std::move(done_cb)))
+        .Run(false);
     return;
   }
 
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
-      "media", "ReadbackRGBTextureBackedFrameToBuffer", txt_frame.get(),
-      "timestamp", txt_frame->timestamp());
+  TRACE_EVENT_BEGIN("media", "ReadbackRGBTextureBackedFrameToBuffer",
+                    perfetto::Track::FromPointer(txt_frame.get()), "timestamp",
+                    txt_frame->timestamp());
 
   SkImageInfo info = GetImageInfoForFrame(*txt_frame, src_rect.size());
   gfx::Point src_point = src_rect.origin();
-  auto origin = txt_frame->metadata().texture_origin_is_top_left
-                    ? kTopLeft_GrSurfaceOrigin
-                    : kBottomLeft_GrSurfaceOrigin;
-
-  gpu::MailboxHolder mailbox_holder = txt_frame->mailbox_holder(0);
-  ri->WaitSyncTokenCHROMIUM(mailbox_holder.sync_token.GetConstData());
+  auto shared_image = txt_frame->shared_image();
+  auto origin = shared_image->surface_origin();
+  auto ri_access = shared_image->BeginRasterAccess(
+      ri, txt_frame->acquire_sync_token(), /*readonly=*/true);
 
   gfx::Size texture_size = txt_frame->coded_size();
   ri->ReadbackARGBPixelsAsync(
-      mailbox_holder.mailbox, mailbox_holder.texture_target, origin,
+      shared_image->mailbox(), shared_image->GetTextureTarget(), origin,
       texture_size, src_point, info, base::saturated_cast<GLuint>(stride),
       dst_pixels,
-      WTF::BindOnce(&BackgroundReadback::OnARGBPixelsBufferReadCompleted,
-                    MakeUnwrappingCrossThreadHandle(this), std::move(txt_frame),
-                    src_rect, dest_layout, dest_buffer, std::move(done_cb)));
+      blink::BindOnce(&BackgroundReadback::OnARGBPixelsBufferReadCompleted,
+                      WrapWeakPersistent(this), std::move(txt_frame), src_rect,
+                      dest_layout, dest_buffer, std::move(done_cb)));
+  gpu::RasterScopedAccess::EndAccess(std::move(ri_access));
 }
 
 void BackgroundReadback::OnARGBPixelsBufferReadCompleted(
@@ -315,9 +286,8 @@ void BackgroundReadback::OnARGBPixelsBufferReadCompleted(
     base::span<uint8_t> dest_buffer,
     ReadbackDoneCallback done_cb,
     bool success) {
-  TRACE_EVENT_NESTABLE_ASYNC_END1("media",
-                                  "ReadbackRGBTextureBackedFrameToBuffer",
-                                  txt_frame.get(), "success", success);
+  TRACE_EVENT_END("media", perfetto::Track::FromPointer(txt_frame.get()),
+                  "success", success);
   if (!success) {
     ReadbackOnThread(std::move(txt_frame), src_rect, dest_layout, dest_buffer,
                      std::move(done_cb));
@@ -343,14 +313,9 @@ bool SyncReadbackThread::LazyInitialize() {
 
   if (context_provider_)
     return true;
-  Platform::ContextAttributes attributes;
-  attributes.enable_raster_interface = true;
-  attributes.support_grcontext = true;
-  attributes.prefer_low_power_gpu = true;
-
-  Platform::GraphicsInfo info;
-  context_provider_ = CreateOffscreenGraphicsContext3DProvider(
-      attributes, &info, KURL("chrome://BackgroundReadback"));
+  context_provider_ = CreateRasterGraphicsContextProvider(
+      KURL("chrome://BackgroundReadback"),
+      Platform::RasterContextType::kWebCodecsReadback);
 
   if (!context_provider_) {
     DLOG(ERROR) << "Can't create context provider.";
@@ -372,8 +337,7 @@ scoped_refptr<media::VideoFrame> SyncReadbackThread::ReadbackToFrame(
     return nullptr;
 
   auto* ri = context_provider_->RasterInterface();
-  auto* gr_context = context_provider_->GetGrContext();
-  return media::ReadbackTextureBackedFrameToMemorySync(*frame, ri, gr_context,
+  return media::ReadbackTextureBackedFrameToMemorySync(*frame, ri,
                                                        &result_frame_pool_);
 }
 
@@ -390,22 +354,17 @@ bool SyncReadbackThread::ReadbackToBuffer(
     return false;
 
   auto* ri = context_provider_->RasterInterface();
-  auto* gr_context = context_provider_->GetGrContext();
-
   if (!ri)
     return false;
 
   for (wtf_size_t i = 0; i < dest_layout.NumPlanes(); i++) {
     const gfx::Size sample_size =
         media::VideoFrame::SampleSize(dest_layout.Format(), i);
-    gfx::Rect plane_src_rect(src_rect.x() / sample_size.width(),
-                             src_rect.y() / sample_size.height(),
-                             src_rect.width() / sample_size.width(),
-                             src_rect.height() / sample_size.height());
-    uint8_t* dest_pixels = dest_buffer.data() + dest_layout.Offset(i);
-    if (!media::ReadbackTexturePlaneToMemorySync(
-            *frame, i, plane_src_rect, dest_pixels, dest_layout.Stride(i), ri,
-            gr_context)) {
+    gfx::Rect plane_src_rect = PlaneRect(src_rect, sample_size);
+    uint8_t* dest_pixels = dest_buffer.subspan(dest_layout.Offset(i)).data();
+    if (!media::ReadbackTexturePlaneToMemorySync(*frame, i, plane_src_rect,
+                                                 dest_pixels,
+                                                 dest_layout.Stride(i), ri)) {
       // It's possible to fail after copying some but not all planes, leaving
       // the output buffer in a corrupt state D:
       return false;

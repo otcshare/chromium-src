@@ -7,21 +7,17 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
-#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "remoting/host/chromoting_host_services_provider.h"
 #include "remoting/host/mojom/chromoting_host_services.mojom.h"
 
 namespace base {
 class Environment;
 }  // namespace base
-
-namespace mojo {
-class IsolatedConnection;
-}  // namespace mojo
 
 namespace remoting {
 
@@ -33,6 +29,8 @@ class ChromotingHostServicesClient final
     : public ChromotingHostServicesProvider {
  public:
   ChromotingHostServicesClient();
+  explicit ChromotingHostServicesClient(
+      const mojo::NamedPlatformChannel::ServerName& server_name);
   ChromotingHostServicesClient(const ChromotingHostServicesClient&) = delete;
   ChromotingHostServicesClient& operator=(const ChromotingHostServicesClient&) =
       delete;
@@ -51,16 +49,13 @@ class ChromotingHostServicesClient final
   // receivers/remotes/message pipes sent will be closed.
   mojom::ChromotingSessionServices* GetSessionServices() const override;
 
+  void set_disconnect_handler(base::OnceClosure disconnect_handler) override;
+
  private:
   friend class ChromotingHostServicesClientTest;
 
-  using ConnectToServerCallback = base::RepeatingCallback<mojo::PendingRemote<
-      mojom::ChromotingHostServices>(mojo::IsolatedConnection&)>;
-
-#if BUILDFLAG(IS_LINUX)
-  static constexpr char kChromeRemoteDesktopSessionEnvVar[] =
-      "CHROME_REMOTE_DESKTOP_SESSION";
-#endif
+  using ConnectToServerCallback = base::RepeatingCallback<
+      mojo::PendingRemote<mojom::ChromotingHostServices>()>;
 
   ChromotingHostServicesClient(std::unique_ptr<base::Environment> environment,
                                ConnectToServerCallback connect_to_server);
@@ -79,14 +74,12 @@ class ChromotingHostServicesClient final
 
   std::unique_ptr<base::Environment> environment_;
   ConnectToServerCallback connect_to_server_;
-  std::unique_ptr<mojo::IsolatedConnection> connection_
-      GUARDED_BY_CONTEXT(sequence_checker_);
   mojo::Remote<mojom::ChromotingHostServices> remote_
       GUARDED_BY_CONTEXT(sequence_checker_);
   mojo::Remote<mojom::ChromotingSessionServices> session_services_remote_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::OnceClosure on_session_disconnected_callback_for_testing_;
+  base::OnceClosure disconnect_handler_;
 };
 
 }  // namespace remoting

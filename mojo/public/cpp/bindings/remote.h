@@ -9,8 +9,8 @@
 #include <tuple>
 #include <utility>
 
-#include "base/callback_forward.h"
 #include "base/check.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -18,6 +18,7 @@
 #include "mojo/public/cpp/bindings/lib/interface_ptr_state.h"
 #include "mojo/public/cpp/bindings/pending_flush.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
@@ -143,8 +144,9 @@ class Remote {
   // If invoked at all, |handler| will be scheduled asynchronously using the
   // Remote's bound SequencedTaskRunner.
   void set_disconnect_handler(base::OnceClosure handler) {
-    if (is_connected())
+    if (is_connected()) {
       internal_state_.set_connection_error_handler(std::move(handler));
+    }
   }
 
   // Like above but also receives extra user-defined metadata about why the
@@ -217,8 +219,9 @@ class Remote {
 
   // Similar to the method above, but also specifies a disconnect reason.
   void ResetWithReason(uint32_t custom_reason, const std::string& description) {
-    if (internal_state_.is_bound())
+    if (internal_state_.is_bound()) {
       internal_state_.CloseWithReason(custom_reason, description);
+    }
     reset();
   }
 
@@ -247,6 +250,10 @@ class Remote {
       scoped_refptr<base::SequencedTaskRunner> task_runner) {
     DCHECK(!is_bound()) << "Remote for " << Interface::Name_
                         << " is already bound";
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      reset();
+      return PendingReceiver<Interface>();
+    }
     MessagePipe pipe;
     Bind(PendingRemote<Interface>(std::move(pipe.handle0), 0),
          std::move(task_runner));
@@ -277,7 +284,10 @@ class Remote {
       reset();
       return;
     }
-
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      reset();
+      return;
+    }
     internal_state_.Bind(pending_remote.internal_state(),
                          std::move(task_runner));
 

@@ -6,20 +6,19 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/fileapi/external_file_resolver.h"
 #include "chrome/browser/ash/fileapi/external_file_url_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/storage_partition.h"
-#include "content/public/common/child_process_host.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/api/file_handlers/mime_util.h"
 #include "mojo/public/c/system/types.h"
@@ -45,20 +44,18 @@ namespace {
 
 constexpr size_t kDefaultPipeSize = 65536;
 
-// An IOBuffer that doesn't own its data.
+// An IOBuffer that doesn't own its data and accepts void* pointers.
 class MojoPipeIOBuffer : public net::IOBuffer {
  public:
-  explicit MojoPipeIOBuffer(void* data)
-      : net::IOBuffer(static_cast<char*>(data)) {}
+  MojoPipeIOBuffer(void* data, size_t size)
+      : net::IOBuffer(UNSAFE_TODO(base::span(static_cast<char*>(data), size))) {
+  }
 
   MojoPipeIOBuffer(const MojoPipeIOBuffer&) = delete;
   MojoPipeIOBuffer& operator=(const MojoPipeIOBuffer&) = delete;
 
  protected:
-  ~MojoPipeIOBuffer() override {
-    // Set data_ to null so ~IOBuffer won't try to delete it.
-    data_ = nullptr;
-  }
+  ~MojoPipeIOBuffer() override = default;
 };
 
 // A helper class to read data from a FileStreamReader, and write it to a
@@ -95,10 +92,9 @@ class FileSystemReaderDataPipeProducer {
     while (remaining_bytes_ > 0) {
       if (!producer_handle_.is_valid())
         CompleteWithResult(net::ERR_FAILED);
-      void* pipe_buffer;
-      uint32_t buffer_size = kDefaultPipeSize;
+      base::span<uint8_t> pipe_buffer;
       MojoResult result = producer_handle_->BeginWriteData(
-          &pipe_buffer, &buffer_size, MOJO_WRITE_DATA_FLAG_NONE);
+          kDefaultPipeSize, MOJO_BEGIN_WRITE_DATA_FLAG_NONE, pipe_buffer);
       // If we can't synchronously get the buffer to write to, stop for now and
       // wait for the SimpleWatcher to notify us that the pipe is writable.
       if (result == MOJO_RESULT_SHOULD_WAIT) {
@@ -110,11 +106,13 @@ class FileSystemReaderDataPipeProducer {
         return;
       }
 
-      DCHECK(base::IsValueInRangeForNumericType<int>(buffer_size));
+      DCHECK(base::IsValueInRangeForNumericType<int>(pipe_buffer.size()));
       scoped_refptr<MojoPipeIOBuffer> io_buffer =
-          base::MakeRefCounted<MojoPipeIOBuffer>(pipe_buffer);
+          base::MakeRefCounted<MojoPipeIOBuffer>(pipe_buffer.data(),
+                                                 pipe_buffer.size());
       const int read_size = stream_reader_->Read(
-          io_buffer.get(), std::min<int64_t>(buffer_size, remaining_bytes_),
+          io_buffer.get(),
+          std::min<int64_t>(pipe_buffer.size(), remaining_bytes_),
           base::BindOnce(
               &FileSystemReaderDataPipeProducer::OnPendingReadComplete,
               weak_ptr_factory_.GetWeakPtr()));
@@ -223,11 +221,9 @@ class ExternalFileURLLoader : public network::mojom::URLLoader {
       const std::vector<std::string>& removed_headers,
       const net::HttpRequestHeaders& modified_headers,
       const net::HttpRequestHeaders& modified_cors_exempt_headers,
-      const absl::optional<GURL>& new_url) override {}
+      const std::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
-  void PauseReadingBodyFromNet() override {}
-  void ResumeReadingBodyFromNet() override {}
 
  private:
   explicit ExternalFileURLLoader(
@@ -290,7 +286,7 @@ class ExternalFileURLLoader : public network::mojom::URLLoader {
     }
     head_.response_start = base::TimeTicks::Now();
     client_->OnReceiveResponse(head_.Clone(), std::move(consumer_handle),
-                               absl::nullopt);
+                               std::nullopt);
 
     data_producer_ = std::make_unique<FileSystemReaderDataPipeProducer>(
         std::move(producer_handle), std::move(stream_reader), size,
@@ -368,7 +364,7 @@ void ExternalFileURLLoaderFactory::CreateLoaderAndStart(
           render_process_host_id_, request.url)) {
     DVLOG(1) << "Denied unauthorized request for "
              << request.url.possibly_invalid_spec();
-    mojo::ReportBadMessage("Unauthorized externalfile request");
+    ReportBadMessage("Unauthorized externalfile request");
     return;
   }
   content::GetIOThreadTaskRunner({})->PostTask(

@@ -31,14 +31,14 @@ class ExternalCacheDelegate {
   // Called when the cached .crx file for |id| is deleted (e.g. due to failed
   // install / corrupted file).
   virtual void OnCachedExtensionFileDeleted(const extensions::ExtensionId& id);
+
+  // Called to check if extension rollback is allowed by this delegate.
+  virtual bool IsRollbackAllowed() const;
+
+  // Called to check if extension rollback can be performed now.
+  virtual bool CanRollbackNow() const;
 };
 
 }  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::ExternalCacheDelegate;
-}
 
 #endif  // CHROME_BROWSER_ASH_EXTENSIONS_EXTERNAL_CACHE_DELEGATE_H_

@@ -7,13 +7,11 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/gtest_prod_util.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
@@ -30,11 +28,10 @@
 namespace syncer {
 
 class Cryptographer;
-class ModelTypeRegistry;
+class DataTypeRegistry;
 class SyncCycleContext;
 
-// Unless stated otherwise, all methods of SyncManager should be called on the
-// same thread.
+// Lives on the sync sequence.
 class SyncManagerImpl
     : public SyncManager,
       public network::NetworkConnectionTracker::NetworkConnectionObserver,
@@ -44,7 +41,7 @@ class SyncManagerImpl
       public NudgeHandler {
  public:
   // Create an uninitialized SyncManager.  Callers must Init() before using.
-  // |network_connection_tracker| must not be null and must outlive this object.
+  // `network_connection_tracker` must not be null and must outlive this object.
   SyncManagerImpl(
       const std::string& name,
       network::NetworkConnectionTracker* network_connection_tracker);
@@ -56,25 +53,25 @@ class SyncManagerImpl
 
   // SyncManager implementation.
   void Init(InitArgs* args) override;
-  ModelTypeSet InitialSyncEndedTypes() override;
-  ModelTypeSet GetConnectedTypes() override;
+  DataTypeSet InitialSyncEndedTypes() override;
+  DataTypeSet GetConnectedTypes() override;
   void UpdateCredentials(const SyncCredentials& credentials) override;
   void InvalidateCredentials() override;
   void StartSyncingNormally(base::Time last_poll_time) override;
   void StartConfiguration() override;
   void ConfigureSyncer(ConfigureReason reason,
-                       ModelTypeSet to_download,
+                       DataTypeSet to_download,
                        SyncFeatureState sync_feature_state,
                        base::OnceClosure ready_task) override;
   void SetInvalidatorEnabled(bool invalidator_enabled) override;
   void OnIncomingInvalidation(
-      ModelType type,
+      DataType type,
       std::unique_ptr<SyncInvalidation> invalidation) override;
   void AddObserver(SyncManager::Observer* observer) override;
   void RemoveObserver(SyncManager::Observer* observer) override;
   void ShutdownOnSyncThread() override;
-  ModelTypeConnector* GetModelTypeConnector() override;
-  std::unique_ptr<ModelTypeConnector> GetModelTypeConnectorProxy() override;
+  DataTypeConnector* GetDataTypeConnector() override;
+  std::unique_ptr<DataTypeConnector> GetDataTypeConnectorProxy() override;
   std::string cache_guid() override;
   std::string birthday() override;
   std::string bag_of_chips() override;
@@ -83,7 +80,6 @@ class SyncManagerImpl
   std::vector<std::unique_ptr<ProtocolEvent>> GetBufferedProtocolEvents()
       override;
   void OnCookieJarChanged(bool account_mismatch) override;
-  void UpdateInvalidationClientId(const std::string& client_id) override;
   void UpdateActiveDevicesInvalidationInfo(
       ActiveDevicesInvalidationInfo active_devices_invalidation_info) override;
 
@@ -94,7 +90,7 @@ class SyncManagerImpl
   void OnPassphraseAccepted() override;
   void OnTrustedVaultKeyRequired() override;
   void OnTrustedVaultKeyAccepted() override;
-  void OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
+  void OnEncryptedTypesChanged(DataTypeSet encrypted_types,
                                bool encrypt_everything) override;
   void OnCryptographerStateChanged(Cryptographer* cryptographer,
                                    bool has_pending_keys) override;
@@ -103,26 +99,26 @@ class SyncManagerImpl
 
   // SyncEngineEventListener implementation.
   void OnSyncCycleEvent(const SyncCycleEvent& event) override;
-  void OnActionableError(const SyncProtocolError& error) override;
+  void OnActionableProtocolError(const SyncProtocolError& error) override;
   void OnRetryTimeChanged(base::Time retry_time) override;
-  void OnThrottledTypesChanged(ModelTypeSet throttled_types) override;
-  void OnBackedOffTypesChanged(ModelTypeSet backed_off_types) override;
-  void OnMigrationRequested(ModelTypeSet types) override;
+  void OnThrottledTypesChanged(DataTypeSet throttled_types) override;
+  void OnBackedOffTypesChanged(DataTypeSet backed_off_types) override;
+  void OnMigrationRequested(DataTypeSet types) override;
   void OnProtocolEvent(const ProtocolEvent& event) override;
 
   // ServerConnectionEventListener implementation.
   void OnServerConnectionEvent(const ServerConnectionEvent& event) override;
 
   // Handle explicit requests to fetch updates for the given types.
-  void RefreshTypes(ModelTypeSet types) override;
+  void RefreshTypes(DataTypeSet types) override;
 
   // NetworkConnectionTracker::NetworkConnectionObserver implementation.
   void OnConnectionChanged(network::mojom::ConnectionType type) override;
 
   // NudgeHandler implementation.
-  void NudgeForInitialDownload(ModelType type) override;
-  void NudgeForCommit(ModelType type) override;
-  void SetHasPendingInvalidations(ModelType type,
+  void NudgeForInitialDownload(DataType type) override;
+  void NudgeForCommit(DataType type) override;
+  void SetHasPendingInvalidations(DataType type,
                                   bool has_pending_invalidations) override;
 
  private:
@@ -130,11 +126,11 @@ class SyncManagerImpl
 
   const std::string name_;
 
-  raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
+  const raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::ObserverList<SyncManager::Observer>::Unchecked observers_;
+  base::ObserverList<SyncManager::Observer> observers_;
 
   // The ServerConnectionManager used to abstract communication between the
   // client (the Syncer) and the sync server.
@@ -142,7 +138,7 @@ class SyncManagerImpl
 
   // Maintains state that affects the way we interact with different sync types.
   // This state changes when entering or exiting a configuration cycle.
-  std::unique_ptr<ModelTypeRegistry> model_type_registry_;
+  std::unique_ptr<DataTypeRegistry> data_type_registry_;
 
   // A container of various bits of information used by the SyncScheduler to
   // create SyncCycles.  Must outlive the SyncScheduler.
@@ -157,16 +153,16 @@ class SyncManagerImpl
   std::unique_ptr<SyncStatusTracker> sync_status_tracker_;
 
   // Set to true once Init has been called.
-  bool initialized_;
+  bool initialized_ = false;
 
-  bool observing_network_connectivity_changes_;
+  bool observing_network_connectivity_changes_ = false;
 
   // This is for keeping track of client events to send to the server.
   DebugInfoEventListener debug_info_event_listener_;
 
   ProtocolEventBuffer protocol_event_buffer_;
 
-  raw_ptr<SyncEncryptionHandler> sync_encryption_handler_;
+  raw_ptr<SyncEncryptionHandler> sync_encryption_handler_ = nullptr;
 
   std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy_;
 

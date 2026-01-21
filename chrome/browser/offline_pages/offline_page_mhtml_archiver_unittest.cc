@@ -8,9 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
@@ -77,8 +77,7 @@ TestMHTMLArchiver::TestMHTMLArchiver(const GURL& url,
                                      TestScopedOfflineClock* clock)
     : url_(url), test_scenario_(test_scenario), clock_(clock) {}
 
-TestMHTMLArchiver::~TestMHTMLArchiver() {
-}
+TestMHTMLArchiver::~TestMHTMLArchiver() = default;
 
 void TestMHTMLArchiver::GenerateMHTML(
     const base::FilePath& archives_dir,
@@ -98,12 +97,10 @@ void TestMHTMLArchiver::GenerateMHTML(
   base::FilePath archive_file_path =
       archives_dir.AppendASCII(url_.ExtractFileName());
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&TestMHTMLArchiver::OnGenerateMHTMLDone,
-                     base::Unretained(this), url_, archive_file_path,
-                     kTestTitle, create_archive_params.name_space,
-                     OfflineTimeNow(),
-                     content::MHTMLGenerationResult(kTestFileSize, nullptr)));
+      FROM_HERE, base::BindOnce(&TestMHTMLArchiver::OnGenerateMHTMLDone,
+                                base::Unretained(this), url_, archive_file_path,
+                                kTestTitle, create_archive_params.name_space,
+                                OfflineTimeNow(), kTestFileSize));
 
   clock_->Advance(kTimeToSaveMhtml);
 }
@@ -112,17 +109,6 @@ void TestMHTMLArchiver::GenerateMHTML(
 
 class OfflinePageMHTMLArchiverTest : public testing::Test {
  public:
-  // Histogram names checked for within this test, already appended with the
-  // offline pages namespace used in all |CreateArchive| calls.
-  const std::string kCreateArchiveTimeHistogram =
-      model_utils::AddHistogramSuffix(
-          kDownloadNamespace,
-          "OfflinePages.SavePage.CreateArchiveTime");
-  const std::string kComputeDigestTimeHistogram =
-      model_utils::AddHistogramSuffix(
-          kDownloadNamespace,
-          "OfflinePages.SavePage.ComputeDigestTime");
-
   OfflinePageMHTMLArchiverTest();
 
   OfflinePageMHTMLArchiverTest(const OfflinePageMHTMLArchiverTest&) = delete;
@@ -185,8 +171,7 @@ OfflinePageMHTMLArchiverTest::OfflinePageMHTMLArchiverTest()
       last_result_(OfflinePageArchiver::ArchiverResult::ERROR_DEVICE_FULL),
       last_file_size_(0L) {}
 
-OfflinePageMHTMLArchiverTest::~OfflinePageMHTMLArchiverTest() {
-}
+OfflinePageMHTMLArchiverTest::~OfflinePageMHTMLArchiverTest() = default;
 
 void OfflinePageMHTMLArchiverTest::SetUp() {
   base::FilePath test_data_dir_path;
@@ -260,8 +245,6 @@ TEST_F(OfflinePageMHTMLArchiverTest, NotAbleToGenerateArchive) {
             last_result());
   EXPECT_EQ(base::FilePath(), last_file_path());
   EXPECT_EQ(0LL, last_file_size());
-  histogram_tester()->ExpectTotalCount(kCreateArchiveTimeHistogram, 0);
-  histogram_tester()->ExpectTotalCount(kComputeDigestTimeHistogram, 0);
 }
 
 // Tests for failing to compute digest for archive file.
@@ -274,9 +257,6 @@ TEST_F(OfflinePageMHTMLArchiverTest, DigestError) {
       last_result());
   EXPECT_EQ(base::FilePath(), last_file_path());
   EXPECT_EQ(0LL, last_file_size());
-  histogram_tester()->ExpectUniqueSample(kCreateArchiveTimeHistogram,
-                                         kTimeToSaveMhtml.InMilliseconds(), 1);
-  histogram_tester()->ExpectTotalCount(kComputeDigestTimeHistogram, 0);
 }
 
 // Tests for successful creation of the offline page archive.
@@ -289,10 +269,6 @@ TEST_F(OfflinePageMHTMLArchiverTest, SuccessfullyCreateOfflineArchive) {
   EXPECT_EQ(GetTestFilePath(page_url), last_file_path());
   EXPECT_EQ(kTestFileSize, last_file_size());
   EXPECT_EQ(kTestDigest, last_digest());
-  histogram_tester()->ExpectUniqueSample(kCreateArchiveTimeHistogram,
-                                         kTimeToSaveMhtml.InMilliseconds(), 1);
-  histogram_tester()->ExpectUniqueSample(
-      kComputeDigestTimeHistogram, kTimeToComputeDigest.InMilliseconds(), 1);
 }
 
 }  // namespace offline_pages

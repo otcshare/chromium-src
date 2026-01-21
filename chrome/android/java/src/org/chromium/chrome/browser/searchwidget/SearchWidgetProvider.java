@@ -16,19 +16,23 @@ import android.text.TextUtils;
 import android.view.View;
 import android.widget.RemoteViews;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.app.ActivityOptionsCompat;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
-import org.chromium.base.Log;
+import org.chromium.base.JavaExceptionReporter;
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.firstrun.FirstRunFlowSequencer;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityConstants;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
 
@@ -37,24 +41,25 @@ import java.util.function.Consumer;
 /**
  * Widget that lets the user search using their default search engine.
  *
- * Because this is a BroadcastReceiver, it dies immediately after it runs.  A new one is created
+ * <p>Because this is a BroadcastReceiver, it dies immediately after it runs. A new one is created
  * for each new broadcast.
  *
- * This class avoids loading the native library because it can be triggered at regular intervals by
- * Android when it tells widgets that they need updates.
+ * <p>This class avoids loading the native library because it can be triggered at regular intervals
+ * by Android when it tells widgets that they need updates.
  *
- * Methods on instances of this class called directly by Android (when a broadcast is received e.g.)
- * catch all Exceptions up to some number of times before letting them go through to allow us to get
- * a crash stack.  This is done to prevent Android from labeling the whole process as "bad" and
- * blocking taps on the widget.  See http://crbug.com/712061.
+ * <p>Methods on instances of this class called directly by Android (when a broadcast is received
+ * e.g.) catch all Exceptions up to some number of times before letting them go through to allow us
+ * to get a crash stack. This is done to prevent Android from labeling the whole process as "bad"
+ * and blocking taps on the widget. See http://crbug.com/712061.
  */
+@NullMarked
 public class SearchWidgetProvider extends AppWidgetProvider {
     /** Wraps up all things that a {@link SearchWidgetProvider} can request things from. */
     static class SearchWidgetProviderDelegate implements Consumer<SearchActivityPreferences> {
         private final Context mContext;
         private final @Nullable AppWidgetManager mManager;
 
-        public SearchWidgetProviderDelegate(Context context) {
+        public SearchWidgetProviderDelegate(@Nullable Context context) {
             mContext = context == null ? ContextUtils.getApplicationContext() : context;
             mManager = AppWidgetManager.getInstance(mContext);
         }
@@ -65,8 +70,8 @@ public class SearchWidgetProvider extends AppWidgetProvider {
         }
 
         /** Returns the {@link SharedPreferencesManager} to store prefs. */
-        protected SharedPreferencesManager getSharedPreferencesManager() {
-            return SharedPreferencesManager.getInstance();
+        protected SharedPreferencesManager getChromeSharedPreferences() {
+            return ChromeSharedPreferences.getInstance();
         }
 
         /** Returns IDs for all search widgets that exist. */
@@ -91,63 +96,74 @@ public class SearchWidgetProvider extends AppWidgetProvider {
     public static final String EXTRA_FROM_SEARCH_WIDGET =
             "org.chromium.chrome.browser.searchwidget.FROM_SEARCH_WIDGET";
 
-    /** Number of consecutive crashes this widget will absorb before giving up. */
-    private static final int CRASH_LIMIT = 3;
     private static final Object DELEGATE_LOCK = new Object();
 
     @SuppressLint("StaticFieldLeak")
-    private static SearchWidgetProviderDelegate sDelegate;
+    private static @Nullable SearchWidgetProviderDelegate sDelegate;
 
     public static void initialize() {
         SearchActivityPreferencesManager.addObserver(getDelegate());
+        // This is a one-time operation to remove the obsolete key.
+        ChromeSharedPreferences.getInstance()
+                .removeKey(ChromePreferenceKeys.SEARCH_WIDGET_NUM_CONSECUTIVE_CRASHES);
+    }
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        super.onReceive(context, intent);
+        if (Intent.ACTION_LOCALE_CHANGED.equals(intent.getAction())) {
+            run(() -> performUpdate(null, null));
+        }
     }
 
     @Override
     public void onUpdate(final Context context, final AppWidgetManager manager, final int[] ids) {
-        run(new Runnable() {
-            @Override
-            public void run() {
-                performUpdate(ids, null);
-            }
-        });
+        run(() -> performUpdate(ids, null));
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    @VisibleForTesting
     public static PendingIntent createIntent(Context context, boolean startVoiceSearch) {
+        SearchActivityClient client =
+                new SearchActivityClientImpl(context, IntentOrigin.SEARCH_WIDGET);
         // Launch the SearchActivity.
         Intent searchIntent =
-                new Intent(startVoiceSearch ? SearchActivityConstants.ACTION_START_VOICE_SEARCH
-                                            : SearchActivityConstants.ACTION_START_TEXT_SEARCH);
+                client.newIntentBuilder()
+                        .setSearchType(startVoiceSearch ? SearchType.VOICE : SearchType.TEXT)
+                        .build();
 
-        searchIntent.setClass(context, SearchActivity.class);
-        searchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        searchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
         searchIntent.putExtra(EXTRA_FROM_SEARCH_WIDGET, true);
 
         Bundle optionsBundle =
                 ActivityOptionsCompat.makeCustomAnimation(context, R.anim.activity_open_enter, 0)
                         .toBundle();
-        return PendingIntent.getActivity(context, 0, searchIntent,
+        return PendingIntent.getActivity(
+                context,
+                0,
+                searchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false),
                 optionsBundle);
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
-    public static void performUpdate(int[] ids, SearchActivityPreferences prefs) {
+    @VisibleForTesting
+    public static void performUpdate(
+            int @Nullable [] ids, @Nullable SearchActivityPreferences prefs) {
         SearchWidgetProviderDelegate delegate = getDelegate();
         if (ids == null) ids = delegate.getAllSearchWidgetIds();
         if (prefs == null) prefs = SearchActivityPreferencesManager.getCurrent();
 
         for (int id : ids) {
-            RemoteViews views = createWidgetViews(
-                    delegate.getContext(), id, prefs.searchEngineName, prefs.voiceSearchAvailable);
+            RemoteViews views =
+                    createWidgetViews(
+                            delegate.getContext(),
+                            prefs.searchEngineName,
+                            prefs.voiceSearchAvailable);
             delegate.updateAppWidget(id, views);
         }
     }
 
     private static RemoteViews createWidgetViews(
-            Context context, int id, String engineName, boolean isVoiceSearchAvailable) {
+            Context context, @Nullable String engineName, boolean isVoiceSearchAvailable) {
         RemoteViews views =
                 new RemoteViews(context.getPackageName(), R.layout.search_widget_template);
 
@@ -157,27 +173,13 @@ public class SearchWidgetProvider extends AppWidgetProvider {
                 R.id.microphone_icon, isVoiceSearchAvailable ? View.VISIBLE : View.GONE);
 
         // Update what string is displayed by the widget.
-        String text = TextUtils.isEmpty(engineName) || !shouldShowFullString()
-                ? context.getString(R.string.search_widget_default)
-                : context.getString(R.string.search_with_product, engineName);
+        String text =
+                TextUtils.isEmpty(engineName) || !shouldShowFullString()
+                        ? context.getString(R.string.search_widget_default)
+                        : context.getString(R.string.search_with_product, engineName);
         views.setCharSequence(R.id.title, "setHint", text);
 
         return views;
-    }
-
-    /** Updates the number of consecutive crashes this widget has absorbed. */
-    @SuppressLint({"ApplySharedPref", "CommitPrefEdits"})
-    static void updateNumConsecutiveCrashes(int newValue) {
-        SharedPreferencesManager prefs = getDelegate().getSharedPreferencesManager();
-        if (getNumConsecutiveCrashes(prefs) == newValue) return;
-
-        // This metric is committed synchronously because it relates to crashes.
-        prefs.writeIntSync(ChromePreferenceKeys.SEARCH_WIDGET_NUM_CONSECUTIVE_CRASHES, newValue);
-    }
-
-    @VisibleForTesting
-    static int getNumConsecutiveCrashes(SharedPreferencesManager prefs) {
-        return prefs.readInt(ChromePreferenceKeys.SEARCH_WIDGET_NUM_CONSECUTIVE_CRASHES);
     }
 
     private static SearchWidgetProviderDelegate getDelegate() {
@@ -193,20 +195,9 @@ public class SearchWidgetProvider extends AppWidgetProvider {
     static void run(Runnable runnable) {
         try {
             runnable.run();
-            updateNumConsecutiveCrashes(0);
         } catch (Exception e) {
-            int numCrashes =
-                    getNumConsecutiveCrashes(getDelegate().getSharedPreferencesManager()) + 1;
-            updateNumConsecutiveCrashes(numCrashes);
-
-            if (numCrashes < CRASH_LIMIT) {
-                // Absorb the crash.
-                Log.e(SearchActivity.TAG,
-                        "Absorbing exception caught when attempting to launch widget.", e);
-            } else {
-                // Too many crashes have happened consecutively.  Let Android handle it.
-                throw e;
-            }
+            // Report the exception instead of crashing.
+            JavaExceptionReporter.reportException(e);
         }
     }
 
@@ -218,7 +209,6 @@ public class SearchWidgetProvider extends AppWidgetProvider {
     }
 
     /** Sets an {@link SearchWidgetProviderDelegate} to interact with. */
-    @VisibleForTesting
     static void setActivityDelegateForTest(SearchWidgetProviderDelegate delegate) {
         assert sDelegate == null;
         sDelegate = delegate;

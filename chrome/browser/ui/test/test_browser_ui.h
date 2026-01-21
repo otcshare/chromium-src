@@ -6,22 +6,40 @@
 #define CHROME_BROWSER_UI_TEST_TEST_BROWSER_UI_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "ui/base/interaction/interaction_test_util.h"
+#include "ui/base/test/skia_gold_matching_algorithm.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace views {
 class Widget;
 class View;
 }  // namespace views
 
-namespace ui {
-namespace test {
-class SkiaGoldMatchingAlgorithm;
-}  // namespace test
-}  // namespace ui
+// How to handle focus on the view when taking the screenshot.
+enum class ScreenshotFocusMode {
+  // Clear focus before taking the screenshot to reduce flakiness. This is the
+  // default to reduce flakiness. See VerifyPixelUi() implementation for more
+  // details.
+  kClearFocus,
+  // Leave focus where it is.
+  kLeaveFocusWhereItIs,
+};
+
+// Options for taking a screenshot.
+struct ScreenshotOptions {
+  // The region of the view to take a screenshot of. If std::nullopt, the entire
+  // view is captured.
+  std::optional<gfx::Rect> region;
+  // How to handle focus on the view when taking the screenshot. Defaults to
+  // kClearFocus which will clear focus before taking the screenshot to reduce
+  // flakiness. See VerifyPixelUi() implementation for more details.
+  ScreenshotFocusMode focus = ScreenshotFocusMode::kClearFocus;
+};
 
 // TestBrowserUi provides a way to register an InProcessBrowserTest testing
 // harness with a framework that invokes Chrome browser UI in a consistent way.
@@ -97,18 +115,24 @@ class TestBrowserUi {
   // successfully shown.
   virtual bool VerifyUi() = 0;
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-  // Can be called by VerifyUi() to ensure pixel correctness.
-  bool VerifyPixelUi(views::Widget* widget,
-                     const std::string& screenshot_prefix,
-                     const std::string& screenshot_name);
+  // Returns ActionResult::Succeeded if the screenshot matches the golden image.
+  // Returns ActionResult::kFailed if the matching fails.
+  // Returns ActionResult::kKnownIncompatible if pixel tests are unsupported.
+  ui::test::ActionResult VerifyPixelUi(views::Widget* widget,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
 
   // Can be called by VerifyUi() to ensure pixel correctness.
-  bool VerifyPixelUi(views::View* view,
-                     const std::string& screenshot_prefix,
-                     const std::string& screenshot_name);
+  ui::test::ActionResult VerifyPixelUi(views::View* view,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
+
+  // Verifies a region within a View. For example, verify an element within
+  // web content.
+  ui::test::ActionResult VerifyPixelUi(views::View* view,
+                                       const ScreenshotOptions& options,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
 
   // Own |algorithm|.
   void SetPixelMatchAlgorithm(
@@ -116,7 +140,6 @@ class TestBrowserUi {
   ui::test::SkiaGoldMatchingAlgorithm* GetPixelMatchAlgorithm() {
     return algorithm_.get();
   }
-#endif
 
   // Called by ShowAndVerifyUi() after VerifyUi(), in the case where the test is
   // interactive.  This should block until the UI has been dismissed.
@@ -137,12 +160,7 @@ class TestBrowserUi {
   bool IsInteractiveUi() const;
 
  private:
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
   std::unique_ptr<ui::test::SkiaGoldMatchingAlgorithm> algorithm_;
-#endif
 };
 
 // Helper to mix in a TestBrowserUi to an existing test harness. |Base| must be

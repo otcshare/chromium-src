@@ -5,8 +5,8 @@
 #ifndef COMPONENTS_UPDATE_CLIENT_PATCH_PATCH_IMPL_H_
 #define COMPONENTS_UPDATE_CLIENT_PATCH_PATCH_IMPL_H_
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/services/patch/public/mojom/file_patcher.mojom.h"
 #include "components/update_client/patcher.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"

@@ -1,6 +1,11 @@
+# Use `chromium-permissions-reviews@google.com` for review load balancing.
 andypaicu@chromium.org
-dominickn@chromium.org
+antoniosartori@chromium.org
 elklm@chromium.org
 engedy@chromium.org
-hkamila@chromium.org
+hempjudith@google.com
 ravjit@chromium.org
+tungnh@chromium.org
+
+# emeritus:
+# hkamila@chromium.org

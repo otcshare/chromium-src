@@ -10,12 +10,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/device_event_log/device_event_log.h"
 #include "dbus/bus.h"
 #include "device/bluetooth/bluetooth_socket.h"
@@ -85,11 +88,12 @@ void ParseModalias(const dbus::ObjectPath& object_path,
   BluetoothDevice::VendorIDSource source_value;
   int vendor_value, product_value, device_value;
 
-  if (sscanf(modalias.c_str(), "bluetooth:v%04xp%04xd%04x", &vendor_value,
-             &product_value, &device_value) == 3) {
+  if (UNSAFE_TODO(sscanf(modalias.c_str(), "bluetooth:v%04xp%04xd%04x",
+                         &vendor_value, &product_value, &device_value)) == 3) {
     source_value = BluetoothDevice::VENDOR_ID_BLUETOOTH;
-  } else if (sscanf(modalias.c_str(), "usb:v%04xp%04xd%04x", &vendor_value,
-                    &product_value, &device_value) == 3) {
+  } else if (UNSAFE_TODO(sscanf(modalias.c_str(), "usb:v%04xp%04xd%04x",
+                                &vendor_value, &product_value,
+                                &device_value)) == 3) {
     source_value = BluetoothDevice::VENDOR_ID_USB;
   } else {
     return;
@@ -240,11 +244,10 @@ device::BluetoothTransport BluetoothDeviceBlueZ::GetType() const {
   }
 
   NOTREACHED();
-  return device::BLUETOOTH_TRANSPORT_INVALID;
 }
 
 void BluetoothDeviceBlueZ::CreateGattConnectionImpl(
-    absl::optional<BluetoothUUID> service_uuid) {
+    std::optional<BluetoothUUID> service_uuid) {
 // Once ConnectLE is supported on Linux, this buildflag will not be necessary
 // (this bluez code is only run on Chrome OS and Linux).
 #if BUILDFLAG(IS_CHROMEOS)
@@ -298,7 +301,7 @@ void BluetoothDeviceBlueZ::DisconnectGatt() {
 
   // IsPaired() returns true if we've connected to the device before. So we
   // check the dbus property directly.
-  // TODO(crbug.com/649651): Use IsPaired once it returns true only for paired
+  // TODO(crbug.com/40486156): Use IsPaired once it returns true only for paired
   // devices.
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
@@ -404,7 +407,7 @@ uint16_t BluetoothDeviceBlueZ::GetAppearance() const {
   return properties->appearance.value();
 }
 
-absl::optional<std::string> BluetoothDeviceBlueZ::GetName() const {
+std::optional<std::string> BluetoothDeviceBlueZ::GetName() const {
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
           object_path_);
@@ -413,7 +416,7 @@ absl::optional<std::string> BluetoothDeviceBlueZ::GetName() const {
   if (properties->name.is_valid())
     return properties->name.value();
   else
-    return absl::nullopt;
+    return std::nullopt;
 }
 
 bool BluetoothDeviceBlueZ::IsPaired() const {
@@ -491,14 +494,14 @@ BluetoothDevice::UUIDSet BluetoothDeviceBlueZ::GetUUIDs() const {
   return device_uuids_.GetUUIDs();
 }
 
-absl::optional<int8_t> BluetoothDeviceBlueZ::GetInquiryRSSI() const {
+std::optional<int8_t> BluetoothDeviceBlueZ::GetInquiryRSSI() const {
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
           object_path_);
   DCHECK(properties);
 
   if (!properties->rssi.is_valid())
-    return absl::nullopt;
+    return std::nullopt;
 
   // BlueZ uses int16_t because there is no int8_t for DBus, so we should never
   // get an int16_t that cannot be represented by an int8_t. But just in case
@@ -506,14 +509,14 @@ absl::optional<int8_t> BluetoothDeviceBlueZ::GetInquiryRSSI() const {
   return ClampPower(properties->rssi.value());
 }
 
-absl::optional<int8_t> BluetoothDeviceBlueZ::GetInquiryTxPower() const {
+std::optional<int8_t> BluetoothDeviceBlueZ::GetInquiryTxPower() const {
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
           object_path_);
   DCHECK(properties);
 
   if (!properties->tx_power.is_valid())
-    return absl::nullopt;
+    return std::nullopt;
 
   // BlueZ uses int16_t because there is no int8_t for DBus, so we should never
   // get an int16_t that cannot be represented by an int8_t. But just in case
@@ -568,7 +571,6 @@ void BluetoothDeviceBlueZ::SetConnectionLatency(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   BLUETOOTH_LOG(EVENT) << "Setting LE connection parameters: min="
@@ -1124,9 +1126,13 @@ void BluetoothDeviceBlueZ::OnConnect(ConnectCallback callback) {
   BLUETOOTH_LOG(EVENT) << object_path_.value() << ": Connected, "
                        << num_connecting_calls_ << " still in progress";
 
+  // For CrOS, set trusted upon outgoing connection established.
+  // No-op for non-CrOS since Chrome is not part of the OS.
+#if BUILDFLAG(IS_CHROMEOS)
   SetTrusted();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  std::move(callback).Run(/*error_code=*/absl::nullopt);
+  std::move(callback).Run(/*error_code=*/std::nullopt);
 }
 
 void BluetoothDeviceBlueZ::OnConnectError(ConnectCallback callback,
@@ -1195,7 +1201,7 @@ void BluetoothDeviceBlueZ::OnPairDuringConnectError(
 void BluetoothDeviceBlueZ::OnPair(ConnectCallback callback) {
   BLUETOOTH_LOG(EVENT) << object_path_.value() << ": Paired";
   EndPairing();
-  std::move(callback).Run(/*error_code=*/absl::nullopt);
+  std::move(callback).Run(/*error_code=*/std::nullopt);
 }
 
 void BluetoothDeviceBlueZ::OnPairError(ConnectCallback callback,

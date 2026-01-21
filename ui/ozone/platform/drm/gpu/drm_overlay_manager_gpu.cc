@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/ozone/platform/drm/gpu/drm_overlay_manager.h"
 #include "ui/ozone/platform/drm/gpu/drm_thread_proxy.h"
 #include "ui/ozone/public/overlay_surface_candidate.h"
@@ -25,9 +26,9 @@ DrmOverlayManagerGpu::~DrmOverlayManagerGpu() = default;
 void DrmOverlayManagerGpu::SendOverlayValidationRequest(
     const std::vector<OverlaySurfaceCandidate>& candidates,
     gfx::AcceleratedWidget widget) {
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(
-      "hwoverlays", "DrmOverlayManagerGpu::SendOverlayValidationRequest",
-      TRACE_ID_LOCAL(this));
+  TRACE_EVENT_BEGIN("hwoverlays",
+                    "DrmOverlayManagerGpu::SendOverlayValidationRequest",
+                    perfetto::Track::FromPointer(this));
   SetDisplaysConfiguredCallbackIfNecessary();
   drm_thread_proxy_->CheckOverlayCapabilities(
       widget, candidates,
@@ -72,9 +73,9 @@ void DrmOverlayManagerGpu::ReceiveOverlayValidationResponse(
     gfx::AcceleratedWidget widget,
     const std::vector<OverlaySurfaceCandidate>& candidates,
     const std::vector<OverlayStatus>& status) {
-  TRACE_EVENT_NESTABLE_ASYNC_END0(
-      "hwoverlays", "DrmOverlayManagerGpu::SendOverlayValidationRequest",
-      TRACE_ID_LOCAL(this));
+  TRACE_EVENT_END("hwoverlays",
+                  /*"DrmOverlayManagerGpu::SendOverlayValidationRequest"*/
+                  perfetto::Track::FromPointer(this));
 
   UpdateCacheForOverlayCandidates(candidates, widget, status);
 }

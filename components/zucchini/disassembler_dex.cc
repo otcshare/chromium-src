@@ -8,14 +8,17 @@
 #include <stdlib.h>
 
 #include <algorithm>
-#include <cctype>
+#include <array>
 #include <cmath>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/checked_math.h"
@@ -24,7 +27,8 @@
 #include "components/zucchini/buffer_source.h"
 #include "components/zucchini/buffer_view.h"
 #include "components/zucchini/io_utils.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/zucchini/type_dex.h"
+#include "third_party/abseil-cpp/absl/strings/ascii.h"
 
 namespace zucchini {
 
@@ -109,7 +113,7 @@ class CodeItemParser {
                              sizeof(dex::CodeItem))) {
       return false;
     }
-    source_ = std::move(BufferSource(image_).Skip(code_map_item.offset));
+    source_ = BufferSource(image_, code_map_item.offset);
     return true;
   }
 
@@ -170,8 +174,9 @@ class CodeItemParser {
 
     // TODO(huangs): Fail if |code_item->insns_size == 0| (Constraint A1).
     // Skip instruction bytes.
-    if (!source_.GetArray<uint16_t>(code_item->insns_size))
+    if (!source_.Skip(code_item->insns_size * sizeof(uint16_t))) {
       return kInvalidOffset;
+    }
     // Skip padding if present.
     if (code_item->tries_size > 0 && !source_.AlignOn(image_, 4U))
       return kInvalidOffset;
@@ -180,8 +185,9 @@ class CodeItemParser {
     // is nontrivial due to use of uleb128 / sleb128.
     if (code_item->tries_size > 0) {
       // Skip (try_item) tries[].
-      if (!source_.GetArray<dex::TryItem>(code_item->tries_size))
+      if (!source_.Skip(code_item->tries_size * sizeof(dex::TryItem))) {
         return kInvalidOffset;
+      }
 
       // Skip handlers_group.
       uint32_t handlers_size = 0;
@@ -220,7 +226,7 @@ class CodeItemParser {
   // |image|, returns |insns| bytes as ConstBufferView.
   static ConstBufferView GetCodeItemInsns(ConstBufferView image,
                                           offset_t code_item_offset) {
-    BufferSource source(BufferSource(image).Skip(code_item_offset));
+    BufferSource source(image, code_item_offset);
     const auto* code_item = source.GetPointer<const dex::CodeItem>();
     DCHECK(code_item);
     BufferRegion insns{0, code_item->insns_size * kInstrUnitSize};
@@ -253,14 +259,14 @@ class InstructionParser {
   // lookup.
   const dex::Instruction* FindDalvikInstruction(uint8_t opcode) {
     static bool is_init = false;
-    static const dex::Instruction* instruction_table[256];
+    static std::array<const dex::Instruction*, 256> instruction_table;
     if (!is_init) {
       is_init = true;
-      std::fill(std::begin(instruction_table), std::end(instruction_table),
-                nullptr);
+      std::ranges::fill(instruction_table, nullptr);
       for (const dex::Instruction& instr : dex::kByteCode) {
-        std::fill(instruction_table + instr.opcode,
-                  instruction_table + instr.opcode + instr.variant, &instr);
+        std::ranges::fill(
+            base::span(instruction_table).subspan(instr.opcode, instr.variant),
+            &instr);
       }
     }
     return instruction_table[opcode];
@@ -310,8 +316,16 @@ class InstructionParser {
         return false;
       }
       // Update boundary between instructions and payload.
-      const ConstBufferView::const_iterator payload_it =
-          insns_.begin() + unsafe_payload_rel_units * kInstrUnitSize;
+      //
+      // `ConstBufferView` (i.e. `zucchini::internal::BufferViewBase`) is an
+      // unsafe class, and should be removed or reimplemented based on
+      // `base::span` for example. Then, this UNSAFE_TODO should be naturally
+      // gone.
+      // SAFETY: It's ensured by the if statement above that
+      // `unsafe_payload_rel_units * kInstrUnitSize` is in bounds for `insns_`
+      // without causing overflow.
+      const ConstBufferView::const_iterator payload_it = UNSAFE_TODO(
+          insns_.begin() + unsafe_payload_rel_units * kInstrUnitSize);
       payload_boundary_ = std::min(payload_boundary_, payload_it);
     }
 
@@ -370,13 +384,13 @@ class InstructionReferenceReader : public ReferenceReader {
   }
 
   // ReferenceReader:
-  absl::optional<Reference> GetNext() override {
+  std::optional<Reference> GetNext() override {
     while (true) {
       while (parser_.ReadNext()) {
         const auto& v = parser_.value();
         DCHECK_NE(v.instr, nullptr);
         if (v.instr_offset >= hi_)
-          return absl::nullopt;
+          return std::nullopt;
         const offset_t location = filter_.Run(v);
         if (location == kInvalidOffset || location < lo_)
           continue;
@@ -384,7 +398,7 @@ class InstructionReferenceReader : public ReferenceReader {
         // assumption |hi_| and |lo_| do not straddle the body of a Reference.
         // So |reference_width| is unneeded.
         if (location >= hi_)
-          return absl::nullopt;
+          return std::nullopt;
         offset_t target = mapper_.Run(location);
         if (target != kInvalidOffset)
           return Reference{location, target};
@@ -393,7 +407,7 @@ class InstructionReferenceReader : public ReferenceReader {
       }
       ++cur_it_;
       if (cur_it_ == end_it_)
-        return absl::nullopt;
+        return std::nullopt;
       parser_ = InstructionParser(image_, *cur_it_);
     }
   }
@@ -460,7 +474,7 @@ class ItemReferenceReader : public ReferenceReader {
   }
 
   // ReferenceReader:
-  absl::optional<Reference> GetNext() override {
+  std::optional<Reference> GetNext() override {
     while (cur_idx_ < num_items_) {
       const offset_t item_offset = OffsetOfIndex(cur_idx_);
       const offset_t location = item_offset + rel_location_;
@@ -498,7 +512,7 @@ class ItemReferenceReader : public ReferenceReader {
       ++cur_idx_;
       return Reference{location, target};
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
 
  private:
@@ -529,7 +543,7 @@ bool ParseItemOffsets(ConstBufferView image,
   // Sanity check: |image| should at least fit |map_item.size| copies of "N".
   if (!image.covers_array(map_item.offset, map_item.size, sizeof(uint32_t)))
     return false;
-  BufferSource source = std::move(BufferSource(image).Skip(map_item.offset));
+  BufferSource source(image, map_item.offset);
   item_offsets->clear();
   for (uint32_t i = 0; i < map_item.size; ++i) {
     if (!source.AlignOn(image, 4U))
@@ -544,7 +558,9 @@ bool ParseItemOffsets(ConstBufferView image,
     for (uint32_t j = 0; j < unsafe_size; ++j) {
       item_offsets->push_back(
           base::checked_cast<offset_t>(source.begin() - image.begin()));
-      source.Skip(item_width);
+      if (!source.Skip(item_width)) {
+        return false;
+      }
     }
   }
   return true;
@@ -573,8 +589,7 @@ bool ParseAnnotationsDirectoryItems(
                           sizeof(dex::AnnotationsDirectoryItem))) {
     return false;
   }
-  BufferSource source = std::move(
-      BufferSource(image).Skip(annotations_directory_map_item.offset));
+  BufferSource source(image, annotations_directory_map_item.offset);
   annotations_directory_item_offsets->clear();
   field_annotation_offsets->clear();
   method_annotation_offsets->clear();
@@ -591,7 +606,9 @@ bool ParseAnnotationsDirectoryItems(
     for (uint32_t i = 0; i < unsafe_size; ++i) {
       item_offsets->push_back(
           base::checked_cast<offset_t>(source.begin() - image.begin()));
-      source.Skip(item_width);
+      if (!source.Skip(item_width)) {
+        return false;
+      }
     }
     return true;
   };
@@ -655,7 +672,7 @@ class CachedItemListReferenceReader : public ReferenceReader {
       const CachedItemListReferenceReader&) = delete;
 
   // ReferenceReader:
-  absl::optional<Reference> GetNext() override {
+  std::optional<Reference> GetNext() override {
     while (cur_it_ < end_it_) {
       const offset_t location = *cur_it_ + rel_location_;
       if (location >= hi_)  // Check is simplified by atomicity assumption.
@@ -673,7 +690,7 @@ class CachedItemListReferenceReader : public ReferenceReader {
         continue;
       return Reference{location, target};
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
 
  private:
@@ -841,8 +858,9 @@ bool ReadDexHeader(ConstBufferView image, ReadDexHeaderResults* opt_results) {
   // Magic matches: More detailed tests can be conducted.
   int dex_version = 0;
   for (int i = 4; i < 7; ++i) {
-    if (!isdigit(header->magic[i]))
+    if (!absl::ascii_isdigit(header->magic[i])) {
       return false;
+    }
     dex_version = dex_version * 10 + (header->magic[i] - '0');
   }
 
@@ -1791,68 +1809,86 @@ bool DisassemblerDex::ParseHeader() {
   static_assert(
       offsetof(dex::MapList, list) == sizeof(decltype(dex::MapList::size)),
       "MapList size error.");
-  source = std::move(BufferSource(image_).Skip(header_->map_off));
+  source = BufferSource(image_, header_->map_off);
   decltype(dex::MapList::size) list_size = 0;
   if (!source.GetValue(&list_size) || list_size > dex::kMaxItemListSize)
     return false;
-  const auto* item_list = source.GetArray<const dex::MapItem>(list_size);
-  if (!item_list)
+  const auto* item_list_ptr = source.GetArray<const dex::MapItem>(list_size);
+  if (!item_list_ptr) {
     return false;
+  }
+  // `BufferSource` (i.e. `zucchini::internal::BufferViewBase`) is an unsafe
+  // class, and should be removed or reimplemented based on `base::span` for
+  // example. Then, this UNSAFE_TODO should be naturally gone.
+  base::span<const dex::MapItem> item_list =
+      UNSAFE_TODO(base::span(item_list_ptr, list_size));
 
   // Read and validate map list, ensuring that required item types are present.
   // GetItemBaseSize() should have an entry for each item.
-  for (offset_t i = 0; i < list_size; ++i) {
-    const dex::MapItem* item = &item_list[i];
-    // Reject unreasonably large |item->size|.
-    size_t item_size = GetItemBaseSize(item->type);
-    // Confusing name: |item->size| is actually the number of items.
-    if (!image_.covers_array(item->offset, item->size, item_size))
+  for (const dex::MapItem& item : item_list) {
+    // Reject unreasonably large |item.size|.
+    size_t item_size = GetItemBaseSize(item.type);
+    // Confusing name: |item.size| is actually the number of items.
+    if (!image_.covers_array(item.offset, item.size, item_size)) {
       return false;
-    if (!map_item_map_.insert(std::make_pair(item->type, item)).second)
+    }
+    if (!map_item_map_.insert(std::make_pair(item.type, &item)).second) {
       return false;  // A given type must appear at most once.
+    }
   }
 
   // Make local copies of main map items.
-  if (map_item_map_.count(dex::kTypeStringIdItem)) {
-    string_map_item_ = *map_item_map_[dex::kTypeStringIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeStringIdItem);
+      it != map_item_map_.end()) {
+    string_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeTypeIdItem)) {
-    type_map_item_ = *map_item_map_[dex::kTypeTypeIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeTypeIdItem);
+      it != map_item_map_.end()) {
+    type_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeProtoIdItem)) {
-    proto_map_item_ = *map_item_map_[dex::kTypeProtoIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeProtoIdItem);
+      it != map_item_map_.end()) {
+    proto_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeFieldIdItem)) {
-    field_map_item_ = *map_item_map_[dex::kTypeFieldIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeFieldIdItem);
+      it != map_item_map_.end()) {
+    field_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeMethodIdItem)) {
-    method_map_item_ = *map_item_map_[dex::kTypeMethodIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeMethodIdItem);
+      it != map_item_map_.end()) {
+    method_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeClassDefItem)) {
-    class_def_map_item_ = *map_item_map_[dex::kTypeClassDefItem];
+  if (auto it = map_item_map_.find(dex::kTypeClassDefItem);
+      it != map_item_map_.end()) {
+    class_def_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeCallSiteIdItem)) {
-    call_site_map_item_ = *map_item_map_[dex::kTypeCallSiteIdItem];
+  if (auto it = map_item_map_.find(dex::kTypeCallSiteIdItem);
+      it != map_item_map_.end()) {
+    call_site_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeMethodHandleItem)) {
-    method_handle_map_item_ = *map_item_map_[dex::kTypeMethodHandleItem];
+  if (auto it = map_item_map_.find(dex::kTypeMethodHandleItem);
+      it != map_item_map_.end()) {
+    method_handle_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeTypeList)) {
-    type_list_map_item_ = *map_item_map_[dex::kTypeTypeList];
+  if (auto it = map_item_map_.find(dex::kTypeTypeList);
+      it != map_item_map_.end()) {
+    type_list_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeAnnotationSetRefList)) {
-    annotation_set_ref_list_map_item_ =
-        *map_item_map_[dex::kTypeAnnotationSetRefList];
+  if (auto it = map_item_map_.find(dex::kTypeAnnotationSetRefList);
+      it != map_item_map_.end()) {
+    annotation_set_ref_list_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeAnnotationSetItem)) {
-    annotation_set_map_item_ = *map_item_map_[dex::kTypeAnnotationSetItem];
+  if (auto it = map_item_map_.find(dex::kTypeAnnotationSetItem);
+      it != map_item_map_.end()) {
+    annotation_set_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeCodeItem)) {
-    code_map_item_ = *map_item_map_[dex::kTypeCodeItem];
+  if (auto it = map_item_map_.find(dex::kTypeCodeItem);
+      it != map_item_map_.end()) {
+    code_map_item_ = *it->second;
   }
-  if (map_item_map_.count(dex::kTypeAnnotationsDirectoryItem)) {
-    annotations_directory_map_item_ =
-        *map_item_map_[dex::kTypeAnnotationsDirectoryItem];
+  if (auto it = map_item_map_.find(dex::kTypeAnnotationsDirectoryItem);
+      it != map_item_map_.end()) {
+    annotations_directory_map_item_ = *it->second;
   }
 
   // Iteratively parse variable length lists, annotations directory items, and

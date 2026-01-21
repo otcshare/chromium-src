@@ -4,11 +4,12 @@
 
 #include "chrome/browser/extensions/system_display/display_info_provider_win.h"
 
-#include <memory>
-#include <utility>
+#include <windows.h>
 
 #include <stddef.h>
-#include <windows.h>
+
+#include <memory>
+#include <utility>
 
 #include "base/hash/hash.h"
 #include "base/strings/string_number_conversions.h"
@@ -43,11 +44,12 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR monitor,
 
   DISPLAY_DEVICE device;
   device.cb = sizeof(device);
-  if (!EnumDisplayDevices(monitor_info.szDevice, 0, &device, 0))
+  if (!EnumDisplayDevices(monitor_info.szDevice, 0, &device, 0)) {
     return FALSE;
+  }
 
   std::string id = base::NumberToString(
-      display::win::ScreenWin::DeviceIdFromDeviceName(monitor_info.szDevice));
+      display::win::GetScreenWin()->DisplayIdFromMonitorInfo(monitor_info));
   (*device_id_to_name)[id] = base::WideToUTF8(device.DeviceString);
   return TRUE;
 }

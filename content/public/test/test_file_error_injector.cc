@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "components/download/public/common/download_file_factory.h"
 #include "components/download/public/common/download_file_impl.h"
 #include "components/download/public/common/download_interrupt_reasons_utils.h"
@@ -52,9 +52,8 @@ class DownloadFileWithError : public download::DownloadFileImpl {
   // DownloadFile interface.
   download::DownloadInterruptReason ValidateAndWriteDataToFile(
       int64_t offset,
-      const char* data,
-      size_t bytes_to_validate,
-      size_t bytes_to_write) override;
+      base::span<const uint8_t> to_validate,
+      base::span<const uint8_t> to_write) override;
 
   download::DownloadInterruptReason HandleStreamCompletionStatus(
       SourceStream* source_stream) override;
@@ -66,6 +65,7 @@ class DownloadFileWithError : public download::DownloadFileImpl {
       const std::string& client_guid,
       const GURL& source_url,
       const GURL& referrer_url,
+      const std::optional<url::Origin>& request_initiator,
       mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
       RenameCompletionCallback callback) override;
 
@@ -177,16 +177,16 @@ void DownloadFileWithError::Initialize(
 }
 
 download::DownloadInterruptReason
-DownloadFileWithError::ValidateAndWriteDataToFile(int64_t offset,
-                                                  const char* data,
-                                                  size_t bytes_to_validate,
-                                                  size_t bytes_to_write) {
+DownloadFileWithError::ValidateAndWriteDataToFile(
+    int64_t offset,
+    base::span<const uint8_t> to_validate,
+    base::span<const uint8_t> to_write) {
   download::DownloadInterruptReason origin_error =
       download::DownloadFileImpl::ValidateAndWriteDataToFile(
-          offset, data, bytes_to_validate, bytes_to_write);
+          offset, to_validate, to_write);
   if (error_info_.data_write_offset == -1 ||
       ((offset <= error_info_.data_write_offset) &&
-       (offset + bytes_to_write >=
+       (offset + to_write.size() >=
         static_cast<size_t>(error_info_.data_write_offset)))) {
     return ShouldReturnError(TestFileErrorInjector::FILE_OPERATION_WRITE,
                              origin_error);
@@ -247,6 +247,7 @@ void DownloadFileWithError::RenameAndAnnotate(
     const std::string& client_guid,
     const GURL& source_url,
     const GURL& referrer_url,
+    const std::optional<url::Origin>& request_initiator,
     mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
     RenameCompletionCallback callback) {
   download::DownloadInterruptReason error_to_return =
@@ -275,7 +276,8 @@ void DownloadFileWithError::RenameAndAnnotate(
     callback_to_use = std::move(callback);
 
   download::DownloadFileImpl::RenameAndAnnotate(
-      full_path, client_guid, source_url, referrer_url, mojo::NullRemote(),
+      full_path, client_guid, source_url, referrer_url,
+      /*request_initiator=*/std::nullopt, mojo::NullRemote(),
       std::move(callback_to_use));
 }
 
@@ -317,6 +319,7 @@ class DownloadFileWithErrorFactory : public download::DownloadFileFactory {
       const base::FilePath& default_download_directory,
       std::unique_ptr<download::InputStream> stream,
       uint32_t download_id,
+      const base::FilePath& duplicate_download_file_path,
       base::WeakPtr<download::DownloadDestinationObserver> observer) override;
 
   bool SetError(TestFileErrorInjector::FileErrorInfo error);
@@ -343,6 +346,7 @@ download::DownloadFile* DownloadFileWithErrorFactory::CreateFile(
     const base::FilePath& default_download_directory,
     std::unique_ptr<download::InputStream> stream,
     uint32_t download_id,
+    const base::FilePath& duplicate_download_file_path,
     base::WeakPtr<download::DownloadDestinationObserver> observer) {
   return new DownloadFileWithError(
       std::move(save_info), default_download_directory, std::move(stream),

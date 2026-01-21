@@ -4,6 +4,7 @@
 
 #include "gpu/command_buffer/client/readback_buffer_shadow_tracker.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/client/gles2_cmd_helper.h"
@@ -26,10 +27,9 @@ ReadbackBufferShadowTracker::Buffer::~Buffer() {
 uint32_t ReadbackBufferShadowTracker::Buffer::Alloc(int32_t* shm_id,
                                                     uint32_t* shm_offset,
                                                     bool* already_allocated) {
-  *already_allocated = readback_shm_address_ != nullptr;
-  if (!readback_shm_address_) {
-    readback_shm_address_ =
-        mapped_memory_->Alloc(size_, &shm_id_, &shm_offset_);
+  *already_allocated = !readback_buffer_.empty();
+  if (readback_buffer_.empty()) {
+    readback_buffer_ = mapped_memory_->Alloc(size_, &shm_id_, &shm_offset_);
   }
   *shm_id = shm_id_;
   *shm_offset = shm_offset_;
@@ -37,11 +37,11 @@ uint32_t ReadbackBufferShadowTracker::Buffer::Alloc(int32_t* shm_id,
 }
 
 void ReadbackBufferShadowTracker::Buffer::Free() {
-  if (readback_shm_address_) {
-    mapped_memory_->FreePendingToken(readback_shm_address_,
+  if (!readback_buffer_.empty()) {
+    mapped_memory_->FreePendingToken(readback_buffer_.data(),
                                      helper_->InsertToken());
   }
-  readback_shm_address_ = nullptr;
+  readback_buffer_ = {};
 }
 
 void* ReadbackBufferShadowTracker::Buffer::MapReadbackShm(uint32_t offset,
@@ -50,7 +50,7 @@ void* ReadbackBufferShadowTracker::Buffer::MapReadbackShm(uint32_t offset,
   if (serial_of_readback_data_ != serial_of_last_write_) {
     return nullptr;
   }
-  if (!readback_shm_address_) {
+  if (readback_buffer_.empty()) {
     return nullptr;
   }
   if (map_size > size_) {
@@ -61,7 +61,7 @@ void* ReadbackBufferShadowTracker::Buffer::MapReadbackShm(uint32_t offset,
     return nullptr;
   }
   is_mapped_ = true;
-  return &static_cast<uint8_t*>(readback_shm_address_)[offset];
+  return readback_buffer_.get_at(offset);
 }
 
 bool ReadbackBufferShadowTracker::Buffer::UnmapReadbackShm() {

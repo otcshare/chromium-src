@@ -4,16 +4,15 @@
 
 #include "chrome/browser/media/test_license_server.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/command_line.h"
 #include "base/environment.h"
-#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/media/test_license_server_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 TestLicenseServer::TestLicenseServer(
     std::unique_ptr<TestLicenseServerConfig> server_config)
@@ -38,7 +37,7 @@ bool TestLicenseServer::Start() {
     return false;
   }
 
-  absl::optional<base::EnvironmentMap> env =
+  std::optional<base::EnvironmentMap> env =
       server_config_->GetServerEnvironment();
   if (!env) {
     LOG(WARNING) << "Could not get server environment variables.";

@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/at_exit.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/debugger.h"
 #include "base/debug/stack_trace.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/metrics/field_trial.h"
 #include "base/process/launch.h"
 #include "base/strings/string_split.h"
@@ -23,7 +26,7 @@
 #include "services/service_manager/public/mojom/service.mojom.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "base/mac/bundle_locations.h"
+#include "base/apple/bundle_locations.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -48,7 +51,7 @@ void WaitForDebuggerIfNecessary() {
         break;
       }
     }
-    if (apps_to_debug.empty() || base::Contains(apps_to_debug, app)) {
+    if (apps_to_debug.empty() || std::ranges::contains(apps_to_debug, app)) {
 #if BUILDFLAG(IS_WIN)
       std::wstring appw = base::UTF8ToWide(app);
       std::wstring message = base::UTF8ToWide(
@@ -94,12 +97,13 @@ int main(int argc, char** argv) {
   std::unique_ptr<base::FieldTrialList> field_trial_list =
       std::make_unique<base::FieldTrialList>();
   // Create field trials according to --force-fieldtrials param.
-  base::FieldTrialList::CreateTrialsFromCommandLine(*command_line, -1);
+  base::FieldTrialList::CreateTrialsFromString(
+      command_line->GetSwitchValueASCII(::switches::kForceFieldTrials));
   // Enable and disable features according to --enable-features and
   // --disable-features.
   std::unique_ptr<base::FeatureList> feature_list =
       std::make_unique<base::FeatureList>();
-  feature_list->InitializeFromCommandLine(
+  feature_list->InitFromCommandLine(
       command_line->GetSwitchValueASCII(switches::kEnableFeatures),
       command_line->GetSwitchValueASCII(switches::kDisableFeatures));
 

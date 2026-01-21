@@ -4,93 +4,61 @@
 
 #include "gpu/command_buffer/service/shared_image/iosurface_image_backing_factory.h"
 
-#include "base/mac/scoped_cftyperef.h"
-#include "base/mac/scoped_nsobject.h"
+#include <optional>
+
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
-#include "components/viz/common/gpu/metal_context_provider.h"
-#include "components/viz/common/resources/resource_format_utils.h"
-#include "components/viz/common/resources/resource_sizes.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
+#include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/iosurface_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
-#include "gpu/command_buffer/service/shared_image/shared_image_format_utils.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/skia_utils.h"
 #include "gpu/command_buffer/service/texture_manager.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/skia/include/core/SkPromiseImageTexture.h"
-#include "ui/gfx/buffer_format_util.h"
-#include "ui/gfx/mac/display_icc_profiles.h"
+#include "gpu/config/gpu_finch_features.h"
+#include "ui/gfx/buffer_types.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gfx/mac/io_surface.h"
-#include "ui/gl/buffer_format_utils.h"
 #include "ui/gl/buildflags.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
 
-#import <Metal/Metal.h>
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#include "ui/gfx/mac/display_icc_profiles.h"
+#endif
 
-// Usage of BUILDFLAG(USE_DAWN) needs to be after the include for
-// ui/gl/buildflags.h
-#if BUILDFLAG(USE_DAWN)
-#include <dawn/native/MetalBackend.h>
-#endif  // BUILDFLAG(USE_DAWN)
+#import <Metal/Metal.h>
 
 namespace gpu {
 
 namespace {
-base::scoped_nsprotocol<id<MTLTexture>> CreateMetalTexture(
-    id<MTLDevice> mtl_device,
-    IOSurfaceRef io_surface,
-    const gfx::Size& size,
-    viz::SharedImageFormat format) {
-  TRACE_EVENT0("gpu", "IOSurfaceImageBackingFactory::CreateMetalTexture");
-  base::scoped_nsprotocol<id<MTLTexture>> mtl_texture;
-  MTLPixelFormat mtl_pixel_format =
-      static_cast<MTLPixelFormat>(ToMTLPixelFormat(format));
-  if (mtl_pixel_format == MTLPixelFormatInvalid)
-    return mtl_texture;
-
-  base::scoped_nsobject<MTLTextureDescriptor> mtl_tex_desc(
-      [MTLTextureDescriptor new]);
-  [mtl_tex_desc setTextureType:MTLTextureType2D];
-  [mtl_tex_desc
-      setUsage:MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget];
-  [mtl_tex_desc setPixelFormat:mtl_pixel_format];
-  [mtl_tex_desc setWidth:size.width()];
-  [mtl_tex_desc setHeight:size.height()];
-  [mtl_tex_desc setDepth:1];
-  [mtl_tex_desc setMipmapLevelCount:1];
-  [mtl_tex_desc setArrayLength:1];
-  [mtl_tex_desc setSampleCount:1];
-  // TODO(https://crbug.com/952063): For zero-copy resources that are populated
-  // on the CPU (e.g, video frames), it may be that MTLStorageModeManaged will
-  // be more appropriate.
-  [mtl_tex_desc setStorageMode:MTLStorageModePrivate];
-  mtl_texture.reset([mtl_device newTextureWithDescriptor:mtl_tex_desc
-                                               iosurface:io_surface
-                                                   plane:0]);
-  DCHECK(mtl_texture);
-  return mtl_texture;
+bool UsageWillResultInGLWrite(gpu::SharedImageUsageSet usage,
+                              GrContextType gr_context_type) {
+  return usage.Has(SHARED_IMAGE_USAGE_GLES2_WRITE) ||
+         ((gr_context_type == GrContextType::kGL) &&
+          usage.HasAny(SHARED_IMAGE_USAGE_RASTER_WRITE |
+                       SHARED_IMAGE_USAGE_DISPLAY_WRITE));
 }
 
-bool IsFormatSupported(viz::ResourceFormat resource_format) {
-  switch (resource_format) {
-    case viz::ResourceFormat::RGBA_8888:
-    case viz::ResourceFormat::RGBX_8888:
-    case viz::ResourceFormat::BGRA_8888:
-    case viz::ResourceFormat::BGRX_8888:
-    case viz::ResourceFormat::RGBA_F16:
-    case viz::ResourceFormat::RED_8:
-    case viz::ResourceFormat::BGRA_1010102:
-    case viz::ResourceFormat::RGBA_1010102:
-      return true;
-    default:
-      return false;
-  }
+bool IsFormatSupported(viz::SharedImageFormat format) {
+  return (format == viz::SinglePlaneFormat::kRGBA_8888) ||
+         (format == viz::SinglePlaneFormat::kRGBX_8888) ||
+         (format == viz::SinglePlaneFormat::kBGRA_8888) ||
+         (format == viz::SinglePlaneFormat::kBGRX_8888) ||
+         (format == viz::SinglePlaneFormat::kRGBA_F16) ||
+         (format == viz::SinglePlaneFormat::kR_8) ||
+         (format == viz::SinglePlaneFormat::kRG_88) ||
+         (format == viz::SinglePlaneFormat::kR_16) ||
+         (format == viz::SinglePlaneFormat::kR_F16) ||
+         (format == viz::SinglePlaneFormat::kRG_1616) ||
+         (format == viz::SinglePlaneFormat::kBGRA_1010102) ||
+         (format == viz::SinglePlaneFormat::kRGBA_1010102);
 }
 
 void SetIOSurfaceColorSpace(IOSurfaceRef io_surface,
@@ -99,13 +67,17 @@ void SetIOSurfaceColorSpace(IOSurfaceRef io_surface,
     return;
   }
 
-  base::ScopedCFTypeRef<CFDataRef> cf_data =
+#if BUILDFLAG(IS_MAC)
+  base::apple::ScopedCFTypeRef<CFDataRef> cf_data =
       gfx::DisplayICCProfiles::GetInstance()->GetDataForColorSpace(color_space);
   if (cf_data) {
-    IOSurfaceSetValue(io_surface, CFSTR("IOSurfaceColorSpace"), cf_data);
+    IOSurfaceSetValue(io_surface, CFSTR("IOSurfaceColorSpace"), cf_data.get());
   } else {
     IOSurfaceSetColorSpace(io_surface, color_space);
   }
+#else
+  IOSurfaceSetColorSpace(io_surface, color_space);
+#endif
 }
 
 bool IsValidSize(const gfx::Size& size, int32_t max_texture_size) {
@@ -125,265 +97,90 @@ bool IsPixelDataValid(viz::SharedImageFormat format,
     return true;
   }
   // If we have initial data to upload, ensure it is sized appropriately
-  size_t estimated_size;
-  if (!viz::ResourceSizes::MaybeSizeInBytes(size, format, &estimated_size)) {
-    DLOG(ERROR) << "Failed to calculate SharedImage size";
+
+  auto estimated_size = format.MaybeEstimatedSizeInBytes(size);
+  if (!estimated_size) {
+    LOG(ERROR) << "Failed to calculate SharedImage size";
     return false;
   }
-  if (pixel_data.size() != estimated_size) {
+  if (pixel_data.size() != estimated_size.value()) {
     LOG(ERROR) << "Initial data does not have expected size.";
     return false;
   }
   return true;
 }
 
+constexpr SharedImageUsageSet kSupportedUsage =
+    SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_GLES2_WRITE |
+    SHARED_IMAGE_USAGE_DISPLAY_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ |
+    SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE |
+    SHARED_IMAGE_USAGE_SCANOUT | SHARED_IMAGE_USAGE_WEBGPU_READ |
+    SHARED_IMAGE_USAGE_WEBGPU_WRITE | SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE |
+    SHARED_IMAGE_USAGE_VIDEO_DECODE |
+    SHARED_IMAGE_USAGE_WEBGPU_SWAP_CHAIN_TEXTURE |
+    SHARED_IMAGE_USAGE_MACOS_VIDEO_TOOLBOX |
+    SHARED_IMAGE_USAGE_HIGH_PERFORMANCE_GPU |
+    SHARED_IMAGE_USAGE_CPU_WRITE_ONLY |
+    SHARED_IMAGE_USAGE_WEBGPU_STORAGE_TEXTURE | SHARED_IMAGE_USAGE_CPU_UPLOAD |
+    SHARED_IMAGE_USAGE_RASTER_COPY_SOURCE | SHARED_IMAGE_USAGE_CPU_READ |
+    SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER |
+    SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR |
+    SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR_WRITE |
+    SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR_READ;
+
 }  // anonymous namespace
-
-// Representation of a SharedImageBackingIOSurface as a Dawn Texture.
-#if BUILDFLAG(USE_DAWN)
-class DawnIOSurfaceRepresentation : public DawnImageRepresentation {
- public:
-  DawnIOSurfaceRepresentation(SharedImageManager* manager,
-                              SharedImageBacking* backing,
-                              MemoryTypeTracker* tracker,
-                              WGPUDevice device,
-                              base::ScopedCFTypeRef<IOSurfaceRef> io_surface,
-                              WGPUTextureFormat wgpu_format,
-                              std::vector<WGPUTextureFormat> view_formats)
-      : DawnImageRepresentation(manager, backing, tracker),
-        io_surface_(std::move(io_surface)),
-        device_(device),
-        wgpu_format_(wgpu_format),
-        view_formats_(std::move(view_formats)),
-        dawn_procs_(dawn::native::GetProcs()) {
-    DCHECK(device_);
-    DCHECK(io_surface_);
-
-    // Keep a reference to the device so that it stays valid (it might become
-    // lost in which case operations will be noops).
-    dawn_procs_.deviceReference(device_);
-  }
-
-  ~DawnIOSurfaceRepresentation() override {
-    EndAccess();
-    dawn_procs_.deviceRelease(device_);
-  }
-
-  WGPUTexture BeginAccess(WGPUTextureUsage usage) final {
-    WGPUTextureDescriptor texture_descriptor = {};
-    texture_descriptor.format = wgpu_format_;
-    texture_descriptor.usage = usage;
-    texture_descriptor.dimension = WGPUTextureDimension_2D;
-    texture_descriptor.size = {static_cast<uint32_t>(size().width()),
-                               static_cast<uint32_t>(size().height()), 1};
-    texture_descriptor.mipLevelCount = 1;
-    texture_descriptor.sampleCount = 1;
-    texture_descriptor.viewFormatCount =
-        static_cast<uint32_t>(view_formats_.size());
-    texture_descriptor.viewFormats = view_formats_.data();
-
-    // We need to have internal usages of CopySrc for copies. If texture is not
-    // for video frame import, which has bi-planar format, we also need
-    // RenderAttachment usage for clears, and TextureBinding for
-    // copyTextureForBrowser.
-    WGPUDawnTextureInternalUsageDescriptor internalDesc = {};
-    internalDesc.chain.sType = WGPUSType_DawnTextureInternalUsageDescriptor;
-    internalDesc.internalUsage =
-        WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
-    if (wgpu_format_ != WGPUTextureFormat_R8BG8Biplanar420Unorm) {
-      internalDesc.internalUsage |= WGPUTextureUsage_RenderAttachment;
-    }
-
-    texture_descriptor.nextInChain =
-        reinterpret_cast<WGPUChainedStruct*>(&internalDesc);
-
-    dawn::native::metal::ExternalImageDescriptorIOSurface descriptor;
-    descriptor.cTextureDescriptor = &texture_descriptor;
-    descriptor.isInitialized = IsCleared();
-    descriptor.ioSurface = io_surface_.get();
-    descriptor.plane = 0;
-
-    // If the backing is compatible - essentially, a GLImageIOSurface -
-    // then synchronize with all of the MTLSharedEvents which have been
-    // stored in it as a consequence of earlier BeginAccess/EndAccess calls
-    // against other representations.
-    if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
-      if (@available(macOS 10.14, *)) {
-        SharedImageBacking* backing = this->backing();
-        // Not possible to reach this with any other type of backing.
-        DCHECK_EQ(backing->GetType(), SharedImageBackingType::kIOSurface);
-        IOSurfaceImageBacking* iosurface_backing =
-            static_cast<IOSurfaceImageBacking*>(backing);
-        std::vector<std::unique_ptr<SharedEventAndSignalValue>> signals =
-            iosurface_backing->TakeSharedEvents();
-        for (const auto& signal : signals) {
-          dawn::native::metal::ExternalImageMTLSharedEventDescriptor
-              external_desc;
-          external_desc.sharedEvent =
-              static_cast<id<MTLSharedEvent>>(signal->shared_event());
-          external_desc.signaledValue = signal->signaled_value();
-          descriptor.waitEvents.push_back(external_desc);
-        }
-      }
-    }
-
-    texture_ = dawn::native::metal::WrapIOSurface(device_, &descriptor);
-    return texture_;
-  }
-
-  void EndAccess() final {
-    if (!texture_) {
-      return;
-    }
-
-    dawn::native::metal::ExternalImageIOSurfaceEndAccessDescriptor descriptor;
-    dawn::native::metal::IOSurfaceEndAccess(texture_, &descriptor);
-
-    if (descriptor.isInitialized) {
-      SetCleared();
-    }
-
-    if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
-      if (@available(macOS 10.14, *)) {
-        SharedImageBacking* backing = this->backing();
-        // Not possible to reach this with any other type of backing.
-        DCHECK_EQ(backing->GetType(), SharedImageBackingType::kIOSurface);
-        IOSurfaceImageBacking* iosurface_backing =
-            static_cast<IOSurfaceImageBacking*>(backing);
-        // Dawn's Metal backend has enqueued a MTLSharedEvent which
-        // consumers of the IOSurface must wait upon before attempting to
-        // use that IOSurface on another MTLDevice. Store this event in
-        // the underlying SharedImageBacking.
-        iosurface_backing->AddSharedEventAndSignalValue(
-            descriptor.sharedEvent, descriptor.signaledValue);
-      }
-    }
-
-    // All further operations on the textures are errors (they would be racy
-    // with other backings).
-    dawn_procs_.textureDestroy(texture_);
-
-    // TODO(b/252731382): the following WaitForCommandsToBeScheduled call should
-    // no longer be necessary, but for some reason it is. Removing it
-    // reintroduces intermittent renders of black frames to the WebGPU canvas.
-    // This points to another synchronization bug not resolved by the use of
-    // MTLSharedEvent between Dawn and ANGLE's Metal backend.
-    //
-    // macOS has a global GPU command queue so synchronization between APIs and
-    // devices is automatic. However on Metal, wgpuQueueSubmit "commits" the
-    // Metal command buffers but they aren't "scheduled" in the global queue
-    // immediately. (that work seems offloaded to a different thread?)
-    // Wait for all the previous submitted commands to be scheduled to have
-    // scheduling races between commands using the IOSurface on different APIs.
-    // This is a blocking call but should be almost instant.
-    TRACE_EVENT0("gpu", "DawnIOSurfaceRepresentation::EndAccess");
-    dawn::native::metal::WaitForCommandsToBeScheduled(device_);
-
-    dawn_procs_.textureRelease(texture_);
-    texture_ = nullptr;
-  }
-
- private:
-  base::ScopedCFTypeRef<IOSurfaceRef> io_surface_;
-  WGPUDevice device_;
-  WGPUTexture texture_ = nullptr;
-  WGPUTextureFormat wgpu_format_;
-  std::vector<WGPUTextureFormat> view_formats_;
-
-  // TODO(cwallez@chromium.org): Load procs only once when the factory is
-  // created and pass a pointer to them around?
-  DawnProcTable dawn_procs_;
-};
-#endif  // BUILDFLAG(USE_DAWN)
-
-// static
-sk_sp<SkPromiseImageTexture>
-IOSurfaceImageBackingFactory::ProduceSkiaPromiseTextureMetal(
-    SharedImageBacking* backing,
-    scoped_refptr<SharedContextState> context_state,
-    gfx::ScopedIOSurface io_surface,
-    uint32_t io_surface_plane) {
-  DCHECK(context_state->GrContextIsMetal());
-  DCHECK(!io_surface_plane);
-
-  id<MTLDevice> mtl_device =
-      context_state->metal_context_provider()->GetMTLDevice();
-  auto mtl_texture = CreateMetalTexture(mtl_device, io_surface.get(),
-                                        backing->size(), backing->format());
-  DCHECK(mtl_texture);
-
-  GrMtlTextureInfo info;
-  info.fTexture.retain(mtl_texture.get());
-  auto gr_backend_texture =
-      GrBackendTexture(backing->size().width(), backing->size().height(),
-                       GrMipMapped::kNo, info);
-  return SkPromiseImageTexture::Make(gr_backend_texture);
-}
-
-// static
-std::unique_ptr<DawnImageRepresentation>
-IOSurfaceImageBackingFactory::ProduceDawn(
-    SharedImageManager* manager,
-    SharedImageBacking* backing,
-    MemoryTypeTracker* tracker,
-    WGPUDevice device,
-    std::vector<WGPUTextureFormat> view_formats,
-    gfx::ScopedIOSurface io_surface,
-    uint32_t io_surface_plane) {
-  DCHECK(!io_surface_plane);
-#if BUILDFLAG(USE_DAWN)
-  // See comments in IOSurfaceImageBackingFactory::CreateSharedImage
-  // regarding RGBA versus BGRA.
-  viz::SharedImageFormat actual_format = backing->format();
-  if (actual_format == viz::SharedImageFormat::kRGBA_8888)
-    actual_format = viz::SharedImageFormat::kBGRA_8888;
-
-  // TODO(crbug.com/1293514): Remove this if condition after using single
-  // multiplanar mailbox and actual_format could report multiplanar format
-  // correctly.
-  if (IOSurfaceGetPixelFormat(io_surface) == '420v')
-    actual_format = viz::SharedImageFormat::SinglePlane(viz::YUV_420_BIPLANAR);
-
-  absl::optional<WGPUTextureFormat> wgpu_format = ToWGPUFormat(actual_format);
-  if (wgpu_format.value() == WGPUTextureFormat_Undefined)
-    return nullptr;
-
-  return std::make_unique<DawnIOSurfaceRepresentation>(
-      manager, backing, tracker, device, io_surface, wgpu_format.value(),
-      std::move(view_formats));
-#else   // BUILDFLAG(USE_DAWN)
-  return nullptr;
-#endif  // BUILDFLAG(USE_DAWN)
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // IOSurfaceImageBackingFactory
 
 IOSurfaceImageBackingFactory::IOSurfaceImageBackingFactory(
-    const GpuPreferences& gpu_preferences,
-    const GpuDriverBugWorkarounds& workarounds,
+    GrContextType gr_context_type,
+    int32_t max_texture_size,
     const gles2::FeatureInfo* feature_info,
-    gl::ProgressReporter* progress_reporter)
-    : progress_reporter_(progress_reporter),
-      gpu_memory_buffer_formats_(
-          feature_info->feature_flags().gpu_memory_buffer_formats),
-      angle_texture_usage_(feature_info->feature_flags().angle_texture_usage) {
-  gl::GLApi* api = gl::g_current_gl_context;
-  api->glGetIntegervFn(GL_MAX_TEXTURE_SIZE, &max_texture_size_);
-  // Ensure max_texture_size_ is less than INT_MAX so that gfx::Rect and friends
-  // can be used to accurately represent all valid sub-rects, with overflow
-  // cases, clamped to INT_MAX, always invalid.
-  max_texture_size_ = std::min(max_texture_size_, INT_MAX - 1);
-
-  for (gfx::BufferFormat buffer_format : gpu_memory_buffer_formats_) {
-    viz::ResourceFormat resource_format = viz::GetResourceFormat(buffer_format);
-    if (IsFormatSupported(resource_format)) {
-      supported_formats_.insert(resource_format);
+    gl::ProgressReporter* progress_reporter,
+    uint32_t texture_target)
+    : SharedImageBackingFactory(kSupportedUsage),
+      gr_context_type_(gr_context_type),
+      max_texture_size_(max_texture_size),
+      angle_texture_usage_(feature_info->feature_flags().angle_texture_usage),
+      progress_reporter_(progress_reporter),
+      texture_target_(texture_target) {
+  for (auto format : feature_info->feature_flags().mappable_formats) {
+    // Add supported single-plane formats.
+    if (format.is_single_plane() && IsFormatSupported(format)) {
+      supported_formats_.insert(format);
     }
   }
+
+  // Support R_F16 for SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR.
+  supported_formats_.insert(viz::SinglePlaneFormat::kR_F16);
+
+  // Add supported multi-plane formats.
+  supported_formats_.insert(viz::MultiPlaneFormat::kNV12);
+  supported_formats_.insert(viz::MultiPlaneFormat::kP210);
+  supported_formats_.insert(viz::MultiPlaneFormat::kP410);
+  supported_formats_.insert(viz::MultiPlaneFormat::kP010);
+  supported_formats_.insert(viz::MultiPlaneFormat::kNV12A);
+  supported_formats_.insert(viz::MultiPlaneFormat::kNV16);
+  supported_formats_.insert(viz::MultiPlaneFormat::kNV24);
 }
 
 IOSurfaceImageBackingFactory::~IOSurfaceImageBackingFactory() = default;
+
+// static
+gfx::GpuMemoryBufferHandle
+IOSurfaceImageBackingFactory::CreateGpuMemoryBufferHandle(
+    const gfx::Size& size,
+    viz::SharedImageFormat format) {
+  base::apple::ScopedCFTypeRef<IOSurfaceRef> io_surface =
+      gfx::CreateIOSurface(size, format, /*should_clear=*/true);
+  if (!io_surface) {
+    LOG(ERROR) << "Failed to allocate IOSurface.";
+    return {};
+  }
+
+  return gfx::GpuMemoryBufferHandle(std::move(io_surface));
+}
 
 std::unique_ptr<SharedImageBacking>
 IOSurfaceImageBackingFactory::CreateSharedImage(
@@ -394,12 +191,13 @@ IOSurfaceImageBackingFactory::CreateSharedImage(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
+    std::string debug_label,
     bool is_thread_safe) {
-  DCHECK(!is_thread_safe);
   return CreateSharedImageInternal(mailbox, format, surface_handle, size,
                                    color_space, surface_origin, alpha_type,
-                                   usage, base::span<const uint8_t>());
+                                   usage, std::move(debug_label),
+                                   is_thread_safe, base::span<const uint8_t>());
 }
 
 std::unique_ptr<SharedImageBacking>
@@ -410,119 +208,114 @@ IOSurfaceImageBackingFactory::CreateSharedImage(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
+    std::string debug_label,
+    bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
-  return CreateSharedImageInternal(mailbox, format, kNullSurfaceHandle, size,
-                                   color_space, surface_origin, alpha_type,
-                                   usage, pixel_data);
+  return CreateSharedImageInternal(
+      mailbox, format, kNullSurfaceHandle, size, color_space, surface_origin,
+      alpha_type, usage, std::move(debug_label), is_thread_safe, pixel_data);
 }
 
 std::unique_ptr<SharedImageBacking>
 IOSurfaceImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    int client_id,
-    gfx::GpuMemoryBufferHandle handle,
-    gfx::BufferFormat buffer_format,
-    gfx::BufferPlane plane,
+    viz::SharedImageFormat format,
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage) {
-  if (handle.type != gfx::IO_SURFACE_BUFFER || !handle.io_surface) {
-    LOG(ERROR) << "Invalid IOSurface GpuMemoryBufferHandle.";
-    return nullptr;
-  }
+    SharedImageUsageSet usage,
+    std::string debug_label,
+    bool is_thread_safe,
+    gfx::GpuMemoryBufferHandle handle) {
+  // MacOS does not support external sampler.
+  CHECK(!format.PrefersExternalSampler());
+  return CreateSharedImageGMBs(
+      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
+      std::move(debug_label), std::move(handle), is_thread_safe);
+}
 
-  if (!gpu_memory_buffer_formats_.Has(buffer_format)) {
-    LOG(ERROR) << "CreateSharedImage: unsupported buffer format "
-               << gfx::BufferFormatToString(buffer_format);
-    return nullptr;
-  }
-
-  if (!gpu::IsPlaneValidForGpuMemoryBufferFormat(plane, buffer_format)) {
-    LOG(ERROR) << "Invalid plane " << gfx::BufferPlaneToString(plane) << " for "
-               << gfx::BufferFormatToString(buffer_format);
-    return nullptr;
-  }
-
-  // Note that `size` refers to the size of the IOSurface, not the `plane`
-  // that is specified. This parameter should probably be ignored.
-  if (!gpu::IsImageSizeValidForGpuMemoryBufferFormat(size, buffer_format)) {
-    LOG(ERROR) << "Invalid size " << size.ToString() << " for "
-               << gfx::BufferFormatToString(buffer_format);
-    return nullptr;
-  }
-
-  const GLenum target = gpu::GetPlatformSpecificTextureTarget();
-  auto io_surface = handle.io_surface;
-  const auto io_surface_id = handle.id;
-  const uint32_t io_surface_plane = GetPlaneIndex(plane, buffer_format);
-
-  // Ensure that the IOSurface has the same size and pixel format as those
-  // specified by `size` and `buffer_format`. A malicious client could lie about
-  // this, which, if subsequently used to determine parameters for bounds
-  // checking, could result in an out-of-bounds memory access.
+std::unique_ptr<SharedImageBacking>
+IOSurfaceImageBackingFactory::CreateSharedImage(
+    const Mailbox& mailbox,
+    viz::SharedImageFormat format,
+    SurfaceHandle surface_handle,
+    const gfx::Size& size,
+    const gfx::ColorSpace& color_space,
+    GrSurfaceOrigin surface_origin,
+    SkAlphaType alpha_type,
+    SharedImageUsageSet usage,
+    std::string debug_label,
+    bool is_thread_safe,
+    gfx::BufferUsage buffer_usage) {
+  // |scoped_progress_reporter| will notify |progress_reporter_| upon
+  // construction and destruction. We limit the scope so that progress is
+  // reported immediately after allocation/upload and before other GL
+  // operations.
+  gfx::ScopedIOSurface io_surface;
   {
-    uint32_t io_surface_format = IOSurfaceGetPixelFormat(io_surface);
-    if (io_surface_format !=
-        BufferFormatToIOSurfacePixelFormat(buffer_format)) {
-      DLOG(ERROR)
-          << "IOSurface pixel format does not match specified buffer format.";
-      return nullptr;
-    }
-    gfx::Size io_surface_size(IOSurfaceGetWidth(io_surface),
-                              IOSurfaceGetHeight(io_surface));
-    if (io_surface_size != size) {
-      DLOG(ERROR) << "IOSurface size does not match specified size.";
+    gl::ScopedProgressReporter scoped_progress_reporter(progress_reporter_);
+    const bool should_clear = true;
+    const bool override_rgba_to_bgra =
+#if BUILDFLAG(IS_IOS)
+        false;
+#else
+        gr_context_type_ == GrContextType::kGL;
+#endif
+    io_surface =
+        gfx::CreateIOSurface(size, format, should_clear, override_rgba_to_bgra);
+    if (!io_surface) {
+      LOG(ERROR) << "CreateSharedImage: Failed to create bindable image";
       return nullptr;
     }
   }
+  SetIOSurfaceColorSpace(io_surface.get(), color_space);
 
-  const gfx::BufferFormat plane_buffer_format =
-      GetPlaneBufferFormat(plane, buffer_format);
-  const viz::ResourceFormat plane_resource_format =
-      viz::GetResourceFormat(plane_buffer_format);
-  const gfx::Size plane_size = gpu::GetPlaneSize(plane, size);
-
-  const bool for_framebuffer_attachment =
-      (usage & (SHARED_IMAGE_USAGE_RASTER |
-                SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT)) != 0;
-
-  const bool framebuffer_attachment_angle =
-      for_framebuffer_attachment && angle_texture_usage_;
-
-  auto si_format = viz::SharedImageFormat::SinglePlane(plane_resource_format);
-  return std::make_unique<IOSurfaceImageBacking>(
-      io_surface, io_surface_plane, plane_buffer_format, io_surface_id, mailbox,
-      si_format, plane_size, color_space, surface_origin, alpha_type, usage,
-      target, framebuffer_attachment_angle, /*is_cleared=*/true);
+  CHECK(!format.PrefersExternalSampler());
+  return CreateSharedImageGMBs(
+      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
+      std::move(debug_label), gfx::GpuMemoryBufferHandle(std::move(io_surface)),
+      is_thread_safe, std::move(buffer_usage));
 }
 
 bool IOSurfaceImageBackingFactory::IsSupported(
-    uint32_t usage,
+    SharedImageUsageSet usage,
     viz::SharedImageFormat format,
     const gfx::Size& size,
     bool thread_safe,
     gfx::GpuMemoryBufferType gmb_type,
     GrContextType gr_context_type,
     base::span<const uint8_t> pixel_data) {
-  if (format.is_multi_plane()) {
+  // Only allow WebGPU shared buffer for WebNN use case for now.
+  if (usage.Has(SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER) &&
+      !usage.Has(SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR)) {
     return false;
   }
-  if (!pixel_data.empty() && gr_context_type != GrContextType::kGL) {
+
+  // This is the only format that can be used as MLMultiArray for WebNN.
+  if (usage.Has(SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR)) {
+    if (format != viz::SinglePlaneFormat::kR_F16) {
+      return false;
+    }
+  }
+
+  if (thread_safe &&
+      !base::FeatureList::IsEnabled(features::kIOSurfaceMultiThreading)) {
     return false;
   }
-  if (thread_safe) {
-    return false;
-  }
+
   // Never used with shared memory GMBs.
-  if (gmb_type == gfx::SHARED_MEMORY_BUFFER) {
+  if (gmb_type != gfx::EMPTY_BUFFER && gmb_type != gfx::IO_SURFACE_BUFFER) {
     return false;
   }
-  if (usage & SHARED_IMAGE_USAGE_CPU_UPLOAD) {
+
+  if (usage.Has(SHARED_IMAGE_USAGE_CPU_WRITE_ONLY) &&
+      gmb_type != gfx::IO_SURFACE_BUFFER) {
+    // Only CPU writable when the client provides a IOSurface.
     return false;
   }
+
   // On macOS, there is no separate interop factory. Any GpuMemoryBuffer-backed
   // image can be used with both OpenGL and Metal
 
@@ -537,7 +330,7 @@ bool IOSurfaceImageBackingFactory::IsSupported(
   // IOSurfaceImageBacking::GLTextureImageRepresentationEndAccess().
   if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kSwiftShader ||
       gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
-    if (usage & SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE) {
+    if (usage.Has(SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE)) {
       return false;
     }
   }
@@ -554,36 +347,49 @@ IOSurfaceImageBackingFactory::CreateSharedImageInternal(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    gpu::SharedImageUsageSet usage,
+    std::string debug_label,
+    bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
-  if (!base::Contains(supported_formats_, format.resource_format())) {
-    LOG(ERROR) << "CreateSharedImage: SCANOUT shared images unavailable. "
-                  "Format= "
+  if (!supported_formats_.contains(format)) {
+    LOG(ERROR) << "CreateSharedImage: Unable to create SharedImage with format "
                << format.ToString();
     return nullptr;
   }
+
+  if (format.is_multi_plane() && !pixel_data.empty()) {
+    LOG(ERROR) << "CreateSharedImage: Creation from pixel data is not "
+                  "supported for multiplanar format "
+               << format.ToString();
+    return nullptr;
+  }
+
   if (!IsValidSize(size, max_texture_size_) ||
       !IsPixelDataValid(format, size, pixel_data)) {
     return nullptr;
   }
 
   const bool for_framebuffer_attachment =
-      (usage & (SHARED_IMAGE_USAGE_RASTER |
-                SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT)) != 0;
+      UsageWillResultInGLWrite(usage, gr_context_type_);
 
   // |scoped_progress_reporter| will notify |progress_reporter_| upon
   // construction and destruction. We limit the scope so that progress is
   // reported immediately after allocation/upload and before other GL
   // operations.
   gfx::ScopedIOSurface io_surface;
-  const uint32_t io_surface_plane = 0;
-  const gfx::GenericSharedMemoryId io_surface_id;
-  const gfx::BufferFormat buffer_format =
-      viz::BufferFormat(format.resource_format());
+  const bool should_clear =
+      usage.Has(SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR) ? true : false;
   {
     gl::ScopedProgressReporter scoped_progress_reporter(progress_reporter_);
-    const bool should_clear = false;
-    io_surface.reset(gfx::CreateIOSurface(size, buffer_format, should_clear));
+
+    const bool override_rgba_to_bgra =
+#if BUILDFLAG(IS_IOS)
+        false;
+#else
+        gr_context_type_ == GrContextType::kGL;
+#endif
+    io_surface =
+        gfx::CreateIOSurface(size, format, should_clear, override_rgba_to_bgra);
     if (!io_surface) {
       LOG(ERROR) << "CreateSharedImage: Failed to create bindable image";
       return nullptr;
@@ -591,20 +397,88 @@ IOSurfaceImageBackingFactory::CreateSharedImageInternal(
   }
   SetIOSurfaceColorSpace(io_surface.get(), color_space);
 
-  const bool is_cleared = !pixel_data.empty();
+  const bool is_cleared = !pixel_data.empty() || should_clear;
   const bool framebuffer_attachment_angle =
       for_framebuffer_attachment && angle_texture_usage_;
-  GLenum texture_target = gpu::GetPlatformSpecificTextureTarget();
 
   auto backing = std::make_unique<IOSurfaceImageBacking>(
-      io_surface, io_surface_plane, buffer_format, io_surface_id, mailbox,
-      format, size, color_space, surface_origin, alpha_type, usage,
-      texture_target, framebuffer_attachment_angle, is_cleared);
+      io_surface, mailbox, format, size, color_space, surface_origin,
+      alpha_type, usage, std::move(debug_label), texture_target_,
+      framebuffer_attachment_angle, is_cleared, is_thread_safe,
+      gr_context_type_);
   if (!pixel_data.empty()) {
     gl::ScopedProgressReporter scoped_progress_reporter(progress_reporter_);
     backing->InitializePixels(pixel_data);
   }
   return std::move(backing);
+}
+
+std::unique_ptr<SharedImageBacking>
+IOSurfaceImageBackingFactory::CreateSharedImageGMBs(
+    const Mailbox& mailbox,
+    viz::SharedImageFormat format,
+    const gfx::Size& size,
+    const gfx::ColorSpace& color_space,
+    GrSurfaceOrigin surface_origin,
+    SkAlphaType alpha_type,
+    gpu::SharedImageUsageSet usage,
+    std::string debug_label,
+    gfx::GpuMemoryBufferHandle handle,
+    bool is_thread_safe,
+    std::optional<gfx::BufferUsage> buffer_usage) {
+  if (handle.type != gfx::IO_SURFACE_BUFFER || !handle.io_surface()) {
+    LOG(ERROR) << "Invalid IOSurface GpuMemoryBufferHandle.";
+    return nullptr;
+  }
+
+  if (!supported_formats_.contains(format)) {
+    LOG(ERROR) << "CreateSharedImage: Unable to create SharedImage with format "
+               << format.ToString();
+    return nullptr;
+  }
+
+  auto io_surface = std::move(handle).io_surface();
+
+  // Ensure that the IOSurface has the same size and pixel format as those
+  // specified by `size` and `format`. A malicious client could lie about
+  // this, which, if subsequently used to determine parameters for bounds
+  // checking, could result in an out-of-bounds memory access.
+  {
+    uint32_t io_surface_format = IOSurfaceGetPixelFormat(io_surface.get());
+    const bool override_rgba_to_bgra =
+#if BUILDFLAG(IS_IOS)
+        false;
+#else
+        gr_context_type_ == GrContextType::kGL;
+#endif
+    if (io_surface_format != SharedImageFormatToIOSurfacePixelFormat(
+                                 format, override_rgba_to_bgra)) {
+      LOG(ERROR) << "IOSurface pixel format does not match specified shared "
+                    "image format.";
+      return nullptr;
+    }
+    gfx::Size io_surface_size(IOSurfaceGetWidth(io_surface.get()),
+                              IOSurfaceGetHeight(io_surface.get()));
+    if (io_surface_size != size) {
+      LOG(ERROR) << "IOSurface size does not match specified size.";
+      return nullptr;
+    }
+  }
+
+  const bool for_framebuffer_attachment =
+      UsageWillResultInGLWrite(usage, gr_context_type_);
+  const bool framebuffer_attachment_angle =
+      for_framebuffer_attachment && angle_texture_usage_;
+
+  return std::make_unique<IOSurfaceImageBacking>(
+      std::move(io_surface), mailbox, format, size, color_space, surface_origin,
+      alpha_type, usage, std::move(debug_label), texture_target_,
+      framebuffer_attachment_angle, /*is_cleared=*/true, is_thread_safe,
+      gr_context_type_, std::move(buffer_usage));
+}
+
+SharedImageBackingType IOSurfaceImageBackingFactory::GetBackingType() {
+  return SharedImageBackingType::kIOSurface;
 }
 
 }  // namespace gpu

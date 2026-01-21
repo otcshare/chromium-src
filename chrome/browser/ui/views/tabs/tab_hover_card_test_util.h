@@ -5,9 +5,6 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TABS_TAB_HOVER_CARD_TEST_UTIL_H_
 #define CHROME_BROWSER_UI_VIEWS_TABS_TAB_HOVER_CARD_TEST_UTIL_H_
 
-#include <memory>
-
-#include "base/auto_reset.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/tabs/tab_hover_card_bubble_view.h"
@@ -28,13 +25,14 @@ class TabHoverCardTestUtil {
   TabHoverCardTestUtil(const TabHoverCardTestUtil&) = delete;
   void operator=(const TabHoverCardTestUtil&) = delete;
 
-  static TabStrip* GetTabStrip(Browser* browser);
+  static TabStrip* GetTabStrip(BrowserWindowInterface* browser);
   static TabHoverCardBubbleView* GetHoverCard(TabStrip* tab_strip);
   static TabHoverCardBubbleView* WaitForHoverCardVisible(TabStrip* tab_strip);
   static bool IsHoverCardVisible(TabStrip* tab_strip);
   static int GetHoverCardsSeenCount(Browser* browser);
-  static TabHoverCardBubbleView* SimulateHoverTab(Browser* browser,
-                                                  int tab_index);
+  static TabHoverCardBubbleView* SimulateHoverTab(
+      BrowserWindowInterface* browser,
+      int tab_index);
 
   // Similar to views::test::WidgetDestroyedWaiter but for the hover card for
   // TabStrip. Waiting after the hover card's widget is destroyed (or if there
@@ -60,8 +58,7 @@ class TabHoverCardTestUtil {
   };
 
  private:
-  std::unique_ptr<base::AutoReset<gfx::Animation::RichAnimationRenderMode>>
-      animation_mode_reset_;
+  gfx::AnimationTestApi::RenderModeResetter animation_mode_reset_;
 };
 
 }  // namespace test

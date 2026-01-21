@@ -3,36 +3,30 @@
 // found in the LICENSE file.
 
 #import <Foundation/Foundation.h>
-
-#import <stdio.h>
 #import <unistd.h>
 
+#import <iostream>
 #import <string>
+#import <string_view>
 
+#import "base/apple/foundation_util.h"
 #import "base/files/file.h"
 #import "base/files/file_path.h"
 #import "base/files/file_util.h"
-#import "base/mac/foundation_util.h"
-#import "base/strings/string_piece.h"
 #import "base/strings/string_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/tools/strings/grit_header_parsing.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace {
 
 using PList = NSDictionary<NSString*, NSObject*>;
 
-const char kUsageString[] = R"(
-usage: substitute_strings_identifier -I header_path -i source_path -i output_path
+constexpr char kUsageString[] =
+    R"(usage: substitute_strings_identifier -I header_path -i source_path -i output_path
 
 Loads the plist at `source_path` and replace all string values corresponding
 to string identifiers to their numerical values (as found in `header_path`)
-and write the resulting plist to `output_path`.
-)";
+and write the resulting plist to `output_path`.)";
 
 NSObject* ConvertValue(NSObject* value, const ResourceMap& resource_map);
 
@@ -54,7 +48,7 @@ NSObject* ConvertString(NSString* string, const ResourceMap& resource_map) {
   auto iter = resource_map.find(key);
   if (iter == resource_map.end()) {
     if (base::StartsWith(key, "IDS_") || base::StartsWith(key, "IDR_")) {
-      fprintf(stderr, "ERROR: no value found for string: %s\n", key.c_str());
+      std::cerr << "ERROR: no value found for string: " << key << std::endl;
       return nil;
     }
 
@@ -79,17 +73,17 @@ NSArray* ConvertArray(NSArray* array, const ResourceMap& resource_map) {
 
 NSObject* ConvertValue(NSObject* value, const ResourceMap& resource_map) {
   if ([value isKindOfClass:[NSString class]]) {
-    NSString* string = base::mac::ObjCCastStrict<NSString>(value);
+    NSString* string = base::apple::ObjCCastStrict<NSString>(value);
     return ConvertString(string, resource_map);
   }
 
   if ([value isKindOfClass:[NSArray class]]) {
-    NSArray<NSObject*>* array = base::mac::ObjCCastStrict<NSArray>(value);
+    NSArray<NSObject*>* array = base::apple::ObjCCastStrict<NSArray>(value);
     return ConvertArray(array, resource_map);
   }
 
   if ([value isKindOfClass:[NSDictionary class]]) {
-    PList* plist = base::mac::ObjCCastStrict<NSDictionary>(value);
+    PList* plist = base::apple::ObjCCastStrict<NSDictionary>(value);
     return ConvertPlist(plist, resource_map);
   }
 
@@ -99,20 +93,16 @@ NSObject* ConvertValue(NSObject* value, const ResourceMap& resource_map) {
 bool ConvertFile(const base::FilePath& source_path,
                  const base::FilePath& output_path,
                  const ResourceMap& resource_map) {
-  NSURL* source_url =
-      [NSURL fileURLWithPath:base::SysUTF8ToNSString(source_path.AsUTF8Unsafe())
-                 isDirectory:NO];
-  NSURL* output_url =
-      [NSURL fileURLWithPath:base::SysUTF8ToNSString(output_path.AsUTF8Unsafe())
-                 isDirectory:NO];
+  NSURL* source_url = base::apple::FilePathToNSURL(source_path);
+  NSURL* output_url = base::apple::FilePathToNSURL(output_path);
 
   NSError* error = nil;
   PList* source_plist = [NSDictionary dictionaryWithContentsOfURL:source_url
                                                             error:&error];
   if (error) {
-    fprintf(stderr, "ERROR: loading %s failed: %s\n",
-            source_path.AsUTF8Unsafe().c_str(),
-            base::SysNSStringToUTF8(error.localizedDescription).c_str());
+    std::cerr << "ERROR: loading '" << source_path << "'  failed: "
+              << base::SysNSStringToUTF8(error.localizedDescription)
+              << std::endl;
     return false;
   }
 
@@ -124,16 +114,16 @@ bool ConvertFile(const base::FilePath& source_path,
   base::File::Error file_error;
   const base::FilePath output_dir = output_path.DirName();
   if (!base::CreateDirectoryAndGetError(output_dir, &file_error)) {
-    fprintf(stderr, "ERROR: creating %s failed: %s\n",
-            output_dir.AsUTF8Unsafe().c_str(),
-            base::File::ErrorToString(file_error).c_str());
+    std::cerr << "ERROR: creating '" << output_dir
+              << "' failed: " << base::File::ErrorToString(file_error)
+              << std::endl;
     return false;
   }
 
   if (![output_plist writeToURL:output_url error:&error]) {
-    fprintf(stderr, "ERROR: writing %s failed: %s\n",
-            output_path.AsUTF8Unsafe().c_str(),
-            base::SysNSStringToUTF8(error.localizedDescription).c_str());
+    std::cerr << "ERROR: writing '" << output_path << "' failed: "
+              << base::SysNSStringToUTF8(error.localizedDescription)
+              << std::endl;
     return false;
   }
 
@@ -154,7 +144,7 @@ int RealMain(int argc, char* const argv[]) {
 
       case 'i':
         if (!source_path.empty()) {
-          fprintf(stderr, "ERROR: cannot pass -i multiple times\n");
+          std::cerr << "ERROR: cannot pass -i multiple times" << std::endl;
           return 1;
         }
 
@@ -163,7 +153,7 @@ int RealMain(int argc, char* const argv[]) {
 
       case 'o':
         if (!output_path.empty()) {
-          fprintf(stderr, "ERROR: cannot pass -o multiple times\n");
+          std::cerr << "ERROR: cannot pass -o multiple times" << std::endl;
           return 1;
         }
 
@@ -171,31 +161,31 @@ int RealMain(int argc, char* const argv[]) {
         break;
 
       case 'h':
-        fprintf(stdout, "%s", kUsageString + 1);
+        std::cerr << kUsageString << std::endl;
         return 0;
 
       default:
-        fprintf(stderr, "ERROR: unknown argument: -%c\n", ch);
+        std::cerr << "ERROR: unknown argument: -" << ch << std::endl;
         return 1;
     }
   }
 
   if (headers.empty()) {
-    fprintf(stderr, "ERROR: header_path is required.\n");
+    std::cerr << "ERROR: header_path is required." << std::endl;
     return 1;
   }
 
   if (source_path.empty()) {
-    fprintf(stderr, "ERROR: source_path is required.\n");
+    std::cerr << "ERROR: source_path is required." << std::endl;
     return 1;
   }
 
   if (output_path.empty()) {
-    fprintf(stderr, "ERROR: output_path is required.\n");
+    std::cerr << "ERROR: output_path is required." << std::endl;
     return 1;
   }
 
-  absl::optional<ResourceMap> resource_map =
+  std::optional<ResourceMap> resource_map =
       LoadResourcesFromGritHeaders(headers);
 
   if (!resource_map) {

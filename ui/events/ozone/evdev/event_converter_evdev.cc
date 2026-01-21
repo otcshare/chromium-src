@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/events/ozone/evdev/event_converter_evdev.h"
+
 #include <errno.h>
 #include <linux/input.h>
 #include <stddef.h>
 
-#include "ui/events/ozone/evdev/event_converter_evdev.h"
-
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/task/current_thread.h"
@@ -50,6 +51,14 @@ EventConverterEvdev::EventConverterEvdev(int fd,
 
 EventConverterEvdev::~EventConverterEvdev() = default;
 
+// static
+bool EventConverterEvdev::IsValidKeyboardKeyPress(uint64_t key) {
+  return (key >= KEY_1 && key <= KEY_EQUAL) ||
+         (key >= KEY_Q && key <= KEY_RIGHTBRACE) ||
+         (key >= KEY_A && key <= KEY_APOSTROPHE) ||
+         (key >= KEY_BACKSLASH && key <= KEY_SLASH);
+}
+
 void EventConverterEvdev::ApplyDeviceSettings(
     const InputDeviceSettingsEvdev& settings) {}
 
@@ -83,12 +92,20 @@ bool EventConverterEvdev::IsEnabled() const {
   return input_device_.enabled;
 }
 
-void EventConverterEvdev::SetSuspectedImposter(bool is_suspected) {
-  input_device_.suspected_imposter = is_suspected;
+void EventConverterEvdev::SetSuspectedKeyboardImposter(bool is_suspected) {
+  input_device_.suspected_keyboard_imposter = is_suspected;
 }
 
-bool EventConverterEvdev::IsSuspectedImposter() const {
-  return input_device_.suspected_imposter;
+bool EventConverterEvdev::IsSuspectedKeyboardImposter() const {
+  return input_device_.suspected_keyboard_imposter;
+}
+
+void EventConverterEvdev::SetSuspectedMouseImposter(bool is_suspected) {
+  input_device_.suspected_mouse_imposter = is_suspected;
+}
+
+bool EventConverterEvdev::IsSuspectedMouseImposter() const {
+  return input_device_.suspected_mouse_imposter;
 }
 
 void EventConverterEvdev::OnStopped() {}
@@ -139,6 +156,18 @@ bool EventConverterEvdev::HasGamepad() const {
   return false;
 }
 
+bool EventConverterEvdev::HasGraphicsTablet() const {
+  return false;
+}
+
+bool EventConverterEvdev::HasAssistantKey() const {
+  return false;
+}
+
+bool EventConverterEvdev::HasFunctionKey() const {
+  return false;
+}
+
 bool EventConverterEvdev::HasCapsLockLed() const {
   return false;
 }
@@ -149,28 +178,23 @@ bool EventConverterEvdev::HasStylusSwitch() const {
 
 ui::StylusState EventConverterEvdev::GetStylusSwitchState() {
   NOTREACHED();
-  return ui::StylusState::REMOVED;
 }
 
 gfx::Size EventConverterEvdev::GetTouchscreenSize() const {
   NOTREACHED();
-  return gfx::Size();
 }
 
 std::vector<ui::GamepadDevice::Axis> EventConverterEvdev::GetGamepadAxes()
     const {
   NOTREACHED();
-  return std::vector<ui::GamepadDevice::Axis>();
 }
 
 bool EventConverterEvdev::GetGamepadRumbleCapability() const {
   NOTREACHED();
-  return false;
 }
 
 std::vector<uint64_t> EventConverterEvdev::GetGamepadKeyBits() const {
   NOTREACHED();
-  return std::vector<uint64_t>();
 }
 
 void EventConverterEvdev::PlayVibrationEffect(uint8_t amplitude,
@@ -196,7 +220,6 @@ void EventConverterEvdev::SetHapticTouchpadEffectForNextButtonRelease(
 
 int EventConverterEvdev::GetTouchPoints() const {
   NOTREACHED();
-  return 0;
 }
 
 void EventConverterEvdev::SetKeyFilter(bool enable_filter,
@@ -204,12 +227,17 @@ void EventConverterEvdev::SetKeyFilter(bool enable_filter,
   NOTREACHED();
 }
 
+void EventConverterEvdev::SetBlockModifiers(bool block_modifiers) {
+  // No-op implementation on purpose for converter that do not implement the
+  // method.
+}
+
 void EventConverterEvdev::SetCapsLockLed(bool enabled) {
   if (!HasCapsLockLed())
     return;
 
   input_event events[2];
-  memset(&events, 0, sizeof(events));
+  UNSAFE_TODO(memset(&events, 0, sizeof(events)));
 
   events[0].type = EV_LED;
   events[0].code = LED_CAPSL;
@@ -257,4 +285,12 @@ base::TimeTicks EventConverterEvdev::TimeTicksFromInputEvent(
   ValidateEventTimeClock(&timestamp);
   return timestamp;
 }
+
+std::ostream& EventConverterEvdev::DescribeForLog(std::ostream& os) const {
+  os << "class=ui::EventConverterEvdev id=" << input_device_.id << std::endl
+     << " path=\"" << path_.value() << "\"" << std::endl
+     << "member ";
+  return input_device_.DescribeForLog(os);
+}
+
 }  // namespace ui

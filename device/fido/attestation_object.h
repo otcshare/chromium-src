@@ -9,12 +9,13 @@
 
 #include <array>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/component_export.h"
 #include "device/fido/authenticator_data.h"
-#include "device/fido/fido_constants.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
 
@@ -25,8 +26,34 @@ class AttestationStatement;
 // https://www.w3.org/TR/2017/WD-webauthn-20170505/#cred-attestation.
 class COMPONENT_EXPORT(DEVICE_FIDO) AttestationObject {
  public:
-  static absl::optional<AttestationObject> Parse(const cbor::Value& value);
+  // ResponseFields contains the parts of an attestation object that are needed
+  // when constructing a browser's response to a create() call.
+  struct COMPONENT_EXPORT(DEVICE_FIDO) ResponseFields {
+    ResponseFields();
+    ~ResponseFields();
+    ResponseFields(ResponseFields&&);
+    ResponseFields(const ResponseFields&) = delete;
+    ResponseFields& operator=(const ResponseFields&) = delete;
 
+    std::vector<uint8_t> attestation_object_bytes;
+    std::vector<uint8_t> authenticator_data;
+    std::optional<std::vector<uint8_t>> public_key_der;
+    int32_t public_key_algo;
+  };
+
+  static std::optional<AttestationObject> Parse(const cbor::Value& value);
+
+  // ParseForResponseFields parses a serialized attestation object and extracts
+  // the fields needed to build a browser's response to a create() call. If
+  // `attestation_acceptable` is false any attestation will have been removed
+  // in the return value.
+  static std::optional<ResponseFields> ParseForResponseFields(
+      std::vector<uint8_t> attestation_object_bytes,
+      bool attestation_acceptable);
+
+  // TODO: this could just take a `cbor::Value` and all the
+  // `AttestationStatement` code could be turned into a parse-on-demand
+  // pattern.
   AttestationObject(AuthenticatorData data,
                     std::unique_ptr<AttestationStatement> statement);
   AttestationObject(AttestationObject&& other);
@@ -53,7 +80,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) AttestationObject {
 
   // EraseExtension deletes the named extension. It returns true iff the
   // extension was present.
-  bool EraseExtension(base::StringPiece name);
+  bool EraseExtension(std::string_view name);
 
   // Returns true if the attestation is a "self" attestation, i.e. is just the
   // private key signing itself to show that it is fresh. See

@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/discardable_memory.h"
 #include "base/memory/discardable_memory_allocator.h"
 
@@ -38,7 +38,7 @@ SkDiscardableMemoryChrome::CreateMemoryAllocatorDump(
 }
 
 SkDiscardableMemory* SkDiscardableMemory::Create(size_t bytes) {
-  // TODO(crbug.com/1034271): Make the caller handle a nullptr return value,
+  // TODO(crbug.com/40111713): Make the caller handle a nullptr return value,
   // and do not die when the allocation fails.
   auto discardable = base::DiscardableMemoryAllocator::GetInstance()
                          ->AllocateLockedDiscardableMemoryWithRetryOrDie(

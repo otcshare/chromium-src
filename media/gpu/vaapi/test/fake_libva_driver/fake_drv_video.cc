@@ -1,16 +1,20 @@
-// Copyright 2020 The Chromium OS Authors.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdbool.h>
 #include <va/va.h>
 #include <va/va_backend.h>
+#include <va/va_drmcommon.h>
 
+#include <array>
 #include <set>
 
 #include "base/check.h"
+#include "base/notreached.h"
 #include "base/numerics/checked_math.h"
 #include "media/gpu/vaapi/test/fake_libva_driver/fake_driver.h"
+#include "third_party/libyuv/include/libyuv.h"
 
 VAStatus FakeTerminate(VADriverContextP ctx) {
   delete static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
@@ -20,13 +24,42 @@ VAStatus FakeTerminate(VADriverContextP ctx) {
 // Needed to be able to instantiate kCapabilities statically.
 #define MAX_CAPABILITY_ATTRIBUTES 5
 
+constexpr auto kSupportedImageFormats =
+    std::to_array<VAImageFormat>({{.fourcc = VA_FOURCC_NV12,
+                                   .byte_order = VA_LSB_FIRST,
+                                   .bits_per_pixel = 12}});
+
 struct Capability {
   VAProfile profile;
   VAEntrypoint entry_point;
   int num_attribs;
   VAConfigAttrib attrib_list[MAX_CAPABILITY_ATTRIBUTES];
 };
-const struct Capability kCapabilities[] = {
+constexpr auto kCapabilities = std::to_array<Capability>({
+    {VAProfileH264ConstrainedBaseline,
+     VAEntrypointVLD,
+     1,
+     {
+         {VAConfigAttribRTFormat, VA_RT_FORMAT_YUV420},
+     }},
+    {VAProfileH264Main,
+     VAEntrypointVLD,
+     1,
+     {
+         {VAConfigAttribRTFormat, VA_RT_FORMAT_YUV420},
+     }},
+    {VAProfileH264High,
+     VAEntrypointVLD,
+     1,
+     {
+         {VAConfigAttribRTFormat, VA_RT_FORMAT_YUV420},
+     }},
+    {VAProfileAV1Profile0,
+     VAEntrypointVLD,
+     1,
+     {
+         {VAConfigAttribRTFormat, VA_RT_FORMAT_YUV420},
+     }},
     {VAProfileVP8Version0_3,
      VAEntrypointVLD,
      1,
@@ -138,10 +171,8 @@ const struct Capability kCapabilities[] = {
          {VAConfigAttribRateControl, VA_RC_CQP | VA_RC_CBR},
          {VAConfigAttribEncPackedHeaders, VA_ENC_PACKED_HEADER_NONE},
          {VAConfigAttribEncMaxRefFrames, 1},
-     }}};
-
-const size_t kCapabilitiesSize =
-    sizeof(kCapabilities) / sizeof(struct Capability);
+     }},
+});
 
 /**
  * Original comment:
@@ -153,18 +184,25 @@ const size_t kCapabilitiesSize =
 VAStatus FakeQueryConfigProfiles(VADriverContextP ctx,
                                  VAProfile* profile_list,
                                  int* num_profiles) {
-  int i = 0;
-
   std::set<VAProfile> unique_profiles;
-  for (auto& capability : kCapabilities)
+  for (const Capability& capability : kCapabilities) {
     unique_profiles.insert(capability.profile);
-
-  for (auto profile : unique_profiles) {
-    profile_list[i] = profile;
-    i++;
   }
 
-  *num_profiles = i;
+  // SAFETY: The `profile_list` pointer is from the `vaQueryConfigProfiles`
+  // function (VA-API C interface). The caller must provide a "profile_list"
+  // array that can hold at least vaMaxNumProfiles() entries. There is no
+  // way to guarantee the buffer size for the given `profile_list` pointer
+  // via the C-style API. The actual number of profiles returned in
+  // "profile_list" is returned in "num_profile". For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga198a34eb408790b172710071a248b660
+  base::span<VAProfile> profile_list_span = UNSAFE_BUFFERS(
+      base::span(profile_list, base::checked_cast<size_t>(ctx->max_profiles)));
+
+  profile_list_span.copy_prefix_from(
+      std::vector<VAProfile>(unique_profiles.begin(), unique_profiles.end()));
+
+  *num_profiles = unique_profiles.size();
 
   return VA_STATUS_SUCCESS;
 }
@@ -180,11 +218,25 @@ VAStatus FakeQueryConfigEntrypoints(VADriverContextP ctx,
                                     VAProfile profile,
                                     VAEntrypoint* entrypoint_list,
                                     int* num_entrypoints) {
-  *num_entrypoints = 0;
-  for (const auto& capability : kCapabilities) {
-    if (capability.profile == profile)
-      entrypoint_list[(*num_entrypoints)++] = capability.entry_point;
+  // SAFETY: The `entrypoint_list` pointer is from the
+  // `vaQueryConfigEntrypoints` function (VA-API C interface). The caller must
+  // provide an "entrypoint_list" array that can hold at least
+  // vaMaxNumEntrypoints() entries. There is no way to guarantee the buffer size
+  // for the given `entrypoint_list` pointer via the C-style API. The actual
+  // number of entry points returned in "entrypoint_list" is returned in
+  // "num_entrypoints". For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga7c6ec979697dafc172123c5d3ad80d8e
+  base::span<VAEntrypoint> entrypoint_list_span = UNSAFE_BUFFERS(base::span(
+      entrypoint_list, base::checked_cast<size_t>(ctx->max_entrypoints)));
+
+  int actual_num_entrypoints = 0;
+  for (const Capability& capability : kCapabilities) {
+    if (capability.profile == profile) {
+      entrypoint_list_span[actual_num_entrypoints++] = capability.entry_point;
+    }
   }
+
+  *num_entrypoints = actual_num_entrypoints;
   return VA_STATUS_SUCCESS;
 }
 
@@ -202,26 +254,40 @@ VAStatus FakeGetConfigAttributes(VADriverContextP ctx,
                                  VAEntrypoint entrypoint,
                                  VAConfigAttrib* attrib_list,
                                  int num_attribs) {
+  // SAFETY: The `attrib_list` pointer is from the `vaGetConfigAttributes`
+  // function (VA-API C interface). The caller must provide an "attrib_list".
+  // There is no way to guarantee the buffer size for the given `attrib_list`
+  // pointer via the C-style API. Upon return, the attributes in "attrib_list"
+  // have been updated. For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#gae51cad2e388d6cc63ce3d4221798f9fd
+  base::span<VAConfigAttrib> attrib_list_span = UNSAFE_BUFFERS(
+      base::span(attrib_list, base::checked_cast<size_t>(num_attribs)));
+  // Clear the |attrib_list|: sometimes it's not initialized.
+  for (VAConfigAttrib& attrib : attrib_list_span) {
+    attrib.value = VA_ATTRIB_NOT_SUPPORTED;
+  }
+
   // First, try to find the |profile| and |entrypoint| entry in kCapabilities.
   // If found, search for each entry in the input |attrib_list| (usually many)
   // in kCapabilities[i]'s |attrib_list| (usually few), and, if found, update
   // its |value|.
   bool profile_found = false;
-  for (const auto& capability : kCapabilities) {
+  for (const Capability& capability : kCapabilities) {
     profile_found = capability.profile == profile || profile_found;
     if (!(capability.profile == profile &&
           capability.entry_point == entrypoint)) {
       continue;
     }
 
-    // Clear the |attrib_list|: sometimes it's not initialized.
-    for (int attrib = 0; attrib < num_attribs; attrib++)
-      attrib_list[attrib].value = VA_ATTRIB_NOT_SUPPORTED;
+    base::span<const VAConfigAttrib> capability_attrib_list_span =
+        base::span(capability.attrib_list)
+            .first(base::checked_cast<size_t>(capability.num_attribs));
 
-    for (int j = 0; j < capability.num_attribs; j++) {
-      for (int n = 0; n < num_attribs; n++) {
-        if (capability.attrib_list[j].type == attrib_list[n].type) {
-          attrib_list[n].value = capability.attrib_list[j].value;
+    for (const VAConfigAttrib& capability_attrib :
+         capability_attrib_list_span) {
+      for (VAConfigAttrib& attrib : attrib_list_span) {
+        if (attrib.type == capability_attrib.type) {
+          attrib.value = capability_attrib.value;
           break;
         }
       }
@@ -240,13 +306,20 @@ VAStatus FakeCreateConfig(VADriverContextP ctx,
                           VAConfigID* config_id) {
   media::internal::FakeDriver* fdrv =
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
+  // SAFETY: The attrib_list pointer and num_attribs size are from the VA-API C
+  // function vaCreateConfig (via VADriverVTable). This C API provides a raw
+  // pointer and size, but offers no guarantee that num_attribs is a safe bound
+  // for accessing attrib_list. For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga9ff7833d425406cb1834c783b0a47652
+  base::span<VAConfigAttrib> attribs_list_span = UNSAFE_BUFFERS(
+      base::span(attrib_list, base::checked_cast<size_t>(num_attribs)));
 
   *config_id = VA_INVALID_ID;
   bool profile_found = false;
-  for (size_t i = 0; i < kCapabilitiesSize; ++i) {
-    profile_found = kCapabilities[i].profile == profile || profile_found;
-    if (!(kCapabilities[i].profile == profile &&
-          kCapabilities[i].entry_point == entrypoint)) {
+  for (const Capability& capability : kCapabilities) {
+    profile_found = capability.profile == profile || profile_found;
+    if (!(capability.profile == profile &&
+          capability.entry_point == entrypoint)) {
       continue;
     }
 
@@ -254,22 +327,28 @@ VAStatus FakeCreateConfig(VADriverContextP ctx,
 
     // Checks that the attrib_list is supported by the profile. Assumes the
     // attributes can be in any order.
-    for (int k = 0; k < num_attribs; k++) {
+    for (const VAConfigAttrib& attrib : attribs_list_span) {
       bool attrib_supported = false;
-      for (int j = 0; j < kCapabilities[i].num_attribs; j++) {
-        if (kCapabilities[i].attrib_list[j].type != attrib_list[k].type)
+
+      base::span<const VAConfigAttrib> capability_attrib_list_span =
+          base::span(capability.attrib_list)
+              .first(base::checked_cast<size_t>(capability.num_attribs));
+
+      for (const VAConfigAttrib& capability_attrib :
+           capability_attrib_list_span) {
+        if (capability_attrib.type != attrib.type) {
           continue;
+        }
         // Note that it's not enough to AND the value in |kCapabilities| against
         // the value provided by the application. We also need to allow for
         // equality. The reason is that there are some attributes that allow a
         // value of 0 (e.g., VA_ENC_PACKED_HEADER_NONE for
         // VAConfigAttribEncPackedHeaders).
-        attrib_supported =
-            (kCapabilities[i].attrib_list[j].value & attrib_list[k].value) ||
-            (kCapabilities[i].attrib_list[j].value == attrib_list[k].value);
+        attrib_supported = (capability_attrib.value & attrib.value) ||
+                           (capability_attrib.value == attrib.value);
         // TODO(b/258275488): Handle duplicate attributes in attrib_list.
         if (attrib_supported) {
-          attribs.push_back(attrib_list[k]);
+          attribs.push_back(attrib);
           break;
         }
       }
@@ -278,7 +357,7 @@ VAStatus FakeCreateConfig(VADriverContextP ctx,
       }
     }
 
-    for (const auto& capability_attrib : kCapabilities[i].attrib_list) {
+    for (const VAConfigAttrib& capability_attrib : capability.attrib_list) {
       if (std::find_if(attribs.begin(), attribs.end(),
                        [&capability_attrib](const VAConfigAttrib& attrib) {
                          return attrib.type == capability_attrib.type;
@@ -323,14 +402,20 @@ VAStatus FakeQueryConfigAttributes(VADriverContextP ctx,
 
   *profile = fconfig.GetProfile();
   *entrypoint = fconfig.GetEntrypoint();
-  const size_t fconfig_attribs_size_in_bytes =
-      base::CheckMul(
-          sizeof(VAConfigAttrib),
-          base::strict_cast<size_t>(fconfig.GetConfigAttribs().size()))
-          .ValueOrDie<size_t>();
-  memcpy(attrib_list, fconfig.GetConfigAttribs().data(),
-         fconfig_attribs_size_in_bytes);
-  *num_attribs = base::checked_cast<int>(fconfig.GetConfigAttribs().size());
+
+  size_t config_attribs_size = fconfig.GetConfigAttribs().size();
+  // SAFETY: The `attrib_list` pointer originates from
+  // the`vaQueryConfigAttributes` function (VA-API C interface). The caller must
+  // provide an "attrib_list" array that can hold at least
+  // vaMaxNumConfigAttributes() entries. This C-style API provides a raw pointer
+  // and a size, but there is no way to guarantee that the provided
+  // `num_attribs` is a valid buffer size for the given `attrib_list` pointer.
+  // For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga593da1618f3495a3f3ac13853a64794c
+  base::span<VAConfigAttrib> attrib_list_span =
+      UNSAFE_BUFFERS(base::span(attrib_list, config_attribs_size));
+  attrib_list_span.copy_from(fconfig.GetConfigAttribs());
+  *num_attribs = config_attribs_size;
 
   return VA_STATUS_SUCCESS;
 }
@@ -350,9 +435,7 @@ VAStatus FakeCreateSurfaces(VADriverContextP ctx,
                             int format,
                             int num_surfaces,
                             VASurfaceID* surfaces) {
-  CHECK(false);
-
-  return VA_STATUS_SUCCESS;
+  NOTREACHED();
 }
 
 VAStatus FakeDestroySurfaces(VADriverContextP ctx,
@@ -360,9 +443,16 @@ VAStatus FakeDestroySurfaces(VADriverContextP ctx,
                              int num_surfaces) {
   media::internal::FakeDriver* fdrv =
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
-
-  for (int i = 0; i < num_surfaces; i++) {
-    fdrv->DestroySurface(surface_list[i]);
+  // SAFETY: The `surface_list` pointer is from the `vaDestroySurfaces` function
+  // (VA-API C interface). This C-style API provides a raw pointer and a size
+  // (`num_surfaces`). There is no way to guarantee that the provided
+  // `num_surfaces` is a valid buffer size for the given `surface_list` array
+  // of surfaces to destroy. For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga108b11751ff3e1113732780bb5b3d547
+  base::span<VASurfaceID> surface_list_span = UNSAFE_BUFFERS(
+      base::span(surface_list, base::checked_cast<size_t>(num_surfaces)));
+  for (unsigned int& surface : surface_list_span) {
+    fdrv->DestroySurface(surface);
   }
 
   return VA_STATUS_SUCCESS;
@@ -380,16 +470,24 @@ VAStatus FakeCreateContext(VADriverContextP ctx,
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
   CHECK(fdrv->ConfigExists(config_id));
-
-  for (int i = 0; i < num_render_targets; i++) {
-    CHECK(fdrv->SurfaceExists(render_targets[i]));
+  // SAFETY: The `render_targets` pointer is from the `vaCreateContext` function
+  // (VA-API C interface). This C-style API provides a raw pointer and a size
+  // (`num_render_targets`). There is no way to guarantee that the provided
+  // `num_render_targets` is a valid buffer size for the given `render_targets`
+  // pointer. `render_targets`: a hint for render targets (surfaces).
+  // `num_render_targets`: number of render targets in the array.
+  // For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga7a0e774a793545058d1a311bed9bb8cf
+  base::span<VASurfaceID> render_targets_span = UNSAFE_BUFFERS(base::span(
+      render_targets, base::checked_cast<size_t>(num_render_targets)));
+  for (const VASurfaceID& render_target : render_targets_span) {
+    CHECK(fdrv->SurfaceExists(render_target));
   }
 
-  *context = fdrv->CreateContext(
-      config_id, picture_width, picture_height, flag,
-      std::vector<VASurfaceID>(
-          render_targets,
-          render_targets + base::checked_cast<size_t>(num_render_targets)));
+  *context =
+      fdrv->CreateContext(config_id, picture_width, picture_height, flag,
+                          std::vector<VASurfaceID>(render_targets_span.begin(),
+                                                   render_targets_span.end()));
 
   return VA_STATUS_SUCCESS;
 }
@@ -415,6 +513,9 @@ VAStatus FakeCreateBuffer(VADriverContextP ctx,
 
   CHECK(fdrv->ContextExists(context));
 
+  *buf_id = fdrv->CreateBuffer(context, type, /*size_per_element=*/size,
+                               num_elements, data);
+
   return VA_STATUS_SUCCESS;
 }
 
@@ -425,6 +526,9 @@ VAStatus FakeBufferSetNumElements(VADriverContextP ctx,
 }
 
 VAStatus FakeMapBuffer(VADriverContextP ctx, VABufferID buf_id, void** pbuf) {
+  media::internal::FakeDriver* fdrv =
+      static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
+  *pbuf = fdrv->GetBuffer(buf_id).GetData().data();
   return VA_STATUS_SUCCESS;
 }
 
@@ -433,6 +537,11 @@ VAStatus FakeUnmapBuffer(VADriverContextP ctx, VABufferID buf_id) {
 }
 
 VAStatus FakeDestroyBuffer(VADriverContextP ctx, VABufferID buffer_id) {
+  media::internal::FakeDriver* fdrv =
+      static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
+
+  fdrv->DestroyBuffer(buffer_id);
+
   return VA_STATUS_SUCCESS;
 }
 
@@ -443,8 +552,9 @@ VAStatus FakeBeginPicture(VADriverContextP ctx,
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
   CHECK(fdrv->SurfaceExists(render_target));
-
   CHECK(fdrv->ContextExists(context));
+
+  fdrv->GetContext(context).BeginPicture(fdrv->GetSurface(render_target));
 
   return VA_STATUS_SUCCESS;
 }
@@ -457,6 +567,21 @@ VAStatus FakeRenderPicture(VADriverContextP ctx,
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
   CHECK(fdrv->ContextExists(context));
+  // SAFETY: The `buffers` pointer is from the `vaRenderPicture` function
+  // (VA-API C interface). This C-style API provides a raw pointer and a size
+  // (`num_buffers`). There is no way to guarantee that the provided
+  // `num_buffers` is a valid buffer size for the given `buffers` pointer.
+  // For more details, see
+  // https://intel.github.io/libva/group__api__core.html#ga3facc622a14fc901d5d44dcda845cb6f
+  base::span<VABufferID> buffers_span = UNSAFE_BUFFERS(
+      base::span(buffers, base::checked_cast<size_t>(num_buffers)));
+  std::vector<raw_ptr<const media::internal::FakeBuffer>> buffer_list;
+  for (const VABufferID& buffer_id : buffers_span) {
+    CHECK(fdrv->BufferExists(buffer_id));
+    buffer_list.push_back(&(fdrv->GetBuffer(buffer_id)));
+  }
+
+  fdrv->GetContext(context).RenderPicture(buffer_list);
 
   return VA_STATUS_SUCCESS;
 }
@@ -466,6 +591,8 @@ VAStatus FakeEndPicture(VADriverContextP ctx, VAContextID context) {
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
   CHECK(fdrv->ContextExists(context));
+
+  fdrv->GetContext(context).EndPicture();
 
   return VA_STATUS_SUCCESS;
 }
@@ -482,9 +609,7 @@ VAStatus FakeSyncSurface(VADriverContextP ctx, VASurfaceID render_target) {
 VAStatus FakeQuerySurfaceStatus(VADriverContextP ctx,
                                 VASurfaceID render_target,
                                 VASurfaceStatus* status) {
-  CHECK(false);
-
-  return VA_STATUS_SUCCESS;
+  NOTREACHED();
 }
 
 VAStatus FakePutSurface(VADriverContextP ctx,
@@ -512,7 +637,22 @@ VAStatus FakePutSurface(VADriverContextP ctx,
 VAStatus FakeQueryImageFormats(VADriverContextP ctx,
                                VAImageFormat* format_list,
                                int* num_formats) {
-  *num_formats = 0;
+  // SAFETY: The `format_list` pointer is from the `vaQueryImageFormats`
+  // function (VA-API C interface). The API requires that `format_list` be able
+  // to hold vaMaxNumImageFormats(). The caller must provide a "format_list"
+  // array that can hold at least vaMaxNumImageFormats() entries. The number of
+  // formats returned is in "num_formats". For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#gacaafd538e7a9c79fdd9753c4243be3b8
+  base::span<VAImageFormat> format_span = UNSAFE_BUFFERS(base::span(
+      format_list, base::checked_cast<size_t>(ctx->max_image_formats)));
+
+  int actual_num_formats = 0;
+  for (const VAImageFormat& format : kSupportedImageFormats) {
+    format_span[actual_num_formats++] = format;
+  }
+
+  *num_formats = actual_num_formats;
+
   return VA_STATUS_SUCCESS;
 }
 
@@ -521,10 +661,18 @@ VAStatus FakeCreateImage(VADriverContextP ctx,
                          int width,
                          int height,
                          VAImage* image) {
+  media::internal::FakeDriver* fdrv =
+      static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
+
+  fdrv->CreateImage(*format, width, height, image);
   return VA_STATUS_SUCCESS;
 }
 
 VAStatus FakeDestroyImage(VADriverContextP ctx, VAImageID image) {
+  media::internal::FakeDriver* fdrv =
+      static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
+
+  fdrv->DestroyImage(image);
   return VA_STATUS_SUCCESS;
 }
 
@@ -545,6 +693,63 @@ VAStatus FakeGetImage(VADriverContextP ctx,
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
   CHECK(fdrv->SurfaceExists(surface));
+
+  const media::internal::FakeSurface& fake_surface = fdrv->GetSurface(surface);
+
+  CHECK(fdrv->ImageExists(image));
+
+  // TODO(b/316609501): Look into replacing this and making this function
+  // operate the same for both testing and non-testing environments.
+  if (!fake_surface.GetMappedBO().IsValid()) {
+    return VA_STATUS_SUCCESS;
+  }
+
+  // Chrome should only request images starting at (0, 0).
+  CHECK_EQ(x, 0);
+  CHECK_EQ(y, 0);
+  CHECK_LE(width, fake_surface.GetWidth());
+  CHECK_LE(height, fake_surface.GetHeight());
+
+  // Chrome should only ask the fake driver for images sourced from NV12
+  // surfaces.
+  CHECK_EQ(fake_surface.GetVAFourCC(), static_cast<uint32_t>(VA_FOURCC_NV12));
+
+  const media::internal::ScopedBOMapping::ScopedAccess mapped_bo =
+      fake_surface.GetMappedBO().BeginAccess();
+
+  const media::internal::FakeImage& fake_image = fdrv->GetImage(image);
+
+  // Chrome should only ask the fake driver to download NV12 surfaces onto NV12
+  // images.
+  CHECK_EQ(fake_image.GetFormat().fourcc,
+           static_cast<uint32_t>(VA_FOURCC_NV12));
+
+  // The image dimensions must be large enough to contain the surface.
+  CHECK_GE(base::checked_cast<unsigned int>(fake_image.GetWidth()), width);
+  CHECK_GE(base::checked_cast<unsigned int>(fake_image.GetHeight()), height);
+
+  base::span<uint8_t> image_data = fake_image.GetBuffer().GetData();
+  uint8_t* const dst_y_addr = &image_data[fake_image.GetPlaneOffset(0)];
+  const int dst_y_stride =
+      base::checked_cast<int>(fake_image.GetPlaneStride(0));
+
+  uint8_t* const dst_uv_addr = &image_data[fake_image.GetPlaneOffset(1)];
+  const int dst_uv_stride =
+      base::checked_cast<int>(fake_image.GetPlaneStride(1));
+
+  const int copy_result = libyuv::NV12Copy(
+      /*src_y=*/mapped_bo.GetData(0),
+      /*src_stride_y=*/base::checked_cast<int>(mapped_bo.GetStride(0)),
+      /*src_uv=*/mapped_bo.GetData(1),
+      /*src_stride_uv=*/base::checked_cast<int>(mapped_bo.GetStride(1)),
+      /*dst_y=*/dst_y_addr,
+      /*dst_stride_y=*/dst_y_stride,
+      /*dst_uv=*/dst_uv_addr,
+      /*dst_stride_uv=*/dst_uv_stride,
+      /*width=*/width,
+      /*height=*/height);
+
+  CHECK_EQ(copy_result, 0);
 
   return VA_STATUS_SUCCESS;
 }
@@ -631,18 +836,14 @@ VAStatus FakeAssociateSubpicture(VADriverContextP ctx,
                                  uint16_t dest_width,
                                  uint16_t dest_height,
                                  uint32_t flags) {
-  CHECK(false);
-
-  return VA_STATUS_SUCCESS;
+  NOTREACHED();
 }
 
 VAStatus FakeDeassociateSubpicture(VADriverContextP ctx,
                                    VASubpictureID subpicture,
                                    VASurfaceID* target_surfaces,
                                    int num_surfaces) {
-  CHECK(false);
-
-  return VA_STATUS_SUCCESS;
+  NOTREACHED();
 }
 
 VAStatus FakeQueryDisplayAttributes(VADriverContextP ctx,
@@ -691,39 +892,52 @@ VAStatus FakeQuerySurfaceAttributes(VADriverContextP ctx,
     return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
   }
 
+  // SAFETY: The `attribs` pointer is from the
+  // `vaQuerySurfaceAttributes` function (VA-API C interface). The `attribs`
+  // array is allocated by the user. This C-style API provides a raw pointer and
+  // a size (`num_attribs`), but there is no way to guarantee that the provided
+  // `num_attribs` is a valid buffer size. If enough space was available, the
+  // actual number of attributes will be returned in `num_attribs`. It is
+  // perfectly valid to pass NULL to the `attribs` argument to determine the
+  // number of elements that need to be allocated. For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#ga6b10b88a628c56377268714cc72090ce
+  base::span<VASurfaceAttrib> attribs_span =
+      UNSAFE_BUFFERS(base::span(attribs, kMaxNumSurfaceAttributes));
   // |attribs| may have a single VASurfaceAttribPixelFormat set for querying
   // support for a given pixel format. Chrome doesn't support it, so we verify
   // all input types are zero (VASurfaceAttribNone).
-  for (size_t i = 0; i < kMaxNumSurfaceAttributes; ++i) {
-    if (attribs[i].type != VASurfaceAttribNone) {
+  for (const VASurfaceAttrib& attrib : attribs_span) {
+    if (attrib.type != VASurfaceAttribNone) {
       *num_attribs = 0;
       return VA_STATUS_ERROR_ATTR_NOT_SUPPORTED;
     }
   }
 
   int i = 0;
-  attribs[i].type = VASurfaceAttribPixelFormat;
-  attribs[i].value.type = VAGenericValueTypeInteger;
-  attribs[i].flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
-  attribs[i].value.value.i = VA_FOURCC_NV12;
+  attribs_span[i].type = VASurfaceAttribPixelFormat;
+  attribs_span[i].value.type = VAGenericValueTypeInteger;
+  attribs_span[i].flags =
+      VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
+  attribs_span[i].value.value.i = VA_FOURCC_NV12;
   i++;
 
-  attribs[i].type = VASurfaceAttribPixelFormat;
-  attribs[i].value.type = VAGenericValueTypeInteger;
-  attribs[i].flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
-  attribs[i].value.value.i = VA_FOURCC_YV12;
+  attribs_span[i].type = VASurfaceAttribPixelFormat;
+  attribs_span[i].value.type = VAGenericValueTypeInteger;
+  attribs_span[i].flags =
+      VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
+  attribs_span[i].value.value.i = VA_FOURCC_YV12;
   i++;
 
-  attribs[i].type = VASurfaceAttribMaxWidth;
-  attribs[i].value.type = VAGenericValueTypeInteger;
-  attribs[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
-  attribs[i].value.value.i = 1024;
+  attribs_span[i].type = VASurfaceAttribMaxWidth;
+  attribs_span[i].value.type = VAGenericValueTypeInteger;
+  attribs_span[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
+  attribs_span[i].value.value.i = 1024;
   i++;
 
-  attribs[i].type = VASurfaceAttribMaxHeight;
-  attribs[i].value.type = VAGenericValueTypeInteger;
-  attribs[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
-  attribs[i].value.value.i = 1024;
+  attribs_span[i].type = VASurfaceAttribMaxHeight;
+  attribs_span[i].value.type = VAGenericValueTypeInteger;
+  attribs_span[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
+  attribs_span[i].value.value.i = 1024;
   i++;
 
   *num_attribs = i;
@@ -741,16 +955,28 @@ VAStatus FakeCreateSurfaces2(VADriverContextP ctx,
   media::internal::FakeDriver* fdrv =
       static_cast<media::internal::FakeDriver*>(ctx->pDriverData);
 
-  for (unsigned int i = 0; i < num_surfaces; i++) {
-    surfaces[i] = fdrv->CreateSurface(
-        format, width, height,
-        std::vector<VASurfaceAttrib>(attrib_list, attrib_list + num_attribs));
+  // SAFETY: The `surfaces` and `attrib_list` pointers are from the
+  // `vaCreateSurfaces` function (VA-API C interface). This C-style API
+  // provides raw pointers and sizes. There is no way to guarantee that the
+  // provided sizes are valid buffer sizes for the given pointers (`surfaces`
+  // and `attrib_list`). The optional list of attributes shall be constructed
+  // based on vaQuerySurfaceAttributes().
+  // For more details, see:
+  // https://intel.github.io/libva/group__api__core.html#gac970ea0eec412326667549f58c44129b
+  base::span<VASurfaceID> surfaces_span =
+      UNSAFE_BUFFERS(base::span(surfaces, num_surfaces));
+  base::span<VASurfaceAttrib> attrib_list_span =
+      UNSAFE_BUFFERS(base::span(attrib_list, num_attribs));
+  std::vector<VASurfaceAttrib> attrib_list_vector(attrib_list_span.begin(),
+                                                  attrib_list_span.end());
+  for (unsigned int& surface : surfaces_span) {
+    surface = fdrv->CreateSurface(format, width, height, attrib_list_vector);
   }
 
   return VA_STATUS_SUCCESS;
 }
 
-#define MAX_PROFILES 8
+#define MAX_PROFILES 12
 #define MAX_ENTRYPOINTS 8
 #define MAX_CONFIG_ATTRIBUTES 32
 #if MAX_CAPABILITY_ATTRIBUTES >= MAX_CONFIG_ATTRIBUTES
@@ -766,8 +992,11 @@ extern "C" VAStatus DLL_EXPORT __vaDriverInit_1_0(VADriverContextP ctx) {
 
   ctx->version_major = VA_MAJOR_VERSION;
   ctx->version_minor = VA_MINOR_VERSION;
-  ctx->str_vendor = "libfake";
-  ctx->pDriverData = new media::internal::FakeDriver();
+  ctx->str_vendor = "Chromium fake libva driver";
+  CHECK(ctx->drm_state);
+
+  ctx->pDriverData = new media::internal::FakeDriver(
+      (static_cast<drm_state*>(ctx->drm_state))->fd);
 
   ctx->max_profiles = MAX_PROFILES;
   ctx->max_entrypoints = MAX_ENTRYPOINTS;

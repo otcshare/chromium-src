@@ -11,11 +11,12 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/themes/theme_service_observer.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
-#include "chrome/browser/ui/tabs/tab_group.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/thumbnails/thumbnail_tracker.h"
 #include "chrome/browser/ui/webui/tab_strip/tab_before_unload_tracker.h"
 #include "chrome/browser/ui/webui/tab_strip/tab_strip.mojom.h"
-#include "chrome/browser/ui/webui/tab_strip/thumbnail_tracker.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
+#include "components/tabs/public/tab_group.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -25,6 +26,10 @@
 
 class Browser;
 class TabStripUIEmbedder;
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 class TabStripPageHandler : public tab_strip::mojom::PageHandler,
                             public TabStripModelObserver,
@@ -48,21 +53,20 @@ class TabStripPageHandler : public tab_strip::mojom::PageHandler,
 
   // TabStripModelObserver:
   void OnTabGroupChanged(const TabGroupChange& change) override;
-  void TabGroupedStateChanged(absl::optional<tab_groups::TabGroupId> group,
-                              content::WebContents* contents,
+  void TabGroupedStateChanged(TabStripModel* tab_strip_model,
+                              std::optional<tab_groups::TabGroupId> old_group,
+                              std::optional<tab_groups::TabGroupId> new_group,
+                              tabs::TabInterface* tab,
                               int index) override;
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
-  void TabChangedAt(content::WebContents* contents,
-                    int index,
-                    TabChangeType change_type) override;
-  void TabPinnedStateChanged(TabStripModel* tab_strip_model,
-                             content::WebContents* contents,
-                             int index) override;
-  void TabBlockedStateChanged(content::WebContents* contents,
-                              int index) override;
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      int index,
+                      TabChangeType change_type) override;
+  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
+  void OnTabBlockedStateChanged(tabs::TabInterface* tab, int index) override;
 
   // content::WebContentsDelegate:
   bool PreHandleGestureEvent(content::WebContents* source,
@@ -87,14 +91,19 @@ class TabStripPageHandler : public tab_strip::mojom::PageHandler,
                            RemoveTabIfInvalidContextMenu);
   FRIEND_TEST_ALL_PREFIXES(TabStripPageHandlerTest, SwitchTab);
   FRIEND_TEST_ALL_PREFIXES(TabStripPageHandlerTest, UngroupTab);
+  FRIEND_TEST_ALL_PREFIXES(TabStripPageHandlerTest,
+                           NoopMoveGroupAcrossWindowsBreaksContiguity);
+  FRIEND_TEST_ALL_PREFIXES(TabStripPageHandlerTest,
+                           MoveTabAcrossWindowsInBetweenGroup);
 
   void OnLongPressTimer();
   tab_strip::mojom::TabPtr GetTabData(content::WebContents* contents,
+                                      const tabs::TabInterface* tab,
                                       int index);
   tab_strip::mojom::TabGroupVisualDataPtr GetTabGroupData(TabGroup* group);
   void HandleThumbnailUpdate(content::WebContents* tab,
                              ThumbnailTracker::CompressedThumbnailData image);
-  void OnTabCloseCancelled(content::WebContents* tab);
+  void HandleTabCloseCancelled(content::WebContents* tab);
   void ReportTabDurationHistogram(const char* histogram_fragment,
                                   int tab_count,
                                   base::TimeDelta duration);

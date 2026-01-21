@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/values.h"
+
 #include <string>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/test/gtest_util.h"
-#include "base/values.h"
 #include "mojo/public/cpp/base/values_mojom_traits.h"
 #include "mojo/public/cpp/bindings/lib/validation_context.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
+#include "mojo/public/cpp/test_support/validation_errors_test_util.h"
 #include "mojo/public/mojom/base/values.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -62,7 +65,8 @@ TEST(ValuesStructTraitsTest, DoubleValue) {
 
 TEST(ValuesStructTraitsTest, StringValue) {
   static constexpr const char* kTestCases[] = {
-      "", "ascii",
+      "",
+      "ascii",
       // 🎆: Unicode FIREWORKS
       "\xf0\x9f\x8e\x86",
   };
@@ -101,26 +105,11 @@ TEST(ValuesStructTraitsTest, DictionaryValue) {
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
   EXPECT_EQ(in, out);
 
-  ASSERT_TRUE(
-      mojo::test::SerializeAndDeserialize<mojom::DeprecatedDictionaryValue>(
-          in, out));
-  EXPECT_EQ(in, out);
-
   base::Value::Dict in_dict = in.GetDict().Clone();
   base::Value::Dict out_dict;
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::DictionaryValue>(
       in_dict, out_dict));
   EXPECT_EQ(in_dict, out_dict);
-}
-
-TEST(ValuesStructTraitsTest, SerializeInvalidDictionaryValue) {
-  base::Value in;
-  ASSERT_FALSE(in.is_dict());
-
-  base::Value out;
-  EXPECT_DCHECK_DEATH(
-      mojo::test::SerializeAndDeserialize<mojom::DeprecatedDictionaryValue>(
-          in, out));
 }
 
 TEST(ValuesStructTraitsTest, ListValue) {

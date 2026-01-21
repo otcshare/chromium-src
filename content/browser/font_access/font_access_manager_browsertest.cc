@@ -13,7 +13,6 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/sequence_bound.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/font_access/font_access_test_utils.h"
 #include "content/browser/font_access/font_enumeration_cache.h"
@@ -21,6 +20,7 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -126,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(FontAccessManagerBrowserTest, EnumerationTest) {
     EXPECT_LT(0, result.ExtractInt())
         << "Enumeration should return at least one font on supported OS.";
   } else {
-    EXPECT_TRUE(!result.error.empty());
+    EXPECT_TRUE(!result.is_ok());
   }
 }
 
@@ -147,7 +147,7 @@ IN_PROC_BROWSER_TEST_F(FontAccessManagerBrowserTest,
     EXPECT_EQ(0, result.ExtractInt())
         << "Enumeration should return no fonts for an invalid postscriptName.";
   } else {
-    EXPECT_TRUE(!result.error.empty());
+    EXPECT_TRUE(!result.is_ok());
   }
 }
 

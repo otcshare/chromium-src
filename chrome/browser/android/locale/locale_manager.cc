@@ -4,40 +4,30 @@
 
 #include "chrome/browser/android/locale/locale_manager.h"
 
+#include <jni.h>
+
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "chrome/browser/locale/jni_headers/LocaleManager_jni.h"
-#include "components/search_engines/template_url_prepopulate_data.h"
-#include "url/gurl.h"
 
 // static
 std::string LocaleManager::GetYandexReferralID() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jobject> jlocale_manager =
+  base::android::ScopedJavaLocalRef jlocale_manager =
       Java_LocaleManager_getInstance(env);
   if (jlocale_manager.is_null())
     return "";
-  return base::android::ConvertJavaStringToUTF8(
-      env, Java_LocaleManager_getYandexReferralId(env, jlocale_manager));
+  return Java_LocaleManager_getYandexReferralId(env, jlocale_manager);
 }
 
 // static
 std::string LocaleManager::GetMailRUReferralID() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jobject> jlocale_manager =
+  base::android::ScopedJavaLocalRef jlocale_manager =
       Java_LocaleManager_getInstance(env);
   if (jlocale_manager.is_null())
     return "";
-  return base::android::ConvertJavaStringToUTF8(
-      env, Java_LocaleManager_getMailRUReferralId(env, jlocale_manager));
+  return Java_LocaleManager_getMailRUReferralId(env, jlocale_manager);
 }
 
-// static
-void LocaleManager::RecordUserTypeMetrics() {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jobject> jlocale_manager =
-      Java_LocaleManager_getInstance(env);
-  if (jlocale_manager.is_null())
-    return;
-  return Java_LocaleManager_recordUserTypeMetrics(env, jlocale_manager);
-}
+DEFINE_JNI(LocaleManager)

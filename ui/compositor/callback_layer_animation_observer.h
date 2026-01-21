@@ -5,7 +5,7 @@
 #ifndef UI_COMPOSITOR_CALLBACK_LAYER_ANIMATION_OBSERVER_H_
 #define UI_COMPOSITOR_CALLBACK_LAYER_ANIMATION_OBSERVER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/compositor/layer_animation_observer.h"
 
@@ -138,6 +138,11 @@ class COMPOSITOR_EXPORT CallbackLayerAnimationObserver
 
  private:
   int GetNumSequencesCompleted();
+
+  // Checks if all sequences have been started,
+  // then if the started callback did not delete the observer,
+  // checks if all sequences have completed.
+  void CheckAllSequencesStartedAndCompleted();
 
   // Checks if all attached sequences have been started and invokes
   // |animation_started_callback_| if |active_| is true.

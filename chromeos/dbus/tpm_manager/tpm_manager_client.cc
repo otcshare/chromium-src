@@ -8,9 +8,9 @@
 
 #include <google/protobuf/message_lite.h>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -110,6 +110,10 @@ class TpmManagerClientImpl : public TpmManagerClient {
     CallProtoMethod(::tpm_manager::kClearStoredOwnerPassword, request,
                     std::move(callback));
   }
+  void ClearTpm(const ::tpm_manager::ClearTpmRequest& request,
+                ClearTpmCallback callback) override {
+    CallProtoMethod(::tpm_manager::kClearTpm, request, std::move(callback));
+  }
 
   void AddObserver(Observer* observer) override {
     observer_list_.AddObserver(observer);
@@ -197,7 +201,7 @@ class TpmManagerClientImpl : public TpmManagerClient {
   }
 
   // D-Bus proxy for the TpmManager daemon, not owned.
-  raw_ptr<dbus::ObjectProxy> proxy_ = nullptr;
+  raw_ptr<dbus::ObjectProxy, LeakedDanglingUntriaged> proxy_ = nullptr;
 
   // The observer list of ownership taken signal.
   base::ObserverList<Observer> observer_list_;

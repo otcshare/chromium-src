@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.history;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.util.AttributeSet;
 import android.view.Menu;
@@ -12,41 +14,65 @@ import android.view.View;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.incognito.IncognitoUtils;
-import org.chromium.chrome.browser.preferences.Pref;
-import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar;
-import org.chromium.components.user_prefs.UserPrefs;
 
 import java.util.List;
 
-/**
- * The SelectionToolbar for the browsing history UI.
- */
+/** The SelectionToolbar for the browsing history UI. */
+@NullMarked
 public class HistoryManagerToolbar extends SelectableListToolbar<HistoryItem> {
     private HistoryManager mManager;
+    private HistoryManagerMenuDelegate mMenuDelegate;
+
+    /**
+     * Interface to the Chrome preference storage used to keep the last visibility state of the info
+     * header.
+     */
+    public interface InfoHeaderPref {
+        default boolean isVisible() {
+            return false;
+        }
+
+        default void setVisible(boolean visible) {}
+    }
+
+    /** Delegate for menu capabilities of history management. */
+    public interface HistoryManagerMenuDelegate {
+        /** Return whether deleting history is currently supported. */
+        boolean supportsDeletingHistory();
+
+        /** Return whether incognito is currently supported. */
+        boolean supportsIncognito();
+    }
 
     public HistoryManagerToolbar(Context context, AttributeSet attrs) {
         super(context, attrs);
-        inflateMenu(R.menu.history_manager_menu);
-
-        getMenu()
-                .findItem(R.id.selection_mode_open_in_incognito)
-                .setTitle(R.string.contextmenu_open_in_incognito_tab);
-
-        updateMenuItemVisibility();
     }
 
     /**
      * @param manager The {@link HistoryManager} associated with this toolbar.
      */
+    @Initializer
     public void setManager(HistoryManager manager) {
         mManager = manager;
 
         if (!mManager.isDisplayedInSeparateActivity()) {
             getMenu().removeItem(R.id.close_menu_id);
         }
+    }
+
+    /**
+     * @param menuDelegate The {@link HistoryManagerMenuDelegate} that determines the availability
+     *     of various menu items.
+     */
+    @Initializer
+    public void setMenuDelegate(HistoryManagerMenuDelegate menuDelegate) {
+        mMenuDelegate = menuDelegate;
+        updateMenuItemVisibility();
     }
 
     @Override
@@ -68,16 +94,19 @@ public class HistoryManagerToolbar extends SelectableListToolbar<HistoryItem> {
             // may not be a view associated with it.
             View deleteButton = findViewById(R.id.selection_mode_delete_menu_id);
             if (deleteButton != null) {
-                deleteButton.setContentDescription(getResources().getQuantityString(
-                        R.plurals.accessibility_remove_selected_items,
-                        numSelected, numSelected));
+                deleteButton.setContentDescription(
+                        getResources()
+                                .getQuantityString(
+                                        R.plurals.accessibility_remove_selected_items,
+                                        numSelected,
+                                        numSelected));
             }
 
             // The copy link option should only be visible when one item is selected.
-            getItemById(R.id.selection_mode_copy_link).setVisible(numSelected == 1);
+            assumeNonNull(getItemById(R.id.selection_mode_copy_link)).setVisible(numSelected == 1);
 
             if (!wasSelectionEnabled) {
-                mManager.recordUserActionWithOptionalSearch("SelectionEstablished");
+                mManager.recordSelectionEstablished();
             }
         }
     }
@@ -87,15 +116,33 @@ public class HistoryManagerToolbar extends SelectableListToolbar<HistoryItem> {
         super.setSearchEnabled(searchEnabled);
         updateInfoMenuItem(
                 mManager.shouldShowInfoButton(), mManager.shouldShowInfoHeaderIfAvailable());
+        // shouldShowInfoButton is checked to ensure all the menu items are ready.
+        if (searchEnabled && mManager.shouldShowInfoButton()) {
+            mManager.showIph();
+        }
     }
 
-    /**
-     * Should be called when the user's sign in state changes.
-     */
+    @Override
+    protected boolean handleEnterKeyPress() {
+        return getMenu().performIdentifierAction(R.id.search_menu_id, 0);
+    }
+
+    // Move focus to list content view.
+    @Override
+    protected View getNextFocusForward() {
+        return mManager.getListContentView();
+    }
+
+    /** Should be called when the user's sign in state changes. */
     public void onSignInStateChange() {
         updateMenuItemVisibility();
         updateInfoMenuItem(
                 mManager.shouldShowInfoButton(), mManager.shouldShowInfoHeaderIfAvailable());
+    }
+
+    @Override
+    protected void onNavigationBack() {
+        mManager.finish();
     }
 
     private void updateMenuItemVisibility() {
@@ -103,17 +150,17 @@ public class HistoryManagerToolbar extends SelectableListToolbar<HistoryItem> {
         // be added back until the user refreshes the history UI. This could happen if the user is
         // signed in to an account that cannot remove browsing history or has incognito disabled and
         // signs out.
-        if (!UserPrefs.get(Profile.getLastUsedRegularProfile())
-                        .getBoolean(Pref.ALLOW_DELETING_BROWSER_HISTORY)) {
+        assert mMenuDelegate != null;
+        if (!mMenuDelegate.supportsDeletingHistory()) {
             getMenu().removeItem(R.id.selection_mode_delete_menu_id);
         }
-        if (!IncognitoUtils.isIncognitoModeEnabled()) {
+        if (!mMenuDelegate.supportsIncognito()) {
             getMenu().removeItem(R.id.selection_mode_open_in_incognito);
         }
     }
 
     @VisibleForTesting
-    MenuItem getItemById(int menuItemId) {
+    @Nullable MenuItem getItemById(int menuItemId) {
         Menu menu = getMenu();
         for (int i = 0; i < menu.size(); i++) {
             MenuItem item = menu.getItem(i);
@@ -122,7 +169,6 @@ public class HistoryManagerToolbar extends SelectableListToolbar<HistoryItem> {
         return null;
     }
 
-    @VisibleForTesting
     Menu getMenuForTests() {
         return getMenu();
     }

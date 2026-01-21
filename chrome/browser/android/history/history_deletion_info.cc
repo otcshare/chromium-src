@@ -5,22 +5,24 @@
 #include "chrome/browser/android/history/history_deletion_info.h"
 
 #include "base/android/jni_array.h"
-#include "chrome/android/chrome_jni_headers/HistoryDeletionInfo_jni.h"
 #include "components/history/core/browser/history_types.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/HistoryDeletionInfo_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 
 namespace {
 
-history::DeletionInfo* ToDeletionInfo(jlong j_deletion_info) {
+history::DeletionInfo* ToDeletionInfo(int64_t j_deletion_info) {
   return reinterpret_cast<history::DeletionInfo*>(j_deletion_info);
 }
 
 }  // namespace
 
-ScopedJavaLocalRef<jobjectArray> JNI_HistoryDeletionInfo_GetDeletedURLs(
+static ScopedJavaLocalRef<jobjectArray> JNI_HistoryDeletionInfo_GetDeletedURLs(
     JNIEnv* env,
-    jlong history_deletion_info_ptr) {
+    int64_t history_deletion_info_ptr) {
   history::DeletionInfo* deletion_info =
       ToDeletionInfo(history_deletion_info_ptr);
   std::vector<std::string> deleted_urls;
@@ -31,17 +33,17 @@ ScopedJavaLocalRef<jobjectArray> JNI_HistoryDeletionInfo_GetDeletedURLs(
   return base::android::ToJavaArrayOfStrings(env, deleted_urls);
 }
 
-jboolean JNI_HistoryDeletionInfo_IsTimeRangeValid(
+static bool JNI_HistoryDeletionInfo_IsTimeRangeValid(
     JNIEnv* env,
-    jlong history_deletion_info_ptr) {
+    int64_t history_deletion_info_ptr) {
   history::DeletionInfo* deletion_info =
       ToDeletionInfo(history_deletion_info_ptr);
   return deletion_info->time_range().IsValid();
 }
 
-jboolean JNI_HistoryDeletionInfo_IsTimeRangeForAllTime(
+static bool JNI_HistoryDeletionInfo_IsTimeRangeForAllTime(
     JNIEnv* env,
-    jlong history_deletion_info_ptr) {
+    int64_t history_deletion_info_ptr) {
   history::DeletionInfo* deletion_info =
       ToDeletionInfo(history_deletion_info_ptr);
   return deletion_info->time_range().IsAllTime();
@@ -53,3 +55,5 @@ ScopedJavaLocalRef<jobject> CreateHistoryDeletionInfo(
   return Java_HistoryDeletionInfo_create(
       env, reinterpret_cast<intptr_t>(deletion_info));
 }
+
+DEFINE_JNI(HistoryDeletionInfo)

@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -48,10 +49,12 @@ TEST(TokenizedStringMatchTest, NotMatch) {
 
   TokenizedStringMatch match;
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
-    const std::u16string text(base::UTF8ToUTF16(kTestCases[i].text));
-    EXPECT_FALSE(match.Calculate(base::UTF8ToUTF16(kTestCases[i].query), text))
-        << "Test case " << i << " : text=" << kTestCases[i].text
-        << ", query=" << kTestCases[i].query;
+    const std::u16string text(
+        base::UTF8ToUTF16(UNSAFE_TODO(kTestCases[i]).text));
+    UNSAFE_TODO(EXPECT_FALSE(
+        match.Calculate(base::UTF8ToUTF16(kTestCases[i].query), text)))
+        << "Test case " << i << " : text=" << UNSAFE_TODO(kTestCases[i]).text
+        << ", query=" << UNSAFE_TODO(kTestCases[i]).query;
   }
 }
 
@@ -122,15 +125,16 @@ TEST(TokenizedStringMatchTest, Relevance) {
   TokenizedStringMatch match_low;
   TokenizedStringMatch match_high;
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
-    const std::u16string text(base::UTF8ToUTF16(kTestCases[i].text));
-    EXPECT_TRUE(
-        match_low.Calculate(base::UTF8ToUTF16(kTestCases[i].query_low), text));
-    EXPECT_TRUE(match_high.Calculate(
-        base::UTF8ToUTF16(kTestCases[i].query_high), text));
+    const std::u16string text(
+        base::UTF8ToUTF16(UNSAFE_TODO(kTestCases[i]).text));
+    UNSAFE_TODO(EXPECT_TRUE(
+        match_low.Calculate(base::UTF8ToUTF16(kTestCases[i].query_low), text)));
+    UNSAFE_TODO(EXPECT_TRUE(match_high.Calculate(
+        base::UTF8ToUTF16(kTestCases[i].query_high), text)));
     EXPECT_LT(match_low.relevance(), match_high.relevance())
-        << "Test case " << i << " : text=" << kTestCases[i].text
-        << ", query_low=" << kTestCases[i].query_low
-        << ", query_high=" << kTestCases[i].query_high;
+        << "Test case " << i << " : text=" << UNSAFE_TODO(kTestCases[i]).text
+        << ", query_low=" << UNSAFE_TODO(kTestCases[i]).query_low
+        << ", query_high=" << UNSAFE_TODO(kTestCases[i]).query_high;
   }
 }
 
@@ -156,12 +160,15 @@ TEST(TokenizedStringMatchTest, AbsoluteRelevance) {
 
   TokenizedStringMatch match;
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
-    const std::u16string text(base::UTF8ToUTF16(kTestCases[i].text));
-    EXPECT_TRUE(match.Calculate(base::UTF8ToUTF16(kTestCases[i].query), text));
-    EXPECT_NEAR(match.relevance(), kTestCases[i].expected_score, kEpsilon)
-        << "Test case " << i << " : text=" << kTestCases[i].text
-        << ", query=" << kTestCases[i].query
-        << ", expected_score=" << kTestCases[i].expected_score;
+    const std::u16string text(
+        base::UTF8ToUTF16(UNSAFE_TODO(kTestCases[i]).text));
+    UNSAFE_TODO(EXPECT_TRUE(
+        match.Calculate(base::UTF8ToUTF16(kTestCases[i].query), text)));
+    UNSAFE_TODO(
+        EXPECT_NEAR(match.relevance(), kTestCases[i].expected_score, kEpsilon))
+        << "Test case " << i << " : text=" << UNSAFE_TODO(kTestCases[i]).text
+        << ", query=" << UNSAFE_TODO(kTestCases[i]).query
+        << ", expected_score=" << UNSAFE_TODO(kTestCases[i]).expected_score;
   }
 }
 

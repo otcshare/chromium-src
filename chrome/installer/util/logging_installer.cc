@@ -4,16 +4,21 @@
 
 #include "chrome/installer/util/logging_installer.h"
 
-#include <stdint.h>
 #include <windows.h>
 
+#include <shlobj.h>
+#include <stdint.h>
+
+#include <optional>
 #include <tuple>
 
 #include "base/command_line.h"
+#include "base/containers/heap_array.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/logging_win.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
@@ -40,9 +45,8 @@ bool installer_logging_ = false;
 TruncateResult TruncateLogFileIfNeeded(const base::FilePath& log_file) {
   TruncateResult result = LOGFILE_UNTOUCHED;
 
-  int64_t log_size = 0;
-  if (base::GetFileSize(log_file, &log_size) &&
-      log_size > kMaxInstallerLogFileSize) {
+  std::optional<int64_t> log_size = base::GetFileSize(log_file);
+  if (log_size.has_value() && log_size.value() > kMaxInstallerLogFileSize) {
     // Cause the old log file to be deleted when we are done with it.
     uint32_t file_flags = base::File::FLAG_OPEN | base::File::FLAG_READ |
                           base::File::FLAG_WIN_SHARE_DELETE |
@@ -54,13 +58,13 @@ TruncateResult TruncateLogFileIfNeeded(const base::FilePath& log_file) {
       base::FilePath tmp_log(log_file.value() + FILE_PATH_LITERAL(".tmp"));
       // Note that base::Move will attempt to replace existing files.
       if (base::Move(log_file, tmp_log)) {
-        int64_t offset = log_size - kTruncatedInstallerLogFileSize;
-        std::string old_log_data(kTruncatedInstallerLogFileSize, 0);
-        int bytes_read = old_log_file.Read(offset, &old_log_data[0],
-                                           kTruncatedInstallerLogFileSize);
-        if (bytes_read > 0 &&
-            (bytes_read ==
-                 base::WriteFile(log_file, &old_log_data[0], bytes_read) ||
+        int64_t offset = log_size.value() - kTruncatedInstallerLogFileSize;
+        auto old_log_data =
+            base::HeapArray<uint8_t>::Uninit(kTruncatedInstallerLogFileSize);
+        std::optional<size_t> bytes_read =
+            old_log_file.Read(offset, old_log_data);
+        if (bytes_read.value_or(0) > 0 &&
+            (base::WriteFile(log_file, old_log_data.subspan(0, *bytes_read)) ||
              base::PathExists(log_file))) {
           result = LOGFILE_TRUNCATED;
         }
@@ -97,9 +101,9 @@ void InitInstallerLogging(const installer::InitialPreferences& prefs) {
 
   if (prefs.GetBool(installer::initial_preferences::kVerboseLogging, &value) &&
       value) {
-    logging::SetMinLogLevel(logging::LOG_VERBOSE);
+    logging::SetMinLogLevel(logging::LOGGING_VERBOSE);
   } else {
-    logging::SetMinLogLevel(logging::LOG_ERROR);
+    logging::SetMinLogLevel(logging::LOGGING_ERROR);
   }
 
   // Enable ETW logging.
@@ -125,9 +129,12 @@ base::FilePath GetLogFilePath(const installer::InitialPreferences& prefs) {
       FILE_PATH_LITERAL("chromium_installer.log");
 #endif
 
-  // Fallback to current directory if getting the temp directory fails.
+  // Fallback to current directory if getting the secure or temp directory
+  // fails.
   base::FilePath tmp_path;
-  std::ignore = base::PathService::Get(base::DIR_TEMP, &tmp_path);
+  std::ignore = ::IsUserAnAdmin()
+                    ? base::PathService::Get(base::DIR_SYSTEM_TEMP, &tmp_path)
+                    : base::PathService::Get(base::DIR_TEMP, &tmp_path);
   return tmp_path.Append(kLogFilename);
 }
 

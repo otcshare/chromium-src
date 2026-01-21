@@ -8,13 +8,16 @@
 #include <utility>
 
 #include "base/files/file_path.h"
-#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "chrome/services/speech/cros_speech_recognition_recognizer_impl.h"
 #include "chrome/services/speech/speech_recognition_service_impl.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/mojo/mojom/audio_data.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -34,6 +37,11 @@ constexpr int kServerBasedRecognitionAudioFramesPerBuffer = 1600;
 constexpr int kOriginalSampleRate = 48000;
 constexpr int kOriginalFramesPerBuffer = 9600;
 
+constexpr char kServerBasedRecognitionSessionLength[] =
+    "Ash.SpeechRecognitionSessionLength.ServerBased";
+constexpr char kOnDeviceRecognitionSessionLength[] =
+    "Ash.SpeechRecognitionSessionLength.OnDevice";
+
 }  // namespace
 
 class MockStreamFactory : public audio::FakeStreamFactory {
@@ -48,9 +56,9 @@ class MockStreamFactory : public audio::FakeStreamFactory {
       mojo::PendingRemote<media::mojom::AudioLog> log,
       const std::string& device_id,
       const media::AudioParameters& params,
+      const base::UnguessableToken& group_id,
       uint32_t shared_memory_count,
       bool enable_agc,
-      base::ReadOnlySharedMemoryRegion key_press_count_buffer,
       media::mojom::AudioProcessingConfigPtr processing_config,
       CreateInputStreamCallback created_callback) override {
     last_created_callback_ = std::move(created_callback);
@@ -75,10 +83,13 @@ class MockAudioSourceConsumer : public AudioSourceConsumer {
 
   // AudioSourceConsumer:
   void AddAudio(media::mojom::AudioDataS16Ptr buffer) override {
+    EXPECT_FALSE(is_audio_end_);
     std::move(on_send_audio_to_speech_recognition_callback_)
         .Run(std::move(buffer));
   }
-  void OnAudioCaptureEnd() override {}
+
+  void OnAudioCaptureEnd() override { is_audio_end_ = true; }
+
   void OnAudioCaptureError() override {}
 
   void SetOnSendAudioToSpeechRecognitionCallback(
@@ -90,6 +101,7 @@ class MockAudioSourceConsumer : public AudioSourceConsumer {
   // Used to verify the media::mojom::AudioDataS16 content.
   OnSendAudioToSpeechRecognitionCallback
       on_send_audio_to_speech_recognition_callback_;
+  bool is_audio_end_ = false;
 };
 
 class AudioSourceFetcherImplTest
@@ -122,7 +134,7 @@ class AudioSourceFetcherImplTest
         std::move(callback));
   }
 
-  void VerifyAudioBuffer(int sample_rate, int frame_count) {
+  void VerifyAudioBuffer(int sample_rate, int frame_count, bool stop = false) {
     base::RunLoop run_loop;
     SetOnSendAudioToSpeechRecognitionCallback(
         base::BindLambdaForTesting([&](media::mojom::AudioDataS16Ptr buffer) {
@@ -131,6 +143,9 @@ class AudioSourceFetcherImplTest
 
           run_loop.Quit();
         }));
+    if (stop) {
+      audio_source_fetcher()->Stop();
+    }
     run_loop.Run();
   }
 
@@ -144,14 +159,17 @@ class AudioSourceFetcherImplTest
   void OnLanguageIdentificationEvent(
       media::mojom::LanguageIdentificationEventPtr event) override {}
 
- private:
-  base::test::TaskEnvironment task_environment;
+  base::test::TaskEnvironment task_environment_;
   std::unique_ptr<AudioSourceFetcherImpl> audio_source_fetcher_;
-  MockAudioSourceConsumer* speech_recognition_recognizer_;
+  base::HistogramTester histogram_tester_;
+
+ private:
+  raw_ptr<MockAudioSourceConsumer, DanglingUntriaged>
+      speech_recognition_recognizer_;
   bool is_server_based_;
 };
 
-TEST_P(AudioSourceFetcherImplTest, ResampleForServerBasedRecognizer) {
+TEST_P(AudioSourceFetcherImplTest, Resample) {
   MockStreamFactory fake_stream_factory;
   media::AudioParameters params =
       media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
@@ -168,8 +186,8 @@ TEST_P(AudioSourceFetcherImplTest, ResampleForServerBasedRecognizer) {
   audio_bus->Zero();
   audio_source_fetcher()->Capture(audio_bus.get(),
                                   /*audio_capture_time=*/base::TimeTicks::Now(),
-                                  /*volume=*/1.0,
-                                  /*key_pressed=*/true);
+                                  /*glitch_info=*/{},
+                                  /*volume=*/1.0);
   if (is_server_based()) {
     VerifyAudioBuffer(kServerBasedRecognitionAudioSampleRate,
                       kServerBasedRecognitionAudioFramesPerBuffer);
@@ -186,6 +204,49 @@ TEST_P(AudioSourceFetcherImplTest, ResampleForServerBasedRecognizer) {
     VerifyAudioBuffer(kServerBasedRecognitionAudioSampleRate,
                       kServerBasedRecognitionAudioFramesPerBuffer);
   }
+
+  // Let's destroy the audio source fetcher and ensure that the metric
+  // has been recorded.
+  audio_source_fetcher_.reset();
+  base::TimeDelta length = media::AudioTimestampHelper::FramesToTime(
+      audio_bus->frames(), kOriginalSampleRate);
+
+  const auto* histogram_name = is_server_based()
+                                   ? kServerBasedRecognitionSessionLength
+                                   : kOnDeviceRecognitionSessionLength;
+  histogram_tester_.ExpectTimeBucketCount(histogram_name, length,
+                                          /*count=*/1);
+}
+
+TEST_P(AudioSourceFetcherImplTest, StopDuringResample) {
+  MockStreamFactory fake_stream_factory;
+  media::AudioParameters params =
+      media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                             media::ChannelLayoutConfig::Stereo(),
+                             /*sample_rate=*/kOriginalSampleRate,
+                             /*frames_per_buffer=*/kOriginalFramesPerBuffer);
+  audio_source_fetcher()->Start(fake_stream_factory.MakeRemote(), "device_id",
+                                params);
+
+  auto audio_bus = media::AudioBus::Create(params);
+
+  // Initialize channel data in `audio_bus`.
+  audio_bus->Zero();
+  audio_source_fetcher()->Capture(audio_bus.get(),
+                                  /*audio_capture_time=*/base::TimeTicks::Now(),
+                                  /*glitch_info=*/{},
+                                  /*volume=*/1.0);
+  if (is_server_based()) {
+    // Stop will prevent the pending resample call from running, so no audio
+    // will be available to verify.
+    audio_source_fetcher_->Stop();
+    task_environment_.RunUntilIdle();
+  } else {
+    VerifyAudioBuffer(kOriginalSampleRate, kOriginalFramesPerBuffer,
+                      /*stop=*/true);
+  }
+  audio_source_fetcher_.reset();
+  fake_stream_factory.ResetReceiver();
 }
 
 INSTANTIATE_TEST_SUITE_P(All, AudioSourceFetcherImplTest, ::testing::Bool());

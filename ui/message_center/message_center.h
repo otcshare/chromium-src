@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "ui/message_center/message_center_export.h"
 #include "ui/message_center/message_center_types.h"
@@ -58,6 +59,9 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   static void Initialize();
   // Creates the global message center object with custom LockScreenController.
   static void Initialize(std::unique_ptr<LockScreenController> controller);
+  // Sets the global message center for testing.
+  static void InitializeForTesting(
+      std::unique_ptr<MessageCenter> message_center);
 
   // Returns the global message center object. Returns null if Initialize is
   // not called.
@@ -109,6 +113,11 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   // that queued changes due to the message center being open are not reflected
   // in this list.
   virtual const NotificationList::Notifications& GetVisibleNotifications() = 0;
+
+  // Gets all notifications to be shown to the user in the message center if not
+  // for the given blocker.
+  virtual NotificationList::Notifications GetVisibleNotificationsWithoutBlocker(
+      const NotificationBlocker* blocker) const = 0;
 
   // Gets all notifications being shown as popups. This should not be affected
   // by the change queue since notifications are not held up while the state is
@@ -170,22 +179,25 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   virtual void ClickOnNotificationButtonWithReply(
       const std::string& id,
       int button_index,
-      const std::u16string& reply) = 0;
+      std::u16string_view reply) = 0;
 
   // Called by the UI classes when the settings buttons is clicked
   // to trigger the notification's delegate and update the message
   // center observers.
   virtual void ClickOnSettingsButton(const std::string& id) = 0;
 
+  // Called when the snooze buttons is clicked to trigger the notification's
+  // delegate.
+  virtual void ClickOnSnoozeButton(const std::string& id) = 0;
+
   // This should be called by UI classes when a user select from notification
   // inline settings to disable notifications from the same origin of the
   // notification.
   virtual void DisableNotification(const std::string& id) = 0;
 
-  // This should be called by UI classes after a visible notification popup
-  // closes, indicating that the notification has been shown to the user.
-  // |mark_notification_as_read|, if false, will unset the read bit on a
-  // notification, increasing the unread count of the center.
+  // Called by the UI classes to mark a popup as shown, preventing it from being
+  // shown in the future. `mark_notification_as_read`, if false, will unset the
+  // read bit on a notification, increasing the unread count of the center.
   virtual void MarkSinglePopupAsShown(const std::string& id,
                                       bool mark_notification_as_read) = 0;
 
@@ -203,7 +215,10 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
                                      const DisplaySource source) = 0;
 
   // This can be called to change the quiet mode state (without a timeout).
-  virtual void SetQuietMode(bool in_quiet_mode) = 0;
+  virtual void SetQuietMode(
+      bool in_quiet_mode,
+      QuietModeSourceType type = QuietModeSourceType::kUserAction) = 0;
+  virtual QuietModeSourceType GetLastQuietModeChangeSourceType() const = 0;
 
   // Used to set the spoken feedback state.
   virtual void SetSpokenFeedbackEnabled(bool enabled) = 0;
@@ -217,6 +232,19 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
 
   // Allows querying the visibility of the center.
   virtual bool IsMessageCenterVisible() const = 0;
+
+  // Access for the `ExpandState` stored for each notification in the
+  // `NotificationList`. The `ExpandState` is kept alongside other
+  // notifications' state information in the `NotificationState` struct. The
+  // `ExpandState signifies whether the notification has been manually expanded
+  // or collapsed by the user.
+  virtual ExpandState GetNotificationExpandState(const std::string& id) = 0;
+  virtual void SetNotificationExpandState(const std::string& id,
+                                          const ExpandState state) = 0;
+
+  // Called when `MessageView::SetExpanded` or the overrides are called. It
+  // will trigger 'ExpandStateChanged' in the notification's delegate.
+  virtual void OnSetExpanded(const std::string& id, bool expanded) = 0;
 
   // Informs the MessageCenter whether there's a bubble anchored to a system
   // tray which holds notifications. If false, only toasts are shown (e.g. on
@@ -244,6 +272,8 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   // Called when a message view associated with `notification_id` is hovered on.
   virtual void OnMessageViewHovered(const std::string& notification_id) = 0;
 
+  virtual ~MessageCenter();
+
  protected:
   friend class ::DownloadNotification;
   friend class ::DownloadNotificationTestBase;
@@ -254,10 +284,10 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   friend class UiControllerTest;
   friend class TrayViewControllerTest;
   friend class MessagePopupCollectionTest;
+  friend class MessagePopupViewTest;
   virtual void DisableTimersForTest() = 0;
 
   MessageCenter();
-  virtual ~MessageCenter();
 };
 
 }  // namespace message_center

@@ -6,16 +6,18 @@
 
 #include <memory>
 
+#include "ash/login/test_login_screen.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/gtest_util.h"
 #include "base/test/mock_callback.h"
-#include "chrome/browser/ash/login/ui/login_screen_extension_ui/create_options.h"
-#include "chrome/browser/ash/login/ui/login_screen_extension_ui/window.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
-#include "chrome/browser/ui/ash/test_login_screen.h"
+#include "chrome/browser/ui/ash/login/login_screen_extension_ui/create_options.h"
+#include "chrome/browser/ui/ash/login/login_screen_extension_ui/window.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/version_info/version_info.h"
 #include "content/public/test/browser_task_environment.h"
@@ -26,12 +28,14 @@
 #include "extensions/common/features/feature_channel.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using extensions::mojom::ManifestLocation;
+namespace chromeos::login_screen_extension_ui {
 
 namespace {
 
-// TODO(https://crbug.com/1164001): remove after migrating to ash.
-using ::ash::StubInstallAttributes;
+using ::ash::login_screen_extension_ui::CreateOptions;
+using ::ash::login_screen_extension_ui::Window;
+using ::ash::login_screen_extension_ui::WindowFactory;
+using ::extensions::mojom::ManifestLocation;
 
 const char kErrorWindowAlreadyExists[] =
     "Login screen extension UI already in use.";
@@ -49,10 +53,6 @@ const char kAllowlistedExtensionID2[] =
 const char kPermissionName[] = "loginScreenUi";
 
 }  // namespace
-
-namespace chromeos {
-
-namespace login_screen_extension_ui {
 
 class FakeWindowFactory : public WindowFactory {
  public:
@@ -140,7 +140,7 @@ class LoginScreenExtensionUiHandlerUnittest : public testing::Test {
                      /*name=*/"LoginScreenUi test extension")
                      .SetID(kAllowlistedExtensionID1)
                      .SetLocation(ManifestLocation::kExternalPolicy)
-                     .AddPermission(kPermissionName)
+                     .AddAPIPermission(kPermissionName)
                      .AddFlags(extensions::Extension::FOR_LOGIN_SCREEN)
                      .Build();
     extension_registry_->AddEnabled(extension_);
@@ -172,8 +172,7 @@ class LoginScreenExtensionUiHandlerUnittest : public testing::Test {
 
   void CheckCanCloseWindow(const extensions::Extension* extension) {
     base::MockCallback<UiHandler::WindowClosedCallback> callback;
-    EXPECT_CALL(callback,
-                Run(true, absl::optional<std::string>(absl::nullopt)));
+    EXPECT_CALL(callback, Run(true, std::optional<std::string>(std::nullopt)));
     ui_handler_->Close(extension, callback.Get());
     // Invoke close callback from dialog delegate because UiHandler::Close() is
     // synchronous and will invoke its callback after that.
@@ -195,14 +194,14 @@ class LoginScreenExtensionUiHandlerUnittest : public testing::Test {
                               const std::string& expected_error) {
     base::MockCallback<UiHandler::WindowClosedCallback> callback;
     EXPECT_CALL(callback,
-                Run(false, absl::optional<std::string>(expected_error)));
+                Run(false, std::optional<std::string>(expected_error)));
     ui_handler_->Close(extension, callback.Get());
     // No need to invoke the close callback here since in case of no open window
     // we directly invoke the callback with an error.
   }
 
   void CheckCannotUseAPI(const extensions::Extension* extension) {
-    ::testing::FLAGS_gtest_death_test_style = "fast";
+    GTEST_FLAG_SET(death_test_style, "fast");
     std::string error;
     EXPECT_CHECK_DEATH(
         ui_handler_->Show(extension, kUrl, kCanBeClosedByUser, &error));
@@ -211,15 +210,16 @@ class LoginScreenExtensionUiHandlerUnittest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   const extensions::ScopedCurrentChannel scoped_current_channel_;
 
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   TestingProfileManager profile_manager_;
-  StubInstallAttributes* stub_install_attributes_ = nullptr;
-  extensions::ExtensionRegistry* extension_registry_ = nullptr;
+  raw_ptr<ash::StubInstallAttributes> stub_install_attributes_ = nullptr;
+  raw_ptr<extensions::ExtensionRegistry> extension_registry_ = nullptr;
   scoped_refptr<const extensions::Extension> extension_;
 
   TestLoginScreen test_login_screen_;
 
-  FakeWindowFactory* fake_window_factory_ = nullptr;
+  raw_ptr<FakeWindowFactory, DanglingUntriaged> fake_window_factory_ = nullptr;
 
   std::unique_ptr<UiHandler> ui_handler_;
 };
@@ -305,7 +305,7 @@ TEST_F(LoginScreenExtensionUiHandlerUnittest, OnlyOneWindow) {
       extensions::ExtensionBuilder(/*name=*/"Imprivata")
           .SetID(kAllowlistedExtensionID2)
           .SetLocation(ManifestLocation::kExternalPolicy)
-          .AddPermission(kPermissionName)
+          .AddAPIPermission(kPermissionName)
           .AddFlags(extensions::Extension::FOR_LOGIN_SCREEN)
           .Build();
   extension_registry_->AddEnabled(other_extension);
@@ -384,7 +384,7 @@ TEST_F(LoginScreenExtensionUiHandlerDeathUnittest, NotAllowed) {
       extensions::ExtensionBuilder(/*name=*/"other profile")
           .SetID(kAllowlistedExtensionID2)  // allowlisted
           .SetLocation(ManifestLocation::kExternalPolicy)
-          .AddPermission(kPermissionName)
+          .AddAPIPermission(kPermissionName)
           .AddFlags(extensions::Extension::FOR_LOGIN_SCREEN)
           .Build();
 
@@ -407,6 +407,4 @@ TEST_F(LoginScreenExtensionUiHandlerDeathUnittest, NotAllowed) {
   CheckCannotUseAPI(extension_.get());
 }
 
-}  // namespace login_screen_extension_ui
-
-}  // namespace chromeos
+}  // namespace chromeos::login_screen_extension_ui

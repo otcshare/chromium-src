@@ -46,7 +46,7 @@ TEST_F(MediaLogTest, ClonedLogsInhertParentPlayerId) {
   child_media_log->AddMessage(MediaLogMessageLevel::kERROR, "test");
   auto event = root_log->take_most_recent_event();
   EXPECT_NE(event, nullptr);
-  EXPECT_EQ(event->id, 0);
+  EXPECT_EQ(event->id.value(), 0u);
 }
 
 TEST_F(MediaLogTest, DontTruncateShortUrlString) {
@@ -97,6 +97,19 @@ TEST_F(MediaLogTest, TruncateLongUrlStrings) {
   event = root_log_->take_most_recent_event();
   EXPECT_NE(event, nullptr);
   EXPECT_EQ(*event->params.FindString("origin_url"), expected_url);
+}
+
+TEST_F(MediaLogTest, PLog) {
+  CreateLog();
+
+  const logging::SystemErrorCode kTestError = 28;
+  EXPECT_CALL(*root_log_, DoAddLogRecordLogString(_)).Times(1);
+  MEDIA_PLOG(ERROR, kTestError, root_log_.get()) << "Testing";
+
+  auto event = root_log_->take_most_recent_event();
+  ASSERT_NE(event, nullptr);
+  EXPECT_EQ(*event->params.FindString("error"),
+            "Testing: " + logging::SystemErrorCodeToString(kTestError));
 }
 
 }  // namespace media

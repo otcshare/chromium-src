@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_COMPONENT_UPDATER_TIMER_UPDATE_SCHEDULER_H_
 #define COMPONENTS_COMPONENT_UPDATER_TIMER_UPDATE_SCHEDULER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/component_updater/timer.h"
 #include "components/component_updater/update_scheduler.h"
 
@@ -22,8 +22,8 @@ class TimerUpdateScheduler : public UpdateScheduler {
   ~TimerUpdateScheduler() override;
 
   // UpdateScheduler:
-  void Schedule(const base::TimeDelta& initial_delay,
-                const base::TimeDelta& delay,
+  void Schedule(base::TimeDelta initial_delay,
+                base::TimeDelta delay,
                 const UserTask& user_task,
                 const OnStopTaskCallback& on_stop) override;
   void Stop() override;

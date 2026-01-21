@@ -5,13 +5,16 @@
 #include "chromeos/ash/components/dbus/shill/modem_messaging_client.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
 #include "dbus/message.h"
 #include "dbus/mock_bus.h"
@@ -20,7 +23,6 @@
 #include "dbus/values_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 using ::testing::_;
@@ -46,13 +48,13 @@ const char kObjectPath[] = "/object/path";
 
 class ModemMessagingClientTest : public testing::Test {
  public:
-  ModemMessagingClientTest() : response_(NULL) {}
+  ModemMessagingClientTest() = default;
 
   void SetUp() override {
     // Create a mock bus.
     dbus::Bus::Options options;
     options.bus_type = dbus::Bus::SYSTEM;
-    mock_bus_ = new dbus::MockBus(options);
+    mock_bus_ = new dbus::MockBus(std::move(options));
 
     // Create a mock proxy.
     mock_proxy_ = new dbus::MockObjectProxy(mock_bus_.get(), kServiceName,
@@ -60,10 +62,9 @@ class ModemMessagingClientTest : public testing::Test {
 
     // Set an expectation so mock_proxy's ConnectToSignal() will use
     // OnConnectToSignal() to run the callback.
-    EXPECT_CALL(
-        *mock_proxy_.get(),
-        DoConnectToSignal(modemmanager::kModemManager1MessagingInterface,
-                          modemmanager::kSMSAddedSignal, _, _))
+    EXPECT_CALL(*mock_proxy_.get(),
+                ConnectToSignal(modemmanager::kModemManager1MessagingInterface,
+                                modemmanager::kSMSAddedSignal, _, _))
         .WillRepeatedly(
             Invoke(this, &ModemMessagingClientTest::OnConnectToSignal));
 
@@ -89,7 +90,7 @@ class ModemMessagingClientTest : public testing::Test {
   // Handles Delete method call.
   void OnDelete(dbus::MethodCall* method_call,
                 int timeout_ms,
-                dbus::ObjectProxy::ResponseCallback* callback) {
+                dbus::ObjectProxy::ResponseCallback callback) {
     EXPECT_EQ(modemmanager::kModemManager1MessagingInterface,
               method_call->GetInterface());
     EXPECT_EQ(modemmanager::kSMSDeleteFunction, method_call->GetMember());
@@ -100,13 +101,13 @@ class ModemMessagingClientTest : public testing::Test {
     EXPECT_FALSE(reader.HasMoreData());
 
     task_environment_.GetMainThreadTaskRunner()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(*callback), response_));
+        FROM_HERE, base::BindOnce(std::move(callback), response_));
   }
 
   // Handles List method call.
   void OnList(dbus::MethodCall* method_call,
               int timeout_ms,
-              dbus::ObjectProxy::ResponseCallback* callback) {
+              dbus::ObjectProxy::ResponseCallback callback) {
     EXPECT_EQ(modemmanager::kModemManager1MessagingInterface,
               method_call->GetInterface());
     EXPECT_EQ(modemmanager::kSMSListFunction, method_call->GetMember());
@@ -114,11 +115,12 @@ class ModemMessagingClientTest : public testing::Test {
     EXPECT_FALSE(reader.HasMoreData());
 
     task_environment_.GetMainThreadTaskRunner()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(*callback), response_));
+        FROM_HERE, base::BindOnce(std::move(callback), response_));
   }
 
  protected:
-  ModemMessagingClient* client_ = nullptr;  // Unowned convenience pointer.
+  raw_ptr<ModemMessagingClient, DanglingUntriaged> client_ =
+      nullptr;  // Unowned convenience pointer.
   // A message loop to emulate asynchronous behavior.
   base::test::SingleThreadTaskEnvironment task_environment_;
   // The mock bus.
@@ -130,7 +132,7 @@ class ModemMessagingClientTest : public testing::Test {
   // Expected argument for Delete method.
   dbus::ObjectPath expected_sms_path_;
   // Response returned by mock methods.
-  dbus::Response* response_;
+  raw_ptr<dbus::Response, DanglingUntriaged> response_ = nullptr;
 
  private:
   // Used to implement the mock proxy.
@@ -138,11 +140,11 @@ class ModemMessagingClientTest : public testing::Test {
       const std::string& interface_name,
       const std::string& signal_name,
       const dbus::ObjectProxy::SignalCallback& signal_callback,
-      dbus::ObjectProxy::OnConnectedCallback* on_connected_callback) {
+      dbus::ObjectProxy::OnConnectedCallback on_connected_callback) {
     sms_received_callback_ = signal_callback;
     const bool success = true;
     task_environment_.GetMainThreadTaskRunner()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(*on_connected_callback),
+        FROM_HERE, base::BindOnce(std::move(on_connected_callback),
                                   interface_name, signal_name, success));
   }
 };
@@ -180,27 +182,23 @@ TEST_F(ModemMessagingClientTest, Delete) {
   // Set expectations.
   const dbus::ObjectPath kSmsPath("/SMS/0");
   expected_sms_path_ = kSmsPath;
-  EXPECT_CALL(*mock_proxy_.get(), DoCallMethod(_, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethod(_, _, _))
       .WillOnce(Invoke(this, &ModemMessagingClientTest::OnDelete));
 
   // Create response.
   std::unique_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
   response_ = response.get();
   // Call Delete.
-  bool success = false;
+  base::test::TestFuture<bool> delete_result_future;
   client_->Delete(kServiceName, dbus::ObjectPath(kObjectPath), kSmsPath,
-                  base::BindOnce([](bool* success_out,
-                                    bool success) { *success_out = true; },
-                                 &success));
+                  delete_result_future.GetCallback());
 
-  // Run the message loop.
-  base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(success);
+  EXPECT_TRUE(delete_result_future.Get());
 }
 
 TEST_F(ModemMessagingClientTest, List) {
   // Set expectations.
-  EXPECT_CALL(*mock_proxy_.get(), DoCallMethod(_, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethod(_, _, _))
       .WillOnce(Invoke(this, &ModemMessagingClientTest::OnList));
 
   const std::vector<dbus::ObjectPath> kExpectedResult{
@@ -213,19 +211,15 @@ TEST_F(ModemMessagingClientTest, List) {
   response_ = response.get();
 
   // Call List.
-  absl::optional<std::vector<dbus::ObjectPath>> result;
-  client_->List(
-      kServiceName, dbus::ObjectPath(kObjectPath),
-      base::BindOnce(
-          [](absl::optional<std::vector<dbus::ObjectPath>>* result_out,
-             absl::optional<std::vector<dbus::ObjectPath>> result) {
-            *result_out = std::move(result);
-          },
-          &result));
+  base::test::TestFuture<std::optional<std::vector<dbus::ObjectPath>>>
+      list_result_future;
+  client_->List(kServiceName, dbus::ObjectPath(kObjectPath),
+                list_result_future.GetCallback());
 
-  // Run the message loop.
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(kExpectedResult, result);
+  std::optional<std::vector<dbus::ObjectPath>> result =
+      list_result_future.Take();
+  EXPECT_TRUE(result);
+  EXPECT_EQ(kExpectedResult, result.value());
 }
 
 }  // namespace ash

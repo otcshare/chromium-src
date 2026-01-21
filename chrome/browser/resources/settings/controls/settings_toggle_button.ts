@@ -6,18 +6,20 @@
  * @fileoverview
  * `settings-toggle-button` is a toggle that controls a supplied preference.
  */
+import '//resources/cr_elements/cr_actionable_row_style.css.js';
+import '//resources/cr_elements/cr_shared_style.css.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
 import '//resources/cr_elements/action_link.css.js';
 import '//resources/cr_elements/cr_toggle/cr_toggle.js';
-import '//resources/cr_elements/policy/cr_policy_pref_indicator.js';
-import '//resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
-import '../settings_shared.css.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
+import '//resources/cr_elements/cr_icon/cr_icon.js';
 
-import {CrToggleElement} from '//resources/cr_elements/cr_toggle/cr_toggle.js';
+import type {CrToggleElement} from '//resources/cr_elements/cr_toggle/cr_toggle.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {SettingsBooleanControlMixin} from '/shared/settings/controls/settings_boolean_control_mixin.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 
-import {SettingsBooleanControlMixin} from './settings_boolean_control_mixin.js';
 import {getTemplate} from './settings_toggle_button.html.js';
 
 
@@ -77,11 +79,26 @@ export class SettingsToggleButtonElement extends
         reflectToAttribute: true,
       },
 
-      // <if expr="chromeos_ash">
+      learnMoreAriaLabel: {
+        type: String,
+        value: '',
+      },
+
       icon: String,
-      // </if>
 
       subLabelIcon: String,
+
+      /**
+       * If true, the host element does not get a click event handler and the
+       * client is responsible for determining their own click logic. Thus when
+       * true, clicking on the setting row does not toggle the setting pref.
+       * Note, this boolean is only used on ready() callback, and any changes
+       * after that have no effect.
+       */
+      noToggleOnHostClick: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
@@ -91,21 +108,26 @@ export class SettingsToggleButtonElement extends
     ];
   }
 
-  override ariaLabel: string;
-  ariaShowLabel: boolean;
-  ariaShowSublabel: boolean;
-  elideLabel: boolean;
-  // <if expr="chromeos_ash">
-  icon: string;
-  // </if>
-  learnMoreUrl: string;
-  subLabelWithLink: string;
-  subLabelIcon: string;
+  declare ariaLabel: string;
+  declare ariaShowLabel: boolean;
+  declare ariaShowSublabel: boolean;
+  declare elideLabel: boolean;
+  declare icon: string;
+  declare learnMoreAriaLabel: string;
+  declare learnMoreUrl: string;
+  declare subLabelWithLink: string;
+  declare subLabelIcon: string;
+  declare noToggleOnHostClick: boolean;
 
   override ready() {
     super.ready();
 
-    this.addEventListener('click', this.onHostTap_);
+    // If the settings toggle is noToggleOnHostClick then do not update the
+    // setting pref on click. Instead let parent code use a custom click
+    // handler as needed.
+    if (!this.noToggleOnHostClick) {
+      this.addEventListener('click', this.onHostClick_);
+    }
   }
 
   private fire_(eventName: string, detail?: any) {
@@ -132,6 +154,17 @@ export class SettingsToggleButtonElement extends
     return this.ariaLabel || this.label;
   }
 
+  private getLearnMoreAriaLabelledBy_(): string {
+    return this.learnMoreAriaLabel ? 'learn-more-aria-label' :
+                                     'sub-label-text learn-more';
+  }
+
+  getBubbleAnchor() {
+    const anchor = this.shadowRoot!.querySelector<HTMLElement>('#control');
+    assert(anchor);
+    return anchor;
+  }
+
   private onDisableOrPrefChange_() {
     this.toggleAttribute('effectively-disabled_', this.controlDisabled());
   }
@@ -140,15 +173,13 @@ export class SettingsToggleButtonElement extends
    * Handles non cr-toggle button clicks (cr-toggle handles its own click events
    * which don't bubble).
    */
-  private onHostTap_(e: Event) {
+  private onHostClick_(e: Event) {
+    assert(!this.noToggleOnHostClick);
     e.stopPropagation();
     if (this.controlDisabled()) {
       return;
     }
-
-    this.checked = !this.checked;
-    this.notifyChangedByUserInteraction();
-    this.fire_('change');
+    this.updateCheckedAndNotify_(!this.checked);
   }
 
   private onLearnMoreClick_(e: CustomEvent<boolean>) {
@@ -164,6 +195,7 @@ export class SettingsToggleButtonElement extends
       attrs: [
         'id',
         'is',
+        'aria-description',
         'aria-hidden',
         'aria-label',
         'aria-labelledby',
@@ -182,8 +214,16 @@ export class SettingsToggleButtonElement extends
   }
 
   private onChange_(e: CustomEvent<boolean>) {
-    this.checked = e.detail;
+    // Prevent cr-toggle's change event from propagating to the parent since
+    // this element fires its own 'change' event.
+    e.stopPropagation();
+    this.updateCheckedAndNotify_(e.detail);
+  }
+
+  private updateCheckedAndNotify_(checked: boolean) {
+    this.checked = checked;
     this.notifyChangedByUserInteraction();
+    this.fire_('change', this.checked);
   }
 }
 

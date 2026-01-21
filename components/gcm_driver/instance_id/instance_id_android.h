@@ -10,9 +10,9 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/id_map.h"
+#include "base/functional/callback.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
@@ -66,25 +66,16 @@ class InstanceIDAndroid : public InstanceID {
 
   // Methods called from Java via JNI:
   void DidGetID(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& obj,
-                jint request_id,
-                const base::android::JavaParamRef<jstring>& jid);
+                int32_t request_id,
+                const base::android::JavaRef<jstring>& jid);
   void DidGetCreationTime(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jint request_id,
-                          jlong creation_time_unix_ms);
+                          int32_t request_id,
+                          int64_t creation_time_unix_ms);
   void DidGetToken(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint request_id,
-                   const base::android::JavaParamRef<jstring>& jtoken);
-  void DidDeleteToken(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jint request_id,
-                      jboolean success);
-  void DidDeleteID(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint request_id,
-                   jboolean success);
+                   int32_t request_id,
+                   const base::android::JavaRef<jstring>& jtoken);
+  void DidDeleteToken(JNIEnv* env, int32_t request_id, bool success);
+  void DidDeleteID(JNIEnv* env, int32_t request_id, bool success);
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;

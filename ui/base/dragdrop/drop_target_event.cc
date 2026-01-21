@@ -4,6 +4,7 @@
 
 #include "ui/base/dragdrop/drop_target_event.h"
 
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/events/event_utils.h"
 
 namespace ui {
@@ -15,7 +16,7 @@ DropTargetEvent::DropTargetEvent(const OSExchangeData& data,
                                  const gfx::PointF& location,
                                  const gfx::PointF& root_location,
                                  int source_operations)
-    : LocatedEvent(ET_DROP_TARGET_EVENT,
+    : LocatedEvent(EventType::kDropTargetEvent,
                    location,
                    root_location,
                    EventTimeForNow(),

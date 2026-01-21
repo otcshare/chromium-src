@@ -1,1 +1,0 @@
--Xclang -plugin-arg-find-bad-constructs -Xclang check-raw-ptr-fields -Xclang -plugin-arg-find-bad-constructs -Xclang exclude-paths=raw_ptr_exclude_paths.exclude

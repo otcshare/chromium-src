@@ -4,6 +4,8 @@
 
 #include "components/proxy_config/proxy_prefs.h"
 
+#include <array>
+
 #include "base/check.h"
 #include "base/notreached.h"
 
@@ -13,11 +15,13 @@ namespace {
 
 // These names are exposed to the proxy extension API. They must be in sync
 // with the constants of ProxyPrefs.
-const char* kProxyModeNames[] = { kDirectProxyModeName,
-                                  kAutoDetectProxyModeName,
-                                  kPacScriptProxyModeName,
-                                  kFixedServersProxyModeName,
-                                  kSystemProxyModeName };
+constexpr auto kProxyModeNames = std::to_array<const char*>({
+    kDirectProxyModeName,
+    kAutoDetectProxyModeName,
+    kPacScriptProxyModeName,
+    kFixedServersProxyModeName,
+    kSystemProxyModeName,
+});
 
 static_assert(std::size(kProxyModeNames) == kModeCount,
               "kProxyModeNames must have kModeCount elements");
@@ -65,9 +69,10 @@ std::string ConfigStateToDebugString(ConfigState state) {
       return "config_fallback";
     case CONFIG_UNSET:
       return "config_unset";
+    case CONFIG_POLICY_OVERRIDE:
+      return "config_policy_override";
   }
   NOTREACHED();
-  return "";
 }
 
 }  // namespace ProxyPrefs

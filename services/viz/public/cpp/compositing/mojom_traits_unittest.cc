@@ -4,18 +4,22 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/gtest_util.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/debug_border_draw_quad.h"
+#include "components/viz/common/quads/offset_tag.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
-#include "components/viz/common/resources/resource_format.h"
-#include "components/viz/common/resources/resource_settings.h"
+#include "components/viz/common/quads/texture_draw_quad.h"
+#include "components/viz/common/quads/trees_in_viz_timing.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/common/resources/transferable_resource.h"
@@ -25,10 +29,9 @@
 #include "components/viz/common/surfaces/surface_range.h"
 #include "components/viz/test/begin_frame_args_test.h"
 #include "components/viz/test/compositor_frame_helpers.h"
-#include "gpu/ipc/common/mailbox_holder_mojom_traits.h"
 #include "gpu/ipc/common/mailbox_mojom_traits.h"
 #include "gpu/ipc/common/sync_token_mojom_traits.h"
-#include "ipc/ipc_message_utils.h"
+#include "ipc/param_traits_utils.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
@@ -42,7 +45,7 @@
 #include "services/viz/public/cpp/compositing/filter_operations_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/frame_sink_id_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/local_surface_id_mojom_traits.h"
-#include "services/viz/public/cpp/compositing/resource_settings_mojom_traits.h"
+#include "services/viz/public/cpp/compositing/offset_tag_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/returned_resource_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/selection_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/shared_quad_state_mojom_traits.h"
@@ -58,6 +61,7 @@
 #include "services/viz/public/mojom/compositing/surface_info.mojom.h"
 #include "services/viz/public/mojom/compositing/surface_range.mojom.h"
 #include "services/viz/public/mojom/compositing/transferable_resource.mojom.h"
+#include "services/viz/public/mojom/compositing/trees_in_viz_timing.mojom.h"
 #include "skia/public/mojom/bitmap_skbitmap_mojom_traits.h"
 #include "skia/public/mojom/tile_mode_mojom_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -66,6 +70,7 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkString.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/mojom/buffer_types_mojom_traits.h"
 #include "ui/gfx/mojom/color_space_mojom_traits.h"
@@ -164,13 +169,13 @@ void ExpectEqual(const cc::FilterOperation& input,
     case cc::FilterOperation::REFERENCE: {
       ASSERT_EQ(!!input.image_filter(), !!output.image_filter());
       if (input.image_filter()) {
-        EXPECT_EQ(*input.image_filter(), *output.image_filter());
+        EXPECT_TRUE(
+            input.image_filter()->EqualsForTesting(*output.image_filter()));
       }
       break;
     }
     case cc::FilterOperation::ALPHA_THRESHOLD:
       NOTREACHED();
-      break;
     case cc::FilterOperation::OFFSET:
       EXPECT_EQ(input.offset(), output.offset());
       break;
@@ -226,7 +231,7 @@ TEST_F(StructTraitsTest, FilterOperations) {
 
 TEST_F(StructTraitsTest, LocalSurfaceId) {
   LocalSurfaceId input(
-      42, base::UnguessableToken::Deserialize(0x12345678, 0x9abcdef0));
+      42, base::UnguessableToken::CreateForTesting(0x12345678, 0x9abcdef0));
 
   LocalSurfaceId output;
   mojo::test::SerializeAndDeserialize<mojom::LocalSurfaceId>(input, output);
@@ -242,7 +247,7 @@ TEST_F(StructTraitsTest, CopyOutputRequest_BitmapRequest) {
       CopyOutputRequest::ResultDestination::kSystemMemory;
   const gfx::Rect area(5, 7, 44, 55);
   const auto source =
-      base::UnguessableToken::Deserialize(0xdeadbeef, 0xdeadf00d);
+      base::UnguessableToken::CreateForTesting(0xdeadbeef, 0xdeadf00d);
   // Requesting 2:3 scale in X dimension, 5:4 in Y dimension.
   const gfx::Vector2d scale_from(2, 5);
   const gfx::Vector2d scale_to(3, 4);
@@ -320,7 +325,7 @@ TEST_F(StructTraitsTest, CopyOutputRequest_TextureRequest) {
 
   const auto result_format = CopyOutputRequest::ResultFormat::RGBA;
   const auto result_destination =
-      CopyOutputRequest::ResultDestination::kNativeTextures;
+      CopyOutputRequest::ResultDestination::kSharedImage;
 
   const int8_t mailbox_name[GL_MAILBOX_SIZE_CHROMIUM] = {
       0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 7, 5, 3, 1, 3};
@@ -353,8 +358,7 @@ TEST_F(StructTraitsTest, CopyOutputRequest_TextureRequest) {
 
   base::RunLoop run_loop_for_release;
 
-  CopyOutputResult::ReleaseCallbacks release_callbacks;
-  release_callbacks.push_back(base::BindOnce(
+  ReleaseCallback release_callback = base::BindOnce(
       [](base::OnceClosure quit_closure,
          const gpu::SyncToken& expected_sync_token,
          const gpu::SyncToken& sync_token, bool is_lost) {
@@ -362,13 +366,11 @@ TEST_F(StructTraitsTest, CopyOutputRequest_TextureRequest) {
         EXPECT_FALSE(is_lost);
         std::move(quit_closure).Run();
       },
-      run_loop_for_release.QuitClosure(), sync_token));
+      run_loop_for_release.QuitClosure(), sync_token);
 
-  output->SendResult(std::make_unique<CopyOutputTextureResult>(
-      result_format, result_rect,
-      CopyOutputResult::TextureResult(mailbox, sync_token,
-                                      gfx::ColorSpace::CreateSRGB()),
-      std::move(release_callbacks)));
+  output->SendResult(std::make_unique<CopyOutputSharedImageResult>(
+      result_format, result_rect, mailbox, gfx::ColorSpace::CreateSRGB(),
+      "CopyOutputRequest_TextureRequest", std::move(release_callback)));
 
   // Wait for the result to be delivered to the other side: The
   // CopyOutputRequest callback will be called, at which point
@@ -401,23 +403,11 @@ TEST_F(StructTraitsTest, CopyOutputRequest_CallbackRunsOnce) {
       std::move(result_sender_pending_remote));
   for (int i = 0; i < 10; i++)
     result_sender_remote->SendResult(std::make_unique<CopyOutputResult>(
-        request->result_format(), request->result_destination(), gfx::Rect(),
-        false));
+        request->result_format(), request->result_destination(),
+        gfx::Rect(10, 10), false));
   EXPECT_EQ(0, n_called);
   result_sender_remote.FlushForTesting();
   EXPECT_EQ(1, n_called);
-}
-
-TEST_F(StructTraitsTest, ResourceSettings) {
-  constexpr bool kArbitraryBool = true;
-  ResourceSettings input;
-  input.use_gpu_memory_buffer_resources = kArbitraryBool;
-
-  ResourceSettings output;
-  mojo::test::SerializeAndDeserialize<mojom::ResourceSettings>(input, output);
-
-  EXPECT_EQ(input.use_gpu_memory_buffer_resources,
-            output.use_gpu_memory_buffer_resources);
 }
 
 TEST_F(StructTraitsTest, Selection) {
@@ -455,8 +445,8 @@ TEST_F(StructTraitsTest, SharedQuadState) {
   SharedQuadState input_sqs;
   input_sqs.SetAll(quad_to_target_transform, layer_rect, visible_layer_rect,
                    mask_filter_info, clip_rect, are_contents_opaque, opacity,
-                   blend_mode, sorting_context_id);
-  input_sqs.is_fast_rounded_corner = is_fast_rounded_corner;
+                   blend_mode, sorting_context_id, /*layer_id=*/0u,
+                   is_fast_rounded_corner);
   SharedQuadState output_sqs;
   mojo::test::SerializeAndDeserialize<mojom::SharedQuadState>(input_sqs,
                                                               output_sqs);
@@ -497,7 +487,8 @@ TEST_F(StructTraitsTest, CompositorFrame) {
   sqs->SetAll(sqs_quad_to_target_transform, sqs_layer_rect,
               sqs_visible_layer_rect, sqs_mask_filter_info, sqs_clip_rect,
               sqs_are_contents_opaque, sqs_opacity, sqs_blend_mode,
-              sqs_sorting_context_id);
+              sqs_sorting_context_id, /*layer_id=*/0u,
+              /*fast_rounded_corner=*/false);
 
   // DebugBorderDrawQuad.
   const gfx::Rect rect1(1234, 4321, 1357, 7531);
@@ -518,24 +509,23 @@ TEST_F(StructTraitsTest, CompositorFrame) {
   // TransferableResource constants.
   const ResourceId single_plane_id(1337);
   const ResourceId multi_plane_id(1338);
-  const SharedImageFormat single_plane_format =
-      SharedImageFormat::SinglePlane(ALPHA_8);
-  const SharedImageFormat multi_plane_format =
-      SharedImageFormat::MultiPlane(SharedImageFormat::PlaneConfig::kY_UV,
-                                    SharedImageFormat::Subsampling::k420,
-                                    SharedImageFormat::ChannelFormat::k8);
-  const uint32_t tr_filter = 1234;
+  const SharedImageFormat single_plane_format = SinglePlaneFormat::kALPHA_8;
+  const SharedImageFormat multi_plane_format = MultiPlaneFormat::kNV12;
   const gfx::Size tr_size(1234, 5678);
-  TransferableResource single_plane_resource;
+  TransferableResource single_plane_resource = TransferableResource::Make(
+      gpu::ClientSharedImage::CreateForTesting(
+          gpu::SharedImageMetadata{.format = single_plane_format,
+                                   .size = tr_size,
+                                   .alpha_type = kPremul_SkAlphaType}),
+      TransferableResource::ResourceSource::kTest, gpu::SyncToken());
   single_plane_resource.id = single_plane_id;
-  single_plane_resource.format = single_plane_format;
-  single_plane_resource.filter = tr_filter;
-  single_plane_resource.size = tr_size;
-  TransferableResource multi_plane_resource;
+  TransferableResource multi_plane_resource = TransferableResource::Make(
+      gpu::ClientSharedImage::CreateForTesting(
+          gpu::SharedImageMetadata{.format = multi_plane_format,
+                                   .size = tr_size,
+                                   .alpha_type = kPremul_SkAlphaType}),
+      TransferableResource::ResourceSource::kTest, gpu::SyncToken());
   multi_plane_resource.id = multi_plane_id;
-  multi_plane_resource.format = multi_plane_format;
-  multi_plane_resource.filter = tr_filter;
-  multi_plane_resource.size = tr_size;
 
   // CompositorFrameMetadata constants.
   const float device_scale_factor = 2.6f;
@@ -567,14 +557,12 @@ TEST_F(StructTraitsTest, CompositorFrame) {
   ASSERT_EQ(2u, output.resource_list.size());
   TransferableResource out_resource1 = output.resource_list[0];
   EXPECT_EQ(single_plane_id, out_resource1.id);
-  EXPECT_EQ(single_plane_format, out_resource1.format);
-  EXPECT_EQ(tr_filter, out_resource1.filter);
-  EXPECT_EQ(tr_size, out_resource1.size);
+  EXPECT_EQ(single_plane_format, out_resource1.GetFormat());
+  EXPECT_EQ(tr_size, out_resource1.GetSize());
   TransferableResource out_resource2 = output.resource_list[1];
   EXPECT_EQ(multi_plane_id, out_resource2.id);
-  EXPECT_EQ(multi_plane_format, out_resource2.format);
-  EXPECT_EQ(tr_filter, out_resource2.filter);
-  EXPECT_EQ(tr_size, out_resource2.size);
+  EXPECT_EQ(multi_plane_format, out_resource2.GetFormat());
+  EXPECT_EQ(tr_size, out_resource2.GetSize());
 
   EXPECT_EQ(1u, output.render_pass_list.size());
   const CompositorRenderPass* out_render_pass =
@@ -618,14 +606,16 @@ TEST_F(StructTraitsTest, CompositorFrameTransitionDirective) {
                    .AddDefaultRenderPass()
                    .Build();
 
+  blink::ViewTransitionToken transition_token;
   CompositorFrameTransitionDirective::SharedElement element;
   element.render_pass_id = frame.render_pass_list.front()->id;
-  NavigationID navigation_id = base::UnguessableToken::Create();
+  element.view_transition_element_resource_id =
+      ViewTransitionElementResourceId(transition_token, 1, false);
   uint32_t sequence_id = 1u;
-  auto type = CompositorFrameTransitionDirective::Type::kSave;
   frame.metadata.transition_directives.push_back(
-      CompositorFrameTransitionDirective(navigation_id, sequence_id, type,
-                                         {element}));
+      CompositorFrameTransitionDirective::CreateSave(
+          transition_token, /*maybe_cross_frame_sink=*/true, sequence_id,
+          {element}, {}, /*delay_layer_tree_view_deletion=*/false));
 
   // This ensures de-serialization succeeds if all passes are present.
   CompositorFrame output;
@@ -633,28 +623,50 @@ TEST_F(StructTraitsTest, CompositorFrameTransitionDirective) {
       frame, output));
   EXPECT_EQ(output.metadata.transition_directives.size(), 1u);
   const auto& directive = output.metadata.transition_directives[0];
-  EXPECT_EQ(directive.navigation_id(), navigation_id);
+  EXPECT_EQ(directive.transition_token(), transition_token);
+  EXPECT_TRUE(directive.maybe_cross_frame_sink());
   EXPECT_EQ(directive.sequence_id(), sequence_id);
-  EXPECT_EQ(directive.type(), type);
+  EXPECT_EQ(directive.type(), CompositorFrameTransitionDirective::Type::kSave);
   EXPECT_EQ(directive.shared_elements().size(), 1u);
   EXPECT_EQ(directive.shared_elements()[0], element);
 
   element.render_pass_id = CompositorRenderPassId(
       frame.render_pass_list.back()->id.GetUnsafeValue() + 1);
   frame.metadata.transition_directives.push_back(
-      CompositorFrameTransitionDirective(navigation_id, sequence_id, type,
-                                         {element}));
+      CompositorFrameTransitionDirective::CreateSave(
+          transition_token, /*maybe_cross_frame_sink=*/true, sequence_id,
+          {element}, {}, /*delay_layer_tree_view_deletion=*/false));
 
   // This ensures de-serialization fails if a pass is missing.
   ASSERT_FALSE(mojo::test::SerializeAndDeserialize<mojom::CompositorFrame>(
       frame, output));
 }
 
+TEST_F(StructTraitsTest, ViewTransitionElementResourceId) {
+  ViewTransitionElementResourceId empty_id;
+  ASSERT_FALSE(empty_id.IsValid());
+  ViewTransitionElementResourceId empty_output_id;
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<
+          mojom::ViewTransitionElementResourceId>(empty_id, empty_output_id));
+  ASSERT_FALSE(empty_output_id.IsValid());
+
+  ViewTransitionElementResourceId valid_id(blink::ViewTransitionToken(), 2u,
+                                           false);
+  ASSERT_TRUE(valid_id.IsValid());
+  ViewTransitionElementResourceId valid_output_id;
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<
+          mojom::ViewTransitionElementResourceId>(valid_id, valid_output_id));
+  ASSERT_TRUE(valid_output_id.IsValid());
+  ASSERT_EQ(valid_output_id, valid_id);
+}
+
 TEST_F(StructTraitsTest, SurfaceInfo) {
   const SurfaceId surface_id(
       FrameSinkId(1234, 4321),
       LocalSurfaceId(5678,
-                     base::UnguessableToken::Deserialize(143254, 144132)));
+                     base::UnguessableToken::CreateForTesting(143254, 144132)));
   constexpr float device_scale_factor = 1.234f;
   constexpr gfx::Size size(987, 123);
 
@@ -679,17 +691,16 @@ TEST_F(StructTraitsTest, ReturnedResource) {
   const int count = 1234;
   const bool lost = true;
 
-  ReturnedResource input;
-  input.id = id;
-  input.sync_token = sync_token;
-  input.count = count;
-  input.lost = lost;
+  ReturnedResource input{
+      id, gpu::SharedImageExportResult::CreateForTesting(sync_token),
+      gfx::GpuFenceHandle(), count, lost};
 
   ReturnedResource output;
   mojo::test::SerializeAndDeserialize<mojom::ReturnedResource>(input, output);
 
   EXPECT_EQ(id, output.id);
-  EXPECT_EQ(sync_token, output.sync_token);
+  EXPECT_TRUE(input.shared_image_export_result.IsEqualForTesting(
+      output.shared_image_export_result));
   EXPECT_EQ(count, output.count);
   EXPECT_EQ(lost, output.lost);
 }
@@ -700,7 +711,6 @@ TEST_F(StructTraitsTest, CompositorFrameMetadata) {
   const float page_scale_factor = 1337.5f;
   const gfx::SizeF scrollable_viewport_size(1337.7f, 1234.5f);
   const bool may_contain_video = true;
-  const bool is_resourceless_software_draw_with_scroll_or_animation = true;
   const SkColor4f root_background_color = {0.0f, 0.02f, 0.224f, 0.0f};
   ui::LatencyInfo latency_info;
   latency_info.set_trace_id(5);
@@ -726,8 +736,6 @@ TEST_F(StructTraitsTest, CompositorFrameMetadata) {
   input.page_scale_factor = page_scale_factor;
   input.scrollable_viewport_size = scrollable_viewport_size;
   input.may_contain_video = may_contain_video;
-  input.is_resourceless_software_draw_with_scroll_or_animation =
-      is_resourceless_software_draw_with_scroll_or_animation;
   input.root_background_color = root_background_color;
   input.latency_info = latency_infos;
   input.referenced_surfaces = referenced_surfaces;
@@ -747,8 +755,6 @@ TEST_F(StructTraitsTest, CompositorFrameMetadata) {
   EXPECT_EQ(page_scale_factor, output.page_scale_factor);
   EXPECT_EQ(scrollable_viewport_size, output.scrollable_viewport_size);
   EXPECT_EQ(may_contain_video, output.may_contain_video);
-  EXPECT_EQ(is_resourceless_software_draw_with_scroll_or_animation,
-            output.is_resourceless_software_draw_with_scroll_or_animation);
   EXPECT_EQ(root_background_color, output.root_background_color);
   EXPECT_EQ(latency_infos.size(), output.latency_info.size());
   EXPECT_TRUE(output.latency_info[0].FindLatency(
@@ -768,15 +774,61 @@ TEST_F(StructTraitsTest, CompositorFrameMetadata) {
   EXPECT_EQ(*output.top_controls_visible_height, top_controls_visible_height);
 }
 
+TEST_F(StructTraitsTest, CompositorFrameMetadataBadOffsetTagDefinition) {
+  CompositorFrameMetadata input;
+  input.device_scale_factor = 1.0f;
+  input.frame_token = 1u;
+  input.begin_frame_ack.frame_id.sequence_number = 1u;
+
+  {
+    // Verify metadata serialization/deserialization is initially successful.
+    CompositorFrameMetadata output;
+    bool result =
+        mojo::test::SerializeAndDeserialize<mojom::CompositorFrameMetadata>(
+            input, output);
+    EXPECT_TRUE(result);
+  }
+
+  SurfaceId surface_id(
+      FrameSinkId(1337, 1234),
+      LocalSurfaceId(0xfbadbeef, base::UnguessableToken::Create()));
+
+  OffsetTagDefinition offset_tag_def;
+  offset_tag_def.tag = OffsetTag(base::Token(1, 1));
+  offset_tag_def.provider = SurfaceRange(surface_id);
+  offset_tag_def.constraints.min_offset = {-20.4f, -89.3f};
+  offset_tag_def.constraints.max_offset = {60.4f, 489.3f};
+
+  input.offset_tag_definitions.push_back((offset_tag_def));
+  {
+    // There is no corresponding Surfacerange entry in `referenced_surfaces` so
+    // this should fail deserialization.
+    CompositorFrameMetadata output;
+    bool result =
+        mojo::test::SerializeAndDeserialize<mojom::CompositorFrameMetadata>(
+            input, output);
+    EXPECT_FALSE(result);
+  }
+}
+
 TEST_F(StructTraitsTest, RenderPass) {
   // The CopyOutputRequest struct traits require a TaskRunner.
   base::test::TaskEnvironment task_environment;
 
-  const CompositorRenderPassId render_pass_id{3u};
-  const gfx::Rect output_rect(45, 22, 120, 13);
-  const gfx::Transform transform_to_root =
+  constexpr CompositorRenderPassId kRenderPassId{3u};
+  constexpr gfx::Rect kOutputRect(45, 22, 120, 13);
+  constexpr gfx::Transform kTransformToRoot =
       gfx::Transform::Affine(1.0, 0.5, 0.5, -0.5, -1.0, 0.0);
-  const gfx::Rect damage_rect(56, 123, 19, 43);
+  constexpr gfx::Rect kDamageRect(56, 123, 19, 43);
+  const std::optional<SkPath> kBackdropFilterBounds = SkPath::RRect(
+      SkRRect(gfx::RRectF{10, 20, 130, 140, 1, 2, 3, 4, 5, 6, 7, 8}));
+  constexpr SubtreeCaptureId kSubtreeCaptureId(base::Token(0u, 22u));
+  constexpr bool kHasTransparentBackground = true;
+  constexpr bool kCacheRenderPass = true;
+  constexpr bool kHasDamageFromContributingContent = true;
+  constexpr bool kGenerateMipmap = true;
+  constexpr bool kHasPerQuadDamage = true;
+
   cc::FilterOperations filters;
   filters.Append(cc::FilterOperation::CreateBlurFilter(0.f));
   filters.Append(cc::FilterOperation::CreateZoomFilter(2.0f, 1));
@@ -784,24 +836,17 @@ TEST_F(StructTraitsTest, RenderPass) {
   backdrop_filters.Append(cc::FilterOperation::CreateSaturateFilter(4.f));
   backdrop_filters.Append(cc::FilterOperation::CreateZoomFilter(2.0f, 1));
   backdrop_filters.Append(cc::FilterOperation::CreateSaturateFilter(2.f));
-  absl::optional<gfx::RRectF> backdrop_filter_bounds(
-      {10, 20, 130, 140, 1, 2, 3, 4, 5, 6, 7, 8});
-  SubtreeCaptureId subtree_capture_id{22u};
-  const bool has_transparent_background = true;
-  const bool cache_render_pass = true;
-  const bool has_damage_from_contributing_content = true;
-  const bool generate_mipmap = true;
-  const bool has_per_quad_damage = true;
+
   auto input = CompositorRenderPass::Create();
-  input->SetAll(render_pass_id, output_rect, damage_rect, transform_to_root,
-                filters, backdrop_filters, backdrop_filter_bounds,
-                subtree_capture_id, output_rect.size(),
-                ViewTransitionElementResourceId(), has_transparent_background,
-                cache_render_pass, has_damage_from_contributing_content,
-                generate_mipmap, has_per_quad_damage);
+  input->SetAll(kRenderPassId, kOutputRect, kDamageRect, kTransformToRoot,
+                filters, backdrop_filters, kBackdropFilterBounds,
+                kSubtreeCaptureId, kOutputRect.size(),
+                ViewTransitionElementResourceId(), kHasTransparentBackground,
+                kCacheRenderPass, kHasDamageFromContributingContent,
+                kGenerateMipmap, kHasPerQuadDamage);
   input->copy_requests.push_back(CopyOutputRequest::CreateStubForTesting());
-  const gfx::Rect copy_output_area(24, 42, 75, 57);
-  input->copy_requests.back()->set_area(copy_output_area);
+  constexpr gfx::Rect kCopyOutputArea(24, 42, 75, 57);
+  input->copy_requests.back()->set_area(kCopyOutputArea);
 
   SharedQuadState* shared_state_1 = input->CreateAndAppendSharedQuadState();
   shared_state_1->SetAll(
@@ -810,7 +855,9 @@ TEST_F(StructTraitsTest, RenderPass) {
                                1.2f),
       gfx::Rect(1, 2), gfx::Rect(1337, 5679, 9101112, 131415),
       gfx::MaskFilterInfo(gfx::RRectF(gfx::RectF(5.f, 6.f, 70.f, 89.f), 10.f)),
-      gfx::Rect(1357, 2468, 121314, 1337), true, 2, SkBlendMode::kSrcOver, 1);
+      gfx::Rect(1357, 2468, 121314, 1337), /*contents_opaque=*/true,
+      /*opacity_f=*/2, SkBlendMode::kSrcOver, /*sorting_context=*/1,
+      /*layer_id=*/0u, /*fast_rounded_corner=*/false);
 
   SharedQuadState* shared_state_2 = input->CreateAndAppendSharedQuadState();
   shared_state_2->SetAll(
@@ -819,7 +866,9 @@ TEST_F(StructTraitsTest, RenderPass) {
                                16.2f),
       gfx::Rect(1337, 1234), gfx::Rect(1234, 5678, 9101112, 13141516),
       gfx::MaskFilterInfo(gfx::RRectF(gfx::RectF(23.f, 45.f, 60.f, 70.f), 8.f)),
-      gfx::Rect(1357, 2468, 121314, 1337), true, 2, SkBlendMode::kSrcOver, 1);
+      gfx::Rect(1357, 2468, 121314, 1337), /*contents_opaque=*/true,
+      /*opacity_f=*/2, SkBlendMode::kSrcOver, /*sorting_context=*/1,
+      /*layer_id=*/0u, /*fast_rounded_corner=*/false);
 
   // This quad uses the first shared quad state. The next two quads use the
   // second shared quad state.
@@ -841,7 +890,7 @@ TEST_F(StructTraitsTest, RenderPass) {
   surface_quad->SetNew(
       shared_state_2, surface_quad_rect, surface_quad_rect,
       SurfaceRange(
-          absl::nullopt,
+          std::nullopt,
           SurfaceId(FrameSinkId(1337, 1234),
                     LocalSurfaceId(1234, base::UnguessableToken::Create()))),
       SkColors::kYellow, false);
@@ -856,22 +905,22 @@ TEST_F(StructTraitsTest, RenderPass) {
   EXPECT_EQ(input->quad_list.size(), output->quad_list.size());
   EXPECT_EQ(input->shared_quad_state_list.size(),
             output->shared_quad_state_list.size());
-  EXPECT_EQ(render_pass_id, output->id);
-  EXPECT_EQ(output_rect, output->output_rect);
-  EXPECT_EQ(damage_rect, output->damage_rect);
-  EXPECT_EQ(transform_to_root, output->transform_to_root_target);
-  EXPECT_EQ(has_transparent_background, output->has_transparent_background);
+  EXPECT_EQ(kRenderPassId, output->id);
+  EXPECT_EQ(kOutputRect, output->output_rect);
+  EXPECT_EQ(kDamageRect, output->damage_rect);
+  EXPECT_EQ(kTransformToRoot, output->transform_to_root_target);
+  EXPECT_EQ(kHasTransparentBackground, output->has_transparent_background);
   EXPECT_EQ(filters, output->filters);
   EXPECT_EQ(backdrop_filters, output->backdrop_filters);
-  EXPECT_EQ(backdrop_filter_bounds, output->backdrop_filter_bounds);
-  EXPECT_EQ(subtree_capture_id, output->subtree_capture_id);
-  EXPECT_EQ(cache_render_pass, output->cache_render_pass);
-  EXPECT_EQ(has_damage_from_contributing_content,
+  EXPECT_EQ(kBackdropFilterBounds, output->backdrop_filter_bounds);
+  EXPECT_EQ(kSubtreeCaptureId, output->subtree_capture_id);
+  EXPECT_EQ(kCacheRenderPass, output->cache_render_pass);
+  EXPECT_EQ(kHasDamageFromContributingContent,
             output->has_damage_from_contributing_content);
-  EXPECT_EQ(has_per_quad_damage, output->has_per_quad_damage);
-  EXPECT_EQ(generate_mipmap, output->generate_mipmap);
+  EXPECT_EQ(kHasPerQuadDamage, output->has_per_quad_damage);
+  EXPECT_EQ(kGenerateMipmap, output->generate_mipmap);
   ASSERT_EQ(1u, output->copy_requests.size());
-  EXPECT_EQ(copy_output_area, output->copy_requests.front()->area());
+  EXPECT_EQ(kCopyOutputArea, output->copy_requests.front()->area());
 
   SharedQuadState* out_sqs1 = output->shared_quad_state_list.ElementAt(0);
   EXPECT_EQ(shared_state_1->quad_to_target_transform,
@@ -926,28 +975,34 @@ TEST_F(StructTraitsTest, RenderPass) {
             out_surface_quad->stretch_content_to_fill_bounds);
   EXPECT_EQ(surface_quad->allow_merge, out_surface_quad->allow_merge);
   EXPECT_EQ(surface_quad->is_reflection, out_surface_quad->is_reflection);
+  EXPECT_EQ(surface_quad->override_child_filter_quality,
+            out_surface_quad->override_child_filter_quality);
+  EXPECT_EQ(surface_quad->override_child_dynamic_range_limit,
+            out_surface_quad->override_child_dynamic_range_limit);
 }
 
 TEST_F(StructTraitsTest, RenderPassWithEmptySharedQuadStateList) {
-  const CompositorRenderPassId render_pass_id{3u};
-  const gfx::Rect output_rect(45, 22, 120, 13);
-  const gfx::Rect damage_rect(56, 123, 19, 43);
-  const gfx::Transform transform_to_root =
+  constexpr CompositorRenderPassId kRenderPassId{3u};
+  constexpr gfx::Rect kOutputRect(45, 22, 120, 13);
+  constexpr gfx::Rect kDamageRect(56, 123, 19, 43);
+  constexpr gfx::Transform kTransformToRoot =
       gfx::Transform::Affine(1.0, 0.5, 0.5, -0.5, -1.0, 0.0);
-  const absl::optional<gfx::RRectF> backdrop_filter_bounds;
-  SubtreeCaptureId subtree_capture_id;
-  const bool has_transparent_background = true;
-  const bool cache_render_pass = false;
-  const bool has_damage_from_contributing_content = false;
-  const bool generate_mipmap = false;
-  const bool has_per_quad_damage = false;
+  const std::optional<SkPath> kBackdropFilterBounds;
+  constexpr SubtreeCaptureId kEmptySubtreeCaptureId;
+  constexpr bool kHasTransparentBackground = true;
+  constexpr bool kCacheRenderPass = false;
+  constexpr bool kHasDamageFromContributingContent = false;
+  constexpr bool kGenerateMipmap = false;
+  constexpr bool kHasPerQuadDamage = false;
+
   auto input = CompositorRenderPass::Create();
-  input->SetAll(render_pass_id, output_rect, damage_rect, transform_to_root,
+  input->SetAll(kRenderPassId, kOutputRect, kDamageRect, kTransformToRoot,
                 cc::FilterOperations(), cc::FilterOperations(),
-                backdrop_filter_bounds, subtree_capture_id, output_rect.size(),
-                ViewTransitionElementResourceId(), has_transparent_background,
-                cache_render_pass, has_damage_from_contributing_content,
-                generate_mipmap, has_per_quad_damage);
+                kBackdropFilterBounds, kEmptySubtreeCaptureId,
+                kOutputRect.size(), ViewTransitionElementResourceId(),
+                kHasTransparentBackground, kCacheRenderPass,
+                kHasDamageFromContributingContent, kGenerateMipmap,
+                kHasPerQuadDamage);
 
   // Unlike the previous test, don't add any quads to the list; we need to
   // verify that the serialization code can deal with that.
@@ -958,15 +1013,49 @@ TEST_F(StructTraitsTest, RenderPassWithEmptySharedQuadStateList) {
   EXPECT_EQ(input->quad_list.size(), output->quad_list.size());
   EXPECT_EQ(input->shared_quad_state_list.size(),
             output->shared_quad_state_list.size());
-  EXPECT_EQ(render_pass_id, output->id);
-  EXPECT_EQ(output_rect, output->output_rect);
-  EXPECT_EQ(damage_rect, output->damage_rect);
-  EXPECT_EQ(transform_to_root, output->transform_to_root_target);
-  EXPECT_EQ(backdrop_filter_bounds, output->backdrop_filter_bounds);
-  EXPECT_EQ(subtree_capture_id, output->subtree_capture_id);
-  EXPECT_EQ(output_rect.size(), output->subtree_size);
+  EXPECT_EQ(kRenderPassId, output->id);
+  EXPECT_EQ(kOutputRect, output->output_rect);
+  EXPECT_EQ(kDamageRect, output->damage_rect);
+  EXPECT_EQ(kTransformToRoot, output->transform_to_root_target);
+  EXPECT_EQ(kBackdropFilterBounds, output->backdrop_filter_bounds);
+  EXPECT_EQ(kEmptySubtreeCaptureId, output->subtree_capture_id);
+  EXPECT_EQ(kOutputRect.size(), output->subtree_size);
   EXPECT_FALSE(output->subtree_capture_id.is_valid());
-  EXPECT_EQ(has_transparent_background, output->has_transparent_background);
+  EXPECT_EQ(kHasTransparentBackground, output->has_transparent_background);
+}
+
+// Verifies that backdrop filters with null (no) crop rect still work correctly.
+// This ensures that null backdrop_filter_bounds means "don't apply bounds"
+// rather than "don't show any backdrop-filter".
+TEST_F(StructTraitsTest, BackdropFilterWithNullBounds) {
+  base::test::TaskEnvironment task_environment;
+
+  // Create a null backdrop filter bounds
+  const std::optional<SkPath> kBackdropFilterBounds;
+
+  cc::FilterOperations backdrop_filters;
+  backdrop_filters.Append(cc::FilterOperation::CreateBlurFilter(5.0f));
+
+  auto input = CompositorRenderPass::Create();
+  input->SetAll(CompositorRenderPassId{1u}, gfx::Rect(100, 100), gfx::Rect(),
+                gfx::Transform(), cc::FilterOperations(), backdrop_filters,
+                kBackdropFilterBounds, SubtreeCaptureId(), gfx::Size(100, 100),
+                ViewTransitionElementResourceId(), true, false, false, false,
+                false);
+
+  std::unique_ptr<CompositorRenderPass> output;
+  mojo::test::SerializeAndDeserialize<mojom::CompositorRenderPass>(input,
+                                                                   output);
+
+  // backdrop_filter_bounds should remain nullopt after serialization
+  EXPECT_EQ(kBackdropFilterBounds, output->backdrop_filter_bounds);
+  EXPECT_FALSE(output->backdrop_filter_bounds.has_value());
+
+  // Verify backdrop filters should still be present and valid
+  EXPECT_FALSE(output->backdrop_filters.IsEmpty());
+  EXPECT_EQ(1u, output->backdrop_filters.size());
+  EXPECT_EQ(cc::FilterOperation::BLUR, output->backdrop_filters.at(0).type());
+  EXPECT_EQ(5.0f, output->backdrop_filters.at(0).amount());
 }
 
 TEST_F(StructTraitsTest, QuadListBasic) {
@@ -1002,6 +1091,10 @@ TEST_F(StructTraitsTest, QuadListBasic) {
   primary_surface_quad->SetNew(
       sqs, rect3, rect3, SurfaceRange(fallback_surface_id, primary_surface_id),
       SkColors::kBlue, false);
+  primary_surface_quad->override_child_filter_quality =
+      cc::PaintFlags::FilterQuality::kHigh;
+  primary_surface_quad->override_child_dynamic_range_limit =
+      cc::PaintFlags::DynamicRangeLimitMixture(0.25f, 0.5f);
 
   const gfx::Rect rect4(1234, 5678, 91012, 13141);
   const bool needs_blending = true;
@@ -1025,38 +1118,41 @@ TEST_F(StructTraitsTest, QuadListBasic) {
 
   const gfx::Rect rect5(123, 567, 91011, 13141);
   const ResourceId resource_id5(1337);
-  const float vertex_opacity[4] = {1.f, 2.f, 3.f, 4.f};
-  const bool premultiplied_alpha = true;
-  const gfx::PointF uv_top_left(12.1f, 34.2f);
-  const gfx::PointF uv_bottom_right(56.3f, 78.4f);
+
+  const gfx::PointF tex_coord_top_left(12.1f, 34.2f);
+  const gfx::PointF tex_coord_bottom_right(56.3f, 78.4f);
   const SkColor4f background_color = SkColors::kGreen;
-  const bool y_flipped = true;
   const bool nearest_neighbor = true;
   const bool secure_output_only = true;
   const gfx::ProtectedVideoType protected_video_type =
       gfx::ProtectedVideoType::kClear;
-  const gfx::Size resource_size_in_pixels5(1234, 5678);
   TextureDrawQuad* texture_draw_quad =
       render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
   texture_draw_quad->SetAll(sqs, rect5, rect5, needs_blending, resource_id5,
-                            resource_size_in_pixels5, premultiplied_alpha,
-                            uv_top_left, uv_bottom_right, background_color,
-                            vertex_opacity, y_flipped, nearest_neighbor,
-                            secure_output_only, protected_video_type);
+                            tex_coord_top_left, tex_coord_bottom_right,
+                            background_color, nearest_neighbor,
+                            secure_output_only, protected_video_type,
+                            /*is_tex_coords_normalized=*/false);
 
-  // Create a stream video TextureDrawQuad.
-  const gfx::Rect rect6(321, 765, 11109, 151413);
-  const bool needs_blending6 = false;
-  const ResourceId resource_id6(1234);
-  const gfx::Size resource_size_in_pixels(1234, 5678);
-  const float stream_draw_quad_opacity[] = {1, 1, 1, 1};
-  TextureDrawQuad* stream_video_draw_quad =
+  // Create a TextureDrawQuad with rounded-display masks.
+  const gfx::Rect rect7(421, 865, 11109, 151413);
+  const bool needs_blending7 = false;
+  const ResourceId resource_id7(4834);
+  const int origin_rounded_display_mask_radius = 10;
+  const int other_rounded_display_mask_radius = 15;
+  const bool is_horizontally_positioned = false;
+
+  TextureDrawQuad* rounded_display_mask_quad =
       render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
-  stream_video_draw_quad->SetAll(
-      sqs, rect6, rect6, needs_blending6, resource_id6, resource_size_in_pixels,
-      false, uv_top_left, uv_bottom_right, SkColors::kTransparent,
-      stream_draw_quad_opacity, false, false, false, protected_video_type);
-  stream_video_draw_quad->is_stream_video = true;
+  rounded_display_mask_quad->SetAll(
+      sqs, rect7, rect7, needs_blending7, resource_id7, tex_coord_top_left,
+      tex_coord_bottom_right, SkColors::kTransparent, false, false,
+      protected_video_type,
+      /*is_tex_coords_normalized=*/false);
+  rounded_display_mask_quad->rounded_display_masks_info =
+      TextureDrawQuad::RoundedDisplayMasksInfo::CreateRoundedDisplayMasksInfo(
+          origin_rounded_display_mask_radius, other_rounded_display_mask_radius,
+          is_horizontally_positioned);
 
   std::unique_ptr<CompositorRenderPass> output;
   mojo::test::SerializeAndDeserialize<mojom::CompositorRenderPass>(render_pass,
@@ -1086,6 +1182,10 @@ TEST_F(StructTraitsTest, QuadListBasic) {
   EXPECT_EQ(rect3, out_primary_surface_draw_quad->rect);
   EXPECT_EQ(rect3, out_primary_surface_draw_quad->visible_rect);
   EXPECT_TRUE(out_primary_surface_draw_quad->needs_blending);
+  EXPECT_EQ(primary_surface_quad->override_child_filter_quality,
+            out_primary_surface_draw_quad->override_child_filter_quality);
+  EXPECT_EQ(primary_surface_quad->override_child_dynamic_range_limit,
+            out_primary_surface_draw_quad->override_child_dynamic_range_limit);
   EXPECT_EQ(primary_surface_id,
             out_primary_surface_draw_quad->surface_range.end());
   EXPECT_EQ(SkColors::kBlue,
@@ -1117,32 +1217,33 @@ TEST_F(StructTraitsTest, QuadListBasic) {
   EXPECT_EQ(rect5, out_texture_draw_quad->rect);
   EXPECT_EQ(rect5, out_texture_draw_quad->visible_rect);
   EXPECT_EQ(needs_blending, out_texture_draw_quad->needs_blending);
-  EXPECT_EQ(resource_id5, out_texture_draw_quad->resource_id());
-  EXPECT_EQ(resource_size_in_pixels5,
-            out_texture_draw_quad->resource_size_in_pixels());
-  EXPECT_EQ(premultiplied_alpha, out_texture_draw_quad->premultiplied_alpha);
-  EXPECT_EQ(uv_top_left, out_texture_draw_quad->uv_top_left);
-  EXPECT_EQ(uv_bottom_right, out_texture_draw_quad->uv_bottom_right);
+  EXPECT_EQ(resource_id5, out_texture_draw_quad->resource_id);
+  EXPECT_EQ(gfx::BoundingRect(tex_coord_top_left, tex_coord_bottom_right),
+            out_texture_draw_quad->GetNormalizedTexCoords(gfx::Size(1, 1)));
   EXPECT_EQ(background_color, out_texture_draw_quad->background_color);
-  EXPECT_EQ(vertex_opacity[0], out_texture_draw_quad->vertex_opacity[0]);
-  EXPECT_EQ(vertex_opacity[1], out_texture_draw_quad->vertex_opacity[1]);
-  EXPECT_EQ(vertex_opacity[2], out_texture_draw_quad->vertex_opacity[2]);
-  EXPECT_EQ(vertex_opacity[3], out_texture_draw_quad->vertex_opacity[3]);
-  EXPECT_EQ(y_flipped, out_texture_draw_quad->y_flipped);
   EXPECT_EQ(nearest_neighbor, out_texture_draw_quad->nearest_neighbor);
   EXPECT_EQ(secure_output_only, out_texture_draw_quad->secure_output_only);
 
-  const TextureDrawQuad* out_stream_video_draw_quad =
+  const TextureDrawQuad* out_rounded_display_mask_quad =
       TextureDrawQuad::MaterialCast(output->quad_list.ElementAt(5));
-  EXPECT_TRUE(out_stream_video_draw_quad->is_stream_video);
-  EXPECT_EQ(rect6, out_stream_video_draw_quad->rect);
-  EXPECT_EQ(rect6, out_stream_video_draw_quad->visible_rect);
-  EXPECT_EQ(needs_blending6, out_stream_video_draw_quad->needs_blending);
-  EXPECT_EQ(resource_id6, out_stream_video_draw_quad->resource_id());
-  EXPECT_EQ(resource_size_in_pixels,
-            out_stream_video_draw_quad->resource_size_in_pixels());
-  EXPECT_EQ(uv_top_left, out_stream_video_draw_quad->uv_top_left);
-  EXPECT_EQ(uv_bottom_right, out_stream_video_draw_quad->uv_bottom_right);
+  EXPECT_EQ(rect7, out_rounded_display_mask_quad->rect);
+  EXPECT_EQ(rect7, out_rounded_display_mask_quad->visible_rect);
+  EXPECT_EQ(needs_blending7, out_rounded_display_mask_quad->needs_blending);
+  EXPECT_EQ(resource_id7, out_rounded_display_mask_quad->resource_id);
+  EXPECT_EQ(
+      gfx::BoundingRect(tex_coord_top_left, tex_coord_bottom_right),
+      out_rounded_display_mask_quad->GetNormalizedTexCoords(gfx::Size(1, 1)));
+  EXPECT_EQ(origin_rounded_display_mask_radius,
+            out_rounded_display_mask_quad->rounded_display_masks_info
+                .radii[TextureDrawQuad::RoundedDisplayMasksInfo::
+                           kOriginRoundedDisplayMaskIndex]);
+  EXPECT_EQ(other_rounded_display_mask_radius,
+            out_rounded_display_mask_quad->rounded_display_masks_info
+                .radii[TextureDrawQuad::RoundedDisplayMasksInfo::
+                           kOtherRoundedDisplayMaskIndex]);
+  EXPECT_EQ(is_horizontally_positioned,
+            out_rounded_display_mask_quad->rounded_display_masks_info
+                .is_horizontally_positioned);
 }
 
 TEST_F(StructTraitsTest, SurfaceId) {
@@ -1156,10 +1257,47 @@ TEST_F(StructTraitsTest, SurfaceId) {
   EXPECT_EQ(local_surface_id, output.local_surface_id());
 }
 
+TEST_F(StructTraitsTest, OffsetTag) {
+  constexpr OffsetTag input(base::Token(1, 1));
+  OffsetTag output;
+
+  mojo::test::SerializeAndDeserialize<mojom::OffsetTag>(input, output);
+  EXPECT_EQ(input, output);
+}
+
+TEST_F(StructTraitsTest, OffsetTagValue) {
+  constexpr OffsetTag kTag(base::Token(1, 1));
+  OffsetTagValue input = {kTag, {5.0f, 7.7f}};
+  OffsetTagValue output;
+
+  mojo::test::SerializeAndDeserialize<mojom::OffsetTagValue>(input, output);
+  EXPECT_EQ(input.tag, output.tag);
+  EXPECT_EQ(input.offset, output.offset);
+}
+
+TEST_F(StructTraitsTest, OffsetTagDefinition) {
+  SurfaceId surface_id(
+      FrameSinkId(1337, 1234),
+      LocalSurfaceId(0xfbadbeef, base::UnguessableToken::Create()));
+
+  OffsetTagDefinition input;
+  input.tag = OffsetTag(base::Token(1, 1));
+  input.provider = SurfaceRange(surface_id);
+  input.constraints.min_offset = {-20.4f, -89.3f};
+  input.constraints.max_offset = {60.4f, 489.3f};
+
+  OffsetTagDefinition output;
+  mojo::test::SerializeAndDeserialize<mojom::OffsetTagDefinition>(input,
+                                                                  output);
+  EXPECT_EQ(input.tag, output.tag);
+  EXPECT_EQ(input.provider, output.provider);
+  EXPECT_EQ(input.constraints.min_offset, output.constraints.min_offset);
+  EXPECT_EQ(input.constraints.max_offset, output.constraints.max_offset);
+}
+
 TEST_F(StructTraitsTest, TransferableResource) {
   const ResourceId id(1337);
-  const SharedImageFormat format = SharedImageFormat::SinglePlane(ALPHA_8);
-  const uint32_t filter = 1234;
+  const SharedImageFormat format = SinglePlaneFormat::kALPHA_8;
   const gfx::Size size(1234, 5678);
   const int8_t mailbox_name[GL_MAILBOX_SIZE_CHROMIUM] = {
       0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 7, 5, 3, 1, 2};
@@ -1173,62 +1311,60 @@ TEST_F(StructTraitsTest, TransferableResource) {
   const bool is_software = false;
   const bool is_overlay_candidate = true;
 
-  gpu::MailboxHolder mailbox_holder;
-  mailbox_holder.mailbox.SetName(mailbox_name);
-  mailbox_holder.sync_token = gpu::SyncToken(command_buffer_namespace,
+  gpu::Mailbox mailbox;
+  mailbox.SetName(mailbox_name);
+
+  gpu::SharedImageUsageSet usage;
+  if (is_overlay_candidate) {
+    usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  }
+
+  gpu::SharedImageMetadata metadata{
+      .format = format,
+      .size = size,
+      .surface_origin = kBottomLeft_GrSurfaceOrigin,
+      .alpha_type = kPremul_SkAlphaType,
+      .usage = usage};
+  gpu::SyncToken sync_token = gpu::SyncToken(command_buffer_namespace,
                                              command_buffer_id, release_count);
-  mailbox_holder.sync_token.SetVerifyFlush();
-  mailbox_holder.texture_target = texture_target;
-  TransferableResource input;
+  sync_token.SetVerifyFlush();
+
+  scoped_refptr<gpu::ClientSharedImage> shared_image =
+      gpu::ClientSharedImage::CreateForTesting(
+          mailbox, metadata, gpu::SyncToken(), texture_target, is_software);
+
+  TransferableResource input = TransferableResource::Make(
+      shared_image, TransferableResource::ResourceSource::kTest, sync_token);
   input.id = id;
-  input.format = format;
-  input.filter = filter;
-  input.size = size;
-  input.mailbox_holder = mailbox_holder;
   input.synchronization_type = sync_type;
-  input.is_software = is_software;
-  input.is_overlay_candidate = is_overlay_candidate;
 
   TransferableResource output;
   mojo::test::SerializeAndDeserialize<mojom::TransferableResource>(input,
                                                                    output);
 
   EXPECT_EQ(id, output.id);
-  EXPECT_EQ(format, output.format);
-  EXPECT_EQ(filter, output.filter);
-  EXPECT_EQ(size, output.size);
-  EXPECT_EQ(mailbox_holder.mailbox, output.mailbox_holder.mailbox);
-  EXPECT_EQ(mailbox_holder.sync_token, output.mailbox_holder.sync_token);
-  EXPECT_EQ(mailbox_holder.texture_target,
-            output.mailbox_holder.texture_target);
+  EXPECT_EQ(format, output.GetFormat());
+  EXPECT_EQ(size, output.GetSize());
+  EXPECT_EQ(mailbox, output.mailbox());
+  EXPECT_EQ(sync_token, output.sync_token());
+  EXPECT_EQ(texture_target, output.texture_target());
   EXPECT_EQ(sync_type, output.synchronization_type);
-  EXPECT_EQ(is_software, output.is_software);
-  EXPECT_EQ(is_overlay_candidate, output.is_overlay_candidate);
+  EXPECT_EQ(is_software, output.GetIsSoftware());
+  EXPECT_EQ(is_overlay_candidate, output.GetIsOverlayCandidate());
+  EXPECT_EQ(kBottomLeft_GrSurfaceOrigin, output.GetOrigin());
 }
 
 TEST_F(StructTraitsTest, SharedImageFormatWithSinglePlane) {
-  const ResourceFormat resource_format = RED_8;
-  SharedImageFormat input = SharedImageFormat::SinglePlane(resource_format);
-
+  SharedImageFormat input = SinglePlaneFormat::kR_8;
   SharedImageFormat output;
   mojo::test::SerializeAndDeserialize<mojom::SharedImageFormat>(input, output);
-
   EXPECT_EQ(input, output);
 }
 
 TEST_F(StructTraitsTest, SharedImageFormatWithMultiPlane) {
-  const SharedImageFormat::PlaneConfig plane_config =
-      SharedImageFormat::PlaneConfig::kY_UV;
-  const SharedImageFormat::Subsampling subsampling =
-      SharedImageFormat::Subsampling::k420;
-  const SharedImageFormat::ChannelFormat channel_format =
-      SharedImageFormat::ChannelFormat::k8;
-  SharedImageFormat input =
-      SharedImageFormat::MultiPlane(plane_config, subsampling, channel_format);
-
+  SharedImageFormat input = MultiPlaneFormat::kNV12;
   SharedImageFormat output;
   mojo::test::SerializeAndDeserialize<mojom::SharedImageFormat>(input, output);
-
   EXPECT_EQ(input, output);
 }
 
@@ -1240,72 +1376,11 @@ TEST_F(StructTraitsTest, SharedImageFormatWithUnknownPlane) {
                                                                     output));
 }
 
-TEST_F(StructTraitsTest, YUVDrawQuad) {
-  auto render_pass = CompositorRenderPass::Create();
-  render_pass->SetNew(CompositorRenderPassId{1}, gfx::Rect(), gfx::Rect(),
-                      gfx::Transform());
-
-  const DrawQuad::Material material = DrawQuad::Material::kYuvVideoContent;
-  const gfx::Rect rect(1234, 4321, 1357, 7531);
-  const gfx::Rect visible_rect(1337, 7331, 561, 293);
-  const bool needs_blending = true;
-  const gfx::Size coded_size(1234, 5678);
-  const gfx::Rect video_visible_rect(123, 456, 789, 1011);
-  const gfx::Size uv_sample_size(1, 2);
-  const ResourceId y_plane_resource_id(1337);
-  const ResourceId u_plane_resource_id(1234);
-  const ResourceId v_plane_resource_id(2468);
-  const ResourceId a_plane_resource_id(7890);
-  const gfx::ColorSpace video_color_space = gfx::ColorSpace::CreateJpeg();
-  const float resource_offset = 1337.5f;
-  const float resource_multiplier = 1234.6f;
-  const uint32_t bits_per_channel = 13;
-  const gfx::ProtectedVideoType protected_video_type =
-      gfx::ProtectedVideoType::kSoftwareProtected;
-  gfx::HDRMetadata hdr_metadata = gfx::HDRMetadata();
-  hdr_metadata.max_content_light_level = 1000;
-  hdr_metadata.max_frame_average_light_level = 100;
-
-  SharedQuadState* sqs = render_pass->CreateAndAppendSharedQuadState();
-  YUVVideoDrawQuad* quad =
-      render_pass->CreateAndAppendDrawQuad<YUVVideoDrawQuad>();
-  quad->SetAll(sqs, rect, visible_rect, needs_blending, coded_size,
-               video_visible_rect, uv_sample_size, y_plane_resource_id,
-               u_plane_resource_id, v_plane_resource_id, a_plane_resource_id,
-               video_color_space, resource_offset, resource_multiplier,
-               bits_per_channel, protected_video_type, hdr_metadata);
-
-  std::unique_ptr<CompositorRenderPass> output;
-  mojo::test::SerializeAndDeserialize<mojom::CompositorRenderPass>(render_pass,
-                                                                   output);
-
-  ASSERT_EQ(render_pass->quad_list.size(), output->quad_list.size());
-
-  ASSERT_EQ(material, output->quad_list.ElementAt(0)->material);
-  const YUVVideoDrawQuad* out_quad =
-      YUVVideoDrawQuad::MaterialCast(output->quad_list.ElementAt(0));
-  EXPECT_EQ(rect, out_quad->rect);
-  EXPECT_EQ(visible_rect, out_quad->visible_rect);
-  EXPECT_EQ(needs_blending, out_quad->needs_blending);
-  EXPECT_EQ(coded_size, out_quad->coded_size);
-  EXPECT_EQ(video_visible_rect, out_quad->video_visible_rect);
-  EXPECT_EQ(uv_sample_size.width(), out_quad->u_scale);
-  EXPECT_EQ(uv_sample_size.height(), out_quad->v_scale);
-  EXPECT_EQ(y_plane_resource_id, out_quad->y_plane_resource_id());
-  EXPECT_EQ(u_plane_resource_id, out_quad->u_plane_resource_id());
-  EXPECT_EQ(v_plane_resource_id, out_quad->v_plane_resource_id());
-  EXPECT_EQ(a_plane_resource_id, out_quad->a_plane_resource_id());
-  EXPECT_EQ(resource_offset, out_quad->resource_offset);
-  EXPECT_EQ(resource_multiplier, out_quad->resource_multiplier);
-  EXPECT_EQ(bits_per_channel, out_quad->bits_per_channel);
-  EXPECT_EQ(protected_video_type, out_quad->protected_video_type);
-  EXPECT_EQ(hdr_metadata, out_quad->hdr_metadata);
-}
-
 TEST_F(StructTraitsTest, CopyOutputResult_EmptyBitmap) {
   auto input = std::make_unique<CopyOutputResult>(
       CopyOutputRequest::ResultFormat::RGBA,
-      CopyOutputRequest::ResultDestination::kSystemMemory, gfx::Rect(), false);
+      CopyOutputRequest::ResultDestination::kSystemMemory,
+      CopyOutputResult::Error::kUnknown);
   std::unique_ptr<CopyOutputResult> output;
   mojo::test::SerializeAndDeserialize<mojom::CopyOutputResult>(input, output);
 
@@ -1317,7 +1392,7 @@ TEST_F(StructTraitsTest, CopyOutputResult_EmptyBitmap) {
   auto scoped_bitmap = output->ScopedAccessSkBitmap();
   auto bitmap = scoped_bitmap.bitmap();
   EXPECT_FALSE(bitmap.readyToDraw());
-  EXPECT_EQ(output->GetTextureResult(), nullptr);
+  EXPECT_EQ(output->GetSharedImage().get(), nullptr);
 }
 
 TEST_F(StructTraitsTest, CopyOutputResult_EmptyTexture) {
@@ -1325,8 +1400,8 @@ TEST_F(StructTraitsTest, CopyOutputResult_EmptyTexture) {
 
   auto input = std::make_unique<CopyOutputResult>(
       CopyOutputRequest::ResultFormat::RGBA,
-      CopyOutputRequest::ResultDestination::kNativeTextures, gfx::Rect(),
-      false);
+      CopyOutputRequest::ResultDestination::kSharedImage,
+      CopyOutputResult::Error::kUnknown);
   EXPECT_TRUE(input->IsEmpty());
 
   std::unique_ptr<CopyOutputResult> output;
@@ -1334,10 +1409,9 @@ TEST_F(StructTraitsTest, CopyOutputResult_EmptyTexture) {
 
   EXPECT_TRUE(output->IsEmpty());
   EXPECT_EQ(output->format(), CopyOutputResult::Format::RGBA);
-  EXPECT_EQ(output->destination(),
-            CopyOutputResult::Destination::kNativeTextures);
+  EXPECT_EQ(output->destination(), CopyOutputResult::Destination::kSharedImage);
   EXPECT_TRUE(output->rect().IsEmpty());
-  EXPECT_EQ(output->GetTextureResult(), nullptr);
+  EXPECT_EQ(output->GetSharedImage().get(), nullptr);
 }
 
 TEST_F(StructTraitsTest, CopyOutputResult_Bitmap) {
@@ -1359,7 +1433,7 @@ TEST_F(StructTraitsTest, CopyOutputResult_Bitmap) {
   EXPECT_EQ(output->destination(),
             CopyOutputResult::Destination::kSystemMemory);
   EXPECT_EQ(output->rect(), result_rect);
-  EXPECT_EQ(output->GetTextureResult(), nullptr);
+  EXPECT_EQ(output->GetSharedImage().get(), nullptr);
 
   auto scoped_bitmap = output->ScopedAccessSkBitmap();
   auto out_bitmap = scoped_bitmap.bitmap();
@@ -1373,8 +1447,9 @@ TEST_F(StructTraitsTest, CopyOutputResult_Bitmap) {
   expected_bitmap.allocPixels(SkImageInfo::MakeN32Premul(7, 8, adobe_rgb));
   expected_bitmap.eraseARGB(123, 213, 77, 33);
   EXPECT_EQ(expected_bitmap.computeByteSize(), out_bitmap.computeByteSize());
-  EXPECT_EQ(0, std::memcmp(expected_bitmap.getPixels(), out_bitmap.getPixels(),
-                           expected_bitmap.computeByteSize()));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, std::memcmp(expected_bitmap.getPixels(), out_bitmap.getPixels(),
+                     expected_bitmap.computeByteSize())));
   EXPECT_TRUE(SkColorSpace::Equals(expected_bitmap.colorSpace(),
                                    out_bitmap.colorSpace()));
 }
@@ -1392,8 +1467,7 @@ TEST_F(StructTraitsTest, CopyOutputResult_Texture) {
                             71234838);
   sync_token.SetVerifyFlush();
   base::RunLoop run_loop;
-  CopyOutputResult::ReleaseCallbacks release_callbacks;
-  release_callbacks.push_back(base::BindOnce(
+  ReleaseCallback release_callback = base::BindOnce(
       [](base::OnceClosure quit_closure,
          const gpu::SyncToken& expected_sync_token,
          const gpu::SyncToken& sync_token, bool is_lost) {
@@ -1401,40 +1475,76 @@ TEST_F(StructTraitsTest, CopyOutputResult_Texture) {
         EXPECT_TRUE(is_lost);
         std::move(quit_closure).Run();
       },
-      run_loop.QuitClosure(), sync_token));
+      run_loop.QuitClosure(), sync_token);
   gpu::Mailbox mailbox;
   mailbox.SetName(mailbox_name);
   std::unique_ptr<CopyOutputResult> input =
-      std::make_unique<CopyOutputTextureResult>(
-          CopyOutputResult::Format::RGBA, result_rect,
-          CopyOutputResult::TextureResult(mailbox, sync_token,
-                                          result_color_space),
-          std::move(release_callbacks));
+      std::make_unique<CopyOutputSharedImageResult>(
+          CopyOutputResult::Format::RGBA, result_rect, mailbox,
+          result_color_space, "CopyOutputResult_Texture",
+          std::move(release_callback));
 
   std::unique_ptr<CopyOutputResult> output;
   mojo::test::SerializeAndDeserialize<mojom::CopyOutputResult>(input, output);
 
   EXPECT_FALSE(output->IsEmpty());
   EXPECT_EQ(output->format(), CopyOutputResult::Format::RGBA);
-  EXPECT_EQ(output->destination(),
-            CopyOutputResult::Destination::kNativeTextures);
+  EXPECT_EQ(output->destination(), CopyOutputResult::Destination::kSharedImage);
   EXPECT_EQ(output->rect(), result_rect);
-  ASSERT_NE(output->GetTextureResult(), nullptr);
-  EXPECT_EQ(output->GetTextureResult()->planes[0].mailbox, mailbox);
-  EXPECT_EQ(output->GetTextureResult()->planes[0].sync_token, sync_token);
-  EXPECT_EQ(output->GetTextureResult()->color_space, result_color_space);
+  ASSERT_NE(output->GetSharedImage().get(), nullptr);
+  EXPECT_EQ(output->GetSharedImage()->mailbox(), mailbox);
+  EXPECT_EQ(output->GetSharedImage()->color_space(), result_color_space);
 
-  CopyOutputResult::ReleaseCallbacks out_callbacks =
-      output->TakeTextureOwnership();
+  ReleaseCallback out_callback = output->TakeSharedImageOwnership();
 
-  EXPECT_EQ(1u, out_callbacks.size());
-  for (auto& cb : out_callbacks) {
-    std::move(cb).Run(sync_token, true /* is_lost */);
-  }
+  ASSERT_TRUE(out_callback);
+  std::move(out_callback).Run(sync_token, true /* is_lost */);
 
   // If the CopyOutputResult callback is called (which is the intended
   // behaviour), this will exit. Otherwise, this test will time out and fail.
   run_loop.Run();
+}
+
+TEST_F(StructTraitsTest, TreesInVizTimingTest) {
+  // Set some appropriately ordered ttimestamps.
+  const base::TimeTicks start_update_display_tree = base::TimeTicks::Now();
+  const base::TimeTicks start_prepare_to_draw =
+      start_update_display_tree + base::Seconds(1);
+  const base::TimeTicks start_draw_layers =
+      start_prepare_to_draw + base::Seconds(2);
+  const base::TimeTicks submit_compositor_frame =
+      start_draw_layers + base::Seconds(3);
+  TreesInVizTiming timestamps = {start_update_display_tree,
+                                 start_prepare_to_draw, start_draw_layers,
+                                 submit_compositor_frame};
+  TreesInVizTiming out;
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TreesInVizTiming>(
+      timestamps, out));
+  EXPECT_EQ(start_update_display_tree, out.start_update_display_tree);
+  EXPECT_EQ(start_prepare_to_draw, out.start_prepare_to_draw);
+  EXPECT_EQ(start_draw_layers, out.start_draw_layers);
+  EXPECT_EQ(submit_compositor_frame, out.submit_compositor_frame);
+}
+
+TEST_F(StructTraitsTest, TreesInVizUnsetTest) {
+  TreesInVizTiming timestamps;
+  TreesInVizTiming out;
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TreesInVizTiming>(
+      timestamps, out));
+}
+
+TEST_F(StructTraitsTest, TreesInVizBadTimestampOrderTest) {
+  const base::TimeTicks start_update_display_tree = base::TimeTicks::Now();
+  const base::TimeTicks start_prepare_to_draw =
+      start_update_display_tree + base::Seconds(1);
+  const base::TimeTicks start_draw_layers;  // imagine we didn't set these
+  const base::TimeTicks submit_compositor_frame;
+  TreesInVizTiming timestamps = {start_update_display_tree,
+                                 start_prepare_to_draw, start_draw_layers,
+                                 submit_compositor_frame};
+  TreesInVizTiming out;
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<mojom::TreesInVizTiming>(
+      timestamps, out));
 }
 
 }  // namespace viz

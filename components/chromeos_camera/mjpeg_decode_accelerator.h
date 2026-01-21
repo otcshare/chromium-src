@@ -9,8 +9,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "base/callback.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "media/base/bitstream_buffer.h"
 
@@ -81,7 +81,7 @@ class MjpegDecodeAccelerator {
     virtual void NotifyError(int32_t task_id, Error error) = 0;
 
    protected:
-    virtual ~Client() {}
+    virtual ~Client() = default;
   };
 
   // Destroys the decoder: all pending inputs are dropped immediately. This

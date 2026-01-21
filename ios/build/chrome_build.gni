@@ -2,51 +2,91 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/apple/mobile_config.gni")
 import("//build/config/apple/symbols.gni")
 import("//build/config/chrome_build.gni")
+import("//build/config/ios/config.gni")
 import("//build/config/ios/ios_sdk.gni")
 
-# Xcode 13.1 or higher is required to build Chromium on iOS. This file should
+assert(target_platform == "iphoneos",
+       "This file must be included only on iOS phone builds.")
+
+# LINT.IfChange
+
+# Xcode 26.0 or higher is required to build Chromium on iOS. This file should
 # only be included when building Chromium, not other related projects (cronet,
 # webrtc, ...).
-assert(xcode_version_int >= 1310, "Xcode 13.1 or higher is required.")
+#
+# TODO(crbug.com/6910795): remove `|| taget_environment == "catalyst"` when
+# the catalyst bot has been updated to use Xcode 26.0+.
+assert(xcode_version_int >= 2600 || target_environment == "catalyst",
+       "Xcode 26.0 or higher is required ($xcode_version_verbatim detected).")
+
+# LINT.ThenChange(//docs/ios/build_instructions.md)
 
 declare_args() {
-  # Enable widget extensions.
-  ios_enable_content_widget_extension = true
-  ios_enable_search_widget_extension = true
-
-  # Enable iOS 14, WidgetKit extension.
-  ios_enable_widget_kit_extension = true
-
-  # Enable iOS 16 lockscreen extensions.
-  ios_enable_lockscreen_extension = true
-
   # Enable share extension.
   ios_enable_share_extension = true
+
+  # Enable the new share extension UI and entry points.
+  ios_enable_extended_share_extension = true
+
+  # Enable open in extension.
+  ios_enable_open_extension = true
 
   # Enable credential provider extension.
   ios_enable_credential_provider_extension = true
 
   # Enable intents extension.
-  ios_enable_intents_extension = false
+  ios_enable_intents_extension = true
+
+  # Enable iOS 14, WidgetKit extension.
+  ios_enable_widget_kit_extension = true
+
+  # Enable iOS 16 lockscreen widget in WidgetKit extension.
+  ios_enable_lockscreen_widget = true
+
+  # Enable iOS Push Notification Service extension.
+  ios_enable_push_notification_service_extension = true
 
   # Label of the target providing implementation for AccountVerificationProvider.
   # Overridden when using the Google-internal repository to build Chrome on iOS.
   ios_account_verification_provider_target = "//ios/chrome/credential_provider_extension:account_verification_provider_implementation"
 
+  # Label of the targets providing implementation for PasskeyKeychainProvider.
+  # Different for Chrome and extensions due to different internal dependencies.
+  # Overridden when using the Google-internal repository to build Chrome on iOS.
+  ios_passkey_keychain_provider_chrome_target = "//ios/chrome/common/credential_provider:passkey_keychain_provider_implementation"
+  ios_passkey_keychain_provider_extension_target = "//ios/chrome/common/credential_provider:passkey_keychain_provider_implementation"
+
+  # Label of the target providing implementation for FontProvider.
+  # Overridden when using the Google-internal repository to build Chrome on iOS.
+  ios_font_provider_target =
+      "//ios/chrome/credential_provider_extension:font_provider_implementation"
+
+  # Label of the target providing implementation for the PushNotificationServiceExtension.
+  # Overridden when using the Google-internal repository to build Chrome on iOS.
+  ios_push_notification_service_extension_target = "//ios/chrome/push_notification_service_extension:push_notification_service_extension_implementation"
+
+  # Enable credential exchange capability in the Credential Provider Extension (CPE).
+  ios_cpe_enable_credential_exchange = true
+
   # The API key to query Google services in the Credential Provider Extension.
   ios_credential_provider_extension_api_key = ""
 
-  # Controls whether ScreenTime API is used.
-  ios_enable_screen_time = true
-
-  # Enable background fetch mode for feed refresh.
+  # Enable background fetch mode for app refresh.
   ios_enable_background_mode = true
+
+  # Enable iOS 17 widgets improvements to support multi profile.
+  ios_enable_widgets_for_mim = true
+
+  # Enable iOS 26 liquid glass.
+  ios_enable_liquid_glass = true
 
   # Value of the encryption export compliance code. See "Cryptography and
   # U.S. Export Compliance" in "Submitting the App to App Review" in the
-  # Apple developer documentation (https://goo.gl/yv1xEF).
+  # Apple developer documentation
+  # (https://developer.apple.com/documentation/security/complying_with_encryption_export_regulations).
   ios_encryption_export_compliance_code = ""
 
   # List of plist templates to merge when generating chrome Info.plist.
@@ -69,34 +109,54 @@ declare_args() {
 
   # List of plist templates to merge when generating chrome cpe entitlements.
   ios_chrome_cpe_entitlements_additions = []
+
+  # Use perf_tests_hook if true
+  ios_is_perf_test = false
+
+  # Enable memory debugging.
+  ios_enable_memory_debugging = !is_chrome_branded
+
+  # The iOS app bundle id.
+  ios_chromium_bundle_id =
+      "$ios_app_bundle_id_prefix.chrome.ios$apple_mobile_app_bundle_id_suffix"
+
+  # Path to a PrivacyInfo.xcprivacy file to be included in app extensions.
+  ios_app_extension_privacy_manifest = ""
 }
 
 if (target_environment == "catalyst") {
   # Some extensions uses API that are not available in "catalyst" environment.
-  ios_enable_content_widget_extension = false
-  ios_enable_search_widget_extension = false
   ios_enable_credential_provider_extension = false
   ios_enable_widget_kit_extension = false
   ios_enable_prebuilt_widget_kit_extension = false
-
-  # ScreenTime framework is not available in the iOS support libraries provided
-  # by "catalyst" environment.
-  ios_enable_screen_time = false
+  ios_enable_open_extension = false
+  ios_enable_push_notification_service_extension = false
 }
 
-# Configure whether breakpad support is enabled.
-breakpad_enabled = is_official_build && is_chrome_branded
+if (ios_chrome_generate_order_file) {
+  assert(
+      !enable_stripping && !is_debug,
+      "An orderfile should only be generated if enable_stripping is false and is_debug is false to ensure all function calls are included.")
 
-if (breakpad_enabled) {
-  breakpad_enabled_as_int = 1
+  # Disable all extensions as the order file is only generated based on running
+  # the primary application.
+  ios_enable_credential_provider_extension = false
+  ios_enable_widget_kit_extension = false
+  ios_enable_prebuilt_widget_kit_extension = false
+  ios_enable_push_notification_service_extension = false
+  ios_enable_share_extension = false
+  ios_enable_open_extension = false
+  ios_enable_intents_extension = false
+}
+
+# Configure is_official_release.
+if (is_official_build && is_chrome_branded) {
   is_official_release = enable_dsyms && target_environment == "device" &&
                         current_toolchain == default_toolchain
 } else {
-  breakpad_enabled_as_int = 0
   is_official_release = false
 }
 
-chromium_bundle_id = "$ios_app_bundle_id_prefix.chrome.ios.dev"
 chromium_handoff_id = "$ios_app_bundle_id_prefix.chrome.handoff"
 ios_move_tab_activity_type = "$ios_app_bundle_id_prefix.chrome.move-tab"
 

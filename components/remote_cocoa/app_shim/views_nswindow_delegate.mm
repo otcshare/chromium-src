@@ -4,8 +4,10 @@
 
 #import "components/remote_cocoa/app_shim/views_nswindow_delegate.h"
 
-#include "base/bind.h"
+#include <optional>
+
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/mac/mac_util.h"
 #include "base/task/single_thread_task_runner.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
@@ -15,7 +17,27 @@
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
 #include "ui/gfx/geometry/resize_utils.h"
 
-@implementation ViewsNSWindowDelegate
+@implementation ViewsNSWindowDelegate {
+ @private
+  raw_ptr<remote_cocoa::NativeWidgetNSWindowBridge, DanglingUntriaged>
+      _parent;  // Weak. Owns this.
+  NSCursor* __strong _cursor;
+  std::optional<float> _aspectRatio;
+  gfx::Size _excludedMargin;
+  BOOL _updatedWindowTitleAfterFirstMiniaturization;
+
+  // Only valid during a live resize.
+  // Used to keep track of whether a resize is happening horizontally or
+  // vertically, even if physically the user is resizing in both directions.
+  // The value is significant when |_aspectRatio| is set, i.e., we are
+  // responsible for maintaining the aspect ratio of the window. As the user is
+  // dragging one of the corners to resize, we need the resize to be either
+  // horizontal or vertical all the time, so we pick one of the directions and
+  // stick to it. This is necessary to achieve stable results, because in order
+  // to keep the aspect ratio fixed we override one window dimension with a
+  // value computed from the other dimension.
+  std::optional<bool> _resizingHorizontally;
+}
 
 - (instancetype)initWithBridgedNativeWidget:
     (remote_cocoa::NativeWidgetNSWindowBridge*)parent {
@@ -27,14 +49,15 @@
 }
 
 - (NSCursor*)cursor {
-  return _cursor.get();
+  return _cursor;
 }
 
 - (void)setCursor:(NSCursor*)newCursor {
-  if (_cursor.get() == newCursor)
+  if (_cursor == newCursor) {
     return;
+  }
 
-  _cursor.reset([newCursor retain]);
+  _cursor = newCursor;
 
   // The window has a tracking rect that was installed in -[BridgedContentView
   // initWithView:] that uses the NSTrackingCursorUpdate option. In the case
@@ -75,23 +98,25 @@
   _parent->OnVisibilityChanged();
 }
 
-- (void)onSystemControlTintChanged:(NSNotification*)notification {
-  _parent->OnSystemControlTintChanged();
+- (void)onSystemColorsChanged:(NSNotification*)notification {
+  _parent->OnSystemColorsChanged();
 }
 
-- (void)sheetDidEnd:(NSWindow*)sheet
-         returnCode:(NSInteger)returnCode
-        contextInfo:(void*)contextInfo {
-  [sheet orderOut:nil];
-  _parent->OnWindowWillClose();
+- (void)onActiveSpaceChanged:(NSNotification*)notification {
+  _parent->OnSpaceActivationMayHaveChanged();
 }
 
 // NSWindowDelegate implementation.
 
 - (void)windowDidFailToEnterFullScreen:(NSWindow*)window {
-  // Cocoa should already have sent an (unexpected) windowDidExitFullScreen:
-  // notification, and the attempt to get back into fullscreen should fail.
-  // Nothing to do except verify |parent_| is no longer trying to fullscreen.
+  // This method is called when the window fails to enter fullscreen. If Cocoa
+  // has already sent an (unexpected) windowDidExitFullScreen: notification,
+  // there is nothing to do. If not, notify `parent_` about this error and
+  // reset the state.
+  if (_parent->target_fullscreen_state()) {
+    _parent->fullscreen_controller().OnWindowDidFailToEnterFullscreen();
+  }
+
   DCHECK(!_parent->target_fullscreen_state());
 }
 
@@ -103,8 +128,10 @@
   DCHECK(!_parent->target_fullscreen_state());
 }
 
-- (void)setAspectRatio:(float)aspectRatio {
+- (void)setAspectRatio:(float)aspectRatio
+        excludedMargin:(const gfx::Size&)excludedMargin {
   _aspectRatio = aspectRatio;
+  _excludedMargin = excludedMargin;
 }
 
 - (NSSize)windowWillResize:(NSWindow*)window toSize:(NSSize)size {
@@ -120,21 +147,27 @@
   gfx::Rect resizedWindowRect(gfx::Point([window frame].origin),
                               gfx::Size(size));
 
-  absl::optional<gfx::Size> maxSizeParam;
+  std::optional<gfx::Size> maxSizeParam;
   gfx::Size maxSize([window maxSize]);
   if (!maxSize.IsEmpty())
     maxSizeParam = maxSize;
 
-  gfx::SizeRectToAspectRatio(*_resizingHorizontally ? gfx::ResizeEdge::kRight
-                                                    : gfx::ResizeEdge::kBottom,
-                             *_aspectRatio, gfx::Size([window minSize]),
-                             maxSizeParam, &resizedWindowRect);
+  gfx::SizeRectToAspectRatioWithExcludedMargin(
+      *_resizingHorizontally ? gfx::ResizeEdge::kRight
+                             : gfx::ResizeEdge::kBottom,
+      *_aspectRatio, gfx::Size([window minSize]), maxSizeParam, _excludedMargin,
+      resizedWindowRect);
   // Discard any updates to |resizedWindowRect| origin as Cocoa takes care of
   // that.
   return resizedWindowRect.size().ToCGSize();
 }
 
+- (void)windowWillStartLiveResize:(NSNotification*)notification {
+  _parent->OnWindowWillStartLiveResize();
+}
+
 - (void)windowDidEndLiveResize:(NSNotification*)notification {
+  _parent->OnWindowDidEndLiveResize();
   _resizingHorizontally.reset();
 }
 
@@ -163,6 +196,18 @@
   _parent->OnWindowKeyStatusChangedTo(false);
 }
 
+- (void)windowDidChangeOcclusionState:(NSNotification*)notification {
+  _parent->OnSpaceActivationMayHaveChanged();
+}
+
+- (void)windowWillBeginSheet:(NSNotification*)notification {
+  _parent->host()->OnSheetModalShown();
+}
+
+- (void)windowDidEndSheet:(NSNotification*)notification {
+  _parent->host()->OnSheetModalClosed();
+}
+
 - (BOOL)windowShouldClose:(id)sender {
   bool canWindowClose = true;
   _parent->host()->OnWindowCloseRequested(&canWindowClose);
@@ -176,13 +221,12 @@
     // -[NSWindow endSheet:] on its parent. If the modal session is not ended
     // then the parent will never be able to show another sheet. But calling
     // -endSheet: here will block the thread with an animation, so post a task.
-    // Use a block: The argument to -endSheet: must be retained, since it's the
-    // window that is closing and -performSelector: won't retain the argument
-    // (putting |window| on the stack above causes this block to retain it).
+    // Use a block to capture a reference to |window| since the argument to
+    // -endSheet: must be retained.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(base::RetainBlock(^{
+        FROM_HERE, base::BindOnce(^{
           [sheetParent endSheet:window];
-        })));
+        }));
   }
   DCHECK([window isEqual:[notification object]]);
   _parent->OnWindowWillClose();
@@ -199,6 +243,26 @@
 - (void)windowDidMiniaturize:(NSNotification*)notification {
   _parent->host()->OnWindowMiniaturizedChanged(true);
   _parent->OnVisibilityChanged();
+
+  // When windows are miniaturized on session restore, they appear just fine
+  // in the Dock but are absent from the Window menu. It's unclear why this
+  // is happening, but my guess is it's something to do with how early in
+  // the launch process the miniaturization is taking place / funky
+  // interaction with remote_cocoa. When a window changes its title, the
+  // AppKit rebuilds the Window menu, so the workaround is to make sure that
+  // when a window is miniaturized for the first time, we force a window title
+  // update.
+  //
+  // This code will get triggered for any window the first time it's
+  // miniaturized, even ones that weren't created by session restore. However,
+  // this code will run at most one time, and it's harmless.
+  if (!_updatedWindowTitleAfterFirstMiniaturization) {
+    NSWindow* window = _parent->ns_window();
+    NSString* title = window.title;
+    window.title = @"";
+    window.title = title;
+    _updatedWindowTitleAfterFirstMiniaturization = YES;
+  }
 }
 
 - (void)windowDidDeminiaturize:(NSNotification*)notification {

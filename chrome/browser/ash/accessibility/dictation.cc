@@ -4,12 +4,11 @@
 
 #include "chrome/browser/ash/accessibility/dictation.h"
 
-#include "base/containers/contains.h"
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/language/core/browser/pref_names.h"
@@ -27,7 +26,9 @@ const char kDefaultProfileLocale[] = "en-US";
 
 // Determines the user's language or locale from the system, first trying
 // the current IME language and falling back to the application locale.
-std::string GetUserLangOrLocaleFromSystem(Profile* profile) {
+std::string GetUserLangOrLocaleFromSystem(
+    Profile* profile,
+    const std::string& application_locale) {
   // Convert from the ID used in the pref to a language identifier.
   std::vector<std::string> input_method_ids;
   input_method_ids.push_back(
@@ -44,7 +45,7 @@ std::string GetUserLangOrLocaleFromSystem(Profile* profile) {
   // If we don't find an IME language, fall back to using the application
   // locale.
   if (user_language.empty())
-    user_language = g_browser_process->GetApplicationLocale();
+    user_language = application_locale;
 
   return user_language.empty() ? kDefaultProfileLocale : user_language;
 }
@@ -58,68 +59,112 @@ std::string GetSupportedLocale(const std::string& lang_or_locale) {
   // map also includes a map from Open Speech API "cmn" languages to
   // their equivalent default locale.
   static constexpr auto kLangsToDefaultLocales =
-      base::MakeFixedFlatMap<base::StringPiece, base::StringPiece>(
-          {{"af", "af-ZA"},          {"am", "am-ET"},
-           {"ar", "ar-001"},         {"az", "az-AZ"},
-           {"bg", "bg-BG"},          {"bn", "bn-IN"},
-           {"bs", "bs-BA"},          {"ca", "ca-ES"},
-           {"cs", "cs-CZ"},          {"da", "da-DK"},
-           {"de", "de-DE"},          {"el", "el-GR"},
-           {"en", "en-US"},          {"es", "es-ES"},
-           {"et", "et-EE"},          {"eu", "eu-ES"},
-           {"fa", "fa-IR"},          {"fi", "fi-FI"},
-           {"fil", "fil-PH"},        {"fr", "fr-FR"},
-           {"gl", "gl-ES"},          {"gu", "gu-IN"},
-           {"he", "iw-IL"},          {"hi", "hi-IN"},
-           {"hr", "hr-HR"},          {"hu", "hu-HU"},
-           {"hy", "hy-AM"},          {"id", "id-ID"},
-           {"is", "is-IS"},          {"it", "it-IT"},
-           {"iw", "iw-IL"},          {"ja", "ja-JP"},
-           {"jv", "jv-ID"},          {"ka", "ka-GE"},
-           {"kk", "kk-KZ"},          {"km", "km-KH"},
-           {"kn", "kn-IN"},          {"ko", "ko-KR"},
-           {"lo", "lo-LA"},          {"lt", "lt-LT"},
-           {"lv", "lv-LV"},          {"mk", "mk-MK"},
-           {"ml", "ml-IN"},          {"mn", "mn-MN"},
-           {"mo", "ro-RO"},          {"mr", "mr-IN"},
-           {"ms", "ms-MY"},          {"my", "my-MM"},
-           {"ne", "ne-NP"},          {"nl", "nl-NL"},
-           {"no", "no-NO"},          {"pa", "pa-Guru-IN"},
-           {"pl", "pl-PL"},          {"pt", "pt-BR"},
-           {"ro", "ro-RO"},          {"ru", "ru-RU"},
-           {"si", "si-LK"},          {"sk", "sk-SK"},
-           {"sl", "sl-SI"},          {"sq", "sq-AL"},
-           {"sr", "sr-RS"},          {"su", "su-ID"},
-           {"sv", "sv-SE"},          {"sw", "sw-TZ"},
-           {"ta", "ta-IN"},          {"te", "te-IN"},
-           {"tl", "fil-PH"},         {"th", "th-TH"},
-           {"tr", "tr-TR"},          {"uk", "uk-UA"},
-           {"ur", "ur-PK"},          {"uz", "uz-UZ"},
-           {"vi", "vi-VN"},          {"yue", "yue-Hant-HK"},
-           {"zh", "zh-CN"},          {"zu", "zu-ZA"},
-           {"zh-cmn-CN", "zh-CN"},   {"zh-cmn", "zh-CN"},
-           {"zh-cmn-Hans", "zh-CN"}, {"zh-cmn-Hans-CN", "zh-CN"},
-           {"cmn-CN", "zh-CN"},      {"cmn-Hans", "zh-CN"},
-           {"cmn-Hans-CN", "zh-CN"}, {"cmn-Hant-TW", "zh-TW"},
-           {"zh-cmn-TW", "zh-TW"},   {"zh-cmn-Hant-TW", "zh-TW"},
+      base::MakeFixedFlatMap<std::string_view, std::string_view>(
+          {{"af", "af-ZA"},
+           {"am", "am-ET"},
+           {"ar", "ar-001"},
+           {"az", "az-AZ"},
+           {"bg", "bg-BG"},
+           {"bn", "bn-IN"},
+           {"bs", "bs-BA"},
+           {"ca", "ca-ES"},
+           {"cs", "cs-CZ"},
+           {"da", "da-DK"},
+           {"de", "de-DE"},
+           {"el", "el-GR"},
+           {"en", "en-US"},
+           {"es", "es-ES"},
+           {"et", "et-EE"},
+           {"eu", "eu-ES"},
+           {"fa", "fa-IR"},
+           {"fi", "fi-FI"},
+           {"fil", "fil-PH"},
+           {"fr", "fr-FR"},
+           {"gl", "gl-ES"},
+           {"gu", "gu-IN"},
+           {"he", "iw-IL"},
+           {"hi", "hi-IN"},
+           {"hr", "hr-HR"},
+           {"hu", "hu-HU"},
+           {"hy", "hy-AM"},
+           {"id", "id-ID"},
+           {"is", "is-IS"},
+           {"it", "it-IT"},
+           {"iw", "iw-IL"},
+           {"ja", "ja-JP"},
+           {"jv", "jv-ID"},
+           {"ka", "ka-GE"},
+           {"kk", "kk-KZ"},
+           {"km", "km-KH"},
+           {"kn", "kn-IN"},
+           {"ko", "ko-KR"},
+           {"lo", "lo-LA"},
+           {"lt", "lt-LT"},
+           {"lv", "lv-LV"},
+           {"mk", "mk-MK"},
+           {"ml", "ml-IN"},
+           {"mn", "mn-MN"},
+           {"mo", "ro-RO"},
+           {"mr", "mr-IN"},
+           {"ms", "ms-MY"},
+           {"my", "my-MM"},
+           {"ne", "ne-NP"},
+           {"nl", "nl-NL"},
+           {"no", "no-NO"},
+           {"pa", "pa-Guru-IN"},
+           {"pl", "pl-PL"},
+           {"pt", "pt-BR"},
+           {"ro", "ro-RO"},
+           {"ru", "ru-RU"},
+           {"si", "si-LK"},
+           {"sk", "sk-SK"},
+           {"sl", "sl-SI"},
+           {"sq", "sq-AL"},
+           {"sr", "sr-RS"},
+           {"su", "su-ID"},
+           {"sv", "sv-SE"},
+           {"sw", "sw-TZ"},
+           {"ta", "ta-IN"},
+           {"te", "te-IN"},
+           {"tl", "fil-PH"},
+           {"th", "th-TH"},
+           {"tr", "tr-TR"},
+           {"uk", "uk-UA"},
+           {"ur", "ur-PK"},
+           {"uz", "uz-UZ"},
+           {"vi", "vi-VN"},
+           {"yue", "yue-Hant-HK"},
+           {"zh", "zh-Hans"},
+           {"zu", "zu-ZA"},
+           {"zh-cmn-CN", "zh-Hans"},
+           {"zh-cmn", "zh-Hans"},
+           {"zh-cmn-Hans", "zh-Hans"},
+           {"zh-cmn-Hans-CN", "zh-Hans"},
+           {"cmn-CN", "zh-Hans"},
+           {"cmn-Hans", "zh-Hans"},
+           {"cmn-Hans-CN", "zh-Hans"},
+           {"cmn-Hant-TW", "zh-TW"},
+           {"zh-cmn-TW", "zh-TW"},
+           {"zh-cmn-Hant-TW", "zh-TW"},
            {"cmn-TW", "zh-TW"}});
 
   // First check if this is a language code supported in the map above.
-  auto* iter = kLangsToDefaultLocales.find(lang_or_locale);
+  auto iter = kLangsToDefaultLocales.find(lang_or_locale);
   if (iter != kLangsToDefaultLocales.end())
     return std::string(iter->second);
 
   // If it's only a language code, we can return early, because no other
   // language-only codes are supported.
-  std::pair<base::StringPiece, base::StringPiece> lang_and_locale_pair =
+  std::pair<std::string_view, std::string_view> lang_and_locale_pair =
       language::SplitIntoMainAndTail(lang_or_locale);
   if (lang_and_locale_pair.second.size() == 0)
     return std::string();
 
   // The code is a supported locale. Return itself.
   // Note that it doesn't matter if the supported locale is online or offline.
-  if (base::Contains(Dictation::GetAllSupportedLocales(), lang_or_locale))
+  if (Dictation::GetAllSupportedLocales().contains(lang_or_locale)) {
     return lang_or_locale;
+  }
 
   // Finally, get the language code from the locale and try to use it to map
   // to a default locale. For example, "en-XX" should map to "en-US" if "en-XX"
@@ -159,7 +204,7 @@ Dictation::GetAllSupportedLocales() {
       "si-LK",       "sk-SK",      "sl-SI", "sq-AL", "sr-RS", "su-ID", "sv-SE",
       "sw-KE",       "sw-TZ",      "ta-IN", "ta-LK", "ta-MY", "ta-SG", "te-IN",
       "th-TH",       "tr-TR",      "uk-UA", "ur-IN", "ur-PK", "uz-UZ", "vi-VN",
-      "yue-Hant-HK", "zh-CN",      "zh-TW", "zu-ZA", "ar-001"};
+      "yue-Hant-HK", "zh-Hans",    "zh-TW", "zu-ZA", "ar-001"};
 
   for (const char* locale : kWebSpeechSupportedLocales) {
     // By default these languages are not supported offline.
@@ -182,17 +227,19 @@ Dictation::GetAllSupportedLocales() {
 }
 
 // static
-std::string Dictation::DetermineDefaultSupportedLocale(Profile* profile,
-                                                       bool new_user) {
+std::string Dictation::DetermineDefaultSupportedLocale(
+    Profile* profile,
+    bool new_user,
+    const std::string& application_locale) {
   std::string lang_or_locale;
   if (new_user) {
     // This is the first time this user has enabled Dictation. Pick the default
     // language preference based on their application locale.
-    lang_or_locale = g_browser_process->GetApplicationLocale();
+    lang_or_locale = application_locale;
   } else {
     // This user has already had Dictation enabled, but now we need to map
     // from the language they've previously used to a supported locale.
-    lang_or_locale = GetUserLangOrLocaleFromSystem(profile);
+    lang_or_locale = GetUserLangOrLocaleFromSystem(profile, application_locale);
   }
   std::string supported_locale = GetSupportedLocale(lang_or_locale);
   return supported_locale.empty() ? kDefaultProfileLocale : supported_locale;

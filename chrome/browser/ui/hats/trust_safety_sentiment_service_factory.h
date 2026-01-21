@@ -5,24 +5,24 @@
 #ifndef CHROME_BROWSER_UI_HATS_TRUST_SAFETY_SENTIMENT_SERVICE_FACTORY_H_
 #define CHROME_BROWSER_UI_HATS_TRUST_SAFETY_SENTIMENT_SERVICE_FACTORY_H_
 
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 
 class TrustSafetySentimentServiceFactory : public ProfileKeyedServiceFactory {
  public:
   static TrustSafetySentimentServiceFactory* GetInstance();
+  static void ShutDownForTesting(content::BrowserContext* context);
   static TrustSafetySentimentService* GetForProfile(Profile* profile);
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      TrustSafetySentimentServiceFactory>;
+  friend base::NoDestructor<TrustSafetySentimentServiceFactory>;
 
   TrustSafetySentimentServiceFactory();
   ~TrustSafetySentimentServiceFactory() override = default;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
 };
 

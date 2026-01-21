@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
 
+#include <array>
 #include <ios>
 #include <memory>
 
@@ -21,6 +22,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 
@@ -36,82 +38,84 @@ static void TestIsPotentialCustomElementName(const AtomicString& str,
 }
 
 static void TestIsPotentialCustomElementNameChar(UChar32 c, bool expected) {
-  LChar str8[] = "a-X";
-  UChar str16[] = {'a', '-', 'X', '\0', '\0'};
+  std::array<LChar, 3> str8 = {'a', '-', 'X'};
+  std::array<UChar, 5> str16 = {'a', '-', 'X', '\0', '\0'};
   AtomicString str;
   if (c <= 0xFF) {
     str8[2] = c;
-    str = str8;
+    str = AtomicString(str8);
   } else {
     size_t i = 2;
     U16_APPEND_UNSAFE(str16, i, c);
-    str16[i] = 0;
-    str = str16;
+    str = AtomicString(base::span(str16).first(i));
   }
   TestIsPotentialCustomElementName(str, expected);
 }
 
 TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName) {
+  test::TaskEnvironment task_environment;
   struct {
     bool expected;
     AtomicString str;
   } tests[] = {
-      {false, ""},
-      {false, "a"},
-      {false, "A"},
+      {false, g_empty_atom},
+      {false, AtomicString("a")},
+      {false, AtomicString("A")},
 
-      {false, "A-"},
-      {false, "0-"},
+      {false, AtomicString("A-")},
+      {false, AtomicString("0-")},
 
-      {true, "a-"},
-      {true, "a-a"},
-      {true, "aa-"},
-      {true, "aa-a"},
-      {true, reinterpret_cast<const UChar*>(
-                 u"aa-\x6F22\x5B57")},  // Two CJK Unified Ideographs
-      {true, reinterpret_cast<const UChar*>(
-                 u"aa-\xD840\xDC0B")},  // Surrogate pair U+2000B
+      {true, AtomicString("a-")},
+      {true, AtomicString("a-a")},
+      {true, AtomicString("aa-")},
+      {true, AtomicString("aa-a")},
+      {true, AtomicString(reinterpret_cast<const UChar*>(
+                 u"aa-\x6F22\x5B57"))},  // Two CJK Unified Ideographs
+      {true, AtomicString(reinterpret_cast<const UChar*>(
+                 u"aa-\xD840\xDC0B"))},  // Surrogate pair U+2000B
 
-      {false, "a-A"},
-      {false, "a-Z"},
+      {false, AtomicString("a-A")},
+      {false, AtomicString("a-Z")},
   };
   for (auto test : tests)
     TestIsPotentialCustomElementName(test.str, test.expected);
 }
 
 TEST(CustomElementTest, TestIsValidNamePotentialCustomElementNameChar) {
+  test::TaskEnvironment task_environment;
+  // ranges is a list of ranges of valid characters. The comments show the
+  // invalid values which are in between the specified ranges.
   struct {
     UChar32 from, to;
   } ranges[] = {
-      // "-" | "." need to merge to test -1/+1.
-      {'-', '.'},
-      {'0', '9'},
-      {'_', '_'},
-      {'a', 'z'},
-      {0xB7, 0xB7},
-      {0xC0, 0xD6},
-      {0xD8, 0xF6},
-      // [#xF8-#x2FF] | [#x300-#x37D] need to merge to test -1/+1.
-      {0xF8, 0x37D},
-      {0x37F, 0x1FFF},
-      {0x200C, 0x200D},
-      {0x203F, 0x2040},
-      {0x2070, 0x218F},
-      {0x2C00, 0x2FEF},
-      {0x3001, 0xD7FF},
-      {0xF900, 0xFDCF},
-      {0xFDF0, 0xFFFD},
-      {0x10000, 0xEFFFF},
+      // 0x00 null
+      {0x01, 0x08},
+      // 0x09 tab, 0x0A LF
+      {0x0B, 0x0B},
+      // 0x0C FF, 0x0D CR
+      {0x0E, 0x1F},
+      // 0x20 space
+      {0x21, 0x2E},
+      // 0x2F /
+      {0x30, 0x3D},
+      // 0x3E >
+      {0x3F, 0x40},
+      // 0x41 to 0x5A uppercase alphas
+      {0x5B, 0x10FFFF},
   };
   for (auto range : ranges) {
     TestIsPotentialCustomElementNameChar(range.from - 1, false);
-    for (UChar32 c = range.from; c <= range.to; ++c)
+    for (UChar32 c = range.from; c <= range.to; ++c) {
       TestIsPotentialCustomElementNameChar(c, true);
-    TestIsPotentialCustomElementNameChar(range.to + 1, false);
+    }
+    if (range.to < 0x10FFFF) {
+      TestIsPotentialCustomElementNameChar(range.to + 1, false);
+    }
   }
 }
 
 TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName8BitChar) {
+  test::TaskEnvironment task_environment;
   // isPotentialCustomElementName8BitChar must match
   // isPotentialCustomElementNameChar, so we just test it returns
   // the same result throughout its range.
@@ -125,6 +129,7 @@ TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName8BitChar) {
 }
 
 TEST(CustomElementTest, TestIsValidNamePotentialCustomElementNameCharFalse) {
+  test::TaskEnvironment task_environment;
   struct {
     UChar32 from, to;
   } ranges[] = {
@@ -137,33 +142,40 @@ TEST(CustomElementTest, TestIsValidNamePotentialCustomElementNameCharFalse) {
 }
 
 TEST(CustomElementTest, TestIsValidNameHyphenContainingElementNames) {
-  EXPECT_TRUE(CustomElement::IsValidName("valid-name"));
+  test::TaskEnvironment task_environment;
+  EXPECT_TRUE(CustomElement::IsValidName(AtomicString("valid-name")));
 
-  EXPECT_FALSE(CustomElement::IsValidName("annotation-xml"));
-  EXPECT_FALSE(CustomElement::IsValidName("color-profile"));
-  EXPECT_FALSE(CustomElement::IsValidName("font-face"));
-  EXPECT_FALSE(CustomElement::IsValidName("font-face-src"));
-  EXPECT_FALSE(CustomElement::IsValidName("font-face-uri"));
-  EXPECT_FALSE(CustomElement::IsValidName("font-face-format"));
-  EXPECT_FALSE(CustomElement::IsValidName("font-face-name"));
-  EXPECT_FALSE(CustomElement::IsValidName("missing-glyph"));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("annotation-xml")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("color-profile")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("font-face")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("font-face-src")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("font-face-uri")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("font-face-format")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("font-face-name")));
+  EXPECT_FALSE(CustomElement::IsValidName(AtomicString("missing-glyph")));
 }
 
 TEST(CustomElementTest, TestIsValidNameEmbedderNames) {
-  CustomElement::AddEmbedderCustomElementName("embeddercustomelement");
+  test::TaskEnvironment task_environment;
+  CustomElement::AddEmbedderCustomElementName(
+      AtomicString("embeddercustomelement"));
 
-  EXPECT_FALSE(CustomElement::IsValidName("embeddercustomelement", false));
-  EXPECT_TRUE(CustomElement::IsValidName("embeddercustomelement", true));
+  EXPECT_FALSE(
+      CustomElement::IsValidName(AtomicString("embeddercustomelement"), false));
+  EXPECT_TRUE(
+      CustomElement::IsValidName(AtomicString("embeddercustomelement"), true));
 }
 
 TEST(CustomElementTest, StateByParser) {
+  test::TaskEnvironment task_environment;
   const char* body_content =
       "<div id=div></div>"
       "<a-a id=v1v0></a-a>"
       "<font-face id=v0></font-face>";
   auto page_holder = std::make_unique<DummyPageHolder>();
   Document& document = page_holder->GetDocument();
-  document.body()->setInnerHTML(String::FromUTF8(body_content));
+  document.body()->SetInnerHTMLWithoutTrustedTypes(
+      String::FromUTF8(body_content));
 
   struct {
     const char* id;
@@ -174,12 +186,13 @@ TEST(CustomElementTest, StateByParser) {
       {"v0", CustomElementState::kUncustomized},
   };
   for (const auto& data : parser_data) {
-    Element* element = document.getElementById(data.id);
+    Element* element = document.getElementById(AtomicString(data.id));
     EXPECT_EQ(data.state, element->GetCustomElementState()) << data.id;
   }
 }
 
 TEST(CustomElementTest, StateByCreateElement) {
+  test::TaskEnvironment task_environment;
   struct {
     const char* name;
     CustomElementState state;
@@ -192,15 +205,17 @@ TEST(CustomElementTest, StateByCreateElement) {
   auto page_holder = std::make_unique<DummyPageHolder>();
   Document& document = page_holder->GetDocument();
   for (const auto& data : create_element_data) {
-    Element* element = document.CreateElementForBinding(data.name);
+    Element* element =
+        document.CreateElementForBinding(AtomicString(data.name));
     EXPECT_EQ(data.state, element->GetCustomElementState()) << data.name;
 
-    element = document.createElementNS(html_names::xhtmlNamespaceURI, data.name,
-                                       ASSERT_NO_EXCEPTION);
+    element =
+        document.createElementNS(html_names::xhtmlNamespaceURI,
+                                 AtomicString(data.name), ASSERT_NO_EXCEPTION);
     EXPECT_EQ(data.state, element->GetCustomElementState()) << data.name;
 
-    element = document.createElementNS(svg_names::kNamespaceURI, data.name,
-                                       ASSERT_NO_EXCEPTION);
+    element = document.createElementNS(
+        svg_names::kNamespaceURI, AtomicString(data.name), ASSERT_NO_EXCEPTION);
     EXPECT_EQ(CustomElementState::kUncustomized,
               element->GetCustomElementState())
         << data.name;
@@ -209,28 +224,30 @@ TEST(CustomElementTest, StateByCreateElement) {
 
 TEST(CustomElementTest,
      CreateElement_TagNameCaseHandlingCreatingCustomElement) {
-  V8TestingScope scope;
+  test::TaskEnvironment task_environment;
+  CustomElementTestingScope scope;
   // register a definition
   ScriptState* script_state = scope.GetScriptState();
   CustomElementRegistry* registry =
       scope.GetFrame().DomWindow()->customElements();
   NonThrowableExceptionState should_not_throw;
   {
-    CEReactionsScope reactions;
-    TestCustomElementDefinitionBuilder builder(script_state);
-    registry->DefineInternal(script_state, "a-a", builder,
+    CEReactionsScope reactions(scope.GetIsolate());
+    TestCustomElementDefinitionBuilder builder;
+    registry->DefineInternal(script_state, AtomicString("a-a"), builder,
                              ElementDefinitionOptions::Create(),
                              should_not_throw);
   }
-  CustomElementDefinition* definition =
-      registry->DefinitionFor(CustomElementDescriptor("a-a", "a-a"));
+  CustomElementDefinition* definition = registry->DefinitionFor(
+      CustomElementDescriptor(AtomicString("a-a"), AtomicString("a-a")));
   EXPECT_NE(nullptr, definition) << "a-a should be registered";
 
   // create an element with an uppercase tag name
   Document& document = scope.GetDocument();
   EXPECT_TRUE(IsA<HTMLDocument>(document))
       << "this test requires a HTML document";
-  Element* element = document.CreateElementForBinding("A-A", should_not_throw);
+  Element* element =
+      document.CreateElementForBinding(AtomicString("A-A"), should_not_throw);
   EXPECT_EQ(definition, element->GetCustomElementDefinition());
 }
 

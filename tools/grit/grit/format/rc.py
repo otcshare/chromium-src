@@ -5,19 +5,19 @@
 '''Support for formatting an RC file for compilation.
 '''
 
-from __future__ import print_function
-
 import os
 import re
 from functools import partial
 
-import six
-
+from grit import constants
 from grit import util
 from grit.node import misc
 
 
-def Format(root, lang='en', output_dir='.'):
+def Format(root, lang='en', gender=None, output_dir='.'):
+  assert gender is None, "rc doesn't support gender translations, yet " \
+      f"Format() was called with gender {gender}"
+
   from grit.node import empty, include, message, structure
 
   yield _FormatHeader(root, lang, output_dir)
@@ -322,7 +322,7 @@ def RcSubstitutions(substituter, lang):
 
 def _FormatHeader(root, lang, output_dir):
   '''Returns the required preamble for RC files.'''
-  assert isinstance(lang, six.string_types)
+  assert isinstance(lang, str)
   assert isinstance(root, misc.GritNode)
   # Find the location of the resource header file, so that we can include
   # it.
@@ -364,7 +364,8 @@ def _FormatHeader(root, lang, output_dir):
 
 def FormatMessage(item, lang):
   '''Returns a single message of a string table.'''
-  message = item.ws_at_start + item.Translate(lang) + item.ws_at_end
+  message = item.ws_at_start + item.Translate(
+      lang, constants.DEFAULT_GENDER) + item.ws_at_end
   # Escape quotation marks (RC format uses doubling-up
   message = message.replace('"', '""')
   # Replace linebreaks with a \n escape
@@ -380,7 +381,7 @@ def FormatMessage(item, lang):
 
 def _FormatSection(item, lang, output_dir):
   '''Writes out an .rc file section.'''
-  assert isinstance(lang, six.string_types)
+  assert isinstance(lang, str)
   from grit.node import structure
   assert isinstance(item, structure.StructureNode)
 
@@ -409,7 +410,7 @@ def FormatInclude(item, lang, output_dir, type=None, process_html=False):
           StructureNode)
     process_html: False/True (ignored unless item is a StructureNode)
   '''
-  assert isinstance(lang, six.string_types)
+  assert isinstance(lang, str)
   from grit.node import structure
   from grit.node import include
   assert isinstance(item, (structure.StructureNode, include.IncludeNode))

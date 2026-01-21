@@ -3,15 +3,17 @@
 # found in the LICENSE file.
 
 import unittest
+from unittest import mock
 
 from blinkpy.common.host_mock import MockHost
 from blinkpy.common.net.results_fetcher import Build
 from blinkpy.common.net.rpc import (RESPONSE_PREFIX as
                                     SEARCHBUILDS_RESPONSE_PREFIX)
-from blinkpy.common.net.git_cl import CLStatus
+from blinkpy.common.net.git_cl import CLStatus, CLSummary
 from blinkpy.common.net.git_cl import GitCL
-from blinkpy.common.net.git_cl import TryJobStatus
+from blinkpy.common.net.git_cl import BuildStatus
 from blinkpy.common.net.web_mock import MockWeb
+from blinkpy.common.system.executive import ScriptError
 from blinkpy.common.system.executive_mock import MockExecutive
 
 
@@ -27,17 +29,20 @@ class GitCLTest(unittest.TestCase):
     def test_run_with_auth(self):
         host = MockHost()
         host.executive = MockExecutive(output='mock-output')
-        git_cl = GitCL(host, auth_refresh_token_json='token.json')
+        git_cl = GitCL(host)
         git_cl.run(['try', '-b', 'win10_blink_rel'])
         self.assertEqual(host.executive.calls, [[
-            'git', 'cl', 'try', '-b', 'win10_blink_rel',
-            '--auth-refresh-token-json', 'token.json'
+            'git',
+            'cl',
+            'try',
+            '-b',
+            'win10_blink_rel',
         ]])
 
     def test_some_commands_not_run_with_auth(self):
         host = MockHost()
         host.executive = MockExecutive(output='mock-output')
-        git_cl = GitCL(host, auth_refresh_token_json='token.json')
+        git_cl = GitCL(host)
         git_cl.run(['issue'])
         self.assertEqual(host.executive.calls, [['git', 'cl', 'issue']])
 
@@ -45,47 +50,70 @@ class GitCLTest(unittest.TestCase):
         # When no bucket is specified, luci.chromium.try is used by
         # default. Besides, `git cl try` invocations are grouped by buckets.
         host = MockHost()
-        git_cl = GitCL(host, auth_refresh_token_json='token.json')
+        git_cl = GitCL(host)
         git_cl.trigger_try_jobs([
             'android_blink_rel', 'fake_blink_try_linux', 'fake_blink_try_win'
         ])
         self.assertEqual(host.executive.calls, [
             [
-                'git', 'cl', 'try', '-B', 'luci.chromium.try', '-b',
-                'fake_blink_try_linux', '-b', 'fake_blink_try_win',
-                '--auth-refresh-token-json', 'token.json'
+                'git',
+                'cl',
+                'try',
+                '-B',
+                'luci.chromium.try',
+                '-b',
+                'fake_blink_try_linux',
+                '-b',
+                'fake_blink_try_win',
             ],
             [
-                'git', 'cl', 'try', '-B', 'luci.chromium.android', '-b',
-                'android_blink_rel', '--auth-refresh-token-json', 'token.json'
+                'git',
+                'cl',
+                'try',
+                '-B',
+                'luci.chromium.android',
+                '-b',
+                'android_blink_rel',
             ],
         ])
 
     def test_trigger_try_jobs_with_frozenset(self):
         # The trigger_try_jobs method may be called with an immutable set.
         host = MockHost()
-        git_cl = GitCL(host, auth_refresh_token_json='token.json')
+        git_cl = GitCL(host)
         git_cl.trigger_try_jobs(
             frozenset(['fake_blink_try_linux', 'fake_blink_try_win']))
         self.assertEqual(host.executive.calls, [
             [
-                'git', 'cl', 'try', '-B', 'luci.chromium.try', '-b',
-                'fake_blink_try_linux', '-b', 'fake_blink_try_win',
-                '--auth-refresh-token-json', 'token.json'
+                'git',
+                'cl',
+                'try',
+                '-B',
+                'luci.chromium.try',
+                '-b',
+                'fake_blink_try_linux',
+                '-b',
+                'fake_blink_try_win',
             ],
         ])
 
     def test_trigger_try_jobs_with_explicit_bucket(self):
         # An explicit bucket overrides configured or default buckets.
         host = MockHost()
-        git_cl = GitCL(host, auth_refresh_token_json='token.json')
+        git_cl = GitCL(host)
         git_cl.trigger_try_jobs(['fake_blink_try_linux', 'android_blink_rel'],
                                 bucket='luci.dummy')
         self.assertEqual(host.executive.calls, [
             [
-                'git', 'cl', 'try', '-B', 'luci.dummy', '-b',
-                'android_blink_rel', '-b', 'fake_blink_try_linux',
-                '--auth-refresh-token-json', 'token.json'
+                'git',
+                'cl',
+                'try',
+                '-B',
+                'luci.dummy',
+                '-b',
+                'android_blink_rel',
+                '-b',
+                'fake_blink_try_linux',
             ],
         ])
 
@@ -94,19 +122,27 @@ class GitCLTest(unittest.TestCase):
         host.executive = MockExecutive(
             output='Foo\nIssue number: 12345 (http://crrev.com/12345)')
         git_cl = GitCL(host)
-        self.assertEqual(git_cl.get_issue_number(), '12345')
+        self.assertEqual(git_cl.get_issue_number(), 12345)
 
     def test_get_issue_number_none(self):
         host = MockHost()
         host.executive = MockExecutive(output='Issue number: None (None)')
         git_cl = GitCL(host)
-        self.assertEqual(git_cl.get_issue_number(), 'None')
+        self.assertIsNone(git_cl.get_issue_number())
+
+    def test_get_issue_number_error(self):
+        host = MockHost()
+        git_cl = GitCL(host)
+        with mock.patch.object(host.executive,
+                               'run_command',
+                               side_effect=ScriptError):
+            self.assertIsNone(git_cl.get_issue_number())
 
     def test_get_issue_number_nothing_in_output(self):
         host = MockHost()
         host.executive = MockExecutive(output='Bogus output')
         git_cl = GitCL(host)
-        self.assertEqual(git_cl.get_issue_number(), 'None')
+        self.assertIsNone(git_cl.get_issue_number())
 
     def test_wait_for_try_jobs_timeout(self):
         response = {
@@ -128,6 +164,7 @@ class GitCLTest(unittest.TestCase):
         # Specify the same response 10 times to ensure each poll gets ones.
         web = MockWeb(responses=[response] * 10)
         host = MockHost(web=web)
+        host.executive = MockExecutive(output='dry-run\n')
         git_cl = GitCL(host)
         self.assertIsNone(git_cl.wait_for_try_jobs())
         self.assertEqual(
@@ -149,6 +186,7 @@ class GitCLTest(unittest.TestCase):
         # Specify the same response 10 times to ensure each poll gets ones.
         web = MockWeb(responses=[response] * 10)
         host = MockHost(web=web)
+        host.executive = MockExecutive(output='dry-run\n')
         git_cl = GitCL(host)
         self.assertIsNone(git_cl.wait_for_try_jobs())
         self.assertEqual(
@@ -183,10 +221,10 @@ class GitCLTest(unittest.TestCase):
         git_cl = GitCL(host)
         self.assertEqual(
             git_cl.wait_for_try_jobs(),
-            CLStatus(
-                status='closed',
+            CLSummary(
+                status=CLStatus.CLOSED,
                 try_job_results={
-                    Build('some-builder', None): TryJobStatus('STARTED', None),
+                    Build('some-builder', None): BuildStatus.STARTED,
                 },
             ))
         self.assertEqual(host.stdout.getvalue(),
@@ -214,12 +252,10 @@ class GitCLTest(unittest.TestCase):
         git_cl = GitCL(host)
         self.assertEqual(
             git_cl.wait_for_try_jobs(),
-            CLStatus(
-                status='lgtm',
-                try_job_results={
-                    Build('some-builder', 100):
-                    TryJobStatus('COMPLETED', 'FAILURE'),
-                }))
+            CLSummary(status=CLStatus.LGTM,
+                      try_job_results={
+                          Build('some-builder', 100): BuildStatus.FAILURE,
+                      }))
         self.assertEqual(host.stdout.getvalue(),
                          'Waiting for try jobs, timeout: 7200 seconds.\n')
 
@@ -241,11 +277,37 @@ class GitCLTest(unittest.TestCase):
             'Waiting for closed status. 1800 seconds passed.\n'
             'Timed out waiting for closed status.\n')
 
+    def test_wait_for_closed_status_timeout_async(self):
+        # 1400s of the timeout has already elapsed, so only busy-wait 400s.
+        host = MockHost(time_return_val=1400)
+        host.executive = MockExecutive(output='commit')
+        git_cl = GitCL(host)
+        self.assertIsNone(
+            git_cl.wait_for_closed_status(poll_delay_seconds=100, start=0))
+        self.assertEqual(
+            host.stdout.getvalue(),
+            'Waiting for closed status, timeout: 1800 seconds.\n'
+            'Waiting for closed status. 1500 seconds passed.\n'
+            'Waiting for closed status. 1700 seconds passed.\n'
+            'Timed out waiting for closed status.\n')
+
+    def test_wait_for_closed_status_timeout_already_expired(self):
+        host = MockHost(time_return_val=2000)
+        host.executive = MockExecutive(output='closed')
+        git_cl = GitCL(host)
+        self.assertEqual(git_cl.wait_for_closed_status(start=0),
+                         CLStatus.CLOSED)
+        self.assertEqual(
+            host.stdout.getvalue(),
+            'Waiting for closed status, timeout: 1800 seconds.\n'
+            'Timed out waiting for closed status.\n'
+            'CL is closed.\n')
+
     def test_wait_for_closed_status_closed(self):
         host = MockHost()
         host.executive = MockExecutive(output='closed')
         git_cl = GitCL(host)
-        self.assertEqual(git_cl.wait_for_closed_status(), 'closed')
+        self.assertEqual(git_cl.wait_for_closed_status(), CLStatus.CLOSED)
         self.assertEqual(
             host.stdout.getvalue(),
             'Waiting for closed status, timeout: 1800 seconds.\n'
@@ -257,17 +319,14 @@ class GitCLTest(unittest.TestCase):
     def test_has_failing_try_results_only_success_and_started(self):
         self.assertFalse(
             GitCL.some_failed({
-                Build('some-builder', 90):
-                TryJobStatus('COMPLETED', 'SUCCESS'),
-                Build('some-builder', 100):
-                TryJobStatus('STARTED'),
+                Build('some-builder', 90): BuildStatus.SUCCESS,
+                Build('some-builder', 100): BuildStatus.STARTED,
             }))
 
     def test_has_failing_try_results_with_failing_results(self):
         self.assertTrue(
             GitCL.some_failed({
-                Build('some-builder', 1):
-                TryJobStatus('COMPLETED', 'FAILURE'),
+                Build('some-builder', 1): BuildStatus.FAILURE,
             }))
 
     def test_all_success_empty(self):
@@ -276,17 +335,14 @@ class GitCLTest(unittest.TestCase):
     def test_all_success_true(self):
         self.assertTrue(
             GitCL.all_success({
-                Build('some-builder', 1):
-                TryJobStatus('COMPLETED', 'SUCCESS'),
+                Build('some-builder', 1): BuildStatus.SUCCESS,
             }))
 
     def test_all_success_with_started_build(self):
         self.assertFalse(
             GitCL.all_success({
-                Build('some-builder', 1):
-                TryJobStatus('COMPLETED', 'SUCCESS'),
-                Build('some-builder', 2):
-                TryJobStatus('STARTED'),
+                Build('some-builder', 1): BuildStatus.SUCCESS,
+                Build('some-builder', 2): BuildStatus.STARTED,
             }))
 
     def test_latest_try_jobs_cq_only(self):
@@ -370,9 +426,9 @@ class GitCLTest(unittest.TestCase):
         git_cl = GitCL(MockHost(web=web))
         self.assertEqual(
             git_cl.latest_try_jobs(cq_only=True), {
-                Build('cq-a'): TryJobStatus('SCHEDULED'),
-                Build('cq-b'): TryJobStatus('SCHEDULED'),
-                Build('cq-c'): TryJobStatus('SCHEDULED'),
+                Build('cq-a'): BuildStatus.SCHEDULED,
+                Build('cq-b'): BuildStatus.SCHEDULED,
+                Build('cq-c'): BuildStatus.SCHEDULED,
             })
 
     def test_latest_try_jobs(self):
@@ -420,8 +476,8 @@ class GitCLTest(unittest.TestCase):
         git_cl = GitCL(MockHost(web=web))
         self.assertEqual(
             git_cl.latest_try_jobs(builder_names=['builder-a', 'builder-b']), {
-                Build('builder-a'): TryJobStatus('SCHEDULED'),
-                Build('builder-b', 100, "100"): TryJobStatus('COMPLETED', 'SUCCESS'),
+                Build('builder-a'): BuildStatus.SCHEDULED,
+                Build('builder-b', 100, "100"): BuildStatus.SUCCESS,
             })
 
     def test_latest_try_jobs_started(self):
@@ -442,9 +498,8 @@ class GitCLTest(unittest.TestCase):
                 }"""
         }])
         git_cl = GitCL(MockHost(web=web))
-        self.assertEqual(
-            git_cl.latest_try_jobs(builder_names=['builder-a']),
-            {Build('builder-a', 100): TryJobStatus('STARTED')})
+        self.assertEqual(git_cl.latest_try_jobs(builder_names=['builder-a']),
+                         {Build('builder-a', 100): BuildStatus.STARTED})
 
     def test_latest_try_jobs_failures(self):
         web = MockWeb(responses=[{
@@ -473,20 +528,20 @@ class GitCLTest(unittest.TestCase):
         git_cl = GitCL(MockHost(web=web))
         self.assertEqual(
             git_cl.latest_try_jobs(builder_names=['builder-a', 'builder-b']), {
-                Build('builder-a', 100): TryJobStatus('COMPLETED', 'FAILURE'),
-                Build('builder-b', 200): TryJobStatus('COMPLETED', 'FAILURE'),
+                Build('builder-a', 100): BuildStatus.FAILURE,
+                Build('builder-b', 200): BuildStatus.INFRA_FAILURE,
             })
 
     def test_filter_latest(self):
         try_job_results = {
-            Build('builder-a', 100): TryJobStatus('COMPLETED', 'FAILURE'),
-            Build('builder-a', 200): TryJobStatus('COMPLETED', 'SUCCESS'),
-            Build('builder-b', 50): TryJobStatus('SCHEDULED'),
+            Build('builder-a', 100): BuildStatus.FAILURE,
+            Build('builder-a', 200): BuildStatus.SUCCESS,
+            Build('builder-b', 50): BuildStatus.SCHEDULED,
         }
         self.assertEqual(
             GitCL.filter_latest(try_job_results), {
-                Build('builder-a', 200): TryJobStatus('COMPLETED', 'SUCCESS'),
-                Build('builder-b', 50): TryJobStatus('SCHEDULED'),
+                Build('builder-a', 200): BuildStatus.SUCCESS,
+                Build('builder-b', 50): BuildStatus.SCHEDULED,
             })
 
     def test_filter_latest_none(self):
@@ -555,15 +610,10 @@ class GitCLTest(unittest.TestCase):
         }])
         git_cl = GitCL(MockHost(web=web))
         self.assertEqual(
-            git_cl.try_job_results(issue_number=None),
-            {
-                Build('builder-a', 111):
-                TryJobStatus('COMPLETED', 'SUCCESS'),
-                Build('builder-b', 222):
-                TryJobStatus('SCHEDULED', None),
-                # INFRA_FAILURE is mapped to FAILURE for this build.
-                Build('builder-c', 333):
-                TryJobStatus('COMPLETED', 'FAILURE'),
+            git_cl.try_job_results(issue_number=None), {
+                Build('builder-a', 111): BuildStatus.SUCCESS,
+                Build('builder-b', 222): BuildStatus.SCHEDULED,
+                Build('builder-c', 333): BuildStatus.INFRA_FAILURE,
             })
 
     def test_try_job_results_skip_experimental_cq(self):
@@ -603,5 +653,5 @@ class GitCLTest(unittest.TestCase):
             # experimental.
             git_cl.try_job_results(issue_number=None, cq_only=True),
             {
-                Build('builder-a', 111): TryJobStatus('COMPLETED', 'SUCCESS'),
+                Build('builder-a', 111): BuildStatus.SUCCESS,
             })

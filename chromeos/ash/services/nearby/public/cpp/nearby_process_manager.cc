@@ -4,8 +4,7 @@
 
 #include "chromeos/ash/services/nearby/public/cpp/nearby_process_manager.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 std::ostream& operator<<(
     std::ostream& os,
@@ -19,10 +18,12 @@ std::ostream& operator<<(
         kConnectionsMojoPipeDisconnection:
       return os << "Connections Mojo Pipe Disconnection";
     case NearbyProcessManager::NearbyProcessShutdownReason::
+        kPresenceMojoPipeDisconnection:
+      return os << "Presence Mojo Pipe Disconnection";
+    case NearbyProcessManager::NearbyProcessShutdownReason::
         kDecoderMojoPipeDisconnection:
       return os << "Decoder Mojo Pipe Disconnection";
   }
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

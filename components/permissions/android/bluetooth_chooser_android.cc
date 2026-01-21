@@ -9,7 +9,6 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/permissions/android/bluetooth_chooser_android_delegate.h"
-#include "components/permissions/android/jni_headers/BluetoothChooserDialog_jni.h"
 #include "components/permissions/constants.h"
 #include "components/permissions/permission_util.h"
 #include "components/url_formatter/elide_url.h"
@@ -18,8 +17,11 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/permissions/android/jni_headers/BluetoothChooserDialog_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace permissions {
@@ -87,10 +89,18 @@ bool BluetoothChooserAndroid::CanAskForScanningPermission() {
 
 void BluetoothChooserAndroid::SetAdapterPresence(AdapterPresence presence) {
   JNIEnv* env = AttachCurrentThread();
-  if (presence != AdapterPresence::POWERED_ON) {
-    Java_BluetoothChooserDialog_notifyAdapterTurnedOff(env, java_dialog_);
-  } else {
-    Java_BluetoothChooserDialog_notifyAdapterTurnedOn(env, java_dialog_);
+  switch (presence) {
+    case AdapterPresence::POWERED_OFF:
+      Java_BluetoothChooserDialog_notifyAdapterTurnedOff(env, java_dialog_);
+      break;
+    case AdapterPresence::POWERED_ON:
+      Java_BluetoothChooserDialog_notifyAdapterTurnedOn(env, java_dialog_);
+      break;
+    case AdapterPresence::UNAUTHORIZED:
+      Java_BluetoothChooserDialog_notifyAdapterUnauthorized(env, java_dialog_);
+      break;
+    default:
+      NOTREACHED();
   }
 }
 
@@ -131,8 +141,8 @@ void BluetoothChooserAndroid::AddOrUpdateDevice(
 
 void BluetoothChooserAndroid::OnDialogFinished(
     JNIEnv* env,
-    jint event_type,
-    const JavaParamRef<jstring>& device_id) {
+    int32_t event_type,
+    const JavaRef<jstring>& device_id) {
   // Values are defined in BluetoothChooserDialog as DIALOG_FINISHED constants.
   switch (event_type) {
     case 0:
@@ -174,10 +184,28 @@ void BluetoothChooserAndroid::ShowNeedLocationPermissionLink(JNIEnv* env) {
                      "");
 }
 
+// static
+std::unique_ptr<BluetoothChooserAndroid>
+BluetoothChooserAndroid::CreateForTesting(
+    content::RenderFrameHost* frame,
+    const EventHandler& event_handler,
+    std::unique_ptr<BluetoothChooserAndroidDelegate> delegate,
+    CreateJavaDialogCallback create_java_dialog_callback) {
+  // Using `new` to access a non-public constructor.
+  return base::WrapUnique(
+      new BluetoothChooserAndroid(frame, event_handler, std::move(delegate),
+                                  std::move(create_java_dialog_callback)));
+}
+
 void BluetoothChooserAndroid::OpenURL(const char* url) {
-  web_contents_->OpenURL(content::OpenURLParams(
-      GURL(url), content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false /* is_renderer_initiated */));
+  web_contents_->OpenURL(
+      content::OpenURLParams(GURL(url), content::Referrer(),
+                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
+                             false /* is_renderer_initiated */),
+      /*navigation_handle_callback=*/{});
 }
 
 }  // namespace permissions
+
+DEFINE_JNI(BluetoothChooserDialog)

@@ -5,19 +5,23 @@
 #include "base/android/callback_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "chrome/android/chrome_jni_headers/ContextualPageActionController_jni.h"
-#include "chrome/browser/profiles/profile_android.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/segmentation_platform/segmentation_platform_service_factory.h"
 #include "chrome/browser/ui/android/toolbar/adaptive_toolbar_enums.h"
+#include "components/segmentation_platform/public/android/input_context_android.h"
 #include "components/segmentation_platform/public/config.h"
 #include "components/segmentation_platform/public/constants.h"
 #include "components/segmentation_platform/public/input_context.h"
 #include "components/segmentation_platform/public/prediction_options.h"
 #include "components/segmentation_platform/public/result.h"
 #include "components/segmentation_platform/public/segmentation_platform_service.h"
+#include "components/segmentation_platform/public/types/processed_value.h"
 #include "url/android/gurl_android.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ContextualPageActionController_jni.h"
+
+using base::android::JavaRef;
 
 // TODO(shaktisahu): Split this file to extract a JNI independent class that
 // can be unit tested.
@@ -25,13 +29,22 @@ namespace {
 
 AdaptiveToolbarButtonVariant ActionLabelToAdaptiveToolbarButtonVariant(
     const std::string& label) {
-  AdaptiveToolbarButtonVariant action = AdaptiveToolbarButtonVariant::UNKNOWN;
+  AdaptiveToolbarButtonVariant action = AdaptiveToolbarButtonVariant::kUnknown;
   if (label ==
       segmentation_platform::kContextualPageActionModelLabelPriceTracking) {
-    action = AdaptiveToolbarButtonVariant::PRICE_TRACKING;
+    action = AdaptiveToolbarButtonVariant::kPriceTracking;
   } else if (label ==
              segmentation_platform::kContextualPageActionModelLabelReaderMode) {
-    action = AdaptiveToolbarButtonVariant::READER_MODE;
+    action = AdaptiveToolbarButtonVariant::kReaderMode;
+  } else if (label == segmentation_platform::
+                          kContextualPageActionModelLabelPriceInsights) {
+    action = AdaptiveToolbarButtonVariant::kPriceInsights;
+  } else if (label ==
+             segmentation_platform::kContextualPageActionModelLabelDiscounts) {
+    action = AdaptiveToolbarButtonVariant::kDiscounts;
+  } else if (label == segmentation_platform::
+                          kContextualPageActionModelLabelTabGrouping) {
+    action = AdaptiveToolbarButtonVariant::kTabGrouping;
   }
   return action;
 }
@@ -51,29 +64,19 @@ void RunGetClassificationResultCallback(
 
 static void JNI_ContextualPageActionController_ComputeContextualPageAction(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_profile,
-    const JavaParamRef<jobject>& j_url,
-    jboolean j_can_track_price,
-    jboolean j_has_reader_mode,
-    const JavaParamRef<jobject>& j_callback) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile);
+    Profile* profile,
+    const JavaRef<jobject>& j_input_context,
+    const JavaRef<jobject>& j_callback) {
   if (!profile) {
     RunGetClassificationResultCallback(
         j_callback, segmentation_platform::ClassificationResult(
                         segmentation_platform::PredictionStatus::kFailed));
     return;
   }
-  auto url = url::GURLAndroid::ToNativeGURL(env, j_url);
 
   scoped_refptr<segmentation_platform::InputContext> input_context =
-      base::MakeRefCounted<segmentation_platform::InputContext>();
-  input_context->metadata_args.emplace(
-      segmentation_platform::kContextualPageActionModelInputPriceTracking,
-      static_cast<float>(j_can_track_price));
-  input_context->metadata_args.emplace(
-      segmentation_platform::kContextualPageActionModelInputReaderMode,
-      static_cast<float>(j_has_reader_mode));
-  input_context->metadata_args.emplace("url", *url);
+      segmentation_platform::InputContextAndroid::ToNativeInputContext(
+          env, j_input_context);
 
   segmentation_platform::SegmentationPlatformService*
       segmentation_platform_service = segmentation_platform::
@@ -87,9 +90,12 @@ static void JNI_ContextualPageActionController_ComputeContextualPageAction(
 
   segmentation_platform::PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
+
   segmentation_platform_service->GetClassificationResult(
       segmentation_platform::kContextualPageActionsKey, prediction_options,
       input_context,
       base::BindOnce(&RunGetClassificationResultCallback,
                      base::android::ScopedJavaGlobalRef<jobject>(j_callback)));
 }
+
+DEFINE_JNI(ContextualPageActionController)

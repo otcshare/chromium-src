@@ -5,9 +5,10 @@
 #include "components/viz/service/frame_sinks/frame_sink_bundle_impl.h"
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/auto_reset.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -15,9 +16,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/task_environment.h"
 #include "base/unguessable_token.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/resources/resource_id.h"
@@ -25,7 +28,6 @@
 #include "components/viz/common/surfaces/frame_sink_bundle_id.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
-#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/test/compositor_frame_helpers.h"
 #include "components/viz/test/fake_external_begin_frame_source.h"
@@ -37,11 +39,9 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-params-data.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
-#include "services/viz/public/mojom/compositing/frame_sink_bundle.mojom-forward.h"
 #include "services/viz/public/mojom/compositing/frame_sink_bundle.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/khronos/GLES2/gl2.h"
 
 namespace viz {
@@ -67,6 +67,8 @@ const base::UnguessableToken kSurfaceTokenC =
 const LocalSurfaceId kSurfaceA{2, kSurfaceTokenA};
 const LocalSurfaceId kSurfaceB{3, kSurfaceTokenB};
 const LocalSurfaceId kSurfaceC{4, kSurfaceTokenC};
+
+const uint64_t kBeginFrameSourceId = 1337;
 
 gpu::SyncToken MakeVerifiedSyncToken(int id) {
   gpu::SyncToken token;
@@ -109,7 +111,7 @@ struct TestRootFrameSink {
     manager_->CreateRootCompositorFrameSink(std::move(params));
   }
 
-  ~TestRootFrameSink() { manager_->InvalidateFrameSinkId(kRootFrame); }
+  ~TestRootFrameSink() { manager_->InvalidateFrameSinkId(kRootFrame, {}); }
 
   const raw_ref<FrameSinkManagerImpl> manager_;
   mojo::AssociatedRemote<mojom::CompositorFrameSink> compositor_frame_sink;
@@ -124,7 +126,7 @@ struct TestFrameSink {
       FrameSinkManagerImpl& manager,
       const FrameSinkId& id,
       const FrameSinkId& parent_id,
-      const absl::optional<FrameSinkBundleId>& bundle_id = absl::nullopt)
+      const std::optional<FrameSinkBundleId>& bundle_id = std::nullopt)
       : manager_(manager), id_(id) {
     manager_->RegisterFrameSinkId(id, /*report_activation=*/true);
     if (parent_id.is_valid()) {
@@ -132,7 +134,8 @@ struct TestFrameSink {
     }
     manager_->CreateCompositorFrameSink(
         id, bundle_id, frame_sink.BindNewPipeAndPassReceiver(),
-        client_receiver_.BindNewPipeAndPassRemote());
+        client_receiver_.BindNewPipeAndPassRemote(),
+        /* render_input_router_config= */ nullptr);
     manager_->GetFrameSinkForId(id)->SetNeedsBeginFrame(true);
   }
 
@@ -168,9 +171,9 @@ class TestBundleClient : public mojom::FrameSinkBundleClient {
       std::vector<mojom::BundledReturnedResourcesPtr>* acks,
       std::vector<mojom::BeginFrameInfoPtr>* begin_frames,
       std::vector<mojom::BundledReturnedResourcesPtr>* reclaimed_resources) {
-    acks_ = acks;
-    begin_frames_ = begin_frames;
-    reclaimed_resources_ = reclaimed_resources;
+    base::AutoReset acks_scope(&acks_, acks);
+    base::AutoReset frames_scope(&begin_frames_, begin_frames);
+    base::AutoReset resources_scope(&reclaimed_resources_, reclaimed_resources);
     WaitForNextMessage();
   }
 
@@ -213,7 +216,7 @@ class TestBundleClient : public mojom::FrameSinkBundleClient {
     }
   }
 
-  absl::optional<base::RunLoop> wait_loop_;
+  std::optional<base::RunLoop> wait_loop_;
   raw_ptr<std::vector<mojom::BundledReturnedResourcesPtr>> acks_;
   raw_ptr<std::vector<mojom::BeginFrameInfoPtr>> begin_frames_;
   raw_ptr<std::vector<mojom::BundledReturnedResourcesPtr>> reclaimed_resources_;
@@ -241,17 +244,17 @@ class FrameSinkBundleImplTest : public testing::Test {
       const FrameSinkId& frame_sink_id,
       const LocalSurfaceId& surface_id,
       std::vector<ResourceId> resource_ids = {}) {
-    auto frame = MakeDefaultCompositorFrame();
+    auto frame = MakeDefaultCompositorFrame(kBeginFrameSourceId);
     for (const auto& id : resource_ids) {
-      TransferableResource resource;
+      TransferableResource resource = TransferableResource::Make(
+          gpu::ClientSharedImage::CreateForTesting(),
+          TransferableResource::ResourceSource::kTest, frame_sync_token_);
       resource.id = id;
-      resource.mailbox_holder.texture_target = GL_TEXTURE_2D;
-      resource.mailbox_holder.sync_token = frame_sync_token_;
       frame.resource_list.push_back(resource);
     }
 
     auto data = mojom::BundledCompositorFrame::New(surface_id, std::move(frame),
-                                                   absl::nullopt, 0);
+                                                   std::nullopt, 0);
     return mojom::BundledFrameSubmission::New(
         frame_sink_id.sink_id(),
         mojom::BundledFrameSubmissionData::NewFrame(std::move(data)));
@@ -277,11 +280,9 @@ class FrameSinkBundleImplTest : public testing::Test {
 
   base::SimpleTestTickClock test_clock_;
   DebugRendererSettings debug_settings_;
-  ServerSharedBitmapManager shared_bitmap_manager_;
   TestOutputSurfaceProvider output_surface_provider_;
   FrameSinkManagerImpl manager_{
-      FrameSinkManagerImpl::InitParams(&shared_bitmap_manager_,
-                                       &output_surface_provider_)};
+      FrameSinkManagerImpl::InitParams(&output_surface_provider_)};
   FakeExternalBeginFrameSource begin_frame_source_{0.0f, false};
 
   TestBundleClient test_client_;
@@ -357,10 +358,11 @@ TEST_F(FrameSinkBundleImplTest, SubmitAndAck) {
   bundle()->Submit(std::move(submissions));
 
   std::vector<mojom::BundledReturnedResourcesPtr> acks;
-  test_client().WaitForNextFlush(&acks, nullptr, nullptr);
-
+  std::vector<mojom::BeginFrameInfoPtr> begin_frames;
+  test_client().WaitForNextFlush(&acks, &begin_frames, nullptr);
   EXPECT_THAT(acks, ElementsAre(ForSink(kSubFrameA), ForSink(kSubFrameB),
                                 ForSink(kSubFrameC)));
+  EXPECT_TRUE(begin_frames.empty());
 }
 
 TEST_F(FrameSinkBundleImplTest, NoAckIfDidNotProduceFrame) {
@@ -376,8 +378,10 @@ TEST_F(FrameSinkBundleImplTest, NoAckIfDidNotProduceFrame) {
   bundle()->Submit(std::move(submissions));
 
   std::vector<mojom::BundledReturnedResourcesPtr> acks;
-  test_client().WaitForNextFlush(&acks, nullptr, nullptr);
+  std::vector<mojom::BeginFrameInfoPtr> begin_frames;
+  test_client().WaitForNextFlush(&acks, &begin_frames, nullptr);
   EXPECT_THAT(acks, ElementsAre(ForSink(kSubFrameA), ForSink(kSubFrameC)));
+  EXPECT_TRUE(begin_frames.empty());
 }
 
 TEST_F(FrameSinkBundleImplTest, ReclaimResourcesOnAck) {
@@ -393,9 +397,11 @@ TEST_F(FrameSinkBundleImplTest, ReclaimResourcesOnAck) {
   bundle()->Submit(std::move(submissions));
 
   std::vector<mojom::BundledReturnedResourcesPtr> acks;
-  test_client().WaitForNextFlush(&acks, nullptr, nullptr);
+  std::vector<mojom::BeginFrameInfoPtr> begin_frames;
+  test_client().WaitForNextFlush(&acks, &begin_frames, nullptr);
   EXPECT_THAT(acks, ElementsAre(ForSink(kSubFrameA), ForSink(kSubFrameB),
                                 ForSink(kSubFrameC)));
+  EXPECT_TRUE(begin_frames.empty());
 
   // Now frame C will submit with resources to a dead surface and be rejected
   // immediately. This should result in an ack which immediately returns the
@@ -408,7 +414,8 @@ TEST_F(FrameSinkBundleImplTest, ReclaimResourcesOnAck) {
   bundle()->Submit(std::move(submissions));
 
   acks.clear();
-  test_client().WaitForNextFlush(&acks, nullptr, nullptr);
+  begin_frames.clear();
+  test_client().WaitForNextFlush(&acks, &begin_frames, nullptr);
   EXPECT_THAT(acks, ElementsAre(ForSink(kSubFrameC)));
 
   EXPECT_EQ(kSubFrameC.sink_id(), acks[0]->sink_id);

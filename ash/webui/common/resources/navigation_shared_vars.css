@@ -4,14 +4,13 @@
 
 /* #css_wrapper_metadata_start
  * #type=vars
- * #import=chrome://resources/cr_elements/cr_shared_vars.css.js
- * #import=chrome://resources/polymer/v3_0/paper-styles/color.js
+ * #import=chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js
  * #css_wrapper_metadata_end */
 
 html {
-  --areas-no-header-nav: "sideNav main";
-  --areas-no-header-nav-banner: "banner banner"
-                                "sideNav main";
+  --areas-no-header-nav: 'sideNav main';
+  --areas-no-header-nav-banner: 'banner banner'
+                                'sideNav main';
   --iron-icon-fill-color: var(--cros-icon-color-primary);
   --iron-icon-height: 20px;
   --iron-icon-width: 20px;
@@ -21,11 +20,11 @@ html {
 /* calc formula: (viewport width - (padding + side nav size)) */
 @media (min-width: 600px) {
   html {
-    --areas-nav: "head head"
-             "main main";
-    --areas-nav-banner: "head head"
-                        "banner banner"
-                        "main main";
+    --areas-nav: 'head head'
+             'main main';
+    --areas-nav-banner: 'head head'
+                        'banner banner'
+                        'main main';
     --columns-nav: 1fr 1fr;
     --container-padding-nav: 24px;
     --container-max-width-nav: calc(100vw - 48px);
@@ -34,11 +33,11 @@ html {
 
 @media (min-width: 769px) {
   html {
-    --areas-nav: "head head"
-             "sideNav main";
-    --areas-nav-banner: "head head"
-                        "banner banner"
-                        "sideNav main";
+    --areas-nav: 'head head'
+             'sideNav main';
+    --areas-nav-banner: 'head head'
+                        'banner banner'
+                        'sideNav main';
     --columns-nav: 192px 1fr;
     --container-padding-nav: 40px;
     --container-max-width-nav: calc(100vw - 272px);

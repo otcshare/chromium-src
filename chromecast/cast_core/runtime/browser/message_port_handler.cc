@@ -4,10 +4,13 @@
 
 #include "chromecast/cast_core/runtime/browser/message_port_handler.h"
 
+#include <string_view>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/cast/message_port/platform_message_port.h"
 #include "components/cast_receiver/browser/public/message_port_service.h"
@@ -94,9 +97,6 @@ cast_receiver::Status MessagePortHandler::HandleMessage(
     case cast::web::Message::kResponse: {
       if (!is_awaiting_response_) {
         LOG(FATAL) << "Received response while not expecting one.";
-        return cast_receiver::Status(
-            cast_receiver::StatusCode::kUnknown,
-            "Received response while not expecting one");
       }
       message_timeout_callback_.Cancel();
       is_awaiting_response_ = false;
@@ -183,9 +183,6 @@ void MessagePortHandler::ForwardMessageNow(cast::web::Message message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!message.has_request() || !has_outstanding_request_);
   bool was_request = message.has_request();
-  if (was_request) {
-    DLOG_CHANNEL(INFO) << "Sending message: " << message.request().data();
-  }
 
   auto call = core_app_stub_->CreateCall<
       cast::v2::CoreMessagePortApplicationServiceStub::PostMessage>(
@@ -236,7 +233,7 @@ void MessagePortHandler::OnPortMessagePosted(
 }
 
 bool MessagePortHandler::OnMessage(
-    base::StringPiece message,
+    std::string_view message,
     std::vector<std::unique_ptr<cast_api_bindings::MessagePort>> ports) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   cast::web::Message request;

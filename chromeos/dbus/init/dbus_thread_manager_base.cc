@@ -4,6 +4,8 @@
 
 #include "chromeos/dbus/init/dbus_thread_manager_base.h"
 
+#include <utility>
+
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/system/sys_info.h"
@@ -21,7 +23,7 @@ bool GetUseRealClients() {
 #if defined(USE_REAL_DBUS_CLIENTS)
   return true;
 #else
-  // TODO(crbug.com/952745): Always use fakes after adding
+  // TODO(crbug.com/41452889): Always use fakes after adding
   // use_real_dbus_clients=true to where needed.
   return (base::SysInfo::IsRunningOnChromeOS() &&
           !base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -49,7 +51,7 @@ DBusThreadManagerBase::DBusThreadManagerBase()
     system_bus_options.bus_type = dbus::Bus::SYSTEM;
     system_bus_options.connection_type = dbus::Bus::PRIVATE;
     system_bus_options.dbus_task_runner = dbus_thread_->task_runner();
-    system_bus_ = new dbus::Bus(system_bus_options);
+    system_bus_ = new dbus::Bus(std::move(system_bus_options));
   }
 }
 

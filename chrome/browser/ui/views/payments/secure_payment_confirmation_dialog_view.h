@@ -7,14 +7,11 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
+#include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
 #include "components/payments/content/secure_payment_confirmation_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/controls/button/button.h"
 #include "ui/views/window/dialog_delegate.h"
-
-namespace views {
-class StyledLabel;
-}
 
 namespace payments {
 
@@ -24,13 +21,14 @@ class PaymentUIObserver;
 // the SecurePaymentConfirmationController.
 class SecurePaymentConfirmationDialogView
     : public SecurePaymentConfirmationView,
-      public views::DialogDelegateView {
- public:
-  METADATA_HEADER(SecurePaymentConfirmationDialogView);
+      public views::DialogDelegateView,
+      public PictureInPictureOcclusionObserver {
+  METADATA_HEADER(SecurePaymentConfirmationDialogView,
+                  views::DialogDelegateView)
 
+ public:
   class ObserverForTest {
    public:
-    virtual void OnDialogOpened() = 0;
     virtual void OnDialogClosed() = 0;
     virtual void OnConfirmButtonPressed() = 0;
     virtual void OnCancelButtonPressed() = 0;
@@ -42,15 +40,18 @@ class SecurePaymentConfirmationDialogView
   enum class DialogViewID : int {
     VIEW_ID_NONE = 0,
     HEADER_ICON,
-    PROGRESS_BAR,
     TITLE,
+    MERCHANT_ICON,
     MERCHANT_LABEL,
     MERCHANT_VALUE,
+    MERCHANT_SECONDARY_VALUE,
+    INSTRUMENT_ICON,
     INSTRUMENT_LABEL,
     INSTRUMENT_VALUE,
-    INSTRUMENT_ICON,
+    INSTRUMENT_SECONDARY_VALUE,
+    TOTAL_ICON,
     TOTAL_LABEL,
-    TOTAL_VALUE
+    TOTAL_VALUE,
   };
 
   explicit SecurePaymentConfirmationDialogView(
@@ -62,6 +63,7 @@ class SecurePaymentConfirmationDialogView
   void ShowDialog(content::WebContents* web_contents,
                   base::WeakPtr<SecurePaymentConfirmationModel> model,
                   VerifyCallback verify_callback,
+                  AnotherWayCallback another_way_callback,
                   CancelCallback cancel_callback,
                   OptOutCallback opt_out_callback) override;
   void OnModelUpdated() override;
@@ -72,20 +74,16 @@ class SecurePaymentConfirmationDialogView
   bool ShouldShowCloseButton() const override;
   bool Accept() override;
 
-  // views::View:
-  void OnThemeChanged() override;
-
   base::WeakPtr<SecurePaymentConfirmationDialogView> GetWeakPtr();
 
  private:
   void OnDialogAccepted();
   void OnDialogCancelled();
   void OnDialogClosed();
+  void OnAnotherWayClicked();
   void OnOptOutClicked();
 
   void InitChildViews();
-
-  std::unique_ptr<views::View> CreateHeaderView();
   std::unique_ptr<views::View> CreateBodyView();
   std::unique_ptr<views::View> CreateRows();
   std::unique_ptr<views::View> CreateRowView(
@@ -96,25 +94,49 @@ class SecurePaymentConfirmationDialogView
       const SkBitmap* icon = nullptr,
       DialogViewID icon_id = DialogViewID::VIEW_ID_NONE);
 
+  // Initialize views for the Secure Payment Confirmation dialog.
+  void InitViews();
+  std::unique_ptr<views::View> CreateHeaderView();
+  std::unique_ptr<views::View> CreateNewRowView(
+      ui::ImageModel icon,
+      DialogViewID icon_id,
+      const std::u16string& value,
+      DialogViewID value_id,
+      const std::u16string& secondary_value = std::u16string(),
+      DialogViewID secondary_value_id = DialogViewID::VIEW_ID_NONE);
+  std::unique_ptr<views::View> CreateFooterView();
+  std::unique_ptr<views::View> CreateOptOutView();
+
   void UpdateLabelView(DialogViewID id, const std::u16string& text);
+
+  // PictureInPictureOcclusionObserver:
+  void OnOcclusionStateChanged(bool occluded) override;
 
   base::WeakPtr<ObserverForTest> observer_for_test_;
   const base::WeakPtr<PaymentUIObserver> ui_observer_for_test_;
 
   VerifyCallback verify_callback_;
   CancelCallback cancel_callback_;
+  AnotherWayCallback another_way_callback_;
   OptOutCallback opt_out_callback_;
 
   // Cache the instrument icon pointer so we don't needlessly update it in
   // OnModelUpdated().
-  raw_ptr<const SkBitmap, DanglingUntriaged> instrument_icon_ = nullptr;
+  raw_ptr<const SkBitmap, AcrossTasksDanglingUntriaged> instrument_icon_ =
+      nullptr;
   // Cache the instrument icon generation ID to check if the instrument_icon_
   // has changed pixels.
   uint32_t instrument_icon_generation_id_ = 0;
 
   // The opt-out view stored in the dialog footnote. This is always created in
   // InitChildViews, but is only marked visible if opt-out was requested.
-  raw_ptr<views::StyledLabel> opt_out_view_ = nullptr;
+  raw_ptr<views::View> opt_out_view_ = nullptr;
+
+  // The footer view stored in the main dialog. This is always created
+  // in InitChildViews, but is only marked visible if footer was requested.
+  raw_ptr<views::View> footer_view_ = nullptr;
+
+  ScopedPictureInPictureOcclusionObservation occlusion_observation_{this};
 
   base::WeakPtrFactory<SecurePaymentConfirmationDialogView> weak_ptr_factory_{
       this};

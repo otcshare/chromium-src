@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "components/favicon/core/favicon_client.h"
@@ -99,7 +100,8 @@ TEST_F(ContentFaviconDriverTest, ShouldCauseImageDownload) {
   // Mimic a page load.
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
-      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes));
+      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes,
+      /*is_default_icon=*/false));
   TestFetchFaviconForPage(web_contents(), kPageURL, favicon_urls);
   EXPECT_TRUE(web_contents_tester()->TestDidDownloadImage(
       kIconURL, 200, kEmptyIcons, kEmptyIconSizes));
@@ -107,7 +109,7 @@ TEST_F(ContentFaviconDriverTest, ShouldCauseImageDownload) {
 
 // Ensures that we do not consider a manifest URL if it arrives before the
 // onload handler has fired.
-// TODO(crbug.com/1205018): This may not necessarily the desired behavior, but
+// TODO(crbug.com/40180290): This may not necessarily the desired behavior, but
 // this test will prevent unintentional behavioral changes until the issue is
 // resolved.
 TEST_F(ContentFaviconDriverTest, IgnoreManifestURLBeforeOnLoad) {
@@ -161,7 +163,8 @@ TEST_F(ContentFaviconDriverTest, ShouldNotCauseImageDownload) {
   navigation->Commit();
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
-      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes));
+      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes,
+      /*is_default_icon=*/false));
   static_cast<content::WebContentsObserver*>(favicon_driver)
       ->DidUpdateFaviconURL(web_contents()->GetPrimaryMainFrame(),
                             favicon_urls);
@@ -178,7 +181,8 @@ TEST_F(ContentFaviconDriverTest, ShouldNotRequestRepeatedlyIfUnavailable) {
   // Mimic a page load.
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
-      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes));
+      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes,
+      /*is_default_icon=*/false));
   TestFetchFaviconForPage(web_contents(), kPageURL, favicon_urls);
   // Verify that no download request is pending for the image.
   EXPECT_FALSE(web_contents_tester()->HasPendingDownloadImage(kIconURL));
@@ -191,9 +195,11 @@ TEST_F(ContentFaviconDriverTest, ShouldDownloadSecondIfFirstUnavailable) {
   // Mimic a page load.
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
-      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes));
+      kIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes,
+      /*is_default_icon=*/false));
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
-      kOtherIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes));
+      kOtherIconURL, blink::mojom::FaviconIconType::kFavicon, kEmptyIconSizes,
+      /*is_default_icon=*/false));
   TestFetchFaviconForPage(web_contents(), kPageURL, favicon_urls);
   // Verify a  download request is pending for the second image.
   EXPECT_FALSE(web_contents_tester()->HasPendingDownloadImage(kIconURL));
@@ -222,7 +228,8 @@ TEST_F(ContentFaviconDriverTestNoFaviconService,
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
       GURL("http://www.google.com/favicon.ico"),
-      blink::mojom::FaviconIconType::kTouchIcon, std::vector<gfx::Size>()));
+      blink::mojom::FaviconIconType::kTouchIcon, std::vector<gfx::Size>(),
+      /*is_default_icon=*/false));
   TestFetchFaviconForPage(web_contents(), GURL("http://www.google.com/"),
                           favicon_urls);
 

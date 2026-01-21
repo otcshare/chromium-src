@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "base/no_destructor.h"
 #include "third_party/sqlite/fuzz/icu_codes.pb.h"
 #include "third_party/sqlite/fuzz/sql_queries.pb.h"
 #include "third_party/sqlite/fuzz/sql_query_grammar.pb.h"
@@ -22,7 +23,7 @@ using namespace sql_query_grammar;
 #define CONV_FN(TYPE, VAR_NAME) std::string TYPE##ToString(const TYPE& VAR_NAME)
 
 #define RETURN_IF_DISABLED_QUERY(TYPE)     \
-  if (disabled_queries_.count(#TYPE) != 0) \
+  if (disabled_queries_->count(#TYPE) != 0) \
     return "";
 
 namespace sql_fuzzer {
@@ -54,7 +55,7 @@ constexpr uint32_t kMaxSavePointNumber = 10;
 constexpr uint32_t kMaxViewNumber = 5;
 constexpr uint32_t kMaxTriggerNumber = 10;
 
-std::set<std::string> disabled_queries_;
+static base::NoDestructor<std::set<std::string>> disabled_queries_;
 }  // namespace
 
 CONV_FN(Expr, expr);
@@ -424,88 +425,60 @@ CONV_FN(BinaryOperator, bop) {
   switch (bop) {
     case BINOP_CONCAT:
       return " || ";
-      break;
     case BINOP_STAR:
       return " * ";
-      break;
     case BINOP_SLASH:
       return " / ";
-      break;
     case BINOP_PERCENT:
       return " % ";
-      break;
     case BINOP_PLUS:
       return " + ";
-      break;
     case BINOP_MINUS:
       return " - ";
-      break;
     case BINOP_LELE:
       return " << ";
-      break;
     case BINOP_GRGR:
       return " >> ";
-      break;
     case BINOP_AMPERSAND:
       return " & ";
-      break;
     case BINOP_PIPE:
       return " | ";
-      break;
     case BINOP_LE:
       return " < ";
-      break;
     case BINOP_LEQ:
       return " <= ";
-      break;
     case BINOP_GR:
       return " > ";
-      break;
     case BINOP_GREQ:
       return " >= ";
-      break;
     case BINOP_EQ:
       return " = ";
-      break;
     case BINOP_EQEQ:
       return " == ";
-      break;
     case BINOP_NOTEQ:
       return " != ";
-      break;
     case BINOP_LEGR:
       return " <> ";
-      break;
     case BINOP_IS:
       return " IS ";
-      break;
     case BINOP_ISNOT:
       return " IS NOT ";
-      break;
     case BINOP_IN:
       return " IN ";  // CORPUS specialize?
-      break;
     case BINOP_LIKE:
       return " LIKE ";  // CORPUS specialize?
-      break;
     case BINOP_GLOB:
       return " GLOB ";  // CORPUS
-      break;
     case BINOP_MATCH:
       return " MATCH ";  // CORPUS
-      break;
     case BINOP_REGEXP:
       return " REGEXP ";  // CORPUS
-      break;
     case BINOP_AND:
       return " AND ";
-      break;
     case BINOP_OR:
       return " OR ";
-      break;
     default:
       return " AND ";
-      break;
   }
 }
 
@@ -666,7 +639,8 @@ CONV_FN(PrintfFormatSpecifier, pfs) {
     }
   }
   if (pfs.has_width()) {
-    ret += std::to_string(pfs.width());
+    // Limit the width to avoid OOM; see https://crbug.com/386415609.
+    ret += std::to_string(std::min(pfs.width(), 255u));
   } else if (pfs.width_star()) {
     ret += "*";
   }
@@ -1178,7 +1152,7 @@ CONV_FN(CreateTable, create_table) {
   RETURN_IF_DISABLED_QUERY(CreateTable);
 #if defined(FUZZ_FTS3)
   return "";  // Don't create normal tables in FTS3 fuzzing mode.
-#endif
+#else
   std::string ret("CREATE ");
   if (create_table.has_temp_modifier()) {
     ret += EnumStrReplaceUnderscores(
@@ -1208,6 +1182,7 @@ CONV_FN(CreateTable, create_table) {
   }
 
   return ret;  // TODO(mpdenton)
+#endif
 }
 
 // ~~~~For INSERT and SELECT~~~~
@@ -1226,7 +1201,8 @@ CONV_FN(CommonTableExpr, cte) {
   }
   ret += " AS (";
   ret += SelectToString(cte.select());
-  ret += ") ";
+  // Avert infinite recursion.
+  ret += " LIMIT 1000)";
   return ret;
 }
 
@@ -2751,7 +2727,7 @@ CONV_FN(SQLQueries, sql_queries) {
 }
 
 void SetDisabledQueries(std::set<std::string> disabled_queries) {
-  disabled_queries_ = disabled_queries;
+  *disabled_queries_ = disabled_queries;
 }
 
 }  // namespace sql_fuzzer

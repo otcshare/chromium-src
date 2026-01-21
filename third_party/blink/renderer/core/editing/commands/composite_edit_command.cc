@@ -29,6 +29,7 @@
 
 #include "third_party/blink/renderer/core/accessibility/blink_ax_event_intent.h"
 #include "third_party/blink/renderer/core/accessibility/scoped_blink_ax_event_intent.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -44,6 +45,7 @@
 #include "third_party/blink/renderer/core/editing/commands/insert_into_text_node_command.h"
 #include "third_party/blink/renderer/core/editing/commands/insert_line_break_command.h"
 #include "third_party/blink/renderer/core/editing/commands/insert_node_before_command.h"
+#include "third_party/blink/renderer/core/editing/commands/insert_node_list_before_command.h"
 #include "third_party/blink/renderer/core/editing/commands/insert_paragraph_separator_command.h"
 #include "third_party/blink/renderer/core/editing/commands/merge_identical_elements_command.h"
 #include "third_party/blink/renderer/core/editing/commands/remove_css_property_command.h"
@@ -71,26 +73,50 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/events/input_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_li_element.h"
 #include "third_party/blink/renderer/core/html/html_object_element.h"
+#include "third_party/blink/renderer/core/html/html_olist_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_ulist_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/core/layout/layout_block.h"
-#include "third_party/blink/renderer/core/layout/layout_list_item.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
-#include "third_party/blink/renderer/core/layout/line/inline_text_box.h"
+#include "third_party/blink/renderer/core/page/chrome_client.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/clear_collection_scope.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/document_resource_coordinator.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
-CompositeEditCommand::CompositeEditCommand(Document& document)
-    : EditCommand(document) {
+namespace {
+
+bool IsWhitespaceForRebalance(const Text& text_node, UChar character) {
+  if (IsWhitespace(character)) {
+    if (character == uchar::kLineFeed &&
+        RuntimeEnabledFeatures::InsertLineBreakIfPhrasingContentEnabled()) {
+      return !text_node.GetLayoutObject() ||
+             text_node.GetLayoutObject()->StyleRef().ShouldCollapseBreaks();
+    }
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+CompositeEditCommand::CompositeEditCommand(Document& document,
+                                           DataTransfer* data_transfer)
+    : EditCommand(document), data_transfer_(data_transfer) {
   const VisibleSelection& visible_selection =
       document.GetFrame()
           ->Selection()
@@ -114,7 +140,7 @@ VisibleSelection CompositeEditCommand::EndingVisibleSelection() const {
 
 bool CompositeEditCommand::Apply() {
   DCHECK(!IsCommandGroupWrapper());
-  if (!IsRichlyEditablePosition(EndingVisibleSelection().Base())) {
+  if (!IsRichlyEditablePosition(EndingVisibleSelection().Anchor())) {
     switch (GetInputType()) {
       case InputEvent::InputType::kInsertText:
       case InputEvent::InputType::kInsertLineBreak:
@@ -125,6 +151,7 @@ bool CompositeEditCommand::Apply() {
       case InputEvent::InputType::kInsertTranspose:
       case InputEvent::InputType::kInsertReplacementText:
       case InputEvent::InputType::kInsertCompositionText:
+      case InputEvent::InputType::kInsertLink:
       case InputEvent::InputType::kDeleteWordBackward:
       case InputEvent::InputType::kDeleteWordForward:
       case InputEvent::InputType::kDeleteSoftLineBackward:
@@ -325,6 +352,20 @@ void CompositeEditCommand::InsertNodeAfter(Node* insert_child,
   }
 }
 
+void CompositeEditCommand::InsertNodeListAfter(Node& insert_first_child,
+                                               Node& ref_child,
+                                               EditingState* editing_state) {
+  ContainerNode* parent = ref_child.parentNode();
+  ABORT_EDITING_COMMAND_IF(!parent);
+  ABORT_EDITING_COMMAND_IF(GetDocument().body() == &ref_child);
+  ABORT_EDITING_COMMAND_IF(!IsEditable(*parent) && parent->InActiveDocument());
+  DCHECK(!parent->IsShadowRoot()) << parent;
+  ApplyCommandToComposite(
+      MakeGarbageCollected<InsertNodeListBeforeCommand>(
+          insert_first_child, *parent, ref_child.nextSibling()),
+      editing_state);
+}
+
 void CompositeEditCommand::InsertNodeAt(Node* insert_child,
                                         const Position& editing_position,
                                         EditingState* editing_state) {
@@ -350,8 +391,8 @@ void CompositeEditCommand::InsertNodeAt(Node* insert_child,
   } else if (ref_child_text_node && CaretMaxOffset(ref_child) > offset) {
     SplitTextNode(ref_child_text_node, offset);
 
-    // Mutation events (bug 22634) from the text node insertion may have
-    // removed the refChild
+    // Synchronous events (bug 22634) from the text node insertion may have
+    // removed the refChild.
     if (!ref_child->isConnected())
       return;
     InsertNodeBefore(insert_child, ref_child, editing_state);
@@ -557,14 +598,17 @@ void CompositeEditCommand::SplitTextNodeContainingElement(Text* text,
       ASSERT_NO_EDITING_ABORT);
 }
 
-void CompositeEditCommand::InsertTextIntoNode(Text* node,
-                                              unsigned offset,
-                                              const String& text) {
+void CompositeEditCommand::InsertTextIntoNode(
+    Text* node,
+    unsigned offset,
+    const String& text,
+    PasswordEchoBehavior password_echo_behavior) {
   // InsertIntoTextNodeCommand is never aborted.
-  if (!text.empty())
-    ApplyCommandToComposite(
-        MakeGarbageCollected<InsertIntoTextNodeCommand>(node, offset, text),
-        ASSERT_NO_EDITING_ABORT);
+  if (!text.empty()) {
+    ApplyCommandToComposite(MakeGarbageCollected<InsertIntoTextNodeCommand>(
+                                node, offset, text, password_echo_behavior),
+                            ASSERT_NO_EDITING_ABORT);
+  }
 }
 
 void CompositeEditCommand::DeleteTextFromNode(Text* node,
@@ -576,17 +620,22 @@ void CompositeEditCommand::DeleteTextFromNode(Text* node,
       ASSERT_NO_EDITING_ABORT);
 }
 
-void CompositeEditCommand::ReplaceTextInNode(Text* node,
-                                             unsigned offset,
-                                             unsigned count,
-                                             const String& replacement_text) {
+void CompositeEditCommand::ReplaceTextInNode(
+    Text* node,
+    unsigned offset,
+    unsigned count,
+    const String& replacement_text,
+    PasswordEchoBehavior password_echo_behavior) {
   // SetCharacterDataCommand is never aborted.
-  ApplyCommandToComposite(MakeGarbageCollected<SetCharacterDataCommand>(
-                              node, offset, count, replacement_text),
-                          ASSERT_NO_EDITING_ABORT);
+  ApplyCommandToComposite(
+      MakeGarbageCollected<SetCharacterDataCommand>(
+          node, offset, count, replacement_text, password_echo_behavior),
+      ASSERT_NO_EDITING_ABORT);
 }
 
-Position CompositeEditCommand::ReplaceSelectedTextInNode(const String& text) {
+Position CompositeEditCommand::ReplaceSelectedTextInNode(
+    const String& text,
+    PasswordEchoBehavior password_echo_behavior) {
   const Position& start = EndingSelection().Start();
   const Position& end = EndingSelection().End();
   auto* text_node = DynamicTo<Text>(start.ComputeContainerNode());
@@ -596,25 +645,26 @@ Position CompositeEditCommand::ReplaceSelectedTextInNode(const String& text) {
 
   ReplaceTextInNode(text_node, start.OffsetInContainerNode(),
                     end.OffsetInContainerNode() - start.OffsetInContainerNode(),
-                    text);
+                    text, password_echo_behavior);
 
   return Position(text_node, start.OffsetInContainerNode() + text.length());
 }
 
 Position CompositeEditCommand::PositionOutsideTabSpan(const Position& pos) {
-  if (!IsTabHTMLSpanElementTextNode(pos.AnchorNode()))
+  Node* anchor_node = pos.AnchorNode();
+  if (!IsTabHTMLSpanElementTextNode(anchor_node)) {
     return pos;
+  }
 
   switch (pos.AnchorType()) {
     case PositionAnchorType::kAfterChildren:
       NOTREACHED();
-      return pos;
     case PositionAnchorType::kOffsetInAnchor:
       break;
     case PositionAnchorType::kBeforeAnchor:
-      return Position::InParentBeforeNode(*pos.AnchorNode());
+      return Position::InParentBeforeNode(*anchor_node);
     case PositionAnchorType::kAfterAnchor:
-      return Position::InParentAfterNode(*pos.AnchorNode());
+      return Position::InParentAfterNode(*anchor_node);
   }
 
   HTMLSpanElement* tab_span = TabSpanElement(pos.ComputeContainerNode());
@@ -627,8 +677,14 @@ Position CompositeEditCommand::PositionOutsideTabSpan(const Position& pos) {
   if (pos.OffsetInContainerNode() <= CaretMinOffset(pos.ComputeContainerNode()))
     return Position::InParentBeforeNode(*tab_span);
 
-  if (pos.OffsetInContainerNode() >= CaretMaxOffset(pos.ComputeContainerNode()))
-    return Position::InParentAfterNode(*tab_span);
+  if (pos.OffsetInContainerNode() >=
+      CaretMaxOffset(pos.ComputeContainerNode())) {
+    return anchor_node->HasNextSibling() &&
+                   RuntimeEnabledFeatures::
+                       PositionOutsideTabSpanCheckSiblingNodeEnabled()
+               ? Position::InParentAfterNode(*anchor_node)
+               : Position::InParentAfterNode(*tab_span);
+  }
 
   SplitTextNodeContainingElement(To<Text>(pos.ComputeContainerNode()),
                                  pos.OffsetInContainerNode());
@@ -700,8 +756,9 @@ bool CompositeEditCommand::CanRebalance(const Position& position) const {
     return false;
 
   LayoutText* layout_text = text_node->GetLayoutObject();
-  if (layout_text && !layout_text->Style()->CollapseWhiteSpace())
+  if (layout_text && layout_text->Style()->ShouldPreserveWhiteSpaces()) {
     return false;
+  }
 
   return true;
 }
@@ -737,12 +794,16 @@ void CompositeEditCommand::RebalanceWhitespaceOnTextSubstring(Text* text_node,
   // Set upstream and downstream to define the extent of the whitespace
   // surrounding text[offset].
   int upstream = start_offset;
-  while (upstream > 0 && IsWhitespace(text[upstream - 1]))
+  while (upstream > 0 &&
+         IsWhitespaceForRebalance(*text_node, text[upstream - 1])) {
     upstream--;
+  }
 
   int downstream = end_offset;
-  while ((unsigned)downstream < text.length() && IsWhitespace(text[downstream]))
+  while ((unsigned)downstream < text.length() &&
+         IsWhitespaceForRebalance(*text_node, text[downstream])) {
     downstream++;
+  }
 
   int length = downstream - upstream;
   if (!length)
@@ -773,8 +834,10 @@ void CompositeEditCommand::RebalanceWhitespaceOnTextSubstring(Text* text_node,
       string, IsStartOfParagraph(visible_upstream_pos) || !upstream,
       should_emit_nbs_pbefore_end);
 
-  if (string != rebalanced_string)
-    ReplaceTextInNode(text_node, upstream, length, rebalanced_string);
+  if (string != rebalanced_string) {
+    ReplaceTextInNode(text_node, upstream, length, rebalanced_string,
+                      EditCommand::PasswordEchoBehavior::kDoNotEcho);
+  }
 }
 
 void CompositeEditCommand::PrepareWhitespaceAtPositionForSplit(
@@ -789,16 +852,18 @@ void CompositeEditCommand::PrepareWhitespaceAtPositionForSplit(
   if (text_node->length() == 0)
     return;
   LayoutText* layout_text = text_node->GetLayoutObject();
-  if (layout_text && !layout_text->Style()->CollapseWhiteSpace())
+  if (layout_text && layout_text->Style()->ShouldPreserveWhiteSpaces()) {
     return;
+  }
 
   // Delete collapsed whitespace so that inserting nbsps doesn't uncollapse it.
   Position upstream_pos = MostBackwardCaretPosition(position);
-  RelocatablePosition relocatable_upstream_pos(upstream_pos);
+  RelocatablePosition* relocatable_upstream_pos =
+      MakeGarbageCollected<RelocatablePosition>(upstream_pos);
   DeleteInsignificantText(upstream_pos, MostForwardCaretPosition(position));
 
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
-  position = MostForwardCaretPosition(relocatable_upstream_pos.GetPosition());
+  position = MostForwardCaretPosition(relocatable_upstream_pos->GetPosition());
   VisiblePosition visible_pos = CreateVisiblePosition(position);
   VisiblePosition previous_visible_pos = PreviousPositionOf(visible_pos);
   ReplaceCollapsibleWhitespaceWithNonBreakingSpaceIfNeeded(
@@ -819,7 +884,8 @@ void CompositeEditCommand::
   if (!container_text_node)
     return;
   ReplaceTextInNode(container_text_node, pos.OffsetInContainerNode(), 1,
-                    NonBreakingSpaceString());
+                    NonBreakingSpaceString(),
+                    EditCommand::PasswordEchoBehavior::kDoNotEcho);
 }
 
 void CompositeEditCommand::RebalanceWhitespace() {
@@ -835,7 +901,7 @@ void CompositeEditCommand::RebalanceWhitespace() {
 static bool IsInsignificantText(const LayoutText& layout_text) {
   if (layout_text.HasInlineFragments())
     return false;
-  // Spaces causing line break don't have `NGFragmentItem` but it has
+  // Spaces causing line break don't have `FragmentItem` but it has
   // non-zero length. See http://crbug.com/1322746
   return !layout_text.ResolvedTextLength();
 }
@@ -862,79 +928,16 @@ void CompositeEditCommand::DeleteInsignificantText(Text* text_node,
   if (start >= length || end > length)
     return;
 
-  if (text_layout_object->IsInLayoutNGInlineFormattingContext()) {
-    const String string = PlainText(
-        EphemeralRange(Position(*text_node, start), Position(*text_node, end)),
-        TextIteratorBehavior::Builder().SetEmitsOriginalText(true).Build());
-    if (string.empty())
-      return DeleteTextFromNode(text_node, start, end - start);
-    // Replace the text between start and end with collapsed version.
-    return ReplaceTextInNode(text_node, start, end - start, string);
+  CHECK(text_layout_object->IsInLayoutNGInlineFormattingContext());
+  const String string = PlainText(
+      EphemeralRange(Position(*text_node, start), Position(*text_node, end)),
+      TextIteratorBehavior::Builder().SetEmitsOriginalText(true).Build());
+  if (string.empty()) {
+    return DeleteTextFromNode(text_node, start, end - start);
   }
-
-  HeapVector<Member<InlineTextBox>> sorted_text_boxes;
-  ClearCollectionScope<HeapVector<Member<InlineTextBox>>> scope(
-      &sorted_text_boxes);
-  wtf_size_t sorted_text_boxes_position = 0;
-
-  for (InlineTextBox* text_box : text_layout_object->TextBoxes())
-    sorted_text_boxes.push_back(text_box);
-
-  // If there is mixed directionality text, the boxes can be out of order,
-  // (like Arabic with embedded LTR), so sort them first.
-  if (text_layout_object->ContainsReversedText())
-    std::sort(sorted_text_boxes.begin(), sorted_text_boxes.end(),
-              InlineTextBox::CompareByStart);
-  InlineTextBox* box = sorted_text_boxes.empty()
-                           ? nullptr
-                           : sorted_text_boxes[sorted_text_boxes_position];
-
-  unsigned removed = 0;
-  InlineTextBox* prev_box = nullptr;
-  String str;
-
-  // This loop structure works to process all gaps preceding a box,
-  // and also will look at the gap after the last box.
-  while (prev_box || box) {
-    unsigned gap_start = prev_box ? prev_box->Start() + prev_box->Len() : 0;
-    if (end < gap_start) {
-      // No more chance for any intersections
-      break;
-    }
-
-    unsigned gap_end = box ? box->Start() : length;
-    bool indices_intersect = start <= gap_end && end >= gap_start;
-    int gap_len = gap_end - gap_start;
-    if (indices_intersect && gap_len > 0) {
-      gap_start = std::max(gap_start, start);
-      if (str.IsNull())
-        str = text_node->data().Substring(start, end - start);
-      // remove text in the gap
-      str.Remove(gap_start - start - removed, gap_len);
-      removed += gap_len;
-    }
-
-    prev_box = box;
-    if (box) {
-      if (++sorted_text_boxes_position < sorted_text_boxes.size())
-        box = sorted_text_boxes[sorted_text_boxes_position];
-      else
-        box = nullptr;
-    }
-  }
-
-  if (!str.IsNull()) {
-    // Replace the text between start and end with our pruned version.
-    if (!str.empty()) {
-      ReplaceTextInNode(text_node, start, end - start, str);
-    } else {
-      // Assert that we are not going to delete all of the text in the node.
-      // If we were, that should have been done above with the call to
-      // removeNode and return.
-      DCHECK(start > 0 || end - start < text_node->length());
-      DeleteTextFromNode(text_node, start, end - start);
-    }
-  }
+  // Replace the text between start and end with collapsed version.
+  return ReplaceTextInNode(text_node, start, end - start, string,
+                           EditCommand::PasswordEchoBehavior::kDoNotEcho);
 }
 
 void CompositeEditCommand::DeleteInsignificantText(const Position& start,
@@ -1014,10 +1017,9 @@ HTMLBRElement* CompositeEditCommand::InsertBlockPlaceholder(
 }
 
 static bool IsEmptyListItem(const LayoutBlockFlow& block_flow) {
-  if (block_flow.IsLayoutNGListItem())
+  if (block_flow.IsLayoutListItem()) {
     return !block_flow.FirstChild();
-  if (block_flow.IsListItem())
-    return To<LayoutListItem>(block_flow).IsEmpty();
+  }
   return false;
 }
 
@@ -1035,8 +1037,9 @@ HTMLBRElement* CompositeEditCommand::AddBlockPlaceholderIfNeeded(
 
   // append the placeholder to make sure it follows
   // any unrendered blocks
-  if (block->Size().Height() == 0 || IsEmptyListItem(*block))
+  if (block->StitchedSize().height == 0 || IsEmptyListItem(*block)) {
     return AppendBlockPlaceholder(container, editing_state);
+  }
 
   return nullptr;
 }
@@ -1373,10 +1376,12 @@ void CompositeEditCommand::MoveParagraphWithClones(
   DCHECK(outer_node);
   DCHECK(block_element);
 
-  RelocatablePosition relocatable_before_paragraph(
-      PreviousPositionOf(start_of_paragraph_to_move).DeepEquivalent());
-  RelocatablePosition relocatable_after_paragraph(
-      NextPositionOf(end_of_paragraph_to_move).DeepEquivalent());
+  RelocatablePosition* relocatable_before_paragraph =
+      MakeGarbageCollected<RelocatablePosition>(
+          PreviousPositionOf(start_of_paragraph_to_move).DeepEquivalent());
+  RelocatablePosition* relocatable_after_paragraph =
+      MakeGarbageCollected<RelocatablePosition>(
+          NextPositionOf(end_of_paragraph_to_move).DeepEquivalent());
 
   // We upstream() the end and downstream() the start so that we don't include
   // collapsed whitespace in the move. When we paste a fragment, spaces after
@@ -1421,9 +1426,9 @@ void CompositeEditCommand::MoveParagraphWithClones(
   // a br. Must recononicalize these two VisiblePositions after the pruning
   // above.
   const VisiblePosition& before_paragraph =
-      CreateVisiblePosition(relocatable_before_paragraph.GetPosition());
+      CreateVisiblePosition(relocatable_before_paragraph->GetPosition());
   const VisiblePosition& after_paragraph =
-      CreateVisiblePosition(relocatable_after_paragraph.GetPosition());
+      CreateVisiblePosition(relocatable_after_paragraph->GetPosition());
 
   if (before_paragraph.IsNotNull() &&
       !IsDisplayInsideTable(before_paragraph.DeepEquivalent().AnchorNode()) &&
@@ -1492,43 +1497,57 @@ void CompositeEditCommand::MoveParagraphs(
     VisiblePosition visible_start = EndingVisibleSelection().VisibleStart();
     VisiblePosition visible_end = EndingVisibleSelection().VisibleEnd();
 
-    bool start_after_paragraph =
-        ComparePositions(visible_start, end_of_paragraph_to_move) > 0;
-    bool end_before_paragraph =
-        ComparePositions(visible_end, start_of_paragraph_to_move) < 0;
+    if (RuntimeEnabledFeatures::
+            HandleDisconnectedSelectionDuringDOMChangesEnabled() &&
+        (visible_start.IsNull() || visible_end.IsNull())) {
+      // Skip preserving the selection if the selection endpoints
+      // visible_start and visible_end are invalid.
+      // It can happen due to a callback of a synchronous event
+      // dispatched by a prior DOM mutation.
+    } else {
+      bool start_after_paragraph =
+          ComparePositions(visible_start, end_of_paragraph_to_move) > 0;
+      bool end_before_paragraph =
+          ComparePositions(visible_end, start_of_paragraph_to_move) < 0;
 
-    if (!start_after_paragraph && !end_before_paragraph) {
-      bool start_in_paragraph =
-          ComparePositions(visible_start, start_of_paragraph_to_move) >= 0;
-      bool end_in_paragraph =
-          ComparePositions(visible_end, end_of_paragraph_to_move) <= 0;
+      if (!start_after_paragraph && !end_before_paragraph) {
+        bool start_in_paragraph =
+            ComparePositions(visible_start, start_of_paragraph_to_move) >= 0;
+        bool end_in_paragraph =
+            ComparePositions(visible_end, end_of_paragraph_to_move) <= 0;
+        const TextIteratorBehavior behavior =
+            RuntimeEnabledFeatures::EnterInOpenShadowRootsEnabled()
+                ? TextIteratorBehavior::
+                      AllVisiblePositionsIncludingShadowRootRangeLengthBehavior()
+                : TextIteratorBehavior::
+                      AllVisiblePositionsRangeLengthBehavior();
 
-      const TextIteratorBehavior behavior =
-          TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior();
+        start_index = 0;
+        if (start_in_paragraph) {
+          start_index = TextIterator::RangeLength(
+              start_of_paragraph_to_move.ToParentAnchoredPosition(),
+              visible_start.ToParentAnchoredPosition(), behavior);
+        }
 
-      start_index = 0;
-      if (start_in_paragraph) {
-        start_index = TextIterator::RangeLength(
-            start_of_paragraph_to_move.ToParentAnchoredPosition(),
-            visible_start.ToParentAnchoredPosition(), behavior);
-      }
-
-      end_index = 0;
-      if (end_in_paragraph) {
-        end_index = TextIterator::RangeLength(
-            start_of_paragraph_to_move.ToParentAnchoredPosition(),
-            visible_end.ToParentAnchoredPosition(), behavior);
+        end_index = 0;
+        if (end_in_paragraph) {
+          end_index = TextIterator::RangeLength(
+              start_of_paragraph_to_move.ToParentAnchoredPosition(),
+              visible_end.ToParentAnchoredPosition(), behavior);
+        }
       }
     }
   }
 
-  RelocatablePosition before_paragraph_position(
-      PreviousPositionOf(start_of_paragraph_to_move,
-                         kCannotCrossEditingBoundary)
-          .DeepEquivalent());
-  RelocatablePosition after_paragraph_position(
-      NextPositionOf(end_of_paragraph_to_move, kCannotCrossEditingBoundary)
-          .DeepEquivalent());
+  RelocatablePosition* before_paragraph_position =
+      MakeGarbageCollected<RelocatablePosition>(
+          PreviousPositionOf(start_of_paragraph_to_move,
+                             kCannotCrossEditingBoundary)
+              .DeepEquivalent());
+  RelocatablePosition* after_paragraph_position =
+      MakeGarbageCollected<RelocatablePosition>(
+          NextPositionOf(end_of_paragraph_to_move, kCannotCrossEditingBoundary)
+              .DeepEquivalent());
 
   const Position& start_candidate = start_of_paragraph_to_move.DeepEquivalent();
   const Position& end_candidate = end_of_paragraph_to_move.DeepEquivalent();
@@ -1539,6 +1558,12 @@ void CompositeEditCommand::MoveParagraphs(
   // the end and before the start are treated as though they were rendered.
   Position start = MostForwardCaretPosition(start_candidate);
   Position end = MostBackwardCaretPosition(end_candidate);
+  if (RuntimeEnabledFeatures::
+          AvoidNormalizingVisiblePositionsWhenStartEqualsEndEnabled() &&
+      start_candidate == end_candidate) {
+    start = start_candidate;
+    end = end_candidate;
+  }
   if (end < start)
     end = start;
 
@@ -1554,7 +1579,7 @@ void CompositeEditCommand::MoveParagraphs(
             .SetShouldConvertBlocksToInlines(true)
             .SetConstrainingAncestor(constraining_ancestor)
             .Build());
-    fragment = CreateSanitizedFragmentFromMarkupWithContext(
+    fragment = CreateStrictlyProcessedFragmentFromMarkupWithContext(
         GetDocument(), paragraphs_markup, 0, paragraphs_markup.length(), "");
   }
 
@@ -1579,14 +1604,33 @@ void CompositeEditCommand::MoveParagraphs(
 
   DCHECK(!GetDocument().NeedsLayoutTreeUpdate());
 
-  const VisibleSelection& selection_to_delete = CreateVisibleSelection(
-      SelectionInDOMTree::Builder().Collapse(start).Extend(end).Build());
-  SetEndingSelection(
-      SelectionForUndoStep::From(selection_to_delete.AsSelection()));
+  if (RuntimeEnabledFeatures::
+          RemoveSelectionCanonicalizationInMoveParagraphEnabled()) {
+    SetEndingSelection(SelectionForUndoStep::From(
+        SelectionInDOMTree::Builder().Collapse(start).Extend(end).Build()));
+  } else {
+    const VisibleSelection& selection_to_delete = CreateVisibleSelection(
+        SelectionInDOMTree::Builder().Collapse(start).Extend(end).Build());
+    SetEndingSelection(
+        SelectionForUndoStep::From(selection_to_delete.AsSelection()));
+  }
+
+  if (RuntimeEnabledFeatures::
+          PartialCompletionNotAllowedInMoveParagraphsEnabled()) {
+    const VisibleSelection& destination_selection = CreateVisibleSelection(
+        SelectionInDOMTree::Builder()
+            .Collapse(destination.ToPositionWithAffinity())
+            .Build());
+    if (!destination_selection.RootEditableElement() ||
+        !EndingVisibleSelection().RootEditableElement()) {
+      return;
+    }
+  }
   if (!DeleteSelection(
           editing_state,
-          DeleteSelectionOptions::Builder().SetSanitizeMarkup(true).Build()))
+          DeleteSelectionOptions::Builder().SetSanitizeMarkup(true).Build())) {
     return;
+  }
 
   DCHECK(destination.DeepEquivalent().IsConnected()) << destination;
   CleanupAfterDeletion(editing_state, destination);
@@ -1606,9 +1650,9 @@ void CompositeEditCommand::MoveParagraphs(
   // a br. Must recononicalize these two VisiblePositions after the pruning
   // above.
   VisiblePosition before_paragraph =
-      CreateVisiblePosition(before_paragraph_position.GetPosition());
+      CreateVisiblePosition(before_paragraph_position->GetPosition());
   VisiblePosition after_paragraph =
-      CreateVisiblePosition(after_paragraph_position.GetPosition());
+      CreateVisiblePosition(after_paragraph_position->GetPosition());
   if (before_paragraph.IsNotNull() &&
       ((!IsStartOfParagraph(before_paragraph) &&
         !IsEndOfParagraph(before_paragraph)) ||
@@ -1623,12 +1667,18 @@ void CompositeEditCommand::MoveParagraphs(
 
   // TextIterator::rangeLength requires clean layout.
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
-
-  destination_index = TextIterator::RangeLength(
-      Position::FirstPositionInNode(*GetDocument().documentElement()),
-      destination.ToParentAnchoredPosition(),
-      TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior());
-
+  if (RuntimeEnabledFeatures::EnterInOpenShadowRootsEnabled()) {
+    destination_index = TextIterator::RangeLength(
+        Position::FirstPositionInNode(*GetDocument().documentElement()),
+        destination.ToParentAnchoredPosition(),
+        TextIteratorBehavior::
+            AllVisiblePositionsIncludingShadowRootRangeLengthBehavior());
+  } else {
+    destination_index = TextIterator::RangeLength(
+        Position::FirstPositionInNode(*GetDocument().documentElement()),
+        destination.ToParentAnchoredPosition(),
+        TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior());
+  }
   const VisibleSelection& destination_selection =
       CreateVisibleSelection(SelectionInDOMTree::Builder()
                                  .Collapse(destination.ToPositionWithAffinity())
@@ -1646,7 +1696,8 @@ void CompositeEditCommand::MoveParagraphs(
   if (should_preserve_style == kDoNotPreserveStyle)
     options |= ReplaceSelectionCommand::kMatchStyle;
   ApplyCommandToComposite(MakeGarbageCollected<ReplaceSelectionCommand>(
-                              GetDocument(), fragment, options),
+                              GetDocument(), fragment, options,
+                              EditCommand::PasswordEchoBehavior::kDoNotEcho),
                           editing_state);
   if (editing_state->IsAborted())
     return;
@@ -1881,10 +1932,11 @@ bool CompositeEditCommand::BreakOutOfEmptyMailBlockquotedParagraph(
 
   Position caret_pos(MostForwardCaretPosition(caret.DeepEquivalent()));
   // A line break is either a br or a preserved newline.
-  DCHECK(
-      IsA<HTMLBRElement>(caret_pos.AnchorNode()) ||
-      (caret_pos.AnchorNode()->IsTextNode() &&
-       caret_pos.AnchorNode()->GetLayoutObject()->Style()->PreserveNewline()))
+  DCHECK(IsA<HTMLBRElement>(caret_pos.AnchorNode()) ||
+         (caret_pos.AnchorNode()->IsTextNode() && caret_pos.AnchorNode()
+                                                      ->GetLayoutObject()
+                                                      ->Style()
+                                                      ->ShouldPreserveBreaks()))
       << caret_pos;
 
   if (IsA<HTMLBRElement>(*caret_pos.AnchorNode())) {
@@ -2099,6 +2151,7 @@ void CompositeEditCommand::Trace(Visitor* visitor) const {
   visitor->Trace(starting_selection_);
   visitor->Trace(ending_selection_);
   visitor->Trace(undo_step_);
+  visitor->Trace(data_transfer_);
   EditCommand::Trace(visitor);
 }
 
@@ -2115,7 +2168,8 @@ void CompositeEditCommand::AppliedEditing() {
   DispatchInputEventEditableContentChanged(
       undo_step.StartingRootEditableElement(),
       undo_step.EndingRootEditableElement(), GetInputType(),
-      TextDataForInputEvent(), IsComposingFromCommand(this));
+      TextDataForInputEvent(), IsComposingFromCommand(this),
+      data_transfer_.Get());
 
   const SelectionInDOMTree& new_selection =
       CorrectedSelectionAfterCommand(EndingSelection(), &GetDocument());
@@ -2156,7 +2210,19 @@ void CompositeEditCommand::AppliedEditing() {
     editor.GetUndoStack().RegisterUndoStep(EnsureUndoStep());
   }
 
-  editor.RespondToChangedContents(new_selection.Base());
+  if (Element* element = undo_step.StartingRootEditableElement()) {
+    if (element->GetDocument().IsPageVisible()) {
+      element->GetDocument()
+          .GetPage()
+          ->GetChromeClient()
+          .DidUserChangeContentEditableContent(*element);
+    }
+  }
+  editor.RespondToChangedContents(new_selection.Anchor());
+
+  if (auto* rc = GetDocument().GetResourceCoordinator()) {
+    rc->SetHadUserEdits();
+  }
 }
 
 }  // namespace blink

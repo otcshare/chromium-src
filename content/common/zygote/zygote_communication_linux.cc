@@ -9,10 +9,12 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/platform_file.h"
 #include "base/i18n/unicodestring.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/pickle.h"
 #include "base/posix/eintr_wrapper.h"
@@ -151,12 +153,11 @@ pid_t ZygoteCommunication::ForkRequest(
       ssize_t n = base::UnixDomainSocket::RecvMsgWithPid(
           my_sock.get(), buf, sizeof(buf), &recv_fds, &real_pid);
       if (n != sizeof(kZygoteChildPingMessage) ||
-          0 != memcmp(buf, kZygoteChildPingMessage,
-                      sizeof(kZygoteChildPingMessage))) {
+          0 != UNSAFE_TODO(memcmp(buf, kZygoteChildPingMessage,
+                                  sizeof(kZygoteChildPingMessage)))) {
         // Zygote children should still be trustworthy when they're supposed to
         // ping us, so something's broken if we don't receive a valid ping.
-        LOG(ERROR) << "Did not receive ping from zygote child";
-        NOTREACHED();
+        DUMP_WILL_BE_NOTREACHED() << "Did not receive ping from zygote child";
         real_pid = -1;
       }
       my_sock.reset();
@@ -174,7 +175,8 @@ pid_t ZygoteCommunication::ForkRequest(
     char buf[kMaxReplyLength];
     const ssize_t len = ReadReply(buf, sizeof(buf));
 
-    base::Pickle reply_pickle(buf, len);
+    base::Pickle reply_pickle = base::Pickle::WithUnownedBuffer(base::as_bytes(
+        UNSAFE_TODO(base::span(buf, base::checked_cast<size_t>(len)))));
     base::PickleIterator iter(reply_pickle);
     if (len <= 0 || !iter.ReadInt(&pid))
       return base::kNullProcessHandle;
@@ -256,11 +258,11 @@ void ZygoteCommunication::Init(
   static const char* const kForwardSwitches[] = {
       sandbox::policy::switches::kAllowSandboxDebugging,
       switches::kDisableInProcessStackTraces,
+      sandbox::policy::switches::kDisableLandlockSandbox,
       sandbox::policy::switches::kDisableSeccompFilterSandbox,
       sandbox::policy::switches::kNoSandbox,
   };
-  cmd_line.CopySwitchesFrom(browser_command_line, kForwardSwitches,
-                            std::size(kForwardSwitches));
+  cmd_line.CopySwitchesFrom(browser_command_line, kForwardSwitches);
 
   pid_ = std::move(launcher).Run(&cmd_line, &control_fd_);
 
@@ -302,7 +304,8 @@ base::TerminationStatus ZygoteCommunication::GetTerminationStatus(
   } else if (len == 0) {
     LOG(WARNING) << "Socket closed prematurely.";
   } else {
-    base::Pickle read_pickle(buf, len);
+    base::Pickle read_pickle = base::Pickle::WithUnownedBuffer(base::as_bytes(
+        UNSAFE_TODO(base::span(buf, base::checked_cast<size_t>(len)))));
     int tmp_status, tmp_exit_code;
     base::PickleIterator iter(read_pickle);
     if (!iter.ReadInt(&tmp_status) || !iter.ReadInt(&tmp_exit_code)) {

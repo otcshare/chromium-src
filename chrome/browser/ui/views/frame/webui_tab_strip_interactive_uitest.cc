@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
@@ -25,6 +23,7 @@
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
@@ -35,15 +34,14 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/views/controls/webview/webview.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/scoped_observation.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_test_api.h"
 #include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/client/drag_drop_client_observer.h"
 #include "ui/aura/window.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 class WebUITabStripTestHelper {
@@ -95,13 +93,13 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest,
 
   // Click in tab strip then in Omnibox.
   base::RunLoop click_loop_1;
-  ui_test_utils::MoveMouseToCenterAndPress(
+  ui_test_utils::MoveMouseToCenterAndClick(
       container_web_view, ui_controls::LEFT,
       ui_controls::DOWN | ui_controls::UP, click_loop_1.QuitClosure());
   click_loop_1.Run();
 
   base::RunLoop click_loop_2;
-  ui_test_utils::MoveMouseToCenterAndPress(omnibox, ui_controls::LEFT,
+  ui_test_utils::MoveMouseToCenterAndClick(omnibox, ui_controls::LEFT,
                                            ui_controls::DOWN | ui_controls::UP,
                                            click_loop_2.QuitClosure());
   click_loop_2.Run();
@@ -126,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest,
   RunScheduledLayouts();
 
   base::RunLoop click_loop;
-  ui_test_utils::MoveMouseToCenterAndPress(
+  ui_test_utils::MoveMouseToCenterAndClick(
       browser_view->contents_web_view(), ui_controls::LEFT,
       ui_controls::DOWN | ui_controls::UP, click_loop.QuitClosure());
   click_loop.Run();
@@ -149,7 +147,7 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest,
   RunScheduledLayouts();
 
   base::RunLoop click_loop;
-  ui_test_utils::MoveMouseToCenterAndPress(container, ui_controls::LEFT,
+  ui_test_utils::MoveMouseToCenterAndClick(container, ui_controls::LEFT,
                                            ui_controls::DOWN | ui_controls::UP,
                                            click_loop.QuitClosure());
   click_loop.Run();
@@ -161,29 +159,23 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest,
   EXPECT_FALSE(container->bounds().IsEmpty());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 // Regression test for crbug.com/1112028
 IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest, CanUseInImmersiveMode) {
   BrowserView* const browser_view =
       BrowserView::GetBrowserViewForBrowser(browser());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   chromeos::ImmersiveFullscreenControllerTestApi immersive_test_api(
       chromeos::ImmersiveFullscreenController::Get(browser_view->GetWidget()));
   immersive_test_api.SetupForTest();
-#endif
 
-  ImmersiveModeController* const immersive_mode_controller =
-      browser_view->immersive_mode_controller();
+  auto* const immersive_mode_controller =
+      ImmersiveModeController::From(browser());
   immersive_mode_controller->SetEnabled(true);
 
   WebUITabStripContainerView* const container = browser_view->webui_tab_strip();
   ASSERT_NE(nullptr, container);
-
-  // IPH may cause a reveal. Stop it.
-  auto lock =
-      browser_view->GetFeaturePromoController()->BlockPromosForTesting();
 
   EXPECT_FALSE(immersive_mode_controller->IsRevealed());
 
@@ -196,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest, CanUseInImmersiveMode) {
 
   // Tapping in the tab strip shouldn't hide the toolbar.
   base::RunLoop click_loop_1;
-  ui_test_utils::MoveMouseToCenterAndPress(container, ui_controls::LEFT,
+  ui_test_utils::MoveMouseToCenterAndClick(container, ui_controls::LEFT,
                                            ui_controls::DOWN | ui_controls::UP,
                                            click_loop_1.QuitClosure());
   click_loop_1.Run();
@@ -209,7 +201,7 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest, CanUseInImmersiveMode) {
 
   // Interacting with the toolbar should also not close the container.
   base::RunLoop click_loop_2;
-  ui_test_utils::MoveMouseToCenterAndPress(
+  ui_test_utils::MoveMouseToCenterAndClick(
       browser_view->toolbar()->reload_button(), ui_controls::LEFT,
       ui_controls::DOWN | ui_controls::UP, click_loop_2.QuitClosure());
   click_loop_2.Run();
@@ -221,7 +213,9 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripInteractiveTest, CanUseInImmersiveMode) {
 }
 
 // Test fixture with additional logic for drag/drop.
-class WebUITabStripDragInteractiveTest : public InteractiveBrowserTest {
+class WebUITabStripDragInteractiveTest
+    : public InteractiveBrowserTest,
+      public testing::WithParamInterface<bool> {
  public:
   WebUITabStripDragInteractiveTest() = default;
   ~WebUITabStripDragInteractiveTest() override = default;
@@ -229,6 +223,17 @@ class WebUITabStripDragInteractiveTest : public InteractiveBrowserTest {
  private:
   WebUITabStripTestHelper helper_;
 };
+
+// Touch mode parameter, only supported by the test framework on Ash.
+#if BUILDFLAG(IS_CHROMEOS)
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
+                         WebUITabStripDragInteractiveTest,
+                         testing::Bool());
+#else
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
+                         WebUITabStripDragInteractiveTest,
+                         testing::Values(false));
+#endif
 
 // Regression test for crbug.com/1286203.
 //
@@ -259,9 +264,17 @@ class WebUITabStripDragInteractiveTest : public InteractiveBrowserTest {
 //
 // This sequence of events would crash without the associated bugfix. More
 // detail is provided in the actual test sequence.
-// TODO(https://crbug.com/1399655): Reenable this test.
-IN_PROC_BROWSER_TEST_F(WebUITabStripDragInteractiveTest,
-                       DISABLED_CloseTabDuringDragDoesNotCrash) {
+
+#if BUILDFLAG(IS_CHROMEOS)
+// TODO(crbug.com/40883259): Flaky on linux-chromeos-chrome. Reenable
+// this test when the flakiness will be resolved.
+#define MAYBE_CloseTabDuringDragDoesNotCrash \
+  DISABLED_CloseTabDuringDragDoesNotCrash
+#else
+#define MAYBE_CloseTabDuringDragDoesNotCrash CloseTabDuringDragDoesNotCrash
+#endif  // BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_P(WebUITabStripDragInteractiveTest,
+                       MAYBE_CloseTabDuringDragDoesNotCrash) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSecondTabElementId);
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebUiTabStripElementId);
 
@@ -307,16 +320,17 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripDragInteractiveTest,
       });
 
   RunTestSequence(
+      // Toggle touch mode to send either mouse or touch events.
+      Check([this]() { return mouse_util().SetTouchMode(GetParam()); }),
       AddInstrumentedTab(kSecondTabElementId, GURL("about:blank")),
       // Click the counter button and then wait for the WebUI tabstrip to
       // appear.
-      PressButton(kTabCounterButtonElementId),
+      PressButton(kToolbarTabCounterButtonElementId),
       InstrumentNonTabWebView(kWebUiTabStripElementId, get_tabstrip_webview),
       // Verify there are two tabs.
       CheckResult(get_tab_count, 2),
       // Wait for the WebUI tabstrip contents to populate.
-      WaitForStateChange(kWebUiTabStripElementId,
-                         std::move(tab_populated_change)),
+      WaitForStateChange(kWebUiTabStripElementId, tab_populated_change),
       // Now that the tab is properly rendered, drag it out of the tabstrip.
       MoveMouseTo(kWebUiTabStripElementId, kSecondTabQuery),
       // Drag to the center of the main web contents pane, which should be
@@ -338,4 +352,4 @@ IN_PROC_BROWSER_TEST_F(WebUITabStripDragInteractiveTest,
       ReleaseMouse());
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)

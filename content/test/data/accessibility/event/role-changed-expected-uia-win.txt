@@ -1,2 +1,4 @@
-AriaRole changed on role=button, name=Role will change
-Name changed on role=button, name=Role will change
+#<skip -- needs de-flake>
+StructureChanged/ChildAdded on role=button, name=Role will change
+StructureChanged/ChildRemoved on role=document
+StructureChanged/ChildrenReordered on role=document

@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/thread_pool/pooled_task_runner_delegate.h"
 #include "base/task/thread_pool/test_utils.h"
@@ -20,25 +20,35 @@
 using ::testing::_;
 using ::testing::Return;
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 class MockPooledTaskRunnerDelegate : public PooledTaskRunnerDelegate {
  public:
-  MOCK_METHOD2(PostTaskWithSequence,
-               bool(Task task, scoped_refptr<Sequence> sequence));
-  MOCK_METHOD1(ShouldYield, bool(const TaskSource* task_source));
-  MOCK_METHOD1(EnqueueJobTaskSource,
-               bool(scoped_refptr<JobTaskSource> task_source));
-  MOCK_METHOD1(RemoveJobTaskSource,
-               void(scoped_refptr<JobTaskSource> task_source));
-  MOCK_CONST_METHOD1(IsRunningPoolWithTraits, bool(const TaskTraits& traits));
-  MOCK_METHOD2(UpdatePriority,
-               void(scoped_refptr<TaskSource> task_source,
-                    TaskPriority priority));
-  MOCK_METHOD2(UpdateJobPriority,
-               void(scoped_refptr<TaskSource> task_source,
-                    TaskPriority priority));
+  MOCK_METHOD(bool,
+              PostTaskWithSequence,
+              (Task task, scoped_refptr<Sequence> sequence),
+              (override));
+  MOCK_METHOD(bool, ShouldYield, (const TaskSource* task_source), (override));
+  MOCK_METHOD(bool,
+              EnqueueJobTaskSource,
+              (scoped_refptr<JobTaskSource> task_source),
+              (override));
+  MOCK_METHOD(void,
+              RemoveJobTaskSource,
+              (scoped_refptr<JobTaskSource> task_source),
+              (override));
+  MOCK_METHOD(bool,
+              IsRunningPoolWithTraits,
+              (const TaskTraits& traits),
+              (const));
+  MOCK_METHOD(void,
+              UpdatePriority,
+              (scoped_refptr<TaskSource> task_source, TaskPriority priority),
+              (override));
+  MOCK_METHOD(void,
+              UpdateJobPriority,
+              (scoped_refptr<TaskSource> task_source, TaskPriority priority),
+              (override));
 };
 
 class ThreadPoolJobTaskSourceTest : public testing::Test {
@@ -125,7 +135,7 @@ TEST_F(ThreadPoolJobTaskSourceTest, Clear) {
   {
     EXPECT_EQ(1U, task_source->GetRemainingConcurrency());
     auto task = registered_task_source_c.Clear();
-    std::move(task.task).Run();
+    EXPECT_FALSE(task);
     registered_task_source_c.DidProcessTask();
     EXPECT_EQ(0U, task_source->GetRemainingConcurrency());
   }
@@ -137,7 +147,7 @@ TEST_F(ThreadPoolJobTaskSourceTest, Clear) {
   // Another outstanding RunStatus can still call Clear.
   {
     auto task = registered_task_source_d.Clear();
-    std::move(task.task).Run();
+    EXPECT_FALSE(task);
     registered_task_source_d.DidProcessTask();
     EXPECT_EQ(0U, task_source->GetRemainingConcurrency());
   }
@@ -539,5 +549,4 @@ TEST_F(ThreadPoolJobTaskSourceTest, GetTaskId) {
   registered_task_source.DidProcessTask();
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

@@ -11,8 +11,7 @@
 #include "base/observer_list_types.h"
 #include "chromeos/ash/components/phonehub/browser_tabs_model.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 // Responsible for providing BrowserTabsModel information to observers.
 class BrowserTabsModelProvider {
@@ -40,6 +39,8 @@ class BrowserTabsModelProvider {
   // visiting a link on the connected phone's Chrome Browser.
   virtual void TriggerRefresh() = 0;
 
+  virtual bool IsBrowserTabSyncEnabled() = 0;
+
  protected:
   BrowserTabsModelProvider();
 
@@ -52,7 +53,6 @@ class BrowserTabsModelProvider {
   base::ObserverList<Observer> observer_list_;
 };
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub
 
 #endif  // CHROMEOS_ASH_COMPONENTS_PHONEHUB_BROWSER_TABS_MODEL_PROVIDER_H_

@@ -4,8 +4,8 @@
 
 #include "media/renderers/decrypting_renderer.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/gmock_callback_support.h"
@@ -50,8 +50,6 @@ class DecryptingRendererTest : public testing::Test {
     EXPECT_CALL(decryptor_, CancelDecrypt(_)).Times(AnyNumber());
     EXPECT_CALL(media_resource_, GetAllStreams())
         .WillRepeatedly(Invoke(this, &DecryptingRendererTest::GetAllStreams));
-    EXPECT_CALL(media_resource_, GetType())
-        .WillRepeatedly(Return(MediaResource::STREAM));
   }
 
   ~DecryptingRendererTest() override {
@@ -95,7 +93,7 @@ class DecryptingRendererTest : public testing::Test {
   StrictMock<MockDecryptor> decryptor_;
   StrictMock<MockMediaResource> media_resource_;
   StrictMock<MockRendererClient> renderer_client_;
-  raw_ptr<StrictMock<MockRenderer>> renderer_;
+  raw_ptr<StrictMock<MockRenderer>, DanglingUntriaged> renderer_;
   std::unique_ptr<DecryptingRenderer> decrypting_renderer_;
   std::vector<std::unique_ptr<StrictMock<MockDemuxerStream>>> streams_;
 };

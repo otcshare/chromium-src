@@ -6,15 +6,17 @@
 
 #include "base/check.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_extension_helper.h"
 #include "extensions/browser/extension_registry.h"
-#include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using sync_datatype_helper::test;
 
@@ -28,23 +30,6 @@ std::string CreateFakeExtensionName(int index) {
 bool HasSameExtensions(int index1, int index2) {
   return SyncExtensionHelper::GetInstance()->ExtensionStatesMatch(
       test()->GetProfile(index1), test()->GetProfile(index2));
-}
-
-bool HasSameExtensionsAsVerifier(int index) {
-  return SyncExtensionHelper::GetInstance()->ExtensionStatesMatch(
-      test()->GetProfile(index), test()->verifier());
-}
-
-bool AllProfilesHaveSameExtensionsAsVerifier() {
-  for (int i = 0; i < test()->num_clients(); ++i) {
-    if (!HasSameExtensionsAsVerifier(i)) {
-      LOG(ERROR) << "Profile " << i
-                 << " doesn't have the same extensions as"
-                    " the verifier profile.";
-      return false;
-    }
-  }
-  return true;
 }
 
 bool AllProfilesHaveSameExtensions() {
@@ -127,6 +112,11 @@ void InstallExtensionsPendingForSync(Profile* profile) {
   SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(profile);
 }
 
+extensions::ExtensionId GetExtensionId(int index) {
+  return SyncExtensionHelper::GetInstance()->GetExtensionId(
+      CreateFakeExtensionName(index));
+}
+
 }  // namespace extensions_helper
 
 ExtensionsMatchChecker::ExtensionsMatchChecker()
@@ -136,14 +126,11 @@ ExtensionsMatchChecker::ExtensionsMatchChecker()
     SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(
         profile);
 
-    CHECK(extensions::ExtensionSystem::Get(profile)
-              ->extension_service()
-              ->updater());
-
-    extensions::ExtensionSystem::Get(profile)
-        ->extension_service()
-        ->updater()
-        ->SetUpdatingStartedCallbackForTesting(base::BindLambdaForTesting(
+    auto* updater = extensions::ExtensionUpdater::Get(profile);
+    CHECK(updater);
+    CHECK(updater->enabled());
+    updater->SetUpdatingStartedCallbackForTesting(
+        base::BindLambdaForTesting(
             [self = weak_ptr_factory_.GetWeakPtr(), profile]() {
               base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
                   FROM_HERE,

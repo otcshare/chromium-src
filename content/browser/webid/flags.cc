@@ -4,49 +4,95 @@
 
 #include "flags.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
+#include "content/common/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "services/network/public/cpp/features.h"
 
-namespace content {
+namespace content::webid {
 
-bool IsFedCmAutoSigninEnabled() {
-  return GetFieldTrialParamByFeatureAsBool(
-      features::kFedCm, features::kFedCmAutoSigninFieldTrialParamName, false);
-}
-
-bool IsFedCmIdpSignoutEnabled() {
-  return GetFieldTrialParamByFeatureAsBool(
-      features::kFedCm, features::kFedCmIdpSignoutFieldTrialParamName, false);
-}
-
-bool IsFedCmMultipleIdentityProvidersEnabled() {
-  return base::FeatureList::IsEnabled(
-      features::kFedCmMultipleIdentityProviders);
-}
-
-FedCmIdpSigninStatusMode GetFedCmIdpSigninStatusMode() {
-  if (GetFieldTrialParamByFeatureAsBool(
-          features::kFedCm, features::kFedCmIdpSigninStatusFieldTrialParamName,
-          false)) {
-    return FedCmIdpSigninStatusMode::ENABLED;
-  }
-  if (GetFieldTrialParamByFeatureAsBool(
-          features::kFedCm,
-          features::kFedCmIdpSigninStatusMetricsOnlyFieldTrialParamName,
-          true)) {
-    return FedCmIdpSigninStatusMode::METRICS_ONLY;
-  }
-  return FedCmIdpSigninStatusMode::DISABLED;
-}
-
-bool IsFedCmMetricsEndpointEnabled() {
+bool IsMetricsEndpointEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmMetricsEndpoint);
 }
 
-bool IsFedCmUserInfoEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmUserInfo);
+bool IsDelegationEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmDelegation);
 }
 
-}  // namespace content
+bool IsEmailVerificationProtocolEnabled() {
+  return base::FeatureList::IsEnabled(features::kEmailVerificationProtocol);
+}
+
+bool IsIdPRegistrationEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmIdPRegistration);
+}
+
+bool IsWithoutWellKnownEnforcementEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kFedCmWithoutWellKnownEnforcement);
+}
+
+bool IsDigitalCredentialsEnabled() {
+  return base::FeatureList::IsEnabled(features::kWebIdentityDigitalCredentials);
+}
+
+bool IsDigitalCredentialsCreationEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kWebIdentityDigitalCredentialsCreation);
+}
+
+bool IsSameSiteLaxEnabled() {
+  return base::FeatureList::IsEnabled(
+      network::features::kSendSameSiteLaxForFedCM);
+}
+
+bool IsLightweightModeEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmLightweightMode);
+}
+
+bool IsFedCmEmbedderCheckEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmEmbedderCheck);
+}
+
+bool IsAutofillEnabled() {
+  // FedCmAutofill is a new flag extracted from FedCmDelegation. To avoid
+  // breaking existing developer testing, we consider the new flag being enabled
+  // if the old one is enabled.
+  return base::FeatureList::IsEnabled(features::kFedCmAutofill) ||
+         IsDelegationEnabled();
+}
+
+bool IsNonceInParamsEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmNonceInParams);
+}
+
+bool IsNonStringTokenEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmNonStringToken);
+}
+
+bool IsWellKnownEndpointValidationEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kFedCmWellKnownEndpointValidation);
+}
+
+bool IsPreservePortsForTestingEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmPreservePortsForTesting);
+}
+
+bool IsErrorAttributeEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmErrorAttribute);
+}
+
+bool IsNavigationInterceptionEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmNavigationInterception);
+}
+
+bool IsEmbedderInitiatedLoginEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin);
+}
+
+}  // namespace content::webid

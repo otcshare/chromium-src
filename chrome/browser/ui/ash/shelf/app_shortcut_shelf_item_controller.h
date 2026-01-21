@@ -6,20 +6,26 @@
 #define CHROME_BROWSER_UI_ASH_SHELF_APP_SHORTCUT_SHELF_ITEM_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_types.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser_list_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "url/gurl.h"
+
+namespace ash {
+class BrowserDelegate;
+}
 
 namespace content {
 class WebContents;
 }
 
-class Browser;
 class ShelfContextMenu;
 
 // Item controller for an app shortcut.
@@ -31,7 +37,7 @@ class ShelfContextMenu;
 // Non-platform app types do not use AppWindows. This delegate is not replaced
 // when browser windows are opened for those app types.
 class AppShortcutShelfItemController : public ash::ShelfItemDelegate,
-                                       public BrowserListObserver {
+                                       public ash::BrowserController::Observer {
  public:
   explicit AppShortcutShelfItemController(const ash::ShelfID& shelf_id);
 
@@ -68,14 +74,14 @@ class AppShortcutShelfItemController : public ash::ShelfItemDelegate,
   bool HasRunningApplications();
 
  private:
-  // BrowserListObserver:
-  void OnBrowserClosing(Browser* browser) override;
+  // ash::BrowserController::Observer:
+  void OnBrowserClosed(ash::BrowserDelegate* browser) override;
 
   // |filter_predicate| is used to filter out the app webcontents and app
   // browsers results based on their corresponding windows.
-  std::vector<content::WebContents*> GetAppWebContents(
-      const ItemFilterPredicate& filter_predicate);
-  std::vector<Browser*> GetAppBrowsers(
+  std::vector<raw_ptr<content::WebContents, VectorExperimental>>
+  GetAppWebContents(const ItemFilterPredicate& filter_predicate);
+  std::vector<raw_ptr<ash::BrowserDelegate, VectorExperimental>> GetAppBrowsers(
       const ItemFilterPredicate& filter_predicate);
 
   // If an owned item is already active, this function advances to the next item
@@ -83,7 +89,7 @@ class AppShortcutShelfItemController : public ash::ShelfItemDelegate,
   // action. Otherwise, it returns nullopt.
   // |filter_predicate| is used to filter out unwanted options to advance to
   // based on their corresponding windows.
-  absl::optional<ash::ShelfAction> AdvanceToNextApp(
+  std::optional<ash::ShelfAction> AdvanceToNextApp(
       const ItemFilterPredicate& filter_predicate);
 
   // Returns true if the application is a V2 app.
@@ -97,6 +103,10 @@ class AppShortcutShelfItemController : public ash::ShelfItemDelegate,
   size_t AppMenuSize();
   void ClearAppMenu();
 
+  base::ScopedObservation<ash::BrowserController,
+                          ash::BrowserController::Observer>
+      browser_controller_observation_{this};
+
   GURL refocus_url_;
 
   // Since V2 applications can be undetectable after launching, this timer is
@@ -106,8 +116,10 @@ class AppShortcutShelfItemController : public ash::ShelfItemDelegate,
   // The cached lists of open app shown in an application menu. We either cache
   // by the web contents or by the browsers, and this is indicated by the value
   // of |app_menu_cached_by_browsers_|.
-  std::vector<content::WebContents*> app_menu_web_contents_;
-  std::vector<Browser*> app_menu_browsers_;
+  std::vector<raw_ptr<content::WebContents, VectorExperimental>>
+      app_menu_web_contents_;
+  std::vector<raw_ptr<ash::BrowserDelegate, VectorExperimental>>
+      app_menu_browsers_;
   bool app_menu_cached_by_browsers_ = false;
 
   std::unique_ptr<ShelfContextMenu> context_menu_;

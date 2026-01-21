@@ -9,13 +9,16 @@
 
 // For devices running on a version >= iOS 16.0+, WKFullScreenState is converted
 // into CrFullscreenState. Once min version supported is iOS 16.0,
-// uses of this enum should be be replaced with WKFullScreenState and this enum
-// declaration should be removed.
+// uses of this enum should be be replaced with WKFullScreenState. This enum is
+// being used for metrics so entries should not be removed or reordered. Please
+// keep in sync with "IOS.Fullscreen.State" in
+// src/tools/metrics/histograms/enums.xml.
 enum class CrFullscreenState {
-  kEnteringFullscreen,
-  kExitingFullscreen,
-  kInFullscreen,
-  kNotInFullScreen,
+  kEnteringFullscreen = 0,
+  kExitingFullscreen = 1,
+  kInFullscreen = 2,
+  kNotInFullScreen = 3,
+  kMaxValue = kNotInFullScreen,
 };
 
 // UIViews conforming to CRWScrollableContent (i.e. CRWContentViews) are used
@@ -37,6 +40,11 @@ enum class CrFullscreenState {
 // via resizing a subview's frame. Can be used as a workaround for WKWebView
 // bug, where UIScrollView.content inset does not work (rdar://23584409).
 @property(nonatomic, assign) UIEdgeInsets contentInset;
+
+// Insets that describe the portion of the web view that is obscured by other
+// UI. This is used to forward the value to the underlying WKWebView if it
+// supports the `obscuredContentInsets` property.
+@property(nonatomic, assign) UIEdgeInsets obscuredInsets;
 
 @optional
 

@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 
@@ -17,15 +19,20 @@
 #include <sys/socket.h>  // Must be included before ifaddrs.h.
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <netinet/in_var.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#if BUILDFLAG(IS_IOS)
+// The code in the following header file is copied from [1]. This file has the
+// minimum definitions needed to retrieve the IP attributes, since iOS SDK
+// doesn't include a necessary header <netinet/in_var.h>.
+// [1] https://chromium.googlesource.com/external/webrtc/+/master/rtc_base/mac_ifaddrs_converter.cc
+#include "net/dns/netinet_in_var_ios.h"
+#else
+#include <netinet/in_var.h>
+#endif  // BUILDFLAG(IS_IOS)
 #endif
-
-#include <algorithm>
 #include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/logging.h"
 #include "net/base/ip_endpoint.h"
@@ -52,11 +59,10 @@ bool ComparePolicy(const AddressSorterPosix::PolicyEntry& p1,
   return p1.prefix_length > p2.prefix_length;
 }
 
-// Creates sorted PolicyTable from |table| with |size| entries.
+// Creates sorted PolicyTable from |table|.
 AddressSorterPosix::PolicyTable LoadPolicy(
-    const AddressSorterPosix::PolicyEntry* table,
-    size_t size) {
-  AddressSorterPosix::PolicyTable result(table, table + size);
+    base::span<const AddressSorterPosix::PolicyEntry> table) {
+  AddressSorterPosix::PolicyTable result(table.begin(), table.end());
   std::sort(result.begin(), result.end(), ComparePolicy);
   return result;
 }
@@ -73,8 +79,6 @@ unsigned GetPolicyValue(const AddressSorterPosix::PolicyTable& table,
       return entry.value;
   }
   NOTREACHED();
-  // The last entry is the least restrictive, so assume it's default.
-  return table.back().value;
 }
 
 bool IsIPv6Multicast(const IPAddress& address) {
@@ -124,7 +128,6 @@ AddressSorterPosix::AddressScope GetScope(
         GetPolicyValue(ipv4_scope_table, address));
   } else {
     NOTREACHED();
-    return AddressSorterPosix::SCOPE_NODELOCAL;
   }
 }
 
@@ -197,7 +200,7 @@ struct DestinationInfo {
   AddressSorterPosix::AddressScope scope;
   unsigned precedence;
   unsigned label;
-  raw_ptr<const AddressSorterPosix::SourceAddressInfo> src;
+  AddressSorterPosix::SourceAddressInfo src;
   std::unique_ptr<DatagramClientSocket> socket;
   size_t common_prefix_length;
   bool failed = false;
@@ -208,27 +211,27 @@ struct DestinationInfo {
 bool CompareDestinations(const DestinationInfo& dst_a,
                          const DestinationInfo& dst_b) {
   // Rule 1: Avoid unusable destinations.
-  // Unusable destinations are already filtered out.
-  DCHECK(dst_a.src);
-  DCHECK(dst_b.src);
+  // Nothing to do here because unusable destinations are already filtered out.
 
   // Rule 2: Prefer matching scope.
-  bool scope_match1 = (dst_a.src->scope == dst_a.scope);
-  bool scope_match2 = (dst_b.src->scope == dst_b.scope);
+  bool scope_match1 = (dst_a.src.scope == dst_a.scope);
+  bool scope_match2 = (dst_b.src.scope == dst_b.scope);
   if (scope_match1 != scope_match2)
     return scope_match1;
 
   // Rule 3: Avoid deprecated addresses.
-  if (dst_a.src->deprecated != dst_b.src->deprecated)
-    return !dst_a.src->deprecated;
+  if (dst_a.src.deprecated != dst_b.src.deprecated) {
+    return !dst_a.src.deprecated;
+  }
 
   // Rule 4: Prefer home addresses.
-  if (dst_a.src->home != dst_b.src->home)
-    return dst_a.src->home;
+  if (dst_a.src.home != dst_b.src.home) {
+    return dst_a.src.home;
+  }
 
   // Rule 5: Prefer matching label.
-  bool label_match1 = (dst_a.src->label == dst_a.label);
-  bool label_match2 = (dst_b.src->label == dst_b.label);
+  bool label_match1 = (dst_a.src.label == dst_a.label);
+  bool label_match2 = (dst_b.src.label == dst_b.label);
   if (label_match1 != label_match2)
     return label_match1;
 
@@ -237,8 +240,9 @@ bool CompareDestinations(const DestinationInfo& dst_a,
     return dst_a.precedence > dst_b.precedence;
 
   // Rule 7: Prefer native transport.
-  if (dst_a.src->native != dst_b.src->native)
-    return dst_a.src->native;
+  if (dst_a.src.native != dst_b.src.native) {
+    return dst_a.src.native;
+  }
 
   // Rule 8: Prefer smaller scope.
   if (dst_a.scope != dst_b.scope)
@@ -272,18 +276,6 @@ class AddressSorterPosix::SortContext {
       VLOG(1) << "Could not connect to " << dest.ToStringWithoutPort()
               << " reason " << rv;
       sort_list_[info_index].failed = true;
-      MaybeFinishSort();
-      return;
-    }
-    // Filter out unusable destinations.
-    IPEndPoint src;
-    rv = sort_list_[info_index].socket->GetLocalAddress(&src);
-    if (rv != OK) {
-      LOG(WARNING) << "Could not get local address for "
-                   << dest.ToStringWithoutPort() << " reason " << rv;
-      sort_list_[info_index].failed = true;
-      MaybeFinishSort();
-      return;
     }
 
     MaybeFinishSort();
@@ -297,25 +289,42 @@ class AddressSorterPosix::SortContext {
     if (num_completed_ != num_endpoints_) {
       return;
     }
-    base::EraseIf(sort_list_, [](auto& element) { return element.failed; });
     for (auto& info : sort_list_) {
-      IPEndPoint src;
-      info.socket->GetLocalAddress(&src);
-      AddressSorterPosix::SourceAddressInfo& src_info =
-          sorter_->source_map_[src.address()];
-      if (src_info.scope == AddressSorterPosix::SCOPE_UNDEFINED) {
-        // If |source_info_| is out of date, |src| might be missing, but we
-        // still want to sort, even though the HostCache will be cleared soon.
-        sorter_->FillPolicy(src.address(), &src_info);
+      if (info.failed) {
+        continue;
       }
-      info.src = &src_info;
+
+      IPEndPoint src;
+      // Filter out unusable destinations.
+      int rv = info.socket->GetLocalAddress(&src);
+      if (rv != OK) {
+        LOG(WARNING) << "Could not get local address for "
+                     << info.endpoint.ToStringWithoutPort() << " reason " << rv;
+        info.failed = true;
+        continue;
+      }
+
+      auto iter = sorter_->source_map_.find(src.address());
+      if (iter == sorter_->source_map_.end()) {
+        //  |src.address| may not be in the map if |source_info_| has not been
+        //  updated from the OS yet. It will be updated and HostCache cleared
+        //  soon, but we still want to sort, so fill in an empty
+        info.src = AddressSorterPosix::SourceAddressInfo();
+      } else {
+        info.src = iter->second;
+      }
+
+      if (info.src.scope == AddressSorterPosix::SCOPE_UNDEFINED) {
+        sorter_->FillPolicy(src.address(), &info.src);
+      }
 
       if (info.endpoint.address().size() == src.address().size()) {
         info.common_prefix_length =
             std::min(CommonPrefixLength(info.endpoint.address(), src.address()),
-                     info.src->prefix_length);
+                     info.src.prefix_length);
       }
     }
+    std::erase_if(sort_list_, [](auto& element) { return element.failed; });
     std::stable_sort(sort_list_.begin(), sort_list_.end(), CompareDestinations);
 
     std::vector<IPEndPoint> sorted_result;
@@ -337,14 +346,11 @@ class AddressSorterPosix::SortContext {
 
 AddressSorterPosix::AddressSorterPosix(ClientSocketFactory* socket_factory)
     : socket_factory_(socket_factory),
-      precedence_table_(LoadPolicy(kDefaultPrecedenceTable,
-                                   std::size(kDefaultPrecedenceTable))),
-      label_table_(
-          LoadPolicy(kDefaultLabelTable, std::size(kDefaultLabelTable))),
-      ipv4_scope_table_(LoadPolicy(kDefaultIPv4ScopeTable,
-                                   std::size(kDefaultIPv4ScopeTable))) {
+      precedence_table_(LoadPolicy(kDefaultPrecedenceTable)),
+      label_table_(LoadPolicy(kDefaultLabelTable)),
+      ipv4_scope_table_(LoadPolicy(kDefaultIPv4ScopeTable)) {
   NetworkChangeNotifier::AddIPAddressObserver(this);
-  OnIPAddressChanged();
+  OnIPAddressChanged(NetworkChangeNotifier::IP_ADDRESS_CHANGE_NORMAL);
 }
 
 AddressSorterPosix::~AddressSorterPosix() {
@@ -387,19 +393,19 @@ void AddressSorterPosix::Sort(const std::vector<IPEndPoint>& endpoints,
   }
 }
 
-void AddressSorterPosix::OnIPAddressChanged() {
+void AddressSorterPosix::OnIPAddressChanged(
+    NetworkChangeNotifier::IPAddressChangeType change_type) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   source_map_.clear();
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  const internal::AddressTrackerLinux* tracker =
-      NetworkChangeNotifier::GetAddressTracker();
-  if (!tracker)
+  // TODO(crbug.com/40263501): This always returns nullptr on ChromeOS.
+  const AddressMapOwnerLinux* address_map_owner =
+      NetworkChangeNotifier::GetAddressMapOwner();
+  if (!address_map_owner) {
     return;
-  typedef internal::AddressTrackerLinux::AddressMap AddressMap;
-  AddressMap map = tracker->GetAddressMap();
-  for (AddressMap::const_iterator it = map.begin(); it != map.end(); ++it) {
-    const IPAddress& address = it->first;
-    const struct ifaddrmsg& msg = it->second;
+  }
+  AddressMapOwnerLinux::AddressMap map = address_map_owner->GetAddressMap();
+  for (const auto& [address, msg] : map) {
     SourceAddressInfo& info = source_map_[address];
     info.native = false;  // TODO(szym): obtain this via netlink.
     info.deprecated = msg.ifa_flags & IFA_F_DEPRECATED;
@@ -431,9 +437,11 @@ void AddressSorterPosix::OnIPAddressChanged() {
     info.native = info.home = info.deprecated = false;
     if (ifa->ifa_addr->sa_family == AF_INET6) {
       struct in6_ifreq ifr = {};
-      strncpy(ifr.ifr_name, ifa->ifa_name, sizeof(ifr.ifr_name) - 1);
+      UNSAFE_TODO(
+          strncpy(ifr.ifr_name, ifa->ifa_name, sizeof(ifr.ifr_name) - 1));
       DCHECK_LE(ifa->ifa_addr->sa_len, sizeof(ifr.ifr_ifru.ifru_addr));
-      memcpy(&ifr.ifr_ifru.ifru_addr, ifa->ifa_addr, ifa->ifa_addr->sa_len);
+      UNSAFE_TODO(memcpy(&ifr.ifr_ifru.ifru_addr, ifa->ifa_addr,
+                         ifa->ifa_addr->sa_len));
       rv = ioctl(ioctl_socket, SIOCGIFAFLAG_IN6, &ifr);
       if (rv >= 0) {
         info.deprecated = ifr.ifr_ifru.ifru_flags & IN6_IFF_DEPRECATED;

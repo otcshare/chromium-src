@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/base/cdm_config.h"
 #include "third_party/blink/public/platform/web_content_decryption_module_access.h"
 #include "third_party/blink/public/platform/web_content_decryption_module_result.h"
@@ -29,11 +30,13 @@ class PLATFORM_EXPORT WebContentDecryptionModuleAccessImpl
   static std::unique_ptr<WebContentDecryptionModuleAccessImpl> Create(
       const WebSecurityOrigin& security_origin,
       const WebMediaKeySystemConfiguration& configuration,
+      const WebString& requested_key_system,
       const media::CdmConfig& cdm_config,
       const base::WeakPtr<WebEncryptedMediaClientImpl>& client);
   WebContentDecryptionModuleAccessImpl(
       const WebSecurityOrigin& security_origin,
       const WebMediaKeySystemConfiguration& configuration,
+      const WebString& requested_key_system,
       const media::CdmConfig& cdm_config,
       const base::WeakPtr<WebEncryptedMediaClientImpl>& client);
   WebContentDecryptionModuleAccessImpl(
@@ -43,7 +46,8 @@ class PLATFORM_EXPORT WebContentDecryptionModuleAccessImpl
   ~WebContentDecryptionModuleAccessImpl() override;
 
   // WebContentDecryptionModuleAccess interface.
-  WebString GetKeySystem() override;
+  WebString GetRequestedKeySystem() override;
+  WebString GetInternalKeySystem() override;
   WebMediaKeySystemConfiguration GetConfiguration() override;
   void CreateContentDecryptionModule(
       WebContentDecryptionModuleResult result,
@@ -53,6 +57,10 @@ class PLATFORM_EXPORT WebContentDecryptionModuleAccessImpl
  private:
   const WebSecurityOrigin security_origin_;
   const WebMediaKeySystemConfiguration configuration_;
+
+  // The requested key system by `requestMediaKeySystemAccess()`.
+  const WebString requested_key_system_;
+
   const media::CdmConfig cdm_config_;
 
   // Keep a WeakPtr as client is owned by render_frame_impl.

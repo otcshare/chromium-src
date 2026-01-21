@@ -6,15 +6,17 @@
 
 #include <windows.media.protection.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <memory>
+#include <vector>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/win/scoped_com_initializer.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
@@ -94,9 +96,6 @@ class MockMediaProtectionPMPServer
 class MediaFoundationRendererTest : public testing::Test {
  public:
   MediaFoundationRendererTest() {
-    if (!MediaFoundationRenderer::IsSupported())
-      return;
-
     mf_cdm_proxy_ =
         base::MakeRefCounted<NiceMock<MockMediaFoundationCdmProxy>>();
 
@@ -123,8 +122,6 @@ class MediaFoundationRendererTest : public testing::Test {
     EXPECT_CALL(media_resource_, GetAllStreams())
         .WillRepeatedly(
             Invoke(this, &MediaFoundationRendererTest::GetAllStreams));
-    EXPECT_CALL(media_resource_, GetType())
-        .WillRepeatedly(Return(MediaResource::STREAM));
   }
 
   ~MediaFoundationRendererTest() override { mf_renderer_.reset(); }
@@ -172,9 +169,6 @@ class MediaFoundationRendererTest : public testing::Test {
 };
 
 TEST_F(MediaFoundationRendererTest, VerifyInitWithoutSetCdm) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
@@ -187,9 +181,6 @@ TEST_F(MediaFoundationRendererTest, VerifyInitWithoutSetCdm) {
 }
 
 TEST_F(MediaFoundationRendererTest, SetCdmThenInit) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
@@ -204,9 +195,6 @@ TEST_F(MediaFoundationRendererTest, SetCdmThenInit) {
 }
 
 TEST_F(MediaFoundationRendererTest, InitThenSetCdm) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
@@ -221,9 +209,6 @@ TEST_F(MediaFoundationRendererTest, InitThenSetCdm) {
 }
 
 TEST_F(MediaFoundationRendererTest, DirectCompositionHandle) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   base::MockCallback<MediaFoundationRendererExtension::GetDCompSurfaceCB>
       get_dcomp_surface_cb;
 
@@ -242,37 +227,6 @@ TEST_F(MediaFoundationRendererTest, DirectCompositionHandle) {
   mf_renderer_->GetDCompSurface(get_dcomp_surface_cb.Get());
 
   task_environment_.RunUntilIdle();
-}
-
-TEST_F(MediaFoundationRendererTest, ClearStartsInFrameServer) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      media::kMediaFoundationClearRendering, {{"strategy", "dynamic"}});
-  ;
-
-  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
-  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
-
-  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
-                           renderer_init_cb_.Get());
-
-  EXPECT_TRUE(mf_renderer_->InFrameServerMode());
-}
-
-TEST_F(MediaFoundationRendererTest, EncryptedStaysInDirectComposition) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
-  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
-  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
-
-  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
-                           renderer_init_cb_.Get());
-
-  EXPECT_FALSE(mf_renderer_->InFrameServerMode());
 }
 
 }  // namespace media

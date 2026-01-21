@@ -4,11 +4,12 @@
 
 #include "content/browser/sms/user_consent_handler.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/browser/sms/test/mock_sms_web_contents_delegate.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -17,7 +18,6 @@
 using std::string;
 using ::testing::_;
 using ::testing::ByMove;
-using ::testing::Invoke;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
@@ -44,12 +44,12 @@ class PromptBasedUserConsentHandlerTest : public RenderViewHostTestHarness {
                              const std::string& one_time_code) {
     EXPECT_CALL(delegate_,
                 CreateSmsPrompt(rfh, origin_list, one_time_code, _, _))
-        .WillOnce(Invoke([=](RenderFrameHost*, const OriginList& origin_list,
-                             const std::string&, base::OnceClosure on_confirm,
-                             base::OnceClosure on_cancel) {
+        .WillOnce([=, this](RenderFrameHost*, const OriginList& origin_list,
+                            const std::string&, base::OnceClosure on_confirm,
+                            base::OnceClosure on_cancel) {
           confirm_callback_ = std::move(on_confirm);
           dismiss_callback_ = std::move(on_cancel);
-        }));
+        });
   }
 
   void ExpectNoSmsPrompt() {
@@ -162,10 +162,8 @@ class PromptBasedUserConsentHandlerAlwaysAllowedTest
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{features::kBackForwardCache, {}}},
-        // Allow BackForwardCache for all devices regardless of their
-        // memory.
-        {features::kBackForwardCacheMemoryControls});
+        GetBasicBackForwardCacheFeatureForTesting(),
+        GetDefaultDisabledBackForwardCacheFeaturesForTesting());
     PromptBasedUserConsentHandlerTest::SetUp();
   }
 

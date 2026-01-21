@@ -4,13 +4,15 @@
 
 #include "net/disk_cache/blockfile/block_files.h"
 
+#include <array>
 #include <atomic>
 #include <limits>
 #include <memory>
+#include <optional>
 
+#include "base/containers/heap_array.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_checker.h"
@@ -27,7 +29,9 @@ const char kBlockName[] = "data_";
 
 // This array is used to perform a fast lookup of the nibble bit pattern to the
 // type of entry that can be stored there (number of consecutive blocks).
-const char s_types[16] = {4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+const std::array<char, 16> s_types = {
+    4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+};
 
 // Returns the type of block (number of consecutive blocks that can be stored)
 // for a given nibble of the bitmap.
@@ -68,7 +72,6 @@ bool BlockHeader::CreateMapBlock(int size, int* index) {
     return false;
   }
 
-  TimeTicks start = TimeTicks::Now();
   // We are going to process the map on 32-block chunks (32 bits), and on every
   // chunk, iterate through the 8 nibbles where the new block can be located.
   int current = header_->hints[target - 1];
@@ -101,7 +104,6 @@ bool BlockHeader::CreateMapBlock(int size, int* index) {
       if (target != size) {
         header_->empty[target - size - 1]++;
       }
-      LOCAL_HISTOGRAM_TIMES("DiskCache.CreateBlock", TimeTicks::Now() - start);
       return true;
     }
   }
@@ -116,11 +118,9 @@ bool BlockHeader::CreateMapBlock(int size, int* index) {
 void BlockHeader::DeleteMapBlock(int index, int size) {
   if (size < 0 || size > kMaxNumBlocks) {
     NOTREACHED();
-    return;
   }
-  TimeTicks start = TimeTicks::Now();
   int byte_index = index / 8;
-  uint8_t* byte_map = reinterpret_cast<uint8_t*>(header_->allocation_map);
+  auto byte_map = base::as_writable_byte_span(header_->allocation_map);
   uint8_t map_block = byte_map[byte_index];
 
   if (index % 8 >= 4)
@@ -148,7 +148,6 @@ void BlockHeader::DeleteMapBlock(int index, int size) {
   std::atomic_thread_fence(std::memory_order_seq_cst);
   header_->num_entries--;
   STRESS_DCHECK(header_->num_entries >= 0);
-  LOCAL_HISTOGRAM_TIMES("DiskCache.DeleteBlock", TimeTicks::Now() - start);
 }
 
 // Note that this is a simplified version of DeleteMapBlock().
@@ -157,7 +156,7 @@ bool BlockHeader::UsedMapBlock(int index, int size) {
     return false;
 
   int byte_index = index / 8;
-  uint8_t* byte_map = reinterpret_cast<uint8_t*>(header_->allocation_map);
+  auto byte_map = base::as_byte_span(header_->allocation_map);
 
   STRESS_DCHECK((((1 << size) - 1) << (index % 8)) < 0x100);
   uint8_t to_clear = ((1 << size) - 1) << (index % 8);
@@ -352,20 +351,26 @@ void BlockFiles::DeleteBlock(Addr address, bool deep) {
   size_t offset = address.start_block() * address.BlockSize() +
                   kBlockHeaderSize;
   if (deep)
-    file->Write(zero_buffer_.data(), size, offset);
+    file->Write(base::as_byte_span(zero_buffer_).first(size), offset);
 
-  BlockHeader file_header(file);
-  file_header.DeleteMapBlock(address.start_block(), address.num_blocks());
-  file->Flush();
+  std::optional<FileType> type_to_delete;
+  {
+    // Block Header can't outlive file's buffer.
+    BlockHeader file_header(file);
+    file_header.DeleteMapBlock(address.start_block(), address.num_blocks());
+    file->Flush();
 
-  if (!file_header.Header()->num_entries) {
-    // This file is now empty. Let's try to delete it.
-    FileType type = Addr::RequiredFileType(file_header.Header()->entry_size);
-    if (Addr::BlockSizeForFileType(RANKINGS) ==
-        file_header.Header()->entry_size) {
-      type = RANKINGS;
+    if (!file_header.Header()->num_entries) {
+      // This file is now empty. Let's try to delete it.
+      type_to_delete = Addr::RequiredFileType(file_header.Header()->entry_size);
+      if (Addr::BlockSizeForFileType(RANKINGS) ==
+          file_header.Header()->entry_size) {
+        type_to_delete = RANKINGS;
+      }
     }
-    RemoveEmptyFile(type);  // Ignore failures.
+  }
+  if (type_to_delete.has_value()) {
+    RemoveEmptyFile(type_to_delete.value());  // Ignore failures.
   }
 }
 
@@ -394,12 +399,12 @@ bool BlockFiles::IsValid(Addr address) {
 
   static bool read_contents = false;
   if (read_contents) {
-    auto buffer =
-        std::make_unique<char[]>(Addr::BlockSizeForFileType(BLOCK_4K) * 4);
+    auto buffer = base::HeapArray<uint8_t>::Uninit(
+        Addr::BlockSizeForFileType(BLOCK_4K) * 4);
     size_t size = address.BlockSize() * address.num_blocks();
     size_t offset = address.start_block() * address.BlockSize() +
                     kBlockHeaderSize;
-    bool ok = file->Read(buffer.get(), size, offset);
+    bool ok = file->Read(buffer.as_span().first(size), offset);
     DCHECK(ok);
   }
 
@@ -417,14 +422,13 @@ bool BlockFiles::CreateBlockFile(int index, FileType file_type, bool force) {
     return false;
 
   BlockFileHeader header;
-  memset(&header, 0, sizeof(header));
   header.magic = kBlockMagic;
   header.version = kBlockVersion2;
   header.entry_size = Addr::BlockSizeForFileType(file_type);
   header.this_file = static_cast<int16_t>(index);
   DCHECK(index <= std::numeric_limits<int16_t>::max() && index >= 0);
 
-  return file->Write(&header, sizeof(header), 0);
+  return file->Write(base::byte_span_from_ref(header), 0);
 }
 
 bool BlockFiles::OpenBlockFile(int index) {
@@ -516,7 +520,6 @@ MappedFile* BlockFiles::FileForNewBlock(FileType block_type, int block_count) {
   MappedFile* file = block_files_[block_type - 1].get();
   BlockHeader file_header(file);
 
-  TimeTicks start = TimeTicks::Now();
   while (file_header.NeedToGrowBlockFile(block_count)) {
     if (kMaxBlocks == file_header.Header()->max_entries) {
       file = NextFile(file);
@@ -530,8 +533,6 @@ MappedFile* BlockFiles::FileForNewBlock(FileType block_type, int block_count) {
       return nullptr;
     break;
   }
-  LOCAL_HISTOGRAM_TIMES("DiskCache.GetFileForNewBlock",
-                        TimeTicks::Now() - start);
   return file;
 }
 
@@ -598,7 +599,6 @@ bool BlockFiles::RemoveEmptyFile(FileType block_type) {
       block_files_[file_index] = nullptr;
 
       int failure = base::DeleteFile(name) ? 0 : 1;
-      UMA_HISTOGRAM_COUNTS_1M("DiskCache.DeleteFailed2", failure);
       if (failure)
         LOG(ERROR) << "Failed to delete " << name.value() << " from the cache.";
       continue;
@@ -632,7 +632,6 @@ bool BlockFiles::FixBlockFileHeader(MappedFile* file) {
   if (file_size != expected) {
     int max_expected = header->entry_size * kMaxBlocks + file_header.Size();
     if (file_size < expected || header->empty[3] || file_size > max_expected) {
-      NOTREACHED();
       LOG(ERROR) << "Unexpected file size";
       return false;
     }

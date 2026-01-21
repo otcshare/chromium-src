@@ -4,6 +4,7 @@
 
 #include "sign_in_test_observer.h"
 
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 
 namespace signin::test {
@@ -34,7 +35,8 @@ void SignInTestObserver::OnRefreshTokenRemovedForAccount(const CoreAccountId&) {
 }
 void SignInTestObserver::OnErrorStateOfRefreshTokenUpdatedForAccount(
     const CoreAccountInfo&,
-    const GoogleServiceAuthError&) {
+    const GoogleServiceAuthError&,
+    signin_metrics::SourceForRefreshTokenOperation) {
   QuitIfConditionIsSatisfied();
 }
 void SignInTestObserver::OnAccountsInCookieUpdated(
@@ -43,11 +45,11 @@ void SignInTestObserver::OnAccountsInCookieUpdated(
   QuitIfConditionIsSatisfied();
 }
 
-// TODO(https://crbug.com/1051864): Remove this observer method once the bug is
+// TODO(crbug.com/40673982): Remove this observer method once the bug is
 // fixed.
 void SignInTestObserver::OnStateChanged(
     signin_metrics::AccountReconcilorState state) {
-  if (state == signin_metrics::ACCOUNT_RECONCILOR_OK) {
+  if (state == signin_metrics::AccountReconcilorState::kOk) {
     // This will trigger cookie update if accounts are stale.
     identity_manager_->GetAccountsInCookieJar();
   }
@@ -107,10 +109,11 @@ int SignInTestObserver::CountAccountsWithValidRefreshToken() const {
 int SignInTestObserver::CountSignedInAccountsInCookie() const {
   signin::AccountsInCookieJarInfo accounts_in_cookie_jar =
       identity_manager_->GetAccountsInCookieJar();
-  if (!accounts_in_cookie_jar.accounts_are_fresh)
+  if (!accounts_in_cookie_jar.AreAccountsFresh()) {
     return -1;
+  }
 
-  return accounts_in_cookie_jar.signed_in_accounts.size();
+  return accounts_in_cookie_jar.GetPotentiallyInvalidSignedInAccounts().size();
 }
 
 bool SignInTestObserver::HasValidPrimarySyncAccount() const {

@@ -13,8 +13,7 @@
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 #include "chromeos/ash/components/phonehub/util/histogram_util.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -46,6 +45,10 @@ std::string GetMessageTypeName(proto::MessageType message_type) {
       return "PING_RESPONSE";
     case proto::MessageType::APP_STREAM_UPDATE:
       return "APP_STREAM_UPDATE";
+    case proto::MessageType::APP_LIST_UPDATE:
+      return "APP_LIST_UPDATE";
+    case proto::MessageType::APP_LIST_INCREMENTAL_UPDATE:
+      return "APP_LIST_INCREMENTAL_UPDATE";
     default:
       return "UNKOWN_MESSAGE";
   }
@@ -54,8 +57,11 @@ std::string GetMessageTypeName(proto::MessageType message_type) {
 }  // namespace
 
 MessageReceiverImpl::MessageReceiverImpl(
-    secure_channel::ConnectionManager* connection_manager)
-    : connection_manager_(connection_manager) {
+    secure_channel::ConnectionManager* connection_manager,
+    PhoneHubStructuredMetricsLogger* phone_hub_structured_metrics_logger)
+    : connection_manager_(connection_manager),
+      phone_hub_structured_metrics_logger_(
+          phone_hub_structured_metrics_logger) {
   DCHECK(connection_manager_);
 
   connection_manager_->AddObserver(this);
@@ -77,6 +83,8 @@ void MessageReceiverImpl::OnMessageReceived(const std::string& payload) {
                << GetMessageTypeName(message_type) << " message.";
   util::LogMessageResult(message_type,
                          util::PhoneHubMessageResult::kResponseReceived);
+  phone_hub_structured_metrics_logger_->LogPhoneHubMessageEvent(
+      message_type, PhoneHubMessageDirection::kPhoneToChromebook);
 
   // Decode the proto message if the message is something we want to notify to
   // clients.
@@ -104,8 +112,7 @@ void MessageReceiverImpl::OnMessageReceived(const std::string& payload) {
     return;
   }
 
-  if (features::IsPhoneHubFeatureSetupErrorHandlingEnabled() &&
-      message_type == proto::MessageType::FEATURE_SETUP_RESPONSE) {
+  if (message_type == proto::MessageType::FEATURE_SETUP_RESPONSE) {
     proto::FeatureSetupResponse response;
     // Serialized proto is after the first two bytes of |payload|.
     if (!response.ParseFromString(payload.substr(2))) {
@@ -176,7 +183,18 @@ void MessageReceiverImpl::OnMessageReceived(const std::string& payload) {
     NotifyAppListUpdateReceived(app_list_update);
     return;
   }
+
+  if (features::IsEcheSWAEnabled() &&
+      message_type == proto::MessageType::APP_LIST_INCREMENTAL_UPDATE) {
+    proto::AppListIncrementalUpdate app_list_incrementalUpdate;
+    if (!app_list_incrementalUpdate.ParseFromString(payload.substr(2))) {
+      PA_LOG(ERROR) << "OnMessageReceived() could not deserialize the "
+                    << "AppListIncrementalUpdate proto message.";
+      return;
+    }
+    NotifyAppListIncrementalUpdateReceived(app_list_incrementalUpdate);
+    return;
+  }
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

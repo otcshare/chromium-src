@@ -7,12 +7,14 @@
 
 #include <stdint.h>
 
-#include <set>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "base/memory/ref_counted.h"
 #include "components/prefs/pref_value_map.h"
 #include "components/prefs/prefs_export.h"
+#include "components/prefs/transparent_unordered_string_map.h"
 
 namespace base {
 class Value;
@@ -51,8 +53,19 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
   // Registering a pref as public allows other services to access it.
   static constexpr PrefRegistrationFlags PUBLIC = 1 << 9;
 
-  typedef PrefValueMap::const_iterator const_iterator;
-  typedef std::unordered_map<std::string, uint32_t> PrefRegistrationFlagsMap;
+  // Enum for pref types that are stored as string but have different semantic
+  // meaning. This is used to prevent accidentally reading a pref as a wrong
+  // type.
+  enum class RegisteredPrefType {
+    // For all prefs that are not registered as any of the more specific types
+    // below.
+    kOther,
+    kInt64,
+    kTime,
+  };
+
+  using const_iterator = PrefValueMap::const_iterator;
+  using PrefRegistrationFlagsMap = TransparentUnorderedStringMap<uint32_t>;
 
   PrefRegistry();
 
@@ -61,7 +74,14 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
 
   // Retrieve the set of registration flags for the given preference. The return
   // value is a bitmask of PrefRegistrationFlags.
-  uint32_t GetRegistrationFlags(const std::string& pref_name) const;
+  uint32_t GetRegistrationFlags(std::string_view pref_name) const;
+
+  // Retrieve the registered type for the given preference.
+  //
+  // TODO(crbug.com/438680281): Fix all test code to always register preferences
+  // before Get/Set calls, then remove the std::optional from the return value.
+  std::optional<RegisteredPrefType> GetRegisteredPrefType(
+      std::string_view pref_name) const;
 
   // Gets the registered defaults.
   scoped_refptr<PrefStore> defaults();
@@ -72,43 +92,37 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
 
   // Changes the default value for a preference.
   //
-  // |pref_name| must be a previously registered preference.
-  void SetDefaultPrefValue(const std::string& pref_name, base::Value value);
-
-  // Registers a pref owned by another service for use with the current service.
-  // The owning service must register that pref with the |PUBLIC| flag.
-  void RegisterForeignPref(const std::string& path);
-
-  // Sets the default value and flags of a previously-registered foreign pref
-  // value.
-  void SetDefaultForeignPrefValue(const std::string& path,
-                                  base::Value default_value,
-                                  uint32_t flags);
-
-  const std::set<std::string>& foreign_pref_keys() const {
-    return foreign_pref_keys_;
-  }
+  // `pref_name` must be a previously registered preference.
+  void SetDefaultPrefValue(std::string_view pref_name, base::Value value);
 
  protected:
   friend class base::RefCounted<PrefRegistry>;
   virtual ~PrefRegistry();
 
   // Used by subclasses to register a default value and registration flags for
-  // a preference. |flags| is a bitmask of |PrefRegistrationFlags|.
-  void RegisterPreference(const std::string& path,
+  // a preference. `flags` is a bitmask of `PrefRegistrationFlags`. `type` can
+  // be specified for prefs that need more specific type-checking than their
+  // storage `base::Value::Type`.
+  //
+  // TODO(crbug.com/438680281): Migrate all pref types to specify the `type`
+  // parameter, then remove the default value.
+  void RegisterPreference(std::string_view path,
                           base::Value default_value,
-                          uint32_t flags);
+                          uint32_t flags,
+                          RegisteredPrefType type = RegisteredPrefType::kOther);
 
   // Allows subclasses to hook into pref registration.
-  virtual void OnPrefRegistered(const std::string& path,
-                                uint32_t flags);
+  virtual void OnPrefRegistered(std::string_view path, uint32_t flags);
 
   scoped_refptr<DefaultPrefStore> defaults_;
 
   // A map of pref name to a bitmask of PrefRegistrationFlags.
   PrefRegistrationFlagsMap registration_flags_;
 
-  std::set<std::string> foreign_pref_keys_;
+  // A map of pref name to its registered type.
+  using PrefRegistrationTypeMap =
+      TransparentUnorderedStringMap<RegisteredPrefType>;
+  PrefRegistrationTypeMap registration_types_;
 };
 
 #endif  // COMPONENTS_PREFS_PREF_REGISTRY_H_

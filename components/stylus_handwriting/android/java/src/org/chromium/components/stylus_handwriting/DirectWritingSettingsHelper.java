@@ -8,13 +8,13 @@ import android.content.Context;
 import android.os.Build;
 import android.provider.Settings;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * Helper class for Direct writing feature support and settings.
- */
+/** Helper class for Direct writing feature support and settings. */
+@NullMarked
 public class DirectWritingSettingsHelper {
     private DirectWritingSettingsHelper() {}
 
@@ -25,51 +25,78 @@ public class DirectWritingSettingsHelper {
     private static final int DIRECT_WRITING_DISABLED = 0;
 
     private static @Nullable Boolean sDirectWritingServiceCallbackAvailable;
+    private static @Nullable Boolean sIsEnabledForTesting;
 
     // Samsung keyboard package names.
     private static final String HONEYBOARD_SERVICE_PKG_NAME =
             DirectWritingConstants.SERVICE_PKG_NAME + "/.service.HoneyBoardService";
 
     public static boolean isEnabled(Context context) {
+        if (sIsEnabledForTesting != null) {
+            return sIsEnabledForTesting;
+        }
+
         // Samsung keyboard supports handwriting in Chrome and Webview from Android S onwards.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false;
+        // Samsung switched to Android handwriting APIs from Android U onwards.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false;
         // Check to see if we are able to instantiate the DirectWritingServiceCallback.
         if (!isDirectWritingServiceCallbackAvailable()) return false;
         return isHoneyboardDefault(context) && isFeatureEnabled(context);
     }
 
     /**
-     * Direct writing feature main switch
-     * 0 : disable, 1 : enable
+     * Direct writing feature main switch 0 : disable, 1 : enable
      *
      * @param context the current {@link Context}
      */
     private static boolean isFeatureEnabled(Context context) {
-        if (context != null) {
-            try {
-                return Settings.System.getInt(context.getContentResolver(), URI_DIRECT_WRITING,
-                               /* default */ DIRECT_WRITING_DISABLED)
-                        == DIRECT_WRITING_ENABLED;
-            } catch (SecurityException e) {
-                // On some devices, URI_DIRECT_WRITING is not readable and trying to do so will
-                // throw a security exception. https://crbug.com/1356155.
+        if (context == null) {
+            return false;
+        }
+
+        if (StylusHandwritingFeatureMap.isEnabledOrDefault(
+                StylusHandwritingFeatureMap.CACHE_STYLUS_SETTINGS, false)) {
+            Integer value = StylusWritingSettingsState.getInstance().getDirectWritingSetting();
+            if (value == null) {
                 return false;
             }
+            return value == DIRECT_WRITING_ENABLED;
         }
-        return false;
+
+        try {
+            return Settings.System.getInt(
+                            context.getContentResolver(),
+                            URI_DIRECT_WRITING,
+                            /* default= */ DIRECT_WRITING_DISABLED)
+                    == DIRECT_WRITING_ENABLED;
+        } catch (SecurityException e) {
+            // On some devices, URI_DIRECT_WRITING is not readable and trying to do so will
+            // throw a security exception. https://crbug.com/1356155.
+            return false;
+        }
     }
 
     private static boolean isHoneyboardDefault(Context context) {
-        if (context != null) {
-            try {
-                String defaultIme = Settings.Secure.getString(
-                        context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
-                return HONEYBOARD_SERVICE_PKG_NAME.equals(defaultIme);
-            } catch (SecurityException e) {
-                return false;
-            }
+        if (context == null) {
+            return false;
         }
-        return false;
+
+        try {
+            String defaultIme = getDefaultInputMethod(context);
+            return HONEYBOARD_SERVICE_PKG_NAME.equals(defaultIme);
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    private static @Nullable String getDefaultInputMethod(Context context) {
+        if (StylusHandwritingFeatureMap.isEnabledOrDefault(
+                StylusHandwritingFeatureMap.CACHE_STYLUS_SETTINGS, false)) {
+            return StylusWritingSettingsState.getInstance().getDefaultInputMethod();
+        }
+        return Settings.Secure.getString(
+                context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
     }
 
     private static boolean isDirectWritingServiceCallbackAvailable() {
@@ -81,17 +108,22 @@ public class DirectWritingSettingsHelper {
                 // so this throws a NoSuchMethodException.
                 dwCallbackClass.getConstructor().isAccessible();
                 sDirectWritingServiceCallbackAvailable = true;
-                logDWServiceCallbackFailed(false);
+                logDwServiceCallbackFailed(false);
             } catch (ClassNotFoundException | NoSuchMethodException e) {
-                logDWServiceCallbackFailed(true);
+                logDwServiceCallbackFailed(true);
                 sDirectWritingServiceCallbackAvailable = false;
             }
         }
         return sDirectWritingServiceCallbackAvailable;
     }
 
-    private static void logDWServiceCallbackFailed(boolean didFail) {
+    private static void logDwServiceCallbackFailed(boolean didFail) {
         RecordHistogram.recordBooleanHistogram(
                 "InputMethod.VirtualKeyboard.Handwriting.DWServiceCallbackFailed", didFail);
+    }
+
+    public static void setIsEnabledForTesting(boolean isEnabled) {
+        sIsEnabledForTesting = isEnabled;
+        ResettersForTesting.register(() -> sIsEnabledForTesting = null);
     }
 }

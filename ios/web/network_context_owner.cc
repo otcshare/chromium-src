@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "ios/web/public/thread/web_task_traits.h"
 #include "ios/web/public/thread/web_thread.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -34,8 +34,9 @@ NetworkContextOwner::NetworkContextOwner(
 
 NetworkContextOwner::~NetworkContextOwner() {
   DCHECK_CURRENTLY_ON(WebThread::IO);
-  if (request_context_)
+  if (request_context_) {
     request_context_->RemoveObserver(this);
+  }
 }
 
 void NetworkContextOwner::InitializeOnIOThread(

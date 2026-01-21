@@ -4,9 +4,9 @@
 
 #include "components/variations/fake_crash.h"
 
-#include "base/bind.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -16,7 +16,6 @@ namespace {
 // actually crashing). This is used for verifying safety measures that help
 // catch features that cause real crashes.
 BASE_FEATURE(kVariationsFakeCrashAfterStartup,
-             "VariationsFakeCrashAfterStartup",
              base::FEATURE_DISABLED_BY_DEFAULT);
 }  // namespace
 

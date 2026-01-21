@@ -4,7 +4,9 @@
 
 #include "ui/events/ozone/evdev/input_injector_evdev.h"
 
-#include "base/bind.h"
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -31,7 +33,7 @@ class EventObserver {
 
   void OnEvent(Event* event) {
     if (event->IsMouseEvent()) {
-      if (event->type() == ET_MOUSEWHEEL) {
+      if (event->type() == EventType::kMousewheel) {
         OnMouseWheelEvent(event->AsMouseWheelEvent());
       } else {
         OnMouseEvent(event->AsMouseEvent());
@@ -46,8 +48,9 @@ class EventObserver {
 
 MATCHER_P4(MatchesMouseEvent, type, button, x, y, "") {
   if (arg->type() != type) {
-    *result_listener << "Expected type: " << type << " actual: " << arg->type()
-                     << " (" << arg->GetName() << ")";
+    *result_listener << "Expected type: " << std::to_underlying(type)
+                     << " actual: " << std::to_underlying(arg->type()) << " ("
+                     << arg->GetName() << ")";
     return false;
   }
   if (button == EF_LEFT_MOUSE_BUTTON && !arg->IsLeftMouseButton()) {
@@ -122,14 +125,14 @@ void InputInjectorEvdevTest::SimulateMouseClick(int x,
 
 void InputInjectorEvdevTest::ExpectClick(int x, int y, int button, int count) {
   InSequence dummy;
-  EXPECT_CALL(event_observer_,
-              OnMouseEvent(MatchesMouseEvent(ET_MOUSE_MOVED, EF_NONE, x, y)));
+  EXPECT_CALL(event_observer_, OnMouseEvent(MatchesMouseEvent(
+                                   EventType::kMouseMoved, EF_NONE, x, y)));
 
   for (int i = 0; i < count; i++) {
     EXPECT_CALL(event_observer_, OnMouseEvent(MatchesMouseEvent(
-                                     ET_MOUSE_PRESSED, button, x, y)));
+                                     EventType::kMousePressed, button, x, y)));
     EXPECT_CALL(event_observer_, OnMouseEvent(MatchesMouseEvent(
-                                     ET_MOUSE_RELEASED, button, x, y)));
+                                     EventType::kMouseReleased, button, x, y)));
   }
 }
 
@@ -166,16 +169,16 @@ TEST_F(InputInjectorEvdevTest, MouseMoved) {
 TEST_F(InputInjectorEvdevTest, MouseDragged) {
   InSequence dummy;
   EXPECT_CALL(event_observer_,
-              OnMouseEvent(MatchesMouseEvent(ET_MOUSE_PRESSED,
+              OnMouseEvent(MatchesMouseEvent(EventType::kMousePressed,
                                              EF_LEFT_MOUSE_BUTTON, 0, 0)));
   EXPECT_CALL(event_observer_,
-              OnMouseEvent(MatchesMouseEvent(ET_MOUSE_DRAGGED,
+              OnMouseEvent(MatchesMouseEvent(EventType::kMouseDragged,
                                              EF_LEFT_MOUSE_BUTTON, 1, 1)));
   EXPECT_CALL(event_observer_,
-              OnMouseEvent(MatchesMouseEvent(ET_MOUSE_DRAGGED,
+              OnMouseEvent(MatchesMouseEvent(EventType::kMouseDragged,
                                              EF_LEFT_MOUSE_BUTTON, 2, 3)));
   EXPECT_CALL(event_observer_,
-              OnMouseEvent(MatchesMouseEvent(ET_MOUSE_RELEASED,
+              OnMouseEvent(MatchesMouseEvent(EventType::kMouseReleased,
                                              EF_LEFT_MOUSE_BUTTON, 2, 3)));
   injector_.InjectMouseButton(EF_LEFT_MOUSE_BUTTON, true);
   injector_.MoveCursorTo(gfx::PointF(1, 1));
@@ -186,14 +189,16 @@ TEST_F(InputInjectorEvdevTest, MouseDragged) {
 
 TEST_F(InputInjectorEvdevTest, MouseWheel) {
   InSequence dummy;
-  EXPECT_CALL(event_observer_, OnMouseWheelEvent(AllOf(
-                                   MatchesMouseEvent(ET_MOUSEWHEEL, 0, 10, 20),
-                                   Property(&MouseWheelEvent::x_offset, 0),
-                                   Property(&MouseWheelEvent::y_offset, 100))));
-  EXPECT_CALL(event_observer_, OnMouseWheelEvent(AllOf(
-                                   MatchesMouseEvent(ET_MOUSEWHEEL, 0, 10, 20),
-                                   Property(&MouseWheelEvent::x_offset, 100),
-                                   Property(&MouseWheelEvent::y_offset, 0))));
+  EXPECT_CALL(event_observer_,
+              OnMouseWheelEvent(
+                  AllOf(MatchesMouseEvent(EventType::kMousewheel, 0, 10, 20),
+                        Property(&MouseWheelEvent::x_offset, 0),
+                        Property(&MouseWheelEvent::y_offset, 100))));
+  EXPECT_CALL(event_observer_,
+              OnMouseWheelEvent(
+                  AllOf(MatchesMouseEvent(EventType::kMousewheel, 0, 10, 20),
+                        Property(&MouseWheelEvent::x_offset, 100),
+                        Property(&MouseWheelEvent::y_offset, 0))));
   injector_.MoveCursorTo(gfx::PointF(10, 20));
   injector_.InjectMouseWheel(0, 100);
   injector_.InjectMouseWheel(100, 0);

@@ -13,6 +13,12 @@ namespace features {
 // Enables HTTPS-Only mode upgrades on iOS.
 BASE_DECLARE_FEATURE(kHttpsOnlyMode);
 
+// Enables HTTPS upgrades on iOS.
+BASE_DECLARE_FEATURE(kHttpsUpgrades);
+
+// Controls whether an interstitial is shown when submitting a mixed form.
+BASE_DECLARE_FEATURE(kInsecureFormSubmissionInterstitial);
+
 }  // namespace features
 }  // namespace security_interstitials
 

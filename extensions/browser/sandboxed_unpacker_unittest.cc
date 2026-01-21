@@ -3,16 +3,16 @@
 // found in the LICENSE file.
 
 #include "extensions/browser/sandboxed_unpacker.h"
-#include "build/build_config.h"
 
 #include <memory>
 #include <tuple>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/features.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
@@ -20,9 +20,11 @@
 #include "base/strings/pattern.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/crx_file/id_util.h"
 #include "components/services/unzip/content/unzip_service.h"
 #include "components/services/unzip/in_process_unzipper.h"
@@ -38,7 +40,6 @@
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/switches.h"
-#include "extensions/common/value_builder.h"
 #include "extensions/common/verifier_formats.h"
 #include "extensions/strings/grit/extensions_strings.h"
 #include "extensions/test/test_extensions_client.h"
@@ -89,13 +90,15 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
 
   base::FilePath temp_dir() const { return temp_dir_; }
   std::u16string unpack_error_message() const {
-    if (error_)
+    if (error_) {
       return error_->message();
+    }
     return std::u16string();
   }
   CrxInstallErrorType unpack_error_type() const {
-    if (error_)
+    if (error_) {
       return error_->type();
+    }
     return CrxInstallErrorType::NONE;
   }
   int unpack_error_detail() const {
@@ -121,10 +124,12 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
 
  private:
   ~MockSandboxedUnpackerClient() override {
-    if (deleted_tracker_)
+    if (deleted_tracker_) {
       *deleted_tracker_ = true;
-    if (quit_closure_)
+    }
+    if (quit_closure_) {
       std::move(quit_closure_).Run();
+    }
   }
 
   void ShouldComputeHashesForOffWebstoreExtension(
@@ -138,8 +143,7 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
                        std::unique_ptr<base::Value::Dict> original_manifest,
                        const Extension* extension,
                        const SkBitmap& install_icon,
-                       declarative_net_request::RulesetInstallPrefs
-                           ruleset_install_prefs) override {
+                       base::Value::Dict ruleset_install_prefs) override {
     temp_dir_ = temp_dir;
     callback_runner_->PostTask(FROM_HERE, std::move(quit_closure_));
   }
@@ -150,7 +154,7 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
   }
 
   scoped_refptr<base::SequencedTaskRunner> callback_runner_;
-  absl::optional<CrxInstallError> error_;
+  std::optional<CrxInstallError> error_;
   base::OnceClosure quit_closure_;
   base::FilePath temp_dir_;
   raw_ptr<bool> deleted_tracker_ = nullptr;
@@ -234,8 +238,7 @@ class SandboxedUnpackerTest : public ExtensionsTest {
     ASSERT_TRUE(zip::Unzip(crx_path, temp_dir.GetPath()));
 
     std::string fake_id = crx_file::id_util::GenerateId(crx_name);
-    std::string fake_public_key;
-    base::Base64Encode(std::string(2048, 'k'), &fake_public_key);
+    std::string fake_public_key = base::Base64Encode(std::string(2048, 'k'));
 
     base::RunLoop run_loop;
     client_->SetQuitClosure(run_loop.QuitClosure());
@@ -267,7 +270,7 @@ class SandboxedUnpackerTest : public ExtensionsTest {
 
   void ExpectInstallErrorContains(const std::string& error) {
     std::string full_error = base::UTF16ToUTF8(client_->unpack_error_message());
-    EXPECT_TRUE(full_error.find(error) != std::string::npos)
+    EXPECT_TRUE(full_error.contains(error))
         << "Error message " << full_error << " does not contain " << error;
   }
 
@@ -302,7 +305,7 @@ class SandboxedUnpackerTest : public ExtensionsTest {
     sandboxed_unpacker_->extension_root_ = path;
   }
 
-  absl::optional<base::Value::Dict> RewriteManifestFile(
+  std::optional<base::Value::Dict> RewriteManifestFile(
       const base::Value::Dict& manifest) {
     return sandboxed_unpacker_->RewriteManifestFile(manifest);
   }
@@ -313,7 +316,7 @@ class SandboxedUnpackerTest : public ExtensionsTest {
 
  protected:
   base::ScopedTempDir extensions_dir_;
-  raw_ptr<MockSandboxedUnpackerClient> client_;
+  raw_ptr<MockSandboxedUnpackerClient, AcrossTasksDanglingUntriaged> client_;
   scoped_refptr<SandboxedUnpacker> sandboxed_unpacker_;
   std::unique_ptr<content::InProcessUtilityThreadHelper>
       in_process_utility_thread_helper_;
@@ -485,10 +488,9 @@ TEST_F(SandboxedUnpackerTest, TestRewriteManifestInjections) {
   std::string fingerprint = "1.0123456789abcdef";
   base::WriteFile(extensions_dir_.GetPath().Append(
                       FILE_PATH_LITERAL("manifest.fingerprint")),
-                  fingerprint.c_str(),
-                  base::checked_cast<int>(fingerprint.size()));
-  absl::optional<base::Value::Dict> manifest(RewriteManifestFile(
-      DictionaryBuilder().Set(kVersionStr, kTestVersion).BuildDict()));
+                  fingerprint);
+  std::optional<base::Value::Dict> manifest(
+      RewriteManifestFile(base::Value::Dict().Set(kVersionStr, kTestVersion)));
   auto* key = manifest->FindString("key");
   auto* version = manifest->FindString(kVersionStr);
   auto* differential_fingerprint =
@@ -506,9 +508,9 @@ TEST_F(SandboxedUnpackerTest, InvalidMessagesFile) {
   // Check that there is no _locales folder.
   base::FilePath install_path = GetInstallPath().Append(kLocaleFolder);
   EXPECT_FALSE(base::PathExists(install_path));
-  EXPECT_TRUE(base::MatchPattern(
-      GetInstallErrorMessage(),
-      u"*_locales?en_US?messages.json': Line: 4, column: 1,*"))
+  EXPECT_TRUE(base::MatchPattern(GetInstallErrorMessage(),
+                                 u"*_locales?en_US?messages.json': EOF while "
+                                 u"parsing a string at line 4*"))
       << GetInstallErrorMessage();
   ASSERT_EQ(CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE,
             GetInstallErrorType());
@@ -555,19 +557,8 @@ TEST_F(SandboxedUnpackerTest, UnzipperServiceFails) {
             GetInstallErrorDetail());
 }
 
-TEST_F(SandboxedUnpackerTest, JsonParserFails) {
-  in_process_data_decoder().service().SimulateJsonParserCrashForTesting(true);
-  InitSandboxedUnpacker();
-
-  SetupUnpacker("good_package.crx", "");
-  EXPECT_FALSE(InstallSucceeded());
-  EXPECT_FALSE(GetInstallErrorMessage().empty());
-  ASSERT_EQ(CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE,
-            GetInstallErrorType());
-}
-
 TEST_F(SandboxedUnpackerTest, ImageDecoderFails) {
-  in_process_data_decoder().service().SimulateImageDecoderCrashForTesting(true);
+  in_process_data_decoder().SimulateImageDecoderCrash(true);
   InitSandboxedUnpacker();
   SetupUnpacker("good_package.crx", "");
   EXPECT_FALSE(InstallSucceeded());

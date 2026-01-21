@@ -134,23 +134,23 @@ void PointScanController::ResetAnimation() {
     vertical_line_layer_->SetSubpixelPositionOffset(gfx::Vector2dF(0, 0));
 }
 
-absl::optional<gfx::PointF> PointScanController::OnPointSelect() {
+std::optional<gfx::PointF> PointScanController::OnPointSelect() {
   switch (state_) {
     case PointScanState::kHorizontalRangeScanning:
       StartHorizontalLineScan();
-      return absl::nullopt;
+      return std::nullopt;
     case PointScanState::kHorizontalScanning:
       StartVerticalRangeScan();
-      return absl::nullopt;
+      return std::nullopt;
     case PointScanState::kVerticalRangeScanning:
       StartVerticalLineScan();
-      return absl::nullopt;
+      return std::nullopt;
     case PointScanState::kVerticalScanning:
       Stop();
       return gfx::PointF(horizontal_line_layer_info_.offset,
                          vertical_line_layer_info_.offset);
     case PointScanState::kOff:
-      return absl::nullopt;
+      return std::nullopt;
   }
 }
 
@@ -168,7 +168,7 @@ bool PointScanController::IsPointScanEnabled() {
 
 void PointScanController::SetSpeedDipsPerSecond(int speed_dips_per_second) {
   const gfx::Rect display_bounds =
-      display::Screen::GetScreen()->GetPrimaryDisplay().bounds();
+      display::Screen::Get()->GetPrimaryDisplay().bounds();
   float width = display_bounds.width();
   float height = display_bounds.height();
   horizontal_range_layer_info_.animation_rate = width / speed_dips_per_second;

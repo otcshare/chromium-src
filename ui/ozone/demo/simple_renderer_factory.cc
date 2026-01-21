@@ -50,7 +50,7 @@ scoped_refptr<gl::GLSurface> CreateGLSurface(gl::GLDisplay* display,
 
 }  // namespace
 
-SimpleRendererFactory::SimpleRendererFactory() {}
+SimpleRendererFactory::SimpleRendererFactory() = default;
 
 SimpleRendererFactory::~SimpleRendererFactory() {
   if (display_) {
@@ -75,7 +75,8 @@ bool SimpleRendererFactory::Initialize() {
   }
 #endif
   if (!command_line->HasSwitch(kDisableGpu)) {
-    display_ = gl::init::InitializeGLOneOff(/*system_device_id=*/0);
+    display_ = gl::init::InitializeGLOneOff(
+        /*gpu_preference=*/gl::GpuPreference::kDefault);
     if (display_) {
       type_ = GL;
     } else {
@@ -100,7 +101,7 @@ std::unique_ptr<Renderer> SimpleRendererFactory::CreateRenderer(
       if (auto presenter = CreatePresenter(display_, widget)) {
         return std::make_unique<SurfacelessGlRenderer>(
             widget, std::move(window_surface),
-            gl::init::CreateOffscreenGLSurface(display_, gfx::Size(1, 1)),
+            gl::init::CreateOffscreenGLSurface(display_, gfx::Size(0, 0)),
             presenter, size);
       }
       scoped_refptr<gl::GLSurface> surface = CreateGLSurface(display_, widget);

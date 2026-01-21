@@ -6,15 +6,21 @@
 
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/bindings_policy.h"
+#include "content/public/common/content_client.h"
 
 namespace ui {
 
 UntrustedWebUIController::UntrustedWebUIController(content::WebUI* web_ui)
     : content::WebUIController(web_ui) {
   // UntrustedWebUIController should never enable bindings.
-  web_ui->SetBindings(content::BINDINGS_POLICY_NONE);
+  web_ui->SetBindings(content::BindingsPolicySet());
 }
 
 UntrustedWebUIController::~UntrustedWebUIController() = default;
+
+content::WebUIController::TrustPolicy
+UntrustedWebUIController::GetTrustPolicy() {
+  return WebUIController::TrustPolicy::kUntrusted;
+}
 
 }  // namespace ui

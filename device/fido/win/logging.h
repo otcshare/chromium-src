@@ -6,9 +6,10 @@
 #define DEVICE_FIDO_WIN_LOGGING_H_
 
 #include <windows.h>
+
 #include <ostream>
 
-#include "third_party/microsoft_webauthn/webauthn.h"
+#include "third_party/microsoft_webauthn/src/webauthn.h"
 
 std::ostream& operator<<(std::ostream& out,
                          const WEBAUTHN_RP_ENTITY_INFORMATION& in);
@@ -48,5 +49,8 @@ std::ostream& operator<<(std::ostream& out,
                          const WEBAUTHN_CREDENTIAL_ATTESTATION& in);
 
 std::ostream& operator<<(std::ostream& out, const WEBAUTHN_ASSERTION& in);
+
+std::ostream& operator<<(std::ostream& out,
+                         const WEBAUTHN_GET_CREDENTIALS_OPTIONS& in);
 
 #endif  // DEVICE_FIDO_WIN_LOGGING_H_

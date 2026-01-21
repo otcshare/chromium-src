@@ -4,23 +4,28 @@
 
 #include "extensions/browser/api/system_info/system_info_provider.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "content/public/browser/browser_thread.h"
+
+// TODO(crbug.com/371321982): port system.storage api on desktop android.
+#if !BUILDFLAG(IS_ANDROID)
 #include "components/storage_monitor/storage_info.h"
 #include "components/storage_monitor/storage_monitor.h"
-#include "content/public/browser/browser_thread.h"
 #include "extensions/common/api/system_storage.h"
 
 using storage_monitor::StorageInfo;
 using storage_monitor::StorageMonitor;
+#endif
 
 namespace extensions {
 
-using api::system_storage::STORAGE_UNIT_TYPE_FIXED;
-using api::system_storage::STORAGE_UNIT_TYPE_REMOVABLE;
+// TODO(crbug.com/371321982): port system.storage api on desktop android.
+#if !BUILDFLAG(IS_ANDROID)
 using api::system_storage::StorageUnitInfo;
+using api::system_storage::StorageUnitType;
 
 namespace systeminfo {
 
@@ -30,12 +35,13 @@ void BuildStorageUnitInfo(const StorageInfo& info, StorageUnitInfo* unit) {
   unit->name = base::UTF16ToUTF8(info.GetDisplayName(false));
   // TODO(hmin): Might need to take MTP device into consideration.
   unit->type = StorageInfo::IsRemovableDevice(info.device_id())
-                   ? STORAGE_UNIT_TYPE_REMOVABLE
-                   : STORAGE_UNIT_TYPE_FIXED;
+                   ? StorageUnitType::kRemovable
+                   : StorageUnitType::kFixed;
   unit->capacity = static_cast<double>(info.total_size_in_bytes());
 }
 
 }  // namespace systeminfo
+#endif  // !BUILDFLAG(IS_ANROID)
 
 SystemInfoProvider::SystemInfoProvider()
     : is_waiting_for_completion_(false),
@@ -61,8 +67,9 @@ void SystemInfoProvider::StartQueryInfo(QueryInfoCompletionCallback callback) {
 
   callbacks_.push(std::move(callback));
 
-  if (is_waiting_for_completion_)
+  if (is_waiting_for_completion_) {
     return;
+  }
 
   is_waiting_for_completion_ = true;
 

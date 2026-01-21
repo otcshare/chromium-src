@@ -5,10 +5,10 @@
 #ifndef COMPONENTS_FEED_CORE_V2_WEB_FEED_SUBSCRIPTION_COORDINATOR_H_
 #define COMPONENTS_FEED_CORE_V2_WEB_FEED_SUBSCRIPTION_COORDINATOR_H_
 
-#include <map>
 #include <string>
+#include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/proto/v2/wire/web_feeds.pb.h"
@@ -16,6 +16,7 @@
 #include "components/feed/core/v2/public/web_feed_subscriptions.h"
 #include "components/feed/core/v2/web_feed_subscriptions/fetch_recommended_web_feeds_task.h"
 #include "components/feed/core/v2/web_feed_subscriptions/fetch_subscribed_web_feeds_task.h"
+#include "components/feed/core/v2/web_feed_subscriptions/query_web_feed_task.h"
 #include "components/feed/core/v2/web_feed_subscriptions/subscribe_to_web_feed_task.h"
 #include "components/feed/core/v2/web_feed_subscriptions/subscription_datastore_provider.h"
 #include "components/feed/core/v2/web_feed_subscriptions/unsubscribe_from_web_feed_task.h"
@@ -80,6 +81,12 @@ class WebFeedSubscriptionCoordinator : public WebFeedSubscriptions {
   void DumpStateForDebugging(std::ostream& ss) override;
   void RefreshRecommendedFeeds(
       base::OnceCallback<void(RefreshResult)> callback) override;
+  void QueryWebFeed(
+      const GURL& url,
+      base::OnceCallback<void(QueryWebFeedResult)> callback) override;
+  void QueryWebFeedId(
+      const std::string& web_feed_id,
+      base::OnceCallback<void(QueryWebFeedResult)> callback) override;
 
   // Types / functions exposed for task implementations.
 
@@ -181,12 +188,16 @@ class WebFeedSubscriptionCoordinator : public WebFeedSubscriptions {
       base::OnceCallback<void(UnfollowWebFeedResult)> callback,
       UnsubscribeFromWebFeedTask::Result result);
 
+  void QueryWebFeedComplete(
+      base::OnceCallback<void(QueryWebFeedResult)> callback,
+      QueryWebFeedResult result);
+
   void EnqueueInFlightChange(
       bool subscribing,
       WebFeedInFlightChangeStrategy strategy,
       feedwire::webfeed::WebFeedChangeReason change_reason,
-      absl::optional<WebFeedPageInformation> page_information,
-      absl::optional<feedstore::WebFeedInfo> info);
+      std::optional<WebFeedPageInformation> page_information,
+      std::optional<feedstore::WebFeedInfo> info);
   const WebFeedInFlightChange* FindInflightChange(
       const std::string& web_feed_id,
       const WebFeedPageInformation* maybe_page_info) const;

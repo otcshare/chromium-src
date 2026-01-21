@@ -28,6 +28,7 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_wiring.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
@@ -152,6 +153,16 @@ unsigned AudioNodeOutput::ParamFanOutCount() {
 
 unsigned AudioNodeOutput::RenderingFanOutCount() const {
   return rendering_fan_out_count_;
+}
+
+unsigned AudioNodeOutput::RenderingParamFanOutCount() const {
+  DCHECK(GetDeferredTaskHandler().IsAudioThread());
+  return rendering_param_fan_out_count_;
+}
+
+bool AudioNodeOutput::IsConnectedDuringRendering() const {
+  DCHECK(GetDeferredTaskHandler().IsAudioThread());
+  return RenderingFanOutCount() > 0 || RenderingParamFanOutCount() > 0;
 }
 
 void AudioNodeOutput::DisconnectAllInputs() {

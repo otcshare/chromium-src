@@ -10,9 +10,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -22,7 +21,6 @@
 #include "chrome/browser/ash/policy/scheduled_task_handler/scheduled_task_executor_impl.h"
 #include "chrome/browser/ash/policy/scheduled_task_handler/scheduled_task_util.h"
 #include "chrome/browser/ash/policy/scheduled_task_handler/task_executor_with_retries.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
 
@@ -126,15 +124,14 @@ void DeviceScheduledUpdateChecker::OnScheduledUpdateCheckDataChanged() {
   // they may break a bigger proportion of the devices when pushed.
   const base::Value* value =
       cros_settings_->GetPref(ash::kDeviceScheduledUpdateCheck);
-  if (!base::FeatureList::IsEnabled(::features::kSupportsRtcWakeOver24Hours) ||
-      !value) {
+  if (!value) {
     ResetState();
     return;
   }
 
   // Keep any old policy timers running if a new policy is ill-formed and can't
   // be used to set a new timer.
-  absl::optional<ScheduledTaskExecutor::ScheduledTaskData>
+  std::optional<ScheduledTaskExecutor::ScheduledTaskData>
       scheduled_update_check_data =
           scheduled_task_util::ParseScheduledTask(*value, kTaskTimeFieldName);
   if (!scheduled_update_check_data) {
@@ -233,7 +230,7 @@ void DeviceScheduledUpdateChecker::OnUpdateCheckCompletion(
 
 void DeviceScheduledUpdateChecker::ResetState() {
   update_check_executor_->Reset();
-  scheduled_update_check_data_ = absl::nullopt;
+  scheduled_update_check_data_ = std::nullopt;
   os_and_policies_update_checker_.Stop();
   start_update_check_timer_task_executor_.Stop();
 }

@@ -130,7 +130,7 @@ TEST(HostMappingRulesTest, RewritesAnyStandardUrlWithPort) {
   const char kScheme[] = "foo";
   url::ScopedSchemeRegistryForTests scoped_registry;
   AddStandardScheme(kScheme, url::SCHEME_WITH_HOST_AND_PORT);
-  ASSERT_TRUE(url::IsStandard(kScheme, url::Component(0, strlen(kScheme))));
+  ASSERT_TRUE(url::IsStandard(kScheme));
 
   HostMappingRules rules;
   rules.AddRuleFromString("MAP initial.test replacement.test:1000");
@@ -144,7 +144,7 @@ TEST(HostMappingRulesTest, RewritesAnyStandardUrlWithoutPort) {
   const char kScheme[] = "foo";
   url::ScopedSchemeRegistryForTests scoped_registry;
   AddStandardScheme(kScheme, url::SCHEME_WITH_HOST);
-  ASSERT_TRUE(url::IsStandard(kScheme, url::Component(0, strlen(kScheme))));
+  ASSERT_TRUE(url::IsStandard(kScheme));
 
   HostMappingRules rules;
   rules.AddRuleFromString("MAP initial.test replacement.test:1000");
@@ -177,11 +177,11 @@ TEST(HostMappingRulesTest, IgnoresInvalidReplacementUrls) {
   EXPECT_EQ(url, GURL("http://initial.test"));
 }
 
-// Remapping to "~NOTFOUND" is documented as a special case for
+// Remapping to "^NOTFOUND" is documented as a special case for
 // MappedHostResolver usage. Ensure that it is handled as invalid as expected.
 TEST(HostMappingRulesTest, NotFoundIgnoredAsInvalidUrl) {
   HostMappingRules rules;
-  rules.AddRuleFromString("MAP initial.test ~NOTFOUND");
+  rules.AddRuleFromString("MAP initial.test ^NOTFOUND");
 
   GURL url("http://initial.test");
   EXPECT_EQ(rules.RewriteUrl(url),

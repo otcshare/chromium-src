@@ -5,20 +5,24 @@
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher_android.h"
 
 #include "base/android/jni_android.h"
-#include "base/callback.h"
-#include "components/signin/public/android/jni_headers/AccountCapabilitiesFetcher_jni.h"
+#include "base/functional/callback.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/account_info.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/signin/public/android/jni_headers/AccountCapabilitiesFetcher_jni.h"
+
 namespace {
 using OnAccountCapabilitiesFetchedCallback =
-    base::OnceCallback<void(const absl::optional<AccountCapabilities>&)>;
+    base::OnceCallback<void(const std::optional<AccountCapabilities>&)>;
 }
 
 AccountCapabilitiesFetcherAndroid::AccountCapabilitiesFetcherAndroid(
     const CoreAccountInfo& account_info,
+    AccountCapabilitiesFetcher::FetchPriority fetch_priority,
     AccountCapabilitiesFetcher::OnCompleteCallback on_complete_callback)
     : AccountCapabilitiesFetcher(account_info,
+                                 fetch_priority,
                                  std::move(on_complete_callback)) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
@@ -33,9 +37,9 @@ AccountCapabilitiesFetcherAndroid::AccountCapabilitiesFetcherAndroid(
           weak_ptr_factory_.GetWeakPtr()));
   base::android::ScopedJavaLocalRef<jobject> local_java_ref =
       signin::Java_AccountCapabilitiesFetcher_Constructor(
-          env, ConvertToJavaCoreAccountInfo(env, account_info),
+          env, account_info,
           reinterpret_cast<intptr_t>(heap_callback.release()));
-  java_ref_.Reset(env, local_java_ref.obj());
+  java_ref_.Reset(env, local_java_ref);
 }
 
 AccountCapabilitiesFetcherAndroid::~AccountCapabilitiesFetcherAndroid() =
@@ -48,10 +52,10 @@ void AccountCapabilitiesFetcherAndroid::StartImpl() {
 }
 
 namespace signin {
-void JNI_AccountCapabilitiesFetcher_OnCapabilitiesFetchComplete(
+static void JNI_AccountCapabilitiesFetcher_OnCapabilitiesFetchComplete(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& account_capabilities,
-    jlong native_callback) {
+    const base::android::JavaRef<jobject>& account_capabilities,
+    int64_t native_callback) {
   std::unique_ptr<OnAccountCapabilitiesFetchedCallback> heap_callback(
       reinterpret_cast<OnAccountCapabilitiesFetchedCallback*>(native_callback));
   std::move(*heap_callback)
@@ -59,3 +63,5 @@ void JNI_AccountCapabilitiesFetcher_OnCapabilitiesFetchComplete(
           env, account_capabilities));
 }
 }  // namespace signin
+
+DEFINE_JNI(AccountCapabilitiesFetcher)

@@ -12,6 +12,7 @@
 
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -32,18 +33,9 @@ bool CreateSocketPair(ScopedFD* one, ScopedFD* two) {
 #else
   const int flags = SOCK_SEQPACKET;
 #endif
-  if (socketpair(AF_UNIX, flags, 0, raw_socks) == -1)
+  if (socketpair(AF_UNIX, flags, 0, raw_socks) == -1) {
     return false;
-#if BUILDFLAG(IS_APPLE)
-  // On macOS, preventing SIGPIPE is done with socket option.
-  const int no_sigpipe = 1;
-  if (setsockopt(raw_socks[0], SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe,
-                 sizeof(no_sigpipe)) != 0)
-    return false;
-  if (setsockopt(raw_socks[1], SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe,
-                 sizeof(no_sigpipe)) != 0)
-    return false;
-#endif
+  }
   one->reset(raw_socks[0]);
   two->reset(raw_socks[1]);
   return true;
@@ -90,27 +82,15 @@ bool UnixDomainSocket::SendMsg(int fd,
 #else
     cmsg->cmsg_len = CMSG_LEN(sizeof(int) * fds.size());
 #endif
-    memcpy(CMSG_DATA(cmsg), &fds[0], sizeof(int) * fds.size());
+    UNSAFE_TODO(memcpy(CMSG_DATA(cmsg), &fds[0], sizeof(int) * fds.size()));
     msg.msg_controllen = cmsg->cmsg_len;
   }
 
-// Avoid a SIGPIPE if the other end breaks the connection.
-// Due to a bug in the Linux kernel (net/unix/af_unix.c) MSG_NOSIGNAL isn't
-// regarded for SOCK_SEQPACKET in the AF_UNIX domain, but it is mandated by
-// POSIX. On Mac MSG_NOSIGNAL is not supported, so we need to ensure that
-// SO_NOSIGPIPE is set during socket creation.
-#if BUILDFLAG(IS_APPLE)
-  const int flags = 0;
-  int no_sigpipe = 0;
-  socklen_t no_sigpipe_len = sizeof(no_sigpipe);
-  DPCHECK(getsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe,
-                     &no_sigpipe_len) == 0)
-      << "Failed ot get socket option.";
-  DCHECK(no_sigpipe) << "SO_NOSIGPIPE not set on the socket.";
-#else
-  const int flags = MSG_NOSIGNAL;
-#endif  // BUILDFLAG(IS_APPLE)
-  const ssize_t r = HANDLE_EINTR(sendmsg(fd, &msg, flags));
+  // Avoid a SIGPIPE if the other end breaks the connection.
+  // Due to a bug in the Linux kernel (net/unix/af_unix.c) MSG_NOSIGNAL isn't
+  // regarded for SOCK_SEQPACKET in the AF_UNIX domain, but it is mandated by
+  // POSIX.
+  const ssize_t r = HANDLE_EINTR(sendmsg(fd, &msg, MSG_NOSIGNAL));
   const bool ret = static_cast<ssize_t>(length) == r;
   delete[] control_buffer;
   return ret;
@@ -160,8 +140,9 @@ ssize_t UnixDomainSocket::RecvMsgWithFlags(int fd,
   msg.msg_controllen = sizeof(control_buffer);
 
   const ssize_t r = HANDLE_EINTR(recvmsg(fd, &msg, flags));
-  if (r == -1)
+  if (r == -1) {
     return -1;
+  }
 
   int* wire_fds = nullptr;
   size_t wire_fds_len = 0;
@@ -169,12 +150,13 @@ ssize_t UnixDomainSocket::RecvMsgWithFlags(int fd,
 
   if (msg.msg_controllen > 0) {
     struct cmsghdr* cmsg;
-    for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    for (cmsg = CMSG_FIRSTHDR(&msg); cmsg;
+         cmsg = UNSAFE_TODO(CMSG_NXTHDR(&msg, cmsg))) {
       const size_t payload_len = cmsg->cmsg_len - CMSG_LEN(0);
       if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
         DCHECK_EQ(payload_len % sizeof(int), 0u);
         DCHECK_EQ(wire_fds, static_cast<void*>(nullptr));
-        wire_fds = reinterpret_cast<int*>(CMSG_DATA(cmsg));
+        wire_fds = reinterpret_cast<int*>(UNSAFE_TODO(CMSG_DATA(cmsg)));
         wire_fds_len = payload_len / sizeof(int);
       }
 #if !BUILDFLAG(IS_APPLE)
@@ -183,7 +165,8 @@ ssize_t UnixDomainSocket::RecvMsgWithFlags(int fd,
           cmsg->cmsg_type == SCM_CREDENTIALS) {
         DCHECK_EQ(payload_len, sizeof(struct ucred));
         DCHECK_EQ(pid, -1);
-        pid = reinterpret_cast<struct ucred*>(CMSG_DATA(cmsg))->pid;
+        pid =
+            reinterpret_cast<struct ucred*>(UNSAFE_TODO(CMSG_DATA(cmsg)))->pid;
       }
 #endif  // !BUILDFLAG(IS_APPLE)
     }
@@ -195,29 +178,33 @@ ssize_t UnixDomainSocket::RecvMsgWithFlags(int fd,
       LOG(ERROR) << "recvmsg returned MSG_CTRUNC flag, buffer len is "
                  << msg.msg_controllen;
     }
-    for (size_t i = 0; i < wire_fds_len; ++i)
-      close(wire_fds[i]);
+    for (size_t i = 0; i < wire_fds_len; ++i) {
+      close(UNSAFE_TODO(wire_fds[i]));
+    }
     errno = EMSGSIZE;
     return -1;
   }
 
   if (wire_fds) {
-    for (size_t i = 0; i < wire_fds_len; ++i)
-      fds->push_back(ScopedFD(wire_fds[i]));  // TODO(mdempsky): emplace_back
+    for (size_t i = 0; i < wire_fds_len; ++i) {
+      fds->emplace_back(UNSAFE_TODO(wire_fds[i]));
+    }
   }
 
   if (out_pid) {
 #if BUILDFLAG(IS_APPLE)
     socklen_t pid_size = sizeof(pid);
-    if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &pid_size) != 0)
+    if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &pid_size) != 0) {
       pid = -1;
+    }
 #else
     // |pid| will legitimately be -1 if we read EOF, so only DCHECK if we
     // actually received a message.  Unfortunately, Linux allows sending zero
     // length messages, which are indistinguishable from EOF, so this check
     // has false negatives.
-    if (r > 0 || msg.msg_controllen > 0)
+    if (r > 0 || msg.msg_controllen > 0) {
       DCHECK_GE(pid, 0);
+    }
 #endif
 
     *out_pid = pid;
@@ -247,14 +234,16 @@ ssize_t UnixDomainSocket::SendRecvMsgWithFlags(int fd,
   // This socketpair is only used for the IPC and is cleaned up before
   // returning.
   ScopedFD recv_sock, send_sock;
-  if (!CreateSocketPair(&recv_sock, &send_sock))
+  if (!CreateSocketPair(&recv_sock, &send_sock)) {
     return -1;
+  }
 
   {
     std::vector<int> send_fds;
     send_fds.push_back(send_sock.get());
-    if (!SendMsg(fd, request.data(), request.size(), send_fds))
+    if (!SendMsg(fd, request.data(), request.size(), send_fds)) {
       return -1;
+    }
   }
 
   // Close the sending end of the socket right away so that if our peer closes
@@ -263,23 +252,22 @@ ssize_t UnixDomainSocket::SendRecvMsgWithFlags(int fd,
   send_sock.reset();
 
   std::vector<ScopedFD> recv_fds;
-  // When porting to OSX keep in mind it doesn't support MSG_NOSIGNAL, so the
-  // sender might get a SIGPIPE.
   const ssize_t reply_len = RecvMsgWithFlags(
       recv_sock.get(), reply, max_reply_len, recvmsg_flags, &recv_fds, nullptr);
   recv_sock.reset();
-  if (reply_len == -1)
+  if (reply_len == -1) {
     return -1;
+  }
 
   // If we received more file descriptors than caller expected, then we treat
   // that as an error.
   if (recv_fds.size() > (result_fd != nullptr ? 1 : 0)) {
     NOTREACHED();
-    return -1;
   }
 
-  if (result_fd)
+  if (result_fd) {
     *result_fd = recv_fds.empty() ? -1 : recv_fds[0].release();
+  }
 
   return reply_len;
 }

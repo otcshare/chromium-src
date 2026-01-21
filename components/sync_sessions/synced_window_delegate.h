@@ -28,9 +28,6 @@ class SyncedWindowDelegate {
   // see Browser::tab_count
   virtual int GetTabCount() const = 0;
 
-  // see Browser::active_index
-  virtual int GetActiveIndex() const = 0;
-
   // see Browser::is_type_normal
   virtual bool IsTypeNormal() const = 0;
 
@@ -45,10 +42,14 @@ class SyncedWindowDelegate {
   // see TabStripModel::GetWebContentsAt
   virtual SyncedTabDelegate* GetTabAt(int index) const = 0;
 
-  // Return the tab id for the tab at |index|.
+  // Returns the tab id for the tab at |index|.
   virtual SessionID GetTabIdAt(int index) const = 0;
 
-  // Return true if we are currently restoring sessions asynchronously.
+  // Returns true if the tab at |index| is a placeholder tab (see the method
+  // SyncedTabDelegate::IsPlaceholderTab).
+  virtual bool IsPlaceholderTabAt(int index) const;
+
+  // Returns true if we are currently restoring sessions asynchronously.
   virtual bool IsSessionRestoreInProgress() const = 0;
 
   // Helper methods.
@@ -57,7 +58,7 @@ class SyncedWindowDelegate {
   virtual bool ShouldSync() const = 0;
 
  protected:
-  virtual ~SyncedWindowDelegate() {}
+  virtual ~SyncedWindowDelegate() = default;
 };
 
 }  // namespace sync_sessions

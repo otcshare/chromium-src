@@ -8,8 +8,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -26,7 +26,7 @@ const char kPathSeparator = '.';
 // Determines if a key passed to Register() is valid. No path separators can
 // be present in the key and it must not be empty.
 bool IsValidRegisterKey(const std::string& key) {
-  return !key.empty() && key.find(kPathSeparator) == std::string::npos;
+  return !key.empty() && !key.contains(kPathSeparator);
 }
 
 // Determines if a path is valid. This is true if there are no empty keys
@@ -96,16 +96,13 @@ void DeviceCapabilities::Validator::SetPrivateValidatedValue(
   capabilities_->SetPrivateValidatedValue(path, std::move(new_value));
 }
 
-DeviceCapabilities::Data::Data() {
-  base::JSONWriter::Write(dictionary_, &json_string_);
-}
+DeviceCapabilities::Data::Data() : Data(base::Value::Dict()) {}
 
 DeviceCapabilities::Data::Data(base::Value::Dict dictionary)
-    : dictionary_(std::move(dictionary)) {
-  base::JSONWriter::Write(dictionary_, &json_string_);
-}
+    : dictionary_(std::move(dictionary)),
+      json_string_(base::WriteJson(dictionary_).value_or("")) {}
 
-DeviceCapabilitiesImpl::Data::~Data() {}
+DeviceCapabilitiesImpl::Data::~Data() = default;
 
 DeviceCapabilitiesImpl::ValidatorInfo::ValidatorInfo(Validator* validator)
     : validator_(validator),
@@ -167,7 +164,7 @@ void DeviceCapabilitiesImpl::Unregister(const std::string& key,
                                         const Validator* validator) {
   base::AutoLock auto_lock(validation_lock_);
   auto validator_it = validator_map_.find(key);
-  DCHECK(validator_it != validator_map_.end());
+  CHECK(validator_it != validator_map_.end());
   // Check that validator being unregistered matches the original for |key|.
   // This prevents managers from accidentally unregistering incorrect
   // validators.
@@ -277,10 +274,9 @@ void DeviceCapabilitiesImpl::SetCapability(const std::string& path,
   SetPublicValidatedValue(path, std::move(proposed_value));
 }
 
-void DeviceCapabilitiesImpl::MergeDictionary(const base::Value& dict_value) {
-  DCHECK(dict_value.is_dict());
-  for (const auto kv : dict_value.DictItems()) {
-    SetCapability(kv.first, kv.second.Clone());
+void DeviceCapabilitiesImpl::MergeDictionary(const base::Value::Dict& dict) {
+  for (const auto [key, value] : dict) {
+    SetCapability(key, value.Clone());
   }
 }
 
@@ -315,7 +311,6 @@ void DeviceCapabilitiesImpl::SetPublicValidatedValue(const std::string& path,
                     !public_data_->dictionary().Find(path);
   if (is_private) {
     NOTREACHED() << "Cannot make a private capability '" << path << "' public.";
-    return;
   }
 
   // We don't need to acquire lock here when reading public_data_ because we
@@ -373,7 +368,6 @@ void DeviceCapabilitiesImpl::SetPrivateValidatedValue(const std::string& path,
   const auto* is_public = public_data_->dictionary().Find(path);
   if (is_public) {
     NOTREACHED() << "Cannot make a public capability '" << path << "' private.";
-    return;
   }
 
   // We don't need to acquire lock here when reading all_data_ because we know

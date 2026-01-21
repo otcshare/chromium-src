@@ -5,6 +5,7 @@
 #include "BlinkGCPluginConsumer.h"
 
 #include <algorithm>
+#include <memory>
 #include <set>
 
 #include "BadPatternFinder.h"
@@ -18,7 +19,11 @@
 #include "JsonWriter.h"
 #include "RecordInfo.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/SourceManager.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Sema.h"
+#include "llvm/Support/TimeProfiler.h"
 
 using namespace clang;
 
@@ -85,21 +90,29 @@ BlinkGCPluginConsumer::BlinkGCPluginConsumer(
       options_(options),
       cache_(instance),
       json_(0) {
-  // Only check structures in the blink and WebKit namespaces.
+  // Only check structures in blink, cppgc and pdfium.
   options_.checked_namespaces.insert("blink");
   options_.checked_namespaces.insert("cppgc");
+  options_.checked_namespaces.insert("v8");
+  options_.checked_namespaces.insert("WTF");
+
+  // Add Pdfium subfolders containing GCed classes.
+  options_.checked_directories.push_back("fpdfsdk/");
+  options_.checked_directories.push_back("fxjs/");
+  options_.checked_directories.push_back("xfa/");
 
   // Ignore GC implementation files.
   options_.ignored_directories.push_back(
-      "third_party/blink/renderer/platform/heap/");
+      "third_party/blink/renderer/platform/heap/collection_support/");
   options_.ignored_directories.push_back("v8/src/heap/cppgc/");
   options_.ignored_directories.push_back("v8/src/heap/cppgc-js/");
-
-  options_.allowed_directories.push_back(
-      "third_party/blink/renderer/platform/heap/test/");
 }
 
 void BlinkGCPluginConsumer::HandleTranslationUnit(ASTContext& context) {
+  llvm::TimeTraceScope TimeScope(
+      "BlinkGCPluginConsumer::HandleTranslationUnit");
+  ApplyFilter(context);
+
   // Don't run the plugin if the compilation unit is already invalid.
   if (reporter_.hasErrorOccurred())
     return;
@@ -141,7 +154,7 @@ void BlinkGCPluginConsumer::HandleTranslationUnit(ASTContext& context) {
     json_ = 0;
   }
 
-  FindBadPatterns(context, reporter_, options_);
+  FindBadPatterns(context, reporter_, cache_, options_);
 }
 
 void BlinkGCPluginConsumer::ParseFunctionTemplates(TranslationUnitDecl* decl) {
@@ -169,8 +182,9 @@ void BlinkGCPluginConsumer::ParseFunctionTemplates(TranslationUnitDecl* decl) {
 }
 
 void BlinkGCPluginConsumer::CheckRecord(RecordInfo* info) {
-  if (IsIgnored(info))
+  if (!info || IsIgnored(info)) {
     return;
+  }
 
   CXXRecordDecl* record = info->record();
 
@@ -200,7 +214,7 @@ void BlinkGCPluginConsumer::CheckClass(RecordInfo* info) {
   if (CXXMethodDecl* trace = info->GetTraceMethod()) {
     if (info->IsStackAllocated())
       reporter_.TraceMethodForStackAllocatedClass(info, trace);
-    if (trace->isPure())
+    if (trace->isPureVirtual())
       reporter_.ClassDeclaresPureVirtualTrace(info, trace);
   } else if (info->RequiresTraceMethod()) {
     reporter_.ClassRequiresTraceMethod(info);
@@ -215,7 +229,7 @@ void BlinkGCPluginConsumer::CheckClass(RecordInfo* info) {
   }
 
   {
-    CheckFieldsVisitor visitor(options_);
+    CheckFieldsVisitor visitor;
     if (visitor.ContainsInvalidFields(info))
       reporter_.ClassContainsInvalidFields(info, visitor.invalid_fields());
   }
@@ -267,14 +281,12 @@ void BlinkGCPluginConsumer::CheckClass(RecordInfo* info) {
       CheckGCRootsVisitor visitor(options_);
       if (visitor.ContainsGCRoots(info))
         reporter_.ClassContainsGCRoots(info, visitor.gc_roots());
+      reporter_.ClassContainsGCRootRefs(info, visitor.gc_root_refs());
     }
 
-    if (options_.enable_forbidden_fields_check) {
-      CheckForbiddenFieldsVisitor visitor(options_);
-      if (visitor.ContainsForbiddenFields(info)) {
-        reporter_.ClassContainsForbiddenFields(info,
-                                               visitor.forbidden_fields());
-      }
+    CheckForbiddenFieldsVisitor visitor;
+    if (visitor.ContainsForbiddenFields(info)) {
+      reporter_.ClassContainsForbiddenFields(info, visitor.forbidden_fields());
     }
 
     if (info->NeedsFinalization())
@@ -399,7 +411,7 @@ CXXRecordDecl* BlinkGCPluginConsumer::GetLeftMostBase(
 bool BlinkGCPluginConsumer::DeclaresVirtualMethods(CXXRecordDecl* decl) {
   CXXRecordDecl::method_iterator it = decl->method_begin();
   for (; it != decl->method_end(); ++it)
-    if (it->isVirtual() && !it->isPure())
+    if (it->isVirtual() && !it->isPureVirtual())
       return true;
   return false;
 }
@@ -454,6 +466,14 @@ void BlinkGCPluginConsumer::CheckDispatch(RecordInfo* info) {
     if (!visitor.dispatched_to_receiver())
       reporter_.MissingFinalizeDispatch(defn, info);
   }
+
+  if (info->HasMultipleTraceDispatchMethods()) {
+    reporter_.RedundantTraceDispatchMethod(info, base);
+  }
+
+  if (info->HasMultipleFinalizeDispatchMethods()) {
+    reporter_.RedundantFinalizeDispatchMethod(info, base);
+  }
 }
 
 // TODO: Should we collect destructors similar to trace methods?
@@ -472,8 +492,9 @@ void BlinkGCPluginConsumer::CheckFinalization(RecordInfo* info) {
 
 void BlinkGCPluginConsumer::CheckTracingMethod(CXXMethodDecl* method) {
   RecordInfo* parent = cache_.Lookup(method->getParent());
-  if (IsIgnored(parent))
+  if (!parent || IsIgnored(parent)) {
     return;
+  }
 
   // Check templated tracing methods by checking the template instantiations.
   // Specialized templates are handled as ordinary classes.
@@ -495,6 +516,10 @@ void BlinkGCPluginConsumer::CheckTracingMethod(CXXMethodDecl* method) {
 void BlinkGCPluginConsumer::CheckTraceOrDispatchMethod(
     RecordInfo* parent,
     CXXMethodDecl* method) {
+  if (!parent) {
+    return;
+  }
+
   Config::TraceMethodType trace_type = Config::GetTraceMethodType(method);
   if (trace_type == Config::TRACE_AFTER_DISPATCH_METHOD ||
       !parent->GetTraceDispatchMethod()) {
@@ -621,10 +646,8 @@ std::string BlinkGCPluginConsumer::GetLocString(SourceLocation loc) {
 }
 
 bool BlinkGCPluginConsumer::IsIgnored(RecordInfo* record) {
-  return (!record ||
-          !InCheckedNamespace(record) ||
-          IsIgnoredClass(record) ||
-          InIgnoredDirectory(record));
+  return (!record || !InCheckedNamespaceOrDirectory(record) ||
+          IsIgnoredClass(record) || InIgnoredDirectory(record));
 }
 
 bool BlinkGCPluginConsumer::IsIgnoredClass(RecordInfo* info) {
@@ -646,16 +669,12 @@ bool BlinkGCPluginConsumer::InIgnoredDirectory(RecordInfo* info) {
 #endif
   for (const auto& ignored_dir : options_.ignored_directories)
     if (filename.find(ignored_dir) != std::string::npos) {
-      for (const auto& allowed_dir : options_.allowed_directories) {
-        if (filename.find(allowed_dir) != std::string::npos)
-          return false;
-      }
       return true;
     }
   return false;
 }
 
-bool BlinkGCPluginConsumer::InCheckedNamespace(RecordInfo* info) {
+bool BlinkGCPluginConsumer::InCheckedNamespaceOrDirectory(RecordInfo* info) {
   if (!info)
     return false;
   for (DeclContext* context = info->record()->getDeclContext();
@@ -668,6 +687,18 @@ bool BlinkGCPluginConsumer::InCheckedNamespace(RecordInfo* info) {
           options_.checked_namespaces.end()) {
         return true;
       }
+    }
+  }
+  std::string filename;
+  if (!GetFilename(info->record()->getBeginLoc(), &filename)) {
+    return false;
+  }
+#if defined(_WIN32)
+  std::replace(filename.begin(), filename.end(), '\\', '/');
+#endif
+  for (const auto& checked_dir : options_.checked_directories) {
+    if (filename.find(checked_dir) != std::string::npos) {
+      return true;
     }
   }
   return false;

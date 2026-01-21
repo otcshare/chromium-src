@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
-import 'chrome://resources/cr_elements/icons.html.js';
+import 'chrome://resources/ash/common/cr_elements/cr_drawer/cr_drawer.js';
+import 'chrome://resources/ash/common/cr_elements/icons.html.js';
 import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 import 'chrome://resources/polymer/v3_0/iron-media-query/iron-media-query.js';
 import './navigation_shared_vars.css.js';
@@ -74,6 +74,14 @@ export class NavigationViewPanelElement extends PolymerElement {
       },
 
       /**
+       * If |hasSearch| is True, the toolbar internal widths will be adjusted
+       * to fit the search bar when |showNav| is False.
+       */
+      hasSearch: {
+        type: Boolean,
+      },
+
+      /**
        * Can only be set to True if specified from the parent element by
        * adding show-banner as an attribute to <navigation-view-panel>. If
        * True, a banner will appear above the 2 column view (sidebar +
@@ -111,6 +119,8 @@ export class NavigationViewPanelElement extends PolymerElement {
   constructor() {
     super();
     window.addEventListener('menu-tap', () => this.onMenuButtonTap_());
+    window.addEventListener(
+        'navigation-selected', () => this.onNavigationSelected_());
 
     /**
      * Event callback for 'scroll'.
@@ -254,6 +264,17 @@ export class NavigationViewPanelElement extends PolymerElement {
   }
 
   /**
+   * Selects the page that has the given id.
+   * @param {string} id
+   */
+  selectPageById(id) {
+    const selectorItem = this.selectorItems_.find(item => item.id == id);
+    if (selectorItem) {
+      this.selectedItem = selectorItem;
+    }
+  }
+
+  /**
    * @param {!SelectorItem} item
    * @private
    */
@@ -310,6 +331,14 @@ export class NavigationViewPanelElement extends PolymerElement {
    */
   pageExists(selectorId) {
     return !!this.selectorItems_.find(({id}) => id === selectorId);
+  }
+
+  /** @private */
+  onNavigationSelected_() {
+    // Don't toggle, but rather only close the drawer if it's opened.
+    if (this.$.drawer.open) {
+      this.$.drawer.close();
+    }
   }
 }
 

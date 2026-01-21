@@ -1,0 +1,443 @@
+// Copyright 2025 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "chrome/browser/ui/views/tabs/vertical/vertical_tab_drag_handler.h"
+
+#include <algorithm>
+#include <memory>
+
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/types/to_address.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+#include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
+#include "chrome/browser/ui/views/tabs/tab_slot_view.h"
+#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
+#include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_controller.h"
+#include "components/tabs/public/split_tab_collection.h"
+#include "components/tabs/public/tab_collection.h"
+#include "components/tabs/public/tab_group_tab_collection.h"
+#include "components/tabs/public/tab_interface.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
+#include "ui/views/view_utils.h"
+
+namespace {
+
+// This is a shim around `TabCollectionNode` to make it compatible with the
+// tab dragging logic in `TabDragController`. Longer term, core tab dragging
+// logic will be updated to remove the `TabSlotView` dependency, which
+// should make this shim view no longer needed.
+class TabSlotShimView : public TabSlotView {
+  METADATA_HEADER(TabSlotShimView, TabSlotView)
+ public:
+  explicit TabSlotShimView(const TabCollectionNode& node) : node_(node) {
+    // TODO(crbug.com/439963720): Support dragging other types.
+    CHECK(node_->type() == TabCollectionNode::Type::TAB);
+  }
+
+  ~TabSlotShimView() override = default;
+  TabSlotShimView(const TabSlotShimView&) = delete;
+  TabSlotShimView& operator=(const TabSlotShimView&) = delete;
+
+  TabSlotView::ViewType GetTabSlotViewType() const override {
+    return ViewType::kTab;
+  }
+
+  TabSizeInfo GetTabSizeInfo() const override { return TabSizeInfo(); }
+
+  const TabCollectionNode& node() const { return node_.get(); }
+
+ private:
+  const raw_ref<const TabCollectionNode> node_;
+};
+
+BEGIN_METADATA(TabSlotShimView)
+END_METADATA
+
+ui::mojom::DragEventSource EventSourceFromEvent(const ui::LocatedEvent& event) {
+  return event.IsGestureEvent() ? ui::mojom::DragEventSource::kTouch
+                                : ui::mojom::DragEventSource::kMouse;
+}
+
+}  // namespace
+
+// static
+views::View* VerticalTabDragHandler::ViewFromTabSlot(TabSlotView* view) {
+  if (auto* shim_view = views::AsViewClass<TabSlotShimView>(view)) {
+    return shim_view->parent();
+  }
+  return nullptr;
+}
+
+VerticalTabDragHandlerImpl::VerticalTabDragHandlerImpl(
+    TabStripModel& tab_strip_model,
+    TabCollectionNode& root_node)
+    : tab_strip_model_(tab_strip_model), root_node_(root_node) {}
+
+VerticalTabDragHandlerImpl::~VerticalTabDragHandlerImpl() = default;
+
+void VerticalTabDragHandlerImpl::InitializeDrag(TabCollectionNode& node,
+                                                const ui::MouseEvent& event) {
+  // TODO(crbug.com/439963720): Look into why the state is not reset elsewhere
+  // after initializing a drag.
+  ResetDragState();
+  drag_controller_ = std::make_unique<TabDragController>();
+
+  const auto& selected_tabs =
+      tab_strip_model_->selection_model().selected_tabs();
+
+  std::vector<TabSlotView*> dragged_views(selected_tabs.size());
+  size_t next_dragged_view_idx = 0;
+
+  TabSlotView* source_dragged_view = nullptr;
+
+  // Track the node and build a shim view for each selected node.
+  for (tabs::TabInterface* tab : selected_tabs) {
+    CHECK(tab);
+    TabCollectionNode* selected_node =
+        root_node_->GetNodeForHandle(tab->GetHandle());
+    CHECK(selected_node);
+    dragged_tabs_.insert(selected_node);
+    auto* shim_view = &GetOrCreateShimViewForNode(*selected_node);
+    shim_view->SetBoundsRect(selected_node->view()->GetLocalBounds());
+    dragged_views[next_dragged_view_idx++] = shim_view;
+    if (selected_node == &node) {
+      source_dragged_view = shim_view;
+    }
+  }
+  CHECK(source_dragged_view);
+
+  const gfx::Point offset_from_source = event.location();
+  if (drag_controller_->Init(
+          this, source_dragged_view, dragged_views, offset_from_source,
+          tab_strip_model_->selection_model().GetListSelectionModel(),
+          EventSourceFromEvent(event)) ==
+      TabDragController::Liveness::kDeleted) {
+    dragged_tabs_.clear();
+  }
+}
+
+bool VerticalTabDragHandlerImpl::ContinueDrag(views::View& event_source_view,
+                                              const ui::MouseEvent& event) {
+  if (!drag_controller_) {
+    return false;
+  }
+  gfx::Point screen_location(event.location());
+  ConvertPointToScreen(&event_source_view, &screen_location);
+  if (drag_controller_->Drag(screen_location) ==
+      TabDragController::Liveness::kDeleted) {
+    ResetDragState();
+    return false;
+  }
+  return true;
+}
+
+void VerticalTabDragHandlerImpl::EndDrag(EndDragReason reason) {
+  if (TabDragController::IsSystemDnDSessionRunning()) {
+    TabDragController::OnSystemDnDEnded();
+  } else if (drag_controller_ && drag_controller_->started_drag()) {
+    drag_controller_->EndDrag(reason);
+  }
+  ResetDragState();
+}
+
+void VerticalTabDragHandlerImpl::HandleDraggedTabsOverNode(
+    const TabCollectionNode& node) {
+  if (!drag_controller_) {
+    // Do nothing if the drag is not attached to our context yet (e.g. on the
+    // first iteration of the drag loop).
+    return;
+  }
+  if (dragged_tabs_.contains(&node)) {
+    return;
+  }
+  CHECK(!dragged_tabs_.empty());
+  switch (node.type()) {
+    case TabCollectionNode::Type::TAB:
+      HandleTabDragOverTab(node);
+      break;
+    case TabCollectionNode::Type::SPLIT:
+      HandleTabDragOverSplit(node);
+      break;
+    case TabCollectionNode::Type::GROUP:
+      HandleTabDragOverGroup(node);
+      break;
+    case TabCollectionNode::Type::UNPINNED:
+      HandleTabDragOverUnpinnedContainer(node);
+      break;
+    default:
+      NOTREACHED();
+  }
+}
+
+void VerticalTabDragHandlerImpl::HandleTabDragOverTab(
+    const TabCollectionNode& node) {
+  const auto* tab = std::get<const tabs::TabInterface*>(node.GetNodeData());
+  CHECK(tab);
+  const auto& selection_model = tab_strip_model_->selection_model();
+  int first_selected_idx =
+      *selection_model.GetListSelectionModel().selected_indices().cbegin();
+  int insertion_idx = tab_strip_model_->GetIndexOfTab(tab);
+  if (first_selected_idx <= insertion_idx) {
+    insertion_idx -= selection_model.size();
+    ++insertion_idx;
+  }
+  insertion_idx = std::clamp(insertion_idx, 0, tab_strip_model_->count() - 1);
+  tab_strip_model_->MoveSelectedTabsTo(insertion_idx, tab->GetGroup());
+}
+
+void VerticalTabDragHandlerImpl::HandleTabDragOverSplit(
+    const TabCollectionNode& node) {
+  const auto* split_collection = static_cast<const tabs::SplitTabCollection*>(
+      std::get<const tabs::TabCollection*>(node.GetNodeData()));
+  CHECK(split_collection);
+  split_tabs::SplitTabData* split_data = split_collection->data();
+  CHECK(split_data);
+  gfx::Range tab_range = split_data->GetIndexRange();
+  int first_tab_in_split = tab_range.GetMin();
+  int last_tab_in_split = tab_range.GetMax();
+
+  const auto& selection_model = tab_strip_model_->selection_model();
+  int first_selected_index =
+      *selection_model.GetListSelectionModel().selected_indices().cbegin();
+  int insertion_idx =
+      (first_selected_index < first_tab_in_split)
+          ? last_tab_in_split - selection_model.selected_tabs().size()
+          : first_tab_in_split;
+
+  tab_strip_model_->MoveSelectedTabsTo(
+      insertion_idx, split_data->ListTabs().front()->GetGroup());
+}
+
+void VerticalTabDragHandlerImpl::HandleTabDragOverGroup(
+    const TabCollectionNode& node) {
+  const auto* tab_group =
+      static_cast<const tabs::TabGroupTabCollection*>(
+          std::get<const tabs::TabCollection*>(node.GetNodeData()))
+          ->GetTabGroup();
+  CHECK(tab_group);
+
+  const auto& selection_model = tab_strip_model_->selection_model();
+
+  if (std::all_of(selection_model.selected_tabs().begin(),
+                  selection_model.selected_tabs().end(),
+                  [tab_group](const tabs::TabInterface* selected_tab) {
+                    return selected_tab->GetGroup() == tab_group->id();
+                  })) {
+    // Selected tabs are already in the group, so return early.
+    return;
+  }
+
+  int first_tab_in_group =
+      tab_strip_model_->GetIndexOfTab(tab_group->GetFirstTab());
+  int last_tab_in_group =
+      tab_strip_model_->GetIndexOfTab(tab_group->GetLastTab());
+  int first_selected_index =
+      *selection_model.GetListSelectionModel().selected_indices().cbegin();
+
+  if (tab_strip_model_->IsGroupCollapsed(tab_group->id())) {
+    // Selected tabs need to be inserted outside the group if collapsed.
+    int insertion_idx = (first_selected_index < first_tab_in_group)
+                            ? last_tab_in_group
+                            : first_tab_in_group;
+    tab_strip_model_->MoveSelectedTabsTo(insertion_idx, std::nullopt);
+  } else {
+    int insertion_idx =
+        (first_selected_index < first_tab_in_group)
+            ? first_tab_in_group - selection_model.selected_tabs().size()
+            : last_tab_in_group + 1;
+    insertion_idx = std::clamp(insertion_idx, 0, tab_strip_model_->count() - 1);
+    tab_strip_model_->MoveSelectedTabsTo(insertion_idx, tab_group->id());
+  }
+}
+
+void VerticalTabDragHandlerImpl::HandleTabDragOverUnpinnedContainer(
+    const TabCollectionNode& node) {
+  const tabs::TabInterface* selected_tab =
+      *tab_strip_model_->selection_model().selected_tabs().cbegin();
+
+  if (selected_tab->GetGroup().has_value()) {
+    ui::ListSelectionModel::SelectedIndices selected =
+        tab_strip_model_->selection_model()
+            .GetListSelectionModel()
+            .selected_indices();
+    std::vector<int> tab_indices(selected.begin(), selected.end());
+    tab_strip_model_->RemoveFromGroup(tab_indices);
+  }
+}
+
+TabDragContext* VerticalTabDragHandlerImpl::GetDragContext() {
+  return this;
+}
+
+bool VerticalTabDragHandlerImpl::IsViewDragging(const views::View& view) const {
+  return std::ranges::find(dragged_tabs_, &view, &TabCollectionNode::view) !=
+         dragged_tabs_.end();
+}
+
+bool VerticalTabDragHandlerImpl::CanAcceptEvent(const ui::Event& event) {
+  // The drag context has to be able to process mouse events during the drag.
+  // By default, this is predicated on visibility, but the handler should not
+  // be visible. Instead, defer the check to the parent.
+  return parent()->CanAcceptEvent(event);
+}
+
+bool VerticalTabDragHandlerImpl::OnMouseDragged(const ui::MouseEvent& event) {
+  return ContinueDrag(*this, event);
+}
+
+void VerticalTabDragHandlerImpl::OnMouseReleased(const ui::MouseEvent& event) {
+  EndDrag(EndDragReason::kComplete);
+}
+
+void VerticalTabDragHandlerImpl::OnMouseCaptureLost() {
+  EndDrag(EndDragReason::kCaptureLost);
+}
+
+TabDragContext* VerticalTabDragHandlerImpl::GetContextForNewBrowser(
+    BrowserView* browser_view) const {
+  return browser_view->tab_strip_view()->GetDragContext();
+}
+
+TabSlotView* VerticalTabDragHandlerImpl::GetTabForContents(
+    content::WebContents* contents) {
+  TabCollectionNode* node = GetNodeForContents(contents);
+  return node ? &GetOrCreateShimViewForNode(*node) : nullptr;
+}
+
+content::WebContents* VerticalTabDragHandlerImpl::GetContentsForTab(
+    TabSlotView* view) {
+  auto* shim_view = views::AsViewClass<TabSlotShimView>(view);
+  CHECK(shim_view);
+  // TODO(crbug.com/439963720): Support dragging other types.
+  CHECK(shim_view->node().type() == TabCollectionNode::Type::TAB);
+  const tabs::TabInterface* tab =
+      std::get<const tabs::TabInterface*>(shim_view->node().GetNodeData());
+  CHECK(tab);
+  return tab->GetContents();
+}
+
+bool VerticalTabDragHandlerImpl::IsTabPinned(const TabSlotView* tab) const {
+  // TODO(crbug.com/439963720): Support dragging pinned tabs.
+  return false;
+}
+
+bool VerticalTabDragHandlerImpl::IsTabDetachable(
+    const TabSlotView* view) const {
+  return true;
+}
+
+TabSlotView* VerticalTabDragHandlerImpl::GetTabGroupHeader(
+    const tab_groups::TabGroupId& group) const {
+  // TODO(crbug.com/439963720): Support dragging tab groups.
+  return nullptr;
+}
+
+TabStripModel* VerticalTabDragHandlerImpl::GetTabStripModel() {
+  return base::to_address(tab_strip_model_);
+}
+
+TabDragController* VerticalTabDragHandlerImpl::GetDragController() {
+  return drag_controller_.get();
+}
+
+void VerticalTabDragHandlerImpl::OwnDragController(
+    std::unique_ptr<TabDragController> controller) {
+  drag_controller_ = std::move(controller);
+}
+
+std::unique_ptr<TabDragController>
+VerticalTabDragHandlerImpl::ReleaseDragController() {
+  return std::move(drag_controller_);
+}
+
+void VerticalTabDragHandlerImpl::DestroyDragController() {
+  drag_controller_.reset();
+}
+
+void VerticalTabDragHandlerImpl::StartedDragging(
+    const std::vector<TabSlotView*>& views) {
+  for (auto* view : views) {
+    auto* shim_view = views::AsViewClass<TabSlotShimView>(view);
+    CHECK(shim_view);
+    dragged_tabs_.insert(&shim_view->node());
+    shim_view->parent()->SetPaintToLayer();
+    shim_view->parent()->layer()->SetFillsBoundsOpaquely(false);
+
+    // Update the height to use preferred size because newly added tabs will
+    // animate in from 0, which affects the window offset for newly-detached
+    // windows.
+    gfx::Rect bounds = shim_view->node().view()->GetLocalBounds();
+    bounds.set_height(shim_view->node().view()->GetPreferredSize({}).height());
+    shim_view->SetBoundsRect(bounds);
+  }
+}
+
+void VerticalTabDragHandlerImpl::DraggedTabsDetached() {
+  dragged_tabs_.clear();
+}
+
+void VerticalTabDragHandlerImpl::StoppedDragging() {
+  for (auto& [_, shim_view] : shim_views_) {
+    shim_view->parent()->DestroyLayer();
+  }
+  dragged_tabs_.clear();
+}
+
+void VerticalTabDragHandlerImpl::SetDragControllerCallbackForTesting(
+    base::OnceCallback<void(TabDragController*)> callback) {}
+
+TabDragPositioningDelegate*
+VerticalTabDragHandlerImpl::GetPositioningDelegate() {
+  // Positioning is implemented through `TabDragDelegate` on individual
+  // containers.
+  return nullptr;
+}
+
+TabCollectionNode* VerticalTabDragHandlerImpl::GetNodeForContents(
+    content::WebContents* contents) {
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(contents);
+  CHECK(tab);
+  return root_node_->GetNodeForHandle(tab->GetHandle());
+}
+
+TabSlotView& VerticalTabDragHandlerImpl::GetOrCreateShimViewForNode(
+    TabCollectionNode& node) {
+  CHECK(node.view());
+  auto it = shim_views_.find(&node);
+  if (it != shim_views_.end()) {
+    return *it->second;
+  }
+
+  auto tab_shim_view = std::make_unique<TabSlotShimView>(node);
+  tab_shim_view->SetBoundsRect(node.view()->GetLocalBounds());
+  auto& tab_shim_view_ref = *tab_shim_view.get();
+  shim_views_.insert(
+      {&node, node.view()->AddChildView(std::move(tab_shim_view))});
+  node_destroyed_callbacks_.push_back(node.RegisterWillDestroyCallback(
+      base::BindOnce(&VerticalTabDragHandlerImpl::OnNodeWillDestroy,
+                     base::Unretained(this), std::ref(node))));
+  tab_shim_view_ref.SetVisible(false);
+  return tab_shim_view_ref;
+}
+
+void VerticalTabDragHandlerImpl::OnNodeWillDestroy(TabCollectionNode& node) {
+  auto it = shim_views_.find(&node);
+  CHECK(it != shim_views_.end());
+  auto view = node.view()->RemoveChildViewT(it->second);
+  shim_views_.erase(it);
+  dragged_tabs_.erase(&node);
+}
+
+void VerticalTabDragHandlerImpl::ResetDragState() {
+  drag_controller_.reset();
+  dragged_tabs_.clear();
+}
+
+BEGIN_METADATA(VerticalTabDragHandlerImpl)
+END_METADATA

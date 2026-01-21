@@ -5,10 +5,12 @@
 #include "chrome/browser/android/policy/policy_auditor_bridge.h"
 
 #include "base/android/jni_android.h"
-#include "chrome/android/chrome_jni_headers/PolicyAuditorBridge_jni.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/PolicyAuditorBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ScopedJavaGlobalRef;
@@ -48,15 +50,21 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(PolicyAuditorBridge);
 
 void PolicyAuditorBridge::DidFinishNavigation(
     NavigationHandle* navigation_handle) {
-  Java_PolicyAuditorBridge_notifyAuditEventForDidFinishNavigation(
-      AttachCurrentThread(), navigation_handle->GetJavaNavigationHandle(),
-      android_policy_auditor_);
+  if (navigation_handle->IsInPrimaryMainFrame()) {
+    Java_PolicyAuditorBridge_notifyAuditEventForDidFinishNavigation(
+        AttachCurrentThread(), navigation_handle->GetJavaNavigationHandle(),
+        android_policy_auditor_);
+  }
 }
 
 void PolicyAuditorBridge::DidFinishLoad(RenderFrameHost* render_frame_host,
                                         const GURL& validated_url) {
-  JNIEnv* env = AttachCurrentThread();
-  Java_PolicyAuditorBridge_notifyAuditEventForDidFinishLoad(
-      env, GURLAndroid::FromNativeGURL(env, validated_url),
-      android_policy_auditor_);
+  if (render_frame_host->IsInPrimaryMainFrame()) {
+    JNIEnv* env = AttachCurrentThread();
+    Java_PolicyAuditorBridge_notifyAuditEventForDidFinishLoad(
+        env, GURLAndroid::FromNativeGURL(env, validated_url),
+        android_policy_auditor_);
+  }
 }
+
+DEFINE_JNI(PolicyAuditorBridge)

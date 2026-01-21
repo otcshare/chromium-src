@@ -6,6 +6,8 @@
 #define MEDIA_BASE_AUDIO_PARAMETERS_H_
 
 #include <stdint.h>
+
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,9 +18,8 @@
 #include "media/base/audio_latency.h"
 #include "media/base/audio_point.h"
 #include "media/base/channel_layout.h"
-#include "media/base/media_shmem_export.h"
+#include "media/base/media_export.h"
 #include "media/base/sample_format.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -37,16 +38,16 @@ constexpr int kParametersAlignment = 16;
 // ****WARNING****: Do not change the field types or ordering of these fields
 // without checking that alignment is correct. The structs may be concurrently
 // accessed by both 32bit and 64bit process in shmem. http://crbug.com/781095.
-struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
-    AudioInputBufferParameters {
+struct MEDIA_EXPORT alignas(kParametersAlignment) AudioInputBufferParameters {
   double volume;
-  int64_t capture_time_us;  // base::TimeTicks in microseconds.
+  int64_t capture_time_us;     // base::TimeTicks in microseconds.
+  int64_t glitch_duration_us;  // base::TimeDelta in microseconds.
+  uint32_t glitch_count;
   uint32_t size;
   uint32_t id;
-  bool key_pressed;
+  uint32_t has_unread_data;
 };
-struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
-    AudioOutputBufferParameters {
+struct MEDIA_EXPORT alignas(kParametersAlignment) AudioOutputBufferParameters {
   int64_t delay_us;            // base::TimeDelta in microseconds.
   int64_t delay_timestamp_us;  // base::TimeTicks in microseconds.
   int64_t glitch_duration_us;  // base::TimeDelta in microseconds.
@@ -58,16 +59,16 @@ struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
 #pragma warning(pop)
 #endif
 
-struct MEDIA_SHMEM_EXPORT AudioInputBuffer {
+struct MEDIA_EXPORT AudioInputBuffer {
   AudioInputBufferParameters params;
-  int8_t audio[1];
+  uint8_t audio[1];
 };
-struct MEDIA_SHMEM_EXPORT AudioOutputBuffer {
+struct MEDIA_EXPORT AudioOutputBuffer {
   AudioOutputBufferParameters params;
-  int8_t audio[1];
+  uint8_t audio[1];
 };
 
-struct MEDIA_SHMEM_EXPORT AudioRendererAlgorithmParameters {
+struct MEDIA_EXPORT AudioRendererAlgorithmParameters {
   // The maximum size for the audio buffer.
   base::TimeDelta max_capacity;
 
@@ -87,35 +88,35 @@ class AudioParameters;
 
 // These convenience function safely computes the size required for
 // |shared_memory_count| AudioInputBuffers, with enough memory for AudioBus
-// data, using |paremeters| (or alternatively |channels| and |frames|). The
+// data, using |parameters| (or alternatively |channels| and |frames|). The
 // functions not returning a CheckedNumeric will CHECK on overflow.
-MEDIA_SHMEM_EXPORT base::CheckedNumeric<uint32_t>
-ComputeAudioInputBufferSizeChecked(const AudioParameters& parameters,
-                                   uint32_t audio_bus_count);
+MEDIA_EXPORT base::CheckedNumeric<uint32_t> ComputeAudioInputBufferSizeChecked(
+    const AudioParameters& parameters,
+    uint32_t audio_bus_count);
 
-MEDIA_SHMEM_EXPORT uint32_t
+MEDIA_EXPORT uint32_t
 ComputeAudioInputBufferSize(const AudioParameters& parameters,
                             uint32_t audio_bus_count);
 
-MEDIA_SHMEM_EXPORT uint32_t
-ComputeAudioInputBufferSize(int channels, int frames, uint32_t audio_bus_count);
+MEDIA_EXPORT uint32_t ComputeAudioInputBufferSize(int channels,
+                                                  int frames,
+                                                  uint32_t audio_bus_count);
 
 // These convenience functions safely computes the size required for an
 // AudioOutputBuffer with enough memory for AudioBus data using |parameters| (or
 // alternatively |channels| and |frames|). The functions not returning a
 // CheckedNumeric will CHECK on overflow.
-MEDIA_SHMEM_EXPORT base::CheckedNumeric<uint32_t>
-ComputeAudioOutputBufferSizeChecked(const AudioParameters& parameters);
+MEDIA_EXPORT base::CheckedNumeric<uint32_t> ComputeAudioOutputBufferSizeChecked(
+    const AudioParameters& parameters);
 
-MEDIA_SHMEM_EXPORT uint32_t
+MEDIA_EXPORT uint32_t
 ComputeAudioOutputBufferSize(const AudioParameters& parameters);
 
-MEDIA_SHMEM_EXPORT uint32_t ComputeAudioOutputBufferSize(int channels,
-                                                         int frames);
+MEDIA_EXPORT uint32_t ComputeAudioOutputBufferSize(int channels, int frames);
 
 // Channel count and ChannelLayout pair, with helper methods to enforce safe
 // construction.
-class MEDIA_SHMEM_EXPORT ChannelLayoutConfig {
+class MEDIA_EXPORT ChannelLayoutConfig {
  public:
   ChannelLayoutConfig(const ChannelLayoutConfig& other);
   ChannelLayoutConfig& operator=(const ChannelLayoutConfig& other);
@@ -149,7 +150,7 @@ template <>
 ChannelLayoutConfig ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_DISCRETE>() =
     delete;
 
-class MEDIA_SHMEM_EXPORT AudioParameters {
+class MEDIA_EXPORT AudioParameters {
  public:
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
   // GENERATED_JAVA_CLASS_NAME_OVERRIDE: AudioEncodingFormat
@@ -185,6 +186,8 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
 
   // Bitmasks to determine whether certain platform (typically hardware) audio
   // effects should be enabled.
+  // Ensure that EffectsMaskToString() is updated to match the content of this
+  // enumerator when it is updated.
   enum PlatformEffectsMask {
     NO_EFFECTS = 0x0,
     ECHO_CANCELLER = 1 << 0,
@@ -193,9 +196,7 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
     HOTWORD = 1 << 3,
     NOISE_SUPPRESSION = 1 << 4,
     AUTOMATIC_GAIN_CONTROL = 1 << 5,
-    EXPERIMENTAL_ECHO_CANCELLER = 1 << 6,  // Indicates an echo canceller is
-                                           // available that should only
-                                           // experimentally be enabled.
+    // EXPERIMENTAL_ECHO_CANCELLER used to hold 1 << 6, but has been deprecated.
     MULTIZONE = 1 << 7,
     AUDIO_PREFETCH = 1 << 8,
     ALLOW_DSP_ECHO_CANCELLER = 1 << 9,
@@ -207,38 +208,64 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
     FUCHSIA_RENDER_USAGE_INTERRUPTION = 1 << 14,
     FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 1 << 15,
     FUCHSIA_RENDER_USAGE_COMMUNICATION = 1 << 16,
+
+    IGNORE_UI_GAINS = 1 << 17,
+
+    VOICE_ISOLATION_SUPPORTED = 1 << 18,  // Set when system voice isolation is
+                                          // supported.
+    CLIENT_CONTROLLED_VOICE_ISOLATION =
+        1 << 19,                // Set when client forces to
+                                // enable/disable the platform voice
+                                // isolation effects. False indicates
+                                // to use platform default state.
+    VOICE_ISOLATION = 1 << 20,  // Enable/Disable platform voice isolation.
+                                // Only meaningful when
+                                // CLIENT_CONTROLLED_VOICE_ISOLATION is set.
+
+    DEEP_NOISE_SUPPRESSION = 1 << 21,  // Also called Voice Focus on Windows.
   };
 
   struct HardwareCapabilities {
-    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+    HardwareCapabilities(int min_frames_per_buffer,
+                         int max_frames_per_buffer,
+                         int default_frames_per_buffer,
+                         bool require_offload)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer),
-          bitstream_formats(0),
-          require_encapsulation(false) {}
+          default_frames_per_buffer(default_frames_per_buffer),
+          require_audio_offload(require_offload) {}
+    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+        : min_frames_per_buffer(min_frames_per_buffer),
+          max_frames_per_buffer(max_frames_per_buffer) {}
     HardwareCapabilities(int bitstream_formats, bool require_encapsulation)
-        : min_frames_per_buffer(0),
-          max_frames_per_buffer(0),
-          bitstream_formats(bitstream_formats),
+        : bitstream_formats(bitstream_formats),
           require_encapsulation(require_encapsulation) {}
-    HardwareCapabilities()
-        : min_frames_per_buffer(0),
-          max_frames_per_buffer(0),
-          bitstream_formats(0),
-          require_encapsulation(false) {}
+    HardwareCapabilities() = default;
 
     // Minimum and maximum buffer sizes supported by the audio hardware. Opening
     // a device with frames_per_buffer set to a value between min and max should
     // result in the audio hardware running close to this buffer size, values
     // above or below will be clamped to the min or max by the audio system.
     // Either value can be 0 and means that the min or max is not known.
-    int min_frames_per_buffer;
-    int max_frames_per_buffer;
+    int min_frames_per_buffer = 0;
+    int max_frames_per_buffer = 0;
+    // The default buffer size that the device will use when frames_per_buffer
+    // is not specified.  Can be `min_frames_per_buffer`,
+    // `max_frames_per_buffer`, or a value in between.  Can be 0 when the
+    // default is unknown.
+    int default_frames_per_buffer = 0;
     // Bitstream formats (OR'ed) supported by audio hardware.
-    int bitstream_formats;
+    int bitstream_formats = 0;
     // Bitstream will need to be encapsulated in IEC61937 to be
     // passed through to the audio hardware.
-    bool require_encapsulation;
+    bool require_encapsulation = false;
+    // Require audio processing offload.
+    bool require_audio_offload = false;
   };
+
+  // Returns a string which contains the full bitmask for the given `mask`.
+  // Example: mask=3 => returns "ECHO_CANCELLER | DUCKING".
+  static std::string EffectsMaskToString(int mask);
 
   AudioParameters();
 
@@ -296,6 +323,9 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
 
   bool RequireEncapsulation() const;
 
+  // Return true if offload is requested.
+  bool RequireOffload() const;
+
   void set_format(Format format) { format_ = format; }
   Format format() const { return format_; }
 
@@ -319,12 +349,12 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
   }
   int frames_per_buffer() const { return frames_per_buffer_; }
 
-  absl::optional<HardwareCapabilities> hardware_capabilities() const {
+  std::optional<HardwareCapabilities> hardware_capabilities() const {
     return hardware_capabilities_;
   }
 
   void set_hardware_capabilities(
-      const absl::optional<HardwareCapabilities>& hwc) {
+      const std::optional<HardwareCapabilities>& hwc) {
     hardware_capabilities_ = hwc;
   }
 
@@ -336,10 +366,10 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
   }
   const std::vector<Point>& mic_positions() const { return mic_positions_; }
 
-  void set_latency_tag(AudioLatency::LatencyType latency_tag) {
+  void set_latency_tag(AudioLatency::Type latency_tag) {
     latency_tag_ = latency_tag;
   }
-  AudioLatency::LatencyType latency_tag() const { return latency_tag_; }
+  AudioLatency::Type latency_tag() const { return latency_tag_; }
 
   AudioParameters(const AudioParameters&);
   AudioParameters& operator=(const AudioParameters&);
@@ -370,11 +400,11 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
 
   // Optional tag to pass latency info from renderer to browser. Set to
   // AudioLatency::LATENCY_COUNT by default, which means "not specified".
-  AudioLatency::LatencyType latency_tag_;
+  AudioLatency::Type latency_tag_;
 
   // Audio hardware specific parameters, these are treated as read-only and
   // changing them has no effect.
-  absl::optional<HardwareCapabilities> hardware_capabilities_;
+  std::optional<HardwareCapabilities> hardware_capabilities_;
 };
 
 // Comparison is useful when AudioParameters is used with std structures.

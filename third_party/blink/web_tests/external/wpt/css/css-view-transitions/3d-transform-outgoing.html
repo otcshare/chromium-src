@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html class=reftest-wait>
-<title>Shared transitions: 3d transform</title>
-<link rel="help" href="https://github.com/WICG/view-transitions">
+<title>View transitions: 3d transform</title>
+<link rel="help" href="https://drafts.csswg.org/css-view-transitions-1/">
 <link rel="author" href="mailto:vmpstr@chromium.org">
 <link rel="match" href="3d-transform-outgoing-ref.html">
-<meta name=fuzzy content="3d-transform-outgoing-ref.html:0-255;0-1200">
+<meta name=fuzzy content="maxDifference=0-255; totalPixels=0-1200">
 <script src="/common/reftest-wait.js"></script>
 
 <style>
@@ -26,7 +26,6 @@ div { box-sizing: border-box; will-change: transform }
 }
 .shared {
   view-transition-name: shared;
-  contain: layout;
   width: 100px;
   height: 100px;
 }
@@ -35,7 +34,6 @@ div { box-sizing: border-box; will-change: transform }
   width: 10px;
   height: 10px;
   background: red;
-  contain: layout;
 }
 
 ::view-transition-group(hidden) { animation-duration: 300s; }
@@ -62,5 +60,5 @@ function runTest() {
   });
 }
 
-onload = requestAnimationFrame(() => requestAnimationFrame(runTest));
+onload = () => requestAnimationFrame(() => requestAnimationFrame(runTest));
 </script>

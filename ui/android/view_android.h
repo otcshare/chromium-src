@@ -7,22 +7,22 @@
 
 #include <list>
 #include <memory>
+#include <optional>
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_weak_ref.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/android/ui_android_export.h"
 #include "ui/android/view_android_observer.h"
 #include "ui/gfx/geometry/rect_f.h"
 
-namespace cc {
+namespace cc::slim {
 class Layer;
 }
 
@@ -67,6 +67,8 @@ class UI_ANDROID_EXPORT ViewAndroid {
   using CopyViewCallback =
       base::RepeatingCallback<void(std::unique_ptr<viz::CopyOutputRequest>)>;
 
+  using HitTestCallback = base::RepeatingCallback<bool()>;
+
   // Stores an anchored view to delete itself at the end of its lifetime
   // automatically. This helps manage the lifecyle without the dependency
   // on |ViewAndroid|.
@@ -99,9 +101,9 @@ class UI_ANDROID_EXPORT ViewAndroid {
 
   enum class LayoutType {
     // Can have its own size given by |OnSizeChanged| events.
-    NORMAL,
+    kNormal,
     // Always follows its parent's size.
-    MATCH_PARENT
+    kMatchParent
   };
 
   explicit ViewAndroid(LayoutType layout_type);
@@ -125,9 +127,8 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // Virtual for testing.
   virtual float GetDipScale();
 
-  // Used to return and set the layer for this view. May be |null|.
-  cc::Layer* GetLayer() const;
-  void SetLayer(scoped_refptr<cc::Layer> layer);
+  cc::slim::Layer* GetLayer() const;
+  void SetLayer(scoped_refptr<cc::slim::Layer> layer);
 
   void SetDelegate(const base::android::JavaRef<jobject>& delegate);
 
@@ -155,27 +156,38 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // Pass necessary |jdrop_data| to build Android ClipData for drag and drop.
   // |jshadow_image| is a bitmap presentation of the shadow image to be used
   // for dragging.
+  // |cursor_offset_x| is the x offset of the cursor w.r.t. to top-left corner
+  // of the drag-image.
+  // |cursor_offset_y| is the y offset of the cursor w.r.t. to top-left corner
+  // of the drag-image.
+  // |drag_obj_rect_width| is the width of the drag object.
+  // |drag_obj_rect_height| is the height of the drag object.
   bool StartDragAndDrop(const base::android::JavaRef<jobject>& jshadow_image,
-                        const base::android::JavaRef<jobject>& jdrop_data);
+                        const base::android::JavaRef<jobject>& jdrop_data,
+                        int32_t cursor_offset_x,
+                        int32_t cursor_offset_y,
+                        int32_t drag_obj_rect_width,
+                        int32_t drag_obj_rect_height);
 
   gfx::Size GetPhysicalBackingSize() const;
-  gfx::Size GetSize() const;
-  gfx::Rect bounds() const { return bounds_; }
+  gfx::Size GetSizeDIPs() const;
+  gfx::Size GetSizeDevicePx() const;
 
+  // |width| and |height| are in device pixels.
   void OnSizeChanged(int width, int height);
   // |deadline_override| if not nullopt will be used as the cc::DeadlinePolicy
   // timeout for this resize.
   void OnPhysicalBackingSizeChanged(
       const gfx::Size& size,
-      absl::optional<base::TimeDelta> deadline_override = absl::nullopt);
+      std::optional<base::TimeDelta> deadline_override = std::nullopt);
   void OnCursorChanged(const Cursor& cursor);
-  void SetHoverActionStylusWritable(bool stylus_writable);
+  void NotifyHoverActionStylusWritable(bool stylus_writable);
   void OnBackgroundColorChanged(unsigned int color);
-  void OnTopControlsChanged(float top_controls_offset,
-                            float top_content_offset,
-                            float top_controls_min_height_offset);
-  void OnBottomControlsChanged(float bottom_controls_offset,
-                               float bottom_controls_min_height_offset);
+  void OnControlsChanged(float top_controls_offset,
+                         float top_content_offset,
+                         float top_controls_min_height_offset,
+                         float bottom_controls_offset,
+                         float bottom_controls_min_height_offset);
   void OnBrowserControlsHeightChanged();
   // |current_scroll_ratio| is the ratio of vertical scroll in [0, 1] range.
   // Scroll at top of page is 0, and bottom of page is 1. It is defined as 0
@@ -183,6 +195,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
   void OnVerticalScrollDirectionChanged(bool direction_up,
                                         float current_scroll_ratio);
   void OnControlsResizeViewChanged(bool controls_resize_view);
+  void DispatchWindowPositionChange();
 
   // Gets the Visual Viewport inset to apply in physical pixels.
   int GetViewportInsetBottom();
@@ -207,10 +220,14 @@ class UI_ANDROID_EXPORT ViewAndroid {
   void RequestDisallowInterceptTouchEvent();
   void RequestUnbufferedDispatch(const MotionEventAndroid& event);
 
+  void SetTooltip(const std::u16string& text);
+
   void SetCopyOutputCallback(CopyViewCallback callback);
   // Return the CopyOutputRequest back if view cannot perform readback.
   std::unique_ptr<viz::CopyOutputRequest> MaybeRequestCopyOfView(
       std::unique_ptr<viz::CopyOutputRequest> request);
+
+  void SetHitTestCallback(HitTestCallback callback);
 
   void set_event_handler(EventHandlerAndroid* handler) {
     event_handler_ = handler;
@@ -218,20 +235,35 @@ class UI_ANDROID_EXPORT ViewAndroid {
 
   ViewAndroid* parent() const { return parent_; }
 
-  absl::optional<gfx::Rect> GetDisplayFeature();
-
   bool OnTouchEventForTesting(const MotionEventAndroid& event) {
     return OnTouchEvent(event);
   }
 
   void NotifyVirtualKeyboardOverlayRect(const gfx::Rect& keyboard_rect);
 
+  void ShowInterestInElement(int);
+
   void SetLayoutForTesting(int x, int y, int width, int height);
 
   EventForwarder* event_forwarder() { return event_forwarder_.get(); }
 
+  size_t GetChildrenCountForTesting() const;
+
+  const ViewAndroid* GetTopMostChildForTesting() const;
+
+  void SetIsHitTestEligible(bool is_hit_test_eligible) {
+    is_hit_test_eligible_ = is_hit_test_eligible;
+  }
+
+  // Checks whether the view is eligible for a Check Hit. This checks the
+  // visibility of the view so that we make sure that we do not send a touch
+  // event to a prerendered (and hidden) view.
+  bool IsCheckHitEligible() const;
+
  protected:
   void RemoveAllChildren(bool attached_to_window);
+
+  void OnPointerLockRelease();
 
   raw_ptr<ViewAndroid> parent_;
 
@@ -245,6 +277,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
   FRIEND_TEST_ALL_PREFIXES(ViewAndroidBoundsTest, OnSizeChanged);
   friend class EventForwarder;
   friend class ViewAndroidBoundsTest;
+  friend class WindowAndroid;
 
   bool OnDragEvent(const DragEventAndroid& event);
   bool OnTouchEvent(const MotionEventAndroid& event);
@@ -283,7 +316,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
 
   bool has_event_forwarder() const { return !!event_forwarder_; }
 
-  bool match_parent() const { return layout_type_ == LayoutType::MATCH_PARENT; }
+  bool match_parent() const { return layout_type_ == LayoutType::kMatchParent; }
 
   // Checks if there is any event forwarder in any node up to root.
   static bool RootPathHasEventForwarder(ViewAndroid* view);
@@ -292,7 +325,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // each leaf of subtree.
   static bool SubtreeHasEventForwarder(ViewAndroid* view);
 
-  void OnSizeChangedInternal(const gfx::Size& size);
+  void OnSizeChangedInternal(const gfx::Size& size_device_px);
   void DispatchOnSizeChanged();
 
   // Returns the Java delegate for this view. This is used to delegate work
@@ -301,16 +334,20 @@ class UI_ANDROID_EXPORT ViewAndroid {
   const base::android::ScopedJavaLocalRef<jobject> GetViewAndroidDelegate()
       const;
 
-  std::list<ViewAndroid*> children_;
+  std::list<raw_ptr<ViewAndroid, CtnExperimental>> children_;
   base::ObserverList<ViewAndroidObserver>::Unchecked observer_list_;
-  scoped_refptr<cc::Layer> layer_;
+  scoped_refptr<cc::slim::Layer> layer_;
   JavaObjectWeakGlobalRef delegate_;
 
   raw_ptr<EventHandlerAndroid> event_handler_ = nullptr;  // Not owned
 
   // Basic view layout information. Used to do hit testing deciding whether
   // the passed events should be processed by the view. Unit in DIP.
-  gfx::Rect bounds_;
+  gfx::Rect bounds_dips_;
+
+  // Same as above, but before dividing by the device scale factor.
+  gfx::Rect bounds_device_px_;
+
   const LayoutType layout_type_;
 
   // In physical pixel.
@@ -323,7 +360,17 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // Copy output of View rather than window.
   CopyViewCallback copy_view_callback_;
 
+  // Conducts additional HitTest check to determine if a HitTest can actually
+  // be sent to the view.
+  HitTestCallback hit_test_callback_;
+
   bool controls_resize_view_ = false;
+
+  // Whether the view is showing. This is used to check if the view is eligible
+  // for a Check Hit.
+  // TODO(crbug.com/442832509): Replace this temporary fix in favor of
+  // a more clean solution by checking the existence of the parent for the view.
+  bool is_hit_test_eligible_ = false;
 };
 
 }  // namespace ui

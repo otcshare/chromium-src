@@ -8,8 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/callback.h"
 #include "chromeos/ash/services/secure_channel/file_transfer_update_callback.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "chromeos/ash/services/secure_channel/register_payload_file_request.h"
@@ -54,12 +53,12 @@ void FakeConnection::AddObserver(ConnectionObserver* observer) {
 }
 
 void FakeConnection::RemoveObserver(ConnectionObserver* observer) {
-  base::Erase(observers_, observer);
+  std::erase(observers_, observer);
   Connection::RemoveObserver(observer);
 }
 
 void FakeConnection::GetConnectionRssi(
-    base::OnceCallback<void(absl::optional<int32_t>)> callback) {
+    base::OnceCallback<void(std::optional<int32_t>)> callback) {
   std::move(callback).Run(rssi_to_return_);
 }
 

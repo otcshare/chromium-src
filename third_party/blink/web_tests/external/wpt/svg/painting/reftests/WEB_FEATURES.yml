@@ -1,0 +1,10 @@
+features:
+- name: context-fill-stroke
+  files:
+  - paint-context-*
+- name: paint-order
+  files:
+  - paint-order-*
+- name: text-shadow
+  files:
+  - text-shadow-*

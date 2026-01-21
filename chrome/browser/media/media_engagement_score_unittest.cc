@@ -9,6 +9,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_param_associator.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
@@ -29,19 +30,13 @@ namespace {
 using ::testing::Optional;
 
 base::Time GetReferenceTime() {
-  base::Time::Exploded exploded_reference_time;
-  exploded_reference_time.year = 2015;
-  exploded_reference_time.month = 1;
-  exploded_reference_time.day_of_month = 30;
-  exploded_reference_time.day_of_week = 5;
-  exploded_reference_time.hour = 11;
-  exploded_reference_time.minute = 0;
-  exploded_reference_time.second = 0;
-  exploded_reference_time.millisecond = 0;
-
+  static constexpr base::Time::Exploded kReferenceTime = {.year = 2015,
+                                                          .month = 1,
+                                                          .day_of_week = 5,
+                                                          .day_of_month = 30,
+                                                          .hour = 11};
   base::Time out_time;
-  EXPECT_TRUE(
-      base::Time::FromLocalExploded(exploded_reference_time, &out_time));
+  EXPECT_TRUE(base::Time::FromLocalExploded(kReferenceTime, &out_time));
   return out_time;
 }
 
@@ -123,7 +118,7 @@ class MediaEngagementScoreTest : public ChromeRenderViewHostTestHarness {
     EXPECT_EQ(details->visits, score.visits());
     EXPECT_EQ(details->media_playbacks, score.media_playbacks());
     EXPECT_EQ(details->last_media_playback_time,
-              score.last_media_playback_time().ToJsTime());
+              score.last_media_playback_time().InMillisecondsFSinceUnixEpoch());
   }
 };
 
@@ -145,11 +140,11 @@ class MediaEngagementScoreWithOverrideFieldTrialsTest
 
     std::map<std::string, std::string> params;
     params[MediaEngagementScore::kScoreMinVisitsParamName] =
-        std::to_string(min_visits);
+        base::NumberToString(min_visits);
     params[MediaEngagementScore::kHighScoreLowerThresholdParamName] =
-        std::to_string(lower_threshold);
+        base::NumberToString(lower_threshold);
     params[MediaEngagementScore::kHighScoreUpperThresholdParamName] =
-        std::to_string(upper_threshold);
+        base::NumberToString(upper_threshold);
 
     scoped_feature_list_ = std::make_unique<base::test::ScopedFeatureList>();
     scoped_feature_list_->InitAndEnableFeatureWithParameters(
@@ -272,18 +267,21 @@ TEST_F(MediaEngagementScoreTest, ContentSettings) {
   score.Commit();
 
   // Now read back content settings and make sure we have the right values.
-  base::Value values = settings_map->GetWebsiteSetting(
-      origin.GetURL(), GURL(), ContentSettingsType::MEDIA_ENGAGEMENT, nullptr);
-  absl::optional<int> stored_visits =
-      values.FindIntKey(MediaEngagementScore::kVisitsKey);
-  absl::optional<int> stored_media_playbacks =
-      values.FindIntKey(MediaEngagementScore::kMediaPlaybacksKey);
-  absl::optional<double> stored_last_media_playback_time =
-      values.FindDoubleKey(MediaEngagementScore::kLastMediaPlaybackTimeKey);
+  base::Value::Dict values =
+      settings_map
+          ->GetWebsiteSetting(origin.GetURL(), GURL(),
+                              ContentSettingsType::MEDIA_ENGAGEMENT, nullptr)
+          .TakeDict();
+  std::optional<int> stored_visits =
+      values.FindInt(MediaEngagementScore::kVisitsKey);
+  std::optional<int> stored_media_playbacks =
+      values.FindInt(MediaEngagementScore::kMediaPlaybacksKey);
+  std::optional<double> stored_last_media_playback_time =
+      values.FindDouble(MediaEngagementScore::kLastMediaPlaybackTimeKey);
   EXPECT_TRUE(stored_visits);
   EXPECT_TRUE(stored_media_playbacks);
   EXPECT_TRUE(stored_last_media_playback_time);
-  EXPECT_THAT(values.FindBoolKey(MediaEngagementScore::kHasHighScoreKey),
+  EXPECT_THAT(values.FindBool(MediaEngagementScore::kHasHighScoreKey),
               Optional(true));
   EXPECT_EQ(*stored_visits, example_num_visits + 1);
   EXPECT_EQ(*stored_media_playbacks, example_media_playbacks + 2);
@@ -378,12 +376,15 @@ TEST_F(MediaEngagementScoreTest, HighScoreUpdated) {
   }
 
   {
-    base::Value dict = settings_map->GetWebsiteSetting(
-        origin.GetURL(), GURL(), ContentSettingsType::MEDIA_ENGAGEMENT,
-        nullptr);
+    base::Value::Dict dict =
+        settings_map
+            ->GetWebsiteSetting(origin.GetURL(), GURL(),
+                                ContentSettingsType::MEDIA_ENGAGEMENT, nullptr)
+            .TakeDict();
 
-    EXPECT_THAT(dict.FindBoolPath(MediaEngagementScore::kHasHighScoreKey),
-                Optional(false));
+    EXPECT_THAT(
+        dict.FindBoolByDottedPath(MediaEngagementScore::kHasHighScoreKey),
+        Optional(false));
   }
 }
 
@@ -504,20 +505,22 @@ TEST_F(MediaEngagementScoreTest, DoNotStoreDeprecatedFields) {
   score.Commit();
 
   // Check the deprecated fields have been dropped.
-  base::Value values = settings_map->GetWebsiteSetting(
-      origin.GetURL(), GURL(), ContentSettingsType::MEDIA_ENGAGEMENT, nullptr);
-  EXPECT_EQ(values.FindKey(kVisitsWithMediaTag), nullptr);
-  EXPECT_EQ(values.FindKey(kAudiblePlaybacks), nullptr);
-  EXPECT_EQ(values.FindKey(kSignificantPlaybacks), nullptr);
-  EXPECT_EQ(values.FindKey(kHighScoreChanges), nullptr);
-  EXPECT_EQ(values.FindKey(kMediaElementPlaybacks), nullptr);
-  EXPECT_EQ(values.FindKey(kAudioContextPlaybacks), nullptr);
+  base::Value::Dict values =
+      settings_map
+          ->GetWebsiteSetting(origin.GetURL(), GURL(),
+                              ContentSettingsType::MEDIA_ENGAGEMENT, nullptr)
+          .TakeDict();
+  EXPECT_FALSE(values.contains(kVisitsWithMediaTag));
+  EXPECT_FALSE(values.contains(kAudiblePlaybacks));
+  EXPECT_FALSE(values.contains(kSignificantPlaybacks));
+  EXPECT_FALSE(values.contains(kHighScoreChanges));
+  EXPECT_FALSE(values.contains(kMediaElementPlaybacks));
+  EXPECT_FALSE(values.contains(kAudioContextPlaybacks));
 
   // Check the non-deprecated fields are still present.
-  EXPECT_NE(values.FindKey(MediaEngagementScore::kVisitsKey), nullptr);
-  EXPECT_NE(values.FindKey(MediaEngagementScore::kMediaPlaybacksKey), nullptr);
-  EXPECT_NE(values.FindKey(MediaEngagementScore::kLastMediaPlaybackTimeKey),
-            nullptr);
-  EXPECT_NE(values.FindKey(MediaEngagementScore::kHasHighScoreKey), nullptr);
-  EXPECT_NE(values.FindKey(kNotDeprectedUnknown), nullptr);
+  EXPECT_TRUE(values.contains(MediaEngagementScore::kVisitsKey));
+  EXPECT_TRUE(values.contains(MediaEngagementScore::kMediaPlaybacksKey));
+  EXPECT_TRUE(values.contains(MediaEngagementScore::kLastMediaPlaybackTimeKey));
+  EXPECT_TRUE(values.contains(MediaEngagementScore::kHasHighScoreKey));
+  EXPECT_TRUE(values.contains(kNotDeprectedUnknown));
 }

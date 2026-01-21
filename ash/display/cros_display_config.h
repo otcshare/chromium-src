@@ -14,7 +14,6 @@
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "mojo/public/cpp/bindings/remote_set.h"
 
 namespace ash {
 
@@ -53,7 +52,7 @@ class ASH_EXPORT CrosDisplayConfig
   void SetUnifiedDesktopEnabled(bool enabled) override;
   void OverscanCalibration(const std::string& display_id,
                            crosapi::mojom::DisplayConfigOperation op,
-                           const absl::optional<gfx::Insets>& delta,
+                           const std::optional<gfx::Insets>& delta,
                            OverscanCalibrationCallback callback) override;
   void TouchCalibration(const std::string& display_id,
                         crosapi::mojom::DisplayConfigOperation op,
@@ -63,6 +62,8 @@ class ASH_EXPORT CrosDisplayConfig
   void DragDisplayDelta(int64_t display_id,
                         int32_t delta_x,
                         int32_t delta_y) override;
+
+  bool IsCalibrating() const;
 
   TouchCalibratorController* touch_calibrator_for_test() {
     return touch_calibrator_.get();

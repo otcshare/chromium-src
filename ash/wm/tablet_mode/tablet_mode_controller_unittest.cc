@@ -13,13 +13,10 @@
 
 #include "ash/accelerometer/accelerometer_reader.h"
 #include "ash/accelerometer/accelerometer_types.h"
-#include "ash/accessibility/accessibility_controller_impl.h"
 #include "ash/accessibility/test_accessibility_controller_client.h"
 #include "ash/app_list/app_list_controller_impl.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/display/screen_orientation_controller.h"
-#include "ash/public/cpp/accessibility_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/public/cpp/test/shell_test_api.h"
@@ -28,32 +25,35 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/test/test_widget_builder.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "ash/wm/overview/overview_wallpaper_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_utils.h"
+#include "ash/wm/tablet_mode/accelerometer_test_data_literals.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/math_constants.h"
 #include "base/run_loop.h"
+#include "base/task/current_thread.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "base/test/scoped_chromeos_version_info.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
-#include "chromeos/ui/wm/features.h"
+#include "chromeos/ui/frame/caption_buttons/snap_controller.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/test_utils.h"
+#include "ui/display/display_switches.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/display/test/display_manager_test_api.h"
@@ -65,8 +65,11 @@
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/vector3d_f.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/message_center/message_center.h"
+#include "ui/ozone/public/ozone_switches.h"
 #include "ui/views/test/native_widget_factory.h"
+#include "ui/views/test/test_widget_builder.h"
 #include "ui/wm/core/cursor_manager.h"
 #include "ui/wm/core/window_util.h"
 
@@ -83,30 +86,9 @@ constexpr char kTabletModeDisabled[] = "Touchview_Disabled";
 constexpr char kEnterHistogram[] = "Ash.TabletMode.AnimationSmoothness.Enter";
 constexpr char kExitHistogram[] = "Ash.TabletMode.AnimationSmoothness.Exit";
 
+constexpr char kLsbReleaseContent[] = "CHROMEOS_RELEASE_NAME=Chromium OS\n";
+
 }  // namespace
-
-// Test accelerometer data taken with the lid at less than 180 degrees while
-// shaking the device around. The data is to be interpreted in groups of 6 where
-// each 6 values corresponds to the base accelerometer (-y / g, -x / g, -z / g)
-// followed by the lid accelerometer (-y / g , x / g, z / g).
-extern const float kAccelerometerLaptopModeTestData[];
-extern const size_t kAccelerometerLaptopModeTestDataLength;
-
-// Test accelerometer data taken with the lid open 360 degrees while
-// shaking the device around. The data is to be interpreted in groups of 6 where
-// each 6 values corresponds to the base accelerometer (-y / g, -x / g, -z / g)
-// followed by the lid accelerometer (-y / g , x / g, z / g).
-extern const float kAccelerometerFullyOpenTestData[];
-extern const size_t kAccelerometerFullyOpenTestDataLength;
-
-// Test accelerometer data taken with the lid open 360 degrees while the device
-// hinge was nearly vertical, while shaking the device around. The data is to be
-// interpreted in groups of 6 where each 6 values corresponds to the X, Y, and Z
-// readings from the base and lid accelerometers in this order.
-extern const float kAccelerometerVerticalHingeTestData[];
-extern const size_t kAccelerometerVerticalHingeTestDataLength;
-extern const float kAccelerometerVerticalHingeUnstableAnglesTestData[];
-extern const size_t kAccelerometerVerticalHingeUnstableAnglesTestDataLength;
 
 class TabletModeControllerTest : public AshTestBase {
  public:
@@ -120,6 +102,14 @@ class TabletModeControllerTest : public AshTestBase {
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kAshEnableTabletMode);
+    bluetooth_adapter_ =
+        base::MakeRefCounted<testing::NiceMock<device::MockBluetoothAdapter>>();
+    device::BluetoothAdapterFactory::SetAdapterForTesting(bluetooth_adapter_);
+    ON_CALL(*bluetooth_adapter_, IsPowered)
+        .WillByDefault(testing::Return(true));
+    ON_CALL(*bluetooth_adapter_, IsPresent)
+        .WillByDefault(testing::Return(true));
+
     AshTestBase::SetUp();
     AccelerometerReader::GetInstance()->RemoveObserver(
         tablet_mode_controller());
@@ -141,6 +131,8 @@ class TabletModeControllerTest : public AshTestBase {
 
   void TearDown() override {
     AccelerometerReader::GetInstance()->AddObserver(tablet_mode_controller());
+    // Rset before Shell destruction.
+    test_api_.reset();
     AshTestBase::TearDown();
   }
 
@@ -153,7 +145,13 @@ class TabletModeControllerTest : public AshTestBase {
   }
 
   void AttachExternalMouse() { test_api_->AttachExternalMouse(); }
+  void AttachBluetoothMouse() {
+    test_api_->AttachBluetoothMouse(bluetooth_adapter_.get());
+  }
   void AttachExternalTouchpad() { test_api_->AttachExternalTouchpad(); }
+  void ClearBluetoothAdapter() {
+    testing::Mock::VerifyAndClear(bluetooth_adapter_.get());
+  }
   void DetachAllMice() { test_api_->DetachAllMice(); }
   void DetachAllTouchpads() { test_api_->DetachAllTouchpads(); }
 
@@ -166,7 +164,9 @@ class TabletModeControllerTest : public AshTestBase {
     test_api_->TriggerBaseAndLidUpdate(base, lid);
   }
 
-  bool IsTabletModeStarted() const { return test_api_->IsTabletModeStarted(); }
+  bool IsInPhysicalTabletState() const {
+    return test_api_->IsInPhysicalTabletState();
+  }
 
   // Attaches a SimpleTestTickClock to the TabletModeController with a non
   // null value initial value.
@@ -221,8 +221,9 @@ class TabletModeControllerTest : public AshTestBase {
   void WaitForWindowAnimation(aura::Window* window) {
     auto* compositor = window->layer()->GetCompositor();
 
-    while (window->layer()->GetAnimator()->is_animating())
+    while (window->layer()->GetAnimator()->is_animating()) {
       EXPECT_TRUE(ui::WaitForNextFrameToBePresented(compositor));
+    }
   }
 
   // Wait one more frame presented for the metrics to get recorded.
@@ -238,6 +239,9 @@ class TabletModeControllerTest : public AshTestBase {
   std::unique_ptr<TabletModeControllerTestApi> test_api_;
 
   base::SimpleTestTickClock test_tick_clock_;
+
+  scoped_refptr<testing::NiceMock<device::MockBluetoothAdapter>>
+      bluetooth_adapter_;
 
   // Tracks user action counts.
   base::UserActionTester user_action_tester_;
@@ -270,10 +274,10 @@ TEST_F(TabletModeControllerTest, VerifyTabletModeEnabledDisabledCounts) {
 // Verify that closing the lid will exit tablet mode.
 TEST_F(TabletModeControllerTest, CloseLidWhileInTabletMode) {
   OpenLidToAngle(315.0f);
-  ASSERT_TRUE(IsTabletModeStarted());
+  ASSERT_TRUE(display::Screen::Get()->InTabletMode());
 
   CloseLid();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify that tablet mode will not be entered when the lid is closed.
@@ -283,13 +287,13 @@ TEST_F(TabletModeControllerTest, HingeAnglesWithLidClosed) {
   CloseLid();
 
   OpenLidToAngle(270.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(315.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(355.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify the unstable lid angle is suppressed during opening the lid.
@@ -300,11 +304,11 @@ TEST_F(TabletModeControllerTest, OpenLidUnstableLidAngle) {
 
   // Simulate the erroneous accelerometer readings.
   OpenLidToAngle(355.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Simulate the correct accelerometer readings.
   OpenLidToAngle(5.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify that suppressing unstable lid angle while opening the lid does not
@@ -314,18 +318,18 @@ TEST_F(TabletModeControllerTest, TabletModeSwitchOnWithOpenUnstableLidAngle) {
   AttachTickClockForTest();
 
   SetTabletMode(true /*on*/);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLid();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Simulate the correct accelerometer readings.
   OpenLidToAngle(355.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Simulate the erroneous accelerometer readings.
   OpenLidToAngle(5.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify the unstable lid angle is suppressed during closing the lid.
@@ -335,18 +339,18 @@ TEST_F(TabletModeControllerTest, CloseLidUnstableLidAngle) {
   OpenLid();
 
   OpenLidToAngle(45.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Simulate the correct accelerometer readings.
   OpenLidToAngle(5.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Simulate the erroneous accelerometer readings.
   OpenLidToAngle(355.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   CloseLid();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify that suppressing unstable lid angle when the lid is closed does not
@@ -358,82 +362,82 @@ TEST_F(TabletModeControllerTest, TabletModeSwitchOnWithCloseUnstableLidAngle) {
   OpenLid();
 
   SetTabletMode(true /*on*/);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   CloseLid();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   SetTabletMode(false /*on*/);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 TEST_F(TabletModeControllerTest, TabletModeTransition) {
   OpenLidToAngle(90.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Unstable reading. This should not trigger tablet mode.
   HoldDeviceVertical();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // When tablet mode switch is on it should force tablet mode even if the
   // reading is not stable.
   SetTabletMode(true);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // After tablet mode switch is off it should stay in tablet mode if the
   // reading is not stable.
   SetTabletMode(false);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Should leave tablet mode when the lid angle is small enough.
   OpenLidToAngle(90.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(300.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 // When there is no keyboard accelerometer available tablet mode should solely
 // rely on the tablet mode switch.
 TEST_F(TabletModeControllerTest, TabletModeTransitionNoKeyboardAccelerometer) {
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
   TriggerLidUpdate(gfx::Vector3dF(0.0f, 0.0f, kMeanGravityFloat));
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   SetTabletMode(true);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Single sensor reading should not change mode.
   TriggerLidUpdate(gfx::Vector3dF(0.0f, 0.0f, kMeanGravityFloat));
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // With a single sensor we should exit immediately on the tablet mode switch
   // rather than waiting for stabilized accelerometer readings.
   SetTabletMode(false);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify the tablet mode enter/exit thresholds for stable angles.
 TEST_F(TabletModeControllerTest, StableHingeAnglesWithLidOpened) {
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(180.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(315.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(180.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(45.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(270.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(90.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify entering tablet mode for unstable lid angles when a certain range of
@@ -443,26 +447,26 @@ TEST_F(TabletModeControllerTest, EnterTabletModeWithUnstableLidAngle) {
 
   OpenLid();
 
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(5.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   EXPECT_FALSE(CanUseUnstableLidAngle());
   OpenLidToAngle(355.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // 1 second after entering unstable angle zone.
   AdvanceTickClock(base::Seconds(1));
   EXPECT_FALSE(CanUseUnstableLidAngle());
   OpenLidToAngle(355.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // 2 seconds after entering unstable angle zone.
   AdvanceTickClock(base::Seconds(1));
   EXPECT_TRUE(CanUseUnstableLidAngle());
   OpenLidToAngle(355.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify not exiting tablet mode for unstable lid angles even after a certain
@@ -472,25 +476,25 @@ TEST_F(TabletModeControllerTest, NotExitTabletModeWithUnstableLidAngle) {
 
   OpenLid();
 
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(280.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(5.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // 1 second after entering unstable angle zone.
   AdvanceTickClock(base::Seconds(1));
   EXPECT_FALSE(CanUseUnstableLidAngle());
   OpenLidToAngle(5.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // 2 seconds after entering unstable angle zone.
   AdvanceTickClock(base::Seconds(1));
   EXPECT_TRUE(CanUseUnstableLidAngle());
   OpenLidToAngle(5.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 // Test that when the device lid is closed, its lid angle is reset properly.
@@ -510,28 +514,28 @@ TEST_F(TabletModeControllerTest, HingeAligned) {
   // Laptop in normal orientation lid open 90 degrees.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(0.0f, 0.0f, -kMeanGravityFloat),
                           gfx::Vector3dF(0.0f, -kMeanGravityFloat, 0.0f));
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Completely vertical.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(kMeanGravityFloat, 0.0f, 0.0f),
                           gfx::Vector3dF(kMeanGravityFloat, 0.0f, 0.0f));
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Close to vertical but with hinge appearing to be open 270 degrees.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(kMeanGravityFloat, 0.0f, -0.1f),
                           gfx::Vector3dF(kMeanGravityFloat, 0.1f, 0.0f));
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Flat and open 270 degrees should start tablet mode.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(0.0f, 0.0f, -kMeanGravityFloat),
                           gfx::Vector3dF(0.0f, kMeanGravityFloat, 0.0f));
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Normal 90 degree orientation but near vertical should stay in maximize
   // mode.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(kMeanGravityFloat, 0.0f, -0.1f),
                           gfx::Vector3dF(kMeanGravityFloat, -0.1f, 0.0f));
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 TEST_F(TabletModeControllerTest, LaptopTest) {
@@ -539,8 +543,8 @@ TEST_F(TabletModeControllerTest, LaptopTest) {
   // transitions into tabletmode / tablet mode while shaking the device around
   // with the hinge at less than 180 degrees. Note the conversion from device
   // data to accelerometer updates consistent with accelerometer_reader.cc.
-  ASSERT_EQ(0u, kAccelerometerLaptopModeTestDataLength % 6);
-  for (size_t i = 0; i < kAccelerometerLaptopModeTestDataLength / 6; ++i) {
+  ASSERT_EQ(0u, kAccelerometerLaptopModeTestData.size() % 6);
+  for (size_t i = 0; i < kAccelerometerLaptopModeTestData.size() / 6; ++i) {
     gfx::Vector3dF base(-kAccelerometerLaptopModeTestData[i * 6 + 1],
                         -kAccelerometerLaptopModeTestData[i * 6],
                         -kAccelerometerLaptopModeTestData[i * 6 + 2]);
@@ -552,7 +556,7 @@ TEST_F(TabletModeControllerTest, LaptopTest) {
     TriggerBaseAndLidUpdate(base, lid);
     // There are a lot of samples, so ASSERT rather than EXPECT to only generate
     // one failure rather than potentially hundreds.
-    ASSERT_FALSE(IsTabletModeStarted());
+    ASSERT_FALSE(display::Screen::Get()->InTabletMode());
   }
 }
 
@@ -560,14 +564,14 @@ TEST_F(TabletModeControllerTest, TabletModeTest) {
   // Trigger tablet mode by opening to 270 to begin the test in tablet mode.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(0.0f, 0.0f, kMeanGravityFloat),
                           gfx::Vector3dF(0.0f, -kMeanGravityFloat, 0.0f));
-  ASSERT_TRUE(IsTabletModeStarted());
+  ASSERT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Feeds in sample accelerometer data and verifies that there are no
   // transitions out of tabletmode / tablet mode while shaking the device
   // around. Note the conversion from device data to accelerometer updates
   // consistent with accelerometer_reader.cc.
-  ASSERT_EQ(0u, kAccelerometerFullyOpenTestDataLength % 6);
-  for (size_t i = 0; i < kAccelerometerFullyOpenTestDataLength / 6; ++i) {
+  ASSERT_EQ(0u, kAccelerometerFullyOpenTestData.size() % 6);
+  for (size_t i = 0; i < kAccelerometerFullyOpenTestData.size() / 6; ++i) {
     gfx::Vector3dF base(-kAccelerometerFullyOpenTestData[i * 6 + 1],
                         -kAccelerometerFullyOpenTestData[i * 6],
                         -kAccelerometerFullyOpenTestData[i * 6 + 2]);
@@ -579,7 +583,7 @@ TEST_F(TabletModeControllerTest, TabletModeTest) {
     TriggerBaseAndLidUpdate(base, lid);
     // There are a lot of samples, so ASSERT rather than EXPECT to only generate
     // one failure rather than potentially hundreds.
-    ASSERT_TRUE(IsTabletModeStarted());
+    ASSERT_TRUE(display::Screen::Get()->InTabletMode());
   }
 }
 
@@ -588,8 +592,8 @@ TEST_F(TabletModeControllerTest, VerticalHingeTest) {
   // transitions out of tabletmode / tablet mode while shaking the device
   // around, while the hinge is nearly vertical. The data was captured from
   // maxmimize_mode_controller.cc and does not require conversion.
-  ASSERT_EQ(0u, kAccelerometerVerticalHingeTestDataLength % 6);
-  for (size_t i = 0; i < kAccelerometerVerticalHingeTestDataLength / 6; ++i) {
+  ASSERT_EQ(0u, kAccelerometerVerticalHingeTestData.size() % 6);
+  for (size_t i = 0; i < kAccelerometerVerticalHingeTestData.size() / 6; ++i) {
     gfx::Vector3dF base(kAccelerometerVerticalHingeTestData[i * 6],
                         kAccelerometerVerticalHingeTestData[i * 6 + 1],
                         kAccelerometerVerticalHingeTestData[i * 6 + 2]);
@@ -599,32 +603,73 @@ TEST_F(TabletModeControllerTest, VerticalHingeTest) {
     TriggerBaseAndLidUpdate(base, lid);
     // There are a lot of samples, so ASSERT rather than EXPECT to only generate
     // one failure rather than potentially hundreds.
-    ASSERT_TRUE(IsTabletModeStarted());
+    ASSERT_TRUE(display::Screen::Get()->InTabletMode());
   }
+}
+
+// Test entering tablet mode with internal and external primary display. See
+// http://crbug.com/443010999
+TEST_F(TabletModeControllerTest, TabletModeWithDifferentPrimaryDisplay) {
+  const int64_t internal_display_id =
+      display::test::DisplayManagerTestApi(display_manager())
+          .SetFirstDisplayAsInternalDisplay();
+  const auto internal_info =
+      display_manager()->GetDisplayInfo(internal_display_id);
+  constexpr int64_t external_id = 210000010;
+
+  const auto external_info =
+      display::ManagedDisplayInfo::CreateFromSpecWithID("400x300", external_id);
+
+  std::vector<display::ManagedDisplayInfo> display_info_list;
+  display_info_list.push_back(internal_info);
+  display_info_list.push_back(external_info);
+  display_manager()->OnNativeDisplaysChanged(display_info_list);
+  EXPECT_EQ(2U, display_manager()->GetNumDisplays());
+
+  // Enter tablet mode.
+  OpenLidToAngle(270.0f);
+
+  // Confirm is in tablet mode and mirrored.
+  base::test::RunUntil([&] { return display_manager()->IsInMirrorMode(); });
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+
+  // Exit tablet mode.
+  OpenLidToAngle(90.0f);
+
+  base::test::RunUntil([&] { return !display_manager()->IsInMirrorMode(); });
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+
+  // Change primary display.
+  Shell::Get()->window_tree_host_manager()->SetPrimaryDisplayId(external_id);
+
+  // Enter tablet mode.
+  OpenLidToAngle(270.0f);
+
+  // Confirm in tablet mode and mirrored.
+  base::test::RunUntil([&] { return display_manager()->IsInMirrorMode(); });
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+
+  // Exit tablet mode.
+  OpenLidToAngle(90.0f);
 }
 
 // Test if this case does not crash. See http://crbug.com/462806.
 TEST_F(TabletModeControllerTest, DisplayDisconnectionDuringOverview) {
-  // Do not animate wallpaper on entering overview.
-  OverviewWallpaperController::SetDisableChangeWallpaperForTest(true);
-
   UpdateDisplay("800x600,800x600");
   std::unique_ptr<aura::Window> w1(
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100)));
+      CreateTestWindowInShell({.bounds = {100, 100}}));
   std::unique_ptr<aura::Window> w2(
-      CreateTestWindowInShellWithBounds(gfx::Rect(800, 0, 100, 100)));
+      CreateTestWindowInShell({.bounds = {800, 0, 100, 100}}));
   ASSERT_NE(w1->GetRootWindow(), w2->GetRootWindow());
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   tablet_mode_controller()->SetEnabledForTest(true);
   EXPECT_TRUE(EnterOverview());
 
   UpdateDisplay("800x600");
   base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(w1->GetRootWindow(), w2->GetRootWindow());
-
-  OverviewWallpaperController::SetDisableChangeWallpaperForTest(false);
 }
 
 // Test that the disabling of the internal display exits tablet mode, and that
@@ -634,7 +679,7 @@ TEST_F(TabletModeControllerTest, NoTabletModeWithDisabledInternalDisplay) {
   const int64_t internal_display_id =
       display::test::DisplayManagerTestApi(display_manager())
           .SetFirstDisplayAsInternalDisplay();
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Set up a mode with the internal display deactivated before switching to
   // tablet mode (which will enable mirror mode with only one display).
@@ -644,23 +689,48 @@ TEST_F(TabletModeControllerTest, NoTabletModeWithDisabledInternalDisplay) {
 
   // Opening the lid to 270 degrees should start tablet mode.
   OpenLidToAngle(270.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Close lid and deactivate the internal display to simulate Docked Mode.
   CloseLid();
   display_manager()->OnNativeDisplaysChanged(secondary_only);
   ASSERT_FALSE(display_manager()->IsActiveDisplayId(internal_display_id));
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   OpenLidToAngle(270.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Tablet mode signal should also be ignored.
   SetTabletMode(true);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(AreEventsBlocked());
+}
+
+// Tests that tablet mode change events are fired while in unified desktop mode.
+TEST_F(TabletModeControllerTest,
+       TabletModeChangeEventsFiredInUnifiedDesktopMode) {
+  UpdateDisplay("300x200, 300x200");
+  display::test::DisplayManagerTestApi(display_manager())
+      .SetFirstDisplayAsInternalDisplay();
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
+
+  // Turn on unified desktop mode.
+  display_manager()->SetUnifiedDesktopEnabled(true);
+  ASSERT_TRUE(display_manager()->IsInUnifiedMode());
+
+  // Opening the lid to 270 degrees should start tablet mode.
+  OpenLidToAngle(270.0f);
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(IsInPhysicalTabletState());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  // Opening the lid to 30 degrees should stop tablet mode.
+  OpenLidToAngle(30.0f);
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(IsInPhysicalTabletState());
   EXPECT_FALSE(AreEventsBlocked());
 }
 
@@ -671,7 +741,7 @@ TEST_F(TabletModeControllerTest, TabletModeAfterExitingDockedMode) {
   const int64_t internal_display_id =
       display::test::DisplayManagerTestApi(display_manager())
           .SetFirstDisplayAsInternalDisplay();
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Deactivate internal display to simulate Docked Mode.
   std::vector<display::ManagedDisplayInfo> all_displays;
@@ -688,14 +758,14 @@ TEST_F(TabletModeControllerTest, TabletModeAfterExitingDockedMode) {
 
   // Tablet mode signal should also be ignored.
   SetTabletMode(true);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Exiting docked state
   display_manager()->OnNativeDisplaysChanged(all_displays);
   display::test::DisplayManagerTestApi(display_manager())
       .SetFirstDisplayAsInternalDisplay();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 // Verify that the device won't exit tabletmode / tablet mode for unstable
@@ -704,15 +774,15 @@ TEST_F(TabletModeControllerTest, VerticalHingeUnstableAnglesTest) {
   // Trigger tablet mode by opening to 270 to begin the test in tablet mode.
   TriggerBaseAndLidUpdate(gfx::Vector3dF(0.0f, 0.0f, kMeanGravityFloat),
                           gfx::Vector3dF(0.0f, -kMeanGravityFloat, 0.0f));
-  ASSERT_TRUE(IsTabletModeStarted());
+  ASSERT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Feeds in sample accelerometer data and verifies that there are no
   // transitions out of tabletmode / tablet mode while shaking the device
   // around, while the hinge is nearly vertical. The data was captured
   // from maxmimize_mode_controller.cc and does not require conversion.
-  ASSERT_EQ(0u, kAccelerometerVerticalHingeUnstableAnglesTestDataLength % 6);
+  ASSERT_EQ(0u, kAccelerometerVerticalHingeUnstableAnglesTestData.size() % 6);
   for (size_t i = 0;
-       i < kAccelerometerVerticalHingeUnstableAnglesTestDataLength / 6; ++i) {
+       i < kAccelerometerVerticalHingeUnstableAnglesTestData.size() / 6; ++i) {
     gfx::Vector3dF base(
         kAccelerometerVerticalHingeUnstableAnglesTestData[i * 6],
         kAccelerometerVerticalHingeUnstableAnglesTestData[i * 6 + 1],
@@ -724,7 +794,7 @@ TEST_F(TabletModeControllerTest, VerticalHingeUnstableAnglesTest) {
     TriggerBaseAndLidUpdate(base, lid);
     // There are a lot of samples, so ASSERT rather than EXPECT to only generate
     // one failure rather than potentially hundreds.
-    ASSERT_TRUE(IsTabletModeStarted());
+    ASSERT_TRUE(display::Screen::Get()->InTabletMode());
   }
 }
 
@@ -762,21 +832,21 @@ TEST_F(TabletModeControllerInitedFromPowerManagerClientTest,
        InitializedWhileTabletModeSwitchOn) {
   // PowerManagerClient callback is a posted task.
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(tablet_mode_controller()->InTabletMode());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 TEST_F(TabletModeControllerTest, RestoreAfterExit) {
   UpdateDisplay("1000x600");
   std::unique_ptr<aura::Window> w1(
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 10, 900, 300)));
+      CreateTestWindowInShell({.bounds = {10, 10, 900, 300}}));
   tablet_mode_controller()->SetEnabledForTest(true);
   Shell::Get()->screen_orientation_controller()->SetLockToRotation(
       display::Display::ROTATE_90);
-  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   EXPECT_EQ(display::Display::ROTATE_90, display.rotation());
   EXPECT_LT(display.size().width(), display.size().height());
   tablet_mode_controller()->SetEnabledForTest(false);
-  display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display = display::Screen::Get()->GetPrimaryDisplay();
   // Sanity checks.
   EXPECT_EQ(display::Display::ROTATE_0, display.rotation());
   EXPECT_GT(display.size().width(), display.size().height());
@@ -825,36 +895,76 @@ TEST_F(TabletModeControllerTest, RecordLidAngle) {
 // lid of the chromebook will not enter tablet mode.
 TEST_F(TabletModeControllerTest, CannotEnterTabletModeWithExternalMouse) {
   OpenLidToAngle(300.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(30.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Open lid to tent mode. Verify that tablet mode is not started.
   OpenLidToAngle(300.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
-// Tests that when we plug in a external mouse the device will
+// Tests that when we plug in an external mouse the device will
 // leave tablet mode.
 TEST_F(TabletModeControllerTest, LeaveTabletModeWhenExternalMouseConnected) {
   // Start in tablet mode.
   OpenLidToAngle(300.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Attach external mouse and verify that tablet mode has ended, but events are
   // still blocked because the keyboard is still facing the bottom.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Verify that after unplugging the mouse, tablet mode will resume.
   DetachAllMice();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+}
+
+// Tests that when we connect a bluetooth mouse the device will
+// leave tablet mode.
+TEST_F(TabletModeControllerTest, LeaveTabletModeWhenBluetoothMouseConnected) {
+  // Start in tablet mode.
+  OpenLidToAngle(300.0f);
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  // Connect bluetooth mouse and verify that tablet mode has ended, but events
+  // are still blocked because the keyboard is still facing the bottom.
+  AttachBluetoothMouse();
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  // Verify that after disconnecting mouse, tablet mode will resume.
+  ClearBluetoothAdapter();
+  DetachAllMice();
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+}
+
+// Tests that when bluetooth mouse is connected device will not start
+// in tablet mode.
+TEST_F(TabletModeControllerTest, StartInLaptopModeWhenBluetoothMouseConnected) {
+  // Have a bluetooth mouse connected in the beginning.
+  AttachBluetoothMouse();
+
+  // Start with device folded back and verify that it is not in tablet mode and
+  // events are blocked
+  OpenLidToAngle(300.0f);
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  // Verify that after unplugging the mouse, tablet mode will resume.
+  ClearBluetoothAdapter();
+  DetachAllMice();
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 }
 
@@ -863,18 +973,18 @@ TEST_F(TabletModeControllerTest, LeaveTabletModeWhenExternalMouseConnected) {
 TEST_F(TabletModeControllerTest, ExternalMouseInLaptopMode) {
   // Start in laptop mode.
   OpenLidToAngle(30.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Attach external mouse doesn't change the mode.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Now remove the external mouse. It still should maintain in laptop mode
   // because its lid angle is still in laptop mode.
   DetachAllMice();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 }
 
@@ -903,11 +1013,11 @@ TEST_F(TabletModeControllerTest, ExternalMouseInDockedMode) {
 
   // Enter tablet position.
   SetTabletMode(true);
-  ASSERT_FALSE(IsTabletModeStarted());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Detach the external mouse, and still expect clamshell mode.
   DetachAllMice();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Test that the ui mode and input event blocker should be both correctly
@@ -915,42 +1025,42 @@ TEST_F(TabletModeControllerTest, ExternalMouseInDockedMode) {
 TEST_F(TabletModeControllerTest, ExternalMouseWithLidAngleTest) {
   // Start in laptop mode.
   OpenLidToAngle(30.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Attach external mouse doesn't change the mode.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Now flip the device to tablet mode angle. The device should stay in
   // clamshell mode because of the external mouse. But the internal input events
   // should be blocked.
   OpenLidToAngle(300.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Remove the external mouse should enter tablet mode now. The internal input
   // events should still be blocked.
   DetachAllMice();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Attach the mouse again should enter clamshell mode again.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Flip the device back to clamshell angle. The device should stay in
   // clamshell mode and the internal input events should not be blocked.
   OpenLidToAngle(30.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Now remove the mouse. The device should stay in clamshell mode and the
   // internal events should not be blocked.
   DetachAllMice();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 }
 
@@ -960,42 +1070,42 @@ TEST_F(TabletModeControllerTest, ExternalMouseWithLidAngleTest) {
 TEST_F(TabletModeControllerTest, ExternalMouseWithTabletModeSwithTest) {
   // Start in laptop mode.
   SetTabletMode(false);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Attach external mouse doesn't change the mode.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Now set tablet mode switch value to true. The device should stay in
   // clamshell mode because of the external mouse. But the internal input events
   // should be blocked.
   SetTabletMode(true);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Remove the external mouse should enter tablet mode now. The internal input
   // events should still be blocked.
   DetachAllMice();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Attach the mouse again should enter clamshell mode again.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Set tablet mode switch value to false. The device should stay in
   // clamshell mode and the internal input events should not be blocked.
   SetTabletMode(false);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Now remove the mouse. The device should stay in clamshell mode and the
   // internal events should not be blocked.
   DetachAllMice();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 }
 
@@ -1006,24 +1116,24 @@ TEST_F(TabletModeControllerTest, ExternalTouchPadTest) {
   DetachAllTouchpads();
 
   OpenLidToAngle(300.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(30.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Attach a external touchpad.
   AttachExternalTouchpad();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Open lid to tent mode. Verify that tablet mode is not started.
   OpenLidToAngle(300.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Verify that after unplugging the touchpad, tablet mode will resume.
   DetachAllTouchpads();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 }
 
@@ -1033,7 +1143,7 @@ TEST_F(TabletModeControllerTest, InternalKeyboardMouseInDockedModeTest) {
   const int64_t internal_display_id =
       display::test::DisplayManagerTestApi(display_manager())
           .SetFirstDisplayAsInternalDisplay();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   // Input devices events are unblocked.
   EXPECT_FALSE(AreEventsBlocked());
   EXPECT_TRUE(display::HasInternalDisplay());
@@ -1042,7 +1152,7 @@ TEST_F(TabletModeControllerTest, InternalKeyboardMouseInDockedModeTest) {
 
   // Enter tablet mode first.
   SetTabletMode(true);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 
   // Deactivate internal display to simulate Docked Mode.
@@ -1058,14 +1168,14 @@ TEST_F(TabletModeControllerTest, InternalKeyboardMouseInDockedModeTest) {
   display_manager()->OnNativeDisplaysChanged(secondary_only);
   ASSERT_FALSE(display_manager()->IsActiveDisplayId(internal_display_id));
   // We should now enter in clamshell mode when the device is docked.
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Exiting docked state should enter tablet mode again.
   display_manager()->OnNativeDisplaysChanged(all_displays);
   display::test::DisplayManagerTestApi(display_manager())
       .SetFirstDisplayAsInternalDisplay();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_TRUE(AreEventsBlocked());
 }
 
@@ -1080,6 +1190,76 @@ TEST_F(TabletModeControllerTest, ShowAndHideMouseCursorTest) {
 
   tablet_mode_controller()->SetEnabledForTest(false);
   EXPECT_TRUE(cursor_manager->IsCursorVisible());
+}
+
+TEST_F(TabletModeControllerTest, StartingKioskSwitchesToUiClamshellMode) {
+  SetTabletMode(true);
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  // When the device is in the physical tablet state, the internal events should
+  // still be blocked even when the device is in the UI clamshell mode.
+  EXPECT_TRUE(AreEventsBlocked());
+}
+
+TEST_F(TabletModeControllerTest, KioskBlocksEnteringTabletMode) {
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(AreEventsBlocked());
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  SetTabletMode(true);
+
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+  EXPECT_TRUE(IsInPhysicalTabletState());
+}
+
+TEST_F(TabletModeControllerTest,
+       KioskModeExplicitlyHidesCursorWhenEnteringClamshellMode) {
+  SetTabletMode(true);
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+  Shell::Get()->cursor_manager()->ShowCursor();
+  EXPECT_TRUE(Shell::Get()->cursor_manager()->IsCursorVisible());
+
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  EXPECT_FALSE(Shell::Get()->cursor_manager()->IsCursorVisible());
+}
+
+TEST_F(TabletModeControllerTest, DeviceReactsOnLidChangeInKioskSession) {
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(AreEventsBlocked());
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  // Opening the lid to 270 degrees should start tablet mode if not blocked.
+  OpenLidToAngle(270.0f);
+
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+  EXPECT_TRUE(IsInPhysicalTabletState());
+}
+
+TEST_F(TabletModeControllerTest,
+       KioskBlocksUiTabletModeEvenAfterMultipleLidChange) {
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(AreEventsBlocked());
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  OpenLidToAngle(270.0f);
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
+
+  OpenLidToAngle(30.0f);
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_FALSE(AreEventsBlocked());
+
+  OpenLidToAngle(270.0f);
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+  EXPECT_TRUE(AreEventsBlocked());
 }
 
 class TabletModeControllerForceTabletModeTest
@@ -1107,21 +1287,30 @@ class TabletModeControllerForceTabletModeTest
 // mode to off will not turn off tablet mode. The internal keyboard and trackpad
 // should still work as it makes testing easier.
 TEST_F(TabletModeControllerForceTabletModeTest, ForceTabletModeTest) {
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   OpenLidToAngle(30.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   SetTabletMode(false);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   // Tests that attaching a external mouse will not change the mode.
   AttachExternalMouse();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
+}
+
+TEST_F(TabletModeControllerForceTabletModeTest,
+       ForceTabletModeOverridenInKiosk) {
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+
+  SimulateKioskMode(user_manager::UserType::kKioskChromeApp);
+
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 TEST_F(TabletModeControllerForceTabletModeTest, DockInForcedTabletMode) {
@@ -1138,7 +1327,7 @@ TEST_F(TabletModeControllerForceTabletModeTest, DockInForcedTabletMode) {
   ASSERT_FALSE(display_manager()->IsActiveDisplayId(internal_display_id));
 
   // Still expect tablet mode.
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 class TabletModeControllerForceClamshellModeTest
@@ -1165,15 +1354,15 @@ class TabletModeControllerForceClamshellModeTest
 // mode is on initially, and cannot be changed by lid angle or manually entering
 // tablet mode.
 TEST_F(TabletModeControllerForceClamshellModeTest, ForceClamshellModeTest) {
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   OpenLidToAngle(200.0f);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 
   SetTabletMode(true);
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   EXPECT_FALSE(AreEventsBlocked());
 }
 
@@ -1184,7 +1373,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveNoSnap) {
   tablet_mode_controller()->SetEnabledForTest(true);
   EXPECT_EQ(SplitViewController::State::kNoSnap,
             split_view_controller()->state());
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
 }
 
 // Test that if the active window is snapped on the left before tablet mode,
@@ -1195,7 +1384,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveLeftSnap) {
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(window.get(), window_util::GetActiveWindow());
 }
 
@@ -1207,7 +1396,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveRightSnap) {
   EXPECT_EQ(SplitViewController::State::kSecondarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(window.get(), split_view_controller()->secondary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(window.get(), window_util::GetActiveWindow());
 }
 
@@ -1224,7 +1413,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveLeftSnapPreviousRightSnap) {
             split_view_controller()->state());
   EXPECT_EQ(left_window.get(), split_view_controller()->primary_window());
   EXPECT_EQ(right_window.get(), split_view_controller()->secondary_window());
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(left_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1241,7 +1430,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveRightSnapPreviousLeftSnap) {
             split_view_controller()->state());
   EXPECT_EQ(left_window.get(), split_view_controller()->primary_window());
   EXPECT_EQ(right_window.get(), split_view_controller()->secondary_window());
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(right_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1258,7 +1447,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveTransientChildOfLeftSnap) {
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(parent.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(child.get(), window_util::GetActiveWindow());
 }
 
@@ -1276,7 +1465,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveAppListPreviousLeftSnap) {
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(window.get(), window_util::GetActiveWindow());
 }
 
@@ -1288,6 +1477,10 @@ TEST_F(TabletModeControllerTest, StartTabletActiveDraggedPreviousLeftSnap) {
   std::unique_ptr<aura::Window> snapped_window =
       CreateDesktopWindowSnappedLeft();
   wm::ActivateWindow(dragged_window.get());
+
+  GetEventGenerator()->PressTouch(
+      dragged_window->GetBoundsInScreen().CenterPoint());
+
   ASSERT_TRUE(Shell::Get()->toplevel_window_event_handler()->AttemptToStartDrag(
       dragged_window.get(), gfx::PointF(), HTCAPTION,
       ToplevelWindowEventHandler::EndClosure()));
@@ -1295,7 +1488,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveDraggedPreviousLeftSnap) {
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(snapped_window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(snapped_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1314,7 +1507,7 @@ TEST_F(TabletModeControllerTest,
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(snapped_window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(snapped_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1330,6 +1523,9 @@ TEST_F(TabletModeControllerTest,
   ::wm::AddTransientChild(parent.get(), child.get());
   wm::ActivateWindow(child.get());
   wm::ActivateWindow(dragged_window.get());
+
+  GetEventGenerator()->PressTouch(
+      dragged_window->GetBoundsInScreen().CenterPoint());
   ASSERT_TRUE(Shell::Get()->toplevel_window_event_handler()->AttemptToStartDrag(
       dragged_window.get(), gfx::PointF(), HTCAPTION,
       ToplevelWindowEventHandler::EndClosure()));
@@ -1337,7 +1533,7 @@ TEST_F(TabletModeControllerTest,
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(parent.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(parent.get(), window_util::GetActiveWindow());
 }
 
@@ -1347,8 +1543,8 @@ TEST_F(TabletModeControllerTest,
 TEST_F(TabletModeControllerTest,
        StartTabletActiveDesktopOnlyLeftSnapPreviousRightSnap) {
   aura::test::TestWindowDelegate left_window_delegate;
-  std::unique_ptr<aura::Window> left_window(CreateTestWindowInShellWithDelegate(
-      &left_window_delegate, /*id=*/-1, /*bounds=*/gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> left_window(CreateTestWindowInShell(
+      {.delegate = &left_window_delegate, .bounds = {400, 400}}));
   const gfx::Rect display_bounds =
       screen_util::GetDisplayWorkAreaBoundsInScreenForActiveDeskContainer(
           left_window.get());
@@ -1356,7 +1552,8 @@ TEST_F(TabletModeControllerTest,
       gfx::Size(display_bounds.width() * 0.67f, display_bounds.height()));
   WindowState* left_window_state = WindowState::Get(left_window.get());
   ASSERT_TRUE(left_window_state->CanSnap());
-  ASSERT_FALSE(split_view_controller()->CanSnapWindow(left_window.get()));
+  ASSERT_FALSE(split_view_controller()->CanSnapWindow(
+      left_window.get(), chromeos::kDefaultSnapRatio));
   WindowSnapWMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_PRIMARY);
   left_window_state->OnWMEvent(&snap_to_left);
   std::unique_ptr<aura::Window> right_window =
@@ -1365,7 +1562,7 @@ TEST_F(TabletModeControllerTest,
   tablet_mode_controller()->SetEnabledForTest(true);
   EXPECT_EQ(SplitViewController::State::kNoSnap,
             split_view_controller()->state());
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
 }
 
 // Test that if before tablet mode, the active window is snapped on the right
@@ -1375,10 +1572,8 @@ TEST_F(TabletModeControllerTest,
        StartTabletActiveDesktopOnlyRightSnapPreviousLeftSnap) {
   std::unique_ptr<aura::Window> left_window = CreateDesktopWindowSnappedLeft();
   aura::test::TestWindowDelegate right_window_delegate;
-  std::unique_ptr<aura::Window> right_window(
-      CreateTestWindowInShellWithDelegate(
-          &right_window_delegate, /*id=*/-1,
-          /*bounds=*/gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> right_window(CreateTestWindowInShell(
+      {.delegate = &right_window_delegate, .bounds = {400, 400}}));
   const gfx::Rect display_bounds =
       screen_util::GetDisplayWorkAreaBoundsInScreenForActiveDeskContainer(
           right_window.get());
@@ -1386,14 +1581,15 @@ TEST_F(TabletModeControllerTest,
       gfx::Size(display_bounds.width() * 0.67f, display_bounds.height()));
   WindowState* right_window_state = WindowState::Get(right_window.get());
   ASSERT_TRUE(right_window_state->CanSnap());
-  ASSERT_FALSE(split_view_controller()->CanSnapWindow(right_window.get()));
+  ASSERT_FALSE(split_view_controller()->CanSnapWindow(
+      right_window.get(), chromeos::kDefaultSnapRatio));
   WindowSnapWMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_SECONDARY);
   right_window_state->OnWMEvent(&snap_to_right);
   wm::ActivateWindow(right_window.get());
   tablet_mode_controller()->SetEnabledForTest(true);
   EXPECT_EQ(SplitViewController::State::kNoSnap,
             split_view_controller()->state());
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
 }
 
 // Test that if before tablet mode, the active window is snapped on the left and
@@ -1404,10 +1600,8 @@ TEST_F(TabletModeControllerTest,
        StartTabletActiveLeftSnapPreviousDesktopOnlyRightSnap) {
   std::unique_ptr<aura::Window> left_window = CreateDesktopWindowSnappedLeft();
   aura::test::TestWindowDelegate right_window_delegate;
-  std::unique_ptr<aura::Window> right_window(
-      CreateTestWindowInShellWithDelegate(
-          &right_window_delegate, /*id=*/-1,
-          /*bounds=*/gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> right_window(CreateTestWindowInShell(
+      {.delegate = &right_window_delegate, .bounds = {400, 400}}));
   const gfx::Rect display_bounds =
       screen_util::GetDisplayWorkAreaBoundsInScreenForActiveDeskContainer(
           right_window.get());
@@ -1415,7 +1609,8 @@ TEST_F(TabletModeControllerTest,
       gfx::Size(display_bounds.width() * 0.67f, display_bounds.height()));
   WindowState* right_window_state = WindowState::Get(right_window.get());
   ASSERT_TRUE(right_window_state->CanSnap());
-  ASSERT_FALSE(split_view_controller()->CanSnapWindow(right_window.get()));
+  ASSERT_FALSE(split_view_controller()->CanSnapWindow(
+      right_window.get(), chromeos::kDefaultSnapRatio));
   WindowSnapWMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_SECONDARY);
   right_window_state->OnWMEvent(&snap_to_right);
   ASSERT_EQ(left_window.get(), window_util::GetActiveWindow());
@@ -1423,7 +1618,7 @@ TEST_F(TabletModeControllerTest,
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(left_window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(left_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1434,8 +1629,8 @@ TEST_F(TabletModeControllerTest,
 TEST_F(TabletModeControllerTest,
        StartTabletActiveRightSnapPreviousDesktopOnlyLeftSnap) {
   aura::test::TestWindowDelegate left_window_delegate;
-  std::unique_ptr<aura::Window> left_window(CreateTestWindowInShellWithDelegate(
-      &left_window_delegate, /*id=*/-1, /*bounds=*/gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> left_window(CreateTestWindowInShell(
+      {.delegate = &left_window_delegate, .bounds = {400, 400}}));
   const gfx::Rect display_bounds =
       screen_util::GetDisplayWorkAreaBoundsInScreenForActiveDeskContainer(
           left_window.get());
@@ -1443,7 +1638,8 @@ TEST_F(TabletModeControllerTest,
       gfx::Size(display_bounds.width() * 0.67f, display_bounds.height()));
   WindowState* left_window_state = WindowState::Get(left_window.get());
   ASSERT_TRUE(left_window_state->CanSnap());
-  ASSERT_FALSE(split_view_controller()->CanSnapWindow(left_window.get()));
+  ASSERT_FALSE(split_view_controller()->CanSnapWindow(
+      left_window.get(), chromeos::kDefaultSnapRatio));
   WindowSnapWMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_PRIMARY);
   left_window_state->OnWMEvent(&snap_to_left);
   std::unique_ptr<aura::Window> right_window =
@@ -1453,7 +1649,7 @@ TEST_F(TabletModeControllerTest,
   EXPECT_EQ(SplitViewController::State::kSecondarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(right_window.get(), split_view_controller()->secondary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(right_window.get(), window_util::GetActiveWindow());
 }
 
@@ -1481,7 +1677,7 @@ TEST_F(TabletModeControllerTest, StartTabletActiveLeftSnapPreviousLeftSnap) {
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(window1.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(window1.get(), window_util::GetActiveWindow());
 }
 
@@ -1499,7 +1695,7 @@ TEST_F(TabletModeControllerTest,
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
   EXPECT_EQ(window.get(), split_view_controller()->primary_window());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
   EXPECT_EQ(window.get(), window_util::GetActiveWindow());
 }
 
@@ -1545,7 +1741,7 @@ TEST_F(TabletModeControllerTest,
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(SplitViewController::State::kPrimarySnapped,
             split_view_controller()->state());
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+  EXPECT_TRUE(OverviewController::Get()->InOverviewSession());
 }
 
 // Test that tablet mode controller does not respond to the input device changes
@@ -1553,30 +1749,30 @@ TEST_F(TabletModeControllerTest,
 TEST_F(TabletModeControllerTest, DoNotObserverInputDeviceChangeDuringSuspend) {
   // Start in tablet mode.
   OpenLidToAngle(300.0f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   // Attaching external mouse will end tablet mode.
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Now suspend the device. Input device changes are no longer be observed.
   SuspendImminent();
   DetachAllMice();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 
   // Resume the device. Input device changes are being observed again.
   SuspendDone(base::TimeDelta::Max());
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   AttachExternalMouse();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // Tests that we get no animation smoothness histograms when entering or
 // exiting tablet mode with no windows.
 TEST_F(TabletModeControllerTest, TabletModeTransitionHistogramsNotLogged) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   base::HistogramTester histogram_tester;
 
   SCOPED_TRACE("No window");
@@ -1589,11 +1785,11 @@ TEST_F(TabletModeControllerTest, TabletModeTransitionHistogramsNotLogged) {
   histogram_tester.ExpectTotalCount(kExitHistogram, 0);
 }
 
-// TODO(crbug.com/1382272): Flaky on Linux Chromium OS ASan LSan Tests.
+// TODO(crbug.com/40877227): Flaky on Linux Chromium OS ASan LSan Tests.
 TEST_F(TabletModeControllerTest,
        DISABLED_TabletModeTransitionHistogramsLogged) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   base::HistogramTester histogram_tester;
   // We have two windows, which both animated into tablet mode, but we only
   // observe and record smoothness for one.
@@ -1624,8 +1820,8 @@ TEST_F(TabletModeControllerTest,
 }
 
 TEST_F(TabletModeControllerTest, TabletModeTransitionHistogramsSnappedWindows) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   base::HistogramTester histogram_tester;
 
   // Snap a window on either side.
@@ -1648,8 +1844,8 @@ TEST_F(TabletModeControllerTest, TabletModeTransitionHistogramsSnappedWindows) {
 TEST_F(TabletModeControllerTest, CloseWindowDuringEnterAnimation) {
   std::unique_ptr<aura::Window> window = CreateAppWindow(gfx::Rect(250, 100));
 
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   tablet_mode_controller()->SetEnabledForTest(true);
   window.reset();
@@ -1661,8 +1857,8 @@ TEST_F(TabletModeControllerTest, CloseWindowDuringExitAnimation) {
   std::unique_ptr<aura::Window> window = CreateAppWindow(gfx::Rect(250, 100));
   tablet_mode_controller()->SetEnabledForTest(true);
 
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   tablet_mode_controller()->SetEnabledForTest(false);
   window.reset();
@@ -1717,7 +1913,7 @@ TEST_F(TabletModeControllerTest, TabletModeUsageMetricsTest) {
 // maximized or snapped.
 TEST_F(TabletModeControllerTest, ShouldAutoHideTitlebars) {
   tablet_mode_controller()->SetEnabledForTest(true);
-  TestWidgetBuilder widget_builder;
+  views::test::TestWidgetBuilder widget_builder;
   std::unique_ptr<views::Widget> widget =
       widget_builder.SetWidgetType(views::Widget::InitParams::TYPE_WINDOW)
           .SetBounds(gfx::Rect(500, 300))
@@ -1758,7 +1954,7 @@ TEST_F(TabletModeControllerTest, ShouldAutoHideTitlebars) {
 // Tests that `ShouldAutoHideTitlebars()` should not crash if the window state
 // does not exist (crbug.com/1267778).
 TEST_F(TabletModeControllerTest, ShouldAutoHideTitlebarsNoWindowState) {
-  TestWidgetBuilder widget_builder;
+  views::test::TestWidgetBuilder widget_builder;
   // Create a window type control which is an example of a window that its
   // state does not exist to test that `ShouldAutoHideTitlebars()` works.
   std::unique_ptr<views::Widget> widget =
@@ -1786,8 +1982,13 @@ class TabletModeControllerOnDeviceTest : public TabletModeControllerTest {
 
   void SetUp() override {
     // We need to simulate the real on-device behavior for some tests.
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kForceSystemCompositorMode);
+    scoped_version_info_ =
+        std::make_unique<base::test::ScopedChromeOSVersionInfo>(
+            kLsbReleaseContent, base::Time::Now());
+    // TODO(oshima): Disable native events instead of adding offset.
+    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+        ::switches::kHostWindowBounds, "800x600");
+
     TabletModeControllerTest::SetUp();
     // PowerManagerClient callback is a posted task.
     base::RunLoop().RunUntilIdle();
@@ -1796,25 +1997,28 @@ class TabletModeControllerOnDeviceTest : public TabletModeControllerTest {
     TriggerBaseAndLidUpdate(gfx::Vector3dF(kMeanGravityFloat, 0.0f, 0.0f),
                             gfx::Vector3dF(kMeanGravityFloat, 0.0f, 0.0f));
   }
+
+ private:
+  std::unique_ptr<base::test::ScopedChromeOSVersionInfo> scoped_version_info_;
 };
 
 // Tests that if there is no internal and external input device, the device
 // should stay in tablet mode.
 TEST_F(TabletModeControllerOnDeviceTest, DoNotEnterClamshellWithNoInputDevice) {
   AttachExternalTouchpad();
-  EXPECT_FALSE(IsTabletModeStarted());
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   DetachAllTouchpads();
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   SetTabletMode(false);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   SetTabletMode(true);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   OpenLidToAngle(30.f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
   OpenLidToAngle(300.f);
-  EXPECT_TRUE(IsTabletModeStarted());
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 }
 
 class TabletModeControllerScreenshotTest : public TabletModeControllerTest {
@@ -1834,8 +2038,9 @@ class TabletModeControllerScreenshotTest : public TabletModeControllerTest {
     for (int id :
          {kShellWindowId_FloatContainer, kShellWindowId_ShelfContainer}) {
       const aura::Window* container = root->GetChildById(id);
-      if (container->layer()->opacity() != 1.0f)
+      if (container->layer()->opacity() != 1.0f) {
         return false;
+      }
     }
     return true;
   }
@@ -1855,8 +2060,8 @@ class TabletModeControllerScreenshotTest : public TabletModeControllerTest {
     // enter/exit. With a NONZERO_DURATION, occasionally they may trigger too
     // quickly in tests so use NORMAL_DURATION.
     scoped_animation_duration_scale_mode_ =
-        std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-            ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+        std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+            gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
     // PowerManagerClient callback is a posted task.
     base::RunLoop().RunUntilIdle();
@@ -1869,7 +2074,7 @@ class TabletModeControllerScreenshotTest : public TabletModeControllerTest {
   }
 
  private:
-  std::unique_ptr<ui::ScopedAnimationDurationScaleMode>
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode>
       scoped_animation_duration_scale_mode_;
 };
 
@@ -1973,7 +2178,7 @@ class LayerStartAnimationWaiter : public ui::LayerAnimationObserver {
       ui::LayerAnimationSequence* sequence) override {}
 
  private:
-  ui::LayerAnimator* animator_;
+  raw_ptr<ui::LayerAnimator> animator_;
   base::RunLoop run_loop_;
 };
 
@@ -2053,24 +2258,9 @@ TEST_F(TabletModeControllerScreenshotTest, TransientChildTypeWindow) {
   EXPECT_TRUE(IsShelfAndFloatContainerOpaque());
 }
 
-class TabletModeControllerFloatScreenshotTest
-    : public TabletModeControllerScreenshotTest {
- public:
-  TabletModeControllerFloatScreenshotTest()
-      : scoped_feature_list_(chromeos::wm::features::kFloatWindow) {}
-  TabletModeControllerFloatScreenshotTest(
-      const TabletModeControllerFloatScreenshotTest&) = delete;
-  TabletModeControllerFloatScreenshotTest& operator=(
-      const TabletModeControllerFloatScreenshotTest&) = delete;
-  ~TabletModeControllerFloatScreenshotTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 // Floated window in tablet mode only covers a portion of the work area, so we
 // don't take a screenshot.
-TEST_F(TabletModeControllerFloatScreenshotTest, NoScreenshotFloatedWindow) {
+TEST_F(TabletModeControllerScreenshotTest, NoScreenshotFloatedWindow) {
   auto window = CreateAppWindow();
   PressAndReleaseKey(ui::VKEY_F, ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN);
   ASSERT_TRUE(WindowState::Get(window.get())->IsFloated());

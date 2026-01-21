@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_observer.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
@@ -24,7 +25,7 @@ class ImmersiveModeControllerChromeos
       public FullscreenObserver,
       public aura::WindowObserver {
  public:
-  ImmersiveModeControllerChromeos();
+  explicit ImmersiveModeControllerChromeos(BrowserWindowInterface* browser);
 
   ImmersiveModeControllerChromeos(const ImmersiveModeControllerChromeos&) =
       delete;
@@ -39,7 +40,6 @@ class ImmersiveModeControllerChromeos
   void Init(BrowserView* browser_view) override;
   void SetEnabled(bool enabled) override;
   bool IsEnabled() const override;
-  bool ShouldHideTopViews() const override;
   bool IsRevealed() const override;
   int GetTopContainerVerticalOffset(
       const gfx::Size& top_container_size) const override;
@@ -48,7 +48,9 @@ class ImmersiveModeControllerChromeos
   void OnFindBarVisibleBoundsChanged(
       const gfx::Rect& new_visible_bounds_in_screen) override;
   bool ShouldStayImmersiveAfterExitingFullscreen() override;
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+  int GetMinimumContentOffset() const override;
+  int GetExtraInfobarOffset() const override;
+  void OnContentFullscreenChanged(bool is_content_fullscreen) override;
 
  private:
   // Updates the browser root view's layout including window caption controls.

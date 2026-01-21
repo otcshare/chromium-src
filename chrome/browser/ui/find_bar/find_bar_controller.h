@@ -6,17 +6,16 @@
 #define CHROME_BROWSER_UI_FIND_BAR_FIND_BAR_CONTROLLER_H_
 
 #include <memory>
-#include <string>
+#include <string_view>
 
-#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/find_bar/find_bar_platform_helper.h"
+#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "components/find_in_page/find_result_observer.h"
 #include "components/find_in_page/find_tab_helper.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 
 class FindBar;
+class FindBarPlatformHelper;
 
 namespace content {
 class WebContents;
@@ -31,7 +30,7 @@ enum class SelectionAction;
 enum class ResultAction;
 }  // namespace find_in_page
 
-class FindBarController : public content::NotificationObserver,
+class FindBarController : public content::WebContentsObserver,
                           public find_in_page::FindResultObserver {
  public:
   explicit FindBarController(std::unique_ptr<FindBar> find_bar);
@@ -54,18 +53,14 @@ class FindBarController : public content::NotificationObserver,
   void EndFindSession(find_in_page::SelectionAction selection_action,
                       find_in_page::ResultAction result_action);
 
-  // Accessor for the attached WebContents.
-  content::WebContents* web_contents() const { return web_contents_; }
-
   // Changes the WebContents that this FindBar is attached to. This
   // occurs when the user switches tabs in the Browser window. |contents| can be
   // NULL.
   void ChangeWebContents(content::WebContents* contents);
 
-  // Overridden from content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // content::WebContentsObserver:
+  void NavigationEntryCommitted(
+      const content::LoadCommittedDetails& load_details) override;
 
   // find_in_page::FindResultObserver:
   void OnFindEmptyText(content::WebContents* web_contents) override;
@@ -74,13 +69,19 @@ class FindBarController : public content::NotificationObserver,
   void SetText(std::u16string text);
 
   // Called when the find text is updated in response to a user action.
-  void OnUserChangedFindText(std::u16string text);
+  void OnUserChangedFindText(std::u16string_view text);
+
+  // Will be called only from `Browser`.
+  void HandleActiveTabChanged(content::WebContents* new_contents);
 
   FindBar* find_bar() const { return find_bar_.get(); }
 
+  // Updates the page action, which the find bar appears anchored to.
+  void UpdatePageAction();
+
  private:
   // Sends an update to the find bar with the tab contents' current result. The
-  // web_contents_ must be non-NULL before this call. This handles
+  // `web_contents()` must be non-NULL before this call. This handles
   // de-flickering in addition to just calling the update function.
   void UpdateFindBarForCurrentResult();
 
@@ -94,12 +95,7 @@ class FindBarController : public content::NotificationObserver,
   // Gets the text that is selected in the current tab, or an empty string.
   std::u16string GetSelectedText();
 
-  content::NotificationRegistrar registrar_;
-
   std::unique_ptr<FindBar> find_bar_;
-
-  // The WebContents we are currently associated with.  Can be NULL.
-  raw_ptr<content::WebContents> web_contents_ = nullptr;
 
   std::unique_ptr<FindBarPlatformHelper> find_bar_platform_helper_;
 
@@ -111,6 +107,10 @@ class FindBarController : public content::NotificationObserver,
   // If the user has changed the text in the find bar. Used to avoid
   // replacing user-entered text with selection.
   bool has_user_modified_text_ = false;
+
+  // Manages the highlight on the page action.
+  std::optional<page_actions::ScopedPageActionActivity>
+      find_bar_page_action_activity_ = std::nullopt;
 
   base::ScopedObservation<find_in_page::FindTabHelper,
                           find_in_page::FindResultObserver>

@@ -4,18 +4,17 @@
 
 #include "chrome/browser/ui/startup/credential_provider_signin_info_fetcher_win.h"
 
-#include "chrome/browser/ui/startup/credential_provider_signin_dialog_win_test_data.h"
-
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "chrome/browser/ui/startup/credential_provider_signin_dialog_win_test_data.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher_impl.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"

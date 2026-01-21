@@ -6,6 +6,7 @@
 #define COMPONENTS_CLIENT_HINTS_BROWSER_CLIENT_HINTS_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -49,9 +50,6 @@ class ClientHints : public KeyedService,
   bool IsJavaScriptAllowed(const GURL& url,
                            content::RenderFrameHost* parent_rfh) override;
 
-  bool AreThirdPartyCookiesBlocked(const GURL& url,
-                                   content::RenderFrameHost* rfh) override;
-
   blink::UserAgentMetadata GetUserAgentMetadata() override;
 
   void PersistClientHints(const url::Origin& primary_origin,
@@ -68,6 +66,10 @@ class ClientHints : public KeyedService,
       const gfx::Size& viewport_size) override;
   gfx::Size GetMostRecentMainFrameViewportSize() override;
 
+  void ForceEmptyViewportSizeForTesting(
+      bool should_force_empty_viewport_size) override;
+  bool ShouldForceEmptyViewportSize() override;
+
  private:
   raw_ptr<content::BrowserContext> context_ = nullptr;
   raw_ptr<network::NetworkQualityTracker> network_quality_tracker_ = nullptr;
@@ -75,6 +77,7 @@ class ClientHints : public KeyedService,
   scoped_refptr<content_settings::CookieSettings> cookie_settings_;
   std::vector<network::mojom::WebClientHintsType> additional_hints_;
   raw_ptr<PrefService> pref_service_;
+  bool should_force_empty_viewport_size_{false};
 
   // This stores the viewport size of the most recent visible main frame tree
   // node. This value is only used when the viewport size cannot be directly

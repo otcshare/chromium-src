@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_FRAME_TREE_DATA_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_FRAME_TREE_DATA_H_
 
 #include <stdint.h>
 
+#include <array>
+#include <optional>
+
+#include "base/byte_count.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_data_utils.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/origin.h"
 
@@ -27,16 +31,16 @@ namespace heavy_ad_thresholds {
 // PageLoad.Clients.Ads.Bytes.AdFrames.PerFrame.Network histogram on mobile and
 // desktop. Additive noise is added to this threshold, see
 // AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider.
-const int kMaxNetworkBytes = 4.0 * 1024 * 1024;
+inline constexpr base::ByteCount kMaxNetworkBytes = base::MiB(4);
 
 // CPU thresholds are selected from AdFrameLoad UKM, and are intended to target
 // 1 in 1000 ad iframes combined, with each threshold responsible for roughly
 // half of those intervention. Maximum number of milliseconds of CPU use allowed
 // to be used by a frame.
-const int kMaxCpuTime = 60 * 1000;
+inline constexpr int kMaxCpuTime = 60 * 1000;
 
 // Maximum percentage of CPU utilization over a 30 second window allowed.
-const int kMaxPeakWindowedPercent = 50;
+inline constexpr int kMaxPeakWindowedPercent = 50;
 
 }  // namespace heavy_ad_thresholds
 
@@ -121,14 +125,12 @@ enum class MediaStatus {
 // typically used to capture an ad creative. It stores frame-specific
 // information (such as size, activation status, and origin), which is typically
 // specific to the top frame in the tree.
-class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
+class FrameTreeData final {
  public:
-  using FrameTreeNodeId = PageLoadMetricsObserver::FrameTreeNodeId;
-
   // |root_frame_tree_node_id| is the root frame of the subtree that
   // FrameTreeData stores information for.
-  explicit FrameTreeData(FrameTreeNodeId root_frame_tree_node_id,
-                         int heavy_ad_network_threshold_noise);
+  explicit FrameTreeData(content::FrameTreeNodeId root_frame_tree_node_id,
+                         base::ByteCount heavy_ad_network_threshold_noise);
   ~FrameTreeData();
 
   // Processes a resource load in frame, calling ResourceLoadAggregator.
@@ -138,7 +140,8 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
 
   // Adjusts ad bytes after call to ProcessResourceLoadInFrame, calling
   // ResourceLoadAggregator.
-  void AdjustAdBytes(int64_t unaccounted_ad_bytes, ResourceMimeType mime_type);
+  void AdjustAdBytes(base::ByteCount unaccounted_ad_bytes,
+                     ResourceMimeType mime_type);
 
   // Updates the cpu usage of this frame.
   void UpdateCpuUsage(base::TimeTicks update_time, base::TimeDelta update);
@@ -159,9 +162,6 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
   // frame.
   void MaybeUpdateFrameDepth(content::RenderFrameHost* render_frame_host);
 
-  // Updates the recorded bytes of memory used.
-  void UpdateMemoryUsage(int64_t delta_bytes);
-
   // Returns whether the frame should be recorded for UKMs and UMA histograms.
   // A frame should be recorded if it has non-zero bytes or non-zero CPU usage
   // (or both).
@@ -180,7 +180,7 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
     return cpu_usage_[static_cast<size_t>(status)];
   }
 
-  FrameTreeNodeId root_frame_tree_node_id() const {
+  content::FrameTreeNodeId root_frame_tree_node_id() const {
     return root_frame_tree_node_id_;
   }
 
@@ -190,22 +190,23 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
     return creative_origin_status_;
   }
 
-  absl::optional<base::TimeDelta> first_eligible_to_paint() const {
+  std::optional<base::TimeDelta> first_eligible_to_paint() const {
     return first_eligible_to_paint_;
   }
 
-  absl::optional<base::TimeDelta> earliest_first_contentful_paint() const {
+  std::optional<base::TimeDelta> earliest_first_contentful_paint() const {
     return earliest_first_contentful_paint_;
   }
+
+  std::optional<base::TimeDelta> earliest_fcp_since_top_nav_start() const {
+    return earliest_fcp_since_top_nav_start_;
+  }
+
   // Sets the size of the frame and updates its visibility state.
   void SetFrameSize(gfx::Size frame_size_);
 
   // Sets the display state of the frame and updates its visibility state.
   void SetDisplayState(bool is_display_none);
-
-  uint64_t v8_max_memory_bytes_used() const {
-    return memory_usage_.max_bytes_used();
-  }
 
   UserActivationStatus user_activation_status() const {
     return user_activation_status_;
@@ -233,11 +234,14 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
     creative_origin_status_ = creative_origin_status;
   }
 
-  void SetFirstEligibleToPaint(absl::optional<base::TimeDelta> time_stamp);
+  void SetFirstEligibleToPaint(std::optional<base::TimeDelta> time_stamp);
 
   // Returns whether a new FCP is set.
   bool SetEarliestFirstContentfulPaint(
-      absl::optional<base::TimeDelta> time_stamp);
+      std::optional<base::TimeDelta> time_stamp);
+
+  void SetEarliestFirstContentfulPaintSinceTopNavStart(
+      base::TimeDelta time_since_top_nav_start);
 
   HeavyAdStatus heavy_ad_status_with_noise() const {
     return heavy_ad_status_with_noise_;
@@ -259,6 +263,10 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
     return peak_cpu_.peak_windowed_percent();
   }
 
+  base::WeakPtr<FrameTreeData> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   // Updates whether or not this frame meets the criteria for visibility.
   void UpdateFrameVisibility();
@@ -274,7 +282,7 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
 
   // The frame tree node id of root frame of the subtree that |this| is
   // tracking information for.
-  const FrameTreeNodeId root_frame_tree_node_id_;
+  const content::FrameTreeNodeId root_frame_tree_node_id_;
 
   // TODO(ericrobinson): May want to move this to ResourceLoadAggregator.
   // Number of resources loaded by the frame (both complete and incomplete).
@@ -308,11 +316,15 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
   // as being eligible to paint, or null if all frames are currently
   // render-throttled and there hasn't been a first paint. Note that this
   // timestamp and the implied throttling status are best-effort.
-  absl::optional<base::TimeDelta> first_eligible_to_paint_;
+  std::optional<base::TimeDelta> first_eligible_to_paint_;
 
   // The smallest FCP seen for any any frame in this ad frame tree, if a
   // frame has painted.
-  absl::optional<base::TimeDelta> earliest_first_contentful_paint_;
+  std::optional<base::TimeDelta> earliest_first_contentful_paint_;
+
+  // The smallest FCP time seen for any frame in this ad frame tree less the
+  // time from top-frame navigation start.
+  std::optional<base::TimeDelta> earliest_fcp_since_top_nav_start_;
 
   // Indicates whether or not this frame met the criteria for the heavy ad
   // intervention with additional additive noise for the
@@ -331,15 +343,16 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
   HeavyAdAction heavy_ad_action_ = HeavyAdAction::kNone;
 
   // Number of bytes of noise that should be added to the network threshold.
-  const int heavy_ad_network_threshold_noise_;
+  const base::ByteCount heavy_ad_network_threshold_noise_;
 
   // Whether or not the frame has been activated (clicked on).
   UserActivationStatus user_activation_status_ =
       UserActivationStatus::kNoActivation;
 
   // The cpu usage for both the activated and unactivated time periods.
-  base::TimeDelta
-      cpu_usage_[static_cast<size_t>(UserActivationStatus::kMaxValue) + 1];
+  std::array<base::TimeDelta,
+             static_cast<size_t>(UserActivationStatus::kMaxValue) + 1>
+      cpu_usage_;
 
   // The resource data for this frame tree.
   ResourceLoadAggregator resource_data_;
@@ -347,8 +360,8 @@ class FrameTreeData : public base::SupportsWeakPtr<FrameTreeData> {
   // The peak cpu usage for this frame tree.
   PeakCpuAggregator peak_cpu_;
 
-  // Memory usage by v8 in this ad frame tree.
-  MemoryUsageAggregator memory_usage_;
+  // Owns weak pointers to the instance.
+  base::WeakPtrFactory<FrameTreeData> weak_ptr_factory_{this};
 };
 
 }  // namespace page_load_metrics

@@ -4,21 +4,19 @@
 
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "content/public/browser/notification_source.h"
 #include "google_apis/gaia/gaia_constants.h"
 
 namespace policy {
@@ -52,16 +50,16 @@ UserCloudPolicyTokenForwarder::UserCloudPolicyTokenForwarder(
   if (manager_->core()->service()->IsInitializationComplete()) {
     StartRequest();
   } else {
-    manager_->core()->service()->AddObserver(this);
+    cloud_policy_service_observation_.Observe(manager_->core()->service());
   }
 }
 
-UserCloudPolicyTokenForwarder::~UserCloudPolicyTokenForwarder() {}
+UserCloudPolicyTokenForwarder::~UserCloudPolicyTokenForwarder() = default;
 
 void UserCloudPolicyTokenForwarder::Shutdown() {
   access_token_fetcher_.reset();
   refresh_oauth_token_timer_.reset();
-  manager_->core()->service()->RemoveObserver(this);
+  cloud_policy_service_observation_.Reset();
 }
 
 void UserCloudPolicyTokenForwarder::
@@ -77,11 +75,11 @@ bool UserCloudPolicyTokenForwarder::IsTokenRefreshScheduledForTesting() const {
   return refresh_oauth_token_timer_ && refresh_oauth_token_timer_->IsRunning();
 }
 
-absl::optional<base::TimeDelta>
+std::optional<base::TimeDelta>
 UserCloudPolicyTokenForwarder::GetTokenRefreshDelayForTesting() const {
   return IsTokenRefreshScheduledForTesting()
              ? refresh_oauth_token_timer_->GetCurrentDelay()
-             : absl::optional<base::TimeDelta>();
+             : std::optional<base::TimeDelta>();
 }
 
 void UserCloudPolicyTokenForwarder::OverrideTimeForTesting(
@@ -98,18 +96,15 @@ void UserCloudPolicyTokenForwarder::OverrideTimeForTesting(
 
 void UserCloudPolicyTokenForwarder::StartRequest() {
   refresh_oauth_token_timer_->Stop();
+
   // TODO(mnissler): Once a better way to reconfirm whether a user is on the
   // login allowlist is available there is no reason to fetch the OAuth2 token
   // for regular user here if the client is already registered. If it is not
   // recurring token fetch for child user check and bail out here.
-  signin::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-
   // NOTE: The primary account may not be available yet.
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          "policy_token_forwarder", identity_manager_, scopes,
+          signin::OAuthConsumerId::kPolicyTokenForwarder, identity_manager_,
           base::BindOnce(
               &UserCloudPolicyTokenForwarder::OnAccessTokenFetchCompleted,
               base::Unretained(this)),

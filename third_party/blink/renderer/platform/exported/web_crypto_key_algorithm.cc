@@ -93,16 +93,14 @@ WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateHmac(
 WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateRsaHashed(
     WebCryptoAlgorithmId id,
     unsigned modulus_length_bits,
-    const unsigned char* public_exponent,
-    unsigned public_exponent_size,
+    base::span<const unsigned char> public_exponent,
     WebCryptoAlgorithmId hash) {
   // FIXME: Verify that id is an RSA algorithm which expects a hash
   if (!WebCryptoAlgorithm::IsHash(hash))
     return WebCryptoKeyAlgorithm();
   return WebCryptoKeyAlgorithm(
       id, std::make_unique<WebCryptoRsaHashedKeyAlgorithmParams>(
-              modulus_length_bits, public_exponent, public_exponent_size,
-              CreateHash(hash)));
+              modulus_length_bits, public_exponent, CreateHash(hash)));
 }
 
 WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateEc(
@@ -113,6 +111,11 @@ WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateEc(
 }
 
 WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateEd25519(
+    WebCryptoAlgorithmId id) {
+  return WebCryptoKeyAlgorithm(id, nullptr);
+}
+
+WebCryptoKeyAlgorithm WebCryptoKeyAlgorithm::CreateX25519(
     WebCryptoAlgorithmId id) {
   return WebCryptoKeyAlgorithm(id, nullptr);
 }

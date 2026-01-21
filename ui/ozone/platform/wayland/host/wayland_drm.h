@@ -17,7 +17,6 @@
 struct wl_drm;
 
 namespace gfx {
-enum class BufferFormat;
 class Size;
 }  // namespace gfx
 
@@ -60,9 +59,9 @@ class WaylandDrm : public wl::GlobalObjectRegistrar<WaylandDrm> {
                     uint32_t planes_count,
                     wl::OnRequestBufferCallback callback);
 
-  // Returns supported buffer formats received from the Wayland compositor.
-  wl::BufferFormatsWithModifiersMap supported_buffer_formats() const {
-    return supported_buffer_formats_;
+  // Returns supported formats received from the Wayland compositor.
+  wl::SharedImageFormatsWithModifiersMap supported_formats() const {
+    return supported_formats_;
   }
 
   // Says if a new buffer can be created immediately.
@@ -79,18 +78,16 @@ class WaylandDrm : public wl::GlobalObjectRegistrar<WaylandDrm> {
   void Authenticate(const char* drm_device_path);
 
   // Completes the drm device authentication.
-  void DrmDeviceAuthenticated(struct wl_drm* wl_drm);
+  void DrmDeviceAuthenticated(wl_drm* wl_drm);
 
   // Checks the capabilities of the drm device.
   void HandleCapabilities(uint32_t value);
 
-  // wl_drm_listener:
-  static void Device(void* data,
-                     struct wl_drm* wl_drm,
-                     const char* drm_device_path);
-  static void Format(void* data, struct wl_drm* wl_drm, uint32_t format);
-  static void Authenticated(void* data, struct wl_drm* wl_drm);
-  static void Capabilities(void* data, struct wl_drm* wl_drm, uint32_t value);
+  // wl_drm_listener callbacks:
+  static void OnDevice(void* data, wl_drm* drm, const char* drm_device_path);
+  static void OnFormat(void* data, wl_drm* drm, uint32_t format);
+  static void OnAuthenticated(void* data, wl_drm* drm);
+  static void OnCapabilities(void* data, wl_drm* drm, uint32_t value);
 
   // Holds pointer to the wl_drm Wayland factory.
   wl::Object<wl_drm> wl_drm_;
@@ -98,10 +95,10 @@ class WaylandDrm : public wl::GlobalObjectRegistrar<WaylandDrm> {
   // Non-owned.
   const raw_ptr<WaylandConnection> connection_;
 
-  // Holds supported DRM formats translated to gfx::BufferFormat. Note that
+  // Holds supported DRM formats translated to viz::SharedImageFormat. Note that
   // |wl_drm| neither announces modifiers nor allows to create buffers with
   // modifiers. Thus, they are always empty.
-  wl::BufferFormatsWithModifiersMap supported_buffer_formats_;
+  wl::SharedImageFormatsWithModifiersMap supported_formats_;
 
   // Says if the drm device passed by the Wayland compositor authenticates this
   // client.

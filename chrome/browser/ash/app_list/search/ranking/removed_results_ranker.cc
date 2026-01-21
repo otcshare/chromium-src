@@ -4,10 +4,11 @@
 
 #include "chrome/browser/ash/app_list/search/ranking/removed_results_ranker.h"
 
+#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_keyed_service.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_keyed_service_factory.h"
 #include "chrome/browser/ash/app_list/search/types.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 
 namespace app_list {
@@ -28,6 +29,10 @@ RemovedResultsRanker::RemovedResultsRanker(Profile* profile)
           base::PassKey<RemovedResultsRanker>())) {
   DCHECK(profile_);
   DCHECK(proto_);
+
+  on_init_subscription_ = proto_->RegisterOnInit(
+      base::BindOnce(&RemovedResultsRanker::OnRemovedResultsProtoInit,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 RemovedResultsRanker::~RemovedResultsRanker() = default;
@@ -41,19 +46,20 @@ void RemovedResultsRanker::UpdateResultRanks(ResultsMap& results,
   // Otherwise, filter any results whose IDs have been recorded as for removal.
   const bool proto_initialized = initialized();
   for (const auto& result : it->second) {
-    if (!proto_initialized) {
-      result->scoring().filter =
-          result->display_type() != DisplayType::kRecentApps;
-    } else {
-      result->scoring().filter =
-          (*proto_)->removed_ids().contains(result->id());
+    if (!proto_initialized &&
+        result->display_type() != DisplayType::kRecentApps) {
+      result->scoring().set_filtered(true);
+    }
+    if (proto_initialized && (*proto_)->removed_ids().contains(result->id())) {
+      result->scoring().set_filtered(true);
     }
   }
 }
 
 void RemovedResultsRanker::Remove(ChromeSearchResult* result) {
-  if (!initialized())
+  if (!initialized()) {
     return;
+  }
 
   if (IsFileSuggestion(*result)) {
     // If `result` is a file suggestion, remove it through the suggestion
@@ -71,8 +77,16 @@ void RemovedResultsRanker::Remove(ChromeSearchResult* result) {
   }
 }
 
-FileSuggestKeyedService* RemovedResultsRanker::GetFileSuggestKeyedService() {
-  return FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile_);
+void RemovedResultsRanker::OnRemovedResultsProtoInit() {
+  // Record `proto_` size in KB.
+  base::UmaHistogramMemoryKB("Apps.AppList.RemovedResultsProto.SizeInKB",
+                             (*proto_)->ByteSizeLong() / 1000);
+}
+
+ash::FileSuggestKeyedService*
+RemovedResultsRanker::GetFileSuggestKeyedService() {
+  return ash::FileSuggestKeyedServiceFactory::GetInstance()->GetService(
+      profile_);
 }
 
 }  // namespace app_list

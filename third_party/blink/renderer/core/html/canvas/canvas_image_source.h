@@ -29,9 +29,8 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
+#include "third_party/blink/renderer/platform/graphics/flush_reason.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
-#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "ui/gfx/geometry/size_f.h"
 
@@ -42,29 +41,18 @@ class Image;
 enum SourceImageStatus {
   kNormalSourceImageStatus,
   kUndecodableSourceImageStatus,     // Image element with a 'broken' image
-  kZeroSizeCanvasSourceImageStatus,  // Source is a canvas with width or heigh
+  kZeroSizeCanvasSourceImageStatus,  // Source is a canvas with width or height
                                      // of zero
   kZeroSizeImageSourceStatus,    // Image element with width or height of zero
   kIncompleteSourceImageStatus,  // Image element with no source media
   kInvalidSourceImageStatus,
+  kLayersOpenInCanvasSource,  // Source is a canvas with open layers
 };
-
-// This is the helper function to get the canvas image with a
-// specific alpha op requirements.
-// This function will be a no op if the image is opaque, or if the image was
-// already in the preferred state (if it was premultiplied and it is requested
-// to be premultiplied or if it was unpremultiplied and it is requested to be
-// unpremultiplied).
-scoped_refptr<StaticBitmapImage> GetImageWithAlphaDisposition(
-    scoped_refptr<StaticBitmapImage>&&,
-    const AlphaDisposition);
 
 class CORE_EXPORT CanvasImageSource {
  public:
-  virtual scoped_refptr<Image> GetSourceImageForCanvas(
-      SourceImageStatus*,
-      const gfx::SizeF&,
-      const AlphaDisposition alpha_disposition = kPremultiplyAlpha) = 0;
+  virtual scoped_refptr<Image> GetSourceImageForCanvas(SourceImageStatus*,
+                                                       const gfx::SizeF&) = 0;
 
   // IMPORTANT: Result must be independent of whether destinationContext is
   // already tainted because this function may be used to determine whether
@@ -72,11 +60,9 @@ class CORE_EXPORT CanvasImageSource {
   // another canvas, which may not be already tainted.
   virtual bool WouldTaintOrigin() const = 0;
 
-  virtual bool IsCSSImageValue() const { return false; }
   virtual bool IsImageElement() const { return false; }
   virtual bool IsVideoElement() const { return false; }
   virtual bool IsCanvasElement() const { return false; }
-  virtual bool IsSVGSource() const { return false; }
   virtual bool IsImageBitmap() const { return false; }
   virtual bool IsOffscreenCanvas() const { return false; }
   virtual bool IsVideoFrame() const { return false; }

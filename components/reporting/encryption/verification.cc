@@ -25,31 +25,32 @@ constexpr uint8_t kDevVerificationKey[kKeySize] = {
 }  // namespace
 
 // static
-base::StringPiece SignatureVerifier::VerificationKey() {
-  return base::StringPiece(reinterpret_cast<const char*>(kProdVerificationKey),
-                           kKeySize);
+std::string_view SignatureVerifier::VerificationKey() {
+  return std::string_view(reinterpret_cast<const char*>(kProdVerificationKey),
+                          kKeySize);
 }
 
 // static
-base::StringPiece SignatureVerifier::VerificationKeyDev() {
-  return base::StringPiece(reinterpret_cast<const char*>(kDevVerificationKey),
-                           kKeySize);
+std::string_view SignatureVerifier::VerificationKeyDev() {
+  return std::string_view(reinterpret_cast<const char*>(kDevVerificationKey),
+                          kKeySize);
 }
 
-SignatureVerifier::SignatureVerifier(base::StringPiece verification_public_key)
+SignatureVerifier::SignatureVerifier(std::string_view verification_public_key)
     : verification_public_key_(verification_public_key) {}
 
-Status SignatureVerifier::Verify(base::StringPiece message,
-                                 base::StringPiece signature) {
+Status SignatureVerifier::Verify(std::string_view message,
+                                 std::string_view signature) {
   if (signature.size() != kSignatureSize) {
     return Status{error::FAILED_PRECONDITION, "Wrong signature size"};
   }
   if (verification_public_key_.size() != kKeySize) {
     return Status{error::FAILED_PRECONDITION, "Wrong public key size"};
   }
-  if (!VerifySignature(
-          reinterpret_cast<const uint8_t*>(verification_public_key_.data()),
-          message, reinterpret_cast<const uint8_t*>(signature.data()))) {
+  base::span<const uint8_t, kKeySize> key(
+      base::as_byte_span(verification_public_key_));
+  base::span<const uint8_t, kSignatureSize> sig(base::as_byte_span(signature));
+  if (!VerifySignature(key, message, sig)) {
     return Status{error::INVALID_ARGUMENT, "Verification failed"};
   }
 

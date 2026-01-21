@@ -4,14 +4,15 @@
 
 #include "chrome/browser/lifetime/browser_close_manager.h"
 
+#include <algorithm>
 #include <iterator>
+#include <ranges>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
-#include "chrome/browser/background/background_mode_manager.h"
+#include "chrome/browser/background/extensions/background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
@@ -21,6 +22,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -31,6 +34,10 @@
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #endif
 
+#if BUILDFLAG(ENABLE_GLIC)
+#include "chrome/browser/background/glic/glic_background_mode_manager.h"
+#endif
+
 namespace {
 
 // Navigates a browser window for |profile|, creating one if necessary, to the
@@ -39,7 +46,7 @@ void ShowInProgressDownloads(Profile* profile) {
   DownloadCoreService* download_core_service =
       DownloadCoreServiceFactory::GetForBrowserContext(profile);
   if (download_core_service &&
-      download_core_service->NonMaliciousDownloadCount() > 0) {
+      download_core_service->BlockingShutdownCount() > 0) {
     chrome::ScopedTabbedBrowserDisplayer displayer(profile);
     chrome::ShowDownloads(displayer.browser());
   }
@@ -47,13 +54,12 @@ void ShowInProgressDownloads(Profile* profile) {
 
 }  // namespace
 
-BrowserCloseManager::BrowserCloseManager() : current_browser_(nullptr) {
-}
-
-BrowserCloseManager::~BrowserCloseManager() {
-}
+BrowserCloseManager::BrowserCloseManager() : current_browser_(nullptr) {}
+BrowserCloseManager::~BrowserCloseManager() = default;
 
 void BrowserCloseManager::StartClosingBrowsers() {
+  close_timer_.emplace();
+
   // If the session is ending or a silent exit was requested, skip straight to
   // closing the browsers without waiting for beforeunload dialogs.
   if (browser_shutdown::ShouldIgnoreUnloadHandlers()) {
@@ -66,9 +72,20 @@ void BrowserCloseManager::StartClosingBrowsers() {
 }
 
 void BrowserCloseManager::CancelBrowserClose() {
+  // This is the abort endpoint. Record the metric if we haven't already.
+  if (close_timer_) {
+    base::UmaHistogramMediumTimes("Shutdown.Time.BrowserCloseManager.Canceled",
+                                  close_timer_->Elapsed());
+    close_timer_.reset();
+  }
+
   browser_shutdown::SetTryingToQuit(false);
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->ResetTryToCloseWindow();
+  GlobalBrowserCollection::GetInstance()->ForEach(
+      [](BrowserWindowInterface* browser) {
+        browser->GetBrowserForMigrationOnly()->ResetTryToCloseWindow();
+        return true;
+      },
+      BrowserCollection::Order::kCreation);
 }
 
 void BrowserCloseManager::TryToCloseBrowsers() {
@@ -77,27 +94,46 @@ void BrowserCloseManager::TryToCloseBrowsers() {
   // stop closing. CallBeforeUnloadHandlers prompts the user and calls
   // OnBrowserReportCloseable with the result. If the user confirms the close,
   // this will trigger TryToCloseBrowsers to try again.
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->TryToCloseWindow(
-            false, base::BindRepeating(
-                       &BrowserCloseManager::OnBrowserReportCloseable, this))) {
-      current_browser_ = browser;
-      return;
-    }
+  bool should_stop = false;
+  GlobalBrowserCollection::GetInstance()->ForEach(
+      [this, &should_stop](BrowserWindowInterface* browser) {
+        if (browser->GetBrowserForMigrationOnly()->TryToCloseWindow(
+                false,
+                base::BindRepeating(
+                    &BrowserCloseManager::OnBrowserReportCloseable, this))) {
+          current_browser_ = browser;
+          should_stop = true;
+        }
+        return !should_stop;
+      },
+      BrowserCollection::Order::kCreation);
+  if (should_stop) {
+    return;
   }
+
+  // This is the success endpoint. If we get here, all beforeunload handlers
+  // have been processed successfully.
+  if (close_timer_) {
+    base::UmaHistogramMediumTimes("Shutdown.Time.BrowserCloseManager.Confirmed",
+                                  close_timer_->Elapsed());
+    close_timer_.reset();
+  }
+
   CheckForDownloadsInProgress();
 }
 
 void BrowserCloseManager::OnBrowserReportCloseable(bool proceed) {
-  if (!current_browser_)
+  if (!current_browser_) {
     return;
+  }
 
   current_browser_ = nullptr;
 
-  if (proceed)
+  if (proceed) {
     TryToCloseBrowsers();
-  else
+  } else {
     CancelBrowserClose();
+  }
 }
 
 void BrowserCloseManager::CheckForDownloadsInProgress() {
@@ -105,8 +141,7 @@ void BrowserCloseManager::CheckForDownloadsInProgress() {
   // Mac has its own in-progress downloads prompt in app_controller_mac.mm.
   CloseBrowsers();
 #else
-  int download_count =
-      DownloadCoreService::NonMaliciousDownloadCountAllProfiles();
+  int download_count = DownloadCoreService::BlockingShutdownCountAllProfiles();
   if (download_count == 0) {
     CloseBrowsers();
     return;
@@ -121,16 +156,19 @@ void BrowserCloseManager::CheckForDownloadsInProgress() {
 void BrowserCloseManager::ConfirmCloseWithPendingDownloads(
     int download_count,
     base::OnceCallback<void(bool)> callback) {
-  Browser* browser = BrowserList::GetInstance()->GetLastActive();
-  if (browser == nullptr) {
+  BrowserWindowInterface* const bwi =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+  if (!bwi) {
     // Background may call CloseAllBrowsers() with no Browsers. In this
     // case immediately continue with shutting down.
     std::move(callback).Run(/* proceed= */ true);
     return;
   }
-  browser->window()->ConfirmBrowserCloseWithPendingDownloads(
-      download_count, Browser::DownloadCloseType::kBrowserShutdown,
-      std::move(callback));
+  bwi->GetBrowserForMigrationOnly()
+      ->window()
+      ->ConfirmBrowserCloseWithPendingDownloads(
+          download_count, Browser::DownloadCloseType::kBrowserShutdown,
+          std::move(callback));
 }
 
 void BrowserCloseManager::OnReportDownloadsCancellable(bool proceed) {
@@ -147,8 +185,9 @@ void BrowserCloseManager::OnReportDownloadsCancellable(bool proceed) {
   for (Profile* profile : profiles) {
     ShowInProgressDownloads(profile);
     std::vector<Profile*> otr_profiles = profile->GetAllOffTheRecordProfiles();
-    for (Profile* otr : otr_profiles)
+    for (Profile* otr : otr_profiles) {
       ShowInProgressDownloads(otr);
+    }
   }
 }
 
@@ -158,43 +197,52 @@ void BrowserCloseManager::CloseBrowsers() {
   // exit can restore all browsers open before exiting.
   ProfileManager::ShutdownSessionServices();
 #endif
+#if BUILDFLAG(ENABLE_BACKGROUND_MODE)
   if (!browser_shutdown::IsTryingToQuit()) {
     BackgroundModeManager* background_mode_manager =
         g_browser_process->background_mode_manager();
-    if (background_mode_manager)
+    if (background_mode_manager) {
       background_mode_manager->SuspendBackgroundMode();
-  }
-
-  // Make a copy of the BrowserList to simplify the case where we need to
-  // destroy a Browser during the loop.
-  std::vector<Browser*> browser_list_copy;
-  base::ranges::copy(*BrowserList::GetInstance(),
-                     std::back_inserter(browser_list_copy));
-
-  bool ignore_unload_handlers = browser_shutdown::ShouldIgnoreUnloadHandlers();
-
-  for (auto* browser : browser_list_copy) {
-    browser->window()->Close();
-    if (ignore_unload_handlers) {
-      // This path is hit during logoff/power-down. In this case we won't get
-      // a final message and so we force the browser to be deleted.
-      // Close doesn't immediately destroy the browser
-      // (Browser::TabStripEmpty() uses invoke later) but when we're ending the
-      // session we need to make sure the browser is destroyed now. So, invoke
-      // DestroyBrowser to make sure the browser is deleted and cleanup can
-      // happen.
-      while (browser->tab_strip_model()->count())
-        browser->tab_strip_model()->DetachAndDeleteWebContentsAt(0);
-      browser->window()->DestroyBrowser();
-      // Destroying the browser should have removed it from the browser list.
-      DCHECK(!base::Contains(*BrowserList::GetInstance(), browser));
     }
   }
+#endif
+
+#if BUILDFLAG(ENABLE_GLIC)
+  auto* glic_background_mode_manager =
+      glic::GlicBackgroundModeManager::GetInstance();
+  if (glic_background_mode_manager) {
+    glic_background_mode_manager->ExitBackgroundMode();
+  }
+#endif
+
+  ForEachCurrentAndNewBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser_window) {
+        bool ignore_unload_handlers =
+            browser_shutdown::ShouldIgnoreUnloadHandlers();
+
+        Browser* const browser = browser_window->GetBrowserForMigrationOnly();
+        browser->set_force_skip_warning_user_on_close(ignore_unload_handlers);
+        browser_window->GetWindow()->Close();
+
+        if (ignore_unload_handlers) {
+          // This path is hit during logoff/power-down. It could be the case
+          // that there are some tabs which would have prevented the browser
+          // from closing (Ex: A form with an open dialog asking for permission
+          // to leave the current site). Since we are attempting to end the
+          // session, we will force skip these warnings and manually close all
+          // the tabs to make sure the browser is destroyed and cleanup can
+          // happen.
+          browser_window->GetTabStripModel()->CloseAllTabs();
+          browser->SynchronouslyDestroyBrowser();
+        }
+        return true;
+      });
 
 #if BUILDFLAG(ENABLE_CHROME_NOTIFICATIONS)
   NotificationUIManager* notification_manager =
       g_browser_process->notification_ui_manager();
-  if (notification_manager)
+  if (notification_manager) {
     notification_manager->CancelAll();
+  }
 #endif
 }

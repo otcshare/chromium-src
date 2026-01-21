@@ -6,14 +6,15 @@
 
 #include <memory>
 #include <set>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/observer_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -231,7 +232,7 @@ base::Value::Dict NetExportFileWriter::GetState() const {
   base::Value::Dict dict;
   dict.Set("file", base::UTF16ToUTF8(log_path_.LossyDisplayName()));
 
-  base::StringPiece state_string;
+  std::string_view state_string;
   switch (state_) {
     case STATE_UNINITIALIZED:
       state_string = "UNINITIALIZED";
@@ -280,6 +281,9 @@ void NetExportFileWriter::GetFilePathToCompletedLog(
 
 std::string NetExportFileWriter::CaptureModeToString(
     net::NetLogCaptureMode capture_mode) {
+  if (capture_mode == net::NetLogCaptureMode::kHeavilyRedacted) {
+    return "HEAVILY_REDACTED";
+  }
   if (capture_mode == net::NetLogCaptureMode::kDefault)
     return "STRIP_PRIVATE_DATA";
   if (capture_mode == net::NetLogCaptureMode::kIncludeSensitive)
@@ -287,7 +291,6 @@ std::string NetExportFileWriter::CaptureModeToString(
   if (capture_mode == net::NetLogCaptureMode::kEverything)
     return "LOG_BYTES";
   NOTREACHED();
-  return "STRIP_PRIVATE_DATA";
 }
 
 net::NetLogCaptureMode NetExportFileWriter::CaptureModeFromString(
@@ -299,7 +302,6 @@ net::NetLogCaptureMode NetExportFileWriter::CaptureModeFromString(
   if (capture_mode_string == "LOG_BYTES")
     return net::NetLogCaptureMode::kEverything;
   NOTREACHED();
-  return net::NetLogCaptureMode::kDefault;
 }
 
 void NetExportFileWriter::SetDefaultLogBaseDirectoryGetterForTest(

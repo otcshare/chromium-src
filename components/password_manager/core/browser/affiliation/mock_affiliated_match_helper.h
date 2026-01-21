@@ -16,10 +16,21 @@
 
 namespace password_manager {
 
+// TODO(crbug.com/40263853) Delete this class. Class should not be derived from
+// the production class.
 class MockAffiliatedMatchHelper : public AffiliatedMatchHelper {
  public:
+  // This struct mirrors the corresponding affiliation and branding information
+  // related fields from PasswordForm.
+  struct AffiliationAndBrandingInformation {
+    std::string affiliated_web_realm;
+    std::string app_display_name;
+    GURL app_icon_url;
+  };
+
   MockAffiliatedMatchHelper();
-  explicit MockAffiliatedMatchHelper(AffiliationService* affiliation_service);
+  explicit MockAffiliatedMatchHelper(
+      affiliations::AffiliationService* affiliation_service);
 
   MockAffiliatedMatchHelper(const MockAffiliatedMatchHelper&) = delete;
   MockAffiliatedMatchHelper& operator=(const MockAffiliatedMatchHelper&) =
@@ -30,18 +41,42 @@ class MockAffiliatedMatchHelper : public AffiliatedMatchHelper {
   // Expects GetAffiliatedAndroidAndWebRealms() to be called with the
   // |expected_observed_form|, and will cause the result callback supplied to
   // GetAffiliatedAndroidAndWebRealms() to be invoked with |results_to_return|.
-  void ExpectCallToGetAffiliatedAndroidRealms(
+  void ExpectCallToGetAffiliatedAndGrouped(
       const PasswordFormDigest& expected_observed_form,
-      const std::vector<std::string>& results_to_return);
+      std::vector<std::string> affiliated_realms,
+      std::vector<std::string> grouped_realms = {},
+      bool repeatedly = false);
+
+  // Expects GetGroup() to be called with the
+  // |expected_observed_form|, and will cause the result callback supplied to
+  // GetGroup() to be invoked with
+  // |results_to_return|.
+  void ExpectCallToGetGroup(const PasswordFormDigest& expected_observed_form,
+                            const std::vector<std::string>& results_to_return);
+
+  void ExpectCallToInjectAffiliationAndBrandingInformation(
+      const std::vector<AffiliationAndBrandingInformation>& results_to_inject);
 
  private:
   MOCK_METHOD(std::vector<std::string>,
               OnGetAffiliatedAndroidRealmsCalled,
               (const PasswordFormDigest&));
 
-  void GetAffiliatedAndroidAndWebRealms(
+  MOCK_METHOD(std::vector<std::string>,
+              OnGetGroup,
+              (const PasswordFormDigest&));
+
+  MOCK_METHOD(std::vector<AffiliationAndBrandingInformation>,
+              OnInjectAffiliationAndBrandingInformationCalled,
+              ());
+
+  void GetAffiliatedAndGroupedRealms(
       const PasswordFormDigest& observed_form,
       AffiliatedRealmsCallback result_callback) override;
+
+  void InjectAffiliationAndBrandingInformation(
+      LoginsResult forms,
+      base::OnceCallback<void(LoginsResultOrError)> result_callback) override;
 };
 
 }  // namespace password_manager

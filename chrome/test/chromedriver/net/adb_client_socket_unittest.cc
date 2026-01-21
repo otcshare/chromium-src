@@ -6,8 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/memory/raw_ptr.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_span.h"
 #include "base/run_loop.h"
 #include "base/test/gtest_util.h"
 #include "base/test/mock_callback.h"
@@ -16,11 +18,8 @@
 
 class MockSocket : public net::MockClientSocket {
  public:
-  int return_values_length;
-  raw_ptr<std::string> return_values_array;
-  MockSocket(std::string* return_values_array, int return_values_length)
+  explicit MockSocket(base::span<std::string> return_values_array)
       : MockClientSocket(net::NetLogWithSource()),
-        return_values_length(return_values_length),
         return_values_array(return_values_array) {}
 
   MockSocket() : MockClientSocket(net::NetLogWithSource()) {}
@@ -46,22 +45,23 @@ class MockSocket : public net::MockClientSocket {
   }
 
   int ReadHelper(net::IOBuffer* buf, int buf_len) {
-    if (return_values_length) {
-      int chunk_length = return_values_array[0].length();
-      if (chunk_length > buf_len) {
-        strncpy(buf->data(), return_values_array[0].data(), buf_len);
-        return_values_array[0] = return_values_array[0].substr(buf_len);
-        return buf_len;
-      }
-      strncpy(buf->data(), return_values_array[0].data(), chunk_length);
-      return_values_length--;
-      return_values_array++;
-      if (chunk_length == 0) {
-        return net::ERR_IO_PENDING;
-      }
-      return chunk_length;
+    if (return_values_array.empty()) {
+      return 0;
     }
-    return 0;
+    int chunk_length = return_values_array.front().length();
+    if (chunk_length > buf_len) {
+      UNSAFE_TODO(
+          strncpy(buf->data(), return_values_array.front().data(), buf_len));
+      return_values_array.front() = return_values_array.front().substr(buf_len);
+      return buf_len;
+    }
+    UNSAFE_TODO(
+        strncpy(buf->data(), return_values_array.front().data(), chunk_length));
+    return_values_array = return_values_array.subspan<1>();
+    if (chunk_length == 0) {
+      return net::ERR_IO_PENDING;
+    }
+    return chunk_length;
   }
 
   int Write(
@@ -78,6 +78,8 @@ class MockSocket : public net::MockClientSocket {
   }
   bool GetSSLInfo(net::SSLInfo* ssl_info) override { return false; }
   bool WasEverUsed() const override { return false; }
+
+  base::raw_span<std::string> return_values_array;
 };
 
 class AdbClientSocketTest : public testing::Test {
@@ -106,7 +108,7 @@ class AdbClientSocketTest : public testing::Test {
     scoped_refptr<net::GrowableIOBuffer> buffer =
         base::MakeRefCounted<net::GrowableIOBuffer>();
     buffer->SetCapacity(100);
-    strcpy(buffer->data(), data_on_buffer);
+    UNSAFE_TODO(strcpy(buffer->data(), data_on_buffer));
     buffer->set_offset(strlen(data_on_buffer));
 
     adb_socket.ReadUntilEOF(parse_callback.Get(), response_callback.Get(),
@@ -132,12 +134,11 @@ class AdbClientSocketTest : public testing::Test {
                             buffer, error_code);
   }
 
-  void TestReadUntilEOF_Recurse(std::string* chunks,
-                                int number_chunks,
+  void TestReadUntilEOF_Recurse(base::span<std::string> chunks,
                                 std::string expected_result) {
     // 3 is an arbitrary meaningless number in the following call.
     AdbClientSocket adb_socket(3);
-    adb_socket.socket_ = std::make_unique<MockSocket>(chunks, number_chunks);
+    adb_socket.socket_ = std::make_unique<MockSocket>(chunks);
 
     base::MockCallback<AdbClientSocket::ParserCallback> parse_callback;
     EXPECT_CALL(parse_callback, Run(expected_result.c_str())).Times(1);
@@ -177,7 +178,7 @@ class AdbClientSocketTest : public testing::Test {
     int initial_capacity = 100;
     buffer->SetCapacity(initial_capacity);
     if (result > 0) {
-      strncpy(buffer->data(), buffer_data, result);
+      UNSAFE_TODO(strncpy(buffer->data(), buffer_data, result));
     }
     AdbClientSocket::ReadStatusOutput(response_callback.Get(), buffer, result);
   }
@@ -213,21 +214,20 @@ TEST_F(AdbClientSocketTest, ReadUntilEOF_Error) {
   TestReadUntilEOF_Error();
 }
 TEST_F(AdbClientSocketTest, ReadUntilEOF_GrowBuffer) {
-  std::string chunks[7] = {"This", "",     " data",   " should",
-                           "",     " be ", "read in."};
-  TestReadUntilEOF_Recurse(chunks, 7, "This data should be read in.");
+  std::string chunks[] = {"This", "",     " data",   " should",
+                          "",     " be ", "read in."};
+  TestReadUntilEOF_Recurse(chunks, "This data should be read in.");
 }
 TEST_F(AdbClientSocketTest, ReadUntilEOF_EmptyChunks) {
-  std::string chunks[5] = {"", "", "", "", ""};
-  TestReadUntilEOF_Recurse(chunks, 5, "");
+  std::string chunks[] = {"", "", "", "", ""};
+  TestReadUntilEOF_Recurse(chunks, "");
 }
 TEST_F(AdbClientSocketTest, ReadUntilEOF_Empty) {
-  std::string chunks[0] = {};
-  TestReadUntilEOF_Recurse(chunks, 0, "");
+  TestReadUntilEOF_Recurse({}, "");
 }
 TEST_F(AdbClientSocketTest, ReadUntilEOF_EmptyEndingChunk) {
-  std::string chunks[2] = {"yeah", ""};
-  TestReadUntilEOF_Recurse(chunks, 2, "yeah");
+  std::string chunks[] = {"yeah", ""};
+  TestReadUntilEOF_Recurse(chunks, "yeah");
 }
 
 TEST_F(AdbClientSocketTest, ReadStatusOutput_Okay) {

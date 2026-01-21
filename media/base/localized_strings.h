@@ -23,6 +23,15 @@ enum MessageId {
 #if BUILDFLAG(IS_WIN)
   COMMUNICATIONS_AUDIO_DEVICE_NAME,
 #endif
+#if BUILDFLAG(IS_ANDROID)
+  GENERIC_AUDIO_DEVICE_NAME,
+  INTERNAL_SPEAKER_AUDIO_DEVICE_NAME,
+  INTERNAL_MIC_AUDIO_DEVICE_NAME,
+  WIRED_HEADPHONES_AUDIO_DEVICE_NAME,
+  BLUETOOTH_AUDIO_DEVICE_NAME,
+  USB_AUDIO_DEVICE_NAME,
+  HDMI_AUDIO_DEVICE_NAME,
+#endif
 };
 
 // Implementations are expected to convert MessageIds to generated_resources.grd
@@ -33,7 +42,6 @@ using LocalizedStringProvider = std::u16string (*)(MessageId message_id);
 // Initializes the global LocalizedStringProvider function.
 MEDIA_EXPORT void SetLocalizedStringProvider(LocalizedStringProvider func);
 
-#if !BUILDFLAG(IS_IOS)
 // The LocalizedStringProvider has probably not been initialized on iOS. This
 // will give an early compile warning for clients attempting to use it.
 
@@ -42,7 +50,6 @@ MEDIA_EXPORT void SetLocalizedStringProvider(LocalizedStringProvider func);
 // initialized or if the ID is unrecognized.
 MEDIA_EXPORT std::string GetLocalizedStringUTF8(MessageId message_id);
 std::u16string GetLocalizedStringUTF16(MessageId message_id);
-#endif
 
 }  // namespace media
 

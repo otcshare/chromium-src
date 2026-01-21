@@ -7,10 +7,10 @@
 
 #include <string>
 
+#include "base/observer_list.h"
 #include "build/build_config.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/infobars/core/infobar_manager.h"
-#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/text_constants.h"
 
 namespace infobars {
@@ -29,19 +29,22 @@ class ConfirmInfoBarDelegate : public infobars::InfoBarDelegate {
     BUTTON_NONE = 0,
     BUTTON_OK = 1 << 0,
     BUTTON_CANCEL = 1 << 1,
-    BUTTON_EXTRA = 1 << 2,
   };
 
   ConfirmInfoBarDelegate(const ConfirmInfoBarDelegate&) = delete;
   ConfirmInfoBarDelegate& operator=(const ConfirmInfoBarDelegate&) = delete;
   ~ConfirmInfoBarDelegate() override;
 
+  class Observer : public base::CheckedObserver {
+   public:
+    virtual void OnAccept() {}
+    virtual void OnDismiss() {}
+  };
+
   // InfoBarDelegate:
   bool EqualsDelegate(infobars::InfoBarDelegate* delegate) const override;
-  ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate() override;
-
-  // Returns the InfoBar type to be displayed for the InfoBar.
-  InfoBarAutomationType GetInfoBarAutomationType() const override;
+  void InfoBarDismissed() override;
+  const ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate() const override;
 
   // Returns the title string to be displayed for the InfoBar.
   // Defaults to having not title. Currently only used on iOS.
@@ -73,9 +76,13 @@ class ConfirmInfoBarDelegate : public infobars::InfoBarDelegate {
   // returns an empty tooltip.
   virtual std::u16string GetButtonTooltip(InfoBarButton button) const;
 
-  // Returns whether or not the OK button will trigger a UAC elevation prompt on
-  // Windows.
-  virtual bool OKButtonTriggersUACPrompt() const;
+  // Returns true if this specific infobar instance should use the
+  // custom layout to show the link text before the button.
+  virtual bool ShouldShowLinkBeforeButton() const;
+
+  // Returns spacing which is to be used when the link shows before the button
+  // on the infobar.
+  virtual int GetLinkSpacingWhenPositionedBeforeButton() const;
 
 #if BUILDFLAG(IS_IOS)
   // Returns whether or not a tint should be applied to the icon background.
@@ -93,13 +100,14 @@ class ConfirmInfoBarDelegate : public infobars::InfoBarDelegate {
   // in handling this call something triggers the infobar to begin closing.
   virtual bool Cancel();
 
-  // Called when the Extra button is pressed. If this function returns true,
-  // the infobar is then immediately closed. Subclasses MUST NOT return true if
-  // in handling this call something triggers the infobar to begin closing.
-  virtual bool ExtraButtonPressed();
+  void AddObserver(Observer* observer);
+  void RemoveObserver(const Observer* observer);
 
  protected:
   ConfirmInfoBarDelegate();
+
+ private:
+  base::ObserverList<Observer> observers_;
 };
 
 #endif  // COMPONENTS_INFOBARS_CORE_CONFIRM_INFOBAR_DELEGATE_H_

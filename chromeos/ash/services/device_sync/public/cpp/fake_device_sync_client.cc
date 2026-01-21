@@ -100,7 +100,7 @@ multidevice::RemoteDeviceRefList FakeDeviceSyncClient::GetSyncedDevices() {
   return synced_devices_;
 }
 
-absl::optional<multidevice::RemoteDeviceRef>
+std::optional<multidevice::RemoteDeviceRef>
 FakeDeviceSyncClient::GetLocalDeviceMetadata() {
   return local_device_metadata_;
 }
@@ -158,6 +158,15 @@ int FakeDeviceSyncClient::GetForceSyncNowCallbackQueueSize() const {
   return force_sync_now_callback_queue_.size();
 }
 
+int FakeDeviceSyncClient::GetBetterTogetherMetadataStatusCallbackQueueSize()
+    const {
+  return get_better_together_metadata_status_callback_queue_.size();
+}
+
+int FakeDeviceSyncClient::GetGroupPrivateKeyStatusCallbackQueueSize() const {
+  return get_group_private_key_status_callback_queue_.size();
+}
+
 int FakeDeviceSyncClient::GetSetSoftwareFeatureStateInputsQueueSize() const {
   return set_software_feature_state_inputs_queue_.size();
 }
@@ -189,6 +198,21 @@ void FakeDeviceSyncClient::InvokePendingForceSyncNowCallback(bool success) {
   DCHECK(force_sync_now_callback_queue_.size() > 0);
   std::move(force_sync_now_callback_queue_.front()).Run(success);
   force_sync_now_callback_queue_.pop_front();
+}
+
+void FakeDeviceSyncClient::InvokePendingGetBetterTogetherMetadataStatusCallback(
+    BetterTogetherMetadataStatus status) {
+  DCHECK(get_better_together_metadata_status_callback_queue_.size() > 0);
+  std::move(get_better_together_metadata_status_callback_queue_.front())
+      .Run(status);
+  get_better_together_metadata_status_callback_queue_.pop_front();
+}
+
+void FakeDeviceSyncClient::InvokePendingGetGroupPrivateKeyStatusCallback(
+    GroupPrivateKeyStatus status) {
+  DCHECK(get_group_private_key_status_callback_queue_.size() > 0);
+  std::move(get_group_private_key_status_callback_queue_.front()).Run(status);
+  get_group_private_key_status_callback_queue_.pop_front();
 }
 
 void FakeDeviceSyncClient::InvokePendingSetSoftwareFeatureStateCallback(
@@ -225,7 +249,7 @@ void FakeDeviceSyncClient::InvokePendingNotifyDevicesCallback(
 
 void FakeDeviceSyncClient::InvokePendingGetDevicesActivityStatusCallback(
     mojom::NetworkRequestResult result_code,
-    absl::optional<std::vector<mojom::DeviceActivityStatusPtr>>
+    std::optional<std::vector<mojom::DeviceActivityStatusPtr>>
         device_activity_status) {
   DCHECK(get_devices_activity_status_callback_queue_.size() > 0);
   std::move(get_devices_activity_status_callback_queue_.front())

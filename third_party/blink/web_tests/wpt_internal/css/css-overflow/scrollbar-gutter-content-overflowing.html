@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name="fuzzy" content="1;0-60">
 <title>Test that scrollbar-gutter does not clip overflowing content</title>
 <link rel="author" title="Felipe Erias Morandeira" href="mailto:felipeerias@gmail.com"/>
 <link rel="help" href="https://www.w3.org/TR/css-overflow-4/#scollbar-gutter-property"/>
@@ -21,6 +22,9 @@
         margin: 6px;
         border: 1px solid black;
         background-color: #00AA00;
+    }
+    .composited > .container {
+        will-change: transform;
     }
     .container.ltr {
         direction: ltr;
@@ -56,6 +60,20 @@
 </style>
 <body>
     <div class="row">
+        <div class="container ltr">
+            <div class="overflowing"></div>
+            <div class="tall"></div>
+        </div>
+        <div class="container rtl">
+            <div class="overflowing"></div>
+            <div class="tall"></div>
+        </div>
+        <div class="container vertical">
+            <div class="overflowing"></div>
+            <div class="tall"></div>
+        </div>
+    </div>
+    <div class="row composited">
         <div class="container ltr">
             <div class="overflowing"></div>
             <div class="tall"></div>

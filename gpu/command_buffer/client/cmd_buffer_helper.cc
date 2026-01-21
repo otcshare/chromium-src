@@ -9,9 +9,10 @@
 #include <stdint.h>
 
 #include <algorithm>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/memory_dump_manager.h"
@@ -105,14 +106,15 @@ bool CommandBufferHelper::AllocateRingBuffer() {
 void CommandBufferHelper::SetGetBuffer(int32_t id,
                                        scoped_refptr<Buffer> buffer) {
   command_buffer_->SetGetBuffer(id);
+  entries_ = nullptr;
+  total_entry_count_ = 0;
   ring_buffer_ = std::move(buffer);
   ring_buffer_id_ = id;
   ++set_get_buffer_count_;
-  entries_ = ring_buffer_
-                 ? static_cast<CommandBufferEntry*>(ring_buffer_->memory())
-                 : 0;
-  total_entry_count_ =
-      ring_buffer_ ? ring_buffer_size_ / sizeof(CommandBufferEntry) : 0;
+  if (ring_buffer_) {
+    entries_ = static_cast<CommandBufferEntry*>(ring_buffer_->memory());
+    total_entry_count_ = ring_buffer_size_ / sizeof(CommandBufferEntry);
+  }
   // Call to SetGetBuffer(id) above resets get and put offsets to 0.
   // No need to query it through IPC.
   put_ = 0;
@@ -317,7 +319,7 @@ void CommandBufferHelper::WaitForAvailableEntries(int32_t count) {
     int32_t num_entries = total_entry_count_ - put_;
     while (num_entries > 0) {
       int32_t num_to_skip = std::min(CommandHeader::kMaxSize, num_entries);
-      cmd::Noop::Set(&entries_[put_], num_to_skip);
+      cmd::Noop::Set(UNSAFE_TODO(&entries_[put_]), num_to_skip);
       put_ += num_to_skip;
       num_entries -= num_to_skip;
     }
@@ -382,11 +384,11 @@ bool CommandBufferHelper::OnMemoryDump(
           ->GetTracingProcessId();
 
   MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(base::StringPrintf(
-      "gpu/command_buffer_memory/buffer_%d", ring_buffer_id_));
+      "gpu/command_buffer_memory/buffer_0x%x", ring_buffer_id_));
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
                   MemoryAllocatorDump::kUnitsBytes, ring_buffer_size_);
 
-  if (args.level_of_detail != MemoryDumpLevelOfDetail::BACKGROUND) {
+  if (args.level_of_detail != MemoryDumpLevelOfDetail::kBackground) {
     dump->AddScalar(
         "free_size", MemoryAllocatorDump::kUnitsBytes,
         GetTotalFreeEntriesNoWaiting() * sizeof(CommandBufferEntry));

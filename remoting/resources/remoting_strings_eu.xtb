@@ -12,7 +12,7 @@
 <translation id="1697532407822776718">Prest zaude!</translation>
 <translation id="1742469581923031760">Konektatzen…</translation>
 <translation id="177040763384871009">Urruneko gailuko estekaren batean klik eginez gero hura arakatzailean irekitzeko baimena eman nahi baduzu, "<ph name="URL_FORWARDER_NAME" />" ezarri behar duzu sistemaren web-arakatzaile gisa.</translation>
-<translation id="177096447311351977">Bezeroaren kanalaren IDa: <ph name="CLIENT_GAIA_IDENTIFIER" /> ip='<ph name="CLIENT_IP_ADDRESS_AND_PORT" />' host_ip='<ph name="HOST_IP_ADDRESS_AND_PORT" />' channel='<ph name="CHANNEL_TYPE" />' connection='<ph name="CONNECTION_TYPE" />'.</translation>
+<translation id="177096447311351977">Bezeroaren kanalaren IPa: <ph name="CLIENT_GAIA_IDENTIFIER" /> ip='<ph name="CLIENT_IP_ADDRESS_AND_PORT" />' host_ip='<ph name="HOST_IP_ADDRESS_AND_PORT" />' channel='<ph name="CHANNEL_TYPE" />' connection='<ph name="CONNECTION_TYPE" />'.</translation>
 <translation id="1897488610212723051">Ezabatu</translation>
 <translation id="2009755455353575666">Ezin izan da konektatu</translation>
 <translation id="2038229918502634450">Ostalaria berrabiarazten ari da, gidalerroen aldaketa bat kontuan hartzeko.</translation>
@@ -28,25 +28,25 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="2329392777730037872">Ezin izan da ireki <ph name="URL" /> bezeroaren gailuan.</translation>
 <translation id="2359808026110333948">Egin aurrera</translation>
 <translation id="2366718077645204424">Ezin da ostalariarekin konektatu. Agian erabiltzen ari zaren sarearen konfigurazioarengatik izan daiteke.zoo</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />  Azken konexio-data <ph name="RELATIVE_TIMESTAMP" />.</translation>
-<translation id="2504109125669302160">Eman erabilerraztasun-eginbideak atzitzeko baimena <ph name="PRODUCT_NAME" /> zerbitzuari</translation>
+<translation id="2504109125669302160">Eman erabilerraztasun-eginbideak erabiltzeko baimena <ph name="PRODUCT_NAME" /> zerbitzuari</translation>
 <translation id="2509394361235492552">Konektatu da <ph name="HOSTNAME" /> ostalarira</translation>
 <translation id="2540992418118313681">Ordenagailua partekatu nahi duzu, beste erabiltzaile batek ikusteko eta kontrolatzeko?</translation>
 <translation id="2579271889603567289">Ostalariak huts egin du edo ezin izan da abiarazi.</translation>
 <translation id="2599300881200251572">Zerbitzu honek Chrome-ren Urruneko pantaila aplikazioaren bezeroen sarrerako konexioak gaitzen ditu.</translation>
 <translation id="2647232381348739934">Chromoting zerbitzua</translation>
 <translation id="2676780859508944670">Lanean…</translation>
-<translation id="2692522824157224199">Copyright 2022 Google LLC. Eskubide guztiak erreserbatuta.</translation>
 <translation id="2699970397166997657">Chromoting</translation>
 <translation id="2758123043070977469">Arazo bat izan da autentifikatzean. Hasi berriro saioa.</translation>
 <translation id="2803375539583399270">Idatzi PINa</translation>
 <translation id="2919669478609886916">Gailua beste erabiltzaile batekin partekatzen ari zara. Partekatzen jarraitu nahi duzu?</translation>
+<translation id="2929683002824598593">Partekatu gailua</translation>
 <translation id="2939145106548231838">Autentifikatu ostalariaren aurrean</translation>
 <translation id="3027681561976217984">Ukipen modua</translation>
 <translation id="3106379468611574572">Urruneko ordenagailua ez da konexio-eskaerei erantzuten ari. Egiaztatu Internetera konektatuta dagoela eta saiatu berriro.</translation>
 <translation id="3150823315463303127">Ostalariak ezin izan ditu irakurri gidalerroak.</translation>
 <translation id="3171922709365450819">Bezeroak ez du onartzen gailua hirugarrenen autentifikazioa eskatzen duelako.</translation>
 <translation id="3197730452537982411">Urruneko pantaila</translation>
+<translation id="3236334139428307578">Copyright 2026 The Chromium Authors. Eskubide guztiak erreserbatuta.</translation>
 <translation id="324272851072175193">Bidali argibideak posta elektronikoz</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> aplikazioak aldaketak egin nahi ditu.</translation>
 <translation id="3339299787263251426">Atzitu ordenagailua modu seguruan Internet bidez</translation>
@@ -54,7 +54,6 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="3423542133075182604">Segurtasun-giltza urrunetik exekutatzeko prozesua</translation>
 <translation id="3581045510967524389">Ezin izan da konektatu sarera. Egiaztatu gailua konektatuta daukazula.</translation>
 <translation id="3596628256176442606">Chromoting bezeroen sarrera-konexioak gaitzen ditu zerbitzu honek.</translation>
-<translation id="369442766917958684">Konexiorik gabe.</translation>
 <translation id="3695446226812920698">Lortu argibideak</translation>
 <translation id="3776024066357219166">Chrome-ren Urruneko pantaila aplikazioko saioa amaitu duzu.</translation>
 <translation id="3858860766373142691">Izena</translation>
@@ -73,7 +72,6 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="4257751272692708833"><ph name="PRODUCT_NAME" /> bezeroko URLen birbidaltzailea</translation>
 <translation id="4277736576214464567">Sarbide-kodeak ez du balio. Saiatu berriro.</translation>
 <translation id="4281844954008187215">Zerbitzu-baldintzak</translation>
-<translation id="4372650392690220936">Copyright 2022 The Chromium Authors. Eskubide guztiak erreserbatuta.</translation>
 <translation id="4405930547258349619">Liburutegi nagusia</translation>
 <translation id="443560535555262820">Ireki erabilerraztasun-hobespenak</translation>
 <translation id="4450893287417543264">Ez erakutsi berriro</translation>
@@ -95,6 +93,7 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="4987330545941822761">Chrome-ren Urruneko pantaila aplikazioak ezin du zehaztu URLak ordenagailuan irekitzeko arakatzailea. Hautatu zerrenda honetako bat.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (konexiorik gabe)</translation>
 <translation id="507204348399810022">Ziur <ph name="HOSTNAME" /> ostalarirako urruneko konexioak desgaitu nahi dituzula?</translation>
+<translation id="5095424396646120601">Hutsegite-txostenak</translation>
 <translation id="5170982930780719864">Ez du balio ostalariaren IDak.</translation>
 <translation id="5204575267916639804">Maiz egiten diren galderak</translation>
 <translation id="5222676887888702881">Amaitu saioa</translation>
@@ -107,24 +106,26 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="5601503069213153581">PINa</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">Mahaigaina <ph name="USER" /> erabiltzailearekin partekatzen ari zara.</translation>
-<translation id="5750083143895808682"><ph name="EMAIL_ADDRESS" /> gisa hasi duzu saioa.</translation>
 <translation id="579702532610384533">Konektatu berriro</translation>
 <translation id="5810269635982033450">Pantailak ukipen-panel baten lanak egiten ditu</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> erabiltzaileak pantaila ikusteko, eta teklatua eta sagua kontrolatzeko baimena eskatu du. Ez bazenuen espero eskaera, sakatu "<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />". Bestela, hautatu "<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />", prest zaudenean konektatzeko baimena emateko.</translation>
 <translation id="5823658491130719298">Urrunetik atzitu nahi duzun ordenagailuan, ireki Chrome eta joan <ph name="INSTALLATION_LINK" /> helbidera</translation>
 <translation id="5841343754884244200">Bistaratze-aukerak</translation>
+<translation id="5965133372831030509">Copyright 2026 Google LLC. Eskubide guztiak erreserbatuta.</translation>
 <translation id="6033507038939587647">Teklatuaren aukerak</translation>
 <translation id="6040143037577758943">Itxi</translation>
 <translation id="6062854958530969723">Ezin izan da hasieratu ostalaria.</translation>
 <translation id="6099500228377758828">Chrome-ren Urruneko pantaila aplikazioa</translation>
 <translation id="6122191549521593678">Konektatu</translation>
-<translation id="6178645564515549384">Urruneko laguntzarako mezularitza-ostalari natiboa</translation>
+<translation id="6178645564515549384">Urruneko laguntza jasotzeko mezularitza-aplikazio natiboetarako ostalaria</translation>
 <translation id="618120821413932081">Eguneratu urruneko bereizmena leihoarenarekin bat etor dadin</translation>
 <translation id="6223301979382383752">Ireki pantaila grabatzeko hobespenak</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> erabiltzaileak pantaila ikusteko, eta teklatua eta sagua kontrolatzeko baimena eskatu du. Gailua partekatu nahi duzu?</translation>
 <translation id="6284412385303060032">Kontsolaren pantaila logikoan abian den ostalaria desaktibatu egin da mahaigaina ezkutatzeko modua erabili ahal izateko. Horretarako, erabiltzaile jakin baten saioan abiarazitako ostalari batera aldatu da.</translation>
 <translation id="6542902059648396432">Eman arazo baten berri…</translation>
 <translation id="6583902294974160967">Laguntza-zerbitzua</translation>
 <translation id="6612717000975622067">Bidali Ktrl-Alt-Ezab</translation>
+<translation id="6625262630437221505">{0,plural, =1{Ezer egiten ez baduzu, gailua # segundo barru hasiko da partekatzen automatikoki.}other{Ezer egiten ez baduzu, gailua # segundo barru hasiko da partekatzen automatikoki.}}</translation>
 <translation id="6654753848497929428">Partekatu</translation>
 <translation id="677755392401385740"><ph name="HOST_USERNAME" /> ostatatzen hasi da.</translation>
 <translation id="6902524959760471898"><ph name="PRODUCT_NAME" /> bezeroan URL bat irekitzeko aplikazio laguntzailea</translation>
@@ -165,7 +166,7 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia pantailare
 <translation id="8073845705237259513">Chrome-ren Urruneko pantaila erabili ahal izateko, Google-ko kontu bat gehitu beharko duzu gailuan.</translation>
 <translation id="809687642899217504">Nire ordenagailuak</translation>
 <translation id="8116630183974937060">Sareko errore bat gertatu da. Egiaztatu gailua konektatuta daukazula eta saiatu berriro.</translation>
-<translation id="8295077433896346116"><ph name="PRODUCT_NAME" /> erabiltzeko, erabilerraztasun-eginbideak atzitzeko baimena eman behar diozu, urruneko gailuko sarrerak Mac honetan aplika daitezen.
+<translation id="8295077433896346116"><ph name="PRODUCT_NAME" /> erabiltzeko, erabilerraztasun-eginbideak erabiltzeko baimena eman behar diozu, urruneko gailuko sarrerak Mac honetan aplika daitezen.
 
 Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia. Erabilerraztasun-eginbideen hobespen-panela irekitzen denean, markatu "<ph name="SERVICE_SCRIPT_NAME" />" elementuaren ondoan dagoen koadroa.
 
@@ -173,21 +174,21 @@ Baimen hori emateko, sakatu beheko "<ph name="BUTTON_NAME" />" botoia. Erabilerr
 <translation id="8305209735512572429">Web Authentication APIaren urruneko prozesua</translation>
 <translation id="8383794970363966105">Chromoting erabili ahal izateko, Google-ko kontu bat gehitu beharko duzu gailuan.</translation>
 <translation id="8386846956409881180">Balio ez duten OAuth kredentzialekin dago konfiguratuta ostalaria.</translation>
-<translation id="8397385476380433240">Eman <ph name="PRODUCT_NAME" /> atzitzeko baimena</translation>
-<translation id="8406498562923498210">Hautatu saio bat Chrome-ren Urruneko pantaila aplikazioaren ingurunean abiarazteko. Gogoan izan saio mota batzuk ezin direla aldi berean abiarazi Chrome-ren Urruneko pantaila aplikazioan eta kontsola lokalean.</translation>
+<translation id="8397385476380433240">Eman <ph name="PRODUCT_NAME" /> erabiltzeko baimena</translation>
+<translation id="8406498562923498210">Hautatu saio bat Chrome-ren Urruneko pantaila aplikazioaren ingurunean exekutatzeko. Gogoan izan saio mota batzuk ezin direla aldi berean exekutatu Chrome-ren Urruneko pantaila aplikazioan eta kontsola lokalean.</translation>
 <translation id="8428213095426709021">Ezarpenak</translation>
 <translation id="8445362773033888690">Ikusi Google Play Store-n</translation>
 <translation id="8509907436388546015">Pantailak integratzeko prozesua</translation>
-<translation id="8513093439376855948">Urruneko ostalari-kudeaketa gaitzeko mezularitza-ostalaria</translation>
+<translation id="8513093439376855948">Urruneko sarbideko ostalariak kudeatzeko mezularitza-aplikazio natiboetarako ostalaria</translation>
 <translation id="8525306231823319788">Pantaila osoa</translation>
 <translation id="858006550102277544">Iruzkina</translation>
 <translation id="8743328882720071828">Ordenagailua ikusteko eta kontrolatzeko baimena eman nahi diozu <ph name="CLIENT_USERNAME" /> erabiltzaileari?</translation>
 <translation id="8747048596626351634">Saioak huts egin du edo ezin izan da hasi. Urruneko ordenagailuan "~/.chrome-remote-desktop-session" izeneko prozesurik bada, ziurtatu aurreko planoko prozesu luzea abiarazten duela, adibidez, ordenagailu-ingurunea edo leiho-kudeatzailea.</translation>
 <translation id="8804164990146287819">Pribatutasun-gidalerroak</translation>
-<translation id="8906511416443321782">Mikrofonoa atzitzeko baimena behar da audioa grabatzeko eta Chrome-ren Urruneko pantaila bezero-aplikaziora igortzeko.</translation>
+<translation id="8906511416443321782">Mikrofonoa erabiltzeko baimena behar da audioa grabatzeko eta Chrome-ren Urruneko pantaila bezero-aplikaziora igortzeko.</translation>
 <translation id="9111855907838866522">Urruneko gailura konektatuta zaude. Menua irekitzeko, sakatu pantaila lau hatzekin.</translation>
 <translation id="9126115402994542723">Ez eskatu PINa berriro ostalari honetara gailu honetatik konektatzean.</translation>
-<translation id="916856682307586697">Abiarazi XSession lehenetsia</translation>
+<translation id="916856682307586697">Exekutatu XSession lehenetsia</translation>
 <translation id="9187628920394877737">Eman pantaila grabatzeko baimena <ph name="PRODUCT_NAME" /> zerbitzuari</translation>
 <translation id="9213184081240281106">Ez du balio ostalariaren konfigurazioak.</translation>
 <translation id="981121421437150478">Konexiorik gabekoak</translation>

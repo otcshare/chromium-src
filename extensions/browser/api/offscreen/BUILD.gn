@@ -4,8 +4,8 @@
 
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_extensions_core,
+       "Cannot depend on extensions because enable_extensions_core=false.")
 
 source_set("offscreen") {
   sources = [
@@ -21,13 +21,20 @@ source_set("offscreen") {
     "offscreen_document_manager.h",
   ]
 
-  deps = [
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
+  public_deps = [
     "//base",
-    "//components/keyed_service/content",
+    "//components/keyed_service/core",
     "//content/public/browser",
+    "//extensions/browser:browser_sources",
     "//extensions/common",
     "//extensions/common/api",
   ]
 
-  public_deps = [ "//extensions/browser:browser_sources" ]
+  deps = [
+    "//components/keyed_service/content",
+    "//content/public/common",
+    "//url",
+  ]
 }

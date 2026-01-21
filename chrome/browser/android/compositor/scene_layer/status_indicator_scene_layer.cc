@@ -4,10 +4,12 @@
 
 #include "chrome/browser/android/compositor/scene_layer/status_indicator_scene_layer.h"
 
-#include "cc/layers/ui_resource_layer.h"
+#include "cc/slim/layer.h"
+#include "cc/slim/ui_resource_layer.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/android/chrome_jni_headers/StatusIndicatorSceneLayer_jni.h"
 
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 
 namespace android {
@@ -16,8 +18,8 @@ StatusIndicatorSceneLayer::StatusIndicatorSceneLayer(
     JNIEnv* env,
     const JavaRef<jobject>& jobj)
     : SceneLayer(env, jobj),
-      view_container_(cc::Layer::Create()),
-      view_layer_(cc::UIResourceLayer::Create()) {
+      view_container_(cc::slim::Layer::Create()),
+      view_layer_(cc::slim::UIResourceLayer::Create()) {
   layer()->SetIsDrawable(true);
 
   view_container_->SetIsDrawable(true);
@@ -27,14 +29,13 @@ StatusIndicatorSceneLayer::StatusIndicatorSceneLayer(
   view_container_->AddChild(view_layer_);
 }
 
-StatusIndicatorSceneLayer::~StatusIndicatorSceneLayer() {}
+StatusIndicatorSceneLayer::~StatusIndicatorSceneLayer() = default;
 
 void StatusIndicatorSceneLayer::UpdateStatusIndicatorLayer(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& object,
-    const base::android::JavaParamRef<jobject>& jresource_manager,
-    jint view_resource_id,
-    jint y_offset) {
+    const base::android::JavaRef<jobject>& jresource_manager,
+    int32_t view_resource_id,
+    int32_t y_offset) {
   ui::ResourceManager* resource_manager =
       ui::ResourceManagerImpl::FromJavaObject(jresource_manager);
   ui::Resource* resource = resource_manager->GetResource(
@@ -58,8 +59,7 @@ void StatusIndicatorSceneLayer::UpdateStatusIndicatorLayer(
 
 void StatusIndicatorSceneLayer::SetContentTree(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jobj,
-    const JavaParamRef<jobject>& jcontent_tree) {
+    const JavaRef<jobject>& jcontent_tree) {
   SceneLayer* content_tree = FromJavaObject(env, jcontent_tree);
   if (!content_tree || !content_tree->layer())
     return;
@@ -83,9 +83,9 @@ bool StatusIndicatorSceneLayer::ShouldShowBackground() {
   return should_show_background_;
 }
 
-static jlong JNI_StatusIndicatorSceneLayer_Init(
+static int64_t JNI_StatusIndicatorSceneLayer_Init(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jobj) {
+    const JavaRef<jobject>& jobj) {
   // This will automatically bind to the Java object and pass ownership there.
   StatusIndicatorSceneLayer* scene_layer =
       new StatusIndicatorSceneLayer(env, jobj);
@@ -93,3 +93,5 @@ static jlong JNI_StatusIndicatorSceneLayer_Init(
 }
 
 }  // namespace android
+
+DEFINE_JNI(StatusIndicatorSceneLayer)

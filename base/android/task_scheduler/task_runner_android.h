@@ -8,6 +8,9 @@
 #include <memory>
 
 #include "base/android/jni_weak_ref.h"
+#include "base/android/task_scheduler/task_traits_android.h"
+#include "base/base_export.h"
+#include "base/functional/callback_forward.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace base {
@@ -17,10 +20,9 @@ enum class TaskRunnerType { BASE, SEQUENCED, SINGLE_THREAD };
 
 // Native implementation backing TaskRunnerImpl.java which posts java tasks onto
 // a C++ TaskRunner.
-class TaskRunnerAndroid {
+class BASE_EXPORT TaskRunnerAndroid {
  public:
-  explicit TaskRunnerAndroid(scoped_refptr<TaskRunner> task_runner,
-                             TaskRunnerType type);
+  TaskRunnerAndroid(scoped_refptr<TaskRunner> task_runner, TaskRunnerType type);
 
   TaskRunnerAndroid(const TaskRunnerAndroid&) = delete;
   TaskRunnerAndroid& operator=(const TaskRunnerAndroid&) = delete;
@@ -29,21 +31,27 @@ class TaskRunnerAndroid {
 
   void Destroy(JNIEnv* env);
 
-  void PostDelayedTask(JNIEnv* env,
-                       const base::android::JavaRef<jobject>& task,
-                       jlong delay,
-                       jstring runnable_class_name);
+  void PostDelayedTask(JNIEnv* env, int64_t delay, int32_t taskIndex);
+
+  void PostDelayedTaskWithLocation(
+      JNIEnv* env,
+      int64_t delay,
+      int32_t taskIndex,
+      const android::JavaRef<jstring>& fileName,
+      const android::JavaRef<jstring>& functionName,
+      int32_t lineNumber);
 
   bool BelongsToCurrentThread(JNIEnv* env);
 
-  static std::unique_ptr<TaskRunnerAndroid> Create(
-      JNIEnv* env,
-      jint task_runner_type,
-      jint priority,
-      jboolean may_block,
-      jboolean use_thread_pool,
-      jbyte extension_id,
-      const base::android::JavaParamRef<jbyteArray>& extension_data);
+  static std::unique_ptr<TaskRunnerAndroid> Create(int32_t task_runner_type,
+                                                   int32_t j_task_traits);
+
+  using UiThreadTaskRunnerCallback =
+      RepeatingCallback<scoped_refptr<base::SingleThreadTaskRunner>(
+          ::TaskTraits)>;
+
+  static void SetUiThreadTaskRunnerCallback(
+      UiThreadTaskRunnerCallback callback);
 
  private:
   const scoped_refptr<TaskRunner> task_runner_;

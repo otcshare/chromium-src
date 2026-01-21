@@ -12,6 +12,7 @@
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "components/page_load_metrics/common/test/page_load_metrics_test_util.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/navigation_simulator.h"
@@ -54,7 +55,7 @@ class FencedFramesPageLoadMetricsObserverTest
     timing.paint_timing->first_image_paint = base::Milliseconds(80);
     timing.paint_timing->first_contentful_paint = base::Milliseconds(100);
 
-    auto largest_contentful_paint = mojom::LargestContentfulPaintTiming::New();
+    auto largest_contentful_paint = CreateLargestContentfulPaintTiming();
     largest_contentful_paint->largest_image_paint = base::Milliseconds(100);
     largest_contentful_paint->largest_image_paint_size = 100;
     timing.paint_timing->largest_contentful_paint =
@@ -75,7 +76,7 @@ class FencedFramesPageLoadMetricsObserverTest
     NavigateAndCommit(GURL(kSetUpUrl));
   }
 
-  raw_ptr<FencedFramesPageLoadMetricsObserver> observer_;
+  raw_ptr<FencedFramesPageLoadMetricsObserver, DanglingUntriaged> observer_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 

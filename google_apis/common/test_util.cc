@@ -4,6 +4,8 @@
 
 #include "google_apis/common/test_util.h"
 
+#include <string_view>
+
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
@@ -33,8 +35,9 @@ bool RemovePrefix(const std::string& input,
 
 base::FilePath GetTestFilePath(const std::string& relative_path) {
   base::FilePath path;
-  if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &path))
+  if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path)) {
     return base::FilePath();
+  }
   path = path.AppendASCII("google_apis")
              .AppendASCII("test")
              .AppendASCII("data")
@@ -52,10 +55,8 @@ void RunAndQuit(base::RunLoop* run_loop, base::OnceClosure closure) {
 }
 
 bool WriteStringToFile(const base::FilePath& file_path,
-                       const std::string& content) {
-  int result = base::WriteFile(file_path, content.data(),
-                               static_cast<int>(content.size()));
-  return content.size() == static_cast<size_t>(result);
+                       std::string_view content) {
+  return base::WriteFile(file_path, content);
 }
 
 bool CreateFileOfSpecifiedSize(const base::FilePath& temp_dir,
@@ -115,8 +116,9 @@ std::unique_ptr<net::test_server::HttpResponse> HandleDownloadFileRequest(
 
   GURL absolute_url = base_url.Resolve(request.relative_url);
   std::string remaining_path;
-  if (!RemovePrefix(absolute_url.path(), "/files/", &remaining_path))
+  if (!RemovePrefix(absolute_url.GetPath(), "/files/", &remaining_path)) {
     return nullptr;
+  }
   return CreateHttpResponseFromFile(GetTestFilePath(remaining_path));
 }
 
@@ -132,7 +134,7 @@ bool ParseContentRangeHeader(const std::string& value,
   if (!RemovePrefix(value, "bytes ", &remaining))
     return false;
 
-  std::vector<base::StringPiece> parts = base::SplitStringPiece(
+  std::vector<std::string_view> parts = base::SplitStringPiece(
       remaining, "/", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (parts.size() != 2U)
     return false;

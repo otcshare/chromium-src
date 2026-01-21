@@ -10,6 +10,7 @@
 #include "components/feed/core/proto/v2/wire/action_diagnostic_info.pb.h"
 #include "components/feed/core/proto/v2/wire/action_payload.pb.h"
 #include "components/feed/core/proto/v2/wire/client_info.pb.h"
+#include "components/feed/core/proto/v2/wire/client_user_profiles.pb.h"
 #include "components/feed/core/proto/v2/wire/consistency_token.pb.h"
 #include "components/feed/core/proto/v2/wire/content_id.pb.h"
 #include "components/feed/core/proto/v2/wire/feed_action.pb.h"
@@ -27,7 +28,8 @@ struct IsFieldSetHelper {
   static bool IsSet(const T& v) { return true; }
 };
 template <typename T>
-struct IsFieldSetHelper<T, std::enable_if_t<std::is_scalar<T>::value>> {
+  requires(std::is_scalar_v<T>)
+struct IsFieldSetHelper<T> {
   static bool IsSet(const T& v) { return !!v; }
 };
 template <>
@@ -186,6 +188,7 @@ class TextProtoPrinter {
     PRINT_ONEOF(content);
     PRINT_ONEOF(local_action);
     PRINT_ONEOF(shared_state);
+    PRINT_ONEOF(doc_view);
     EndMessage();
     return *this;
   }
@@ -202,7 +205,7 @@ class TextProtoPrinter {
     PRINT_FIELD(next_page_token);
     PRINT_FIELD(last_added_time_millis);
     PRINT_FIELD(shared_state_ids);
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     PRINT_FIELD(content_hashes);
     EndMessage();
     return *this;
@@ -217,7 +220,7 @@ class TextProtoPrinter {
   }
   TextProtoPrinter& operator<<(const feedstore::StreamStructureSet& v) {
     BeginMessage();
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     PRINT_FIELD(sequence_number);
     PRINT_FIELD(structures);
     EndMessage();
@@ -324,7 +327,7 @@ class TextProtoPrinter {
     BeginMessage();
     PRINT_FIELD(content_id);
     PRINT_FIELD(frame);
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     EndMessage();
     return *this;
   }
@@ -332,7 +335,7 @@ class TextProtoPrinter {
     BeginMessage();
     PRINT_FIELD(content_id);
     PRINT_FIELD(shared_state_data);
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     EndMessage();
     return *this;
   }
@@ -341,6 +344,13 @@ class TextProtoPrinter {
     PRINT_FIELD(id);
     PRINT_FIELD(upload_attempt_count);
     // PRINT_FIELD(action);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedstore::DocView& v) {
+    BeginMessage();
+    PRINT_FIELD(docid);
+    PRINT_FIELD(view_time_millis);
     EndMessage();
     return *this;
   }
@@ -434,6 +444,44 @@ class TextProtoPrinter {
     EndMessage();
     return *this;
   }
+  TextProtoPrinter& operator<<(
+      const feedwire::ViewDemotionProfileExtension& v) {
+    BeginMessage();
+    PRINT_FIELD(tables);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedwire::Table& v) {
+    BeginMessage();
+    PRINT_FIELD(name);
+    PRINT_FIELD(num_rows);
+    PRINT_FIELD(columns);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedwire::Table::Column& v) {
+    BeginMessage();
+    PRINT_FIELD(type);
+    PRINT_FIELD(name);
+    PRINT_FIELD(int64_values);
+    PRINT_FIELD(uint64_values);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedwire::ClientUserProfiles& v) {
+    BeginMessage();
+    PRINT_FIELD(view_demotion_profile);
+    EndMessage();
+    return *this;
+  }
+
+  TextProtoPrinter& operator<<(const feedwire::ViewDemotionProfile& v) {
+    BeginMessage();
+    PRINT_FIELD(view_demotion_profile);
+    EndMessage();
+    return *this;
+  }
+
   TextProtoPrinter& operator<<(
       const feedwire::webfeed::ListRecommendedWebFeedsRequest& v) {
     BeginMessage();
@@ -547,6 +595,7 @@ DECLARE_PRINTER(feedstore, StreamStructureSet)
 DECLARE_PRINTER(feedstore, SubscribedWebFeeds)
 DECLARE_PRINTER(feedstore, WebFeedInfo)
 DECLARE_PRINTER(feedstore, PendingWebFeedOperation)
+DECLARE_PRINTER(feedstore, DocView)
 DECLARE_PRINTER(feedui, StreamUpdate)
 DECLARE_PRINTER(feedwire, ActionPayload)
 DECLARE_PRINTER(feedwire, ClientInfo)
@@ -555,7 +604,12 @@ DECLARE_PRINTER(feedwire, DisplayInfo)
 DECLARE_PRINTER(feedwire, InfoCardTrackingState)
 DECLARE_PRINTER(feedwire, UploadActionsRequest)
 DECLARE_PRINTER(feedwire, UploadActionsResponse)
+DECLARE_PRINTER(feedwire, ViewDemotionProfileExtension)
+DECLARE_PRINTER(feedwire, ViewDemotionProfile)
+DECLARE_PRINTER(feedwire, Table)
+DECLARE_PRINTER(feedwire, Table::Column)
 DECLARE_PRINTER(feedwire, Version)
+DECLARE_PRINTER(feedwire, ClientUserProfiles)
 DECLARE_PRINTER(feedwire::webfeed, Image)
 DECLARE_PRINTER(feedwire::webfeed, ListRecommendedWebFeedsRequest)
 DECLARE_PRINTER(feedwire::webfeed, ListRecommendedWebFeedsResponse)

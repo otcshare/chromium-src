@@ -5,16 +5,17 @@
 #ifndef CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_CLIENT_IMPL_H_
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_CLIENT_IMPL_H_
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/services/device_sync/cryptauth_api_call_flow.h"
 #include "chromeos/ash/services/device_sync/cryptauth_client.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_api.pb.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace signin {
 struct AccessTokenInfo;
@@ -135,8 +136,8 @@ class CryptAuthClientImpl : public CryptAuthClient {
   void MakeApiCall(
       const GURL& request_url,
       RequestType request_type,
-      const absl::optional<std::string>& serialized_request,
-      const absl::optional<std::vector<std::pair<std::string, std::string>>>&
+      const std::optional<std::string>& serialized_request,
+      const std::optional<std::vector<std::pair<std::string, std::string>>>&
           request_as_query_parameters,
       base::OnceCallback<void(const ResponseProto&)> response_callback,
       ErrorCallback error_callback,
@@ -147,8 +148,8 @@ class CryptAuthClientImpl : public CryptAuthClient {
   template <class ResponseProto>
   void OnAccessTokenFetched(
       RequestType request_type,
-      const absl::optional<std::string>& serialized_request,
-      const absl::optional<std::vector<std::pair<std::string, std::string>>>&
+      const std::optional<std::string>& serialized_request,
+      const std::optional<std::vector<std::pair<std::string, std::string>>>&
           request_as_query_parameters,
       base::OnceCallback<void(const ResponseProto&)> response_callback,
       GoogleServiceAuthError error,
@@ -172,7 +173,7 @@ class CryptAuthClientImpl : public CryptAuthClient {
   // Constructs and executes the actual HTTP request.
   std::unique_ptr<CryptAuthApiCallFlow> api_call_flow_;
 
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
 
   // Fetches the access token authorizing the API calls.
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher>
@@ -223,7 +224,7 @@ class CryptAuthClientFactoryImpl : public CryptAuthClientFactory {
   std::unique_ptr<CryptAuthClient> CreateInstance() override;
 
  private:
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   const cryptauth::DeviceClassifier device_classifier_;
 };

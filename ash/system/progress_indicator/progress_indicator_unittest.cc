@@ -17,18 +17,19 @@ namespace {
 class TestProgressIndicator : public ProgressIndicator {
  public:
   TestProgressIndicator()
-      : ProgressIndicator(/*animation_registry=*/nullptr,
-                          /*animation_key=*/this) {}
+      : ProgressIndicator(
+            /*animation_registry=*/nullptr,
+            ProgressIndicatorAnimationRegistry::AsAnimationKey(this)) {}
 
-  void SetProgress(const absl::optional<float>& progress) {
+  void SetProgress(const std::optional<float>& progress) {
     progress_ = progress;
     static_cast<ui::LayerDelegate*>(this)->UpdateVisualState();
   }
 
  private:
   // ProgressIndicator:
-  absl::optional<float> CalculateProgress() const override { return progress_; }
-  absl::optional<float> progress_;
+  std::optional<float> CalculateProgress() const override { return progress_; }
+  std::optional<float> progress_;
 };
 
 }  // namespace
@@ -41,7 +42,7 @@ using ProgressIndicatorTest = AshTestBase;
 // It should delegate progress calculation to a constructor provided callback
 // and manage progress animations as needed.
 TEST_F(ProgressIndicatorTest, CreateDefaultInstance) {
-  absl::optional<float> progress;
+  std::optional<float> progress = ProgressIndicator::kProgressComplete;
 
   // Create a default instance of `ProgressIndicator` that paints `progress`
   // whenever visual state is updated.
@@ -54,7 +55,7 @@ TEST_F(ProgressIndicatorTest, CreateDefaultInstance) {
       static_cast<ui::LayerDelegate*>(progress_indicator.get());
 
   // Cache animation `key` and `registry` associated with `progress_indicator`.
-  auto* key = progress_indicator.get();
+  auto key = progress_indicator->animation_key();
   auto* registry = progress_indicator->animation_registry();
 
   // Verify initial progress and animation states.
@@ -79,7 +80,7 @@ TEST_F(ProgressIndicatorTest, CreateDefaultInstance) {
   EXPECT_FALSE(registry->GetProgressRingAnimationForKey(key));
 
   // Update `progress` to indeterminate. Verify progress and animation states.
-  progress = absl::nullopt;
+  progress = std::nullopt;
   layer_delegate->UpdateVisualState();
   EXPECT_EQ(progress_indicator->progress(), progress);
   ASSERT_TRUE(registry->GetProgressIconAnimationForKey(key));
@@ -124,10 +125,8 @@ TEST_F(ProgressIndicatorTest, AddProgressChangedCallback) {
   // should be invoked on progress changes so long as the returned subscription
   // continues to exist.
   int callback_call_count = 0;
-  auto subscription =
-      std::make_unique<base::RepeatingClosureList::Subscription>(
-          progress_indicator.AddProgressChangedCallback(
-              base::BindLambdaForTesting([&]() { ++callback_call_count; })));
+  auto subscription = progress_indicator.AddProgressChangedCallback(
+      base::BindLambdaForTesting([&]() { ++callback_call_count; }));
 
   // Change the underlying progress.
   progress_indicator.SetProgress(0.75f);
@@ -138,7 +137,7 @@ TEST_F(ProgressIndicatorTest, AddProgressChangedCallback) {
   EXPECT_EQ(callback_call_count, 1);
 
   // Reset the subscription and change the underlying progress.
-  subscription.reset();
+  subscription = base::CallbackListSubscription();
   progress_indicator.SetProgress(1.f);
   EXPECT_EQ(callback_call_count, 1);
 }

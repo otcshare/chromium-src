@@ -28,17 +28,21 @@ const properties = [
   "ariaActiveDescendantElement",
   "ariaAtomic",
   "ariaAutoComplete",
+  "ariaBrailleLabel",
+  "ariaBrailleRoleDescription",
   "ariaBusy",
   "ariaChecked",
   "ariaColCount",
   "ariaColIndex",
+  // "ariaColIndexText", // tentative -> ElementInternals-accessibility.tentative.html
   "ariaColSpan",
   "ariaControlsElements",
   "ariaCurrent",
   "ariaDescribedByElements",
+  // "ariaDescription", // tentative -> ElementInternals-accessibility.tentative.html
   "ariaDetailsElements",
   "ariaDisabled",
-  "ariaErrorMessageElement",
+  "ariaErrorMessageElements",
   "ariaExpanded",
   "ariaFlowToElements",
   "ariaHasPopup",
@@ -63,8 +67,10 @@ const properties = [
   "ariaRoleDescription",
   "ariaRowCount",
   "ariaRowIndex",
+  // "ariaRowIndexText", // tentative -> ElementInternals-accessibility.tentative.html
   "ariaRowSpan",
   "ariaSelected",
+  "ariaSetSize",
   "ariaSort",
   "ariaValueMax",
   "ariaValueMin",
@@ -76,4 +82,5 @@ for (const property of properties) {
     assert_inherits(element.internals, property);
   }, property + " is defined in ElementInternals");
 }
+test(() => assert_false('ariaErrorMessageElement' in element.internals), 'ariaErrorMessageElement is not defined in ElementInternals')
 </script>

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/content_index_context.h"
@@ -173,7 +174,7 @@ class CONTENT_EXPORT ContentIndexDatabase {
   void BlockOrigin(const url::Origin& origin);
   void UnblockOrigin(const url::Origin& origin);
 
-  raw_ptr<ContentIndexProvider, DanglingUntriaged> provider_;
+  raw_ptr<ContentIndexProvider> provider_;
 
   // A map from origins to how many times it's been blocked.
   base::flat_map<url::Origin, int> blocked_origins_;

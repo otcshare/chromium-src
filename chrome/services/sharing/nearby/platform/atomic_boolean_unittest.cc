@@ -4,7 +4,7 @@
 
 #include "chrome/services/sharing/nearby/platform/atomic_boolean.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
@@ -12,9 +12,7 @@
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 class AtomicBooleanTest : public testing::Test {
  protected:
@@ -93,6 +91,4 @@ TEST_F(AtomicBooleanTest, GetOnNewThread) {
   VerifyAtomicBooleanOnThread(true);
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

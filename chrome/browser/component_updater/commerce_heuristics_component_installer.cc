@@ -10,10 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
 #include "components/commerce/core/commerce_heuristics_data.h"
@@ -22,7 +22,6 @@
 #include "chrome/browser/new_tab_page/new_tab_page_util.h"
 #include "components/search/ntp_features.h"
 #else
-#include "chrome/browser/fast_checkout/fast_checkout_features.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #endif
 
@@ -67,8 +66,9 @@ base::FilePath GetCommerceCartExtractionScriptInstalledPath(
 
 void LoadHeuristicFilesFromDisk(const base::Version& version,
                                 const base::FilePath& install_dir) {
-  if (install_dir.empty())
+  if (install_dir.empty()) {
     return;
+  }
 
   const base::FilePath& commerce_hint_file_path =
       GetCommerceHintHeuristicsInstalledPath(install_dir);
@@ -189,11 +189,9 @@ CommerceHeuristicsInstallerPolicy::GetInstallerAttributes() const {
 void RegisterCommerceHeuristicsComponent(
     component_updater::ComponentUpdateService* cus) {
 #if !BUILDFLAG(IS_ANDROID)
-  if (IsCartModuleEnabled()) {
-#else
-  if (base::FeatureList::IsEnabled(commerce::kCommerceHintAndroid) ||
-      base::FeatureList::IsEnabled(features::kFastCheckout)) {
+  if (IsCartModuleEnabled())
 #endif
+  {
     VLOG(1) << "Registering Commerce Heuristics component.";
     auto installer = base::MakeRefCounted<ComponentInstaller>(
         std::make_unique<CommerceHeuristicsInstallerPolicy>());

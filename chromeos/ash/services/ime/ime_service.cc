@@ -10,15 +10,17 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/files/file_util.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chromeos/ash/services/ime/constants.h"
 #include "chromeos/ash/services/ime/decoder/decoder_engine.h"
 #include "chromeos/ash/services/ime/decoder/system_engine.h"
-#include "chromeos/ash/services/ime/rule_based_engine.h"
+#include "chromeos/ash/services/ime/ime_shared_library_wrapper.h"
+#include "chromeos/ash/services/ime/input_method_user_data_service_impl.h"
+#include "chromeos/ash/services/ime/user_data_c_api_impl.h"
 #include "mojo/public/c/system/thunks.h"
 
 namespace ash {
@@ -72,9 +74,24 @@ void ImeService::BindInputEngineManager(
 }
 
 void ImeService::ResetAllBackendConnections() {
-  decoder_engine_.reset();
-  system_engine_.reset();
-  connection_factory_.reset();
+  proto_mode_shared_lib_engine_.reset();
+  mojo_mode_shared_lib_engine_.reset();
+}
+
+void ImeService::BindInputMethodUserDataService(
+    mojo::PendingReceiver<mojom::InputMethodUserDataService> receiver) {
+  if (input_method_user_data_api_ == nullptr) {
+    std::optional<ImeSharedLibraryWrapper::EntryPoints> entry_points =
+        ime_shared_library_->MaybeLoadThenReturnEntryPoints();
+    if (!entry_points.has_value()) {
+      LOG(ERROR) << "shared library entry_points not loaded";
+      return;
+    }
+    input_method_user_data_api_ =
+        std::make_unique<InputMethodUserDataServiceImpl>(
+            std::make_unique<UserDataCApiImpl>(this, *entry_points));
+  }
+  input_method_user_data_api_->AddReceiver(std::move(receiver));
 }
 
 void ImeService::ConnectToImeEngine(
@@ -92,45 +109,31 @@ void ImeService::ConnectToImeEngine(
   //
   // The extension will only use ConnectToImeEngine, and NativeInputMethodEngine
   // will only use ConnectToInputMethod.
-  if ((connection_factory_ && connection_factory_->IsConnected()) ||
-      (system_engine_ && system_engine_->IsConnected())) {
+  if (mojo_mode_shared_lib_engine_ &&
+      mojo_mode_shared_lib_engine_->IsConnected()) {
     std::move(callback).Run(/*bound=*/false);
     return;
   }
 
   ResetAllBackendConnections();
 
-  decoder_engine_ = std::make_unique<DecoderEngine>(
+  proto_mode_shared_lib_engine_ = std::make_unique<DecoderEngine>(
       this, ime_shared_library_->MaybeLoadThenReturnEntryPoints());
-  bool bound = decoder_engine_->BindRequest(
+  bool bound = proto_mode_shared_lib_engine_->BindRequest(
       ime_spec, std::move(to_engine_request), std::move(from_engine), extra);
   std::move(callback).Run(bound);
 }
 
 void ImeService::InitializeConnectionFactory(
     mojo::PendingReceiver<mojom::ConnectionFactory> connection_factory,
-    mojom::ConnectionTarget connection_target,
     InitializeConnectionFactoryCallback callback) {
   ResetAllBackendConnections();
 
-  switch (connection_target) {
-    case mojom::ConnectionTarget::kRulebasedEngine: {
-      connection_factory_ = std::make_unique<RuleBasedEngineConnectionFactory>(
-          std::move(connection_factory));
-      std::move(callback).Run(/*success=*/true);
-      break;
-    }
-    case mojom::ConnectionTarget::kImeServiceLib: {
-      system_engine_ = std::make_unique<SystemEngine>(
-          this, ime_shared_library_->MaybeLoadThenReturnEntryPoints());
-      bool bound =
-          system_engine_->BindConnectionFactory(std::move(connection_factory));
-      std::move(callback).Run(bound);
-      break;
-    }
-    default:
-      break;
-  }
+  mojo_mode_shared_lib_engine_ = std::make_unique<SystemEngine>(
+      this, ime_shared_library_->MaybeLoadThenReturnEntryPoints());
+  bool bound = mojo_mode_shared_lib_engine_->BindConnectionFactory(
+      std::move(connection_factory));
+  std::move(callback).Run(bound);
 }
 
 const char* ImeService::GetImeBundleDir() {
@@ -153,47 +156,37 @@ void ImeService::RunInMainSequence(ImeSequencedTask task, int task_id) {
   main_task_runner_->PostTask(FROM_HERE, base::BindOnce(task, task_id));
 }
 
-// TODO(b/218815885): Use consistent feature flag names as in CrOS
-// base::Feature::name (instead of slightly-different bespoke names), and always
-// wire 1:1 to CrOS feature flags (instead of having any extra logic).
 bool ImeService::IsFeatureEnabled(const char* feature_name) {
-  // TODO(b/218815885): Replace refs of AssistiveEmojiEnhanced with
-  // AssistEmojiEnhanced in internal code for consistency.
-  // Then remove the AssistiveEmojiEnhanced check.
-  if (strcmp(feature_name, "AssistiveEmojiEnhanced") == 0 ||
-      strcmp(feature_name, features::kAssistEmojiEnhanced.name) == 0) {
-    return base::FeatureList::IsEnabled(features::kAssistEmojiEnhanced);
+  static const base::Feature* kConsideredFeatures[] = {
+      &features::kAssistMultiWord,
+      &features::kAutocorrectParamsTuning,
+      &features::kImeDownloaderExperiment,
+      &features::kAutocorrectByDefault,
+      &features::kImeSwitchCheckConnectionStatus};
+
+  static constexpr std::string_view kEnabledFeatures[] = {
+      "InputMethodKoreanRightAltKeyDownFix",
+      "FirstPartyVietnameseInput",
+      "ImeKoreanOnlyModeSwitchOnRightAlt",
+      "ImeFstDecoderParamsUpdate",
+      "ImeDownloaderUpdate",
+      "ImeUsEnglishModelUpdate",
+  };
+
+  // Use consistent feature flag names as in CrOS base::Feature::name and always
+  // wire 1:1 to CrOS feature flags without extra logic.
+  for (const base::Feature* feature : kConsideredFeatures) {
+    if (UNSAFE_TODO(strcmp(feature_name, feature->name)) == 0) {
+      return base::FeatureList::IsEnabled(*feature);
+    }
   }
-  // TODO(b/218815885): Replace refs of AssistiveMultiWord with
-  // AssistMultiWord in internal code for consistency.
-  // Then remove the AssistiveMultiWord check.
-  if (strcmp(feature_name, "AssistiveMultiWord") == 0 ||
-      strcmp(feature_name, features::kAssistMultiWord.name) == 0) {
-    return features::IsAssistiveMultiWordEnabled();
+
+  for (const std::string_view name : kEnabledFeatures) {
+    if (name == feature_name) {
+      return true;
+    }
   }
-  // TODO(b/218815885): Replace refs of this with true internally and delete.
-  if (strcmp(feature_name, "AssistiveMultiWordLacrosSupport") == 0) {
-    return true;
-  }
-  if (strcmp(feature_name, features::kAutocorrectParamsTuning.name) == 0) {
-    return base::FeatureList::IsEnabled(features::kAutocorrectParamsTuning);
-  }
-  if (strcmp(feature_name, features::kFirstPartyVietnameseInput.name) == 0) {
-    return base::FeatureList::IsEnabled(features::kFirstPartyVietnameseInput);
-  }
-  if (strcmp(feature_name, features::kLacrosSupport.name) == 0) {
-    return base::FeatureList::IsEnabled(features::kLacrosSupport);
-  }
-  if (strcmp(feature_name, "SystemChinesePhysicalTyping") == 0) {
-    return true;
-  }
-  if (strcmp(feature_name, features::kSystemJapanesePhysicalTyping.name) == 0) {
-    return base::FeatureList::IsEnabled(
-        features::kSystemJapanesePhysicalTyping);
-  }
-  if (strcmp(feature_name, "SystemTransliterationPhysicalTyping") == 0) {
-    return true;
-  }
+
   return false;
 }
 
@@ -202,13 +195,14 @@ const char* ImeService::GetFieldTrialParamValueByFeature(
     const char* param_name) {
   char* c_string_value;
 
-  if (strcmp(feature_name, features::kAutocorrectParamsTuning.name) == 0) {
+  if (UNSAFE_TODO(
+          strcmp(feature_name, features::kAutocorrectParamsTuning.name)) == 0) {
     std::string string_value =
         field_trial_params_retriever_->GetFieldTrialParamValueByFeature(
             features::kAutocorrectParamsTuning, param_name);
     c_string_value =
         new char[string_value.length() + 1];  // extra slot for NULL '\0' char
-    strcpy(c_string_value, string_value.c_str());
+    UNSAFE_TODO(strcpy(c_string_value, string_value.c_str()));
   } else {
     c_string_value = new char[1];
     c_string_value[0] = '\0';
@@ -250,8 +244,12 @@ void ImeService::SimpleDownloadFinishedV2(SimpleDownloadCallbackV2 callback,
   }
 }
 
-const MojoSystemThunks* ImeService::GetMojoSystemThunks() {
-  return MojoEmbedderGetSystemThunks32();
+const void* ImeService::Unused4() {
+  return nullptr;
+}
+
+const MojoSystemThunks2* ImeService::GetMojoSystemThunks2() {
+  return MojoEmbedderGetSystemThunks2();
 }
 
 void ImeService::Unused1() {

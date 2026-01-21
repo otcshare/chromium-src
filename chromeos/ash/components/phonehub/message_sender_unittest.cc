@@ -2,22 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chromeos/ash/components/phonehub/message_sender_impl.h"
-
 #include <netinet/in.h>
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 
 #include "ash/constants/ash_features.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/task_environment.h"
+#include "chromeos/ash/components/phonehub/fake_feature_status_provider.h"
+#include "chromeos/ash/components/phonehub/message_sender_impl.h"
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
+#include "chromeos/ash/components/phonehub/phone_hub_ui_readiness_recorder.h"
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/fake_connection_manager.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 class MessageSenderImplTest : public testing::Test {
  protected:
@@ -29,8 +33,18 @@ class MessageSenderImplTest : public testing::Test {
   void SetUp() override {
     fake_connection_manager_ =
         std::make_unique<secure_channel::FakeConnectionManager>();
-    message_sender_ =
-        std::make_unique<MessageSenderImpl>(fake_connection_manager_.get());
+    fake_feature_status_provider_ =
+        std::make_unique<FakeFeatureStatusProvider>();
+    phone_hub_ui_readiness_recorder_ =
+        std::make_unique<PhoneHubUiReadinessRecorder>(
+            fake_feature_status_provider_.get(),
+            fake_connection_manager_.get());
+    PhoneHubStructuredMetricsLogger::RegisterPrefs(pref_service_.registry());
+    phone_hub_structured_metrics_logger_ =
+        std::make_unique<PhoneHubStructuredMetricsLogger>(&pref_service_);
+    message_sender_ = std::make_unique<MessageSenderImpl>(
+        fake_connection_manager_.get(), phone_hub_ui_readiness_recorder_.get(),
+        phone_hub_structured_metrics_logger_.get());
   }
 
   void VerifyMessage(proto::MessageType expected_message_type,
@@ -56,23 +70,48 @@ class MessageSenderImplTest : public testing::Test {
     EXPECT_EQ(expected_proto_message, actual_proto_message);
   }
 
+  base::test::TaskEnvironment task_environment_;
+  TestingPrefServiceSimple pref_service_;
   std::unique_ptr<secure_channel::FakeConnectionManager>
       fake_connection_manager_;
+  std::unique_ptr<FakeFeatureStatusProvider> fake_feature_status_provider_;
+  std::unique_ptr<PhoneHubUiReadinessRecorder> phone_hub_ui_readiness_recorder_;
+  std::unique_ptr<PhoneHubStructuredMetricsLogger>
+      phone_hub_structured_metrics_logger_;
   std::unique_ptr<MessageSenderImpl> message_sender_;
 };
 
-TEST_F(MessageSenderImplTest, SendCrosState) {
+TEST_F(MessageSenderImplTest, SendCrosStateWithoutAttestation) {
   proto::CrosState request;
   request.set_notification_setting(
       proto::NotificationSetting::NOTIFICATIONS_ON);
   request.set_camera_roll_setting(proto::CameraRollSetting::CAMERA_ROLL_OFF);
-  if (features::IsPhoneHubMonochromeNotificationIconsEnabled()) {
-    request.set_notification_icon_styling(
-        proto::NotificationIconStyling::ICON_STYLE_MONOCHROME_SMALL_ICON);
-  }
+  request.set_allocated_attestation_data(nullptr);
+  request.set_should_provide_eche_status(true);
+  phone_hub_structured_metrics_logger_->SetChromebookInfo(request);
+  message_sender_->SendCrosState(/*notification_enabled=*/true,
+                                 /*camera_roll_enabled=*/false,
+                                 /*certs=*/nullptr);
+  VerifyMessage(proto::MessageType::PROVIDE_CROS_STATE, &request,
+                fake_connection_manager_->sent_messages().back());
+}
+
+TEST_F(MessageSenderImplTest, SendCrosStateWithAttestation) {
+  proto::CrosState request;
+  request.set_notification_setting(
+      proto::NotificationSetting::NOTIFICATIONS_ON);
+  request.set_camera_roll_setting(proto::CameraRollSetting::CAMERA_ROLL_OFF);
+  request.set_should_provide_eche_status(true);
+  request.mutable_attestation_data()->set_type(
+      proto::AttestationData::CROS_SOFT_BIND_CERT_CHAIN);
+  request.mutable_attestation_data()->add_certificates("certificate");
+  phone_hub_structured_metrics_logger_->SetChromebookInfo(request);
+
+  std::vector<std::string> certificates = {"certificate"};
 
   message_sender_->SendCrosState(/*notification_enabled=*/true,
-                                 /*camera_roll_enabled=*/false);
+                                 /*camera_roll_enabled=*/false,
+                                 /*certs=*/&certificates);
   VerifyMessage(proto::MessageType::PROVIDE_CROS_STATE, &request,
                 fake_connection_manager_->sent_messages().back());
 }
@@ -82,7 +121,7 @@ TEST_F(MessageSenderImplTest, SendUpdateNotificationModeRequest) {
   request.set_notification_mode(proto::NotificationMode::DO_NOT_DISTURB_ON);
 
   message_sender_->SendUpdateNotificationModeRequest(
-      /*do_not_disturbed_enabled=*/true);
+      /*do_not_disturb_enabled=*/true);
   VerifyMessage(proto::MessageType::UPDATE_NOTIFICATION_MODE_REQUEST, &request,
                 fake_connection_manager_->sent_messages().back());
 }
@@ -193,5 +232,4 @@ TEST_F(MessageSenderImplTest, SendPingRequest) {
                 fake_connection_manager_->sent_messages().back());
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

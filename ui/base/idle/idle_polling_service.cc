@@ -14,8 +14,6 @@ namespace ui {
 
 namespace {
 
-constexpr base::TimeDelta kPollInterval = base::Seconds(1);
-
 // Default provider implementation. Everything is delegated to
 // ui::CalculateIdleTime and ui::CheckIdleStateIsLocked.
 class DefaultIdleProvider : public IdleTimeProvider {
@@ -51,9 +49,13 @@ void IdlePollingService::AddObserver(Observer* observer) {
   if (observers_.empty()) {
     DCHECK(!timer_.IsRunning());
     PollIdleState();
-    timer_.Reset();
+    // We still use the polling logic for idle time calculation.
+    timer_.Start(FROM_HERE, poll_interval_,
+                 base::BindRepeating(&IdlePollingService::PollIdleState,
+                                     base::Unretained(this)));
+    lock_state_subscription_ = AddScreenLockCallback(base::BindRepeating(
+        &IdlePollingService::OnLockStateChanged, base::Unretained(this)));
   }
-
   observers_.AddObserver(observer);
 }
 
@@ -64,6 +66,7 @@ void IdlePollingService::RemoveObserver(Observer* observer) {
   // Stop polling when there are no observers to save resources.
   if (observers_.empty()) {
     timer_.Stop();
+    lock_state_subscription_ = {};
   }
 }
 
@@ -73,6 +76,11 @@ void IdlePollingService::SetProviderForTest(
   if (!provider_) {
     provider_ = std::make_unique<DefaultIdleProvider>();
   }
+}
+
+void IdlePollingService::SetPollIntervalForTest(base::TimeDelta poll_interval) {
+  DCHECK(!timer_.IsRunning());
+  poll_interval_ = poll_interval;
 }
 
 bool IdlePollingService::IsPollingForTest() {
@@ -85,23 +93,34 @@ void IdlePollingService::SetTaskRunnerForTest(
 }
 
 IdlePollingService::IdlePollingService()
-    : timer_(FROM_HERE,
-             kPollInterval,
-             base::BindRepeating(&IdlePollingService::PollIdleState,
-                                 base::Unretained(this))),
+    : poll_interval_(kPollInterval),
       provider_(std::make_unique<DefaultIdleProvider>()) {
   DCHECK(!timer_.IsRunning());
 }
 
 IdlePollingService::~IdlePollingService() = default;
 
-void IdlePollingService::PollIdleState() {
-  last_state_.idle_time = provider_->CalculateIdleTime();
-  last_state_.locked = provider_->CheckIdleStateIsLocked();
+void IdlePollingService::OnLockStateChanged(bool locked) {
+  if (last_state_.locked == locked) {
+    return;
+  }
 
-  // TODO(https://crbug.com/939870): Only notify observers on change.
-  for (Observer& observer : observers_) {
-    observer.OnIdleStateChange(last_state_);
+  last_state_.locked = locked;
+  last_state_.idle_time = provider_->CalculateIdleTime();
+  observers_.Notify(&Observer::OnIdleStateChange, last_state_);
+}
+
+IdlePollingService::State IdlePollingService::CreateCurrentIdleState() const {
+  return {
+      .locked = provider_->CheckIdleStateIsLocked(),
+      .idle_time = provider_->CalculateIdleTime(),
+  };
+}
+
+void IdlePollingService::PollIdleState() {
+  if (auto cur_state = CreateCurrentIdleState(); cur_state != last_state_) {
+    last_state_ = std::move(cur_state);
+    observers_.Notify(&Observer::OnIdleStateChange, last_state_);
   }
 }
 

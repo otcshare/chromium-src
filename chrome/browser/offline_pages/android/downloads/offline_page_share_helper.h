@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/offline_items_collection/core/offline_item.h"
@@ -41,9 +41,6 @@ class OfflinePageShareHelper {
 
  private:
   void OnPageGetForShare(const std::vector<OfflinePageItem>& pages);
-
-  void AcquireFileAccessPermission();
-  void OnFileAccessPermissionDone(bool granted);
 
   void OnPageGetForPublish(const std::vector<OfflinePageItem>& pages);
   void OnPagePublished(const base::FilePath& file_path, SavePageResult result);

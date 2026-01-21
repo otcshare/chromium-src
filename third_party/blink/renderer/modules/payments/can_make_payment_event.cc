@@ -4,8 +4,6 @@
 
 #include "third_party/blink/renderer/modules/payments/can_make_payment_event.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
@@ -13,31 +11,30 @@
 #include "third_party/blink/renderer/modules/payments/can_make_payment_respond_with_observer.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
-#include "v8/include/v8-local-handle.h"
-#include "v8/include/v8-value.h"
 
 namespace blink {
-namespace {
 
-template <typename IDLType, typename T>
-ScriptValue GetScriptValueOrUndefined(ScriptState* script_state,
-                                      const T& value) {
-  v8::Isolate* isolate = script_state->GetIsolate();
+class CanMakePaymentRespondWithFulfill final
+    : public ThenCallable<IDLBoolean, CanMakePaymentRespondWithFulfill> {
+ public:
+  explicit CanMakePaymentRespondWithFulfill(
+      CanMakePaymentRespondWithObserver* observer)
+      : observer_(observer) {}
 
-  // Merchant and user identifying fields should return undefined values when
-  // ClearIdentityInCanMakePaymentEvent is enabled.
-  if (RuntimeEnabledFeatures::ClearIdentityInCanMakePaymentEventEnabled(
-          ExecutionContext::From(script_state))) {
-    return ScriptValue(isolate, v8::Undefined(isolate));
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(observer_);
+    ThenCallable<IDLBoolean, CanMakePaymentRespondWithFulfill>::Trace(visitor);
   }
 
-  return ScriptValue(
-      isolate, ToV8Traits<IDLType>::ToV8(script_state, value).ToLocalChecked());
-}
+  void React(ScriptState* script_state, bool response) {
+    DCHECK(observer_);
+    observer_->OnResponseFulfilled(script_state, response);
+  }
 
-}  // namespace
+ private:
+  Member<CanMakePaymentRespondWithObserver> observer_;
+};
 
 CanMakePaymentEvent* CanMakePaymentEvent::Create(
     const AtomicString& type,
@@ -61,28 +58,26 @@ const AtomicString& CanMakePaymentEvent::InterfaceName() const {
   return event_interface_names::kCanMakePaymentEvent;
 }
 
-ScriptValue CanMakePaymentEvent::topOrigin(ScriptState* script_state) const {
-  return GetScriptValueOrUndefined<IDLUSVString>(script_state, top_origin_);
+const String& CanMakePaymentEvent::topOrigin() const {
+  return top_origin_;
 }
 
-ScriptValue CanMakePaymentEvent::paymentRequestOrigin(
-    ScriptState* script_state) const {
-  return GetScriptValueOrUndefined<IDLUSVString>(script_state,
-                                                 payment_request_origin_);
+const String& CanMakePaymentEvent::paymentRequestOrigin() const {
+  return payment_request_origin_;
 }
 
-ScriptValue CanMakePaymentEvent::methodData(ScriptState* script_state) const {
-  return GetScriptValueOrUndefined<IDLArray<PaymentMethodData>>(script_state,
-                                                                method_data_);
+const HeapVector<Member<PaymentMethodData>>& CanMakePaymentEvent::methodData()
+    const {
+  return method_data_;
 }
 
-ScriptValue CanMakePaymentEvent::modifiers(ScriptState* script_state) const {
-  return GetScriptValueOrUndefined<IDLArray<PaymentDetailsModifier>>(
-      script_state, modifiers_);
+const HeapVector<Member<PaymentDetailsModifier>>&
+CanMakePaymentEvent::modifiers() const {
+  return modifiers_;
 }
 
 void CanMakePaymentEvent::respondWith(ScriptState* script_state,
-                                      ScriptPromise script_promise,
+                                      ScriptPromise<IDLBoolean> script_promise,
                                       ExceptionState& exception_state) {
   if (!isTrusted()) {
     exception_state.ThrowDOMException(
@@ -93,8 +88,10 @@ void CanMakePaymentEvent::respondWith(ScriptState* script_state,
 
   stopImmediatePropagation();
   if (observer_) {
-    observer_->ObservePromiseResponse(script_state, script_promise,
-                                      exception_state);
+    observer_->RespondWith(
+        script_state, script_promise,
+        MakeGarbageCollected<CanMakePaymentRespondWithFulfill>(observer_),
+        exception_state);
   }
 }
 

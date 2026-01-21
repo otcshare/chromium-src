@@ -8,9 +8,13 @@
 #include <memory>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/render_widget_host.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "ui/android/overscroll_glow.h"
 #include "ui/android/overscroll_refresh.h"
@@ -20,11 +24,12 @@ namespace blink {
 class WebGestureEvent;
 }
 
-namespace cc {
+namespace cc::slim {
 class Layer;
 }
 
 namespace ui {
+class MotionEventAndroid;
 class WindowAndroidCompositor;
 struct DidOverscrollParams;
 }
@@ -35,12 +40,14 @@ namespace content {
 // both the passive overscroll glow and the active overscroll pull-to-refresh.
 // Note that all input coordinates (both for events and overscroll) are in DIPs.
 class CONTENT_EXPORT OverscrollControllerAndroid
-    : public ui::OverscrollGlowClient {
+    : public ui::OverscrollGlowClient,
+      public RenderWidgetHost::InputEventObserver {
  public:
   OverscrollControllerAndroid(
       ui::OverscrollRefreshHandler* overscroll_refresh_handler,
       ui::WindowAndroidCompositor* compositor,
-      float dpi_scale);
+      float dpi_scale,
+      RenderWidgetHost* host);
 
   static std::unique_ptr<OverscrollControllerAndroid> CreateForTests(
       ui::WindowAndroidCompositor* compositor,
@@ -54,20 +61,12 @@ class CONTENT_EXPORT OverscrollControllerAndroid
 
   ~OverscrollControllerAndroid() override;
 
-  // Returns true if |event| is consumed by an overscroll effect, in which
-  // case it should cease propagation.
-  bool WillHandleGestureEvent(const blink::WebGestureEvent& event);
-
-  // To be called upon receipt of a gesture event ack.
-  void OnGestureEventAck(const blink::WebGestureEvent& event,
-                         blink::mojom::InputEventResultState ack_result);
-
   // To be called upon receipt of an overscroll event.
   void OnOverscrolled(const ui::DidOverscrollParams& overscroll_params);
 
   // Returns true if the effect still needs animation ticks.
   // Note: The effect will detach itself when no further animation is required.
-  bool Animate(base::TimeTicks current_time, cc::Layer* parent_layer);
+  bool Animate(base::TimeTicks current_time, cc::slim::Layer* parent_layer);
 
   // To be called whenever the content frame has been updated.
   void OnFrameMetadataUpdated(float page_scale_factor,
@@ -82,7 +81,38 @@ class CONTENT_EXPORT OverscrollControllerAndroid
   void Enable();
   void Disable();
 
+  void SetTouchpadOverscrollHistoryNavigation(bool enabled);
+
+  // Returns true if the controller is actively handling the current input
+  // sequence. This state persists until reset by
+  // MotionEventAndroid::Action::DOWN from the next input sequence.
+  bool IsHandlingInputSequence();
+
+  // Returns true if |event| is consumed by an overscroll effect, in which
+  // case it should cease propagation.
+  bool OnTouchEvent(const ui::MotionEventAndroid& event);
+
+  // Start RenderWidgetHost::InputEventObserver overrides
+  void OnInputEvent(const RenderWidgetHost& widget,
+                    const blink::WebInputEvent& event,
+                    InputEventSource source) override;
+  void OnInputEventAck(const RenderWidgetHost& widget,
+                       blink::mojom::InputEventResultSource source,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent&) override;
+  // End RenderWidgetHost::InputEventObserver overrides
+
  private:
+  FRIEND_TEST_ALL_PREFIXES(OverscrollControllerAndroidUnitTest,
+                           ConsumedBeginDoesNotResetEnabledRefresh);
+
+  bool ShouldHandleInputEvents();
+  void OnGestureEvent(const blink::WebGestureEvent& event);
+
+  // To be called upon receipt of a gesture event ack.
+  void OnGestureEventAck(const blink::WebGestureEvent& event,
+                         blink::mojom::InputEventResultState ack_result);
+
   // This method should only be called from CreateForTests.
   OverscrollControllerAndroid(
       ui::WindowAndroidCompositor* compositor,
@@ -100,9 +130,21 @@ class CONTENT_EXPORT OverscrollControllerAndroid
 
   bool enabled_;
 
+  // True if the OverscrollController has claimed the current input sequence. It
+  // will continue handling all events in this sequence until a terminating
+  // action (ACTION_UP/ACTION_CANCEL) occurs.
+  bool is_handling_sequence_ = false;
+
+  // Stores the last seen position of a touch input event (in pix) to correctly
+  // calculate scroll deltas for `refresh_effect_`.
+  gfx::Vector2dF last_pos_;
+
   // TODO(jdduke): Factor out a common API from the two overscroll effects.
   std::unique_ptr<ui::OverscrollGlow> glow_effect_;
   std::unique_ptr<ui::OverscrollRefresh> refresh_effect_;
+  base::ScopedObservation<RenderWidgetHost,
+                          RenderWidgetHost::InputEventObserver>
+      obs_{this};
 };
 
 }  // namespace content

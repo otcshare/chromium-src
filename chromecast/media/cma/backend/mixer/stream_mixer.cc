@@ -12,17 +12,16 @@
 #include <unordered_set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/synchronization/condition_variable.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/thread_health_checker.h"
@@ -367,7 +366,8 @@ void StreamMixer::CreatePostProcessors(CastMediaShlib::ResultCallback callback,
   mixer_pipeline_.reset();
 
   if (!override_config.empty()) {
-    auto value = base::JSONReader::Read(override_config);
+    auto value = base::JSONReader::Read(override_config,
+                                        base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     CHECK(value) << "Invalid JSON";
     PostProcessingPipelineParser parser(std::move(*value));
     mixer_pipeline_ = MixerPipeline::CreateMixerPipeline(
@@ -921,7 +921,8 @@ void StreamMixer::WriteMixedPcm(int frames, int64_t expected_playback_time) {
   // Hard limit to [1.0, -1.0]
   for (int i = 0; i < frames * loopback_channel_count; ++i) {
     // TODO(bshaya): Warn about clipping here.
-    loopback_data[i] = base::clamp(loopback_data[i], -1.0f, 1.0f);
+    UNSAFE_TODO(loopback_data[i]) =
+        std::clamp(UNSAFE_TODO(loopback_data[i]), -1.0f, 1.0f);
   }
 
   loopback_handler_->SendData(expected_playback_time,
@@ -933,7 +934,8 @@ void StreamMixer::WriteMixedPcm(int frames, int64_t expected_playback_time) {
 
   // Hard limit to [1.0, -1.0].
   for (int i = 0; i < frames * num_output_channels_; ++i) {
-    linearized_data[i] = base::clamp(linearized_data[i], -1.0f, 1.0f);
+    UNSAFE_TODO(linearized_data[i]) =
+        std::clamp(UNSAFE_TODO(linearized_data[i]), -1.0f, 1.0f);
   }
 
   bool playback_interrupted = false;

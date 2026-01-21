@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "mojo/public/cpp/bindings/array_data_view.h"
 #include "mojo/public/cpp/bindings/lib/array_serialization.h"
 #include "mojo/public/cpp/bindings/lib/map_data_internal.h"
@@ -36,7 +37,8 @@ class MapReaderBase {
   void* GetDataIfExists() { return nullptr; }
 
  protected:
-  MaybeConstUserType& input_;
+  // RAW_PTR_EXCLUSION: Binary size increase.
+  RAW_PTR_EXCLUSION MaybeConstUserType& input_;
   MaybeConstIterator iter_;
 };
 
@@ -100,8 +102,9 @@ struct Serializer<MapDataView<Key, Value>, MaybeConstUserType> {
                         const ContainerValidateParams* validate_params) {
     DCHECK(validate_params->key_validate_params);
     DCHECK(validate_params->element_validate_params);
-    if (CallIsNullIfExists<Traits>(input))
+    if (CallIsNullIfExists<Traits>(input)) {
       return;
+    }
 
     fragment.Allocate();
     MessageFragment<typename MojomTypeTraits<ArrayDataView<Key>>::Data>
@@ -123,8 +126,9 @@ struct Serializer<MapDataView<Key, Value>, MaybeConstUserType> {
   }
 
   static bool Deserialize(Data* input, UserType* output, Message* message) {
-    if (!input)
+    if (!input) {
       return CallSetToNullIfExists<Traits>(output);
+    }
 
     std::vector<UserKey> keys;
     std::vector<UserValue> values;
@@ -141,8 +145,9 @@ struct Serializer<MapDataView<Key, Value>, MaybeConstUserType> {
     Traits::SetToEmpty(output);
 
     for (size_t i = 0; i < size; ++i) {
-      if (!Traits::Insert(*output, std::move(keys[i]), std::move(values[i])))
+      if (!Traits::Insert(*output, std::move(keys[i]), std::move(values[i]))) {
         return false;
+      }
     }
     return true;
   }

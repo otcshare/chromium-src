@@ -5,22 +5,19 @@
 #include "components/browsing_data/content/mock_cookie_helper.h"
 
 #include <memory>
+#include <optional>
 
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
-#include "content/public/browser/browser_context.h"
 #include "net/cookies/cookie_options.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace browsing_data {
 
-MockCookieHelper::MockCookieHelper(content::BrowserContext* browser_context)
-    : CookieHelper(browser_context->GetDefaultStoragePartition(),
-                   base::NullCallback()) {}
+MockCookieHelper::MockCookieHelper(content::StoragePartition* storage_partition)
+    : CookieHelper(storage_partition, base::NullCallback()) {}
 
-MockCookieHelper::~MockCookieHelper() {}
+MockCookieHelper::~MockCookieHelper() = default;
 
 void MockCookieHelper::StartFetching(FetchCallback callback) {
   ASSERT_FALSE(callback.is_null());
@@ -29,17 +26,18 @@ void MockCookieHelper::StartFetching(FetchCallback callback) {
 }
 
 void MockCookieHelper::DeleteCookie(const net::CanonicalCookie& cookie) {
-  ASSERT_TRUE(base::Contains(cookies_, cookie));
+  ASSERT_TRUE(cookies_.contains(cookie));
   cookies_[cookie] = false;
 }
 
 void MockCookieHelper::AddCookieSamples(
     const GURL& url,
     const std::string& cookie_line,
-    absl::optional<net::CookiePartitionKey> cookie_partition_key) {
-  std::unique_ptr<net::CanonicalCookie> cc(net::CanonicalCookie::Create(
-      url, cookie_line, base::Time::Now(), absl::nullopt /* server_time */,
-      cookie_partition_key));
+    std::optional<net::CookiePartitionKey> cookie_partition_key) {
+  std::unique_ptr<net::CanonicalCookie> cc(
+      net::CanonicalCookie::CreateForTesting(
+          url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
+          cookie_partition_key));
 
   if (cc.get()) {
     if (cookies_.count(*cc))

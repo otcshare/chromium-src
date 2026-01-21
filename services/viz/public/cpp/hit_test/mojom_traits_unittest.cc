@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "base/compiler_specific.h"
 #include "components/viz/common/hit_test/aggregated_hit_test_region.h"
 #include "components/viz/common/hit_test/hit_test_region_list.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
@@ -40,7 +41,7 @@ TEST(StructTraitsTest, AggregatedHitTestRegion) {
 }
 
 TEST(StructTraitsTest, HitTestRegionList) {
-  absl::optional<HitTestRegionList> input(absl::in_place);
+  std::optional<HitTestRegionList> input(std::in_place);
   input->flags = HitTestRegionFlags::kHitTestAsk;
   input->async_hit_test_reasons = AsyncHitTestReasons::kOverlappedRegion;
   input->bounds = gfx::Rect(1, 2, 3, 4);
@@ -54,7 +55,7 @@ TEST(StructTraitsTest, HitTestRegionList) {
   input_region1.transform.Scale(1.2f, 1.3f);
   input->regions.push_back(input_region1);
 
-  absl::optional<HitTestRegionList> output;
+  std::optional<HitTestRegionList> output;
   mojo::test::SerializeAndDeserialize<mojom::HitTestRegionList>(input, output);
   EXPECT_TRUE(output);
   EXPECT_EQ(input->flags, output->flags);
@@ -76,9 +77,9 @@ TEST(StructTraitsTest, TransformImmutable) {
   auto t = gfx::Transform::RowMajor(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
                                     14, 15, 16);
   uint8_t mem[sizeof(t)];
-  std::memcpy(&mem, &t, sizeof(t));
+  UNSAFE_TODO(std::memcpy(&mem, &t, sizeof(t)));
   EXPECT_FALSE(t.IsIdentity());
-  EXPECT_EQ(0, std::memcmp(&t, &mem, sizeof(t)));
+  UNSAFE_TODO(EXPECT_EQ(0, std::memcmp(&t, &mem, sizeof(t))));
 }
 
 }  // namespace viz

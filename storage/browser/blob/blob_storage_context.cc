@@ -11,12 +11,13 @@
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/stringprintf.h"
@@ -277,7 +278,8 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
     }
   }
 
-  std::vector<ShareableBlobDataItem*> transport_items;
+  std::vector<raw_ptr<ShareableBlobDataItem, VectorExperimental>>
+      transport_items;
   transport_items.reserve(content->pending_transport_items().size());
   for (const auto& item : content->pending_transport_items())
     transport_items.emplace_back(item.get());
@@ -530,8 +532,8 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
           scoped_refptr<BlobDataItem> new_item = BlobDataItem::CreateFile(
               source_item->path(),
               source_item->offset() + copy.source_item_offset, dest_size,
-              source_item->expected_modification_time(),
-              source_item->file_ref_);
+              source_item->expected_modification_time(), source_item->file_ref_,
+              source_item->file_access_);
           copy.dest_item->set_item(std::move(new_item));
           break;
         }
@@ -539,7 +541,6 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
         case BlobDataItem::Type::kFileFilesystem:
         case BlobDataItem::Type::kReadableDataHandle:
           NOTREACHED();
-          break;
       }
       copy.dest_item->set_state(ShareableBlobDataItem::POPULATED_WITH_QUOTA);
     }
@@ -697,7 +698,7 @@ void BlobStorageContext::RegisterFromMemory(
 
   std::unique_ptr<BlobDataBuilder> builder =
       std::make_unique<BlobDataBuilder>(uuid);
-  builder->AppendData(data.byte_span());
+  builder->AppendData(data);
   std::unique_ptr<BlobDataHandle> handle = AddFinishedBlob(std::move(builder));
   BlobImpl::Create(std::move(handle), std::move(blob));
 }
@@ -706,7 +707,7 @@ void BlobStorageContext::WriteBlobToFile(
     mojo::PendingRemote<::blink::mojom::Blob> pending_blob,
     const base::FilePath& file_path,
     bool flush_on_write,
-    absl::optional<base::Time> last_modified,
+    std::optional<base::Time> last_modified,
     BlobStorageContext::WriteBlobToFileCallback callback) {
   DCHECK(!last_modified || !last_modified.value().is_null());
   if (profile_directory_.empty()) {
@@ -727,7 +728,7 @@ void BlobStorageContext::WriteBlobToFile(
       base::BindOnce(
           [](base::WeakPtr<BlobStorageContext> blob_context,
              const base::FilePath& file_path, bool flush_on_write,
-             absl::optional<base::Time> last_modified,
+             std::optional<base::Time> last_modified,
              BlobStorageContext::WriteBlobToFileCallback callback,
              std::unique_ptr<BlobDataHandle> handle) {
             if (!handle || !blob_context) {
@@ -741,6 +742,11 @@ void BlobStorageContext::WriteBlobToFile(
           },
           AsWeakPtr(), file_path, flush_on_write, last_modified,
           std::move(callback)));
+}
+
+void BlobStorageContext::Clone(
+    mojo::PendingReceiver<mojom::BlobStorageContext> receiver) {
+  Bind(std::move(receiver));
 }
 
 }  // namespace storage

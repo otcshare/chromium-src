@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/scoped_refptr.h"
@@ -35,7 +35,7 @@ RefCountedClosureList::~RefCountedClosureList() {
 
 void RefCountedClosureList::RegisterCompletionCallback(
     base::OnceClosure callback) {
-  DCHECK(callback);
+  CHECK(callback);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   callbacks_.push_back(std::move(callback));
 }

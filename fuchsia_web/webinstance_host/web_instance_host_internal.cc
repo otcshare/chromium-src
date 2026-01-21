@@ -6,6 +6,7 @@
 
 #include <fuchsia/web/cpp/fidl.h>
 
+#include <string_view>
 #include <utility>
 
 #include "base/base_switches.h"
@@ -14,7 +15,6 @@
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
@@ -40,7 +40,7 @@ namespace {
 // Returns true if DRM is supported in current configuration. Currently we
 // assume that it is supported on ARM64, but not on x64.
 //
-// TODO(crbug.com/1013412): Detect support for all features required for
+// TODO(crbug.com/42050020): Detect support for all features required for
 // FuchsiaCdm. Specifically we need to verify that protected memory is supported
 // and that mediacodec API provides hardware video decoders.
 bool IsFuchsiaCdmSupported() {
@@ -55,8 +55,8 @@ bool IsFuchsiaCdmSupported() {
 // The switch is assumed to consist of comma-separated values. If |switch_name|
 // is already set in |command_line| then a comma will be appended, followed by
 // |value|, otherwise the switch will be set to |value|.
-void AppendToSwitch(base::StringPiece switch_name,
-                    base::StringPiece value,
+void AppendToSwitch(std::string_view switch_name,
+                    std::string_view value,
                     base::CommandLine& command_line) {
   if (!command_line.HasSwitch(switch_name)) {
     command_line.AppendSwitchNative(switch_name, value);
@@ -125,8 +125,9 @@ bool HandleKeyboardFeatureFlags(fuchsia::web::ContextFeatureFlags features,
 void HandleUnsafelyTreatInsecureOriginsAsSecureParam(
     fuchsia::web::CreateContextParams& params,
     base::CommandLine& launch_args) {
-  if (!params.has_unsafely_treat_insecure_origins_as_secure())
+  if (!params.has_unsafely_treat_insecure_origins_as_secure()) {
     return;
+  }
 
   const std::vector<std::string>& insecure_origins =
       params.unsafely_treat_insecure_origins_as_secure();
@@ -157,10 +158,11 @@ void HandleUnsafelyTreatInsecureOriginsAsSecureParam(
 
 void HandleCorsExemptHeadersParam(fuchsia::web::CreateContextParams& params,
                                   base::CommandLine& launch_args) {
-  if (!params.has_cors_exempt_headers())
+  if (!params.has_cors_exempt_headers()) {
     return;
+  }
 
-  std::vector<base::StringPiece> cors_exempt_headers;
+  std::vector<std::string_view> cors_exempt_headers;
   cors_exempt_headers.reserve(params.cors_exempt_headers().size());
   for (const auto& header : params.cors_exempt_headers()) {
     cors_exempt_headers.push_back(BytesAsString(header));
@@ -188,14 +190,11 @@ void HandleDisableCodeGenerationParam(
   // Add the JIT-less option to the comma-separated set of V8 flags passed to
   // Blink.
   AppendToSwitch(kJavaScriptFlags, kV8JitlessFlag, launch_args);
-
-  // TODO(crbug.com/1290907): Disable use of VmexResource in this case, once
-  // migrated off of ambient VMEX.
 }
 
 }  // namespace
 
-void RegisterWebInstanceProductData(base::StringPiece component_url) {
+void RegisterWebInstanceProductData(std::string_view absolute_component_url) {
   // LINT.IfChange(web_engine_crash_product_name)
   static constexpr char kCrashProductName[] = "FuchsiaWebEngine";
   // LINT.ThenChange(//fuchsia_web/webengine/context_provider_main.cc:web_engine_crash_product_name)
@@ -203,16 +202,16 @@ void RegisterWebInstanceProductData(base::StringPiece component_url) {
   static constexpr char kFeedbackAnnotationsNamespace[] = "web-engine";
 
   fuchsia_component_support::RegisterProductDataForCrashReporting(
-      component_url, kCrashProductName);
+      absolute_component_url, kCrashProductName);
 
   fuchsia_component_support::RegisterProductDataForFeedback(
       kFeedbackAnnotationsNamespace);
 }
 
-bool IsValidContentDirectoryName(base::StringPiece file_name) {
+bool IsValidContentDirectoryName(std::string_view file_name) {
   if (file_name.find_first_of(base::FilePath::kSeparators, 0,
                               base::FilePath::kSeparatorsLength - 1) !=
-      base::StringPiece::npos) {
+      std::string_view::npos) {
     return false;
   }
   if (file_name == base::FilePath::kCurrentDirectory ||
@@ -226,7 +225,6 @@ zx_status_t AppendLaunchArgs(fuchsia::web::CreateContextParams& params,
                              base::CommandLine& launch_args) {
   // Arguments to be stripped rather than propagated.
   launch_args.RemoveSwitch(switches::kContextProvider);
-  launch_args.RemoveSwitch(switches::kEnableCfv2);
 
   const fuchsia::web::ContextFeatureFlags features =
       params.has_features() ? params.features()
@@ -415,11 +413,15 @@ void AppendDynamicServices(fuchsia::web::ContextFeatureFlags features,
                            std::vector<std::string>& services) {
   using ::fuchsia::web::ContextFeatureFlags;
 
+  // Result of bitwise AND when no specified flag(s) are present.
+  const ContextFeatureFlags kNoFeaturesRequested =
+      static_cast<ContextFeatureFlags>(0);
+
   // Features are listed here in order of their enum value.
   static constexpr struct {
     ContextFeatureFlags flag;
     ContextFeatureFlags value;
-    base::StringPiece service;
+    std::string_view service;
   } kServices[] = {
     {ContextFeatureFlags::NETWORK, ContextFeatureFlags::NETWORK,
      "fuchsia.net.interfaces.State"},
@@ -434,6 +436,8 @@ void AppendDynamicServices(fuchsia::web::ContextFeatureFlags features,
     {ContextFeatureFlags::AUDIO, ContextFeatureFlags::AUDIO,
      "fuchsia.media.SessionAudioConsumerFactory"},
     {ContextFeatureFlags::VULKAN, ContextFeatureFlags::VULKAN,
+     "fuchsia.tracing.provider.Registry"},
+    {ContextFeatureFlags::VULKAN, ContextFeatureFlags::VULKAN,
      "fuchsia.vulkan.loader.Loader"},
     {ContextFeatureFlags::HARDWARE_VIDEO_DECODER,
      ContextFeatureFlags::HARDWARE_VIDEO_DECODER,
@@ -443,14 +447,12 @@ void AppendDynamicServices(fuchsia::web::ContextFeatureFlags features,
     {ContextFeatureFlags::WIDEVINE_CDM, ContextFeatureFlags::WIDEVINE_CDM,
      "fuchsia.media.drm.Widevine"},
 #endif
-    {ContextFeatureFlags::HEADLESS, static_cast<ContextFeatureFlags>(0),
+    {ContextFeatureFlags::HEADLESS, kNoFeaturesRequested,
      "fuchsia.accessibility.semantics.SemanticsManager"},
-    {ContextFeatureFlags::HEADLESS, static_cast<ContextFeatureFlags>(0),
+    {ContextFeatureFlags::HEADLESS, kNoFeaturesRequested,
      "fuchsia.ui.composition.Allocator"},
-    {ContextFeatureFlags::HEADLESS, static_cast<ContextFeatureFlags>(0),
+    {ContextFeatureFlags::HEADLESS, kNoFeaturesRequested,
      "fuchsia.ui.composition.Flatland"},
-    {ContextFeatureFlags::HEADLESS, static_cast<ContextFeatureFlags>(0),
-     "fuchsia.ui.scenic.Scenic"},
 #if BUILDFLAG(ENABLE_CAST_RECEIVER)
     {ContextFeatureFlags::LEGACYMETRICS, ContextFeatureFlags::LEGACYMETRICS,
      "fuchsia.legacymetrics.MetricsRecorder"},
@@ -460,10 +462,13 @@ void AppendDynamicServices(fuchsia::web::ContextFeatureFlags features,
     {ContextFeatureFlags::VIRTUAL_KEYBOARD,
      ContextFeatureFlags::VIRTUAL_KEYBOARD,
      "fuchsia.input.virtualkeyboard.ControllerCreator"},
+    {ContextFeatureFlags::DISABLE_DYNAMIC_CODE_GENERATION, kNoFeaturesRequested,
+     "fuchsia.kernel.VmexResource"},
   };
   for (const auto& [flag, value, service] : kServices) {
-    if ((features & flag) == value)
+    if ((features & flag) == value) {
       services.push_back(std::string(service));
+    }
   }
 
 #if BUILDFLAG(ENABLE_WIDEVINE) && BUILDFLAG(ENABLE_CAST_RECEIVER)

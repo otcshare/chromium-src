@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 
 SafeMediaMetadataParser::SafeMediaMetadataParser(
@@ -69,7 +69,7 @@ void SafeMediaMetadataParser::ParseMediaMetadataDone(
 
 void SafeMediaMetadataParser::OnMediaDataReady(
     chrome::mojom::MediaDataSource::ReadCallback callback,
-    std::unique_ptr<std::string> data) {
+    std::string data) {
   if (media_parser())
-    std::move(callback).Run(std::vector<uint8_t>(data->begin(), data->end()));
+    std::move(callback).Run(std::vector<uint8_t>(data.begin(), data.end()));
 }

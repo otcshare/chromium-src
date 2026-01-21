@@ -17,7 +17,25 @@ extern const char kLastUploadTimestamp[];
 
 extern const char kLastUploadSucceededTimestamp[];
 
+extern const char kLastSignalsUploadAttemptTimestamp[];
+
+extern const char kLastSignalsUploadSucceededTimestamp[];
+
+extern const char kLastSignalsUploadSucceededConfig[];
+
 extern const char kCloudReportingUploadFrequency[];
+
+extern const char kUserSecuritySignalsReporting[];
+
+extern const char kUserSecurityAuthenticatedReporting[];
+
+extern const char kPoliciesEverFetchedWithProfileId[];
+
+extern const char kSaasUsageDomainUrlsForBrowser[];
+
+extern const char kSaasUsageDomainUrlsForProfile[];
+
+extern const char kSaasUsageReport[];
 
 }  // namespace enterprise_reporting
 

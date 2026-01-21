@@ -4,31 +4,29 @@
 
 import './diagnostics_shared.css.js';
 
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {TroubleshootingInfo} from './diagnostics_types.js';
+import type {TroubleshootingInfo} from './diagnostics_types.js';
 import {getTemplate} from './network_troubleshooting.html.js';
 
 const NetworkTroubleshootingElementBase = I18nMixin(PolymerElement);
 
 export class NetworkTroubleshootingElement extends
     NetworkTroubleshootingElementBase {
-  static get is() {
-    return 'network-troubleshooting';
+  static get is(): 'network-troubleshooting' {
+    return 'network-troubleshooting' as const;
   }
 
-  static get template() {
+  static get template(): HTMLTemplateElement {
     return getTemplate();
   }
 
-  static get properties() {
+  static get properties(): PolymerElementProperties {
     return {
-      isLoggedIn_: {
-        type: Boolean,
-        value: loadTimeData.getBoolean('isLoggedIn'),
-      },
+      isLoggedIn: {type: Boolean},
 
       troubleshootingInfo: {
         type: Object,
@@ -37,16 +35,16 @@ export class NetworkTroubleshootingElement extends
   }
 
   troubleshootingInfo: TroubleshootingInfo;
-  protected isLoggedIn_: boolean;
+  protected isLoggedIn: boolean = loadTimeData.getBoolean('isLoggedIn');
 
-  protected onLinkTextClicked_(): void {
+  protected onLinkTextClicked(): void {
     window.open(this.troubleshootingInfo.url);
   }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'network-troubleshooting': NetworkTroubleshootingElement;
+    [NetworkTroubleshootingElement.is]: NetworkTroubleshootingElement;
   }
 }
 

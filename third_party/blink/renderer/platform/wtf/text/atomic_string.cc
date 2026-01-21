@@ -31,47 +31,45 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
 
-namespace WTF {
+namespace blink {
 
 ASSERT_SIZE(AtomicString, String);
 
-#if defined(ARCH_CPU_64_BITS)
-AtomicString::AtomicString(const LChar* chars, size_t length)
-    : AtomicString(chars, base::checked_cast<unsigned>(length)) {}
-#endif  // defined(ARCH_CPU_64_BITS)
+AtomicString::AtomicString(base::span<const LChar> chars)
+    : string_(AtomicStringTable::Instance().Add(chars)) {}
 
-AtomicString::AtomicString(const LChar* chars, unsigned length)
-    : string_(AtomicStringTable::Instance().Add(chars, length)) {}
-
-AtomicString::AtomicString(const UChar* chars,
-                           unsigned length,
+AtomicString::AtomicString(base::span<const UChar> chars,
                            AtomicStringUCharEncoding encoding)
-    : string_(AtomicStringTable::Instance().Add(chars, length, encoding)) {}
+    : string_(AtomicStringTable::Instance().Add(chars, encoding)) {}
 
 AtomicString::AtomicString(const UChar* chars)
     : string_(AtomicStringTable::Instance().Add(
-          chars,
-          chars ? LengthOfNullTerminatedString(chars) : 0,
+          // SAFETY: safe when `chars` points to a null-terminated cstring.
+          UNSAFE_BUFFERS(
+              {chars, chars ? LengthOfNullTerminatedString(chars) : 0}),
           AtomicStringUCharEncoding::kUnknown)) {}
 
-scoped_refptr<StringImpl> AtomicString::AddSlowCase(
-    scoped_refptr<StringImpl>&& string) {
-  DCHECK(!string->IsAtomic());
+AtomicString::AtomicString(const StringView& string_view)
+    : string_(AtomicStringTable::Instance().Add(string_view)) {}
+
+String AtomicString::AddSlowCase(String&& string) {
+  DCHECK(!string.Impl()->IsAtomic());
   return AtomicStringTable::Instance().Add(std::move(string));
 }
 
-scoped_refptr<StringImpl> AtomicString::AddSlowCase(StringImpl* string) {
+String AtomicString::AddSlowCase(StringImpl* string) {
   DCHECK(!string->IsAtomic());
   return AtomicStringTable::Instance().Add(string);
 }
 
-AtomicString AtomicString::FromUTF8(const char* chars, size_t length) {
-  if (!chars)
+AtomicString AtomicString::FromUTF8(base::span<const uint8_t> bytes) {
+  if (!bytes.data()) {
     return g_null_atom;
-  if (!length)
+  }
+  if (bytes.empty()) {
     return g_empty_atom;
-  return AtomicString(
-      AtomicStringTable::Instance().AddUTF8(chars, chars + length));
+  }
+  return AtomicString(AtomicStringTable::Instance().AddUTF8(bytes));
 }
 
 AtomicString AtomicString::FromUTF8(const char* chars) {
@@ -79,16 +77,22 @@ AtomicString AtomicString::FromUTF8(const char* chars) {
     return g_null_atom;
   if (!*chars)
     return g_empty_atom;
-  return AtomicString(AtomicStringTable::Instance().AddUTF8(chars, nullptr));
+  return AtomicString(AtomicStringTable::Instance().AddUTF8(
+      base::as_byte_span(std::string_view(chars))));
+}
+
+AtomicString AtomicString::FromUTF8(std::string_view utf8_string) {
+  return FromUTF8(base::as_byte_span(utf8_string));
 }
 
 AtomicString AtomicString::LowerASCII(AtomicString source) {
-  if (LIKELY(source.IsLowerASCII()))
+  if (source.IsLowerASCII()) [[likely]] {
     return source;
+  }
   StringImpl* impl = source.Impl();
   // if impl is null, then IsLowerASCII() should have returned true.
   DCHECK(impl);
-  scoped_refptr<StringImpl> new_impl = impl->LowerASCII();
+  String new_impl = impl->LowerASCII();
   return AtomicString(String(std::move(new_impl)));
 }
 
@@ -98,14 +102,15 @@ AtomicString AtomicString::LowerASCII() const {
 
 AtomicString AtomicString::UpperASCII() const {
   StringImpl* impl = Impl();
-  if (UNLIKELY(!impl))
+  if (!impl) [[unlikely]] {
     return *this;
+  }
   return AtomicString(impl->UpperASCII());
 }
 
 AtomicString AtomicString::Number(double number, unsigned precision) {
-  NumberToStringBuffer buffer;
-  return AtomicString(NumberToFixedPrecisionString(number, precision, buffer));
+  DoubleToStringConverter converter;
+  return AtomicString(converter.ToStringWithFixedPrecision(number, precision));
 }
 
 std::ostream& operator<<(std::ostream& out, const AtomicString& s) {
@@ -122,4 +127,4 @@ void AtomicString::Show() const {
 }
 #endif
 
-}  // namespace WTF
+}  // namespace blink

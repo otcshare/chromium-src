@@ -8,17 +8,21 @@
 #include <limits>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
-#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/cloud_policy.pb.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 #include "components/strings/grit/components_strings.h"
 
 namespace policy {
@@ -63,11 +67,12 @@ base::Value DecodeBooleanProto(const em::BooleanPolicyProto& proto) {
 // Convert an IntegerPolicyProto to an int base::Value.
 base::Value DecodeIntegerProto(const em::IntegerPolicyProto& proto,
                                std::string* error) {
-  google::protobuf::int64 value = proto.value();
+  int64_t value = proto.value();
 
   if (value < std::numeric_limits<int>::min() ||
       value > std::numeric_limits<int>::max()) {
-    LOG(WARNING) << "Integer value " << value << " out of numeric limits";
+    LOG_POLICY(WARNING, POLICY_PROCESSING)
+        << "Integer value " << value << " out of numeric limits";
     *error = "Number out of range - invalid int32";
     return base::Value(base::NumberToString(value));
   }
@@ -83,14 +88,14 @@ base::Value DecodeStringProto(const em::StringPolicyProto& proto) {
 // Convert a StringListPolicyProto to a List base::Value, where each list value
 // is of Type::STRING.
 base::Value DecodeStringListProto(const em::StringListPolicyProto& proto) {
-  base::Value list_value(base::Value::Type::LIST);
+  base::Value::List list_value;
   for (const auto& entry : proto.value().entries())
     list_value.Append(entry);
-  return list_value;
+  return base::Value(std::move(list_value));
 }
 
 // Convert a StringPolicyProto to a base::Value of any type (for example,
-// Type::DICTIONARY or Type::LIST) by parsing it as JSON.
+// Type::DICT or Type::LIST) by parsing it as JSON.
 base::Value DecodeJsonProto(const em::StringPolicyProto& proto,
                             std::string* error) {
   const std::string& json = proto.value();
@@ -100,7 +105,7 @@ base::Value DecodeJsonProto(const em::StringPolicyProto& proto,
   if (!value_with_error.has_value()) {
     // Can't parse as JSON so return it as a string, and leave it to the handler
     // to validate.
-    LOG(WARNING) << "Invalid JSON: " << json;
+    LOG_POLICY(WARNING, POLICY_PROCESSING) << "Invalid JSON: " << json;
     *error = value_with_error.error().message;
     return base::Value(json);
   }
@@ -129,13 +134,110 @@ bool UseExternalDataFetcher(const char* policy_name,
     return true;
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  if (strcmp(policy_name, key::kWebAppInstallForceList) == 0)
+  if (UNSAFE_TODO(strcmp(policy_name, key::kWebAppInstallForceList)) == 0) {
     return true;
+  }
 #endif
   return false;
 }
 
 }  // namespace
+
+ExtensionInstallDecision ConvertToExtensionInstallDecision(
+    const enterprise_management::ExtensionInstallPolicies& policies,
+    const ExtensionIdAndVersion& extension_id_and_version) {
+  for (em::ExtensionInstallPolicy policy : policies.policies()) {
+    if (!policy.has_extension_id()) {
+      VLOG_POLICY(1, POLICY_PROCESSING)
+          << "ExtensionInstallCloudPolicy missing extension id";
+      continue;
+    }
+    if (!policy.has_extension_version()) {
+      VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallCloudPolicy - %s: missing version",
+          policy.extension_id());
+      continue;
+    }
+    std::string policy_key = base::StringPrintf("%s@%s", policy.extension_id(),
+                                                policy.extension_version());
+
+    if (!policy.has_action()) {
+      VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallCloudPolicy - %s:missing action", policy_key);
+      continue;
+    }
+
+    if (policy.extension_id() == extension_id_and_version.extension_id &&
+        policy.extension_version() ==
+            extension_id_and_version.extension_version) {
+      std::set<enterprise_management::ExtensionInstallPolicy::Reason> reasons;
+      for (const auto& reason : policy.reasons()) {
+        reasons.insert(
+            static_cast<enterprise_management::ExtensionInstallPolicy::Reason>(
+                reason));
+      }
+      return ExtensionInstallDecision(policy.action(), std::move(reasons));
+    }
+  }
+  VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+      "ExtensionInstallCloudPolicy - %s@%s:missing policy",
+      extension_id_and_version.extension_id,
+      extension_id_and_version.extension_version);
+  return ExtensionInstallDecision();
+}
+
+void DecodeProtoFields(const em::ExtensionInstallPolicies& policies,
+                       PolicySource source,
+                       PolicyScope scope,
+                       PolicyMap* map) {
+  std::map<std::string, base::Value> extension_id_to_policy_value;
+  for (const em::ExtensionInstallPolicy& policy : policies.policies()) {
+    if (!policy.has_extension_id()) {
+      VLOG_POLICY(2, POLICY_PROCESSING)
+          << "ExtensionInstallPolicy missing extension id";
+      continue;
+    }
+    if (!policy.has_extension_version()) {
+      VLOG_POLICY(2, POLICY_PROCESSING)
+          << base::StringPrintf("ExtensionInstallPolicy - %s: missing version",
+                                policy.extension_id());
+      continue;
+    }
+
+    if (!policy.has_action()) {
+      VLOG_POLICY(2, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallPolicy - %s - version %s: missing action",
+          policy.extension_id(), policy.extension_version());
+      continue;
+    }
+    base::Value action(policy.action());
+    base::Value::List reasons;
+    for (const auto& reason : policy.reasons()) {
+      reasons.Append(reason);
+    }
+
+    VLOG_POLICY(2, POLICY_PROCESSING) << base::StringPrintf(
+        "ExtensionInstallPolicy - %s - version:%s action: %s, reasons: %s",
+        policy.extension_id(), policy.extension_version(), action.DebugString(),
+        reasons.DebugString());
+
+    base::Value policy_value(base::Value::Type::DICT);
+    policy_value.GetDict().Set("action", std::move(action));
+    policy_value.GetDict().Set("reasons", std::move(reasons));
+
+    if (!extension_id_to_policy_value.contains(policy.extension_id())) {
+      extension_id_to_policy_value.emplace(
+          policy.extension_id(), base::Value(base::Value::Type::DICT));
+    }
+    extension_id_to_policy_value[policy.extension_id()].GetDict().Set(
+        policy.extension_version(), std::move(policy_value));
+  }
+  for (auto& [extension_id, policy_value] :
+       extension_id_to_policy_value) {
+    map->Set(extension_id, POLICY_LEVEL_MANDATORY, scope, source,
+             std::move(policy_value), /*external_data_fetcher=*/nullptr);
+  }
+}
 
 void DecodeProtoFields(
     const em::CloudPolicySettings& policy,
@@ -226,7 +328,7 @@ void DecodeProtoFields(
   }
 }
 
-bool ParseComponentPolicy(base::Value json,
+bool ParseComponentPolicy(base::Value::Dict json_dict,
                           PolicyScope scope,
                           PolicySource source,
                           PolicyMap* policy,
@@ -236,15 +338,14 @@ bool ParseComponentPolicy(base::Value json,
   // Each description is an object that contains the policy value under the
   // "Value" key. The optional "Level" key is either "Mandatory" (default) or
   // "Recommended".
-  for (auto it : json.DictItems()) {
-    const std::string& policy_name = it.first;
-    base::Value description = std::move(it.second);
+  for (auto [policy_name, description] : json_dict) {
     if (!description.is_dict()) {
       *error = "The JSON blob dictionary value is not a dictionary.";
       return false;
     }
 
-    absl::optional<base::Value> value = description.ExtractKey(kValue);
+    base::Value::Dict& description_dict = description.GetDict();
+    std::optional<base::Value> value = description_dict.Extract(kValue);
     if (!value.has_value()) {
       *error = base::StrCat(
           {"The JSON blob dictionary value doesn't contain the required ",
@@ -253,7 +354,7 @@ bool ParseComponentPolicy(base::Value json,
     }
 
     PolicyLevel level = POLICY_LEVEL_MANDATORY;
-    const std::string* level_string = description.FindStringKey(kLevel);
+    const std::string* level_string = description_dict.FindString(kLevel);
     if (level_string && *level_string == kRecommended)
       level = POLICY_LEVEL_RECOMMENDED;
 

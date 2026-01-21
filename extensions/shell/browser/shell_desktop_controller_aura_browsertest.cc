@@ -6,9 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
@@ -66,6 +67,7 @@ class ShellDesktopControllerAuraBrowserTest : public ShellApiTest {
 
   void TearDownOnMainThread() override {
     EXPECT_FALSE(KeepAliveRegistry::GetInstance()->IsKeepingAlive());
+    desktop_controller_ = nullptr;
     ShellApiTest::TearDownOnMainThread();
   }
 
@@ -82,8 +84,7 @@ class ShellDesktopControllerAuraBrowserTest : public ShellApiTest {
   scoped_refptr<const Extension> app_;
 
  private:
-  raw_ptr<ShellDesktopControllerAura, DanglingUntriaged> desktop_controller_ =
-      nullptr;
+  raw_ptr<ShellDesktopControllerAura> desktop_controller_ = nullptr;
 };
 
 // Test that closing the app window stops the DesktopController.

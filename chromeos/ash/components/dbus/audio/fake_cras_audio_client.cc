@@ -4,10 +4,12 @@
 
 #include "chromeos/ash/components/dbus/audio/fake_cras_audio_client.h"
 
+#include <algorithm>
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace ash {
 
@@ -176,6 +178,11 @@ void FakeCrasAudioClient::GetNodes(
   std::move(callback).Run(node_list_);
 }
 
+void FakeCrasAudioClient::GetNumberOfNonChromeOutputStreams(
+    chromeos::DBusMethodCallback<int32_t> callback) {
+  std::move(callback).Run(number_non_chrome_output_streams_);
+}
+
 void FakeCrasAudioClient::GetNumberOfActiveOutputStreams(
     chromeos::DBusMethodCallback<int> callback) {
   std::move(callback).Run(0);
@@ -186,30 +193,82 @@ void FakeCrasAudioClient::GetNumberOfInputStreamsWithPermission(
   std::move(callback).Run(active_input_streams_);
 }
 
-void FakeCrasAudioClient::GetDeprioritizeBtWbsMic(
+void FakeCrasAudioClient::GetSpeakOnMuteDetectionEnabled(
     chromeos::DBusMethodCallback<bool> callback) {
   std::move(callback).Run(false);
 }
 
 void FakeCrasAudioClient::SetOutputNodeVolume(uint64_t node_id,
                                               int32_t volume) {
-  if (!notify_volume_change_with_delay_)
-    NotifyOutputNodeVolumeChangedForTesting(node_id, volume);
+  if (enable_volume_change_events_) {
+    if (send_volume_change_events_synchronous_) {
+      NotifyOutputNodeVolumeChangedForTesting(node_id, volume);
+    } else {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &FakeCrasAudioClient::NotifyOutputNodeVolumeChangedForTesting,
+              weak_ptr_factory_.GetWeakPtr(), node_id, volume));
+    }
+  }
 }
 
 void FakeCrasAudioClient::SetOutputUserMute(bool mute_on) {
   volume_state_.output_user_mute = mute_on;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OutputMuteChanged(volume_state_.output_user_mute);
+  }
 }
 
 void FakeCrasAudioClient::SetInputNodeGain(uint64_t node_id,
-                                           int32_t input_gain) {}
+                                           int32_t input_gain) {
+  if (enable_gain_change_events_) {
+    NotifyInputNodeGainChangedForTesting(node_id, input_gain);
+  }
+}
 
 void FakeCrasAudioClient::SetInputMute(bool mute_on) {
   volume_state_.input_mute = mute_on;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.InputMuteChanged(volume_state_.input_mute);
+  }
+}
+
+void FakeCrasAudioClient::SetAudioEffectDlcsForTesting(
+    const std::string& audio_effect_dlcs) {
+  audio_effect_dlcs_ = audio_effect_dlcs;
+}
+
+void FakeCrasAudioClient::GetAudioEffectDlcs(
+    chromeos::DBusMethodCallback<std::string> callback) {
+  std::move(callback).Run(audio_effect_dlcs_);
+}
+
+void FakeCrasAudioClient::SetVoiceIsolationUIAppearance(
+    VoiceIsolationUIAppearance appearance) {
+  voice_isolation_ui_appearance_ = appearance;
+}
+
+void FakeCrasAudioClient::GetVoiceIsolationUIAppearance(
+    chromeos::DBusMethodCallback<VoiceIsolationUIAppearance> callback) {
+  std::move(callback).Run(voice_isolation_ui_appearance_);
+}
+
+void FakeCrasAudioClient::SetVoiceIsolationUIEnabled(bool voice_isolation_on) {
+  voice_isolation_ui_enabled_ = voice_isolation_on;
+}
+
+bool FakeCrasAudioClient::GetVoiceIsolationUIEnabled() {
+  return voice_isolation_ui_enabled_;
+}
+
+void FakeCrasAudioClient::SetVoiceIsolationUIPreferredEffect(
+    uint32_t effect_mode) {
+  voice_isolation_preferred_effect_ = effect_mode;
+}
+
+uint32_t FakeCrasAudioClient::GetVoiceIsolationUIPreferredEffect() {
+  return voice_isolation_preferred_effect_;
 }
 
 void FakeCrasAudioClient::SetNoiseCancellationSupported(
@@ -219,7 +278,7 @@ void FakeCrasAudioClient::SetNoiseCancellationSupported(
 
 void FakeCrasAudioClient::SetNoiseCancellationEnabled(
     bool noise_cancellation_on) {
-  noise_cancellation_enabled_ = noise_cancellation_on;
+  SetVoiceIsolationUIEnabled(noise_cancellation_on);
   ++noise_cancellation_enabled_counter_;
 }
 
@@ -229,37 +288,68 @@ void FakeCrasAudioClient::GetNoiseCancellationSupported(
 }
 
 uint32_t FakeCrasAudioClient::GetNoiseCancellationEnabledCount() {
-  return noise_cancellation_enabled_counter_;
+  return GetVoiceIsolationUIEnabled();
+}
+
+void FakeCrasAudioClient::SetStyleTransferSupported(
+    bool style_transfer_supported) {
+  style_transfer_supported_ = style_transfer_supported;
+}
+
+void FakeCrasAudioClient::SetStyleTransferEnabled(bool style_transfer_on) {
+  SetVoiceIsolationUIEnabled(style_transfer_on);
+}
+
+void FakeCrasAudioClient::GetStyleTransferSupported(
+    chromeos::DBusMethodCallback<bool> callback) {
+  std::move(callback).Run(style_transfer_supported_);
+}
+
+bool FakeCrasAudioClient::GetStyleTransferEnabled() {
+  return GetVoiceIsolationUIEnabled();
+}
+
+void FakeCrasAudioClient::SetNumberOfNonChromeOutputStreams(int32_t streams) {
+  number_non_chrome_output_streams_ = streams;
+  for (auto& observer : observers_) {
+    observer.NumberOfNonChromeOutputStreamsChanged();
+  }
 }
 
 void FakeCrasAudioClient::SetActiveOutputNode(uint64_t node_id) {
-  if (active_output_node_id_ == node_id)
+  if (active_output_node_id_ == node_id) {
     return;
+  }
 
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == active_output_node_id_)
+    if (node_list_[i].id == active_output_node_id_) {
       node_list_[i].active = false;
-    else if (node_list_[i].id == node_id)
+    } else if (node_list_[i].id == node_id) {
       node_list_[i].active = true;
+    }
   }
   active_output_node_id_ = node_id;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.ActiveOutputNodeChanged(node_id);
+  }
 }
 
 void FakeCrasAudioClient::SetActiveInputNode(uint64_t node_id) {
-  if (active_input_node_id_ == node_id)
+  if (active_input_node_id_ == node_id) {
     return;
+  }
 
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == active_input_node_id_)
+    if (node_list_[i].id == active_input_node_id_) {
       node_list_[i].active = false;
-    else if (node_list_[i].id == node_id)
+    } else if (node_list_[i].id == node_id) {
       node_list_[i].active = true;
+    }
   }
   active_input_node_id_ = node_id;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.ActiveInputNodeChanged(node_id);
+  }
 }
 
 void FakeCrasAudioClient::SetHotwordModel(
@@ -271,17 +361,36 @@ void FakeCrasAudioClient::SetFixA2dpPacketSize(bool enabled) {}
 
 void FakeCrasAudioClient::SetFlossEnabled(bool enabled) {}
 
+void FakeCrasAudioClient::SetSpeakOnMuteDetection(bool enabled) {
+  speak_on_mute_detection_enabled_ = enabled;
+}
+
+void FakeCrasAudioClient::SetEwmaPowerReportEnabled(bool enabled) {
+  ewma_power_report_enabled_ = enabled;
+}
+
+void FakeCrasAudioClient::SetSidetoneEnabled(bool enabled) {
+  sidetone_enabled_ = enabled;
+}
+
+void FakeCrasAudioClient::GetSidetoneSupported(
+    chromeos::DBusMethodCallback<bool> callback) {
+  std::move(callback).Run(sidetone_supported_);
+}
+
 void FakeCrasAudioClient::AddActiveInputNode(uint64_t node_id) {
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == node_id)
+    if (node_list_[i].id == node_id) {
       node_list_[i].active = true;
+    }
   }
 }
 
 void FakeCrasAudioClient::RemoveActiveInputNode(uint64_t node_id) {
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == node_id)
+    if (node_list_[i].id == node_id) {
       node_list_[i].active = false;
+    }
   }
 }
 
@@ -309,14 +418,16 @@ void FakeCrasAudioClient::SetPlayerMetadata(
 
 void FakeCrasAudioClient::AddActiveOutputNode(uint64_t node_id) {
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == node_id)
+    if (node_list_[i].id == node_id) {
       node_list_[i].active = true;
+    }
   }
 }
 
 void FakeCrasAudioClient::ResendBluetoothBattery() {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.BluetoothBatteryChanged("11:22:33:44:55:66", battery_level_);
+  }
 }
 
 void FakeCrasAudioClient::WaitForServiceToBeAvailable(
@@ -326,27 +437,31 @@ void FakeCrasAudioClient::WaitForServiceToBeAvailable(
 
 void FakeCrasAudioClient::RemoveActiveOutputNode(uint64_t node_id) {
   for (size_t i = 0; i < node_list_.size(); ++i) {
-    if (node_list_[i].id == node_id)
+    if (node_list_[i].id == node_id) {
       node_list_[i].active = false;
+    }
   }
 }
 
 void FakeCrasAudioClient::InsertAudioNodeToList(const AudioNode& audio_node) {
   auto iter = FindNode(audio_node.id);
-  if (iter != node_list_.end())
+  if (iter != node_list_.end()) {
     (*iter) = audio_node;
-  else
+  } else {
     node_list_.push_back(audio_node);
-  for (auto& observer : observers_)
+  }
+  for (auto& observer : observers_) {
     observer.NodesChanged();
+  }
 }
 
 void FakeCrasAudioClient::RemoveAudioNodeFromList(const uint64_t& node_id) {
   auto iter = FindNode(node_id);
   if (iter != node_list_.end()) {
     node_list_.erase(iter);
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.NodesChanged();
+    }
   }
 }
 
@@ -358,21 +473,31 @@ void FakeCrasAudioClient::SetAudioNodesForTesting(
 void FakeCrasAudioClient::SetAudioNodesAndNotifyObserversForTesting(
     const AudioNodeList& new_nodes) {
   SetAudioNodesForTesting(new_nodes);
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.NodesChanged();
+  }
 }
 
 void FakeCrasAudioClient::NotifyOutputNodeVolumeChangedForTesting(
     uint64_t node_id,
     int volume) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OutputNodeVolumeChanged(node_id, volume);
+  }
+}
+
+void FakeCrasAudioClient::NotifyInputNodeGainChangedForTesting(uint64_t node_id,
+                                                               int gain) {
+  for (auto& observer : observers_) {
+    observer.InputNodeGainChanged(node_id, gain);
+  }
 }
 
 void FakeCrasAudioClient::NotifyHotwordTriggeredForTesting(uint64_t tv_sec,
                                                            uint64_t tv_nsec) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.HotwordTriggered(tv_sec, tv_nsec);
+  }
 }
 
 void FakeCrasAudioClient::SetBluetoothBattteryLevelForTesting(uint32_t level) {
@@ -382,12 +507,73 @@ void FakeCrasAudioClient::SetBluetoothBattteryLevelForTesting(uint32_t level) {
 void FakeCrasAudioClient::SetActiveInputStreamsWithPermission(
     const ClientTypeToInputStreamCount& input_streams) {
   active_input_streams_ = input_streams;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.NumberOfInputStreamsWithPermissionChanged(active_input_streams_);
+  }
+}
+
+void FakeCrasAudioClient::NotifySurveyTriggered(
+    const base::flat_map<std::string, std::string>& survey_specific_data) {
+  for (auto& observer : observers_) {
+    observer.SurveyTriggered(survey_specific_data);
+  }
 }
 
 AudioNodeList::iterator FakeCrasAudioClient::FindNode(uint64_t node_id) {
-  return base::ranges::find(node_list_, node_id, &AudioNode::id);
+  return std::ranges::find(node_list_, node_id, &AudioNode::id);
+}
+
+void FakeCrasAudioClient::SetForceRespectUiGains(
+    bool force_respect_ui_gains_enabled) {
+  force_respect_ui_gains_enabled_ = force_respect_ui_gains_enabled;
+}
+
+void FakeCrasAudioClient::GetNumStreamIgnoreUiGains(
+    chromeos::DBusMethodCallback<int> callback) {
+  std::move(callback).Run(false);
+}
+
+void FakeCrasAudioClient::GetHfpMicSrSupported(
+    chromeos::DBusMethodCallback<bool> callback) {
+  std::move(callback).Run(hfp_mic_sr_supported_);
+}
+
+void FakeCrasAudioClient::SetHfpMicSrSupported(bool hfp_mic_sr_supported) {
+  hfp_mic_sr_supported_ = hfp_mic_sr_supported;
+}
+
+uint32_t FakeCrasAudioClient::GetHfpMicSrEnabled() {
+  return hfp_mic_sr_enabled_;
+}
+
+void FakeCrasAudioClient::SetHfpMicSrEnabled(bool hfp_mic_sr_on) {
+  hfp_mic_sr_enabled_ = hfp_mic_sr_on;
+}
+
+void FakeCrasAudioClient::SetNumberOfArcStreams(int32_t streams) {
+  number_arc_streams_ = streams;
+  for (auto& observer : observers_) {
+    observer.NumberOfArcStreamsChanged();
+  }
+}
+
+void FakeCrasAudioClient::GetNumberOfArcStreams(
+    chromeos::DBusMethodCallback<int32_t> callback) {
+  std::move(callback).Run(number_arc_streams_);
+}
+
+void FakeCrasAudioClient::SetSpatialAudioSupported(
+    bool spatial_audio_supported) {
+  spatial_audio_supported_ = spatial_audio_supported;
+}
+
+void FakeCrasAudioClient::SetSpatialAudio(bool spatial_audio_enabled) {
+  spatial_audio_enabled_ = spatial_audio_enabled;
+}
+
+void FakeCrasAudioClient::GetSpatialAudioSupported(
+    chromeos::DBusMethodCallback<bool> callback) {
+  std::move(callback).Run(spatial_audio_supported_);
 }
 
 }  // namespace ash

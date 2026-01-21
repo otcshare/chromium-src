@@ -8,25 +8,28 @@
 #include <map>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "content/public/common/page_type.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace base {
 class FilePath;
 
-namespace mac {
+namespace apple {
 class ScopedObjCClassSwizzler;
-}  // namespace mac
+}  // namespace apple
 }  // namespace base
 
 namespace gfx {
 class Point;
+#if BUILDFLAG(IS_MAC)
 class Range;
+#endif
 class Rect;
 }  // namespace gfx
 
@@ -165,7 +168,7 @@ class ShellAddedObserver {
  private:
   void ShellCreated(Shell* shell);
 
-  raw_ptr<Shell, DanglingUntriaged> shell_ = nullptr;
+  raw_ptr<Shell, AcrossTasksDanglingUntriaged> shell_ = nullptr;
   std::unique_ptr<base::RunLoop> runner_;
 };
 
@@ -174,14 +177,12 @@ class ShellAddedObserver {
 // corresponding to the page.
 class RenderWidgetHostViewCocoaObserver {
  public:
-  // The method name for 'didAddSubview'.
-  static constexpr char kDidAddSubview[] = "didAddSubview:";
   static constexpr char kShowDefinitionForAttributedString[] =
       "showDefinitionForAttributedString:atPoint:";
 
   // Returns the method swizzler for the given |method_name|. This is useful
   // when the original implementation of the method is needed.
-  static base::mac::ScopedObjCClassSwizzler* GetSwizzler(
+  static base::apple::ScopedObjCClassSwizzler* GetSwizzler(
       const std::string& method_name);
 
   // Returns the unique RenderWidgetHostViewCocoaObserver instance (if any) for
@@ -199,12 +200,12 @@ class RenderWidgetHostViewCocoaObserver {
 
   virtual ~RenderWidgetHostViewCocoaObserver();
 
-  // Called when a new NSView is added as a subview of RWHVCocoa.
-  // |rect_in_root_view| represents the bounds of the NSView in RWHVCocoa
-  // coordinates. The view will be dismissed shortly after this call.
-  virtual void DidAddSubviewWillBeDismissed(
-      const gfx::Rect& rect_in_root_view) {}
-  // Called when RenderWidgeHostViewCocoa is asked to show definition of
+  // Called when a popup was attempted to be displayed, conveying the bounds of
+  // the popup rectangle (in the RenderWidgetHostViewCocoa coordinate system)
+  // and the initially-selected item. The popup will not actually be triggered.
+  virtual void DidAttemptToShowPopup(const gfx::Rect& bounds,
+                                     int selected_item) {}
+  // Called when RenderWidgetHostViewCocoa is asked to show definition of
   // |for_word| using Mac's dictionary popup.
   virtual void OnShowDefinitionForAttributedString(
       const std::string& for_word) {}
@@ -215,7 +216,7 @@ class RenderWidgetHostViewCocoaObserver {
   static void SetUpSwizzlers();
 
   static std::map<std::string,
-                  std::unique_ptr<base::mac::ScopedObjCClassSwizzler>>
+                  std::unique_ptr<base::apple::ScopedObjCClassSwizzler>>
       rwhvcocoa_swizzlers_;
   static std::map<WebContents*, RenderWidgetHostViewCocoaObserver*> observers_;
 
@@ -257,6 +258,13 @@ void IsolateOriginsForTesting(
     net::test_server::EmbeddedTestServer* embedded_test_server,
     WebContents* web_contents,
     std::vector<std::string> hostnames_to_isolate);
+
+// Same as above, but takes full origins as input.  In particular, this version
+// doesn't assume HTTP, so it can be used for also isolating HTTPS origins.
+void IsolateOriginsForTesting(
+    net::test_server::EmbeddedTestServer* embedded_test_server,
+    WebContents* web_contents,
+    std::vector<url::Origin> origins_to_isolate);
 
 #if BUILDFLAG(IS_WIN)
 

@@ -4,6 +4,8 @@
 
 'use strict';
 
+let testUtil;
+
 /**
  * @type {Object}
  * @const
@@ -19,13 +21,19 @@ var TESTING_DIRECTORY = Object.freeze({
  * @type {string}
  * @const
  */
-var TESTING_TAG = "hello-puppy";
+var TESTING_TAG1 = 'hello-puppy';
 
 /**
  * @type {string}
  * @const
  */
-var TESTING_ANOTHER_TAG = "hello-giraffe";
+var TESTING_TAG2 = 'hello-cat';
+
+/**
+ * @type {string}
+ * @const
+ */
+var TESTING_TAG3 = 'hello-giraffe';
 
 /**
  * List of directory changed events received from the chrome.fileManagerPrivate
@@ -60,15 +68,15 @@ function setUp(callback) {
   chrome.fileManagerPrivate.onDirectoryChanged.addListener(onDirectoryChanged);
 
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
-      test_util.onGetMetadataRequestedDefault);
+      testUtil.onGetMetadataRequestedDefault);
   chrome.fileSystemProvider.onAddWatcherRequested.addListener(
-      test_util.onAddWatcherRequested);
+      testUtil.onAddWatcherRequested);
   chrome.fileSystemProvider.onRemoveWatcherRequested.addListener(
-      test_util.onRemoveWatcherRequested);
+      testUtil.onRemoveWatcherRequested);
 
-  test_util.defaultMetadata['/' + TESTING_DIRECTORY.name] = TESTING_DIRECTORY;
+  testUtil.defaultMetadata['/' + TESTING_DIRECTORY.name] = TESTING_DIRECTORY;
 
-  test_util.mountFileSystem(callback, {supportsNotifyTag: true});
+  testUtil.mountFileSystem(callback, {supportsNotifyTag: true});
 }
 
 /**
@@ -79,19 +87,19 @@ function runTests() {
 
     // Add a watcher, and then notifies that the entry has changed.
     function notifyChanged() {
-      test_util.fileSystem.root.getDirectory(
+      testUtil.fileSystem.root.getDirectory(
           TESTING_DIRECTORY.name,
           {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_DIRECTORY.name, fileEntry.name);
-            test_util.toExternalEntry(fileEntry).then(
+            testUtil.toExternalEntry(fileEntry).then(
                 chrome.test.callbackPass(function(externalEntry) {
                   chrome.test.assertTrue(!!externalEntry);
                   chrome.fileManagerPrivate.addFileWatch(
                       externalEntry,
                       chrome.test.callbackPass(function(result) {
                         chrome.test.assertTrue(result);
-                        // Verify closure called when an even arrives.
+                        // Verify closure called when an event arrives.
                         directoryChangedCallback = chrome.test.callbackPass(
                             function() {
                               chrome.test.assertEq(
@@ -110,18 +118,27 @@ function runTests() {
                                         1, items[0].watchers.length);
                                     var watcher = items[0].watchers[0];
                                     chrome.test.assertEq(
-                                        TESTING_TAG, watcher.lastTag);
+                                        TESTING_TAG1, watcher.lastTag);
                                   }));
                             });
                         // TODO(mtomasz): Add more advanced tests, eg. for the
                         // details of changes.
-                        chrome.fileSystemProvider.notify({
-                          fileSystemId: test_util.FILE_SYSTEM_ID,
-                          observedPath: fileEntry.fullPath,
-                          recursive: false,
-                          changeType: 'CHANGED',
-                          tag: TESTING_TAG
-                        }, chrome.test.callbackPass());
+                        chrome.fileSystemProvider.notify(
+                            {
+                              fileSystemId: testUtil.FILE_SYSTEM_ID,
+                              observedPath: fileEntry.fullPath,
+                              recursive: false,
+                              changeType: 'CHANGED',
+                              changes: [{
+                                entryPath: fileEntry.fullPath,
+                                changeType: 'CHANGED',
+                                cloudFileInfo: {
+                                  versionTag: 'abc',
+                                }
+                              }],
+                              tag: TESTING_TAG1
+                            },
+                            chrome.test.callbackPass());
                       }));
                 })).catch(chrome.test.fail);
           }), function(error) {
@@ -129,10 +146,34 @@ function runTests() {
           });
     },
 
+    // Notifying with a null cloudFileInfo should succeed.
+    function notifyEmptyCloudFileInfo() {
+      testUtil.fileSystem.root.getDirectory(
+          TESTING_DIRECTORY.name, {create: false},
+          chrome.test.callbackPass(function(fileEntry) {
+            chrome.test.assertEq(TESTING_DIRECTORY.name, fileEntry.name);
+            directoryChangedCallback = function() {};
+            chrome.fileSystemProvider.notify(
+                {
+                  fileSystemId: testUtil.FILE_SYSTEM_ID,
+                  observedPath: fileEntry.fullPath,
+                  recursive: false,
+                  changeType: 'CHANGED',
+                  // No cloudFileInfo.
+                  changes: [{
+                    entryPath: fileEntry.fullPath,
+                    changeType: 'CHANGED',
+                  }],
+                  tag: TESTING_TAG2,
+                },
+                chrome.test.callbackPass());
+          }));
+    },
+
     // Passing an empty tag (or no tag) is invalid when the file system supports
     // the tag.
     function notifyEmptyTag() {
-      test_util.fileSystem.root.getDirectory(
+      testUtil.fileSystem.root.getDirectory(
           TESTING_DIRECTORY.name,
           {create: false},
           chrome.test.callbackPass(function(fileEntry) {
@@ -142,7 +183,7 @@ function runTests() {
             };
             // TODO(mtomasz): NOT_FOUND error should be returned instead.
             chrome.fileSystemProvider.notify({
-              fileSystemId: test_util.FILE_SYSTEM_ID,
+              fileSystemId: testUtil.FILE_SYSTEM_ID,
               observedPath: fileEntry.fullPath,
               recursive: false,
               changeType: 'CHANGED',
@@ -156,7 +197,7 @@ function runTests() {
     // Notifying for the watched entry but in a wrong mode (recursive, while the
     // watcher is not recursive) should fail.
     function notifyWatchedPathButDifferentModeTag() {
-      test_util.fileSystem.root.getDirectory(
+      testUtil.fileSystem.root.getDirectory(
           TESTING_DIRECTORY.name,
           {create: false},
           chrome.test.callbackPass(function(fileEntry) {
@@ -165,31 +206,33 @@ function runTests() {
               chrome.test.fail();
             };
             // TODO(mtomasz): NOT_FOUND error should be returned instead.
-            chrome.fileSystemProvider.notify({
-              fileSystemId: test_util.FILE_SYSTEM_ID,
-              observedPath: fileEntry.fullPath,
-              recursive: true,
-              changeType: 'CHANGED',
-              tag: TESTING_ANOTHER_TAG,
-            }, chrome.test.callbackFail('NOT_FOUND'));
+            chrome.fileSystemProvider.notify(
+                {
+                  fileSystemId: testUtil.FILE_SYSTEM_ID,
+                  observedPath: fileEntry.fullPath,
+                  recursive: true,
+                  changeType: 'CHANGED',
+                  tag: TESTING_TAG3,
+                },
+                chrome.test.callbackFail('NOT_FOUND'));
           }));
     },
 
     // Notify about the watched entry being removed. That should result in the
     // watcher being removed.
     function notifyDeleted() {
-      test_util.fileSystem.root.getDirectory(
+      testUtil.fileSystem.root.getDirectory(
           TESTING_DIRECTORY.name,
           {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_DIRECTORY.name, fileEntry.name);
             // Verify closure called when an even arrives.
-            test_util.toExternalEntry(fileEntry).then(
+            testUtil.toExternalEntry(fileEntry).then(
                 chrome.test.callbackPass(function(externalEntry) {
                   chrome.test.assertTrue(!!externalEntry);
-                  directoryChangedCallback = chrome.test.callbackPass(
-                      function() {
-                        chrome.test.assertEq(2, directoryChangedEvents.length);
+                  directoryChangedCallback =
+                      chrome.test.callbackPass(function() {
+                        chrome.test.assertEq(3, directoryChangedEvents.length);
                         chrome.test.assertEq(
                             'changed', directoryChangedEvents[1].eventType);
                         chrome.test.assertEq(
@@ -205,13 +248,15 @@ function runTests() {
                       });
                   // TODO(mtomasz): Add more advanced tests, eg. for the details
                   // of changes.
-                  chrome.fileSystemProvider.notify({
-                    fileSystemId: test_util.FILE_SYSTEM_ID,
-                    observedPath: fileEntry.fullPath,
-                    recursive: false,
-                    changeType: 'DELETED',
-                    tag: TESTING_ANOTHER_TAG
-                  }, chrome.test.callbackPass());
+                  chrome.fileSystemProvider.notify(
+                      {
+                        fileSystemId: testUtil.FILE_SYSTEM_ID,
+                        observedPath: fileEntry.fullPath,
+                        recursive: false,
+                        changeType: 'DELETED',
+                        tag: TESTING_TAG3
+                      },
+                      chrome.test.callbackPass());
                 })).catch(chrome.test.fail);
           }));
     },
@@ -219,30 +264,39 @@ function runTests() {
     // Notify about an entry which is not watched. That should result in an
     // error.
     function notifyNotWatched() {
-      test_util.fileSystem.root.getDirectory(
+      testUtil.fileSystem.root.getDirectory(
           TESTING_DIRECTORY.name,
           {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_DIRECTORY.name, fileEntry.name);
-            test_util.toExternalEntry(fileEntry).then(
+            testUtil.toExternalEntry(fileEntry).then(
                 chrome.test.callbackPass(function(externalEntry) {
                   chrome.test.assertTrue(!!externalEntry);
                   directoryChangedCallback = function() {
                     chrome.test.fail();
                   };
                   // TODO(mtomasz): NOT_FOUND error should be returned instead.
-                  chrome.fileSystemProvider.notify({
-                    fileSystemId: test_util.FILE_SYSTEM_ID,
-                    observedPath: fileEntry.fullPath,
-                    recursive: false,
-                    changeType: 'CHANGED',
-                    tag: TESTING_ANOTHER_TAG
-                  }, chrome.test.callbackFail('NOT_FOUND'));
+                  chrome.fileSystemProvider.notify(
+                      {
+                        fileSystemId: testUtil.FILE_SYSTEM_ID,
+                        observedPath: fileEntry.fullPath,
+                        recursive: false,
+                        changeType: 'CHANGED',
+                        tag: TESTING_TAG3
+                      },
+                      chrome.test.callbackFail('NOT_FOUND'));
                 })).catch(chrome.test.fail);
             }));
     }
   ]);
 }
 
-// Setup and run all of the test cases.
-setUp(runTests);
+// This works-around that background scripts can't import because they aren't
+// considered modules.
+(async () => {
+  testUtil = await import(
+    '/_test_resources/api_test/file_system_provider/test_util.js');
+
+  // Setup and run all of the test cases.
+  setUp(runTests);
+})();

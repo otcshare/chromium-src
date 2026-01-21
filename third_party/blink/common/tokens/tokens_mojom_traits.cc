@@ -103,6 +103,12 @@ bool UnionTraits<blink::mojom::WorkletTokenDataView, blink::WorkletToken>::Read(
       *output = token;
       return ret;
     }
+    case DataView::Tag::kSharedStorageWorkletToken: {
+      blink::SharedStorageWorkletToken token;
+      bool ret = input.ReadSharedStorageWorkletToken(&token);
+      *output = token;
+      return ret;
+    }
   }
   return false;
 }
@@ -173,6 +179,12 @@ bool UnionTraits<
       *output = token;
       return ret;
     }
+    case DataView::Tag::kSharedStorageWorkletToken: {
+      blink::SharedStorageWorkletToken token;
+      bool ret = input.ReadSharedStorageWorkletToken(&token);
+      *output = token;
+      return ret;
+    }
     case DataView::Tag::kShadowRealmToken: {
       blink::ShadowRealmToken token;
       bool ret = input.ReadShadowRealmToken(&token);
@@ -197,6 +209,18 @@ bool UnionTraits<blink::mojom::WebGPUExecutionContextTokenDataView,
     case DataView::Tag::kDedicatedWorkerToken: {
       blink::DedicatedWorkerToken token;
       bool ret = input.ReadDedicatedWorkerToken(&token);
+      *output = token;
+      return ret;
+    }
+    case DataView::Tag::kSharedWorkerToken: {
+      blink::SharedWorkerToken token;
+      bool ret = input.ReadSharedWorkerToken(&token);
+      *output = token;
+      return ret;
+    }
+    case DataView::Tag::kServiceWorkerToken: {
+      blink::ServiceWorkerToken token;
+      bool ret = input.ReadServiceWorkerToken(&token);
       *output = token;
       return ret;
     }

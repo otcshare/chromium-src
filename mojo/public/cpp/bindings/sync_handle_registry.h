@@ -8,10 +8,11 @@
 #include <map>
 #include <memory>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/callback_list.h"
 #include "base/component_export.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/waitable_event.h"
@@ -79,7 +80,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) SyncHandleRegistry
   // The method:
   //   - returns true when any element of |should_stop| is set to true;
   //   - returns false when any error occurs.
-  bool Wait(const bool* should_stop[], size_t count);
+  bool Wait(base::span<const bool*> should_stop);
 
  private:
   friend class base::RefCounted<SyncHandleRegistry>;

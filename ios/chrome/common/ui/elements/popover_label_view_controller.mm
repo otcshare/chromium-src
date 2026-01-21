@@ -8,10 +8,6 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/text_view_util.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace {
 
 // Vertical inset for the text content.
@@ -114,7 +110,7 @@ constexpr CGFloat kIconSize = 16;
 
   AddSameConstraints(self.view.safeAreaLayoutGuide, _scrollView);
 
-  // TODO(crbug.com/1100884): Remove the following workaround:
+  // TODO(crbug.com/40138105): Remove the following workaround:
   // Using a UIView instead of UILayoutGuide as the later behaves weirdly with
   // the scroll view.
   UIView* textContainerView = [[UIView alloc] init];
@@ -250,6 +246,17 @@ constexpr CGFloat kIconSize = 16;
   heightConstraint.active = YES;
 
   [self updateBackgroundColor];
+
+  NSArray<UITrait>* traits = @[
+    UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class,
+    UITraitUserInterfaceStyle.class
+  ];
+  __weak __typeof(self) weakSelf = self;
+  UITraitChangeHandler handler = ^(id<UITraitEnvironment> traitEnvironment,
+                                   UITraitCollection* previousCollection) {
+    [weakSelf updateUIOnTraitChange:previousCollection];
+  };
+  [self registerForTraitChanges:traits withHandler:handler];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -257,8 +264,7 @@ constexpr CGFloat kIconSize = 16;
   [super viewWillAppear:animated];
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
-  [super traitCollectionDidChange:previousTraitCollection];
+- (void)updateUIOnTraitChange:(UITraitCollection*)previousTraitCollection {
   if ((self.traitCollection.verticalSizeClass !=
        previousTraitCollection.verticalSizeClass) ||
       (self.traitCollection.horizontalSizeClass !=
@@ -296,8 +302,7 @@ constexpr CGFloat kIconSize = 16;
                   UIUserInterfaceStyleDark;
 
   self.view.backgroundColor =
-      darkMode ? [UIColor colorNamed:kTertiaryBackgroundColor]
-               : UIColor.clearColor;
+      darkMode ? [UIColor colorNamed:kGrey100Color] : UIColor.clearColor;
 
   if (darkMode && self.blurBackgroundView.superview) {
     // Remove blurred background in dark mode if it has been added.
@@ -360,15 +365,18 @@ constexpr CGFloat kIconSize = 16;
 
 #pragma mark - UITextViewDelegate
 
-- (BOOL)textView:(UITextView*)textView
-    shouldInteractWithURL:(NSURL*)URL
-                  inRange:(NSRange)characterRange
-              interaction:(UITextItemInteraction)interaction {
+- (UIAction*)textView:(UITextView*)textView
+    primaryActionForTextItem:(UITextItem*)textItem
+               defaultAction:(UIAction*)defaultAction {
+  NSURL* URL = textItem.link;
   if (URL) {
-    [self.delegate didTapLinkURL:URL];
+    __weak __typeof(self) weakSelf = self;
+    return [UIAction actionWithHandler:^(UIAction* action) {
+      [weakSelf.delegate didTapLinkURL:URL];
+    }];
   }
-  // Returns NO as the app is handling the opening of the URL.
-  return NO;
+
+  return defaultAction;
 }
 
 @end

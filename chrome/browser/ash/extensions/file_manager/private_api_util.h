@@ -10,12 +10,16 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_forward.h"
+#include "base/files/file_error_or.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/file_system_provider/icon_set.h"
+#include "chrome/browser/ash/fileapi/recent_source.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_mount_provider_registry.h"
+#include "chrome/common/extensions/api/file_manager_private.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-forward.h"
 #include "components/drive/file_errors.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -26,14 +30,14 @@ class Profile;
 namespace base {
 class File;
 class FilePath;
-}
-
-namespace content {
-class RenderFrameHost;
-}
+}  // namespace base
 
 namespace drive {
 class EventLogger;
+}
+
+namespace drivefs::pinning {
+struct Progress;
 }
 
 namespace extensions {
@@ -43,8 +47,8 @@ struct EntryProperties;
 struct IconSet;
 struct VolumeMetadata;
 struct MountableGuest;
-}
-}
+}  // namespace file_manager_private
+}  // namespace api
 }  // namespace extensions
 
 namespace ui {
@@ -66,8 +70,9 @@ class SingleEntryPropertiesGetterForDriveFs {
 
   // Creates an instance and starts the process.
   static void Start(const storage::FileSystemURL& file_system_url,
-                    Profile* const profile,
-                    ResultCallback callback);
+      Profile* const profile,
+      ResultCallback callback);
+
   ~SingleEntryPropertiesGetterForDriveFs();
 
   SingleEntryPropertiesGetterForDriveFs(
@@ -88,7 +93,8 @@ class SingleEntryPropertiesGetterForDriveFs {
   // Given parameters.
   ResultCallback callback_;
   const storage::FileSystemURL file_system_url_;
-  Profile* const running_profile_;
+  base::FilePath relative_path_;
+  const raw_ptr<Profile> running_profile_;
 
   // Values used in the process.
   std::unique_ptr<extensions::api::file_manager_private::EntryProperties>
@@ -110,15 +116,13 @@ void VolumeToVolumeMetadata(
     extensions::api::file_manager_private::VolumeMetadata* volume_metadata);
 
 // Returns the local FilePath associated with |url|. If the file isn't of the
-// type FileSystemBackend handles, returns an empty
-// FilePath. |render_frame_host| and |profile| are needed to obtain the
-// FileSystemContext currently in use.
+// type FileSystemBackend handles, returns an empty FilePath.
 //
-// Local paths will look like "/home/chronos/user/Downloads/foo/bar.txt" or
-// "/special/drive/foo/bar.txt".
-base::FilePath GetLocalPathFromURL(content::RenderFrameHost* render_frame_host,
-                                   Profile* profile,
-                                   const GURL& url);
+// Local paths will look like "/home/chronos/user/MyFiles/Downloads/foo/bar.txt"
+// or "/special/drive/foo/bar.txt".
+base::FilePath GetLocalPathFromURL(
+    scoped_refptr<storage::FileSystemContext> file_system_context,
+    const GURL& url);
 
 // The callback type is used for GetSelectedFileInfo().
 typedef base::OnceCallback<void(const std::vector<ui::SelectedFileInfo>&)>
@@ -139,10 +143,9 @@ enum GetSelectedFileInfoLocalPathOption {
   NEED_LOCAL_PATH_FOR_SAVING,
 };
 
-// Gets the information for |file_urls|.
-void GetSelectedFileInfo(content::RenderFrameHost* render_frame_host,
-                         Profile* profile,
-                         const std::vector<GURL>& file_urls,
+// Gets the information for |local_paths|.
+void GetSelectedFileInfo(Profile* profile,
+                         std::vector<base::FilePath> local_paths,
                          GetSelectedFileInfoLocalPathOption local_path_option,
                          GetSelectedFileInfoCallback callback);
 
@@ -151,6 +154,27 @@ drive::EventLogger* GetLogger(Profile* profile);
 
 std::vector<extensions::api::file_manager_private::MountableGuest>
 CreateMountableGuestList(Profile* profile);
+
+// Converts file manager private FileCategory enum to RecentSource::FileType
+// enum. Returns true if the conversion was successful, and false otherwise.
+bool ToRecentSourceFileType(
+    extensions::api::file_manager_private::FileCategory input_category,
+    ash::RecentSource::FileType* output_type);
+
+// Converts the given |progress| struct containing the progress of Drive's bulk
+// pinning to its file manager private equivalent.
+extensions::api::file_manager_private::BulkPinProgress BulkPinProgressToJs(
+    const drivefs::pinning::Progress& progress);
+
+// Converts the given GURL into an EntryData struct that can be returned by
+// fileManagerPrivate.
+void GURLToEntryData(
+    Profile* profile,
+    scoped_refptr<storage::FileSystemContext> file_system_context,
+    const GURL& url,
+    base::OnceCallback<void(
+        base::FileErrorOr<extensions::api::file_manager_private::EntryData>)>
+        callback);
 
 }  // namespace util
 }  // namespace file_manager

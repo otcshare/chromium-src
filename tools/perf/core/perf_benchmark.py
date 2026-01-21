@@ -74,12 +74,24 @@ class PerfBenchmark(benchmark.Benchmark):
   For more info, see: https://goo.gl/4uvaVM
   """
 
+  SCHEDULED = True
+
+  @classmethod
+  def IsScheduled(cls):
+    if cls.Name().startswith("UNSCHEDULED_"):
+      return False
+    return cls.SCHEDULED
+
   def SetExtraBrowserOptions(self, options):
     """To be overridden by perf benchmarks."""
 
+  def SetExtraBrowserOptionsWithBrowser(self, options, possible_browser):
+    """To be overridden by perf benchmarks. Run after SetExtraBrowserOptions."""
+
   def CustomizeOptions(self, finder_options, possible_browser=None):
-    # Subclass of PerfBenchmark should override  SetExtraBrowserOptions to add
-    # more browser options rather than overriding CustomizeOptions.
+    # Subclass of PerfBenchmark should override SetExtraBrowserOptions or
+    # SetExtraBrowserOptionsWithBrowser to add more browser options, rather than
+    # overriding CustomizeOptions.
     super(PerfBenchmark, self).CustomizeOptions(finder_options)
 
     browser_options = finder_options.browser_options
@@ -111,7 +123,20 @@ class PerfBenchmark(benchmark.Benchmark):
     browser_options.AppendExtraBrowserArgs(
         '--disable-gpu-process-for-dx12-info-collection')
 
+    # In-Product Help (IPH) is a constantly-updating collection of prompts
+    # designed to help users understand the browser better. Because different
+    # experiences are rolled out all the time and some can happen at or near
+    # startup, disable IPH to prevent any interference with test results.
+    # (Note that this argument takes a list of IPH that will be allowed;
+    # specifying none disables all IPH.)
+    browser_options.AppendExtraBrowserArgs('--propagate-iph-for-testing')
+
     self.SetExtraBrowserOptions(browser_options)
+
+    # SetExtraBrowserOptions is inherited from Telemetry and doesn't take a
+    # possible_browser. PerfBenchmark disallows the usual approach of overriding
+    # CustomizeOptions, so instead it provides this additional hook.
+    self.SetExtraBrowserOptionsWithBrowser(browser_options, possible_browser)
 
   def GetExtraOutDirectories(self):
     # Subclasses of PerfBenchmark should override this method instead of

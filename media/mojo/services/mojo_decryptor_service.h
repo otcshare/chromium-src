@@ -8,8 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -105,7 +105,7 @@ class MEDIA_MOJO_EXPORT MojoDecryptorService final : public mojom::Decryptor {
   // Helper class to send decrypted DecoderBuffer to the client.
   std::unique_ptr<MojoDecoderBufferWriter> decrypted_buffer_writer_;
 
-  raw_ptr<media::Decryptor> decryptor_;
+  raw_ptr<media::Decryptor, DanglingUntriaged> decryptor_;
 
   // Holds the CdmContextRef to keep the CdmContext alive for the lifetime of
   // the |decryptor_|.

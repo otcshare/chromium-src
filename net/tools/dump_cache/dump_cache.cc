@@ -10,6 +10,7 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/i18n/icu_util.h"
 #include "base/strings/string_util.h"
 #include "net/disk_cache/blockfile/disk_format.h"
 #include "net/tools/dump_cache/dump_files.h"
@@ -46,7 +47,7 @@ const char kDumpFile[] = "file";
 
 int Help() {
   printf("dump_cache path_to_files [options]\n");
-  printf("Dumps internal cache structures.\n");
+  printf("Dumps internal cache structures for blockfile cache.\n");
   printf("warning: input files may be modified by this tool\n\n");
   printf("--dump-headers: show file headers\n");
   printf("--dump-contents [-v] [--full-key] [--csv]: list all entries\n");
@@ -71,6 +72,9 @@ int main(int argc, const char* argv[]) {
   // Setup an AtExitManager so Singleton objects will be destroyed.
   base::AtExitManager at_exit_manager;
 
+  // base::UnlocalizedTimeFormatWithPattern() depends on ICU.
+  base::i18n::InitializeICU();
+
   base::CommandLine::Init(argc, argv);
 
   const base::CommandLine& command_line =
@@ -83,9 +87,9 @@ int main(int argc, const char* argv[]) {
   if (input_path.empty())
     return Help();
 
-  int version = GetMajorVersion(input_path);
-  if (version != 2)
+  if (!CheckFileVersion(input_path)) {
     return FILE_ACCESS_ERROR;
+  }
 
   if (command_line.HasSwitch(kDumpContents))
     return DumpContents(input_path);

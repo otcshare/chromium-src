@@ -6,7 +6,7 @@
 #define ASH_QUICK_PAIR_REPOSITORY_UNAUTHENTICATED_HTTP_FETCHER_H_
 
 #include "ash/quick_pair/repository/http_fetcher.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/gurl.h"
@@ -36,7 +36,7 @@ class UnauthenticatedHttpFetcher : public HttpFetcher {
  private:
   void OnComplete(std::unique_ptr<network::SimpleURLLoader> simple_loader,
                   FetchCompleteCallback success_callback,
-                  std::unique_ptr<std::string> response_body);
+                  std::optional<std::string> response_body);
 
   net::NetworkTrafficAnnotationTag traffic_annotation_;
 

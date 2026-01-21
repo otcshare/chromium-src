@@ -2,9 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# TODO(crbug.com/1226159): Complete crash reporting integration on Fuchsia.
+# TODO(crbug.com/40188745): Complete crash reporting integration on Fuchsia.
 assert(!is_fuchsia)
 
+import("//base/debug/debug.gni")
 import("//components/gwp_asan/buildflags/buildflags.gni")
 
 if (is_android) {
@@ -12,10 +13,7 @@ if (is_android) {
 }
 
 source_set("lib") {
-  visibility = [
-    ":*",
-    "//components/crash/content/app:*",
-  ]
+  visibility = [ ":*" ]
 
   sources = [
     "crash_reporter_client.cc",
@@ -32,12 +30,23 @@ source_set("crashpad_handler_main") {
   sources = [ "crashpad_handler_main.cc" ]
 
   deps = [
+    "//base:debugging_buildflags",
     "//components/gwp_asan/buildflags",
-    "//third_party/crashpad/crashpad/handler:handler",
+    "//third_party/crashpad/crashpad/handler",
   ]
+
+  if (is_linux || is_chromeos || is_mac) {
+    deps += [ "//components/stability_report" ]
+  }
 
   if (enable_gwp_asan) {
     deps += [ "//components/gwp_asan/crash_handler" ]
+  }
+
+  if (build_allocation_stack_trace_recorder) {
+    # The allocation stack trace report will be included only if the
+    # recorder was enabled.
+    deps += [ "//components/allocation_recorder/crash_handler" ]
   }
 }
 
@@ -52,11 +61,7 @@ static_library("app") {
     "crashpad.h",
   ]
 
-  if (is_linux || is_chromeos) {
-    sources += [ "crashpad_linux.cc" ]
-  }
-
-  if (is_chromeos || is_castos) {
+  if (is_castos) {
     sources += [
       "breakpad_linux.cc",
       "breakpad_linux.h",
@@ -78,18 +83,22 @@ static_library("app") {
     "//third_party/crashpad/crashpad/util",
   ]
 
+  if (is_linux || is_chromeos) {
+    sources += [ "crashpad_linux.cc" ]
+    data_deps = [ ":chrome_crashpad_handler" ]
+  }
+
   if (is_ios) {
-    deps -= [
-      "//components/crash/core/common:crash_key",
-      "//content/public/common:content_descriptors",
-    ]
+    deps -= [ "//content/public/common:content_descriptors" ]
+    deps += [ "//third_party/crashpad/crashpad/handler:common" ]
+    public_deps += [ "//third_party/crashpad/crashpad/client" ]
   }
 
   if (is_android) {
     sources += [ "crashpad_android.cc" ]
     deps += [
       ":crashpad_handler_main",
-      "//components/crash/android:jni_headers",
+      "//components/crash/android:package_paths_jni",
       "//third_party/crashpad/crashpad/handler",
       "//third_party/crashpad/crashpad/snapshot",
     ]
@@ -104,7 +113,7 @@ static_library("app") {
     ]
   }
 
-  if (is_chromeos || is_castos) {
+  if (is_castos) {
     deps += [ "//third_party/breakpad:client" ]
   }
 
@@ -118,6 +127,7 @@ static_library("app") {
     ]
 
     deps += [
+      "//components/app_launch_prefetch",
       "//third_party/crashpad/crashpad/client",
       "//third_party/crashpad/crashpad/handler",
       "//third_party/crashpad/crashpad/minidump",
@@ -137,6 +147,10 @@ static_library("app") {
     sources += [ "crashpad_ios.mm" ]
     deps += [ "//third_party/crashpad/crashpad/minidump" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 if (is_win) {
@@ -158,9 +172,9 @@ if (is_win) {
 
     deps = [
       "//base",
-      "//build:chromeos_buildflags",
-      "//components/browser_watcher:activity_report",
+      "//components/app_launch_prefetch",
       "//components/gwp_asan/buildflags",
+      "//components/stability_report",
       "//third_party/crashpad/crashpad/client",
       "//third_party/crashpad/crashpad/handler",
       "//third_party/crashpad/crashpad/minidump",
@@ -195,6 +209,8 @@ if (is_win) {
       "crash_export_thunks.h",
     ]
 
+    defines = [ "CRASH_IMPLEMENTATION" ]
+
     deps = [
       ":app",
       "//base",
@@ -206,6 +222,7 @@ if (is_win) {
   # time.
   source_set("crash_export_stubs") {
     testonly = true
+    defines = [ "CRASH_IMPLEMENTATION" ]
 
     sources = [
       "crash_export_stubs.cc",
@@ -230,7 +247,7 @@ if (is_mac || is_android || is_linux || is_chromeos) {
       "//third_party/crashpad/crashpad/handler",
     ]
 
-    if (is_mac && (is_component_build || is_asan)) {
+    if (is_mac && (is_component_build || is_asan || is_ubsan_any)) {
       ldflags = [
         # The handler is in
         # Chromium.app/Contents/Frameworks/Chromium Framework.framework/Versions/A/Helpers/
@@ -246,6 +263,12 @@ if (is_mac || is_android || is_linux || is_chromeos) {
         # The handler can be executed from headless_browsertests in Helpers/
         "-Wl,-rpath,@loader_path/..",
       ]
+    }
+
+    if (build_allocation_stack_trace_recorder) {
+      # The allocation stack trace report will be included only if the
+      # recorder was enabled.
+      deps += [ "//components/allocation_recorder/crash_client" ]
     }
   }
 }
@@ -297,14 +320,12 @@ source_set("unit_tests") {
       ":run_as_crashpad_handler",
       "//components/crash/win:unit_tests",
       "//third_party/breakpad:client",
-      "//third_party/crashpad/crashpad/client:client",
-      "//third_party/crashpad/crashpad/snapshot:snapshot",
+      "//third_party/crashpad/crashpad/client",
+      "//third_party/crashpad/crashpad/snapshot",
       "//third_party/crashpad/crashpad/util",
     ]
   }
   if (is_ios) {
-    configs += [ "//build/config/compiler:enable_arc" ]
-
     sources += [ "crashpad_ios_unittest.mm" ]
     deps += [
       ":app",

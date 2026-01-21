@@ -4,17 +4,17 @@
 
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_info.h"
 #include "chrome/browser/enterprise/connectors/common.h"
-#include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router.h"
-#include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router_factory.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/enterprise/connectors/reporting/reporting_event_router_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/crash/core/common/crash_key.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/enterprise/connectors/core/reporting_constants.h"
 
 namespace safe_browsing {
 
@@ -23,27 +23,27 @@ namespace {
 constexpr int kMinBytesPerSecond = 1;
 constexpr int kMaxBytesPerSecond = 100 * 1024 * 1024;  // 100 MB/s
 
-std::string MaybeGetUnscannedReason(BinaryUploadService::Result result) {
+std::string MaybeGetUnscannedReason(
+    enterprise_connectors::ScanRequestUploadResult result) {
   switch (result) {
-    case BinaryUploadService::Result::SUCCESS:
-    case BinaryUploadService::Result::UNAUTHORIZED:
+    case enterprise_connectors::ScanRequestUploadResult::kSuccess:
+    case enterprise_connectors::ScanRequestUploadResult::kUnauthorized:
       // Don't report an unscanned file event on these results.
       return "";
 
-    case BinaryUploadService::Result::FILE_TOO_LARGE:
-      return "FILE_TOO_LARGE";
-    case BinaryUploadService::Result::TOO_MANY_REQUESTS:
-      return "TOO_MANY_REQUESTS";
-    case BinaryUploadService::Result::TIMEOUT:
-      return "TIMEOUT";
-    case BinaryUploadService::Result::UNKNOWN:
-    case BinaryUploadService::Result::UPLOAD_FAILURE:
-    case BinaryUploadService::Result::FAILED_TO_GET_TOKEN:
-      return "SERVICE_UNAVAILABLE";
-    case BinaryUploadService::Result::FILE_ENCRYPTED:
-      return "FILE_PASSWORD_PROTECTED";
-    case BinaryUploadService::Result::DLP_SCAN_UNSUPPORTED_FILE_TYPE:
-      return "DLP_SCAN_UNSUPPORTED_FILE_TYPE";
+    case enterprise_connectors::ScanRequestUploadResult::kFileTooLarge:
+      return enterprise_connectors::kFileTooLargeUnscannedReason;
+    case enterprise_connectors::ScanRequestUploadResult::kTooManyRequests:
+      return enterprise_connectors::kTooManyRequestsUnscannedReason;
+    case enterprise_connectors::ScanRequestUploadResult::kTimeout:
+      return enterprise_connectors::kTimeoutUnscannedReason;
+    case enterprise_connectors::ScanRequestUploadResult::kUnknown:
+    case enterprise_connectors::ScanRequestUploadResult::kUploadFailure:
+    case enterprise_connectors::ScanRequestUploadResult::kFailedToGetToken:
+    case enterprise_connectors::ScanRequestUploadResult::kIncompleteResponse:
+      return enterprise_connectors::kServiceUnavailableUnscannedReason;
+    case enterprise_connectors::ScanRequestUploadResult::kFileEncrypted:
+      return enterprise_connectors::kFilePasswordProtectedUnscannedReason;
   }
 }
 
@@ -132,37 +132,57 @@ void ModifyKey(ScanningCrashKey key, int delta) {
     crash_key->Set(base::NumberToString(new_value));
 }
 
+void AddCustomMessageRule(
+    enterprise_connectors::ContentAnalysisResponse::Result::TriggeredRule&
+        rule) {
+  enterprise_connectors::ContentAnalysisResponse::Result::TriggeredRule::
+      CustomRuleMessage custom_message;
+  auto* custom_segments = custom_message.add_message_segments();
+  custom_segments->set_text("Custom rule message");
+  custom_segments->set_link("http://example.com");
+  *rule.mutable_custom_rule_message() = custom_message;
+}
+
 }  // namespace
 
 void MaybeReportDeepScanningVerdict(
     Profile* profile,
-    const GURL& url,
+    const enterprise_connectors::ContentAnalysisInfo* content_analysis_info,
     const std::string& source,
     const std::string& destination,
     const std::string& file_name,
     const std::string& download_digest_sha256,
     const std::string& mime_type,
     const std::string& trigger,
-    DeepScanAccessPoint access_point,
+    const std::string& content_transfer_method,
+    const std::string& source_email,
     const int64_t content_size,
-    BinaryUploadService::Result result,
+    const safe_browsing::ReferrerChain& referrer_chain,
+    enterprise_connectors::ScanRequestUploadResult result,
     const enterprise_connectors::ContentAnalysisResponse& response,
-    EventResult event_result) {
-  DCHECK(base::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
-  auto* router =
-      extensions::SafeBrowsingPrivateEventRouterFactory::GetForProfile(profile);
-  if (!router)
+    enterprise_connectors::EventResult event_result) {
+  DCHECK(std::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
+  DCHECK(content_analysis_info);
+
+  auto* reporting_event_router =
+      enterprise_connectors::ReportingEventRouterFactory::GetForBrowserContext(
+          profile);
+  if (!reporting_event_router) {
     return;
+  }
 
   std::string unscanned_reason = MaybeGetUnscannedReason(result);
   if (!unscanned_reason.empty()) {
-    router->OnUnscannedFileEvent(
-        url, source, destination, file_name, download_digest_sha256, mime_type,
-        trigger, access_point, unscanned_reason, content_size, event_result);
+    reporting_event_router->OnUnscannedFileEvent(
+        GURL(content_analysis_info->url()), content_analysis_info->tab_url(),
+        source, destination, file_name, download_digest_sha256, mime_type,
+        trigger, unscanned_reason, content_transfer_method, content_size,
+        event_result);
   }
 
-  if (result != BinaryUploadService::Result::SUCCESS)
+  if (result != enterprise_connectors::ScanRequestUploadResult::kSuccess) {
     return;
+  }
 
   for (const auto& response_result : response.results()) {
     if (response_result.status() !=
@@ -173,96 +193,72 @@ void MaybeReportDeepScanningVerdict(
       else if (response_result.tag() == "dlp")
         unscanned_reason = "DLP_SCAN_FAILED";
 
-      router->OnUnscannedFileEvent(url, source, destination, file_name,
-                                   download_digest_sha256, mime_type, trigger,
-                                   access_point, std::move(unscanned_reason),
-                                   content_size, event_result);
+      reporting_event_router->OnUnscannedFileEvent(
+          GURL(content_analysis_info->url()), content_analysis_info->tab_url(),
+          source, destination, file_name, download_digest_sha256, mime_type,
+          trigger, std::move(unscanned_reason), content_transfer_method,
+          content_size, event_result);
     } else if (response_result.triggered_rules_size() > 0) {
-      router->OnAnalysisConnectorResult(
-          url, source, destination, file_name, download_digest_sha256,
-          mime_type, trigger, response.request_token(), access_point,
-          response_result, content_size, event_result);
+      reporting_event_router->OnAnalysisConnectorResult(
+          GURL(content_analysis_info->url()), content_analysis_info->tab_url(),
+          source, destination, file_name, download_digest_sha256, mime_type,
+          trigger, response.request_token(), content_transfer_method,
+          source_email, content_analysis_info->GetContentAreaAccountEmail(),
+          response_result, content_size, referrer_chain,
+          content_analysis_info->frame_url_chain(), event_result);
     }
   }
 }
 
 void ReportAnalysisConnectorWarningBypass(
     Profile* profile,
-    const GURL& url,
+    const enterprise_connectors::ContentAnalysisInfo& content_analysis_info,
     const std::string& source,
     const std::string& destination,
     const std::string& file_name,
     const std::string& download_digest_sha256,
     const std::string& mime_type,
     const std::string& trigger,
-    DeepScanAccessPoint access_point,
+    const std::string& content_transfer_method,
     const int64_t content_size,
+    const safe_browsing::ReferrerChain& referrer_chain,
     const enterprise_connectors::ContentAnalysisResponse& response,
-    absl::optional<std::u16string> user_justification) {
-  DCHECK(base::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
-  auto* router =
-      extensions::SafeBrowsingPrivateEventRouterFactory::GetForProfile(profile);
-  if (!router)
+    std::optional<std::u16string> user_justification) {
+  DCHECK(std::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
+  auto* reporting_event_router =
+      enterprise_connectors::ReportingEventRouterFactory::GetForBrowserContext(
+          profile);
+  if (!reporting_event_router) {
     return;
+  }
 
   for (const auto& result : response.results()) {
     // Only report results with triggered rules.
     if (result.triggered_rules().empty())
       continue;
 
-    router->OnAnalysisConnectorWarningBypassed(
-        url, source, destination, file_name, download_digest_sha256, mime_type,
-        trigger, response.request_token(), access_point, result, content_size,
-        user_justification);
+    reporting_event_router->OnSensitiveDataEvent(
+        GURL(content_analysis_info.url()), content_analysis_info.tab_url(),
+        source, destination, file_name, download_digest_sha256, mime_type,
+        trigger, response.request_token(), content_transfer_method,
+        /*source_email=*/"", content_analysis_info.GetContentAreaAccountEmail(),
+        user_justification, result, content_size, referrer_chain,
+        content_analysis_info.frame_url_chain(),
+        enterprise_connectors::EventResult::BYPASSED);
   }
-}
-
-std::string EventResultToString(EventResult result) {
-  switch (result) {
-    case EventResult::UNKNOWN:
-      return "EVENT_RESULT_UNKNOWN";
-    case EventResult::ALLOWED:
-      return "EVENT_RESULT_ALLOWED";
-    case EventResult::WARNED:
-      return "EVENT_RESULT_WARNED";
-    case EventResult::BLOCKED:
-      return "EVENT_RESULT_BLOCKED";
-    case EventResult::BYPASSED:
-      return "EVENT_RESULT_BYPASSED";
-  }
-  NOTREACHED();
-  return "";
-}
-
-std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point) {
-  switch (access_point) {
-    case DeepScanAccessPoint::DOWNLOAD:
-      return "Download";
-    case DeepScanAccessPoint::UPLOAD:
-      return "Upload";
-    case DeepScanAccessPoint::DRAG_AND_DROP:
-      return "DragAndDrop";
-    case DeepScanAccessPoint::PASTE:
-      return "Paste";
-    case DeepScanAccessPoint::PRINT:
-      return "Print";
-    case DeepScanAccessPoint::FILE_TRANSFER:
-      return "FileTransfer";
-  }
-  NOTREACHED();
-  return "";
 }
 
 void RecordDeepScanMetrics(
     bool is_cloud,
-    DeepScanAccessPoint access_point,
+    enterprise_connectors::DeepScanAccessPoint access_point,
     base::TimeDelta duration,
     int64_t total_bytes,
-    const BinaryUploadService::Result& result,
+    const enterprise_connectors::ScanRequestUploadResult& result,
     const enterprise_connectors::ContentAnalysisResponse& response) {
   // Don't record UMA metrics for this result.
-  if (result == BinaryUploadService::Result::UNAUTHORIZED)
+  if (result == enterprise_connectors::ScanRequestUploadResult::kUnauthorized) {
     return;
+  }
   bool dlp_verdict_success = true;
   bool malware_verdict_success = true;
   for (const auto& response_result : response.results()) {
@@ -282,18 +278,20 @@ void RecordDeepScanMetrics(
   std::string result_value = BinaryUploadServiceResultToString(result, success);
 
   // Update |success| so non-SUCCESS results don't log the bytes/sec metric.
-  success &= (result == BinaryUploadService::Result::SUCCESS);
+  success &=
+      (result == enterprise_connectors::ScanRequestUploadResult::kSuccess);
 
   RecordDeepScanMetrics(is_cloud, access_point, duration, total_bytes,
                         result_value, success);
 }
 
-void RecordDeepScanMetrics(bool is_cloud,
-                           DeepScanAccessPoint access_point,
-                           base::TimeDelta duration,
-                           int64_t total_bytes,
-                           const std::string& result,
-                           bool success) {
+void RecordDeepScanMetrics(
+    bool is_cloud,
+    enterprise_connectors::DeepScanAccessPoint access_point,
+    base::TimeDelta duration,
+    int64_t total_bytes,
+    const std::string& result,
+    bool success) {
   // Don't record metrics if the duration is unusable.
   if (duration.InMilliseconds() == 0)
     return;
@@ -323,8 +321,9 @@ void RecordDeepScanMetrics(bool is_cloud,
 }
 
 enterprise_connectors::ContentAnalysisResponse
-SimpleContentAnalysisResponseForTesting(absl::optional<bool> dlp_success,
-                                        absl::optional<bool> malware_success) {
+SimpleContentAnalysisResponseForTesting(std::optional<bool> dlp_success,
+                                        std::optional<bool> malware_success,
+                                        bool has_custom_rule_message) {
   enterprise_connectors::ContentAnalysisResponse response;
 
   if (dlp_success.has_value()) {
@@ -336,6 +335,9 @@ SimpleContentAnalysisResponseForTesting(absl::optional<bool> dlp_success,
       auto* rule = result->add_triggered_rules();
       rule->set_rule_name("dlp");
       rule->set_action(enterprise_connectors::TriggeredRule::BLOCK);
+      if (has_custom_rule_message) {
+        AddCustomMessageRule(*rule);
+      }
     }
   }
 
@@ -348,6 +350,9 @@ SimpleContentAnalysisResponseForTesting(absl::optional<bool> dlp_success,
       auto* rule = result->add_triggered_rules();
       rule->set_rule_name("malware");
       rule->set_action(enterprise_connectors::TriggeredRule::BLOCK);
+      if (has_custom_rule_message) {
+        AddCustomMessageRule(*rule);
+      }
     }
   }
 
@@ -355,49 +360,33 @@ SimpleContentAnalysisResponseForTesting(absl::optional<bool> dlp_success,
 }
 
 std::string BinaryUploadServiceResultToString(
-    const BinaryUploadService::Result& result,
+    const enterprise_connectors::ScanRequestUploadResult& result,
     bool success) {
   switch (result) {
-    case BinaryUploadService::Result::SUCCESS:
+    case enterprise_connectors::ScanRequestUploadResult::kSuccess:
       if (success)
         return "Success";
       else
         return "FailedToGetVerdict";
-    case BinaryUploadService::Result::UPLOAD_FAILURE:
+    case enterprise_connectors::ScanRequestUploadResult::kUploadFailure:
       return "UploadFailure";
-    case BinaryUploadService::Result::TIMEOUT:
+    case enterprise_connectors::ScanRequestUploadResult::kTimeout:
       return "Timeout";
-    case BinaryUploadService::Result::FILE_TOO_LARGE:
+    case enterprise_connectors::ScanRequestUploadResult::kFileTooLarge:
       return "FileTooLarge";
-    case BinaryUploadService::Result::FAILED_TO_GET_TOKEN:
+    case enterprise_connectors::ScanRequestUploadResult::kFailedToGetToken:
       return "FailedToGetToken";
-    case BinaryUploadService::Result::UNKNOWN:
+    case enterprise_connectors::ScanRequestUploadResult::kUnknown:
       return "Unknown";
-    case BinaryUploadService::Result::UNAUTHORIZED:
+    case enterprise_connectors::ScanRequestUploadResult::kUnauthorized:
       return "";
-    case BinaryUploadService::Result::FILE_ENCRYPTED:
+    case enterprise_connectors::ScanRequestUploadResult::kFileEncrypted:
       return "FileEncrypted";
-    case BinaryUploadService::Result::DLP_SCAN_UNSUPPORTED_FILE_TYPE:
-      return "DlpScanUnsupportedFileType";
-    case BinaryUploadService::Result::TOO_MANY_REQUESTS:
+    case enterprise_connectors::ScanRequestUploadResult::kTooManyRequests:
       return "TooManyRequests";
+    case enterprise_connectors::ScanRequestUploadResult::kIncompleteResponse:
+      return "IncompleteResponse";
   }
-}
-
-std::string GetProfileEmail(Profile* profile) {
-  return profile
-             ? GetProfileEmail(IdentityManagerFactory::GetForProfile(profile))
-             : std::string();
-}
-
-std::string GetProfileEmail(signin::IdentityManager* identity_manager) {
-  // If the profile is not signed in, GetPrimaryAccountInfo() returns an
-  // empty account info.
-  return identity_manager
-             ? identity_manager
-                   ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
-                   .email
-             : std::string();
 }
 
 void IncrementCrashKey(ScanningCrashKey key, int delta) {
@@ -408,6 +397,20 @@ void IncrementCrashKey(ScanningCrashKey key, int delta) {
 void DecrementCrashKey(ScanningCrashKey key, int delta) {
   DCHECK_GE(delta, 0);
   ModifyKey(key, -delta);
+}
+
+bool IsConsumerScanRequest(
+    const enterprise_connectors::BinaryUploadRequest& request) {
+  if (request.cloud_or_local_settings().is_local_analysis()) {
+    return false;
+  }
+
+  for (const std::string& tag : request.content_analysis_request().tags()) {
+    if (tag == "dlp") {
+      return false;
+    }
+  }
+  return request.device_token().empty();
 }
 
 }  // namespace safe_browsing

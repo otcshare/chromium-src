@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
+
 namespace tracing {
 
 // These are the possible primitive types that can be read in by the parser.
@@ -37,7 +39,7 @@ constexpr const char* kPrimitiveArrayStrings[] = {
     "float[]", "double[]", "byte[]", "short[]", "int[]",  "long[]"};
 
 inline const char* GetTypeString(uint32_t index) {
-  return kPrimitiveArrayStrings[index];
+  return UNSAFE_TODO(kPrimitiveArrayStrings[index]);
 }
 
 }  // namespace tracing

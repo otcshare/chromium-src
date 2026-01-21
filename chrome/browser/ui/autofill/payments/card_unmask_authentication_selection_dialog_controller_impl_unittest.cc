@@ -2,38 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/autofill/payments/card_unmask_authentication_selection_dialog_controller_impl.h"
+#include "components/autofill/core/browser/ui/payments/card_unmask_authentication_selection_dialog_controller_impl.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 
 namespace autofill {
 
-namespace {
-
-class TestCardUnmaskAuthenticationSelectionDialogControllerImpl
-    : public CardUnmaskAuthenticationSelectionDialogControllerImpl {
- public:
-  static void CreateForTesting(content::WebContents* web_contents) {
-    web_contents->SetUserData(
-        UserDataKey(),
-        std::make_unique<
-            TestCardUnmaskAuthenticationSelectionDialogControllerImpl>(
-            web_contents));
-  }
-
-  explicit TestCardUnmaskAuthenticationSelectionDialogControllerImpl(
-      content::WebContents* web_contents)
-      : CardUnmaskAuthenticationSelectionDialogControllerImpl(web_contents) {}
-};
-
-}  // namespace
-
 class CardUnmaskAuthenticationSelectionDialogControllerImplTest
-    : public ChromeRenderViewHostTestHarness {
+    : public testing::Test {
  public:
   CardUnmaskAuthenticationSelectionDialogControllerImplTest() = default;
   CardUnmaskAuthenticationSelectionDialogControllerImplTest(
@@ -44,17 +24,22 @@ class CardUnmaskAuthenticationSelectionDialogControllerImplTest
       delete;
 
   void SetUp() override {
-    ChromeRenderViewHostTestHarness::SetUp();
-    TestCardUnmaskAuthenticationSelectionDialogControllerImpl::CreateForTesting(
-        web_contents());
+    card_unmask_authentication_selection_dialog_controller_ =
+        std::make_unique<CardUnmaskAuthenticationSelectionDialogControllerImpl>(
+            /*challenge_options=*/test::GetCardUnmaskChallengeOptions(
+                {CardUnmaskChallengeOptionType::
+                     kSmsOtp}),  // `challenge_options` must not be empty.
+            /*confirm_unmasking_method_callback=*/base::DoNothing(),
+            /*cancel_unmasking_callback=*/base::DoNothing());
   }
 
-  TestCardUnmaskAuthenticationSelectionDialogControllerImpl* controller() {
-    return static_cast<
-        TestCardUnmaskAuthenticationSelectionDialogControllerImpl*>(
-        TestCardUnmaskAuthenticationSelectionDialogControllerImpl::
-            FromWebContents(web_contents()));
+  CardUnmaskAuthenticationSelectionDialogControllerImpl* controller() {
+    return card_unmask_authentication_selection_dialog_controller_.get();
   }
+
+ private:
+  std::unique_ptr<CardUnmaskAuthenticationSelectionDialogControllerImpl>
+      card_unmask_authentication_selection_dialog_controller_;
 };
 
 TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
@@ -64,18 +49,26 @@ TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
   controller()->SetSelectedChallengeOptionsForTesting(
       test::GetCardUnmaskChallengeOptions(
           {CardUnmaskChallengeOptionType::kSmsOtp,
+           CardUnmaskChallengeOptionType::kEmailOtp,
            CardUnmaskChallengeOptionType::kCvc}));
-  controller()->SetSelectedChallengeOptionId(
-      controller()->GetChallengeOptions()[0].id);
-  EXPECT_EQ(controller()->GetChallengeOptions()[0].id,
-            controller()->GetSelectedChallengeOptionIdForTesting());
-  controller()->OnDialogClosed(/*user_closed_dialog=*/true,
-                               /*server_success=*/false);
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
-      AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
-          kCanceledByUserBeforeSelection,
-      1);
+  int count = 0;
+  for (CardUnmaskChallengeOption challenge_option :
+       controller()->GetChallengeOptions()) {
+    SCOPED_TRACE(testing::Message() << " count=" << count);
+    controller()->SetSelectedChallengeOptionId(
+        CardUnmaskChallengeOption::ChallengeOptionId(
+            challenge_option.id.value()));
+    EXPECT_EQ(challenge_option.id.value(),
+              controller()->GetSelectedChallengeOptionIdForTesting().value());
+    controller()->OnDialogClosed(/*user_closed_dialog=*/true,
+                                 /*server_success=*/false);
+    count++;
+    histogram_tester.ExpectUniqueSample(
+        "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
+        AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
+            kCanceledByUserBeforeSelection,
+        count);
+  }
 }
 
 TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
@@ -85,43 +78,58 @@ TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
   controller()->SetSelectedChallengeOptionsForTesting(
       test::GetCardUnmaskChallengeOptions(
           {CardUnmaskChallengeOptionType::kSmsOtp,
+           CardUnmaskChallengeOptionType::kEmailOtp,
            CardUnmaskChallengeOptionType::kCvc}));
-  controller()->SetSelectedChallengeOptionId(
-      controller()->GetChallengeOptions()[0].id);
-  EXPECT_EQ(controller()->GetChallengeOptions()[0].id,
-            controller()->GetSelectedChallengeOptionIdForTesting());
+  int count = 0;
+  for (CardUnmaskChallengeOption challenge_option :
+       controller()->GetChallengeOptions()) {
+    SCOPED_TRACE(testing::Message() << " count=" << count);
+    controller()->SetSelectedChallengeOptionId(
+        CardUnmaskChallengeOption::ChallengeOptionId(
+            challenge_option.id.value()));
+    EXPECT_EQ(challenge_option.id.value(),
+              controller()->GetSelectedChallengeOptionIdForTesting().value());
 
-  controller()->OnOkButtonClicked();
-  controller()->OnDialogClosed(/*user_closed_dialog=*/true,
-                               /*server_success=*/false);
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
-      AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
-          kCanceledByUserAfterSelection,
-      1);
+    controller()->OnOkButtonClicked();
+    controller()->OnDialogClosed(/*user_closed_dialog=*/true,
+                                 /*server_success=*/false);
+    count++;
+    histogram_tester.ExpectUniqueSample(
+        "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
+        AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
+            kCanceledByUserAfterSelection,
+        count);
+  }
 }
 
 TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
        ServerRequestSucceeded) {
   base::HistogramTester histogram_tester;
+  int count = 0;
+  for (CardUnmaskChallengeOption challenge_option :
+       controller()->GetChallengeOptions()) {
+    SCOPED_TRACE(testing::Message() << " count=" << count);
+    controller()->SetSelectedChallengeOptionsForTesting(
+        test::GetCardUnmaskChallengeOptions(
+            {CardUnmaskChallengeOptionType::kSmsOtp,
+             CardUnmaskChallengeOptionType::kEmailOtp}));
 
-  controller()->SetSelectedChallengeOptionsForTesting(
-      test::GetCardUnmaskChallengeOptions(
-          {CardUnmaskChallengeOptionType::kSmsOtp,
-           CardUnmaskChallengeOptionType::kCvc}));
-  controller()->SetSelectedChallengeOptionId(
-      controller()->GetChallengeOptions()[0].id);
-  EXPECT_EQ(controller()->GetChallengeOptions()[0].id,
-            controller()->GetSelectedChallengeOptionIdForTesting());
+    controller()->SetSelectedChallengeOptionId(
+        CardUnmaskChallengeOption::ChallengeOptionId(
+            challenge_option.id.value()));
+    EXPECT_EQ(challenge_option.id.value(),
+              controller()->GetSelectedChallengeOptionIdForTesting().value());
 
-  controller()->OnOkButtonClicked();
-  controller()->OnDialogClosed(/*user_closed_dialog=*/false,
-                               /*server_success=*/true);
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
-      AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
-          kDismissedByServerRequestSuccess,
-      1);
+    controller()->OnOkButtonClicked();
+    controller()->OnDialogClosed(/*user_closed_dialog=*/false,
+                                 /*server_success=*/true);
+    count++;
+    histogram_tester.ExpectUniqueSample(
+        "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
+        AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
+            kDismissedByServerRequestSuccess,
+        count);
+  }
 }
 
 TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
@@ -131,21 +139,27 @@ TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
   controller()->SetSelectedChallengeOptionsForTesting(
       test::GetCardUnmaskChallengeOptions(
           {CardUnmaskChallengeOptionType::kSmsOtp,
-           CardUnmaskChallengeOptionType::kCvc}));
-  controller()->SetSelectedChallengeOptionId(
-      controller()->GetChallengeOptions()[0].id);
-  EXPECT_EQ(controller()->GetChallengeOptions()[0].id,
-            controller()->GetSelectedChallengeOptionIdForTesting());
+           CardUnmaskChallengeOptionType::kEmailOtp}));
+  int count = 0;
+  for (CardUnmaskChallengeOption challenge_option :
+       controller()->GetChallengeOptions()) {
+    SCOPED_TRACE(testing::Message() << " count=" << count);
+    controller()->SetSelectedChallengeOptionId(
+        CardUnmaskChallengeOption::ChallengeOptionId(
+            challenge_option.id.value()));
+    EXPECT_EQ(challenge_option.id.value(),
+              controller()->GetSelectedChallengeOptionIdForTesting().value());
 
-  controller()->OnOkButtonClicked();
-  controller()->OnDialogClosed(/*user_closed_dialog=*/false,
-                               /*server_success=*/false);
-
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
-      AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
-          kDismissedByServerRequestFailure,
-      1);
+    controller()->OnOkButtonClicked();
+    controller()->OnDialogClosed(/*user_closed_dialog=*/false,
+                                 /*server_success=*/false);
+    count++;
+    histogram_tester.ExpectUniqueSample(
+        "Autofill.CardUnmaskAuthenticationSelectionDialog.Result",
+        AutofillMetrics::CardUnmaskAuthenticationSelectionDialogResultMetric::
+            kDismissedByServerRequestFailure,
+        count);
+  }
 }
 
 TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
@@ -180,11 +194,14 @@ TEST_F(CardUnmaskAuthenticationSelectionDialogControllerImplTest,
   controller()->SetSelectedChallengeOptionsForTesting(
       test::GetCardUnmaskChallengeOptions(
           {CardUnmaskChallengeOptionType::kSmsOtp,
+           CardUnmaskChallengeOptionType::kEmailOtp,
            CardUnmaskChallengeOptionType::kCvc}));
 
   for (CardUnmaskChallengeOption challenge_option :
        controller()->GetChallengeOptions()) {
-    controller()->SetSelectedChallengeOptionId(challenge_option.id);
+    controller()->SetSelectedChallengeOptionId(
+        CardUnmaskChallengeOption::ChallengeOptionId(
+            challenge_option.id.value()));
     controller()->OnOkButtonClicked();
     EXPECT_EQ(challenge_option.type,
               controller()->GetSelectedChallengeOptionTypeForTesting());

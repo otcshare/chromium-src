@@ -5,7 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_LINK_HEADER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_LINK_HEADER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -31,7 +32,8 @@ class LinkHeader {
   const String& VariantKey() const { return variant_key_; }
   const String& Blocking() const { return blocking_; }
   const String& ReferrerPolicy() const { return referrer_policy_; }
-  const absl::optional<String>& Anchor() const { return anchor_; }
+  const String& FetchPriority() const { return fetch_priority_; }
+  const std::optional<String>& Anchor() const { return anchor_; }
   bool Valid() const { return is_valid_; }
   bool IsViewportDependent() const {
     return !Media().empty() || !ImageSrcset().empty() || !ImageSizes().empty();
@@ -58,6 +60,7 @@ class LinkHeader {
     kLinkParameterVariantKey,
     kLinkParameterBlocking,
     kLinkParameterReferrerPolicy,
+    kLinkParameterFetchPriority,
   };
 
  private:
@@ -82,7 +85,8 @@ class LinkHeader {
   String variant_key_;
   String blocking_;
   String referrer_policy_;
-  absl::optional<String> anchor_;
+  String fetch_priority_;
+  std::optional<String> anchor_;
   bool is_valid_;
 };
 

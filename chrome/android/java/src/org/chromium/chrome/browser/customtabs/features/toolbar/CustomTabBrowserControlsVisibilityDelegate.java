@@ -4,33 +4,29 @@
 
 package org.chromium.chrome.browser.customtabs.features.toolbar;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.cc.input.BrowserControlsState;
-import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
-import org.chromium.chrome.browser.dependency_injection.ActivityScope;
 import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 
-import javax.inject.Inject;
-
-import dagger.Lazy;
+import java.util.function.Supplier;
 
 /**
- * Implementation of {@link BrowserControlsVisibilityDelegate} for custom tabs.
+ * Implementation of {@link BrowserControlsVisibilityDelegate} for custom tabs specific logic. It is
+ * a wrapper around the delegate provided by {@link BrowserControlsVisibilityManager}, allow setting
+ * constraint without changing the browser state logic (e.g. hide controls in TWA app mode).
  */
-@ActivityScope
+@NullMarked
 public class CustomTabBrowserControlsVisibilityDelegate extends BrowserControlsVisibilityDelegate {
-    private final Lazy<BrowserControlsVisibilityManager> mBrowserControlsVisibilityManager;
-    private final ActivityTabProvider mTabProvider;
+    private final Supplier<BrowserControlsVisibilityManager> mBrowserControlsVisibilityManager;
     private @BrowserControlsState int mBrowserControlsState = BrowserControlsState.BOTH;
 
-    @Inject
     public CustomTabBrowserControlsVisibilityDelegate(
-            Lazy<BrowserControlsVisibilityManager> controlsVisibilityManager,
-            ActivityTabProvider tabProvider) {
-        super(BrowserControlsState.BOTH);
+            Supplier<BrowserControlsVisibilityManager> controlsVisibilityManager) {
         mBrowserControlsVisibilityManager = controlsVisibilityManager;
-        mTabProvider = tabProvider;
         getDefaultVisibilityDelegate().addObserver((constraints) -> updateVisibilityConstraints());
         updateVisibilityConstraints();
     }
@@ -45,10 +41,9 @@ public class CustomTabBrowserControlsVisibilityDelegate extends BrowserControlsV
         updateVisibilityConstraints();
     }
 
-    @BrowserControlsState
-    private int calculateVisibilityConstraints() {
+    private @BrowserControlsState int calculateVisibilityConstraints() {
         @BrowserControlsState
-        int defaultConstraints = getDefaultVisibilityDelegate().get();
+        int defaultConstraints = assumeNonNull(getDefaultVisibilityDelegate().get());
         if (defaultConstraints == BrowserControlsState.HIDDEN
                 || mBrowserControlsState == BrowserControlsState.HIDDEN) {
             return BrowserControlsState.HIDDEN;

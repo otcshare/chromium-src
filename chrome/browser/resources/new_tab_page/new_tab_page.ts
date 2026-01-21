@@ -9,24 +9,28 @@
  * things tests need.
  */
 
+export {CustomizeButtonsElement} from 'chrome://new-tab-page/shared/customize_buttons/customize_buttons.js';
+export {PlaceholderTextCycler, SearchboxElement} from 'chrome://resources/cr_components/searchbox/searchbox.js';
+export {createAutocompleteMatch, SearchboxBrowserProxy} from 'chrome://resources/cr_components/searchbox/searchbox_browser_proxy.js';
+export {SearchboxIconElement} from 'chrome://resources/cr_components/searchbox/searchbox_icon.js';
+export {SearchboxMatchElement} from 'chrome://resources/cr_components/searchbox/searchbox_match.js';
 export {CrAutoImgElement} from 'chrome://resources/cr_elements/cr_auto_img/cr_auto_img.js';
 export {BrowserCommandProxy} from 'chrome://resources/js/browser_command/browser_command_proxy.js';
 export {BrowserProxyImpl} from 'chrome://resources/js/metrics_reporter/browser_proxy.js';
 export {MetricsReporterImpl} from 'chrome://resources/js/metrics_reporter/metrics_reporter.js';
 export {getTrustedHTML} from 'chrome://resources/js/static_types.js';
-export {DomIf} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-export {AppElement, NtpElement} from './app.js';
+export {AppElement, CONTEXTUAL_ENTRYPOINT_ELEMENT_ID, CUSTOMIZE_CHROME_BUTTON_ELEMENT_ID, NtpCustomizeChromeEntryPoint, NtpElement} from './app.js';
 export {BackgroundManager} from './background_manager.js';
+export {CustomizeButtonsProxy} from './customize_buttons_proxy.js';
 export {CustomizeDialogPage} from './customize_dialog_types.js';
 export {DoodleShareDialogElement} from './doodle_share_dialog.js';
 export {IframeElement} from './iframe.js';
+export {processFile} from './image_processor.js';
+export type {ProcessedFile} from './image_processor.js';
 export {LogoElement} from './logo.js';
-export {recordDuration, recordLoadDuration, recordOccurence, recordPerdecage} from './metrics_utils.js';
+export {recordBoolean, recordDuration, recordEnumeration, recordLinearValue, recordLoadDuration, recordLogValue, recordOccurrence, recordPerdecage, recordSmallCount, recordSparseValueWithPersistentHash} from './metrics_utils.js';
 export {NewTabPageProxy} from './new_tab_page_proxy.js';
-export {RealboxElement} from './realbox/realbox.js';
-export {RealboxBrowserProxy} from './realbox/realbox_browser_proxy.js';
-export {RealboxIconElement} from './realbox/realbox_icon.js';
-export {RealboxMatchElement} from './realbox/realbox_match.js';
-export {$$, createScrollBorders, decodeString16, mojoString16} from './utils.js';
+export {checkTransparency, isBMP, isPNG, isWebP} from './transparency.js';
+export {$$} from './utils.js';
 export {Action as VoiceAction, Error as VoiceError} from './voice_search_overlay.js';
 export {WindowProxy} from './window_proxy.js';

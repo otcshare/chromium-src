@@ -16,7 +16,13 @@ REPOCONFIG="deb [arch=${ARCHITECTURE}] http://${BASEREPOCONFIG}"
 REPOCONFIGREGEX="deb (\\\\[arch=[^]]*\\\\b${ARCHITECTURE}\\\\b[^]]*\\\\]"
 REPOCONFIGREGEX+="[[:space:]]*) https?://${BASEREPOCONFIG}"
 
-source ${SCRIPTDIR}/../../../../chrome/installer/linux/common/installer.include
+# The template processor requires these variables to be lowercase for
+# some substitutions to work:
+architecture="$ARCHITECTURE"
+repoconfig="$REPOCONFIG"
+repoconfigregex="$REPOCONFIGREGEX"
+
+source ${SCRIPTDIR}/installer.include
 
 guess_filename() {
   VERSION_FULL=$(get_version_full)
@@ -43,14 +49,16 @@ get_version_full() {
 }
 
 usage() {
-  echo "usage: $(basename $0) [-hp] [-o path] [-s path]"
+  echo "usage: $(basename $0) [-hp] [-o path] [-s path] [-O option]"
   echo "-h     this help message"
   echo "-p     just print the expected DEB filename that this will build."
   echo "-s     path to the top of the src tree."
   echo "-o     output directory path."
+  echo "-O     option (no options currently defined)"
+  echo "-b     build timestamp (Epoch seconds)"
 }
 
-while getopts ":s:o:ph" OPTNAME
+while getopts ":s:o:O:phb:" OPTNAME
 do
   case $OPTNAME in
     s )
@@ -61,6 +69,12 @@ do
       ;;
     p )
       PRINTDEBNAME=1
+      ;;
+    O )
+      OPTION="$OPTARG"
+      ;;
+    b )
+      BUILD_TIMESTAMP="$OPTARG"
       ;;
     h )
       usage
@@ -88,9 +102,9 @@ if [[ -n "$PRINTDEBNAME" ]]; then
   exit 0
 fi
 
-# TODO: Make this all happen in a temp dir to keep intermediate files out of the
-# build tree?
-cd "$SCRIPTDIR"
+# get_version_full works from ${SCRIPTDIR}
+# TODO(ukai): fix get_version_full so that not need to chdir?
+cd "${SCRIPTDIR}"
 
 if [[ -z "$version_full" ]]; then
   version_full=$(get_version_full)
@@ -101,18 +115,16 @@ if [[ ! "$version_full" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-# Include revision information in changelog when building from a local
-# git-based checkout.
-merge_head="$(git merge-base HEAD origin/git-svn 2>/dev/null || true)"
-if [[ -n "$merge_head" ]]; then
-  revision="$(git svn find-rev "$merge_head" 2>/dev/null || true)"
-else
-  # Official builders still use svn-based builds.
-  revision="$(svn info . | awk '/^Revision: /{print $2}')"
-fi
-if [[ -n "$revision" ]]; then
-  revision_text="(r$revision)"
-fi
+# TODO(ukai): Include revision information in changelog when building
+# from a local git-based checkout.
+revision_text=""
+
+tmpdir="$(mktemp -p ${TMPDIR:-/tmp} -d chromium_remoting_build_deb.XXXXXX)"
+trap "rm -rf -- ${tmpdir}" EXIT
+# dpkg-buildpackage creates ../*.deb from ${tmpdir}/linux
+mkdir -p "${tmpdir}/linux"
+cp -a "${SCRIPTDIR}"/* "${tmpdir}/linux"
+cd "${tmpdir}/linux"
 
 if [[ ! "$OUTPUT_PATH" ]]; then
   OUTPUT_PATH="${SCRIPTDIR}/../../../../out/Release"
@@ -129,12 +141,18 @@ debchange --create \
   --force-distribution \
   --distribution unstable \
   "New Debian package $revision_text"
-
+# Manually overwrite the trailer line to force the timestamp for reproducible
+# builds. Without this, debchange uses the current system time (localtime).
+# NOTE: When debchange --date is properly supported in the build environment,
+# this sed command should be removed and --date "$DATE_RFC5322" added to the
+# debchange command above.
+DATE_RFC5322="$(date -u --rfc-email -d "@$BUILD_TIMESTAMP")"
+sed -i "s/^ -- $DEBEMAIL .*/ -- $DEBEMAIL  $DATE_RFC5322/" debian/changelog
 
 CRON_SCRIPT_DIR="${OUTPUT_PATH}/remoting/installer/cron"
 mkdir -p ${CRON_SCRIPT_DIR}
 process_template \
-    "${SCRIPTDIR}/../../../../chrome/installer/linux/common/repo.cron" \
+    "${SCRIPTDIR}/debian/repo.cron" \
     "${CRON_SCRIPT_DIR}/chrome-remote-desktop"
 
 # TODO(mmoss): This is a workaround for a problem where dpkg-shlibdeps was
@@ -145,7 +163,9 @@ process_template \
 # but it seems that we don't currently, so this is the most expediant fix.
 SAVE_LDLP=$LD_LIBRARY_PATH
 unset LD_LIBRARY_PATH
-BUILD_DIR=$OUTPUT_PATH dpkg-buildpackage -b -us -uc
+SOURCE_DATE_EPOCH="$BUILD_TIMESTAMP" \
+  BUILD_DIR=$OUTPUT_PATH SRC_DIR=${SCRIPTDIR}/../../../.. \
+  dpkg-buildpackage -b -us -uc
 LD_LIBRARY_PATH=$SAVE_LDLP
 
 mv ../${PACKAGE}_*.deb "$OUTPUT_PATH"/

@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
@@ -30,9 +31,9 @@ class EventLogger {
  public:
   EventLogger() = default;
 
-  void AddEvent(StringPiece event) {
+  void AddEvent(std::string_view event) {
     AutoLock guard(lock_);
-    events_.push_back(std::string(event));
+    events_.emplace_back(event);
   }
   std::vector<std::string> TakeEvents() {
     AutoLock guard(lock_);
@@ -227,8 +228,9 @@ class BoxedValue {
   ~BoxedValue() {
     EXPECT_TRUE(sequence_checker_.CalledOnValidSequence());
     AddEventIfNeeded(StringPrintf("destroyed BoxedValue = %d", value_));
-    if (destruction_callback_)
+    if (destruction_callback_) {
       std::move(destruction_callback_).Run();
+    }
   }
 
   void set_destruction_callback(OnceClosure callback) {
@@ -249,7 +251,7 @@ class BoxedValue {
   }
 
  private:
-  void AddEventIfNeeded(StringPiece event) const {
+  void AddEventIfNeeded(std::string_view event) const {
     if (logger_) {
       logger_->AddEvent(event);
     }
@@ -709,18 +711,22 @@ namespace {
 class NoArgsVoidReturn {
  public:
   void Method() {
-    if (loop_)
+    if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
+    }
   }
   void ConstMethod() const {
-    if (loop_)
+    if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
+    }
   }
 
   void set_loop(RunLoop* loop) { loop_ = loop; }
 
  private:
-  raw_ptr<RunLoop> loop_ = nullptr;
+  mutable raw_ptr<RunLoop> loop_ = nullptr;
 };
 
 class NoArgsIntReturn {
@@ -737,22 +743,27 @@ class IntArgVoidReturn {
 
   void Method(int x) {
     *method_called_with_ = x;
-    if (loop_)
+    method_called_with_ = nullptr;
+    if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
+    }
   }
   void ConstMethod(int x) const {
     *const_method_called_with_ = x;
-    if (loop_)
+    const_method_called_with_ = nullptr;
+    if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
+    }
   }
 
   void set_loop(RunLoop* loop) { loop_ = loop; }
 
  private:
-  const raw_ptr<int> method_called_with_;
-  const raw_ptr<int> const_method_called_with_;
-
-  raw_ptr<RunLoop> loop_ = nullptr;
+  raw_ptr<int> method_called_with_;
+  mutable raw_ptr<int> const_method_called_with_;
+  mutable raw_ptr<RunLoop> loop_ = nullptr;
 };
 
 class IntArgIntReturn {
@@ -810,7 +821,7 @@ TYPED_TEST(SequenceBoundTest, AsyncCallNoArgsVoidThen) {
 
   {
     RunLoop loop;
-    s.AsyncCall(&NoArgsVoidReturn::Method).Then(BindLambdaForTesting([&]() {
+    s.AsyncCall(&NoArgsVoidReturn::Method).Then(BindLambdaForTesting([&] {
       loop.Quit();
     }));
     loop.Run();
@@ -818,8 +829,9 @@ TYPED_TEST(SequenceBoundTest, AsyncCallNoArgsVoidThen) {
 
   {
     RunLoop loop;
-    s.AsyncCall(&NoArgsVoidReturn::ConstMethod)
-        .Then(BindLambdaForTesting([&]() { loop.Quit(); }));
+    s.AsyncCall(&NoArgsVoidReturn::ConstMethod).Then(BindLambdaForTesting([&] {
+      loop.Quit();
+    }));
     loop.Run();
   }
 }
@@ -916,9 +928,11 @@ class IgnoreResultTestHelperWithNoArgs {
   int ConstMethod() const {
     if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
     }
     if (called_) {
       *called_ = true;
+      called_ = nullptr;
     }
     return 0;
   }
@@ -926,16 +940,18 @@ class IgnoreResultTestHelperWithNoArgs {
   int Method() {
     if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
     }
     if (called_) {
       *called_ = true;
+      called_ = nullptr;
     }
     return 0;
   }
 
  private:
-  const raw_ptr<RunLoop> loop_ = nullptr;
-  const raw_ptr<bool> called_ = nullptr;
+  mutable raw_ptr<RunLoop> loop_ = nullptr;
+  mutable raw_ptr<bool> called_ = nullptr;
 };
 
 TYPED_TEST(SequenceBoundTest, AsyncCallIgnoreResultNoArgs) {
@@ -983,27 +999,35 @@ TYPED_TEST(SequenceBoundTest, AsyncCallIgnoreResultThen) {
 class IgnoreResultTestHelperWithArgs {
  public:
   IgnoreResultTestHelperWithArgs(RunLoop* loop, int& value)
-      : loop_(loop), value_(value) {}
+      : loop_(loop), value_(&value) {}
 
   int ConstMethod(int arg) const {
-    *value_ = arg;
+    if (value_) {
+      *value_ = arg;
+      value_ = nullptr;
+    }
     if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
     }
     return arg;
   }
 
   int Method(int arg) {
-    *value_ = arg;
+    if (value_) {
+      *value_ = arg;
+      value_ = nullptr;
+    }
     if (loop_) {
       loop_->Quit();
+      loop_ = nullptr;
     }
     return arg;
   }
 
  private:
-  const raw_ptr<RunLoop> loop_ = nullptr;
-  const raw_ref<int> value_;
+  mutable raw_ptr<RunLoop> loop_ = nullptr;
+  mutable raw_ptr<int> value_;
 };
 
 TYPED_TEST(SequenceBoundTest, AsyncCallIgnoreResultWithArgs) {
@@ -1056,10 +1080,10 @@ TYPED_TEST(SequenceBoundTest, AsyncCallIgnoreResultWithArgsThen) {
   }
 }
 
-// TODO(https://crbug.com/1382549): Maybe use the nocompile harness here instead
+// TODO(crbug.com/40245687): Maybe use the nocompile harness here instead
 // of being "clever"...
 TYPED_TEST(SequenceBoundTest, NoCompileTests) {
-  // TODO(https://crbug.com/1382549): Test calling WithArgs() on a method that
+  // TODO(crbug.com/40245687): Test calling WithArgs() on a method that
   // takes no arguments.
   //
   // Given:
@@ -1073,7 +1097,7 @@ TYPED_TEST(SequenceBoundTest, NoCompileTests) {
   //
   // should not compile.
   //
-  // TODO(https://crbug.com/1382549): Test calling Then() before calling
+  // TODO(crbug.com/40245687): Test calling Then() before calling
   // WithArgs().
   //
   // Given:
@@ -1087,7 +1111,7 @@ TYPED_TEST(SequenceBoundTest, NoCompileTests) {
   //
   // should not compile.
   //
-  // TODO(https://crbug.com/1382549): Add no-compile tests for converting
+  // TODO(crbug.com/40245687): Add no-compile tests for converting
   // between SequenceBound<T> and SequenceBound<std::unique_ptr<T>>.
 }
 #undef SequenceBound

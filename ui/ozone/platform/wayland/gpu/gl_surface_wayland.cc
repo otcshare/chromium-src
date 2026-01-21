@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "third_party/khronos/EGL/egl.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/presentation_feedback.h"
@@ -24,7 +24,7 @@ void EGLWindowDeleter::operator()(wl_egl_window* egl_window) {
 
 std::unique_ptr<wl_egl_window, EGLWindowDeleter> CreateWaylandEglWindow(
     WaylandWindow* window) {
-  gfx::Size size = window->size_px();
+  gfx::Size size = window->applied_state().size_px;
   return std::unique_ptr<wl_egl_window, EGLWindowDeleter>(wl_egl_window_create(
       window->root_surface()->surface(), size.width(), size.height()));
 }
@@ -47,8 +47,9 @@ bool GLSurfaceWayland::Resize(const gfx::Size& size,
                               float scale_factor,
                               const gfx::ColorSpace& color_space,
                               bool has_alpha) {
-  if (size_ == size)
+  if (size_ == size) {
     return true;
+  }
   wl_egl_window_resize(egl_window_.get(), size.width(), size.height(), 0, 0);
   size_ = size;
   scale_factor_ = ceil(scale_factor);
@@ -77,9 +78,16 @@ EGLConfig GLSurfaceWayland::GetConfig() {
   return config_;
 }
 
+// TODO(crbug.com/368634141): Revisit and double-check the direct root surface
+// state setter calls in the functions below, where a cached and ceiled scale
+// factor is used. Ideally surface information should be set using the standard
+// WaylandFrameManager::ApplySurfaceConfigure flow, i.e: whose entry point is
+// WaylandBufferManager::CommitOverlays. Which is done in GbmSurfacelessWayland,
+// for example.
+
 gfx::SwapResult GLSurfaceWayland::SwapBuffers(PresentationCallback callback,
                                               gfx::FrameData data) {
-  UpdateVisualSize();
+  OnSequencePoint(data.seq);
   if (!window_->IsSurfaceConfigured()) {
     // The presentation |callback| must be called after gfx::SwapResult is sent.
     // Thus, use a scoped swap buffers object that will send the feedback later.
@@ -98,7 +106,7 @@ gfx::SwapResult GLSurfaceWayland::PostSubBuffer(int x,
                                                 int height,
                                                 PresentationCallback callback,
                                                 gfx::FrameData data) {
-  UpdateVisualSize();
+  OnSequencePoint(data.seq);
   if (!window_->IsSurfaceConfigured()) {
     // The presentation |callback| must be called after gfx::SwapResult is sent.
     // Thus, use a scoped swap buffers object that will send the feedback later.
@@ -113,13 +121,14 @@ gfx::SwapResult GLSurfaceWayland::PostSubBuffer(int x,
 }
 
 GLSurfaceWayland::~GLSurfaceWayland() {
+  InvalidateWeakPtrs();
   Destroy();
 }
 
-void GLSurfaceWayland::UpdateVisualSize() {
+void GLSurfaceWayland::OnSequencePoint(int64_t seq) {
   window_->ui_task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&WaylandWindow::UpdateVisualSize,
-                                window_->AsWeakPtr(), size_));
+      FROM_HERE, base::BindOnce(&WaylandWindow::OnSequencePoint,
+                                window_->AsWeakPtr(), seq));
 }
 
 }  // namespace ui

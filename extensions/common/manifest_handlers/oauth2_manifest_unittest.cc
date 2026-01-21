@@ -103,23 +103,20 @@ class OAuth2ManifestTest : public ManifestTest {
 };
 
 TEST_F(OAuth2ManifestTest, OAuth2SectionParsing) {
-  base::Value::Dict base_manifest;
-
-  base_manifest.Set(keys::kName, "test");
-  base_manifest.Set(keys::kVersion, "0.1");
-  base_manifest.Set(keys::kManifestVersion, 2);
+  auto base_manifest = base::Value::Dict()
+                           .Set(keys::kName, "test")
+                           .Set(keys::kVersion, "0.1")
+                           .Set(keys::kManifestVersion, 2);
   base_manifest.SetByDottedPath(GetOauth2KeyPath(OAuth2Info::kClientId),
                                 "client1");
-  base::Value::List scopes;
-  scopes.Append("scope1");
-  scopes.Append("scope2");
+  auto scopes = base::Value::List().Append("scope1").Append("scope2");
   base_manifest.SetByDottedPath(GetOauth2KeyPath(OAuth2Info::kScopes),
                                 std::move(scopes));
 
   // OAuth2 section should be parsed for an extension.
   {
     base::Value::Dict ext_manifest;
-    // Lack of "app" section representa an extension. So the base manifest
+    // Lack of "app" section represents an extension. So the base manifest
     // itself represents an extension.
     ext_manifest.Merge(base_manifest.Clone());
     ext_manifest.Set(keys::kKey, kExtensionKey);

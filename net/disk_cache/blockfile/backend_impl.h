@@ -15,14 +15,18 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/timer/timer.h"
+#include "base/types/expected.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/blockfile/block_files.h"
+#include "net/disk_cache/blockfile/disk_format.h"
 #include "net/disk_cache/blockfile/eviction.h"
 #include "net/disk_cache/blockfile/in_flight_backend_io.h"
 #include "net/disk_cache/blockfile/rankings.h"
 #include "net/disk_cache/blockfile/stats.h"
 #include "net/disk_cache/blockfile/stress_support.h"
 #include "net/disk_cache/disk_cache.h"
+#include "net/net_buildflags.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -35,7 +39,6 @@ class NetLog;
 namespace disk_cache {
 
 class BackendCleanupTracker;
-struct Index;
 
 enum BackendFlags {
   kNone = 0,
@@ -63,6 +66,7 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // mask can be used to limit the usable size of the hash table, for testing.
   BackendImpl(const base::FilePath& path,
               uint32_t mask,
+              scoped_refptr<BackendCleanupTracker> cleanup_tracker,
               const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread,
               net::CacheType cache_type,
               net::NetLog* net_log);
@@ -189,11 +193,6 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // Returns true if this instance seems to be under heavy load.
   bool IsLoaded() const;
 
-  // Returns the full histogram name, for the given base |name| and experiment,
-  // and the current cache type. The name will be "DiskCache.t.name_e" where n
-  // is the cache type and e the provided |experiment|.
-  std::string HistogramName(const char* name, int experiment) const;
-
   bool read_only() const {
     return read_only_;
   }
@@ -201,12 +200,12 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // Returns a weak pointer to this object.
   base::WeakPtr<BackendImpl> GetWeakPtr();
 
-  // Returns true if we should send histograms for this user again. The caller
-  // must call this function only once per run (because it returns always the
-  // same thing on a given run).
-  bool ShouldReportAgain();
+  // Returns true if we should perform a periodic stat update. The caller must
+  // call this function only once per run (because it returns always the same
+  // thing on a given run).
+  bool ShouldUpdateStats();
 
-  // Reports some data when we filled up the cache.
+  // Reset stat ratios on first eviction.
   void FirstEviction();
 
   // Reports a critical error (and disables the cache).
@@ -276,7 +275,8 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   static void FlushAsynchronouslyForTesting(base::OnceClosure callback);
 
   // Backend implementation.
-  int32_t GetEntryCount() const override;
+  base::expected<int32_t, net::Error> GetEntryCount(
+      GetEntryCountCallback callback) const override;
   EntryResult OpenOrCreateEntry(const std::string& key,
                                 net::RequestPriority request_priority,
                                 EntryResultCallback callback) override;
@@ -372,8 +372,8 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // Dumps current cache statistics to the log.
   void LogStats();
 
-  // Send UMA stats.
-  void ReportStats();
+  // Perform some periodic upkeep tasks on the stats.
+  void UpdateStats();
 
   // Upgrades the index file to version 2.1 (from 2.0)
   void UpgradeTo2_1();
@@ -382,8 +382,21 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // (from 2.1/2.0 depending on eviction algorithm)
   void UpgradeTo3_0();
 
-  // Performs basic checks on the index file. Returns false on failure.
-  bool CheckIndex();
+  enum class CheckIndexResult {
+    kOk,
+    kCorruptIndexFileInIndexLength,
+    kInvalidFileMagic,
+    kInvalidFileVersion,
+    kInvalidTableSize,
+    kCorruptIndexFileInTableLength1,
+    kInvalidCacheSize,
+    kInvalidNumberOfEntries,
+    kFailedOnPreload,
+    kCorruptIndexFileInTableLength2,
+  };
+
+  // Performs basic checks on the index file.
+  CheckIndexResult CheckIndex();
 
   // Part of the self test. Returns the number or dirty entries, or an error.
   int CheckAllEntries();
@@ -391,8 +404,11 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // Part of the self test. Returns false if the entry is corrupt.
   bool CheckEntry(EntryImpl* cache_entry);
 
+  // Returns the entry count synchronously.
+  int32_t GetEntryCountSync() const;
+
   // Returns the maximum total memory for the memory buffers.
-  int MaxBuffersSize();
+  static int MaxBuffersSize();
 
   // We want this destroyed after every other field.
   scoped_refptr<BackendCleanupTracker> cleanup_tracker_;
@@ -400,7 +416,20 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   InFlightBackendIO background_queue_;  // The controller of pending operations.
   scoped_refptr<MappedFile> index_;  // The main cache index.
   base::FilePath path_;  // Path to the folder used as backing storage.
-  raw_ptr<Index> data_;  // Pointer to the index data.
+
+  // Pointer to the index data.
+  // May point to a mapped file's unmapped memory at destruction time.
+  raw_ptr<Index, DisableDanglingPtrDetection> data_;
+
+  // Points inside the same object as `data_`; note that this is usually
+  // a memory mapped file, so raw_span is only used in configurations where it's
+  // not.
+#if BUILDFLAG(POSIX_BYPASS_MMAP)
+  base::raw_span<CacheAddr> index_table_;
+#else
+  RAW_PTR_EXCLUSION base::span<CacheAddr> index_table_;
+#endif
+
   BlockFiles block_files_;  // Set of files used to store all data.
   Rankings rankings_;  // Rankings to be able to trim the cache.
   uint32_t mask_ = 0;  // Binary mask to map a hash to the hash table.
@@ -414,7 +443,7 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   int byte_count_;  // Number of bytes read/written lately.
   int buffer_bytes_;  // Total size of the temporary entries' buffers.
   int up_ticks_ = 0;  // The number of timer ticks received (OnStatsTimer).
-  int uma_report_ = 0;   // Controls transmission of UMA data.
+  int should_update_ = 0;  // Used to determine when to reset statistics.
   uint32_t user_flags_;  // Flags set by the user.
   bool init_ = false;    // controls the initialization of the system.
   bool restarted_ = false;

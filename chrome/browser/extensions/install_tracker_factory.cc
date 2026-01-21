@@ -4,12 +4,13 @@
 
 #include "chrome/browser/extensions/install_tracker_factory.h"
 
-#include "base/memory/singleton.h"
-#include "chrome/browser/extensions/install_tracker.h"
+#include "base/no_destructor.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_prefs_factory.h"
 #include "extensions/browser/extension_system_provider.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/browser/install_tracker.h"
+#include "extensions/buildflags/buildflags.h"
 
 namespace extensions {
 
@@ -21,7 +22,8 @@ InstallTracker* InstallTrackerFactory::GetForBrowserContext(
 }
 
 InstallTrackerFactory* InstallTrackerFactory::GetInstance() {
-  return base::Singleton<InstallTrackerFactory>::get();
+  static base::NoDestructor<InstallTrackerFactory> instance;
+  return instance.get();
 }
 
 InstallTrackerFactory::InstallTrackerFactory()
@@ -29,17 +31,26 @@ InstallTrackerFactory::InstallTrackerFactory()
           "InstallTracker",
           // The installs themselves are routed to the non-incognito profile and
           // so should the install progress.
-          ProfileSelections::BuildRedirectedInIncognito()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/40257657): Audit whether these should be
+              // redirected or should have their own instance.
+              .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {
   DependsOn(ExtensionsBrowserClient::Get()->GetExtensionSystemFactory());
   DependsOn(ExtensionPrefsFactory::GetInstance());
 }
 
-InstallTrackerFactory::~InstallTrackerFactory() {
-}
+InstallTrackerFactory::~InstallTrackerFactory() = default;
 
-KeyedService* InstallTrackerFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+InstallTrackerFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new InstallTracker(context, ExtensionPrefs::Get(context));
+  return std::make_unique<InstallTracker>(context,
+                                          ExtensionPrefs::Get(context));
 }
 
 }  // namespace extensions

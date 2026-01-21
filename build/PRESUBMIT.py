@@ -4,10 +4,6 @@
 
 PRESUBMIT_VERSION = '2.0.0'
 
-# This line is 'magic' in that git-cl looks for it to decide whether to
-# use Python3 instead of Python2 when running the code in this file.
-USE_PYTHON3 = True
-
 import textwrap
 
 
@@ -17,8 +13,11 @@ def CheckNoBadDeps(input_api, output_api):
       r'(.+/)?BUILD\.gn',
       r'.+\.gni',
   ]
+  exclude_file_patterns = [
+      r'build/rust/tests',
+  ]
   blocklist_pattern = input_api.re.compile(r'^[^#]*"//(?!build).+?/.*"')
-  allowlist_pattern = input_api.re.compile(r'^[^#]*"//third_party/junit')
+  allowlist_pattern = input_api.re.compile(r'^[^#]*"//(third_party/junit|out)')
 
   warning_message = textwrap.dedent("""
       The //build directory is meant to be as hermetic as possible so that
@@ -31,7 +30,8 @@ def CheckNoBadDeps(input_api, output_api):
 
   def FilterFile(affected_file):
     return input_api.FilterSourceFile(affected_file,
-                                      files_to_check=build_file_patterns)
+                                      files_to_check=build_file_patterns,
+                                      files_to_skip=exclude_file_patterns)
 
   problems = []
   for f in input_api.AffectedSourceFiles(FilterFile):
@@ -52,6 +52,4 @@ def CheckPythonTests(input_api, output_api):
           input_api,
           output_api,
           input_api.PresubmitLocalPath(),
-          files_to_check=[r'.+_(?:unit)?test\.py$'],
-          run_on_python2=False,
-          run_on_python3=True))
+          files_to_check=[r'.+_(?:unit)?test\.py$']))

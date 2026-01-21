@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
+import type {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
 
-import {BacklightColor, KeyboardBacklightObserverInterface, KeyboardBacklightObserverReceiver, KeyboardBacklightProviderInterface} from '../personalization_app.mojom-webui.js';
+import type {CurrentBacklightState, KeyboardBacklightObserverInterface, KeyboardBacklightProviderInterface} from '../../personalization_app.mojom-webui.js';
+import {KeyboardBacklightObserverReceiver} from '../../personalization_app.mojom-webui.js';
 import {PersonalizationStore} from '../personalization_store.js';
 
-import {setBacklightColorAction, setWallpaperColorAction} from './keyboard_backlight_actions.js';
+import {setCurrentBacklightStateAction, setWallpaperColorAction} from './keyboard_backlight_actions.js';
 import {getKeyboardBacklightProvider} from './keyboard_backlight_interface_provider.js';
 
 /** @fileoverview listens for updates on keyboard backlight settings changes. */
@@ -45,9 +46,9 @@ export class KeyboardBacklightObserver implements
     return receiver;
   }
 
-  onBacklightColorChanged(backlightColor: BacklightColor): void {
+  onBacklightStateChanged(currentBacklightState: CurrentBacklightState): void {
     const store = PersonalizationStore.getInstance();
-    store.dispatch(setBacklightColorAction(backlightColor));
+    store.dispatch(setCurrentBacklightStateAction(currentBacklightState));
   }
 
   onWallpaperColorChanged(wallpaperColor: SkColor): void {

@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_INTENT_FILTER_H_
 #define COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_INTENT_FILTER_H_
 
+#include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -13,8 +15,6 @@
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "components/services/app_service/public/cpp/macros.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace apps {
 
@@ -26,7 +26,7 @@ namespace apps {
 enum class IntentFilterMatchLevel {
   kNone = 0,
   kScheme = 1,
-  kHost = 2,
+  kAuthority = 2,
   kPath = 4,
   kMimeType = 8,
 };
@@ -38,8 +38,13 @@ enum class IntentFilterMatchLevel {
 enum class ConditionType {
   // Matches the URL scheme (e.g. https, tel).
   kScheme = 0,
-  // Matches the URL host (e.g. www.google.com).
-  kHost = 1,
+  // Matches the URL host and optional port (e.g. www.google.com:443).
+  // ConditionValue strings should be set using AuthorityView::Encode() however
+  // it is acceptable to supply just a host name; an absence of port will match
+  // on any port.
+  // PatternMatchType will only apply to the host part, the port if present will
+  // use kLiteral matching.
+  kAuthority = 1,
   // Matches the URL path (e.g. /abc/*). Does not include the URL query or
   // hash.
   kPath = 2,
@@ -82,7 +87,8 @@ enum class PatternMatchType {
   // The ConditionValue is a file extension (e.g. "png") or a wildcard ("*")
   // which is matched against file names in the Intent. Common double extension
   // file types are supported: for example, a file named "file.tar.gz" matches
-  // both "gz" and "tar.gz" ConditionValues.
+  // both "gz" and "tar.gz" ConditionValues. File extension matching is
+  // case-insensitive.
   kFileExtension = 5,
   // The ConditionValue matches any files which are directories.
   kIsDirectory = 6,
@@ -101,8 +107,8 @@ struct COMPONENT_EXPORT(APP_TYPES) ConditionValue {
   ConditionValue& operator=(const ConditionValue&) = delete;
   ~ConditionValue();
 
-  bool operator==(const ConditionValue& other) const;
-  bool operator!=(const ConditionValue& other) const;
+  friend bool operator==(const ConditionValue&,
+                         const ConditionValue&) = default;
 
   std::string ToString() const;
 
@@ -124,7 +130,6 @@ struct COMPONENT_EXPORT(APP_TYPES) Condition {
   ~Condition();
 
   bool operator==(const Condition& other) const;
-  bool operator!=(const Condition& other) const;
 
   std::unique_ptr<Condition> Clone() const;
 
@@ -148,7 +153,6 @@ struct COMPONENT_EXPORT(APP_TYPES) IntentFilter {
   ~IntentFilter();
 
   bool operator==(const IntentFilter& other) const;
-  bool operator!=(const IntentFilter& other) const;
 
   std::unique_ptr<IntentFilter> Clone() const;
 
@@ -168,10 +172,6 @@ struct COMPONENT_EXPORT(APP_TYPES) IntentFilter {
   void GetMimeTypesAndExtensions(std::set<std::string>& mime_types,
                                  std::set<std::string>& file_extensions);
 
-  // Returns all of the links that this intent filter would accept, to be used
-  // in listing all of the supported links for a given app.
-  std::set<std::string> GetSupportedLinksForAppManagement();
-
   // Returns true if the filter is a browser filter, i.e. can handle all https
   // or http scheme.
   bool IsBrowserFilter();
@@ -190,10 +190,10 @@ struct COMPONENT_EXPORT(APP_TYPES) IntentFilter {
   // Publisher-specific identifier for the activity which registered this
   // filter. Used to determine what action to take when Intents are launched
   // through this filter.
-  absl::optional<std::string> activity_name;
+  std::optional<std::string> activity_name;
 
   // The label shown to the user for this activity.
-  absl::optional<std::string> activity_label;
+  std::optional<std::string> activity_label;
 };
 
 using IntentFilterPtr = std::unique_ptr<IntentFilter>;
@@ -211,60 +211,19 @@ base::flat_map<std::string, IntentFilters> CloneIntentFiltersMap(
 COMPONENT_EXPORT(APP_TYPES)
 bool IsEqual(const IntentFilters& source, const IntentFilters& target);
 
+// Note that the comparison rules are somewhat specific:
+// * If both `source` and `target` are defined, normal comparison rules apply;
+// * If both `source` and `target` are undefined, they're equal;
+// * If only one of the two is undefined, then they're equal if and only if the
+// other one has length of zero.
+COMPONENT_EXPORT(APP_TYPES)
+bool IsEqual(const std::optional<IntentFilters>& source,
+             const std::optional<IntentFilters>& target);
+
 // Returns true if `intent_filters` contains `intent_filter`.
 COMPONENT_EXPORT(APP_TYPES)
 bool Contains(const IntentFilters& intent_filters,
               const IntentFilterPtr& intent_filter);
-
-// TODO(crbug.com/1253250): Remove these functions after migrating to non-mojo
-// AppService.
-COMPONENT_EXPORT(APP_TYPES)
-ConditionType ConvertMojomConditionTypeToConditionType(
-    const apps::mojom::ConditionType& mojom_condition_type);
-
-COMPONENT_EXPORT(APP_TYPES)
-apps::mojom::ConditionType ConvertConditionTypeToMojomConditionType(
-    const ConditionType& condition_type);
-
-COMPONENT_EXPORT(APP_TYPES)
-PatternMatchType ConvertMojomPatternMatchTypeToPatternMatchType(
-    const apps::mojom::PatternMatchType& mojom_pattern_match_type);
-
-COMPONENT_EXPORT(APP_TYPES)
-apps::mojom::PatternMatchType ConvertPatternMatchTypeToMojomPatternMatchType(
-    const PatternMatchType& pattern_match_type);
-
-COMPONENT_EXPORT(APP_TYPES)
-ConditionValuePtr ConvertMojomConditionValueToConditionValue(
-    const apps::mojom::ConditionValuePtr& mojom_condition_value);
-
-COMPONENT_EXPORT(APP_TYPES)
-apps::mojom::ConditionValuePtr ConvertConditionValueToMojomConditionValue(
-    const ConditionValuePtr& condition_value);
-
-COMPONENT_EXPORT(APP_TYPES)
-ConditionPtr ConvertMojomConditionToCondition(
-    const apps::mojom::ConditionPtr& mojom_condition);
-
-COMPONENT_EXPORT(APP_TYPES)
-apps::mojom::ConditionPtr ConvertConditionToMojomCondition(
-    const ConditionPtr& condition);
-
-COMPONENT_EXPORT(APP_TYPES)
-IntentFilterPtr ConvertMojomIntentFilterToIntentFilter(
-    const apps::mojom::IntentFilterPtr& mojom_intent_filter);
-
-COMPONENT_EXPORT(APP_TYPES)
-apps::mojom::IntentFilterPtr ConvertIntentFilterToMojomIntentFilter(
-    const IntentFilterPtr& intent_filter);
-
-COMPONENT_EXPORT(APP_TYPES)
-IntentFilters ConvertMojomIntentFiltersToIntentFilters(
-    const std::vector<apps::mojom::IntentFilterPtr>& mojom_intent_filters);
-
-COMPONENT_EXPORT(APP_TYPES)
-std::vector<apps::mojom::IntentFilterPtr>
-ConvertIntentFiltersToMojomIntentFilters(const IntentFilters& intent_filters);
 
 }  // namespace apps
 

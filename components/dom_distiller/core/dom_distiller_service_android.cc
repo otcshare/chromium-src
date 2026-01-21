@@ -10,10 +10,12 @@
 #include "components/dom_distiller/core/distilled_page_prefs.h"
 #include "components/dom_distiller/core/distilled_page_prefs_android.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
-#include "components/dom_distiller/core/jni_headers/DomDistillerService_jni.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/dom_distiller/core/android/jni_headers/DomDistillerService_jni.h"
 
 using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace dom_distiller {
@@ -25,14 +27,16 @@ DomDistillerServiceAndroid::DomDistillerServiceAndroid(
   JNIEnv* env = base::android::AttachCurrentThread();
   base::android::ScopedJavaLocalRef<jobject> local_java_ref =
       Java_DomDistillerService_create(env, reinterpret_cast<intptr_t>(this));
-  java_ref_.Reset(env, local_java_ref.obj());
+  java_ref_.Reset(env, local_java_ref);
 }
 
-DomDistillerServiceAndroid::~DomDistillerServiceAndroid() {}
+DomDistillerServiceAndroid::~DomDistillerServiceAndroid() = default;
 
-jlong DomDistillerServiceAndroid::GetDistilledPagePrefsPtr(JNIEnv* env) {
+int64_t DomDistillerServiceAndroid::GetDistilledPagePrefsPtr(JNIEnv* env) {
   return reinterpret_cast<intptr_t>(service_->GetDistilledPagePrefs());
 }
 
 }  // namespace android
 }  // namespace dom_distiller
+
+DEFINE_JNI(DomDistillerService)

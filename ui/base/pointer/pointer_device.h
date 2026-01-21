@@ -5,14 +5,22 @@
 #ifndef UI_BASE_POINTER_POINTER_DEVICE_H_
 #define UI_BASE_POINTER_POINTER_DEVICE_H_
 
+#include <cstdint>
+#include <optional>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 #include "base/component_export.h"
 #include "build/build_config.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include <jni.h>
-#endif
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace ui {
 
@@ -59,17 +67,75 @@ enum HoverType {
   HOVER_TYPE_LAST = HOVER_TYPE_HOVER
 };
 
-int GetAvailablePointerTypes();
-int GetAvailableHoverTypes();
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. See PointerDigitizerType in:
+// tools/metrics/histograms/metadata/input/enums.xml
+enum class PointerDigitizerType : uint8_t {
+  kUnknown = 0,
+  // Integrated into a display.
+  kDirectPen = 1,
+  // Not integrated into a display.
+  kIndirectPen = 2,
+  kTouch = 3,
+  kTouchPad = 4,
+  kMaxValue = kTouchPad
+};
+
+// Description of an input pointer device.
+struct COMPONENT_EXPORT(UI_BASE) PointerDevice final {
+#if BUILDFLAG(IS_WIN)
+  using Key = HANDLE;
+#else
+  // Placeholder, override as needed when implementing a new platform specific
+  // GetPointerDevice(s) method.
+  using Key = uintptr_t;
+#endif
+
+  Key key;
+  PointerDigitizerType digitizer;
+  int32_t max_active_contacts;
+};
+
+// Use this to override the return value of `GetAvailablePointerAndHoverTypes()`
+// for as long as this object is alive.
+class COMPONENT_EXPORT(UI_BASE)
+    [[maybe_unused, nodiscard]] ScopedSetPointerAndHoverTypesForTesting {
+ public:
+  ScopedSetPointerAndHoverTypesForTesting(int available_pointer_types,
+                                          int available_hover_types);
+  ~ScopedSetPointerAndHoverTypesForTesting();
+
+  const std::pair<int, int>& pointer_and_hover_types() const {
+    return pointer_and_hover_types_;
+  }
+
+ private:
+  std::pair<int, int> pointer_and_hover_types_;
+};
+
 COMPONENT_EXPORT(UI_BASE)
 std::pair<int, int> GetAvailablePointerAndHoverTypes();
+COMPONENT_EXPORT(UI_BASE) PointerType GetPrimaryPointerType();
+COMPONENT_EXPORT(UI_BASE) HoverType GetPrimaryHoverType();
+
 COMPONENT_EXPORT(UI_BASE)
-void SetAvailablePointerAndHoverTypesForTesting(int available_pointer_types,
-                                                int available_hover_types);
-COMPONENT_EXPORT(UI_BASE)
-PointerType GetPrimaryPointerType(int available_pointer_types);
-COMPONENT_EXPORT(UI_BASE)
-HoverType GetPrimaryHoverType(int available_hover_types);
+std::optional<PointerDevice> GetPointerDevice(PointerDevice::Key key);
+COMPONENT_EXPORT(UI_BASE) std::vector<PointerDevice> GetPointerDevices();
+
+inline constexpr bool operator==(const PointerDevice& left,
+                                 const PointerDevice& right) {
+  return left.key == right.key;
+}
+
+inline constexpr bool operator==(const PointerDevice& left,
+                                 PointerDevice::Key right) {
+  return left.key == right;
+}
+
+inline constexpr bool operator==(PointerDevice::Key left,
+                                 const PointerDevice& right) {
+  return left == right.key;
+}
 
 }  // namespace ui
 

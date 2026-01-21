@@ -6,8 +6,8 @@
 # attributes are auto-generated from this list because they're boilerplated.
 _CODE_GENERATOR_INFO_ATTRIBUTES = (
     'blink_headers',
-    'defined_in_mixin',  # [LegacyTreatAsPartialInterface] makes this False
-    'defined_in_partial',  # [LegacyTreatAsPartialInterface] makes this True
+    'defined_across_component',
+    'defined_in_partial',
     'for_testing',
     'is_active_script_wrappable',
     'is_legacy_unenumerable_named_properties',

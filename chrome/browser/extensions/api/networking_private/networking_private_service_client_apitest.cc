@@ -5,13 +5,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "chrome/browser/browser_process.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/wifi/fake_wifi_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -29,8 +26,8 @@
 // should be kept similar to the ChromeOS (primary) implementation as much as
 // possible. See also crbug.com/460119.
 
-using testing::Return;
 using testing::_;
+using testing::Return;
 
 using extensions::NetworkingPrivateDelegate;
 using extensions::NetworkingPrivateDelegateFactory;
@@ -43,7 +40,7 @@ namespace {
 class NetworkingPrivateServiceClientApiTest
     : public extensions::ExtensionApiTest {
  public:
-  NetworkingPrivateServiceClientApiTest() {}
+  NetworkingPrivateServiceClientApiTest() = default;
 
   NetworkingPrivateServiceClientApiTest(
       const NetworkingPrivateServiceClientApiTest&) = delete;
@@ -162,8 +159,9 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
   EXPECT_TRUE(RunNetworkingSubtest("getManagedProperties")) << message_;
 }
 
+// TODO(b/349276078): This test is flaky.
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
-                       OnNetworksChangedEventConnect) {
+                       DISABLED_OnNetworksChangedEventConnect) {
   EXPECT_TRUE(RunNetworkingSubtest("onNetworksChangedEventConnect"))
       << message_;
 }

@@ -6,9 +6,9 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/extensions/settings_api_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/settings/settings_utils.h"
@@ -27,7 +27,7 @@ const char OnStartupHandler::kOnStartupNtpExtensionEventName[] =
 OnStartupHandler::OnStartupHandler(Profile* profile) : profile_(profile) {
   DCHECK(profile);
 }
-OnStartupHandler::~OnStartupHandler() {}
+OnStartupHandler::~OnStartupHandler() = default;
 
 void OnStartupHandler::OnJavascriptAllowed() {
   extension_registry_observation_.Observe(

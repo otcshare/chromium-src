@@ -13,6 +13,7 @@
 #include "components/viz/service/display/direct_renderer.h"
 #include "components/viz/service/display/display_resource_provider_software.h"
 #include "components/viz/service/viz_service_export.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/latency/latency_info.h"
 
 namespace viz {
@@ -40,10 +41,6 @@ class VIZ_SERVICE_EXPORT SoftwareRenderer : public DirectRenderer {
 
   void SwapBuffers(SwapFrameData swap_frame_data) override;
 
-  void SetDisablePictureQuadImageFiltering(bool disable) {
-    disable_picture_quad_image_filtering_ = disable;
-  }
-
  protected:
   bool CanPartialSwap() override;
   void UpdateRenderPassTextures(
@@ -57,24 +54,32 @@ class VIZ_SERVICE_EXPORT SoftwareRenderer : public DirectRenderer {
       const AggregatedRenderPassId& render_pass_id) const override;
   gfx::Size GetRenderPassBackingPixelSize(
       const AggregatedRenderPassId& render_pass_id) override;
-  void BindFramebufferToOutputSurface() override;
-  void BindFramebufferToTexture(
-      const AggregatedRenderPassId render_pass_id) override;
   void SetScissorTestRect(const gfx::Rect& scissor_rect) override;
-  void PrepareSurfaceForPass(SurfaceInitializationMode initialization_mode,
-                             const gfx::Rect& render_pass_scissor) override;
+  void BeginDrawingRenderPass(const AggregatedRenderPass* render_pass,
+                              bool needs_clear,
+                              const gfx::Rect& render_pass_update_rect,
+                              const gfx::Size& viewport_size) override;
   void DoDrawQuad(const DrawQuad* quad, const gfx::QuadF* draw_region) override;
   void BeginDrawingFrame() override;
   void FinishDrawingFrame() override;
-  bool FlippedFramebuffer() const override;
-  void EnsureScissorTestEnabled() override;
   void EnsureScissorTestDisabled() override;
   void CopyDrawnRenderPass(const copy_output::RenderPassGeometry& geometry,
                            std::unique_ptr<CopyOutputRequest> request) override;
   void DidChangeVisibility() override;
-  void GenerateMipmap() override;
+
+ protected:
+  void SetRenderPassBackingDrawnRect(
+      const AggregatedRenderPassId& render_pass_id,
+      const gfx::Rect& drawn_rect) override;
+
+  gfx::Rect GetRenderPassBackingDrawnRect(
+      const AggregatedRenderPassId& render_pass_id) const override;
 
  private:
+  struct RenderPassBitmapBacking {
+    SkBitmap bitmap;
+    gfx::Rect drawn_rect;
+  };
   void ClearCanvas(SkColor color);
   void ClearFramebuffer();
   void SetClipRect(const gfx::Rect& rect);
@@ -96,15 +101,16 @@ class VIZ_SERVICE_EXPORT SoftwareRenderer : public DirectRenderer {
                                   const SkBitmap& to_filter,
                                   bool offset_expanded_bounds,
                                   SkIRect* auto_bounds) const;
-  gfx::Rect GetBackdropBoundingBoxForRenderPassQuad(
-      const AggregatedRenderPassDrawQuad* quad,
-      const cc::FilterOperations* backdrop_filters,
-      absl::optional<gfx::RRectF> backdrop_filter_bounds_input,
-      gfx::Transform contents_device_transform,
-      gfx::Transform* backdrop_filter_bounds_transform,
-      absl::optional<gfx::RRectF>* backdrop_filter_bounds,
-      gfx::Rect* unclipped_rect) const;
-
+  // Applies filter to backdrop_bitmap. Available_backdrop is a rectangle
+  // representing the captured backdrop area, while output_rect represents the
+  // required paint area. Rects must be in content space, or passed crop
+  // filters will not function properly.
+  sk_sp<SkImage> ApplyBackdropFilterWithExactOutputSize(
+      sk_sp<SkImageFilter> filter,
+      const SkBitmap& backdrop_bitmap,
+      const SkMatrix local_matrix,
+      const SkRect available_backdrop,
+      const SkIRect output_rect) const;
   SkBitmap GetBackdropBitmap(const gfx::Rect& bounding_rect) const;
   sk_sp<SkShader> GetBackdropFilterShader(
       const AggregatedRenderPassDrawQuad* quad,
@@ -115,9 +121,8 @@ class VIZ_SERVICE_EXPORT SoftwareRenderer : public DirectRenderer {
   }
 
   // A map from RenderPass id to the bitmap used to draw the RenderPass from.
-  base::flat_map<AggregatedRenderPassId, SkBitmap> render_pass_bitmaps_;
-
-  bool disable_picture_quad_image_filtering_ = false;
+  base::flat_map<AggregatedRenderPassId, RenderPassBitmapBacking>
+      render_pass_bitmaps_;
 
   bool is_scissor_enabled_ = false;
   gfx::Rect scissor_rect_;

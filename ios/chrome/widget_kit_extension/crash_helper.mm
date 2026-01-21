@@ -6,17 +6,11 @@
 
 #import "ios/chrome/common/crash_report/crash_helper.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 @implementation CrashHelper
 
 + (void)configure {
   if (self == [CrashHelper self]) {
-    if (crash_helper::common::CanUseCrashpad()) {
-      crash_helper::common::StartCrashpad();
-    }
+    crash_helper::common::StartCrashpad();
   }
 }
 

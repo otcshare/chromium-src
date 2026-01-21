@@ -8,6 +8,7 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "net/proxy_resolution/proxy_config_with_annotation.h"
@@ -54,13 +55,12 @@ constexpr net::NetworkTrafficAnnotationTag kSystemProxyConfigTrafficAnnotation =
           "User cannot override system proxy settings, but can change them "
           "through 'Advanced/System/Open proxy settings'."
         policy_exception_justification:
-          "Using either of 'ProxyMode', 'ProxyServer', or 'ProxyPacUrl' "
-          "policies can set Chrome to use a specific proxy settings and avoid "
-          "system proxy."
+          "Using 'ProxySettings' policy can set Chrome to use specific "
+          "proxy settings and avoid system proxy."
       })");
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class UnsetProxyConfigService : public ProxyConfigService {
  public:
   UnsetProxyConfigService() = default;
@@ -103,7 +103,7 @@ ProxyConfigService::CreateSystemProxyConfigService(
 #elif BUILDFLAG(IS_MAC)
   return std::make_unique<ProxyConfigServiceMac>(
       std::move(main_task_runner), kSystemProxyConfigTrafficAnnotation);
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
   LOG(ERROR) << "ProxyConfigService for ChromeOS should be created in "
              << "profile_io_data.cc::CreateProxyConfigService and this should "
              << "be used only for examples.";
@@ -132,13 +132,17 @@ ProxyConfigService::CreateSystemProxyConfigService(
       std::move(main_task_runner),
       base::SingleThreadTaskRunner::GetCurrentDefault());
 #elif BUILDFLAG(IS_FUCHSIA)
-  // TODO(crbug.com/889195): Implement a system proxy service for Fuchsia.
+  // TODO(crbug.com/42050626): Implement a system proxy service for Fuchsia.
   return std::make_unique<ProxyConfigServiceDirect>();
 #else
   LOG(WARNING) << "Failed to choose a system proxy settings fetcher "
                   "for this platform.";
   return std::make_unique<ProxyConfigServiceDirect>();
 #endif
+}
+
+bool ProxyConfigService::UsesPolling() {
+  return false;
 }
 
 }  // namespace net

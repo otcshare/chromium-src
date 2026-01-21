@@ -5,7 +5,7 @@
 #ifndef CHROMECAST_BROWSER_CAST_PERMISSION_MANAGER_H_
 #define CHROMECAST_BROWSER_CAST_PERMISSION_MANAGER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "content/public/browser/permission_controller_delegate.h"
 #include "content/public/browser/permission_result.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -28,57 +28,42 @@ class CastPermissionManager : public content::PermissionControllerDelegate {
   ~CastPermissionManager() override;
 
   // content::PermissionControllerDelegate implementation:
-  void RequestPermission(
-      blink::PermissionType permission,
-      content::RenderFrameHost* render_frame_host,
-      const GURL& requesting_origin,
-      bool user_gesture,
-      base::OnceCallback<void(blink::mojom::PermissionStatus)> callback)
-      override;
   void RequestPermissions(
-      const std::vector<blink::PermissionType>& permission,
       content::RenderFrameHost* render_frame_host,
-      const GURL& requesting_origin,
-      bool user_gesture,
-      base::OnceCallback<
-          void(const std::vector<blink::mojom::PermissionStatus>&)> callback)
-      override;
+      const content::PermissionRequestDescription& request_description,
+      base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
+          callback) override;
   void ResetPermission(blink::PermissionType permission,
                        const GURL& requesting_origin,
                        const GURL& embedding_origin) override;
   void RequestPermissionsFromCurrentDocument(
-      const std::vector<blink::PermissionType>& permissions,
       content::RenderFrameHost* render_frame_host,
-      bool user_gesture,
-      base::OnceCallback<
-          void(const std::vector<blink::mojom::PermissionStatus>&)> callback)
-      override;
+      const content::PermissionRequestDescription& request_description,
+      base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
+          callback) override;
   blink::mojom::PermissionStatus GetPermissionStatus(
-      blink::PermissionType permission,
+      const blink::mojom::PermissionDescriptorPtr& permission,
       const GURL& requesting_origin,
       const GURL& embedding_origin) override;
   content::PermissionResult GetPermissionResultForOriginWithoutContext(
-      blink::PermissionType permission,
-      const url::Origin& origin) override;
-  blink::mojom::PermissionStatus GetPermissionStatusForCurrentDocument(
-      blink::PermissionType permission,
-      content::RenderFrameHost* render_frame_host) override;
-  blink::mojom::PermissionStatus GetPermissionStatusForWorker(
-      blink::PermissionType permission,
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+      const url::Origin& requesting_origin,
+      const url::Origin& embedding_origin) override;
+  content::PermissionResult GetPermissionResultForCurrentDocument(
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+      content::RenderFrameHost* render_frame_host,
+      bool should_include_device_status) override;
+  content::PermissionResult GetPermissionResultForWorker(
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
       content::RenderProcessHost* render_process_host,
       const GURL& worker_origin) override;
-  SubscriptionId SubscribePermissionStatusChange(
-      blink::PermissionType permission,
-      content::RenderProcessHost* render_process_host,
+  content::PermissionResult GetPermissionResultForEmbeddedRequester(
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
       content::RenderFrameHost* render_frame_host,
-      const GURL& requesting_origin,
-      base::RepeatingCallback<void(blink::mojom::PermissionStatus)> callback)
-      override;
-  void UnsubscribePermissionStatusChange(
-      SubscriptionId subscription_id) override;
+      const url::Origin& requesting_origin) override;
 };
 
 }  // namespace shell
 }  // namespace chromecast
 
-#endif // CHROMECAST_BROWSER_CAST_PERMISSION_MANAGER_H_
+#endif  // CHROMECAST_BROWSER_CAST_PERMISSION_MANAGER_H_

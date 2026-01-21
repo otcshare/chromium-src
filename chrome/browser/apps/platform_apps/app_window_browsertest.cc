@@ -5,11 +5,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -19,8 +17,10 @@
 #include "extensions/browser/app_window/app_window_geometry_cache.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "ui/display/display_switches.h"
 
 using extensions::AppWindowGeometryCache;
 using extensions::ResultCatcher;
@@ -30,7 +30,7 @@ using extensions::ResultCatcher;
 class GeometryCacheChangeHelper : AppWindowGeometryCache::Observer {
  public:
   GeometryCacheChangeHelper(AppWindowGeometryCache* cache,
-                            const std::string& extension_id,
+                            const extensions::ExtensionId& extension_id,
                             const std::string& window_id,
                             const gfx::Rect& bounds)
       : cache_(cache),
@@ -50,11 +50,11 @@ class GeometryCacheChangeHelper : AppWindowGeometryCache::Observer {
       return;
 
     waiting_ = true;
-    content::RunMessageLoop();
+    loop_.Run();
   }
 
   // Implements the AppWindowGeometryCache::Observer interface.
-  void OnGeometryCacheChanged(const std::string& extension_id,
+  void OnGeometryCacheChanged(const extensions::ExtensionId& extension_id,
                               const std::string& window_id,
                               const gfx::Rect& bounds) override {
     if (extension_id != extension_id_ || window_id != window_id_)
@@ -67,22 +67,29 @@ class GeometryCacheChangeHelper : AppWindowGeometryCache::Observer {
       cache_->RemoveObserver(this);
 
       if (waiting_)
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+        loop_.QuitWhenIdle();
     }
   }
 
  private:
   raw_ptr<AppWindowGeometryCache> cache_;
-  std::string extension_id_;
+  extensions::ExtensionId extension_id_;
   std::string window_id_;
   gfx::Rect bounds_;
   bool satisfied_;
   bool waiting_;
+  // base::RunLoop used to require kNestableTaskAllowed
+  base::RunLoop loop_{base::RunLoop::Type::kNestableTasksAllowed};
 };
 
 // Helper class for tests related to the Apps Window API (chrome.app.window).
 class AppWindowAPITest : public extensions::PlatformAppBrowserTest {
  protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    extensions::PlatformAppBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII(::switches::kForceDeviceScaleFactor, "1.0");
+  }
+
   bool RunAppWindowAPITest(const char* testName) {
     if (!BeginAppWindowAPITest(testName))
       return false;
@@ -153,9 +160,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestMaximize) {
 }
 
 // Flaky on Linux. http://crbug.com/424399.
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #define MAYBE_TestMinimize DISABLED_TestMinimize
 #else
 #define MAYBE_TestMinimize TestMinimize
@@ -225,8 +230,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
   EXPECT_TRUE(extension);
 
   apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
-      ->BrowserAppLauncher()
-      ->LaunchAppWithParamsForTesting(apps::AppLaunchParams(
+      ->LaunchAppWithParams(apps::AppLaunchParams(
           extension->id(), apps::LaunchContainer::kLaunchContainerNone,
           WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest));
 

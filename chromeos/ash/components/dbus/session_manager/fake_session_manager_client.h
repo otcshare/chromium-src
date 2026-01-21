@@ -6,17 +6,22 @@
 #define CHROMEOS_ASH_COMPONENTS_DBUS_SESSION_MANAGER_FAKE_SESSION_MANAGER_CLIENT_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/dbus/arc/arc.pb.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 
 namespace ash {
 
@@ -94,44 +99,20 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
       const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StartSessionEx(const cryptohome::AccountIdentifier& cryptohome_id,
                       bool chrome_side_key_generation) override;
+  void EmitStartedUserSession(
+      const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StopSession(login_manager::SessionStopReason reason) override;
   void LoadShillProfile(
       const cryptohome::AccountIdentifier& cryptohome_id) override;
-  void StartDeviceWipe() override;
+  void StartDeviceWipe(chromeos::VoidDBusMethodCallback callback) override;
   void StartRemoteDeviceWipe(
       const enterprise_management::SignedData& signed_command) override;
-  void ClearForcedReEnrollmentVpd(
-      chromeos::VoidDBusMethodCallback callback) override;
-  void UnblockDevModeForEnrollment(
-      chromeos::VoidDBusMethodCallback callback) override;
-  void UnblockDevModeForInitialStateDetermination(
-      chromeos::VoidDBusMethodCallback callback) override;
-  void UnblockDevModeForCarrierLock(
-      chromeos::VoidDBusMethodCallback callback) override;
+  void ClearBlockDevmodeVpd(chromeos::VoidDBusMethodCallback callback) override;
   void StartTPMFirmwareUpdate(const std::string& update_mode) override;
   void RequestLockScreen() override;
   void NotifyLockScreenShown() override;
   void NotifyLockScreenDismissed() override;
-  bool BlockingRequestBrowserDataMigration(
-      const cryptohome::AccountIdentifier& cryptohome_id,
-      const std::string& mode) override;
-  bool BlockingRequestBrowserDataBackwardMigration(
-      const cryptohome::AccountIdentifier& cryptohome_id) override;
   void RetrieveActiveSessions(ActiveSessionsCallback callback) override;
-  void RetrieveDevicePolicy(RetrievePolicyCallback callback) override;
-  RetrievePolicyResponseType BlockingRetrieveDevicePolicy(
-      std::string* policy_out) override;
-  void RetrievePolicyForUser(const cryptohome::AccountIdentifier& cryptohome_id,
-                             RetrievePolicyCallback callback) override;
-  RetrievePolicyResponseType BlockingRetrievePolicyForUser(
-      const cryptohome::AccountIdentifier& cryptohome_id,
-      std::string* policy_out) override;
-  void RetrieveDeviceLocalAccountPolicy(
-      const std::string& account_id,
-      RetrievePolicyCallback callback) override;
-  RetrievePolicyResponseType BlockingRetrieveDeviceLocalAccountPolicy(
-      const std::string& account_id,
-      std::string* policy_out) override;
   void RetrievePolicy(const login_manager::PolicyDescriptor& descriptor,
                       RetrievePolicyCallback callback) override;
   RetrievePolicyResponseType BlockingRetrievePolicy(
@@ -187,6 +168,14 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   bool GetFlagsForUser(const cryptohome::AccountIdentifier& cryptohome_id,
                        std::vector<std::string>* out_flags_for_user) const;
 
+  // Notify observers about the session stopping.
+  void NotifySessionStopping() const;
+
+  // Configures state key retrieval error used to satisfy
+  // GetServerBackedStateKeys() requests. Only available for
+  // PolicyStorageType::kInMemory.
+  void SetServerBackedStateKeyError(const StateKeyErrorType error_type);
+
   // Sets whether FakeSessionManagerClient should advertise (through
   // |SupportsBrowserRestart|) that it supports restarting Chrome. For example,
   // to apply user-session flags, or to start guest session.
@@ -200,11 +189,11 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     restart_job_callback_ = std::move(callback);
   }
 
-  const absl::optional<std::vector<std::string>>& restart_job_argv() const {
+  const std::optional<std::vector<std::string>>& restart_job_argv() const {
     return restart_job_argv_;
   }
 
-  absl::optional<RestartJobReason> restart_job_reason() const {
+  std::optional<RestartJobReason> restart_job_reason() const {
     return restart_job_reason_;
   }
 
@@ -266,8 +255,8 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     psm_device_active_secret_ = psm_device_active_secret;
   }
 
-  int clear_forced_re_enrollment_vpd_call_count() const {
-    return clear_forced_re_enrollment_vpd_call_count_;
+  int clear_block_devmode_vpd_call_count() const {
+    return clear_block_devmode_vpd_call_count_;
   }
 
   int unblock_dev_mode_enrollment_call_count() const {
@@ -341,24 +330,8 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   const std::string& login_password() const { return login_password_; }
 
-  const absl::optional<std::string>& primary_user_id() const {
+  const std::optional<std::string>& primary_user_id() const {
     return primary_user_id_;
-  }
-
-  bool request_browser_data_migration_called() const {
-    return request_browser_data_migration_called_;
-  }
-
-  bool request_browser_data_migration_mode_called() const {
-    return request_browser_data_migration_mode_called_;
-  }
-
-  const std::string& request_browser_data_migration_mode_value() const {
-    return request_browser_data_migration_mode_value_;
-  }
-
-  bool request_browser_data_backward_migration_called() const {
-    return request_browser_data_migration_called_;
   }
 
  private:
@@ -375,19 +348,20 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   // If restart job was requested, and the client supports restart job, the
   // requested restarted arguments.
-  absl::optional<std::vector<std::string>> restart_job_argv_;
+  std::optional<std::vector<std::string>> restart_job_argv_;
 
   // If restart job was requested, and the client supports restart job, the
   // requested restart reason.
-  absl::optional<RestartJobReason> restart_job_reason_;
+  std::optional<RestartJobReason> restart_job_reason_;
 
   // Callback that will be run, if set, when StopSession() is called.
   base::OnceClosure stop_session_callback_;
 
-  base::ObserverList<Observer>::Unchecked observers_{
+  base::ObserverList<Observer> observers_{
       SessionManagerClient::kObserverListPolicy};
   SessionManagerClient::ActiveSessionsMap user_sessions_;
-  std::vector<std::string> server_backed_state_keys_;
+  base::expected<std::vector<std::string>, StateKeyErrorType>
+      server_backed_state_keys_;
 
   std::string psm_device_active_secret_;
 
@@ -407,7 +381,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   AdbSideloadResponseCode adb_sideload_response_ =
       AdbSideloadResponseCode::SUCCESS;
 
-  int clear_forced_re_enrollment_vpd_call_count_ = 0;
+  int clear_block_devmode_vpd_call_count_ = 0;
   int unblock_dev_mode_enrollment_call_count_ = 0;
   int unblock_dev_mode_init_state_call_count_ = 0;
   int unblock_dev_mode_carrier_lock_call_count_ = 0;
@@ -435,19 +409,13 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   std::string login_password_;
 
-  bool request_browser_data_migration_called_ = false;
-  bool request_browser_data_migration_mode_called_ = false;
-  std::string request_browser_data_migration_mode_value_ = "invalid";
-
-  bool request_browser_data_backward_migration_called_ = false;
-
   // Contains last request passed to StartArcMiniContainer
   arc::StartArcMiniInstanceRequest last_start_arc_mini_container_request_;
 
   // Contains last request passed to StartArcInstance
   arc::UpgradeArcContainerRequest last_upgrade_arc_request_;
 
-  StubDelegate* delegate_ = nullptr;
+  raw_ptr<StubDelegate> delegate_ = nullptr;
 
   bool session_stopped_ = false;
 
@@ -463,21 +431,23 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   };
   std::map<cryptohome::AccountIdentifier, FlagsState> flags_for_user_;
 
-  absl::optional<std::string> primary_user_id_;
+  std::optional<std::string> primary_user_id_;
+
+  base::flat_map<std::string, std::string> login_screen_storage_;
+
+  base::flat_set<base::FilePath> files_to_clean_up_;
 
   base::WeakPtrFactory<FakeSessionManagerClient> weak_ptr_factory_{this};
 };
 
+// Helper class to create FakeSessionManagerClient. Note that the existing
+// SessionManagerClient instance will be released.
 class COMPONENT_EXPORT(SESSION_MANAGER) ScopedFakeSessionManagerClient {
  public:
   ScopedFakeSessionManagerClient();
+  explicit ScopedFakeSessionManagerClient(
+      FakeSessionManagerClient::PolicyStorageType policy_storage);
   ~ScopedFakeSessionManagerClient();
-};
-
-class COMPONENT_EXPORT(SESSION_MANAGER) ScopedFakeInMemorySessionManagerClient {
- public:
-  ScopedFakeInMemorySessionManagerClient();
-  ~ScopedFakeInMemorySessionManagerClient();
 };
 
 }  // namespace ash

@@ -7,14 +7,14 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/features.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
@@ -59,7 +59,7 @@ class HttpAuthHandlerNegotiateTest : public PlatformTest,
  public:
   void SetUp() override {
     scoped_feature_list_.InitAndEnableFeature(
-        features::kSplitHostCacheByNetworkIsolationKey);
+        features::kPartitionConnectionsByNetworkIsolationKey);
     network_anoymization_key_ = NetworkAnonymizationKey::CreateTransient();
 #if BUILDFLAG(IS_WIN)
     auto auth_library =
@@ -96,7 +96,7 @@ class HttpAuthHandlerNegotiateTest : public PlatformTest,
   void SetupMocks(MockAuthLibrary* mock_library) {
 #if BUILDFLAG(IS_WIN)
     security_package_ = std::make_unique<SecPkgInfoW>();
-    memset(security_package_.get(), 0x0, sizeof(SecPkgInfoW));
+    UNSAFE_TODO(memset(security_package_.get(), 0x0, sizeof(SecPkgInfoW)));
     security_package_->cbMaxToken = 1337;
     mock_library->ExpectQuerySecurityPackageInfo(SEC_E_OK,
                                                  security_package_.get());
@@ -270,13 +270,14 @@ class HttpAuthHandlerNegotiateTest : public PlatformTest,
 #elif BUILDFLAG(IS_ANDROID)
   std::unique_ptr<MockAuthLibrary> auth_library_for_android_;
 #endif
+  std::unique_ptr<MockCachingHostResolver> resolver_;
+  std::unique_ptr<MockAllowHttpAuthPreferences> http_auth_preferences_;
+  std::unique_ptr<HttpAuthHandlerNegotiate::Factory> factory_;
+
   // |auth_library_| is passed to |factory_|, which assumes ownership of it, but
   // can't be a scoped pointer to it since the tests need access when they set
   // up the mocks after passing ownership.
   raw_ptr<MockAuthLibrary> auth_library_;
-  std::unique_ptr<MockCachingHostResolver> resolver_;
-  std::unique_ptr<MockAllowHttpAuthPreferences> http_auth_preferences_;
-  std::unique_ptr<HttpAuthHandlerNegotiate::Factory> factory_;
 };
 
 TEST_F(HttpAuthHandlerNegotiateTest, DisableCname) {
@@ -471,8 +472,8 @@ TEST_F(HttpAuthHandlerNegotiateTest, MissingGSSAPI) {
 }
 #endif  // BUILDFLAG(USE_EXTERNAL_GSSAPI)
 
-// AllowGssapiLibraryLoad() is only supported on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
+// AllowGssapiLibraryLoad() is only supported on ChromeOS and Linux.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 TEST_F(HttpAuthHandlerNegotiateTest, AllowGssapiLibraryLoad) {
   // Disabling allow_gssapi_library_load should prevent handler creation.
   SetupMocks(AuthLibrary());
@@ -488,7 +489,7 @@ TEST_F(HttpAuthHandlerNegotiateTest, AllowGssapiLibraryLoad) {
   EXPECT_EQ(OK, rv);
   EXPECT_TRUE(auth_handler);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 
 #endif  // BUILDFLAG(IS_POSIX)
 
@@ -502,19 +503,19 @@ class TestAuthSystem : public HttpAuthMechanism {
   bool NeedsIdentity() const override { return true; }
   bool AllowsExplicitCredentials() const override { return true; }
 
-  net::HttpAuth::AuthorizationResult ParseChallenge(
-      net::HttpAuthChallengeTokenizer* tok) override {
-    return net::HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
+  HttpAuth::AuthorizationResult ParseChallenge(
+      HttpAuthChallengeTokenizer* tok) override {
+    return HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
   }
 
-  int GenerateAuthToken(const net::AuthCredentials* credentials,
+  int GenerateAuthToken(const AuthCredentials* credentials,
                         const std::string& spn,
                         const std::string& channel_bindings,
                         std::string* auth_token,
                         const NetLogWithSource& net_log,
-                        net::CompletionOnceCallback callback) override {
+                        CompletionOnceCallback callback) override {
     *auth_token = kFakeToken;
-    return net::OK;
+    return OK;
   }
 
   void SetDelegation(HttpAuth::DelegationType delegation_type) override {}

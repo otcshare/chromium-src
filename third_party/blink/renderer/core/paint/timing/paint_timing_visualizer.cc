@@ -35,6 +35,14 @@ void CreateQuad(TracedValue* value, const char* name, const gfx::QuadF& quad) {
 
 }  // namespace
 
+PaintTimingVisualizer::PaintTimingVisualizer() {
+  trace_event::AddTraceSessionObserver(this);
+}
+
+PaintTimingVisualizer::~PaintTimingVisualizer() {
+  trace_event::RemoveTraceSessionObserver(this);
+}
+
 void PaintTimingVisualizer::RecordRects(const gfx::Rect& rect,
                                         std::unique_ptr<TracedValue>& value) {
   CreateQuad(value.get(), "rect", gfx::QuadF(gfx::RectF(rect)));
@@ -43,12 +51,12 @@ void PaintTimingVisualizer::RecordObject(const LayoutObject& object,
                                          std::unique_ptr<TracedValue>& value) {
   value->SetString("object_name", object.GetName());
   DCHECK(object.GetFrame());
-  value->SetString("frame", String::FromUTF8(ToTraceValue(object.GetFrame())));
+  value->SetString("frame", GetFrameIdForTracing(object.GetFrame()));
   value->SetBoolean("is_in_main_frame", object.GetFrame()->IsMainFrame());
   value->SetBoolean("is_in_outermost_main_frame",
                     object.GetFrame()->IsOutermostMainFrame());
   if (object.GetNode())
-    value->SetInteger("dom_node_id", DOMNodeIds::IdForNode(object.GetNode()));
+    value->SetInteger("dom_node_id", object.GetNode()->GetDomNodeId());
 }
 
 void PaintTimingVisualizer::DumpTextDebuggingRect(const LayoutObject& object,
@@ -97,6 +105,7 @@ void PaintTimingVisualizer::RecordMainFrameViewport(
 
   std::unique_ptr<TracedValue> value = std::make_unique<TracedValue>();
   CreateQuad(value.get(), "viewport_rect", gfx::QuadF(float_visual_rect));
+  value->SetDouble("dpr", frame_view.GetFrame().DevicePixelRatio());
   TRACE_EVENT_INSTANT1("loading", "PaintTimingVisualizer::Viewport",
                        TRACE_EVENT_SCOPE_THREAD, "data", std::move(value));
   need_recording_viewport = false;
@@ -104,9 +113,12 @@ void PaintTimingVisualizer::RecordMainFrameViewport(
 
 // static
 bool PaintTimingVisualizer::IsTracingEnabled() {
-  bool enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED("loading", &enabled);
-  return enabled;
+  return TRACE_EVENT_CATEGORY_ENABLED("loading");
+}
+
+void PaintTimingVisualizer::OnStart(
+    const perfetto::DataSourceBase::StartArgs&) {
+  need_recording_viewport = true;
 }
 
 }  // namespace blink

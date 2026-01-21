@@ -6,10 +6,12 @@
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_DEVICE_SYNCER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -26,7 +28,6 @@
 #include "chromeos/ash/services/device_sync/proto/cryptauth_better_together_device_metadata.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_devicesync.pb.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_directive.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefService;
 
@@ -108,8 +109,8 @@ class CryptAuthDeviceSyncerImpl : public CryptAuthDeviceSyncer {
 
   friend std::ostream& operator<<(std::ostream& stream, const State& state);
 
-  static absl::optional<base::TimeDelta> GetTimeoutForState(State state);
-  static absl::optional<CryptAuthDeviceSyncResult::ResultCode>
+  static std::optional<base::TimeDelta> GetTimeoutForState(State state);
+  static std::optional<CryptAuthDeviceSyncResult::ResultCode>
   ResultCodeErrorFromTimeoutDuringState(State state);
 
   // |device_registry|: At the end of a DeviceSync flow, the devices in the
@@ -153,9 +154,9 @@ class CryptAuthDeviceSyncerImpl : public CryptAuthDeviceSyncer {
       const CryptAuthMetadataSyncer::IdToDeviceMetadataPacketMap&
           id_to_device_metadata_packet_map,
       std::unique_ptr<CryptAuthKey> new_group_key,
-      const absl::optional<cryptauthv2::EncryptedGroupPrivateKey>&
+      const std::optional<cryptauthv2::EncryptedGroupPrivateKey>&
           encrypted_group_private_key,
-      const absl::optional<cryptauthv2::ClientDirective>& new_client_directive,
+      const std::optional<cryptauthv2::ClientDirective>& new_client_directive,
       CryptAuthDeviceSyncResult::ResultCode device_sync_result_code);
 
   void SetGroupKey(const CryptAuthKey& new_group_key);
@@ -177,7 +178,7 @@ class CryptAuthDeviceSyncerImpl : public CryptAuthDeviceSyncer {
   // we verify that they agree.
   void ProcessEncryptedGroupPrivateKey();
   void OnGroupPrivateKeyDecrypted(
-      const absl::optional<std::string>& group_private_key_from_cryptauth);
+      const std::optional<std::string>& group_private_key_from_cryptauth);
 
   void ProcessEncryptedDeviceMetadata();
   void OnDeviceMetadataDecrypted(const CryptAuthEciesEncryptor::IdToOutputMap&
@@ -211,15 +212,15 @@ class CryptAuthDeviceSyncerImpl : public CryptAuthDeviceSyncer {
   // Output from CryptAuthMetadataSyncer.
   CryptAuthMetadataSyncer::IdToDeviceMetadataPacketMap
       id_to_device_metadata_packet_map_;
-  absl::optional<cryptauthv2::EncryptedGroupPrivateKey>
+  std::optional<cryptauthv2::EncryptedGroupPrivateKey>
       encrypted_group_private_key_;
-  absl::optional<cryptauthv2::ClientDirective> new_client_directive_;
+  std::optional<cryptauthv2::ClientDirective> new_client_directive_;
 
   // Populated after a successful BatchGetFeatureStatuses call. Device metadata
   // is added if device metadata decryption is successful. Replaces the contents
   // of the device registry if non-null when the DeviceSync attempt ends,
   // successfully or not.
-  absl::optional<CryptAuthDeviceRegistry::InstanceIdToDeviceMap>
+  std::optional<CryptAuthDeviceRegistry::InstanceIdToDeviceMap>
       new_device_registry_map_;
 
   // The time of the last state change. Used for execution time metrics.
@@ -231,12 +232,14 @@ class CryptAuthDeviceSyncerImpl : public CryptAuthDeviceSyncer {
   std::unique_ptr<CryptAuthGroupPrivateKeySharer> group_private_key_sharer_;
 
   State state_ = State::kNotStarted;
-  CryptAuthDeviceRegistry* device_registry_ = nullptr;
-  CryptAuthKeyRegistry* key_registry_ = nullptr;
-  CryptAuthClientFactory* client_factory_ = nullptr;
-  SyncedBluetoothAddressTracker* synced_bluetooth_address_tracker_ = nullptr;
-  AttestationCertificatesSyncer* attestation_certificates_syncer_ = nullptr;
-  PrefService* pref_service_ = nullptr;
+  raw_ptr<CryptAuthDeviceRegistry> device_registry_ = nullptr;
+  raw_ptr<CryptAuthKeyRegistry> key_registry_ = nullptr;
+  raw_ptr<CryptAuthClientFactory> client_factory_ = nullptr;
+  raw_ptr<SyncedBluetoothAddressTracker> synced_bluetooth_address_tracker_ =
+      nullptr;
+  raw_ptr<AttestationCertificatesSyncer> attestation_certificates_syncer_ =
+      nullptr;
+  raw_ptr<PrefService> pref_service_ = nullptr;
   std::unique_ptr<base::OneShotTimer> timer_;
 
   base::WeakPtrFactory<CryptAuthDeviceSyncerImpl> weak_ptr_factory_{this};

@@ -36,6 +36,10 @@ class ContentCaptureConsumer {
  public:
   virtual ~ContentCaptureConsumer() = default;
 
+  // Invoked to notify that a batch of Content Capture has ended.
+  virtual void FlushCaptureContent(const ContentCaptureSession& session,
+                                   const ContentCaptureFrame& data) = 0;
+
   // Invoked when the captured content |data| from the |parent_session| was
   // received.
   virtual void DidCaptureContent(const ContentCaptureSession& parent_session,
@@ -57,6 +61,17 @@ class ContentCaptureConsumer {
   virtual void DidUpdateTitle(const ContentCaptureFrame& main_frame) = 0;
   // Invoked when the given |main_frame|'s favicon updated.
   virtual void DidUpdateFavicon(const ContentCaptureFrame& main_frame) = 0;
+  // Invoked when the sensitivity score for the corresponding WebContents has
+  // been updated.
+  virtual void DidUpdateSensitivityScore(const GURL& url,
+                                         float sensitivity_score) = 0;
+  // Invoked when the language details for the corresponding WebContents has
+  // been updated.
+  virtual void DidUpdateLanguageDetails(const GURL& url,
+                                        const std::string& detected_language,
+                                        float language_confidence) = 0;
+  // Invoked when the content capture metedata needs to be cleared.
+  virtual void ClearContentCaptureMetadata() = 0;
 
   // Return if the |url| shall be captured. Even return false, the content might
   // still be streamed because of the other consumers require it. Consumer can

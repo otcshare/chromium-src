@@ -2,18 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <wayland-drm-client-protocol.h>
+#include "ui/ozone/platform/wayland/host/wayland_drm.h"
 
 #include <fcntl.h>
+#include <wayland-drm-client-protocol.h>
 #include <xf86drm.h>
 
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
-#include "ui/gfx/buffer_format_util.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/linux/drm_util_linux.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_factory.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
-#include "ui/ozone/platform/wayland/host/wayland_drm.h"
+
+#if defined(WAYLAND_GBM)
+#include "base/command_line.h"
+#include "base/trace_event/trace_event.h"
+#include "ui/gfx/linux/scoped_gbm_device.h"
+#include "ui/ozone/public/ozone_switches.h"
+#endif  // defined(WAYLAND_GBM)
 
 namespace ui {
 
@@ -39,22 +47,22 @@ void WaylandDrm::Instantiate(WaylandConnection* connection,
     return;
   }
 
-  auto wl_drm = wl::Bind<struct wl_drm>(registry, name, version);
-  if (!wl_drm) {
+  auto wl_obj = wl::Bind<wl_drm>(registry, name, version);
+  if (!wl_obj) {
     LOG(ERROR) << "Failed to bind wl_drm";
     return;
   }
   buffer_factory->wayland_drm_ =
-      std::make_unique<WaylandDrm>(wl_drm.release(), connection);
+      std::make_unique<WaylandDrm>(wl_obj.release(), connection);
 }
 
 WaylandDrm::WaylandDrm(wl_drm* drm, WaylandConnection* connection)
     : wl_drm_(drm), connection_(connection) {
   static constexpr wl_drm_listener kDrmListener = {
-      &Device,
-      &Format,
-      &Authenticated,
-      &Capabilities,
+      .device = &OnDevice,
+      .format = &OnFormat,
+      .authenticated = &OnAuthenticated,
+      .capabilities = &OnCapabilities,
   };
   wl_drm_add_listener(wl_drm_.get(), &kDrmListener, this);
   connection_->Flush();
@@ -81,8 +89,8 @@ void WaylandDrm::CreateBuffer(const base::ScopedFD& fd,
   // If the |planes_count| less than the maximum sizes of these arrays and the
   // number of offsets and strides that |wl_drm| can receive, just initialize
   // them to 0, which is totally ok.
-  uint32_t stride[3] = {0};
-  uint32_t offset[3] = {0};
+  std::array<uint32_t, 3> stride = {0};
+  std::array<uint32_t, 3> offset = {0};
   for (size_t i = 0; i < planes_count; i++) {
     stride[i] = strides[i];
     offset[i] = offset[i];
@@ -112,13 +120,14 @@ void WaylandDrm::AddSupportedFourCCFormat(uint32_t fourcc_format) {
   if (!IsValidBufferFormat(fourcc_format))
     return;
 
-  gfx::BufferFormat format = GetBufferFormatFromFourCCFormat(fourcc_format);
+  viz::SharedImageFormat format =
+      GetSharedImageFormatFromFourCCFormat(fourcc_format);
   // Modifiers are not supported by the |wl_drm|, but for consistency with the
   // WaylandZwpLinuxDmabuf we use the same map type, which is passed to the
   // WaylandBufferManagerGpu later during initialization stage of the GPU
   // process.
   std::vector<uint64_t> modifiers;
-  supported_buffer_formats_.emplace(format, std::move(modifiers));
+  supported_formats_.emplace(format, std::move(modifiers));
 }
 
 void WaylandDrm::Authenticate(const char* drm_device_path) {
@@ -132,13 +141,16 @@ void WaylandDrm::Authenticate(const char* drm_device_path) {
     return;
   }
 
+#if defined(WAYLAND_GBM)
+  connection_->SetRenderNodePath(drm_fd, drm_device_path);
+#endif  // defined(WAYLAND_GBM)
+
   if (drmGetNodeTypeFromFd(drm_fd.get()) != DRM_NODE_PRIMARY) {
     DrmDeviceAuthenticated(wl_drm_.get());
     return;
   }
 
-  drm_magic_t magic;
-  memset(&magic, 0, sizeof(magic));
+  drm_magic_t magic = {};
   if (drmGetMagic(drm_fd.get(), &magic)) {
     HandleDrmFailure("Failed to get drm magic");
     return;
@@ -152,44 +164,43 @@ void WaylandDrm::Authenticate(const char* drm_device_path) {
   connection_->RoundTripQueue();
 }
 
-void WaylandDrm::DrmDeviceAuthenticated(struct wl_drm* wl_drm) {
-  DCHECK(wl_drm_ && wl_drm_.get() == wl_drm);
+void WaylandDrm::DrmDeviceAuthenticated(wl_drm* drm) {
+  DCHECK(wl_drm_ && wl_drm_.get() == drm);
   authenticated_ = true;
 }
 
 void WaylandDrm::HandleCapabilities(uint32_t value) {
-  if ((value & WL_DRM_CAPABILITY_PRIME) == 0)
+  if ((value & WL_DRM_CAPABILITY_PRIME) == 0) {
     HandleDrmFailure("Drm prime capability is not supported");
+  }
 }
 
 // static
-void WaylandDrm::Device(void* data, struct wl_drm* wl_drm, const char* path) {
-  auto* wayland_drm = static_cast<WaylandDrm*>(data);
-  DCHECK(wayland_drm && wayland_drm->wl_drm_.get() == wl_drm);
-  wayland_drm->Authenticate(path);
+void WaylandDrm::OnDevice(void* data, wl_drm* drm, const char* path) {
+  auto* self = static_cast<WaylandDrm*>(data);
+  DCHECK(self && self->wl_drm_.get() == drm);
+  self->Authenticate(path);
 }
 
 // static
-void WaylandDrm::Format(void* data, struct wl_drm* wl_drm, uint32_t format) {
-  auto* wayland_drm = static_cast<WaylandDrm*>(data);
-  DCHECK(wayland_drm && wayland_drm->wl_drm_.get() == wl_drm);
-  wayland_drm->AddSupportedFourCCFormat(format);
+void WaylandDrm::OnFormat(void* data, wl_drm* drm, uint32_t format) {
+  auto* self = static_cast<WaylandDrm*>(data);
+  DCHECK(self && self->wl_drm_.get() == drm);
+  self->AddSupportedFourCCFormat(format);
 }
 
 // static
-void WaylandDrm::Authenticated(void* data, struct wl_drm* wl_drm) {
-  auto* wayland_drm = static_cast<WaylandDrm*>(data);
-  DCHECK(wayland_drm);
-  wayland_drm->DrmDeviceAuthenticated(wl_drm);
+void WaylandDrm::OnAuthenticated(void* data, wl_drm* drm) {
+  auto* self = static_cast<WaylandDrm*>(data);
+  DCHECK(self);
+  self->DrmDeviceAuthenticated(drm);
 }
 
 // static
-void WaylandDrm::Capabilities(void* data,
-                              struct wl_drm* wl_drm,
-                              uint32_t value) {
-  auto* wayland_drm = static_cast<WaylandDrm*>(data);
-  DCHECK(wayland_drm && wayland_drm->wl_drm_.get() == wl_drm);
-  wayland_drm->HandleCapabilities(value);
+void WaylandDrm::OnCapabilities(void* data, wl_drm* drm, uint32_t value) {
+  auto* self = static_cast<WaylandDrm*>(data);
+  DCHECK(self && self->wl_drm_.get() == drm);
+  self->HandleCapabilities(value);
 }
 
 }  // namespace ui

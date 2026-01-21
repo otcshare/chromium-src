@@ -33,7 +33,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/table_constants.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/core/layout/layout_table_cell.h"
+#include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
@@ -87,9 +87,12 @@ bool HTMLTableCellElement::IsPresentationAttribute(
 void HTMLTableCellElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kNowrapAttr) {
-    AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWhiteSpace,
+    // Longhands of `white-space: nowrap`.
+    AddPropertyToPresentationAttributeStyle(
+        style, CSSPropertyID::kWhiteSpaceCollapse, CSSValueID::kCollapse);
+    AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kTextWrapMode,
                                             CSSValueID::kNowrap);
   } else if (name == html_names::kWidthAttr) {
     if (!value.empty()) {
@@ -111,9 +114,8 @@ void HTMLTableCellElement::ParseAttribute(
     const AttributeModificationParams& params) {
   if (params.name == html_names::kRowspanAttr ||
       params.name == html_names::kColspanAttr) {
-    if (GetLayoutObject() && GetLayoutObject()->IsTableCell()) {
-      ToInterface<LayoutNGTableCellInterface>(GetLayoutObject())
-          ->ColSpanOrRowSpanChanged();
+    if (auto* cell = DynamicTo<LayoutTableCell>(GetLayoutObject())) {
+      cell->ColSpanOrRowSpanChanged();
     }
   } else {
     HTMLTablePartElement::ParseAttribute(params);
@@ -137,12 +139,6 @@ bool HTMLTableCellElement::HasLegalLinkAttribute(
   return (HasTagName(html_names::kTdTag) &&
           name == html_names::kBackgroundAttr) ||
          HTMLTablePartElement::HasLegalLinkAttribute(name);
-}
-
-const QualifiedName& HTMLTableCellElement::SubResourceAttributeName() const {
-  return HasTagName(html_names::kTdTag)
-             ? html_names::kBackgroundAttr
-             : HTMLTablePartElement::SubResourceAttributeName();
 }
 
 const AtomicString& HTMLTableCellElement::Abbr() const {

@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+chromium::import! {
+    "//testing/rust_gtest_interop:gtest_attribute";
+}
+
 use std::pin::Pin;
 
 /// Use `prelude:::*` to get access to all macros defined in this crate.
@@ -38,6 +42,7 @@ pub extern crate small_ctor;
 /// #[extern_test_suite("cpp::type::wrapped::by::Foo")
 /// unsafe impl TestSuite for Foo {}
 /// ```
+#[allow(clippy::missing_safety_doc)] // TODO(https://crbug.com/472355480)
 pub unsafe trait TestSuite {
     /// Gives the Gtest factory function on the C++ side which constructs the
     /// C++ class for which the implementing Rust type is an FFI wrapper.
@@ -61,11 +66,16 @@ pub type GtestFactoryFunction = unsafe extern "C" fn(
 /// GtestFactoryFunction signature, which is a function pointer that passed to
 /// C++, and never run from within Rust.
 ///
+/// See https://doc.rust-lang.org/nomicon/ffi.html#representing-opaque-structs
+///
 /// TODO(danakj): If there was a way, without making references to it into wide
 /// pointers, we should make this type be !Sized.
 #[repr(C)]
 #[doc(hidden)]
-pub struct OpaqueTestingTest(u8);
+pub struct OpaqueTestingTest {
+    data: [u8; 0],
+    marker: std::marker::PhantomData<(*mut u8, std::marker::PhantomPinned)>,
+}
 
 #[doc(hidden)]
 pub trait TestResult {
@@ -94,12 +104,12 @@ impl<E: Into<Box<dyn std::error::Error>>> TestResult for std::result::Result<(),
 pub mod __private {
     use super::{GtestFactoryFunction, OpaqueTestingTest, Pin};
 
-    /// Rust wrapper around the same C++ method.
+    /// Rust wrapper around C++'s rust_gtest_add_failure().
     ///
-    /// We have a wrapper to convert the file name into a C++-friendly string,
+    /// The wrapper converts the file name into a C++-friendly string,
     /// and the line number into a C++-friendly signed int.
     ///
-    /// TODO(crbug.com/1298175): We should be able to receive a C++-friendly
+    /// TODO(crbug.com/40215436): We should be able to receive a C++-friendly
     /// file path.
     ///
     /// TODO(danakj): We should be able to pass a `c_int` directly to C++:
@@ -108,10 +118,8 @@ pub mod __private {
         let null_term_file = std::ffi::CString::new(make_canonical_file_path(file)).unwrap();
         let null_term_message = std::ffi::CString::new(message).unwrap();
 
-        extern "C" {
-            // The C++ mangled name for rust_gtest_interop::rust_gtest_add_failure_at().
-            // This comes from `objdump -t` on the C++ object file.
-            fn _ZN18rust_gtest_interop25rust_gtest_add_failure_atEPKciS1_(
+        unsafe extern "C" {
+            fn rust_gtest_add_failure_at(
                 file: *const std::ffi::c_char,
                 line: i32,
                 message: *const std::ffi::c_char,
@@ -119,7 +127,7 @@ pub mod __private {
 
         }
         unsafe {
-            _ZN18rust_gtest_interop25rust_gtest_add_failure_atEPKciS1_(
+            rust_gtest_add_failure_at(
                 null_term_file.as_ptr(),
                 line.try_into().unwrap_or(-1),
                 null_term_message.as_ptr(),
@@ -171,61 +179,28 @@ pub mod __private {
             .to_string()
     }
 
-    /// Wrapper that calls C++ rust_gtest_default_factory().
-    ///
-    /// TODO(danakj): We do this by hand because cxx doesn't support passing raw
-    /// function pointers: https://github.com/dtolnay/cxx/issues/1011.
-    pub unsafe extern "C" fn rust_gtest_default_factory(
-        f: extern "C" fn(Pin<&mut OpaqueTestingTest>),
-    ) -> Pin<&'static mut OpaqueTestingTest> {
-        extern "C" {
-            // The C++ mangled name for rust_gtest_interop::rust_gtest_default_factory().
-            // This comes from `objdump -t` on the C++ object file.
-            fn _ZN18rust_gtest_interop26rust_gtest_default_factoryEPFvPN7testing4TestEE(
-                f: extern "C" fn(Pin<&mut OpaqueTestingTest>),
-            ) -> Pin<&'static mut OpaqueTestingTest>;
+    unsafe extern "C" {
+        /// extern for C++'s rust_gtest_default_factory().
+        /// TODO(danakj): We do this by hand because cxx doesn't support passing
+        /// raw function pointers: https://github.com/dtolnay/cxx/issues/1011.
+        pub fn rust_gtest_default_factory(
+            f: extern "C" fn(Pin<&mut OpaqueTestingTest>),
+        ) -> Pin<&'static mut OpaqueTestingTest>;
 
-        }
-        _ZN18rust_gtest_interop26rust_gtest_default_factoryEPFvPN7testing4TestEE(f)
-    }
-
-    /// Wrapper that calls C++ rust_gtest_add_test().
-    ///
-    /// Note that the `factory` parameter is actually a C++ function pointer.
-    ///
-    /// TODO(danakj): We do this by hand because cxx doesn't support passing raw
-    /// function pointers nor passing `*const c_char`: https://github.com/dtolnay/cxx/issues/1011 and
-    /// https://github.com/dtolnay/cxx/issues/1015.
-    unsafe fn rust_gtest_add_test(
-        factory: GtestFactoryFunction,
-        run_test_fn: extern "C" fn(Pin<&mut OpaqueTestingTest>),
-        test_suite_name: *const std::os::raw::c_char,
-        test_name: *const std::os::raw::c_char,
-        file: *const std::os::raw::c_char,
-        line: i32,
-    ) {
-        extern "C" {
-            /// The C++ mangled name for
-            /// rust_gtest_interop::rust_gtest_add_test(). This comes from
-            /// `objdump -t` on the C++ object file.
-            fn _ZN18rust_gtest_interop19rust_gtest_add_testEPFPN7testing4TestEPFvS2_EES4_PKcS8_S8_i(
-                factory: GtestFactoryFunction,
-                run_test_fn: extern "C" fn(Pin<&mut OpaqueTestingTest>),
-                test_suite_name: *const std::os::raw::c_char,
-                test_name: *const std::os::raw::c_char,
-                file: *const std::os::raw::c_char,
-                line: i32,
-            );
-        }
-
-        _ZN18rust_gtest_interop19rust_gtest_add_testEPFPN7testing4TestEPFvS2_EES4_PKcS8_S8_i(
-            factory,
-            run_test_fn,
-            test_suite_name,
-            test_name,
-            file,
-            line,
-        )
+        /// extern for C++'s rust_gtest_add_test().
+        ///
+        /// Note that the `factory` parameter is actually a C++ function
+        /// pointer. TODO(danakj): We do this by hand because cxx
+        /// doesn't support passing raw function pointers nor passing `*const c_char`: https://github.com/dtolnay/cxx/issues/1011 and
+        /// https://github.com/dtolnay/cxx/issues/1015.
+        pub fn rust_gtest_add_test(
+            factory: GtestFactoryFunction,
+            run_test_fn: extern "C" fn(Pin<&mut OpaqueTestingTest>),
+            test_suite_name: *const std::os::raw::c_char,
+            test_name: *const std::os::raw::c_char,
+            file: *const std::os::raw::c_char,
+            line: i32,
+        );
     }
 
     /// Information used to register a function pointer as a test with the C++

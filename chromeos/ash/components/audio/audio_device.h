@@ -16,7 +16,11 @@
 
 namespace ash {
 
-// Ordered from the highest priority to the lowest.
+// This enum is used in histograms, do not remove/renumber entries. If you're
+// adding to this enum, update the corresponding enum listing in
+// tools/metrics/histograms/enums.xml.
+//
+// Originally ordered from the highest priority to the lowest.
 enum class AudioDeviceType {
   kHeadphone,
   kMic,
@@ -35,6 +39,7 @@ enum class AudioDeviceType {
   kPostDspLoopback,
   kAlsaLoopback,
   kOther,
+  kMaxValue = kOther,
 };
 
 // Default value of user priority preference.
@@ -74,9 +79,22 @@ struct COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO) AudioDevice {
             type == AudioDeviceType::kAlsaLoopback);
   }
 
+  // Indicates if a device has privilege. System will automatically
+  // activate those devices when they are connected, disregarding previously
+  // saved user preferences. In other words, having privilege overrides the
+  // priority stored in user preferences.
+  bool has_privilege() const {
+    return type == AudioDeviceType::kHeadphone ||
+           type == AudioDeviceType::kMic ||
+           type == AudioDeviceType::kBluetooth ||
+           type == AudioDeviceType::kBluetoothNbMic;
+  }
+
   bool IsExternalDevice() const;
 
   bool IsInternalMic() const;
+
+  bool IsInternalSpeaker() const;
 
   bool is_input = false;
 

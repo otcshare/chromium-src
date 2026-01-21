@@ -6,9 +6,6 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-
 namespace performance_manager {
 namespace testing {
 
@@ -18,7 +15,7 @@ TestWithPerformanceManager::~TestWithPerformanceManager() = default;
 
 void TestWithPerformanceManager::SetUp() {
   EXPECT_FALSE(PerformanceManagerImpl::IsAvailable());
-  performance_manager_ = PerformanceManagerImpl::Create(base::DoNothing());
+  performance_manager_ = PerformanceManagerImpl::Create();
   // Make sure creation registers the created instance.
   EXPECT_TRUE(PerformanceManagerImpl::IsAvailable());
 }

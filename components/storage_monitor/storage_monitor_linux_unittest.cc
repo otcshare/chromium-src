@@ -11,18 +11,19 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <array>
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "components/storage_monitor/mock_removable_storage_observer.h"
 #include "components/storage_monitor/removable_device_constants.h"
 #include "components/storage_monitor/storage_info.h"
@@ -58,19 +59,17 @@ struct TestDeviceData {
   uint64_t partition_size_in_bytes;
 };
 
-const TestDeviceData kTestDeviceData[] = {
-  { kDeviceDCIM1, "UUID:FFF0-000F",
-    StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, 88788 },
-  { kDeviceDCIM2, "VendorModelSerial:ComName:Model2010:8989",
-    StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM,
-    8773 },
-  { kDeviceDCIM3, "VendorModelSerial:::WEM319X792",
-    StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, 22837 },
-  { kDeviceNoDCIM, "UUID:ABCD-1234",
-    StorageInfo::REMOVABLE_MASS_STORAGE_NO_DCIM, 512 },
-  { kDeviceFixed, "UUID:743A-2349",
-    StorageInfo::FIXED_MASS_STORAGE, 17282 },
-};
+constexpr auto kTestDeviceData = std::to_array<TestDeviceData>({
+    {kDeviceDCIM1, "UUID:FFF0-000F",
+     StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, 88788},
+    {kDeviceDCIM2, "VendorModelSerial:ComName:Model2010:8989",
+     StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, 8773},
+    {kDeviceDCIM3, "VendorModelSerial:::WEM319X792",
+     StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, 22837},
+    {kDeviceNoDCIM, "UUID:ABCD-1234",
+     StorageInfo::REMOVABLE_MASS_STORAGE_NO_DCIM, 512},
+    {kDeviceFixed, "UUID:743A-2349", StorageInfo::FIXED_MASS_STORAGE, 17282},
+});
 
 std::unique_ptr<StorageInfo> GetDeviceInfo(const base::FilePath& device_path,
                                            const base::FilePath& mount_point) {
@@ -174,8 +173,7 @@ class StorageMonitorLinuxTest : public testing::Test {
     MtabTestData initial_test_data[] = {
       MtabTestData("dummydevice", "dummydir", kInvalidFS),
     };
-    WriteToMtab(initial_test_data, std::size(initial_test_data),
-                /*overwrite=*/true);
+    WriteToMtab(initial_test_data, /*overwrite=*/true);
 
     monitor_ = std::make_unique<TestStorageMonitorLinux>(mtab_file_);
     mock_storage_observer_ = std::make_unique<MockRemovableStorageObserver>();
@@ -194,25 +192,23 @@ class StorageMonitorLinuxTest : public testing::Test {
     monitor_.reset();
   }
 
-  // Append mtab entries from the |data| array of size |data_size| to the mtab
+  // Append mtab entries from the |data| span to the mtab
   // file, and run the message loop.
-  void AppendToMtabAndRunLoop(const MtabTestData* data, size_t data_size) {
-    WriteToMtab(data, data_size, /*overwrite=*/false);
+  void AppendToMtabAndRunLoop(base::span<const MtabTestData> data) {
+    WriteToMtab(data, /*overwrite=*/false);
     WaitForMtabUpdate();
   }
 
-  // Overwrite the mtab file with mtab entries from the |data| array of size
-  // |data_size|, and run the message loop.
-  void OverwriteMtabAndRunLoop(const MtabTestData* data, size_t data_size) {
-    WriteToMtab(data, data_size, /*overwrite=*/true);
+  // Overwrite the mtab file with mtab entries from the |data| span, and run
+  // the message loop.
+  void OverwriteMtabAndRunLoop(base::span<const MtabTestData> data) {
+    WriteToMtab(data, /*overwrite=*/true);
     WaitForMtabUpdate();
   }
 
   // Simplied version of OverwriteMtabAndRunLoop() that just deletes all the
   // entries in the mtab file.
-  void WriteEmptyMtabAndRunLoop() {
-    OverwriteMtabAndRunLoop(/*data=*/nullptr, /*data_size=*/0);
-  }
+  void WriteEmptyMtabAndRunLoop() { OverwriteMtabAndRunLoop(/*data=*/{}); }
 
   // Create a directory named |dir| relative to the test directory.
   // It has a DCIM directory, so StorageMonitorLinux recognizes it as a media
@@ -284,12 +280,9 @@ class StorageMonitorLinuxTest : public testing::Test {
   }
 
   // Write the test mtab data to |mtab_file_|.
-  // |data| is an array of mtab entries.
-  // |data_size| is the array size of |data|.
+  // |data| is a span of mtab entries.
   // |overwrite| specifies whether to overwrite |mtab_file_|.
-  void WriteToMtab(const MtabTestData* data,
-                   size_t data_size,
-                   bool overwrite) {
+  void WriteToMtab(base::span<const MtabTestData> data, bool overwrite) {
     FILE* file = setmntent(mtab_file_.value().c_str(), overwrite ? "w" : "a");
     ASSERT_TRUE(file);
 
@@ -307,7 +300,7 @@ class StorageMonitorLinuxTest : public testing::Test {
     entry.mnt_opts = const_cast<char*>(kMountOpts);
     entry.mnt_freq = 0;
     entry.mnt_passno = 0;
-    for (size_t i = 0; i < data_size; ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
       entry.mnt_fsname = const_cast<char*>(data[i].mount_device.c_str());
       entry.mnt_dir = const_cast<char*>(data[i].mount_point.c_str());
       entry.mnt_type = const_cast<char*>(data[i].mount_type.c_str());
@@ -328,7 +321,7 @@ class StorageMonitorLinuxTest : public testing::Test {
   std::unique_ptr<TestStorageMonitorLinux> monitor_;
 };
 
-// TODO(https://crbug.com/1297464): This test is flaky.
+// TODO(crbug.com/40822314): This test is flaky.
 // Simple test case where we attach and detach a media device.
 TEST_F(StorageMonitorLinuxTest, DISABLED_BasicAttachDetach) {
   base::FilePath test_path = CreateMountPointWithDCIMDir(kMountPointA);
@@ -339,7 +332,7 @@ TEST_F(StorageMonitorLinuxTest, DISABLED_BasicAttachDetach) {
   };
   // Only |kDeviceDCIM2| should be attached, since |kDeviceFixed| has a bad
   // path.
-  AppendToMtabAndRunLoop(test_data, std::size(test_data));
+  AppendToMtabAndRunLoop(test_data);
 
   EXPECT_EQ(1, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
@@ -362,7 +355,7 @@ TEST_F(StorageMonitorLinuxTest, Removable) {
     MtabTestData(kDeviceDCIM1, test_path_a.value(), kValidFS),
   };
   // |kDeviceDCIM1| should be attached as expected.
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
 
   EXPECT_EQ(1, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
@@ -375,7 +368,7 @@ TEST_F(StorageMonitorLinuxTest, Removable) {
   MtabTestData test_data2[] = {
     MtabTestData(kDeviceFixed, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data2, std::size(test_data2));
+  AppendToMtabAndRunLoop(test_data2);
   EXPECT_EQ(1, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -389,7 +382,7 @@ TEST_F(StorageMonitorLinuxTest, Removable) {
   MtabTestData test_data3[] = {
     MtabTestData(kDeviceNoDCIM, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data3, std::size(test_data3));
+  AppendToMtabAndRunLoop(test_data3);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(1, observer().detach_calls());
   EXPECT_EQ(GetDeviceId(kDeviceNoDCIM), observer().last_attached().device_id());
@@ -417,7 +410,7 @@ TEST_F(StorageMonitorLinuxTest, SwapMountPoints) {
     MtabTestData(kDeviceDCIM1, test_path_a.value(), kValidFS),
     MtabTestData(kDeviceDCIM2, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -429,7 +422,7 @@ TEST_F(StorageMonitorLinuxTest, SwapMountPoints) {
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
     MtabTestData(kDeviceDCIM2, test_path_a.value(), kValidFS),
   };
-  OverwriteMtabAndRunLoop(test_data2, std::size(test_data2));
+  OverwriteMtabAndRunLoop(test_data2);
   EXPECT_EQ(4, observer().attach_calls());
   EXPECT_EQ(2, observer().detach_calls());
 
@@ -454,7 +447,7 @@ TEST_F(StorageMonitorLinuxTest, MultiDevicesMultiMountPoints) {
     MtabTestData(kDeviceDCIM1, test_path_a.value(), kValidFS),
     MtabTestData(kDeviceDCIM2, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -467,7 +460,7 @@ TEST_F(StorageMonitorLinuxTest, MultiDevicesMultiMountPoints) {
   MtabTestData test_data2[] = {
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data2, std::size(test_data2));
+  AppendToMtabAndRunLoop(test_data2);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(1, observer().detach_calls());
 
@@ -479,7 +472,7 @@ TEST_F(StorageMonitorLinuxTest, MultiDevicesMultiMountPoints) {
     MtabTestData(kDeviceDCIM2, test_path_b.value(), kValidFS),
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
   };
-  OverwriteMtabAndRunLoop(test_data3, std::size(test_data3));
+  OverwriteMtabAndRunLoop(test_data3);
   EXPECT_EQ(3, observer().attach_calls());
   EXPECT_EQ(2, observer().detach_calls());
 
@@ -490,14 +483,14 @@ TEST_F(StorageMonitorLinuxTest, MultiDevicesMultiMountPoints) {
   MtabTestData test_data4[] = {
     MtabTestData(kDeviceDCIM1, test_path_a.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data4, std::size(test_data4));
+  AppendToMtabAndRunLoop(test_data4);
   EXPECT_EQ(3, observer().attach_calls());
   EXPECT_EQ(2, observer().detach_calls());
 
   // Detach |kDeviceDCIM1| from |kMountPointB|.
   // kDeviceDCIM1 -> kMountPointA *
   // kDeviceDCIM2 -> kMountPointB *
-  OverwriteMtabAndRunLoop(test_data1, std::size(test_data1));
+  OverwriteMtabAndRunLoop(test_data1);
   EXPECT_EQ(5, observer().attach_calls());
   EXPECT_EQ(3, observer().detach_calls());
 
@@ -519,7 +512,7 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
   MtabTestData test_data1[] = {
     MtabTestData(kDeviceDCIM1, test_path_a.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
   EXPECT_EQ(1, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -529,7 +522,7 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
   MtabTestData test_data2[] = {
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data2, std::size(test_data2));
+  AppendToMtabAndRunLoop(test_data2);
   EXPECT_EQ(1, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -541,7 +534,7 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
     MtabTestData(kDeviceFixed, test_path_a.value(), kValidFS),
   };
   RemoveDCIMDirFromMountPoint(kMountPointA);
-  AppendToMtabAndRunLoop(test_data3, std::size(test_data3));
+  AppendToMtabAndRunLoop(test_data3);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(1, observer().detach_calls());
 
@@ -553,7 +546,7 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
   };
   CreateMountPointWithDCIMDir(kMountPointA);
-  OverwriteMtabAndRunLoop(test_data4, std::size(test_data4));
+  OverwriteMtabAndRunLoop(test_data4);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(1, observer().detach_calls());
 
@@ -565,7 +558,7 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
     MtabTestData(kDeviceNoDCIM, test_path_b.value(), kValidFS),
   };
   base::DeleteFile(test_path_b.Append(kDCIMDirectoryName));
-  AppendToMtabAndRunLoop(test_data5, std::size(test_data5));
+  AppendToMtabAndRunLoop(test_data5);
   EXPECT_EQ(4, observer().attach_calls());
   EXPECT_EQ(2, observer().detach_calls());
 
@@ -577,13 +570,13 @@ TEST_F(StorageMonitorLinuxTest, MultipleMountPointsWithNonDCIMDevices) {
     MtabTestData(kDeviceDCIM1, test_path_b.value(), kValidFS),
   };
   CreateMountPointWithDCIMDir(kMountPointB);
-  OverwriteMtabAndRunLoop(test_data6, std::size(test_data6));
+  OverwriteMtabAndRunLoop(test_data6);
   EXPECT_EQ(4, observer().attach_calls());
   EXPECT_EQ(3, observer().detach_calls());
 
   // Detach |kDeviceDCIM1| from |kMountPointB|.
   // kDeviceDCIM1 -> kMountPointA *
-  OverwriteMtabAndRunLoop(test_data1, std::size(test_data1));
+  OverwriteMtabAndRunLoop(test_data1);
   EXPECT_EQ(4, observer().attach_calls());
   EXPECT_EQ(3, observer().detach_calls());
 
@@ -611,7 +604,7 @@ TEST_F(StorageMonitorLinuxTest, DeviceLookUp) {
     MtabTestData(kDeviceNoDCIM, test_path_b.value(), kValidFS),
     MtabTestData(kDeviceFixed, test_path_c.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 
@@ -652,7 +645,7 @@ TEST_F(StorageMonitorLinuxTest, DeviceLookUp) {
     MtabTestData(kDeviceFixed, test_path_b.value(), kValidFS),
     MtabTestData(kDeviceFixed, test_path_c.value(), kValidFS),
   };
-  AppendToMtabAndRunLoop(test_data2, std::size(test_data2));
+  AppendToMtabAndRunLoop(test_data2);
 
   EXPECT_TRUE(notifier()->GetStorageInfoForPath(test_path_a, &device_info));
   EXPECT_EQ(GetDeviceId(kDeviceDCIM1), device_info.device_id());
@@ -678,7 +671,7 @@ TEST_F(StorageMonitorLinuxTest, DevicePartitionSize) {
     MtabTestData(kDeviceNoDCIM, test_path_b.value(), kValidFS),
     MtabTestData(kDeviceFixed, kInvalidPath, kInvalidFS),
   };
-  AppendToMtabAndRunLoop(test_data1, std::size(test_data1));
+  AppendToMtabAndRunLoop(test_data1);
   EXPECT_EQ(2, observer().attach_calls());
   EXPECT_EQ(0, observer().detach_calls());
 

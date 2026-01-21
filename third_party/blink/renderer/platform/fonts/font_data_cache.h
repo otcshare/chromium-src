@@ -33,71 +33,55 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/linked_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
 
 namespace blink {
 
-enum ShouldRetain { kRetain, kDoNotRetain };
-enum PurgeSeverity { kPurgeIfNeeded, kForcePurge };
-
-struct FontDataCacheKeyHash {
-  STATIC_ONLY(FontDataCacheKeyHash);
+struct FontDataCacheKeyHashTraits : GenericHashTraits<const FontPlatformData*> {
+  STATIC_ONLY(FontDataCacheKeyHashTraits);
   static unsigned GetHash(const FontPlatformData* platform_data) {
     return platform_data->GetHash();
   }
 
   static bool Equal(const FontPlatformData* a, const FontPlatformData* b) {
-    const FontPlatformData* empty_value =
-        reinterpret_cast<FontPlatformData*>(-1);
-
-    if (a == empty_value)
-      return b == empty_value;
-    if (b == empty_value)
-      return a == empty_value;
-
-    if (!a || !b)
-      return a == b;
-
-    CHECK(a && b);
-
     return *a == *b;
   }
 
-  static const bool safe_to_compare_to_empty_or_deleted = true;
+  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
 };
 
 class FontDataCache final {
-  USING_FAST_MALLOC(FontDataCache);
+  DISALLOW_NEW();
 
  public:
-  static std::unique_ptr<FontDataCache> Create();
-
   FontDataCache() = default;
   FontDataCache(const FontDataCache&) = delete;
   FontDataCache& operator=(const FontDataCache&) = delete;
 
-  scoped_refptr<SimpleFontData> Get(const FontPlatformData*,
-                                    ShouldRetain = kRetain,
-                                    bool subpixel_ascent_descent = false);
-  bool Contains(const FontPlatformData*) const;
-  void Release(const SimpleFontData*);
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(cache_);
+    visitor->Trace(strong_reference_lru_);
+  }
 
-  // Purges items in FontDataCache according to provided severity.
-  // Returns true if any removal of cache items actually occurred.
-  bool Purge(PurgeSeverity);
+  const SimpleFontData* Get(const FontPlatformData*,
+                            bool subpixel_ascent_descent = false);
+  void Clear() {
+    cache_.clear();
+    strong_reference_lru_.clear();
+  }
 
  private:
-  bool PurgeLeastRecentlyUsed(int count);
+  HeapHashMap<Member<const FontPlatformData>,
+              WeakMember<const SimpleFontData>,
+              FontDataCacheKeyHashTraits>
+      cache_;
 
-  typedef HashMap<const FontPlatformData*,
-                  std::pair<scoped_refptr<SimpleFontData>, unsigned>,
-                  FontDataCacheKeyHash>
-      Cache;
-
-  Cache cache_;
-  LinkedHashSet<scoped_refptr<SimpleFontData>> inactive_font_data_;
-  bool is_purging_ = false;
+  // The above `cache_` is weak, meaning its entries will potentially be
+  // cleared if no other references exist.
+  // This LRU keeps a small (limited) number of strong references alive so they
+  // won't be cleared in the above cache for performance reasons.
+  HeapLinkedHashSet<Member<const SimpleFontData>> strong_reference_lru_;
 };
 
 }  // namespace blink

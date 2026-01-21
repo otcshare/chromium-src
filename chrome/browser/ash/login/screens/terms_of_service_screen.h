@@ -6,9 +6,11 @@
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_TERMS_OF_SERVICE_SCREEN_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
@@ -80,12 +82,12 @@ class TermsOfServiceScreen : public BaseScreen {
   void OnDownloadTimeout();
 
   // Callback function called when SimpleURLLoader completes.
-  void OnDownloaded(std::unique_ptr<std::string> response_body);
+  void OnDownloaded(std::optional<std::string> response_body);
 
   // Try to load terms of service from file, show error if there is a failure.
   void LoadFromFileOrShowError();
   // Show terms of service once they are loaded from file.
-  void OnTosLoadedFromFile(absl::optional<std::string> tos);
+  void OnTosLoadedFromFile(std::optional<std::string> tos);
   // Save terms as text to a local file.
   void SaveTos(const std::string& tos);
   // Runs callback for tests.

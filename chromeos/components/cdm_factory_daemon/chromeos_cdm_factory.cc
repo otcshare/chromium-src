@@ -7,13 +7,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/unguessable_token.h"
 #include "chromeos/components/cdm_factory_daemon/cdm_storage_adapter.h"
 #include "chromeos/components/cdm_factory_daemon/content_decryption_module_adapter.h"
 #include "chromeos/components/cdm_factory_daemon/mojom/content_decryption_module.mojom.h"
@@ -22,6 +24,7 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
+#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 
 namespace chromeos {
 
@@ -75,21 +78,12 @@ void CreateFactoryOnTaskRunner(
   GetBrowserCdmFactoryRemote()->CreateFactory(key_system, std::move(callback));
 }
 
-void CreateFactoryCallback(
-    scoped_refptr<base::SingleThreadTaskRunner> runner,
-    cdm::mojom::BrowserCdmFactory::CreateFactoryCallback callback,
-    mojo::PendingRemote<cdm::mojom::CdmFactory> remote_factory) {
-  runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback),
-                                             std::move(remote_factory)));
-}
-
 void GetOutputProtectionOnTaskRunner(
     mojo::PendingReceiver<cdm::mojom::OutputProtection> output_protection) {
   GetBrowserCdmFactoryRemote()->GetOutputProtection(
       std::move(output_protection));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 class SingletonCdmContextRef : public media::CdmContextRef {
  public:
   explicit SingletonCdmContextRef(media::CdmContext* cdm_context)
@@ -103,7 +97,7 @@ class SingletonCdmContextRef : public media::CdmContextRef {
   }
 
  private:
-  media::CdmContext* cdm_context_;
+  raw_ptr<media::CdmContext> cdm_context_;
 };
 
 void GetHwKeyDataProxy(const std::string& key_id,
@@ -147,12 +141,41 @@ class ArcCdmContext : public ChromeOsCdmContext, public media::CdmContext {
   }
   bool UsingArcCdm() const override { return true; }
   bool IsRemoteCdm() const override { return true; }
+  void AllocateSecureBuffer(uint32_t size,
+                            AllocateSecureBufferCB callback) override {
+    ChromeOsCdmFactory::AllocateSecureBuffer(size, std::move(callback));
+  }
+  void ParseEncryptedSliceHeader(
+      uint64_t secure_handle,
+      uint32_t offset,
+      const std::vector<uint8_t>& stream_data,
+      ParseEncryptedSliceHeaderCB callback) override {
+    ChromeOsCdmFactory::ParseEncryptedSliceHeader(
+        secure_handle, offset, stream_data, std::move(callback));
+  }
 
   // media::CdmContext implementation.
   ChromeOsCdmContext* GetChromeOsCdmContext() override { return this; }
 };
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
+void OnCdmCreated(media::CdmCreatedCB callback,
+                  scoped_refptr<ContentDecryptionModuleAdapter> cdm,
+                  cdm::mojom::CdmFactory::CreateCdmStatus result) {
+  switch (result) {
+    case cdm::mojom::CdmFactory::CreateCdmStatus::kSuccess:
+      std::move(callback).Run(std::move(cdm), media::CreateCdmStatus::kSuccess);
+      return;
+    case cdm::mojom::CdmFactory::CreateCdmStatus::kNoMoreInstances:
+      std::move(callback).Run(nullptr,
+                              media::CreateCdmStatus::kNoMoreInstances);
+      return;
+    case cdm::mojom::CdmFactory::CreateCdmStatus::kInsufficientGpuResources:
+      std::move(callback).Run(
+          nullptr, media::CreateCdmStatus::kInsufficientGpuResources);
+      return;
+  }
+  std::move(callback).Run(nullptr, media::CreateCdmStatus::kUnknownError);
+}
 }  // namespace
 
 ChromeOsCdmFactory::ChromeOsCdmFactory(
@@ -223,7 +246,37 @@ void ChromeOsCdmFactory::GetScreenResolutions(
   GetBrowserCdmFactoryRemote()->GetScreenResolutions(std::move(callback));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// static
+void ChromeOsCdmFactory::AllocateSecureBuffer(
+    uint32_t size,
+    ChromeOsCdmContext::AllocateSecureBufferCB callback) {
+  if (!GetFactoryTaskRunner()->RunsTasksInCurrentSequence()) {
+    GetFactoryTaskRunner()->PostTask(
+        FROM_HERE, base::BindOnce(&ChromeOsCdmFactory::AllocateSecureBuffer,
+                                  size, std::move(callback)));
+    return;
+  }
+  GetBrowserCdmFactoryRemote()->AllocateSecureBuffer(size, std::move(callback));
+}
+
+// static
+void ChromeOsCdmFactory::ParseEncryptedSliceHeader(
+    uint64_t secure_handle,
+    uint32_t offset,
+    const std::vector<uint8_t>& stream_data,
+    ChromeOsCdmContext::ParseEncryptedSliceHeaderCB callback) {
+  if (!GetFactoryTaskRunner()->RunsTasksInCurrentSequence()) {
+    GetFactoryTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&ChromeOsCdmFactory::ParseEncryptedSliceHeader,
+                       secure_handle, offset, stream_data,
+                       std::move(callback)));
+    return;
+  }
+  GetBrowserCdmFactoryRemote()->ParseEncryptedSliceHeader(
+      secure_handle, offset, stream_data, std::move(callback));
+}
+
 // static
 void ChromeOsCdmFactory::SetBrowserCdmFactoryRemote(
     mojo::Remote<cdm::mojom::BrowserCdmFactory> remote) {
@@ -237,7 +290,6 @@ media::CdmContext* ChromeOsCdmFactory::GetArcCdmContext() {
   static base::NoDestructor<ArcCdmContext> arc_cdm_context;
   return arc_cdm_context.get();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 void ChromeOsCdmFactory::OnVerifiedAccessEnabled(
     const media::CdmConfig& cdm_config,
@@ -251,8 +303,9 @@ void ChromeOsCdmFactory::OnVerifiedAccessEnabled(
     DVLOG(1)
         << "Not using Chrome OS CDM factory due to Verified Access disabled";
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(cdm_created_cb), nullptr,
-                                  "Verified Access is disabled."));
+        FROM_HERE,
+        base::BindOnce(std::move(cdm_created_cb), nullptr,
+                       media::CreateCdmStatus::kCrOsVerifiedAccessDisabled));
     return;
   }
   // If we haven't retrieved the remote CDM factory, do that first.
@@ -265,14 +318,11 @@ void ChromeOsCdmFactory::OnVerifiedAccessEnabled(
         FROM_HERE,
         base::BindOnce(
             &CreateFactoryOnTaskRunner, cdm_config.key_system,
-            base::BindOnce(
-                &CreateFactoryCallback,
-                base::SingleThreadTaskRunner::GetCurrentDefault(),
-                base::BindOnce(
-                    &ChromeOsCdmFactory::OnCreateFactory,
-                    weak_factory_.GetWeakPtr(), cdm_config, session_message_cb,
-                    session_closed_cb, session_keys_change_cb,
-                    session_expiration_update_cb, std::move(cdm_created_cb)))));
+            base::BindPostTaskToCurrentDefault(base::BindOnce(
+                &ChromeOsCdmFactory::OnCreateFactory,
+                weak_factory_.GetWeakPtr(), cdm_config, session_message_cb,
+                session_closed_cb, session_keys_change_cb,
+                session_expiration_update_cb, std::move(cdm_created_cb)))));
     return;
   }
 
@@ -296,8 +346,10 @@ void ChromeOsCdmFactory::OnCreateFactory(
   if (!remote_factory) {
     LOG(ERROR) << "Failed creating the remote CDM factory";
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(cdm_created_cb), nullptr,
-                                  "Remote factory creation failed."));
+        FROM_HERE,
+        base::BindOnce(
+            std::move(cdm_created_cb), nullptr,
+            media::CreateCdmStatus::kCrOsRemoteFactoryCreationFailed));
     return;
   }
   // Check if this is bound already, which could happen due to asynchronous
@@ -338,12 +390,9 @@ void ChromeOsCdmFactory::CreateCdm(
   // Create the adapter that proxies calls between
   // media::ContentDecryptionModule and
   // chromeos::cdm::mojom::ContentDecryptionModule.
-  scoped_refptr<ContentDecryptionModuleAdapter> cdm =
-      base::WrapRefCounted<ContentDecryptionModuleAdapter>(
-          new ContentDecryptionModuleAdapter(
-              std::move(storage), std::move(cros_cdm), session_message_cb,
-              session_closed_cb, session_keys_change_cb,
-              session_expiration_update_cb));
+  auto cdm = base::MakeRefCounted<ContentDecryptionModuleAdapter>(
+      std::move(storage), std::move(cros_cdm), session_message_cb,
+      session_closed_cb, session_keys_change_cb, session_expiration_update_cb);
 
   // Create the OutputProtection interface to pass to the CDM.
   mojo::PendingRemote<cdm::mojom::OutputProtection> output_protection_remote;
@@ -353,15 +402,21 @@ void ChromeOsCdmFactory::CreateCdm(
           &GetOutputProtectionOnTaskRunner,
           output_protection_remote.InitWithNewPipeAndPassReceiver()));
 
-  // Now create the remote CDM instance that links everything up.
-  remote_factory_->CreateCdm(cdm->GetClientInterface(),
-                             std::move(storage_remote),
-                             std::move(output_protection_remote),
-                             base::UnguessableToken::Create().ToString(),
-                             std::move(cros_cdm_pending_receiver));
+  url::Origin cdm_origin;
+  {
+    // TODO (crbug.com/368792274): Refactor the GetCdmOrigin mojo call to not be
+    // a sync call.
+    mojo::SyncCallRestrictions::ScopedAllowSyncCall allow_sync_mojo_call;
+    frame_interfaces_->GetCdmOrigin(&cdm_origin);
+  }
 
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(cdm_created_cb), std::move(cdm), ""));
+  // Now create the remote CDM instance that links everything up.
+  remote_factory_->CreateCdm(
+      cdm->GetClientInterface(), std::move(storage_remote),
+      std::move(output_protection_remote), cdm_origin.host(),
+      std::move(cros_cdm_pending_receiver),
+      base::BindPostTaskToCurrentDefault(base::BindOnce(
+          &OnCdmCreated, std::move(cdm_created_cb), std::move(cdm))));
 }
 
 void ChromeOsCdmFactory::OnFactoryMojoConnectionError() {

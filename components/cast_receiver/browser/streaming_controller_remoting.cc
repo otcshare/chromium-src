@@ -24,12 +24,6 @@ void StreamingControllerRemoting::StartPlayback(
         renderer_connection) {
   receiver_session->StartStreamingAsync(std::move(demuxer_connector),
                                         std::move(renderer_connection));
-
-  auto* renderer_controller = receiver_session->GetRendererControls();
-  DCHECK(renderer_controller);
-  DCHECK(renderer_controller->IsValid());
-  renderer_controller->StartPlayingFrom(base::Seconds(0));
-  renderer_controller->SetPlaybackRate(1.0);
 }
 
 void StreamingControllerRemoting::ProcessConfig(

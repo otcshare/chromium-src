@@ -14,6 +14,7 @@
 #include "ash/shell.h"
 #include "ash/system/human_presence/human_presence_metrics.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
@@ -84,7 +85,9 @@ class SnoopingProtectionControllerTestBase : public NoSessionAshTestBase {
   }
 
   void TearDown() override {
+    controller_ = nullptr;
     AshTestBase::TearDown();
+    dbus_client_ = nullptr;
     HumanPresenceDBusClient::Shutdown();
   }
 
@@ -96,15 +99,15 @@ class SnoopingProtectionControllerTestBase : public NoSessionAshTestBase {
   const bool service_state_;
   const std::map<std::string, std::string> params_;
 
-  FakeHumanPresenceDBusClient* dbus_client_ = nullptr;
-  SnoopingProtectionController* controller_ = nullptr;
+  raw_ptr<FakeHumanPresenceDBusClient> dbus_client_ = nullptr;
+  raw_ptr<SnoopingProtectionController> controller_ = nullptr;
 
   // Simulates a login. This will trigger a DBus call if and only if logging in
   // was the final precondition required for the feature. Hence we wait for any
   // asynchronous logic to complete, revealing whether a DBus call was correctly
   // or incorrectly made.
   void SimulateLogin() {
-    SimulateUserLogin("testuser@gmail.com");
+    SimulateUserLogin({"testuser@gmail.com"});
     task_environment()->FastForwardBy(kShortTime);
   }
 
@@ -287,10 +290,9 @@ TEST_F(SnoopingProtectionControllerTestPresent, Oobe) {
   TestSessionControllerClient* session = GetSessionControllerClient();
 
   // Simulate end of OOBE when user is logged in.
-  session->AddUserSession("testuser@gmail.com", user_manager::USER_TYPE_REGULAR,
-                          /*provide_pref_service=*/true,
-                          /*is_new_profile=*/true);
-  session->SwitchActiveUser(AccountId::FromUserEmail("testuser@gmail.com"));
+  SimulateUserLogin({.display_email = "testuser@gmail.com",
+                     .is_new_profile = true,
+                     .activate_session = false});
   session->SetSessionState(session_manager::SessionState::OOBE);
 
   // Shouldn't configure, as the session isn't active.

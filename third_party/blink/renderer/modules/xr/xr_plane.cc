@@ -4,43 +4,73 @@
 
 #include "third_party/blink/renderer/modules/xr/xr_plane.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_plane_orientation.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/modules/xr/type_converters.h"
+#include "third_party/blink/renderer/modules/xr/vr_service_type_converters.h"
 #include "third_party/blink/renderer/modules/xr/xr_object_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_reference_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
 
 namespace blink {
 
-XRPlane::XRPlane(uint64_t id,
+namespace {
+
+String SemanticLabelToString(
+    const std::optional<device::mojom::blink::XRSemanticLabel>& label) {
+  if (!label) {
+    return String();
+  }
+
+  switch (*label) {
+    case device::mojom::blink::XRSemanticLabel::kOther:
+      return "other";
+    case device::mojom::blink::XRSemanticLabel::kFloor:
+      return "floor";
+    case device::mojom::blink::XRSemanticLabel::kWall:
+      return "wall";
+    case device::mojom::blink::XRSemanticLabel::kCeiling:
+      return "ceiling";
+    case device::mojom::blink::XRSemanticLabel::kTable:
+      return "table";
+  }
+}
+
+}  // namespace
+
+XRPlane::XRPlane(device::PlaneId id,
                  XRSession* session,
                  const device::mojom::blink::XRPlaneData& plane_data,
                  double timestamp)
     : XRPlane(id,
               session,
-              mojo::ConvertTo<absl::optional<blink::XRPlane::Orientation>>(
+              mojo::ConvertTo<std::optional<blink::XRPlane::Orientation>>(
                   plane_data.orientation),
               mojo::ConvertTo<HeapVector<Member<DOMPointReadOnly>>>(
                   plane_data.polygon),
               plane_data.mojo_from_plane,
+              SemanticLabelToString(plane_data.semantic_label),
               timestamp) {}
 
-XRPlane::XRPlane(uint64_t id,
+XRPlane::XRPlane(device::PlaneId id,
                  XRSession* session,
-                 const absl::optional<Orientation>& orientation,
-                 const HeapVector<Member<DOMPointReadOnly>>& polygon,
-                 const absl::optional<device::Pose>& mojo_from_plane,
+                 const std::optional<Orientation>& orientation,
+                 HeapVector<Member<DOMPointReadOnly>> polygon,
+                 const std::optional<device::Pose>& mojo_from_plane,
+                 const String& semantic_label,
                  double timestamp)
     : id_(id),
-      polygon_(polygon),
+      polygon_(MakeGarbageCollected<FrozenArray<DOMPointReadOnly>>(
+          std::move(polygon))),
       orientation_(orientation),
       mojo_from_plane_(mojo_from_plane),
+      semantic_label_(semantic_label),
       session_(session),
       last_changed_time_(timestamp) {
   DVLOG(3) << __func__;
 }
 
-uint64_t XRPlane::id() const {
+device::PlaneId XRPlane::id() const {
   return id_;
 }
 
@@ -49,12 +79,12 @@ XRSpace* XRPlane::planeSpace() const {
     plane_space_ = MakeGarbageCollected<XRObjectSpace<XRPlane>>(session_, this);
   }
 
-  return plane_space_;
+  return plane_space_.Get();
 }
 
-absl::optional<gfx::Transform> XRPlane::MojoFromObject() const {
+std::optional<gfx::Transform> XRPlane::MojoFromObject() const {
   if (!mojo_from_plane_) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return mojo_from_plane_->ToTransform();
@@ -66,28 +96,28 @@ device::mojom::blink::XRNativeOriginInformationPtr XRPlane::NativeOrigin()
       this->id());
 }
 
-String XRPlane::orientation() const {
+std::optional<V8XRPlaneOrientation> XRPlane::orientation() const {
   if (orientation_) {
     switch (*orientation_) {
       case Orientation::kHorizontal:
-        return "Horizontal";
+        return V8XRPlaneOrientation(V8XRPlaneOrientation::Enum::kHorizontal);
       case Orientation::kVertical:
-        return "Vertical";
+        return V8XRPlaneOrientation(V8XRPlaneOrientation::Enum::kVertical);
     }
   }
-  return "";
+  return std::nullopt;
+}
+
+String XRPlane::semanticLabel() const {
+  return semantic_label_;
 }
 
 double XRPlane::lastChangedTime() const {
   return last_changed_time_;
 }
 
-HeapVector<Member<DOMPointReadOnly>> XRPlane::polygon() const {
-  // Returns copy of a vector - by design. This way, JavaScript code could
-  // store the state of the plane's polygon in frame N just by storing the
-  // array (`let polygon = plane.polygon`) - the stored array won't be affected
-  // by the changes to the plane that could happen in frames >N.
-  return polygon_;
+const FrozenArray<DOMPointReadOnly>& XRPlane::polygon() const {
+  return *polygon_.Get();
 }
 
 void XRPlane::Update(const device::mojom::blink::XRPlaneData& plane_data,
@@ -96,13 +126,16 @@ void XRPlane::Update(const device::mojom::blink::XRPlaneData& plane_data,
 
   last_changed_time_ = timestamp;
 
-  orientation_ = mojo::ConvertTo<absl::optional<blink::XRPlane::Orientation>>(
+  orientation_ = mojo::ConvertTo<std::optional<blink::XRPlane::Orientation>>(
       plane_data.orientation);
 
   mojo_from_plane_ = plane_data.mojo_from_plane;
 
-  polygon_ =
-      mojo::ConvertTo<HeapVector<Member<DOMPointReadOnly>>>(plane_data.polygon);
+  semantic_label_ = SemanticLabelToString(plane_data.semantic_label);
+
+  polygon_ = MakeGarbageCollected<FrozenArray<DOMPointReadOnly>>(
+      mojo::ConvertTo<HeapVector<Member<DOMPointReadOnly>>>(
+          plane_data.polygon));
 }
 
 void XRPlane::Trace(Visitor* visitor) const {

@@ -2,16 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/public/provider/chrome/browser/signin/signin_identity_api.h"
-
-#import "base/bind.h"
-#import "base/callback_helpers.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
 #import "base/notreached.h"
 #import "base/task/sequenced_task_runner.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/public/provider/chrome/browser/signin/signin_identity_api.h"
 
 namespace ios {
 namespace provider {
@@ -31,6 +26,7 @@ class ChromiumSystemIdentityManager final : public SystemIdentityManager {
   ~ChromiumSystemIdentityManager() final;
 
   // SystemIdentityManager implementation.
+  bool IsSigninSupported() final;
   bool HandleSessionOpenURLContexts(
       UIScene* scene,
       NSSet<UIOpenURLContext*>* url_contexts) final;
@@ -38,17 +34,16 @@ class ChromiumSystemIdentityManager final : public SystemIdentityManager {
       NSSet<UISceneSession*>* scene_sessions) final;
   void DismissDialogs() final;
   DismissViewCallback PresentAccountDetailsController(
-      id<SystemIdentity> identity,
-      UIViewController* view_controller,
-      bool animated) final;
+      PresentDialogConfiguration configuration) final;
   DismissViewCallback PresentWebAndAppSettingDetailsController(
-      id<SystemIdentity> identity,
-      UIViewController* view_controller,
-      bool animated) final;
+      PresentDialogConfiguration configuration) final;
+  DismissViewCallback PresentLinkedServicesSettingsDetailsController(
+      PresentDialogConfiguration configuration) final;
   id<SystemIdentityInteractionManager> CreateInteractionManager() final;
   void IterateOverIdentities(IdentityIteratorCallback callback) final;
   void ForgetIdentity(id<SystemIdentity> identity,
                       ForgetIdentityCallback callback) final;
+  bool IdentityRemovedByUser(const GaiaId& gaia_id) final;
   void GetAccessToken(id<SystemIdentity> identity,
                       const std::set<std::string>& scopes,
                       AccessTokenCallback callback) final;
@@ -62,17 +57,27 @@ class ChromiumSystemIdentityManager final : public SystemIdentityManager {
                        HostedDomainCallback callback) final;
   NSString* GetCachedHostedDomainForIdentity(id<SystemIdentity> identity) final;
   void FetchCapabilities(id<SystemIdentity> identity,
-                         const std::set<std::string>& names,
+                         const std::vector<std::string>& names,
                          FetchCapabilitiesCallback callback) final;
   bool HandleMDMNotification(id<SystemIdentity> identity,
+                             NSArray<id<SystemIdentity>>* active_identities,
                              id<RefreshAccessTokenError> error,
                              HandleMDMCallback callback) final;
+  bool IsScopeLimitedError(id<RefreshAccessTokenError> error) final;
   bool IsMDMError(id<SystemIdentity> identity, NSError* error) final;
+  void FetchTokenAuthURL(id<SystemIdentity> identity,
+                         NSURL* target_url,
+                         AuthenticatedURLCallback callback) final;
 };
 
 ChromiumSystemIdentityManager::ChromiumSystemIdentityManager() = default;
 
 ChromiumSystemIdentityManager::~ChromiumSystemIdentityManager() = default;
+
+bool ChromiumSystemIdentityManager::IsSigninSupported() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return false;
+}
 
 bool ChromiumSystemIdentityManager::HandleSessionOpenURLContexts(
     UIScene* scene,
@@ -95,20 +100,20 @@ void ChromiumSystemIdentityManager::DismissDialogs() {
 
 SystemIdentityManager::DismissViewCallback
 ChromiumSystemIdentityManager::PresentAccountDetailsController(
-    id<SystemIdentity> identity,
-    UIViewController* view_controller,
-    bool animated) {
+    PresentDialogConfiguration configuration) {
   NOTREACHED();
-  return {};
 }
 
 SystemIdentityManager::DismissViewCallback
 ChromiumSystemIdentityManager::PresentWebAndAppSettingDetailsController(
-    id<SystemIdentity> identity,
-    UIViewController* view_controller,
-    bool animated) {
+    PresentDialogConfiguration configuration) {
   NOTREACHED();
-  return {};
+}
+
+SystemIdentityManager::DismissViewCallback
+ChromiumSystemIdentityManager::PresentLinkedServicesSettingsDetailsController(
+    PresentDialogConfiguration configuration) {
+  NOTREACHED();
 }
 
 id<SystemIdentityInteractionManager>
@@ -126,6 +131,11 @@ void ChromiumSystemIdentityManager::IterateOverIdentities(
 void ChromiumSystemIdentityManager::ForgetIdentity(
     id<SystemIdentity> identity,
     ForgetIdentityCallback callback) {
+  NOTREACHED();
+}
+
+bool ChromiumSystemIdentityManager::IdentityRemovedByUser(
+    const GaiaId& gaia_id) {
   NOTREACHED();
 }
 
@@ -152,7 +162,6 @@ void ChromiumSystemIdentityManager::FetchAvatarForIdentity(
 UIImage* ChromiumSystemIdentityManager::GetCachedAvatarForIdentity(
     id<SystemIdentity> identity) {
   NOTREACHED();
-  return nil;
 }
 
 void ChromiumSystemIdentityManager::GetHostedDomain(
@@ -164,35 +173,41 @@ void ChromiumSystemIdentityManager::GetHostedDomain(
 NSString* ChromiumSystemIdentityManager::GetCachedHostedDomainForIdentity(
     id<SystemIdentity> identity) {
   NOTREACHED();
-  return @"";
 }
 
 void ChromiumSystemIdentityManager::FetchCapabilities(
     id<SystemIdentity> identity,
-    const std::set<std::string>& names,
+    const std::vector<std::string>& names,
     FetchCapabilitiesCallback callback) {
   NOTREACHED();
 }
 
 bool ChromiumSystemIdentityManager::HandleMDMNotification(
     id<SystemIdentity> identity,
+    NSArray<id<SystemIdentity>>* active_identities,
     id<RefreshAccessTokenError> error,
     HandleMDMCallback callback) {
   NOTREACHED();
-  return false;
+}
+
+bool ChromiumSystemIdentityManager::IsScopeLimitedError(
+    id<RefreshAccessTokenError> error) {
+  NOTREACHED();
 }
 
 bool ChromiumSystemIdentityManager::IsMDMError(id<SystemIdentity> identity,
                                                NSError* error) {
   NOTREACHED();
-  return false;
+}
+
+void ChromiumSystemIdentityManager::FetchTokenAuthURL(
+    id<SystemIdentity> identity,
+    NSURL* target_url,
+    AuthenticatedURLCallback callback) {
+  NOTREACHED();
 }
 
 }  // anonymous namespace
-
-bool IsSigninSupported() {
-  return false;
-}
 
 std::unique_ptr<SystemIdentityManager> CreateSystemIdentityManager(
     id<SingleSignOnService> sso_service) {

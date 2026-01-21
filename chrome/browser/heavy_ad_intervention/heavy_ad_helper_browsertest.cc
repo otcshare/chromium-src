@@ -37,8 +37,8 @@ bool IsContentInDocument(content::RenderFrameHost* rfh, std::string content) {
 
 class HeavyAdHelperBrowserTest : public InProcessBrowserTest {
  public:
-  HeavyAdHelperBrowserTest() {}
-  ~HeavyAdHelperBrowserTest() override {}
+  HeavyAdHelperBrowserTest() = default;
+  ~HeavyAdHelperBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -64,11 +64,10 @@ IN_PROC_BROWSER_TEST_F(HeavyAdHelperBrowserTest,
   content::WebContentsConsoleObserver console_observer(web_contents);
 
   content::TestNavigationObserver error_observer(web_contents);
-  controller.LoadPostCommitErrorPage(
+  controller.NavigateFrameToErrorPage(
       child, url,
       heavy_ad_intervention::PrepareHeavyAdPage(
-          g_browser_process->GetApplicationLocale()),
-      net::ERR_BLOCKED_BY_CLIENT);
+          g_browser_process->GetApplicationLocale()));
   error_observer.Wait();
 
   for (const auto& message : console_observer.messages()) {
@@ -93,20 +92,13 @@ IN_PROC_BROWSER_TEST_F(HeavyAdHelperBrowserTest,
       ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
 
   content::TestNavigationObserver error_observer(web_contents);
-  controller.LoadPostCommitErrorPage(
+  controller.NavigateFrameToErrorPage(
       child, url,
       heavy_ad_intervention::PrepareHeavyAdPage(
-          g_browser_process->GetApplicationLocale()),
-      net::ERR_BLOCKED_BY_CLIENT);
+          g_browser_process->GetApplicationLocale()));
   error_observer.Wait();
 
-  // With error page isolation, the error page will be loaded in the error
-  // page process, therefore it will have a different RenderFrameHost
-  // instance.
-  if (content::SiteIsolationPolicy::IsErrorPageIsolationEnabled(
-          /* in_main_frame = */ false)) {
-    child = ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
-  }
+  child = ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
 
   EXPECT_TRUE(IsContentInDocument(
       child,

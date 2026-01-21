@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/renderer/media/android/flinging_renderer_client.h"
 #include "media/mojo/clients/mojo_renderer.h"
 #include "media/mojo/clients/mojo_renderer_factory.h"
@@ -19,9 +20,9 @@ namespace content {
 
 FlingingRendererClientFactory::FlingingRendererClientFactory(
     std::unique_ptr<media::MojoRendererFactory> mojo_flinging_factory,
-    std::unique_ptr<media::RemotePlaybackClientWrapper> remote_playback_client)
+    media::RemotePlaybackClientWrapper* remote_playback_client)
     : mojo_flinging_factory_(std::move(mojo_flinging_factory)),
-      remote_playback_client_(std::move(remote_playback_client)) {}
+      remote_playback_client_(remote_playback_client) {}
 
 FlingingRendererClientFactory::~FlingingRendererClientFactory() = default;
 

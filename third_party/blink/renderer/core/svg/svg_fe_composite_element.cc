@@ -20,26 +20,29 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_composite_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 template <>
 const SVGEnumerationMap& GetEnumerationMap<CompositeOperationType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {FECOMPOSITE_OPERATOR_OVER, "over"},
-      {FECOMPOSITE_OPERATOR_IN, "in"},
-      {FECOMPOSITE_OPERATOR_OUT, "out"},
-      {FECOMPOSITE_OPERATOR_ATOP, "atop"},
-      {FECOMPOSITE_OPERATOR_XOR, "xor"},
-      {FECOMPOSITE_OPERATOR_ARITHMETIC, "arithmetic"},
-      {FECOMPOSITE_OPERATOR_LIGHTER, "lighter"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "over",
+      "in",
+      "out",
+      "atop",
+      "xor",
+      "arithmetic",
+      "lighter",
+  });
   static const SVGEnumerationMap entries(enum_items,
                                          FECOMPOSITE_OPERATOR_ARITHMETIC);
   return entries;
@@ -66,15 +69,7 @@ SVGFECompositeElement::SVGFECompositeElement(Document& document)
           MakeGarbageCollected<SVGAnimatedEnumeration<CompositeOperationType>>(
               this,
               svg_names::kOperatorAttr,
-              FECOMPOSITE_OPERATOR_OVER)) {
-  AddToPropertyMap(k1_);
-  AddToPropertyMap(k2_);
-  AddToPropertyMap(k3_);
-  AddToPropertyMap(k4_);
-  AddToPropertyMap(in1_);
-  AddToPropertyMap(in2_);
-  AddToPropertyMap(svg_operator_);
-}
+              FECOMPOSITE_OPERATOR_OVER)) {}
 
 void SVGFECompositeElement::Trace(Visitor* visitor) const {
   visitor->Trace(k1_);
@@ -112,13 +107,11 @@ void SVGFECompositeElement::SvgAttributeChanged(
   if (attr_name == svg_names::kOperatorAttr ||
       attr_name == svg_names::kK1Attr || attr_name == svg_names::kK2Attr ||
       attr_name == svg_names::kK3Attr || attr_name == svg_names::kK4Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr || attr_name == svg_names::kIn2Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -128,6 +121,7 @@ void SVGFECompositeElement::SvgAttributeChanged(
 
 FilterEffect* SVGFECompositeElement::Build(SVGFilterBuilder* filter_builder,
                                            Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFECompositeElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   FilterEffect* input2 = filter_builder->GetEffectById(
@@ -144,6 +138,36 @@ FilterEffect* SVGFECompositeElement::Build(SVGFilterBuilder* filter_builder,
   input_effects.push_back(input1);
   input_effects.push_back(input2);
   return effect;
+}
+
+SVGAnimatedPropertyBase* SVGFECompositeElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kK1Attr) {
+    return k1_.Get();
+  } else if (attribute_name == svg_names::kK2Attr) {
+    return k2_.Get();
+  } else if (attribute_name == svg_names::kK3Attr) {
+    return k3_.Get();
+  } else if (attribute_name == svg_names::kK4Attr) {
+    return k4_.Get();
+  } else if (attribute_name == svg_names::kInAttr) {
+    return in1_.Get();
+  } else if (attribute_name == svg_names::kIn2Attr) {
+    return in2_.Get();
+  } else if (attribute_name == svg_names::kOperatorAttr) {
+    return svg_operator_.Get();
+  } else {
+    return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+        attribute_name);
+  }
+}
+
+void SVGFECompositeElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{k1_.Get(),          k2_.Get(),  k3_.Get(),
+                                   k4_.Get(),          in1_.Get(), in2_.Get(),
+                                   svg_operator_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

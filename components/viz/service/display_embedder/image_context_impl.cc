@@ -8,21 +8,85 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "components/viz/common/resources/resource_format_utils.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/trace_event/trace_event.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
+#include "gpu/command_buffer/service/graphite_shared_context.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
-#include "gpu/command_buffer/service/shared_image/shared_image_format_utils.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/skia_utils.h"
 #include "gpu/command_buffer/service/texture_manager.h"
+#include "skia/buildflags.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
-#include "third_party/skia/include/core/SkPromiseImageTexture.h"
-#include "third_party/skia/include/gpu/GrContextThreadSafeProxy.h"
-#include "ui/gl/gl_image.h"
+#include "third_party/skia/include/gpu/GpuTypes.h"
+#include "third_party/skia/include/gpu/ganesh/GrContextThreadSafeProxy.h"
+#include "third_party/skia/include/gpu/graphite/Context.h"
+#include "third_party/skia/include/gpu/graphite/Recorder.h"
+#include "third_party/skia/include/gpu/graphite/Surface.h"
+#include "third_party/skia/include/gpu/graphite/dawn/DawnTypes.h"
+#include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class CreateFallbackImageResult {
+  kSuccess = 0,
+  kFailedPrefersExternalSampler = 1,
+  kFailedYcbcrMismatch = 2,
+  kFailedExternalTexture = 3,
+  kFailedInvalidTextureInfo = 4,
+  kFailedCreateTexture = 5,
+  kMaxValue = kFailedCreateTexture
+};
+
+const char* CreateFallbackImageResultToString(
+    CreateFallbackImageResult result) {
+  switch (result) {
+    case CreateFallbackImageResult::kSuccess:
+      return "Success";
+    case CreateFallbackImageResult::kFailedPrefersExternalSampler:
+      return "FailedPrefersExternalSampler";
+    case CreateFallbackImageResult::kFailedYcbcrMismatch:
+      return "FailedYcbcrMismatch";
+    case CreateFallbackImageResult::kFailedExternalTexture:
+      return "FailedExternalTexture";
+    case CreateFallbackImageResult::kFailedInvalidTextureInfo:
+      return "FailedInvalidTextureInfo";
+    case CreateFallbackImageResult::kFailedCreateTexture:
+      return "FailedCreateTexture";
+  }
+}
+
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(SKIA_USE_DAWN)
+bool DawnYCbCrVkDescriptorsAreCompatible(const wgpu::YCbCrVkDescriptor& left,
+                                         const wgpu::YCbCrVkDescriptor& right) {
+  // NOTE: We deliberately do not compare the swizzle components as those
+  // components are not plumbed through the Chrome-level information and thus
+  // could cause spurious equality failures. By the Vulkan spec, those
+  // components should not be set for external formats, but some drivers do not
+  // adhere to the spec here.
+  // Mismatch of model, range and chroma fields happens often enough to be
+  // problematic if we skip drawing the video for those frames. While the video
+  // may not draw 100% correctly it will still be better than not drawing it at
+  // all.
+  if (left.vkFormat != right.vkFormat) {
+    return false;
+  }
+  if (left.forceExplicitReconstruction != right.forceExplicitReconstruction) {
+    return false;
+  }
+  if (left.externalFormat != right.externalFormat) {
+    return false;
+  }
+  return true;
+}
+#endif
 
 SkColor4f GetFallbackColorForPlane(viz::SharedImageFormat format,
                                    int plane_index) {
@@ -38,8 +102,12 @@ SkColor4f GetFallbackColorForPlane(viz::SharedImageFormat format,
   if (format.is_single_plane())
     return SkColors::kWhite;
   switch (format.plane_config()) {
+    case viz::SharedImageFormat::PlaneConfig::kY_U_V:
     case viz::SharedImageFormat::PlaneConfig::kY_V_U:
       return plane_index == 0 ? SkColors::kWhite : SkColors::kGray;
+    case viz::SharedImageFormat::PlaneConfig::kY_U_V_A:
+      return (plane_index == 0 || plane_index == 3) ? SkColors::kWhite
+                                                    : SkColors::kGray;
     case viz::SharedImageFormat::PlaneConfig::kY_UV:
       return plane_index == 0 ? SkColors::kWhite : SkColors::kGray;
     case viz::SharedImageFormat::PlaneConfig::kY_UV_A:
@@ -52,22 +120,23 @@ SkColor4f GetFallbackColorForPlane(viz::SharedImageFormat format,
 
 namespace viz {
 
-ImageContextImpl::ImageContextImpl(
-    const gpu::MailboxHolder& mailbox_holder,
-    const gfx::Size& size,
-    SharedImageFormat format,
-    bool maybe_concurrent_reads,
-    const absl::optional<gpu::VulkanYCbCrInfo>& ycbcr_info,
-    sk_sp<SkColorSpace> color_space,
-    bool allow_keeping_read_access,
-    bool raw_draw_if_possible)
-    : ImageContext(mailbox_holder, size, format, ycbcr_info, color_space),
+ImageContextImpl::ImageContextImpl(const TransferableResource& resource,
+                                   bool maybe_concurrent_reads,
+                                   bool raw_draw_if_possible,
+                                   uint32_t client_id)
+    : ImageContext(resource),
       maybe_concurrent_reads_(maybe_concurrent_reads),
-      allow_keeping_read_access_(allow_keeping_read_access),
       raw_draw_if_possible_(raw_draw_if_possible) {}
 
+ImageContextImpl::ImageContextImpl(const gpu::Mailbox& mailbox,
+                                   const gfx::Size& size,
+                                   SharedImageFormat format,
+                                   const gfx::ColorSpace& color_space)
+    : ImageContext(mailbox, size, format, color_space),
+      is_for_render_pass_(true) {}
+
 ImageContextImpl::~ImageContextImpl() {
-  DeleteFallbackGrBackendTextures();
+  DeleteFallbackTextures();
 }
 
 void ImageContextImpl::OnContextLost() {
@@ -85,11 +154,12 @@ void ImageContextImpl::OnContextLost() {
   if (fallback_context_state_) {
     fallback_context_state_ = nullptr;
     fallback_textures_.clear();
+    graphite_fallback_textures_.clear();
   }
 }
 
 void ImageContextImpl::SetPromiseImageTextures(
-    std::vector<sk_sp<SkPromiseImageTexture>> promise_image_textures) {
+    std::vector<sk_sp<GrPromiseImageTexture>> promise_image_textures) {
   owned_promise_image_textures_ = std::move(promise_image_textures);
   promise_image_textures_.clear();
   for (auto& owned_texture : owned_promise_image_textures_) {
@@ -97,43 +167,156 @@ void ImageContextImpl::SetPromiseImageTextures(
   }
 }
 
-void ImageContextImpl::DeleteFallbackGrBackendTextures() {
+void ImageContextImpl::DeleteFallbackTextures() {
   if (fallback_context_state_) {
-    for (auto& fallback_texture : fallback_textures_)
-      gpu::DeleteGrBackendTexture(fallback_context_state_, &fallback_texture);
+    if (fallback_context_state_->gr_context()) {
+      CHECK(graphite_fallback_textures_.empty());
+      for (auto& fallback_texture : fallback_textures_) {
+        gpu::DeleteGrBackendTexture(fallback_context_state_, &fallback_texture);
+      }
+    } else {
+      CHECK(fallback_context_state_->gpu_main_graphite_recorder());
+      CHECK(fallback_textures_.empty());
+      for (auto& fallback_texture : graphite_fallback_textures_) {
+        fallback_context_state_->gpu_main_graphite_recorder()
+            ->deleteBackendTexture(fallback_texture);
+      }
+    }
   }
   fallback_context_state_ = nullptr;
   fallback_textures_.clear();
+  graphite_fallback_textures_.clear();
 }
 
 void ImageContextImpl::CreateFallbackImage(
     gpu::SharedContextState* context_state) {
+  const int num_planes = format().NumberOfPlanes();
+  TRACE_EVENT_BEGIN("viz", "ImageContextImpl::CreateFallbackImage");
+
+  CreateFallbackImageResult result = CreateFallbackImageResult::kSuccess;
+  absl::Cleanup record_results = [&result] {
+    base::UmaHistogramEnumeration("Viz.CreateFallbackImageResult", result);
+    TRACE_EVENT_END("viz", "result", CreateFallbackImageResultToString(result));
+  };
+
+  if (format().PrefersExternalSampler()) {
+    // Skia can't allocate a fallback texture since the original texture was
+    // externally allocated.
+    result = CreateFallbackImageResult::kFailedPrefersExternalSampler;
+    return;
+  }
+
+  if (context_state->graphite_shared_context()) {
+    if (graphite_ycbcr_info_mismatch_) {
+      // It is not possible to allocate a fallback texture if the failure was
+      // due to a mismatch in YCBCr info between the promise image and the
+      // fulfillment texture.
+      result = CreateFallbackImageResult::kFailedYcbcrMismatch;
+      return;
+    }
+
+    const auto& tex_infos = texture_infos();
+    if (tex_infos.size() != static_cast<size_t>(num_planes) ||
+        std::ranges::any_of(tex_infos, [](const auto& tex_info) {
+          return !tex_info.isValid();
+        })) {
+      DLOG(ERROR) << "Invalid Graphite texture infos for format: "
+                  << format().ToString();
+      result = CreateFallbackImageResult::kFailedInvalidTextureInfo;
+      return;
+    }
+
+#if BUILDFLAG(SKIA_USE_DAWN)
+    skgpu::graphite::DawnTextureInfo dawn_info;
+    bool success = skgpu::graphite::TextureInfos::GetDawnTextureInfo(
+        tex_infos[0], &dawn_info);
+    if (success && dawn_info.fFormat == wgpu::TextureFormat::External) {
+      // Skia can't allocate a fallback texture since the original texture was
+      // externally allocated.
+      result = CreateFallbackImageResult::kFailedExternalTexture;
+      return;
+    }
+#endif
+
+    DCHECK(!fallback_context_state_);
+    fallback_context_state_ = context_state;
+    for (int plane_index = 0; plane_index < num_planes; plane_index++) {
+      SkISize sk_size =
+          gfx::SizeToSkISize(format().GetPlaneSize(plane_index, size()));
+      auto tex_info =
+          gpu::FallbackGraphiteBackendTextureInfo(tex_infos[plane_index]);
+      auto texture = fallback_context_state_->gpu_main_graphite_recorder()
+                         ->createBackendTexture(sk_size, tex_info);
+      if (!texture.isValid()) {
+        DLOG(ERROR) << "Failed to create fallback graphite backend texture";
+        DeleteFallbackTextures();
+        result = CreateFallbackImageResult::kFailedCreateTexture;
+        return;
+      }
+      graphite_fallback_textures_.push_back(texture);
+    }
+    graphite_textures_ = graphite_fallback_textures_;
+
+    for (int plane_index = 0; plane_index < num_planes; plane_index++) {
+      SkColorType color_type = ToClosestSkColorType(format(), plane_index);
+      auto sk_surface = SkSurfaces::WrapBackendTexture(
+          fallback_context_state_->gpu_main_graphite_recorder(),
+          graphite_fallback_textures_[plane_index], color_type,
+          GetSkColorSpace(),
+          /*props=*/nullptr);
+      CHECK(sk_surface);
+      sk_surface->getCanvas()->clear(
+          GetFallbackColorForPlane(format(), plane_index));
+    }
+
+    // Snap and insert recording for GPU work needed for clearing the surface.
+    // If this is not done, the fallback image may be used in a Submit after
+    // destruction if it waits too long for snap to happen during rasterization
+    // on GPU main thread.
+    auto recording =
+        fallback_context_state_->gpu_main_graphite_recorder()->snap();
+    if (recording) {
+      skgpu::graphite::InsertRecordingInfo info = {};
+      info.fRecording = recording.get();
+      bool insert_success =
+          fallback_context_state_->graphite_shared_context()->insertRecording(
+              info);
+      if (!insert_success) {
+        DLOG(ERROR) << "Failed to insert recording";
+      }
+    }
+    return;
+  }
+
   // We can't allocate a fallback texture as the original texture was externally
-  // allocated. Skia will skip drawing a null SkPromiseImageTexture, do nothing
+  // allocated. Skia will skip drawing a null GrPromiseImageTexture, do nothing
   // and leave it null.
   const auto& formats = backend_formats();
-  if (formats.empty() || formats[0].textureType() == GrTextureType::kExternal)
+  if (formats.empty() || formats[0].textureType() == GrTextureType::kExternal) {
+    result = CreateFallbackImageResult::kFailedExternalTexture;
     return;
+  }
 
   DCHECK(!fallback_context_state_);
   fallback_context_state_ = context_state;
 
-  std::vector<sk_sp<SkPromiseImageTexture>> promise_textures;
-  for (int plane_index = 0; plane_index < format().NumberOfPlanes();
-       plane_index++) {
+  std::vector<sk_sp<GrPromiseImageTexture>> promise_textures;
+  for (int plane_index = 0; plane_index < num_planes; plane_index++) {
     DCHECK_NE(formats[plane_index].textureType(), GrTextureType::kExternal);
+    auto plane_size = format().GetPlaneSize(plane_index, size());
     auto fallback_texture =
         fallback_context_state_->gr_context()->createBackendTexture(
-            size().width(), size().height(), formats[plane_index],
-            GetFallbackColorForPlane(format(), plane_index), GrMipMapped::kNo,
-            GrRenderable::kYes);
+            plane_size.width(), plane_size.height(), formats[plane_index],
+            GetFallbackColorForPlane(format(), plane_index),
+            skgpu::Mipmapped::kNo, GrRenderable::kYes);
 
     if (!fallback_texture.isValid()) {
-      DeleteFallbackGrBackendTextures();
+      DeleteFallbackTextures();
       DLOG(ERROR) << "Could not create backend texture.";
+      result = CreateFallbackImageResult::kFailedCreateTexture;
       return;
     }
-    auto promise_texture = SkPromiseImageTexture::Make(fallback_texture);
+    auto promise_texture = GrPromiseImageTexture::Make(fallback_texture);
     promise_textures.push_back(std::move(promise_texture));
     fallback_textures_.push_back(fallback_texture);
   }
@@ -143,82 +326,15 @@ void ImageContextImpl::CreateFallbackImage(
 void ImageContextImpl::BeginAccessIfNecessary(
     gpu::SharedContextState* context_state,
     gpu::SharedImageRepresentationFactory* representation_factory,
-    gpu::MailboxManager* mailbox_manager,
     std::vector<GrBackendSemaphore>* begin_semaphores,
     std::vector<GrBackendSemaphore>* end_semaphores) {
   if (representation_raster_scoped_access_)
     return;
 
-  // Prepare for accessing shared image.
-  if (mailbox_holder().mailbox.IsSharedImage()) {
-    if (!BeginAccessIfNecessaryForSharedImage(
-            context_state, representation_factory, begin_semaphores,
-            end_semaphores)) {
-      CreateFallbackImage(context_state);
-    }
-    return;
-  }
-
-  // Prepare for accessing legacy mailbox.
-  // The promise images have been fulfilled once, so we don't need to do
-  // anything.
-  if (!promise_image_textures_.empty())
-    return;
-
-  if (!context_state->GrContextIsGL()) {
-    // Probably this texture is created with wrong interface
-    // (GLES2Interface).
-    DLOG(ERROR) << "Failed to fulfill the promise texture whose backend is not "
-                   "compatible with vulkan.";
+  if (!BeginAccessIfNecessaryInternal(context_state, representation_factory,
+                                      begin_semaphores, end_semaphores)) {
     CreateFallbackImage(context_state);
-    return;
   }
-
-  auto* texture_base =
-      mailbox_manager->ConsumeTexture(mailbox_holder().mailbox);
-  if (!texture_base) {
-    DLOG(ERROR) << "Failed to fulfill the promise texture.";
-    CreateFallbackImage(context_state);
-    return;
-  }
-
-  gfx::Size texture_size;
-  if (BindOrCopyTextureIfNecessary(texture_base, &texture_size) &&
-      texture_size != size()) {
-    DLOG(ERROR) << "Failed to fulfill the promise texture - texture "
-                   "size does not match TransferableResource size: "
-                << texture_size.ToString() << " vs " << size().ToString();
-    CreateFallbackImage(context_state);
-    return;
-  }
-
-  // Legacy mailboxes support only single planar formats.
-  DCHECK(format().is_single_plane());
-  bool angle_rgbx_internal_format =
-      context_state->feature_info()->feature_flags().angle_rgbx_internal_format;
-  GrBackendTexture backend_texture;
-  GLenum gl_storage_internal_format =
-      gpu::TextureStorageFormat(format(), angle_rgbx_internal_format);
-  gpu::GetGrBackendTexture(
-      context_state->feature_info(), texture_base->target(), size(),
-      texture_base->service_id(), gl_storage_internal_format,
-      context_state->gr_context()->threadSafeProxy(), &backend_texture);
-  if (!backend_texture.isValid()) {
-    DLOG(ERROR) << "Failed to fulfill the promise texture.";
-    CreateFallbackImage(context_state);
-    return;
-  }
-  SetPromiseImageTextures({SkPromiseImageTexture::Make(backend_texture)});
-
-  // Hold onto a reference to legacy GL textures while still in use, see
-  // https://crbug.com/1118166 for why this is necessary.
-  if (texture_base->GetType() == gpu::TextureBase::Type::kPassthrough) {
-    texture_passthrough_ =
-        gpu::gles2::TexturePassthrough::CheckedCast(texture_base);
-  }
-  // TODO(crbug.com/1118166): The case above handles textures with the
-  // passthrough command decoder, verify if something is required for the
-  // validating command decoder as well.
 }
 
 bool ImageContextImpl::BeginRasterAccess(
@@ -229,10 +345,9 @@ bool ImageContextImpl::BeginRasterAccess(
     return true;
   }
 
-  auto raster =
-      raw_draw_if_possible_
-          ? representation_factory->ProduceRaster(mailbox_holder().mailbox)
-          : nullptr;
+  auto raster = raw_draw_if_possible_
+                    ? representation_factory->ProduceRaster(mailbox())
+                    : nullptr;
   if (!raster)
     return false;
 
@@ -249,36 +364,43 @@ bool ImageContextImpl::BeginRasterAccess(
   return true;
 }
 
-bool ImageContextImpl::BeginAccessIfNecessaryForSharedImage(
+bool ImageContextImpl::BeginAccessIfNecessaryInternal(
     gpu::SharedContextState* context_state,
     gpu::SharedImageRepresentationFactory* representation_factory,
     std::vector<GrBackendSemaphore>* begin_semaphores,
     std::vector<GrBackendSemaphore>* end_semaphores) {
   // Skip the context if it has been processed.
   if (representation_scoped_read_access_) {
-    DCHECK(owned_promise_image_textures_.empty());
-    DCHECK(!promise_image_textures_.empty());
+    CHECK(owned_promise_image_textures_.empty());
+    CHECK(!context_state->gr_context() || !promise_image_textures_.empty());
+    CHECK(!context_state->graphite_shared_context() ||
+          !graphite_textures_.empty());
     return true;
   }
 
   // promise_image_textures_ are not empty here, it means we are using a
   // fallback image.
   if (!promise_image_textures_.empty()) {
-    DCHECK_EQ(promise_image_textures_.size(),
-              owned_promise_image_textures_.size());
+    CHECK_EQ(promise_image_textures_.size(),
+             owned_promise_image_textures_.size());
+    return true;
+  }
+
+  if (!graphite_textures_.empty()) {
+    CHECK_EQ(graphite_textures_.size(), graphite_fallback_textures_.size());
     return true;
   }
 
   if (!representation_) {
-    auto representation = representation_factory->ProduceSkia(
-        mailbox_holder().mailbox, context_state);
+    auto representation =
+        representation_factory->ProduceSkia(mailbox(), context_state);
     if (!representation) {
       DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
                      "mailbox not found in SharedImageManager.";
       return false;
     }
 
-    if (!(representation->usage() & gpu::SHARED_IMAGE_USAGE_DISPLAY_READ)) {
+    if (!(representation->usage().Has(gpu::SHARED_IMAGE_USAGE_DISPLAY_READ))) {
       DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
                      "was not created with DISPLAY_READ usage.";
       return false;
@@ -298,6 +420,7 @@ bool ImageContextImpl::BeginAccessIfNecessaryForSharedImage(
   representation_scoped_read_access_ =
       representation_->BeginScopedReadAccess(begin_semaphores, end_semaphores);
   if (!representation_scoped_read_access_) {
+    clear_image();
     representation_ = nullptr;
     DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
                    "begin read access failed..";
@@ -307,47 +430,48 @@ bool ImageContextImpl::BeginAccessIfNecessaryForSharedImage(
   // Only one promise texture for external sampler case.
   int num_planes =
       format().PrefersExternalSampler() ? 1 : format().NumberOfPlanes();
-  for (int plane_index = 0; plane_index < num_planes; plane_index++) {
-    promise_image_textures_.push_back(
-        representation_scoped_read_access_->promise_image_texture(plane_index));
-  }
+  if (context_state->graphite_shared_context()) {
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(SKIA_USE_DAWN)
+    // In the case of video decoding, it is possible for there to be a mismatch
+    // between the YCbCr info passed to Viz at the time of creating the promise
+    // texture and that computed at the time of fulfilling the promise texture.
+    // Detect such mismatches and error out, as Skia/Dawn will raise errors.
+    graphite_ycbcr_info_mismatch_ = false;
 
-  return true;
-}
+    skgpu::graphite::DawnTextureInfo fulfillment_texture_info;
+    CHECK(skgpu::graphite::TextureInfos::GetDawnTextureInfo(
+        representation_scoped_read_access_->graphite_texture(0).info(),
+        &fulfillment_texture_info));
 
-bool ImageContextImpl::BindOrCopyTextureIfNecessary(
-    gpu::TextureBase* texture_base,
-    gfx::Size* size) {
-  if (texture_base->GetType() != gpu::TextureBase::Type::kValidated)
-    return false;
-  // If a texture is validated and bound to an image, we may defer copying the
-  // image to the texture until the texture is used. It is for implementing low
-  // latency drawing (e.g. fast ink) and avoiding unnecessary texture copy. So
-  // we need check the texture image state, and bind or copy the image to the
-  // texture if necessary.
-  auto* texture = gpu::gles2::Texture::CheckedCast(texture_base);
-  gpu::gles2::Texture::ImageState image_state;
-  auto* image = texture->GetLevelImage(GL_TEXTURE_2D, 0, &image_state);
-  if (image && image_state == gpu::gles2::Texture::UNBOUND) {
-    glBindTexture(texture_base->target(), texture_base->service_id());
-    if (image->ShouldBindOrCopy() == gl::GLImage::BIND) {
-      if (!image->BindTexImage(texture_base->target())) {
-        LOG(ERROR) << "Failed to bind a gl image to texture.";
-        return false;
-      }
-    } else {
-      texture->SetLevelImageState(texture_base->target(), 0,
-                                  gpu::gles2::Texture::COPIED);
-      if (!image->CopyTexImage(texture_base->target())) {
-        LOG(ERROR) << "Failed to copy a gl image to texture.";
-        return false;
-      }
+    wgpu::YCbCrVkDescriptor promise_texture_ycbcr_desc = {};
+    if (ycbcr_info()) {
+      promise_texture_ycbcr_desc =
+          gpu::ToDawnYCbCrVkDescriptor(ycbcr_info().value());
+    }
+    wgpu::YCbCrVkDescriptor fulfillment_texture_ycbcr_desc =
+        fulfillment_texture_info.fYcbcrVkDescriptor;
+
+    if (!DawnYCbCrVkDescriptorsAreCompatible(promise_texture_ycbcr_desc,
+                                             fulfillment_texture_ycbcr_desc)) {
+      graphite_ycbcr_info_mismatch_ = true;
+      representation_scoped_read_access_.reset();
+      return false;
+    }
+#endif
+
+    for (int plane_index = 0; plane_index < num_planes; plane_index++) {
+      graphite_textures_.push_back(
+          representation_scoped_read_access_->graphite_texture(plane_index));
+    }
+  } else {
+    CHECK(context_state->gr_context());
+    for (int plane_index = 0; plane_index < num_planes; plane_index++) {
+      promise_image_textures_.push_back(
+          representation_scoped_read_access_->promise_image_texture(
+              plane_index));
     }
   }
-  GLsizei temp_width, temp_height;
-  texture->GetLevelSize(texture_base->target(), 0 /* level */, &temp_width,
-                        &temp_height, nullptr /* depth */);
-  *size = gfx::Size(temp_width, temp_height);
+
   return true;
 }
 
@@ -363,11 +487,13 @@ void ImageContextImpl::EndAccessIfNecessary() {
   // Avoid unnecessary read access churn for representations that
   // support multiple readers.
   if (representation_->SupportsMultipleConcurrentReadAccess() &&
-      allow_keeping_read_access_)
+      !is_for_render_pass_) {
     return;
+  }
 
   representation_scoped_read_access_.reset();
   promise_image_textures_.clear();
+  graphite_textures_.clear();
 }
 
 }  // namespace viz

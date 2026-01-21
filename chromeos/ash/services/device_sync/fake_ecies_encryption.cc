@@ -22,7 +22,7 @@ std::string GetPrivateKeyFromPublicKeyForTest(const std::string& public_key) {
 }
 
 std::string GetPublicKeyFromPrivateKeyForTest(const std::string& private_key) {
-  DCHECK_NE(std::string::npos, private_key.find(kPrivateKeyPrefix));
+  DCHECK(private_key.contains(kPrivateKeyPrefix));
 
   return private_key.substr(strlen(kPrivateKeyPrefix), private_key.length());
 }

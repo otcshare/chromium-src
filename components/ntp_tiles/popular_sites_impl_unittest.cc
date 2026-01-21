@@ -6,19 +6,19 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
@@ -34,7 +34,6 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::_;
 using testing::Contains;
@@ -56,12 +55,11 @@ const char kFaviconUrl[] = "favicon_url";
 const char kSection[] = "section";
 const char kSites[] = "sites";
 const char kTitleSource[] = "title_source";
-const char kIOSDefaultPopularSitesExperimentIncludeApps[] =
+#if BUILDFLAG(IS_IOS)
+const char kIOSDefaultPopularSitesLocaleUS[] =
     "https://www.gstatic.com/chrome/ntp/ios/"
     "suggested_sites_US_2023q1_mvt_experiment_with_popular_sites.json";
-const char kIOSDefaultPopularSitesExperimentExcludeApps[] =
-    "https://www.gstatic.com/chrome/ntp/ios/"
-    "suggested_sites_US_2023q1_mvt_experiment_without_popular_sites.json";
+#endif
 
 using TestPopularSite = std::map<std::string, std::string>;
 using TestPopularSiteVector = std::vector<TestPopularSite>;
@@ -140,8 +138,8 @@ class PopularSitesTest : public ::testing::Test {
 
   void RespondWithV5JSON(const std::string& url,
                          const TestPopularSiteVector& sites) {
-    std::string sites_string;
-    base::JSONWriter::Write(CreateListFromTestSites(sites), &sites_string);
+    std::string sites_string =
+        base::WriteJson(CreateListFromTestSites(sites)).value_or("");
     test_url_loader_factory_.AddResponse(url, sites_string);
   }
 
@@ -155,8 +153,7 @@ class PopularSitesTest : public ::testing::Test {
       section_value.Set(kSites, CreateListFromTestSites(section.second));
       sections_value.Append(std::move(section_value));
     }
-    std::string sites_string;
-    base::JSONWriter::Write(sections_value, &sites_string);
+    std::string sites_string = base::WriteJson(sections_value).value_or("");
     test_url_loader_factory_.AddResponse(url, sites_string);
   }
 
@@ -175,10 +172,10 @@ class PopularSitesTest : public ::testing::Test {
 
   // Returns an optional bool representing whether the completion callback was
   // called at all, and if yes which was the returned bool value.
-  absl::optional<bool> FetchPopularSites(bool force_download,
-                                         PopularSites::SitesVector* sites) {
+  std::optional<bool> FetchPopularSites(bool force_download,
+                                        PopularSites::SitesVector* sites) {
     std::map<SectionType, PopularSites::SitesVector> sections;
-    absl::optional<bool> save_success =
+    std::optional<bool> save_success =
         FetchAllSections(force_download, &sections);
     *sites = sections.at(SectionType::PERSONALIZED);
     return save_success;
@@ -186,16 +183,16 @@ class PopularSitesTest : public ::testing::Test {
 
   // Returns an optional bool representing whether the completion callback was
   // called at all, and if yes which was the returned bool value.
-  absl::optional<bool> FetchAllSections(
+  std::optional<bool> FetchAllSections(
       bool force_download,
       std::map<SectionType, PopularSites::SitesVector>* sections) {
     std::unique_ptr<PopularSites> popular_sites = CreatePopularSites();
 
     base::RunLoop loop;
-    absl::optional<bool> save_success;
+    std::optional<bool> save_success;
     if (popular_sites->MaybeStartFetch(
             force_download, base::BindOnce(
-                                [](absl::optional<bool>* save_success,
+                                [](std::optional<bool>* save_success,
                                    base::RunLoop* loop, bool success) {
                                   save_success->emplace(success);
                                   loop->Quit();
@@ -218,7 +215,7 @@ class PopularSitesTest : public ::testing::Test {
   const TestPopularSite kYouTube;
   const TestPopularSite kChromium;
 
-  base::test::SingleThreadTaskEnvironment task_environment_{
+  base::test::TaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::UI};
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> prefs_;
@@ -253,7 +250,7 @@ TEST_F(PopularSitesTest, ShouldSucceedFetching) {
 
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].title, Str16Eq("Wikipedia, fhta Ph'nglui mglw'nafh"));
@@ -264,19 +261,14 @@ TEST_F(PopularSitesTest, ShouldSucceedFetching) {
   EXPECT_THAT(sites[0].title_source, Eq(TileTitleSource::TITLE_TAG));
 }
 
-TEST_F(PopularSitesTest,
-       ShouldSucceedFetchingIOSExperimentalSitesWithPopularApps) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      ntp_tiles::kIOSPopularSitesImprovedSuggestions,
-      {{ntp_tiles::kIOSPopularSitesExcludePopularAppsParam, "false"}});
-
+#if BUILDFLAG(IS_IOS)
+TEST_F(PopularSitesTest, ShouldSucceedFetchingDefaultPopularSitesForLocaleUS) {
   SetCountryAndVersion("US", "5");
-  RespondWithV5JSON(kIOSDefaultPopularSitesExperimentIncludeApps, {kWikipedia});
+  RespondWithV5JSON(kIOSDefaultPopularSitesLocaleUS, {kWikipedia});
 
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].title, Str16Eq("Wikipedia, fhta Ph'nglui mglw'nafh"));
@@ -286,29 +278,7 @@ TEST_F(PopularSitesTest,
   EXPECT_THAT(sites[0].favicon_url, URLEq(""));
   EXPECT_THAT(sites[0].title_source, Eq(TileTitleSource::TITLE_TAG));
 }
-
-TEST_F(PopularSitesTest,
-       ShouldSucceedFetchingIOSExperimentalSitesWithoutPopularApps) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      ntp_tiles::kIOSPopularSitesImprovedSuggestions,
-      {{ntp_tiles::kIOSPopularSitesExcludePopularAppsParam, "true"}});
-
-  SetCountryAndVersion("US", "5");
-  RespondWithV5JSON(kIOSDefaultPopularSitesExperimentExcludeApps, {kWikipedia});
-
-  PopularSites::SitesVector sites;
-  EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
-              Eq(absl::optional<bool>(true)));
-
-  ASSERT_THAT(sites.size(), Eq(1u));
-  EXPECT_THAT(sites[0].title, Str16Eq("Wikipedia, fhta Ph'nglui mglw'nafh"));
-  EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
-  EXPECT_THAT(sites[0].large_icon_url,
-              URLEq("https://zz.m.wikipedia.org/wikipedia.png"));
-  EXPECT_THAT(sites[0].favicon_url, URLEq(""));
-  EXPECT_THAT(sites[0].title_source, Eq(TileTitleSource::TITLE_TAG));
-}
+#endif
 
 TEST_F(PopularSitesTest, Fallback) {
   SetCountryAndVersion("ZZ", "5");
@@ -320,7 +290,7 @@ TEST_F(PopularSitesTest, Fallback) {
 
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   ASSERT_THAT(sites.size(), Eq(2u));
   EXPECT_THAT(sites[0].title, Str16Eq("YouTube"));
@@ -348,7 +318,7 @@ TEST_F(PopularSitesTest, PopulatesWithDefaultResoucesOnFailure) {
 
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(false)));
+              Eq(std::optional<bool>(false)));
   EXPECT_THAT(sites.size(), Eq(GetNumberOfDefaultPopularSitesForPlatform()));
 }
 
@@ -376,11 +346,11 @@ TEST_F(PopularSitesTest, ProvidesDefaultSitesUntilCallbackReturns) {
   std::unique_ptr<PopularSites> popular_sites = CreatePopularSites();
 
   base::RunLoop loop;
-  absl::optional<bool> save_success = false;
+  std::optional<bool> save_success = false;
 
   bool callback_was_scheduled = popular_sites->MaybeStartFetch(
       /*force_download=*/true, base::BindOnce(
-                                   [](absl::optional<bool>* save_success,
+                                   [](std::optional<bool>* save_success,
                                       base::RunLoop* loop, bool success) {
                                      save_success->emplace(success);
                                      loop->Quit();
@@ -410,13 +380,13 @@ TEST_F(PopularSitesTest, UsesCachedJson) {
   // First request succeeds and gets cached.
   PopularSites::SitesVector sites;
   ASSERT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   // File disappears from server, but we don't need it because it's cached.
   RespondWith404(
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_5.json");
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::nullopt));
+              Eq(std::nullopt));
   EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
 }
 
@@ -431,7 +401,7 @@ TEST_F(PopularSitesTest, CachesEmptyFile) {
   // First request succeeds and caches empty suggestions list (no fallback).
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites, IsEmpty());
 
   // File appears on server, but we continue to use our cached empty file.
@@ -439,7 +409,7 @@ TEST_F(PopularSitesTest, CachesEmptyFile) {
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_5.json",
       {kWikipedia});
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::nullopt));
+              Eq(std::nullopt));
   EXPECT_THAT(sites, IsEmpty());
 }
 
@@ -452,7 +422,7 @@ TEST_F(PopularSitesTest, DoesntUseCachedFileIfDownloadForced) {
   // First request succeeds and gets cached.
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
 
   // File disappears from server. Download is forced, so we get the new file.
@@ -460,8 +430,22 @@ TEST_F(PopularSitesTest, DoesntUseCachedFileIfDownloadForced) {
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_5.json",
       {kChromium});
   EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
+}
+
+// V7 uses the V5 format. ParseSites() should be detect this, and fall back to
+// to ParseSimple().
+TEST_F(PopularSitesTest, ParsesV7AsV5) {
+  SetCountryAndVersion("ZZ", "7");
+  RespondWithV5JSON(
+      "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_7.json",
+      {kChromium});
+  PopularSites::SitesVector sites;
+  EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
+              Eq(std::optional<bool>(true)));
+  EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
+  EXPECT_THAT(prefs_->GetInteger(prefs::kPopularSitesVersionPref), Eq(7));
 }
 
 TEST_F(PopularSitesTest, DoesntUseCacheWithDeprecatedVersion) {
@@ -473,7 +457,7 @@ TEST_F(PopularSitesTest, DoesntUseCacheWithDeprecatedVersion) {
   // First request succeeds and gets cached.
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
   EXPECT_THAT(prefs_->GetInteger(prefs::kPopularSitesVersionPref), Eq(5));
 
@@ -483,7 +467,7 @@ TEST_F(PopularSitesTest, DoesntUseCacheWithDeprecatedVersion) {
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_6.json",
       {{SectionType::PERSONALIZED, {kChromium}}});
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
   EXPECT_THAT(prefs_->GetInteger(prefs::kPopularSitesVersionPref), Eq(6));
 }
@@ -496,7 +480,7 @@ TEST_F(PopularSitesTest, FallsBackToDefaultParserIfVersionContainsNoNumber) {
       {kChromium});
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
 }
@@ -514,13 +498,13 @@ TEST_F(PopularSitesTest, RefetchesAfterCountryMoved) {
   // First request (in ZZ) saves Wikipedia.
   SetCountryAndVersion("ZZ", "5");
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
 
   // Second request (now in ZX) saves Chromium.
   SetCountryAndVersion("ZX", "5");
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              absl::optional<bool>(true));
+              std::optional<bool>(true));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
 }
 
@@ -535,14 +519,14 @@ TEST_F(PopularSitesTest, DoesntCacheInvalidFile) {
   // First request falls back and gets nothing there either.
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(false)));
+              Eq(std::optional<bool>(false)));
 
   // Second request refetches ZZ_9, which now has data.
   RespondWithV5JSON(
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_5.json",
       {kChromium});
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
 }
@@ -558,7 +542,7 @@ TEST_F(PopularSitesTest, RefetchesAfterFallback) {
   // First request falls back.
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].url, URLEq("https://zz.m.wikipedia.org/"));
 
@@ -567,7 +551,7 @@ TEST_F(PopularSitesTest, RefetchesAfterFallback) {
       "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_5.json",
       {kChromium});
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
   ASSERT_THAT(sites.size(), Eq(1u));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
 }
@@ -580,7 +564,7 @@ TEST_F(PopularSitesTest, ShouldOverrideDirectory) {
 
   PopularSites::SitesVector sites;
   EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   EXPECT_THAT(sites.size(), Eq(1u));
 }
@@ -594,7 +578,7 @@ TEST_F(PopularSitesTest, DoesNotFetchExplorationSites) {
 
   std::map<SectionType, PopularSites::SitesVector> sections;
   EXPECT_THAT(FetchAllSections(/*force_download=*/false, &sections),
-              Eq(absl::optional<bool>(true)));
+              Eq(std::optional<bool>(true)));
 
   // The fetched news section should not be propagated without enabled feature.
   EXPECT_THAT(sections, Not(Contains(Pair(SectionType::NEWS, _))));

@@ -4,6 +4,7 @@
 
 #include "components/feed/core/v2/public/feed_service.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -13,7 +14,9 @@
 #include "base/rand_util.h"
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
+#include "components/country_codes/country_codes.h"
 #include "components/feed/core/common/pref_names.h"
 #include "components/feed/core/shared_prefs/pref_names.h"
 #include "components/feed/core/v2/feed_network_impl.h"
@@ -30,6 +33,8 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -76,13 +81,21 @@ class FeedService::HistoryObserverImpl
   HistoryObserverImpl& operator=(const HistoryObserverImpl&) = delete;
 
   // history::HistoryServiceObserver.
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override {
-    if (internal::ShouldClearFeed(
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override {
+    if (feed_stream_ && identity_manager_ &&
+        internal::ShouldClearFeed(
             identity_manager_->HasPrimaryAccount(
                 GetConsentLevelNeededForPersonalizedFeed()),
-            deletion_info))
+            deletion_info)) {
       feed_stream_->OnAllHistoryDeleted();
+    }
+  }
+
+  void Shutdown() {
+    feed_stream_ = nullptr;
+    identity_manager_ = nullptr;
+    scoped_history_service_observer_.Reset();
   }
 
  private:
@@ -121,35 +134,40 @@ class FeedService::NetworkDelegateImpl : public FeedNetworkImpl::Delegate {
 
 class FeedService::StreamDelegateImpl : public FeedStream::Delegate {
  public:
-  StreamDelegateImpl(PrefService* local_state,
-                     FeedService::Delegate* service_delegate,
-                     signin::IdentityManager* identity_manager)
+  StreamDelegateImpl(FeedService::Delegate* service_delegate,
+                     signin::IdentityManager* identity_manager,
+                     PrefService* profile_prefs)
       : service_delegate_(service_delegate),
-        eula_notifier_(local_state),
-        identity_manager_(identity_manager) {}
+        identity_manager_(identity_manager),
+        profile_prefs_(profile_prefs) {}
   StreamDelegateImpl(const StreamDelegateImpl&) = delete;
   StreamDelegateImpl& operator=(const StreamDelegateImpl&) = delete;
 
-  void Initialize(FeedStream* feed_stream) {
+  void Initialize(FeedStream* feed_stream, PrefService* local_state) {
+    eula_notifier_ =
+        std::make_unique<web_resource::EulaAcceptedNotifier>(local_state);
     eula_observer_ = std::make_unique<EulaObserver>(feed_stream);
-    eula_notifier_.Init(eula_observer_.get());
+    eula_notifier_->Init(eula_observer_.get());
   }
 
   // FeedStream::Delegate.
   bool IsEulaAccepted() override {
-    return eula_notifier_.IsEulaAccepted() ||
-           base::CommandLine::ForCurrentProcess()->HasSwitch(
-               "feed-screenshot-mode");
+    if (eula_notifier_) {
+      return eula_notifier_->IsEulaAccepted() ||
+             base::CommandLine::ForCurrentProcess()->HasSwitch(
+                 "feed-screenshot-mode");
+    }
+    return false;
   }
   bool IsOffline() override { return net::NetworkChangeNotifier::IsOffline(); }
+
+  std::string GetCountry() override { return service_delegate_->GetCountry(); }
+
   DisplayMetrics GetDisplayMetrics() override {
     return service_delegate_->GetDisplayMetrics();
   }
   std::string GetLanguageTag() override {
     return service_delegate_->GetLanguageTag();
-  }
-  bool IsAutoplayEnabled() override {
-    return service_delegate_->IsAutoplayEnabled();
   }
   TabGroupEnabledState GetTabGroupEnabledState() override {
     return service_delegate_->GetTabGroupEnabledState();
@@ -162,6 +180,11 @@ class FeedService::StreamDelegateImpl : public FeedStream::Delegate {
     return AccountInfo(identity_manager_->GetPrimaryAccountInfo(
         GetConsentLevelNeededForPersonalizedFeed()));
   }
+  // Returns if signin is allowed on Android. Return true on other platform so
+  // behavior is unchanged there.
+  bool IsSigninAllowed() override {
+    return profile_prefs_->GetBoolean(::prefs::kSigninAllowed);
+  }
   void RegisterExperiments(const Experiments& experiments) override {
     service_delegate_->RegisterExperiments(experiments);
   }
@@ -169,16 +192,25 @@ class FeedService::StreamDelegateImpl : public FeedStream::Delegate {
       size_t follow_count) override {
     service_delegate_->RegisterFollowingFeedFollowCountFieldTrial(follow_count);
   }
-  void RegisterFeedUserSettingsFieldTrial(base::StringPiece group) override {
+  void RegisterFeedUserSettingsFieldTrial(std::string_view group) override {
     service_delegate_->RegisterFeedUserSettingsFieldTrial(group);
+  }
+  void SetFeedLaunchCuiMetadata(const std::string& metadata) override {
+    service_delegate_->SetFeedLaunchCuiMetadata(metadata);
+  }
+
+  void Shutdown() {
+    eula_notifier_.reset();
+    eula_observer_.reset();
   }
 
  private:
   raw_ptr<FeedService::Delegate> service_delegate_;
-  web_resource::EulaAcceptedNotifier eula_notifier_;
+  std::unique_ptr<web_resource::EulaAcceptedNotifier> eula_notifier_;
   std::unique_ptr<EulaObserver> eula_observer_;
   std::unique_ptr<HistoryObserverImpl> history_observer_;
   raw_ptr<signin::IdentityManager> identity_manager_;
+  raw_ptr<PrefService> profile_prefs_;
 };
 
 class FeedService::IdentityManagerObserverImpl
@@ -234,11 +266,12 @@ FeedService::FeedService(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     scoped_refptr<base::SequencedTaskRunner> background_task_runner,
     const std::string& api_key,
-    const ChromeInfo& chrome_info)
+    const ChromeInfo& chrome_info,
+    TemplateURLService* template_url_service)
     : delegate_(std::move(delegate)),
       refresh_task_scheduler_(std::move(refresh_task_scheduler)) {
   stream_delegate_ = std::make_unique<StreamDelegateImpl>(
-      local_state, delegate_.get(), identity_manager);
+      delegate_.get(), identity_manager, profile_prefs);
   network_delegate_ =
       std::make_unique<NetworkDelegateImpl>(delegate_.get(), identity_manager);
   metrics_reporter_ = std::make_unique<MetricsReporter>(profile_prefs);
@@ -254,13 +287,14 @@ FeedService::FeedService(
       refresh_task_scheduler_.get(), metrics_reporter_.get(),
       stream_delegate_.get(), profile_prefs, feed_network_.get(),
       image_fetcher_.get(), store_.get(), persistent_key_value_store_.get(),
-      chrome_info);
+      template_url_service, chrome_info);
   api_ = stream_.get();
 
   history_observer_ = std::make_unique<HistoryObserverImpl>(
       history_service, static_cast<FeedStream*>(stream_.get()),
       identity_manager);
-  stream_delegate_->Initialize(static_cast<FeedStream*>(stream_.get()));
+  stream_delegate_->Initialize(static_cast<FeedStream*>(stream_.get()),
+                               local_state);
 
   identity_manager_observer_ = std::make_unique<IdentityManagerObserverImpl>(
       identity_manager, stream_.get(), delegate_.get());
@@ -294,6 +328,14 @@ void FeedService::ClearCachedData() {
   stream_->OnCacheDataCleared();
 }
 
+const Experiments& FeedService::GetExperiments() const {
+  return delegate_->GetExperiments();
+}
+
+const std::string& FeedService::GetFeedLaunchCuiMetadata() const {
+  return delegate_->GetFeedLaunchCuiMetadata();
+}
+
 // static
 bool FeedService::IsEnabled(const PrefService& pref_service) {
   return pref_service.GetBoolean(feed::prefs::kEnableSnippets);
@@ -318,8 +360,11 @@ uint64_t FeedService::GetReliabilityLoggingId(const std::string& metrics_id,
 }
 
 bool FeedService::IsSignedIn() {
-  return identity_manager_observer_->identity_manager().HasPrimaryAccount(
-      GetConsentLevelNeededForPersonalizedFeed());
+  if (identity_manager_observer_) {
+    return identity_manager_observer_->identity_manager().HasPrimaryAccount(
+        GetConsentLevelNeededForPersonalizedFeed());
+  }
+  return false;
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -337,5 +382,16 @@ void FeedService::OnApplicationStateChange(
   }
 }
 #endif
+
+void FeedService::Shutdown() {
+  identity_manager_observer_.reset();
+  if (history_observer_) {
+    history_observer_->Shutdown();
+  }
+
+  if (stream_delegate_) {
+    stream_delegate_->Shutdown();
+  }
+}
 
 }  // namespace feed

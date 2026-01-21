@@ -6,35 +6,64 @@
 #define COMPONENTS_AUTOFILL_CONTENT_BROWSER_CONTENT_AUTOFILL_DRIVER_FACTORY_TEST_API_H_
 
 #include <memory>
-#include <string>
 
 #include "base/memory/ptr_util.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
+#include "components/autofill/core/browser/foundations/autofill_driver_factory_test_api.h"
 
 namespace autofill {
 
-class ContentAutofillDriverFactoryTestApi {
+// Exposes some testing operations for ContentAutofillDriverFactory.
+class ContentAutofillDriverFactoryTestApi
+    : public AutofillDriverFactoryTestApi {
  public:
   static std::unique_ptr<ContentAutofillDriverFactory> Create(
       content::WebContents* web_contents,
-      AutofillClient* client,
-      ContentAutofillDriverFactory::DriverInitCallback driver_init_hook);
+      ContentAutofillClient* client);
 
   explicit ContentAutofillDriverFactoryTestApi(
       ContentAutofillDriverFactory* factory);
 
-  size_t num_drivers() const { return factory_->driver_map_.size(); }
+  size_t num_drivers() { return factory().driver_map_.size(); }
 
-  void SetDriver(content::RenderFrameHost* rfh,
-                 std::unique_ptr<ContentAutofillDriver> driver);
+  // Replaces the existing driver for `rfh` with `new_driver`. This is a
+  // stealthy operation:
+  // - It does not fire any events.
+  // - It does does not invalidate any references. More precisely:
+  //   std::unique_ptr<ContentAutofillDriver>& old_driver = ...;
+  //   std::unique_ptr<ContentAutofillDriver> new_driver = ...;
+  //   ContentAutofillDriver* new_driver_raw = new_driver.get();
+  //   ExchangeDriver(rfh, std::move(new_driver));
+  //   CHECK_EQ(old_driver.get(), new_driver_raw);
+  std::unique_ptr<ContentAutofillDriver> ExchangeDriver(
+      content::RenderFrameHost* rfh,
+      std::unique_ptr<ContentAutofillDriver> new_driver);
+
+  ContentAutofillDriver* DriverForFrame(content::RenderFrameHost* rfh);
   ContentAutofillDriver* GetDriver(content::RenderFrameHost* rfh);
 
-  ContentAutofillRouter& router() { return factory_->router_; }
+  // Simulates a reset of an active or inactive driver and its manager. The
+  // driver transitions back to its original state after the reset, as in
+  // production code (see `AutofillDriver::LifecycleState`).
+  void Reset(ContentAutofillDriver& driver);
+
+  // TODO(crbug.com/445023368): Remove when SensitiveContentManager's unit test
+  // is removed or doesn't use WebContents anymore.
+  void SetLifecycleStateAndNotifyObservers(
+      ContentAutofillDriver& driver,
+      AutofillDriver::LifecycleState new_state);
 
  private:
-  raw_ptr<ContentAutofillDriverFactory> factory_;
+  ContentAutofillDriverFactory& factory() {
+    return static_cast<ContentAutofillDriverFactory&>(*factory_);
+  }
 };
+
+inline ContentAutofillDriverFactoryTestApi test_api(
+    ContentAutofillDriverFactory& factory) {
+  return ContentAutofillDriverFactoryTestApi(&factory);
+}
 
 }  // namespace autofill
 

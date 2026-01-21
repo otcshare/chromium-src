@@ -5,12 +5,12 @@
 #ifndef UI_BASE_COCOA_BUBBLE_CLOSER_H_
 #define UI_BASE_COCOA_BUBBLE_CLOSER_H_
 
-#include <objc/objc.h>
+#include <memory>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "ui/base/cocoa/weak_ptr_nsobject.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -21,7 +21,8 @@ class COMPONENT_EXPORT(UI_BASE) BubbleCloser {
  public:
   // Installs an event monitor watching for mouse clicks outside of |window| or
   // any of its child windows. Invokes |on_click_outside| on each event.
-  BubbleCloser(NSWindow* window, base::RepeatingClosure on_click_outside);
+  BubbleCloser(gfx::NativeWindow window,
+               base::RepeatingClosure on_click_outside);
 
   BubbleCloser(const BubbleCloser&) = delete;
   BubbleCloser& operator=(const BubbleCloser&) = delete;
@@ -31,9 +32,12 @@ class COMPONENT_EXPORT(UI_BASE) BubbleCloser {
  private:
   void OnClickOutside();
 
-  id event_tap_;  // Weak. Owned by AppKit.
   base::RepeatingClosure on_click_outside_;
-  WeakPtrNSObjectFactory<BubbleCloser> factory_;
+
+  struct ObjCStorage;
+  std::unique_ptr<ObjCStorage> objc_storage_;
+
+  base::WeakPtrFactory<BubbleCloser> factory_{this};
 };
 
 }  // namespace ui

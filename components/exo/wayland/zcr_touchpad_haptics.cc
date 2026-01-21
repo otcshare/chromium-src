@@ -8,11 +8,13 @@
 #include <wayland-server-core.h>
 #include <wayland-server-protocol-core.h>
 
+#include <optional>
+
 #include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "components/exo/wayland/server_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/devices/haptic_touchpad_effects.h"
 #include "ui/ozone/public/input_controller.h"
 #include "ui/ozone/public/ozone_platform.h"
@@ -28,9 +30,6 @@ class WaylandTouchpadHapticsDelegate {
   ~WaylandTouchpadHapticsDelegate() = default;
 
   void UpdateTouchpadHapticsState() {
-    if (!base::FeatureList::IsEnabled(ash::features::kExoHapticFeedbackSupport))
-      return;
-
     ui::InputController* controller =
         ui::OzonePlatform::GetInstance()->GetInputController();
     if (!controller) {
@@ -62,8 +61,8 @@ class WaylandTouchpadHapticsDelegate {
   }
 
  private:
-  wl_resource* const resource_;
-  absl::optional<bool> last_activation_state_;
+  const raw_ptr<wl_resource> resource_;
+  std::optional<bool> last_activation_state_;
 };
 
 void touchpad_haptics_destroy(wl_client* client, wl_resource* resource) {
@@ -74,8 +73,6 @@ void touchpad_haptics_play(wl_client* client,
                            wl_resource* resource,
                            uint32_t effect,
                            int32_t strength) {
-  if (!base::FeatureList::IsEnabled(ash::features::kExoHapticFeedbackSupport))
-    return;
   GetUserDataAs<WaylandTouchpadHapticsDelegate>(resource)->Play(effect,
                                                                 strength);
 }

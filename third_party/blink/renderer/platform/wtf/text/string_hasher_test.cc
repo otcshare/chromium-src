@@ -25,406 +25,125 @@
 
 #include "third_party/blink/renderer/platform/wtf/text/string_hasher.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/case_folding_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/convert_to_8bit_hash_reader.h"
 
-namespace WTF {
+namespace blink {
 
 namespace {
 
-const LChar kNullLChars[2] = {0, 0};
-const UChar kNullUChars[2] = {0, 0};
+const char kNullLChars[1] = {0};
+const UChar kNullUChars[1] = {0};
 
-const unsigned kEmptyStringHash = 0x4EC889EU;
-const unsigned kSingleNullCharacterHash = 0x3D3ABF44U;
+const uint64_t kEmptyStringHash = 0x5A6EF77074EBC84B;
+const uint64_t kSingleNullCharacterHash = 0x48DFCE108249B3F8;
 
-const LChar kTestALChars[6] = {0x41, 0x95, 0xFF, 0x50, 0x01, 0};
-const UChar kTestAUChars[6] = {0x41, 0x95, 0xFF, 0x50, 0x01, 0};
-const UChar kTestBUChars[6] = {0x41, 0x95, 0xFFFF, 0x1080, 0x01, 0};
+const LChar kTestALChars[5] = {0x41, 0x95, 0xFF, 0x50, 0x01};
+const UChar kTestAUChars[5] = {0x41, 0x95, 0xFF, 0x50, 0x01};
+const UChar kTestBUChars[5] = {0x41, 0x95, 0xFFFF, 0x1080, 0x01};
 
-const unsigned kTestAHash1 = 0xEA32B004;
-const unsigned kTestAHash2 = 0x93F0F71E;
-const unsigned kTestAHash3 = 0xCB609EB1;
-const unsigned kTestAHash4 = 0x7984A706;
-const unsigned kTestAHash5 = 0x0427561F;
+const uint64_t kTestAHash = 0xE9422771E0A5DDE6;
+const uint64_t kTestBHash = 0x4A2DA770EEA75C1E;
 
-const unsigned kTestBHash1 = 0xEA32B004;
-const unsigned kTestBHash2 = 0x93F0F71E;
-const unsigned kTestBHash3 = 0x59EB1B2C;
-const unsigned kTestBHash4 = 0xA7BCCC0A;
-const unsigned kTestBHash5 = 0x79201649;
+bool EqualCaseFoldingHash(StringView a, StringView b) {
+  unsigned hash_a = a.Is8Bit() ? CaseFoldingHash::GetHash(a.Span8())
+                               : CaseFoldingHash::GetHash(a.Span16());
+  unsigned hash_b = b.Is8Bit() ? CaseFoldingHash::GetHash(b.Span8())
+                               : CaseFoldingHash::GetHash(b.Span16());
+  return hash_a == hash_b;
+}
 
 }  // anonymous namespace
 
-TEST(StringHasherTest, StringHasher) {
-  StringHasher hasher;
-
-  // The initial state of the hasher.
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-}
-
-TEST(StringHasherTest, StringHasher_addCharacter) {
-  StringHasher hasher;
-
-  // Hashing a single character.
-  hasher = StringHasher();
-  hasher.AddCharacter(0);
-  EXPECT_EQ(kSingleNullCharacterHash, hasher.GetHash());
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, checking the intermediate state after each is
-  // added.
-  hasher = StringHasher();
-  hasher.AddCharacter(kTestAUChars[0]);
-  EXPECT_EQ(kTestAHash1, hasher.GetHash());
-  EXPECT_EQ(kTestAHash1 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestAUChars[1]);
-  EXPECT_EQ(kTestAHash2, hasher.GetHash());
-  EXPECT_EQ(kTestAHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestAUChars[2]);
-  EXPECT_EQ(kTestAHash3, hasher.GetHash());
-  EXPECT_EQ(kTestAHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestAUChars[3]);
-  EXPECT_EQ(kTestAHash4, hasher.GetHash());
-  EXPECT_EQ(kTestAHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestAUChars[4]);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing a second set of five characters, including non-Latin-1 characters.
-  hasher = StringHasher();
-  hasher.AddCharacter(kTestBUChars[0]);
-  EXPECT_EQ(kTestBHash1, hasher.GetHash());
-  EXPECT_EQ(kTestBHash1 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestBUChars[1]);
-  EXPECT_EQ(kTestBHash2, hasher.GetHash());
-  EXPECT_EQ(kTestBHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestBUChars[2]);
-  EXPECT_EQ(kTestBHash3, hasher.GetHash());
-  EXPECT_EQ(kTestBHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestBUChars[3]);
-  EXPECT_EQ(kTestBHash4, hasher.GetHash());
-  EXPECT_EQ(kTestBHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestBUChars[4]);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-}
-
-TEST(StringHasherTest, StringHasher_addCharacters) {
-  StringHasher hasher;
-
-  // Hashing zero characters.
-  hasher = StringHasher();
-  hasher.AddCharacters(static_cast<LChar*>(nullptr), 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kNullLChars, 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(static_cast<UChar*>(nullptr), 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kNullUChars, 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing one character.
-  hasher = StringHasher();
-  hasher.AddCharacters(kNullLChars, 1);
-  EXPECT_EQ(kSingleNullCharacterHash, hasher.GetHash());
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kNullUChars, 1);
-  EXPECT_EQ(kSingleNullCharacterHash, hasher.GetHash());
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, all at once.
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestALChars, 5);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestAUChars, 5);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestBUChars, 5);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, in groups of two, then the last one.
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestALChars, 2);
-  EXPECT_EQ(kTestAHash2, hasher.GetHash());
-  EXPECT_EQ(kTestAHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestALChars + 2, 2);
-  EXPECT_EQ(kTestAHash4, hasher.GetHash());
-  EXPECT_EQ(kTestAHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestALChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestALChars, 2);
-  hasher.AddCharacters(kTestALChars + 2, 2);
-  hasher.AddCharacters(kTestALChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestAUChars, 2);
-  EXPECT_EQ(kTestAHash2, hasher.GetHash());
-  EXPECT_EQ(kTestAHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestAUChars + 2, 2);
-  EXPECT_EQ(kTestAHash4, hasher.GetHash());
-  EXPECT_EQ(kTestAHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestAUChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestAUChars, 2);
-  hasher.AddCharacters(kTestAUChars + 2, 2);
-  hasher.AddCharacters(kTestAUChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestBUChars, 2);
-  EXPECT_EQ(kTestBHash2, hasher.GetHash());
-  EXPECT_EQ(kTestBHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestBUChars + 2, 2);
-  EXPECT_EQ(kTestBHash4, hasher.GetHash());
-  EXPECT_EQ(kTestBHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestBUChars + 4, 1);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestBUChars, 2);
-  hasher.AddCharacters(kTestBUChars + 2, 2);
-  hasher.AddCharacters(kTestBUChars + 4, 1);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, the first three, then the last two.
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestALChars, 3);
-  EXPECT_EQ(kTestAHash3, hasher.GetHash());
-  EXPECT_EQ(kTestAHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestALChars + 3, 2);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestALChars, 3);
-  EXPECT_EQ(kTestAHash3, hasher.GetHash());
-  EXPECT_EQ(kTestAHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestALChars + 3, 2);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestAUChars, 3);
-  EXPECT_EQ(kTestAHash3, hasher.GetHash());
-  EXPECT_EQ(kTestAHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestAUChars + 3, 2);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestAUChars, 3);
-  EXPECT_EQ(kTestAHash3, hasher.GetHash());
-  EXPECT_EQ(kTestAHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestAUChars + 3, 2);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestBUChars, 3);
-  EXPECT_EQ(kTestBHash3, hasher.GetHash());
-  EXPECT_EQ(kTestBHash3 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacters(kTestBUChars + 3, 2);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharacters(kTestBUChars, 3);
-  hasher.AddCharacters(kTestBUChars + 3, 2);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-}
-
-TEST(StringHasherTest, StringHasher_addCharactersAssumingAligned) {
-  StringHasher hasher;
-
-  // Hashing zero characters.
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(static_cast<LChar*>(nullptr), 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kNullLChars, 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(static_cast<UChar*>(nullptr), 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kNullUChars, 0);
-  EXPECT_EQ(kEmptyStringHash, hasher.GetHash());
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing one character.
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kNullLChars, 1);
-  EXPECT_EQ(kSingleNullCharacterHash, hasher.GetHash());
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kNullUChars, 1);
-  EXPECT_EQ(kSingleNullCharacterHash, hasher.GetHash());
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, all at once.
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestALChars, 5);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestAUChars, 5);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestBUChars, 5);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, in groups of two, then the last one.
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestALChars, 2);
-  EXPECT_EQ(kTestAHash2, hasher.GetHash());
-  EXPECT_EQ(kTestAHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestALChars + 2, 2);
-  EXPECT_EQ(kTestAHash4, hasher.GetHash());
-  EXPECT_EQ(kTestAHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestALChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestALChars, 2);
-  hasher.AddCharactersAssumingAligned(kTestALChars + 2, 2);
-  hasher.AddCharactersAssumingAligned(kTestALChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestAUChars, 2);
-  EXPECT_EQ(kTestAHash2, hasher.GetHash());
-  EXPECT_EQ(kTestAHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestAUChars + 2, 2);
-  EXPECT_EQ(kTestAHash4, hasher.GetHash());
-  EXPECT_EQ(kTestAHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestAUChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestAUChars, 2);
-  hasher.AddCharactersAssumingAligned(kTestAUChars + 2, 2);
-  hasher.AddCharactersAssumingAligned(kTestAUChars + 4, 1);
-  EXPECT_EQ(kTestAHash5, hasher.GetHash());
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestBUChars, 2);
-  EXPECT_EQ(kTestBHash2, hasher.GetHash());
-  EXPECT_EQ(kTestBHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestBUChars + 2, 2);
-  EXPECT_EQ(kTestBHash4, hasher.GetHash());
-  EXPECT_EQ(kTestBHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestBUChars + 4, 1);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher = StringHasher();
-  hasher.AddCharactersAssumingAligned(kTestBUChars, 2);
-  hasher.AddCharactersAssumingAligned(kTestBUChars + 2, 2);
-  hasher.AddCharactersAssumingAligned(kTestBUChars + 4, 1);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-
-  // Hashing five characters, first two characters one at a time,
-  // then two more, then the last one.
-  hasher = StringHasher();
-  hasher.AddCharacter(kTestBUChars[0]);
-  EXPECT_EQ(kTestBHash1, hasher.GetHash());
-  EXPECT_EQ(kTestBHash1 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharacter(kTestBUChars[1]);
-  EXPECT_EQ(kTestBHash2, hasher.GetHash());
-  EXPECT_EQ(kTestBHash2 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestBUChars[2], kTestBUChars[3]);
-  EXPECT_EQ(kTestBHash4, hasher.GetHash());
-  EXPECT_EQ(kTestBHash4 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-  hasher.AddCharactersAssumingAligned(kTestBUChars + 4, 1);
-  EXPECT_EQ(kTestBHash5, hasher.GetHash());
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, hasher.HashWithTop8BitsMasked());
-}
-
-TEST(StringHasherTest, StringHasher_computeHash) {
-  EXPECT_EQ(kEmptyStringHash,
-            StringHasher::ComputeHash(static_cast<LChar*>(nullptr), 0));
-  EXPECT_EQ(kEmptyStringHash, StringHasher::ComputeHash(kNullLChars, 0));
-  EXPECT_EQ(kEmptyStringHash,
-            StringHasher::ComputeHash(static_cast<UChar*>(nullptr), 0));
-  EXPECT_EQ(kEmptyStringHash, StringHasher::ComputeHash(kNullUChars, 0));
-
-  EXPECT_EQ(kSingleNullCharacterHash,
-            StringHasher::ComputeHash(kNullLChars, 1));
-  EXPECT_EQ(kSingleNullCharacterHash,
-            StringHasher::ComputeHash(kNullUChars, 1));
-
-  EXPECT_EQ(kTestAHash5, StringHasher::ComputeHash(kTestALChars, 5));
-  EXPECT_EQ(kTestAHash5, StringHasher::ComputeHash(kTestAUChars, 5));
-  EXPECT_EQ(kTestBHash5, StringHasher::ComputeHash(kTestBUChars, 5));
-}
-
-TEST(StringHasherTest, StringHasher_computeHashAndMaskTop8Bits) {
+TEST(StringHasherTest, StringHasher_ComputeHashAndMaskTop8Bits) {
   EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(
-                static_cast<LChar*>(nullptr), 0));
+            StringHasher::ComputeHashAndMaskTop8Bits(nullptr, 0));
   EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
             StringHasher::ComputeHashAndMaskTop8Bits(kNullLChars, 0));
   EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(
-                static_cast<UChar*>(nullptr), 0));
+            StringHasher::ComputeHashAndMaskTop8Bits<ConvertTo8BitHashReader>(
+                nullptr, 0));
   EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(kNullUChars, 0));
+            StringHasher::ComputeHashAndMaskTop8Bits<ConvertTo8BitHashReader>(
+                (const char*)kNullUChars, 0));
 
   EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
             StringHasher::ComputeHashAndMaskTop8Bits(kNullLChars, 1));
   EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(kNullUChars, 1));
+            StringHasher::ComputeHashAndMaskTop8Bits<ConvertTo8BitHashReader>(
+                (const char*)kNullUChars, 1));
 
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(kTestALChars, 5));
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(kTestAUChars, 5));
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF,
-            StringHasher::ComputeHashAndMaskTop8Bits(kTestBUChars, 5));
+  EXPECT_EQ(kTestAHash & 0xFFFFFF, StringHasher::ComputeHashAndMaskTop8Bits(
+                                       (const char*)kTestALChars, 5));
+  EXPECT_EQ(kTestAHash & 0xFFFFFF,
+            StringHasher::ComputeHashAndMaskTop8Bits<ConvertTo8BitHashReader>(
+                (const char*)kTestAUChars, 5));
+  EXPECT_EQ(kTestBHash & 0xFFFFFF, StringHasher::ComputeHashAndMaskTop8Bits(
+                                       (const char*)kTestBUChars, 10));
+
+  // Test a slightly longer case (including characters that fit in Latin1
+  // but not in ASCII).
+  constexpr base::span<const char> kStr =
+      base::span_from_cstring("A quick browñ föx jumps over thé lazy dog");
+  std::array<UChar, kStr.size()> wide_str;
+  std::ranges::copy(base::as_bytes(kStr), wide_str.begin());
+  auto wide_bytes = base::as_chars(base::as_byte_span(wide_str));
+  unsigned expected_hash =
+      StringHasher::ComputeHashAndMaskTop8Bits(kStr.data(), kStr.size());
+  using Reader = ConvertTo8BitHashReader;
+  EXPECT_EQ(expected_hash, StringHasher::ComputeHashAndMaskTop8Bits<Reader>(
+                               wide_bytes.data(),
+                               wide_bytes.size() / Reader::kCompressionFactor));
+  EXPECT_NE(expected_hash, StringHasher::ComputeHashAndMaskTop8Bits(
+                               wide_bytes.data(), wide_bytes.size() / 2));
+  EXPECT_NE(expected_hash, StringHasher::ComputeHashAndMaskTop8Bits(
+                               wide_bytes.data(), wide_bytes.size()));
 }
 
-TEST(StringHasherTest, StringHasher_hashMemory) {
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, StringHasher::HashMemory(nullptr, 0));
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
-            StringHasher::HashMemory(kNullUChars, 0));
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF, StringHasher::HashMemory<0>(nullptr));
-  EXPECT_EQ(kEmptyStringHash & 0xFFFFFF,
-            StringHasher::HashMemory<0>(kNullUChars));
+TEST(StringHasherTest, StringHasher_HashMemory) {
+  EXPECT_EQ(kEmptyStringHash,
+            StringHasher::HashMemory(base::span<const uint8_t>()));
+  EXPECT_EQ(kEmptyStringHash,
+            StringHasher::HashMemory(base::span<const uint8_t, 0>()));
+  EXPECT_EQ(kEmptyStringHash, StringHasher::HashMemory(
+                                  base::as_byte_span(kNullUChars).first(0u)));
 
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            StringHasher::HashMemory(kNullUChars, 2));
-  EXPECT_EQ(kSingleNullCharacterHash & 0xFFFFFF,
-            StringHasher::HashMemory<2>(kNullUChars));
+  EXPECT_EQ(
+      kSingleNullCharacterHash,
+      StringHasher::HashMemory(base::as_byte_span(kNullUChars).first(1u)));
 
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, StringHasher::HashMemory(kTestAUChars, 10));
-  EXPECT_EQ(kTestAHash5 & 0xFFFFFF, StringHasher::HashMemory<10>(kTestAUChars));
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, StringHasher::HashMemory(kTestBUChars, 10));
-  EXPECT_EQ(kTestBHash5 & 0xFFFFFF, StringHasher::HashMemory<10>(kTestBUChars));
+  EXPECT_EQ(kTestAHash, StringHasher::HashMemory(kTestALChars));
+  EXPECT_EQ(kTestBHash,
+            StringHasher::HashMemory(base::as_byte_span(kTestBUChars)));
 }
 
-}  // namespace WTF
+TEST(StringHasherTest, CaseFoldingHash) {
+  EXPECT_FALSE(EqualCaseFoldingHash("foo", "bar"));
+  EXPECT_TRUE(EqualCaseFoldingHash("foo", "FOO"));
+  EXPECT_TRUE(EqualCaseFoldingHash("foo", "Foo"));
+  EXPECT_TRUE(EqualCaseFoldingHash("Longer string 123", "longEr String 123"));
+  EXPECT_TRUE(EqualCaseFoldingHash(String::FromUTF8("Ünicode"),
+                                   String::FromUTF8("ünicode")));
+}
+
+TEST(StringHasherTest, ContractionAndExpansion) {
+  // CaseFoldingHash is the only current reader using the expansion logic,
+  // so we use it to test that the expansion logic is correct for various sizes;
+  // we don't really use the case folding itself here. We make a string that's
+  // long enough that we will hit most of the paths.
+  String str =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_!?'$";
+  for (unsigned i = 0; i < str.length(); ++i) {
+    String s8 = str.Substring(0, i);
+    String s16 = s8;
+    s16.Ensure16Bit();
+    EXPECT_EQ(CaseFoldingHash::GetHash(s8), CaseFoldingHash::GetHash(s16));
+    EXPECT_EQ(GetHash(s8), GetHash(s16));
+  }
+}
+
+}  // namespace blink

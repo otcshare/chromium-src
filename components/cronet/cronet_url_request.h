@@ -8,13 +8,15 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "net/base/idempotency.h"
 #include "net/base/network_handle.h"
 #include "net/base/request_priority.h"
+#include "net/shared_dictionary/shared_dictionary.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/url_request/url_request.h"
 #include "url/gurl.h"
 
@@ -77,7 +79,8 @@ class CronetURLRequest {
                                    bool was_cached,
                                    const std::string& negotiated_protocol,
                                    const std::string& proxy_server,
-                                   int64_t received_byte_count) = 0;
+                                   int64_t received_byte_count,
+                                   bool is_proxied) = 0;
 
     // Invoked whenever part of the response body has been read. Only part of
     // the buffer may be populated, even if the entire response body has not yet
@@ -98,8 +101,11 @@ class CronetURLRequest {
     // Invoked if request failed for any reason after CronetURLRequest::Start().
     // |net_error| provides information about the failure. |quic_error| is only
     // valid if |net_error| is net::QUIC_PROTOCOL_ERROR.
+    // |source| represents who asked to terminate the connection, it is only
+    // valid if the |net_error| is net::QUIC_PROTOCOL_ERROR.
     virtual void OnError(int net_error,
                          int quic_error,
+                         quic::ConnectionCloseSource source,
                          const std::string& error_string,
                          int64_t received_byte_count) = 0;
 
@@ -110,7 +116,9 @@ class CronetURLRequest {
     // methods will be invoked.
     virtual void OnDestroyed() = 0;
 
-    // Invoked right before request is destroyed to report collected metrics.
+    // Reports metrics data about the request.
+    // This is called immediately before the terminal state callback (i.e.
+    // OnSucceeded()/OnError()/OnCanceled()).
     virtual void OnMetricsCollected(
         const base::Time& request_start_time,
         const base::TimeTicks& request_start,
@@ -153,6 +161,7 @@ class CronetURLRequest {
                    bool traffic_stats_uid_set,
                    int32_t traffic_stats_uid,
                    net::Idempotency idempotency,
+                   scoped_refptr<net::SharedDictionary> shared_dictionary,
                    net::handles::NetworkHandle network =
                        net::handles::kInvalidNetworkHandle);
 
@@ -216,6 +225,7 @@ class CronetURLRequest {
                  bool traffic_stats_uid_set,
                  int32_t traffic_stats_uid,
                  net::Idempotency idempotency,
+                 scoped_refptr<net::SharedDictionary> shared_dictionary,
                  net::handles::NetworkHandle network);
 
     NetworkTasks(const NetworkTasks&) = delete;
@@ -297,6 +307,8 @@ class CronetURLRequest {
     const int32_t traffic_stats_uid_;
     // Idempotency of the request.
     const net::Idempotency idempotency_;
+    // Optional compression dictionary for this request. != nullptr if present.
+    scoped_refptr<net::SharedDictionary> shared_dictionary_;
 
     net::handles::NetworkHandle network_;
 

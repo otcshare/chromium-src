@@ -4,8 +4,8 @@
 
 #include "ui/aura/window_tracker.h"
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "ui/aura/window.h"
 
 namespace aura {
@@ -22,8 +22,9 @@ WindowTracker::~WindowTracker() {
 }
 
 void WindowTracker::Add(Window* window) {
-  if (base::Contains(windows_, window))
+  if (std::ranges::contains(windows_, window)) {
     return;
+  }
 
   window->AddObserver(this);
   windows_.push_back(window);
@@ -36,7 +37,7 @@ void WindowTracker::RemoveAll() {
 }
 
 void WindowTracker::Remove(Window* window) {
-  auto iter = base::ranges::find(windows_, window);
+  auto iter = std::ranges::find(windows_, window);
   if (iter != windows_.end()) {
     window->RemoveObserver(this);
     windows_.erase(iter);
@@ -51,7 +52,7 @@ Window* WindowTracker::Pop() {
 }
 
 bool WindowTracker::Contains(Window* window) const {
-  return base::Contains(windows_, window);
+  return std::ranges::contains(windows_, window);
 }
 
 void WindowTracker::OnWindowDestroying(Window* window) {

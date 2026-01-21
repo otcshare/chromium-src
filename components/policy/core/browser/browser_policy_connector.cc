@@ -9,12 +9,14 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler.h"
@@ -42,6 +44,12 @@ const char kDefaultEncryptedReportingServerUrl[] =
 const char kDefaultRealtimeReportingServerUrl[] =
     "https://chromereporting-pa.googleapis.com/v1/events";
 
+// The URL suffix for the File Storage Server endpoint in DMServer. File Storage
+// Server receives the requests on this URL.
+const char kFileStorageServerUploadUrlSuffixForDMServer[] = "/upload";
+
+DeviceManagementService* g_device_management_service_for_testing = nullptr;
+
 }  // namespace
 
 BrowserPolicyConnector::BrowserPolicyConnector(
@@ -67,6 +75,7 @@ void BrowserPolicyConnector::InitInternal(
 void BrowserPolicyConnector::Shutdown() {
   BrowserPolicyConnectorBase::Shutdown();
   device_management_service_.reset();
+  policy_statistics_collector_.reset();
 }
 
 void BrowserPolicyConnector::ScheduleServiceInitialization(
@@ -81,8 +90,9 @@ void BrowserPolicyConnector::ScheduleServiceInitialization(
 
 bool BrowserPolicyConnector::ProviderHasPolicies(
     const ConfigurationPolicyProvider* provider) const {
-  if (!provider)
+  if (!provider || !provider->is_active()) {
     return false;
+  }
   for (const auto& pair : provider->policies()) {
     if (!pair.second.empty())
       return true;
@@ -105,9 +115,18 @@ std::string BrowserPolicyConnector::GetEncryptedReportingUrl() const {
                         kDefaultEncryptedReportingServerUrl);
 }
 
+std::string BrowserPolicyConnector::GetFileStorageServerUploadUrl() const {
+  return GetUrlOverride(
+      switches::kFileStorageServerUploadUrl,
+      // The default URL for File Storage Server upload endpoint is
+      // extension of the DMServer URL.
+      base::StrCat({GetDeviceManagementUrl(),
+                    kFileStorageServerUploadUrlSuffixForDMServer}));
+}
+
 std::string BrowserPolicyConnector::GetUrlOverride(
     const char* flag,
-    const char* default_value) const {
+    std::string_view default_value) const {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(flag)) {
     if (IsCommandLineSwitchSupported())
@@ -115,19 +134,18 @@ std::string BrowserPolicyConnector::GetUrlOverride(
     else
       LOG(WARNING) << flag << " not supported on this channel";
   }
-  return default_value;
+  return std::string(default_value);
+}
+
+DeviceManagementService*
+BrowserPolicyConnector::GetTestDeviceManagementService() {
+  return g_device_management_service_for_testing;
 }
 
 // static
-bool BrowserPolicyConnector::IsNonEnterpriseUser(const std::string& username) {
-  TRACE_EVENT0("browser", "BrowserPolicyConnector::IsNonEnterpriseUser");
-  return signin::AccountManagedStatusFinder::IsNonEnterpriseUser(username);
-}
-
-// static
-void BrowserPolicyConnector::SetNonEnterpriseDomainForTesting(
-    const char* domain) {
-  signin::AccountManagedStatusFinder::SetNonEnterpriseDomainForTesting(domain);
+void BrowserPolicyConnector::SetDeviceManagementServiceForTesting(
+    DeviceManagementService* device_management_service) {
+  g_device_management_service_for_testing = device_management_service;
 }
 
 // static

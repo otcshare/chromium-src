@@ -6,10 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/values.h"
 #include "components/policy/core/browser/configuration_policy_handler_parameters.h"
 #include "components/policy/core/browser/policy_error_map.h"
@@ -17,7 +18,9 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema.h"
 #include "components/prefs/pref_value_map.h"
+#include "components/strings/grit/components_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace policy {
 
@@ -97,7 +100,7 @@ class TestSchemaValidatingPolicyHandler : public SchemaValidatingPolicyHandler {
   TestSchemaValidatingPolicyHandler(const Schema& schema,
                                     SchemaOnErrorStrategy strategy)
       : SchemaValidatingPolicyHandler(kPolicyName, schema, strategy) {}
-  ~TestSchemaValidatingPolicyHandler() override {}
+  ~TestSchemaValidatingPolicyHandler() override = default;
 
   void ApplyPolicySettings(const policy::PolicyMap&, PrefValueMap*) override {}
 
@@ -117,16 +120,21 @@ class StringListPolicyHandler : public ListPolicyHandler {
       : ListPolicyHandler(policy_name, base::Value::Type::STRING) {}
 
  protected:
-  void ApplyList(base::Value filtered_list, PrefValueMap* prefs) override {
-    DCHECK(filtered_list.is_list());
-    prefs->SetValue(kTestPref, std::move(filtered_list));
+  void ApplyList(base::Value::List filtered_list,
+                 PrefValueMap* prefs) override {
+    prefs->SetValue(kTestPref, base::Value(std::move(filtered_list)));
   }
 };
 
 std::unique_ptr<SimpleJsonStringSchemaValidatingPolicyHandler>
 JsonStringHandlerForTesting() {
-  std::string error;
-  Schema validation_schema = Schema::Parse(kValidationSchemaJson, &error);
+  ASSIGN_OR_RETURN(
+      const auto validation_schema, Schema::Parse(kValidationSchemaJson),
+      [](const auto& e)
+          -> std::unique_ptr<SimpleJsonStringSchemaValidatingPolicyHandler> {
+        ADD_FAILURE() << e;
+        return nullptr;
+      });
   return std::make_unique<SimpleJsonStringSchemaValidatingPolicyHandler>(
       kPolicyName, kTestPref, validation_schema,
       SimpleSchemaValidatingPolicyHandler::RECOMMENDED_PROHIBITED,
@@ -137,7 +145,7 @@ JsonStringHandlerForTesting() {
 
 TEST(ListPolicyHandlerTest, CheckPolicySettings) {
   base::Value::List list;
-  base::Value dict(base::Value::Type::DICTIONARY);
+  base::Value dict(base::Value::Type::DICT);
   policy::PolicyMap policy_map;
   policy::PolicyErrorMap errors;
   StringListPolicyHandler handler(kTestPolicy, kTestPref);
@@ -674,7 +682,6 @@ TEST(IntPercentageToDoublePolicyHandler, ApplyPolicySettingsDontClamp) {
 }
 
 TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueInvalid) {
-  std::string error;
   static const char kSchemaJson[] =
       "{"
       "  \"type\": \"object\","
@@ -690,8 +697,8 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueInvalid) {
       "    }"
       "  }"
       "}";
-  Schema schema = Schema::Parse(kSchemaJson, &error);
-  ASSERT_TRUE(schema.valid()) << error;
+  const auto schema = Schema::Parse(kSchemaJson);
+  ASSERT_TRUE(schema.has_value()) << schema.error();
 
   static const char kPolicyMapJson[] =
       "{"
@@ -700,26 +707,22 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueInvalid) {
       "    \"Colors\": \"White\""
       "  }"
       "}";
-  auto parsed_json_or_error = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json_or_error.has_value())
-      << parsed_json_or_error.error().message;
-
-  base::Value& parsed_json = *parsed_json_or_error;
+  ASSERT_OK_AND_ASSIGN(base::Value parsed_json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS));
   ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
   policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_RECOMMENDED,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
-  TestSchemaValidatingPolicyHandler handler(schema, SCHEMA_ALLOW_UNKNOWN);
+  TestSchemaValidatingPolicyHandler handler(*schema, SCHEMA_ALLOW_UNKNOWN);
   std::unique_ptr<base::Value> output_value;
   EXPECT_FALSE(handler.CheckAndGetValueForTest(policy_map, /*errors=*/nullptr,
                                                &output_value));
 }
 
 TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueUnknown) {
-  std::string error;
   static const char kSchemaJson[] =
       "{"
       "  \"type\": \"object\","
@@ -735,8 +738,8 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueUnknown) {
       "    }"
       "  }"
       "}";
-  Schema schema = Schema::Parse(kSchemaJson, &error);
-  ASSERT_TRUE(schema.valid()) << error;
+  const auto schema = Schema::Parse(kSchemaJson);
+  ASSERT_TRUE(schema.has_value()) << schema.error();
 
   static const char kPolicyMapJson[] =
       "{"
@@ -745,16 +748,16 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueUnknown) {
       "    \"Apples\": \"Red\""
       "  }"
       "}";
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(auto parsed_json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_RECOMMENDED,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_RECOMMENDED,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
-  TestSchemaValidatingPolicyHandler handler(schema, SCHEMA_ALLOW_UNKNOWN);
+  TestSchemaValidatingPolicyHandler handler(*schema, SCHEMA_ALLOW_UNKNOWN);
 
   // Test that CheckPolicySettings() is true but outputs warnings about unknown
   // properties.
@@ -770,6 +773,7 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueUnknown) {
       handler.CheckAndGetValueForTest(policy_map, &error_map, &output_value));
   ASSERT_TRUE(output_value);
   ASSERT_TRUE(output_value->is_dict());
+  const base::Value::Dict& output = output_value->GetDict();
 
   // Test that CheckAndGetValue outputs warnings about unknown properties.
   EXPECT_THAT(error_map.GetErrors(kPolicyName),
@@ -777,11 +781,11 @@ TEST(SchemaValidatingPolicyHandlerTest, CheckAndGetValueUnknown) {
                   testing::_, PolicyMap::MessageType::kWarning)));
 
   // Test that CheckAndGetValue() actually dropped unknown properties.
-  absl::optional<int> one_two_three = output_value->FindIntKey("OneToThree");
+  const std::optional<int> one_two_three = output.FindInt("OneToThree");
   ASSERT_TRUE(one_two_three);
   int int_value = one_two_three.value();
   EXPECT_EQ(2, int_value);
-  EXPECT_FALSE(output_value->FindKey("Apples"));
+  EXPECT_FALSE(output.contains("Apples"));
 }
 
 TEST(SimpleSchemaValidatingPolicyHandlerTest, CheckAndGetValue) {
@@ -805,9 +809,8 @@ TEST(SimpleSchemaValidatingPolicyHandlerTest, CheckAndGetValue) {
       "    }"
       "  }"
       "}";
-  std::string error;
-  Schema schema = Schema::Parse(kSchemaJson, &error);
-  ASSERT_TRUE(schema.valid()) << error;
+  const auto schema = Schema::Parse(kSchemaJson);
+  ASSERT_TRUE(schema.has_value()) << schema.error();
 
   static const char kPolicyMapJson[] =
       "{"
@@ -816,42 +819,42 @@ TEST(SimpleSchemaValidatingPolicyHandlerTest, CheckAndGetValue) {
       "    \"Colors\": \"Green\""
       "  }"
       "}";
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(auto parsed_json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           kPolicyMapJson, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map_recommended;
-  policy_map_recommended.LoadFrom(parsed_json->GetDict(),
+  policy_map_recommended.LoadFrom(parsed_json.GetDict(),
                                   POLICY_LEVEL_RECOMMENDED, POLICY_SCOPE_USER,
                                   POLICY_SOURCE_CLOUD);
 
   PolicyMap policy_map_mandatory;
-  policy_map_mandatory.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map_mandatory.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                                 POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   SimpleSchemaValidatingPolicyHandler handler_all(
-      kPolicyName, kTestPref, schema, SCHEMA_STRICT,
+      kPolicyName, kTestPref, *schema, SCHEMA_STRICT,
       SimpleSchemaValidatingPolicyHandler::RECOMMENDED_ALLOWED,
       SimpleSchemaValidatingPolicyHandler::MANDATORY_ALLOWED);
 
   SimpleSchemaValidatingPolicyHandler handler_recommended(
-      kPolicyName, kTestPref, schema, SCHEMA_STRICT,
+      kPolicyName, kTestPref, *schema, SCHEMA_STRICT,
       SimpleSchemaValidatingPolicyHandler::RECOMMENDED_ALLOWED,
       SimpleSchemaValidatingPolicyHandler::MANDATORY_PROHIBITED);
 
   SimpleSchemaValidatingPolicyHandler handler_mandatory(
-      kPolicyName, kTestPref, schema, SCHEMA_STRICT,
+      kPolicyName, kTestPref, *schema, SCHEMA_STRICT,
       SimpleSchemaValidatingPolicyHandler::RECOMMENDED_PROHIBITED,
       SimpleSchemaValidatingPolicyHandler::MANDATORY_ALLOWED);
 
   SimpleSchemaValidatingPolicyHandler handler_none(
-      kPolicyName, kTestPref, schema, SCHEMA_STRICT,
+      kPolicyName, kTestPref, *schema, SCHEMA_STRICT,
       SimpleSchemaValidatingPolicyHandler::RECOMMENDED_PROHIBITED,
       SimpleSchemaValidatingPolicyHandler::MANDATORY_PROHIBITED);
 
   const base::Value* value_expected_in_pref =
-      parsed_json->FindPath(kPolicyName);
+      parsed_json.GetDict().Find(kPolicyName);
 
   PolicyErrorMap errors;
   PrefValueMap prefs;
@@ -907,17 +910,18 @@ TEST(SimpleSchemaValidatingPolicyHandlerTest, CheckAndGetValue) {
 }
 
 TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, ValidEmbeddedJson) {
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJsonValid, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(
+      auto parsed_json,
+      base::JSONReader::ReadAndReturnValueWithError(
+          kPolicyMapJsonValid, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   const base::Value* value_expected_in_pref =
-      parsed_json->FindPath(kPolicyName);
+      parsed_json.GetDict().Find(kPolicyName);
 
   PolicyErrorMap errors;
   PrefValueMap prefs;
@@ -934,17 +938,18 @@ TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, ValidEmbeddedJson) {
 }
 
 TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, InvalidEmbeddedJson) {
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJsonInvalid, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(
+      auto parsed_json,
+      base::JSONReader::ReadAndReturnValueWithError(
+          kPolicyMapJsonInvalid, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   const base::Value* value_expected_in_pref =
-      parsed_json->FindPath(kPolicyName);
+      parsed_json.GetDict().Find(kPolicyName);
 
   PolicyErrorMap errors;
   PrefValueMap prefs;
@@ -961,17 +966,18 @@ TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, InvalidEmbeddedJson) {
 }
 
 TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, UnparsableJson) {
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJsonUnparsable, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(
+      auto parsed_json,
+      base::JSONReader::ReadAndReturnValueWithError(
+          kPolicyMapJsonUnparsable, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   const base::Value* value_expected_in_pref =
-      parsed_json->FindPath(kPolicyName);
+      parsed_json.GetDict().Find(kPolicyName);
 
   PolicyErrorMap errors;
   PrefValueMap prefs;
@@ -988,17 +994,18 @@ TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, UnparsableJson) {
 }
 
 TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, WrongType) {
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJsonWrongTypes, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(
+      auto parsed_json,
+      base::JSONReader::ReadAndReturnValueWithError(
+          kPolicyMapJsonWrongTypes, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   const base::Value* value_expected_in_pref =
-      parsed_json->FindPath(kPolicyName);
+      parsed_json.GetDict().Find(kPolicyName);
 
   PolicyErrorMap errors;
   PrefValueMap prefs;
@@ -1015,13 +1022,14 @@ TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, WrongType) {
 }
 
 TEST(SimpleJsonStringSchemaValidatingPolicyHandlerTest, WrongRootType) {
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
-      kPolicyMapJsonWrongRootType, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
-  ASSERT_TRUE(parsed_json->is_dict());
+  ASSERT_OK_AND_ASSIGN(
+      auto parsed_json,
+      base::JSONReader::ReadAndReturnValueWithError(
+          kPolicyMapJsonWrongRootType, base::JSON_ALLOW_TRAILING_COMMAS));
+  ASSERT_TRUE(parsed_json.is_dict());
 
   PolicyMap policy_map;
-  policy_map.LoadFrom(parsed_json->GetDict(), POLICY_LEVEL_MANDATORY,
+  policy_map.LoadFrom(parsed_json.GetDict(), POLICY_LEVEL_MANDATORY,
                       POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD);
 
   PolicyErrorMap errors;
@@ -1090,6 +1098,200 @@ TEST(SimpleDeprecatingPolicyHandlerTest, CheckDeprecatedUsedWhenNoNewValue) {
   expected = std::make_unique<base::Value>(1337);
   EXPECT_TRUE(prefs.GetValue(kTestPref, &value));
   EXPECT_EQ(*expected, *value);
+}
+
+TEST(URLPolicyHandler, CheckOnlyValidURLApplied) {
+  PolicyMap policy_map;
+  PrefValueMap prefs;
+  std::unique_ptr<base::Value> expected;
+  const base::Value* value;
+  PolicyErrorMap errors;
+  PolicyHandlerParameters params;
+
+  URLPolicyHandler handler(kTestPolicy, kTestPref);
+
+  // Check that invalid url returns error.
+  policy_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 POLICY_SOURCE_CLOUD, base::Value("not_a_url"), nullptr);
+  EXPECT_FALSE(handler.CheckPolicySettings(policy_map, &errors));
+  EXPECT_FALSE(errors.empty());
+  errors.Clear();
+  prefs.Clear();
+
+  // Check that valid url returns no error.
+  policy_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 POLICY_SOURCE_CLOUD, base::Value("https://www.example.com/"),
+                 nullptr);
+  EXPECT_TRUE(handler.CheckPolicySettings(policy_map, &errors));
+  EXPECT_TRUE(errors.empty());
+
+  handler.ApplyPolicySettingsWithParameters(policy_map, params, &prefs);
+  expected = std::make_unique<base::Value>("https://www.example.com/");
+  EXPECT_TRUE(prefs.GetValue(kTestPref, &value));
+  EXPECT_EQ(*expected, *value);
+}
+
+TEST(CloudUserOnlyPolicyChecker, CheckValidatesSource) {
+  PolicyMap policy_map;
+  PrefValueMap prefs;
+  std::unique_ptr<base::Value> expected;
+  const base::Value* value;
+  PolicyErrorMap errors;
+  PolicyHandlerParameters params;
+  CloudUserOnlyPolicyChecker handler(std::make_unique<SimplePolicyHandler>(
+      kTestPolicy, kTestPref, base::Value::Type::STRING));
+
+  std::vector<PolicySource> all_sources{
+      POLICY_SOURCE_ENTERPRISE_DEFAULT,
+      POLICY_SOURCE_COMMAND_LINE,
+      POLICY_SOURCE_ACTIVE_DIRECTORY,
+      POLICY_SOURCE_DEVICE_LOCAL_ACCOUNT_OVERRIDE_DEPRECATED,
+      POLICY_SOURCE_CLOUD,
+      POLICY_SOURCE_PLATFORM,
+      POLICY_SOURCE_PRIORITY_CLOUD_DEPRECATED,
+      POLICY_SOURCE_MERGED,
+      POLICY_SOURCE_CLOUD_FROM_ASH,
+      POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE};
+
+  std::vector<PolicyScope> all_scopes{POLICY_SCOPE_USER, POLICY_SCOPE_MACHINE};
+
+  for (const PolicyScope scope : all_scopes) {
+    for (const PolicySource source : all_sources) {
+      policy_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, scope, source,
+                     base::Value("some_value"), nullptr);
+      if (scope == POLICY_SCOPE_USER &&
+          (source == POLICY_SOURCE_CLOUD ||
+           source == POLICY_SOURCE_CLOUD_FROM_ASH)) {
+        EXPECT_TRUE(handler.CheckPolicySettings(policy_map, &errors));
+        EXPECT_TRUE(errors.empty());
+        errors.Clear();
+
+        handler.ApplyPolicySettingsWithParameters(policy_map, params, &prefs);
+        expected = std::make_unique<base::Value>("some_value");
+        EXPECT_TRUE(prefs.GetValue(kTestPref, &value));
+        EXPECT_EQ(*expected, *value);
+
+      } else {
+        EXPECT_FALSE(handler.CheckPolicySettings(policy_map, &errors));
+        EXPECT_FALSE(errors.empty());
+        errors.Clear();
+      }
+    }
+  }
+}
+
+class CloudOnlyPolicyCheckerTestValid
+    : public testing::TestWithParam<PolicySource> {};
+
+TEST_P(CloudOnlyPolicyCheckerTestValid, ValidSource) {
+  PolicyMap policy_map;
+  PrefValueMap prefs;
+  std::unique_ptr<base::Value> expected;
+  const base::Value* value;
+  PolicyErrorMap errors;
+  PolicyHandlerParameters params;
+  CloudOnlyPolicyChecker handler(std::make_unique<SimplePolicyHandler>(
+      kTestPolicy, kTestPref, base::Value::Type::STRING));
+
+  policy_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 GetParam(), base::Value("some_value"), nullptr);
+
+  EXPECT_TRUE(handler.CheckPolicySettings(policy_map, &errors));
+  EXPECT_TRUE(errors.empty());
+
+  handler.ApplyPolicySettingsWithParameters(policy_map, params, &prefs);
+  expected = std::make_unique<base::Value>("some_value");
+  EXPECT_TRUE(prefs.GetValue(kTestPref, &value));
+  EXPECT_EQ(*expected, *value);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ValidSources,
+    CloudOnlyPolicyCheckerTestValid,
+    testing::ValuesIn<PolicySource>({
+        POLICY_SOURCE_CLOUD,
+        POLICY_SOURCE_CLOUD_FROM_ASH,
+#if BUILDFLAG(IS_ANDROID)
+        // Android allows command line policy for development and testing.
+        POLICY_SOURCE_COMMAND_LINE,
+#endif  // BUILDFLAG(IS_ANDROID)
+    }));
+
+class CloudOnlyPolicyCheckerTestInvalid
+    : public testing::TestWithParam<PolicySource> {};
+
+TEST_P(CloudOnlyPolicyCheckerTestInvalid, InvalidSource) {
+  PolicyMap policy_map;
+  PrefValueMap prefs;
+  std::unique_ptr<base::Value> expected;
+  PolicyErrorMap errors;
+  PolicyHandlerParameters params;
+  CloudOnlyPolicyChecker handler(std::make_unique<SimplePolicyHandler>(
+      kTestPolicy, kTestPref, base::Value::Type::STRING));
+
+  policy_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 GetParam(), base::Value("some_value"), nullptr);
+
+  EXPECT_FALSE(handler.CheckPolicySettings(policy_map, &errors));
+  EXPECT_FALSE(errors.empty());
+  EXPECT_EQ(errors.GetErrorMessages(kTestPolicy),
+            l10n_util::GetStringUTF16(IDS_POLICY_CLOUD_SOURCE_ONLY_ERROR));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InvalidSources,
+    CloudOnlyPolicyCheckerTestInvalid,
+    testing::ValuesIn<PolicySource>({
+        POLICY_SOURCE_ENTERPRISE_DEFAULT,
+#if !BUILDFLAG(IS_ANDROID)
+        // Android allows command line policy for development and testing.
+        POLICY_SOURCE_COMMAND_LINE,
+#endif  // BUILDFLAG(IS_ANDROID)
+        POLICY_SOURCE_ACTIVE_DIRECTORY,
+        POLICY_SOURCE_DEVICE_LOCAL_ACCOUNT_OVERRIDE_DEPRECATED,
+        POLICY_SOURCE_PLATFORM,
+        POLICY_SOURCE_PRIORITY_CLOUD_DEPRECATED,
+        POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE,
+    }));
+
+TEST(CloudOnlyPolicyChecker, MergedCloudSourcesIsValid) {
+  PolicyErrorMap errors;
+  CloudOnlyPolicyChecker handler(std::make_unique<SimplePolicyHandler>(
+      kTestPolicy, kTestPref, base::Value::Type::STRING));
+
+  // Merged with only cloud sources should be valid.
+  PolicyMap valid_merged_map;
+  valid_merged_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                       POLICY_SOURCE_CLOUD, base::Value("user cloud value"),
+                       nullptr);
+  PolicyMap other_cloud_map;
+  other_cloud_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                      POLICY_SOURCE_CLOUD, base::Value("machine cloud value"),
+                      nullptr);
+  valid_merged_map.MergeFrom(other_cloud_map);
+  EXPECT_TRUE(handler.CheckPolicySettings(valid_merged_map, &errors));
+  EXPECT_TRUE(errors.empty());
+}
+
+TEST(CloudOnlyPolicyChecker, MergedNonCloudSourceIsInvalid) {
+  PolicyErrorMap errors;
+  CloudOnlyPolicyChecker handler(std::make_unique<SimplePolicyHandler>(
+      kTestPolicy, kTestPref, base::Value::Type::STRING));
+
+  // Merged with a non-cloud source should be invalid.
+  PolicyMap invalid_merged_map;
+  invalid_merged_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                         POLICY_SOURCE_CLOUD, base::Value("cloud value"),
+                         nullptr);
+  PolicyMap non_cloud_map;
+  non_cloud_map.Set(kTestPolicy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                    POLICY_SOURCE_PLATFORM, base::Value("platform value"),
+                    nullptr);
+  invalid_merged_map.MergeFrom(non_cloud_map);
+  EXPECT_FALSE(handler.CheckPolicySettings(invalid_merged_map, &errors));
+  EXPECT_FALSE(errors.empty());
+  EXPECT_EQ(errors.GetErrorMessages(kTestPolicy),
+            l10n_util::GetStringUTF16(IDS_POLICY_CLOUD_SOURCE_ONLY_ERROR));
 }
 
 }  // namespace policy

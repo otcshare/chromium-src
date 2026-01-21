@@ -5,31 +5,33 @@
 package org.chromium.chrome.browser.webapps;
 
 import android.content.Intent;
-import android.graphics.Bitmap;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
 import org.chromium.base.PackageUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
 import org.chromium.base.task.AsyncTask;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.AppHooks;
-import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebappIntentUtils;
 import org.chromium.chrome.browser.browserservices.metrics.WebApkUmaRecorder;
 import org.chromium.components.webapps.WebApkInstallResult;
 
 /**
- * Java counterpart to webapk_installer.h
- * Contains functionality to install / update WebAPKs.
- * This Java object is created by and owned by the native WebApkInstaller.
+ * Java counterpart to webapk_installer.h Contains functionality to install / update WebAPKs. This
+ * Java object is created by and owned by the native WebApkInstaller.
  */
+@NullMarked
 public class WebApkInstaller {
 
     /** Weak pointer to the native WebApkInstaller. */
     private long mNativePointer;
 
     /** Talks to Google Play to install WebAPKs. */
-    private final GooglePlayWebApkInstallDelegate mInstallDelegate;
+    private final @Nullable GooglePlayWebApkInstallDelegate mInstallDelegate;
 
     private final String mWebApkServerUrl;
 
@@ -51,17 +53,21 @@ public class WebApkInstaller {
 
     /**
      * Installs a WebAPK and monitors the installation.
+     *
      * @param packageName The package name of the WebAPK to install.
      * @param version The version of WebAPK to install.
      * @param title The title of the WebAPK to display during installation.
      * @param token The token from WebAPK Server.
      * @param source The source (either app banner or menu) that the install of a WebAPK was
-     *               triggered.
-     * @param icon The primary icon of the WebAPK to install.
+     *     triggered.
      */
     @CalledByNative
-    private void installWebApkAsync(final String packageName, int version, final String title,
-            String token, final int source, final Bitmap icon) {
+    private void installWebApkAsync(
+            @JniType("std::string") final String packageName,
+            int version,
+            @JniType("std::u16string") final String title,
+            @JniType("std::string") String token,
+            final int source) {
         // Check whether the WebAPK package is already installed. The WebAPK may have been installed
         // by another Chrome version (e.g. Chrome Dev). We have to do this check because the Play
         // install API fails silently if the package is already installed.
@@ -77,44 +83,47 @@ public class WebApkInstaller {
             return;
         }
 
-        Callback<Integer> callback = new Callback<Integer>() {
-            @Override
-            public void onResult(Integer result) {
-                WebApkInstaller.this.notify(result);
-                if (result == WebApkInstallResult.FAILURE) return;
+        Callback<Integer> callback =
+                (Integer result) -> {
+                    WebApkInstaller.this.notify(result);
+                    if (result == WebApkInstallResult.FAILURE) return;
+                    var intentDataProvider =
+                            WebApkIntentDataProviderFactory.create(
+                                    new Intent(),
+                                    packageName,
+                                    null,
+                                    source,
+                                    /* forceNavigation= */ false,
+                                    /* canUseSplashFromContentProvider= */ false,
+                                    /* shareData= */ null,
+                                    /* shareDataActivityClassName= */ null);
 
-                // Stores the source info of WebAPK in WebappDataStorage.
-                WebappRegistry.getInstance().register(
-                        WebappIntentUtils.getIdForWebApkPackage(packageName),
-                        new WebappRegistry.FetchWebappDataStorageCallback() {
-                            @Override
-                            public void onWebappDataStorageRetrieved(WebappDataStorage storage) {
-                                BrowserServicesIntentDataProvider intentDataProvider =
-                                        WebApkIntentDataProviderFactory.create(new Intent(),
-                                                packageName, null, source,
-                                                false /* forceNavigation */,
-                                                false /* canUseSplashFromContentProvider */,
-                                                null /* shareData */,
-                                                null /* shareDataActivityClassName */);
+                    // Stores the source info of WebAPK in WebappDataStorage.
+                    WebappRegistry.FetchWebappDataStorageCallback fetchCallback =
+                            (WebappDataStorage storage) -> {
                                 storage.updateFromWebappIntentDataProvider(intentDataProvider);
                                 storage.updateSource(source);
                                 storage.updateTimeOfLastCheckForUpdatedWebManifest();
-                            }
-                        });
-            }
-        };
+                                WebApkSyncService.onWebApkUsed(
+                                        intentDataProvider, storage, true /* isInstall */);
+                            };
+                    WebappRegistry.getInstance()
+                            .register(
+                                    WebappIntentUtils.getIdForWebApkPackage(packageName),
+                                    fetchCallback);
+                };
         mInstallDelegate.installAsync(packageName, version, title, token, callback);
     }
 
     private void notify(@WebApkInstallResult int result) {
         if (mNativePointer != 0) {
-            WebApkInstallerJni.get().onInstallFinished(
-                    mNativePointer, WebApkInstaller.this, result);
+            WebApkInstallerJni.get().onInstallFinished(mNativePointer, result);
         }
     }
 
     /**
      * Updates a WebAPK installation.
+     *
      * @param packageName The package name of the WebAPK to install.
      * @param version The version of WebAPK to install.
      * @param title The title of the WebAPK to display during installation.
@@ -122,18 +131,22 @@ public class WebApkInstaller {
      */
     @CalledByNative
     private void updateAsync(
-            String packageName, int version, String title, String token) {
+            @JniType("std::string") String packageName,
+            int version,
+            @JniType("std::u16string") String title,
+            @JniType("std::string") String token) {
         if (mInstallDelegate == null) {
             notify(WebApkInstallResult.NO_INSTALLER);
             return;
         }
 
-        Callback<Integer> callback = new Callback<Integer>() {
-            @Override
-            public void onResult(Integer result) {
-                WebApkInstaller.this.notify(result);
-            }
-        };
+        Callback<Integer> callback =
+                new Callback<>() {
+                    @Override
+                    public void onResult(Integer result) {
+                        WebApkInstaller.this.notify(result);
+                    }
+                };
         mInstallDelegate.updateAsync(packageName, version, title, token, callback);
     }
 
@@ -156,15 +169,13 @@ public class WebApkInstaller {
 
             @Override
             protected void onPostExecute(Integer result) {
-                WebApkInstallerJni.get().onGotSpaceStatus(
-                        mNativePointer, WebApkInstaller.this, result);
+                WebApkInstallerJni.get().onGotSpaceStatus(mNativePointer, result);
             }
-        }
-                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     @CalledByNative
-    private String getWebApkServerUrl() {
+    private @JniType("std::string") String getWebApkServerUrl() {
         return mWebApkServerUrl;
     }
 
@@ -174,8 +185,8 @@ public class WebApkInstaller {
 
     @NativeMethods
     interface Natives {
-        void onInstallFinished(long nativeWebApkInstaller, WebApkInstaller caller,
-                @WebApkInstallResult int result);
-        void onGotSpaceStatus(long nativeWebApkInstaller, WebApkInstaller caller, int status);
+        void onInstallFinished(long nativeWebApkInstaller, @WebApkInstallResult int result);
+
+        void onGotSpaceStatus(long nativeWebApkInstaller, int status);
     }
 }

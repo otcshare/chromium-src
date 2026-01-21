@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 #include "sql/init_status.h"
 
@@ -50,7 +50,7 @@ class HistoryClient {
   // Returns a new HistoryBackendClient instance.
   virtual std::unique_ptr<HistoryBackendClient> CreateBackendClient() = 0;
 
-  // Update the last used `time` for the given bookmark node `id`.
+  // Update the last used `time` for the given `bookmark_node_id`.
   virtual void UpdateBookmarkLastUsedTime(int64_t bookmark_node_id,
                                           base::Time time) = 0;
 };

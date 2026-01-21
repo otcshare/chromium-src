@@ -4,13 +4,15 @@
 
 #include "content/browser/android/background_sync_network_observer_android.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
-#include "content/public/android/content_jni_headers/BackgroundSyncNetworkObserver_jni.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/service_worker_context.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/BackgroundSyncNetworkObserver_jni.h"
+
+using base::android::JavaRef;
 
 namespace content {
 
@@ -32,20 +34,18 @@ void BackgroundSyncNetworkObserverAndroid::Observer::Init() {
   // scoped to the lifetime of this object.
   JNIEnv* env = base::android::AttachCurrentThread();
   j_observer_ = Java_BackgroundSyncNetworkObserver_createObserver(
-      env, reinterpret_cast<jlong>(this));
+      env, reinterpret_cast<int64_t>(this));
 }
 
 BackgroundSyncNetworkObserverAndroid::Observer::~Observer() {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_BackgroundSyncNetworkObserver_removeObserver(
-      env, j_observer_, reinterpret_cast<jlong>(this));
+      env, j_observer_, reinterpret_cast<int64_t>(this));
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
 void BackgroundSyncNetworkObserverAndroid::Observer::
-    NotifyConnectionTypeChanged(JNIEnv* env,
-                                const JavaParamRef<jobject>& jcaller,
-                                jint new_connection_type) {
+    NotifyConnectionTypeChanged(JNIEnv* env, int32_t new_connection_type) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   callback_.Run(
       static_cast<network::mojom::ConnectionType>(new_connection_type));
@@ -79,3 +79,5 @@ void BackgroundSyncNetworkObserverAndroid::RegisterWithNetworkConnectionTracker(
     network::NetworkConnectionTracker* network_connection_tracker) {}
 
 }  // namespace content
+
+DEFINE_JNI(BackgroundSyncNetworkObserver)

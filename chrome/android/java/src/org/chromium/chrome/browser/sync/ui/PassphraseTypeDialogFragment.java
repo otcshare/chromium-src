@@ -4,12 +4,11 @@
 
 package org.chromium.chrome.browser.sync.ui;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.components.sync.Passphrase.isExplicitPassphraseType;
 
 import android.app.Dialog;
 import android.content.DialogInterface;
-import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.text.SpannableString;
 import android.text.method.LinkMovementMethod;
@@ -18,25 +17,21 @@ import android.view.View;
 import android.widget.CheckedTextView;
 
 import androidx.appcompat.app.AlertDialog;
-import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.fragment.app.DialogFragment;
 
-import org.chromium.base.ContextUtils;
-import org.chromium.base.IntentUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeStringConstants;
+import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
 import org.chromium.components.sync.PassphraseType;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
 import org.chromium.ui.widget.TextViewWithClickableSpans;
 
-/**
- * Dialog to ask the user select what type of password to use for encryption.
- */
-public class PassphraseTypeDialogFragment
-        extends DialogFragment implements DialogInterface.OnClickListener {
-    private static final String TAG = "PassphraseTypeDialogFragment";
-
+/** Dialog to ask the user select what type of password to use for encryption. */
+@NullMarked
+public class PassphraseTypeDialogFragment extends DialogFragment
+        implements DialogInterface.OnClickListener {
     public interface Listener {
         /**
          * Called when the user doesn't have a custom passphrase and taps the option to set up one.
@@ -46,9 +41,7 @@ public class PassphraseTypeDialogFragment
         void onChooseCustomPassphraseRequested();
     }
 
-    /**
-     * This argument should contain a single value of type {@link PassphraseType}.
-     */
+    /** This argument should contain a single value of type {@link PassphraseType}. */
     private static final String ARG_CURRENT_TYPE = "arg_current_type";
 
     private static final String ARG_IS_CUSTOM_PASSPHRASE_ALLOWED =
@@ -66,16 +59,15 @@ public class PassphraseTypeDialogFragment
     }
 
     @Override
-    public Dialog onCreateDialog(Bundle savedInstanceState) {
+    public Dialog onCreateDialog(@Nullable Bundle savedInstanceState) {
         final View dialog =
                 getActivity().getLayoutInflater().inflate(R.layout.sync_passphrase_types, null);
 
         final CheckedTextView explicitPassphraseCheckbox =
-                (CheckedTextView) dialog.findViewById(R.id.explicit_passphrase_checkbox);
+                dialog.findViewById(R.id.explicit_passphrase_checkbox);
         final CheckedTextView keystorePassphraseCheckbox =
-                (CheckedTextView) dialog.findViewById(R.id.keystore_passphrase_checkbox);
-        final TextViewWithClickableSpans resetSyncLink =
-                (TextViewWithClickableSpans) dialog.findViewById(R.id.reset_sync_link);
+                dialog.findViewById(R.id.keystore_passphrase_checkbox);
+        final TextViewWithClickableSpans resetSyncLink = dialog.findViewById(R.id.reset_sync_link);
 
         if (isExplicitPassphraseType(getArguments().getInt(ARG_CURRENT_TYPE))) {
             explicitPassphraseCheckbox.setChecked(true);
@@ -104,17 +96,15 @@ public class PassphraseTypeDialogFragment
     private SpannableString getResetSyncText() {
         return SpanApplier.applySpans(
                 getString(R.string.sync_passphrase_encryption_reset_instructions),
-                new SpanInfo("<resetlink>", "</resetlink>", new ClickableSpan() {
-                    @Override
-                    public void onClick(View view) {
-                        Uri syncDashboardUrl = Uri.parse(ChromeStringConstants.SYNC_DASHBOARD_URL);
-                        Intent intent = new Intent(Intent.ACTION_VIEW, syncDashboardUrl);
-                        intent.setPackage(ContextUtils.getApplicationContext().getPackageName());
-                        IntentUtils.safePutBinderExtra(
-                                intent, CustomTabsIntent.EXTRA_SESSION, null);
-                        getActivity().startActivity(intent);
-                    }
-                }));
+                new SpanInfo(
+                        "BEGIN_LINK",
+                        "END_LINK",
+                        new ClickableSpan() {
+                            @Override
+                            public void onClick(View view) {
+                                SyncSettingsUtils.openSyncDashboard(getActivity());
+                            }
+                        }));
     }
 
     @Override
@@ -125,7 +115,7 @@ public class PassphraseTypeDialogFragment
     }
 
     private void onCustomPassphraseCheckboxClicked(View unused) {
-        ((Listener) getTargetFragment()).onChooseCustomPassphraseRequested();
+        assumeNonNull((Listener) getTargetFragment()).onChooseCustomPassphraseRequested();
         dismiss();
     }
 }

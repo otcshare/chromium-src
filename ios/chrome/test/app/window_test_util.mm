@@ -6,23 +6,21 @@
 
 #import <Foundation/Foundation.h>
 
+#import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/main_controller.h"
-#import "ios/chrome/browser/main/browser.h"
-#import "ios/chrome/browser/ui/commands/browser_commands.h"
-#import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/ui/main/browser_interface_provider.h"
-#import "ios/chrome/browser/ui/main/scene_controller.h"
-#import "ios/chrome/browser/ui/main/scene_controller_testing.h"
-#import "ios/chrome/browser/ui/main/scene_state.h"
-#import "ios/chrome/browser/ui/tab_switcher/tab_grid/tab_grid_coordinator.h"
-#import "ios/chrome/browser/url/chrome_url_constants.h"
-#import "ios/chrome/browser/url_loading/url_loading_params.h"
-#import "ios/chrome/browser/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_controller_testing.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/public/commands/browser_commands.h"
+#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_coordinator.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace chrome_test_util {
 
@@ -42,15 +40,16 @@ SceneState* GetSceneStateForWindowWithNumber(int windowNumber) {
   return nil;
 }
 
-id<BrowserInterfaceProvider> GetInterfaceProviderForWindowWithNumber(
+id<BrowserProviderInterface> GetInterfaceProviderForWindowWithNumber(
     int windowNumber) {
-  return GetSceneStateForWindowWithNumber(windowNumber).interfaceProvider;
+  return GetSceneStateForWindowWithNumber(windowNumber)
+      .browserProviderInterface;
 }
 
 // Returns the browser for the current mode.
 Browser* GetCurrentBrowserForWindowWithNumber(int windowNumber) {
   return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .currentInterface.browser;
+      .currentBrowserProvider.browser;
 }
 
 // Returns the WebStateList for the current mode. Or nullptr of there is no
@@ -70,13 +69,13 @@ web::WebState* GetCurrentWebStateForWindowWithNumber(int windowNumber) {
 
 NSUInteger GetMainTabCountForWindowWithNumber(int windowNumber) {
   return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .mainInterface.browser->GetWebStateList()
+      .mainBrowserProvider.browser->GetWebStateList()
       ->count();
 }
 
 NSUInteger GetIncognitoTabCountForWindowWithNumber(int windowNumber) {
   return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .incognitoInterface.browser->GetWebStateList()
+      .incognitoBrowserProvider.browser->GetWebStateList()
       ->count();
 }
 
@@ -92,8 +91,8 @@ void OpenNewTabInWindowWithNumber(int windowNumber) {
       [controller addANewTabAndPresentBrowser:browser withURLLoadParams:params];
       return;
     }
-    id<ApplicationCommands, BrowserCommands> handler =
-        static_cast<id<ApplicationCommands, BrowserCommands>>(
+    id<SceneCommands, BrowserCommands> handler =
+        static_cast<id<SceneCommands, BrowserCommands>>(
             GetCurrentBrowserForWindowWithNumber(windowNumber)
                 ->GetCommandDispatcher());
     [handler openURLInNewTab:command];

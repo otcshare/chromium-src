@@ -8,10 +8,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "ash/components/arc/test/fake_app_instance.h"
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_menu_constants.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -31,27 +29,25 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_test.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
-#include "chrome/browser/ash/app_list/internal_app/internal_app_metadata.h"
 #include "chrome/browser/ash/app_list/test/fake_app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/menu_manager_factory.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/app_constants/constants.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/manifest_constants.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/display/test/scoped_screen_override.h"
 #include "ui/display/test/test_screen.h"
 
 namespace app_list {
@@ -191,10 +187,12 @@ std::unique_ptr<ui::SimpleMenuModel> GetMenuModel(
 
 class AppContextMenuTest : public AppListTestBase {
  public:
-  AppContextMenuTest() : screen_override_(&test_screen_) {}
+  AppContextMenuTest() { display::Screen::SetScreenInstance(&test_screen_); }
   AppContextMenuTest(const AppContextMenuTest&) = delete;
   AppContextMenuTest& operator=(const AppContextMenuTest&) = delete;
-  ~AppContextMenuTest() override = default;
+  ~AppContextMenuTest() override {
+    display::Screen::SetScreenInstance(nullptr);
+  }
 
   void SetUp() override {
     AppListTestBase::SetUp();
@@ -215,6 +213,7 @@ class AppContextMenuTest : public AppListTestBase {
     menu_delegate_.reset();
     controller_.reset();
     menu_manager_.reset();
+    AppListTestBase::TearDown();
   }
 
  protected:
@@ -259,8 +258,6 @@ class AppContextMenuTest : public AppListTestBase {
 
   FakeAppContextMenuDelegate* menu_delegate() { return menu_delegate_.get(); }
 
-  Profile* profile() { return profile_.get(); }
-
   void AddToStates(const AppServiceContextMenu& menu,
                    MenuState state,
                    std::vector<MenuState>* states) {
@@ -285,7 +282,7 @@ class AppContextMenuTest : public AppListTestBase {
         deserializer.Deserialize(nullptr, nullptr));
 
     DCHECK(manifest.is_dict());
-    std::string error;
+    std::u16string error;
     return extensions::Extension::Create(
         path.DirName(), extensions::mojom::ManifestLocation::kInternal,
         manifest.GetDict(), extensions::Extension::NO_FLAGS, app_id, &error);
@@ -298,8 +295,8 @@ class AppContextMenuTest : public AppListTestBase {
     app_service_test_.SetUp(profile());
 
     scoped_refptr<extensions::Extension> store = MakeApp(app_id, platform_app);
-    service_->AddExtension(store.get());
-    service_->EnableExtension(app_id);
+    registrar()->AddExtension(store.get());
+    registrar()->EnableExtension(app_id);
 
     controller_ = std::make_unique<FakeAppListControllerDelegate>();
     controller_->SetAppPinnable(app_id, pinnable);
@@ -330,7 +327,7 @@ class AppContextMenuTest : public AppListTestBase {
   }
 
   scoped_refptr<extensions::Extension> MakeChromeApp() {
-    std::string err;
+    std::u16string err;
     base::Value::Dict value;
     value.Set("name", "Chrome App");
     value.Set("version", "0.0");
@@ -339,7 +336,7 @@ class AppContextMenuTest : public AppListTestBase {
         base::FilePath(), extensions::mojom::ManifestLocation::kInternal, value,
         extensions::Extension::WAS_INSTALLED_BY_DEFAULT,
         app_constants::kChromeAppId, &err);
-    EXPECT_EQ(err, "");
+    EXPECT_EQ(err, u"");
     return app;
   }
 
@@ -347,7 +344,7 @@ class AppContextMenuTest : public AppListTestBase {
     app_service_test_.SetUp(profile());
 
     scoped_refptr<extensions::Extension> store = MakeChromeApp();
-    service_->AddExtension(store.get());
+    registrar()->AddExtension(store.get());
 
     controller_ = std::make_unique<FakeAppListControllerDelegate>();
     AppServiceContextMenu menu(menu_delegate(), profile(),
@@ -370,7 +367,6 @@ class AppContextMenuTest : public AppListTestBase {
  private:
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   display::test::TestScreen test_screen_;
-  display::test::ScopedScreenOverride screen_override_;
   std::unique_ptr<KeyedService> menu_manager_;
   std::unique_ptr<FakeAppListControllerDelegate> controller_;
   std::unique_ptr<FakeAppContextMenuDelegate> menu_delegate_;
@@ -404,13 +400,10 @@ TEST_F(AppContextMenuTest, ChromeApp) {
 }
 
 TEST_F(AppContextMenuTest, ChromeAppInRecentAppsList) {
-  base::test::ScopedFeatureList feature_list(
-      ash::features::kProductivityLauncher);
-
   app_service_test().SetUp(profile());
 
   scoped_refptr<extensions::Extension> app = MakeChromeApp();
-  service_->AddExtension(app.get());
+  registrar()->AddExtension(app.get());
 
   // Simulate a context menu in the recent apps row.
   AppServiceContextMenu menu(menu_delegate(), profile(),
@@ -438,14 +431,16 @@ TEST_F(AppContextMenuTest, NonExistingExtensionApp) {
 
 TEST_F(AppContextMenuTest, ArcMenu) {
   app_service_test().SetUp(profile());
-  ArcAppTest arc_test;
-  arc_test.SetUp(profile());
+  ArcAppTest arc_app_test;
+  // TODO(crbug.com/454468678): This should be called before profile is created.
+  arc_app_test.PreProfileSetUp();
+  arc_app_test.PostProfileSetUp(profile());
 
-  const auto& app_info = arc_test.fake_apps()[1];
+  const auto& app_info = arc_app_test.fake_apps()[1];
   const std::string app_id = ArcAppTest::GetAppId(*app_info);
   controller()->SetAppPinnable(app_id, AppListControllerDelegate::PIN_EDITABLE);
 
-  arc_test.app_instance()->SendRefreshAppList(arc_test.fake_apps());
+  arc_app_test.app_instance()->SendRefreshAppList(arc_app_test.fake_apps());
 
   std::unique_ptr<FakeAppServiceAppItem> item =
       GetAppListItem(profile(), app_id);
@@ -466,7 +461,7 @@ TEST_F(AppContextMenuTest, ArcMenu) {
   ValidateItemState(menu.get(), index++, MenuState(ash::SHOW_APP_INFO));
 
   // Test activate request.
-  EXPECT_EQ(0u, arc_test.app_instance()->launch_requests().size());
+  EXPECT_EQ(0u, arc_app_test.app_instance()->launch_requests().size());
 
   menu->ActivatedAt(0);
 
@@ -474,12 +469,12 @@ TEST_F(AppContextMenuTest, ArcMenu) {
   item->WaitForLaunch();
 
   const std::vector<std::unique_ptr<arc::FakeAppInstance::Request>>&
-      launch_requests = arc_test.app_instance()->launch_requests();
+      launch_requests = arc_app_test.app_instance()->launch_requests();
   ASSERT_EQ(1u, launch_requests.size());
   EXPECT_TRUE(launch_requests[0]->IsForApp(*app_info));
 
   controller()->SetAppOpen(app_id, true);
-  arc_test.app_instance()->SendTaskCreated(1, *app_info, std::string());
+  arc_app_test.app_instance()->SendTaskCreated(1, *app_info, std::string());
 
   // It is not expected that menu model is unchanged on GetContextMenuModel.
   // ARC app menu requires model to be recalculated.
@@ -506,15 +501,15 @@ TEST_F(AppContextMenuTest, ArcMenu) {
   }
 
   // Test launching app shortcut item.
-  EXPECT_EQ(0, arc_test.app_instance()->launch_app_shortcut_item_count());
+  EXPECT_EQ(0, arc_app_test.app_instance()->launch_app_shortcut_item_count());
   menu->ActivatedAt(menu->GetItemCount() - 1);
-  EXPECT_EQ(1, arc_test.app_instance()->launch_app_shortcut_item_count());
+  EXPECT_EQ(1, arc_app_test.app_instance()->launch_app_shortcut_item_count());
 
   // This makes all apps non-ready.
   controller()->SetAppOpen(app_id, false);
-  arc_test.app_instance()->SendTaskDestroyed(1);
+  arc_app_test.app_instance()->SendTaskDestroyed(1);
   arc::ConnectionObserver<arc::mojom::AppInstance>* connection_observer =
-      arc_test.arc_app_list_prefs();
+      arc_app_test.arc_app_list_prefs();
   connection_observer->OnConnectionClosed();
 
   menu = GetContextMenuModel(item.get());
@@ -540,25 +535,33 @@ TEST_F(AppContextMenuTest, ArcMenu) {
   }
 
   // Uninstall all apps.
-  arc_test.app_instance()->SendRefreshAppList(
+  arc_app_test.app_instance()->SendRefreshAppList(
       std::vector<arc::mojom::AppInfoPtr>());
   controller()->SetAppOpen(app_id, false);
 
   // No app available case.
   menu = GetContextMenuModel(item.get());
   EXPECT_EQ(nullptr, menu);
+
+  arc_app_test.PreProfileTearDown();
+  // TODO(crbug.com/454468678): This should be called after profile is deleted.
+  arc_app_test.PostProfileTearDown();
 }
 
 TEST_F(AppContextMenuTest, ArcMenuShortcut) {
   app_service_test().SetUp(profile());
-  ArcAppTest arc_test;
-  arc_test.SetUp(profile());
+  ArcAppTest arc_app_test;
+  // TODO(crbug.com/454468678): This should be called before profile is created.
+  arc_app_test.PreProfileSetUp();
+  arc_app_test.PostProfileSetUp(profile());
 
-  const arc::mojom::ShortcutInfo& shortcut_info = arc_test.fake_shortcuts()[0];
+  const arc::mojom::ShortcutInfo& shortcut_info =
+      arc_app_test.fake_shortcuts()[0];
   const std::string app_id = ArcAppTest::GetAppId(shortcut_info);
   controller()->SetAppPinnable(app_id, AppListControllerDelegate::PIN_EDITABLE);
 
-  arc_test.app_instance()->SendInstallShortcuts(arc_test.fake_shortcuts());
+  arc_app_test.app_instance()->SendInstallShortcuts(
+      arc_app_test.fake_shortcuts());
 
   std::unique_ptr<AppServiceAppItem> item = GetAppListItem(profile(), app_id);
 
@@ -586,7 +589,7 @@ TEST_F(AppContextMenuTest, ArcMenuShortcut) {
 
   // This makes all apps non-ready. Shortcut is still uninstall-able.
   arc::ConnectionObserver<arc::mojom::AppInstance>* connection_observer =
-      arc_test.arc_app_list_prefs();
+      arc_app_test.arc_app_list_prefs();
   connection_observer->OnConnectionClosed();
 
   menu = GetContextMenuModel(item.get());
@@ -610,18 +613,24 @@ TEST_F(AppContextMenuTest, ArcMenuShortcut) {
     if (index < menu->GetItemCount())
       EXPECT_EQ(ui::PADDED_SEPARATOR, menu->GetSeparatorTypeAt(index));
   }
+
+  arc_app_test.PreProfileTearDown();
+  // TODO(crbug.com/454468678): This should be called after profile is deleted.
+  arc_app_test.PostProfileTearDown();
 }
 
 TEST_F(AppContextMenuTest, ArcMenuStickyItem) {
   app_service_test().SetUp(profile());
-  ArcAppTest arc_test;
-  arc_test.SetUp(profile());
+  ArcAppTest arc_app_test;
+  // TODO(crbug.com/454468678): This should be called before profile is created.
+  arc_app_test.PreProfileSetUp();
+  arc_app_test.PostProfileSetUp(profile());
 
-  arc_test.app_instance()->SendRefreshAppList(arc_test.fake_apps());
+  arc_app_test.app_instance()->SendRefreshAppList(arc_app_test.fake_apps());
 
   {
     // Verify menu of store
-    const auto& store_info = arc_test.fake_apps()[0];
+    const auto& store_info = arc_app_test.fake_apps()[0];
     const std::string store_id = ArcAppTest::GetAppId(*store_info);
     controller()->SetAppPinnable(store_id,
                                  AppListControllerDelegate::PIN_EDITABLE);
@@ -650,17 +659,23 @@ TEST_F(AppContextMenuTest, ArcMenuStickyItem) {
         EXPECT_EQ(ui::PADDED_SEPARATOR, menu->GetSeparatorTypeAt(index));
     }
   }
+
+  arc_app_test.PreProfileTearDown();
+  // TODO(crbug.com/454468678): This should be called after profile is deleted.
+  arc_app_test.PostProfileTearDown();
 }
 
 // In suspended state app does not have launch item.
 TEST_F(AppContextMenuTest, ArcMenuSuspendedItem) {
   app_service_test().SetUp(profile());
-  ArcAppTest arc_test;
-  arc_test.SetUp(profile());
+  ArcAppTest arc_app_test;
+  // TODO(crbug.com/454468678): This should be called before profile is created.
+  arc_app_test.PreProfileSetUp();
+  arc_app_test.PostProfileSetUp(profile());
 
   std::vector<arc::mojom::AppInfoPtr> apps;
-  apps.emplace_back(arc_test.fake_apps()[0]->Clone())->suspended = true;
-  arc_test.app_instance()->SendRefreshAppList(apps);
+  apps.emplace_back(arc_app_test.fake_apps()[0]->Clone())->suspended = true;
+  arc_app_test.app_instance()->SendRefreshAppList(apps);
 
   const std::string app_id = ArcAppTest::GetAppId(*apps[0]);
   controller()->SetAppPinnable(app_id, AppListControllerDelegate::PIN_EDITABLE);
@@ -686,6 +701,10 @@ TEST_F(AppContextMenuTest, ArcMenuSuspendedItem) {
     if (index < menu->GetItemCount())
       EXPECT_EQ(ui::PADDED_SEPARATOR, menu->GetSeparatorTypeAt(index));
   }
+
+  arc_app_test.PreProfileTearDown();
+  // TODO(crbug.com/454468678): This should be called after profile is deleted.
+  arc_app_test.PostProfileTearDown();
 }
 
 TEST_F(AppContextMenuTest, CommandIdsMatchEnumsForHistograms) {
@@ -702,82 +721,11 @@ TEST_F(AppContextMenuTest, CommandIdsMatchEnumsForHistograms) {
   EXPECT_EQ(107, ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW);
   EXPECT_EQ(108, ash::INSTALL);
   EXPECT_EQ(200, ash::USE_LAUNCH_TYPE_COMMAND_START);
-  EXPECT_EQ(200, ash::USE_LAUNCH_TYPE_PINNED);
+  EXPECT_EQ(200, ash::DEPRECATED_USE_LAUNCH_TYPE_PINNED);
   EXPECT_EQ(201, ash::USE_LAUNCH_TYPE_REGULAR);
-  EXPECT_EQ(202, ash::USE_LAUNCH_TYPE_FULLSCREEN);
+  EXPECT_EQ(202, ash::DEPRECATED_USE_LAUNCH_TYPE_FULLSCREEN);
   EXPECT_EQ(203, ash::USE_LAUNCH_TYPE_WINDOW);
-}
-
-// Tests that internal app's context menu is correct.
-TEST_F(AppContextMenuTest, InternalAppMenu) {
-  for (const auto& internal_app : GetInternalAppList(profile())) {
-    controller()->SetAppPinnable(internal_app.app_id,
-                                 AppListControllerDelegate::PIN_EDITABLE);
-
-    std::unique_ptr<AppServiceAppItem> item =
-        GetAppListItem(profile(), internal_app.app_id);
-    std::unique_ptr<ui::MenuModel> menu = GetContextMenuModel(item.get());
-    ASSERT_NE(nullptr, menu);
-    EXPECT_EQ(1u, menu->GetItemCount());
-    ValidateItemState(menu.get(), 0, MenuState(ash::TOGGLE_PIN));
-  }
-}
-
-// Lacros has its own test suite because the feature needs to be enabled before
-// SetUp().
-class AppContextMenuLacrosTest : public AppContextMenuTest {
- public:
-  AppContextMenuLacrosTest() {
-    feature_list_.InitAndEnableFeature(ash::features::kLacrosSupport);
-    crosapi::browser_util::SetProfileMigrationCompletedForTest(true);
-  }
-  AppContextMenuLacrosTest(const AppContextMenuLacrosTest&) = delete;
-  AppContextMenuLacrosTest& operator=(const AppContextMenuLacrosTest&) = delete;
-  ~AppContextMenuLacrosTest() override = default;
-
-  // testing::Test:
-  void SetUp() override {
-    auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
-    auto* fake_user_manager = user_manager.get();
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::move(user_manager));
-
-    // Login a user. The "email" must match the TestingProfile's
-    // GetProfileUserName() so that profile() will be the primary profile.
-    const AccountId account_id = AccountId::FromUserEmail("testing_profile");
-    fake_user_manager->AddUser(account_id);
-    fake_user_manager->LoginUser(account_id);
-
-    // Creates profile().
-    AppContextMenuTest::SetUp();
-
-    ASSERT_TRUE(ash::ProfileHelper::Get()->IsPrimaryProfile(profile()));
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-};
-
-TEST_F(AppContextMenuLacrosTest, LacrosApp) {
-  app_service_test().SetUp(profile());
-
-  // Create the context menu.
-  AppServiceContextMenu menu(menu_delegate(), profile(),
-                             app_constants::kLacrosAppId, controller(),
-                             ash::AppListItemContext::kNone);
-  std::unique_ptr<ui::MenuModel> menu_model = GetMenuModel(&menu);
-  ASSERT_NE(menu_model, nullptr);
-
-  // Verify expected menu items.
-  // It should have, Open new window, Open incognito window, and app info.
-  EXPECT_EQ(menu_model->GetItemCount(), 3u);
-  std::vector<MenuState> states;
-  AddToStates(menu, MenuState(ash::APP_CONTEXT_MENU_NEW_WINDOW), &states);
-  AddToStates(menu, MenuState(ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW),
-              &states);
-  AddToStates(menu, MenuState(ash::SHOW_APP_INFO), &states);
-  ValidateMenuState(menu_model.get(), states);
+  EXPECT_EQ(204, ash::USE_LAUNCH_TYPE_TABBED_WINDOW);
 }
 
 }  // namespace app_list

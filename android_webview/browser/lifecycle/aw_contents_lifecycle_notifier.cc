@@ -6,7 +6,9 @@
 
 #include <utility>
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "android_webview/browser_jni_headers/AwContentsLifecycleNotifier_jni.h"
+#include "base/compiler_specific.h"
 #include "content/public/browser/browser_thread.h"
 
 using base::android::AttachCurrentThread;
@@ -53,6 +55,8 @@ AwContentsLifecycleNotifier::AwContentsLifecycleNotifier(
   EnsureOnValidSequence();
   DCHECK(!g_instance);
   g_instance = this;
+  JNIEnv* env = AttachCurrentThread();
+  java_ref_.Reset(Java_AwContentsLifecycleNotifier_getInstance(env));
 }
 
 AwContentsLifecycleNotifier::~AwContentsLifecycleNotifier() {
@@ -66,15 +70,15 @@ void AwContentsLifecycleNotifier::OnWebViewCreated(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   has_aw_contents_ever_created_ = true;
   bool first_created = !HasAwContentsInstance();
-  DCHECK(aw_contents_to_data_.find(aw_contents) == aw_contents_to_data_.end());
+  DCHECK(!aw_contents_to_data_.contains(aw_contents));
 
   aw_contents_to_data_.emplace(aw_contents, AwContentsData());
-  state_count_[ToIndex(AwContentsState::kDetached)]++;
+  UNSAFE_TODO(state_count_[ToIndex(AwContentsState::kDetached)])++;
   UpdateAppState();
 
   if (first_created) {
     Java_AwContentsLifecycleNotifier_onFirstWebViewCreated(
-        AttachCurrentThread());
+        AttachCurrentThread(), java_ref_);
   }
 }
 
@@ -82,16 +86,16 @@ void AwContentsLifecycleNotifier::OnWebViewDestroyed(
     const AwContents* aw_contents) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   const auto it = aw_contents_to_data_.find(aw_contents);
-  DCHECK(it != aw_contents_to_data_.end());
+  CHECK(it != aw_contents_to_data_.end());
 
-  state_count_[ToIndex(it->second.aw_content_state)]--;
-  DCHECK(state_count_[ToIndex(it->second.aw_content_state)] >= 0);
+  UNSAFE_TODO(state_count_[ToIndex(it->second.aw_content_state)])--;
+  UNSAFE_TODO(DCHECK(state_count_[ToIndex(it->second.aw_content_state)] >= 0));
   aw_contents_to_data_.erase(it);
   UpdateAppState();
 
   if (!HasAwContentsInstance()) {
     Java_AwContentsLifecycleNotifier_onLastWebViewDestroyed(
-        AttachCurrentThread());
+        AttachCurrentThread(), java_ref_);
   }
 }
 
@@ -162,22 +166,24 @@ void AwContentsLifecycleNotifier::OnAwContentsStateChanged(
       CalculateState(data->attached_to_window, data->window_visible);
   if (data->aw_content_state == state)
     return;
-  state_count_[ToIndex(data->aw_content_state)]--;
-  DCHECK(state_count_[ToIndex(data->aw_content_state)] >= 0);
-  state_count_[ToIndex(state)]++;
+  UNSAFE_TODO(state_count_[ToIndex(data->aw_content_state)])--;
+  UNSAFE_TODO(DCHECK(state_count_[ToIndex(data->aw_content_state)] >= 0));
+  UNSAFE_TODO(state_count_[ToIndex(state)])++;
   data->aw_content_state = state;
   UpdateAppState();
 }
 
 void AwContentsLifecycleNotifier::UpdateAppState() {
   WebViewAppStateObserver::State state;
-  if (state_count_[ToIndex(AwContentsState::kForeground)] > 0)
+  if (UNSAFE_TODO(state_count_[ToIndex(AwContentsState::kForeground)]) > 0) {
     state = WebViewAppStateObserver::State::kForeground;
-  else if (state_count_[ToIndex(AwContentsState::kBackground)] > 0)
+  } else if (UNSAFE_TODO(state_count_[ToIndex(AwContentsState::kBackground)]) >
+             0) {
     state = WebViewAppStateObserver::State::kBackground;
-  else if (state_count_[ToIndex(AwContentsState::kDetached)] > 0)
+  } else if (UNSAFE_TODO(state_count_[ToIndex(AwContentsState::kDetached)]) >
+             0) {
     state = WebViewAppStateObserver::State::kUnknown;
-  else
+  } else
     state = WebViewAppStateObserver::State::kDestroyed;
   if (state != app_state_) {
     bool previous_in_foreground =
@@ -190,21 +196,32 @@ void AwContentsLifecycleNotifier::UpdateAppState() {
     if (previous_in_foreground && on_lose_foreground_callback_) {
       on_lose_foreground_callback_.Run();
     }
+
+    Java_AwContentsLifecycleNotifier_onAppStateChanged(
+        AttachCurrentThread(), java_ref_, static_cast<int32_t>(app_state_));
   }
 }
 
 bool AwContentsLifecycleNotifier::HasAwContentsInstance() const {
   for (size_t i = 0; i < std::size(state_count_); i++) {
-    if (state_count_[i] > 0)
+    if (UNSAFE_TODO(state_count_[i]) > 0) {
       return true;
+    }
   }
   return false;
 }
 
 AwContentsLifecycleNotifier::AwContentsData*
 AwContentsLifecycleNotifier::GetAwContentsData(const AwContents* aw_contents) {
-  DCHECK(aw_contents_to_data_.find(aw_contents) != aw_contents_to_data_.end());
+  DCHECK(aw_contents_to_data_.contains(aw_contents));
   return &aw_contents_to_data_.at(aw_contents);
 }
 
+void AwContentsLifecycleNotifier::InitForTesting() {  // IN-TEST
+  Java_AwContentsLifecycleNotifier_initialize(        // IN-TEST
+      AttachCurrentThread());
+}
+
 }  // namespace android_webview
+
+DEFINE_JNI(AwContentsLifecycleNotifier)

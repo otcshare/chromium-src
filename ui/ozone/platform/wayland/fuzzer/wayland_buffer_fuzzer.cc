@@ -9,14 +9,15 @@
 #include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_executor.h"
@@ -27,15 +28,17 @@
 #include "base/test/test_timeouts.h"
 #include "mojo/core/embedder/embedder.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/hdr_metadata.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
 #include "ui/ozone/platform/wayland/host/wayland_output_manager.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
-#include "ui/ozone/platform/wayland/test/test_util.h"
 #include "ui/ozone/platform/wayland/test/test_wayland_server_thread.h"
 #include "ui/ozone/platform/wayland/test/test_zwp_linux_buffer_params.h"
+#include "ui/ozone/platform/wayland/test/wayland_connection_test_api.h"
 #include "ui/platform_window/platform_window_delegate.h"
 #include "ui/platform_window/platform_window_init_properties.h"
 
@@ -71,7 +74,7 @@ class MockPlatformWindowDelegate : public ui::PlatformWindowDelegate {
   MOCK_METHOD0(OnWillDestroyAcceleratedWidget, void());
   MOCK_METHOD0(OnAcceleratedWidgetDestroyed, void());
   MOCK_METHOD1(OnActivationChanged, void(bool active));
-  MOCK_METHOD0(OnMouseEnter, void());
+  MOCK_METHOD0(OnCursorUpdate, void());
 };
 
 struct Environment {
@@ -79,7 +82,7 @@ struct Environment {
       : task_environment((base::CommandLine::Init(0, nullptr),
                           TestTimeouts::Initialize(),
                           base::test::TaskEnvironment::MainThreadType::UI)) {
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
 
     mojo::core::Init();
   }
@@ -118,7 +121,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       DRM_FORMAT_NV12,        DRM_FORMAT_YVU420};
 
   wl::TestWaylandServerThread server;
-  CHECK(server.Start({}));
+  CHECK(server.Start());
 
   std::unique_ptr<ui::WaylandConnection> connection =
       std::make_unique<ui::WaylandConnection>();
@@ -144,7 +147,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   CHECK_NE(widget, gfx::kNullAcceleratedWidget);
 
   // Let the server process the events and wait until everything is initialised.
-  wl::SyncDisplay(connection->display_wrapper(), *connection->display());
+  ui::WaylandConnectionTestApi test_api(connection.get());
+  test_api.SyncDisplay();
 
   base::FilePath temp_dir, temp_path;
   base::ScopedFD fd =
@@ -181,10 +185,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   env.SetTerminateGpuCallback(manager_host);
   manager_host->CreateDmabufBasedBuffer(
       mojo::PlatformHandle(std::move(fd)), buffer_size, strides, offsets,
-      modifiers, kFormat, kPlaneCount, kBufferId);
+      modifiers, kFormat, kPlaneCount, gfx::ColorSpace(), gfx::HDRMetadata(),
+      kBufferId);
 
   // Wait until the buffers are created.
-  wl::SyncDisplay(connection->display_wrapper(), *connection->display());
+  test_api.SyncDisplay();
 
   if (!env.terminated) {
     server.RunAndWait(
@@ -194,13 +199,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           auto params_vector = server->zwp_linux_dmabuf_v1()->buffer_params();
           // To ensure, no other buffers are created, test the size of the
           // vector.
-          for (auto* mock_params : params_vector) {
+          for (wl::TestZwpLinuxBufferParamsV1* mock_params : params_vector) {
             zwp_linux_buffer_params_v1_send_created(
                 mock_params->resource(), mock_params->buffer_resource());
           }
         }));
 
-    wl::SyncDisplay(connection->display_wrapper(), *connection->display());
+    test_api.SyncDisplay();
   } else {
     // If the |manager_host| fires the terminate gpu callback, we need to set
     // the callback again.
@@ -210,7 +215,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   manager_host->DestroyBuffer(kBufferId);
 
   // Wait until the buffers are destroyed.
-  wl::SyncDisplay(connection->display_wrapper(), *connection->display());
+  test_api.SyncDisplay();
 
   // Reset the value as |env| is a static object.
   env.terminated = false;

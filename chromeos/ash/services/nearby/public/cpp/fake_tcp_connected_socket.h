@@ -5,14 +5,13 @@
 #ifndef CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_CONNECTED_SOCKET_H_
 #define CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_CONNECTED_SOCKET_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 // A trivial implementation of TCPConnectedSocket that can invoke a callback
 // upon destruction. Used for unit tests.
@@ -48,7 +47,6 @@ class FakeTcpConnectedSocket : public network::mojom::TCPConnectedSocket {
   base::OnceClosure on_destroy_callback_;
 };
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby
 
 #endif  // CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_TCP_CONNECTED_SOCKET_H_

@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import './emoji_button.js';
+
 import {beforeNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './emoji_variants.html.js';
 import {createCustomEvent, EMOJI_VARIANTS_SHOWN} from './events.js';
-import {Emoji} from './types.js';
+import type {Emoji} from './types.js';
 
 const SKIN_TONE_MEDIUM = '🏽';  // U+1F3FD EMOJI MODIFIER FITZPATRICK TYPE-4
 const FAMILY = '👪';               // U+1F46A FAMILY
@@ -16,7 +18,7 @@ const FAMILY = '👪';               // U+1F46A FAMILY
  * the given codepoint.
  */
 function hasVariation(variants: Emoji[], codepoint: string): boolean {
-  return variants.findIndex(x => x.string.includes(codepoint)) !== -1;
+  return variants.findIndex(x => x.string?.includes(codepoint)) !== -1;
 }
 
 
@@ -57,7 +59,8 @@ export class EmojiVariants extends PolymerElement {
   static get properties() {
     return {
       variants: {type: Array, readonly: true},
-      variantRows: {type: Array},
+      groupedTone: {type: Boolean, readonly: true},
+      groupedGender: {type: Boolean, readonly: true},
       baseEmoji: {type: Array},
       showSkinTones: {type: Boolean},
       showBaseEmoji: {type: Boolean},
@@ -65,7 +68,8 @@ export class EmojiVariants extends PolymerElement {
     };
   }
   variants: Emoji[];
-  private variantRows: Emoji[][];
+  private groupedTone = false;
+  private groupedGender = false;
   private baseEmoji: string;
   private showSkinTones: boolean;
   private showBaseEmoji: boolean;
@@ -84,17 +88,19 @@ export class EmojiVariants extends PolymerElement {
     this.baseEmoji = this.variants[0]?.string ?? '';
     this.showSkinTones = isTwoPeople;
 
-    // if we are showing a base emoji separately, omit it from the main grid.
-    const gridEmoji =
-        this.showBaseEmoji ? this.variants.slice(1) : this.variants;
-    const rowLengths = this.computeVariantRowLengths(gridEmoji);
-    this.variantRows = partitionArray(gridEmoji, rowLengths);
-
     this.addEventListener('keydown', (ev) => this.onKeyDown(ev));
   }
 
   override connectedCallback() {
     beforeNextRender(this, () => this.$.fakeFocusTarget.focus());
+  }
+
+  private computeVariantRows(showBaseEmoji: boolean, variants: Emoji[]):
+      Emoji[][] {
+    // if we are showing a base emoji separately, omit it from the main grid.
+    const gridEmoji = showBaseEmoji ? variants.slice(1) : variants;
+    const rowLengths = this.computeVariantRowLengths(gridEmoji);
+    return partitionArray(gridEmoji, rowLengths);
   }
 
   private computeVariantRowLengths(variants: Emoji[]): number[] {
@@ -126,8 +132,7 @@ export class EmojiVariants extends PolymerElement {
     ev.preventDefault();
     ev.stopPropagation();
     this.dispatchEvent(createCustomEvent(EMOJI_VARIANTS_SHOWN, {
-      button: null,
-      variants: null,
+      baseEmoji: this.baseEmoji,
     }));
   }
 }

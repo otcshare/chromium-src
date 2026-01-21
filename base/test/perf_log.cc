@@ -4,6 +4,8 @@
 
 #include "base/test/perf_log.h"
 
+#include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/notreached.h"
 
@@ -15,7 +17,6 @@ bool InitPerfLog(const FilePath& log_file) {
   if (perf_log_file) {
     // trying to initialize twice
     NOTREACHED();
-    return false;
   }
 
   perf_log_file = OpenFile(log_file, "w");
@@ -26,19 +27,15 @@ void FinalizePerfLog() {
   if (!perf_log_file) {
     // trying to cleanup without initializing
     NOTREACHED();
-    return;
   }
   base::CloseFile(perf_log_file);
 }
 
 void LogPerfResult(const char* test_name, double value, const char* units) {
-  if (!perf_log_file) {
-    NOTREACHED();
-    return;
-  }
+  CHECK(perf_log_file);
 
-  fprintf(perf_log_file, "%s\t%g\t%s\n", test_name, value, units);
-  printf("%s\t%g\t%s\n", test_name, value, units);
+  UNSAFE_TODO(fprintf(perf_log_file, "%s\t%g\t%s\n", test_name, value, units));
+  UNSAFE_TODO(printf("%s\t%g\t%s\n", test_name, value, units));
   fflush(stdout);
 }
 

@@ -33,12 +33,21 @@ export function getOppositeOrientation() {
     : "portrait";
 }
 
-export function makeCleanup(
-  initialOrientation = screen.orientation?.type.split(/-/)[0]
-) {
+export function makeCleanup(options = {}) {
+  const {
+    iframe,
+    initialOrientation = screen.orientation?.type.split(/-/)[0]
+  } = options;
+
   return async () => {
+    if (iframe) {
+      iframe.remove();
+    }
+
     if (initialOrientation) {
-      await screen.orientation.lock(initialOrientation);
+      try {
+        await screen.orientation.lock(initialOrientation);
+      } catch {}
     }
     screen.orientation.unlock();
     requestAnimationFrame(async () => {

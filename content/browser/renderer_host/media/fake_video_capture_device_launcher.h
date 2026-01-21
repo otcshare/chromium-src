@@ -14,7 +14,7 @@ namespace content {
 class FakeVideoCaptureDeviceLauncher
     : public content::VideoCaptureDeviceLauncher {
  public:
-  FakeVideoCaptureDeviceLauncher(media::VideoCaptureSystem* system);
+  explicit FakeVideoCaptureDeviceLauncher(media::VideoCaptureSystem* system);
   ~FakeVideoCaptureDeviceLauncher() override;
 
   void LaunchDeviceAsync(const std::string& device_id,

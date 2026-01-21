@@ -7,7 +7,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "chrome/browser/ui/messages/android/jni_headers/SimpleConfirmInfoBarBuilder_jni.h"
 #include "components/infobars/android/confirm_infobar.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
@@ -17,7 +16,10 @@
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/image/image.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/ui/messages/android/jni_headers/SimpleConfirmInfoBarBuilder_jni.h"
+
+using base::android::JavaRef;
 
 namespace {
 
@@ -25,7 +27,7 @@ namespace {
 class SimpleConfirmInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
   SimpleConfirmInfoBarDelegate(
-      const JavaParamRef<jobject>& j_listener,
+      const JavaRef<jobject>& j_listener,
       infobars::InfoBarDelegate::InfoBarIdentifier infobar_identifier,
       const gfx::Image& bitmap,
       const std::u16string& message_str,
@@ -65,7 +67,7 @@ class SimpleConfirmInfoBarDelegate : public ConfirmInfoBarDelegate {
 };
 
 SimpleConfirmInfoBarDelegate::SimpleConfirmInfoBarDelegate(
-    const JavaParamRef<jobject>& j_listener,
+    const JavaRef<jobject>& j_listener,
     infobars::InfoBarDelegate::InfoBarIdentifier identifier,
     const gfx::Image& bitmap,
     const std::u16string& message_str,
@@ -83,8 +85,7 @@ SimpleConfirmInfoBarDelegate::SimpleConfirmInfoBarDelegate(
   java_listener_.Reset(j_listener);
 }
 
-SimpleConfirmInfoBarDelegate::~SimpleConfirmInfoBarDelegate() {
-}
+SimpleConfirmInfoBarDelegate::~SimpleConfirmInfoBarDelegate() = default;
 
 infobars::InfoBarDelegate::InfoBarIdentifier
 SimpleConfirmInfoBarDelegate::GetIdentifier() const {
@@ -122,7 +123,7 @@ std::u16string SimpleConfirmInfoBarDelegate::GetMessageText() const {
 
 int SimpleConfirmInfoBarDelegate::GetButtons() const {
   return (primary_str_.empty() ? 0 : BUTTON_OK) |
-      (secondary_str_.empty() ? 0 : BUTTON_CANCEL);
+         (secondary_str_.empty() ? 0 : BUTTON_CANCEL);
 }
 
 std::u16string SimpleConfirmInfoBarDelegate::GetButtonLabel(
@@ -144,17 +145,17 @@ bool SimpleConfirmInfoBarDelegate::Cancel() {
 
 // Native JNI methods ---------------------------------------------------------
 
-void JNI_SimpleConfirmInfoBarBuilder_Create(
+static void JNI_SimpleConfirmInfoBarBuilder_Create(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_web_contents,
-    jint j_identifier,
-    const JavaParamRef<jobject>& j_icon,
-    const JavaParamRef<jstring>& j_message,
-    const JavaParamRef<jstring>& j_primary,
-    const JavaParamRef<jstring>& j_secondary,
-    const JavaParamRef<jstring>& j_link_text,
-    jboolean auto_expire,
-    const JavaParamRef<jobject>& j_listener) {
+    const JavaRef<jobject>& j_web_contents,
+    int32_t j_identifier,
+    const JavaRef<jobject>& j_icon,
+    const JavaRef<jstring>& j_message,
+    const JavaRef<jstring>& j_primary,
+    const JavaRef<jstring>& j_secondary,
+    const JavaRef<jstring>& j_link_text,
+    bool auto_expire,
+    const JavaRef<jobject>& j_listener) {
   infobars::InfoBarDelegate::InfoBarIdentifier infobar_identifier =
       static_cast<infobars::InfoBarDelegate::InfoBarIdentifier>(j_identifier);
 
@@ -189,3 +190,5 @@ void JNI_SimpleConfirmInfoBarBuilder_Create(
           j_listener, infobar_identifier, icon_bitmap, message_str, primary_str,
           secondary_str, link_text_str, auto_expire)));
 }
+
+DEFINE_JNI(SimpleConfirmInfoBarBuilder)

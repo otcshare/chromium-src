@@ -10,9 +10,14 @@
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/extensions/extension_management_constants.h"
+#include "chrome/browser/extensions/managed_installation_mode.h"
+#include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/url_pattern_set.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -62,15 +67,15 @@ bool IndividualSettings::Parse(const base::Value::Dict& dict,
   if (GetString(dict, schema_constants::kInstallationMode,
                 &installation_mode_str)) {
     if (installation_mode_str == schema_constants::kAllowed) {
-      installation_mode = ExtensionManagement::INSTALLATION_ALLOWED;
+      installation_mode = ManagedInstallationMode::kAllowed;
     } else if (installation_mode_str == schema_constants::kBlocked) {
-      installation_mode = ExtensionManagement::INSTALLATION_BLOCKED;
+      installation_mode = ManagedInstallationMode::kBlocked;
     } else if (installation_mode_str == schema_constants::kForceInstalled) {
-      installation_mode = ExtensionManagement::INSTALLATION_FORCED;
+      installation_mode = ManagedInstallationMode::kForced;
     } else if (installation_mode_str == schema_constants::kNormalInstalled) {
-      installation_mode = ExtensionManagement::INSTALLATION_RECOMMENDED;
+      installation_mode = ManagedInstallationMode::kRecommended;
     } else if (installation_mode_str == schema_constants::kRemoved) {
-      installation_mode = ExtensionManagement::INSTALLATION_REMOVED;
+      installation_mode = ManagedInstallationMode::kRemoved;
     } else {
       // Invalid value for 'installation_mode'.
       LOG(WARNING) << kMalformedPreferenceWarning;
@@ -79,8 +84,8 @@ bool IndividualSettings::Parse(const base::Value::Dict& dict,
 
     // Only proceed to fetch update url if force or recommended install mode
     // is set.
-    if (installation_mode == ExtensionManagement::INSTALLATION_FORCED ||
-        installation_mode == ExtensionManagement::INSTALLATION_RECOMMENDED) {
+    if (installation_mode == ManagedInstallationMode::kForced ||
+        installation_mode == ManagedInstallationMode::kRecommended) {
       if (scope != SCOPE_INDIVIDUAL) {
         // Only individual extensions are allowed to be automatically
         // installed.
@@ -100,13 +105,13 @@ bool IndividualSettings::Parse(const base::Value::Dict& dict,
   }
 
   bool is_policy_installed =
-      installation_mode == ExtensionManagement::INSTALLATION_FORCED ||
-      installation_mode == ExtensionManagement::INSTALLATION_RECOMMENDED;
+      installation_mode == ManagedInstallationMode::kForced ||
+      installation_mode == ManagedInstallationMode::kRecommended;
   // Note: We ignore the override update URL policy when the update URL is from
   // the webstore.
   if (is_policy_installed &&
       !extension_urls::IsWebstoreUpdateUrl(GURL(update_url))) {
-    const absl::optional<bool> is_update_url_overridden =
+    const std::optional<bool> is_update_url_overridden =
         dict.FindBool(schema_constants::kOverrideUpdateUrl);
     if (is_update_url_overridden)
       override_update_url = is_update_url_overridden.value();
@@ -222,9 +227,11 @@ bool IndividualSettings::Parse(const base::Value::Dict& dict,
   std::string toolbar_pin_str;
   if (GetString(dict, schema_constants::kToolbarPin, &toolbar_pin_str)) {
     if (toolbar_pin_str == schema_constants::kDefaultUnpinned) {
-      toolbar_pin = ExtensionManagement::ToolbarPinMode::kDefaultUnpinned;
+      toolbar_pin = ManagedToolbarPinMode::kDefaultUnpinned;
+    } else if (toolbar_pin_str == schema_constants::kDefaultPinned) {
+      toolbar_pin = ManagedToolbarPinMode::kDefaultPinned;
     } else if (toolbar_pin_str == schema_constants::kForcePinned) {
-      toolbar_pin = ExtensionManagement::ToolbarPinMode::kForcePinned;
+      toolbar_pin = ManagedToolbarPinMode::kForcePinned;
     } else {
       // Invalid value for 'toolbar_pin'.
       LOG(WARNING) << kMalformedPreferenceWarning;
@@ -232,16 +239,23 @@ bool IndividualSettings::Parse(const base::Value::Dict& dict,
     }
   }
 
+  const std::optional<bool> is_file_url_navigation_allowed =
+      dict.FindBool(schema_constants::kFileUrlNavigationAllowed);
+  if (is_file_url_navigation_allowed) {
+    file_url_navigation_allowed = is_file_url_navigation_allowed.value();
+  }
+
   return true;
 }
 
 void IndividualSettings::Reset() {
-  installation_mode = ExtensionManagement::INSTALLATION_ALLOWED;
+  installation_mode = ManagedInstallationMode::kAllowed;
   update_url.clear();
   blocked_permissions.clear();
   policy_blocked_hosts.ClearPatterns();
   policy_allowed_hosts.ClearPatterns();
   blocked_install_message.clear();
+  toolbar_pin = ManagedToolbarPinMode::kDefaultUnpinned;
 }
 
 GlobalSettings::GlobalSettings() = default;
@@ -252,6 +266,7 @@ void GlobalSettings::Reset() {
   install_sources.reset();
   allowed_types.reset();
   manifest_v2_setting = ManifestV2Setting::kDefault;
+  unpublished_availability_setting = UnpublishedAvailability::kAllowUnpublished;
 }
 
 }  // namespace internal

@@ -7,6 +7,7 @@
 
 #include <cstddef>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "ui/gl/gl_export.h"
 
 struct ANativeWindow;
@@ -17,7 +18,13 @@ class ScopedJavaSurface;
 
 class GL_EXPORT ScopedANativeWindow {
  public:
+  // Wraps a native window, and increments its reference count.
   static ScopedANativeWindow Wrap(ANativeWindow* a_native_window);
+
+  // Adopts a native window, taking ownership of it without incrementing the
+  // reference count.
+  static ScopedANativeWindow Adopt(ANativeWindow* a_native_window);
+
   constexpr ScopedANativeWindow() = default;
   constexpr ScopedANativeWindow(std::nullptr_t) {}
   explicit ScopedANativeWindow(const ScopedJavaSurface& surface);
@@ -39,7 +46,11 @@ class GL_EXPORT ScopedANativeWindow {
 
   void DestroyIfNeeded();
 
-  ANativeWindow* a_native_window_ = nullptr;
+  // RAW_PTR_EXCLUSION: This pointer is managed by the android API, and is to
+  // a reference-counted object. It can't dangle because the ref counting
+  // enforces that it isn't freed until the pointer is released, and we null
+  // it immediately afterwards.
+  RAW_PTR_EXCLUSION ANativeWindow* a_native_window_ = nullptr;
 };
 
 }  // namespace gl

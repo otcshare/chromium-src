@@ -5,20 +5,28 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_ASH_LOGIN_OOBE_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_ASH_LOGIN_OOBE_UI_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "ash/webui/common/backend/webui_syslog_emitter.h"
+#include "ash/webui/common/chrome_os_webui_config.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
+#include "chrome/browser/ash/login/screens/core_oobe.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/core_oobe_handler.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_screens_handler_factory.h"
+#include "chrome/common/webui_url_constants.h"
+#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-forward.h"
 #include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-forward.h"
 #include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom-forward.h"
-#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom-forward.h"  // nogncheck
+#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom-forward.h"
+#include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 
@@ -27,10 +35,21 @@ class WebUIDataSource;
 }
 
 namespace ash {
+
 class ErrorScreen;
 class NetworkStateInformer;
 class OobeDisplayChooser;
-class SigninScreenHandler;
+class OobeUI;
+
+// The WebUIConfig for chrome://oobe urls
+class OobeUIConfig : public ChromeOSWebUIConfig<OobeUI> {
+ public:
+  OobeUIConfig()
+      : ChromeOSWebUIConfig(content::kChromeUIScheme,
+                            chrome::kChromeUIOobeHost) {}
+
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+};
 
 // A custom WebUI that defines datasource for out-of-box-experience (OOBE) UI:
 // - welcome screen (setup language/keyboard/network).
@@ -40,9 +59,10 @@ class OobeUI : public ui::MojoWebUIController {
  public:
   // List of known types of OobeUI. Type added as path in chrome://oobe url, for
   // example chrome://oobe/gaia-signin.
-  static const char kAppLaunchSplashDisplay[];
-  static const char kGaiaSigninDisplay[];
-  static const char kOobeDisplay[];
+  static inline constexpr char kAppLaunchSplashDisplay[] = "app-launch-splash";
+  static inline constexpr char kGaiaSigninDisplay[] = "gaia-signin";
+  static inline constexpr char kOobeDisplay[] = "oobe";
+  static inline constexpr char kOobeTestLoader[] = "test_loader.html";
 
   class Observer {
    public:
@@ -53,6 +73,7 @@ class OobeUI : public ui::MojoWebUIController {
     virtual void OnCurrentScreenChanged(OobeScreenId current_screen,
                                         OobeScreenId new_screen) = 0;
 
+    virtual void OnBackdropLoaded() {}
     virtual void OnDestroyingOobeUI() = 0;
 
    protected:
@@ -66,8 +87,9 @@ class OobeUI : public ui::MojoWebUIController {
 
   ~OobeUI() override;
 
-  CoreOobeView* GetCoreOobeView();
+  CoreOobe* GetCoreOobe();
   ErrorScreen* GetErrorScreen();
+  OobeScreensHandlerFactory* GetOobeScreensHandlerFactory();
 
   // Collects localized strings from the owned handlers.
   base::Value::Dict GetLocalizedStrings();
@@ -78,10 +100,10 @@ class OobeUI : public ui::MojoWebUIController {
   // Called when the screen has changed.
   void CurrentScreenChanged(OobeScreenId screen);
 
-  bool IsJSReady(base::OnceClosure display_is_ready_callback);
+  // Called when the backdrop image of the OOBE is loaded.
+  void OnBackdropLoaded();
 
-  // Shows or hides OOBE UI elements.
-  void ShowOobeUI(bool show);
+  bool IsJSReady(base::OnceClosure display_is_ready_callback);
 
   gfx::NativeView GetNativeView();
 
@@ -98,10 +120,6 @@ class OobeUI : public ui::MojoWebUIController {
   OobeScreenId previous_screen() const { return previous_screen_; }
 
   const std::string& display_type() const { return display_type_; }
-
-  SigninScreenHandler* signin_screen_handler() {
-    return signin_screen_handler_;
-  }
 
   NetworkStateInformer* network_state_informer_for_test() const {
     return network_state_informer_.get();
@@ -124,12 +142,12 @@ class OobeUI : public ui::MojoWebUIController {
   THandler* GetHandler() {
     OobeScreenId expected_screen = THandler::kScreenId;
     for (BaseScreenHandler* handler : screen_handlers_) {
-      if (expected_screen == handler->oobe_screen())
+      if (expected_screen == handler->oobe_screen()) {
         return static_cast<THandler*>(handler);
+      }
     }
 
     NOTREACHED() << "Unable to find handler for screen " << expected_screen;
-    return nullptr;
   }
 
   // Instantiates implementor of the mojom::MultiDeviceSetup mojo interface
@@ -152,6 +170,20 @@ class OobeUI : public ui::MojoWebUIController {
   // passing the pending receiver that will be internally bound.
   void BindInterface(
       mojo::PendingReceiver<ash::cellular_setup::mojom::ESimManager> receiver);
+
+  // Binds to the cros authentication factor editing services.
+  void BindInterface(
+      mojo::PendingReceiver<auth::mojom::AuthFactorConfig> receiver);
+  void BindInterface(
+      mojo::PendingReceiver<auth::mojom::PinFactorEditor> receiver);
+  void BindInterface(
+      mojo::PendingReceiver<auth::mojom::PasswordFactorEditor> receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<screens_factory::mojom::ScreensFactory> receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<common::mojom::WebUiSyslogEmitter> receiver);
 
   static void AddOobeComponents(content::WebUIDataSource* source);
 
@@ -177,15 +209,19 @@ class OobeUI : public ui::MojoWebUIController {
   scoped_refptr<NetworkStateInformer> network_state_informer_;
 
   // Reference to CoreOobeHandler that handles common requests of Oobe page.
-  CoreOobeHandler* core_handler_ = nullptr;
+  raw_ptr<CoreOobeHandler> core_handler_ = nullptr;
+  std::unique_ptr<CoreOobe> core_oobe_;
 
-  // Reference to SigninScreenHandler that handles sign-in screen requests and
-  // forwards calls from native code to JS side.
-  SigninScreenHandler* signin_screen_handler_ = nullptr;
+  std::vector<raw_ptr<BaseWebUIHandler, VectorExperimental>>
+      webui_handlers_;  // Non-owning pointers.
+  std::vector<raw_ptr<BaseWebUIHandler, VectorExperimental>>
+      webui_only_handlers_;  // Non-owning pointers.
+  std::vector<raw_ptr<BaseScreenHandler, VectorExperimental>>
+      screen_handlers_;  // Non-owning pointers.
 
-  std::vector<BaseWebUIHandler*> webui_handlers_;       // Non-owning pointers.
-  std::vector<BaseWebUIHandler*> webui_only_handlers_;  // Non-owning pointers.
-  std::vector<BaseScreenHandler*> screen_handlers_;     // Non-owning pointers.
+  std::unique_ptr<OobeScreensHandlerFactory> oobe_screens_handler_factory_;
+
+  std::unique_ptr<WebUiSyslogEmitter> webui_syslog_emitter_;
 
   std::unique_ptr<ErrorScreen> error_screen_;
 

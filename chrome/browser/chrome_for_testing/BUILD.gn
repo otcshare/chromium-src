@@ -5,20 +5,20 @@
 import("//build/buildflag_header.gni")
 import("//build/config/chrome_build.gni")
 
-buildflag_header("buildflags") {
-  header = "buildflags.h"
+assert(is_chrome_for_testing)
 
-  if (is_chrome_for_testing_branded) {
-    # TODO(crbug.com/1336611): To be renamed to CHROME_FOR_TESTING.
-    flags = [ "GOOGLE_CHROME_FOR_TESTING_BRANDING=1" ]
-  } else {
-    flags = [ "GOOGLE_CHROME_FOR_TESTING_BRANDING=0" ]
-  }
+group("chrome_for_testing") {
+  deps = [
+    ":generate_about_file",
+    "//third_party/hyphenation-patterns:bundle_hyphen_data",
+  ]
+}
 
-  if (use_internal_chrome_for_testing_icons) {
-    # TODO(crbug.com/1336611): To be renamed to GOOGLE_CHROME_FOR_TESTING_BRANDING.
-    flags += [ "USE_INTERNAL_CHROME_FOR_TESTING_ICONS=1" ]
-  } else {
-    flags += [ "USE_INTERNAL_CHROME_FOR_TESTING_ICONS=0" ]
-  }
+action("generate_about_file") {
+  script = "//chrome/browser/chrome_for_testing/tools/generate_about_file.py"
+  args = [
+    "--output-file",
+    rebase_path("$root_out_dir/ABOUT"),
+  ]
+  outputs = [ "$root_out_dir/ABOUT" ]
 }

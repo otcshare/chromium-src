@@ -6,10 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/string_piece.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon/core/favicon_util.h"
 #include "components/favicon/core/large_icon_service.h"
@@ -132,8 +131,9 @@ void IconCacherImpl::OnGetFaviconImageForPageURLFinished(
                                            kImageFetcherUmaClient);
   // For images with multiple frames, prefer one of size 128x128px.
   params.set_frame_size(gfx::Size(kDesiredFrameSize, kDesiredFrameSize));
-  if (data_decoder_)
+  if (data_decoder_) {
     params.set_data_decoder(data_decoder_.get());
+  }
   image_fetcher_->FetchImage(
       IconURL(site),
       base::BindOnce(&IconCacherImpl::OnPopularSitesFaviconDownloaded,
@@ -173,13 +173,8 @@ void IconCacherImpl::SaveAndNotifyDefaultIconForSite(
 
 void IconCacherImpl::SaveIconForSite(const PopularSites::Site& site,
                                      const gfx::Image& image) {
-  // Although |SetFaviconColorSpace| affects OSX only, copies of gfx::Images are
-  // just copies of the reference to the image and therefore cheap.
-  gfx::Image img(image);
-  favicon_base::SetFaviconColorSpace(&img);
-
   favicon_service_->SetFavicons({site.url}, IconURL(site), IconType(site),
-                                std::move(img));
+                                image);
 }
 
 std::unique_ptr<IconCacherImpl::CancelableImageCallback>
@@ -260,8 +255,7 @@ void IconCacherImpl::OnGetLargeIconOrFallbackStyleFinished(
   large_icon_service_
       ->GetLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
           page_url,
-          /*may_page_url_be_private=*/true, /*should_trim_page_url_path=*/false,
-          traffic_annotation,
+          /*should_trim_page_url_path=*/false, traffic_annotation,
           base::BindOnce(&IconCacherImpl::OnMostLikelyFaviconDownloaded,
                          weak_ptr_factory_.GetWeakPtr(), page_url));
 }
@@ -276,17 +270,18 @@ void IconCacherImpl::OnMostLikelyFaviconDownloaded(
 
 bool IconCacherImpl::StartRequest(const GURL& request_url,
                                   base::OnceClosure icon_available) {
-  bool in_flight = in_flight_requests_.count(request_url) > 0;
-  in_flight_requests_[request_url].push_back(std::move(icon_available));
+  auto [it, inserted] = in_flight_requests_.try_emplace(request_url);
+  bool in_flight = !inserted;
+  it->second.push_back(std::move(icon_available));
   return !in_flight;
 }
 
 void IconCacherImpl::FinishRequestAndNotifyIconAvailable(
     const GURL& request_url,
     bool newly_available) {
-  std::vector<base::OnceClosure> callbacks =
-      std::move(in_flight_requests_[request_url]);
-  in_flight_requests_.erase(request_url);
+  auto it = in_flight_requests_.try_emplace(request_url).first;
+  std::vector<base::OnceClosure> callbacks = std::move(it->second);
+  in_flight_requests_.erase(it);
   if (!newly_available) {
     return;
   }

@@ -12,16 +12,36 @@
  * @param {string} testFixture Fixture name.
  * @param {string} testName Test name.
  * @param {function} testFunction The test impl.
+ * @param {string=} preamble C++ code to execute before the test.
  */
-function AX_TEST_F(testFixture, testName, testFunction) {
+function AX_TEST_F(testFixture, testName, testFunction, preamble) {
   TEST_F(testFixture, testName, function() {
     this.newCallback(testFunction)();
-  });
+  }, preamble);
 }
 
 // var is used to export this function alias outside of the current context
 // while all tests are migrated to the new fixture.
 var SYNC_TEST_F = AX_TEST_F;
+
+/** Whether the current running context is a service worker. */
+function isRunningInServiceWorker() {
+  return typeof ServiceWorkerGlobalScope !== 'undefined' &&
+      self instanceof ServiceWorkerGlobalScope;
+}
+
+/**
+ * Helper to keep the service worker alive by calling an extension API.
+ * Caller should use `await` on the returned promise to yield control to
+ * allow the service worker to respond to pings.
+ */
+function keepServiceWorkerAlive() {
+  if (!isRunningInServiceWorker()) {
+    return Promise.resolve();
+  }
+
+  return chrome.runtime.getPlatformInfo();
+}
 
 /**
  * Helper to import a module, and expose it onto window.

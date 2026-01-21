@@ -10,15 +10,17 @@
 #include <string>
 #include <unordered_map>
 
-#include "base/callback_helpers.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/queue.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/expected.h"
 #include "gpu/ipc/common/gpu_disk_cache_type.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/net_errors.h"
 #include "net/disk_cache/disk_cache.h"
 
 namespace gpu {
@@ -55,8 +57,11 @@ class GpuDiskCache : public base::RefCounted<GpuDiskCache> {
   // will be executed when the cache is available.
   int SetAvailableCallback(net::CompletionOnceCallback callback);
 
-  // Returns the number of elements currently in the cache.
-  int32_t Size();
+  // Returns the element count synchronously if available, or
+  // net::ERR_IO_PENDING for asynchronous completion via `callback`. Returns
+  // net::ERR_FAILED if the cache is not yet available.
+  using SizeCallback = base::OnceCallback<void(int32_t)>;
+  base::expected<int32_t, net::Error> Size(SizeCallback callback);
 
   // Set a callback notification for when all current entries have been
   // written to the cache.
@@ -119,7 +124,7 @@ class GpuDiskCacheFactory {
   GpuDiskCacheFactory(const GpuDiskCacheFactory&) = delete;
   GpuDiskCacheFactory& operator=(const GpuDiskCacheFactory&) = delete;
 
-  ~GpuDiskCacheFactory();
+  virtual ~GpuDiskCacheFactory();
 
   // Clear the given gpu disk |cache|. This supports unbounded deletes in
   // either direction by using null Time values for either |begin_time| or
@@ -133,10 +138,10 @@ class GpuDiskCacheFactory {
   // deletes in either direction by using null Time values for either
   // |begin_time| or |end_time|. The |callback| will be executed when the
   // clear is complete.
-  void ClearByPath(const base::FilePath& path,
-                   base::Time begin_time,
-                   base::Time end_time,
-                   base::OnceClosure callback);
+  virtual void ClearByPath(const base::FilePath& path,
+                           base::Time begin_time,
+                           base::Time end_time,
+                           base::OnceClosure callback);
 
   // Looks up a |path| and returns a cache handle for it (registering it if
   // necessary) for the given |type|.
@@ -199,7 +204,8 @@ class GpuDiskCacheFactory {
   using HandleRefCounts = base::flat_map<GpuDiskCacheHandle, uint32_t>;
   HandleRefCounts handle_ref_counts_;
 
-  using PathToCacheMap = base::flat_map<base::FilePath, GpuDiskCache*>;
+  using PathToCacheMap =
+      base::flat_map<base::FilePath, raw_ptr<GpuDiskCache, CtnExperimental>>;
   PathToCacheMap gpu_cache_map_;
 
   using ClearHelperQueue =

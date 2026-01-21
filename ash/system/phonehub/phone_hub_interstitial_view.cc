@@ -7,11 +7,10 @@
 #include <memory>
 #include <string>
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/resources/grit/ash_public_unscaled_resources.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/typography.h"
 #include "ash/system/phonehub/ui_constants.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_utils.h"
@@ -20,6 +19,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
@@ -37,21 +37,14 @@ namespace ash {
 
 namespace {
 constexpr auto kLabelInsets = gfx::Insets::VH(0, 4);
+constexpr int kTitleLabelLineHeight = 48;
 }
 
 PhoneHubInterstitialView::PhoneHubInterstitialView(bool show_progress,
                                                    bool show_image) {
-  // In dark light mode, we switch TrayBubbleView to use a textured layer
-  // instead of solid color layer, so no need to create an extra layer here.
-  if (!features::IsDarkLightModeEnabled()) {
-    SetPaintToLayer();
-    layer()->SetFillsBoundsOpaquely(false);
-  }
-
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>());
   layout->SetOrientation(views::BoxLayout::Orientation::kVertical);
 
-  auto* color_provider = AshColorProvider::Get();
   if (show_progress) {
     auto* progress_bar_container =
         AddChildView(std::make_unique<views::BoxLayoutView>());
@@ -60,9 +53,9 @@ PhoneHubInterstitialView::PhoneHubInterstitialView(bool show_progress,
     progress_bar_container->SetMainAxisAlignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
     progress_bar_ = progress_bar_container->AddChildView(
-        std::make_unique<views::ProgressBar>(2));
-    progress_bar_->SetForegroundColor(color_provider->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kIconColorProminent));
+        std::make_unique<views::ProgressBar>());
+    progress_bar_->SetPreferredHeight(2);
+    progress_bar_->SetForegroundColor(cros_tokens::kIconColorProminent);
     progress_bar_->SetValue(-1.0);
   }
 
@@ -72,8 +65,7 @@ PhoneHubInterstitialView::PhoneHubInterstitialView(bool show_progress,
   content_container->SetMainAxisAlignment(views::LayoutAlignment::kCenter);
   content_container->SetInteriorMargin(
       gfx::Insets::VH(0, kBubbleHorizontalSidePaddingDip) +
-      (features::IsDarkLightModeEnabled() ? gfx::Insets::TLBR(0, 0, 16, 0)
-                                          : gfx::Insets()));
+      gfx::Insets::TLBR(0, 0, 16, 0));
 
   // Set up image if any.
   if (show_image) {
@@ -90,28 +82,27 @@ PhoneHubInterstitialView::PhoneHubInterstitialView(bool show_progress,
   title_->SetProperty(views::kCrossAxisAlignmentKey,
                       views::LayoutAlignment::kStart);
   title_->SetProperty(views::kMarginsKey, kLabelInsets);
-  title_->SetLineHeight(48);
-  auto label_color = color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary);
-  title_->SetEnabledColor(label_color);
-  TrayPopupUtils::SetLabelFontList(title_,
-                                   TrayPopupUtils::FontStyle::kSubHeader);
+  title_->SetEnabledColor(cros_tokens::kTextColorPrimary);
+  TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosButton1,
+                                        *title_);
+
+  // Overriding because the typography line height set does not match Phone
+  // Hub specs.
+  title_->SetLineHeight(kTitleLabelLineHeight);
 
   // Set up multi-line description view.
   description_ =
       content_container->AddChildView(std::make_unique<views::Label>());
   description_->SetProperty(views::kMarginsKey,
                             kLabelInsets + gfx::Insets::TLBR(0, 0, 12, 0));
-  description_->SetProperty(
-      views::kFlexBehaviorKey,
-      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
-                               views::MaximumFlexSizeRule::kUnbounded, true));
-  description_->SetEnabledColor(label_color);
-  TrayPopupUtils::SetLabelFontList(
-      description_, TrayPopupUtils::FontStyle::kDetailedViewLabel);
+  description_->SetEnabledColor(cros_tokens::kTextColorPrimary);
   description_->SetMultiLine(true);
-  description_->SetLineHeight(20);
   description_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
+  // TODO(b/281844561): Migrate the `description_` to use a slightly lighter
+  // text color when tokens have been finalized.
+  TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosBody2,
+                                        *description_);
+  description_->SetLineHeight(20);
 
   // Set up button container view, which should be right-aligned.
   button_container_ =
@@ -150,7 +141,7 @@ void PhoneHubInterstitialView::AddButton(
   button_container_->AddChildView(std::move(button));
 }
 
-BEGIN_METADATA(PhoneHubInterstitialView, views::View)
+BEGIN_METADATA(PhoneHubInterstitialView)
 END_METADATA
 
 }  // namespace ash

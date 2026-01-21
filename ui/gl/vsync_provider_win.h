@@ -5,7 +5,7 @@
 #ifndef UI_GL_VSYNC_PROVIDER_WIN_H_
 #define UI_GL_VSYNC_PROVIDER_WIN_H_
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/vsync_provider.h"
 #include "ui/gl/gl_export.h"
 
@@ -28,6 +28,8 @@ class GL_EXPORT VSyncProviderWin : public gfx::VSyncProvider {
                                      base::TimeDelta* interval) override;
   bool SupportGetVSyncParametersIfAvailable() const override;
   bool IsHWClock() const override;
+
+  bool GetVSyncIntervalIfAvailable(base::TimeDelta* interval);
 
  private:
   gfx::AcceleratedWidget window_;

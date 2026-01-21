@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {dp, session} = await testRunner.startBlank(
       `Tests DOMStorage functionality with storageKey\n`);
 
@@ -15,7 +15,8 @@
   testRunner.log(storageId.storageKey ? "not empty\n" : "empty\n");
 
   const frameId = (await dp.Page.getResourceTree()).result.frameTree.frame.id;
-  const key = (await dp.Storage.getStorageKeyForFrame({frameId: frameId})).result.storageKey;
+  const key =
+      (await dp.Storage.getStorageKey({frameId: frameId})).result.storageKey;
 
   testRunner.log("Get storage key by frame");
   testRunner.log(`storageKey obtained: ${!!key}`)

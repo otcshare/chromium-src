@@ -4,6 +4,8 @@
 
 #include "ash/webui/diagnostics_ui/backend/common/routine_properties.h"
 
+#include "base/compiler_specific.h"
+
 namespace ash::diagnostics {
 
 namespace healthd = cros_healthd::mojom;
@@ -74,7 +76,7 @@ uint32_t GetExpectedRoutineDurationInSeconds(mojom::RoutineType routine_type) {
 }
 
 const RoutineProperties& GetRoutineProperties(mojom::RoutineType routine_type) {
-  return kRoutineProperties[static_cast<size_t>(routine_type)];
+  return UNSAFE_TODO(kRoutineProperties[static_cast<size_t>(routine_type)]);
 }
 
 }  // namespace ash::diagnostics

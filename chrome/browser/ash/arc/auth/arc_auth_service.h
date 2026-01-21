@@ -9,15 +9,15 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/mojom/auth.mojom.h"
-#include "ash/components/arc/session/connection_observer.h"
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability.h"
-#include "chrome/browser/ash/arc/auth/arc_active_directory_enrollment_token_fetcher.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
+#include "chromeos/ash/experiences/arc/mojom/auth.mojom.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
@@ -42,9 +42,9 @@ class ArcBackgroundAuthCodeFetcher;
 class ArcBridgeService;
 class ArcFetcherBase;
 
-constexpr char kArcAuthRequestAccountInfoResultPrimaryHistogramName[] =
+inline constexpr char kArcAuthRequestAccountInfoResultPrimaryHistogramName[] =
     "Arc.Auth.RequestAccountInfoResult.Primary";
-constexpr char kArcAuthRequestAccountInfoResultSecondaryHistogramName[] =
+inline constexpr char kArcAuthRequestAccountInfoResultSecondaryHistogramName[] =
     "Arc.Auth.RequestAccountInfoResult.Secondary";
 
 // Implementation of ARC authorization.
@@ -57,6 +57,14 @@ class ArcAuthService : public KeyedService,
  public:
   using GetGoogleAccountsInArcCallback =
       base::OnceCallback<void(std::vector<mojom::ArcAccountInfoPtr>)>;
+
+  class Delegate {
+   public:
+    virtual ~Delegate() = default;
+
+    // Opens the settings app for Arc auth.
+    virtual void OpenSettingsAppWithPeopleSection() = 0;
+  };
 
   // Returns singleton instance for the given BrowserContext,
   // or nullptr if the browser |context| is not allowed to use ARC.
@@ -102,6 +110,11 @@ class ArcAuthService : public KeyedService,
   void HandleRemoveAccountRequest(const std::string& email) override;
   void HandleUpdateCredentialsRequest(const std::string& email) override;
 
+  static void EnsureFactoryBuilt();
+
+  // Overrides the Delegate behavior for testing.
+  void SetDelegateForTesting(std::unique_ptr<Delegate> delegate);
+
  private:
   friend class ArcAuthServiceTest;
 
@@ -133,16 +146,6 @@ class ArcAuthService : public KeyedService,
   // Calls `mojom::OnAccountUpdated` with update type
   // `mojom::AccountUpdateType::REMOVAL` for the provided email.
   void RemoveAccountFromArc(const std::string& email);
-
-  // Callback when Active Directory Enrollment Token is fetched.
-  // |callback| is completed with |ArcAuthCodeStatus| and |AccountInfo|
-  // depending on the success / failure of the operation.
-  void OnActiveDirectoryEnrollmentTokenFetched(
-      ArcActiveDirectoryEnrollmentTokenFetcher* fetcher,
-      RequestPrimaryAccountInfoCallback callback,
-      ArcActiveDirectoryEnrollmentTokenFetcher::Status status,
-      const std::string& enrollment_token,
-      const std::string& user_id);
 
   // Issues a request for fetching AccountInfo for the Device Account.
   // |initial_signin| denotes whether this is the initial ARC provisioning flow
@@ -220,11 +223,13 @@ class ArcAuthService : public KeyedService,
   // Response for |mojom::GetMainAccountResolutionStatus|.
   void OnMainAccountResolutionStatus(mojom::MainAccountResolutionStatus status);
 
+  std::unique_ptr<Delegate> delegate_;
+
   // Non-owning pointers.
-  Profile* const profile_;
-  signin::IdentityManager* const identity_manager_;
-  ArcBridgeService* const arc_bridge_service_;
-  ash::AccountAppsAvailability* account_apps_availability_ = nullptr;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<signin::IdentityManager> identity_manager_;
+  const raw_ptr<ArcBridgeService> arc_bridge_service_;
+  raw_ptr<ash::AccountAppsAvailability> account_apps_availability_ = nullptr;
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   bool url_loader_factory_for_testing_set_ = false;

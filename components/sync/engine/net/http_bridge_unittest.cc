@@ -6,12 +6,14 @@
 
 #include <stddef.h>
 
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -19,10 +21,8 @@
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "components/sync/engine/cancelation_signal.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "net/http/http_request_headers.h"
-#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
@@ -42,7 +42,7 @@ const base::FilePath::CharType kDocRoot[] =
 
 }  // namespace
 
-const char kUserAgent[] = "user-agent";
+constexpr char kUserAgent[] = "user-agent";
 
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_SyncHttpBridgeTest DISABLED_SyncHttpBridgeTest
@@ -59,15 +59,13 @@ class MAYBE_SyncHttpBridgeTest : public testing::Test {
     base::Thread::Options options;
     options.message_pump_type = base::MessagePumpType::IO;
     io_thread_.StartWithOptions(std::move(options));
-
-    HttpBridge::SetIOCapableTaskRunnerForTest(io_thread_.task_runner());
   }
 
   void TearDown() override { io_thread_.Stop(); }
 
-  HttpBridge* BuildBridge() { return new CustomHttpBridge(); }
-
-  static void Abort(HttpBridge* bridge) { bridge->Abort(); }
+  scoped_refptr<HttpBridge> BuildBridge() {
+    return base::MakeRefCounted<CustomHttpBridge>(io_thread_.task_runner());
+  }
 
   // Used by AbortAndReleaseBeforeFetchCompletes to test an interesting race
   // condition.
@@ -85,54 +83,55 @@ class MAYBE_SyncHttpBridgeTest : public testing::Test {
   HttpBridge* bridge_for_race_test() { return bridge_for_race_test_; }
 
  private:
-  // A custom HTTPBridge implementation that sets a SharedURLLoaderFactory
+  // A custom HttpBridge implementation that sets a SharedURLLoaderFactory
   // instance from the IO-capable thread.
   class CustomHttpBridge : public HttpBridge {
    public:
-    CustomHttpBridge()
-        : HttpBridge(kUserAgent, nullptr /*PendingSharedURLLoaderFactory*/) {}
+    explicit CustomHttpBridge(
+        scoped_refptr<base::SequencedTaskRunner> network_task_runner)
+        : HttpBridge(kUserAgent,
+                     network_task_runner,
+                     /*pending_url_loader_factory=*/nullptr) {}
 
    protected:
     ~CustomHttpBridge() override = default;
 
-    void MakeAsynchronousPost() override {
-      set_url_loader_factory_for_testing(
-          base::MakeRefCounted<network::TestSharedURLLoaderFactory>());
-
-      HttpBridge::MakeAsynchronousPost();
-
-      // Attempt to spin a loop so that mojom::URLLoaderFactory get executed.
-      base::RunLoop().RunUntilIdle();
+    scoped_refptr<network::SharedURLLoaderFactory> CreateSharedURLLoader()
+        override {
+      return base::MakeRefCounted<network::TestSharedURLLoaderFactory>();
     }
   };
 
   raw_ptr<HttpBridge> bridge_for_race_test_ = nullptr;
 
   base::test::TaskEnvironment task_environment_;
-  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
   // Separate thread for IO used by the HttpBridge.
   base::Thread io_thread_;
 };
 
 // An HttpBridge that doesn't actually make network requests and just calls
-// back with dummy response info.
+// back with fake response info.
 // TODO(tim): Instead of inheriting here we should inject a component
 // responsible for the MakeAsynchronousPost bit.
 class ShuntedHttpBridge : public HttpBridge {
  public:
-  // If |never_finishes| is true, the simulated request never actually
+  // If `never_finishes` is true, the simulated request never actually
   // returns.
   ShuntedHttpBridge(MAYBE_SyncHttpBridgeTest* test, bool never_finishes)
-      : HttpBridge(kUserAgent, /*pending_url_loader_factory=*/nullptr),
+      : HttpBridge(kUserAgent,
+                   test->io_thread()->task_runner(),
+                   /*pending_url_loader_factory=*/nullptr),
         test_(test),
         never_finishes_(never_finishes) {}
 
  protected:
   void MakeAsynchronousPost() override {
     ASSERT_TRUE(test_->GetIOThreadTaskRunner()->BelongsToCurrentThread());
-    if (never_finishes_)
+    if (never_finishes_) {
       return;
+    }
 
     // We don't actually want to make a request for this test, so just callback
     // as if it completed.
@@ -147,11 +146,11 @@ class ShuntedHttpBridge : public HttpBridge {
   void CallOnURLFetchComplete() {
     ASSERT_TRUE(test_->GetIOThreadTaskRunner()->BelongsToCurrentThread());
 
-    // Set up a dummy content response.
+    // Set up a fake content response.
     OnURLLoadCompleteInternal(200, net::OK, GURL("http://www.google.com"),
-                              std::make_unique<std::string>("success!"));
+                              "success!");
   }
-  MAYBE_SyncHttpBridgeTest* test_;
+  const raw_ptr<MAYBE_SyncHttpBridgeTest> test_;
   bool never_finishes_;
 };
 
@@ -258,7 +257,9 @@ TEST_F(MAYBE_SyncHttpBridgeTest, TestExtraRequestHeaders) {
   scoped_refptr<HttpBridge> http_bridge(BuildBridge());
 
   http_bridge->SetURL(test_server_.GetURL("/echoall"));
-  http_bridge->SetExtraRequestHeaders("test:fnord");
+  net::HttpRequestHeaders headers;
+  headers.SetHeader("test", "fnord");
+  http_bridge->SetExtraRequestHeaders(headers);
 
   std::string test_payload = "###TEST PAYLOAD###";
   http_bridge->SetPostPayload("text/html", test_payload.length() + 1,
@@ -364,8 +365,7 @@ TEST_F(MAYBE_SyncHttpBridgeTest, Abort) {
   int response_code = 0;
 
   io_thread()->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&MAYBE_SyncHttpBridgeTest::Abort,
-                                base::RetainedRef(http_bridge)));
+      FROM_HERE, base::BindOnce(&HttpBridge::Abort, http_bridge));
   bool success = http_bridge->MakeSynchronousPost(&os_error, &response_code);
   EXPECT_FALSE(success);
   EXPECT_EQ(net::ERR_ABORTED, os_error);
@@ -412,21 +412,21 @@ TEST_F(MAYBE_SyncHttpBridgeTest, AbortAndReleaseBeforeFetchComplete) {
       base::WaitableEvent::ResetPolicy::AUTOMATIC,
       base::WaitableEvent::InitialState::NOT_SIGNALED);
   ASSERT_TRUE(io_thread()->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&base::WaitableEvent::Wait,
-                                base::Unretained(&io_waiter))));
+      FROM_HERE, io_waiter.GetWaitCallbackForTesting()));
 
   signal_when_created.Wait();  // Wait till we have a bridge to abort.
   ASSERT_TRUE(bridge_for_race_test());
 
-  // Schedule the fetch completion callback (but don't run it yet). Don't take
-  // a reference to the bridge to mimic URLFetcher's handling of the delegate.
+  // Schedule the fetch completion callback (but don't run it yet). Take a
+  // reference to the bridge (implicitly by binding it to the callback), to
+  // simulate what HttpBridge::MakeAsynchronousPost() does.
   ASSERT_TRUE(io_thread()->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&syncer::HttpBridge::OnURLLoadComplete,
-                                base::Unretained(bridge_for_race_test()),
-                                std::make_unique<std::string>("success!"))));
+                                bridge_for_race_test(), "success!")));
 
   // Abort the fetch. This should be smart enough to handle the case where
-  // the bridge is destroyed before the callback scheduled above completes.
+  // the bridge is released on the sync therad before the callback scheduled
+  // above completes.
   bridge_for_race_test()->Abort();
 
   // Wait until the sync thread releases its ref on the bridge.
@@ -434,19 +434,12 @@ TEST_F(MAYBE_SyncHttpBridgeTest, AbortAndReleaseBeforeFetchComplete) {
   ASSERT_FALSE(bridge_for_race_test());
 
   // Unleash the hounds. The fetch completion callback should fire first, and
-  // succeed even though we Release()d the bridge above because the call to
-  // Abort should have held a reference.
+  // succeed even though the sync thread already released its ref on the bridge.
   io_waiter.Signal();
 
   // Done.
   sync_thread.Stop();
   io_thread()->Stop();
-}
-
-void WaitOnIOThread(base::WaitableEvent* signal_wait_start,
-                    base::WaitableEvent* wait_done) {
-  signal_wait_start->Signal();
-  wait_done->Wait();
 }
 
 }  // namespace syncer

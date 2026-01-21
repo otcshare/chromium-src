@@ -47,11 +47,11 @@ class LookalikeUrlContainer
   struct LookalikeUrlInfo {
     const GURL safe_url;
     const GURL request_url;
-    LookalikeUrlMatchType match_type;
+    lookalikes::LookalikeUrlMatchType match_type;
 
     LookalikeUrlInfo(const GURL& safe_url,
                      const GURL& request_url,
-                     LookalikeUrlMatchType match_type);
+                     lookalikes::LookalikeUrlMatchType match_type);
     LookalikeUrlInfo(const LookalikeUrlInfo& other);
     ~LookalikeUrlInfo();
   };
@@ -66,7 +66,7 @@ class LookalikeUrlContainer
   // Stores URL info associated with a lookalike blocking page.
   void SetLookalikeUrlInfo(const GURL& safe_url,
                            const GURL& request_url,
-                           LookalikeUrlMatchType match_type);
+                           lookalikes::LookalikeUrlMatchType match_type);
 
   // Returns currently stored parameters associated with a lookalike blocking
   // page, transferring ownership to the caller.
@@ -79,7 +79,6 @@ class LookalikeUrlContainer
  private:
   explicit LookalikeUrlContainer(web::WebState* web_state);
   friend class web::WebStateUserData<LookalikeUrlContainer>;
-  WEB_STATE_USER_DATA_KEY_DECL();
 
   // Parameters associated with the currently displayed blocking page. These are
   // cleared immediately on next navigation.

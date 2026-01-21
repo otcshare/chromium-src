@@ -6,6 +6,8 @@
 
 #include "base/synchronization/lock.h"
 #include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "media/base/video_frame.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
@@ -79,7 +81,6 @@ void PushableMediaStreamVideoSource::Broker::PushFrame(
   PostCrossThreadTask(
       *video_task_runner_, FROM_HERE,
       CrossThreadBindOnce(frame_callback_, std::move(video_frame),
-                          std::vector<scoped_refptr<media::VideoFrame>>(),
                           estimated_capture_time));
 }
 
@@ -159,12 +160,10 @@ void PushableMediaStreamVideoSource::PushFrame(
 }
 
 void PushableMediaStreamVideoSource::StartSourceImpl(
-    VideoCaptureDeliverFrameCB frame_callback,
-    EncodedVideoFrameCB encoded_frame_callback,
-    VideoCaptureCropVersionCB crop_version_callback) {
+    MediaStreamVideoSourceCallbacks media_stream_callbacks) {
   DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-  DCHECK(frame_callback);
-  broker_->OnSourceStarted(std::move(frame_callback));
+  DCHECK(media_stream_callbacks.deliver_frame_cb);
+  broker_->OnSourceStarted(std::move(media_stream_callbacks.deliver_frame_cb));
   OnStartDone(mojom::blink::MediaStreamRequestResult::OK);
 }
 
@@ -178,7 +177,7 @@ PushableMediaStreamVideoSource::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
-void PushableMediaStreamVideoSource::SetCanDiscardAlpha(
+void PushableMediaStreamVideoSource::OnSourceCanDiscardAlpha(
     bool can_discard_alpha) {
   broker_->SetCanDiscardAlpha(can_discard_alpha);
 }
@@ -187,7 +186,7 @@ media::VideoCaptureFeedbackCB
 PushableMediaStreamVideoSource::GetFeedbackCallback() const {
   return base::BindPostTask(
       GetTaskRunner(),
-      WTF::BindRepeating(
+      blink::BindRepeating(
           &PushableMediaStreamVideoSource::ProcessFeedbackInternal,
           weak_factory_.GetMutableWeakPtr()));
 }

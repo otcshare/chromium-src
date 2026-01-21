@@ -4,28 +4,35 @@
 
 package org.chromium.content.app;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.SparseArray;
-import android.view.Surface;
+import android.window.InputTransferToken;
 
-import org.chromium.base.JNIUtils;
+import androidx.annotation.RequiresApi;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.UnguessableToken;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.base.library_loader.IRelroLibInfo;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.memory.MemoryPressureUma;
 import org.chromium.base.process_launcher.ChildProcessServiceDelegate;
-import org.chromium.build.annotations.MainDex;
+import org.chromium.base.process_launcher.IChildProcessArgs;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content.browser.ChildProcessCreationParamsImpl;
-import org.chromium.content.browser.ContentChildProcessConstants;
 import org.chromium.content.common.IGpuProcessCallback;
+import org.chromium.content.common.InputTransferTokenWrapper;
 import org.chromium.content.common.SurfaceWrapper;
 import org.chromium.content_public.common.ContentProcessInfo;
 
@@ -36,16 +43,16 @@ import java.util.List;
  * access to view surfaces.
  */
 @JNINamespace("content")
-@MainDex
+@NullMarked
 public class ContentChildProcessServiceDelegate implements ChildProcessServiceDelegate {
     private static final String TAG = "ContentCPSDelegate";
 
-    private IGpuProcessCallback mGpuCallback;
+    private @Nullable IGpuProcessCallback mGpuCallback;
 
     private int mCpuCount;
     private long mCpuFeatures;
 
-    private SparseArray<String> mFdsIdsToKeys;
+    private @Nullable SparseArray<String> mFdsIdsToKeys;
 
     public ContentChildProcessServiceDelegate() {
         KillChildUncaughtExceptionHandler.maybeInstallHandler();
@@ -58,22 +65,25 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
 
     @Override
     public void onServiceBound(Intent intent) {
-        LibraryLoader.getInstance().getMediator().takeLoadAddressFromBundle(intent.getExtras());
-        LibraryLoader.getInstance().setLibraryProcessType(
-                ChildProcessCreationParamsImpl.getLibraryProcessType(intent.getExtras()));
+        Bundle extras = assumeNonNull(intent.getExtras());
+        LibraryLoader.getInstance().getMediator().takeLoadAddressFromBundle(extras);
+        LibraryLoader.getInstance()
+                .setLibraryProcessType(
+                        ChildProcessCreationParamsImpl.getLibraryProcessType(extras));
     }
 
     @Override
-    public void onConnectionSetup(Bundle connectionBundle, List<IBinder> clientInterfaces) {
-        mGpuCallback = clientInterfaces != null && !clientInterfaces.isEmpty()
-                ? IGpuProcessCallback.Stub.asInterface(clientInterfaces.get(0))
-                : null;
+    public void onConnectionSetup(IChildProcessArgs args, List<IBinder> clientInterfaces) {
+        mGpuCallback =
+                clientInterfaces != null && !clientInterfaces.isEmpty()
+                        ? IGpuProcessCallback.Stub.asInterface(clientInterfaces.get(0))
+                        : null;
 
-        mCpuCount = connectionBundle.getInt(ContentChildProcessConstants.EXTRA_CPU_COUNT);
-        mCpuFeatures = connectionBundle.getLong(ContentChildProcessConstants.EXTRA_CPU_FEATURES);
+        mCpuCount = args.cpuCount;
+        mCpuFeatures = args.cpuFeatures;
         assert mCpuCount > 0;
 
-        LibraryLoader.getInstance().getMediator().takeSharedRelrosFromBundle(connectionBundle);
+        LibraryLoader.getInstance().getMediator().takeSharedRelrosFromAidl(args.relroInfo);
     }
 
     @Override
@@ -91,8 +101,6 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
             return;
         }
 
-        JNIUtils.enableSelectiveJniRegistration();
-
         LibraryLoader libraryLoader = LibraryLoader.getInstance();
         libraryLoader.getMediator().initInChildProcess();
         libraryLoader.loadNowOverrideApplicationContext(hostContext);
@@ -105,16 +113,15 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
         // Now that the library is loaded, get the FD map,
         // TODO(jcivelli): can this be done in onBeforeMain? We would have to mode onBeforeMain
         // so it's called before FDs are registered.
-        ContentChildProcessServiceDelegateJni.get().retrieveFileDescriptorsIdsToKeys(
-                ContentChildProcessServiceDelegate.this);
+        ContentChildProcessServiceDelegateJni.get().retrieveFileDescriptorsIdsToKeys(this);
     }
 
     @Override
-    public void consumeRelroBundle(Bundle bundle) {
+    public void consumeRelroLibInfo(IRelroLibInfo libInfo) {
         // Does not block, but may jank slightly. If the library has not been loaded yet, the bundle
         // will be unpacked and saved for the future. If the library is loaded, the RELRO region
         // will be replaced, which involves mmap(2) of shared memory and memcpy+memcmp of a few MB.
-        LibraryLoader.getInstance().getMediator().takeSharedRelrosFromBundle(bundle);
+        LibraryLoader.getInstance().getMediator().takeSharedRelrosFromAidl(libInfo);
     }
 
     @Override
@@ -125,12 +132,14 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
 
     @Override
     public void onBeforeMain() {
-        ContentChildProcessServiceDelegateJni.get().initChildProcess(
-                ContentChildProcessServiceDelegate.this, mCpuCount, mCpuFeatures);
-        ThreadUtils.getUiThreadHandler().post(() -> {
-            ContentChildProcessServiceDelegateJni.get().initMemoryPressureListener();
-            MemoryPressureUma.initializeForChildService();
-        });
+        ContentChildProcessServiceDelegateJni.get().initChildProcess(this, mCpuCount, mCpuFeatures);
+        ThreadUtils.getUiThreadHandler()
+                .post(
+                        () -> {
+                            ContentChildProcessServiceDelegateJni.get()
+                                    .initMemoryPressureListener();
+                            MemoryPressureUma.initializeForChildService();
+                        });
     }
 
     @Override
@@ -150,25 +159,7 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
 
     @SuppressWarnings("unused")
     @CalledByNative
-    private void forwardSurfaceForSurfaceRequest(UnguessableToken requestToken, Surface surface) {
-        if (mGpuCallback == null) {
-            Log.e(TAG, "No callback interface has been provided.");
-            return;
-        }
-
-        try {
-            mGpuCallback.forwardSurfaceForSurfaceRequest(requestToken, surface);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Unable to call forwardSurfaceForSurfaceRequest: %s", e);
-            return;
-        } finally {
-            surface.release();
-        }
-    }
-
-    @SuppressWarnings("unused")
-    @CalledByNative
-    private SurfaceWrapper getViewSurface(int surfaceId) {
+    private @Nullable SurfaceWrapper getViewSurface(int surfaceId) {
         if (mGpuCallback == null) {
             Log.e(TAG, "No callback interface has been provided.");
             return null;
@@ -183,6 +174,21 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @CalledByNative
+    private void forwardInputTransferToken(int surfaceId, InputTransferToken vizInputToken) {
+        if (mGpuCallback == null) {
+            Log.e(TAG, "No callback interface has been provided.");
+            return;
+        }
+        try {
+            mGpuCallback.forwardInputTransferToken(
+                    surfaceId, new InputTransferTokenWrapper(vizInputToken));
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to call forwardInputTransferToken: %s", e);
+        }
+    }
+
     @NativeMethods
     interface Natives {
         /**
@@ -192,15 +198,14 @@ public class ContentChildProcessServiceDelegate implements ChildProcessServiceDe
          * @param cpuFeatures The CPU features.
          */
         void initChildProcess(
-                ContentChildProcessServiceDelegate caller, int cpuCount, long cpuFeatures);
+                ContentChildProcessServiceDelegate self, int cpuCount, long cpuFeatures);
 
         /**
-         * Initializes the MemoryPressureListener on the same thread callbacks will be
-         * received on.
+         * Initializes the MemoryPressureListener on the same thread callbacks will be received on.
          */
         void initMemoryPressureListener();
 
         // Retrieves the FD IDs to keys map and set it by calling setFileDescriptorsIdsToKeys().
-        void retrieveFileDescriptorsIdsToKeys(ContentChildProcessServiceDelegate caller);
+        void retrieveFileDescriptorsIdsToKeys(ContentChildProcessServiceDelegate self);
     }
 }

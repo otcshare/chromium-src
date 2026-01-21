@@ -43,6 +43,9 @@ class HistoryBackendObserver {
   // database. `is_from_expiration` is true if the modification is caused by
   // automatic history expiration (the visit count got reduced by expiring some
   // of the visits); it is false if the modification is caused by user action.
+  //
+  // Callers may receive URLRows that contain 404 visits and thus have visit
+  // counts or times that take 404 errors into account.
   virtual void OnURLsModified(HistoryBackend* history_backend,
                               const URLRows& changed_urls,
                               bool is_from_expiration) = 0;
@@ -55,16 +58,16 @@ class HistoryBackendObserver {
   // `expired` is set to true, if the URL deletion is due to expiration.
   // `deleted_rows` list of the deleted URLs.
   // `favicon_urls` list of favicon URLs that correspond to the deleted URLs.
-  virtual void OnURLsDeleted(HistoryBackend* history_backend,
-                             bool all_history,
-                             bool expired,
-                             const URLRows& deleted_rows,
-                             const std::set<GURL>& favicon_urls) = 0;
+  virtual void OnHistoryDeletions(HistoryBackend* history_backend,
+                                  bool all_history,
+                                  bool expired,
+                                  const URLRows& deleted_rows,
+                                  const std::set<GURL>& favicon_urls) = 0;
 
-  // Called when a visit is updated. Typically this happens when the visit
-  // duration is updated, and in some redirect cases when the transition type
-  // is updated.
-  virtual void OnVisitUpdated(const VisitRow& visit) = 0;
+  // Called when a visit, or some of its annotations, are updated. `reason`
+  // specifies what specifically was updated.
+  virtual void OnVisitUpdated(const VisitRow& visit,
+                              VisitUpdateReason reason) = 0;
 
   // Called when a visit is deleted - usually either due to expiry, or because
   // the user explicitly deleted it.

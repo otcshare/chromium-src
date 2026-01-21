@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #include "android_webview/browser/permission/aw_permission_request_delegate.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/media_stream_request.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 
@@ -17,11 +17,13 @@ class AwPermissionManager;
 
 // The AwPermissionRequestDelegate implementation for media access permission
 // request.
+// Lifetime: Temporary
 class MediaAccessPermissionRequest : public AwPermissionRequestDelegate {
  public:
   MediaAccessPermissionRequest(const content::MediaStreamRequest& request,
                                content::MediaResponseCallback callback,
-                               AwPermissionManager& permission_manager);
+                               AwPermissionManager& permission_manager,
+                               bool can_cache_file_url_permissions);
 
   MediaAccessPermissionRequest(const MediaAccessPermissionRequest&) = delete;
   MediaAccessPermissionRequest& operator=(const MediaAccessPermissionRequest&) =
@@ -40,6 +42,7 @@ class MediaAccessPermissionRequest : public AwPermissionRequestDelegate {
   const content::MediaStreamRequest request_;
   content::MediaResponseCallback callback_;
   const raw_ref<AwPermissionManager> permission_manager_;
+  bool can_cache_file_url_permissions_;
 
   // For test only.
   blink::MediaStreamDevices audio_test_devices_;

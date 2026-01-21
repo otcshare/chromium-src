@@ -18,6 +18,12 @@ config("cpuinfo_config") {
     # For clog.c.
     "-Wno-unused-result",
 
+    # For src/src/arm/windows/init-by-logical-sys-info.c.
+    "-Wno-tautological-pointer-compare",
+
+    # For src/src/arm/linux/chipset.c.
+    "-Wno-logical-op-parentheses",
+
     # A lot of locations.
     "-Wno-unused-function",
   ]
@@ -25,6 +31,7 @@ config("cpuinfo_config") {
   defines = [
     "_GNU_SOURCE=1",  # Required for CPU_SETSIZE to be available.
     "CPUINFO_INTERNAL=",
+    "CPUINFO_LOG_LEVEL=0",  # CPUINFO_LOG_NONE=0
     "CPUINFO_PRIVATE=",
   ]
 }
@@ -38,6 +45,7 @@ source_set("cpuinfo") {
     "src/src/api.c",
     "src/src/cache.c",
     "src/src/init.c",
+    "src/src/log.c",
   ]
 
   deps = [
@@ -101,6 +109,10 @@ source_set("cpu_specific") {
       "src/src/arm/cache.c",
       "src/src/arm/uarch.c",
     ]
+  }
+
+  if (current_cpu == "riscv64") {
+    sources = [ "src/src/riscv/uarch.c" ]
   }
 
   # Because "init.c" is reused again, but only has sources in the corresponding
@@ -167,6 +179,14 @@ source_set("cpu_and_os_specific") {
       "src/src/arm/linux/hwcap.c",
       "src/src/arm/linux/init.c",
       "src/src/arm/linux/midr.c",
+    ]
+  }
+
+  if ((is_linux || is_chromeos) && current_cpu == "riscv64") {
+    sources = [
+      "src/src/riscv/linux/init.c",
+      "src/src/riscv/linux/riscv-hw.c",
+      "src/src/riscv/linux/riscv-isa.c",
     ]
   }
 

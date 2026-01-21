@@ -8,12 +8,13 @@
 #include <stddef.h>
 #include <string.h>  // For |memcpy()|.
 
-#include <limits>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/types/is_instantiation.h"
 #include "mojo/public/cpp/bindings/array_data_view.h"
 #include "mojo/public/cpp/bindings/lib/array_internal.h"
 #include "mojo/public/cpp/bindings/lib/message_fragment.h"
@@ -55,7 +56,8 @@ class ArrayIterator<Traits, MaybeConstUserType, true> {
   const MaybeConstUserType& input() const { return input_; }
 
  private:
-  MaybeConstUserType& input_;
+  // RAW_PTR_EXCLUSION: Binary size increase.
+  RAW_PTR_EXCLUSION MaybeConstUserType& input_;
   IteratorType iter_;
 };
 
@@ -76,7 +78,8 @@ class ArrayIterator<Traits, MaybeConstUserType, false> {
   const MaybeConstUserType& input() const { return input_; }
 
  private:
-  MaybeConstUserType& input_;
+  // RAW_PTR_EXCLUSION: Binary size increase.
+  RAW_PTR_EXCLUSION MaybeConstUserType& input_;
   size_t iter_;
 };
 
@@ -85,20 +88,16 @@ class ArrayIterator<Traits, MaybeConstUserType, false> {
 // difference between ArrayTraits and MapTraits.
 template <typename MojomType,
           typename MaybeConstUserType,
-          typename UserTypeIterator,
-          typename EnableType = void>
+          typename UserTypeIterator>
 struct ArraySerializer;
 
 // Handles serialization and deserialization of arrays of pod types.
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<
-    MojomType,
-    MaybeConstUserType,
-    UserTypeIterator,
-    typename std::enable_if<BelongsTo<typename MojomType::Element,
-                                      MojomTypeCategory::kPOD>::value>::type> {
+  requires(
+      BelongsTo<typename MojomType::Element, MojomTypeCategory::kPOD>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Data = typename MojomTypeTraits<MojomType>::Data;
   using DataElement = typename Data::Element;
@@ -117,38 +116,51 @@ struct ArraySerializer<
       UserTypeIterator* input,
       MessageFragment<Data>& fragment,
       const ContainerValidateParams* validate_params) {
-    DCHECK(!validate_params->element_is_nullable)
-        << "Primitive type should be non-nullable";
     DCHECK(!validate_params->element_validate_params)
         << "Primitive type should not have array validate params";
 
     size_t size = input->GetSize();
-    if (size == 0)
+    if (size == 0) {
       return;
+    }
 
     Data* output = fragment.data();
-    if constexpr (HasGetDataMethod<Traits, MaybeConstUserType>::value) {
+    // std::optional<> is considered a POD type by MojomTypeCategory, but it is
+    // not safe to memcpy.
+    if constexpr (requires { Traits::GetData(input->input()); } &&
+                  !base::is_instantiation<DataElement, std::optional>) {
       auto data = Traits::GetData(input->input());
-      memcpy(output->storage(), data, size * sizeof(DataElement));
+      // SAFETY: The GetData and output storage types need to be spanified.
+      UNSAFE_TODO(
+          { memcpy(output->storage(), data, size * sizeof(DataElement)); });
     } else {
-      for (size_t i = 0; i < size; ++i)
+      for (size_t i = 0; i < size; ++i) {
         output->at(i) = input->GetNext();
+      }
     }
   }
 
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     if (input->size()) {
-      if constexpr (HasGetDataMethod<Traits, UserType>::value) {
+      // std::optional<> is considered a POD type by MojomTypeCategory, but it
+      // is not safe to memcpy.
+      if constexpr (requires { Traits::GetData(*output); } &&
+                    !base::is_instantiation<DataElement, std::optional>) {
         auto data = Traits::GetData(*output);
-        memcpy(data, input->storage(), input->size() * sizeof(DataElement));
+        // SAFETY: The GetData and output storage types need to be spanified.
+        UNSAFE_TODO({
+          memcpy(data, input->storage(), input->size() * sizeof(DataElement));
+        });
       } else {
         ArrayIterator<Traits, UserType> iterator(*output);
-        for (size_t i = 0; i < input->size(); ++i)
-          iterator.GetNext() = input->at(i);
+        for (size_t i = 0; i < input->size(); ++i) {
+          iterator.GetNext() = static_cast<DataElement>(input->at(i));
+        }
       }
     }
     return true;
@@ -159,12 +171,10 @@ struct ArraySerializer<
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<
-    MojomType,
-    MaybeConstUserType,
-    UserTypeIterator,
-    typename std::enable_if<BelongsTo<typename MojomType::Element,
-                                      MojomTypeCategory::kEnum>::value>::type> {
+  requires(
+      !base::is_instantiation<typename MojomType::Element, std::optional> &&
+      BelongsTo<typename MojomType::Element, MojomTypeCategory::kEnum>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Data = typename MojomTypeTraits<MojomType>::Data;
   using DataElement = typename Data::Element;
@@ -185,19 +195,86 @@ struct ArraySerializer<
 
     Data* output = fragment.data();
     size_t size = input->GetSize();
-    for (size_t i = 0; i < size; ++i)
-      Serialize<Element>(input->GetNext(), output->storage() + i);
+    for (size_t i = 0; i < size; ++i) {
+      Serialize<Element>(input->GetNext(), UNSAFE_TODO(output->storage() + i));
+    }
   }
 
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     ArrayIterator<Traits, UserType> iterator(*output);
     for (size_t i = 0; i < input->size(); ++i) {
-      if (!Deserialize<Element>(input->at(i), &iterator.GetNext()))
+      if (!Deserialize<Element>(input->at(i), &iterator.GetNext())) {
         return false;
+      }
+    }
+    return true;
+  }
+};
+
+// Handles serialization and deserialization of arrays of optional enum types.
+template <typename MojomType,
+          typename MaybeConstUserType,
+          typename UserTypeIterator>
+  requires(
+      base::is_instantiation<typename MojomType::Element, std::optional> &&
+      BelongsTo<typename MojomType::Element, MojomTypeCategory::kEnum>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
+  using UserType = typename std::remove_const<MaybeConstUserType>::type;
+  using Data = typename MojomTypeTraits<MojomType>::Data;
+  using DataElement = typename Data::Element;
+  using Element = typename MojomType::Element;
+  using Traits = ArrayTraits<UserType>;
+
+  static_assert(IsStdOptional<typename Traits::Element>::value,
+                "Output type should be optional");
+  static_assert(sizeof(Element) == sizeof(DataElement),
+                "Incorrect array serializer");
+
+  static void SerializeElements(
+      UserTypeIterator* input,
+      MessageFragment<Data>& fragment,
+      const ContainerValidateParams* validate_params) {
+    DCHECK(!validate_params->element_validate_params)
+        << "Primitive type should not have array validate params";
+
+    Data* output = fragment.data();
+    size_t size = input->GetSize();
+    for (size_t i = 0; i < size; ++i) {
+      auto next = input->GetNext();
+      if (next) {
+        int32_t serialized;
+        Serialize<typename Element::value_type>(*next, &serialized);
+        output->at(i) = serialized;
+      } else {
+        output->at(i) = std::nullopt;
+      }
+    }
+  }
+
+  static bool DeserializeElements(Data* input,
+                                  UserType* output,
+                                  Message* message) {
+    if (!Traits::Resize(*output, input->size())) {
+      return false;
+    }
+    ArrayIterator<Traits, UserType> iterator(*output);
+    for (size_t i = 0; i < input->size(); ++i) {
+      std::optional<int32_t> element = input->at(i).ToOptional();
+      if (element) {
+        typename Element::value_type deserialized;
+        if (!Deserialize<typename Element::value_type>(*element,
+                                                       &deserialized)) {
+          return false;
+        }
+        iterator.GetNext() = deserialized;
+      } else {
+        iterator.GetNext() = std::nullopt;
+      }
     }
     return true;
   }
@@ -207,12 +284,9 @@ struct ArraySerializer<
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<MojomType,
-                       MaybeConstUserType,
-                       UserTypeIterator,
-                       typename std::enable_if<BelongsTo<
-                           typename MojomType::Element,
-                           MojomTypeCategory::kBoolean>::value>::type> {
+  requires(BelongsTo<typename MojomType::Element,
+                     MojomTypeCategory::kBoolean>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Traits = ArrayTraits<UserType>;
   using Data = typename MojomTypeTraits<MojomType>::Data;
@@ -231,17 +305,20 @@ struct ArraySerializer<MojomType,
 
     Data* output = fragment.data();
     size_t size = input->GetSize();
-    for (size_t i = 0; i < size; ++i)
+    for (size_t i = 0; i < size; ++i) {
       output->at(i) = input->GetNext();
+    }
   }
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     ArrayIterator<Traits, UserType> iterator(*output);
-    for (size_t i = 0; i < input->size(); ++i)
+    for (size_t i = 0; i < input->size(); ++i) {
       iterator.GetNext() = input->at(i);
+    }
     return true;
   }
 };
@@ -250,16 +327,13 @@ struct ArraySerializer<MojomType,
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<
-    MojomType,
-    MaybeConstUserType,
-    UserTypeIterator,
-    typename std::enable_if<BelongsTo<
-        typename MojomType::Element,
-        MojomTypeCategory::kAssociatedInterface |
-            MojomTypeCategory::kAssociatedInterfaceRequest |
-            MojomTypeCategory::kHandle | MojomTypeCategory::kInterface |
-            MojomTypeCategory::kInterfaceRequest>::value>::type> {
+  requires(
+      BelongsTo<typename MojomType::Element,
+                MojomTypeCategory::kAssociatedInterface |
+                    MojomTypeCategory::kAssociatedInterfaceRequest |
+                    MojomTypeCategory::kHandle | MojomTypeCategory::kInterface |
+                    MojomTypeCategory::kInterfaceRequest>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Data = typename MojomTypeTraits<MojomType>::Data;
   using Element = typename MojomType::Element;
@@ -284,9 +358,11 @@ struct ArraySerializer<
                         MojomTypeCategory::kAssociatedInterfaceRequest>::value
               ? VALIDATION_ERROR_UNEXPECTED_INVALID_INTERFACE_ID
               : VALIDATION_ERROR_UNEXPECTED_INVALID_HANDLE;
-      MOJO_INTERNAL_DLOG_SERIALIZATION_WARNING(
-          !validate_params->element_is_nullable &&
-              !IsHandleOrInterfaceValid(output->at(i)),
+
+      MOJO_INTERNAL_CHECK_SERIALIZATION(
+          SendValidation::kDefault,
+          !(!validate_params->element_is_nullable &&
+            !IsHandleOrInterfaceValid(output->at(i))),
           kError,
           MakeMessageWithArrayIndex("invalid handle or interface ID in array "
                                     "expecting valid handles or interface IDs",
@@ -296,8 +372,9 @@ struct ArraySerializer<
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     ArrayIterator<Traits, UserType> iterator(*output);
     for (size_t i = 0; i < input->size(); ++i) {
       bool result =
@@ -313,14 +390,11 @@ struct ArraySerializer<
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<MojomType,
-                       MaybeConstUserType,
-                       UserTypeIterator,
-                       typename std::enable_if<BelongsTo<
-                           typename MojomType::Element,
-                           MojomTypeCategory::kArray | MojomTypeCategory::kMap |
-                               MojomTypeCategory::kString |
-                               MojomTypeCategory::kStruct>::value>::type> {
+  requires(BelongsTo<typename MojomType::Element,
+                     MojomTypeCategory::kArray | MojomTypeCategory::kMap |
+                         MojomTypeCategory::kString |
+                         MojomTypeCategory::kStruct>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Data = typename MojomTypeTraits<MojomType>::Data;
   using Element = typename MojomType::Element;
@@ -339,8 +413,10 @@ struct ArraySerializer<MojomType,
                                     validate_params->element_validate_params);
       fragment->at(i).Set(data_fragment.is_null() ? nullptr
                                                   : data_fragment.data());
-      MOJO_INTERNAL_DLOG_SERIALIZATION_WARNING(
-          !validate_params->element_is_nullable && data_fragment.is_null(),
+
+      MOJO_INTERNAL_CHECK_SERIALIZATION(
+          SendValidation::kDefault,
+          !(!validate_params->element_is_nullable && data_fragment.is_null()),
           VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
           MakeMessageWithArrayIndex("null in array expecting valid pointers",
                                     size, i));
@@ -349,13 +425,15 @@ struct ArraySerializer<MojomType,
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     ArrayIterator<Traits, UserType> iterator(*output);
     for (size_t i = 0; i < input->size(); ++i) {
       if (!Deserialize<Element>(input->at(i).Get(), &iterator.GetNext(),
-                                message))
+                                message)) {
         return false;
+      }
     }
     return true;
   }
@@ -390,12 +468,9 @@ struct ArraySerializer<MojomType,
 template <typename MojomType,
           typename MaybeConstUserType,
           typename UserTypeIterator>
-struct ArraySerializer<MojomType,
-                       MaybeConstUserType,
-                       UserTypeIterator,
-                       typename std::enable_if<
-                           BelongsTo<typename MojomType::Element,
-                                     MojomTypeCategory::kUnion>::value>::type> {
+  requires(
+      BelongsTo<typename MojomType::Element, MojomTypeCategory::kUnion>::value)
+struct ArraySerializer<MojomType, MaybeConstUserType, UserTypeIterator> {
   using UserType = typename std::remove_const<MaybeConstUserType>::type;
   using Data = typename MojomTypeTraits<MojomType>::Data;
   using Element = typename MojomType::Element;
@@ -409,12 +484,14 @@ struct ArraySerializer<MojomType,
     size_t size = input->GetSize();
     for (size_t i = 0; i < size; ++i) {
       MessageFragment<DataElement> inlined_union_element(fragment.message());
-      inlined_union_element.Claim(fragment->storage() + i);
+      inlined_union_element.Claim(UNSAFE_TODO(fragment->storage() + i));
       decltype(auto) next = input->GetNext();
       Serialize<Element>(next, inlined_union_element, true);
-      MOJO_INTERNAL_DLOG_SERIALIZATION_WARNING(
-          !validate_params->element_is_nullable &&
-              inlined_union_element.is_null(),
+
+      MOJO_INTERNAL_CHECK_SERIALIZATION(
+          SendValidation::kDefault,
+          !(!validate_params->element_is_nullable &&
+            inlined_union_element.is_null()),
           VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
           MakeMessageWithArrayIndex("null in array expecting valid unions",
                                     size, i));
@@ -424,12 +501,14 @@ struct ArraySerializer<MojomType,
   static bool DeserializeElements(Data* input,
                                   UserType* output,
                                   Message* message) {
-    if (!Traits::Resize(*output, input->size()))
+    if (!Traits::Resize(*output, input->size())) {
       return false;
+    }
     ArrayIterator<Traits, UserType> iterator(*output);
     for (size_t i = 0; i < input->size(); ++i) {
-      if (!Deserialize<Element>(&input->at(i), &iterator.GetNext(), message))
+      if (!Deserialize<Element>(&input->at(i), &iterator.GetNext(), message)) {
         return false;
+      }
     }
     return true;
   }
@@ -447,25 +526,30 @@ struct Serializer<ArrayDataView<Element>, MaybeConstUserType> {
   static void Serialize(MaybeConstUserType& input,
                         MessageFragment<Data>& fragment,
                         const ContainerValidateParams* validate_params) {
-    if (CallIsNullIfExists<Traits>(input))
+    if (CallIsNullIfExists<Traits>(input)) {
       return;
+    }
 
     const size_t size = Traits::GetSize(input);
-    MOJO_INTERNAL_DLOG_SERIALIZATION_WARNING(
-        validate_params->expected_num_elements != 0 &&
-            size != validate_params->expected_num_elements,
-        internal::VALIDATION_ERROR_UNEXPECTED_ARRAY_HEADER,
-        internal::MakeMessageWithExpectedArraySize(
+
+    MOJO_INTERNAL_CHECK_SERIALIZATION(
+        SendValidation::kDefault,
+        !(validate_params->expected_num_elements != 0 &&
+          size != validate_params->expected_num_elements),
+        VALIDATION_ERROR_UNEXPECTED_ARRAY_HEADER,
+        MakeMessageWithExpectedArraySize(
             "fixed-size array has wrong number of elements", size,
             validate_params->expected_num_elements));
+
     fragment.AllocateArrayData(size);
     ArrayIterator<Traits, MaybeConstUserType> iterator(input);
     Impl::SerializeElements(&iterator, fragment, validate_params);
   }
 
   static bool Deserialize(Data* input, UserType* output, Message* message) {
-    if (!input)
+    if (!input) {
       return CallSetToNullIfExists<Traits>(output);
+    }
     return Impl::DeserializeElements(input, output, message);
   }
 };

@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/upgrade_detector/build_state.h"
 #include "chrome/browser/upgrade_detector/mock_build_state_observer.h"
@@ -47,7 +48,8 @@ class InstalledVersionUpdaterTest : public ::testing::Test {
   BuildState build_state_;
 
  private:
-  ash::FakeUpdateEngineClient* fake_update_engine_client_;  // Not owned.
+  raw_ptr<ash::FakeUpdateEngineClient, DanglingUntriaged>
+      fake_update_engine_client_;  // Not owned.
 };
 
 // Tests that an unrelated status change notification does not push data to the
@@ -75,7 +77,7 @@ TEST_F(InstalledVersionUpdaterTest, Update) {
                               Eq(BuildState::UpdateType::kNormalUpdate)),
                      Property(&BuildState::installed_version, IsTrue()),
                      Property(&BuildState::installed_version,
-                              Eq(absl::optional<base::Version>(
+                              Eq(std::optional<base::Version>(
                                   base::Version(new_version)))),
                      Property(&BuildState::critical_version, IsFalse()))));
   NotifyStatusChanged(std::move(status));
@@ -110,7 +112,7 @@ TEST_F(InstalledVersionUpdaterTest, Rollback) {
                               Eq(BuildState::UpdateType::kEnterpriseRollback)),
                      Property(&BuildState::installed_version, IsTrue()),
                      Property(&BuildState::installed_version,
-                              Eq(absl::optional<base::Version>(
+                              Eq(std::optional<base::Version>(
                                   base::Version(new_version)))),
                      Property(&BuildState::critical_version, IsFalse()))));
   NotifyStatusChanged(std::move(status));
@@ -135,7 +137,7 @@ TEST_F(InstalledVersionUpdaterTest, ChannelChange) {
           Property(&BuildState::installed_version, IsTrue()),
           Property(
               &BuildState::installed_version,
-              Eq(absl::optional<base::Version>(base::Version(new_version)))),
+              Eq(std::optional<base::Version>(base::Version(new_version)))),
           Property(&BuildState::critical_version, IsFalse()))));
   NotifyStatusChanged(std::move(status));
   task_environment_.RunUntilIdle();

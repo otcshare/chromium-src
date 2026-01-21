@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
-
 #include <stdint.h>
+
+#include <array>
 
 #include "base/command_line.h"
 #include "base/strings/string_number_conversions.h"
@@ -13,10 +13,9 @@
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/context_state.h"
 #include "gpu/command_buffer/service/gl_surface_mock.h"
+#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_unittest.h"
-
 #include "gpu/command_buffer/service/gpu_switches.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/mocks.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/test_helper.h"
@@ -137,7 +136,7 @@ void GLES2DecoderRestoreStateTest::AddExpectationsForBindSampler(GLuint unit,
 
 TEST_P(GLES2DecoderRestoreStateTest, NullPreviousStateBGR) {
   InitState init;
-  init.bind_generates_resource = true;
+  init.gl_version = "OpenGL ES 2.0";
   InitDecoder(init);
   SetupTexture();
 
@@ -145,16 +144,13 @@ TEST_P(GLES2DecoderRestoreStateTest, NullPreviousStateBGR) {
   // Expect to restore texture bindings for unit GL_TEXTURE0.
   AddExpectationsForActiveTexture(GL_TEXTURE0);
   AddExpectationsForBindTexture(GL_TEXTURE_2D, kServiceTextureId);
-  AddExpectationsForBindTexture(GL_TEXTURE_CUBE_MAP,
-                                TestHelper::kServiceDefaultTextureCubemapId);
+  AddExpectationsForBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
   // Expect to restore texture bindings for remaining units.
   for (uint32_t i = 1; i < group().max_texture_units(); ++i) {
     AddExpectationsForActiveTexture(GL_TEXTURE0 + i);
-    AddExpectationsForBindTexture(GL_TEXTURE_2D,
-                                  TestHelper::kServiceDefaultTexture2dId);
-    AddExpectationsForBindTexture(GL_TEXTURE_CUBE_MAP,
-                                  TestHelper::kServiceDefaultTextureCubemapId);
+    AddExpectationsForBindTexture(GL_TEXTURE_2D, 0);
+    AddExpectationsForBindTexture(GL_TEXTURE_CUBE_MAP, 0);
   }
 
   // Expect to restore the active texture unit to GL_TEXTURE0.
@@ -165,6 +161,7 @@ TEST_P(GLES2DecoderRestoreStateTest, NullPreviousStateBGR) {
 
 TEST_P(GLES2DecoderRestoreStateTest, NullPreviousState) {
   InitState init;
+  init.gl_version = "OpenGL ES 2.0";
   InitDecoder(init);
   SetupTexture();
 
@@ -189,7 +186,6 @@ TEST_P(GLES2DecoderRestoreStateTest, NullPreviousState) {
 
 TEST_P(GLES2DecoderRestoreStateTest, WithPreviousStateBGR) {
   InitState init;
-  init.bind_generates_resource = true;
   InitDecoder(init);
   SetupTexture();
 
@@ -266,7 +262,6 @@ TEST_P(GLES2DecoderRestoreStateTest, ActiveUnit1) {
 
 TEST_P(GLES2DecoderRestoreStateTest, NonDefaultUnit0BGR) {
   InitState init;
-  init.bind_generates_resource = true;
   InitDecoder(init);
 
   // Bind a non-default texture to GL_TEXTURE1 unit.
@@ -288,8 +283,7 @@ TEST_P(GLES2DecoderRestoreStateTest, NonDefaultUnit0BGR) {
   // Expect to restore GL_TEXTURE_2D binding for GL_TEXTURE0 unit to
   // a default texture.
   AddExpectationsForActiveTexture(GL_TEXTURE0);
-  AddExpectationsForBindTexture(GL_TEXTURE_2D,
-                                TestHelper::kServiceDefaultTexture2dId);
+  AddExpectationsForBindTexture(GL_TEXTURE_2D, 0);
 
   // Expect to restore GL_TEXTURE_2D binding for GL_TEXTURE1 unit to
   // non-default.
@@ -304,7 +298,6 @@ TEST_P(GLES2DecoderRestoreStateTest, NonDefaultUnit0BGR) {
 
 TEST_P(GLES2DecoderRestoreStateTest, NonDefaultUnit1BGR) {
   InitState init;
-  init.bind_generates_resource = true;
   InitDecoder(init);
 
   // Bind a non-default texture to GL_TEXTURE0 unit.
@@ -325,8 +318,7 @@ TEST_P(GLES2DecoderRestoreStateTest, NonDefaultUnit1BGR) {
   // Expect to restore GL_TEXTURE_2D binding to the default texture
   // for GL_TEXTURE1 unit.
   AddExpectationsForActiveTexture(GL_TEXTURE1);
-  AddExpectationsForBindTexture(GL_TEXTURE_2D,
-                                TestHelper::kServiceDefaultTexture2dId);
+  AddExpectationsForBindTexture(GL_TEXTURE_2D, 0);
 
   // Expect to restore active texture unit to GL_TEXTURE0.
   AddExpectationsForActiveTexture(GL_TEXTURE0);
@@ -493,31 +485,32 @@ TEST_P(GLES2DecoderManualInitTest, ContextStateCapabilityCaching) {
   };
 
   // TODO(vmiura): Should autogen this to match build_gles2_cmd_buffer.py.
-  TestInfo test[] = {{GL_BLEND, false, true},
-                     {GL_CULL_FACE, false, true},
-                     {GL_DEPTH_TEST, false, false},
-                     {GL_DITHER, true, true},
-                     {GL_POLYGON_OFFSET_FILL, false, true},
-                     {GL_SAMPLE_ALPHA_TO_COVERAGE, false, true},
-                     {GL_SAMPLE_COVERAGE, false, true},
-                     {GL_SCISSOR_TEST, false, true},
-                     {GL_STENCIL_TEST, false, false},
-                     {0, false, false}};
+  constexpr std::array kTestInfos = {
+      TestInfo{GL_BLEND, false, true},
+      TestInfo{GL_CULL_FACE, false, true},
+      TestInfo{GL_DEPTH_TEST, false, false},
+      TestInfo{GL_DITHER, true, true},
+      TestInfo{GL_POLYGON_OFFSET_FILL, false, true},
+      TestInfo{GL_SAMPLE_ALPHA_TO_COVERAGE, false, true},
+      TestInfo{GL_SAMPLE_COVERAGE, false, true},
+      TestInfo{GL_SCISSOR_TEST, false, true},
+      TestInfo{GL_STENCIL_TEST, false, false},
+  };
 
   InitState init;
   InitDecoder(init);
 
-  for (int i = 0; test[i].gl_enum; i++) {
-    bool enable_state = test[i].default_state;
+  for (const auto& test : kTestInfos) {
+    bool enable_state = test.default_state;
 
     // Test setting default state initially is ignored.
-    EnableDisableTest(test[i].gl_enum, enable_state, test[i].expect_set);
+    EnableDisableTest(test.gl_enum, enable_state, test.expect_set);
 
     // Test new and cached state changes.
     for (int n = 0; n < 3; n++) {
       enable_state = !enable_state;
-      EnableDisableTest(test[i].gl_enum, enable_state, test[i].expect_set);
-      EnableDisableTest(test[i].gl_enum, enable_state, test[i].expect_set);
+      EnableDisableTest(test.gl_enum, enable_state, test.expect_set);
+      EnableDisableTest(test.gl_enum, enable_state, test.expect_set);
     }
   }
 }
@@ -556,38 +549,6 @@ TEST_P(GLES3DecoderTest, ES3PixelStoreiWithPixelUnpackBuffer) {
   // Bind a PIXEL_UNPACK_BUFFER again.
   SetupUpdateES3UnpackParametersExpectations(gl_.get(), 32, 0);
   DoBindBuffer(GL_PIXEL_UNPACK_BUFFER, client_buffer_id_, kServiceBufferId);
-}
-
-TEST_P(GLES2DecoderManualInitTest, MipmapHintOnCoreProfile) {
-  // On a core profile, glHint(GL_GENERATE_MIPMAP_HINT) should be a noop
-  InitState init;
-  init.gl_version = "3.2";
-  InitDecoder(init);
-
-  cmds::Hint cmd;
-  cmd.Init(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
-
-  EXPECT_CALL(*gl_, Hint(GL_GENERATE_MIPMAP_HINT, GL_NICEST)).Times(0);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-}
-
-TEST_P(GLES2DecoderManualInitTest, MipmapHintOnCompatibilityProfile) {
-  // On a compatibility profile, glHint(GL_GENERATE_MIPMAP_HINT) should be go
-  // through
-  InitState init;
-  init.gl_version = "3.2";
-  init.extensions += " GL_ARB_compatibility";
-  InitDecoder(init);
-
-  cmds::Hint cmd;
-  cmd.Init(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
-
-  EXPECT_CALL(*gl_, Hint(GL_GENERATE_MIPMAP_HINT, GL_NICEST))
-      .Times(1)
-      .RetiresOnSaturation();
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
 // TODO(vmiura): Tests for VAO restore.

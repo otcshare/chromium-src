@@ -51,6 +51,10 @@ class Group(object):
         # Recursively get all the fields in the subgroups as well
         self.all_fields = _flatten_list(subgroup.all_fields
                                         for subgroup in subgroups) + fields
+        self.all_subgroups = _flatten_list(
+            subgroup.all_subgroups for subgroup in subgroups) + subgroups
+
+        self.needs_diff = any(field.needs_diff for field in self.all_fields)
 
         # Ensure that all fields/subgroups on this group link to it
         for field in fields:
@@ -78,29 +82,11 @@ class Enum(object):
 
     def __init__(self, type_name, keywords, set_type):
         self.type_name = type_name
+        self.keywords = keywords
         self.values = [
             NameStyleConverter(keyword).to_enum_value() for keyword in keywords
         ]
         self.set_type = set_type
-
-
-class DiffGroup(object):
-    """Represents a group of expressions and subgroups that need to be diffed
-    for a function in ComputedStyle.
-
-    Attributes:
-        subgroups: List of DiffGroup instances that are stored as subgroups
-            under this group.
-        expressions: List of expression that are on this group that need to
-            be diffed.
-    """
-
-    def __init__(self, group):
-        self.group = group
-        self.subgroups = []
-        self.fields = []
-        self.expressions = []
-        self.predicates = []
 
 
 class Field(object):
@@ -136,24 +122,31 @@ class Field(object):
         default_value: Default value for this field when it is first initialized
     """
 
-    def __init__(self, field_role, name_for_methods, writable, property_name,
-                 type_name, wrapper_pointer_name, field_template, size,
-                 default_value, custom_copy, custom_compare, mutable,
+    def __init__(self, field_role, name_for_methods, property_name, type_name,
+                 wrapper_pointer_name, field_template, size, default_value,
+                 derived_from, invalidate, reset_on_new_style, custom_compare,
+                 highlight_style_comes_from_originating_element, mutable,
                  getter_method_name, setter_method_name, initial_method_name,
                  computed_style_custom_functions,
                  computed_style_protected_functions, **kwargs):
         name_source = NameStyleConverter(name_for_methods)
         self.name = name_source.to_class_data_member()
-        self.writable = writable
         self.property_name = property_name
         self.type_name = type_name
         self.wrapper_pointer_name = wrapper_pointer_name
         self.alignment_type = self.wrapper_pointer_name or self.type_name
+        self.requires_tracing = wrapper_pointer_name == 'Member'
         self.field_template = field_template
         self.size = size
         self.default_value = default_value
-        self.custom_copy = custom_copy
+        self.derived_from = derived_from
+        self.invalidate = [
+            NameStyleConverter(value).to_enum_value() for value in invalidate
+        ]
+        self.needs_diff = bool(invalidate)
+        self.reset_on_new_style = reset_on_new_style
         self.custom_compare = custom_compare
+        self.highlight_style_comes_from_originating_element = highlight_style_comes_from_originating_element
         self.mutable = mutable
         self.group = None
 
@@ -186,6 +179,7 @@ class Field(object):
         assert (self.is_property, self.is_inherited_flag).count(True) == 1, \
             'Field role has to be exactly one of: property, inherited_flag'
 
+        self.is_inherited = False
         if not self.is_inherited_flag:
             self.is_inherited = kwargs.pop('inherited')
             self.is_independent = kwargs.pop('independent')

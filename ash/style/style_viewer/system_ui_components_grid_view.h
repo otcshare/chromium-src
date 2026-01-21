@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/views/view.h"
 
 namespace ash {
@@ -41,9 +42,9 @@ class SystemUIComponentsGridView : public views::View {
   // Adds a new instance and returns the raw pointer of the instance.
   template <typename T>
   T* AddInstance(const std::u16string& name, std::unique_ptr<T> instance) {
-    T* raw_ptr = instance.get();
-    AddInstanceImpl(name, instance.release());
-    return raw_ptr;
+    T* instance_ptr = instance.get();
+    AddInstanceImpl(name, std::move(instance));
+    return instance_ptr;
   }
 
   // views::View:
@@ -53,10 +54,11 @@ class SystemUIComponentsGridView : public views::View {
   class GridLayout;
 
   // Adds the view of the instance and label in the view's hierarchy.
-  void AddInstanceImpl(const std::u16string& name, views::View* instance_view);
+  void AddInstanceImpl(const std::u16string& name,
+                       std::unique_ptr<views::View> instance_view);
 
   // The grid layout holding the labels and instances.
-  GridLayout* grid_layout_;
+  raw_ptr<GridLayout> grid_layout_;
 };
 
 }  // namespace ash

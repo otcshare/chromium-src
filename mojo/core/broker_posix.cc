@@ -13,6 +13,7 @@
 #include "base/logging.h"
 #include "base/memory/platform_shared_memory_region.h"
 #include "build/build_config.h"
+#include "mojo/buildflags.h"
 #include "mojo/core/broker_messages.h"
 #include "mojo/core/channel.h"
 #include "mojo/core/platform_handle_utils.h"
@@ -47,8 +48,9 @@ Channel::MessagePtr WaitForBrokerMessage(
     error = true;
   }
 
-  if (error)
+  if (error) {
     return nullptr;
+  }
 
   const BrokerMessageHeader* header =
       reinterpret_cast<const BrokerMessageHeader*>(message->payload());
@@ -58,8 +60,9 @@ Channel::MessagePtr WaitForBrokerMessage(
   }
 
   incoming_handles->reserve(incoming_fds.size());
-  for (size_t i = 0; i < incoming_fds.size(); ++i)
+  for (size_t i = 0; i < incoming_fds.size(); ++i) {
     incoming_handles->emplace_back(std::move(incoming_fds[i]));
+  }
 
   return message;
 }
@@ -77,8 +80,9 @@ Broker::Broker(PlatformHandle handle, bool wait_for_channel_handle)
   flags = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
   PCHECK(flags != -1);
 
-  if (!wait_for_channel_handle)
+  if (!wait_for_channel_handle) {
     return;
+  }
 
   // Wait for the first message, which should contain a handle.
   std::vector<PlatformHandle> incoming_platform_handles;
@@ -115,7 +119,8 @@ base::WritableSharedMemoryRegion Broker::GetWritableSharedMemoryRegion(
     return base::WritableSharedMemoryRegion();
   }
 
-#if !BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
+#if !BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
   // Non-POSIX systems, as well as Android and Mac, only use a single handle to
   // represent a writable region.
   constexpr size_t kNumExpectedHandles = 1;
@@ -129,19 +134,23 @@ base::WritableSharedMemoryRegion Broker::GetWritableSharedMemoryRegion(
       kNumExpectedHandles, sizeof(BufferResponseData), &handles);
   if (message) {
     const BufferResponseData* data;
-    if (!GetBrokerMessageData(message.get(), &data))
+    if (!GetBrokerMessageData(message.get(), &data)) {
       return base::WritableSharedMemoryRegion();
-
-    if (handles.size() == 1)
+    }
+    std::optional<base::UnguessableToken> guid =
+        base::UnguessableToken::Deserialize(data->guid_high, data->guid_low);
+    if (!guid.has_value()) {
+      return base::WritableSharedMemoryRegion();
+    }
+    if (handles.size() == 1) {
       handles.emplace_back();
+    }
     return base::WritableSharedMemoryRegion::Deserialize(
         base::subtle::PlatformSharedMemoryRegion::Take(
             CreateSharedMemoryRegionHandleFromPlatformHandles(
                 std::move(handles[0]), std::move(handles[1])),
             base::subtle::PlatformSharedMemoryRegion::Mode::kWritable,
-            num_bytes,
-            base::UnguessableToken::Deserialize(data->guid_high,
-                                                data->guid_low)));
+            num_bytes, guid.value()));
   }
 
   return base::WritableSharedMemoryRegion();

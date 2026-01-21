@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//testing/libfuzzer/fuzzer_test.gni")
+
 config("unrar_warnings") {
   cflags = [
     # unrar frequently drops parentheses around logical ops
@@ -23,6 +25,7 @@ config("unrar_warnings") {
 
 static_library("unrar") {
   sources = [
+    "google/unrar_delegates.h",
     "google/unrar_wrapper.cc",
     "google/unrar_wrapper.h",
     "src/archive.cpp",
@@ -45,6 +48,7 @@ static_library("unrar") {
     "src/global.cpp",
     "src/hash.cpp",
     "src/headers.cpp",
+    "src/largepage.cpp",
     "src/list.cpp",
     "src/match.cpp",
     "src/options.cpp",
@@ -74,7 +78,10 @@ static_library("unrar") {
     "src/volume.cpp",
   ]
   if (is_win) {
-    sources += [ "src/isnt.cpp" ]
+    sources += [
+      "src/isnt.cpp",
+      "src/motw.cpp",
+    ]
   }
 
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -101,5 +108,22 @@ static_library("unrar") {
     "UNRAR_NO_EXCEPTIONS",
   ]
 
+  if (use_fuzzing_engine) {
+    defines += [ "CHROMIUM_UNRAR_FUZZER" ]
+  }
+
   deps = [ "//base" ]
+}
+
+fuzzer_test("unrar_fuzzer") {
+  sources = [ "unrar_fuzzer.cc" ]
+  deps = [
+    ":unrar",
+    "//base",
+  ]
+  seed_corpus = "//chrome/test/data/safe_browsing/rar"
+
+  # Increase the memory limit because unpacking files can result in large
+  # allocations.
+  libfuzzer_options = [ "rss_limit_mb=4096" ]
 }

@@ -5,9 +5,11 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_PHONEHUB_FEATURE_STATUS_PROVIDER_IMPL_H_
 #define CHROMEOS_ASH_COMPONENTS_PHONEHUB_FEATURE_STATUS_PROVIDER_IMPL_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/phonehub/feature_status_provider.h"
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
 #include "chromeos/ash/services/device_sync/public/cpp/device_sync_client.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/connection_manager.h"
@@ -16,8 +18,7 @@
 #include "components/session_manager/core/session_manager_observer.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 // FeatureStatusProvider implementation which utilizes DeviceSyncClient,
 // MultiDeviceSetupClient and BluetoothAdapter to determine the current status.
@@ -35,7 +36,8 @@ class FeatureStatusProviderImpl
       multidevice_setup::MultiDeviceSetupClient* multidevice_setup_client,
       secure_channel::ConnectionManager* connection_manager,
       session_manager::SessionManager* session_manager,
-      chromeos::PowerManagerClient* power_manager_client);
+      chromeos::PowerManagerClient* power_manager_client,
+      PhoneHubStructuredMetricsLogger* phone_hub_structured_metrics_logger);
   ~FeatureStatusProviderImpl() override;
 
  private:
@@ -78,20 +80,22 @@ class FeatureStatusProviderImpl
   void SuspendImminent(power_manager::SuspendImminent::Reason reason) override;
   void SuspendDone(base::TimeDelta sleep_duration) override;
 
-  device_sync::DeviceSyncClient* device_sync_client_;
-  multidevice_setup::MultiDeviceSetupClient* multidevice_setup_client_;
-  secure_channel::ConnectionManager* connection_manager_;
-  session_manager::SessionManager* session_manager_;
-  chromeos::PowerManagerClient* power_manager_client_;
+  void CheckEligibleDevicesForNudge();
+
+  raw_ptr<device_sync::DeviceSyncClient> device_sync_client_;
+  raw_ptr<multidevice_setup::MultiDeviceSetupClient> multidevice_setup_client_;
+  raw_ptr<secure_channel::ConnectionManager> connection_manager_;
+  raw_ptr<session_manager::SessionManager> session_manager_;
+  raw_ptr<chromeos::PowerManagerClient> power_manager_client_;
+  raw_ptr<PhoneHubStructuredMetricsLogger> phone_hub_structured_metrics_logger_;
 
   scoped_refptr<device::BluetoothAdapter> bluetooth_adapter_;
-  absl::optional<FeatureStatus> status_;
+  std::optional<FeatureStatus> status_;
   bool is_suspended_ = false;
 
   base::WeakPtrFactory<FeatureStatusProviderImpl> weak_ptr_factory_{this};
 };
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub
 
 #endif  // CHROMEOS_ASH_COMPONENTS_PHONEHUB_FEATURE_STATUS_PROVIDER_IMPL_H_

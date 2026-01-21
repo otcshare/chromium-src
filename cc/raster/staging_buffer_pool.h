@@ -11,7 +11,6 @@
 #include <set>
 
 #include "base/containers/circular_deque.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
@@ -20,16 +19,17 @@
 #include "base/trace_event/memory_dump_provider.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/cc_export.h"
-#include "components/viz/common/resources/resource_format.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/common/gl2_types.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_memory_buffer.h"
 
-namespace gfx {
-class GpuMemoryBuffer;
-}
+namespace base::trace_event {
+class TracedValue;
+}  // namespace base::trace_event
+
 namespace gpu {
 namespace raster {
 class RasterInterface;
@@ -44,26 +44,21 @@ class RasterContextProvider;
 namespace cc {
 
 struct StagingBuffer {
-  StagingBuffer(const gfx::Size& size, viz::ResourceFormat format);
+  StagingBuffer(const gfx::Size& size, viz::SharedImageFormat format);
   ~StagingBuffer();
 
   void DestroyGLResources(gpu::raster::RasterInterface* gl,
                           gpu::SharedImageInterface* sii);
   void OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
-                    viz::ResourceFormat dump_format,
+                    viz::SharedImageFormat dump_format,
                     bool is_free) const;
 
   const gfx::Size size;
-  const viz::ResourceFormat format;
+  const viz::SharedImageFormat format;
   base::TimeTicks last_usage;
 
-  // The following fields are initialized by OneCopyRasterBufferProvider.
-  // Storage for the staging buffer.  This can be a GPU native or shared memory
-  // GpuMemoryBuffer.
-  std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer;
-
-  // Mailbox for the shared image bound to the GpuMemoryBuffer.
-  gpu::Mailbox mailbox;
+  // The shared image used by this StagingBuffer instance.
+  scoped_refptr<gpu::ClientSharedImage> client_shared_image;
 
   // Sync token for the last RasterInterface operations using the shared image.
   gpu::SyncToken sync_token;
@@ -76,6 +71,9 @@ struct StagingBuffer {
   // Id of the content that's rastered into this staging buffer.  Used to
   // retrieve staging buffer with known content for reuse for partial raster.
   uint64_t content_id = 0;
+
+  // Whether the underlying buffer is shared memory or GPU native.
+  bool is_shared_memory = false;
 };
 
 class CC_EXPORT StagingBufferPool final
@@ -98,13 +96,13 @@ class CC_EXPORT StagingBufferPool final
 
   std::unique_ptr<StagingBuffer> AcquireStagingBuffer(
       const gfx::Size& size,
-      viz::ResourceFormat format,
+      viz::SharedImageFormat format,
       uint64_t previous_content_id);
   void ReleaseStagingBuffer(std::unique_ptr<StagingBuffer> staging_buffer);
 
  private:
   void AddStagingBuffer(const StagingBuffer* staging_buffer,
-                        viz::ResourceFormat format)
+                        viz::SharedImageFormat format)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
   void RemoveStagingBuffer(const StagingBuffer* staging_buffer)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
@@ -124,17 +122,15 @@ class CC_EXPORT StagingBufferPool final
   void StagingStateAsValueInto(
       base::trace_event::TracedValue* staging_state) const;
 
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel level);
-
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   const raw_ptr<viz::RasterContextProvider> worker_context_provider_;
   const bool use_partial_raster_;
 
   mutable base::Lock lock_;
   // |lock_| must be acquired when accessing the following members.
-  using StagingBufferSet = std::set<const StagingBuffer*>;
-  StagingBufferSet buffers_;
+  using StagingBufferSet =
+      std::set<raw_ptr<const StagingBuffer, SetExperimental>>;
+  StagingBufferSet buffers_ GUARDED_BY(lock_);
   using StagingBufferDeque =
       base::circular_deque<std::unique_ptr<StagingBuffer>>;
   StagingBufferDeque free_buffers_ GUARDED_BY(lock_);
@@ -145,8 +141,6 @@ class CC_EXPORT StagingBufferPool final
   const base::TimeDelta staging_buffer_expiration_delay_ GUARDED_BY(lock_);
   bool reduce_memory_usage_pending_ GUARDED_BY(lock_);
   base::RepeatingClosure reduce_memory_usage_callback_ GUARDED_BY(lock_);
-
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 
   base::WeakPtrFactory<StagingBufferPool> weak_ptr_factory_{this};
 };

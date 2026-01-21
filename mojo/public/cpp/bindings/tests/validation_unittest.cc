@@ -5,12 +5,15 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
 #include <algorithm>
+#include <array>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_math.h"
 #include "base/run_loop.h"
@@ -27,8 +30,9 @@
 #include "mojo/public/cpp/bindings/tests/validation_test_input_parser.h"
 #include "mojo/public/cpp/system/message.h"
 #include "mojo/public/cpp/test_support/test_support.h"
-#include "mojo/public/interfaces/bindings/tests/validation_test_associated_interfaces.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/validation_test_interfaces.mojom.h"
+#include "mojo/public/cpp/test_support/validation_errors_test_util.h"
+#include "mojo/public/interfaces/bindings/tests/validation_test_associated_interfaces.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/validation_test_interfaces.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -58,7 +62,7 @@ template <typename T>
 void Append(std::vector<uint8_t>* data_vector, T data) {
   size_t pos = data_vector->size();
   data_vector->resize(pos + sizeof(T));
-  memcpy(&(*data_vector)[pos], &data, sizeof(T));
+  UNSAFE_TODO(memcpy(&(*data_vector)[pos], &data, sizeof(T)));
 }
 
 bool TestInputParser(const std::string& input,
@@ -96,8 +100,9 @@ std::vector<std::string> GetMatchingTests(const std::vector<std::string>& names,
   for (size_t i = 0; i < names.size(); ++i) {
     if (names[i].size() >= suffix.size() &&
         names[i].substr(0, prefix.size()) == prefix &&
-        names[i].substr(names[i].size() - suffix.size()) == suffix)
+        names[i].substr(names[i].size() - suffix.size()) == suffix) {
       tests.push_back(names[i].substr(0, names[i].size() - suffix.size()));
+    }
   }
   return tests;
 }
@@ -117,7 +122,7 @@ bool ReadFile(const std::string& path, std::string* result) {
   }
   fseek(fp, 0, SEEK_SET);
   result->resize(size);
-  size_t size_read = fread(&result->at(0), 1, size, fp);
+  size_t size_read = UNSAFE_TODO(fread(&result->at(0), 1, size, fp));
   fclose(fp);
   return size == size_read;
 }
@@ -126,8 +131,9 @@ bool ReadAndParseDataFile(const std::string& path,
                           std::vector<uint8_t>* data,
                           size_t* num_handles) {
   std::string input;
-  if (!ReadFile(path, &input))
+  if (!ReadFile(path, &input)) {
     return false;
+  }
 
   std::string error_message;
   if (!ParseValidationTestInput(input, data, num_handles, &error_message)) {
@@ -139,19 +145,20 @@ bool ReadAndParseDataFile(const std::string& path,
 }
 
 bool ReadResultFile(const std::string& path, std::string* result) {
-  if (!ReadFile(path, result))
+  if (!ReadFile(path, result)) {
     return false;
+  }
 
   // Result files are new-line delimited text files. Remove any CRs.
-  result->erase(std::remove(result->begin(), result->end(), '\r'),
-                result->end());
+  std::erase(*result, '\r');
 
   // Remove trailing LFs.
   size_t pos = result->find_last_not_of('\n');
-  if (pos == std::string::npos)
+  if (pos == std::string::npos) {
     result->clear();
-  else
+  } else {
     result->resize(pos + 1);
+  }
 
   return true;
 }
@@ -173,8 +180,9 @@ bool ReadTestCase(const std::string& test,
   }
 
   *message = CreateRawMessage(data.size());
-  if (!data.empty())
-    memcpy(message->mutable_data(), &data[0], data.size());
+  if (!data.empty()) {
+    UNSAFE_TODO(memcpy(message->mutable_data(), &data[0], data.size()));
+  }
   message->mutable_handles()->resize(num_handles);
 
   return true;
@@ -197,12 +205,14 @@ void RunValidationTests(const std::string& prefix,
     mojo::internal::ValidationErrorObserverForTesting observer(
         run_loop.QuitClosure());
     std::ignore = test_message_receiver->Accept(&message);
-    if (expected != "PASS")  // Observer only gets called on errors.
+    if (expected != "PASS") {  // Observer only gets called on errors.
       run_loop.Run();
-    if (observer.last_error() == mojo::internal::VALIDATION_ERROR_NONE)
+    }
+    if (observer.last_error() == mojo::internal::VALIDATION_ERROR_NONE) {
       result = "PASS";
-    else
+    } else {
       result = mojo::internal::ValidationErrorToString(observer.last_error());
+    }
 
     EXPECT_EQ(expected, result) << "failed test: " << tests[i];
   }
@@ -242,28 +252,28 @@ class ValidationTest : public testing::Test {
 
 class ValidationIntegrationTest : public ValidationTest {
  public:
-  ValidationIntegrationTest() : test_message_receiver_(nullptr) {}
-
-  ~ValidationIntegrationTest() override {}
+  ValidationIntegrationTest() = default;
+  ~ValidationIntegrationTest() override = default;
 
   void SetUp() override {
     ScopedMessagePipeHandle tester_endpoint;
     ASSERT_EQ(MOJO_RESULT_OK,
               CreateMessagePipe(nullptr, &tester_endpoint, &testee_endpoint_));
     test_message_receiver_ =
-        new TestMessageReceiver(this, std::move(tester_endpoint));
+        std::make_unique<TestMessageReceiver>(this, std::move(tester_endpoint));
   }
 
   void TearDown() override {
-    delete test_message_receiver_;
-    test_message_receiver_ = nullptr;
+    test_message_receiver_.reset();
 
     // Make sure that the other end receives the OnConnectionError()
     // notification.
     PumpMessages();
   }
 
-  MessageReceiver* test_message_receiver() { return test_message_receiver_; }
+  MessageReceiver* test_message_receiver() {
+    return test_message_receiver_.get();
+  }
 
   ScopedMessagePipeHandle testee_endpoint() {
     return std::move(testee_endpoint_);
@@ -293,7 +303,7 @@ class ValidationIntegrationTest : public ValidationTest {
 
   void PumpMessages() { base::RunLoop().RunUntilIdle(); }
 
-  raw_ptr<TestMessageReceiver> test_message_receiver_;
+  std::unique_ptr<TestMessageReceiver> test_message_receiver_;
   ScopedMessagePipeHandle testee_endpoint_;
 };
 
@@ -388,24 +398,27 @@ TEST_F(ValidationTest, InputParser) {
 
   // Test some failure cases.
   {
-    const char* error_inputs[] = {"/ hello world",
-                                  "[u1]x",
-                                  "[u2]-1000",
-                                  "[u1]0x100",
-                                  "[s2]-0x8001",
-                                  "[b]1",
-                                  "[b]1111111k",
-                                  "[dist4]unmatched",
-                                  "[anchr]hello [dist8]hello",
-                                  "[dist4]a [dist4]a [anchr]a",
-                                  "[dist4]a [anchr]a [dist4]a [anchr]a",
-                                  "0 [handles]50",
-                                  nullptr};
+    auto error_inputs = std::to_array<const char*>({
+        "/ hello world",
+        "[u1]x",
+        "[u2]-1000",
+        "[u1]0x100",
+        "[s2]-0x8001",
+        "[b]1",
+        "[b]1111111k",
+        "[dist4]unmatched",
+        "[anchr]hello [dist8]hello",
+        "[dist4]a [dist4]a [anchr]a",
+        "[dist4]a [anchr]a [dist4]a [anchr]a",
+        "0 [handles]50",
+        nullptr,
+    });
 
     for (size_t i = 0; error_inputs[i]; ++i) {
       std::vector<uint8_t> expected;
-      if (!TestInputParser(error_inputs[i], false, expected, 0))
+      if (!TestInputParser(error_inputs[i], false, expected, 0)) {
         ADD_FAILURE() << "Unexpected test result for: " << error_inputs[i];
+      }
     }
   }
 }

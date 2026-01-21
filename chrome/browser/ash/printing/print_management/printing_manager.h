@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_PRINTING_PRINT_MANAGEMENT_PRINTING_MANAGER_H_
 #define CHROME_BROWSER_ASH_PRINTING_PRINT_MANAGEMENT_PRINTING_MANAGER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/printing/cups_print_job_manager.h"
@@ -73,8 +74,8 @@ class PrintingManager : public chromeos::printing::printing_manager::mojom::
   void Shutdown() override;
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // CupsPrintJobManager::Observer impls
   void OnPrintJobCreated(base::WeakPtr<CupsPrintJob> job) override;
@@ -130,15 +131,15 @@ class PrintingManager : public chromeos::printing::printing_manager::mojom::
 
   // Not owned, this is the intermediate layer to interact with the print
   // job local database.
-  PrintJobHistoryService* print_job_history_service_;
+  raw_ptr<PrintJobHistoryService, DanglingUntriaged> print_job_history_service_;
 
   // Not owned, this provides the necessary observers to observe when browser
   // history has been cleared.
-  history::HistoryService* history_service_;
+  raw_ptr<history::HistoryService> history_service_;
 
   // Not owned, this provides the necessary observers to observe when an
   // ongoing print job has been updated.
-  CupsPrintJobManager* cups_print_job_manager_;
+  raw_ptr<CupsPrintJobManager> cups_print_job_manager_;
 
   IntegerPrefMember print_job_history_expiration_period_;
 

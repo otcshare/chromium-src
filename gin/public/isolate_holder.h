@@ -8,11 +8,12 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "gin/gin_export.h"
 #include "gin/public/v8_idle_task_runner.h"
 #include "v8/include/v8-array-buffer.h"
 #include "v8/include/v8-callbacks.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-isolate.h"
 
@@ -83,13 +84,22 @@ class GIN_EXPORT IsolateHolder {
       IsolateType isolate_type,
       IsolateCreationMode isolate_creation_mode = IsolateCreationMode::kNormal,
       v8::CreateHistogramCallback create_histogram_callback = nullptr,
-      v8::AddHistogramSampleCallback add_histogram_sample_callback = nullptr);
+      v8::AddHistogramSampleCallback add_histogram_sample_callback = nullptr,
+      scoped_refptr<base::SingleThreadTaskRunner> user_visible_task_runner =
+          nullptr,
+      scoped_refptr<base::SingleThreadTaskRunner> best_effort_task_runner =
+          nullptr,
+      std::unique_ptr<v8::CppHeap> cpp_heap = {});
   IsolateHolder(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       AccessMode access_mode,
       IsolateType isolate_type,
       std::unique_ptr<v8::Isolate::CreateParams> params,
-      IsolateCreationMode isolate_creation_mode = IsolateCreationMode::kNormal);
+      IsolateCreationMode isolate_creation_mode = IsolateCreationMode::kNormal,
+      scoped_refptr<base::SingleThreadTaskRunner> user_visible_task_runner =
+          nullptr,
+      scoped_refptr<base::SingleThreadTaskRunner> best_effort_task_runner =
+          nullptr);
   IsolateHolder(const IsolateHolder&) = delete;
   IsolateHolder& operator=(const IsolateHolder&) = delete;
   ~IsolateHolder();
@@ -107,7 +117,8 @@ class GIN_EXPORT IsolateHolder {
   static void Initialize(ScriptMode mode,
                          v8::ArrayBuffer::Allocator* allocator,
                          const intptr_t* reference_table = nullptr,
-                         const std::string js_command_line_flags = {},
+                         std::string js_command_line_flags = {},
+                         bool disallow_v8_feature_flag_overrides = false,
                          v8::FatalErrorCallback fatal_error_callback = nullptr,
                          v8::OOMErrorCallback oom_error_callback = nullptr);
 
@@ -143,7 +154,7 @@ class GIN_EXPORT IsolateHolder {
   void SetUp(scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
   std::unique_ptr<v8::SnapshotCreator> snapshot_creator_;
-  raw_ptr<v8::Isolate, DanglingUntriaged> isolate_;
+  raw_ptr<v8::Isolate, AcrossTasksDanglingUntriaged> isolate_;
   std::unique_ptr<PerIsolateData> isolate_data_;
   std::unique_ptr<V8IsolateMemoryDumpProvider> isolate_memory_dump_provider_;
   AccessMode access_mode_;

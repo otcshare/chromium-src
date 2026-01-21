@@ -10,10 +10,7 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #import "content/app_shim_remote_cocoa/web_contents_view_cocoa.h"
-#include "content/common/web_contents_ns_view_bridge.mojom.h"
 
-extern CONTENT_EXPORT const base::FeatureParam<bool>
-    kEnhancedWindowOcclusionDetection;
 extern CONTENT_EXPORT const base::FeatureParam<bool>
     kDisplaySleepAndAppHideDetection;
 
@@ -30,6 +27,13 @@ extern CONTENT_EXPORT const base::FeatureParam<bool>
 @interface WebContentsOcclusionCheckerMac : NSObject
 
 + (instancetype)sharedInstance;
+
+// Returns YES if the specified version is less than 13.0 or more than 13.2.
+// Manual occlusion detection is not supported on macOS 13.0-13.2.
++ (BOOL)manualOcclusionDetectionSupportedForPackedVersion:(int)version;
+
+// Returns YES if manual occlusion detection is supported for the current macOS.
++ (BOOL)manualOcclusionDetectionSupportedForCurrentMacOSVersion;
 
 // API exposed for testing.
 

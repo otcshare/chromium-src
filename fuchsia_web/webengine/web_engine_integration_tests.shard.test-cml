@@ -8,27 +8,6 @@
       url: "fuchsia-pkg://fuchsia.com/flatland-scene-manager-test-ui-stack#meta/test-ui-stack.cm",
     },
   ],
-  offer: [
-    {
-      protocol: [
-        "fuchsia.sys.Environment",
-        "fuchsia.sys.Loader",
-      ],
-      from: "parent",
-      to: "#realm_builder",
-    },
-    {
-      protocol: [
-        "fuchsia.logger.LogSink",
-        "fuchsia.scheduler.ProfileProvider",
-        "fuchsia.sysmem.Allocator",
-        "fuchsia.tracing.provider.Registry",
-        "fuchsia.vulkan.loader.Loader",
-      ],
-      from: "parent",
-      to: "#test_ui_stack",
-    },
-  ],
   use: [
     {
       protocol: [
@@ -36,22 +15,71 @@
         "fuchsia.ui.composition.Allocator",
         "fuchsia.ui.composition.Flatland",
         "fuchsia.ui.input3.Keyboard",
-        "fuchsia.ui.scenic.Scenic",
       ],
       from: "#test_ui_stack",
     },
+    { protocol: "fuchsia.memorypressure.Provider" },
+  ],
+  offer: [
     {
       protocol: [
+        "fuchsia.buildinfo.Provider",
+        "fuchsia.camera3.DeviceWatcher",
+        "fuchsia.device.NameProvider",
+        "fuchsia.fonts.Provider",
+        "fuchsia.hwinfo.Product",
+        "fuchsia.intl.PropertyProvider",
+        "fuchsia.kernel.VmexResource",
+        "fuchsia.media.ProfileProvider",
+        "fuchsia.scheduler.RoleManager",
         "fuchsia.memorypressure.Provider",
+        "fuchsia.process.Launcher",
+        "fuchsia.settings.Display",
+        "fuchsia.sysmem.Allocator",
+        "fuchsia.sysmem2.Allocator",
+        "fuchsia.tracing.perfetto.ProducerConnector",
+        "fuchsia.tracing.provider.Registry",
       ],
+      from: "parent",
+      to: "#realm_builder",
+    },
+    {
+      directory: "root-ssl-certificates",
+      from: "parent",
+      to: "#realm_builder",
+    },
+    {
+      directory: "config-data",
+      from: "parent",
+      as: "config-data-for-web-instance",
+      to: "#realm_builder",
+      subdir: "web_engine",
+    },
+    {
+      directory: "tzdata-icu",
+      from: "parent",
+      rights: [ "r*" ],
+      to: "#realm_builder",
+    },
+
+    {
+      protocol: [
+        "fuchsia.scheduler.ProfileProvider",
+        "fuchsia.sysmem.Allocator",
+        "fuchsia.sysmem2.Allocator",
+        "fuchsia.tracing.provider.Registry",
+        "fuchsia.vulkan.loader.Loader",
+      ],
+      from: "parent",
+      to: "#test_ui_stack",
     },
   ],
   facets: {
     "fuchsia.test": {
       "deprecated-allowed-packages": [
-          "cursor",
-          "flatland-scene-manager-test-ui-stack",
-          "web_engine",
+        "cursor",
+        "flatland-scene-manager-test-ui-stack",
+        "web_engine",
       ],
     },
   },

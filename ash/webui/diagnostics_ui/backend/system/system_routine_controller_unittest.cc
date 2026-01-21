@@ -4,9 +4,13 @@
 
 #include "ash/webui/diagnostics_ui/backend/system/system_routine_controller.h"
 
+#include <algorithm>
+
+#include "ash/system/diagnostics/diagnostics_log_controller.h"
+#include "ash/system/diagnostics/fake_diagnostics_browser_delegate.h"
 #include "ash/system/diagnostics/routine_log.h"
+#include "ash/test/ash_test_base.h"
 #include "ash/webui/diagnostics_ui/mojom/system_routine_controller.mojom.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
@@ -17,13 +21,16 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
+#include "chromeos/ash/components/test/ash_test_suite.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/fake_cros_healthd.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_diagnostics.mojom.h"
+#include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/system/platform_handle.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/device/public/cpp/test/test_wake_lock_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/resource/resource_bundle.h"
 
 namespace ash::diagnostics {
 
@@ -107,16 +114,16 @@ mojom::PowerRoutineResultPtr ConstructPowerRoutineResult(
 // the discharge field will be used.
 std::string ConstructPowerRoutineResultJson(double charge_percent,
                                             bool charge) {
-  base::Value result_dict(base::Value::Type::DICTIONARY);
+  base::Value::Dict result_dict;
   if (charge) {
-    result_dict.SetKey(kChargePercentKey, base::Value(charge_percent));
+    result_dict.Set(kChargePercentKey, charge_percent);
 
   } else {
-    result_dict.SetKey(kDischargePercentKey, base::Value(charge_percent));
+    result_dict.Set(kDischargePercentKey, charge_percent);
   }
 
-  base::Value output_dict(base::Value::Type::DICTIONARY);
-  output_dict.SetKey(kResultDetailsKey, std::move(result_dict));
+  base::Value::Dict output_dict;
+  output_dict.Set(kResultDetailsKey, std::move(result_dict));
 
   std::string json;
   const bool serialize_success = base::JSONWriter::Write(output_dict, &json);
@@ -157,11 +164,25 @@ struct FakeRoutineRunner : public mojom::RoutineRunner {
   mojo::Receiver<mojom::RoutineRunner> receiver{this};
 };
 
-class SystemRoutineControllerTest : public testing::Test {
+class SystemRoutineControllerTest : public AshTestBase {
  public:
-  SystemRoutineControllerTest() {
+  SystemRoutineControllerTest()
+      : AshTestBase(content::BrowserTaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  SystemRoutineControllerTest(const SystemRoutineControllerTest&) = delete;
+  SystemRoutineControllerTest& operator=(const SystemRoutineControllerTest&) =
+      delete;
+
+  ~SystemRoutineControllerTest() override = default;
+
+  void SetUp() override {
+    ui::ResourceBundle::CleanupSharedInstance();
+    AshTestSuite::LoadTestResources();
+    AshTestBase::SetUp();
     cros_healthd::FakeCrosHealthd::Initialize();
     system_routine_controller_ = std::make_unique<SystemRoutineController>();
+    DiagnosticsLogController::Initialize(
+        std::make_unique<FakeDiagnosticsBrowserDelegate>());
 
     wake_lock_provider_ = std::make_unique<device::TestWakeLockProvider>();
 
@@ -172,10 +193,11 @@ class SystemRoutineControllerTest : public testing::Test {
         std::move(remote_provider));
   }
 
-  ~SystemRoutineControllerTest() override {
+  void TearDown() override {
     system_routine_controller_.reset();
     cros_healthd::FakeCrosHealthd::Shutdown();
     base::RunLoop().RunUntilIdle();
+    AshTestBase::TearDown();
   }
 
  protected:
@@ -204,11 +226,10 @@ class SystemRoutineControllerTest : public testing::Test {
   void CallSendRoutineResult(mojom::RoutineResultInfoPtr result_info) {
     system_routine_controller_->SendRoutineResult(std::move(result_info));
 
-    task_environment_.RunUntilIdle();
+    task_environment()->RunUntilIdle();
   }
 
-  base::test::TaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  ::ash::mojo_service_manager::FakeMojoServiceManager fake_service_manager_;
   std::unique_ptr<SystemRoutineController> system_routine_controller_;
 
  private:
@@ -226,7 +247,6 @@ class SystemRoutineControllerTest : public testing::Test {
   }
 
   base::ScopedTempDir temp_dir_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   std::unique_ptr<device::TestWakeLockProvider> wake_lock_provider_;
 };
 
@@ -290,11 +310,11 @@ TEST_F(SystemRoutineControllerTest, CpuStressSuccess) {
       mojo::ScopedHandle());
 
   // Before the update interval, the routine status is not processed.
-  task_environment_.FastForwardBy(base::Seconds(59));
+  task_environment()->FastForwardBy(base::Seconds(59));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -319,11 +339,11 @@ TEST_F(SystemRoutineControllerTest, CpuStressFailure) {
       mojo::ScopedHandle());
 
   // Before the update interval, the routine status is not processed.
-  task_environment_.FastForwardBy(base::Seconds(59));
+  task_environment()->FastForwardBy(base::Seconds(59));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestFailed);
@@ -348,12 +368,12 @@ TEST_F(SystemRoutineControllerTest, CpuStressStillRunning) {
       mojo::ScopedHandle());
 
   // Before the update interval, the routine status is not processed.
-  task_environment_.FastForwardBy(base::Seconds(59));
+  task_environment()->FastForwardBy(base::Seconds(59));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // After the update interval, the results from the routine are still not
   // available.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // Update the status on cros_healthd to signify the routine is completed
@@ -362,7 +382,7 @@ TEST_F(SystemRoutineControllerTest, CpuStressStillRunning) {
       mojo::ScopedHandle());
 
   // Fast forward by the refresh interval.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -387,12 +407,12 @@ TEST_F(SystemRoutineControllerTest, CpuStressStillRunningMultipleIntervals) {
       mojo::ScopedHandle());
 
   // Before the update interval, the routine status is not processed.
-  task_environment_.FastForwardBy(base::Seconds(59));
+  task_environment()->FastForwardBy(base::Seconds(59));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // After the update interval, the results from the routine are still not
   // available.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   SetNonInteractiveRoutineUpdateResponse(
@@ -400,7 +420,7 @@ TEST_F(SystemRoutineControllerTest, CpuStressStillRunningMultipleIntervals) {
       mojo::ScopedHandle());
 
   // After another refresh interval, the routine is still running.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // Update the status on cros_healthd to signify the routine is completed
@@ -409,7 +429,7 @@ TEST_F(SystemRoutineControllerTest, CpuStressStillRunningMultipleIntervals) {
       mojo::ScopedHandle());
 
   // After a second refresh interval, the routine is completed.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -432,7 +452,7 @@ TEST_F(SystemRoutineControllerTest, TwoConsecutiveRoutines) {
   SetNonInteractiveRoutineUpdateResponse(
       /*percent_complete=*/100, healthd::DiagnosticRoutineStatusEnum::kPassed,
       mojo::ScopedHandle());
-  task_environment_.FastForwardBy(base::Seconds(60));
+  task_environment()->FastForwardBy(base::Seconds(60));
   EXPECT_FALSE(routine_runner_1.result.is_null());
   VerifyRoutineResult(*routine_runner_1.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -454,7 +474,7 @@ TEST_F(SystemRoutineControllerTest, TwoConsecutiveRoutines) {
   SetNonInteractiveRoutineUpdateResponse(
       /*percent_complete=*/100, healthd::DiagnosticRoutineStatusEnum::kFailed,
       mojo::ScopedHandle());
-  task_environment_.FastForwardBy(base::Seconds(60));
+  task_environment()->FastForwardBy(base::Seconds(60));
   EXPECT_FALSE(routine_runner_2.result.is_null());
   VerifyRoutineResult(*routine_runner_2.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestFailed);
@@ -483,7 +503,7 @@ TEST_F(SystemRoutineControllerTest, PowerRoutineSuccess) {
       /*percent_complete=*/100, healthd::DiagnosticRoutineStatusEnum::kPassed,
       CreateMojoHandleForPowerRoutine(expected_percent_charge,
                                       /*charge=*/true));
-  task_environment_.FastForwardBy(base::Seconds(31));
+  task_environment()->FastForwardBy(base::Seconds(31));
 
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(
@@ -516,7 +536,7 @@ TEST_F(SystemRoutineControllerTest, DischargeRoutineSuccess) {
       /*percent_complete=*/100, healthd::DiagnosticRoutineStatusEnum::kPassed,
       CreateMojoHandleForPowerRoutine(expected_percent_discharge,
                                       /*charge=*/false));
-  task_environment_.FastForwardBy(base::Seconds(31));
+  task_environment()->FastForwardBy(base::Seconds(31));
 
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(
@@ -553,48 +573,48 @@ TEST_F(SystemRoutineControllerTest, AvailableRoutines) {
   system_routine_controller_->GetSupportedRoutines(base::BindLambdaForTesting(
       [&](const std::vector<mojom::RoutineType>& supported_routines) {
         EXPECT_EQ(17u, supported_routines.size());
-        EXPECT_FALSE(base::Contains(supported_routines,
-                                    mojom::RoutineType::kBatteryCharge));
-        EXPECT_FALSE(base::Contains(supported_routines,
-                                    mojom::RoutineType::kBatteryDischarge));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kCaptivePortal));
-        EXPECT_FALSE(
-            base::Contains(supported_routines, mojom::RoutineType::kCpuCache));
-        EXPECT_FALSE(
-            base::Contains(supported_routines, mojom::RoutineType::kCpuStress));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kCpuFloatingPoint));
-        EXPECT_TRUE(
-            base::Contains(supported_routines, mojom::RoutineType::kCpuPrime));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kDnsLatency));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kDnsResolution));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kDnsResolverPresent));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kGatewayCanBePinged));
-        EXPECT_TRUE(base::Contains(
+        EXPECT_FALSE(std::ranges::contains(supported_routines,
+                                           mojom::RoutineType::kBatteryCharge));
+        EXPECT_FALSE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kBatteryDischarge));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kCaptivePortal));
+        EXPECT_FALSE(std::ranges::contains(supported_routines,
+                                           mojom::RoutineType::kCpuCache));
+        EXPECT_FALSE(std::ranges::contains(supported_routines,
+                                           mojom::RoutineType::kCpuStress));
+        EXPECT_TRUE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kCpuFloatingPoint));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kCpuPrime));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kDnsLatency));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kDnsResolution));
+        EXPECT_TRUE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kDnsResolverPresent));
+        EXPECT_TRUE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kGatewayCanBePinged));
+        EXPECT_TRUE(std::ranges::contains(
             supported_routines, mojom::RoutineType::kHasSecureWiFiConnection));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kHttpFirewall));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kHttpsFirewall));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kHttpsLatency));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kLanConnectivity));
-        EXPECT_TRUE(
-            base::Contains(supported_routines, mojom::RoutineType::kMemory));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kSignalStrength));
-        EXPECT_TRUE(
-            base::Contains(supported_routines, mojom::RoutineType::kArcHttp));
-        EXPECT_TRUE(
-            base::Contains(supported_routines, mojom::RoutineType::kArcPing));
-        EXPECT_TRUE(base::Contains(supported_routines,
-                                   mojom::RoutineType::kArcDnsResolution));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kHttpFirewall));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kHttpsFirewall));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kHttpsLatency));
+        EXPECT_TRUE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kLanConnectivity));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kMemory));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kSignalStrength));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kArcHttp));
+        EXPECT_TRUE(std::ranges::contains(supported_routines,
+                                          mojom::RoutineType::kArcPing));
+        EXPECT_TRUE(std::ranges::contains(
+            supported_routines, mojom::RoutineType::kArcDnsResolution));
         run_loop.Quit();
       }));
   run_loop.Run();
@@ -625,7 +645,7 @@ TEST_F(SystemRoutineControllerTest, CancelRoutine) {
   base::RunLoop().RunUntilIdle();
 
   // Verify that CrosHealthd is called with the correct parameters.
-  absl::optional<cros_healthd::FakeCrosHealthd::RoutineUpdateParams>
+  std::optional<cros_healthd::FakeCrosHealthd::RoutineUpdateParams>
       update_params =
           cros_healthd::FakeCrosHealthd::Get()->GetRoutineUpdateParams();
 
@@ -660,7 +680,7 @@ TEST_F(SystemRoutineControllerTest, CancelRoutineDtor) {
   base::RunLoop().RunUntilIdle();
 
   // Verify that CrosHealthd is called with the correct parameters.
-  absl::optional<cros_healthd::FakeCrosHealthd::RoutineUpdateParams>
+  std::optional<cros_healthd::FakeCrosHealthd::RoutineUpdateParams>
       update_params =
           cros_healthd::FakeCrosHealthd::Get()->GetRoutineUpdateParams();
 
@@ -699,11 +719,11 @@ TEST_F(SystemRoutineControllerTest, RunRoutineCount1) {
       mojo::ScopedHandle());
 
   // Before the update interval, the routine status is not processed.
-  task_environment_.FastForwardBy(base::Seconds(59));
+  task_environment()->FastForwardBy(base::Seconds(59));
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment()->FastForwardBy(base::Seconds(1));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -723,26 +743,26 @@ TEST_F(SystemRoutineControllerTest, RoutineLog) {
 
   EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
   log_path = temp_dir.GetPath().AppendASCII("routine_log");
-
-  RoutineLog log(log_path);
-  system_routine_controller_ = std::make_unique<SystemRoutineController>(&log);
+  DiagnosticsLogController::Get()->SetRoutineLogForTesting(
+      std::make_unique<RoutineLog>(log_path));
 
   SetRunRoutineResponse(/*id=*/1,
                         healthd::DiagnosticRoutineStatusEnum::kRunning);
-  task_environment_.RunUntilIdle();
+  task_environment()->RunUntilIdle();
 
   FakeRoutineRunner routine_runner;
   system_routine_controller_->RunRoutine(
       mojom::RoutineType::kCpuStress,
       routine_runner.receiver.BindNewPipeAndPassRemote());
-  task_environment_.RunUntilIdle();
+  task_environment()->RunUntilIdle();
 
   // Assert that the first routine is not complete.
   EXPECT_TRUE(routine_runner.result.is_null());
 
   // Verify that the Running status appears in the log.
   std::vector<std::string> log_lines = GetLogLines(
-      log.GetContentsForCategory(RoutineLog::RoutineCategory::kSystem));
+      DiagnosticsLogController::Get()->GetRoutineLog().GetContentsForCategory(
+          RoutineLog::RoutineCategory::kSystem));
   EXPECT_EQ(1u, log_lines.size());
 
   std::vector<std::string> log_line_contents = GetLogLineContents(log_lines[0]);
@@ -756,14 +776,15 @@ TEST_F(SystemRoutineControllerTest, RoutineLog) {
       mojo::ScopedHandle());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(60));
+  task_environment()->FastForwardBy(base::Seconds(60));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
 
   // Verify that the Passed status appears in the log.
   log_lines = GetLogLines(
-      log.GetContentsForCategory(RoutineLog::RoutineCategory::kSystem));
+      DiagnosticsLogController::Get()->GetRoutineLog().GetContentsForCategory(
+          RoutineLog::RoutineCategory::kSystem));
   EXPECT_EQ(2u, log_lines.size());
 
   log_line_contents = GetLogLineContents(log_lines[1]);
@@ -777,7 +798,7 @@ TEST_F(SystemRoutineControllerTest, RoutineLog) {
   system_routine_controller_->RunRoutine(
       mojom::RoutineType::kCpuPrime,
       routine_runner_2->receiver.BindNewPipeAndPassRemote());
-  task_environment_.RunUntilIdle();
+  task_environment()->RunUntilIdle();
 
   SetNonInteractiveRoutineUpdateResponse(
       /*percent_complete=*/0, healthd::DiagnosticRoutineStatusEnum::kCancelled,
@@ -785,10 +806,11 @@ TEST_F(SystemRoutineControllerTest, RoutineLog) {
 
   // Close the routine_runner
   routine_runner_2.reset();
-  task_environment_.RunUntilIdle();
+  task_environment()->RunUntilIdle();
 
   log_lines = GetLogLines(
-      log.GetContentsForCategory(RoutineLog::RoutineCategory::kSystem));
+      DiagnosticsLogController::Get()->GetRoutineLog().GetContentsForCategory(
+          RoutineLog::RoutineCategory::kSystem));
   EXPECT_EQ(4u, log_lines.size());
 
   log_line_contents = GetLogLineContents(log_lines[3]);
@@ -818,7 +840,7 @@ TEST_F(SystemRoutineControllerTest, RoutineResultEmitted) {
       mojo::ScopedHandle());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(60));
+  task_environment()->FastForwardBy(base::Seconds(60));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -871,7 +893,7 @@ TEST_F(SystemRoutineControllerTest, MemoryRuntimeEmitted) {
       mojo::ScopedHandle());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(1000));
+  task_environment()->FastForwardBy(base::Seconds(1000));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kMemory,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -922,7 +944,7 @@ TEST_F(SystemRoutineControllerTest, CancelThenStartRoutine) {
       mojo::ScopedHandle());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(60));
+  task_environment()->FastForwardBy(base::Seconds(60));
   EXPECT_FALSE(routine_runner_2.result.is_null());
   VerifyRoutineResult(*routine_runner_2.result, mojom::RoutineType::kCpuStress,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -950,7 +972,7 @@ TEST_F(SystemRoutineControllerTest, MemoryAcquiresWakeLock) {
       mojo::ScopedHandle());
 
   // After the update interval, the update is fetched and processed.
-  task_environment_.FastForwardBy(base::Seconds(1000));
+  task_environment()->FastForwardBy(base::Seconds(1000));
   EXPECT_FALSE(routine_runner.result.is_null());
   VerifyRoutineResult(*routine_runner.result, mojom::RoutineType::kMemory,
                       mojom::StandardRoutineResult::kTestPassed);
@@ -1041,6 +1063,15 @@ TEST_F(SystemRoutineControllerTest, SendRoutineResultDoesNotCrash) {
   // RoutineResultInfoPtr exists and has not been configured.
   EXPECT_NO_FATAL_FAILURE(CallSendRoutineResult(std::move(null_result_info)));
   EXPECT_TRUE(routine_runner->result.is_null());
+}
+
+TEST_F(SystemRoutineControllerTest,
+       SendRoutineResultWithNullRunnerDoesNotCrash) {
+  // Intentionally do not initialize routine_runner.
+  EXPECT_NO_FATAL_FAILURE(CallSendRoutineResult(mojom::RoutineResultInfo::New(
+      mojom::RoutineType::kCpuStress,
+      mojom::RoutineResult::NewSimpleResult(
+          mojom::StandardRoutineResult::kTestPassed))));
 }
 
 }  // namespace ash::diagnostics

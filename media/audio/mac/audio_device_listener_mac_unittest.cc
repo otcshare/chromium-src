@@ -7,16 +7,15 @@
 #include <CoreAudio/AudioHardware.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "media/base/bind_to_current_loop.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::Return;
 
@@ -39,7 +38,7 @@ class AudioDeviceListenerMacUnderTest final : public AudioDeviceListenerMac {
 
   MOCK_METHOD0(GetAllAudioDeviceIDs, std::vector<AudioObjectID>());
   MOCK_METHOD1(IsOutputDevice, bool(AudioObjectID));
-  MOCK_METHOD2(GetDeviceSource, absl::optional<uint32_t>(AudioObjectID, bool));
+  MOCK_METHOD2(GetDeviceSource, std::optional<uint32_t>(AudioObjectID, bool));
 
   OSStatus AddPropertyListener(AudioObjectID inObjectID,
                                const AudioObjectPropertyAddress* inAddress,
@@ -72,7 +71,7 @@ class AudioDeviceListenerMacTest : public testing::Test {
     const AudioObjectPropertyAddress addresses[] = {
         address,
         {kAudioHardwarePropertySleepingIsAllowed,
-         kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMaster}};
+         kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain}};
 
     for (void* context : contexts) {
       OSStatus status = AudioDeviceListenerMac::SimulateEventForTesting(
@@ -405,7 +404,7 @@ TEST_F(AudioDeviceListenerMacTest,
   // Device 1 is an input device.
   EXPECT_CALL(system_audio_mock, GetDeviceSource(1, false))
       .Times(3)
-      .WillRepeatedly(Return(absl::optional<uint32_t>()));
+      .WillRepeatedly(Return(std::optional<uint32_t>()));
   EXPECT_CALL(system_audio_mock, GetDeviceSource(1, true))
       .Times(3)
       .WillRepeatedly(Return(123));
@@ -414,7 +413,7 @@ TEST_F(AudioDeviceListenerMacTest,
   EXPECT_CALL(system_audio_mock, GetDeviceSource(2, false))
       .WillOnce(Return(123));
   EXPECT_CALL(system_audio_mock, GetDeviceSource(2, true))
-      .WillOnce(Return(absl::optional<uint32_t>()));
+      .WillOnce(Return(std::optional<uint32_t>()));
 
   // Device 3 is both an input and output device.
   EXPECT_CALL(system_audio_mock, GetDeviceSource(3, false))
@@ -471,7 +470,7 @@ TEST_F(AudioDeviceListenerMacTest, SourceChangeNotifications) {
   // Device 1 is an input device.
   EXPECT_CALL(system_audio_mock, GetDeviceSource(1, false))
       .Times(3)
-      .WillRepeatedly(Return(absl::optional<uint32_t>()));
+      .WillRepeatedly(Return(std::optional<uint32_t>()));
   EXPECT_CALL(system_audio_mock, GetDeviceSource(1, true))
       .Times(3)
       .WillRepeatedly(Return(123));
@@ -480,7 +479,7 @@ TEST_F(AudioDeviceListenerMacTest, SourceChangeNotifications) {
   EXPECT_CALL(system_audio_mock, GetDeviceSource(2, false))
       .WillOnce(Return(123));
   EXPECT_CALL(system_audio_mock, GetDeviceSource(2, true))
-      .WillOnce(Return(absl::optional<uint32_t>()));
+      .WillOnce(Return(std::optional<uint32_t>()));
 
   // Device 3 is both an input and output device.
   EXPECT_CALL(system_audio_mock, GetDeviceSource(3, false))

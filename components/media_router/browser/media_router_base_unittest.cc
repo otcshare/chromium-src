@@ -4,7 +4,7 @@
 
 #include "components/media_router/browser/media_router_base.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/mock_callback.h"
 #include "components/media_router/browser/test/mock_media_router.h"
 #include "components/media_router/browser/test/test_helper.h"
@@ -22,8 +22,8 @@ namespace media_router {
 // methods with mock methods, so we must override them again.
 class MockMediaRouterBase : public MockMediaRouter {
  public:
-  MockMediaRouterBase() {}
-  ~MockMediaRouterBase() override {}
+  MockMediaRouterBase() = default;
+  ~MockMediaRouterBase() override = default;
 
   base::CallbackListSubscription AddPresentationConnectionStateChangedCallback(
       const MediaRoute::Id& route_id,

@@ -5,9 +5,11 @@
 #ifndef CHROME_BROWSER_LOGIN_DETECTION_LOGIN_DETECTION_TAB_HELPER_H_
 #define CHROME_BROWSER_LOGIN_DETECTION_LOGIN_DETECTION_TAB_HELPER_H_
 
+#include "base/gtest_prod_util.h"
 #include "chrome/browser/login_detection/oauth_login_detector.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace content {
 class NavigationHandle;
@@ -29,6 +31,7 @@ class LoginDetectionTabHelper
 
  private:
   friend class content::WebContentsUserData<LoginDetectionTabHelper>;
+  FRIEND_TEST_ALL_PREFIXES(LoginDetectionTabHelperTest, PopUpOAuthLogin);
 
   explicit LoginDetectionTabHelper(content::WebContents* web_contents);
 

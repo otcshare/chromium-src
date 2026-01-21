@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as Console from 'devtools/panels/console/console.js';
+
 (async function() {
   TestRunner.addResult(`Tests that property values can be edited inline in the console via double click.\n`);
 
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   await TestRunner.evaluateInPagePromise(`
@@ -52,7 +56,7 @@
   }
 
   function getValueElements() {
-    var messageElement = Console.ConsoleView.instance().visibleViewMessages[1].element();
+    var messageElement = Console.ConsoleView.ConsoleView.instance().visibleViewMessages[1].element();
     return messageElement.querySelector('.console-message-text *').shadowRoot.querySelectorAll('.value');
   }
 
@@ -60,9 +64,10 @@
     var event = document.createEvent('MouseEvent');
     event.initMouseEvent('dblclick', true, true, null, 2);
     node.dispatchEvent(event);
-    TestRunner.addResult('Node was hidden after dblclick: ' + node.classList.contains('hidden'));
-    var messageElement = Console.ConsoleView.instance().visibleViewMessages[1].element();
-    var editPrompt = messageElement.querySelector('.console-message-text *').shadowRoot.querySelector('.text-prompt');
+    var messageElement = Console.ConsoleView.ConsoleView.instance().visibleViewMessages[1].element();
+    var editPrompt = messageElement.querySelector('.console-message-text *').shadowRoot.
+      querySelector('devtools-prompt[editing]').shadowRoot.
+      querySelector('.text-prompt');
     editPrompt.textContent = text;
     editPrompt.dispatchEvent(TestRunner.createKeyEvent('Enter'));
   }

@@ -4,11 +4,10 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.clipboard;
 
-import static org.mockito.Mockito.eq;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.view.ContextThemeWrapper;
@@ -29,42 +28,51 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.R;
-import org.chromium.chrome.browser.omnibox.OmniboxSuggestionType;
-import org.chromium.chrome.browser.omnibox.suggestions.FaviconFetcher;
-import org.chromium.chrome.browser.omnibox.suggestions.FaviconFetcher.FaviconFetchCompleteListener;
-import org.chromium.chrome.browser.omnibox.suggestions.FaviconFetcher.FaviconType;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxDrawableState;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxImageSupplier;
+import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
+import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteUIContext;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewProperties;
-import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionDrawableState;
-import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionSpannable;
+import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProcessor.BookmarkState;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewViewBinder;
+import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.share.ShareDelegate;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
+import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
-import org.chromium.url.ShadowGURL;
 
 import java.io.ByteArrayOutputStream;
+import java.util.function.Supplier;
 
-/**
- * Tests for {@link ClipboardSuggestionProcessor}.
- */
+/** Tests for {@link ClipboardSuggestionProcessor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = {ShadowGURL.class})
+@Config(manifest = Config.NONE)
 public class ClipboardSuggestionProcessorUnitTest {
-    private static final GURL TEST_URL = JUnitTestGURLs.getGURL(JUnitTestGURLs.EXAMPLE_URL);
+    private static final GURL TEST_URL = JUnitTestGURLs.EXAMPLE_URL;
 
     public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private @Mock SuggestionHost mSuggestionHost;
-    private @Mock FaviconFetcher mIconFetcher;
-    private @Mock Resources mResources;
+    private @Mock OmniboxImageSupplier mImageSupplier;
+    private @Mock UrlBarEditingTextStateProvider mTextProvider;
+    private @Mock Supplier<Tab> mTabSupplier;
+    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
+    private @Mock BookmarkState mBookmarkState;
+    private @Mock AutocompleteInput mInput;
 
     private Context mContext;
     private ClipboardSuggestionProcessor mProcessor;
@@ -78,20 +86,32 @@ public class ClipboardSuggestionProcessorUnitTest {
 
     @Before
     public void setUp() {
-        mContext = new ContextThemeWrapper(
-                ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
+        mContext =
+                new ContextThemeWrapper(
+                        ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
         mBitmap = Bitmap.createBitmap(10, 5, Bitmap.Config.ARGB_8888);
-        mProcessor = new ClipboardSuggestionProcessor(mContext, mSuggestionHost, mIconFetcher);
+        AutocompleteUIContext uiContext =
+                new AutocompleteUIContext(
+                        mContext,
+                        mSuggestionHost,
+                        mTextProvider,
+                        mImageSupplier,
+                        mBookmarkState,
+                        mTabSupplier,
+                        mShareDelegateSupplier,
+                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+        mProcessor = new ClipboardSuggestionProcessor(uiContext);
         mRootView = new LinearLayout(mContext);
         mTitleTextView = new TextView(mContext);
         mTitleTextView.setId(R.id.line_1);
-        mContentTextView = new TextView(mContext) {
-            @Override
-            public void setTextDirection(int textDirection) {
-                super.setTextDirection(textDirection);
-                mLastSetTextDirection = textDirection;
-            }
-        };
+        mContentTextView =
+                new TextView(mContext) {
+                    @Override
+                    public void setTextDirection(int textDirection) {
+                        super.setTextDirection(textDirection);
+                        mLastSetTextDirection = textDirection;
+                    }
+                };
         mContentTextView.setId(R.id.line_2);
         mRootView.addView(mTitleTextView);
         mRootView.addView(mContentTextView);
@@ -121,13 +141,14 @@ public class ClipboardSuggestionProcessorUnitTest {
 
     /** Create clipboard suggestion for test. */
     private void createClipboardSuggestion(int type, GURL url, byte[] clipboardImageData) {
-        mSuggestion = AutocompleteMatchBuilder.searchWithType(type)
-                              .setIsSearch(type != OmniboxSuggestionType.CLIPBOARD_URL)
-                              .setUrl(url)
-                              .setClipboardImageData(clipboardImageData)
-                              .build();
+        mSuggestion =
+                AutocompleteMatchBuilder.searchWithType(type)
+                        .setIsSearch(type != OmniboxSuggestionType.CLIPBOARD_URL)
+                        .setUrl(url)
+                        .setClipboardImageData(clipboardImageData)
+                        .build();
         mModel = mProcessor.createModel();
-        mProcessor.populateModel(mSuggestion, mModel, 0);
+        mProcessor.populateModel(mInput, mSuggestion, mModel, 0);
         SuggestionViewViewBinder.bind(mModel, mRootView, SuggestionViewProperties.TEXT_LINE_1_TEXT);
         SuggestionViewViewBinder.bind(mModel, mRootView, SuggestionCommonProperties.COLOR_SCHEME);
         SuggestionViewViewBinder.bind(
@@ -149,15 +170,14 @@ public class ClipboardSuggestionProcessorUnitTest {
     @Test
     @SmallTest
     public void clipboardSuggestion_showsFaviconWhenAvailable() {
-        final ArgumentCaptor<FaviconFetchCompleteListener> callback =
-                ArgumentCaptor.forClass(FaviconFetchCompleteListener.class);
+        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
-        SuggestionDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
+        OmniboxDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon1);
 
-        verify(mIconFetcher).fetchFaviconWithBackoff(eq(TEST_URL), eq(false), callback.capture());
-        callback.getValue().onFaviconFetchComplete(mBitmap, FaviconType.REGULAR);
-        SuggestionDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
+        verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
+        callback.getValue().onResult(mBitmap);
+        OmniboxDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon2);
 
         Assert.assertNotEquals(icon1, icon2);
@@ -167,15 +187,14 @@ public class ClipboardSuggestionProcessorUnitTest {
     @Test
     @SmallTest
     public void clipboardSuggestion_showsFallbackIconWhenNoFaviconIsAvailable() {
-        final ArgumentCaptor<FaviconFetchCompleteListener> callback =
-                ArgumentCaptor.forClass(FaviconFetchCompleteListener.class);
+        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
-        SuggestionDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
+        OmniboxDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon1);
 
-        verify(mIconFetcher).fetchFaviconWithBackoff(eq(TEST_URL), eq(false), callback.capture());
-        callback.getValue().onFaviconFetchComplete(null, FaviconType.NONE);
-        SuggestionDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
+        verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
+        callback.getValue().onResult(null);
+        OmniboxDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon2);
 
         Assert.assertEquals(icon1, icon2);
@@ -184,13 +203,12 @@ public class ClipboardSuggestionProcessorUnitTest {
     @Test
     @SmallTest
     public void clipobardSuggestion_urlAndTextDirection() {
-        final ArgumentCaptor<FaviconFetchCompleteListener> callback =
-                ArgumentCaptor.forClass(FaviconFetchCompleteListener.class);
+        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
         // URL
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
         Assert.assertFalse(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
-        verify(mIconFetcher).fetchFaviconWithBackoff(eq(TEST_URL), eq(false), callback.capture());
-        callback.getValue().onFaviconFetchComplete(null, FaviconType.NONE);
+        verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
+        callback.getValue().onResult(null);
         Assert.assertEquals(TextView.TEXT_DIRECTION_LTR, mLastSetTextDirection);
 
         // Text
@@ -207,7 +225,7 @@ public class ClipboardSuggestionProcessorUnitTest {
         byte[] bitmapData = baos.toByteArray();
         createClipboardSuggestionAndClickReveal(
                 OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL(), bitmapData);
-        SuggestionDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
+        OmniboxDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon);
 
         // Since |icon| is Bitmap -> PNG -> Bitmap, the image changed, we just check the size to
@@ -221,8 +239,9 @@ public class ClipboardSuggestionProcessorUnitTest {
     @Test
     @SmallTest
     public void clipboardSuggestion_thumbnailShouldResizeIfTooLarge() {
-        int size = mContext.getResources().getDimensionPixelSize(
-                R.dimen.omnibox_suggestion_decoration_image_size);
+        int size =
+                mContext.getResources()
+                        .getDimensionPixelSize(R.dimen.omnibox_suggestion_decoration_image_size);
 
         Bitmap largeBitmap = Bitmap.createBitmap(size * 2, size * 2, Bitmap.Config.ARGB_8888);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -230,7 +249,7 @@ public class ClipboardSuggestionProcessorUnitTest {
         byte[] bitmapData = baos.toByteArray();
         createClipboardSuggestionAndClickReveal(
                 OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL(), bitmapData);
-        SuggestionDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
+        OmniboxDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
         Assert.assertNotNull(icon);
 
         Assert.assertEquals(size, ((BitmapDrawable) icon.drawable).getBitmap().getWidth());
@@ -241,19 +260,19 @@ public class ClipboardSuggestionProcessorUnitTest {
     @SmallTest
     public void clipboardSuggestion_revealButton() {
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_URL, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTIONS));
+        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
     }
 
     @Test

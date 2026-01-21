@@ -1,7 +1,8 @@
 include_rules = [
   "+base/cpu_reduction_experiment.h",
-  "+base/metrics/single_sample_metrics.h",
+  "+base/task/thread_pool/thread_pool_instance.h",
   "+cc",
+  "+components/performance_manager/scenario_api",
   "+components/viz/common",
 ]
 
@@ -15,6 +16,12 @@ specific_include_rules = {
   ],
   "agent_interference_recorder.h": [
     "+base/task/sequence_manager/enqueue_order.h"
+  ],
+  "main_thread_scheduler_impl.cc": [
+    "+base/android/self_compaction_manager.h"
+  ],
+  "memory_purge_manager.cc": [
+    "+base/android/self_compaction_manager.h"
   ],
   "frame_scheduler_impl.h": [
     "+net/base/request_priority.h"

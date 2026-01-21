@@ -4,6 +4,8 @@
 
 import("//mojo/public/tools/bindings/mojom.gni")
 
+assert(is_chromeos)
+
 mojom("mojom") {
   sources = [
     "network_diagnostics.mojom",
@@ -11,11 +13,28 @@ mojom("mojom") {
   ]
 
   public_deps = [
-    "//chromeos/services/network_config/public/mojom:network_types",
+    ":types",
     "//mojo/public/mojom/base",
+  ]
+
+  webui_module_path =
+      "chrome://resources/mojo/chromeos/services/network_health/public/mojom"
+
+  # Used by external clients, see chromeos/resources/BUILD.gn.
+  generate_legacy_js_bindings = true
+}
+
+mojom("types") {
+  sources = [ "network_health_types.mojom" ]
+
+  public_deps = [
+    "//chromeos/services/network_config/public/mojom:network_types",
     "//url/mojom:url_mojom_gurl",
   ]
 
   webui_module_path =
       "chrome://resources/mojo/chromeos/services/network_health/public/mojom"
+
+  # Used by external clients, see chromeos/resources/BUILD.gn.
+  generate_legacy_js_bindings = true
 }

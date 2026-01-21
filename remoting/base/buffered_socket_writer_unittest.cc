@@ -4,13 +4,14 @@
 
 #include "remoting/base/buffered_socket_writer.h"
 
-#include <stddef.h>
-#include <stdlib.h>
-
+#include <algorithm>
 #include <memory>
+#include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "net/base/io_buffer.h"
@@ -37,7 +38,7 @@ int WriteNetSocket(net::Socket* socket,
                        traffic_annotation);
 }
 
-class SocketDataProvider: public net::SocketDataProvider {
+class SocketDataProvider : public net::SocketDataProvider {
  public:
   SocketDataProvider()
       : write_limit_(-1), async_write_(false), next_write_error_(net::OK) {}
@@ -54,24 +55,23 @@ class SocketDataProvider: public net::SocketDataProvider {
                                   r);
     }
     int size = data.size();
-    if (write_limit_ > 0)
+    if (write_limit_ > 0) {
       size = std::min(write_limit_, size);
+    }
     written_data_.append(data, 0, size);
     return net::MockWriteResult(async_write_ ? net::ASYNC : net::SYNCHRONOUS,
                                 size);
   }
 
-  bool AllReadDataConsumed() const override {
-    return true;
-  }
+  bool AllReadDataConsumed() const override { return true; }
 
-  bool AllWriteDataConsumed() const override {
-    return true;
-  }
+  bool AllWriteDataConsumed() const override { return true; }
 
   void Reset() override {}
 
-  std::string written_data() { return written_data_; }
+  base::span<const uint8_t> written_bytes() const {
+    return base::as_byte_span(written_data_);
+  }
 
   void set_write_limit(int limit) { write_limit_ = limit; }
   void set_async_write(bool async_write) { async_write_ = async_write; }
@@ -88,18 +88,14 @@ class SocketDataProvider: public net::SocketDataProvider {
 
 class BufferedSocketWriterTest : public testing::Test {
  public:
-  BufferedSocketWriterTest()
-      : write_error_(0) {
-  }
+  BufferedSocketWriterTest() : write_error_(0) {}
 
   void DestroyWriter() {
     writer_.reset();
     socket_.reset();
   }
 
-  void Unexpected() {
-    EXPECT_TRUE(false);
-  }
+  void Unexpected() { EXPECT_TRUE(false); }
 
  protected:
   void SetUp() override {
@@ -107,16 +103,17 @@ class BufferedSocketWriterTest : public testing::Test {
         net::AddressList(), net::NetLog::Get(), &socket_data_provider_);
     socket_data_provider_.set_connect_data(
         net::MockConnect(net::SYNCHRONOUS, net::OK));
-    EXPECT_EQ(net::OK, socket_->Connect(net::CompletionOnceCallback()));
+    ASSERT_EQ(net::OK, socket_->Connect(net::CompletionOnceCallback()));
 
     writer_ = std::make_unique<BufferedSocketWriter>();
-    test_buffer_ = base::MakeRefCounted<net::IOBufferWithSize>(kTestBufferSize);
-    test_buffer_2_ =
-        base::MakeRefCounted<net::IOBufferWithSize>(kTestBufferSize);
-    for (int i = 0; i < kTestBufferSize; ++i) {
-      test_buffer_->data()[i] = rand() % 256;
-      test_buffer_2_->data()[i] = rand() % 256;
-    }
+    InitializeTestBuffer(test_buffer_, kTestBufferSize);
+    InitializeTestBuffer(test_buffer_2_, kTestBufferSize);
+  }
+
+  void InitializeTestBuffer(scoped_refptr<net::IOBufferWithSize>& buffer,
+                            size_t size) {
+    buffer = base::MakeRefCounted<net::IOBufferWithSize>(size);
+    std::ranges::generate(buffer->span(), []() { return rand() % 256; });
   }
 
   void StartWriter() {
@@ -125,21 +122,21 @@ class BufferedSocketWriterTest : public testing::Test {
                                   base::Unretained(this)));
   }
 
-  void OnWriteFailed(int error) {
-    write_error_ = error;
-  }
+  void OnWriteFailed(int error) { write_error_ = error; }
 
   void VerifyWrittenData() {
-    ASSERT_EQ(static_cast<size_t>(test_buffer_->size() +
-                                  test_buffer_2_->size()),
-              socket_data_provider_.written_data().size());
-    EXPECT_EQ(0, memcmp(test_buffer_->data(),
-                        socket_data_provider_.written_data().data(),
-                        test_buffer_->size()));
-    EXPECT_EQ(0, memcmp(test_buffer_2_->data(),
-                        socket_data_provider_.written_data().data() +
-                            test_buffer_->size(),
-                        test_buffer_2_->size()));
+    const auto written_bytes = socket_data_provider_.written_bytes();
+    const size_t expected_size = test_buffer_->size() + test_buffer_2_->size();
+
+    ASSERT_EQ(expected_size, written_bytes.size());
+    const auto buffer1_bytes = base::as_byte_span(test_buffer_->span());
+    const auto buffer2_bytes = base::as_byte_span(test_buffer_2_->span());
+    const auto first_segment = written_bytes.first(buffer1_bytes.size());
+    EXPECT_TRUE(std::ranges::equal(first_segment, buffer1_bytes));
+
+    const auto second_segment = written_bytes.subspan(buffer1_bytes.size());
+    EXPECT_TRUE(std::ranges::equal(second_segment.first(buffer2_bytes.size()),
+                                   buffer2_bytes));
   }
 
   void TestWrite() {
@@ -220,11 +217,11 @@ TEST_F(BufferedSocketWriterTest, DestroyFromCallback) {
                  TRAFFIC_ANNOTATION_FOR_TESTS);
   socket_data_provider_.set_async_write(false);
   base::RunLoop().RunUntilIdle();
-  ASSERT_GE(socket_data_provider_.written_data().size(),
-            static_cast<size_t>(test_buffer_->size()));
-  EXPECT_EQ(0, memcmp(test_buffer_->data(),
-                      socket_data_provider_.written_data().data(),
-                      test_buffer_->size()));
+  const auto written_bytes = socket_data_provider_.written_bytes();
+  const auto expected_bytes = base::as_byte_span(test_buffer_->span());
+  ASSERT_GE(written_bytes.size(), expected_bytes.size());
+  const auto actual_segment = written_bytes.first(expected_bytes.size());
+  EXPECT_TRUE(std::ranges::equal(actual_segment, expected_bytes));
 }
 
 // Verify that it stops writing after the first error.
@@ -243,7 +240,7 @@ TEST_F(BufferedSocketWriterTest, TestWriteErrorSync) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(net::ERR_FAILED, write_error_);
   EXPECT_EQ(static_cast<size_t>(test_buffer_->size()),
-            socket_data_provider_.written_data().size());
+            socket_data_provider_.written_bytes().size());
 }
 
 // Verify that it stops writing after the first error.
@@ -261,7 +258,7 @@ TEST_F(BufferedSocketWriterTest, TestWriteErrorAsync) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(net::ERR_FAILED, write_error_);
   EXPECT_EQ(static_cast<size_t>(test_buffer_->size()),
-            socket_data_provider_.written_data().size());
+            socket_data_provider_.written_bytes().size());
 }
 
 TEST_F(BufferedSocketWriterTest, WriteBeforeStart) {

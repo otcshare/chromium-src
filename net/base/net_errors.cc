@@ -46,7 +46,9 @@ std::string ErrorToShortString(int error) {
 #include "net/base/net_error_list.h"
 #undef NET_ERROR
   default:
-    NOTREACHED();
+    // TODO(crbug.com/40909121): Figure out why this is firing, fix and upgrade
+    // this to be fatal.
+    DUMP_WILL_BE_NOTREACHED() << error;
     error_string = "<unknown>";
   }
   return std::string("ERR_") + error_string;
@@ -84,10 +86,22 @@ bool IsRequestBlockedError(int error) {
     case ERR_BLOCKED_BY_CLIENT:
     case ERR_BLOCKED_BY_ADMINISTRATOR:
     case ERR_BLOCKED_BY_CSP:
+    case ERR_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR:
       return true;
     default:
       return false;
   }
+}
+
+bool IsOkOrDefinedError(int error) {
+  switch (error) {
+    case OK:
+#define NET_ERROR(label, value) case value:
+#include "net/base/net_error_list.h"
+#undef NET_ERROR
+      return true;
+  }
+  return false;
 }
 
 Error FileErrorToNetError(base::File::Error file_error) {
@@ -116,7 +130,6 @@ Error FileErrorToNetError(base::File::Error file_error) {
       return ERR_ACCESS_DENIED;
     case base::File::FILE_ERROR_MAX:
       NOTREACHED();
-      [[fallthrough]];
     case base::File::FILE_ERROR_NOT_A_DIRECTORY:
     case base::File::FILE_ERROR_NOT_A_FILE:
     case base::File::FILE_ERROR_NOT_EMPTY:
@@ -127,7 +140,6 @@ Error FileErrorToNetError(base::File::Error file_error) {
       return ERR_FAILED;
   }
   NOTREACHED();
-  return ERR_FAILED;
 }
 
 }  // namespace net

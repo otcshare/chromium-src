@@ -9,11 +9,14 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/time/time.h"
 #include "cc/animation/animation_export.h"
 #include "cc/paint/element_id.h"
 #include "cc/paint/paint_worklet_input.h"
 #include "ui/gfx/animation/keyframe/keyframe_model.h"
+
+namespace base {
+class TimeTicks;
+}  // namespace base
 
 namespace cc {
 
@@ -27,6 +30,8 @@ class CC_ANIMATION_EXPORT KeyframeModel : public gfx::KeyframeModel {
       const gfx::KeyframeModel* keyframe_model);
 
   static KeyframeModel* ToCcKeyframeModel(gfx::KeyframeModel* keyframe_model);
+
+  static const int kInvalidGroup = -1;
 
   // Bundles a property id with its name and native type.
   class CC_ANIMATION_EXPORT TargetPropertyId {
@@ -80,6 +85,7 @@ class CC_ANIMATION_EXPORT KeyframeModel : public gfx::KeyframeModel {
   KeyframeModel& operator=(const KeyframeModel&) = delete;
 
   int group() const { return group_; }
+  void ungroup() { group_ = kInvalidGroup; }
 
   int TargetProperty() const override;
 

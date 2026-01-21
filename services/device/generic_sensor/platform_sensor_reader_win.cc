@@ -4,16 +4,20 @@
 
 #include "services/device/generic_sensor/platform_sensor_reader_win.h"
 
+#include <objbase.h>
+
 #include <Sensors.h>
 #include <comdef.h>
-#include <objbase.h>
 #include <wrl/implements.h>
 
 #include <iomanip>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/numerics/math_constants.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -21,7 +25,6 @@
 #include "services/device/generic_sensor/generic_sensor_consts.h"
 #include "services/device/public/cpp/generic_sensor/platform_sensor_configuration.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 
 namespace device {
 
@@ -132,9 +135,9 @@ std::unique_ptr<ReaderInitParams> CreateGyroscopeReaderInitParams() {
     }
 
     // Values are converted from degrees to radians.
-    reading->gyro.x = gfx::DegToRad(x);
-    reading->gyro.y = gfx::DegToRad(y);
-    reading->gyro.z = gfx::DegToRad(z);
+    reading->gyro.x = base::DegToRad(x);
+    reading->gyro.y = base::DegToRad(y);
+    reading->gyro.z = base::DegToRad(z);
     return S_OK;
   };
   return params;
@@ -212,9 +215,9 @@ CreateAbsoluteOrientationQuaternionReaderInitParams() {
     float* quat = reinterpret_cast<float*>(quat_variant.get().caub.pElems);
 
     reading->orientation_quat.x = quat[0];  // x*sin(Theta/2)
-    reading->orientation_quat.y = quat[1];  // y*sin(Theta/2)
-    reading->orientation_quat.z = quat[2];  // z*sin(Theta/2)
-    reading->orientation_quat.w = quat[3];  // cos(Theta/2)
+    reading->orientation_quat.y = UNSAFE_TODO(quat[1]);  // y*sin(Theta/2)
+    reading->orientation_quat.z = UNSAFE_TODO(quat[2]);  // z*sin(Theta/2)
+    reading->orientation_quat.w = UNSAFE_TODO(quat[3]);  // cos(Theta/2)
     return S_OK;
   };
   return params;
@@ -318,15 +321,15 @@ class EventListener
     base::TimeTicks ticks_now = base::TimeTicks::Now();
     base::Time time_now = base::Time::NowFromSystemTime();
 
-    base::Time::Exploded exploded;
-    exploded.year = report_time.wYear;
-    exploded.month = report_time.wMonth;
-    exploded.day_of_week = report_time.wDayOfWeek;
-    exploded.day_of_month = report_time.wDay;
-    exploded.hour = report_time.wHour;
-    exploded.minute = report_time.wMinute;
-    exploded.second = report_time.wSecond;
-    exploded.millisecond = report_time.wMilliseconds;
+    const base::Time::Exploded exploded = {
+        .year = report_time.wYear,
+        .month = report_time.wMonth,
+        .day_of_week = report_time.wDayOfWeek,
+        .day_of_month = report_time.wDay,
+        .hour = report_time.wHour,
+        .minute = report_time.wMinute,
+        .second = report_time.wSecond,
+        .millisecond = report_time.wMilliseconds};
 
     base::Time timestamp;
     if (!base::Time::FromUTCExploded(exploded, &timestamp))

@@ -13,13 +13,14 @@
 #include "base/files/scoped_file.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "components/exo/seat.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_pixmap_handle.h"
 
 namespace gfx {
 class ClientNativePixmapFactory;
-}
+}  // namespace gfx
 
 namespace exo {
 class Buffer;
@@ -45,6 +46,8 @@ class XdgShellSurface;
 class Display {
  public:
   Display();
+  explicit Display(
+      std::unique_ptr<DataExchangeDelegate> data_exchange_delegate);
 
   Display(
       std::unique_ptr<NotificationSurfaceManager> notification_surface_manager,
@@ -70,7 +73,7 @@ class Display {
   // Creates a buffer for a Linux DMA-buf file descriptor.
   std::unique_ptr<Buffer> CreateLinuxDMABufBuffer(
       const gfx::Size& size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle,
       bool y_invert);
 
@@ -86,8 +89,8 @@ class Display {
   std::unique_ptr<ClientControlledShellSurface>
   CreateOrGetClientControlledShellSurface(Surface* surface,
                                           int container,
-                                          double default_device_scale_factor,
-                                          bool default_scale_cancellation);
+                                          bool default_scale_cancellation,
+                                          bool supports_floated_state);
 
   // Creates a notification surface for a surface and notification id.
   std::unique_ptr<NotificationSurface> CreateNotificationSurface(
@@ -97,13 +100,11 @@ class Display {
   // Creates a input method surface for a surface.
   std::unique_ptr<InputMethodSurface> CreateInputMethodSurface(
       Surface* surface,
-      double default_device_scale_factor,
       bool default_scale_cancellation);
 
   // Creates a toast surface for a surface.
   std::unique_ptr<ToastSurface> CreateToastSurface(
       Surface* surface,
-      double default_device_scale_factor,
       bool default_scale_cancellation);
 
   // Creates a sub-surface for an existing surface. The sub-surface will be

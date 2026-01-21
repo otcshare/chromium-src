@@ -69,7 +69,6 @@ bool ScrollAnimatorCompositorCoordinator::HasAnimationThatRequiresService()
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool ScrollAnimatorCompositorCoordinator::AddAnimation(
@@ -171,7 +170,6 @@ void ScrollAnimatorCompositorCoordinator::CompositorAnimationFinished(
     case RunState::kPostAnimationCleanup:
     case RunState::kRunningOnMainThread:
       NOTREACHED();
-      break;
     case RunState::kWaitingToSendToCompositor:
     case RunState::kWaitingToCancelOnCompositorButNewScroll:
       break;
@@ -292,9 +290,11 @@ void ScrollAnimatorCompositorCoordinator::UpdateCompositorAnimations() {
 
 void ScrollAnimatorCompositorCoordinator::ScrollOffsetChanged(
     const ScrollOffset& offset,
-    mojom::blink::ScrollType scroll_type) {
+    mojom::blink::ScrollType scroll_type,
+    cc::ScrollSourceType source_type) {
   ScrollOffset clamped_offset = GetScrollableArea()->ClampScrollOffset(offset);
-  GetScrollableArea()->ScrollOffsetChanged(clamped_offset, scroll_type);
+  GetScrollableArea()->ScrollOffsetChanged(clamped_offset, scroll_type,
+                                           source_type);
 }
 
 void ScrollAnimatorCompositorCoordinator::AdjustImplOnlyScrollOffsetAnimation(
@@ -345,7 +345,6 @@ String ScrollAnimatorCompositorCoordinator::RunStateAsText() const {
       return String("RunningOnCompositorButNeedsAdjustment");
   }
   NOTREACHED();
-  return String();
 }
 
 }  // namespace blink

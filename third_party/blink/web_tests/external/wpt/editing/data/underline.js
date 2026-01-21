@@ -245,7 +245,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"underline":[false,false,"",false,true,""]}],
 ["foo<s>[bar]</s>baz",
     [["stylewithcss","false"],["underline",""]],
-    "foo<u><s>[bar]</s></u>baz",
+    "foo<s><u>[bar]</u></s>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"underline":[false,false,"",false,true,""]}],
 // Should update text-decoration declaration in the <span> which is a container
@@ -330,7 +330,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"underline":[false,false,"",false,true,""]}],
 ["foo<strike>[bar]</strike>baz",
     [["stylewithcss","false"],["underline",""]],
-    "foo<u><strike>[bar]</strike></u>baz",
+    "foo<strike><u>[bar]</u></strike>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"underline":[false,false,"",false,true,""]}],
 ["<strike>foo[bar]baz</strike>",
@@ -423,7 +423,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"underline":[false,false,"",false,true,""]}],
 ["foo<del>[bar]</del>baz",
     [["stylewithcss","false"],["underline",""]],
-    "foo<u><del>[bar]</del></u>baz",
+    "foo<del><u>[bar]</u></del>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"underline":[false,false,"",false,true,""]}],
 ["<del>foo[bar]baz</del>",
@@ -602,7 +602,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"underline":[false,false,"",false,true,""]}],
 ["foo<span class=\"line-through\">[bar]</span>baz",
     [["stylewithcss","false"],["underline",""]],
-    "foo<u><span class=\"line-through\">[bar]</span></u>baz",
+    "foo<span class=\"line-through\"><u>[bar]</u></span>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"underline":[false,false,"",false,true,""]}],
 ["foo<span class=\"line-through\">b[a]r</span>baz",
@@ -758,6 +758,14 @@ var browserTests = [
     [["stylewithcss","true"],["underline",""]],
     ["abc<span style=\"text-decoration:line-through\">[def]</span>ghi",
      "abc<span style=\"text-decoration-line:line-through\">[def]</span>ghi"],
+    [true,true],
+    {}],
+
+// Should not change the style of the non-editable nodes so that only the
+// visible and editable nodes are wrapped into the <u> elements.
+['{ <span contenteditable="false">A</span> ; <span contenteditable="false">B</span> ; <span contenteditable="false">C</span> }',
+    [["stylewithcss","false"],["underline",""]],
+    ' <span contenteditable="false">A</span><u> ; </u><span contenteditable="false">B</span><u> ; </u><span contenteditable="false">C</span> ',
     [true,true],
     {}],
 ]

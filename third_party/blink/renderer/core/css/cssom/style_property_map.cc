@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_cssstylevalue_string.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_property_name.h"
+#include "third_party/blink/renderer/core/css/css_scoped_keyword_value.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/css_value_pair.h"
 #include "third_party/blink/renderer/core/css/cssom/css_style_value.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/style_property_shorthand.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -36,7 +38,6 @@ CSSValueList* CssValueListForPropertyID(CSSPropertyID property_id) {
       return CSSValueList::CreateSlashSeparated();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -64,6 +65,17 @@ const CSSValue* StyleValueToCSSValue(
   // TODO(https://crbug.com/545324): Move this into a method on
   // CSSProperty when there are more of these cases.
   switch (property_id) {
+    case CSSPropertyID::kAnchorScope:
+    case CSSPropertyID::kTriggerScope: {
+      // The 'all' keyword is tree-scoped.
+      if (const auto* ident =
+              DynamicTo<CSSIdentifierValue>(style_value.ToCSSValue());
+          ident && ident->GetValueID() == CSSValueID::kAll) {
+        return MakeGarbageCollected<cssvalue::CSSScopedKeywordValue>(
+            ident->GetValueID());
+      }
+      break;
+    }
     case CSSPropertyID::kBorderBottomLeftRadius:
     case CSSPropertyID::kBorderBottomRightRadius:
     case CSSPropertyID::kBorderTopLeftRadius:
@@ -78,6 +90,20 @@ const CSSValue* StyleValueToCSSValue(
       if (value->IsPrimitiveValue()) {
         return MakeGarbageCollected<CSSValuePair>(
             value, value, CSSValuePair::kDropIdenticalValues);
+      }
+      break;
+    }
+    case CSSPropertyID::kClipPath: {
+      // level 1 only accepts single keywords
+      const auto* value = style_value.ToCSSValue();
+      // only 'none' is stored as an identifier, the other keywords are
+      // wrapped in a list.
+      auto* identifier_value = DynamicTo<CSSIdentifierValue>(value);
+      if (identifier_value && !value->IsCSSWideKeyword() &&
+          identifier_value->GetValueID() != CSSValueID::kNone) {
+        CSSValueList* list = CSSValueList::CreateSpaceSeparated();
+        list->Append(*style_value.ToCSSValue());
+        return list;
       }
       break;
     }
@@ -213,15 +239,15 @@ const CSSValue* CoerceStyleValueOrString(
       const auto& values = StyleValueFactory::FromString(
           property.PropertyID(), custom_property_name, value->GetAsString(),
           MakeGarbageCollected<CSSParserContext>(execution_context));
-      if (values.size() != 1U)
+      if (values.size() != 1U) {
         return nullptr;
+      }
       return StyleValueToCSSValue(property, custom_property_name, *values[0],
                                   execution_context);
     }
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 const CSSValue* CoerceStyleValuesOrStrings(
@@ -232,24 +258,38 @@ const CSSValue* CoerceStyleValuesOrStrings(
   DCHECK(property.IsRepeated());
   DCHECK_EQ(property.IDEquals(CSSPropertyID::kVariable),
             !custom_property_name.IsNull());
-  if (values.empty())
+  if (values.empty()) {
     return nullptr;
+  }
 
   CSSStyleValueVector style_values =
       StyleValueFactory::CoerceStyleValuesOrStrings(
           property, custom_property_name, values, execution_context);
 
-  if (style_values.empty())
+  if (style_values.empty()) {
     return nullptr;
+  }
 
   CSSValueList* result = CssValueListForPropertyID(property.PropertyID());
   for (const auto& style_value : style_values) {
     const CSSValue* css_value = StyleValueToCSSValue(
         property, custom_property_name, *style_value, execution_context);
-    if (!css_value)
+    if (!css_value) {
       return nullptr;
-    if (css_value->IsCSSWideKeyword() || css_value->IsVariableReferenceValue())
+    }
+    if (css_value->IsCSSWideKeyword() || css_value->IsUnparsedDeclaration()) {
       return style_values.size() == 1U ? css_value : nullptr;
+    }
+
+    // Flatten lists of values into the result list.
+    if (css_value->IsValueList()) {
+      const auto* value_list = DynamicTo<CSSValueList>(css_value);
+      for (const auto& value : *value_list) {
+        result->Append(*value);
+      }
+      continue;
+    }
+
     result->Append(*css_value);
   }
 
@@ -266,7 +306,8 @@ void StylePropertyMap::set(
   const CSSPropertyID property_id =
       CssPropertyID(execution_context, property_name);
   if (property_id == CSSPropertyID::kInvalid) {
-    exception_state.ThrowTypeError("Invalid propertyName: " + property_name);
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid propertyName: ", property_name}));
     return;
   }
 
@@ -276,7 +317,8 @@ void StylePropertyMap::set(
   // Descriptors (like 'src') have CSSProperty instances, but are not
   // valid properties in this context.
   if (!property.IsProperty()) {
-    exception_state.ThrowTypeError("Invalid propertyName: " + property_name);
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid propertyName: ", property_name}));
     return;
   }
 
@@ -328,10 +370,11 @@ void StylePropertyMap::set(
     return;
   }
 
-  if (property_id == CSSPropertyID::kVariable)
+  if (property_id == CSSPropertyID::kVariable) {
     SetCustomProperty(custom_property_name, *result);
-  else
+  } else {
     SetProperty(property_id, *result);
+  }
 }
 
 void StylePropertyMap::append(
@@ -339,14 +382,16 @@ void StylePropertyMap::append(
     const String& property_name,
     const HeapVector<Member<V8UnionCSSStyleValueOrString>>& values,
     ExceptionState& exception_state) {
-  if (values.empty())
+  if (values.empty()) {
     return;
+  }
 
   const CSSPropertyID property_id =
       CssPropertyID(execution_context, property_name);
 
   if (property_id == CSSPropertyID::kInvalid) {
-    exception_state.ThrowTypeError("Invalid propertyName: " + property_name);
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid propertyName: ", property_name}));
     return;
   }
 
@@ -365,6 +410,25 @@ void StylePropertyMap::append(
 
   CSSValueList* current_value = nullptr;
   if (const CSSValue* css_value = GetProperty(property_id)) {
+    if (css_value->IsUnparsedDeclaration() ||
+        css_value->IsPendingSubstitutionValue()) {
+      // https://drafts.css-houdini.org/css-typed-om/#dom-stylepropertymap-append
+      // 8. If props[property] contains a var() reference, throw a TypeError.
+      exception_state.ThrowTypeError(
+          "Cannot append to a list containing a variable reference");
+      return;
+    }
+    if (!css_value->IsValueList()) {
+      // The standard doesn't seem to cover this explicitly
+      // (https://github.com/w3c/css-houdini-drafts/issues/823),
+      // but the only really reasonable solution seems to be
+      // to throw a TypeError.
+      //
+      // This covers e.g. system-wide CSS keywords, like inherit.
+      exception_state.ThrowTypeError(
+          "Cannot append to something that is not a list");
+      return;
+    }
     current_value = To<CSSValueList>(css_value)->Copy();
   } else {
     current_value = CssValueListForPropertyID(property_id);
@@ -390,7 +454,8 @@ void StylePropertyMap::remove(const ExecutionContext* execution_context,
                               ExceptionState& exception_state) {
   CSSPropertyID property_id = CssPropertyID(execution_context, property_name);
   if (property_id == CSSPropertyID::kInvalid) {
-    exception_state.ThrowTypeError("Invalid property name: " + property_name);
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid property name: ", property_name}));
     return;
   }
 

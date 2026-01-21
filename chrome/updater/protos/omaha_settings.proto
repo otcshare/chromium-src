@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// TODO: crbug/1082836
+// TODO: crbug.com/1082836
 // This file is currently manually tweaked for Chromium use. Find a
 // way to automatically sync from source and make the following necessary
 // changes:
@@ -10,9 +10,7 @@
 //   2) Remove Google internal options:
 //        "option java_api_version = 2;"
 //        "option java_enable_dual_generate_mutable_api = true;"
-//        "option cc_api_version = 2;"
 //        "option java_use_javaproto2 = true;"
-//        "option java_java5_enums = true;"
 //   3) Update the copyright section.
 //
 
@@ -43,14 +41,34 @@ enum UpdateValue {
   AUTOMATIC_UPDATES_ONLY = 3;
 }
 
+enum InstallDefaultValue {
+  INSTALL_DEFAULT_DISABLED = 0;
+  INSTALL_DEFAULT_ENABLED = 1;
+  INSTALL_DEFAULT_ENABLED_MACHINE_ONLY = 4;
+  // Apps cannot be force-installed by default.
+}
+
 enum InstallValue {
   INSTALL_DISABLED = 0;
   INSTALL_ENABLED = 1;
+  INSTALL_ENABLED_MACHINE_ONLY = 4;
+  INSTALL_FORCED = 5;
 }
 
 enum RollbackToTargetVersionValue {
   ROLLBACK_TO_TARGET_VERSION_DISABLED = 0;
   ROLLBACK_TO_TARGET_VERSION_ENABLED = 1;
+}
+
+enum RolloutValue {
+  // Participate in gradual rollout.
+  ROLLOUT_DEFAULT = 0;
+
+  // Update after gradual rollout completes.
+  ROLLOUT_SLOW = 1;
+
+  // Update when gradual rollout begins.
+  ROLLOUT_FAST = 2;
 }
 
 message UpdatesSuppressed {
@@ -142,6 +160,18 @@ message ApplicationSettings {
   // binaries for the specified channel. If this policy is not set, the default
   // channel will be used.
   optional string target_channel = 8;
+
+  // Major Version Rollout
+  //
+  // If a major update for the application is gradually rollout out, this policy
+  // controls when in the gradual rollout this device will update.
+  optional RolloutValue major_version_rollout_policy = 9;
+
+  // Minor Version Rollout
+  //
+  // If a minor update for the application is gradually rollout out, this policy
+  // controls when in the gradual rollout this device will update.
+  optional RolloutValue minor_version_rollout_policy = 10;
 }
 
 message GcpwSpecificApplicationSettings {
@@ -227,7 +257,7 @@ message OmahaSettingsClientProto {
   // Installer. Cannot prevent running the application installer directly or
   // installation of Google software that does not use Google Update/Google
   // Installer for installation.
-  optional InstallValue install_default = 17;
+  optional InstallDefaultValue install_default = 17;
 
   // Update policy override default
   //
@@ -264,4 +294,7 @@ message OmahaSettingsClientProto {
 
   // Application-specific settings.
   repeated ApplicationSettings application_settings = 19;
+
+  // Meta-policy that decides the priority of cloud policy vs platform policy.
+  optional bool cloud_policy_overrides_platform_policy = 20;
 }

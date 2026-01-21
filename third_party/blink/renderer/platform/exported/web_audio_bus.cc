@@ -25,6 +25,7 @@
 #include "third_party/blink/public/platform/web_audio_bus.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 
 namespace blink {
@@ -84,7 +85,7 @@ float* WebAudioBus::ChannelData(unsigned channel_index) {
 }
 
 scoped_refptr<AudioBus> WebAudioBus::Release() {
-  scoped_refptr<AudioBus> audio_bus(private_);
+  scoped_refptr<AudioBus> audio_bus(private_.get());
   private_->Release();
   private_ = nullptr;
   return audio_bus;

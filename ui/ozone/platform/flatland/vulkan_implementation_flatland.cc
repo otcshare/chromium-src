@@ -10,10 +10,10 @@
 #include <memory>
 #include <tuple>
 
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/fuchsia/fuchsia_logging.h"
-#include "gpu/ipc/common/vulkan_ycbcr_info.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
 #include "gpu/vulkan/fuchsia/vulkan_fuchsia_ext.h"
 #include "gpu/vulkan/vulkan_function_pointers.h"
 #include "gpu/vulkan/vulkan_image.h"
@@ -22,7 +22,7 @@
 #include "gpu/vulkan/vulkan_util.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "ui/gfx/gpu_fence.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/ozone/platform/flatland/flatland_surface.h"
 #include "ui/ozone/platform/flatland/flatland_surface_factory.h"
 #include "ui/ozone/platform/flatland/flatland_sysmem_buffer_collection.h"
@@ -60,7 +60,6 @@ gpu::VulkanInstance* VulkanImplementationFlatland::GetVulkanInstance() {
 std::unique_ptr<gpu::VulkanSurface>
 VulkanImplementationFlatland::CreateViewSurface(gfx::AcceleratedWidget window) {
   NOTREACHED();
-  return nullptr;
 }
 
 bool VulkanImplementationFlatland::GetPhysicalDevicePresentationSupport(
@@ -73,7 +72,6 @@ bool VulkanImplementationFlatland::GetPhysicalDevicePresentationSupport(
 std::vector<const char*>
 VulkanImplementationFlatland::GetRequiredDeviceExtensions() {
   std::vector<const char*> result = {
-      VK_FUCHSIA_BUFFER_COLLECTION_EXTENSION_NAME,
       VK_FUCHSIA_EXTERNAL_MEMORY_EXTENSION_NAME,
       VK_FUCHSIA_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
       VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
@@ -82,8 +80,13 @@ VulkanImplementationFlatland::GetRequiredDeviceExtensions() {
       VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
       VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
       VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-      VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
   };
+
+  // Following extensions are not supported by Swiftshader.
+  if (!use_swiftshader()) {
+    result.push_back(VK_FUCHSIA_BUFFER_COLLECTION_EXTENSION_NAME);
+    result.push_back(VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME);
+  }
 
   return result;
 }
@@ -106,29 +109,9 @@ VulkanImplementationFlatland::ExportVkFenceToGpuFence(VkDevice vk_device,
   return nullptr;
 }
 
-VkSemaphore VulkanImplementationFlatland::CreateExternalSemaphore(
-    VkDevice vk_device) {
-  return gpu::CreateExternalVkSemaphore(
-      vk_device, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA);
-}
-
-VkSemaphore VulkanImplementationFlatland::ImportSemaphoreHandle(
-    VkDevice vk_device,
-    gpu::SemaphoreHandle handle) {
-  return gpu::ImportVkSemaphoreHandle(vk_device, std::move(handle));
-}
-
-gpu::SemaphoreHandle VulkanImplementationFlatland::GetSemaphoreHandle(
-    VkDevice vk_device,
-    VkSemaphore vk_semaphore) {
-  return gpu::GetVkSemaphoreHandle(
-      vk_device, vk_semaphore,
-      VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA);
-}
-
-VkExternalMemoryHandleTypeFlagBits
-VulkanImplementationFlatland::GetExternalImageHandleType() {
-  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_ZIRCON_VMO_BIT_FUCHSIA;
+VkExternalSemaphoreHandleTypeFlagBits
+VulkanImplementationFlatland::GetExternalSemaphoreHandleType() {
+  return VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA;
 }
 
 bool VulkanImplementationFlatland::CanImportGpuMemoryBuffer(
@@ -147,13 +130,13 @@ VulkanImplementationFlatland::CreateImageFromGpuMemoryHandle(
   if (gmb_handle.type != gfx::NATIVE_PIXMAP)
     return nullptr;
 
-  if (!gmb_handle.native_pixmap_handle.buffer_collection_handle) {
+  if (!gmb_handle.native_pixmap_handle().buffer_collection_handle) {
     DLOG(ERROR) << "NativePixmapHandle.buffer_collection_handle is not set.";
     return nullptr;
   }
 
   auto collection = flatland_sysmem_buffer_manager_->GetCollectionByHandle(
-      gmb_handle.native_pixmap_handle.buffer_collection_handle);
+      gmb_handle.native_pixmap_handle().buffer_collection_handle);
   if (!collection) {
     DLOG(ERROR) << "Tried to use an unknown buffer collection ID.";
     return nullptr;
@@ -162,7 +145,7 @@ VulkanImplementationFlatland::CreateImageFromGpuMemoryHandle(
   VkImageCreateInfo vk_image_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   VkDeviceMemory vk_device_memory = VK_NULL_HANDLE;
   VkDeviceSize vk_device_size = 0;
-  if (!collection->CreateVkImage(gmb_handle.native_pixmap_handle.buffer_index,
+  if (!collection->CreateVkImage(gmb_handle.native_pixmap_handle().buffer_index,
                                  device_queue->GetVulkanDevice(), size,
                                  &vk_image, &vk_image_info, &vk_device_memory,
                                  &vk_device_size)) {
@@ -170,28 +153,10 @@ VulkanImplementationFlatland::CreateImageFromGpuMemoryHandle(
     return nullptr;
   }
 
-  absl::optional<gpu::VulkanYCbCrInfo> ycbcr_info;
-  if (collection->format() == gfx::BufferFormat::YUV_420_BIPLANAR) {
-    VkSamplerYcbcrModelConversion ycbcr_conversion =
-        (color_space.GetMatrixID() == gfx::ColorSpace::MatrixID::BT709)
-            ? VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709
-            : VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601;
-
-    // Currently sysmem doesn't specify location of chroma samples relative to
-    // luma (see fxbug.dev/13677). Assume they are cosited with luma. Y'CbCr
-    // info here must match the values passed for the same buffer in
-    // FuchsiaVideoDecoder. |format_features| are resolved later in the GPU
-    // process before the ycbcr info is passed to Skia.
-    ycbcr_info = gpu::VulkanYCbCrInfo(
-        vk_image_info.format, /*external_format=*/0, ycbcr_conversion,
-        VK_SAMPLER_YCBCR_RANGE_ITU_NARROW, VK_CHROMA_LOCATION_COSITED_EVEN,
-        VK_CHROMA_LOCATION_COSITED_EVEN, /*format_features=*/0);
-  }
-
   auto image = gpu::VulkanImage::Create(
       device_queue, vk_image, vk_device_memory, size, vk_image_info.format,
       vk_image_info.tiling, vk_device_size, 0 /* memory_type_index */,
-      ycbcr_info, vk_image_info.usage, vk_image_info.flags);
+      vk_image_info.usage, vk_image_info.flags);
 
   if (image->format() != vk_format) {
     DLOG(ERROR) << "Unexpected format " << vk_format << " vs "
@@ -202,7 +167,7 @@ VulkanImplementationFlatland::CreateImageFromGpuMemoryHandle(
 
   image->set_queue_family_index(VK_QUEUE_FAMILY_EXTERNAL);
   image->set_native_pixmap(collection->CreateNativePixmap(
-      std::move(gmb_handle.native_pixmap_handle), size));
+      std::move(gmb_handle).native_pixmap_handle(), size));
   return image;
 }
 
@@ -210,7 +175,7 @@ void VulkanImplementationFlatland::RegisterSysmemBufferCollection(
     VkDevice device,
     zx::eventpair service_handle,
     zx::channel sysmem_token,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage,
     gfx::Size size,
     size_t min_buffer_count,

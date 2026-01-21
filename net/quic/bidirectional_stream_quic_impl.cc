@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -17,7 +17,6 @@
 #include "net/socket/next_proto.h"
 #include "net/spdy/spdy_http_utils.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_connection.h"
-#include "net/third_party/quiche/src/quiche/spdy/core/http2_header_block.h"
 #include "quic_http_stream.h"
 
 namespace net {
@@ -110,13 +109,13 @@ void BidirectionalStreamQuicImpl::SendRequestHeaders() {
 int BidirectionalStreamQuicImpl::WriteHeaders() {
   DCHECK(!has_sent_headers_);
 
-  spdy::Http2HeaderBlock headers;
+  quiche::HttpHeaderBlock headers;
   HttpRequestInfo http_request_info;
   http_request_info.url = request_info_->url;
   http_request_info.method = request_info_->method;
   http_request_info.extra_headers = request_info_->extra_headers;
 
-  CreateSpdyHeadersFromHttpRequest(http_request_info,
+  CreateSpdyHeadersFromHttpRequest(http_request_info, std::nullopt,
                                    http_request_info.extra_headers, &headers);
   int rv = stream_->WriteHeaders(std::move(headers),
                                  request_info_->end_stream_on_headers, nullptr);
@@ -199,35 +198,19 @@ NextProto BidirectionalStreamQuicImpl::GetProtocol() const {
 }
 
 int64_t BidirectionalStreamQuicImpl::GetTotalReceivedBytes() const {
-  // When QPACK is enabled, headers are sent and received on the stream, so
-  // the headers bytes do not need to be accounted for independently.
-  int64_t total_received_bytes =
-      quic::VersionUsesHttp3(session_->GetQuicVersion().transport_version)
-          ? 0
-          : headers_bytes_received_;
   if (stream_) {
     DCHECK_LE(stream_->NumBytesConsumed(), stream_->stream_bytes_read());
     // Only count the uniquely received bytes.
-    total_received_bytes += stream_->NumBytesConsumed();
-  } else {
-    total_received_bytes += closed_stream_received_bytes_;
+    return stream_->NumBytesConsumed();
   }
-  return total_received_bytes;
+  return closed_stream_received_bytes_;
 }
 
 int64_t BidirectionalStreamQuicImpl::GetTotalSentBytes() const {
-  // When QPACK is enabled, headers are sent and received on the stream, so
-  // the headers bytes do not need to be accounted for independently.
-  int64_t total_sent_bytes =
-      quic::VersionUsesHttp3(session_->GetQuicVersion().transport_version)
-          ? 0
-          : headers_bytes_sent_;
   if (stream_) {
-    total_sent_bytes += stream_->stream_bytes_written();
-  } else {
-    total_sent_bytes += closed_stream_sent_bytes_;
+    return stream_->stream_bytes_written();
   }
-  return total_sent_bytes;
+  return closed_stream_sent_bytes_;
 }
 
 bool BidirectionalStreamQuicImpl::GetLoadTimingInfo(
@@ -299,7 +282,7 @@ void BidirectionalStreamQuicImpl::OnReadInitialHeadersComplete(int rv) {
   }
 
   headers_bytes_received_ += rv;
-  negotiated_protocol_ = kProtoQUIC;
+  negotiated_protocol_ = NextProto::kProtoQUIC;
   connect_timing_ = session_->GetConnectTiming();
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,

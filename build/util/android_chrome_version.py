@@ -55,9 +55,15 @@ _PACKAGE_NAMES = {
     'MONOCHROME': 20,
     'TRICHROME': 30,
     'TRICHROME_BETA': 40,
+    'TRICHROME_AUTO': 50,
+    'TRICHROME_DESKTOP': 60,
+    'CHROME_DESKTOP': 70,
+    'CHROME_DESKTOP_BETA': 80,
     'WEBVIEW_STABLE': 0,
     'WEBVIEW_BETA': 10,
     'WEBVIEW_DEV': 20,
+    'WEBVIEW_AUTO': 70,
+    'WEBVIEW_DESKTOP': 80
 }
 """ "Next" builds get +500 on their patch number.
 
@@ -84,13 +90,33 @@ _APKS = {
         ('CHROME_MODERN', 'CHROME_MODERN', '32'),
         ('MONOCHROME', 'MONOCHROME', '32'),
         ('TRICHROME', 'TRICHROME', '32'),
+        ('TRICHROME_AUTO', 'TRICHROME_AUTO', '32'),
         ('TRICHROME_BETA', 'TRICHROME_BETA', '32'),
         ('WEBVIEW_STABLE', 'WEBVIEW_STABLE', '32'),
         ('WEBVIEW_BETA', 'WEBVIEW_BETA', '32'),
         ('WEBVIEW_DEV', 'WEBVIEW_DEV', '32'),
+        ('WEBVIEW_AUTO', 'WEBVIEW_AUTO', '32'),
     ],
     '64': [
         ('CHROME', 'CHROME', '64'),
+        ('CHROME_MODERN', 'CHROME_MODERN', '64'),
+        ('MONOCHROME', 'MONOCHROME', '64'),
+        ('TRICHROME', 'TRICHROME', '64'),
+        ('TRICHROME_AUTO', 'TRICHROME_AUTO', '64'),
+        ('TRICHROME_BETA', 'TRICHROME_BETA', '64'),
+        ('TRICHROME_DESKTOP', 'TRICHROME_DESKTOP', '64'),
+        ('WEBVIEW_STABLE', 'WEBVIEW_STABLE', '64'),
+        ('WEBVIEW_BETA', 'WEBVIEW_BETA', '64'),
+        ('WEBVIEW_DEV', 'WEBVIEW_DEV', '64'),
+        ('WEBVIEW_AUTO', 'WEBVIEW_AUTO', '64'),
+        ('WEBVIEW_DESKTOP', 'WEBVIEW_DESKTOP', '64'),
+    ],
+    'hybrid': [
+        ('CHROME', 'CHROME', '64_32'),
+        ('CHROME_HIGH', 'CHROME', '64'),
+        # Obsolete Chrome Modern version code being used for Chrome
+        ('CHROME_HIGH_BETA', 'CHROME_MODERN', '64'),
+        ('CHROME_32', 'CHROME', '32'),
         ('CHROME_MODERN', 'CHROME_MODERN', '64'),
         ('MONOCHROME', 'MONOCHROME', '32_64'),
         ('MONOCHROME_32', 'MONOCHROME', '32'),
@@ -101,32 +127,58 @@ _APKS = {
         ('TRICHROME_32', 'TRICHROME', '32'),
         ('TRICHROME_32_64', 'TRICHROME', '32_64'),
         ('TRICHROME_64_32', 'TRICHROME', '64_32'),
+        ('TRICHROME_64_32_HIGH', 'TRICHROME', '64_32_high'),
         ('TRICHROME_64', 'TRICHROME', '64'),
-        ('TRICHROME_64_HIGH', 'TRICHROME', '64_high'),
+        ('TRICHROME_AUTO', 'TRICHROME_AUTO', '32_64'),
+        ('TRICHROME_AUTO_32', 'TRICHROME_AUTO', '32'),
+        ('TRICHROME_AUTO_32_64', 'TRICHROME_AUTO', '32_64'),
+        ('TRICHROME_AUTO_64', 'TRICHROME_AUTO', '64'),
+        ('TRICHROME_AUTO_64_32', 'TRICHROME_AUTO', '64_32'),
+        ('TRICHROME_AUTO_64_32_HIGH', 'TRICHROME_AUTO', '64_32_high'),
         ('TRICHROME_BETA', 'TRICHROME_BETA', '32_64'),
         ('TRICHROME_32_BETA', 'TRICHROME_BETA', '32'),
         ('TRICHROME_32_64_BETA', 'TRICHROME_BETA', '32_64'),
         ('TRICHROME_64_32_BETA', 'TRICHROME_BETA', '64_32'),
+        ('TRICHROME_64_32_HIGH_BETA', 'TRICHROME_BETA', '64_32_high'),
+        ('TRICHROME_DESKTOP_64', 'TRICHROME_DESKTOP', '64'),
         ('TRICHROME_64_BETA', 'TRICHROME_BETA', '64'),
-        ('TRICHROME_64_HIGH_BETA', 'TRICHROME_BETA', '64_high'),
+        ('CHROME_DESKTOP', 'CHROME_DESKTOP', '64'),
+        ('CHROME_DESKTOP_BETA', 'CHROME_DESKTOP_BETA', '64'),
         ('WEBVIEW_STABLE', 'WEBVIEW_STABLE', '32_64'),
-        ('WEBVIEW_BETA', 'WEBVIEW_BETA', '32_64'),
-        ('WEBVIEW_DEV', 'WEBVIEW_DEV', '32_64'),
         ('WEBVIEW_32_STABLE', 'WEBVIEW_STABLE', '32'),
-        ('WEBVIEW_32_BETA', 'WEBVIEW_BETA', '32'),
-        ('WEBVIEW_32_DEV', 'WEBVIEW_DEV', '32'),
+        ('WEBVIEW_32_64_STABLE', 'WEBVIEW_STABLE', '32_64'),
         ('WEBVIEW_64_STABLE', 'WEBVIEW_STABLE', '64'),
+        ('WEBVIEW_64_32_STABLE', 'WEBVIEW_STABLE', '64_32'),
+        ('WEBVIEW_64_32_HIGH_STABLE', 'WEBVIEW_STABLE', '64_32_high'),
+        ('WEBVIEW_BETA', 'WEBVIEW_BETA', '32_64'),
+        ('WEBVIEW_32_BETA', 'WEBVIEW_BETA', '32'),
+        ('WEBVIEW_32_64_BETA', 'WEBVIEW_BETA', '32_64'),
         ('WEBVIEW_64_BETA', 'WEBVIEW_BETA', '64'),
+        ('WEBVIEW_64_32_BETA', 'WEBVIEW_BETA', '64_32'),
+        ('WEBVIEW_64_32_HIGH_BETA', 'WEBVIEW_BETA', '64_32_high'),
+        ('WEBVIEW_DEV', 'WEBVIEW_DEV', '32_64'),
+        ('WEBVIEW_32_DEV', 'WEBVIEW_DEV', '32'),
         ('WEBVIEW_64_DEV', 'WEBVIEW_DEV', '64'),
+        ('WEBVIEW_64_32_DEV', 'WEBVIEW_DEV', '64_32'),
+        ('WEBVIEW_AUTO', 'WEBVIEW_AUTO', '32_64'),
+        ('WEBVIEW_AUTO_32', 'WEBVIEW_AUTO', '32'),
+        ('WEBVIEW_AUTO_32_64', 'WEBVIEW_AUTO', '32_64'),
+        ('WEBVIEW_AUTO_64', 'WEBVIEW_AUTO', '64'),
+        ('WEBVIEW_AUTO_64_32', 'WEBVIEW_AUTO', '64_32'),
+        ('WEBVIEW_AUTO_64_32_HIGH', 'WEBVIEW_AUTO', '64_32_high'),
+        ('WEBVIEW_DESKTOP_64', 'WEBVIEW_DESKTOP', '64'),
     ]
 }
 
 # Splits input build config architecture to manufacturer and bitness.
 _ARCH_TO_MFG_AND_BITNESS = {
     'arm': ('arm', '32'),
-    'arm64': ('arm', '64'),
+    'arm64': ('arm', 'hybrid'),
+    # Until riscv64 needs a unique version code to ship APKs to the store,
+    # point to the 'arm' bitmask.
+    'riscv64': ('arm', '64'),
     'x86': ('intel', '32'),
-    'x64': ('intel', '64'),
+    'x64': ('intel', 'hybrid'),
 }
 
 # Expose the available choices to other scripts.
@@ -170,21 +222,57 @@ things here:
   version needs to be a higher versionCode, as otherwise a 64-bit device would
   prefer the 32-bit version that does not include any 64-bit code, and fail.
 """
-_ABIS_TO_DIGIT_MASK = {
-    'arm': {
-        '32': 0,
-        '32_64': 3,
-        '64_32': 4,
-        '64': 5,
-        '64_high': 9,
-    },
-    'intel': {
-        '32': 1,
-        '32_64': 6,
-        '64_32': 7,
-        '64': 8,
-    },
-}
+
+
+def _GetAbisToDigitMask(build_number, patch_number):
+  """Return the correct digit mask based on build number.
+
+  Updated from build 5750: Some intel devices advertise support for arm,
+  so arm codes must be lower than x86 codes to prevent providing an
+  arm-optimized build to intel devices.
+
+  Returns:
+    A dictionary of architecture mapped to bitness
+    mapped to version code suffix.
+  """
+  # Scheme change was made directly to M113 and M114 branches.
+  use_new_scheme = (build_number >= 5750
+                    or (build_number == 5672 and patch_number >= 176)
+                    or (build_number == 5735 and patch_number >= 53))
+  if use_new_scheme:
+    return {
+        'arm': {
+            '32': 0,
+            '32_64': 1,
+            '64_32': 2,
+            '64_32_high': 3,
+            # This is not shipped, so fine that there's a dupe.
+            '64_high': 4,
+            '64': 4,
+        },
+        'intel': {
+            '32': 6,
+            '32_64': 7,
+            '64_32': 8,
+            '64': 9,
+        },
+    }
+  return {
+      'arm': {
+          '32': 0,
+          '32_64': 3,
+          '64_32': 4,
+          '64': 5,
+          '64_32_high': 9,
+      },
+      'intel': {
+          '32': 1,
+          '32_64': 6,
+          '64_32': 7,
+          '64': 8,
+      },
+  }
+
 
 VersionCodeComponents = namedtuple('VersionCodeComponents', [
     'build_number',
@@ -238,13 +326,18 @@ def TranslateVersionCode(version_code, is_webview=False):
     is_next_build = True
     package_digit -= 5
 
+  package_name = None
   for package, number in _PACKAGE_NAMES.items():
     if number == package_digit * 10:
       if is_webview == ('WEBVIEW' in package):
         package_name = package
         break
+  if not package_name:
+    raise Error(f'Unable to match package with package_digit={package_digit} '
+                f'and is_webview={is_webview}')
 
-  for arch, bitness_to_number in _ABIS_TO_DIGIT_MASK.items():
+  for arch, bitness_to_number in (_GetAbisToDigitMask(build_number,
+                                                      patch_number).items()):
     for bitness, number in bitness_to_number.items():
       if abi_digit == number:
         abi = arch if arch != 'intel' else 'x86'
@@ -256,7 +349,7 @@ def TranslateVersionCode(version_code, is_webview=False):
                                is_next_build)
 
 
-def GenerateVersionCodes(version_values, arch, is_next_build):
+def GenerateVersionCodes(build_number, patch_number, arch):
   """Build dict of version codes for the specified build architecture. Eg:
 
   {
@@ -279,21 +372,17 @@ def GenerateVersionCodes(version_values, arch, is_next_build):
 
   Thus, this method is responsible for the final two digits of versionCode.
   """
-
-  base_version_code = int(
-      '%s%03d00' % (version_values['BUILD'], int(version_values['PATCH'])))
-
-  if is_next_build:
-    base_version_code += _NEXT_BUILD_VERSION_CODE_DIFF
+  base_version_code = (build_number * 1000 + patch_number) * 100
 
   mfg, bitness = _ARCH_TO_MFG_AND_BITNESS[arch]
 
   version_codes = {}
 
+  abi_to_digit_mask = _GetAbisToDigitMask(build_number, patch_number)
   for apk, package, abis in _APKS[bitness]:
-    if abis == '64_high' and arch != 'arm64':
+    if abis == '64_32_high' and arch != 'arm64':
       continue
-    abi_part = _ABIS_TO_DIGIT_MASK[mfg][abis]
+    abi_part = abi_to_digit_mask[mfg][abis]
     package_part = _PACKAGE_NAMES[package]
 
     version_code_name = apk + '_VERSION_CODE'
@@ -305,12 +394,29 @@ def GenerateVersionCodes(version_values, arch, is_next_build):
 
 def main():
   parser = argparse.ArgumentParser(description='Parses version codes.')
-  parser.add_argument('version_code', help='Version code (e.g. 529700010).')
-  parser.add_argument('--webview',
-                      action='store_true',
-                      help='Whether this is a webview version code.')
+  g1 = parser.add_argument_group('To Generate Version Name')
+  g1.add_argument('--version-code', help='Version code (e.g. 529700010).')
+  g1.add_argument('--webview',
+                  action='store_true',
+                  help='Whether this is a webview version code.')
+  g2 = parser.add_argument_group('To Generate Version Code')
+  g2.add_argument('--version-name', help='Version name (e.g. 124.0.6355.0).')
+  g2.add_argument('--arch',
+                  choices=ARCH_CHOICES,
+                  help='Set which cpu architecture the build is for.')
   args = parser.parse_args()
-  print(TranslateVersionCode(args.version_code, is_webview=args.webview))
+  if args.version_code:
+    print(TranslateVersionCode(args.version_code, is_webview=args.webview))
+  elif args.version_name:
+    if not args.arch:
+      parser.error('Required --arch')
+    _, _, build, patch = args.version_name.split('.')
+    values = GenerateVersionCodes(int(build), int(patch), args.arch)
+    for k, v in values.items():
+      print(f'{k}={v}')
+  else:
+    parser.print_help()
+
 
 
 if __name__ == '__main__':

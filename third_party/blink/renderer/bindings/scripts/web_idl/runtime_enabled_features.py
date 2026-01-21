@@ -3,7 +3,7 @@
 # found in the LICENSE file.
 
 import json5
-
+import os
 
 class RuntimeEnabledFeatures(object):
     """Represents a set of definitions of runtime enabled features."""
@@ -26,18 +26,45 @@ class RuntimeEnabledFeatures(object):
         cls._features = {}
 
         for filepath in filepaths:
-            with open(filepath) as file_obj:
+            with open(filepath, encoding='utf-8') as file_obj:
                 datastore = json5.load(file_obj)
 
-            for entry in datastore["data"]:
-                assert entry["name"] not in cls._features
-                cls._features[entry["name"]] = entry
+                for entry in datastore["data"]:
+                    assert entry["name"] not in cls._features
+                    cls._features[entry["name"]] = entry
+
+            file_root, file_ext = os.path.splitext(filepath)
+            override_file_path = f"{file_root}.override{file_ext}"
+            if os.path.exists(override_file_path):
+                with open(override_file_path, encoding='utf-8') as file_obj:
+                    datastore = json5.load(file_obj)
+
+                    for entry in datastore["data"]:
+                        cls._features[entry["name"]] = entry
 
         cls._is_initialized = True
 
     @classmethod
     def is_context_dependent(cls, feature_name):
         """Returns True if the feature may be enabled per-context."""
+        return (cls.is_browser_controlled(feature_name)
+                or cls.is_origin_trial(feature_name))
+
+    @classmethod
+    def is_browser_controlled(cls, feature_name):
+        """Returns True if the feature can be controlled by the browser."""
+        assert cls._is_initialized, cls._REQUIRE_INIT_MESSAGE
+        assert isinstance(feature_name, str)
+        assert feature_name in cls._features, (
+            "Unknown runtime-enabled feature: {}".format(feature_name))
+        value = cls._features[feature_name].get(
+            "browser_process_read_write_access", False)
+        assert isinstance(value, bool)
+        return value
+
+    @classmethod
+    def is_origin_trial(cls, feature_name):
+        """Returns True if the feature is an origin trial."""
         assert cls._is_initialized, cls._REQUIRE_INIT_MESSAGE
         assert isinstance(feature_name, str)
         assert feature_name in cls._features, (

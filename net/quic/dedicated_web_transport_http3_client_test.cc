@@ -5,22 +5,27 @@
 #include "net/quic/dedicated_web_transport_http3_client.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
+#include "net/base/proxy_chain.h"
+#include "net/base/proxy_server.h"
 #include "net/base/schemeful_site.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/quic/crypto/proof_source_chromium.h"
+#include "net/quic/quic_context.h"
 #include "net/test/test_data_directory.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/crypto_test_utils.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/quic_test_backend.h"
 #include "net/tools/quic/quic_simple_server.h"
 #include "net/tools/quic/quic_simple_server_socket.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -37,6 +42,15 @@ using ::testing::DoAll;
 using ::testing::Optional;
 using ::testing::SaveArg;
 
+// testing::InvokeArgument<N> does not work with base::OnceCallback. Use this
+// gmock action template to invoke base::OnceCallback. `k` is the k-th argument
+// and `T` is the callback's type.
+ACTION_TEMPLATE(InvokeCallbackArgument,
+                HAS_2_TEMPLATE_PARAMS(int, k, typename, T),
+                AND_1_VALUE_PARAMS(net_err)) {
+  std::move(const_cast<T&>(std::get<k>(args))).Run(net_err);
+}
+
 class MockVisitor : public WebTransportClientVisitor {
  public:
   MOCK_METHOD(void,
@@ -45,17 +59,22 @@ class MockVisitor : public WebTransportClientVisitor {
               (override));
   MOCK_METHOD(void, OnConnectionFailed, (const WebTransportError&), (override));
   MOCK_METHOD(void,
+              OnLocalNetworkAccessCheck,
+              (const IPEndPoint&, CompletionOnceCallback callback),
+              (override));
+  MOCK_METHOD(void, OnBeforeConnect, (const IPEndPoint&), (override));
+  MOCK_METHOD(void,
               OnClosed,
-              (const absl::optional<WebTransportCloseInfo>&),
+              (const std::optional<WebTransportCloseInfo>&),
               (override));
   MOCK_METHOD(void, OnError, (const WebTransportError&), (override));
 
   MOCK_METHOD0(OnIncomingBidirectionalStreamAvailable, void());
   MOCK_METHOD0(OnIncomingUnidirectionalStreamAvailable, void());
-  MOCK_METHOD1(OnDatagramReceived, void(base::StringPiece));
+  MOCK_METHOD1(OnDatagramReceived, void(std::string_view));
   MOCK_METHOD0(OnCanCreateNewOutgoingBidirectionalStream, void());
   MOCK_METHOD0(OnCanCreateNewOutgoingUnidirectionalStream, void());
-  MOCK_METHOD1(OnDatagramProcessed, void(absl::optional<quic::MessageStatus>));
+  MOCK_METHOD1(OnDatagramProcessed, void(std::optional<quic::DatagramStatus>));
 };
 
 // A clock that only mocks out WallNow(), but uses real Now() and
@@ -95,15 +114,43 @@ class TestConnectionHelper : public quic::QuicConnectionHelperInterface {
 
 class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
  public:
-  DedicatedWebTransportHttp3Test() {
+  ~DedicatedWebTransportHttp3Test() override {
+    if (server_ != nullptr) {
+      server_->Shutdown();
+    }
+  }
+
+  void SetUp() override {
+    BuildContext(ConfiguredProxyResolutionService::CreateDirect());
     quic::QuicEnableVersion(quic::ParsedQuicVersion::RFCv1());
     origin_ = url::Origin::Create(GURL{"https://example.org"});
     anonymization_key_ =
-        NetworkAnonymizationKey(SchemefulSite(origin_), SchemefulSite(origin_));
+        NetworkAnonymizationKey::CreateSameSite(SchemefulSite(origin_));
 
+    // By default, quit on error instead of waiting for RunLoop() to time out.
+    ON_CALL(visitor_, OnConnectionFailed(_))
+        .WillByDefault([this](const WebTransportError& error) {
+          LOG(ERROR) << "Connection failed: " << error;
+          if (run_loop_) {
+            run_loop_->Quit();
+          }
+        });
+    ON_CALL(visitor_, OnError(_))
+        .WillByDefault([this](const WebTransportError& error) {
+          LOG(ERROR) << "Connection error: " << error;
+          if (run_loop_) {
+            run_loop_->Quit();
+          }
+        });
+    ON_CALL(visitor_, OnLocalNetworkAccessCheck(_, _))
+        .WillByDefault(InvokeCallbackArgument<1, CompletionOnceCallback>(OK));
+  }
+
+  // Use a URLRequestContextBuilder to set `context_`.
+  void BuildContext(
+      std::unique_ptr<ProxyResolutionService> proxy_resolution_service) {
     URLRequestContextBuilder builder;
-    builder.set_proxy_resolution_service(
-        ConfiguredProxyResolutionService::CreateDirect());
+    builder.set_proxy_resolution_service(std::move(proxy_resolution_service));
 
     auto cert_verifier = std::make_unique<MockCertVerifier>();
     cert_verifier->set_default_result(OK);
@@ -120,29 +167,11 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
     // This is required to bypass the check that only allows known certificate
     // roots in QUIC.
     quic_context->params()->origins_to_force_quic_on.insert(
-        HostPortPair("test.example.com", 0));
+        url::SchemeHostPort("https", "test.example.com", 443));
     builder.set_quic_context(std::move(quic_context));
 
     builder.set_net_log(NetLog::Get());
     context_ = builder.Build();
-
-    // By default, quit on error instead of waiting for RunLoop() to time out.
-    ON_CALL(visitor_, OnConnectionFailed(_))
-        .WillByDefault([this](const WebTransportError& error) {
-          LOG(ERROR) << "Connection failed: " << error;
-          run_loop_->Quit();
-        });
-    ON_CALL(visitor_, OnError(_))
-        .WillByDefault([this](const WebTransportError& error) {
-          LOG(ERROR) << "Connection error: " << error;
-          run_loop_->Quit();
-        });
-  }
-
-  ~DedicatedWebTransportHttp3Test() override {
-    if (server_ != nullptr) {
-      server_->Shutdown();
-    }
   }
 
   GURL GetURL(const std::string& suffix) {
@@ -158,9 +187,9 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
     server_ = std::make_unique<QuicSimpleServer>(
         std::move(proof_source), quic::QuicConfig(),
         quic::QuicCryptoServerConfig::ConfigOptions(),
-        quic::AllSupportedVersions(), &backend_);
+        AllSupportedQuicVersions(), &backend_);
     ASSERT_TRUE(server_->CreateUDPSocketAndListen(
-        quic::QuicSocketAddress(quic::QuicIpAddress::Any6(), /*port=*/0)));
+        quic::QuicSocketAddress(quiche::QuicheIpAddress::Any6(), /*port=*/0)));
     port_ = server_->server_address().port();
   }
 
@@ -170,7 +199,11 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
   }
 
   auto StopRunning() {
-    return [this]() { run_loop_->Quit(); };
+    return [this]() {
+      if (run_loop_) {
+        run_loop_->Quit();
+      }
+    };
   }
 
  protected:
@@ -194,17 +227,56 @@ TEST_F(DedicatedWebTransportHttp3Test, Connect) {
       GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
       WebTransportParameters());
 
-  EXPECT_CALL(visitor_, OnConnected(_)).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
   client_->Connect();
   Run();
   ASSERT_TRUE(client_->session() != nullptr);
 
-  client_->Close(absl::nullopt);
+  client_->Close(std::nullopt);
   EXPECT_CALL(visitor_, OnClosed(_)).WillOnce(StopRunning());
   Run();
 }
 
-// TODO(https://crbug.com/1288036): The test is flaky on Mac and iOS.
+// Check that the Local Network Access check returning an error correctly fails
+// the connection before attempting the connection.
+TEST_F(DedicatedWebTransportHttp3Test, ConnectLocalNetworkAccessCheckFail) {
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
+      WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnLocalNetworkAccessCheck)
+      .WillOnce(InvokeCallbackArgument<1, CompletionOnceCallback>(
+          ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS));
+
+  WebTransportError error;
+  EXPECT_CALL(visitor_, OnConnectionFailed)
+      .WillOnce(DoAll(StopRunning(), SaveArg<0>(&error)));
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() == nullptr);
+  EXPECT_EQ(error.net_error, ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS);
+}
+
+// Check that connecting via a proxy fails. This is currently not implemented,
+// but it's important that WebTransport not be usable to _bypass_ a proxy -- if
+// a proxy is configured, it must be used.
+TEST_F(DedicatedWebTransportHttp3Test, ConnectViaProxy) {
+  BuildContext(
+      ConfiguredProxyResolutionService::CreateFixedFromProxyChainsForTest(
+          {ProxyChain::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTPS, "test",
+                                             80)},
+          TRAFFIC_ANNOTATION_FOR_TESTS));
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
+      WebTransportParameters());
+
+  client_->Connect();
+}
+
+// TODO(crbug.com/40816637): The test is flaky on Mac and iOS.
 #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
 #define MAYBE_CloseTimeout DISABLED_CloseTimeout
 #else
@@ -216,7 +288,8 @@ TEST_F(DedicatedWebTransportHttp3Test, MAYBE_CloseTimeout) {
       GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
       WebTransportParameters());
 
-  EXPECT_CALL(visitor_, OnConnected(_)).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
   client_->Connect();
   Run();
   ASSERT_TRUE(client_->session() != nullptr);
@@ -231,7 +304,7 @@ TEST_F(DedicatedWebTransportHttp3Test, MAYBE_CloseTimeout) {
   noop_socket->AllowAddressReuse();
   ASSERT_GE(noop_socket->Listen(bind_address), 0);
 
-  client_->Close(absl::nullopt);
+  client_->Close(std::nullopt);
   EXPECT_CALL(visitor_, OnError(_)).WillOnce(StopRunning());
   Run();
 }
@@ -242,7 +315,8 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
       GetURL("/session-close"), origin_, &visitor_, anonymization_key_,
       context_.get(), WebTransportParameters());
 
-  EXPECT_CALL(visitor_, OnConnected(_)).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
   client_->Connect();
   Run();
   ASSERT_TRUE(client_->session() != nullptr);
@@ -254,11 +328,48 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
   EXPECT_TRUE(stream->SendFin());
 
   WebTransportCloseInfo close_info(42, "test error");
-  absl::optional<WebTransportCloseInfo> received_close_info;
+  std::optional<WebTransportCloseInfo> received_close_info;
   EXPECT_CALL(visitor_, OnClosed(_))
       .WillOnce(DoAll(StopRunning(), SaveArg<0>(&received_close_info)));
   Run();
   EXPECT_THAT(received_close_info, Optional(close_info));
+}
+
+// Test negotiation of the application protocol via
+// https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-12.html#name-application-protocol-negoti
+TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
+  StartServer();
+  WebTransportParameters parameters;
+  parameters.application_protocols = {"first", "second", "third"};
+  // The selected-subprotocol endpoint selects the first of the offered
+  // protocols by default, and echoes it on a unidirectional stream.
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/selected-subprotocol"), origin_, &visitor_, anonymization_key_,
+      context_.get(), parameters);
+
+  bool stream_received = false;
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnIncomingUnidirectionalStreamAvailable).WillOnce([&] {
+    stream_received = true;
+    StopRunning();
+  });
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+
+  EXPECT_EQ(client_->session()->GetNegotiatedSubprotocol(), "first");
+
+  if (!stream_received) {
+    Run();
+  }
+
+  quic::WebTransportStream* stream =
+      client_->session()->AcceptIncomingUnidirectionalStream();
+  ASSERT_TRUE(stream != nullptr);
+  std::string read_buffer;
+  webtransport::Stream::ReadResult read_result = stream->Read(&read_buffer);
+  ASSERT_TRUE(read_result.fin);
+  EXPECT_EQ(read_buffer, "first");
 }
 
 }  // namespace

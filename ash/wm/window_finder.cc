@@ -43,7 +43,7 @@ bool IsWindowTargeted(aura::Window* window,
     gfx::Point point_in_root = local_point;
     aura::Window::ConvertPointToTarget(window, window->GetRootWindow(),
                                        &point_in_root);
-    ui::MouseEvent event(ui::ET_MOUSE_MOVED, local_point, point_in_root,
+    ui::MouseEvent event(ui::EventType::kMouseMoved, local_point, point_in_root,
                          base::TimeTicks::Now(), 0, 0);
     return targeter->SubtreeShouldBeExploredForEvent(window, event);
   }
@@ -59,8 +59,9 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
     aura::Window* window,
     aura::WindowTargeter* targeter,
     const std::set<aura::Window*>& ignore) {
-  if (!window->IsVisible())
+  if (!window->IsVisible()) {
     return nullptr;
+  }
 
   if (window->GetId() == kShellWindowId_PhantomWindow ||
       window->GetId() == kShellWindowId_OverlayContainer ||
@@ -69,18 +70,20 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
   }
 
   if (IsTopLevelWindow(window)) {
-    if (IsWindowTargeted(window, screen_point, targeter))
-      return (ignore.find(window) == ignore.end()) ? window : nullptr;
+    if (IsWindowTargeted(window, screen_point, targeter)) {
+      return ignore.contains(window) ? nullptr : window;
+    }
     return nullptr;
   }
 
-  for (auto* child : base::Reversed(window->children())) {
+  for (aura::Window* child : base::Reversed(window->children())) {
     aura::WindowTargeter* child_targeter =
         child->targeter() ? child->targeter() : targeter;
     aura::Window* result = GetTopmostWindowAtPointWithinWindow(
         screen_point, child, child_targeter, ignore);
-    if (result)
+    if (result) {
       return result;
+    }
   }
   return nullptr;
 }
@@ -93,22 +96,25 @@ aura::Window* GetToplevelWindowInOverviewAtPoint(
     const gfx::Point& screen_point,
     const std::set<aura::Window*>& ignore) {
   OverviewController* overview_controller = Shell::Get()->overview_controller();
-  if (!overview_controller->InOverviewSession())
+  if (!overview_controller->InOverviewSession()) {
     return nullptr;
+  }
 
   OverviewGrid* grid =
       overview_controller->overview_session()->GetGridWithRootWindow(
           window_util::GetRootWindowAt(screen_point));
-  if (!grid)
+  if (!grid) {
     return nullptr;
+  }
 
   aura::Window* window = grid->GetTargetWindowOnLocation(
       gfx::PointF(screen_point), /*ignored_item=*/nullptr);
-  if (!window)
+  if (!window) {
     return nullptr;
+  }
 
   window = window->GetToplevelWindow();
-  return (ignore.find(window) == ignore.end()) ? window : nullptr;
+  return ignore.contains(window) ? nullptr : window;
 }
 
 }  // namespace

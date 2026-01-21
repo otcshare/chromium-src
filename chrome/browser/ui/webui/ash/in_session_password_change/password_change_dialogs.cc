@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "chrome/browser/ui/webui/ash/in_session_password_change/confirm_password_change_handler.h"
 #include "chrome/common/webui_url_constants.h"
@@ -14,6 +14,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/strings/grit/ui_strings.h"
@@ -42,8 +43,7 @@ constexpr int kConfirmBothPasswordsHeight = 380;
 // Given a desired size, returns the same size if it fits on screen,
 // or the closest possible size that will fit on the screen.
 gfx::Size FitSizeToDisplay(const gfx::Size& desired) {
-  const display::Display display =
-      display::Screen::GetScreen()->GetPrimaryDisplay();
+  const display::Display display = display::Screen::Get()->GetPrimaryDisplay();
 
   gfx::Size display_size = display.size();
 
@@ -57,7 +57,7 @@ BasePasswordDialog::BasePasswordDialog(GURL url, gfx::Size desired_size)
     : SystemWebDialogDelegate(url, /*title=*/std::u16string()),
       desired_size_(desired_size) {}
 
-BasePasswordDialog::~BasePasswordDialog() {}
+BasePasswordDialog::~BasePasswordDialog() = default;
 
 void BasePasswordDialog::GetDialogSize(gfx::Size* size) const {
   *size = FitSizeToDisplay(desired_size_);
@@ -68,8 +68,8 @@ void BasePasswordDialog::AdjustWidgetInitParams(
   params->type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
 }
 
-ui::ModalType BasePasswordDialog::GetDialogModalType() const {
-  return ui::ModalType::MODAL_TYPE_SYSTEM;
+ui::mojom::ModalType BasePasswordDialog::GetDialogModalType() const {
+  return ui::mojom::ModalType::kSystem;
 }
 
 // static
@@ -86,8 +86,9 @@ void PasswordChangeDialog::Show() {
 // static
 void PasswordChangeDialog::Dismiss() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (g_dialog)
+  if (g_dialog) {
     g_dialog->Close();
+  }
 }
 
 PasswordChangeDialog::PasswordChangeDialog()
@@ -116,8 +117,9 @@ void ConfirmPasswordChangeDialog::Show(const std::string& scraped_old_password,
 // static
 void ConfirmPasswordChangeDialog::Dismiss() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (g_confirm_dialog)
+  if (g_confirm_dialog) {
     g_confirm_dialog->Close();
+  }
 }
 
 ConfirmPasswordChangeDialog::ConfirmPasswordChangeDialog(
@@ -159,7 +161,7 @@ gfx::Size ConfirmPasswordChangeDialog::GetSize(
 }
 
 void ConfirmPasswordChangeDialog::GetWebUIMessageHandlers(
-    std::vector<content::WebUIMessageHandler*>* handlers) const {
+    std::vector<content::WebUIMessageHandler*>* handlers) {
   handlers->push_back(new ConfirmPasswordChangeHandler(
       scraped_old_password_, scraped_new_password_, show_spinner_initially_));
 }
@@ -178,8 +180,9 @@ void UrgentPasswordExpiryNotificationDialog::Show() {
 // static
 void UrgentPasswordExpiryNotificationDialog::Dismiss() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (g_notification_dialog)
+  if (g_notification_dialog) {
     g_notification_dialog->Close();
+  }
 }
 
 UrgentPasswordExpiryNotificationDialog::UrgentPasswordExpiryNotificationDialog()

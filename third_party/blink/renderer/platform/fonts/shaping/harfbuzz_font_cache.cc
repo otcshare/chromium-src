@@ -8,10 +8,8 @@
 
 namespace blink {
 
-HarfBuzzFontCache::HarfBuzzFontCache() = default;
-HarfBuzzFontCache::~HarfBuzzFontCache() = default;
-
-// See "harfbuzz_face.cc" for |HarfBuzzFontCache::GetOrCreateFontData()|
-// implementation.
+void HarfBuzzFontCache::Trace(Visitor* visitor) const {
+  visitor->Trace(font_map_);
+}
 
 }  // namespace blink

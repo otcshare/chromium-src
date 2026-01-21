@@ -14,8 +14,6 @@
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 
-using testing::Mock;
-
 namespace blink {
 
 class CanvasRenderingAPIUkmMetricsTest : public PageTestBase {
@@ -24,36 +22,30 @@ class CanvasRenderingAPIUkmMetricsTest : public PageTestBase {
 
   void SetUp() override {
     PageTestBase::SetUp();
-    InstallTestUkmRecorder();
-    GetDocument().documentElement()->setInnerHTML(
+    GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
         "<body><canvas id='c'></canvas></body>");
-    canvas_element_ = To<HTMLCanvasElement>(GetDocument().getElementById("c"));
+    canvas_element_ =
+        To<HTMLCanvasElement>(GetDocument().getElementById(AtomicString("c")));
     UpdateAllLifecyclePhasesForTest();
   }
 
   void CheckContext(String context_type,
                     CanvasRenderingContext::CanvasRenderingAPI expected_value) {
     CanvasContextCreationAttributesCore attributes;
-    canvas_element_->GetCanvasRenderingContext(context_type, attributes);
+    canvas_element_->GetCanvasRenderingContext(
+        GetDocument().GetExecutionContext(), context_type, attributes);
 
-    auto entries = test_ukm_recorder_->GetEntriesByName(
+    auto entries = recorder_.GetEntriesByName(
         ukm::builders::ClientRenderingAPI::kEntryName);
     EXPECT_EQ(1ul, entries.size());
-    auto* entry = entries[0];
+    auto* entry = entries[0].get();
     ukm::TestUkmRecorder::ExpectEntryMetric(
         entry, ukm::builders::ClientRenderingAPI::kCanvas_RenderingContextName,
         static_cast<int>(expected_value));
   }
 
  private:
-  void InstallTestUkmRecorder() {
-    DCHECK(!test_ukm_recorder_);  // Should be initialized only once.
-    auto temp_recorder = std::make_unique<ukm::TestUkmRecorder>();
-    test_ukm_recorder_ = temp_recorder.get();
-    GetDocument().ukm_recorder_ = std::move(temp_recorder);
-  }
-
-  ukm::TestUkmRecorder* test_ukm_recorder_ = nullptr;
+  ukm::TestAutoSetUkmRecorder recorder_;
   Persistent<HTMLCanvasElement> canvas_element_;
 };
 

@@ -2,22 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/api/offscreen/audio_lifetime_enforcer.h"
+
+#include <optional>
+
 #include "base/run_loop.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/version_info/channel.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "extensions/browser/api/offscreen/audio_lifetime_enforcer.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/offscreen_document_host.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_features.h"
-#include "extensions/common/features/feature_channel.h"
 #include "extensions/test/test_extension_dir.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -68,30 +73,24 @@ class AudioWaiter : public content::WebContentsObserver {
   base::RunLoop run_loop_;
 
   // The eventual desired state.
-  absl::optional<bool> expected_state_;
+  std::optional<bool> expected_state_;
 };
 
 }  // namespace
 
 class AudioLifetimeEnforcerBrowserTest : public ExtensionApiTest {
  public:
-  AudioLifetimeEnforcerBrowserTest() {
-    feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionsOffscreenDocuments);
-  }
+  AudioLifetimeEnforcerBrowserTest() = default;
   ~AudioLifetimeEnforcerBrowserTest() override = default;
 
   // Creates a new OffscreenDocumentHost and waits for it to load.
   std::unique_ptr<OffscreenDocumentHost> CreateOffscreenDocument(
       const Extension& extension,
       const GURL& url) {
-    scoped_refptr<content::SiteInstance> site_instance =
-        ProcessManager::Get(profile())->GetSiteInstanceForURL(url);
-
     content::TestNavigationObserver navigation_observer(url);
     navigation_observer.StartWatchingNewWebContents();
-    auto offscreen_document = std::make_unique<OffscreenDocumentHost>(
-        extension, site_instance.get(), url);
+    auto offscreen_document =
+        std::make_unique<OffscreenDocumentHost>(extension, profile(), url);
     offscreen_document->CreateRendererSoon();
     navigation_observer.Wait();
     EXPECT_TRUE(navigation_observer.last_navigation_succeeded());
@@ -116,9 +115,7 @@ class AudioLifetimeEnforcerBrowserTest : public ExtensionApiTest {
   }
 
  private:
-  ScopedCurrentChannel current_channel_override_{version_info::Channel::CANARY};
   TestExtensionDir test_dir_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that an offscreen document is considered active while playing audio and
@@ -155,14 +152,11 @@ IN_PROC_BROWSER_TEST_F(AudioLifetimeEnforcerBrowserTest,
          audioTag.src = '_test_resources/long_audio.ogg';
          document.body.appendChild(audioTag);
          audioTag.play();
-         window.domAutomationController.send('done');)";
+         'done';)";
 
   {
     AudioWaiter audio_waiter(contents);
-    std::string result;
-    EXPECT_TRUE(
-        content::ExecuteScriptAndExtractString(contents, kPlayAudio, &result));
-    EXPECT_EQ("done", result);
+    EXPECT_EQ("done", content::EvalJs(contents, kPlayAudio));
     audio_waiter.WaitForAudible();
   }
 
@@ -174,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(AudioLifetimeEnforcerBrowserTest,
   // Next, prepare to stop the audio.
   static constexpr char kStopAudio[] =
       R"(document.body.getElementsByTagName('audio')[0].pause();
-         window.domAutomationController.send('done');)";
+         'done';)";
 
   // Override the timeout. We can't do this at the top of the test because
   // otherwise, the document would immediately be considered inactive.
@@ -183,10 +177,8 @@ IN_PROC_BROWSER_TEST_F(AudioLifetimeEnforcerBrowserTest,
 
   {
     // Stop the audio.
-    std::string result;
     AudioWaiter audio_waiter(contents);
-    EXPECT_TRUE(
-        content::ExecuteScriptAndExtractString(contents, kStopAudio, &result));
+    EXPECT_TRUE(content::ExecJs(contents, kStopAudio));
     audio_waiter.WaitForInaudible();
   }
 

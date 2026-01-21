@@ -7,14 +7,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "chromecast/media/api/audio_clock_simulator.h"
 #include "chromecast/media/api/audio_provider.h"
 #include "media/base/audio_bus.h"
 #include "media/base/multi_channel_resampler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromecast {
 namespace media {
@@ -37,7 +38,7 @@ class AudioClockSimulatorImpl : public AudioClockSimulator {
     resample_buffer_ =
         ::media::AudioBus::Create(num_channels_, kDefaultResampleBufferFrames);
     resampler_ = std::make_unique<::media::MultiChannelResampler>(
-        num_channels_, 1.0, ::media::SincResampler::kKernelSize * 2,
+        num_channels_, 1.0, ::media::SincResampler::kSmallRequestSize,
         base::BindRepeating(&AudioClockSimulatorImpl::ResamplerReadCallback,
                             base::Unretained(this)));
     resampler_->PrimeWithSilence();
@@ -62,8 +63,7 @@ class AudioClockSimulatorImpl : public AudioClockSimulator {
   }
 
   double DelayFrames() const override {
-    return resampler_->BufferedFrames() +
-           ::media::SincResampler::kKernelSize / 2;
+    return resampler_->BufferedFrames() + resampler_->KernelSize() / 2;
   }
 
   void SetSampleRate(int sample_rate) override { sample_rate_ = sample_rate; }
@@ -91,7 +91,8 @@ class AudioClockSimulatorImpl : public AudioClockSimulator {
       pending_rate_.reset();
     }
     for (size_t c = 0; c < num_channels_; ++c) {
-      std::copy_n(resample_buffer_->channel(c), num_frames, channel_data[c]);
+      std::copy_n(resample_buffer_->channel(c).data(), num_frames,
+                  UNSAFE_TODO(channel_data[c]));
     }
     return num_frames;
   }
@@ -104,7 +105,7 @@ class AudioClockSimulatorImpl : public AudioClockSimulator {
   void ResamplerReadCallback(int frame_delay, ::media::AudioBus* output) {
     float* channels[kMaxChannels];
     for (size_t c = 0; c < num_channels_; ++c) {
-      channels[c] = output->channel(c);
+      UNSAFE_TODO(channels[c]) = output->channel(c).data();
     }
 
     int64_t timestamp =
@@ -134,7 +135,7 @@ class AudioClockSimulatorImpl : public AudioClockSimulator {
   int64_t request_timestamp_ = 0;
   double resampler_buffered_frames_ = 0.0;
   bool in_fill_ = false;
-  absl::optional<double> pending_rate_;
+  std::optional<double> pending_rate_;
 };
 
 }  // namespace

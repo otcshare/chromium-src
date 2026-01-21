@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "remoting/host/file_transfer/buffered_file_writer.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 #include <utility>
 
@@ -109,7 +109,6 @@ void BufferedFileWriter::SetState(BufferedFileWriter::State state) {
     case kNotStarted:
       // This is the initial state, but should never be reached again.
       NOTREACHED();
-      break;
     case kWorking:
       DCHECK(state_ == kNotStarted || state_ == kWaiting);
       break;

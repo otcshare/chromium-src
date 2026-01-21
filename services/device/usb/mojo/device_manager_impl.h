@@ -6,12 +6,11 @@
 #define SERVICES_DEVICE_USB_MOJO_DEVICE_MANAGER_IMPL_H_
 
 #include <memory>
-#include <queue>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"

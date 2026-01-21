@@ -4,16 +4,15 @@
 
 #include "components/cast_receiver/browser/streaming_receiver_session_client.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/cast/message_port/platform_message_port.h"
 #include "components/cast_receiver/browser/streaming_controller_base.h"
-#include "components/cast_streaming/public/cast_streaming_url.h"
+#include "components/cast_streaming/common/public/cast_streaming_url.h"
 #include "media/base/video_decoder_config.h"
 
 namespace cast_receiver {
@@ -23,7 +22,7 @@ constexpr base::TimeDelta
 
 StreamingReceiverSessionClient::StreamingReceiverSessionClient(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
-    cast_streaming::NetworkContextGetter network_context_getter,
+    network::NetworkContextGetter network_context_getter,
     std::unique_ptr<cast_api_bindings::MessagePort> message_port,
     content::WebContents* web_contents,
     Handler* handler,
@@ -42,7 +41,7 @@ StreamingReceiverSessionClient::StreamingReceiverSessionClient(
 
 StreamingReceiverSessionClient::StreamingReceiverSessionClient(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
-    cast_streaming::NetworkContextGetter network_context_getter,
+    network::NetworkContextGetter network_context_getter,
     std::unique_ptr<StreamingController> streaming_controller,
     Handler* handler,
     cast_receiver::StreamingConfigManager* config_manager,
@@ -155,13 +154,16 @@ void StreamingReceiverSessionClient::OnStreamingConfigSet(
       << "Received updated streaming config during an ongoing session!";
 }
 
-void StreamingReceiverSessionClient::OnAudioConfigUpdated(
-    const ::media::AudioDecoderConfig& audio_config) {}
-
-void StreamingReceiverSessionClient::OnVideoConfigUpdated(
-    const ::media::VideoDecoderConfig& video_config) {
-  handler_->OnResolutionChanged(video_config.visible_rect(),
-                                video_config.video_transformation());
+void StreamingReceiverSessionClient::OnStreamingSessionEnded() {
+  // The streaming session will only "end" (as opposed to being "renegotated"
+  // when a new config is sent or the stream changes between mirroring and
+  // remoting) when the session completely exits. This occurs either when there
+  // is an error in the runtime or the when sender-side ends the streaming
+  // session.
+  //
+  // In either case, the result is an unsupported state for the
+  // StreamingRuntimeApplication, so an error.
+  TriggerError();
 }
 
 void StreamingReceiverSessionClient::TriggerError() {

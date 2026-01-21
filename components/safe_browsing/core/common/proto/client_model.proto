@@ -10,7 +10,7 @@
 // sync with the server-side copy.  Otherwise, the client may not be able to
 // parse the server generated model anymore.  If you want to change this
 // protocol definition or you have questions regarding its format please contact
-// chrome-anti-phishing@googlegroups.com.
+// safebrowsing@chromium.org.
 
 syntax = "proto2";
 
@@ -109,7 +109,9 @@ message ClientSideModel {
 
   optional TfLiteModelMetadata tflite_metadata = 17;
 
-  // next available tag number: 19
+  optional TfLiteModelMetadata img_embedding_metadata = 19;
+
+  // next available tag number: 20
 }
 
 message TfLiteModelMetadata {
@@ -122,6 +124,9 @@ message TfLiteModelMetadata {
 
     // The threshold value
     optional float threshold = 2;
+
+    // The threshold value for ESB users
+    optional float esb_threshold = 3;
   }
 
   // The list of threshold values for each category in the TFLite model. Pages
@@ -132,4 +137,31 @@ message TfLiteModelMetadata {
   // The width and height of the input tensor to the corresponding TFLite model.
   optional int32 input_width = 3;
   optional int32 input_height = 4;
+}
+
+message EmbeddingList {
+  // The version of this list.
+  //
+  // Format: PYYMMDDRR
+  // P: Platform
+  // YY: Year
+  // MM: Month
+  // DD: Day
+  // RR: Revision
+  optional string version = 1;
+  // The version of the embedder that created the embeddings.
+  optional int32 embedder_version = 2;
+  // An embedding.
+  message Embedding {
+    // The unique identifier for this embedding.
+    optional string id = 1;
+    // The version of the embedder that created this embedding.
+    optional int32 embedder_version = 2;
+    // The n-dimensional embedding.
+    repeated float value = 3;
+    // Dictates whether another embedding is "close" to it.
+    optional float threshold = 4;
+  }
+  // The list of image embeddings.
+  repeated Embedding image_embeddings = 3;
 }

@@ -7,11 +7,14 @@
 #include <string>
 #include <tuple>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "build/android_buildflags.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/policy_conversions_client.h"
 #include "components/policy/core/browser/policy_error_map.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_details.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
@@ -55,10 +58,12 @@ class StubPolicyHandler : public ConfigurationPolicyHandler {
 
 class ConfigurationPolicyHandlerListTest : public ::testing::Test {
  public:
-  void SetUp() override { CreateHandlerList(); }
+  void SetUp() override {
+    CreateHandlerList();
+  }
 
   void AddSimplePolicy() {
-    AddPolicy(kPolicyName, /* is_cloud */ true, base::Value(kPolicyValue));
+    AddPolicy(kPolicyName, /*is_cloud=*/true, base::Value(kPolicyValue));
   }
 
   void AddPolicy(const std::string policy_name,
@@ -80,14 +85,14 @@ class ConfigurationPolicyHandlerListTest : public ::testing::Test {
         policies_, &prefs_, &errors_, &deprecated_policies_, &future_policies_);
   }
 
-  void CreateHandlerList(bool allow_all_future_policies = false) {
+  void CreateHandlerList(bool are_future_policies_allowed_by_default = false) {
     handler_list_ = std::make_unique<ConfigurationPolicyHandlerList>(
         ConfigurationPolicyHandlerList::
             PopulatePolicyHandlerParametersCallback(),
         base::BindRepeating(
             &ConfigurationPolicyHandlerListTest::GetPolicyDetails,
             base::Unretained(this)),
-        allow_all_future_policies);
+        are_future_policies_allowed_by_default);
   }
 
   PrefValueMap* prefs() { return &prefs_; }
@@ -125,7 +130,7 @@ class ConfigurationPolicyHandlerListTest : public ::testing::Test {
   PolicyMap policies_;
   PoliciesSet deprecated_policies_;
   PoliciesSet future_policies_;
-  PolicyDetails details_{false, false, false, 0, 0, {}};
+  PolicyDetails details_{false, false, kProfile, 0, 0, {}};
 
   std::unique_ptr<ConfigurationPolicyHandlerList> handler_list_;
 };
@@ -133,39 +138,51 @@ class ConfigurationPolicyHandlerListTest : public ::testing::Test {
 TEST_F(ConfigurationPolicyHandlerListTest, ApplySettingsWithNormalPolicy) {
   AddSimplePolicy();
   ApplySettings();
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true);
 }
 
 // Future policy will be filter out unless it's whitelisted by
-// kEnableExperimentalPolicies.
+// kEnableExperimentalPolicies or the feature kFuturePoliciesOnDesktopAndroid is
+// enabled (for Desktop Android dogfooders).
 TEST_F(ConfigurationPolicyHandlerListTest, ApplySettingsWithFuturePolicy) {
+
   AddSimplePolicy();
   details()->is_future = true;
 
   ApplySettings();
 
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ false,
-                      /* in_deprecated */ false, /* in_future */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/false,
+                      /*in_deprecated=*/false, /*in_future=*/true);
+
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+  // Future policy will not be filtered out if kFuturePoliciesOnDesktopAndroid
+  // is enabled (for Desktop Android dogfooders, see
+  // https://crbug.com/452666657).
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kFuturePoliciesOnDesktopAndroid);
+
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true);
+#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
 
   // Whitelist a different policy.
   base::Value::List enabled_future_policies;
   enabled_future_policies.Append(kPolicyName2);
-  AddPolicy(key::kEnableExperimentalPolicies, /* is_cloud */ true,
+  AddPolicy(key::kEnableExperimentalPolicies, /*is_cloud=*/true,
             base::Value(enabled_future_policies.Clone()));
 
   ApplySettings();
 
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ false,
-                      /* in_deprecated */ false, /* in_future */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/false,
+                      /*in_deprecated=*/false, /*in_future=*/true);
 
   // Whitelist the policy.
   enabled_future_policies.Append(base::Value(kPolicyName));
-  AddPolicy(key::kEnableExperimentalPolicies, /* is_cloud */ true,
+  AddPolicy(key::kEnableExperimentalPolicies, /*is_cloud=*/true,
             base::Value(std::move(enabled_future_policies)));
 
   ApplySettings();
 
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true);
 }
 
 TEST_F(ConfigurationPolicyHandlerListTest,
@@ -176,22 +193,22 @@ TEST_F(ConfigurationPolicyHandlerListTest,
 
   ApplySettings();
 
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true);
 }
 
-// Device platform policy will be fitered out.
+// Device platform policy will be filtered out.
 TEST_F(ConfigurationPolicyHandlerListTest,
        ApplySettingsWithPlatformDevicePolicy) {
   AddSimplePolicy();
-  details()->is_device_policy = true;
+  details()->scope = kDevice;
 
   ApplySettings();
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true);
 
-  AddPolicy(kPolicyName2, /* is_cloud */ false, base::Value(kPolicyValue));
+  AddPolicy(kPolicyName2, /*is_cloud=*/false, base::Value(kPolicyValue));
 
   ApplySettings();
-  VerifyPolicyAndPref(kPolicyName2, /* in_pref */ false);
+  VerifyPolicyAndPref(kPolicyName2, /*in_pref=*/false);
 }
 
 // Deprecated policy won't be filtered out.
@@ -200,7 +217,7 @@ TEST_F(ConfigurationPolicyHandlerListTest, ApplySettingsWithDeprecatedPolicy) {
   details()->is_deprecated = true;
 
   ApplySettings();
-  VerifyPolicyAndPref(kPolicyName, /* in_pref */ true, /* in_deprecated*/ true);
+  VerifyPolicyAndPref(kPolicyName, /*in_pref=*/true, /*in_deprecated=*/true);
 }
 
 }  // namespace policy

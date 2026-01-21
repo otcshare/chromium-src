@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 #include "third_party/blink/renderer/core/timing/performance_mark.h"
 
+#include <optional>
+
 #include "third_party/blink/public/mojom/timing/performance_mark_or_measure.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
@@ -23,9 +25,9 @@ PerformanceMark::PerformanceMark(
     base::TimeTicks unsafe_time_for_traces,
     scoped_refptr<SerializedScriptValue> serialized_detail,
     ExceptionState& exception_state,
-    uint32_t navigation_id,
-    DOMWindow* source)
-    : PerformanceEntry(name, start_time, start_time, navigation_id, source),
+    DOMWindow* source,
+    uint32_t navigation_id)
+    : PerformanceEntry(/*duration=*/0.0, name, start_time, source, navigation_id),
       serialized_detail_(std::move(serialized_detail)),
       unsafe_time_for_traces_(unsafe_time_for_traces) {}
 
@@ -47,13 +49,13 @@ PerformanceMark* PerformanceMark::Create(ScriptState* script_state,
 
   DOMHighResTimeStamp start = 0.0;
   base::TimeTicks unsafe_start_for_traces;
-  ScriptValue detail = ScriptValue::CreateNull(script_state->GetIsolate());
+  std::optional<ScriptValue> detail;
   if (mark_options) {
     if (mark_options->hasStartTime()) {
       start = mark_options->startTime();
       if (start < 0.0) {
-        exception_state.ThrowTypeError("'" + mark_name +
-                                       "' cannot have a negative start time.");
+        exception_state.ThrowTypeError(
+            StrCat({"'", mark_name, "' cannot have a negative start time."}));
         return nullptr;
       }
       // |start| is in milliseconds from the start of navigation.
@@ -78,23 +80,28 @@ PerformanceMark* PerformanceMark::Create(ScriptState* script_state,
       PerformanceTiming::IsAttributeName(mark_name)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "'" + mark_name +
-            "' is part of the PerformanceTiming interface, and "
-            "cannot be used as a mark name.");
+        StrCat({"'", mark_name,
+                "' is part of the PerformanceTiming interface, and cannot be "
+                "used as a mark name."}));
     return nullptr;
   }
 
-  scoped_refptr<SerializedScriptValue> serialized_detail =
-      SerializedScriptValue::Serialize(
-          script_state->GetIsolate(), detail.V8Value(),
-          SerializedScriptValue::SerializeOptions(), exception_state);
-  if (exception_state.HadException())
-    return nullptr;
+  scoped_refptr<SerializedScriptValue> serialized_detail;
+  if (!detail) {
+    serialized_detail = nullptr;
+  } else {
+    serialized_detail = SerializedScriptValue::Serialize(
+        script_state->GetIsolate(), (*detail).V8Value(),
+        SerializedScriptValue::SerializeOptions(), exception_state);
+    if (exception_state.HadException()) {
+      return nullptr;
+    }
+  }
 
-  uint32_t navigation_id = PerformanceEntry::GetNavigationId(script_state);
   return MakeGarbageCollected<PerformanceMark>(
       mark_name, start, unsafe_start_for_traces, std::move(serialized_detail),
-      exception_state, navigation_id, LocalDOMWindow::From(script_state));
+      exception_state, LocalDOMWindow::From(script_state),
+      performance->NavigationId());
 }
 
 const AtomicString& PerformanceMark::entryType() const {
@@ -109,7 +116,10 @@ mojom::blink::PerformanceMarkOrMeasurePtr
 PerformanceMark::ToMojoPerformanceMarkOrMeasure() {
   auto mojo_performance_mark_or_measure =
       PerformanceEntry::ToMojoPerformanceMarkOrMeasure();
-  mojo_performance_mark_or_measure->detail = serialized_detail_->GetWireData();
+  if (serialized_detail_) {
+    mojo_performance_mark_or_measure->detail =
+        serialized_detail_->GetWireData();
+  }
   return mojo_performance_mark_or_measure;
 }
 
@@ -126,6 +136,47 @@ ScriptValue PerformanceMark::detail(ScriptState* script_state) {
   v8::Local<v8::Value> value = serialized_detail_->Deserialize(isolate);
   relevant_data.Reset(isolate, value);
   return ScriptValue(isolate, value);
+}
+
+// static
+const PerformanceMark::UserFeatureNameToWebFeatureMap&
+PerformanceMark::GetUseCounterMapping() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(
+      ThreadSpecific<UserFeatureNameToWebFeatureMap>, map, ());
+  if (!map.IsSet()) {
+    *map = {
+        {"NgOptimizedImage", WebFeature::kUserFeatureNgOptimizedImage},
+        {"NgAfterRender", WebFeature::kUserFeatureNgAfterRender},
+        {"NgHydration", WebFeature::kUserFeatureNgHydration},
+        {"next-third-parties-ga", WebFeature::kUserFeatureNextThirdPartiesGA},
+        {"next-third-parties-gtm", WebFeature::kUserFeatureNextThirdPartiesGTM},
+        {"next-third-parties-YouTubeEmbed",
+         WebFeature::kUserFeatureNextThirdPartiesYouTubeEmbed},
+        {"next-third-parties-GoogleMapsEmbed",
+         WebFeature::kUserFeatureNextThirdPartiesGoogleMapsEmbed},
+        {"nuxt-image", WebFeature::kUserFeatureNuxtImage},
+        {"nuxt-picture", WebFeature::kUserFeatureNuxtPicture},
+        {"nuxt-third-parties-ga", WebFeature::kUserFeatureNuxtThirdPartiesGA},
+        {"nuxt-third-parties-gtm", WebFeature::kUserFeatureNuxtThirdPartiesGTM},
+        {"nuxt-third-parties-YouTubeEmbed",
+         WebFeature::kUserFeatureNuxtThirdPartiesYouTubeEmbed},
+        {"nuxt-third-parties-GoogleMaps",
+         WebFeature::kUserFeatureNuxtThirdPartiesGoogleMaps},
+    };
+  }
+  return *map;
+}
+
+// static
+std::optional<mojom::blink::WebFeature>
+PerformanceMark::GetWebFeatureForUserFeatureName(const String& feature_name) {
+  auto& feature_map = PerformanceMark::GetUseCounterMapping();
+  auto it = feature_map.find(feature_name);
+  if (it == feature_map.end()) {
+    return std::nullopt;
+  }
+
+  return it->value;
 }
 
 void PerformanceMark::Trace(Visitor* visitor) const {

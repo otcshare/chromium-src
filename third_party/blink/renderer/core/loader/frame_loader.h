@@ -34,10 +34,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_FRAME_LOADER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/callback_helpers.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/loader/code_cache.mojom-blink-forward.h"
@@ -52,7 +51,6 @@
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
-#include "third_party/blink/renderer/core/loader/old_document_info_for_commit.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -62,7 +60,6 @@ namespace blink {
 
 class DocumentLoader;
 class FetchClientSettingsObject;
-class Frame;
 class LocalFrame;
 class LocalFrameClient;
 class PolicyContainer;
@@ -76,6 +73,7 @@ struct WebNavigationParams;
 
 CORE_EXPORT bool IsBackForwardLoadType(WebFrameLoadType);
 CORE_EXPORT bool IsReloadLoadType(WebFrameLoadType);
+CORE_EXPORT bool IsBackForwardOrRestore(WebFrameLoadType);
 
 class CORE_EXPORT FrameLoader final {
   DISALLOW_NEW();
@@ -89,7 +87,8 @@ class CORE_EXPORT FrameLoader final {
   void Init(const DocumentToken& document_token,
             std::unique_ptr<PolicyContainer> policy_container,
             const StorageKey& storage_key,
-            ukm::SourceId document_ukm_source_id);
+            ukm::SourceId document_ukm_source_id,
+            const KURL& creator_base_url);
 
   ResourceRequest ResourceRequestForReload(
       WebFrameLoadType,
@@ -147,9 +146,7 @@ class CORE_EXPORT FrameLoader final {
   void DidExplicitOpen();
 
   String UserAgent() const;
-  String FullUserAgent() const;
-  String ReducedUserAgent() const;
-  absl::optional<blink::UserAgentMetadata> UserAgentMetadata() const;
+  std::optional<blink::UserAgentMetadata> UserAgentMetadata() const;
 
   void DispatchDidClearWindowObjectInMainWorld();
   void DispatchDidClearDocumentOfWindowObject();
@@ -171,12 +168,6 @@ class CORE_EXPORT FrameLoader final {
       const FetchClientSettingsObject* fetch_client_settings_object,
       LocalDOMWindow* window_for_logging,
       mojom::RequestContextFrameType) const;
-  void ReportLegacyTLSVersion(const KURL& url,
-                              bool is_subresource,
-                              bool is_ad_resource);
-
-  Frame* Opener();
-  void SetOpener(LocalFrame*);
 
   void Detach();
 
@@ -187,8 +178,9 @@ class CORE_EXPORT FrameLoader final {
   void ProcessScrollForSameDocumentNavigation(
       const KURL&,
       WebFrameLoadType,
-      absl::optional<HistoryItem::ViewState>,
-      mojom::blink::ScrollRestorationType);
+      std::optional<HistoryItem::ViewState>,
+      mojom::blink::ScrollRestorationType,
+      mojom::blink::ScrollBehavior scroll_behavior);
 
   // This will attempt to detach the current document. It will dispatch unload
   // events and abort XHR requests. Returns true if the frame is ready to
@@ -211,6 +203,7 @@ class CORE_EXPORT FrameLoader final {
   void SaveScrollState();
   void RestoreScrollPositionAndViewState();
 
+  bool IsCommittingNavigation() const { return committing_navigation_; }
   bool HasProvisionalNavigation() const {
     return committing_navigation_ || client_navigation_.get();
   }
@@ -261,11 +254,11 @@ class CORE_EXPORT FrameLoader final {
 
   void WriteIntoTrace(perfetto::TracedValue context) const;
 
+  bool AllowRequestForThisFrame(const FrameLoadRequest&);
+
   mojo::PendingRemote<mojom::blink::CodeCacheHost> CreateWorkerCodeCacheHost();
 
  private:
-  bool AllowRequestForThisFrame(const FrameLoadRequest&);
-
   bool ShouldPerformFragmentNavigation(bool is_form_submission,
                                        const String& http_method,
                                        WebFrameLoadType,
@@ -278,9 +271,11 @@ class CORE_EXPORT FrameLoader final {
   // Clears any information about client navigation, see client_navigation_.
   void ClearClientNavigation();
 
-  void RestoreScrollPositionAndViewState(WebFrameLoadType,
-                                         const HistoryItem::ViewState&,
-                                         mojom::blink::ScrollRestorationType);
+  void RestoreScrollPositionAndViewState(
+      WebFrameLoadType,
+      const HistoryItem::ViewState&,
+      mojom::blink::ScrollRestorationType,
+      mojom::blink::ScrollBehavior scroll_behavior);
 
   void DetachDocumentLoader(Member<DocumentLoader>&,
                             bool flush_microtask_queue = false);
@@ -294,7 +289,7 @@ class CORE_EXPORT FrameLoader final {
 
   LocalFrameClient* Client() const;
 
-  String ApplyUserAgentOverrideAndLog(const String& user_agent) const;
+  String ApplyUserAgentOverride(const String& user_agent) const;
 
   // This struct holds information about a navigation, which is being
   // initiated by the client through the browser process, until the navigation

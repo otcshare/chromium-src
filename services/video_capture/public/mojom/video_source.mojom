@@ -13,7 +13,7 @@ enum CreatePushSubscriptionSuccessCode {
   kCreatedWithDifferentSettings,
 };
 
-union CreatePushSubscriptionResultCode{
+union CreatePushSubscriptionResultCode {
   CreatePushSubscriptionSuccessCode success_code;
   media.mojom.VideoCaptureError error_code;
 };
@@ -37,18 +37,15 @@ interface PushVideoStreamSubscription {
 
   Resume();
 
-  GetPhotoState()
-      => (media.mojom.PhotoState? capabilities);
+  GetPhotoState() => (media.mojom.PhotoState? capabilities);
   // Sets controls such as focus/zoom/white balance etc.
   // Note, depending on the implementation, some of these settings may or may
   // not affect the live video stream while others may only take effect during
   // TakePhoto().
   // Note, these settings affect the device globally, i.e. they may affect
   // other subscribers if there are any.
-  SetPhotoOptions(media.mojom.PhotoSettings settings)
-      => (bool success);
-  TakePhoto()
-      => (media.mojom.Blob? blob);
+  SetPhotoOptions(media.mojom.PhotoSettings settings) => (bool success);
+  TakePhoto() => (media.mojom.Blob? blob);
 
   // Closes the subscription. The callback indicates when the closing is
   // complete. After closing is complete, the subscriber will no longer receive
@@ -67,6 +64,8 @@ interface PushVideoStreamSubscription {
 
 // Provides shared access to a specific video source to potentially multiple
 // subscribers.
+// Hosted in VideoSourceImpl running in VideoCaptureService process, that has no
+// sandbox except on Fuchsia.
 interface VideoSource {
   // Creates a subscription to the video source that will push video frames to
   // |subscriber| once it is activated. If this is the first subscriber, or if

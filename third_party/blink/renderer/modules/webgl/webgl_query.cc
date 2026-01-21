@@ -7,33 +7,35 @@
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_context_object_support.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
-WebGLQuery::WebGLQuery(WebGL2RenderingContextBase* ctx)
-    : WebGLSharedPlatform3DObject(ctx),
+WebGLQuery::WebGLQuery(WebGLContextObjectSupport* ctx)
+    : WebGLObject(ctx),
       target_(0),
       can_update_availability_(false),
       query_result_available_(false),
       query_result_(0),
       task_runner_(ctx->GetContextTaskRunner()) {
-  GLuint query;
-  ctx->ContextGL()->GenQueriesEXT(1, &query);
-  SetObject(query);
+  if (!ctx->IsLost()) {
+    GLuint query;
+    ctx->ContextGL()->GenQueriesEXT(1, &query);
+    SetObject(query);
+  }
 }
 
 WebGLQuery::~WebGLQuery() = default;
 
 void WebGLQuery::SetTarget(GLenum target) {
-  DCHECK(Object());
+  DCHECK(HasObject());
   DCHECK(!target_);
   target_ = target;
 }
 
 void WebGLQuery::DeleteObjectImpl(gpu::gles2::GLES2Interface* gl) {
-  gl->DeleteQueriesEXT(1, &object_);
-  object_ = 0;
+  gl->DeleteQueriesEXT(1, &Object());
 }
 
 void WebGLQuery::ResetCachedResult() {
@@ -47,6 +49,8 @@ void WebGLQuery::ResetCachedResult() {
 }
 
 void WebGLQuery::UpdateCachedResult(gpu::gles2::GLES2Interface* gl) {
+  // Context loss is checked at higher levels.
+
   if (query_result_available_)
     return;
 
@@ -62,8 +66,8 @@ void WebGLQuery::UpdateCachedResult(gpu::gles2::GLES2Interface* gl) {
   gl->GetQueryObjectuivEXT(Object(), GL_QUERY_RESULT_AVAILABLE_EXT, &available);
   query_result_available_ = !!available;
   if (query_result_available_) {
-    GLuint result = 0;
-    gl->GetQueryObjectuivEXT(Object(), GL_QUERY_RESULT_EXT, &result);
+    GLuint64 result = 0;
+    gl->GetQueryObjectui64vEXT(Object(), GL_QUERY_RESULT_EXT, &result);
     query_result_ = result;
     task_handle_.Cancel();
   } else {
@@ -75,17 +79,16 @@ bool WebGLQuery::IsQueryResultAvailable() {
   return query_result_available_;
 }
 
-GLuint WebGLQuery::GetQueryResult() {
+GLuint64 WebGLQuery::GetQueryResult() {
   return query_result_;
 }
 
 void WebGLQuery::ScheduleAllowAvailabilityUpdate() {
   if (task_handle_.IsActive())
     return;
-  task_handle_ =
-      PostCancellableTask(*task_runner_, FROM_HERE,
-                          WTF::BindOnce(&WebGLQuery::AllowAvailabilityUpdate,
-                                        WrapWeakPersistent(this)));
+  task_handle_ = PostCancellableTask(
+      *task_runner_, FROM_HERE,
+      BindOnce(&WebGLQuery::AllowAvailabilityUpdate, WrapWeakPersistent(this)));
 }
 
 void WebGLQuery::AllowAvailabilityUpdate() {

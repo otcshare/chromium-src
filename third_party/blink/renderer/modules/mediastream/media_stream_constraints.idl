@@ -2,23 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// https://github.com/w3c/mediacapture-screen-share/pull/222/files
-enum SystemAudioPreferenceEnum {
-  "include",
-  "exclude"
-};
+enum DisplayMediaIncludeOrExclude { "include", "exclude" };
+enum DisplayMediaSystemWindowOrExclude { "system", "window", "exclude" };
 
-// https://github.com/w3c/mediacapture-screen-share/pull/216/files
-enum SelfCapturePreferenceEnum {
-  "include",
-  "exclude"
-};
-
-// https://github.com/w3c/mediacapture-screen-share/pull/225/files
-enum SurfaceSwitchingPreferenceEnum {
-  "include",
-  "exclude"
-};
+typedef DisplayMediaIncludeOrExclude SystemAudioPreferenceEnum;
+typedef DisplayMediaSystemWindowOrExclude WindowAudioPreferenceEnum;
+typedef DisplayMediaIncludeOrExclude SelfCapturePreferenceEnum;
+typedef DisplayMediaIncludeOrExclude SurfaceSwitchingPreferenceEnum;
+typedef DisplayMediaIncludeOrExclude MonitorTypeSurfacesEnum;
 
 // https://w3c.github.io/mediacapture-main/#idl-def-mediastreamconstraints
 // The name differs from the spec because the name MediaStreamConstraints
@@ -27,8 +18,6 @@ enum SurfaceSwitchingPreferenceEnum {
 dictionary UserMediaStreamConstraints {
     (boolean or MediaTrackConstraints) video = false;
     (boolean or MediaTrackConstraints) audio = false;
-    // TODO(crbug.com/1382520): Remove the controller.
-    [RuntimeEnabled = CaptureController] CaptureController controller;
 };
 
 // https://www.w3.org/TR/screen-capture/#dom-displaymediastreamoptions
@@ -38,29 +27,18 @@ dictionary DisplayMediaStreamOptions {
 
     // https://wicg.github.io/prefer-current-tab/#prefer-current-tab
     boolean preferCurrentTab = false;
-    [
-      RuntimeEnabled = GetDisplayMediaSetAutoSelectAllScreens
-    ] boolean autoSelectAllScreens = false;
 
     // https://w3c.github.io/mediacapture-screen-share/#dom-displaymediastreamoptions-controller
     [
       RuntimeEnabled = CaptureController
     ] CaptureController controller;
 
-    // https://github.com/w3c/mediacapture-screen-share/pull/216/files
-    [
-      RuntimeEnabled = SelfBrowserSurfaceConstraint
-    ] SelfCapturePreferenceEnum selfBrowserSurface;
-
-    // https://github.com/w3c/mediacapture-screen-share/pull/222/files
-    [
-      RuntimeEnabled = SystemAudioConstraint
-    ] SystemAudioPreferenceEnum systemAudio;
-
-    // https://github.com/w3c/mediacapture-screen-share/pull/225/files
-    [
-      RuntimeEnabled = SurfaceSwitchingConstraint
-    ] SurfaceSwitchingPreferenceEnum surfaceSwitching;
+    SelfCapturePreferenceEnum selfBrowserSurface;
+    SystemAudioPreferenceEnum systemAudio;
+    [RuntimeEnabled = GetDisplayMediaWindowAudioCapture]
+        WindowAudioPreferenceEnum windowAudio;
+    SurfaceSwitchingPreferenceEnum surfaceSwitching;
+    MonitorTypeSurfacesEnum monitorTypeSurfaces;
 };
 
 // This dictionnary is used internally to hold all members from
@@ -72,9 +50,15 @@ dictionary MediaStreamConstraints {
     (boolean or MediaTrackConstraints) video = false;
     (boolean or MediaTrackConstraints) audio = false;
     boolean preferCurrentTab = false;
-    boolean autoSelectAllScreens = false;
     CaptureController controller;
     SelfCapturePreferenceEnum selfBrowserSurface;
     SystemAudioPreferenceEnum systemAudio;
+    [RuntimeEnabled = GetDisplayMediaWindowAudioCapture]
+        WindowAudioPreferenceEnum windowAudio;
     SurfaceSwitchingPreferenceEnum surfaceSwitching;
+    MonitorTypeSurfacesEnum monitorTypeSurfaces;
+};
+
+dictionary AudioOutputOptions {
+  DOMString deviceId = "";
 };

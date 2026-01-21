@@ -26,9 +26,9 @@ class DlpRulesManagerFactory : public ProfileKeyedServiceFactory {
   DlpRulesManagerFactory();
   ~DlpRulesManagerFactory() override = default;
 
-  // BrowserStateKeyedServiceFactory overrides:
+  // BrowserContextKeyedServiceFactory overrides:
   bool ServiceIsCreatedWithBrowserContext() const override;
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
 };
 

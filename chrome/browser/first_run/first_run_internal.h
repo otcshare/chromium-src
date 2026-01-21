@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_FIRST_RUN_FIRST_RUN_INTERNAL_H_
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 namespace base {
 class FilePath;
@@ -21,6 +20,25 @@ namespace first_run {
 struct MasterPrefs;
 
 namespace internal {
+
+// UMA enum for tracking import bookmarks from Initial Preferences on First
+// Run results.
+// These values are persisted to logs. Entries should not be
+// renumbered and numeric values should never be reused.
+//
+// LINT.IfChange(FirstRunImportBookmarksResult)
+enum class FirstRunImportBookmarksResult {
+  // Bookmarks imported successfully.
+  kSuccess = 0,
+
+  // Import failed due to missing/malformed data.
+  kInvalidDict = 1,
+
+  // Import failed due to profile not supporting BookmarkModel.
+  kInvalidProfile = 2,
+  kMaxValue = kInvalidProfile,
+};
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:FirstRunImportBookmarksResult)
 
 enum FirstRunState {
   FIRST_RUN_UNKNOWN,  // The state is not tested or set yet.
@@ -53,6 +71,12 @@ base::FilePath InitialPrefsPath();
 FirstRunState DetermineFirstRunState(bool has_sentinel,
                                      bool force_first_run,
                                      bool no_first_run);
+
+#if BUILDFLAG(IS_LINUX)
+// Shows the EULA dialog if required. Returns true if the EULA is accepted
+// or not required. Returns false if the EULA has not been accepted.
+bool ShowEulaDialog();
+#endif
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 // For testing, forces the first run dialog to either be shown or not. If not

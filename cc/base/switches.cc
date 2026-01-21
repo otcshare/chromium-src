@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 
-namespace cc {
 namespace switches {
 
 const char kDisableThreadedAnimation[] = "disable-threaded-animation";
@@ -52,6 +51,9 @@ const char kEnableGpuBenchmarking[] = "enable-gpu-benchmarking";
 const char kDisableLayerTreeHostMemoryPressure[] =
     "disable-layer-tree-host-memory-pressure";
 
+// Controls the number of threads to use for raster tasks.
+const char kNumRasterThreads[] = "num-raster-threads";
+
 // Renders a border around compositor layers to help debug and study
 // layer compositing.
 const char kShowCompositedLayerBorders[] = "show-composited-layer-borders";
@@ -65,6 +67,13 @@ const char kCompositedLayerBorders[] = "layer";
 // Checks and logs double background blur as an error if any.
 const char kLogOnUIDoubleBackgroundBlur[] = "log-on-ui-double-background-blur";
 #endif
+
+// Save CompositorFrame data in both renderer and gpu process for TreesInViz
+// and TreeAnimationsInViz. This doesn't work without --no-sandbox.
+// If no parameters are specified, by default, it records frame 1 - 10.
+// If --dump-compositor-frame=begin,end is specified, it records frame
+// [begin, end] inclusive.
+const char kDumpCompositorFrame[] = "dump-compositor-frame";
 
 // Draws a heads-up-display showing Frames Per Second as well as GPU memory
 // usage. If you also use --enable-logging=stderr --vmodule="head*=1" then FPS
@@ -90,19 +99,9 @@ const char kUIShowSurfaceDamageRects[] = "ui-show-surface-damage-rects";
 const char kShowScreenSpaceRects[] = "show-screenspace-rects";
 const char kUIShowScreenSpaceRects[] = "ui-show-screenspace-rects";
 
-// Highlights layers that can't use lcd text. Layers containing no text won't
-// be highlighted. See DebugColors::NonLCDTextHighlightColor() for the colors.
-const char kHighlightNonLCDTextLayers[] = "highlight-non-lcd-text-layers";
-
-// Switches the ui compositor to use layer lists instead of layer trees.
-const char kUIEnableLayerLists[] = "ui-enable-layer-lists";
-
-// Enables the resume method on animated images.
-const char kAnimatedImageResume[] = "animated-image-resume";
-
 // Allows scaling clipped images in GpuImageDecodeCache. Note that this may
 // cause color-bleeding.
-// TODO(crbug.com/1157548): Remove this workaround flag once the underlying
+// TODO(crbug.com/40160880): Remove this workaround flag once the underlying
 // cache problems are solved.
 const char kEnableClippedImageScaling[] = "enable-scaling-clipped-images";
 
@@ -117,4 +116,3 @@ const char kCCScrollAnimationDurationForTesting[] =
     "cc-scroll-animation-duration-in-seconds";
 
 }  // namespace switches
-}  // namespace cc

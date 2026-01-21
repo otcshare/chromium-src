@@ -7,7 +7,7 @@
 /* at a redacted point in time
  */
 /* Compiler settings for gen/chrome/updater/app/server/win/updater_internal_idl.idl:
-    Oicf, W1, Zp8, env=Win64 (32b run), target_arch=ARM64 8.01.0626 
+    Oicf, W1, Zp8, env=Win64 (32b run), target_arch=ARM64 8.01.0628 
     protocol : dce , ms_ext, c_ext, robust
     error checks: allocation ref bounds_check enum stub_data 
     VC __declspec() decoration level: 
@@ -44,7 +44,7 @@
 #endif
 
 #ifndef DECLSPEC_XFGVIRT
-#if _CONTROL_FLOW_GUARD_XFG
+#if defined(_CONTROL_FLOW_GUARD_XFG)
 #define DECLSPEC_XFGVIRT(base, func) __declspec(xfg_virtual(base, func))
 #else
 #define DECLSPEC_XFGVIRT(base, func)
@@ -119,27 +119,6 @@ typedef struct UpdaterInternalSystemClass UpdaterInternalSystemClass;
 #endif 	/* __UpdaterInternalSystemClass_FWD_DEFINED__ */
 
 
-#ifndef __IUpdaterInternalUser_FWD_DEFINED__
-#define __IUpdaterInternalUser_FWD_DEFINED__
-typedef interface IUpdaterInternalUser IUpdaterInternalUser;
-
-#endif 	/* __IUpdaterInternalUser_FWD_DEFINED__ */
-
-
-#ifndef __IUpdaterInternalSystem_FWD_DEFINED__
-#define __IUpdaterInternalSystem_FWD_DEFINED__
-typedef interface IUpdaterInternalSystem IUpdaterInternalSystem;
-
-#endif 	/* __IUpdaterInternalSystem_FWD_DEFINED__ */
-
-
-#ifndef __IUpdaterInternalCallback_FWD_DEFINED__
-#define __IUpdaterInternalCallback_FWD_DEFINED__
-typedef interface IUpdaterInternalCallback IUpdaterInternalCallback;
-
-#endif 	/* __IUpdaterInternalCallback_FWD_DEFINED__ */
-
-
 #ifndef __IUpdaterInternalCallbackUser_FWD_DEFINED__
 #define __IUpdaterInternalCallbackUser_FWD_DEFINED__
 typedef interface IUpdaterInternalCallbackUser IUpdaterInternalCallbackUser;
@@ -152,6 +131,20 @@ typedef interface IUpdaterInternalCallbackUser IUpdaterInternalCallbackUser;
 typedef interface IUpdaterInternalCallbackSystem IUpdaterInternalCallbackSystem;
 
 #endif 	/* __IUpdaterInternalCallbackSystem_FWD_DEFINED__ */
+
+
+#ifndef __IUpdaterInternalUser_FWD_DEFINED__
+#define __IUpdaterInternalUser_FWD_DEFINED__
+typedef interface IUpdaterInternalUser IUpdaterInternalUser;
+
+#endif 	/* __IUpdaterInternalUser_FWD_DEFINED__ */
+
+
+#ifndef __IUpdaterInternalSystem_FWD_DEFINED__
+#define __IUpdaterInternalSystem_FWD_DEFINED__
+typedef interface IUpdaterInternalSystem IUpdaterInternalSystem;
+
+#endif 	/* __IUpdaterInternalSystem_FWD_DEFINED__ */
 
 
 /* header files for imported files */
@@ -167,7 +160,7 @@ extern "C"{
 #define __IUpdaterInternalCallback_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternalCallback */
-/* [object][unique][helpstring][uuid] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternalCallback;
@@ -251,7 +244,7 @@ EXTERN_C const IID IID_IUpdaterInternalCallback;
 #define __IUpdaterInternalCallbackUser_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternalCallbackUser */
-/* [unique][helpstring][uuid][dual][object] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternalCallbackUser;
@@ -259,9 +252,12 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackUser;
 #if defined(__cplusplus) && !defined(CINTERFACE)
     
     MIDL_INTERFACE("618D9B82-9F51-4490-AF24-BB80489E1537")
-    IUpdaterInternalCallbackUser : public IUpdaterInternalCallback
+    IUpdaterInternalCallbackUser : public IUnknown
     {
     public:
+        virtual HRESULT STDMETHODCALLTYPE Run( 
+            /* [in] */ LONG result) = 0;
+        
     };
     
     
@@ -286,7 +282,7 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackUser;
         ULONG ( STDMETHODCALLTYPE *Release )( 
             IUpdaterInternalCallbackUser * This);
         
-        DECLSPEC_XFGVIRT(IUpdaterInternalCallback, Run)
+        DECLSPEC_XFGVIRT(IUpdaterInternalCallbackUser, Run)
         HRESULT ( STDMETHODCALLTYPE *Run )( 
             IUpdaterInternalCallbackUser * This,
             /* [in] */ LONG result);
@@ -317,7 +313,6 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackUser;
 #define IUpdaterInternalCallbackUser_Run(This,result)	\
     ( (This)->lpVtbl -> Run(This,result) ) 
 
-
 #endif /* COBJMACROS */
 
 
@@ -333,7 +328,7 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackUser;
 #define __IUpdaterInternalCallbackSystem_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternalCallbackSystem */
-/* [unique][helpstring][uuid][dual][object] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternalCallbackSystem;
@@ -341,9 +336,12 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackSystem;
 #if defined(__cplusplus) && !defined(CINTERFACE)
     
     MIDL_INTERFACE("7E806C73-B2A4-4BC5-BDAD-2249D87F67FC")
-    IUpdaterInternalCallbackSystem : public IUpdaterInternalCallback
+    IUpdaterInternalCallbackSystem : public IUnknown
     {
     public:
+        virtual HRESULT STDMETHODCALLTYPE Run( 
+            /* [in] */ LONG result) = 0;
+        
     };
     
     
@@ -368,7 +366,7 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackSystem;
         ULONG ( STDMETHODCALLTYPE *Release )( 
             IUpdaterInternalCallbackSystem * This);
         
-        DECLSPEC_XFGVIRT(IUpdaterInternalCallback, Run)
+        DECLSPEC_XFGVIRT(IUpdaterInternalCallbackSystem, Run)
         HRESULT ( STDMETHODCALLTYPE *Run )( 
             IUpdaterInternalCallbackSystem * This,
             /* [in] */ LONG result);
@@ -399,7 +397,6 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackSystem;
 #define IUpdaterInternalCallbackSystem_Run(This,result)	\
     ( (This)->lpVtbl -> Run(This,result) ) 
 
-
 #endif /* COBJMACROS */
 
 
@@ -415,7 +412,7 @@ EXTERN_C const IID IID_IUpdaterInternalCallbackSystem;
 #define __IUpdaterInternal_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternal */
-/* [object][unique][helpstring][uuid] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternal;
@@ -510,7 +507,7 @@ EXTERN_C const IID IID_IUpdaterInternal;
 #define __IUpdaterInternalUser_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternalUser */
-/* [unique][helpstring][uuid][dual][object] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternalUser;
@@ -605,7 +602,7 @@ EXTERN_C const IID IID_IUpdaterInternalUser;
 #define __IUpdaterInternalSystem_INTERFACE_DEFINED__
 
 /* interface IUpdaterInternalSystem */
-/* [unique][helpstring][uuid][dual][object] */ 
+/* [unique][helpstring][uuid][oleautomation][object] */ 
 
 
 EXTERN_C const IID IID_IUpdaterInternalSystem;

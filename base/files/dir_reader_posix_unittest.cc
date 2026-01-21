@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,8 +26,9 @@ namespace base {
 TEST(DirReaderPosixUnittest, Read) {
   static const unsigned kNumFiles = 100;
 
-  if (DirReaderPosix::IsFallback())
+  if (DirReaderPosix::IsFallback()) {
     return;
+  }
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -51,25 +53,27 @@ TEST(DirReaderPosixUnittest, Read) {
   DirReaderPosix reader(dir);
   EXPECT_TRUE(reader.IsValid());
 
-  if (!reader.IsValid())
+  if (!reader.IsValid()) {
     return;
+  }
 
   bool seen_dot = false, seen_dotdot = false;
 
-  for (; reader.Next(); ) {
-    if (strcmp(reader.name(), ".") == 0) {
+  for (; reader.Next();) {
+    if (UNSAFE_TODO(strcmp(reader.name(), ".")) == 0) {
       seen_dot = true;
       continue;
     }
-    if (strcmp(reader.name(), "..") == 0) {
+    if (UNSAFE_TODO(strcmp(reader.name(), "..")) == 0) {
       seen_dotdot = true;
       continue;
     }
 
     SCOPED_TRACE(testing::Message() << "reader.name(): " << reader.name());
 
-    char *endptr;
-    const unsigned long value = strtoul(reader.name(), &endptr, 10);
+    char* endptr;
+    const unsigned long value =
+        UNSAFE_TODO(strtoul(reader.name(), &endptr, 10));
 
     EXPECT_FALSE(*endptr);
     EXPECT_LT(value, kNumFiles);

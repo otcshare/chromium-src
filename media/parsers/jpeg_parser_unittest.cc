@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include <stdint.h>
 
-#include "base/at_exit.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/path_service.h"
 #include "media/base/test_data_util.h"
@@ -15,7 +15,7 @@ namespace media {
 
 TEST(JpegParserTest, Parsing) {
   base::FilePath data_dir;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &data_dir));
+  ASSERT_TRUE(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &data_dir));
 
   // This sample frame is captured from Chromebook Pixel
   base::FilePath file_path = data_dir.AppendASCII("media")
@@ -28,7 +28,7 @@ TEST(JpegParserTest, Parsing) {
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
   JpegParseResult result;
-  ASSERT_TRUE(ParseJpegPicture(stream.data(), stream.length(), &result));
+  ASSERT_TRUE(ParseJpegPicture(stream.bytes(), &result));
 
   // Verify selected fields
 
@@ -77,13 +77,13 @@ TEST(JpegParserTest, Parsing) {
   EXPECT_EQ(3, result.scan.components[2].component_selector);
   EXPECT_EQ(1, result.scan.components[2].dc_selector);
   EXPECT_EQ(1, result.scan.components[2].ac_selector);
-  EXPECT_EQ(121148u, result.data_size);
+  EXPECT_EQ(121148u, result.data.size());
   EXPECT_EQ(121358u, result.image_size);
 }
 
 TEST(JpegParserTest, TrailingZerosShouldBeIgnored) {
   base::FilePath data_dir;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &data_dir));
+  ASSERT_TRUE(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &data_dir));
   base::FilePath file_path =
       data_dir.AppendASCII("media")
           .AppendASCII("test")
@@ -95,18 +95,18 @@ TEST(JpegParserTest, TrailingZerosShouldBeIgnored) {
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
   JpegParseResult result;
-  ASSERT_TRUE(ParseJpegPicture(stream.data(), stream.length(), &result));
+  ASSERT_TRUE(ParseJpegPicture(stream.bytes(), &result));
 
   // Verify selected fields
 
   // SOS fields
-  EXPECT_EQ(121148u, result.data_size);
+  EXPECT_EQ(121148u, result.data.size());
   EXPECT_EQ(121358u, result.image_size);
 }
 
 TEST(JpegParserTest, CodedSizeNotEqualVisibleSize) {
   base::FilePath data_dir;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &data_dir));
+  ASSERT_TRUE(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &data_dir));
 
   base::FilePath file_path = data_dir.AppendASCII("media")
                                  .AppendASCII("test")
@@ -118,7 +118,7 @@ TEST(JpegParserTest, CodedSizeNotEqualVisibleSize) {
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
   JpegParseResult result;
-  ASSERT_TRUE(ParseJpegPicture(stream.data(), stream.length(), &result));
+  ASSERT_TRUE(ParseJpegPicture(stream.bytes(), &result));
 
   EXPECT_EQ(1, result.frame_header.visible_width);
   EXPECT_EQ(1, result.frame_header.visible_height);
@@ -132,7 +132,7 @@ TEST(JpegParserTest, CodedSizeNotEqualVisibleSize) {
 TEST(JpegParserTest, ParsingFail) {
   const uint8_t data[] = {0, 1, 2, 3};  // not jpeg
   JpegParseResult result;
-  ASSERT_FALSE(ParseJpegPicture(data, sizeof(data), &result));
+  ASSERT_FALSE(ParseJpegPicture(data, &result));
 }
 
 }  // namespace media

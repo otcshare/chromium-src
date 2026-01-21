@@ -7,24 +7,26 @@
 #include <string>
 #include <vector>
 
-#include "base/allocator/partition_allocator/page_allocator_constants.h"
-#include "base/allocator/partition_allocator/partition_alloc_buildflags.h"
+#include "base/compiler_specific.h"
 #include "base/rand_util.h"
 #include "build/build_config.h"
 #include "chromeos/ash/components/memory/userspace_swap/region.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/page_allocator_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-#include "base/allocator/partition_allocator/page_allocator.h"
-#include "base/allocator/partition_allocator/partition_alloc_constants.h"
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#include "partition_alloc/page_allocator.h"
+#include "partition_alloc/partition_alloc_constants.h"
 #endif
 
 namespace ash {
 namespace memory {
 namespace userspace_swap {
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && defined(PA_HAS_64_BITS_POINTERS)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 // InRange matches if the range specified by [start,end] is in [address,
 // address+length] of a region.
 MATCHER_P2(InRange, start, end, "") {
@@ -41,22 +43,25 @@ TEST(UserspaceSwap, GetUsedSuperpages) {
   uintptr_t mem_area[kNumAllocations] = {};
   uint64_t mem_area_len[kNumAllocations] = {};
   for (size_t i = 0; i < kNumAllocations; ++i) {
-    mem_area_len[i] = base::RandInt(kMinAllocationSize, kMaxAllocationSize);
-    mem_area[i] = reinterpret_cast<uintptr_t>(malloc(mem_area_len[i]));
-    ASSERT_NE(mem_area[i], 0u);
+    UNSAFE_TODO(mem_area_len[i]) =
+        base::RandInt(kMinAllocationSize, kMaxAllocationSize);
+    UNSAFE_TODO(mem_area[i]) =
+        reinterpret_cast<uintptr_t>(malloc(UNSAFE_TODO(mem_area_len[i])));
+    UNSAFE_TODO(ASSERT_NE(mem_area[i], 0u));
   }
 
   // And we should expect to find all of our allocations.
   std::vector<::userspace_swap::mojom::MemoryRegionPtr> regions;
   ASSERT_TRUE(GetPartitionAllocSuperPagesInUse(-1, regions));
   for (size_t i = 0; i < kNumAllocations; ++i) {
-    EXPECT_THAT(regions, testing::Contains(userspace_swap::InRange(
-                             mem_area[i], mem_area[i] + mem_area_len[i])));
+    UNSAFE_TODO(
+        EXPECT_THAT(regions, testing::Contains(userspace_swap::InRange(
+                                 mem_area[i], mem_area[i] + mem_area_len[i]))));
   }
 
   // Cleanup
   for (size_t i = 0; i < kNumAllocations; ++i) {
-    free(reinterpret_cast<void*>(mem_area[i]));
+    free(reinterpret_cast<void*>(UNSAFE_TODO(mem_area[i])));
   }
 }
 
@@ -69,9 +74,11 @@ TEST(UserspaceSwap, LimitSuperpagesReturned) {
   uintptr_t mem_area[kNumAllocations] = {};
   uint64_t mem_area_len[kNumAllocations] = {};
   for (size_t i = 0; i < kNumAllocations; ++i) {
-    mem_area_len[i] = base::RandInt(kMinAllocationSize, kMaxAllocationSize);
-    mem_area[i] = reinterpret_cast<uintptr_t>(malloc(mem_area_len[i]));
-    ASSERT_NE(mem_area[i], 0u);
+    UNSAFE_TODO(mem_area_len[i]) =
+        base::RandInt(kMinAllocationSize, kMaxAllocationSize);
+    UNSAFE_TODO(mem_area[i]) =
+        reinterpret_cast<uintptr_t>(malloc(UNSAFE_TODO(mem_area_len[i])));
+    UNSAFE_TODO(ASSERT_NE(mem_area[i], 0u));
   }
 
   // All that will be returned is 5 superpages worth of in use memory.
@@ -88,11 +95,11 @@ TEST(UserspaceSwap, LimitSuperpagesReturned) {
 
   // Cleanup
   for (size_t i = 0; i < kNumAllocations; ++i) {
-    free(reinterpret_cast<void*>(mem_area[i]));
+    free(reinterpret_cast<void*>(UNSAFE_TODO(mem_area[i])));
   }
 }
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
-        // defined(PA_HAS_64_BITS_POINTERS)
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
+        // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 
 }  // namespace userspace_swap
 }  // namespace memory

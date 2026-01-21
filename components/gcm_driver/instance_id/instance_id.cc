@@ -4,7 +4,7 @@
 
 #include "components/gcm_driver/instance_id/instance_id.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/gcm_driver/gcm_driver.h"
 
 namespace instance_id {
@@ -18,7 +18,7 @@ const char kGCMScope[] = "GCM";
 InstanceID::InstanceID(const std::string& app_id, gcm::GCMDriver* gcm_driver)
     : gcm_driver_(gcm_driver), app_id_(app_id) {}
 
-InstanceID::~InstanceID() {}
+InstanceID::~InstanceID() = default;
 
 void InstanceID::GetEncryptionInfo(const std::string& authorized_entity,
                                    GetEncryptionInfoCallback callback) {

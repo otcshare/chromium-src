@@ -7,13 +7,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_helpers.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/native_library.h"
@@ -30,7 +31,6 @@
 #include "media/base/win/mf_feature_checks.h"
 #include "media/cdm/win/media_foundation_cdm.h"
 #include "sandbox/policy/win/lpac_capability.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/widevine/cdm/widevine_cdm_common.h"
 
 namespace {
@@ -65,9 +65,11 @@ const char kWidevineCdmArch[] =
 
 namespace component_updater {
 
+// Allows this component to be disabled via `ComponentUpdatesEnabled` policy.
+// See https://chromeenterprise.google/policies/?policy=ComponentUpdatesEnabled
 bool MediaFoundationWidevineCdmComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool MediaFoundationWidevineCdmComponentInstallerPolicy::
@@ -106,16 +108,16 @@ void MediaFoundationWidevineCdmComponentInstallerPolicy::ComponentReady(
   VLOG(1) << "Register Media Foundation Widevine CDM";
   content::CdmInfo cdm_info(
       kWidevineKeySystem, content::CdmInfo::Robustness::kHardwareSecure,
-      /*capability=*/absl::nullopt, /*supports_sub_key_systems=*/false,
+      /*capability=*/std::nullopt, /*supports_sub_key_systems=*/false,
       kMediaFoundationWidevineCdmDisplayName, kMediaFoundationWidevineCdmType,
       version, GetCdmPath(install_dir));
 
   // Ensures MediaFoundationService process is monitored.
-  // TODO(crbug.com/1296219): This is tricky. Move the init to a better place.
   MediaFoundationServiceMonitor::GetInstance();
 
   // Check whether hardware secure decryption CDM should be disabled.
   if (base::FeatureList::IsEnabled(media::kHardwareSecureDecryptionFallback) &&
+      !media::kHardwareSecureDecryptionFallbackPerSite.Get() &&
       MediaFoundationServiceMonitor::
           IsHardwareSecureDecryptionDisabledByPref()) {
     VLOG(1) << "Media Foundation Widevine CDM disabled due to previous errors";
@@ -132,7 +134,6 @@ void MediaFoundationWidevineCdmComponentInstallerPolicy::ComponentReady(
 bool MediaFoundationWidevineCdmComponentInstallerPolicy::VerifyInstallation(
     const base::Value::Dict& manifest,
     const base::FilePath& install_dir) const {
-  // TODO(crbug.com/1225681): Compare manifest version and DLL's version.
   return base::PathExists(GetCdmPath(install_dir));
 }
 

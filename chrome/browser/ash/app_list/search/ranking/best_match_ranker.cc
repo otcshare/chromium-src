@@ -10,6 +10,7 @@
 #include "base/containers/flat_set.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/ranking/constants.h"
+#include "chrome/browser/ash/app_list/search/search_features.h"
 #include "chrome/browser/ash/app_list/search/types.h"
 
 namespace app_list {
@@ -22,6 +23,7 @@ bool ShouldIgnoreProvider(ProviderType type) {
     case ProviderType::kZeroStateApp:
     case ProviderType::kZeroStateFile:
     case ProviderType::kZeroStateDrive:
+    case ProviderType::kDesksAdminTemplate:
       // Low-intent providers:
     case ProviderType::kPlayStoreReinstallApp:
     case ProviderType::kPlayStoreApp:
@@ -32,13 +34,13 @@ bool ShouldIgnoreProvider(ProviderType type) {
       // Internal results:
     case ProviderType::kUnknown:
     case ProviderType::kInternalPrivacyInfo:
+    // In development:
+    case ProviderType::kImageSearch:
+    case ProviderType::kHelpApp:
       return true;
-    case ProviderType::kInternalApp:
     case ProviderType::kArcAppShortcut:
-    case ProviderType::kKeyboardShortcut:
     case ProviderType::kDriveSearch:
     case ProviderType::kGames:
-    case ProviderType::kHelpApp:
     case ProviderType::kZeroStateHelpApp:
     case ProviderType::kFileSearch:
     case ProviderType::kInstalledApp:
@@ -47,7 +49,16 @@ bool ShouldIgnoreProvider(ProviderType type) {
     case ProviderType::kPersonalization:
     case ProviderType::kOpenTab:
     case ProviderType::kOsSettings:
+    case ProviderType::kSystemInfo:
+    case ProviderType::kAppShortcutV2:
       return false;
+    case ProviderType::kKeyboardShortcut:
+      // Allows key shortcut results to appear in best match if flag enabled,
+      // otherwise disable it by default to avoid possible over-triggering.
+      if (search_features::IskLauncherKeyShortcutInBestMatchEnabled()) {
+        return false;
+      }
+      return true;
   }
 }
 
@@ -57,12 +68,13 @@ bool ShouldIgnoreResult(const ChromeSearchResult* result) {
   // - 'magnifying glass' results: WEB_QUERY, SEARCH_SUGGEST,
   //   SEARCH_SUGGEST_PERSONALIZED.
   //
-  // This is determined using the omnibox metrics type, which is currently the
-  // only type that gives sufficient granularity.
+  // This is determined using the omnibox metrics type, which is currently
+  // the only type that gives sufficient granularity.
   return result->metrics_type() == ash::OMNIBOX_ANSWER ||
          result->metrics_type() == ash::OMNIBOX_CALCULATOR ||
          result->metrics_type() == ash::OMNIBOX_WEB_QUERY ||
          result->metrics_type() == ash::OMNIBOX_SEARCH_SUGGEST ||
+         result->metrics_type() == ash::OMNIBOX_SEARCH_SUGGEST_ENTITY ||
          result->metrics_type() == ash::OMNIBOX_SUGGEST_PERSONALIZED;
 }
 
@@ -73,8 +85,7 @@ BestMatchRanker::BestMatchRanker() = default;
 BestMatchRanker::~BestMatchRanker() = default;
 
 void BestMatchRanker::Start(const std::u16string& query,
-                            ResultsMap& results,
-                            CategoriesList& categories) {
+                            const CategoriesList& categories) {
   is_pre_burnin_ = true;
   best_matches_.clear();
 }
@@ -86,8 +97,9 @@ void BestMatchRanker::OnBurnInPeriodElapsed() {
 void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
                                         ProviderType provider) {
   // Skip results from providers that are never included in the top matches.
-  if (ShouldIgnoreProvider(provider))
+  if (ShouldIgnoreProvider(provider)) {
     return;
+  }
 
   // Remove invalidated weak pointers from best_matches_
   for (auto iter = best_matches_.begin(); iter != best_matches_.end();) {
@@ -113,8 +125,9 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
   }
 
   for (const auto& result : it->second) {
-    if (ShouldIgnoreResult(result.get()))
+    if (ShouldIgnoreResult(result.get())) {
       continue;
+    }
 
     if (seen_ids.find(result->id()) != seen_ids.end()) {
       // Omnibox provider can return more than once. Don't add duplicate results
@@ -122,14 +135,21 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
       continue;
     }
     Scoring& scoring = result->scoring();
-    if (scoring.BestMatchScore() >= kBestMatchThreshold) {
+
+    double threshold = kBestMatchThreshold;
+    if (search_features::IsLauncherKeywordExtractionScoringEnabled()) {
+      threshold = kBestMatchThresholdWithKeywordRanking;
+    }
+
+    if (scoring.BestMatchScore() >= threshold) {
       best_matches_.push_back(result->GetWeakPtr());
     }
   }
 
   // If we have no best matches, there is no ranking work to do. Return early.
-  if (best_matches_.empty())
+  if (best_matches_.empty()) {
     return;
+  }
 
   // Sort best_matches_:
   if (use_relevance_sort_only) {
@@ -149,8 +169,8 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
     // results can technically be destroyed at any time.
     std::sort(best_matches_.begin(), best_matches_.end(),
               [](const auto& a, const auto& b) {
-                const int a_rank = a->scoring().best_match_rank;
-                const int b_rank = b->scoring().best_match_rank;
+                const int a_rank = a->scoring().best_match_rank();
+                const int b_rank = b->scoring().best_match_rank();
                 // Sort order: 0, 1, 2, 3, ... then -1.
                 // N.B. (a ^ b) < 0 checks for opposite sign.
                 return (a_rank ^ b_rank) < 0 ? a_rank > b_rank
@@ -158,15 +178,15 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
               });
     std::sort(best_matches_.begin() + kNumBestMatchesToStabilize,
               best_matches_.end(), [](const auto& a, const auto& b) {
-                return a->scoring().normalized_relevance >
-                       b->scoring().normalized_relevance;
+                return a->scoring().normalized_relevance() >
+                       b->scoring().normalized_relevance();
               });
   }
 
   // For the first kNumBestMatches of best_matches_, renumber their best match
   // rank.
   for (size_t i = 0; i < std::min(kNumBestMatches, best_matches_.size()); ++i) {
-    best_matches_[i]->scoring().best_match_rank = i;
+    best_matches_[i]->scoring().set_best_match_rank(i);
     best_matches_[i]->SetBestMatch(true);
   }
 
@@ -174,7 +194,7 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
   // and remove them from the vector.
   if (best_matches_.size() > kNumBestMatches) {
     for (size_t i = kNumBestMatches; i < best_matches_.size(); ++i) {
-      best_matches_[i]->scoring().best_match_rank = -1;
+      best_matches_[i]->scoring().set_best_match_rank(-1);
       best_matches_[i]->SetBestMatch(false);
     }
     best_matches_.resize(kNumBestMatches);

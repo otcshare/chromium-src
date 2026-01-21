@@ -12,6 +12,7 @@
 #include "base/threading/thread_restrictions.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace enterprise_connectors {
 
@@ -83,7 +84,8 @@ TEST_F(FilesScanDataTest, FlatFileList) {
     files_scan_data.ExpandPaths(run_loop.QuitClosure());
     run_loop.Run();
 
-    std::set<size_t> blocked_indexes = files_scan_data.IndexesToBlock(results);
+    absl::flat_hash_set<size_t> blocked_indexes =
+        files_scan_data.IndexesToBlock(results);
 
     ASSERT_EQ(results.size(), files_scan_data.expanded_paths().size());
 
@@ -126,7 +128,7 @@ TEST_F(FilesScanDataTest, Directories) {
   ASSERT_EQ(expand.at(path_2_2), 1u);
 
   // No failure means no top directory gets blocked.
-  std::set<size_t> blocked_indexes =
+  absl::flat_hash_set<size_t> blocked_indexes =
       files_scan_data.IndexesToBlock({true, true, true, true});
   ASSERT_TRUE(blocked_indexes.empty());
 
@@ -159,6 +161,31 @@ TEST_F(FilesScanDataTest, Directories) {
   blocked_indexes = files_scan_data.IndexesToBlock({true, true, false, false});
   ASSERT_EQ(blocked_indexes.size(), 1u);
   ASSERT_TRUE(blocked_indexes.count(1));
+}
+
+TEST_F(FilesScanDataTest, BasePaths) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  std::vector<base::FilePath> paths = {
+      AddFile(base::FilePath(FILE_PATH_LITERAL("a.txt"))),
+      AddFile(base::FilePath(FILE_PATH_LITERAL("b.txt"))),
+      AddFile(base::FilePath(FILE_PATH_LITERAL("c.txt"))),
+  };
+
+  FilesScanData files_scan_data(paths);
+  ASSERT_EQ(files_scan_data.base_paths(), paths);
+
+  base::RunLoop run_loop;
+  files_scan_data.ExpandPaths(run_loop.QuitClosure());
+  ASSERT_EQ(files_scan_data.base_paths().size(), 0u);
+  run_loop.Run();
+
+  ASSERT_EQ(files_scan_data.base_paths(), paths);
+  ASSERT_EQ(files_scan_data.take_base_paths(), paths);
+
+  // Base paths is empty after a take.
+  ASSERT_EQ(files_scan_data.base_paths().size(), 0u);
+  ASSERT_EQ(files_scan_data.take_base_paths().size(), 0u);
 }
 
 }  // namespace enterprise_connectors

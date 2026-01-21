@@ -6,14 +6,15 @@
 #define CHROME_BROWSER_SHARING_SHARED_CLIPBOARD_REMOTE_COPY_MESSAGE_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/image_decoder/image_decoder.h"
-#include "chrome/browser/sharing/shared_clipboard/remote_copy_handle_message_result.h"
-#include "chrome/browser/sharing/sharing_message_handler.h"
+#include "components/sharing_message/shared_clipboard/remote_copy_handle_message_result.h"
+#include "components/sharing_message/sharing_message_handler.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "url/gurl.h"
 
@@ -33,7 +34,7 @@ class RemoteCopyMessageHandler : public SharingMessageHandler,
   ~RemoteCopyMessageHandler() override;
 
   // SharingMessageHandler implementation:
-  void OnMessage(chrome_browser_sharing::SharingMessage message,
+  void OnMessage(components_sharing_message::SharingMessage message,
                  DoneCallback done_callback) override;
 
   // ImageDecoder::ImageRequest implementation:
@@ -48,7 +49,7 @@ class RemoteCopyMessageHandler : public SharingMessageHandler,
 
   void HandleText(const std::string& text);
   void HandleImage(const std::string& image_url);
-  void OnURLLoadComplete(std::unique_ptr<std::string> content);
+  void OnURLLoadComplete(std::optional<std::string> content);
   void WriteImageAndShowNotification(const SkBitmap& image);
   void ShowNotification(const std::u16string& title, const SkBitmap& image);
   void DetectWrite(const ui::ClipboardSequenceNumberToken& old_sequence_number,
@@ -64,8 +65,6 @@ class RemoteCopyMessageHandler : public SharingMessageHandler,
   raw_ptr<Profile> profile_ = nullptr;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
   std::string device_name_;
-  base::ElapsedTimer timer_;
-  base::OneShotTimer write_detection_timer_;
   GURL allowed_origin_;
 };
 

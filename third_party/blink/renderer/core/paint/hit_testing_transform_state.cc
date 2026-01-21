@@ -25,7 +25,6 @@
 
 #include "third_party/blink/renderer/core/paint/hit_testing_transform_state.h"
 
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h"
 
 namespace blink {
@@ -48,7 +47,9 @@ void HitTestingTransformState::Flatten() {
   if (accumulated_transform_.GetInverse(&inverse_transform)) {
     last_planar_point_ = inverse_transform.ProjectPoint(last_planar_point_);
     last_planar_quad_ = inverse_transform.ProjectQuad(last_planar_quad_);
-    last_planar_area_ = inverse_transform.ProjectQuad(last_planar_area_);
+    if (last_planar_area_) {
+      *last_planar_area_ = inverse_transform.ProjectQuad(*last_planar_area_);
+    }
   }
 
   accumulated_transform_.MakeIdentity();
@@ -69,18 +70,14 @@ PhysicalRect HitTestingTransformState::BoundsOfMappedQuad() const {
 }
 
 PhysicalRect HitTestingTransformState::BoundsOfMappedArea() const {
-  return BoundsOfMappedQuadInternal(last_planar_area_);
+  return last_planar_area_ ? BoundsOfMappedQuadInternal(*last_planar_area_)
+                           : PhysicalRect(InfiniteIntRect());
 }
 
 PhysicalRect HitTestingTransformState::BoundsOfMappedQuadInternal(
     const gfx::QuadF& q) const {
-  gfx::RectF rect =
-      accumulated_transform_.InverseOrIdentity().ProjectQuad(q).BoundingBox();
-  PhysicalOffset offset(LayoutUnit::FromFloatRound(rect.x()),
-                        LayoutUnit::FromFloatRound(rect.y()));
-  PhysicalSize size(LayoutUnit::FromFloatRound(rect.right()) - offset.left,
-                    LayoutUnit::FromFloatRound(rect.bottom()) - offset.top);
-  return PhysicalRect(offset, size);
+  return PhysicalRect::EnclosingRect(
+      accumulated_transform_.InverseOrIdentity().ProjectQuad(q).BoundingBox());
 }
 
 }  // namespace blink

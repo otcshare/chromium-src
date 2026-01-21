@@ -57,17 +57,36 @@ std::ostream& operator<<(std::ostream& out,
       return out << "kCrxInstaller";
     case ProfileKeepAliveOrigin::kProfilePickerView:
       return out << "kProfilePickerView";
-    case ProfileKeepAliveOrigin::kCommanderFrontend:
-      return out << "kCommanderFrontend";
     case ProfileKeepAliveOrigin::kDiceWebSigninInterceptionBubble:
       return out << "kDiceWebSigninInterceptionBubble";
     case ProfileKeepAliveOrigin::kHistoryMenuBridge:
       return out << "kHistoryMenuBridge";
-    case ProfileKeepAliveOrigin::kLacrosMainProfile:
-      return out << "kLacrosMainProfile";
     case ProfileKeepAliveOrigin::kProfileCreationSamlFlow:
       return out << "kProfileCreationSamlFlow";
+    case ProfileKeepAliveOrigin::kProfileDeletionProcess:
+      return out << "kProfileDeletionProcess";
+    case ProfileKeepAliveOrigin::kProfileStatistics:
+      return out << "kProfileStatistics";
+    case ProfileKeepAliveOrigin::kIsolatedWebAppInstall:
+      return out << "kIsolatedWebAppInstall";
+    case ProfileKeepAliveOrigin::kIsolatedWebAppUpdate:
+      return out << "kIsolatedWebAppUpdate";
+    case ProfileKeepAliveOrigin::kWebAppUninstall:
+      return out << "kWebAppUninstall";
+    case ProfileKeepAliveOrigin::kOsIntegrationForceUnregistration:
+      return out << "kOsIntegrationForceUnregistration";
+    case ProfileKeepAliveOrigin::kRemoteDebugging:
+      return out << "kRemoteDebugging";
+    case ProfileKeepAliveOrigin::kHeadlessCommand:
+      return out << "kHeadlessCommand";
+    case ProfileKeepAliveOrigin::kGlicView:
+      return out << "kGlicView";
+    case ProfileKeepAliveOrigin::kWaitingForGlicView:
+      return out << "kWaitingForGlicView";
+    case ProfileKeepAliveOrigin::kWaitingForBookmarksImportOnFirstRun:
+      return out << "kWaitingForBookmarksImportOnFirstRun";
+    case ProfileKeepAliveOrigin::kSkillsDialog:
+      return out << "kSkillsDialog";
   }
   NOTREACHED();
-  return out << static_cast<int>(origin);
 }

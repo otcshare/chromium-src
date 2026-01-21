@@ -7,18 +7,19 @@
 #include <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
 
+#include "base/no_destructor.h"
 #include "ui/base/idle/idle_internal.h"
 
-@interface MacScreenMonitor : NSObject {
- @private
-  BOOL _screensaverRunning;
-  BOOL _screenLocked;
-}
+namespace ui {
+// Forward declaration of the function.
+base::RepeatingCallbackList<void(bool)>& GetScreenLockCallbacks();
+}  // namespace ui
 
-@property (readonly,
-           nonatomic,
-           getter=isScreensaverRunning) BOOL screensaverRunning;
-@property (readonly, nonatomic, getter=isScreenLocked) BOOL screenLocked;
+@interface MacScreenMonitor : NSObject
+
+@property(readonly, nonatomic, getter=isScreensaverRunning)
+    BOOL screensaverRunning;
+@property(readonly, nonatomic, getter=isScreenLocked) BOOL screenLocked;
 
 @end
 
@@ -30,7 +31,7 @@
 - (instancetype)init {
   if ((self = [super init])) {
     NSDistributedNotificationCenter* distCenter =
-          [NSDistributedNotificationCenter defaultCenter];
+        NSDistributedNotificationCenter.defaultCenter;
     [distCenter addObserver:self
                    selector:@selector(onScreenSaverStarted:)
                        name:@"com.apple.screensaver.didstart"
@@ -52,24 +53,25 @@
 }
 
 - (void)dealloc {
-  [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
-  [super dealloc];
+  [NSDistributedNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)onScreenSaverStarted:(NSNotification*)notification {
-   _screensaverRunning = YES;
+  _screensaverRunning = YES;
 }
 
 - (void)onScreenSaverStopped:(NSNotification*)notification {
-   _screensaverRunning = NO;
+  _screensaverRunning = NO;
 }
 
 - (void)onScreenLocked:(NSNotification*)notification {
-   _screenLocked = YES;
+  _screenLocked = YES;
+  ui::GetScreenLockCallbacks().Notify(true);
 }
 
 - (void)onScreenUnlocked:(NSNotification*)notification {
-   _screenLocked = NO;
+  _screenLocked = NO;
+  ui::GetScreenLockCallbacks().Notify(false);
 }
 
 @end
@@ -81,9 +83,22 @@ static MacScreenMonitor* g_screenMonitor = nil;
 
 }  // namespace
 
+base::RepeatingCallbackList<void(bool)>& GetScreenLockCallbacks() {
+  static base::NoDestructor<base::RepeatingCallbackList<void(bool)>> callbacks;
+  return *callbacks;
+}
+
 void InitIdleMonitor() {
   if (!g_screenMonitor)
     g_screenMonitor = [[MacScreenMonitor alloc] init];
+}
+
+base::CallbackListSubscription AddScreenLockCallback(
+    base::RepeatingCallback<void(bool)> callback) {
+  if (GetScreenLockCallbacks().empty()) {
+    InitIdleMonitor();
+  }
+  return GetScreenLockCallbacks().Add(std::move(callback));
 }
 
 int CalculateIdleTime() {
@@ -97,8 +112,7 @@ bool CheckIdleStateIsLocked() {
   if (IdleStateForTesting().has_value())
     return IdleStateForTesting().value() == IDLE_STATE_LOCKED;
 
-  return [g_screenMonitor isScreensaverRunning] ||
-      [g_screenMonitor isScreenLocked];
+  return g_screenMonitor.screensaverRunning || g_screenMonitor.screenLocked;
 }
 
 }  // namespace ui

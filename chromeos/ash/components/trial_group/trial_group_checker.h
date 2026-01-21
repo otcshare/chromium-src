@@ -5,10 +5,11 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_TRIAL_GROUP_TRIAL_GROUP_CHECKER_H_
 #define CHROMEOS_ASH_COMPONENTS_TRIAL_GROUP_TRIAL_GROUP_CHECKER_H_
 
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "url/gurl.h"
 
@@ -57,7 +58,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_TRIAL_GROUP) TrialGroupChecker {
   void SetServerUrl(GURL server_url);
 
  private:
-  void OnRequestComplete(std::unique_ptr<std::string> response_body);
+  void OnRequestComplete(std::optional<std::string> response_body);
 
   // The url of the Dogpack server.
   GURL server_url_;

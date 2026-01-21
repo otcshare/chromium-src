@@ -5,30 +5,43 @@
 #import "ios/chrome/test/app/signin_test_util.h"
 
 #import "base/check.h"
+#import "base/notreached.h"
 #import "base/test/ios/wait_util.h"
+#import "components/policy/core/browser/signin/profile_separation_policies.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_pref_names.h"
-#import "components/sync/driver/sync_service.h"
-#import "components/sync/driver/sync_user_settings.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/sync/base/user_selectable_type.h"
+#import "components/sync/service/sync_prefs.h"
+#import "components/sync/service/sync_service.h"
+#import "components/sync/service/sync_user_settings.h"
 #import "google_apis/gaia/gaia_constants.h"
-#import "ios/chrome/browser/browser_state/chrome_browser_state.h"
-#import "ios/chrome/browser/prefs/pref_names.h"
-#import "ios/chrome/browser/signin/authentication_service.h"
-#import "ios/chrome/browser/signin/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/chrome_account_manager_service.h"
-#import "ios/chrome/browser/signin/chrome_account_manager_service_factory.h"
-#import "ios/chrome/browser/signin/fake_system_identity.h"
-#import "ios/chrome/browser/signin/gaia_auth_fetcher_ios.h"
-#import "ios/chrome/browser/sync/sync_service_factory.h"
-#import "ios/chrome/browser/ui/authentication/authentication_flow.h"
-#import "ios/chrome/browser/ui/authentication/cells/signin_promo_view.h"
+#import "ios/chrome/app/change_profile_commands.h"
+#import "ios/chrome/browser/authentication/history_sync/model/history_sync_utils.h"
+#import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
+#import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_delegate.h"
+#import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_performer.h"
+#import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/test_authentication_flow_delegate.h"
+#import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view.h"
+#import "ios/chrome/browser/authentication/ui_bundled/change_profile/change_profile_signout_continuation.h"
+#import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios_util.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/signin/model/gaia_auth_fetcher_ios.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/signin/model/system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
-#import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-#import "ios/public/provider/chrome/browser/signin/fake_chrome_identity_service.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace chrome_test_util {
 
@@ -38,119 +51,223 @@ namespace {
 //
 // Note: Forgetting an identity is a asynchronous operation. This function does
 // not wait for the forget identity operation to finish.
-void StartForgetAllIdentities(ChromeBrowserState* browser_state) {
-  ChromeAccountManagerService* account_manager_service =
-      ChromeAccountManagerServiceFactory::GetForBrowserState(browser_state);
-  NSArray* identities_to_remove = account_manager_service->GetAllIdentities();
-  ios::ChromeIdentityService* identity_service =
-      ios::GetChromeBrowserProvider().GetChromeIdentityService();
-  for (id<SystemIdentity> identity in identities_to_remove) {
-    identity_service->ForgetIdentity(identity, ^(NSError* error) {
-      if (error) {
-        NSLog(@"ForgetIdentity failed: [identity = %@, error = %@]",
-              identity.userEmail, [error localizedDescription]);
-      }
-    });
-  }
+void StartForgetAllIdentitiesOnDevice(ProceduralBlock completion) {
+  SystemIdentityManager* system_identity_manager =
+      GetApplicationContext()->GetSystemIdentityManager();
+
+  // Number of tasks we are waiting for.
+  // Triggering all deletion counts as one task, so that
+  // the completion can’t be called until all deletions are requested.
+  __block int pending_tasks_count = 1;
+  ProceduralBlock tasks_completion = ^{
+    DCHECK_GT(pending_tasks_count, 0);
+    if (--pending_tasks_count == 0 && completion) {
+      completion();
+    }
+  };
+
+  SystemIdentityManager::IdentityIteratorCallback callback =
+      base::BindRepeating(
+          [](int& pending_tasks_count, ProceduralBlock tasks_completion,
+             SystemIdentityManager* system_identity_manager,
+             id<SystemIdentity> identity) {
+            pending_tasks_count++;
+            system_identity_manager->ForgetIdentity(
+                identity, base::BindOnce(^(NSError* error) {
+                  if (error) {
+                    NSLog(@"ForgetIdentity failed: [identity = %@, error = %@]",
+                          identity.userEmail, [error localizedDescription]);
+                  }
+                  tasks_completion();
+                }));
+            return SystemIdentityManager::IteratorResult::kContinueIteration;
+          },
+          std::ref(pending_tasks_count), tasks_completion,
+          system_identity_manager);
+
+  system_identity_manager->IterateOverIdentities(std::move(callback));
+  // Now that all ForgetIdentity() calls have been kicked off, mark the task for
+  // triggering all deletions as complete.
+  tasks_completion();
 }
 
 }  // namespace
 
 void SetUpMockAuthentication() {
-  std::unique_ptr<ios::FakeChromeIdentityService> service(
-      new ios::FakeChromeIdentityService());
-  ios::GetChromeBrowserProvider().SetChromeIdentityServiceForTesting(
-      std::move(service));
+  // Should we do something here?
 }
 
 void TearDownMockAuthentication() {
-  ios::GetChromeBrowserProvider().SetChromeIdentityServiceForTesting(nullptr);
+  // Should we do something here?
 }
 
-void SignOutAndClearIdentities() {
+// Clear sign-in related preferences.
+void ClearPreferences() {
+  ProfileIOS* profile = GetOriginalProfile();
+  CHECK(profile);
+  // Clear last signed in user preference.
+  profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingGaiaId);
+  profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSignedInUsername);
+  profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingUsername);
+
+  // `SignOutAndClearIdentities()` is called during shutdown. Commit all pref
+  // changes to ensure that clearing the last signed in account is saved on
+  // disk in case Chrome crashes during shutdown.
+  profile->GetPrefs()->CommitPendingWrite();
+}
+
+// Clear preferences and remove identities from device. Assumes the user is
+// signed-out.
+void ClearIdentities(ProceduralBlock completion) {
+  ProfileIOS* profile = GetOriginalProfile();
+  CHECK(profile);
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  CHECK(!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+
+  ClearPreferences();
+  StartForgetAllIdentitiesOnDevice(completion);
+}
+
+void SignOutAndClearIdentities(ProceduralBlock completion) {
   // EarlGrey monitors network requests by swizzling internal iOS network
   // objects and expects them to be dealloced before the tear down. It is
   // important to autorelease all objects that make network requests to avoid
   // EarlGrey being confused about on-going network traffic..
+  CHECK(completion);
   @autoreleasepool {
-    ChromeBrowserState* browser_state = GetOriginalBrowserState();
-    DCHECK(browser_state);
+    ProfileIOS* profile = GetOriginalProfile();
+    CHECK(profile);
 
-    // Sign out current user and clear all browsing data on the device.
-    AuthenticationService* authentication_service =
-        AuthenticationServiceFactory::GetForBrowserState(browser_state);
-    if (authentication_service->HasPrimaryIdentity(
-            signin::ConsentLevel::kSignin)) {
-      authentication_service->SignOut(signin_metrics::SIGNOUT_TEST,
-                                      /*force_clear_browsing_data=*/true, nil);
+    // Needs to wait for two tasks to complete:
+    // - Sign-out & clean browsing data (skipped if the user is already
+    // signed-out, but callback is still called)
+    // - Forgetting all identities
+    if (!IsPersonalProfile(profile)) {
+      auto signout_source = signin_metrics::ProfileSignout::kTest;
+      SignoutCompletionCallback switch_callback =
+          base::BindOnce([](ProceduralBlock completion,
+                            SceneState*) { ClearIdentities(completion); },
+                         completion);
+      ChangeProfileContinuation continuation =
+          CreateChangeProfileSignoutContinuation(
+              signout_source, /*force_snackbar_over_toolbar=*/false,
+              /*should_record_metrics=*/false, /*snackbar_message =*/nil,
+              std::move(switch_callback));
+      SceneState* scene_state = chrome_test_util::GetForegroundActiveScene();
+      signin::SwitchToPersonalProfile(
+          scene_state, ChangeProfileReason::kManagedAccountSignOut,
+          std::move(continuation));
+      return;
     }
-
-    // Clear last signed in user preference.
-    browser_state->GetPrefs()->ClearPref(prefs::kGoogleServicesLastGaiaId);
-    browser_state->GetPrefs()->ClearPref(prefs::kGoogleServicesLastUsername);
-
-    // `SignOutAndClearIdentities()` is called during shutdown. Commit all pref
-    // changes to ensure that clearing the last signed in account is saved on
-    // disk in case Chrome crashes during shutdown.
-    browser_state->GetPrefs()->CommitPendingWrite();
-
-    // Once the browser was signed out, start clearing all identities from the
-    // ChromeIdentityService.
-    StartForgetAllIdentities(browser_state);
+    // Sign out current user and clear all browsing data on the device.
+    signin::IdentityManager* identity_manager =
+        IdentityManagerFactory::GetForProfile(profile);
+    AuthenticationService* authentication_service =
+        AuthenticationServiceFactory::GetForProfile(profile);
+    if (identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+      ProceduralBlock signout_completion = ^{
+        ClearIdentities(completion);
+      };
+      authentication_service->SignOut(signin_metrics::ProfileSignout::kTest,
+                                      signout_completion);
+    } else {
+      ClearIdentities(completion);
+    }
   }
 }
 
 bool HasIdentities() {
   ChromeAccountManagerService* account_manager_service =
-      ChromeAccountManagerServiceFactory::GetForBrowserState(
-          GetOriginalBrowserState());
+      ChromeAccountManagerServiceFactory::GetForProfile(GetOriginalProfile());
   return account_manager_service->HasIdentities();
 }
 
 void ResetMockAuthentication() {
-  ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()
-      ->SetFakeMDMError(false);
+  // Should we do something here?
 }
 
 void ResetSigninPromoPreferences() {
-  ChromeBrowserState* browser_state = GetOriginalBrowserState();
-  PrefService* prefs = browser_state->GetPrefs();
+  ProfileIOS* profile = GetOriginalProfile();
+  PrefService* prefs = profile->GetPrefs();
   prefs->SetInteger(prefs::kIosBookmarkSigninPromoDisplayedCount, 0);
   prefs->SetBoolean(prefs::kIosBookmarkPromoAlreadySeen, false);
-  prefs->SetInteger(prefs::kIosSettingsSigninPromoDisplayedCount, 0);
-  prefs->SetBoolean(prefs::kIosSettingsPromoAlreadySeen, false);
   prefs->SetInteger(prefs::kIosNtpFeedTopSigninPromoDisplayedCount, 0);
   prefs->SetBoolean(prefs::kIosNtpFeedTopPromoAlreadySeen, false);
+  prefs->SetInteger(prefs::kIosReadingListSigninPromoDisplayedCount, 0);
+  prefs->SetBoolean(prefs::kIosReadingListPromoAlreadySeen, false);
   prefs->SetBoolean(prefs::kSigninShouldPromptForSigninAgain, false);
 }
 
-void ResetUserApprovedAccountListManager() {
-  ChromeBrowserState* browser_state = GetOriginalBrowserState();
-  PrefService* prefs = browser_state->GetPrefs();
-  prefs->ClearPref(prefs::kSigninLastAccounts);
-}
-
-void SignInWithoutSync(id<SystemIdentity> identity) {
+void SignIn(id<SystemIdentity> identity) {
   Browser* browser = GetMainBrowser();
   UIViewController* viewController = GetActiveViewController();
-  __block AuthenticationFlow* authenticationFlow =
-      [[AuthenticationFlow alloc] initWithBrowser:browser
-                                         identity:identity
-                                 postSignInAction:POST_SIGNIN_ACTION_NONE
-                         presentingViewController:viewController];
-  authenticationFlow.dispatcher = (id<BrowsingDataCommands>)GetMainController();
-  [authenticationFlow startSignInWithCompletion:^(BOOL success) {
+  __block AuthenticationFlow* authenticationFlow = [[AuthenticationFlow alloc]
+               initWithBrowser:browser
+                      identity:identity
+                   accessPoint:signin_metrics::AccessPoint::kUnknown
+          precedingHistorySync:NO
+             postSignInActions:PostSignInActionSet()
+      presentingViewController:viewController
+                    anchorView:nil
+                    anchorRect:CGRectNull];
+  // The delegate is retaining itself and the flow.
+  __block TestAuthenticationFlowDelegate* testRequestDelegate = nil;
+  // Unsetting those variables to ensure that they are not retained anymore.
+  // The authentication flow should retain them.
+  void (^unsetVariables)() = ^() {
     authenticationFlow = nil;
-  }];
+    testRequestDelegate = nil;
+  };
+  signin_ui::SigninCompletionCallback callback =
+      ^(signin_ui::CancelationReason cancelationReason) {
+        unsetVariables();
+      };
+  ChangeProfileContinuationProvider provider = base::BindRepeating(
+      [](void (^unsetVariables)()) {
+        return base::BindOnce(
+            [](void (^unsetVariables)(), SceneState*,
+               base::OnceClosure closure) {
+              unsetVariables();
+              std::move(closure).Run();
+            },
+            unsetVariables);
+      },
+      unsetVariables);
+  testRequestDelegate = [[TestAuthenticationFlowDelegate alloc]
+       initWithSigninCompletionCallback:callback
+      changeProfileContinuationProvider:provider];
+  authenticationFlow.delegate = testRequestDelegate;
+  [authenticationFlow startSignIn];
 }
 
-void ResetSyncSelectedDataTypes() {
-  ChromeBrowserState* browserState =
-      chrome_test_util::GetOriginalBrowserState();
-  syncer::SyncService* syncService =
-      SyncServiceFactory::GetForBrowserState(browserState);
-  syncService->GetUserSettings()->SetSelectedTypes(/*sync_everything=*/true,
-                                                   {});
+void ResetHistorySyncPreferencesForTesting() {
+  ProfileIOS* profile = GetOriginalProfile();
+  PrefService* prefs = profile->GetPrefs();
+  history_sync::ResetDeclinePrefs(prefs);
+}
+
+void ResetSyncAccountSettingsPrefs() {
+  ProfileIOS* profile = chrome_test_util::GetOriginalProfile();
+  // Clear the per-account selected types and per-account passphrase.
+  SyncServiceFactory::GetForProfile(profile)
+      ->GetUserSettings()
+      ->KeepAccountSettingsPrefsOnlyForUsers({});
+}
+
+void SetUseFakeResponsesForProfileSeparationPolicyRequests() {
+  [AuthenticationFlowPerformer setUseFakePolicyResponsesForTesting:YES];
+}
+
+void ClearUseFakeResponsesForProfileSeparationPolicyRequests() {
+  [AuthenticationFlowPerformer setUseFakePolicyResponsesForTesting:NO];
+}
+
+void SetPolicyResponseForNextProfileSeparationPolicyRequest(
+    policy::ProfileSeparationDataMigrationSettings
+        profileSeparationDataMigrationSettings) {
+  [AuthenticationFlowPerformer forcePolicyResponseForNextRequestForTesting:
+                                   profileSeparationDataMigrationSettings];
 }
 
 }  // namespace chrome_test_util

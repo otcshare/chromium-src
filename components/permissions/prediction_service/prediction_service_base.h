@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/prediction_service/prediction_request_features.h"
@@ -31,7 +31,7 @@ class PredictionServiceBase : public KeyedService {
   using LookupResponseCallback = base::OnceCallback<void(
       bool,  // Lookup successful.
       bool,  // Response from cache.
-      const absl::optional<GeneratePredictionsResponse>&)>;
+      const std::optional<GeneratePredictionsResponse>&)>;
 
   virtual void StartLookup(const PredictionRequestFeatures& entity,
                            LookupRequestCallback request_callback,

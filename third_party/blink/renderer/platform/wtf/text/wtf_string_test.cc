@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (C) 2012 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,7 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
-namespace WTF {
+namespace blink {
 
 TEST(StringTest, CreationFromLiteral) {
   String string_from_literal("Explicit construction syntax");
@@ -56,6 +56,43 @@ TEST(StringTest, CreationFromHashTraits) {
   EXPECT_TRUE(empty.empty());
   EXPECT_FALSE(HashTraits<String>::IsEmptyValue(empty));
   EXPECT_NE(empty, HashTraits<String>::EmptyValue());
+
+  uint32_t hash = String("abc").Impl()->GetHash();
+  EXPECT_EQ(hash, HashTraits<String>::GetHash(String("abc")));
+  EXPECT_EQ(hash, HashTraits<String>::GetHash("abc"));
+  EXPECT_EQ(hash,
+            HashTraits<String>::GetHash(reinterpret_cast<const LChar*>("abc")));
+  const UChar abc_wide[] = {'a', 'b', 'c', 0};
+  EXPECT_EQ(hash, HashTraits<String>::GetHash(abc_wide));
+}
+
+TEST(StringTest, EqualHashTraits) {
+  String abc = "abc";
+  String def = "def";
+
+  EXPECT_TRUE(HashTraits<String>::Equal(abc, abc));
+  EXPECT_FALSE(HashTraits<String>::Equal(abc, def));
+
+  EXPECT_TRUE(HashTraits<String>::Equal(abc, "abc"));
+  EXPECT_FALSE(HashTraits<String>::Equal(abc, "def"));
+  EXPECT_TRUE(HashTraits<String>::Equal("abc", abc));
+  EXPECT_FALSE(HashTraits<String>::Equal("def", abc));
+
+  EXPECT_TRUE(
+      HashTraits<String>::Equal(abc, reinterpret_cast<const LChar*>("abc")));
+  EXPECT_FALSE(
+      HashTraits<String>::Equal(abc, reinterpret_cast<const LChar*>("def")));
+  EXPECT_TRUE(
+      HashTraits<String>::Equal(reinterpret_cast<const LChar*>("abc"), abc));
+  EXPECT_FALSE(
+      HashTraits<String>::Equal(reinterpret_cast<const LChar*>("def"), abc));
+
+  const UChar abc_wide[] = {'a', 'b', 'c', 0};
+  const UChar def_wide[] = {'d', 'e', 'f', 0};
+  EXPECT_TRUE(HashTraits<String>::Equal(abc, abc_wide));
+  EXPECT_FALSE(HashTraits<String>::Equal(abc, def_wide));
+  EXPECT_TRUE(HashTraits<String>::Equal(abc_wide, abc));
+  EXPECT_FALSE(HashTraits<String>::Equal(def_wide, abc));
 }
 
 TEST(StringTest, ASCII) {
@@ -170,30 +207,110 @@ TEST(StringTest, ComparisonOfSameStringVectors) {
   EXPECT_EQ(string_vector, same_string_vector);
 }
 
+TEST(WTF, LengthWithStrippedWhiteSpace) {
+  String stripped("Hello  world");
+  EXPECT_EQ(stripped.LengthWithStrippedWhiteSpace(), stripped.length());
+  EXPECT_EQ(String("  Hello  world  ").LengthWithStrippedWhiteSpace(),
+            stripped.length());
+  EXPECT_EQ(String("Hello  world  ").LengthWithStrippedWhiteSpace(),
+            stripped.length());
+  EXPECT_EQ(String("  Hello  world").LengthWithStrippedWhiteSpace(),
+            stripped.length());
+  EXPECT_EQ(String("\nHello\n world  ").LengthWithStrippedWhiteSpace(),
+            stripped.length());
+  EXPECT_EQ(String().LengthWithStrippedWhiteSpace(), 0u);
+  EXPECT_EQ(String("").LengthWithStrippedWhiteSpace(), 0u);
+  EXPECT_EQ(String("\n").LengthWithStrippedWhiteSpace(), 0u);
+  EXPECT_EQ(String("\n\n").LengthWithStrippedWhiteSpace(), 0u);
+  String only_spaces("   ");
+  EXPECT_EQ(only_spaces.LengthWithStrippedWhiteSpace(), 0u);
+}
+
+TEST(StringTest, Substring) {
+  String str8("abc");
+  EXPECT_EQ(u"abc", str8.Substring(0));
+  EXPECT_EQ("abc", str8.Substring(0));
+  EXPECT_EQ("bc", str8.Substring(1));
+  EXPECT_EQ("c", str8.Substring(2));
+  EXPECT_EQ("", str8.Substring(3));
+  EXPECT_EQ("", str8.Substring(4));
+  EXPECT_EQ("", str8.Substring(3, 1));
+  EXPECT_EQ("ab", str8.Substring(0, 2));
+  EXPECT_EQ("abc", str8.Substring(0, 3));
+  EXPECT_EQ("abc", str8.Substring(0, 4));
+  EXPECT_EQ("b", str8.Substring(1, 1));
+
+  String str16(u"abc");
+  EXPECT_EQ("abc", str16.Substring(0));
+  EXPECT_EQ(u"abc", str16.Substring(0));
+  EXPECT_EQ(u"bc", str16.Substring(1));
+  EXPECT_EQ(u"c", str16.Substring(2));
+  EXPECT_EQ(u"", str16.Substring(3));
+  EXPECT_EQ(u"", str16.Substring(4));
+  EXPECT_EQ(u"", str16.Substring(3, 1));
+  EXPECT_EQ(u"ab", str16.Substring(0, 2));
+  EXPECT_EQ(u"abc", str8.Substring(0, 3));
+  EXPECT_EQ(u"abc", str8.Substring(0, 4));
+  EXPECT_EQ(u"b", str16.Substring(1, 1));
+}
+
 TEST(WTF, SimplifyWhiteSpace) {
   String extra_spaces("  Hello  world  ");
   EXPECT_EQ(String("Hello world"), extra_spaces.SimplifyWhiteSpace());
   EXPECT_EQ(String("  Hello  world  "),
-            extra_spaces.SimplifyWhiteSpace(WTF::kDoNotStripWhiteSpace));
+            extra_spaces.SimplifyWhiteSpace(kDoNotStripWhiteSpace));
 
   String extra_spaces_and_newlines(" \nHello\n world\n ");
   EXPECT_EQ(String("Hello world"),
             extra_spaces_and_newlines.SimplifyWhiteSpace());
   EXPECT_EQ(
       String("  Hello  world  "),
-      extra_spaces_and_newlines.SimplifyWhiteSpace(WTF::kDoNotStripWhiteSpace));
+      extra_spaces_and_newlines.SimplifyWhiteSpace(kDoNotStripWhiteSpace));
 
   String extra_spaces_and_tabs(" \nHello\t world\t ");
   EXPECT_EQ(String("Hello world"), extra_spaces_and_tabs.SimplifyWhiteSpace());
-  EXPECT_EQ(
-      String("  Hello  world  "),
-      extra_spaces_and_tabs.SimplifyWhiteSpace(WTF::kDoNotStripWhiteSpace));
+  EXPECT_EQ(String("  Hello  world  "),
+            extra_spaces_and_tabs.SimplifyWhiteSpace(kDoNotStripWhiteSpace));
+
+  auto is_space_or_g = [](UChar character) {
+    return character == ' ' || character == 'G';
+  };
+  String extra_spaces_and_gs(" GGG Hello G world G G");
+  EXPECT_EQ(String("Hello world"),
+            extra_spaces_and_gs.SimplifyWhiteSpace(is_space_or_g));
+  EXPECT_EQ(String("     Hello   world    "),
+            extra_spaces_and_gs.SimplifyWhiteSpace(is_space_or_g,
+                                                   kDoNotStripWhiteSpace));
+}
+
+TEST(StringTest, SplitByChar) {
+  Vector<String> result;
+  String("").Split(' ', result);
+  EXPECT_EQ(0u, result.size());
+  result.clear();
+
+  String("  foo  bar").Split(' ', result);
+  EXPECT_EQ(2u, result.size());
+  EXPECT_EQ("foo", result[0]);
+  EXPECT_EQ("bar", result[1]);
+  result.clear();
+
+  String("").Split(',', true, result);
+  EXPECT_EQ(1u, result.size());
+  EXPECT_EQ("", result[0]);
+  result.clear();
+
+  String("foo,,bar").Split(',', true, result);
+  EXPECT_EQ(3u, result.size());
+  EXPECT_EQ("foo", result[0]);
+  EXPECT_EQ("", result[1]);
+  EXPECT_EQ("bar", result[2]);
 }
 
 TEST(StringTest, StartsWithIgnoringUnicodeCase) {
   // [U+017F U+212A i a] starts with "sk".
-  EXPECT_TRUE(
-      String::FromUTF8("\xC5\xBF\xE2\x84\xAAia").StartsWithIgnoringCase("sk"));
+  EXPECT_TRUE(String::FromUTF8("\xC5\xBF\xE2\x84\xAAia")
+                  .DeprecatedStartsWithIgnoringCase("sk"));
 }
 
 TEST(StringTest, StartsWithIgnoringASCIICase) {
@@ -274,9 +391,8 @@ TEST(StringTest, DeprecatedLower) {
   EXPECT_EQ("lin\xE1k", String("lIn\xC1k").DeprecatedLower().Latin1());
 
   // U+212A -> k
-  EXPECT_EQ(
-      "link",
-      String::FromUTF8("LIN\xE2\x84\xAA").DeprecatedLower().Utf8());
+  EXPECT_EQ("link",
+            String::FromUTF8("LIN\xE2\x84\xAA").DeprecatedLower().Utf8());
 }
 
 TEST(StringTest, Ensure16Bit) {
@@ -322,17 +438,17 @@ TEST(StringTest, StringPrinter) {
   EXPECT_EQ("\"\\\"\"", ToStdStringThroughPrinter("\""));
   EXPECT_EQ("\"\\\\\"", ToStdStringThroughPrinter("\\"));
   EXPECT_EQ("\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\"",
-            ToStdStringThroughPrinter(
-                String("\x00\x01\x02\x03\x04\x05\x06\x07", 8u)));
-  EXPECT_EQ("\"\\u0008\\t\\n\\u000B\\u000C\\r\\u000E\\u000F\"",
-            ToStdStringThroughPrinter(
-                String("\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F", 8u)));
-  EXPECT_EQ("\"\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\"",
-            ToStdStringThroughPrinter(
-                String("\x10\x11\x12\x13\x14\x15\x16\x17", 8u)));
-  EXPECT_EQ("\"\\u0018\\u0019\\u001A\\u001B\\u001C\\u001D\\u001E\\u001F\"",
-            ToStdStringThroughPrinter(
-                String("\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F", 8u)));
+            ToStdStringThroughPrinter(String(
+                base::span_from_cstring("\x00\x01\x02\x03\x04\x05\x06\x07"))));
+  EXPECT_EQ(
+      "\"\\u0008\\t\\n\\u000B\\u000C\\r\\u000E\\u000F\"",
+      ToStdStringThroughPrinter(String("\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F")));
+  EXPECT_EQ(
+      "\"\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\"",
+      ToStdStringThroughPrinter(String("\x10\x11\x12\x13\x14\x15\x16\x17")));
+  EXPECT_EQ(
+      "\"\\u0018\\u0019\\u001A\\u001B\\u001C\\u001D\\u001E\\u001F\"",
+      ToStdStringThroughPrinter(String("\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F")));
   EXPECT_EQ("\"\\u007F\\u0080\\u0081\"",
             ToStdStringThroughPrinter("\x7F\x80\x81"));
   EXPECT_EQ("\"\"", ToStdStringThroughPrinter(g_empty_string));
@@ -341,8 +457,7 @@ TEST(StringTest, StringPrinter) {
   static const UChar kUnicodeSample[] = {0x30C6, 0x30B9,
                                          0x30C8};  // "Test" in Japanese.
   EXPECT_EQ("\"\\u30C6\\u30B9\\u30C8\"",
-            ToStdStringThroughPrinter(
-                String(kUnicodeSample, std::size(kUnicodeSample))));
+            ToStdStringThroughPrinter(String(base::span(kUnicodeSample))));
 }
 
 class TestMatcher {
@@ -362,10 +477,33 @@ TEST(StringTest, FindWithCallback) {
   // An instance method.
   TestMatcher matcher('t');
   // Unretained is safe because callback executes synchronously in Find().
-  auto callback =
-      WTF::BindRepeating(&TestMatcher::IsTarget, WTF::Unretained(&matcher));
-  EXPECT_EQ(WTF::kNotFound, test_string1.Find(callback));
+  auto callback = BindRepeating(&TestMatcher::IsTarget, Unretained(&matcher));
+  EXPECT_EQ(kNotFound, test_string1.Find(callback));
   EXPECT_EQ(1U, test_string2.Find(callback));
 }
 
-}  // namespace WTF
+TEST(StringTest, StartsWithIgnoringCaseAndAccents) {
+  EXPECT_TRUE(String(u"ÎÑŢÉRÑÅŢÎÖÑÅĻÎŽÅŢÎÖÑ")
+                  .StartsWithIgnoringCaseAndAccents(String("international")));
+}
+
+TEST(StringTest, StartsWithIgnoringCaseAndAccents8Bit) {
+  EXPECT_TRUE(String("PuPpY").StartsWithIgnoringCaseAndAccents(String("pup")));
+}
+
+TEST(StringTest, StartsWithIgnoringCaseAndAccentsExpanding) {
+  EXPECT_TRUE(
+      String(u"Straße").StartsWithIgnoringCaseAndAccents(String("STRASS")));
+}
+
+TEST(StringTest, StartsWithIgnoringCaseAndAccentsSuffixDiff) {
+  EXPECT_FALSE(
+      String("Donkey").StartsWithIgnoringCaseAndAccents(String("Donka")));
+}
+
+// https://issues.chromium.org/u/1/issues/420990876#comment9
+TEST(StringTest, Issue420990876FuzzerCase) {
+  EXPECT_EQ(String(), String::FromUTF8("\364\244\204\244"));
+}
+
+}  // namespace blink

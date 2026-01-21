@@ -5,7 +5,7 @@
 #ifndef MEDIA_FILTERS_SOURCE_BUFFER_STATE_H_
 #define MEDIA_FILTERS_SOURCE_BUFFER_STATE_H_
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -32,9 +32,6 @@ class MEDIA_EXPORT SourceBufferState {
   using CreateDemuxerStreamCB =
       base::RepeatingCallback<ChunkDemuxerStream*(DemuxerStream::Type)>;
 
-  using NewTextTrackCB = base::RepeatingCallback<void(ChunkDemuxerStream*,
-                                                      const TextTrackConfig&)>;
-
   SourceBufferState(std::unique_ptr<StreamParser> stream_parser,
                     std::unique_ptr<FrameProcessor> frame_processor,
                     CreateDemuxerStreamCB create_demuxer_stream_cb,
@@ -46,10 +43,9 @@ class MEDIA_EXPORT SourceBufferState {
   ~SourceBufferState();
 
   void Init(StreamParser::InitCB init_cb,
-            const std::string& expected_codecs,
+            std::optional<std::string_view> expected_codecs,
             const StreamParser::EncryptedMediaInitDataCB&
-                encrypted_media_init_data_cb,
-            NewTextTrackCB new_text_track_cb);
+                encrypted_media_init_data_cb);
 
   // Reconfigures this source buffer to use |new_stream_parser|. Caller must
   // first ensure that ResetParserState() was done to flush any pending frames
@@ -66,10 +62,7 @@ class MEDIA_EXPORT SourceBufferState {
   // append failure using a `QuotaExceededErr` exception per the MSE
   // specification. App could use a back-off and retry strategy or otherwise
   // alter their behavior to attempt to buffer media for further playback.
-  // TODO(crbug.com/1286810): Update resource allocation paths in the
-  // StreamParser implementations called by this method to recognize and report
-  // allocation failure.
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* data, size_t length);
+  [[nodiscard]] bool AppendToParseBuffer(base::span<const uint8_t> data);
 
   // Tells the stream parser to parse more of the data previously sent to it
   // from this object's AppendToParseBuffer(). `*timestamp_offset` is used and
@@ -111,17 +104,6 @@ class MEDIA_EXPORT SourceBufferState {
   // https://w3c.github.io/media-source/#sourcebuffer-coded-frame-eviction
   bool EvictCodedFrames(base::TimeDelta media_time, size_t newDataSize);
 
-  // Gets invoked when the system is experiencing memory pressure, i.e. there's
-  // not enough free memory. The |media_time| is the media playback position at
-  // the time of memory pressure notification (needed for accurate GC). The
-  // |memory_pressure_level| indicates memory pressure severity. The
-  // |force_instant_gc| is used to force the MSE garbage collection algorithm to
-  // be run right away, without waiting for the next append.
-  void OnMemoryPressure(
-      base::TimeDelta media_time,
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level,
-      bool force_instant_gc);
-
   // Returns true if currently parsing a media segment, or false otherwise.
   bool parsing_media_segment() const { return parsing_media_segment_; }
 
@@ -143,6 +125,10 @@ class MEDIA_EXPORT SourceBufferState {
   // end of stream range logic needs to be executed.
   Ranges<base::TimeDelta> GetBufferedRanges(base::TimeDelta duration,
                                             bool ended) const;
+
+  // Returns the lowest PTS of currently buffered frames in this source, or
+  // base::TimeDelta() if none of the streams contain buffered data.
+  base::TimeDelta GetLowestPresentationTimestamp() const;
 
   // Returns the highest PTS of currently buffered frames in this source, or
   // base::TimeDelta() if none of the streams contain buffered data.
@@ -201,15 +187,13 @@ class MEDIA_EXPORT SourceBufferState {
 
   // Initializes |stream_parser_|. Also, updates |expected_audio_codecs| and
   // |expected_video_codecs|.
-  void InitializeParser(const std::string& expected_codecs);
+  void InitializeParser(std::optional<std::string_view> expected_codecs);
 
   // Called by the |stream_parser_| when a new initialization segment is
   // encountered.
   // Returns true on a successful call. Returns false if an error occurred while
   // processing decoder configurations.
-  bool OnNewConfigs(std::string expected_codecs,
-                    std::unique_ptr<MediaTracks> tracks,
-                    const StreamParser::TextTrackConfigMap& text_configs);
+  bool OnNewConfigs(std::unique_ptr<MediaTracks> tracks);
 
   // Called by the |stream_parser_| at the beginning of a new media segment.
   void OnNewMediaSegment();
@@ -267,7 +251,6 @@ class MEDIA_EXPORT SourceBufferState {
   using DemuxerStreamMap = std::map<StreamParser::TrackId, ChunkDemuxerStream*>;
   DemuxerStreamMap audio_streams_;
   DemuxerStreamMap video_streams_;
-  DemuxerStreamMap text_streams_;
 
   std::unique_ptr<FrameProcessor> frame_processor_;
   const CreateDemuxerStreamCB create_demuxer_stream_cb_;
@@ -275,7 +258,6 @@ class MEDIA_EXPORT SourceBufferState {
 
   StreamParser::InitCB init_cb_;
   StreamParser::EncryptedMediaInitDataCB encrypted_media_init_data_cb_;
-  NewTextTrackCB new_text_track_cb_;
 
   State state_;
 
@@ -290,6 +272,11 @@ class MEDIA_EXPORT SourceBufferState {
   bool new_configs_possible_ = false;
   bool first_init_segment_received_ = false;
   bool encrypted_media_init_data_reported_ = false;
+
+  // Initialization can happen with an optional set of codecs, which much be
+  // strictly matched, if provided. If no strict codecs are provided, then
+  // non-strict mode is enabled, and codecs are not checked.
+  bool strict_codec_expectations_ = true;
 
   std::vector<AudioCodec> expected_audio_codecs_;
   std::vector<VideoCodec> expected_video_codecs_;

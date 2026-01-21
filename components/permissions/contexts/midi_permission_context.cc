@@ -6,23 +6,31 @@
 
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom.h"
+#include "components/permissions/permissions_client.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace permissions {
 
 MidiPermissionContext::MidiPermissionContext(
     content::BrowserContext* browser_context)
-    : PermissionContextBase(
+    : ContentSettingPermissionContextBase(
           browser_context,
           ContentSettingsType::MIDI,
-          blink::mojom::PermissionsPolicyFeature::kMidiFeature) {}
+          network::mojom::PermissionsPolicyFeature::kMidiFeature) {}
 
 MidiPermissionContext::~MidiPermissionContext() = default;
 
-ContentSetting MidiPermissionContext::GetPermissionStatusInternal(
+ContentSetting MidiPermissionContext::GetContentSettingStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
+  if (base::FeatureList::IsEnabled(blink::features::kBlockMidiByDefault)) {
+    return PermissionsClient::Get()
+        ->GetSettingsMap(browser_context())
+        ->GetContentSetting(requesting_origin, embedding_origin,
+                            ContentSettingsType::MIDI_SYSEX);
+  }
   return CONTENT_SETTING_ALLOW;
 }
 

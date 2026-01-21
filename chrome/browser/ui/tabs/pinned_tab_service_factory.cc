@@ -8,25 +8,35 @@
 #include "chrome/browser/ui/tabs/pinned_tab_service.h"
 
 // static
-PinnedTabService* PinnedTabServiceFactory::GetForProfile(
-    Profile* profile) {
+PinnedTabService* PinnedTabServiceFactory::GetForProfile(Profile* profile) {
   return static_cast<PinnedTabService*>(
       GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 PinnedTabServiceFactory* PinnedTabServiceFactory::GetInstance() {
-  return base::Singleton<PinnedTabServiceFactory>::get();
+  static base::NoDestructor<PinnedTabServiceFactory> instance;
+  return instance.get();
 }
 
 PinnedTabServiceFactory::PinnedTabServiceFactory()
-    : ProfileKeyedServiceFactory("PinnedTabService") {}
+    : ProfileKeyedServiceFactory(
+          "PinnedTabService",
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {}
 
-PinnedTabServiceFactory::~PinnedTabServiceFactory() {
-}
+PinnedTabServiceFactory::~PinnedTabServiceFactory() = default;
 
-KeyedService* PinnedTabServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+PinnedTabServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* profile) const {
-  return new PinnedTabService(static_cast<Profile*>(profile));
+  return std::make_unique<PinnedTabService>(static_cast<Profile*>(profile));
 }
 
 bool PinnedTabServiceFactory::ServiceIsCreatedWithBrowserContext() const {

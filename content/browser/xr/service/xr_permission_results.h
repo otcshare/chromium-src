@@ -5,11 +5,13 @@
 #ifndef CONTENT_BROWSER_XR_SERVICE_XR_PERMISSION_RESULTS_H_
 #define CONTENT_BROWSER_XR_SERVICE_XR_PERMISSION_RESULTS_H_
 
+#include <optional>
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "content/public/browser/permission_result.h"
 #include "device/vr/public/mojom/vr_service.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/vr/public/mojom/xr_session.mojom-shared.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 
 namespace content {
@@ -21,7 +23,7 @@ class XrPermissionResults {
  public:
   XrPermissionResults(
       const std::vector<blink::PermissionType>& permission_types,
-      const std::vector<blink::mojom::PermissionStatus>& permission_statuses);
+      const std::vector<PermissionResult>& permission_results);
   ~XrPermissionResults();
 
   // Checks if |permission_type_to_status| contains permissions necessary to
@@ -33,13 +35,13 @@ class XrPermissionResults {
   // satisfied, `false` otherwise.
   bool HasPermissionsFor(device::mojom::XRSessionFeature feature) const;
 
-  static absl::optional<blink::PermissionType> GetPermissionFor(
+  static std::optional<blink::PermissionType> GetPermissionFor(
       device::mojom::XRSessionMode mode);
-  static absl::optional<blink::PermissionType> GetPermissionFor(
+  static std::optional<blink::PermissionType> GetPermissionFor(
       device::mojom::XRSessionFeature feature);
 
  private:
-  const base::flat_map<blink::PermissionType, blink::mojom::PermissionStatus>
+  const base::flat_map<blink::PermissionType, PermissionResult>
       permission_type_to_status_;
 
   bool HasPermissionsFor(blink::PermissionType permission_type) const;

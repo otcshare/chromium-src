@@ -6,6 +6,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/process/memory.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/win/process_startup_helper.h"
@@ -90,11 +91,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   logging::SetEventSource("GCPW", GCPW_EXTENSION_CATEGORY, MSG_LOG_MESSAGE);
 
   if (GetGlobalFlagOrDefault(kRegEnableVerboseLogging, 0))
-    logging::SetMinLogLevel(logging::LOG_VERBOSE);
+    logging::SetMinLogLevel(logging::LOGGING_VERBOSE);
 
   // Make sure the process exits cleanly on unexpected errors.
   base::EnableTerminationOnHeapCorruption();
   base::EnableTerminationOnOutOfMemory();
+  logging::RegisterAbslAbortHook();
   base::win::RegisterInvalidParamHandler();
   base::win::SetupCRT(*base::CommandLine::ForCurrentProcess());
 

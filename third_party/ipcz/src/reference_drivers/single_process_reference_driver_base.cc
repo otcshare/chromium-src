@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "reference_drivers/single_process_reference_driver_base.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -13,8 +11,10 @@
 #include "ipcz/ipcz.h"
 #include "reference_drivers/object.h"
 #include "reference_drivers/random.h"
+#include "reference_drivers/single_process_reference_driver_base.h"
 #include "third_party/abseil-cpp/absl/base/macros.h"
 #include "util/ref_counted.h"
+#include "util/unsafe_buffers.h"
 
 namespace ipcz::reference_drivers {
 
@@ -25,7 +25,7 @@ class InProcessMemory : public ObjectImpl<InProcessMemory, Object::kMemory> {
  public:
   explicit InProcessMemory(size_t size)
       : size_(size), data_(new uint8_t[size]) {
-    memset(&data_[0], 0, size_);
+    IPCZ_UNSAFE_TODO(memset(&data_[0], 0, size_));
   }
 
   size_t size() const { return size_; }
@@ -76,7 +76,7 @@ IpczResult IPCZ_API Serialize(IpczDriverHandle handle,
                               IpczDriverHandle transport,
                               uint32_t flags,
                               const void* options,
-                              void* data,
+                              volatile void* data,
                               size_t* num_bytes,
                               IpczDriverHandle* handles,
                               size_t* num_handles) {
@@ -102,7 +102,7 @@ IpczResult IPCZ_API Serialize(IpczDriverHandle handle,
   return IPCZ_RESULT_OK;
 }
 
-IpczResult IPCZ_API Deserialize(const void* data,
+IpczResult IPCZ_API Deserialize(const volatile void* data,
                                 size_t num_bytes,
                                 const IpczDriverHandle* handles,
                                 size_t num_handles,
@@ -166,7 +166,7 @@ IpczResult IPCZ_API DuplicateSharedMemory(IpczDriverHandle driver_memory,
 IpczResult IPCZ_API MapSharedMemory(IpczDriverHandle driver_memory,
                                     uint32_t flags,
                                     const void* options,
-                                    void** address,
+                                    volatile void** address,
                                     IpczDriverHandle* driver_mapping) {
   Ref<InProcessMemory> memory(InProcessMemory::FromHandle(driver_memory));
   auto mapping = MakeRefCounted<InProcessMapping>(std::move(memory));

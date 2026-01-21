@@ -8,18 +8,20 @@
 #include <vector>
 
 #include "ash/constants/ash_paths.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "chrome/browser/ash/login/login_pref_names.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/proto/install_attributes.pb.h"
@@ -57,15 +59,14 @@ cryptohome::SerializedInstallAttributes BuildInstallAttributes(
     const std::string& name = it.first;
     const std::string& value = it.second;
     attr_entry->set_name(name);
-    attr_entry->mutable_value()->assign(value.data(),
-                                        value.data() + value.size());
+    attr_entry->mutable_value()->assign(
+        value.data(), UNSAFE_TODO(value.data() + value.size()));
   }
   return install_attrs;
 }
 
 void WriteFile(const base::FilePath& path, const std::string& blob) {
-  CHECK_EQ(base::checked_cast<int>(blob.length()),
-           base::WriteFile(path, blob.data(), blob.length()));
+  CHECK(base::WriteFile(path, blob));
 }
 
 }  // namespace

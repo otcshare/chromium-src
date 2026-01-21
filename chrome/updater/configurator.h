@@ -5,23 +5,24 @@
 #ifndef CHROME_UPDATER_CONFIGURATOR_H_
 #define CHROME_UPDATER_CONFIGURATOR_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "components/update_client/buildflags.h"
+#include "chrome/updater/event_logger.h"
 #include "components/update_client/configurator.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 class PrefService;
 
 namespace base {
 class Version;
-class FilePath;
 }  // namespace base
 
 namespace crx_file {
@@ -29,29 +30,25 @@ enum class VerifierFormat;
 }
 
 namespace update_client {
-class ActivityDataService;
 class NetworkFetcherFactory;
+class CrxCache;
 class CrxDownloaderFactory;
 class ProtocolHandlerFactory;
 }  // namespace update_client
 
 namespace updater {
 
-class ActivityDataService;
 class ExternalConstants;
+class PersistedData;
 class PolicyService;
 class UpdaterPrefs;
+enum class UpdaterScope;
 
-#if BUILDFLAG(ENABLE_PUFFIN_PATCHES)
-inline constexpr const char* kCrxCachePath = "crx_cache";
-#endif
-
-// This class is free-threaded. Its instance is shared by multiple sequences and
-// it can't be mutated.
 class Configurator : public update_client::Configurator {
  public:
   Configurator(scoped_refptr<UpdaterPrefs> prefs,
-               scoped_refptr<ExternalConstants> external_constants);
+               scoped_refptr<ExternalConstants> external_constants,
+               UpdaterScope scope);
   Configurator(const Configurator&) = delete;
   Configurator& operator=(const Configurator&) = delete;
 
@@ -75,36 +72,44 @@ class Configurator : public update_client::Configurator {
       override;
   scoped_refptr<update_client::UnzipperFactory> GetUnzipperFactory() override;
   scoped_refptr<update_client::PatcherFactory> GetPatcherFactory() override;
-  bool EnabledDeltas() const override;
   bool EnabledBackgroundDownloader() const override;
   bool EnabledCupSigning() const override;
   PrefService* GetPrefService() const override;
-  update_client::ActivityDataService* GetActivityDataService() const override;
+  update_client::PersistedData* GetPersistedData() const override;
   bool IsPerUserInstall() const override;
   std::unique_ptr<update_client::ProtocolHandlerFactory>
   GetProtocolHandlerFactory() const override;
-  absl::optional<bool> IsMachineExternallyManaged() const override;
+  std::optional<bool> IsMachineExternallyManaged() const override;
   update_client::UpdaterStateProvider GetUpdaterStateProvider() const override;
-#if BUILDFLAG(ENABLE_PUFFIN_PATCHES)
-  absl::optional<base::FilePath> GetCrxCachePath() const override;
-#endif
+  scoped_refptr<update_client::CrxCache> GetCrxCache() const override;
+  bool IsConnectionMetered() const override;
+
+  scoped_refptr<PersistedData> GetUpdaterPersistedData() const;
+  scoped_refptr<UpdaterEventLogger> GetEventLogger() const;
+  virtual GURL CrashUploadURL() const;
 
   base::TimeDelta ServerKeepAliveTime() const;
   scoped_refptr<PolicyService> GetPolicyService() const;
   crx_file::VerifierFormat GetCrxVerifierFormat() const;
+  std::optional<std::vector<uint8_t>> GetCrxPublicKeyHash() const;
+  base::TimeDelta MinimumEventLoggingCooldown() const;
 
  private:
   friend class base::RefCountedThreadSafe<Configurator>;
   ~Configurator() override;
 
+  SEQUENCE_CHECKER(sequence_checker_);
   scoped_refptr<UpdaterPrefs> prefs_;
-  scoped_refptr<PolicyService> policy_service_;
   scoped_refptr<ExternalConstants> external_constants_;
-  std::unique_ptr<ActivityDataService> activity_data_service_;
+  scoped_refptr<PersistedData> persisted_data_;
+  scoped_refptr<PolicyService> policy_service_;
   scoped_refptr<update_client::NetworkFetcherFactory> network_fetcher_factory_;
   scoped_refptr<update_client::CrxDownloaderFactory> crx_downloader_factory_;
   scoped_refptr<update_client::UnzipperFactory> unzip_factory_;
   scoped_refptr<update_client::PatcherFactory> patch_factory_;
+  scoped_refptr<update_client::CrxCache> crx_cache_;
+  scoped_refptr<UpdaterEventLogger> event_logger_;
+  const std::optional<bool> is_managed_device_;
 };
 
 }  // namespace updater

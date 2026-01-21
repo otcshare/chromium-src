@@ -6,7 +6,10 @@
 #define COMPONENTS_VIZ_SERVICE_SURFACES_PENDING_COPY_OUTPUT_REQUEST_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
@@ -19,10 +22,17 @@ namespace viz {
 struct VIZ_SERVICE_EXPORT PendingCopyOutputRequest {
   PendingCopyOutputRequest(LocalSurfaceId surface_id,
                            SubtreeCaptureId subtree_id,
-                           std::unique_ptr<CopyOutputRequest> request);
-  PendingCopyOutputRequest(PendingCopyOutputRequest&&);
-  PendingCopyOutputRequest& operator=(PendingCopyOutputRequest&&);
+                           std::unique_ptr<CopyOutputRequest> request,
+                           bool capture_exact_id = false,
+                           base::TimeDelta timeout = base::TimeDelta());
+  PendingCopyOutputRequest(const PendingCopyOutputRequest& ohter) = delete;
+  PendingCopyOutputRequest& operator=(const PendingCopyOutputRequest&) = delete;
+  PendingCopyOutputRequest(PendingCopyOutputRequest&&) = delete;
+  PendingCopyOutputRequest& operator=(PendingCopyOutputRequest&&) = delete;
   ~PendingCopyOutputRequest();
+
+  // Returns if this pending request has timed out.
+  bool IsTimedOut() const;
 
   // The ID of the local surface which |copy_output_request| will be placed on
   // its next composited frame. If this ID is default constructed, then the next
@@ -36,6 +46,22 @@ struct VIZ_SERVICE_EXPORT PendingCopyOutputRequest {
 
   // The actual copy-of-output request.
   std::unique_ptr<CopyOutputRequest> copy_output_request;
+
+  // Indicates if this request is used to capture the old page for a navigation.
+  // Such requests should only be picked up by the `Surfaces` with exact
+  // matching `local_surface_id` (as opposed to being picked up by the surfaces
+  // whose `LocalSurfaceId` is >= `local_surface_id`).
+  //
+  // Notice that setting this flag to true does not guarantee the successful
+  // copy. The request issuer is also responsible for making sure the `Surface`s
+  // are preserved in order to be captured.
+  bool capture_exact_surface_id = false;
+
+  // The response deadline.
+  std::optional<base::OneShotTimer> response_deadline_timer;
+
+ private:
+  void TimeoutFired();
 };
 
 }  // namespace viz

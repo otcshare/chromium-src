@@ -7,7 +7,6 @@
 #include <cmath>
 
 #include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -19,19 +18,6 @@ namespace auto_screen_brightness {
 namespace {
 constexpr double kTol = 1e-10;
 
-// Entries should not be renumbered and numeric values should never be reused.
-enum class InvalidCurveReason {
-  kTooFewPoints = 0,
-  kUnequalXY = 1,
-  kKnotsNotIncreasing = 2,
-  kControlsDecreasing = 3,
-  kMaxValue = kControlsDecreasing
-};
-
-void LogError(InvalidCurveReason reason) {
-  base::UmaHistogramEnumeration("AutoScreenBrightness.InvalidCurveReason",
-                                reason);
-}
 
 bool IsIncreasing(const std::vector<double>& data, bool is_strict) {
   DCHECK_GT(data.size(), 1u);
@@ -45,22 +31,18 @@ bool IsIncreasing(const std::vector<double>& data, bool is_strict) {
 bool IsDataValid(const std::vector<double>& xs, const std::vector<double>& ys) {
   const size_t num_points = xs.size();
   if (num_points < 2) {
-    LogError(InvalidCurveReason::kTooFewPoints);
     return false;
   }
 
   if (num_points != ys.size()) {
-    LogError(InvalidCurveReason::kUnequalXY);
     return false;
   }
 
   if (!IsIncreasing(xs, true /* is_strict */)) {
-    LogError(InvalidCurveReason::kKnotsNotIncreasing);
     return false;
   }
 
   if (!IsIncreasing(ys, false /* is_strict */)) {
-    LogError(InvalidCurveReason::kControlsDecreasing);
     return false;
   }
 
@@ -123,18 +105,18 @@ MonotoneCubicSpline& MonotoneCubicSpline::operator=(
 
 MonotoneCubicSpline::~MonotoneCubicSpline() = default;
 
-absl::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
+std::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
     const std::string& data) {
   std::vector<double> xs;
   std::vector<double> ys;
 
   if (data.empty())
-    return absl::nullopt;
+    return std::nullopt;
 
   base::StringPairs key_value_pairs;
   if (!base::SplitStringIntoKeyValuePairs(data, ',', '\n', &key_value_pairs)) {
     LOG(ERROR) << "Ill-formatted spline";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   for (base::StringPairs::iterator it = key_value_pairs.begin();
@@ -142,29 +124,29 @@ absl::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
     double x;
     if (!base::StringToDouble(it->first, &x)) {
       LOG(ERROR) << "Ill-formatted xs";
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     double y;
     if (!base::StringToDouble(it->second, &y)) {
       LOG(ERROR) << "Ill-formatted ys";
-      return absl::nullopt;
+      return std::nullopt;
     }
     xs.push_back(x);
     ys.push_back(y);
   }
 
   if (!IsDataValid(xs, ys))
-    return absl::nullopt;
+    return std::nullopt;
 
   return MonotoneCubicSpline(xs, ys);
 }
 
-absl::optional<MonotoneCubicSpline>
+std::optional<MonotoneCubicSpline>
 MonotoneCubicSpline::CreateMonotoneCubicSpline(const std::vector<double>& xs,
                                                const std::vector<double>& ys) {
   if (!IsDataValid(xs, ys))
-    return absl::nullopt;
+    return std::nullopt;
 
   return MonotoneCubicSpline(xs, ys);
 }
@@ -182,10 +164,6 @@ bool MonotoneCubicSpline::operator==(const MonotoneCubicSpline& spline) const {
   }
 
   return true;
-}
-
-bool MonotoneCubicSpline::operator!=(const MonotoneCubicSpline& spline) const {
-  return !(*this == spline);
 }
 
 double MonotoneCubicSpline::Interpolate(double x) const {

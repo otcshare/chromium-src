@@ -6,12 +6,12 @@
 
 #include <stdint.h>
 
+#include <algorithm>
+
 #include "ash/public/ash_interfaces.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
-#include "chrome/browser/ui/ash/ash_util.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/display/display.h"
@@ -34,7 +34,7 @@ const uint16_t kDeviceIds[] = {0x0457, 0x266e, 0x222a};
 // Returns true if `vendor_id` is a valid vendor id that may be made the primary
 // display.
 bool IsAllowListedVendorId(uint16_t vendor_id) {
-  return base::Contains(kDeviceIds, vendor_id);
+  return std::ranges::contains(kDeviceIds, vendor_id);
 }
 
 }  // namespace
@@ -44,18 +44,19 @@ OobeDisplayChooser::OobeDisplayChooser() {
       cros_display_config_.BindNewPipeAndPassReceiver());
 }
 
-OobeDisplayChooser::~OobeDisplayChooser() {}
+OobeDisplayChooser::~OobeDisplayChooser() = default;
 
 void OobeDisplayChooser::TryToPlaceUiOnTouchDisplay() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Don't (potentially) queue a second task to run MoveToTouchDisplay if one
   // already is queued.
-  if (weak_ptr_factory_.HasWeakPtrs())
+  if (weak_ptr_factory_.HasWeakPtrs()) {
     return;
+  }
 
   display::Display primary_display =
-      display::Screen::GetScreen()->GetPrimaryDisplay();
+      display::Screen::Get()->GetPrimaryDisplay();
 
   if (primary_display.is_valid() && !TouchSupportAvailable(primary_display)) {
     content::GetUIThreadTaskRunner({})->PostTask(

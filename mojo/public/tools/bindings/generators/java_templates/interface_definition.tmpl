@@ -18,13 +18,19 @@
 {% endmacro %}
 
 {%- macro declare_callback(method) -%}
-
-interface {{method|interface_response_name}} extends org.chromium.mojo.bindings.Callbacks.Callback{{method.response_parameters|length}}{% if method.response_parameters %}<
-{%-   for param in method.response_parameters -%}
-{{param.kind|java_type(True)}}
-{%- if not loop.last %}, {% endif %}
+interface {{method|interface_response_name}} {
+  public void call(
+{%- if method.result_response != None %}
+      Result<{{method.result_response.success_kind|java_type(true)}},
+             {{method.result_response.failure_kind|java_type(true)}}> result
+{%- else -%}
+{%-   for param in method.response_parameters %}
+      {{param.kind|java_type(false)}} {{param|name}}
+{%-     if not loop.last %}, {% endif %}
 {%-   endfor -%}
->{% endif %} { }
+{%- endif -%}
+      );
+}
 {%- endmacro -%}
 
 {%- macro run_callback(variable, parameters) -%}
@@ -34,6 +40,11 @@ interface {{method|interface_response_name}} extends org.chromium.mojo.bindings.
 {%-   if not loop.last %}, {% endif %}
 {%-     endfor -%}
 {%-   endif -%}
+{%- endmacro -%}
+
+
+{%- macro result_converter_name(method, callback) -%}
+{{method|interface_response_name}}_Converter
 {%- endmacro -%}
 
 {%- macro flags_for_method(method, is_request) -%}
@@ -78,8 +89,11 @@ public static final {{manager_class(interface, True)}} MANAGER =
     }
 
     @Override
-    public Stub buildStub(org.chromium.mojo.system.Core core, {{interface|name}} impl) {
-        return new Stub(core, impl);
+    public org.chromium.mojo.bindings.Stub<{{interface|name}}> buildStub(
+            org.chromium.mojo.system.Core core,
+            {{interface|name}} impl,
+            int interfaceId) {
+        return new {{interface|name}}Stub(core, impl, interfaceId);
     }
 
     @Override
@@ -98,10 +112,12 @@ try {
     if (header.hasFlag(org.chromium.mojo.bindings.MessageHeader.MESSAGE_IS_SYNC_FLAG)) {
         flags = flags | org.chromium.mojo.bindings.MessageHeader.MESSAGE_IS_SYNC_FLAG;
     }
-    if (!header.validateHeader(flags)) {
-        return false;
+    if (!header.hasExactFlags(flags)) {
+        throw new org.chromium.mojo.bindings.InvalidHeaderException(
+            "expected flags: " + flags + ", but got: " + header.getFlags()
+        );
     }
-    switch(header.getType()) {
+    switch(header.getMethodId()) {
 {%   if with_response %}
         case org.chromium.mojo.bindings.interfacecontrol.InterfaceControlMessagesConstants.RUN_MESSAGE_ID:
             return org.chromium.mojo.bindings.InterfaceControlMessagesHelper.handleRun(
@@ -131,11 +147,11 @@ try {
 {%     endif %}
 {%   endfor %}
         default:
-            return false;
+            throw new org.chromium.mojo.bindings.UnknownMethodException(
+                "unknown method: " + header.getMethodId());
     }
 } catch (org.chromium.mojo.bindings.DeserializationException e) {
-    System.err.println(e.toString());
-    return false;
+    throw new org.chromium.mojo.bindings.UnmarshalException(e);
 }
 {%- endmacro -%}
 
@@ -187,43 +203,78 @@ class {{interface|name}}_Internal {
 {%   for param in method.parameters %}
             _message.{{param|name}} = {{param|name}};
 {%   endfor %}
+            try {
 {%   if method.response_parameters != None %}
-            getProxyHandler().getMessageReceiver().acceptWithResponder(
-                    _message.serializeWithHeader(
-                            getProxyHandler().getCore(),
-                            new org.chromium.mojo.bindings.MessageHeader(
-                                    {{method|method_ordinal_name}},
-                                    {{flags_for_method(method, True)}},
-                                    0)),
-                    new {{method.response_param_struct|name}}ForwardToCallback(callback));
+                getProxyHandler().getMessageReceiver().acceptWithResponder(
+                        _message.serializeWithHeader(
+                                getProxyHandler().getCore(),
+                                new org.chromium.mojo.bindings.MessageHeader(
+                                        org.chromium.mojo.bindings.MessageHeader.TEMPORARY_DEFAULT_INTERFACE_ID,
+                                        {{method|method_ordinal_name}},
+                                        {{flags_for_method(method, True)}},
+                                        0)),
+                        new {{method.response_param_struct|name}}ForwardToCallback(callback));
 {%   else %}
-            getProxyHandler().getMessageReceiver().accept(
-                    _message.serializeWithHeader(
-                            getProxyHandler().getCore(),
-                            new org.chromium.mojo.bindings.MessageHeader({{method|method_ordinal_name}})));
+                getProxyHandler().getMessageReceiver().accept(
+                        _message.serializeWithHeader(
+                                getProxyHandler().getCore(),
+                                new org.chromium.mojo.bindings.MessageHeader(
+                                    org.chromium.mojo.bindings.MessageHeader.TEMPORARY_DEFAULT_INTERFACE_ID,
+                                    {{method|method_ordinal_name}})));
 {%   endif %}
+            } catch (org.chromium.mojo.bindings.BadMessageException e) {
+                // Should not be possible, because we serialized above.
+                throw new IllegalStateException(e);
+            }
         }
 {% endfor %}
 
     }
 
-    static final class Stub extends org.chromium.mojo.bindings.Interface.Stub<{{interface|name}}> {
+    static final class {{interface|name}}Stub extends org.chromium.mojo.bindings.Stub<{{interface|name}}> {
 
-        Stub(org.chromium.mojo.system.Core core, {{interface|name}} impl) {
-            super(core, impl);
+        {{interface|name}}Stub(org.chromium.mojo.system.Core core, {{interface|name}} impl, int interfaceId) {
+            super(core, impl, interfaceId);
         }
 
         @Override
-        public boolean accept(org.chromium.mojo.bindings.Message message) {
+        public boolean accept(org.chromium.mojo.bindings.Message message) throws org.chromium.mojo.bindings.BadMessageException {
             {{accept_body(interface, False)|indent(12)}}
         }
 
         @Override
-        public boolean acceptWithResponder(org.chromium.mojo.bindings.Message message, org.chromium.mojo.bindings.MessageReceiver receiver) {
+        public boolean acceptWithResponder(org.chromium.mojo.bindings.Message message, org.chromium.mojo.bindings.MessageReceiver receiver)
+                throws org.chromium.mojo.bindings.BadMessageException {
             {{accept_body(interface, True)|indent(12)}}
         }
     }
 {% for method in interface.methods %}
+
+{%-   if method.result_response != None -%}
+{%-    set result_param = method.response_parameters[0] %}
+{%-    set success_kind = method.result_response.success_kind -%}
+{%-    set failure_kind = method.result_response.failure_kind %}
+{%-    set generic_typing = '<' + success_kind|java_type(true) + ', ' + failure_kind|java_type(true) + '>' %}
+{%-    set mojo_type = result_param.kind|java_type(false) %}
+
+    static class {{result_converter_name(method)}} {
+        static {{mojo_type}} convert(Result{{generic_typing}} result) {
+            var mojoObj = new {{mojo_type}}();
+            if (result.isSuccess()) {
+                mojoObj.setSuccess(result.get());
+            } else {
+                mojoObj.setFailure(result.getError());
+            }
+            return mojoObj;
+        }
+
+        static Result{{generic_typing}} convert({{mojo_type}} mojoObj) {
+            return mojoObj.which() == {{mojo_type}}.Tag.Success ?
+                Result.of(mojoObj.getSuccess()) :
+                Result.ofError(mojoObj.getFailure());
+        }
+    }
+{%-   endif %}
 
     {{ struct_def(method.param_struct, True)|indent(4) }}
 {%   if method.response_parameters != None %}
@@ -231,8 +282,7 @@ class {{interface|name}}_Internal {
 
     {{ struct_def(response_struct, True)|indent(4) }}
 
-    static class {{response_struct|name}}ForwardToCallback extends org.chromium.mojo.bindings.SideEffectFreeCloseable
-            implements org.chromium.mojo.bindings.MessageReceiver {
+    static class {{response_struct|name}}ForwardToCallback implements org.chromium.mojo.bindings.MessageReceiver {
         private final {{interface|name}}.{{method|interface_response_name}} mCallback;
 
         {{response_struct|name}}ForwardToCallback({{interface|name}}.{{method|interface_response_name}} callback) {
@@ -240,24 +290,35 @@ class {{interface|name}}_Internal {
         }
 
         @Override
-        public boolean accept(org.chromium.mojo.bindings.Message message) {
+        public boolean accept(org.chromium.mojo.bindings.Message message) throws org.chromium.mojo.bindings.BadMessageException {
             try {
                 org.chromium.mojo.bindings.ServiceMessage messageWithHeader =
                         message.asServiceMessage();
                 org.chromium.mojo.bindings.MessageHeader header = messageWithHeader.getHeader();
-                if (!header.validateHeader({{method|method_ordinal_name}},
-                                           {{flags_for_method(method, False)}})) {
+                if (header.getMethodId() != {{method|method_ordinal_name}}) {
+                    return false;
+                }
+                if (!header.hasExactFlags({{flags_for_method(method, False)}})) {
                     return false;
                 }
 {%   if method.response_parameters|length %}
                 {{response_struct|name}} response = {{response_struct|name}}.deserialize(messageWithHeader.getPayload());
 {%   endif %}
+{%-  if method.result_response != None %}
+{%-    set result_param = method.response_parameters[0] %}
+                var mojoObj = response.{{result_param|name}};
+                mCallback.call({{result_converter_name(method)}}.convert(mojoObj));
+{%-  else %}
                 mCallback.call({{run_callback('response', method.response_parameters)}});
+{%-  endif %}
                 return true;
             } catch (org.chromium.mojo.bindings.DeserializationException e) {
-                return false;
+                throw new org.chromium.mojo.bindings.UnmarshalException(e);
             }
         }
+
+        @Override
+        public void close() {}
     }
 
     static class {{response_struct|name}}ProxyToResponder implements {{interface|name}}.{{method|interface_response_name}} {
@@ -276,19 +337,38 @@ class {{interface|name}}_Internal {
         }
 
         @Override
-        public void call({{declare_params(method.response_parameters, true)}}) {
+{%-  if method.result_response -%}
+{%-   set success_kind = method.result_response.success_kind %}
+{%-   set failure_kind = method.result_response.failure_kind %}
+        public void call(Result<{{success_kind|java_type(true)}}, {{failure_kind|java_type(true)}}> result) {
+{%-  else %}
+        public void call({{declare_params(method.response_parameters)}}) {
+{%-  endif %}
             {{response_struct|name}} _response = new {{response_struct|name}}();
+
+
+{%-  if method.result_response -%}
+{%-    set result_param = method.response_parameters[0] %}
+            _response.{{result_param|name}} = {{result_converter_name(method)}}.convert(result);
+{%-  else %}
 {%   for param in method.response_parameters %}
             _response.{{param|name}} = {{param|name}};
 {%   endfor %}
-            org.chromium.mojo.bindings.ServiceMessage _message =
-                    _response.serializeWithHeader(
-                            mCore,
-                            new org.chromium.mojo.bindings.MessageHeader(
-                                    {{method|method_ordinal_name}},
-                                    {{flags_for_method(method, False)}},
-                                    mRequestId));
-            mMessageReceiver.accept(_message);
+{%-  endif %}
+            try {
+                org.chromium.mojo.bindings.ServiceMessage _message =
+                        _response.serializeWithHeader(
+                                mCore,
+                                new org.chromium.mojo.bindings.MessageHeader(
+                                        org.chromium.mojo.bindings.MessageHeader.TEMPORARY_DEFAULT_INTERFACE_ID,
+                                        {{method|method_ordinal_name}},
+                                        {{flags_for_method(method, False)}},
+                                        mRequestId));
+                mMessageReceiver.accept(_message);
+            } catch (org.chromium.mojo.bindings.BadMessageException e) {
+                // Should not be possible, because we serialized above.
+                throw new IllegalStateException(e);
+            }
         }
     }
 {%   endif %}

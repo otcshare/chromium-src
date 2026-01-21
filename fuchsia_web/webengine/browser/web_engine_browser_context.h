@@ -10,13 +10,21 @@
 #include "base/files/file_path.h"
 #include "components/client_hints/browser/in_memory_client_hints_controller_delegate.h"
 #include "components/keyed_service/core/simple_factory_key.h"
+#include "components/reduce_accept_language/browser/in_memory_reduce_accept_language_service.h"
 #include "content/public/browser/browser_context.h"
+#include "fuchsia_web/webengine/browser/platform_notification_service_impl.h"
+#include "fuchsia_web/webengine/browser/push_messaging_service_impl.h"
 #include "fuchsia_web/webengine/browser/web_engine_permission_delegate.h"
 
 class WebEngineNetLogObserver;
 
 namespace network {
+class NetworkConnectionTracker;
 class NetworkQualityTracker;
+}
+
+namespace os_crypt_async {
+class OSCryptAsync;
 }
 
 class WebEngineBrowserContext final : public content::BrowserContext {
@@ -25,11 +33,15 @@ class WebEngineBrowserContext final : public content::BrowserContext {
   // the specified |data_directory|.
   static std::unique_ptr<WebEngineBrowserContext> CreatePersistent(
       base::FilePath data_directory,
-      network::NetworkQualityTracker* network_quality_tracker);
+      network::NetworkQualityTracker* network_quality_tracker,
+      os_crypt_async::OSCryptAsync* os_crypt_async,
+      network::NetworkConnectionTracker* network_connection_tracker);
 
   // Creates a browser context with no support for persistent data.
   static std::unique_ptr<WebEngineBrowserContext> CreateIncognito(
-      network::NetworkQualityTracker* network_quality_tracker);
+      network::NetworkQualityTracker* network_quality_tracker,
+      os_crypt_async::OSCryptAsync* os_crypt_async,
+      network::NetworkConnectionTracker* network_connection_tracker);
 
   ~WebEngineBrowserContext() override;
 
@@ -39,9 +51,8 @@ class WebEngineBrowserContext final : public content::BrowserContext {
   // BrowserContext implementation.
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
-  base::FilePath GetPath() override;
+  base::FilePath GetPath() const override;
   bool IsOffTheRecord() override;
-  content::ResourceContext* GetResourceContext() override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
   storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
@@ -64,20 +75,22 @@ class WebEngineBrowserContext final : public content::BrowserContext {
   GetReduceAcceptLanguageControllerDelegate() override;
 
  private:
-  // Contains URLRequestContextGetter required for resource loading.
-  class ResourceContext;
-
   explicit WebEngineBrowserContext(
       base::FilePath data_dir_path,
-      network::NetworkQualityTracker* network_quality_tracker);
+      network::NetworkQualityTracker* network_quality_tracker,
+      os_crypt_async::OSCryptAsync* os_crypt_async,
+      network::NetworkConnectionTracker* network_connection_tracker);
 
   const base::FilePath data_dir_path_;
 
   const std::unique_ptr<WebEngineNetLogObserver> net_log_observer_;
   SimpleFactoryKey simple_factory_key_;
   WebEnginePermissionDelegate permission_delegate_;
-  std::unique_ptr<ResourceContext> resource_context_;
   client_hints::InMemoryClientHintsControllerDelegate client_hints_delegate_;
+  reduce_accept_language::InMemoryReduceAcceptLanguageService
+      reduce_accept_language_delegate_;
+  PushMessagingServiceImpl push_messaging_service_;
+  PlatformNotificationServiceImpl platform_notification_service_;
 };
 
 #endif  // FUCHSIA_WEB_WEBENGINE_BROWSER_WEB_ENGINE_BROWSER_CONTEXT_H_

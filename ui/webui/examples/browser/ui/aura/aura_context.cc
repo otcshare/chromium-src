@@ -4,6 +4,8 @@
 
 #include "ui/webui/examples/browser/ui/aura/aura_context.h"
 
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/test/test_screen.h"
@@ -42,7 +44,7 @@ class FocusRules : public wm::BaseFocusRules {
 
 class AuraContext::NativeCursorManager : public wm::NativeCursorManager {
  public:
-  NativeCursorManager() = default;
+  NativeCursorManager() { aura::client::SetCursorShapeClient(&cursor_loader_); }
   ~NativeCursorManager() override = default;
 
   void AddHost(aura::WindowTreeHost* host) { hosts_.insert(host); }
@@ -52,9 +54,9 @@ class AuraContext::NativeCursorManager : public wm::NativeCursorManager {
   // wm::NativeCursorManager:
   void SetDisplay(const display::Display& display,
                   wm::NativeCursorManagerDelegate* delegate) override {
-    cursor_loader_.SetDisplayData(display.rotation(),
-                                  display.device_scale_factor());
-    SetCursor(delegate->GetCursor(), delegate);
+    if (cursor_loader_.SetDisplay(display)) {
+      SetCursor(delegate->GetCursor(), delegate);
+    }
   }
 
   void SetCursor(gfx::NativeCursor cursor,
@@ -63,8 +65,9 @@ class AuraContext::NativeCursorManager : public wm::NativeCursorManager {
     cursor_loader_.SetPlatformCursor(&new_cursor);
     delegate->CommitCursor(new_cursor);
     if (delegate->IsCursorVisible()) {
-      for (auto* host : hosts_)
+      for (aura::WindowTreeHost* host : hosts_) {
         host->SetCursor(new_cursor);
+      }
     }
   }
 
@@ -77,16 +80,24 @@ class AuraContext::NativeCursorManager : public wm::NativeCursorManager {
     } else {
       gfx::NativeCursor invisible_cursor(ui::mojom::CursorType::kNone);
       cursor_loader_.SetPlatformCursor(&invisible_cursor);
-      for (auto* host : hosts_)
+      for (aura::WindowTreeHost* host : hosts_) {
         host->SetCursor(invisible_cursor);
+      }
     }
 
-    for (auto* host : hosts_)
+    for (aura::WindowTreeHost* host : hosts_) {
       host->OnCursorVisibilityChanged(visible);
+    }
   }
 
   void SetCursorSize(ui::CursorSize cursor_size,
                      wm::NativeCursorManagerDelegate* delegate) override {
+    NOTIMPLEMENTED();
+  }
+
+  void SetLargeCursorSizeInDip(
+      int large_cursor_size_in_dip,
+      wm::NativeCursorManagerDelegate* delegate) override {
     NOTIMPLEMENTED();
   }
 
@@ -95,12 +106,18 @@ class AuraContext::NativeCursorManager : public wm::NativeCursorManager {
       wm::NativeCursorManagerDelegate* delegate) override {
     delegate->CommitMouseEventsEnabled(enabled);
     SetVisibility(delegate->IsCursorVisible(), delegate);
-    for (auto* host : hosts_)
+    for (aura::WindowTreeHost* host : hosts_) {
       host->dispatcher()->OnMouseEventsEnableStateChanged(enabled);
+    }
+  }
+
+  void SetCursorColor(SkColor color,
+                      wm::NativeCursorManagerDelegate* delegate) override {
+    NOTIMPLEMENTED();
   }
 
   // The set of hosts to notify of changes in cursor state.
-  base::flat_set<aura::WindowTreeHost*> hosts_;
+  base::flat_set<raw_ptr<aura::WindowTreeHost, CtnExperimental>> hosts_;
 
   wm::CursorLoader cursor_loader_;
 };
@@ -119,7 +136,7 @@ AuraContext::ContextualizedWindowTreeHost::~ContextualizedWindowTreeHost() {
 
 AuraContext::AuraContext()
     : screen_(aura::TestScreen::Create(gfx::Size(1024, 768))) {
-  DCHECK(!display::Screen::GetScreen());
+  DCHECK(!display::Screen::Get());
   display::Screen::SetScreenInstance(screen_.get());
   focus_controller_ = std::make_unique<wm::FocusController>(new FocusRules());
   auto native_cursor_manager = std::make_unique<NativeCursorManager>();

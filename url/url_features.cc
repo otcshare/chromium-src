@@ -3,24 +3,56 @@
 // found in the LICENSE file.
 
 #include "url/url_features.h"
+#include "base/feature_list.h"
 
 namespace url {
 
-BASE_FEATURE(kUseIDNA2008NonTransitional,
-             "UseIDNA2008NonTransitional",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kDisallowSpaceCharacterInURLHostParsing,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Kill switch for crbug.com/1362507.
-BASE_FEATURE(kRecordIDNA2008Metrics,
-             "RecordIDNA2008Metrics",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsUsingIDNA2008NonTransitional() {
-  return base::FeatureList::IsEnabled(kUseIDNA2008NonTransitional);
+bool IsDisallowingSpaceCharacterInURLHostParsing() {
+  // If the FeatureList isn't available yet, fall back to the feature's default
+  // state. This may happen during early startup, see crbug.com/1441956.
+  if (!base::FeatureList::GetInstance()) {
+    return kDisallowSpaceCharacterInURLHostParsing.default_state ==
+           base::FEATURE_ENABLED_BY_DEFAULT;
+  }
+  return base::FeatureList::IsEnabled(kDisallowSpaceCharacterInURLHostParsing);
 }
 
-bool IsRecordingIDNA2008Metrics() {
-  return base::FeatureList::IsEnabled(kRecordIDNA2008Metrics);
+BASE_FEATURE(kUseIDNAContextJRules, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsUsingIDNAContextJRules() {
+  // If the FeatureList isn't available yet, fall back to the feature's default
+  // state. This may happen during early startup, see crbug.com/1441956.
+  if (!base::FeatureList::GetInstance()) {
+    return kUseIDNAContextJRules.default_state ==
+           base::FEATURE_ENABLED_BY_DEFAULT;
+  }
+  return base::FeatureList::IsEnabled(kUseIDNAContextJRules);
+}
+
+BASE_FEATURE(kNonSpecialLeadingSlashHandling, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsNonSpecialLeadingSlashHandlingEnabled() {
+  if (!base::FeatureList::GetInstance()) {
+    return kNonSpecialLeadingSlashHandling.default_state ==
+           base::FEATURE_ENABLED_BY_DEFAULT;
+  }
+  return base::FeatureList::IsEnabled(kNonSpecialLeadingSlashHandling);
+}
+
+BASE_FEATURE(kPreservePercentEncodedDotInPath,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsPreservingPercentEncodedDotInPath() {
+  // If the FeatureList isn't available yet, fall back to the feature's default
+  // state. This may happen during early startup, see crbug.com/1441956.
+  if (!base::FeatureList::GetInstance()) {
+    return kPreservePercentEncodedDotInPath.default_state ==
+           base::FEATURE_ENABLED_BY_DEFAULT;
+  }
+  return base::FeatureList::IsEnabled(kPreservePercentEncodedDotInPath);
 }
 
 }  // namespace url

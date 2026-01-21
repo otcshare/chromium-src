@@ -7,24 +7,25 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/device_event_log/device_event_log.h"
-#include "services/device/usb/jni_headers/ChromeUsbService_jni.h"
 #include "services/device/usb/usb_device_android.h"
 
-using base::android::AttachCurrentThread;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/usb/jni_headers/ChromeUsbService_jni.h"
+
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
+using jni_zero::AttachCurrentThread;
 
 namespace device {
 
 UsbServiceAndroid::UsbServiceAndroid() : UsbService() {
   JNIEnv* env = AttachCurrentThread();
   j_object_.Reset(
-      Java_ChromeUsbService_create(env, reinterpret_cast<jlong>(this)));
+      Java_ChromeUsbService_create(env, reinterpret_cast<int64_t>(this)));
   ScopedJavaLocalRef<jobjectArray> devices =
       Java_ChromeUsbService_getDevices(env, j_object_);
   for (auto usb_device : devices.ReadElements<jobject>()) {
@@ -41,7 +42,6 @@ UsbServiceAndroid::~UsbServiceAndroid() {
 }
 
 void UsbServiceAndroid::DeviceAttached(JNIEnv* env,
-                                       const JavaRef<jobject>& caller,
                                        const JavaRef<jobject>& usb_device) {
   scoped_refptr<UsbDeviceAndroid> device =
       UsbDeviceAndroid::Create(env, weak_factory_.GetWeakPtr(), usb_device);
@@ -49,9 +49,7 @@ void UsbServiceAndroid::DeviceAttached(JNIEnv* env,
   NotifyDeviceAdded(device);
 }
 
-void UsbServiceAndroid::DeviceDetached(JNIEnv* env,
-                                       const JavaRef<jobject>& caller,
-                                       jint device_id) {
+void UsbServiceAndroid::DeviceDetached(JNIEnv* env, int32_t device_id) {
   auto it = devices_by_id_.find(device_id);
   if (it == devices_by_id_.end())
     return;
@@ -67,13 +65,13 @@ void UsbServiceAndroid::DeviceDetached(JNIEnv* env,
   NotifyDeviceRemoved(device);
 }
 
-void UsbServiceAndroid::DevicePermissionRequestComplete(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& caller,
-    jint device_id,
-    jboolean granted) {
+void UsbServiceAndroid::DevicePermissionRequestComplete(JNIEnv* env,
+                                                        int32_t device_id,
+                                                        bool granted) {
   const auto it = devices_by_id_.find(device_id);
-  DCHECK(it != devices_by_id_.end());
+  if (it == devices_by_id_.end()) {
+    return;
+  }
   it->second->PermissionGranted(env, granted);
 }
 
@@ -95,8 +93,8 @@ void UsbServiceAndroid::RequestDevicePermission(
 }
 
 void UsbServiceAndroid::AddDevice(scoped_refptr<UsbDeviceAndroid> device) {
-  DCHECK(!base::Contains(devices_by_id_, device->device_id()));
-  DCHECK(!base::Contains(devices(), device->guid()));
+  DCHECK(!devices_by_id_.contains(device->device_id()));
+  DCHECK(!devices().contains(device->guid()));
   devices_by_id_[device->device_id()] = device;
   devices()[device->guid()] = device;
 
@@ -109,3 +107,5 @@ void UsbServiceAndroid::AddDevice(scoped_refptr<UsbDeviceAndroid> device) {
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeUsbService)

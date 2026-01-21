@@ -27,6 +27,7 @@ class PreRedirectionURLObserver
     : public content::WebContentsObserver,
       public content::WebContentsUserData<PreRedirectionURLObserver> {
  public:
+  ~PreRedirectionURLObserver() override;
   PreRedirectionURLObserver(const PreRedirectionURLObserver&) = delete;
   PreRedirectionURLObserver& operator=(const PreRedirectionURLObserver&) =
       delete;
@@ -38,7 +39,6 @@ class PreRedirectionURLObserver
  private:
   explicit PreRedirectionURLObserver(content::WebContents* web_contents);
   friend class content::WebContentsUserData<PreRedirectionURLObserver>;
-  friend class PreRedirectionURLObserverTest;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 

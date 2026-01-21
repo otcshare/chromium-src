@@ -5,9 +5,10 @@
 #include "third_party/blink/renderer/platform/media/video_decode_stats_reporter.h"
 
 #include <memory>
+#include <optional>
+#include <utility>
 
-#include "base/bind.h"
-#include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -18,13 +19,13 @@
 #include "media/base/video_codecs.h"
 #include "media/base/video_types.h"
 #include "media/capabilities/bucket_utility.h"
-#include "media/mojo/mojom/media_types.mojom.h"
-#include "media/mojo/mojom/video_decode_stats_recorder.mojom.h"
+#include "media/mojo/mojom/media_types.mojom-blink.h"
+#include "media/mojo/mojom/video_decode_stats_recorder.mojom-blink.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace blink {
@@ -71,13 +72,14 @@ media::PipelineStatistics MakeStats(int frames_decoded,
 }
 
 // Mock VideoDecodeStatsRecorder to verify reporter/recorder interactions.
-class RecordInterceptor : public media::mojom::VideoDecodeStatsRecorder {
+class RecordInterceptor : public media::mojom::blink::VideoDecodeStatsRecorder {
  public:
   RecordInterceptor() = default;
   ~RecordInterceptor() override = default;
 
   // Until move-only types work.
-  void StartNewRecord(media::mojom::PredictionFeaturesPtr features) override {
+  void StartNewRecord(
+      media::mojom::blink::PredictionFeaturesPtr features) override {
     MockStartNewRecord(features->profile, features->video_size,
                        features->frames_per_sec, features->key_system,
                        features->use_hw_secure_codecs);
@@ -87,10 +89,11 @@ class RecordInterceptor : public media::mojom::VideoDecodeStatsRecorder {
                void(media::VideoCodecProfile profile,
                     const gfx::Size& natural_size,
                     int frames_per_sec,
-                    std::string key_system,
+                    String key_system,
                     bool use_hw_secure_codecs));
 
-  void UpdateRecord(media::mojom::PredictionTargetsPtr targets) override {
+  void UpdateRecord(
+      media::mojom::blink::PredictionTargetsPtr targets) override {
     MockUpdateRecord(targets->frames_decoded, targets->frames_dropped,
                      targets->frames_power_efficient);
   }
@@ -122,6 +125,9 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    // Depends on `reporter_` so must be cleared before it is destroyed.
+    interceptor_ = nullptr;
+
     // Break the IPC connection if reporter still around.
     reporter_.reset();
 
@@ -159,18 +165,20 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
     SLOW_STABILIZE_FPS,
   };
 
-  // Return mojo::PendingRemote<media::mojom::VideoDecodeStatsRecorder>
+  // Return mojo::PendingRemote<media::mojom::blink::VideoDecodeStatsRecorder>
   // after binding the RecordInterceptor to the receiver for a
   // VideoDecodeStatsRecorder. The interceptor serves as a mock recorder to
   // verify reporter/recorder interactions.
-  mojo::PendingRemote<media::mojom::VideoDecodeStatsRecorder>
-  SetupRecordInterceptor(RecordInterceptor** interceptor) {
+  mojo::PendingRemote<media::mojom::blink::VideoDecodeStatsRecorder>
+  SetupRecordInterceptor(raw_ptr<RecordInterceptor>* interceptor_ptr) {
     // Capture a the interceptor pointer for verifying recorder calls. Lifetime
     // will be managed by the |recorder_remote|.
-    *interceptor = new RecordInterceptor();
-    mojo::PendingRemote<media::mojom::VideoDecodeStatsRecorder> recorder_remote;
+    auto interceptor = std::make_unique<RecordInterceptor>();
+    *interceptor_ptr = interceptor.get();
+    mojo::PendingRemote<media::mojom::blink::VideoDecodeStatsRecorder>
+        recorder_remote;
     mojo::MakeSelfOwnedReceiver(
-        base::WrapUnique(*interceptor),
+        std::move(interceptor),
         recorder_remote.InitWithNewPipeAndPassReceiver());
     EXPECT_TRUE(recorder_remote.is_valid());
     return recorder_remote;
@@ -180,11 +188,11 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
   void MakeReporter(
       media::VideoCodecProfile profile = kDefaultProfile,
       const gfx::Size& natural_size = gfx::Size(kDefaultWidth, kDefaultHeight),
-      const absl::optional<media::CdmConfig> cdm_config = kDefaultCdmConfig) {
+      const std::optional<media::CdmConfig> cdm_config = kDefaultCdmConfig) {
     reporter_ = std::make_unique<VideoDecodeStatsReporter>(
         SetupRecordInterceptor(&interceptor_),
-        base::BindRepeating(&VideoDecodeStatsReporterTest::GetPipelineStatsCB,
-                            base::Unretained(this)),
+        BindRepeating(&VideoDecodeStatsReporterTest::GetPipelineStatsCB,
+                      Unretained(this)),
         profile, natural_size, cdm_config,
         task_environment_.GetMainThreadTaskRunner(),
         task_environment_.GetMockTickClock());
@@ -216,7 +224,7 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
       gfx::Size expected_natural_size = gfx::Size(kDefaultWidth,
                                                   kDefaultHeight),
       int expected_fps = kDefaultFps,
-      std::string expected_key_system = kDefaultKeySystem,
+      String expected_key_system = kDefaultKeySystem,
       bool expected_use_hw_secure_codecs = kDefaultUseHwSecureCodecs) {
     DCHECK(!reporter_->is_playing_);
     DCHECK_EQ(reporter_->num_stable_fps_samples_, 0);
@@ -252,7 +260,7 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
       media::VideoCodecProfile expected_profile,
       gfx::Size expected_natural_size,
       int expected_fps,
-      std::string expected_key_system,
+      String expected_key_system,
       bool expected_use_hw_secure_codecs,
       FpsStabiliaztionSpeed fps_timer_speed = FAST_STABILIZE_FPS) {
     ASSERT_TRUE(ShouldBeReporting());
@@ -362,7 +370,7 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
   // Points to the interceptor that acts as a VideoDecodeStatsRecorder. The
   // object is owned by mojo::Remote<VideoDecodeStatsRecorder>, which is itself
   // owned by |reporter_|.
-  RecordInterceptor* interceptor_ = nullptr;
+  raw_ptr<RecordInterceptor> interceptor_ = nullptr;
 
   // The VideoDecodeStatsReporter being tested.
   std::unique_ptr<VideoDecodeStatsReporter> reporter_;
@@ -380,9 +388,11 @@ class VideoDecodeStatsReporterTest : public ::testing::Test {
 };
 
 const base::TimeDelta VideoDecodeStatsReporterTest::kRecordingInterval =
-    base::Milliseconds(VideoDecodeStatsReporter::kRecordingIntervalMs);
+    base::Milliseconds(
+        std::to_underlying(VideoDecodeStatsReporter::kRecordingIntervalMs));
 const base::TimeDelta VideoDecodeStatsReporterTest::kTinyFpsWindowDuration =
-    base::Milliseconds(VideoDecodeStatsReporter::kTinyFpsWindowMs);
+    base::Milliseconds(
+        std::to_underlying(VideoDecodeStatsReporter::kTinyFpsWindowMs));
 
 TEST_F(VideoDecodeStatsReporterTest, RecordWhilePlaying) {
   StartPlayingAndStabilizeFramerate();
@@ -455,9 +465,10 @@ TEST_F(VideoDecodeStatsReporterTest, RecordingStopsWhenHidden) {
   // while hidden, so expect a new record to begin. GetPipelineStatsCB will be
   // called to update offsets to ignore stats while hidden.
   EXPECT_CALL(*this, GetPipelineStatsCB());
-  EXPECT_CALL(*interceptor_,
-              MockStartNewRecord(kDefaultProfile, kDefaultSize_, kDefaultFps,
-                                 kDefaultKeySystem, kDefaultUseHwSecureCodecs));
+  EXPECT_CALL(
+      *interceptor_,
+      MockStartNewRecord(kDefaultProfile, kDefaultSize_, kDefaultFps,
+                         String(kDefaultKeySystem), kDefaultUseHwSecureCodecs));
   reporter_->OnShown();
 
   // Update offsets for new record and verify updates resume as time advances.
@@ -865,7 +876,7 @@ TEST_F(VideoDecodeStatsReporterTest, VaryEmeProperties) {
                                                  kNonDefaultHwSecureCodecs};
 
   // Make reporter with no EME properties.
-  MakeReporter(kDefaultProfile, kDefaultSize, absl::nullopt);
+  MakeReporter(kDefaultProfile, kDefaultSize, std::nullopt);
   // Verify the empty key system and non-default hw_secure_codecs.
   StartPlayingAndStabilizeFramerate(kDefaultProfile, kDefaultSize, kDefaultFps,
                                     kEmptyKeySystem, kNonDefaultHwSecureCodecs);

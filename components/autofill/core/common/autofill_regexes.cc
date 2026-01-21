@@ -4,14 +4,16 @@
 
 #include "components/autofill/core/common/autofill_regexes.h"
 
-#include <map>
-#include <memory>
-#include <string>
-#include <utility>
+#include <tuple>
 
 #include "base/check.h"
+#include "base/containers/to_vector.h"
+#include "base/debug/crash_logging.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/ptr_util.h"
+#include "base/not_fatal_until.h"
+#include "base/notreached.h"
+#include "base/strings/utf_string_conversions.h"
 
 namespace {
 
@@ -23,19 +25,33 @@ constexpr int kMaxStringLength = 5000;
 
 namespace autofill {
 
-std::unique_ptr<const icu::RegexPattern> CompileRegex(
-    base::StringPiece16 regex) {
+std::unique_ptr<const icu::RegexPattern> CompileRegex(std::u16string_view regex,
+                                                      uint32_t flags) {
   const icu::UnicodeString icu_regex(false, regex.data(), regex.length());
   UErrorCode status = U_ZERO_ERROR;
-  std::unique_ptr<icu::RegexPattern> regex_pattern = base::WrapUnique(
-      icu::RegexPattern::compile(icu_regex, UREGEX_CASE_INSENSITIVE, status));
-  DCHECK(U_SUCCESS(status));
+  std::unique_ptr<icu::RegexPattern> regex_pattern =
+      base::WrapUnique(icu::RegexPattern::compile(icu_regex, flags, status));
+
+  // TODO(crbug.com/468309430): The following is temporary instrumentation to
+  // investigate regex compilation failures. Once fixed, replace this with
+  // `CHECK(U_SUCCESS(status));`
+  if (U_FAILURE(status)) {
+    SCOPED_CRASH_KEY_STRING32("autofill", "bad-regex",
+                              base::UTF16ToUTF8(regex));
+    DUMP_WILL_BE_NOTREACHED();
+    return nullptr;
+  }
   return regex_pattern;
 }
 
-bool MatchesRegex(base::StringPiece16 input,
-                  const icu::RegexPattern& regex_pattern,
+bool MatchesRegex(std::u16string_view input,
+                  const icu::RegexPattern* regex_pattern,
                   std::vector<std::u16string>* groups) {
+  // TODO(crbug.com/468309430): Make this a `CHECK` once issue is fixed.
+  if (!regex_pattern) {
+    return false;
+  }
+
   if (input.size() > kMaxStringLength)
     return false;
 
@@ -44,7 +60,7 @@ bool MatchesRegex(base::StringPiece16 input,
   // it.
   icu::UnicodeString icu_input(false, input.data(), input.length());
   std::unique_ptr<icu::RegexMatcher> regex_matcher =
-      base::WrapUnique(regex_pattern.matcher(icu_input, status));
+      base::WrapUnique(regex_pattern->matcher(icu_input, status));
   UBool matched = regex_matcher->find(0, status);
   DCHECK(U_SUCCESS(status));
 
@@ -60,6 +76,35 @@ bool MatchesRegex(base::StringPiece16 input,
   return matched;
 }
 
+std::u16string MatchAndReplace(std::u16string_view input,
+                               const icu::RegexPattern& pattern,
+                               std::string_view replacement) {
+  icu::UnicodeString icu_input(input);
+  UErrorCode status = U_ZERO_ERROR;
+  std::unique_ptr<icu::RegexMatcher> matcher =
+      base::WrapUnique(pattern.matcher(icu_input, status));
+  DCHECK(U_SUCCESS(status));
+  icu_input =
+      matcher->replaceAll(icu::UnicodeString::fromUTF8(replacement), status);
+  return base::i18n::UnicodeStringToString16(icu_input);
+}
+
+std::optional<std::vector<std::u16string>> SplitByRegex(
+    std::u16string_view input,
+    const icu::RegexPattern& regex_pattern,
+    size_t max_groups) {
+  UErrorCode status = U_ZERO_ERROR;
+  icu::UnicodeString icu_input(false, input.data(), input.length());
+  std::vector<icu::UnicodeString> parts(max_groups);
+  int32_t part_count =
+      regex_pattern.split(icu_input, parts.data(), parts.size(), status);
+  if (U_FAILURE(status) || part_count <= 0) {
+    return std::nullopt;
+  }
+  parts.resize(part_count);
+  return base::ToVector(parts, &base::i18n::UnicodeStringToString16);
+}
+
 AutofillRegexCache::AutofillRegexCache(ThreadSafe thread_safe)
     : thread_safe_(thread_safe) {
   if (!thread_safe_)
@@ -72,8 +117,8 @@ AutofillRegexCache::~AutofillRegexCache() {
 }
 
 const icu::RegexPattern* AutofillRegexCache::GetRegexPattern(
-    base::StringPiece16 regex) {
-  auto GetOrCreate = [&]() {
+    std::u16string_view regex) {
+  auto GetOrCreate = [&] {
     auto it = cache_.find(regex);
     if (it == cache_.end()) {
       bool success;
@@ -81,7 +126,7 @@ const icu::RegexPattern* AutofillRegexCache::GetRegexPattern(
           cache_.emplace(std::u16string(regex), CompileRegex(regex));
       DCHECK(success);
     }
-    DCHECK(it != cache_.end());
+    CHECK(it != cache_.end());
     DCHECK(it->second.get());
     return it->second.get();
   };

@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/common/extensions/api/input_method_private.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
@@ -16,6 +17,7 @@ namespace chromeos {
 class ExtensionDictionaryEventRouter;
 class ExtensionInputMethodEventRouter;
 class ExtensionImeMenuEventRouter;
+class LanguagePackEventRouter;
 }
 
 namespace extensions {
@@ -24,7 +26,7 @@ namespace extensions {
 class InputMethodPrivateGetInputMethodConfigFunction
     : public ExtensionFunction {
  public:
-  InputMethodPrivateGetInputMethodConfigFunction() {}
+  InputMethodPrivateGetInputMethodConfigFunction() = default;
 
   InputMethodPrivateGetInputMethodConfigFunction(
       const InputMethodPrivateGetInputMethodConfigFunction&) = delete;
@@ -32,7 +34,7 @@ class InputMethodPrivateGetInputMethodConfigFunction
       const InputMethodPrivateGetInputMethodConfigFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateGetInputMethodConfigFunction() override {}
+  ~InputMethodPrivateGetInputMethodConfigFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -45,7 +47,7 @@ class InputMethodPrivateGetInputMethodConfigFunction
 class InputMethodPrivateGetCurrentInputMethodFunction
     : public ExtensionFunction {
  public:
-  InputMethodPrivateGetCurrentInputMethodFunction() {}
+  InputMethodPrivateGetCurrentInputMethodFunction() = default;
 
   InputMethodPrivateGetCurrentInputMethodFunction(
       const InputMethodPrivateGetCurrentInputMethodFunction&) = delete;
@@ -53,7 +55,7 @@ class InputMethodPrivateGetCurrentInputMethodFunction
       const InputMethodPrivateGetCurrentInputMethodFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateGetCurrentInputMethodFunction() override {}
+  ~InputMethodPrivateGetCurrentInputMethodFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -66,7 +68,7 @@ class InputMethodPrivateGetCurrentInputMethodFunction
 class InputMethodPrivateSetCurrentInputMethodFunction
     : public ExtensionFunction {
  public:
-  InputMethodPrivateSetCurrentInputMethodFunction() {}
+  InputMethodPrivateSetCurrentInputMethodFunction() = default;
 
   InputMethodPrivateSetCurrentInputMethodFunction(
       const InputMethodPrivateSetCurrentInputMethodFunction&) = delete;
@@ -74,7 +76,7 @@ class InputMethodPrivateSetCurrentInputMethodFunction
       const InputMethodPrivateSetCurrentInputMethodFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateSetCurrentInputMethodFunction() override {}
+  ~InputMethodPrivateSetCurrentInputMethodFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -87,7 +89,7 @@ class InputMethodPrivateSetCurrentInputMethodFunction
 class InputMethodPrivateSwitchToLastUsedInputMethodFunction
     : public ExtensionFunction {
  public:
-  InputMethodPrivateSwitchToLastUsedInputMethodFunction() {}
+  InputMethodPrivateSwitchToLastUsedInputMethodFunction() = default;
 
   InputMethodPrivateSwitchToLastUsedInputMethodFunction(
       const InputMethodPrivateSwitchToLastUsedInputMethodFunction&) = delete;
@@ -95,7 +97,7 @@ class InputMethodPrivateSwitchToLastUsedInputMethodFunction
       const InputMethodPrivateSwitchToLastUsedInputMethodFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateSwitchToLastUsedInputMethodFunction() override {}
+  ~InputMethodPrivateSwitchToLastUsedInputMethodFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -107,7 +109,7 @@ class InputMethodPrivateSwitchToLastUsedInputMethodFunction
 // Implements the inputMethodPrivate.getInputMethods method.
 class InputMethodPrivateGetInputMethodsFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateGetInputMethodsFunction() {}
+  InputMethodPrivateGetInputMethodsFunction() = default;
 
   InputMethodPrivateGetInputMethodsFunction(
       const InputMethodPrivateGetInputMethodsFunction&) = delete;
@@ -115,7 +117,7 @@ class InputMethodPrivateGetInputMethodsFunction : public ExtensionFunction {
       const InputMethodPrivateGetInputMethodsFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateGetInputMethodsFunction() override {}
+  ~InputMethodPrivateGetInputMethodsFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -128,7 +130,7 @@ class InputMethodPrivateGetInputMethodsFunction : public ExtensionFunction {
 class InputMethodPrivateFetchAllDictionaryWordsFunction
     : public ExtensionFunction {
  public:
-  InputMethodPrivateFetchAllDictionaryWordsFunction() {}
+  InputMethodPrivateFetchAllDictionaryWordsFunction() = default;
 
   InputMethodPrivateFetchAllDictionaryWordsFunction(
       const InputMethodPrivateFetchAllDictionaryWordsFunction&) = delete;
@@ -136,7 +138,7 @@ class InputMethodPrivateFetchAllDictionaryWordsFunction
       const InputMethodPrivateFetchAllDictionaryWordsFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateFetchAllDictionaryWordsFunction() override {}
+  ~InputMethodPrivateFetchAllDictionaryWordsFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -148,7 +150,7 @@ class InputMethodPrivateFetchAllDictionaryWordsFunction
 // Implements the inputMethodPrivate.addWordToDictionary method.
 class InputMethodPrivateAddWordToDictionaryFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateAddWordToDictionaryFunction() {}
+  InputMethodPrivateAddWordToDictionaryFunction() = default;
 
   InputMethodPrivateAddWordToDictionaryFunction(
       const InputMethodPrivateAddWordToDictionaryFunction&) = delete;
@@ -156,7 +158,7 @@ class InputMethodPrivateAddWordToDictionaryFunction : public ExtensionFunction {
       const InputMethodPrivateAddWordToDictionaryFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateAddWordToDictionaryFunction() override {}
+  ~InputMethodPrivateAddWordToDictionaryFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -168,7 +170,7 @@ class InputMethodPrivateAddWordToDictionaryFunction : public ExtensionFunction {
 // Implements the inputMethodPrivate.setXkbLayout method.
 class InputMethodPrivateSetXkbLayoutFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateSetXkbLayoutFunction() {}
+  InputMethodPrivateSetXkbLayoutFunction() = default;
 
   InputMethodPrivateSetXkbLayoutFunction(
       const InputMethodPrivateSetXkbLayoutFunction&) = delete;
@@ -176,7 +178,7 @@ class InputMethodPrivateSetXkbLayoutFunction : public ExtensionFunction {
       const InputMethodPrivateSetXkbLayoutFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateSetXkbLayoutFunction() override {}
+  ~InputMethodPrivateSetXkbLayoutFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -188,7 +190,7 @@ class InputMethodPrivateSetXkbLayoutFunction : public ExtensionFunction {
 // Implements the inputMethodPrivate.showInputView method.
 class InputMethodPrivateShowInputViewFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateShowInputViewFunction() {}
+  InputMethodPrivateShowInputViewFunction() = default;
 
   InputMethodPrivateShowInputViewFunction(
       const InputMethodPrivateShowInputViewFunction&) = delete;
@@ -196,7 +198,7 @@ class InputMethodPrivateShowInputViewFunction : public ExtensionFunction {
       const InputMethodPrivateShowInputViewFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateShowInputViewFunction() override {}
+  ~InputMethodPrivateShowInputViewFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -215,7 +217,7 @@ class InputMethodPrivateHideInputViewFunction : public ExtensionFunction {
       const InputMethodPrivateHideInputViewFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateHideInputViewFunction() override {}
+  ~InputMethodPrivateHideInputViewFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -227,7 +229,7 @@ class InputMethodPrivateHideInputViewFunction : public ExtensionFunction {
 // Implements the inputMethodPrivate.openOptionsPage method.
 class InputMethodPrivateOpenOptionsPageFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateOpenOptionsPageFunction() {}
+  InputMethodPrivateOpenOptionsPageFunction() = default;
 
   InputMethodPrivateOpenOptionsPageFunction(
       const InputMethodPrivateOpenOptionsPageFunction&) = delete;
@@ -235,7 +237,7 @@ class InputMethodPrivateOpenOptionsPageFunction : public ExtensionFunction {
       const InputMethodPrivateOpenOptionsPageFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateOpenOptionsPageFunction() override {}
+  ~InputMethodPrivateOpenOptionsPageFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -246,7 +248,7 @@ class InputMethodPrivateOpenOptionsPageFunction : public ExtensionFunction {
 
 class InputMethodPrivateGetSurroundingTextFunction : public ExtensionFunction {
  public:
-  InputMethodPrivateGetSurroundingTextFunction() {}
+  InputMethodPrivateGetSurroundingTextFunction() = default;
 
   InputMethodPrivateGetSurroundingTextFunction(
       const InputMethodPrivateGetSurroundingTextFunction&) = delete;
@@ -254,7 +256,7 @@ class InputMethodPrivateGetSurroundingTextFunction : public ExtensionFunction {
       const InputMethodPrivateGetSurroundingTextFunction&) = delete;
 
  protected:
-  ~InputMethodPrivateGetSurroundingTextFunction() override {}
+  ~InputMethodPrivateGetSurroundingTextFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -309,29 +311,12 @@ class InputMethodPrivateSetCompositionRangeFunction : public ExtensionFunction {
                              INPUTMETHODPRIVATE_SETCOMPOSITIONRANGE)
 
  protected:
-  ~InputMethodPrivateSetCompositionRangeFunction() override {}
+  ~InputMethodPrivateSetCompositionRangeFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class InputMethodPrivateGetTextFieldBoundsFunction : public ExtensionFunction {
- public:
-  InputMethodPrivateGetTextFieldBoundsFunction(
-      const InputMethodPrivateGetTextFieldBoundsFunction&) = delete;
-  InputMethodPrivateGetTextFieldBoundsFunction& operator=(
-      const InputMethodPrivateGetTextFieldBoundsFunction&) = delete;
-  InputMethodPrivateGetTextFieldBoundsFunction() = default;
-
- protected:
-  ~InputMethodPrivateGetTextFieldBoundsFunction() override = default;
-  // ExtensionFunction:
-  ResponseAction Run() override;
-
- private:
-  DECLARE_EXTENSION_FUNCTION("inputMethodPrivate.getTextFieldBounds",
-                             INPUTMETHODPRIVATE_GETTEXTFIELDBOUNDS)
-};
 class InputMethodPrivateResetFunction : public ExtensionFunction {
  public:
   InputMethodPrivateResetFunction() = default;
@@ -393,6 +378,29 @@ class InputMethodPrivateNotifyInputMethodReadyForTestingFunction
       INPUTMETHODPRIVATE_NOTIFYINPUTMETHODREADYFORTESTING)
 };
 
+class InputMethodPrivateGetLanguagePackStatusFunction
+    : public ExtensionFunction {
+ public:
+  InputMethodPrivateGetLanguagePackStatusFunction() = default;
+
+  InputMethodPrivateGetLanguagePackStatusFunction(
+      const InputMethodPrivateGetLanguagePackStatusFunction&) = delete;
+  InputMethodPrivateGetLanguagePackStatusFunction& operator=(
+      const InputMethodPrivateGetLanguagePackStatusFunction&) = delete;
+
+ protected:
+  ~InputMethodPrivateGetLanguagePackStatusFunction() override = default;
+
+  ResponseAction Run() override;
+
+ private:
+  DECLARE_EXTENSION_FUNCTION("inputMethodPrivate.getLanguagePackStatus",
+                             INPUTMETHODPRIVATE_GETLANGUAGEPACKSTATUS)
+
+  void OnGetLanguagePackStatusComplete(
+      const api::input_method_private::LanguagePackStatus result);
+};
+
 class InputMethodAPI : public BrowserContextKeyedAPI,
                        public extensions::EventRouter::Observer {
  public:
@@ -425,7 +433,7 @@ class InputMethodAPI : public BrowserContextKeyedAPI,
   }
   static const bool kServiceIsNULLWhileTesting = true;
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
 
   // Created lazily upon OnListenerAdded.
   std::unique_ptr<chromeos::ExtensionInputMethodEventRouter>
@@ -433,6 +441,8 @@ class InputMethodAPI : public BrowserContextKeyedAPI,
   std::unique_ptr<chromeos::ExtensionDictionaryEventRouter>
       dictionary_event_router_;
   std::unique_ptr<chromeos::ExtensionImeMenuEventRouter> ime_menu_event_router_;
+  std::unique_ptr<chromeos::LanguagePackEventRouter>
+      language_pack_event_router_;
 };
 
 }  // namespace extensions

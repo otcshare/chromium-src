@@ -5,12 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/bindings/lib/message_fragment.h"
 #include "mojo/public/cpp/system/message_pipe.h"
-#include "mojo/public/interfaces/bindings/tests/test_export2.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_structs.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_export2.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_structs.test-mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -78,7 +80,7 @@ U SerializeAndDeserialize(T input) {
   // Set the subsequent area to a special value, so that we can find out if we
   // mistakenly access the area.
   void* subsequent_area = message.payload_buffer()->AllocateAndGet(32);
-  memset(subsequent_area, 0xAA, 32);
+  UNSAFE_TODO(memset(subsequent_area, 0xAA, 32));
 
   OutputDataType output_data =
       reinterpret_cast<OutputDataType>(message.mutable_payload());
@@ -190,8 +192,9 @@ TEST_F(StructTest, Serialization_StructPointers) {
 // Serialization test of a struct with an array member.
 TEST_F(StructTest, Serialization_ArrayPointers) {
   std::vector<RectPtr> rects;
-  for (size_t i = 0; i < 4; ++i)
+  for (size_t i = 0; i < 4; ++i) {
     rects.push_back(MakeRect(static_cast<int32_t>(i) + 1));
+  }
 
   NamedRegionPtr region(
       NamedRegion::New(std::string("region"), std::move(rects)));
@@ -215,8 +218,9 @@ TEST_F(StructTest, Serialization_ArrayPointers) {
   EXPECT_EQ("region", *region2->name);
 
   EXPECT_EQ(4U, region2->rects->size());
-  for (size_t i = 0; i < region2->rects->size(); ++i)
+  for (size_t i = 0; i < region2->rects->size(); ++i) {
     CheckRect(*(*region2->rects)[i], static_cast<int32_t>(i) + 1);
+  }
 }
 
 // Serialization test of a struct with null array pointers.
@@ -458,8 +462,9 @@ TEST_F(StructTest, Serialization_PublicAPI) {
   {
     // A struct containing other objects.
     std::vector<RectPtr> rects;
-    for (size_t i = 0; i < 3; ++i)
+    for (size_t i = 0; i < 3; ++i) {
       rects.push_back(MakeRect(static_cast<int32_t>(i) + 1));
+    }
     NamedRegionPtr region(
         NamedRegion::New(std::string("region"), std::move(rects)));
 

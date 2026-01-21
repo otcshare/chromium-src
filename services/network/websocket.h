@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,19 +18,21 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/supports_user_data.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_delegate.h"
+#include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "services/network/network_service.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "services/network/websocket_interceptor.h"
 #include "services/network/websocket_throttler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 class GURL;
@@ -61,9 +64,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
       const GURL& url,
       const std::vector<std::string>& requested_protocols,
       const net::SiteForCookies& site_for_cookies,
+      net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       std::vector<mojom::HttpHeaderPtr> additional_headers,
       const url::Origin& origin,
+      network::mojom::ClientSecurityStatePtr client_security_state,
       uint32_t options,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       HasRawHeadersAccess has_raw_cookie_access,
@@ -72,10 +77,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
           url_loader_network_observer,
       mojo::PendingRemote<mojom::WebSocketAuthenticationHandler> auth_handler,
       mojo::PendingRemote<mojom::TrustedHeaderClient> header_client,
-      absl::optional<WebSocketThrottler::PendingConnection>
+      std::optional<WebSocketThrottler::PendingConnection>
           pending_connection_tracker,
       base::TimeDelta delay,
-      const absl::optional<base::UnguessableToken>& throttling_profile_id);
+      const std::optional<base::UnguessableToken>& throttling_profile_id);
 
   WebSocket(const WebSocket&) = delete;
   WebSocket& operator=(const WebSocket&) = delete;
@@ -93,6 +98,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   // WebSocket was created with.
   bool AllowCookies(const GURL& url) const;
 
+  // Returns if the nonce from |isolation_info_| matches |nonce|, which
+  // originates from a fenced frame whose network access is being revoked.
+  bool RevokeIfNonceMatches(const base::UnguessableToken& nonce);
+
   // These methods are called by the network delegate to forward these events to
   // the |header_client_|.
   int OnBeforeStartTransaction(
@@ -102,7 +111,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
       net::CompletionOnceCallback callback,
       const net::HttpResponseHeaders* original_response_headers,
       scoped_refptr<net::HttpResponseHeaders>* override_response_headers,
-      absl::optional<GURL>* preserve_fragment_on_redirect_url);
+      std::optional<GURL>* preserve_fragment_on_redirect_url,
+      const std::optional<net::SSLInfo>& ssl_info);
 
   // Gets the WebSocket associated with this request.
   static WebSocket* ForRequest(const net::URLRequest& request);
@@ -146,6 +156,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   void AddChannel(const GURL& socket_url,
                   const std::vector<std::string>& requested_protocols,
                   const net::SiteForCookies& site_for_cookies,
+                  net::StorageAccessApiStatus storage_access_api_status,
                   const net::IsolationInfo& isolation_info,
                   std::vector<mojom::HttpHeaderPtr> additional_headers);
   void OnSSLCertificateErrorResponse(
@@ -155,19 +166,21 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
       int net_error);
   void OnAuthRequiredComplete(
       base::OnceCallback<void(const net::AuthCredentials*)> callback,
-      const absl::optional<net::AuthCredentials>& credential);
+      const std::optional<net::AuthCredentials>& credential);
   void OnBeforeSendHeadersComplete(
       net::NetworkDelegate::OnBeforeStartTransactionCallback callback,
       int result,
-      const absl::optional<net::HttpRequestHeaders>& headers);
+      const std::optional<net::HttpRequestHeaders>& headers);
   void OnHeadersReceivedComplete(
       net::CompletionOnceCallback callback,
       scoped_refptr<net::HttpResponseHeaders>* out_headers,
-      absl::optional<GURL>* out_preserve_fragment_on_redirect_url,
+      std::optional<GURL>* out_preserve_fragment_on_redirect_url,
       int result,
-      const absl::optional<std::string>& headers,
-      const absl::optional<GURL>& preserve_fragment_on_redirect_url);
+      const std::optional<std::string>& headers,
+      const std::optional<GURL>& preserve_fragment_on_redirect_url);
 
+  // Disconnect the WebSocket and mojo pipes and tell WebSocketFactory to delete
+  // `this`. Will not work correctly if called during construction.
   void Reset();
 
   enum class InterruptionReason {
@@ -206,7 +219,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   mojo::Remote<mojom::WebSocketAuthenticationHandler> auth_handler_;
   mojo::Remote<mojom::TrustedHeaderClient> header_client_;
 
-  absl::optional<WebSocketThrottler::PendingConnection>
+  std::optional<WebSocketThrottler::PendingConnection>
       pending_connection_tracker_;
 
   // The channel we use to send events to the network.
@@ -222,8 +235,13 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   // The web origin to use for the WebSocket.
   const url::Origin origin_;
 
+  const network::mojom::ClientSecurityStatePtr client_security_state_;
+
   // For 3rd-party cookie permission checking.
   net::SiteForCookies site_for_cookies_;
+
+  // Used by RevokeIfNonceMatches() for handling network revocation.
+  const net::IsolationInfo isolation_info_;
 
   bool handshake_succeeded_ = false;
   const HasRawHeadersAccess has_raw_headers_access_;
@@ -242,12 +260,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   base::queue<DataFrame> pending_send_data_frames_;
   bool blocked_on_websocket_channel_ = false;
 
-  // True if we should preserve the old behaviour where <=64KB messages were
-  // never fragmented.
-  // TODO(ricea): Remove the flag once we know whether we really need this or
-  // not. See https://crbug.com/1086273.
-  const bool reassemble_short_messages_;
-
   // Temporary buffer for storage of short messages that have been fragmented by
   // the data pipe. Only messages that are actually fragmented are copied into
   // here.
@@ -263,7 +275,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   // which StartClosingHandshake() is called.
   std::unique_ptr<CloseInfo> pending_start_closing_handshake_;
 
-  const absl::optional<base::UnguessableToken> throttling_profile_id_;
+  const std::optional<base::UnguessableToken> throttling_profile_id_;
   uint32_t net_log_source_id_ = net::NetLogSource::kInvalidId;
   std::unique_ptr<WebSocketInterceptor> frame_interceptor_;
 

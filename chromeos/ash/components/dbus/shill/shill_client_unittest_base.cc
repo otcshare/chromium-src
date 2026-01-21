@@ -7,12 +7,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "dbus/message.h"
@@ -30,38 +35,38 @@ namespace ash {
 namespace {
 
 // Pops a string-to-string dictionary from the reader.
-std::unique_ptr<base::Value> PopStringToStringDictionary(
-    dbus::MessageReader* reader) {
+base::Value PopStringToStringDictionary(dbus::MessageReader* reader) {
   dbus::MessageReader array_reader(nullptr);
   if (!reader->PopArray(&array_reader))
-    return nullptr;
-  auto result = std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
+    return base::Value();
+  base::Value::Dict result;
   while (array_reader.HasMoreData()) {
     dbus::MessageReader entry_reader(nullptr);
     std::string key;
     std::string value;
     if (!array_reader.PopDictEntry(&entry_reader) ||
-        !entry_reader.PopString(&key) || !entry_reader.PopString(&value))
-      return nullptr;
-    result->SetKey(key, base::Value(value));
+        !entry_reader.PopString(&key) || !entry_reader.PopString(&value)) {
+      return base::Value();
+    }
+    result.Set(key, value);
   }
-  return result;
+  return base::Value(std::move(result));
 }
 
 }  // namespace
 
 ValueMatcher::ValueMatcher(const base::Value& value)
-    : expected_value_(base::Value::ToUniquePtrValue(value.Clone())) {}
+    : expected_value_(value.Clone()) {}
 ValueMatcher::~ValueMatcher() = default;
 
 bool ValueMatcher::MatchAndExplain(const base::Value& value,
                                    MatchResultListener* listener) const {
-  return *expected_value_ == value;
+  return expected_value_ == value;
 }
 
 void ValueMatcher::DescribeTo(::std::ostream* os) const {
   std::string expected_value_str;
-  base::JSONWriter::WriteWithOptions(*expected_value_,
+  base::JSONWriter::WriteWithOptions(expected_value_,
                                      base::JSONWriter::OPTIONS_PRETTY_PRINT,
                                      &expected_value_str);
   *os << "value equals " << expected_value_str;
@@ -69,7 +74,7 @@ void ValueMatcher::DescribeTo(::std::ostream* os) const {
 
 void ValueMatcher::DescribeNegationTo(::std::ostream* os) const {
   std::string expected_value_str;
-  base::JSONWriter::WriteWithOptions(*expected_value_,
+  base::JSONWriter::WriteWithOptions(expected_value_,
                                      base::JSONWriter::OPTIONS_PRETTY_PRINT,
                                      &expected_value_str);
   *os << "value does not equal " << expected_value_str;
@@ -94,47 +99,42 @@ void ShillClientUnittestBase::SetUp() {
   // Create a mock bus.
   dbus::Bus::Options options;
   options.bus_type = dbus::Bus::SYSTEM;
-  mock_bus_ = new dbus::MockBus(options);
+  mock_bus_ = new dbus::MockBus(std::move(options));
 
   // Create a mock proxy.
   mock_proxy_ = new dbus::MockObjectProxy(
       mock_bus_.get(), shill::kFlimflamServiceName, object_path_);
 
   // Set expectations so that mock_proxy's Call methods will return responses.
-  EXPECT_CALL(*mock_proxy_.get(), DoCallMethod(_, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethod(_, _, _))
       .WillRepeatedly(Invoke(this, &ShillClientUnittestBase::OnCallMethod));
-  EXPECT_CALL(*mock_proxy_.get(), DoCallMethodWithErrorResponse(_, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethodWithErrorResponse(_, _, _))
       .WillRepeatedly(Invoke(
           this, &ShillClientUnittestBase::OnCallMethodWithErrorResponse));
-  EXPECT_CALL(*mock_proxy_.get(), DoCallMethodWithErrorCallback(_, _, _, _))
-      .WillRepeatedly(Invoke(
-          this, &ShillClientUnittestBase::OnCallMethodWithErrorCallback));
 
   // Set an expectation so mock_proxy's ConnectToSignal() will use
   // OnConnectToPropertyChanged() to run the callback.
   EXPECT_CALL(
       *mock_proxy_.get(),
-      DoConnectToSignal(interface_name_, shill::kMonitorPropertyChanged, _, _))
+      ConnectToSignal(interface_name_, shill::kMonitorPropertyChanged, _, _))
       .WillRepeatedly(
           Invoke(this, &ShillClientUnittestBase::OnConnectToPropertyChanged));
 
-  EXPECT_CALL(*mock_proxy_.get(),
-              DoConnectToSignal(interface_name_,
-                                shill::kOnPlatformMessageFunction, _, _))
+  EXPECT_CALL(
+      *mock_proxy_.get(),
+      ConnectToSignal(interface_name_, shill::kOnPlatformMessageFunction, _, _))
       .WillRepeatedly(
           Invoke(this, &ShillClientUnittestBase::OnConnectToPlatformMessage));
 
-  EXPECT_CALL(*mock_proxy_.get(),
-              DoConnectToSignal(interface_name_,
-                                shill::kOnPacketReceivedFunction, _, _))
+  EXPECT_CALL(
+      *mock_proxy_.get(),
+      ConnectToSignal(interface_name_, shill::kOnPacketReceivedFunction, _, _))
       .WillRepeatedly(
           Invoke(this, &ShillClientUnittestBase::OnConnectToPacketReceived));
 
-  // Set an expectation so mock_bus's GetObjectProxy() for the given
-  // service name and the object path will return mock_proxy_.
   EXPECT_CALL(*mock_bus_.get(),
               GetObjectProxy(shill::kFlimflamServiceName, object_path_))
-      .WillOnce(Return(mock_proxy_.get()));
+      .WillRepeatedly(Return(mock_proxy_.get()));
 
   // Set an expectation so mock_bus's GetDBusTaskRunner will return the current
   // task runner.
@@ -164,7 +164,7 @@ void ShillClientUnittestBase::SendPlatformMessageSignal(dbus::Signal* signal) {
   platform_message_handler_.Run(signal);
 }
 
-void ShillClientUnittestBase::SendPacketReceievedSignal(dbus::Signal* signal) {
+void ShillClientUnittestBase::SendPacketReceivedSignal(dbus::Signal* signal) {
   ASSERT_FALSE(packet_receieved__handler_.is_null());
   packet_receieved__handler_.Run(signal);
 }
@@ -200,16 +200,22 @@ void ShillClientUnittestBase::ExpectUint32Argument(
 }
 
 // static
+void ShillClientUnittestBase::ExpectIntArgument(
+    int expected_value,
+    dbus::MessageReader* reader) {
+  int value;
+  ASSERT_TRUE(reader->PopInt32(&value));
+  EXPECT_EQ(expected_value, value);
+  EXPECT_FALSE(reader->HasMoreData());
+}
+
+// static
 void ShillClientUnittestBase::ExpectArrayOfBytesArgument(
     const std::string& expected_bytes,
     dbus::MessageReader* reader) {
-  const uint8_t* bytes = nullptr;
-  size_t size = 0;
-  ASSERT_TRUE(reader->PopArrayOfBytes(&bytes, &size));
-  EXPECT_EQ(expected_bytes.size(), size);
-  for (size_t i = 0; i < size; ++i) {
-    EXPECT_EQ(expected_bytes[i], bytes[i]);
-  }
+  base::span<const uint8_t> bytes;
+  ASSERT_TRUE(reader->PopArrayOfBytes(&bytes));
+  EXPECT_EQ(base::as_string_view(bytes), expected_bytes);
   EXPECT_FALSE(reader->HasMoreData());
 }
 
@@ -258,10 +264,9 @@ void ShillClientUnittestBase::ExpectStringAndValueArguments(
 
 // static
 void ShillClientUnittestBase::ExpectValueDictionaryArgument(
-    const base::Value* expected_dictionary,
+    const base::Value::Dict* expected_dictionary,
     bool string_valued,
     dbus::MessageReader* reader) {
-  ASSERT_TRUE(expected_dictionary->is_dict());
   dbus::MessageReader array_reader(nullptr);
   ASSERT_TRUE(reader->PopArray(&array_reader));
   while (array_reader.HasMoreData()) {
@@ -272,17 +277,16 @@ void ShillClientUnittestBase::ExpectValueDictionaryArgument(
     if (string_valued) {
       std::string value;
       ASSERT_TRUE(entry_reader.PopString(&value));
-      const std::string* expected_value =
-          expected_dictionary->FindStringKey(key);
+      const std::string* expected_value = expected_dictionary->FindString(key);
       ASSERT_TRUE(expected_value);
       EXPECT_EQ(*expected_value, value);
       continue;
     }
     dbus::MessageReader variant_reader(nullptr);
     ASSERT_TRUE(entry_reader.PopVariant(&variant_reader));
-    std::unique_ptr<base::Value> value;
+    base::Value value;
     // Variants in the dictionary can be basic types or string-to-string
-    // dictinoary.
+    // dictionary.
     switch (variant_reader.GetDataType()) {
       case dbus::Message::ARRAY:
         value = PopStringToStringDictionary(&variant_reader);
@@ -290,90 +294,41 @@ void ShillClientUnittestBase::ExpectValueDictionaryArgument(
       case dbus::Message::BOOL:
       case dbus::Message::INT32:
       case dbus::Message::STRING:
-        value = base::Value::ToUniquePtrValue(
-            dbus::PopDataAsValue(&variant_reader));
-        ASSERT_FALSE(value->is_none());
+        value = dbus::PopDataAsValue(&variant_reader);
+        ASSERT_FALSE(value.is_none());
         break;
       default:
         NOTREACHED();
     }
-    ASSERT_TRUE(value.get());
-    const base::Value* expected_value = expected_dictionary->FindKey(key);
+    const base::Value* expected_value = expected_dictionary->Find(key);
     ASSERT_TRUE(expected_value);
-    EXPECT_EQ(*value, *expected_value);
+    EXPECT_EQ(value, *expected_value);
   }
 }
 
 // static
-base::Value ShillClientUnittestBase::CreateExampleServiceProperties() {
-  base::Value properties(base::Value::Type::DICTIONARY);
-  properties.SetKey(shill::kGuidProperty,
-                    base::Value("00000000-0000-0000-0000-000000000000"));
-  properties.SetKey(shill::kModeProperty, base::Value(shill::kModeManaged));
-  properties.SetKey(shill::kTypeProperty, base::Value(shill::kTypeWifi));
+base::Value::Dict ShillClientUnittestBase::CreateExampleServiceProperties() {
+  base::Value::Dict properties;
+  properties.Set(shill::kGuidProperty,
+                 base::Value("00000000-0000-0000-0000-000000000000"));
+  properties.Set(shill::kModeProperty, base::Value(shill::kModeManaged));
+  properties.Set(shill::kTypeProperty, base::Value(shill::kTypeWifi));
   const std::string ssid = "testssid";
-  properties.SetKey(shill::kWifiHexSsid,
-                    base::Value(base::HexEncode(ssid.c_str(), ssid.size())));
-  properties.SetKey(shill::kSecurityClassProperty,
-                    base::Value(shill::kSecurityClassPsk));
+  properties.Set(shill::kWifiHexSsid, base::Value(base::HexEncode(ssid)));
+  properties.Set(shill::kSecurityClassProperty,
+                 base::Value(shill::kSecurityClassPsk));
   return properties;
-}
-
-// static
-void ShillClientUnittestBase::ExpectNoResultValue(bool result) {
-  EXPECT_TRUE(result);
-}
-
-// static
-void ShillClientUnittestBase::ExpectObjectPathResultWithoutStatus(
-    const dbus::ObjectPath& expected_result,
-    const dbus::ObjectPath& result) {
-  EXPECT_EQ(expected_result, result);
-}
-
-// static
-void ShillClientUnittestBase::ExpectBoolResultWithoutStatus(
-    bool expected_result,
-    bool result) {
-  EXPECT_EQ(expected_result, result);
-}
-
-// static
-void ShillClientUnittestBase::ExpectStringResultWithoutStatus(
-    const std::string& expected_result,
-    const std::string& result) {
-  EXPECT_EQ(expected_result, result);
-}
-
-// static
-void ShillClientUnittestBase::ExpectValueResultWithoutStatus(
-    const base::Value* expected_result,
-    base::Value result) {
-  std::string expected_result_string;
-  base::JSONWriter::Write(*expected_result, &expected_result_string);
-  std::string result_string;
-  base::JSONWriter::Write(result, &result_string);
-  EXPECT_EQ(expected_result_string, result_string);
-}
-
-// static
-void ShillClientUnittestBase::ExpectValueResult(
-    const base::Value* expected_result,
-    absl::optional<base::Value> result) {
-  EXPECT_TRUE(result);
-  ExpectValueResultWithoutStatus(expected_result,
-                                 std::move(result).value_or(base::Value()));
 }
 
 void ShillClientUnittestBase::OnConnectToPlatformMessage(
     const std::string& interface_name,
     const std::string& signal_name,
     const dbus::ObjectProxy::SignalCallback& signal_callback,
-    dbus::ObjectProxy::OnConnectedCallback* on_connected_callback) {
+    dbus::ObjectProxy::OnConnectedCallback on_connected_callback) {
   platform_message_handler_ = signal_callback;
   const bool success = true;
   task_environment_.GetMainThreadTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(*on_connected_callback),
+      FROM_HERE, base::BindOnce(std::move(on_connected_callback),
                                 interface_name, signal_name, success));
 }
 
@@ -381,11 +336,11 @@ void ShillClientUnittestBase::OnConnectToPacketReceived(
     const std::string& interface_name,
     const std::string& signal_name,
     const dbus::ObjectProxy::SignalCallback& signal_callback,
-    dbus::ObjectProxy::OnConnectedCallback* on_connected_callback) {
+    dbus::ObjectProxy::OnConnectedCallback on_connected_callback) {
   packet_receieved__handler_ = signal_callback;
   const bool success = true;
   task_environment_.GetMainThreadTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(*on_connected_callback),
+      FROM_HERE, base::BindOnce(std::move(on_connected_callback),
                                 interface_name, signal_name, success));
 }
 
@@ -393,45 +348,37 @@ void ShillClientUnittestBase::OnConnectToPropertyChanged(
     const std::string& interface_name,
     const std::string& signal_name,
     const dbus::ObjectProxy::SignalCallback& signal_callback,
-    dbus::ObjectProxy::OnConnectedCallback* on_connected_callback) {
+    dbus::ObjectProxy::OnConnectedCallback on_connected_callback) {
   property_changed_handler_ = signal_callback;
   const bool success = true;
   task_environment_.GetMainThreadTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(*on_connected_callback),
+      FROM_HERE, base::BindOnce(std::move(on_connected_callback),
                                 interface_name, signal_name, success));
 }
 
 void ShillClientUnittestBase::OnCallMethod(
     dbus::MethodCall* method_call,
     int timeout_ms,
-    dbus::ObjectProxy::ResponseCallback* response_callback) {
+    dbus::ObjectProxy::ResponseCallback response_callback) {
   EXPECT_EQ(interface_name_, method_call->GetInterface());
   EXPECT_EQ(expected_method_name_, method_call->GetMember());
   dbus::MessageReader reader(method_call);
   argument_checker_.Run(&reader);
   task_environment_.GetMainThreadTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(*response_callback), response_));
+      FROM_HERE, base::BindOnce(std::move(response_callback), response_));
 }
 
 void ShillClientUnittestBase::OnCallMethodWithErrorResponse(
     dbus::MethodCall* method_call,
     int timeout_ms,
-    dbus::ObjectProxy::ResponseOrErrorCallback* response_callback) {
+    dbus::ObjectProxy::ResponseOrErrorCallback response_callback) {
   EXPECT_EQ(interface_name_, method_call->GetInterface());
   EXPECT_EQ(expected_method_name_, method_call->GetMember());
   dbus::MessageReader reader(method_call);
   argument_checker_.Run(&reader);
   task_environment_.GetMainThreadTaskRunner()->PostTask(
       FROM_HERE,
-      base::BindOnce(std::move(*response_callback), response_, nullptr));
-}
-
-void ShillClientUnittestBase::OnCallMethodWithErrorCallback(
-    dbus::MethodCall* method_call,
-    int timeout_ms,
-    dbus::ObjectProxy::ResponseCallback* response_callback,
-    dbus::ObjectProxy::ErrorCallback* error_callback) {
-  OnCallMethod(method_call, timeout_ms, response_callback);
+      base::BindOnce(std::move(response_callback), response_, nullptr));
 }
 
 }  // namespace ash

@@ -59,7 +59,7 @@ mojom::blink::FullscreenOptionsPtr ToMojoOptions(
     FullscreenRequestType request_type) {
   auto fullscreen_options = mojom::blink::FullscreenOptions::New();
   fullscreen_options->prefers_navigation_bar =
-      options->navigationUI() == "show";
+      options->navigationUI() == V8FullscreenNavigationUI::Enum::kShow;
   if (options->hasScreen() &&
       options->screen()->DisplayId() != Screen::kInvalidDisplayId) {
     fullscreen_options->display_id = options->screen()->DisplayId();
@@ -208,8 +208,8 @@ void FullscreenController::EnterFullscreen(LocalFrame& frame,
   if (!(request_type & FullscreenRequestType::kForCrossProcessDescendant)) {
     frame.GetLocalFrameHostRemote().EnterFullscreen(
         std::move(fullscreen_options),
-        WTF::BindOnce(&FullscreenController::EnterFullscreenCallback,
-                      WTF::Unretained(this)));
+        BindOnce(&FullscreenController::EnterFullscreenCallback,
+                 Unretained(this)));
   }
 
   if (state_ == State::kInitial)
@@ -270,17 +270,13 @@ void FullscreenController::FullscreenElementChanged(
 
       frame->GetLocalFrameHostRemote().FullscreenStateChanged(
           in_fullscreen, std::move(mojo_options));
-      if (IsSpatialNavigationEnabled(frame)) {
-        doc.GetPage()->GetSpatialNavigationController().FullscreenStateChanged(
-            new_element);
-      }
     }
   }
 }
 
 void FullscreenController::RestoreBackgroundColorOverride() {
   web_view_base_->SetBackgroundColorOverrideForFullscreenController(
-      absl::nullopt);
+      std::nullopt);
 }
 
 void FullscreenController::NotifyFramesOfFullscreenEntry(bool granted) {

@@ -9,6 +9,8 @@
 #define CHROME_BROWSER_ASH_POLICY_REMOTE_COMMANDS_USER_SESSION_TYPE_TEST_UTIL_H_
 
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "device_management_backend.pb.h"
 
 namespace policy::test {
 
@@ -16,10 +18,8 @@ namespace policy::test {
 // manually and auto launched kiosk sessions.
 enum class TestSessionType {
   // Kiosk sessions
-  kManuallyLaunchedArcKioskSession,
   kManuallyLaunchedWebKioskSession,
   kManuallyLaunchedKioskSession,
-  kAutoLaunchedArcKioskSession,
   kAutoLaunchedWebKioskSession,
   kAutoLaunchedKioskSession,
 
@@ -37,11 +37,22 @@ enum class TestSessionType {
 
 const char* SessionTypeToString(TestSessionType session_type);
 
+enterprise_management::UserSessionType SessionTypeToUserSessionType(
+    TestSessionType session_type);
+
 // Start a session of the given type, which involves first creating an user
 // of the given type and then logging the user in (unless the session type
 // doesn't require a logged in user).
 void StartSessionOfType(TestSessionType session_type,
                         ash::FakeChromeUserManager& user_manager);
+
+// Start a session of the given type, which involves first creating an user
+// of the given type and then logging the user in (unless the session type
+// doesn't require a logged in user) and a main TestingProfile creation.
+TestingProfile* StartSessionOfTypeWithProfile(
+    TestSessionType session_type,
+    ash::FakeChromeUserManager& user_manager,
+    TestingProfileManager& profile_manager);
 
 }  // namespace policy::test
 

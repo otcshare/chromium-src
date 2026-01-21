@@ -5,6 +5,9 @@
 #include "components/media_router/common/providers/cast/channel/enum_table.h"
 
 #include <cstdlib>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 
 namespace cast_util {
 
@@ -20,25 +23,28 @@ static_assert(sizeof(GenericEnumTableEntry) == 16,
 const GenericEnumTableEntry* GenericEnumTableEntry::FindByString(
     const GenericEnumTableEntry data[],
     std::size_t size,
-    base::StringPiece str) {
+    std::string_view str) {
   for (std::size_t i = 0; i < size; i++) {
-    if (data[i].length == str.length() &&
-        std::memcmp(data[i].chars, str.data(), str.length()) == 0)
-      return &data[i];
+    if (UNSAFE_TODO(data[i]).length == str.length() &&
+        UNSAFE_TODO(std::memcmp(data[i].chars, str.data(), str.length())) ==
+            0) {
+      return &UNSAFE_TODO(data[i]);
+    }
   }
   return nullptr;
 }
 
 // static
-absl::optional<base::StringPiece> GenericEnumTableEntry::FindByValue(
+std::optional<std::string_view> GenericEnumTableEntry::FindByValue(
     const GenericEnumTableEntry data[],
     std::size_t size,
     int value) {
   for (std::size_t i = 0; i < size; i++) {
-    if (data[i].value == value && data[i].has_str())
-      return data[i].str();
+    if (UNSAFE_TODO(data[i]).value == value && UNSAFE_TODO(data[i]).has_str()) {
+      return UNSAFE_TODO(data[i]).str();
+    }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace cast_util

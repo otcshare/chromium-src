@@ -10,17 +10,15 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
-#include "chrome/browser/payments/android/jni_headers/ServiceWorkerPaymentAppBridge_jni.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "components/payments/content/android/payment_handler_host.h"
 #include "components/payments/content/payment_event_response_util.h"
 #include "components/payments/content/payment_handler_host.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/service_worker_payment_app_finder.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/installed_payment_apps_finder.h"
@@ -34,13 +32,15 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ServiceWorkerPaymentAppBridge_jni.h"
+
 namespace {
 
 using ::base::android::AppendJavaStringArrayToStringVector;
 using ::base::android::AttachCurrentThread;
 using ::base::android::ConvertJavaStringToUTF8;
 using ::base::android::ConvertUTF8ToJavaString;
-using ::base::android::JavaParamRef;
 using ::base::android::JavaRef;
 using ::base::android::ScopedJavaGlobalRef;
 using ::base::android::ScopedJavaLocalRef;
@@ -82,9 +82,7 @@ void OnGetServiceWorkerPaymentAppsInfo(
 
   for (const auto& app_info : apps) {
     Java_ServiceWorkerPaymentAppBridge_addPaymentAppInfo(
-        env, jappsInfo,
-        ConvertUTF8ToJavaString(env, app_info.second->scope.host()),
-        ConvertUTF8ToJavaString(env, app_info.second->name),
+        env, jappsInfo, app_info.second->scope.GetHost(), app_info.second->name,
         app_info.second->icon == nullptr
             ? nullptr
             : gfx::ConvertToJavaBitmap(*app_info.second->icon));
@@ -98,30 +96,28 @@ void OnGetServiceWorkerPaymentAppsInfo(
 
 static void JNI_ServiceWorkerPaymentAppBridge_HasServiceWorkerPaymentApps(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jcallback) {
+    Profile* profile,
+    const JavaRef<jobject>& jcallback) {
   // Checks whether there is a installed service worker payment app through
   // GetAllPaymentApps.
-  content::InstalledPaymentAppsFinder::GetInstance(
-      ProfileManager::GetActiveUserProfile())
-      ->GetAllPaymentApps(
-          base::BindOnce(&OnHasServiceWorkerPaymentAppsResponse,
-                         ScopedJavaGlobalRef<jobject>(env, jcallback)));
+  content::InstalledPaymentAppsFinder::GetInstance(profile)->GetAllPaymentApps(
+      base::BindOnce(&OnHasServiceWorkerPaymentAppsResponse,
+                     ScopedJavaGlobalRef<jobject>(env, jcallback)));
 }
 
 static void JNI_ServiceWorkerPaymentAppBridge_GetServiceWorkerPaymentAppsInfo(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jcallback) {
-  content::InstalledPaymentAppsFinder::GetInstance(
-      ProfileManager::GetActiveUserProfile())
-      ->GetAllPaymentApps(
-          base::BindOnce(&OnGetServiceWorkerPaymentAppsInfo,
-                         ScopedJavaGlobalRef<jobject>(env, jcallback)));
+    Profile* profile,
+    const JavaRef<jobject>& jcallback) {
+  content::InstalledPaymentAppsFinder::GetInstance(profile)->GetAllPaymentApps(
+      base::BindOnce(&OnGetServiceWorkerPaymentAppsInfo,
+                     ScopedJavaGlobalRef<jobject>(env, jcallback)));
 }
 
 static void JNI_ServiceWorkerPaymentAppBridge_OnClosingPaymentAppWindow(
     JNIEnv* env,
-    const JavaParamRef<jobject>& payment_request_jweb_contents,
-    jint reason) {
+    const JavaRef<jobject>& payment_request_jweb_contents,
+    int32_t reason) {
   content::WebContents* payment_request_web_contents =
       content::WebContents::FromJavaWebContents(payment_request_jweb_contents);
   DCHECK(payment_request_web_contents);  // Verified in Java before invoking
@@ -134,8 +130,8 @@ static void JNI_ServiceWorkerPaymentAppBridge_OnClosingPaymentAppWindow(
 
 static void JNI_ServiceWorkerPaymentAppBridge_OnOpeningPaymentAppWindow(
     JNIEnv* env,
-    const JavaParamRef<jobject>& payment_request_jweb_contents,
-    const JavaParamRef<jobject>& payment_handler_jweb_contents) {
+    const JavaRef<jobject>& payment_request_jweb_contents,
+    const JavaRef<jobject>& payment_handler_jweb_contents) {
   content::WebContents* payment_request_web_contents =
       content::WebContents::FromJavaWebContents(payment_request_jweb_contents);
   content::WebContents* payment_handler_web_contents =
@@ -149,17 +145,17 @@ static void JNI_ServiceWorkerPaymentAppBridge_OnOpeningPaymentAppWindow(
       ->SetOpenedWindow(payment_handler_web_contents);
 }
 
-static jlong
+static int64_t
 JNI_ServiceWorkerPaymentAppBridge_GetSourceIdForPaymentAppFromScope(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jscope) {
+    const JavaRef<jobject>& jscope) {
   // At this point we know that the payment handler window is open for the
   // payment app associated with this scope. Since this getter is called inside
   // PaymentApp::getUkmSourceId() function which in turn gets called for the
   // invoked app inside
   // ChromePaymentRequestService::openPaymentHandlerWindowInternal.
   return content::PaymentAppProviderUtil::GetSourceIdForPaymentAppFromScope(
-      url::GURLAndroid::ToNativeGURL(env, jscope)
-          .get()
-          ->DeprecatedGetOriginAsURL());
+      url::GURLAndroid::ToNativeGURL(env, jscope).DeprecatedGetOriginAsURL());
 }
+
+DEFINE_JNI(ServiceWorkerPaymentAppBridge)

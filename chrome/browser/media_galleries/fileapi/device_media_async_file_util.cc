@@ -8,11 +8,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/notimplemented.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/media_galleries/fileapi/media_path_filter.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_async_delegate.h"
@@ -260,8 +262,8 @@ DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::MediaPathFilterWrapper()
     : media_path_filter_(new MediaPathFilter) {
 }
 
-DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::~MediaPathFilterWrapper() {
-}
+DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::~MediaPathFilterWrapper() =
+    default;
 
 AsyncFileUtil::EntryList
 DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::FilterMediaEntries(
@@ -270,7 +272,7 @@ DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::FilterMediaEntries(
   for (size_t i = 0; i < file_list.size(); ++i) {
     const filesystem::mojom::DirectoryEntry& entry = file_list[i];
     if (entry.type == filesystem::mojom::FsFileType::DIRECTORY ||
-        CheckFilePath(entry.name)) {
+        CheckFilePath(entry.name.path())) {
       results.push_back(entry);
     }
   }
@@ -282,8 +284,7 @@ bool DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::CheckFilePath(
   return media_path_filter_->Match(path);
 }
 
-DeviceMediaAsyncFileUtil::~DeviceMediaAsyncFileUtil() {
-}
+DeviceMediaAsyncFileUtil::~DeviceMediaAsyncFileUtil() = default;
 
 // static
 std::unique_ptr<DeviceMediaAsyncFileUtil> DeviceMediaAsyncFileUtil::Create(
@@ -311,9 +312,9 @@ void DeviceMediaAsyncFileUtil::CreateOrOpen(
     CreateOrOpenCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   // Returns an error if any unsupported flag is found.
-  if (file_flags & ~(base::File::FLAG_OPEN |
-                     base::File::FLAG_READ |
-                     base::File::FLAG_WRITE_ATTRIBUTES)) {
+  if (file_flags &
+      ~(base::File::FLAG_OPEN | base::File::FLAG_READ |
+        base::File::FLAG_WRITE_ATTRIBUTES | base::File::FLAG_WIN_NO_EXECUTE)) {
     std::move(callback).Run(base::File(base::File::FILE_ERROR_SECURITY),
                             base::OnceClosure());
     return;
@@ -356,20 +357,18 @@ void DeviceMediaAsyncFileUtil::CreateDirectory(
   }
 
   // Only one of the success or error callbacks will be called here.
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
+  auto [on_success, on_error] = base::SplitOnceCallback(std::move(callback));
   delegate->CreateDirectory(
       url.path(), exclusive, recursive,
-      base::BindRepeating(&DeviceMediaAsyncFileUtil::OnDidCreateDirectory,
-                          weak_ptr_factory_.GetWeakPtr(),
-                          base::Passed(&split_callback.first)),
-      base::BindOnce(&OnCreateDirectoryError,
-                     std::move(split_callback.second)));
+      base::BindOnce(&DeviceMediaAsyncFileUtil::OnDidCreateDirectory,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(on_success)),
+      base::BindOnce(&OnCreateDirectoryError, std::move(on_error)));
 }
 
 void DeviceMediaAsyncFileUtil::GetFileInfo(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
-    int /* flags */,
+    GetMetadataFieldSet fields,
     GetFileInfoCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   MTPDeviceAsyncDelegate* delegate =

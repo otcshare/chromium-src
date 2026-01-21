@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/time/time.h"
+
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "mojo/public/mojom/base/time.mojom.h"
@@ -17,6 +18,44 @@ TEST(TimeTest, Time) {
 
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Time>(in, out));
   EXPECT_EQ(in, out);
+
+  // Test corner cases.
+  in = base::Time();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Time>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::Time::Max();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Time>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::Time::Min();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Time>(in, out));
+  EXPECT_EQ(in, out);
+}
+
+TEST(TimeTest, JSTime) {
+  base::Time in = base::Time::Now();
+  base::Time out;
+
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::JSTime>(in, out));
+  EXPECT_EQ(in, out);
+
+  base::Time::UnixEpoch();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::JSTime>(in, out));
+  EXPECT_EQ(in, out);
+
+  // Test corner cases.
+  in = base::Time();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::JSTime>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::Time::Max();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::JSTime>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::Time::Min();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::JSTime>(in, out));
+  EXPECT_EQ(in, out);
 }
 
 TEST(TimeTest, TimeDelta) {
@@ -25,12 +64,46 @@ TEST(TimeTest, TimeDelta) {
 
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
   EXPECT_EQ(in, out);
+
+  // Test corner cases.
+  in = base::TimeDelta();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeDelta::Max();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeDelta::Min();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeDelta::FiniteMax();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeDelta::FiniteMin();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeDelta>(in, out));
+  EXPECT_EQ(in, out);
 }
 
 TEST(TimeTest, TimeTicks) {
   base::TimeTicks in = base::TimeTicks::Now();
   base::TimeTicks out;
 
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeTicks>(in, out));
+  EXPECT_EQ(in, out);
+
+  // Test corner cases.
+  in = base::TimeTicks();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeTicks>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeTicks::Max();
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeTicks>(in, out));
+  EXPECT_EQ(in, out);
+
+  in = base::TimeTicks::Min();
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::TimeTicks>(in, out));
   EXPECT_EQ(in, out);
 }

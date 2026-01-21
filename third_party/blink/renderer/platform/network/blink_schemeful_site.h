@@ -10,7 +10,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin_hash.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -70,13 +69,10 @@ class PLATFORM_EXPORT BlinkSchemefulSite {
     return site_as_origin_->IsSameOriginWith(rhs.site_as_origin_.get());
   }
 
-  bool operator!=(const BlinkSchemefulSite& rhs) const {
-    return !operator==(rhs);
-  }
+  bool IsOpaque() const { return site_as_origin_->IsOpaque(); }
 
  private:
-  friend struct WTF::DefaultHash<BlinkSchemefulSite>;
-  friend struct WTF::HashTraits<BlinkSchemefulSite>;
+  friend struct HashTraits<BlinkSchemefulSite>;
 
   // IPC serialization code needs to access internal origin.
   friend struct mojo::StructTraits<network::mojom::SchemefulSiteDataView,
@@ -114,47 +110,11 @@ class PLATFORM_EXPORT BlinkSchemefulSite {
   scoped_refptr<const SecurityOrigin> site_as_origin_;
 };
 
+template <>
+struct HashTraits<BlinkSchemefulSite>
+    : OneFieldHashTraits<BlinkSchemefulSite,
+                         &BlinkSchemefulSite::site_as_origin_> {};
+
 }  // namespace blink
-
-namespace WTF {
-
-template <>
-struct DefaultHash<blink::BlinkSchemefulSite> {
-  STATIC_ONLY(DefaultHash);
-
-  static unsigned GetHash(const blink::BlinkSchemefulSite& schemeful_site) {
-    return blink::SecurityOriginHash::GetHash(schemeful_site.site_as_origin_);
-  }
-
-  static bool Equal(const blink::BlinkSchemefulSite& a,
-                    const blink::BlinkSchemefulSite& b) {
-    return blink::SecurityOriginHash::Equal(a.site_as_origin_,
-                                            b.site_as_origin_);
-  }
-
-  static const bool safe_to_compare_to_empty_or_deleted = false;
-};
-
-template <>
-struct HashTraits<blink::BlinkSchemefulSite>
-    : SimpleClassHashTraits<blink::BlinkSchemefulSite> {
-  static const bool kHasIsEmptyValueFunction = true;
-  static bool IsEmptyValue(const blink::BlinkSchemefulSite& value) {
-    return !value.site_as_origin_;
-  }
-
-  static bool IsDeletedValue(const blink::BlinkSchemefulSite& value) {
-    return HashTraits<scoped_refptr<const blink::SecurityOrigin>>::
-        IsDeletedValue(value.site_as_origin_);
-  }
-
-  static void ConstructDeletedValue(blink::BlinkSchemefulSite& slot,
-                                    bool zero_value) {
-    HashTraits<scoped_refptr<const blink::SecurityOrigin>>::
-        ConstructDeletedValue(slot.site_as_origin_, zero_value);
-  }
-};
-
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_BLINK_SCHEMEFUL_SITE_H_

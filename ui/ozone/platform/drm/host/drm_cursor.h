@@ -8,12 +8,15 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
 #include "ui/gfx/geometry/rect.h"
+
+class SkBitmap;
 
 namespace base {
 class TimeDelta;
@@ -33,7 +36,7 @@ class DrmCursorProxy {
   // Sets the cursor |bitmaps| on |window| at |point| with |frame_delay|.
   virtual void CursorSet(gfx::AcceleratedWidget window,
                          const std::vector<SkBitmap>& bitmaps,
-                         const gfx::Point& point,
+                         const std::optional<gfx::Point>& point,
                          base::TimeDelta frame_delay) = 0;
   // Moves the cursor in |window| to |point|.
   virtual void Move(gfx::AcceleratedWidget window, const gfx::Point& point) = 0;
@@ -95,9 +98,11 @@ class DrmCursor : public CursorDelegateEvdev {
   // Lock-testing helpers.
   void CursorSetLockTested(gfx::AcceleratedWidget window,
                            const std::vector<SkBitmap>& bitmaps,
-                           const gfx::Point& point,
+                           const std::optional<gfx::Point>& point,
                            base::TimeDelta frame_delay);
   void MoveLockTested(gfx::AcceleratedWidget window, const gfx::Point& point);
+
+  gfx::PointF GetLocationWithoutLock();
 
   // The mutex synchronizing this object.
   base::Lock lock_;
@@ -126,7 +131,7 @@ class DrmCursor : public CursorDelegateEvdev {
   // The bounds that the cursor is confined to in |window|.
   gfx::Rect confined_bounds_ GUARDED_BY(lock_);
 
-  DrmWindowHostManager* const window_manager_
+  const raw_ptr<DrmWindowHostManager> window_manager_
       GUARDED_BY_CONTEXT(ui_thread_checker_);  // Not owned.
 
   std::unique_ptr<DrmCursorProxy> proxy_ GUARDED_BY(lock_);

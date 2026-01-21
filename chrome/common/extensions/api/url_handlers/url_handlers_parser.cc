@@ -53,19 +53,15 @@ const UrlHandlerInfo* GetMatchingUrlHandler(const Extension* extension,
 namespace mkeys = manifest_keys;
 namespace merrors = manifest_errors;
 
-UrlHandlerInfo::UrlHandlerInfo() {
-}
+UrlHandlerInfo::UrlHandlerInfo() = default;
 
 UrlHandlerInfo::UrlHandlerInfo(UrlHandlerInfo&& other) = default;
 
-UrlHandlerInfo::~UrlHandlerInfo() {
-}
+UrlHandlerInfo::~UrlHandlerInfo() = default;
 
-UrlHandlers::UrlHandlers() {
-}
+UrlHandlers::UrlHandlers() = default;
 
-UrlHandlers::~UrlHandlers() {
-}
+UrlHandlers::~UrlHandlers() = default;
 
 // static
 const std::vector<UrlHandlerInfo>* UrlHandlers::GetUrlHandlers(
@@ -83,13 +79,6 @@ bool UrlHandlers::CanPlatformAppHandleUrl(const Extension* app,
 }
 
 // static
-// TODO(crbug.com/1065748): Clean up this function and related paths.
-bool UrlHandlers::CanBookmarkAppHandleUrl(const Extension* app,
-                                          const GURL& url) {
-  return !!GetMatchingUrlHandler(app, url);
-}
-
-// static
 const UrlHandlerInfo* UrlHandlers::GetMatchingPlatformAppUrlHandler(
     const Extension* app,
     const GURL& url) {
@@ -101,11 +90,9 @@ const UrlHandlerInfo* UrlHandlers::GetMatchingPlatformAppUrlHandler(
   return GetMatchingUrlHandler(app, url);
 }
 
-UrlHandlersParser::UrlHandlersParser() {
-}
+UrlHandlersParser::UrlHandlersParser() = default;
 
-UrlHandlersParser::~UrlHandlersParser() {
-}
+UrlHandlersParser::~UrlHandlersParser() = default;
 
 bool ParseUrlHandler(const std::string& handler_id,
                      const base::Value::Dict& handler_info,
@@ -156,8 +143,7 @@ bool ParseUrlHandler(const std::string& handler_id,
 bool UrlHandlersParser::Parse(Extension* extension, std::u16string* error) {
   std::unique_ptr<UrlHandlers> info(new UrlHandlers);
   const base::Value::Dict* all_handlers =
-      extension->manifest()->available_values_dict().FindDict(
-          mkeys::kUrlHandlers);
+      extension->manifest()->available_values().FindDict(mkeys::kUrlHandlers);
   if (!all_handlers) {
     *error = merrors::kInvalidURLHandlers;
     return false;

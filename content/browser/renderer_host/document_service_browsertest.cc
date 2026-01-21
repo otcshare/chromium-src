@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/browser/renderer_host/document_service_echo_impl.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/render_frame_host.h"
@@ -52,7 +52,7 @@ class DocumentServicePrerenderingBrowserTest
   ~DocumentServicePrerenderingBrowserTest() override = default;
 
   void SetUp() override {
-    prerender_helper_.SetUp(embedded_test_server());
+    prerender_helper_.RegisterServerRequestMonitor(embedded_test_server());
     DocumentServiceBrowserTest::SetUp();
   }
 
@@ -63,8 +63,9 @@ class DocumentServicePrerenderingBrowserTest
 };
 
 // Tests that DocumentService is not destroyed on prerendering activation.
+// TODO(crbug.com/460621062): Re-enable the test
 IN_PROC_BROWSER_TEST_F(DocumentServicePrerenderingBrowserTest,
-                       NotClosedInPrerenderingActivation) {
+                       DISABLED_NotClosedInPrerenderingActivation) {
   const GURL kInitialUrl = embedded_test_server()->GetURL("/empty.html");
   const GURL kPrerenderingUrl = embedded_test_server()->GetURL("/title1.html");
   // The test assumes documents and their DocumentServices get deleted after
@@ -76,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(DocumentServicePrerenderingBrowserTest,
   // Navigate to an initial page.
   ASSERT_TRUE(NavigateToURL(shell(), kInitialUrl));
 
-  int host_id = prerender_helper()->AddPrerender(kPrerenderingUrl);
+  PrerenderHostId host_id = prerender_helper()->AddPrerender(kPrerenderingUrl);
   RenderFrameHost* prerendered_frame_host =
       prerender_helper()->GetPrerenderedMainFrameHost(host_id);
 
@@ -91,7 +92,10 @@ IN_PROC_BROWSER_TEST_F(DocumentServicePrerenderingBrowserTest,
   // DocumentService should not be destroyed.
   EXPECT_FALSE(echo_deleted);
 
+  RenderFrameDeletedObserver deleted_observer(
+      shell()->web_contents()->GetPrimaryMainFrame());
   ASSERT_TRUE(NavigateToURL(shell(), kInitialUrl));
+  deleted_observer.WaitUntilDeleted();
   // It should be destroyed on navigation.
   EXPECT_TRUE(echo_deleted);
 }
@@ -99,11 +103,9 @@ IN_PROC_BROWSER_TEST_F(DocumentServicePrerenderingBrowserTest,
 class DocumentServiceBFCacheBrowserTest : public DocumentServiceBrowserTest {
  public:
   DocumentServiceBFCacheBrowserTest() {
-    std::vector<base::test::FeatureRefAndParams> additional_features = {
-        {features::kBackForwardCache, {}}};
     feature_list_.InitWithFeaturesAndParameters(
-        DefaultEnabledBackForwardCacheParametersForTests(additional_features),
-        DefaultDisabledBackForwardCacheParametersForTests());
+        GetDefaultEnabledBackForwardCacheFeaturesForTesting(),
+        GetDefaultDisabledBackForwardCacheFeaturesForTesting());
   }
   ~DocumentServiceBFCacheBrowserTest() override = default;
 

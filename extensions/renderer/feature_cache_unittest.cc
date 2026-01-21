@@ -4,39 +4,41 @@
 
 #include "extensions/renderer/feature_cache.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/memory/raw_ptr.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/value_builder.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/scoped_web_frame.h"
 #include "extensions/renderer/script_context.h"
-#include "v8/include/v8.h"
-
+#include "extensions/test/test_context_data.h"
 #include "third_party/blink/public/platform/web_data.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "v8/include/v8.h"
 
 namespace extensions {
 
 namespace {
 
 struct FakeContext {
-  Feature::Context context_type;
-  const Extension* extension;
+  mojom::ContextType context_type;
+  raw_ptr<const Extension> extension;
   const GURL url;
 };
 
 bool HasFeature(FeatureCache& cache,
                 const FakeContext& context,
                 const std::string& feature) {
-  return base::Contains(
+  return std::ranges::contains(
       cache.GetAvailableFeatures(context.context_type, context.extension,
-                                 context.url),
+                                 context.url, TestContextData()),
       feature);
 }
 
@@ -48,11 +50,11 @@ TEST_F(FeatureCacheTest, Basic) {
   FeatureCache cache;
   scoped_refptr<const Extension> extension_a = ExtensionBuilder("a").Build();
   scoped_refptr<const Extension> extension_b =
-      ExtensionBuilder("b").AddPermission("storage").Build();
+      ExtensionBuilder("b").AddAPIPermission("storage").Build();
 
-  FakeContext context_a = {Feature::BLESSED_EXTENSION_CONTEXT,
+  FakeContext context_a = {mojom::ContextType::kPrivilegedExtension,
                            extension_a.get(), extension_a->url()};
-  FakeContext context_b = {Feature::BLESSED_EXTENSION_CONTEXT,
+  FakeContext context_b = {mojom::ContextType::kPrivilegedExtension,
                            extension_b.get(), extension_b->url()};
   // To start, context a should not have access to storage, but context b
   // should.
@@ -74,11 +76,11 @@ TEST_F(FeatureCacheTest, WebUIContexts) {
   scoped_refptr<const Extension> extension_a = ExtensionBuilder("a").Build();
 
   // The chrome://extensions page is allowlisted for the management API.
-  FakeContext webui_context = {Feature::WEBUI_CONTEXT, nullptr,
+  FakeContext webui_context = {mojom::ContextType::kWebUi, nullptr,
                                content::GetWebUIURL("extensions")};
   // chrome://baz is not allowlisted, and should not have access.
-  FakeContext webui_context_without_access = {Feature::WEBUI_CONTEXT, nullptr,
-                                              content::GetWebUIURL("baz")};
+  FakeContext webui_context_without_access = {
+      mojom::ContextType::kWebUi, nullptr, content::GetWebUIURL("baz")};
 
   EXPECT_TRUE(HasFeature(cache, webui_context, "management"));
   EXPECT_FALSE(HasFeature(cache, webui_context_without_access, "management"));

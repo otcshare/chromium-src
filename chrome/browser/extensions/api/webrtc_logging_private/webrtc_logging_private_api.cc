@@ -7,30 +7,33 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/supports_user_data.h"
 #include "build/build_config.h"
-#include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/error_utils.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include "extensions/common/permissions/permissions_data.h"
+#endif
+
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
+#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #endif
 
 namespace {
@@ -38,7 +41,7 @@ namespace {
 bool CanEnableAudioDebugRecordingsFromExtension(
     const extensions::Extension* extension) {
   bool enabled_by_permissions = false;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   if (extension) {
     enabled_by_permissions =
         extension->permissions_data()->active_permissions().HasAPIPermission(
@@ -100,21 +103,12 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
   //  2. From an allowlisted app that hosts a page in a webview. In this case,
   //  the app should call these API functions with the |target_webview| flag
   //  set, from a web contents that has exactly 1 webview .
-
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // If |target_webview| is set, lookup the guest content's render process in
   // the sender's web contents. There should be exactly 1 guest.
   if (request.target_webview && *request.target_webview) {
     content::RenderProcessHost* target_host = nullptr;
     int guests_found = 0;
-    auto get_guest = [](int* guests_found,
-                        content::RenderProcessHost** target_host,
-                        content::WebContents* guest_contents) {
-      *guests_found = *guests_found + 1;
-      *target_host = guest_contents->GetPrimaryMainFrame()->GetProcess();
-      // Don't short-circuit, so we can count how many other guest contents
-      // there are.
-      return false;
-    };
     auto* guest_view_manager =
         guest_view::GuestViewManager::FromBrowserContext(browser_context());
     if (!guest_view_manager) {
@@ -124,8 +118,13 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
       return nullptr;
     }
     guest_view_manager->ForEachGuest(
-        GetSenderWebContents(),
-        base::BindRepeating(get_guest, &guests_found, &target_host));
+        GetSenderWebContents(), [&](content::WebContents* guest_contents) {
+          ++guests_found;
+          target_host = guest_contents->GetPrimaryMainFrame()->GetProcess();
+          // Don't short-circuit, so we can count how many other guest contents
+          // there are.
+          return false;
+        });
     if (!target_host) {
       *error = "No webview render process found";
       return nullptr;
@@ -136,6 +135,7 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
     }
     return target_host;
   }
+#endif  // BUILDFLAG(ENABLE_GUEST_VIEW)
 
   // If |guest_process_id| is defined, directly use this id to find the
   // corresponding RenderProcessHost.
@@ -162,7 +162,7 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
   if (!ExtensionTabUtil::GetTabById(tab_id, browser_context(), true,
                                     &contents)) {
     *error = extensions::ErrorUtils::FormatErrorMessage(
-        extensions::tabs_constants::kTabNotFoundError,
+        extensions::ExtensionTabUtil::kTabNotFoundError,
         base::NumberToString(tab_id));
     return nullptr;
   }
@@ -229,7 +229,7 @@ void WebrtcLoggingPrivateFunctionWithUploadCallback::FireCallback(
   if (success) {
     api::webrtc_logging_private::UploadResult result;
     result.report_id = report_id;
-    Respond(OneArgument(base::Value(result.ToValue())));
+    Respond(WithArguments(result.ToValue()));
   } else {
     Respond(Error(error_message));
   }
@@ -250,14 +250,14 @@ void WebrtcLoggingPrivateFunctionWithRecordingDoneCallback::FireCallback(
   result.prefix_path = prefix_path;
   result.did_stop = did_stop;
   result.did_manual_stop = did_manual_stop;
-  Respond(OneArgument(base::Value(result.ToValue())));
+  Respond(WithArguments(result.ToValue()));
 }
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateSetMetaDataFunction::Run() {
-  std::unique_ptr<SetMetaData::Params> params(
-      SetMetaData::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<SetMetaData::Params> params =
+      SetMetaData::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   WebRtcLoggingController::GenericDoneCallback callback;
   std::string error;
@@ -276,8 +276,8 @@ WebrtcLoggingPrivateSetMetaDataFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction WebrtcLoggingPrivateStartFunction::Run() {
-  std::unique_ptr<Start::Params> params(Start::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Start::Params> params = Start::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   WebRtcLoggingController::GenericDoneCallback callback;
   std::string error;
@@ -292,9 +292,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStartFunction::Run() {
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateSetUploadOnRenderCloseFunction::Run() {
-  std::unique_ptr<SetUploadOnRenderClose::Params> params(
-      SetUploadOnRenderClose::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<SetUploadOnRenderClose::Params> params =
+      SetUploadOnRenderClose::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller(
@@ -310,8 +310,8 @@ WebrtcLoggingPrivateSetUploadOnRenderCloseFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction WebrtcLoggingPrivateStopFunction::Run() {
-  std::unique_ptr<Stop::Params> params(Stop::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Stop::Params> params = Stop::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   WebRtcLoggingController::GenericDoneCallback callback;
   std::string error;
@@ -325,8 +325,8 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStopFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction WebrtcLoggingPrivateStoreFunction::Run() {
-  std::unique_ptr<Store::Params> params(Store::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Store::Params> params = Store::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   WebRtcLoggingController::GenericDoneCallback callback;
   std::string error;
@@ -344,9 +344,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStoreFunction::Run() {
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateUploadStoredFunction::Run() {
-  std::unique_ptr<UploadStored::Params> params(
-      UploadStored::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<UploadStored::Params> params =
+      UploadStored::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string error;
   WebRtcLoggingController* logging_controller = LoggingControllerFromRequest(
@@ -365,8 +365,8 @@ WebrtcLoggingPrivateUploadStoredFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction WebrtcLoggingPrivateUploadFunction::Run() {
-  std::unique_ptr<Upload::Params> params(Upload::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Upload::Params> params = Upload::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string error;
   WebRtcLoggingController* logging_controller = LoggingControllerFromRequest(
@@ -382,8 +382,8 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateUploadFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction WebrtcLoggingPrivateDiscardFunction::Run() {
-  std::unique_ptr<Discard::Params> params(Discard::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Discard::Params> params = Discard::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   WebRtcLoggingController::GenericDoneCallback callback;
   std::string error;
@@ -398,9 +398,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateDiscardFunction::Run() {
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateStartRtpDumpFunction::Run() {
-  std::unique_ptr<StartRtpDump::Params> params(
-      StartRtpDump::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<StartRtpDump::Params> params =
+      StartRtpDump::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   if (!params->incoming && !params->outgoing) {
     FireCallback(false, "Either incoming or outgoing must be true.");
@@ -431,9 +431,9 @@ WebrtcLoggingPrivateStartRtpDumpFunction::Run() {
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateStopRtpDumpFunction::Run() {
-  std::unique_ptr<StopRtpDump::Params> params(
-      StopRtpDump::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<StopRtpDump::Params> params =
+      StopRtpDump::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   if (!params->incoming && !params->outgoing) {
     FireCallback(false, "Either incoming or outgoing must be true.");
@@ -468,9 +468,9 @@ WebrtcLoggingPrivateStartAudioDebugRecordingsFunction::Run() {
     return RespondNow(Error(""));
   }
 
-  std::unique_ptr<StartAudioDebugRecordings::Params> params(
-      StartAudioDebugRecordings::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<StartAudioDebugRecordings::Params> params =
+      StartAudioDebugRecordings::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   if (params->seconds < 0) {
     FireErrorCallback("seconds must be greater than or equal to 0");
@@ -505,9 +505,9 @@ WebrtcLoggingPrivateStopAudioDebugRecordingsFunction::Run() {
     return RespondNow(Error(""));
   }
 
-  std::unique_ptr<StopAudioDebugRecordings::Params> params(
-      StopAudioDebugRecordings::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<StopAudioDebugRecordings::Params> params =
+      StopAudioDebugRecordings::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string error;
   content::RenderProcessHost* host =
@@ -533,9 +533,9 @@ WebrtcLoggingPrivateStopAudioDebugRecordingsFunction::Run() {
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateStartEventLoggingFunction::Run() {
-  std::unique_ptr<StartEventLogging::Params> params(
-      StartEventLogging::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<StartEventLogging::Params> params =
+      StartEventLogging::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string error;
   content::RenderProcessHost* host =
@@ -570,7 +570,7 @@ void WebrtcLoggingPrivateStartEventLoggingFunction::FireCallback(
     DCHECK(error_message.empty());
     api::webrtc_logging_private::StartEventLoggingResult result;
     result.log_id = log_id;
-    Respond(OneArgument(base::Value(result.ToValue())));
+    Respond(WithArguments(result.ToValue()));
   } else {
     DCHECK(log_id.empty());
     DCHECK(!error_message.empty());
@@ -580,7 +580,7 @@ void WebrtcLoggingPrivateStartEventLoggingFunction::FireCallback(
 
 ExtensionFunction::ResponseAction
 WebrtcLoggingPrivateGetLogsDirectoryFunction::Run() {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Unlike other WebrtcLoggingPrivate functions that take a RequestInfo object,
   // this function shouldn't be called by a component extension on behalf of
   // some web code. It returns a DirectoryEntry for use directly in the calling
@@ -603,19 +603,19 @@ WebrtcLoggingPrivateGetLogsDirectoryFunction::Run() {
           &WebrtcLoggingPrivateGetLogsDirectoryFunction::FireErrorCallback,
           this));
   return RespondLater();
-#else   // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#else
   return RespondNow(Error("Not supported on the current OS"));
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif
 }
 
 void WebrtcLoggingPrivateGetLogsDirectoryFunction::FireCallback(
     const std::string& filesystem_id,
     const std::string& base_name) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
-  dict->SetStringKey("fileSystemId", filesystem_id);
-  dict->SetStringKey("baseName", base_name);
-  Respond(OneArgument(base::Value::FromUniquePtrValue(std::move(dict))));
+  base::Value::Dict dict;
+  dict.Set("fileSystemId", filesystem_id);
+  dict.Set("baseName", base_name);
+  Respond(WithArguments(std::move(dict)));
 }
 
 void WebrtcLoggingPrivateGetLogsDirectoryFunction::FireErrorCallback(

@@ -11,6 +11,7 @@
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
+#include "third_party/skia/include/gpu/graphite/BackendTexture.h"
 
 namespace viz {
 
@@ -20,7 +21,7 @@ class SkiaOutputDeviceOffscreen : public SkiaOutputDevice {
       scoped_refptr<gpu::SharedContextState> context_state,
       gfx::SurfaceOrigin origin,
       bool has_alpha,
-      gpu::MemoryTracker* memory_tracker,
+      scoped_refptr<gpu::MemoryTracker> memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
 
   SkiaOutputDeviceOffscreen(const SkiaOutputDeviceOffscreen&) = delete;
@@ -30,26 +31,23 @@ class SkiaOutputDeviceOffscreen : public SkiaOutputDevice {
   ~SkiaOutputDeviceOffscreen() override;
 
   // SkiaOutputDevice implementation:
-  bool Reshape(const SkSurfaceCharacterization& characterization,
-               const gfx::ColorSpace& color_space,
-               float device_scale_factor,
-               gfx::OverlayTransform transform) override;
-  void SwapBuffers(BufferPresentedCallback feedback,
-                   OutputSurfaceFrame frame) override;
-  void PostSubBuffer(const gfx::Rect& rect,
-                     BufferPresentedCallback feedback,
-                     OutputSurfaceFrame frame) override;
+  bool Reshape(const ReshapeParams& params) override;
+  void Present(const std::optional<gfx::Rect>& update_rect,
+               BufferPresentedCallback feedback,
+               OutputSurfaceFrame frame) override;
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
   SkSurface* BeginPaint(
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
+  void ReadbackForTesting(base::OnceCallback<void(SkBitmap)> callback) override;
 
  protected:
   scoped_refptr<gpu::SharedContextState> context_state_;
   const bool has_alpha_;
   sk_sp<SkSurface> sk_surface_;
   GrBackendTexture backend_texture_;
+  skgpu::graphite::BackendTexture graphite_texture_;
   bool supports_rgbx_ = true;
   gfx::Size size_;
   SkColorType sk_color_type_ = kUnknown_SkColorType;

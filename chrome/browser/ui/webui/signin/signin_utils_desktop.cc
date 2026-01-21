@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
 
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -14,28 +16,36 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_utils.h"
+#include "components/sync/base/features.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 
 SigninUIError CanOfferSignin(Profile* profile,
-                             const std::string& gaia_id,
-                             const std::string& email) {
-  if (!profile)
-    return SigninUIError::Other(email);
+                             const GaiaId& gaia_id,
+                             const std::string& email,
+                             bool allow_account_from_other_profile) {
+  if (!profile) {
+    return SigninUIError::NoProfile(email);
+  }
 
-  if (!profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed))
-    return SigninUIError::Other(email);
+  if (!profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed)) {
+    return SigninUIError::SigninDisallowed(email);
+  }
 
-  if (!ChromeSigninClient::ProfileAllowsSigninCookies(profile))
-    return SigninUIError::Other(email);
+  if (!ChromeSigninClient::ProfileAllowsSigninCookies(profile)) {
+    return SigninUIError::SigninCookiesDisallowed(email);
+  }
 
   if (!email.empty()) {
     auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
-    if (!identity_manager)
-      return SigninUIError::Other(email);
+    if (!identity_manager) {
+      return SigninUIError::NoIdentityManager(email);
+    }
 
     // Make sure this username is not prohibited by policy.
     if (!signin::IsUsernameAllowedByPatternFromPrefs(
@@ -47,15 +57,27 @@ SigninUIError CanOfferSignin(Profile* profile,
     // re-auth scenario. Make sure the email just signed in corresponds to
     // the one sign in manager expects.
     std::string current_email =
-        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSync)
+        identity_manager
+            ->GetPrimaryAccountInfo(
+                base::FeatureList::IsEnabled(
+                    syncer::kReplaceSyncPromosWithSignInPromos)
+                    ? signin::ConsentLevel::kSignin
+                    : signin::ConsentLevel::kSync)
             .email;
+    // TODO(crbug.com/440302112): Consider checking for the gaia_id equality
+    // instead of the email for reauth flow detection.
     const bool same_email = gaia::AreEmailsSame(current_email, email);
-    if (!current_email.empty() && !same_email)
+    if (!current_email.empty() && !same_email) {
       return SigninUIError::WrongReauthAccount(email, current_email);
+    }
 
+    allow_account_from_other_profile =
+        allow_account_from_other_profile ||
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kBypassAccountAlreadyUsedByAnotherProfileCheck);
     // If some profile, not just the current one, is already connected to this
-    // account, don't show the infobar.
-    if (g_browser_process && !same_email) {
+    // account, don't offer sign in.
+    if (g_browser_process && !same_email && !allow_account_from_other_profile) {
       ProfileManager* profile_manager = g_browser_process->profile_manager();
       if (profile_manager) {
         std::vector<ProfileAttributesEntry*> entries =
@@ -68,7 +90,7 @@ SigninUIError CanOfferSignin(Profile* profile,
           // these profile hanging around until the next restart which could
           // block subsequent profile creation, resulting in
           // SigninUIError::AccountAlreadyUsedByAnotherProfile.
-          // TODO(crbug.com/1196290): This opens the possibility for getting
+          // TODO(crbug.com/40176394): This opens the possibility for getting
           // into a state with 2 profiles syncing to the same account:
           //  - start creating a new profile and sign-in,
           //  - enabled sync for the same account in another (existing) profile,
@@ -78,17 +100,18 @@ SigninUIError CanOfferSignin(Profile* profile,
           // profiles, and fix the code that switches to the other syncing
           // profile so that the profile creation flow window gets activated for
           // profiles being created (instead of opening a new window).
-          if (!entry->IsAuthenticated() || entry->IsOmitted())
+          if (entry->IsOmitted() || entry->GetPath() == profile->GetPath()) {
             continue;
-
-          // For backward compatibility, need to check also the username of the
-          // profile, since the GAIA ID may not have been set yet in the
-          // ProfileAttributesStorage.  It will be set once the profile
-          // is opened.
-          std::string profile_gaia_id = entry->GetGAIAId();
-          std::string profile_email = base::UTF16ToUTF8(entry->GetUserName());
-          if (gaia_id == profile_gaia_id ||
-              gaia::AreEmailsSame(email, profile_email)) {
+          }
+          // If the feature is disabled, the below check on GaiaId equality is
+          // equivalent to checking if the user is signed in.
+          if (!base::FeatureList::IsEnabled(
+                  syncer::kReplaceSyncPromosWithSignInPromos)) {
+            if (!entry->IsAuthenticated() && !entry->CanBeManaged()) {
+              continue;
+            }
+          }
+          if (gaia_id == entry->GetGAIAId()) {
             return SigninUIError::AccountAlreadyUsedByAnotherProfile(
                 email, entry->GetPath());
           }
@@ -99,8 +122,8 @@ SigninUIError CanOfferSignin(Profile* profile,
     // With force sign in enabled, cross account sign in is not allowed.
     if (signin_util::IsForceSigninEnabled() &&
         IsCrossAccountError(profile, gaia_id)) {
-      std::string last_email =
-          profile->GetPrefs()->GetString(prefs::kGoogleServicesLastUsername);
+      std::string last_email = profile->GetPrefs()->GetString(
+          prefs::kGoogleServicesLastSyncingUsername);
       return SigninUIError::ProfileWasUsedByAnotherAccount(email, last_email);
     }
   }
@@ -108,9 +131,9 @@ SigninUIError CanOfferSignin(Profile* profile,
   return SigninUIError::Ok();
 }
 
-bool IsCrossAccountError(Profile* profile, const std::string& gaia_id) {
+bool IsCrossAccountError(Profile* profile, const GaiaId& gaia_id) {
   DCHECK(!gaia_id.empty());
-  std::string last_gaia_id =
-      profile->GetPrefs()->GetString(prefs::kGoogleServicesLastGaiaId);
+  const GaiaId last_gaia_id(
+      profile->GetPrefs()->GetString(prefs::kGoogleServicesLastSyncingGaiaId));
   return !last_gaia_id.empty() && gaia_id != last_gaia_id;
 }

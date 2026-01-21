@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/login/signin/oauth2_token_fetcher.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "chromeos/ash/components/network/network_handler.h"
@@ -37,7 +37,7 @@ OAuth2TokenFetcher::OAuth2TokenFetcher(
   DCHECK(delegate);
 }
 
-OAuth2TokenFetcher::~OAuth2TokenFetcher() {}
+OAuth2TokenFetcher::~OAuth2TokenFetcher() = default;
 
 void OAuth2TokenFetcher::StartExchangeFromAuthCode(
     const std::string& auth_code,
@@ -79,9 +79,8 @@ void OAuth2TokenFetcher::RetryOnError(const GoogleServiceAuthError& error,
         FROM_HERE, std::move(task), base::Milliseconds(kRequestRestartDelay));
     return;
   }
-  LOG(ERROR) << "Unrecoverable error or retry count max reached. State: "
-             << error.state() << ", network error: " << error.network_error()
-             << ", message: " << error.error_message();
+  LOG(ERROR) << "Unrecoverable error or retry count max reached. Error: "
+             << error.ToString();
   std::move(error_handler).Run();
 }
 

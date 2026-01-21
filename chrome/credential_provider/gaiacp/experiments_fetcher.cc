@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/credential_provider/gaiacp/experiments_fetcher.h"
 
 #include <windows.h>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -144,7 +150,7 @@ extension::TaskCreator ExperimentsFetcher::GetFetchExperimentsTaskCreator() {
   return base::BindRepeating(&ExperimentsFetchTask::Create);
 }
 
-ExperimentsFetcher::ExperimentsFetcher() {}
+ExperimentsFetcher::ExperimentsFetcher() = default;
 
 ExperimentsFetcher::~ExperimentsFetcher() = default;
 
@@ -176,7 +182,7 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
   }
 
   // Make the fetch experiments HTTP request.
-  absl::optional<base::Value> request_result;
+  std::optional<base::Value::Dict> request_result;
   HRESULT hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
       GetExperimentsUrl(), access_token, {}, *request_dict,
       kDefaultFetchExperimentsRequestTimeout, kMaxNumHttpRetries,
@@ -189,7 +195,7 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
   }
 
   std::string experiments_data;
-  if (request_result && request_result->is_dict()) {
+  if (request_result) {
     if (!base::JSONWriter::Write(*request_result, &experiments_data)) {
       LOGFN(ERROR) << "base::JSONWriter::Write failed";
       return E_FAIL;
@@ -210,17 +216,13 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
     return E_FAIL;
   }
 
-  int num_bytes_written = experiments_file->Write(0, experiments_data.c_str(),
-                                                  experiments_data.size());
-
-  experiments_file.reset();
-
-  if (size_t(num_bytes_written) != experiments_data.size()) {
-    LOGFN(ERROR) << "Failed writing experiments data to file! Only "
-                 << num_bytes_written << " bytes written out of "
-                 << experiments_data.size();
+  if (!experiments_file->WriteAndCheck(0,
+                                       base::as_byte_span(experiments_data))) {
+    LOGFN(ERROR) << "Failed writing experiments data to file!";
     return E_FAIL;
   }
+
+  experiments_file.reset();
 
   base::Time fetch_time = base::Time::Now();
   std::wstring fetch_time_millis = base::NumberToWString(

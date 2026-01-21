@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/services/printing/print_backend_service_impl.h"
@@ -88,14 +89,17 @@ class PrintBackendServiceTestImpl : public PrintBackendServiceImpl {
   void GetDefaultPrinterName(
       mojom::PrintBackendService::GetDefaultPrinterNameCallback callback)
       override;
+#if BUILDFLAG(IS_CHROMEOS)
   void GetPrinterSemanticCapsAndDefaults(
       const std::string& printer_name,
       mojom::PrintBackendService::GetPrinterSemanticCapsAndDefaultsCallback
           callback) override;
+#endif
   void FetchCapabilities(
       const std::string& printer_name,
       mojom::PrintBackendService::FetchCapabilitiesCallback callback) override;
   void UpdatePrintSettings(
+      uint32_t context_id,
       base::Value::Dict job_settings,
       mojom::PrintBackendService::UpdatePrintSettingsCallback callback)
       override;
@@ -110,6 +114,13 @@ class PrintBackendServiceTestImpl : public PrintBackendServiceImpl {
       float shrink_factor,
       mojom::PrintBackendService::RenderPrintedPageCallback callback) override;
 #endif  // BUILDFLAG(IS_WIN)
+
+  // Tests which will have a leftover printing context established in the
+  // service can use this to skip the destructor check that all contexts were
+  // cleaned up.
+  void SkipPersistentContextsCheckOnShutdown() {
+    skip_dtor_persistent_contexts_check_ = true;
+  }
 
   // Cause the service to terminate on the next interaction it receives.  Once
   // terminated no further Mojo calls will be possible since there will not be
@@ -129,11 +140,12 @@ class PrintBackendServiceTestImpl : public PrintBackendServiceImpl {
   // Use LaunchForTesting() or LaunchForTestingWithServiceThread().
   PrintBackendServiceTestImpl(
       mojo::PendingReceiver<mojom::PrintBackendService> receiver,
+      bool is_sandboxed,
       scoped_refptr<TestPrintBackend> backend);
 
   void OnDidGetDefaultPrinterName(
       mojom::PrintBackendService::GetDefaultPrinterNameCallback callback,
-      mojom::DefaultPrinterNameResultPtr printer_name);
+      mojom::PrintBackendService::GetDefaultPrinterNameResult printer_name);
 
   void TerminateConnection();
 
@@ -143,13 +155,17 @@ class PrintBackendServiceTestImpl : public PrintBackendServiceImpl {
   static std::unique_ptr<PrintBackendServiceTestImpl>
   CreateServiceOnServiceThread(
       mojo::PendingReceiver<mojom::PrintBackendService> receiver,
+      bool is_sandboxed,
       scoped_refptr<TestPrintBackend> backend,
       mojo::PendingRemote<mojom::PrinterXmlParser> xml_parser_remote);
 #endif  // BUILDFLAG(IS_WIN)
 
   // When pretending to be sandboxed, have the possibility of getting access
   // denied errors.
-  bool is_sandboxed_ = false;
+  const bool is_sandboxed_;
+
+  // Marker for skipping check for empty persistent contexts at destruction.
+  bool skip_dtor_persistent_contexts_check_ = false;
 
   // Marker to signal service should terminate on next interaction.
   bool terminate_receiver_ = false;

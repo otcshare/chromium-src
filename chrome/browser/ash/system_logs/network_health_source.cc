@@ -7,7 +7,7 @@
 #include <sstream>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/net/network_health/network_health_manager.h"
@@ -149,6 +149,27 @@ std::string GetProblemsString(
     case RoutineProblems::Tag::kArcPingProblems:
       problemsStr = ProblemsToStr(problems->get_arc_ping_problems());
       break;
+    case RoutineProblems::Tag::kGoogleServicesConnectivityProblems: {
+      std::ostringstream output;
+      const auto& google_problems =
+          problems->get_google_services_connectivity_problems();
+      for (size_t i = 0; i < google_problems.size(); i++) {
+        const auto& problem = google_problems[i];
+        if (problem->is_connection_error()) {
+          output << problem->get_connection_error()->problem_type;
+        } else if (problem->is_proxy_connection_error()) {
+          output << problem->get_proxy_connection_error()->problem_type;
+        } else {
+          // NoValidProxyError has implicit problem type.
+          output << "kNoValidProxy";
+        }
+        if (i != google_problems.size() - 1) {
+          output << ", ";
+        }
+      }
+      problemsStr = output.str();
+      break;
+    }
   }
   return problemsStr;
 }
@@ -168,6 +189,7 @@ std::string FormatNetworkDiagnosticResults(
     output << "Routine: " << result.first << "\n";
     output << "Verdict: " << result.second->verdict << "\n";
     output << "Timestamp: " << result.second->timestamp << "\n";
+    output << "Source: " << result.second->source << "\n";
 
     auto problems = GetProblemsString(result.second->problems);
     if (!problems.empty())
@@ -190,7 +212,7 @@ NetworkHealthSource::NetworkHealthSource(bool scrub,
           network_diagnostics_service_.BindNewPipeAndPassReceiver());
 }
 
-NetworkHealthSource::~NetworkHealthSource() {}
+NetworkHealthSource::~NetworkHealthSource() = default;
 
 void NetworkHealthSource::Fetch(SysLogsSourceCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);

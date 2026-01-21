@@ -7,13 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/performance_manager_impl.h"
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/render_process_host_id.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
 #include "content/public/browser/child_process_termination_info.h"
@@ -25,20 +27,31 @@ namespace {
 
 const void* const kRenderProcessUserDataKey = &kRenderProcessUserDataKey;
 
+base::Process::Priority GetInitialPriority(bool is_spare) {
+  // A spare is always initialized at a low priority.
+  if (is_spare) {
+    return base::Process::Priority::kMinValue;
+  }
+  return features::kNonSpareRendererHighInitialPriority.Get()
+             ? base::Process::Priority::kUserBlocking
+             : base::Process::Priority::kMinValue;
+}
+
 }  // namespace
 
 RenderProcessUserData::RenderProcessUserData(
     content::RenderProcessHost* render_process_host)
     : host_(render_process_host) {
   host_->AddObserver(this);
+  base::Process::Priority initial_priority =
+      GetInitialPriority(host_->IsSpare());
   process_node_ = PerformanceManagerImpl::CreateProcessNode(
-      content::PROCESS_TYPE_RENDERER,
-      RenderProcessHostProxy(RenderProcessHostId(host_->GetID())));
+      RenderProcessHostProxy(host_->GetID()), initial_priority);
 }
 
 RenderProcessUserData::~RenderProcessUserData() {
-  PerformanceManagerImpl::DeleteNode(std::move(process_node_));
   host_->RemoveObserver(this);
+  PerformanceManagerImpl::DeleteNode(std::move(process_node_));
 
   if (destruction_observer_) {
     destruction_observer_->OnRenderProcessUserDataDestroying(host_);
@@ -65,11 +78,8 @@ void RenderProcessUserData::SetDestructionObserver(
 
 void RenderProcessUserData::OnProcessLaunched() {
   DCHECK(host_->GetProcess().IsValid());
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE, base::BindOnce(&ProcessNodeImpl::SetProcess,
-                                base::Unretained(process_node_.get()),
-                                host_->GetProcess().Duplicate(),
-                                /* launch_time=*/base::TimeTicks::Now()));
+  process_node_->SetProcess(host_->GetProcess().Duplicate(),
+                            /*launch_time=*/base::TimeTicks::Now());
 }
 
 // static
@@ -86,10 +96,7 @@ RenderProcessUserData* RenderProcessUserData::CreateForRenderProcessHost(
 void RenderProcessUserData::RenderProcessExited(
     content::RenderProcessHost* host,
     const content::ChildProcessTerminationInfo& info) {
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE,
-      base::BindOnce(&ProcessNodeImpl::SetProcessExitStatus,
-                     base::Unretained(process_node_.get()), info.exit_code));
+  process_node_->SetProcessExitStatus(info.exit_code);
 }
 
 void RenderProcessUserData::RenderProcessHostDestroyed(

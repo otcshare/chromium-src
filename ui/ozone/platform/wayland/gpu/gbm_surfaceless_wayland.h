@@ -5,17 +5,24 @@
 #ifndef UI_OZONE_PLATFORM_WAYLAND_GPU_GBM_SURFACELESS_WAYLAND_H_
 #define UI_OZONE_PLATFORM_WAYLAND_GPU_GBM_SURFACELESS_WAYLAND_H_
 
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
 #include <memory>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gl/presenter.h"
 #include "ui/ozone/platform/wayland/common/wayland_overlay_config.h"
 #include "ui/ozone/platform/wayland/gpu/wayland_surface_gpu.h"
 #include "ui/ozone/public/swap_completion_callback.h"
+
+namespace gl {
+class GLDisplayEGL;
+}
 
 namespace ui {
 
@@ -48,7 +55,6 @@ class GbmSurfacelessWayland : public gl::Presenter, public WaylandSurfaceGpu {
   void Present(SwapCompletionCallback completion_callback,
                PresentationCallback presentation_callback,
                gfx::FrameData data) override;
-  EGLConfig GetConfig() override;
   void SetRelyOnImplicitSync() override;
   bool SupportsPlaneGpuFences() const override;
   bool SupportsOverridePlatformSize() const override;
@@ -57,7 +63,6 @@ class GbmSurfacelessWayland : public gl::Presenter, public WaylandSurfaceGpu {
               float scale_factor,
               const gfx::ColorSpace& color_space,
               bool has_alpha) override;
-  void SetForceGlFlushOnSwapBuffers() override;
 
   BufferId GetOrCreateSolidColorBuffer(SkColor4f color, const gfx::Size& size);
 
@@ -116,6 +121,8 @@ class GbmSurfacelessWayland : public gl::Presenter, public WaylandSurfaceGpu {
   void OnPresentation(uint32_t frame_id,
                       const gfx::PresentationFeedback& feedback) override;
 
+  EGLDisplay GetEGLDisplay();
+
   // PendingFrame here is a post-SkiaRenderer struct that contains overlays +
   // primary plane informations. It is a "compositor frame" on AcceleratedWidget
   // level. This information gets into browser process and overlays are
@@ -145,7 +152,6 @@ class GbmSurfacelessWayland : public gl::Presenter, public WaylandSurfaceGpu {
 
   void MaybeSubmitFrames();
 
-  EGLSyncKHR InsertFence(bool implicit);
   void FenceRetired(PendingFrame* frame);
 
   // Sets a flag that skips glFlush step in unittests.
@@ -170,13 +176,14 @@ class GbmSurfacelessWayland : public gl::Presenter, public WaylandSurfaceGpu {
   bool use_egl_fence_sync_ = true;
 
   bool no_gl_flush_for_tests_ = false;
-  bool requires_gl_flush_on_swap_buffers_ = false;
 
   // Scale factor of the current surface.
   float surface_scale_factor_ = 1.f;
 
   // Holds gpu side reference (buffer_ids) for solid color wl_buffers.
   std::unique_ptr<SolidColorBufferHolder> solid_color_buffers_holder_;
+
+  const raw_ptr<gl::GLDisplayEGL> display_;
 
   base::WeakPtrFactory<GbmSurfacelessWayland> weak_factory_;
 };

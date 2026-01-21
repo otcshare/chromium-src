@@ -12,9 +12,9 @@
 #include <set>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "net/base/completion_once_callback.h"
 #include "net/disk_cache/disk_cache.h"
@@ -129,7 +129,7 @@ class ServiceWorkerDiskCache {
   std::map</*call_id=*/uint64_t, EntryCallback> active_entry_calls_;
   std::map</*call_id=*/uint64_t, net::CompletionOnceCallback>
       active_doom_calls_;
-  std::set<ServiceWorkerDiskCacheEntry*> open_entries_;
+  std::set<raw_ptr<ServiceWorkerDiskCacheEntry>> open_entries_;
   std::unique_ptr<disk_cache::Backend> disk_cache_;
 
   SEQUENCE_CHECKER(sequence_checker_);

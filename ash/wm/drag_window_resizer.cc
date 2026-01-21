@@ -12,7 +12,6 @@
 #include "ash/wm/window_positioning_utils.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
-#include "base/memory/weak_ptr.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
@@ -54,10 +53,11 @@ void DragWindowResizer::Drag(const gfx::PointF& location, int event_flags) {
 
   last_mouse_location_ = location;
   // Show a phantom window for dragging in another root window.
-  if (display::Screen::GetScreen()->GetNumDisplays() > 1)
+  if (display::Screen::Get()->GetNumDisplays() > 1) {
     UpdateDragWindow();
-  else
+  } else {
     drag_window_controller_.reset();
+  }
 }
 
 void DragWindowResizer::CompleteDrag() {
@@ -99,7 +99,8 @@ void DragWindowResizer::UpdateDragWindow() {
 
   if (!drag_window_controller_) {
     drag_window_controller_ = std::make_unique<DragWindowController>(
-        GetTarget(), details().source == wm::WINDOW_MOVE_SOURCE_TOUCH);
+        GetTarget(), details().source == wm::WINDOW_MOVE_SOURCE_TOUCH,
+        /*create_window_shadow=*/true);
   }
   drag_window_controller_->Update();
 }
@@ -122,14 +123,14 @@ void DragWindowResizer::EndDragImpl() {
   // TODO(oshima): Change the API so |GetDisplay| just returns a display id.
   const int64_t dst_display_id =
       Shell::Get()->cursor_manager()->GetDisplay().id();
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   if (dst_display_id == screen->GetDisplayNearestWindow(root_window).id())
     return;
 
   // Adjust the size and position so that it doesn't exceed the size of work
   // area.
   display::Display dst_display;
-  // TODO(crbug.com/1131071): It's possible that |dst_display_id| returned from
+  // TODO(crbug.com/40721205): It's possible that |dst_display_id| returned from
   // CursorManager::GetDisplay().id() is an invalid display id thus
   // |dst_display| may be invalid as well. This may cause crash later. To avoid
   // crash, we early return here. However, |dst_display_id| should never be
@@ -160,8 +161,8 @@ void DragWindowResizer::EndDragImpl() {
     else if (last_mouse_location_in_screen.x() > dst_bounds.right())
       dst_bounds.set_x(last_mouse_location_in_screen.x() - dst_bounds.width());
   }
-  AdjustBoundsToEnsureMinimumWindowVisibility(dst_display.bounds(),
-                                              &dst_bounds);
+  AdjustBoundsToEnsureMinimumWindowVisibility(
+      dst_display.bounds(), /*client_controlled=*/false, &dst_bounds);
 
   GetTarget()->SetBoundsInScreen(dst_bounds, dst_display);
 }

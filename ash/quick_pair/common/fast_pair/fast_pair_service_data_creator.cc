@@ -10,8 +10,7 @@
 #include "base/check_op.h"
 #include "base/strings/string_number_conversions.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 FastPairServiceDataCreator::Builder::Builder() = default;
 
@@ -48,8 +47,8 @@ FastPairServiceDataCreator::Builder::Build() {
 }
 
 FastPairServiceDataCreator::FastPairServiceDataCreator(
-    absl::optional<uint8_t> header,
-    absl::optional<std::string> model_id,
+    std::optional<uint8_t> header,
+    std::optional<std::string> model_id,
     std::vector<uint8_t> extra_field_headers,
     std::vector<std::string> extra_fields)
     : header_(header),
@@ -85,5 +84,4 @@ std::vector<uint8_t> FastPairServiceDataCreator::CreateServiceData() {
   return service_data;
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

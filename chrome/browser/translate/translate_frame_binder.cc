@@ -30,5 +30,4 @@ void BindContentTranslateDriver(
 
   translate_client->translate_driver()->AddReceiver(std::move(receiver));
 }
-
 }  // namespace translate

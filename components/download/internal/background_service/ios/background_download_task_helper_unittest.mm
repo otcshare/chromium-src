@@ -6,23 +6,20 @@
 
 #include <memory>
 
-#import "base/callback_helpers.h"
 #import "base/files/file_util.h"
 #import "base/files/scoped_temp_dir.h"
-#import "base/guid.h"
+#import "base/functional/callback_helpers.h"
 #import "base/run_loop.h"
 #import "base/sequence_checker.h"
 #import "base/test/bind.h"
 #import "base/test/gmock_callback_support.h"
+#import "base/test/task_environment.h"
+#import "base/uuid.h"
 #import "components/download/internal/background_service/test/background_download_test_base.h"
 #import "components/download/public/background_service/download_params.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "net/test/embedded_test_server/http_request.h"
 #import "net/test/embedded_test_server/http_response.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using net::test_server::HttpRequest;
 using net::test_server::HttpResponse;
@@ -35,7 +32,7 @@ namespace download {
 class BackgroundDownloadTaskHelperTest
     : public test::BackgroundDownloadTestBase {
  protected:
-  BackgroundDownloadTaskHelperTest() {}
+  BackgroundDownloadTaskHelperTest() = default;
   ~BackgroundDownloadTaskHelperTest() override = default;
 
   void SetUp() override {
@@ -60,14 +57,15 @@ class BackgroundDownloadTaskHelperTest
   BackgroundDownloadTaskHelper* helper() { return helper_.get(); }
 
  private:
+  base::test::TaskEnvironment task_environment_;
   std::unique_ptr<BackgroundDownloadTaskHelper> helper_;
 };
 
 // Verifies download can be finished.
-// TODO(crbug/1367306): Re-enable the test.
+// TODO(crbug.com/40239993): Re-enable the test.
 TEST_F(BackgroundDownloadTaskHelperTest, DISABLED_DownloadComplete) {
   base::RunLoop loop;
-  std::string guid = base::GenerateGUID();
+  std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   Download("/test", guid,
            base::BindLambdaForTesting([&](bool success,
                                           const base::FilePath& file_path,
@@ -90,11 +88,11 @@ TEST_F(BackgroundDownloadTaskHelperTest, DISABLED_DownloadComplete) {
 }
 
 // Verifies non success http code is treated as error.
-// TODO(crbug/1367306): Re-enable the test.
+// TODO(crbug.com/40239993): Re-enable the test.
 TEST_F(BackgroundDownloadTaskHelperTest,
        DISABLED_DownloadErrorNonSuccessHttpCode) {
   base::RunLoop loop;
-  std::string guid = base::GenerateGUID();
+  std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   Download("/notfound", guid,
            base::BindLambdaForTesting([&](bool success,
                                           const base::FilePath& file_path,
@@ -108,10 +106,10 @@ TEST_F(BackgroundDownloadTaskHelperTest,
 }
 
 // Verifies data URL should result in failure.
-// TODO(crbug/1367306): Re-enable the test.
+// TODO(crbug.com/40239993): Re-enable the test.
 TEST_F(BackgroundDownloadTaskHelperTest, DISABLED_DataURL) {
   base::RunLoop loop;
-  std::string guid = base::GenerateGUID();
+  std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   DownloadParams params;
   params.request_params.url = GURL("data:text/plain;base64,Q2hyb21pdW0=");
   helper()->StartDownload(

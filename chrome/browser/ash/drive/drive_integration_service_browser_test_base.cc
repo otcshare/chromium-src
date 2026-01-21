@@ -1,10 +1,14 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/drive/drive_integration_service_browser_test_base.h"
+
 #include "base/files/file_util.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/drivefs_test_support.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 
 namespace drive {
@@ -29,7 +33,7 @@ DriveIntegrationServiceBrowserTestBase::CreateDriveIntegrationService(
   fake_drivefs_helpers_[profile] =
       std::make_unique<drive::FakeDriveFsHelper>(profile, mount_path);
   auto* integration_service = new drive::DriveIntegrationService(
-      profile, std::string(), mount_path,
+      g_browser_process->local_state(), profile, std::string(), mount_path,
       fake_drivefs_helpers_[profile]->CreateFakeDriveFsListenerFactory());
   return integration_service;
 }
@@ -88,12 +92,11 @@ void DriveIntegrationServiceBrowserTestBase::AddDriveFileWithRelativePath(
                                    &relative_to_drive_fs_mount);
 
   // Update the drive file metadata.
-  GetFakeDriveFsForProfile(profile)->SetMetadata(
-      relative_to_drive_fs_mount, "text/plain",
-      relative_to_drive_fs_mount.BaseName().value(),
-      /*pinned=*/false, /*available_offline=*/false, /*shared=*/false,
-      /*capabilities=*/{},
-      /*folder_feature=*/{}, drive_file_id, /*alternate_url=*/"");
+  drivefs::FakeMetadata metadata;
+  metadata.path = relative_to_drive_fs_mount;
+  metadata.mime_type = "text/plain";
+  metadata.doc_id = drive_file_id;
+  GetFakeDriveFsForProfile(profile)->SetMetadata(std::move(metadata));
 
   // Update the relative/absolute paths to the generated file.
   if (new_file_relative_path)

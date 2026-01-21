@@ -15,8 +15,11 @@ struct WebPreferences;
 class WebMouseEvent;
 }
 
-namespace content {
+namespace input {
 struct NativeWebKeyboardEvent;
+}  // namespace input
+
+namespace content {
 
 //
 // RenderWidgetHostOwnerDelegate
@@ -40,7 +43,7 @@ class RenderWidgetHostOwnerDelegate {
   // The RenderWidgetHost wants to forward a keyboard event; returns whether
   // it's allowed to do so.
   virtual bool MayRenderWidgetForwardKeyboardEvent(
-      const NativeWebKeyboardEvent& key_event) = 0;
+      const input::NativeWebKeyboardEvent& key_event) = 0;
 
   // Allow OwnerDelegate to control whether its RenderWidgetHost contributes
   // priority to the RenderProcessHost.
@@ -50,12 +53,9 @@ class RenderWidgetHostOwnerDelegate {
   // the renderer's background is forced to be opaque.
   virtual void SetBackgroundOpaque(bool opaque) = 0;
 
-  // Returns true if the main frame is active, false if it is swapped out.
+  // Returns true if the main frame is active, false if the widget is not for
+  // the main frame.
   virtual bool IsMainFrameActive() = 0;
-
-  // Returns true if all widgets will never be user-visible, and thus do not
-  // need to generate pixels for display.
-  virtual bool IsNeverComposited() = 0;
 
   // Returns the WebkitPreferences for the page. The preferences are shared
   // between all widgets for the page.

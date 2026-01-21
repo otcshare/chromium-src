@@ -6,11 +6,12 @@
 
 #include <iostream>
 
+#include "base/base64.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/form_structure.h"
-#include "components/autofill/core/browser/form_structure_test_api.h"
+#include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_encoding.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "testing/libfuzzer/proto/lpm_interface.h"
 
@@ -21,33 +22,42 @@ using ::base::ASCIIToUTF16;
 
 void AddField(const std::string& label,
               const std::string& name,
-              const std::string& control_type,
+              FormControlType control_type,
               FormData* form_data) {
   FormFieldData field;
-  field.label = ASCIIToUTF16(label);
-  field.name = ASCIIToUTF16(name);
-  field.form_control_type = control_type;
-
-  form_data->fields.push_back(field);
+  field.set_label(ASCIIToUTF16(label));
+  field.set_name(ASCIIToUTF16(name));
+  field.set_form_control_type(control_type);
+  test_api(*form_data).Append(field);
 }
 
-// We run ProcessQueryResponse twice with hardcoded forms vectors. Ideally we
-// should also generate forms vectors by using fuzzing, but at the moment we use
-// simplified approach. There is no specific reason to use those two hardcoded
-// forms vectors, so it can be changed if needed.
+std::string SerializeAndEncode(const AutofillQueryResponse& response) {
+  std::string unencoded_response_string;
+  if (!response.SerializeToString(&unencoded_response_string)) {
+    LOG(ERROR) << "Cannot serialize the response proto";
+    return "";
+  }
+  return base::Base64Encode(unencoded_response_string);
+}
+
+// We run ParseServerPredictionsFromQueryResponse twice with hardcoded forms
+// vectors. Ideally we should also generate forms vectors by using fuzzing, but
+// at the moment we use simplified approach. There is no specific reason to use
+// those two hardcoded forms vectors, so it can be changed if needed.
 DEFINE_BINARY_PROTO_FUZZER(const AutofillQueryResponse& response) {
-  std::vector<FormStructure*> forms;
-  FormStructureTestApi::ProcessQueryResponse(
-      response, forms, test::GetEncodedSignatures(forms), nullptr);
+  std::vector<FormData> forms;
+  ParseServerPredictionsFromQueryResponse(
+      SerializeAndEncode(response), forms, test::GetEncodedSignatures(forms),
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
 
-  FormData form_data;
-  AddField("username", "username", "text", &form_data);
-  AddField("password", "password", "password", &form_data);
+  FormData form;
+  AddField("username", "username", FormControlType::kInputText, &form);
+  AddField("password", "password", FormControlType::kInputPassword, &form);
 
-  FormStructure form(form_data);
-  forms.push_back(&form);
-  FormStructureTestApi::ProcessQueryResponse(
-      response, forms, test::GetEncodedSignatures(forms), nullptr);
+  forms.emplace_back(form);
+  ParseServerPredictionsFromQueryResponse(
+      SerializeAndEncode(response), forms, test::GetEncodedSignatures(forms),
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
 }
 
 }  // namespace

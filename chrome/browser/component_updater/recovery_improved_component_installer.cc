@@ -15,25 +15,35 @@
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
+#include "base/path_service.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/sequence_checker.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/component_updater/component_updater_utils.h"
+#include "components/component_updater/component_updater_paths.h"
 #include "components/services/unzip/content/unzip_service.h"
 #include "components/update_client/patcher.h"
+#include "components/update_client/unpacker.h"
 #include "components/update_client/unzip/unzip_impl.h"
+
+#if BUILDFLAG(IS_POSIX)
+#include <errno.h>
+#endif
 
 namespace component_updater {
 
@@ -41,6 +51,14 @@ constexpr base::TaskTraits
     RecoveryComponentActionHandler::kThreadPoolTaskTraits;
 constexpr base::TaskTraits
     RecoveryComponentActionHandler::kThreadPoolTaskTraitsRunCommand;
+
+constexpr char kRecoveryImprovedComponentId[] =
+    "ihnlcenocehgdaegdmhbidjhnhdchfmm";
+// The SHA256 of the SubjectPublicKeyInfo used to sign the component CRX.
+constexpr uint8_t kRecoveryImprovedPublicKeySHA256[32] = {
+    0x87, 0xdb, 0x24, 0xde, 0x24, 0x76, 0x30, 0x46, 0x3c, 0x71, 0x83,
+    0x97, 0xd7, 0x32, 0x75, 0xcc, 0xd5, 0x7f, 0xec, 0x09, 0x60, 0x6d,
+    0x20, 0xc3, 0x81, 0xd7, 0xce, 0x7b, 0x10, 0x15, 0x44, 0xd1};
 
 RecoveryComponentActionHandler::RecoveryComponentActionHandler(
     const std::vector<uint8_t>& key_hash,
@@ -71,17 +89,15 @@ void RecoveryComponentActionHandler::Unpack() {
   auto unzipper = base::MakeRefCounted<update_client::UnzipChromiumFactory>(
                       base::BindRepeating(&unzip::LaunchUnzipper))
                       ->Create();
-  auto unpacker = base::MakeRefCounted<update_client::ComponentUnpacker>(
-      key_hash_, crx_path_, nullptr, std::move(unzipper), nullptr,
-      verifier_format_);
-  unpacker->Unpack(
+  update_client::Unpacker::Unpack(
+      kRecoveryImprovedComponentId, "RecoveryComponentActionHandler", key_hash_,
+      crx_path_, std::move(unzipper), verifier_format_,
       base::BindOnce(&RecoveryComponentActionHandler::UnpackComplete, this));
 }
 
 void RecoveryComponentActionHandler::UnpackComplete(
-    const update_client::ComponentUnpacker::Result& result) {
+    const update_client::Unpacker::Result& result) {
   if (result.error != update_client::UnpackerError::kNone) {
-    DCHECK(!base::DirectoryExists(result.unpack_path));
     main_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback_), false,
@@ -97,39 +113,50 @@ void RecoveryComponentActionHandler::UnpackComplete(
 
 void RecoveryComponentActionHandler::RunCommand(
     const base::CommandLine& cmdline) {
+  PrepareFiles(unpack_path_);
   VLOG(1) << "run command: " << cmdline.GetCommandLineString();
-  base::LaunchOptions options;
+  auto process_or_error = [&cmdline]() -> base::expected<base::Process, int> {
+    base::LaunchOptions options;
 #if BUILDFLAG(IS_WIN)
-  options.start_hidden = true;
+    options.start_hidden = true;
 #endif
-  base::Process process = base::LaunchProcess(cmdline, options);
+    base::Process process = base::LaunchProcess(cmdline, options);
+    if (!process.IsValid()) {
+#if BUILDFLAG(IS_WIN)
+      return base::unexpected(::GetLastError());
+#elif BUILDFLAG(IS_POSIX)
+      return base::unexpected(errno);
+#else
+      return base::unexpected(0);
+#endif
+    }
+    return std::move(process);
+  }();
   base::ThreadPool::PostTask(
       FROM_HERE, kThreadPoolTaskTraitsRunCommand,
       base::BindOnce(&RecoveryComponentActionHandler::WaitForCommand, this,
-                     std::move(process)));
+                     std::move(process_or_error)));
 }
 
-void RecoveryComponentActionHandler::WaitForCommand(base::Process process) {
+void RecoveryComponentActionHandler::WaitForCommand(
+    base::expected<base::Process, int> process_or_error) {
   int exit_code = 0;
-  const base::TimeDelta kMaxWaitTime = base::Seconds(600);
+  int extra_code1 = 0;
   bool succeeded = false;
-  if (!process.IsValid()) {
+  static constexpr base::TimeDelta kMaxWaitTime = base::Seconds(600);
+  if (process_or_error.has_value()) {
+    succeeded =
+        process_or_error->WaitForExitWithTimeout(kMaxWaitTime, &exit_code);
+  } else {
     exit_code =
         static_cast<int>(update_client::InstallError::LAUNCH_PROCESS_FAILED);
-  } else {
-    succeeded = process.WaitForExitWithTimeout(kMaxWaitTime, &exit_code);
+    extra_code1 = process_or_error.error();
   }
   base::DeletePathRecursively(unpack_path_);
   main_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback_), succeeded, exit_code, 0));
+      FROM_HERE,
+      base::BindOnce(std::move(callback_), succeeded, exit_code, extra_code1));
 }
-
-// The SHA256 of the SubjectPublicKeyInfo used to sign the component CRX.
-// The component id is: ihnlcenocehgdaegdmhbidjhnhdchfmm
-constexpr uint8_t kRecoveryImprovedPublicKeySHA256[32] = {
-    0x87, 0xdb, 0x24, 0xde, 0x24, 0x76, 0x30, 0x46, 0x3c, 0x71, 0x83,
-    0x97, 0xd7, 0x32, 0x75, 0xcc, 0xd5, 0x7f, 0xec, 0x09, 0x60, 0x6d,
-    0x20, 0xc3, 0x81, 0xd7, 0xce, 0x7b, 0x10, 0x15, 0x44, 0xd1};
 
 bool RecoveryImprovedInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
@@ -192,6 +219,14 @@ void RegisterRecoveryImprovedComponent(ComponentUpdateService* cus,
       std::make_unique<RecoveryImprovedInstallerPolicy>(prefs),
       RecoveryComponentActionHandler::MakeActionHandler());
   installer->Register(cus, base::OnceClosure());
+
+  // Post a task to clean up the legacy recovery component. This can be removed
+  // in M155+.
+  if (base::FilePath path; base::PathService::Get(DIR_RECOVERY_BASE, &path)) {
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::MayBlock()},
+        base::BindOnce(base::IgnoreResult(&base::DeletePathRecursively), path));
+  }
 #endif
 }
 

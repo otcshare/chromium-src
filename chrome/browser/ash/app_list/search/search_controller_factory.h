@@ -14,7 +14,7 @@ class Profile;
 
 namespace ash {
 class AppListNotifier;
-}
+}  // namespace ash
 
 namespace app_list {
 
@@ -26,6 +26,10 @@ std::unique_ptr<SearchController> CreateSearchController(
     AppListModelUpdater* model_updater,
     AppListControllerDelegate* list_controller,
     ash::AppListNotifier* notifier);
+
+// Returns a bitmask of `AutocompleteProvider::Type` for Launcher's
+// `SearchController`.
+int LauncherSearchProviderTypes();
 
 }  // namespace app_list
 

@@ -6,16 +6,24 @@
 #define COMPONENTS_OPTIMIZATION_GUIDE_CORE_OPTIMIZATION_GUIDE_LOGGER_H_
 
 #include <string>
+#include <vector>
 
 #include "base/containers/circular_deque.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "components/optimization_guide/core/optimization_guide_common.mojom.h"
-#include "components/optimization_guide/core/optimization_guide_decision.h"
+#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
+#include "components/optimization_guide/proto/hints.pb.h"
+#include "components/optimization_guide/proto/models.pb.h"
 #include "url/gurl.h"
+
+namespace optimization_guide {
+class ModelExecutionInternalsPageBrowserTest;
+}
 
 #define OPTIMIZATION_GUIDE_LOGGER(log_source, optimization_guide_logger)     \
   OptimizationGuideLogger::LogMessageBuilder(log_source, __FILE__, __LINE__, \
@@ -34,6 +42,7 @@ class OptimizationGuideLogger {
         int source_line,
         const std::string& message) = 0;
   };
+  static OptimizationGuideLogger* GetInstance();
   OptimizationGuideLogger();
   ~OptimizationGuideLogger();
 
@@ -51,6 +60,10 @@ class OptimizationGuideLogger {
   // Whether debug logs should allowed to be recorded.
   bool ShouldEnableDebugLogs() const;
 
+  base::WeakPtr<OptimizationGuideLogger> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   // Class that builds the log message and used when debugging is enabled via
   // command-line switch or the internals page.
   class LogMessageBuilder {
@@ -67,12 +80,6 @@ class OptimizationGuideLogger {
     LogMessageBuilder& operator<<(
         optimization_guide::proto::RequestContext request_context);
     LogMessageBuilder& operator<<(
-        optimization_guide::proto::OptimizationType optimization_type);
-    LogMessageBuilder& operator<<(optimization_guide::OptimizationTypeDecision
-                                      optimization_type_decision);
-    LogMessageBuilder& operator<<(optimization_guide::OptimizationGuideDecision
-                                      optimization_guide_decision);
-    LogMessageBuilder& operator<<(
         optimization_guide::proto::OptimizationTarget optimization_target);
 
    private:
@@ -84,6 +91,9 @@ class OptimizationGuideLogger {
   };
 
  private:
+  friend class optimization_guide::ModelExecutionInternalsPageBrowserTest;
+  friend class NewTabPageUtilBrowserTest;
+
   struct LogMessage {
     LogMessage(base::Time event_time,
                optimization_guide_common::mojom::LogSource log_source,
@@ -103,6 +113,10 @@ class OptimizationGuideLogger {
   base::circular_deque<LogMessage> recent_log_messages_;
 
   base::ObserverList<OptimizationGuideLogger::Observer> observers_;
+
+  bool command_line_flag_enabled_ = false;
+
+  base::WeakPtrFactory<OptimizationGuideLogger> weak_ptr_factory_{this};
 };
 
 #endif  // COMPONENTS_OPTIMIZATION_GUIDE_CORE_OPTIMIZATION_GUIDE_LOGGER_H_

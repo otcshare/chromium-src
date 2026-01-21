@@ -4,7 +4,6 @@
 
 #include "chrome/browser/sharesheet/sharesheet_test_util.h"
 
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -44,8 +43,8 @@ storage::FileSystemURL FileInDownloads(Profile* profile, base::FilePath file) {
       mount_point_name, storage::kFileSystemTypeLocal,
       storage::FileSystemMountOption(),
       file_manager::util::GetDownloadsFolderForProfile(profile));
-  return mount_points->CreateExternalFileSystemURL(blink::StorageKey(origin),
-                                                   mount_point_name, file);
+  return mount_points->CreateExternalFileSystemURL(
+      blink::StorageKey::CreateFirstParty(origin), mount_point_name, file);
 }
 
 storage::FileSystemURL FileInNonNativeFileSystemType(Profile* profile,

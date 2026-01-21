@@ -4,13 +4,17 @@
 
 #include "components/history_clusters/core/context_clusterer_history_service_observer.h"
 
+#include <optional>
+
 #include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_move_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history_clusters/core/config.h"
-#include "components/optimization_guide/core/new_optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/test_optimization_guide_decider.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/site_engagement/core/site_engagement_score_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -36,7 +40,7 @@ history::URLRows CreateURLRows(const std::vector<GURL>& urls) {
 }
 
 class TestOptimizationGuideDecider
-    : public optimization_guide::NewOptimizationGuideDecider {
+    : public optimization_guide::TestOptimizationGuideDecider {
  public:
   TestOptimizationGuideDecider() = default;
   ~TestOptimizationGuideDecider() override = default;
@@ -49,31 +53,16 @@ class TestOptimizationGuideDecider
               optimization_types[0]);
   }
 
-  void CanApplyOptimization(
-      const GURL& url,
-      optimization_guide::proto::OptimizationType optimization_type,
-      optimization_guide::OptimizationGuideDecisionCallback callback) override {
-    NOTREACHED();
-  }
-
   optimization_guide::OptimizationGuideDecision CanApplyOptimization(
       const GURL& url,
       optimization_guide::proto::OptimizationType optimization_type,
       optimization_guide::OptimizationMetadata* optimization_metadata)
       override {
     DCHECK_EQ(optimization_guide::proto::HISTORY_CLUSTERS, optimization_type);
-    return url.host() == "shouldskip.com"
+    return url.GetHost() == "shouldskip.com"
                ? optimization_guide::OptimizationGuideDecision::kFalse
                : optimization_guide::OptimizationGuideDecision::kTrue;
   }
-
-  void CanApplyOptimizationOnDemand(
-      const std::vector<GURL>& urls,
-      const base::flat_set<optimization_guide::proto::OptimizationType>&
-          optimization_types,
-      optimization_guide::proto::RequestContext request_context,
-      optimization_guide::OnDemandOptimizationGuideDecisionRepeatingCallback
-          callback) override {}
 };
 
 const TemplateURLService::Initializer kTemplateURLData[] = {
@@ -86,19 +75,60 @@ const TemplateURLService::Initializer kTemplateURLData[] = {
 class MockHistoryService : public history::HistoryService {
  public:
   MockHistoryService() = default;
+  ~MockHistoryService() override = default;
 
   MOCK_METHOD(base::CancelableTaskTracker::TaskId,
-              ReserveNextClusterId,
-              (ClusterIdCallback callback,
+              ReserveNextClusterIdWithVisit,
+              (const history::ClusterVisit&,
+               ClusterIdCallback callback,
                base::CancelableTaskTracker* tracker),
               (override));
-
   MOCK_METHOD(base::CancelableTaskTracker::TaskId,
               AddVisitsToCluster,
               (int64_t,
                const std::vector<history::ClusterVisit>&,
+               base::OnceClosure callback,
                base::CancelableTaskTracker*),
               (override));
+  MOCK_METHOD(base::CancelableTaskTracker::TaskId,
+              UpdateClusterVisit,
+              (const history::ClusterVisit&,
+               base::OnceClosure callback,
+               base::CancelableTaskTracker*),
+              (override));
+
+  base::CancelableTaskTracker::TaskId CaptureClusterIdCallback(
+      const history::ClusterVisit& cluster_visit,
+      ClusterIdCallback callback,
+      base::CancelableTaskTracker* tracker) {
+    cluster_id_callback_ = std::move(callback);
+    return base::CancelableTaskTracker::TaskId();
+  }
+
+  // Runs the last cluster id callback received with `cluster_id`.
+  void RunLastClusterIdCallbackWithClusterId(int64_t cluster_id) {
+    std::move(cluster_id_callback_).Run(cluster_id);
+  }
+
+  base::CancelableTaskTracker::TaskId RunAddVisitsToClusterCallback(
+      int64_t cluster_id,
+      const std::vector<history::ClusterVisit>& cluster_visits,
+      base::OnceClosure callback,
+      base::CancelableTaskTracker* tracker) {
+    std::move(callback).Run();
+    return base::CancelableTaskTracker::TaskId();
+  }
+
+  base::CancelableTaskTracker::TaskId RunUpdateClusterVisitCallback(
+      const history::ClusterVisit& cluster_visit,
+      base::OnceClosure callback,
+      base::CancelableTaskTracker* tracker) {
+    std::move(callback).Run();
+    return base::CancelableTaskTracker::TaskId();
+  }
+
+ private:
+  ClusterIdCallback cluster_id_callback_;
 };
 
 class TestSiteEngagementScoreProvider
@@ -109,10 +139,14 @@ class TestSiteEngagementScoreProvider
 
   double GetScore(const GURL& url) const override {
     ++count_get_score_invocations_;
-    return 0;
+    return static_cast<double>(count_get_score_invocations_);
   }
 
   double GetTotalEngagementPoints() const override { return 1; }
+
+  size_t num_get_score_invocations() const {
+    return count_get_score_invocations_;
+  }
 
  private:
   mutable size_t count_get_score_invocations_ = 0;
@@ -140,9 +174,6 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
     history_service_ =
         std::make_unique<testing::StrictMock<MockHistoryService>>();
 
-    template_url_service_ = std::make_unique<TemplateURLService>(
-        kTemplateURLData, std::size(kTemplateURLData));
-
     optimization_guide_decider_ =
         std::make_unique<TestOptimizationGuideDecider>();
 
@@ -151,9 +182,16 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
 
     // Instantiate observer.
     observer_ = std::make_unique<ContextClustererHistoryServiceObserver>(
-        history_service_.get(), template_url_service_.get(),
+        history_service_.get(),
+        search_engines_test_environment_.template_url_service(),
         optimization_guide_decider_.get(), engagement_score_provider_.get());
     observer_->OverrideClockForTesting(task_environment_.GetMockClock());
+
+    // TODO(b/276488340): Update this test when non context clusterer code gets
+    //   cleaned up.
+    Config config;
+    config.use_navigation_context_clusters = false;
+    SetConfigForTesting(config);
   }
 
   void TearDown() override {
@@ -166,21 +204,8 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
   // code path.
   void SetPersistenceExpectedConfig() {
     Config config;
-    config.persist_context_clusters_at_navigation = true;
+    config.use_navigation_context_clusters = true;
     SetConfigForTesting(config);
-  }
-
-  // Closure to capture the cluster ID callback.
-  base::CancelableTaskTracker::TaskId CaptureClusterIdCallbackAndReturn(
-      history::HistoryService::ClusterIdCallback callback,
-      base::CancelableTaskTracker* tracker) {
-    cluster_id_callback_ = std::move(callback);
-    return base::CancelableTaskTracker::TaskId();
-  }
-
-  // Runs the last cluster id callback received with `cluster_id`.
-  void RunLastClusterIdCallbackWithClusterId(int64_t cluster_id) {
-    std::move(cluster_id_callback_).Run(cluster_id);
   }
 
   // Simulates a visit to URL.
@@ -189,15 +214,24 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
                 base::Time visit_time,
                 history::VisitID opener_visit = history::kInvalidVisitID,
                 history::VisitID referring_visit = history::kInvalidVisitID,
-                bool is_known_to_sync = false) {
+                bool is_synced_visit = false,
+                bool is_visible_visit = true,
+                history::VisitResponseCodeCategory response_code_category =
+                    history::VisitResponseCodeCategory::kNot404) {
     history::URLRow url_row(url);
     history::VisitRow new_visit;
     new_visit.visit_id = visit_id;
     new_visit.visit_time = visit_time;
     new_visit.opener_visit = opener_visit;
     new_visit.referring_visit = referring_visit;
-    new_visit.is_known_to_sync = is_known_to_sync;
-    observer_->OnURLVisited(history_service_.get(), url_row, new_visit);
+    new_visit.originator_cache_guid = is_synced_visit ? "otherdevice" : "";
+    new_visit.transition = ui::PageTransitionFromInt(
+        (is_visible_visit ? ui::PAGE_TRANSITION_LINK
+                          : ui::PAGE_TRANSITION_AUTO_SUBFRAME) |
+        ui::PAGE_TRANSITION_CHAIN_END);
+    observer_->OnURLVisited(
+        history_service_.get(),
+        history::VisitedURLInfo(url_row, new_visit, response_code_category));
   }
 
   // Simulates deleting `urls` from history. If `urls` is empty, we will
@@ -207,7 +241,7 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
         urls.empty() ? history::DeletionInfo::ForAllHistory()
                      : history::DeletionInfo::ForUrls(CreateURLRows(urls),
                                                       /*favicon_urls=*/{});
-    observer_->OnURLsDeleted(history_service_.get(), deletion_info);
+    observer_->OnHistoryDeletions(history_service_.get(), deletion_info);
   }
 
   // Move clock forward by `time_delta`.
@@ -224,6 +258,13 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
   // Returns the current time of this task environment's mock clock.
   base::Time Now() { return task_environment_.GetMockClock()->Now(); }
 
+  // Returns the number of times engagement score provider has been invoked.
+  size_t num_get_score_invocations() const {
+    return engagement_score_provider_
+               ? engagement_score_provider_->num_get_score_invocations()
+               : 0;
+  }
+
  protected:
   std::unique_ptr<MockHistoryService> history_service_;
 
@@ -231,88 +272,210 @@ class ContextClustererHistoryServiceObserverTest : public testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
-  std::unique_ptr<TemplateURLService> template_url_service_;
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_{
+      {.template_url_service_initializer = kTemplateURLData}};
   std::unique_ptr<TestOptimizationGuideDecider> optimization_guide_decider_;
   std::unique_ptr<TestSiteEngagementScoreProvider> engagement_score_provider_;
   std::unique_ptr<ContextClustererHistoryServiceObserver> observer_;
-
-  history::HistoryService::ClusterIdCallback cluster_id_callback_;
 };
 
 TEST_F(ContextClustererHistoryServiceObserverTest, ClusterOneVisit) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
   int64_t cluster_id = 123;
 
-  EXPECT_CALL(*history_service_,
-              ReserveNextClusterId(base::test::IsNotNullCallback(), _))
-      .WillOnce(Invoke(this, &ContextClustererHistoryServiceObserverTest::
-                                 CaptureClusterIdCallbackAndReturn));
+  history::ClusterVisit got_cluster_visit;
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(DoAll(SaveArg<0>(&got_cluster_visit),
+                      Invoke(history_service_.get(),
+                             &MockHistoryService::CaptureClusterIdCallback)));
   VisitURL(GURL("https://example.com"), 1, base::Time::FromTimeT(123));
 
-  std::vector<history::ClusterVisit> got_cluster_visits;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
-  RunLastClusterIdCallbackWithClusterId(cluster_id);
+  history_service_->RunLastClusterIdCallbackWithClusterId(cluster_id);
 
   EXPECT_EQ(1, GetNumClustersCreated());
-  EXPECT_THAT(GetClusterVisitIds(got_cluster_visits), ElementsAre(1));
+  EXPECT_EQ(got_cluster_visit.annotated_visit.visit_row.visit_id, 1);
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 1);
+}
+
+TEST_F(ContextClustererHistoryServiceObserverTest,
+       StillPersistsClusterEvenIfClusterIdComesBackWayLaterSingleVisit) {
+  SetPersistenceExpectedConfig();
+  int64_t cluster_id = 123;
+
+  base::HistogramTester histogram_tester;
+
+  history::ClusterVisit got_cluster_visit;
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(DoAll(SaveArg<0>(&got_cluster_visit),
+                      Invoke(history_service_.get(),
+                             &MockHistoryService::CaptureClusterIdCallback)));
+  base::Time now =
+      Now() - GetConfig().cluster_navigation_time_cutoff - base::Minutes(1);
+  VisitURL(GURL("https://example.com"), 1, now);
+  EXPECT_EQ(got_cluster_visit.annotated_visit.visit_row.visit_id, 1);
+
+  EXPECT_EQ(1, GetNumClustersCreated());
+
+  // Force a cleanup pass.
+  MoveClockForwardBy(GetConfig().context_clustering_clean_up_duration);
+
+  // Do not expect any calls to history service.
+  history_service_->RunLastClusterIdCallbackWithClusterId(cluster_id);
+
+  histogram_tester.ExpectUniqueSample(
+      "History.Clusters.ContextClusterer.ClusterCleanedUpBeforePersistence",
+      true, 1);
+}
+
+TEST_F(ContextClustererHistoryServiceObserverTest,
+       StillPersistsClusterEvenIfClusterIdComesBackWayLaterMultipleVisits) {
+  SetPersistenceExpectedConfig();
+  int64_t cluster_id = 123;
+
+  {
+    history::ClusterVisit got_cluster_visit;
+    EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                       _, base::test::IsNotNullCallback(), _))
+        .WillOnce(DoAll(SaveArg<0>(&got_cluster_visit),
+                        Invoke(history_service_.get(),
+                               &MockHistoryService::CaptureClusterIdCallback)));
+    base::Time now =
+        Now() - GetConfig().cluster_navigation_time_cutoff - base::Minutes(1);
+    VisitURL(GURL("https://example.com"), 1, now);
+    EXPECT_EQ(got_cluster_visit.annotated_visit.visit_row.visit_id, 1);
+
+    VisitURL(GURL("https://example.com/2"), 2, now + base::Milliseconds(2),
+             /*opener_visit=*/history::kInvalidVisitID, /*referring_visit=*/1);
+
+    EXPECT_EQ(1, GetNumClustersCreated());
+
+    // Force a cleanup pass.
+    MoveClockForwardBy(GetConfig().context_clustering_clean_up_duration);
+  }
+
+  {
+    base::HistogramTester histogram_tester;
+
+    // Now, run the cluster id callback and make sure remaining visits get
+    // persisted.
+    std::vector<history::ClusterVisit> got_cluster_visits;
+    EXPECT_CALL(
+        *history_service_,
+        AddVisitsToCluster(cluster_id, _, base::test::IsNotNullCallback(), _))
+        .WillOnce(
+            DoAll(SaveArg<1>(&got_cluster_visits),
+                  Invoke(history_service_.get(),
+                         &MockHistoryService::RunAddVisitsToClusterCallback)));
+    history_service_->RunLastClusterIdCallbackWithClusterId(cluster_id);
+
+    EXPECT_THAT(GetClusterVisitIds(got_cluster_visits), ElementsAre(2));
+
+    histogram_tester.ExpectTotalCount(
+        "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 1);
+    histogram_tester.ExpectTotalCount(
+        "History.Clusters.ContextClusterer.DbLatency.AddVisitsToCluster", 1);
+
+    histogram_tester.ExpectUniqueSample(
+        "History.Clusters.ContextClusterer.ClusterCleanedUpBeforePersistence",
+        false, 1);
+    histogram_tester.ExpectUniqueSample(
+        "History.Clusters.ContextClusterer."
+        "NumUnpersistedVisitsBeforeClusterPersisted",
+        1, 1);
+  }
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest,
        ClusterTwoVisitsTiedByReferringVisit) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
   int64_t cluster_id = 123;
 
-  EXPECT_CALL(*history_service_,
-              ReserveNextClusterId(base::test::IsNotNullCallback(), _))
-      .WillOnce(Invoke(this, &ContextClustererHistoryServiceObserverTest::
-                                 CaptureClusterIdCallbackAndReturn));
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(Invoke(history_service_.get(),
+                       &MockHistoryService::CaptureClusterIdCallback));
   VisitURL(GURL("https://example.com"), 1, base::Time::FromTimeT(123));
   VisitURL(GURL("https://example.com/2"), 2, base::Time::FromTimeT(123),
            /*opener_visit=*/history::kInvalidVisitID, /*referring_visit=*/1);
 
   // Should persist all visits for the cluster when callback is run.
   std::vector<history::ClusterVisit> got_cluster_visits;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
-  RunLastClusterIdCallbackWithClusterId(cluster_id);
+  EXPECT_CALL(
+      *history_service_,
+      AddVisitsToCluster(cluster_id, _, base::test::IsNotNullCallback(), _))
+      .WillOnce(
+          DoAll(SaveArg<1>(&got_cluster_visits),
+                Invoke(history_service_.get(),
+                       &MockHistoryService::RunAddVisitsToClusterCallback)));
+  history_service_->RunLastClusterIdCallbackWithClusterId(cluster_id);
 
   EXPECT_EQ(1, GetNumClustersCreated());
-  EXPECT_THAT(GetClusterVisitIds(got_cluster_visits), ElementsAre(1, 2));
+  EXPECT_THAT(GetClusterVisitIds(got_cluster_visits), ElementsAre(2));
+
+  // Add a visit that is not visible to the user but refers to one of the visits
+  // in the cluster. Should not be persisted.
+  VisitURL(GURL("https://example.com/notvisible"), 3,
+           base::Time::FromTimeT(124), 1, history::kInvalidVisitID, false,
+           false);
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 1);
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.AddVisitsToCluster", 1);
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest,
        ClusterTwoVisitsTiedByOpenerVisit) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
   int64_t cluster_id = 123;
 
-  EXPECT_CALL(*history_service_,
-              ReserveNextClusterId(base::test::IsNotNullCallback(), _))
-      .WillOnce(Invoke(this, &ContextClustererHistoryServiceObserverTest::
-                                 CaptureClusterIdCallbackAndReturn));
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(Invoke(history_service_.get(),
+                       &MockHistoryService::CaptureClusterIdCallback));
   VisitURL(GURL("https://example.com"), 1, base::Time::FromTimeT(123));
 
-  // Should persist all visits for the cluster when callback is run.
-  std::vector<history::ClusterVisit> got_first_cluster_visits;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_first_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
-  RunLastClusterIdCallbackWithClusterId(cluster_id);
+  // No visits were made since cluster id callback came back. Do not expect for
+  // any calls to history service.
+  history_service_->RunLastClusterIdCallbackWithClusterId(cluster_id);
 
   // Should persist as is since we already have the persisted cluster id at this
-  // visit.t
+  // visit.
   std::vector<history::ClusterVisit> got_second_cluster_visits;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_second_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
+  EXPECT_CALL(
+      *history_service_,
+      AddVisitsToCluster(cluster_id, _, base::test::IsNotNullCallback(), _))
+      .WillOnce(
+          DoAll(SaveArg<1>(&got_second_cluster_visits),
+                Invoke(history_service_.get(),
+                       &MockHistoryService::RunAddVisitsToClusterCallback)));
   VisitURL(GURL("https://example.com/2"), 2, base::Time::FromTimeT(123),
            /*opener_visit=*/1, /*referring_visit=*/history::kInvalidVisitID);
 
   EXPECT_EQ(1, GetNumClustersCreated());
-  EXPECT_THAT(GetClusterVisitIds(got_first_cluster_visits), ElementsAre(1));
   EXPECT_THAT(GetClusterVisitIds(got_second_cluster_visits), ElementsAre(2));
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 1);
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.AddVisitsToCluster", 1);
+
+  // Cluster ID was received before second visit so there are no visits that are
+  // considered unpersisted before the cluster was persisted.
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer."
+      "NumUnpersistedVisitsBeforeClusterPersisted",
+      0);
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest,
@@ -338,52 +501,52 @@ TEST_F(ContextClustererHistoryServiceObserverTest, ClusterTwoVisitsTiedByURL) {
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest,
-       ClusterTwoVisitsTiedBySearchURL) {
+       ClusterVisitsTiedBySearchURL) {
   VisitURL(GURL("http://default-engine.com/search?q=foo"), 1,
            base::Time::FromTimeT(123));
   VisitURL(GURL("http://default-engine.com/search?q=foo#whatever"), 2,
            base::Time::FromTimeT(123),
            /*opener_visit=*/history::kInvalidVisitID,
            /*referring_visit=*/history::kInvalidVisitID);
+  // Simulate a back-forward navigation.
+  VisitURL(GURL("http://default-engine.com/search?q=foo"), 3,
+           base::Time::FromTimeT(124));
 
   EXPECT_EQ(1, GetNumClustersCreated());
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest, SplitClusterOnSearchTerm) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
 
-  EXPECT_CALL(*history_service_,
-              ReserveNextClusterId(base::test::IsNotNullCallback(), _))
-      .WillOnce(Invoke(this, &ContextClustererHistoryServiceObserverTest::
-                                 CaptureClusterIdCallbackAndReturn));
+  history::ClusterVisit got_first_cluster_visit;
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(DoAll(SaveArg<0>(&got_first_cluster_visit),
+                      Invoke(history_service_.get(),
+                             &MockHistoryService::CaptureClusterIdCallback)));
   VisitURL(GURL("http://default-engine.com/search?q=foo"), 1,
            base::Time::FromTimeT(123));
+  history_service_->RunLastClusterIdCallbackWithClusterId(123);
 
-  int64_t cluster_id = 123;
-  std::vector<history::ClusterVisit> got_first_cluster_visits;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_first_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
-  RunLastClusterIdCallbackWithClusterId(cluster_id);
-
-  EXPECT_CALL(*history_service_,
-              ReserveNextClusterId(base::test::IsNotNullCallback(), _))
-      .WillOnce(Invoke(this, &ContextClustererHistoryServiceObserverTest::
-                                 CaptureClusterIdCallbackAndReturn));
+  history::ClusterVisit got_second_cluster_visit;
+  EXPECT_CALL(*history_service_, ReserveNextClusterIdWithVisit(
+                                     _, base::test::IsNotNullCallback(), _))
+      .WillOnce(DoAll(SaveArg<0>(&got_second_cluster_visit),
+                      Invoke(history_service_.get(),
+                             &MockHistoryService::CaptureClusterIdCallback)));
   VisitURL(GURL("http://default-engine.com/search?q=otherterm"), 2,
            base::Time::FromTimeT(123),
            /*opener_visit=*/1);
-
-  std::vector<history::ClusterVisit> got_second_cluster_visits;
-  cluster_id = 124;
-  EXPECT_CALL(*history_service_, AddVisitsToCluster(cluster_id, _, _))
-      .WillOnce(DoAll(SaveArg<1>(&got_second_cluster_visits),
-                      Return(base::CancelableTaskTracker::TaskId())));
-  RunLastClusterIdCallbackWithClusterId(cluster_id);
+  history_service_->RunLastClusterIdCallbackWithClusterId(124);
 
   EXPECT_EQ(2, GetNumClustersCreated());
-  EXPECT_THAT(GetClusterVisitIds(got_first_cluster_visits), ElementsAre(1));
-  EXPECT_THAT(GetClusterVisitIds(got_second_cluster_visits), ElementsAre(2));
+  EXPECT_EQ(got_first_cluster_visit.annotated_visit.visit_row.visit_id, 1);
+  EXPECT_EQ(got_second_cluster_visit.annotated_visit.visit_row.visit_id, 2);
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 2);
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest,
@@ -397,22 +560,115 @@ TEST_F(ContextClustererHistoryServiceObserverTest,
   EXPECT_EQ(2, GetNumClustersCreated());
 }
 
-TEST_F(ContextClustererHistoryServiceObserverTest, SkipsSyncedVisits) {
+TEST_F(ContextClustererHistoryServiceObserverTest,
+       DoesNotClusterSyncedVisitsButUpdatesDetails) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
+
+  history::ClusterVisit updated_cluster_visit;
+  EXPECT_CALL(*history_service_,
+              UpdateClusterVisit(_, base::test::IsNotNullCallback(), _))
+      .WillOnce(
+          DoAll(SaveArg<0>(&updated_cluster_visit),
+                Invoke(history_service_.get(),
+                       &MockHistoryService::RunUpdateClusterVisitCallback)));
 
   VisitURL(GURL("https://example.com"), 1, base::Time::FromTimeT(123),
            history::kInvalidVisitID, history::kInvalidVisitID,
-           /*is_known_to_sync=*/true);
+           /*is_synced_visit=*/true);
 
   EXPECT_EQ(0, GetNumClustersCreated());
+  // Details should be somewhat populated.
+  EXPECT_FALSE(updated_cluster_visit.normalized_url.is_empty());
+  EXPECT_FALSE(updated_cluster_visit.url_for_deduping.is_empty());
+  EXPECT_FALSE(updated_cluster_visit.url_for_display.empty());
+  EXPECT_GT(updated_cluster_visit.engagement_score, 0);
+  EXPECT_EQ(1u, num_get_score_invocations());
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlVisited", 1);
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.UpdateClusterVisit", 1);
+
+  // Visit the same host. We only expect for the engagement score provider to be
+  // called once.
+  EXPECT_CALL(*history_service_,
+              UpdateClusterVisit(_, base::test::IsNotNullCallback(), _))
+      .WillOnce(
+          DoAll(SaveArg<0>(&updated_cluster_visit),
+                Invoke(history_service_.get(),
+                       &MockHistoryService::RunUpdateClusterVisitCallback)));
+
+  VisitURL(GURL("https://example.com/123"), 1, base::Time::FromTimeT(123),
+           history::kInvalidVisitID, history::kInvalidVisitID,
+           /*is_synced_visit=*/true);
+
+  EXPECT_EQ(1u, num_get_score_invocations());
+}
+
+TEST_F(ContextClustererHistoryServiceObserverTest,
+       SearchNormalizedUrlIsNotAdjusted) {
+  base::HistogramTester histogram_tester;
+
+  SetPersistenceExpectedConfig();
+
+  history::ClusterVisit updated_cluster_visit;
+  EXPECT_CALL(*history_service_,
+              UpdateClusterVisit(_, base::test::IsNotNullCallback(), _))
+      .WillOnce(
+          DoAll(SaveArg<0>(&updated_cluster_visit),
+                Invoke(history_service_.get(),
+                       &MockHistoryService::RunUpdateClusterVisitCallback)));
+
+  VisitURL(GURL("http://default-engine.com/search?q=foo#abc"), 1,
+           base::Time::FromTimeT(123), history::kInvalidVisitID,
+           history::kInvalidVisitID,
+           /*is_synced_visit=*/true);
+
+  EXPECT_EQ(updated_cluster_visit.normalized_url,
+            GURL("http://default-engine.com/search?q=foo"));
+  EXPECT_EQ(updated_cluster_visit.url_for_deduping,
+            GURL("http://default-engine.com/search?q=foo"));
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest, SkipsBlocklistedHost) {
+  base::HistogramTester histogram_tester;
+
   SetPersistenceExpectedConfig();
 
   VisitURL(GURL("https://shouldskip.com"), 1, base::Time::FromTimeT(123));
 
   EXPECT_EQ(0, GetNumClustersCreated());
+
+  // Visit processing histogram should still be recorded.
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlVisited", 1);
+
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 0);
+}
+
+TEST_F(ContextClustererHistoryServiceObserverTest, Skips404Visits) {
+  base::HistogramTester histogram_tester;
+
+  SetPersistenceExpectedConfig();
+
+  VisitURL(GURL("https://example.com"), 1, base::Time::FromTimeT(123),
+           history::kInvalidVisitID, history::kInvalidVisitID,
+           /*is_synced_visit=*/false, /*is_visible_visit=*/true,
+           history::VisitResponseCodeCategory::k404);
+
+  EXPECT_EQ(0, GetNumClustersCreated());
+
+  // No DB latency histograms should be recorded.
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.ReserveNextClusterId", 0);
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.DbLatency.UpdateClusterVisit", 0);
+  // Visit processing histogram should not be recorded.
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlVisited", 0);
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest, MultipleClusters) {
@@ -452,13 +708,12 @@ TEST_F(ContextClustererHistoryServiceObserverTest, CleansUpClusters) {
     // Force a cleanup pass.
     MoveClockForwardBy(GetConfig().context_clustering_clean_up_duration);
 
-    histogram_tester.ExpectUniqueSample(
-        "History.Clusters.ContextClusterer.NumClusters.AtCleanUp", 3, 1);
-    histogram_tester.ExpectUniqueSample(
-        "History.Clusters.ContextClusterer.NumClusters.CleanedUp", 2, 1);
-    // Should not finalize cluster with visit 10.
-    histogram_tester.ExpectUniqueSample(
-        "History.Clusters.ContextClusterer.NumClusters.PostCleanUp", 1, 1);
+    histogram_tester.ExpectTotalCount(
+        "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlVisited",
+        5);
+    histogram_tester.ExpectTotalCount(
+        "History.Clusters.ContextClusterer.VisitProcessingLatency.CleanUpTimer",
+        1);
   }
 
   // This should create a new cluster.
@@ -468,16 +723,6 @@ TEST_F(ContextClustererHistoryServiceObserverTest, CleansUpClusters) {
 
   // Expect only one more cluster to be created, which makes 4 total.
   EXPECT_EQ(4, GetNumClustersCreated());
-
-  // Make sure everything is cleaned up eventually.
-  {
-    base::HistogramTester histogram_tester;
-
-    MoveClockForwardBy(2 * GetConfig().cluster_navigation_time_cutoff);
-
-    histogram_tester.ExpectBucketCount(
-        "History.Clusters.ContextClusterer.NumClusters.PostCleanUp", 0, 1);
-  }
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest, DeleteAllHistory) {
@@ -492,14 +737,9 @@ TEST_F(ContextClustererHistoryServiceObserverTest, DeleteAllHistory) {
   // Force a cleanup pass.
   MoveClockForwardBy(GetConfig().context_clustering_clean_up_duration);
 
-  // There should be nothing to clean up so it shouldn't even initiate a clean
-  // up pass.
   histogram_tester.ExpectTotalCount(
-      "History.Clusters.ContextClusterer.NumClusters.AtCleanUp", 0);
-  histogram_tester.ExpectTotalCount(
-      "History.Clusters.ContextClusterer.NumClusters.CleanedUp", 0);
-  histogram_tester.ExpectTotalCount(
-      "History.Clusters.ContextClusterer.NumClusters.PostCleanUp", 0);
+      "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlsDeleted",
+      1);
 }
 
 TEST_F(ContextClustererHistoryServiceObserverTest, DeleteSelectURLs) {
@@ -517,13 +757,9 @@ TEST_F(ContextClustererHistoryServiceObserverTest, DeleteSelectURLs) {
   // Force a cleanup pass.
   MoveClockForwardBy(GetConfig().context_clustering_clean_up_duration);
 
-  // There should be 1 cluster untouched by the deletion.
-  histogram_tester.ExpectUniqueSample(
-      "History.Clusters.ContextClusterer.NumClusters.AtCleanUp", 1, 1);
-  histogram_tester.ExpectUniqueSample(
-      "History.Clusters.ContextClusterer.NumClusters.CleanedUp", 0, 1);
-  histogram_tester.ExpectUniqueSample(
-      "History.Clusters.ContextClusterer.NumClusters.PostCleanUp", 1, 1);
+  histogram_tester.ExpectTotalCount(
+      "History.Clusters.ContextClusterer.VisitProcessingLatency.UrlsDeleted",
+      1);
 }
 
 }  // namespace history_clusters

@@ -7,9 +7,9 @@
 #include <winstring.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/core_winrt_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base::win {
@@ -22,12 +22,10 @@ constexpr wchar_t kTestString2[] = L"456789";
 }  // namespace
 
 TEST(ScopedHStringTest, Init) {
-  EXPECT_TRUE(ScopedHString::ResolveCoreWinRTStringDelayload());
-
   ScopedHString hstring = ScopedHString::Create(kTestString1);
   std::string buffer = hstring.GetAsUTF8();
   EXPECT_EQ(kTestString1, UTF8ToWide(buffer));
-  WStringPiece contents = hstring.Get();
+  std::wstring_view contents = hstring.Get();
   EXPECT_EQ(kTestString1, contents);
 
   hstring.reset();

@@ -13,17 +13,19 @@ StyleInitialData::StyleInitialData(Document& document,
                                    const PropertyRegistry& registry) {
   for (const auto& entry : registry) {
     const CSSValue* specified_initial_value = entry.value->Initial();
-    if (!specified_initial_value)
+    if (!specified_initial_value) {
       continue;
+    }
 
     const CSSValue* computed_initial_value =
         &StyleBuilderConverter::ConvertRegisteredPropertyInitialValue(
             document, *specified_initial_value);
-    scoped_refptr<CSSVariableData> computed_initial_data =
+    CSSVariableData* computed_initial_data =
         StyleBuilderConverter::ConvertRegisteredPropertyVariableData(
-            *computed_initial_value, false /* is_animation_tainted */);
+            *computed_initial_value, false /* is_animation_tainted */,
+            false /* is_attr_tainted */);
 
-    variables_.SetData(entry.key, std::move(computed_initial_data));
+    variables_.SetData(entry.key, computed_initial_data);
     variables_.SetValue(entry.key, computed_initial_value);
   }
 

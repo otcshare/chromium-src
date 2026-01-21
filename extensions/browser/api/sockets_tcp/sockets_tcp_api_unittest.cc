@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "content/public/test/test_browser_context.h"
 #include "extensions/browser/api/api_resource_manager.h"
@@ -41,7 +41,7 @@ TEST_F(SocketsTcpUnitTest, Create) {
   SocketsTcpCreateFunction* function = new SocketsTcpCreateFunction();
 
   // Run tests
-  absl::optional<base::Value> result = RunFunctionAndReturnValue(
+  std::optional<base::Value> result = RunFunctionAndReturnValue(
       function, "[{\"persistent\": true, \"name\": \"foo\"}]");
   ASSERT_TRUE(result);
   ASSERT_TRUE(result->is_dict());

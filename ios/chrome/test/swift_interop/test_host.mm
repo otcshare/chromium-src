@@ -4,9 +4,24 @@
 
 #import <UIKit/UIKit.h>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+namespace {
+
+void PopulateUIWindow(UIWindow* window) {
+  window.backgroundColor = UIColor.whiteColor;
+  [window makeKeyAndVisible];
+  CGRect bounds = window.windowScene.screen.bounds;
+  // Add a label with the app name.
+  UILabel* label = [[UILabel alloc] initWithFrame:bounds];
+  label.text = NSProcessInfo.processInfo.processName;
+  label.textAlignment = NSTextAlignmentCenter;
+  [window addSubview:label];
+
+  // An NSInternalInconsistencyException is thrown if the app doesn't have a
+  // root view controller. Set an empty one here.
+  window.rootViewController = [[UIViewController alloc] init];
+}
+
+}  // namespace
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @end
@@ -26,15 +41,13 @@
 
 - (void)scene:(UIScene*)scene
     willConnectToSession:(UISceneSession*)session
-                 options:(UISceneConnectionOptions*)connectionOptions
-    API_AVAILABLE(ios(13)) {
+                 options:(UISceneConnectionOptions*)connectionOptions {
   _window =
       [[UIWindow alloc] initWithWindowScene:static_cast<UIWindowScene*>(scene)];
-
-  [_window setRootViewController:[[UIViewController alloc] init]];
+  PopulateUIWindow(_window);
 }
 
-- (void)sceneDidDisconnect:(UIScene*)scene API_AVAILABLE(ios(13)) {
+- (void)sceneDidDisconnect:(UIScene*)scene {
   _window = nil;
 }
 

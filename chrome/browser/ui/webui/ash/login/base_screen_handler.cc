@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
 
-#include "base/bind.h"
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/base_webui_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 
@@ -31,11 +32,11 @@ BaseScreenHandler::BaseScreenHandler(OobeScreenId oobe_screen)
 
 BaseScreenHandler::~BaseScreenHandler() = default;
 
-void BaseScreenHandler::ShowInWebUI(absl::optional<base::Value::Dict> data) {
-  if (!GetOobeUI())
+void BaseScreenHandler::ShowInWebUI(std::optional<base::Value::Dict> data) {
+  if (!GetOobeUI()) {
     return;
-  GetOobeUI()->GetCoreOobeView()->ShowScreenWithData(oobe_screen_,
-                                                     std::move(data));
+  }
+  GetOobeUI()->GetCoreOobe()->ShowScreenWithData(oobe_screen_, std::move(data));
 }
 
 void BaseScreenHandler::RegisterMessages() {
@@ -54,22 +55,28 @@ void BaseScreenHandler::HandleUserAction(const base::Value::List& args) {
 }
 
 bool BaseScreenHandler::HandleUserActionImpl(const base::Value::List& args) {
-  if (!LoginDisplayHost::default_host())
-    return false;
-
   LoginDisplayHost* host = LoginDisplayHost::default_host();
   if (!host) {
     return false;
   }
 
   WizardController* wizard_controller = host->GetWizardController();
+
+  // TODO(b/345711957): Upgrade to `CHECK()` and remove the handling of the case
+  // when `wizard_controller` is null.
+  DUMP_WILL_BE_CHECK(wizard_controller);
   if (!wizard_controller) {
     return false;
   }
 
   BaseScreen* screen = wizard_controller->GetScreen(oobe_screen_);
-  if (!screen)
+
+  // TODO(b/345711957): Upgrade to `CHECK()` and remove the handling of the case
+  // when `screen` is null.
+  DUMP_WILL_BE_CHECK(screen);
+  if (!screen) {
     return false;
+  }
 
   screen->HandleUserAction(args);
   return true;

@@ -5,12 +5,14 @@
 #ifndef CHROME_BROWSER_UI_WEB_APPLICATIONS_WEB_APP_LAUNCH_PROCESS_H_
 #define CHROME_BROWSER_UI_WEB_APPLICATIONS_WEB_APP_LAUNCH_PROCESS_H_
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 
 class Browser;
+class BrowserWindowInterface;
 enum class WindowOpenDisposition;
 class GURL;
 class Profile;
@@ -38,6 +40,9 @@ class WebAppRegistrar;
 // https://github.com/WICG/web-app-launch/blob/main/launch_handler.md
 class WebAppLaunchProcess {
  public:
+  using OpenApplicationCallback =
+      base::RepeatingCallback<void(apps::AppLaunchParams params)>;
+
   WebAppLaunchProcess(const WebAppLaunchProcess&) = delete;
 
   static content::WebContents* CreateAndRun(
@@ -45,6 +50,12 @@ class WebAppLaunchProcess {
       WebAppRegistrar& registrar,
       OsIntegrationManager& os_integration_manager,
       const apps::AppLaunchParams& params);
+
+  static void SetOpenApplicationCallbackForTesting(
+      OpenApplicationCallback callback);
+
+  // Created temporarily while this class is migrated to the command system.
+  static OpenApplicationCallback& GetOpenApplicationCallbackForTesting();
 
  private:
   WebAppLaunchProcess(Profile& profile,
@@ -57,18 +68,19 @@ class WebAppLaunchProcess {
   std::tuple<GURL, bool /*is_file_handling*/> GetLaunchUrl(
       const apps::ShareTarget* share_target) const;
   WindowOpenDisposition GetNavigationDisposition(bool is_new_browser) const;
-  std::tuple<Browser*, bool /*is_new_browser*/> EnsureBrowser();
+  std::tuple<BrowserWindowInterface*, bool /*is_new_browser*/> EnsureBrowser();
   LaunchHandler GetLaunchHandler() const;
   LaunchHandler::ClientMode GetLaunchClientMode() const;
 
-  Browser* MaybeFindBrowserForLaunch() const;
+  // Returns nullptr if these is no existing browser to be used for the launch.
+  BrowserWindowInterface* MaybeFindBrowserForLaunch() const;
   Browser* CreateBrowserForLaunch();
 
   struct NavigateResult {
     raw_ptr<content::WebContents> web_contents = nullptr;
     bool did_navigate;
   };
-  NavigateResult MaybeNavigateBrowser(Browser* browser,
+  NavigateResult MaybeNavigateBrowser(BrowserWindowInterface* browser,
                                       bool is_new_browser,
                                       const GURL& launch_url,
                                       const apps::ShareTarget* share_target);

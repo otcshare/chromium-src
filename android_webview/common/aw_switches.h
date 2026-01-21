@@ -12,6 +12,7 @@ extern const char kWebViewSandboxedRenderer[];
 extern const char kWebViewDisableSafebrowsingSupport[];
 extern const char kWebViewSafebrowsingBlockAllResources[];
 extern const char kHighlightAllWebViews[];
+extern const char kNetLog[];
 extern const char kWebViewVerboseLogging[];
 extern const char kFinchSeedExpirationAge[];
 extern const char kFinchSeedIgnorePendingDownload[];
@@ -19,12 +20,23 @@ extern const char kFinchSeedNoChargingRequirement[];
 extern const char kFinchSeedMinDownloadPeriod[];
 extern const char kFinchSeedMinUpdatePeriod[];
 extern const char kWebViewEnableModernCookieSameSite[];
-extern const char kWebViewDisablePackageAllowlistThrottling[];
-extern const char kWebViewSelectiveImageInversionDarkening[];
-extern const char kWebViewMPArchFencedFrames[];
-extern const char kWebViewShadowDOMFencedFrames[];
-extern const char kWebViewDisableAppRecovery[];
-extern const char kWebViewEnableAppRecovery[];
+extern const char kWebViewFencedFrames[];
+extern const char kWebViewForceDisable3pcs[];
+extern const char kWebViewForceCrashJava[];
+extern const char kWebViewForceCrashNative[];
+extern const char kWebViewUseSeparateResourceContext[];
+extern const char kDebugBsa[];
+extern const char kWebViewInterceptedCookieHeader[];
+extern const char kWebViewUseStartupTasksLogic[];
+extern const char kWebViewUseStartupTasksLogicP2[];
+extern const char kWebViewStartupTasksYieldToNative[];
+extern const char kStartupNonBlockingWebViewConstructor[];
+extern const char kWebViewOptInToGmsBindServiceOptimization[];
+extern const char kWebViewRendererLibraryPrefetch[];
+extern const char kWebViewRendererLibraryPrefetchDisabled[];
+extern const char kWebViewRendererLibraryPrefetchEnabled[];
+extern const char kWebViewStartupTasksPlusMultiProcess[];
+extern const char kWebViewStopBrowserStartupInIsMultiProcessEnabled[];
 
 }  // namespace switches
 

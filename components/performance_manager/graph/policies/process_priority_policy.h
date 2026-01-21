@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_GRAPH_POLICIES_PROCESS_PRIORITY_POLICY_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_GRAPH_POLICIES_PROCESS_PRIORITY_POLICY_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/process_node.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
@@ -18,12 +18,11 @@ namespace policies {
 // is no need for more than one of these to be instantiated at a time (enforced
 // by a DCHECK). This policy expects to be attached to an empty graph (also
 // enforced by a DCHECK).
-class ProcessPriorityPolicy : public GraphOwned,
-                              public ProcessNode::ObserverDefaultImpl {
+class ProcessPriorityPolicy : public GraphOwned, public ProcessNodeObserver {
  public:
   using SetPriorityOnUiThreadCallback =
       base::RepeatingCallback<void(RenderProcessHostProxy rph_proxy,
-                                   bool foreground)>;
+                                   base::Process::Priority priority)>;
 
   ProcessPriorityPolicy();
   ProcessPriorityPolicy(const ProcessPriorityPolicy&) = delete;
@@ -45,7 +44,7 @@ class ProcessPriorityPolicy : public GraphOwned,
   // ProcessNodeObserver implementation:
   void OnProcessNodeAdded(const ProcessNode* process_node) override;
   void OnPriorityChanged(const ProcessNode* process_node,
-                         base::TaskPriority previous_value) override;
+                         base::Process::Priority previous_value) override;
 };
 
 }  // namespace policies

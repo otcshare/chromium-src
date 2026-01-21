@@ -66,7 +66,7 @@ class UserDemographicsPrefsTest : public testing::Test {
     SetDemographicsImpl(kSyncDemographicsPrefName, birth_year, gender);
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void SetOsDemographics(int birth_year, UserDemographicsProto::Gender gender) {
     SetDemographicsImpl(kSyncOsDemographicsPrefName, birth_year, gender);
   }
@@ -123,7 +123,7 @@ TEST_F(UserDemographicsPrefsTest, ReadDemographicsWithRandomOffset) {
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(UserDemographicsPrefsTest, ReadOsDemographicsWithRandomOffset) {
   int user_demographics_birth_year = 1983;
   UserDemographicsProto_Gender user_demographics_gender =
@@ -158,7 +158,7 @@ TEST_F(UserDemographicsPrefsTest, ReadOsDemographicsWithRandomOffset) {
     EXPECT_EQ(provided_birth_year, demographics_result.value().birth_year);
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(UserDemographicsPrefsTest, ReadAndClearUserDemographicPreferences) {
   // Verify demographic prefs are not available when there is nothing set.
@@ -193,48 +193,14 @@ TEST_F(UserDemographicsPrefsTest, ReadAndClearUserDemographicPreferences) {
                    GetNowTime(), GetLocalState(), GetProfilePrefs())
                    .IsSuccess());
   EXPECT_FALSE(GetProfilePrefs()->HasPrefPath(kSyncDemographicsPrefName));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_FALSE(GetProfilePrefs()->HasPrefPath(kSyncOsDemographicsPrefName));
 #endif
   EXPECT_TRUE(
       GetLocalState()->HasPrefPath(kUserDemographicsBirthYearOffsetPrefName));
-  // Deprecated offset is not created if it does not already exist.
-  EXPECT_FALSE(GetProfilePrefs()->HasPrefPath(
-      kDeprecatedDemographicsBirthYearOffsetPrefName));
 }
 
-TEST_F(UserDemographicsPrefsTest, ReadAndClearDeprecatedOffsetPref) {
-  // Verify demographic prefs are not available when there is nothing set.
-  ASSERT_FALSE(GetUserNoisedBirthYearAndGenderFromPrefs(
-                   GetNowTime(), GetLocalState(), GetProfilePrefs())
-                   .IsSuccess());
-
-  // Set demographic prefs directly from the pref service interface because
-  // demographic prefs will only be set on the server-side. The SyncPrefs
-  // interface cannot set demographic prefs.
-  SetDemographics(1983, UserDemographicsProto::GENDER_FEMALE);
-
-  // Set deprecated birth year noise offset in the UserPrefs
-  GetProfilePrefs()->SetInteger(kDeprecatedDemographicsBirthYearOffsetPrefName,
-                                2);
-
-  // Verify that demographics are provided.
-  {
-    UserDemographicsResult demographics_result =
-        GetUserNoisedBirthYearAndGenderFromPrefs(GetNowTime(), GetLocalState(),
-                                                 GetProfilePrefs());
-    ASSERT_TRUE(demographics_result.IsSuccess());
-  }
-
-  // Offset if migrated to new pref.
-  EXPECT_EQ(
-      2, GetLocalState()->GetInteger(kUserDemographicsBirthYearOffsetPrefName));
-  // TODO(crbug/1367338): clear/remove deprecated pref after 2023/09
-  EXPECT_TRUE(GetProfilePrefs()->HasPrefPath(
-      kDeprecatedDemographicsBirthYearOffsetPrefName));
-}
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(UserDemographicsPrefsTest, ChromeOsAsh) {
   // Verify demographic prefs are not available when there is nothing set.
   ASSERT_FALSE(GetUserNoisedBirthYearAndGenderFromPrefs(
@@ -260,7 +226,7 @@ TEST_F(UserDemographicsPrefsTest, ChromeOsAsh) {
   EXPECT_TRUE(
       GetLocalState()->HasPrefPath(kUserDemographicsBirthYearOffsetPrefName));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 struct DemographicsTestParam {
   // Birth year of the user.

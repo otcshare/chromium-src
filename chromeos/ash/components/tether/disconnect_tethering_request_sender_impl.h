@@ -6,18 +6,12 @@
 #define CHROMEOS_ASH_COMPONENTS_TETHER_DISCONNECT_TETHERING_REQUEST_SENDER_IMPL_H_
 
 #include <map>
+#include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/tether/disconnect_tethering_operation.h"
 #include "chromeos/ash/components/tether/disconnect_tethering_request_sender.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace ash::device_sync {
-class DeviceSyncClient;
-}
-
-namespace ash::secure_channel {
-class SecureChannelClient;
-}
+#include "chromeos/ash/components/tether/host_connection.h"
 
 namespace ash::tether {
 
@@ -30,8 +24,7 @@ class DisconnectTetheringRequestSenderImpl
   class Factory {
    public:
     static std::unique_ptr<DisconnectTetheringRequestSender> Create(
-        device_sync::DeviceSyncClient* device_sync_client,
-        secure_channel::SecureChannelClient* secure_channel_client,
+        raw_ptr<HostConnection::Factory> host_connection_factory,
         TetherHostFetcher* tether_host_fetcher);
 
     static void SetFactoryForTesting(Factory* factory);
@@ -39,8 +32,7 @@ class DisconnectTetheringRequestSenderImpl
    protected:
     virtual ~Factory();
     virtual std::unique_ptr<DisconnectTetheringRequestSender> CreateInstance(
-        device_sync::DeviceSyncClient* device_sync_client,
-        secure_channel::SecureChannelClient* secure_channel_client,
+        raw_ptr<HostConnection::Factory> host_connection_factory,
         TetherHostFetcher* tether_host_fetcher) = 0;
 
    private:
@@ -63,20 +55,13 @@ class DisconnectTetheringRequestSenderImpl
 
  protected:
   DisconnectTetheringRequestSenderImpl(
-      device_sync::DeviceSyncClient* device_sync_client,
-      secure_channel::SecureChannelClient* secure_channel_client,
+      raw_ptr<HostConnection::Factory> host_connection_factory,
       TetherHostFetcher* tether_host_fetcher);
 
  private:
-  void OnTetherHostFetched(
-      const std::string& device_id,
-      absl::optional<multidevice::RemoteDeviceRef> tether_host);
+  raw_ptr<HostConnection::Factory> host_connection_factory_;
+  raw_ptr<TetherHostFetcher> tether_host_fetcher_;
 
-  device_sync::DeviceSyncClient* device_sync_client_;
-  secure_channel::SecureChannelClient* secure_channel_client_;
-  TetherHostFetcher* tether_host_fetcher_;
-
-  int num_pending_host_fetches_ = 0;
   std::map<std::string, std::unique_ptr<DisconnectTetheringOperation>>
       device_id_to_operation_map_;
 

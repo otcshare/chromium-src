@@ -5,21 +5,24 @@
 #include "chrome/browser/ui/views/incognito_clear_browsing_data_dialog.h"
 
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/style/typography_provider.h"
 
 IncognitoClearBrowsingDataDialog::IncognitoClearBrowsingDataDialog(
     views::View* anchor_view,
@@ -30,7 +33,7 @@ IncognitoClearBrowsingDataDialog::IncognitoClearBrowsingDataDialog(
       incognito_profile_(incognito_profile) {
   DCHECK(incognito_profile_);
   DCHECK(incognito_profile_->IsIncognitoProfile());
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetShowCloseButton(true);
 
   // Layout
@@ -51,41 +54,46 @@ IncognitoClearBrowsingDataDialog::IncognitoClearBrowsingDataDialog(
   auto image_view = std::make_unique<ThemeTrackingNonAccessibleImageView>(
       *bundle.GetImageSkiaNamed(IDR_INCOGNITO_DATA_NOT_SAVED_HEADER_LIGHT),
       *bundle.GetImageSkiaNamed(IDR_INCOGNITO_DATA_NOT_SAVED_HEADER_DARK),
-      base::BindRepeating(&views::BubbleDialogDelegate::GetBackgroundColor,
+      base::BindRepeating(&views::BubbleDialogDelegate::background_color,
                           base::Unretained(this)));
   AddChildView(std::move(image_view));
 
   // Set bubble regarding to the type.
-  if (type == kHistoryDisclaimerBubble)
+  if (type == kHistoryDisclaimerBubble) {
     SetDialogForHistoryDisclaimerBubbleType();
-  else
+  } else {
     SetDialogForDefaultBubbleType();
+  }
 }
 
 void IncognitoClearBrowsingDataDialog::SetDialogForDefaultBubbleType() {
   // Text
+  const auto& typography_provider = views::TypographyProvider::Get();
   AddChildView(
       views::Builder<views::Label>()
           .SetText(l10n_util::GetStringUTF16(
               IDS_INCOGNITO_CLEAR_BROWSING_DATA_DIALOG_PRIMARY_TEXT))
-          .SetFontList(views::style::GetFont(views::style::CONTEXT_LABEL,
-                                             views::style::STYLE_EMPHASIZED))
+          .SetFontList(typography_provider.GetFont(
+              views::style::CONTEXT_LABEL, views::style::STYLE_EMPHASIZED))
           .SetHorizontalAlignment(gfx::ALIGN_LEFT)
+          .SetMultiLine(true)
           .Build());
 
   AddChildView(
       views::Builder<views::Label>()
           .SetText(l10n_util::GetStringUTF16(
               IDS_INCOGNITO_CLEAR_BROWSING_DATA_DIALOG_SECONDARY_TEXT))
-          .SetFontList(views::style::GetFont(views::style::CONTEXT_LABEL,
-                                             views::style::STYLE_SECONDARY))
+          .SetFontList(typography_provider.GetFont(
+              views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY))
           .SetHorizontalAlignment(gfx::ALIGN_LEFT)
+          .SetMultiLine(true)
           .Build());
 
   // Buttons
-  SetButtons(ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
+             static_cast<int>(ui::mojom::DialogButton::kCancel));
   SetButtonLabel(
-      ui::DIALOG_BUTTON_OK,
+      ui::mojom::DialogButton::kOk,
       l10n_util::GetStringUTF16(
           IDS_INCOGNITO_CLEAR_BROWSING_DATA_DIALOG_CLOSE_WINDOWS_BUTTON));
 
@@ -100,12 +108,13 @@ void IncognitoClearBrowsingDataDialog::SetDialogForDefaultBubbleType() {
 void IncognitoClearBrowsingDataDialog::
     SetDialogForHistoryDisclaimerBubbleType() {
   // Text
+  const auto& typography_provider = views::TypographyProvider::Get();
   AddChildView(
       views::Builder<views::Label>()
           .SetText(l10n_util::GetStringUTF16(
               IDS_INCOGNITO_HISTORY_BUBBLE_PRIMARY_TEXT))
-          .SetFontList(views::style::GetFont(views::style::CONTEXT_LABEL,
-                                             views::style::STYLE_EMPHASIZED))
+          .SetFontList(typography_provider.GetFont(
+              views::style::CONTEXT_LABEL, views::style::STYLE_EMPHASIZED))
           .SetHorizontalAlignment(gfx::ALIGN_LEFT)
           .Build());
 
@@ -113,8 +122,8 @@ void IncognitoClearBrowsingDataDialog::
       views::Builder<views::Label>()
           .SetText(l10n_util::GetStringUTF16(
               IDS_INCOGNITO_HISTORY_BUBBLE_SECONDARY_TEXT))
-          .SetFontList(views::style::GetFont(views::style::CONTEXT_LABEL,
-                                             views::style::STYLE_SECONDARY))
+          .SetFontList(typography_provider.GetFont(
+              views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY))
           .SetHorizontalAlignment(gfx::ALIGN_LEFT)
           .SetMultiLine(true)
           .Build());
@@ -122,11 +131,12 @@ void IncognitoClearBrowsingDataDialog::
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
 
   // Buttons
-  SetButtons(ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL);
-  SetButtonLabel(ui::DIALOG_BUTTON_OK,
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
+             static_cast<int>(ui::mojom::DialogButton::kCancel));
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
                  l10n_util::GetStringUTF16(
                      IDS_INCOGNITO_HISTORY_BUBBLE_CANCEL_BUTTON_TEXT));
-  SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
+  SetButtonLabel(ui::mojom::DialogButton::kCancel,
                  l10n_util::GetStringUTF16(
                      IDS_INCOGNITO_HISTORY_BUBBLE_CLOSE_INCOGNITO_BUTTON_TEXT));
 
@@ -148,9 +158,7 @@ void IncognitoClearBrowsingDataDialog::OnCloseWindowsButtonClicked() {
   // Skipping before-unload trigger to give incognito mode users a chance to
   // quickly close all incognito windows without needing to confirm closing the
   // open forms.
-  BrowserList::CloseAllBrowsersWithIncognitoProfile(
-      incognito_profile_, base::DoNothing(), base::DoNothing(),
-      /*skip_beforeunload=*/true);
+  chrome::CloseAllBrowsersWithIncognitoProfile(incognito_profile_);
 }
 
 void IncognitoClearBrowsingDataDialog::OnCancelButtonClicked() {
@@ -164,6 +172,5 @@ void IncognitoClearBrowsingDataDialog::OnCancelButtonClicked() {
       views::Widget::ClosedReason::kCloseButtonClicked);
 }
 
-BEGIN_METADATA(IncognitoClearBrowsingDataDialog,
-               views::BubbleDialogDelegateView)
+BEGIN_METADATA(IncognitoClearBrowsingDataDialog)
 END_METADATA

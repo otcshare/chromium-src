@@ -21,6 +21,7 @@ int SampleFormatToBytesPerChannel(SampleFormat sample_format) {
     case kSampleFormatMpegHAudio:
     case kSampleFormatDts:
     case kSampleFormatDtsxP2:
+    case kSampleFormatDtse:
       return 1;
     case kSampleFormatS16:
     case kSampleFormatPlanarS16:
@@ -35,7 +36,6 @@ int SampleFormatToBytesPerChannel(SampleFormat sample_format) {
   }
 
   NOTREACHED() << "Invalid sample format provided: " << sample_format;
-  return 0;
 }
 
 int SampleFormatToBitsPerChannel(SampleFormat sample_format) {
@@ -76,9 +76,10 @@ const char* SampleFormatToString(SampleFormat sample_format) {
       return "Compressed DTSXP2 bitstream";
     case kSampleFormatIECDts:
       return "IEC-61937 encapsulated DTS bitstream";
+    case kSampleFormatDtse:
+      return "Compressed DTS Express bitstream";
   }
   NOTREACHED() << "Invalid sample format provided: " << sample_format;
-  return "";
 }
 
 bool IsPlanar(SampleFormat sample_format) {
@@ -100,11 +101,11 @@ bool IsPlanar(SampleFormat sample_format) {
     case kSampleFormatDts:
     case kSampleFormatDtsxP2:
     case kSampleFormatIECDts:
+    case kSampleFormatDtse:
       return false;
   }
 
   NOTREACHED() << "Invalid sample format provided: " << sample_format;
-  return false;
 }
 
 bool IsInterleaved(SampleFormat sample_format) {
@@ -120,6 +121,7 @@ bool IsInterleaved(SampleFormat sample_format) {
     case kSampleFormatDts:
     case kSampleFormatDtsxP2:
     case kSampleFormatIECDts:
+    case kSampleFormatDtse:
       return true;
     case kUnknownSampleFormat:
     case kSampleFormatPlanarU8:
@@ -130,7 +132,6 @@ bool IsInterleaved(SampleFormat sample_format) {
   }
 
   NOTREACHED() << "Invalid sample format provided: " << sample_format;
-  return false;
 }
 
 bool IsBitstream(SampleFormat sample_format) {
@@ -156,11 +157,11 @@ bool IsBitstream(SampleFormat sample_format) {
     case kSampleFormatPlanarS16:
     case kSampleFormatPlanarF32:
     case kSampleFormatPlanarS32:
+    case kSampleFormatDtse:
       return false;
   }
 
   NOTREACHED() << "Invalid sample format provided: " << sample_format;
-  return false;
 }
 
 }  // namespace media

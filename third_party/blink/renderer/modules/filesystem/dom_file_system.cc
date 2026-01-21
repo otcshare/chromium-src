@@ -96,6 +96,7 @@ DOMFileSystem::DOMFileSystem(ExecutionContext* context,
                              mojom::blink::FileSystemType type,
                              const KURL& root_url)
     : DOMFileSystemBase(context, name, type, root_url),
+      ActiveScriptWrappable<DOMFileSystem>({}),
       ExecutionContextClient(context),
       number_of_pending_callbacks_(0),
       root_entry_(
@@ -130,7 +131,7 @@ void DOMFileSystem::ReportError(ExecutionContext* execution_context,
   if (!error_callback)
     return;
   ScheduleCallback(execution_context,
-                   WTF::BindOnce(std::move(error_callback), error));
+                   blink::BindOnce(std::move(error_callback), error));
 }
 
 void DOMFileSystem::CreateWriter(
@@ -172,8 +173,8 @@ void DOMFileSystem::ScheduleCallback(ExecutionContext* execution_context,
   execution_context->GetTaskRunner(TaskType::kFileReading)
       ->PostTask(
           FROM_HERE,
-          WTF::BindOnce(&RunCallback, WrapWeakPersistent(execution_context),
-                        std::move(task), std::move(async_task_context)));
+          blink::BindOnce(&RunCallback, WrapWeakPersistent(execution_context),
+                          std::move(task), std::move(async_task_context)));
 }
 
 void DOMFileSystem::Trace(Visitor* visitor) const {

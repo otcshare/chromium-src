@@ -4,14 +4,17 @@
 
 #include <fuchsia/web/cpp/fidl.h>
 
+#include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/test/browser_test.h"
+#include "fuchsia_web/common/test/frame_for_test.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "fuchsia_web/common/test/test_navigation_listener.h"
 #include "fuchsia_web/webengine/browser/context_impl.h"
 #include "fuchsia_web/webengine/browser/fake_navigation_policy_provider.h"
 #include "fuchsia_web/webengine/browser/frame_impl.h"
 #include "fuchsia_web/webengine/browser/navigation_policy_handler.h"
-#include "fuchsia_web/webengine/test/frame_for_test.h"
 #include "fuchsia_web/webengine/test/test_data.h"
 #include "fuchsia_web/webengine/test/web_engine_browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -56,9 +59,14 @@ class NavigationPolicyTest : public WebEngineBrowserTest {
         frame_impl_->navigation_policy_handler()->is_provider_connected());
   }
 
+  void TearDownOnMainThread() override {
+    frame_ = {};
+    WebEngineBrowserTest::TearDownOnMainThread();
+  }
+
  protected:
   FrameForTest frame_;
-  FrameImpl* frame_impl_ = nullptr;
+  raw_ptr<FrameImpl> frame_impl_ = nullptr;
   fidl::Binding<fuchsia::web::NavigationPolicyProvider>
       policy_provider_binding_;
   FakeNavigationPolicyProvider policy_provider_;
@@ -98,6 +106,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPolicyTest, Deferred) {
   auto* current_state = frame_.navigation_listener().current_state();
   EXPECT_TRUE(current_state->has_is_main_document_loaded());
   EXPECT_FALSE(current_state->is_main_document_loaded());
+  EXPECT_EQ(current_state->page_type(), fuchsia::web::PageType::NORMAL);
 
   EXPECT_EQ(page_url.spec(), policy_provider_.requested_navigation()->url());
 }

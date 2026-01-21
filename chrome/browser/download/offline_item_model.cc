@@ -6,8 +6,8 @@
 
 #include <string>
 
+#include "base/notimplemented.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_commands.h"
@@ -16,6 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "components/offline_items_collection/core/fail_state.h"
+#include "components/offline_items_collection/core/launch_location.h"
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
 
 using offline_items_collection::ContentId;
@@ -49,10 +50,12 @@ OfflineItemModel::OfflineItemModel(OfflineItemModelManager* manager,
 OfflineItemModel::OfflineItemModel(
     OfflineItemModelManager* manager,
     const OfflineItem& offline_item,
-    std::unique_ptr<DownloadUIModel::StatusTextBuilderBase> status_text_builder)
+    std::unique_ptr<DownloadUIModel::StatusTextBuilderBase> status_text_builder,
+    bool user_canceled)
     : DownloadUIModel(std::move(status_text_builder)),
       manager_(manager),
-      offline_item_(std::make_unique<OfflineItem>(offline_item)) {
+      offline_item_(std::make_unique<OfflineItem>(offline_item)),
+      user_canceled_(user_canceled) {
   Profile* profile = Profile::FromBrowserContext(manager_->browser_context());
   offline_items_collection::OfflineContentAggregator* aggregator =
       OfflineContentAggregatorFactory::GetForKey(profile->GetProfileKey());
@@ -92,6 +95,10 @@ int OfflineItemModel::PercentComplete() const {
   return static_cast<int>(GetCompletedBytes() * 100.0 / GetTotalBytes());
 }
 
+bool OfflineItemModel::IsDangerous() const {
+  return offline_item_ ? offline_item_->is_dangerous : false;
+}
+
 bool OfflineItemModel::WasUINotified() const {
   const OfflineItemModelData* data =
       manager_->GetOrCreateOfflineItemModelData(offline_item_->id);
@@ -129,9 +136,15 @@ void OfflineItemModel::OpenDownload() {
   if (!offline_item_)
     return;
 
-  offline_items_collection::OpenParams open_params(
-      offline_items_collection::LaunchLocation::DOWNLOAD_SHELF);
-  // TODO(crbug.com/1058475): Determine if we ever need to open in incognito.
+  offline_items_collection::LaunchLocation launch_location =
+#if BUILDFLAG(IS_CHROMEOS)
+      offline_items_collection::LaunchLocation::NOTIFICATION;
+#else
+      offline_items_collection::LaunchLocation::DOWNLOAD_BUBBLE;
+#endif
+
+  offline_items_collection::OpenParams open_params(launch_location);
+  // TODO(crbug.com/40121163): Determine if we ever need to open in incognito.
   GetProvider()->OpenItem(open_params, offline_item_->id);
 }
 
@@ -146,13 +159,13 @@ void OfflineItemModel::Resume() {
   if (!offline_item_)
     return;
 
-  GetProvider()->ResumeDownload(offline_item_->id, true /* has_user_gesture */);
+  GetProvider()->ResumeDownload(offline_item_->id);
 }
 
 void OfflineItemModel::Cancel(bool user_cancel) {
   if (!offline_item_)
     return;
-
+  user_canceled_ = user_canceled_ || user_cancel;
   GetProvider()->CancelDownload(offline_item_->id);
 }
 
@@ -183,13 +196,17 @@ download::DownloadItem::DownloadState OfflineItemModel::GetState() const {
       return download::DownloadItem::CANCELLED;
     case OfflineItemState::NUM_ENTRIES:
       NOTREACHED();
-      return download::DownloadItem::CANCELLED;
   }
 }
 
 bool OfflineItemModel::IsPaused() const {
   return offline_item_ ? offline_item_->state == OfflineItemState::PAUSED
                        : true;
+}
+
+download::DownloadDangerType OfflineItemModel::GetDangerType() const {
+  return offline_item_ ? offline_item_->danger_type
+                       : download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS;
 }
 
 bool OfflineItemModel::TimeRemaining(base::TimeDelta* remaining) const {
@@ -212,17 +229,13 @@ bool OfflineItemModel::IsDone() const {
     return true;
   switch (offline_item_->state) {
     case OfflineItemState::IN_PROGRESS:
-      [[fallthrough]];
     case OfflineItemState::PAUSED:
-      [[fallthrough]];
     case OfflineItemState::PENDING:
       return false;
     case OfflineItemState::INTERRUPTED:
       return !offline_item_->is_resumable;
     case OfflineItemState::FAILED:
-      [[fallthrough]];
     case OfflineItemState::COMPLETE:
-      [[fallthrough]];
     case OfflineItemState::CANCELLED:
       return true;
     case OfflineItemState::NUM_ENTRIES:
@@ -252,11 +265,6 @@ GURL OfflineItemModel::GetURL() const {
   return offline_item_ ? offline_item_->url : GURL();
 }
 
-bool OfflineItemModel::ShouldRemoveFromShelfWhenComplete() const {
-  // TODO(shaktisahu): Add more appropriate logic.
-  return false;
-}
-
 OfflineContentProvider* OfflineItemModel::GetProvider() const {
   Profile* profile = Profile::FromBrowserContext(manager_->browser_context());
   offline_items_collection::OfflineContentAggregator* aggregator =
@@ -273,13 +281,17 @@ void OfflineItemModel::OnItemRemoved(const ContentId& id) {
 
 void OfflineItemModel::OnItemUpdated(
     const OfflineItem& item,
-    const absl::optional<UpdateDelta>& update_delta) {
+    const std::optional<UpdateDelta>& update_delta) {
   offline_item_ = std::make_unique<OfflineItem>(item);
   if (delegate_)
     delegate_->OnDownloadUpdated();
 }
 
 FailState OfflineItemModel::GetLastFailState() const {
+  // If we know the user canceled, return that. Otherwise, rely on heuristic.
+  if (user_canceled_) {
+    return FailState::USER_CANCELED;
+  }
   return offline_item_ ? offline_item_->fail_state : FailState::USER_CANCELED;
 }
 
@@ -296,13 +308,12 @@ bool OfflineItemModel::IsCommandEnabled(
     const DownloadCommands* download_commands,
     DownloadCommands::Command command) const {
   switch (command) {
-    case DownloadCommands::MAX:
-      NOTREACHED();
-      return false;
     case DownloadCommands::SHOW_IN_FOLDER:
     case DownloadCommands::OPEN_WHEN_COMPLETE:
     case DownloadCommands::PLATFORM_OPEN:
     case DownloadCommands::ALWAYS_OPEN_TYPE:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       NOTIMPLEMENTED();
       return false;
     case DownloadCommands::PAUSE:
@@ -314,23 +325,23 @@ bool OfflineItemModel::IsCommandEnabled(
     case DownloadCommands::LEARN_MORE_SCANNING:
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
     case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
+    case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
+    case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
     case DownloadCommands::DEEP_SCAN:
     case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING_AND_OPEN:
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
+    case DownloadCommands::CANCEL_DEEP_SCAN:
       return DownloadUIModel::IsCommandEnabled(download_commands, command);
   }
   NOTREACHED();
-  return false;
 }
 
 bool OfflineItemModel::IsCommandChecked(
     const DownloadCommands* download_commands,
     DownloadCommands::Command command) const {
   switch (command) {
-    case DownloadCommands::MAX:
-      NOTREACHED();
-      return false;
     case DownloadCommands::OPEN_WHEN_COMPLETE:
     case DownloadCommands::ALWAYS_OPEN_TYPE:
       NOTIMPLEMENTED();
@@ -346,11 +357,17 @@ bool OfflineItemModel::IsCommandChecked(
     case DownloadCommands::LEARN_MORE_SCANNING:
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
     case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
+    case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
+    case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
     case DownloadCommands::COPY_TO_CLIPBOARD:
     case DownloadCommands::DEEP_SCAN:
     case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING_AND_OPEN:
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
+    case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       return false;
   }
   return false;
@@ -359,15 +376,14 @@ bool OfflineItemModel::IsCommandChecked(
 void OfflineItemModel::ExecuteCommand(DownloadCommands* download_commands,
                                       DownloadCommands::Command command) {
   switch (command) {
-    case DownloadCommands::MAX:
-      NOTREACHED();
-      break;
     case DownloadCommands::SHOW_IN_FOLDER:
     case DownloadCommands::OPEN_WHEN_COMPLETE:
     case DownloadCommands::ALWAYS_OPEN_TYPE:
     case DownloadCommands::KEEP:
     case DownloadCommands::LEARN_MORE_SCANNING:
     case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
+    case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
+    case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
       NOTIMPLEMENTED();
       return;
     case DownloadCommands::PLATFORM_OPEN:
@@ -379,8 +395,12 @@ void OfflineItemModel::ExecuteCommand(DownloadCommands* download_commands,
     case DownloadCommands::COPY_TO_CLIPBOARD:
     case DownloadCommands::DEEP_SCAN:
     case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING_AND_OPEN:
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
+    case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       DownloadUIModel::ExecuteCommand(download_commands, command);
       break;
   }

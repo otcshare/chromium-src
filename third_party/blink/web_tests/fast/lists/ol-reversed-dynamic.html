@@ -18,6 +18,8 @@
 
                 var list3 = document.getElementById("list3");
                 list3.start = 20;
+                list3.removeAttribute("reversed");
+                list3.setAttribute("reversed", "");
                 document.getElementById("console3").innerHTML = dumpList(list3);
 
                 var list4 = document.getElementById("list4");
@@ -50,11 +52,11 @@
 
         <p>This tests that resetting the value of an item updates markers accordingly.</p>
         <ol id="list2" reversed>
-            <li>Five</li>
-            <li>Four</li>
-            <li value="20">Three</li>
-            <li>Two</li>
-            <li>One</li>
+            <li>Twenty Two</li>
+            <li>Twenty One</li>
+            <li value="20">Twenty</li>
+            <li>Nineteen</li>
+            <li>Eighteen</li>
         </ol>
         <p id="console2"></p>
 

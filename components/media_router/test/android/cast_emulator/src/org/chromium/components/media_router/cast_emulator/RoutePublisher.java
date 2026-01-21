@@ -11,14 +11,10 @@ import androidx.mediarouter.media.MediaRouteProvider;
  * RouteController} for a specific kind of {@link MediaRouteDiscoveryRequest} / route id.
  */
 public interface RoutePublisher {
-    /**
-     * @return Whether the publisher supports the given control category.
-     */
+    /** @return Whether the publisher supports the given control category. */
     boolean supportsControlCategory(String controlCategory);
 
-    /**
-     * Publish routes (sinks).
-     */
+    /** Publish routes (sinks). */
     void publishRoutes();
 
     /**
@@ -29,5 +25,5 @@ public interface RoutePublisher {
     /**
      * @return A {@link RouteController} created for {@link routeId}.
      */
-    public MediaRouteProvider.RouteController onCreateRouteController(String routeId);
+    MediaRouteProvider.RouteController onCreateRouteController(String routeId);
 }

@@ -5,20 +5,27 @@
 #include "base/test/scoped_feature_list.h"
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
+#include "base/features.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace test {
+namespace base::test {
 
 namespace {
 
 BASE_FEATURE(kTestFeature1, "TestFeature1", FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kTestFeature2, "TestFeature2", FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(bool,
+                   kTestFeatureParam1,
+                   &kTestFeature1,
+                   "TestFeatureParam1",
+                   false);
 
 void ExpectFeatures(const std::string& enabled_features,
                     const std::string& disabled_features) {
@@ -33,12 +40,13 @@ void ExpectFeatures(const std::string& enabled_features,
   EXPECT_EQ(disabled_features, actual_disabled_features);
 }
 
-std::string GetActiveFieldTrialGroupName(const std::string trial_name) {
+std::string GetActiveFieldTrialGroupName(const std::string& trial_name) {
   FieldTrial::ActiveGroups groups;
   FieldTrialList::GetActiveFieldTrialGroups(&groups);
   for (const auto& group : groups) {
-    if (group.trial_name == trial_name)
+    if (group.trial_name == trial_name) {
       return group.group_name;
+    }
   }
   return std::string();
 }
@@ -49,8 +57,8 @@ class ScopedFeatureListTest : public testing::Test {
  public:
   ScopedFeatureListTest() {
     // Clear default feature list.
-    std::unique_ptr<FeatureList> feature_list(new FeatureList);
-    feature_list->InitializeFromCommandLine(std::string(), std::string());
+    auto feature_list = std::make_unique<FeatureList>();
+    feature_list->InitFromCommandLine(std::string(), std::string());
     original_feature_list_ = FeatureList::ClearInstanceForTesting();
     FeatureList::SetInstance(std::move(feature_list));
   }
@@ -559,7 +567,7 @@ TEST_F(ScopedFeatureListTest, FeatureOverrideFeatureWithDefault2) {
 TEST_F(ScopedFeatureListTest, FeatureOverrideFeatureWithEnabledFieldTrial) {
   test::ScopedFeatureList feature_list1;
 
-  std::unique_ptr<FeatureList> feature_list(new FeatureList);
+  auto feature_list = std::make_unique<FeatureList>();
   FieldTrial* trial = FieldTrialList::CreateFieldTrial("TrialExample", "A");
   feature_list->RegisterFieldTrialOverride(
       kTestFeature1.name, FeatureList::OVERRIDE_ENABLE_FEATURE, trial);
@@ -575,7 +583,7 @@ TEST_F(ScopedFeatureListTest, FeatureOverrideFeatureWithEnabledFieldTrial) {
 TEST_F(ScopedFeatureListTest, FeatureOverrideFeatureWithDisabledFieldTrial) {
   test::ScopedFeatureList feature_list1;
 
-  std::unique_ptr<FeatureList> feature_list(new FeatureList);
+  auto feature_list = std::make_unique<FeatureList>();
   FieldTrial* trial = FieldTrialList::CreateFieldTrial("TrialExample", "A");
   feature_list->RegisterFieldTrialOverride(
       kTestFeature1.name, FeatureList::OVERRIDE_DISABLE_FEATURE, trial);
@@ -651,8 +659,7 @@ TEST_F(ScopedFeatureListTest,
     feature_list2.InitWithNullFeatureAndFieldTrialLists();
 
     leaked_field_trial_list = std::make_unique<FieldTrialList>();
-    FeatureList::InitializeInstance("TestFeature1:TestParam/TestValue2", "",
-                                    {});
+    FeatureList::InitInstance("TestFeature1:TestParam/TestValue2", "", {});
     EXPECT_TRUE(FeatureList::IsEnabled(kTestFeature1));
     EXPECT_EQ("TestValue2",
               GetFieldTrialParamValueByFeature(kTestFeature1, "TestParam"));
@@ -684,5 +691,33 @@ TEST(ScopedFeatureListTestWithMemberList, ScopedFeatureListLocalOverride) {
   }
 }
 
-}  // namespace test
-}  // namespace base
+TEST_F(ScopedFeatureListTest, InitWithFeatureStates) {
+  test::ScopedFeatureList feature_list1;
+  feature_list1.InitWithFeatureStates(
+      {{kTestFeature1, true}, {kTestFeature2, false}});
+  ExpectFeatures(/*enabled_features=*/"TestFeature1",
+                 /*disabled_features=*/"TestFeature2");
+
+  {
+    test::ScopedFeatureList feature_list2;
+    feature_list2.InitWithFeatureStates(
+        {{kTestFeature1, false}, {kTestFeature2, true}});
+    ExpectFeatures(/*enabled_features=*/"TestFeature2",
+                   /*disabled_features=*/"TestFeature1");
+  }
+}
+
+TEST_F(ScopedFeatureListTest, FeatureParameterCache) {
+  // Check the default parameter, and bring it on its local cache if the cache
+  // is enabled.
+  ASSERT_FALSE(kTestFeatureParam1.Get());
+
+  // Ensure if the parameter override works if the cache feature is enabled
+  // outside the ScopedFeatureList.
+  test::ScopedFeatureList feature_list_to_override_cached_parameter;
+  feature_list_to_override_cached_parameter.InitAndEnableFeatureWithParameters(
+      kTestFeature1, {{kTestFeatureParam1.name, "true"}});
+  ASSERT_TRUE(kTestFeatureParam1.Get());
+}
+
+}  // namespace base::test

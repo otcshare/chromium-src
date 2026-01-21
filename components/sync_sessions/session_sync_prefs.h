@@ -26,10 +26,17 @@ class SessionSyncPrefs {
 
   ~SessionSyncPrefs();
 
-  std::string GetLegacySyncSessionsGUID() const;
-  void ClearLegacySyncSessionsGUID();
-
-  void SetLegacySyncSessionsGUIDForTesting(const std::string& guid);
+  // Tracks whether our local representation of which sync nodes map to what
+  // tabs (belonging to the current local session) is inconsistent.  This can
+  // happen if a foreign client deems our session as "stale" and decides to
+  // delete it. Rather than respond by bullishly re-creating our nodes
+  // immediately, which could lead to ping-pong sequences, we give the benefit
+  // of the doubt and hold off until another local navigation occurs, which
+  // proves that we are still relevant.
+  // This is stored across restarts to avoid multiple quick restarts from
+  // potentially wiping local tab data.
+  bool GetLocalDataOutOfSync();
+  void SetLocalDataOutOfSync(bool local_data_out_of_sync);
 
  private:
   const raw_ptr<PrefService> pref_service_;

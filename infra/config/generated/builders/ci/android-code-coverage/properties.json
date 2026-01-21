@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/ci/android-code-coverage/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -10,19 +13,19 @@
               "project": "chromium"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-fyi-archive",
-              "builder_group": "chromium.fyi",
+              "builder_group": "chromium.coverage",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_android_config": {
-                "config": "main_builder"
+                "config": "base_config"
               },
               "legacy_chromium_config": {
                 "apply_configs": [
-                  "download_vr_test_apks",
+                  "download_xr_test_apks",
                   "mb"
                 ],
                 "build_config": "Release",
-                "config": "android",
+                "config": "main_builder",
+                "target_arch": "arm",
                 "target_bits": 64,
                 "target_platform": "android"
               },
@@ -42,7 +45,14 @@
           "builder": "android-code-coverage",
           "project": "chromium"
         }
-      ]
+      ],
+      "mirroring_builder_group_and_names": [
+        {
+          "builder": "android-code-coverage",
+          "group": "tryserver.chromium.android"
+        }
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/ci/android-code-coverage/targets"
     }
   },
   "$build/code_coverage": {
@@ -54,10 +64,16 @@
     "generate_blame_list": true,
     "use_java_coverage": true
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-trusted",
-    "jobs": 500,
-    "metrics_project": "chromium-reclient-metrics"
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-trusted",
+    "remote_jobs": 500
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -66,6 +82,6 @@
       "v.test_suite"
     ]
   },
-  "builder_group": "chromium.fyi",
+  "builder_group": "chromium.coverage",
   "recipe": "chromium"
 }

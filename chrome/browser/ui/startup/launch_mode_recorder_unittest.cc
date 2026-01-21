@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/startup/launch_mode_recorder.h"
 
+#include <optional>
+
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -17,7 +19,6 @@
 #include "base/test/task_environment.h"
 #include "chrome/common/chrome_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -35,12 +36,12 @@ class LaunchModeRecorderTest : public testing::Test {
   void ComputeLaunchModeAndVerify(const base::CommandLine& cmd_line,
                                   LaunchMode expected_mode) {
     base::RunLoop run_loop;
-    base::MockCallback<base::OnceCallback<void(absl::optional<LaunchMode>)>>
+    base::MockCallback<base::OnceCallback<void(std::optional<LaunchMode>)>>
         mock_callback;
     ON_CALL(mock_callback, Run(testing::_))
         .WillByDefault(
-            [&run_loop](absl::optional<LaunchMode>) { run_loop.Quit(); });
-    EXPECT_CALL(mock_callback, Run(absl::optional<LaunchMode>(expected_mode)))
+            [&run_loop](std::optional<LaunchMode>) { run_loop.Quit(); });
+    EXPECT_CALL(mock_callback, Run(std::optional<LaunchMode>(expected_mode)))
         .WillOnce(testing::DoDefault());
     ComputeLaunchMode(cmd_line, mock_callback.Get());
     run_loop.Run();
@@ -52,15 +53,15 @@ class LaunchModeRecorderTest : public testing::Test {
 
 TEST_F(LaunchModeRecorderTest, NoMetric) {
   base::HistogramTester histogram_tester;
-  base::OnceCallback<void(absl::optional<LaunchMode>)> record_callback =
+  base::OnceCallback<void(std::optional<LaunchMode>)> record_callback =
       GetRecordLaunchModeForTesting();
-  std::move(record_callback).Run(absl::nullopt);
+  std::move(record_callback).Run(std::nullopt);
   histogram_tester.ExpectTotalCount(kLaunchModeMetric, 0);
 }
 
 TEST_F(LaunchModeRecorderTest, NoneMetric) {
   base::HistogramTester histogram_tester;
-  base::OnceCallback<void(absl::optional<LaunchMode>)> record_callback =
+  base::OnceCallback<void(std::optional<LaunchMode>)> record_callback =
       GetRecordLaunchModeForTesting();
   std::move(record_callback).Run(LaunchMode::kNone);
   histogram_tester.ExpectTotalCount(kLaunchModeMetric, 0);
@@ -68,7 +69,7 @@ TEST_F(LaunchModeRecorderTest, NoneMetric) {
 
 TEST_F(LaunchModeRecorderTest, SimpleMetric) {
   base::HistogramTester histogram_tester;
-  base::OnceCallback<void(absl::optional<LaunchMode>)> record_callback =
+  base::OnceCallback<void(std::optional<LaunchMode>)> record_callback =
       GetRecordLaunchModeForTesting();
   std::move(record_callback).Run(LaunchMode::kWithUrl);
   histogram_tester.ExpectUniqueSample(kLaunchModeMetric, LaunchMode::kWithUrl,
@@ -76,14 +77,6 @@ TEST_F(LaunchModeRecorderTest, SimpleMetric) {
 }
 
 #if BUILDFLAG(IS_WIN)
-// Test  that we we record a LaunchMode of `kUserExperiment` for
-// `kTryChromeAgain`.
-TEST_F(LaunchModeRecorderTest, TryChromeAgain) {
-  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
-  cmd_line.AppendSwitch(switches::kTryChromeAgain);
-  ComputeLaunchModeAndVerify(cmd_line, LaunchMode::kUserExperiment);
-}
-
 TEST_F(LaunchModeRecorderTest, WinNotification) {
   base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
   cmd_line.AppendSwitch(switches::kNotificationLaunchId);
@@ -154,6 +147,27 @@ TEST_F(LaunchModeRecorderTest, SlowModeChromeShortcut) {
   }
 }
 
+TEST_F(LaunchModeRecorderTest, SlowModeChromeAppId) {
+  // Normal launch with an AppId.
+  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
+  cmd_line.AppendSwitchNative(switches::kSourceAppId, L"ChromeAppId");
+  ComputeLaunchModeAndVerify(cmd_line, LaunchMode::kWithAppId);
+}
+
+// Launch with --source-app-id and a file to make sure the launch mode is
+// kWithFile instead of kWithAppId.
+TEST_F(LaunchModeRecorderTest, SlowModeChromeAppIdAndFile) {
+  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
+  cmd_line.AppendSwitchNative(switches::kSourceAppId, L"ChromeAppId");
+  base::ScopedTempDir test_dir;
+  ASSERT_TRUE(test_dir.CreateUniqueTempDir());
+  base::FilePath test_file;
+  base::CreateTemporaryFileInDir(test_dir.GetPath(), &test_file);
+  ASSERT_TRUE(base::PathExists(test_file));
+  cmd_line.AppendArgPath(test_file);
+  ComputeLaunchModeAndVerify(cmd_line, LaunchMode::kWithFile);
+}
+
 TEST_F(LaunchModeRecorderTest, SlowModeWebAppShortcut) {
   static constexpr struct PathKeyAndLaunchMode kPathKeysAndModes[] = {
       {base::DIR_COMMON_START_MENU, LaunchMode::kWebAppShortcutStartMenu},
@@ -209,7 +223,8 @@ TEST_F(LaunchModeRecorderTest, Other) {
 
 #else  // IS_MAC
 
-TEST_F(LaunchModeRecorderTest, Mac) {
+// TODO(crbug.com/437351384): Flaky
+TEST_F(LaunchModeRecorderTest, DISABLED_Mac) {
   base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
   ComputeLaunchModeAndVerify(cmd_line, LaunchMode::kMacUndockedDiskLaunch);
 }

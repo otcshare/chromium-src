@@ -12,6 +12,11 @@
 // TODO(dcheng): This is really horrible. In general, all tests should run on
 // all platforms, to avoid this mess.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef UI_BASE_CLIPBOARD_CLIPBOARD_TEST_TEMPLATE_H_
 #define UI_BASE_CLIPBOARD_CLIPBOARD_TEST_TEMPLATE_H_
 
@@ -20,19 +25,21 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
 #include "base/pickle.h"
 #include "base/run_loop.h"
-#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
-#include "build/chromeos_buildflags.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,14 +50,15 @@
 #include "third_party/skia/include/core/SkUnPreMultiply.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_constants.h"
+#include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/base/data_transfer_policy/data_transfer_policy_controller.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/half_float.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -83,7 +91,7 @@ class ClipboardTest : public PlatformTest {
   }
 
   void TearDown() override {
-    ClipboardTraits::Destroy(clipboard_);
+    ClipboardTraits::Destroy(clipboard_.ExtractAsDangling());
     PlatformTest::TearDown();
   }
 
@@ -108,18 +116,20 @@ class MockPolicyController : public DataTransferPolicyController {
   ~MockPolicyController() override;
 
   MOCK_METHOD3(IsClipboardReadAllowed,
-               bool(const DataTransferEndpoint* const data_src,
-                    const DataTransferEndpoint* const data_dst,
-                    const absl::optional<size_t> size));
-  MOCK_METHOD5(PasteIfAllowed,
-               void(const DataTransferEndpoint* const data_src,
-                    const DataTransferEndpoint* const data_dst,
-                    const absl::optional<size_t> size,
-                    content::RenderFrameHost* rfh,
-                    base::OnceCallback<void(bool)> callback));
-  MOCK_METHOD3(DropIfAllowed,
-               void(const ui::DataTransferEndpoint* data_src,
-                    const ui::DataTransferEndpoint* data_dst,
+               bool(base::optional_ref<const DataTransferEndpoint> data_src,
+                    base::optional_ref<const DataTransferEndpoint> data_dst,
+                    const std::optional<size_t> size));
+  MOCK_METHOD5(
+      PasteIfAllowed,
+      void(base::optional_ref<const DataTransferEndpoint> data_src,
+           base::optional_ref<const DataTransferEndpoint> data_dst,
+           std::variant<size_t, std::vector<base::FilePath>> pasted_content,
+           content::RenderFrameHost* rfh,
+           base::OnceCallback<void(bool)> callback));
+  MOCK_METHOD4(DropIfAllowed,
+               void(std::optional<ui::DataTransferEndpoint> data_src,
+                    std::optional<ui::DataTransferEndpoint> data_dst,
+                    std::optional<std::vector<ui::FileInfo>> filenames,
                     base::OnceClosure drop_cb));
 };
 
@@ -165,7 +175,7 @@ TYPED_TEST(ClipboardTest, TextTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeText)));
+              Contains(kMimeTypePlainText16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::PlainTextType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -196,7 +206,7 @@ TYPED_TEST(ClipboardTest, HTMLTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeHTML)));
+              Contains(kMimeTypeHtml16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::HtmlType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -224,7 +234,7 @@ TYPED_TEST(ClipboardTest, SvgTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeSvg)));
+              Contains(kMimeTypeSvg16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::SvgType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -234,11 +244,23 @@ TYPED_TEST(ClipboardTest, SvgTest) {
                             /* data_dst = */ nullptr, &markup_result);
 
   EXPECT_EQ(markup, markup_result);
+  // On Windows, the SVG data is written as UTF-8.
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(features::kUseUtf8EncodingForSvgImage)) {
+    std::string result;
+    this->clipboard().ReadData(ClipboardFormatType::SvgType(),
+                               /*data_dst=*/nullptr, &result);
+    // On Windows, after calling `GetClipboardData`, some extra null characters
+    // are added at the end. Use the C-string for comparison that ignores the
+    // null characters after the first one.
+    EXPECT_EQ(base::UTF16ToUTF8(markup), result.c_str());
+  }
+#endif
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-// TODO(crbug/1064968): This test fails with ClipboardAndroid, but passes with
-// the TestClipboard as RTF isn't implemented in ClipboardAndroid.
+// TODO(crbug.com/40681589): This test fails with ClipboardAndroid, but passes
+// with the TestClipboard as RTF isn't implemented in ClipboardAndroid.
 TYPED_TEST(ClipboardTest, RTFTest) {
   std::string rtf =
       "{\\rtf1\\ansi{\\fonttbl\\f0\\fswiss Helvetica;}\\f0\\pard\n"
@@ -251,7 +273,7 @@ TYPED_TEST(ClipboardTest, RTFTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeRTF)));
+              Contains(kMimeTypeRtf16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::RtfType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -286,9 +308,9 @@ TYPED_TEST(ClipboardTest, MultipleBufferTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeText)));
+              Contains(kMimeTypePlainText16));
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kSelection),
-              Contains(ASCIIToUTF16(kMimeTypeHTML)));
+              Contains(kMimeTypeHtml16));
 
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::PlainTextType(), ClipboardBuffer::kCopyPaste,
@@ -332,7 +354,7 @@ TYPED_TEST(ClipboardTest, TrickyHTMLTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeHTML)));
+              Contains(kMimeTypeHtml16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::HtmlType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -367,7 +389,7 @@ TYPED_TEST(ClipboardTest, UnicodeHTMLTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeHTML)));
+              Contains(kMimeTypeHtml16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::HtmlType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -410,8 +432,6 @@ TYPED_TEST(ClipboardTest, BookmarkTest) {
 }
 #endif  // !BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_APPLE)
 
-#if !BUILDFLAG(IS_ANDROID)
-// Filenames is not implemented in ClipboardAndroid.
 TYPED_TEST(ClipboardTest, FilenamesTest) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   base::ScopedTempDir temp_dir;
@@ -441,7 +461,6 @@ TYPED_TEST(ClipboardTest, FilenamesTest) {
   EXPECT_EQ(1u, filenames.size());
   EXPECT_EQ(file, filenames[0].path);
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 TYPED_TEST(ClipboardTest, MultiFormatTest) {
   std::u16string text(u"Hi!"), text_result;
@@ -456,9 +475,9 @@ TYPED_TEST(ClipboardTest, MultiFormatTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeHTML)));
+              Contains(kMimeTypeHtml16));
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeText)));
+              Contains(kMimeTypePlainText16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::HtmlType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -500,7 +519,7 @@ TYPED_TEST(ClipboardTest, URLTest) {
   }
 
   EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
-              Contains(ASCIIToUTF16(kMimeTypeText)));
+              Contains(kMimeTypePlainText16));
   EXPECT_TRUE(this->clipboard().IsFormatAvailable(
       ClipboardFormatType::PlainTextType(), ClipboardBuffer::kCopyPaste,
       /* data_dst = */ nullptr));
@@ -523,7 +542,7 @@ TYPED_TEST(ClipboardTest, URLTest) {
 // TODO(tonikitoo, msisov): enable back for ClipboardOzone implements
 // selection support. https://crbug.com/911992
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID) && \
-    !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_OZONE)
+    !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_OZONE)
   ascii_text.clear();
   this->clipboard().ReadAsciiText(ClipboardBuffer::kSelection,
                                   /* data_dst = */ nullptr, &ascii_text);
@@ -531,10 +550,50 @@ TYPED_TEST(ClipboardTest, URLTest) {
 #endif
 }
 
+#if BUILDFLAG(IS_WIN)
+// See crbug.com/1477344 for more details on the issue.
+TYPED_TEST(ClipboardTest, ChromiumCustomFormatTest) {
+  std::u16string markup(u"<strong>Hi!</string>"), markup_result;
+  std::string url("http://www.example.com/"), url_result;
+
+  {
+    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteHTML(markup, url);
+  }
+
+  EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
+              Contains(kMimeTypeHtml16));
+  EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
+              testing::Not(Contains(kMimeTypeDataTransferCustomData16)));
+  {
+    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
+    base::flat_map<std::u16string, std::u16string> custom_data;
+    custom_data[kMimeTypeDataTransferCustomData16] = u"data";
+    base::Pickle pickle;
+    WriteCustomDataToPickle(custom_data, &pickle);
+    clipboard_writer.WritePickledData(
+        pickle, ClipboardFormatType::DataTransferCustomType());
+  }
+  EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
+              testing::Not(Contains(kMimeTypeHtml16)));
+  EXPECT_THAT(this->GetAvailableTypes(ClipboardBuffer::kCopyPaste),
+              Contains(kMimeTypeDataTransferCustomData16));
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace {
 
-using U8x4 = std::array<uint8_t, 4>;
-using F16x4 = std::array<gfx::HalfFloat, 4>;
+using U16x4 = std::array<uint16_t, 4>;
+
+// Packs a premultiplied ARGB in Skia's configuration-dependent N32 format.
+inline constexpr uint32_t N32(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
+  // The value should be premultiplied.
+  DCHECK(r <= a);
+  DCHECK(g <= a);
+  DCHECK(b <= a);
+  return (uint32_t{a} << SK_A32_SHIFT) | (uint32_t{r} << SK_R32_SHIFT) |
+         (uint32_t{g} << SK_G32_SHIFT) | (uint32_t{b} << SK_B32_SHIFT);
+}
 
 void WriteBitmap(Clipboard* clipboard,
                  const SkImageInfo& info,
@@ -542,7 +601,7 @@ void WriteBitmap(Clipboard* clipboard,
   {
     ScopedClipboardWriter clipboard_writer(
         ClipboardBuffer::kCopyPaste,
-        std::make_unique<DataTransferEndpoint>(GURL()));
+        std::make_unique<DataTransferEndpoint>(GURL("https://google.com/")));
     SkBitmap bitmap;
     ASSERT_TRUE(bitmap.setInfo(info));
     bitmap.setPixels(const_cast<void*>(bitmap_data));
@@ -552,15 +611,14 @@ void WriteBitmap(Clipboard* clipboard,
 
 void AssertBitmapMatchesExpected(const SkBitmap& image,
                                  const SkImageInfo& info,
-                                 const U8x4* expect_data) {
+                                 const uint32_t* expect_data) {
   ASSERT_EQ(image.info().colorType(), kN32_SkColorType);
   ASSERT_NE(image.info().alphaType(), kUnpremul_SkAlphaType);
   EXPECT_EQ(gfx::Size(info.width(), info.height()),
             gfx::Size(image.width(), image.height()));
   for (int y = 0; y < image.height(); ++y) {
-    const U8x4* actual_row =
-        reinterpret_cast<const U8x4*>(image.getAddr32(0, y));
-    const U8x4* expect_row = &expect_data[y * info.width()];
+    const uint32_t* actual_row = image.getAddr32(0, y);
+    const uint32_t* expect_row = &expect_data[y * info.width()];
     for (int x = 0; x < image.width(); ++x) {
       EXPECT_EQ(expect_row[x], actual_row[x]) << "x = " << x << ", y = " << y;
     }
@@ -571,7 +629,7 @@ template <typename T>
 static void TestBitmapWriteAndPngRead(Clipboard* clipboard,
                                       const SkImageInfo& info,
                                       const T* bitmap_data,
-                                      const U8x4* expect_data) {
+                                      const uint32_t* expect_data) {
   WriteBitmap(clipboard, info, reinterpret_cast<const void*>(bitmap_data));
 
   // Expect to be able to read images as either bitmaps or PNGs.
@@ -582,20 +640,21 @@ static void TestBitmapWriteAndPngRead(Clipboard* clipboard,
                                            ClipboardBuffer::kCopyPaste,
                                            /* data_dst = */ nullptr));
   std::vector<uint8_t> result = clipboard_test_util::ReadPng(clipboard);
-  SkBitmap image;
-  gfx::PNGCodec::Decode(result.data(), result.size(), &image);
+  SkBitmap image = gfx::PNGCodec::Decode(result);
+  ASSERT_FALSE(image.isNull());
   AssertBitmapMatchesExpected(image, info, expect_data);
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-// TODO(crbug.com/815537): Re-enable this test once death tests work on Android.
+// TODO(crbug.com/41372437): Re-enable this test once death tests work on
+// Android.
 
 // Only kN32_SkColorType bitmaps are allowed into the clipboard to prevent
 // surprising buffer overflows due to bits-per-pixel assumptions.
 TYPED_TEST(ClipboardTest, BitmapWriteAndPngRead_F16_Premul) {
-  constexpr F16x4 kRGBAF16Premul = {0x30c5, 0x2d86, 0x2606, 0x3464};
-  constexpr U8x4 kRGBAPremul = {0x26, 0x16, 0x06, 0x46};
-  EXPECT_DEATH(
+  constexpr U16x4 kRGBAF16Premul = {0x30c5, 0x2d86, 0x2606, 0x3464};
+  constexpr uint32_t kRGBAPremul = N32(0x46, 0x06, 0x16, 0x26);
+  EXPECT_DEATH_IF_SUPPORTED(
       TestBitmapWriteAndPngRead(
           &this->clipboard(),
           SkImageInfo::Make(1, 1, kRGBA_F16_SkColorType, kPremul_SkAlphaType),
@@ -605,27 +664,27 @@ TYPED_TEST(ClipboardTest, BitmapWriteAndPngRead_F16_Premul) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 TYPED_TEST(ClipboardTest, BitmapWriteAndPngRead_N32_Premul) {
-  constexpr U8x4 b[4 * 3] = {
-      {0x26, 0x16, 0x06, 0x46}, {0x88, 0x59, 0x9f, 0xf6},
-      {0x37, 0x29, 0x3f, 0x79}, {0x86, 0xb9, 0x55, 0xfa},
-      {0x52, 0x21, 0x77, 0x78}, {0x30, 0x2a, 0x69, 0x87},
-      {0x25, 0x2a, 0x32, 0x36}, {0x1b, 0x40, 0x20, 0x43},
-      {0x21, 0x8c, 0x84, 0x91}, {0x3c, 0x7b, 0x17, 0xc3},
-      {0x5c, 0x15, 0x46, 0x69}, {0x52, 0x19, 0x17, 0x64},
+  constexpr uint32_t b[4 * 3] = {
+      N32(0x46, 0x06, 0x16, 0x26), N32(0xf6, 0x9f, 0x59, 0x88),
+      N32(0x79, 0x3f, 0x29, 0x37), N32(0xfa, 0x55, 0xb9, 0x86),
+      N32(0x78, 0x77, 0x21, 0x52), N32(0x87, 0x69, 0x2a, 0x30),
+      N32(0x36, 0x32, 0x2a, 0x25), N32(0x43, 0x20, 0x40, 0x1b),
+      N32(0x91, 0x84, 0x8c, 0x21), N32(0xc3, 0x17, 0x7b, 0x3c),
+      N32(0x69, 0x46, 0x15, 0x5c), N32(0x64, 0x17, 0x19, 0x52),
   };
   TestBitmapWriteAndPngRead(&this->clipboard(),
                             SkImageInfo::MakeN32Premul(4, 3), b, b);
 }
 
 TYPED_TEST(ClipboardTest, BitmapWriteAndPngRead_N32_Premul_2x7) {
-  constexpr U8x4 b[2 * 7] = {
-      {0x26, 0x16, 0x06, 0x46}, {0x88, 0x59, 0x9f, 0xf6},
-      {0x37, 0x29, 0x3f, 0x79}, {0x86, 0xb9, 0x55, 0xfa},
-      {0x52, 0x21, 0x77, 0x78}, {0x30, 0x2a, 0x69, 0x87},
-      {0x25, 0x2a, 0x32, 0x36}, {0x1b, 0x40, 0x20, 0x43},
-      {0x21, 0x8c, 0x84, 0x91}, {0x3c, 0x7b, 0x17, 0xc3},
-      {0x5c, 0x15, 0x46, 0x69}, {0x52, 0x19, 0x17, 0x64},
-      {0x13, 0x03, 0x91, 0xa6}, {0x3e, 0x32, 0x02, 0x83},
+  constexpr uint32_t b[2 * 7] = {
+      N32(0x46, 0x06, 0x16, 0x26), N32(0xf6, 0x9f, 0x59, 0x88),
+      N32(0x79, 0x3f, 0x29, 0x37), N32(0xfa, 0x55, 0xb9, 0x86),
+      N32(0x78, 0x77, 0x21, 0x52), N32(0x87, 0x69, 0x2a, 0x30),
+      N32(0x36, 0x32, 0x2a, 0x25), N32(0x43, 0x20, 0x40, 0x1b),
+      N32(0x91, 0x84, 0x8c, 0x21), N32(0xc3, 0x17, 0x7b, 0x3c),
+      N32(0x69, 0x46, 0x15, 0x5c), N32(0x64, 0x17, 0x19, 0x52),
+      N32(0xa6, 0x91, 0x03, 0x13), N32(0x83, 0x02, 0x32, 0x3e),
   };
   TestBitmapWriteAndPngRead(&this->clipboard(),
                             SkImageInfo::MakeN32Premul(2, 7), b, b);
@@ -635,7 +694,7 @@ TYPED_TEST(ClipboardTest, BitmapWriteAndPngRead_N32_Premul_2x7) {
 
 TYPED_TEST(ClipboardTest, PickleTest) {
   const ClipboardFormatType kFormat =
-      ClipboardFormatType::GetType("chromium/x-test-format");
+      ClipboardFormatType::CustomPlatformType("chromium/x-test-format");
   std::string payload("test string");
   base::Pickle write_pickle;
   write_pickle.WriteString(payload);
@@ -651,7 +710,7 @@ TYPED_TEST(ClipboardTest, PickleTest) {
   this->clipboard().ReadData(kFormat, /* data_dst = */ nullptr, &output);
   ASSERT_FALSE(output.empty());
 
-  base::Pickle read_pickle(output.data(), output.size());
+  base::Pickle read_pickle = base::Pickle::WithData(base::as_byte_span(output));
   base::PickleIterator iter(read_pickle);
   std::string unpickled_string;
   ASSERT_TRUE(iter.ReadString(&unpickled_string));
@@ -660,13 +719,13 @@ TYPED_TEST(ClipboardTest, PickleTest) {
 
 TYPED_TEST(ClipboardTest, MultiplePickleTest) {
   const ClipboardFormatType kFormat1 =
-      ClipboardFormatType::GetType("chromium/x-test-format1");
+      ClipboardFormatType::CustomPlatformType("chromium/x-test-format1");
   std::string payload1("test string1");
   base::Pickle write_pickle1;
   write_pickle1.WriteString(payload1);
 
   const ClipboardFormatType kFormat2 =
-      ClipboardFormatType::GetType("chromium/x-test-format2");
+      ClipboardFormatType::CustomPlatformType("chromium/x-test-format2");
   std::string payload2("test string2");
   base::Pickle write_pickle2;
   write_pickle2.WriteString(payload2);
@@ -674,52 +733,37 @@ TYPED_TEST(ClipboardTest, MultiplePickleTest) {
   {
     ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
     clipboard_writer.WritePickledData(write_pickle1, kFormat1);
-    // overwrite the previous pickle for fun
     clipboard_writer.WritePickledData(write_pickle2, kFormat2);
   }
 
-  ASSERT_FALSE(this->clipboard().IsFormatAvailable(
+  ASSERT_TRUE(this->clipboard().IsFormatAvailable(
       kFormat1, ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr));
   ASSERT_TRUE(this->clipboard().IsFormatAvailable(
       kFormat2, ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr));
 
-  // Check string 2.
+  std::string output1;
+  this->clipboard().ReadData(kFormat1, /* data_dst = */ nullptr, &output1);
+  ASSERT_FALSE(output1.empty());
   std::string output2;
   this->clipboard().ReadData(kFormat2, /* data_dst = */ nullptr, &output2);
   ASSERT_FALSE(output2.empty());
 
-  base::Pickle read_pickle2(output2.data(), output2.size());
-  base::PickleIterator iter2(read_pickle2);
-  std::string unpickled_string2;
-  ASSERT_TRUE(iter2.ReadString(&unpickled_string2));
-  EXPECT_EQ(payload2, unpickled_string2);
-
-  {
-    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
-    clipboard_writer.WritePickledData(write_pickle2, kFormat2);
-    // overwrite the previous pickle for fun
-    clipboard_writer.WritePickledData(write_pickle1, kFormat1);
-  }
-
-  ASSERT_TRUE(this->clipboard().IsFormatAvailable(
-      kFormat1, ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr));
-  ASSERT_FALSE(this->clipboard().IsFormatAvailable(
-      kFormat2, ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr));
-
-  // Check string 1.
-  std::string output1;
-  this->clipboard().ReadData(kFormat1, /* data_dst = */ nullptr, &output1);
-  ASSERT_FALSE(output1.empty());
-
-  base::Pickle read_pickle1(output1.data(), output1.size());
+  base::Pickle read_pickle1 =
+      base::Pickle::WithData(base::as_byte_span(output1));
   base::PickleIterator iter1(read_pickle1);
   std::string unpickled_string1;
   ASSERT_TRUE(iter1.ReadString(&unpickled_string1));
   EXPECT_EQ(payload1, unpickled_string1);
+
+  base::Pickle read_pickle2 =
+      base::Pickle::WithData(base::as_byte_span(output2));
+  base::PickleIterator iter2(read_pickle2);
+  std::string unpickled_string2;
+  ASSERT_TRUE(iter2.ReadString(&unpickled_string2));
+  EXPECT_EQ(payload2, unpickled_string2);
 }
 
-// TODO(crbug.com/106449): Implement multiple custom format write on Chrome OS.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !(BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK))
 TYPED_TEST(ClipboardTest, DataTest) {
   const std::string kFormatString = "web chromium/x-test-format";
   const std::u16string kFormatString16 = u"chromium/x-test-format";
@@ -858,7 +902,7 @@ TYPED_TEST(ClipboardTest, DataAndPortableFormatTest) {
 // the Windows implicitly converts this to UNICODE as expected.
 TYPED_TEST(ClipboardTest, PlatformSpecificDataTest) {
   // We're testing platform-specific behavior, so use PlatformClipboardTest.
-  // TODO(https://crbug.com/1083050): The template shouldn't know about its
+  // TODO(crbug.com/40692232): The template shouldn't know about its
   // instantiations. Move this information up using a flag, virtual method, or
   // creating separate test files for different platforms.
   std::string test_suite_name = ::testing::UnitTest::GetInstance()
@@ -947,7 +991,7 @@ TYPED_TEST(ClipboardTest, WebSmartPasteTest) {
 void HtmlTestHelper(const std::string& cf_html,
                     const std::string& expected_html) {
   std::string html;
-  ClipboardUtil::CFHtmlToHtml(cf_html, &html, nullptr);
+  clipboard_util::CFHtmlToHtml(cf_html, &html, nullptr);
   EXPECT_EQ(html, expected_html);
 }
 
@@ -987,7 +1031,60 @@ TYPED_TEST(ClipboardTest, HtmlTest) {
       "</html>\r\n\r\n",
       "<p>Foo</p>");
 }
+
+TYPED_TEST(ClipboardTest, PrivacyMetadataTest) {
+  // We're testing platform-specific behavior, so use PlatformClipboardTest.
+  std::string test_suite_name = ::testing::UnitTest::GetInstance()
+                                    ->current_test_info()
+                                    ->test_suite_name();
+  if (test_suite_name != std::string("ClipboardTest/PlatformClipboardTest")) {
+    return;
+  }
+
+  {
+    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(u"foo");
+    clipboard_writer.MarkAsOffTheRecord();
+  }
+
+  EXPECT_TRUE(this->clipboard().IsFormatAvailable(
+      ClipboardFormatType::ClipboardHistoryType(), ClipboardBuffer::kCopyPaste,
+      /* data_dst = */ nullptr));
+  EXPECT_TRUE(this->clipboard().IsFormatAvailable(
+      ClipboardFormatType::UploadCloudClipboardType(),
+      ClipboardBuffer::kCopyPaste,
+      /* data_dst = */ nullptr));
+  std::string result;
+  this->clipboard().ReadData(ClipboardFormatType::ClipboardHistoryType(),
+                             /* data_dst = */ nullptr, &result);
+  DWORD history_data = std::strtoul(result.c_str(), nullptr, 16);
+  EXPECT_EQ(0ul, history_data);
+  this->clipboard().ReadData(ClipboardFormatType::UploadCloudClipboardType(),
+                             /* data_dst = */ nullptr, &result);
+  DWORD cloud_data = std::strtoul(result.c_str(), nullptr, 16);
+  EXPECT_EQ(0ul, cloud_data);
+}
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_MAC)
+TYPED_TEST(ClipboardTest, PasswordTest) {
+  // We're testing platform-specific behavior, so use PlatformClipboardTest.
+  std::string test_suite_name = ::testing::UnitTest::GetInstance()
+                                    ->current_test_info()
+                                    ->test_suite_name();
+  if (test_suite_name != std::string("ClipboardTest/PlatformClipboardTest")) {
+    return;
+  }
+
+  {
+    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(u"password");
+    clipboard_writer.MarkAsConfidential();
+  }
+
+  EXPECT_TRUE(this->clipboard().IsMarkedByOriginatorAsConfidential());
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 // Test writing all formats we have simultaneously.
 TYPED_TEST(ClipboardTest, WriteEverything) {
@@ -1074,6 +1171,34 @@ TYPED_TEST(ClipboardTest, WriteImageEmptyParams) {
   scw.WriteImage(SkBitmap());
 }
 
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID))
+TYPED_TEST(ClipboardTest, BookmarkTestWithoutTitle) {
+  // We're testing platform-specific behavior, so use PlatformClipboardTest.
+  std::string test_suite_name = ::testing::UnitTest::GetInstance()
+                                    ->current_test_info()
+                                    ->test_suite_name();
+  if (test_suite_name != std::string("ClipboardTest/PlatformClipboardTest")) {
+    return;
+  }
+
+  std::u16string title_result;
+  std::string url("http://www.example.com/"), url_result;
+
+  {
+    ScopedClipboardWriter clipboard_writer(ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteBookmark(std::u16string(), url);
+  }
+
+  EXPECT_TRUE(this->clipboard().IsFormatAvailable(
+      ClipboardFormatType::UrlType(), ClipboardBuffer::kCopyPaste,
+      /* data_dst = */ nullptr));
+
+  this->clipboard().ReadBookmark(/* data_dst = */ nullptr, &title_result,
+                                 &url_result);
+  EXPECT_EQ(url, url_result);
+}
+#endif  //(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID))
+
 // Policy controller is only intended to be used in Chrome OS, so the following
 // policy related tests are only run on Chrome OS.
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1095,18 +1220,6 @@ TYPED_TEST(ClipboardTest, PolicyAllowDataRead) {
                              /* data_dst = */ nullptr, &read_result);
   EXPECT_EQ(kTestText, read_result);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Checks that the clipboard source metadata is encoded in the
-  // DataTransferEndpoint mime type.
-  std::string actual_json;
-  this->clipboard().ReadData(
-      ui::ClipboardFormatType::DataTransferEndpointDataType(),
-      /* data_dst = */ nullptr, &actual_json);
-
-  EXPECT_EQ(R"({"endpoint_type":"url","url":"https://www.google.com/"})",
-            actual_json);
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
   ::testing::Mock::VerifyAndClearExpectations(policy_controller.get());
 }
 
@@ -1118,7 +1231,7 @@ TYPED_TEST(ClipboardTest, PolicyDisallow_ReadText) {
   {
     ScopedClipboardWriter writer(
         ClipboardBuffer::kCopyPaste,
-        std::make_unique<DataTransferEndpoint>(GURL()));
+        std::make_unique<DataTransferEndpoint>(GURL("https://google.com/")));
     writer.WriteText(kTestText);
   }
   EXPECT_CALL(*policy_controller, IsClipboardReadAllowed)
@@ -1132,13 +1245,13 @@ TYPED_TEST(ClipboardTest, PolicyDisallow_ReadText) {
 
 TYPED_TEST(ClipboardTest, PolicyDisallow_ReadPng) {
   auto policy_controller = std::make_unique<MockPolicyController>();
-  constexpr U8x4 kBitMapData[4 * 3] = {
-      {0x26, 0x16, 0x06, 0x46}, {0x88, 0x59, 0x9f, 0xf6},
-      {0x37, 0x29, 0x3f, 0x79}, {0x86, 0xb9, 0x55, 0xfa},
-      {0x52, 0x21, 0x77, 0x78}, {0x30, 0x2a, 0x69, 0x87},
-      {0x25, 0x2a, 0x32, 0x36}, {0x1b, 0x40, 0x20, 0x43},
-      {0x21, 0x8c, 0x84, 0x91}, {0x3c, 0x7b, 0x17, 0xc3},
-      {0x5c, 0x15, 0x46, 0x69}, {0x52, 0x19, 0x17, 0x64},
+  constexpr uint32_t kBitMapData[4 * 3] = {
+      N32(0x46, 0x06, 0x16, 0x26), N32(0xf6, 0x9f, 0x59, 0x88),
+      N32(0x79, 0x3f, 0x29, 0x37), N32(0xfa, 0x55, 0xb9, 0x86),
+      N32(0x78, 0x77, 0x21, 0x52), N32(0x87, 0x69, 0x2a, 0x30),
+      N32(0x36, 0x32, 0x2a, 0x25), N32(0x43, 0x20, 0x40, 0x1b),
+      N32(0x91, 0x84, 0x8c, 0x21), N32(0xc3, 0x17, 0x7b, 0x3c),
+      N32(0x69, 0x46, 0x15, 0x5c), N32(0x64, 0x17, 0x19, 0x52),
   };
   WriteBitmap(&this->clipboard(), SkImageInfo::MakeN32Premul(4, 3),
               reinterpret_cast<const void*>(kBitMapData));
@@ -1148,40 +1261,6 @@ TYPED_TEST(ClipboardTest, PolicyDisallow_ReadPng) {
   ::testing::Mock::VerifyAndClearExpectations(policy_controller.get());
   EXPECT_EQ(true, image.empty());
 }
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-// Checks that source DTEs provided through the custom MIME type can be parsed.
-TYPED_TEST(ClipboardTest, ClipboardSourceDteCanBeRetrievedByLacros) {
-  auto policy_controller = std::make_unique<MockPolicyController>();
-  const std::u16string kTestText(u"World");
-  const std::string kDteJson(
-      R"({"endpoint_type":"url","url":"https://www.google.com"})");
-  {
-    // No source DTE provided directly to the Lacros clipboard.
-    ScopedClipboardWriter writer(ClipboardBuffer::kCopyPaste);
-    writer.WriteText(kTestText);
-    // Encoded source DTE provided in custom MIME type.
-    writer.WriteEncodedDataTransferEndpointForTesting(kDteJson);
-  }
-
-  EXPECT_CALL(*policy_controller,
-              IsClipboardReadAllowed(
-                  Pointee(AllOf(
-                      Property(&DataTransferEndpoint::IsUrlType, true),
-                      Property(&DataTransferEndpoint::GetURL,
-                               Pointee(Property(&GURL::spec,
-                                                "https://www.google.com/"))))),
-                  _, _))
-      .WillRepeatedly(testing::Return(true));
-
-  std::u16string read_result;
-  this->clipboard().ReadText(ClipboardBuffer::kCopyPaste,
-                             /* data_dst= */ nullptr, &read_result);
-  EXPECT_EQ(kTestText, read_result);
-
-  ::testing::Mock::VerifyAndClearExpectations(policy_controller.get());
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
 

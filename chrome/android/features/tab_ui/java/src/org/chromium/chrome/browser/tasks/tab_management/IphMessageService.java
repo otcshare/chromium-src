@@ -5,62 +5,93 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.build.BuildConfig;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab_ui.TabSwitcherIphController;
+import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
+import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
+import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
+import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * One of the concrete {@link MessageService} that only serves {@link MessageType.IPH}.
- */
-public class IphMessageService extends MessageService {
-    private final TabSwitcherCoordinator.IphController mIphController;
+import java.util.function.Supplier;
+
+/** One of the concrete {@link MessageService} that only serves {@link MessageType.IPH}. */
+@NullMarked
+public class IphMessageService extends MessageService<@MessageType Integer, @UiType Integer> {
+    private static boolean sSkipIphInTests = true;
+
+    private final Context mContext;
+    private final TabSwitcherIphController mIphController;
+    private final Supplier<Profile> mProfileSupplier;
     private Tracker mTracker;
-    private Callback<Boolean> mInitializedCallback = (result) -> {
-        if (mTracker.wouldTriggerHelpUI(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE)) {
-            assert mTracker.isInitialized();
-            sendAvailabilityNotification(
-                    new IphMessageData(this::review, (int messageType) -> dismiss()));
-        }
-    };
 
-    /**
-     * This is the data type that this MessageService is serving to its Observer.
-     */
-    class IphMessageData implements MessageData {
-        private final MessageCardView.ReviewActionProvider mReviewActionProvider;
-        private final MessageCardView.DismissActionProvider mDismissActionProvider;
+    private final Callback<Boolean> mInitializedCallback =
+            (result) -> {
+                if (wouldTriggerIph()) {
+                    assert mTracker.isInitialized();
+                    queueMessage(this::buildModel);
+                }
+            };
 
-        IphMessageData(MessageCardView.ReviewActionProvider reviewActionProvider,
-                MessageCardView.DismissActionProvider dismissActionProvider) {
-            mReviewActionProvider = reviewActionProvider;
+    /** This is the data type that this MessageService is serving to its Observer. */
+    public static class IphMessageData {
+        private final MessageCardView.ActionProvider mAcceptActionProvider;
+        private final MessageCardView.ActionProvider mDismissActionProvider;
+        private final boolean mIsIncognito;
+
+        IphMessageData(
+                MessageCardView.ActionProvider acceptActionProvider,
+                MessageCardView.ActionProvider dismissActionProvider,
+                boolean isIncognito) {
+            mAcceptActionProvider = acceptActionProvider;
             mDismissActionProvider = dismissActionProvider;
+            mIsIncognito = isIncognito;
         }
 
         /**
-         * @return The {@link MessageCardView.ReviewActionProvider} for the associated IPH.
+         * @return The {@link MessageCardView.ActionProvider} for the associated IPH.
          */
-        MessageCardView.ReviewActionProvider getReviewActionProvider() {
-            return mReviewActionProvider;
+        MessageCardView.ActionProvider getAcceptActionProvider() {
+            return mAcceptActionProvider;
         }
 
         /**
-         * @return The {@link MessageCardView.DismissActionProvider} for the associated IPH.
+         * @return The {@link ServiceDismissActionProvider} for the associated IPH.
          */
-        MessageCardView.DismissActionProvider getDismissActionProvider() {
+        MessageCardView.ActionProvider getDismissActionProvider() {
             return mDismissActionProvider;
+        }
+
+        /** Returns whether the message card is to be themed for incognito */
+        boolean isIncognito() {
+            return mIsIncognito;
         }
     }
 
-    IphMessageService(TabSwitcherCoordinator.IphController controller) {
-        super(MessageType.IPH);
+    IphMessageService(
+            Context context,
+            Supplier<Profile> profileSupplier,
+            TabSwitcherIphController controller) {
+        super(
+                MessageType.IPH,
+                UiType.IPH_MESSAGE,
+                R.layout.tab_grid_message_card_item,
+                MessageCardViewBinder::bind);
+        mContext = context;
         mIphController = controller;
-        Profile profile = Profile.getLastUsedRegularProfile().getOriginalProfile();
-        mTracker = TrackerFactory.getTrackerForProfile(profile);
+        mTracker = TrackerFactory.getTrackerForProfile(profileSupplier.get());
+        mProfileSupplier = profileSupplier;
     }
 
     @VisibleForTesting
@@ -71,18 +102,50 @@ public class IphMessageService extends MessageService {
     @SuppressLint("CheckResult")
     @VisibleForTesting
     protected void dismiss() {
-        mTracker.shouldTriggerHelpUI(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
+        mTracker.shouldTriggerHelpUi(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
         mTracker.dismissed(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
+        dismissShownMessage();
     }
 
     @Override
-    public void addObserver(MessageObserver observer) {
-        super.addObserver(observer);
-        mTracker.addOnInitializedCallback(mInitializedCallback);
+    public void initialize(
+            ServiceDismissActionProvider<@MessageType Integer> serviceDismissActionProvider) {
+        super.initialize(serviceDismissActionProvider);
+        if (mTracker.isInitialized()) {
+            mInitializedCallback.onResult(true);
+        } else {
+            mTracker.addOnInitializedCallback(mInitializedCallback);
+        }
     }
 
-    @VisibleForTesting
     protected Callback<Boolean> getInitializedCallbackForTesting() {
         return mInitializedCallback;
+    }
+
+    /**
+     * Whether to trigger the IPH taking into account testing configuration. By default the IPH is
+     * not shown in tests.
+     */
+    private boolean wouldTriggerIph() {
+        boolean wouldTriggerIph =
+                mTracker.wouldTriggerHelpUi(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
+        boolean skipForTests = BuildConfig.IS_FOR_TEST && sSkipIphInTests;
+        return wouldTriggerIph && !skipForTests;
+    }
+
+    /** Sets whether to skip the IPH for testing. By default the IPH is skipped. */
+    static void setSkipIphInTestsForTesting(boolean skipIphInTests) {
+        boolean oldValue = sSkipIphInTests;
+        sSkipIphInTests = skipIphInTests;
+        ResettersForTesting.register(() -> sSkipIphInTests = oldValue);
+    }
+
+    private PropertyModel buildModel(
+            ServiceDismissActionProvider<@MessageType Integer> serviceActionProvider) {
+        boolean isIncognito = mProfileSupplier.get().isIncognitoBranded();
+        return IphMessageCardViewModel.create(
+                mContext,
+                serviceActionProvider,
+                new IphMessageData(this::review, this::dismiss, isIncognito));
     }
 }

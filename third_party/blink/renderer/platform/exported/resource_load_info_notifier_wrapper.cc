@@ -4,20 +4,26 @@
 
 #include "third_party/blink/public/platform/resource_load_info_notifier_wrapper.h"
 
-#include "base/bind.h"
+#include "base/byte_count.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "net/base/ip_endpoint.h"
 #include "net/url_request/redirect_info.h"
-#include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "services/network/public/mojom/url_loader_completion_status.mojom-blink.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/network_utils.h"
 #include "third_party/blink/public/common/loader/record_load_histograms.h"
 #include "third_party/blink/public/common/loader/resource_type_util.h"
-#include "third_party/blink/public/mojom/loader/resource_load_info_notifier.mojom.h"
+#include "third_party/blink/public/mojom/loader/resource_load_info_notifier.mojom-blink.h"
 #include "third_party/blink/public/platform/weak_wrapper_resource_load_info_notifier.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_copier_mojo.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_copier_url.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -36,14 +42,14 @@ ResourceLoadInfoNotifierWrapper::ResourceLoadInfoNotifierWrapper(
           std::move(weak_wrapper_resource_load_info_notifier)),
       task_runner_(std::move(task_runner)) {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  DETACH_FROM_THREAD(thread_checker_);
+  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 ResourceLoadInfoNotifierWrapper::~ResourceLoadInfoNotifierWrapper() = default;
 
 #if BUILDFLAG(IS_ANDROID)
 void ResourceLoadInfoNotifierWrapper::NotifyUpdateUserGestureCarryoverInfo() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (task_runner_->BelongsToCurrentThread()) {
     if (weak_wrapper_resource_load_info_notifier_) {
       weak_wrapper_resource_load_info_notifier_
@@ -51,10 +57,11 @@ void ResourceLoadInfoNotifierWrapper::NotifyUpdateUserGestureCarryoverInfo() {
     }
     return;
   }
-  task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&mojom::ResourceLoadInfoNotifier::
-                                    NotifyUpdateUserGestureCarryoverInfo,
-                                weak_wrapper_resource_load_info_notifier_));
+  PostCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(&mojom::ResourceLoadInfoNotifier::
+                              NotifyUpdateUserGestureCarryoverInfo,
+                          weak_wrapper_resource_load_info_notifier_));
 }
 #endif
 
@@ -64,10 +71,9 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadInitiated(
     const std::string& http_method,
     const GURL& referrer,
     network::mojom::RequestDestination request_destination,
-    net::RequestPriority request_priority) {
-  // Should bind |thread_checker_| to the caller's thread and class member
-  // functions expect ctor/dtor should be called from the same thread.
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    net::RequestPriority request_priority,
+    bool is_ad_resource) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   DCHECK(!resource_load_info_);
   resource_load_info_ = mojom::ResourceLoadInfo::New();
@@ -79,12 +85,13 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadInitiated(
   resource_load_info_->referrer = referrer;
   resource_load_info_->network_info = mojom::CommonNetworkInfo::New();
   resource_load_info_->request_priority = request_priority;
+  is_ad_resource_ = is_ad_resource;
 }
 
 void ResourceLoadInfoNotifierWrapper::NotifyResourceRedirectReceived(
     const net::RedirectInfo& redirect_info,
     network::mojom::URLResponseHeadPtr redirect_response) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(resource_load_info_);
   resource_load_info_->final_url = redirect_info.new_url;
   resource_load_info_->method = redirect_info.new_method;
@@ -105,17 +112,15 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceRedirectReceived(
 
 void ResourceLoadInfoNotifierWrapper::NotifyResourceResponseReceived(
     network::mojom::URLResponseHeadPtr response_head) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (response_head->network_accessed) {
     if (resource_load_info_->request_destination ==
         network::mojom::RequestDestination::kDocument) {
       UMA_HISTOGRAM_ENUMERATION("Net.ConnectionInfo.MainFrame",
-                                response_head->connection_info,
-                                net::HttpResponseInfo::NUM_OF_CONNECTION_INFOS);
+                                response_head->connection_info);
     } else {
       UMA_HISTOGRAM_ENUMERATION("Net.ConnectionInfo.SubResource",
-                                response_head->connection_info,
-                                net::HttpResponseInfo::NUM_OF_CONNECTION_INFOS);
+                                response_head->connection_info);
     }
   }
 
@@ -127,13 +132,22 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceResponseReceived(
       network_utils::AlwaysAccessNetwork(response_head->headers);
   resource_load_info_->network_info->remote_endpoint =
       response_head->remote_endpoint;
+  // TODO: crbug.com/398226457 - Investigate request failure scenarios.
+  resource_load_info_->proxy_chain = response_head->proxy_chain;
+  resource_load_info_->did_use_server_http_auth =
+      response_head->did_use_server_http_auth;
+  if (response_head->headers) {
+    resource_load_info_->http_status_code =
+        response_head->headers->response_code();
+  }
 
   if (task_runner_->BelongsToCurrentThread()) {
     if (weak_wrapper_resource_load_info_notifier_) {
       weak_wrapper_resource_load_info_notifier_->NotifyResourceResponseReceived(
           resource_load_info_->request_id,
           url::SchemeHostPort(resource_load_info_->final_url),
-          std::move(response_head), resource_load_info_->request_destination);
+          std::move(response_head), resource_load_info_->request_destination,
+          is_ad_resource_);
     }
     return;
   }
@@ -143,19 +157,20 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceResponseReceived(
     response_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
         response_head->headers->raw_headers());
   }
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
+  PostCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(
           &mojom::ResourceLoadInfoNotifier::NotifyResourceResponseReceived,
           weak_wrapper_resource_load_info_notifier_,
           resource_load_info_->request_id,
           url::SchemeHostPort(resource_load_info_->final_url),
-          std::move(response_head), resource_load_info_->request_destination));
+          std::move(response_head), resource_load_info_->request_destination,
+          is_ad_resource_));
 }
 
 void ResourceLoadInfoNotifierWrapper::NotifyResourceTransferSizeUpdated(
     int32_t transfer_size_diff) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (task_runner_->BelongsToCurrentThread()) {
     if (weak_wrapper_resource_load_info_notifier_) {
       weak_wrapper_resource_load_info_notifier_
@@ -164,9 +179,9 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceTransferSizeUpdated(
     }
     return;
   }
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
+  PostCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(
           &mojom::ResourceLoadInfoNotifier::NotifyResourceTransferSizeUpdated,
           weak_wrapper_resource_load_info_notifier_,
           resource_load_info_->request_id, transfer_size_diff));
@@ -174,17 +189,17 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceTransferSizeUpdated(
 
 void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadCompleted(
     const network::URLLoaderCompletionStatus& status) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RecordLoadHistograms(url::Origin::Create(resource_load_info_->final_url),
                        resource_load_info_->request_destination,
                        status.error_code);
 
   resource_load_info_->was_cached = status.exists_in_cache;
-  resource_load_info_->was_in_network_service_memory_cache =
-      status.exists_in_memory_cache;
   resource_load_info_->net_error = status.error_code;
-  resource_load_info_->total_received_bytes = status.encoded_data_length;
-  resource_load_info_->raw_body_bytes = status.encoded_body_length;
+  resource_load_info_->total_received_bytes =
+      base::ByteCount(status.encoded_data_length);
+  resource_load_info_->raw_body_bytes =
+      base::ByteCount(status.encoded_body_length);
 
   if (task_runner_->BelongsToCurrentThread()) {
     if (weak_wrapper_resource_load_info_notifier_) {
@@ -193,9 +208,9 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadCompleted(
     }
     return;
   }
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
+  PostCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(
           &mojom::ResourceLoadInfoNotifier::NotifyResourceLoadCompleted,
           weak_wrapper_resource_load_info_notifier_,
           std::move(resource_load_info_), status));
@@ -203,7 +218,7 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadCompleted(
 
 void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadCanceled(
     int net_error) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RecordLoadHistograms(url::Origin::Create(resource_load_info_->final_url),
                        resource_load_info_->request_destination, net_error);
 
@@ -214,9 +229,9 @@ void ResourceLoadInfoNotifierWrapper::NotifyResourceLoadCanceled(
     }
     return;
   }
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
+  PostCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(
           &mojom::ResourceLoadInfoNotifier::NotifyResourceLoadCanceled,
           weak_wrapper_resource_load_info_notifier_,
           resource_load_info_->request_id));

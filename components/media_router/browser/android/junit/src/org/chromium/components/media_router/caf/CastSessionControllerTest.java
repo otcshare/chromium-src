@@ -8,16 +8,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
-
-import android.content.Context;
 
 import com.google.android.gms.cast.ApplicationMetadata;
 import com.google.android.gms.cast.Cast;
@@ -35,50 +33,27 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.media_router.CastSessionUtil;
 import org.chromium.components.media_router.MediaRouterClient;
-import org.chromium.components.media_router.MediaSink;
-import org.chromium.components.media_router.MediaSource;
 import org.chromium.components.media_router.TestMediaRouterClient;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Robolectric tests for CastSessionController.
- */
+/** Robolectric tests for CastSessionController. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class CastSessionControllerTest {
-    private static final String PRESENTATION_ID = "presentation-id";
-    private static final String ORIGIN = "https://example.com/";
-    private static final int TAB_ID = 1;
-    private static final String APP_ID = "12345678";
-
-    @Mock
-    private CastDevice mCastDevice;
-    @Mock
-    private CafMediaRouteProvider mProvider;
-    @Mock
-    private MediaSource mSource;
-    @Mock
-    private MediaSink mSink;
-    @Mock
-    private CastSession mCastSession;
-    @Mock
-    private RemoteMediaClient mRemoteMediaClient;
-    @Mock
-    private CafMessageHandler mMessageHandler;
-    @Mock
-    private ApplicationMetadata mApplicationMetadata;
+    @Mock private CastDevice mCastDevice;
+    @Mock private CafMediaRouteProvider mProvider;
+    @Mock private CastSession mCastSession;
+    @Mock private RemoteMediaClient mRemoteMediaClient;
+    @Mock private CafMessageHandler mMessageHandler;
+    @Mock private ApplicationMetadata mApplicationMetadata;
     private CastSessionController mController;
-    private CreateRouteRequestInfo mRequestInfo;
-    private MediaRouterTestHelper mMediaRouterHelper;
-    private Context mContext;
 
     @Before
     public void setUp() {
@@ -86,8 +61,6 @@ public class CastSessionControllerTest {
 
         MediaRouterClient.setInstance(new TestMediaRouterClient());
 
-        mContext = RuntimeEnvironment.application;
-        mMediaRouterHelper = new MediaRouterTestHelper();
         mController = spy(new CastSessionController(mProvider));
         mController.initNestedFieldsForTesting();
 
@@ -158,31 +131,31 @@ public class CastSessionControllerTest {
 
     @Test
     public void testUpdateNamespaces() throws Exception {
-        org.robolectric.shadows.ShadowLog.stream = System.out;
-        InOrder inOrder = inOrder(mCastSession);
 
         mController.attachToCastSession(mCastSession);
 
         List<String> namespaces = new ArrayList<>();
         List<String> observedNamespaces = new ArrayList<>();
         doReturn(namespaces).when(mApplicationMetadata).getSupportedNamespaces();
-        doAnswer(new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) {
-                observedNamespaces.add((String) (invocation.getArguments()[0]));
-                return null;
-            }
-        })
+        doAnswer(
+                        new Answer<>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) {
+                                observedNamespaces.add((String) invocation.getArguments()[0]);
+                                return null;
+                            }
+                        })
                 .when(mCastSession)
                 .setMessageReceivedCallbacks(
                         any(String.class), any(Cast.MessageReceivedCallback.class));
-        doAnswer(new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) {
-                observedNamespaces.remove((String) (invocation.getArguments()[0]));
-                return null;
-            }
-        })
+        doAnswer(
+                        new Answer<>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) {
+                                observedNamespaces.remove((String) invocation.getArguments()[0]);
+                                return null;
+                            }
+                        })
                 .when(mCastSession)
                 .removeMessageReceivedCallbacks(any(String.class));
 

@@ -4,19 +4,22 @@
 
 #include "third_party/blink/renderer/platform/blob/blob_bytes_provider.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -75,33 +78,31 @@ TEST_F(BlobBytesProviderTest, Consolidation) {
   auto data = CreateProvider();
   DCHECK_CALLED_ON_VALID_SEQUENCE(data->sequence_checker_);
 
-  data->AppendData(base::make_span("abc", 3));
-  data->AppendData(base::make_span("def", 3));
-  data->AppendData(base::make_span("ps1", 3));
-  data->AppendData(base::make_span("ps2", 3));
+  data->AppendData(base::span_from_cstring("abc"));
+  data->AppendData(base::span_from_cstring("def"));
+  data->AppendData(base::span_from_cstring("ps1"));
+  data->AppendData(base::span_from_cstring("ps2"));
 
   EXPECT_EQ(1u, data->data_.size());
-  EXPECT_EQ(12u, data->data_[0]->length());
-  EXPECT_EQ(0, memcmp(data->data_[0]->data(), "abcdefps1ps2", 12));
+  EXPECT_EQ(data->data_[0]->span(), base::span_from_cstring("abcdefps1ps2"));
 
-  auto large_data = std::make_unique<char[]>(
+  auto large_data = base::HeapArray<char>::WithSize(
       BlobBytesProvider::kMaxConsolidatedItemSizeInBytes);
-  data->AppendData(base::make_span(
-      large_data.get(), BlobBytesProvider::kMaxConsolidatedItemSizeInBytes));
+  data->AppendData(large_data);
 
   EXPECT_EQ(2u, data->data_.size());
-  EXPECT_EQ(12u, data->data_[0]->length());
+  EXPECT_EQ(12u, data->data_[0]->size());
   EXPECT_EQ(BlobBytesProvider::kMaxConsolidatedItemSizeInBytes,
-            data->data_[1]->length());
+            data->data_[1]->size());
 }
 
 TEST_F(BlobBytesProviderTest, RequestAsReply) {
   auto provider = CreateProvider(test_data1_);
   Vector<uint8_t> received_bytes;
   provider->RequestAsReply(
-      base::BindOnce([](Vector<uint8_t>* bytes_out,
-                        const Vector<uint8_t>& bytes) { *bytes_out = bytes; },
-                     &received_bytes));
+      BindOnce([](Vector<uint8_t>* bytes_out,
+                  const Vector<uint8_t>& bytes) { *bytes_out = bytes; },
+               Unretained(&received_bytes)));
   EXPECT_EQ(test_bytes1_, received_bytes);
 
   received_bytes.clear();
@@ -110,9 +111,9 @@ TEST_F(BlobBytesProviderTest, RequestAsReply) {
   provider->AppendData(test_data2_);
   provider->AppendData(test_data3_);
   provider->RequestAsReply(
-      base::BindOnce([](Vector<uint8_t>* bytes_out,
-                        const Vector<uint8_t>& bytes) { *bytes_out = bytes; },
-                     &received_bytes));
+      BindOnce([](Vector<uint8_t>* bytes_out,
+                  const Vector<uint8_t>& bytes) { *bytes_out = bytes; },
+               Unretained(&received_bytes)));
   EXPECT_EQ(combined_bytes_, received_bytes);
 }
 
@@ -137,9 +138,10 @@ class RequestAsFile : public BlobBytesProviderTest,
     test_provider_->AppendData(test_data2_);
     test_provider_->AppendData(test_data3_);
 
-    sliced_data_.AppendRange(
-        combined_bytes_.begin() + GetParam().offset,
-        combined_bytes_.begin() + GetParam().offset + GetParam().size);
+    auto combined_bytes_span =
+        base::span(combined_bytes_).subspan(GetParam().offset, GetParam().size);
+    sliced_data_.AppendRange(combined_bytes_span.begin(),
+                             combined_bytes_span.end());
   }
 
   base::File DoRequestAsFile(uint64_t source_offset,
@@ -147,17 +149,17 @@ class RequestAsFile : public BlobBytesProviderTest,
                              uint64_t file_offset) {
     base::FilePath path;
     base::CreateTemporaryFile(&path);
-    absl::optional<base::Time> received_modified;
+    std::optional<base::Time> received_modified;
     test_provider_->RequestAsFile(
         source_offset, source_length,
         base::File(path, base::File::FLAG_OPEN | base::File::FLAG_WRITE),
         file_offset,
-        base::BindOnce(
-            [](absl::optional<base::Time>* received_modified,
-               absl::optional<base::Time> modified) {
+        blink::BindOnce(
+            [](std::optional<base::Time>* received_modified,
+               std::optional<base::Time> modified) {
               *received_modified = modified;
             },
-            &received_modified));
+            blink::Unretained(&received_modified)));
     base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
                               base::File::FLAG_DELETE_ON_CLOSE);
     base::File::Info info;
@@ -180,8 +182,7 @@ TEST_P(RequestAsFile, AtStartOfEmptyFile) {
   EXPECT_EQ(static_cast<int64_t>(test.size), info.size);
 
   Vector<uint8_t> read_data(test.size);
-  EXPECT_EQ(static_cast<int>(test.size),
-            file.Read(0, reinterpret_cast<char*>(read_data.data()), test.size));
+  EXPECT_TRUE(file.ReadAndCheck(0, read_data));
   EXPECT_EQ(sliced_data_, read_data);
 }
 
@@ -200,16 +201,14 @@ TEST_P(RequestAsFile, OffsetInEmptyFile) {
     EXPECT_EQ(static_cast<int64_t>(test.size) + 32, info.size);
 
     Vector<uint8_t> read_data(sliced_data_.size());
-    EXPECT_EQ(static_cast<int>(sliced_data_.size()),
-              file.Read(0, reinterpret_cast<char*>(read_data.data()),
-                        sliced_data_.size()));
+    EXPECT_TRUE(file.ReadAndCheck(0, read_data));
     EXPECT_EQ(sliced_data_, read_data);
   }
 }
 
 TEST_P(RequestAsFile, OffsetInNonEmptyFile) {
   FileTestData test = GetParam();
-  int file_offset = 23;
+  size_t file_offset = 23;
 
   Vector<uint8_t> expected_data(1024, 42);
 
@@ -217,18 +216,15 @@ TEST_P(RequestAsFile, OffsetInNonEmptyFile) {
   base::CreateTemporaryFile(&path);
   {
     base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
-    EXPECT_EQ(static_cast<int>(expected_data.size()),
-              file.WriteAtCurrentPos(
-                  reinterpret_cast<const char*>(expected_data.data()),
-                  expected_data.size()));
+    EXPECT_TRUE(file.WriteAtCurrentPosAndCheck(expected_data));
   }
 
-  base::ranges::copy(sliced_data_, expected_data.begin() + file_offset);
+  base::span(expected_data).subspan(file_offset).copy_prefix_from(sliced_data_);
 
   test_provider_->RequestAsFile(
       test.offset, test.size,
       base::File(path, base::File::FLAG_OPEN | base::File::FLAG_WRITE),
-      file_offset, base::BindOnce([](absl::optional<base::Time> last_modified) {
+      file_offset, BindOnce([](std::optional<base::Time> last_modified) {
         EXPECT_TRUE(last_modified);
       }));
 
@@ -239,9 +235,7 @@ TEST_P(RequestAsFile, OffsetInNonEmptyFile) {
   EXPECT_EQ(static_cast<int64_t>(expected_data.size()), info.size);
 
   Vector<uint8_t> read_data(expected_data.size());
-  EXPECT_EQ(static_cast<int>(expected_data.size()),
-            file.Read(0, reinterpret_cast<char*>(read_data.data()),
-                      expected_data.size()));
+  EXPECT_TRUE(file.ReadAndCheck(0, read_data));
   EXPECT_EQ(expected_data, read_data);
 }
 
@@ -275,10 +269,12 @@ TEST_F(BlobBytesProviderTest, RequestAsFile_MultipleChunks) {
     provider->RequestAsFile(
         i, 16, base::File(path, base::File::FLAG_OPEN | base::File::FLAG_WRITE),
         combined_bytes_.size() - i - 16,
-        base::BindOnce([](absl::optional<base::Time> last_modified) {
+        BindOnce([](std::optional<base::Time> last_modified) {
           EXPECT_TRUE(last_modified);
         }));
-    expected_data.insert(0, combined_bytes_.data() + i, 16);
+    auto combined_bytes_chunk = base::span(combined_bytes_).subspan(i, 16u);
+    expected_data.insert(0, combined_bytes_chunk.data(),
+                         combined_bytes_chunk.size());
   }
 
   base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
@@ -288,20 +284,17 @@ TEST_F(BlobBytesProviderTest, RequestAsFile_MultipleChunks) {
   EXPECT_EQ(static_cast<int64_t>(combined_bytes_.size()), info.size);
 
   Vector<uint8_t> read_data(expected_data.size());
-  EXPECT_EQ(static_cast<int>(expected_data.size()),
-            file.Read(0, reinterpret_cast<char*>(read_data.data()),
-                      expected_data.size()));
+  EXPECT_TRUE(file.ReadAndCheck(0, read_data));
   EXPECT_EQ(expected_data, read_data);
 }
 
 TEST_F(BlobBytesProviderTest, RequestAsFile_InvaldFile) {
   auto provider = CreateProvider(test_data1_);
 
-  provider->RequestAsFile(
-      0, 16, base::File(), 0,
-      base::BindOnce([](absl::optional<base::Time> last_modified) {
-        EXPECT_FALSE(last_modified);
-      }));
+  provider->RequestAsFile(0, 16, base::File(), 0,
+                          BindOnce([](std::optional<base::Time> last_modified) {
+                            EXPECT_FALSE(last_modified);
+                          }));
 }
 
 TEST_F(BlobBytesProviderTest, RequestAsFile_UnwritableFile) {
@@ -311,7 +304,7 @@ TEST_F(BlobBytesProviderTest, RequestAsFile_UnwritableFile) {
   base::CreateTemporaryFile(&path);
   provider->RequestAsFile(
       0, 16, base::File(path, base::File::FLAG_OPEN | base::File::FLAG_READ), 0,
-      base::BindOnce([](absl::optional<base::Time> last_modified) {
+      BindOnce([](std::optional<base::Time> last_modified) {
         EXPECT_FALSE(last_modified);
       }));
 
@@ -342,7 +335,7 @@ TEST_F(BlobBytesProviderTest, RequestAsStream) {
   watcher.Watch(
       consumer_handle.get(), MOJO_HANDLE_SIGNAL_READABLE,
       MOJO_WATCH_CONDITION_SATISFIED,
-      base::BindRepeating(
+      blink::BindRepeating(
           [](mojo::DataPipeConsumerHandle pipe,
              base::RepeatingClosure quit_closure, Vector<uint8_t>* bytes_out,
              MojoResult result, const mojo::HandleSignalsState& state) {
@@ -352,20 +345,22 @@ TEST_F(BlobBytesProviderTest, RequestAsStream) {
               return;
             }
 
-            uint32_t num_bytes = 0;
-            MojoResult query_result =
-                pipe.ReadData(nullptr, &num_bytes, MOJO_READ_DATA_FLAG_QUERY);
+            size_t num_bytes = 0;
+            MojoResult query_result = pipe.ReadData(
+                MOJO_READ_DATA_FLAG_QUERY, base::span<uint8_t>(), num_bytes);
             if (query_result == MOJO_RESULT_SHOULD_WAIT)
               return;
             EXPECT_EQ(MOJO_RESULT_OK, query_result);
 
             Vector<uint8_t> bytes(num_bytes);
-            EXPECT_EQ(MOJO_RESULT_OK,
-                      pipe.ReadData(bytes.data(), &num_bytes,
-                                    MOJO_READ_DATA_FLAG_ALL_OR_NONE));
+            EXPECT_EQ(
+                MOJO_RESULT_OK,
+                pipe.ReadData(MOJO_READ_DATA_FLAG_ALL_OR_NONE,
+                              base::as_writable_byte_span(bytes), num_bytes));
             bytes_out->AppendVector(bytes);
           },
-          consumer_handle.get(), loop.QuitClosure(), &received_data));
+          consumer_handle.get(), loop.QuitClosure(),
+          blink::Unretained(&received_data)));
   loop.Run();
 
   EXPECT_EQ(combined_bytes_, received_data);

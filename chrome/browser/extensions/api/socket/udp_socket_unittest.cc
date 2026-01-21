@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/api/socket/udp_socket.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -17,7 +20,6 @@
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "content/public/browser/storage_partition.h"
-#include "extensions/browser/api/socket/udp_socket.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/io_buffer.h"
@@ -32,7 +34,10 @@ namespace extensions {
 class UDPSocketUnitTest : public extensions::ExtensionServiceTestBase {
  protected:
   // extensions::ExtensionServiceTestBase:
-  void SetUp() override { InitializeEmptyExtensionService(); }
+  void SetUp() override {
+    extensions::ExtensionServiceTestBase::SetUp();
+    InitializeEmptyExtensionService();
+  }
 
   std::unique_ptr<UDPSocket> CreateSocket() {
     network::mojom::NetworkContext* network_context =
@@ -142,8 +147,7 @@ static void SendMulticastPacket(base::OnceClosure quit_run_loop,
                                 UDPSocket* src,
                                 int result) {
   if (result == 0) {
-    scoped_refptr<net::IOBuffer> data =
-        base::MakeRefCounted<net::WrappedIOBuffer>(kTestMessage);
+    auto data = base::MakeRefCounted<net::WrappedIOBuffer>(kTestMessage);
     src->Write(data, kTestMessageLength, base::BindOnce(&OnSendCompleted));
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
@@ -164,12 +168,13 @@ static void OnMulticastReadCompleted(base::OnceClosure quit_run_loop,
                                      const std::string& ip,
                                      uint16_t port) {
   EXPECT_EQ(kTestMessageLength, count);
-  EXPECT_EQ(0, strncmp(io_buffer->data(), kTestMessage, kTestMessageLength));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, strncmp(io_buffer->data(), kTestMessage, kTestMessageLength)));
   *packet_received = true;
   std::move(quit_run_loop).Run();
 }
 
-// TODO(https://crbug.com/1210643): Test is flaky on Mac.
+// TODO(crbug.com/40182531): Test is flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_TestUDPMulticastRecv DISABLED_TestUDPMulticastRecv
 #else

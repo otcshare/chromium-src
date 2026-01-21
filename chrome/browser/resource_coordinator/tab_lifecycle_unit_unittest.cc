@@ -8,36 +8,43 @@
 #include <string>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/observer_list.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/simple_test_clock.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
 #include "chrome/browser/notifications/notification_permission_context.h"
-#include "chrome/browser/resource_coordinator/intervention_policy_database.h"
-#include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
+#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "chrome/browser/resource_coordinator/tab_helper.h"
-#include "chrome/browser/resource_coordinator/tab_lifecycle_observer.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/resource_coordinator/tab_load_tracker.h"
-#include "chrome/browser/resource_coordinator/tab_manager_features.h"
 #include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
 #include "chrome/browser/resource_coordinator/time.h"
-#include "chrome/browser/resource_coordinator/usage_clock.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/tab_contents/form_interaction_tab_helper.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/test_browser_window.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/performance_manager/public/decorators/page_live_state_decorator.h"
+#include "components/performance_manager/public/graph/graph.h"
+#include "components/performance_manager/public/graph/page_node.h"
+#include "components/performance_manager/public/performance_manager.h"
+#include "components/performance_manager/test_support/test_harness_helper.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "content/public/test/navigation_simulator.h"
@@ -48,30 +55,20 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/permissions/system/system_permission_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace resource_coordinator {
 
 namespace {
 
 using LoadingState = TabLoadTracker::LoadingState;
-
-constexpr base::TimeDelta kShortDelay = base::Seconds(1);
-
-class MockTabLifecycleObserver : public TabLifecycleObserver {
- public:
-  MockTabLifecycleObserver() = default;
-
-  MockTabLifecycleObserver(const MockTabLifecycleObserver&) = delete;
-  MockTabLifecycleObserver& operator=(const MockTabLifecycleObserver&) = delete;
-
-  MOCK_METHOD3(OnDiscardedStateChange,
-               void(content::WebContents* contents,
-                    LifecycleUnitDiscardReason reason,
-                    bool is_discarded));
-  MOCK_METHOD2(OnAutoDiscardableStateChange,
-               void(content::WebContents* contents, bool is_auto_discardable));
-};
-
-}  // namespace
+using PageNode = performance_manager::PageNode;
+using PageLiveStateDecorator = performance_manager::PageLiveStateDecorator;
+using PerformanceManager = performance_manager::PerformanceManager;
+using performance_manager::policies::CannotDiscardReason;
 
 class MockLifecycleUnitObserver : public LifecycleUnitObserver {
  public:
@@ -81,14 +78,22 @@ class MockLifecycleUnitObserver : public LifecycleUnitObserver {
   MockLifecycleUnitObserver& operator=(const MockLifecycleUnitObserver&) =
       delete;
 
-  MOCK_METHOD3(OnLifecycleUnitStateChanged,
-               void(LifecycleUnit*,
-                    LifecycleUnitState,
-                    LifecycleUnitStateChangeReason));
-  MOCK_METHOD1(OnLifecycleUnitDestroyed, void(LifecycleUnit*));
-  MOCK_METHOD2(OnLifecycleUnitVisibilityChanged,
-               void(LifecycleUnit*, content::Visibility));
+  MOCK_METHOD(void,
+              OnLifecycleUnitStateChanged,
+              (LifecycleUnit*, LifecycleUnitState),
+              (override));
 };
+
+class MockPageLiveStateObserver
+    : public performance_manager::PageLiveStateObserver {
+ public:
+  MOCK_METHOD(void,
+              OnIsAutoDiscardableChanged,
+              (const PageNode* page_node),
+              (override));
+};
+
+}  // namespace
 
 class TabLifecycleUnitTest : public ChromeRenderViewHostTestHarness {
  protected:
@@ -98,20 +103,31 @@ class TabLifecycleUnitTest : public ChromeRenderViewHostTestHarness {
   // TabLifecycleUnitTest.
   class ScopedEnterpriseOptOut;
 
-  TabLifecycleUnitTest() : scoped_set_tick_clock_for_testing_(&test_clock_) {
+  TabLifecycleUnitTest()
+      : scoped_set_clocks_for_testing_(&test_clock_, &test_tick_clock_) {
+    test_clock_.SetNow(base::Time::NowFromSystemTime());
     // Advance the clock so that it doesn't yield null time ticks.
-    test_clock_.Advance(base::Seconds(1));
-    observers_.AddObserver(&observer_);
+    test_tick_clock_.Advance(base::Seconds(1));
   }
 
   TabLifecycleUnitTest(const TabLifecycleUnitTest&) = delete;
   TabLifecycleUnitTest& operator=(const TabLifecycleUnitTest&) = delete;
 
   void SetUp() override {
+    TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+        /*profile_manager=*/false);
     ChromeRenderViewHostTestHarness::SetUp();
+    pm_helper_.SetUp();
+
+    PerformanceManager::GetGraph()->PassToGraph(
+        std::make_unique<PageLiveStateDecorator>());
+
+    // FormInteractionTabHelper asserts that its observer exists whenever
+    // PerformanceManager is initialized.
+    PerformanceManager::GetGraph()->PassToGraph(
+        FormInteractionTabHelper::CreateGraphObserver());
 
     metrics::DesktopSessionDurationTracker::Initialize();
-    usage_clock_ = std::make_unique<UsageClock>();
 
     // Force TabManager/TabLifecycleUnitSource creation.
     g_browser_process->GetTabManager();
@@ -120,7 +136,8 @@ class TabLifecycleUnitTest : public ChromeRenderViewHostTestHarness {
         CreateTestWebContents();
     web_contents_ = test_web_contents.get();
     auto* tester = content::WebContentsTester::For(web_contents_);
-    tester->SetLastActiveTime(NowTicks());
+    tester->SetLastActiveTimeTicks(NowTicks());
+    tester->SetLastActiveTime(Now());
     ResourceCoordinatorTabHelper::CreateForWebContents(web_contents_);
     // Commit an URL to allow discarding.
     auto navigation = content::NavigationSimulator::CreateBrowserInitiated(
@@ -139,15 +156,22 @@ class TabLifecycleUnitTest : public ChromeRenderViewHostTestHarness {
     tab_strip_model_->AppendWebContents(std::move(second_web_contents),
                                         /*foreground=*/true);
     raw_second_web_contents->WasHidden();
+
+    performance_manager::Graph* graph = PerformanceManager::GetGraph();
+    graph->PassToGraph(
+        std::make_unique<
+            performance_manager::policies::DiscardEligibilityPolicy>());
   }
 
   void TearDown() override {
-    while (!tab_strip_model_->empty())
+    while (!tab_strip_model_->empty()) {
       tab_strip_model_->DetachAndDeleteWebContentsAt(0);
+    }
     tab_strip_model_.reset();
-    usage_clock_.reset();
     metrics::DesktopSessionDurationTracker::CleanupForTesting();
+    pm_helper_.TearDown();
     ChromeRenderViewHostTestHarness::TearDown();
+    TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
   }
 
   // Create a new test WebContents and append it to the tab strip to allow
@@ -163,17 +187,28 @@ class TabLifecycleUnitTest : public ChromeRenderViewHostTestHarness {
     return web_contents;
   }
 
-  ::testing::StrictMock<MockTabLifecycleObserver> observer_;
-  base::ObserverList<TabLifecycleObserver>::Unchecked observers_;
-  raw_ptr<content::WebContents> web_contents_;  // Owned by tab_strip_model_.
+  // Create a new test WebContents, as in AddNewHiddenWebContentsToTabStrip().
+  // If the TabLifecycleUnitSource is observing the tab strip, returns the
+  // TabLifecycleUnit that it created for the WebContents, otherwise returns
+  // nullptr. (By default tests don't observe the tab strip so that they can
+  // manually create TabLifecycleUnits.)
+  TabLifecycleUnit* AddNewHiddenLifecycleUnitToTabStrip() {
+    content::WebContents* contents = AddNewHiddenWebContentsToTabStrip();
+    return GetTabLifecycleUnitSource()->GetTabLifecycleUnit(contents);
+  }
+
+  raw_ptr<content::WebContents, DanglingUntriaged>
+      web_contents_;  // Owned by tab_strip_model_.
   std::unique_ptr<TabStripModel> tab_strip_model_;
-  base::SimpleTestTickClock test_clock_;
-  std::unique_ptr<UsageClock> usage_clock_;
+  base::SimpleTestClock test_clock_;
+  base::SimpleTestTickClock test_tick_clock_;
 
  private:
   // So that the main thread looks like the UI thread as expected.
   TestTabStripModelDelegate tab_strip_model_delegate_;
-  ScopedSetTickClockForTesting scoped_set_tick_clock_for_testing_;
+  ScopedSetClocksForTesting scoped_set_clocks_for_testing_;
+  const tabs::TabModel::PreventFeatureInitializationForTesting prevent_;
+  performance_manager::PerformanceManagerTestHarnessHelper pm_helper_;
 };
 
 class TabLifecycleUnitTest::ScopedEnterpriseOptOut {
@@ -188,140 +223,85 @@ class TabLifecycleUnitTest::ScopedEnterpriseOptOut {
 };
 
 TEST_F(TabLifecycleUnitTest, AsTabLifecycleUnitExternal) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(),
+                                      web_contents_, tab_strip_model_.get());
   EXPECT_TRUE(tab_lifecycle_unit.AsTabLifecycleUnitExternal());
 }
 
 TEST_F(TabLifecycleUnitTest, CanDiscardByDefault) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, SetFocused) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  EXPECT_EQ(NowTicks(), tab_lifecycle_unit.GetLastFocusedTime());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  tab_lifecycle_unit.SetFocused(true);
-  tab_strip_model_->ActivateTabAt(0);
-  web_contents_->WasShown();
-  EXPECT_EQ(base::TimeTicks::Max(), tab_lifecycle_unit.GetLastFocusedTime());
-  ExpectCanDiscardFalseAllReasons(&tab_lifecycle_unit,
-                                  DecisionFailureReason::LIVE_STATE_VISIBLE);
-
-  tab_lifecycle_unit.SetFocused(false);
-  tab_strip_model_->ActivateTabAt(1);
-  web_contents_->WasHidden();
-  EXPECT_EQ(test_clock_.NowTicks(), tab_lifecycle_unit.GetLastFocusedTime());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(),
+                                      web_contents_, tab_strip_model_.get());
   ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
 }
 
 TEST_F(TabLifecycleUnitTest, AutoDiscardable) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
+  base::WeakPtr<PageNode> page_node =
+      PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents_);
+  ASSERT_TRUE(page_node);
+  auto* page_live_state_data =
+      PageLiveStateDecorator::Data::GetOrCreateForPageNode(page_node.get());
 
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
+  ::testing::StrictMock<MockPageLiveStateObserver> page_observer;
+  base::ScopedObservation<PageLiveStateDecorator::Data,
+                          MockPageLiveStateObserver>
+      page_observation(&page_observer);
+  page_observation.Observe(page_live_state_data);
+
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(),
+                                      web_contents_, tab_strip_model_.get());
+
   EXPECT_TRUE(tab_lifecycle_unit.IsAutoDiscardable());
+  EXPECT_TRUE(page_live_state_data->IsAutoDiscardable());
   ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
 
-  EXPECT_CALL(observer_,
-              OnAutoDiscardableStateChange(web_contents_.get(), false));
+  EXPECT_CALL(page_observer, OnIsAutoDiscardableChanged(page_node.get()));
   tab_lifecycle_unit.SetAutoDiscardable(false);
-  ::testing::Mock::VerifyAndClear(&observer_);
+  ::testing::Mock::VerifyAndClear(&page_observer);
   EXPECT_FALSE(tab_lifecycle_unit.IsAutoDiscardable());
-  ExpectCanDiscardFalseAllReasons(
-      &tab_lifecycle_unit,
-      DecisionFailureReason::LIVE_STATE_EXTENSION_DISALLOWED);
+  EXPECT_FALSE(page_live_state_data->IsAutoDiscardable());
+  ExpectCanDiscardFalse(&tab_lifecycle_unit,
+                        CannotDiscardReason::kExtensionProtected,
+                        LifecycleUnitDiscardReason::URGENT);
+  // Auto discardable shouldn't change external discard behavior.
+  ExpectCanDiscardTrue(&tab_lifecycle_unit,
+                       LifecycleUnitDiscardReason::EXTERNAL);
 
-  EXPECT_CALL(observer_,
-              OnAutoDiscardableStateChange(web_contents_.get(), true));
+  EXPECT_CALL(page_observer, OnIsAutoDiscardableChanged(page_node.get()));
   tab_lifecycle_unit.SetAutoDiscardable(true);
-  ::testing::Mock::VerifyAndClear(&observer_);
+  ::testing::Mock::VerifyAndClear(&page_observer);
   EXPECT_TRUE(tab_lifecycle_unit.IsAutoDiscardable());
+  EXPECT_TRUE(page_live_state_data->IsAutoDiscardable());
   ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
 }
 
-TEST_F(TabLifecycleUnitTest, CannotDiscardCrashed) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
+TEST_F(TabLifecycleUnitTest, AutoDiscardablePersistsThroughDiscard) {
+  // Start observing the TabStripModel so that TabLifecycleUnitSource will be
+  // informed when the tab is discarded. TabLifecycleUnitSource expects to fully
+  // manage TabLifecycleUnits after this, so create a new WebContents that will
+  // get a TabLifecycleUnit attached.
+  tab_strip_model_->AddObserver(GetTabLifecycleUnitSource());
+  TabLifecycleUnit* tab_lifecycle_unit = AddNewHiddenLifecycleUnitToTabStrip();
 
-  auto* tester = content::WebContentsTester::For(web_contents_);
-  tester->SetIsCrashed(base::TERMINATION_STATUS_PROCESS_CRASHED, 0);
-  ExpectCanDiscardFalseTrivialAllReasons(&tab_lifecycle_unit);
+  tab_lifecycle_unit->SetAutoDiscardable(false);
+
+  // Manual discard by an extension is allowed when AutoDiscardable is false.
+  EXPECT_TRUE(
+      tab_lifecycle_unit->DiscardTab(LifecycleUnitDiscardReason::EXTERNAL, 0));
+  EXPECT_FALSE(tab_lifecycle_unit->IsAutoDiscardable());
+  EXPECT_FALSE(PageLiveStateDecorator::IsAutoDiscardable(
+      tab_lifecycle_unit->GetWebContents()));
+
+  EXPECT_TRUE(tab_lifecycle_unit->Load());
+  EXPECT_FALSE(tab_lifecycle_unit->IsAutoDiscardable());
+  EXPECT_FALSE(PageLiveStateDecorator::IsAutoDiscardable(
+      tab_lifecycle_unit->GetWebContents()));
+
+  tab_strip_model_->RemoveObserver(GetTabLifecycleUnitSource());
 }
-
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-TEST_F(TabLifecycleUnitTest, CannotDiscardActive) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-
-  tab_strip_model_->ActivateTabAt(0);
-
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-
-  ExpectCanDiscardFalseAllReasons(&tab_lifecycle_unit,
-                                  DecisionFailureReason::LIVE_STATE_VISIBLE);
-}
-
-TEST_F(TabLifecycleUnitTest, UrgentDiscardProtections) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Initial external discarding are fine, but urgent discarding is blocked
-  // because the tab is too recent.
-  ExpectCanDiscardTrue(&tab_lifecycle_unit,
-                       LifecycleUnitDiscardReason::EXTERNAL);
-  ExpectCanDiscardFalseTrivial(&tab_lifecycle_unit,
-                               LifecycleUnitDiscardReason::URGENT);
-
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-
-  // The tab should now be discardable for all reasons.
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  // Mark the tab as having been discarded.
-  tab_lifecycle_unit.SetDiscardCountForTesting(1);
-
-  // Advance time enough that the time protection no longer applies. The tab
-  // should still not be urgent discardable at this point, because it has
-  // already been discarded at least once.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-
-  // External discarding should be fine, but not urgent.
-  ExpectCanDiscardTrue(&tab_lifecycle_unit,
-                       LifecycleUnitDiscardReason::EXTERNAL);
-  ExpectCanDiscardFalseTrivial(&tab_lifecycle_unit,
-                               LifecycleUnitDiscardReason::URGENT);
-
-  // The tab should be discardable a second time when the memory limit
-  // enterprise policy is set.
-  GetTabLifecycleUnitSource()->SetMemoryLimitEnterprisePolicyFlag(true);
-  ExpectCanDiscardTrue(&tab_lifecycle_unit, LifecycleUnitDiscardReason::URGENT);
-}
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
 TEST_F(TabLifecycleUnitTest, CannotDiscardInvalidURL) {
   content::WebContents* web_contents = AddNewHiddenWebContentsToTabStrip();
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents,
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), web_contents,
                                       tab_strip_model_.get());
   // TODO(sebmarchand): Fix this test, this doesn't really test that it's not
   // possible to discard an invalid URL, TestWebContents::GetLastCommittedURL()
@@ -334,181 +314,140 @@ TEST_F(TabLifecycleUnitTest, CannotDiscardInvalidURL) {
 
 TEST_F(TabLifecycleUnitTest, CannotDiscardEmptyURL) {
   content::WebContents* web_contents = AddNewHiddenWebContentsToTabStrip();
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents,
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), web_contents,
                                       tab_strip_model_.get());
 
   ExpectCanDiscardFalseTrivialAllReasons(&tab_lifecycle_unit);
 }
 
-TEST_F(TabLifecycleUnitTest, CannotDiscardVideoCapture) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  blink::mojom::StreamDevices devices;
-  devices.video_device = blink::MediaStreamDevice(
-      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE, "fake_media_device",
-      "fake_media_device");
-
-  std::unique_ptr<content::MediaStreamUI> ui =
-      MediaCaptureDevicesDispatcher::GetInstance()
-          ->GetMediaStreamCaptureIndicator()
-          ->RegisterMediaStream(web_contents_, devices);
-  ui->OnStarted(base::RepeatingClosure(),
-                content::MediaStreamUI::SourceCallback(),
-                /*label=*/std::string(), /*screen_capture_ids=*/{},
-                content::MediaStreamUI::StateChangeCallback());
-  ExpectCanDiscardFalseAllReasons(&tab_lifecycle_unit,
-                                  DecisionFailureReason::LIVE_STATE_CAPTURING);
-
-  ui.reset();
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, CannotDiscardHasFormInteractions) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  FormInteractionTabHelper::CreateForWebContents(web_contents_);
-  FormInteractionTabHelper::FromWebContents(web_contents_)
-      ->OnHadFormInteractionChangedForTesting(true);
-  ExpectCanDiscardFalseAllReasons(&tab_lifecycle_unit,
-                                  DecisionFailureReason::LIVE_STATE_FORM_ENTRY);
-
-  FormInteractionTabHelper::FromWebContents(web_contents_)
-      ->OnHadFormInteractionChangedForTesting(false);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, CannotDiscardDesktopCapture) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  blink::mojom::StreamDevices devices;
-  devices.video_device = blink::MediaStreamDevice(
-      blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE,
-      "fake_media_device", "fake_media_device");
-  std::unique_ptr<content::MediaStreamUI> ui =
-      MediaCaptureDevicesDispatcher::GetInstance()
-          ->GetMediaStreamCaptureIndicator()
-          ->RegisterMediaStream(web_contents_, devices);
-  ui->OnStarted(base::RepeatingClosure(),
-                content::MediaStreamUI::SourceCallback(),
-                /*label=*/std::string(), /*screen_capture_ids=*/{},
-                content::MediaStreamUI::StateChangeCallback());
-  ExpectCanDiscardFalseAllReasons(
-      &tab_lifecycle_unit, DecisionFailureReason::LIVE_STATE_DESKTOP_CAPTURE);
-
-  ui.reset();
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, CannotDiscardRecentlyAudible) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  // Cannot discard when the "recently audible" bit is set.
-  tab_lifecycle_unit.SetRecentlyAudible(true);
-  ExpectCanDiscardFalseAllReasons(
-      &tab_lifecycle_unit, DecisionFailureReason::LIVE_STATE_PLAYING_AUDIO);
-
-  // The "recently audible" bit is still set. The tab cannot be discarded.
-  test_clock_.Advance(kTabAudioProtectionTime);
-  ExpectCanDiscardFalseAllReasons(
-      &tab_lifecycle_unit, DecisionFailureReason::LIVE_STATE_PLAYING_AUDIO);
-
-  // The "recently audible" bit was unset less than
-  // kTabAudioProtectionTime ago. The tab cannot be discarded.
-  tab_lifecycle_unit.SetRecentlyAudible(false);
-  test_clock_.Advance(kShortDelay);
-  ExpectCanDiscardFalseAllReasons(
-      &tab_lifecycle_unit, DecisionFailureReason::LIVE_STATE_PLAYING_AUDIO);
-
-  // The "recently audible" bit was unset kTabAudioProtectionTime ago. The tab
-  // can be discarded.
-  test_clock_.Advance(kTabAudioProtectionTime - kShortDelay);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  // Calling SetRecentlyAudible(false) again does not change the fact that the
-  // tab can be discarded.
-  tab_lifecycle_unit.SetRecentlyAudible(false);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, CanDiscardNeverAudibleTab) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  tab_lifecycle_unit.SetRecentlyAudible(false);
-  // Since the tab was never audible, it should be possible to discard it,
-  // even if there was a recent call to SetRecentlyAudible(false).
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-}
-
-TEST_F(TabLifecycleUnitTest, CannotDiscardPDF) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-  // Advance time enough that the tab is urgent discardable.
-  test_clock_.Advance(kBackgroundUrgentProtectionTime);
-  ExpectCanDiscardTrueAllReasons(&tab_lifecycle_unit);
-
-  content::WebContentsTester::For(web_contents_)
-      ->SetMainFrameMimeType("application/pdf");
-  ExpectCanDiscardFalseAllReasons(&tab_lifecycle_unit,
-                                  DecisionFailureReason::LIVE_STATE_IS_PDF);
-}
-
-TEST_F(TabLifecycleUnitTest, NotifiedOfWebContentsVisibilityChanges) {
-  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(), &observers_,
-                                      usage_clock_.get(), web_contents_,
-                                      tab_strip_model_.get());
-
-  ::testing::StrictMock<MockLifecycleUnitObserver> observer;
-  tab_lifecycle_unit.AddObserver(&observer);
-
-  EXPECT_CALL(observer, OnLifecycleUnitVisibilityChanged(
-                            &tab_lifecycle_unit, content::Visibility::VISIBLE));
+// Verify the initial GetWallTimeWhenHidden() of a visible LifecycleUnit.
+TEST_F(TabLifecycleUnitTest, InitialLastActiveTimeForVisibleLifecycleUnit) {
   web_contents_->WasShown();
-  ::testing::Mock::VerifyAndClear(&observer);
+  TabLifecycleUnit lifecycle_unit(GetTabLifecycleUnitSource(), web_contents_,
+                                  tab_strip_model_.get());
+  EXPECT_EQ(base::TimeTicks::Max(),
+            lifecycle_unit.GetWallTimeWhenHiddenForTesting());
+}
 
-  EXPECT_CALL(observer, OnLifecycleUnitVisibilityChanged(
-                            &tab_lifecycle_unit, content::Visibility::HIDDEN));
+// Verify the initial GetWallTimeWhenHidden() of a hidden LifecycleUnit.
+TEST_F(TabLifecycleUnitTest, InitialLastActiveTimeForHiddenLifecycleUnit) {
   web_contents_->WasHidden();
-  ::testing::Mock::VerifyAndClear(&observer);
+  TabLifecycleUnit lifecycle_unit(GetTabLifecycleUnitSource(), web_contents_,
+                                  tab_strip_model_.get());
+  EXPECT_EQ(NowTicks(), lifecycle_unit.GetWallTimeWhenHiddenForTesting());
+}
 
-  EXPECT_CALL(observer, OnLifecycleUnitVisibilityChanged(
-                            &tab_lifecycle_unit, content::Visibility::VISIBLE));
+TEST_F(TabLifecycleUnitTest, LastActiveTimeUpdatedOnVisibilityChange) {
+  TabLifecycleUnit tab_lifecycle_unit(GetTabLifecycleUnitSource(),
+                                      web_contents_, tab_strip_model_.get());
+
   web_contents_->WasShown();
-  ::testing::Mock::VerifyAndClear(&observer);
+  EXPECT_EQ(base::TimeTicks::Max(),
+            tab_lifecycle_unit.GetWallTimeWhenHiddenForTesting());
 
-  EXPECT_CALL(observer,
-              OnLifecycleUnitVisibilityChanged(&tab_lifecycle_unit,
-                                               content::Visibility::OCCLUDED));
+  test_tick_clock_.Advance(base::Minutes(1));
+  web_contents_->WasHidden();
+  base::TimeTicks wall_time_when_hidden = NowTicks();
+  EXPECT_EQ(wall_time_when_hidden,
+            tab_lifecycle_unit.GetWallTimeWhenHiddenForTesting());
+
+  test_tick_clock_.Advance(base::Minutes(1));
   web_contents_->WasOccluded();
-  ::testing::Mock::VerifyAndClear(&observer);
+  // `wall_time_when_hidden` not updated because it was already HIDDEN.
+  EXPECT_EQ(wall_time_when_hidden,
+            tab_lifecycle_unit.GetWallTimeWhenHiddenForTesting());
 
-  tab_lifecycle_unit.RemoveObserver(&observer);
+  test_tick_clock_.Advance(base::Minutes(1));
+  web_contents_->WasShown();
+  EXPECT_EQ(base::TimeTicks::Max(),
+            tab_lifecycle_unit.GetWallTimeWhenHiddenForTesting());
+
+  test_tick_clock_.Advance(base::Minutes(1));
+  web_contents_->WasOccluded();
+  wall_time_when_hidden = NowTicks();
+  EXPECT_EQ(wall_time_when_hidden,
+            tab_lifecycle_unit.GetWallTimeWhenHiddenForTesting());
+}
+
+TEST_F(TabLifecycleUnitTest, MetricsRecordedOnReload) {
+  base::HistogramTester histogram_tester;
+
+  // Register the observer so the Source handles the Discard swap.
+  tab_strip_model_->AddObserver(GetTabLifecycleUnitSource());
+  TabLifecycleUnit* tab_lifecycle_unit = AddNewHiddenLifecycleUnitToTabStrip();
+  ASSERT_TRUE(tab_lifecycle_unit);
+
+  // Advance the clock to avoid null timestamps.
+  test_tick_clock_.Advance(base::Seconds(10));
+  // Define memory in KiB, because that's what Discard() expects.
+  const uint64_t kMemoryEstimateBytes = 100 * 1024;
+
+  EXPECT_TRUE(tab_lifecycle_unit->Discard(LifecycleUnitDiscardReason::URGENT,
+                                          kMemoryEstimateBytes));
+
+  // Simulate a 5-minute interval between discard and reload.
+  const base::TimeDelta kTimeSinceDiscard = base::Minutes(5);
+  test_tick_clock_.Advance(kTimeSinceDiscard);
+
+  // Trigger a reload.
+  tab_lifecycle_unit->DidStartLoading();
+
+  // Verify immediate metrics.
+  histogram_tester.ExpectUniqueTimeSample(
+      "Tab.Discarding.Reload.TimeSinceDiscard", kTimeSinceDiscard, 1);
+  histogram_tester.ExpectUniqueSample("Tab.Discarding.Reload.CausedByFocus",
+                                      false, 1);
+
+  // Advance the clock to simulate load duration.
+  const base::TimeDelta kLoadTime = base::Seconds(2);
+  test_tick_clock_.Advance(kLoadTime);
+
+  tab_lifecycle_unit->DidStopLoading();
+
+  // Verify efficiency metrics.
+  histogram_tester.ExpectUniqueTimeSample("Tab.Discarding.Reload.LoadTime",
+                                          kLoadTime, 1);
+  histogram_tester.ExpectUniqueSample("Tab.Discarding.Reload.FreedMemoryMB",
+                                      100, 1);
+
+  // Verify no double-counting.
+  test_tick_clock_.Advance(base::Seconds(1));
+  tab_lifecycle_unit->DidStopLoading();
+  histogram_tester.ExpectTotalCount("Tab.Discarding.Reload.LoadTime", 1);
+
+  // Unregister the observer.
+  tab_strip_model_->RemoveObserver(GetTabLifecycleUnitSource());
+}
+
+TEST_F(TabLifecycleUnitTest, MetricsRecordedOnFocusTriggeredReload) {
+  base::HistogramTester histogram_tester;
+
+  tab_strip_model_->AddObserver(GetTabLifecycleUnitSource());
+  TabLifecycleUnit* tab_lifecycle_unit = AddNewHiddenLifecycleUnitToTabStrip();
+  ASSERT_TRUE(tab_lifecycle_unit);
+
+  // Setup and Discard.
+  test_tick_clock_.Advance(base::Seconds(10));
+  const uint64_t kMemoryEstimateBytes = 100 * 1024 * 1024;
+  EXPECT_TRUE(tab_lifecycle_unit->Discard(LifecycleUnitDiscardReason::URGENT,
+                                          kMemoryEstimateBytes));
+
+  test_tick_clock_.Advance(base::Minutes(1));
+
+  // Simulate user focus.
+  tab_lifecycle_unit->SetFocused(true);
+
+  // Trigger reload.
+  tab_lifecycle_unit->DidStartLoading();
+
+  // Verify CausedByFocus is true.
+  histogram_tester.ExpectUniqueSample("Tab.Discarding.Reload.CausedByFocus",
+                                      true, 1);
+
+  // Finish load to cleanup state.
+  tab_lifecycle_unit->DidStopLoading();
+
+  tab_strip_model_->RemoveObserver(GetTabLifecycleUnitSource());
 }
 
 }  // namespace resource_coordinator

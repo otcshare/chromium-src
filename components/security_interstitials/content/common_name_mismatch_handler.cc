@@ -4,10 +4,12 @@
 
 #include "components/security_interstitials/content/common_name_mismatch_handler.h"
 
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/ssl_errors/error_classification.h"
 #include "net/base/load_flags.h"
@@ -138,8 +140,8 @@ void CommonNameMismatchHandler::OnSimpleLoaderHandler(
     response_code = head->headers->response_code();
   }
   if (response_code == 200 && final_url.SchemeIsCryptographic() &&
-      final_url.host() != request_url_.host()) {
-    DCHECK_EQ(final_url.host(), final_url.host());
+      final_url.GetHost() != request_url_.GetHost()) {
+    DCHECK_EQ(final_url.GetHost(), final_url.GetHost());
     result = SUGGESTED_URL_AVAILABLE;
   }
   simple_url_loader_.reset();
@@ -147,6 +149,7 @@ void CommonNameMismatchHandler::OnSimpleLoaderHandler(
 }
 
 void CommonNameMismatchHandler::OnSimpleLoaderRedirect(
+    const GURL& url_before_redirect,
     const net::RedirectInfo& redirect_info,
     const network::mojom::URLResponseHead& response_head,
     std::vector<std::string>* to_be_removed_headers) {
@@ -160,7 +163,7 @@ void CommonNameMismatchHandler::OnSimpleLoaderResponseStarted(
 }
 
 void CommonNameMismatchHandler::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   OnSimpleLoaderHandler(simple_url_loader_->GetFinalURL(),
                         simple_url_loader_->ResponseInfo());
 }

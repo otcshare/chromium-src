@@ -5,12 +5,13 @@
 #ifndef IOS_WEB_JS_MESSAGING_JAVA_SCRIPT_CONTENT_WORLD_H_
 #define IOS_WEB_JS_MESSAGING_JAVA_SCRIPT_CONTENT_WORLD_H_
 
+#import <WebKit/WebKit.h>
+
 #include <map>
 #include <memory>
 #include <set>
 
-#import <WebKit/WebKit.h>
-
+#import "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #import "ios/web/js_messaging/scoped_wk_script_message_handler.h"
 #import "ios/web/public/js_messaging/java_script_feature.h"
@@ -34,7 +35,7 @@ class JavaScriptContentWorld {
   JavaScriptContentWorld(const JavaScriptContentWorld&) = delete;
 
   // Creates a content world for features which will interact with the given
-  // `content_world`.
+  // `content_world`. `browser_state` and `content_world` must not be null.
   JavaScriptContentWorld(BrowserState* browser_state,
                          WKContentWorld* content_world);
 
@@ -59,7 +60,7 @@ class JavaScriptContentWorld {
 
   // The associated browser state for configuring injected scripts and
   // communication.
-  BrowserState* browser_state_;
+  raw_ptr<BrowserState> browser_state_;
 
   // The associated user content controller for configuring injected scripts and
   // script message handler JavaScript->native communication.
@@ -69,10 +70,8 @@ class JavaScriptContentWorld {
            std::unique_ptr<ScopedWKScriptMessageHandler>>
       script_message_handlers_;
 
-  // The associated WKContentWorld. May be null which represents the main world
-  // which the page content itself uses. (The same content world can also be
-  // represented by [WKContentWorld pageWorld] on iOS 14 and later.)
-  WKContentWorld* content_world_ = nullptr;
+  // The associated underlying WKContentWorld.
+  WKContentWorld* content_world_;
 
   base::WeakPtrFactory<JavaScriptContentWorld> weak_factory_;
 };

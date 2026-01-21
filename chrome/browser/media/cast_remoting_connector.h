@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_MEDIA_CAST_REMOTING_CONNECTOR_H_
 #define CHROME_BROWSER_MEDIA_CAST_REMOTING_CONNECTOR_H_
 
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -19,16 +20,11 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class RenderFrameHost;
 class WebContents;
 }  // namespace content
-
-namespace media_router {
-class MediaRouter;
-}
 
 class MediaRemotingDialogCoordinator {
  public:
@@ -52,7 +48,7 @@ class MediaRemotingDialogCoordinator {
 // collection of render frames), and it is created on-demand. The source in the
 // render process represents itself by providing a media::mojom::RemotingSource
 // service instance. The sink is represented by a MediaRemoter in the Cast Media
-// Router Provider that handles the communication with the remote device. The
+// Route Provider that handles the communication with the remote device. The
 // CastRemotingConnector and the MediaRemoter can communicate with each other
 // through the media::mojom::Remoter and media::mojom::RemotingSource interfaces
 // when a sink that is capable of remoting is available.
@@ -65,10 +61,8 @@ class MediaRemotingDialogCoordinator {
 // notify when a sink becomes available for remoting, and to pass binary
 // messages from the sink back to the source.
 //
-// When the CastRemotingConnector is created, it registers itself in the
-// media_router::MediaRouter with a tab ID that uniquely identifies it. When a
-// mirroring route is created and available for remoting, the Cast MRP will
-// create a MediaRemoter and notify MediaRouter, which notifies the
+// When a mirroring route is created and available for remoting, the Cast MRP
+// will create a MediaRemoter and notify MediaRouter, which notifies the
 // CastRemotingConnector registered under the tab ID being remoted. At this
 // point, the CastRemotingConnector can communicate with the MediaRemoter. When
 // CastRemotingConnector gets notified that a sink is available, it notifies all
@@ -136,7 +130,6 @@ class CastRemotingConnector final : public base::SupportsUserData::Data,
   // Main constructor. |tab_id| refers to any remoted content managed
   // by this instance (i.e., any remoted content from one tab/WebContents).
   CastRemotingConnector(
-      media_router::MediaRouter* router,
       PrefService* pref_service,
       SessionID tab_id,
       std::unique_ptr<MediaRemotingDialogCoordinator> dialog_coordinator);
@@ -169,7 +162,7 @@ class CastRemotingConnector final : public base::SupportsUserData::Data,
   // source is allowed to be in a remoting session at a time, and that no source
   // may interfere with any other.
   void StartRemoting(RemotingBridge* bridge);
-  void StartRemotingWithoutPermission(RemotingBridge* bridge);
+  void StartWithPermissionAlreadyGranted(RemotingBridge* bridge);
   bool StartRemotingCommon(RemotingBridge* bridge);
   void StartRemotingDataStreams(
       RemotingBridge* bridge,
@@ -222,13 +215,12 @@ class CastRemotingConnector final : public base::SupportsUserData::Data,
   void OnPrefChanged();
 
   // Returns the user's remoting preference, or nullopt if it isn't set.
-  absl::optional<bool> GetRemotingAllowedUserPref() const;
+  std::optional<bool> GetRemotingAllowedUserPref() const;
 
   void set_remoting_allowed_for_testing(bool remoting_allowed) {
     remoting_allowed_ = remoting_allowed;
   }
 
-  const raw_ptr<media_router::MediaRouter> media_router_;
   const raw_ptr<PrefService> pref_service_;
   const SessionID tab_id_;
 
@@ -242,7 +234,7 @@ class CastRemotingConnector final : public base::SupportsUserData::Data,
   // Set of registered RemotingBridges, maintained by RegisterBridge() and
   // DeregisterBridge(). These pointers are always valid while they are in this
   // set.
-  std::set<RemotingBridge*> bridges_;
+  std::set<raw_ptr<RemotingBridge, SetExperimental>> bridges_;
 
   // When non-null, an active remoting session is taking place, with this
   // pointing to the RemotingBridge being used to communicate with the source.
@@ -253,7 +245,7 @@ class CastRemotingConnector final : public base::SupportsUserData::Data,
 
   // Permission is checked the first time remoting requested to start for each
   // casting session.
-  absl::optional<bool> remoting_allowed_;
+  std::optional<bool> remoting_allowed_;
 
   PrefChangeRegistrar pref_change_registrar_;
 

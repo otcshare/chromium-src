@@ -12,10 +12,10 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/process/process.h"
 #include "base/time/time.h"
-#include "ipc/ipc_message.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
@@ -44,7 +44,8 @@ class DaemonProcess : public ConfigWatcher::Delegate,
                       public HostStatusObserver,
                       public mojom::DesktopSessionManager {
  public:
-  typedef std::list<DesktopSession*> DesktopSessionList;
+  typedef std::list<raw_ptr<DesktopSession, CtnExperimental>>
+      DesktopSessionList;
 
   DaemonProcess(const DaemonProcess&) = delete;
   DaemonProcess& operator=(const DaemonProcess&) = delete;
@@ -142,6 +143,8 @@ class DaemonProcess : public ConfigWatcher::Delegate,
   // Notifies the network process that the daemon has disconnected the desktop
   // session from the associated desktop environment.
   virtual void SendTerminalDisconnected(int terminal_id) = 0;
+
+  virtual void StartChromotingHostServices() = 0;
 
   scoped_refptr<AutoThreadTaskRunner> caller_task_runner() {
     return caller_task_runner_;

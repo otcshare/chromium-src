@@ -25,9 +25,10 @@
 
 #include "third_party/blink/renderer/platform/graphics/filters/fe_turbulence.h"
 
+#include "base/numerics/safe_conversions.h"
 #include "base/types/optional_util.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
@@ -122,13 +123,14 @@ sk_sp<PaintFilter> FETurbulence::CreateImageFilter() {
     base_frequency_x = base_frequency_y = 0;
   }
 
-  absl::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
+  std::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
   TurbulencePaintFilter::TurbulenceType type =
       GetType() == FETURBULENCE_TYPE_FRACTALNOISE
           ? TurbulencePaintFilter::TurbulenceType::kFractalNoise
           : TurbulencePaintFilter::TurbulenceType::kTurbulence;
-  const SkISize size = SkISize::Make(FilterPrimitiveSubregion().width(),
-                                     FilterPrimitiveSubregion().height());
+  const SkISize size = SkISize::Make(
+      base::saturated_cast<int32_t>(FilterPrimitiveSubregion().width()),
+      base::saturated_cast<int32_t>(FilterPrimitiveSubregion().height()));
   // Frequency should be scaled by page zoom, but not by primitiveUnits.
   // So we apply only the transform scale (as Filter::apply*Scale() do)
   // and not the target bounding box scale (as SVGFilter::apply*Scale()
@@ -147,8 +149,8 @@ sk_sp<PaintFilter> FETurbulence::CreateImageFilter() {
       base::OptionalToPtr(crop_rect));
 }
 
-static WTF::TextStream& operator<<(WTF::TextStream& ts,
-                                   const TurbulenceType& type) {
+static StringBuilder& operator<<(StringBuilder& ts,
+                                 const TurbulenceType& type) {
   switch (type) {
     case FETURBULENCE_TYPE_UNKNOWN:
       ts << "UNKNOWN";
@@ -163,8 +165,8 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts,
   return ts;
 }
 
-WTF::TextStream& FETurbulence::ExternalRepresentation(WTF::TextStream& ts,
-                                                      int indent) const {
+StringBuilder& FETurbulence::ExternalRepresentation(StringBuilder& ts,
+                                                    wtf_size_t indent) const {
   WriteIndent(ts, indent);
   ts << "[feTurbulence";
   FilterEffect::ExternalRepresentation(ts);

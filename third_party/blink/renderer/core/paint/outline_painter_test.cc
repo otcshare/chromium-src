@@ -7,18 +7,20 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 
 namespace blink {
 
 using OutlinePainterTest = RenderingTest;
 
 TEST_F(OutlinePainterTest, FocusRingOutset) {
-  auto initial_style = ComputedStyle::CreateInitialStyleSingleton();
+  const auto* initial_style = ComputedStyle::GetInitialStyleSingleton();
   ComputedStyleBuilder builder(*initial_style);
   builder.SetOutlineStyle(EBorderStyle::kSolid);
   builder.SetOutlineStyleIsAuto(true);
-  auto style = builder.TakeStyle();
+  const auto* style = builder.TakeStyle();
   LayoutObject::OutlineInfo info =
       LayoutObject::OutlineInfo::GetFromStyle(*style);
   EXPECT_EQ(2, OutlinePainter::OutlineOutsetExtent(*style, info));
@@ -40,7 +42,7 @@ TEST_F(OutlinePainterTest, HugeOutlineWidthOffset) {
   )HTML");
   LayoutObject::OutlineInfo info;
   GetLayoutObjectByElementId("target")->OutlineRects(
-      &info, PhysicalOffset(), NGOutlineType::kDontIncludeBlockVisualOverflow);
+      &info, PhysicalOffset(), OutlineType::kDontIncludeBlockInkOverflow);
   const auto& style = GetLayoutObjectByElementId("target")->StyleRef();
   EXPECT_TRUE(style.HasOutline());
   EXPECT_EQ(LayoutUnit::Max().ToInt() * 2,
@@ -60,19 +62,21 @@ TEST_F(OutlinePainterTest, OutlineWidthLessThanOne) {
 }
 
 TEST_F(OutlinePainterTest, IterateCollapsedPath) {
-  SkPath path;
-  path.moveTo(8, 12);
-  path.lineTo(8, 4);
-  path.lineTo(9, 4);
-  path.lineTo(9, 0);
-  path.lineTo(9, 0);
-  path.lineTo(9, 4);
-  path.lineTo(8, 4);
-  path.close();
+  const SkPath path = SkPathBuilder()
+                          .moveTo(8, 12)
+                          .lineTo(8, 4)
+                          .lineTo(9, 4)
+                          .lineTo(9, 0)
+                          .lineTo(9, 0)
+                          .lineTo(9, 4)
+                          .lineTo(8, 4)
+                          .close()
+                          .detach();
+
   // Collapsed contour should not cause crash and should be ignored.
   OutlinePainter::IterateRightAnglePathForTesting(
-      path, base::BindRepeating(
-                [](const Vector<OutlinePainter::Line>&) { NOTREACHED(); }));
+      path,
+      BindRepeating([](const Vector<OutlinePainter::Line>&) { NOTREACHED(); }));
 }
 
 }  // namespace blink

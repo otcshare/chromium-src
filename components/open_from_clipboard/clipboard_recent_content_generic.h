@@ -7,7 +7,6 @@
 
 #include "base/time/time.h"
 #include "components/open_from_clipboard/clipboard_recent_content.h"
-#include "ui/gfx/image/image.h"
 #include "url/gurl.h"
 
 // An implementation of ClipboardRecentContent that uses
@@ -27,13 +26,24 @@ class ClipboardRecentContentGeneric : public ClipboardRecentContent {
 
   ~ClipboardRecentContentGeneric() override;
 
+  // Returns clipboard content as URL, if it has a compatible type,
+  // is recent enough, has not been suppressed and will not trigger a system
+  // notification that the clipboard has been accessed.
+  std::optional<GURL> GetRecentURLFromClipboard();
+
+  // Returns clipboard content as text, if it has a compatible type,
+  // is recent enough, has not been suppressed and will not trigger a system
+  // notification that the clipboard has been accessed.
+  std::optional<std::u16string> GetRecentTextFromClipboard();
+
+  // Return if system's clipboard contains an image that will not trigger a
+  // system notification that the clipboard has been accessed.
+  bool HasRecentImageFromClipboard();
+
   // ClipboardRecentContent implementation.
-  absl::optional<GURL> GetRecentURLFromClipboard() override;
-  absl::optional<std::u16string> GetRecentTextFromClipboard() override;
-  absl::optional<std::set<ClipboardContentType>>
-  GetCachedClipboardContentTypes() override;
+  std::optional<std::set<ClipboardContentType>> GetCachedClipboardContentTypes()
+      override;
   void GetRecentImageFromClipboard(GetRecentImageCallback callback) override;
-  bool HasRecentImageFromClipboard() override;
   void HasRecentContentFromClipboard(std::set<ClipboardContentType> types,
                                      HasDataCallback callback) override;
   void GetRecentURLFromClipboard(GetRecentURLCallback callback) override;

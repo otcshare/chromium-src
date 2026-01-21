@@ -5,10 +5,11 @@
 #include "chrome/browser/ash/chromebox_for_meetings/logger/cfm_logger_service.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
@@ -16,23 +17,22 @@
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/chromebox_for_meetings/features.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/fake_cfm_hotline_client.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/fake_service_connection.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/fake_service_context.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/service_connection.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/mojom/meet_devices_logger.mojom-shared.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/mojom/meet_devices_logger.mojom.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/fake_service_connection.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/fake_service_context.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/service_connection.h"
+#include "chromeos/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
+#include "chromeos/services/chromebox_for_meetings/public/mojom/meet_devices_logger.mojom.h"
 #include "components/reporting/util/status.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash::cfm {
 namespace {
 
-// TODO(https://crbug.com/1164001): remove after the migration to namespace ash.
+// TODO(https://crbug.com/1403174): Remove when namespace of mojoms for CfM are
+// migarted to ash.
 namespace mojom = ::chromeos::cfm::mojom;
 
 class FakeCfmLoggerServiceDelegate : public CfmLoggerService::Delegate {
@@ -87,7 +87,7 @@ class CfmLoggerServiceTest : public testing::Test {
 
   void SetUp() override {
     CfmHotlineClient::InitializeFake();
-    ServiceConnection::UseFakeServiceConnectionForTesting(
+    chromeos::cfm::ServiceConnection::UseFakeServiceConnectionForTesting(
         &fake_service_connection_);
   }
 
@@ -110,7 +110,7 @@ class CfmLoggerServiceTest : public testing::Test {
     auto* interface_name = mojom::MeetDevicesLogger::Name_;
 
     // Fake out CfmServiceContext
-    FakeCfmServiceContext context;
+    chromeos::cfm::FakeCfmServiceContext context;
     mojo::Receiver<mojom::CfmServiceContext> context_receiver(&context);
     fake_service_connection_.SetCallback(base::BindLambdaForTesting(
         [&](mojo::PendingReceiver<mojom::CfmServiceContext> pending_receiver,
@@ -152,7 +152,7 @@ class CfmLoggerServiceTest : public testing::Test {
  protected:
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
-  FakeServiceConnectionImpl fake_service_connection_;
+  chromeos::cfm::FakeServiceConnectionImpl fake_service_connection_;
   FakeCfmLoggerServiceDelegate logger_delegate_;
 };
 

@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
@@ -24,7 +24,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/image/image.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/render_text.h"
 #include "ui/snapshot/snapshot.h"
 #include "ui/views/background.h"
@@ -55,6 +55,45 @@ static constexpr int kMinimumValidSelectionEdgePixels = 30;
 
 ScreenshotCapturedData::ScreenshotCapturedData() = default;
 ScreenshotCapturedData::~ScreenshotCapturedData() = default;
+
+// UnderlyingWebContentsObserver monitors the WebContents and exits screen
+// capture mode if a navigation occurs.
+class ScreenshotFlow::UnderlyingWebContentsObserver
+    : public content::WebContentsObserver {
+ public:
+  UnderlyingWebContentsObserver(content::WebContents* web_contents,
+                                ScreenshotFlow* screenshot_flow)
+      : content::WebContentsObserver(web_contents),
+        screenshot_flow_(screenshot_flow) {}
+
+  ~UnderlyingWebContentsObserver() override = default;
+
+  UnderlyingWebContentsObserver(const UnderlyingWebContentsObserver&) = delete;
+  UnderlyingWebContentsObserver& operator=(
+      const UnderlyingWebContentsObserver&) = delete;
+
+  // content::WebContentsObserver
+  void PrimaryPageChanged(content::Page& page) override {
+    // We only care to complete/cancel a capture if the capture mode is
+    // currently active.
+    if (screenshot_flow_->IsCaptureModeActive()) {
+      screenshot_flow_->CompleteCapture(
+          ScreenshotCaptureResultCode::USER_NAVIGATED_EXIT, gfx::Rect());
+    }
+  }
+
+  // content::WebContentsObserver
+  void FrameSizeChanged(content::RenderFrameHost* render_frame_host,
+                        const gfx::Size& frame_size) override {
+    // We only care to resize the UI overlay when it's visible to the user.
+    if (screenshot_flow_->IsUIOverlayShown()) {
+      screenshot_flow_->ResetUIOverlayBounds();
+    }
+  }
+
+ private:
+  raw_ptr<ScreenshotFlow> screenshot_flow_;
+};
 
 ScreenshotFlow::ScreenshotFlow(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
@@ -162,6 +201,12 @@ void ScreenshotFlow::StartFullscreenCapture(
                                           gfx::Rect(web_contents_->GetSize()));
 }
 
+void ScreenshotFlow::StartForRegionSelection(
+    RegionSelectionCallback region_selection_callback) {
+  region_selection_callback_ = std::move(region_selection_callback);
+  CreateAndAddUIOverlay();
+}
+
 void ScreenshotFlow::CaptureAndRunScreenshotCompleteCallback(
     ScreenshotCaptureResultCode result_code,
     gfx::Rect region) {
@@ -171,32 +216,20 @@ void ScreenshotFlow::CaptureAndRunScreenshotCompleteCallback(
   }
 
   gfx::Rect bounds = web_contents_->GetViewBounds();
-#if BUILDFLAG(IS_MAC)
-  const gfx::NativeView& native_view = web_contents_->GetContentNativeView();
-  gfx::Image img;
-  bool rval = ui::GrabViewSnapshot(native_view, region, &img);
-  // If |img| is empty, clients should treat it as a canceled action, but
-  // we have a DCHECK for development as we expected this call to succeed.
-  DCHECK(rval);
-  RunScreenshotCompleteCallback(result_code, bounds, img);
-#else
-  ui::GrabWindowSnapshotAsyncCallback screenshot_callback =
+  ui::GrabSnapshotImageCallback screenshot_callback =
       base::BindOnce(&ScreenshotFlow::RunScreenshotCompleteCallback, weak_this_,
                      result_code, bounds);
-  const gfx::NativeWindow& native_window = web_contents_->GetNativeView();
-  ui::GrabWindowSnapshotAsync(native_window, region,
-                              std::move(screenshot_callback));
-#endif
+  ui::GrabViewSnapshot(web_contents_->GetNativeView(), region,
+                       std::move(screenshot_callback));
 }
 
 void ScreenshotFlow::CancelCapture() {
-  RemoveUIOverlay();
-  CaptureAndRunScreenshotCompleteCallback(
-      ScreenshotCaptureResultCode::USER_NAVIGATED_EXIT, gfx::Rect());
+  CompleteCapture(ScreenshotCaptureResultCode::USER_NAVIGATED_EXIT,
+                  gfx::Rect());
 }
 
 void ScreenshotFlow::OnKeyEvent(ui::KeyEvent* event) {
-  if (event->type() == ui::ET_KEY_PRESSED &&
+  if (event->type() == ui::EventType::kKeyPressed &&
       event->key_code() == ui::VKEY_ESCAPE) {
     event->StopPropagation();
     CompleteCapture(ScreenshotCaptureResultCode::USER_ESCAPE_EXIT, gfx::Rect());
@@ -227,11 +260,11 @@ void ScreenshotFlow::OnMouseEvent(ui::MouseEvent* event) {
   location.set_y(location.y() + (widget_bounds.y() - web_contents_bounds.y()));
 #endif
   switch (event->type()) {
-    case ui::ET_MOUSE_MOVED:
+    case ui::EventType::kMouseMoved:
       SetCursor(ui::mojom::CursorType::kCross);
       event->SetHandled();
       break;
-    case ui::ET_MOUSE_PRESSED:
+    case ui::EventType::kMousePressed:
       if (event->IsOnlyLeftMouseButton()) {
         // Don't capture initial clicks on browser ui outside the webcontents.
         if (location.x() < 0 || location.y() < 0 ||
@@ -245,14 +278,14 @@ void ScreenshotFlow::OnMouseEvent(ui::MouseEvent* event) {
         event->SetHandled();
       }
       break;
-    case ui::ET_MOUSE_DRAGGED:
+    case ui::EventType::kMouseDragged:
       if (event->IsOnlyLeftMouseButton() && is_dragging_) {
         drag_end_ = location;
         RequestRepaint(gfx::Rect());
         event->SetHandled();
       }
       break;
-    case ui::ET_MOUSE_RELEASED:
+    case ui::EventType::kMouseReleased:
       if ((capture_mode_ == CaptureMode::SELECTION_RECTANGLE ||
            capture_mode_ == CaptureMode::SELECTION_ELEMENT) &&
           is_dragging_) {
@@ -262,7 +295,7 @@ void ScreenshotFlow::OnMouseEvent(ui::MouseEvent* event) {
       }
       break;
     // This event type is never called on Mac.
-    case ui::ET_MOUSEWHEEL:
+    case ui::EventType::kMousewheel:
       if ((capture_mode_ == CaptureMode::SELECTION_RECTANGLE ||
            capture_mode_ == CaptureMode::SELECTION_ELEMENT) &&
           event->AsMouseWheelEvent()->y_offset() > 0 && is_dragging_) {
@@ -279,9 +312,10 @@ void ScreenshotFlow::OnMouseEvent(ui::MouseEvent* event) {
 void ScreenshotFlow::OnScrollEvent(ui::ScrollEvent* event) {
   // A single tap can create a scroll event, so ignore scroll starts and
   // cancels but complete capture when scrolls actually occur.
-  if (event->type() == ui::EventType::ET_SCROLL_FLING_START ||
-      event->type() == ui::EventType::ET_SCROLL_FLING_CANCEL)
+  if (event->type() == ui::EventType::kScrollFlingStart ||
+      event->type() == ui::EventType::kScrollFlingCancel) {
     return;
+  }
 
   gfx::Rect web_contents_bounds = web_contents_->GetViewBounds();
   if ((capture_mode_ == CaptureMode::SELECTION_RECTANGLE ||
@@ -296,6 +330,12 @@ void ScreenshotFlow::OnScrollEvent(ui::ScrollEvent* event) {
 void ScreenshotFlow::CompleteCapture(ScreenshotCaptureResultCode result_code,
                                      const gfx::Rect& region) {
   RemoveUIOverlay();
+  if (region_selection_callback_) {
+    RegionSelectionResult result = {.result_code = result_code,
+                                    .selected_rect = region};
+    std::move(region_selection_callback_).Run(result);
+    return;
+  }
   CaptureAndRunScreenshotCompleteCallback(result_code, region);
 }
 
@@ -448,43 +488,5 @@ void ScreenshotFlow::AttemptRegionCapture(gfx::Rect view_bounds) {
     RequestRepaint(gfx::Rect());
   }
 }
-
-// UnderlyingWebContentsObserver monitors the WebContents and exits screen
-// capture mode if a navigation occurs.
-class ScreenshotFlow::UnderlyingWebContentsObserver
-    : public content::WebContentsObserver {
- public:
-  UnderlyingWebContentsObserver(content::WebContents* web_contents,
-                                ScreenshotFlow* screenshot_flow)
-      : content::WebContentsObserver(web_contents),
-        screenshot_flow_(screenshot_flow) {}
-
-  ~UnderlyingWebContentsObserver() override = default;
-
-  UnderlyingWebContentsObserver(const UnderlyingWebContentsObserver&) = delete;
-  UnderlyingWebContentsObserver& operator=(
-      const UnderlyingWebContentsObserver&) = delete;
-
-  // content::WebContentsObserver
-  void PrimaryPageChanged(content::Page& page) override {
-    // We only care to complete/cancel a capture if the capture mode is
-    // currently active.
-    if (screenshot_flow_->IsCaptureModeActive())
-      screenshot_flow_->CompleteCapture(
-          ScreenshotCaptureResultCode::USER_NAVIGATED_EXIT, gfx::Rect());
-  }
-
-  // content::WebContentsObserver
-  void FrameSizeChanged(content::RenderFrameHost* render_frame_host,
-                        const gfx::Size& frame_size) override {
-    // We only care to resize the UI overlay when it's visible to the user.
-    if (screenshot_flow_->IsUIOverlayShown()) {
-      screenshot_flow_->ResetUIOverlayBounds();
-    }
-  }
-
- private:
-  raw_ptr<ScreenshotFlow> screenshot_flow_;
-};
 
 }  // namespace image_editor

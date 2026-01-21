@@ -12,9 +12,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/install_signer.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -27,8 +24,11 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/install_signer.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_id.h"
@@ -36,9 +36,13 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/scoped_test_user_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
 
 using ::testing::StrictMock;
@@ -55,13 +59,12 @@ class ExtensionTestingProfile : public TestingProfile {
       std::string description = "Test extension",
       std::string update_url =
           "https://clients2.google.com/service/update2/crx",
-      int state_value = 0);
+      const extensions::DisableReasonSet& disable_reasons = {});
 
   void SetInstallSignature(extensions::InstallSignature signature);
 
  private:
   raw_ptr<TestingProfile> profile_;
-  raw_ptr<extensions::ExtensionService> extension_service_;
   raw_ptr<extensions::ExtensionPrefs> extension_prefs_;
 };
 
@@ -72,40 +75,42 @@ ExtensionTestingProfile::ExtensionTestingProfile(TestingProfile* profile)
   extensions::TestExtensionSystem* test_extension_system =
       static_cast<extensions::TestExtensionSystem*>(
           extensions::ExtensionSystem::Get(profile_));
-  extension_service_ = test_extension_system->CreateExtensionService(
+  test_extension_system->CreateExtensionService(
       &command_line, base::FilePath() /* install_directory */,
       false /* autoupdate_enabled */);
   extension_prefs_ = extensions::ExtensionPrefs::Get(profile_);
 }
 
-void ExtensionTestingProfile::AddExtension(std::string extension_id,
-                                           std::string extension_name,
-                                           base::Time install_time,
-                                           std::string version,
-                                           std::string description,
-                                           std::string update_url,
-                                           int state_value) {
+void ExtensionTestingProfile::AddExtension(
+    std::string extension_id,
+    std::string extension_name,
+    base::Time install_time,
+    std::string version,
+    std::string description,
+    std::string update_url,
+    const extensions::DisableReasonSet& disable_reasons) {
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder()
           .SetID(extension_id)
-          .SetManifest(extensions::DictionaryBuilder()
+          .SetManifest(base::Value::Dict()
                            .Set("name", extension_name)
                            .Set("version", version)
                            .Set("manifest_version", 2)
                            .Set("description", description)
-                           .Set("update_url", update_url)
-                           .Build())
+                           .Set("update_url", update_url))
           .Build();
 
-  // Install the extension on the faked extension service.
-  extension_service_->AddExtension(extension.get());
+  // Install the extension.
+  auto* extension_registrar = extensions::ExtensionRegistrar::Get(profile_);
+  extension_registrar->AddExtension(extension);
 
   extension_prefs_->UpdateExtensionPref(
       extension_id, "last_update_time",
-      std::make_unique<base::Value>(
-          base::NumberToString(install_time.ToInternalValue())));
-  extension_prefs_->UpdateExtensionPref(
-      extension_id, "state", std::make_unique<base::Value>(state_value));
+      base::Value(base::NumberToString(install_time.ToInternalValue())));
+
+  if (!disable_reasons.empty()) {
+    extension_registrar->DisableExtension(extension_id, disable_reasons);
+  }
 }
 
 void ExtensionTestingProfile::SetInstallSignature(
@@ -127,6 +132,7 @@ class ExtensionDataCollectionTest : public testing::Test {
     SAFE_BROWSING_ONLY,
     EXTENDED_REPORTING_ONLY,
     SAFE_BROWSING_AND_EXTENDED_REPORTING,
+    ENHANCED_PROTECTION_ONLY,
   };
 
   ExtensionDataCollectionTest() = default;
@@ -136,16 +142,18 @@ class ExtensionDataCollectionTest : public testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    test_user_manager_ = std::make_unique<ash::ScopedTestUserManager>();
+#if BUILDFLAG(IS_CHROMEOS)
+    user_manager_.Reset(std::make_unique<user_manager::UserManagerImpl>(
+        std::make_unique<ash::UserManagerDelegateImpl>(),
+        g_browser_process->local_state(), ash::CrosSettings::Get()));
 #endif
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // UserManager should be destroyed before TestingBrowserProcess as it
     // uses it in destructor.
-    test_user_manager_.reset();
+    user_manager_.Reset();
     // Finish any pending tasks before deleting the TestingBrowserProcess.
     task_environment_.RunUntilIdle();
 #endif
@@ -163,14 +171,19 @@ class ExtensionDataCollectionTest : public testing::Test {
     std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> prefs(
         new sync_preferences::TestingPrefServiceSyncable);
     RegisterUserProfilePrefs(prefs->registry());
-    prefs->SetBoolean(
-        prefs::kSafeBrowsingEnabled,
-        safe_browsing_opt_in == SAFE_BROWSING_ONLY ||
-            safe_browsing_opt_in == SAFE_BROWSING_AND_EXTENDED_REPORTING);
-    safe_browsing::SetExtendedReportingPrefForTests(
-        prefs.get(),
-        safe_browsing_opt_in == EXTENDED_REPORTING_ONLY ||
-            safe_browsing_opt_in == SAFE_BROWSING_AND_EXTENDED_REPORTING);
+    if (safe_browsing_opt_in == ENHANCED_PROTECTION_ONLY) {
+      prefs->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
+      prefs->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+    } else {
+      prefs->SetBoolean(
+          prefs::kSafeBrowsingEnabled,
+          safe_browsing_opt_in == SAFE_BROWSING_ONLY ||
+              safe_browsing_opt_in == SAFE_BROWSING_AND_EXTENDED_REPORTING);
+      safe_browsing::SetExtendedReportingPrefForTests(
+          prefs.get(),
+          safe_browsing_opt_in == EXTENDED_REPORTING_ONLY ||
+              safe_browsing_opt_in == SAFE_BROWSING_AND_EXTENDED_REPORTING);
+    }
     TestingProfile* profile = profile_manager_->CreateTestingProfile(
         profile_name, std::move(prefs),
         base::UTF8ToUTF16(profile_name),  // user_name
@@ -189,13 +202,17 @@ class ExtensionDataCollectionTest : public testing::Test {
  private:
   int profile_number_ = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-  std::unique_ptr<ash::ScopedTestUserManager> test_user_manager_;
+  user_manager::ScopedUserManager user_manager_;
 #endif
 };
 
-TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtensions) {
+TEST_F(ExtensionDataCollectionTest,
+       CollectExtensionDataNoExtensions_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::unique_ptr<ExtensionTestingProfile> profile =
       CreateProfile(SAFE_BROWSING_AND_EXTENDED_REPORTING);
 
@@ -205,7 +222,11 @@ TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtensions) {
   ASSERT_FALSE(data.has_last_installed_extension());
 }
 
-TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoSafeBrowsing) {
+TEST_F(ExtensionDataCollectionTest,
+       CollectExtensionDataNoSafeBrowsing_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::unique_ptr<ExtensionTestingProfile> profile =
       CreateProfile(EXTENDED_REPORTING_ONLY);
   profile->AddExtension();
@@ -216,7 +237,11 @@ TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoSafeBrowsing) {
   ASSERT_FALSE(data.has_last_installed_extension());
 }
 
-TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtendedReporting) {
+TEST_F(ExtensionDataCollectionTest,
+       CollectExtensionDataNoExtendedReporting_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::unique_ptr<ExtensionTestingProfile> profile =
       CreateProfile(SAFE_BROWSING_ONLY);
   profile->AddExtension();
@@ -227,19 +252,22 @@ TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtendedReporting) {
   ASSERT_FALSE(data.has_last_installed_extension());
 }
 
-TEST_F(ExtensionDataCollectionTest, CollectExtensionDataWithExtension) {
+TEST_F(ExtensionDataCollectionTest,
+       CollectExtensionDataWithExtension_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::string extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   std::string extension_name = "my_test_extension";
   base::Time install_time = base::Time::Now();
   std::string version = "1.4.2";
   std::string description = "Test Extension";
   std::string update_url = "https://www.chromium.org";
-  int state = extensions::Extension::State::ENABLED;
 
   std::unique_ptr<ExtensionTestingProfile> profile =
       CreateProfile(SAFE_BROWSING_AND_EXTENDED_REPORTING);
   profile->AddExtension(extension_id, extension_name, install_time, version,
-                        description, update_url, state);
+                        description, update_url, /*disable_reasons=*/{});
 
   extensions::ExtensionIdSet valid_ids;
   extensions::ExtensionIdSet invalid_ids;
@@ -258,13 +286,15 @@ TEST_F(ExtensionDataCollectionTest, CollectExtensionDataWithExtension) {
 
   ASSERT_EQ(extension_info.id(), extension_id);
   ASSERT_EQ(extension_info.name(), extension_name);
-  ASSERT_EQ(extension_info.install_time_msec(), install_time.ToJavaTime());
+  ASSERT_EQ(extension_info.install_time_msec(),
+            install_time.InMillisecondsSinceUnixEpoch());
   ASSERT_EQ(extension_info.version(), version);
   ASSERT_EQ(extension_info.description(), description);
   ASSERT_EQ(extension_info.update_url(), update_url);
   ASSERT_EQ(extension_info.has_signature_validation(), true);
   ASSERT_EQ(extension_info.signature_is_valid(), false);
-  ASSERT_EQ(extension_info.state(), state);
+  ASSERT_EQ(extension_info.state(),
+            ClientIncidentReport_ExtensionData_ExtensionInfo::STATE_ENABLED);
   std::string expected_manifest =
       "{\"description\":\"Test Extension\",\""
       "manifest_version\":2,\"name\":\"my_test_extension\",\"update_url\":\""
@@ -272,7 +302,11 @@ TEST_F(ExtensionDataCollectionTest, CollectExtensionDataWithExtension) {
   ASSERT_EQ(extension_info.manifest(), expected_manifest);
 }
 
-TEST_F(ExtensionDataCollectionTest, CollectsLastInstalledExtension) {
+TEST_F(ExtensionDataCollectionTest,
+       CollectsLastInstalledExtension_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::string extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   std::string extension_name = "extension_2";
   base::Time install_time = base::Time::Now() - base::Minutes(3);
@@ -294,10 +328,45 @@ TEST_F(ExtensionDataCollectionTest, CollectsLastInstalledExtension) {
 
   ASSERT_EQ(extension_info.id(), extension_id);
   ASSERT_EQ(extension_info.name(), extension_name);
-  ASSERT_EQ(extension_info.install_time_msec(), install_time.ToJavaTime());
+  ASSERT_EQ(extension_info.install_time_msec(),
+            install_time.InMillisecondsSinceUnixEpoch());
+}
+
+TEST_F(ExtensionDataCollectionTest, CollectsLastInstalledExtension) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {safe_browsing::kExtendedReportingRemovePrefDependency,
+       safe_browsing::kHashPrefixRealTimeLookupsSamplePing},
+      {});
+  std::string extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  std::string extension_name = "extension_2";
+  base::Time install_time = base::Time::Now() - base::Minutes(3);
+
+  std::unique_ptr<ExtensionTestingProfile> profile =
+      CreateProfile(ENHANCED_PROTECTION_ONLY);
+  profile->AddExtension("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "extension_1",
+                        base::Time::Now() - base::Days(2));
+  profile->AddExtension(extension_id, extension_name, install_time);
+  profile->AddExtension("cccccccccccccccccccccccccccccccc", "extension_3",
+                        base::Time::Now() - base::Hours(4));
+
+  ClientIncidentReport_ExtensionData data;
+  CollectExtensionData(&data);
+
+  ASSERT_TRUE(data.has_last_installed_extension());
+  ClientIncidentReport_ExtensionData_ExtensionInfo extension_info =
+      data.last_installed_extension();
+
+  ASSERT_EQ(extension_info.id(), extension_id);
+  ASSERT_EQ(extension_info.name(), extension_name);
+  ASSERT_EQ(extension_info.install_time_msec(),
+            install_time.InMillisecondsSinceUnixEpoch());
 }
 
 TEST_F(ExtensionDataCollectionTest, IgnoresExtensionsIfNoExtendedSafeBrowsing) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   std::string extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   std::string extension_name = "extension_2";
 
@@ -322,6 +391,104 @@ TEST_F(ExtensionDataCollectionTest, IgnoresExtensionsIfNoExtendedSafeBrowsing) {
 
   ASSERT_EQ(extension_info.id(), extension_id);
   ASSERT_EQ(extension_info.name(), extension_name);
+}
+
+TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtensions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {safe_browsing::kExtendedReportingRemovePrefDependency,
+       safe_browsing::kHashPrefixRealTimeLookupsSamplePing},
+      {});
+  std::unique_ptr<ExtensionTestingProfile> profile =
+      CreateProfile(ENHANCED_PROTECTION_ONLY);
+
+  ClientIncidentReport_ExtensionData data;
+  CollectExtensionData(&data);
+
+  ASSERT_FALSE(data.has_last_installed_extension());
+}
+
+TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoSafeBrowsing) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {safe_browsing::kExtendedReportingRemovePrefDependency,
+       safe_browsing::kHashPrefixRealTimeLookupsSamplePing},
+      {});
+  std::unique_ptr<ExtensionTestingProfile> profile =
+      CreateProfile(EXTENDED_REPORTING_ONLY);
+  profile->AddExtension();
+
+  ClientIncidentReport_ExtensionData data;
+  CollectExtensionData(&data);
+
+  ASSERT_FALSE(data.has_last_installed_extension());
+}
+
+TEST_F(ExtensionDataCollectionTest, CollectExtensionDataNoExtendedReporting) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {safe_browsing::kExtendedReportingRemovePrefDependency,
+       safe_browsing::kHashPrefixRealTimeLookupsSamplePing},
+      {});
+  std::unique_ptr<ExtensionTestingProfile> profile =
+      CreateProfile(SAFE_BROWSING_ONLY);
+  profile->AddExtension();
+
+  ClientIncidentReport_ExtensionData data;
+  CollectExtensionData(&data);
+
+  ASSERT_FALSE(data.has_last_installed_extension());
+}
+
+TEST_F(ExtensionDataCollectionTest, CollectExtensionDataWithExtension) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {safe_browsing::kExtendedReportingRemovePrefDependency,
+       safe_browsing::kHashPrefixRealTimeLookupsSamplePing},
+      {});
+  std::string extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  std::string extension_name = "my_test_extension";
+  base::Time install_time = base::Time::Now();
+  std::string version = "1.4.2";
+  std::string description = "Test Extension";
+  std::string update_url = "https://www.chromium.org";
+
+  std::unique_ptr<ExtensionTestingProfile> profile =
+      CreateProfile(ENHANCED_PROTECTION_ONLY);
+  profile->AddExtension(extension_id, extension_name, install_time, version,
+                        description, update_url, /*disable_reasons=*/{});
+
+  extensions::ExtensionIdSet valid_ids;
+  extensions::ExtensionIdSet invalid_ids;
+  invalid_ids.insert(extension_id);
+  extensions::InstallSignature signature = {};
+  signature.ids = valid_ids;
+  signature.invalid_ids = invalid_ids;
+  profile->SetInstallSignature(signature);
+
+  ClientIncidentReport_ExtensionData data;
+  CollectExtensionData(&data);
+
+  ASSERT_TRUE(data.has_last_installed_extension());
+  ClientIncidentReport_ExtensionData_ExtensionInfo extension_info =
+      data.last_installed_extension();
+
+  ASSERT_EQ(extension_info.id(), extension_id);
+  ASSERT_EQ(extension_info.name(), extension_name);
+  ASSERT_EQ(extension_info.install_time_msec(),
+            install_time.InMillisecondsSinceUnixEpoch());
+  ASSERT_EQ(extension_info.version(), version);
+  ASSERT_EQ(extension_info.description(), description);
+  ASSERT_EQ(extension_info.update_url(), update_url);
+  ASSERT_EQ(extension_info.has_signature_validation(), true);
+  ASSERT_EQ(extension_info.signature_is_valid(), false);
+  ASSERT_EQ(extension_info.state(),
+            ClientIncidentReport_ExtensionData_ExtensionInfo::STATE_ENABLED);
+  std::string expected_manifest =
+      "{\"description\":\"Test Extension\",\""
+      "manifest_version\":2,\"name\":\"my_test_extension\",\"update_url\":\""
+      "https://www.chromium.org\",\"version\":\"1.4.2\"}";
+  ASSERT_EQ(extension_info.manifest(), expected_manifest);
 }
 
 }  // namespace safe_browsing

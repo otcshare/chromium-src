@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/ozone/platform/wayland/gpu/wayland_overlay_manager.h"
 
 #include <drm_fourcc.h>
 
-#include "base/bind.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h"
@@ -20,13 +22,12 @@ namespace ui {
 namespace {
 
 constexpr gfx::AcceleratedWidget kPrimaryWidget = 1;
-constexpr uint32_t kAugmentedSurfaceNotSupportedVersion = 0;
 
 OverlaySurfaceCandidate CreateCandidate(const gfx::Rect& rect,
                                         int plane_z_order) {
   ui::OverlaySurfaceCandidate candidate;
   candidate.transform = gfx::OVERLAY_TRANSFORM_NONE;
-  candidate.format = gfx::BufferFormat::YUV_420_BIPLANAR;
+  candidate.format = viz::MultiPlaneFormat::kNV12;
   candidate.plane_z_order = plane_z_order;
   candidate.buffer_size = rect.size();
   candidate.display_rect = gfx::RectF(rect);
@@ -47,18 +48,20 @@ class WaylandOverlayManagerTest : public WaylandTest {
   ~WaylandOverlayManagerTest() override = default;
 
   void SetUp() override {
-    const base::flat_map<gfx::BufferFormat, std::vector<uint64_t>>
+    const base::flat_map<viz::SharedImageFormat, std::vector<uint64_t>>
         kSupportedFormatsWithModifiers{
-            {gfx::BufferFormat::YUV_420_BIPLANAR, {DRM_FORMAT_MOD_LINEAR}}};
+            {viz::MultiPlaneFormat::kNV12, {DRM_FORMAT_MOD_LINEAR}}};
 
     WaylandTest::SetUp();
 
     auto manager_ptr = connection_->buffer_manager_host()->BindInterface();
-    buffer_manager_gpu_->Initialize(
-        std::move(manager_ptr), kSupportedFormatsWithModifiers,
-        /*supports_dma_buf=*/false,
-        /*supports_viewporter=*/true,
-        /*supports_acquire_fence=*/false, kAugmentedSurfaceNotSupportedVersion);
+    buffer_manager_gpu_->Initialize(std::move(manager_ptr),
+                                    kSupportedFormatsWithModifiers,
+                                    /*supports_dma_buf=*/false,
+                                    /*supports_viewporter=*/true,
+                                    /*supports_acquire_fence=*/false,
+                                    /*supports_overlays=*/true,
+                                    /*supports_single_pixel_buffer=*/true);
 
     // Wait until initialization and mojo calls go through.
     base::RunLoop().RunUntilIdle();
@@ -92,7 +95,7 @@ TEST_P(WaylandOverlayManagerTest, FormatSupportTest) {
   std::vector<OverlaySurfaceCandidate> candidates = {
       CreateCandidate(gfx::Rect(0, 0, 100, 100), 0),
       CreateCandidate(gfx::Rect(10, 10, 20, 20), 1)};
-  candidates[1].format = gfx::BufferFormat::RGBX_8888;
+  candidates[1].format = viz::SinglePlaneFormat::kRGBX_8888;
   manager.CheckOverlaySupport(&candidates, kPrimaryWidget);
   EXPECT_TRUE(candidates[0].overlay_handled);
   EXPECT_FALSE(candidates[1].overlay_handled);
@@ -133,21 +136,9 @@ void NonIntegerDisplayRectTestHelper(WaylandBufferManagerGpu* manager_gpu,
 }  // namespace
 
 TEST_P(WaylandOverlayManagerTest, DoesNotSupportNonIntegerDisplayRect) {
-  // WaylandBufferManagerGpu manager_gpu;
-  constexpr bool test_data[2][2] = {{false, false}, {true, false}};
-  for (auto* data : test_data) {
-    NonIntegerDisplayRectTestHelper(buffer_manager_gpu_.get(),
-                                    data[0] /* is_delegated_context */,
-                                    data[1] /* expect_candidates_handled */);
-  }
-}
-
-TEST_P(WaylandOverlayManagerTest, SupportsNonIntegerDisplayRect) {
-  // WaylandBufferManagerGpu manager_gpu;
-  buffer_manager_gpu_->supports_subpixel_accurate_position_ = true;
-
-  constexpr bool test_data[2][2] = {{false, false}, {true, true}};
-  for (auto* data : test_data) {
+  constexpr std::array<std::array<bool, 2>, 2> test_data = {
+      {{false, false}, {true, false}}};
+  for (const auto& data : test_data) {
     NonIntegerDisplayRectTestHelper(buffer_manager_gpu_.get(),
                                     data[0] /* is_delegated_context */,
                                     data[1] /* expect_candidates_handled */);

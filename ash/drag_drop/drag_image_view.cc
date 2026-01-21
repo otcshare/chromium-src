@@ -28,11 +28,12 @@ DragImageView::DragImageView(ui::mojom::DragEventSource event_source)
 DragImageView::~DragImageView() = default;
 
 // static
-views::UniqueWidgetPtr DragImageView::Create(
+std::unique_ptr<views::Widget> DragImageView::Create(
     aura::Window* root_window,
     ui::mojom::DragEventSource event_source) {
-  views::Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_TOOLTIP;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_TOOLTIP);
   params.name = "DragWidget";
   params.accept_events = false;
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
@@ -41,8 +42,7 @@ views::UniqueWidgetPtr DragImageView::Create(
       root_window->GetChildById(kShellWindowId_DragImageAndTooltipContainer);
   if (!params.parent)
     params.context = root_window;  // Happens in tests.
-  auto drag_widget = views::UniqueWidgetPtr(
-      std::make_unique<views::Widget>(std::move(params)));
+  auto drag_widget = std::make_unique<views::Widget>(std::move(params));
   drag_widget->SetOpacity(1.f);
   drag_widget->SetContentsView(
       base::WrapUnique(new DragImageView(event_source)));
@@ -116,7 +116,7 @@ void DragImageView::OnPaint(gfx::Canvas* canvas) {
     canvas->DrawImageInt(GetImage(), 0, 0);
   } else {
     aura::Window* window = GetWidget()->GetNativeWindow();
-    const float device_scale = display::Screen::GetScreen()
+    const float device_scale = display::Screen::Get()
                                    ->GetDisplayNearestWindow(window)
                                    .device_scale_factor();
     // The drag image already has device scale factor applied. But
@@ -181,8 +181,8 @@ gfx::Size DragImageView::GetMinimumSize() const {
   return minimum_size;
 }
 
-void DragImageView::Layout() {
-  View::Layout();
+void DragImageView::Layout(PassKey) {
+  LayoutSuperclass<View>(this);
 
   // Only consider resizing the widget for the drag hint image if we are in a
   // touch initiated drag.

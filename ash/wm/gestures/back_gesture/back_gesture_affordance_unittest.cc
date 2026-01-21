@@ -57,7 +57,7 @@ TEST_F(BackGestureAffordanceTest, AffordaceShouldNotOutsideDisplay) {
 TEST_F(BackGestureAffordanceTest,
        DoNotExceedSplitViewDividerInPortraitOrientation) {
   TabletModeControllerTestApi().EnterTabletMode();
-  int64_t display_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t display_id = display::Screen::Get()->GetPrimaryDisplay().id();
   display::DisplayManager* display_manager = Shell::Get()->display_manager();
   display::test::ScopedSetInternalDisplayId set_internal(display_manager,
                                                          display_id);
@@ -66,8 +66,8 @@ TEST_F(BackGestureAffordanceTest,
   std::unique_ptr<aura::Window> bottom_window = CreateTestWindow();
   auto* split_view_controller =
       SplitViewController::Get(Shell::GetPrimaryRootWindow());
-  split_view_controller->SnapWindow(
-      bottom_window.get(), SplitViewController::SnapPosition::kSecondary);
+  split_view_controller->SnapWindow(bottom_window.get(),
+                                    SnapPosition::kSecondary);
 
   // Rotate the screen by 270 degree.
   test_api.SetDisplayRotation(display::Display::ROTATE_270,

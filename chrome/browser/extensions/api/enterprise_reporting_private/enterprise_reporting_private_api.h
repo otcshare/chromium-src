@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/signals/client_certificate_fetcher.h"
 #include "chrome/browser/enterprise/signals/context_info_fetcher.h"
@@ -246,7 +247,7 @@ class EnterpriseReportingPrivateEnqueueRecordFunction
   ExtensionFunction::ResponseAction Run() override;
 
   bool TryParseParams(
-      std::unique_ptr<api::enterprise_reporting_private::EnqueueRecord::Params>
+      std::optional<api::enterprise_reporting_private::EnqueueRecord::Params>
           params,
       ::reporting::Record& record,
       ::reporting::Priority& priority);
@@ -378,6 +379,26 @@ class EnterpriseReportingPrivateGetHotfixesFunction : public ExtensionFunction {
 };
 
 #endif  // BUILDFLAG(IS_WIN)
+
+class EnterpriseReportingPrivateReportDataMaskingEventFunction
+    : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION(
+      "enterprise.reportingPrivate.reportDataMaskingEvent",
+      ENTERPRISEREPORTINGPRIVATE_REPORTDATAMASKINGEVENT)
+
+  EnterpriseReportingPrivateReportDataMaskingEventFunction();
+  EnterpriseReportingPrivateReportDataMaskingEventFunction(
+      const EnterpriseReportingPrivateReportDataMaskingEventFunction&) = delete;
+  EnterpriseReportingPrivateReportDataMaskingEventFunction& operator=(
+      const EnterpriseReportingPrivateReportDataMaskingEventFunction&) = delete;
+
+ private:
+  ~EnterpriseReportingPrivateReportDataMaskingEventFunction() override;
+
+  // ExtensionFunction:
+  ExtensionFunction::ResponseAction Run() override;
+};
 
 }  // namespace extensions
 

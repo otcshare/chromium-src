@@ -7,12 +7,12 @@
 
 #include <memory>
 
+#include "ash/quick_pair/fast_pair_handshake/fast_pair_data_encryptor.h"
+#include "ash/quick_pair/fast_pair_handshake/fast_pair_gatt_service_client.h"
 #include "ash/quick_pair/fast_pair_handshake/fast_pair_handshake.h"
-
 #include "base/memory/scoped_refptr.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 class FakeFastPairHandshake : public FastPairHandshake {
  public:
@@ -22,18 +22,22 @@ class FakeFastPairHandshake : public FastPairHandshake {
       OnCompleteCallback on_complete,
       std::unique_ptr<FastPairDataEncryptor> data_encryptor = nullptr,
       std::unique_ptr<FastPairGattServiceClient> gatt_service_client = nullptr);
+
   FakeFastPairHandshake(const FakeFastPairHandshake&) = delete;
   FakeFastPairHandshake& operator=(const FakeFastPairHandshake&) = delete;
   ~FakeFastPairHandshake() override;
 
-  void InvokeCallback(absl::optional<PairFailure> failure = absl::nullopt);
+  void SetUpHandshake(OnFailureCallback on_failure_callback,
+                      OnCompleteCallbackNew on_success_callback) override;
+  void Reset() override;
+
+  void InvokeCallback(std::optional<PairFailure> failure = std::nullopt);
 
   void set_completed_successfully(bool completed_successfully) {
     completed_successfully_ = completed_successfully;
   }
 };
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_FAST_PAIR_HANDSHAKE_FAKE_FAST_PAIR_HANDSHAKE_H_

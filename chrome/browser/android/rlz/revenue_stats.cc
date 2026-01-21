@@ -4,28 +4,38 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/RevenueStats_jni.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data_android.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/RevenueStats_jni.h"
+
+using base::android::JavaRef;
 
 namespace chrome {
 namespace android {
 
-static void JNI_RevenueStats_SetSearchClient(
-    JNIEnv* env,
-    const JavaParamRef<jstring>& jclient) {
-  SearchTermsDataAndroid::search_client_.Get() =
-      base::android::ConvertJavaStringToUTF8(env, jclient);
+static void JNI_RevenueStats_SetSearchClient(JNIEnv* env, std::string& client) {
+  SearchTermsDataAndroid::GetSearchClient() = client;
 }
 
-static void JNI_RevenueStats_SetRlzParameterValue(
+static void JNI_RevenueStats_SetCustomTabSearchClient(
     JNIEnv* env,
-    const JavaParamRef<jstring>& jrlz) {
-  SearchTermsDataAndroid::rlz_parameter_value_.Get() =
-      base::android::ConvertJavaStringToUTF16(env, jrlz);
+    const jni_zero::JavaRef<jstring>& j_client) {
+  if (j_client.is_null()) {
+    SearchTermsDataAndroid::GetCustomTabSearchClient().reset();
+  } else {
+    SearchTermsDataAndroid::GetCustomTabSearchClient().emplace(
+        base::android::ConvertJavaStringToUTF8(j_client));
+  }
+}
+
+static void JNI_RevenueStats_SetRlzParameterValue(JNIEnv* env,
+                                                  std::u16string& rlz) {
+  SearchTermsDataAndroid::GetRlzParameterValue() = rlz;
 }
 
 }  // namespace android
 }  // namespace chrome
+
+DEFINE_JNI(RevenueStats)

@@ -9,16 +9,35 @@
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/public/cpp/app_list/app_list_controller.h"
-#include "base/bind.h"
+#include "ash/public/cpp/app_list/app_list_types.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "chromeos/ui/vector_icons/vector_icons.h"
+#include "ui/base/themed_vector_icon.h"
+#include "ui/gfx/color_palette.h"
+#include "ui/gfx/image/image.h"
+#include "ui/menus/simple_menu_model.h"
 
 namespace ash {
+
+namespace {
+class FakeScopedIphSession : public ScopedIphSession {
+ public:
+  ~FakeScopedIphSession() override = default;
+  void NotifyEvent(const std::string& event) override {}
+};
+}  // namespace
 
 TestAppListClient::TestAppListClient() = default;
 
 TestAppListClient::~TestAppListClient() = default;
+
+std::vector<AppListSearchControlCategory>
+TestAppListClient::GetToggleableCategories() const {
+  return toggleable_categories_for_test_;
+}
 
 void TestAppListClient::StartZeroStateSearch(base::OnceClosure on_done,
                                              base::TimeDelta timeout) {
@@ -61,18 +80,18 @@ void TestAppListClient::InvokeSearchResultAction(
   invoked_result_actions_.emplace_back(result_id, action);
 }
 
-void TestAppListClient::GetSearchResultContextMenuModel(
-    const std::string& result_id,
-    GetContextMenuModelCallback callback) {
-  std::move(callback).Run(nullptr);
-}
-
 void TestAppListClient::ActivateItem(int profile_id,
                                      const std::string& id,
                                      int event_flags,
-                                     ash::AppListLaunchedFrom launched_from) {
+                                     ash::AppListLaunchedFrom launched_from,
+                                     bool is_above_the_fold) {
   activate_item_count_++;
   activate_item_last_id_ = id;
+  if (is_above_the_fold) {
+    activate_item_above_the_fold_++;
+  } else {
+    activate_item_below_the_fold_++;
+  }
 }
 
 void TestAppListClient::GetContextMenuModel(
@@ -87,6 +106,17 @@ void TestAppListClient::GetContextMenuModel(
 
 AppListNotifier* TestAppListClient::GetNotifier() {
   return nullptr;
+}
+
+void TestAppListClient::RecalculateWouldTriggerLauncherSearchIph() {}
+
+std::unique_ptr<ScopedIphSession>
+TestAppListClient::CreateLauncherSearchIphSession() {
+  return std::make_unique<FakeScopedIphSession>();
+}
+
+void TestAppListClient::LoadIcon(int profile_id, const std::string& app_id) {
+  loaded_icon_app_ids_.push_back(app_id);
 }
 
 std::vector<TestAppListClient::SearchResultActionId>
@@ -107,16 +137,32 @@ ash::AppListSortOrder TestAppListClient::GetPermanentSortingOrder() const {
   return ash::AppListSortOrder::kCustom;
 }
 
-void TestAppListClient::CommitTemporarySortOrder() {
-  // Committing the temporary sort order should not introduce item reorder so
-  // reset the sort order without reorder animation.
-  AppListController::Get()->UpdateAppListWithNewTemporarySortOrder(
-      /*new_order=*/absl::nullopt, /*animate=*/false, base::NullCallback());
-}
-
 void TestAppListClient::OnZeroStateSearchDone(base::OnceClosure on_done) {
   zero_state_search_done_count_++;
   std::move(on_done).Run();
+}
+
+std::optional<bool> TestAppListClient::IsNewUser(
+    const AccountId& account_id) const {
+  return is_new_user_;
+}
+
+void TestAppListClient::RecordAppsDefaultVisibility(
+    const std::vector<std::string>& apps_above_the_fold,
+    const std::vector<std::string>& apps_below_the_fold,
+    bool is_apps_collections_page) {
+  items_above_the_fold_count_ = apps_above_the_fold.size();
+  items_below_the_fold_count_ = apps_below_the_fold.size();
+}
+
+bool TestAppListClient::HasReordered() {
+  return false;
+}
+
+gfx::Image TestAppListClient::GetGeminiIcon() {
+  // Use `kMahiSparkIcon` as a placeholder.
+  return gfx::Image(ui::ThemedVectorIcon(&chromeos::kMahiSparkIcon)
+                        .GetImageSkia(gfx::kPlaceholderColor));
 }
 
 }  // namespace ash

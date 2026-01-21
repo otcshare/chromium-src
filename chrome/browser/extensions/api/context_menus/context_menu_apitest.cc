@@ -23,13 +23,15 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_action.h"
+#include "extensions/browser/extension_host.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/test/result_catcher.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/models/menu_model.h"
 
 namespace extensions {
 
-using ContextType = ExtensionBrowserTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
 class ExtensionContextMenuApiTest : public ExtensionApiTest {
  public:
@@ -76,6 +78,10 @@ INSTANTIATE_TEST_SUITE_P(ServiceWorker,
 
 IN_PROC_BROWSER_TEST_P(ExtensionContextMenuApiLazyTest, ContextMenus) {
   ASSERT_TRUE(RunExtensionTest("context_menus/event_page")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_P(ExtensionContextMenuApiTestWithContextType, Count) {
+  ASSERT_TRUE(RunExtensionTest("context_menus/count")) << message_;
 }
 
 // crbug.com/51436 -- creating context menus from multiple script contexts
@@ -130,6 +136,13 @@ class ExtensionContextMenuVisibilityApiTest
   ExtensionContextMenuVisibilityApiTest& operator=(
       const ExtensionContextMenuVisibilityApiTest&) = delete;
 
+  void TearDownOnMainThread() override {
+    // Depends on `menu_` so must be cleared before it is destroyed.
+    top_level_model_ = nullptr;
+    menu_.reset();
+    ExtensionContextMenuApiTest::TearDownOnMainThread();
+  }
+
   void SetUpTestExtension() {
     extension_ = LoadExtension(
         test_data_dir_.AppendASCII("context_menus/item_visibility/"));
@@ -163,10 +176,7 @@ class ExtensionContextMenuVisibilityApiTest
 
   void CallAPI(const Extension* extension, const std::string& script) {
     content::WebContents* background_page = GetBackgroundPage(extension->id());
-    bool error = false;
-    ASSERT_TRUE(
-        content::ExecuteScriptAndExtractBool(background_page, script, &error));
-    ASSERT_FALSE(error);
+    ASSERT_EQ(false, content::EvalJs(background_page, script));
   }
 
   // Verifies that the UI menu model has the given number of extension menu
@@ -209,10 +219,10 @@ class ExtensionContextMenuVisibilityApiTest
 
   const Extension* extension() { return extension_; }
 
-  ui::MenuModel* top_level_model_ = nullptr;
+  raw_ptr<ui::MenuModel> top_level_model_ = nullptr;
 
  private:
-  content::WebContents* GetBackgroundPage(const std::string& extension_id) {
+  content::WebContents* GetBackgroundPage(const ExtensionId& extension_id) {
     return process_manager()
         ->GetBackgroundHostForExtension(extension_id)
         ->host_contents();

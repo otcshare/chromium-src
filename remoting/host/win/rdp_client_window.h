@@ -5,15 +5,16 @@
 #ifndef REMOTING_HOST_WIN_RDP_CLIENT_WINDOW_H_
 #define REMOTING_HOST_WIN_RDP_CLIENT_WINDOW_H_
 
-#include "base/memory/raw_ptr.h"
-
-// Must be included before <atlapp.h>.
-#include "base/win/atl.h"  // NOLINT(build/include_order)
+// clang-format off
+// This needs to be included before ATL headers.
+#include "base/win/atl.h"
+// clang-format on
 
 #include <atlapp.h>
 #include <atlcrack.h>
 #include <wrl/client.h>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/timer/timer.h"
 #include "base/win/atl.h"
@@ -24,17 +25,30 @@
 #include "remoting/host/win/com_imported_mstscax.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 
+#ifdef COMPONENT_BUILD
+#ifdef RDP_WINDOW_IMPL
+#define RDP_WINDOW_EXPORT __declspec(dllexport)
+#else
+#define RDP_WINDOW_EXPORT __declspec(dllimport)
+#endif  // RDP_WINDOW_IMPL
+#else
+#define RDP_WINDOW_EXPORT
+#endif  // COMPONENT_BUILD
+
 namespace remoting {
 
 // RdpClientWindow is used to establish a connection to the given RDP endpoint.
 // It is a GUI window class that hosts Microsoft RDP ActiveX control, which
 // takes care of handling RDP properly. RdpClientWindow must be used only on
 // a UI thread.
-class RdpClientWindow
+class RDP_WINDOW_EXPORT RdpClientWindow
     : public CWindowImpl<RdpClientWindow, CWindow, CFrameWinTraits>,
-      public IDispEventImpl<1, RdpClientWindow,
+      public IDispEventImpl<1,
+                            RdpClientWindow,
                             &__uuidof(mstsc::IMsTscAxEvents),
-                            &__uuidof(mstsc::__MSTSCLib), 1, 0> {
+                            &__uuidof(mstsc::__MSTSCLib),
+                            1,
+                            0> {
  public:
   // Receives connect/disconnect notifications. The notifications can be
   // delivered after RdpClientWindow::Connect() returned success.
@@ -65,8 +79,8 @@ class RdpClientWindow
 
   DECLARE_WND_CLASS(L"RdpClientWindow")
 
-  // Specifies the endpoint to connect to and passes the event handler pointer
-  // to be notified about connection events.
+  // Specifies the endpoint to connect to and passes the event handler
+  // pointer to be notified about connection events.
   RdpClientWindow(const net::IPEndPoint& server_endpoint,
                   const std::string& terminal_id,
                   EventHandler* event_handler);
@@ -89,9 +103,13 @@ class RdpClientWindow
   void ChangeResolution(const ScreenResolution& resolution);
 
  private:
-  typedef IDispEventImpl<1, RdpClientWindow,
+  typedef IDispEventImpl<1,
+                         RdpClientWindow,
                          &__uuidof(mstsc::IMsTscAxEvents),
-                         &__uuidof(mstsc::__MSTSCLib), 1, 0> RdpEventsSink;
+                         &__uuidof(mstsc::__MSTSCLib),
+                         1,
+                         0>
+      RdpEventsSink;
 
   // Handled window messages.
   BEGIN_MSG_MAP_EX(RdpClientWindow)
@@ -111,20 +129,34 @@ class RdpClientWindow
   void OnDestroy();
 
   BEGIN_SINK_MAP(RdpClientWindow)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 2,
-                  &RdpClientWindow::OnConnected)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 3,
-                  &RdpClientWindow::OnLoginComplete)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 4,
-                  &RdpClientWindow::OnDisconnected)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 10,
-                  &RdpClientWindow::OnFatalError)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 15,
-                  &RdpClientWindow::OnConfirmClose)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 18,
-                  &RdpClientWindow::OnAuthenticationWarningDisplayed)
-    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 19,
-                  &RdpClientWindow::OnAuthenticationWarningDismissed)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                2,
+                &RdpClientWindow::OnConnected)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                3,
+                &RdpClientWindow::OnLoginComplete)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                4,
+                &RdpClientWindow::OnDisconnected)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                10,
+                &RdpClientWindow::OnFatalError)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                15,
+                &RdpClientWindow::OnConfirmClose)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                18,
+                &RdpClientWindow::OnAuthenticationWarningDisplayed)
+  SINK_ENTRY_EX(1,
+                __uuidof(mstsc::IMsTscAxEvents),
+                19,
+                &RdpClientWindow::OnAuthenticationWarningDismissed)
   END_SINK_MAP()
 
   // mstsc::IMsTscAxEvents notifications.
@@ -158,8 +190,14 @@ class RdpClientWindow
   // Invoked to report connect/disconnect events.
   raw_ptr<EventHandler> event_handler_;
 
-  // Contains the requested dimensions of the screen.
-  remoting::ScreenResolution screen_resolution_;
+  // Contains the requested dimensions of the screen. Used for both login and
+  // user sessions.
+  remoting::ScreenResolution display_settings_;
+
+  // Contains the last successful display update for the user session. This
+  // needs to be tracked as trying to re-apply the same values can cause DXGI
+  // capture to fail.
+  remoting::ScreenResolution session_display_settings_;
 
   // Used for applying resolution changes after a timeout.
   base::RepeatingTimer apply_resolution_timer_;
@@ -180,8 +218,7 @@ class RdpClientWindow
   bool user_logged_in_ = false;
 
   // Interfaces exposed by the RDP ActiveX control.
-  Microsoft::WRL::ComPtr<mstsc::IMsRdpClient> client_;
-  Microsoft::WRL::ComPtr<mstsc::IMsRdpClient9> client_9_;
+  Microsoft::WRL::ComPtr<mstsc::IMsRdpClient9> client_;
   Microsoft::WRL::ComPtr<mstsc::IMsRdpClientAdvancedSettings> client_settings_;
 
   // Used to cancel modal dialog boxes shown by the RDP control.

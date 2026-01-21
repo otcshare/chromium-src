@@ -9,15 +9,16 @@
 #include "chrome/browser/sharesheet/sharesheet_controller.h"
 #include "chrome/browser/sharesheet/sharesheet_types.h"
 #include "chromeos/components/sharesheet/constants.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
 
 namespace sharesheet {
 
-ExampleAction::ExampleAction() {
-  name_ = "example";
-}
+ExampleAction::ExampleAction() = default;
 
 ExampleAction::~ExampleAction() = default;
+
+ShareActionType ExampleAction::GetActionType() const {
+  return type_;
+}
 
 const std::u16string ExampleAction::GetActionName() {
   return base::ASCIIToUTF16(name_);

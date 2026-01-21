@@ -4,11 +4,13 @@
 
 #include "extensions/browser/api/system_cpu/cpu_info_provider.h"
 
+#include <inttypes.h>
 #include <stdint.h>
 
 #include <cstdio>
 #include <sstream>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 
@@ -36,8 +38,9 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
   //   cpu0 138060 19947 78350 1479514 570 44 3576 0 0 0
   //   cpu3 2033 32 1075 1400 52 0 1 0 0 0
   std::string contents;
-  if (!base::ReadFileToString(base::FilePath(kProcStat), &contents))
+  if (!base::ReadFileToString(base::FilePath(kProcStat), &contents)) {
     return false;
+  }
 
   std::istringstream iss(contents);
   std::string line;
@@ -46,21 +49,20 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
   // all cpuN lines.
   std::getline(iss, line);
   while (std::getline(iss, line)) {
-    if (line.compare(0, 3, "cpu") != 0)
+    if (line.compare(0, 3, "cpu") != 0) {
       continue;
+    }
 
     uint64_t user = 0, nice = 0, sys = 0, idle = 0;
     uint32_t pindex = 0;
-    int vals =
-        sscanf(line.c_str(),
-               "cpu%" PRIu32 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64,
-               &pindex,
-               &user,
-               &nice,
-               &sys,
-               &idle);
+    int vals = UNSAFE_TODO(sscanf(line.c_str(),
+                                  "cpu%" SCNu32 " %" SCNu64 " %" SCNu64
+                                  " %" SCNu64 " %" SCNu64,
+                                  &pindex, &user, &nice, &sys, &idle));
     if (vals != 5 || pindex >= infos->size()) {
-      NOTREACHED();
+      // TODO(b/326303922): This fires in internal integration tests, reevaluate
+      // whether this should be (and can be made) unreachable or handle it.
+      DUMP_WILL_BE_NOTREACHED();
       return false;
     }
 

@@ -5,24 +5,32 @@
 #include "components/services/storage/indexed_db/scopes/leveldb_scopes_coding.h"
 
 #include <sstream>
+#include <string_view>
 #include <utility>
 
-#include "base/big_endian.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "components/services/storage/indexed_db/scopes/varint_coding.h"
 
-namespace content {
+namespace content::indexed_db {
 namespace {
 
 void EncodeBigEndianFixed64(uint64_t number, std::string* output) {
   DCHECK(output);
   size_t start_index = output->size();
   output->resize(output->size() + sizeof(uint64_t));
-  base::WriteBigEndian(&(*output)[start_index], number);
+  base::as_writable_byte_span(*output)
+      .subspan(start_index)
+      .copy_from(base::U64ToBigEndian(number));
 }
 
-base::StringPiece MakeStringPiece(base::span<const uint8_t> bytes) {
-  return base::StringPiece(reinterpret_cast<const char*>(bytes.data()),
-                           bytes.size());
+std::string_view MakeStringView(base::span<const uint8_t> bytes) {
+  return std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                          bytes.size());
 }
 
 }  // namespace
@@ -49,8 +57,9 @@ std::tuple<bool, int64_t> ParseScopeMetadataId(
     return std::make_tuple(false, 0);
 
   int64_t scope_id = 0;
-  base::StringPiece part(key.data() + prefix_size, key.size() - prefix_size);
-  bool decode_success = DecodeVarInt(&part, &scope_id);
+  std::string_view key_without_prefix =
+      std::string_view(key.begin(), key.end()).substr(prefix_size);
+  bool decode_success = DecodeVarInt(&key_without_prefix, &scope_id);
   DCHECK_GE(scope_id, 0);
   return std::make_tuple(decode_success, scope_id);
 }
@@ -63,8 +72,8 @@ std::string KeyToDebugString(base::span<const uint8_t> key_without_prefix) {
     return result.str();
   }
   char type_byte = key_without_prefix[0];
-  base::StringPiece key_after_type =
-      MakeStringPiece(key_without_prefix.subspan(1));
+  std::string_view key_after_type =
+      MakeStringView(key_without_prefix.subspan<1>());
   switch (type_byte) {
     case kGlobalMetadataByte:
       result << "GlobalMetadata";
@@ -100,8 +109,8 @@ std::string KeyToDebugString(base::span<const uint8_t> key_without_prefix) {
         result << "<Invalid Seq Num>";
         break;
       }
-      base::ReadBigEndian(
-          reinterpret_cast<const uint8_t*>(key_after_type.data()), &seq_num);
+      seq_num = base::U64FromBigEndian(
+          base::as_byte_span(key_after_type).first<8u>());
       result << seq_num;
       break;
     }
@@ -115,8 +124,7 @@ std::string KeyToDebugString(base::span<const uint8_t> key_without_prefix) {
 leveldb::Slice ScopesEncoder::GlobalMetadataKey(
     base::span<const uint8_t> scopes_prefix) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(scopes_prefix.data()),
-                     scopes_prefix.size());
+  key_buffer_ = base::as_string_view(scopes_prefix);
   key_buffer_.push_back(leveldb_scopes::kGlobalMetadataByte);
   return leveldb::Slice(key_buffer_);
 }
@@ -125,8 +133,7 @@ leveldb::Slice ScopesEncoder::ScopeMetadataKey(
     base::span<const uint8_t> scopes_prefix,
     int64_t scope_number) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(scopes_prefix.data()),
-                     scopes_prefix.size());
+  key_buffer_ = base::as_string_view(scopes_prefix);
   key_buffer_.push_back(leveldb_scopes::kScopesMetadataByte);
   DCHECK_GE(scope_number, 0);
   EncodeVarInt(static_cast<uint64_t>(scope_number), &key_buffer_);
@@ -136,16 +143,14 @@ leveldb::Slice ScopesEncoder::ScopeMetadataKey(
 leveldb::Slice ScopesEncoder::ScopeMetadataPrefix(
     base::span<const uint8_t> scopes_prefix) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(scopes_prefix.data()),
-                     scopes_prefix.size());
+  key_buffer_ = base::as_string_view(scopes_prefix);
   key_buffer_.push_back(leveldb_scopes::kScopesMetadataByte);
   return leveldb::Slice(key_buffer_);
 }
 
 leveldb::Slice ScopesEncoder::TasksKeyPrefix(base::span<const uint8_t> prefix) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(prefix.data()),
-                     prefix.size());
+  key_buffer_ = base::as_string_view(prefix);
   key_buffer_.push_back(leveldb_scopes::kLogByte);
   return leveldb::Slice(key_buffer_);
 }
@@ -153,8 +158,7 @@ leveldb::Slice ScopesEncoder::TasksKeyPrefix(base::span<const uint8_t> prefix) {
 leveldb::Slice ScopesEncoder::TasksKeyPrefix(base::span<const uint8_t> prefix,
                                              int64_t scope_number) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(prefix.data()),
-                     prefix.size());
+  key_buffer_ = base::as_string_view(prefix);
   key_buffer_.push_back(leveldb_scopes::kLogByte);
   DCHECK_GE(scope_number, 0);
   EncodeVarInt(static_cast<uint64_t>(scope_number), &key_buffer_);
@@ -165,8 +169,7 @@ leveldb::Slice ScopesEncoder::UndoTaskKeyPrefix(
     base::span<const uint8_t> prefix,
     int64_t scope_number) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(prefix.data()),
-                     prefix.size());
+  key_buffer_ = base::as_string_view(prefix);
   key_buffer_.push_back(leveldb_scopes::kLogByte);
   DCHECK_GE(scope_number, 0);
   EncodeVarInt(static_cast<uint64_t>(scope_number), &key_buffer_);
@@ -178,8 +181,7 @@ leveldb::Slice ScopesEncoder::CleanupTaskKeyPrefix(
     base::span<const uint8_t> prefix,
     int64_t scope_number) {
   key_buffer_.clear();
-  key_buffer_.assign(reinterpret_cast<const char*>(prefix.data()),
-                     prefix.size());
+  key_buffer_ = base::as_string_view(prefix);
   key_buffer_.push_back(leveldb_scopes::kLogByte);
   DCHECK_GE(scope_number, 0);
   EncodeVarInt(static_cast<uint64_t>(scope_number), &key_buffer_);
@@ -205,4 +207,4 @@ leveldb::Slice ScopesEncoder::CleanupTaskKey(
   return leveldb::Slice(key_buffer_);
 }
 
-}  // namespace content
+}  // namespace content::indexed_db

@@ -39,17 +39,22 @@ class StyleDifference {
   };
 
   StyleDifference()
-      : needs_paint_invalidation_(false),
+      : paint_invalidation_type_(
+            static_cast<unsigned>(PaintInvalidationType::kNone)),
         layout_type_(kNoLayout),
         needs_reshape_(false),
         recompute_visual_overflow_(false),
         property_specific_differences_(0),
         scroll_anchor_disabling_property_changed_(false),
         compositing_reasons_changed_(false),
-        compositable_paint_effect_changed_(false) {}
+        compositable_paint_effect_changed_(false),
+        border_radius_changed_(false),
+        border_shape_changed_(false),
+        transform_data_changed_(false) {}
 
   void Merge(StyleDifference other) {
-    needs_paint_invalidation_ |= other.needs_paint_invalidation_;
+    paint_invalidation_type_ =
+        std::max(paint_invalidation_type_, other.paint_invalidation_type_);
     layout_type_ = std::max(layout_type_, other.layout_type_);
     needs_reshape_ |= other.needs_reshape_;
     recompute_visual_overflow_ |= other.recompute_visual_overflow_;
@@ -59,24 +64,40 @@ class StyleDifference {
     compositing_reasons_changed_ |= other.compositing_reasons_changed_;
     compositable_paint_effect_changed_ |=
         other.compositable_paint_effect_changed_;
+    border_radius_changed_ |= other.border_radius_changed_;
+    transform_data_changed_ |= other.transform_data_changed_;
   }
 
   bool HasDifference() const {
-    return needs_paint_invalidation_ || layout_type_ || needs_reshape_ ||
-           property_specific_differences_ || recompute_visual_overflow_ ||
+    return (paint_invalidation_type_ !=
+            static_cast<unsigned>(PaintInvalidationType::kNone)) ||
+           layout_type_ || needs_reshape_ || property_specific_differences_ ||
+           recompute_visual_overflow_ ||
            scroll_anchor_disabling_property_changed_ ||
-           compositing_reasons_changed_ || compositable_paint_effect_changed_;
+           compositing_reasons_changed_ || compositable_paint_effect_changed_ ||
+           border_radius_changed_ || transform_data_changed_;
   }
 
-  bool HasAtMostPropertySpecificDifferences(
-      unsigned property_differences) const {
-    return !needs_paint_invalidation_ && !layout_type_ &&
-           !compositing_reasons_changed_ &&
-           !(property_specific_differences_ & ~property_differences);
+  // For simple paint invalidation, we can directly invalidate the
+  // DisplayItemClients during style update, without paint invalidation during
+  // PrePaintTreeWalk.
+  bool NeedsSimplePaintInvalidation() const {
+    return paint_invalidation_type_ ==
+           static_cast<unsigned>(PaintInvalidationType::kSimple);
   }
-
-  bool NeedsPaintInvalidation() const { return needs_paint_invalidation_; }
-  void SetNeedsPaintInvalidation() { needs_paint_invalidation_ = true; }
+  bool NeedsNormalPaintInvalidation() const {
+    return paint_invalidation_type_ ==
+           static_cast<unsigned>(PaintInvalidationType::kNormal);
+  }
+  void SetNeedsSimplePaintInvalidation() {
+    DCHECK(!NeedsNormalPaintInvalidation());
+    paint_invalidation_type_ =
+        static_cast<unsigned>(PaintInvalidationType::kSimple);
+  }
+  void SetNeedsNormalPaintInvalidation() {
+    paint_invalidation_type_ =
+        static_cast<unsigned>(PaintInvalidationType::kNormal);
+  }
 
   bool NeedsLayout() const { return layout_type_ != kNoLayout; }
   void ClearNeedsLayout() { layout_type_ = kNoLayout; }
@@ -191,6 +212,12 @@ class StyleDifference {
   void SetCompositablePaintEffectChanged() {
     compositable_paint_effect_changed_ = true;
   }
+  bool BorderRadiusChanged() const { return border_radius_changed_; }
+  void SetBorderRadiusChanged() { border_radius_changed_ = true; }
+  bool BorderShapeChanged() const { return border_shape_changed_; }
+  void SetBorderShapeChanged() { border_shape_changed_ = true; }
+  bool TransformDataChanged() const { return transform_data_changed_; }
+  void SetTransformDataChanged() { transform_data_changed_ = true; }
 
  private:
   static constexpr int kPropertyDifferenceCount = 11;
@@ -198,7 +225,8 @@ class StyleDifference {
   friend CORE_EXPORT std::ostream& operator<<(std::ostream&,
                                               const StyleDifference&);
 
-  unsigned needs_paint_invalidation_ : 1;
+  enum class PaintInvalidationType { kNone, kSimple, kNormal };
+  unsigned paint_invalidation_type_ : 2;
 
   enum LayoutType { kNoLayout = 0, kPositionedMovement, kFullLayout };
   unsigned layout_type_ : 2;
@@ -210,6 +238,9 @@ class StyleDifference {
   // Designed for the effects such as background-color, whose animation can be
   // composited using paint worklet infra.
   unsigned compositable_paint_effect_changed_ : 1;
+  unsigned border_radius_changed_ : 1;
+  unsigned border_shape_changed_ : 1;
+  unsigned transform_data_changed_ : 1;
 
   // This exists only to get the object up to exactly 32 bits,
   // which keeps Clang from making partial writes of it when copying
@@ -217,7 +248,7 @@ class StyleDifference {
   // data back again with a large read can cause store-to-load forward
   // stalls). Feel free to take bits from here if you need them
   // for something else.
-  unsigned padding_ [[maybe_unused]] : 13;
+  unsigned padding_ [[maybe_unused]] : 9;
 };
 static_assert(sizeof(StyleDifference) == 4, "Remove some padding bits!");
 

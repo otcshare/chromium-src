@@ -43,12 +43,11 @@ void CSSSkewY::setAy(CSSNumericValue* value, ExceptionState& exception_state) {
 CSSSkewY* CSSSkewY::FromCSSValue(const CSSFunctionValue& value) {
   DCHECK_GT(value.length(), 0U);
   DCHECK_EQ(value.FunctionType(), CSSValueID::kSkewY);
-  if (value.length(), 1U) {
+  if (value.length() == 1U) {
     return CSSSkewY::Create(
         CSSNumericValue::FromCSSValue(To<CSSPrimitiveValue>(value.Item(0))));
   }
   NOTREACHED();
-  return nullptr;
 }
 
 DOMMatrix* CSSSkewY::toMatrix(ExceptionState&) const {
@@ -61,8 +60,9 @@ DOMMatrix* CSSSkewY::toMatrix(ExceptionState&) const {
 
 const CSSFunctionValue* CSSSkewY::ToCSSValue() const {
   const CSSValue* ay = ay_->ToCSSValue();
-  if (!ay)
+  if (!ay) {
     return nullptr;
+  }
 
   CSSFunctionValue* result =
       MakeGarbageCollected<CSSFunctionValue>(CSSValueID::kSkewY);

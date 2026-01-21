@@ -4,21 +4,22 @@
 
 #include "services/network/sct_auditing/sct_auditing_reporter.h"
 
+#include <utility>
+
 #include "base/base64.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
-#include "base/time/time_to_iso8601.h"
 #include "net/base/hash_value.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
-#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/proto/sct_audit_report.pb.h"
 #include "services/network/test/fake_test_cert_verifier_params_factory.h"
@@ -26,7 +27,6 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "services/network/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/utility/utility.h"
 
 namespace network {
 
@@ -115,7 +115,7 @@ class SCTAuditingReporterTest : public testing::Test {
     SCTAuditingReporter::SCTHashdanceMetadata metadata =
         *SCTAuditingReporter::SCTHashdanceMetadata::FromValue(
             reporter_metadata_.ToValue());
-    mojom::SCTAuditingConfigurationPtr configuration(absl::in_place);
+    mojom::SCTAuditingConfigurationPtr configuration(std::in_place);
     configuration->log_expected_ingestion_delay = kExpectedIngestionDelay;
     configuration->log_max_ingestion_random_delay = kMaxIngestionRandomDelay;
     configuration->report_uri = GURL(kTestReportURL);
@@ -134,10 +134,8 @@ class SCTAuditingReporterTest : public testing::Test {
   // Simulates a response for a pending request with the values from the
   // |response_| template object.
   void SimulateResponse() {
-    std::string leaf_hash_base64;
-    base::Base64Encode(response_.hash_suffix, &leaf_hash_base64);
-    std::string log_id_base64;
-    base::Base64Encode(response_.log_id, &log_id_base64);
+    std::string leaf_hash_base64 = base::Base64Encode(response_.hash_suffix);
+    std::string log_id_base64 = base::Base64Encode(response_.log_id);
     url_loader_factory_.SimulateResponseForPendingRequest(
         url_loader_factory_.GetPendingRequest(0)->request.url.spec(),
         base::ReplaceStringPlaceholders(
@@ -158,8 +156,8 @@ class SCTAuditingReporterTest : public testing::Test {
                 response_.status,
                 leaf_hash_base64,
                 log_id_base64,
-                base::TimeToISO8601(response_.ingested_until),
-                base::TimeToISO8601(response_.now),
+                base::TimeFormatAsIso8601(response_.ingested_until),
+                base::TimeFormatAsIso8601(response_.now),
             },
             nullptr));
   }
@@ -183,20 +181,15 @@ class SCTAuditingReporterTest : public testing::Test {
   // Stores the mojo::Remote<mojom::NetworkContext> of the most recently created
   // NetworkContext.
   mojo::Remote<mojom::NetworkContext> network_context_remote_;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kSCTAuditingRetryReports,
-  };
 };
 
 TEST_F(SCTAuditingReporterTest, SCTHashdanceMetadataFromValue) {
-  base::Value::Dict valid_value_dict;
-  valid_value_dict.Set("leaf_hash", kLeafHashBase64);
-  valid_value_dict.Set("issued", kIssuedSerialized);
-  valid_value_dict.Set("log_id", kLogIdBase64);
-  valid_value_dict.Set("log_mmd", kLogMMDSerialized);
-  valid_value_dict.Set("cert_expiry", kCertExpirySerialized);
+  auto valid_value_dict = base::Value::Dict()
+                              .Set("leaf_hash", kLeafHashBase64)
+                              .Set("issued", kIssuedSerialized)
+                              .Set("log_id", kLogIdBase64)
+                              .Set("log_mmd", kLogMMDSerialized)
+                              .Set("cert_expiry", kCertExpirySerialized);
   base::Value valid_value(std::move(valid_value_dict));
 
   auto metadata =

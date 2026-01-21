@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
@@ -49,7 +49,6 @@ VkPipelineStageFlags GetPipelineStageFlags(const VkImageLayout layout) {
     default:
       NOTREACHED() << "layout=" << layout;
   }
-  return 0;
 }
 
 VkAccessFlags GetAccessMask(const VkImageLayout layout) {
@@ -79,7 +78,6 @@ VkAccessFlags GetAccessMask(const VkImageLayout layout) {
     default:
       NOTREACHED() << "layout=" << layout;
   }
-  return 0;
 }
 }  // namespace
 

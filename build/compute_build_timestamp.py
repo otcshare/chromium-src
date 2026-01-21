@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -27,7 +27,6 @@ Either way, it is guaranteed to be in the past and always in UTC.
 # the symbol server, so rarely changing timestamps can cause conflicts there
 # as well. We only upload symbols for official builds to the symbol server.
 
-from __future__ import print_function
 
 import argparse
 import calendar
@@ -110,7 +109,8 @@ def main():
   # use_dummy_lastchange is set.
   lastchange_file = os.path.join(THIS_DIR, 'util', 'LASTCHANGE.committime')
   last_commit_timestamp = int(open(lastchange_file).read())
-  build_date = datetime.datetime.utcfromtimestamp(last_commit_timestamp)
+  build_date = datetime.datetime.fromtimestamp(last_commit_timestamp,
+                                               datetime.timezone.utc)
 
   # For official builds we want full fidelity time stamps because official
   # builds are typically added to symbol servers and Windows symbol servers

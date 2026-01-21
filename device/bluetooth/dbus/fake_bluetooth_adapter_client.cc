@@ -8,9 +8,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -144,7 +145,7 @@ void FakeBluetoothAdapterClient::StartDiscovery(
   ++discovering_count_;
   DVLOG(1) << "StartDiscovery: " << object_path.value() << ", "
            << "count is now " << discovering_count_;
-  PostDelayedTask(base::BindOnce(std::move(callback), absl::nullopt));
+  PostDelayedTask(base::BindOnce(std::move(callback), std::nullopt));
 
   if (discovering_count_ == 1) {
     PostDelayedTask(
@@ -178,7 +179,7 @@ void FakeBluetoothAdapterClient::StopDiscovery(
   --discovering_count_;
   DVLOG(1) << "StopDiscovery: " << object_path.value() << ", "
            << "count is now " << discovering_count_;
-  PostDelayedTask(base::BindOnce(std::move(callback), absl::nullopt));
+  PostDelayedTask(base::BindOnce(std::move(callback), std::nullopt));
 
   if (discovering_count_ == 0) {
     FakeBluetoothDeviceClient* device_client =
@@ -288,7 +289,7 @@ void FakeBluetoothAdapterClient::RemoveServiceRecord(
 void FakeBluetoothAdapterClient::ConnectDevice(
     const dbus::ObjectPath& object_path,
     const std::string& address,
-    const absl::optional<AddressType>& address_type,
+    const std::optional<AddressType>& address_type,
     ConnectDeviceCallback callback,
     ErrorCallback error_callback) {
   NOTIMPLEMENTED();
@@ -347,8 +348,14 @@ void FakeBluetoothAdapterClient::SetSecondUUIDs(
   second_properties_->uuids.ReplaceValue(uuids);
 }
 
-void FakeBluetoothAdapterClient::SetDiscoverableTimeout(uint32_t timeout) {
-  properties_->discoverable_timeout.ReplaceValue(timeout);
+void FakeBluetoothAdapterClient::SetDiscoverableTimeout(
+    base::TimeDelta timeout) {
+  properties_->discoverable_timeout.ReplaceValue(timeout.InSeconds());
+}
+
+void FakeBluetoothAdapterClient::SetRoles(
+    const std::vector<std::string>& roles) {
+  properties_->roles.ReplaceValue(roles);
 }
 
 void FakeBluetoothAdapterClient::OnPropertyChanged(

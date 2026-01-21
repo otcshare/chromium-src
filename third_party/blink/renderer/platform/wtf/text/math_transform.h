@@ -9,7 +9,7 @@
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
-namespace WTF {
+namespace blink {
 namespace unicode {
 
 // Performs the character mapping needed to implement MathML's mathvariant
@@ -25,11 +25,9 @@ namespace unicode {
 // https://unicode.org/cldr/utility/character.jsp.
 // TODO(https://crbug.com/1076420): this needs to handle all mathvariants, not
 // just italics.
-WTF_EXPORT UChar32 MathVariant(UChar32 code_point);
+WTF_EXPORT UChar32 ItalicMathVariant(UChar32 code_point);
 
 }  // namespace unicode
-}  // namespace WTF
-
-using WTF::unicode::MathVariant;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_MATH_TRANSFORM_H_

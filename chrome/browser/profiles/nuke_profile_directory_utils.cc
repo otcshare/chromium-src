@@ -7,7 +7,6 @@
 #include <map>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/values_util.h"
@@ -15,6 +14,9 @@
 #include "base/no_destructor.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/pref_names.h"
@@ -77,7 +79,7 @@ void NukeProfileFromDiskImpl(const base::FilePath& profile_path,
                              size_t retry_count,
                              size_t max_retry_count,
                              base::OnceClosure done_callback) {
-  // TODO(crbug.com/1191455): Make FileSystemProxy/FileSystemImpl expose its
+  // TODO(crbug.com/40756611): Make FileSystemProxy/FileSystemImpl expose its
   // LockTable, and/or fire events when locks are released. That way we could
   // wait for all the locks in |profile_path| to be released, rather than having
   // this retry logic.
@@ -136,7 +138,7 @@ bool IsProfileDirectoryMarkedForDeletion(const base::FilePath& profile_path) {
 }
 
 void CancelProfileDeletion(const base::FilePath& path) {
-  DCHECK(!base::Contains(ProfilesToDelete(), path) ||
+  DCHECK(!ProfilesToDelete().contains(path) ||
          ProfilesToDelete()[path] == ProfileDeletionStage::SCHEDULING);
   ProfilesToDelete().erase(path);
   ProfileMetrics::LogProfileDeleteUser(ProfileMetrics::DELETE_PROFILE_ABORTED);
@@ -145,14 +147,15 @@ void CancelProfileDeletion(const base::FilePath& path) {
 // Schedule a profile for deletion if it isn't already scheduled.
 // Returns whether the profile has been newly scheduled.
 bool ScheduleProfileDirectoryForDeletion(const base::FilePath& path) {
-  if (base::Contains(ProfilesToDelete(), path))
+  if (ProfilesToDelete().contains(path)) {
     return false;
+  }
   ProfilesToDelete()[path] = ProfileDeletionStage::SCHEDULING;
   return true;
 }
 
 void MarkProfileDirectoryForDeletion(const base::FilePath& path) {
-  DCHECK(!base::Contains(ProfilesToDelete(), path) ||
+  DCHECK(!ProfilesToDelete().contains(path) ||
          ProfilesToDelete()[path] == ProfileDeletionStage::SCHEDULING);
   ProfilesToDelete()[path] = ProfileDeletionStage::MARKED;
   // Remember that this profile was deleted and files should have been deleted
@@ -160,4 +163,13 @@ void MarkProfileDirectoryForDeletion(const base::FilePath& path) {
   ScopedListPrefUpdate deleted_profiles(g_browser_process->local_state(),
                                         prefs::kProfilesDeleted);
   deleted_profiles->Append(base::FilePathToValue(path));
+
+  // Set profile as ephemeral.
+  ProfileAttributesEntry* entry = g_browser_process->profile_manager()
+                                      ->GetProfileAttributesStorage()
+                                      .GetProfileAttributesWithPath(path);
+  if (!entry->IsEphemeral()) {
+    entry->SetIsEphemeral(true);
+    entry->SetIsOmitted(true);
+  }
 }

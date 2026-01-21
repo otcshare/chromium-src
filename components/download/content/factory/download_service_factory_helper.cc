@@ -7,6 +7,8 @@
 #include <utility>
 
 #include "base/files/file_path.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/download/content/factory/navigation_monitor_factory.h"
 #include "components/download/content/internal/download_driver_impl.h"
@@ -109,8 +111,8 @@ std::unique_ptr<BackgroundDownloadService> BuildDownloadService(
     std::unique_ptr<TaskScheduler> task_scheduler) {
   auto config = Configuration::CreateFromFinch();
 
-  auto driver = std::make_unique<DownloadDriverImpl>(
-      download_manager_coordinator);
+  auto driver =
+      std::make_unique<DownloadDriverImpl>(download_manager_coordinator);
 
   auto entry_db_storage_dir = storage_dir.Append(kEntryDBStorageDir);
 
@@ -137,12 +139,13 @@ std::unique_ptr<BackgroundDownloadService> BuildInMemoryDownloadService(
     const base::FilePath& storage_dir,
     BlobContextGetterFactoryPtr blob_context_getter_factory,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+    URLLoaderFactoryGetterPtr url_loader_factory_getter) {
   auto config = Configuration::CreateFromFinch();
-  auto download_factory = std::make_unique<InMemoryDownloadFactory>(
-      url_loader_factory.get(), io_task_runner);
+  auto download_factory =
+      std::make_unique<InMemoryDownloadFactory>(io_task_runner);
   auto driver = std::make_unique<InMemoryDownloadDriver>(
-      std::move(download_factory), std::move(blob_context_getter_factory));
+      std::move(download_factory), std::move(blob_context_getter_factory),
+      std::move(url_loader_factory_getter));
   auto store = std::make_unique<NoopStore>();
   auto task_scheduler = std::make_unique<EmptyTaskScheduler>();
 

@@ -6,9 +6,10 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -20,17 +21,16 @@
 #include "net/base/sys_addrinfo.h"
 #include "net/dns/dns_util.h"
 #include "net/dns/host_resolver.h"
+#include "net/http/http_network_session.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_with_source.h"
 #include "net/socket/client_socket_factory.h"
-#include "net/socket/datagram_client_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "services/network/p2p/socket.h"
 #include "services/network/proxy_resolving_client_socket_factory.h"
 #include "services/network/public/cpp/p2p_param_traits.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/webrtc/media/base/rtp_utils.h"
 #include "third_party/webrtc/media/base/turn_utils.h"
 
@@ -74,11 +74,10 @@ bool HasLocalTld(const std::string& host_name) {
   return EndsWith(host_name, kLocalTld, base::CompareCase::INSENSITIVE_ASCII);
 }
 
-net::DnsQueryType FamilyToDnsQueryType(int family) {
-  return net::AddressFamilyToDnsQueryType(net::ToAddressFamily(family));
-}
-
 }  // namespace
+
+DefaultLocalAddresses::DefaultLocalAddresses() = default;
+DefaultLocalAddresses::~DefaultLocalAddresses() = default;
 
 class P2PSocketManager::DnsRequest {
  public:
@@ -88,7 +87,7 @@ class P2PSocketManager::DnsRequest {
       : resolver_(host_resolver), enable_mdns_(enable_mdns) {}
 
   void Resolve(const std::string& host_name,
-               absl::optional<int> family,
+               std::optional<net::AddressFamily> family,
                const net::NetworkAnonymizationKey& network_anonymization_key,
                DoneCallback done_callback) {
     DCHECK(!done_callback.is_null());
@@ -119,7 +118,7 @@ class P2PSocketManager::DnsRequest {
 #endif  // ENABLE_MDNS
     }
     if (family.has_value()) {
-      parameters.dns_query_type = FamilyToDnsQueryType(family.value());
+      parameters.dns_query_type = net::AddressFamilyToDnsQueryType(*family);
     }
     request_ = resolver_->CreateRequest(host, network_anonymization_key,
                                         net::NetLogWithSource(), parameters);
@@ -133,15 +132,16 @@ class P2PSocketManager::DnsRequest {
  private:
   void OnDone(int result) {
     net::IPAddressList list;
-    const net::AddressList* addresses = request_->GetAddressResults();
-    if (result != net::OK || !addresses) {
+    const net::AddressList& addresses = request_->GetAddressResults();
+    if (result != net::OK) {
       LOG(ERROR) << "Failed to resolve address for " << host_name_
                  << ", errorcode: " << result;
       std::move(done_callback_).Run(list);
       return;
     }
 
-    for (const auto& endpoint : *addresses) {
+    list.reserve(addresses.size());
+    for (const auto& endpoint : addresses) {
       list.push_back(endpoint.address());
     }
     std::move(done_callback_).Run(list);
@@ -206,11 +206,10 @@ void P2PSocketManager::OnNetworkChanged(
   }
 
   // Notify the renderer about changes to list of network interfaces.
-  network_list_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&P2PSocketManager::DoGetNetworkList,
-                     weak_factory_.GetWeakPtr(),
-                     base::SingleThreadTaskRunner::GetCurrentDefault()));
+  network_list_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&P2PSocketManager::DoGetNetworkList),
+      base::BindOnce(&P2PSocketManager::DoGetDefaultLocalAddresses,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void P2PSocketManager::PauseNetworkChangeNotifications() {
@@ -225,14 +224,9 @@ void P2PSocketManager::ResumeNetworkChangeNotifications() {
   }
 }
 
-void P2PSocketManager::AddAcceptedConnection(
-    std::unique_ptr<P2PSocket> accepted_connection) {
-  sockets_[accepted_connection.get()] = std::move(accepted_connection);
-}
-
 void P2PSocketManager::DestroySocket(P2PSocket* socket) {
   auto iter = sockets_.find(socket);
-  DCHECK(iter != sockets_.end());
+  CHECK(iter != sockets_.end());
   sockets_.erase(iter);
 }
 
@@ -248,47 +242,122 @@ void P2PSocketManager::DumpPacket(base::span<const uint8_t> packet,
 
   size_t rtp_packet_pos = 0;
   size_t rtp_packet_size = packet.size();
-  if (!cricket::UnwrapTurnPacket(packet.data(), packet.size(), &rtp_packet_pos,
-                                 &rtp_packet_size)) {
+  if (!webrtc::UnwrapTurnPacket(packet.data(), packet.size(), &rtp_packet_pos,
+                                &rtp_packet_size)) {
     return;
   }
 
   auto rtp_packet = packet.subspan(rtp_packet_pos, rtp_packet_size);
 
   size_t header_size = 0;
-  bool valid = cricket::ValidateRtpHeader(rtp_packet.data(), rtp_packet.size(),
-                                          &header_size);
+  bool valid = webrtc::ValidateRtpHeader(rtp_packet, &header_size);
   if (!valid) {
     NOTREACHED();
-    return;
   }
 
-  std::vector<uint8_t> header_buffer(rtp_packet.data(),
-                                     rtp_packet.data() + header_size);
+  std::vector<uint8_t> header_buffer(rtp_packet.begin(),
+                                     rtp_packet.begin() + header_size);
   trusted_socket_manager_client_->DumpPacket(header_buffer, rtp_packet.size(),
                                              incoming);
 }
 
-void P2PSocketManager::DoGetNetworkList(
-    const base::WeakPtr<P2PSocketManager>& socket_manager,
-    scoped_refptr<base::SingleThreadTaskRunner> main_task_runner) {
+net::NetworkInterfaceList P2PSocketManager::DoGetNetworkList() {
   net::NetworkInterfaceList list;
   if (!net::GetNetworkList(&list, net::EXCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES)) {
     LOG(ERROR) << "GetNetworkList failed.";
+  }
+  return list;
+}
+
+void P2PSocketManager::DoGetDefaultLocalAddresses(
+    net::NetworkInterfaceList list) {
+  DefaultLocalAddresses* default_local_addresses = new DefaultLocalAddresses();
+  GetDefaultLocalAddress(
+      AF_INET,
+      base::BindOnce(&P2PSocketManager::MaybeFinishDoGetDefaultLocalAddresses,
+                     weak_factory_.GetWeakPtr(), default_local_addresses, list,
+                     AF_INET));
+  GetDefaultLocalAddress(
+      AF_INET6,
+      base::BindOnce(&P2PSocketManager::MaybeFinishDoGetDefaultLocalAddresses,
+                     weak_factory_.GetWeakPtr(), default_local_addresses, list,
+                     AF_INET6));
+}
+
+void P2PSocketManager::MaybeFinishDoGetDefaultLocalAddresses(
+    DefaultLocalAddresses* default_local_addresses,
+    net::NetworkInterfaceList list,
+    int family,
+    net::IPAddress addr) {
+  if (family == AF_INET) {
+    default_local_addresses->default_ipv4_local_address = addr;
+  } else {
+    default_local_addresses->default_ipv6_local_address = addr;
+  }
+
+  if (!default_local_addresses->default_ipv6_local_address.has_value() ||
+      !default_local_addresses->default_ipv4_local_address.has_value()) {
     return;
   }
-  net::IPAddress default_ipv4_local_address = GetDefaultLocalAddress(AF_INET);
-  net::IPAddress default_ipv6_local_address = GetDefaultLocalAddress(AF_INET6);
-  main_task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(&P2PSocketManager::SendNetworkList, socket_manager, list,
-                     default_ipv4_local_address, default_ipv6_local_address));
+
+  SendNetworkList(list,
+                  default_local_addresses->default_ipv4_local_address.value(),
+                  default_local_addresses->default_ipv6_local_address.value());
+  delete default_local_addresses;
+}
+
+void P2PSocketManager::GetDefaultLocalAddress(int family,
+                                              GetDefaultCallback callback) {
+  DCHECK(family == AF_INET || family == AF_INET6);
+
+  auto socket =
+      url_request_context_->GetNetworkSessionContext()
+          ->client_socket_factory->CreateDatagramClientSocket(
+              net::DatagramSocket::DEFAULT_BIND, nullptr, net::NetLogSource());
+
+  net::IPAddress ip_address;
+  if (family == AF_INET) {
+    ip_address = net::IPAddress(kPublicIPv4Host);
+  } else {
+    ip_address = net::IPAddress(kPublicIPv6Host);
+  }
+
+  auto* socket_ptr = socket.get();
+  auto split_connect_callback = base::SplitOnceCallback(base::BindOnce(
+      &P2PSocketManager::FinishGetDefaultLocalAddress,
+      weak_factory_.GetWeakPtr(), std::move(socket), std::move(callback)));
+  int rv = socket_ptr->ConnectAsync(net::IPEndPoint(ip_address, kPublicPort),
+                                    std::move(split_connect_callback.first));
+  // If ConnectAsync returns synchronously then it will never run the callback
+  // that was passed in, so run the callback here to make sure
+  // FinishGetDefaultLocalAddress runs.
+  if (rv != net::ERR_IO_PENDING) {
+    std::move(split_connect_callback.second).Run(rv);
+  }
+}
+
+void P2PSocketManager::FinishGetDefaultLocalAddress(
+    std::unique_ptr<net::DatagramClientSocket> socket,
+    GetDefaultCallback callback,
+    int result) {
+  if (result != net::OK) {
+    std::move(callback).Run(net::IPAddress());
+    return;
+  }
+
+  net::IPEndPoint local_address;
+  if (socket->GetLocalAddress(&local_address) != net::OK) {
+    std::move(callback).Run(net::IPAddress());
+    return;
+  }
+
+  std::move(callback).Run(local_address.address());
 }
 
 void P2PSocketManager::SendNetworkList(
     const net::NetworkInterfaceList& list,
-    const net::IPAddress& default_ipv4_local_address,
-    const net::IPAddress& default_ipv6_local_address) {
+    net::IPAddress default_ipv4_local_address,
+    net::IPAddress default_ipv6_local_address) {
   network_notification_client_->NetworkListChanged(
       list, default_ipv4_local_address, default_ipv6_local_address);
 }
@@ -303,33 +372,12 @@ void P2PSocketManager::StartNetworkNotifications(
 
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
 
-  network_list_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&P2PSocketManager::DoGetNetworkList,
-                     weak_factory_.GetWeakPtr(),
-                     base::SingleThreadTaskRunner::GetCurrentDefault()));
+  OnNetworkChanged(net::NetworkChangeNotifier::CONNECTION_NONE);
 }
 
 void P2PSocketManager::GetHostAddress(
     const std::string& host_name,
-    bool enable_mdns,
-    mojom::P2PSocketManager::GetHostAddressCallback callback) {
-  DoGetHostAddress(host_name, /*address_family=*/absl::nullopt, enable_mdns,
-                   std::move(callback));
-}
-
-void P2PSocketManager::GetHostAddressWithFamily(
-    const std::string& host_name,
-    int address_family,
-    bool enable_mdns,
-    mojom::P2PSocketManager::GetHostAddressCallback callback) {
-  DoGetHostAddress(host_name, absl::make_optional(address_family), enable_mdns,
-                   std::move(callback));
-}
-
-void P2PSocketManager::DoGetHostAddress(
-    const std::string& host_name,
-    absl::optional<int> address_family,
+    std::optional<net::AddressFamily> address_family,
     bool enable_mdns,
     mojom::P2PSocketManager::GetHostAddressCallback callback) {
   auto request = std::make_unique<DnsRequest>(
@@ -348,6 +396,7 @@ void P2PSocketManager::CreateSocket(
     const P2PPortRange& port_range,
     const P2PHostAndIPEndPoint& remote_address,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+    const std::optional<base::UnguessableToken>& devtools_token,
     mojo::PendingRemote<mojom::P2PSocketClient> client,
     mojo::PendingReceiver<mojom::P2PSocket> receiver) {
   if (port_range.min_port > port_range.max_port ||
@@ -365,11 +414,11 @@ void P2PSocketManager::CreateSocket(
     LOG(ERROR) << "Too many sockets created";
     return;
   }
-  std::unique_ptr<P2PSocket> socket =
-      P2PSocket::Create(this, std::move(client), std::move(receiver), type,
-                        net::NetworkTrafficAnnotationTag(traffic_annotation),
-                        url_request_context_->net_log(),
-                        proxy_resolving_socket_factory_.get(), &throttler_);
+  std::unique_ptr<P2PSocket> socket = P2PSocket::Create(
+      this, std::move(client), std::move(receiver), type,
+      net::NetworkTrafficAnnotationTag(traffic_annotation),
+      url_request_context_->net_log(), proxy_resolving_socket_factory_.get(),
+      &throttler_, devtools_token);
 
   if (!socket)
     return;
@@ -395,34 +444,6 @@ void P2PSocketManager::StopRtpDump(bool incoming, bool outgoing) {
 
 void P2PSocketManager::NetworkNotificationClientConnectionError() {
   net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
-}
-
-net::IPAddress P2PSocketManager::GetDefaultLocalAddress(int family) {
-  DCHECK(family == AF_INET || family == AF_INET6);
-
-  // Creation and connection of a UDP socket might be janky.
-  // DCHECK(network_list_task_runner_->RunsTasksInCurrentSequence());
-
-  auto socket =
-      net::ClientSocketFactory::GetDefaultFactory()->CreateDatagramClientSocket(
-          net::DatagramSocket::DEFAULT_BIND, nullptr, net::NetLogSource());
-
-  net::IPAddress ip_address;
-  if (family == AF_INET) {
-    ip_address = net::IPAddress(kPublicIPv4Host);
-  } else {
-    ip_address = net::IPAddress(kPublicIPv6Host);
-  }
-
-  if (socket->Connect(net::IPEndPoint(ip_address, kPublicPort)) != net::OK) {
-    return net::IPAddress();
-  }
-
-  net::IPEndPoint local_address;
-  if (socket->GetLocalAddress(&local_address) != net::OK)
-    return net::IPAddress();
-
-  return local_address.address();
 }
 
 void P2PSocketManager::OnAddressResolved(

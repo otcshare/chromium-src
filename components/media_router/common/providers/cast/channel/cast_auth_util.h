@@ -9,6 +9,7 @@
 
 #include "base/feature_list.h"
 #include "base/time/time.h"
+#include "components/media_router/common/providers/cast/channel/cast_channel_enum.h"
 #include "third_party/openscreen/src/cast/common/channel/proto/cast_channel.pb.h"
 
 namespace cast_certificate {
@@ -17,40 +18,43 @@ enum class CRLPolicy;
 
 namespace net {
 class X509Certificate;
-class TrustStore;
 }  // namespace net
+
+namespace bssl {
+class TrustStore;
+}  // namespace bssl
 
 namespace cast_channel {
 
-using ::cast::channel::AuthResponse;
-using ::cast::channel::CastMessage;
-
-BASE_DECLARE_FEATURE(kEnforceNonceChecking);
-BASE_DECLARE_FEATURE(kEnforceSHA256Checking);
+using ::openscreen::cast::proto::AuthResponse;
+using ::openscreen::cast::proto::CastMessage;
 
 struct AuthResult {
  public:
   enum ErrorType {
-    ERROR_NONE,
-    ERROR_PEER_CERT_EMPTY,
-    ERROR_WRONG_PAYLOAD_TYPE,
-    ERROR_NO_PAYLOAD,
-    ERROR_PAYLOAD_PARSING_FAILED,
-    ERROR_MESSAGE_ERROR,
-    ERROR_NO_RESPONSE,
-    ERROR_FINGERPRINT_NOT_FOUND,
-    ERROR_CERT_PARSING_FAILED,
-    ERROR_CERT_NOT_SIGNED_BY_TRUSTED_CA,
-    ERROR_CANNOT_EXTRACT_PUBLIC_KEY,
-    ERROR_SIGNED_BLOBS_MISMATCH,
-    ERROR_TLS_CERT_VALIDITY_PERIOD_TOO_LONG,
-    ERROR_TLS_CERT_VALID_START_DATE_IN_FUTURE,
-    ERROR_TLS_CERT_EXPIRED,
-    ERROR_CRL_INVALID,
-    ERROR_CERT_REVOKED,
-    ERROR_SENDER_NONCE_MISMATCH,
-    ERROR_DIGEST_UNSUPPORTED,
-    ERROR_SIGNATURE_EMPTY,
+    ERROR_NONE = 0,
+    ERROR_PEER_CERT_EMPTY = 1,
+    ERROR_WRONG_PAYLOAD_TYPE = 2,
+    ERROR_NO_PAYLOAD = 3,
+    ERROR_PAYLOAD_PARSING_FAILED = 4,
+    ERROR_MESSAGE_ERROR = 5,
+    ERROR_NO_RESPONSE = 6,
+    ERROR_FINGERPRINT_NOT_FOUND = 7,
+    ERROR_CERT_PARSING_FAILED = 8,
+    ERROR_CERT_NOT_SIGNED_BY_TRUSTED_CA = 9,
+    ERROR_CANNOT_EXTRACT_PUBLIC_KEY = 10,
+    ERROR_SIGNED_BLOBS_MISMATCH = 11,
+    ERROR_TLS_CERT_VALIDITY_PERIOD_TOO_LONG = 12,
+    ERROR_TLS_CERT_VALID_START_DATE_IN_FUTURE = 13,
+    ERROR_TLS_CERT_EXPIRED = 14,
+    ERROR_CRL_INVALID = 15,
+    ERROR_CERT_REVOKED = 16,
+    ERROR_CRL_OK_FALLBACK_CRL = 17,
+    ERROR_FALLBACK_CRL_INVALID = 18,
+    ERROR_CERTS_REVOKED_BY_FALLBACK_CRL = 19,
+    ERROR_SENDER_NONCE_MISMATCH = 20,
+    ERROR_DIGEST_UNSUPPORTED = 21,
+    ERROR_SIGNATURE_EMPTY = 22,
   };
 
   enum PolicyType { POLICY_NONE = 0, POLICY_AUDIO_ONLY = 1 << 0 };
@@ -58,18 +62,28 @@ struct AuthResult {
   // Constructs a AuthResult that corresponds to success.
   AuthResult();
 
-  AuthResult(const std::string& error_message, ErrorType error_type);
+  AuthResult(const std::string& error_message,
+             ErrorType error_type,
+             CastChannelFlag flag = CastChannelFlag::kFlagsNone);
 
   ~AuthResult();
 
   static AuthResult CreateWithParseError(const std::string& error_message,
                                          ErrorType error_type);
 
-  bool success() const { return error_type == ERROR_NONE; }
+  void set_flag(CastChannelFlag flag) { flags |= static_cast<uint16_t>(flag); }
+
+  bool success() const {
+    return error_type == ERROR_NONE || error_type == ERROR_CRL_OK_FALLBACK_CRL;
+  }
+
+  // Copies any flags set in `source` to this object's flags.
+  void CopyFlagsFrom(const AuthResult& source);
 
   std::string error_message;
-  ErrorType error_type;
-  unsigned int channel_policies;
+  ErrorType error_type{ERROR_NONE};
+  unsigned int channel_policies{POLICY_NONE};
+  CastChannelFlags flags{kCastChannelFlagsNone};
 };
 
 class AuthContext {
@@ -121,8 +135,7 @@ AuthResult VerifyCredentialsForTest(
     const AuthResponse& response,
     const std::string& signature_input,
     const cast_certificate::CRLPolicy& crl_policy,
-    net::TrustStore* cast_trust_store,
-    net::TrustStore* crl_trust_store,
+    bssl::TrustStore* crl_trust_store,
     const base::Time& verification_time);
 
 }  // namespace cast_channel

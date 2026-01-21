@@ -5,6 +5,9 @@
 
 #include "third_party/liburlpattern/tokenize.h"
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
 #include "third_party/icu/source/common/unicode/utf8.h"
@@ -26,15 +29,15 @@ bool IsASCII(UChar32 c) {
 
 class Tokenizer {
  public:
-  Tokenizer(absl::string_view pattern, TokenizePolicy policy)
+  Tokenizer(std::string_view pattern, TokenizePolicy policy)
       : pattern_(std::move(pattern)), policy_(policy) {
     token_list_.reserve(pattern_.size());
   }
 
-  absl::StatusOr<std::vector<Token>> Tokenize() {
+  base::expected<std::vector<Token>, absl::Status> Tokenize() {
     while (index_ < pattern_.size()) {
       if (!status_.ok())
-        return std::move(status_);
+        return base::unexpected(std::move(status_));
 
       if (!NextAt(index_)) {
         Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.", index_));
@@ -86,7 +89,7 @@ class Tokenizer {
         // Iterate over codepoints until we find the first non-name codepoint.
         while (pos < pattern_.size()) {
           if (!status_.ok())
-            return std::move(status_);
+            return base::unexpected(std::move(status_));
           if (!NextAt(pos)) {
             Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.", pos));
             continue;
@@ -229,7 +232,7 @@ class Tokenizer {
     }
 
     if (!status_.ok())
-      return std::move(status_);
+      return base::unexpected(std::move(status_));
 
     AddToken(TokenType::kEnd, index_, index_);
 
@@ -242,7 +245,8 @@ class Tokenizer {
   // read next.  Returns true iff the codepoint was read successfully. On
   // success, `codepoint_` is non-negative.
   [[nodiscard]] bool Next() {
-    U8_NEXT(pattern_.data(), next_index_, pattern_.size(), codepoint_);
+    UNSAFE_TODO(
+        U8_NEXT(pattern_.data(), next_index_, pattern_.size(), codepoint_));
     return codepoint_ >= 0;
   }
 
@@ -281,16 +285,16 @@ class Tokenizer {
   // `index_`. Update `index_` to `next_index_` automatically.
   void AddToken(TokenType type) { AddToken(type, next_index_, index_); }
 
-  void Error(absl::string_view message, size_t next_pos, size_t value_pos) {
+  void Error(std::string_view message, size_t next_pos, size_t value_pos) {
     if (policy_ == TokenizePolicy::kLenient)
       AddToken(TokenType::kInvalidChar, next_pos, value_pos);
     else
       status_ = absl::InvalidArgumentError(message);
   }
 
-  void Error(absl::string_view message) { Error(message, next_index_, index_); }
+  void Error(std::string_view message) { Error(message, next_index_, index_); }
 
-  const absl::string_view pattern_;
+  const std::string_view pattern_;
   const TokenizePolicy policy_;
   std::vector<Token> token_list_;
   absl::Status status_;
@@ -344,8 +348,9 @@ std::ostream& operator<<(std::ostream& o, Token token) {
 }
 
 // Split the input pattern into a list of tokens.
-absl::StatusOr<std::vector<Token>> Tokenize(absl::string_view pattern,
-                                            TokenizePolicy policy) {
+base::expected<std::vector<Token>, absl::Status> Tokenize(
+    std::string_view pattern,
+    TokenizePolicy policy) {
   Tokenizer tokenizer(std::move(pattern), policy);
   return tokenizer.Tokenize();
 }

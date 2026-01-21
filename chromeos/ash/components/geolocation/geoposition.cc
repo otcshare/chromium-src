@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/components/geolocation/geoposition.h"
 
+#include "base/compiler_specific.h"
 #include "base/strings/stringprintf.h"
 
 namespace {
@@ -38,7 +39,8 @@ std::string Geoposition::ToString() const {
       "error_message='%s', status=%u (%s)",
       latitude, longitude, accuracy, error_code, error_message.c_str(),
       (unsigned)status,
-      (status < std::size(status2string) ? status2string[status] : "unknown"));
+      (status < std::size(status2string) ? UNSAFE_TODO(status2string[status])
+                                         : "unknown"));
 }
 
 }  // namespace ash

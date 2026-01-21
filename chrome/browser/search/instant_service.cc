@@ -5,11 +5,11 @@
 #include "chrome/browser/search/instant_service.h"
 
 #include <stddef.h>
+
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
 #include "base/path_service.h"
@@ -19,7 +19,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/clock.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ntp_tiles/chrome_most_visited_sites_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service_factory.h"
@@ -38,6 +37,7 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/ntp_tiles/constants.h"
+#include "components/ntp_tiles/tile_type.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
@@ -46,8 +46,6 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/url_data_source.h"
 #include "extensions/browser/extension_registry.h"
@@ -60,20 +58,17 @@ InstantService::InstantService(Profile* profile)
     : profile_(profile),
       most_visited_info_(std::make_unique<InstantMostVisitedInfo>()),
       pref_service_(profile_->GetPrefs()),
-      native_theme_(ui::NativeTheme::GetInstanceForNativeUi()),
       background_updated_timestamp_(base::TimeTicks::Now()) {
   // The initialization below depends on a typical set of browser threads. Skip
   // it if we are running in a unit test without the full suite.
   if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI))
     return;
 
-  registrar_.Add(this,
-                 content::NOTIFICATION_RENDERER_PROCESS_TERMINATED,
-                 content::NotificationService::AllSources());
-
   most_visited_sites_ = ChromeMostVisitedSitesFactory::NewForProfile(profile_);
   if (most_visited_sites_) {
-    most_visited_sites_->EnableCustomLinks(false);
+    most_visited_sites_->EnableTileTypes(
+        ntp_tiles::MostVisitedSites::EnableTileTypesOptions().with_top_sites(
+            true));
     most_visited_sites_->AddMostVisitedURLsObserver(
         this, ntp_tiles::kMaxNumMostVisited);
   }
@@ -81,7 +76,7 @@ InstantService::InstantService(Profile* profile)
   // Listen for theme installation.
   ThemeServiceFactory::GetForProfile(profile_)->AddObserver(this);
 
-  // TODO(crbug.com/1192394): multiple WebUI pages depend on the theme source
+  // TODO(crbug.com/40757220): multiple WebUI pages depend on the theme source
   // without adding it themselves. This is not causing an issue because the
   // theme source is being added here. The source should be added where it is
   // used and then the following can be removed.
@@ -95,13 +90,17 @@ InstantService::InstantService(Profile* profile)
   content::URLDataSource::Add(profile_,
                               std::make_unique<MostVisitedIframeSource>());
 
-  theme_observation_.Observe(native_theme_.get());
+  theme_observation_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
 }
 
 InstantService::~InstantService() = default;
 
-void InstantService::AddInstantProcess(int process_id) {
-  process_ids_.insert(process_id);
+void InstantService::AddInstantProcess(content::RenderProcessHost* host) {
+  process_ids_.insert(host->GetDeprecatedID());
+  // The same process may be added for multiple WebContents. Only observe once.
+  if (!host_observation_.IsObservingSource(host)) {
+    host_observation_.AddObservation(host);
+  }
 }
 
 bool InstantService::IsInstantProcess(int process_id) const {
@@ -161,12 +160,6 @@ NtpTheme* InstantService::GetInitializedNtpTheme() {
   return theme_.get();
 }
 
-void InstantService::SetNativeThemeForTesting(ui::NativeTheme* theme) {
-  theme_observation_.Reset();
-  native_theme_ = theme;
-  theme_observation_.Observe(native_theme_.get());
-}
-
 void InstantService::Shutdown() {
   process_ids_.clear();
 
@@ -177,30 +170,16 @@ void InstantService::Shutdown() {
   ThemeServiceFactory::GetForProfile(profile_)->RemoveObserver(this);
 }
 
-void InstantService::Observe(int type,
-                             const content::NotificationSource& source,
-                             const content::NotificationDetails& details) {
-  switch (type) {
-    case content::NOTIFICATION_RENDERER_PROCESS_TERMINATED: {
-      content::RenderProcessHost* rph =
-          content::Source<content::RenderProcessHost>(source).ptr();
-      Profile* renderer_profile =
-          static_cast<Profile*>(rph->GetBrowserContext());
-      if (profile_ == renderer_profile)
-        OnRendererProcessTerminated(rph->GetID());
-      break;
-    }
-    default:
-      NOTREACHED() << "Unexpected notification type in InstantService.";
+void InstantService::RenderProcessHostDestroyed(
+    content::RenderProcessHost* host) {
+  Profile* renderer_profile = static_cast<Profile*>(host->GetBrowserContext());
+  if (profile_ == renderer_profile) {
+    process_ids_.erase(host->GetDeprecatedID());
+    host_observation_.RemoveObservation(host);
   }
 }
 
-void InstantService::OnRendererProcessTerminated(int process_id) {
-  process_ids_.erase(process_id);
-}
-
 void InstantService::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
-  DCHECK_EQ(observed_theme, native_theme_);
   // Force the theme information to rebuild so the correct using_dark_colors
   // value is sent to the renderer.
   BuildNtpTheme();
@@ -208,6 +187,7 @@ void InstantService::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
 }
 
 void InstantService::OnURLsAvailable(
+    bool is_user_triggered,
     const std::map<ntp_tiles::SectionType, ntp_tiles::NTPTilesVector>&
         sections) {
   DCHECK(most_visited_sites_);

@@ -1,13 +1,15 @@
-# Primary (in CET)
+# cryptohome/UI (in CET)
 antrim@chromium.org
-emaxx@chromium.org
 emaamari@google.com
-
-#Secondary (in CET)
-rsorokin@google.com
 rrsilva@google.com
 
-# Secondary (in PST)
+# OOBE/onboarding (in CET):
+dkuzmin@google.com
+osamafathy@google.com
+
+# Lock screen and app (in PST)
 tbarzic@chromium.org
-xiyuan@chromium.org
-alemate@chromium.org
+
+# Login performance (in JST)
+# User/session management, Profile (in JST)
+hidehiko@chromium.org

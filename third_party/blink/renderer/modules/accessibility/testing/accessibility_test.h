@@ -5,8 +5,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_TESTING_ACCESSIBILITY_TEST_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_TESTING_ACCESSIBILITY_TEST_H_
 
-#include <ostream>
-#include <sstream>
 #include <string>
 
 #include "third_party/blink/renderer/core/accessibility/ax_context.h"
@@ -26,6 +24,7 @@ class AccessibilityTest : public RenderingTest {
 
  public:
   AccessibilityTest(LocalFrameClient* local_frame_client = nullptr);
+  static std::string PrintAXTree(Document& document);
 
  protected:
   void SetUp() override;
@@ -43,36 +42,19 @@ class AccessibilityTest : public RenderingTest {
   // Returns the object with the accessibility focus.
   AXObject* GetAXFocusedObject() const;
 
-  AXObject* GetAXObjectByElementId(const char* id) const;
+  AXObject* GetAXObjectByElementId(const char* id,
+                                   PseudoId = kPseudoIdNone) const;
 
-  std::string PrintAXTree() const;
-
- protected:
   std::unique_ptr<AXContext> ax_context_;
 
  private:
-  std::ostringstream& PrintAXTreeHelper(std::ostringstream&,
-                                        const AXObject* root,
-                                        size_t level) const;
+  static void PrintAXTreeHelper(std::string& out,
+                                const AXObject* root,
+                                size_t level);
 
-  ScopedAccessibilityExposeHTMLElementForTest expose_html_element{true};
   ScopedAccessibilityUseAXPositionForDocumentMarkersForTest use_ax_position{
       true};
 };
-
-class ParameterizedAccessibilityTest : public testing::WithParamInterface<bool>,
-                                       private ScopedLayoutNGForTest,
-                                       public AccessibilityTest {
- public:
-  ParameterizedAccessibilityTest() : ScopedLayoutNGForTest(GetParam()) {}
-
- protected:
-  bool LayoutNGEnabled() const {
-    return RuntimeEnabledFeatures::LayoutNGEnabled();
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All, ParameterizedAccessibilityTest, testing::Bool());
 
 }  // namespace blink
 

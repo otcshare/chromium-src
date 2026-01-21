@@ -4,6 +4,8 @@
 
 #include "device/bluetooth/floss/floss_battery_manager_client.h"
 
+#include <utility>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
@@ -17,11 +19,30 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace {
+using testing::DoAll;
+
+void FakeExportMethod(
+    const std::string& interface_name,
+    const std::string& method_name,
+    const dbus::ExportedObject::MethodCallCallback& method_call_callback,
+    dbus::ExportedObject::OnExportedCallback on_exported_callback) {
+  std::move(on_exported_callback)
+      .Run(interface_name, method_name, /*success=*/true);
+}
+}  // namespace
+
 namespace floss {
+
+const uint32_t kTestCallbackId = 42;
 
 class FlossBatteryManagerClientTest : public testing::Test,
                                       public FlossBatteryManagerClientObserver {
  public:
+  base::Version GetCurrVersion() {
+    return floss::version::GetMaximalSupportedVersion();
+  }
+
   void SetUpMocks() {
     battery_manager_path_ =
         FlossDBusClient::GenerateBatteryManagerPath(adapter_index_);
@@ -40,13 +61,13 @@ class FlossBatteryManagerClientTest : public testing::Test,
 
     // Handle method calls on the object proxy
     ON_CALL(*battery_manager_object_proxy_.get(),
-            DoCallMethodWithErrorResponse(
+            CallMethodWithErrorResponse(
                 HasMemberOf(battery_manager::kRegisterBatteryCallback),
                 testing::_, testing::_))
         .WillByDefault(Invoke(
             this, &FlossBatteryManagerClientTest::HandleRegisterCallback));
     ON_CALL(*battery_manager_object_proxy_.get(),
-            DoCallMethodWithErrorResponse(
+            CallMethodWithErrorResponse(
                 HasMemberOf(battery_manager::kGetBatteryInformation),
                 testing::_, testing::_))
         .WillByDefault(Invoke(
@@ -56,7 +77,7 @@ class FlossBatteryManagerClientTest : public testing::Test,
   void SetUp() override {
     ::dbus::Bus::Options options;
     options.bus_type = ::dbus::Bus::BusType::SYSTEM;
-    bus_ = base::MakeRefCounted<::dbus::MockBus>(options);
+    bus_ = base::MakeRefCounted<::dbus::MockBus>(std::move(options));
     callback_path_ =
         ::dbus::ObjectPath(FlossBatteryManagerClient::kExportedCallbacksPath);
     client_ = FlossBatteryManagerClient::Create();
@@ -66,28 +87,27 @@ class FlossBatteryManagerClientTest : public testing::Test,
 
   void TearDown() override { client_.reset(); }
 
-  void HandleRegisterCallback(
-      ::dbus::MethodCall* method_call,
-      int timeout_ms,
-      ::dbus::ObjectProxy::ResponseOrErrorCallback* cb) {
+  void HandleRegisterCallback(::dbus::MethodCall* method_call,
+                              int timeout_ms,
+                              ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
     auto response = ::dbus::Response::CreateEmpty();
     ::dbus::MessageWriter msg(response.get());
-    msg.AppendUint32(42);
+    msg.AppendUint32(kTestCallbackId);
 
-    std::move(*cb).Run(response.get(), nullptr);
+    std::move(cb).Run(response.get(), nullptr);
   }
 
   void HandleGetBatteryInformation(
       ::dbus::MethodCall* method_call,
       int timeout_ms,
-      ::dbus::ObjectProxy::ResponseOrErrorCallback* cb) {
+      ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
     auto response = ::dbus::Response::CreateEmpty();
     ::dbus::MessageWriter msg(response.get());
 
-    std::move(*cb).Run(response.get(), nullptr);
+    std::move(cb).Run(response.get(), nullptr);
   }
 
-  void HandleGetBatteryInfo(DBusResult<absl::optional<BatterySet>> result) {
+  void HandleGetBatteryInfo(DBusResult<std::optional<BatterySet>> result) {
     callback_count_++;
   }
 
@@ -98,22 +118,41 @@ class FlossBatteryManagerClientTest : public testing::Test,
 
   // Test defined here to access private members.
   void TestInitializesCorrectly() {
+    EXPECT_CALL(*exported_callbacks_.get(),
+                ExportMethod(testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(&FakeExportMethod);
     EXPECT_CALL(*battery_manager_object_proxy_.get(),
-                DoCallMethodWithErrorResponse)
+                CallMethodWithErrorResponse)
         .Times(testing::AnyNumber());
     // Expected specific method calls.
     EXPECT_CALL(*battery_manager_object_proxy_.get(),
-                DoCallMethodWithErrorResponse(
+                CallMethodWithErrorResponse(
                     HasMemberOf(battery_manager::kRegisterBatteryCallback),
                     testing::_, testing::_))
         .Times(1);
-    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_);
-    EXPECT_EQ(client_->battery_manager_callback_id_, static_cast<uint32_t>(42));
+    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_,
+                  GetCurrVersion(), base::DoNothing());
+    EXPECT_EQ(client_->battery_manager_callback_id_, kTestCallbackId);
+    // Expected call to UnregisterCallback when client is destroyed
+    EXPECT_CALL(*battery_manager_object_proxy_.get(),
+                CallMethodWithErrorResponse(
+                    HasMemberOf(battery_manager::kUnregisterBatteryCallback),
+                    testing::_, testing::_))
+        .WillOnce([](::dbus::MethodCall* method_call, int timeout_ms,
+                     ::dbus::ObjectProxy::ResponseOrErrorCallback cb) {
+          dbus::MessageReader msg(method_call);
+          // D-Bus method call should have 1 parameter.
+          uint32_t param1;
+          ASSERT_TRUE(FlossDBusClient::ReadAllDBusParams(&msg, &param1));
+          EXPECT_EQ(kTestCallbackId, param1);
+          EXPECT_FALSE(msg.HasMoreData());
+        });
   }
 
   void TestForwardsCallbacks() {
     EXPECT_EQ(callback_count_, 0);
-    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_);
+    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_,
+                  GetCurrVersion(), base::DoNothing());
     client_->BatteryInfoUpdated("11:11:11:11:11:11", BatterySet());
     EXPECT_EQ(callback_count_, 1);
   }
@@ -126,8 +165,11 @@ class FlossBatteryManagerClientTest : public testing::Test,
                 ExportMethod(battery_manager::kCallbackInterface,
                              battery_manager::kOnBatteryInfoUpdated, testing::_,
                              testing::_))
-        .WillOnce(testing::SaveArg<2>(&method_handler_on_battery_info_updated));
-    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_);
+        .WillOnce(
+            DoAll(testing::SaveArg<2>(&method_handler_on_battery_info_updated),
+                  &FakeExportMethod));
+    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_,
+                  GetCurrVersion(), base::DoNothing());
     ASSERT_TRUE(!!method_handler_on_battery_info_updated);
 
     // Set up DBus message
@@ -157,15 +199,16 @@ class FlossBatteryManagerClientTest : public testing::Test,
 
   void TestGetBatteryInfo() {
     EXPECT_CALL(*battery_manager_object_proxy_.get(),
-                DoCallMethodWithErrorResponse)
+                CallMethodWithErrorResponse)
         .Times(testing::AnyNumber());
     EXPECT_CALL(*battery_manager_object_proxy_.get(),
-                DoCallMethodWithErrorResponse(
+                CallMethodWithErrorResponse(
                     HasMemberOf(battery_manager::kGetBatteryInformation),
                     testing::_, testing::_))
         .Times(1);
     EXPECT_EQ(callback_count_, 0);
-    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_);
+    client_->Init(bus_.get(), kBatteryManagerInterface, adapter_index_,
+                  GetCurrVersion(), base::DoNothing());
     FlossDeviceId test_device{};
     test_device.address = "11:11:11:11:11:11";
     client_->GetBatteryInformation(

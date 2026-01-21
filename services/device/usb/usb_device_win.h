@@ -11,6 +11,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "services/device/usb/usb_device.h"
 
 namespace device {
@@ -79,7 +80,7 @@ class UsbDeviceWin : public UsbDevice {
   void OnReadWebUsbCapabilityDescriptor(
       base::OnceCallback<void(bool)> callback,
       scoped_refptr<UsbDeviceHandle> device_handle,
-      const absl::optional<WebUsbPlatformCapabilityDescriptor>& descriptor);
+      const std::optional<WebUsbPlatformCapabilityDescriptor>& descriptor);
   void OnOpenedToReadWebUsbLandingPage(
       base::OnceCallback<void(bool)> callback,
       uint8_t vendor_code,

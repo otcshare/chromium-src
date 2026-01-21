@@ -8,10 +8,11 @@
       "is_chrome_branded": true,
       "is_official_build": true,
       "proprietary_codecs": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
+      "target_cpu": "arm",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "Android arm64 Builder Perf": {
@@ -21,13 +22,14 @@
       "debuggable_apks": false,
       "ffmpeg_branding": "Chrome",
       "is_chrome_branded": true,
+      "is_high_end_android": false,
       "is_official_build": true,
       "proprietary_codecs": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
       "target_cpu": "arm64",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "android-builder-perf": {
@@ -39,10 +41,11 @@
       "is_chrome_branded": true,
       "is_official_build": true,
       "proprietary_codecs": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
+      "target_cpu": "arm",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "android-builder-perf-pgo": {
@@ -53,8 +56,48 @@
       "is_official_build": true,
       "proprietary_codecs": true,
       "symbol_level": 1,
+      "target_cpu": "arm",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "android-desktop-arm-builder-perf": {
+    "gn_args": {
+      "chrome_pgo_phase": 0,
+      "clang_use_default_sample_profile": false,
+      "dcheck_always_on": false,
+      "debuggable_apks": false,
+      "ffmpeg_branding": "Chrome",
+      "is_chrome_branded": true,
+      "is_desktop_android": true,
+      "is_official_build": true,
+      "proprietary_codecs": true,
+      "symbol_level": 1,
+      "system_webview_package_name": "com.google.android.webview",
+      "target_cpu": "arm64",
+      "target_os": "android",
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "android-desktop-x64-builder-perf": {
+    "gn_args": {
+      "chrome_pgo_phase": 0,
+      "clang_use_default_sample_profile": false,
+      "dcheck_always_on": false,
+      "debuggable_apks": false,
+      "ffmpeg_branding": "Chrome",
+      "is_chrome_branded": true,
+      "is_desktop_android": true,
+      "is_official_build": true,
+      "proprietary_codecs": true,
+      "symbol_level": 1,
+      "system_webview_package_name": "com.google.android.webview",
+      "target_cpu": "x64",
+      "target_os": "android",
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "android_arm64-builder-perf": {
@@ -64,17 +107,35 @@
       "debuggable_apks": false,
       "ffmpeg_branding": "Chrome",
       "is_chrome_branded": true,
+      "is_high_end_android": false,
       "is_official_build": true,
       "proprietary_codecs": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
       "target_cpu": "arm64",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "android_arm64-builder-perf-pgo": {
     "gn_args": {
+      "debuggable_apks": false,
+      "ffmpeg_branding": "Chrome",
+      "is_chrome_branded": true,
+      "is_high_end_android": false,
+      "is_official_build": true,
+      "proprietary_codecs": true,
+      "symbol_level": 1,
+      "target_cpu": "arm64",
+      "target_os": "android",
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "android_arm64_high_end-builder-perf": {
+    "gn_args": {
+      "chrome_pgo_phase": 0,
+      "clang_use_default_sample_profile": false,
       "debuggable_apks": false,
       "ffmpeg_branding": "Chrome",
       "is_chrome_branded": true,
@@ -83,7 +144,23 @@
       "symbol_level": 1,
       "target_cpu": "arm64",
       "target_os": "android",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "android_arm64_high_end-builder-perf-pgo": {
+    "gn_args": {
+      "clang_use_default_sample_profile": false,
+      "debuggable_apks": false,
+      "ffmpeg_branding": "Chrome",
+      "is_chrome_branded": true,
+      "is_official_build": true,
+      "proprietary_codecs": true,
+      "symbol_level": 1,
+      "target_cpu": "arm64",
+      "target_os": "android",
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "chromecast-linux-builder-perf": {
@@ -94,55 +171,8 @@
       "is_component_build": false,
       "is_debug": false,
       "symbol_level": 1,
-      "use_goma": true
-    }
-  },
-  "chromeos-amd64-generic-lacros-builder-perf": {
-    "args_file": "//build/args/chromeos/amd64-generic-crostoolchain.gni",
-    "gn_args": {
-      "chromeos_is_browser_only": true,
-      "dcheck_always_on": false,
-      "is_cfi": true,
-      "is_chrome_branded": true,
-      "is_chromeos_device": true,
-      "is_official_build": true,
-      "ozone_platform_headless": true,
-      "symbol_level": 1,
-      "target_os": "chromeos",
-      "use_goma": true,
-      "use_thin_lto": true
-    }
-  },
-  "chromeos-arm-generic-lacros-builder-perf": {
-    "args_file": "//build/args/chromeos/arm-generic-crostoolchain.gni",
-    "gn_args": {
-      "chromeos_is_browser_only": true,
-      "dcheck_always_on": false,
-      "is_cfi": true,
-      "is_chrome_branded": true,
-      "is_chromeos_device": true,
-      "is_official_build": true,
-      "ozone_platform_headless": true,
-      "symbol_level": 1,
-      "target_os": "chromeos",
-      "use_goma": true,
-      "use_thin_lto": true
-    }
-  },
-  "chromeos-arm64-generic-lacros-builder-perf": {
-    "args_file": "//build/args/chromeos/arm64-generic-crostoolchain.gni",
-    "gn_args": {
-      "chromeos_is_browser_only": true,
-      "dcheck_always_on": false,
-      "is_cfi": true,
-      "is_chrome_branded": true,
-      "is_chromeos_device": true,
-      "is_official_build": true,
-      "ozone_platform_headless": true,
-      "symbol_level": 1,
-      "target_os": "chromeos",
-      "use_goma": true,
-      "use_thin_lto": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "linux-builder-perf": {
@@ -150,10 +180,10 @@
       "chrome_pgo_phase": 0,
       "is_chrome_branded": true,
       "is_official_build": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
       "use_gnome_keyring": false,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "linux-builder-perf-pgo": {
@@ -162,7 +192,8 @@
       "is_official_build": true,
       "symbol_level": 1,
       "use_gnome_keyring": false,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "linux-builder-perf-rel": {
@@ -170,10 +201,10 @@
       "chrome_pgo_phase": 0,
       "is_chrome_branded": true,
       "is_official_build": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
       "use_gnome_keyring": false,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "mac-arm-builder-perf": {
@@ -183,10 +214,10 @@
       "ignore_missing_widevine_signing_cert": true,
       "is_chrome_branded": true,
       "is_official_build": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
       "target_cpu": "arm64",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "mac-arm-builder-perf-pgo": {
@@ -197,7 +228,23 @@
       "is_official_build": true,
       "symbol_level": 1,
       "target_cpu": "arm64",
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "mac-arm-no-brp-builder-perf": {
+    "gn_args": {
+      "chrome_pgo_phase": 0,
+      "enable_backup_ref_ptr_support": false,
+      "enable_keystone_registration_framework": false,
+      "ignore_missing_widevine_signing_cert": true,
+      "is_chrome_branded": true,
+      "is_official_build": true,
+      "symbol_level": 1,
+      "target_cpu": "arm64",
+      "use_raw_ptr_backup_ref_impl": false,
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "mac-builder-perf": {
@@ -207,9 +254,9 @@
       "ignore_missing_widevine_signing_cert": true,
       "is_chrome_branded": true,
       "is_official_build": true,
-      "strip_absolute_paths_from_debug_symbols": true,
       "symbol_level": 1,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "mac-builder-perf-pgo": {
@@ -219,7 +266,20 @@
       "is_chrome_branded": true,
       "is_official_build": true,
       "symbol_level": 1,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
+    }
+  },
+  "win-arm64-builder-perf": {
+    "gn_args": {
+      "chrome_pgo_phase": 0,
+      "is_chrome_branded": true,
+      "is_official_build": true,
+      "reclient_cfg_dir": "//buildtools/reclient_cfgs/win-cross",
+      "symbol_level": 1,
+      "target_cpu": "arm64",
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "win64-builder-perf": {
@@ -227,9 +287,10 @@
       "chrome_pgo_phase": 0,
       "is_chrome_branded": true,
       "is_official_build": true,
-      "strip_absolute_paths_from_debug_symbols": true,
+      "reclient_cfg_dir": "//buildtools/reclient_cfgs/win-cross",
       "symbol_level": 1,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   },
   "win64-builder-perf-pgo": {
@@ -237,7 +298,8 @@
       "is_chrome_branded": true,
       "is_official_build": true,
       "symbol_level": 1,
-      "use_goma": true
+      "use_reclient": false,
+      "use_remoteexec": true
     }
   }
 }

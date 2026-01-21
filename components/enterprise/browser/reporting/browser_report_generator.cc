@@ -8,7 +8,6 @@
 
 #include "base/notreached.h"
 #include "base/version.h"
-#include "build/chromeos_buildflags.h"
 #include "components/enterprise/browser/reporting/report_util.h"
 #include "components/enterprise/browser/reporting/reporting_delegate_factory.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
@@ -32,16 +31,12 @@ void BrowserReportGenerator::Generate(ReportType report_type,
 
   if (report_type != ReportType::kProfileReport) {
     GenerateProfileInfo(report.get());
-    // std::move is required here because the function completes the report
-    // asynchronously.
-    delegate_->GeneratePluginsIfNeeded(std::move(callback), std::move(report));
-  } else {
-    std::move(callback).Run(std::move(report));
   }
+  std::move(callback).Run(std::move(report));
 }
 
 void BrowserReportGenerator::GenerateProfileInfo(em::BrowserReport* report) {
-  for (auto entry : delegate_->GetReportedProfiles()) {
+  for (const auto& entry : delegate_->GetReportedProfiles()) {
     em::ChromeUserProfileInfo* profile =
         report->add_chrome_user_profile_infos();
     profile->set_id(entry.id);
@@ -54,14 +49,14 @@ void BrowserReportGenerator::GenerateBasicInfo(em::BrowserReport* report,
                                                ReportType report_type) {
   // Chrome OS user session report doesn't include version and channel
   // information.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   bool contains_version_and_channel = report_type == ReportType::kProfileReport;
 #else
   bool contains_version_and_channel = true;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (contains_version_and_channel) {
-    report->set_browser_version(version_info::GetVersionNumber());
+    report->set_browser_version(std::string(version_info::GetVersionNumber()));
     report->set_channel(policy::ConvertToProtoChannel(delegate_->GetChannel()));
     if (delegate_->IsExtendedStableChannel())
       report->set_is_extended_stable_channel(true);
@@ -78,7 +73,6 @@ void BrowserReportGenerator::GenerateBasicInfo(em::BrowserReport* report,
       break;
     case ReportType::kBrowserVersion:
       NOTREACHED();
-      break;
   }
 }
 

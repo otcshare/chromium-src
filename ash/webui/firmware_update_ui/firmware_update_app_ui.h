@@ -27,8 +27,6 @@ class FirmwareUpdateAppUIConfig
   FirmwareUpdateAppUIConfig()
       : DefaultWebUIConfig(content::kChromeUIScheme,
                            ash::kChromeUIFirmwareUpdateAppHost) {}
-
-  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class FirmwareUpdateAppUI : public ui::MojoWebDialogUI {
@@ -39,6 +37,9 @@ class FirmwareUpdateAppUI : public ui::MojoWebDialogUI {
   ~FirmwareUpdateAppUI() override;
   void BindInterface(
       mojo::PendingReceiver<firmware_update::mojom::UpdateProvider> receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<firmware_update::mojom::SystemUtils> receiver);
 
  private:
   WEB_UI_CONTROLLER_TYPE_DECL();

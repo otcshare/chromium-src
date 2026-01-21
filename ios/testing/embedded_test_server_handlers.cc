@@ -6,12 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "url/gurl.h"
@@ -27,8 +28,7 @@ namespace {
 std::string ExtractUlrSpecFromQuery(
     const net::test_server::HttpRequest& request) {
   GURL request_url = request.GetURL();
-  std::string spec =
-      base::UnescapeBinaryURLComponent(request_url.query_piece());
+  std::string spec = base::UnescapeBinaryURLComponent(request_url.query());
 
   // Escape the URL spec.
   GURL url(spec);
@@ -62,8 +62,9 @@ class DownloadResponse : public net::test_server::BasicHttpResponse {
       base::WeakPtr<net::test_server::HttpResponseDelegate> delegate,
       int count) {
     if (!count) {
-      if (delegate)
+      if (delegate) {
         delegate->FinishResponse();
+      }
       return;
     }
     int block_size = std::min(count, 1000);
@@ -71,7 +72,7 @@ class DownloadResponse : public net::test_server::BasicHttpResponse {
     auto next_send =
         base::BindOnce(&DownloadResponse::Send, delegate, count - block_size);
 
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&net::test_server::HttpResponseDelegate::SendContents,
                        delegate, content_block, std::move(next_send)),
@@ -158,7 +159,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandlePageWithContents(
     const net::test_server::HttpRequest& request) {
   auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
   http_response->set_content_type("text/html");
-  http_response->set_content(request.GetURL().query());
+  http_response->set_content(request.GetURL().GetQuery());
   return std::move(http_response);
 }
 
@@ -171,7 +172,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleEchoQueryOrCloseSocket(
   }
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_content_type("text/html");
-  response->set_content(request.GetURL().query());
+  response->set_content(request.GetURL().GetQuery());
   response->AddCustomHeader("Cache-Control", "no-store");
   return std::move(response);
 }
@@ -194,7 +195,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleForm(
 std::unique_ptr<net::test_server::HttpResponse> HandleDownload(
     const net::test_server::HttpRequest& request) {
   int length = 0;
-  if (!base::StringToInt(request.GetURL().query(), &length)) {
+  if (!base::StringToInt(request.GetURL().GetQuery(), &length)) {
     length = 1;
   }
 

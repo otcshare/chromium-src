@@ -15,18 +15,21 @@ import androidx.test.filters.SmallTest;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.search_resumption.SearchResumptionTileBuilder.OnSuggestionClickCallback;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -37,6 +40,7 @@ import org.chromium.url.JUnitTestGURLs;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class SearchResumptionModuleViewUnitTest {
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private Activity mActivity;
     private SearchResumptionModuleView mModuleView;
     private View mHeaderView;
@@ -44,12 +48,10 @@ public class SearchResumptionModuleViewUnitTest {
     private PropertyModel mPropertyModel;
     private PropertyModelChangeProcessor mPropertyModelChangeProcessor;
 
-    @Mock
-    Callback<Boolean> mOnClickedCallback;
+    @Mock Callback<Boolean> mOnClickedCallback;
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.initMocks(this);
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mPropertyModel = new PropertyModel(SearchResumptionModuleProperties.ALL_KEYS);
     }
@@ -70,21 +72,25 @@ public class SearchResumptionModuleViewUnitTest {
         inflateModuleView();
 
         Assert.assertTrue(mTilesView.isExpanded());
-        Assert.assertFalse(SharedPreferencesManager.getInstance().readBoolean(
-                ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP, false));
+        Assert.assertFalse(
+                ChromeSharedPreferences.getInstance()
+                        .readBoolean(
+                                ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP,
+                                false));
     }
 
     @Test
     @SmallTest
     public void testVisibilityDisallowInitially() {
-        SharedPreferencesManager sharedPreferencesManager = SharedPreferencesManager.getInstance();
+        SharedPreferencesManager sharedPreferencesManager = ChromeSharedPreferences.getInstance();
         sharedPreferencesManager.writeBoolean(
                 ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP, true);
 
         inflateModuleView();
         Assert.assertFalse(mTilesView.isExpanded());
-        Assert.assertTrue(sharedPreferencesManager.readBoolean(
-                ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP, false));
+        Assert.assertTrue(
+                sharedPreferencesManager.readBoolean(
+                        ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP, false));
 
         sharedPreferencesManager.writeBoolean(
                 ChromePreferenceKeys.SEARCH_RESUMPTION_MODULE_COLLAPSE_ON_NTP, false);
@@ -109,7 +115,8 @@ public class SearchResumptionModuleViewUnitTest {
         inflateModuleView();
         Assert.assertTrue(mTilesView.isExpanded());
 
-        mPropertyModel.set(SearchResumptionModuleProperties.EXPAND_COLLAPSE_CLICK_CALLBACK,
+        mPropertyModel.set(
+                SearchResumptionModuleProperties.EXPAND_COLLAPSE_CLICK_CALLBACK,
                 mOnClickedCallback);
         mHeaderView.performClick();
         verify(mOnClickedCallback, times(1)).onResult(false);
@@ -138,7 +145,7 @@ public class SearchResumptionModuleViewUnitTest {
     public void testTileView() {
         SearchResumptionTileView tileView = inflateTileView();
         String text = "foo";
-        GURL gUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.EXAMPLE_URL);
+        GURL gUrl = JUnitTestGURLs.EXAMPLE_URL;
 
         tileView.updateSuggestionData(gUrl, text);
         Assert.assertEquals(text, tileView.getTextForTesting());
@@ -153,18 +160,24 @@ public class SearchResumptionModuleViewUnitTest {
     }
 
     private void inflateModuleView() {
-        mModuleView = (SearchResumptionModuleView) mActivity.getLayoutInflater().inflate(
-                R.layout.search_resumption_module_layout, null);
+        mModuleView =
+                (SearchResumptionModuleView)
+                        mActivity
+                                .getLayoutInflater()
+                                .inflate(R.layout.search_resumption_module_layout, null);
         mActivity.setContentView(mModuleView);
         mHeaderView = mModuleView.findViewById(R.id.search_resumption_module_header);
         mTilesView = mModuleView.findViewById(R.id.search_resumption_module_tiles_container);
-        mPropertyModelChangeProcessor = PropertyModelChangeProcessor.create(
-                mPropertyModel, mModuleView, new SearchResumptionModuleViewBinder());
+        mPropertyModelChangeProcessor =
+                PropertyModelChangeProcessor.create(
+                        mPropertyModel, mModuleView, new SearchResumptionModuleViewBinder());
     }
 
     private SearchResumptionTileView inflateTileView() {
-        return (SearchResumptionTileView) mActivity.getLayoutInflater().inflate(
-                R.layout.search_resumption_module_tile_layout, null);
+        return (SearchResumptionTileView)
+                mActivity
+                        .getLayoutInflater()
+                        .inflate(R.layout.search_resumption_module_tile_layout, null);
     }
 
     private boolean isViewVisible(View view) {

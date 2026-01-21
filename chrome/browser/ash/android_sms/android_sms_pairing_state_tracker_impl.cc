@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/android_sms/android_sms_urls.h"
@@ -78,7 +78,7 @@ void AndroidSmsPairingStateTrackerImpl::OnCookiesRetrieved(
 void AndroidSmsPairingStateTrackerImpl::OnCookieChange(
     const net::CookieChangeInfo& change) {
   DCHECK_EQ(kMessagesPairStateCookieName, change.cookie.Name());
-  DCHECK(change.cookie.IsDomainMatch(GetPairingUrl().host()));
+  DCHECK(change.cookie.IsDomainMatch(GetPairingUrl().GetHost()));
 
   // NOTE: cookie.Value() cannot be trusted in this callback. The cookie may
   // have expired or been removed and the Value() does not get updated. It's
@@ -99,7 +99,7 @@ GURL AndroidSmsPairingStateTrackerImpl::GetPairingUrl() {
   // If the app registry is not ready, we can't see check what is currently
   // installed.
   if (android_sms_app_manager_->IsAppRegistryReady()) {
-    absl::optional<GURL> app_url = android_sms_app_manager_->GetCurrentAppUrl();
+    std::optional<GURL> app_url = android_sms_app_manager_->GetCurrentAppUrl();
     if (app_url)
       return *app_url;
   }

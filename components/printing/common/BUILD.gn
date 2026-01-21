@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/features.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//printing/buildflags/buildflags.gni")
 
@@ -11,18 +12,41 @@ static_library("common") {
   sources = [
     "cloud_print_cdd_conversion.cc",
     "cloud_print_cdd_conversion.h",
+    "print_params.cc",
+    "print_params.h",
   ]
 
   deps = [
     ":mojo_interfaces",
     "//base",
-    "//build:chromeos_buildflags",
-    "//components/cloud_devices/common:common",
+    "//components/cloud_devices/common",
     "//printing",
     "//printing/backend",
     "//printing/common",
     "//printing/mojom",
   ]
+
+  if (is_linux) {
+    deps += [
+      "//build/config/linux/dbus:buildflags",
+      "//ui/linux:linux_ui",
+    ]
+    sources += [
+      "print_dialog_linux_factory.cc",
+      "print_dialog_linux_factory.h",
+    ]
+    if (use_dbus) {
+      sources += [
+        "print_dialog_linux_portal.cc",
+        "print_dialog_linux_portal.h",
+      ]
+      deps += [
+        "//components/dbus",
+        "//components/strings:components_strings_grit",
+        "//dbus",
+      ]
+    }
+  }
 }
 
 mojom("mojo_interfaces") {
@@ -31,20 +55,13 @@ mojom("mojo_interfaces") {
   public_deps = [
     "//mojo/public/mojom/base",
     "//printing/mojom",
+    "//ui/accessibility/mojom",
     "//ui/gfx/geometry/mojom",
   ]
 
   enabled_features = []
   if (enable_print_preview) {
     enabled_features += [ "enable_print_preview" ]
-  }
-  if (enable_tagged_pdf) {
-    assert(enable_print_preview)
-    public_deps += [ "//ui/accessibility/mojom" ]
-    enabled_features += [ "enable_tagged_pdf" ]
-  }
-  if (enable_print_content_analysis) {
-    enabled_features += [ "enable_print_content_analysis" ]
   }
 }
 
@@ -57,5 +74,26 @@ source_set("unit_tests") {
     "//printing/backend",
     "//printing/backend:test_support",
     "//testing/gtest",
+    "//ui/gfx/geometry",
   ]
+
+  if (is_chromeos) {
+    deps += [ "//printing" ]
+  }
+
+  if (is_linux && use_dbus) {
+    sources += [ "print_dialog_linux_portal_unittest.cc" ]
+    deps += [
+      "//components/dbus",
+      "//dbus",
+      "//dbus:test_support",
+      "//printing",
+      "//testing/gmock",
+      "//ui/base",
+    ]
+  }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

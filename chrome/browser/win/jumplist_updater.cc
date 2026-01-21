@@ -4,16 +4,19 @@
 
 #include "chrome/browser/win/jumplist_updater.h"
 
-#include <windows.h>
 #include <objbase.h>
-#include <propkey.h>
+
 #include <shobjidl.h>
+#include <windows.h>
+
+#include <propkey.h>
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/win_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/common/content_switches.h"
@@ -71,7 +74,7 @@ bool AddShellLink(Microsoft::WRL::ComPtr<IObjectCollection> collection,
     return false;
 
   if (!base::win::SetStringValueForPropertyStore(
-          property_store.Get(), PKEY_Title, base::as_wcstr(item->title()))) {
+          property_store.Get(), PKEY_Title, base::UTF16ToWide(item->title()))) {
     return false;
   }
 
@@ -88,7 +91,7 @@ ShellLinkItem::ShellLinkItem()
     : command_line_(base::CommandLine::NO_PROGRAM), icon_index_(0) {
 }
 
-ShellLinkItem::~ShellLinkItem() {}
+ShellLinkItem::~ShellLinkItem() = default;
 
 std::wstring ShellLinkItem::GetArguments() const {
   return command_line_.GetArgumentsString();
@@ -104,8 +107,7 @@ base::CommandLine* ShellLinkItem::GetCommandLine() {
 JumpListUpdater::JumpListUpdater(const std::wstring& app_user_model_id)
     : app_user_model_id_(app_user_model_id), user_max_items_(0) {}
 
-JumpListUpdater::~JumpListUpdater() {
-}
+JumpListUpdater::~JumpListUpdater() = default;
 
 // static
 bool JumpListUpdater::IsEnabled() {

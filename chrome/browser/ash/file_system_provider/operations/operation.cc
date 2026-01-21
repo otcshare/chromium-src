@@ -6,26 +6,23 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "chrome/browser/ash/file_system_provider/event_dispatcher.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
+#include "chrome/browser/ash/file_system_provider/request_dispatcher.h"
 #include "extensions/browser/event_router.h"
 
-namespace ash {
-namespace file_system_provider {
-namespace operations {
+namespace ash::file_system_provider::operations {
 
 namespace {
 
 
 }  // namespace
 
-Operation::Operation(EventDispatcher* dispatcher,
+Operation::Operation(RequestDispatcher* dispatcher,
                      const ProvidedFileSystemInfo& file_system_info)
-    : file_system_info_(file_system_info), event_dispatcher_(dispatcher) {}
+    : file_system_info_(file_system_info), request_dispatcher_(dispatcher) {}
 
-Operation::~Operation() {
-}
+Operation::~Operation() = default;
 
 bool Operation::SendEvent(int request_id,
                           extensions::events::HistogramValue histogram_value,
@@ -33,14 +30,13 @@ bool Operation::SendEvent(int request_id,
                           base::Value::List event_args) {
   auto event = std::make_unique<extensions::Event>(histogram_value, event_name,
                                                    std::move(event_args));
-  return event_dispatcher_->DispatchEvent(
+  return request_dispatcher_->DispatchRequest(
       request_id, file_system_info_.file_system_id(), std::move(event));
 }
 
 void Operation::OnAbort(int request_id) {
-  // TODO(b/249182641): plumb through request cancellation to lacros.
+  request_dispatcher_->CancelRequest(request_id,
+                                     file_system_info_.file_system_id());
 }
 
-}  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::operations

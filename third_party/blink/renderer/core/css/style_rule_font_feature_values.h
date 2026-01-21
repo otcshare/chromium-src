@@ -10,7 +10,12 @@
 
 namespace blink {
 
-using FontFeatureAliases = HashMap<AtomicString, Vector<uint32_t>>;
+struct FeatureIndicesWithPriority {
+  Vector<uint32_t> indices;
+  uint16_t layer_order = std::numeric_limits<uint16_t>::max();
+};
+
+using FontFeatureAliases = HashMap<AtomicString, FeatureIndicesWithPriority>;
 
 class CORE_EXPORT StyleRuleFontFeature : public StyleRuleBase {
  public:
@@ -27,8 +32,7 @@ class CORE_EXPORT StyleRuleFontFeature : public StyleRuleBase {
   StyleRuleFontFeature(const StyleRuleFontFeature&);
   ~StyleRuleFontFeature();
 
-  void UpdateAlias(AtomicString alias, const Vector<uint32_t>& features);
-
+  void UpdateAlias(AtomicString alias, Vector<uint32_t> features);
   void OverrideAliasesIn(FontFeatureAliases& destination);
 
   FeatureType GetFeatureType() { return type_; }
@@ -62,23 +66,24 @@ class CORE_EXPORT FontFeatureValuesStorage {
   FontFeatureValuesStorage& operator=(const FontFeatureValuesStorage& other) =
       default;
 
-  Vector<uint32_t> ResolveStylistic(AtomicString) const;
-  Vector<uint32_t> ResolveStyleset(AtomicString) const;
-  Vector<uint32_t> ResolveCharacterVariant(AtomicString) const;
-  Vector<uint32_t> ResolveSwash(AtomicString) const;
-  Vector<uint32_t> ResolveOrnaments(AtomicString) const;
-  Vector<uint32_t> ResolveAnnotation(AtomicString) const;
+  Vector<uint32_t> ResolveStylistic(const AtomicString&) const;
+  Vector<uint32_t> ResolveStyleset(const AtomicString&) const;
+  Vector<uint32_t> ResolveCharacterVariant(const AtomicString&) const;
+  Vector<uint32_t> ResolveSwash(const AtomicString&) const;
+  Vector<uint32_t> ResolveOrnaments(const AtomicString&) const;
+  Vector<uint32_t> ResolveAnnotation(const AtomicString&) const;
+
+  void SetLayerOrder(uint16_t layer_order);
 
   // Update and extend this FontFeatureValuesStorage with information from
-  // `other`. Intended to be used in `StyleEngine::AddFontFeatureValuesRules`
-  // to merge multiple at-rules in a document so that their maps became
-  // unified, compare
+  // `other`. Intended to be used for fusing multiple at-rules in a document and
+  // across cascade layers so that their maps became unified, compare
   // https://drafts.csswg.org/css-fonts-4/#font-feature-values-syntax: If
   // multiple @font-feature-values rules are defined for a given family, the
   // resulting values definitions are the union of the definitions contained
-  // within these rules.
-  // Updates FontFeatureAliases from other without checking families overlap.
-  void FuseUpdate(const FontFeatureValuesStorage& other);
+  // within these rules. If `other` is passed in with a higher `layer_order`,
+  // existing alias keys are overridden with the values from `other`.
+  void FuseUpdate(const FontFeatureValuesStorage& other, unsigned layer_order);
 
  private:
   // TODO(https://crbug.com/716567): Only styleset and character variant take
@@ -91,7 +96,7 @@ class CORE_EXPORT FontFeatureValuesStorage {
   FontFeatureAliases ornaments_;
   FontFeatureAliases annotation_;
   static Vector<uint32_t> ResolveInternal(const FontFeatureAliases&,
-                                          AtomicString);
+                                          const AtomicString&);
 
   friend class StyleRuleFontFeatureValues;
 };

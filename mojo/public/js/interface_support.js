@@ -3,6 +3,21 @@
 // found in the LICENSE file.
 
 /**
+ * Reprents a message in the router's message queue that is ready for dispatch
+ * to an endpoint. This is needed because there are times when the router
+ * is not able to dispatch a message (e.g. if an interface client has not been
+ * bound yet). In those cases, the router must hold onto the message in its own
+ * message queue until dispatch is possible.
+ *
+ * @typedef {{
+ *   header: !mojo.internal.MessageHeader,
+ *   buffer: !ArrayBuffer,
+ *   handles: !Array<MojoHandle>,
+ * }}
+ */
+mojo.internal.interfaceSupport.RouterMessage;
+
+/**
  * Owns a single message pipe handle and facilitates message sending and routing
  * on behalf of all the pipe's local Endpoints.
  */
@@ -15,6 +30,18 @@ mojo.internal.interfaceSupport.Router = class {
   constructor(pipe, setNamespaceBit) {
     /** @const {!MojoHandle} */
     this.pipe_ = pipe;
+
+    /** @const {!Array<mojo.internal.interfaceSupport.RouterMessage>}*/
+    this.messages_ = [];
+    /**
+     * Flag used to keep track of message dispatch. This is necessary because
+     * it is possible that a message dispatch could trigger additional message
+     * dispatch. The dispatch logic should check that this flag is not set
+     * before attempting to dispatch messages.
+     *
+     * @type {boolean}
+     */
+    this.dispatchInProgress_ = false;
 
     /** @const {!mojo.internal.interfaceSupport.HandleReader} */
     this.reader_ = new mojo.internal.interfaceSupport.HandleReader(pipe);
@@ -58,6 +85,7 @@ mojo.internal.interfaceSupport.Router = class {
     console.assert(
         this.isReading(), 'adding a secondary endpoint with no primary');
     this.endpoints_.set(interfaceId, endpoint);
+    this.dispatchMessages_();
   }
 
   /** @param {number} interfaceId */
@@ -100,9 +128,7 @@ mojo.internal.interfaceSupport.Router = class {
    * @param {!Array<MojoHandle>} handles
    */
   onMessageReceived_(buffer, handles) {
-    if (buffer.byteLength < mojo.internal.kMessageV0HeaderSize) {
-      console.error('Rejecting undersized message');
-      this.onError_();
+    if (!this.checkSize_(buffer)) {
       return;
     }
 
@@ -111,15 +137,83 @@ mojo.internal.interfaceSupport.Router = class {
       return;
     }
 
-    const endpoint = this.endpoints_.get(header.interfaceId);
-    if (!endpoint) {
-      console.error(
-          `Received message for unknown endpoint ${header.interfaceId}`);
+    this.messages_.push({
+      header: header,
+      buffer: buffer,
+      handles: handles,
+    });
+
+    this.dispatchMessages_();
+  }
+
+  /**
+   * Does a preliminary check to see if the buffer is a well formed mojo
+   * message.
+   *
+   * @param {ArrayBuffer} buffer
+   * @returns true if size is big enough to be a potential mojo message,
+   * false otherwise
+   */
+  checkSize_(buffer) {
+    if (buffer.byteLength < mojo.internal.kMessageV0HeaderSize) {
+      console.error('Rejecting undersized message');
+      this.onError_();
+      return false;
+    }
+
+    return true
+  }
+
+  /**
+   * Dispatch all the messages currently in the router's message queue.
+   */
+  dispatchMessages_() {
+    if (this.dispatchInProgress_) {
       return;
     }
 
-    endpoint.onMessageReceived(header, buffer, handles);
+    this.dispatchInProgress_ = true;
+
+    while (this.messages_.length > 0) {
+      const msg = this.messages_[0];
+      const successfullyDispatched = this.dispatch_(msg);
+      if (successfullyDispatched) {
+        this.messages_.shift();
+      } else {
+        // Dispatch was unsuccessful, stop message dispatch and wait for
+        // another router event before re-attempting dispatch.
+        break;
+      }
+    }
+
+    this.dispatchInProgress_ = false;
   }
+
+  /**
+   * Dispatches a single message to the endpoint.
+   *
+   * @param {mojo.internal.interfaceSupport.RouterMessage} msg
+   * @returns true if the message was successfully dispatched, false otherwise.
+   */
+  dispatch_(msg) {
+    const endpoint = this.endpoints_.get(msg.header.interfaceId);
+    if (!endpoint) {
+      console.error(
+          `Received message for unknown endpoint ${msg.header.interfaceId}`);
+
+      return false;
+    }
+    if (!endpoint.isStarted) {
+      // Not client bound for endpoint. This can happen for associated
+      // interface endpoint, where the client has not been bound yet.
+      return false;
+    }
+
+    // Dispatch to the endpoint client.
+    endpoint.onMessageReceived(msg.header, msg.buffer, msg.handles);
+    return true;
+  }
+
 
   onError_() {
     for (const endpoint of this.endpoints_.values()) {
@@ -337,15 +431,28 @@ mojo.internal.interfaceSupport.Endpoint = class {
 };
 
 /**
+ * @param {!mojo.internal.interfaceSupport.Endpoint} endpoint
+ * @param {!ArrayBuffer} buffer
+ * @export
+ */
+mojo.internal.interfaceSupport.acceptBufferForTesting = function(
+    endpoint, buffer) {
+  endpoint.router_.onMessageReceived_(buffer, []);
+};
+
+/**
  * Creates a new Endpoint wrapping a given pipe handle.
  *
- * @param {!MojoHandle|!mojo.internal.interfaceSupport.Endpoint} pipeOrEndpoint
+ * @param {!MojoHandle|!mojo.internal.interfaceSupport.Endpoint}
+ *     pipeOrEndpoint
  * @param {boolean=} setNamespaceBit
  * @return {!mojo.internal.interfaceSupport.Endpoint}
  */
 mojo.internal.interfaceSupport.createEndpoint = function(
     pipeOrEndpoint, setNamespaceBit = false) {
-  if (pipeOrEndpoint.constructor.name != 'MojoHandle') {
+  // `watch` is defined on MojoHandle but not Endpoint, so if it is not defined
+  // we know this is an Endpoint.
+  if (pipeOrEndpoint.watch === undefined) {
     return /** @type {!mojo.internal.interfaceSupport.Endpoint} */(
         pipeOrEndpoint);
   }
@@ -396,8 +503,6 @@ mojo.internal.interfaceSupport.PipeControlMessageHandler = class {
    * @param {!mojo.pipeControl.RunOrClosePipeInput} input
    */
   send(input) {
-    const spec = /** @type {!mojo.internal.StructSpec} */ (
-        mojo.pipeControl.RunOrClosePipeMessageParamsSpec.$.$.structSpec);
     const message = new mojo.internal.Message(
         null, 0xffffffff, 0, mojo.pipeControl.RUN_OR_CLOSE_PIPE_MESSAGE_ID, 0,
         /** @type {!mojo.internal.StructSpec} */
@@ -507,6 +612,7 @@ mojo.internal.interfaceSupport.ControlMessageHandler = class {
  *   responseStruct: !mojo.internal.MojomType,
  *   resolve: !Function,
  *   reject: !Function,
+ *   useResultResponse: boolean,
  * }}
  */
 mojo.internal.interfaceSupport.PendingResponse;
@@ -575,7 +681,7 @@ mojo.internal.interfaceSupport.PendingReceiver = class {
  * serialize requests and deserialize their replies, both according to
  * declarative message structure specs.
  *
- * TODO(crbug.com/1012109): Use a bounded generic type instead of
+ * TODO(crbug.com/40102194): Use a bounded generic type instead of
  * mojo.internal.interfaceSupport.PendingReceiver.
  * @implements {mojo.internal.interfaceSupport.EndpointClient}
  * @export
@@ -687,23 +793,46 @@ mojo.internal.interfaceSupport.InterfaceRemoteBase = class {
    * @param {!mojo.internal.MojomType} paramStruct
    * @param {?mojo.internal.MojomType} maybeResponseStruct
    * @param {!Array} args
+   * @param {boolean} useResultResponse
    * @return {!Promise}
    * @export
    */
-  sendMessage(ordinal, paramStruct, maybeResponseStruct, args) {
+  sendMessage(
+      ordinal, paramStruct, maybeResponseStruct, args, useResultResponse) {
     // The pipe has already been closed, so just drop the message.
     if (maybeResponseStruct && (!this.endpoint_ || !this.endpoint_.isStarted)) {
       return Promise.reject(new Error('The pipe has already been closed.'));
     }
 
+    // Turns a functions args into an object where each property corresponds to
+    // an argument.
+    //
+    // Each argument in `args` has a single corresponding field in `fields`
+    // except for optional numerics which map to two fields in `fields`. This
+    // means args' indexes don't exactly match `fields`'s. As we iterate
+    // over the fields we keep track of how many optional numeric args we've
+    // seen to get the right `args` index.
     const value = {};
-    paramStruct.$.structSpec.fields.forEach(
-        (field, index) => value[field.name] = args[index]);
+    let nullableValueKindFields = 0;
+    paramStruct.$.structSpec.fields.forEach((field, index) => {
+      const fieldArgsIndex = index - nullableValueKindFields;
+      if (!mojo.internal.isNullableValueKindField(field)) {
+        value[field.name] = args[fieldArgsIndex];
+        return;
+      }
+
+      const props = field.nullableValueKindProperties;
+      if (props.isPrimary) {
+        nullableValueKindFields++;
+        value[props.originalFieldName] = args[fieldArgsIndex];
+      }
+    });
+
     const requestId = this.endpoint_.generateRequestId();
     this.endpoint_.send(
-        ordinal, requestId,
-        maybeResponseStruct ? mojo.internal.kMessageFlagExpectsResponse : 0,
-        paramStruct, value);
+      ordinal, requestId,
+      maybeResponseStruct ? mojo.internal.kMessageFlagExpectsResponse : 0,
+      paramStruct, value);
     if (!maybeResponseStruct) {
       return Promise.resolve();
     }
@@ -711,8 +840,14 @@ mojo.internal.interfaceSupport.InterfaceRemoteBase = class {
     const responseStruct =
         /** @type {!mojo.internal.MojomType} */ (maybeResponseStruct);
     return new Promise((resolve, reject) => {
-      this.pendingResponses_.set(
-          requestId, {requestId, ordinal, responseStruct, resolve, reject});
+      this.pendingResponses_.set(requestId, {
+        requestId,
+        ordinal,
+        responseStruct,
+        resolve,
+        reject,
+        useResultResponse
+      });
     });
   }
 
@@ -744,7 +879,17 @@ mojo.internal.interfaceSupport.InterfaceRemoteBase = class {
     if (header.ordinal !== pendingResponse.ordinal)
       return this.onError(endpoint, 'Received malformed response message');
 
-    pendingResponse.resolve(responseValue);
+    if (pendingResponse.useResultResponse) {
+      // Must use property access below to avoid closure name mangling.
+      const result = responseValue['result'];
+      if (result['success'] !== undefined) {
+        pendingResponse.resolve(result['success']);
+      } else {
+        pendingResponse.reject(result['failure']);
+      }
+    } else {
+      pendingResponse.resolve(responseValue);
+    }
   }
 
   /** @override */
@@ -935,6 +1080,7 @@ mojo.internal.interfaceSupport.InterfaceCallbackReceiver = class {
  *   paramStruct: !mojo.internal.MojomType,
  *   responseStruct: ?mojo.internal.MojomType,
  *   handler: !Function,
+ *   useResultResponse: boolean,
  * }}
  */
 mojo.internal.interfaceSupport.MessageHandler;
@@ -979,10 +1125,13 @@ mojo.internal.interfaceSupport.InterfaceReceiverHelperInternal = class {
    * @param {!mojo.internal.MojomType} paramStruct
    * @param {?mojo.internal.MojomType} responseStruct
    * @param {!Function} handler
+   * @param {boolean} useResultResponse
    * @export
    */
-  registerHandler(ordinal, paramStruct, responseStruct, handler) {
-    this.messageHandlers_.set(ordinal, {paramStruct, responseStruct, handler});
+  registerHandler(
+      ordinal, paramStruct, responseStruct, handler, useResultResponse) {
+    this.messageHandlers_.set(
+        ordinal, {paramStruct, responseStruct, handler, useResultResponse});
   }
 
   /**
@@ -1057,10 +1206,92 @@ mojo.internal.interfaceSupport.InterfaceReceiverHelperInternal = class {
     if (!request)
       throw new Error('Received malformed message');
 
-    let result = handler.handler.apply(
-        null,
-        handler.paramStruct.$.structSpec.fields.map(
-            field => request[field.name]));
+    // Each field in `handler.paramStruct.$.structSpec.fields` corresponds to
+    // an argument, except for optional numerics where two fields correspond to
+    // a single argument.
+    const args = [];
+    for (const field of handler.paramStruct.$.structSpec.fields) {
+      if (!mojo.internal.isNullableValueKindField(field)) {
+        args.push(request[field.name]);
+        continue;
+      }
+
+      const props = field.nullableValueKindProperties;
+      if (!props.isPrimary) {
+        continue;
+      }
+      args.push(request[props.originalFieldName]);
+    }
+
+    if (handler.useResultResponse) {
+      this.handleResultResponseMessage_(endpoint, header, handler, args);
+    } else {
+      this.handleResponseMessage_(endpoint, header, handler, args);
+    }
+  }
+
+  /**
+   * Handles result response messages. 'result' need more handling because there
+   * are more semantics around its type that are more consistent with js
+   * promise.
+   *
+   * Successful "handling" of the incoming message causes in a mojo message
+   * that signals a successful response with the associated value. A failure in
+   * the message handling would signal failure and propagate the error (if
+   * possible).
+   *
+   * Note that there is still a chance for irrecoverable error here if the type
+   * conversion cannot be successfully completed. The success path is mostly
+   * immune to this because of strong typing, but the error path is vulnerable
+   * to this type of runtime error. To avoid this, use the JsError mojo type for
+   * errors originating from javascript.
+   * @param {!mojo.internal.interfaceSupport.Endpoint} endpoint
+   * @param {!mojo.internal.MessageHeader} header
+   * @param {!mojo.internal.interfaceSupport.MessageHandler} handler
+   * @param {!Array<*>} args
+   * @private
+   */
+  handleResultResponseMessage_(endpoint, header, handler, args) {
+    try {
+      let result = handler.handler.apply(null, args);
+
+      if (typeof result != 'object' || result.constructor.name != 'Promise') {
+        result = Promise.resolve(result);
+      }
+
+      result
+          .then(value => {
+            endpoint.send(
+                header.ordinal, header.requestId,
+                mojo.internal.kMessageFlagIsResponse,
+                /** @type {!mojo.internal.MojomType} */
+                (handler.responseStruct), {'result': {'success': value}});
+          })
+          .catch(error => {
+            endpoint.send(
+                header.ordinal, header.requestId,
+                mojo.internal.kMessageFlagIsResponse,
+                /** @type {!mojo.internal.MojomType} */
+                (handler.responseStruct), {'result': {'failure': error}});
+          });
+    } catch (error) {
+      endpoint.send(
+          header.ordinal, header.requestId,
+          mojo.internal.kMessageFlagIsResponse,
+          /** @type {!mojo.internal.MojomType} */
+          (handler.responseStruct), {'result': {'failure': error}});
+    }
+  }
+
+  /**
+   * @param {!mojo.internal.interfaceSupport.Endpoint} endpoint
+   * @param {!mojo.internal.MessageHeader} header
+   * @param {!mojo.internal.interfaceSupport.MessageHandler} handler
+   * @param {!Array<*>} args
+   * @private
+   */
+  handleResponseMessage_(endpoint, header, handler, args) {
+    let result = handler.handler.apply(null, args);
 
     // If the message expects a response, the handler must return either a
     // well-formed response object, or a Promise that will eventually yield one.

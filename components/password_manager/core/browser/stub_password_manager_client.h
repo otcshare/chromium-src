@@ -5,17 +5,15 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_STUB_PASSWORD_MANAGER_CLIENT_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_STUB_PASSWORD_MANAGER_CLIENT_H_
 
+#include <optional>
+
 #include "components/autofill/core/browser/logging/stub_log_manager.h"
-#include "components/password_manager/core/browser/mock_password_change_success_tracker.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/mock_password_feature_manager.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_metrics_recorder.h"
-#include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/password_manager/core/browser/password_reuse_detector.h"
 #include "components/password_manager/core/browser/stub_credentials_filter.h"
-#include "components/sync/driver/sync_service.h"
-#include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/sync/service/sync_service.h"
 
 namespace password_manager {
 
@@ -33,6 +31,10 @@ class StubPasswordManagerClient : public PasswordManagerClient {
   ~StubPasswordManagerClient() override;
 
   // PasswordManagerClient:
+  bool IsSavingAndFillingEnabled(const GURL& url) const override;
+  bool IsFillingEnabled(const GURL& url) const override;
+  bool IsFieldFilledWithOtp(autofill::FormGlobalId form_id,
+                            autofill::FieldGlobalId field_id) override;
   bool PromptUserToSaveOrUpdatePassword(
       std::unique_ptr<PasswordFormManagerForUI> form_to_save,
       bool update_password) override;
@@ -51,65 +53,88 @@ class StubPasswordManagerClient : public PasswordManagerClient {
       std::vector<std::unique_ptr<PasswordForm>> local_forms,
       const url::Origin& origin,
       CredentialsCallback callback) override;
+  bool IsReauthBeforeFillingRequired(
+      device_reauth::DeviceAuthenticator* authenticator) override;
   void NotifyUserAutoSignin(
       std::vector<std::unique_ptr<PasswordForm>> local_forms,
       const url::Origin& origin) override;
   void NotifyUserCouldBeAutoSignedIn(std::unique_ptr<PasswordForm>) override;
   void NotifySuccessfulLoginWithExistingPassword(
       std::unique_ptr<PasswordFormManagerForUI> submitted_manager) override;
+  bool IsPasswordChangeOngoing() override;
   void NotifyStorePasswordCalled() override;
+  void NotifyKeychainError() override;
   void AutomaticPasswordSave(
-      std::unique_ptr<PasswordFormManagerForUI> saved_manager) override;
+      std::unique_ptr<PasswordFormManagerForUI> saved_manager,
+      bool is_update_confirmation) override;
   PrefService* GetPrefs() const override;
   PrefService* GetLocalStatePrefs() const override;
   const syncer::SyncService* GetSyncService() const override;
+  affiliations::AffiliationService* GetAffiliationService() override;
   PasswordStoreInterface* GetProfilePasswordStore() const override;
   PasswordStoreInterface* GetAccountPasswordStore() const override;
   PasswordReuseManager* GetPasswordReuseManager() const override;
-  MockPasswordChangeSuccessTracker* GetPasswordChangeSuccessTracker() override;
+  PasswordChangeServiceInterface* GetPasswordChangeService() const override;
+  const PasswordManagerInterface* GetPasswordManager() const override;
   const GURL& GetLastCommittedURL() const override;
   url::Origin GetLastCommittedOrigin() const override;
   const CredentialsFilter* GetStoreResultFilter() const override;
-  autofill::LogManager* GetLogManager() override;
+  autofill::LogManager* GetCurrentLogManager() override;
   const MockPasswordFeatureManager* GetPasswordFeatureManager() const override;
   MockPasswordFeatureManager* GetPasswordFeatureManager();
   version_info::Channel GetChannel() const override;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_CHROMEOS)
+  void OpenPasswordDetailsBubble(
+      const password_manager::PasswordForm& form) override;
+  void MaybeShowSavePasswordPrimingPromo(const GURL& current_url) override;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_IOS)
+  std::unique_ptr<
+      password_manager::PasswordCrossDomainConfirmationPopupController>
+  ShowCrossDomainConfirmationPopup(
+      const gfx::RectF& element_bounds,
+      base::i18n::TextDirection text_direction,
+      const GURL& domain,
+      const std::u16string& password_hostname,
+      bool show_warning_text,
+      base::OnceClosure confirmation_callback) override;
+#endif  // !BUILDFLAG(IS_IOS)
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE) || BUILDFLAG(IS_IOS)
   safe_browsing::PasswordProtectionService* GetPasswordProtectionService()
       const override;
+#endif
 
-#if defined(ON_FOCUS_PING_ENABLED)
+#if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   void CheckSafeBrowsingReputation(const GURL& form_action,
                                    const GURL& frame_url) override;
 #endif
 
-  void CheckProtectedPasswordEntry(
-      metrics_util::PasswordType reused_password_type,
-      const std::string& username,
-      const std::vector<MatchingReusedCredential>& matching_reused_credentials,
-      bool password_field_exists,
-      uint64_t reused_password_hash,
-      const std::string& domain) override;
-
-  void LogPasswordReuseDetectedEvent() override;
-
   ukm::SourceId GetUkmSourceId() override;
   PasswordManagerMetricsRecorder* GetMetricsRecorder() override;
+#if BUILDFLAG(IS_ANDROID)
+  FirstCctPageLoadPasswordsUkmRecorder* GetFirstCctPageLoadUkmRecorder()
+      override;
+  void PotentialSaveFormSubmitted() override;
+#endif
   signin::IdentityManager* GetIdentityManager() override;
+  const signin::IdentityManager* GetIdentityManager() const override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   network::mojom::NetworkContext* GetNetworkContext() const override;
   bool IsIsolationForPasswordSitesEnabled() const override;
   bool IsNewTabPage() const override;
-  FieldInfoManager* GetFieldInfoManager() const override;
+  password_manager::UndoPasswordChangeController*
+  GetUndoPasswordChangeController() override;
 
  private:
   const StubCredentialsFilter credentials_filter_;
   testing::NiceMock<MockPasswordFeatureManager> password_feature_manager_;
   autofill::StubLogManager log_manager_;
   ukm::SourceId ukm_source_id_;
-  absl::optional<PasswordManagerMetricsRecorder> metrics_recorder_;
-  testing::NiceMock<MockPasswordChangeSuccessTracker>
-      password_change_success_tracker_;
+  std::optional<PasswordManagerMetricsRecorder> metrics_recorder_;
+  UndoPasswordChangeController undo_password_change_controller_;
 };
 
 }  // namespace password_manager

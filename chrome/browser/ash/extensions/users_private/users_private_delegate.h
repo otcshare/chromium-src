@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_ASH_EXTENSIONS_USERS_PRIVATE_USERS_PRIVATE_DELEGATE_H_
 #define CHROME_BROWSER_ASH_EXTENSIONS_USERS_PRIVATE_USERS_PRIVATE_DELEGATE_H_
 
-#include <map>
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
 #include "chrome/common/extensions/api/users_private.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -33,7 +33,7 @@ class UsersPrivateDelegate : public KeyedService {
   virtual PrefsUtil* GetPrefsUtil();
 
  protected:
-  Profile* profile_;  // weak; not owned by us
+  raw_ptr<Profile, LeakedDanglingUntriaged> profile_;  // weak; not owned by us
   std::unique_ptr<PrefsUtil> prefs_util_;
 };
 

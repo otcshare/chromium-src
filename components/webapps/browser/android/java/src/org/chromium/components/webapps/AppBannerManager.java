@@ -10,25 +10,32 @@ import android.text.TextUtils;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.ContextUtils;
+import org.chromium.base.PackageUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContents;
+
+import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * Manages an AppBannerInfoBar for a WebContents.
  *
- * The AppBannerManager is responsible for fetching details about native apps to display in the
+ * <p>The AppBannerManager is responsible for fetching details about native apps to display in the
  * banner. The actual observation of the WebContents (which triggers the automatic creation and
  * removal of banners, among other things) is done by the native-side AppBannerManagerAndroid.
  */
 @JNINamespace("webapps")
+@NullMarked
 public class AppBannerManager {
     /**
-     * A struct containing the string resources IDs for the strings to show in the install
-     * dialog (both the dialog title and the accept button).
+     * A struct containing the string resources IDs for the strings to show in the install dialog
+     * (both the dialog title and the accept button).
      */
     public static class InstallStringPair {
         public final @StringRes int titleTextId;
@@ -40,27 +47,29 @@ public class AppBannerManager {
         }
     }
 
-    public static final InstallStringPair PWA_PAIR = new InstallStringPair(
-            R.string.menu_add_to_homescreen_install, R.string.app_banner_install);
+    public interface Observer {
+        void onInstallabilityUpdated(AppBannerManager manager);
+    }
+
+    public static final InstallStringPair PWA_PAIR =
+            new InstallStringPair(R.string.menu_install_webapp, R.string.app_banner_install);
     public static final InstallStringPair NON_PWA_PAIR =
             new InstallStringPair(R.string.menu_add_to_homescreen, R.string.add);
 
-    /** The key to use to store and retrieve (from the menu data) what was shown in the menu. */
-    public static final String MENU_TITLE_KEY = "AppMenuTitleShown";
-
-    private static final String TAG = "AppBannerManager";
-
     /** Retrieves information about a given package. */
-    private static AppDetailsDelegate sAppDetailsDelegate;
+    private static @Nullable AppDetailsDelegate sAppDetailsDelegate;
 
     /** Pointer to the native side AppBannerManager. */
     private long mNativePointer;
 
+    private static final CopyOnWriteArraySet<Observer> sObservers = new CopyOnWriteArraySet<>();
+
     /** Whether add to home screen is permitted by the system. */
-    private static Boolean sIsSupported;
+    private static @Nullable Boolean sIsSupported;
 
     /**
      * Checks if the add to home screen intent is supported.
+     *
      * @return true if add to home screen is supported, false otherwise.
      */
     @CalledByNative
@@ -79,15 +88,25 @@ public class AppBannerManager {
 
     /**
      * Sets the delegate that provides information about a given package.
-     * @param delegate Delegate to use.  Previously set ones are destroyed.
+     *
+     * @param delegate Delegate to use. Previously set ones are destroyed.
      */
     public static void setAppDetailsDelegate(AppDetailsDelegate delegate) {
         if (sAppDetailsDelegate != null) sAppDetailsDelegate.destroy();
         sAppDetailsDelegate = delegate;
     }
 
+    public static void addObserver(Observer observer) {
+        sObservers.add(observer);
+    }
+
+    public static void removeObserver(Observer observer) {
+        sObservers.remove(observer);
+    }
+
     /**
      * Constructs an AppBannerManager.
+     *
      * @param nativePointer the native-side object that owns this AppBannerManager.
      */
     private AppBannerManager(long nativePointer) {
@@ -106,27 +125,34 @@ public class AppBannerManager {
 
     /**
      * Grabs package information for the banner asynchronously.
-     * @param url         URL for the page that is triggering the banner.
+     *
+     * @param url URL for the page that is triggering the banner.
      * @param packageName Name of the package that is being advertised.
      */
     @CalledByNative
     private void fetchAppDetails(
-            String url, String packageName, String referrer, int iconSizeInDp) {
+            int requestId, String url, String packageName, String referrer, int iconSizeInDp) {
         if (sAppDetailsDelegate == null) return;
 
         Context context = ContextUtils.getApplicationContext();
         int iconSizeInPx =
                 Math.round(context.getResources().getDisplayMetrics().density * iconSizeInDp);
         sAppDetailsDelegate.getAppDetailsAsynchronously(
-                createAppDetailsObserver(), url, packageName, referrer, iconSizeInPx);
+                createAppDetailsObserver(requestId), url, packageName, referrer, iconSizeInPx);
     }
 
-    private AppDetailsDelegate.Observer createAppDetailsObserver() {
+    @CalledByNative
+    private static boolean isRelatedNonWebAppInstalled(String packageName) {
+        return PackageUtils.isPackageInstalled(packageName);
+    }
+
+    private AppDetailsDelegate.Observer createAppDetailsObserver(int requestId) {
         return new AppDetailsDelegate.Observer() {
             /**
              * Called when data about the package has been retrieved, which includes the url for the
              * app's icon but not the icon Bitmap itself.
-             * @param data Data about the app.  Null if the task failed.
+             *
+             * @param data Data about the app. Null if the task failed.
              */
             @Override
             public void onAppDetailsRetrieved(AppData data) {
@@ -135,26 +161,23 @@ public class AppBannerManager {
                 String imageUrl = data.imageUrl();
                 if (TextUtils.isEmpty(imageUrl)) return;
 
-                AppBannerManagerJni.get().onAppDetailsRetrieved(mNativePointer,
-                        AppBannerManager.this, data, data.title(), data.packageName(),
-                        data.imageUrl());
+                AppBannerManagerJni.get()
+                        .onAppDetailsRetrieved(
+                                mNativePointer,
+                                requestId,
+                                data,
+                                data.title(),
+                                data.packageName(),
+                                data.imageUrl());
             }
         };
     }
 
-    /** Returns the language option to use for the add to homescreen dialog and menu item. */
-    public static InstallStringPair getHomescreenLanguageOption(WebContents webContents) {
-        AppBannerManager manager =
-                webContents != null ? AppBannerManager.forWebContents(webContents) : null;
-        if (manager != null && manager.getIsPwa(webContents)) {
-            return PWA_PAIR;
-        } else {
-            return NON_PWA_PAIR;
-        }
-    }
-
-    /** Returns the language option to use for the add to homescreen dialog and menu item. */
-    public static String maybeGetManifestId(WebContents webContents) {
+    /**
+     * Returns the manifest id if the current page is installable, otherwise returns the empty
+     * string.
+     */
+    public static @Nullable String maybeGetManifestId(WebContents webContents) {
         AppBannerManager manager =
                 webContents != null ? AppBannerManager.forWebContents(webContents) : null;
         if (manager != null) {
@@ -163,40 +186,44 @@ public class AppBannerManager {
         return null;
     }
 
+    /** Returns true if the web app can be promoted into an installable application. */
+    public static boolean isProbablyPromotable(WebContents webContents) {
+        return AppBannerManagerJni.get().isProbablyPromotable(webContents);
+    }
+
     /** Sets the app-banner-showing logic to ignore the Chrome channel. */
-    @VisibleForTesting
     public static void ignoreChromeChannelForTesting() {
         AppBannerManagerJni.get().ignoreChromeChannelForTesting();
     }
 
     /** Returns whether the native AppBannerManager is working. */
-    @VisibleForTesting
     public boolean isRunningForTesting() {
-        return AppBannerManagerJni.get().isRunningForTesting(mNativePointer, AppBannerManager.this);
+        return AppBannerManagerJni.get().isRunningForTesting(mNativePointer);
     }
 
     /** Returns the state of the current pipeline. */
-    @VisibleForTesting
     public int getPipelineStatusForTesting() {
         return AppBannerManagerJni.get().getPipelineStatusForTesting(mNativePointer);
     }
 
+    /** Returns the state of the ambient badge. */
+    public int getBadgeStatusForTesting() {
+        return AppBannerManagerJni.get().getBadgeStatusForTesting(mNativePointer);
+    }
+
     /** Sets constants (in days) the banner should be blocked for after dismissing and ignoring. */
-    @VisibleForTesting
     public static void setDaysAfterDismissAndIgnoreForTesting(int dismissDays, int ignoreDays) {
         AppBannerManagerJni.get().setDaysAfterDismissAndIgnoreToTrigger(dismissDays, ignoreDays);
     }
 
     /** Sets a constant (in days) that gets added to the time when the current time is requested. */
-    @VisibleForTesting
     public static void setTimeDeltaForTesting(int days) {
         AppBannerManagerJni.get().setTimeDeltaForTesting(days);
     }
 
-    /** Sets the total required engagement to trigger the banner. */
-    @VisibleForTesting
-    public static void setTotalEngagementForTesting(double engagement) {
-        AppBannerManagerJni.get().setTotalEngagementToTrigger(engagement);
+    /** Sets the install promo result from segmentation service for testing purpose. */
+    public static void setOverrideSegmentationResultForTesting(boolean show) {
+        AppBannerManagerJni.get().setOverrideSegmentationResultForTesting(show);
     }
 
     /** Returns the AppBannerManager object. This is owned by the C++ banner manager. */
@@ -205,32 +232,48 @@ public class AppBannerManager {
         return AppBannerManagerJni.get().getJavaBannerManagerForWebContents(contents);
     }
 
-    /**
-     * Checks whether the renderer has navigated to a PWA.
-     * @param contents The web contents to check.
-     * @return true if the site has been determined to contain a PWA.
-     */
-    public boolean getIsPwa(WebContents contents) {
-        return !TextUtils.equals("", AppBannerManagerJni.get().getInstallableWebAppName(contents));
-    }
-
     public String getManifestId(WebContents contents) {
         return AppBannerManagerJni.get().getInstallableWebAppManifestId(contents);
     }
 
+    /** Called every time the web contents updates its installability status. */
+    @CalledByNative
+    private void onInstallabilityUpdated() {
+        for (Observer observer : sObservers) {
+            observer.onInstallabilityUpdated(this);
+        }
+    }
+
     @NativeMethods
-    interface Natives {
+    @VisibleForTesting
+    public interface Natives {
         AppBannerManager getJavaBannerManagerForWebContents(WebContents webContents);
-        String getInstallableWebAppName(WebContents webContents);
+
         String getInstallableWebAppManifestId(WebContents webContents);
-        boolean onAppDetailsRetrieved(long nativeAppBannerManagerAndroid, AppBannerManager caller,
-                AppData data, String title, String packageName, String imageUrl);
+
+        void onAppDetailsRetrieved(
+                long nativeAppBannerManagerAndroid,
+                int requestId,
+                AppData data,
+                @Nullable String title,
+                String packageName,
+                @Nullable String imageUrl);
+
         // Testing methods.
         void ignoreChromeChannelForTesting();
-        boolean isRunningForTesting(long nativeAppBannerManagerAndroid, AppBannerManager caller);
+
+        boolean isRunningForTesting(long nativeAppBannerManagerAndroid);
+
         int getPipelineStatusForTesting(long nativeAppBannerManagerAndroid);
+
+        int getBadgeStatusForTesting(long nativeAppBannerManagerAndroid);
+
         void setDaysAfterDismissAndIgnoreToTrigger(int dismissDays, int ignoreDays);
+
         void setTimeDeltaForTesting(int days);
-        void setTotalEngagementToTrigger(double engagement);
+
+        void setOverrideSegmentationResultForTesting(boolean show);
+
+        boolean isProbablyPromotable(WebContents contents);
     }
 }

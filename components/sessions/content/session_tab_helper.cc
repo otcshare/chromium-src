@@ -9,6 +9,7 @@
 #include "components/sessions/content/session_tab_helper_delegate.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/serialized_user_agent_override.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
 
@@ -24,7 +25,7 @@ SessionTabHelper::SessionTabHelper(content::WebContents* contents,
 
 SessionTabHelper::~SessionTabHelper() = default;
 
-void SessionTabHelper::SetWindowID(const SessionID& id) {
+void SessionTabHelper::SetWindowID(SessionID id) {
   window_id_ = id;
   window_id_changed_callbacks_.Notify(id);
 }

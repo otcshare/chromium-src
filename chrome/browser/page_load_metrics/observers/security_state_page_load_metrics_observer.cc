@@ -11,7 +11,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
+#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "content/public/browser/navigation_handle.h"
@@ -22,7 +22,6 @@
 namespace {
 // Site Engagement score behavior histogram prefixes.
 const char kEngagementFinalPrefix[] = "Security.SiteEngagement";
-const char kEngagementDeltaPrefix[] = "Security.SiteEngagementDelta";
 
 // Navigation histogram prefixes.
 const char kPageEndReasonPrefix[] = "Security.PageEndReason";
@@ -52,14 +51,6 @@ SecurityStatePageLoadMetricsObserver::MaybeCreateForProfile(
 
 // static
 std::string
-SecurityStatePageLoadMetricsObserver::GetEngagementDeltaHistogramNameForTesting(
-    security_state::SecurityLevel level) {
-  return security_state::GetSecurityLevelHistogramName(
-      kEngagementDeltaPrefix, level);
-}
-
-// static
-std::string
 SecurityStatePageLoadMetricsObserver::GetEngagementFinalHistogramNameForTesting(
     security_state::SecurityLevel level) {
   return security_state::GetSecurityLevelHistogramName(
@@ -84,7 +75,7 @@ std::string SecurityStatePageLoadMetricsObserver::
 
 SecurityStatePageLoadMetricsObserver::SecurityStatePageLoadMetricsObserver(
     site_engagement::SiteEngagementService* engagement_service)
-    : content::WebContentsObserver(), engagement_service_(engagement_service) {}
+    : engagement_service_(engagement_service) {}
 
 SecurityStatePageLoadMetricsObserver::~SecurityStatePageLoadMetricsObserver() =
     default;
@@ -157,6 +148,9 @@ void SecurityStatePageLoadMetricsObserver::OnComplete(
       page_load_metrics::PrerenderingState::kInPrerendering) {
     return;
   }
+  if (!security_state_tab_helper_) {
+    return;
+  }
 
   security_state::SafetyTipStatus safety_tip_status =
       security_state_tab_helper_->GetVisibleSecurityState()
@@ -181,20 +175,10 @@ void SecurityStatePageLoadMetricsObserver::OnComplete(
 
     // Get the change in Site Engagement score and transform it into the range
     // [0, 100] so it can be logged in an EXACT_LINEAR histogram.
-    int delta = std::round(
-        (final_engagement_score - initial_engagement_score_ + 100) / 2);
     base::UmaHistogramExactLinear(
-        security_state::GetSecurityLevelHistogramName(
-            kEngagementDeltaPrefix, current_security_level_),
-        delta, 100);
-    base::UmaHistogramExactLinear(
-        security_state::GetSecurityLevelHistogramName(
-            kEngagementFinalPrefix, current_security_level_),
+        security_state::GetSecurityLevelHistogramName(kEngagementFinalPrefix,
+                                                      current_security_level_),
         final_engagement_score, 100);
-    base::UmaHistogramExactLinear(
-        security_state::GetSafetyTipHistogramName(kEngagementDeltaPrefix,
-                                                  safety_tip_status),
-        delta, 100);
     base::UmaHistogramExactLinear(
         security_state::GetSafetyTipHistogramName(kEngagementFinalPrefix,
                                                   safety_tip_status),
@@ -247,6 +231,13 @@ void SecurityStatePageLoadMetricsObserver::RecordSecurityLevelHistogram(
   // resolved.
   security_state_tab_helper_ =
       SecurityStateTabHelper::FromWebContents(web_contents);
+  // TODO(https://crbug.com/355894536): There are some features that currently
+  // instantiate a SecurityStatePageLoadMetricsObserver without a
+  // ChromeSecurityStateTabHelper. This does not make sense conceptually. For
+  // now add an early return.
+  if (!security_state_tab_helper_) {
+    return;
+  }
 
   DCHECK_EQ(initial_security_level_, security_state::NONE);
   DCHECK_EQ(current_security_level_, security_state::NONE);

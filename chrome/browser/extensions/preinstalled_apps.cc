@@ -6,13 +6,13 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/lazy_instance.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/preinstalled_app_install_features.h"
 #include "chrome/browser/web_applications/preinstalled_web_app_utils.h"
@@ -22,6 +22,7 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 
@@ -38,10 +39,11 @@ bool IsLocaleSupported() {
   // that they don't work.
   // TODO(rogerta): Do this check dynamically once the webstore can expose
   // an API. See http://crbug.com/101357
-  const std::string& locale = g_browser_process->GetApplicationLocale();
-  static const char* const unsupported_locales[] = {"CN", "TR", "IR"};
-  for (size_t i = 0; i < std::size(unsupported_locales); ++i) {
-    if (base::EndsWith(locale, unsupported_locales[i],
+  std::string locale =
+      extensions::ExtensionsBrowserClient::Get()->GetApplicationLocale();
+  static constexpr const char* unsupported_locales[] = {"CN", "TR", "IR"};
+  for (const char* unsupported : unsupported_locales) {
+    if (base::EndsWith(locale, unsupported,
                        base::CompareCase::INSENSITIVE_ASCII)) {
       return false;
     }
@@ -49,8 +51,10 @@ bool IsLocaleSupported() {
   return true;
 }
 
-base::LazyInstance<std::set<Profile*>>::Leaky g_perform_new_installation =
-    LAZY_INSTANCE_INITIALIZER;
+std::set<Profile*>& GetPerformNewInstallationProfiles() {
+  static base::NoDestructor<std::set<Profile*>> perform_new_installation;
+  return *perform_new_installation;
+}
 }  // namespace
 
 namespace preinstalled_apps {
@@ -61,7 +65,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 
 // static
 bool Provider::DidPerformNewInstallationForProfile(Profile* profile) {
-  return g_perform_new_installation.Get().count(profile);
+  return GetPerformNewInstallationProfiles().count(profile);
 }
 
 void Provider::InitProfileState() {
@@ -82,14 +86,14 @@ void Provider::InitProfileState() {
   InstallState state = static_cast<InstallState>(
       profile_->GetPrefs()->GetInteger(prefs::kPreinstalledAppsInstallState));
 
-  absl::optional<InstallState> new_install_state;
+  std::optional<InstallState> new_install_state;
 
   switch (state) {
     case kUnknown: {
       // Pre-installed apps are only installed on profile creation or a new
       // chrome download.
       bool is_new_profile = profile_->WasCreatedByVersionOrLater(
-          version_info::GetVersionNumber());
+          std::string(version_info::GetVersionNumber()));
       if (is_new_profile && preinstalled_apps_enabled_) {
         new_install_state = kAlreadyInstalledPreinstalledApps;
         perform_new_installation_ = true;
@@ -122,7 +126,7 @@ void Provider::InitProfileState() {
                                      *new_install_state);
   }
   if (perform_new_installation_)
-    g_perform_new_installation.Get().insert(profile_);
+    GetPerformNewInstallationProfiles().insert(profile_);
 }
 
 Provider::Provider(Profile* profile,
@@ -184,11 +188,10 @@ void Provider::SetPrefs(base::Value::Dict prefs) {
       if (!pref.is_dict())
         return false;  // Invalid entry; it'll be ignored later.
       const std::string* web_app_flag =
-          pref.FindStringPath(kWebAppMigrationFlag);
+          pref.GetDict().FindString(kWebAppMigrationFlag);
       if (!web_app_flag)
         return false;  // Isn't migrating.
-      if (web_app::IsPreinstalledAppInstallFeatureEnabled(*web_app_flag,
-                                                          *profile)) {
+      if (web_app::IsPreinstalledAppInstallFeatureEnabled(*web_app_flag)) {
         // The feature is still enabled; it's responsible for the behavior.
         return false;
       }

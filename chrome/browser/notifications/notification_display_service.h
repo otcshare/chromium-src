@@ -5,12 +5,11 @@
 #ifndef CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_DISPLAY_SERVICE_H_
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_DISPLAY_SERVICE_H_
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/observer_list_types.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_handler.h"
@@ -65,9 +64,6 @@ class NotificationDisplayService : public KeyedService {
       base::OnceCallback<void(std::set<std::string>,
                               bool /* supports_synchronization */)>;
 
-  // Returns an instance of the display service for the given |profile|.
-  static NotificationDisplayService* GetForProfile(Profile* profile);
-
   // Displays the |notification| of type |notification_type|. The |metadata|
   // may be provided for certain notification types that require additional
   // information for the notification to be displayed.
@@ -82,7 +78,16 @@ class NotificationDisplayService : public KeyedService {
 
   // Gets the IDs of currently displaying notifications and invokes |callback|
   // once available. Not all backends support retrieving this information.
+  // TODO(crbug.com/40283098): Consider refactoring this API and its
+  // usage to something that can get implemented by more backends.
   virtual void GetDisplayed(DisplayedNotificationsCallback callback) = 0;
+
+  // Gets the IDs of currently displaying notifications associated with `origin`
+  // and invokes `callback` once available. Not all backends support retrieving
+  // this information.
+  virtual void GetDisplayedForOrigin(
+      const GURL& origin,
+      DisplayedNotificationsCallback callback) = 0;
 
   // Adds and removes an observer.
   virtual void AddObserver(Observer* observer) = 0;

@@ -37,20 +37,21 @@ class ResultLoader {
     // Invoked when there is a network error.
     virtual void OnNetworkError() {}
 
-    // Invoked when the |quick_answer| is received. Note that |quick_answer| may
-    // be |nullptr| if no answer found for the selected content.
+    // Invoked when the `quick_answers_session` is received. Note that
+    // `quick_answers_session` may be `nullptr` if no answer found for the
+    // selected content.
     virtual void OnQuickAnswerReceived(
-        std::unique_ptr<QuickAnswer> quick_answer) {}
+        std::unique_ptr<QuickAnswersSession> quick_answers_session) {}
 
    protected:
     ResultLoaderDelegate() = default;
     virtual ~ResultLoaderDelegate() = default;
   };
 
-  // Callback used when parsing of |quick_answer| is complete. Note that
-  // |quick_answer| may be |nullptr|.
-  using ResponseParserCallback =
-      base::OnceCallback<void(std::unique_ptr<QuickAnswer> quick_answer)>;
+  // Callback used when parsing for `quick_answers_session` is complete. Note
+  // that `quick_answers_session` may be `nullptr`.
+  using ResponseParserCallback = base::OnceCallback<void(
+      std::unique_ptr<QuickAnswersSession> quick_answers_session)>;
 
   using BuildRequestCallback = base::OnceCallback<void(
       std::unique_ptr<network::ResourceRequest> resource_request,
@@ -85,7 +86,7 @@ class ResultLoader {
 
   // Process the |response_body| and invoked the callback with |QuickAnswer|.
   virtual void ProcessResponse(const PreprocessedOutput& preprocessed_output,
-                               std::unique_ptr<std::string> response_body,
+                               std::optional<std::string> response_body,
                                ResponseParserCallback complete_callback) = 0;
 
   ResultLoaderDelegate* delegate() const { return delegate_; }
@@ -100,8 +101,9 @@ class ResultLoader {
       std::unique_ptr<network::ResourceRequest> resource_request,
       const std::string& request_body);
   void OnSimpleURLLoaderComplete(const PreprocessedOutput& preprocessed_output,
-                                 std::unique_ptr<std::string> response_body);
-  void OnResultParserComplete(std::unique_ptr<QuickAnswer> quick_answer);
+                                 std::optional<std::string> response_body);
+  void OnResultParserComplete(
+      std::unique_ptr<QuickAnswersSession> quick_answers_session);
 
   // Time when the query is issued.
   base::TimeTicks fetch_start_time_;

@@ -111,13 +111,11 @@ VideoCaptureSettings::VideoCaptureSettings(const char* failed_constraint_name)
 VideoCaptureSettings::VideoCaptureSettings(
     std::string device_id,
     media::VideoCaptureParams capture_params,
-    absl::optional<bool> noise_reduction,
+    std::optional<bool> noise_reduction,
     const VideoTrackAdapterSettings& track_adapter_settings,
-    absl::optional<double> min_frame_rate,
-    absl::optional<double> max_frame_rate,
-    absl::optional<double> pan,
-    absl::optional<double> tilt,
-    absl::optional<double> zoom)
+    std::optional<double> min_frame_rate,
+    std::optional<double> max_frame_rate,
+    std::optional<ImageCaptureDeviceSettings> image_capture_device_settings)
     : failed_constraint_name_(nullptr),
       device_id_(std::move(device_id)),
       capture_params_(capture_params),
@@ -125,9 +123,7 @@ VideoCaptureSettings::VideoCaptureSettings(
       track_adapter_settings_(track_adapter_settings),
       min_frame_rate_(min_frame_rate),
       max_frame_rate_(max_frame_rate),
-      pan_(pan),
-      tilt_(tilt),
-      zoom_(zoom) {
+      image_capture_device_settings_(image_capture_device_settings) {
   DCHECK(!min_frame_rate ||
          *min_frame_rate_ <= capture_params.requested_format.frame_rate);
   DCHECK(!track_adapter_settings.target_size() ||
@@ -157,7 +153,7 @@ AudioCaptureSettings::AudioCaptureSettings(const char* failed_constraint_name)
 
 AudioCaptureSettings::AudioCaptureSettings(
     std::string device_id,
-    const absl::optional<int>& requested_buffer_size,
+    const std::optional<int>& requested_buffer_size,
     bool disable_local_echo,
     bool enable_automatic_output_device_selection,
     ProcessingType processing_type,
@@ -216,13 +212,35 @@ bool GetConstraintValueAsDouble(
   return ScanConstraintsForExactValue(constraints, picker, value);
 }
 
+bool IsPanTiltZoomConstraintPresentAndNotFalse(
+    const MediaConstraints& constraints) {
+  if (IsPanTiltZoomConstraintPresentAndNotFalse(constraints.Basic())) {
+    return true;
+  }
+
+  for (const auto& advanced_constraint_set : constraints.Advanced()) {
+    if (IsPanTiltZoomConstraintPresentAndNotFalse(advanced_constraint_set)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool IsPanTiltZoomConstraintPresentAndNotFalse(
+    const MediaTrackConstraintSetPlatform& constraint_set) {
+  return constraint_set.pan.IsPresentAndNotFalse() ||
+         constraint_set.tilt.IsPresentAndNotFalse() ||
+         constraint_set.zoom.IsPresentAndNotFalse();
+}
+
 VideoTrackAdapterSettings SelectVideoTrackAdapterSettings(
     const MediaTrackConstraintSetPlatform& basic_constraint_set,
     const media_constraints::ResolutionSet& resolution_set,
     const media_constraints::NumericRangeSet<double>& frame_rate_set,
     const media::VideoCaptureFormat& source_format,
     bool enable_rescale) {
-  absl::optional<gfx::Size> target_resolution;
+  std::optional<gfx::Size> target_resolution;
   if (enable_rescale) {
     media_constraints::ResolutionSet::Point resolution =
         resolution_set.SelectClosestPointToIdeal(
@@ -240,16 +258,18 @@ VideoTrackAdapterSettings SelectVideoTrackAdapterSettings(
       std::min(resolution_set.max_aspect_ratio(),
                static_cast<double>(resolution_set.max_width()) /
                    static_cast<double>(resolution_set.min_height()));
-  // VideoTrackAdapter uses a frame rate of 0.0 to disable frame-rate
+  // VideoTrackAdapter uses an unset frame rate to disable frame-rate
   // adjustment.
-  double track_max_frame_rate = frame_rate_set.Max().value_or(0.0);
+  std::optional<double> track_max_frame_rate = frame_rate_set.Max();
   if (basic_constraint_set.frame_rate.HasIdeal()) {
     track_max_frame_rate = std::max(basic_constraint_set.frame_rate.Ideal(),
                                     kMinDeviceCaptureFrameRate);
-    if (frame_rate_set.Min() && track_max_frame_rate < *frame_rate_set.Min())
+    if (frame_rate_set.Min() && *track_max_frame_rate < *frame_rate_set.Min()) {
       track_max_frame_rate = *frame_rate_set.Min();
-    if (frame_rate_set.Max() && track_max_frame_rate > *frame_rate_set.Max())
+    }
+    if (frame_rate_set.Max() && *track_max_frame_rate > *frame_rate_set.Max()) {
       track_max_frame_rate = *frame_rate_set.Max();
+    }
   }
 
   return VideoTrackAdapterSettings(target_resolution, track_min_aspect_ratio,
@@ -272,7 +292,7 @@ double StringConstraintFitnessDistance(const WebString& value,
 
   for (auto& ideal_value : constraint.Ideal()) {
     // TODO(crbug.com/787254): Remove the explicit conversion to WebString when
-    // this method operates solely over WTF::String.
+    // this method operates solely over String.
     if (value == WebString(ideal_value))
       return 0.0;
   }
@@ -285,7 +305,7 @@ MediaStreamSource::Capabilities ComputeCapabilitiesForVideoSource(
     const media::VideoCaptureFormats& formats,
     mojom::blink::FacingMode facing_mode,
     bool is_device_capture,
-    const absl::optional<std::string>& group_id) {
+    const std::optional<std::string>& group_id) {
   MediaStreamSource::Capabilities capabilities;
   capabilities.device_id = std::move(device_id);
   if (is_device_capture) {

@@ -6,11 +6,11 @@
 
 #include <stddef.h>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 class QuickPairLogBufferTest : public testing::Test,
                                public LogBuffer::Observer {
@@ -30,7 +30,7 @@ class QuickPairLogBufferTest : public testing::Test,
 
  protected:
   std::vector<LogBuffer::LogMessage> log_messages_;
-  LogBuffer* log_buffer_ = nullptr;
+  raw_ptr<LogBuffer> log_buffer_ = nullptr;
 };
 
 TEST_F(QuickPairLogBufferTest, ObserversNotifiedWhenLogsAdded) {
@@ -45,5 +45,4 @@ TEST_F(QuickPairLogBufferTest, ObserversNotifiedWhenLogBufferCleared) {
   EXPECT_EQ(log_messages_.size(), 0u);
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

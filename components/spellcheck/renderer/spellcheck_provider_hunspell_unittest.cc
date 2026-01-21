@@ -8,6 +8,7 @@
 #include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/renderer/spellcheck_provider_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/web/web_text_check_client.h"
 
 // Tests for Hunspell functionality in SpellcheckingProvider
 
@@ -18,28 +19,20 @@ namespace {
 
 void CheckSpellingServiceCallCount(size_t actual, size_t expected) {
   // On Windows, if the native spell checker integration is enabled,
-  // CallSpellingService() is not used, so the call count will always be 0.
-  // Don't assert the call count in that case.
-#if BUILDFLAG(IS_WIN)
-  if (base::FeatureList::IsEnabled(spellcheck::kWinUseBrowserSpellChecker)) {
-    return;
-  }
-#endif  // BUILDFLAG(IS_WIN)
-
+  // CallSpellingService() is not used, so the fake provider's |text_| is never
+  // assigned. Don't assert the text in that case.
+#if !BUILDFLAG(IS_WIN)
   EXPECT_EQ(actual, expected);
+#endif  // !BUILDFLAG(IS_WIN)
 }
 
 void CheckProviderText(std::u16string expected, std::u16string actual) {
   // On Windows, if the native spell checker integration is enabled,
   // CallSpellingService() is not used, so the fake provider's |text_| is never
   // assigned. Don't assert the text in that case.
-#if BUILDFLAG(IS_WIN)
-  if (base::FeatureList::IsEnabled(spellcheck::kWinUseBrowserSpellChecker)) {
-    return;
-  }
-#endif  // BUILDFLAG(IS_WIN)
-
+#if !BUILDFLAG(IS_WIN)
   EXPECT_EQ(actual, expected);
+#endif  // !BUILDFLAG(IS_WIN)
 }
 
 // Tests that the SpellCheckProvider object sends a spellcheck request when a
@@ -52,6 +45,8 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   provider_.ResetResult();
   provider_.RequestTextChecking(
       std::u16string(),
+      /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
       std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 1U);
   EXPECT_TRUE(provider_.text_.empty());
@@ -61,7 +56,9 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   // stop typing after finishing the first word.
   provider_.ResetResult();
   provider_.RequestTextChecking(
-      u"First", std::make_unique<FakeTextCheckingCompletion>(&completion));
+      u"First", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 2U);
   CheckProviderText(u"First", provider_.text_);
   CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 1U);
@@ -70,7 +67,8 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   // type a return key, i.e. when we finish typing a line.
   provider_.ResetResult();
   provider_.RequestTextChecking(
-      u"First Second\n",
+      u"First Second\n", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
       std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 3U);
   CheckProviderText(u"First Second\n", provider_.text_);
@@ -80,7 +78,8 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   // finish typing a word "Third" to the second line.
   provider_.ResetResult();
   provider_.RequestTextChecking(
-      u"First Second\nThird ",
+      u"First Second\nThird ", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
       std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 4U);
   CheckProviderText(u"First Second\nThird ", provider_.text_);
@@ -90,7 +89,8 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   // when a user inserts whitespace characters.
   provider_.ResetResult();
   provider_.RequestTextChecking(
-      u"First Second\nThird   ",
+      u"First Second\nThird   ", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
       std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 5U);
   EXPECT_TRUE(provider_.text_.empty());
@@ -100,7 +100,8 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
   // a period.
   provider_.ResetResult();
   provider_.RequestTextChecking(
-      u"First Second\nThird   Fourth.",
+      u"First Second\nThird   Fourth.", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
       std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 6U);
   CheckProviderText(u"First Second\nThird   Fourth.", provider_.text_);
@@ -112,7 +113,9 @@ TEST_F(SpellCheckProviderTest, MultiLineText) {
 TEST_F(SpellCheckProviderTest, CancelUnnecessaryRequests) {
   FakeTextCheckingResult completion;
   provider_.RequestTextChecking(
-      u"hello.", std::make_unique<FakeTextCheckingCompletion>(&completion));
+      u"hello.", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 1U);
   EXPECT_EQ(completion.cancellation_count_, 0U);
   CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 1U);
@@ -120,7 +123,9 @@ TEST_F(SpellCheckProviderTest, CancelUnnecessaryRequests) {
   // Test that the SpellCheckProvider does not send a request with the same text
   // as above.
   provider_.RequestTextChecking(
-      u"hello.", std::make_unique<FakeTextCheckingCompletion>(&completion));
+      u"hello.", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 2U);
   EXPECT_EQ(completion.cancellation_count_, 0U);
   CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 1U);
@@ -128,7 +133,9 @@ TEST_F(SpellCheckProviderTest, CancelUnnecessaryRequests) {
   // Test that the SpellCheckProvider class cancels an incoming request that
   // does not include any words.
   provider_.RequestTextChecking(
-      u":-)", std::make_unique<FakeTextCheckingCompletion>(&completion));
+      u":-)", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 3U);
   EXPECT_EQ(completion.cancellation_count_, 1U);
   CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 1U);
@@ -137,7 +144,9 @@ TEST_F(SpellCheckProviderTest, CancelUnnecessaryRequests) {
   // Russian word.
   const char16_t kRussianWord[] = u"\x0431\x0451\x0434\x0440\x0430";
   provider_.RequestTextChecking(
-      kRussianWord, std::make_unique<FakeTextCheckingCompletion>(&completion));
+      kRussianWord, /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(completion.completion_count_, 4U);
   EXPECT_EQ(completion.cancellation_count_, 1U);
   CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 2U);
@@ -150,21 +159,51 @@ TEST_F(SpellCheckProviderTest, CompleteNecessaryRequests) {
 
   std::u16string text = u"Icland is an icland ";
   provider_.RequestTextChecking(
-      text, std::make_unique<FakeTextCheckingCompletion>(&completion));
+      text, /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(0U, completion.cancellation_count_) << "Should finish checking \""
                                                 << text << "\"";
 
   const int kSubstringLength = 18;
   std::u16string substring = text.substr(0, kSubstringLength);
   provider_.RequestTextChecking(
-      substring, std::make_unique<FakeTextCheckingCompletion>(&completion));
+      substring, /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(0U, completion.cancellation_count_) << "Should finish checking \""
                                                 << substring << "\"";
 
   provider_.RequestTextChecking(
-      text, std::make_unique<FakeTextCheckingCompletion>(&completion));
+      text, /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
   EXPECT_EQ(0U, completion.cancellation_count_) << "Should finish checking \""
                                                 << text << "\"";
+}
+
+// Tests that the SpellCheckProvider class send all requests to the
+// spelling service when should_force_refresh flag is enabled.
+TEST_F(SpellCheckProviderTest,
+       ForceToSendRequestsWhenShouldForceRefreshFlagIsUsed) {
+  FakeTextCheckingResult completion;
+  provider_.RequestTextChecking(
+      u"hello.", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kYes,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
+  EXPECT_EQ(completion.completion_count_, 1U);
+  EXPECT_EQ(completion.cancellation_count_, 0U);
+  CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 1U);
+
+  // Test that the SpellCheckProvider sends a request, when the
+  // should_force_refresh is enabled and with the same text as above.
+  provider_.RequestTextChecking(
+      u"hello.", /*spelling_markers=*/{},
+      blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kYes,
+      std::make_unique<FakeTextCheckingCompletion>(&completion));
+  EXPECT_EQ(completion.completion_count_, 2U);
+  EXPECT_EQ(completion.cancellation_count_, 0U);
+  CheckSpellingServiceCallCount(provider_.spelling_service_call_count_, 2U);
 }
 
 }  // namespace

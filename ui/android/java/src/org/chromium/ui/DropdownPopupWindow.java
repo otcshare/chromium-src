@@ -11,19 +11,23 @@ import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.PopupWindow;
 
-// TODO(https://crbug.com/1400723): This class is a noop now, so we should remove it.
-/**
- * The dropdown popup window that decides what widget should be used for the popup.
- */
+import org.chromium.build.annotations.NullMarked;
+
+// TODO(crbug.com/40250394): This class is a noop now, so we should remove it.
+/** The dropdown popup window that decides what widget should be used for the popup. */
+@NullMarked
 public class DropdownPopupWindow {
-    private DropdownPopupWindowInterface mPopup;
+    private final DropdownPopupWindowInterface mPopup;
 
     /**
      * Creates an DropdownPopupWindow with specified parameters.
+     *
      * @param context Application context.
      * @param anchorView Popup view to be anchored.
      */
-    public DropdownPopupWindow(Context context, View anchorView) {
+    public DropdownPopupWindow(
+            Context context,
+            View anchorView) {
         mPopup = new DropdownPopupWindowImpl(context, anchorView);
     }
 
@@ -41,9 +45,7 @@ public class DropdownPopupWindow {
         mPopup.setInitialSelection(initialSelection);
     }
 
-    /**
-     * Shows the popup. The adapter should be set before calling this method.
-     */
+    /** Shows the popup. The adapter should be set before calling this method. */
     public void show() {
         mPopup.show();
     }
@@ -99,9 +101,7 @@ public class DropdownPopupWindow {
         mPopup.postShow();
     }
 
-    /**
-     * Disposes of the popup window.
-     */
+    /** Disposes of the popup window. */
     public void dismiss() {
         mPopup.dismiss();
     }
@@ -118,12 +118,5 @@ public class DropdownPopupWindow {
      */
     public boolean isShowing() {
         return mPopup.isShowing();
-    }
-
-    /**
-     * See {@link DropdownPopupWindowInterface#setFooterView(View)}.
-     */
-    protected void setFooterView(View footerItem) {
-        mPopup.setFooterView(footerItem);
     }
 }

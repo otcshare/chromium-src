@@ -9,14 +9,13 @@
 #include <utility>
 
 #include "base/base_export.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/is_callback.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/post_task_and_reply_with_result_internal.h"
-#include "base/task/sequenced_task_runner.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
@@ -25,6 +24,9 @@
 #include "build/build_config.h"
 
 namespace base {
+
+class SequencedTaskRunner;
+class SingleThreadTaskRunner;
 
 // This is the interface to post tasks to base's thread pool.
 //
@@ -96,12 +98,10 @@ class BASE_EXPORT ThreadPool {
   // Though RepeatingCallback is convertible to OnceCallback, we need a
   // CallbackType template since we can not use template deduction and object
   // conversion at once on the overload resolution.
-  // TODO(crbug.com/714018): Update all callers of the RepeatingCallback version
-  // to use OnceCallback and remove the CallbackType template.
   template <template <typename> class CallbackType,
             typename TaskReturnType,
-            typename ReplyArgType,
-            typename = EnableIfIsBaseCallback<CallbackType>>
+            typename ReplyArgType>
+    requires(IsBaseCallback<CallbackType<void()>>)
   static bool PostTaskAndReplyWithResult(
       const Location& from_here,
       CallbackType<TaskReturnType()> task,
@@ -131,7 +131,7 @@ class BASE_EXPORT ThreadPool {
   // execution context (i.e. same sequence or thread and same TaskTraits if
   // applicable) when |task| completes. Returns false if the task definitely
   // won't run because of current shutdown state. Can only be called when
-  // SequencedTaskRunnerHandle::IsSet().
+  // SequencedTaskRunner::HasCurrentDefault().
   static bool PostTaskAndReply(const Location& from_here,
                                const TaskTraits& traits,
                                OnceClosure task,
@@ -141,17 +141,15 @@ class BASE_EXPORT ThreadPool {
   // of |task| as argument on the caller's execution context (i.e. same sequence
   // or thread and same TaskTraits if applicable) when |task| completes. Returns
   // false if the task definitely won't run because of current shutdown state.
-  // Can only be called when SequencedTaskRunnerHandle::IsSet().
+  // Can only be called when SequencedTaskRunner::HasCurrentDefault().
   //
   // Though RepeatingCallback is convertible to OnceCallback, we need a
   // CallbackType template since we can not use template deduction and object
   // conversion at once on the overload resolution.
-  // TODO(crbug.com/714018): Update all callers of the RepeatingCallback version
-  // to use OnceCallback and remove the CallbackType template.
   template <template <typename> class CallbackType,
             typename TaskReturnType,
-            typename ReplyArgType,
-            typename = EnableIfIsBaseCallback<CallbackType>>
+            typename ReplyArgType>
+    requires(IsBaseCallback<CallbackType<void()>>)
   static bool PostTaskAndReplyWithResult(
       const Location& from_here,
       const TaskTraits& traits,
@@ -223,6 +221,16 @@ class BASE_EXPORT ThreadPool {
       SingleThreadTaskRunnerThreadMode thread_mode =
           SingleThreadTaskRunnerThreadMode::SHARED);
 #endif  // BUILDFLAG(IS_WIN)
+
+  // Returns a SequencedTaskRunner whose PostTask invocations result in
+  // scheduling tasks using |traits|. Tasks run one at a time in posting order.
+  // Returns the existing `SequenceTaskRunner` for 'path', or creates it.
+  // Ensures tasks accessing the same `path` are sequenced, even if posted from
+  // `SequencedTaskRunner`s obtained in different contexts. The same `traits`
+  // must be provided to all calls with the same `path`.
+  static scoped_refptr<SequencedTaskRunner>
+  CreateSequencedTaskRunnerForResource(const TaskTraits& traits,
+                                       const base::FilePath& path);
 };
 
 }  // namespace base

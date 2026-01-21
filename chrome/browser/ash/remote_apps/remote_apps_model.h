@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "chrome/browser/ash/remote_apps/id_generator.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/gurl.h"

@@ -7,13 +7,13 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base_export.h"
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -25,7 +25,14 @@ BASE_EXPORT void Base64EncodeAppend(span<const uint8_t> input,
                                     std::string* output);
 
 // Encodes the input string in base64.
-BASE_EXPORT void Base64Encode(StringPiece input, std::string* output);
+BASE_EXPORT std::string Base64Encode(std::string_view input);
+
+// Same as Base64Encode(), but does not access any base::Feature. This is only
+// necessary for code that runs at early startup before base::FeatureList
+// registration. As such, there is only a span version.
+// TODO(crbug.com/468035603): Remove this once Base64Encode() stops accessing
+// base::Feature.
+BASE_EXPORT std::string Base64EncodeEarlyStartup(span<const uint8_t> input);
 
 // Decodes the base64 input string.  Returns true if successful and false
 // otherwise. The output string is only modified if successful. The decoding can
@@ -44,13 +51,13 @@ enum class Base64DecodePolicy {
   kForgiving,
 };
 BASE_EXPORT bool Base64Decode(
-    StringPiece input,
+    std::string_view input,
     std::string* output,
     Base64DecodePolicy policy = Base64DecodePolicy::kStrict);
 
-// Decodes the base64 input string. Returns `absl::nullopt` if unsuccessful.
-BASE_EXPORT absl::optional<std::vector<uint8_t>> Base64Decode(
-    StringPiece input);
+// Decodes the base64 input string. Returns `std::nullopt` if unsuccessful.
+BASE_EXPORT std::optional<std::vector<uint8_t>> Base64Decode(
+    std::string_view input);
 
 }  // namespace base
 

@@ -7,7 +7,7 @@
 
 #include "base/cancelable_callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/policy_details.h"
 #include "components/policy/core/common/schema.h"
@@ -29,7 +29,6 @@ enum Condition {
   kDefault,
   kMandatory,
   kRecommended,
-  kIgnoredByAtomicGroup,
 };
 
 enum class PoliciesSources {
@@ -39,15 +38,6 @@ enum class PoliciesSources {
   kHybrid = 3,
   kEnrollmentOnly = 4,
   kMaxValue = kEnrollmentOnly,
-};
-
-// Values for the BrowserSignin policy.
-// VALUES MUST COINCIDE WITH THE BrowserSignin POLICY DEFINITION.
-enum class BrowserSigninMode {
-  kDisabled = 0,
-  kEnabled = 1,
-  kForced = 2,
-  kMaxValue = kForced
 };
 
 // Manages regular updates of policy usage UMA histograms.
@@ -80,8 +70,8 @@ class POLICY_EXPORT PolicyStatisticsCollector {
 
   GetChromePolicyDetailsCallback get_details_;
   Schema chrome_schema_;
-  raw_ptr<PolicyService> policy_service_;
-  raw_ptr<PrefService> prefs_;
+  raw_ptr<PolicyService, DanglingUntriaged> policy_service_;
+  raw_ptr<PrefService, DanglingUntriaged> prefs_;
 
   base::CancelableOnceClosure update_callback_;
 

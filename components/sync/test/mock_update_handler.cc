@@ -10,10 +10,10 @@
 
 namespace syncer {
 
-MockUpdateHandler::MockUpdateHandler(ModelType type) {
-  progress_marker_.set_data_type_id(GetSpecificsFieldNumberFromModelType(type));
+MockUpdateHandler::MockUpdateHandler(DataType type) {
+  progress_marker_.set_data_type_id(GetSpecificsFieldNumberFromDataType(type));
   const std::string& token_str =
-      std::string("Mock token: ") + std::string(ModelTypeToDebugString(type));
+      std::string("Mock token: ") + std::string(DataTypeToDebugString(type));
   progress_marker_.set_token(token_str);
 }
 
@@ -40,12 +40,16 @@ void MockUpdateHandler::ProcessGetUpdatesResponse(
   progress_marker_.CopyFrom(progress_marker);
 }
 
-void MockUpdateHandler::ApplyUpdates(StatusController* status) {
+void MockUpdateHandler::ApplyUpdates(StatusController* status,
+                                     bool cycle_done) {
   apply_updates_count_++;
 }
 
 void MockUpdateHandler::RecordRemoteInvalidation(
     std::unique_ptr<SyncInvalidation> incoming) {}
+
+void MockUpdateHandler::RecordDownloadFailure(
+    UpdateHandler::NudgedUpdateResult failure_result) const {}
 
 void MockUpdateHandler::CollectPendingInvalidations(
     sync_pb::GetUpdateTriggers* msg) {

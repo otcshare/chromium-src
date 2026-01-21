@@ -15,6 +15,10 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
+namespace activity_reporter {
+class ActivityReporter;
+}
+
 namespace component_updater {
 class ComponentUpdateService;
 }
@@ -22,7 +26,7 @@ class ComponentUpdateService;
 namespace net {
 class NetLog;
 class URLRequestContextGetter;
-}
+}  // namespace net
 
 namespace network {
 class NetworkChangeManager;
@@ -33,6 +37,10 @@ namespace mojom {
 class NetworkContext;
 }
 }  // namespace network
+
+namespace os_crypt_async {
+class OSCryptAsync;
+}
 
 class PrefService;
 class SafeBrowsingService;
@@ -67,12 +75,22 @@ class ApplicationContext {
   // Gets the NetLog.
   net::NetLog* GetNetLog();
 
+  // Gets the ActivityReporter.
+  activity_reporter::ActivityReporter* GetActivityReporter();
+
   // Gets the ComponentUpdateService.
   component_updater::ComponentUpdateService* GetComponentUpdateService();
+
+  // Gets the application specific OSCryptAsync instance.
+  os_crypt_async::OSCryptAsync* GetOSCryptAsync();
 
   // Creates state tied to application threads. It is expected this will be
   // called from web::WebMainParts::PreCreateThreads.
   void PreCreateThreads();
+
+  // Called after the browser threads are created. It is expected this will be
+  // called from web::WebMainParts::PostCreateThreads.
+  void PostCreateThreads();
 
   // Saves application context state if |local_state_| exists. This should be
   // called during shutdown to save application state.
@@ -117,9 +135,12 @@ class ApplicationContext {
   std::unique_ptr<network::NetworkConnectionTracker>
       network_connection_tracker_;
 
+  std::unique_ptr<activity_reporter::ActivityReporter> activity_reporter_;
   std::unique_ptr<component_updater::ComponentUpdateService> component_updater_;
 
   scoped_refptr<SafeBrowsingService> safe_browsing_service_;
+
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 };
 
 }  // namespace ios_web_view

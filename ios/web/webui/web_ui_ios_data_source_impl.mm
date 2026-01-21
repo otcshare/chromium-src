@@ -6,22 +6,21 @@
 
 #import <string>
 
-#import "base/bind.h"
+#import "base/containers/map_util.h"
+#import "base/functional/bind.h"
+#import "base/memory/raw_ptr.h"
 #import "base/memory/ref_counted_memory.h"
 #import "base/strings/string_util.h"
 #import "base/strings/utf_string_conversions.h"
 #import "ios/web/public/web_client.h"
 #import "ui/base/webui/jstemplate_builder.h"
+#import "ui/base/webui/resource_path.h"
 #import "ui/base/webui/web_ui_util.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace web {
 
 // static
-WebUIIOSDataSource* WebUIIOSDataSource::Create(const std::string& source_name) {
+WebUIIOSDataSource* WebUIIOSDataSource::Create(std::string_view source_name) {
   return new WebUIIOSDataSourceImpl(source_name);
 }
 
@@ -41,10 +40,10 @@ class WebUIIOSDataSourceImpl::InternalDataSource : public URLDataSourceIOS {
 
   // URLDataSourceIOS implementation.
   std::string GetSource() const override { return parent_->GetSource(); }
-  std::string GetMimeType(const std::string& path) const override {
+  std::string GetMimeType(std::string_view path) const override {
     return parent_->GetMimeType(path);
   }
-  void StartDataRequest(const std::string& path,
+  void StartDataRequest(std::string_view path,
                         URLDataSourceIOS::GotDataCallback callback) override {
     return parent_->StartDataRequest(path, std::move(callback));
   }
@@ -60,10 +59,10 @@ class WebUIIOSDataSourceImpl::InternalDataSource : public URLDataSourceIOS {
   }
 
  private:
-  WebUIIOSDataSourceImpl* parent_;
+  raw_ptr<WebUIIOSDataSourceImpl> parent_;
 };
 
-WebUIIOSDataSourceImpl::WebUIIOSDataSourceImpl(const std::string& source_name)
+WebUIIOSDataSourceImpl::WebUIIOSDataSourceImpl(std::string_view source_name)
     : URLDataSourceIOSImpl(source_name, new InternalDataSource(this)),
       source_name_(source_name),
       default_resource_(-1),
@@ -128,6 +127,13 @@ void WebUIIOSDataSourceImpl::AddResourcePath(const std::string& path,
   path_to_idr_map_[path] = resource_id;
 }
 
+void WebUIIOSDataSourceImpl::AddResourcePaths(
+    base::span<const webui::ResourcePath> paths) {
+  for (const auto& path : paths) {
+    AddResourcePath(path.path, path.id);
+  }
+}
+
 void WebUIIOSDataSourceImpl::SetDefaultResource(int resource_id) {
   default_resource_ = resource_id;
 }
@@ -145,28 +151,34 @@ std::string WebUIIOSDataSourceImpl::GetSource() const {
   return source_name_;
 }
 
-std::string WebUIIOSDataSourceImpl::GetMimeType(const std::string& path) const {
-  if (base::EndsWith(path, ".js", base::CompareCase::INSENSITIVE_ASCII))
+std::string WebUIIOSDataSourceImpl::GetMimeType(std::string_view path) const {
+  if (base::EndsWith(path, ".js", base::CompareCase::INSENSITIVE_ASCII)) {
     return "application/javascript";
+  }
 
-  if (base::EndsWith(path, ".json", base::CompareCase::INSENSITIVE_ASCII))
+  if (base::EndsWith(path, ".json", base::CompareCase::INSENSITIVE_ASCII)) {
     return "application/json";
+  }
 
-  if (base::EndsWith(path, ".pdf", base::CompareCase::INSENSITIVE_ASCII))
+  if (base::EndsWith(path, ".pdf", base::CompareCase::INSENSITIVE_ASCII)) {
     return "application/pdf";
+  }
 
-  if (base::EndsWith(path, ".css", base::CompareCase::INSENSITIVE_ASCII))
+  if (base::EndsWith(path, ".css", base::CompareCase::INSENSITIVE_ASCII)) {
     return "text/css";
+  }
 
-  if (base::EndsWith(path, ".svg", base::CompareCase::INSENSITIVE_ASCII))
+  if (base::EndsWith(path, ".svg", base::CompareCase::INSENSITIVE_ASCII)) {
     return "image/svg+xml";
+  }
 
   return "text/html";
 }
 
 void WebUIIOSDataSourceImpl::EnsureLoadTimeDataDefaultsAdded() {
-  if (load_time_data_defaults_added_)
+  if (load_time_data_defaults_added_) {
     return;
+  }
 
   load_time_data_defaults_added_ = true;
   base::Value::Dict defaults;
@@ -176,7 +188,7 @@ void WebUIIOSDataSourceImpl::EnsureLoadTimeDataDefaultsAdded() {
 }
 
 void WebUIIOSDataSourceImpl::StartDataRequest(
-    const std::string& path,
+    std::string_view path,
     URLDataSourceIOS::GotDataCallback callback) {
   EnsureLoadTimeDataDefaultsAdded();
 
@@ -204,9 +216,9 @@ void WebUIIOSDataSourceImpl::SendLocalizedStringsAsJSON(
       base::MakeRefCounted<base::RefCountedString>(std::move(template_data)));
 }
 
-int WebUIIOSDataSourceImpl::PathToIdrOrDefault(const std::string& path) const {
-  auto it = path_to_idr_map_.find(path);
-  return it == path_to_idr_map_.end() ? default_resource_ : it->second;
+int WebUIIOSDataSourceImpl::PathToIdrOrDefault(std::string_view path) const {
+  const int* idr = base::FindOrNull(path_to_idr_map_, path);
+  return idr ? *idr : default_resource_;
 }
 
 }  // namespace web

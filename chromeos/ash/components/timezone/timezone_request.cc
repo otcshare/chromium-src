@@ -6,10 +6,13 @@
 
 #include <stddef.h>
 
+#include <array>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -20,6 +23,7 @@
 #include "base/values.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -119,27 +123,25 @@ constexpr net::NetworkTrafficAnnotationTag kTimezoneRequestNetworkTag =
             "not specify a fixed timezone, you can select whether just the ip "
             "address or also Wi-Fi and mobile networks are used to determine "
             "your geolocation."
-          policy_exception_justification:
-            "Controlled by SystemTimeZone and SystemTimezonAutomaticDetection. "
-            "chrome_device_policy not supported by auditor yet."
-          # TODO(b/210911671): Add the following policies once they are
-          # supported:
-          # chrome_policy {
-          #   SystemTimezone {
-          #     # cmfcmf: HasSystemTimezonePolicy
-          #     timezone: 'not empty, e.g. Europe/Berlin'
-          #   }
-          # }
-          # chrome_policy {
-          #   SystemTimezone {
-          #     AutomaticTimezoneDetectionType: DISABLED
-          #   }
-          # }
-          # chrome_policy {
-          #   SystemTimezone {
-          #     AutomaticTimezoneDetectionType: IP_ONLY
-          #   }
-          # }
+          chrome_device_policy {
+            # SystemTimezone
+            system_timezone {
+              # cmfcmf: HasSystemTimezonePolicy
+              timezone: 'not empty, e.g. Europe/Berlin'
+            }
+          }
+          chrome_device_policy {
+            # SystemTimezone
+            system_timezone {
+              timezone_detection_type: DISABLED
+            }
+          }
+          chrome_device_policy {
+            # SystemTimezone
+            system_timezone {
+              timezone_detection_type: IP_ONLY
+            }
+          }
         })");
 
 // Too many requests (more than 1) mean there is a problem in implementation.
@@ -174,7 +176,7 @@ void RecordUmaResult(TimeZoneRequestResult result, unsigned retries) {
 GURL TimeZoneRequestURL(const GURL& url,
                         const Geoposition& geoposition,
                         bool sensor) {
-  std::string query(url.query());
+  std::string query(url.GetQuery());
   query += base::StringPrintf(
       "%s=%f,%f", kLocationString, geoposition.latitude, geoposition.longitude);
   if (url == DefaultTimezoneProviderURL()) {
@@ -228,8 +230,8 @@ bool ParseServerResponse(const GURL& server_url,
           << response_body;
 
   // Parse the response, ignoring comments.
-  auto parsed_json =
-      base::JSONReader::ReadAndReturnValueWithError(response_body);
+  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+      response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!parsed_json.has_value()) {
     PrintTimeZoneError(server_url,
                        "JSONReader failed: " + parsed_json.error().message,
@@ -259,11 +261,12 @@ bool ParseServerResponse(const GURL& server_url,
   }
 
   bool found = false;
-  for (size_t i = 0; i < std::size(statusString2Enum); ++i) {
-    if (*status != statusString2Enum[i].string)
+  for (const auto& entry : statusString2Enum) {
+    if (*status != entry.string) {
       continue;
+    }
 
-    timezone->status = statusString2Enum[i].value;
+    timezone->status = entry.value;
     found = true;
     break;
   }
@@ -277,7 +280,7 @@ bool ParseServerResponse(const GURL& server_url,
 
   const bool status_ok = (timezone->status == TimeZoneResponseData::OK);
 
-  absl::optional<double> dst_offset =
+  std::optional<double> dst_offset =
       response_object.FindDouble(kDstOffsetString);
   if (dst_offset.has_value()) {
     timezone->dstOffset = dst_offset.value();
@@ -287,7 +290,7 @@ bool ParseServerResponse(const GURL& server_url,
     return false;
   }
 
-  absl::optional<double> raw_offset =
+  std::optional<double> raw_offset =
       response_object.FindDouble(kRawOffsetString);
   if (raw_offset.has_value()) {
     timezone->rawOffset = raw_offset.value();
@@ -425,17 +428,18 @@ void TimeZoneRequest::Retry(bool server_error) {
 }
 
 void TimeZoneRequest::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
-  bool is_success = !!response_body;
+    std::optional<std::string> response_body) {
+  bool is_success = response_body.has_value();
   int response_code = -1;
   if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers)
     response_code = url_loader_->ResponseInfo()->headers->response_code();
   RecordUmaResponseCode(response_code);
 
   std::string data;
-  std::unique_ptr<TimeZoneResponseData> timezone = GetTimeZoneFromResponse(
-      is_success, response_code, is_success ? *response_body : std::string(),
-      url_loader_->GetFinalURL());
+  std::unique_ptr<TimeZoneResponseData> timezone =
+      GetTimeZoneFromResponse(is_success, response_code,
+                              std::move(response_body).value_or(std::string()),
+                              url_loader_->GetFinalURL());
   const bool server_error =
       !is_success || (response_code >= 500 && response_code < 600);
   url_loader_.reset();
@@ -471,22 +475,21 @@ void TimeZoneRequest::OnSimpleLoaderComplete(
 }
 
 std::string TimeZoneResponseData::ToStringForDebug() const {
-  static const char* const status2string[] = {
+  static constexpr std::array<const char*, 7> status2string = {
       "OK",
       "INVALID_REQUEST",
       "OVER_QUERY_LIMIT",
       "REQUEST_DENIED",
       "UNKNOWN_ERROR",
       "ZERO_RESULTS",
-      "REQUEST_ERROR"
-  };
+      "REQUEST_ERROR"};
 
   return base::StringPrintf(
       "dstOffset=%f, rawOffset=%f, timeZoneId='%s', timeZoneName='%s', "
       "error_message='%s', status=%u (%s)",
       dstOffset, rawOffset, timeZoneId.c_str(), timeZoneName.c_str(),
       error_message.c_str(), (unsigned)status,
-      (status < std::size(status2string) ? status2string[status] : "unknown"));
+      (status < status2string.size() ? status2string[status] : "unknown"));
 }
 
 }  // namespace ash

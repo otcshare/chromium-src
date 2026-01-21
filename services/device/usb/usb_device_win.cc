@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -59,7 +59,7 @@ void UsbDeviceWin::ReadDescriptors(
   base::win::ScopedHandle handle(
       CreateFile(hub_path_.c_str(), GENERIC_WRITE, FILE_SHARE_WRITE, nullptr,
                  OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
-  if (handle.IsValid()) {
+  if (handle.is_valid()) {
     device_handle = new UsbDeviceHandleWin(this, std::move(handle),
                                            std::move(blocking_task_runner));
   } else {
@@ -156,7 +156,7 @@ void UsbDeviceWin::OnReadStringDescriptors(
 void UsbDeviceWin::OnReadWebUsbCapabilityDescriptor(
     base::OnceCallback<void(bool)> callback,
     scoped_refptr<UsbDeviceHandle> device_handle,
-    const absl::optional<WebUsbPlatformCapabilityDescriptor>& descriptor) {
+    const std::optional<WebUsbPlatformCapabilityDescriptor>& descriptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   device_handle->Close();
 

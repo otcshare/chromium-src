@@ -6,11 +6,10 @@
 #define CHROME_BROWSER_UI_VIEWS_ACCESSIBILITY_UIA_ACCESSIBILITY_EVENT_WAITER_H_
 
 #include <ole2.h>
+
 #include <stdint.h>
-#include <uiautomation.h>
 #include <wrl/client.h>
 
-#include <map>
 #include <string>
 #include <vector>
 
@@ -22,6 +21,8 @@
 #include "base/time/time.h"
 #include "base/win/atl.h"
 #include "ui/views/accessibility/view_accessibility.h"
+
+#include <uiautomation.h>
 
 struct UiaAccessibilityWaiterInfo {
   HWND hwnd;

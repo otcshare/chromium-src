@@ -5,9 +5,6 @@
 #include "ash/accessibility/switch_access/point_scan_layer.h"
 
 #include "ash/shell.h"
-#include "third_party/skia/include/core/SkPaint.h"
-#include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/effects/SkDashPathEffect.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/paint_recorder.h"
@@ -15,6 +12,7 @@
 #include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
 namespace ash {
@@ -30,8 +28,8 @@ constexpr SkColor kInnerColor = gfx::kGoogleBlue300;
 constexpr SkColor kOuterColor = gfx::kGoogleBlue600;
 
 display::Display GetPrimaryDisplay() {
-  DCHECK(display::Screen::GetScreen());
-  return display::Screen::GetScreen()->GetPrimaryDisplay();
+  DCHECK(display::Screen::Get());
+  return display::Screen::Get()->GetPrimaryDisplay();
 }
 }  // namespace
 
@@ -93,7 +91,8 @@ void PointScanLayer::OnPaintLayer(const ui::PaintContext& context) {
   if (!is_moving_) {
     SkScalar intervals[] = {kDashLengthDips, kGapLengthDips};
     int intervals_length = 2;
-    flags.setPathEffect(SkDashPathEffect::Make(intervals, intervals_length, 0));
+    flags.setPathEffect(
+        cc::PathEffect::MakeDash(intervals, intervals_length, 0));
   }
 
   flags.setColor(kOuterColor);
@@ -137,10 +136,8 @@ void PointScanLayer::DrawLineWithOffsets(gfx::Canvas* canvas,
                                          cc::PaintFlags flags,
                                          int x_offset,
                                          int y_offset) {
-  SkPath path;
-  path.moveTo(line_.start.x() + x_offset, line_.start.y() + y_offset);
-  path.lineTo(line_.end.x() + x_offset, line_.end.y() + y_offset);
-  canvas->DrawPath(path, flags);
+  const gfx::Vector2d offset(x_offset, y_offset);
+  canvas->DrawLine(line_.start + offset, line_.end + offset, flags);
 }
 
 }  // namespace ash

@@ -4,6 +4,8 @@
 
 #include "base/android/scoped_hardware_buffer_fence_sync.h"
 
+#include <android/hardware_buffer.h>
+
 #include <utility>
 
 namespace base {
@@ -12,14 +14,16 @@ namespace android {
 ScopedHardwareBufferFenceSync::ScopedHardwareBufferFenceSync(
     ScopedHardwareBufferHandle handle,
     ScopedFD fence_fd,
-    ScopedFD available_fence_fd,
-    bool is_video)
+    ScopedFD available_fence_fd)
     : handle_(std::move(handle)),
       fence_fd_(std::move(fence_fd)),
-      available_fence_fd_(std::move(available_fence_fd)),
-      is_video_(is_video) {}
+      available_fence_fd_(std::move(available_fence_fd)) {}
 
 ScopedHardwareBufferFenceSync::~ScopedHardwareBufferFenceSync() = default;
+
+AHardwareBuffer_Desc ScopedHardwareBufferFenceSync::Describe() const {
+  return handle_.Describe();
+}
 
 ScopedHardwareBufferHandle ScopedHardwareBufferFenceSync::TakeBuffer() {
   return std::move(handle_);

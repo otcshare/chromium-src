@@ -8,9 +8,11 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/functional/callback.h"
+#include "extensions/common/features/feature.h"
 #include "extensions/common/permissions/api_permission_set.h"
 #include "services/network/public/mojom/cors_origin_pattern.mojom-forward.h"
 
@@ -48,6 +50,11 @@ class ExtensionsClient {
   ExtensionsClient& operator=(const ExtensionsClient&) = delete;
   virtual ~ExtensionsClient();
 
+  void SetFeatureDelegatedAvailabilityCheckMap(
+      Feature::FeatureDelegatedAvailabilityCheckMap map);
+  const Feature::FeatureDelegatedAvailabilityCheckMap&
+  GetFeatureDelegatedAvailabilityCheckMap() const;
+
   // Create a FeatureProvider for a specific feature type, e.g. "permission".
   std::unique_ptr<FeatureProvider> CreateFeatureProvider(
       const std::string& name) const;
@@ -56,11 +63,11 @@ class ExtensionsClient {
   // TODO(devlin): We should find a way to remove this.
   std::unique_ptr<JSONFeatureProviderSource> CreateAPIFeatureSource() const;
 
-  // Returns true iff a schema named |name| is generated.
+  // Returns true iff a schema named `name` is generated.
   bool IsAPISchemaGenerated(const std::string& name) const;
 
-  // Gets the generated API schema named |name|.
-  base::StringPiece GetAPISchema(const std::string& name) const;
+  // Gets the generated API schema named `name`.
+  std::string_view GetAPISchema(const std::string& name) const;
 
   // Adds a new API provider.
   void AddAPIProvider(std::unique_ptr<ExtensionsAPIProvider> provider);
@@ -86,15 +93,15 @@ class ExtensionsClient {
   virtual const std::string GetProductName() = 0;
 
   // Takes the list of all hosts and filters out those with special
-  // permission strings. Adds the regular hosts to |new_hosts|,
-  // and adds any additional permissions to |permissions|.
+  // permission strings. Adds the regular hosts to `new_hosts`,
+  // and adds any additional permissions to `permissions`.
   // TODO(sashab): Split this function in two: One to filter out ignored host
   // permissions, and one to get permissions for the given hosts.
   virtual void FilterHostPermissions(const URLPatternSet& hosts,
                                      URLPatternSet* new_hosts,
                                      PermissionIDSet* permissions) const = 0;
 
-  // Replaces the scripting allowlist with |allowlist|. Used in the renderer;
+  // Replaces the scripting allowlist with `allowlist`. Used in the renderer;
   // only used for testing in the browser process.
   virtual void SetScriptingAllowlist(const ScriptingAllowlist& allowlist) = 0;
 
@@ -102,13 +109,13 @@ class ExtensionsClient {
   // any origin.
   virtual const ScriptingAllowlist& GetScriptingAllowlist() const = 0;
 
-  // Get the set of chrome:// hosts that |extension| can have host permissions
+  // Get the set of chrome:// hosts that `extension` can have host permissions
   // for.
   virtual URLPatternSet GetPermittedChromeSchemeHosts(
       const Extension* extension,
       const APIPermissionSet& api_permissions) const = 0;
 
-  // Returns false if content scripts are forbidden from running on |url|.
+  // Returns false if content scripts are forbidden from running on `url`.
   virtual bool IsScriptableURL(const GURL& url, std::string* error) const = 0;
 
   // Returns the base webstore URL prefix.
@@ -140,7 +147,7 @@ class ExtensionsClient {
   virtual std::set<base::FilePath> GetBrowserImagePaths(
       const Extension* extension);
 
-  // Adds client specific permitted origins to |origin_patterns| for
+  // Adds client specific permitted origins to `origin_patterns` for
   // cross-origin communication for an extension context.
   virtual void AddOriginAccessPermissions(
       const Extension& extension,
@@ -148,9 +155,9 @@ class ExtensionsClient {
       std::vector<network::mojom::CorsOriginPatternPtr>* origin_patterns) const;
 
   // Returns the extended error code used by the embedder when an extension
-  // blocks a request. Returns absl::nullopt if the embedder doesn't define such
+  // blocks a request. Returns std::nullopt if the embedder doesn't define such
   // an error code.
-  virtual absl::optional<int> GetExtensionExtendedErrorCode() const;
+  virtual std::optional<int> GetExtensionExtendedErrorCode() const;
 
  private:
   // Performs common initialization and calls Initialize() to allow subclasses
@@ -158,6 +165,8 @@ class ExtensionsClient {
   void DoInitialize();
 
   std::vector<std::unique_ptr<ExtensionsAPIProvider>> api_providers_;
+
+  Feature::FeatureDelegatedAvailabilityCheckMap availability_check_map_;
 
   // Whether DoInitialize() has been called.
   bool initialize_called_ = false;

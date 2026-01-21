@@ -9,6 +9,7 @@
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
 #include "build/branding_buildflags.h"
+#include "build/chromeos_buildflags.h"
 
 namespace ash {
 
@@ -24,12 +25,6 @@ const base::FilePath::CharType kDefaultAppOrderFileName[] =
 const base::FilePath::CharType kMachineHardwareInfoFileName[] =
     FILE_PATH_LITERAL("/tmp/machine-info");
 
-const base::FilePath::CharType kVpdFileName[] = FILE_PATH_LITERAL(
-    "/mnt/stateful_partition/unencrypted/cache/vpd/filtered.txt");
-
-const base::FilePath::CharType kVpdStatusFileName[] = FILE_PATH_LITERAL(
-    "/mnt/stateful_partition/unencrypted/cache/vpd/status.txt");
-
 const base::FilePath::CharType kUptimeFileName[] =
     FILE_PATH_LITERAL("/proc/uptime");
 
@@ -38,6 +33,12 @@ const base::FilePath::CharType kUpdateRebootNeededUptimeFile[] =
 
 const base::FilePath::CharType kStartupCustomizationManifestFile[] =
     FILE_PATH_LITERAL("/opt/oem/etc/startup_manifest.json");
+
+const base::FilePath::CharType kTPMFirmwareUpdateLocation[] =
+    FILE_PATH_LITERAL("/run/tpm_firmware_update_location");
+
+const base::FilePath::CharType kTPMFirmwareUpdateSRKVulnerableROCA[] =
+    FILE_PATH_LITERAL("/run/tpm_firmware_update_srk_vulnerable_roca");
 
 const base::FilePath::CharType kDeviceLocalAccountExtensionDir[] =
     FILE_PATH_LITERAL("/var/cache/device_local_account_extensions");
@@ -63,11 +64,22 @@ const base::FilePath::CharType kSigninProfileComponentPolicy[] =
 const base::FilePath::CharType kSigninProfileExtensionsDir[] =
     FILE_PATH_LITERAL("/var/cache/signin_profile_extensions");
 
-const base::FilePath::CharType kPreinstalledComponents[] =
-    FILE_PATH_LITERAL("/mnt/stateful_partition/unencrypted/");
-
 const base::FilePath::CharType kDevicePolicyExternalDataDir[] =
     FILE_PATH_LITERAL("/var/cache/device_policy_external_data");
+
+const base::FilePath::CharType kDevicePolicyScreensaverDataDir[] =
+    FILE_PATH_LITERAL("/var/cache/managed_screensaver");
+
+const base::FilePath::CharType kDeviceLocalAccountIwaCacheDir[] =
+    FILE_PATH_LITERAL("/var/cache/device_local_account_iwa");
+
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
+const base::FilePath::CharType kCryptohomeMountRoot[] =
+    FILE_PATH_LITERAL("/home/user");
+#else
+const base::FilePath::CharType kFakeCryptohomeMountRootDirname[] =
+    FILE_PATH_LITERAL(".home_user");
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
 
 bool PathProvider(int key, base::FilePath* result) {
   switch (key) {
@@ -77,12 +89,6 @@ bool PathProvider(int key, base::FilePath* result) {
     case FILE_MACHINE_INFO:
       *result = base::FilePath(kMachineHardwareInfoFileName);
       break;
-    case FILE_VPD:
-      *result = base::FilePath(kVpdFileName);
-      break;
-    case FILE_VPD_STATUS:
-      *result = base::FilePath(kVpdStatusFileName);
-      break;
     case FILE_UPTIME:
       *result = base::FilePath(kUptimeFileName);
       break;
@@ -91,6 +97,25 @@ bool PathProvider(int key, base::FilePath* result) {
       break;
     case FILE_STARTUP_CUSTOMIZATION_MANIFEST:
       *result = base::FilePath(kStartupCustomizationManifestFile);
+      break;
+    case FILE_TPM_FIRMWARE_UPDATE_LOCATION:
+      *result = base::FilePath(kTPMFirmwareUpdateLocation);
+      break;
+    case FILE_TPM_FIRMWARE_UPDATE_SRK_VULNERABLE_ROCA:
+      *result = base::FilePath(kTPMFirmwareUpdateSRKVulnerableROCA);
+      break;
+    case DIR_HOMEDIR_MOUNT:
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
+      *result = base::FilePath(kCryptohomeMountRoot);
+#else
+    {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(kFakeCryptohomeMountRootDirname);
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
       break;
     case DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS:
       *result = base::FilePath(kDeviceLocalAccountExtensionDir);
@@ -116,15 +141,37 @@ bool PathProvider(int key, base::FilePath* result) {
     case DIR_SIGNIN_PROFILE_EXTENSIONS:
       *result = base::FilePath(kSigninProfileExtensionsDir);
       break;
-    case DIR_PREINSTALLED_COMPONENTS:
-      *result = base::FilePath(kPreinstalledComponents);
-      break;
     case DIR_DEVICE_POLICY_EXTERNAL_DATA:
       *result = base::FilePath(kDevicePolicyExternalDataDir);
       break;
+    case DIR_DEVICE_POLICY_SCREENSAVER_DATA:
+      *result = base::FilePath(kDevicePolicyScreensaverDataDir);
+      break;
+    case DIR_DEVICE_LOCAL_ACCOUNT_IWA_CACHE:
+      *result = base::FilePath(kDeviceLocalAccountIwaCacheDir);
+      break;
+
+    case DIR_WALLPAPERS: {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(FILE_PATH_LITERAL("wallpapers"));
+      break;
+    }
+    case DIR_CUSTOM_WALLPAPERS: {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(FILE_PATH_LITERAL("custom_wallpapers"));
+      break;
+    }
+
     default:
       return false;
   }
+
   return true;
 }
 
@@ -144,8 +191,6 @@ void RegisterStubPathOverrides(const base::FilePath& stubs_dir) {
   base::PathService::OverrideAndCreateIfNeeded(
       FILE_MACHINE_INFO, parent.AppendASCII("stub_machine-info"), is_absolute,
       create);
-  base::PathService::OverrideAndCreateIfNeeded(
-      FILE_VPD, parent.AppendASCII("stub_vpd"), is_absolute, create);
   base::PathService::Override(
       DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,
       parent.AppendASCII("stub_device_local_account_extensions"));
@@ -165,11 +210,11 @@ void RegisterStubPathOverrides(const base::FilePath& stubs_dir) {
       DIR_SIGNIN_PROFILE_EXTENSIONS,
       parent.AppendASCII("stub_signin_profile_extensions"));
   base::PathService::Override(
-      DIR_PREINSTALLED_COMPONENTS,
-      parent.AppendASCII("stub_preinstalled_components"));
-  base::PathService::Override(
       DIR_DEVICE_POLICY_EXTERNAL_DATA,
       parent.AppendASCII("stub_device_policy_external_data"));
+  base::PathService::Override(
+      DIR_DEVICE_POLICY_SCREENSAVER_DATA,
+      parent.AppendASCII("stub_device_policy_screensaver_data"));
 }
 
 }  // namespace ash

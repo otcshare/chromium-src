@@ -4,16 +4,23 @@
 
 #include "chrome/test/base/test_browser_window.h"
 
+#include <utility>
+
+#include "base/feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/sharing/sharing_dialog_data.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
-#include "components/user_education/common/feature_promo_controller.h"
-#include "components/user_education/common/feature_promo_handle.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+#include "components/sharing_message/sharing_dialog_data.h"
+#include "components/user_education/common/new_badge/new_badge_controller.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
-#include "ui/base/interaction/element_identifier.h"
+#include "content/public/browser/web_contents.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -22,45 +29,30 @@
 std::unique_ptr<Browser> CreateBrowserWithTestWindowForParams(
     Browser::CreateParams params) {
   DCHECK(!params.window);
-  TestBrowserWindow* window = new TestBrowserWindow;
-  new TestBrowserWindowOwner(window);
-  params.window = window;
+  auto window = std::make_unique<TestBrowserWindow>();
   window->set_is_minimized(params.initial_show_state ==
-                           ui::SHOW_STATE_MINIMIZED);
+                           ui::mojom::WindowShowState::kMinimized);
   // Tests generally expect TestBrowserWindows not to be active.
-  window->set_is_active(params.initial_show_state != ui::SHOW_STATE_INACTIVE &&
-                        params.initial_show_state != ui::SHOW_STATE_DEFAULT &&
-                        params.initial_show_state != ui::SHOW_STATE_MINIMIZED);
+  window->set_is_active(
+      params.initial_show_state != ui::mojom::WindowShowState::kInactive &&
+      params.initial_show_state != ui::mojom::WindowShowState::kDefault &&
+      params.initial_show_state != ui::mojom::WindowShowState::kMinimized);
+  params.window = window.release();
 
-  return std::unique_ptr<Browser>(Browser::Create(params));
+  return Browser::DeprecatedCreateOwnedForTesting(params);
 }
 
 // TestBrowserWindow::TestLocationBar -----------------------------------------
 
-GURL TestBrowserWindow::TestLocationBar::GetDestinationURL() const {
-  return GURL();
-}
-
-WindowOpenDisposition
-    TestBrowserWindow::TestLocationBar::GetWindowOpenDisposition() const {
-  return WindowOpenDisposition::CURRENT_TAB;
-}
-
-ui::PageTransition
-    TestBrowserWindow::TestLocationBar::GetPageTransition() const {
-  return ui::PAGE_TRANSITION_LINK;
-}
-
-base::TimeTicks TestBrowserWindow::TestLocationBar::GetMatchSelectionTimestamp()
-    const {
-  return base::TimeTicks();
-}
-
-const OmniboxView* TestBrowserWindow::TestLocationBar::GetOmniboxView() const {
+OmniboxView* TestBrowserWindow::TestLocationBar::GetOmniboxView() {
   return nullptr;
 }
 
-OmniboxView* TestBrowserWindow::TestLocationBar::GetOmniboxView() {
+OmniboxController* TestBrowserWindow::TestLocationBar::GetOmniboxController() {
+  return nullptr;
+}
+
+ChipController* TestBrowserWindow::TestLocationBar::GetChipController() {
   return nullptr;
 }
 
@@ -69,19 +61,62 @@ LocationBarTesting*
   return nullptr;
 }
 
-bool TestBrowserWindow::TestLocationBar::IsInputTypedUrlWithoutScheme() const {
+LocationBarModel* TestBrowserWindow::TestLocationBar::GetLocationBarModel() {
+  return nullptr;
+}
+
+content::WebContents* TestBrowserWindow::TestLocationBar::GetWebContents() {
+  return nullptr;
+}
+
+std::optional<bubble_anchor_util::AnchorConfiguration>
+TestBrowserWindow::TestLocationBar::GetChipAnchor() {
+  return {};
+}
+
+bool TestBrowserWindow::TestLocationBar::IsVisible() const {
+  return true;
+}
+
+gfx::Rect TestBrowserWindow::TestLocationBar::Bounds() const {
+  return gfx::Rect();
+}
+
+gfx::Size TestBrowserWindow::TestLocationBar::MinimumSize() const {
+  return gfx::Size();
+}
+
+gfx::Size TestBrowserWindow::TestLocationBar::PreferredSize() const {
+  return gfx::Size();
+}
+
+bool TestBrowserWindow::TestLocationBar::HasSecurityStateChanged() {
   return false;
 }
 
 // TestBrowserWindow ----------------------------------------------------------
 
-TestBrowserWindow::TestBrowserWindow() {}
+TestBrowserWindow::TestBrowserWindow() {
+  // TestBrowserWindow will always be instantiated before its Browser.
+  // TODO(crbug.com/413168662): This can be removed once Browser is updated to
+  // always own its BrowserWindow.
+  browser_list_observer_.Observe(BrowserList::GetInstance());
+}
 
-TestBrowserWindow::~TestBrowserWindow() {}
+TestBrowserWindow::~TestBrowserWindow() {
+  if (browser_) {
+    // BrowserWindow implementations are expected to call
+    // TearDownPreBrowserWindowDestruction() before destruction.
+    browser_->GetFeatures().TearDownPreBrowserWindowDestruction();
+    browser_ = nullptr;
+  }
+}
 
 void TestBrowserWindow::Close() {
-  if (close_callback_)
+  if (close_callback_) {
     std::move(close_callback_).Run();
+  }
+  is_closed_ = true;
 }
 
 bool TestBrowserWindow::IsActive() const {
@@ -97,6 +132,10 @@ gfx::NativeWindow TestBrowserWindow::GetNativeWindow() const {
 }
 
 bool TestBrowserWindow::IsOnCurrentWorkspace() const {
+  return true;
+}
+
+bool TestBrowserWindow::IsVisibleOnScreen() const {
   return true;
 }
 
@@ -119,14 +158,7 @@ const ui::ThemeProvider* TestBrowserWindow::GetThemeProvider() const {
 
 const ui::ColorProvider* TestBrowserWindow::GetColorProvider() const {
   return ui::ColorProviderManager::Get().GetColorProviderFor(
-      {ui::ColorProviderManager::ColorMode::kLight,
-       ui::ColorProviderManager::ContrastMode::kNormal,
-       ui::SystemTheme::kDefault,
-       ui::ColorProviderManager::FrameType::kChromium});
-}
-
-ui::ElementContext TestBrowserWindow::GetElementContext() {
-  return element_context_;
+      ui::ColorProviderKey());
 }
 
 int TestBrowserWindow::GetTopControlsHeight() const {
@@ -136,16 +168,20 @@ int TestBrowserWindow::GetTopControlsHeight() const {
 void TestBrowserWindow::SetTopControlsGestureScrollInProgress(
     bool in_progress) {}
 
-StatusBubble* TestBrowserWindow::GetStatusBubble() {
-  return nullptr;
+std::vector<StatusBubble*> TestBrowserWindow::GetStatusBubbles() {
+  return {};
+}
+
+bool TestBrowserWindow::CanDockDevTools() const {
+  return true;
 }
 
 gfx::Rect TestBrowserWindow::GetRestoredBounds() const {
   return gfx::Rect();
 }
 
-ui::WindowShowState TestBrowserWindow::GetRestoredState() const {
-  return ui::SHOW_STATE_DEFAULT;
+ui::mojom::WindowShowState TestBrowserWindow::GetRestoredState() const {
+  return ui::mojom::WindowShowState::kDefault;
 }
 
 gfx::Rect TestBrowserWindow::GetBounds() const {
@@ -170,6 +206,14 @@ bool TestBrowserWindow::ShouldHideUIForFullscreen() const {
   return false;
 }
 
+bool TestBrowserWindow::GetCanResize() {
+  return false;
+}
+
+ui::mojom::WindowShowState TestBrowserWindow::GetWindowShowState() const {
+  return ui::mojom::WindowShowState::kDefault;
+}
+
 bool TestBrowserWindow::IsFullscreen() const {
   return false;
 }
@@ -179,6 +223,10 @@ bool TestBrowserWindow::IsFullscreenBubbleVisible() const {
 }
 
 bool TestBrowserWindow::IsForceFullscreen() const {
+  return false;
+}
+
+bool TestBrowserWindow::UpdateToolbarSecurityState() {
   return false;
 }
 
@@ -200,12 +248,12 @@ ExtensionsContainer* TestBrowserWindow::GetExtensionsContainer() {
 
 content::KeyboardEventProcessingResult
 TestBrowserWindow::PreHandleKeyboardEvent(
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool TestBrowserWindow::HandleKeyboardEvent(
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return false;
 }
 
@@ -221,8 +269,8 @@ bool TestBrowserWindow::IsTabStripEditable() const {
   return is_tab_strip_editable_;
 }
 
-void TestBrowserWindow::SetIsTabStripEditable(bool is_editable) {
-  is_tab_strip_editable_ = is_editable;
+void TestBrowserWindow::DisableTabStripEditingForTesting() {
+  is_tab_strip_editable_ = false;
 }
 
 bool TestBrowserWindow::IsToolbarVisible() const {
@@ -241,6 +289,14 @@ bool TestBrowserWindow::IsBorderlessModeEnabled() const {
   return false;
 }
 
+BrowserView* TestBrowserWindow::AsBrowserView() {
+  return nullptr;
+}
+
+void TestBrowserWindow::DeleteBrowserWindow() {
+  delete this;
+}
+
 ShowTranslateBubbleResult TestBrowserWindow::ShowTranslateBubble(
     content::WebContents* contents,
     translate::TranslateStep step,
@@ -248,7 +304,7 @@ ShowTranslateBubbleResult TestBrowserWindow::ShowTranslateBubble(
     const std::string& target_language,
     translate::TranslateErrors error_type,
     bool is_user_gesture) {
-  return ShowTranslateBubbleResult::SUCCESS;
+  return ShowTranslateBubbleResult::kSuccess;
 }
 
 void TestBrowserWindow::StartPartialTranslate(
@@ -290,8 +346,8 @@ TestBrowserWindow::ShowSendTabToSelfPromoBubble(content::WebContents* contents,
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-views::Button* TestBrowserWindow::GetSharingHubIconButton() {
-  return nullptr;
+void TestBrowserWindow::ToggleMultitaskMenu() {
+  return;
 }
 #else
 sharing_hub::SharingHubBubbleView* TestBrowserWindow::ShowSharingHubBubble(
@@ -299,14 +355,6 @@ sharing_hub::SharingHubBubbleView* TestBrowserWindow::ShowSharingHubBubble(
   return nullptr;
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-bool TestBrowserWindow::IsDownloadShelfVisible() const {
-  return false;
-}
-
-DownloadShelf* TestBrowserWindow::GetDownloadShelf() {
-  return &download_shelf_;
-}
 
 DownloadBubbleUIController* TestBrowserWindow::GetDownloadBubbleUIController() {
   return nullptr;
@@ -318,6 +366,12 @@ std::unique_ptr<FindBar> TestBrowserWindow::CreateFindBar() {
 
 web_modal::WebContentsModalDialogHost*
     TestBrowserWindow::GetWebContentsModalDialogHost() {
+  return nullptr;
+}
+
+web_modal::WebContentsModalDialogHost*
+TestBrowserWindow::GetWebContentsModalDialogHostFor(
+    content::WebContents* web_contents) {
   return nullptr;
 }
 
@@ -347,79 +401,18 @@ void TestBrowserWindow::SetCloseCallback(base::OnceClosure close_callback) {
   close_callback_ = std::move(close_callback);
 }
 
-user_education::FeaturePromoController*
-TestBrowserWindow::GetFeaturePromoController() {
-  return feature_promo_controller_.get();
+bool TestBrowserWindow::IsTabModalPopupDeprecated() const {
+  return is_tab_modal_popup_deprecated_;
 }
 
-bool TestBrowserWindow::IsFeaturePromoActive(
-    const base::Feature& iph_feature) const {
-  return feature_promo_controller_ &&
-         feature_promo_controller_->IsPromoActive(
-             iph_feature, user_education::FeaturePromoStatus::kContinued);
+void TestBrowserWindow::SetIsTabModalPopupDeprecated(
+    bool is_tab_modal_popup_deprecated) {
+  is_tab_modal_popup_deprecated_ = is_tab_modal_popup_deprecated;
 }
 
-bool TestBrowserWindow::MaybeShowFeaturePromo(
-    const base::Feature& iph_feature,
-    user_education::FeaturePromoSpecification::StringReplacements
-        body_text_replacements,
-    user_education::FeaturePromoController::BubbleCloseCallback
-        close_callback) {
-  return feature_promo_controller_ &&
-         feature_promo_controller_->MaybeShowPromo(
-             iph_feature, body_text_replacements, std::move(close_callback));
-}
-
-bool TestBrowserWindow::MaybeShowStartupFeaturePromo(
-    const base::Feature& iph_feature,
-    user_education::FeaturePromoSpecification::StringReplacements
-        body_text_replacements,
-    user_education::FeaturePromoController::StartupPromoCallback promo_callback,
-    user_education::FeaturePromoController::BubbleCloseCallback
-        close_callback) {
-  if (!feature_promo_controller_)
-    return false;
-  return feature_promo_controller_->MaybeShowStartupPromo(
-      iph_feature, body_text_replacements, std::move(promo_callback),
-      std::move(close_callback));
-}
-
-bool TestBrowserWindow::CloseFeaturePromo(const base::Feature& iph_feature) {
-  return feature_promo_controller_ &&
-         feature_promo_controller_->EndPromo(iph_feature);
-}
-
-user_education::FeaturePromoHandle
-TestBrowserWindow::CloseFeaturePromoAndContinue(
-    const base::Feature& iph_feature) {
-  return feature_promo_controller_
-             ? feature_promo_controller_->CloseBubbleAndContinuePromo(
-                   iph_feature)
-             : user_education::FeaturePromoHandle();
-}
-
-void TestBrowserWindow::NotifyFeatureEngagementEvent(const char* event_name) {}
-
-user_education::FeaturePromoController*
-TestBrowserWindow::SetFeaturePromoController(
-    std::unique_ptr<user_education::FeaturePromoController>
-        feature_promo_controller) {
-  feature_promo_controller_ = std::move(feature_promo_controller);
-  return feature_promo_controller_.get();
-}
-
-// TestBrowserWindowOwner -----------------------------------------------------
-
-TestBrowserWindowOwner::TestBrowserWindowOwner(TestBrowserWindow* window)
-    : window_(window) {
-  BrowserList::AddObserver(this);
-}
-
-TestBrowserWindowOwner::~TestBrowserWindowOwner() {
-  BrowserList::RemoveObserver(this);
-}
-
-void TestBrowserWindowOwner::OnBrowserRemoved(Browser* browser) {
-  if (browser->window() == window_.get())
-    delete this;
+void TestBrowserWindow::OnBrowserAdded(Browser* browser) {
+  if (browser->create_params().window == this) {
+    browser_ = browser;
+    browser_list_observer_.Reset();
+  }
 }

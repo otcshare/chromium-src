@@ -16,7 +16,6 @@ enum ViewID {
 
   // Views which make up the skyline. These are used only
   // on views.
-  VIEW_ID_TAB_SEARCH_BUTTON,
   VIEW_ID_MINIMIZE_BUTTON,
   VIEW_ID_MAXIMIZE_BUTTON,
   VIEW_ID_RESTORE_BUTTON,
@@ -62,11 +61,13 @@ enum ViewID {
   VIEW_ID_OMNIBOX,
   VIEW_ID_SCRIPT_BUBBLE,
   VIEW_ID_SAVE_CREDIT_CARD_BUTTON,
+  VIEW_ID_SAVE_IBAN_BUTTON,
   VIEW_ID_MIGRATE_LOCAL_CREDIT_CARD_BUTTON,
   VIEW_ID_TRANSLATE_BUTTON,
   VIEW_ID_AVATAR_BUTTON,
   VIEW_ID_WEBAUTHN_BUTTON,
   VIEW_ID_SHARING_HUB_BUTTON,
+  VIEW_ID_MANAGEMENT_BUTTON,
 
   // Location bar content settings icons.
   VIEW_ID_CONTENT_SETTING_JAVASCRIPT,
@@ -74,7 +75,7 @@ enum ViewID {
 
   // The Bookmark Bar.
   VIEW_ID_BOOKMARK_BAR,
-  VIEW_ID_OTHER_BOOKMARKS,
+  VIEW_ID_ALL_BOOKMARKS,
   VIEW_ID_MANAGED_BOOKMARKS,
   // Used for bookmarks/folders on the bookmark bar.
   VIEW_ID_BOOKMARK_BAR_ELEMENT,
@@ -91,14 +92,20 @@ enum ViewID {
   // Docked dev tools.
   VIEW_ID_DEV_TOOLS_DOCKED,
 
+  // Lens overlay.
+  VIEW_ID_LENS_OVERLAY,
+
+  // The view that hosts the immersive Reading Mode.
+  VIEW_ID_READ_ANYTHING_OVERLAY,
+
+  // Glic Actor Overlay
+  VIEW_ID_ACTOR_OVERLAY,
+
   // The contents split.
   VIEW_ID_CONTENTS_SPLIT,
 
   // The Infobar container.
   VIEW_ID_INFO_BAR_CONTAINER,
-
-  // The Download shelf.
-  VIEW_ID_DOWNLOAD_SHELF,
 
   // The header in the App Identity Update dialog.
   VIEW_ID_APP_IDENTITY_UPDATE_HEADER,
@@ -109,6 +116,9 @@ enum ViewID {
 
   // Plus button on location bar.
   VIEW_ID_ACTION_BOX_BUTTON,
+
+  // Media Picker screen scroll view.
+  VIEW_ID_MEDIA_PICKER_SCREEN_SCROLL_VIEW,
 };
 
 #endif  // CHROME_BROWSER_UI_VIEW_IDS_H_

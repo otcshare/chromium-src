@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -19,7 +20,6 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
@@ -29,10 +29,10 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/support_tool/data_collector.h"
-#include "components/feedback/pii_types.h"
-#include "components/feedback/redaction_tool.h"
+#include "components/feedback/redaction_tool/pii_types.h"
+#include "components/feedback/redaction_tool/redaction_tool.h"
 #include "components/user_manager/user.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/user_manager/user_manager.h"
 
 namespace {
 
@@ -41,6 +41,8 @@ namespace {
 constexpr char kChromeLogsDir[] = "log";
 // The pattern for name of Chrome logs file.
 constexpr char kChromeLogsPattern[] = "chrome*";
+// A reasonable limit for log collection to prevent OOM.
+constexpr size_t kMaxLogFileSize = 50 * 1024 * 1024;  // 50 MB
 
 // Paths of other (non-Chrome) user logs.
 constexpr std::array<const char*, 3> kOtherLogsPaths = {
@@ -50,11 +52,11 @@ constexpr std::array<const char*, 3> kOtherLogsPaths = {
 // Creates a temporary directory and returns it if there's no error. Gives the
 // ownership of the temporary directory to the caller and caller will be
 // responsible of deleting it.
-absl::optional<base::FilePath> CreateTempDir() {
+std::optional<base::FilePath> CreateTempDir() {
   base::ScopedTempDir temp_dir;
   if (temp_dir.CreateUniqueTempDir())
     return temp_dir.Take();
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::vector<base::FilePath> GetUserLogPaths(base::FilePath profile_dir) {
@@ -89,21 +91,23 @@ std::pair<base::FilePath, std::string> ReadUserLogAndCopyContents(
     return {base::FilePath(), std::string()};
 
   std::string file_contents;
-  if (!base::ReadFileToString(log_path, &file_contents))
+  if (!base::ReadFileToStringWithMaxSize(log_path, &file_contents,
+                                         kMaxLogFileSize)) {
     return {copy_target, std::string()};
+  }
 
   return {copy_target, file_contents};
 }
 
 PIIMap DetectPII(
     std::string log_contents,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container) {
-  feedback::RedactionTool* redaction_tool = redaction_tool_container->Get();
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container) {
+  redaction::RedactionTool* redaction_tool = redaction_tool_container->Get();
   return redaction_tool->Detect(log_contents);
 }
 
-std::set<feedback::PIIType> GetPIITypesInMap(const PIIMap& pii_map) {
-  std::set<feedback::PIIType> pii_types;
+std::set<redaction::PIIType> GetPIITypesInMap(const PIIMap& pii_map) {
+  std::set<redaction::PIIType> pii_types;
   for (const auto& pii_map_entry : pii_map)
     pii_types.insert(pii_map_entry.first);
   return pii_types;
@@ -122,18 +126,19 @@ bool CopyTemporaryLogFileToTarget(base::FilePath log_file,
   return base::Move(log_file, target_path.Append(log_file.BaseName()));
 }
 
-absl::optional<std::string> ReadLogFromFile(base::FilePath log_file) {
+std::optional<std::string> ReadLogFromFile(base::FilePath log_file) {
   std::string log;
-  if (!base::ReadFileToString(log_file, &log))
-    return absl::nullopt;
+  if (!base::ReadFileToStringWithMaxSize(log_file, &log, kMaxLogFileSize)) {
+    return std::nullopt;
+  }
   return log;
 }
 
 std::string RedactPII(
     std::string log_contents,
-    std::set<feedback::PIIType> pii_types_to_keep,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container) {
-  feedback::RedactionTool* redaction_tool = redaction_tool_container->Get();
+    std::set<redaction::PIIType> pii_types_to_keep,
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container) {
+  redaction::RedactionTool* redaction_tool = redaction_tool_container->Get();
   return redaction_tool->RedactAndKeepSelected(log_contents, pii_types_to_keep);
 }
 
@@ -179,8 +184,16 @@ const PIIMap& ChromeUserLogsDataCollector::GetDetectedPII() {
 void ChromeUserLogsDataCollector::CollectDataAndDetectPII(
     DataCollectorDoneCallback on_data_collected_callback,
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container) {
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!user_manager::UserManager::Get()->IsUserLoggedIn()) {
+    SupportToolError error = {SupportToolErrorCode::kDataCollectorError,
+                              "A user must have logged in for "
+                              "ChromeUserLogsDataCollector."};
+    std::move(on_data_collected_callback).Run(error);
+    return;
+  }
 
   on_data_collector_done_callback_ = std::move(on_data_collected_callback);
   task_runner_for_redaction_tool_ = task_runner_for_redaction_tool;
@@ -193,7 +206,7 @@ void ChromeUserLogsDataCollector::CollectDataAndDetectPII(
 }
 
 void ChromeUserLogsDataCollector::OnTempDirCreated(
-    absl::optional<base::FilePath> temp_dir) {
+    std::optional<base::FilePath> temp_dir) {
   if (!temp_dir) {
     SupportToolError error = {SupportToolErrorCode::kDataCollectorError,
                               "Failed to create temporary directory for "
@@ -266,17 +279,16 @@ void ChromeUserLogsDataCollector::OnPIIDetected(
     base::RepeatingClosure barrier_closure,
     base::FilePath path_in_temp_dir,
     PIIMap detected_pii) {
-  task_runner_for_redaction_tool_.reset();
-  redaction_tool_container_.reset();
-
   pii_in_log_files_.emplace(path_in_temp_dir, GetPIITypesInMap(detected_pii));
   MergePIIMaps(pii_map_, detected_pii);
   std::move(barrier_closure).Run();
 }
 
 void ChromeUserLogsDataCollector::OnAllUserLogFilesReadAndDetected() {
+  task_runner_for_redaction_tool_.reset();
+  redaction_tool_container_.reset();
   if (errors_.empty()) {
-    std::move(on_data_collector_done_callback_).Run(absl::nullopt);
+    std::move(on_data_collector_done_callback_).Run(std::nullopt);
     return;
   }
   SupportToolError error = {
@@ -288,10 +300,10 @@ void ChromeUserLogsDataCollector::OnAllUserLogFilesReadAndDetected() {
 }
 
 void ChromeUserLogsDataCollector::ExportCollectedDataWithPII(
-    std::set<feedback::PIIType> pii_types_to_keep,
+    std::set<redaction::PIIType> pii_types_to_keep,
     base::FilePath target_directory,
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container,
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container,
     DataCollectorDoneCallback on_exported_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   on_data_collector_done_callback_ = std::move(on_exported_callback);
@@ -336,10 +348,10 @@ void ChromeUserLogsDataCollector::OnReadLogFromFile(
     base::RepeatingClosure barrier_closure,
     std::string file_name,
     base::FilePath target_directory,
-    std::set<feedback::PIIType> pii_types_to_keep,
+    std::set<redaction::PIIType> pii_types_to_keep,
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-    scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container,
-    absl::optional<std::string> log_contents) {
+    scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container,
+    std::optional<std::string> log_contents) {
   if (!log_contents) {
     errors_.push_back(base::StringPrintf("Couldn't read logs from %s log file",
                                          file_name.c_str()));
@@ -384,7 +396,7 @@ void ChromeUserLogsDataCollector::OnAllLogFilesWritten() {
   // Clean-up the temporary directory when we're done with file operations.
   CleanUp();
   if (errors_.empty()) {
-    std::move(on_data_collector_done_callback_).Run(absl::nullopt);
+    std::move(on_data_collector_done_callback_).Run(std::nullopt);
     return;
   }
   SupportToolError error = {

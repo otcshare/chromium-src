@@ -5,29 +5,32 @@
 #ifndef CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 #define CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 
+#include <functional>
+#include <map>
 #include <string>
+#include <variant>
 
-#include "base/callback_forward.h"
 #include "base/containers/circular_deque.h"
 #include "base/files/file.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/sequence_bound.h"
 #include "base/values.h"
 #include "chrome/browser/ash/fusebox/fusebox.pb.h"
 #include "chrome/browser/ash/fusebox/fusebox_moniker.h"
-#include "chrome/browser/ash/fusebox/fusebox_staging.pb.h"
-#include "net/base/io_buffer.h"
+#include "chrome/browser/ash/system_web_apps/apps/files_internals_debug_json_provider.h"
 #include "storage/browser/file_system/async_file_util.h"
-#include "storage/browser/file_system/file_stream_reader.h"
-#include "storage/browser/file_system/file_stream_writer.h"
 #include "storage/browser/file_system/file_system_context.h"
 
 class Profile;
 
 namespace fusebox {
 
-class Server {
+class ReadWriter;
+
+class Server : public ash::FilesInternalsDebugJSONProvider {
  public:
   struct Delegate {
     // These methods cause D-Bus signals to be sent that a storage unit (as
@@ -47,7 +50,7 @@ class Server {
   explicit Server(Delegate* delegate);
   Server(const Server&) = delete;
   Server& operator=(const Server&) = delete;
-  ~Server();
+  ~Server() override;
 
   // Manages monikers in the context of the Server's MonikerMap.
   fusebox::Moniker CreateMoniker(const storage::FileSystemURL& target,
@@ -71,10 +74,28 @@ class Server {
   // It returns an invalid storage::FileSystemURL if the filename doesn't match
   // "/media/fuse/fusebox/subdir/etc" or the "subdir" wasn't registered.
   storage::FileSystemURL ResolveFilename(Profile* profile,
-                                         const std::string& filename);
+                                         std::string_view filename);
 
-  // Returns human-readable debugging information as a JSON value.
-  base::Value GetDebugJSON();
+  // Performs the inverse of ResolveFilename. It converts a FileSystemURL like
+  // "filesystem:origin/external/mount_name/xxx/yyy/p/q.txt" to a FuseBox
+  // filename like "/media/fuse/fusebox/subdir/p/q.txt".
+  //
+  // It returns an empty base::FilePath on failure, such as when there was no
+  // previously registered (subdir, fs_url_prefix) that matched.
+  base::FilePath InverseResolveFSURL(const storage::FileSystemURL& fs_url);
+
+  // Chains GetInstance and InverseResolveFSURL, returning an empty
+  // base::FilePath when there is no instance.
+  static base::FilePath SubstituteFuseboxFilePath(
+      const storage::FileSystemURL& fs_url) {
+    Server* server = GetInstance();
+    return server ? server->InverseResolveFSURL(fs_url) : base::FilePath();
+  }
+
+  // ash::FilesInternalsDebugJSONProvider overrides.
+  void GetDebugJSONForKey(
+      std::string_view key,
+      base::OnceCallback<void(JSONKeyValuePair)> callback) override;
 
   // These methods map 1:1 to the D-Bus methods implemented by
   // fusebox_service_provider.cc.
@@ -84,9 +105,15 @@ class Server {
   // library functions of the same name. For example, the Stat method here
   // corresponds to the standard stat function described by "man 2 stat".
   //
-  // These methods take a fs_url_as_string argument, roughly equivalent to a
-  // POSIX filename that identifies a file or directory, but are a
-  // storage::FileSystemURL (in string form).
+  // These methods all take a protobuf argument and return (via a callback)
+  // another protobuf. Many of the request protos have a string-typed
+  // file_system_url field, roughly equivalent to a POSIX filename for a file
+  // or directory. These used to be full storage::FileSystemURL strings (e.g.
+  // "filesystem:chrome://file-manager/external/foo/com.bar/baz/p/q.txt") but
+  // today look like "subdir/p/q.txt". The PrefixMap is used to resolve the
+  // "subdir" prefix to recreate the storage::FileSystemURL.
+  //
+  // See system_api/dbus/fusebox/fusebox.proto for more commentary.
 
   // Close2 closes a virtual file opened by Open2.
   using Close2Callback =
@@ -98,6 +125,11 @@ class Server {
       base::OnceCallback<void(const CreateResponseProto& response)>;
   void Create(const CreateRequestProto& request, CreateCallback callback);
 
+  // Flush flushes a file, like the C standard library's fsync.
+  using FlushCallback =
+      base::OnceCallback<void(const FlushResponseProto& response)>;
+  void Flush(const FlushRequestProto& request, FlushCallback callback);
+
   // MkDir is analogous to "/usr/bin/mkdir".
   using MkDirCallback =
       base::OnceCallback<void(const MkDirResponseProto& response)>;
@@ -108,21 +140,17 @@ class Server {
       base::OnceCallback<void(const Open2ResponseProto& response)>;
   void Open2(const Open2RequestProto& request, Open2Callback callback);
 
+  // Rename is analogous to "/usr/bin/mv".
+  using RenameCallback =
+      base::OnceCallback<void(const RenameResponseProto& response)>;
+  void Rename(const RenameRequestProto& request, RenameCallback callback);
+
   // Read2 reads from a virtual file opened by Open2.
   using Read2Callback =
       base::OnceCallback<void(const Read2ResponseProto& response)>;
   void Read2(const Read2RequestProto& request, Read2Callback callback);
 
-  // ReadDir2 lists the directory's children. The results will be sent back in
-  // the responses of one or more request-response RPC pairs. The first request
-  // and last response have a zero cookie value. The remaining RPCs will have
-  // the same server-chosen, non-zero cookie value.
-  //
-  // The request's cancel_error_code is typically zero but if not, it is echoed
-  // in the response (which becomes the final response) and indicates that the
-  // D-Bus client is cancelling the overall "read a directory" operation.
-  //
-  // TODO(crbug.com/1363861): document the D-Bus protocol separately.
+  // ReadDir2 lists the directory's children.
   using ReadDir2Callback =
       base::OnceCallback<void(const ReadDir2ResponseProto& response)>;
   void ReadDir2(const ReadDir2RequestProto& request, ReadDir2Callback callback);
@@ -196,71 +224,35 @@ class Server {
 
   // ----
 
+  using PendingFlush = std::pair<FlushRequestProto, FlushCallback>;
   using PendingRead2 = std::pair<Read2RequestProto, Read2Callback>;
   using PendingWrite2 = std::pair<Write2RequestProto, Write2Callback>;
-
-  // Lives entirely on the I/O thread, as enforced by base::SequenceBound.
-  struct ReadWriter {
-    explicit ReadWriter(const storage::FileSystemURL& fs_url);
-    ~ReadWriter();
-
-    void Read(scoped_refptr<storage::FileSystemContext> fs_context,
-              int64_t offset,
-              int64_t length,
-              Server::Read2Callback callback);
-    void OnRead(Server::Read2Callback callback,
-                scoped_refptr<storage::FileSystemContext> fs_context,
-                std::unique_ptr<storage::FileStreamReader> fs_reader,
-                scoped_refptr<net::IOBuffer> buffer,
-                int64_t offset,
-                int length);
-
-    void Write(scoped_refptr<storage::FileSystemContext> fs_context,
-               scoped_refptr<net::StringIOBuffer> buffer,
-               int64_t offset,
-               int length,
-               Server::Write2Callback callback);
-    void OnWrite(Server::Write2Callback callback,
-                 scoped_refptr<storage::FileSystemContext> fs_context,
-                 std::unique_ptr<storage::FileStreamWriter> fs_writer,
-                 scoped_refptr<net::IOBuffer> buffer,
-                 int64_t offset,
-                 int length);
-
-    const storage::FileSystemURL fs_url_;
-
-    std::unique_ptr<storage::FileStreamReader> fs_reader_;
-    // Unused whenever fs_reader_ is nullptr.
-    int64_t read_offset_ = -1;
-
-    std::unique_ptr<storage::FileStreamWriter> fs_writer_;
-    // Unused whenever fs_writer_ is nullptr.
-    int64_t write_offset_ = -1;
-
-    // TODO(b/255703917): snapshot management.
-
-    base::WeakPtrFactory<ReadWriter> weak_ptr_factory_{this};
-  };
+  using PendingOp = std::variant<PendingFlush, PendingRead2, PendingWrite2>;
 
   struct FuseFileMapEntry {
     FuseFileMapEntry(scoped_refptr<storage::FileSystemContext> fs_context_arg,
                      storage::FileSystemURL fs_url_arg,
+                     const std::string& profile_path_arg,
                      bool readable_arg,
-                     bool writable_arg);
+                     bool writable_arg,
+                     bool use_temp_file_arg,
+                     bool temp_file_starts_with_copy_arg);
     FuseFileMapEntry(FuseFileMapEntry&&);
     ~FuseFileMapEntry();
 
+    void DoFlush(const FlushRequestProto& request, FlushCallback callback);
     void DoRead2(const Read2RequestProto& request, Read2Callback callback);
     void DoWrite2(const Write2RequestProto& request, Write2Callback callback);
+    void Do(PendingOp& op,
+            base::WeakPtr<Server> weak_ptr_server,
+            uint64_t fuse_handle);
 
     const scoped_refptr<storage::FileSystemContext> fs_context_;
     const bool readable_;
     const bool writable_;
 
-    bool has_in_flight_read_ = false;
-    bool has_in_flight_write_ = false;
-    base::circular_deque<PendingRead2> pending_reads_;
-    base::circular_deque<PendingWrite2> pending_writes_;
+    bool has_in_flight_op_ = false;
+    base::circular_deque<PendingOp> pending_ops_;
 
     base::SequenceBound<ReadWriter> seqbnd_read_writer_;
   };
@@ -283,7 +275,7 @@ class Server {
   // storage::FileSystemURL.
   //
   // Neither subdir nor fs_url_prefix should have a trailing slash.
-  using PrefixMap = std::map<std::string, PrefixMapEntry>;
+  using PrefixMap = std::map<std::string, PrefixMapEntry, std::less<>>;
 
   struct ReadDir2MapEntry {
     explicit ReadDir2MapEntry(ReadDir2Callback callback);
@@ -327,6 +319,10 @@ class Server {
                           bool create_succeeded,
                           MakeTempDirCallback callback);
 
+  void OnFlush(uint64_t fuse_handle,
+               FlushCallback callback,
+               const FlushResponseProto& response);
+
   void OnRead2(uint64_t fuse_handle,
                Read2Callback callback,
                const Read2ResponseProto& response);
@@ -347,7 +343,7 @@ class Server {
   // Returns the fuse_handle that is the map key.
   uint64_t InsertFuseFileMapEntry(FuseFileMapEntry&& entry);
 
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
   FuseFileMap fuse_file_map_;
   fusebox::MonikerMap moniker_map_;
   PrefixMap prefix_map_;

@@ -4,7 +4,7 @@
 
 #include "components/offline_pages/core/background/remove_requests_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace offline_pages {
 
@@ -16,7 +16,7 @@ RemoveRequestsTask::RemoveRequestsTask(
       request_ids_(request_ids),
       callback_(std::move(callback)) {}
 
-RemoveRequestsTask::~RemoveRequestsTask() {}
+RemoveRequestsTask::~RemoveRequestsTask() = default;
 
 void RemoveRequestsTask::Run() {
   RemoveRequests();

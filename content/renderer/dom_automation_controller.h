@@ -11,6 +11,8 @@
 #include "content/public/renderer/render_frame_observer.h"
 #include "gin/wrappable.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "v8/include/cppgc/persistent.h"
+#include "v8/include/cppgc/prefinalizer.h"
 
 namespace blink {
 class WebLocalFrame;
@@ -26,15 +28,16 @@ class RenderFrame;
 
 // Provides implementation of window.domAutomationController javascript object.
 // Javascript can call domAutomationController.send(...) to send arbitrary data
-// to the browser.  On the browser side, the data is received via one of the
-// following:
-// - Test code:
-//   - DOMMessageQueue class
-//   - ExecuteScriptAndExtractInt/Bool/String functions
+// to the browser.  On the browser side, the data is received via the
+// DOMMessageQueue class.
 class DomAutomationController : public gin::Wrappable<DomAutomationController>,
                                 public RenderFrameObserver {
+  CPPGC_USING_PRE_FINALIZER(DomAutomationController, Dispose);
+
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin},
+      gin::kDomAutomationController};
 
   DomAutomationController(const DomAutomationController&) = delete;
   DomAutomationController& operator=(const DomAutomationController&) = delete;
@@ -47,13 +50,17 @@ class DomAutomationController : public gin::Wrappable<DomAutomationController>,
   // argument at all is ignored.
   bool SendMsg(const gin::Arguments& args);
 
- private:
-  explicit DomAutomationController(RenderFrame* render_view);
+  // Make public for cppgc::MakeGarbageCollected.
+  explicit DomAutomationController(RenderFrame* render_frame);
   ~DomAutomationController() override;
 
+  void Dispose();
+
+ private:
   // gin::WrappableBase
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
+  const gin::WrapperInfo* wrapper_info() const override;
 
   // RenderFrameObserver
   void OnDestruct() override;

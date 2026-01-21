@@ -8,11 +8,12 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
@@ -24,11 +25,10 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/proto/chrome_extension_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
-#include "crypto/rsa_private_key.h"
 #include "crypto/sha2.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace em = enterprise_management;
 
@@ -68,7 +68,7 @@ bool True(const PolicyDomain domain, const std::string& ignored) {
 class MockComponentCloudPolicyStoreDelegate
     : public ComponentCloudPolicyStore::Delegate {
  public:
-  ~MockComponentCloudPolicyStoreDelegate() override {}
+  ~MockComponentCloudPolicyStoreDelegate() override = default;
 
   MOCK_METHOD0(OnComponentCloudPolicyStoreUpdated, void());
 };
@@ -95,10 +95,10 @@ class ComponentCloudPolicyStoreTest : public testing::Test {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     cache_ = std::make_unique<ResourceCache>(
         temp_dir_.GetPath(), base::MakeRefCounted<base::TestSimpleTaskRunner>(),
-        /* max_cache_size */ absl::nullopt);
+        /* max_cache_size */ std::nullopt);
     store_ = CreateStore();
     store_->SetCredentials(
-        PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+        PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
         PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
         PolicyBuilder::kFakePublicKeyVersion);
   }
@@ -199,7 +199,8 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyWrongTimestamp) {
                             CreatePolicyData().get(), TestPolicyHash(),
                             kTestPolicy));
 
-  const int64_t kPastTimestamp = (base::Time() + base::Days(1)).ToJavaTime();
+  const int64_t kPastTimestamp =
+      (base::Time() + base::Days(1)).InMillisecondsSinceUnixEpoch();
   CHECK_GT(PolicyBuilder::kFakeTimestamp, kPastTimestamp);
   builder_.policy_data().set_timestamp(kPastTimestamp);
   std::string error;
@@ -238,7 +239,8 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyWrongDeviceId) {
 }
 
 TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyBadType) {
-  builder_.policy_data().set_policy_type(dm_protocol::kChromeUserPolicyType);
+  builder_.policy_data().set_policy_type(
+      dm_protocol::GetChromeUserPolicyType());
   std::string error;
   EXPECT_FALSE(store_->ValidatePolicy(kTestPolicyNS, CreateResponse(),
                                       nullptr /* policy_data */,
@@ -285,7 +287,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyEmptyComponentId) {
 
 TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyWrongPublicKey) {
   // Test against a policy signed with a wrong key.
-  builder_.SetSigningKey(*PolicyBuilder::CreateTestOtherSigningKey());
+  builder_.SetSigningKey(PolicyBuilder::CreateTestOtherSigningKey());
   std::string error;
   EXPECT_FALSE(store_->ValidatePolicy(kTestPolicyNS, CreateResponse(),
                                       nullptr /* policy_data */,
@@ -307,7 +309,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyWrongPublicKeyVersion) {
 TEST_F(ComponentCloudPolicyStoreTest, ValidatePolicyDifferentPublicKey) {
   // Test against a policy signed with a different key and containing a new
   // public key version.
-  builder_.SetSigningKey(*PolicyBuilder::CreateTestOtherSigningKey());
+  builder_.SetSigningKey(PolicyBuilder::CreateTestOtherSigningKey());
   builder_.policy_data().set_public_key_version(
       PolicyBuilder::kFakePublicKeyVersion + 1);
   std::string error;
@@ -358,7 +360,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentials) {
 
 TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsUser) {
   store_ = CreateStore();
-  store_->SetCredentials(/*username=*/std::string(), /*gaia_id=*/std::string(),
+  store_->SetCredentials(/*username=*/std::string(), GaiaId(),
                          PolicyBuilder::kFakeToken,
                          PolicyBuilder::kFakeDeviceId, public_key_,
                          PolicyBuilder::kFakePublicKeyVersion);
@@ -372,7 +374,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsUser) {
 TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsDMToken) {
   store_ = CreateStore();
   store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       std::string() /* dm_token */, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   std::string error;
@@ -384,10 +386,10 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsDMToken) {
 
 TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsDeviceId) {
   store_ = CreateStore();
-  store_->SetCredentials(PolicyBuilder::kFakeUsername,
-                         PolicyBuilder::kFakeGaiaId, PolicyBuilder::kFakeToken,
-                         std::string() /* device_id */, public_key_,
-                         PolicyBuilder::kFakePublicKeyVersion);
+  store_->SetCredentials(
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
+      PolicyBuilder::kFakeToken, std::string() /* device_id */, public_key_,
+      PolicyBuilder::kFakePublicKeyVersion);
   std::string error;
   EXPECT_FALSE(store_->ValidatePolicy(kTestPolicyNS, CreateResponse(),
                                       nullptr /* policy_data */,
@@ -398,7 +400,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsDeviceId) {
 TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsPublicKey) {
   store_ = CreateStore();
   store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId,
       std::string() /* public_key */, PolicyBuilder::kFakePublicKeyVersion);
   std::string error;
@@ -412,7 +414,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsPublicKeyVersion) {
   StoreTestPolicy(store_.get());
   another_store_ = CreateStore();
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       -1 /* public_key_version */);
   another_store_->Load();
@@ -423,10 +425,10 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateNoCredentialsPublicKeyVersion) {
 TEST_F(ComponentCloudPolicyStoreTest, ValidateWrongCredentialsDMToken) {
   StoreTestPolicy(store_.get());
   another_store_ = CreateStore();
-  another_store_->SetCredentials(PolicyBuilder::kFakeUsername,
-                                 PolicyBuilder::kFakeGaiaId, "wrongtoken",
-                                 PolicyBuilder::kFakeDeviceId, public_key_,
-                                 PolicyBuilder::kFakePublicKeyVersion);
+  another_store_->SetCredentials(
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
+      "wrongtoken", PolicyBuilder::kFakeDeviceId, public_key_,
+      PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
   EXPECT_TRUE(IsStoreEmpty(*another_store_));
   EXPECT_TRUE(LoadCacheExtensionsSubkeys().empty());
@@ -436,7 +438,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateWrongCredentialsDeviceId) {
   StoreTestPolicy(store_.get());
   another_store_ = CreateStore();
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, "wrongdeviceid", public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
@@ -448,7 +450,7 @@ TEST_F(ComponentCloudPolicyStoreTest, ValidateWrongCredentialsPublicKey) {
   StoreTestPolicy(store_.get());
   another_store_ = CreateStore();
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, "wrongkey",
       PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
@@ -461,7 +463,7 @@ TEST_F(ComponentCloudPolicyStoreTest,
   StoreTestPolicy(store_.get());
   another_store_ = CreateStore();
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion + 1);
   another_store_->Load();
@@ -516,7 +518,8 @@ TEST_F(ComponentCloudPolicyStoreTest, StoreAndLoad) {
   EXPECT_TRUE(IsStoreEmpty(*store_));
 
   // Store policy for an unsupported domain.
-  builder_.policy_data().set_policy_type(dm_protocol::kChromeUserPolicyType);
+  builder_.policy_data().set_policy_type(
+      dm_protocol::GetChromeUserPolicyType());
   EXPECT_FALSE(
       store_->Store(PolicyNamespace(POLICY_DOMAIN_CHROME, kTestExtension),
                     CreateSerializedResponse(), CreatePolicyData().get(),
@@ -567,7 +570,7 @@ TEST_F(ComponentCloudPolicyStoreTest, StoreAndLoad) {
   // Loading from the cache validates the policy data again.
   another_store_ = CreateStore();
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
@@ -578,10 +581,10 @@ TEST_F(ComponentCloudPolicyStoreTest, StoreAndLoad) {
 TEST_F(ComponentCloudPolicyStoreTest, StoreAndLoadMachineLevelUserPolicy) {
   store_ =
       CreateStore(dm_protocol::kChromeMachineLevelExtensionCloudPolicyType);
-  store_->SetCredentials(PolicyBuilder::kFakeUsername,
-                         PolicyBuilder::kFakeGaiaId, PolicyBuilder::kFakeToken,
-                         PolicyBuilder::kFakeDeviceId, public_key_,
-                         PolicyBuilder::kFakePublicKeyVersion);
+  store_->SetCredentials(
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
+      PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
+      PolicyBuilder::kFakePublicKeyVersion);
 
   builder_.policy_data().set_policy_type(
       dm_protocol::kChromeMachineLevelExtensionCloudPolicyType);
@@ -593,7 +596,7 @@ TEST_F(ComponentCloudPolicyStoreTest, StoreAndLoadMachineLevelUserPolicy) {
   another_store_ =
       CreateStore(dm_protocol::kChromeMachineLevelExtensionCloudPolicyType);
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
@@ -648,7 +651,7 @@ TEST_F(ComponentCloudPolicyStoreTest, Purge) {
   const PolicyBundle empty_bundle;
   EXPECT_TRUE(another_store_->policy().Equals(empty_bundle));
   another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   another_store_->Load();
@@ -665,7 +668,7 @@ TEST_F(ComponentCloudPolicyStoreTest, Purge) {
   // And they aren't loaded anymore either.
   yet_another_store_ = CreateStore();
   yet_another_store_->SetCredentials(
-      PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,
+      PolicyBuilder::kFakeUsername, GaiaId(PolicyBuilder::kFakeGaiaId),
       PolicyBuilder::kFakeToken, PolicyBuilder::kFakeDeviceId, public_key_,
       PolicyBuilder::kFakePublicKeyVersion);
   yet_another_store_->Load();

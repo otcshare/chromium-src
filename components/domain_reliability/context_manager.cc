@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "components/domain_reliability/google_configs.h"
 #include "net/base/url_util.h"
 
@@ -29,7 +29,7 @@ DomainReliabilityContextManager::~DomainReliabilityContextManager() = default;
 
 void DomainReliabilityContextManager::RouteBeacon(
     std::unique_ptr<DomainReliabilityBeacon> beacon) {
-  const std::string& beacon_host = beacon->url.host();
+  const std::string& beacon_host = beacon->url.GetHost();
 
   // An exact match for the host always takes priority.
   DomainReliabilityContext* context_to_use = GetContext(beacon_host);

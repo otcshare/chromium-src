@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/syslog_logging.h"
 #include "base/task/single_thread_task_runner.h"
@@ -28,16 +28,14 @@ constexpr char kRoutinesFieldName[] = "routines";
 std::string CreatePayload(
     const std::vector<ash::cros_healthd::mojom::DiagnosticRoutineEnum>&
         available_routines) {
-  base::Value::Dict root_dict;
   base::Value::List routine_list;
   for (const auto& routine : available_routines) {
     routine_list.Append(static_cast<int>(routine));
   }
-  root_dict.Set(kRoutinesFieldName, std::move(routine_list));
+  auto root_dict =
+      base::Value::Dict().Set(kRoutinesFieldName, std::move(routine_list));
 
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  return payload;
+  return base::WriteJson(root_dict).value_or("");
 }
 
 }  // namespace
@@ -53,33 +51,32 @@ em::RemoteCommand_Type DeviceCommandGetAvailableRoutinesJob::GetType() const {
 }
 
 void DeviceCommandGetAvailableRoutinesJob::RunImpl(
-    CallbackWithResult succeeded_callback,
-    CallbackWithResult failed_callback) {
+    CallbackWithResult result_callback) {
   SYSLOG(INFO) << "Executing GetAvailableRoutines command.";
 
   ash::cros_healthd::ServiceConnection::GetInstance()
       ->GetDiagnosticsService()
       ->GetAvailableRoutines(base::BindOnce(
           &DeviceCommandGetAvailableRoutinesJob::OnCrosHealthdResponseReceived,
-          weak_ptr_factory_.GetWeakPtr(), std::move(succeeded_callback),
-          std::move(failed_callback)));
+          weak_ptr_factory_.GetWeakPtr(), std::move(result_callback)));
 }
 
 void DeviceCommandGetAvailableRoutinesJob::OnCrosHealthdResponseReceived(
-    CallbackWithResult succeeded_callback,
-    CallbackWithResult failed_callback,
+    CallbackWithResult result_callback,
     const std::vector<ash::cros_healthd::mojom::DiagnosticRoutineEnum>&
         available_routines) {
   if (available_routines.empty()) {
     SYSLOG(ERROR) << "No routines received from cros_healthd.";
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(failed_callback), absl::nullopt));
+        FROM_HERE, base::BindOnce(std::move(result_callback),
+                                  ResultType::kFailure, std::nullopt));
     return;
   }
 
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(succeeded_callback),
-                                CreatePayload(available_routines)));
+      FROM_HERE,
+      base::BindOnce(std::move(result_callback), ResultType::kSuccess,
+                     CreatePayload(available_routines)));
 }
 
 }  // namespace policy

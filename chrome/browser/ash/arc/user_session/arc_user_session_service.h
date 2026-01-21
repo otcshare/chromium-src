@@ -5,8 +5,9 @@
 #ifndef CHROME_BROWSER_ASH_ARC_USER_SESSION_ARC_USER_SESSION_SERVICE_H_
 #define CHROME_BROWSER_ASH_ARC_USER_SESSION_ARC_USER_SESSION_SERVICE_H_
 
-#include "ash/components/arc/mojom/intent_helper.mojom-forward.h"
-#include "ash/components/arc/session/connection_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom-forward.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/session_manager/core/session_manager_observer.h"
 
@@ -45,8 +46,10 @@ class ArcUserSessionService
   // session_manager::SessionManagerObserver
   void OnSessionStateChanged() override;
 
+  static void EnsureFactoryBuilt();
+
  private:
-  ArcBridgeService* const arc_bridge_service_;
+  const raw_ptr<ArcBridgeService> arc_bridge_service_;
 };
 
 }  // namespace arc

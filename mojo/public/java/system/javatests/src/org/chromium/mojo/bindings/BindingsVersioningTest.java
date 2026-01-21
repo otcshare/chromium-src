@@ -24,13 +24,12 @@ import org.chromium.mojo.system.impl.CoreImpl;
 
 /**
  * Testing generated classes with the [MinVersion] annotation. Struct in this test are from:
- * mojo/public/interfaces/bindings/tests/rect.mojom and
- * mojo/public/interfaces/bindings/tests/test_structs.mojom
+ * mojo/public/interfaces/bindings/tests/rect.test-mojom and
+ * mojo/public/interfaces/bindings/tests/test_structs.test-mojom
  */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class BindingsVersioningTest {
-    @Rule
-    public MojoTestRule mTestRule = new MojoTestRule();
+    @Rule public MojoTestRule mTestRule = new MojoTestRule();
 
     private static Rect newRect(int factor) {
         Rect rect = new Rect();
@@ -52,12 +51,10 @@ public class BindingsVersioningTest {
         return struct;
     }
 
-    /**
-     * Testing serializing old struct version to newer one.
-     */
+    /** Testing serializing old struct version to newer one. */
     @Test
     @SmallTest
-    public void testOldToNew() {
+    public void testOldToNew() throws BadMessageException {
         {
             MultiVersionStructV0 v0 = new MultiVersionStructV0();
             v0.fInt32 = 123;
@@ -125,9 +122,10 @@ public class BindingsVersioningTest {
             v7.fRect = newRect(5);
             v7.fString = "hello";
             v7.fArray = new byte[] {10, 9, 8};
-            v7.fMessagePipe = CoreImpl.getInstance()
-                                      .acquireNativeHandle(expectedHandle)
-                                      .toMessagePipeHandle();
+            v7.fMessagePipe =
+                    CoreImpl.getInstance()
+                            .acquireNativeHandle(expectedHandle)
+                            .toMessagePipeHandle();
             v7.fBool = true;
             MultiVersionStruct expected = new MultiVersionStruct();
             expected.fInt32 = 123;
@@ -148,12 +146,10 @@ public class BindingsVersioningTest {
         }
     }
 
-    /**
-     * Testing serializing new struct version to older one.
-     */
+    /** Testing serializing new struct version to older one. */
     @Test
     @SmallTest
-    public void testNewToOld() {
+    public void testNewToOld() throws BadMessageException {
         MultiVersionStruct struct = newStruct();
         {
             MultiVersionStructV0 expected = new MultiVersionStructV0();
@@ -207,9 +203,10 @@ public class BindingsVersioningTest {
             expected.fBool = true;
 
             MultiVersionStruct input = struct;
-            input.fMessagePipe = CoreImpl.getInstance()
-                                         .acquireNativeHandle(expectedHandle)
-                                         .toMessagePipeHandle();
+            input.fMessagePipe =
+                    CoreImpl.getInstance()
+                            .acquireNativeHandle(expectedHandle)
+                            .toMessagePipeHandle();
 
             MultiVersionStructV7 output = MultiVersionStructV7.deserialize(input.serialize(null));
 

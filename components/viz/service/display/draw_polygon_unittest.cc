@@ -2,20 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/viz/service/display/draw_polygon.h"
+
 #include <stddef.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
-#include "base/numerics/math_constants.h"
 #include "build/build_config.h"
 #include "components/viz/service/display/bsp_compare_result.h"
-#include "components/viz/service/display/draw_polygon.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -30,25 +30,29 @@ void DrawPolygon::RecomputeNormalForTesting() {
 static int sign(float v) {
   static const float epsilon = 0.00001f;
 
-  if (v > epsilon)
+  if (v > epsilon) {
     return 1;
-  if (v < -epsilon)
+  }
+  if (v < -epsilon) {
     return -1;
+  }
   return 0;
 }
 
 bool IsPlanarForTesting(const DrawPolygon& p) {
   static const float epsilon = 0.00001f;
   for (size_t i = 1; i < p.points_.size(); i++) {
-    if (gfx::DotProduct(p.points_[i] - p.points_[0], p.normal_) > epsilon)
+    if (gfx::DotProduct(p.points_[i] - p.points_[0], p.normal_) > epsilon) {
       return false;
+    }
   }
   return true;
 }
 
 bool IsConvexForTesting(const DrawPolygon& p) {
-  if (p.points_.size() < 3)
+  if (p.points_.size() < 3) {
     return true;
+  }
 
   gfx::Vector3dF prev =
       p.points_[p.points_.size() - 1] - p.points_[p.points_.size() - 2];
@@ -58,10 +62,12 @@ bool IsConvexForTesting(const DrawPolygon& p) {
     prev = next;
     next = p.points_[i] - p.points_[i - 1];
     int next_sign = sign(gfx::DotProduct(CrossProduct(prev, next), p.normal_));
-    if (ccw == 0)
+    if (ccw == 0) {
       ccw = next_sign;
-    if (next_sign != 0 && next_sign != ccw)
+    }
+    if (next_sign != 0 && next_sign != ccw) {
       return false;
+    }
   }
   return true;
 }
@@ -160,7 +166,7 @@ TEST(DrawPolygonConstructionTest, ManyVertexNormal) {
   std::vector<gfx::Point3F> vertices_c;
   std::vector<gfx::Point3F> vertices_d;
   for (int i = 0; i < 100; i++) {
-    const double step = i * base::kPiDouble / 50;
+    const double step = i * std::numbers::pi / 50;
     vertices_c.emplace_back(cos(step), sin(step), 0.0f);
     vertices_d.emplace_back(cos(step) + 99.0f, sin(step) + 99.0f, 100.0f);
   }
@@ -181,7 +187,7 @@ TEST(DrawPolygonConstructionTest, SimpleNormal) {
   EXPECT_NORMAL(polygon_i, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(DrawPolygonConstructionTest, DISABLED_NormalInvertXY) {
+TEST(DrawPolygonConstructionTest, NormalInvertXY) {
   gfx::RectF src(-0.1f, -10.0f, 0.2f, 20.0f);
 
   auto transform =
@@ -191,7 +197,7 @@ TEST(DrawPolygonConstructionTest, DISABLED_NormalInvertXY) {
   EXPECT_NORMAL(polygon_a, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(DrawPolygonConstructionTest, DISABLED_NormalInvertXZ) {
+TEST(DrawPolygonConstructionTest, NormalInvertXZ) {
   gfx::RectF src(-0.1f, -10.0f, 0.2f, 20.0f);
 
   auto transform =
@@ -201,7 +207,7 @@ TEST(DrawPolygonConstructionTest, DISABLED_NormalInvertXZ) {
   EXPECT_NORMAL(polygon_b, 1.0f, 0.0f, 0.0f);
 }
 
-TEST(DrawPolygonConstructionTest, DISABLED_NormalInvertYZ) {
+TEST(DrawPolygonConstructionTest, NormalInvertYZ) {
   gfx::RectF src(-0.1f, -10.0f, 0.2f, 20.0f);
 
   auto transform =
@@ -541,8 +547,8 @@ TEST(DrawPolygonSplitTest, AlmostCoplanarSplit) {
   EXPECT_TRUE(back_polygon != nullptr);
 
   for (auto vertex : vertices_b) {
-    EXPECT_TRUE(base::Contains(front_polygon->points(), vertex) ||
-                base::Contains(back_polygon->points(), vertex));
+    EXPECT_TRUE(std::ranges::contains(front_polygon->points(), vertex) ||
+                std::ranges::contains(back_polygon->points(), vertex));
   }
 }
 
@@ -604,8 +610,8 @@ TEST(DrawPolygonSplitTest, DoubleSplit) {
   EXPECT_EQ(3u, second_back_polygon->points().size());
 
   for (auto vertex : saved_back_polygon_vertices) {
-    EXPECT_TRUE(base::Contains(second_front_polygon->points(), vertex) ||
-                base::Contains(second_back_polygon->points(), vertex));
+    EXPECT_TRUE(std::ranges::contains(second_front_polygon->points(), vertex) ||
+                std::ranges::contains(second_back_polygon->points(), vertex));
   }
 }
 

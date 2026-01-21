@@ -4,8 +4,8 @@
 
 #include "components/offline_pages/core/model/add_page_task.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "components/offline_pages/core/offline_page_item.h"
 #include "components/offline_pages/core/offline_page_metadata_store.h"
 #include "components/offline_pages/core/offline_page_types.h"
@@ -32,7 +32,6 @@ AddPageResult ItemActionStatusToAddPageResult(ItemActionStatus status) {
       break;
   }
   NOTREACHED();
-  return AddPageResult::STORE_FAILURE;
 }
 
 ItemActionStatus AddOfflinePageSync(const OfflinePageItem& item,
@@ -83,7 +82,7 @@ AddPageTask::AddPageTask(OfflinePageMetadataStore* store,
   DCHECK(!callback_.is_null());
 }
 
-AddPageTask::~AddPageTask() {}
+AddPageTask::~AddPageTask() = default;
 
 void AddPageTask::Run() {
   if (!store_) {

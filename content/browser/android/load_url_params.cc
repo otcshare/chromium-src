@@ -5,19 +5,23 @@
 #include <jni.h>
 
 #include "base/android/jni_string.h"
-#include "content/public/android/content_jni_headers/LoadUrlParams_jni.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/common/url_constants.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/LoadUrlParams_jni.h"
+
+using base::android::JavaRef;
 
 namespace content {
 
-jboolean JNI_LoadUrlParams_IsDataScheme(JNIEnv* env,
-                                        const JavaParamRef<jstring>& jurl) {
+static bool JNI_LoadUrlParams_IsDataScheme(JNIEnv* env,
+                                           const JavaRef<jstring>& jurl) {
   GURL url(base::android::ConvertJavaStringToUTF8(env, jurl));
   return url.SchemeIs(url::kDataScheme);
 }
 
 }  // namespace content
+
+DEFINE_JNI(LoadUrlParams)

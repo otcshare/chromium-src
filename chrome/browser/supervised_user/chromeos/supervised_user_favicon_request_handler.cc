@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,11 @@
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/codec/png_codec.h"
 
 namespace {
 constexpr int kMinIconSize = 16;
-constexpr int kDesiredIconSize = 24;
+constexpr int kDesiredIconSize = 28;
 constexpr int kMonogramSize = 20;
 
 const char kFaviconAvailabilityHistogramName[] =
@@ -37,27 +36,31 @@ SupervisedUserFaviconRequestHandler::~SupervisedUserFaviconRequestHandler() =
     default;
 
 void SupervisedUserFaviconRequestHandler::StartFaviconFetch(
-    base::OnceCallback<void(const gfx::ImageSkia&)> callback) {
+    base::OnceClosure on_fetched_callback) {
   DCHECK(!network_request_completed_);
-  favicon_fetched_callback_ = std::move(callback);
+  on_fetched_callback_ = std::move(on_fetched_callback);
   FetchFaviconFromCache();
 }
 
 void SupervisedUserFaviconRequestHandler::FetchFaviconFromCache() {
-  large_icon_service_->GetLargeIconImageOrFallbackStyleForPageUrl(
+  // Resize the favicon in SupervisedUserFaviconRequestHandler instead of in the
+  // renderer so that the favicon resizing and the sizing of the monogram
+  // favicon occur in the same place.
+  large_icon_service_->GetLargeIconRawBitmapForPageUrl(
       page_url_, kMinIconSize, kDesiredIconSize,
+      favicon::LargeIconService::NoBigEnoughIconBehavior::kReturnBitmap,
       base::BindOnce(
           &SupervisedUserFaviconRequestHandler::OnGetFaviconFromCacheFinished,
           weak_ptr_factory_.GetWeakPtr()),
       &favicon_task_tracker_);
 }
 
-gfx::ImageSkia SupervisedUserFaviconRequestHandler::GetFaviconOrFallback() {
+SkBitmap SupervisedUserFaviconRequestHandler::GetFaviconOrFallback() {
   if (favicon_.isNull()) {
     base::UmaHistogramEnumeration(kFaviconAvailabilityHistogramName,
                                   FaviconAvailability::kUnavailable);
-    return gfx::ImageSkia::CreateFrom1xBitmap(favicon::GenerateMonogramFavicon(
-        page_url_, kMonogramSize, kDesiredIconSize));
+    return favicon::GenerateMonogramFavicon(page_url_, kDesiredIconSize,
+                                            kMonogramSize);
   }
   base::UmaHistogramEnumeration(kFaviconAvailabilityHistogramName,
                                 FaviconAvailability::kAvailable);
@@ -65,19 +68,21 @@ gfx::ImageSkia SupervisedUserFaviconRequestHandler::GetFaviconOrFallback() {
 }
 
 void SupervisedUserFaviconRequestHandler::OnGetFaviconFromCacheFinished(
-    const favicon_base::LargeIconImageResult& result) {
+    const favicon_base::LargeIconResult& result) {
   // Check if fetching the favicon from the cache was successful.
-  if (!result.image.IsEmpty()) {
-    large_icon_service_->TouchIconFromGoogleServer(result.icon_url);
-    favicon_ = result.image.AsImageSkia();
-    std::move(favicon_fetched_callback_).Run(GetFaviconOrFallback());
-    return;
+  const favicon_base::FaviconRawBitmapResult& bitmap_result = result.bitmap;
+  if (bitmap_result.is_valid()) {
+    favicon_ = gfx::PNGCodec::Decode(*bitmap_result.bitmap_data);
+    if (!favicon_.isNull()) {
+      large_icon_service_->TouchIconFromGoogleServer(bitmap_result.icon_url);
+      std::move(on_fetched_callback_).Run();
+      return;
+    }
   }
 
-  // Do not make another network request if one has already been made. Run the
-  // favicon fetched callback with the favicon or its fallback icon.
+  // Do not make another network request if one has already been made.
   if (network_request_completed_) {
-    std::move(favicon_fetched_callback_).Run(GetFaviconOrFallback());
+    std::move(on_fetched_callback_).Run();
     return;
   }
 
@@ -106,7 +111,6 @@ void SupervisedUserFaviconRequestHandler::OnGetFaviconFromCacheFinished(
   large_icon_service_
       ->GetLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
           page_url_,
-          /*may_page_url_be_private=*/false,
           /*should_trim_page_url_path=*/false, traffic_annotation,
           base::BindOnce(&SupervisedUserFaviconRequestHandler::
                              OnGetFaviconFromGoogleServerFinished,
@@ -118,7 +122,7 @@ void SupervisedUserFaviconRequestHandler::OnGetFaviconFromGoogleServerFinished(
   network_request_completed_ = true;
   if (status != favicon_base::GoogleFaviconServerRequestStatus::SUCCESS) {
     LOG(WARNING) << "Favicon fetch failed, using fallback favicon.";
-    std::move(favicon_fetched_callback_).Run(GetFaviconOrFallback());
+    std::move(on_fetched_callback_).Run();
     return;
   }
   FetchFaviconFromCache();

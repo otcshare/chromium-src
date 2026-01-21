@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/printing/zeroconf_printer_detector.h"
@@ -103,7 +104,8 @@ class FuzzDeviceLister : public local_discovery::ServiceDiscoveryDeviceLister {
                                   base::Unretained(this)));
   }
 
-  local_discovery::ServiceDiscoveryDeviceLister::Delegate* delegate_ = nullptr;
+  raw_ptr<local_discovery::ServiceDiscoveryDeviceLister::Delegate> delegate_ =
+      nullptr;
   std::string service_type_;
   std::vector<CallToDelegate> calls_;
 };
@@ -182,7 +184,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   CreateLister(ash::ZeroconfPrinterDetector::kIppsEverywhereServiceName, calls,
                &listers);
   // Creating an object of ZeroconfPrinterDetector to fuzz.
-  auto detector = ash::ZeroconfPrinterDetector::CreateForTesting(&listers);
+  auto detector = ash::ZeroconfPrinterDetector::CreateForTesting(
+      &listers, /*ipp_reject_list=*/{});
   for (auto& lf : listers) {
     static_cast<FuzzDeviceLister*>(lf.second.get())
         ->SetDelegate(detector.get());

@@ -4,13 +4,10 @@
 
 #include "chromeos/ash/services/device_sync/cryptauth_device_registry.h"
 
-#include <sstream>
+#include <ostream>
 
-#include "base/containers/contains.h"
 
-namespace ash {
-
-namespace device_sync {
+namespace ash::device_sync {
 
 CryptAuthDeviceRegistry::CryptAuthDeviceRegistry() = default;
 
@@ -24,16 +21,18 @@ CryptAuthDeviceRegistry::instance_id_to_device_map() const {
 const CryptAuthDevice* CryptAuthDeviceRegistry::GetDevice(
     const std::string& instance_id) const {
   auto it = instance_id_to_device_map_.find(instance_id);
-  if (it == instance_id_to_device_map_.end())
+  if (it == instance_id_to_device_map_.end()) {
     return nullptr;
+  }
 
   return &it->second;
 }
 
 bool CryptAuthDeviceRegistry::AddDevice(const CryptAuthDevice& device) {
   const CryptAuthDevice* existing_device = GetDevice(device.instance_id());
-  if (existing_device && device == *existing_device)
+  if (existing_device && device == *existing_device) {
     return false;
+  }
 
   instance_id_to_device_map_.insert_or_assign(device.instance_id(), device);
 
@@ -42,8 +41,9 @@ bool CryptAuthDeviceRegistry::AddDevice(const CryptAuthDevice& device) {
 }
 
 bool CryptAuthDeviceRegistry::DeleteDevice(const std::string& instance_id) {
-  if (!base::Contains(instance_id_to_device_map_, instance_id))
+  if (!instance_id_to_device_map_.contains(instance_id)) {
     return false;
+  }
 
   instance_id_to_device_map_.erase(instance_id);
 
@@ -54,8 +54,9 @@ bool CryptAuthDeviceRegistry::DeleteDevice(const std::string& instance_id) {
 bool CryptAuthDeviceRegistry::SetRegistry(
     const CryptAuthDeviceRegistry::InstanceIdToDeviceMap&
         instance_id_to_device_map) {
-  if (instance_id_to_device_map_ == instance_id_to_device_map)
+  if (instance_id_to_device_map_ == instance_id_to_device_map) {
     return false;
+  }
 
   instance_id_to_device_map_ = instance_id_to_device_map;
 
@@ -63,13 +64,13 @@ bool CryptAuthDeviceRegistry::SetRegistry(
   return true;
 }
 
-base::Value CryptAuthDeviceRegistry::AsReadableDictionary() const {
-  base::Value dict(base::Value::Type::DICTIONARY);
+base::Value::Dict CryptAuthDeviceRegistry::AsReadableDictionary() const {
+  base::Value::Dict dict;
   for (const std::pair<std::string, CryptAuthDevice>& id_device_pair :
        instance_id_to_device_map_) {
     std::string key = id_device_pair.second.device_name +
                       " (ID: " + id_device_pair.second.instance_id() + ")";
-    dict.SetKey(key, id_device_pair.second.AsReadableDictionary());
+    dict.Set(key, id_device_pair.second.AsReadableDictionary());
   }
 
   return dict;
@@ -81,6 +82,4 @@ std::ostream& operator<<(std::ostream& stream,
   return stream;
 }
 
-}  // namespace device_sync
-
-}  // namespace ash
+}  // namespace ash::device_sync

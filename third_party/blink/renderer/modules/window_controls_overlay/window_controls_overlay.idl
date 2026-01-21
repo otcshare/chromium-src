@@ -5,8 +5,8 @@
 // https://github.com/WICG/window-controls-overlay/blob/master/explainer.md
 
 [
-    RuntimeEnabled=WebAppWindowControlsOverlay,
-    Exposed=Window
+    Exposed=Window,
+    RuntimeEnabled=WindowControlsOverlay
 ] interface WindowControlsOverlay : EventTarget {
     readonly attribute boolean visible;
     DOMRect getTitlebarAreaRect();

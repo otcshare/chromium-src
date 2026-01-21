@@ -6,12 +6,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/personalization_app/enterprise_policy_delegate.h"
 #include "ash/webui/personalization_app/personalization_app_url_constants.h"
-#include "ash/webui/personalization_app/search/search.mojom-forward.h"
 #include "ash/webui/personalization_app/search/search.mojom.h"
 #include "ash/webui/personalization_app/search/search_concept.h"
 #include "ash/webui/personalization_app/search/search_tag_registry.h"
@@ -23,7 +23,6 @@
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/prefs/pref_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace ash::personalization_app {
@@ -92,7 +91,7 @@ void SearchHandler::OnLocalSearchDone(
     SearchCallback callback,
     uint32_t max_num_results,
     local_search_service::ResponseStatus response_status,
-    const absl::optional<std::vector<local_search_service::Result>>&
+    const std::optional<std::vector<local_search_service::Result>>&
         local_search_service_results) {
   if (response_status != local_search_service::ResponseStatus::kSuccess) {
     LOG(ERROR) << "Cannot search; LocalSearchService returned "
@@ -117,12 +116,11 @@ void SearchHandler::OnLocalSearchDone(
                            &matching_content_id)) {
       NOTREACHED() << "All content ids are expected to be a valid integer: "
                    << local_result.positions.front().content_id;
-      continue;
     }
 
     search_results.push_back(mojom::SearchResult::New(
         /*id=*/search_concept->id,
-        /*text=*/l10n_util::GetStringUTF16(matching_content_id),
+        /*text=*/SearchTagRegistry::MessageIdToString(matching_content_id),
         /*relative_url=*/search_concept->relative_url,
         /*relevance_score=*/local_result.score));
   }

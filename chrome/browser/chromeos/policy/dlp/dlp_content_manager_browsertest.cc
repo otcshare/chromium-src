@@ -4,26 +4,26 @@
 
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_manager.h"
 
-#include <functional>
+#include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/barrier_closure.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_content_manager_test_helper.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_histogram_helper.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_policy_event.pb.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_reporting_manager.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_reporting_manager_test_helper.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
-#include "chrome/browser/chromeos/policy/dlp/dlp_warn_notifier.h"
-#include "chrome/browser/chromeos/policy/dlp/mock_dlp_rules_manager.h"
+#include "chrome/browser/chromeos/policy/dlp/test/dlp_content_manager_test_helper.h"
+#include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
+#include "chrome/browser/enterprise/data_controls/dlp_reporting_manager.h"
+#include "chrome/browser/enterprise/data_controls/dlp_reporting_manager_test_helper.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
+#include "chrome/browser/policy/messaging_layer/public/report_client_test_util.h"
+#include "chrome/browser/printing/print_test_utils.h"
 #include "chrome/browser/printing/print_view_manager.h"
 #include "chrome/browser/printing/print_view_manager_common.h"
 #include "chrome/browser/printing/test_print_preview_dialog_cloned_observer.h"
@@ -33,13 +33,15 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/enterprise/common/proto/synced/dlp_policy_event.pb.h"
+#include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
 #include "components/reporting/client/report_queue_impl.h"
 #include "components/reporting/storage/test_storage_module.h"
 #include "components/reporting/util/test_support_callbacks.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::_;
 
@@ -72,9 +74,12 @@ const DlpContentRestrictionSet kScreenShareWarned(
 constexpr char kPrintBlockedNotificationId[] = "print_dlp_blocked";
 
 constexpr char kExampleUrl[] = "https://example.com";
-constexpr char kSrcPattern[] = "example.com";
 constexpr char kLabel[] = "label";
 const std::u16string kApplicationTitle = u"example.com";
+
+constexpr char kRuleName[] = "rule #1";
+constexpr char kRuleId[] = "testid1";
+const DlpRulesManager::RuleMetadata kRuleMetadata(kRuleName, kRuleId);
 }  // namespace
 
 class DlpContentManagerBrowserTest : public InProcessBrowserTest {
@@ -84,7 +89,8 @@ class DlpContentManagerBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<KeyedService> SetDlpRulesManager(
       content::BrowserContext* context) {
-    auto dlp_rules_manager = std::make_unique<MockDlpRulesManager>();
+    auto dlp_rules_manager = std::make_unique<MockDlpRulesManager>(
+        Profile::FromBrowserContext(context));
     mock_rules_manager_ = dlp_rules_manager.get();
     return dlp_rules_manager;
   }
@@ -107,7 +113,8 @@ class DlpContentManagerBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(DlpRulesManagerFactory::GetForPrimaryProfile());
 
     EXPECT_CALL(*mock_rules_manager_, GetSourceUrlPattern)
-        .WillRepeatedly(testing::Return(kSrcPattern));
+        .WillRepeatedly(testing::DoAll(testing::SetArgPointee<3>(kRuleMetadata),
+                                       testing::Return("example.com")));
     EXPECT_CALL(*mock_rules_manager_, IsRestricted)
         .WillRepeatedly(testing::Return(DlpRulesManager::Level::kAllow));
   }
@@ -115,7 +122,7 @@ class DlpContentManagerBrowserTest : public InProcessBrowserTest {
   void SetupReporting() {
     SetupDlpRulesManager();
     // Set up mock report queue.
-    SetReportQueueForReportingManager(
+    data_controls::SetReportQueueForReportingManager(
         helper_->GetReportingManager(), events_,
         base::SequencedTaskRunner::GetCurrentDefault());
   }
@@ -125,12 +132,16 @@ class DlpContentManagerBrowserTest : public InProcessBrowserTest {
                    size_t count) {
     EXPECT_EQ(events_.size(), count);
     for (size_t i = 0; i < count; ++i) {
-      EXPECT_THAT(events_[i], IsDlpPolicyEvent(CreateDlpPolicyEvent(
-                                  kSrcPattern, restriction, level)));
+      EXPECT_THAT(events_[i], data_controls::IsDlpPolicyEvent(
+                                  data_controls::CreateDlpPolicyEvent(
+                                      GURL(kExampleUrl).spec(), restriction,
+                                      kRuleName, kRuleId, level)));
     }
   }
 
  protected:
+  std::unique_ptr<::reporting::ReportingClient::TestEnvironment>
+      test_reporting_;
   std::unique_ptr<DlpContentManagerTestHelper> helper_;
   base::HistogramTester histogram_tester_;
   raw_ptr<MockDlpRulesManager, DanglingUntriaged> mock_rules_manager_;
@@ -146,7 +157,7 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, PrintingNotRestricted) {
 
   NotificationDisplayServiceTester display_service_tester(browser()->profile());
 
-  base::MockCallback<OnDlpRestrictionCheckedCallback> cb;
+  base::MockCallback<WarningCallback> cb;
   EXPECT_CALL(cb, Run(true)).Times(1);
 
   helper_->GetContentManager()->CheckPrintingRestriction(
@@ -155,10 +166,7 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, PrintingNotRestricted) {
 
   // Start printing and check that there is no notification when printing is not
   // restricted.
-  printing::StartPrint(web_contents,
-                       /*print_renderer=*/mojo::NullAssociatedRemote(),
-                       /*print_preview_disabled=*/false,
-                       /*has_selection=*/false);
+  printing::test::StartPrint(web_contents);
   EXPECT_FALSE(
       display_service_tester.GetNotification(kPrintBlockedNotificationId));
   CheckEvents(DlpRulesManager::Restriction::kPrinting,
@@ -174,18 +182,26 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, ScreenshotsRestricted) {
 
   EXPECT_FALSE(manager->IsScreenshotApiRestricted(web_contents));
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 0);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 0);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 1);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kBlock, 0u);
 
   helper_->ChangeConfidentiality(web_contents, kScreenshotRestricted);
   EXPECT_TRUE(manager->IsScreenshotApiRestricted(web_contents));
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 1);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 1);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kBlock, 1u);
 
@@ -193,9 +209,13 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, ScreenshotsRestricted) {
   helper_->ChangeVisibility(web_contents);
   EXPECT_TRUE(manager->IsScreenshotApiRestricted(web_contents));
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 2);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 2);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 1);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kBlock, 2u);
 
@@ -203,17 +223,25 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, ScreenshotsRestricted) {
   helper_->ChangeVisibility(web_contents);
   EXPECT_TRUE(manager->IsScreenshotApiRestricted(web_contents));
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 3);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 3);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 1);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kBlock, 3u);
 
   helper_->DestroyWebContents(web_contents);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 3);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 3);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 1);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 1);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kBlock, 3u);
 }
@@ -281,9 +309,13 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerBrowserTest, ScreenshotsReported) {
 
   helper_->DestroyWebContents(web_contents);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, true, 0);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      true, 0);
   histogram_tester_.ExpectBucketCount(
-      GetDlpHistogramPrefix() + dlp::kScreenshotBlockedUMA, false, 4);
+      data_controls::GetDlpHistogramPrefix() +
+          data_controls::dlp::kScreenshotBlockedUMA,
+      false, 4);
   CheckEvents(DlpRulesManager::Restriction::kScreenshot,
               DlpRulesManager::Level::kReport, 3u);
 }
@@ -313,87 +345,108 @@ class DlpContentManagerReportingBrowserTest
   void TearDownOnMainThread() override {
     DlpContentManagerBrowserTest::TearDownOnMainThread();
     cloned_tab_observer_.reset();
+    test_reporting_.reset();
+    storage_module_.reset();
   }
 
   // Sets up real report queue together with TestStorageModule
   void SetupReportQueue() {
-    const reporting::Destination destination_ =
-        reporting::Destination::UPLOAD_EVENTS;
+    const ::reporting::Destination destination_ =
+        ::reporting::Destination::UPLOAD_EVENTS;
 
     storage_module_ =
-        base::MakeRefCounted<reporting::test::TestStorageModule>();
+        base::MakeRefCounted<::reporting::test::TestStorageModule>();
+
+    test_reporting_ =
+        ::reporting::ReportingClient::TestEnvironment::CreateWithStorageModule(
+            test_storage_module());
 
     policy_check_callback_ =
-        base::BindRepeating(&testing::MockFunction<reporting::Status()>::Call,
+        base::BindRepeating(&testing::MockFunction<::reporting::Status()>::Call,
                             base::Unretained(&mocked_policy_check_));
 
     ON_CALL(mocked_policy_check_, Call())
-        .WillByDefault(testing::Return(reporting::Status::StatusOK()));
+        .WillByDefault(testing::Return(::reporting::Status::StatusOK()));
 
     auto config_result = ::reporting::ReportQueueConfiguration::Create(
-        ::reporting::EventType::kDevice, destination_, policy_check_callback_);
+                             {.event_type = ::reporting::EventType::kDevice,
+                              .destination = destination_})
+                             .SetPolicyCheckCallback(policy_check_callback_)
+                             .Build();
 
-    ASSERT_TRUE(config_result.ok());
+    ASSERT_TRUE(config_result.has_value());
 
     // Create a report queue with the test storage module, and attach it
     // to an actual speculative report queue so we can override the one used in
     // |DlpReportingManager| by default.
-    reporting::test::TestEvent<
-        reporting::StatusOr<std::unique_ptr<reporting::ReportQueue>>>
+    ::reporting::test::TestEvent<
+        ::reporting::StatusOr<std::unique_ptr<::reporting::ReportQueue>>>
         report_queue_event;
-    reporting::ReportQueueImpl::Create(std::move(config_result.ValueOrDie()),
-                                       storage_module_,
-                                       report_queue_event.cb());
+    ::reporting::ReportQueueImpl::Create(std::move(config_result.value()),
+                                         storage_module_,
+                                         report_queue_event.cb());
     auto report_queue_result = report_queue_event.result();
 
-    ASSERT_TRUE(report_queue_result.ok());
+    ASSERT_TRUE(report_queue_result.has_value());
 
     auto speculative_report_queue =
-        ::reporting::SpeculativeReportQueueImpl::Create();
+        ::reporting::SpeculativeReportQueueImpl::Create(
+            {.destination = destination_});
     auto attach_queue_cb =
         speculative_report_queue->PrepareToAttachActualQueue();
 
     helper_->GetReportingManager()->SetReportQueueForTest(
         std::move(speculative_report_queue));
-    std::move(attach_queue_cb).Run(std::move(report_queue_result.ValueOrDie()));
+    std::move(attach_queue_cb).Run(std::move(report_queue_result.value()));
 
     // Wait until the speculative report queue is initialized with the stubbed
     // report queue posted to its internal task runner
     base::ThreadPoolInstance::Get()->FlushForTesting();
   }
 
-  reporting::test::TestStorageModule* test_storage_module() const {
-    reporting::test::TestStorageModule* test_storage_module =
-        google::protobuf::down_cast<reporting::test::TestStorageModule*>(
+  ::reporting::test::TestStorageModule* test_storage_module() const {
+    ::reporting::test::TestStorageModule* test_storage_module =
+        static_cast<::reporting::test::TestStorageModule*>(
             storage_module_.get());
     DCHECK(test_storage_module);
     return test_storage_module;
   }
 
-  void CheckRecord(DlpPolicyEvent expectedEvent, reporting::Record record) {
+  void CheckRecord(DlpPolicyEvent expectedEvent,
+                   base::OnceClosure done_closure,
+                   ::reporting::Record record) {
     DlpPolicyEvent event;
     EXPECT_TRUE(event.ParseFromString(record.data()));
-    EXPECT_EQ(event.source().url(), kSrcPattern);
-    EXPECT_THAT(event, IsDlpPolicyEvent(expectedEvent));
+    EXPECT_EQ(event.source().url(), GURL(kExampleUrl).spec());
+    EXPECT_EQ(event.triggered_rule_name(), kRuleName);
+    EXPECT_EQ(event.triggered_rule_id(), kRuleId);
+    EXPECT_THAT(event, data_controls::IsDlpPolicyEvent(expectedEvent));
+    std::move(done_closure).Run();
   }
 
   // Sets an action to execute when an event arrives to the report queue storage
   // module.
-  void SetAddRecordCheck(DlpPolicyEvent expectedEvent, int times) {
-    // TODO(1290312): Change to [=, this] when chrome code base is updated to
-    // C++20.
+  void SetAddRecordCheck(DlpPolicyEvent expectedEvent,
+                         int times,
+                         base::test::TestFuture<void>& future) {
+    base::RepeatingClosure barrier_closure =
+        base::BarrierClosure(times, future.GetSequenceBoundCallback());
+
+    // `barrier_closure` must be captured by copy in the lambda, and then copied
+    // again into the posted task, so that its shared state doesn't go out of
+    // scope or get consumed by the task.
     EXPECT_CALL(*test_storage_module(), AddRecord)
         .Times(times)
         .WillRepeatedly(testing::WithArgs<1, 2>(testing::Invoke(
-            [=](reporting::Record record,
-                base::OnceCallback<void(reporting::Status)> callback) {
+            [=, this](::reporting::Record record,
+                      base::OnceCallback<void(::reporting::Status)> callback) {
               content::GetUIThreadTaskRunner({})->PostTask(
                   FROM_HERE,
                   base::BindOnce(
                       &DlpContentManagerReportingBrowserTest::CheckRecord,
                       base::Unretained(this), std::move(expectedEvent),
-                      std::move(record)));
-              std::move(callback).Run(reporting::Status::StatusOK());
+                      barrier_closure, std::move(record)));
+              std::move(callback).Run(::reporting::Status::StatusOK());
             })));
   }
 
@@ -406,14 +459,10 @@ class DlpContentManagerReportingBrowserTest
   void StartPrint(
       printing::TestPrintViewManagerForRequestPreview* print_manager,
       content::WebContents* web_contents) {
-    base::RunLoop run_loop;
-    print_manager->set_quit_closure(run_loop.QuitClosure());
-
-    printing::StartPrint(web_contents,
-                         /*print_renderer=*/mojo::NullAssociatedRemote(),
-                         /*print_preview_disabled=*/false,
-                         /*has_selection=*/false);
-    run_loop.Run();
+    base::test::TestFuture<void> future;
+    print_manager->set_quit_closure(future.GetCallback());
+    printing::test::StartPrint(web_contents);
+    EXPECT_TRUE(future.Wait());
   }
 
  protected:
@@ -447,32 +496,28 @@ class DlpContentManagerReportingBrowserTest
     return MockPrintManager::FromWebContents(web_contents);
   }
 
-  scoped_refptr<reporting::StorageModuleInterface> storage_module_;
-  testing::NiceMock<testing::MockFunction<reporting::Status()>>
+  scoped_refptr<::reporting::StorageModuleInterface> storage_module_;
+  testing::NiceMock<testing::MockFunction<::reporting::Status()>>
       mocked_policy_check_;
-  reporting::ReportQueueConfiguration::PolicyCheckCallback
+  ::reporting::ReportQueueConfiguration::PolicyCheckCallback
       policy_check_callback_;
   std::unique_ptr<printing::TestPrintPreviewDialogClonedObserver>
       cloned_tab_observer_;
 };
 
-// TODO(crbug.com/1291074): Flaky on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_PrintingRestricted DISABLED_PrintingRestricted
-#else
-#define MAYBE_PrintingRestricted PrintingRestricted
-#endif
 IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
-                       MAYBE_PrintingRestricted) {
+                       PrintingRestricted) {
   // Set up mock rules manager.
   SetupDlpRulesManager();
   // Set up real report queue.
   SetupReportQueue();
   // Sets an action to execute when an event arrives to a storage module.
+  base::test::TestFuture<void> record_check_future;
   SetAddRecordCheck(
-      CreateDlpPolicyEvent(kSrcPattern, DlpRulesManager::Restriction::kPrinting,
-                           DlpRulesManager::Level::kBlock),
-      /*times=*/2);
+      CreateDlpPolicyEvent(GURL(kExampleUrl).spec(),
+                           DlpRulesManager::Restriction::kPrinting, kRuleName,
+                           kRuleId, DlpRulesManager::Level::kBlock),
+      /*times=*/2, record_check_future);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kExampleUrl)));
   content::WebContents* web_contents =
@@ -481,7 +526,7 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   NotificationDisplayServiceTester display_service_tester(browser()->profile());
 
   // Set up the mocks for directly calling CheckPrintingRestriction().
-  base::MockCallback<OnDlpRestrictionCheckedCallback> cb;
+  base::MockCallback<WarningCallback> cb;
   testing::InSequence s;
   EXPECT_CALL(cb, Run(true)).Times(1);
   EXPECT_CALL(cb, Run(false)).Times(1);
@@ -507,22 +552,21 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   // Check for notification about printing restriction.
   EXPECT_TRUE(
       display_service_tester.GetNotification(kPrintBlockedNotificationId));
+
+  // Wait for the recording service to receive reports.
+  EXPECT_TRUE(record_check_future.Wait());
 }
 
-// TODO(crbug.com/1291074): Flaky on ChromeOS Lacros.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_PrintingReported DISABLED_PrintingReported
-#else
-#define MAYBE_PrintingReported PrintingReported
-#endif
 IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
-                       MAYBE_PrintingReported) {
+                       PrintingReported) {
   SetupDlpRulesManager();
   SetupReportQueue();
+  base::test::TestFuture<void> record_check_future;
   SetAddRecordCheck(
-      CreateDlpPolicyEvent(kSrcPattern, DlpRulesManager::Restriction::kPrinting,
-                           DlpRulesManager::Level::kReport),
-      /*times=*/2);
+      CreateDlpPolicyEvent(GURL(kExampleUrl).spec(),
+                           DlpRulesManager::Restriction::kPrinting, kRuleName,
+                           kRuleId, DlpRulesManager::Level::kReport),
+      /*times=*/2, record_check_future);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kExampleUrl)));
   content::WebContents* web_contents =
@@ -534,7 +578,7 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   helper_->ChangeConfidentiality(web_contents, kPrintReported);
   // Printing should be reported, but still allowed whether we call
   // CheckPrintingRestriction() directly or indirectly.
-  base::MockCallback<OnDlpRestrictionCheckedCallback> cb;
+  base::MockCallback<WarningCallback> cb;
   EXPECT_CALL(cb, Run(true)).Times(1);
   helper_->GetContentManager()->CheckPrintingRestriction(
       web_contents, web_contents->GetPrimaryMainFrame()->GetGlobalId(),
@@ -547,16 +591,12 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
 
   EXPECT_FALSE(
       display_service_tester.GetNotification(kPrintBlockedNotificationId));
+
+  // Wait for the recording service to receive reports.
+  EXPECT_TRUE(record_check_future.Wait());
 }
 
-// Test is flaky on Lacros: https://crbug.com/1344827
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_PrintingWarned DISABLED_PrintingWarned
-#else
-#define MAYBE_PrintingWarned PrintingWarned
-#endif
-IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
-                       MAYBE_PrintingWarned) {
+IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest, PrintingWarned) {
   SetupDlpRulesManager();
   SetupReportQueue();
   NotificationDisplayServiceTester display_service_tester(browser()->profile());
@@ -568,10 +608,12 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   // Set up printing restriction.
   helper_->ChangeConfidentiality(web_contents, kPrintWarned);
 
+  base::test::TestFuture<void> record_check_future;
   SetAddRecordCheck(
-      CreateDlpPolicyEvent(kSrcPattern, DlpRulesManager::Restriction::kPrinting,
-                           DlpRulesManager::Level::kWarn),
-      /*times=*/1);
+      CreateDlpPolicyEvent(GURL(kExampleUrl).spec(),
+                           DlpRulesManager::Restriction::kPrinting, kRuleName,
+                           kRuleId, DlpRulesManager::Level::kWarn),
+      /*times=*/1, record_check_future);
 
   MockPrintManager* print_manager = GetPrintManager(web_contents);
   testing::InSequence s;
@@ -586,37 +628,45 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   // There should be no notification about printing restriction.
   EXPECT_FALSE(
       display_service_tester.GetNotification(kPrintBlockedNotificationId));
+
+  // Wait for the recording service to receive reports.
+  EXPECT_TRUE(record_check_future.Wait());
   EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(test_storage_module()));
 
+  record_check_future.Clear();
   SetAddRecordCheck(
-      CreateDlpPolicyEvent(kSrcPattern, DlpRulesManager::Restriction::kPrinting,
-                           DlpRulesManager::Level::kWarn),
-      /*times=*/1);
+      CreateDlpPolicyEvent(GURL(kExampleUrl).spec(),
+                           DlpRulesManager::Restriction::kPrinting, kRuleName,
+                           kRuleId, DlpRulesManager::Level::kWarn),
+      /*times=*/1, record_check_future);
 
   // Attempt to print again.
   StartPrint(print_manager, web_contents);
   EXPECT_EQ(helper_->ActiveWarningDialogsCount(), 1);
+
+  // Wait for the recording service to receive reports.
+  EXPECT_TRUE(record_check_future.Wait());
   EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(test_storage_module()));
 
-  SetAddRecordCheck(CreateDlpPolicyWarningProceededEvent(
-                        kSrcPattern, DlpRulesManager::Restriction::kPrinting),
-                    /*times=*/1);
+  record_check_future.Clear();
+  SetAddRecordCheck(
+      CreateDlpPolicyWarningProceededEvent(
+          GURL(kExampleUrl).spec(), DlpRulesManager::Restriction::kPrinting,
+          kRuleName, kRuleId),
+      /*times=*/1, record_check_future);
   EXPECT_CALL(*print_manager, PrintPreviewAllowedForTesting()).Times(1);
 
   // Hit Enter to "Print anyway".
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
                                               false, false, false));
   EXPECT_EQ(helper_->ActiveWarningDialogsCount(), 0);
+
+  // Wait for the recording service to receive reports.
+  EXPECT_TRUE(record_check_future.Wait());
 }
 
-// Test is flaky on Lacros: https://crbug.com/1344827
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_TabShareWarnedDuringAllowed DISABLED_TabShareWarnedDuringAllowed
-#else
-#define MAYBE_TabShareWarnedDuringAllowed TabShareWarnedDuringAllowed
-#endif
 IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
-                       MAYBE_TabShareWarnedDuringAllowed) {
+                       TabShareWarnedDuringAllowed) {
   SetupReporting();
   NotificationDisplayServiceTester display_service_tester(browser()->profile());
 
@@ -627,7 +677,7 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
       content::DesktopMediaID::TYPE_WEB_CONTENTS,
       content::DesktopMediaID::kNullId,
       content::WebContentsMediaCaptureId(
-          web_contents->GetPrimaryMainFrame()->GetProcess()->GetID(),
+          web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
           web_contents->GetPrimaryMainFrame()->GetRoutingID()));
 
   DlpContentManager* manager = helper_->GetContentManager();
@@ -644,8 +694,8 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
   EXPECT_CALL(source_cb, Run).Times(1);
   // Although the share should be paused and resumed, DLP will only call
   // state_change_cb_ once to pause it. When it's supposed to be resumed, it
-  // will call source_cb which also resumes the share after a successful source
-  // change.
+  // will call source_cb only first and resume only the new stream once
+  // notified.
   EXPECT_CALL(state_change_cb,
               Run(testing::_, blink::mojom::MediaStreamStateChange::PLAY))
       .Times(0);
@@ -665,9 +715,12 @@ IN_PROC_BROWSER_TEST_F(DlpContentManagerReportingBrowserTest,
       /*shift=*/false, /*alt=*/false, /*command=*/false));
   EXPECT_EQ(helper_->ActiveWarningDialogsCount(), 0);
   EXPECT_EQ(events_.size(), 2u);
-  EXPECT_THAT(events_[1],
-              IsDlpPolicyEvent(CreateDlpPolicyWarningProceededEvent(
-                  kSrcPattern, DlpRulesManager::Restriction::kScreenShare)));
+  EXPECT_THAT(
+      events_[1],
+      data_controls::IsDlpPolicyEvent(
+          data_controls::CreateDlpPolicyWarningProceededEvent(
+              GURL(kExampleUrl).spec(),
+              DlpRulesManager::Restriction::kScreenShare, kRuleName, kRuleId)));
 
   // The contents should already be cached as allowed by the user, so this
   // should not trigger a new warning.

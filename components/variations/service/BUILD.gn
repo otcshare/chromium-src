@@ -33,12 +33,17 @@ buildflag_header("buildflags") {
 
 static_library("service") {
   sources = [
+    "google_groups_manager.cc",
+    "google_groups_manager.h",
+    "google_groups_manager_prefs.h",
+    "limited_entropy_randomization.cc",
+    "limited_entropy_randomization.h",
     "safe_seed_manager.cc",
     "safe_seed_manager.h",
-    "ui_string_overrider.cc",
-    "ui_string_overrider.h",
     "variations_field_trial_creator.cc",
     "variations_field_trial_creator.h",
+    "variations_network_clock.cc",
+    "variations_network_clock.h",
     "variations_service.cc",
     "variations_service.h",
     "variations_service_client.cc",
@@ -47,17 +52,22 @@ static_library("service") {
     "variations_service_utils.h",
   ]
 
+  public_deps = [ "//base" ]
   deps = [
     ":buildflags",
-    "//base",
+    "//base:build_time",
     "//build:branding_buildflags",
-    "//build:chromeos_buildflags",
+    "//build/config/chromebox_for_meetings:buildflags",
+    "//components/country_codes",
     "//components/encrypted_messages",
+    "//components/keyed_service/core",
     "//components/language/core/browser",
     "//components/metrics",
     "//components/network_time",
+    "//components/network_time/time_tracker",
     "//components/pref_registry",
     "//components/prefs",
+    "//components/sync/service",
     "//components/variations",
     "//components/variations/field_trial_config",
     "//components/variations/proto",
@@ -72,9 +82,11 @@ static_library("service") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "google_groups_manager_unittest.cc",
+    "limited_entropy_randomization_unittest.cc",
     "safe_seed_manager_unittest.cc",
-    "ui_string_overrider_unittest.cc",
     "variations_field_trial_creator_unittest.cc",
+    "variations_network_clock_unittest.cc",
     "variations_service_unittest.cc",
     "variations_service_utils_unittest.cc",
   ]
@@ -83,11 +95,15 @@ source_set("unit_tests") {
     ":buildflags",
     ":service",
     "//base",
+    "//base:build_time",
     "//base/test:test_support",
     "//build:branding_buildflags",
     "//components/metrics",
     "//components/metrics:test_support",
+    "//components/network_time",
     "//components/prefs:test_support",
+    "//components/sync:test_support",
+    "//components/sync_preferences:test_support",
     "//components/variations",
     "//components/variations:test_support",
     "//components/variations/field_trial_config",

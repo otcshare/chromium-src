@@ -10,10 +10,12 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/stringprintf.h"
+#include "base/syslog_logging.h"
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -33,7 +35,8 @@
 namespace ash {
 
 PasswordUpdateFlow::PasswordUpdateFlow()
-    : auth_performer_(UserDataAuthClient::Get()) {}
+    : auth_performer_(UserDataAuthClient::Get()),
+      auth_factor_editor_(UserDataAuthClient::Get()) {}
 
 PasswordUpdateFlow::~PasswordUpdateFlow() = default;
 
@@ -43,7 +46,9 @@ void PasswordUpdateFlow::Start(std::unique_ptr<UserContext> user_context,
                                AuthErrorCallback error_callback) {
   DCHECK(user_context);
   DCHECK(user_context->GetAuthSessionId().empty());
-  LOGIN_LOG(USER) << "Attempting to update user password";
+  const std::string msg = "(LOGIN) Attempting to update user password";
+  SYSLOG(INFO) << msg;
+  LOGIN_LOG(USER) << msg;
 
   bool is_ephemeral_user =
       user_manager::UserManager::Get()->IsUserCryptohomeDataEphemeral(
@@ -62,30 +67,25 @@ void PasswordUpdateFlow::ContinueWithAuthSession(
     AuthErrorCallback error_callback,
     bool user_exists,
     std::unique_ptr<UserContext> user_context,
-    absl::optional<AuthenticationError> error) {
+    std::optional<AuthenticationError> error) {
   DCHECK(user_context);
 
   if (error.has_value()) {
-    LOGIN_LOG(ERROR) << "Error starting AuthSession for key migration "
-                     << error.value().get_cryptohome_code();
+    const std::string error_message = base::StringPrintf(
+        "(LOGIN) Error starting AuthSession for key migration %d",
+        error.value().get_cryptohome_code());
+    LOGIN_LOG(ERROR) << error_message;
+    SYSLOG(INFO) << error_message;
     std::move(error_callback).Run(std::move(user_context), error.value());
     return;
   }
   DCHECK(user_exists);
   DCHECK(!user_context->GetAuthSessionId().empty());
 
-  std::string key_label;
-  if (features::IsUseAuthFactorsEnabled()) {
-    auto* password_factor =
-        user_context->GetAuthFactorsData().FindOnlinePasswordFactor();
-    DCHECK(password_factor);
-    key_label = password_factor->ref().label().value();
-  } else {
-    const cryptohome::KeyDefinition* password_key_def =
-        user_context->GetAuthFactorsData().FindOnlinePasswordKey();
-    DCHECK(password_key_def);
-    key_label = password_key_def->label.value();
-  }
+  auto* password_factor =
+      user_context->GetAuthFactorsData().FindOnlinePasswordFactor();
+  DCHECK(password_factor);
+  std::string key_label = password_factor->ref().label().value();
 
   if (!user_context->HasReplacementKey()) {
     // Make sure that the key has correct label.

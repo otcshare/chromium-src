@@ -157,13 +157,14 @@ LEGACY_DEVICE_POLICY_NAME_OFFENDERS = [
 LEGACY_USER_POLICY_NAME_OFFENDERS = [
     'DeviceLocalAccountManagedSessionEnabled',
     'DeviceAttributesAllowedForOrigins',
+    'DeviceAttributesBlockedForOrigins',
     'DevicePowerAdaptiveChargingEnabled',
 ]
 
 # List of policies where not all properties are required to be presented in the
 # example value. This could be useful e.g. in case of mutually exclusive fields.
 # See crbug.com/1068257 for the details.
-OPTIONAL_PROPERTIES_POLICIES_ALLOWLIST = ['ProxySettings']
+OPTIONAL_PROPERTIES_POLICIES_ALLOWLIST = ['DataControlsRules', 'ProxySettings']
 
 # Each policy must have a description message shorter than 4096 characters in
 # all its translations (ADM format limitation). However, translations of the
@@ -233,9 +234,6 @@ CHROME_STAR_PLATFORMS = ['chrome.win', 'chrome.mac', 'chrome.linux']
 
 # List of supported metapolicy types.
 METAPOLICY_TYPES = ['merge', 'precedence']
-
-# List of supported chrome os management tags.
-SUPPORTED_CHROME_OS_MANAGEMENT = ['google_cloud', 'active_directory']
 
 # Helper function to determine if a given type defines a key in a dictionary
 # that is used to condition certain backwards compatibility checks.
@@ -315,7 +313,7 @@ def _IsAllowedDevicePolicyPrefix(name):
 
 class PolicyTypeProvider():
   def __init__(self):
-    # TODO(crbug.com/1171839): Persist the deduced schema types into a separate
+    # TODO(crbug.com/40166337): Persist the deduced schema types into a separate
     # file to further speed up the presubmit scripts.
     self._policy_types = {}
     # List of policies which are type 'dict' but should be type 'external'
@@ -329,7 +327,7 @@ class PolicyTypeProvider():
 
     Args:
       policy (dict): The policy to get the type for.
-      schemas_by_id (dict): Maps schema id to a a schema.
+      schemas_by_id (dict): Maps schema id to a schema.
 
     '''
     # Policies may have the same name as the groups they belong to, so caching
@@ -357,8 +355,9 @@ class PolicyTypeProvider():
     if '$ref' in schema:
       if not schema['$ref'] in schemas_by_id:
         raise NotImplementedError(
-            'Policy %s uses unknow $ref %s in schema' % policy['name'],
-            schema['$ref'])
+            'Policy %s uses unknown $ref %s in schema. If you are '
+            'removing a $ref that is no longer used, please remove it in a '
+            'separate CL.' % (policy['name'], schema['$ref']))
       schema = schemas_by_id[schema['$ref']]
 
     schema_type = schema.get('type')
@@ -403,7 +402,6 @@ class PolicyTemplateChecker(object):
   def __init__(self):
     self.num_policies = 0
     self.num_groups = 0
-    self.num_policies_in_groups = 0
     self.options = None
     self.features = []
     self.schema_validator = SchemaValidator()
@@ -569,7 +567,7 @@ class PolicyTemplateChecker(object):
       return
 
     policy_type_legacy = policy.get('type')
-    # TODO(crbug.com/1310258): Remove this check once 'type' is removed from
+    # TODO(crbug.com/40830265): Remove this check once 'type' is removed from
     # policy_templates.
     if policy_type != policy_type_legacy:
       self._PolicyError(
@@ -646,11 +644,7 @@ class PolicyTemplateChecker(object):
         and not self._SupportedPolicy(policy, current_version)):
       return
 
-    # Only validate the default when present.
-    # TODO(crbug.com/1139046): Always validate the default for types that
-    # should have it.
-    if 'default' not in policy:
-      return
+    # Validate the default for types that should have it.
     policy_type = self.policy_type_provider.GetPolicyType(policy)
     default = policy.get('default')
     if policy_type == 'int':
@@ -728,8 +722,8 @@ class PolicyTemplateChecker(object):
       # try and ensure the items are still described in the descriptions.
       value_to_names = {
           None: {'none', 'unset', 'not set', 'not configured'},
-          True: {'true', 'enable'},
-          False: {'false', 'disable'},
+          True: {'true', 'enable', 'allowed'},
+          False: {'false', 'disable', 'not allowed', 'disallowed'},
       }
       if policy['name'] not in LEGACY_NO_ENABLE_DISABLE_DESC:
         for value in required_values:
@@ -828,11 +822,29 @@ class PolicyTemplateChecker(object):
 
     return False
 
-  def _CheckPolicyDefinition(self,
-                             policy,
-                             current_version,
-                             schemas_by_id,
-                             is_in_group=False):
+  # Checks if the policy supported on a specific platform via 'supported_on'
+  # field. Does not take into account the 'future_on' field.
+  def _SupportedOnPlatformPolicy(self, policy, current_version, platform):
+    for s in policy.get('supported_on', []):
+      (
+          supported_on_platform,
+          supported_on_from,
+          supported_on_to,
+      ) = _GetSupportedVersionPlatformAndRange(s)
+
+      # Skip other platforms.
+      if supported_on_platform != platform:
+        continue
+
+      # If supported_on_to isn't given, this policy is still supported.
+      if supported_on_to is None:
+        return True
+
+      return current_version <= int(supported_on_to)
+
+    return False
+
+  def _CheckPolicyDefinition(self, policy, current_version, schemas_by_id):
     if not isinstance(policy, dict):
       self._Error('Each policy must be a dictionary.', 'policy', None, policy)
       return
@@ -866,7 +878,8 @@ class PolicyTemplateChecker(object):
           'default_for_managed_devices_doc_only',
           'default_policy_level',
           'arc_support',
-          'supported_chrome_os_management',
+          'generate_device_proto',
+          'sensitive',
       ):
         self._PolicyError(f'Unknown key: {key}', policy, key)
 
@@ -902,11 +915,13 @@ class PolicyTemplateChecker(object):
     # If 'arc_support' is present, it must be a string.
     self._CheckContains(policy, 'arc_support', str, True)
 
-    if policy_type == 'group':
-      # Groups must not be nested.
-      if is_in_group:
-        self._Error('Policy groups must not be nested.', 'policy', policy)
+    # If 'generate_device_proto' is present, it must be a bool.
+    self._CheckContains(policy, 'generate_device_proto', bool, True)
 
+    # If 'sensitive' is present, it must be a bool.
+    self._CheckContains(policy, 'sensitive', bool, True)
+
+    if policy_type == 'group':
       # Each policy group must have a list of policies.
       policies = self._CheckContains(policy, 'policies', list)
 
@@ -932,7 +947,7 @@ class PolicyTemplateChecker(object):
       self._CheckContains(policy, 'tags', list)
 
       # 'schema' is the new 'type'.
-      # TODO(crbug.com/1310258): remove 'type' from policy_templates and
+      # TODO(crbug.com/40830265): remove 'type' from policy_templates and
       # all supporting files (including this one), and exclusively use 'schema'.
       self._CheckPolicySchema(policy, policy_type, schemas_by_id)
 
@@ -968,11 +983,11 @@ class PolicyTemplateChecker(object):
         if (not self._SupportedPolicy(policy, current_version)
             and not policy.get('deprecated', False)):
           self._PolicyError(
-              "Marked as no longer supported, but isn't marked as "
-              '"deprecated.\n'
-              '  Unsupported policies must be marked as "deprecated": True. '
-              'You may see this error after branch point. Please fix the'
-              f' issue and cc the policy owners.', policy, 'supported_on')
+              'Marked as no longer supported, but is not marked as '
+              'deprecated.\n'
+              '  Unsupported policies must be marked as `deprecated: true`. '
+              'You may see this error after branch point. Please fix the '
+              'issue and cc the policy owners.', policy, 'supported_on')
 
       supported_platforms = ExpandChromeStar(supported_platforms)
       future_on = ExpandChromeStar(
@@ -1050,6 +1065,13 @@ class PolicyTemplateChecker(object):
         self._PolicyError(
             '"per_profile" attribute is set with device_only=True', policy,
             'features')
+
+      # 'generate_device_proto' can only be present on 'device_only' policies.
+      if (not policy.get('device_only', False)
+          and 'generate_device_proto' in policy):
+        self._PolicyError(
+            'generate_device_proto must only be set on a policy that is '
+            'device_only')
 
       # If 'device only' policy is on, 'default_for_enterprise_users' shouldn't
       # exist.
@@ -1144,6 +1166,13 @@ class PolicyTemplateChecker(object):
                                           optional=True,
                                           container_name='features')
 
+      # 'user_only' feature must be an optional boolean flag.
+      user_only = self._CheckContains(features,
+                                      'user_only',
+                                      bool,
+                                      optional=True,
+                                      container_name='features')
+
       # 'private' feature must be an optional boolean flag.
       is_unlisted = self._CheckContains(features,
                                         'unlisted',
@@ -1167,35 +1196,14 @@ class PolicyTemplateChecker(object):
             '"cloud_only" and "platfrom_only" are true at the same time.',
             policy, 'features')
 
+      if user_only and not features.get('per_profile', False):
+        self._PolicyError('"user_only" is used by non per_profile policy.',
+                          policy, 'features')
+
       if is_unlisted and not cloud_only:
         self._PolicyError('"unlisted" is used by non cloud only policy.',
                           policy, 'features')
 
-
-      # Chrome OS policies may have a non-empty supported_chrome_os_management
-      # list with either 'active_directory' or 'google_cloud' or both.
-      supported_chrome_os_management = self._CheckContains(
-          policy, 'supported_chrome_os_management', list, True)
-      if supported_chrome_os_management is not None:
-        # Must be on Chrome OS.
-        if (supported_on is not None
-            and not any('chrome_os' == str
-                        for str in (supported_platforms +
-                                    (future_on if future_on else [])))):
-          self._PolicyError(
-              '"supported_chrome_os_management" is used for policy that does '
-              'not support Chrome OS.', policy, 'supported_on')
-        # Must be non-empty.
-        if len(supported_chrome_os_management) == 0:
-          self._PolicyError('"supported_chrome_os_management" is empty', policy,
-                            'supported_chrome_os_management')
-        # Must be either 'active_directory' or 'google_cloud'.
-        if (any(str not in SUPPORTED_CHROME_OS_MANAGEMENT
-                for str in supported_chrome_os_management)):
-          self._PolicyError(
-              '"supported_chrome_os_management" contains supported entry.\n'
-              f'Please use one of {SUPPORTED_CHROME_OS_MANAGEMENT}', policy,
-              'supported_chrome_os_management')
 
       # Each policy must have an 'example_value' of appropriate type.
       self._CheckContains(policy, 'example_value',
@@ -1235,8 +1243,6 @@ class PolicyTemplateChecker(object):
 
       # Statistics.
       self.num_policies += 1
-      if is_in_group:
-        self.num_policies_in_groups += 1
 
       self._CheckItems(policy, current_version)
 
@@ -1398,7 +1404,8 @@ class PolicyTemplateChecker(object):
           '\'%s\' which is not allowed.' %
           (current_schema_key, str(old_schema_value), str(new_schema_value)))
 
-  def _CheckSchemasAreCompatible(self, schema_key_path, old_schema, new_schema):
+  def _CheckSchemasAreCompatible(self, schema_key_path, old_schema, new_schema,
+                                 schemas_by_id):
     current_schema_key = '/'.join(schema_key_path)
     '''
     Checks if two given schemas are compatible with each other.
@@ -1410,7 +1417,7 @@ class PolicyTemplateChecker(object):
       policy schema that we are processing represented as a list of paths.
     |old_schema|: The full contents of the schema as found in the original
       policy templates file.
-    |new_schema|: The full contents of the new schema as found  (if any) in the
+    |new_schema|: The full contents of the new schema as found (if any) in the
       modified policy templates file.
     '''
 
@@ -1434,15 +1441,24 @@ class PolicyTemplateChecker(object):
           'Policy schema path \'%s\' in new policy is of type \'%s\', it must '
           'be dict type.' % (current_schema_key, type(new_schema)))
 
-    # Both schemas must either have a 'type' key or not. This covers the case
-    # where the schema is merely a '$ref'
+    # Both schemas should either have a 'type' key or be '$ref' schemas. If this
+    # is not the case, it is possible that a schema that previously had a type
+    # is now converted into a '$ref' schema, or vice versa. In this case we want
+    # to expand the '$ref' and see if the before and after are still compatible.
     if ('type' in old_schema) != ('type' in new_schema):
-      self._SchemaCompatibleError(
-          'Mismatch in type definition for old schema and new schema for '
-          'policy schema path \'%s\'. One schema defines a type while the other'
-          ' does not.' %
-          (current_schema_key, old_schema['type'], new_schema['type']))
-      return
+      if '$ref' in old_schema:
+        if not old_schema['$ref'] in schemas_by_id:
+          raise NotImplementedError(
+              'Policy %s uses unknown $ref %s in old_schema' %
+              (policy['name'], old_schema['$ref']))
+        old_schema = schemas_by_id[old_schema['$ref']]
+
+      if '$ref' in new_schema:
+        if not new_schema['$ref'] in schemas_by_id:
+          raise NotImplementedError(
+              'Policy %s uses unknown $ref %s in new_schema' %
+              (policy['name'], new_schema['$ref']))
+        new_schema = schemas_by_id[new_schema['$ref']]
 
     # For schemas that define a 'type', make sure they match.
     schema_type = None
@@ -1500,7 +1516,7 @@ class PolicyTemplateChecker(object):
           self._CheckSchemasAreCompatible(
               schema_key_path + [old_key, sub_key], old_value[sub_key],
               new_schema_value[sub_key]
-              if sub_key in new_schema_value else None)
+              if sub_key in new_schema_value else None, schemas_by_id)
       # For types that have a key that themselves define a schema (e.g. 'items'
       # schema in an 'array' type), we need to validate the schema defined in
       # the key.
@@ -1508,7 +1524,8 @@ class PolicyTemplateChecker(object):
                                            KEYS_DEFINING_SCHEMAS_PER_TYPE):
         self._CheckSchemasAreCompatible(
             schema_key_path + [old_key], old_value,
-            new_schema[old_key] if old_key in new_schema else None)
+            new_schema[old_key] if old_key in new_schema else None,
+            schemas_by_id)
       # For any other key, we just check if the two values of the key are
       # compatible with each other, possibly allowing removal of entries in
       # array values if needed (e.g. removing 'required' fields makes the schema
@@ -1529,39 +1546,94 @@ class PolicyTemplateChecker(object):
           'Key \'%s\' was added to policy schema path \'%s\' in new schema.' %
           (new_key, current_schema_key))
 
+  def SetFeatures(self, known_features):
+    '''
+      'known_features' is a list of features that we can find in the feature
+      list for policies.
+    '''
+    self.features = known_features
+
+  def CheckPolicyDefinitions(self, policy_list, current_version, schemas_by_id):
+    '''
+      Checks that policy comply to the definitions checks.
+      with the `current_version` and previous versions of the policy.
+      This also check that the policy definition schema matches the expected
+      schema for a policy.
+    '''
+    for policy in policy_list:
+      self._CheckPolicyDefinition(policy, current_version, schemas_by_id)
 
   def CheckModifiedPolicies(self, policy_change_list, current_version,
-                            known_features, schemas_by_id):
+                            schemas_by_id, skip_compatibility_check):
     '''
       Checks that changes made to policies `policy_change_list` are compatible
       with the `current_version` and previous versions of the policy.
       This also check that the policy definition schema matches the expected
       schema for a policy.
-      'known_features' is a list of faetures that we can find in the feature
-      list for policies.
+      'skip_compatibility_check' is a flag used to bypass compatibility checks
+      (use `BYPASS_POLICY_COMPATIBILITY_CHECK=<reason>` in CL description to
+      skip these checks).
       Returns warnings and errors found in the policies.
     '''
-    self.features = known_features
-    modified_policies = [
-        pc['new_policy'] for pc in policy_change_list
-        if pc['new_policy'] is not None
-    ]
-    for policy in modified_policies:
+    for policy_change in policy_change_list:
+      policy = policy_change['new_policy']
+      # Nothing to check if the policy was removed.
+      if policy is None:
+        continue
+
       self._CheckPolicyDefinition(policy, current_version, schemas_by_id)
 
-      self.schema_compatible_errors = []
-      old_schema = None
-      if 'old_policy' in policy:
-        old_schema = policy['old_policy']['schema']
-      new_schema = None
-      if 'new_policy' in policy:
-        new_schema = policy['new_policy']['schema']
+      if skip_compatibility_check:
+        continue
 
-      self._CheckSchemasAreCompatible([policy['name']], old_schema, new_schema)
+      self.schema_compatible_errors = []
+      if policy_change['old_policy'] is not None:
+        old_schema = policy_change['old_policy']['schema']
+        self._CheckSchemasAreCompatible([policy['name']], old_schema,
+                                        policy['schema'], schemas_by_id)
+
       if self.schema_compatible_errors:
         schema_compatible_error_message = '\n  '.join(
             self.schema_compatible_errors)
         self._PolicyError(
-            'Schema compatible errors.\n'
+            'Schema compatible errors. If this is intentional, add '
+            'BYPASS_POLICY_COMPATIBILITY_CHECK=<reason> to your CL '
+            'description.\n'
             f'  {schema_compatible_error_message}', policy)
+
+      # Check that defaults have not changed for a launched policy.
+      if policy_change['old_policy'] is not None:
+        old_policy = policy_change['old_policy']
+        supported_on = self._CheckContains(policy,
+                                           'supported_on',
+                                           list,
+                                           optional=True)
+        for key in [
+            'default', 'default_for_enterprise_users', 'default_policy_level'
+        ]:
+          # Nothing changed.
+          if old_policy.get(key) == policy.get(key):
+            continue
+          if key == 'default':
+            if not supported_on:
+              continue
+            self._Warning(
+                'You seem to change a default value for a launched policy '
+                '\'%s\'. This will certainly break the contract if the policy '
+                'is already supported in the Admin Console. Please consider '
+                'contacting chromium-enterprise@chromium.org for guidance.' %
+                policy['name'])
+            continue
+
+          # Handle default_for_enterprise_users and default_policy_level
+          if self._SupportedOnPlatformPolicy(old_policy, current_version,
+                                             'chrome_os'):
+            self._Warning(
+                'You seem to change defaults for enterprise users on ChromeOS '
+                'for a launched policy \'%s\'. This will certainly break the '
+                ' contract if the policy is already supported in the Admin '
+                'Console. Please consider contacting '
+                'chromium-enterprise@chromium.org for guidance' %
+                policy['name'])
+
     return self.errors, self.warnings

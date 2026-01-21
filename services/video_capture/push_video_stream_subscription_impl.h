@@ -8,7 +8,6 @@
 #include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "services/video_capture/device.h"
 #include "services/video_capture/public/mojom/video_frame_handler.mojom.h"
 #include "services/video_capture/public/mojom/video_source.mojom.h"
@@ -37,10 +36,10 @@ class PushVideoStreamSubscriptionImpl
 
   void SetOnClosedHandler(
       base::OnceCallback<void(base::OnceClosure done_cb)> handler);
-  void SetDevice(Device* device) { device_ = device; }
 
   void OnDeviceStartSucceededWithSettings(
-      const media::VideoCaptureParams& settings);
+      const media::VideoCaptureParams& settings,
+      Device* device);
   void OnDeviceStartFailed(media::VideoCaptureError error);
 
   // mojom::PushVideoStreamSubscription implementation.
@@ -70,7 +69,7 @@ class PushVideoStreamSubscriptionImpl
   const media::VideoCaptureParams requested_settings_;
   mojom::VideoSource::CreatePushSubscriptionCallback creation_callback_;
   const raw_ptr<BroadcastingReceiver> broadcaster_;
-  raw_ptr<Device, DanglingUntriaged> device_;
+  raw_ptr<Device, AcrossTasksDanglingUntriaged> device_;
   Status status_{Status::kCreationCallbackNotYetRun};
 
   // Client id handed out by |broadcaster_| when registering |this| as its

@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as TextUtils from 'devtools/models/text_utils/text_utils.js';
+
 (async function() {
   TestRunner.addResult(`Tests that the content of resources with JSON MIME types can be accessed.`);
   TestRunner.addResult('When loaded by asynchronous XHR requests (Bug 80684) or within iframes/documents.\n');
 
-  await TestRunner.loadTestModule('network_test_runner');
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('network');
 
   NetworkTestRunner.recordNetwork();
@@ -28,7 +32,7 @@
     function step2() {
       var request = lastRequest();
       reportRequest(request);
-      request.requestContent().then(step3);
+      request.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(step3);
     }
 
     function step3({ content, error, isEncoded }) {
@@ -39,7 +43,7 @@
     function step4() {
       var request = lastRequest();
       reportRequest(request);
-      request.requestContent().then(step5);
+      request.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(step5);
     }
 
     function step5({ content, error, isEncoded }) {

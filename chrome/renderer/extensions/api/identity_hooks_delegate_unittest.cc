@@ -6,6 +6,7 @@
 
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/native_extension_bindings_system.h"
@@ -21,20 +22,17 @@ using IdentityHooksDelegateTest = NativeExtensionBindingsSystemUnittest;
 // and promise-based calls getting a response with a single object.
 TEST_F(IdentityHooksDelegateTest, GetAuthToken) {
   // Initialize bindings system.
-  bindings_system()
-      ->api_system()
-      ->GetHooksForAPI("identity")
-      ->SetDelegate(std::make_unique<IdentityHooksDelegate>());
+  bindings_system()->api_system()->RegisterHooksDelegate(
+      "identity", std::make_unique<IdentityHooksDelegate>());
   // Register extension.
   scoped_refptr<const Extension> extension = ExtensionBuilder("testExtension")
-                                                 .SetManifestVersion(3)
-                                                 .AddPermission("identity")
+                                                 .AddAPIPermission("identity")
                                                  .Build();
   RegisterExtension(extension);
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context);
 

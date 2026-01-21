@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/rust/rust_target.gni")
+import("//build/rust/gni_impl/rust_target.gni")
 
 # Defines a Rust static library which can be used by downstream Rust or C++
 # targets. This is a single Rust compilation unit consisting of potentially
@@ -23,23 +23,12 @@ import("//build/rust/rust_target.gni")
 #     discovered source files must match this list. (This is not yet enforced,
 #     but will be.)
 #
-#   epoch (optional)
-#     The major version of the library, which is used to differentiate between
-#     multiple versions of the same library name. This includes all leading 0s
-#     and the first non-zero value in the crate's version. This should be left
-#     as the default, which is "0", for first-party code unless there are
-#     multiple versions of a crate present. For third-party code, the version
-#     epoch (matching the directory it is found in) should be specified.
-#
-#     Examples:
-#       1.0.2 => epoch = "1"
-#       4.2.0 => epoch = "4"
-#       0.2.7 => epoch = "0.2"
-#       0.0.3 => epoch = "0.0.3"
-#
 #   edition (optional)
 #     Edition of the Rust language to be used.
-#     Options are "2015", "2018" and "2021". Defaults to "2021".
+#     Options are "2015", "2018", "2021", and "2024". Defaults to "2024".
+#
+#   allow_unsafe (optional)
+#     Set to true to allow unsafe code in this target. Defaults to false.
 #
 #   configs (optional)
 #     A list of config labels (in the GN meaning) applying to this target.
@@ -60,6 +49,12 @@ import("//build/rust/rust_target.gni")
 #   test_deps (optional)
 #     List of GN targets on which this crate's tests depend, in addition
 #     to deps.
+#
+#   is_gtest_unittests (optional)
+#     Should only be set to true for rlibs of gtest unit tests. This ensures
+#     all objects in the rlib are linked into the final target, rather than
+#     pruning dead code, so that the tests themselves are not discarded by the
+#     linker.
 #
 #   mutually_dependent_target (optional)
 #   mutually_dependent_public_deps (optional)
@@ -115,16 +110,35 @@ import("//build/rust/rust_target.gni")
 #     This will automatically add appropriate dependencies: there's no
 #     need to depend on the cxx crate or any generated bindings.
 #
-#   visibility (optional)
-#   rustflags (optional)
+#   allow_circular_includes_from (optional)
+#     If cxx_bindings is present, this will allow the generated cxx bindings to
+#     include headers from the listed targets. Generally, this should only be
+#     used to include headers from C++ shim libraries that are logically part
+#     of the cxx bindings.
+#
+#     TODO(crbug.com/469057512): this option may be replaced with an equivalent
+#     formulation in the future, which moves the circularity under the hood.
+#
+#   data, testonly, visibility (optional)
+#     Same meaning as in other GN targets.
+#
 #   crate_name (optional)
-#     Per the usual gn meaning for Rust targets.
+#     Discouraged - first-party code should prefer to use the auto-generated,
+#     target-based crate name which is guaranteed to be globally unique (and
+#     still ergonomic to import and use via the `chromium::import!` macro).
 #
 #   inputs (optional)
 #     Additional input files needed for compilation (such as `include!`ed files)
 #
 #   test_inputs (optional)
 #     Same as above but for the unit tests target
+#
+#   rustc_metadata (optional)
+#     Override the metadata identifying the target's version. This allows e.g.
+#     linking otherwise conflicting versions of the same Rust library. The
+#     metadata string will also be appended to the output library names.
+#     Should be used sparingly, since generally we should have one version and
+#     build of each target.
 #
 # Example of usage:
 #
@@ -141,14 +155,62 @@ import("//build/rust/rust_target.gni")
 # This template is intended to serve the same purpose as 'rustc_library'
 # in Fuchsia.
 template("rust_static_library") {
-  exclude_forwards = TESTONLY_AND_VISIBILITY + [ "configs" ]
-  rust_target(target_name) {
-    forward_variables_from(invoker, "*", exclude_forwards)
-    forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
-    if (defined(invoker.configs)) {
-      library_configs = []
-      library_configs = invoker.configs
+  _target_name = target_name
+
+  _configs = []
+  _all_dependent_configs = []
+
+  if (defined(invoker.configs)) {
+    _configs += invoker.configs
+  }
+
+  # TODO(dcheng): Is there any value in allowing rust_shared_library() to also
+  # set `is_gtest_unittest` to true?
+  if (defined(invoker.is_gtest_unittests) && invoker.is_gtest_unittests) {
+    _output_dir = rebase_path(target_out_dir, root_build_dir)
+
+    config("${_target_name}_alwayslink") {
+      # Targets using the #[gtest(...)] proc macro register their tests with
+      # static initializers. A rust library target generates a .rlib, which is
+      # a regular static library with extra metadata. However, if nothing
+      # outside the .rlib references functions in the .rlib—as is often the
+      # case with a target containing only tests—the linker will not pull in
+      # the .rlib into the final test binary at all, so the tests won't run.
+      #
+      # C++ works around this by using source sets and directly passes the .o
+      # files to the linker, but Rust does not have a parallel to this. Instead,
+      # force the linker to always include the whole archive.
+
+      # NOTE: TargetName=>CrateName mangling algorithm should be updated
+      # simultaneously in 3 places: here, //build/rust/rust_target.gni,
+      # //build/rust/chromium_prelude/import_attribute.rs
+      if (defined(invoker.crate_name)) {
+        _crate_name = invoker.crate_name
+      } else {
+        _dir_hash = string_hash(get_label_info(":${_target_name}", "dir"))
+        _crate_name = "${_target_name}_${_dir_hash}"
+      }
+
+      _rlib_path = "${_output_dir}/lib${_crate_name}.rlib"
+      if (current_os == "aix") {
+        # The AIX linker does not implement an option for this.
+      } else if (is_win) {
+        ldflags = [ "/WHOLEARCHIVE:${_rlib_path}" ]
+      } else {
+        ldflags = [ "-LinkWrapper,add-whole-archive=${_rlib_path}" ]
+      }
     }
+    _all_dependent_configs += [ ":${target_name}_alwayslink" ]
+    _configs += [ "//build/rust:is_gtest_unittests" ]
+  }
+
+  rust_target(_target_name) {
+    forward_variables_from(invoker,
+                           "*",
+                           TESTONLY_AND_VISIBILITY + [ "configs" ])
+    forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
+    library_configs = _configs
+    all_dependent_configs = _all_dependent_configs
     target_type = "rust_library"
   }
 }

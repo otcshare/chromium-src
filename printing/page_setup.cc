@@ -5,8 +5,10 @@
 #include "printing/page_setup.h"
 
 #include <algorithm>
+#include <tuple>
 
 #include "base/check_op.h"
+#include "base/strings/stringprintf.h"
 
 namespace printing {
 
@@ -49,6 +51,12 @@ PageMargins::PageMargins(int header,
       top(top),
       bottom(bottom) {}
 
+bool PageMargins::operator==(const PageMargins& other) const {
+  return std::tie(header, footer, left, right, top, bottom) ==
+         std::tie(other.header, other.footer, other.left, other.right,
+                  other.top, other.bottom);
+}
+
 void PageMargins::Clear() {
   header = 0;
   footer = 0;
@@ -58,9 +66,15 @@ void PageMargins::Clear() {
   bottom = 0;
 }
 
-bool PageMargins::Equals(const PageMargins& rhs) const {
-  return header == rhs.header && footer == rhs.footer && left == rhs.left &&
-         top == rhs.top && right == rhs.right && bottom == rhs.bottom;
+std::string PageMargins::ToString() const {
+  return base::StringPrintf(
+      "header=%d, footer=%d, left=%d, right=%d, top=%d, bottom=%d)", header,
+      footer, left, right, top, bottom);
+}
+
+bool PageMargins::IsEmpty() const {
+  return header == 0 && footer == 0 && left == 0 && right == 0 && top == 0 &&
+         bottom == 0;
 }
 
 PageSetup::PageSetup() {
@@ -79,6 +93,16 @@ PageSetup::PageSetup(const gfx::Size& physical_size,
 PageSetup::PageSetup(const PageSetup& other) = default;
 
 PageSetup::~PageSetup() = default;
+
+bool PageSetup::operator==(const PageSetup& other) const {
+  return std::tie(physical_size_, printable_area_, overlay_area_, content_area_,
+                  effective_margins_, requested_margins_, forced_margins_,
+                  text_height_) ==
+         std::tie(other.physical_size_, other.printable_area_,
+                  other.overlay_area_, other.content_area_,
+                  other.effective_margins_, other.requested_margins_,
+                  other.forced_margins_, other.text_height_);
+}
 
 // static
 gfx::Rect PageSetup::GetSymmetricalPrintableArea(
@@ -108,16 +132,6 @@ void PageSetup::Clear() {
   effective_margins_.Clear();
   text_height_ = 0;
   forced_margins_ = false;
-}
-
-bool PageSetup::Equals(const PageSetup& rhs) const {
-  return physical_size_ == rhs.physical_size_ &&
-         printable_area_ == rhs.printable_area_ &&
-         overlay_area_ == rhs.overlay_area_ &&
-         content_area_ == rhs.content_area_ &&
-         effective_margins_.Equals(rhs.effective_margins_) &&
-         requested_margins_.Equals(rhs.requested_margins_) &&
-         text_height_ == rhs.text_height_;
 }
 
 void PageSetup::Init(const gfx::Size& physical_size,

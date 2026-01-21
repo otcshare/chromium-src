@@ -15,14 +15,21 @@ source_set("sockets_udp") {
     "udp_socket_event_dispatcher.h",
   ]
 
-  deps = [
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+    "//extensions/browser:browser_sources",
     "//extensions/browser/api/socket",
     "//extensions/common",
     "//extensions/common/api",
+    "//mojo/public/cpp/bindings",
   ]
 
-  public_deps = [
-    "//content/public/browser",
-    "//extensions/browser:browser_sources",
+  deps = [
+    "//content/public/common",
+    "//net",
+    "//services/network/public/mojom",
   ]
 }

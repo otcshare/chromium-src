@@ -11,8 +11,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/feature_engagement/internal/availability_model.h"
 #include "components/feature_engagement/internal/persistent_availability_store.h"
@@ -37,7 +37,7 @@ class AvailabilityModelImpl : public AvailabilityModel {
   void Initialize(OnInitializedCallback callback,
                   uint32_t current_day) override;
   bool IsReady() const override;
-  absl::optional<uint32_t> GetAvailability(
+  std::optional<uint32_t> GetAvailability(
       const base::Feature& feature) const override;
 
  private:

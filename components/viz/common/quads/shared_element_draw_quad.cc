@@ -27,7 +27,7 @@ void SharedElementDrawQuad::SetNew(const SharedQuadState* shared_quad_state,
   bool needs_blending = true;
   DrawQuad::SetAll(shared_quad_state, DrawQuad::Material::kSharedElement, rect,
                    visible_rect, needs_blending);
-  resource_id = id;
+  element_resource_id = id;
 }
 
 void SharedElementDrawQuad::SetAll(const SharedQuadState* shared_quad_state,
@@ -37,19 +37,19 @@ void SharedElementDrawQuad::SetAll(const SharedQuadState* shared_quad_state,
                                    const ViewTransitionElementResourceId& id) {
   DrawQuad::SetAll(shared_quad_state, DrawQuad::Material::kSharedElement, rect,
                    visible_rect, needs_blending);
-  resource_id = id;
+  element_resource_id = id;
 }
 
 const SharedElementDrawQuad* SharedElementDrawQuad::MaterialCast(
     const DrawQuad* quad) {
-  DCHECK_EQ(quad->material, DrawQuad::Material::kSharedElement);
+  CHECK_EQ(quad->material, DrawQuad::Material::kSharedElement);
   return static_cast<const SharedElementDrawQuad*>(quad);
 }
 
 void SharedElementDrawQuad::ExtendValue(
     base::trace_event::TracedValue* value) const {
   value->SetString("view_transition_element_resource_id",
-                   resource_id.ToString());
+                   element_resource_id.ToString());
 }
 
 }  // namespace viz

@@ -12,27 +12,34 @@
 
 namespace base {
 
-SingleThreadTaskExecutor::SingleThreadTaskExecutor(MessagePumpType type)
-    : SingleThreadTaskExecutor(type, MessagePump::Create(type)) {
+SingleThreadTaskExecutor::SingleThreadTaskExecutor(MessagePumpType type,
+                                                   bool is_main_thread)
+    : SingleThreadTaskExecutor(type,
+                               MessagePump::Create(type),
+                               is_main_thread) {
   DCHECK_NE(type, MessagePumpType::CUSTOM);
 }
 
 SingleThreadTaskExecutor::SingleThreadTaskExecutor(
-    std::unique_ptr<MessagePump> pump)
-    : SingleThreadTaskExecutor(MessagePumpType::CUSTOM, std::move(pump)) {}
+    std::unique_ptr<MessagePump> pump,
+    bool is_main_thread)
+    : SingleThreadTaskExecutor(MessagePumpType::CUSTOM,
+                               std::move(pump),
+                               is_main_thread) {}
 
 SingleThreadTaskExecutor::SingleThreadTaskExecutor(
     MessagePumpType type,
-    std::unique_ptr<MessagePump> pump)
+    std::unique_ptr<MessagePump> pump,
+    bool is_main_thread)
     : sequence_manager_(sequence_manager::CreateUnboundSequenceManager(
           sequence_manager::SequenceManager::Settings::Builder()
               .SetMessagePumpType(type)
+              .SetIsMainThread(is_main_thread)
               .Build())),
       default_task_queue_(
           sequence_manager_->CreateTaskQueue(sequence_manager::TaskQueue::Spec(
               sequence_manager::QueueName::DEFAULT_TQ))),
-      type_(type),
-      simple_task_executor_(task_runner()) {
+      type_(type) {
   sequence_manager_->SetDefaultTaskRunner(task_runner());
   sequence_manager_->BindToMessagePump(std::move(pump));
 }

@@ -7,7 +7,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/quick_pair/common/quick_pair_browser_delegate.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/prefs/pref_service.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 
@@ -17,8 +17,7 @@ const char kFastPairUmaFeatureName[] = "FastPair";
 
 }  // namespace
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 FastPairFeatureUsageMetricsLogger::FastPairFeatureUsageMetricsLogger()
     : feature_usage_metrics_(kFastPairUmaFeatureName, this) {
@@ -43,15 +42,14 @@ bool FastPairFeatureUsageMetricsLogger::IsEligible() const {
   // IsEligible reflects the hardware filtering support on the Chromebook.
   // Devices that do not have hardware filtering support are not eligible for
   // Fast Pair.
-  return features::IsFastPairSoftwareScanningEnabled() ||
-         (bluetooth_adapter_.get() && bluetooth_adapter_->IsPresent() &&
-          bluetooth_adapter_
-                  ->GetLowEnergyScanSessionHardwareOffloadingStatus() ==
-              device::BluetoothAdapter::
-                  LowEnergyScanSessionHardwareOffloadingStatus::kSupported);
+  return bluetooth_adapter_.get() && bluetooth_adapter_->IsPresent() &&
+         bluetooth_adapter_
+                 ->GetLowEnergyScanSessionHardwareOffloadingStatus() ==
+             device::BluetoothAdapter::
+                 LowEnergyScanSessionHardwareOffloadingStatus::kSupported;
 }
 
-absl::optional<bool> FastPairFeatureUsageMetricsLogger::IsAccessible() const {
+std::optional<bool> FastPairFeatureUsageMetricsLogger::IsAccessible() const {
   if (!IsEligible())
     return false;
 
@@ -79,5 +77,4 @@ bool FastPairFeatureUsageMetricsLogger::IsEnabled() const {
          pref_service->GetBoolean(ash::prefs::kFastPairEnabled);
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

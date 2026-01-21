@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/viz/common/quads/draw_quad.h"
+
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/lap_timer.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
-#include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
+#include "components/viz/common/resources/resource_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
@@ -47,8 +49,9 @@ SharedQuadState* CreateSharedQuadState(CompositorRenderPass* render_pass) {
 
   SharedQuadState* state = render_pass->CreateAndAppendSharedQuadState();
   state->SetAll(quad_transform, content_rect, visible_layer_rect,
-                gfx::MaskFilterInfo(), /*clip_rect=*/absl::nullopt,
-                are_contents_opaque, opacity, blend_mode, sorting_context_id);
+                gfx::MaskFilterInfo(), /*clip=*/std::nullopt,
+                are_contents_opaque, opacity, blend_mode, sorting_context_id,
+                /*layer_id=*/0u, /*fast_rounded_corner=*/false);
   return state;
 }
 
@@ -78,19 +81,16 @@ class DrawQuadPerfTest : public testing::Test {
       gfx::Rect rect(0, 0, 100, 100);
       bool needs_blending = false;
       ResourceId resource_id{1};
-      bool premultiplied_alpha = true;
-      gfx::PointF uv_top_left(0, 0);
-      gfx::PointF uv_bottom_right(1, 1);
+      gfx::PointF tex_coord_top_left(0, 0);
+      gfx::PointF tex_coord_bottom_right(100, 100);
       SkColor4f background_color = SkColors::kRed;
-      float vertex_opacity[4] = {1.f, 1.f, 1.f, 1.f};
-      bool y_flipped = false;
       bool nearest_neighbor = true;
 
       quad->SetNew(shared_state_, rect, rect, needs_blending, resource_id,
-                   premultiplied_alpha, uv_top_left, uv_bottom_right,
-                   background_color, vertex_opacity, y_flipped,
-                   nearest_neighbor, /*secure_output_only=*/false,
-                   gfx::ProtectedVideoType::kClear);
+                   tex_coord_top_left, tex_coord_bottom_right, background_color,
+                   nearest_neighbor,
+                   /*secure_output=*/false, gfx::ProtectedVideoType::kClear,
+                   /*is_tex_coords_normalized=*/false);
       quads->push_back(quad);
     }
   }
@@ -103,8 +103,9 @@ class DrawQuadPerfTest : public testing::Test {
     timer_.Reset();
     do {
       for (auto* quad : quads) {
-        for (ResourceId& resource_id : quad->resources)
-          resource_id = NextId(resource_id);
+        if (quad->resource_id != kInvalidResourceId) {
+          quad->resource_id = NextId(quad->resource_id);
+        }
       }
       timer_.NextLap();
     } while (!timer_.HasTimeLimitExpired());

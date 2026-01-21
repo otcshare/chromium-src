@@ -7,10 +7,12 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/test/browser_task_environment.h"
@@ -21,6 +23,8 @@
 using testing::ElementsAre;
 
 namespace simple_devtools_protocol_client {
+
+namespace {
 
 class SimpleDevToolsProtocolClientTest : public SimpleDevToolsProtocolClient,
                                          public testing::Test {
@@ -93,10 +97,9 @@ class SimpleDevToolsProtocolClientEventHandlerTest
     base::Value::Dict params;
     params.Set("method", event_name);
 
-    std::string json;
-    base::JSONWriter::Write(base::Value(std::move(params)), &json);
-    DispatchProtocolMessage(agent_host_.get(),
-                            base::as_bytes(base::make_span(json)));
+    std::string json =
+        base::WriteJson(base::Value(std::move(params))).value_or("");
+    DispatchProtocolMessage(agent_host_.get(), base::as_byte_span(json));
     RunUntilIdle();
   }
 };
@@ -344,5 +347,33 @@ TEST_F(SimpleDevToolsProtocolClientEventHandlerNestedRemoveTest,
   // only register the very first event.
   EXPECT_THAT(received_events_, ElementsAre("event"));
 }
+
+class SelfDestructingSimpleDevToolsProtocolClient
+    : public SimpleDevToolsProtocolClient {
+ public:
+  void TryIt() {
+    std::string json_message = "{}";
+    SimpleDevToolsProtocolClient::DispatchProtocolMessage(
+        agent_host_.get(), base::as_byte_span(json_message));
+
+    // Delete self so that the task posted by the previous call has nowhere to
+    // go.
+    delete this;
+  }
+
+  void DispatchProtocolMessageTask(base::Value::Dict message) override {
+    NOTREACHED() << "use-after-free";
+  }
+};
+
+TEST(SimpleDevToolsProtocolClientTest, DestoroyClientInFlight) {
+  content::BrowserTaskEnvironment task_environment;
+
+  (new SelfDestructingSimpleDevToolsProtocolClient)->TryIt();
+
+  task_environment.RunUntilIdle();
+}
+
+}  // namespace
 
 }  // namespace simple_devtools_protocol_client

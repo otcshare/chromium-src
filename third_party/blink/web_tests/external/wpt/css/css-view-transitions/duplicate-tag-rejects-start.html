@@ -6,6 +6,7 @@
 
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
+<script src="/dom/events/scrolling/scroll_support.js"></script>
 
 <style>
 div {
@@ -21,30 +22,37 @@ div {
 
 <script>
 promise_test(async t => {
-  assert_implements(document.startViewTransition, "Missing document.startViewTransition");
-  return new Promise((resolve, reject) => {
+  assert_implements(document.startViewTransition,
+                    "Missing document.startViewTransition");
+
+  return new Promise(async (resolve, reject) => {
+    await waitForCompositorReady();
+
     first.style = "view-transition-name: target";
     let transition = document.startViewTransition(() => {
       first.style = "view-transition-name: target";
       second.style = "view-transition-name: target";
     });
 
-    // First domUpdated resolves since the callback runs successfully.
-    let domUpdatedResolved = false;
-    transition.domUpdated.then(() => { domUpdatedResolved = true; }, reject);
+    // First updateCallbackDone resolves since the callback runs successfully.
+    let updateCallbackDoneResolved = false;
+    transition.updateCallbackDone.then(
+      () => { updateCallbackDoneResolved = true; }, reject);
 
-    // Then finished resolves since domUpdated was already resolved.
-    let finishResolved = false;
-    transition.domUpdated.then(() => {
-      assert_true(domUpdatedResolved, "domUpdated not resolved before finish");
-      finishResolved = true;
-    }, reject);
-
-    // Finally ready rejects.
+    // Ready rejects.
+    let readyRejected = false;
     transition.ready.then(reject, () => {
-      assert_true(finishResolved, "finish not resolved before ready");
-      resolve();
+      readyRejected = true;
+      assert_true(
+        updateCallbackDoneResolved,
+        "updateCallbackDone should resolve before ready was rejected");
     });
+
+    // Then finished resolves since updateCallbackDone was already resolved.
+    await transition.finished;
+    assert_true(
+      readyRejected, "finished should resolve after ready was rejected");
+    resolve();
   });
 }, "Two different elements with the same name in the new DOM should skip the transition");
 </script>

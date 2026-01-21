@@ -4,14 +4,15 @@
 
 #include "components/power_bookmarks/storage/power_bookmark_database_impl.h"
 
+#include "base/check.h"
 #include "base/files/file_util.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/pattern.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "components/power_bookmarks/core/powers/search_params.h"
-#include "components/power_bookmarks/metrics/power_bookmark_metrics.h"
-#include "components/power_bookmarks/storage/power_bookmark_sync_metadata_database.h"
+#include "components/power_bookmarks/common/power_bookmark_metrics.h"
+#include "components/power_bookmarks/common/search_params.h"
 #include "components/sync/protocol/power_bookmark_specifics.pb.h"
 #include "sql/error_delegate_util.h"
 #include "sql/statement.h"
@@ -40,12 +41,12 @@ std::unique_ptr<Power> CreatePowerFromSpecifics(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
-bool CheckIfPowerWithIdExists(sql::Database* db, const base::GUID& guid) {
-  if (guid == base::GUID())
+bool CheckIfPowerWithIdExists(sql::Database* db, const base::Uuid& guid) {
+  if (guid == base::Uuid()) {
     return false;
+  }
 
   static constexpr char kCheckIfPowerWithIdExistsSql[] =
       // clang-format off
@@ -67,38 +68,95 @@ bool CheckIfPowerWithIdExists(sql::Database* db, const base::GUID& guid) {
   return count > 0;
 }
 
-bool MatchesSearchParams(const sync_pb::PowerBookmarkSpecifics& specifics,
-                         const SearchParams& search_params) {
-  if (search_params.query.empty())
-    return true;
-  std::string pattern = base::StrCat({"*", search_params.query, "*"});
-  if (base::MatchPattern(specifics.url(), pattern))
-    return true;
+bool MatchPattern(std::string field, std::string pattern, bool case_sensitive) {
+  if (!case_sensitive) {
+    field = base::ToLowerASCII(field);
+    pattern = base::ToLowerASCII(pattern);
+  }
+  return base::MatchPattern(field, pattern);
+}
 
-  // A note can be matched by its contents.
+bool MatchesSearchQuery(const sync_pb::PowerBookmarkSpecifics& specifics,
+                        const std::string& query,
+                        bool case_sensitive) {
+  if (query.empty()) {
+    return true;
+  }
+  std::string pattern = base::StrCat({"*", query, "*"});
+  std::vector<std::string> match_fields = {};
+
+  // Different powers can define their own match fields.
   switch (specifics.power_type()) {
     case sync_pb::PowerBookmarkSpecifics::POWER_TYPE_NOTE:
-      if (base::MatchPattern(
-              specifics.power_entity().note_entity().plain_text(), pattern)) {
-        return true;
-      }
+      match_fields.push_back(
+          specifics.power_entity().note_entity().plain_text());
       break;
     default:
+      match_fields.push_back(specifics.url());
       break;
   }
+
+  for (const std::string& match_field : match_fields) {
+    if (MatchPattern(match_field, pattern, case_sensitive)) {
+      return true;
+    }
+  }
+
   return false;
+}
+
+bool MatchesSearchParams(const sync_pb::PowerBookmarkSpecifics& specifics,
+                         const SearchParams& search_params) {
+  if (search_params.power_type !=
+          sync_pb::PowerBookmarkSpecifics_PowerType_POWER_TYPE_UNSPECIFIED &&
+      search_params.power_type != specifics.power_type()) {
+    return false;
+  }
+  if (!MatchesSearchQuery(specifics, search_params.query,
+                          search_params.case_sensitive)) {
+    return false;
+  }
+  return true;
+}
+
+class SqliteDatabaseTransaction : public Transaction {
+ public:
+  explicit SqliteDatabaseTransaction(sql::Database& db);
+  ~SqliteDatabaseTransaction() override;
+  bool Begin();
+  bool Commit() override;
+
+ private:
+  sql::Transaction transaction_;
+  bool committed_ = false;
+};
+
+SqliteDatabaseTransaction::SqliteDatabaseTransaction(sql::Database& db)
+    : transaction_(&db) {}
+
+SqliteDatabaseTransaction::~SqliteDatabaseTransaction() {
+  if (!committed_) {
+    transaction_.Rollback();
+  }
+}
+
+bool SqliteDatabaseTransaction::Begin() {
+  return transaction_.Begin();
+}
+
+bool SqliteDatabaseTransaction::Commit() {
+  DCHECK(!committed_);
+  committed_ = true;
+  return transaction_.Commit();
 }
 
 }  // namespace
 
 PowerBookmarkDatabaseImpl::PowerBookmarkDatabaseImpl(
     const base::FilePath& database_dir)
-    : db_(sql::DatabaseOptions{.exclusive_locking = true,
-                               .page_size = 4096,
-                               .cache_size = 128}),
+    : db_(sql::DatabaseOptions().set_cache_size(128),
+          /*tag=*/"PowerBookmarks"),
       database_path_(database_dir.Append(kDatabaseName)) {
-  sync_db_ =
-      std::make_unique<PowerBookmarkSyncMetadataDatabase>(&db_, &meta_table_);
 }
 
 PowerBookmarkDatabaseImpl::~PowerBookmarkDatabaseImpl() {
@@ -118,7 +176,6 @@ bool PowerBookmarkDatabaseImpl::Init() {
   db_.set_error_callback(
       base::BindRepeating(&PowerBookmarkDatabaseImpl::DatabaseErrorCallback,
                           base::Unretained(this)));
-  db_.set_histogram_tag("PowerBookmarks");
 
   const base::FilePath dir = database_path_.DirName();
   bool dir_exists = base::DirectoryExists(dir);
@@ -135,13 +192,6 @@ bool PowerBookmarkDatabaseImpl::Init() {
 
   if (!InitSchema()) {
     DLOG(ERROR) << "Failed to create schema for power bookmarks database: "
-                << db_.GetErrorMessage();
-    db_.Close();
-    return false;
-  }
-
-  if (!sync_db_->Init()) {
-    DLOG(ERROR) << "Failed to initialize sync metadata db: "
                 << db_.GetErrorMessage();
     db_.Close();
     return false;
@@ -174,7 +224,7 @@ void PowerBookmarkDatabaseImpl::DatabaseErrorCallback(int error,
 
   // After this call, the `db_` handle is poisoned so that future calls will
   // return errors until the handle is re-opened.
-  db_.RazeAndClose();
+  db_.RazeAndPoison();
 }
 
 bool PowerBookmarkDatabaseImpl::InitSchema() {
@@ -187,6 +237,11 @@ bool PowerBookmarkDatabaseImpl::InitSchema() {
   if (!has_metatable && has_schema) {
     // Existing DB with no meta table. Cannot determine DB version.
     db_.Raze();
+  }
+
+  sql::Transaction transaction(&db_);
+  if (!transaction.Begin()) {
+    return false;
   }
 
   // Create the meta table if it doesn't exist.
@@ -204,15 +259,18 @@ bool PowerBookmarkDatabaseImpl::InitSchema() {
     return false;
   }
 
-  meta_table_.SetVersionNumber(kCurrentVersionNumber);
-  meta_table_.SetCompatibleVersionNumber(kCompatibleVersionNumber);
-  return true;
+  return meta_table_.SetVersionNumber(kCurrentVersionNumber) &&
+         meta_table_.SetCompatibleVersionNumber(kCompatibleVersionNumber) &&
+         transaction.Commit();
 }
 
 bool PowerBookmarkDatabaseImpl::CreateSchema() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // `id` is the primary key of the table, corresponds to a base::GUID.
+  // Ensure that the schema is created atomically.
+  DCHECK(db_.HasActiveTransactions());
+
+  // `id` is the primary key of the table, corresponds to a base::Uuid.
   // `url` The URL of the target page.
   // `origin` The URL origin of the target page.
   // `power_type` The type of target this power.
@@ -234,7 +292,7 @@ bool PowerBookmarkDatabaseImpl::CreateSchema() {
   if (!db_.Execute(kCreateSaveSchemaSql))
     return false;
 
-  // `id` is the primary key of the table, corresponds to a base::GUID.
+  // `id` is the primary key of the table, corresponds to a base::Uuid.
   // `specifics` The serialized specifics of the save. This is split into a
   // separate table because SQLite reads the whole row into memory when
   // querying. Having a separate table for blobs increases query performance
@@ -248,7 +306,7 @@ bool PowerBookmarkDatabaseImpl::CreateSchema() {
   DCHECK(db_.IsSQLValid(kCreateBlobSchemaSql));
   return db_.Execute(kCreateBlobSchemaSql);
 
-  // TODO(crbug.com/1376612): Create indexes for searching capabilities.
+  // TODO(crbug.com/40243263): Create indexes for searching capabilities.
 }
 
 std::vector<std::unique_ptr<Power>> PowerBookmarkDatabaseImpl::GetPowersForURL(
@@ -275,10 +333,10 @@ std::vector<std::unique_ptr<Power>> PowerBookmarkDatabaseImpl::GetPowersForURL(
   while (statement.Step()) {
     DCHECK_EQ(3, statement.ColumnCount());
 
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
+    std::optional<sync_pb::PowerBookmarkSpecifics> specifics =
         DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
+            statement.ColumnStringView(1),
+            base::Uuid::ParseLowercase(statement.ColumnStringView(0)));
     if (!specifics.has_value())
       continue;
 
@@ -293,14 +351,14 @@ PowerBookmarkDatabaseImpl::GetPowerOverviewsForType(
     const sync_pb::PowerBookmarkSpecifics::PowerType& power_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/1382855): Optimize this query to avoid SCAN TABLE.
+  // TODO(crbug.com/40245847): Optimize this query to avoid SCAN TABLE.
   static constexpr char kGetPowerOverviewsForTypeSql[] =
       // clang-format off
       "SELECT blobs.id, blobs.specifics, COUNT(blobs.id) FROM blobs "
           "JOIN saves ON blobs.id=saves.id "
           "WHERE saves.power_type=? "
           "GROUP BY saves.url "
-          "ORDER BY COUNT(saves.url) DESC";
+          "ORDER BY COUNT(saves.url) DESC, MAX(saves.time_modified)";
   // clang-format on
   DCHECK(db_.IsSQLValid(kGetPowerOverviewsForTypeSql));
 
@@ -312,10 +370,10 @@ PowerBookmarkDatabaseImpl::GetPowerOverviewsForType(
   while (statement.Step()) {
     DCHECK_EQ(3, statement.ColumnCount());
 
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
+    std::optional<sync_pb::PowerBookmarkSpecifics> specifics =
         DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
+            statement.ColumnStringView(1),
+            base::Uuid::ParseLowercase(statement.ColumnStringView(0)));
     if (!specifics.has_value())
       continue;
 
@@ -331,7 +389,7 @@ PowerBookmarkDatabaseImpl::GetPowersForSearchParams(
     const SearchParams& search_params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/1382855): Optimize this query to avoid SCAN TABLE.
+  // TODO(crbug.com/40245847): Optimize this query to avoid SCAN TABLE.
   static constexpr char kGetPowersForSearchParamsSql[] =
       // clang-format off
       "SELECT blobs.id, blobs.specifics "
@@ -347,10 +405,10 @@ PowerBookmarkDatabaseImpl::GetPowersForSearchParams(
   while (statement.Step()) {
     DCHECK_EQ(2, statement.ColumnCount());
 
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
+    std::optional<sync_pb::PowerBookmarkSpecifics> specifics =
         DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
+            statement.ColumnStringView(1),
+            base::Uuid::ParseLowercase(statement.ColumnStringView(0)));
     if (!specifics.has_value())
       continue;
     if (!MatchesSearchParams(specifics.value(), search_params))
@@ -359,6 +417,82 @@ PowerBookmarkDatabaseImpl::GetPowersForSearchParams(
     search_results.emplace_back(CreatePowerFromSpecifics(specifics.value()));
   }
 
+  return search_results;
+}
+
+std::vector<std::unique_ptr<PowerOverview>>
+PowerBookmarkDatabaseImpl::GetPowerOverviewsForSearchParams(
+    const SearchParams& search_params) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // TODO(crbug.com/40245847): Optimize this query to avoid SCAN TABLE.
+  static constexpr char kGetPowerOverviewsForSearchParamsSql[] =
+      // clang-format off
+      "SELECT blobs.id, blobs.specifics, url, power_type "
+          "FROM blobs JOIN saves ON blobs.id=saves.id "
+          "ORDER BY url ASC, power_type ASC, time_modified DESC";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kGetPowerOverviewsForSearchParamsSql));
+
+  sql::Statement statement(db_.GetCachedStatement(
+      SQL_FROM_HERE, kGetPowerOverviewsForSearchParamsSql));
+
+  std::vector<std::unique_ptr<PowerOverview>> search_results;
+  // Between loop iterations these are the URL and PowerType of the last seen
+  // power.
+  std::string prev_url;
+  sync_pb::PowerBookmarkSpecifics::PowerType prev_power_type =
+      sync_pb::PowerBookmarkSpecifics::POWER_TYPE_UNSPECIFIED;
+  // Between loop iterations this is the matched power that will be used to make
+  // a PowerOverview. If set, it must match `prev_url` and `prev_power_type`.
+  std::unique_ptr<Power> first_matching_power;
+  // Between loop iterations this is the total count powers seen with
+  // `prev_power_type` and `prev_url`.
+  size_t overview_count = 0;
+  while (statement.Step()) {
+    DCHECK_EQ(4, statement.ColumnCount());
+
+    std::string current_url = statement.ColumnString(2);
+    sync_pb::PowerBookmarkSpecifics::PowerType current_power_type =
+        (sync_pb::PowerBookmarkSpecifics::PowerType)statement.ColumnInt(3);
+
+    if (current_url == prev_url && current_power_type == prev_power_type) {
+      overview_count++;
+      // Skip matching, if we already have a match for this URL and PowerType.
+      if (first_matching_power) {
+        continue;
+      }
+    } else {
+      // We've scanned all powers for this URL and PowerType pair - saving the
+      // matched power if we have one.
+      if (first_matching_power) {
+        search_results.emplace_back(std::make_unique<PowerOverview>(
+            std::move(first_matching_power), overview_count));
+      }
+      DCHECK(!first_matching_power);
+      prev_url = current_url;
+      prev_power_type = current_power_type;
+      overview_count = 1;
+    }
+
+    std::optional<sync_pb::PowerBookmarkSpecifics> specifics =
+        DeserializeOrDelete(
+            statement.ColumnStringView(1),
+            base::Uuid::ParseLowercase(statement.ColumnStringView(0)));
+    if (!specifics.has_value()) {
+      continue;
+    }
+    if (!MatchesSearchParams(specifics.value(), search_params)) {
+      continue;
+    }
+
+    first_matching_power = CreatePowerFromSpecifics(specifics.value());
+  }
+
+  if (first_matching_power) {
+    search_results.emplace_back(std::make_unique<PowerOverview>(
+        std::move(first_matching_power), overview_count));
+  }
   return search_results;
 }
 
@@ -371,155 +505,48 @@ bool PowerBookmarkDatabaseImpl::CreatePower(std::unique_ptr<Power> power) {
     return false;
   }
 
-  sql::Transaction transaction(&db_);
-  if (!transaction.Begin())
-    return false;
-
-  static constexpr char kCreatePowerSaveSql[] =
-      // clang-format off
-      "INSERT INTO saves("
-          "id, url, origin, power_type, "
-          "time_added, time_modified)"
-          "VALUES(?,?,?,?,?,?)";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kCreatePowerSaveSql));
-
-  sql::Statement save_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kCreatePowerSaveSql));
-  save_statement.BindString(0, power->guid().AsLowercaseString());
-  save_statement.BindString(1, power->url().spec());
-  save_statement.BindString(2, url::Origin::Create(power->url()).Serialize());
-  save_statement.BindInt(3, power->power_type());
-  save_statement.BindTime(4, power->time_added());
-  save_statement.BindTime(5, power->time_modified());
-  if (!save_statement.Run())
-    return false;
-
-  static constexpr char kCreatePowerBlobSql[] =
-      // clang-format off
-      "INSERT INTO blobs(id, specifics) VALUES(?, ?)";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kCreatePowerBlobSql));
-
-  sql::Statement blob_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kCreatePowerBlobSql));
-  blob_statement.BindString(0, power->guid().AsLowercaseString());
-
-  std::string data;
-  sync_pb::PowerBookmarkSpecifics specifics;
-  power->ToPowerBookmarkSpecifics(&specifics);
-  specifics.SerializeToString(&data);
-  blob_statement.BindString(1, data);
-  if (!blob_statement.Run())
-    return false;
-
-  return transaction.Commit();
+  return CreatePowerInternal(*power);
 }
 
-bool PowerBookmarkDatabaseImpl::UpdatePower(std::unique_ptr<Power> power) {
+std::unique_ptr<Power> PowerBookmarkDatabaseImpl::UpdatePower(
+    std::unique_ptr<Power> power) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto existing_power = GetPowerForGUID(power->guid().AsLowercaseString());
+  auto existing_power = GetPowerForGUID(power->guid_string());
   if (!existing_power) {
     DLOG(ERROR)
         << "Failed to update power because the current power does not exist.";
-    return false;
+    return nullptr;
   }
   existing_power->Merge(*power);
 
-  sql::Transaction transaction(&db_);
-  if (!transaction.Begin())
-    return false;
+  if (!UpdatePowerInternal(*existing_power)) {
+    return nullptr;
+  }
 
-  static constexpr char kUpdatePowerSaveSql[] =
-      // clang-format off
-      "UPDATE saves SET "
-          "url=?, origin=?, power_type=?, time_added=?, "
-          "time_modified=?"
-          "WHERE id=?";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kUpdatePowerSaveSql));
-
-  sql::Statement save_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kUpdatePowerSaveSql));
-
-  save_statement.BindString(0, existing_power->url().spec());
-  save_statement.BindString(
-      1, url::Origin::Create(existing_power->url()).Serialize());
-  save_statement.BindInt(2, existing_power->power_type());
-  save_statement.BindTime(3, existing_power->time_added());
-  save_statement.BindTime(4, existing_power->time_modified());
-  if (!save_statement.Run())
-    return false;
-
-  static constexpr char kUpdatePowerBlobSql[] =
-      // clang-format off
-      "UPDATE blobs SET specifics=? WHERE id=?";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kUpdatePowerBlobSql));
-
-  sql::Statement blob_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kUpdatePowerBlobSql));
-
-  std::string data;
-  sync_pb::PowerBookmarkSpecifics specifics;
-  existing_power->ToPowerBookmarkSpecifics(&specifics);
-  bool success = specifics.SerializeToString(&data);
-  DCHECK(success);
-  blob_statement.BindBlob(0, data);
-  blob_statement.BindString(1, existing_power->guid().AsLowercaseString());
-  if (!blob_statement.Run())
-    return false;
-
-  return transaction.Commit();
+  return existing_power;
 }
 
-bool PowerBookmarkDatabaseImpl::DeletePower(const base::GUID& guid) {
+bool PowerBookmarkDatabaseImpl::DeletePower(const base::Uuid& guid) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!CheckIfPowerWithIdExists(&db_, guid)) {
     return true;
   }
 
-  sql::Transaction transaction(&db_);
-  if (!transaction.Begin())
-    return false;
-
-  static constexpr char kDeletePowerSaveSql[] =
-      // clang-format off
-      "DELETE FROM saves WHERE id=?";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kDeletePowerSaveSql));
-
-  sql::Statement save_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kDeletePowerSaveSql));
-  save_statement.BindString(0, guid.AsLowercaseString());
-  if (!save_statement.Run())
-    return false;
-
-  static constexpr char kDeletePowerBlobSql[] =
-      // clang-format off
-      "DELETE FROM blobs WHERE id=?";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kDeletePowerBlobSql));
-
-  sql::Statement blob_statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kDeletePowerBlobSql));
-  blob_statement.BindString(0, guid.AsLowercaseString());
-  if (!blob_statement.Run())
-    return false;
-
-  return transaction.Commit();
+  return DeletePowerInternal(guid);
 }
 
 bool PowerBookmarkDatabaseImpl::DeletePowersForURL(
     const GURL& url,
-    const sync_pb::PowerBookmarkSpecifics::PowerType& power_type) {
+    const sync_pb::PowerBookmarkSpecifics::PowerType& power_type,
+    std::vector<std::string>* deleted_guids) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  sql::Transaction transaction(&db_);
-  if (!transaction.Begin())
-    return false;
+  std::vector<std::string> guids = GetGUIDsForURL(url, power_type);
+  if (guids.empty()) {
+    return true;
+  }
 
   static constexpr char kDeletePowersBlobsForURLSql[] =
       // clang-format off
@@ -555,79 +582,19 @@ bool PowerBookmarkDatabaseImpl::DeletePowersForURL(
   if (!save_statement.Run())
     return false;
 
-  return transaction.Commit();
-}
-
-std::vector<std::unique_ptr<Power>>
-PowerBookmarkDatabaseImpl::GetPowersForGUIDs(
-    const std::vector<std::string>& guids) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  for (auto& guid : guids) {
-    DCHECK(base::IsValidGUID(guid));
+  if (deleted_guids) {
+    for (const auto& guid : guids) {
+      deleted_guids->push_back(guid);
+    }
   }
-  static constexpr char kGetPowersForGUIDsSql[] =
-      // clang-format off
-      "SELECT blobs.id, blobs.specifics, saves.url "
-          "FROM blobs JOIN saves ON blobs.id=saves.id "
-          "WHERE saves.id IN ('";
-  // clang-format on
-  std::string sql_string = (std::string(kGetPowersForGUIDsSql) +
-                            base::JoinString(guids, "','") + "')");
-  db_.IsSQLValid(sql_string.c_str());
-  sql::Statement statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, sql_string.c_str()));
-  std::vector<std::unique_ptr<Power>> powers;
-  while (statement.Step()) {
-    DCHECK_EQ(3, statement.ColumnCount());
-
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
-        DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
-    if (!specifics.has_value())
-      continue;
-
-    powers.emplace_back(CreatePowerFromSpecifics(specifics.value()));
-  }
-
-  return powers;
-}
-
-std::vector<std::unique_ptr<Power>> PowerBookmarkDatabaseImpl::GetAllPowers() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  static constexpr char kGetPowersSql[] =
-      // clang-format off
-      "SELECT blobs.id, blobs.specifics, saves.url "
-          "FROM blobs JOIN saves ON blobs.id=saves.id";
-  // clang-format on
-  DCHECK(db_.IsSQLValid(kGetPowersSql));
-
-  sql::Statement statement(
-      db_.GetCachedStatement(SQL_FROM_HERE, kGetPowersSql));
-  std::vector<std::unique_ptr<Power>> powers;
-  while (statement.Step()) {
-    DCHECK_EQ(3, statement.ColumnCount());
-
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
-        DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
-    if (!specifics.has_value())
-      continue;
-
-    powers.emplace_back(CreatePowerFromSpecifics(specifics.value()));
-  }
-
-  return powers;
+  return true;
 }
 
 std::unique_ptr<Power> PowerBookmarkDatabaseImpl::GetPowerForGUID(
     const std::string& guid) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK(base::IsValidGUID(guid));
+  DCHECK(base::Uuid::ParseCaseInsensitive(guid).is_valid());
   static constexpr char kGetPowerForGUIDSql[] =
       // clang-format off
       "SELECT blobs.id, blobs.specifics, saves.url "
@@ -643,10 +610,10 @@ std::unique_ptr<Power> PowerBookmarkDatabaseImpl::GetPowerForGUID(
   while (statement.Step()) {
     DCHECK_EQ(3, statement.ColumnCount());
 
-    absl::optional<sync_pb::PowerBookmarkSpecifics> specifics =
+    std::optional<sync_pb::PowerBookmarkSpecifics> specifics =
         DeserializeOrDelete(
-            statement.ColumnString(1),
-            base::GUID::ParseLowercase(statement.ColumnString(0)));
+            statement.ColumnStringView(1),
+            base::Uuid::ParseLowercase(statement.ColumnStringView(0)));
     if (!specifics.has_value())
       continue;
 
@@ -656,9 +623,9 @@ std::unique_ptr<Power> PowerBookmarkDatabaseImpl::GetPowerForGUID(
   return nullptr;
 }
 
-absl::optional<sync_pb::PowerBookmarkSpecifics>
-PowerBookmarkDatabaseImpl::DeserializeOrDelete(const std::string& data,
-                                               const base::GUID& id) {
+std::optional<sync_pb::PowerBookmarkSpecifics>
+PowerBookmarkDatabaseImpl::DeserializeOrDelete(std::string_view data,
+                                               const base::Uuid& id) {
   sync_pb::PowerBookmarkSpecifics specifics;
   bool parse_success = specifics.ParseFromString(data);
 
@@ -667,7 +634,166 @@ PowerBookmarkDatabaseImpl::DeserializeOrDelete(const std::string& data,
 
   bool delete_success = DeletePower(id);
   DCHECK(delete_success);
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+std::vector<std::string> PowerBookmarkDatabaseImpl::GetGUIDsForURL(
+    const GURL& url,
+    const sync_pb::PowerBookmarkSpecifics::PowerType& power_type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  static constexpr char kGetGUIDsForURLSql[] =
+      // clang-format off
+      "SELECT id FROM saves WHERE (url=?) AND (power_type=? OR ?=?)";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kGetGUIDsForURLSql));
+
+  sql::Statement statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kGetGUIDsForURLSql));
+  statement.BindString(0, url.spec());
+  statement.BindInt(1, power_type);
+  statement.BindInt(2, power_type);
+  statement.BindInt(3, sync_pb::PowerBookmarkSpecifics::POWER_TYPE_UNSPECIFIED);
+
+  std::vector<std::string> guids;
+  while (statement.Step()) {
+    DCHECK_EQ(1, statement.ColumnCount());
+    guids.push_back(statement.ColumnString(0));
+  }
+
+  return guids;
+}
+
+bool PowerBookmarkDatabaseImpl::CreatePowerInternal(const Power& power) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  static constexpr char kCreatePowerSaveSql[] =
+      // clang-format off
+      "INSERT INTO saves("
+          "id, url, origin, power_type, "
+          "time_added, time_modified)"
+          "VALUES(?,?,?,?,?,?)";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kCreatePowerSaveSql));
+
+  sql::Statement save_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kCreatePowerSaveSql));
+  save_statement.BindString(0, power.guid_string());
+  save_statement.BindString(1, power.url().spec());
+  save_statement.BindString(2, url::Origin::Create(power.url()).Serialize());
+  save_statement.BindInt(3, power.power_type());
+  save_statement.BindTime(4, power.time_added());
+  save_statement.BindTime(5, power.time_modified());
+  if (!save_statement.Run()) {
+    return false;
+  }
+
+  static constexpr char kCreatePowerBlobSql[] =
+      // clang-format off
+      "INSERT INTO blobs(id, specifics) VALUES(?, ?)";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kCreatePowerBlobSql));
+
+  sql::Statement blob_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kCreatePowerBlobSql));
+  blob_statement.BindString(0, power.guid_string());
+
+  std::string data;
+  sync_pb::PowerBookmarkSpecifics specifics;
+  power.ToPowerBookmarkSpecifics(&specifics);
+  specifics.SerializeToString(&data);
+  blob_statement.BindString(1, data);
+  if (!blob_statement.Run()) {
+    return false;
+  }
+
+  return true;
+}
+
+bool PowerBookmarkDatabaseImpl::UpdatePowerInternal(const Power& power) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  static constexpr char kUpdatePowerSaveSql[] =
+      // clang-format off
+      "UPDATE saves SET "
+          "url=?, origin=?, power_type=?, time_added=?, "
+          "time_modified=?"
+          "WHERE id=?";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kUpdatePowerSaveSql));
+
+  sql::Statement save_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kUpdatePowerSaveSql));
+
+  save_statement.BindString(0, power.url().spec());
+  save_statement.BindString(1, url::Origin::Create(power.url()).Serialize());
+  save_statement.BindInt(2, power.power_type());
+  save_statement.BindTime(3, power.time_added());
+  save_statement.BindTime(4, power.time_modified());
+  if (!save_statement.Run()) {
+    return false;
+  }
+
+  static constexpr char kUpdatePowerBlobSql[] =
+      // clang-format off
+      "UPDATE blobs SET specifics=? WHERE id=?";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kUpdatePowerBlobSql));
+
+  sql::Statement blob_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kUpdatePowerBlobSql));
+
+  std::string data;
+  sync_pb::PowerBookmarkSpecifics specifics;
+  power.ToPowerBookmarkSpecifics(&specifics);
+  bool success = specifics.SerializeToString(&data);
+  DCHECK(success);
+  blob_statement.BindBlob(0, std::move(data));
+  blob_statement.BindString(1, power.guid_string());
+  if (!blob_statement.Run()) {
+    return false;
+  }
+
+  return true;
+}
+
+bool PowerBookmarkDatabaseImpl::DeletePowerInternal(const base::Uuid& guid) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  static constexpr char kDeletePowerSaveSql[] =
+      // clang-format off
+      "DELETE FROM saves WHERE id=?";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kDeletePowerSaveSql));
+
+  sql::Statement save_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kDeletePowerSaveSql));
+  save_statement.BindString(0, guid.AsLowercaseString());
+  if (!save_statement.Run()) {
+    return false;
+  }
+
+  static constexpr char kDeletePowerBlobSql[] =
+      // clang-format off
+      "DELETE FROM blobs WHERE id=?";
+  // clang-format on
+  DCHECK(db_.IsSQLValid(kDeletePowerBlobSql));
+
+  sql::Statement blob_statement(
+      db_.GetCachedStatement(SQL_FROM_HERE, kDeletePowerBlobSql));
+  blob_statement.BindString(0, guid.AsLowercaseString());
+  if (!blob_statement.Run()) {
+    return false;
+  }
+
+  return true;
+}
+
+std::unique_ptr<Transaction> PowerBookmarkDatabaseImpl::BeginTransaction() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto transaction = std::make_unique<SqliteDatabaseTransaction>(db_);
+  if (transaction->Begin()) {
+    return transaction;
+  } else {
+    return nullptr;
+  }
 }
 
 }  // namespace power_bookmarks

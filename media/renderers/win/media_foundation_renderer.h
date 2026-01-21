@@ -10,7 +10,10 @@
 #include <mfmediaengine.h>
 #include <wrl.h>
 
-#include "base/callback.h"
+#include <memory>
+
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -30,7 +33,6 @@
 #include "media/renderers/win/media_foundation_protection_manager.h"
 #include "media/renderers/win/media_foundation_renderer_extension.h"
 #include "media/renderers/win/media_foundation_source_wrapper.h"
-#include "media/renderers/win/media_foundation_texture_pool.h"
 
 namespace media {
 
@@ -44,6 +46,8 @@ class MEDIA_EXPORT MediaFoundationRenderer
  public:
   // An enum for recording MediaFoundationRenderer playback error reason.
   // Reported to UMA. Do not change existing values.
+  // Updates to ErrorReason also requires the changes updated to
+  // tools/metrics/histograms/metadata/media/enums.xml.
   enum class ErrorReason {
     kUnknown = 0,
     kCdmProxyReceivedInInvalidState = 1,
@@ -60,20 +64,37 @@ class MEDIA_EXPORT MediaFoundationRenderer
     kFailedToCreateMediaEngine = 12,
     kFailedToCreateDCompTextureWrapper = 13,
     kFailedToInitDCompTextureWrapper = 14,
+    kFailedToSetPlaybackRate = 15,
+    kFailedToGetMediaEngineEx = 16,
     // Add new values here and update `kMaxValue`. Never reuse existing values.
-    kMaxValue = kFailedToInitDCompTextureWrapper,
+    kMaxValue = kFailedToGetMediaEngineEx,
   };
+
+  // An enum for recording MediaFoundationRenderer playback detected rendered
+  // video frames. Reported to UMA. Do not change existing values. Updates to
+  // RenderedVideoFrameDetectionResult also requires the changes updated to
+  // tools/metrics/histograms/metadata/media/enums.xml.
+  //
+  // LINT.IfChange(RenderedVideoFrameDetectionResult)
+  enum class RenderedVideoFrameDetectionResult {
+    // kUnknown = 0,      // Deprecated.
+    kDetected = 1,     // Rendered video frames detected within the given time.
+    kNotDetected = 2,  // Rendered video frames NOT detected.
+    kUnknownByPlaybackError = 3,  // Unknown due to a playback error.
+    kUnknownByPlaybackEnd = 4,    // Unknown due to an early playback end.
+    kUnknownByShutdown = 5,       // Unknown due to an early shutdown.
+    // Add new values here and update `kMaxValue`. Never reuse existing values.
+    kMaxValue = kUnknownByShutdown,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/media/enums.xml:MediaFoundationRendererRenderedVideoFrameDetectionResult)
 
   // Report `reason` to UMA.
   static void ReportErrorReason(ErrorReason reason);
 
-  // Whether MediaFoundationRenderer() is supported on the current device.
-  static bool IsSupported();
-
   MediaFoundationRenderer(scoped_refptr<base::SequencedTaskRunner> task_runner,
                           std::unique_ptr<MediaLog> media_log,
                           LUID gpu_process_adapter_luid,
-                          bool force_dcomp_mode_for_testing = false);
+                          bool is_testing = false);
   MediaFoundationRenderer(const MediaFoundationRenderer&) = delete;
   MediaFoundationRenderer& operator=(const MediaFoundationRenderer&) = delete;
   ~MediaFoundationRenderer() override;
@@ -83,7 +104,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
                   RendererClient* client,
                   PipelineStatusCallback init_cb) override;
   void SetCdm(CdmContext* cdm_context, CdmAttachedCB cdm_attached_cb) override;
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void Flush(base::OnceClosure flush_cb) override;
   void StartPlayingFrom(base::TimeDelta time) override;
   void SetPlaybackRate(double playback_rate) override;
@@ -96,22 +117,18 @@ class MEDIA_EXPORT MediaFoundationRenderer
   void SetVideoStreamEnabled(bool enabled) override;
   void SetOutputRect(const gfx::Rect& output_rect,
                      SetOutputRectCB callback) override;
-  void NotifyFrameReleased(const base::UnguessableToken& frame_token) override;
-  void RequestNextFrame() override;
-  void SetMediaFoundationRenderingMode(
-      MediaFoundationRenderingMode render_mode) override;
 
-  using FrameReturnCallback = base::RepeatingCallback<
-      void(const base::UnguessableToken&, const gfx::Size&, base::TimeDelta)>;
-  void SetFrameReturnCallbacks(
-      FrameReturnCallback frame_available_cb,
-      FramePoolInitializedCallback initialized_frame_pool_cb);
   void SetGpuProcessAdapterLuid(LUID gpu_process_adapter_luid);
 
-  // Testing verification
-  bool InFrameServerMode();
-
  private:
+  enum class StopSendingStatisticsReason {
+    kPlaybackEnded = 0,          // Playback ended
+    kPlaybackPauseInternal = 1,  // Playback internal pause
+    kPlaybackError = 2,          // Playback error occurred
+    kShutdown = 3,               // Shutdown (destructor)
+    kMaxValue = kShutdown,
+  };
+
   HRESULT CreateMediaEngine(MediaResource* media_resource);
   HRESULT InitializeDXGIDeviceManager();
   HRESULT InitializeVirtualVideoWindow();
@@ -120,7 +137,12 @@ class MEDIA_EXPORT MediaFoundationRenderer
   HRESULT PopulateStatistics(PipelineStatistics& statistics);
   void SendStatistics();
   void StartSendingStatistics();
-  void StopSendingStatistics();
+  void StopSendingStatistics(StopSendingStatisticsReason reason);
+  bool NeedRenderedVideoFrameDetection();
+  void CheckRenderedVideoFrame(const PipelineStatistics& stats);
+  void RestartRenderedVideoFrameDetectionTimerInNotReported();
+  void ReportRenderedVideoFrameDetectionResult(
+      RenderedVideoFrameDetectionResult result);
 
   // Callbacks for `mf_media_engine_notify_`.
   void OnPlaybackError(PipelineStatus status, HRESULT hr);
@@ -130,6 +152,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
   void OnCanPlayThrough();
   void OnPlaying();
   void OnWaiting();
+  void OnFrameStepCompleted();
   void OnTimeUpdate();
 
   // Callback for `content_protection_manager_`.
@@ -142,9 +165,8 @@ class MEDIA_EXPORT MediaFoundationRenderer
   HRESULT SetDCompModeInternal();
   HRESULT GetDCompSurfaceInternal(HANDLE* surface_handle);
   HRESULT SetSourceOnMediaEngine();
-  HRESULT UpdateVideoStream(const gfx::Rect& rect);
+  HRESULT UpdateVideoStream(const gfx::Size rect_size);
   HRESULT PauseInternal();
-  HRESULT InitializeTexturePool(const gfx::Size& size);
   void OnVideoNaturalSizeChange();
 
   // Handles errors in MediaFoundationRenderer:
@@ -170,13 +192,10 @@ class MEDIA_EXPORT MediaFoundationRenderer
   // handles between the two processes for Frame Server mode.
   LUID gpu_process_adapter_luid_;
 
-  // Once set, will force `mf_media_engine_` to use DirectComposition mode.
   // This is used for testing.
-  const bool force_dcomp_mode_for_testing_;
+  const bool is_testing_;
 
   raw_ptr<RendererClient> renderer_client_;
-  FrameReturnCallback frame_available_cb_;
-  FramePoolInitializedCallback initialized_frame_pool_cb_;
 
   Microsoft::WRL::ComPtr<IMFMediaEngine> mf_media_engine_;
   Microsoft::WRL::ComPtr<MediaEngineNotifyImpl> mf_media_engine_notify_;
@@ -187,6 +206,9 @@ class MEDIA_EXPORT MediaFoundationRenderer
   // and video processing.
   Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> dxgi_device_manager_;
 
+  // Current cached rectangle size of video to be rendered.
+  gfx::Size current_video_rect_size_;
+
   // Current duration of the media.
   base::TimeDelta duration_;
 
@@ -195,6 +217,9 @@ class MEDIA_EXPORT MediaFoundationRenderer
 
   // Keep the last volume value being set.
   float volume_ = 1.0;
+
+  // Current playback rate.
+  double playback_rate_ = 0.0;
 
   // Used for RendererClient::OnBufferingStateChange().
   BufferingState max_buffering_state_ = BufferingState::BUFFERING_HAVE_NOTHING;
@@ -217,17 +242,24 @@ class MEDIA_EXPORT MediaFoundationRenderer
   Microsoft::WRL::ComPtr<MediaFoundationProtectionManager>
       content_protection_manager_;
 
-  // Texture pool of ID3D11Texture2D for the media engine to draw video frames
-  // when the media engine is in frame server mode instead of Direct
-  // Composition mode.
-  MediaFoundationTexturePool texture_pool_;
-
-  // Rendering mode the Media Engine will use.
-  MediaFoundationRenderingMode rendering_mode_ =
-      MediaFoundationRenderingMode::DirectComposition;
-
   bool has_reported_playing_ = false;
   bool has_reported_significant_playback_ = false;
+
+  // Value saved from last call to SetLatencyHint(). Latency hint can only be
+  // used to determine real-time mode on MediaEngine creation.
+  // IMFMediaEngineEx::SetRealTimeMode is only applicable to the next
+  // IMFMediaEngine::SetSource call so we aren't able to change real-time mode
+  // dynamically in MFR use cases.
+  std::optional<base::TimeDelta> latency_hint_;
+
+  // Whether reporting for the rendered video frame detection has done or not.
+  bool has_reported_rendered_video_frame_detection_ = false;
+
+  // Start time for the rendered video frame detection.
+  std::optional<base::TimeTicks> rendered_video_frame_detection_start_time_;
+
+  // Whether reporting for multi-GPU histogram has been done or not.
+  bool has_reported_multi_gpu_histogram_ = false;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationRenderer> weak_factory_{this};

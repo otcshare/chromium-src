@@ -77,7 +77,8 @@ std::unique_ptr<google::protobuf::MessageLite> DecodedMessageToProto(
 // static
 std::unique_ptr<MessageWrapper> MessageWrapper::FromRawMessage(
     const std::string& message) {
-  absl::optional<base::Value> json_value = base::JSONReader::Read(message);
+  std::optional<base::Value> json_value =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!json_value) {
     return nullptr;
   }
@@ -87,7 +88,7 @@ std::unique_ptr<MessageWrapper> MessageWrapper::FromRawMessage(
     return nullptr;
   }
 
-  absl::optional<int> message_type = json_dictionary->FindInt(kJsonTypeKey);
+  std::optional<int> message_type = json_dictionary->FindInt(kJsonTypeKey);
   if (!message_type)
     return nullptr;
 
@@ -162,13 +163,11 @@ std::string MessageWrapper::ToRawMessage() const {
                         base::Base64UrlEncodePolicy::INCLUDE_PADDING,
                         &encoded_message);
 
-  base::DictionaryValue json_dictionary;
-  json_dictionary.SetIntKey(kJsonTypeKey, static_cast<int>(type_));
-  json_dictionary.SetStringKey(kJsonDataKey, encoded_message);
+  base::Value::Dict json_dictionary;
+  json_dictionary.Set(kJsonTypeKey, static_cast<int>(type_));
+  json_dictionary.Set(kJsonDataKey, encoded_message);
 
-  std::string raw_message;
-  base::JSONWriter::Write(json_dictionary, &raw_message);
-  return raw_message;
+  return base::WriteJson(json_dictionary).value_or("");
 }
 
 }  // namespace tether

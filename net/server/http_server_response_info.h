@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/strings/string_split.h"
@@ -15,7 +16,7 @@
 
 namespace net {
 
-class HttpServerResponseInfo {
+class NET_EXPORT HttpServerResponseInfo {
  public:
   // Creates a 200 OK HttpServerResponseInfo.
   HttpServerResponseInfo();
@@ -24,15 +25,14 @@ class HttpServerResponseInfo {
   ~HttpServerResponseInfo();
 
   static HttpServerResponseInfo CreateFor404();
-  static HttpServerResponseInfo CreateFor500(const std::string& body);
+  static HttpServerResponseInfo CreateFor500(std::string_view body);
 
-  void AddHeader(const std::string& name, const std::string& value);
+  void AddHeader(std::string_view name, std::string_view value);
 
   // This also adds an appropriate Content-Length header.
-  void SetBody(const std::string& body, const std::string& content_type);
+  void SetBody(std::string_view body, std::string_view content_type);
   // Sets content-length and content-type. Body should be sent separately.
-  void SetContentHeaders(size_t content_length,
-                         const std::string& content_type);
+  void SetContentHeaders(size_t content_length, std::string_view content_type);
 
   std::string Serialize() const;
 

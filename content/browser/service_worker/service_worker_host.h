@@ -8,19 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/supports_user_data.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/browser_interface_broker_impl.h"
 #include "content/browser/buckets/bucket_context.h"
 #include "content/browser/renderer_host/code_cache_host_impl.h"
-#include "content/browser/service_worker/service_worker_container_host.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
-#include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
@@ -28,6 +26,7 @@
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/blink/public/mojom/ai/ai_manager.mojom-forward.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-forward.h"
 #include "third_party/blink/public/mojom/broadcastchannel/broadcast_channel.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
@@ -46,6 +45,7 @@
 
 namespace content {
 
+class ServiceWorkerContainerHostForServiceWorker;
 class ServiceWorkerContextCore;
 class ServiceWorkerVersion;
 struct ServiceWorkerVersionBaseInfo;
@@ -55,11 +55,12 @@ struct ServiceWorkerVersionBaseInfo;
 // execution context instance.
 //
 // Lives on the UI thread.
-class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
+class CONTENT_EXPORT ServiceWorkerHost : public BucketContext,
+                                         public base::SupportsUserData {
  public:
   ServiceWorkerHost(mojo::PendingAssociatedReceiver<
                         blink::mojom::ServiceWorkerContainerHost> host_receiver,
-                    ServiceWorkerVersion* version,
+                    ServiceWorkerVersion& version,
                     base::WeakPtr<ServiceWorkerContextCore> context);
 
   ServiceWorkerHost(const ServiceWorkerHost&) = delete;
@@ -69,6 +70,7 @@ class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
 
   int worker_process_id() const { return worker_process_id_; }
   ServiceWorkerVersion* version() const { return version_; }
+  const blink::ServiceWorkerToken& token() const { return token_; }
 
   service_manager::InterfaceProvider& remote_interfaces() {
     return remote_interfaces_;
@@ -85,6 +87,8 @@ class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
 
   void CreateWebTransportConnector(
       mojo::PendingReceiver<blink::mojom::WebTransportConnector> receiver);
+  void CreateWebSocketConnector(
+      mojo::PendingReceiver<blink::mojom::WebSocketConnector> receiver);
   // Used when EagerCacheStorageSetupForServiceWorkers is disabled, or when
   // setup for eager cache storage has failed.
   void BindCacheStorage(
@@ -97,7 +101,7 @@ class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
   void BindUsbService(
       mojo::PendingReceiver<blink::mojom::WebUsbService> receiver);
 
-  content::ServiceWorkerContainerHost* container_host() {
+  ServiceWorkerContainerHostForServiceWorker* container_host() {
     return container_host_.get();
   }
 
@@ -132,16 +136,28 @@ class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) override;
   void GetSandboxedFileSystemForBucket(
       const storage::BucketInfo& bucket,
+      const std::vector<std::string>& directory_path_components,
       blink::mojom::FileSystemAccessManager::GetSandboxedFileSystemCallback
           callback) override;
-  GlobalRenderFrameHostId GetAssociatedRenderFrameHostId() const override;
+  storage::BucketClientInfo GetBucketClientInfo() const override;
+
+  void BindAIManager(mojo::PendingReceiver<blink::mojom::AIManager> receiver);
+
+  RenderProcessHost* GetProcessHost() const;
 
  private:
-  int worker_process_id_ = ChildProcessHost::kInvalidUniqueID;
+  int worker_process_id_;
 
   // The service worker being hosted. Raw pointer is safe because the version
   // owns |this|.
   const raw_ptr<ServiceWorkerVersion> version_;
+
+  // A unique identifier for this service worker instance. This is unique across
+  // the browser process, but not persistent across service worker restarts.
+  // This token is generated every time the worker starts (i.e.,
+  // ServiceWorkerHost is created), and is plumbed through to the corresponding
+  // ServiceWorkerGlobalScope in the renderer process.
+  const blink::ServiceWorkerToken token_;
 
   // BrowserInterfaceBroker implementation through which this
   // ServiceWorkerHost exposes worker-scoped Mojo services to the corresponding
@@ -156,7 +172,7 @@ class CONTENT_EXPORT ServiceWorkerHost : public BucketContext {
   mojo::Receiver<blink::mojom::BrowserInterfaceBroker> broker_receiver_{
       &broker_};
 
-  std::unique_ptr<ServiceWorkerContainerHost> container_host_;
+  std::unique_ptr<ServiceWorkerContainerHostForServiceWorker> container_host_;
 
   service_manager::InterfaceProvider remote_interfaces_{
       base::SingleThreadTaskRunner::GetCurrentDefault()};

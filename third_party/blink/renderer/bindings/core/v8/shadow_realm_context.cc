@@ -9,17 +9,64 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_dom_wrapper.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_context_data.h"
+#include "third_party/blink/renderer/platform/context_lifecycle_observer.h"
 #include "v8/include/v8-context.h"
 
 namespace blink {
+
+namespace {
+
+// This is a helper class to make the initiator ExecutionContext the owner
+// of a ShadowRealmGlobalScope and its ScriptState. When the initiator
+// ExecutionContext is destroyed, the ShadowRealmGlobalScope is destroyed,
+// too.
+class ShadowRealmLifetimeController
+    : public GarbageCollected<ShadowRealmLifetimeController>,
+      public ContextLifecycleObserver {
+ public:
+  explicit ShadowRealmLifetimeController(
+      ExecutionContext* initiator_execution_context,
+      ShadowRealmGlobalScope* shadow_realm_global_scope,
+      ScriptState* shadow_realm_script_state)
+      : is_initiator_worker_or_worklet_(
+            initiator_execution_context->IsWorkerOrWorkletGlobalScope()),
+        shadow_realm_global_scope_(shadow_realm_global_scope),
+        shadow_realm_script_state_(shadow_realm_script_state) {
+    SetContextLifecycleNotifier(initiator_execution_context);
+  }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(shadow_realm_global_scope_);
+    visitor->Trace(shadow_realm_script_state_);
+    ContextLifecycleObserver::Trace(visitor);
+  }
+
+ protected:
+  void ContextDestroyed() override {
+    shadow_realm_script_state_->DisposePerContextData();
+    if (is_initiator_worker_or_worklet_) {
+      shadow_realm_script_state_->DissociateContext();
+    }
+    shadow_realm_script_state_.Clear();
+    shadow_realm_global_scope_->NotifyContextDestroyed();
+    shadow_realm_global_scope_.Clear();
+  }
+
+ private:
+  bool is_initiator_worker_or_worklet_;
+  Member<ShadowRealmGlobalScope> shadow_realm_global_scope_;
+  Member<ScriptState> shadow_realm_script_state_;
+};
+
+}  // namespace
 
 v8::MaybeLocal<v8::Context> OnCreateShadowRealmV8Context(
     v8::Local<v8::Context> initiator_context) {
   ExecutionContext* initiator_execution_context =
       ExecutionContext::From(initiator_context);
   DCHECK(initiator_execution_context);
-  v8::Isolate* isolate = initiator_context->GetIsolate();
-  scoped_refptr<DOMWrapperWorld> world = DOMWrapperWorld::Create(
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  DOMWrapperWorld* world = DOMWrapperWorld::Create(
       isolate, DOMWrapperWorld::WorldType::kShadowRealm);
   CHECK(world);  // Not yet run out of the world id.
 
@@ -43,21 +90,22 @@ v8::MaybeLocal<v8::Context> OnCreateShadowRealmV8Context(
   context->UseDefaultSecurityToken();
 
   // Associate the Blink object with the v8::Context.
-  ScriptState* script_state = MakeGarbageCollected<ScriptState>(
-      context, world, shadow_realm_global_scope);
+  ScriptState* script_state =
+      ScriptState::Create(context, world, shadow_realm_global_scope);
 
   // Associate the Blink object with the v8::Objects.
   global_proxy = context->Global();
-  V8DOMWrapper::SetNativeInfo(isolate, global_proxy, wrapper_type_info,
-                              shadow_realm_global_scope);
-  v8::Local<v8::Object> global_object =
-      global_proxy->GetPrototype().As<v8::Object>();
-  V8DOMWrapper::SetNativeInfo(isolate, global_object, wrapper_type_info,
-                              shadow_realm_global_scope);
+  V8DOMWrapper::SetNativeInfoForGlobal(isolate, global_proxy,
+                                       shadow_realm_global_scope);
 
   // Install context-dependent properties.
   std::ignore =
       script_state->PerContextData()->ConstructorForType(wrapper_type_info);
+
+  // Make the initiator execution context the owner of the
+  // ShadowRealmGlobalScope and the ScriptState.
+  MakeGarbageCollected<ShadowRealmLifetimeController>(
+      initiator_execution_context, shadow_realm_global_scope, script_state);
 
   return context;
 }

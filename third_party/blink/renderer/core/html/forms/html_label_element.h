@@ -36,13 +36,17 @@ class CORE_EXPORT HTMLLabelElement final : public HTMLElement {
  public:
   explicit HTMLLabelElement(Document&);
 
-  HTMLElement* control() const;
-  HTMLFormElement* form() const;
+  HTMLElement* controlForBinding() const;
+  HTMLElement* Control() const;
+  HTMLElement* formForBinding() const override;
 
   bool WillRespondToMouseClickEvents() override;
 
  private:
+  // TODO(crbug.com/452084024): Remove this when the
+  // LabelInteractiveContentCheckBeforeHandler flag is removed
   bool IsInInteractiveContent(Node*) const;
+  bool IsInInteractiveContent(Event&) const;
 
   bool IsInteractiveContent() const override;
   void AccessKeyAction(SimulatedClickCreationScope creation_scope) override;
@@ -53,6 +57,7 @@ class CORE_EXPORT HTMLLabelElement final : public HTMLElement {
 
   // Overridden to either click() or focus() the corresponding control.
   void DefaultEventHandler(Event&) override;
+  void DefaultEventHandlerInternal(Event&);
   bool HasActivationBehavior() const override;
 
   void Focus(const FocusParams&) override;

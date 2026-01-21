@@ -5,6 +5,7 @@
 #include "services/network/trust_tokens/trust_token_request_helper_factory.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
@@ -16,6 +17,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/trust_token_http_headers.h"
 #include "services/network/public/cpp/trust_token_parameterization.h"
+#include "services/network/public/mojom/network_context_client.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom-shared.h"
 #include "services/network/trust_tokens/boringssl_trust_token_issuance_cryptographer.h"
 #include "services/network/trust_tokens/boringssl_trust_token_redemption_cryptographer.h"
@@ -35,7 +37,7 @@ namespace {
 
 using Outcome = internal::TrustTokenRequestHelperFactoryOutcome;
 
-base::StringPiece OutcomeToString(Outcome outcome) {
+std::string_view OutcomeToString(Outcome outcome) {
   switch (outcome) {
     case Outcome::kSuccessfullyCreatedAnIssuanceHelper:
       return "Successfully created an issuance helper";
@@ -57,18 +59,16 @@ base::StringPiece OutcomeToString(Outcome outcome) {
 }
 
 void LogOutcome(const net::NetLogWithSource& log,
-                mojom::TrustTokenOperationType type,
+                mojom::TrustTokenOperationType operation,
                 Outcome outcome) {
   base::UmaHistogramEnumeration(
       base::StrCat({"Net.TrustTokens.RequestHelperFactoryOutcome.",
-                    internal::TrustTokenOperationTypeToString(type)}),
+                    internal::TrustTokenOperationTypeToString(operation)}),
       outcome);
-  log.EndEvent(net::NetLogEventType::TRUST_TOKEN_OPERATION_REQUESTED,
-               [outcome]() {
-                 base::Value ret(base::Value::Type::DICTIONARY);
-                 ret.SetStringKey("outcome", OutcomeToString(outcome));
-                 return ret;
-               });
+  log.EndEvent(
+      net::NetLogEventType::TRUST_TOKEN_OPERATION_REQUESTED, [outcome]() {
+        return base::Value::Dict().Set("outcome", OutcomeToString(outcome));
+      });
 }
 
 }  // namespace
@@ -94,28 +94,28 @@ void TrustTokenRequestHelperFactory::CreateTrustTokenHelperForRequest(
   net_log.BeginEventWithIntParams(
       net::NetLogEventType::TRUST_TOKEN_OPERATION_REQUESTED,
       "Operation type (mojom.TrustTokenOperationType)",
-      static_cast<int>(params.type));
+      static_cast<int>(params.operation));
 
   if (!authorizer_.Run()) {
-    LogOutcome(net_log, params.type, Outcome::kRejectedByAuthorizer);
+    LogOutcome(net_log, params.operation, Outcome::kRejectedByAuthorizer);
     std::move(done).Run(mojom::TrustTokenOperationStatus::kUnauthorized);
     return;
   }
 
-  for (base::StringPiece header : TrustTokensRequestHeaders()) {
+  for (std::string_view header : TrustTokensRequestHeaders()) {
     if (headers.HasHeader(header)) {
       LogOutcome(
-          net_log, params.type,
+          net_log, params.operation,
           Outcome::kRequestRejectedDueToBearingAnInternalTrustTokensHeader);
       std::move(done).Run(mojom::TrustTokenOperationStatus::kInvalidArgument);
       return;
     }
   }
 
-  absl::optional<SuitableTrustTokenOrigin> maybe_top_frame_origin =
+  std::optional<SuitableTrustTokenOrigin> maybe_top_frame_origin =
       SuitableTrustTokenOrigin::Create(top_frame_origin);
   if (!maybe_top_frame_origin) {
-    LogOutcome(net_log, params.type, Outcome::kUnsuitableTopFrameOrigin);
+    LogOutcome(net_log, params.operation, Outcome::kUnsuitableTopFrameOrigin);
     std::move(done).Run(mojom::TrustTokenOperationStatus::kFailedPrecondition);
     return;
   }
@@ -135,11 +135,11 @@ void TrustTokenRequestHelperFactory::ConstructHelperUsingStore(
   DCHECK(params);
 
   auto metrics_recorder =
-      std::make_unique<TrustTokenOperationMetricsRecorder>(params->type);
+      std::make_unique<TrustTokenOperationMetricsRecorder>(params->operation);
 
-  switch (params->type) {
+  switch (params->operation) {
     case mojom::TrustTokenOperationType::kIssuance: {
-      LogOutcome(net_log, params->type,
+      LogOutcome(net_log, params->operation,
                  Outcome::kSuccessfullyCreatedAnIssuanceHelper);
       auto helper = std::make_unique<TrustTokenRequestIssuanceHelper>(
           std::move(top_frame_origin), store, key_commitment_getter_,
@@ -153,7 +153,7 @@ void TrustTokenRequestHelperFactory::ConstructHelperUsingStore(
     }
 
     case mojom::TrustTokenOperationType::kRedemption: {
-      LogOutcome(net_log, params->type,
+      LogOutcome(net_log, params->operation,
                  Outcome::kSuccessfullyCreatedARedemptionHelper);
       auto helper = std::make_unique<TrustTokenRequestRedemptionHelper>(
           std::move(top_frame_origin), params->refresh_policy, store,
@@ -169,18 +169,18 @@ void TrustTokenRequestHelperFactory::ConstructHelperUsingStore(
 
     case mojom::TrustTokenOperationType::kSigning: {
       if (params->issuers.empty()) {
-        LogOutcome(net_log, params->type, Outcome::kEmptyIssuersParameter);
+        LogOutcome(net_log, params->operation, Outcome::kEmptyIssuersParameter);
         std::move(done).Run(mojom::TrustTokenOperationStatus::kInvalidArgument);
         return;
       }
 
       std::vector<SuitableTrustTokenOrigin> issuers;
       for (url::Origin& potentially_unsuitable_issuer : params->issuers) {
-        absl::optional<SuitableTrustTokenOrigin> maybe_issuer =
+        std::optional<SuitableTrustTokenOrigin> maybe_issuer =
             SuitableTrustTokenOrigin::Create(
                 std::move(potentially_unsuitable_issuer));
         if (!maybe_issuer) {
-          LogOutcome(net_log, params->type,
+          LogOutcome(net_log, params->operation,
                      Outcome::kUnsuitableIssuerInIssuersParameter);
           std::move(done).Run(
               mojom::TrustTokenOperationStatus::kInvalidArgument);
@@ -193,7 +193,7 @@ void TrustTokenRequestHelperFactory::ConstructHelperUsingStore(
       TrustTokenRequestSigningHelper::Params signing_params(std::move(issuers),
                                                             top_frame_origin);
 
-      LogOutcome(net_log, params->type,
+      LogOutcome(net_log, params->operation,
                  Outcome::kSuccessfullyCreatedASigningHelper);
       auto helper = std::make_unique<TrustTokenRequestSigningHelper>(
           store, std::move(signing_params), std::move(net_log));

@@ -10,13 +10,11 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/memory_dump_manager.h"
 #include "gpu/command_buffer/service/ref_counted_lock.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/gpu_gles2_export.h"
 #include "ui/gl/android/scoped_java_surface.h"
-#include "ui/gl/gl_bindings.h"
-#include "ui/gl/gl_context.h"
-#include "ui/gl/gl_surface.h"
 
 namespace base {
 namespace android {
@@ -25,10 +23,16 @@ class ScopedHardwareBufferFenceSync;
 }  // namespace base
 
 namespace gpu {
-class TextureBase;
-namespace gles2 {
-class AbstractTexture;
-}  // namespace gles2
+
+// Used for diagnosting metrics. Do not use for anything else.
+// TODO(crbug.com/329821776): Remove once we get enough data.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum TextureOwnerCodecType {
+  kMediaCodec = 0,
+  kStreamTexture = 1,
+  kMaxValue = kStreamTexture
+};
 
 // A Texture wrapper interface that creates and maintains ownership of the
 // attached GL or Vulkan texture. The texture is destroyed with the object.
@@ -41,7 +45,8 @@ class AbstractTexture;
 // TextureOwner's shared context is lost.
 class GPU_GLES2_EXPORT TextureOwner
     : public base::RefCountedDeleteOnSequence<TextureOwner>,
-      public SharedContextState::ContextLostObserver {
+      public SharedContextState::ContextLostObserver,
+      public base::trace_event::MemoryDumpProvider {
  public:
   // Creates a GL texture using the current platform GL context and returns a
   // new TextureOwner attached to it. Returns null on failure.
@@ -53,42 +58,27 @@ class GPU_GLES2_EXPORT TextureOwner
   enum class Mode {
     kAImageReaderInsecure,
     kAImageReaderInsecureSurfaceControl,
-    kAImageReaderSecureSurfaceControl,
-    kSurfaceTextureInsecure
+    kAImageReaderSecureSurfaceControl
   };
+
   static scoped_refptr<TextureOwner> Create(
-      std::unique_ptr<gles2::AbstractTexture> texture,
       Mode mode,
       scoped_refptr<SharedContextState> context_state,
-      scoped_refptr<RefCountedLock> drdc_lock);
+      scoped_refptr<RefCountedLock> drdc_lock,
+      TextureOwnerCodecType type_for_metrics);
 
   TextureOwner(const TextureOwner&) = delete;
   TextureOwner& operator=(const TextureOwner&) = delete;
-
-  // Create a texture that's appropriate for a TextureOwner.
-  static std::unique_ptr<gles2::AbstractTexture> CreateTexture(
-      scoped_refptr<SharedContextState> context_state);
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner() {
     return task_runner_;
   }
 
-  // Returns the GL texture id that the TextureOwner is attached to.
-  GLuint GetTextureId() const;
-  TextureBase* GetTextureBase() const;
-  virtual gl::GLContext* GetContext() const = 0;
-  virtual gl::GLSurface* GetSurface() const = 0;
-
   // Create a java surface for the TextureOwner.
   virtual gl::ScopedJavaSurface CreateJavaSurface() const = 0;
 
   // Update the texture image using the latest available image data.
-  virtual void UpdateTexImage() = 0;
-
-  // Ensures that the latest texture image is bound to the provided texture
-  // service_id. Should only be used if the TextureOwner requires explicit
-  // binding of the image after an update.
-  virtual void EnsureTexImageBound(GLuint service_id) = 0;
+  virtual bool UpdateTexImage(bool discard) = 0;
 
   // Transformation matrix if any associated with the texture image.
   virtual void ReleaseBackBuffers() = 0;
@@ -123,8 +113,6 @@ class GPU_GLES2_EXPORT TextureOwner
   // thread.
   virtual void RunWhenBufferIsAvailable(base::OnceClosure callback) = 0;
 
-  bool binds_texture_on_update() const { return binds_texture_on_update_; }
-
   // SharedContextState::ContextLostObserver implementation.
   void OnContextLost() override;
 
@@ -132,46 +120,25 @@ class GPU_GLES2_EXPORT TextureOwner
   friend class base::RefCountedDeleteOnSequence<TextureOwner>;
   friend class base::DeleteHelper<TextureOwner>;
 
-  // Used to restore texture binding to GL_TEXTURE_EXTERNAL_OES target.
-  // TODO(crbug.com/1367187): Fold into gl::ScopedRestoreTexture.
-  class ScopedRestoreTextureBinding {
-   public:
-    ScopedRestoreTextureBinding() {
-      glGetIntegerv(GL_TEXTURE_BINDING_EXTERNAL_OES, &bound_service_id_);
-    }
-    ~ScopedRestoreTextureBinding() {
-      glBindTexture(GL_TEXTURE_EXTERNAL_OES, bound_service_id_);
-    }
-
-   private:
-    GLint bound_service_id_;
-  };
-
-  // |texture| is the texture that we'll own.
-  TextureOwner(bool binds_texture_on_update,
-               std::unique_ptr<gles2::AbstractTexture> texture,
-               scoped_refptr<SharedContextState> context_state);
+  explicit TextureOwner(scoped_refptr<SharedContextState> context_state);
   ~TextureOwner() override;
 
   // Called when |texture_| signals that the platform texture will be destroyed.
   virtual void ReleaseResources() = 0;
 
-  gles2::AbstractTexture* texture() const { return texture_.get(); }
+  int tracing_id() const { return tracing_id_; }
+
+  static constexpr char kMemoryDumpPrefix[] = "gpu/media_texture_owner_0x%x";
 
  private:
   friend class MockTextureOwner;
 
   // To be used by MockTextureOwner.
-  TextureOwner(bool binds_texture_on_update,
-               std::unique_ptr<gles2::AbstractTexture> texture);
-
-  // Set to true if the updating the image for this owner will automatically
-  // bind it to the texture target.
-  const bool binds_texture_on_update_;
+  TextureOwner();
 
   scoped_refptr<SharedContextState> context_state_;
-  std::unique_ptr<gles2::AbstractTexture> texture_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  const int tracing_id_;
 };
 
 }  // namespace gpu

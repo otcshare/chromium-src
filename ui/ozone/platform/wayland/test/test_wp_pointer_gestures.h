@@ -22,7 +22,15 @@ class TestPinchGesture : public ServerObject {
   ~TestPinchGesture() override;
 };
 
-// Manage zwp_linux_dmabuf_v1 object.
+class TestHoldGesture : public ServerObject {
+ public:
+  explicit TestHoldGesture(wl_resource* resource);
+  TestHoldGesture(const TestHoldGesture&) = delete;
+  TestHoldGesture& operator=(const TestHoldGesture&) = delete;
+  ~TestHoldGesture() override;
+};
+
+// Manage zwp_pointer_gestures_v1 object.
 class TestWpPointerGestures : public GlobalObject {
  public:
   TestWpPointerGestures();
@@ -31,6 +39,15 @@ class TestWpPointerGestures : public GlobalObject {
   ~TestWpPointerGestures() override;
 
   TestPinchGesture* pinch() const { return pinch_; }
+
+  TestHoldGesture* hold() const { return hold_; }
+
+  void set_pinch(TestPinchGesture* pinch) { pinch_ = pinch; }
+  void set_hold(TestHoldGesture* hold) { hold_ = hold; }
+
+  base::WeakPtr<TestWpPointerGestures> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
   static void GetSwipeGesture(struct wl_client* client,
                               struct wl_resource* resource,
@@ -42,8 +59,15 @@ class TestWpPointerGestures : public GlobalObject {
                               uint32_t id,
                               struct wl_resource* pointer);
 
+  static void GetHoldGesture(struct wl_client* client,
+                             struct wl_resource* pointer_gestures_resource,
+                             uint32_t id,
+                             struct wl_resource* pointer);
+
  private:
   raw_ptr<TestPinchGesture> pinch_;
+  raw_ptr<TestHoldGesture> hold_;
+  base::WeakPtrFactory<TestWpPointerGestures> weak_ptr_factory_{this};
 };
 
 }  // namespace wl

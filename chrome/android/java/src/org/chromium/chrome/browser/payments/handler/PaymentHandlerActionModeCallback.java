@@ -10,14 +10,16 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.content_public.browser.ActionModeCallback;
 import org.chromium.content_public.browser.ActionModeCallbackHelper;
+import org.chromium.content_public.browser.SelectionMenuItem;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.WebContents;
 
-/**
- * A class that handles selection action mode for Payment Handler.
- */
-public class PaymentHandlerActionModeCallback extends ActionMode.Callback2 {
+/** A class that handles selection action mode for Payment Handler. */
+@NullMarked
+public class PaymentHandlerActionModeCallback extends ActionModeCallback {
     private final ActionModeCallbackHelper mHelper;
 
     /**
@@ -44,7 +46,13 @@ public class PaymentHandlerActionModeCallback extends ActionMode.Callback2 {
     @Override
     public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
         if (!mHelper.isActionModeValid()) return true;
+
         return mHelper.onActionItemClicked(mode, item);
+    }
+
+    @Override
+    public boolean onDropdownItemClicked(SelectionMenuItem item, boolean closeMenu) {
+        return mHelper.onDropdownItemClicked(item, closeMenu);
     }
 
     @Override

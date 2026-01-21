@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/utility/image_writer/image_writer.h"
+
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOKitLib.h>
@@ -13,10 +15,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
-#include "base/mac/scoped_cftyperef.h"
+#include "base/functional/bind.h"
 #include "base/mac/scoped_ioobject.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/kill.h"
@@ -26,29 +29,29 @@
 #include "chrome/common/extensions/image_writer/image_writer_util_mac.h"
 #include "chrome/utility/image_writer/disk_unmounter_mac.h"
 #include "chrome/utility/image_writer/error_message_strings.h"
-#include "chrome/utility/image_writer/image_writer.h"
 
 namespace image_writer {
 
 static const char kAuthOpenPath[] = "/usr/libexec/authopen";
 
 bool ImageWriter::IsValidDevice() {
-  base::ScopedCFTypeRef<CFStringRef> cf_bsd_name(
+  base::apple::ScopedCFTypeRef<CFStringRef> cf_bsd_name(
       base::SysUTF8ToCFStringRef(device_path_.value()));
-  base::ScopedCFTypeRef<CFMutableDictionaryRef> matching(
+  base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> matching(
       IOServiceMatching(kIOMediaClass));
-  CFDictionaryAddValue(matching, CFSTR(kIOMediaWholeKey), kCFBooleanTrue);
-  CFDictionaryAddValue(matching, CFSTR(kIOMediaWritableKey), kCFBooleanTrue);
-  CFDictionaryAddValue(matching, CFSTR(kIOBSDNameKey), cf_bsd_name);
+  CFDictionaryAddValue(matching.get(), CFSTR(kIOMediaWholeKey), kCFBooleanTrue);
+  CFDictionaryAddValue(matching.get(), CFSTR(kIOMediaWritableKey),
+                       kCFBooleanTrue);
+  CFDictionaryAddValue(matching.get(), CFSTR(kIOBSDNameKey), cf_bsd_name.get());
 
   // IOServiceGetMatchingService consumes a reference to the matching dictionary
   // passed to it.
   base::mac::ScopedIOObject<io_service_t> disk_obj(
-      IOServiceGetMatchingService(kIOMasterPortDefault, matching.release()));
+      IOServiceGetMatchingService(kIOMainPortDefault, matching.release()));
   if (!disk_obj)
     return false;
 
-  return extensions::IsSuitableRemovableStorageDevice(disk_obj, nullptr,
+  return extensions::IsSuitableRemovableStorageDevice(disk_obj.get(), nullptr,
                                                       nullptr, nullptr);
 }
 
@@ -137,7 +140,7 @@ bool ImageWriter::OpenDevice() {
 
     if (cmsg_socket_header && cmsg_socket_header->cmsg_level == SOL_SOCKET &&
         cmsg_socket_header->cmsg_type == SCM_RIGHTS) {
-      fd = *reinterpret_cast<int*>(CMSG_DATA(cmsg_socket_header));
+      fd = *reinterpret_cast<int*>(UNSAFE_TODO(CMSG_DATA(cmsg_socket_header)));
     }
   }
 

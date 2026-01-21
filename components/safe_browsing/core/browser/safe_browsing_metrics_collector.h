@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CORE_BROWSER_SAFE_BROWSING_METRICS_COLLECTOR_H_
 #define COMPONENTS_SAFE_BROWSING_CORE_BROWSER_SAFE_BROWSING_METRICS_COLLECTOR_H_
 
+#include <optional>
+
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -12,12 +14,28 @@
 #include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "components/safe_browsing/core/browser/db/hit_report.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/safe_browsing/core/common/threat_enums.h"
 
 class PrefService;
 
 namespace safe_browsing {
+
+// Describes the reason for an unwanted notification revocation.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(NotificationRevocationSource)
+enum class NotificationRevocationSource {
+  kSocialEngineeringBlocklist = 0,
+  kSafeBrowsingUnwantedRevocation = 1,
+  kStandardOneTapUnsubscribe = 2,
+  kSuspiciousWarningOneTapUnsubscribe = 3,
+  kDisruptiveAutoRevocation = 4,
+  kUserManuallyChangedSiteSetting = 5,
+  kUnknown = 6,
+  kSuspiciousContentAutoRevocation = 7,
+  kMaxValue = kSuspiciousContentAutoRevocation,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/safe_browsing/enums.xml:NotificationRevocationSource)
 
 // This class is for logging Safe Browsing metrics regularly. Metrics are logged
 // everyday or at startup, if the last logging time was more than a day ago.
@@ -29,10 +47,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
   // for measuring user friction, or security sensitive actions. They are used
   // as keys of the SafeBrowsingEventTimestamps pref. They are used for logging
   // histograms, entries must not be removed or reordered. Please update the
-  // enums.xml file if new values are added. They are also used to construct
-  // suffixes of histograms. Please update the MetricsCollectorBypassEventType
-  // or MetricsCollectorSecuritySensitiveEventType
-  // variants in the histograms.xml file if new event values are added.
+  // enums.xml file if new values are added.
   enum EventType {
     // The user state is disabled.
     USER_STATE_DISABLED = 0,
@@ -46,7 +61,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
     CSD_INTERSTITIAL_BYPASS = 3,
     // The user bypasses the interstitial that is triggered by real time URL
     // check.
-    REAL_TIME_INTERSTITIAL_BYPASS = 4,
+    URL_REAL_TIME_INTERSTITIAL_BYPASS = 4,
     // The user bypasses the dangerous download warning based on server
     // verdicts.
     DANGEROUS_DOWNLOAD_BYPASS = 5,
@@ -72,8 +87,19 @@ class SafeBrowsingMetricsCollector : public KeyedService {
     // User committed a security sensitive action related to downloads, as
     // checked by Safe Browsing.
     SECURITY_SENSITIVE_DOWNLOAD = 12,
+    // The user bypasses an interstitial that is triggered by the hash-prefix
+    // real-time lookup.
+    HASH_PREFIX_REAL_TIME_INTERSTITIAL_BYPASS = 13,
+    // The user bypasses an interstitial that is triggered by the hash-prefix
+    // real-time lookup through Android Safe Browsing API.
+    ANDROID_SAFEBROWSING_REAL_TIME_INTERSTITIAL_BYPASS = 14,
+    // The user bypasses an interstitial that is triggered by the local Safe
+    // Browsing database through Android Safe Browsing API.
+    ANDROID_SAFEBROWSING_INTERSTITIAL_BYPASS = 15,
+    // The user started a download deep scan
+    DOWNLOAD_DEEP_SCAN = 16,
 
-    kMaxValue = SECURITY_SENSITIVE_DOWNLOAD
+    kMaxValue = DOWNLOAD_DEEP_SCAN
   };
 
   using EventTypeFilter = base::RepeatingCallback<bool(const EventType&)>;
@@ -106,6 +132,11 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   ~SafeBrowsingMetricsCollector() override = default;
 
+  // Log the histogram that shows the revocation source when notification
+  // permissions are removed.
+  static void LogSafeBrowsingNotificationRevocationSourceHistogram(
+      NotificationRevocationSource source);
+
   // Checks the last logging time. If the time is longer than a day ago, log
   // immediately. Otherwise, schedule the next logging with delay.
   void StartLogging();
@@ -119,26 +150,38 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   // Gets the latest event timestamp of the |event_type|. Returns nullopt if
   // the |event_type| didn't happen in the past.
-  absl::optional<base::Time> GetLatestEventTimestamp(EventType event_type);
+  std::optional<base::Time> GetLatestEventTimestamp(EventType event_type);
 
   // Gets the latest event timestamp for security sensitive events. Returns
   // nullopt if a security sensitive event didn't happen in the past.
-  virtual absl::optional<base::Time> GetLatestSecuritySensitiveEventTimestamp();
+  virtual std::optional<base::Time> GetLatestSecuritySensitiveEventTimestamp();
 
   // KeyedService:
   // Called before the actual deletion of the object.
   void Shutdown() override;
 
  private:
+  friend class SafeBrowsingMetricsCollectorTest;
   FRIEND_TEST_ALL_PREFIXES(SafeBrowsingMetricsCollectorTest, GetUserState);
+
+  // The type of Protego ping that was sent by an enhanced protection
+  // user. These values are persisted to logs. Entries should not be renumbered
+  // and numeric values should never be reused.
+  enum class ProtegoPingType {
+    kUnknownType = 0,
+    kNone = 1,
+    kWithToken = 2,
+    kWithoutToken = 3,
+    kMaxValue = kWithoutToken,
+  };
 
   static bool IsBypassEventType(const EventType& type);
   static bool IsSecuritySensitiveEventType(const EventType& type);
   static std::string GetUserStateMetricSuffix(const UserState& user_state);
-  static std::string GetEventTypeMetricSuffix(const EventType& event_type);
 
   // For daily metrics.
   void LogMetricsAndScheduleNextLogging();
+  void MaybeLogDailyEsbProtegoPingSent();
   void ScheduleNextLoggingAfterInterval(base::TimeDelta interval);
   void LogDailyOptInMetrics();
   void LogDailyEventMetrics();
@@ -158,11 +201,11 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   // Gets the latest event timestamp for events filtered by |event_type_filter|.
   // Returns nullopt if none of the events happened in the past.
-  absl::optional<base::Time> GetLatestEventTimestamp(
+  std::optional<base::Time> GetLatestEventTimestamp(
       EventTypeFilter event_type_filter);
-  absl::optional<SafeBrowsingMetricsCollector::Event>
+  std::optional<SafeBrowsingMetricsCollector::Event>
   GetLatestEventFromEventType(UserState user_state, EventType event_type);
-  absl::optional<SafeBrowsingMetricsCollector::Event>
+  std::optional<SafeBrowsingMetricsCollector::Event>
   GetLatestEventFromEventTypeFilter(UserState user_state,
                                     EventTypeFilter event_type_filter);
   const base::Value::Dict* GetSafeBrowsingEventDictionary(UserState user_state);
@@ -170,6 +213,10 @@ class SafeBrowsingMetricsCollector : public KeyedService {
                          EventType event_type,
                          base::Time since_time);
   UserState GetUserState();
+
+  ProtegoPingType GetMostRecentPingType(base::Time last_ping_with_token,
+                                        base::Time last_ping_without_token,
+                                        base::TimeDelta time_delta);
 
   raw_ptr<PrefService> pref_service_;
   PrefChangeRegistrar pref_change_registrar_;

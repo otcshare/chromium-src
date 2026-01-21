@@ -12,14 +12,14 @@
 #include "chrome/browser/ash/policy/remote_commands/device_command_screenshot_job.h"
 #include "chrome/browser/ash/policy/uploading/upload_job.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/snapshot/snapshot.h"
 #include "url/gurl.h"
 
 namespace policy {
 
 // An implementation of the |DeviceCommandScreenshotJob::Delegate| that uses
-// aura's GrabWindowSnapshotAsyncPNG() to acquire the window snapshot.
+// aura's GrabWindowSnapshotAsPNG() to acquire the window snapshot.
 class ScreenshotDelegate : public DeviceCommandScreenshotJob::Delegate {
  public:
   ScreenshotDelegate();

@@ -6,14 +6,15 @@
 #define UI_GL_GL_IMPLEMENTATION_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/native_library.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/extension_set.h"
+#include "ui/gl/angle_implementation.h"
 #include "ui/gl/buildflags.h"
 #include "ui/gl/gl_export.h"
 #include "ui/gl/gl_switches.h"
@@ -32,9 +33,9 @@ class GLApi;
 // in /tool/metrics/histograms/enums.xml
 enum GLImplementation {
   kGLImplementationNone = 0,
-  kGLImplementationDesktopGL = 1,
-  kGLImplementationDesktopGLCoreProfile = 2,
-  // Note: 3 and 4 are skipped and should not be reused.
+  // Note: 1, 2, 3, 4 are skipped and should not be reused.
+  // 1 used to be desktop GL.
+  // 2 used to be desktop GL core profile.
   // 3 used to be legacy SwiftShader.
   // 4 used to be Apple's software GL.
   kGLImplementationEGLGLES2 = 5,  // Native EGL/GLES2
@@ -43,20 +44,6 @@ enum GLImplementation {
   kGLImplementationDisabled = 8,
   kGLImplementationEGLANGLE = 9,  // EGL/GL implemented using ANGLE
   kMaxValue = kGLImplementationEGLANGLE,
-};
-
-enum class ANGLEImplementation {
-  kNone = 0,
-  kD3D9 = 1,
-  kD3D11 = 2,
-  kOpenGL = 3,
-  kOpenGLES = 4,
-  kNull = 5,
-  kVulkan = 6,
-  kSwiftShader = 7,
-  kMetal = 8,
-  kDefault = 9,
-  kMaxValue = kDefault,
 };
 
 struct GL_EXPORT GLImplementationParts {
@@ -72,21 +59,22 @@ struct GL_EXPORT GLImplementationParts {
   GLImplementation gl = kGLImplementationNone;
   ANGLEImplementation angle = ANGLEImplementation::kNone;
 
-  constexpr bool operator==(const GLImplementationParts& other) const {
-    return (gl == other.gl && angle == other.angle);
-  }
+  friend constexpr bool operator==(const GLImplementationParts&,
+                                   const GLImplementationParts&) = default;
 
   constexpr bool operator==(const ANGLEImplementation angle_impl) const {
-    return operator==(GLImplementationParts(angle_impl));
+    return *this == GLImplementationParts(angle_impl);
   }
 
   constexpr bool operator==(const GLImplementation gl_impl) const {
-    return operator==(GLImplementationParts(gl_impl));
+    return *this == GLImplementationParts(gl_impl);
   }
 
   bool IsValid() const;
   bool IsAllowed(const std::vector<GLImplementationParts>& allowed_impls) const;
   std::string ToString() const;
+  std::string GLString() const;
+  std::string ANGLEString() const;
 
  private:
   static constexpr ANGLEImplementation MakeANGLEImplementation(
@@ -116,8 +104,10 @@ struct GL_EXPORT GLWindowSystemBindingInfo {
 using GLFunctionPointerType = void (*)();
 #if BUILDFLAG(IS_WIN)
 typedef GLFunctionPointerType(WINAPI* GLGetProcAddressProc)(const char* name);
+#define STDCALL __stdcall
 #else
 typedef GLFunctionPointerType (*GLGetProcAddressProc)(const char* name);
+#define STDCALL
 #endif
 
 // Sets stub methods for drawing operations in the GL bindings. The
@@ -165,7 +155,13 @@ GL_EXPORT void SetANGLEImplementation(ANGLEImplementation implementation);
 GL_EXPORT ANGLEImplementation GetANGLEImplementation();
 
 // Get the software GL implementation
-GL_EXPORT GLImplementationParts GetSoftwareGLImplementation();
+GL_EXPORT GLImplementationParts
+GetSoftwareGLImplementation(const base::CommandLine* command_line);
+
+// Set the command line flags to request the provided GL implementation
+GL_EXPORT void SetGLImplementationCommandLineSwitches(
+    const GLImplementationParts& implementation,
+    base::CommandLine* command_line);
 
 // Set the software GL implementation on the provided command line
 GL_EXPORT void SetSoftwareGLCommandLineSwitches(
@@ -175,19 +171,24 @@ GL_EXPORT void SetSoftwareGLCommandLineSwitches(
 GL_EXPORT void SetSoftwareWebGLCommandLineSwitches(
     base::CommandLine* command_line);
 
+// Check if there is a requested software GL implementation in the command line
+// arguments. Used to avoid requesting multiple times or overriding specific
+// user requests.
+GL_EXPORT bool HasRequestedSoftwareGLImplementationFromCommandLine(
+    const base::CommandLine* command_line);
+
 // Return requested GL implementation by checking commandline. If there isn't
 // gl related argument, nullopt is returned.
-GL_EXPORT absl::optional<GLImplementationParts>
+GL_EXPORT std::optional<GLImplementationParts>
 GetRequestedGLImplementationFromCommandLine(
-    const base::CommandLine* command_line,
-    bool* fallback_to_software_gl);
+    const base::CommandLine* command_line);
 
 // Whether the implementation is one of the software GL implementations
 GL_EXPORT bool IsSoftwareGLImplementation(GLImplementationParts implementation);
 
-// Does the underlying GL support all features from Desktop GL 2.0 that were
-// removed from the ES 2.0 spec without requiring specific extension strings.
-GL_EXPORT bool HasDesktopGLFeatures();
+GL_EXPORT bool IsSwiftShaderGLImplementation(
+    GLImplementationParts implementation);
+GL_EXPORT bool IsWARPGLImplementation(GLImplementationParts implementation);
 
 // Get the GL implementation with a given name.
 GL_EXPORT GLImplementationParts
@@ -212,12 +213,11 @@ GL_EXPORT void SetGLGetProcAddressProc(GLGetProcAddressProc proc);
 
 // Find an entry point in the current GL implementation. Note that the function
 // may return a non-null pointer to something else than the GL function if an
-// unsupported function is queried. Spec-compliant eglGetProcAddress and
-// glxGetProcAddress are allowed to return garbage for unsupported functions,
-// and when querying functions from the EGL library supplied by Android, it may
-// return a function that prints a log message about the function being
-// unsupported.
-GL_EXPORT GLFunctionPointerType GetGLProcAddress(const char* name);
+// unsupported function is queried. Spec-compliant eglGetProcAddress is allowed
+// to return garbage for unsupported functions, and when querying functions
+// from the EGL library supplied by Android, it may return a function that
+// prints a log message about the function being unsupported.
+STDCALL GL_EXPORT GLFunctionPointerType GetGLProcAddress(const char* name);
 
 // Helper for fetching the OpenGL extensions from the current context.
 // This helper abstracts over differences between the desktop OpenGL
@@ -231,12 +231,6 @@ GL_EXPORT std::string GetGLExtensionsFromCurrentContext(GLApi* api);
 GL_EXPORT gfx::ExtensionSet GetRequestableGLExtensionsFromCurrentContext();
 GL_EXPORT gfx::ExtensionSet GetRequestableGLExtensionsFromCurrentContext(
     GLApi* api);
-
-// Helper for the GL bindings implementation to understand whether
-// glGetString(GL_EXTENSIONS) or glGetStringi(GL_EXTENSIONS, i) will
-// be used in the function above.
-GL_EXPORT bool WillUseGLGetStringForExtensions();
-GL_EXPORT bool WillUseGLGetStringForExtensions(GLApi* api);
 
 // Helpers to load a library and log error on failure.
 GL_EXPORT base::NativeLibrary LoadLibraryAndPrintError(

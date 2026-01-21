@@ -18,9 +18,11 @@ void CreateSimpleAlertInfoBar(
     const gfx::VectorIcon* vector_icon,
     const std::u16string& message,
     bool auto_expire,
-    bool should_animate) {
+    bool should_animate,
+    bool closeable,
+    infobars::InfoBarDelegate::InfobarPriority infobar_priority) {
   infobar_manager->AddInfoBar(
       CreateConfirmInfoBar(std::make_unique<SimpleAlertInfoBarDelegate>(
-          infobar_identifier, vector_icon, message, auto_expire,
-          should_animate)));
+          infobar_identifier, vector_icon, message, auto_expire, should_animate,
+          closeable, infobar_priority)));
 }

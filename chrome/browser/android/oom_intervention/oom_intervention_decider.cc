@@ -4,7 +4,7 @@
 
 #include "chrome/browser/android/oom_intervention/oom_intervention_decider.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -17,7 +17,7 @@ namespace {
 const char kOomInterventionDecider[] = "oom_intervention.decider";
 
 // Deprecated: Replaced with `kBlocklist`.
-// TODO(https://crbug.com/1169828): Remove this after M92 once existing
+// TODO(crbug.com/40744119): Remove this after M92 once existing
 // clients have migrated to the new pref.
 const char kBlacklist[] = "oom_intervention.blacklist";
 // Pref path for blocklist. If a hostname is in the blocklist we never trigger

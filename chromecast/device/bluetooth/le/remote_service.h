@@ -9,7 +9,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "chromecast/device/bluetooth/le/ble_types.h"
 #include "chromecast/public/bluetooth/gatt.h"

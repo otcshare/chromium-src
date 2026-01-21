@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_FEED_CORE_V2_STREAM_MODEL_H_
 #define COMPONENTS_FEED_CORE_V2_STREAM_MODEL_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -98,6 +97,7 @@ class StreamModel {
   StreamModel& operator=(const StreamModel&) = delete;
 
   void SetStreamType(const StreamType& stream_type);
+  const StreamType& GetStreamType() const;
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
   void SetStoreObserver(StoreObserver* store_observer);

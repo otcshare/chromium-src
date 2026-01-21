@@ -8,6 +8,7 @@
 #include "base/test/gtest_util.h"
 #include "media/base/media_content_type.h"
 #include "media/base/media_switches.h"
+#include "media/base/media_track.h"
 #include "media/mojo/mojom/media_player.mojom-blink.h"
 #include "services/media_session/public/mojom/media_session.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,23 +16,32 @@
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom-blink.h"
 #include "third_party/blink/public/platform/web_media_player.h"
 #include "third_party/blink/public/platform/web_media_player_source.h"
+#include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
+#include "third_party/blink/renderer/core/dom/dom_implementation.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
+#include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/media/media_error.h"
+#include "third_party/blink/renderer/core/html/media/media_video_visibility_tracker.h"
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/core/html/track/audio_track_list.h"
 #include "third_party/blink/renderer/core/html/track/video_track_list.h"
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/thread_state_scopes.h"
 #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
 #include "third_party/blink/renderer/platform/testing/empty_web_media_player.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -56,25 +66,26 @@ enum class TestURLScheme {
 AtomicString SrcSchemeToURL(TestURLScheme scheme) {
   switch (scheme) {
     case TestURLScheme::kHttp:
-      return "http://example.com/foo.mp4";
+      return AtomicString("http://example.com/foo.mp4");
     case TestURLScheme::kHttps:
-      return "https://example.com/foo.mp4";
+      return AtomicString("https://example.com/foo.mp4");
     case TestURLScheme::kFtp:
-      return "ftp://example.com/foo.mp4";
+      return AtomicString("ftp://example.com/foo.mp4");
     case TestURLScheme::kFile:
-      return "file:///foo/bar.mp4";
+      return AtomicString("file:///foo/bar.mp4");
     case TestURLScheme::kData:
-      return "data:video/mp4;base64,XXXXXXX";
+      return AtomicString("data:video/mp4;base64,XXXXXXX");
     case TestURLScheme::kBlob:
-      return "blob:http://example.com/00000000-0000-0000-0000-000000000000";
+      return AtomicString(
+          "blob:http://example.com/00000000-0000-0000-0000-000000000000");
     default:
       NOTREACHED();
   }
-  return g_empty_atom;
 }
 
 class MockWebMediaPlayer : public EmptyWebMediaPlayer {
  public:
+  MOCK_METHOD1(Pause, void(PauseReason));
   MOCK_METHOD0(OnTimeUpdate, void());
   MOCK_CONST_METHOD0(Seekable, WebTimeRanges());
   MOCK_METHOD0(OnFrozen, void());
@@ -86,9 +97,10 @@ class MockWebMediaPlayer : public EmptyWebMediaPlayer {
   MOCK_CONST_METHOD0(GetNetworkState, NetworkState());
   MOCK_CONST_METHOD0(WouldTaintOrigin, bool());
   MOCK_METHOD1(SetLatencyHint, void(double));
-  MOCK_METHOD1(SetWasPlayedWithUserActivation, void(bool));
-  MOCK_METHOD1(EnabledAudioTracksChanged, void(const WebVector<TrackId>&));
-  MOCK_METHOD1(SelectedVideoTrackChanged, void(TrackId*));
+  MOCK_METHOD1(SetWasPlayedWithUserActivationAndHighMediaEngagement,
+               void(bool));
+  MOCK_METHOD1(EnabledAudioTracksChanged, void(std::optional<TrackId>));
+  MOCK_METHOD1(SelectedVideoTrackChanged, void(std::optional<TrackId>));
   MOCK_METHOD4(
       Load,
       WebMediaPlayer::LoadTiming(LoadType load_type,
@@ -115,6 +127,53 @@ class WebMediaStubLocalFrameClient : public EmptyLocalFrameClient {
 
  private:
   std::unique_ptr<WebMediaPlayer> player_;
+};
+
+class FullscreenMockChromeClient : public EmptyChromeClient {
+ public:
+  // ChromeClient overrides:
+  void EnterFullscreen(LocalFrame& frame,
+                       const FullscreenOptions*,
+                       FullscreenRequestType) override {
+    Fullscreen::DidResolveEnterFullscreenRequest(*frame.GetDocument(),
+                                                 true /* granted */);
+  }
+  void ExitFullscreen(LocalFrame& frame) override {
+    Fullscreen::DidExitFullscreen(*frame.GetDocument());
+  }
+};
+
+// Helper class to mock `RequestVisibility` callbacks.
+class RequestVisibilityWaiter {
+ public:
+  RequestVisibilityWaiter() : run_loop_(std::make_unique<base::RunLoop>()) {}
+
+  RequestVisibilityWaiter(const RequestVisibilityWaiter&) = delete;
+  RequestVisibilityWaiter(RequestVisibilityWaiter&&) = delete;
+  RequestVisibilityWaiter& operator=(const RequestVisibilityWaiter&) = delete;
+
+  HTMLMediaElement::RequestVisibilityCallback VisibilityCallback() {
+    // base::Unretained() is safe since no further tasks can run after
+    // RunLoop::Run() returns.
+    return BindOnce(&RequestVisibilityWaiter::RequestVisibility,
+                    Unretained(this));
+  }
+
+  void WaitUntilDone() {
+    run_loop_->Run();
+    run_loop_ = std::make_unique<base::RunLoop>();
+  }
+
+  bool MeetsVisibility() { return meets_visibility_; }
+
+ private:
+  void RequestVisibility(bool meets_visibility) {
+    meets_visibility_ = meets_visibility;
+    run_loop_->Quit();
+  }
+
+  std::unique_ptr<base::RunLoop> run_loop_;
+  bool meets_visibility_ = false;
 };
 
 // Helper class that provides an implementation of the MediaPlayerObserver mojo
@@ -176,7 +235,7 @@ class TestMediaPlayerObserver final
 
   void OnPictureInPictureAvailabilityChanged(bool available) override {}
 
-  void OnAudioOutputSinkChanged(const WTF::String& hashed_device_id) override {}
+  void OnAudioOutputSinkChanged(const String& hashed_device_id) override {}
 
   void OnUseAudioServiceChanged(bool uses_audio_service) override {
     received_uses_audio_service_ = uses_audio_service;
@@ -192,18 +251,20 @@ class TestMediaPlayerObserver final
     run_loop_->Quit();
   }
 
+  void OnVideoVisibilityChanged(bool meets_visibility_threshold) override {}
+
   // Getters used from HTMLMediaElementTest.
   bool received_media_playing() const { return received_media_playing_; }
 
-  const absl::optional<bool>& received_media_paused_stream_ended() const {
+  const std::optional<bool>& received_media_paused_stream_ended() const {
     return received_media_paused_stream_ended_;
   }
 
-  const absl::optional<bool>& received_muted_status() const {
+  const std::optional<bool>& received_muted_status() const {
     return received_muted_status_type_;
   }
 
-  const absl::optional<OnMetadataChangedResult>&
+  const std::optional<OnMetadataChangedResult>&
   received_metadata_changed_result() const {
     return received_metadata_changed_result_;
   }
@@ -223,11 +284,11 @@ class TestMediaPlayerObserver final
  private:
   std::unique_ptr<base::RunLoop> run_loop_;
   bool received_media_playing_{false};
-  absl::optional<bool> received_media_paused_stream_ended_;
-  absl::optional<bool> received_muted_status_type_;
-  absl::optional<OnMetadataChangedResult> received_metadata_changed_result_;
+  std::optional<bool> received_media_paused_stream_ended_;
+  std::optional<bool> received_muted_status_type_;
+  std::optional<OnMetadataChangedResult> received_metadata_changed_result_;
   gfx::Size received_media_size_{0, 0};
-  absl::optional<bool> received_uses_audio_service_;
+  std::optional<bool> received_uses_audio_service_;
   media_session::mojom::blink::RemotePlaybackMetadataPtr
       received_remote_playback_metadata_;
 };
@@ -286,8 +347,9 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
         .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateIdle));
     EXPECT_CALL(*mock_media_player, SetLatencyHint(_)).Times(AnyNumber());
 
+    chrome_client_ = MakeGarbageCollected<FullscreenMockChromeClient>();
     dummy_page_holder_ = std::make_unique<DummyPageHolder>(
-        gfx::Size(), nullptr,
+        gfx::Size(), chrome_client_,
         MakeGarbageCollected<WebMediaStubLocalFrameClient>(
             std::move(mock_media_player)));
 
@@ -301,6 +363,12 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
 
     media_->SetMediaPlayerHostForTesting(
         media_player_host_receiver_.BindNewEndpointAndPassDedicatedRemote());
+
+    UpdateLifecyclePhases();
+  }
+
+  void UpdateLifecyclePhases() {
+    dummy_page_holder_->GetFrameView().UpdateAllLifecyclePhasesForTest();
   }
 
   void WaitForPlayer() {
@@ -338,7 +406,8 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
 
   void ResetWebMediaPlayer() const { Media()->web_media_player_.reset(); }
 
-  void MediaContextLifecycleStateChanged(mojom::FrameLifecycleState state) {
+  void MediaContextLifecycleStateChanged(
+      mojom::blink::FrameLifecycleState state) {
     Media()->ContextLifecycleStateChanged(state);
   }
 
@@ -368,6 +437,28 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
   LocalDOMWindow* GetDomWindow() const {
     return dummy_page_holder_->GetFrame().DomWindow();
   }
+
+  void TimeChanged() { Media()->TimeChanged(); }
+
+  void ContextDestroyed() { Media()->ContextDestroyed(); }
+
+  MediaVideoVisibilityTracker* VideoVisibilityTracker() {
+    auto* video = DynamicTo<HTMLVideoElement>(Media());
+    return video ? video->visibility_tracker_for_tests() : nullptr;
+  }
+
+  MediaVideoVisibilityTracker::TrackerAttachedToDocument
+  VideoVisibilityTrackerAttachedToDocument(HTMLVideoElement* video) const {
+    DCHECK(video->visibility_tracker_for_tests());
+    return video->visibility_tracker_for_tests()->tracker_attached_to_document_;
+  }
+
+  void RequestVisibility(HTMLMediaElement::RequestVisibilityCallback
+                             request_visibility_callback) const {
+    Media()->RequestVisibility(std::move(request_visibility_callback));
+  }
+
+  void ClearMediaPlayer() { Media()->ClearMediaPlayer(); }
 
  protected:
   // Helpers to call MediaPlayerObserver mojo methods and check their results.
@@ -403,15 +494,14 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
                                   bool has_video,
                                   media::AudioCodec audio_codec,
                                   media::VideoCodec video_codec,
-                                  media::MediaContentType media_content_type) {
+                                  media::MediaContentType media_content_type,
+                                  bool is_encrypted_media) {
     media_->DidMediaMetadataChange(has_audio, has_video, audio_codec,
-                                   video_codec, media_content_type);
+                                   video_codec, media_content_type,
+                                   is_encrypted_media);
     media_player_observer().WaitUntilReceivedMessage();
     // wait for OnRemotePlaybackMetadataChange() to be called.
-    if (audio_codec != media::AudioCodec::kUnknown ||
-        video_codec != media::VideoCodec::kUnknown) {
       media_player_observer().WaitUntilReceivedMessage();
-    }
   }
 
   bool ReceivedMessageMediaMetadataChanged(
@@ -537,13 +627,69 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
     EXPECT_FALSE(WasPlayerDestroyed());
   }
 
+  bool HasEventListenerRegistered(EventTarget& target,
+                                  const AtomicString& event_type,
+                                  const EventListener* listener) const {
+    EventListenerVector* listeners = target.GetEventListeners(event_type);
+    if (!listeners) {
+      return false;
+    }
+
+    for (const auto& registered_listener : *listeners) {
+      if (registered_listener->Callback() == listener) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  void SimulateEnterFullscreen(Element* element) {
+    {
+      LocalFrame::NotifyUserActivation(
+          element->GetDocument().GetFrame(),
+          mojom::UserActivationNotificationType::kTest);
+      Fullscreen::RequestFullscreen(*element);
+    }
+    test::RunPendingTasks();
+    UpdateLifecyclePhases();
+
+    if (auto* video = DynamicTo<HTMLVideoElement>(element); video) {
+      video->DidEnterFullscreen();
+      EXPECT_TRUE(video->IsFullscreen());
+    }
+
+    element->GetDocument().DispatchEvent(
+        *Event::Create(event_type_names::kFullscreenchange));
+    EXPECT_EQ(element,
+              Fullscreen::FullscreenElementFrom(element->GetDocument()));
+  }
+
+  void SimulateExitFullscreen(Element* element) {
+    Fullscreen::FullyExitFullscreen(element->GetDocument());
+
+    if (auto* video = DynamicTo<HTMLVideoElement>(element); video) {
+      video->DidExitFullscreen();
+      EXPECT_FALSE(video->IsFullscreen());
+    }
+
+    element->GetDocument().DispatchEvent(
+        *Event::Create(event_type_names::kFullscreenchange));
+    EXPECT_EQ(nullptr,
+              Fullscreen::FullscreenElementFrom(element->GetDocument()));
+  }
+
+  test::TaskEnvironment task_environment_;
+  CSSDefaultStyleSheets::TestingScope ua_style_sheets_scope_;
+  std::unique_ptr<DummyPageHolder> dummy_page_holder_;
+
  private:
   TestMediaPlayerObserver& media_player_observer() {
     return media_player_host_.observer();
   }
 
-  std::unique_ptr<DummyPageHolder> dummy_page_holder_;
   Persistent<HTMLMediaElement> media_;
+  Persistent<FullscreenMockChromeClient> chrome_client_;
 
   // Owned by WebMediaStubLocalFrameClient.
   MockWebMediaPlayer* media_player_;
@@ -579,6 +725,9 @@ TEST_P(HTMLMediaElementTest, effectiveMediaVolume) {
 }
 
 TEST_P(HTMLMediaElementTest, preloadType) {
+  AtomicString auto_string("auto");
+  AtomicString none_string("none");
+  AtomicString metadata_string("metadata");
   struct TestData {
     bool data_saver_enabled;
     bool is_cellular;
@@ -586,23 +735,25 @@ TEST_P(HTMLMediaElementTest, preloadType) {
     AtomicString preload_to_set;
     AtomicString preload_expected;
   } test_data[] = {
-      // Tests for conditions in which preload type should be overriden to
-      // "none".
-      {false, false, TestURLScheme::kHttp, "auto", "auto"},
-      {true, false, TestURLScheme::kHttps, "auto", "auto"},
-      {true, false, TestURLScheme::kFtp, "metadata", "metadata"},
-      {false, false, TestURLScheme::kHttps, "auto", "auto"},
-      {false, false, TestURLScheme::kFile, "auto", "auto"},
-      {false, false, TestURLScheme::kData, "metadata", "metadata"},
-      {false, false, TestURLScheme::kBlob, "auto", "auto"},
-      {false, false, TestURLScheme::kFile, "none", "none"},
-      // Tests for conditions in which preload type should be overriden to
-      // "metadata".
-      {false, true, TestURLScheme::kHttp, "auto", "metadata"},
-      {false, true, TestURLScheme::kHttp, "scheme", "metadata"},
-      {false, true, TestURLScheme::kHttp, "none", "none"},
-      // Tests that the preload is overriden to "metadata".
-      {false, false, TestURLScheme::kHttp, "foo", "metadata"},
+      // Tests for conditions in which preload type should be overridden to
+      // none_string.
+      {false, false, TestURLScheme::kHttp, auto_string, auto_string},
+      {true, false, TestURLScheme::kHttps, auto_string, auto_string},
+      {true, false, TestURLScheme::kFtp, metadata_string, metadata_string},
+      {false, false, TestURLScheme::kHttps, auto_string, auto_string},
+      {false, false, TestURLScheme::kFile, auto_string, auto_string},
+      {false, false, TestURLScheme::kData, metadata_string, metadata_string},
+      {false, false, TestURLScheme::kBlob, auto_string, auto_string},
+      {false, false, TestURLScheme::kFile, none_string, none_string},
+      // Tests for conditions in which preload type should be overridden to
+      // metadata_string.
+      {false, true, TestURLScheme::kHttp, auto_string, metadata_string},
+      {false, true, TestURLScheme::kHttp, AtomicString("scheme"),
+       metadata_string},
+      {false, true, TestURLScheme::kHttp, none_string, none_string},
+      // Tests that the preload is overridden to metadata_string.
+      {false, false, TestURLScheme::kHttp, AtomicString("foo"),
+       metadata_string},
   };
 
   int index = 0;
@@ -867,6 +1018,132 @@ TEST_P(HTMLMediaElementTest, DefaultTracksAreEnabled) {
   EXPECT_TRUE(Media()->videoTracks().AnonymousIndexedGetter(0)->selected());
 }
 
+TEST_P(HTMLMediaElementTest, TrackChangeSourceDemuxerIsIgnored) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  SetReadyState(HTMLMediaElement::kHaveFutureData);
+
+  ASSERT_EQ(1u, Media()->audioTracks().length());
+  ASSERT_EQ(1u, Media()->videoTracks().length());
+  AudioTrack* audio_track = Media()->audioTracks().AnonymousIndexedGetter(0);
+  VideoTrack* video_track = Media()->videoTracks().AnonymousIndexedGetter(0);
+
+  // Tracks are enabled by default. Let's disable them to test enabling.
+  // Use kScript source to ensure the player is notified.
+  EXPECT_CALL(*MockMediaPlayer(),
+              EnabledAudioTracksChanged(testing::Eq(std::nullopt)));
+  audio_track->setEnabled(false);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  EXPECT_CALL(*MockMediaPlayer(),
+              SelectedVideoTrackChanged(testing::Eq(std::nullopt)));
+  video_track->setSelected(false);
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Test AudioTrackChanged with kDemuxer.
+  // We expect that EnabledAudioTracksChanged is NOT called for demuxer.
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_)).Times(0);
+  audio_track->setEnabled(true, TrackBase::ChangeSource::kDemuxer);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Test SelectedVideoTrackChanged with kDemuxer.
+  // We expect that SelectedVideoTrackChanged is NOT called for demuxer.
+  EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_)).Times(0);
+  video_track->setSelected(true, TrackBase::ChangeSource::kDemuxer);
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Disable the tracks again using a non-notifying source before testing the
+  // script source.
+  audio_track->setEnabled(false, TrackBase::ChangeSource::kDemuxer);
+  video_track->setSelected(false, TrackBase::ChangeSource::kDemuxer);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Test AudioTrackChanged with kScript.
+  // We expect that EnabledAudioTracksChanged IS called for script.
+  EXPECT_CALL(*MockMediaPlayer(),
+              EnabledAudioTracksChanged(testing::Optional(audio_track->id())));
+  audio_track->setEnabled(true, TrackBase::ChangeSource::kScript);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Test SelectedVideoTrackChanged with kScript.
+  // We expect that SelectedVideoTrackChanged IS called for script.
+  EXPECT_CALL(*MockMediaPlayer(),
+              SelectedVideoTrackChanged(testing::Optional(video_track->id())));
+  video_track->setSelected(true, TrackBase::ChangeSource::kScript);
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+}
+
+TEST_P(HTMLMediaElementTest, SetTrackStateFromDemuxer) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  SetReadyState(HTMLMediaElement::kHaveFutureData);
+
+  ASSERT_EQ(1u, Media()->audioTracks().length());
+  ASSERT_EQ(1u, Media()->videoTracks().length());
+  AudioTrack* audio_track = Media()->audioTracks().AnonymousIndexedGetter(0);
+  VideoTrack* video_track = Media()->videoTracks().AnonymousIndexedGetter(0);
+
+  // Tracks are enabled by default. Let's disable them to test enabling.
+  // Use kScript source to ensure the player is notified and we start from a
+  // known state.
+  EXPECT_CALL(*MockMediaPlayer(),
+              EnabledAudioTracksChanged(testing::Eq(std::nullopt)));
+  audio_track->setEnabled(false);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  EXPECT_CALL(*MockMediaPlayer(),
+              SelectedVideoTrackChanged(testing::Eq(std::nullopt)));
+  video_track->setSelected(false);
+  test::RunPendingTasks();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  ASSERT_FALSE(audio_track->enabled());
+  ASSERT_FALSE(video_track->selected());
+
+  media::MediaTrack audio_media_track = media::MediaTrack::CreateAudioTrack(
+      audio_track->id().Utf8(), media::MediaTrack::AudioKind::kMain, "", "",
+      false, 0);
+  media::MediaTrack video_media_track = media::MediaTrack::CreateVideoTrack(
+      video_track->id().Utf8(), media::MediaTrack::VideoKind::kMain, "", "",
+      false, 0);
+
+  // We expect that EnabledAudioTracksChanged is NOT called for demuxer.
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_)).Times(0);
+  Media()->SetTrackStateForTesting(audio_media_track,
+                                   media::MediaTrack::State::kActive);
+  test::RunPendingTasks();
+  EXPECT_TRUE(audio_track->enabled());
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // We expect that SelectedVideoTrackChanged is NOT called for demuxer.
+  EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_)).Times(0);
+  Media()->SetTrackStateForTesting(video_media_track,
+                                   media::MediaTrack::State::kActive);
+  test::RunPendingTasks();
+  EXPECT_TRUE(video_track->selected());
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // Now test deactivation.
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_)).Times(0);
+  Media()->SetTrackStateForTesting(audio_media_track,
+                                   media::MediaTrack::State::kInactive);
+  test::RunPendingTasks();
+  EXPECT_FALSE(audio_track->enabled());
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_)).Times(0);
+  Media()->SetTrackStateForTesting(video_media_track,
+                                   media::MediaTrack::State::kInactive);
+  test::RunPendingTasks();
+  EXPECT_FALSE(video_track->selected());
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+}
+
 // Ensure a visibility observer is created for lazy loading.
 TEST_P(HTMLMediaElementTest, VisibilityObserverCreatedForLazyLoad) {
   Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
@@ -889,33 +1166,21 @@ TEST_P(HTMLMediaElementTest, ContextFrozen) {
   test::RunPendingTasks();
   SetReadyState(HTMLMediaElement::kHaveFutureData);
 
-  // First, set frozen but with auto resume.
+  // Set to frozen.
   EXPECT_CALL((*MockMediaPlayer()), OnFrozen());
-  EXPECT_FALSE(Media()->paused());
   GetExecutionContext()->SetLifecycleState(
-      mojom::FrameLifecycleState::kFrozenAutoResumeMedia);
-  EXPECT_TRUE(Media()->paused());
-  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
-
-  // Now, if we set back to running the media should auto resume.
-  GetExecutionContext()->SetLifecycleState(
-      mojom::FrameLifecycleState::kRunning);
-  EXPECT_FALSE(Media()->paused());
-
-  // Then set to frozen without auto resume.
-  EXPECT_CALL((*MockMediaPlayer()), OnFrozen());
-  GetExecutionContext()->SetLifecycleState(mojom::FrameLifecycleState::kFrozen);
+      mojom::blink::FrameLifecycleState::kFrozen);
   EXPECT_TRUE(Media()->paused());
   testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
 
   // Now, the media should stay paused.
   GetExecutionContext()->SetLifecycleState(
-      mojom::FrameLifecycleState::kRunning);
+      mojom::blink::FrameLifecycleState::kRunning);
   EXPECT_TRUE(Media()->paused());
 }
 
 TEST_P(HTMLMediaElementTest, GcMarkingNoAllocWebTimeRanges) {
-  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   auto* thread_state = ThreadState::Current();
   ThreadState::NoAllocationScope no_allocation_scope(thread_state);
   EXPECT_FALSE(thread_state->IsAllocationAllowed());
@@ -924,9 +1189,7 @@ TEST_P(HTMLMediaElementTest, GcMarkingNoAllocWebTimeRanges) {
   EXPECT_DEATH_IF_SUPPORTED(MakeGarbageCollected<TimeRanges>(0, 0), "");
 #endif  // DCHECK_IS_ON()
   // Instead of using TimeRanges, WebTimeRanges can be used without GC
-  Vector<WebTimeRanges> ranges;
-  ranges.emplace_back();
-  ranges[0].emplace_back(0, 0);
+  Vector<WebTimeRanges> ranges = {WebTimeRanges(0, 0)};
 }
 
 // Reproduce crbug.com/970150
@@ -974,7 +1237,7 @@ TEST_P(HTMLMediaElementTest, EmptyRedirectedSrcUsesOriginal) {
   EXPECT_EQ(Media()->downloadURL(), Media()->currentSrc());
 }
 
-TEST_P(HTMLMediaElementTest, NoPendingActivityEvenIfBeforeMetadata) {
+TEST_P(HTMLMediaElementTest, NoPendingActivityAfterCurrentData) {
   Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
   test::RunPendingTasks();
 
@@ -985,9 +1248,12 @@ TEST_P(HTMLMediaElementTest, NoPendingActivityEvenIfBeforeMetadata) {
 
   EXPECT_TRUE(MediaShouldBeOpaque());
   EXPECT_TRUE(Media()->HasPendingActivity());
-  SetNetworkState(WebMediaPlayer::kNetworkStateIdle);
+  EXPECT_CALL(*MockMediaPlayer(), GetSrcAfterRedirects)
+      .WillRepeatedly(Return(GURL()));
+  EXPECT_CALL(*MockMediaPlayer(), OnTimeUpdate());
+  SetReadyState(HTMLMediaElement::kHaveCurrentData);
+  test::RunPendingTasks();
   EXPECT_FALSE(Media()->HasPendingActivity());
-  EXPECT_TRUE(MediaShouldBeOpaque());
 }
 
 TEST_P(HTMLMediaElementTest, OnTimeUpdate_DurationChange) {
@@ -1032,6 +1298,29 @@ TEST_P(HTMLMediaElementTest, OnTimeUpdate_PlayPauseSetRate) {
 
   EXPECT_CALL(*MockMediaPlayer(), OnTimeUpdate());
   Media()->Play();
+}
+
+// Test ensures that WebMediaPlayer is always told about pause events,
+// even if already paused.
+TEST_P(HTMLMediaElementTest, WebMediaPlayerIsPaused) {
+  // Prepare the player.
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+
+  // Prior to HaveMetadata, Play/Pause won't be delivered to the player.
+  EXPECT_CALL(*MockMediaPlayer(), Pause(_)).Times(0);
+  Media()->Play();
+  Media()->pause();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
+
+  // After metadata pause should be delivered even if already paused.
+  SetReadyState(HTMLMediaElement::kHaveMetadata);
+  EXPECT_CALL(*MockMediaPlayer(),
+              Pause(WebMediaPlayer::PauseReason::kPauseCalled))
+      .Times(2);
+  Media()->pause();
+  Media()->pause();
+  testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
 }
 
 TEST_P(HTMLMediaElementTest, OnTimeUpdate_ReadyState) {
@@ -1195,34 +1484,43 @@ TEST_P(HTMLMediaElementTest, SendMediaMetadataChangedToObserver) {
 
   bool has_audio = false;
   bool has_video = true;
+  bool is_encrypted_media = false;
   media::AudioCodec audio_codec = media::AudioCodec::kUnknown;
   media::VideoCodec video_codec = media::VideoCodec::kUnknown;
   media::MediaContentType media_content_type =
-      media::MediaContentType::Transient;
+      media::MediaContentType::kTransient;
 
   NotifyMediaMetadataChanged(has_audio, has_video, audio_codec, video_codec,
-                             media_content_type);
+                             media_content_type, is_encrypted_media);
   EXPECT_TRUE(ReceivedMessageMediaMetadataChanged(has_audio, has_video,
                                                   media_content_type));
   // Change values and test again.
   has_audio = true;
   has_video = false;
-  media_content_type = media::MediaContentType::OneShot;
+  media_content_type = media::MediaContentType::kOneShot;
   NotifyMediaMetadataChanged(has_audio, has_video, audio_codec, video_codec,
-                             media_content_type);
+                             media_content_type, is_encrypted_media);
   EXPECT_TRUE(ReceivedMessageMediaMetadataChanged(has_audio, has_video,
                                                   media_content_type));
 
-  // Send codecs
+  // Send codecs. Video Codec will be ignored since `has_video` is false.
   audio_codec = media::AudioCodec::kAAC;
   video_codec = media::VideoCodec::kH264;
   NotifyMediaMetadataChanged(has_audio, has_video, audio_codec, video_codec,
-                             media_content_type);
+                             media_content_type, is_encrypted_media);
   EXPECT_TRUE(ReceivedRemotePlaybackMetadataChange(
       media_session::mojom::blink::RemotePlaybackMetadata::New(
-          WTF::String(media::GetCodecName(video_codec)),
-          WTF::String(media::GetCodecName(audio_codec)), false, false,
-          WTF::String())));
+          "unknown", String(media::GetCodecName(audio_codec)), false, false,
+          String(), is_encrypted_media)));
+
+  has_video = true;
+  NotifyMediaMetadataChanged(has_audio, has_video, audio_codec, video_codec,
+                             media_content_type, is_encrypted_media);
+  EXPECT_TRUE(ReceivedRemotePlaybackMetadataChange(
+      media_session::mojom::blink::RemotePlaybackMetadata::New(
+          String(media::GetCodecName(video_codec)),
+          String(media::GetCodecName(audio_codec)), false, false, String(),
+          is_encrypted_media)));
 }
 
 TEST_P(HTMLMediaElementTest, SendMediaSizeChangeToObserver) {
@@ -1239,15 +1537,16 @@ TEST_P(HTMLMediaElementTest, SendRemotePlaybackMetadataChangeToObserver) {
   media::AudioCodec audio_codec = media::AudioCodec::kAAC;
   bool is_remote_playback_disabled = true;
   bool is_remote_playback_started = false;
+  bool is_encrypted_media = false;
   NotifyMediaMetadataChanged(true, true, audio_codec, video_codec,
-                             media::MediaContentType::Transient);
+                             media::MediaContentType::kTransient,
+                             is_encrypted_media);
   NotifyRemotePlaybackDisabled(is_remote_playback_disabled);
   EXPECT_TRUE(ReceivedRemotePlaybackMetadataChange(
       media_session::mojom::blink::RemotePlaybackMetadata::New(
-          WTF::String(media::GetCodecName(video_codec)),
-          WTF::String(media::GetCodecName(audio_codec)),
-          is_remote_playback_disabled, is_remote_playback_started,
-          WTF::String())));
+          String(media::GetCodecName(video_codec)),
+          String(media::GetCodecName(audio_codec)), is_remote_playback_disabled,
+          is_remote_playback_started, String(), is_encrypted_media)));
 }
 
 TEST_P(HTMLMediaElementTest, SendUseAudioServiceChangedToObserver) {
@@ -1303,7 +1602,8 @@ TEST_P(HTMLMediaElementTest,
 
   // Setting the controlsList attribute to a valid value should not show the
   // controls.
-  Media()->setAttribute(blink::html_names::kControlslistAttr, "nofullscreen");
+  Media()->setAttribute(blink::html_names::kControlslistAttr,
+                        AtomicString("nofullscreen"));
   EXPECT_FALSE(MediaShouldShowAllControls());
 
   // Removing the controlsList attribute should show the controls.
@@ -1312,12 +1612,14 @@ TEST_P(HTMLMediaElementTest,
 
   // Setting the controlsList attribute to an invalid value should still show
   // the controls.
-  Media()->setAttribute(blink::html_names::kControlslistAttr, "foo");
+  Media()->setAttribute(blink::html_names::kControlslistAttr,
+                        AtomicString("foo"));
   EXPECT_TRUE(MediaShouldShowAllControls());
 
   // Setting the controlsList attribute to another valid value should not show
   // the controls.
-  Media()->setAttribute(blink::html_names::kControlslistAttr, "noplaybackrate");
+  Media()->setAttribute(blink::html_names::kControlslistAttr,
+                        AtomicString("noplaybackrate"));
   EXPECT_FALSE(MediaShouldShowAllControls());
 
   // If the user explicitly shows them, that should override the controlsList
@@ -1359,7 +1661,8 @@ TEST_P(
     HTMLMediaElementTest,
     DoNotDestroyMediaPlayerWhenSwitchingSameOriginDocumentsIfReuseIsEnabled) {
   // Ensure that the WebMediaPlayer is re-used when moving to a same-origin
-  // document, if `kDocumentPictureInPictureAPI` is enabled.
+  // document, if `kDocumentPictureInPictureAPI` is enabled.  Note that this
+  // also tests moving from pip back to the opener, which should be retained.
   ScopedDocumentPictureInPictureAPIForTest scoped_feature(true);
   MoveElementAndTestPlayerDestruction(
       "https://a.com", "https://a.com",
@@ -1388,14 +1691,20 @@ TEST_P(
 
 TEST_P(
     HTMLMediaElementTest,
-    DoNotDestroyMediaPlayerWhenSwitchingSameOriginDocumentsIfOldDocumentIsInPictureInPicture) {
-  // Ensure that the WebMediaPlayer is not destroyed when moving to a
-  // same-origin document when the old document is in picture-in-picture window,
-  // if 'kDocumentPictureInPictureAPI' is enabled.
+    DestroyMediaPlayerWhenSwitchingSameOriginDocumentsIfFirstDocumentIsInPictureInPicture) {
+  // Ensure that the WebMediaPlayer is destroyed when moving to a same-origin
+  // document when the old document is in picture-in-picture window on the first
+  // move, if `kDocumentPictureInPictureAPI` is enabled.  Note that, on
+  // subsequent moves, we'd expect it to be retained.  For the special case
+  // where the element is never added to the opener, it should be destroyed.
+  // See `HTMLMediaElement::ShouldReusePlayer()` for more information.  Note
+  // that the 'retained' case is tested elsewhere, since `MoveElement...` tests
+  // moving to the new document and also back to the old one: see
+  // `DoNotDestroyMediaPlayerWhenSwitchingSameOriginDocumentsIfReuseIsEnabled`.
   ScopedDocumentPictureInPictureAPIForTest scoped_feature(true);
   MoveElementAndTestPlayerDestruction(
       "https://a.com", "https://a.com",
-      /*should_destroy=*/false,
+      /*should_destroy=*/true,
       /*is_new_document_picture_in_picture=*/false,
       /*is_old_document_picture_in_picture=*/true,
       /*is_new_document_opener=*/true,
@@ -1493,7 +1802,8 @@ TEST_P(HTMLMediaElementTest, PlayedWithoutUserActivation) {
   SetReadyState(HTMLMediaElement::kHaveEnoughData);
   test::RunPendingTasks();
 
-  EXPECT_CALL(*MockMediaPlayer(), SetWasPlayedWithUserActivation(false));
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(false));
   Media()->Play();
 }
 
@@ -1508,7 +1818,25 @@ TEST_P(HTMLMediaElementTest, PlayedWithUserActivation) {
       Media()->GetDocument().GetFrame(),
       mojom::UserActivationNotificationType::kTest);
 
-  EXPECT_CALL(*MockMediaPlayer(), SetWasPlayedWithUserActivation(true));
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(false));
+  Media()->Play();
+}
+
+TEST_P(HTMLMediaElementTest, PlayedWithUserActivationAndHighMediaEngagement) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  SimulateHighMediaEngagement();
+  test::RunPendingTasks();
+
+  LocalFrame::NotifyUserActivation(
+      Media()->GetDocument().GetFrame(),
+      mojom::UserActivationNotificationType::kTest);
+
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(true));
   Media()->Play();
 }
 
@@ -1517,7 +1845,9 @@ TEST_P(HTMLMediaElementTest, PlayedWithUserActivationBeforeLoad) {
       Media()->GetDocument().GetFrame(),
       mojom::UserActivationNotificationType::kTest);
 
-  EXPECT_CALL(*MockMediaPlayer(), SetWasPlayedWithUserActivation(_)).Times(0);
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(_))
+      .Times(0);
   Media()->Play();
 }
 
@@ -1528,7 +1858,8 @@ TEST_P(HTMLMediaElementTest, CanFreezeWithoutMediaPlayerAttached) {
   SetReadyState(HTMLMediaElement::kHaveEnoughData);
   test::RunPendingTasks();
 
-  EXPECT_CALL(*MockMediaPlayer(), SetWasPlayedWithUserActivation(false));
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(false));
   Media()->Play();
 
   ResetWebMediaPlayer();
@@ -1536,8 +1867,7 @@ TEST_P(HTMLMediaElementTest, CanFreezeWithoutMediaPlayerAttached) {
   EXPECT_TRUE(MediaIsPlaying());
 
   // Freeze with auto resume.
-  MediaContextLifecycleStateChanged(
-      mojom::FrameLifecycleState::kFrozenAutoResumeMedia);
+  MediaContextLifecycleStateChanged(mojom::blink::FrameLifecycleState::kFrozen);
 
   EXPECT_FALSE(MediaIsPlaying());
 }
@@ -1549,7 +1879,8 @@ TEST_P(HTMLMediaElementTest, CanFreezeWithMediaPlayerAttached) {
   SetReadyState(HTMLMediaElement::kHaveEnoughData);
   test::RunPendingTasks();
 
-  EXPECT_CALL(*MockMediaPlayer(), SetWasPlayedWithUserActivation(false));
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(false));
   EXPECT_CALL(*MockMediaPlayer(), OnFrozen());
   Media()->Play();
 
@@ -1557,10 +1888,763 @@ TEST_P(HTMLMediaElementTest, CanFreezeWithMediaPlayerAttached) {
   EXPECT_TRUE(MediaIsPlaying());
 
   // Freeze with auto resume.
-  MediaContextLifecycleStateChanged(
-      mojom::FrameLifecycleState::kFrozenAutoResumeMedia);
+  MediaContextLifecycleStateChanged(mojom::blink::FrameLifecycleState::kFrozen);
 
   EXPECT_FALSE(MediaIsPlaying());
+}
+
+TEST_P(HTMLMediaElementTest, MoveToAnotherDocument) {
+  auto* second_document =
+      dummy_page_holder_->GetDocument().implementation().createHTMLDocument();
+
+  // The second document is not active. When Media() is moved over, it triggers
+  // a call to HTMLMediaElement::ShouldShowControls. This should not violate any
+  // DCHECKs.
+  second_document->body()->AppendChild(Media());
+
+  // Destroying the first document should not cause anything unusual to happen.
+  dummy_page_holder_.reset();
+
+  EXPECT_FALSE(ControlsVisible());
+}
+
+TEST_P(HTMLMediaElementTest, LoadingFailsAfterContextDestruction) {
+  // Ensure the media element throws an error if loading is attempted after V8
+  // memory is purged (which destroys the element's execution context).
+
+  constexpr char kOrigin[] = "https://a.com";
+  SetSecurityOrigin(kOrigin);
+  WaitForPlayer();
+  auto new_dummy_page_holder =
+      CreatePageWithSecurityOrigin(kOrigin, /*is_picture_in_picture=*/false);
+  EXPECT_FALSE(WasPlayerDestroyed());
+
+  LocalFrame* frame = Media()->LocalFrameForPlayer();
+  ASSERT_TRUE(frame);
+  frame->ForciblyPurgeV8Memory();
+  test::RunPendingTasks();
+  EXPECT_TRUE(WasPlayerDestroyed());
+  EXPECT_FALSE(Media()->error());
+
+  Media()->load();
+  test::RunPendingTasks();
+  EXPECT_TRUE(Media()->error());
+}
+
+TEST_P(HTMLMediaElementTest, VideoVisibilityTrackerDetachedOnPause) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  video->GetDocument().body()->AppendChild(video);
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Pause the video, and verify that the visibility tracker has been detached.
+  video->pause();
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+}
+
+TEST_P(HTMLMediaElementTest, VideoVisibilityTrackerDetachedOnEnded) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  video->GetDocument().body()->AppendChild(video);
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  MockWebMediaPlayer* mock_wmpi =
+      reinterpret_cast<MockWebMediaPlayer*>(video->GetWebMediaPlayer());
+  ASSERT_NE(mock_wmpi, nullptr);
+
+  // Advance current time to duration, and verify that the visibility tracker
+  // has been detached.
+  testing::Mock::VerifyAndClearExpectations(mock_wmpi);
+  EXPECT_CALL(*mock_wmpi, CurrentTime())
+      .WillRepeatedly(Return(video->duration()));
+  EXPECT_CALL(*mock_wmpi, IsEnded()).WillRepeatedly(Return(true));
+  EXPECT_TRUE(video->ended());
+  TimeChanged();
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+}
+
+TEST_P(HTMLMediaElementTest, VideoVisibilityTrackerDetachedOnContextDestroyed) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  video->GetDocument().body()->AppendChild(video);
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Destroy context, and verify that the visibility tracker has been detached.
+  ContextDestroyed();
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+}
+
+TEST_P(HTMLMediaElementTest, VideoVisibilityTrackerDetachedOnRemovedFrom) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Remove video, and verify that the visibility tracker has been detached.
+  NonThrowableExceptionState should_not_throw;
+  video->remove(should_not_throw);
+  test::RunPendingTasks();
+
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerDetachedOnWebMediaPlayerCleared) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  EXPECT_TRUE(video->GetWebMediaPlayer());
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Clear media player, and verify that the visibility tracker has been
+  // detached.
+  ClearMediaPlayer();
+  EXPECT_FALSE(Media()->GetWebMediaPlayer());
+  EXPECT_TRUE(MediaIsPlaying());
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerInsertingPlayingVideoReusesTracker) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(AtomicString("http://example.com/foo.mp4"));
+  test::RunPendingTasks();
+
+  MockWebMediaPlayer* mock_wmpi =
+      reinterpret_cast<MockWebMediaPlayer*>(video->GetWebMediaPlayer());
+  ASSERT_NE(mock_wmpi, nullptr);
+  EXPECT_CALL(*mock_wmpi, CurrentTime())
+      .WillRepeatedly(Return(video->duration() / 2));
+  EXPECT_CALL(*mock_wmpi, IsEnded()).WillRepeatedly(Return(false));
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  ASSERT_NE(video->visibility_tracker_for_tests(), nullptr);
+  ASSERT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  const auto* tracker_before_append = video->visibility_tracker_for_tests();
+
+  // Create div and append video element to it.
+  video->GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+      "<div id='container' style='width:200px; height:200px;'></div>");
+  video->GetDocument()
+      .body()
+      ->getElementById(AtomicString("container"))
+      ->AppendChild(video);
+
+  ASSERT_NE(video->visibility_tracker_for_tests(), nullptr);
+  ASSERT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  const auto* tracker_after_append = video->visibility_tracker_for_tests();
+
+  // Ensure that tracker is re-used.
+  EXPECT_EQ(tracker_before_append, tracker_after_append);
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerStatusUpdatedOnVideoEnterAndExitFullscreen) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  video->Play();
+  EXPECT_TRUE(video->GetWebMediaPlayer());
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_FALSE(video->IsFullscreen());
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate enter fullscreen, and verify that: the visibility tracker has been
+  // detached and, the fullscreen change event listener is not removed.
+  SimulateEnterFullscreen(video);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate exit fullscreen, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener is not removed.
+  SimulateExitFullscreen(video);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerStatusUpdatedOnAnyElementEnterAndExitFullscreen) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+
+  video->GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+      "<div id='fullscreen-div' style='width:200px; height:200px;'></div>");
+  Element* fullscreen_div = video->GetDocument().body()->getElementById(
+      AtomicString("fullscreen-div"));
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+  EXPECT_EQ(nullptr, Fullscreen::FullscreenElementFrom(video->GetDocument()));
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  video->Play();
+  EXPECT_TRUE(video->GetWebMediaPlayer());
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate enter fullscreen on fullscreen_div, and verify that: the
+  // visibility tracker has been detached and, the fullscreen change event
+  // listener is not removed.
+  SimulateEnterFullscreen(fullscreen_div);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate exit fullscreen on fullscreen_div, and verify that: the visibility
+  // tracker has been attached and, the fullscreen change event listener is not
+  // removed.
+  SimulateExitFullscreen(fullscreen_div);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerDetachedOnEnterFullscreenAfterVideoPauseThenPlay) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // Play video, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener has been registered.
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Pause video, and verify that: the visibility tracker has been
+  // detached and, the fullscreen change event listener is not removed.
+  video->pause();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Play video once again, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener is not removed.
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate enter fullscreen, and verify that: the visibility tracker has been
+  // detached and, the fullscreen change event listener is not removed.
+  SimulateEnterFullscreen(video);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Simulate exit fullscreen, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener is not removed.
+  SimulateExitFullscreen(video);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+}
+
+TEST_P(
+    HTMLMediaElementTest,
+    VideoVisibilityTrackerDetachedOnEntereFullscreenAfterInsertingPlayingVideo) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(AtomicString("http://example.com/foo.mp4"));
+  test::RunPendingTasks();
+
+  MockWebMediaPlayer* mock_wmpi =
+      reinterpret_cast<MockWebMediaPlayer*>(video->GetWebMediaPlayer());
+  ASSERT_NE(mock_wmpi, nullptr);
+  EXPECT_CALL(*mock_wmpi, CurrentTime())
+      .WillRepeatedly(Return(video->duration() / 2));
+  EXPECT_CALL(*mock_wmpi, IsEnded()).WillRepeatedly(Return(false));
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // Play video, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener has been registered.
+  video->Play();
+  ASSERT_NE(video->visibility_tracker_for_tests(), nullptr);
+  ASSERT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  const auto* tracker_before_append = video->visibility_tracker_for_tests();
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         tracker_before_append));
+
+  // Create a div and append the video element to it.
+  video->GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+      "<div id='container' style='width:200px; height:200px;'></div>");
+  video->GetDocument()
+      .body()
+      ->getElementById(AtomicString("container"))
+      ->AppendChild(video);
+
+  // Verify that: the visibility tracker has been detached and, the fullscreen
+  // change event listener is not removed.
+  ASSERT_NE(video->visibility_tracker_for_tests(), nullptr);
+  ASSERT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  const auto* tracker_after_append = video->visibility_tracker_for_tests();
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         tracker_after_append));
+
+  // Verify that tracker is re-used.
+  EXPECT_EQ(tracker_before_append, tracker_after_append);
+
+  // Simulate enter fullscreen, and verify that: the visibility tracker has been
+  // detached and, the fullscreen change event listener is not removed.
+  SimulateEnterFullscreen(video);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         tracker_after_append));
+
+  // Simulate exit fullscreen, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener is not removed.
+  SimulateExitFullscreen(video);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         tracker_after_append));
+}
+
+TEST_P(
+    HTMLMediaElementTest,
+    VideoVisibilityTrackerFullScreenEventListenerRemovedOnDidMoveToNewDocument) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(AtomicString("http://example.com/foo.mp4"));
+  test::RunPendingTasks();
+
+  MockWebMediaPlayer* mock_wmpi =
+      reinterpret_cast<MockWebMediaPlayer*>(video->GetWebMediaPlayer());
+  ASSERT_NE(mock_wmpi, nullptr);
+  EXPECT_CALL(*mock_wmpi, CurrentTime())
+      .WillRepeatedly(Return(video->duration() / 2));
+  EXPECT_CALL(*mock_wmpi, IsEnded()).WillRepeatedly(Return(false));
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // Play video, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener has been registered.
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  ASSERT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Remember the old document.
+  auto& old_document = video->GetDocument();
+
+  // Create another document and move the video element to it.
+  auto* another_document = Document::Create(video->GetDocument());
+  another_document->AppendChild(video);
+
+  // Verify that the old and new document are different.
+  EXPECT_NE(old_document, *another_document);
+
+  // Verify that for the new document: the visibility tracker has been detached
+  // and, the fullscreen change event listener has been removed.
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  ASSERT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_FALSE(HasEventListenerRegistered(video->GetDocument(),
+                                          event_type_names::kFullscreenchange,
+                                          VideoVisibilityTracker()));
+
+  // Verify that, for the old document, the fullscreen change event listener has
+  // been removed.
+  EXPECT_FALSE(HasEventListenerRegistered(old_document,
+                                          event_type_names::kFullscreenchange,
+                                          VideoVisibilityTracker()));
+}
+
+TEST_P(HTMLMediaElementTest,
+       VideoVisibilityTrackerFullScreenEventListenerRemovedOnRemovedFrom) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // Play video, and verify that: the visibility tracker has been
+  // attached and, the fullscreen change event listener has been registered.
+  video->Play();
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_TRUE(HasEventListenerRegistered(video->GetDocument(),
+                                         event_type_names::kFullscreenchange,
+                                         VideoVisibilityTracker()));
+
+  // Remove video, and verify that: the visibility tracker has been
+  // detached and, the fullscreen change event listener has been removed.
+  NonThrowableExceptionState should_not_throw;
+  video->remove(should_not_throw);
+  test::RunPendingTasks();
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+  EXPECT_FALSE(HasEventListenerRegistered(
+      video->GetDocument(), event_type_names::kFullscreenchange,
+      video->visibility_tracker_for_tests()));
+}
+
+TEST_P(HTMLMediaElementTest,
+       RequestVisibilityReturnsFalseWhenTrackerDoesNotExist) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // Request visibility and verify that the returned visibility is false.
+  RequestVisibilityWaiter request_visibility_waiter;
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+  RequestVisibility(request_visibility_waiter.VisibilityCallback());
+  request_visibility_waiter.WaitUntilDone();
+  EXPECT_FALSE(request_visibility_waiter.MeetsVisibility());
+}
+
+TEST_P(HTMLMediaElementTest,
+       RequestVisibilityReturnsFalseWhenTrackerIsNotAttached) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  auto* video = To<HTMLVideoElement>(Media());
+  video->GetDocument().body()->AppendChild(video);
+  video->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_EQ(VideoVisibilityTracker(), nullptr);
+
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+  video->Play();
+  EXPECT_TRUE(video->GetWebMediaPlayer());
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_NE(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Clear media player, to cause the visibility tracker to detach.
+  ClearMediaPlayer();
+  EXPECT_FALSE(Media()->GetWebMediaPlayer());
+  EXPECT_TRUE(MediaIsPlaying());
+  ASSERT_NE(VideoVisibilityTracker(), nullptr);
+  EXPECT_EQ(VideoVisibilityTrackerAttachedToDocument(video), nullptr);
+
+  // Request visibility and verify that the returned visibility is false.
+  RequestVisibilityWaiter request_visibility_waiter;
+  RequestVisibility(request_visibility_waiter.VisibilityCallback());
+  request_visibility_waiter.WaitUntilDone();
+  EXPECT_FALSE(request_visibility_waiter.MeetsVisibility());
+}
+
+TEST_P(HTMLMediaElementTest, StartVideoWithTrackSelectionFragment) {
+  std::string frag_url = "http://example.com/foo.mp4#track=audio2&track=video3";
+  EXPECT_CALL(*MockMediaPlayer(), GetSrcAfterRedirects())
+      .WillRepeatedly(Return(GURL(frag_url)));
+  bool audio_only = GetParam() == MediaTestParam::kAudio;
+
+  EXPECT_CALL(*MockMediaPlayer(), Load(_, _, _, _))
+      .Times(1)
+      .WillOnce(
+          [element = Media(), audio_only](EmptyWebMediaPlayer::LoadType,
+                                          const blink::WebMediaPlayerSource&,
+                                          EmptyWebMediaPlayer::CorsMode,
+                                          bool) -> WebMediaPlayer::LoadTiming {
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio1", media::MediaTrack::AudioKind::kMain, "audio1", "",
+                true, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio2", media::MediaTrack::AudioKind::kMain, "audio2", "",
+                false, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio3", media::MediaTrack::AudioKind::kMain, "audio3", "",
+                false, 0, true));
+            if (!audio_only) {
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video1", media::MediaTrack::VideoKind::kMain, "video1", "",
+                  true, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video2", media::MediaTrack::VideoKind::kMain, "video2", "",
+                  false, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video3", media::MediaTrack::VideoKind::kMain, "video3", "",
+                  false, 0));
+            }
+            return WebMediaPlayer::LoadTiming::kImmediate;
+          });
+  Media()->SetSrc(AtomicString(frag_url.c_str()));
+  test::RunPendingTasks();
+
+  uint64_t video_tracks = audio_only ? 0 : 3;
+  ASSERT_EQ(3u, Media()->audioTracks().length());
+  ASSERT_EQ(video_tracks, Media()->videoTracks().length());
+
+  EXPECT_CALL(*MockMediaPlayer(), OnTimeUpdate());
+
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_))
+      .WillOnce([](std::optional<WebMediaPlayer::TrackId> tracks) {
+        ASSERT_TRUE(tracks.has_value());
+        ASSERT_EQ(tracks.value(), "audio2");
+      });
+
+  if (!audio_only) {
+    EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_))
+        .WillOnce([](std::optional<WebMediaPlayer::TrackId> track) {
+          ASSERT_TRUE(track.has_value());
+          ASSERT_EQ(track.value(), "video3");
+        });
+  }
+
+  SetReadyState(HTMLMediaElement::kHaveMetadata);
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(Media()->audioTracks().AnonymousIndexedGetter(1)->enabled());
+  if (!audio_only) {
+    EXPECT_TRUE(Media()->videoTracks().AnonymousIndexedGetter(2)->selected());
+  }
+}
+
+TEST_P(HTMLMediaElementTest, StartVideoWithInvalidTrackSelection) {
+  std::string frag_url = "http://example.com/foo.mp4#track=blahblah";
+  EXPECT_CALL(*MockMediaPlayer(), GetSrcAfterRedirects())
+      .WillRepeatedly(Return(GURL(frag_url)));
+  bool audio_only = GetParam() == MediaTestParam::kAudio;
+
+  EXPECT_CALL(*MockMediaPlayer(), Load(_, _, _, _))
+      .Times(1)
+      .WillOnce(
+          [element = Media(), audio_only](EmptyWebMediaPlayer::LoadType,
+                                          const blink::WebMediaPlayerSource&,
+                                          EmptyWebMediaPlayer::CorsMode,
+                                          bool) -> WebMediaPlayer::LoadTiming {
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio1", media::MediaTrack::AudioKind::kMain, "audio1", "",
+                true, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio2", media::MediaTrack::AudioKind::kMain, "audio2", "",
+                false, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio3", media::MediaTrack::AudioKind::kMain, "audio3", "",
+                false, 0, true));
+            if (!audio_only) {
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video1", media::MediaTrack::VideoKind::kMain, "video1", "",
+                  true, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video2", media::MediaTrack::VideoKind::kMain, "video2", "",
+                  false, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video3", media::MediaTrack::VideoKind::kMain, "video3", "",
+                  false, 0));
+            }
+            return WebMediaPlayer::LoadTiming::kImmediate;
+          });
+  Media()->SetSrc(AtomicString(frag_url.c_str()));
+  test::RunPendingTasks();
+
+  uint64_t video_tracks = audio_only ? 0 : 3;
+  ASSERT_EQ(3u, Media()->audioTracks().length());
+  ASSERT_EQ(video_tracks, Media()->videoTracks().length());
+
+  EXPECT_CALL(*MockMediaPlayer(), OnTimeUpdate());
+
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_)).Times(0);
+  EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_)).Times(0);
+
+  SetReadyState(HTMLMediaElement::kHaveMetadata);
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(Media()->audioTracks().AnonymousIndexedGetter(0)->enabled());
+  if (!audio_only) {
+    EXPECT_TRUE(Media()->videoTracks().AnonymousIndexedGetter(0)->selected());
+  }
+}
+
+TEST_P(HTMLMediaElementTest, StartVideoWithDoubleTrackSelection) {
+  std::string frag_url = "http://example.com/foo.mp4#track=audio2&track=audio3";
+  EXPECT_CALL(*MockMediaPlayer(), GetSrcAfterRedirects())
+      .WillRepeatedly(Return(GURL(frag_url)));
+  bool audio_only = GetParam() == MediaTestParam::kAudio;
+
+  EXPECT_CALL(*MockMediaPlayer(), Load(_, _, _, _))
+      .Times(1)
+      .WillOnce(
+          [element = Media(), audio_only](EmptyWebMediaPlayer::LoadType,
+                                          const blink::WebMediaPlayerSource&,
+                                          EmptyWebMediaPlayer::CorsMode,
+                                          bool) -> WebMediaPlayer::LoadTiming {
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio1", media::MediaTrack::AudioKind::kMain, "audio1", "",
+                true, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio2", media::MediaTrack::AudioKind::kMain, "audio2", "",
+                false, 0, true));
+            element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+                "audio3", media::MediaTrack::AudioKind::kMain, "audio3", "",
+                false, 0, true));
+            if (!audio_only) {
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video1", media::MediaTrack::VideoKind::kMain, "video1", "",
+                  true, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video2", media::MediaTrack::VideoKind::kMain, "video2", "",
+                  false, 0));
+              element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+                  "video3", media::MediaTrack::VideoKind::kMain, "video3", "",
+                  false, 0));
+            }
+            return WebMediaPlayer::LoadTiming::kImmediate;
+          });
+  Media()->SetSrc(AtomicString(frag_url.c_str()));
+  test::RunPendingTasks();
+
+  uint64_t video_tracks = audio_only ? 0 : 3;
+  ASSERT_EQ(3u, Media()->audioTracks().length());
+  ASSERT_EQ(video_tracks, Media()->videoTracks().length());
+
+  EXPECT_CALL(*MockMediaPlayer(), OnTimeUpdate());
+
+  EXPECT_CALL(*MockMediaPlayer(), EnabledAudioTracksChanged(_))
+      .WillOnce([](std::optional<WebMediaPlayer::TrackId> tracks) {
+        ASSERT_TRUE(tracks.has_value());
+        ASSERT_EQ(tracks.value(), "audio3");
+      });
+  EXPECT_CALL(*MockMediaPlayer(), SelectedVideoTrackChanged(_)).Times(0);
+
+  SetReadyState(HTMLMediaElement::kHaveMetadata);
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(Media()->audioTracks().AnonymousIndexedGetter(2)->enabled());
+  if (!audio_only) {
+    EXPECT_TRUE(Media()->videoTracks().AnonymousIndexedGetter(0)->selected());
+  }
 }
 
 }  // namespace blink

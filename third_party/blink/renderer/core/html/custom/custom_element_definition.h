@@ -25,6 +25,7 @@ class ExceptionState;
 class HTMLElement;
 class HTMLFormElement;
 class QualifiedName;
+class V8CustomElementConstructor;
 
 enum class FormAssociationFlag {
   kNo,
@@ -41,9 +42,11 @@ class CORE_EXPORT CustomElementDefinition
   ~CustomElementDefinition() override;
 
   void Trace(Visitor*) const override;
-  const char* NameInHeapSnapshot() const override {
+  const char* GetHumanReadableName() const override {
     return "CustomElementDefinition";
   }
+
+  CustomElementRegistry& GetRegistry() { return *registry_; }
 
   const CustomElementDescriptor& Descriptor() { return descriptor_; }
 
@@ -55,13 +58,13 @@ class CORE_EXPORT CustomElementDefinition
   // CustomElementConstructor|.
   virtual ScriptValue GetConstructorForScript() = 0;
 
-  using ConstructionStack = HeapVector<Member<Element>, 1>;
-  ConstructionStack& GetConstructionStack() { return construction_stack_; }
+  virtual V8CustomElementConstructor* GetV8CustomElementConstructor() = 0;
 
   HTMLElement* CreateElementForConstructor(Document&);
   virtual HTMLElement* CreateAutonomousCustomElementSync(
       Document&,
-      const QualifiedName&) = 0;
+      const QualifiedName&,
+      CustomElementRegistry*) = 0;
   HTMLElement* CreateElement(Document&,
                              const QualifiedName&,
                              const CreateElementFlags);
@@ -70,6 +73,7 @@ class CORE_EXPORT CustomElementDefinition
 
   virtual bool HasConnectedCallback() const = 0;
   virtual bool HasDisconnectedCallback() const = 0;
+  virtual bool HasConnectedMoveCallback() const = 0;
   virtual bool HasAdoptedCallback() const = 0;
   bool HasAttributeChangedCallback(const QualifiedName&) const;
   bool HasStyleAttributeChangedCallback() const;
@@ -80,6 +84,7 @@ class CORE_EXPORT CustomElementDefinition
 
   virtual void RunConnectedCallback(Element&) = 0;
   virtual void RunDisconnectedCallback(Element&) = 0;
+  virtual void RunConnectedMoveCallback(Element&) = 0;
   virtual void RunAdoptedCallback(Element&,
                                   Document& old_owner,
                                   Document& new_owner) = 0;
@@ -98,6 +103,7 @@ class CORE_EXPORT CustomElementDefinition
   void EnqueueUpgradeReaction(Element&);
   void EnqueueConnectedCallback(Element&);
   void EnqueueDisconnectedCallback(Element&);
+  void EnqueueConnectedMoveCallback(Element&);
   void EnqueueAdoptedCallback(Element&,
                               Document& old_owner,
                               Document& new_owner);
@@ -110,25 +116,12 @@ class CORE_EXPORT CustomElementDefinition
   bool DisableInternals() const { return disable_internals_; }
   bool IsFormAssociated() const { return is_form_associated_; }
 
-  class CORE_EXPORT ConstructionStackScope final {
-    STACK_ALLOCATED();
-
-   public:
-    ConstructionStackScope(CustomElementDefinition&, Element&);
-    ConstructionStackScope(const ConstructionStackScope&) = delete;
-    ConstructionStackScope& operator=(const ConstructionStackScope&) = delete;
-    ~ConstructionStackScope();
-
-   private:
-    ConstructionStack& construction_stack_;
-    Element* element_;
-    size_t depth_;
-  };
-
  protected:
-  CustomElementDefinition(const CustomElementDescriptor&);
+  CustomElementDefinition(CustomElementRegistry&,
+                          const CustomElementDescriptor&);
 
-  CustomElementDefinition(const CustomElementDescriptor&,
+  CustomElementDefinition(CustomElementRegistry&,
+                          const CustomElementDescriptor&,
                           const HashSet<AtomicString>& observed_attributes,
                           const Vector<String>& disabled_features,
                           FormAssociationFlag form_association_flag);
@@ -141,8 +134,8 @@ class CORE_EXPORT CustomElementDefinition
                                      ExceptionState&);
 
  private:
+  Member<CustomElementRegistry> registry_;
   const CustomElementDescriptor descriptor_;
-  ConstructionStack construction_stack_;
   HashSet<AtomicString> observed_attributes_;
   bool has_style_attribute_changed_callback_;
   bool disable_shadow_ = false;

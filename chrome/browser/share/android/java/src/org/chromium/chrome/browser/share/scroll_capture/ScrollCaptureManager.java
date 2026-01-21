@@ -10,7 +10,9 @@ import android.view.View;
 import androidx.annotation.RequiresApi;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 
@@ -18,33 +20,34 @@ import org.chromium.chrome.browser.tab.Tab;
  * A ScrollCaptureManager is responsible for providing snapshots of the active tab to be used for
  * long screenshots.
  */
-public class ScrollCaptureManager extends EmptyTabObserver implements Callback<Tab> {
-    private final ObservableSupplier<Tab> mTabSupplier;
+@NullMarked
+public class ScrollCaptureManager extends EmptyTabObserver implements Callback<@Nullable Tab> {
+    private final NullableObservableSupplier<Tab> mTabSupplier;
     private final ScrollCaptureManagerDelegate mDelegate;
-    private Tab mCurrentTab;
-    private View mCurrentView;
+    private @Nullable Tab mCurrentTab;
+    private @Nullable View mCurrentView;
 
     @RequiresApi(api = VERSION_CODES.S)
-    public ScrollCaptureManager(ObservableSupplier<Tab> tabSupplier) {
+    public ScrollCaptureManager(NullableObservableSupplier<Tab> tabSupplier) {
         this(tabSupplier, new ScrollCaptureManagerDelegateImpl());
     }
 
     ScrollCaptureManager(
-            ObservableSupplier<Tab> tabSupplier, ScrollCaptureManagerDelegate delegate) {
+            NullableObservableSupplier<Tab> tabSupplier, ScrollCaptureManagerDelegate delegate) {
         mTabSupplier = tabSupplier;
         mDelegate = delegate;
         mTabSupplier.addObserver(this);
     }
 
     @Override
-    public void onResult(Tab tab) {
+    public void onResult(@Nullable Tab tab) {
         if (mCurrentTab != null) {
             mCurrentTab.removeObserver(this);
         }
         mCurrentTab = tab;
         mDelegate.setCurrentTab(tab);
-        if (mCurrentTab != null) {
-            mCurrentTab.addObserver(this);
+        if (tab != null) {
+            tab.addObserver(this);
             onContentChanged(tab);
         }
     }
@@ -73,7 +76,7 @@ public class ScrollCaptureManager extends EmptyTabObserver implements Callback<T
     }
 
     public void destroy() {
-        if (mTabSupplier != null) mTabSupplier.removeObserver(this);
+        mTabSupplier.removeObserver(this);
         if (mCurrentTab != null) mCurrentTab.removeObserver(this);
         if (mCurrentView != null) removeScrollCaptureBindings(mCurrentView);
     }

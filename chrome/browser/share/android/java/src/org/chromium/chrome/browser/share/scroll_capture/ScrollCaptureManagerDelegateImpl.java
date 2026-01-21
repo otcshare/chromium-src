@@ -10,12 +10,13 @@ import android.view.View;
 
 import androidx.annotation.RequiresApi;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.share.scroll_capture.ScrollCaptureCallbackDelegate.EntryManagerWrapper;
 import org.chromium.chrome.browser.tab.Tab;
 
-/**
- * Delegate to handle Android S API calls for {@link ScrollCaptureManager}.
- */
+/** Delegate to handle Android S API calls for {@link ScrollCaptureManager}. */
+@NullMarked
 @RequiresApi(api = VERSION_CODES.S)
 public class ScrollCaptureManagerDelegateImpl implements ScrollCaptureManagerDelegate {
     private final ScrollCaptureCallbackImpl mScrollCaptureCallback;
@@ -35,14 +36,16 @@ public class ScrollCaptureManagerDelegateImpl implements ScrollCaptureManagerDel
     }
 
     @Override
-    public void setCurrentTab(Tab tab) {
+    public void setCurrentTab(@Nullable Tab tab) {
         mScrollCaptureCallback.setCurrentTab(tab);
     }
 
     private void setScrollCaptureCallbackForView(
-            View view, ScrollCaptureCallback scrollCaptureCallback) {
-        view.setScrollCaptureHint(scrollCaptureCallback != null ? View.SCROLL_CAPTURE_HINT_INCLUDE
-                                                                : View.SCROLL_CAPTURE_HINT_AUTO);
+            View view, @Nullable ScrollCaptureCallback scrollCaptureCallback) {
+        view.setScrollCaptureHint(
+                scrollCaptureCallback != null
+                        ? View.SCROLL_CAPTURE_HINT_INCLUDE
+                        : View.SCROLL_CAPTURE_HINT_AUTO);
         view.setScrollCaptureCallback(scrollCaptureCallback);
     }
 }

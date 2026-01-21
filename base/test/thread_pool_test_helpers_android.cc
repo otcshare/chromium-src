@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/task/thread_pool/thread_pool_instance.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "base/test/test_support_jni_headers/ThreadPoolTestHelpers_jni.h"
 
 namespace base {
@@ -28,12 +30,14 @@ void ThreadPoolTestHelpers::EndFenceForTesting() {
 
 }  // namespace base
 
-void JNI_ThreadPoolTestHelpers_EnableThreadPoolExecutionForTesting(
+static void JNI_ThreadPoolTestHelpers_EnableThreadPoolExecutionForTesting(
     JNIEnv* env) {
   base::ThreadPoolTestHelpers::EndFenceForTesting();
 }
 
-void JNI_ThreadPoolTestHelpers_DisableThreadPoolExecutionForTesting(
+static void JNI_ThreadPoolTestHelpers_DisableThreadPoolExecutionForTesting(
     JNIEnv* env) {
   base::ThreadPoolTestHelpers::BeginFenceForTesting();
 }
+
+DEFINE_JNI(ThreadPoolTestHelpers)

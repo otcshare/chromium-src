@@ -5,11 +5,13 @@
 #ifndef CONTENT_BROWSER_SCHEDULER_RESPONSIVENESS_WATCHER_H_
 #define CONTENT_BROWSER_SCHEDULER_RESPONSIVENESS_WATCHER_H_
 
+#include <variant>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "content/browser/scheduler/responsiveness/metric_source.h"
 #include "content/common/content_export.h"
@@ -96,9 +98,15 @@ class CONTENT_EXPORT Watcher : public base::RefCounted<Watcher>,
                    bool was_blocked_or_low_priority,
                    std::vector<Metadata>* currently_running_metadata);
 
+  // TODO(crbug.com/40287434): After the "ReduceCpuUtilization2" feature is
+  // cleaned up (~January 2025), remove the std::variant in favor of a
+  // base::FunctionRef.
+  using TaskOrEventFinishedSignature = void(base::TimeTicks,
+                                            base::TimeTicks,
+                                            base::TimeTicks);
+  using TaskOrEventFinishedCallback =
+      base::FunctionRef<TaskOrEventFinishedSignature>;
   // |callback| will either be synchronously invoked, or else never invoked.
-  using TaskOrEventFinishedCallback = base::OnceCallback<
-      void(base::TimeTicks, base::TimeTicks, base::TimeTicks)>;
   void DidRunTask(const base::PendingTask* task,
                   std::vector<Metadata>* currently_running_metadata,
                   int* mismatched_task_identifiers,

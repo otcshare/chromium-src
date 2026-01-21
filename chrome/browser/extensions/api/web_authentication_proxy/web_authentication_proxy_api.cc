@@ -4,9 +4,15 @@
 
 #include "chrome/browser/extensions/api/web_authentication_proxy/web_authentication_proxy_api.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "chrome/browser/extensions/api/web_authentication_proxy/web_authentication_proxy_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/web_authentication_proxy.h"
+#include "content/public/browser/browser_context.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -55,7 +61,7 @@ void WebAuthenticationProxyAPI::OnListenerRemoved(
     return;
   }
   auto it = session_state_change_notifiers_.find(details.extension_id);
-  DCHECK(it != session_state_change_notifiers_.end());
+  CHECK(it != session_state_change_notifiers_.end());
   session_state_change_notifiers_.erase(it);
 }
 
@@ -67,17 +73,13 @@ WebAuthenticationProxyAttachFunction::~WebAuthenticationProxyAttachFunction() =
 ExtensionFunction::ResponseAction WebAuthenticationProxyAttachFunction::Run() {
   DCHECK(extension());
 
-  WebAuthenticationProxyService* proxy_service =
-      WebAuthenticationProxyServiceFactory::GetForBrowserContext(
-          browser_context());
-
-  const Extension* active_proxy = proxy_service->GetActiveRequestProxy();
-  if (active_proxy) {
-    return RespondNow(Error("Another extension is already attached"));
-  }
-
-  proxy_service->SetActiveRequestProxy(extension());
-  return RespondNow(NoArguments());
+  const bool success =
+      WebAuthenticationProxyRegistrarFactory::GetForBrowserContext(
+          browser_context())
+          ->SetRequestProxy(Profile::FromBrowserContext(browser_context()),
+                            extension());
+  return RespondNow(success ? NoArguments()
+                            : Error("Another extension is already attached"));
 }
 
 WebAuthenticationProxyDetachFunction::WebAuthenticationProxyDetachFunction() =
@@ -89,14 +91,16 @@ ExtensionFunction::ResponseAction WebAuthenticationProxyDetachFunction::Run() {
   DCHECK(extension());
 
   WebAuthenticationProxyService* proxy_service =
-      WebAuthenticationProxyServiceFactory::GetForBrowserContext(
-          browser_context());
-
-  if (proxy_service->GetActiveRequestProxy() != extension()) {
-    return RespondNow(Error("This extension is not currently attached"));
+      WebAuthenticationProxyService::GetIfProxyAttached(browser_context());
+  if (!proxy_service || proxy_service->GetActiveRequestProxy() != extension()) {
+    return RespondNow(NoArguments());
   }
 
-  proxy_service->ClearActiveRequestProxy();
+  WebAuthenticationProxyRegistrar* proxy_registrar =
+      WebAuthenticationProxyRegistrarFactory::GetForBrowserContext(
+          browser_context());
+  proxy_registrar->ClearRequestProxy(
+      Profile::FromBrowserContext(browser_context()));
   return RespondNow(NoArguments());
 }
 
@@ -106,7 +110,7 @@ WebAuthenticationProxyCompleteCreateRequestFunction::
     ~WebAuthenticationProxyCompleteCreateRequestFunction() = default;
 
 void WebAuthenticationProxyCompleteCreateRequestFunction::DoRespond(
-    absl::optional<std::string> error) {
+    std::optional<std::string> error) {
   Respond(error ? Error(std::move(*error)) : NoArguments());
 }
 
@@ -116,11 +120,10 @@ WebAuthenticationProxyCompleteCreateRequestFunction::Run() {
   auto params =
       api::web_authentication_proxy::CompleteCreateRequest::Params::Create(
           args());
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  EXTENSION_FUNCTION_VALIDATE(params);
   WebAuthenticationProxyService* proxy_service =
-      WebAuthenticationProxyServiceFactory::GetForBrowserContext(
-          browser_context());
-  if (proxy_service->GetActiveRequestProxy() != extension()) {
+      WebAuthenticationProxyService::GetIfProxyAttached(browser_context());
+  if (!proxy_service || proxy_service->GetActiveRequestProxy() != extension()) {
     return RespondNow(Error("Invalid sender"));
   }
   proxy_service->CompleteCreateRequest(
@@ -137,7 +140,7 @@ WebAuthenticationProxyCompleteGetRequestFunction::
     ~WebAuthenticationProxyCompleteGetRequestFunction() = default;
 
 void WebAuthenticationProxyCompleteGetRequestFunction::DoRespond(
-    absl::optional<std::string> error) {
+    std::optional<std::string> error) {
   Respond(error ? Error(std::move(*error)) : NoArguments());
 }
 
@@ -146,11 +149,10 @@ WebAuthenticationProxyCompleteGetRequestFunction::Run() {
   DCHECK(extension());
   auto params =
       api::web_authentication_proxy::CompleteGetRequest::Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  EXTENSION_FUNCTION_VALIDATE(params);
   WebAuthenticationProxyService* proxy_service =
-      WebAuthenticationProxyServiceFactory::GetForBrowserContext(
-          browser_context());
-  if (proxy_service->GetActiveRequestProxy() != extension()) {
+      WebAuthenticationProxyService::GetIfProxyAttached(browser_context());
+  if (!proxy_service || proxy_service->GetActiveRequestProxy() != extension()) {
     return RespondNow(Error("Invalid sender"));
   }
   proxy_service->CompleteGetRequest(
@@ -171,11 +173,10 @@ WebAuthenticationProxyCompleteIsUvpaaRequestFunction::Run() {
   auto params =
       api::web_authentication_proxy::CompleteIsUvpaaRequest::Params::Create(
           args());
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  EXTENSION_FUNCTION_VALIDATE(params);
   WebAuthenticationProxyService* proxy_service =
-      WebAuthenticationProxyServiceFactory::GetForBrowserContext(
-          browser_context());
-  if (proxy_service->GetActiveRequestProxy() != extension()) {
+      WebAuthenticationProxyService::GetIfProxyAttached(browser_context());
+  if (!proxy_service || proxy_service->GetActiveRequestProxy() != extension()) {
     return RespondNow(Error("Invalid sender"));
   }
   if (!proxy_service->CompleteIsUvpaaRequest(params->details)) {

@@ -7,11 +7,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_client_registration_helper.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
@@ -19,6 +20,7 @@
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -27,7 +29,8 @@ namespace policy {
 namespace {
 
 void OnPolicyFetchCompleted(bool success) {
-  VLOG(1) << "Policy fetch " << (success ? "succeeded" : "failed");
+  VLOG_POLICY(1, POLICY_FETCHING)
+      << "Policy fetch " << (success ? "succeeded" : "failed");
 }
 
 }  // namespace
@@ -40,7 +43,7 @@ ChromeBrowserCloudManagementRegistrar::ChromeBrowserCloudManagementRegistrar(
       url_loader_factory_(url_loader_factory) {}
 
 ChromeBrowserCloudManagementRegistrar::
-    ~ChromeBrowserCloudManagementRegistrar() {}
+    ~ChromeBrowserCloudManagementRegistrar() = default;
 
 void ChromeBrowserCloudManagementRegistrar::
     RegisterForCloudManagementWithEnrollmentToken(
@@ -48,6 +51,9 @@ void ChromeBrowserCloudManagementRegistrar::
         const std::string& client_id,
         const ClientDataDelegate& client_data_delegate,
         CloudManagementRegistrationCallback callback) {
+  VLOG_POLICY(1, CBCM_ENROLLMENT) << "Registering a CloudPolicyClient with "
+                                     "enrollment token and client id.";
+
   DCHECK(!enrollment_token.empty());
   DCHECK(!client_id.empty());
 
@@ -69,7 +75,8 @@ void ChromeBrowserCloudManagementRegistrar::
   // request context because the user is not signed in to this profile.
   registration_helper_ = std::make_unique<CloudPolicyClientRegistrationHelper>(
       policy_client.get(),
-      enterprise_management::DeviceRegisterRequest::BROWSER);
+      enterprise_management::DeviceRegisterRequest::BROWSER,
+      enterprise_management::DeviceRegisterRequest::FLAVOR_USER_REGISTRATION);
 
   // Check if token enrollment is mandatory
   bool is_enrollment_mandatory =
@@ -110,12 +117,8 @@ MachineLevelUserCloudPolicyFetcher::MachineLevelUserCloudPolicyFetcher(
   InitializeManager(std::move(client));
 }
 
-MachineLevelUserCloudPolicyFetcher::~MachineLevelUserCloudPolicyFetcher() {
-  // The pointers need to be checked since they might be invalidated from a
-  // |Disconnect| call.
-  if (policy_manager_->core() && policy_manager_->core()->service())
-    policy_manager_->core()->service()->RemoveObserver(this);
-}
+MachineLevelUserCloudPolicyFetcher::~MachineLevelUserCloudPolicyFetcher() =
+    default;
 
 void MachineLevelUserCloudPolicyFetcher::SetupRegistrationAndFetchPolicy(
     const DMToken& dm_token,
@@ -123,10 +126,20 @@ void MachineLevelUserCloudPolicyFetcher::SetupRegistrationAndFetchPolicy(
   policy_manager_->core()->client()->SetupRegistration(
       dm_token.value(), client_id, std::vector<std::string>());
   policy_manager_->store()->SetupRegistration(dm_token, client_id);
+  if (policy_manager_->extension_install_store()) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    policy_manager_->extension_install_store()->SetupRegistration(dm_token,
+                                                                  client_id);
+#else
+    NOTREACHED() << "extension_install_store initialized on a platform without "
+                    "extensions";
+#endif
+  }
   DCHECK(policy_manager_->IsClientRegistered());
 
   policy_manager_->core()->service()->RefreshPolicy(
-      base::BindOnce(&OnPolicyFetchCompleted));
+      base::BindOnce(&OnPolicyFetchCompleted),
+      PolicyFetchReason::kRegistrationChanged);
 }
 
 void MachineLevelUserCloudPolicyFetcher::AddClientObserver(
@@ -142,9 +155,8 @@ void MachineLevelUserCloudPolicyFetcher::RemoveClientObserver(
 }
 
 void MachineLevelUserCloudPolicyFetcher::Disconnect() {
+  cloud_policy_service_observation_.Reset();
   if (policy_manager_) {
-    if (policy_manager_->core() && policy_manager_->core()->service())
-      policy_manager_->core()->service()->RemoveObserver(this);
     policy_manager_->DisconnectAndRemovePolicy();
   }
 }
@@ -159,8 +171,9 @@ void MachineLevelUserCloudPolicyFetcher::
   // Note that Chrome will not fetch policy again immediately here if DM server
   // returns a policy that Chrome is not able to validate.
   if (!policy_manager_->IsClientRegistered()) {
-    VLOG(1) << "OnCloudPolicyServiceInitializationCompleted: Fetching policy "
-               "when there is no valid local cache.";
+    VLOG_POLICY(1, POLICY_FETCHING)
+        << "OnCloudPolicyServiceInitializationCompleted: Fetching policy "
+           "when there is no valid local cache.";
     TryToFetchPolicy();
   }
 }
@@ -168,7 +181,7 @@ void MachineLevelUserCloudPolicyFetcher::
 void MachineLevelUserCloudPolicyFetcher::InitializeManager(
     std::unique_ptr<CloudPolicyClient> client) {
   policy_manager_->Connect(local_state_, std::move(client));
-  policy_manager_->core()->service()->AddObserver(this);
+  cloud_policy_service_observation_.Observe(policy_manager_->core()->service());
 
   // If CloudPolicyStore is already initialized then
   // |OnCloudPolicyServiceInitializationCompleted| has already fired. Fetch
@@ -176,8 +189,9 @@ void MachineLevelUserCloudPolicyFetcher::InitializeManager(
   // valid policy cache.
   if (policy_manager_->store()->is_initialized() &&
       !policy_manager_->IsClientRegistered()) {
-    VLOG(1) << "InitializeManager: Fetching policy when there is no valid "
-               "local cache.";
+    VLOG_POLICY(1, POLICY_FETCHING)
+        << "InitializeManager: Fetching policy when there is no valid "
+           "local cache.";
     TryToFetchPolicy();
   }
 }

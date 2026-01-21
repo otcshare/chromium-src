@@ -4,10 +4,9 @@
 
 package org.chromium.chrome.test.pagecontroller.utils;
 
-import android.support.test.InstrumentationRegistry;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.uiautomator.StaleObjectException;
 import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
@@ -26,31 +25,32 @@ import java.util.List;
  * This helper class provides these capabilities.
  */
 public class UiLocatorHelper {
-    private static final String TAG = "UiLocatorHelper";
     private static final long DEFAULT_TIMEOUT_MS = 3000L;
     // UI_CHECK_INTERVAL_MS is intentionally not modifiable so that longer timeouts
     // don't lead to slowness due to the checking interval being too coarse.
     static final long UI_CHECK_INTERVAL_MS = DEFAULT_TIMEOUT_MS / 4L;
-    private static final long DEFAULT_MAX_UI_SETTLE_TIME_MS = 200L;
 
-    private static final ElementConverter<String> CONVERTER_TEXT = object2 -> {
-        return object2.getText();
-    };
+    private static final ElementConverter<String> CONVERTER_TEXT =
+            object2 -> {
+                return object2.getText();
+            };
 
-    private static final ElementConverter<String> CONVERTER_DESC = object2 -> {
-        return object2.getContentDescription();
-    };
+    private static final ElementConverter<String> CONVERTER_DESC =
+            object2 -> {
+                return object2.getContentDescription();
+            };
 
-    private static final ElementConverter<Boolean> CONVERTER_CHECKED = object2 -> {
-        if (object2.isCheckable()) {
-            return object2.isChecked();
-        } else {
-            throw new UiLocationException("Item in " + object2 + " is not checkable.");
-        }
-    };
+    private static final ElementConverter<Boolean> CONVERTER_CHECKED =
+            object2 -> {
+                if (object2.isCheckable()) {
+                    return object2.isChecked();
+                } else {
+                    throw new UiLocationException("Item in " + object2 + " is not checkable.");
+                }
+            };
 
     private final UiDevice mDevice;
-    private long mTimeout;
+    private final long mTimeout;
 
     /** Create a UiLocatorHelper with default timeout. */
     UiLocatorHelper() {
@@ -291,8 +291,12 @@ public class UiLocatorHelper {
             }
             Utils.sleep(UI_CHECK_INTERVAL_MS);
         }
-        throw new UiLocationException("Could not find any objects after " + mTimeout + "ms and "
-                        + attempts + " attempts.",
+        throw new UiLocationException(
+                "Could not find any objects after "
+                        + mTimeout
+                        + "ms and "
+                        + attempts
+                        + " attempts.",
                 locator);
     }
 
@@ -316,28 +320,23 @@ public class UiLocatorHelper {
 
     /**
      * Delegate to be used with getCustomElements.
+     *
      * @param <T> The type of the element.
      */
-    public static interface CustomElementMaker<T> {
+    public interface CustomElementMaker<T> {
         /**
          * Should construct an element given a node.
-         * @param root          The input node.
-         * @param isLastAttempt getCustomElements may call this delegate
-         *                      multiple times if errors are thrown from this
-         *                      method and timeout has not been reached.  If
-         *                      isLastAttempt is true, then it indicates that
-         *                      getCustomElements will not call this delegate
-         *                      again.  For example the delegate can return null
-         *                      on the lastAttempt if it still encounters errors
-         *                      which indicates that a properly formed element is
-         *                      not found on the page, this case could happen if
-         *                      an element gets cutoff at a scroll boundary.
-         * @return              The element if construction is successful, null
-         *                      otherwise.
-         * @throws UiLocationException Should throw a UiLocationException or
-         *                      UiStaleObjectException if getCustomElements
-         *                      should re-obtain a root using its provided
-         *                      locator.
+         *
+         * @param root The input node.
+         * @param isLastAttempt getCustomElements may call this delegate multiple times if errors
+         *     are thrown from this method and timeout has not been reached. If isLastAttempt is
+         *     true, then it indicates that getCustomElements will not call this delegate again. For
+         *     example the delegate can return null on the lastAttempt if it still encounters errors
+         *     which indicates that a properly formed element is not found on the page, this case
+         *     could happen if an element gets cutoff at a scroll boundary.
+         * @return The element if construction is successful, null otherwise.
+         * @throws UiLocationException Should throw a UiLocationException or UiStaleObjectException
+         *     if getCustomElements should re-obtain a root using its provided locator.
          */
         T makeElement(UiObject2 root, boolean isLastAttempt);
     }
@@ -390,9 +389,12 @@ public class UiLocatorHelper {
 
     /**
      * Define a conversion method creates an object from info in a UiObject2 node.
+     *
      * @param <T> Type of the object.
      */
-    private static interface ElementConverter<T> { T convert(UiObject2 object2); }
+    private interface ElementConverter<T> {
+        T convert(UiObject2 object2);
+    }
 
     private <T> T getOneElement(IUi2Locator locator, ElementConverter<T> converter) {
         List<T> all = getAllElements(locator, converter);

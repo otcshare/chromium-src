@@ -5,23 +5,23 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBSOCKETS_WEBSOCKET_MESSAGE_CHUNK_ACCUMULATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBSOCKETS_WEBSOCKET_MESSAGE_CHUNK_ACCUMULATOR_H_
 
-#include <memory>
+#include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace base {
+class SingleThreadTaskRunner;
 class TickClock;
 }
 
 namespace blink {
-
-class SingleThreadTaskRunner;
 
 // WebSocketMessageChunkAccumulator stores chunks for one WebSocket message. A
 // user can call Append() to append bytes, and call GetView() to get a list of
@@ -29,16 +29,15 @@ class SingleThreadTaskRunner;
 // We don't use SharedBuffer due to an observed performance problem of FastFree.
 // TODO(yhirano): Remove this once the performance problem is fixed in a general
 // manner.
-class MODULES_EXPORT WebSocketMessageChunkAccumulator final {
-  DISALLOW_NEW();
-
+class MODULES_EXPORT WebSocketMessageChunkAccumulator final
+    : public GarbageCollected<WebSocketMessageChunkAccumulator> {
  public:
   explicit WebSocketMessageChunkAccumulator(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
   ~WebSocketMessageChunkAccumulator();
 
   // Appends |data| to this instance.
-  void Append(base::span<const char> data);
+  void Append(base::span<const uint8_t> data);
 
   // Returns the number of bytes stored in this instance.
   size_t GetSize() const { return size_; }
@@ -50,8 +49,10 @@ class MODULES_EXPORT WebSocketMessageChunkAccumulator final {
   // Clear all stored data and cancel timers.
   void Reset();
 
+  void Trace(Visitor*) const;
+
   // The regions will be available until Clear() is called.
-  Vector<base::span<const char>> GetView() const;
+  Vector<base::span<const uint8_t>> GetView() const;
 
   wtf_size_t GetPoolSizeForTesting() const { return pool_.size(); }
   bool IsTimerActiveForTesting() const { return timer_.IsActive(); }
@@ -65,12 +66,16 @@ class MODULES_EXPORT WebSocketMessageChunkAccumulator final {
 
  private:
   struct SegmentDeleter {
-    void operator()(char* p) const { WTF::Partitions::FastFree(p); }
+    void operator()(uint8_t* p) const { Partitions::FastFree(p); }
   };
-  using SegmentPtr = std::unique_ptr<char[], SegmentDeleter>;
+  using SegmentPtr = base::HeapArray<uint8_t, SegmentDeleter>;
   static SegmentPtr CreateSegment() {
-    return SegmentPtr(static_cast<char*>(WTF::Partitions::FastMalloc(
-        kSegmentSize, "blink::WebSocketMessageChunkAccumulator::Segment")));
+    // SAFETY: `Partitions::FastMalloc` returns a pointer to
+    // `kSegmentSize` bytes.
+    return UNSAFE_BUFFERS(SegmentPtr::FromOwningPointer(
+        static_cast<uint8_t*>(Partitions::FastMalloc(
+            kSegmentSize, "blink::WebSocketMessageChunkAccumulator::Segment")),
+        kSegmentSize));
   }
 
   void OnTimerFired(TimerBase*);
@@ -84,7 +89,7 @@ class MODULES_EXPORT WebSocketMessageChunkAccumulator final {
   Vector<SegmentPtr> pool_;
   size_t size_ = 0;
   wtf_size_t num_pooled_segments_to_be_removed_ = 0;
-  TaskRunnerTimer<WebSocketMessageChunkAccumulator> timer_;
+  HeapTaskRunnerTimer<WebSocketMessageChunkAccumulator> timer_;
 };
 
 }  // namespace blink

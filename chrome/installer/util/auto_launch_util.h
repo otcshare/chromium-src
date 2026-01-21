@@ -5,15 +5,22 @@
 #ifndef CHROME_INSTALLER_UTIL_AUTO_LAUNCH_UTIL_H_
 #define CHROME_INSTALLER_UTIL_AUTO_LAUNCH_UTIL_H_
 
+#include <string>
+
 // A namespace containing the platform specific implementation of setting Chrome
 // to launch at user login.
 namespace auto_launch_util {
 
-// Requests that Chrome start in Background Mode at user login.
-void EnableBackgroundStartAtLogin();
+// Different launch modes that can be registered with the OS.
+enum class StartupLaunchMode { kBackground, kForeground };
 
-// Disables auto-starting Chrome in background mode at user login.
-void DisableBackgroundStartAtLogin();
+std::wstring GetAutoLaunchKeyName();
+
+// Requests that Chrome start in the given mode at user login.
+void EnableStartAtLogin(StartupLaunchMode startup_launch_mode);
+
+// Disables auto-starting Chrome in at user login.
+void DisableStartAtLogin();
 
 }  // namespace auto_launch_util
 

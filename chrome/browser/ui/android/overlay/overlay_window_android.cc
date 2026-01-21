@@ -6,15 +6,29 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
+#include "base/android/unguessable_token_android.h"
 #include "base/memory/ptr_util.h"
-#include "cc/layers/surface_layer.h"
+#include "base/no_destructor.h"
+#include "cc/slim/surface_layer.h"
 #include "chrome/android/chrome_jni_headers/PictureInPictureActivity_jni.h"
 #include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "components/thin_webview/compositor_view.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "media/base/media_switches.h"
 #include "ui/android/window_android_compositor.h"
+
+using WindowMap = base::flat_map<base::UnguessableToken, OverlayWindowAndroid*>;
+
+namespace {
+WindowMap& GetWindowMap() {
+  static base::NoDestructor<WindowMap> instance;
+  return *instance;
+}
+
+}  // namespace
 
 // static
 std::unique_ptr<content::VideoOverlayWindow>
@@ -27,61 +41,111 @@ OverlayWindowAndroid::OverlayWindowAndroid(
     content::VideoPictureInPictureWindowController* controller)
     : window_android_(nullptr),
       compositor_view_(nullptr),
-      surface_layer_(cc::SurfaceLayer::Create()),
+      surface_layer_(cc::slim::SurfaceLayer::Create()),
       bounds_(gfx::Rect(0, 0)),
       update_action_timer_(std::make_unique<base::OneShotTimer>()),
       controller_(controller) {
+  GetWindowMap().emplace(token_, this);
   surface_layer_->SetIsDrawable(true);
   surface_layer_->SetStretchContentToFillBounds(true);
-  surface_layer_->SetMayContainVideo(true);
   surface_layer_->SetBackgroundColor(SkColors::kBlack);
 
   auto* web_contents = controller_->GetWebContents();
 
+  // Compute the screen position of the video, and see if it fits inside the
+  // WebContents or if it's clipped / off-screen.  If it's onscreen, then T and
+  // later, Android can do a nicer animated transition to PiP with a screen
+  // capture of the video.  However, if the video is clipped / offscreen, then
+  // it'll look nicer to use the default light grey transition.
+
+  // We provide a small buffer for what "clipped" means, rather than enforcing
+  // it strictly.  It'll still look fine while allowing small positioning errors
+  // that sites sometimes make.  See https://crbug.com/1411517 for an example.
+
+  // The java side will ignore any source bounds that are not on the screen for
+  // the source rect hint. It will use the aspect ratio only in that case.  We
+  // set the x position to be <0 to ensure this, to skip the transition.
+
+  // Get the size of the video, and inset it to provide some slack.
   gfx::Rect source_bounds = controller_->GetSourceBounds();
+  gfx::Rect smaller_source_bounds = source_bounds;
+  constexpr int inset_size = 4;  // pixels on each side
+  smaller_source_bounds.Inset(inset_size);
+
+  // Get the size of the WebContents, and convert to pixels.
   gfx::Rect unscaled_content_bounds = web_contents->GetContainerBounds();
   auto* native_view = web_contents->GetNativeView();
-  // The java side will ignore any source bounds that are not on the screen for
-  // the source rect hint. It will use the aspect ratio only in that case.  If
-  // it's not entirely on-screen, then skip it.
   const float dip_scale = native_view->GetDipScale();
   gfx::Rect content_bounds(unscaled_content_bounds.x() * dip_scale,
                            unscaled_content_bounds.y() * dip_scale,
                            unscaled_content_bounds.width() * dip_scale,
                            unscaled_content_bounds.height() * dip_scale);
-  const bool out_of_bounds = !content_bounds.Contains(source_bounds);
+  const bool out_of_bounds = !content_bounds.Contains(smaller_source_bounds);
+  // Use the new source location based transition when the source is not out of
+  // bound and the AllowEnhancedPipTransition feature is enabled.
+  // TODO(crbug.com/440384447): remove AllowEnhancedPipTransition check once the
+  // new transition works properly on desktop Android.
+  const bool use_source_hint_transition =
+      !out_of_bounds &&
+      base::FeatureList::IsEnabled(media::kAllowEnhancedPipTransition);
 
-  if (!out_of_bounds) {
-    // Convert to screen space.
+  if (use_source_hint_transition) {
+    // Use the newer transition, if available.
+    // Convert to screen space.  Since the comparison was with the inset source
+    // bounds, clamp the real source bounds to the container.
+    source_bounds.Intersect(content_bounds);
     gfx::PointF offset = native_view->GetLocationOnScreen(0, 0);
     source_bounds.Offset(
         static_cast<int>(offset.x()),
         static_cast<int>(offset.y()) +
             native_view->content_offset() * native_view->GetDipScale());
   } else {
+    // Use the old transition.
     // Slide this offscreen, while keeping the aspect ratio the same.
     source_bounds.set_x(-1);
   }
 
   JNIEnv* env = base::android::AttachCurrentThread();
+  auto j_token = base::android::UnguessableTokenAndroid::Create(env, token_);
   Java_PictureInPictureActivity_createActivity(
-      env, reinterpret_cast<intptr_t>(this),
-      TabAndroid::FromWebContents(web_contents)->GetJavaObject(),
+      env, j_token, TabAndroid::FromWebContents(web_contents)->GetJavaObject(),
       source_bounds.x(), source_bounds.y(), source_bounds.width(),
       source_bounds.height());
 }
 
 OverlayWindowAndroid::~OverlayWindowAndroid() {
+  // Any future use of our token will fail.
+  GetWindowMap().erase(token_);
+  if (java_ref_.is_uninitialized()) {
+    return;
+  }
+  // Notify the java side that the native side is gone.
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_PictureInPictureActivity_onWindowDestroyed(
-      env, reinterpret_cast<intptr_t>(this));
+  Java_PictureInPictureActivity_onWindowDestroyed(env, java_ref_.get(env));
 }
 
-void OverlayWindowAndroid::OnActivityStart(
+static int64_t JNI_PictureInPictureActivity_OnActivityStart(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj,
-    const base::android::JavaParamRef<jobject>& jwindow_android) {
-  java_ref_ = JavaObjectWeakGlobalRef(env, obj);
+    const jni_zero::JavaRef<jobject>& j_token,
+    const jni_zero::JavaRef<jobject>& self,
+    const jni_zero::JavaRef<jobject>& window) {
+  auto token = base::android::UnguessableTokenAndroid::FromJavaUnguessableToken(
+      env, j_token);
+  auto iter = GetWindowMap().find(token);
+  if (iter == GetWindowMap().end()) {
+    return 0;
+  }
+  OverlayWindowAndroid* thiz = iter->second;
+  thiz->Initialize(env, self, window);
+
+  return reinterpret_cast<int64_t>(thiz);
+}
+
+void OverlayWindowAndroid::Initialize(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& self,
+    const base::android::JavaRef<jobject>& jwindow_android) {
+  java_ref_ = JavaObjectWeakGlobalRef(env, self);
   window_android_ = ui::WindowAndroid::FromJavaWindowAndroid(jwindow_android);
   window_android_->AddObserver(this);
 
@@ -92,11 +156,13 @@ void OverlayWindowAndroid::OnActivityStart(
   Java_PictureInPictureActivity_setCameraState(env, java_ref_.get(env),
                                                camera_on_);
 
-  if (!update_action_timer_->IsRunning())
+  if (!update_action_timer_->IsRunning()) {
     MaybeNotifyVisibleActionsChanged();
+  }
 
-  if (video_size_.IsEmpty())
+  if (video_size_.IsEmpty()) {
     return;
+  }
 
   Java_PictureInPictureActivity_updateVideoSize(
       env, java_ref_.get(env), video_size_.width(), video_size_.height());
@@ -113,11 +179,27 @@ void OverlayWindowAndroid::OnDetachCompositor() {
 }
 
 void OverlayWindowAndroid::OnActivityStopped() {
-  Destroy(nullptr);
+  if (java_ref_.is_uninitialized()) {
+    return;
+  }
+
+  // If the activity stops, pretend that somebody pressed the close button.
+  // This will notify the java side to forget about us, and clean up.
+  Close();
+  // `this` may be destroyed.
 }
 
-void OverlayWindowAndroid::Destroy(JNIEnv* env) {
+void OverlayWindowAndroid::DestroyStartedByJava(JNIEnv* env) {
+  // Note that the java side also clears its native ptr when calling us, so it's
+  // okay that we don't notify it in the dtor.
+  // ** IMPORTANT ** Do not add calls here unless the above statement continues
+  // to be true.  It's unlikely that anything on the native side should call
+  // this method directly.
   java_ref_.reset();
+
+  // Stop the timer for completeness, though resetting `java_ref_` will make it
+  // a no-op.
+  update_action_timer_->Stop();
 
   if (window_android_) {
     window_android_->RemoveObserver(this);
@@ -129,12 +211,13 @@ void OverlayWindowAndroid::Destroy(JNIEnv* env) {
       /*should_pause_video=*/visible_actions_.find(
           static_cast<int>(media_session::mojom::MediaSessionAction::kPlay)) !=
       visible_actions_.end());
+  // `this` may be destroyed.
 }
 
 void OverlayWindowAndroid::TogglePlayPause(JNIEnv* env, bool toggleOn) {
-  DCHECK(!controller_->IsPlayerActive());
-  if (toggleOn == (playback_state_ == PlaybackState::kPaused))
+  if (toggleOn == (playback_state_ == PlaybackState::kPaused)) {
     controller_->TogglePlayPause();
+  }
 }
 
 void OverlayWindowAndroid::NextTrack(JNIEnv* env) {
@@ -145,23 +228,46 @@ void OverlayWindowAndroid::PreviousTrack(JNIEnv* env) {
   controller_->PreviousTrack();
 }
 
+void OverlayWindowAndroid::NextSlide(JNIEnv* env) {
+  controller_->NextSlide();
+}
+
+void OverlayWindowAndroid::PreviousSlide(JNIEnv* env) {
+  controller_->PreviousSlide();
+}
+
 void OverlayWindowAndroid::ToggleMicrophone(JNIEnv* env, bool toggleOn) {
-  if (microphone_muted_ == toggleOn)
+  if (microphone_muted_ == toggleOn) {
     controller_->ToggleMicrophone();
+  }
 }
 
 void OverlayWindowAndroid::ToggleCamera(JNIEnv* env, bool toggleOn) {
-  if (!camera_on_ == toggleOn)
+  if (!camera_on_ == toggleOn) {
     controller_->ToggleCamera();
+  }
 }
 
 void OverlayWindowAndroid::HangUp(JNIEnv* env) {
   controller_->HangUp();
 }
 
+void OverlayWindowAndroid::Hide(JNIEnv* env) {
+  if (auto* web_contents = controller_->GetWebContents()) {
+    if (auto* helper =
+            AutoPictureInPictureTabHelper::FromWebContents(web_contents)) {
+      helper->OnPictureInPictureWindowWillHide();
+    }
+  }
+
+  // Hides the window without pausing the video, effectively moving the playback
+  // to the background.
+  Hide();
+}
+
 void OverlayWindowAndroid::CompositorViewCreated(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& compositor_view) {
+    const base::android::JavaRef<jobject>& compositor_view) {
   compositor_view_ =
       thin_webview::android::CompositorView::FromJavaObject(compositor_view);
   DCHECK(compositor_view_);
@@ -169,11 +275,12 @@ void OverlayWindowAndroid::CompositorViewCreated(
 }
 
 void OverlayWindowAndroid::OnViewSizeChanged(JNIEnv* env,
-                                             jint width,
-                                             jint height) {
+                                             int32_t width,
+                                             int32_t height) {
   gfx::Size content_size(width, height);
-  if (bounds_.size() == content_size)
+  if (bounds_.size() == content_size) {
     return;
+  }
 
   bounds_.set_size(content_size);
   surface_layer_->SetBounds(content_size);
@@ -181,29 +288,74 @@ void OverlayWindowAndroid::OnViewSizeChanged(JNIEnv* env,
 }
 
 void OverlayWindowAndroid::OnBackToTab(JNIEnv* env) {
-  controller_->FocusInitiator();
-  Hide();
+  if (base::FeatureList::IsEnabled(media::kAutoPictureInPictureAndroid)) {
+    // Call `CloseAndFocusInitiator()` here to prevent a race condition with the
+    // auto-PiP flow. The race occurs between two paths trying to close the
+    // window:
+    // 1. This manual "back to tab" action.
+    // 2. The `AutoPictureInPictureTabHelper`, which automatically closes the
+    //    window when the originating tab becomes visible.
+    //
+    // If we were to call `FocusInitiator()` first, it would make the tab
+    // visible, triggering path (2) immediately. This `OnBackToTab` flow (path
+    // 1) would then also try to close the window, leading to a use-after-free
+    // crash.
+    //
+    // `CloseAndFocusInitiator()` solves this by ensuring the controller
+    // destroys the window (`Close()`) *before* focusing the tab
+    // (`FocusInitiator()`). This way, by the time the tab helper in path (2)
+    // runs, the window is already gone, and its attempt to close it becomes a
+    // safe no-op.
+    controller_->CloseAndFocusInitiator();
+  } else {
+    controller_->FocusInitiator();
+    Hide();
+  }
+}
+
+void OverlayWindowAndroid::OnDismissal(JNIEnv* env) {
+  // Verify that the dismissal is for an auto-PiP session, not a user-initiated
+  // one, before triggering the embargo logic.
+  if (IsInAutoPictureInPicture()) {
+    AutoPictureInPictureTabHelper::FromWebContents(
+        controller_->GetWebContents())
+        ->OnPictureInPictureDismissed();
+  }
 }
 
 void OverlayWindowAndroid::Close() {
   CloseInternal();
-  controller_->OnWindowDestroyed(/*should_pause_video=*/true);
+  // Only pause the video when play/pause button is visible.
+  controller_->OnWindowDestroyed(
+      /*should_pause_video=*/visible_actions_.find(
+          static_cast<int>(media_session::mojom::MediaSessionAction::kPlay)) !=
+      visible_actions_.end());
+  // `this` may be destroyed.
 }
 
 void OverlayWindowAndroid::Hide() {
   CloseInternal();
   controller_->OnWindowDestroyed(/*should_pause_video=*/false);
+  // `this` may be destroyed.
 }
 
 void OverlayWindowAndroid::CloseInternal() {
-  if (java_ref_.is_uninitialized())
+  if (java_ref_.is_uninitialized()) {
     return;
+  }
 
   DCHECK(window_android_);
   window_android_->RemoveObserver(this);
   window_android_ = nullptr;
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_PictureInPictureActivity_close(env, java_ref_.get(env));
+  // The java side forgets about us on close, so don't call back.
+  java_ref_.reset();
+
+  // Stop any in-flight action button updates.  We won't find out if the Android
+  // window is destroyed since that comes from `WindowAndroidObserver` but we
+  // just unregistered from that.
+  update_action_timer_->Stop();
 }
 
 bool OverlayWindowAndroid::IsActive() const {
@@ -212,6 +364,16 @@ bool OverlayWindowAndroid::IsActive() const {
 
 bool OverlayWindowAndroid::IsVisible() const {
   return true;
+}
+
+bool OverlayWindowAndroid::IsInAutoPictureInPicture() const {
+  auto* web_contents = controller_->GetWebContents();
+  if (!web_contents) {
+    return false;
+  }
+
+  auto* helper = AutoPictureInPictureTabHelper::FromWebContents(web_contents);
+  return helper && helper->IsInAutoPictureInPicture();
 }
 
 gfx::Rect OverlayWindowAndroid::GetBounds() {
@@ -232,12 +394,14 @@ void OverlayWindowAndroid::UpdateNaturalSize(const gfx::Size& natural_size) {
 }
 
 void OverlayWindowAndroid::SetPlaybackState(PlaybackState playback_state) {
-  if (playback_state_ == playback_state)
+  if (playback_state_ == playback_state) {
     return;
+  }
 
   playback_state_ = playback_state;
-  if (java_ref_.is_uninitialized())
+  if (java_ref_.is_uninitialized()) {
     return;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_PictureInPictureActivity_setPlaybackState(env, java_ref_.get(env),
@@ -245,12 +409,14 @@ void OverlayWindowAndroid::SetPlaybackState(PlaybackState playback_state) {
 }
 
 void OverlayWindowAndroid::SetMicrophoneMuted(bool muted) {
-  if (microphone_muted_ == muted)
+  if (microphone_muted_ == muted) {
     return;
+  }
 
   microphone_muted_ = muted;
-  if (java_ref_.is_uninitialized())
+  if (java_ref_.is_uninitialized()) {
     return;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_PictureInPictureActivity_setMicrophoneMuted(env, java_ref_.get(env),
@@ -258,12 +424,14 @@ void OverlayWindowAndroid::SetMicrophoneMuted(bool muted) {
 }
 
 void OverlayWindowAndroid::SetCameraState(bool turned_on) {
-  if (camera_on_ == turned_on)
+  if (camera_on_ == turned_on) {
     return;
+  }
 
   camera_on_ = turned_on;
-  if (java_ref_.is_uninitialized())
+  if (java_ref_.is_uninitialized()) {
     return;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_PictureInPictureActivity_setCameraState(env, java_ref_.get(env),
@@ -285,6 +453,17 @@ void OverlayWindowAndroid::SetPreviousTrackButtonVisibility(bool is_visible) {
       media_session::mojom::MediaSessionAction::kPreviousTrack, is_visible);
 }
 
+void OverlayWindowAndroid::SetHidePictureInPictureButtonVisibility(
+    bool is_visible) {
+  // The hide button is only shown for auto-PiP sessions. The controller
+  // provides `is_visible` as a hint based on play/pause visibility, but we make
+  // the final decision here based on the auto-PiP state.
+  bool should_show_hide_button = is_visible && IsInAutoPictureInPicture();
+  MaybeUpdateVisibleAction(
+      media_session::mojom::MediaSessionAction::kExitPictureInPicture,
+      should_show_hide_button);
+}
+
 void OverlayWindowAndroid::SetToggleMicrophoneButtonVisibility(
     bool is_visible) {
   MaybeUpdateVisibleAction(
@@ -301,12 +480,22 @@ void OverlayWindowAndroid::SetHangUpButtonVisibility(bool is_visible) {
                            is_visible);
 }
 
+void OverlayWindowAndroid::SetNextSlideButtonVisibility(bool is_visible) {
+  MaybeUpdateVisibleAction(media_session::mojom::MediaSessionAction::kNextSlide,
+                           is_visible);
+}
+
+void OverlayWindowAndroid::SetPreviousSlideButtonVisibility(bool is_visible) {
+  MaybeUpdateVisibleAction(
+      media_session::mojom::MediaSessionAction::kPreviousSlide, is_visible);
+}
+
 void OverlayWindowAndroid::SetSurfaceId(const viz::SurfaceId& surface_id) {
   const viz::SurfaceId& old_surface_id = surface_layer_->surface_id().is_valid()
                                              ? surface_layer_->surface_id()
                                              : surface_id;
   if (window_android_ && window_android_->GetCompositor() &&
-      old_surface_id != surface_id) {
+      old_surface_id.frame_sink_id() != surface_id.frame_sink_id()) {
     // On Android, the new frame sink needs to be added before
     // removing the previous surface sink.
     window_android_->GetCompositor()->AddChildFrameSink(
@@ -320,8 +509,9 @@ void OverlayWindowAndroid::SetSurfaceId(const viz::SurfaceId& surface_id) {
 }
 
 void OverlayWindowAndroid::MaybeNotifyVisibleActionsChanged() {
-  if (java_ref_.is_uninitialized())
+  if (java_ref_.is_uninitialized()) {
     return;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_PictureInPictureActivity_updateVisibleActions(
@@ -340,10 +530,11 @@ void OverlayWindowAndroid::MaybeUpdateVisibleAction(
     return;
   }
 
-  if (is_visible)
+  if (is_visible) {
     visible_actions_.insert(action_code);
-  else
+  } else {
     visible_actions_.erase(action_code);
+  }
 
   if (!update_action_timer_->IsRunning()) {
     update_action_timer_->Start(
@@ -352,3 +543,5 @@ void OverlayWindowAndroid::MaybeUpdateVisibleAction(
                        base::Unretained(this)));
   }
 }
+
+DEFINE_JNI(PictureInPictureActivity)

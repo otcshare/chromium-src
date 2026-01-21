@@ -15,7 +15,6 @@ namespace network_diagnostics {
 
 namespace {
 
-// TODO(https://crbug.com/1164001): remove when migrated to namespace ash.
 namespace mojom = ::chromeos::network_diagnostics::mojom;
 
 // Fake ICMP output. For more details, see:
@@ -73,12 +72,12 @@ class FakeDebugDaemonClient : public ash::FakeDebugDaemonClient {
   FakeDebugDaemonClient(const FakeDebugDaemonClient&) = delete;
   FakeDebugDaemonClient& operator=(const FakeDebugDaemonClient&) = delete;
 
-  ~FakeDebugDaemonClient() override {}
+  ~FakeDebugDaemonClient() override = default;
 
   void TestICMP(const std::string& ip_address,
                 TestICMPCallback callback) override {
     // Invoke the test callback with fake output.
-    std::move(callback).Run(absl::optional<std::string>{icmp_output_});
+    std::move(callback).Run(std::optional<std::string>{icmp_output_});
   }
 
  private:
@@ -109,7 +108,9 @@ class GatewayCanBePingedRoutineTest : public NetworkDiagnosticsTestHelper {
   void SetUpRoutine(const std::string& icmp_output) {
     debug_daemon_client_ = std::make_unique<FakeDebugDaemonClient>(icmp_output);
     gateway_can_be_pinged_routine_ =
-        std::make_unique<GatewayCanBePingedRoutine>(debug_daemon_client_.get());
+        std::make_unique<GatewayCanBePingedRoutine>(
+            mojom::RoutineCallSource::kDiagnosticsUI,
+            debug_daemon_client_.get());
   }
 
   GatewayCanBePingedRoutine* gateway_can_be_pinged_routine() {

@@ -4,9 +4,9 @@
 
 #include "components/spellcheck/browser/spellcheck_platform.h"
 
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/notreached.h"
+#include "base/functional/callback.h"
+#include "base/notimplemented.h"
 #include "components/spellcheck/common/spellcheck_features.h"
 
 class PlatformSpellChecker;

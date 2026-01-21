@@ -6,17 +6,19 @@
 
 #include <sys/xattr.h>
 
+#include <algorithm>
+
 #include "ash/metrics/histogram_macros.h"
-#include "base/callback.h"
 #include "base/containers/adapters.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/callback.h"
+#include "base/i18n/time_formatting.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/system/sys_info.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/time/time_to_iso8601.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
@@ -50,10 +52,11 @@ bool UpdateTrashInfoContents(const base::FilePath& original_path,
                               ? prefix_restore_path
                               : base::FilePath("/").Append(prefix_restore_path);
 
-  entry.trash_info_contents = base::StrCat(
-      {"[Trash Info]\nPath=", prefix.AsEndingWithSeparator().value(),
-       relative_restore_path,
-       "\nDeletionDate=", base::TimeToISO8601(entry.deletion_time)});
+  entry.trash_info_contents =
+      base::StrCat({"[Trash Info]\nPath=",
+                    base::EscapePath(prefix.AsEndingWithSeparator().value()),
+                    base::EscapePath(relative_restore_path), "\nDeletionDate=",
+                    base::TimeFormatAsIso8601(entry.deletion_time), "\n"});
   return true;
 }
 
@@ -72,7 +75,7 @@ bool WriteMetadataFileOnBlockingThread(const base::FilePath& destination_path,
   // the file has been tampered with to overwrite. Try to delete the file before
   // proceeding. `DeleteFile` will succeed if the file does not exist.
   if (!base::DeleteFile(destination_path)) {
-    LOG(ERROR) << "Failed to remove existing metadata file";
+    PLOG(ERROR) << "Failed to remove existing metadata file";
     return false;
   }
   return base::WriteFile(destination_path, contents);
@@ -100,8 +103,8 @@ base::File::Error SetTrackedExtendedAttribute(const base::FilePath& path) {
   if (lsetxattr(path.value().c_str(), trash::kTrackedDirectoryName,
                 tracked_name.c_str(), tracked_name.size(), 0) < 0) {
     RecordDirectorySetupMetric(trash::DirectorySetupUmaType::FAILED_XATTR);
-    PLOG(ERROR) << "Failed to set the xattr";
-    return base::File::FILE_ERROR_FAILED;
+    PLOG(WARNING) << "Failed to set the xattr " << trash::kTrackedDirectoryName
+                  << "=" << tracked_name << " on " << path;
   }
   return base::File::FILE_OK;
 }
@@ -130,7 +133,7 @@ TrashIOTask::TrashIOTask(
   progress_.total_bytes = 0;
 
   for (const auto& url : file_urls) {
-    progress_.sources.emplace_back(url, absl::nullopt);
+    progress_.sources.emplace_back(url, std::nullopt);
     trash_entries_.emplace_back();
   }
 }
@@ -161,8 +164,7 @@ void TrashIOTask::Execute(IOTask::ProgressCallback progress_callback,
 
   // Build the list of known paths that are enabled, for now Downloads is a bind
   // mount at MyFiles/Downloads so treat them as separate volumes.
-  free_space_map_ =
-      trash::GenerateEnabledTrashLocationsForProfile(profile_, base_path_);
+  free_space_map_ = trash::GenerateEnabledTrashLocationsForProfile(profile_);
   progress_.state = State::kInProgress;
 
   UpdateTrashEntry(0);
@@ -189,10 +191,10 @@ void TrashIOTask::UpdateTrashEntry(size_t source_idx) {
   // however in the case of nested directories, reverse lexicographical order is
   // preferred to ensure the closer parent path by depth is chosen.
   const trash::TrashPathsMap::reverse_iterator& trash_parent_path_it =
-      base::ranges::find_if(base::Reversed(free_space_map_),
-                            [&source_path](const auto& it) {
-                              return it.first.IsParent(source_path);
-                            });
+      std::ranges::find_if(base::Reversed(free_space_map_),
+                           [&source_path](const auto& it) {
+                             return it.first.IsParent(source_path);
+                           });
 
   if (trash_parent_path_it == free_space_map_.rend()) {
     // The `source_path` is not parented at a supported Trash location, bail
@@ -257,8 +259,9 @@ void TrashIOTask::GetFileSize(size_t source_idx) {
       base::BindOnce(
           &GetFileMetadataOnIOThread, file_system_context_,
           progress_.sources[source_idx].url,
-          storage::FileSystemOperation::GET_METADATA_FIELD_SIZE |
-              storage::FileSystemOperation::GET_METADATA_FIELD_TOTAL_SIZE,
+          storage::FileSystemOperation::GetMetadataFieldSet(
+              {storage::FileSystemOperation::GetMetadataField::kSize,
+               storage::FileSystemOperation::GetMetadataField::kRecursiveSize}),
           google_apis::CreateRelayCallback(
               base::BindOnce(&TrashIOTask::GotFileSize,
                              weak_ptr_factory_.GetWeakPtr(), source_idx))));
@@ -326,7 +329,7 @@ base::FilePath TrashIOTask::MakeRelativePathAbsoluteFromBasePath(
 void TrashIOTask::GotFreeDiskSpace(
     size_t source_idx,
     const trash::TrashPathsMap::reverse_iterator& it,
-    int64_t free_space) {
+    std::optional<int64_t> free_space) {
   trash::TrashLocation& trash_location = it->second;
   const base::FilePath& trash_parent_path = it->first;
   base::FilePath trash_path = MakeRelativeFromBasePath(
@@ -337,7 +340,7 @@ void TrashIOTask::GotFreeDiskSpace(
   trash_location.trash_info =
       CreateFileSystemURL(progress_.sources[source_idx].url,
                           trash_path.Append(trash::kInfoFolderName));
-  trash_location.free_space = free_space;
+  trash_location.free_space = free_space.value_or(-1);
   trash_location.require_setup = true;
 
   ValidateAndDecrementFreeSpace(source_idx, it);
@@ -366,8 +369,7 @@ void TrashIOTask::SetupSubDirectory(
       FROM_HERE,
       base::BindOnce(&StartCreateDirectoryOnIOThread, file_system_context_,
                      trash_subdirectory,
-                     base::BindPostTask(
-                         base::SequencedTaskRunner::GetCurrentDefault(),
+                     base::BindPostTaskToCurrentDefault(
                          base::BindOnce(&TrashIOTask::SetDirectoryTracking,
                                         weak_ptr_factory_.GetWeakPtr(),
                                         std::move(on_setup_complete_callback),
@@ -479,7 +481,7 @@ void TrashIOTask::WriteMetadata(
     const storage::FileSystemURL& files_folder_location,
     base::FileErrorOr<storage::FileSystemURL> destination_result) {
   if (!destination_result.has_value()) {
-    progress_.outputs.emplace_back(files_folder_location, absl::nullopt);
+    progress_.outputs.emplace_back(files_folder_location, std::nullopt);
     TrashComplete(source_idx, output_idx, destination_result.error());
     return;
   }
@@ -493,7 +495,7 @@ void TrashIOTask::WriteMetadata(
       absolute_trash_path, trash::kInfoFolderName, file_name);
   progress_.outputs.emplace_back(
       CreateFileSystemURL(progress_.sources[source_idx].url, destination_path),
-      absl::nullopt);
+      std::nullopt);
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock()},
@@ -525,7 +527,7 @@ void TrashIOTask::TrashFile(size_t source_idx,
                             const storage::FileSystemURL& destination_url) {
   DCHECK(source_idx < progress_.sources.size());
   DCHECK(output_idx < progress_.outputs.size());
-  progress_.outputs.emplace_back(destination_url, absl::nullopt);
+  progress_.outputs.emplace_back(destination_url, std::nullopt);
 
   last_progress_size_ = 0;
 
@@ -533,14 +535,12 @@ void TrashIOTask::TrashFile(size_t source_idx,
 
   // File browsers generally default to preserving mtimes on copy/move so we
   // should do the same.
-  storage::FileSystemOperation::CopyOrMoveOptionSet options(
-      storage::FileSystemOperation::CopyOrMoveOption::kPreserveLastModified);
+  storage::FileSystemOperation::CopyOrMoveOptionSet options = {
+      storage::FileSystemOperation::CopyOrMoveOption::kPreserveLastModified};
 
-  auto complete_callback =
-      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
-                         base::BindOnce(&TrashIOTask::OnMoveComplete,
-                                        weak_ptr_factory_.GetWeakPtr(),
-                                        source_idx, output_idx + 1));
+  auto complete_callback = base::BindPostTaskToCurrentDefault(base::BindOnce(
+      &TrashIOTask::OnMoveComplete, weak_ptr_factory_.GetWeakPtr(), source_idx,
+      output_idx + 1));
 
   // For move operations that occur on the same file system, the progress
   // callback is never invoked.
@@ -562,8 +562,7 @@ void TrashIOTask::OnMoveComplete(size_t source_idx,
     LOG(ERROR) << "Failed to move the file to trash folder: " << error;
     RecordFailedTrashingMetric(
         trash::FailedTrashingUmaType::FAILED_MOVING_FILE);
-    auto complete_callback = base::BindPostTask(
-        base::SequencedTaskRunner::GetCurrentDefault(),
+    auto complete_callback = base::BindPostTaskToCurrentDefault(
         base::BindOnce(&TrashIOTask::TrashComplete,
                        weak_ptr_factory_.GetWeakPtr(), source_idx, output_idx));
 

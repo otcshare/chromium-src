@@ -4,10 +4,15 @@
 
 #include "chrome/browser/ash/login/saml/password_sync_token_checkers_collection.h"
 
-#include "base/containers/contains.h"
+#include <memory>
+#include <string>
+
+#include "chrome/browser/ash/login/saml/password_sync_token_login_checker.h"
 #include "chrome/browser/browser_process.h"
 #include "components/user_manager/known_user.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "net/base/backoff_entry.h"
 
 namespace ash {
 
@@ -31,7 +36,7 @@ PasswordSyncTokenCheckersCollection::~PasswordSyncTokenCheckersCollection() =
 void PasswordSyncTokenCheckersCollection::StartPasswordSyncCheckers(
     const user_manager::UserList& users,
     PasswordSyncTokenLoginChecker::Observer* observer) {
-  for (auto* user : users) {
+  for (user_manager::User* user : users) {
     // Online login already enforced for the user - no further checks are
     // required.
     if (!user->using_saml() || user->force_online_signin())
@@ -41,7 +46,7 @@ void PasswordSyncTokenCheckersCollection::StartPasswordSyncCheckers(
     const std::string* sync_token =
         known_user.GetPasswordSyncToken(user->GetAccountId());
     if (sync_token && !sync_token->empty() &&
-        !base::Contains(sync_token_checkers_, *sync_token)) {
+        !sync_token_checkers_.contains(*sync_token)) {
       sync_token_checkers_.insert(
           {*sync_token,
            std::make_unique<PasswordSyncTokenLoginChecker>(
@@ -61,8 +66,9 @@ void PasswordSyncTokenCheckersCollection::OnInvalidSyncToken(
   const std::string* sync_token = known_user.GetPasswordSyncToken(account_id);
   if (!sync_token)
     return;
-  if (base::Contains(sync_token_checkers_, *sync_token))
+  if (sync_token_checkers_.contains(*sync_token)) {
     sync_token_checkers_.erase(*sync_token);
+  }
 }
 
 }  // namespace ash

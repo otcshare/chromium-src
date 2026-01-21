@@ -4,7 +4,7 @@
 
 #include "components/safe_browsing/core/browser/safe_browsing_token_fetch_tracker.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
@@ -29,9 +29,9 @@ int SafeBrowsingTokenFetchTracker::StartTrackingTokenFetch(
   const int request_id = requests_sent_;
   requests_sent_++;
   callbacks_[request_id] = std::move(on_token_fetched_callback);
-  // TODO(crbug.com/1276273): Use base::OneShotTimer here to enabling cancelling
-  // tracking of timeouts when requests complete. The implementation of
-  // OnTokenFetchTimeout can then be correspondingly simplified.
+  // TODO(crbug.com/40808768): Use base::OneShotTimer here to enabling
+  // cancelling tracking of timeouts when requests complete. The implementation
+  // of OnTokenFetchTimeout can then be correspondingly simplified.
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&SafeBrowsingTokenFetchTracker::OnTokenFetchTimeout,

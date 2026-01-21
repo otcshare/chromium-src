@@ -5,16 +5,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_DIRECT_SOCKETS_UDP_SOCKET_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_DIRECT_SOCKETS_UDP_SOCKET_H_
 
+#include <optional>
+
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/mojom/udp_socket.mojom-blink.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/mojom/direct_sockets/direct_sockets.mojom-blink.h"
+#include "services/network/public/mojom/restricted_udp_socket.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/modules/direct_sockets/direct_sockets_service_mojo_remote.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
+#include "third_party/blink/renderer/modules/direct_sockets/multicast_controller.h"
 #include "third_party/blink/renderer/modules/direct_sockets/socket.h"
 #include "third_party/blink/renderer/modules/direct_sockets/udp_readable_stream_wrapper.h"
 #include "third_party/blink/renderer/modules/direct_sockets/udp_socket_mojo_remote.h"
@@ -25,6 +22,7 @@
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/loader/fetch/unique_identifier.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_or_worker_scheduler.h"
@@ -34,17 +32,15 @@ class IPEndPoint;
 }  // namespace net
 
 namespace blink {
-
-class UDPSocketOptions;
 class ScriptState;
 class SocketCloseOptions;
+class UDPSocketOpenInfo;
+class UDPSocketOptions;
 
 // UDPSocket interface from udp_socket.idl
-class MODULES_EXPORT UDPSocket final
-    : public ScriptWrappable,
-      public Socket,
-      public ActiveScriptWrappable<UDPSocket>,
-      public network::mojom::blink::UDPSocketListener {
+class MODULES_EXPORT UDPSocket final : public ScriptWrappable,
+                                       public Socket,
+                                       public ActiveScriptWrappable<UDPSocket> {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -53,48 +49,92 @@ class MODULES_EXPORT UDPSocket final
                            const UDPSocketOptions*,
                            ExceptionState&);
 
+  // Socket:
+  ScriptPromise<UDPSocketOpenInfo> opened(ScriptState*) const;
+  ScriptPromise<IDLUndefined> close(ScriptState*, ExceptionState&) override;
+
  public:
   explicit UDPSocket(ScriptState*);
   ~UDPSocket() override;
 
-  // Validates options and calls
-  // DirectSocketsServiceMojoRemote::OpenUdpSocket(...) with Init(...) passed as
-  // callback.
+  // Validates options and calls OpenBoundUDPSocket(...) or
+  // OpenConnectedUDPSocket() depending on the provided options.
   bool Open(const UDPSocketOptions*, ExceptionState&);
 
   // On net::OK initializes readable/writable streams and resolves opened
-  // promise. Otherwise rejects the opened promise. Serves as callback for
-  // Open(...).
-  void Init(int32_t result,
-            const absl::optional<net::IPEndPoint>& local_addr,
-            const absl::optional<net::IPEndPoint>& peer_addr);
+  // promise. Otherwise rejects the opened promise.
+  void OnConnectedUDPSocketOpened(
+      mojo::PendingReceiver<network::mojom::blink::UDPSocketListener>,
+      int32_t result,
+      const std::optional<net::IPEndPoint>& local_addr,
+      const std::optional<net::IPEndPoint>& peer_addr);
+
+  // On net::OK initializes readable/writable streams and resolves opened
+  // promise. Otherwise rejects the opened promise.
+  void OnBoundUDPSocketOpened(
+      mojo::PendingReceiver<network::mojom::blink::UDPSocketListener>,
+      int32_t result,
+      const std::optional<net::IPEndPoint>& local_addr);
 
   void Trace(Visitor*) const override;
 
   // ActiveScriptWrappable:
   bool HasPendingActivity() const override;
 
+  // ExecutionContextLifecycleStateObserver:
+  void ContextDestroyed() override;
+
+  // Socket:
+  void SetState(State state) override;
+
  private:
-  mojo::PendingReceiver<blink::mojom::blink::DirectUDPSocket>
+  void FinishOpen(
+      network::mojom::RestrictedUDPSocketMode,
+      mojo::PendingReceiver<network::mojom::blink::UDPSocketListener>,
+      int32_t result,
+      const std::optional<net::IPEndPoint>& local_addr,
+      const std::optional<net::IPEndPoint>& peer_addr);
+
+  void FailOpenWith(int32_t error);
+
+  mojo::PendingReceiver<network::mojom::blink::RestrictedUDPSocket>
   GetUDPSocketReceiver();
-  mojo::PendingRemote<network::mojom::blink::UDPSocketListener>
-  GetUDPSocketListener();
 
-  // network::mojom::blink::UDPSocketListener:
-  void OnReceived(int32_t result,
-                  const absl::optional<net::IPEndPoint>& src_addr,
-                  absl::optional<base::span<const uint8_t>> data) override;
-
+  // Invoked if mojo pipe for |service_| breaks.
   void OnServiceConnectionError() override;
-  void OnSocketConnectionError();
 
+  // Invoked if mojo pipe for |udp_socket_| breaks.
   void CloseOnError();
 
-  void OnBothStreamsClosed(std::vector<ScriptValue> args);
+  // Resets mojo resources held by this class.
+  void ReleaseResources();
 
-  const Member<UDPSocketMojoRemote> udp_socket_;
-  HeapMojoReceiver<network::mojom::blink::UDPSocketListener, UDPSocket>
-      socket_listener_;
+  // Invoked when one of the streams (readable or writable) closes.
+  // `exception` is non-empty iff the stream closed with an error.
+  void OnStreamClosed(v8::Local<v8::Value> exception, int net_error);
+  void OnBothStreamsClosed();
+
+  Member<UDPSocketMojoRemote> udp_socket_;
+
+  Member<ScriptPromiseProperty<UDPSocketOpenInfo, DOMException>> opened_;
+
+  Member<UDPReadableStreamWrapper> readable_stream_wrapper_;
+  Member<UDPWritableStreamWrapper> writable_stream_wrapper_;
+
+  // Always less or equal to 2 (readable + writable).
+  int streams_closed_count_ = 0;
+
+  // Stores the first encountered stream error to be reported after both streams
+  // close.
+  TraceWrapperV8Reference<v8::Value> stream_error_;
+
+  // Stores the net error when the socket is aborted
+  int abort_net_error_;
+
+  // Unique id for devtools inspector_network_agent.
+  uint64_t inspector_id_ = CreateUniqueIdentifier();
+
+  Member<MulticastController> multicast_controller_;
 };
 
 }  // namespace blink

@@ -61,7 +61,6 @@ void RegisterContentSchemes(bool should_lock_registry) {
   url::AddStandardScheme(kChromeDevToolsScheme, url::SCHEME_WITH_HOST);
   url::AddStandardScheme(kChromeUIScheme, url::SCHEME_WITH_HOST);
   url::AddStandardScheme(kChromeUIUntrustedScheme, url::SCHEME_WITH_HOST);
-  url::AddStandardScheme(kGuestScheme, url::SCHEME_WITH_HOST);
   url::AddStandardScheme(kChromeErrorScheme, url::SCHEME_WITH_HOST);
   for (auto& scheme : schemes.standard_schemes)
     url::AddStandardScheme(scheme.c_str(), url::SCHEME_WITH_HOST);
@@ -81,6 +80,10 @@ void RegisterContentSchemes(bool should_lock_registry) {
 
   for (auto& scheme : schemes.extension_schemes)
     blink::CommonSchemeRegistry::RegisterURLSchemeAsExtension(scheme.c_str());
+
+  for (auto& scheme : schemes.isolated_app_schemes) {
+    blink::CommonSchemeRegistry::RegisterURLSchemeAsIsolatedApp(scheme.c_str());
+  }
 
   schemes.no_access_schemes.push_back(kChromeErrorScheme);
   for (auto& scheme : schemes.no_access_schemes)

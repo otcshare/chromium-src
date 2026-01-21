@@ -5,9 +5,9 @@
 #include "chrome/browser/ash/guest_os/guest_os_file_watcher.h"
 
 #include <memory>
+#include <optional>
 
-#include "base/callback_forward.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/guest_os/dbus_test_helper.h"
@@ -16,7 +16,6 @@
 #include "chromeos/ash/components/dbus/cicerone/fake_cicerone_client.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace guest_os {
 
@@ -35,7 +34,7 @@ class GuestOsFileWatcherTest : public testing::Test,
   TestingProfile profile_;
   std::string owner_id_{"owner-id"};
   GuestId guest_id_{VmType::UNKNOWN, "vm_name", ""};
-  absl::optional<base::FilePath> last_event_path_;
+  std::optional<base::FilePath> last_event_path_;
   vm_tools::cicerone::FileWatchTriggeredSignal signal_;
   base::FilePathWatcher::Callback watcher_callback_;
 };
@@ -48,7 +47,7 @@ TEST_F(GuestOsFileWatcherTest, WatchNotTriggeredForWrongOwnerId) {
   task_environment_.RunUntilIdle();
   FakeCiceroneClient()->NotifyFileWatchTriggered(signal_);
 
-  EXPECT_EQ(last_event_path_, absl::nullopt);
+  EXPECT_EQ(last_event_path_, std::nullopt);
   EXPECT_EQ(FakeCiceroneClient()->add_file_watch_call_count(), 1);
 }
 
@@ -61,7 +60,7 @@ TEST_F(GuestOsFileWatcherTest, WatchNotTriggeredForWrongContainerId) {
   task_environment_.RunUntilIdle();
   FakeCiceroneClient()->NotifyFileWatchTriggered(signal_);
 
-  EXPECT_EQ(last_event_path_, absl::nullopt);
+  EXPECT_EQ(last_event_path_, std::nullopt);
   EXPECT_EQ(FakeCiceroneClient()->add_file_watch_call_count(), 1);
 }
 
@@ -80,12 +79,12 @@ TEST_F(GuestOsFileWatcherTest, WatchFullLifecycle) {
   EXPECT_EQ(last_event_path_, base::FilePath("/mnt/fuse/a/path"));
 
   // Should stop getting called after destroying the watcher.
-  last_event_path_ = absl::nullopt;
+  last_event_path_ = std::nullopt;
   watcher.reset();
 
   EXPECT_EQ(FakeCiceroneClient()->remove_file_watch_call_count(), 1);
   FakeCiceroneClient()->NotifyFileWatchTriggered(signal_);
-  EXPECT_EQ(last_event_path_, absl::nullopt);
+  EXPECT_EQ(last_event_path_, std::nullopt);
 }
 
 }  // namespace guest_os

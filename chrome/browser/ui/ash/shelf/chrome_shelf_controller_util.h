@@ -10,10 +10,12 @@
 #include "ash/public/cpp/shelf_types.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 
-class Browser;
+class AccountId;
 
 namespace ash {
+class BrowserDelegate;
 class ShelfModel;
 }
 
@@ -31,10 +33,29 @@ AppListControllerDelegate::Pinnable GetPinnableForAppID(
     const std::string& app_id,
     Profile* profile);
 
-// Returns true when the given |browser| is listed in the browser application
-// list.
-bool IsBrowserRepresentedInBrowserList(Browser* browser,
+// Helper function to return whether the app with `app_id` should explicitly
+// be hidden from shelf, as indicated by `AppUpdate::ShowInShelf()` app state.
+bool IsAppHiddenFromShelf(Profile* profile, const std::string& app_id);
+
+// Helper function to return whether the promise app with `promise_package_id`
+// should be visible in the shelf by reading the should_show field of the
+// promise app in the PromiseAppRegistryCache.
+bool IsPromiseAppReadyToShowInShelf(Profile* profile,
+                                    const std::string& promise_package_id);
+
+// Whether the pin state of the app with `app_id` is editable according to its
+// `app_type`.
+bool IsAppPinEditable(apps::AppType app_type,
+                      const std::string& app_id,
+                      Profile* profile);
+
+// Returns true when the given |browser| is listed in the browser
+// application list.
+bool IsBrowserRepresentedInBrowserList(const ash::BrowserDelegate* browser,
                                        const ash::ShelfModel* model);
+
+void ShowAndActivateBrowser(bool move_to_current_desktop,
+                            ash::BrowserDelegate* browser);
 
 // Pins an app to the shelf using only an app_id.
 // If the app is already present in the shelf and is unpinned, mark it as
@@ -48,17 +69,13 @@ void PinAppWithIDToShelf(const std::string& app_id);
 // Unpins an app from the shelf, if it is in the shelf. Otherwise does nothing.
 void UnpinAppWithIDFromShelf(const std::string& app_id);
 
-// Returns whether the app with `app_id` has been pinned to the shelf.
-bool IsAppWithIDPinnedToShelf(const std::string& app_id);
-
 apps::LaunchSource ShelfLaunchSourceToAppsLaunchSource(
     ash::ShelfLaunchSource source);
 
-// Checks if |BrowserAppShelfController| and |BrowserAppShelfItemController| can
-// handle the app indicated by |app_id|. Returns true if the app is a web app,
-// system web app, or Lacros browser (kWeb, kSystemWeb, kStandaloneBrowser app
-// service types respectively).
-bool BrowserAppShelfControllerShouldHandleApp(const std::string& app_id,
-                                              Profile* profile);
+// Returns the (non-empty) account id of the user associated with the currently
+// active session.
+const AccountId& GetActiveAccountId();
+
+bool IsAppBrowser(const ash::BrowserDelegate& browser);
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_CHROME_SHELF_CONTROLLER_UTIL_H_

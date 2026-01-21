@@ -5,11 +5,13 @@
 #ifndef BASE_FUCHSIA_TEST_COMPONENT_CONTEXT_FOR_PROCESS_H_
 #define BASE_FUCHSIA_TEST_COMPONENT_CONTEXT_FOR_PROCESS_H_
 
+#include <fidl/fuchsia.io/cpp/fidl.h>
+
 #include <memory>
+#include <string_view>
 
 #include "base/base_export.h"
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
 
 namespace sys {
 class ComponentContext;
@@ -92,8 +94,8 @@ class BASE_EXPORT TestComponentContextForProcess {
 
   // Allows the specified service(s) from the original ComponentContext to be
   // exposed via the test default ComponentContext.
-  void AddService(const base::StringPiece service);
-  void AddServices(base::span<const base::StringPiece> services);
+  void AddService(std::string_view service);
+  void AddServices(base::span<const std::string_view> services);
 
   // Returns the directory of services that the code under test has published
   // to its outgoing service directory.
@@ -101,11 +103,14 @@ class BASE_EXPORT TestComponentContextForProcess {
     return published_services_;
   }
 
+  fidl::UnownedClientEnd<fuchsia_io::Directory> published_services_natural();
+
  private:
   std::unique_ptr<sys::ComponentContext> old_context_;
 
   std::unique_ptr<FilteredServiceDirectory> context_services_;
   std::shared_ptr<sys::ServiceDirectory> published_services_;
+  fidl::ClientEnd<fuchsia_io::Directory> published_services_natural_;
 };
 
 }  // namespace base

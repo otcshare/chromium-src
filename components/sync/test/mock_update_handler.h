@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/sync_invalidation.h"
 #include "components/sync/engine/update_handler.h"
 #include "components/sync/protocol/data_type_progress_marker.pb.h"
@@ -17,7 +17,7 @@ namespace syncer {
 
 class MockUpdateHandler : public UpdateHandler {
  public:
-  explicit MockUpdateHandler(ModelType type);
+  explicit MockUpdateHandler(DataType type);
   ~MockUpdateHandler() override;
 
   // UpdateHandler implementation.
@@ -29,9 +29,11 @@ class MockUpdateHandler : public UpdateHandler {
       const sync_pb::DataTypeContext& mutated_context,
       const SyncEntityList& applicable_updates,
       StatusController* status) override;
-  void ApplyUpdates(StatusController* status) override;
+  void ApplyUpdates(StatusController* status, bool cycle_done) override;
   void RecordRemoteInvalidation(
       std::unique_ptr<SyncInvalidation> incoming) override;
+  void RecordDownloadFailure(
+      UpdateHandler::NudgedUpdateResult failure_result) const override;
   void CollectPendingInvalidations(sync_pb::GetUpdateTriggers* msg) override;
   bool HasPendingInvalidations() const override;
 

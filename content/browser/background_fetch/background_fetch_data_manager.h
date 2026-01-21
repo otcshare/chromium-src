@@ -12,8 +12,8 @@
 #include <tuple>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -269,7 +269,7 @@ class CONTENT_EXPORT BackgroundFetchDataManager
   // |unique_id|. These remotes are created opportunistically in
   // GetOrOpenCacheStorage(). They are cleared after the Cache has been
   // deleted.
-  // TODO(crbug.com/711354): Possibly update key when CORS support is added.
+  // TODO(crbug.com/40515511): Possibly update key when CORS support is added.
   std::map<std::string, mojo::Remote<blink::mojom::CacheStorage>>
       cache_storage_remote_map_;
   mojo::Remote<blink::mojom::CacheStorage> null_remote_;

@@ -7,19 +7,20 @@
 #include <dlfcn.h>
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/debug/test_elf_image_builder.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/native_library.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 extern char __executable_start;
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 namespace {
 constexpr uint8_t kBuildIdBytes[] = {0xab, 0xcd, 0x12, 0x34};
@@ -55,7 +56,7 @@ TEST_P(ElfReaderTest, ReadElfBuildIdUppercase) {
   ElfBuildIdBuffer build_id;
   size_t build_id_size = ReadElfBuildId(image.elf_start(), true, build_id);
   EXPECT_EQ(8u, build_id_size);
-  EXPECT_EQ(kBuildIdHexString, StringPiece(&build_id[0], build_id_size));
+  EXPECT_EQ(kBuildIdHexString, std::string_view(&build_id[0], build_id_size));
 }
 
 TEST_P(ElfReaderTest, ReadElfBuildIdLowercase) {
@@ -69,7 +70,7 @@ TEST_P(ElfReaderTest, ReadElfBuildIdLowercase) {
   size_t build_id_size = ReadElfBuildId(image.elf_start(), false, build_id);
   EXPECT_EQ(8u, build_id_size);
   EXPECT_EQ(ToLowerASCII(kBuildIdHexStringLower),
-            StringPiece(&build_id[0], build_id_size));
+            std::string_view(&build_id[0], build_id_size));
 }
 
 TEST_P(ElfReaderTest, ReadElfBuildIdMultipleNotes) {
@@ -85,7 +86,7 @@ TEST_P(ElfReaderTest, ReadElfBuildIdMultipleNotes) {
   ElfBuildIdBuffer build_id;
   size_t build_id_size = ReadElfBuildId(image.elf_start(), true, build_id);
   EXPECT_EQ(8u, build_id_size);
-  EXPECT_EQ(kBuildIdHexString, StringPiece(&build_id[0], build_id_size));
+  EXPECT_EQ(kBuildIdHexString, std::string_view(&build_id[0], build_id_size));
 }
 
 TEST_P(ElfReaderTest, ReadElfBuildIdWrongName) {
@@ -128,9 +129,9 @@ TEST_P(ElfReaderTest, ReadElfLibraryName) {
                            .AddSoName("mysoname")
                            .Build();
 
-  absl::optional<StringPiece> library_name =
+  std::optional<std::string_view> library_name =
       ReadElfLibraryName(image.elf_start());
-  ASSERT_NE(absl::nullopt, library_name);
+  ASSERT_NE(std::nullopt, library_name);
   EXPECT_EQ("mysoname", *library_name);
 }
 
@@ -139,9 +140,9 @@ TEST_P(ElfReaderTest, ReadElfLibraryNameNoSoName) {
                            .AddLoadSegment(PF_R | PF_X, /* size = */ 2000)
                            .Build();
 
-  absl::optional<StringPiece> library_name =
+  std::optional<std::string_view> library_name =
       ReadElfLibraryName(image.elf_start());
-  EXPECT_EQ(absl::nullopt, library_name);
+  EXPECT_EQ(std::nullopt, library_name);
 }
 
 TEST_P(ElfReaderTest, GetRelocationOffset) {
@@ -188,7 +189,7 @@ TEST(ElfReaderTestWithCurrentElfImage, ReadElfBuildId) {
 
   EXPECT_EQ(kExpectedBuildIdStringLength, build_id_size);
   for (size_t i = 0; i < build_id_size; ++i) {
-    char c = build_id[i];
+    char c = UNSAFE_TODO(build_id[i]);
     EXPECT_TRUE(IsHexDigit(c));
     EXPECT_FALSE(IsAsciiLower(c));
   }
@@ -230,5 +231,4 @@ TEST(ElfReaderTestWithCurrentImage, ReadElfBuildId) {
 #endif
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

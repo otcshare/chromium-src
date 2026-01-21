@@ -31,13 +31,18 @@
 
 #include "third_party/blink/renderer/core/workers/shared_worker.h"
 
+#include <optional>
+
+#include "base/feature_list.h"
+#include "build/buildflag.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/worker/shared_worker_info.mojom-blink.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_string_workeroptions.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_worker_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_shared_worker_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sharedworkeroptions_string.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_trustedscripturl_usvstring.h"
 #include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fetch/request.h"
@@ -59,6 +64,9 @@ namespace {
 
 void RecordSharedWorkerUsage(LocalDOMWindow* window) {
   UseCounter::Count(window, WebFeature::kSharedWorkerStart);
+#if BUILDFLAG(IS_ANDROID)
+  UseCounter::Count(window, WebFeature::kSharedWorkerStartOnAndroid);
+#endif
 
   if (window->IsCrossSiteSubframe())
     UseCounter::Count(window, WebFeature::kThirdPartySharedWorker);
@@ -68,16 +76,51 @@ void RecordSharedWorkerUsage(LocalDOMWindow* window) {
 
 SharedWorker::SharedWorker(ExecutionContext* context)
     : AbstractWorker(context),
-      is_being_connected_(false),
-      feature_handle_for_scheduler_(context->GetScheduler()->RegisterFeature(
-          SchedulingPolicy::Feature::kSharedWorker,
-          {SchedulingPolicy::DisableBackForwardCache()})) {}
-
+      ActiveScriptWrappable<SharedWorker>({}),
+      is_being_connected_(false) {
+  if (!base::FeatureList::IsEnabled(features::kBFCacheWithSharedWorker)) {
+    feature_handle_for_scheduler_ = context->GetScheduler()->RegisterFeature(
+        SchedulingPolicy::Feature::kSharedWorker,
+        {SchedulingPolicy::DisableBackForwardCache()});
+  }
+}
 SharedWorker* SharedWorker::Create(
     ExecutionContext* context,
-    const String& url,
-    const V8UnionStringOrWorkerOptions* name_or_options,
+    const V8UnionTrustedScriptURLOrUSVString* url,
+    const V8UnionSharedWorkerOptionsOrString* name_or_options,
     ExceptionState& exception_state) {
+  String compliant_url = TrustedTypesCheckForScriptURL(
+      url, context, trusted_types_names::kSharedWorker,
+      trusted_types_names::kCreate, exception_state);
+  if (exception_state.HadException()) {
+    return 0;
+  }
+  return CreateImpl(context, compliant_url, name_or_options, exception_state,
+                    &To<LocalDOMWindow>(context)->GetPublicURLManager(),
+                    /*connector_override=*/nullptr);
+}
+
+SharedWorker* SharedWorker::Create(
+    base::PassKey<StorageAccessHandle>,
+    ExecutionContext* context,
+    const String& url,
+    const V8UnionSharedWorkerOptionsOrString* name_or_options,
+    ExceptionState& exception_state,
+    PublicURLManager* public_url_manager,
+    const HeapMojoRemote<mojom::blink::SharedWorkerConnector>*
+        connector_override) {
+  return CreateImpl(context, url, name_or_options, exception_state,
+                    public_url_manager, connector_override);
+}
+
+SharedWorker* SharedWorker::CreateImpl(
+    ExecutionContext* context,
+    const String& url,
+    const V8UnionSharedWorkerOptionsOrString* name_or_options,
+    ExceptionState& exception_state,
+    PublicURLManager* public_url_manager,
+    const HeapMojoRemote<mojom::blink::SharedWorkerConnector>*
+        connector_override) {
   DCHECK(IsMainThread());
 
   if (context->IsContextDestroyed()) {
@@ -99,10 +142,11 @@ SharedWorker* SharedWorker::Create(
   worker->port_ = channel->port1();
   MessagePortChannel remote_port = channel->port2()->Disentangle();
 
+  worker->port_->SetIsSharedWorkerPort(true);
   if (!window->GetSecurityOrigin()->CanAccessSharedWorkers()) {
     exception_state.ThrowSecurityError(
-        "Access to shared workers is denied to origin '" +
-        window->GetSecurityOrigin()->ToString() + "'.");
+        StrCat({"Access to shared workers is denied to origin '",
+                window->GetSecurityOrigin()->ToString(), "'."}));
     return nullptr;
   } else if (window->GetSecurityOrigin()->IsLocal()) {
     UseCounter::Count(window, WebFeature::kFileAccessedSharedWorker);
@@ -112,28 +156,81 @@ SharedWorker* SharedWorker::Create(
   if (script_url.IsEmpty())
     return nullptr;
 
+  if (!worker->CheckAllowedByCSPForNoThrow(script_url)) {
+    // Return the unconnected worker. The port_ will be closed when remote_port
+    // goes out of scope after returning from this function.
+    return worker;
+  }
+
   mojo::PendingRemote<mojom::blink::BlobURLToken> blob_url_token;
   if (script_url.ProtocolIs("blob")) {
-    window->GetPublicURLManager().Resolve(
-        script_url, blob_url_token.InitWithNewPipeAndPassReceiver());
+    public_url_manager->ResolveAsBlobURLToken(
+        script_url, blob_url_token.InitWithNewPipeAndPassReceiver(),
+        /*is_top_level_navigation=*/false);
+  }
+
+  if (script_url.ProtocolIs("data")) {
+    context->CountUse(WebFeature::kDataUrlSharedWorker);
   }
 
   auto options = mojom::blink::WorkerOptions::New();
+  // The same_site_cookies setting defaults to kAll for first-party contexts
+  // (allowing access to SameSite Lax and String cookies) and kNone in
+  // third-party contexts (allowing access to just SameSite None cookies).
+  mojom::blink::SharedWorkerSameSiteCookies same_site_cookies =
+      window->GetStorageKey().IsFirstPartyContext()
+          ? mojom::blink::SharedWorkerSameSiteCookies::kAll
+          : mojom::blink::SharedWorkerSameSiteCookies::kNone;
+  bool extended_lifetime = false;
   switch (name_or_options->GetContentType()) {
-    case V8UnionStringOrWorkerOptions::ContentType::kString:
+    case V8UnionSharedWorkerOptionsOrString::ContentType::kString:
       options->name = name_or_options->GetAsString();
       break;
-    case V8UnionStringOrWorkerOptions::ContentType::kWorkerOptions: {
-      WorkerOptions* worker_options = name_or_options->GetAsWorkerOptions();
+    case V8UnionSharedWorkerOptionsOrString::ContentType::
+        kSharedWorkerOptions: {
+      SharedWorkerOptions* worker_options =
+          name_or_options->GetAsSharedWorkerOptions();
       options->name = worker_options->name();
-      absl::optional<mojom::blink::ScriptType> type_result =
-          Script::ParseScriptType(worker_options->type());
-      DCHECK(type_result);
-      options->type = type_result.value();
-      absl::optional<network::mojom::CredentialsMode> credentials_result =
-          Request::ParseCredentialsMode(worker_options->credentials());
-      DCHECK(credentials_result);
-      options->credentials = credentials_result.value();
+      options->type =
+          Script::V8WorkerTypeToScriptType(worker_options->type().AsEnum());
+      options->credentials = Request::V8RequestCredentialsToCredentialsMode(
+          worker_options->credentials().AsEnum());
+      if (worker_options->hasSameSiteCookies()) {
+        switch (worker_options->sameSiteCookies().AsEnum()) {
+          case V8SharedWorkerSameSiteCookies::Enum::kAll:
+            same_site_cookies = mojom::blink::SharedWorkerSameSiteCookies::kAll;
+            if (window->GetStorageKey().IsThirdPartyContext()) {
+              // Third-party contexts cannot request SameSite Strict or Lax
+              // cookies so no worker can be returned.
+              exception_state.ThrowSecurityError(
+                  "SharedWorkers in third-party contexts cannot request "
+                  "SameSite Strict or Lax cookies via the `sameSiteCookies: "
+                  "\"all\"` option.");
+              return nullptr;
+            }
+            break;
+          case V8SharedWorkerSameSiteCookies::Enum::kNone:
+            same_site_cookies =
+                mojom::blink::SharedWorkerSameSiteCookies::kNone;
+            if (window->GetStorageKey().IsFirstPartyContext()) {
+              // We want to note when `none` is specifically requested in a
+              // first-party context to gauge usage of this feature.
+              UseCounter::Count(
+                  window,
+                  WebFeature::kFirstPartySharedWorkerSameSiteCookiesNone);
+            }
+            break;
+        }
+      }
+      if (worker_options->hasExtendedLifetime()) {
+        extended_lifetime = worker_options->extendedLifetime();
+        UseCounter::Count(
+            window, WebFeature::kSharedWorkerExtendedLifetimeFeatureEnabled);
+        if (extended_lifetime) {
+          UseCounter::Count(window,
+                            WebFeature::kSharedWorkerExtendedLifetimeIsTrue);
+        }
+      }
       break;
     }
   }
@@ -145,7 +242,8 @@ SharedWorker* SharedWorker::Create(
 
   SharedWorkerClientHolder::From(*window)->Connect(
       worker, std::move(remote_port), script_url, std::move(blob_url_token),
-      std::move(options), context->UkmSourceID());
+      std::move(options), same_site_cookies, connector_override,
+      extended_lifetime);
 
   return worker;
 }

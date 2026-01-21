@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "av1_video_rate_control_wrapper.h"
 
 #include "third_party/libaom/source/libaom/av1/ratectrl_rtc.h"
@@ -14,9 +19,18 @@ int AV1RateControl::GetLoopfilterLevel() const {
 }
 
 template <>
+void AV1RateControl::PostEncodeUpdate(uint64_t encoded_frame_size,
+                                      const FrameParams& frame_params) {
+  DCHECK(impl_);
+  return impl_->PostEncodeUpdate(encoded_frame_size);
+}
+
+template <>
 aom::AV1RateControlRtcConfig AV1RateControl::ConvertControlConfig(
     const RateControlConfig& config) {
   aom::AV1RateControlRtcConfig rc_config;
+  rc_config.is_screen = config.content_type ==
+                        VideoEncodeAccelerator::Config::ContentType::kDisplay;
   rc_config.width = config.width;
   rc_config.height = config.height;
   rc_config.target_bandwidth = config.target_bandwidth;
@@ -35,11 +49,13 @@ aom::AV1RateControlRtcConfig AV1RateControl::ConvertControlConfig(
   rc_config.max_inter_bitrate_pct = 0;
   rc_config.ss_number_layers = config.ss_number_layers;
   rc_config.ts_number_layers = config.ts_number_layers;
+  for (int tid = 0; tid < config.ts_number_layers; ++tid) {
+    rc_config.ts_rate_decimator[tid] = config.ts_rate_decimator[tid];
+  }
   for (int sid = 0; sid < config.ss_number_layers; ++sid) {
     rc_config.scaling_factor_num[sid] = config.scaling_factor_num[sid];
     rc_config.scaling_factor_den[sid] = config.scaling_factor_den[sid];
     for (int tid = 0; tid < config.ts_number_layers; ++tid) {
-      rc_config.ts_rate_decimator[tid] = config.ts_rate_decimator[tid];
       const int i = sid * config.ts_number_layers + tid;
       rc_config.max_quantizers[i] = config.max_quantizers[i];
       rc_config.min_quantizers[i] = config.min_quantizers[i];

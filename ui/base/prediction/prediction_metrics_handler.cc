@@ -1,19 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/prediction/prediction_metrics_handler.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/cpu_reduction_experiment.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/strcat.h"
 
 namespace ui {
 namespace {
-base::HistogramBase* GetHistogram(base::StringPiece name,
-                                  base::StringPiece suffix) {
+base::HistogramBase* GetHistogram(std::string_view name,
+                                  std::string_view suffix) {
   return base::Histogram::FactoryGet(
       base::StrCat({name, ".", suffix}), 1, 1000, 50,
       base::HistogramBase::kUmaTargetedHistogramFlag);
@@ -93,7 +93,14 @@ void PredictionMetricsHandler::AddPredictedEvent(
     const base::TimeTicks& time_stamp,
     const base::TimeTicks& frame_time,
     bool scrolling) {
-  DCHECK(!events_queue_.empty());
+  // A prediction can be generated synthetically before any real events have
+  // been processed. In this case, the metrics handler has no ground truth to
+  // compare against, so we must return early to avoid a crash from accessing an
+  // empty queue.
+  if (events_queue_.empty()) {
+    return;
+  }
+
   // If the predicted event is prior to the first real event, ignore it as we
   // don't have enough data for interpolation.
   if (time_stamp < events_queue_.front().time_stamp)
@@ -149,7 +156,7 @@ void PredictionMetricsHandler::EvaluatePrediction() {
 void PredictionMetricsHandler::Reset() {
   events_queue_.clear();
   predicted_events_queue_.clear();
-  last_predicted_ = absl::nullopt;
+  last_predicted_ = std::nullopt;
 }
 
 int PredictionMetricsHandler::GetInterpolatedEventForPredictedEvent(

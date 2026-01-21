@@ -6,9 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/dbus/upstart/fake_upstart_client.h"
 #include "dbus/bus.h"
@@ -26,17 +27,7 @@ constexpr char kRestartMethod[] = "Restart";
 constexpr char kStopMethod[] = "Stop";
 
 constexpr char kUpstartJobsPath[] = "/com/ubuntu/Upstart/jobs/";
-constexpr char kAuthPolicyJob[] = "authpolicyd";
 constexpr char kMediaAnalyticsJob[] = "rtanalytics";
-// "wilco_5fdtc_5fdispatcher" below refers to the "wilco_dtc_dispatcher" upstart
-// job. Upstart escapes characters that aren't valid in D-Bus object paths
-// using underscore as the escape character, followed by the character code in
-// hex.
-constexpr char kWilcoDtcDispatcherJob[] = "wilco_5fdtc_5fdispatcher";
-// "arc_2ddata_2dsnapshotd" below refers to the "arc-data-snapshotd" upstart
-// job. Upstart escapes characters that aren't valid in D-Bus object paths using
-// underscore as the escape character, followed by the character code in hex.
-constexpr char kArcDataSnapshotdJob[] = "arc_2ddata_2dsnapshotd";
 
 UpstartClient* g_instance = nullptr;
 
@@ -59,6 +50,17 @@ class UpstartClientImpl : public UpstartClient {
                                  std::move(callback)));
   }
 
+  void StartJobWithTimeout(const std::string& job,
+                           const std::vector<std::string>& upstart_env,
+                           chromeos::VoidDBusMethodCallback callback,
+                           int timeout_ms) override {
+    CallJobMethod(job, kStartMethod, upstart_env,
+                  base::BindOnce(&UpstartClientImpl::OnVoidMethod,
+                                 weak_ptr_factory_.GetWeakPtr(), job, "start",
+                                 std::move(callback)),
+                  timeout_ms);
+  }
+
   void StartJobWithErrorDetails(
       const std::string& job,
       const std::vector<std::string>& upstart_env,
@@ -76,22 +78,6 @@ class UpstartClientImpl : public UpstartClient {
                   base::BindOnce(&UpstartClientImpl::OnVoidMethod,
                                  weak_ptr_factory_.GetWeakPtr(), job, "stop",
                                  std::move(callback)));
-  }
-
-  void StartAuthPolicyService() override {
-    StartJob(kAuthPolicyJob, {}, base::DoNothing());
-  }
-
-  void RestartAuthPolicyService() override {
-    CallJobMethod(kAuthPolicyJob, kRestartMethod, {}, base::DoNothing());
-  }
-
-  void StartLacrosChrome(const std::vector<std::string>& upstart_env) override {
-    // TODO(lacros): Remove logging.
-    StartJob("lacros_2dchrome", upstart_env, base::BindOnce([](bool result) {
-               LOG(WARNING) << (result ? "success" : "fail")
-                            << " starting lacros-chrome";
-             }));
   }
 
   void StartMediaAnalytics(const std::vector<std::string>& upstart_env,
@@ -118,40 +104,20 @@ class UpstartClientImpl : public UpstartClient {
     StopJob(kMediaAnalyticsJob, {}, std::move(callback));
   }
 
-  void StartWilcoDtcService(
-      chromeos::VoidDBusMethodCallback callback) override {
-    StartJob(kWilcoDtcDispatcherJob, {}, std::move(callback));
-  }
-
-  void StopWilcoDtcService(chromeos::VoidDBusMethodCallback callback) override {
-    StopJob(kWilcoDtcDispatcherJob, {}, std::move(callback));
-  }
-
-  void StartArcDataSnapshotd(
-      const std::vector<std::string>& upstart_env,
-      chromeos::VoidDBusMethodCallback callback) override {
-    StartJob(kArcDataSnapshotdJob, upstart_env, std::move(callback));
-  }
-
-  void StopArcDataSnapshotd(
-      chromeos::VoidDBusMethodCallback callback) override {
-    StopJob(kArcDataSnapshotdJob, {}, std::move(callback));
-  }
-
  private:
   void CallJobMethod(const std::string& job,
                      const std::string& method,
                      const std::vector<std::string>& upstart_env,
-                     dbus::ObjectProxy::ResponseOrErrorCallback callback) {
+                     dbus::ObjectProxy::ResponseOrErrorCallback callback,
+                     int timeout_ms = dbus::ObjectProxy::TIMEOUT_USE_DEFAULT) {
     dbus::ObjectProxy* job_proxy = bus_->GetObjectProxy(
         kUpstartServiceName, dbus::ObjectPath(kUpstartJobsPath + job));
     dbus::MethodCall method_call(kUpstartJobInterface, method);
     dbus::MessageWriter writer(&method_call);
     writer.AppendArrayOfStrings(upstart_env);
     writer.AppendBool(true /* wait for response */);
-    job_proxy->CallMethodWithErrorResponse(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        std::move(callback));
+    job_proxy->CallMethodWithErrorResponse(&method_call, timeout_ms,
+                                           std::move(callback));
   }
 
   void OnVoidMethod(const std::string& job_for_logging,
@@ -167,8 +133,8 @@ class UpstartClientImpl : public UpstartClient {
   void OnStartJobWithErrorDetails(StartJobWithErrorDetailsCallback callback,
                                   dbus::Response* response,
                                   dbus::ErrorResponse* error_response) {
-    absl::optional<std::string> error_name;
-    absl::optional<std::string> error_message;
+    std::optional<std::string> error_name;
+    std::optional<std::string> error_message;
     if (!response && error_response) {
       // Error response may contain the error message as string.
       error_name = error_response->GetErrorName();
@@ -200,7 +166,7 @@ class UpstartClientImpl : public UpstartClient {
                << ": " << error_name << ": " << error_message;
   }
 
-  dbus::Bus* bus_ = nullptr;
+  raw_ptr<dbus::Bus> bus_ = nullptr;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

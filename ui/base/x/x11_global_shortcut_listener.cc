@@ -6,7 +6,8 @@
 
 #include <stddef.h>
 
-#include "base/containers/contains.h"
+#include <array>
+
 #include "ui/base/x/x11_util.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_code_conversion_x.h"
@@ -19,7 +20,7 @@ namespace {
 // exact modifiers, we need to grab all key combinations including zero or more
 // of the following: Num lock, Caps lock and Scroll lock.  So that we can make
 // sure the behavior of global shortcuts is consistent on all platforms.
-const x11::ModMask kModifiersMasks[] = {
+constexpr auto kModifiersMasks = std::to_array<x11::ModMask>({
     {},                  // No additional modifier.
     x11::ModMask::c_2,   // Num lock
     x11::ModMask::Lock,  // Caps lock
@@ -27,7 +28,8 @@ const x11::ModMask kModifiersMasks[] = {
     x11::ModMask::c_2 | x11::ModMask::Lock,
     x11::ModMask::c_2 | x11::ModMask::c_5,
     x11::ModMask::Lock | x11::ModMask::c_5,
-    x11::ModMask::c_2 | x11::ModMask::Lock | x11::ModMask::c_5};
+    x11::ModMask::c_2 | x11::ModMask::Lock | x11::ModMask::c_5,
+});
 
 x11::ModMask GetNativeModifiers(bool is_alt_down,
                                 bool is_ctrl_down,
@@ -69,11 +71,11 @@ void XGlobalShortcutListener::StopListening() {
 }
 
 bool XGlobalShortcutListener::CanDispatchEvent(const PlatformEvent& event) {
-  return event->type() == ET_KEY_PRESSED;
+  return event->type() == EventType::kKeyPressed;
 }
 
 uint32_t XGlobalShortcutListener::DispatchEvent(const PlatformEvent& event) {
-  CHECK_EQ(event->type(), ET_KEY_PRESSED);
+  CHECK_EQ(event->type(), EventType::kKeyPressed);
   OnKeyPressEvent(*event->AsKeyEvent());
   return POST_DISPATCH_NONE;
 }
@@ -89,7 +91,7 @@ bool XGlobalShortcutListener::RegisterAccelerator(KeyboardCode key_code,
   // Because XGrabKey only works on the exact modifiers mask, we should register
   // our hot keys with modifiers that we want to ignore, including Num lock,
   // Caps lock, Scroll lock. See comment about |kModifiersMasks|.
-  x11::Future<void> grab_requests[std::size(kModifiersMasks)];
+  std::array<x11::Future<void>, std::size(kModifiersMasks)> grab_requests;
   for (size_t i = 0; i < std::size(kModifiersMasks); i++) {
     grab_requests[i] = connection_->GrabKey(
         {false, x_root_window_, modifiers | kModifiersMasks[i], keycode,
@@ -128,15 +130,14 @@ void XGlobalShortcutListener::UnregisterAccelerator(KeyboardCode key_code,
 }
 
 void XGlobalShortcutListener::OnKeyPressEvent(const KeyEvent& event) {
-  DCHECK_EQ(event.type(), ET_KEY_PRESSED);
+  DCHECK_EQ(event.type(), EventType::kKeyPressed);
 
   const KeyboardCode key_code = event.key_code();
   const bool is_alt_down = event.flags() & EF_ALT_DOWN;
   const bool is_ctrl_down = event.flags() & EF_CONTROL_DOWN;
   const bool is_shift_down = event.flags() & EF_SHIFT_DOWN;
 
-  if (!base::Contains(
-          registered_combinations_,
+  if (!registered_combinations_.contains(
           Accelerator(key_code, is_alt_down, is_ctrl_down, is_shift_down))) {
     return;
   }

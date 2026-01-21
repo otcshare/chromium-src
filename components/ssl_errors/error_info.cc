@@ -6,11 +6,14 @@
 
 #include <stddef.h>
 
+#include <array>
+
 #include "base/i18n/message_formatter.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/strings/grit/components_strings.h"
+#include "net/base/features.h"
 #include "net/base/net_errors.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/ssl/ssl_info.h"
@@ -40,7 +43,7 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
         // The certificate had no DNS names, display an explanatory string.
         details = l10n_util::GetStringFUTF16(
             IDS_CERT_ERROR_NO_SUBJECT_ALTERNATIVE_NAMES_DETAILS,
-            UTF8ToUTF16(request_url.host()));
+            UTF8ToUTF16(request_url.GetHost()));
       } else {
         // If the certificate contains multiple DNS names, we choose the most
         // representative one -- either the DNS name that's also in the subject
@@ -57,7 +60,7 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
 
         details = l10n_util::GetStringFUTF16(
             IDS_CERT_ERROR_COMMON_NAME_INVALID_DETAILS,
-            UTF8ToUTF16(request_url.host()),
+            UTF8ToUTF16(request_url.GetHost()),
             base::EscapeForHTML(UTF8ToUTF16(dns_names[i])));
       }
 
@@ -73,13 +76,13 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
             (base::Time::Now() - cert->valid_expiry()).InDays() + 1;
         details = base::i18n::MessageFormatter::FormatWithNumberedArgs(
             l10n_util::GetStringUTF16(IDS_CERT_ERROR_EXPIRED_DETAILS),
-            request_url.host(), expiration_value, base::Time::Now());
+            request_url.GetHost(), expiration_value, base::Time::Now());
         short_description =
             l10n_util::GetStringUTF16(IDS_CERT_ERROR_EXPIRED_DESCRIPTION);
       } else if (base::Time::Now() < cert->valid_start()) {
         details = base::i18n::MessageFormatter::FormatWithNumberedArgs(
             l10n_util::GetStringUTF16(IDS_CERT_ERROR_NOT_YET_VALID_DETAILS),
-            request_url.host(),
+            request_url.GetHost(),
             (cert->valid_start() - base::Time::Now()).InDays());
         short_description =
             l10n_util::GetStringUTF16(IDS_CERT_ERROR_NOT_YET_VALID_DESCRIPTION);
@@ -90,70 +93,77 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
         // date, remove the information.
         details = l10n_util::GetStringFUTF16(
             IDS_CERT_ERROR_NOT_VALID_AT_THIS_TIME_DETAILS,
-            UTF8ToUTF16(request_url.host()));
+            UTF8ToUTF16(request_url.GetHost()));
         short_description = l10n_util::GetStringUTF16(
             IDS_CERT_ERROR_NOT_VALID_AT_THIS_TIME_DESCRIPTION);
       }
       break;
     case CERT_KNOWN_INTERCEPTION_BLOCKED:
     case CERT_AUTHORITY_INVALID:
-    case CERT_SYMANTEC_LEGACY:
-      details =
-          l10n_util::GetStringFUTF16(IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS,
-                                     UTF8ToUTF16(request_url.host()));
+    case CERT_SELF_SIGNED_LOCAL_NETWORK:
+      details = l10n_util::GetStringFUTF16(
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+          base::FeatureList::IsEnabled(net::features::kVerifyQWACs)
+              ? IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS_V2
+              : IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS
+#else
+          IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS
+#endif
+          ,
+          UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_AUTHORITY_INVALID_DESCRIPTION);
       break;
     case CERT_CONTAINS_ERRORS:
       details =
           l10n_util::GetStringFUTF16(IDS_CERT_ERROR_CONTAINS_ERRORS_DETAILS,
-                                     UTF8ToUTF16(request_url.host()));
+                                     UTF8ToUTF16(request_url.GetHost()));
       short_description =
           l10n_util::GetStringUTF16(IDS_CERT_ERROR_CONTAINS_ERRORS_DESCRIPTION);
       break;
     case CERT_NO_REVOCATION_MECHANISM:
       details = l10n_util::GetStringFUTF16(
           IDS_CERT_ERROR_NO_REVOCATION_MECHANISM_DETAILS,
-          UTF8ToUTF16(request_url.host()));
+          UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_NO_REVOCATION_MECHANISM_DESCRIPTION);
       break;
     case CERT_REVOKED:
       details = l10n_util::GetStringFUTF16(IDS_CERT_ERROR_REVOKED_CERT_DETAILS,
-                                           UTF8ToUTF16(request_url.host()));
+                                           UTF8ToUTF16(request_url.GetHost()));
       short_description =
           l10n_util::GetStringUTF16(IDS_CERT_ERROR_REVOKED_CERT_DESCRIPTION);
       break;
     case CERT_INVALID:
       details = l10n_util::GetStringFUTF16(IDS_CERT_ERROR_INVALID_CERT_DETAILS,
-                                           UTF8ToUTF16(request_url.host()));
+                                           UTF8ToUTF16(request_url.GetHost()));
       short_description =
           l10n_util::GetStringUTF16(IDS_CERT_ERROR_INVALID_CERT_DESCRIPTION);
       break;
     case CERT_WEAK_SIGNATURE_ALGORITHM:
       details = l10n_util::GetStringFUTF16(
           IDS_CERT_ERROR_WEAK_SIGNATURE_ALGORITHM_DETAILS,
-          UTF8ToUTF16(request_url.host()));
+          UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_WEAK_SIGNATURE_ALGORITHM_DESCRIPTION);
       break;
     case CERT_WEAK_KEY:
       details = l10n_util::GetStringFUTF16(IDS_CERT_ERROR_WEAK_KEY_DETAILS,
-                                           UTF8ToUTF16(request_url.host()));
+                                           UTF8ToUTF16(request_url.GetHost()));
       short_description =
           l10n_util::GetStringUTF16(IDS_CERT_ERROR_WEAK_KEY_DESCRIPTION);
       break;
     case CERT_NAME_CONSTRAINT_VIOLATION:
       details = l10n_util::GetStringFUTF16(
           IDS_CERT_ERROR_NAME_CONSTRAINT_VIOLATION_DETAILS,
-          UTF8ToUTF16(request_url.host()));
+          UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_NAME_CONSTRAINT_VIOLATION_DESCRIPTION);
       break;
     case CERT_VALIDITY_TOO_LONG:
       details =
           l10n_util::GetStringFUTF16(IDS_CERT_ERROR_VALIDITY_TOO_LONG_DETAILS,
-                                     UTF8ToUTF16(request_url.host()));
+                                     UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_VALIDITY_TOO_LONG_DESCRIPTION);
       break;
@@ -166,7 +176,7 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
     case CERT_UNABLE_TO_CHECK_REVOCATION:
       details = l10n_util::GetStringFUTF16(
           IDS_CERT_ERROR_UNABLE_TO_CHECK_REVOCATION_DETAILS,
-          UTF8ToUTF16(request_url.host()));
+          UTF8ToUTF16(request_url.GetHost()));
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_UNABLE_TO_CHECK_REVOCATION_DESCRIPTION);
       break;
@@ -175,6 +185,13 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
           IDS_CERT_ERROR_CERTIFICATE_TRANSPARENCY_REQUIRED_DETAILS);
       short_description = l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_CERTIFICATE_TRANSPARENCY_REQUIRED_DESCRIPTION);
+      break;
+    case CERT_NON_UNIQUE_NAME:
+      details =
+          l10n_util::GetStringFUTF16(IDS_CERT_ERROR_NON_UNIQUE_NAME_DETAILS,
+                                     UTF8ToUTF16(request_url.GetHost()));
+      short_description =
+          l10n_util::GetStringUTF16(IDS_CERT_ERROR_NON_UNIQUE_NAME_DESCRIPTION);
       break;
     case UNKNOWN:
       details = l10n_util::GetStringUTF16(IDS_CERT_ERROR_UNKNOWN_ERROR_DETAILS);
@@ -187,7 +204,7 @@ ErrorInfo ErrorInfo::CreateError(ErrorType error_type,
   return ErrorInfo(details, short_description);
 }
 
-ErrorInfo::~ErrorInfo() {}
+ErrorInfo::~ErrorInfo() = default;
 
 // static
 ErrorInfo::ErrorType ErrorInfo::NetErrorToErrorType(int net_error) {
@@ -210,6 +227,8 @@ ErrorInfo::ErrorType ErrorInfo::NetErrorToErrorType(int net_error) {
       return CERT_INVALID;
     case net::ERR_CERT_WEAK_SIGNATURE_ALGORITHM:
       return CERT_WEAK_SIGNATURE_ALGORITHM;
+    case net::ERR_CERT_NON_UNIQUE_NAME:
+      return CERT_NON_UNIQUE_NAME;
     case net::ERR_CERT_WEAK_KEY:
       return CERT_WEAK_KEY;
     case net::ERR_CERT_NAME_CONSTRAINT_VIOLATION:
@@ -220,13 +239,12 @@ ErrorInfo::ErrorType ErrorInfo::NetErrorToErrorType(int net_error) {
       return CERT_PINNED_KEY_MISSING;
     case net::ERR_CERTIFICATE_TRANSPARENCY_REQUIRED:
       return CERTIFICATE_TRANSPARENCY_REQUIRED;
-    case net::ERR_CERT_SYMANTEC_LEGACY:
-      return CERT_SYMANTEC_LEGACY;
     case net::ERR_CERT_KNOWN_INTERCEPTION_BLOCKED:
       return CERT_KNOWN_INTERCEPTION_BLOCKED;
+    case net::ERR_CERT_SELF_SIGNED_LOCAL_NETWORK:
+      return CERT_SELF_SIGNED_LOCAL_NETWORK;
     default:
       NOTREACHED();
-      return UNKNOWN;
   }
 }
 
@@ -236,7 +254,7 @@ void ErrorInfo::GetErrorsForCertStatus(
     net::CertStatus cert_status,
     const GURL& url,
     std::vector<ErrorInfo>* errors) {
-  const net::CertStatus kErrorFlags[] = {
+  const auto kErrorFlags = std::to_array<net::CertStatus>({
       net::CERT_STATUS_COMMON_NAME_INVALID,
       net::CERT_STATUS_DATE_INVALID,
       net::CERT_STATUS_AUTHORITY_INVALID,
@@ -245,15 +263,15 @@ void ErrorInfo::GetErrorsForCertStatus(
       net::CERT_STATUS_REVOKED,
       net::CERT_STATUS_INVALID,
       net::CERT_STATUS_WEAK_SIGNATURE_ALGORITHM,
+      net::CERT_STATUS_NON_UNIQUE_NAME,
       net::CERT_STATUS_WEAK_KEY,
       net::CERT_STATUS_NAME_CONSTRAINT_VIOLATION,
       net::CERT_STATUS_VALIDITY_TOO_LONG,
       net::CERT_STATUS_CERTIFICATE_TRANSPARENCY_REQUIRED,
-      net::CERT_STATUS_SYMANTEC_LEGACY,
       net::CERT_STATUS_KNOWN_INTERCEPTION_BLOCKED,
-  };
+  });
 
-  const ErrorType kErrorTypes[] = {
+  const auto kErrorTypes = std::to_array<ErrorType>({
       CERT_COMMON_NAME_INVALID,
       CERT_DATE_INVALID,
       CERT_AUTHORITY_INVALID,
@@ -262,13 +280,13 @@ void ErrorInfo::GetErrorsForCertStatus(
       CERT_REVOKED,
       CERT_INVALID,
       CERT_WEAK_SIGNATURE_ALGORITHM,
+      CERT_NON_UNIQUE_NAME,
       CERT_WEAK_KEY,
       CERT_NAME_CONSTRAINT_VIOLATION,
       CERT_VALIDITY_TOO_LONG,
       CERTIFICATE_TRANSPARENCY_REQUIRED,
-      CERT_SYMANTEC_LEGACY,
       CERT_KNOWN_INTERCEPTION_BLOCKED,
-  };
+  });
   DCHECK(std::size(kErrorFlags) == std::size(kErrorTypes));
 
   for (size_t i = 0; i < std::size(kErrorFlags); ++i) {

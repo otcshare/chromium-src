@@ -6,12 +6,17 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/string_view_util.h"
 #include "net/base/io_buffer.h"
 #include "net/dns/dns_names_util.h"
 #include "net/dns/opt_record_rdata.h"
@@ -19,7 +24,6 @@
 #include "net/dns/record_rdata.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 
@@ -27,17 +31,16 @@ namespace {
 
 using ::testing::ElementsAreArray;
 
-std::tuple<char*, size_t> AsTuple(const IOBufferWithSize* buf) {
+std::tuple<const char*, size_t> AsTuple(const IOBufferWithSize* buf) {
   return std::make_tuple(buf->data(), buf->size());
 }
 
-bool ParseAndCreateDnsQueryFromRawPacket(const uint8_t* data,
-                                         size_t length,
+bool ParseAndCreateDnsQueryFromRawPacket(base::span<const uint8_t> data,
                                          std::unique_ptr<DnsQuery>* out) {
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(length);
-  memcpy(packet->data(), data, length);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(data.size());
+  packet->span().copy_from_nonoverlapping(data);
   *out = std::make_unique<DnsQuery>(packet);
-  return (*out)->Parse(length);
+  return (*out)->Parse(data.size());
 }
 
 // This includes \0 at the end.
@@ -48,12 +51,11 @@ const char kQNameData[] =
     "example"
     "\x03"
     "com";
-const base::span<const uint8_t> kQName =
-    base::as_bytes(base::make_span(kQNameData));
+const base::span<const uint8_t> kQName = base::as_byte_span(kQNameData);
 
 TEST(DnsQueryTest, Constructor) {
   // This includes \0 at the end.
-  const uint8_t query_data[] = {
+  const auto query_data = std::to_array<uint8_t>({
       // Header
       0xbe, 0xef, 0x01, 0x00,  // Flags -- set RD (recursion desired) bit.
       0x00, 0x01,              // Set QDCOUNT (question count) to 1, all the
@@ -66,15 +68,15 @@ TEST(DnsQueryTest, Constructor) {
 
       0x00, 0x01,  // QTYPE: A query.
       0x00, 0x01,  // QCLASS: IN class.
-  };
+  });
 
   DnsQuery q1(0xbeef, kQName, dns_protocol::kTypeA);
   EXPECT_EQ(dns_protocol::kTypeA, q1.qtype());
   EXPECT_THAT(AsTuple(q1.io_buffer()), ElementsAreArray(query_data));
   EXPECT_THAT(q1.qname(), ElementsAreArray(kQName));
 
-  base::StringPiece question(reinterpret_cast<const char*>(query_data) + 12,
-                             21);
+  std::string_view question(
+      base::as_string_view(base::span(query_data).subspan(12u, 21u)));
   EXPECT_EQ(question, q1.question());
 }
 
@@ -84,8 +86,8 @@ TEST(DnsQueryTest, CopiesAreIndependent) {
   DnsQuery q2(q1);
 
   EXPECT_EQ(q1.id(), q2.id());
-  EXPECT_EQ(base::StringPiece(q1.io_buffer()->data(), q1.io_buffer()->size()),
-            base::StringPiece(q2.io_buffer()->data(), q2.io_buffer()->size()));
+  EXPECT_EQ(std::string_view(q1.io_buffer()->data(), q1.io_buffer()->size()),
+            std::string_view(q2.io_buffer()->data(), q2.io_buffer()->size()));
   EXPECT_NE(q1.io_buffer(), q2.io_buffer());
 }
 
@@ -100,7 +102,7 @@ TEST(DnsQueryTest, Clone) {
 }
 
 TEST(DnsQueryTest, EDNS0) {
-  const uint8_t query_data[] = {
+  const auto query_data = std::to_array<uint8_t>({
       // Header
       0xbe, 0xef, 0x01, 0x00,  // Flags -- set RD (recursion desired) bit.
       // Set QDCOUNT (question count) and ARCOUNT (additional count) to 1, all
@@ -122,19 +124,53 @@ TEST(DnsQueryTest, EDNS0) {
       0x00, 0xFF,              // OPT code
       0x00, 0x04,              // OPT data size
       0xDE, 0xAD, 0xBE, 0xEF   // OPT data
-  };
+  });
 
   OptRecordRdata opt_rdata;
-  opt_rdata.AddOpt(
-      OptRecordRdata::UnknownOpt::CreateForTesting(255, "\xde\xad\xbe\xef"));
+  const auto data = std::to_array<uint8_t>({0xde, 0xad, 0xbe, 0xef});
+  opt_rdata.AddOpt(OptRecordRdata::UnknownOpt::CreateForTesting(255, data));
   DnsQuery q1(0xbeef, kQName, dns_protocol::kTypeA, &opt_rdata);
   EXPECT_EQ(dns_protocol::kTypeA, q1.qtype());
 
   EXPECT_THAT(AsTuple(q1.io_buffer()), ElementsAreArray(query_data));
 
-  base::StringPiece question(reinterpret_cast<const char*>(query_data) + 12,
-                             21);
+  std::string_view question(
+      base::as_string_view(base::span(query_data).subspan(12u, 21u)));
   EXPECT_EQ(question, q1.question());
+}
+
+TEST(DnsQueryTest, ExtendedDnsErrorRequest) {
+  // clang-format off
+  const auto query_data = std::to_array<uint8_t>({
+      // Header
+      0xbe, 0xef, 0x01, 0x00,  // Flags -- set RD (recursion desired) bit.
+      // Set QDCOUNT (question count) and ARCOUNT (additional count) to 1, all
+      // the rest are 0 for a query.
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+      // Question
+      0x03, 'w', 'w', 'w',  // QNAME: www.example.com in DNS format.
+      0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+
+      0x00, 0x01,  // QTYPE: A query.
+      0x00, 0x01,  // QCLASS: IN class.
+
+      // Additional
+      0x00,  // QNAME: empty (root domain)
+      0x00, 0x29,  // TYPE: OPT
+      0x10, 0x00,  // CLASS: max UDP payload size
+      0x00, 0x00, 0x00, 0x00,  // TTL: rcode, version and flags
+      0x00, 0x06,  // RDATA length
+      0x00, 0x0f,  // OPT code for EDE
+      0x00, 0x02,  // OPT data size
+      0x00, 0x00,  // EDE Info Code "Other Error" (0)
+  });
+  // clang-format on
+
+  OptRecordRdata opt_rdata;
+  opt_rdata.AddOpt(OptRecordRdata::EdeOpt::CreateStructuredErrorsRequest());
+  DnsQuery q1(0xbeef, kQName, dns_protocol::kTypeA, &opt_rdata,
+              DnsQuery::PaddingStrategy::NONE);
+  EXPECT_THAT(AsTuple(q1.io_buffer()), ElementsAreArray(query_data));
 }
 
 TEST(DnsQueryTest, Block128Padding) {
@@ -152,8 +188,52 @@ TEST(DnsQueryTest, Block128Padding) {
   EXPECT_EQ(parsed_query.qtype(), dns_protocol::kTypeAAAA);
 }
 
+TEST(DnsQueryTest, Block128Padding_EDE) {
+  // clang-format off
+  const auto query_data_prefix = std::to_array<uint8_t>({
+      // Header
+      0xbe, 0xef, 0x01, 0x00,  // Flags -- set RD (recursion desired) bit.
+      // Set QDCOUNT (question count) and ARCOUNT (additional count) to 1, all
+      // the rest are 0 for a query.
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+      // Question
+      0x03, 'w', 'w', 'w',  // QNAME: www.example.com in DNS format.
+      0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+
+      0x00, 0x1c,  // QTYPE: AAAA query.
+      0x00, 0x01,  // QCLASS: IN class.
+
+      // Additional
+      0x00,  // QNAME: empty (root domain)
+      0x00, 0x29,  // TYPE: OPT
+      0x10, 0x00,  // CLASS: max UDP payload size
+      0x00, 0x00, 0x00, 0x00,  // TTL: rcode, version and flags
+      0x00, 0x54,  // RDATA length
+      0x00, 0x0f,  // OPT code for EDE
+      0x00, 0x02,  // OPT data size
+      0x00, 0x00,  // EDE Info Code "Other Error" (0)
+      0x00, 0x0c,  // OPT code for Padding
+      0x00, 0x4a,  // Padding length to pad up to 128 bytes
+  });
+  // clang-format on
+
+  OptRecordRdata opt_rdata;
+  opt_rdata.AddOpt(OptRecordRdata::EdeOpt::CreateStructuredErrorsRequest());
+  DnsQuery query(0xbeef, kQName, dns_protocol::kTypeAAAA, &opt_rdata,
+                 DnsQuery::PaddingStrategy::BLOCK_LENGTH_128);
+
+  // Query is expected to be short and fit in a single 128-byte padded block.
+  ASSERT_EQ(128, query.io_buffer()->size());
+  EXPECT_THAT(query.io_buffer()->first(query_data_prefix.size()),
+              ElementsAreArray(query_data_prefix));
+
+  // Ensure created query still parses as expected.
+  DnsQuery parsed_query(query.io_buffer());
+  EXPECT_TRUE(parsed_query.Parse(query.io_buffer()->size()));
+}
+
 TEST(DnsQueryTest, Block128Padding_LongName) {
-  absl::optional<std::vector<uint8_t>> qname =
+  std::optional<std::vector<uint8_t>> qname =
       dns_names_util::DottedNameToNetwork(
           "really.long.domain.name.that.will.push.us.past.the.128.byte.block."
           "size.because.it.would.be.nice.to.test.something.realy.long.like."
@@ -175,7 +255,7 @@ TEST(DnsQueryTest, Block128Padding_LongName) {
 }
 
 TEST(DnsQueryParseTest, SingleQuestionForTypeARecord) {
-  const uint8_t query_data[] = {
+  const auto query_data = std::to_array<uint8_t>({
       0x12, 0x34,  // ID
       0x00, 0x00,  // flags
       0x00, 0x01,  // number of questions
@@ -187,17 +267,16 @@ TEST(DnsQueryParseTest, SingleQuestionForTypeARecord) {
       0x00,        // null label
       0x00, 0x01,  // type A Record
       0x00, 0x01,  // class IN
-  };
+  });
   std::unique_ptr<DnsQuery> query;
-  EXPECT_TRUE(ParseAndCreateDnsQueryFromRawPacket(query_data,
-                                                  sizeof(query_data), &query));
+  EXPECT_TRUE(ParseAndCreateDnsQueryFromRawPacket(query_data, &query));
   EXPECT_EQ(query->id(), 0x1234);
   EXPECT_THAT(query->qname(), ElementsAreArray(kQName));
   EXPECT_EQ(query->qtype(), dns_protocol::kTypeA);
 }
 
 TEST(DnsQueryParseTest, SingleQuestionForTypeAAAARecord) {
-  const uint8_t query_data[] = {
+  const auto query_data = std::to_array<uint8_t>({
       0x12, 0x34,  // ID
       0x00, 0x00,  // flags
       0x00, 0x01,  // number of questions
@@ -209,16 +288,15 @@ TEST(DnsQueryParseTest, SingleQuestionForTypeAAAARecord) {
       0x00,        // null label
       0x00, 0x1c,  // type AAAA Record
       0x00, 0x01,  // class IN
-  };
+  });
   std::unique_ptr<DnsQuery> query;
-  EXPECT_TRUE(ParseAndCreateDnsQueryFromRawPacket(query_data,
-                                                  sizeof(query_data), &query));
+  EXPECT_TRUE(ParseAndCreateDnsQueryFromRawPacket(query_data, &query));
   EXPECT_EQ(query->id(), 0x1234);
   EXPECT_THAT(query->qname(), ElementsAreArray(kQName));
   EXPECT_EQ(query->qtype(), dns_protocol::kTypeAAAA);
 }
 
-const uint8_t kQueryTruncatedQuestion[] = {
+const auto kQueryTruncatedQuestion = std::to_array<uint8_t>({
     0x12, 0x34,  // ID
     0x00, 0x00,  // flags
     0x00, 0x02,  // number of questions
@@ -230,9 +308,9 @@ const uint8_t kQueryTruncatedQuestion[] = {
     0x00,        // null label
     0x00, 0x01,  // type A Record
     0x00,        // class IN, truncated
-};
+});
 
-const uint8_t kQueryTwoQuestions[] = {
+const auto kQueryTwoQuestions = std::to_array<uint8_t>({
     0x12, 0x34,  // ID
     0x00, 0x00,  // flags
     0x00, 0x02,  // number of questions
@@ -248,9 +326,9 @@ const uint8_t kQueryTwoQuestions[] = {
     0x00,        // null label
     0x00, 0x1c,  // type AAAA Record
     0x00, 0x01,  // class IN
-};
+});
 
-const uint8_t kQueryInvalidDNSDomainName1[] = {
+const auto kQueryInvalidDNSDomainName1 = std::to_array<uint8_t>({
     0x12, 0x34,            // ID
     0x00, 0x00,            // flags
     0x00, 0x01,            // number of questions
@@ -262,9 +340,9 @@ const uint8_t kQueryInvalidDNSDomainName1[] = {
     0x00,        // null label
     0x00, 0x01,  // type A Record
     0x00, 0x01,  // class IN
-};
+});
 
-const uint8_t kQueryInvalidDNSDomainName2[] = {
+const auto kQueryInvalidDNSDomainName2 = std::to_array<uint8_t>({
     0x12, 0x34,  // ID
     0x00, 0x00,  // flags
     0x00, 0x01,  // number of questions
@@ -274,21 +352,15 @@ const uint8_t kQueryInvalidDNSDomainName2[] = {
     0xc0, 0x02,  // illegal name pointer
     0x00, 0x01,  // type A Record
     0x00, 0x01,  // class IN
-};
+});
 
 TEST(DnsQueryParseTest, FailsInvalidQueries) {
-  const struct TestCase {
-    const uint8_t* data;
-    size_t size;
-  } testcases[] = {
-      {kQueryTruncatedQuestion, std::size(kQueryTruncatedQuestion)},
-      {kQueryTwoQuestions, std::size(kQueryTwoQuestions)},
-      {kQueryInvalidDNSDomainName1, std::size(kQueryInvalidDNSDomainName1)},
-      {kQueryInvalidDNSDomainName2, std::size(kQueryInvalidDNSDomainName2)}};
+  const base::span<const uint8_t> testcases[] = {
+      kQueryTruncatedQuestion, kQueryTwoQuestions, kQueryInvalidDNSDomainName1,
+      kQueryInvalidDNSDomainName2};
   std::unique_ptr<DnsQuery> query;
   for (const auto& testcase : testcases) {
-    EXPECT_FALSE(ParseAndCreateDnsQueryFromRawPacket(testcase.data,
-                                                     testcase.size, &query));
+    EXPECT_FALSE(ParseAndCreateDnsQueryFromRawPacket(testcase, &query));
   }
 }
 
@@ -322,7 +394,7 @@ TEST(DnsQueryParseTest, ParsesLongName) {
       4);
 
   auto packet = base::MakeRefCounted<IOBufferWithSize>(data.size());
-  memcpy(packet->data(), data.data(), data.size());
+  packet->span().copy_from_nonoverlapping(base::as_byte_span(data));
   DnsQuery query(packet);
 
   EXPECT_TRUE(query.Parse(data.size()));
@@ -356,7 +428,7 @@ TEST(DnsQueryParseTest, FailsTooLongName) {
       4);
 
   auto packet = base::MakeRefCounted<IOBufferWithSize>(data.size());
-  memcpy(packet->data(), data.data(), data.size());
+  packet->span().copy_from_nonoverlapping(base::as_byte_span(data));
   DnsQuery query(packet);
 
   EXPECT_FALSE(query.Parse(data.size()));
@@ -389,7 +461,7 @@ TEST(DnsQueryParseTest, FailsTooLongSingleLabelName) {
       4);
 
   auto packet = base::MakeRefCounted<IOBufferWithSize>(data.size());
-  memcpy(packet->data(), data.data(), data.size());
+  packet->span().copy_from_nonoverlapping(base::as_byte_span(data));
   DnsQuery query(packet);
 
   EXPECT_FALSE(query.Parse(data.size()));
@@ -410,11 +482,12 @@ TEST(DnsQueryParseTest, FailsNonendedName) {
       "\x00\x00"                    // 0 additional records
       "\003www\006google\006test";  // Nonended name.
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto kDataSpan = base::byte_span_from_cstring(kData);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 // Test that a query cannot be parsed with a name without final null
@@ -434,12 +507,13 @@ TEST(DnsQueryParseTest, FailsNameWithoutTerminator) {
       "\003www\006google\004test"  // Name without termination.
       "\x00\x01"                   // TYPE=A
       "\x00\x01";                  // CLASS=IN
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 TEST(DnsQueryParseTest, FailsQueryWithNoQuestions) {
@@ -450,12 +524,13 @@ TEST(DnsQueryParseTest, FailsQueryWithNoQuestions) {
       "\x00\x00"   // 0 answers
       "\x00\x00"   // 0 authority records
       "\x00\x00";  // 0 additional records
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 TEST(DnsQueryParseTest, FailsQueryWithMultipleQuestions) {
@@ -472,12 +547,13 @@ TEST(DnsQueryParseTest, FailsQueryWithMultipleQuestions) {
       "\003www\006google\004test\000"  // www.google.test
       "\x00\x1c"                       // TYPE=AAAA
       "\x00\x01";                      // CLASS=IN
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 // Test that if more questions are at the end of the buffer than the number of
@@ -497,12 +573,13 @@ TEST(DnsQueryParseTest, IgnoresExtraQuestion) {
       "\003www\006google\004test\000"  // www.google.test
       "\x00\x1c"                       // TYPE=AAAA
       "\x00\x01";                      // CLASS=IN
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_TRUE(query.Parse(sizeof(kData) - 1));
+  EXPECT_TRUE(query.Parse(kDataSpan.size()));
 
   std::string expected_qname("\003www\006google\004test\000", 17);
   EXPECT_THAT(query.qname(), ElementsAreArray(expected_qname));
@@ -523,12 +600,13 @@ TEST(DnsQueryParseTest, FailsQueryWithMissingQuestion) {
       "\x00\x00"   // 0 answers
       "\x00\x00"   // 0 authority records
       "\x00\x00";  // 0 additional records
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 // Test that DnsQuery parsing disallows name compression pointers (which should
@@ -548,12 +626,13 @@ TEST(DnsQueryParseTest, FailsQueryWithNamePointer) {
       "\x00\x01"                   // TYPE=A
       "\x00\x01"                   // CLASS=IN
       "\004test\000";              // Byte 29 (name pointer destination): test.
+  auto kDataSpan = base::byte_span_from_cstring(kData);
 
-  auto packet = base::MakeRefCounted<IOBufferWithSize>(sizeof(kData) - 1);
-  memcpy(packet->data(), kData, sizeof(kData) - 1);
+  auto packet = base::MakeRefCounted<IOBufferWithSize>(kDataSpan.size());
+  packet->span().copy_from_nonoverlapping(kDataSpan);
   DnsQuery query(packet);
 
-  EXPECT_FALSE(query.Parse(sizeof(kData) - 1));
+  EXPECT_FALSE(query.Parse(kDataSpan.size()));
 }
 
 }  // namespace

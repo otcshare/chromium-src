@@ -8,10 +8,13 @@
 
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -34,8 +37,7 @@ WebstoreReinstaller::WebstoreReinstaller(
           ->HasDisableReason(extension_id, disable_reason::DISABLE_CORRUPTED));
 }
 
-WebstoreReinstaller::~WebstoreReinstaller() {
-}
+WebstoreReinstaller::~WebstoreReinstaller() = default;
 
 void WebstoreReinstaller::BeginReinstall() {
   WebstoreStandaloneInstaller::BeginInstall();
@@ -50,18 +52,13 @@ WebstoreReinstaller::CreateInstallPrompt() const {
   std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt(
       new ExtensionInstallPrompt::Prompt(
           ExtensionInstallPrompt::REPAIR_PROMPT));
-  prompt->SetWebstoreData(localized_user_count(),
-                          show_user_count(),
-                          average_rating(),
-                          rating_count());
+  prompt->SetWebstoreData(localized_user_count(), show_user_count(),
+                          average_rating(), rating_count(),
+                          localized_rating_count());
   return prompt;
 }
 
 bool WebstoreReinstaller::ShouldShowPostInstallUI() const {
-  return false;
-}
-
-bool WebstoreReinstaller::ShouldShowAppInstalledBubble() const {
   return false;
 }
 
@@ -86,7 +83,7 @@ void WebstoreReinstaller::OnInstallPromptDone(
     return;
   }
 
-  if (!ExtensionSystem::Get(profile())->extension_service()->UninstallExtension(
+  if (!ExtensionRegistrar::Get(profile())->UninstallExtension(
           id(), UNINSTALL_REASON_REINSTALL, nullptr)) {
     // Run the callback now, because AbortInstall() doesn't do it.
     RunCallback(

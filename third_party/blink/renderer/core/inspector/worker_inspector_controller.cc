@@ -31,10 +31,13 @@
 #include "third_party/blink/renderer/core/inspector/worker_inspector_controller.h"
 
 #include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/core/core_initializer.h"
 #include "third_party/blink/renderer/core/core_probe_sink.h"
 #include "third_party/blink/renderer/core/inspector/devtools_session.h"
 #include "third_party/blink/renderer/core/inspector/inspector_audits_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_emulation_agent.h"
+#include "third_party/blink/renderer/core/inspector/inspector_event_breakpoints_agent.h"
+#include "third_party/blink/renderer/core/inspector/inspector_inspector_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_issue_reporter.h"
 #include "third_party/blink/renderer/core/inspector/inspector_log_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_media_agent.h"
@@ -101,39 +104,57 @@ WorkerInspectorController::WorkerInspectorController(
         std::move(devtools_params->agent_receiver),
         thread->GetTaskRunner(TaskType::kInternalInspector));
   }
-  trace_event::AddEnabledStateObserver(this);
+  trace_event::AddTraceSessionObserver(this);
   EmitTraceEvent();
 }
 
 WorkerInspectorController::~WorkerInspectorController() {
   DCHECK(!thread_);
-  trace_event::RemoveEnabledStateObserver(this);
 }
 
 void WorkerInspectorController::AttachSession(DevToolsSession* session,
                                               bool restore) {
-  if (!session_count_)
+  if (inspector_agents_.empty()) {
     thread_->GetWorkerBackingThread().BackingThread().AddTaskObserver(this);
+  }
   session->ConnectToV8(debugger_->GetV8Inspector(),
                        debugger_->ContextGroupId(thread_));
   session->CreateAndAppend<InspectorLogAgent>(
       thread_->GetConsoleMessageStorage(), nullptr, session->V8Session());
-  if (auto* scope = DynamicTo<WorkerGlobalScope>(thread_->GlobalScope())) {
-    auto* network_agent = session->CreateAndAppend<InspectorNetworkAgent>(
-        inspected_frames_.Get(), scope, session->V8Session());
-    session->CreateAndAppend<InspectorEmulationAgent>(nullptr);
-    session->CreateAndAppend<InspectorAuditsAgent>(
-        network_agent, thread_->GetInspectorIssueStorage(), nullptr);
+  session->CreateAndAppend<InspectorEventBreakpointsAgent>(
+      session->V8Session());
+
+  WorkerOrWorkletGlobalScope* worker_or_worklet_global_scope =
+      thread_->GlobalScope();
+  CHECK(worker_or_worklet_global_scope);
+
+  auto* network_agent = session->CreateAndAppend<InspectorNetworkAgent>(
+      inspected_frames_.Get(), worker_or_worklet_global_scope,
+      session->V8Session());
+  session->CreateAndAppend<InspectorAuditsAgent>(
+      network_agent, thread_->GetInspectorIssueStorage(),
+      /*inspected_frames=*/nullptr, /*web_autofill_client=*/nullptr);
+  auto* inspector_agent = session->CreateAndAppend<InspectorInspectorAgent>();
+  inspector_agents_.insert(session, inspector_agent);
+  if (auto* worker_global_scope =
+          DynamicTo<WorkerGlobalScope>(worker_or_worklet_global_scope)) {
+    auto* virtual_time_controller =
+        thread_->GetScheduler()->GetVirtualTimeController();
+    DCHECK(virtual_time_controller);
+    session->CreateAndAppend<InspectorEmulationAgent>(nullptr,
+                                                      *virtual_time_controller);
     session->CreateAndAppend<InspectorMediaAgent>(inspected_frames_.Get(),
-                                                  scope);
+                                                  worker_global_scope);
+    CoreInitializer::GetInstance().InitWorkerInspectorAgentSession(
+        session, worker_global_scope);
   }
-  ++session_count_;
 }
 
-void WorkerInspectorController::DetachSession(DevToolsSession*) {
-  --session_count_;
-  if (!session_count_)
+void WorkerInspectorController::DetachSession(DevToolsSession* session) {
+  inspector_agents_.erase(session);
+  if (inspector_agents_.empty()) {
     thread_->GetWorkerBackingThread().BackingThread().RemoveTaskObserver(this);
+  }
 }
 
 void WorkerInspectorController::InspectElement(const gfx::Point&) {
@@ -152,6 +173,7 @@ void WorkerInspectorController::Dispose() {
   if (agent_)
     agent_->Dispose();
   thread_ = nullptr;
+  trace_event::RemoveTraceSessionObserver(this);
 }
 
 void WorkerInspectorController::FlushProtocolNotifications() {
@@ -166,6 +188,12 @@ void WorkerInspectorController::WaitForDebuggerIfNeeded() {
   debugger_->PauseWorkerOnStart(thread_);
 }
 
+void WorkerInspectorController::WorkerScriptLoaded() {
+  for (auto& it : inspector_agents_) {
+    it.value->WorkerScriptLoaded();
+  }
+}
+
 void WorkerInspectorController::WillProcessTask(
     const base::PendingTask& pending_task,
     bool was_blocked_or_low_priority) {}
@@ -175,11 +203,10 @@ void WorkerInspectorController::DidProcessTask(
   FlushProtocolNotifications();
 }
 
-void WorkerInspectorController::OnTraceLogEnabled() {
+void WorkerInspectorController::OnStart(
+    const perfetto::DataSourceBase::StartArgs&) {
   EmitTraceEvent();
 }
-
-void WorkerInspectorController::OnTraceLogDisabled() {}
 
 void WorkerInspectorController::EmitTraceEvent() {
   if (worker_devtools_token_.is_empty())
@@ -188,13 +215,15 @@ void WorkerInspectorController::EmitTraceEvent() {
       TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
       "TracingSessionIdForWorker",
       inspector_tracing_session_id_for_worker_event::Data,
-      worker_devtools_token_, parent_devtools_token_, url_, worker_thread_id_);
+      worker_devtools_token_, parent_devtools_token_, url_,
+      worker_thread_id_.raw());
 }
 
 void WorkerInspectorController::Trace(Visitor* visitor) const {
   visitor->Trace(agent_);
   visitor->Trace(inspected_frames_);
   visitor->Trace(probe_sink_);
+  visitor->Trace(inspector_agents_);
 }
 
 }  // namespace blink

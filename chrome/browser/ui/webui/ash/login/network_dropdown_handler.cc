@@ -4,12 +4,13 @@
 
 #include "chrome/browser/ui/webui/ash/login/network_dropdown_handler.h"
 
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ui/webui/ash/internet_config_dialog.h"
-#include "chrome/browser/ui/webui/ash/internet_detail_dialog.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/webui/ash/internet/internet_config_dialog.h"
+#include "chrome/browser/ui/webui/ash/internet/internet_detail_dialog.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
+#include "chromeos/ash/components/network/technology_state_controller.h"
 #include "components/onc/onc_constants.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -31,7 +32,7 @@ NetworkDropdownHandler::~NetworkDropdownHandler() = default;
 void NetworkDropdownHandler::DeclareLocalizedValues(
     ::login::LocalizedValuesBuilder* builder) {}
 
-void NetworkDropdownHandler::RegisterMessages() {
+void NetworkDropdownHandler::DeclareJSCallbacks() {
   AddCallback(kJsApiLaunchInternetDetailDialog,
               &NetworkDropdownHandler::HandleLaunchInternetDetailDialog);
   AddCallback(kJsApiLaunchAddWiFiNetworkDialog,
@@ -51,10 +52,12 @@ void NetworkDropdownHandler::HandleLaunchInternetDetailDialog() {
 void NetworkDropdownHandler::HandleLaunchAddWiFiNetworkDialog() {
   // Make sure WiFi is enabled.
   NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
+  TechnologyStateController* controller =
+      NetworkHandler::Get()->technology_state_controller();
   if (handler->GetTechnologyState(NetworkTypePattern::WiFi()) !=
       NetworkStateHandler::TECHNOLOGY_ENABLED) {
-    handler->SetTechnologyEnabled(NetworkTypePattern::WiFi(), true,
-                                  network_handler::ErrorCallback());
+    controller->SetTechnologiesEnabled(NetworkTypePattern::WiFi(), true,
+                                       network_handler::ErrorCallback());
   }
   InternetConfigDialog::ShowDialogForNetworkType(
       ::onc::network_type::kWiFi,
@@ -67,10 +70,12 @@ void NetworkDropdownHandler::HandleShowNetworkDetails(const std::string& type,
     // Make sure Cellular is enabled.
     NetworkStateHandler* handler =
         NetworkHandler::Get()->network_state_handler();
+    TechnologyStateController* controller =
+        NetworkHandler::Get()->technology_state_controller();
     if (handler->GetTechnologyState(NetworkTypePattern::Cellular()) !=
         NetworkStateHandler::TECHNOLOGY_ENABLED) {
-      handler->SetTechnologyEnabled(NetworkTypePattern::Cellular(), true,
-                                    network_handler::ErrorCallback());
+      controller->SetTechnologiesEnabled(NetworkTypePattern::Cellular(), true,
+                                         network_handler::ErrorCallback());
     }
   }
   InternetDetailDialog::ShowDialog(

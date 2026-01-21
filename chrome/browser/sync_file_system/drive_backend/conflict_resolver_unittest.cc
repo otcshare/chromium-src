@@ -7,10 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
@@ -58,7 +58,7 @@ class ConflictResolverTest : public testing::Test {
   ConflictResolverTest(const ConflictResolverTest&) = delete;
   ConflictResolverTest& operator=(const ConflictResolverTest&) = delete;
 
-  ~ConflictResolverTest() override {}
+  ~ConflictResolverTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
@@ -278,9 +278,9 @@ class ConflictResolverTest : public testing::Test {
 TEST_F(ConflictResolverTest, NoFileToBeResolved) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   EXPECT_EQ(SYNC_STATUS_NO_CONFLICT, RunConflictResolver());
@@ -289,9 +289,9 @@ TEST_F(ConflictResolverTest, NoFileToBeResolved) {
 TEST_F(ConflictResolverTest, ResolveConflict_Files) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string kTitle = "foo";
@@ -315,9 +315,9 @@ TEST_F(ConflictResolverTest, ResolveConflict_Files) {
 TEST_F(ConflictResolverTest, ResolveConflict_Folders) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string kTitle = "foo";
@@ -341,9 +341,9 @@ TEST_F(ConflictResolverTest, ResolveConflict_Folders) {
 TEST_F(ConflictResolverTest, ResolveConflict_FilesAndFolders) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string kTitle = "foo";
@@ -367,9 +367,9 @@ TEST_F(ConflictResolverTest, ResolveConflict_FilesAndFolders) {
 TEST_F(ConflictResolverTest, ResolveConflict_RemoteFolderOnLocalFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string kTitle = "foo";
@@ -411,9 +411,9 @@ TEST_F(ConflictResolverTest, ResolveConflict_RemoteFolderOnLocalFile) {
 TEST_F(ConflictResolverTest, ResolveConflict_RemoteNestedFolderOnLocalFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string kTitle = "foo";
@@ -458,9 +458,9 @@ TEST_F(ConflictResolverTest, ResolveConflict_RemoteNestedFolderOnLocalFile) {
 TEST_F(ConflictResolverTest, ResolveMultiParents_File) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string primary = CreateRemoteFolder(app_root, "primary");
@@ -485,9 +485,9 @@ TEST_F(ConflictResolverTest, ResolveMultiParents_File) {
 TEST_F(ConflictResolverTest, ResolveMultiParents_Folder) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
   RunRemoteToLocalSyncerUntilIdle();
 
   const std::string primary = CreateRemoteFolder(app_root, "primary");

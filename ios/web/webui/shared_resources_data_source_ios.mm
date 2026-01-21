@@ -17,12 +17,8 @@
 #import "net/base/mime_util.h"
 #import "ui/base/webui/resource_path.h"
 #import "ui/base/webui/web_ui_util.h"
-#import "ui/resources/grit/webui_resources.h"
-#import "ui/resources/grit/webui_resources_map.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ui/webui/resources/grit/webui_resources.h"
+#import "ui/webui/resources/grit/webui_resources_map.h"
 
 namespace web {
 
@@ -34,19 +30,21 @@ const char kWebUIResourcesHost[] = "resources";
 
 // Maps a path name (i.e. "/js/path.js") to a resource map entry. Returns
 // nullptr if not found.
-const webui::ResourcePath* PathToResource(const std::string& path) {
-  for (size_t i = 0; i < kWebuiResourcesSize; ++i) {
-    if (path == kWebuiResources[i].path) {
-      return &kWebuiResources[i];
+const webui::ResourcePath* PathToResource(std::string_view path) {
+  for (const auto& resource : kWebuiResources) {
+    if (path == resource.path) {
+      return &resource;
     }
   }
-  for (size_t i = 0; i < kMojoBindingsResourcesSize; ++i) {
-    if (path == kMojoBindingsResources[i].path)
-      return &kMojoBindingsResources[i];
+  for (const auto& resource : kMojoBindingsResources) {
+    if (path == resource.path) {
+      return &resource;
+    }
   }
-  for (size_t i = 0; i < kIosWebResourcesSize; ++i) {
-    if (path == kIosWebResources[i].path)
-      return &kIosWebResources[i];
+  for (const auto& resource : kIosWebResources) {
+    if (path == resource.path) {
+      return &resource;
+    }
   }
 
   return nullptr;
@@ -63,7 +61,7 @@ std::string SharedResourcesDataSourceIOS::GetSource() const {
 }
 
 void SharedResourcesDataSourceIOS::StartDataRequest(
-    const std::string& path,
+    std::string_view path,
     URLDataSourceIOS::GotDataCallback callback) {
   const webui::ResourcePath* resource = PathToResource(path);
   DCHECK(resource) << " path: " << path;
@@ -83,7 +81,7 @@ void SharedResourcesDataSourceIOS::StartDataRequest(
 }
 
 std::string SharedResourcesDataSourceIOS::GetMimeType(
-    const std::string& path) const {
+    std::string_view path) const {
   std::string mime_type;
   net::GetMimeTypeFromFile(base::FilePath().AppendASCII(path), &mime_type);
   return mime_type;

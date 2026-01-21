@@ -13,7 +13,7 @@ bool StructTraits<gfx::mojom::MaskFilterInfoDataView, gfx::MaskFilterInfo>::
   if (!data.ReadRoundedCornerBounds(&bounds))
     return false;
 
-  absl::optional<gfx::LinearGradient> gradient_mask;
+  std::optional<gfx::LinearGradient> gradient_mask;
   if (!data.ReadGradientMask(&gradient_mask))
     return false;
 
@@ -21,6 +21,10 @@ bool StructTraits<gfx::mojom::MaskFilterInfoDataView, gfx::MaskFilterInfo>::
     *out = gfx::MaskFilterInfo(bounds, gradient_mask.value());
   else
     *out = gfx::MaskFilterInfo(bounds);
+  auto clip_id = data.clip_id();
+  if (clip_id.has_value()) {
+    out->set_clip_id(clip_id.value());
+  }
   return true;
 }
 

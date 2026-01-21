@@ -6,9 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
@@ -16,7 +14,6 @@
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "components/device_event_log/device_event_log.h"
-#include "device/base/features.h"
 #include "services/device/usb/usb_device.h"
 #include "services/device/usb/usb_device_handle.h"
 
@@ -26,7 +23,6 @@
 #include "services/device/usb/usb_service_linux.h"
 #elif BUILDFLAG(IS_MAC)
 #include "services/device/usb/usb_service_impl.h"
-#include "services/device/usb/usb_service_mac.h"
 #elif BUILDFLAG(IS_WIN)
 #include "services/device/usb/usb_service_win.h"
 #endif
@@ -56,10 +52,7 @@ std::unique_ptr<UsbService> UsbService::Create() {
 #elif BUILDFLAG(IS_WIN)
   return base::WrapUnique(new UsbServiceWin());
 #elif BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(kNewUsbBackend))
-    return base::WrapUnique(new UsbServiceMac());
-  else
-    return base::WrapUnique(new UsbServiceImpl());
+  return base::WrapUnique(new UsbServiceImpl());
 #else
   return nullptr;
 #endif
@@ -106,7 +99,7 @@ void UsbService::RemoveObserver(Observer* observer) {
 
 void UsbService::AddDeviceForTesting(scoped_refptr<UsbDevice> device) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!base::Contains(devices_, device->guid()));
+  DCHECK(!devices_.contains(device->guid()));
   devices_[device->guid()] = device;
   testing_devices_.insert(device->guid());
   NotifyDeviceAdded(device);
@@ -119,7 +112,7 @@ void UsbService::RemoveDeviceForTesting(const std::string& device_guid) {
   auto testing_devices_it = testing_devices_.find(device_guid);
   if (testing_devices_it != testing_devices_.end()) {
     auto devices_it = devices_.find(device_guid);
-    DCHECK(devices_it != devices_.end());
+    CHECK(devices_it != devices_.end());
     scoped_refptr<UsbDevice> device = devices_it->second;
     devices_.erase(devices_it);
     testing_devices_.erase(testing_devices_it);
@@ -133,7 +126,7 @@ void UsbService::GetTestDevices(
   devices->reserve(testing_devices_.size());
   for (const std::string& guid : testing_devices_) {
     auto it = devices_.find(guid);
-    DCHECK(it != devices_.end());
+    CHECK(it != devices_.end());
     devices->push_back(it->second);
   }
 }

@@ -11,19 +11,19 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_message_loop.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "media/audio/audio_device_description.h"
 #include "media/audio/cras/audio_manager_cras.h"
 #include "media/audio/fake_audio_log_factory.h"
 #include "media/audio/mock_audio_source_callback.h"
 #include "media/audio/test_audio_thread.h"
+#include "media/media_buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // cras_util.h defines custom min/max macros which break compilation, so ensure
 // it's not included until last.  #if avoids presubmit errors.
-#if defined(USE_CRAS)
+#if BUILDFLAG(USE_CRAS)
 #include "media/audio/cras/cras_unified.h"
 #endif
 
@@ -77,12 +77,11 @@ class CrasUnifiedStreamTest : public testing::Test {
     AudioParameters params(kTestFormat, layout, kTestSampleRate,
                            samples_per_packet);
     return new CrasUnifiedStream(params, mock_manager_.get(),
-                                 AudioDeviceDescription::kDefaultDeviceId);
+                                 AudioDeviceDescription::kDefaultDeviceId,
+                                 AudioManager::LogCallback());
   }
 
-  MockAudioManagerCras& mock_manager() {
-    return *(mock_manager_.get());
-  }
+  MockAudioManagerCras& mock_manager() { return *(mock_manager_.get()); }
 
   static const ChannelLayout kTestChannelLayout;
   static const int kTestSampleRate;
@@ -123,7 +122,8 @@ TEST_F(CrasUnifiedStreamTest, ConstructedState) {
       kTestFormat, ChannelLayoutConfig::FromLayout<kTestChannelLayout>(), 0,
       kTestFramesPerPacket);
   test_stream = new CrasUnifiedStream(bad_rate_params, mock_manager_.get(),
-                                      AudioDeviceDescription::kDefaultDeviceId);
+                                      AudioDeviceDescription::kDefaultDeviceId,
+                                      AudioManager::LogCallback());
   EXPECT_FALSE(test_stream->Open());
   test_stream->Close();
 }

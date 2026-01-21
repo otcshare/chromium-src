@@ -4,10 +4,11 @@
 
 #include "content/browser/notifications/notification_storage.h"
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "base/uuid.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
+#include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
@@ -65,7 +66,7 @@ class NotificationStorageTest : public ::testing::Test {
   // ServiceWorkerRegistration will be kept alive for the test's lifetime.
   int64_t RegisterServiceWorker() {
     GURL script_url = url_;
-    blink::StorageKey key(origin_);
+    const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin_);
     {
       blink::mojom::ServiceWorkerRegistrationOptions options;
       options.scope = url_;
@@ -90,7 +91,7 @@ class NotificationStorageTest : public ::testing::Test {
 
     {
       base::RunLoop run_loop;
-      helper_->context()->registry()->FindRegistrationForId(
+      helper_->context()->registry().FindRegistrationForId(
           service_worker_registration_id_, key,
           base::BindOnce(
               &NotificationStorageTest::DidFindServiceWorkerRegistration,
@@ -155,7 +156,9 @@ class NotificationStorageTest : public ::testing::Test {
   }
 
   // Generates a random notification ID. The format of the ID is opaque.
-  std::string GenerateNotificationId() { return base::GenerateGUID(); }
+  std::string GenerateNotificationId() {
+    return base::Uuid::GenerateRandomV4().AsLowercaseString();
+  }
 
  protected:
   BrowserTaskEnvironment task_environment_;  // Must be first member

@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "ui/gfx/icc_profile.h"
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/skia_color_space_util.h"
@@ -107,7 +109,7 @@ TEST(ICCProfile, GarbageData) {
   std::vector<char> bad_data(10 * 1024);
   const char* bad_data_string = "deadbeef";
   for (size_t i = 0; i < bad_data.size(); ++i)
-    bad_data[i] = bad_data_string[i % 8];
+    bad_data[i] = UNSAFE_TODO(bad_data_string[i % 8]);
   ICCProfile garbage_profile =
       ICCProfile::FromData(bad_data.data(), bad_data.size());
   EXPECT_FALSE(garbage_profile.IsValid());

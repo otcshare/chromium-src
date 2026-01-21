@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/markers/highlight_pseudo_marker.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
@@ -27,14 +28,18 @@ class CORE_EXPORT CustomHighlightMarker final : public HighlightPseudoMarker {
   PseudoId GetPseudoId() const final;
   const AtomicString& GetPseudoArgument() const final;
 
-  const Highlight* GetHighlight() const { return highlight_; }
+  const Highlight* GetHighlight() const { return highlight_.Get(); }
   const AtomicString& GetHighlightName() const { return highlight_name_; }
+
+  void SetHasVisualOverflow(bool has_overflow);
+  bool HasVisualOverflow() const;
 
   void Trace(blink::Visitor*) const override;
 
  private:
   const AtomicString highlight_name_;
   const Member<Highlight> highlight_;
+  bool highlight_has_visual_overflow_ = false;
 };
 
 template <>

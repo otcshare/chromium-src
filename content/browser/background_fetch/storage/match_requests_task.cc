@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
@@ -15,6 +15,7 @@
 #include "services/network/public/cpp/cors/cors.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace background_fetch {
@@ -33,8 +34,8 @@ MatchRequestsTask::~MatchRequestsTask() = default;
 
 void MatchRequestsTask::Start() {
   int64_t trace_id = blink::cache_storage::CreateTraceId();
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "MatchRequestsTask::Start",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "MatchRequestsTask::Start",
+              perfetto::Flow::Global(trace_id));
   OpenCache(registration_id_, trace_id,
             base::BindOnce(&MatchRequestsTask::DidOpenCache,
                            weak_factory_.GetWeakPtr(), trace_id));
@@ -42,9 +43,8 @@ void MatchRequestsTask::Start() {
 
 void MatchRequestsTask::DidOpenCache(int64_t trace_id,
                                      blink::mojom::CacheStorageError error) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "MatchRequestsTask::DidOpenCache",
-                         TRACE_ID_GLOBAL(trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "MatchRequestsTask::DidOpenCache",
+              perfetto::Flow::Global(trace_id));
 
   if (error != blink::mojom::CacheStorageError::kSuccess) {
     SetStorageErrorAndFinish(BackgroundFetchStorageError::kCacheStorageError);
@@ -79,17 +79,16 @@ void MatchRequestsTask::DidOpenCache(int64_t trace_id,
 
 void MatchRequestsTask::DidGetAllMatchedEntries(
     int64_t trace_id,
-    blink::mojom::GetAllMatchedEntriesResultPtr result) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "MatchRequestsTask::DidGetAllMatchedEntries",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_IN);
+    blink::mojom::CacheStorageCache::GetAllMatchedEntriesResult result) {
+  TRACE_EVENT("CacheStorage", "MatchRequestsTask::DidGetAllMatchedEntries",
+              perfetto::TerminatingFlow::Global(trace_id));
 
-  if (result->is_status()) {
+  if (!result.has_value()) {
     SetStorageErrorAndFinish(BackgroundFetchStorageError::kCacheStorageError);
     return;
   }
 
-  auto& entries = result->get_entries();
+  auto& entries = result.value();
   // If we tried to match without filtering, there should always be entries.
   if (entries.empty()) {
     if (!match_params_->FilterByRequest())
@@ -140,7 +139,8 @@ bool MatchRequestsTask::ShouldMatchRequest(
   // Ignore the request if the queries don't match.
   if ((!match_params_->cache_query_options() ||
        !match_params_->cache_query_options()->ignore_search) &&
-      request->url.query() != match_params_->request_to_match()->url.query()) {
+      request->url.GetQuery() !=
+          match_params_->request_to_match()->url.GetQuery()) {
     return false;
   }
 
@@ -151,14 +151,9 @@ void MatchRequestsTask::FinishWithError(
     blink::mojom::BackgroundFetchError error) {
   if (HasStorageError())
     error = blink::mojom::BackgroundFetchError::STORAGE_ERROR;
-  ReportStorageError();
 
   std::move(callback_).Run(error, std::move(settled_fetches_));
   Finished();  // Destroys |this|.
-}
-
-std::string MatchRequestsTask::HistogramName() const {
-  return "MatchRequestsTask";
 }
 
 }  // namespace background_fetch

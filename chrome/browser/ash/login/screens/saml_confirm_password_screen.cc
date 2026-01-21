@@ -4,26 +4,34 @@
 
 #include "chrome/browser/ash/login/screens/saml_confirm_password_screen.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/check_passwords_against_cryptohome_helper.h"
 #include "chrome/browser/ui/webui/ash/login/saml_confirm_password_handler.h"
+#include "chromeos/ash/components/login/auth/public/auth_types.h"
 #include "chromeos/ash/components/login/auth/public/cryptohome_key_constants.h"
+#include "chromeos/ash/components/osauth/public/auth_session_storage.h"
 
 namespace ash {
 
 // static
 std::string SamlConfirmPasswordScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
+    case Result::kSuccess:
+      return "Success";
     case Result::kCancel:
       return "Cancel";
     case Result::kTooManyAttempts:
       return "TooManyAttempts";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 SamlConfirmPasswordScreen::SamlConfirmPasswordScreen(
@@ -48,9 +56,20 @@ void SamlConfirmPasswordScreen::TryPassword(const std::string& password) {
   Key key(password);
   key.SetLabel(kCryptohomeGaiaKeyLabel);
   if (scraped_saml_passwords_.empty() ||
-      base::Contains(scraped_saml_passwords_, password)) {
+      std::ranges::contains(scraped_saml_passwords_, password)) {
     user_context_->SetKey(key);
+    user_context_->SetSamlPassword(SamlPassword{password});
     user_context_->SetPasswordKey(Key(password));
+
+    if (features::IsManagedLocalPinAndPasswordEnabled()) {
+      scraped_saml_passwords_.clear();
+      // As this is run before user_context session validity is set, so we need
+      // to pass it to the context directly.
+      context()->user_context = std::move(user_context_);
+      exit_callback_.Run(Result::kSuccess);
+      return;
+    }
+
     LoginDisplayHost::default_host()->CompleteLogin(*user_context_);
 
     user_context_.reset();

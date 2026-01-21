@@ -6,7 +6,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -16,7 +15,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/thread_annotations.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/trace_event/typed_macros.h"
 #include "third_party/webrtc/api/metronome/metronome.h"
@@ -45,7 +43,7 @@ class WebRtcMetronomeAdapter : public webrtc::Metronome {
   const base::WeakPtr<MetronomeSource> source_;
 };
 
-MetronomeSource::MetronomeSource(std::unique_ptr<TickProvider> tick_provider)
+MetronomeSource::MetronomeSource(scoped_refptr<TickProvider> tick_provider)
     : tick_provider_(std::move(tick_provider)) {
   DETACH_FROM_SEQUENCE(metronome_sequence_checker_);
 }

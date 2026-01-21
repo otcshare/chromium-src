@@ -7,8 +7,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/gtest_prod_util.h"
+#include "base/containers/queue.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -18,7 +18,7 @@
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/floss/exported_callback_manager.h"
 #include "device/bluetooth/floss/floss_dbus_client.h"
-#include "device/bluetooth/floss/floss_gatt_client.h"
+#include "device/bluetooth/floss/floss_gatt_manager_client.h"
 
 namespace dbus {
 class ObjectPath;
@@ -26,12 +26,24 @@ class ObjectPath;
 
 namespace floss {
 
-const char kScannerCallbackPath[] = "/org/chromium/bluetooth/scanner/callback";
+const char kScannerCallbackPath[] =
+    "/org/chromium/bluetooth/scanner/callback";
 const char kScannerCallbackInterfaceName[] =
     "org.chromium.bluetooth.ScannerCallback";
+const char kEmptyUuidStr[] = "00000000-0000-0000-0000-000000000000";
 
-// TODO(b/217274013): Update structs to support filtering
-class ScanSettings {};
+// Represents type of a scan.
+enum class ScanType {
+  kActive = 0,
+  kPassive = 1,
+};
+
+// Represents scanning configurations.
+struct ScanSettings {
+  int32_t interval;
+  int32_t window;
+  ScanType scan_type;
+};
 
 struct DEVICE_BLUETOOTH_EXPORT ScanFilterPattern {
   // Specifies the starting byte position of the pattern immediately following
@@ -89,15 +101,15 @@ struct DEVICE_BLUETOOTH_EXPORT ScanFilter {
 struct DEVICE_BLUETOOTH_EXPORT ScanResult {
   std::string name;
   std::string address;
-  uint8_t addr_type;
-  uint16_t event_type;
-  uint8_t primary_phy;
-  uint8_t secondary_phy;
-  uint8_t advertising_sid;
-  int8_t tx_power;
-  int8_t rssi;
-  uint16_t periodic_adv_int;
-  uint8_t flags;
+  uint8_t addr_type = 0;
+  uint16_t event_type = 0;
+  uint8_t primary_phy = 0;
+  uint8_t secondary_phy = 0;
+  uint8_t advertising_sid = 0;
+  int8_t tx_power = 0;
+  int8_t rssi = 0;
+  uint16_t periodic_adv_int = 0;
+  uint8_t flags = 0;
   std::vector<device::BluetoothUUID> service_uuids;
   std::map<std::string, std::vector<uint8_t>> service_data;
   std::map<uint16_t, std::vector<uint8_t>> manufacturer_data;
@@ -121,8 +133,11 @@ class ScannerClientObserver : public base::CheckedObserver {
   // A scan result has been received
   virtual void ScanResultReceived(ScanResult scan_result) {}
 
+  // An advertisement has been found
+  virtual void AdvertisementFound(uint8_t scanner_id, ScanResult scan_result) {}
+
   // A scan result has been lost
-  virtual void ScanResultLost(ScanResult scan_result) {}
+  virtual void AdvertisementLost(uint8_t scanner_id, ScanResult scan_result) {}
 };
 
 // Low-level interface to Floss's LE Scan API.
@@ -148,7 +163,9 @@ class DEVICE_BLUETOOTH_EXPORT FlossLEScanClient : public FlossDBusClient,
   // Initialize the LE Scan client.
   void Init(dbus::Bus* bus,
             const std::string& service_name,
-            const int adapter_index) override;
+            const int adapter_index,
+            base::Version version,
+            base::OnceClosure on_ready) override;
 
   virtual void RegisterScanner(
       ResponseCallback<device::BluetoothUUID> callback);
@@ -156,8 +173,8 @@ class DEVICE_BLUETOOTH_EXPORT FlossLEScanClient : public FlossDBusClient,
                                  uint8_t scanner_id);
   virtual void StartScan(ResponseCallback<BtifStatus> callback,
                          uint8_t scanner_id,
-                         const ScanSettings& scan_settings,
-                         const absl::optional<ScanFilter>& filter);
+                         const std::optional<ScanSettings>& scan_settings,
+                         const std::optional<ScanFilter>& filter);
   virtual void StopScan(ResponseCallback<BtifStatus> callback,
                         uint8_t scanner_id);
 
@@ -167,6 +184,8 @@ class DEVICE_BLUETOOTH_EXPORT FlossLEScanClient : public FlossDBusClient,
                          uint8_t scanner_id,
                          GattStatus status) override;
   void ScanResultReceived(ScanResult scan_result) override;
+  void AdvertisementFound(uint8_t scanner_id, ScanResult scan_result) override;
+  void AdvertisementLost(uint8_t scanner_id, ScanResult scan_result) override;
 
   // Managed by FlossDBusManager - we keep local pointer to access object proxy.
   raw_ptr<dbus::Bus> bus_ = nullptr;
@@ -181,10 +200,15 @@ class DEVICE_BLUETOOTH_EXPORT FlossLEScanClient : public FlossDBusClient,
   std::string service_name_;
 
  private:
-  absl::optional<uint32_t> le_scan_callback_id_;
+  std::optional<uint32_t> le_scan_callback_id_;
 
   ExportedCallbackManager<ScannerClientObserver>
       exported_scanner_callback_manager_{kScannerCallbackInterfaceName};
+
+  // List of callbacks to register a scanner for once |RegisterScannerCallback|
+  // completes.
+  base::queue<ResponseCallback<device::BluetoothUUID>>
+      pending_register_scanners_;
 
   void RegisterScannerCallback();
 
@@ -199,6 +223,9 @@ class DEVICE_BLUETOOTH_EXPORT FlossLEScanClient : public FlossDBusClient,
     CallMethod(std::move(callback), bus_, service_name_, kGattInterface,
                object_path_, member, args...);
   }
+
+  // Signal that the client is ready to be used.
+  base::OnceClosure on_ready_;
 
   base::WeakPtrFactory<FlossLEScanClient> weak_ptr_factory_{this};
 };

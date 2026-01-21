@@ -4,9 +4,11 @@
 
 #include "ash/display/display_move_window_util.h"
 
+#include "ash/accelerators/accelerator_commands.h"
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accelerators/accelerator_table.h"
 #include "ash/accessibility/test_accessibility_controller_client.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/root_window_controller.h"
 #include "ash/screen_util.h"
@@ -18,6 +20,7 @@
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
 #include "base/command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/display/display.h"
 #include "ui/display/display_layout.h"
@@ -29,17 +32,16 @@
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/window_util.h"
 
-namespace ash {
-
-namespace display_move_window_util {
+namespace ash::display_move_window_util {
 
 namespace {
 
-// Get the default left snapped window bounds which has snapped width ratio 0.5.
+// Get the default left snapped window bounds which has snapped width ratio
+// `chromeos::kDefaultSnapRatio`.
 gfx::Rect GetDefaultLeftSnappedBoundsInDisplay(
     const display::Display& display) {
   auto work_area = display.work_area();
-  work_area.set_width(work_area.width() / 2);
+  work_area.set_width(work_area.width() * chromeos::kDefaultSnapRatio);
   return work_area;
 }
 
@@ -47,9 +49,9 @@ views::Widget* CreateTestWidgetWithParent(views::Widget::InitParams::Type type,
                                           gfx::NativeView parent,
                                           const gfx::Rect& bounds,
                                           bool child) {
-  views::Widget::InitParams params(type);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET, type);
   params.delegate = nullptr;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.parent = parent;
   params.bounds = bounds;
   params.child = child;
@@ -61,16 +63,23 @@ views::Widget* CreateTestWidgetWithParent(views::Widget::InitParams::Type type,
 
 void PerformMoveWindowAccel() {
   Shell::Get()->accelerator_controller()->PerformActionIfEnabled(
-      MOVE_ACTIVE_WINDOW_BETWEEN_DISPLAYS, {});
+      AcceleratorAction::kMoveActiveWindowBetweenDisplays, {});
 }
 
 }  // namespace
 
-using DisplayMoveWindowUtilTest = AshTestBase;
+class DisplayMoveWindowUtilTest : public AshTestBase {
+ public:
+  DisplayMoveWindowUtilTest() = default;
+  DisplayMoveWindowUtilTest(const DisplayMoveWindowUtilTest&) = delete;
+  DisplayMoveWindowUtilTest& operator=(const DisplayMoveWindowUtilTest&) =
+      delete;
+  ~DisplayMoveWindowUtilTest() override = default;
+};
 
 TEST_F(DisplayMoveWindowUtilTest, SingleDisplay) {
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
   EXPECT_FALSE(CanHandleMoveActiveWindowBetweenDisplays());
 }
@@ -81,7 +90,7 @@ TEST_F(DisplayMoveWindowUtilTest, WindowBounds) {
   // Layout: [p][1]
   UpdateDisplay("400x300,400x300");
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
   PerformMoveWindowAccel();
   EXPECT_EQ(gfx::Rect(410, 20, 200, 100), window->GetBoundsInScreen());
@@ -93,9 +102,9 @@ TEST_F(DisplayMoveWindowUtilTest, WindowState) {
   UpdateDisplay("400x300,800x300");
 
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   ASSERT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window).id());
   WindowState* window_state = WindowState::Get(window);
@@ -129,17 +138,17 @@ TEST_F(DisplayMoveWindowUtilTest, WindowState) {
   EXPECT_EQ(display_manager()->GetDisplayAt(1).bounds(),
             window->GetBoundsInScreen());
 
-  // Set window to left snapped state.
+  // Set window to primary snapped state.
   PerformMoveWindowAccel();
-  const WindowSnapWMEvent snap_left(WM_EVENT_SNAP_PRIMARY);
-  window_state->OnWMEvent(&snap_left);
+  const WindowSnapWMEvent snap_primary(WM_EVENT_SNAP_PRIMARY);
+  window_state->OnWMEvent(&snap_primary);
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window).id());
   EXPECT_TRUE(window_state->IsSnapped());
   EXPECT_EQ(GetDefaultLeftSnappedBoundsInDisplay(
                 screen->GetDisplayNearestWindow(window)),
             window->GetBoundsInScreen());
-  EXPECT_EQ(0.5f, *window_state->snap_ratio());
+  EXPECT_EQ(chromeos::kDefaultSnapRatio, *window_state->snap_ratio());
   PerformMoveWindowAccel();
   EXPECT_EQ(display_manager()->GetDisplayAt(1).id(),
             screen->GetDisplayNearestWindow(window).id());
@@ -148,12 +157,12 @@ TEST_F(DisplayMoveWindowUtilTest, WindowState) {
   EXPECT_EQ(GetDefaultLeftSnappedBoundsInDisplay(
                 screen->GetDisplayNearestWindow(window)),
             window->GetBoundsInScreen());
-  EXPECT_EQ(0.5f, *window_state->snap_ratio());
+  EXPECT_EQ(chromeos::kDefaultSnapRatio, *window_state->snap_ratio());
 }
 
 // Tests that movement follows cycling through sorted display id list.
 TEST_F(DisplayMoveWindowUtilTest, FourDisplays) {
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   int64_t primary_id = screen->GetPrimaryDisplay().id();
   // Layout:
   // [3][2]
@@ -181,7 +190,7 @@ TEST_F(DisplayMoveWindowUtilTest, FourDisplays) {
             display_manager()->GetDisplayAt(3).bounds());
 
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
   ASSERT_EQ(list[0], screen->GetDisplayNearestWindow(window).id());
 
@@ -202,7 +211,7 @@ TEST_F(DisplayMoveWindowUtilTest, A11yAlert) {
   TestAccessibilityControllerClient client;
 
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
   PerformMoveWindowAccel();
   EXPECT_EQ(AccessibilityAlert::WINDOW_MOVED_TO_ANOTHER_DISPLAY,
@@ -223,7 +232,7 @@ TEST_F(DisplayMoveWindowUtilTest, NoMovementIfNotInCycleWindowList) {
           .Build();
 
   wm::ActivateWindow(window.get());
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window.get()).id());
 
@@ -250,9 +259,9 @@ TEST_F(DisplayMoveWindowUtilTest, KeepWindowBoundsIfNotChangedByUser) {
   const int shelf_inset = 300 - ShelfConfig::Get()->shelf_size();
   // Create and activate window on display [1].
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(410, 20, 200, 400));
+      CreateTestWindowInShell({.bounds = {410, 20, 200, 400}, .window_id = 0});
   wm::ActivateWindow(window);
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(1).id(),
             screen->GetDisplayNearestWindow(window).id());
   // Move window to display [p]. Its window bounds is adjusted by available work
@@ -270,7 +279,7 @@ TEST_F(DisplayMoveWindowUtilTest, KeepWindowBoundsIfNotChangedByUser) {
   // Move window to display [p] and set that its bounds is changed by user.
   WindowState* window_state = WindowState::Get(window);
   PerformMoveWindowAccel();
-  window_state->set_bounds_changed_by_user(true);
+  window_state->SetBoundsChangedByUser(true);
   // Move window back to display [1], but its bounds has been changed by user.
   // Then window bounds should be kept the same as that in display [p].
   PerformMoveWindowAccel();
@@ -286,20 +295,20 @@ TEST_F(DisplayMoveWindowUtilTest, AutoManaged) {
   // Create and show window on display [p]. Enable auto window position managed,
   // which will center the window on display [p].
   aura::Window* window1 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   WindowState* window1_state = WindowState::Get(window1);
   window1_state->SetWindowPositionManaged(true);
   window1->Hide();
   window1->Show();
   EXPECT_EQ(gfx::Rect(100, 20, 200, 100), window1->GetBoundsInScreen());
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window1).id());
 
   // Create and show window on display [p]. Enable auto window position managed,
   // which will do auto window management (pushing the other window to side).
   aura::Window* window2 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   WindowState* window2_state = WindowState::Get(window2);
   window2_state->SetWindowPositionManaged(true);
   window2->Hide();
@@ -331,14 +340,14 @@ TEST_F(DisplayMoveWindowUtilTest, AutoManaged) {
 TEST_F(DisplayMoveWindowUtilTest, WindowWithTransientChild) {
   UpdateDisplay("400x300,400x300");
   aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(window);
 
   // Create a |child| window and make it a transient child of |window|.
   std::unique_ptr<aura::Window> child =
       ChildTestWindowBuilder(window, gfx::Rect(20, 30, 40, 50)).Build();
   ::wm::AddTransientChild(window, child.get());
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window).id());
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
@@ -359,7 +368,8 @@ TEST_F(DisplayMoveWindowUtilTest, WindowWithTransientChild) {
 // target instead.
 TEST_F(DisplayMoveWindowUtilTest, ActiveTransientChildWindow) {
   UpdateDisplay("400x300,400x300");
-  std::unique_ptr<views::Widget> window = CreateTestWidget();
+  std::unique_ptr<views::Widget> window =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   window->SetBounds(gfx::Rect(10, 20, 200, 100));
 
   // Create a |child| transient widget of |window|. When |child| is shown, it is
@@ -367,7 +377,7 @@ TEST_F(DisplayMoveWindowUtilTest, ActiveTransientChildWindow) {
   std::unique_ptr<views::Widget> child(CreateTestWidgetWithParent(
       views::Widget::InitParams::TYPE_WINDOW, window->GetNativeView(),
       gfx::Rect(20, 30, 40, 50), false));
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(window->GetNativeWindow()).id());
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
@@ -393,7 +403,7 @@ TEST_F(DisplayMoveWindowUtilTest, ActiveTransientChildWindow) {
 TEST_F(DisplayMoveWindowUtilTest, TransientParentNotInCycleWindowList) {
   UpdateDisplay("400x300,400x300");
   aura::Window* w1 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(100, 100, 50, 50));
+      CreateTestWindowInShell({.bounds = {100, 100, 50, 50}, .window_id = 0});
   wm::ActivateWindow(w1);
 
   // Create a window |w2| in non-switchable window container.
@@ -411,7 +421,7 @@ TEST_F(DisplayMoveWindowUtilTest, TransientParentNotInCycleWindowList) {
   std::unique_ptr<views::Widget> child(
       CreateTestWidgetWithParent(views::Widget::InitParams::TYPE_WINDOW,
                                  w2.get(), gfx::Rect(20, 30, 40, 50), false));
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
             screen->GetDisplayNearestWindow(w1).id());
   EXPECT_EQ(display_manager()->GetDisplayAt(0).id(),
@@ -436,7 +446,7 @@ TEST_F(DisplayMoveWindowUtilTest, TransientParentNotInCycleWindowList) {
 TEST_F(DisplayMoveWindowUtilTest, RestoreMaximizedWindowAfterMovement) {
   UpdateDisplay("400x300,400x300");
   aura::Window* w =
-      CreateTestWindowInShellWithBounds(gfx::Rect(10, 20, 200, 100));
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
   wm::ActivateWindow(w);
 
   WindowState* window_state = WindowState::Get(w);
@@ -451,6 +461,69 @@ TEST_F(DisplayMoveWindowUtilTest, RestoreMaximizedWindowAfterMovement) {
   EXPECT_EQ(gfx::Rect(410, 20, 200, 100), w->GetBoundsInScreen());
 }
 
-}  // namespace display_move_window_util
+// Tests that the restore history stack will be updated correctly on the restore
+// bounds updates.
+TEST_F(DisplayMoveWindowUtilTest, RestoreHistoryOnUpdatedRestoreBounds) {
+  UpdateDisplay("400x300,400x300");
+  aura::Window* w =
+      CreateTestWindowInShell({.bounds = {10, 20, 200, 100}, .window_id = 0});
+  wm::ActivateWindow(w);
 
-}  // namespace ash
+  const gfx::Rect restore_bounds_in_second_display(410, 20, 200, 100);
+  WindowState* window_state = WindowState::Get(w);
+  window_state->Maximize();
+
+  using chromeos::WindowStateType;
+  EXPECT_EQ(gfx::Rect(10, 20, 200, 100),
+            window_state->GetRestoreBoundsInScreen());
+
+  // Moving the window to the second display through shortcut should update both
+  // the restore bounds and the restore history stack.
+  PerformMoveWindowAccel();
+  std::vector<chromeos::WindowStateType> restore_stack =
+      window_state->GetWindowStateTypeRestoreHistoryForTesting();
+  EXPECT_TRUE(window_state->IsMaximized());
+  EXPECT_EQ(restore_bounds_in_second_display,
+            window_state->GetRestoreBoundsInScreen());
+  EXPECT_EQ(1u, restore_stack.size());
+  EXPECT_EQ(restore_stack[0], WindowStateType::kDefault);
+
+  // Verify the restore bounds and restore history after toggling to fullscreen
+  // the window.
+  accelerators::ToggleFullscreen();
+  restore_stack = window_state->GetWindowStateTypeRestoreHistoryForTesting();
+  EXPECT_TRUE(window_state->IsFullscreen());
+  EXPECT_EQ(gfx::Rect(400, 0, 400, 300), w->GetBoundsInScreen());
+  EXPECT_EQ(restore_bounds_in_second_display,
+            window_state->GetRestoreBoundsInScreen());
+  EXPECT_EQ(2u, restore_stack.size());
+  EXPECT_EQ(restore_stack[0], WindowStateType::kDefault);
+  EXPECT_EQ(restore_stack[1], WindowStateType::kMaximized);
+
+  // Verify the restore bounds and restore history after toggling to
+  // restore the window to maxmized.
+  accelerators::ToggleFullscreen();
+  restore_stack = window_state->GetWindowStateTypeRestoreHistoryForTesting();
+  EXPECT_TRUE(window_state->IsMaximized());
+  EXPECT_EQ(restore_bounds_in_second_display,
+            window_state->GetRestoreBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(400, 0, 400, 300 - ShelfConfig::Get()->shelf_size()),
+            w->GetBoundsInScreen());
+  EXPECT_EQ(1u, restore_stack.size());
+  EXPECT_EQ(restore_stack[0], WindowStateType::kDefault);
+
+  // Verify the restore bounds and restore history after toggling to fullscreen
+  // the window again. And the window should stay in the second display with
+  // correct restore bounds.
+  accelerators::ToggleFullscreen();
+  restore_stack = window_state->GetWindowStateTypeRestoreHistoryForTesting();
+  EXPECT_TRUE(window_state->IsFullscreen());
+  EXPECT_EQ(restore_bounds_in_second_display,
+            window_state->GetRestoreBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(400, 0, 400, 300), w->GetBoundsInScreen());
+  EXPECT_EQ(2u, restore_stack.size());
+  EXPECT_EQ(restore_stack[0], WindowStateType::kDefault);
+  EXPECT_EQ(restore_stack[1], WindowStateType::kMaximized);
+}
+
+}  // namespace ash::display_move_window_util

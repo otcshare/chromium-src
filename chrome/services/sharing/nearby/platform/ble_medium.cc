@@ -4,13 +4,11 @@
 
 #include "chrome/services/sharing/nearby/platform/ble_medium.h"
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/services/sharing/nearby/platform/bluetooth_device.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
 // Client name for logging in BLE scanning.
@@ -65,9 +63,10 @@ bool BleMedium::StartAdvertising(
   mojo::PendingRemote<bluetooth::mojom::Advertisement> pending_advertisement;
   bool success = adapter_->RegisterAdvertisement(
       service_uuid,
-      std::vector<uint8_t>(advertisement.data(),
-                           advertisement.data() + advertisement.size()),
-      /*use_scan_data=*/true, &pending_advertisement);
+      std::vector<uint8_t>(
+          advertisement.data(),
+          UNSAFE_TODO(advertisement.data() + advertisement.size())),
+      /*use_scan_data=*/true, /*connectable=*/false, &pending_advertisement);
 
   if (!success || !pending_advertisement.is_valid()) {
     LogStartAdvertisingResult(false);
@@ -122,13 +121,13 @@ bool BleMedium::StartScanning(
 
   // The ID-to-UUID map should always be in sync with the callbacks map, and we
   // assume that the ID-UUID mapping is one-to-one.
-  DCHECK_EQ(base::Contains(discovered_peripheral_callbacks_map_, service_uuid),
-            base::Contains(
-                discovery_service_id_to_fast_advertisement_service_uuid_map_,
-                service_id));
+  DCHECK_EQ(
+      discovered_peripheral_callbacks_map_.contains(service_uuid),
+      discovery_service_id_to_fast_advertisement_service_uuid_map_.contains(
+          service_id));
 
   if (IsScanning() &&
-      base::Contains(discovered_peripheral_callbacks_map_, service_uuid)) {
+      discovered_peripheral_callbacks_map_.contains(service_uuid)) {
     LogStartScanningResult(true);
     return true;
   }
@@ -169,7 +168,7 @@ bool BleMedium::StartScanning(
   // A different DiscoveredPeripheralCallback is being passed on each call, so
   // each must be captured and associated with its service UUID.
   discovered_peripheral_callbacks_map_.insert(
-      {service_uuid, discovered_peripheral_callback});
+      {service_uuid, std::move(discovered_peripheral_callback)});
 
   discovery_service_id_to_fast_advertisement_service_uuid_map_.insert(
       {service_id, service_uuid});
@@ -188,7 +187,7 @@ bool BleMedium::StopScanning(const std::string& service_id) {
           service_id);
   if (it !=
       discovery_service_id_to_fast_advertisement_service_uuid_map_.end()) {
-    DCHECK(base::Contains(discovered_peripheral_callbacks_map_, it->second));
+    DCHECK(discovered_peripheral_callbacks_map_.contains(it->second));
     discovered_peripheral_callbacks_map_.erase(it->second);
     discovery_service_id_to_fast_advertisement_service_uuid_map_.erase(it);
     for (auto& uuid_peripheral_pair : discovered_ble_peripherals_map_) {
@@ -398,6 +397,4 @@ chrome::BlePeripheral* BleMedium::GetDiscoveredBlePeripheral(
   return it == discovered_ble_peripherals_map_.end() ? nullptr : &it->second;
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

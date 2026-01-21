@@ -8,13 +8,15 @@
 #include "base/threading/thread_local.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/interned_args_helper.h"
+#include "base/trace_event/typed_macros.h"
 #include "base/tracing_buildflags.h"
 #include "build/build_config.h"
+#include "third_party/perfetto/protos/perfetto/trace/track_event/source_location.pbzero.h"
 
-#if BUILDFLAG(ENABLE_BASE_TRACING)
-#include "third_party/perfetto/protos/perfetto/trace/track_event/source_location.pbzero.h"  // nogncheck
-#endif  // BUILDFLAG(ENABLE_BASE_TRACING)
+#if DCHECK_IS_ON()
+#include "base/auto_reset.h"
+#endif
 
 namespace base {
 
@@ -24,8 +26,7 @@ namespace {
 // Used to verify that the trace events used in the constructor do not result in
 // instantiating a ScopedBlockingCall themselves (which would cause an infinite
 // reentrancy loop).
-LazyInstance<ThreadLocalBoolean>::Leaky tls_construction_in_progress =
-    LAZY_INSTANCE_INITIALIZER;
+constinit thread_local bool construction_in_progress = false;
 #endif
 
 }  // namespace
@@ -33,24 +34,18 @@ LazyInstance<ThreadLocalBoolean>::Leaky tls_construction_in_progress =
 ScopedBlockingCall::ScopedBlockingCall(const Location& from_here,
                                        BlockingType blocking_type)
     : UncheckedScopedBlockingCall(
-          from_here,
           blocking_type,
           UncheckedScopedBlockingCall::BlockingCallType::kRegular) {
 #if DCHECK_IS_ON()
-  DCHECK(!tls_construction_in_progress.Get().Get());
-  tls_construction_in_progress.Get().Set(true);
+  const AutoReset<bool> resetter(&construction_in_progress, true, false);
 #endif
 
-  internal::AssertBlockingAllowed();
+  AssertBlockingAllowed();
   TRACE_EVENT_BEGIN(
       "base", "ScopedBlockingCall", [&](perfetto::EventContext ctx) {
         ctx.event()->set_source_location_iid(
             base::trace_event::InternedSourceLocation::Get(&ctx, from_here));
       });
-
-#if DCHECK_IS_ON()
-  tls_construction_in_progress.Get().Set(false);
-#endif
 }
 
 ScopedBlockingCall::~ScopedBlockingCall() {
@@ -63,12 +58,10 @@ ScopedBlockingCallWithBaseSyncPrimitives::
     ScopedBlockingCallWithBaseSyncPrimitives(const Location& from_here,
                                              BlockingType blocking_type)
     : UncheckedScopedBlockingCall(
-          from_here,
           blocking_type,
           UncheckedScopedBlockingCall::BlockingCallType::kBaseSyncPrimitives) {
 #if DCHECK_IS_ON()
-  DCHECK(!tls_construction_in_progress.Get().Get());
-  tls_construction_in_progress.Get().Set(true);
+  const AutoReset<bool> resetter(&construction_in_progress, true, false);
 #endif
 
   internal::AssertBaseSyncPrimitivesAllowed();
@@ -80,10 +73,6 @@ ScopedBlockingCallWithBaseSyncPrimitives::
         source_location_data->set_file_name(from_here.file_name());
         source_location_data->set_function_name(from_here.function_name());
       });
-
-#if DCHECK_IS_ON()
-  tls_construction_in_progress.Get().Set(false);
-#endif
 }
 
 ScopedBlockingCallWithBaseSyncPrimitives::

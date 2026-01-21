@@ -7,12 +7,9 @@
 #include "base/command_line.h"
 #include "content/shell/common/shell_switches.h"
 
-@interface ShellRenderWidgetHostViewMacDelegate () {
+@implementation ShellRenderWidgetHostViewMacDelegate {
   BOOL _drop_events;
 }
-@end
-
-@implementation ShellRenderWidgetHostViewMacDelegate
 
 - (id)init {
   if ((self = [super init])) {
@@ -22,14 +19,9 @@
   }
   return self;
 }
+
 - (BOOL)handleEvent:(NSEvent*)event {
   return _drop_events;
-}
-
-- (void)beginGestureWithEvent:(NSEvent*)event {
-}
-
-- (void)endGestureWithEvent:(NSEvent*)event {
 }
 
 - (void)touchesMovedWithEvent:(NSEvent*)event {
@@ -42,10 +34,6 @@
 }
 
 - (void)touchesEndedWithEvent:(NSEvent*)event {
-}
-
-- (void)rendererHandledWheelEvent:(const blink::WebMouseWheelEvent&)event
-                         consumed:(BOOL)consumed {
 }
 
 - (void)rendererHandledGestureScrollEvent:(const blink::WebGestureEvent&)event

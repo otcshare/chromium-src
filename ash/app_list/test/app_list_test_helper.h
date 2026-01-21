@@ -11,8 +11,11 @@
 #include "ash/app_list/app_list_metrics.h"
 #include "ash/app_list/model/app_list_test_model.h"
 #include "ash/app_list/model/search/search_model.h"
+#include "ash/app_list/quick_app_access_model.h"
 #include "ash/app_list/test_app_list_client.h"
+#include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/test/ash_test_color_generator.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/animation/tween.h"
 
 namespace base {
@@ -26,7 +29,7 @@ class View;
 namespace ash {
 
 class AppListBubbleAppsPage;
-class AppListBubbleAssistantPage;
+class AppListBubbleAppsCollectionsPage;
 class AppListBubbleSearchPage;
 class AppListBubbleView;
 class AppListControllerImpl;
@@ -35,7 +38,7 @@ class AppListView;
 class AppsContainerView;
 class ContinueSectionView;
 class PagedAppsGridView;
-class ProductivityLauncherSearchView;
+class AppListSearchView;
 class RecentAppsView;
 class ScrollableAppsGridView;
 class SearchBoxView;
@@ -126,6 +129,10 @@ class AppListTestHelper {
                                    IconColorType color_type,
                                    bool set_name);
 
+  // Similar to `AddAppItems()` but provides the option to set items an initial
+  // collection.
+  void AddAppListItemsWithCollection(AppCollection collection_id, int num_apps);
+
   // Adds `num_results` to continue section in the app list.
   void AddContinueSuggestionResults(int num_results);
 
@@ -150,7 +157,6 @@ class AppListTestHelper {
   ContinueSectionView* GetFullscreenContinueSectionView();
   SearchResultPageView* GetFullscreenSearchResultPageView();
   SearchResultPageAnchoredDialog* GetFullscreenSearchPageDialog();
-  ProductivityLauncherSearchView* GetProductivityLauncherSearchView();
   views::View* GetFullscreenLauncherAppsSeparatorView();
 
   // Whether the fullscreen/peeking launcher is showing the search results view.
@@ -164,18 +170,23 @@ class AppListTestHelper {
   SearchBoxView* GetBubbleSearchBoxView();
   AppListFolderView* GetBubbleFolderView();
   AppListBubbleAppsPage* GetBubbleAppsPage();
+  AppListBubbleAppsCollectionsPage* GetBubbleAppsCollectionsPage();
   ContinueSectionView* GetBubbleContinueSectionView();
   RecentAppsView* GetBubbleRecentAppsView();
   ScrollableAppsGridView* GetScrollableAppsGridView();
+  views::View* GetAppCollectionsSectionsContainer();
   AppListBubbleSearchPage* GetBubbleSearchPage();
   SearchResultPageAnchoredDialog* GetBubbleSearchPageDialog();
-  AppListBubbleAssistantPage* GetBubbleAssistantPage();
   SearchModel::SearchResults* GetSearchResults();
   views::View* GetBubbleLauncherAppsSeparatorView();
   std::vector<ash::AppListSearchResultCategory>* GetOrderedResultCategories();
+  AppListSearchView* GetBubbleAppListSearchView();
 
   test::AppListTestModel* model() { return &model_; }
   SearchModel* search_model() { return &search_model_; }
+  QuickAppAccessModel* quick_app_access_model() {
+    return &quick_app_access_model_;
+  }
   TestAppListClient* app_list_client() { return app_list_client_.get(); }
 
  private:
@@ -184,7 +195,8 @@ class AppListTestHelper {
 
   test::AppListTestModel model_;
   SearchModel search_model_;
-  AppListControllerImpl* app_list_controller_ = nullptr;
+  QuickAppAccessModel quick_app_access_model_;
+  raw_ptr<AppListControllerImpl> app_list_controller_ = nullptr;
   std::unique_ptr<TestAppListClient> app_list_client_;
 
   AshTestColorGenerator icon_color_generator_{/*default_color=*/SK_ColorRED};

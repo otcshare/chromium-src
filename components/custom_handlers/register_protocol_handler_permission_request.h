@@ -5,13 +5,15 @@
 #ifndef COMPONENTS_CUSTOM_HANDLERS_REGISTER_PROTOCOL_HANDLER_PERMISSION_REQUEST_H_
 #define COMPONENTS_CUSTOM_HANDLERS_REGISTER_PROTOCOL_HANDLER_PERMISSION_REQUEST_H_
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "components/custom_handlers/protocol_handler.h"
 #include "components/permissions/permission_request.h"
+#include "components/permissions/permission_request_data.h"
 
 namespace permissions {
 enum class RequestType;
+struct PermissionPromptDecision;
 }  // namespace permissions
 
 class GURL;
@@ -42,10 +44,9 @@ class RegisterProtocolHandlerPermissionRequest
       permissions::PermissionRequest* other_request) const override;
   std::u16string GetMessageTextFragment() const override;
 
-  void PermissionDecided(ContentSetting result,
-                         bool is_one_time,
-                         bool is_final_decision);
-  void DeleteRequest();
+  void PermissionDecided(
+      const permissions::PermissionPromptDecision& decision,
+      const permissions::PermissionRequestData& request_data);
 
   raw_ptr<custom_handlers::ProtocolHandlerRegistry> registry_;
   ProtocolHandler handler_;
@@ -57,4 +58,4 @@ class RegisterProtocolHandlerPermissionRequest
 
 }  // namespace custom_handlers
 
-#endif  // COMONENTS_CUSTOM_HANDLERS_REGISTER_PROTOCOL_HANDLER_PERMISSION_REQUEST_H_
+#endif  // COMPONENTS_CUSTOM_HANDLERS_REGISTER_PROTOCOL_HANDLER_PERMISSION_REQUEST_H_

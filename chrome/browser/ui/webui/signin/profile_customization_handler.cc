@@ -7,9 +7,9 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
@@ -17,13 +17,15 @@
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/profile_picker.h"
-#include "chrome/browser/ui/signin/profile_colors_util.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/profiles/profile_colors_util.h"
+#include "chrome/browser/ui/profiles/profile_customization_util.h"
+#include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "signin_url_utils.h"
@@ -99,7 +101,7 @@ void ProfileCustomizationHandler::OnProfileThemeColorsChanged(
       profiles::GetIconsAndLabelsForProfileAvatarSelector(profile_->GetPath()));
 }
 
-void ProfileCustomizationHandler::OnProfileHostedDomainChanged(
+void ProfileCustomizationHandler::OnProfileIsManagedChanged(
     const base::FilePath& profile_path) {
   UpdateProfileInfo(profile_path);
 }
@@ -134,28 +136,31 @@ void ProfileCustomizationHandler::HandleDone(const base::Value::List& args) {
 
   base::TrimWhitespace(profile_name, base::TRIM_ALL, &profile_name);
   DCHECK(!profile_name.empty());
-  GetProfileEntry()->SetLocalProfileName(profile_name,
-                                         /*is_default_name=*/false);
-  // Local profile is created at first as ephemeral and this is changed when
-  // customization is successfully completed.
+
   const GURL& url = web_ui()->GetWebContents()->GetVisibleURL();
   if (GetProfileCustomizationStyle(url) ==
       ProfileCustomizationStyle::kLocalProfileCreation) {
-    GetProfileEntry()->SetIsOmitted(false);
-    if (!profile_->GetPrefs()->GetBoolean(prefs::kForceEphemeralProfiles)) {
-      GetProfileEntry()->SetIsEphemeral(false);
-    }
+    // The local profile is created at first as ephemeral and its creation is
+    // finalized when customization is successfully completed.
+    FinalizeNewProfileSetup(profile_, profile_name, /*is_default_name=*/false);
+  } else {
+    // TODO(crbug.com/40264199): Look into whether this branch should be also
+    // covered by calling FinalizeNewProfileSetup().
+    GetProfileEntry()->SetLocalProfileName(profile_name,
+                                           /*is_default_name=*/false);
   }
 
-  if (completion_callback_)
+  if (completion_callback_) {
     std::move(completion_callback_).Run(CustomizationResult::kDone);
+  }
 }
 
 void ProfileCustomizationHandler::HandleSkip(const base::Value::List& args) {
   CHECK_EQ(0u, args.size());
 
-  if (completion_callback_)
+  if (completion_callback_) {
     std::move(completion_callback_).Run(CustomizationResult::kSkip);
+  }
 }
 
 void ProfileCustomizationHandler::HandleDeleteProfile(
@@ -167,9 +172,7 @@ void ProfileCustomizationHandler::HandleDeleteProfile(
       ProfilePicker::EntryPoint::kOpenNewWindowAfterProfileDeletion));
   // Since the profile is ephemeral, closing all browser windows triggers the
   // deletion.
-  BrowserList::CloseAllBrowsersWithProfile(
-      profile_, BrowserList::CloseCallback(), BrowserList::CloseCallback(),
-      /*skip_beforeunload=*/true);
+  chrome::CloseAllBrowsersWithProfile(profile_, /*skip_beforeunload=*/true);
 }
 
 void ProfileCustomizationHandler::HandleSetAvatarIcon(
@@ -183,8 +186,9 @@ void ProfileCustomizationHandler::HandleSetAvatarIcon(
 void ProfileCustomizationHandler::UpdateProfileInfo(
     const base::FilePath& profile_path) {
   DCHECK(IsJavascriptAllowed());
-  if (profile_path != profile_->GetPath())
+  if (profile_path != profile_->GetPath()) {
     return;
+  }
   FireWebUIListener("on-profile-info-changed", GetProfileInfoValue());
 }
 
@@ -200,10 +204,12 @@ base::Value::Dict ProfileCustomizationHandler::GetProfileInfoValue() {
       profiles::GetSizedAvatarIcon(entry->GetAvatarIcon(avatar_icon_size),
                                    avatar_icon_size, avatar_icon_size);
   dict.Set("pictureUrl", webui::GetBitmapDataUrl(icon.AsBitmap()));
-  dict.Set("isManaged", AccountInfo::IsManaged(entry->GetHostedDomain()));
+  dict.Set("isManaged", entry->GetIsManaged() == signin::Tribool::kTrue);
+  dict.Set("hasEnterpriseLabel", !entry->GetEnterpriseProfileLabel().empty());
   std::u16string gaia_name = entry->GetGAIANameToDisplay();
-  if (gaia_name.empty())
+  if (gaia_name.empty()) {
     gaia_name = entry->GetLocalProfileName();
+  }
   dict.Set("welcomeTitle", l10n_util::GetStringFUTF8(
                                IDS_PROFILE_CUSTOMIZATION_WELCOME, gaia_name));
   return dict;

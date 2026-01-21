@@ -7,9 +7,8 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
-#include "components/cronet/android/cronet_tests_jni_headers/ExperimentalOptionsTest_jni.h"
 #include "components/cronet/android/test/cronet_test_util.h"
 #include "components/cronet/url_request_context_config.h"
 #include "net/base/address_family.h"
@@ -22,12 +21,15 @@
 #include "net/dns/public/host_resolver_source.h"
 #include "net/url_request/url_request_context.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/cronet/android/cronet_tests_jni_headers/ExperimentalOptionsTest_jni.h"
+
+using base::android::JavaRef;
 
 namespace cronet {
 
 namespace {
-void WriteToHostCacheOnNetworkThread(jlong jcontext_adapter,
+void WriteToHostCacheOnNetworkThread(int64_t jcontext_adapter,
                                      const std::string& address_string) {
   net::URLRequestContext* context =
       TestUtil::GetURLRequestContext(jcontext_adapter);
@@ -55,18 +57,20 @@ void WriteToHostCacheOnNetworkThread(jlong jcontext_adapter,
 
 static void JNI_ExperimentalOptionsTest_WriteToHostCache(
     JNIEnv* env,
-    jlong jcontext_adapter,
-    const JavaParamRef<jstring>& jaddress) {
+    int64_t jcontext_adapter,
+    const JavaRef<jstring>& jaddress) {
   TestUtil::RunAfterContextInit(
       jcontext_adapter,
       base::BindOnce(&WriteToHostCacheOnNetworkThread, jcontext_adapter,
                      base::android::ConvertJavaStringToUTF8(env, jaddress)));
 }
 
-static jboolean
+static bool
 JNI_ExperimentalOptionsTest_ExperimentalOptionsParsingIsAllowedToFail(
     JNIEnv* env) {
   return URLRequestContextConfig::ExperimentalOptionsParsingIsAllowedToFail();
 }
 
 }  // namespace cronet
+
+DEFINE_JNI(ExperimentalOptionsTest)

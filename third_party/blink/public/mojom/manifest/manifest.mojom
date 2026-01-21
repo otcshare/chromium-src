@@ -4,15 +4,15 @@
 
 module blink.mojom;
 
-import "services/device/public/mojom/screen_orientation_lock_types.mojom";
 import "mojo/public/mojom/base/string16.mojom";
+import "services/device/public/mojom/screen_orientation_lock_types.mojom";
 import "third_party/blink/public/mojom/manifest/display_mode.mojom";
-import "third_party/blink/public/mojom/manifest/capture_links.mojom";
 import "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom";
-import "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom";
+import "services/network/public/mojom/permissions_policy/permissions_policy.mojom";
+import "third_party/blink/public/mojom/safe_url_pattern.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
-import "url/mojom/url.mojom";
 import "url/mojom/origin.mojom";
+import "url/mojom/url.mojom";
 
 
 // The Manifest structure is an internal representation of the Manifest file
@@ -22,20 +22,45 @@ import "url/mojom/origin.mojom";
 // if the manifest failed to parse.
 [JavaClassName="WebManifest"]
 struct Manifest {
+  enum TextDirection {
+    // Text direction is unknown.
+    kAuto,
+    // Left-to-right text.
+    kLTR,
+    // Right-to-left text.
+    kRTL,
+  };
+
+  // The URL this manifest was loaded from. This can be an empty URL if this is
+  // an automatically generated "default" manifest.
+  url.mojom.Url manifest_url;
+
+  TextDirection dir;
+
   mojo_base.mojom.String16? name;
 
   mojo_base.mojom.String16? short_name;
 
   mojo_base.mojom.String16? description;
 
-  // Defaults to start_url with origin stripped when id field is not present.
-  mojo_base.mojom.String16? id;
+  // This is empty or invalid iff the start_url is empty or invalid.
+  url.mojom.Url id;
 
+  // Set to true if the json specified a specific value for the id.
+  bool has_custom_id;
+
+  // This defaults to the document_url. See `has_valid_specified_start_url` to know if
+  // this was specified by the manifest json itself.
   url.mojom.Url start_url;
+
+  // True if the json specified a start_url.
+  bool has_valid_specified_start_url;
 
   DisplayMode display;
 
-  array<DisplayMode> display_override;
+  array<DisplayOverrideItem> display_override;
+
+  array<SafeUrlPattern> borderless_url_patterns;
 
   device.mojom.ScreenOrientationLockType orientation;
 
@@ -57,10 +82,10 @@ struct Manifest {
   // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/URLProtocolHandler/explainer.md
   array<ManifestProtocolHandler> protocol_handlers;
 
-  // TODO(crbug.com/1072058): This field is non-standard and part of an
+  // TODO(crbug.com/1250011): This field is non-standard and part of an
   // experiment. See:
-  // https://github.com/WICG/pwa-url-handler/blob/main/explainer.md
-  array<ManifestUrlHandler> url_handlers;
+  // https://github.com/WICG/manifest-incubations/blob/gh-pages/scope_extensions-explainer.md
+  array<ManifestScopeExtension> scope_extensions;
 
   // TODO(crbug.com/1006642): This field is non-standard and part of an
   // experiment. See:
@@ -79,6 +104,13 @@ struct Manifest {
   // or there is a parsing failure.
   bool prefer_related_applications;
 
+  // A list of web apps that this web app intends to replace, with optional
+  // install URLs.
+  array<ManifestMigrateFrom> migrate_from;
+
+  // The app that this PWA intends to migrate to.
+  ManifestMigrateTo? migrate_to;
+
   // TODO(https://crbug.com/657632): Numeric types are not nullable. =(
   bool has_theme_color;
   uint32 theme_color;
@@ -93,19 +125,12 @@ struct Manifest {
   // filename, query, and fragment removed if not present.
   url.mojom.Url scope;
 
-  // TODO(crbug.com/1163398): This field is non-standard and part of a Chrome
-  // experiment. See:
-  // https://github.com/WICG/web-app-launch/blob/main/declarative_link_capturing.md#proposal
-  // As such, this field should not be exposed by default.
-  CaptureLinks capture_links;
+  array<network.mojom.ParsedPermissionsPolicyDeclaration> permissions_policy;
 
-  // TODO(b/245352075): Remove this field.
-  // TODO(crbug.com/1212263): This field is non-standard and part of a Chrome
-  // experiment. See:
-  // https://github.com/robbiemc/pwa-isolated-storage/blob/main/explainer.md
-  bool isolated_storage;
-
-  array<ParsedPermissionsPolicyDeclaration> permissions_policy;
+  // TODO(crbug.com/454569670): This field is non-standard and used for
+  // unmanaged IWA installs.
+  // See: https://github.com/WICG/isolated-web-apps
+  url.mojom.Url? update_manifest_url;
 
   // TODO(crbug.com/1231886): This field is non-standard and part of a Chrome
   // experiment. See:
@@ -118,11 +143,7 @@ struct Manifest {
   // A mapping of locales to their translations.
   map<mojo_base.mojom.String16, ManifestTranslationItem> translations;
 
-  // TODO(crbug.com/1271804): This field is non-standard and part of a Chrome
-  // experiment. See:
-  // https://github.com/WICG/manifest-incubations/blob/gh-pages/user-preferences-explainer.md
-  ManifestUserPreferences? user_preferences;
-
+  // TODO(b:340126786): Remove these obsolete fields.
   // TODO(crbug.com/1318305): This field is non-standard and part of a Chrome
   // experiment. See: https://github.com/w3c/manifest/issues/1045
   bool has_dark_theme_color;
@@ -134,6 +155,33 @@ struct Manifest {
   // experiment. See:
   // https://github.com/WICG/manifest-incubations/blob/gh-pages/tabbed-mode-explainer.md
   ManifestTabStrip? tab_strip;
+
+  // TODO(crbug.com/1444407): This field is non-standard and part of an
+  // experiment. See: https://github.com/WICG/isolated-web-apps
+  mojo_base.mojom.String16? version;
+
+  // Localized fields map locales with localized value.
+  // See: https://www.w3.org/TR/appmanifest/#x_localized-members
+  map<Locale, ManifestLocalizedTextObject>? name_localized;
+  map<Locale, ManifestLocalizedTextObject>? short_name_localized;
+  map<Locale, ManifestLocalizedTextObject>? description_localized;
+  map<Locale, array<ManifestImageResource>>? icons_localized;
+};
+
+struct ManifestLocalizedTextObject {
+  // value is required
+  mojo_base.mojom.String16 value;
+
+  Manifest.TextDirection? dir;
+
+  mojo_base.mojom.String16? lang;
+};
+
+// Wrapper struct for BCP 47 locale tags. This is used as a map key for
+// localized manifest fields and will be converted to icu::Locale on the C++
+// side via StructTraits.
+struct Locale {
+  string tag;
 };
 
 // Structure representing a Shortcut Item per the Manifest specification, see:
@@ -152,6 +200,11 @@ struct ManifestShortcutItem {
   url.mojom.Url url;
 
   array<ManifestImageResource> icons;
+
+  map<Locale, ManifestLocalizedTextObject>? name_localized;
+  map<Locale, ManifestLocalizedTextObject>? short_name_localized;
+  map<Locale, ManifestLocalizedTextObject>? description_localized;
+  map<Locale, array<ManifestImageResource>>? icons_localized;
 };
 
 // Structure representing an icon as per the Manifest specification, see:
@@ -213,11 +266,12 @@ struct ManifestProtocolHandler {
   url.mojom.Url url;
 };
 
-struct ManifestUrlHandler {
+struct ManifestScopeExtension {
   url.mojom.Origin origin;
   // A boolean that is used to show if a wildcard is present for the origin.
-  // If true, the application indicates that it wants to handle all subdomains
-  // of |origin|. If false, the application only wants to handle |origin|.
+  // If true, the application indicates that it wants to extend its scope to all
+  // subdomains of |origin|. If false, the application only wants to extend its
+  // scope to |origin|.
   bool has_origin_wildcard;
 };
 
@@ -328,25 +382,39 @@ struct ManifestTranslationItem {
   mojo_base.mojom.String16? description;
 };
 
-// Structure representing overrides for certain user preferences.
-struct ManifestUserPreferences {
-  ManifestUserPreferenceOverrides? color_scheme_dark;
+// Enumeration of possible behaviors for the migration.
+enum ManifestMigrationBehavior {
+  // The migration is suggested (default).
+  kSuggest,
+  // The migration is forced.
+  kForce,
 };
 
-// Structure representing manifest fields that can be overridden given certain
-// user preferences (eg. dark mode). All fields are optional.
-struct ManifestUserPreferenceOverrides {
-  bool has_theme_color;
-  uint32 theme_color;
+// Structure representing a migration source for a PWA (migrate_from).
+struct ManifestMigrateFrom {
+  // The manifest ID of the app from which to migrate.
+  url.mojom.Url id;
 
-  bool has_background_color;
-  uint32 background_color;
+  // A URL for a page that should link to a manifest with the given ID.
+  url.mojom.Url? install_url;
+
+  // The behavior of the migration.
+  ManifestMigrationBehavior behavior;
+};
+
+// Structure representing a migration target for a PWA (migrate_to).
+struct ManifestMigrateTo {
+  // The manifest ID of the app to which to migrate.
+  url.mojom.Url id;
+
+  // A URL for a page that should link to a manifest with the given ID.
+  url.mojom.Url install_url;
 };
 
 // Structure representing customizations to the tab strip.
 struct ManifestTabStrip {
   HomeTabUnion home_tab;
-  NewTabButtonUnion new_tab_button;
+  NewTabButtonParams new_tab_button;
 };
 
 // Represents whether a particular tab strip customization is present or not.
@@ -361,16 +429,14 @@ union HomeTabUnion {
   HomeTabParams params;
 };
 
-union NewTabButtonUnion {
-  TabStripMemberVisibility visibility;
-  NewTabButtonParams params;
-};
-
 // Structure representing the home tab customization to the tab strip.
 struct HomeTabParams {
   // If the array is empty, the platform can choose what icon to use. This is
   // the same as setting 'auto' on the icons field.
   array<ManifestImageResource> icons;
+
+  // TODO(crbug.com/1381374): Use URLPatternList once available.
+  array<SafeUrlPattern> scope_patterns;
 };
 
 // Structure representing the new tab button customization to the tab strip.
@@ -393,4 +459,38 @@ struct ManifestError {
   bool critical;
   uint32 line;
   uint32 column;
+};
+
+// Possible results of requesting the manifest for a document.
+enum ManifestRequestResult {
+  // Something unexpectedly went wrong, no default manifest will be returned
+  // with this response.
+  kUnexpectedFailure,
+  // This page isn't allowed to have a manifest, for example because it has a
+  // unique origin. No default manifest will be returned, but the manifest url
+  // (if any) specified in the page is still returned.
+  kNoManifestAllowed,
+  // The page does not specify a manifest, a default manifest is returned
+  // instead.
+  kNoManifestSpecified,
+  // The manifest failed to fetch or failed to parse. A default manifest will
+  // be returned in addition to the manifest URL the page specified.
+  kManifestFailedToFetch,
+  kManifestFailedToParse,
+  // Success, the manifest was loaded from the URL specified by the page.
+  kSuccess
+};
+
+// Represents an item in the `display_override` list.
+struct DisplayOverrideItem {
+  // The display mode of this item.
+  DisplayMode display;
+
+  // The URL patterns where this display mode applies. An empty list means the
+  // display mode applies to all URLs.
+  //
+  // Note the parser does not validate that URL patterns are same-origin or in
+  // scope. Consumers should verify the pattern is within the app scope before
+  // applying the display mode.
+  array<SafeUrlPattern> url_patterns;
 };

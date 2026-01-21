@@ -7,6 +7,7 @@
 #include <wrl/event.h>
 #include <wrl/implements.h>
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/webshare/win/fake_buffer.h"
@@ -215,13 +216,13 @@ TEST(FakeDataWriterFactoryTest, WriteBytes) {
   byte* raw_buffer;
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
   ASSERT_EQ(raw_buffer[0], 'h');
-  ASSERT_EQ(raw_buffer[1], 'i');
-  ASSERT_EQ(raw_buffer[2], ' ');
-  ASSERT_EQ(raw_buffer[3], 't');
-  ASSERT_EQ(raw_buffer[4], 'h');
-  ASSERT_EQ(raw_buffer[5], 'e');
-  ASSERT_EQ(raw_buffer[6], 'r');
-  ASSERT_EQ(raw_buffer[7], 'e');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[1]), 'i');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[2]), ' ');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[3]), 't');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[4]), 'h');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[5]), 'e');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[6]), 'r');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[7]), 'e');
 
   // Cleanup
   ASSERT_HRESULT_SUCCEEDED(stream->Close());

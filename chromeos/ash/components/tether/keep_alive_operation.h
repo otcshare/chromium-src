@@ -6,18 +6,11 @@
 #define CHROMEOS_ASH_COMPONENTS_TETHER_KEEP_ALIVE_OPERATION_H_
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/tether/message_transfer_operation.h"
-
-namespace ash::device_sync {
-class DeviceSyncClient;
-}
-
-namespace ash::secure_channel {
-class SecureChannelClient;
-}
 
 namespace ash::tether {
 
@@ -28,18 +21,16 @@ class KeepAliveOperation : public MessageTransferOperation {
   class Factory {
    public:
     static std::unique_ptr<KeepAliveOperation> Create(
-        multidevice::RemoteDeviceRef device_to_connect,
-        device_sync::DeviceSyncClient* device_sync_client,
-        secure_channel::SecureChannelClient* secure_channel_client);
+        const TetherHost& tether_host,
+        raw_ptr<HostConnection::Factory> host_connection_factory);
 
     static void SetFactoryForTesting(Factory* factory);
 
    protected:
     virtual ~Factory();
     virtual std::unique_ptr<KeepAliveOperation> CreateInstance(
-        multidevice::RemoteDeviceRef device_to_connect,
-        device_sync::DeviceSyncClient* device_sync_client,
-        secure_channel::SecureChannelClient* secure_channel_client) = 0;
+        const TetherHost& tether_host,
+        raw_ptr<HostConnection::Factory> host_connection_factory) = 0;
 
    private:
     static Factory* factory_instance_;
@@ -50,7 +41,6 @@ class KeepAliveOperation : public MessageTransferOperation {
     // |device_status| points to a valid DeviceStatus if the operation completed
     // successfully and is null if the operation was not successful.
     virtual void OnOperationFinished(
-        multidevice::RemoteDeviceRef remote_device,
         std::unique_ptr<DeviceStatus> device_status) = 0;
   };
 
@@ -63,16 +53,13 @@ class KeepAliveOperation : public MessageTransferOperation {
   void RemoveObserver(Observer* observer);
 
  protected:
-  KeepAliveOperation(
-      multidevice::RemoteDeviceRef device_to_connect,
-      device_sync::DeviceSyncClient* device_sync_client,
-      secure_channel::SecureChannelClient* secure_channel_client);
+  KeepAliveOperation(const TetherHost& tether_host,
+                     raw_ptr<HostConnection::Factory> host_connection_factory);
 
   // MessageTransferOperation:
-  void OnDeviceAuthenticated(
-      multidevice::RemoteDeviceRef remote_device) override;
-  void OnMessageReceived(std::unique_ptr<MessageWrapper> message_wrapper,
-                         multidevice::RemoteDeviceRef remote_device) override;
+  void OnDeviceAuthenticated() override;
+  void OnMessageReceived(
+      std::unique_ptr<MessageWrapper> message_wrapper) override;
   void OnOperationFinished() override;
   MessageType GetMessageTypeForConnection() override;
 
@@ -87,8 +74,7 @@ class KeepAliveOperation : public MessageTransferOperation {
 
   void SetClockForTest(base::Clock* clock_for_test);
 
-  multidevice::RemoteDeviceRef remote_device_;
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
   base::ObserverList<Observer>::Unchecked observer_list_;
 
   base::Time keep_alive_tickle_request_start_time_;

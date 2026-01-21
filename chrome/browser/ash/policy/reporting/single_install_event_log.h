@@ -7,10 +7,16 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <deque>
 #include <memory>
 #include <string>
+
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/numerics/safe_conversions.h"
 
 namespace policy {
 
@@ -54,7 +60,7 @@ class SingleInstallEventLog {
   // successful.
   static bool ParseIdFromFile(base::File* file,
                               ssize_t* size,
-                              std::unique_ptr<char[]>* package_buffer);
+                              base::HeapArray<char>* package_buffer);
 
   // Restores the event log from |file| into |log|. Returns |true| if the
   // self-delimiting format of the log was parsed successfully and further logs
@@ -88,7 +94,7 @@ SingleInstallEventLog<T>::SingleInstallEventLog(const std::string& id)
     : id_(id) {}
 
 template <typename T>
-SingleInstallEventLog<T>::~SingleInstallEventLog() {}
+SingleInstallEventLog<T>::~SingleInstallEventLog() = default;
 
 template <typename T>
 void SingleInstallEventLog<T>::Add(const T& event) {
@@ -109,49 +115,46 @@ bool SingleInstallEventLog<T>::Store(base::File* file) const {
   }
 
   ssize_t size = id_.size();
-  if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(&size),
-                              sizeof(size)) != sizeof(size)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(size))) {
     return false;
   }
 
-  if (file->WriteAtCurrentPos(id_.data(), size) != size) {
+  if (!file->WriteAtCurrentPosAndCheck(base::as_byte_span(id_))) {
     return false;
   }
 
   const int64_t incomplete = incomplete_;
-  if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(&incomplete),
-                              sizeof(incomplete)) != sizeof(incomplete)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(incomplete))) {
     return false;
   }
 
   const ssize_t entries = events_.size();
-  if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(&entries),
-                              sizeof(entries)) != sizeof(entries)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(entries))) {
     return false;
   }
 
   for (const T& event : events_) {
+    base::HeapArray<char> buffer;
     size = event.ByteSizeLong();
-    std::unique_ptr<char[]> buffer;
-
     if (size > kMaxBufferSize) {
       // Log entry too large. Skip it.
       size = 0;
     } else {
-      buffer = std::make_unique<char[]>(size);
-      if (!event.SerializeToArray(buffer.get(), size)) {
+      buffer = base::HeapArray<char>::Uninit(size);
+      if (!event.SerializeToArray(buffer.data(), size)) {
         // Log entry serialization failed. Skip it.
         size = 0;
       }
     }
-
-    if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(&size),
-                                sizeof(size)) != sizeof(size) ||
-        (size && file->WriteAtCurrentPos(buffer.get(), size) != size)) {
+    if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(size))) {
       return false;
     }
+    if (size) {
+      if (!file->WriteAtCurrentPosAndCheck(base::as_bytes(buffer.as_span()))) {
+        return false;
+      }
+    }
   }
-
   return true;
 }
 
@@ -170,18 +173,21 @@ template <typename T>
 bool SingleInstallEventLog<T>::ParseIdFromFile(
     base::File* file,
     ssize_t* size,
-    std::unique_ptr<char[]>* package_buffer) {
-  if (!file->IsValid())
+    base::HeapArray<char>* package_buffer) {
+  if (!file->IsValid()) {
     return false;
-  if (file->ReadAtCurrentPos(reinterpret_cast<char*>(size), sizeof(*size)) !=
+  }
+  if (file->ReadAtCurrentPos(base::byte_span_from_ref(*size)) !=
           sizeof(*size) ||
       *size < 0 || *size > kMaxBufferSize) {
     return false;
   }
-  *package_buffer = std::make_unique<char[]>(*size);
+  *package_buffer = base::HeapArray<char>::Uninit(*size);
 
-  if (file->ReadAtCurrentPos((*package_buffer).get(), *size) != *size)
+  if (file->ReadAtCurrentPos(base::as_writable_bytes(
+          package_buffer->as_span())) != base::checked_cast<size_t>(*size)) {
     return false;
+  }
   return true;
 }
 
@@ -190,19 +196,19 @@ bool SingleInstallEventLog<T>::LoadEventLogFromFile(
     base::File* file,
     SingleInstallEventLog<T>* log) {
   int64_t incomplete;
-  if (file->ReadAtCurrentPos(reinterpret_cast<char*>(&incomplete),
-                             sizeof(incomplete)) != sizeof(incomplete)) {
+  if (file->ReadAtCurrentPos(base::byte_span_from_ref(incomplete)) !=
+      sizeof(incomplete)) {
     return false;
   }
   log->incomplete_ = incomplete;
   ssize_t entries;
-  if (file->ReadAtCurrentPos(reinterpret_cast<char*>(&entries),
-                             sizeof(entries)) != sizeof(entries)) {
+  if (file->ReadAtCurrentPos(base::byte_span_from_ref(entries)) !=
+      sizeof(entries)) {
     return false;
   }
   for (ssize_t i = 0; i < entries; ++i) {
     ssize_t size;
-    if (file->ReadAtCurrentPos(reinterpret_cast<char*>(&size), sizeof(size)) !=
+    if (file->ReadAtCurrentPos(base::byte_span_from_ref(size)) !=
             sizeof(size) ||
         size < 0 || size > kMaxBufferSize) {
       log->incomplete_ = true;
@@ -216,14 +222,15 @@ bool SingleInstallEventLog<T>::LoadEventLogFromFile(
       continue;
     }
 
-    std::unique_ptr<char[]> buffer = std::make_unique<char[]>(size);
-    if (file->ReadAtCurrentPos(buffer.get(), size) != size) {
+    auto buffer = base::HeapArray<char>::Uninit(size);
+    if (file->ReadAtCurrentPos(base::as_writable_bytes(buffer.as_span())) !=
+        base::checked_cast<size_t>(size)) {
       log->incomplete_ = true;
       return false;
     }
 
     T event;
-    if (event.ParseFromArray(buffer.get(), size)) {
+    if (event.ParseFromArray(buffer.data(), size)) {
       log->Add(event);
     } else {
       log->incomplete_ = true;

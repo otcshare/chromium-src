@@ -9,7 +9,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/win/async_operation.h"
@@ -58,7 +58,7 @@ FakeDeviceInformationCustomPairingWinrt::
     FakeDeviceInformationCustomPairingWinrt(
         Microsoft::WRL::ComPtr<FakeDeviceInformationPairingWinrt> pairing,
         DevicePairingKinds pairing_kind,
-        base::StringPiece display_pin)
+        std::string_view display_pin)
     : pairing_(std::move(pairing)),
       pairing_kind_(pairing_kind),
       display_pin_(display_pin) {}

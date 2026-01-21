@@ -4,8 +4,10 @@
 
 #include "gpu/command_buffer/service/command_buffer_direct.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
+#include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/transfer_buffer_manager.h"
 
 namespace gpu {
@@ -55,8 +57,9 @@ void CommandBufferDirect::SetGetBuffer(int32_t transfer_buffer_id) {
 scoped_refptr<Buffer> CommandBufferDirect::CreateTransferBuffer(
     uint32_t size,
     int32_t* id,
+    uint32_t alignment,
     TransferBufferAllocationOption option) {
-  return service_.CreateTransferBuffer(size, id);
+  return service_.CreateTransferBuffer(size, id, alignment);
 }
 
 void CommandBufferDirect::DestroyTransferBuffer(int32_t id) {
@@ -94,8 +97,6 @@ void CommandBufferDirect::OnRescheduleAfterFinished() {
   service_.SetScheduled(true);
 }
 
-void CommandBufferDirect::OnSwapBuffers(uint64_t swap_id, uint32_t flags) {}
-
 scoped_refptr<Buffer> CommandBufferDirect::CreateTransferBufferWithId(
     uint32_t size,
     int32_t id) {
@@ -104,6 +105,10 @@ scoped_refptr<Buffer> CommandBufferDirect::CreateTransferBufferWithId(
 
 void CommandBufferDirect::HandleReturnData(base::span<const uint8_t> data) {
   NOTIMPLEMENTED();
+}
+
+bool CommandBufferDirect::ShouldYield() {
+  return service_.ShouldYield();
 }
 
 }  // namespace gpu

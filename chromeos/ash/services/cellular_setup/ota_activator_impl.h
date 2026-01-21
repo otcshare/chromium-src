@@ -8,7 +8,8 @@
 #include <memory>
 #include <ostream>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -128,14 +129,14 @@ class OtaActivatorImpl : public OtaActivator,
   void FlushForTesting();
 
   mojo::Remote<mojom::ActivationDelegate> activation_delegate_;
-  NetworkStateHandler* network_state_handler_;
-  NetworkConnectionHandler* network_connection_handler_;
-  NetworkActivationHandler* network_activation_handler_;
+  raw_ptr<NetworkStateHandler> network_state_handler_;
+  raw_ptr<NetworkConnectionHandler> network_connection_handler_;
+  raw_ptr<NetworkActivationHandler> network_activation_handler_;
 
   NetworkStateHandlerScopedObservation network_state_handler_observer_{this};
 
   State state_ = State::kNotYetStarted;
-  absl::optional<mojom::CarrierPortalStatus> last_carrier_portal_status_;
+  std::optional<mojom::CarrierPortalStatus> last_carrier_portal_status_;
   std::string iccid_;
   bool has_sent_metadata_ = false;
   bool has_called_complete_activation_ = false;

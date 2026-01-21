@@ -1,18 +1,22 @@
 // Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 //
 // A benchmark to isolate the HTML parsing done in the Speedometer test,
 // for more stable benchmarking and profiling.
 
+#include <string_view>
+
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
+#include "base/strings/string_view_util.h"
 #include "testing/perf/perf_result_reporter.h"
 #include "testing/perf/perf_test.h"
-#include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
-#include "third_party/blink/renderer/core/testing/no_network_web_url_loader.h"
+#include "third_party/blink/renderer/core/testing/no_network_url_loader.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
@@ -34,14 +38,16 @@ TEST(HTMLParsePerfTest, Speedometer) {
 
   auto reporter = perf_test::PerfResultReporter("BlinkHTML", label);
 
-  scoped_refptr<SharedBuffer> serialized =
+  std::optional<Vector<char>> serialized =
       test::ReadFromFile(test::CoreTestDataPath(filename));
-  absl::optional<base::Value> json = base::JSONReader::Read(
-      base::StringPiece(serialized->Data(), serialized->size()));
+  CHECK(serialized);
+  std::optional<base::Value> json = base::JSONReader::Read(
+      base::as_string_view(*serialized), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!json.has_value()) {
     char msg[256];
-    snprintf(msg, sizeof(msg), "Skipping %s test because %s could not be read",
-             label, filename);
+    UNSAFE_TODO(snprintf(msg, sizeof(msg),
+                         "Skipping %s test because %s could not be read", label,
+                         filename));
     GTEST_SKIP_(msg);
   }
 
@@ -57,8 +63,8 @@ TEST(HTMLParsePerfTest, Speedometer) {
     base::ElapsedTimer html_timer;
     for (int i = 0; i < html_parse_iterations; ++i) {
       for (const base::Value& html : json->GetList()) {
-        WTF::String html_wtf(html.GetString());
-        document.body()->setInnerHTML(html_wtf);
+        String html_wtf(html.GetString());
+        document.body()->SetInnerHTMLWithoutTrustedTypes(html_wtf);
       }
     }
     base::TimeDelta html_time = html_timer.Elapsed();

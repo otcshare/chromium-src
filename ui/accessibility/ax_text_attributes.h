@@ -9,8 +9,11 @@
 #include <vector>
 
 #include "ui/accessibility/ax_base_export.h"
+#include "ui/accessibility/ax_enums.mojom-shared.h"
 
 namespace ui {
+
+struct AXNodeData;
 
 // A compact representation of text attributes, such as spelling markers and
 // style information, on an `AXNode`. This data represents a snapshot at a given
@@ -24,17 +27,20 @@ struct AX_BASE_EXPORT AXTextAttributes final {
   AXTextAttributes();
   ~AXTextAttributes();
 
+  explicit AXTextAttributes(const AXNodeData& node_data);
+
   AXTextAttributes(const AXTextAttributes& other) = delete;
   AXTextAttributes& operator=(const AXTextAttributes&) = delete;
 
   AXTextAttributes(AXTextAttributes&& other);
   AXTextAttributes& operator=(AXTextAttributes&& other);
 
-  bool operator==(const AXTextAttributes& other) const;
-
-  bool operator!=(const AXTextAttributes& other) const;
+  friend bool operator==(const AXTextAttributes&,
+                         const AXTextAttributes&) = default;
 
   bool IsUnset() const;
+
+  bool HasTextStyle(const ax::mojom::TextStyle text_style_enum) const;
 
   int32_t background_color = kUnsetValue;
   int32_t color = kUnsetValue;

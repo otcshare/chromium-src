@@ -5,7 +5,7 @@
 #ifndef CHROME_RENDERER_SUPERVISED_USER_SUPERVISED_USER_ERROR_PAGE_CONTROLLER_DELEGATE_IMPL_H_
 #define CHROME_RENDERER_SUPERVISED_USER_SUPERVISED_USER_ERROR_PAGE_CONTROLLER_DELEGATE_IMPL_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/common/supervised_user_commands.mojom.h"
 #include "chrome/renderer/supervised_user/supervised_user_error_page_controller_delegate.h"
@@ -40,8 +40,9 @@ class SupervisedUserErrorPageControllerDelegateImpl
   void GoBack() override;
   void RequestUrlAccessRemote(UrlAccessRequestInitiated callback) override;
   void RequestUrlAccessLocal(UrlAccessRequestInitiated callback) override;
-
-  void Feedback() override;
+#if BUILDFLAG(IS_ANDROID)
+  void LearnMore(base::OnceClosure open_help_page) override;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // content::RenderFrameObserver:
   void OnDestruct() override;

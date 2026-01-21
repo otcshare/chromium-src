@@ -13,7 +13,7 @@
 #include <set>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
@@ -132,7 +132,7 @@ class UsbDeviceHandleImpl : public UsbDeviceHandle {
 
   void ReportIsochronousTransferError(
       UsbDeviceHandle::IsochronousTransferCallback callback,
-      const std::vector<uint32_t> packet_lengths,
+      const std::vector<uint32_t>& packet_lengths,
       mojom::UsbTransferStatus status);
 
   // Submits a transfer and starts tracking it. Retains the buffer and copies

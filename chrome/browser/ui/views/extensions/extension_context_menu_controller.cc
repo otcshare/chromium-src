@@ -4,14 +4,19 @@
 
 #include "chrome/browser/ui/views/extensions/extension_context_menu_controller.h"
 
+#include <memory>
+#include <utility>
+
 #include "chrome/browser/extensions/extension_context_menu_model.h"
-#include "chrome/browser/ui/toolbar/toolbar_action_view_controller.h"
+#include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/animation/ink_drop_host_view.h"
+#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/menu_button_controller.h"
+#include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/flex_layout.h"
@@ -19,22 +24,27 @@
 #include "ui/views/view_class_properties.h"
 
 ExtensionContextMenuController::ExtensionContextMenuController(
-    ToolbarActionViewController* controller,
+    ToolbarActionViewModel* action_model,
+    Observer* observer,
     extensions::ExtensionContextMenuModel::ContextMenuSource
         context_menu_source)
-    : controller_(controller), context_menu_source_(context_menu_source) {}
+    : action_model_(action_model),
+      observer_(observer),
+      context_menu_source_(context_menu_source) {}
 
 ExtensionContextMenuController::~ExtensionContextMenuController() = default;
 
 void ExtensionContextMenuController::ShowContextMenuForViewImpl(
     views::View* source,
     const gfx::Point& point,
-    ui::MenuSourceType source_type) {
-  ui::MenuModel* model = controller_->GetContextMenu(context_menu_source_);
+    ui::mojom::MenuSourceType source_type) {
+  ui::MenuModel* menu_model =
+      action_model_->GetContextMenu(context_menu_source_);
 
   // It's possible the action doesn't have a context menu.
-  if (!model)
+  if (!menu_model) {
     return;
+  }
 
   int run_types =
       views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU;
@@ -45,14 +55,15 @@ void ExtensionContextMenuController::ShowContextMenuForViewImpl(
   // menu. Any action that would lead to the deletion of |this| first triggers
   // the closing of the menu through lost capture.
   menu_adapter_ = std::make_unique<views::MenuModelAdapter>(
-      model, base::BindRepeating(&ExtensionContextMenuController::OnMenuClosed,
-                                 base::Unretained(this)));
+      menu_model,
+      base::BindRepeating(&ExtensionContextMenuController::OnMenuClosed,
+                          base::Unretained(this)));
 
-  menu_ = menu_adapter_->CreateMenu();
+  std::unique_ptr<views::MenuItemView> menu = menu_adapter_->CreateMenu();
+  menu_runner_ =
+      std::make_unique<views::MenuRunner>(std::move(menu), run_types);
 
-  menu_runner_ = std::make_unique<views::MenuRunner>(menu_, run_types);
-
-  controller_->OnContextMenuShown();
+  observer_->OnContextMenuShown();
   menu_runner_->RunMenuAt(
       parent,
       static_cast<views::MenuButtonController*>(
@@ -67,7 +78,6 @@ bool ExtensionContextMenuController::IsMenuRunning() const {
 
 void ExtensionContextMenuController::OnMenuClosed() {
   menu_runner_.reset();
-  menu_ = nullptr;
-  controller_->OnContextMenuClosed();
+  observer_->OnContextMenuClosed();
   menu_adapter_.reset();
 }

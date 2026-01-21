@@ -12,12 +12,12 @@
 #include "base/test/mock_callback.h"
 #include "base/values.h"
 #include "chrome/browser/ash/kerberos/kerberos_credentials_manager.h"
-#include "chrome/browser/ash/login/users/mock_user_manager.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_client.h"
+#include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
@@ -26,8 +26,7 @@
 
 using ::base::test::RunClosure;
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 namespace {
 
@@ -37,22 +36,15 @@ constexpr char kOtherPrincipal[] = "icebear_cloud@EXAMPLE.COM";
 constexpr char kPassword[] = "m1sst1ped>_<";
 constexpr char kConfig[] = "[libdefaults]";
 
-std::unique_ptr<MockUserManager> CreateMockUserManager() {
-  std::unique_ptr<MockUserManager> mock_user_manager =
-      std::make_unique<testing::NiceMock<MockUserManager>>();
-  mock_user_manager->AddUser(AccountId::FromUserEmail(kProfileEmail));
-  return mock_user_manager;
-}
-
 }  // namespace
 
 class SmbKerberosCredentialsUpdaterTest : public testing::Test {
  public:
-  SmbKerberosCredentialsUpdaterTest()
-      : scoped_user_manager_(CreateMockUserManager()),
-        local_state_(TestingBrowserProcess::GetGlobal()) {
+  SmbKerberosCredentialsUpdaterTest() {
     // Enable Kerberos via policy.
     SetPref(prefs::kKerberosEnabled, base::Value(true));
+
+    user_manager_->AddUser(AccountId::FromUserEmail(kProfileEmail));
 
     // Initialize User, Profile and KerberosCredentialsManager.
     KerberosClient::InitializeFake();
@@ -60,7 +52,7 @@ class SmbKerberosCredentialsUpdaterTest : public testing::Test {
     profile_builder.SetProfileName(kProfileEmail);
     profile_ = profile_builder.Build();
     credentials_manager_ = std::make_unique<KerberosCredentialsManager>(
-        local_state_.Get(), profile_.get());
+        TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
   }
 
   ~SmbKerberosCredentialsUpdaterTest() override {
@@ -82,7 +74,7 @@ class SmbKerberosCredentialsUpdaterTest : public testing::Test {
   }
 
   void SetPref(const char* name, base::Value value) {
-    local_state_.Get()->SetManagedPref(
+    TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
         name, std::make_unique<base::Value>(std::move(value)));
   }
 
@@ -93,8 +85,8 @@ class SmbKerberosCredentialsUpdaterTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  user_manager::ScopedUserManager scoped_user_manager_;
-  ScopedTestingLocalState local_state_;
+  user_manager::TypedScopedUserManager<FakeChromeUserManager> user_manager_{
+      std::make_unique<FakeChromeUserManager>()};
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<KerberosCredentialsManager> credentials_manager_;
   std::unique_ptr<SmbKerberosCredentialsUpdater> credentials_updater_;
@@ -203,5 +195,4 @@ TEST_F(SmbKerberosCredentialsUpdaterTest, KerberosGetsEnabled) {
   EXPECT_EQ(credentials_updater_->active_account_name(), kPrincipal);
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

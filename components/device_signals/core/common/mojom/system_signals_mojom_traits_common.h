@@ -5,13 +5,13 @@
 #ifndef COMPONENTS_DEVICE_SIGNALS_CORE_COMMON_MOJOM_SYSTEM_SIGNALS_MOJOM_TRAITS_COMMON_H_
 #define COMPONENTS_DEVICE_SIGNALS_CORE_COMMON_MOJOM_SYSTEM_SIGNALS_MOJOM_TRAITS_COMMON_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "components/device_signals/core/common/common_types.h"
 #include "components/device_signals/core/common/mojom/system_signals.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 
@@ -31,19 +31,28 @@ struct StructTraits<device_signals::mojom::ExecutableMetadataDataView,
     return input.is_running;
   }
 
-  static absl::optional<std::vector<std::string>> public_keys_hashes(
+  static std::optional<std::vector<std::string>> public_keys_hashes(
       const device_signals::ExecutableMetadata& input) {
     return input.public_keys_hashes;
   }
 
-  static absl::optional<std::string> product_name(
+  static std::optional<std::string> product_name(
       const device_signals::ExecutableMetadata& input) {
     return input.product_name;
   }
 
-  static absl::optional<std::string> version(
+  static std::optional<std::string> version(
       const device_signals::ExecutableMetadata& input) {
     return input.version;
+  }
+
+  static bool is_os_verified(const device_signals::ExecutableMetadata& input) {
+    return input.is_os_verified;
+  }
+
+  static std::optional<std::string> subject_name(
+      const device_signals::ExecutableMetadata& input) {
+    return input.subject_name;
   }
 
   static bool Read(device_signals::mojom::ExecutableMetadataDataView data,
@@ -63,12 +72,12 @@ struct StructTraits<device_signals::mojom::FileSystemItemDataView,
     return input.presence;
   }
 
-  static absl::optional<std::string> sha256_hash(
+  static std::optional<std::string> sha256_hash(
       const device_signals::FileSystemItem& input) {
     return input.sha256_hash;
   }
 
-  static absl::optional<device_signals::ExecutableMetadata> executable_metadata(
+  static std::optional<device_signals::ExecutableMetadata> executable_metadata(
       const device_signals::FileSystemItem& input) {
     return input.executable_metadata;
   }

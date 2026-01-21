@@ -8,33 +8,36 @@
 
 #include <stddef.h>
 
-#include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/lazy_instance.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/extensions/api/preference/preference_helpers.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/preference/preference_helpers.h"
+#include "chrome/browser/font_pref_change_notifier.h"
 #include "chrome/browser/font_pref_change_notifier_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/font_settings.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/pref_names_util.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/font_list_async.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_prefs_helper.h"
 #include "extensions/browser/extension_prefs_helper_factory.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/common/api/types.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/mojom/api_permission_id.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "ui/gfx/win/direct_write.h"
@@ -43,6 +46,7 @@
 namespace extensions {
 
 namespace fonts = api::font_settings;
+using extensions::api::types::ChromeSettingScope;
 
 namespace {
 
@@ -84,7 +88,7 @@ void MaybeUnlocalizeFontName(std::string* font_name) {
 #if BUILDFLAG(IS_WIN)
   // Try to get the 'us-en' font name. If it is failing, use the first name
   // available.
-  absl::optional<std::string> localized_font_name =
+  std::optional<std::string> localized_font_name =
       gfx::win::RetrieveLocalizedFontName(*font_name, "us-en");
   if (!localized_font_name)
     localized_font_name = gfx::win::RetrieveLocalizedFontName(*font_name, "");
@@ -95,6 +99,57 @@ void MaybeUnlocalizeFontName(std::string* font_name) {
 }
 
 }  // namespace
+
+// This class observes pref changed events on a profile and dispatches the
+// corresponding extension API events to extensions.
+class FontSettingsEventRouter {
+ public:
+  // Constructor for observing pref changed events on `profile`. Stores a
+  // pointer to `profile` but does not take ownership. `profile` must be
+  // non-NULL and remain alive for the lifetime of the instance.
+  explicit FontSettingsEventRouter(Profile* profile);
+
+  FontSettingsEventRouter(const FontSettingsEventRouter&) = delete;
+  FontSettingsEventRouter& operator=(const FontSettingsEventRouter&) = delete;
+
+  virtual ~FontSettingsEventRouter();
+
+ private:
+  // Observes browser pref `pref_name`. When a change is observed, dispatches
+  // event `event_name` to extensions. A JavaScript object is passed to the
+  // extension event function with the new value of the pref in property `key`.
+  void AddPrefToObserve(const char* pref_name,
+                        events::HistogramValue histogram_value,
+                        const char* event_name,
+                        const char* key);
+
+  // Decodes a preference change for a font family map and invokes
+  // OnFontNamePrefChange with the right parameters.
+  void OnFontFamilyMapPrefChanged(const std::string& pref_name);
+
+  // Dispatches a changed event for the font setting for `generic_family` and
+  // `script` to extensions. The new value of the setting is the value of
+  // browser pref `pref_name`.
+  void OnFontNamePrefChanged(const std::string& pref_name,
+                             const std::string& generic_family,
+                             const std::string& script);
+
+  // Dispatches the setting changed event `event_name` to extensions. The new
+  // value of the setting is the value of browser pref `pref_name`. This value
+  // is passed in the JavaScript object argument to the extension event function
+  // under the key `key`.
+  void OnFontPrefChanged(events::HistogramValue histogram_value,
+                         const std::string& event_name,
+                         const std::string& key,
+                         const std::string& pref_name);
+
+  // Manages pref observation registration.
+  PrefChangeRegistrar registrar_;
+  FontPrefChangeNotifier::Registrar font_change_registrar_;
+
+  // Weak, owns us (transitively via ExtensionService).
+  raw_ptr<Profile> profile_;
+};
 
 FontSettingsEventRouter::FontSettingsEventRouter(Profile* profile)
     : profile_(profile) {
@@ -120,7 +175,7 @@ FontSettingsEventRouter::FontSettingsEventRouter(Profile* profile)
                    fonts::OnMinimumFontSizeChanged::kEventName, kPixelSizeKey);
 }
 
-FontSettingsEventRouter::~FontSettingsEventRouter() {}
+FontSettingsEventRouter::~FontSettingsEventRouter() = default;
 
 void FontSettingsEventRouter::AddPrefToObserve(
     const char* pref_name,
@@ -156,7 +211,6 @@ void FontSettingsEventRouter::OnFontNamePrefChanged(
 
   if (!pref->GetValue()->is_string()) {
     NOTREACHED();
-    return;
   }
   std::string font_name = pref->GetValue()->GetString();
   base::Value::List args;
@@ -195,8 +249,7 @@ FontSettingsAPI::FontSettingsAPI(content::BrowserContext* context)
     : font_settings_event_router_(
           new FontSettingsEventRouter(Profile::FromBrowserContext(context))) {}
 
-FontSettingsAPI::~FontSettingsAPI() {
-}
+FontSettingsAPI::~FontSettingsAPI() = default;
 
 static base::LazyInstance<BrowserContextKeyedAPIFactory<FontSettingsAPI>>::
     DestructorAtExit g_font_settings_api_factory = LAZY_INSTANCE_INITIALIZER;
@@ -212,25 +265,25 @@ ExtensionFunction::ResponseAction FontSettingsClearFontFunction::Run() {
   if (profile->IsOffTheRecord())
     return RespondNow(Error(kSetFromIncognitoError));
 
-  std::unique_ptr<fonts::ClearFont::Params> params(
-      fonts::ClearFont::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<fonts::ClearFont::Params> params =
+      fonts::ClearFont::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string pref_path = GetFontNamePrefPath(params->details.generic_family,
                                               params->details.script);
 
-  // Ensure |pref_path| really is for a registered per-script font pref.
+  // Ensure `pref_path` really is for a registered per-script font pref.
   EXTENSION_FUNCTION_VALIDATE(profile->GetPrefs()->FindPreference(pref_path));
 
   ExtensionPrefsHelper::Get(profile)->RemoveExtensionControlledPref(
-      extension_id(), pref_path, kExtensionPrefsScopeRegular);
+      extension_id(), pref_path, ChromeSettingScope::kRegular);
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction FontSettingsGetFontFunction::Run() {
-  std::unique_ptr<fonts::GetFont::Params> params(
-      fonts::GetFont::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<fonts::GetFont::Params> params =
+      fonts::GetFont::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string pref_path = GetFontNamePrefPath(params->details.generic_family,
                                               params->details.script);
@@ -266,26 +319,32 @@ ExtensionFunction::ResponseAction FontSettingsSetFontFunction::Run() {
   if (profile->IsOffTheRecord())
     return RespondNow(Error(kSetFromIncognitoError));
 
-  std::unique_ptr<fonts::SetFont::Params> params(
-      fonts::SetFont::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<fonts::SetFont::Params> params =
+      fonts::SetFont::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   std::string pref_path = GetFontNamePrefPath(params->details.generic_family,
                                               params->details.script);
 
-  // Ensure |pref_path| really is for a registered font pref.
+  // Ensure `pref_path` really is for a registered font pref.
   EXTENSION_FUNCTION_VALIDATE(profile->GetPrefs()->FindPreference(pref_path));
 
   ExtensionPrefsHelper::Get(profile)->SetExtensionControlledPref(
-      extension_id(), pref_path, kExtensionPrefsScopeRegular,
+      extension_id(), pref_path, ChromeSettingScope::kRegular,
       base::Value(params->details.font_id));
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction FontSettingsGetFontListFunction::Run() {
+#if BUILDFLAG(IS_ANDROID)
+  // Android does not support a mechanism to get "all installed fonts" like
+  // Windows/Mac/Linux.
+  return RespondNow(WithArguments(base::Value::List()));
+#else
   content::GetFontListAsync(
       BindOnce(&FontSettingsGetFontListFunction::FontListHasLoaded, this));
   return RespondLater();
+#endif
 }
 
 void FontSettingsGetFontListFunction::FontListHasLoaded(
@@ -301,14 +360,12 @@ FontSettingsGetFontListFunction::CopyFontsToResult(
   for (const auto& entry : fonts) {
     if (!entry.is_list()) {
       NOTREACHED();
-      return Error("");
     }
     const base::Value::List& font_list_value = entry.GetList();
 
     if (font_list_value.size() < 2 || !font_list_value[0].is_string() ||
         !font_list_value[1].is_string()) {
       NOTREACHED();
-      return Error("");
     }
     const std::string& name = font_list_value[0].GetString();
     const std::string& localized_name = font_list_value[1].GetString();
@@ -328,7 +385,7 @@ ExtensionFunction::ResponseAction ClearFontPrefExtensionFunction::Run() {
     return RespondNow(Error(kSetFromIncognitoError));
 
   ExtensionPrefsHelper::Get(profile)->RemoveExtensionControlledPref(
-      extension_id(), GetPrefName(), kExtensionPrefsScopeRegular);
+      extension_id(), GetPrefName(), ChromeSettingScope::kRegular);
   return RespondNow(NoArguments());
 }
 
@@ -364,7 +421,7 @@ ExtensionFunction::ResponseAction SetFontPrefExtensionFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(value);
 
   ExtensionPrefsHelper::Get(profile)->SetExtensionControlledPref(
-      extension_id(), GetPrefName(), kExtensionPrefsScopeRegular,
+      extension_id(), GetPrefName(), ChromeSettingScope::kRegular,
       value->Clone());
   return RespondNow(NoArguments());
 }

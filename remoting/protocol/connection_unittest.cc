@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <numbers>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/math_constants.h"
@@ -26,6 +28,7 @@
 #include "remoting/protocol/fake_video_renderer.h"
 #include "remoting/protocol/ice_connection_to_client.h"
 #include "remoting/protocol/ice_connection_to_host.h"
+#include "remoting/protocol/network_settings.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/video_stream.h"
@@ -77,9 +80,7 @@ class TestScreenCapturer : public DesktopCapturer {
   ~TestScreenCapturer() override = default;
 
   // webrtc::DesktopCapturer interface.
-  void Start(Callback* callback) override {
-    callback_ = callback;
-  }
+  void Start(Callback* callback) override { callback_ = callback; }
 
   void CaptureFrame() override {
     if (capture_request_index_to_fail_ >= 0) {
@@ -92,10 +93,10 @@ class TestScreenCapturer : public DesktopCapturer {
     }
 
     // Return black 100x100 frame.
-    std::unique_ptr<webrtc::DesktopFrame> frame(
-        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(100, 100)));
-    memset(frame->data(), frame_index_,
-           frame->stride() * frame->size().height());
+    auto frame = std::make_unique<webrtc::BasicDesktopFrame>(
+        webrtc::DesktopSize(100, 100), webrtc::FOURCC_ARGB);
+    UNSAFE_TODO(memset(frame->data(), frame_index_,
+                       frame->stride() * frame->size().height()));
     frame_index_++;
     frame->mutable_updated_region()->SetRect(
         webrtc::DesktopRect::MakeSize(frame->size()));
@@ -104,18 +105,14 @@ class TestScreenCapturer : public DesktopCapturer {
                                std::move(frame));
   }
 
-  bool GetSourceList(SourceList* sources) override {
-    return true;
-  }
+  bool GetSourceList(SourceList* sources) override { return true; }
 
-  bool SelectSource(SourceId id) override {
-    return true;
-  }
+  bool SelectSource(SourceId id) override { return true; }
 
   void FailNthFrame(int n) { capture_request_index_to_fail_ = n; }
 
  private:
-  Callback* callback_ = nullptr;
+  raw_ptr<Callback> callback_ = nullptr;
   int frame_index_ = 0;
 
   int capture_request_index_to_fail_ = -1;
@@ -152,7 +149,7 @@ class TestAudioSource : public AudioSource {
   static int16_t GetSampleValue(double pos, int frequency) {
     const int kMaxSampleValue = 32767;
     return static_cast<int>(
-        sin(pos * 2 * base::kPiDouble * frequency / kAudioSampleRate) *
+        sin(pos * 2 * std::numbers::pi * frequency / kAudioSampleRate) *
             kMaxSampleValue +
         0.5);
   }
@@ -198,11 +195,13 @@ class FakeAudioPlayer : public AudioStub {
 
     data_.insert(data_.end(), packet->data(0).begin(), packet->data(0).end());
 
-    if (run_loop_ && data_.size() >= samples_expected_ * 4)
+    if (run_loop_ && data_.size() >= samples_expected_ * 4) {
       run_loop_->Quit();
+    }
 
-    if (!done.is_null())
+    if (!done.is_null()) {
       std::move(done).Run();
+    }
   }
 
   void WaitForSamples(size_t samples_expected) {
@@ -214,7 +213,8 @@ class FakeAudioPlayer : public AudioStub {
   }
 
   void Verify() {
-    const int16_t* data = reinterpret_cast<const int16_t*>(data_.data());
+    const int16_t* data =
+        UNSAFE_TODO(reinterpret_cast<const int16_t*>(data_.data()));
     int num_samples = data_.size() / kAudioChannels / sizeof(int16_t);
 
     // Skip the first 200 ms as these samples are more likely to be affected by
@@ -228,11 +228,12 @@ class FakeAudioPlayer : public AudioStub {
     int left = 0;
     int right = 0;
     for (int i = kSkippedSamples; i < num_samples; ++i) {
-      if (data[(i - 1) * kAudioChannels] < 0 && data[i * kAudioChannels] >= 0) {
+      if (UNSAFE_TODO(data[(i - 1) * kAudioChannels]) < 0 &&
+          UNSAFE_TODO(data[i * kAudioChannels]) >= 0) {
         ++left;
       }
-      if (data[(i - 1) * kAudioChannels + 1] < 0 &&
-          data[i * kAudioChannels + 1] >= 0) {
+      if (UNSAFE_TODO(data[(i - 1) * kAudioChannels + 1]) < 0 &&
+          UNSAFE_TODO(data[i * kAudioChannels + 1]) >= 0) {
         ++right;
       }
     }
@@ -327,7 +328,7 @@ class ConnectionTest : public testing::Test,
     {
       testing::InSequence sequence;
       EXPECT_CALL(host_event_handler_, OnConnectionAuthenticating());
-      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticated());
+      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticated(nullptr));
     }
     EXPECT_CALL(host_event_handler_, OnConnectionChannelsConnected())
         .WillOnce(InvokeWithoutArgs(this, &ConnectionTest::OnHostConnected));
@@ -336,22 +337,29 @@ class ConnectionTest : public testing::Test,
 
     {
       testing::InSequence sequence;
+      EXPECT_CALL(
+          client_event_handler_,
+          OnConnectionState(ConnectionToHost::CONNECTING, ErrorCode::OK));
+      EXPECT_CALL(
+          client_event_handler_,
+          OnConnectionState(ConnectionToHost::AUTHENTICATED, ErrorCode::OK));
       EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::CONNECTING, OK));
-      EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::AUTHENTICATED, OK));
-      EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::CONNECTED, OK))
-          .WillOnce(InvokeWithoutArgs(
-              this, &ConnectionTest::OnClientConnected));
+                  OnConnectionState(ConnectionToHost::CONNECTED, ErrorCode::OK))
+          .WillOnce(
+              InvokeWithoutArgs(this, &ConnectionTest::OnClientConnected));
     }
     EXPECT_CALL(client_event_handler_, OnRouteChanged(_, _))
         .Times(testing::AnyNumber());
+
+    NetworkSettings network_settings(NetworkSettings::NAT_TRAVERSAL_OUTGOING);
+
+    host_connection_->ApplyNetworkSettings(network_settings);
 
     client_connection_->Connect(
         std::move(owned_client_session_),
         TransportContext::ForTests(protocol::TransportRole::CLIENT),
         &client_event_handler_);
+    client_connection_->ApplyNetworkSettings(network_settings);
     client_session_->SimulateConnection(host_session_);
 
     run_loop_ = std::make_unique<base::RunLoop>();
@@ -369,14 +377,16 @@ class ConnectionTest : public testing::Test,
 
   void OnHostConnected() {
     host_connected_ = true;
-    if (client_connected_ && run_loop_)
+    if (client_connected_ && run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void OnClientConnected() {
     client_connected_ = true;
-    if (host_connected_ && run_loop_)
+    if (host_connected_ && run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void WaitNextVideoFrame() {
@@ -447,7 +457,8 @@ class ConnectionTest : public testing::Test,
   MockHostStub host_stub_;
   MockInputStub host_input_stub_;
   std::unique_ptr<ConnectionToClient> host_connection_;
-  raw_ptr<FakeSession> host_session_;  // Owned by |host_connection_|.
+  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged>
+      host_session_;  // Owned by |host_connection_|.
   bool host_connected_ = false;
 
   MockConnectionToHostEventCallback client_event_handler_;
@@ -456,7 +467,8 @@ class ConnectionTest : public testing::Test,
   FakeVideoRenderer client_video_renderer_;
   FakeAudioPlayer client_audio_player_;
   std::unique_ptr<ConnectionToHost> client_connection_;
-  raw_ptr<FakeSession> client_session_;  // Owned by |client_connection_|.
+  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged>
+      client_session_;  // Owned by |client_connection_|.
   std::unique_ptr<FakeSession> owned_client_session_;
   bool client_connected_ = false;
 
@@ -470,9 +482,9 @@ INSTANTIATE_TEST_SUITE_P(Webrtc, ConnectionTest, ::testing::Values(true));
 
 TEST_P(ConnectionTest, RejectConnection) {
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CONNECTING, OK));
+              OnConnectionState(ConnectionToHost::CONNECTING, ErrorCode::OK));
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CLOSED, OK));
+              OnConnectionState(ConnectionToHost::CLOSED, ErrorCode::OK));
 
   client_connection_->Connect(
       std::move(owned_client_session_),
@@ -491,10 +503,10 @@ TEST_P(ConnectionTest, MAYBE_Disconnect) {
   Connect();
 
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CLOSED, OK));
-  EXPECT_CALL(host_event_handler_, OnConnectionClosed(OK));
+              OnConnectionState(ConnectionToHost::CLOSED, ErrorCode::OK));
+  EXPECT_CALL(host_event_handler_, OnConnectionClosed(ErrorCode::OK));
 
-  client_session_->Close(OK);
+  client_session_->Close(ErrorCode::OK, /* error_details= */ {}, FROM_HERE);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -557,7 +569,7 @@ TEST_P(ConnectionTest, MAYBE_Video) {
 
   std::unique_ptr<VideoStream> video_stream =
       host_connection_->StartVideoStream(
-          "screen_stream", std::make_unique<TestScreenCapturer>());
+          0, std::make_unique<TestScreenCapturer>());
 
   // Receive 5 frames.
   for (int i = 0; i < 5; ++i) {
@@ -582,7 +594,7 @@ TEST_P(ConnectionTest, MAYBE_VideoWithSlowSignaling) {
 
   std::unique_ptr<VideoStream> video_stream =
       host_connection_->StartVideoStream(
-          "screen_stream", base::WrapUnique(new TestScreenCapturer()));
+          0, base::WrapUnique(new TestScreenCapturer()));
 
   WaitNextVideoFrame();
 }
@@ -612,13 +624,14 @@ TEST_P(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
   run_loop.Run();
 }
 
-// TODO(crbug.com/1146302): Test is flaky.
+// TODO(crbug.com/40729981): Test is flaky.
 TEST_P(ConnectionTest, DISABLED_VideoStats) {
   // Currently this test only works for WebRTC because ICE connections stats are
   // reported by SoftwareVideoRenderer which is not used in this test.
   // TODO(sergeyu): Fix this.
-  if (!is_using_webrtc())
+  if (!is_using_webrtc()) {
     return;
+  }
 
   Connect();
 
@@ -632,7 +645,7 @@ TEST_P(ConnectionTest, DISABLED_VideoStats) {
 
   std::unique_ptr<VideoStream> video_stream =
       host_connection_->StartVideoStream(
-          "screen_stream", std::make_unique<TestScreenCapturer>());
+          0, std::make_unique<TestScreenCapturer>());
   video_stream->SetEventTimestampsSource(input_event_timestamps_source);
 
   WaitNextVideoFrame();
@@ -668,10 +681,10 @@ TEST_P(ConnectionTest, DISABLED_VideoStats) {
 }
 
 // Slow/fails on Linux ASan/TSan (crbug.com/1045344) and flaky on Mac
-// (crbug.com/1237376).
+// (crbug.com/1237376) and Windows (crbug.com/1503680).
 #if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) &&               \
         (defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER)) || \
-    BUILDFLAG(IS_MAC)
+    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_Audio DISABLED_Audio
 #else
 #define MAYBE_Audio Audio
@@ -695,7 +708,7 @@ TEST_P(ConnectionTest, DISABLED_FirstCaptureFailed) {
   auto capturer = std::make_unique<TestScreenCapturer>();
   capturer->FailNthFrame(0);
   auto video_stream =
-      host_connection_->StartVideoStream("screen_stream", std::move(capturer));
+      host_connection_->StartVideoStream(0, std::move(capturer));
 
   WaitNextVideoFrame();
 }
@@ -708,7 +721,7 @@ TEST_P(ConnectionTest, DISABLED_SecondCaptureFailed) {
   auto capturer = std::make_unique<TestScreenCapturer>();
   capturer->FailNthFrame(1);
   auto video_stream =
-      host_connection_->StartVideoStream("screen_stream", std::move(capturer));
+      host_connection_->StartVideoStream(0, std::move(capturer));
 
   WaitNextVideoFrame();
   WaitNextVideoFrame();

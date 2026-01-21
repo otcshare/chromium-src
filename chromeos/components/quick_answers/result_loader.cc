@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 #include "chromeos/components/quick_answers/result_loader.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "chromeos/components/quick_answers/public/cpp/quick_answers_prefs.h"
+#include "chromeos/components/quick_answers/public/cpp/quick_answers_state.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/components/quick_answers/search_result_loader.h"
 #include "chromeos/components/quick_answers/translation_result_loader.h"
@@ -19,7 +21,6 @@ namespace {
 using network::ResourceRequest;
 using network::SharedURLLoaderFactory;
 
-// TODO(llin): Update the policy detail after finalizing on the consent check.
 constexpr net::NetworkTrafficAnnotationTag kNetworkTrafficAnnotationTag =
     net::DefineNetworkTrafficAnnotation("quick_answers_loader", R"(
           semantics: {
@@ -30,9 +31,11 @@ constexpr net::NetworkTrafficAnnotationTag kNetworkTrafficAnnotationTag =
               "or unit conversion."
             trigger:
               "Right click to trigger context menu."
-            data: "Currently selected text, device language and "
-                  "source language of the selected text "
-                  "is sent to Google API only for translation."
+            data: "Currently selected text is sent to Google API for "
+            "generating answers. Source language of the selected text "
+            "is sent to Google API only for translation and dictionary "
+            "definition. Device language is sent to Google API "
+            "only for translation."
             destination: GOOGLE_OWNED_SERVICE
           }
           policy: {
@@ -47,7 +50,13 @@ constexpr net::NetworkTrafficAnnotationTag kNetworkTrafficAnnotationTag =
                     QuickAnswersEnabled: false
                 }
                 QuickAnswersTranslationEnabled {
-                    QuickAnswersTranslationEnabled: true
+                    QuickAnswersTranslationEnabled: false
+                }
+                QuickAnswersDefinitionEnabled {
+                    QuickAnswersDefinitionEnabled: false
+                }
+                QuickAnswersUnitConversionEnabled {
+                    QuickAnswersUnitConversionEnabled: false
                 }
             }
           })");
@@ -66,15 +75,20 @@ std::unique_ptr<ResultLoader> ResultLoader::Create(
     IntentType intent_type,
     scoped_refptr<SharedURLLoaderFactory> url_loader_factory,
     ResultLoader::ResultLoaderDelegate* delegate) {
-  if (intent_type == IntentType::kTranslation)
+  if (intent_type == IntentType::kTranslation) {
     return std::make_unique<TranslationResultLoader>(url_loader_factory,
                                                      delegate);
+  }
   return std::make_unique<SearchResultLoader>(url_loader_factory, delegate);
 }
 
 void ResultLoader::Fetch(const PreprocessedOutput& preprocessed_output) {
   DCHECK(url_loader_factory_);
   DCHECK(!preprocessed_output.query.empty());
+
+  CHECK_EQ(QuickAnswersState::GetConsentStatus(),
+           quick_answers::prefs::ConsentStatus::kAccepted)
+      << "Consent status must be kAccepted for making a request";
 
   // Load the resource.
   BuildRequest(preprocessed_output,
@@ -88,8 +102,9 @@ void ResultLoader::OnBuildRequestComplete(
     const std::string& request_body) {
   loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                              kNetworkTrafficAnnotationTag);
-  if (!request_body.empty())
+  if (!request_body.empty()) {
     loader_->AttachStringForUpload(request_body, "application/json");
+  }
 
   loader_->SetRetryOptions(
       /*max_retries=*/5, network::SimpleURLLoader::RetryMode::RETRY_ON_5XX |
@@ -105,10 +120,10 @@ void ResultLoader::OnBuildRequestComplete(
 
 void ResultLoader::OnSimpleURLLoaderComplete(
     const PreprocessedOutput& preprocessed_output,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   base::TimeDelta duration = base::TimeTicks::Now() - fetch_start_time_;
 
-  if (!response_body || loader_->NetError() != net::OK ||
+  if (!response_body.has_value() || loader_->NetError() != net::OK ||
       !loader_->ResponseInfo() || !loader_->ResponseInfo()->headers) {
     int response_code = -1;
     if (loader_->ResponseInfo() && loader_->ResponseInfo()->headers) {
@@ -127,13 +142,17 @@ void ResultLoader::OnSimpleURLLoaderComplete(
 }
 
 void ResultLoader::OnResultParserComplete(
-    std::unique_ptr<QuickAnswer> quick_answer) {
+    std::unique_ptr<QuickAnswersSession> quick_answers_session) {
+  raw_ptr<QuickAnswer> quick_answer =
+      quick_answers_session ? quick_answers_session->quick_answer.get()
+                            : nullptr;
   // Record quick answer result.
   base::TimeDelta duration = base::TimeTicks::Now() - fetch_start_time_;
   RecordLoadingStatus(
       quick_answer ? LoadStatus::kSuccess : LoadStatus::kNoResult, duration);
   RecordResult(quick_answer ? quick_answer->result_type : ResultType::kNoResult,
                duration);
-  delegate_->OnQuickAnswerReceived(std::move(quick_answer));
+
+  delegate_->OnQuickAnswerReceived(std::move(quick_answers_session));
 }
 }  // namespace quick_answers

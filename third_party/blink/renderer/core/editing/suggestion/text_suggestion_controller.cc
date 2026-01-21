@@ -4,10 +4,9 @@
 
 #include "third_party/blink/renderer/core/editing/suggestion/text_suggestion_controller.h"
 
-#include "base/ranges/algorithm.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/renderer/core/clipboard/data_transfer.h"
-#include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
+#include <algorithm>
+
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
@@ -50,9 +49,10 @@ bool ShouldDeleteNextCharacter(const Node& marker_text_node,
       PlainText(next_character_range, TextIteratorBehavior::Builder().Build());
   const UChar next_character = next_character_str[0];
   // Character immediately following the range is not a space
-  if (next_character != kSpaceCharacter &&
-      next_character != kNoBreakSpaceCharacter)
+  if (next_character != uchar::kSpace &&
+      next_character != uchar::kNoBreakSpace) {
     return false;
+  }
 
   // First case: we're deleting at the beginning of the editable text
   if (marker.StartOffset() == 0)
@@ -71,8 +71,8 @@ bool ShouldDeleteNextCharacter(const Node& marker_text_node,
   // Return true if the character immediately before the range is a space, false
   // otherwise
   const UChar prev_character = prev_character_str[0];
-  return prev_character == kSpaceCharacter ||
-         prev_character == kNoBreakSpaceCharacter;
+  return prev_character == uchar::kSpace ||
+         prev_character == uchar::kNoBreakSpace;
 }
 
 EphemeralRangeInFlatTree ComputeRangeSurroundingCaret(
@@ -107,6 +107,7 @@ struct SuggestionInfosWithNodeAndHighlightColor {
   Persistent<const Text> text_node;
   Color highlight_color;
   Vector<TextSuggestionInfo> suggestion_infos;
+  bool should_hide_suggestion_menu = true;
 };
 
 SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
@@ -167,12 +168,19 @@ SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
 
     const auto* marker = To<SuggestionMarker>(node_marker_pair.second.Get());
     const Vector<String>& marker_suggestions = marker->Suggestions();
+
+    // Only hide the suggestion menu if every marker hides it.
+    suggestion_infos_with_node_and_highlight_color.should_hide_suggestion_menu =
+        suggestion_infos_with_node_and_highlight_color
+            .should_hide_suggestion_menu &&
+        marker->ShouldHideSuggestionMenu();
+
     for (wtf_size_t suggestion_index = 0;
          suggestion_index < marker_suggestions.size(); ++suggestion_index) {
       const String& suggestion = marker_suggestions[suggestion_index];
       if (suggestion_infos.size() == max_number_of_suggestions)
         break;
-      if (base::ranges::any_of(
+      if (std::ranges::any_of(
               suggestion_infos,
               [marker, &suggestion](const TextSuggestionInfo& info) {
                 return info.span_start == (int32_t)marker->StartOffset() &&
@@ -208,19 +216,11 @@ bool TextSuggestionController::IsMenuOpen() const {
 
 void TextSuggestionController::HandlePotentialSuggestionTap(
     const PositionInFlatTree& caret_position) {
-  if (!IsAvailable()) {
-    // TODO(crbug.com/1054955): We should fix caller not to make this happens.
-    NOTREACHED();
+  if (!IsAvailable() || GetFrame() != GetDocument().GetFrame()) {
+    // TODO(crbug.com/1054955, crbug.com/1409155, crbug.com/1412036): Callsites
+    // should not call this function in these conditions.
     return;
   }
-  if (GetFrame() != GetDocument().GetFrame()) {
-    // TODO(crbug.com/1054955): We should fix caller not to make this happens.
-    NOTREACHED();
-    return;
-  }
-  // TODO(crbug.com/779126): add support for suggestions in immersive mode.
-  if (GetFrame().GetSettings()->GetImmersiveModeEnabled())
-    return;
 
   // It's theoretically possible, but extremely unlikely, that the user has
   // managed to tap on some text after TextSuggestionController has told the
@@ -421,6 +421,9 @@ void TextSuggestionController::ShowSpellCheckMenu(
     const std::pair<const Text*, DocumentMarker*>& node_spelling_marker_pair) {
   const Text* const marker_text_node = node_spelling_marker_pair.first;
   auto* const marker = To<SpellCheckMarker>(node_spelling_marker_pair.second);
+  if (marker->ShouldHideSuggestionMenu()) {
+    return;
+  }
 
   const EphemeralRange active_suggestion_range =
       EphemeralRange(Position(marker_text_node, marker->StartOffset()),
@@ -447,6 +450,11 @@ void TextSuggestionController::ShowSpellCheckMenu(
     suggestion_ptrs.push_back(std::move(info_ptr));
   }
 
+  // |FrameSelection::AbsoluteCaretBounds()| requires clean layout.
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetFrame().GetDocument()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSpellCheck);
   const gfx::Rect& absolute_bounds =
       GetFrame().Selection().AbsoluteCaretBounds();
   const gfx::Rect& viewport_bounds =
@@ -466,6 +474,10 @@ void TextSuggestionController::ShowSuggestionMenu(
   SuggestionInfosWithNodeAndHighlightColor
       suggestion_infos_with_node_and_highlight_color = ComputeSuggestionInfos(
           node_suggestion_marker_pairs, max_number_of_suggestions);
+  if (suggestion_infos_with_node_and_highlight_color
+          .should_hide_suggestion_menu) {
+    return;
+  }
 
   Vector<TextSuggestionInfo>& suggestion_infos =
       suggestion_infos_with_node_and_highlight_color.suggestion_infos;
@@ -625,40 +637,8 @@ void TextSuggestionController::ReplaceRangeWithText(const EphemeralRange& range,
   GetFrame().Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build());
 
-  // TODO(editing-dev): We should check whether |TextSuggestionController| is
-  // available or not.
-  // TODO(editing-dev): The use of UpdateStyleAndLayout
-  // needs to be audited.  See http://crbug.com/590369 for more details.
-  GetFrame().GetDocument()->UpdateStyleAndLayout(
-      DocumentUpdateReason::kSpellCheck);
-
-  // Dispatch 'beforeinput'.
-  Element* const target = FindEventTargetFrom(
-      GetFrame(), GetFrame().Selection().ComputeVisibleSelectionInDOMTree());
-
-  DataTransfer* const data_transfer = DataTransfer::Create(
-      DataTransfer::DataTransferType::kInsertReplacementText,
-      DataTransferAccessPolicy::kReadable,
-      DataObject::CreateFromString(replacement));
-
-  const bool is_canceled =
-      DispatchBeforeInputDataTransfer(
-          target, InputEvent::InputType::kInsertReplacementText,
-          data_transfer) != DispatchEventResult::kNotCanceled;
-
-  // 'beforeinput' event handler may destroy target frame.
-  if (!IsAvailable())
-    return;
-
-  // TODO(editing-dev): The use of UpdateStyleAndLayout
-  // needs to be audited.  See http://crbug.com/590369 for more details.
-  GetFrame().GetDocument()->UpdateStyleAndLayout(
-      DocumentUpdateReason::kSpellCheck);
-
-  if (is_canceled)
-    return;
-  GetFrame().GetEditor().ReplaceSelectionWithText(
-      replacement, false, false, InputEvent::InputType::kInsertReplacementText);
+  InsertTextAndSendInputEventsOfTypeInsertReplacementText(GetFrame(),
+                                                          replacement);
 }
 
 }  // namespace blink

@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -14,7 +15,6 @@
 #include "base/time/time.h"
 #include "base/trace_event/memory_dump_request_args.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using base::trace_event::MemoryDumpDeterminism;
 using base::trace_event::MemoryDumpLevelOfDetail;
@@ -28,8 +28,10 @@ using OSMemDumpMap =
 
 // Holds data for pending requests enqueued via RequestGlobalMemoryDump().
 struct QueuedRequest {
-  using RequestGlobalMemoryDumpInternalCallback = base::OnceCallback<
-      void(bool, uint64_t, memory_instrumentation::mojom::GlobalMemoryDumpPtr)>;
+  using RequestGlobalMemoryDumpInternalCallback = base::OnceCallback<void(
+      mojom::RequestOutcome,
+      uint64_t,
+      memory_instrumentation::mojom::GlobalMemoryDumpPtr)>;
 
   struct Args {
     Args(MemoryDumpType dump_type,
@@ -74,7 +76,7 @@ struct QueuedRequest {
 
     base::ProcessId process_id = base::kNullProcessId;
     mojom::ProcessType process_type = mojom::ProcessType::OTHER;
-    absl::optional<std::string> service_name;
+    std::optional<std::string> service_name;
     std::unique_ptr<base::trace_event::ProcessMemoryDump> chrome_dump;
     OSMemDumpMap os_dumps;
   };
@@ -88,13 +90,15 @@ struct QueuedRequest {
 
   mojom::MemoryMapOption memory_map_option() const {
     return args.level_of_detail ==
-                   base::trace_event::MemoryDumpLevelOfDetail::DETAILED
+                   base::trace_event::MemoryDumpLevelOfDetail::kDetailed
                ? mojom::MemoryMapOption::FULL
                : mojom::MemoryMapOption::NONE;
   }
 
+  std::vector<mojom::MemDumpFlags> memory_dump_flags() const;
+
   bool should_return_summaries() const {
-    return args.dump_type == base::trace_event::MemoryDumpType::SUMMARY_ONLY;
+    return args.dump_type == base::trace_event::MemoryDumpType::kSummaryOnly;
   }
 
   const Args args;
@@ -107,7 +111,10 @@ struct QueuedRequest {
   // to the client disconnecting).
   std::set<PendingResponse> pending_responses;
   std::map<base::ProcessId, Response> responses;
-  int failed_memory_dump_count = 0;
+  // The request's outcome up to now. This is updated whenever an error is
+  // encountered as part of fulfilling the request. If multiple errors occur,
+  // this will only represent the last encountered error.
+  mojom::RequestOutcome outcome = mojom::RequestOutcome::kSuccess;
   bool dump_in_progress = false;
 
   // This field is set to |true| before a heap dump is requested, and set to
@@ -134,7 +141,7 @@ struct QueuedVmRegionRequest {
 
     base::ProcessId process_id = base::kNullProcessId;
     OSMemDumpMap os_dumps;
-    absl::optional<std::string> service_name;
+    std::optional<std::string> service_name;
   };
 
   std::set<base::ProcessId> pending_responses;

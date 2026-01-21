@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/app_list/app_list_metrics.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/app_list/test/test_focus_change_listener.h"
 #include "ash/app_list/views/app_list_a11y_announcer.h"
@@ -28,10 +29,10 @@
 #include "base/time/time.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animation_stopped_waiter.h"
 #include "ui/compositor/test/test_utils.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/scroll_view.h"
@@ -56,7 +57,7 @@ class AppListBubbleAppsPageTest : public AshTestBase {
   // Sorts app list with the specified order. If `wait` is true, wait for the
   // reorder animation to complete. The animation is expected to be aborted if
   // `expect_abort` is set to true.
-  void SortAppList(const absl::optional<AppListSortOrder>& order,
+  void SortAppList(const std::optional<AppListSortOrder>& order,
                    bool wait,
                    bool expect_abort = false) {
     AppListController::Get()->UpdateAppListWithNewTemporarySortOrder(
@@ -79,8 +80,8 @@ class AppListBubbleAppsPageTest : public AshTestBase {
 
 TEST_F(AppListBubbleAppsPageTest, SlideViewIntoPositionCleansUpLayers) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddRecentApps(5);
   helper->AddAppItems(5);
@@ -91,8 +92,8 @@ TEST_F(AppListBubbleAppsPageTest, SlideViewIntoPositionCleansUpLayers) {
   ASSERT_FALSE(recent_apps->layer());
 
   // Trigger a slide animation.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   constexpr int kVerticalOffset = 20;
   constexpr base::TimeDelta kSlideDuration = base::Milliseconds(100);
   constexpr gfx::Tween::Type kTweenType = gfx::Tween::LINEAR;
@@ -118,8 +119,8 @@ TEST_F(AppListBubbleAppsPageTest, SlideViewIntoPositionCleansUpLayers) {
 // Regression test for https://crbug.com/1295794
 TEST_F(AppListBubbleAppsPageTest, AppsPageVisibleAfterQuicklyClearingSearch) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
   helper->ShowAppList();
@@ -128,8 +129,8 @@ TEST_F(AppListBubbleAppsPageTest, AppsPageVisibleAfterQuicklyClearingSearch) {
   ASSERT_TRUE(apps_page->GetVisible());
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Type a key to trigger the animation to transition to the search page.
   PressAndReleaseKey(ui::VKEY_A);
@@ -149,8 +150,8 @@ TEST_F(AppListBubbleAppsPageTest, AppsPageVisibleAfterQuicklyClearingSearch) {
 TEST_F(AppListBubbleAppsPageTest,
        AppsPageVisibleAfterQuicklyHidingAndShowingLauncherFromSearchPage) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
   helper->ShowAppList();
@@ -163,8 +164,8 @@ TEST_F(AppListBubbleAppsPageTest,
   EXPECT_FALSE(apps_page->GetVisible());
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   helper->GetBubbleView()->StartHideAnimation(/*is_side_shelf=*/false,
                                               base::DoNothing());
@@ -182,8 +183,8 @@ TEST_F(AppListBubbleAppsPageTest,
 
 TEST_F(AppListBubbleAppsPageTest, AnimateHidePage) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
   helper->ShowAppList();
@@ -192,8 +193,8 @@ TEST_F(AppListBubbleAppsPageTest, AnimateHidePage) {
   ASSERT_TRUE(apps_page->GetVisible());
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   base::HistogramTester histograms;
 
   // Type a key to trigger the animation to transition to the search page.
@@ -216,8 +217,8 @@ TEST_F(AppListBubbleAppsPageTest, AnimateHidePage) {
 
 TEST_F(AppListBubbleAppsPageTest, AnimateShowPage) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
   helper->ShowAppList();
@@ -231,8 +232,8 @@ TEST_F(AppListBubbleAppsPageTest, AnimateShowPage) {
   // Enable animations. NON_ZERO_DURATION does not work here. The animation
   // end callback is not called, for reasons I don't understand. It works fine
   // in production, and in tests with NORMAL_DURATION.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   base::HistogramTester histograms;
 
   // Press escape to trigger animation back to the apps page.
@@ -361,16 +362,16 @@ TEST_F(AppListBubbleAppsPageTest, CanHideContinueSectionByClickingHeader) {
 
 TEST_F(AppListBubbleAppsPageTest, HideContinueSectionPlaysAnimation) {
   // Open the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddRecentApps(5);
   helper->AddAppItems(5);
   helper->ShowAppList();
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Hide the continue section.
   auto* apps_page = helper->GetBubbleAppsPage();
@@ -433,8 +434,8 @@ TEST_F(AppListBubbleAppsPageTest, ShowContinueSectionPlaysAnimation) {
   helper->ShowAppList();
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Click the show continue section button.
   auto* apps_page = helper->GetBubbleAppsPage();
@@ -468,8 +469,8 @@ TEST_F(AppListBubbleAppsPageTest, HiddenContinueSectionDoesNotAnimateOnShow) {
   Shell::Get()->app_list_controller()->SetHideContinueSection(true);
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Show the app list with enough items that the continue section and
   // recent apps would normally be visible.
@@ -538,7 +539,7 @@ TEST_F(AppListBubbleAppsPageTest, SortAppsMakesA11yAnnouncement) {
       }));
 
   // Simulate the sort undo by setting the new order to nullopt.
-  SortAppList(absl::nullopt, /*wait=*/false);
+  SortAppList(std::nullopt, /*wait=*/false);
   undo_run_loop.Run();
 
   EXPECT_EQ(event, ax::mojom::Event::kAlert);
@@ -552,8 +553,8 @@ TEST_F(AppListBubbleAppsPageTest, SortAppsMakesA11yAnnouncement) {
 // list should have focus. In addition, the focus should move to the search box
 // after reverting the sort.
 TEST_F(AppListBubbleAppsPageTest, SortAppsWithItemFocused) {
-  ui::ScopedAnimationDurationScaleMode scope_duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
@@ -580,7 +581,7 @@ TEST_F(AppListBubbleAppsPageTest, SortAppsWithItemFocused) {
 
   // Simulate the sort undo by setting the new order to nullopt. The focus
   // should be on the search box after undoing the sort.
-  SortAppList(absl::nullopt, /*wait=*/true);
+  SortAppList(std::nullopt, /*wait=*/true);
   EXPECT_TRUE(helper->GetBubbleSearchBoxView()->search_box()->HasFocus());
 }
 
@@ -599,8 +600,8 @@ INSTANTIATE_TEST_SUITE_P(All, AppListBubbleAppsReorderTest, testing::Bool());
 
 // Verifies that after sorting the undo toast should fully show.
 TEST_P(AppListBubbleAppsReorderTest, ScrollToShowUndoToastWhenSorting) {
-  ui::ScopedAnimationDurationScaleMode scope_duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Show an app list with enough apps to allow scrolling.
   auto* helper = GetAppListTestHelper();
@@ -656,8 +657,8 @@ TEST_P(AppListBubbleAppsReorderTest, ScrollToShowUndoToastWhenSorting) {
 
 // Test clicking on close button to dismiss the reorder toast.
 TEST_F(AppListBubbleAppsPageTest, CloseReorderToast) {
-  ui::ScopedAnimationDurationScaleMode scope_duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   auto* helper = GetAppListTestHelper();
   helper->AddAppItems(5);
@@ -685,8 +686,8 @@ TEST_F(AppListBubbleAppsPageTest, CloseReorderToast) {
 
 // Verifies that sorting the app list with no app is properly handled.
 TEST_F(AppListBubbleAppsPageTest, SortingAppListWithNoApp) {
-  ui::ScopedAnimationDurationScaleMode scope_duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   auto* helper = GetAppListTestHelper();
   helper->ShowAppList();
@@ -700,6 +701,88 @@ TEST_F(AppListBubbleAppsPageTest, SortingAppListWithNoApp) {
   auto* toast_container =
       helper->GetBubbleAppsPage()->toast_container_for_test();
   EXPECT_TRUE(toast_container->IsToastVisible());
+}
+
+// Verifies that a UserAction is recorded for scrolling to the bottom of the
+// Apps Grid.
+TEST_F(AppListBubbleAppsPageTest, ScrollToBottomLogsAction) {
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // Show an app list with enough apps to allow scrolling.
+  auto* helper = GetAppListTestHelper();
+  helper->AddAppItems(50);
+  helper->ShowAppList();
+
+  auto* apps_page = helper->GetBubbleAppsPage();
+  base::HistogramTester histograms;
+
+  // Scroll the apps page but do not hit the end.
+  views::ScrollView* scroll_view = apps_page->scroll_view();
+  scroll_view->ScrollToPosition(scroll_view->vertical_scroll_bar(), 10);
+
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                0);
+
+  // Scroll the apps page to the end.
+  scroll_view->ScrollToPosition(scroll_view->vertical_scroll_bar(), INT_MAX);
+
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Scroll upwards and check that the bucket count keeps the same.
+  scroll_view->ScrollToPosition(scroll_view->vertical_scroll_bar(), 10);
+
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Scroll the apps page to the end one more time.
+  scroll_view->ScrollToPosition(scroll_view->vertical_scroll_bar(), INT_MAX);
+
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                2);
+}
+
+// Verifies that a UserAction is recorded for keyboard navigating to the bottom
+// of the Apps Grid.
+TEST_F(AppListBubbleAppsPageTest, KeyboardSelectToBottomLogsAction) {
+  gfx::ScopedAnimationDurationScaleMode scope_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // Show an app list with enough apps to allow scrolling.
+  auto* helper = GetAppListTestHelper();
+  helper->AddAppItems(50);
+  helper->ShowAppList();
+  base::HistogramTester histograms;
+
+  // Verify histogram initial state
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                0);
+
+  // Select the last app on the grid with the up arrow.
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_UP);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Move down twice to return to the top of the grid.
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_DOWN);
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_DOWN);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Move to the bottom again and verify that the metric is recorded again.
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_UP);
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_UP);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.ClamshellMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                2);
 }
 
 }  // namespace

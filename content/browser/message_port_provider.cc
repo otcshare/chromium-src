@@ -4,6 +4,7 @@
 
 #include "content/public/browser/message_port_provider.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/unguessable_token.h"
@@ -14,7 +15,6 @@
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/messaging/string_message_codec.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -31,8 +31,8 @@ namespace {
 
 void PostMessageToFrameInternal(
     Page& page,
-    const std::u16string& source_origin,
-    const std::u16string& target_origin,
+    const url::Origin* source_origin,
+    const url::Origin* target_origin,
     const blink::WebMessagePayload& data,
     std::vector<blink::MessagePortDescriptor> ports) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -52,13 +52,13 @@ void PostMessageToFrameInternal(
 
   RenderFrameHostImpl* rfh =
       static_cast<RenderFrameHostImpl*>(&page.GetMainDocument());
-  rfh->PostMessageEvent(absl::nullopt, source_origin, target_origin,
+  rfh->PostMessageEvent(std::nullopt, source_origin, target_origin,
                         std::move(message));
 }
 
 #if BUILDFLAG(IS_ANDROID)
 std::u16string ToString16(JNIEnv* env,
-                          const base::android::JavaParamRef<jstring>& s) {
+                          const base::android::JavaRef<jstring>& s) {
   if (s.is_null())
     return std::u16string();
   return base::android::ConvertJavaStringToUTF16(env, s);
@@ -70,8 +70,8 @@ std::u16string ToString16(JNIEnv* env,
 // static
 void MessagePortProvider::PostMessageToFrame(
     Page& page,
-    const std::u16string& source_origin,
-    const std::u16string& target_origin,
+    const url::Origin* source_origin,
+    const url::Origin* target_origin,
     const blink::WebMessagePayload& data) {
   PostMessageToFrameInternal(page, source_origin, target_origin, data,
                              std::vector<blink::MessagePortDescriptor>());
@@ -81,12 +81,25 @@ void MessagePortProvider::PostMessageToFrame(
 void MessagePortProvider::PostMessageToFrame(
     Page& page,
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& source_origin,
-    const base::android::JavaParamRef<jstring>& target_origin,
-    const base::android::JavaParamRef<jobject>& payload,
-    const base::android::JavaParamRef<jobjectArray>& ports) {
+    const base::android::JavaRef<jstring>& source_origin,
+    const base::android::JavaRef<jstring>& target_origin,
+    const base::android::JavaRef<jobject>& payload,
+    const base::android::JavaRef<jobjectArray>& ports) {
+  std::optional<url::Origin> source;
+  std::u16string serialized_source = ToString16(env, source_origin);
+  if (!serialized_source.empty()) {
+    source = url::Origin::Create(GURL(serialized_source));
+  }
+
+  std::optional<url::Origin> target;
+  std::u16string serialized_target = ToString16(env, target_origin);
+  if (!serialized_target.empty()) {
+    target = url::Origin::Create(GURL(serialized_target));
+  }
+
   PostMessageToFrameInternal(
-      page, ToString16(env, source_origin), ToString16(env, target_origin),
+      page, source.has_value() ? &(*source) : nullptr,
+      target.has_value() ? &(*target) : nullptr,
       android::ConvertToWebMessagePayloadFromJava(
           base::android::ScopedJavaLocalRef<jobject>(payload)),
       android::AppWebMessagePort::Release(env, ports));
@@ -99,8 +112,8 @@ void MessagePortProvider::PostMessageToFrame(
 // static
 void MessagePortProvider::PostMessageToFrame(
     Page& page,
-    const std::u16string& source_origin,
-    const absl::optional<std::u16string>& target_origin,
+    const url::Origin* source_origin,
+    const url::Origin* target_origin,
     const std::u16string& data,
     std::vector<blink::WebMessagePort> ports) {
   // Extract the underlying descriptors.
@@ -108,9 +121,8 @@ void MessagePortProvider::PostMessageToFrame(
   descriptors.reserve(ports.size());
   for (size_t i = 0; i < ports.size(); ++i)
     descriptors.push_back(ports[i].PassPort());
-  PostMessageToFrameInternal(page, source_origin,
-                             target_origin.value_or(base::EmptyString16()),
-                             data, std::move(descriptors));
+  PostMessageToFrameInternal(page, source_origin, target_origin, data,
+                             std::move(descriptors));
 }
 #endif
 

@@ -5,8 +5,9 @@
 #include "base/android/jni_registrar.h"
 
 #include "base/android/jni_android.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
 
 namespace base {
 namespace android {
@@ -15,13 +16,13 @@ bool RegisterNativeMethods(JNIEnv* env,
                            const RegistrationMethod* method,
                            size_t count) {
   TRACE_EVENT0("startup", "base_android::RegisterNativeMethods");
-  const RegistrationMethod* end = method + count;
+  const RegistrationMethod* end = UNSAFE_TODO(method + count);
   while (method != end) {
     if (!method->func(env)) {
       DLOG(ERROR) << method->name << " failed registration!";
       return false;
     }
-    method++;
+    UNSAFE_TODO(method++);
   }
   return true;
 }

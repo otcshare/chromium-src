@@ -69,7 +69,7 @@
 // [Ready]       [Error]
 
 namespace base {
-class SingleThreadTaskRunner;
+class SequencedTaskRunner;
 }
 
 namespace media {
@@ -80,7 +80,7 @@ class MEDIA_EXPORT MediaCodecAudioDecoder : public AudioDecoder,
                                             public MediaCodecLoop::Client {
  public:
   explicit MediaCodecAudioDecoder(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
 
   MediaCodecAudioDecoder(const MediaCodecAudioDecoder&) = delete;
   MediaCodecAudioDecoder& operator=(const MediaCodecAudioDecoder&) = delete;
@@ -100,7 +100,7 @@ class MEDIA_EXPORT MediaCodecAudioDecoder : public AudioDecoder,
 
   // MediaCodecLoop::Client implementation
   bool IsAnyInputPending() const override;
-  MediaCodecLoop::InputData ProvideInputData() override;
+  scoped_refptr<DecoderBuffer> ProvideInputData() override;
   void OnInputDataQueued(bool) override;
   bool OnDecodedEos(const MediaCodecLoop::OutputBuffer& out) override;
   bool OnDecodedFrame(const MediaCodecLoop::OutputBuffer& out) override;
@@ -133,9 +133,10 @@ class MEDIA_EXPORT MediaCodecAudioDecoder : public AudioDecoder,
   void SetCdm(CdmContext* cdm_context, InitCB init_cb);
 
   // This callback is called after CDM obtained a MediaCrypto object.
-  void OnMediaCryptoReady(InitCB init_cb,
-                          JavaObjectPtr media_crypto,
-                          bool requires_secure_video_codec);
+  void OnMediaCryptoReady(
+      InitCB init_cb,
+      base::android::ScopedJavaGlobalRef<jobject> media_crypto,
+      bool requires_secure_video_codec);
 
   // Callback for the CDM to notify |this|.
   void OnCdmContextEvent(CdmContext::Event event);
@@ -159,9 +160,8 @@ class MEDIA_EXPORT MediaCodecAudioDecoder : public AudioDecoder,
   // A helper function for logging.
   static const char* AsString(State state);
 
-  // Used to post tasks. This class is single threaded and every method should
-  // run on this task runner.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  // Used to post tasks.
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   State state_;
 
@@ -211,7 +211,7 @@ class MEDIA_EXPORT MediaCodecAudioDecoder : public AudioDecoder,
 
   // The MediaCrypto object is used in the MediaCodec.configure() in case of
   // an encrypted stream.
-  JavaObjectPtr media_crypto_;
+  base::android::ScopedJavaGlobalRef<jobject> media_crypto_;
 
   base::WeakPtrFactory<MediaCodecAudioDecoder> weak_factory_{this};
 };

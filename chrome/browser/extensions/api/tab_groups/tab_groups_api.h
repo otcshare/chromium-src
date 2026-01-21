@@ -5,12 +5,20 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_TAB_GROUPS_TAB_GROUPS_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_TAB_GROUPS_TAB_GROUPS_API_H_
 
+#include <optional>
 #include <string>
 
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+#include "ui/gfx/range/range.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class BrowserWindowInterface;
 
 namespace tab_groups {
 class TabGroupId;
+class TabGroupVisualData;
 }
 
 namespace extensions {
@@ -77,9 +85,19 @@ class TabGroupsMoveFunction : public ExtensionFunction {
   // |error| is populated if the group cannot be found or moved.
   bool MoveGroup(int group_id,
                  int new_index,
-                 const absl::optional<int>& window_id,
+                 const std::optional<int>& window_id,
                  tab_groups::TabGroupId* group,
                  std::string* error);
+
+  // Moves a tab group between browser windows.
+  bool MoveTabGroupBetweenBrowsers(
+      BrowserWindowInterface* source_browser,
+      BrowserWindowInterface* target_browser,
+      const tab_groups::TabGroupId& group,
+      const tab_groups::TabGroupVisualData& visual_data,
+      const gfx::Range& tabs,
+      int new_index,
+      std::string* error);
 };
 
 }  // namespace extensions

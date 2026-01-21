@@ -6,9 +6,7 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
-#include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -16,20 +14,21 @@
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/omnibox/browser/actions/omnibox_pedal_provider.h"
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
-#include "components/omnibox/browser/test_omnibox_client.h"
-#include "components/omnibox/browser/test_omnibox_edit_controller.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/sync/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/window_open_disposition.h"
 
 class OmniboxPedalImplementationsTest : public testing::Test {
  protected:
-  OmniboxPedalImplementationsTest()
-      : omnibox_edit_controller_(
-            std::make_unique<TestOmniboxEditController>()) {}
-
   void SetUp() override {
-    feature_list_.InitWithFeatures({}, {});
+    feature_list_.InitWithFeatures(
+        {
+#if !BUILDFLAG(IS_CHROMEOS)
+            syncer::kUnoPhase2FollowUp
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+        },
+        {});
     InitPedals();
   }
 
@@ -40,28 +39,51 @@ class OmniboxPedalImplementationsTest : public testing::Test {
         std::make_unique<OmniboxPedalProvider>(
             autocomplete_provider_client_,
             GetPedalImplementations(
-                autocomplete_provider_client_.IsOffTheRecord(), true)));
+                autocomplete_provider_client_.IsIncognitoProfile(),
+                autocomplete_provider_client_.IsGuestSession(),
+                /*testing=*/true)));
   }
 
   OmniboxPedalProvider* provider() {
     return autocomplete_provider_client_.GetPedalProvider();
   }
 
-  void SetOffTheRecord() {
+  void SetIncognitoProfile() {
     // This macro mutates the client state to go off the record.
-    EXPECT_CALL(autocomplete_provider_client_, IsOffTheRecord())
+    EXPECT_CALL(autocomplete_provider_client_, IsIncognitoProfile())
         .WillOnce(testing::Return(true));
     InitPedals();
+  }
+
+  void SetGuestSession() {
+    // This macro mutates the client state to go off the record.
+    EXPECT_CALL(autocomplete_provider_client_, IsGuestSession())
+        .WillOnce(testing::Return(true));
+    InitPedals();
+  }
+
+  void OnAutocompleteAccept(const GURL& destination_url,
+                            TemplateURLRef::PostContent* post_content,
+                            WindowOpenDisposition disposition,
+                            ui::PageTransition transition,
+                            AutocompleteMatchType::Type match_type,
+                            base::TimeTicks match_selection_timestamp,
+                            bool destination_url_entered_without_scheme,
+                            bool destination_url_entered_with_http_scheme,
+                            const std::u16string& text,
+                            const AutocompleteMatch& match,
+                            const AutocompleteMatch& alternative_nav_match) {
+    last_destination_url_ = destination_url;
   }
 
   GURL ExecuteContextAndReturnResult(const OmniboxPedal* pedal) {
     OmniboxPedal::ExecutionContext context(
         autocomplete_provider_client_,
-        base::BindOnce(&OmniboxEditController::OnAutocompleteAccept,
-                       omnibox_edit_controller_->AsWeakPtr()),
+        base::BindOnce(&OmniboxPedalImplementationsTest::OnAutocompleteAccept,
+                       base::Unretained(this)),
         {}, WindowOpenDisposition::CURRENT_TAB);
     pedal->Execute(context);
-    return omnibox_edit_controller_->destination_url();
+    return last_destination_url_;
   }
 
   // Exhaustive test of unordered synonym groups for concept matches; this is
@@ -11021,6 +11043,15 @@ class OmniboxPedalImplementationsTest : public testing::Test {
             "sync settings google",
             "sync settings google chrome",
             "sync settings manage",
+#if !BUILDFLAG(IS_CHROMEOS)
+            "manage my stuff",
+            "manage my chrome stuff",
+            "manage my chrome data",
+            "manage my chrome info",
+            "manage bookmarks and stuff",
+            "edit what I save",
+            "edit what's in my account",
+#endif  // !BUILDFLAG(IS_CHROMEOS)
         },
 
         // ID#12
@@ -17935,31 +17966,32 @@ class OmniboxPedalImplementationsTest : public testing::Test {
           sequence.ResetLinks();
           return pedal.second->IsConceptMatch(sequence);
         };
-        auto iter = base::ranges::find_if(pedals, is_match);
+        auto iter = std::ranges::find_if(pedals, is_match);
         EXPECT_NE(iter, pedals.end()) << "Pedal not found for: " << expression;
         EXPECT_EQ(iter->second.get(), canonical_pedal)
             << "Found wrong Pedal for: " << expression;
-        const int found_id = static_cast<int>(iter->second->id());
+        const int found_id = static_cast<int>(iter->second->PedalId());
         std::advance(iter, 1);
         iter = std::find_if(iter, pedals.end(), is_match);
         EXPECT_EQ(iter, pedals.end())
             << "Found more than one Pedal match for: " << expression
             << " -- IDs: first " << found_id << " then "
-            << static_cast<int>(iter->second->id());
+            << static_cast<int>(iter->second->PedalId());
       }
     }
   }
 
   base::test::ScopedFeatureList feature_list_;
   base::test::TaskEnvironment task_environment_;
-  std::unique_ptr<TestOmniboxClient> omnibox_client_;
-  std::unique_ptr<TestOmniboxEditController> omnibox_edit_controller_;
   MockAutocompleteProviderClient autocomplete_provider_client_;
+
+ private:
+  GURL last_destination_url_;
 };
 
 TEST_F(OmniboxPedalImplementationsTest, PedalClearBrowsingDataExecutes) {
   const OmniboxPedal* pedal = provider()->FindPedalMatch(u"clear browser data");
-  EXPECT_EQ(OmniboxPedalId::CLEAR_BROWSING_DATA, pedal->id());
+  EXPECT_EQ(OmniboxPedalId::CLEAR_BROWSING_DATA, pedal->PedalId());
 
   EXPECT_EQ(GURL("chrome://settings/clearBrowserData"),
             ExecuteContextAndReturnResult(pedal));
@@ -17967,13 +17999,20 @@ TEST_F(OmniboxPedalImplementationsTest, PedalClearBrowsingDataExecutes) {
 
 TEST_F(OmniboxPedalImplementationsTest,
        PedalIncognitoClearBrowsingDataExecutes) {
-  SetOffTheRecord();
+  SetIncognitoProfile();
   const OmniboxPedal* pedal = provider()->FindPedalMatch(u"clear browser data");
   // Note, there is only one Pedal for clearing browser data but it behaves
   // differently depending on incognito status. The incognito behavior does
   // not navigate but the non-incognito behavior does navigate.
-  EXPECT_EQ(OmniboxPedalId::CLEAR_BROWSING_DATA, pedal->id());
+  EXPECT_EQ(OmniboxPedalId::CLEAR_BROWSING_DATA, pedal->PedalId());
   EXPECT_EQ(GURL(""), ExecuteContextAndReturnResult(pedal));
+}
+
+TEST_F(OmniboxPedalImplementationsTest,
+       PedalGuestClearBrowsingDataDoesNotExecute) {
+  SetGuestSession();
+  const OmniboxPedal* pedal = provider()->FindPedalMatch(u"clear browser data");
+  EXPECT_FALSE(pedal);
 }
 
 TEST_F(OmniboxPedalImplementationsTest,

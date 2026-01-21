@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/system/message_pipe.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -10,14 +12,15 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
+#include "build/blink_buildflags.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/c/system/core.h"
 #include "mojo/public/c/system/types.h"
-#include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
 namespace core {
@@ -40,10 +43,12 @@ class MessagePipeTest : public test::MojoTestBase {
   MessagePipeTest& operator=(const MessagePipeTest&) = delete;
 
   ~MessagePipeTest() override {
-    if (pipe0_ != MOJO_HANDLE_INVALID)
+    if (pipe0_ != MOJO_HANDLE_INVALID) {
       CHECK_EQ(MOJO_RESULT_OK, MojoClose(pipe0_));
-    if (pipe1_ != MOJO_HANDLE_INVALID)
+    }
+    if (pipe1_ != MOJO_HANDLE_INVALID) {
       CHECK_EQ(MOJO_RESULT_OK, MojoClose(pipe1_));
+    }
   }
 
   MojoResult WriteMessage(MojoHandle message_pipe_handle,
@@ -61,8 +66,9 @@ class MessagePipeTest : public test::MojoTestBase {
     MojoMessageHandle message_handle;
     MojoResult rv =
         MojoReadMessage(message_pipe_handle, nullptr, &message_handle);
-    if (rv != MOJO_RESULT_OK)
+    if (rv != MOJO_RESULT_OK) {
       return rv;
+    }
 
     const uint32_t expected_num_bytes = *num_bytes;
     void* buffer;
@@ -75,7 +81,7 @@ class MessagePipeTest : public test::MojoTestBase {
       CHECK_EQ(MOJO_RESULT_OK, rv);
       CHECK_GE(expected_num_bytes, *num_bytes);
       CHECK(bytes);
-      memcpy(bytes, buffer, *num_bytes);
+      UNSAFE_TODO(memcpy(bytes, buffer, *num_bytes));
     }
     CHECK_EQ(MOJO_RESULT_OK, MojoDestroyMessage(message_handle));
     return rv;
@@ -313,7 +319,7 @@ TEST_F(MessagePipeTest, BasicWaiting) {
   ASSERT_FALSE(hss.satisfiable_signals & MOJO_HANDLE_SIGNAL_WRITABLE);
 }
 
-#if !BUILDFLAG(IS_IOS)
+#if BUILDFLAG(USE_BLINK)
 
 const size_t kPingPongHandlesPerIteration = 30;
 const size_t kPingPongIterations = 500;
@@ -333,11 +339,11 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(HandlePingPong, MessagePipeTest, h) {
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h));
 }
 
-// This test is flaky: http://crbug.com/585784
-TEST_F(MessagePipeTest, DISABLED_DataPipeConsumerHandlePingPong) {
+TEST_F(MessagePipeTest, DataPipeConsumerHandlePingPong) {
   MojoHandle p, c[kPingPongHandlesPerIteration];
   for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
-    EXPECT_EQ(MOJO_RESULT_OK, MojoCreateDataPipe(nullptr, &p, &c[i]));
+    UNSAFE_TODO(
+        EXPECT_EQ(MOJO_RESULT_OK, MojoCreateDataPipe(nullptr, &p, &c[i])));
     MojoClose(p);
   }
 
@@ -348,15 +354,16 @@ TEST_F(MessagePipeTest, DISABLED_DataPipeConsumerHandlePingPong) {
     }
     WriteMessage(h, "quit", 4);
   });
-  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i)
-    MojoClose(c[i]);
+  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
+    MojoClose(UNSAFE_TODO(c[i]));
+  }
 }
 
-// This test is flaky: http://crbug.com/585784
-TEST_F(MessagePipeTest, DISABLED_DataPipeProducerHandlePingPong) {
+TEST_F(MessagePipeTest, DataPipeProducerHandlePingPong) {
   MojoHandle p[kPingPongHandlesPerIteration], c;
   for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
-    EXPECT_EQ(MOJO_RESULT_OK, MojoCreateDataPipe(nullptr, &p[i], &c));
+    UNSAFE_TODO(
+        EXPECT_EQ(MOJO_RESULT_OK, MojoCreateDataPipe(nullptr, &p[i], &c)));
     MojoClose(c);
   }
 
@@ -367,14 +374,23 @@ TEST_F(MessagePipeTest, DISABLED_DataPipeProducerHandlePingPong) {
     }
     WriteMessage(h, "quit", 4);
   });
-  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i)
-    MojoClose(p[i]);
+  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
+    MojoClose(UNSAFE_TODO(p[i]));
+  }
 }
 
-TEST_F(MessagePipeTest, SharedBufferHandlePingPong) {
+#if BUILDFLAG(IS_IOS)
+// TODO(crbug.com/40257752): Test currently fails on iOS.
+#define MAYBE_SharedBufferHandlePingPong DISABLED_SharedBufferHandlePingPong
+#else
+#define MAYBE_SharedBufferHandlePingPong SharedBufferHandlePingPong
+#endif  // BUILDFLAG(IS_IOS)
+TEST_F(MessagePipeTest, MAYBE_SharedBufferHandlePingPong) {
   MojoHandle buffers[kPingPongHandlesPerIteration];
-  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i)
-    EXPECT_EQ(MOJO_RESULT_OK, MojoCreateSharedBuffer(1, nullptr, &buffers[i]));
+  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
+    UNSAFE_TODO(EXPECT_EQ(MOJO_RESULT_OK,
+                          MojoCreateSharedBuffer(1, nullptr, &buffers[i])));
+  }
 
   RunTestClient("HandlePingPong", [&](MojoHandle h) {
     for (size_t i = 0; i < kPingPongIterations; i++) {
@@ -383,11 +399,12 @@ TEST_F(MessagePipeTest, SharedBufferHandlePingPong) {
     }
     WriteMessage(h, "quit", 4);
   });
-  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i)
-    MojoClose(buffers[i]);
+  for (size_t i = 0; i < kPingPongHandlesPerIteration; ++i) {
+    MojoClose(UNSAFE_TODO(buffers[i]));
+  }
 }
 
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // BUILDFLAG(USE_BLINK)
 
 TEST_F(FuseMessagePipeTest, Basic) {
   // Test that we can fuse pipes and they still work.

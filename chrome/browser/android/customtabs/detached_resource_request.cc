@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -188,6 +188,7 @@ void DetachedResourceRequest::Start(
 }
 
 void DetachedResourceRequest::OnRedirectCallback(
+    const GURL& url_before_redirect,
     const net::RedirectInfo& redirect_info,
     const network::mojom::URLResponseHead& response_head,
     std::vector<std::string>* to_be_removed_headers) {
@@ -195,7 +196,7 @@ void DetachedResourceRequest::OnRedirectCallback(
 }
 
 void DetachedResourceRequest::OnResponseCallback(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   int net_error = url_loader_->NetError();
   net_error = std::abs(net_error);

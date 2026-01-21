@@ -9,6 +9,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/scrollbar/scroll_bar.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 // The distance the mouse can be dragged outside the bounds of the thumb during
@@ -26,15 +27,16 @@ BaseScrollBarThumb::~BaseScrollBarThumb() = default;
 void BaseScrollBarThumb::SetLength(int length) {
   // Make sure the thumb is never sized smaller than its minimum possible
   // display size.
-  gfx::Size size = GetPreferredSize();
+  gfx::Size size = GetPreferredSize({});
   size.SetToMax(
       gfx::Size(IsHorizontal() ? length : 0, IsHorizontal() ? 0 : length));
   SetSize(size);
 }
 
 int BaseScrollBarThumb::GetLength() const {
-  if (IsHorizontal())
+  if (IsHorizontal()) {
     return width();
+  }
   return height();
 }
 
@@ -51,8 +53,9 @@ void BaseScrollBarThumb::SetPosition(int position) {
 
 int BaseScrollBarThumb::GetPosition() const {
   gfx::Rect track_bounds = scroll_bar_->GetTrackBounds();
-  if (IsHorizontal())
+  if (IsHorizontal()) {
     return x() - track_bounds.x();
+  }
   return y() - track_bounds.y();
 }
 
@@ -100,8 +103,9 @@ bool BaseScrollBarThumb::OnMouseDragged(const ui::MouseEvent& event) {
   }
   if (IsHorizontal()) {
     int thumb_x = event.x() - mouse_offset_;
-    if (base::i18n::IsRTL())
+    if (base::i18n::IsRTL()) {
       thumb_x *= -1;
+    }
     scroll_bar_->ScrollToThumbPosition(GetPosition() + thumb_x, false);
   } else {
     int thumb_y = event.y() - mouse_offset_;
@@ -124,8 +128,9 @@ Button::ButtonState BaseScrollBarThumb::GetState() const {
 }
 
 void BaseScrollBarThumb::SetState(Button::ButtonState state) {
-  if (state_ == state)
+  if (state_ == state) {
     return;
+  }
 
   state_ = state;
   OnStateChanged();
@@ -136,10 +141,19 @@ void BaseScrollBarThumb::OnStateChanged() {
 }
 
 bool BaseScrollBarThumb::IsHorizontal() const {
-  return scroll_bar_->IsHorizontal();
+  return scroll_bar_->GetOrientation() == ScrollBar::Orientation::kHorizontal;
 }
 
-BEGIN_METADATA(BaseScrollBarThumb, View)
+ui::NativeTheme::PreferredColorScheme BaseScrollBarThumb::GetColorScheme() const {
+  const ui::ColorProviderKey::ColorMode color_mode =
+      GetWidget() ? GetWidget()->GetColorMode()
+                  : ui::ColorProviderKey::ColorMode::kLight;
+  return color_mode == ui::ColorProviderKey::ColorMode::kDark
+             ? ui::NativeTheme::PreferredColorScheme::kDark
+             : ui::NativeTheme::PreferredColorScheme::kLight;
+}
+
+BEGIN_METADATA(BaseScrollBarThumb)
 ADD_PROPERTY_METADATA(bool, SnapBackOnDragOutside);
 END_METADATA
 

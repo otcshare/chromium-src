@@ -4,6 +4,7 @@
 
 #include "ash/system/network/managed_sim_lock_notifier.h"
 
+#include "ash/ash_element_identifiers.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/system_tray_client.h"
@@ -12,7 +13,7 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/tray_popup_utils.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
 #include "components/onc/onc_constants.h"
 #include "components/session_manager/session_manager_types.h"
@@ -161,9 +162,8 @@ void ManagedSimLockNotifier::Close(bool by_user) {
   }
 }
 
-void ManagedSimLockNotifier::Click(
-    const absl::optional<int>& button_index,
-    const absl::optional<std::u16string>& reply) {
+void ManagedSimLockNotifier::Click(const std::optional<int>& button_index,
+                                   const std::optional<std::u16string>& reply) {
   CellularMetricsLogger::RecordSimLockNotificationEvent(
       CellularMetricsLogger::SimLockNotificationEvent::kClicked);
 
@@ -194,8 +194,10 @@ void ManagedSimLockNotifier::ShowNotification() {
           message_center::RichNotificationData(),
           base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
               weak_ptr_factory_.GetWeakPtr()),
-          /*small_image=*/gfx::VectorIcon(),
+          /*small_image=*/gfx::VectorIcon::EmptyIcon(),
           message_center::SystemNotificationWarningLevel::WARNING);
+  notification->set_host_view_element_id(
+      kCellularManagedSimLockNotificationElementId);
 
   message_center::MessageCenter* message_center =
       message_center::MessageCenter::Get();

@@ -9,6 +9,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
+#include "media/base/audio_bus.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,6 +37,7 @@ class MockListener : public ReferenceOutput::Listener {
                void(const media::AudioBus& audio_bus,
                     int sample_rate,
                     base::TimeDelta delay));
+  MOCK_METHOD(void, OnReferenceStreamError, (), (override));
 };
 
 // Mock of a physical output stream_under_test.
@@ -73,7 +75,8 @@ class MockAudioOutputStream : public AudioOutputStream {
   }
 
  private:
-  raw_ptr<AudioOutputStream::AudioSourceCallback> provided_callback_ = nullptr;
+  raw_ptr<AudioOutputStream::AudioSourceCallback, DanglingUntriaged>
+      provided_callback_ = nullptr;
   double volume_ = 0;
 };
 
@@ -202,7 +205,7 @@ class OutputDeviceMixerImplTestBase {
   // Helper.
   struct StreamUnderTest {
     // MixableOutputStream produced by OutputMixerImpl.
-    raw_ptr<AudioOutputStream> mixable_stream;
+    raw_ptr<AudioOutputStream, DanglingUntriaged> mixable_stream;
     // All the mocks associated with it.
     raw_ptr<MixTrackMock> mix_track_mock;
   };
@@ -422,7 +425,7 @@ class OutputDeviceMixerImplTestBase {
         OutputDeviceMixerImpl::kSwitchToUnmixedPlaybackDelay * 2);
   }
 
-  raw_ptr<MockMixingGraph> mock_mixing_graph_ = nullptr;
+  raw_ptr<MockMixingGraph, DanglingUntriaged> mock_mixing_graph_ = nullptr;
   StrictMock<MockAudioOutputStream> mock_mixing_graph_output_stream_;
 
   const media::AudioParameters mixer_output_params_{

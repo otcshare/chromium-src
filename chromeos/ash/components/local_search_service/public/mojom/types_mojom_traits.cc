@@ -22,9 +22,10 @@ EnumTraits<ash::local_search_service::mojom::IndexId,
       return ash::local_search_service::mojom::IndexId::kHelpAppLauncher;
     case ash::local_search_service::IndexId::kPersonalization:
       return ash::local_search_service::mojom::IndexId::kPersonalization;
+    case ash::local_search_service::IndexId::kShortcutsApp:
+      return ash::local_search_service::mojom::IndexId::kShortcutsApp;
   }
   NOTREACHED();
-  return ash::local_search_service::mojom::IndexId::kCrosSettings;
 }
 
 // static
@@ -45,9 +46,11 @@ bool EnumTraits<ash::local_search_service::mojom::IndexId,
     case ash::local_search_service::mojom::IndexId::kPersonalization:
       *output = ash::local_search_service::IndexId::kPersonalization;
       return true;
+    case ash::local_search_service::mojom::IndexId::kShortcutsApp:
+      *output = ash::local_search_service::IndexId::kShortcutsApp;
+      return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -62,7 +65,6 @@ EnumTraits<ash::local_search_service::mojom::Backend,
       return ash::local_search_service::mojom::Backend::kInvertedIndex;
   }
   NOTREACHED();
-  return ash::local_search_service::mojom::Backend::kLinearMap;
 }
 
 // static
@@ -79,7 +81,6 @@ bool EnumTraits<ash::local_search_service::mojom::Backend,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -171,7 +172,6 @@ EnumTraits<ash::local_search_service::mojom::ResponseStatus,
       return ash::local_search_service::mojom::ResponseStatus::kEmptyIndex;
   }
   NOTREACHED();
-  return ash::local_search_service::mojom::ResponseStatus::kUnknownError;
 }
 
 // static
@@ -194,7 +194,6 @@ bool EnumTraits<ash::local_search_service::mojom::ResponseStatus,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

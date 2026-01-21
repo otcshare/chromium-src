@@ -4,7 +4,7 @@
 
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {Result} from './launcher_internals.mojom-webui.js';
+import type {Result} from './launcher_internals.mojom-webui.js';
 import {getTemplate} from './results_table.html.js';
 
 export interface LauncherResultsTableElement {
@@ -49,7 +49,8 @@ export class LauncherResultsTableElement extends PolymerElement {
 
   clearResults() {
     this.results.clear();
-    this.$.resultsSection.innerHTML = '';
+    this.$.resultsSection.innerHTML =
+        window.trustedTypes ? (window.trustedTypes.emptyHTML) : '';
     for (const cell of this.headerCells.values()) {
       this.$.headerRow.removeChild(cell);
     }
@@ -100,7 +101,8 @@ export class LauncherResultsTableElement extends PolymerElement {
     }
 
     // Clear and repopulate the results table.
-    this.$.resultsSection.innerHTML = '';
+    this.$.resultsSection.innerHTML =
+        window.trustedTypes ? (window.trustedTypes.emptyHTML) : '';
     for (const result of sortedResults) {
       const newRow = this.$.resultsSection.insertRow();
       newRow.addEventListener('click', (e: Event) => this.toggleRowSelected(e));

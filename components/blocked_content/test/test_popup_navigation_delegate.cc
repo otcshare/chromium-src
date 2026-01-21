@@ -23,14 +23,14 @@ bool TestPopupNavigationDelegate::GetOriginalUserGesture() {
   return true;
 }
 
-const GURL& TestPopupNavigationDelegate::GetURL() {
+GURL TestPopupNavigationDelegate::GetURL() {
   return url_;
 }
 
 PopupNavigationDelegate::NavigateResult
 TestPopupNavigationDelegate::NavigateWithGesture(
     const blink::mojom::WindowFeatures& window_features,
-    absl::optional<WindowOpenDisposition> updated_disposition) {
+    std::optional<WindowOpenDisposition> updated_disposition) {
   if (result_holder_) {
     result_holder_->did_navigate = true;
     result_holder_->navigation_window_features = window_features;

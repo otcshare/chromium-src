@@ -17,8 +17,6 @@ component("x") {
     "selection_requestor.h",
     "selection_utils.cc",
     "selection_utils.h",
-    "visual_picker_glx.cc",
-    "visual_picker_glx.h",
     "x11_clipboard_helper.cc",
     "x11_clipboard_helper.h",
     "x11_cursor.cc",
@@ -37,8 +35,6 @@ component("x") {
     "x11_global_shortcut_listener.h",
     "x11_idle_query.cc",
     "x11_idle_query.h",
-    "x11_keyboard_hook.cc",
-    "x11_keyboard_hook.h",
     "x11_move_loop.h",
     "x11_move_loop_delegate.h",
     "x11_pointer_grab.cc",
@@ -61,6 +57,8 @@ component("x") {
     "x11_xrandr_interval_only_vsync_provider.h",
   ]
 
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
   defines = [ "IS_UI_BASE_X_IMPL" ]
 
   public_deps = [
@@ -70,7 +68,7 @@ component("x") {
   deps = [
     "//base",
     "//base:i18n",
-    "//build:chromeos_buildflags",
+    "//components/device_event_log",
     "//net",
     "//skia",
     "//ui/base:data_exchange",
@@ -84,7 +82,7 @@ component("x") {
     "//ui/events/devices/x11",
     "//ui/events/keycodes:x11",
     "//ui/events/platform/x11",
-    "//ui/events/x:x",
+    "//ui/events/x",
     "//ui/gfx",
     "//ui/gfx:gfx_switches",
     "//ui/gfx/geometry",
@@ -122,7 +120,7 @@ source_set("gl") {
     "x11_gl_egl_utility.h",
   ]
 
-  configs += [ "//third_party/khronos:khronos_headers" ]
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
   deps = [
     ":x",
     "//base",
@@ -156,8 +154,10 @@ source_set("unittests") {
   testonly = true
   sources = [
     "selection_requestor_unittest.cc",
+    "selection_utils_unittest.cc",
     "x11_cursor_factory_unittest.cc",
     "x11_cursor_loader_unittest.cc",
+    "x11_display_util_unittest.cc",
   ]
   deps = [
     ":x",

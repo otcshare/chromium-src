@@ -10,16 +10,16 @@
 #include <wrl/event.h>
 
 #include <ios>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/win/windows_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
@@ -39,7 +39,7 @@ template <typename Interface,
           typename Args,
           typename SenderAbi,
           typename ArgsAbi>
-absl::optional<EventRegistrationToken> AddEventHandler(
+std::optional<EventRegistrationToken> AddEventHandler(
     Interface* interface_called,
     internal::IMemberFunction<Interface,
                               ABI::Windows::Foundation::IEventHandler<Args*>*,
@@ -61,7 +61,7 @@ absl::optional<EventRegistrationToken> AddEventHandler(
   if (FAILED(hr)) {
     DVLOG(2) << "Adding EventHandler failed: "
              << "0x" << std::hex << hr;
-    return absl::nullopt;
+    return std::nullopt;
   }
   return token;
 }

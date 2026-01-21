@@ -9,10 +9,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "services/service_manager/public/cpp/export.h"
@@ -125,6 +126,12 @@ class BinderRegistryWithArgs {
 
   base::WeakPtr<BinderRegistryWithArgs> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
+  }
+
+  void GetInterfacesForTesting(std::vector<std::string>& out) {
+    for (const auto& [key, _] : binders_) {
+      out.push_back(key);
+    }
   }
 
  private:

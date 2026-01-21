@@ -4,21 +4,21 @@
 
 package org.chromium.chrome.browser.payments.ui;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.text.Layout;
 import android.text.TextPaint;
 import android.view.View;
 import android.widget.TextView;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.components.autofill.EditableOption;
 
-/**
- * Utility functions for PaymentRequestSection.
- * This class is not supposed to be instantiated.
- */
+/** Utility functions for PaymentRequestSection. This class is not supposed to be instantiated. */
+@NullMarked
 public class SectionUiUtils {
     /** Avoid instantiation by accident. */
     private SectionUiUtils() {}
@@ -42,36 +42,50 @@ public class SectionUiUtils {
         // Listen for layout event to check whether the string can be fit in a single line and
         // manually elide the string in the middle if necessary.
         if (view.getLayout() == null && optionCount > 1) {
-            view.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
-                @Override
-                public void onLayoutChange(View v, int left, int top, int right, int bottom,
-                        int oldLeft, int oldTop, int oldRight, int oldBottom) {
-                    if (section.getSelectedItem() != null) {
-                        view.removeOnLayoutChangeListener(this);
-                        return;
-                    }
+            view.addOnLayoutChangeListener(
+                    new View.OnLayoutChangeListener() {
+                        @Override
+                        public void onLayoutChange(
+                                View v,
+                                int left,
+                                int top,
+                                int right,
+                                int bottom,
+                                int oldLeft,
+                                int oldTop,
+                                int oldRight,
+                                int oldBottom) {
+                            if (section.getSelectedItem() != null) {
+                                view.removeOnLayoutChangeListener(this);
+                                return;
+                            }
 
-                    Layout layout = view.getLayout();
-                    if (layout.getEllipsisCount(0) > 0) {
-                        String summary = getSectionSummaryForPreviewInASingleLine(
-                                context, section, layout, view.getPaint());
-                        view.setText(summary);
-                    }
-                }
-            });
+                            Layout layout = assumeNonNull(view.getLayout());
+                            if (layout.getEllipsisCount(0) > 0) {
+                                String summary =
+                                        getSectionSummaryForPreviewInASingleLine(
+                                                context, section, layout, view.getPaint());
+                                view.setText(summary);
+                            }
+                        }
+                    });
         }
 
-        String summary = SectionUiUtils.getSectionSummaryForPreviewInASingleLine(
-                context, section, view.getLayout(), view.getPaint());
+        String summary =
+                SectionUiUtils.getSectionSummaryForPreviewInASingleLine(
+                        context, section, view.getLayout(), view.getPaint());
         view.setText(summary);
     }
 
-    private static String getSectionSummaryForPreviewInASingleLine(Context context,
-            SectionInformation section, @Nullable Layout layout, @Nullable TextPaint paint) {
+    private static String getSectionSummaryForPreviewInASingleLine(
+            Context context,
+            SectionInformation section,
+            @Nullable Layout layout,
+            @Nullable TextPaint paint) {
         int optionCount = section.getSize();
         assert optionCount != 0;
 
-        EditableOption option = section.getItem(0);
+        EditableOption option = assumeNonNull(section.getItem(0));
         String labelSeparator = context.getString(R.string.autofill_address_summary_separator);
         String optionSummary = option.getPreviewString(labelSeparator, -1);
 
@@ -85,8 +99,9 @@ public class SectionUiUtils {
         // section.
         int resId = section.getPreviewStringResourceId();
         assert resId > 0;
-        String summary = context.getResources().getQuantityString(
-                resId, moreOptionCount, optionSummary, moreOptionCount);
+        String summary =
+                context.getResources()
+                        .getQuantityString(resId, moreOptionCount, optionSummary, moreOptionCount);
         if (paint == null || layout == null) {
             // If layout or paint is null, return the full summary string. Otherwise, check and
             // shrink "<summary of the first option>" so as to make the entire summary string fits
@@ -100,8 +115,10 @@ public class SectionUiUtils {
         // be able to fit in a single line.
         while (Layout.getDesiredWidth(summary, paint) > ellipsizedWidth) {
             optionSummary = option.getPreviewString(labelSeparator, optionSummary.length());
-            summary = context.getResources().getQuantityString(
-                    resId, moreOptionCount, optionSummary, moreOptionCount);
+            summary =
+                    context.getResources()
+                            .getQuantityString(
+                                    resId, moreOptionCount, optionSummary, moreOptionCount);
         }
 
         return summary;

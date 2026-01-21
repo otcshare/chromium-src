@@ -6,7 +6,7 @@
 
 #include "base/no_destructor.h"
 #include "base/threading/thread_checker_impl.h"
-#include "base/threading/thread_local.h"
+#include "third_party/blink/public/mojom/cpu_performance.mojom.h"
 
 namespace content {
 
@@ -14,10 +14,7 @@ namespace {
 
 // Keep the global RenderThread in a TLS slot so it is impossible to access
 // incorrectly from the wrong thread.
-base::ThreadLocalPointer<RenderThread>& GetRenderThreadLocalPointer() {
-  static base::NoDestructor<base::ThreadLocalPointer<RenderThread>> tls;
-  return *tls;
-}
+constinit thread_local RenderThread* render_thread = nullptr;
 
 static const base::ThreadCheckerImpl& GetThreadChecker() {
   static base::NoDestructor<base::ThreadCheckerImpl> checker;
@@ -27,20 +24,20 @@ static const base::ThreadCheckerImpl& GetThreadChecker() {
 }  // namespace
 
 RenderThread* RenderThread::Get() {
-  return GetRenderThreadLocalPointer().Get();
+  return render_thread;
 }
 
 bool RenderThread::IsMainThread() {
-  // TODO(avi): Eventually move to be based on WTF::IsMainThread().
+  // TODO(avi): Eventually move to be based on blink::IsMainThread().
   return GetThreadChecker().CalledOnValidThread();
 }
 
-RenderThread::RenderThread() {
-  GetRenderThreadLocalPointer().Set(this);
-}
+RenderThread::RenderThread() : resetter_(&render_thread, this) {}
 
-RenderThread::~RenderThread() {
-  GetRenderThreadLocalPointer().Set(nullptr);
+RenderThread::~RenderThread() = default;
+
+blink::mojom::PerformanceTier RenderThread::GetCpuPerformanceTier() {
+  return blink::mojom::PerformanceTier::kUnknown;
 }
 
 }  // namespace content

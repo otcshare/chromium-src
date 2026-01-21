@@ -468,11 +468,27 @@
   },
   {
     "type": "hosted",
+    "icon": "gproject",
+    "translationKey": "GPROJECT_DOCUMENT_FILE_TYPE",
+    "subtype": "project",
+    "extensions": [".gprj"],
+    "mime": "application/vnd.google-apps.project"
+  },
+  {
+    "type": "hosted",
     "icon": "gsite",
     "translationKey": "GSITE_DOCUMENT_FILE_TYPE",
     "subtype": "site",
     "extensions": [".gsite"],
     "mime": "application/vnd.google-apps.site"
+  },
+  {
+    "type": "hosted",
+    "icon": "gmaillayout",
+    "translationKey": "EMAIL_LAYOUTS_DOCUMENT_FILE_TYPE",
+    "subtype": "emaillayouts",
+    "extensions": [".gmaillayout"],
+    "mime": "application/vnd.google-apps.mail-layout"
   },
 
   // Others
@@ -538,6 +554,14 @@
     "subtype": "Excel",
     "extensions": [".xlsx"],
     "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  },
+  {
+    "type": "document",
+    "icon": "excel",
+    "translationKey": "EXCEL_FILE_TYPE",
+    "subtype": "Excel",
+    "extensions": [".xlsm"],
+    "mime": "application/vnd.ms-excel.sheet.macroEnabled.12"
   },
   {
     "type": "archive",

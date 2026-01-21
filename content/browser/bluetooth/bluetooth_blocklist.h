@@ -6,10 +6,10 @@
 #define CONTENT_BROWSER_BLUETOOTH_BLUETOOTH_BLOCKLIST_H_
 
 #include <map>
+#include <string_view>
 #include <vector>
 
-#include "base/lazy_instance.h"
-#include "base/strings/string_piece.h"
+#include "base/no_destructor.h"
 #include "content/common/content_export.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
@@ -65,7 +65,7 @@ class CONTENT_EXPORT BluetoothBlocklist final {
   //
   // Malformed pairs in the string are ignored, including invalid UUID or
   // exclusion values. Duplicate UUIDs follow Add()'s merging rule.
-  void Add(base::StringPiece blocklist_string);
+  void Add(std::string_view blocklist_string);
 
   // Adds a manufacturer data prefix to |blocklisted_manufacturer_data_prefix_|
   // so that any manufacturer data in the device's advertisement matched
@@ -112,8 +112,8 @@ class CONTENT_EXPORT BluetoothBlocklist final {
   void ResetToDefaultValuesForTest();
 
  private:
-  // friend LazyInstance to permit access to private constructor.
-  friend base::LazyInstanceTraitsBase<BluetoothBlocklist>;
+  // friend NoDestructor to permit access to private constructor.
+  friend class base::NoDestructor<BluetoothBlocklist>;
 
   BluetoothBlocklist();
 

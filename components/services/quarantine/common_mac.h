@@ -7,17 +7,15 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/mac/scoped_nsobject.h"
-
 namespace base {
 class FilePath;
 }
 
 namespace quarantine {
 
-bool GetQuarantineProperties(
-    const base::FilePath& file,
-    base::scoped_nsobject<NSMutableDictionary>* properties);
+// Returns a dictionary of quarantine properties. Returns an empty dictionary
+// upon any error or failure.
+NSDictionary* GetQuarantineProperties(const base::FilePath& file);
 
 }  // namespace quarantine
 

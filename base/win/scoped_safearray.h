@@ -7,10 +7,13 @@
 
 #include <objbase.h>
 
+#include <optional>
+
 #include "base/base_export.h"
 #include "base/check_op.h"
-#include "base/win/variant_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/win/variant_conversions.h"
 
 namespace base {
 namespace win {
@@ -32,7 +35,8 @@ class BASE_EXPORT ScopedSafearray {
    public:
     // Type declarations to support std::iterator_traits
     using iterator_category = std::random_access_iterator_tag;
-    using value_type = typename internal::VariantUtil<ElementVartype>::Type;
+    using value_type =
+        typename internal::VariantConverter<ElementVartype>::Type;
     using difference_type = ptrdiff_t;
     using reference = value_type&;
     using const_reference = const value_type&;
@@ -67,7 +71,7 @@ class BASE_EXPORT ScopedSafearray {
     size_t size() const { return array_size_; }
 
     pointer begin() { return array_; }
-    pointer end() { return array_ + array_size_; }
+    pointer end() { return UNSAFE_TODO(array_ + array_size_); }
     const_pointer begin() const { return array_; }
     const_pointer end() const { return array_ + array_size_; }
 
@@ -80,7 +84,7 @@ class BASE_EXPORT ScopedSafearray {
     reference at(size_t index) {
       DCHECK_NE(array_, nullptr);
       DCHECK_LT(index, array_size_);
-      return array_[index];
+      return UNSAFE_TODO(array_[index]);
     }
     const_reference at(size_t index) const {
       return const_cast<LockScope<ElementVartype>*>(this)->at(index);
@@ -97,15 +101,19 @@ class BASE_EXPORT ScopedSafearray {
           array_size_(array_size) {}
 
     void Reset() {
-      if (safearray_)
+      if (safearray_) {
         SafeArrayUnaccessData(safearray_);
+      }
       safearray_ = nullptr;
       vartype_ = VT_EMPTY;
       array_ = nullptr;
       array_size_ = 0U;
     }
 
-    SAFEARRAY* safearray_ = nullptr;
+    // RAW_PTR_EXCLUSION: Comes from the operating system and may have been
+    // laundered. If rewritten, it may generate an incorrect Dangling Pointer
+    // Detector error.
+    RAW_PTR_EXCLUSION SAFEARRAY* safearray_ = nullptr;
     VARTYPE vartype_ = VT_EMPTY;
     pointer array_ = nullptr;
     size_t array_size_ = 0U;
@@ -135,21 +143,23 @@ class BASE_EXPORT ScopedSafearray {
   // Creates a LockScope for accessing the contents of a
   // single-dimensional SAFEARRAYs.
   template <VARTYPE ElementVartype>
-  absl::optional<LockScope<ElementVartype>> CreateLockScope() const {
-    if (!safearray_ || SafeArrayGetDim(safearray_) != 1)
-      return absl::nullopt;
+  std::optional<LockScope<ElementVartype>> CreateLockScope() const {
+    if (!safearray_ || SafeArrayGetDim(safearray_) != 1) {
+      return std::nullopt;
+    }
 
     VARTYPE vartype;
     HRESULT hr = SafeArrayGetVartype(safearray_, &vartype);
     if (FAILED(hr) ||
-        !internal::VariantUtil<ElementVartype>::IsConvertibleTo(vartype)) {
-      return absl::nullopt;
+        !internal::VariantConverter<ElementVartype>::IsConvertibleTo(vartype)) {
+      return std::nullopt;
     }
 
     typename LockScope<ElementVartype>::pointer array = nullptr;
     hr = SafeArrayAccessData(safearray_, reinterpret_cast<void**>(&array));
-    if (FAILED(hr))
-      return absl::nullopt;
+    if (FAILED(hr)) {
+      return std::nullopt;
+    }
 
     const size_t array_size = GetCount();
     return LockScope<ElementVartype>(safearray_, vartype, array, array_size);
@@ -204,7 +214,7 @@ class BASE_EXPORT ScopedSafearray {
     DCHECK(SUCCEEDED(hr));
     LONG count = upper - lower + 1;
     // SafeArrays may have negative lower bounds, so check for wraparound.
-    DCHECK_GT(count, 0);
+    DCHECK_GE(count, 0);
     return static_cast<size_t>(count);
   }
 
@@ -217,7 +227,9 @@ class BASE_EXPORT ScopedSafearray {
   bool operator!=(const ScopedSafearray& safearray2) const = delete;
 
  private:
-  SAFEARRAY* safearray_;
+  // RAW_PTR_EXCLUSION: Like LockScope::safearray_, this comes from the
+  // operating system.
+  RAW_PTR_EXCLUSION SAFEARRAY* safearray_;
 };
 
 }  // namespace win

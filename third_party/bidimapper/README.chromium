@@ -1,32 +1,61 @@
 Name: Implementation of WebDriver BiDi standard
 Short Name: chromium-bidi
-URL: https://github.com/GoogleChromeLabs/chromium-bidi/archive/f8d953fa7313c562f88471865a4fd18dc81f1715.zip
-Version: 0
-Date: 2022-12-13
-Revision: f8d953fa7313c562f88471865a4fd18dc81f1715
-SHA-512: 349bc196e97cef7d53d8817000ee898e8f6565d2602cbbacac0b2d15565d08536a4ff5bace2fd8ca03943ee2d1c25cba6b1ed357869ed0599a79db19e1208c6c
-License: Apache 2.0
+URL: https://registry.npmjs.org/chromium-bidi/-/chromium-bidi-13.0.0.tgz
+Version: 13.0.0
+Date: 2026-01-20
+Revision: c2c6a443bfb6b84601dd42602e67b36c46bb7970
+SHA-512: 08d49b96936a2ba915a63387fcb2ab07a9bc62c9d57cae63b04c52e0ca9a7e6e1fb93542a29db3b1a9b79356321fa9756df2782a2946e23536cf3ecb62aaf238
+Update Mechanism: Manual
+License: Apache-2.0
 License File: LICENSE
+Shipped: yes
 Security Critical: no
 CPEPrefix: unknown
+License Android Compatible: yes
 
 Description:
 WebDriver BiDi implementation for ChromeDriver.
 The software is compiled into mapper.js script that is uploaded by ChromeDriver into the Chrome browser.
 
-Steps to build:
-Assume the git-revision-full-sha1 is the wanted revision.
-It can be found in the upstream repo: https://github.com/GoogleChromeLabs/chromium-bidi/commits/main.
+Steps to roll:
+Find the needed revision in the project release list: https://github.com/GoogleChromeLabs/chromium-bidi/releases.
+Roll the BiDiMapper to the needed version:
 
 ```bash
-cd directory-of-this-README.chromium
-./pull.sh git-revision-full-sha1
-./build.sh
+roll_bidimapper --version=<your-version>
 ```
 
-The file README.chromium will be updated by build.sh
+If you omit the `--version` parameter the latest available version will be pulled from NPM.
+
+The file README.chromium will be updated by roll_bidimapper
 
 Local Modifications:
 Local modifications are not allowed.
 The upstream is maintained by the Chromium developers.
 All the changes must be done there.
+
+The source code of the current revision can be found at the following url: https://github.com/GoogleChromeLabs/chromium-bidi/archive/c2c6a443bfb6b84601dd42602e67b36c46bb7970.zip
+
+-------------------- DEPENDENCY DIVIDER --------------------
+
+Name: mitt
+URL: https://github.com/developit/mitt
+Version: 3.0.1
+License: MIT
+Revision: b240473b5707857ba2c6a8e6d707c28d1e39da49
+Update Mechanism: Manual
+Security Critical: no
+Shipped: yes
+License File: licenses/LICENSE.mitt
+
+-------------------- DEPENDENCY DIVIDER --------------------
+
+Name: zod
+URL: https://zod.dev
+Version: 3.25.76
+License: MIT
+Revision: 50606616c0d291caf3210a7521da51271b918333
+Update Mechanism: Manual
+Security Critical: no
+Shipped: yes
+License File: licenses/LICENSE.zod

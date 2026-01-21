@@ -7,6 +7,7 @@
 
 #include "base/sequence_checker.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/pass_key.h"
 #include "chrome/browser/password_manager/android/password_settings_updater_android_bridge_helper.h"
 #include "chrome/browser/password_manager/android/password_settings_updater_android_dispatcher_bridge.h"
 
@@ -39,10 +40,10 @@ class PasswordSettingsUpdaterAndroidBridgeHelperImpl
 
   // PasswordSettingsUpdaterAndroidBridgeHelper implementation
   void SetConsumer(base::WeakPtr<Consumer> consumer) override;
-  void GetPasswordSettingValue(absl::optional<SyncingAccount> account,
+  void GetPasswordSettingValue(std::optional<SyncingAccount> account,
                                PasswordManagerSetting setting) override;
 
-  void SetPasswordSettingValue(absl::optional<SyncingAccount> account,
+  void SetPasswordSettingValue(std::optional<SyncingAccount> account,
                                PasswordManagerSetting setting,
                                bool value) override;
 

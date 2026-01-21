@@ -4,21 +4,19 @@
 
 #include "content/browser/service_worker/service_worker_installed_scripts_sender.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_test_utils.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/base/io_buffer.h"
 #include "net/base/test_completion_callback.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
@@ -55,7 +53,7 @@ class ExpectedScriptInfo {
     EXPECT_EQ(script_url_, script_info->script_url);
     EXPECT_EQ(encoding_, script_info->encoding);
     for (const auto& header : headers_) {
-      EXPECT_TRUE(base::Contains(script_info->headers, header.first));
+      EXPECT_TRUE(script_info->headers.contains(header.first));
       EXPECT_EQ(header.second, script_info->headers[header.first]);
       script_info->headers.erase(header.first);
     }
@@ -134,8 +132,9 @@ class ServiceWorkerInstalledScriptsSenderTest : public testing::Test {
     scope_ = GURL("http://www.example.com/test/");
     blink::mojom::ServiceWorkerRegistrationOptions options;
     options.scope = scope_;
-    registration_ = base::MakeRefCounted<ServiceWorkerRegistration>(
-        options, blink::StorageKey(url::Origin::Create(scope_)), 1L,
+    registration_ = ServiceWorkerRegistration::Create(
+        options,
+        blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_)), 1L,
         context()->AsWeakPtr(), blink::mojom::AncestorFrameType::kNormalFrame);
     version_ = CreateNewServiceWorkerVersion(
         context()->registry(), registration_.get(),
@@ -154,7 +153,7 @@ class ServiceWorkerInstalledScriptsSenderTest : public testing::Test {
 
   EmbeddedWorkerTestHelper* helper() { return helper_.get(); }
   ServiceWorkerContextCore* context() { return helper_->context(); }
-  ServiceWorkerRegistry* registry() { return context()->registry(); }
+  ServiceWorkerRegistry& registry() { return context()->registry(); }
   ServiceWorkerVersion* version() { return version_.get(); }
 
  private:
@@ -223,7 +222,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, SendScripts) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -282,7 +281,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, FailedToSendBody) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -296,8 +295,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, FailedToSendBody) {
   {
     // Reset a data pipe during sending the body.
     auto script_info = renderer_manager->WaitUntilTransferInstalledScript();
-    EXPECT_TRUE(
-        base::Contains(kExpectedScriptInfoMap, script_info->script_url));
+    EXPECT_TRUE(kExpectedScriptInfoMap.contains(script_info->script_url));
     script_info->body.reset();
     kExpectedScriptInfoMap.erase(script_info->script_url);
     // Wait until the error is triggered on the sender side.
@@ -342,7 +340,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, FailedToSendMetaData) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -356,8 +354,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, FailedToSendMetaData) {
   {
     // Reset a data pipe during sending the meta data.
     auto script_info = renderer_manager->WaitUntilTransferInstalledScript();
-    EXPECT_TRUE(
-        base::Contains(kExpectedScriptInfoMap, script_info->script_url));
+    EXPECT_TRUE(kExpectedScriptInfoMap.contains(script_info->script_url));
     script_info->meta_data.reset();
     kExpectedScriptInfoMap.erase(script_info->script_url);
     // Wait until the error is triggered on the sender side.
@@ -414,7 +411,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, Histograms) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -499,7 +496,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, RequestScriptBeforeStreaming) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -590,7 +587,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, RequestScriptAfterStreaming) {
     ASSERT_EQ(kExpectedScriptInfoMap.size(),
               scripts_info->installed_urls.size());
     for (const auto& url : scripts_info->installed_urls)
-      EXPECT_TRUE(base::Contains(kExpectedScriptInfoMap, url));
+      EXPECT_TRUE(kExpectedScriptInfoMap.contains(url));
     EXPECT_TRUE(scripts_info->manager_receiver.is_valid());
     renderer_manager =
         std::make_unique<MockServiceWorkerInstalledScriptsManager>(
@@ -707,7 +704,7 @@ TEST_F(ServiceWorkerInstalledScriptsSenderTest, StorageDisabled) {
   version()->script_cache_map()->SetResources(records);
 
   base::RunLoop loop;
-  registry()->DisableStorageForTesting(loop.QuitClosure());
+  registry().DisableStorageForTesting(loop.QuitClosure());
   loop.Run();
 
   auto sender =

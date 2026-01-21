@@ -113,7 +113,7 @@ class PageImplPrerenderBrowserTest : public PageImplTest {
                                 base::Unretained(this))) {}
 
   void SetUp() override {
-    prerender_helper_.SetUp(embedded_test_server());
+    prerender_helper_.RegisterServerRequestMonitor(embedded_test_server());
     PageImplTest::SetUp();
   }
 
@@ -171,14 +171,13 @@ IN_PROC_BROWSER_TEST_F(PageImplTest, RenderFrameHostDeleted) {
   // RenderFrameDeleted callback is invoked.
   testing::NiceMock<MockWebContentsObserver> observer(shell()->web_contents());
   EXPECT_CALL(observer, RenderFrameDeleted(testing::_))
-      .WillOnce(
-          testing::Invoke([data, rfh_a](RenderFrameHost* render_frame_host) {
-            // Both PageUserData and Page objects should be accessible before
-            // RenderFrameHost deletion.
-            EXPECT_EQ(rfh_a, render_frame_host);
-            DCHECK(&render_frame_host->GetPage());
-            EXPECT_TRUE(data);
-          }));
+      .WillOnce([data, rfh_a](RenderFrameHost* render_frame_host) {
+        // Both PageUserData and Page objects should be accessible before
+        // RenderFrameHost deletion.
+        EXPECT_EQ(rfh_a, render_frame_host);
+        DCHECK(&render_frame_host->GetPage());
+        EXPECT_TRUE(data);
+      });
 
   // Test needs rfh_a to be deleted after navigating but it doesn't happen with
   // BackForwardCache as it is stored in cache.
@@ -310,7 +309,7 @@ IN_PROC_BROWSER_TEST_F(PageImplTest, PageObjectBeforeAndAfterCommit) {
   // 2) Start navigation to B, but don't commit yet.
   TestNavigationManager manager(shell()->web_contents(), url_b);
   shell()->LoadURL(url_b);
-  EXPECT_TRUE(manager.WaitForRequestStart());
+  manager.WaitForSpeculativeRenderFrameHostCreation();
 
   FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   RenderFrameHostImpl* pending_rfh =
@@ -332,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(PageImplTest, PageObjectBeforeAndAfterCommit) {
   EXPECT_NE(data_before_commit.get()->unique_id(), data_a.get()->unique_id());
 
   // 4) Let the navigation finish and make sure it has succeeded.
-  manager.WaitForNavigationFinished();
+  ASSERT_TRUE(manager.WaitForNavigationFinished());
   EXPECT_EQ(url_b,
             web_contents()->GetPrimaryMainFrame()->GetLastCommittedURL());
 
@@ -371,8 +370,8 @@ IN_PROC_BROWSER_TEST_F(PageImplTest, PrimaryPageChangedOnCrossSiteNavigation) {
     // LastCommittedUrl, HttpStatusCode to match with ones inside
     // DidFinishNavigation and page after navigation.
     EXPECT_CALL(web_contents_observer, PrimaryPageChanged(testing::_))
-        .WillOnce(testing::Invoke([&invoked_page, &last_committed_url,
-                                   &http_status_code, url_b, this](Page& page) {
+        .WillOnce([&invoked_page, &last_committed_url, &http_status_code, url_b,
+                   this](Page& page) {
           invoked_page = &page;
           last_committed_url = page.GetMainDocument().GetLastCommittedURL();
           http_status_code = web_contents()
@@ -382,17 +381,17 @@ IN_PROC_BROWSER_TEST_F(PageImplTest, PrimaryPageChangedOnCrossSiteNavigation) {
           EXPECT_EQ(last_committed_url, url_b);
           EXPECT_TRUE(page.IsPrimary());
           EXPECT_EQ(&web_contents()->GetPrimaryPage(), &page);
-        }));
+        });
 
     EXPECT_CALL(web_contents_observer, DidFinishNavigation(testing::_))
-        .WillOnce(testing::Invoke([&last_committed_url, &http_status_code](
-                                      NavigationHandle* navigation_handle) {
+        .WillOnce([&last_committed_url,
+                   &http_status_code](NavigationHandle* navigation_handle) {
           EXPECT_EQ(navigation_handle->GetURL(), last_committed_url);
           EXPECT_EQ(http_status_code, navigation_handle->GetWebContents()
                                           ->GetController()
                                           .GetVisibleEntry()
                                           ->GetHttpStatusCode());
-        }));
+        });
   }
 
   // 4) Navigate to B. PrimaryPageChanged and DidFinishNavigation should be
@@ -528,13 +527,9 @@ class PageImplWithBackForwardCacheTest : public PageImplTest {
  public:
   PageImplWithBackForwardCacheTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{features::kBackForwardCache,
-          // Set a very long TTL before expiration (longer than the test
-          // timeout) so tests that are expecting deletion don't pass when
-          // they shouldn't.
-          {{"TimeToLiveInBackForwardCacheInSeconds", "3600"}}}},
-        // Allow BackForwardCache for all devices regardless of their memory.
-        {features::kBackForwardCacheMemoryControls});
+        GetDefaultEnabledBackForwardCacheFeaturesForTesting(
+            /*ignore_outstanding_network_request=*/false),
+        GetDefaultDisabledBackForwardCacheFeaturesForTesting());
   }
 
  private:
@@ -608,7 +603,8 @@ IN_PROC_BROWSER_TEST_F(PageImplPrerenderBrowserTest, IsPrimary) {
   // Prerender to another site.
   GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
   prerender_helper_.AddPrerender(prerender_url);
-  int host_id = prerender_test_helper().GetHostForUrl(prerender_url);
+  PrerenderHostId host_id =
+      prerender_test_helper().GetHostForUrl(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   content::RenderFrameHost* prerender_frame =
       prerender_test_helper().GetPrerenderedMainFrameHost(host_id);

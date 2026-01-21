@@ -5,13 +5,23 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_UTIL_H_
 #define CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_UTIL_H_
 
+#include <optional>
+#include <type_traits>
+
 #include "base/time/time.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_animation_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+#include "ui/base/class_property.h"
 
 class Browser;
 class SidePanelRegistry;
 class SidePanelContentProxy;
+
+namespace actions {
+class ActionItem;
+}  // namespace actions
 
 namespace views {
 class View;
@@ -19,20 +29,8 @@ class View;
 
 class SidePanelUtil {
  public:
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  enum class SidePanelOpenTrigger {
-    kToolbarButton = 0,
-    kLensContextMenu = 1,
-    kSideSearchPageAction = 2,
-    kNotesInPageContextMenu = 3,
-    kComboboxSelected = 4,
-    kTabChanged = 5,
-    kSidePanelEntryDeregistered = 6,
-    kIPHSideSearchAutoTrigger = 7,
-    kContextMenuSearchOption = 8,
-    kMaxValue = kContextMenuSearchOption,
-  };
+  using SidePanelOpenTrigger = ::SidePanelOpenTrigger;
+  using SidePanelContentState = ::SidePanelContentState;
 
   static void PopulateGlobalEntries(Browser* browser,
                                     SidePanelRegistry* global_registry);
@@ -42,18 +40,43 @@ class SidePanelUtil {
   static SidePanelContentProxy* GetSidePanelContentProxy(
       views::View* content_view);
 
+  static actions::ActionItem* GetActionItem(Browser* browser,
+                                            SidePanelEntryKey entry_key);
+
   static void RecordNewTabButtonClicked(SidePanelEntry::Id id);
-  static void RecordSidePanelOpen(absl::optional<SidePanelOpenTrigger> trigger);
-  static void RecordSidePanelClosed(base::TimeTicks opened_timestamp);
-  static void RecordSidePanelResizeMetrics(SidePanelEntry::Id id,
+  static void RecordSidePanelOpen(SidePanelEntry::PanelType type,
+                                  std::optional<SidePanelOpenTrigger> trigger);
+  static void RecordSidePanelShowOrChangeEntryTrigger(
+      SidePanelEntry::PanelType type,
+      std::optional<SidePanelOpenTrigger> trigger);
+  static void RecordSidePanelClosed(SidePanelEntry::PanelType type,
+                                    base::TimeTicks opened_timestamp);
+  static void RecordSidePanelResizeMetrics(SidePanelEntry::PanelType type,
+                                           SidePanelEntry::Id id,
                                            int side_panel_contents_width,
                                            int browser_window_width);
-  static void RecordEntryShownMetrics(SidePanelEntry::Id id);
-  static void RecordEntryHiddenMetrics(SidePanelEntry::Id id,
+  static void RecordEntryShownMetrics(SidePanelEntry::PanelType type,
+                                      SidePanelEntry::Id id,
+                                      base::TimeTicks load_started_timestamp);
+  static void RecordEntryHiddenMetrics(SidePanelEntry::PanelType type,
+                                       SidePanelEntry::Id id,
                                        base::TimeTicks shown_timestamp);
   static void RecordEntryShowTriggeredMetrics(
+      SidePanelEntry::PanelType type,
+      Browser* browser,
       SidePanelEntry::Id id,
-      absl::optional<SidePanelOpenTrigger> trigger);
+      std::optional<SidePanelOpenTrigger> trigger);
+  static void RecordPinnedButtonClicked(SidePanelEntry::Id id, bool is_pinned);
+  static void RecordSidePanelAnimationMetrics(
+      SidePanelEntry::PanelType panel_type,
+      SidePanelAnimationCoordinator::AnimationType animation_type,
+      base::TimeDelta largest_step_time,
+      int frames_per_second);
+  static void RecordPanelClosedForOtherPanelTypeMetrics(
+      SidePanelEntry::PanelType closing_panel_type,
+      SidePanelEntry::PanelType opening_panel_type,
+      SidePanelEntryId closing_panel_id,
+      SidePanelEntryId opening_panel_id);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_UTIL_H_

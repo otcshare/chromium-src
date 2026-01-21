@@ -4,7 +4,7 @@
 
 #include "components/download/public/common/mock_download_file.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -30,7 +30,7 @@ MockDownloadFile::MockDownloadFile() {
           PostSuccessRun(base::SingleThreadTaskRunner::GetCurrentDefault()));
 }
 
-MockDownloadFile::~MockDownloadFile() {}
+MockDownloadFile::~MockDownloadFile() = default;
 
 void MockDownloadFile::AddInputStream(std::unique_ptr<InputStream> input_stream,
                                       int64_t offset) {

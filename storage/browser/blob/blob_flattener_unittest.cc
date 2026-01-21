@@ -2,14 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "storage/browser/blob/blob_storage_context.h"
-
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
@@ -19,6 +17,7 @@
 #include "storage/browser/blob/blob_data_item.h"
 #include "storage/browser/blob/blob_entry.h"
 #include "storage/browser/blob/blob_memory_controller.h"
+#include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/blob/blob_storage_registry.h"
 #include "storage/browser/blob/shareable_blob_data_item.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -74,7 +73,7 @@ class BlobFlattenerTest : public testing::Test {
 
   scoped_refptr<BlobDataItem> CreateDataItem(const char* memory, size_t size) {
     return BlobDataItem::CreateBytes(
-        base::as_bytes(base::make_span(memory, size)));
+        base::as_bytes(UNSAFE_TODO(base::span(memory, size))));
   }
 
   scoped_refptr<BlobDataItem> CreateFileItem(size_t offset, size_t size) {

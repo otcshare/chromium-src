@@ -10,12 +10,12 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/singleton.h"
+#include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "rlz/lib/rlz_lib.h"
 
 namespace base {
@@ -45,6 +45,9 @@ class RLZTracker {
   // instance. Must be called before calling any other method of RLZTracker.
   static void SetRlzDelegate(std::unique_ptr<RLZTrackerDelegate> delegate);
 
+  // Clear the RLZTrackerDelegate for testing only.
+  static void ClearRlzDelegateForTesting();
+
   // Initializes the RLZ library services for use in chrome. Schedules a delayed
   // task that performs the ping and registers some events when 'first-run' is
   // true.
@@ -62,7 +65,7 @@ class RLZTracker {
                              bool is_google_in_startpages);
 
   // Records an RLZ event. Some events can be access point independent.
-  // Returns false it the event could not be recorded. Requires write access
+  // Returns false if the event could not be recorded. Requires write access
   // to the HKCU registry hive on windows.
   static bool RecordProductEvent(rlz_lib::Product product,
                                  rlz_lib::AccessPoint point,
@@ -73,7 +76,13 @@ class RLZTracker {
 #if !BUILDFLAG(IS_IOS)
   static rlz_lib::AccessPoint ChromeHomePage();
   static rlz_lib::AccessPoint ChromeAppList();
-#endif
+#endif  // !BUILDFLAG(IS_IOS)
+
+  // Records enterprise-related events.
+  static void RecordEnterpriseEnrollment();
+  static void RecordEnterpriseUnenrollment();
+  static void RecordEnterpriseEnrolledActivate();
+  static void RecordEnterpriseEnrolledFirstSearch();
 
   // Gets the HTTP header value that can be added to requests from the
   // specific access point.  The string returned is of the form:
@@ -91,7 +100,7 @@ class RLZTracker {
   // Invoked during shutdown to clean up any state created by RLZTracker.
   static void CleanupRlz();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Clears all product state. Should be called when turning RLZ off. On other
   // platforms, this is done by product uninstaller.
   static void ClearRlzState();
@@ -106,7 +115,19 @@ class RLZTracker {
 #if !BUILDFLAG(IS_IOS)
   // Records that the app list search has been used.
   static void RecordAppListSearch();
-#endif
+
+  // Returns true if there is a non-organic brand code and we have never
+  // recorded that user has performed a Google search from their Google homepage
+  // yet.
+  static bool ShouldRecordChromeHomePageSearch();
+
+  // Records that the user has their homepage set to Google search and performs
+  // a Google search from there. This event should be recorded at most once.
+  static void RecordChromeHomePageSearch();
+
+  // Manually sets if the search has been performed for testing only.
+  static void SetRlzChromeHomePageSearchRecordedForTesting(bool recorded);
+#endif  // !BUILDFLAG(IS_IOS)
 
   // The following methods are made protected so that they can be used for
   // testing purposes. Production code should never need to call these.
@@ -128,11 +149,14 @@ class RLZTracker {
   void PingNowImpl();
 
  private:
-  friend struct base::DefaultSingletonTraits<RLZTracker>;
+  friend class base::NoDestructor<RLZTracker>;
   friend class base::RefCountedThreadSafe<RLZTracker>;
 
   // Implementation called from SetRlzDelegate() static method.
   void SetDelegate(std::unique_ptr<RLZTrackerDelegate> delegate);
+
+  // Implementation called from ClearRlzDelegateForTesting() static method.
+  void ClearDelegateForTesting();
 
   // Implementation called from InitRlzDelayed() static method.
   bool Init(bool first_run,
@@ -170,6 +194,12 @@ class RLZTracker {
   // to allow tests to override how the scheduling is done.
   virtual bool ScheduleRecordFirstSearch(rlz_lib::AccessPoint point);
 
+  // Schedules a call to RecordEnterpriseEvent().
+  void ScheduleRecordEnterpriseEvent(rlz_lib::Event event_id);
+
+  // Records enterprise-related events.
+  void RecordEnterpriseEvent(rlz_lib::Event event_id);
+
   // Schedules a call to rlz_lib::SendFinancialPing(). This method is virtual
   // to allow tests to override how the scheduling is done.
   virtual void ScheduleFinancialPing();
@@ -186,7 +216,7 @@ class RLZTracker {
                                  const std::u16string& lang,
                                  const std::u16string& referral);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Implementation called from ClearRlzState static method.
   void ClearRlzStateImpl();
 
@@ -198,6 +228,12 @@ class RLZTracker {
   // Returns a pointer to the bool corresponding to whether |point| has been
   // used but not reported.
   bool* GetAccessPointRecord(rlz_lib::AccessPoint point);
+
+#if !BUILDFLAG(IS_IOS)
+  // Implementation called from SetRlzChromeHomePageSearchRecordedForTesting()
+  // static method.
+  void SetChromeHomePageSearchRecordedForTesting(bool recorded);
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Tracker used for testing purposes only. If this value is non-NULL, it
   // will be returned from GetInstance() instead of the regular singleton.
@@ -228,6 +264,20 @@ class RLZTracker {
   bool omnibox_used_;
   bool homepage_used_;
   bool app_list_used_;
+  bool enterprise_enrollment_recorded_;
+  bool enterprise_unenrollment_recorded_;
+  bool enterprise_enrolled_activate_recorded_;
+  bool enterprise_enrolled_first_search_recorded_;
+
+#if !BUILDFLAG(IS_IOS)
+  // Sets to true when we have attempted to record that user has performed a
+  // Google search from their Google homepage. This will be set to true
+  // regardless whether the event is recorded successfully, so that new
+  // |ChromeRLZTrackerWebContentsObserver| only observes web contents if still
+  // needed. On the contrast, |homepage_used_| is only set to true if the event
+  // is not recorded successfully and needs another attempt.
+  bool chrome_homepage_search_recorded_ = false;
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Main and (optionally) reactivation brand codes, assigned on UI thread.
   std::string brand_;
@@ -243,6 +293,8 @@ class RLZTracker {
   // occur in the correct sequence, especially in tests.
   scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
   SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<RLZTracker> weak_ptr_factory_{this};
 };
 
 }  // namespace rlz

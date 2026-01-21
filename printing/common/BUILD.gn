@@ -8,10 +8,16 @@ source_set("common") {
     "metafile_utils.h",
   ]
 
-  deps = [
+  configs += [ "//printing/:strict" ]
+
+  public_deps = [
     "//base",
-    "//printing/buildflags",
+    "//printing/mojom",
     "//skia",
     "//ui/accessibility",
+  ]
+  deps = [
+    "//pdf:pdf_accessibility_constants",
+    "//printing/buildflags",
   ]
 }

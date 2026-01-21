@@ -6,6 +6,7 @@
 
 #include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "base/types/pass_key.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
@@ -212,15 +213,13 @@ void CrossThreadMediaSourceAttachment::RemoveTracksFromMediaElementInternal(
 
   // Otherwise, post a task to the main thread to update the media element's
   // track lists there. Note that task might never run if the main context is
-  // destroyed in the interim. Using WTF::RetainedRef(this) here to ensure we
-  // are still alive if/when |main_runner_| executes the task. Note that there
-  // exists a CrossThreadCopier<Vector<String>> that deep-copies the bound ids
-  // vector to keep thread safety for the contained Strings.
+  // destroyed in the interim. Using blink::RetainedRef(this) here to ensure we
+  // are still alive if/when |main_runner_| executes the task.
   PostCrossThreadTask(
       *main_runner_, FROM_HERE,
       CrossThreadBindOnce(&CrossThreadMediaSourceAttachment::
                               RemoveTracksFromMediaElementOnMainThread,
-                          WTF::RetainedRef(this), track_type, track_ids,
+                          blink::RetainedRef(this), track_type, track_ids,
                           enqueue_change_event));
 }
 
@@ -336,15 +335,13 @@ void CrossThreadMediaSourceAttachment::AddTrackToMediaElementInternal(
 
   // Post a task to the main thread to add the track to the appropriate media
   // element track list there. Note that task might never run if the main
-  // context is destroyed in the interim. Using WTF::RetainedRef(this) here to
-  // ensure we are still alive if/when |main_runner_| executes the task. Note
-  // that there exists a CrossThreadCopier<String> that deep-copies the bound
-  // Strings to keep thread safety.
+  // context is destroyed in the interim. Using blink::RetainedRef(this) here to
+  // ensure we are still alive if/when |main_runner_| executes the task.
   PostCrossThreadTask(
       *main_runner_, FROM_HERE,
       CrossThreadBindOnce(
           &CrossThreadMediaSourceAttachment::AddTrackToMediaElementOnMainThread,
-          WTF::RetainedRef(this), track_type, id, kind, label, language,
+          blink::RetainedRef(this), track_type, id, kind, label, language,
           enable_or_select));
 }
 
@@ -388,7 +385,7 @@ void CrossThreadMediaSourceAttachment::AddTrackToMediaElementOnMainThread(
   // media element. Note, we use default nullptr for the supplemental
   // sourceBuffer attribute to prevent main thread JS from attempting to
   // reference worker-thread SourceBuffer. Due to lack of deducible conversion
-  // from WTF::String to WTF::AtomicString, we construct the atomics locally for
+  // from String to AtomicString, we construct the atomics locally for
   // use in track creation here.
   const AtomicString atomic_id(id);
   const AtomicString atomic_kind(kind);
@@ -398,7 +395,8 @@ void CrossThreadMediaSourceAttachment::AddTrackToMediaElementOnMainThread(
     case TrackAddRemovalType::kAudio: {
       auto* audio_track =
           MakeGarbageCollected<AudioTrack>(atomic_id, atomic_kind, atomic_label,
-                                           atomic_language, enable_or_select);
+                                           atomic_language, enable_or_select,
+                                           /*exclusive=*/false);
       attached_element_->audioTracks().Add(audio_track);
       break;
     }
@@ -475,38 +473,8 @@ bool CrossThreadMediaSourceAttachment::RunExclusively(
 }
 
 void CrossThreadMediaSourceAttachment::Unregister() {
-  DVLOG(1) << __func__ << " this=" << this
-           << ", IsMainThread=" << IsMainThread();
-
-  // Release our strong reference to the MediaSource. Note that revokeObjectURL
-  // of the url associated with this attachment could commonly follow this path
-  // while the MediaSource (and any attachment to an HTMLMediaElement) may still
-  // be alive/active. Also note that |registered_media_source_| could be
-  // incorrectly cleared already if its owner's execution context destruction
-  // has completed without notifying us, hence careful locking in
-  // MediaSourceRegistryImpl around this scenario, and allowance for us to be
-  // called on the worker context. Locking there instead of cross-thread posting
-  // to the main thread to reach us enables stability in cases where worker's
-  // context destruction or explicit object URL revocation from worker context
-  // races attempted usage of the object URL (or |registered_media_source_|
-  // here).
-  {
-    base::AutoLock lock(attachment_state_lock_);
-    DCHECK(registered_media_source_);
-
-    // MSE-in-Worker using MediaSourceHandle for attachment does NOT use object
-    // URLs, so we must not be called if MediaSourceHandle feature is enabled.
-    DCHECK(!RuntimeEnabledFeatures::MediaSourceInWorkersUsingHandleEnabled(
-        registered_media_source_->GetExecutionContext()));
-
-    // The only expected caller is a MediaSourceRegistryImpl on the main thread
-    // (or possibly on the worker thread, if MediaSourceInWorkers is enabled).
-    DCHECK(IsMainThread() ||
-           RuntimeEnabledFeatures::MediaSourceInWorkersEnabled(
-               registered_media_source_->GetExecutionContext()));
-
-    registered_media_source_ = nullptr;
-  }
+  // MSE-in-Worker does NOT use object URLs, so this should not be called.
+  NOTREACHED();
 }
 
 MediaSourceTracer*
@@ -533,21 +501,13 @@ CrossThreadMediaSourceAttachment::StartAttachingToMediaElement(
     // Prevent sequential re-use of this attachment for multiple successful
     // attachments. See declaration of |have_ever_attached_|.
     if (have_ever_attached_) {
-      if (RuntimeEnabledFeatures::MediaSourceInWorkersUsingHandleEnabled(
-              element->GetExecutionContext())) {
-        // With current restrictions on ability to only ever obtain at most one
-        // MediaSourceHandle per MediaSource and only allow loading to succeed
-        // at most once per each MediaSourceHandle, fail if there is attempt to
-        // reuse either in a load.
-        DVLOG(1) << __func__ << " this=" << this << ", element=" << element
-                 << ": failed: reuse of MediaSource for more than one load "
-                    "is not supported for MSE-in-Workers";
-      } else {
-        DVLOG(1) << __func__ << " this=" << this << ", element=" << element
-                 << ": failed: reuse of MediaSource object URL by disabling "
-                    "RevokeMediaSourceObjectURLOnAttach is not supported for "
-                    "MSE-in-Workers";
-      }
+      // With current restrictions on ability to only ever obtain at most one
+      // MediaSourceHandle per MediaSource and only allow loading to succeed
+      // at most once per each MediaSourceHandle, fail if there is attempt to
+      // reuse either in a load.
+      DVLOG(1) << __func__ << " this=" << this << ", element=" << element
+               << ": failed: reuse of MediaSource for more than one load "
+                  "is not supported for MSE-in-Workers";
       *success = false;
       return nullptr;
     }
@@ -640,17 +600,17 @@ void CrossThreadMediaSourceAttachment::CompleteAttachingToMediaElement(
 
     // In unlikely case this attachment is reused, clear the cached state of
     // previous attachment.
-    cached_buffered_.Clear();
-    cached_seekable_.Clear();
+    cached_buffered_.clear();
+    cached_seekable_.clear();
 
     // Verify the rest of the status once we're completing this in the worker
-    // thread. Using WTF::RetainedRef(this) here to ensure we are still alive
+    // thread. Using blink::RetainedRef(this) here to ensure we are still alive
     // if/when |worker_runner_| executes the task.
     PostCrossThreadTask(
         *worker_runner_, FROM_HERE,
         CrossThreadBindOnce(&CrossThreadMediaSourceAttachment::
                                 CompleteAttachingToMediaElementOnWorkerThread,
-                            WTF::RetainedRef(this),
+                            blink::RetainedRef(this),
                             std::move(web_media_source)));
   }
 }
@@ -732,13 +692,13 @@ void CrossThreadMediaSourceAttachment::Close(MediaSourceTracer* /* tracer */) {
   // RunExclusively()), since the Chromium abstractions underlying those are
   // owned by the main thread WebMediaPlayer which is shutting down concurrently
   // with the task scheduling to complete the close operation on the worker
-  // thread. Using WTF::RetainedRef(this) here to ensure we are still alive
+  // thread. Using blink::RetainedRef(this) here to ensure we are still alive
   // if/when |worker_runner_| executes the task.
   PostCrossThreadTask(
       *worker_runner_, FROM_HERE,
       CrossThreadBindOnce(
           &CrossThreadMediaSourceAttachment::CloseOnWorkerThread,
-          WTF::RetainedRef(this)));
+          blink::RetainedRef(this)));
 }
 
 void CrossThreadMediaSourceAttachment::CloseOnWorkerThread() {
@@ -902,7 +862,7 @@ void CrossThreadMediaSourceAttachment::OnElementTimeUpdate(double time) {
         *worker_runner_, FROM_HERE,
         CrossThreadBindOnce(
             &CrossThreadMediaSourceAttachment::UpdateWorkerThreadTimeCache,
-            WTF::RetainedRef(this), base::Seconds(time)));
+            blink::RetainedRef(this), base::Seconds(time)));
   }
 }
 
@@ -939,7 +899,7 @@ void CrossThreadMediaSourceAttachment::OnElementError() {
         *worker_runner_, FROM_HERE,
         CrossThreadBindOnce(
             &CrossThreadMediaSourceAttachment::HandleElementErrorOnWorkerThread,
-            WTF::RetainedRef(this)));
+            blink::RetainedRef(this)));
   }
 }
 
@@ -1017,7 +977,7 @@ void CrossThreadMediaSourceAttachment::SendUpdatedInfoToMainThreadCacheInternal(
       *main_runner_, FROM_HERE,
       CrossThreadBindOnce(
           &CrossThreadMediaSourceAttachment::UpdateMainThreadInfoCache,
-          WTF::RetainedRef(this), std::move(new_buffered),
+          blink::RetainedRef(this), std::move(new_buffered),
           std::move(new_seekable), has_new_duration, new_duration));
 }
 

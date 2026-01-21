@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_ASH_ACCESSIBILITY_MAGNIFICATION_MANAGER_H_
 
 #include "ash/public/cpp/accessibility_controller_enums.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -15,7 +16,7 @@
 #include "components/session_manager/core/session_manager_observer.h"
 #include "components/user_manager/user_manager.h"
 #include "ui/events/event_handler.h"
-#include "ui/views/accessibility/ax_event_observer.h"
+#include "ui/views/accessibility/ax_update_observer.h"
 
 class PrefChangeRegistrar;
 
@@ -40,7 +41,7 @@ class MagnificationManager
       public user_manager::UserManager::UserSessionStateObserver,
       public ProfileObserver,
       public ui::EventHandler,
-      public views::AXEventObserver {
+      public views::AXUpdateObserver {
  public:
   MagnificationManager(const MagnificationManager&) = delete;
   MagnificationManager& operator=(const MagnificationManager&) = delete;
@@ -84,7 +85,7 @@ class MagnificationManager
   // ui::EventHandler overrides:
   void OnMouseEvent(ui::MouseEvent* event) override;
 
-  // views::AXEventObserver:
+  // views::AXUpdateObserver:
   void OnViewEvent(views::View* view, ax::mojom::Event event_type) override;
 
   void SetProfileForTest(Profile* profile);
@@ -103,14 +104,13 @@ class MagnificationManager
   void SetProfile(Profile* profile);
 
   void SetMagnifierEnabledInternal(bool enabled);
-  void SetMagnifierKeepFocusCenteredInternal(bool keep_focus_centered);
   void SetMagnifierScaleInternal(double scale);
   void SetMagnifierMouseFollowingModeInternal(
       MagnifierMouseFollowingMode mouse_following_mode);
   void UpdateMagnifierFromPrefs();
   void UpdateDockedMagnifierFromPrefs();
 
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
 
   // Last mouse event time - used for ignoring focus changes for a few
@@ -118,7 +118,6 @@ class MagnificationManager
   base::TimeTicks last_mouse_event_;
 
   bool fullscreen_magnifier_enabled_ = false;
-  bool keep_focus_centered_ = false;
   double scale_ = 0.0;
 
   base::ScopedObservation<session_manager::SessionManager,

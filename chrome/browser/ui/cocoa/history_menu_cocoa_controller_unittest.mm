@@ -5,8 +5,9 @@
 #include "chrome/browser/ui/cocoa/history_menu_cocoa_controller.h"
 
 #include <memory>
+#include <set>
+#include <utility>
 
-#include "base/mac/scoped_nsobject.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -18,22 +19,15 @@
 
 @interface FakeHistoryMenuController : HistoryMenuCocoaController {
  @public
-  BOOL _opened[3];
+  // ivars are initialized to zero, so these all start out as NO.
+  std::set<SessionID::id_type> _opened;
 }
 @end
 
 @implementation FakeHistoryMenuController
 
-- (instancetype)initTest {
-  if ((self = [super init])) {
-    _opened[1] = NO;
-    _opened[2] = NO;
-  }
-  return self;
-}
-
 - (void)openURLForItem:(const HistoryMenuBridge::HistoryItem*)item {
-  _opened[item->session_id.id()] = YES;
+  _opened.insert(item->session_id.id());
 }
 
 @end  // FakeHistoryMenuController
@@ -45,12 +39,14 @@ class HistoryMenuCocoaControllerTest : public BrowserWithTestWindowTest {
     ASSERT_TRUE(profile());
 
     bridge_ = std::make_unique<HistoryMenuBridge>(profile());
-    bridge_->controller_.reset(
-        [[FakeHistoryMenuController alloc] initWithBridge:bridge_.get()]);
-    [controller() initTest];
+    bridge_->controller_ =
+        [[FakeHistoryMenuController alloc] initWithBridge:bridge_.get()];
   }
 
-  void TearDown() override { bridge_.reset(); }
+  void TearDown() override {
+    bridge_.reset();
+    BrowserWithTestWindowTest::TearDown();
+  }
 
   void CreateItems(NSMenu* menu) {
     auto item = std::make_unique<HistoryMenuBridge::HistoryItem>();
@@ -72,7 +68,7 @@ class HistoryMenuCocoaControllerTest : public BrowserWithTestWindowTest {
   }
 
   FakeHistoryMenuController* controller() {
-    return static_cast<FakeHistoryMenuController*>(bridge_->controller_.get());
+    return static_cast<FakeHistoryMenuController*>(bridge_->controller_);
   }
 
  private:
@@ -81,15 +77,15 @@ class HistoryMenuCocoaControllerTest : public BrowserWithTestWindowTest {
 };
 
 TEST_F(HistoryMenuCocoaControllerTest, OpenURLForItem) {
-  base::scoped_nsobject<NSMenu> menu([[NSMenu alloc] initWithTitle:@"History"]);
-  CreateItems(menu.get());
+  NSMenu* menu = [[NSMenu alloc] initWithTitle:@"History"];
+  CreateItems(menu);
 
   std::map<NSMenuItem*, std::unique_ptr<HistoryMenuBridge::HistoryItem>>&
       items = menu_item_map();
   for (const auto& pair : items) {
     HistoryMenuBridge::HistoryItem* item = pair.second.get();
-    EXPECT_FALSE(controller()->_opened[item->session_id.id()]);
+    EXPECT_FALSE(controller()->_opened.count(item->session_id.id()));
     [controller() openHistoryMenuItem:pair.first];
-    EXPECT_TRUE(controller()->_opened[item->session_id.id()]);
+    EXPECT_TRUE(controller()->_opened.count(item->session_id.id()));
   }
 }

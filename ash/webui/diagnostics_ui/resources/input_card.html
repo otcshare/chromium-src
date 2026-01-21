@@ -1,4 +1,18 @@
 <style include="diagnostics-shared">
+  :host-context(body.jelly-enabled) .device #deviceIcon {
+    --iron-icon-fill-color: var(--cros-icon-color-prominent);
+    background-color: var(--cros-sys-highlight_shape);
+  }
+
+  :host-context(body.jelly-enabled) .device #tooltipText {
+    font: var(--cros-annotation-1-font);
+  }
+
+  :host-context(body.jelly-enabled) .device-name,
+  :host-context(body.jelly-enabled) .device-description {
+    font: var(--cros-body-2-font);
+  }
+
   paper-tooltip {
     --paper-tooltip-background: var(--cros-tooltip-background-color);
     --paper-tooltip-min-width: 0px;
@@ -57,10 +71,10 @@
     <dom-repeat items="[[devices]]" as="device">
       <template>
         <div class="device" data-evdev-id$="[[device.id]]">
-          <iron-icon icon="[[deviceIcon_]]" id="deviceIcon"></iron-icon>
+          <iron-icon icon="[[deviceIcon]]" id="deviceIcon"></iron-icon>
           <div class="device-body">
             <div class="device-description" id="deviceDescription">
-              [[getDeviceDescription_(device)]]
+              [[getDeviceDescription(device)]]
             </div>
             <div class="device-name" id="deviceName">[[device.name]]</div>
           </div>
@@ -74,7 +88,7 @@
             </span>
           </paper-tooltip>
           <cr-button id="inputDeviceTestButton"
-              on-click="handleTestButtonClick_"
+              on-click="handleTestButtonClick"
               aria-labelledby="inputDeviceTestButton deviceDescription"
               disabled="[[!getDeviceTestability(device, hostDeviceStatus)]]">
             [[i18n('inputDeviceTest')]]

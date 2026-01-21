@@ -5,10 +5,10 @@
 #ifndef CHROME_BROWSER_ASH_EXTENSIONS_MEDIA_PLAYER_API_H_
 #define CHROME_BROWSER_ASH_EXTENSIONS_MEDIA_PLAYER_API_H_
 
-#include <map>
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_function.h"
 
@@ -39,7 +39,7 @@ class MediaPlayerAPI : public BrowserContextKeyedAPI {
  private:
   friend class BrowserContextKeyedAPIFactory<MediaPlayerAPI>;
 
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() {

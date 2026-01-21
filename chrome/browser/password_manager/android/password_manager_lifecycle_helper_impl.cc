@@ -5,10 +5,13 @@
 #include "chrome/browser/password_manager/android/password_manager_lifecycle_helper_impl.h"
 
 #include <jni.h>
+
 #include <cstdint>
 #include <utility>
 
 #include "base/android/jni_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/password_manager/android/jni_headers/PasswordManagerLifecycleHelper_jni.h"
 
 PasswordManagerLifecycleHelperImpl::PasswordManagerLifecycleHelperImpl() {
@@ -39,3 +42,5 @@ void PasswordManagerLifecycleHelperImpl::OnForegroundSessionStart(JNIEnv* env) {
   DCHECK(foregrounding_callback_);
   foregrounding_callback_.Run();
 }
+
+DEFINE_JNI(PasswordManagerLifecycleHelper)

@@ -4,7 +4,9 @@
 
 #include "third_party/blink/renderer/platform/wtf/atomic_operations.h"
 
-namespace WTF {
+#include "base/compiler_specific.h"
+
+namespace blink {
 
 namespace {
 
@@ -17,8 +19,9 @@ void AtomicReadMemcpyImpl(void* to, const void* from, size_t bytes) {
                     (sizeof(AlignmentType) - 1));
   auto* sizet_to = reinterpret_cast<AlignmentType*>(to);
   const auto* sizet_from = reinterpret_cast<const AlignmentType*>(from);
-  for (; bytes >= sizeof(AlignmentType);
-       bytes -= sizeof(AlignmentType), ++sizet_to, ++sizet_from) {
+  for (; bytes >= sizeof(AlignmentType); bytes -= sizeof(AlignmentType),
+                                         UNSAFE_TODO(++sizet_to),
+                                         UNSAFE_TODO(++sizet_from)) {
     *sizet_to = AsAtomicPtr(sizet_from)->load(std::memory_order_relaxed);
   }
 
@@ -27,13 +30,14 @@ void AtomicReadMemcpyImpl(void* to, const void* from, size_t bytes) {
   if (sizeof(AlignmentType) == 8 && bytes >= 4) {
     *uint32t_to = AsAtomicPtr(uint32t_from)->load(std::memory_order_relaxed);
     bytes -= sizeof(uint32_t);
-    ++uint32t_to;
-    ++uint32t_from;
+    UNSAFE_TODO(++uint32t_to);
+    UNSAFE_TODO(++uint32t_from);
   }
 
   uint8_t* uint8t_to = reinterpret_cast<uint8_t*>(uint32t_to);
   const uint8_t* uint8t_from = reinterpret_cast<const uint8_t*>(uint32t_from);
-  for (; bytes > 0; bytes -= sizeof(uint8_t), ++uint8t_to, ++uint8t_from) {
+  for (; bytes > 0; bytes -= sizeof(uint8_t), UNSAFE_TODO(++uint8t_to),
+                    UNSAFE_TODO(++uint8t_from)) {
     *uint8t_to = AsAtomicPtr(uint8t_from)->load(std::memory_order_relaxed);
   }
   DCHECK_EQ(0u, bytes);
@@ -48,8 +52,9 @@ void AtomicWriteMemcpyImpl(void* to, const void* from, size_t bytes) {
                     (sizeof(AlignmentType) - 1));
   auto* sizet_to = reinterpret_cast<AlignmentType*>(to);
   const auto* sizet_from = reinterpret_cast<const AlignmentType*>(from);
-  for (; bytes >= sizeof(AlignmentType);
-       bytes -= sizeof(AlignmentType), ++sizet_to, ++sizet_from) {
+  for (; bytes >= sizeof(AlignmentType); bytes -= sizeof(AlignmentType),
+                                         UNSAFE_TODO(++sizet_to),
+                                         UNSAFE_TODO(++sizet_from)) {
     AsAtomicPtr(sizet_to)->store(*sizet_from, std::memory_order_relaxed);
   }
 
@@ -58,13 +63,14 @@ void AtomicWriteMemcpyImpl(void* to, const void* from, size_t bytes) {
   if (sizeof(AlignmentType) == 8 && bytes >= 4) {
     AsAtomicPtr(uint32t_to)->store(*uint32t_from, std::memory_order_relaxed);
     bytes -= sizeof(uint32_t);
-    ++uint32t_to;
-    ++uint32t_from;
+    UNSAFE_TODO(++uint32t_to);
+    UNSAFE_TODO(++uint32t_from);
   }
 
   uint8_t* uint8t_to = reinterpret_cast<uint8_t*>(uint32t_to);
   const uint8_t* uint8t_from = reinterpret_cast<const uint8_t*>(uint32t_from);
-  for (; bytes > 0; bytes -= sizeof(uint8_t), ++uint8t_to, ++uint8t_from) {
+  for (; bytes > 0; bytes -= sizeof(uint8_t), UNSAFE_TODO(++uint8t_to),
+                    UNSAFE_TODO(++uint8t_from)) {
     AsAtomicPtr(uint8t_to)->store(*uint8t_from, std::memory_order_relaxed);
   }
   DCHECK_EQ(0u, bytes);
@@ -77,7 +83,7 @@ void AtomicMemzeroImpl(void* buf, size_t bytes) {
                     (sizeof(AlignmentType) - 1));
   auto* sizet_buf = reinterpret_cast<AlignmentType*>(buf);
   for (; bytes >= sizeof(AlignmentType);
-       bytes -= sizeof(AlignmentType), ++sizet_buf) {
+       bytes -= sizeof(AlignmentType), UNSAFE_TODO(++sizet_buf)) {
     AsAtomicPtr(sizet_buf)->store(0, std::memory_order_relaxed);
   }
 
@@ -85,11 +91,11 @@ void AtomicMemzeroImpl(void* buf, size_t bytes) {
   if (sizeof(AlignmentType) == 8 && bytes >= 4) {
     AsAtomicPtr(uint32t_buf)->store(0, std::memory_order_relaxed);
     bytes -= sizeof(uint32_t);
-    ++uint32t_buf;
+    UNSAFE_TODO(++uint32t_buf);
   }
 
   uint8_t* uint8t_buf = reinterpret_cast<uint8_t*>(uint32t_buf);
-  for (; bytes > 0; bytes -= sizeof(uint8_t), ++uint8t_buf) {
+  for (; bytes > 0; bytes -= sizeof(uint8_t), UNSAFE_TODO(++uint8t_buf)) {
     AsAtomicPtr(uint8t_buf)->store(0, std::memory_order_relaxed);
   }
   DCHECK_EQ(0u, bytes);
@@ -132,4 +138,4 @@ void AtomicMemzero(void* buf, size_t bytes) {
   AtomicMemzeroImpl<uintptr_t>(buf, bytes);
 }
 
-}  // namespace WTF
+}  // namespace blink

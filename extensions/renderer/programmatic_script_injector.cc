@@ -11,12 +11,10 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/error_utils.h"
-#include "extensions/common/extension_messages.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/script_constants.h"
 #include "extensions/renderer/injection_host.h"
 #include "extensions/renderer/renderer_extension_registry.h"
 #include "extensions/renderer/script_context.h"
@@ -48,6 +46,11 @@ blink::mojom::UserActivationOption ProgrammaticScriptInjector::IsUserGesture()
 mojom::ExecutionWorld ProgrammaticScriptInjector::GetExecutionWorld() const {
   DCHECK(params_->injection->is_js());
   return params_->injection->get_js()->world;
+}
+
+const std::optional<std::string>&
+ProgrammaticScriptInjector::GetExecutionWorldId() const {
+  return params_->injection->get_js()->world_id;
 }
 
 mojom::CSSOrigin ProgrammaticScriptInjector::GetCssOrigin() const {
@@ -100,9 +103,7 @@ PermissionsData::PageAccess ProgrammaticScriptInjector::CanExecuteOnFrame(
   GURL effective_document_url =
       ScriptContext::GetEffectiveDocumentURLForInjection(
           frame, frame->GetDocument().Url(),
-          params_->match_about_blank
-              ? MatchOriginAsFallbackBehavior::kMatchForAboutSchemeAndClimbTree
-              : MatchOriginAsFallbackBehavior::kNever);
+          params_->match_origin_as_fallback_behavior);
   if (params_->is_web_view) {
     if (!frame->IsOutermostMainFrame()) {
       // This is a subframe inside <webview>, so allow it.
@@ -163,7 +164,7 @@ ProgrammaticScriptInjector::GetCssSources(
 }
 
 void ProgrammaticScriptInjector::OnInjectionComplete(
-    absl::optional<base::Value> execution_result,
+    std::optional<base::Value> execution_result,
     mojom::RunLocation run_location) {
   DCHECK(!result_.has_value());
   result_ = std::move(execution_result);
@@ -173,7 +174,7 @@ void ProgrammaticScriptInjector::OnInjectionComplete(
 void ProgrammaticScriptInjector::OnWillNotInject(InjectFailureReason reason) {
   std::string error;
   switch (reason) {
-    case NOT_ALLOWED:
+    case ScriptInjector::InjectFailureReason::kNotAllowed:
       if (!CanShowUrlInError()) {
         error = manifest_errors::kCannotAccessPage;
       } else if (!origin_for_about_error_.empty()) {
@@ -185,8 +186,9 @@ void ProgrammaticScriptInjector::OnWillNotInject(InjectFailureReason reason) {
             manifest_errors::kCannotAccessPageWithUrl, url_.spec());
       }
       break;
-    case EXTENSION_REMOVED:  // no special error here.
-    case WONT_INJECT:
+    case ScriptInjector::InjectFailureReason::kExtensionRemoved:  // no special
+                                                                  // error here.
+    case ScriptInjector::InjectFailureReason::kWontInject:
       break;
   }
   Finish(error);

@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 
 namespace remoting::protocol {
 
@@ -15,19 +16,6 @@ constexpr char kSingleStreamName[] = "screen_stream";
 
 VideoStreamEventRouter::VideoStreamEventRouter() = default;
 VideoStreamEventRouter::~VideoStreamEventRouter() = default;
-
-void VideoStreamEventRouter::OnTargetFramerateChanged(
-    webrtc::ScreenId screen_id,
-    int framerate) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  auto observer = GetObserver(screen_id);
-  if (observer) {
-    observer->OnTargetFramerateChanged(framerate);
-  } else {
-    LOG(WARNING) << "No registered VideoChannelStateObserver for " << screen_id;
-  }
-}
 
 void VideoStreamEventRouter::OnEncodedFrameSent(
     webrtc::ScreenId screen_id,
@@ -58,21 +46,19 @@ void VideoStreamEventRouter::SetVideoChannelStateObserver(
   // Clear out the single stream observer in case the mode changed.
   single_stream_state_observer_ = nullptr;
 
-  auto screen_id_index = stream_name.find_last_of('_');
-  if (screen_id_index == std::string::npos) {
+  auto parts = base::RSplitStringOnce(stream_name, '_');
+  if (!parts) {
     LOG(ERROR) << "Unexpected stream name format: " << stream_name;
     return;
   }
 
   int64_t screen_id;
-  if (!base::StringToInt64(stream_name.substr(screen_id_index + 1),
-                           &screen_id)) {
+  if (!base::StringToInt64(parts->second, &screen_id)) {
     LOG(ERROR) << "Failed to extract screen id from: " << stream_name;
     return;
   }
 
-  multi_stream_state_observers_.insert(
-      {screen_id, video_channel_state_observer});
+  multi_stream_state_observers_[screen_id] = video_channel_state_observer;
 }
 
 base::WeakPtr<VideoChannelStateObserver> VideoStreamEventRouter::GetObserver(
@@ -81,11 +67,12 @@ base::WeakPtr<VideoChannelStateObserver> VideoStreamEventRouter::GetObserver(
     return single_stream_state_observer_;
   }
 
-  if (multi_stream_state_observers_.contains(screen_id)) {
-    auto observer = multi_stream_state_observers_.at(screen_id);
+  if (auto it = multi_stream_state_observers_.find(screen_id);
+      it != multi_stream_state_observers_.end()) {
+    auto observer = it->second;
     if (!observer) {
       LOG(WARNING) << "Removing invalid observer for screen_id: " << screen_id;
-      multi_stream_state_observers_.erase(screen_id);
+      multi_stream_state_observers_.erase(it);
     }
 
     return observer;

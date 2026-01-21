@@ -8,10 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "printing/printer_query_result.h"
 
 namespace chromeos {
+struct IppPrinterInfo;
 struct PrinterAuthenticationInfo;
 }  // namespace chromeos
 
@@ -26,8 +27,8 @@ namespace ash {
 // the raw printer-make-and-model value from the printer. |autoconf| indicates
 // if we think we can compute the printer capabilities without a PPD.
 // |auth_info| holds the information about authentication required by the
-// printer. |client_info_supported| indicates whether the printer supports all
-// members of the 'client-info' IPP attribute.
+// printer. |ipp_printer_info| holds various IPP attributes reported by the
+// printer.
 using PrinterInfoCallback = base::OnceCallback<void(
     ::printing::PrinterQueryResult result,
     const ::printing::PrinterStatus& status,
@@ -35,7 +36,7 @@ using PrinterInfoCallback = base::OnceCallback<void(
     const std::vector<std::string>& document_formats,
     bool autoconf,
     const chromeos::PrinterAuthenticationInfo& auth_info,
-    bool client_info_supported)>;
+    const chromeos::IppPrinterInfo& ipp_printer_info)>;
 
 // Dispatch an IPP request to |host| on |port| for |path| to obtain
 // basic printer information.

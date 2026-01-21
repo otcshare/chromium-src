@@ -6,16 +6,15 @@
 #define SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_COPY_OUTPUT_RESULT_MOJOM_TRAITS_H_
 
 #include <memory>
+#include <optional>
 
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "gpu/ipc/common/mailbox_mojom_traits.h"
-#include "gpu/ipc/common/sync_token_mojom_traits.h"
 #include "mojo/public/cpp/bindings/optional_as_pointer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/viz/public/cpp/compositing/bitmap_in_shared_memory_mojom_traits.h"
 #include "services/viz/public/mojom/compositing/copy_output_result.mojom-shared.h"
 #include "services/viz/public/mojom/compositing/texture_releaser.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
 #include "ui/gfx/ipc/color/gfx_param_traits.h"
 #include "ui/gfx/mojom/color_space_mojom_traits.h"
@@ -43,6 +42,16 @@ struct EnumTraits<viz::mojom::CopyOutputResultDestination,
 };
 
 template <>
+struct EnumTraits<viz::mojom::CopyOutputResultError,
+                  viz::CopyOutputResult::Error> {
+  static viz::mojom::CopyOutputResultError ToMojom(
+      viz::CopyOutputResult::Error format);
+
+  static bool FromMojom(viz::mojom::CopyOutputResultError input,
+                        viz::CopyOutputResult::Error* out);
+};
+
+template <>
 struct StructTraits<viz::mojom::CopyOutputResultDataView,
                     std::unique_ptr<viz::CopyOutputResult>> {
   static viz::CopyOutputResult::Format format(
@@ -54,13 +63,13 @@ struct StructTraits<viz::mojom::CopyOutputResultDataView,
   static const gfx::Rect& rect(
       const std::unique_ptr<viz::CopyOutputResult>& result);
 
-  static absl::optional<viz::CopyOutputResult::ScopedSkBitmap> bitmap(
+  static viz::CopyOutputResult::Error error(
+      const std::unique_ptr<viz::CopyOutputResult>& result);
+
+  static std::optional<viz::CopyOutputResult::ScopedSkBitmap> bitmap(
       const std::unique_ptr<viz::CopyOutputResult>& result);
 
   static mojo::OptionalAsPointer<const gpu::Mailbox> mailbox(
-      const std::unique_ptr<viz::CopyOutputResult>& result);
-
-  static mojo::OptionalAsPointer<const gpu::SyncToken> sync_token(
       const std::unique_ptr<viz::CopyOutputResult>& result);
 
   static mojo::OptionalAsPointer<const gfx::ColorSpace> color_space(

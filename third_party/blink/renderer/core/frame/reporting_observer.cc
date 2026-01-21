@@ -25,7 +25,8 @@ ReportingObserver* ReportingObserver::Create(
 ReportingObserver::ReportingObserver(ExecutionContext* execution_context,
                                      V8ReportingObserverCallback* callback,
                                      ReportingObserverOptions* options)
-    : ExecutionContextClient(execution_context),
+    : ActiveScriptWrappable<ReportingObserver>({}),
+      ExecutionContextClient(execution_context),
       execution_context_(execution_context),
       callback_(callback),
       options_(options),
@@ -54,15 +55,15 @@ void ReportingObserver::QueueReport(Report* report) {
   // batch.
   if (report_queue_.size() == 1) {
     execution_context_->GetTaskRunner(TaskType::kMiscPlatformAPI)
-        ->PostTask(FROM_HERE,
-                   WTF::BindOnce(&ReportingObserver::ReportToCallback,
-                                 WrapWeakPersistent(this)));
+        ->PostTask(FROM_HERE, BindOnce(&ReportingObserver::ReportToCallback,
+                                       WrapWeakPersistent(this)));
   }
 }
 
 bool ReportingObserver::ObservedType(const String& type) {
-  return !options_->hasTypesNonNull() || options_->typesNonNull().empty() ||
-         options_->typesNonNull().Find(type) != kNotFound;
+  return !options_->hasTypes() || !options_->types() ||
+         options_->types()->empty() ||
+         options_->types()->Find(type) != kNotFound;
 }
 
 bool ReportingObserver::Buffered() {

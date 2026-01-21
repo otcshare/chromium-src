@@ -4,7 +4,9 @@
 
 #include "media/audio/audio_thread_hang_monitor.h"
 
-#include "base/bind.h"
+#include <optional>
+
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -13,7 +15,6 @@
 #include "base/time/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::ElementsAre;
 using testing::Test;
@@ -47,7 +48,7 @@ class AudioThreadHangMonitorTest : public Test {
     // runner since TaskEnvironment::FastForwardBy only works for the main
     // thread.
     hang_monitor_ = AudioThreadHangMonitor::Create(
-        HangAction::kDoNothing, absl::nullopt, task_env_.GetMockTickClock(),
+        HangAction::kDoNothing, std::nullopt, task_env_.GetMockTickClock(),
         audio_thread_.task_runner(), task_env_.GetMainThreadTaskRunner());
   }
 
@@ -78,9 +79,8 @@ class AudioThreadHangMonitorTest : public Test {
     // We keep |event_| as a member of the test fixture to make sure that the
     // audio thread terminates before |event_| is destructed.
     event_.Reset();
-    audio_thread_.task_runner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&base::WaitableEvent::Wait, base::Unretained(&event_)));
+    audio_thread_.task_runner()->PostTask(FROM_HERE,
+                                          event_.GetWaitCallbackForTesting());
   }
 
   MOCK_METHOD0(HangActionDump, void());
@@ -251,7 +251,7 @@ TEST_F(AudioThreadHangMonitorTest, NoHangActionWhenOk) {
 
 TEST_F(AudioThreadHangMonitorTest, DumpsWhenAudioThreadIsBlocked) {
   hang_monitor_ = AudioThreadHangMonitor::Create(
-      HangAction::kDump, absl::nullopt, task_env_.GetMockTickClock(),
+      HangAction::kDump, std::nullopt, task_env_.GetMockTickClock(),
       audio_thread_.task_runner(), task_env_.GetMainThreadTaskRunner());
   SetHangActionCallbacksForTesting();
   RunUntilIdle();
@@ -268,7 +268,7 @@ TEST_F(AudioThreadHangMonitorTest, DumpsWhenAudioThreadIsBlocked) {
 
 TEST_F(AudioThreadHangMonitorTest, TerminatesProcessWhenAudioThreadIsBlocked) {
   hang_monitor_ = AudioThreadHangMonitor::Create(
-      HangAction::kTerminateCurrentProcess, absl::nullopt,
+      HangAction::kTerminateCurrentProcess, std::nullopt,
       task_env_.GetMockTickClock(), audio_thread_.task_runner(),
       task_env_.GetMainThreadTaskRunner());
   SetHangActionCallbacksForTesting();
@@ -287,7 +287,7 @@ TEST_F(AudioThreadHangMonitorTest, TerminatesProcessWhenAudioThreadIsBlocked) {
 TEST_F(AudioThreadHangMonitorTest,
        DumpsAndTerminatesProcessWhenAudioThreadIsBlocked) {
   hang_monitor_ = AudioThreadHangMonitor::Create(
-      HangAction::kDumpAndTerminateCurrentProcess, absl::nullopt,
+      HangAction::kDumpAndTerminateCurrentProcess, std::nullopt,
       task_env_.GetMockTickClock(), audio_thread_.task_runner(),
       task_env_.GetMainThreadTaskRunner());
   SetHangActionCallbacksForTesting();

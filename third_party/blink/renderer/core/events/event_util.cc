@@ -4,9 +4,12 @@
 
 #include "third_party/blink/renderer/core/events/event_util.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
@@ -21,7 +24,7 @@ const Vector<AtomicString>& MouseButtonEventTypes() {
 }
 
 bool IsMouseButtonEventType(const AtomicString& event_type) {
-  return base::Contains(MouseButtonEventTypes(), event_type);
+  return std::ranges::contains(MouseButtonEventTypes(), event_type);
 }
 
 bool IsPointerEventType(const AtomicString& event_type) {
@@ -37,13 +40,9 @@ bool IsPointerEventType(const AtomicString& event_type) {
          event_type == event_type_names::kPointerup;
 }
 
-bool IsDOMMutationEventType(const AtomicString& event_type) {
-  return event_type == event_type_names::kDOMCharacterDataModified ||
-         event_type == event_type_names::kDOMNodeInserted ||
-         event_type == event_type_names::kDOMNodeInsertedIntoDocument ||
-         event_type == event_type_names::kDOMNodeRemoved ||
-         event_type == event_type_names::kDOMNodeRemovedFromDocument ||
-         event_type == event_type_names::kDOMSubtreeModified;
+bool IsSnapEventType(const AtomicString& event_type) {
+  return event_type == event_type_names::kScrollsnapchanging ||
+         event_type == event_type_names::kScrollsnapchange;
 }
 
 }  // namespace event_util

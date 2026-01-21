@@ -9,14 +9,15 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "components/zucchini/address_translator.h"
 #include "components/zucchini/arm_utils.h"
 #include "components/zucchini/buffer_view.h"
 #include "components/zucchini/image_utils.h"
 #include "components/zucchini/io_utils.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace zucchini {
 
@@ -38,8 +39,8 @@ class Rel32ReaderX86 : public ReferenceReader {
   const Rel32ReaderX86& operator=(const Rel32ReaderX86&) = delete;
   ~Rel32ReaderX86() override;
 
-  // Returns the next reference, or absl::nullopt if exhausted.
-  absl::optional<Reference> GetNext() override;
+  // Returns the next reference, or std::nullopt if exhausted.
+  std::optional<Reference> GetNext() override;
 
  private:
   ConstBufferView image_;
@@ -94,7 +95,7 @@ class Rel32ReaderArm : public ReferenceReader {
   Rel32ReaderArm(const Rel32ReaderArm&) = delete;
   const Rel32ReaderArm& operator=(const Rel32ReaderArm&) = delete;
 
-  absl::optional<Reference> GetNext() override {
+  std::optional<Reference> GetNext() override {
     while (cur_it_ < rel32_end_ && *cur_it_ < hi_) {
       offset_t location = *(cur_it_++);
       CODE_T code = ADDR_TRAITS::Fetch(view_, location);
@@ -106,7 +107,7 @@ class Rel32ReaderArm : public ReferenceReader {
           return Reference{location, target};
       }
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
 
  private:
@@ -187,15 +188,17 @@ class Rel32MixerArm : public ReferenceMixer {
   ~Rel32MixerArm() override = default;
 
   ConstBufferView Mix(offset_t src_offset, offset_t dst_offset) override {
-    ConstBufferView::const_iterator new_it = dst_image_.begin() + dst_offset;
+    ConstBufferView::const_iterator new_it =
+        UNSAFE_TODO(dst_image_.begin() + dst_offset);
     MutableBufferView out_buffer_view(out_buffer_.data(), kCodeWidth);
-    std::copy(new_it, new_it + kCodeWidth, out_buffer_view.begin());
+    std::copy(new_it, UNSAFE_TODO(new_it + kCodeWidth),
+              out_buffer_view.begin());
 
     if (!ArmCopyDisp<ADDR_TRAITS>(src_image_, src_offset, out_buffer_view,
                                   0U)) {
       OutputArmCopyDispFailure(static_cast<uint32_t>(ADDR_TRAITS::addr_type));
       // Fall back to direct copy.
-      std::copy(new_it, new_it + kCodeWidth, out_buffer_.begin());
+      std::copy(new_it, UNSAFE_TODO(new_it + kCodeWidth), out_buffer_.begin());
     }
     return ConstBufferView(out_buffer_.data(), kCodeWidth);
   }

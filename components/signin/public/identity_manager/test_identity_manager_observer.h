@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
@@ -43,6 +43,8 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
   const CoreAccountInfo& AccountFromErrorStateOfRefreshTokenUpdatedCallback();
   const GoogleServiceAuthError&
   ErrorFromErrorStateOfRefreshTokenUpdatedCallback() const;
+  signin_metrics::SourceForRefreshTokenOperation
+  TokenOperationSourceFromErrorStateOfRefreshTokenUpdatedCallback() const;
 
   void SetOnRefreshTokenRemovedCallback(base::OnceClosure callback);
   const CoreAccountId& AccountIdFromRefreshTokenRemovedCallback();
@@ -65,6 +67,10 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
   // occurred, with the elements ordered from oldest to newest batch occurrence.
   const std::vector<std::vector<CoreAccountId>>& BatchChangeRecords() const;
 
+#if BUILDFLAG(IS_IOS)
+  size_t GetOnEndBatchOfPrimaryAccountChangesCalledCount() const;
+#endif  // BUILDFLAG(IS_IOS)
+
  private:
   // IdentityManager::Observer:
   void OnPrimaryAccountChanged(
@@ -75,7 +81,9 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
       const CoreAccountId& account_id) override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
   void OnRefreshTokensLoaded() override;
 
   void OnAccountsInCookieUpdated(
@@ -85,6 +93,10 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
 
   void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
   void OnExtendedAccountInfoRemoved(const AccountInfo& info) override;
+
+#if BUILDFLAG(IS_IOS)
+  void OnEndBatchOfPrimaryAccountChanges() override;
+#endif  // BUILDFLAG(IS_IOS)
 
   void StartBatchOfRefreshTokenStateChanges();
   void OnEndBatchOfRefreshTokenStateChanges() override;
@@ -101,6 +113,8 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
   CoreAccountInfo account_from_error_state_of_refresh_token_updated_callback_;
   GoogleServiceAuthError
       error_from_error_state_of_refresh_token_updated_callback_;
+  signin_metrics::SourceForRefreshTokenOperation
+      token_operation_source_from_error_state_of_refresh_token_updated_callback_;
 
   base::OnceClosure on_refresh_token_removed_callback_;
   CoreAccountId account_from_refresh_token_removed_callback_;
@@ -119,6 +133,10 @@ class TestIdentityManagerObserver : IdentityManager::Observer {
   bool is_inside_batch_ = false;
   bool was_called_account_removed_with_info_callback_ = false;
   std::vector<std::vector<CoreAccountId>> batch_change_records_;
+
+#if BUILDFLAG(IS_IOS)
+  size_t on_end_batch_of_primary_account_changes_called_count_ = 0;
+#endif  // BUILDFLAG(IS_IOS)
 };
 
 }  // namespace signin

@@ -5,12 +5,12 @@
 #ifndef IOS_WEB_JS_MESSAGING_WEB_FRAMES_MANAGER_IMPL_H_
 #define IOS_WEB_JS_MESSAGING_WEB_FRAMES_MANAGER_IMPL_H_
 
-#import "ios/web/public/js_messaging/web_frames_manager.h"
-
 #import <map>
 
+#import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
 #import "base/observer_list.h"
+#import "ios/web/public/js_messaging/web_frames_manager.h"
 
 namespace web {
 class WebFrame;
@@ -18,11 +18,10 @@ class WebFrame;
 class WebFramesManagerImpl : public WebFramesManager {
  public:
   explicit WebFramesManagerImpl();
+  ~WebFramesManagerImpl() override;
 
   WebFramesManagerImpl(const WebFramesManagerImpl&) = delete;
   WebFramesManagerImpl& operator=(const WebFramesManagerImpl&) = delete;
-
-  ~WebFramesManagerImpl() override;
 
   // Adds `frame` to the list of web frames. A frame with the same frame ID must
   // not already be registered). Returns `false` and `frame` will be ignored if
@@ -32,6 +31,8 @@ class WebFramesManagerImpl : public WebFramesManager {
   // associated web frames. If the frame manager does not contain a frame with
   // `frame_id`, operation is a no-op.
   void RemoveFrameWithId(const std::string& frame_id);
+  // Removes all the associated web frames.
+  void RemoveAllWebFrames();
 
   // WebFramesManager overrides.
   void AddObserver(Observer* observer) override;
@@ -45,8 +46,8 @@ class WebFramesManagerImpl : public WebFramesManager {
   std::map<std::string, std::unique_ptr<WebFrame>> web_frames_;
 
   // Reference to the current main web frame.
-  WebFrame* main_web_frame_ = nullptr;
-  base::ObserverList<Observer, /*check_empty=*/true> observers_;
+  raw_ptr<WebFrame> main_web_frame_ = nullptr;
+  base::ObserverList<Observer, /*check_empty=*/false> observers_;
   base::WeakPtrFactory<WebFramesManagerImpl> weak_factory_;
 };
 

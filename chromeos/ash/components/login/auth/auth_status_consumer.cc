@@ -9,14 +9,26 @@
 
 namespace ash {
 
-void AuthStatusConsumer::OnPasswordChangeDetected(
-    const UserContext& user_context) {
+void AuthStatusConsumer::OnOnlinePasswordUnusable(
+    std::unique_ptr<UserContext> user_context,
+    bool online_password_mismatch) {
+  if (online_password_mismatch) {
+    OnPasswordChangeDetectedFor(user_context->GetAccountId());
+  }
+}
+
+void AuthStatusConsumer::OnPasswordChangeDetectedFor(const AccountId& account) {
   NOTREACHED();
 }
 
 void AuthStatusConsumer::OnOldEncryptionDetected(
     std::unique_ptr<UserContext> user_context,
     bool has_incomplete_migration) {
+  NOTREACHED();
+}
+
+void AuthStatusConsumer::OnLocalAuthenticationRequired(
+    std::unique_ptr<UserContext> user_context) {
   NOTREACHED();
 }
 

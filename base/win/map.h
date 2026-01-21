@@ -12,8 +12,7 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/win/vector.h"
 #include "base/win/winrt_foundation_helpers.h"
 
@@ -152,7 +151,7 @@ class Map
 
   // Iterates over base::win::Map.
   // Its methods return E_CHANGED_STATE is the map is modified.
-  // TODO(https://crbug.com/987533): Refactor MapIterator to leverage
+  // TODO(crbug.com/40637532): Refactor MapIterator to leverage
   // std::map::iterator.
   class MapIterator
       : public Microsoft::WRL::RuntimeClass<
@@ -250,8 +249,9 @@ class Map
     }
 
     ~MapView() override {
-      if (map_)
+      if (map_) {
         map_->remove_MapChanged(map_changed_token_);
+      }
     }
 
     // ABI::Windows::Foundation::Collections::IMapView:
@@ -321,8 +321,9 @@ class Map
   // ABI::Windows::Foundation::Collections::IMap:
   IFACEMETHODIMP Lookup(AbiK key, AbiV* value) override {
     auto it = map_.find(key);
-    if (it == map_.cend())
+    if (it == map_.cend()) {
       return E_BOUNDS;
+    }
 
     return internal::CopyTo(it->second, value);
   }
@@ -333,7 +334,7 @@ class Map
   }
 
   IFACEMETHODIMP HasKey(AbiK key, boolean* found) override {
-    *found = Contains(map_, key);
+    *found = map_.contains(key);
     return S_OK;
   }
 
@@ -355,8 +356,9 @@ class Map
   }
 
   IFACEMETHODIMP Remove(AbiK key) override {
-    if (!map_.erase(key))
+    if (!map_.erase(key)) {
       return E_BOUNDS;
+    }
 
     NotifyMapChanged(
         ABI::Windows::Foundation::Collections::CollectionChange_ItemRemoved,
@@ -414,8 +416,9 @@ class Map
     // Invoking the handlers could result in mutations to the map, thus we make
     // a copy beforehand.
     auto handlers = handlers_;
-    for (auto& handler : handlers)
+    for (auto& handler : handlers) {
       handler.second->Invoke(this, args.Get());
+    }
   }
 
   std::map<StorageK, StorageV, internal::Less> map_;

@@ -7,7 +7,7 @@
 #include <map>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/download/internal/background_service/entry.h"
 #include "components/download/internal/background_service/model_stats.h"
@@ -64,7 +64,7 @@ void ModelImpl::Remove(const std::string& guid) {
   DCHECK(store_->IsInitialized());
 
   const auto& it = entries_.find(guid);
-  DCHECK(it != entries_.end());
+  CHECK(it != entries_.end());
 
   // Pull out a separate guid and a DownloadClient so that when we destroy the
   // entry we don't destroy the std::string that is backing the guid.

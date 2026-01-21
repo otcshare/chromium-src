@@ -7,9 +7,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/test_support/remote_commands_state.h"
+#include "components/policy/test_support/request_handler_for_check_user_account.h"
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 #include "components/policy/proto/chrome_extension_policy.pb.h"
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -17,22 +19,28 @@
 #include "components/policy/test_support/policy_storage.h"
 #include "components/policy/test_support/request_handler_for_api_authorization.h"
 #include "components/policy/test_support/request_handler_for_auto_enrollment.h"
+#include "components/policy/test_support/request_handler_for_browser_public_key_upload.h"
 #include "components/policy/test_support/request_handler_for_cert_upload.h"
 #include "components/policy/test_support/request_handler_for_check_android_management.h"
 #include "components/policy/test_support/request_handler_for_chrome_desktop_report.h"
 #include "components/policy/test_support/request_handler_for_client_cert_provisioning.h"
+#include "components/policy/test_support/request_handler_for_determine_promotion_eligibility.h"
 #include "components/policy/test_support/request_handler_for_device_attribute_update.h"
 #include "components/policy/test_support/request_handler_for_device_attribute_update_permission.h"
 #include "components/policy/test_support/request_handler_for_device_initial_enrollment_state.h"
 #include "components/policy/test_support/request_handler_for_device_state_retrieval.h"
 #include "components/policy/test_support/request_handler_for_policy.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "components/policy/test_support/request_handler_for_psm_auto_enrollment.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#include "components/policy/test_support/remote_commands_state.h"
 #include "components/policy/test_support/request_handler_for_register_browser.h"
 #include "components/policy/test_support/request_handler_for_register_cert_based.h"
 #include "components/policy/test_support/request_handler_for_register_device_and_user.h"
 #include "components/policy/test_support/request_handler_for_remote_commands.h"
 #include "components/policy/test_support/request_handler_for_status_upload.h"
 #include "components/policy/test_support/request_handler_for_unregister.h"
+#include "components/policy/test_support/request_handler_for_upload_euicc_info.h"
 #include "components/policy/test_support/test_server_helpers.h"
 #include "crypto/sha2.h"
 #include "net/base/url_util.h"
@@ -55,8 +63,9 @@ const char kExternalEntityIdParam[] = "entity_id";
 std::unique_ptr<HttpResponse> LogStatusAndReturn(
     GURL url,
     std::unique_ptr<HttpResponse> response) {
-  if (!response)
+  if (!response) {
     return nullptr;
+  }
 
   CustomHttpResponse* basic_response =
       static_cast<CustomHttpResponse*>(response.get());
@@ -94,17 +103,27 @@ PolicyStorage* EmbeddedPolicyTestServer::policy_storage() {
   return &server_state_->policy_storage_;
 }
 
+RemoteCommandsState* EmbeddedPolicyTestServer::remote_commands_state() {
+  return remote_commands_state_.get();
+}
+
 EmbeddedPolicyTestServer::EmbeddedPolicyTestServer()
     : http_server_(EmbeddedTestServer::TYPE_HTTP) {
+  remote_commands_state_ = std::make_unique<RemoteCommandsState>();
   ResetServerState();
   RegisterHandler(std::make_unique<RequestHandlerForApiAuthorization>(this));
   RegisterHandler(std::make_unique<RequestHandlerForAutoEnrollment>(this));
+  RegisterHandler(
+      std::make_unique<RequestHandlerForBrowserPublicKeyUpload>(this));
   RegisterHandler(std::make_unique<RequestHandlerForCertUpload>(this));
   RegisterHandler(
       std::make_unique<RequestHandlerForCheckAndroidManagement>(this));
+  RegisterHandler(std::make_unique<RequestHandlerForCheckUserAccount>(this));
   RegisterHandler(std::make_unique<RequestHandlerForChromeDesktopReport>(this));
   RegisterHandler(
       std::make_unique<RequestHandlerForClientCertProvisioning>(this));
+  RegisterHandler(
+      std::make_unique<RequestHandlerForDeterminePromotionEligibility>(this));
   RegisterHandler(
       std::make_unique<RequestHandlerForDeviceAttributeUpdate>(this));
   RegisterHandler(
@@ -114,14 +133,18 @@ EmbeddedPolicyTestServer::EmbeddedPolicyTestServer()
   RegisterHandler(
       std::make_unique<RequestHandlerForDeviceStateRetrieval>(this));
   RegisterHandler(std::make_unique<RequestHandlerForPolicy>(this));
+#if BUILDFLAG(IS_CHROMEOS)
   RegisterHandler(std::make_unique<RequestHandlerForPsmAutoEnrollment>(this));
+#endif  // BUILDFLAG(IS_CHROMEOS)
   RegisterHandler(std::make_unique<RequestHandlerForRegisterBrowser>(this));
+  RegisterHandler(std::make_unique<RequestHandlerForRegisterPolicyAgent>(this));
   RegisterHandler(std::make_unique<RequestHandlerForRegisterCertBased>(this));
   RegisterHandler(
       std::make_unique<RequestHandlerForRegisterDeviceAndUser>(this));
   RegisterHandler(std::make_unique<RequestHandlerForRemoteCommands>(this));
   RegisterHandler(std::make_unique<RequestHandlerForStatusUpload>(this));
   RegisterHandler(std::make_unique<RequestHandlerForUnregister>(this));
+  RegisterHandler(std::make_unique<RequestHandlerForUploadEuiccInfo>(this));
 
   http_server_.RegisterDefaultHandler(base::BindRepeating(
       &EmbeddedPolicyTestServer::HandleRequest, base::Unretained(this)));
@@ -129,8 +152,8 @@ EmbeddedPolicyTestServer::EmbeddedPolicyTestServer()
 
 EmbeddedPolicyTestServer::~EmbeddedPolicyTestServer() = default;
 
-bool EmbeddedPolicyTestServer::Start() {
-  return http_server_.Start();
+bool EmbeddedPolicyTestServer::Start(int port, std::string_view address) {
+  return http_server_.Start(port, address);
 }
 
 GURL EmbeddedPolicyTestServer::GetServiceURL() const {
@@ -178,8 +201,9 @@ std::unique_ptr<HttpResponse> EmbeddedPolicyTestServer::HandleRequest(
   GURL url = request.GetURL();
   LOG(INFO) << "Request URL: " << url;
 
-  if (url.path() == kExternalPolicyDataPath)
+  if (url.GetPath() == kExternalPolicyDataPath) {
     return HandleExternalPolicyDataRequest(url);
+  }
 
   std::string request_type = KeyValueFromUrl(url, dm_protocol::kParamRequest);
 
@@ -207,7 +231,7 @@ std::unique_ptr<HttpResponse> EmbeddedPolicyTestServer::HandleRequest(
 
 std::unique_ptr<HttpResponse>
 EmbeddedPolicyTestServer::HandleExternalPolicyDataRequest(const GURL& url) {
-  DCHECK_EQ(url.path(), kExternalPolicyDataPath);
+  DCHECK_EQ(url.GetPath(), kExternalPolicyDataPath);
   std::string policy_type = KeyValueFromUrl(url, kExternalPolicyTypeParam);
   std::string entity_id = KeyValueFromUrl(url, kExternalEntityIdParam);
   std::string policy_payload =

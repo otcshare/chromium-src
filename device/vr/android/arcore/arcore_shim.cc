@@ -6,16 +6,11 @@
 
 #include <dlfcn.h>
 
-#include "base/android/android_hardware_buffer_compat.h"
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/logging.h"
 #include "device/vr/android/arcore/arcore_sdk.h"
 
 namespace {
-
-// TODO(https://crbug.com/1394735): Remove this again.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 // Run DO macro for every function defined in the API.
 #define FOR_EACH_API_FN(DO)                                        \
@@ -50,6 +45,7 @@ namespace {
   DO(ArCameraConfigFilter_create)                                  \
   DO(ArCameraConfigFilter_destroy)                                 \
   DO(ArCameraConfigFilter_setDepthSensorUsage)                     \
+  DO(ArCameraConfigFilter_setFacingDirection)                      \
   DO(ArCameraConfigFilter_setTargetFps)                            \
   DO(ArCameraConfigList_create)                                    \
   DO(ArCameraConfigList_destroy)                                   \
@@ -67,7 +63,7 @@ namespace {
   DO(ArConfig_setFocusMode)                                        \
   DO(ArConfig_setLightEstimationMode)                              \
   DO(ArFrame_acquireCamera)                                        \
-  DO(ArFrame_acquireDepthImage)                                    \
+  DO(ArFrame_acquireDepthImage16Bits)                              \
   DO(ArFrame_create)                                               \
   DO(ArFrame_destroy)                                              \
   DO(ArFrame_getLightEstimate)                                     \
@@ -160,9 +156,6 @@ void LoadArCoreApi(void* handle, ArCoreApi* api) {
 
 #undef FOR_EACH_API_FN
 
-// TODO(https://crbug.com/1394735): Remove this again.
-#pragma GCC diagnostic pop
-
 void* g_sdk_handle = nullptr;
 ArCoreApi* g_arcore_api = nullptr;
 
@@ -183,7 +176,7 @@ bool LoadArCoreSdk(const std::string& libraryPath) {
     VLOG(2) << "Opened shim shared library.";
   }
 
-  // TODO(https://crbug.com/914999): check SDK version.
+  // TODO(crbug.com/41431724): check SDK version.
   auto* arcore_api = new ArCoreApi();
   LoadArCoreApi(sdk_handle, arcore_api);
 
@@ -193,8 +186,8 @@ bool LoadArCoreSdk(const std::string& libraryPath) {
 }
 
 bool IsArCoreSupported() {
-  return base::android::BuildInfo::GetInstance()->sdk_int() >=
-         base::android::SDK_VERSION_NOUGAT;
+  return base::android::android_info::sdk_int() >=
+         base::android::android_info::SDK_VERSION_NOUGAT;
 }
 
 }  // namespace device
@@ -410,6 +403,14 @@ void ArCameraConfigFilter_setDepthSensorUsage(
       session, filter, depth_sensor_usage_filters);
 }
 
+void ArCameraConfigFilter_setFacingDirection(
+    const ArSession* session,
+    ArCameraConfigFilter* filter,
+    const ArCameraConfigFacingDirection direction) {
+  return g_arcore_api->impl_ArCameraConfigFilter_setFacingDirection(
+      session, filter, direction);
+}
+
 void ArCameraConfigFilter_setTargetFps(const ArSession* session,
                                        ArCameraConfigFilter* filter,
                                        const uint32_t fps_filters) {
@@ -516,11 +517,11 @@ void ArFrame_acquireCamera(const ArSession* session,
   return g_arcore_api->impl_ArFrame_acquireCamera(session, frame, out_camera);
 }
 
-ArStatus ArFrame_acquireDepthImage(const ArSession* session,
-                                   const ArFrame* frame,
-                                   ArImage** out_depth_image) {
-  return g_arcore_api->impl_ArFrame_acquireDepthImage(session, frame,
-                                                      out_depth_image);
+ArStatus ArFrame_acquireDepthImage16Bits(const ArSession* session,
+                                         const ArFrame* frame,
+                                         ArImage** out_depth_image) {
+  return g_arcore_api->impl_ArFrame_acquireDepthImage16Bits(session, frame,
+                                                            out_depth_image);
 }
 
 void ArFrame_create(const ArSession* session, ArFrame** out_frame) {

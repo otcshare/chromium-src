@@ -57,13 +57,8 @@ const char* kAsanDefaultOptions =
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_APPLE) || \
     BUILDFLAG(IS_WIN)
-// Allow NaCl to override the default asan options.
-extern const char* kAsanDefaultOptionsNaCl;
-__attribute__((weak)) const char* kAsanDefaultOptionsNaCl = nullptr;
 
 SANITIZER_HOOK_ATTRIBUTE const char *__asan_default_options() {
-  if (kAsanDefaultOptionsNaCl)
-    return kAsanDefaultOptionsNaCl;
   return kAsanDefaultOptions;
 }
 
@@ -152,7 +147,7 @@ const char kLsanDefaultOptions[] =
     // When pointer compression in V8 is enabled the external pointers in the
     // heap are guaranteed to be only 4 bytes aligned. So we need this option
     // in order to ensure that LSAN will find all the external pointers.
-    // TODO(crbug.com/328552): see updates from 2019.
+    // TODO(crbug.com/40344974): see updates from 2019.
     "use_unaligned=1 "
 #endif  // ARCH_CPU_64_BITS
     ;

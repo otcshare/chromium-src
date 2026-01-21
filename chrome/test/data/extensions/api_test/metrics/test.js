@@ -27,6 +27,19 @@ chrome.test.runTests([
     chrome.test.succeed();
   },
 
+  function recordExtensionUsageUkm() {
+    const EXTENSION_ID = 'a'.repeat(32);
+    chrome.metricsPrivate.recordExtensionUsageUkm(EXTENSION_ID, 'kPinned');
+    chrome.metricsPrivate.recordExtensionUsageUkm(EXTENSION_ID, 'kUnpinned');
+    chrome.metricsPrivate.recordExtensionUsageUkm(
+        EXTENSION_ID, 'kContextMenuInit');
+    chrome.metricsPrivate.recordExtensionUsageUkm(
+        EXTENSION_ID, 'kActionClicked');
+    chrome.metricsPrivate.recordExtensionUsageUkm(EXTENSION_ID, 'kEnabled');
+    chrome.metricsPrivate.recordExtensionUsageUkm(EXTENSION_ID, 'kDisabled');
+    chrome.test.succeed();
+  },
+
   function recordValue() {
     chrome.metricsPrivate.recordValue({
       'metricName': 'test.h.1',
@@ -158,4 +171,3 @@ chrome.test.runTests([
   },
 
 ]);
-

@@ -7,18 +7,32 @@
 
 #include <jni.h>
 
+#include <vector>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
+#include "chrome/browser/ui/tabs/tab_list_interface_observer.h"
+
+class TabAndroid;
+class TabModel;
+class TabAndroid;
+
+namespace base {
+class Token;
+}  // namespace base
 
 // Bridges calls between the C++ and the Java TabModelObservers. Functions in
 // this class do little more than translating between Java TabModelObserver
 // notifications to native TabModelObserver notifications.
 class TabModelObserverJniBridge {
  public:
-  TabModelObserverJniBridge(JNIEnv* env,
-                            const base::android::JavaRef<jobject>& tab_model);
+  TabModelObserverJniBridge(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& java_tab_model,
+      TabModel& tab_model);
 
   TabModelObserverJniBridge(const TabModelObserverJniBridge&) = delete;
   TabModelObserverJniBridge& operator=(const TabModelObserverJniBridge&) =
@@ -26,83 +40,72 @@ class TabModelObserverJniBridge {
 
   ~TabModelObserverJniBridge();
 
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Destroy(JNIEnv* env);
 
   // The following functions are called by JNI.
 
-  void DidSelectTab(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& jobj,
-                    const base::android::JavaParamRef<jobject>& jtab,
-                    int type,
-                    int last_id);
+  void DidSelectTab(JNIEnv* env, TabAndroid* tab, int type, int last_id);
 
-  void WillCloseTab(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& jobj,
-                    const base::android::JavaParamRef<jobject>& jtab,
-                    bool animate);
+  void WillCloseTab(JNIEnv* env, TabAndroid* tab);
 
-  void OnFinishingTabClosure(JNIEnv* env,
-                             const base::android::JavaParamRef<jobject>& jobj,
-                             int tab_id,
-                             bool incognito);
+  void DidRemoveTabForClosure(JNIEnv* env, TabAndroid* tab);
 
-  void OnFinishingMultipleTabClosure(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobjectArray>& jtabs);
+  void OnFinishingTabClosure(JNIEnv* env, TabAndroid* tab, int source);
 
-  void WillAddTab(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  const base::android::JavaParamRef<jobject>& jtab,
-                  int type);
+  void OnFinishingMultipleTabClosure(JNIEnv* env,
+                                     const std::vector<TabAndroid*>& tabs,
+                                     bool can_restore);
 
-  void DidAddTab(JNIEnv* env,
-                 const base::android::JavaParamRef<jobject>& jobj,
-                 const base::android::JavaParamRef<jobject>& jtab,
-                 int type);
+  void WillAddTab(JNIEnv* env, TabAndroid* tab, int type);
 
-  void DidMoveTab(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  const base::android::JavaParamRef<jobject>& jtab,
-                  int new_index,
-                  int cur_index);
+  void DidAddTab(JNIEnv* env, TabAndroid* tab, int type);
 
-  void TabPendingClosure(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& jobj,
-                         const base::android::JavaParamRef<jobject>& jtab);
+  void DidMoveTab(JNIEnv* env, TabAndroid* tab, int new_index, int cur_index);
 
-  void TabClosureUndone(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& jobj,
-                        const base::android::JavaParamRef<jobject>& jtab);
+  void OnTabClosePending(JNIEnv* env,
+                         const std::vector<TabAndroid*>& tabs,
+                         int source);
 
-  void TabClosureCommitted(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& jobj,
-                           const base::android::JavaParamRef<jobject>& jtab);
+  void TabClosureUndone(JNIEnv* env, TabAndroid* tab);
 
-  void AllTabsPendingClosure(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobjectArray>& jtabs);
+  void OnTabCloseUndone(JNIEnv* env, const std::vector<TabAndroid*>& tabs);
 
-  void AllTabsClosureCommitted(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj);
+  void TabClosureCommitted(JNIEnv* env, TabAndroid* tab);
 
-  void TabRemoved(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  const base::android::JavaParamRef<jobject>& jtab);
+  void AllTabsClosureCommitted(JNIEnv* env);
+
+  void TabRemoved(JNIEnv* env, TabAndroid* tab);
+
+  void OnTabGroupCreated(JNIEnv* env, base::Token group_id);
+
+  void OnTabGroupRemoving(JNIEnv* env, base::Token group_id);
+
+  void OnTabGroupMoved(JNIEnv* env, base::Token group_id, int old_index);
+
+  void OnTabGroupVisualsChanged(JNIEnv* env, base::Token group_id);
 
   void AddObserver(TabModelObserver* observer);
+  void AddTabListInterfaceObserver(TabListInterfaceObserver* observer);
   void RemoveObserver(TabModelObserver* observer);
+  void RemoveTabListInterfaceObserver(TabListInterfaceObserver* observer);
+  void NotifyShutdown();
 
-  bool has_observers() const { return !observers_.empty(); }
+  bool has_observers() const {
+    return !model_observers_.empty() || !interface_observers_.empty();
+  }
 
  private:
   // This object's Java counterpart. This objects controls its lifetime.
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
 
-  // Observers attached to this bridge.
-  base::ObserverList<TabModelObserver>::Unchecked observers_;
+  // TabModelObservers attached to this bridge.
+  base::ObserverList<TabModelObserver>::Unchecked model_observers_;
+
+  // The C++ TabModel. Owns this object, so is guaranteed to outlive it.
+  base::raw_ref<TabModel> tab_model_;
+
+  // TabListInterfaceObservers attached to this bridge.
+  base::ObserverList<TabListInterfaceObserver> interface_observers_;
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_TAB_MODEL_TAB_MODEL_OBSERVER_JNI_BRIDGE_H_

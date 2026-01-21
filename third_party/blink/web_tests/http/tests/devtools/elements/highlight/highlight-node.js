@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(
       `This test verifies the position and size of the highlight rectangles overlaid on an inspected node.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <style>
@@ -64,7 +66,8 @@
    * @param {!Promise}
    */
   async function nodeResolved(node, name, colorFormat = 'hex') {
-    const result = await TestRunner.OverlayAgent.getHighlightObjectForTest(node.id, undefined, undefined, colorFormat);
+    const {highlight: result} = await TestRunner.OverlayAgent.invoke_getHighlightObjectForTest(
+        {nodeId: node.id, colorFormat: colorFormat});
     TestRunner.addResult(name + JSON.stringify(result, null, 2));
   }
 
@@ -77,7 +80,7 @@
    * @param {!Promise}
    */
   async function nodeResolvedApproximate(node, name, expectedWidth, expectedHeight, tolerance = 3) {
-    const result = await TestRunner.OverlayAgent.getHighlightObjectForTest(node.id);
+    const {highlight: result} = await TestRunner.OverlayAgent.invoke_getHighlightObjectForTest({nodeId: node.id});
 
     if (result['paths']) {
       for (const path of result['paths']) {

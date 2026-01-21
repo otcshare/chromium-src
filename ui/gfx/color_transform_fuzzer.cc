@@ -2,14 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/gfx/color_transform.h"
+
 #include <stddef.h>
 #include <stdint.h>
+
 #include <random>
 
 #include "base/at_exit.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/color_transform.h"
 #include "ui/gfx/icc_profile.h"
 
 static constexpr size_t kPixels = 256;
@@ -21,7 +24,8 @@ static void GeneratePixels(size_t hash) {
 
   std::mt19937_64 random(hash);
   for (size_t i = 0; i < kPixels; ++i)
-    pixels[i].SetPoint(uniform(random), uniform(random), uniform(random));
+    UNSAFE_TODO(pixels[i]).SetPoint(uniform(random), uniform(random),
+                                    uniform(random));
 }
 
 static gfx::ColorSpace test;
@@ -55,12 +59,12 @@ static gfx::ColorSpace CreateRGBColorSpace(size_t hash) {
 
 inline size_t Hash(const char* data, size_t size, size_t hash = ~0) {
   for (size_t i = 0; i < size; ++i)
-    hash = hash * 131 + *data++;
+    hash = hash * 131 + *UNSAFE_TODO(data++);
   return hash;
 }
 
 struct Environment {
-  Environment() { logging::SetMinLogLevel(logging::LOG_FATAL); }
+  Environment() { logging::SetMinLogLevel(logging::LOGGING_FATAL); }
 };
 
 Environment* environment = new Environment();

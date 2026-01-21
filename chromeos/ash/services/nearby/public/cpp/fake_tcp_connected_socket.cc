@@ -4,10 +4,9 @@
 
 #include "chromeos/ash/services/nearby/public/cpp/fake_tcp_connected_socket.h"
 
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 FakeTcpConnectedSocket::FakeTcpConnectedSocket(
     mojo::ScopedDataPipeProducerHandle producer_handle,
@@ -58,5 +57,4 @@ void FakeTcpConnectedSocket::SetKeepAlive(bool enable,
   NOTIMPLEMENTED();
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

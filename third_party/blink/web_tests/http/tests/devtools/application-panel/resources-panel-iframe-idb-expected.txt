@@ -2,45 +2,28 @@ Tests Application Panel's handling of storages in iframes.
 
 Initial tree...
 
-Application
- Manifest
-  Identity
-  Presentation
-  Protocol Handlers
-  Icons
- Service Workers
- Storage
 Storage
- Local Storage
-  http://127.0.0.1:8000/
+ Local storage
+  http://127.0.0.1:8000
   http://devtools.oopif.test:8000
- Session Storage
-  http://127.0.0.1:8000/
+ Session storage
+  http://127.0.0.1:8000
   http://devtools.oopif.test:8000
+ Extension storage
  IndexedDB
-  Database-iframe - http://devtools.oopif.test:8000/
+  Database-iframe
    Database-iframe
-  Database-main-frame - http://127.0.0.1:8000/
- Web SQL
+  Database-main-frame
  Cookies
   http://127.0.0.1:8000
   http://devtools.oopif.test:8000
- Trust Tokens
- Interest Groups
- Shared Storage
+ Private state tokens
+ Interest groups
+ Shared storage
   http://127.0.0.1:8000
   http://devtools.oopif.test:8000
-Cache
- Cache Storage
- Back/forward cache
-Background Services
- Background Fetch
- Background Sync
- Notifications
- Payment Handler
- Periodic Background Sync
- Push Messaging
- Reporting API
+ Cache storage
+ Storage buckets
 Frames
  top
   indexeddb-in-iframe.html
@@ -49,85 +32,51 @@ Frames
 
 Remove iframe from page...
 
-Application
- Manifest
-  Identity
-  Presentation
-  Protocol Handlers
-  Icons
- Service Workers
- Storage
 Storage
- Local Storage
-  http://127.0.0.1:8000/
- Session Storage
-  http://127.0.0.1:8000/
+ Local storage
+  http://127.0.0.1:8000
+ Session storage
+  http://127.0.0.1:8000
+ Extension storage
  IndexedDB
-  Database-main-frame - http://127.0.0.1:8000/
- Web SQL
+  Database-main-frame
  Cookies
   http://127.0.0.1:8000
   http://devtools.oopif.test:8000
- Trust Tokens
- Interest Groups
- Shared Storage
+ Private state tokens
+ Interest groups
+ Shared storage
   http://127.0.0.1:8000
-Cache
- Cache Storage
- Back/forward cache
-Background Services
- Background Fetch
- Background Sync
- Notifications
- Payment Handler
- Periodic Background Sync
- Push Messaging
- Reporting API
+ Cache storage
+ Storage buckets
 Frames
  top
   inspected-page.html
 
 Add iframe to page again...
 
-Application
- Manifest
-  Identity
-  Presentation
-  Protocol Handlers
-  Icons
- Service Workers
- Storage
 Storage
- Local Storage
-  http://127.0.0.1:8000/
+ Local storage
+  http://127.0.0.1:8000
   http://devtools.oopif.test:8000
- Session Storage
-  http://127.0.0.1:8000/
+ Session storage
+  http://127.0.0.1:8000
   http://devtools.oopif.test:8000
+ Extension storage
  IndexedDB
-  Database-main-frame - http://127.0.0.1:8000/
-  Database-iframe - http://devtools.oopif.test:8000/
+  Database-main-frame
+  Database-iframe
    Database-iframe
- Web SQL
  Cookies
   http://127.0.0.1:8000
   http://devtools.oopif.test:8000
- Trust Tokens
- Interest Groups
- Shared Storage
+ Private state tokens
+ Interest groups
+ Shared storage
   http://127.0.0.1:8000
   http://devtools.oopif.test:8000
-Cache
- Cache Storage
- Back/forward cache
-Background Services
- Background Fetch
- Background Sync
- Notifications
- Payment Handler
- Periodic Background Sync
- Push Messaging
- Reporting API
+ Cache storage
+ Storage buckets
 Frames
  top
   indexeddb-in-iframe.html

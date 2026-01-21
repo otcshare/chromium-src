@@ -19,15 +19,18 @@ namespace blink {
 #endif
 
 const WrapperTypeInfo DOMSharedArrayBuffer::wrapper_type_info_body_{
-    gin::kEmbedderBlink,
+    {gin::kEmbedderBlink},
     nullptr,
     nullptr,
     "SharedArrayBuffer",
     nullptr,
+    static_cast<v8::CppHeapPointerTag>(
+        ScriptWrappableArrayTag::kDOMSharedArrayBufferTag),
+    static_cast<v8::CppHeapPointerTag>(
+        ScriptWrappableArrayTag::kDOMSharedArrayBufferTag),
     WrapperTypeInfo::kWrapperTypeObjectPrototype,
     WrapperTypeInfo::kObjectClassId,
-    WrapperTypeInfo::kNotInheritFromActiveScriptWrappable,
-    WrapperTypeInfo::kIdlBufferSourceType,
+    WrapperTypeInfo::kIdlOtherType,
 };
 
 const WrapperTypeInfo& DOMSharedArrayBuffer::wrapper_type_info_ =
@@ -37,9 +40,8 @@ const WrapperTypeInfo& DOMSharedArrayBuffer::wrapper_type_info_ =
 #pragma clang diagnostic pop
 #endif
 
-v8::MaybeLocal<v8::Value> DOMSharedArrayBuffer::Wrap(
-    ScriptState* script_state) {
-  DCHECK(!DOMDataStore::ContainsWrapper(this, script_state->GetIsolate()));
+v8::Local<v8::Value> DOMSharedArrayBuffer::Wrap(ScriptState* script_state) {
+  DCHECK(!DOMDataStore::ContainsWrapper(script_state->GetIsolate(), this));
 
   const WrapperTypeInfo* wrapper_type_info = GetWrapperTypeInfo();
   v8::Local<v8::SharedArrayBuffer> wrapper;

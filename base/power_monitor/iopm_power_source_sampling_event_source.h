@@ -6,7 +6,7 @@
 #define BASE_POWER_MONITOR_IOPM_POWER_SOURCE_SAMPLING_EVENT_SOURCE_H_
 
 #include "base/base_export.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/mac/scoped_ionotificationportref.h"
 #include "base/mac/scoped_ioobject.h"
 #include "base/power_monitor/sampling_event_source.h"
@@ -24,6 +24,7 @@ class BASE_EXPORT IOPMPowerSourceSamplingEventSource
 
   // SamplingEventSource:
   bool Start(SamplingEventCallback callback) override;
+  TimeDelta GetSampleInterval() override;
 
  private:
   static void OnNotification(void* context,

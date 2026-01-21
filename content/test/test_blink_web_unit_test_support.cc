@@ -6,11 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/message_loop/message_pump.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/path_service.h"
@@ -20,10 +19,8 @@
 #include "base/test/null_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/platform_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "cc/trees/layer_tree_settings.h"
-#include "content/app/mojo/mojo_init.h"
 #include "content/child/child_process.h"
 #include "media/base/media.h"
 #include "media/media_buildflags.h"
@@ -39,15 +36,14 @@
 #include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/platform/web_url_loader_factory.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/public/web/blink.h"
 #include "tools/v8_context_snapshot/buildflags.h"
 #include "v8/include/v8.h"
 
-#if BUILDFLAG(IS_MAC)
-#include "base/mac/foundation_util.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
+#if BUILDFLAG(IS_APPLE)
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_nsautorelease_pool.h"
 #endif
 
 #ifdef V8_USE_EXTERNAL_STARTUP_DATA
@@ -59,37 +55,6 @@
 using blink::WebString;
 
 namespace {
-
-class DummyTaskRunner : public base::SingleThreadTaskRunner {
- public:
-  DummyTaskRunner() : thread_id_(base::PlatformThread::CurrentId()) {}
-
-  DummyTaskRunner(const DummyTaskRunner&) = delete;
-  DummyTaskRunner& operator=(const DummyTaskRunner&) = delete;
-
-  bool PostDelayedTask(const base::Location& from_here,
-                       base::OnceClosure task,
-                       base::TimeDelta delay) override {
-    // Drop the delayed task.
-    return false;
-  }
-
-  bool PostNonNestableDelayedTask(const base::Location& from_here,
-                                  base::OnceClosure task,
-                                  base::TimeDelta delay) override {
-    // Drop the delayed task.
-    return false;
-  }
-
-  bool RunsTasksInCurrentSequence() const override {
-    return thread_id_ == base::PlatformThread::CurrentId();
-  }
-
- protected:
-  ~DummyTaskRunner() override {}
-
-  base::PlatformThreadId thread_id_;
-};
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
 #if BUILDFLAG(USE_V8_CONTEXT_SNAPSHOT)
@@ -108,9 +73,10 @@ content::TestBlinkWebUnitTestSupport* g_test_platform = nullptr;
 namespace content {
 
 TestBlinkWebUnitTestSupport::TestBlinkWebUnitTestSupport(
-    TestBlinkWebUnitTestSupport::SchedulerType scheduler_type) {
-#if BUILDFLAG(IS_MAC)
-  base::mac::ScopedNSAutoreleasePool autorelease_pool;
+    SchedulerType scheduler_type,
+    std::string additional_v8_flags) {
+#if BUILDFLAG(IS_APPLE)
+  base::apple::ScopedNSAutoreleasePool autorelease_pool;
 #endif
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
@@ -120,6 +86,7 @@ TestBlinkWebUnitTestSupport::TestBlinkWebUnitTestSupport(
   // Test shell always exposes the GC, and some tests need to modify flags so do
   // not freeze them on initialization.
   std::string v8_flags("--expose-gc --no-freeze-flags-after-init");
+  v8_flags += additional_v8_flags;
 
   blink::Platform::InitializeBlink();
   scoped_refptr<base::SingleThreadTaskRunner> dummy_task_runner;
@@ -139,8 +106,6 @@ TestBlinkWebUnitTestSupport::TestBlinkWebUnitTestSupport(
     dummy_task_runner_handle =
         std::make_unique<base::SingleThreadTaskRunner::CurrentDefaultHandle>(
             dummy_task_runner);
-    // Force V8 to run single threaded.
-    v8_flags += " --single-threaded";
   } else {
     DCHECK_EQ(scheduler_type, SchedulerType::kRealScheduler);
     main_thread_scheduler_ =
@@ -150,9 +115,6 @@ TestBlinkWebUnitTestSupport::TestBlinkWebUnitTestSupport(
     base::ThreadPoolInstance::Get()->StartWithDefaultParams();
   }
 
-  // Initialize mojo firstly to enable Blink initialization to use it.
-  InitializeMojo();
-
   // Set V8 flags.
   v8::V8::SetFlagsFromString(v8_flags.c_str(), v8_flags.size());
 
@@ -161,10 +123,10 @@ TestBlinkWebUnitTestSupport::TestBlinkWebUnitTestSupport(
   blink::WebRuntimeFeatures::EnableAndroidDownloadableFontsMatching(false);
 
   mojo::BinderMap binders;
-  blink::Initialize(this, &binders, main_thread_scheduler_.get());
+  blink::InitializeWithoutIsolateForTesting(this, &binders,
+                                            main_thread_scheduler_.get());
   g_test_platform = this;
   blink::SetWebTestMode(true);
-  blink::WebRuntimeFeatures::EnableDatabase(true);
   blink::WebRuntimeFeatures::EnableNotifications(true);
   blink::WebRuntimeFeatures::EnableTouchEventFeatureDetection(true);
 
@@ -184,14 +146,6 @@ TestBlinkWebUnitTestSupport::~TestBlinkWebUnitTestSupport() {
 }
 
 blink::WebString TestBlinkWebUnitTestSupport::UserAgent() {
-  return blink::WebString::FromUTF8("test_runner/0.0.0.0");
-}
-
-blink::WebString TestBlinkWebUnitTestSupport::FullUserAgent() {
-  return blink::WebString::FromUTF8("test_runner/0.0.0.0");
-}
-
-blink::WebString TestBlinkWebUnitTestSupport::ReducedUserAgent() {
   return blink::WebString::FromUTF8("test_runner/0.0.0.0");
 }
 

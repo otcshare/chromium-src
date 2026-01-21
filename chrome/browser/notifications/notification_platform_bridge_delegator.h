@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/notifications/displayed_notifications_dispatch_callback.h"
 #include "chrome/browser/notifications/notification_common.h"
@@ -43,6 +43,9 @@ class NotificationPlatformBridgeDelegator {
                      const std::string& notification_id);
 
   virtual void GetDisplayed(GetDisplayedNotificationsCallback callback) const;
+  virtual void GetDisplayedForOrigin(
+      const GURL& origin,
+      GetDisplayedNotificationsCallback callback) const;
 
   virtual void DisplayServiceShutDown();
 

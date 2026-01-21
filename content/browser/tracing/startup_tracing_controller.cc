@@ -3,7 +3,10 @@
 // found in the LICENSE file.
 
 #include "content/browser/tracing/startup_tracing_controller.h"
+
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -16,15 +19,14 @@
 #include "base/task/thread_pool.h"
 #include "base/thread_annotations.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/typed_macros.h"
 #include "build/build_config.h"
-#include "components/tracing/common/trace_startup_config.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
 #include "services/tracing/public/cpp/perfetto/trace_packet_tokenizer.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_packet.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
 #include "third_party/perfetto/include/perfetto/tracing/tracing.h"
@@ -32,6 +34,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/android/tracing_controller_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS)
+#include "base/apple/foundation_util.h"
+#endif  // BUILDFLAG(IS_IOS)
 
 namespace content {
 
@@ -62,9 +68,6 @@ class EmergencyTraceFinalisationCoordinator {
     // do.
     if (!tracing_started_.IsSet())
       return;
-
-    base::trace_event::TraceLog::GetInstance()
-        ->SetCurrentThreadBlocksMessageLoop();
 
     base::OnceClosure stop_tracing;
     scoped_refptr<base::SequencedTaskRunner> task_runner;
@@ -140,7 +143,7 @@ class StartupTracingController::BackgroundTracer {
     EmergencyTraceFinalisationCoordinator::GetInstance().OnTracingStarted(
         task_runner_,
         base::BindOnce(&BackgroundTracer::Stop, weak_ptr_factory_.GetWeakPtr(),
-                       absl::nullopt));
+                       std::nullopt));
 
     tracing_session_->SetOnStopCallback([&]() { OnTracingStopped(); });
     tracing_session_->StartBlocking();
@@ -148,7 +151,7 @@ class StartupTracingController::BackgroundTracer {
     TRACE_EVENT("startup", "StartupTracingController::Start");
   }
 
-  void Stop(absl::optional<base::FilePath> output_file) {
+  void Stop(std::optional<base::FilePath> output_file) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     // Tracing might have already been finished due to a timeout.
@@ -204,12 +207,16 @@ class StartupTracingController::BackgroundTracer {
  private:
   void WriteData(const char* data, size_t size) {
     // Last chunk can be empty.
-    if (size == 0)
+    if (size == 0) {
       return;
+    }
+
+    base::span<const uint8_t> data_span =
+        UNSAFE_TODO(base::as_bytes(base::span(data, size)));
 
     // Proto files should be written directly to the file.
     if (output_format_ == tracing::TraceStartupConfig::OutputFormat::kProto) {
-      file_.WriteAtCurrentPos(data, size);
+      file_.WriteAtCurrentPosAndCheck(data_span);
       return;
     }
 
@@ -219,12 +226,12 @@ class StartupTracingController::BackgroundTracer {
           std::make_unique<tracing::TracePacketTokenizer>();
     }
 
-    std::vector<perfetto::TracePacket> packets = trace_packet_tokenizer_->Parse(
-        reinterpret_cast<const uint8_t*>(data), size);
+    std::vector<perfetto::TracePacket> packets =
+        trace_packet_tokenizer_->Parse(data_span);
     for (const auto& packet : packets) {
       for (const auto& slice : packet.slices()) {
-        file_.WriteAtCurrentPos(reinterpret_cast<const char*>(slice.start),
-                                slice.size);
+        file_.WriteAtCurrentPosAndCheck(UNSAFE_TODO(base::span(
+            reinterpret_cast<const uint8_t*>(slice.start), slice.size)));
       }
     }
   }
@@ -327,6 +334,9 @@ namespace {
 base::FilePath BasenameToPath(std::string basename) {
 #if BUILDFLAG(IS_ANDROID)
   return TracingControllerAndroid::GenerateTracingFilePath(basename);
+#elif BUILDFLAG(IS_IOS)
+  // On iOS blink, write to the documents directory associated with the app.
+  return base::apple::GetUserDocumentPath().AppendASCII(basename);
 #else
   // Default to saving the startup trace into the current dir.
   return base::FilePath().AppendASCII(basename);
@@ -342,7 +352,7 @@ base::FilePath StartupTracingController::GetOutputPath() {
   auto* command_line = base::CommandLine::ForCurrentProcess();
 
   base::FilePath path_from_config =
-      tracing::TraceStartupConfig::GetInstance()->GetResultFile();
+      tracing::TraceStartupConfig::GetInstance().GetResultFile();
   if (!path_from_config.empty())
     return path_from_config;
 
@@ -384,8 +394,8 @@ void StartupTracingController::StartIfNeeded() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_NE(state_, State::kRunning);
 
-  auto* trace_startup_config = tracing::TraceStartupConfig::GetInstance();
-  if (!trace_startup_config->AttemptAdoptBySessionOwner(
+  auto& trace_startup_config = tracing::TraceStartupConfig::GetInstance();
+  if (!trace_startup_config.AttemptAdoptBySessionOwner(
           tracing::TraceStartupConfig::SessionOwner::kTracingController)) {
     return;
   }
@@ -399,7 +409,7 @@ void StartupTracingController::StartIfNeeded() {
        base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
 
   auto output_format =
-      tracing::TraceStartupConfig::GetInstance()->GetOutputFormat();
+      tracing::TraceStartupConfig::GetInstance().GetOutputFormat();
 
   BackgroundTracer::WriteMode write_mode;
 #if BUILDFLAG(IS_WIN)
@@ -416,16 +426,8 @@ void StartupTracingController::StartIfNeeded() {
           : BackgroundTracer::WriteMode::kAfterStopping;
 #endif
 
-  const auto& chrome_config =
-      tracing::TraceStartupConfig::GetInstance()->GetTraceConfig();
-  perfetto::TraceConfig perfetto_config = tracing::GetDefaultPerfettoConfig(
-      chrome_config, /*privacy_filtering_enabled=*/false,
-      /*convert_to_legacy_json=*/output_format ==
-          tracing::TraceStartupConfig::OutputFormat::kLegacyJSON);
-
-  int duration_in_seconds =
-      tracing::TraceStartupConfig::GetInstance()->GetStartupDuration();
-  perfetto_config.set_duration_ms(duration_in_seconds * 1000);
+  auto perfetto_config =
+      tracing::TraceStartupConfig::GetInstance().GetPerfettoConfig();
 
   background_tracer_ = base::SequenceBound<BackgroundTracer>(
       std::move(background_task_runner), write_mode, temp_file_policy_,
@@ -465,7 +467,7 @@ void StartupTracingController::OnStoppedOnUIThread() {
   if (on_tracing_finished_)
     std::move(on_tracing_finished_).Run();
 
-  tracing::TraceStartupConfig::GetInstance()->SetDisabled();
+  tracing::TraceStartupConfig::GetInstance().SetDisabled();
 }
 
 void StartupTracingController::SetUsingTemporaryFile(
@@ -477,14 +479,15 @@ void StartupTracingController::SetUsingTemporaryFile(
 void StartupTracingController::SetDefaultBasename(
     std::string basename,
     ExtensionType extension_type) {
-  if (!tracing::TraceStartupConfig::GetInstance()->IsEnabled())
+  if (!tracing::TraceStartupConfig::GetInstance().IsEnabled()) {
     return;
+  }
 
   if (basename_for_test_set_)
     return;
 
   if (extension_type == ExtensionType::kAppendAppropriate) {
-    switch (tracing::TraceStartupConfig::GetInstance()->GetOutputFormat()) {
+    switch (tracing::TraceStartupConfig::GetInstance().GetOutputFormat()) {
       case tracing::TraceStartupConfig::OutputFormat::kLegacyJSON:
         basename += ".json";
         break;

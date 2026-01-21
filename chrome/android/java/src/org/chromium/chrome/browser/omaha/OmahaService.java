@@ -8,43 +8,46 @@ import android.app.IntentService;
 import android.app.job.JobService;
 import android.content.Context;
 
-import androidx.annotation.Nullable;
-
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.background_task_scheduler.BackgroundTask;
+import org.chromium.components.background_task_scheduler.BackgroundTaskScheduler;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.components.background_task_scheduler.TaskIds;
 import org.chromium.components.background_task_scheduler.TaskInfo;
 import org.chromium.components.background_task_scheduler.TaskParameters;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
 
 /**
- * Manages scheduling and running of the Omaha client code.
- * Delegates out to either an {@link IntentService} or {@link JobService}, as necessary.
+ * Manages scheduling and running of the Omaha client code. Delegates out to either an {@link
+ * IntentService} or {@link JobService}, as necessary.
  */
+@NullMarked
 public class OmahaService extends OmahaBase implements BackgroundTask {
     private static class OmahaClientDelegate extends OmahaDelegateBase {
         @Override
         public void scheduleService(long currentTimestampMs, long nextTimestampMs) {
             final long delay = nextTimestampMs - currentTimestampMs;
-            PostTask.runOrPostTask(UiThreadTaskTraits.DEFAULT, () -> {
-                if (scheduleJobService(delay)) {
-                    Log.i(OmahaBase.TAG, "Scheduled using JobService");
-                } else {
-                    Log.e(OmahaBase.TAG, "Failed to schedule job");
-                }
-            });
+            PostTask.runOrPostTask(
+                    TaskTraits.UI_DEFAULT,
+                    () -> {
+                        if (scheduleJobService(delay)) {
+                            Log.i(OmahaBase.TAG, "Scheduled using JobService");
+                        } else {
+                            Log.e(OmahaBase.TAG, "Failed to schedule job");
+                        }
+                    });
         }
     }
 
     private static final Object DELEGATE_LOCK = new Object();
-    private static OmahaService sInstance;
+    private static @Nullable OmahaService sInstance;
     private static boolean sHasPendingJob;
 
-    @Nullable
     public static OmahaService getInstance() {
         synchronized (DELEGATE_LOCK) {
             if (sInstance == null) sInstance = new OmahaService();
@@ -52,7 +55,7 @@ public class OmahaService extends OmahaBase implements BackgroundTask {
         }
     }
 
-    private AsyncTask<Void> mJobServiceTask;
+    private @Nullable AsyncTask<Void> mJobServiceTask;
 
     /** Used only by {@link BackgroundTaskScheduler}. */
     public OmahaService() {
@@ -75,18 +78,19 @@ public class OmahaService extends OmahaBase implements BackgroundTask {
     public boolean onStartTask(
             Context context, TaskParameters parameters, final TaskFinishedCallback callback) {
         sHasPendingJob = false;
-        mJobServiceTask = new AsyncTask<Void>() {
-            @Override
-            public Void doInBackground() {
-                run();
-                return null;
-            }
+        mJobServiceTask =
+                new AsyncTask<Void>() {
+                    @Override
+                    public Void doInBackground() {
+                        run();
+                        return null;
+                    }
 
-            @Override
-            public void onPostExecute(Void result) {
-                callback.taskFinished(false);
-            }
-        }.executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
+                    @Override
+                    public void onPostExecute(@Nullable Void result) {
+                        callback.taskFinished(false);
+                    }
+                }.executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
         return false;
     }
 
@@ -102,11 +106,6 @@ public class OmahaService extends OmahaBase implements BackgroundTask {
         return false;
     }
 
-    @Override
-    public void reschedule(Context context) {
-        // Needs appropriate implementation.
-    }
-
     /**
      * Schedules the Omaha code to run at the given time.
      * @param delayMs How long to wait until the job should be triggered.
@@ -116,8 +115,9 @@ public class OmahaService extends OmahaBase implements BackgroundTask {
 
         TaskInfo taskInfo =
                 TaskInfo.createOneOffTask(TaskIds.OMAHA_JOB_ID, latency, latency).build();
-        sHasPendingJob = BackgroundTaskSchedulerFactory.getScheduler().schedule(
-                ContextUtils.getApplicationContext(), taskInfo);
+        sHasPendingJob =
+                BackgroundTaskSchedulerFactory.getScheduler()
+                        .schedule(ContextUtils.getApplicationContext(), taskInfo);
         return sHasPendingJob;
     }
 }

@@ -4,14 +4,13 @@
 
 #include "ash/public/cpp/app_list/app_list_config_provider.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/scoped_feature_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -49,25 +48,24 @@ void SanityCheckGridTileDimensions(AppListConfig* config, int error_margin) {
   // Icon should fit in the tile width.
   EXPECT_LE(config->grid_icon_dimension(), config->grid_tile_width());
 
-  const int folder_unclipped_icon_top =
+  const int folder_icon_top =
       (config->grid_tile_height() - config->grid_icon_bottom_padding() -
-       config->folder_unclipped_icon_dimension()) /
+       config->folder_icon_dimension()) /
       2;
   // The app list folder icon top should be within the tile bounds.
-  EXPECT_GE(folder_unclipped_icon_top, 0);
+  EXPECT_GE(folder_icon_top, 0);
 
   // Unclipped folder icon should not overlap with title.
-  const int folder_unclipped_icon_bottom =
-      folder_unclipped_icon_top + config->folder_unclipped_icon_dimension();
-  EXPECT_LE(folder_unclipped_icon_bottom, title_top + error_margin);
+  const int folder_icon_bottom =
+      folder_icon_top + config->folder_icon_dimension();
+  EXPECT_LE(folder_icon_bottom, title_top + error_margin);
 
   // Unclipped folder icon should fit within available height.
-  EXPECT_LE(folder_unclipped_icon_bottom,
+  EXPECT_LE(folder_icon_bottom,
             config->grid_tile_height() - config->grid_icon_bottom_padding());
 
   // Unclipped folder icon should fit into tile width.
-  EXPECT_LE(config->folder_unclipped_icon_dimension(),
-            config->grid_tile_width());
+  EXPECT_LE(config->folder_icon_dimension(), config->grid_tile_width());
 }
 
 class TestAppListConfigProviderObserver
@@ -84,7 +82,7 @@ class TestAppListConfigProviderObserver
 
   // AppListConfigProvider::Observer:
   void OnAppListConfigCreated(ash::AppListConfigType config_type) override {
-    ASSERT_FALSE(base::Contains(created_types_, config_type));
+    ASSERT_FALSE(std::ranges::contains(created_types_, config_type));
 
     created_types_.push_back(config_type);
   }
@@ -232,8 +230,8 @@ TEST_F(AppListConfigProviderTest, CreateConfigByDisplayWorkArea) {
     // observed created types are not cleared for |registry_observer_| between
     // test cases, the "observed" count for |test_case.config_type| should
     // always be 1.
-    EXPECT_EQ(1, base::ranges::count(registry_observer_.created_types(),
-                                     test_case.config_type));
+    EXPECT_EQ(1, std::ranges::count(registry_observer_.created_types(),
+                                    test_case.config_type));
 
     // Verify CreateForAppListWidget returns nullptr if the created config would
     // be the same as |config|.

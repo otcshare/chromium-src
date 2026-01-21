@@ -7,6 +7,7 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "content/public/common/webplugininfo.h"
@@ -33,25 +34,12 @@ void PluginUtils::GetPluginContentSetting(
     const GURL& plugin_url,
     const std::string& resource,
     ContentSetting* setting,
-    bool* is_default,
     bool* is_managed) {
   GURL main_frame_url = main_frame_origin.GetURL();
   content_settings::SettingInfo info;
-  bool uses_plugin_specific_setting = false;
-  const base::Value value = host_content_settings_map->GetWebsiteSetting(
+  *setting = host_content_settings_map->GetContentSetting(
       main_frame_url, main_frame_url, ContentSettingsType::JAVASCRIPT, &info);
-
-  *setting = content_settings::ValueToContentSetting(value);
-
-  bool uses_default_content_setting =
-      !uses_plugin_specific_setting &&
-      info.primary_pattern == ContentSettingsPattern::Wildcard() &&
-      info.secondary_pattern == ContentSettingsPattern::Wildcard();
-
-  if (is_default)
-    *is_default = uses_default_content_setting;
-  if (is_managed)
-    *is_managed = info.source == content_settings::SETTING_SOURCE_POLICY;
+  *is_managed = info.source == content_settings::SettingSource::kPolicy;
 }
 
 // static
@@ -76,14 +64,14 @@ PluginUtils::GetMimeTypeToExtensionIdMap(
     return mime_type_to_extension_id_map;
   }
 
-  const std::vector<std::string>& allowlist =
+  const std::vector<extensions::ExtensionId>& allowlist =
       MimeTypesHandler::GetMIMETypeAllowlist();
   // Go through the allowed extensions and try to use them to intercept
   // the URL request.
   extensions::ExtensionRegistry* registry =
       extensions::ExtensionRegistry::Get(browser_context);
   DCHECK(registry);
-  for (const std::string& extension_id : allowlist) {
+  for (const extensions::ExtensionId& extension_id : allowlist) {
     const extensions::Extension* extension =
         registry->enabled_extensions().GetByID(extension_id);
     // The allowed extension may not be installed, so we have to nullptr

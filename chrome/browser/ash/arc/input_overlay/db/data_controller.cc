@@ -4,9 +4,10 @@
 
 #include "chrome/browser/ash/arc/input_overlay/db/data_controller.h"
 
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -20,16 +21,18 @@ namespace {
 // Base directory for saving customized data in the user profile.
 constexpr char kPath[] = "google_gio";
 
-absl::optional<base::FilePath> CreateOrGetDirectory(
+std::optional<base::FilePath> CreateOrGetDirectory(
     const base::FilePath& storage_dir) {
-  if (base::PathExists(storage_dir))
+  if (base::PathExists(storage_dir)) {
     return storage_dir;
-  if (base::CreateDirectory(storage_dir))
+  }
+  if (base::CreateDirectory(storage_dir)) {
     return storage_dir;
+  }
 
   LOG(ERROR) << "Failed to create the base storage directory: "
              << storage_dir.value();
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool ProtoFileExists(const base::FilePath& file_path) {
@@ -37,12 +40,12 @@ bool ProtoFileExists(const base::FilePath& file_path) {
 }
 
 void CreateEmptyFile(const base::FilePath& file_path) {
-  FILE* file = base::OpenFile(file_path, "wb+");
-  if (file == nullptr) {
-    LOG(ERROR) << "Failed to create file: " << file_path.value();
+  if (FILE* file = base::OpenFile(file_path, "wb+")) {
+    base::CloseFile(file);
     return;
   }
-  base::CloseFile(file);
+
+  LOG(ERROR) << "Failed to create file: " << file_path.value();
 }
 
 }  // namespace
@@ -66,9 +69,9 @@ base::FilePath DataController::GetFilePathFromPackageName(
 
 std::unique_ptr<AppDataProto> DataController::ReadProtoFromFile(
     base::FilePath file_path) {
-  auto base_path = CreateOrGetDirectory(file_path.DirName());
-  if (!base_path)
+  if (auto base_path = CreateOrGetDirectory(file_path.DirName()); !base_path) {
     return nullptr;
+  }
 
   if (!ProtoFileExists(file_path)) {
     CreateEmptyFile(file_path);
@@ -87,9 +90,10 @@ std::unique_ptr<AppDataProto> DataController::ReadProtoFromFile(
 bool DataController::WriteProtoToFile(std::unique_ptr<AppDataProto> proto,
                                       base::FilePath file_path) {
   std::string proto_str;
-  if (!proto->SerializeToString(&proto_str))
+  if (!proto->SerializeToString(&proto_str)) {
     return false;
-  return base::WriteFile(file_path, proto_str.data(), proto_str.size()) > 0;
+  }
+  return base::WriteFile(file_path, proto_str);
 }
 
 }  // namespace arc::input_overlay

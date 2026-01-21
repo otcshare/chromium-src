@@ -12,6 +12,8 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "ui/base/l10n/l10n_util.h"
 
+namespace lookalikes {
+
 void RecordUkmForLookalikeUrlBlockingPage(
     ukm::SourceId source_id,
     LookalikeUrlMatchType match_type,
@@ -86,7 +88,7 @@ void PopulateLookalikeUrlBlockingPageStrings(base::Value::Dict& load_time_data,
 #if BUILDFLAG(IS_IOS)
     // On iOS, offer to close the page instead of navigating to NTP when the
     // safe URL is empty or invalid, and unable to go back.
-    absl::optional<bool> maybe_cant_go_back =
+    std::optional<bool> maybe_cant_go_back =
         load_time_data.FindBool("cant_go_back");
     if (maybe_cant_go_back && *maybe_cant_go_back) {
       load_time_data.Set(
@@ -104,12 +106,10 @@ void PopulateStringsForSharedHTML(base::Value::Dict& load_time_data) {
   load_time_data.Set("lookalike_url", true);
   load_time_data.Set("overridable", false);
   load_time_data.Set("hide_primary_button", false);
-  load_time_data.Set("show_recurrent_error_paragraph", false);
-
-  load_time_data.Set("recurrentErrorParagraph", "");
   load_time_data.Set("openDetails", "");
   load_time_data.Set("explanationParagraph", "");
   load_time_data.Set("finalParagraph", "");
-
   load_time_data.Set("type", "LOOKALIKE");
 }
+
+}  // namespace lookalikes

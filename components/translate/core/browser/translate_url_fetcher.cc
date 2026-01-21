@@ -4,7 +4,11 @@
 
 #include "components/translate/core/browser/translate_url_fetcher.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/variations/net/variations_http_headers.h"
@@ -26,7 +30,7 @@ const int kMaxRetry = 16;
 TranslateURLFetcher::TranslateURLFetcher()
     : state_(IDLE), retry_count_(0), max_retry_on_5xx_(0) {}
 
-TranslateURLFetcher::~TranslateURLFetcher() {}
+TranslateURLFetcher::~TranslateURLFetcher() = default;
 
 bool TranslateURLFetcher::Request(const GURL& url,
                                   TranslateURLFetcher::Callback callback,
@@ -35,7 +39,6 @@ bool TranslateURLFetcher::Request(const GURL& url,
   // finished.
   if (state_ == REQUESTING) {
     NOTREACHED();
-    return false;
   }
 
   if (retry_count_ >= kMaxRetry)
@@ -96,8 +99,7 @@ bool TranslateURLFetcher::Request(const GURL& url,
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url_;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  if (!extra_request_header_.empty())
-    resource_request->headers.AddHeaderFromString(extra_request_header_);
+  resource_request->headers.MergeFrom(extra_request_header_);
 
   simple_loader_ =
       variations::CreateSimpleURLLoaderWithVariationsHeaderUnknownSignedIn(
@@ -121,11 +123,9 @@ bool TranslateURLFetcher::Request(const GURL& url,
 }
 
 void TranslateURLFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
-  std::string data;
+    std::optional<std::string> response_body) {
   if (response_body) {
     DCHECK_EQ(net::OK, simple_loader_->NetError());
-    data = std::move(*response_body);
     state_ = COMPLETED;
   } else {
     state_ = FAILED;
@@ -133,7 +133,8 @@ void TranslateURLFetcher::OnSimpleLoaderComplete(
 
   simple_loader_.reset();
 
-  std::move(callback_).Run(state_ == COMPLETED, data);
+  std::move(callback_).Run(state_ == COMPLETED,
+                           std::move(response_body).value_or(""));
 }
 
 }  // namespace translate

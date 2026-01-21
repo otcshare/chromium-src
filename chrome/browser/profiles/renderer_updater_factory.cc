@@ -9,19 +9,35 @@
 #include "chrome/browser/profiles/renderer_updater.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+#include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service_factory.h"
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+
 RendererUpdaterFactory::RendererUpdaterFactory()
     : ProfileKeyedServiceFactory(
           "RendererUpdater",
-          ProfileSelections::BuildForRegularAndIncognito()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(HostContentSettingsMapFactory::GetInstance());
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+  DependsOn(BoundSessionCookieRefreshServiceFactory::GetInstance());
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 }
 
-RendererUpdaterFactory::~RendererUpdaterFactory() {}
+RendererUpdaterFactory::~RendererUpdaterFactory() = default;
 
 // static
 RendererUpdaterFactory* RendererUpdaterFactory::GetInstance() {
-  return base::Singleton<RendererUpdaterFactory>::get();
+  static base::NoDestructor<RendererUpdaterFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -30,9 +46,10 @@ RendererUpdater* RendererUpdaterFactory::GetForProfile(Profile* profile) {
       GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
-KeyedService* RendererUpdaterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+RendererUpdaterFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new RendererUpdater(static_cast<Profile*>(context));
+  return std::make_unique<RendererUpdater>(static_cast<Profile*>(context));
 }
 
 bool RendererUpdaterFactory::ServiceIsCreatedWithBrowserContext() const {

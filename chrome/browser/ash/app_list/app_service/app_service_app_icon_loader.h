@@ -9,8 +9,10 @@
 #include <set>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/app_icon_loader.h"
+#include "base/scoped_observation.h"
+#include "components/app_icon_loader/app_icon_loader.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
@@ -44,7 +46,7 @@ class AppServiceAppIconLoader : public AppIconLoader,
   void OnAppRegistryCacheWillBeDestroyed(
       apps::AppRegistryCache* cache) override;
 
- private:
+ protected:
   using AppIDToIconMap = std::map<std::string, gfx::ImageSkia>;
   using AppIDToShelfAppId = std::map<std::string, std::set<std::string>>;
 
@@ -52,16 +54,26 @@ class AppServiceAppIconLoader : public AppIconLoader,
   void CallLoadIcon(const std::string& app_id, bool allow_placeholder_icon);
 
   // Callback invoked when the icon is loaded.
-  void OnLoadIcon(const std::string& app_id, apps::IconValuePtr icon_value);
+  virtual void OnLoadIcon(const std::string& app_id,
+                          apps::IconValuePtr icon_value);
 
   // Returns true if the app_id does exist in icon_map_.
   bool Exist(const std::string& app_id);
+
+  Profile* profile() { return profile_; }
+
+ private:
+  const raw_ptr<Profile, DanglingUntriaged> profile_ = nullptr;
 
   // Maps from an app id to shelf app ids.
   AppIDToShelfAppId shelf_app_id_map_;
 
   // Maps from an app id to the icon to track the icons added via FetchImage.
   AppIDToIconMap icon_map_;
+
+  base::ScopedObservation<apps::AppRegistryCache,
+                          apps::AppRegistryCache::Observer>
+      app_registry_cache_observer_{this};
 
   base::WeakPtrFactory<AppServiceAppIconLoader> weak_ptr_factory_{this};
 };

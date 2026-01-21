@@ -13,9 +13,9 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "rlz/lib/rlz_lib.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -61,7 +61,7 @@ void ReadRegistryTree(const base::win::RegKey& src, RegistryKeyData* data) {
       const uint8_t* value_bytes = reinterpret_cast<const uint8_t*>(i.Value());
       value.name.assign(i.Name());
       value.type = i.Type();
-      value.data.assign(value_bytes, value_bytes + i.ValueSize());
+      value.data.assign(value_bytes, UNSAFE_TODO(value_bytes + i.ValueSize()));
     }
   }
 
@@ -133,7 +133,7 @@ void RlzLibTestNoMachineStateHelper::SetUp() {
   ASSERT_NO_FATAL_FAILURE(
       InitializeRegistryOverridesForTesting(&override_manager_));
 #elif BUILDFLAG(IS_APPLE)
-  base::mac::ScopedNSAutoreleasePool pool;
+  base::apple::ScopedNSAutoreleasePool pool;
 #endif  // BUILDFLAG(IS_WIN)
 #if BUILDFLAG(IS_POSIX)
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -182,15 +182,15 @@ void RlzLibTestBase::SetUp() {
   EXPECT_TRUE(rlz_lib::SetAccessPointRlz(rlz_lib::IE_HOME_PAGE, ""));
 #endif  // BUILDFLAG(IS_POSIX)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   statistics_provider_ =
       std::make_unique<ash::system::FakeStatisticsProvider>();
   ash::system::StatisticsProvider::SetTestProvider(statistics_provider_.get());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void RlzLibTestBase::TearDown() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::system::StatisticsProvider::SetTestProvider(nullptr);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }

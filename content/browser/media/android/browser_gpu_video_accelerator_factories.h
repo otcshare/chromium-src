@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_MEDIA_ANDROID_BROWSER_GPU_VIDEO_ACCELERATOR_FACTORIES_H_
 
 #include "base/callback_list.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 
 namespace viz {
@@ -44,23 +45,19 @@ class BrowserGpuVideoAcceleratorFactories
   std::unique_ptr<media::VideoDecoder> CreateVideoDecoder(
       media::MediaLog* media_log,
       media::RequestOverlayInfoCB request_overlay_info_cb) override;
-  absl::optional<media::VideoEncodeAccelerator::SupportedProfiles>
+  std::optional<media::VideoEncodeAccelerator::SupportedProfiles>
   GetVideoEncodeAcceleratorSupportedProfiles() override;
   bool IsEncoderSupportKnown() override;
   void NotifyEncoderSupportKnown(base::OnceClosure) override;
   std::unique_ptr<media::VideoEncodeAccelerator> CreateVideoEncodeAccelerator()
       override;
-  std::unique_ptr<gfx::GpuMemoryBuffer> CreateGpuMemoryBuffer(
-      const gfx::Size& size,
-      gfx::BufferFormat format,
-      gfx::BufferUsage usage) override;
+  std::optional<media::SupportedVideoDecoderConfigs>
+  GetSupportedVideoDecoderConfigs() override;
   bool ShouldUseGpuMemoryBuffersForVideoFrames(
       bool for_media_stream) const override;
-  unsigned ImageTextureTarget(gfx::BufferFormat format) override;
   media::GpuVideoAcceleratorFactories::OutputFormat VideoFrameOutputFormat(
       media::VideoPixelFormat pixel_format) override;
   gpu::SharedImageInterface* SharedImageInterface() override;
-  gpu::GpuMemoryBufferManager* GpuMemoryBufferManager() override;
   base::UnsafeSharedMemoryRegion CreateSharedMemoryRegion(size_t size) override;
   scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() override;
   viz::RasterContextProvider* GetMediaContextProvider() override;

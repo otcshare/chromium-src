@@ -4,8 +4,8 @@
 
 #include "services/proxy_resolver/mock_proxy_host_resolver.h"
 
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -16,9 +16,7 @@
 
 namespace proxy_resolver {
 
-class MockProxyHostResolver::RequestImpl
-    : public Request,
-      public base::SupportsWeakPtr<RequestImpl> {
+class MockProxyHostResolver::RequestImpl final : public Request {
  public:
   RequestImpl(std::vector<net::IPAddress> results, bool synchronous_mode)
       : results_(std::move(results)), synchronous_mode_(synchronous_mode) {}
@@ -28,7 +26,8 @@ class MockProxyHostResolver::RequestImpl
     if (!synchronous_mode_) {
       callback_ = std::move(callback);
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&RequestImpl::SendResults, AsWeakPtr()));
+          FROM_HERE, base::BindOnce(&RequestImpl::SendResults,
+                                    weak_ptr_factory_.GetWeakPtr()));
       return net::ERR_IO_PENDING;
     }
 
@@ -55,6 +54,8 @@ class MockProxyHostResolver::RequestImpl
   const bool synchronous_mode_;
 
   net::CompletionOnceCallback callback_;
+
+  base::WeakPtrFactory<RequestImpl> weak_ptr_factory_{this};
 };
 
 MockProxyHostResolver::MockProxyHostResolver(bool synchronous_mode)

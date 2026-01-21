@@ -4,14 +4,15 @@
 
 #include "components/device_signals/core/system_signals/win/wsc_client_impl.h"
 
-#include <iwscapi.h>
 #include <windows.h>
+
+#include <iwscapi.h>
 #include <wrl/client.h>
 #include <wscapi.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -19,7 +20,6 @@
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
 #include "base/win/windows_version.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -114,15 +114,6 @@ WscAvProductsResponse WscClientImpl::GetAntiVirusProducts() {
     }
     av_product.display_name = base::SysWideToUTF8(
         std::wstring(product_name.Get(), product_name.Length()));
-
-    base::win::ScopedBstr product_id;
-    hr = product->get_ProductGuid(product_id.Receive());
-    if (FAILED(hr)) {
-      response.parsing_errors.push_back(WscParsingError::kFailedToGetId);
-      continue;
-    }
-    av_product.product_id = base::SysWideToUTF8(
-        std::wstring(product_id.Get(), product_id.Length()));
 
     response.av_products.push_back(std::move(av_product));
   }

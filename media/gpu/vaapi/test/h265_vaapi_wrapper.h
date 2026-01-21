@@ -5,13 +5,14 @@
 #ifndef MEDIA_GPU_VAAPI_TEST_H265_VAAPI_WRAPPER_H_
 #define MEDIA_GPU_VAAPI_TEST_H265_VAAPI_WRAPPER_H_
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "media/gpu/vaapi/test/h265_dpb.h"
 #include "media/gpu/vaapi/test/scoped_va_config.h"
 #include "media/gpu/vaapi/test/scoped_va_context.h"
 #include "media/gpu/vaapi/test/vaapi_device.h"
-#include "media/video/h265_parser.h"
+#include "media/parsers/h265_parser.h"
 
 namespace media::vaapi_test {
 
@@ -55,7 +56,7 @@ class H265VaapiWrapper {
  private:
   void FillVAPicture(VAPictureHEVC* va_pic, scoped_refptr<H265Picture> pic);
   void FillVARefFramesFromRefList(const H265Picture::Vector& ref_pic_list,
-                                  VAPictureHEVC* va_pics);
+                                  base::span<VAPictureHEVC> va_pics);
 
   // Returns |kInvalidRefPicIndex| if it cannot find a picture.
   int GetRefPicIndex(int poc);

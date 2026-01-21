@@ -11,7 +11,8 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread.h"
@@ -63,7 +64,9 @@ class ConnectionManager {
   void OnNewConnection(base::ProcessId pid,
                        mojo::PendingRemote<mojom::ProfilingClient> client,
                        mojom::ProcessType process_type,
-                       mojom::ProfilingParamsPtr params);
+                       mojom::ProfilingParamsPtr params,
+                       mojom::ProfilingService::AddProfilingClientCallback
+                           started_profiling_closure);
 
   // Returns pids of clients that have started profiling.
   std::vector<base::ProcessId> GetConnectionPids();

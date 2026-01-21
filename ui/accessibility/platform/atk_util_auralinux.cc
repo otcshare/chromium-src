@@ -3,26 +3,36 @@
 // found in the LICENSE file.
 
 #include <atk/atk.h>
+
+#include <array>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
+
+#if defined(USE_GIO)
+#include <gio/gio.h>
+#endif
 
 #include "base/environment.h"
 #include "base/memory/singleton.h"
 #include "base/no_destructor.h"
 #include "ui/accessibility/platform/atk_util_auralinux.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_node_auralinux.h"
+#include "ui/base/glib/gsettings.h"
 
 namespace {
 
-const char* kAccessibilityEnabledVariables[] = {
-    "ACCESSIBILITY_ENABLED",
-    "GNOME_ACCESSIBILITY",
-    "QT_ACCESSIBILITY",
-};
+constexpr auto kAccessibilityEnabledVariables =
+    std::to_array<base::cstring_view>({
+        "ACCESSIBILITY_ENABLED",
+        "GNOME_ACCESSIBILITY",
+        "QT_ACCESSIBILITY",
+    });
 
 //
 // AtkUtilAuraLinux definition and implementation.
@@ -35,7 +45,10 @@ struct AtkUtilAuraLinuxClass {
   AtkUtilClass parent_class;
 };
 
-G_DEFINE_TYPE(AtkUtilAuraLinux, atk_util_auralinux, ATK_TYPE_UTIL)
+// SAFETY: Usage of third-party library macro is outside our control.
+UNSAFE_BUFFERS(G_DEFINE_TYPE(AtkUtilAuraLinux,
+                             atk_util_auralinux,
+                             ATK_TYPE_UTIL))
 
 static void atk_util_auralinux_init(AtkUtilAuraLinux *ax_util) {
 }
@@ -110,13 +123,55 @@ AtkUtilAuraLinux* AtkUtilAuraLinux::GetInstance() {
 }
 
 bool AtkUtilAuraLinux::ShouldEnableAccessibility() {
+  // Check enabled/disabled accessibility based on env variable
   std::unique_ptr<base::Environment> env(base::Environment::Create());
-  for (const auto* variable : kAccessibilityEnabledVariables) {
-    std::string enable_accessibility;
-    env->GetVar(variable, &enable_accessibility);
+  for (base::cstring_view variable : kAccessibilityEnabledVariables) {
+    std::string enable_accessibility =
+        env->GetVar(variable).value_or(std::string());
     if (enable_accessibility == "1")
       return true;
+    if (enable_accessibility == "0") {
+      return false;
+    }
   }
+
+#if defined(USE_GIO)
+  // Do not run additional checks when Chrome runs in headless mode, which means
+  // we are in a test environment
+  std::string chrome_headless =
+      env->GetVar("CHROME_HEADLESS").value_or(std::string());
+  if (chrome_headless == "1") {
+    return false;
+  }
+
+  // Check enabled accessibility based on a11y DBus interface
+  GDBusConnection* connection =
+      g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+
+  if (connection) {
+    GVariant* result = g_dbus_connection_call_sync(
+        connection, "org.a11y.Bus", "/org/a11y/bus",
+        "org.freedesktop.DBus.Properties", "Get",
+        g_variant_new("(ss)", "org.a11y.Status", "IsEnabled"), nullptr,
+        G_DBUS_CALL_FLAGS_NONE, -1, nullptr, nullptr);
+    g_object_unref(connection);
+
+    if (result) {
+      GVariant* property;
+      g_variant_get(result, "(v)", &property);
+      const bool accessibilityEnabled = g_variant_get_boolean(property);
+      g_variant_unref(result);
+      g_variant_unref(property);
+      return accessibilityEnabled;
+    }
+  }
+
+  // Check enabled accessibility based on GSettings
+  auto settings = ui::GSettingsNew("org.gnome.desktop.interface");
+  if (settings) {
+    return g_settings_get_boolean(settings, "toolkit-accessibility");
+  }
+#endif
 
   return false;
 }
@@ -149,9 +204,9 @@ DiscardAtkKeyEvent AtkUtilAuraLinux::HandleAtkKeyEvent(
     AtkKeyEventStruct* key_event) {
   DCHECK(key_event);
 
-  if (!ui::AXPlatformNode::GetAccessibilityMode().has_mode(
-          ui::AXMode::kNativeAPIs))
+  if (!AXPlatform::GetInstance().GetMode().has_mode(AXMode::kNativeAPIs)) {
     return DiscardAtkKeyEvent::Retain;
+  }
 
   GetInstance()->InitializeAsync();
 

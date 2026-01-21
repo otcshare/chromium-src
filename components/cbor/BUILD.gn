@@ -9,6 +9,8 @@ component("cbor") {
     "constants.h",
     "diagnostic_writer.cc",
     "diagnostic_writer.h",
+    "float_conversions.cc",
+    "float_conversions.h",
     "reader.cc",
     "reader.h",
     "values.cc",
@@ -37,6 +39,10 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 fuzzer_test("reader_fuzzer") {

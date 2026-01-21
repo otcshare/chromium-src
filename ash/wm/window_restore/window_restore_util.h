@@ -5,7 +5,12 @@
 #ifndef ASH_WM_WINDOW_RESTORE_WINDOW_RESTORE_UTIL_H_
 #define ASH_WM_WINDOW_RESTORE_WINDOW_RESTORE_UTIL_H_
 
+#include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "components/app_restore/window_info.h"
+
+class PrefRegistrySimple;
+class PrefService;
 
 namespace aura {
 class Window;
@@ -13,16 +18,57 @@ class Window;
 
 namespace ash {
 
+namespace full_restore {
+
+// Enum that specifies restore options on startup. The values must not be
+// changed as they are persisted on disk.
+//
+// This is used to record histograms, so do not remove or reorder existing
+// entries.
+enum class RestoreOption {
+  kAlways = 1,
+  kAskEveryTime = 2,
+  kDoNotRestore = 3,
+
+  // Add any new values above this one, and update kMaxValue to the highest
+  // enumerator value.
+  kMaxValue = kDoNotRestore,
+};
+
+}  // namespace full_restore
+
+// Registers the restore pref.
+ASH_EXPORT void RegisterProfilePrefsFullRestore(PrefRegistrySimple* registry);
+
+// Returns true if the pref `kRestoreAppsAndPagesPrefName` exists. Otherwise,
+// returns false.
+ASH_EXPORT bool HasRestorePref(PrefService* prefs);
+
+// Returns true if the restore pref doesn't exist or the pref is 'Always' or
+// 'Ask every time'. Otherwise, returns false for 'Do not restore'.
+ASH_EXPORT bool CanPerformRestore(PrefService* prefs);
+
+// Returns true if the restore pref exists, and is set to 'Ask every time'.
+ASH_EXPORT bool IsAskEveryTime(PrefService* prefs);
+
 // Builds the WindowInfo for `window`. Optionally passes `activation_index`,
 // which is used to set `WindowInfo.activation_index` if it has value.
 // Otherwise, `WindowInfo.activation_index` will be calculated from
-// `mru_windows`. If `for_saved_desks` this was called from a feature which
-// saves desks, and we need to add extra information such as the app title.
-std::unique_ptr<app_restore::WindowInfo> BuildWindowInfo(
+// `mru_windows`.
+std::unique_ptr<::app_restore::WindowInfo> BuildWindowInfo(
     aura::Window* window,
-    absl::optional<int> activation_index,
-    bool for_saved_desks,
-    const std::vector<aura::Window*>& mru_windows);
+    std::optional<int> activation_index,
+    const std::vector<raw_ptr<aura::Window, VectorExperimental>>& mru_windows);
+
+bool IsBrowserAppId(const std::string& id);
+
+// Gets the path of the informed restore image being taken on the session state
+// changes. It will be written to
+// /home/chronos/u-<hash>/informed_restore_image.png.
+ASH_EXPORT base::FilePath GetInformedRestoreImagePath();
+
+// Sets the informed restore image path for tests.
+ASH_EXPORT void SetInformedRestoreImagePathForTest(const base::FilePath& path);
 
 }  // namespace ash
 

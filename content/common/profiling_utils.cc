@@ -14,7 +14,6 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/guid.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
@@ -23,6 +22,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
+#include "content/public/common/content_switches.h"
 
 namespace content {
 
@@ -40,14 +40,15 @@ base::FilePath GetProfileFileDirectory() {
 #if BUILDFLAG(IS_ANDROID)
   base::PathService::Get(base::DIR_TEMP, &path);
   path = path.Append("pgo_profiles/");
-#else  // !BUILDFLAG(IS_ANDROID)
-  std::string prof_template;
-  std::unique_ptr<base::Environment> env(base::Environment::Create());
-  if (env->GetVar("LLVM_PROFILE_FILE", &prof_template)) {
-#if BUILDFLAG(IS_WIN)
-    path = base::FilePath(base::UTF8ToWide(prof_template)).DirName();
 #else
-    path = base::FilePath(prof_template).DirName();
+
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
+  std::optional<std::string> prof_template = env->GetVar("LLVM_PROFILE_FILE");
+  if (prof_template.has_value()) {
+#if BUILDFLAG(IS_WIN)
+    path = base::FilePath(base::UTF8ToWide(*prof_template)).DirName();
+#else
+    path = base::FilePath(*prof_template).DirName();
 #endif
   }
 #endif
@@ -69,7 +70,7 @@ base::File OpenProfilingFile() {
 
   // sajjadm@ and liaoyuke@ experimentally determined that a size 4 pool works
   // well for the coverage builder.
-  // TODO(https://crbug.com/1059335): Check if this is an appropriate value for
+  // TODO(crbug.com/40121559): Check if this is an appropriate value for
   // the PGO builds.
   int pool_index = base::RandInt(0, 3);
   std::string filename = base::StrCat(
@@ -81,6 +82,9 @@ base::File OpenProfilingFile() {
 #endif
   uint32_t flags = base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
                    base::File::FLAG_WRITE;
+
+  // The profiling file is passed to an untrusted process.
+  flags = base::File::AddFlagsForPassingToUntrustedProcess(flags);
 
   base::File file(path, flags);
   if (!file.IsValid()) {

@@ -8,12 +8,14 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/persisted_state_db/session_proto_db_factory.h"
-#include "chrome/browser/tab/jni_headers/LevelDBPersistedDataStorage_jni.h"
 #include "components/commerce/core/proto/persisted_state_db_content.pb.h"
 #include "content/public/browser/android/browser_context_handle.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/tab/jni_headers/LevelDBPersistedDataStorage_jni.h"
 
 namespace {
 
@@ -52,8 +54,8 @@ PersistedStateDB::~PersistedStateDB() = default;
 
 void PersistedStateDB::Save(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& jkey,
-    const base::android::JavaParamRef<jbyteArray>& jbyte_array,
+    const base::android::JavaRef<jstring>& jkey,
+    const base::android::JavaRef<jbyteArray>& jbyte_array,
     const base::android::JavaRef<jobject>& joncomplete_for_testing) {
   const std::string& key = base::android::ConvertJavaStringToUTF8(env, jkey);
   std::string data;
@@ -69,7 +71,7 @@ void PersistedStateDB::Save(
 }
 
 void PersistedStateDB::Load(JNIEnv* env,
-                            const base::android::JavaParamRef<jstring>& jkey,
+                            const base::android::JavaRef<jstring>& jkey,
                             const base::android::JavaRef<jobject>& jcallback) {
   proto_db_->LoadContentWithPrefix(
       base::android::ConvertJavaStringToUTF8(env, jkey),
@@ -79,7 +81,7 @@ void PersistedStateDB::Load(JNIEnv* env,
 
 void PersistedStateDB::Delete(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& jkey,
+    const base::android::JavaRef<jstring>& jkey,
     const base::android::JavaRef<jobject>& joncomplete_for_testing) {
   proto_db_->DeleteContentWithPrefix(
       base::android::ConvertJavaStringToUTF8(env, jkey),
@@ -90,8 +92,8 @@ void PersistedStateDB::Delete(
 
 void PersistedStateDB::PerformMaintenance(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobjectArray>& jkeys_to_keep,
-    const base::android::JavaParamRef<jstring>& jkey_substring_to_match,
+    const base::android::JavaRef<jobjectArray>& jkeys_to_keep,
+    const base::android::JavaRef<jstring>& jkey_substring_to_match,
     const base::android::JavaRef<jobject>& joncomplete_for_testing) {
   std::vector<std::string> keys_to_keep;
   base::android::AppendJavaStringArrayToStringVector(env, jkeys_to_keep,
@@ -110,10 +112,12 @@ void PersistedStateDB::Destroy(JNIEnv* env) {
 
 static void JNI_LevelDBPersistedDataStorage_Init(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj,
-    const base::android::JavaParamRef<jobject>& jprofile) {
+    const base::android::JavaRef<jobject>& obj,
+    const base::android::JavaRef<jobject>& jprofile) {
   Java_LevelDBPersistedDataStorage_setNativePtr(
       env, obj,
       reinterpret_cast<intptr_t>(new PersistedStateDB(
           content::BrowserContextFromJavaHandle(jprofile))));
 }
+
+DEFINE_JNI(LevelDBPersistedDataStorage)

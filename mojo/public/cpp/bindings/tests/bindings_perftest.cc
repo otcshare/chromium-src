@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include <stddef.h>
+
+#include <array>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -18,7 +20,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/test_support/test_support.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -118,10 +120,9 @@ TEST_F(MojoBindingsPerftest, InProcessPingPong) {
     const MojoTimeTicks start_time = MojoGetTimeTicksNow();
     test.Run(kIterations);
     const MojoTimeTicks end_time = MojoGetTimeTicksNow();
-    test::LogPerfResult(
-        "InProcessPingPong", "0_Inactive",
-        kIterations / MojoTicksToSeconds(end_time - start_time),
-        "pings/second");
+    test::LogPerfResult("InProcessPingPong", "0_Inactive",
+                        kIterations / MojoTicksToSeconds(end_time - start_time),
+                        "pings/second");
   }
 
   {
@@ -133,10 +134,9 @@ TEST_F(MojoBindingsPerftest, InProcessPingPong) {
     const MojoTimeTicks start_time = MojoGetTimeTicksNow();
     test.Run(kIterations);
     const MojoTimeTicks end_time = MojoGetTimeTicksNow();
-    test::LogPerfResult(
-        "InProcessPingPong", "1000_Inactive",
-        kIterations / MojoTicksToSeconds(end_time - start_time),
-        "pings/second");
+    test::LogPerfResult("InProcessPingPong", "1000_Inactive",
+                        kIterations / MojoTicksToSeconds(end_time - start_time),
+                        "pings/second");
 
     delete[] inactive_services;
   }
@@ -169,7 +169,6 @@ class PingPongPaddle : public MessageReceiverWithResponderStatus {
       Message* message,
       std::unique_ptr<MessageReceiverWithStatus> responder) override {
     NOTREACHED();
-    return true;
   }
 
   base::TimeDelta Serve(uint32_t expected_count) {
@@ -244,7 +243,6 @@ class CounterReceiver : public MessageReceiverWithResponderStatus {
       Message* message,
       std::unique_ptr<MessageReceiverWithStatus> responder) override {
     NOTREACHED();
-    return true;
   }
 
   uint32_t counter() const { return counter_; }
@@ -267,7 +265,7 @@ TEST_F(MojoBindingsPerftest, MultiplexRouterDispatchCost) {
       nullptr, {}, base::SingleThreadTaskRunner::GetCurrentDefault(), 0u,
       kTestInterfaceName, MessageToMethodInfo, MessageToMethodName);
 
-  static const uint32_t kIterations[] = {1000, 3000000};
+  static const auto kIterations = std::to_array<uint32_t>({1000, 3000000});
 
   for (size_t i = 0; i < 2; ++i) {
     receiver.Reset();

@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert} from 'chrome://resources/js/assert_ts.js';
-import {TimeDelta} from 'chrome://resources/mojo/mojo/public/mojom/base/time.mojom-webui.js';
-import {BrowserProxy, BrowserProxyImpl} from './browser_proxy.js';
+import type {TimeDelta} from '//resources/mojo/mojo/public/mojom/base/time.mojom-webui.js';
+
+import {assert} from '../assert.js';
+
+import type {BrowserProxy} from './browser_proxy.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 
 function timeFromMojo(delta: TimeDelta): bigint {
   return delta.microseconds;
@@ -66,7 +69,7 @@ function timeToMojo(mark: bigint): TimeDelta {
  */
 
 export interface MetricsReporter {
-  mark(name: string): void;
+  mark(name: string, time?: bigint): void;
   measure(startMark: string, endMark?: string): Promise<bigint>;
   hasMark(name: string): Promise<boolean>;
   hasLocalMark(name: string): boolean;
@@ -98,8 +101,8 @@ export class MetricsReporterImpl implements MetricsReporter {
     instance = newInstance;
   }
 
-  mark(name: string) {
-    this.marks_.set(name, this.browserProxy_.now());
+  mark(name: string, time?: bigint) {
+    this.marks_.set(name, time ?? this.browserProxy_.now());
   }
 
   async measure(startMark: string, endMark?: string): Promise<bigint> {

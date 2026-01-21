@@ -10,6 +10,7 @@
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
 #include "media/base/audio_renderer_sink.h"
 #include "media/mojo/mojom/audio_output_stream.mojom.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
@@ -52,7 +53,7 @@ class COMPONENT_EXPORT(AUDIO_PUBLIC_CPP) OutputDevice {
   std::unique_ptr<media::AudioOutputDeviceThreadCallback> audio_callback_;
   std::unique_ptr<media::AudioDeviceThread> audio_thread_;
   media::AudioParameters audio_parameters_;
-  raw_ptr<media::AudioRendererSink::RenderCallback> render_callback_;
+  const raw_ptr<media::AudioRendererSink::RenderCallback> render_callback_;
   mojo::Remote<media::mojom::AudioOutputStream> stream_;
   mojo::Remote<media::mojom::AudioStreamFactory> stream_factory_;
 

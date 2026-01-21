@@ -3,20 +3,21 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 
-#include "base/bind.h"
+#include <optional>
+
 #include "base/callback_list.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/process/process.h"
 #include "base/threading/hang_watcher.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_close_manager.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/lifetime/termination_notification.h"
@@ -26,27 +27,22 @@
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/pref_names.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/boot_times_recorder.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
-#else  // !BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ui/profile_picker.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/crosapi/mojom/crosapi.mojom.h"
-#include "chromeos/lacros/lacros_service.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#else  // !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/profiles/profile_picker.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
@@ -56,6 +52,10 @@
 #include "chrome/browser/sessions/session_data_service.h"
 #include "chrome/browser/sessions/session_data_service_factory.h"
 #endif  // BUILDFLAG(ENABLE_SESSION_SERVICE)
+
+#if BUILDFLAG(ENABLE_GLIC)
+#include "chrome/browser/background/glic/glic_background_mode_manager.h"
+#endif
 
 namespace chrome {
 
@@ -72,22 +72,25 @@ using IgnoreUnloadHandlers =
 
 void AttemptRestartInternal(IgnoreUnloadHandlers ignore_unload_handlers) {
   // TODO(beng): Can this use ProfileManager::GetLoadedProfiles instead?
-  // TODO(crbug.com/1205798): Unset SaveSessionState if the restart fails.
-  for (auto* browser : *BrowserList::GetInstance()) {
-    browser->profile()->SaveSessionState();
+  // TODO(crbug.com/40180622): Unset SaveSessionState if the restart fails.
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [](BrowserWindowInterface* browser) {
+        browser->GetProfile()->SaveSessionState();
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
-    auto* session_data_service =
-        SessionDataServiceFactory::GetForProfile(browser->profile());
-    if (session_data_service)
-      session_data_service->SetForceKeepSessionState();
+        if (auto* session_data_service =
+                SessionDataServiceFactory::GetForProfile(
+                    browser->GetProfile())) {
+          session_data_service->SetForceKeepSessionState();
+        }
 #endif  // BUILDFLAG(ENABLE_SESSION_SERVICE)
-  }
+        return true;
+      });
 
   PrefService* pref_service = g_browser_process->local_state();
   pref_service->SetBoolean(prefs::kWasRestarted, true);
   KeepAliveRegistry::GetInstance()->SetRestarting();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   DCHECK(!chrome::IsSendingStopRequestToSessionManager());
 
   ash::BootTimesRecorder::Get()->set_restart_requested();
@@ -105,38 +108,33 @@ void AttemptRestartInternal(IgnoreUnloadHandlers ignore_unload_handlers) {
   // Run exit process in clean stack.
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&ExitIgnoreUnloadHandlers));
-#else  // !BUILDFLAG(IS_CHROMEOS_ASH).
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Request ash-chrome to relaunch Lacros on its process termination.
-  // Do not set kRestartLastSessionOnShutdown for Lacros, because it tries to
-  // respawn another Chrome process from the current Chrome process, which
-  // does not work on Lacros.
-  auto* lacros_service = chromeos::LacrosService::Get();
-  if (lacros_service->IsAvailable<crosapi::mojom::BrowserServiceHost>() &&
-      lacros_service->GetInterfaceVersion(
-          crosapi::mojom::BrowserServiceHost::Uuid_) >=
-          static_cast<int>(
-              crosapi::mojom::BrowserServiceHost::kRequestRelaunchMinVersion)) {
-    lacros_service->GetRemote<crosapi::mojom::BrowserServiceHost>()
-        ->RequestRelaunch();
-  }
-#else   // !BUILDFLAG(IS_CHROMEOS_LACROS)
+#else   // !BUILDFLAG(IS_CHROMEOS).
   // Set the flag to restore state after the restart.
   pref_service->SetBoolean(prefs::kRestartLastSessionOnShutdown, true);
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (ignore_unload_handlers)
+  if (ignore_unload_handlers) {
     ExitIgnoreUnloadHandlers();
-  else
+  } else {
     AttemptExit();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void ShutdownIfNoBrowsers() {
-  if (GetTotalBrowserCount() > 0)
+  if (KeepAliveRegistry::GetInstance()->IsOriginRegistered(
+          KeepAliveOrigin::BROWSER)) {
     return;
+  }
 
   // Tell everyone that we are shutting down.
   browser_shutdown::SetTryingToQuit(true);
+
+#if BUILDFLAG(ENABLE_GLIC)
+  auto* glic_background_mode_manager =
+      glic::GlicBackgroundModeManager::GetInstance();
+  if (glic_background_mode_manager) {
+    glic_background_mode_manager->ExitBackgroundMode();
+  }
+#endif
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   // If ShuttingDownWithoutClosingBrowsers() returns true, the session
@@ -145,9 +143,9 @@ void ShutdownIfNoBrowsers() {
   ProfileManager::ShutdownSessionServices();
 #endif  // BUILDFLAG(ENABLE_SESSION_SERVICE)
   browser_shutdown::NotifyAppTerminating();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   StopSession();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   OnAppExiting();
 }
 
@@ -162,17 +160,18 @@ void CloseAllBrowsers() {
   // If there are no browsers and closing the last browser would quit the
   // application, send the APP_TERMINATING action here. Otherwise, it will be
   // sent by RemoveBrowser() when the last browser has closed.
-  if (GetTotalBrowserCount() == 0 &&
+  const auto* const keep_alive_registry = KeepAliveRegistry::GetInstance();
+  if (!keep_alive_registry->IsOriginRegistered(KeepAliveOrigin::BROWSER) &&
       (browser_shutdown::IsTryingToQuit() ||
-       !KeepAliveRegistry::GetInstance()->IsKeepingAlive())) {
+       !keep_alive_registry->IsKeepingAlive())) {
     ShutdownIfNoBrowsers();
     return;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("StartedClosingWindows",
                                                      false);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   scoped_refptr<BrowserCloseManager> browser_close_manager =
       new BrowserCloseManager;
   browser_close_manager->StartClosingBrowsers();
@@ -181,11 +180,11 @@ void CloseAllBrowsers() {
 void AttemptRestart() {
   AttemptRestartInternal(IgnoreUnloadHandlers(false));
 }
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 void RelaunchIgnoreUnloadHandlers() {
   AttemptRestartInternal(IgnoreUnloadHandlers(true));
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 void SessionEnding() {
   // This is a time-limited shutdown where we need to write as much to
@@ -196,8 +195,7 @@ void SessionEnding() {
   static bool already_ended = false;
   // We may get called in the middle of shutdown, e.g. https://crbug.com/70852
   // and https://crbug.com/1187418.  In this case, do nothing.
-  if (already_ended || !content::NotificationService::current() ||
-      !g_browser_process) {
+  if (already_ended || !g_browser_process) {
     return;
   }
   already_ended = true;
@@ -209,11 +207,12 @@ void SessionEnding() {
 
   // Two different types of hang detection cannot attempt to upload crashes at
   // the same time or they would interfere with each other.
-  absl::optional<ShutdownWatcherHelper> shutdown_watcher;
-  absl::optional<base::WatchHangsInScope> watch_hangs_scope;
+  std::optional<ShutdownWatcherHelper> shutdown_watcher;
+  std::optional<base::WatchHangsInScope> watch_hangs_scope;
   if (base::HangWatcher::IsCrashReportingEnabled()) {
-    // TODO(crbug.com/1327000): Migrate away from ShutdownWatcher and its old
+    // TODO(crbug.com/40840897): Migrate away from ShutdownWatcher and its old
     // timing.
+    base::HangWatcher::SetShuttingDown();
     constexpr base::TimeDelta kShutdownHangDelay{base::Seconds(30)};
     watch_hangs_scope.emplace(kShutdownHangDelay);
   } else {
@@ -240,6 +239,10 @@ void SessionEnding() {
   // Write important data first.
   g_browser_process->EndSession();
 
+  // Emit the shutdown metric for the end-session case. The process will exit
+  // after this point.
+  browser_shutdown::RecordShutdownMetrics();
+
 #if BUILDFLAG(IS_WIN)
   base::win::SetShouldCrashOnProcessDetach(false);
 #endif  // BUILDFLAG(IS_WIN)
@@ -252,16 +255,18 @@ void SessionEnding() {
 }
 
 void ShutdownIfNeeded() {
-  if (browser_shutdown::IsTryingToQuit())
+  if (browser_shutdown::IsTryingToQuit()) {
     return;
+  }
 
   ShutdownIfNoBrowsers();
 }
 
 void OnAppExiting() {
   static bool notified = false;
-  if (notified)
+  if (notified) {
     return;
+  }
   notified = true;
   HandleAppExitingForPlatform();
 }
@@ -277,45 +282,54 @@ base::CallbackListSubscription AddClosingAllBrowsersCallback(
 }
 
 void MarkAsCleanShutdown() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  LogMarkAsCleanShutdown();
   // Tracks profiles that have pending write of the exit type.
   std::set<Profile*> pending_profiles;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (ExitTypeService* exit_type_service =
-            ExitTypeService::GetInstanceForProfile(browser->profile())) {
-      exit_type_service->SetCurrentSessionExitType(ExitType::kClean);
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        Profile* const profile = browser->GetProfile();
+        if (ExitTypeService* exit_type_service =
+                ExitTypeService::GetInstanceForProfile(profile)) {
+          exit_type_service->SetCurrentSessionExitType(ExitType::kClean);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      // Explicitly schedule pending writes on ChromeOS so that even if the
-      // UI thread is hosed (e.g. taking a long time to close all tabs because
-      // of page faults/swap-in), the clean shutdown flag still gets a chance
-      // to be persisted. See https://crbug.com/1294764
-      Profile* profile = browser->profile();
-      if (pending_profiles.insert(profile).second) {
-        profile->GetPrefs()->CommitPendingWrite();
-      }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-    }
-  }
+#if BUILDFLAG(IS_CHROMEOS)
+          // Explicitly schedule pending writes on ChromeOS so that even if the
+          // UI thread is hosed (e.g. taking a long time to close all tabs
+          // because of page faults/swap-in), the clean shutdown flag still gets
+          // a chance to be persisted. See https://crbug.com/1294764
+          if (pending_profiles.insert(profile).second) {
+            profile->GetPrefs()->CommitPendingWrite();
+          }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        }
+        return true;
+      });
 }
 
 bool AreAllBrowsersCloseable() {
-  if (BrowserList::GetInstance()->empty())
+  if (GlobalBrowserCollection::GetInstance()->IsEmpty()) {
     return true;
+  }
 
   // If there are any downloads active, all browsers are not closeable.
   // However, this does not block for malicious downloads.
-  if (DownloadCoreService::NonMaliciousDownloadCountAllProfiles() > 0)
+  if (DownloadCoreService::BlockingShutdownCountAllProfiles() > 0) {
     return false;
+  }
 
   // Check TabsNeedBeforeUnloadFired().
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->TabsNeedBeforeUnloadFired())
-      return false;
-  }
-  return true;
+  bool all_closeable = true;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&all_closeable](BrowserWindowInterface* bwi) {
+        if (bwi->GetBrowserForMigrationOnly()->TabsNeedBeforeUnloadFired()) {
+          all_closeable = false;
+        }
+        return all_closeable;
+      });
+  return all_closeable;
 }
 
 }  // namespace chrome

@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "components/sync/engine/net/server_connection_manager.h"
 #include "url/gurl.h"
@@ -23,7 +22,7 @@ class HttpPostProviderFactory;
 // instance of the HttpPostProviderFactory class.
 class SyncServerConnectionManager : public ServerConnectionManager {
  public:
-  // |factory| and |cancelation_signal| must not be null, and the latter must
+  // `factory` and `cancelation_signal` must not be null, and the latter must
   // outlive this object.
   SyncServerConnectionManager(const GURL& sync_request_url,
                               std::unique_ptr<HttpPostProviderFactory> factory,
@@ -37,7 +36,6 @@ class SyncServerConnectionManager : public ServerConnectionManager {
 
   HttpResponse PostBuffer(const std::string& buffer_in,
                           const std::string& access_token,
-                          bool allow_batching,
                           std::string* buffer_out) override;
 
  private:

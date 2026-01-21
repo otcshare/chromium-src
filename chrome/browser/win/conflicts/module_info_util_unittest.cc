@@ -7,13 +7,14 @@
 #include <windows.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/base_paths.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/scoped_environment_variable_override.h"
@@ -37,17 +38,17 @@ bool CreateTruncatedModule(const base::FilePath& location) {
     return false;
 
   const size_t kSizeOfTruncatedDll = 256;
-  char buffer[kSizeOfTruncatedDll];
-  if (file_exe.Read(0, buffer, kSizeOfTruncatedDll) != kSizeOfTruncatedDll)
+  uint8_t buffer[kSizeOfTruncatedDll];
+  if (!file_exe.ReadAndCheck(0, base::span(buffer))) {
     return false;
+  }
 
   base::File target_file(location,
                          base::File::FLAG_CREATE | base::File::FLAG_WRITE);
   if (!target_file.IsValid())
     return false;
 
-  return target_file.Write(0, buffer, kSizeOfTruncatedDll) ==
-         kSizeOfTruncatedDll;
+  return target_file.WriteAndCheck(0, base::span(buffer));
 }
 
 }  // namespace
@@ -64,11 +65,11 @@ TEST(ModuleInfoUtilTest, GetCertificateInfoUnsigned) {
 
 TEST(ModuleInfoUtilTest, GetCertificateInfoSigned) {
   std::unique_ptr<base::Environment> env = base::Environment::Create();
-  std::string sysroot;
-  ASSERT_TRUE(env->GetVar("SYSTEMROOT", &sysroot));
+  std::optional<std::string> sysroot = env->GetVar("SYSTEMROOT");
+  ASSERT_TRUE(sysroot.has_value());
 
-  base::FilePath path =
-      base::FilePath::FromUTF8Unsafe(sysroot).Append(L"system32\\kernel32.dll");
+  base::FilePath path = base::FilePath::FromUTF8Unsafe(sysroot.value())
+                            .Append(L"system32\\kernel32.dll");
 
   CertificateInfo cert_info;
   GetCertificateInfo(path, &cert_info);
@@ -97,7 +98,7 @@ TEST(ModuleInfoUtilTest, GetEnvironmentVariablesMapping) {
 
 const struct CollapsePathList {
   std::u16string expected_result;
-  std::u16string test_case;
+  std::u16string path;
 } kCollapsePathList[] = {
     // Negative testing (should not collapse this path).
     {u"c:\\a\\a.dll", u"c:\\a\\a.dll"},
@@ -114,10 +115,10 @@ TEST(ModuleInfoUtilTest, CollapseMatchingPrefixInPath) {
       std::make_pair(u"c:\\foo\\bar", u"%x%"),
   };
 
-  for (size_t i = 0; i < std::size(kCollapsePathList); ++i) {
-    std::u16string test_case = kCollapsePathList[i].test_case;
-    CollapseMatchingPrefixInPath(string_mapping, &test_case);
-    EXPECT_EQ(kCollapsePathList[i].expected_result, test_case);
+  for (const auto& test_case : kCollapsePathList) {
+    std::u16string path = test_case.path;
+    CollapseMatchingPrefixInPath(string_mapping, &path);
+    EXPECT_EQ(test_case.expected_result, path);
   }
 }
 

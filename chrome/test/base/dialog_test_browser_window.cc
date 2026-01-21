@@ -10,6 +10,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/views/widget/widget.h"
@@ -23,8 +24,9 @@ DialogTestBrowserWindow::DialogTestBrowserWindow() {
   // using the WebContents since creating a Widget here requires an Aura
   // RootWindow for context and it's tricky to get one here.
   host_window_ = std::make_unique<views::Widget>();
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   host_window_->Init(std::move(params));
   // Leave the window hidden: unit tests shouldn't need it to be visible.
 #endif
@@ -37,6 +39,12 @@ DialogTestBrowserWindow::GetWebContentsModalDialogHost() {
   return this;
 }
 
+WebContentsModalDialogHost*
+DialogTestBrowserWindow::GetWebContentsModalDialogHostFor(
+    content::WebContents* web_contents) {
+  return this;
+}
+
 // The web contents modal dialog must be parented to *something*; use the
 // WebContents window since there is no true browser window for unit tests.
 gfx::NativeView DialogTestBrowserWindow::GetHostView() const {
@@ -44,7 +52,7 @@ gfx::NativeView DialogTestBrowserWindow::GetHostView() const {
     return host_window_->GetNativeView();
 
   return FindBrowser()
-      ->tab_strip_model()
+      ->GetTabStripModel()
       ->GetActiveWebContents()
       ->GetNativeView();
 }
@@ -69,12 +77,15 @@ void DialogTestBrowserWindow::RemoveObserver(
     ModalDialogHostObserver* observer) {
 }
 
-Browser* DialogTestBrowserWindow::FindBrowser() const {
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->window() == this)
-      return browser;
-  }
-  NOTREACHED();
-  return nullptr;
+BrowserWindowInterface* DialogTestBrowserWindow::FindBrowser() const {
+  BrowserWindowInterface* result = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this, &result](BrowserWindowInterface* browser) {
+        if (browser->GetWindow() == this) {
+          result = browser;
+        }
+        return !result;
+      });
+  CHECK(result);
+  return result;
 }
-

@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_CROSTINI_CROSTINI_SHARED_DEVICES_H_
 #define CHROME_BROWSER_ASH_CROSTINI_CROSTINI_SHARED_DEVICES_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 #include <string>
@@ -33,8 +34,6 @@ class CrostiniSharedDevices : public KeyedService,
   CrostiniSharedDevices& operator=(const CrostiniSharedDevices&) = delete;
 
   ~CrostiniSharedDevices() override;
-
-  static CrostiniSharedDevices* GetForProfile(Profile* profile);
 
   // ResultCallback's bool argument is true if the we attempted apply the
   // sharing state via Cicerone.
@@ -66,10 +65,10 @@ class CrostiniSharedDevices : public KeyedService,
       const guest_os::GuestId container_id,
       base::Value::Dict next_shared_devices,
       ResultCallback callback,
-      absl::optional<vm_tools::cicerone::UpdateContainerDevicesResponse>
+      std::optional<vm_tools::cicerone::UpdateContainerDevicesResponse>
           response);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   base::WeakPtrFactory<CrostiniSharedDevices> weak_ptr_factory_{this};
 };

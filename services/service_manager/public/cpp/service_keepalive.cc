@@ -4,7 +4,7 @@
 
 #include "services/service_manager/public/cpp/service_keepalive.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
 #include "services/service_manager/public/cpp/service_receiver.h"
@@ -59,7 +59,7 @@ class ServiceKeepaliveRefImpl : public ServiceKeepaliveRef {
 };
 
 ServiceKeepalive::ServiceKeepalive(ServiceReceiver* receiver,
-                                   absl::optional<base::TimeDelta> idle_timeout)
+                                   std::optional<base::TimeDelta> idle_timeout)
     : receiver_(receiver), idle_timeout_(idle_timeout) {}
 
 ServiceKeepalive::~ServiceKeepalive() = default;

@@ -5,21 +5,23 @@
 #include "chrome/browser/net/service_providers_win.h"
 
 #include <winsock2.h>
+
 #include <Ws2spi.h>
 
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "base/values.h"
 
-WinsockLayeredServiceProvider::WinsockLayeredServiceProvider() {
-}
+WinsockLayeredServiceProvider::WinsockLayeredServiceProvider() = default;
 
 WinsockLayeredServiceProvider::WinsockLayeredServiceProvider(
     const WinsockLayeredServiceProvider& other) = default;
 
-WinsockLayeredServiceProvider::~WinsockLayeredServiceProvider() {
-}
+WinsockLayeredServiceProvider::~WinsockLayeredServiceProvider() = default;
 
 void GetWinsockNamespaceProviders(
     WinsockNamespaceProviderList* namespace_list) {
@@ -27,30 +29,32 @@ void GetWinsockNamespaceProviders(
   // Find out how just how much memory is needed.  If we get the expected error,
   // the memory needed is written to size.
   DWORD size = 0;
-  if (WSAEnumNameSpaceProviders(&size, NULL) != SOCKET_ERROR ||
+  if (::WSAEnumNameSpaceProviders(&size, nullptr) != SOCKET_ERROR ||
       GetLastError() != WSAEFAULT) {
     NOTREACHED();
-    return;
   }
 
-  std::unique_ptr<char[]> namespace_provider_bytes(new char[size]);
+  auto namespace_provider_bytes = base::HeapArray<uint8_t>::WithSize(size);
   WSANAMESPACE_INFO* namespace_providers =
-      reinterpret_cast<WSANAMESPACE_INFO*>(namespace_provider_bytes.get());
+      reinterpret_cast<WSANAMESPACE_INFO*>(namespace_provider_bytes.data());
 
-  int num_namespace_providers = WSAEnumNameSpaceProviders(&size,
-                                                          namespace_providers);
+  int num_namespace_providers =
+      ::WSAEnumNameSpaceProviders(&size, namespace_providers);
   if (num_namespace_providers == SOCKET_ERROR) {
     NOTREACHED();
-    return;
   }
 
-  for (int i = 0; i < num_namespace_providers; ++i) {
+  // SAFETY: We use UNSAFE_BUFFERS because we are trusting the
+  // `num_namespace_providers` count returned by the Win32 API.
+  auto providers_span = UNSAFE_BUFFERS(base::span(
+      namespace_providers, static_cast<size_t>(num_namespace_providers)));
+  for (const auto& namespace_info : providers_span) {
     WinsockNamespaceProvider provider;
 
-    provider.name = namespace_providers[i].lpszIdentifier;
-    provider.active = TRUE == namespace_providers[i].fActive;
-    provider.version = namespace_providers[i].dwVersion;
-    provider.type = namespace_providers[i].dwNameSpace;
+    provider.name = namespace_info.lpszIdentifier;
+    provider.active = namespace_info.fActive == TRUE;
+    provider.version = namespace_info.dwVersion;
+    provider.type = namespace_info.dwNameSpace;
 
     namespace_list->push_back(provider);
   }
@@ -62,45 +66,45 @@ void GetWinsockLayeredServiceProviders(
   // the memory needed is written to size.
   DWORD size = 0;
   int error;
-  if (SOCKET_ERROR != WSCEnumProtocols(NULL, NULL, &size, &error) ||
+  if (SOCKET_ERROR != ::WSCEnumProtocols(nullptr, nullptr, &size, &error) ||
       error != WSAENOBUFS) {
     NOTREACHED();
-    return;
   }
 
-  std::unique_ptr<char[]> service_provider_bytes(new char[size]);
+  auto service_provider_bytes = base::HeapArray<uint8_t>::WithSize(size);
   WSAPROTOCOL_INFOW* service_providers =
-      reinterpret_cast<WSAPROTOCOL_INFOW*>(service_provider_bytes.get());
+      reinterpret_cast<WSAPROTOCOL_INFOW*>(service_provider_bytes.data());
 
-  int num_service_providers = WSCEnumProtocols(NULL, service_providers, &size,
-                                               &error);
+  int num_service_providers =
+      ::WSCEnumProtocols(nullptr, service_providers, &size, &error);
   if (num_service_providers == SOCKET_ERROR) {
     NOTREACHED();
-    return;
   }
 
-  for (int i = 0; i < num_service_providers; ++i) {
+  // SAFETY: Need to trust the WSCEnumProtocols `num_service_providers` result.
+  auto providers_span = UNSAFE_BUFFERS(base::span(
+      service_providers, static_cast<size_t>(num_service_providers)));
+
+  for (auto& provider_info : providers_span) {
     WinsockLayeredServiceProvider service_provider;
 
-    service_provider.name = service_providers[i].szProtocol;
-    service_provider.version = service_providers[i].iVersion;
-    service_provider.socket_type = service_providers[i].iSocketType;
-    service_provider.socket_protocol = service_providers[i].iProtocol;
-    service_provider.chain_length = service_providers[i].ProtocolChain.ChainLen;
+    service_provider.name = provider_info.szProtocol;
+    service_provider.version = provider_info.iVersion;
+    service_provider.socket_type = provider_info.iSocketType;
+    service_provider.socket_protocol = provider_info.iProtocol;
+    service_provider.chain_length = provider_info.ProtocolChain.ChainLen;
 
     // TODO(mmenke): Add categories under Vista and later.
     // http://msdn.microsoft.com/en-us/library/ms742239%28v=VS.85%29.aspx
 
     wchar_t path[MAX_PATH];
     int path_length = std::size(path);
-    if (0 == WSCGetProviderPath(&service_providers[i].ProviderId, path,
-                                &path_length, &error)) {
+    if (0 == WSCGetProviderPath(&provider_info.ProviderId, path, &path_length,
+                                &error)) {
       service_provider.path = path;
     }
-
     service_list->push_back(service_provider);
   }
 
   return;
 }
-

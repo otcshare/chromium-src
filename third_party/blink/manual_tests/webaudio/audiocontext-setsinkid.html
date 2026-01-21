@@ -65,17 +65,16 @@
     // Handles the button click to activate `setSinkId()` method.
     const onDeviceChange = async (event, audioContext, appView) => {
       const deviceId = appView.dropdown.value;
-      if (deviceId === 'default') {
-        audioContext.setSinkId('');
-      } else if (deviceId === 'silent') {
+      if (deviceId === 'silent') {
         audioContext.setSinkId({type: 'none'});
       } else {
         audioContext.setSinkId(deviceId);
       }
 
-      appView.inspector.textContent = typeof audioContext.sinkId === 'object'
-          ? `AudioContext.sinkId = ${JSON.stringify(audioContext.sinkId)}`
-          : `AudioContext.sinkId = '${audioContext.sinkId}'`
+      const sinkId = `AudioContext.sinkId = ` + typeof audioContext.sinkId === 'object'
+          ? JSON.stringify(audioContext.sinkId) : audioContext.sinkId;
+      const maxChan = audioContext.destination.maxChannelCount;
+      appView.inspector.textContent = `${sinkId} (${maxChan} channels max)`;
     };
 
     // The manual test body
@@ -101,7 +100,8 @@
       }
 
       appView.inspector.textContent =
-          `AudioContext.sinkId = '${audioContext.sinkId}'`;
+          `AudioContext.sinkId = ${audioContext.sinkId}`+
+          `(${audioContext.destination.maxChannelCount} channels max)`;
 
       // Get a permission, enumerate devices, and set up the UI.
       try {

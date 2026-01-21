@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/network/tray_network_state_model.h"
@@ -14,11 +13,11 @@
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/test/ash_test_base.h"
-#include "base/test/scoped_feature_list.h"
-#include "chromeos/services/network_config/public/cpp/cros_network_config_test_helper.h"
+#include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 
 namespace ash {
+
 namespace {
 
 using ::chromeos::network_config::mojom::ConnectionStateType;
@@ -33,11 +32,7 @@ TrayNetworkStateModel* GetNetworkStateModel() {
 
 class VPNFeaturePodControllerTest : public AshTestBase {
  public:
-  VPNFeaturePodControllerTest() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kQsRevamp, features::kQsRevampWip},
-        /*disabled_features=*/{});
-  }
+  VPNFeaturePodControllerTest() = default;
 
   // AshTestBase:
   void TearDown() override {
@@ -65,7 +60,6 @@ class VPNFeaturePodControllerTest : public AshTestBase {
     GetNetworkStateModel()->OnGetVirtualNetworks(std::move(networks));
   }
 
-  base::test::ScopedFeatureList feature_list_;
   network_config::CrosNetworkConfigTestHelper network_config_test_helper_;
   std::unique_ptr<VPNFeaturePodController> feature_pod_controller_;
   std::unique_ptr<FeatureTile> feature_tile_;
@@ -83,9 +77,8 @@ TEST_F(VPNFeaturePodControllerTest, Basics) {
   CreateTile();
   EXPECT_TRUE(feature_tile_->GetVisible());
   EXPECT_EQ(feature_tile_->GetTooltipText(), u"Show VPN settings");
-  EXPECT_TRUE(feature_tile_->drill_in_button()->GetVisible());
-  EXPECT_EQ(feature_tile_->drill_in_button()->GetTooltipText(),
-            u"Show VPN settings");
+  ASSERT_TRUE(feature_tile_->drill_in_arrow());
+  EXPECT_TRUE(feature_tile_->drill_in_arrow()->GetVisible());
 }
 
 }  // namespace ash

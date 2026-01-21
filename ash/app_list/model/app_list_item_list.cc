@@ -4,13 +4,12 @@
 
 #include "ash/app_list/model/app_list_item_list.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_model_delegate.h"
-#include "base/containers/contains.h"
-#include "base/guid.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -39,8 +38,6 @@ AppListItem* AppListItemList::FindItem(const std::string& id) {
   return nullptr;
 }
 
-// TODO(https://crbug.com/883971): Make it return iterator to avoid unnecessary
-// check in this code.
 bool AppListItemList::FindItemIndex(const std::string& id, size_t* index) {
   for (size_t i = 0; i < app_list_items_.size(); ++i) {
     if (app_list_items_[i]->id() == id) {
@@ -191,8 +188,8 @@ syncer::StringOrdinal AppListItemList::CreatePositionBefore(
 
 AppListItem* AppListItemList::AddItem(std::unique_ptr<AppListItem> item_ptr) {
   AppListItem* item = item_ptr.get();
-  CHECK(!base::Contains(app_list_items_, item,
-                        &std::unique_ptr<AppListItem>::get));
+  CHECK(!std::ranges::contains(app_list_items_, item,
+                               &std::unique_ptr<AppListItem>::get));
   EnsureValidItemPosition(item);
   size_t index = GetItemSortOrderIndex(item->position(), item->id());
   app_list_items_.insert(app_list_items_.begin() + index, std::move(item_ptr));

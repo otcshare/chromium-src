@@ -5,9 +5,7 @@
 #ifndef CHROME_UPDATER_WIN_INSTALLER_CONFIGURATION_H_
 #define CHROME_UPDATER_WIN_INSTALLER_CONFIGURATION_H_
 
-#include <windows.h>
-
-#include "base/win/scoped_localalloc.h"
+#include "base/win/windows_types.h"
 
 namespace updater {
 
@@ -40,16 +38,9 @@ class Configuration {
   void Clear();
   bool ParseCommandLine(const wchar_t* command_line);
 
-  base::win::ScopedLocalAllocTyped<wchar_t*> args_;
-  const wchar_t* command_line_ = nullptr;
-  int argument_count_ = 0;
   Operation operation_ = INSTALL_PRODUCT;
   bool is_system_level_ = false;
   bool has_invalid_switch_ = false;
-
- private:
-  Configuration(const Configuration&) = delete;
-  Configuration& operator=(const Configuration&) = delete;
 };
 
 }  // namespace updater

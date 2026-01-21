@@ -8,11 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "net/base/backoff_entry.h"
 #include "url/gurl.h"
@@ -100,9 +103,6 @@ class GCM_EXPORT UnregistrationRequest {
     // Parses the HTTP response. It is called after
     // UnregistrationRequest::ParseResponse to proceed the parsing.
     virtual Status ParseResponse(const std::string& response) = 0;
-
-    // Reports UMAs.
-    virtual void ReportUMAs(Status status) = 0;
   };
 
   // Creates an instance of UnregistrationRequest. |callback| will be called
@@ -131,12 +131,12 @@ class GCM_EXPORT UnregistrationRequest {
  private:
   // Invoked from SimpleURLLoader.
   void OnURLLoadComplete(const network::SimpleURLLoader* source,
-                         std::unique_ptr<std::string> body);
+                         std::optional<std::string> body);
 
   void BuildRequestHeaders(net::HttpRequestHeaders* headers);
   void BuildRequestBody(std::string* body);
   Status ParseResponse(const network::SimpleURLLoader* source,
-                       std::unique_ptr<std::string> body);
+                       std::optional<std::string> body);
 
   // Schedules a retry attempt with a backoff.
   void RetryWithBackoff();

@@ -9,28 +9,37 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/span.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "crypto/signature_verifier.h"
 #include "net/base/hash_value.h"
 #include "net/base/net_export.h"
+#include "net/cert/x509_certificate.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 #include "third_party/boringssl/src/include/openssl/pool.h"
-
-namespace crypto {
-class RSAPrivateKey;
-}
+#include "third_party/boringssl/src/pki/parsed_certificate.h"
 
 namespace net {
 
-struct ParseCertificateOptions;
-class X509Certificate;
-
 namespace x509_util {
+
+// Convert a vector of bytes into X509Certificate objects.
+// This will silently drop all input that does not parse, so be careful using
+// this.
+NET_EXPORT net::CertificateList ConvertToX509CertificatesIgnoreErrors(
+    const std::vector<std::vector<uint8_t>>& certs_bytes);
+
+// Parse all certificiates with default parsing options. Return those that
+// parse.
+// This will silently drop all certs with parsing errors, so be careful using
+// this.
+NET_EXPORT bssl::ParsedCertificateList ParseAllValidCerts(
+    const CertificateList& x509_certs);
 
 // Supported digest algorithms for signing certificates.
 enum DigestAlgorithm { DIGEST_SHA256 };
@@ -46,7 +55,7 @@ NET_EXPORT bool CBBAddTime(CBB* cbb, base::Time time);
 // distinguished names. It should only be used if |name| is a constant
 // value, rather than programmatically constructed. If programmatic support
 // is needed, this input should be replaced with a richer type.
-NET_EXPORT bool AddName(CBB* cbb, base::StringPiece name);
+NET_EXPORT bool AddName(CBB* cbb, std::string_view name);
 
 // Generate a 'tls-server-end-point' channel binding based on the specified
 // certificate. Channel bindings are based on RFC 5929.
@@ -54,28 +63,17 @@ NET_EXPORT_PRIVATE bool GetTLSServerEndPointChannelBinding(
     const X509Certificate& certificate,
     std::string* token);
 
-// Creates a public-private keypair and a self-signed certificate.
-// Subject, serial number and validity period are given as parameters.
-// The certificate is signed by the private key in |key|. The key length and
-// signature algorithm may be updated periodically to match best practices.
+// Creates a certificate which cannot be used: a random private key is
+// generated, then a self-signed certificate using that private key is created
+// and the private key is discarded. The resulting cert can never be used to
+// actually authenticate anything because the private key is unknown, so this
+// function is only useful for test and demonstration purposes.
 //
-// |subject| specifies the subject and issuer names as in AddName()
-//
-// SECURITY WARNING
-//
-// Using self-signed certificates has the following security risks:
-// 1. Encryption without authentication and thus vulnerable to
-//    man-in-the-middle attacks.
-// 2. Self-signed certificates cannot be revoked.
-//
-// Use this certificate only after the above risks are acknowledged.
-NET_EXPORT bool CreateKeyAndSelfSignedCert(
-    const std::string& subject,
-    uint32_t serial_number,
-    base::Time not_valid_before,
-    base::Time not_valid_after,
-    std::unique_ptr<crypto::RSAPrivateKey>* key,
-    std::string* der_cert);
+// |subject| specifies the subject and issuer names as in AddName() - a string
+// consisting of a very small subset of the X.509 DN syntax. All fields of the
+// cert that are not specified here are hardcoded. The certificate's lifetime is
+// always from 5 minutes ago to 1 hour from now.
+NET_EXPORT std::vector<uint8_t> CreateUnusableCert(std::string_view subject);
 
 struct NET_EXPORT Extension {
   Extension(base::span<const uint8_t> oid,
@@ -84,10 +82,25 @@ struct NET_EXPORT Extension {
   ~Extension();
   Extension(const Extension&);
 
-  base::span<const uint8_t> oid;
+  base::raw_span<const uint8_t> oid;
   bool critical;
-  base::span<const uint8_t> contents;
+  base::raw_span<const uint8_t> contents;
 };
+
+// Create a certificate signed by |issuer_key| and write it to |der_encoded|.
+//
+// |subject| and |issuer| specify names as in AddName(). If you want to create
+// a self-signed certificate, see |CreateSelfSignedCert|.
+NET_EXPORT bool CreateCert(EVP_PKEY* subject_key,
+                           DigestAlgorithm digest_alg,
+                           std::string_view subject,
+                           uint32_t serial_number,
+                           base::Time not_valid_before,
+                           base::Time not_valid_after,
+                           const std::vector<Extension>& extension_specs,
+                           std::string_view issuer,
+                           EVP_PKEY* issuer_key,
+                           std::string* der_encoded);
 
 // Creates a self-signed certificate from a provided key, using the specified
 // hash algorithm.
@@ -96,7 +109,7 @@ struct NET_EXPORT Extension {
 NET_EXPORT bool CreateSelfSignedCert(
     EVP_PKEY* key,
     DigestAlgorithm alg,
-    const std::string& subject,
+    std::string_view subject,
     uint32_t serial_number,
     base::Time not_valid_before,
     base::Time not_valid_after,
@@ -112,10 +125,10 @@ NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
 
 // Creates a CRYPTO_BUFFER in the same pool returned by GetBufferPool.
 NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
-    base::StringPiece data);
+    std::string_view data);
 
 // Overload with no definition, to disallow creating a CRYPTO_BUFFER from a
-// char* due to StringPiece implicit ctor.
+// char* due to std::string_view implicit ctor.
 NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
     const char* invalid_data);
 
@@ -125,12 +138,16 @@ NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
 NET_EXPORT bssl::UniquePtr<CRYPTO_BUFFER>
 CreateCryptoBufferFromStaticDataUnsafe(base::span<const uint8_t> data);
 
+// Returns a vector containing new references to the same buffers.
+NET_EXPORT std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> DupCryptoBuffers(
+    base::span<const bssl::UniquePtr<CRYPTO_BUFFER>> buffers);
+
 // Compares two CRYPTO_BUFFERs and returns true if they have the same contents.
 NET_EXPORT bool CryptoBufferEqual(const CRYPTO_BUFFER* a,
                                   const CRYPTO_BUFFER* b);
 
-// Returns a StringPiece pointing to the data in |buffer|.
-NET_EXPORT base::StringPiece CryptoBufferAsStringPiece(
+// Returns a std::string_view pointing to the data in |buffer|.
+NET_EXPORT std::string_view CryptoBufferAsStringPiece(
     const CRYPTO_BUFFER* buffer);
 
 // Returns a span pointing to the data in |buffer|.
@@ -151,14 +168,14 @@ NET_EXPORT bool CreateCertBuffersFromPKCS7Bytes(
     std::vector<bssl::UniquePtr<CRYPTO_BUFFER>>* handles);
 
 // Returns the default ParseCertificateOptions for the net stack.
-NET_EXPORT ParseCertificateOptions DefaultParseCertificateOptions();
+NET_EXPORT bssl::ParseCertificateOptions DefaultParseCertificateOptions();
 
 // On success, returns true and updates |hash| to be the SHA-256 hash of the
 // subjectPublicKeyInfo of the certificate in |buffer|. If |buffer| is not a
 // valid certificate, returns false and |hash| is in an undefined state.
 [[nodiscard]] NET_EXPORT bool CalculateSha256SpkiHash(
     const CRYPTO_BUFFER* buffer,
-    HashValue* hash);
+    SHA256HashValue* hash);
 
 // Calls |verifier->VerifyInit|, using the public key from |certificate|,
 // checking if the digitalSignature key usage bit is present, and returns true
@@ -173,6 +190,36 @@ NET_EXPORT bool SignatureVerifierInitWithCertificate(
 // SHA-1.
 NET_EXPORT_PRIVATE bool HasRsaPkcs1Sha1Signature(
     const CRYPTO_BUFFER* cert_buffer);
+
+// Given a DER-encoded OID or Relative-OID, appends a single OID component and
+// returns the result.
+NET_EXPORT std::vector<uint8_t> AppendOidComponent(
+    base::span<const uint8_t> oid,
+    uint64_t component);
+
+// Given a DER-encoded OID or relative OID that starts with |base|, returns the
+// single component of the OID that follows base. Returns nullopt if |oid| does
+// not start with |base|, if the bytes are not well-formed after |base|, if it
+// does not contain exactly one component following |base|, or if the single
+// component does not fit in a uint64_t.
+//
+// This function performs steps 1 thru 3 of the procedure described in
+// https://www.ietf.org/archive/id/draft-davidben-tls-merkle-tree-certs-09.html#section-8.1
+NET_EXPORT std::optional<uint64_t> LastOidComponentFromBase(
+    base::span<const uint8_t> oid,
+    base::span<const uint8_t> base);
+
+// Returns the textual representation of a DER-encoded Relative-OID.
+NET_EXPORT std::string RelativeOidToString(
+    base::span<const uint8_t> relative_oid);
+
+// Converts the wire format of the trust anchor ID TLS extension (see
+// https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-02.html#section-4.1)
+// into a vector of trust anchor IDs. If the input is unparsable, returns an
+// empty vector. Note that |wire_ids| should not include the 16-bit length for
+// the whole list.
+NET_EXPORT std::vector<std::vector<uint8_t>> ParseTlsTrustAnchorIDs(
+    base::span<const uint8_t> wire_ids);
 
 }  // namespace x509_util
 

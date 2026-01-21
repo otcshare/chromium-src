@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
@@ -111,8 +110,16 @@ IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
       "callAndEnsureRemoteAudioTrackMutingWorks(" + constraints + ");");
 }
 
+// https://crbug.com/445223008
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_EstablishAudioVideoCallAndVerifyLocalMutingWorks \
+  DISABLED_CheckTempPagesSavedInCorrectDir
+#else
+#define MAYBE_EstablishAudioVideoCallAndVerifyLocalMutingWorks \
+  EstablishAudioVideoCallAndVerifyLocalMutingWorks
+#endif
 IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
-                       EstablishAudioVideoCallAndVerifyLocalMutingWorks) {
+                       MAYBE_EstablishAudioVideoCallAndVerifyLocalMutingWorks) {
   std::string constraints =
       BuildConstraints(kAudioConstraints, kVideoConstraints);
   MakeAudioDetectingPeerConnectionCall(
@@ -136,6 +143,13 @@ IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
+                       EnsureRemoteAudioMuteMakeMediaRecorderSilence) {
+  std::string constraints = BuildConstraints(kAudioConstraints, "");
+  MakeAudioDetectingPeerConnectionCall(
+      "callAndEnsureMuteWorksForMediaRecorder(" + constraints + ");");
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
                        EstablishAudioVideoCallAndVerifyUnmutingWorks) {
   std::string constraints =
       BuildConstraints(kAudioConstraints, kVideoConstraints);
@@ -143,7 +157,7 @@ IN_PROC_BROWSER_TEST_F(WebRtcAudioBrowserTest,
                                        constraints + ");");
 }
 
-// TODO(crbug.com/988432): This test is a temporary replacement for:
+// TODO(crbug.com/40637961): This test is a temporary replacement for:
 // external/wpt/webrtc/RTCRtpReceiver-getSynchronizationSources.https.html
 IN_PROC_BROWSER_TEST_F(
     WebRtcAudioBrowserTest,

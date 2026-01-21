@@ -8,6 +8,17 @@
 
 namespace remoting {
 
+WebrtcVideoEncoder::FrameStats::FrameStats() = default;
+WebrtcVideoEncoder::FrameStats::FrameStats(const FrameStats&) = default;
+WebrtcVideoEncoder::FrameStats& WebrtcVideoEncoder::FrameStats::operator=(
+    const FrameStats&) = default;
+WebrtcVideoEncoder::FrameStats::~FrameStats() = default;
+
+std::unique_ptr<WebrtcVideoEncoder::FrameStats>
+WebrtcVideoEncoder::FrameStats::Clone() const {
+  return std::make_unique<FrameStats>(*this);
+}
+
 WebrtcVideoEncoder::EncodedFrame::EncodedFrame() = default;
 WebrtcVideoEncoder::EncodedFrame::~EncodedFrame() = default;
 WebrtcVideoEncoder::EncodedFrame::EncodedFrame(
@@ -18,7 +29,9 @@ WebrtcVideoEncoder::EncodedFrame& WebrtcVideoEncoder::EncodedFrame::operator=(
 // static
 int WebrtcVideoEncoder::GetEncoderThreadCount(int frame_width) {
   int thread_num;
-  if (frame_width >= 3840) {
+  if (frame_width >= 5120) {
+    thread_num = 32;
+  } else if (frame_width >= 3840) {
     thread_num = 16;
   } else if (frame_width >= 2560) {
     thread_num = 8;

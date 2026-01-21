@@ -7,23 +7,25 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_message_loop.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "media/audio/audio_device_description.h"
 #include "media/audio/cras/audio_manager_cras.h"
 #include "media/audio/fake_audio_log_factory.h"
 #include "media/audio/test_audio_thread.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_parameters.h"
+#include "media/media_buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // cras_util.h defines custom min/max macros which break compilation, so ensure
 // it's not included until last.  #if avoids presubmit errors.
-#if defined(USE_CRAS)
+#if BUILDFLAG(USE_CRAS)
 #include "media/audio/cras/cras_input.h"
 #endif
 
@@ -37,7 +39,11 @@ namespace media {
 
 class MockAudioInputCallback : public AudioInputStream::AudioInputCallback {
  public:
-  MOCK_METHOD3(OnData, void(const AudioBus*, base::TimeTicks, double));
+  MOCK_METHOD4(OnData,
+               void(const AudioBus*,
+                    base::TimeTicks,
+                    double,
+                    const AudioGlitchInfo& glitch_info));
   MOCK_METHOD0(OnError, void());
 };
 
@@ -51,18 +57,20 @@ class MockAudioManagerCrasInput : public AudioManagerCrasBase {
 
   MOCK_METHOD1(DeregisterSystemAecDumpSource, void(AecdumpRecordingSource*));
 
-  bool HasAudioOutputDevices() { return true; }
-  bool HasAudioInputDevices() { return true; }
+  bool HasAudioOutputDevices() override { return true; }
+  bool HasAudioInputDevices() override { return true; }
   AudioParameters GetPreferredOutputStreamParameters(
       const std::string& output_device_id,
-      const AudioParameters& input_params) {
+      const AudioParameters& input_params) override {
     return AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
                            ChannelLayoutConfig::Stereo(), 44100, 1000);
   }
   bool IsDefault(const std::string& device_id, bool is_input) override {
     return true;
   }
-  enum CRAS_CLIENT_TYPE GetClientType() { return CRAS_CLIENT_TYPE_LACROS; }
+  enum CRAS_CLIENT_TYPE GetClientType() override {
+    return CRAS_CLIENT_TYPE_UNKNOWN;
+  }
 
   // We need to override this function in order to skip checking the number
   // of active output streams. It is because the number of active streams
@@ -102,17 +110,17 @@ class CrasInputStreamTest : public testing::Test {
   CrasInputStream* CreateStream(ChannelLayoutConfig layout,
                                 int32_t samples_per_packet,
                                 const std::string& device_id) {
-    AudioParameters params(kTestFormat,
-                           layout,
-                           kTestSampleRate,
+    AudioParameters params(kTestFormat, layout, kTestSampleRate,
                            samples_per_packet);
-    return new CrasInputStream(params, mock_manager_.get(), device_id);
+    return new CrasInputStream(params, mock_manager_.get(), device_id,
+                               AudioManager::LogCallback());
   }
 
-  void CaptureSomeFrames(const AudioParameters &params,
+  void CaptureSomeFrames(const AudioParameters& params,
                          unsigned int duration_ms) {
     CrasInputStream* test_stream = new CrasInputStream(
-        params, mock_manager_.get(), AudioDeviceDescription::kDefaultDeviceId);
+        params, mock_manager_.get(), AudioDeviceDescription::kDefaultDeviceId,
+        AudioManager::LogCallback());
 
     EXPECT_CALL(*mock_manager_.get(), RegisterSystemAecDumpSource(_));
     EXPECT_CALL(*mock_manager_.get(), DeregisterSystemAecDumpSource(_));
@@ -126,7 +134,7 @@ class CrasInputStreamTest : public testing::Test {
     base::WaitableEvent event(base::WaitableEvent::ResetPolicy::AUTOMATIC,
                               base::WaitableEvent::InitialState::NOT_SIGNALED);
 
-    EXPECT_CALL(mock_callback, OnData(_, _, _))
+    EXPECT_CALL(mock_callback, OnData(_, _, _, _))
         .WillOnce(InvokeWithoutArgs(&event, &base::WaitableEvent::Signal));
 
     test_stream->Start(&mock_callback);
@@ -172,9 +180,9 @@ TEST_F(CrasInputStreamTest, BadSampleRate) {
   AudioParameters bad_rate_params(
       kTestFormat, ChannelLayoutConfig::FromLayout<kTestChannelLayout>(), 0,
       kTestFramesPerPacket);
-  CrasInputStream* test_stream =
-      new CrasInputStream(bad_rate_params, mock_manager_.get(),
-                          AudioDeviceDescription::kDefaultDeviceId);
+  CrasInputStream* test_stream = new CrasInputStream(
+      bad_rate_params, mock_manager_.get(),
+      AudioDeviceDescription::kDefaultDeviceId, AudioManager::LogCallback());
   EXPECT_EQ(test_stream->Open(), AudioInputStream::OpenOutcome::kFailed);
   test_stream->Close();
 }
@@ -197,20 +205,22 @@ TEST_F(CrasInputStreamTest, SetGetVolume) {
 }
 
 TEST_F(CrasInputStreamTest, CaptureFrames) {
-  const unsigned int rates[] =
-      {8000, 16000, 22050, 32000, 44100, 48000, 96000, 192000};
+  const unsigned int rates[] = {8000,  16000, 22050, 32000,
+                                44100, 48000, 96000, 192000};
 
   for (unsigned int i = 0; i < ARRAY_SIZE(rates); i++) {
-    SCOPED_TRACE(testing::Message() << "Mono " << rates[i] << "Hz");
+    SCOPED_TRACE(testing::Message()
+                 << "Mono " << UNSAFE_TODO(rates[i]) << "Hz");
     AudioParameters params_mono(kTestFormat, ChannelLayoutConfig::Mono(),
-                                rates[i], kTestFramesPerPacket);
+                                UNSAFE_TODO(rates[i]), kTestFramesPerPacket);
     CaptureSomeFrames(params_mono, kTestCaptureDurationMs);
   }
 
   for (unsigned int i = 0; i < ARRAY_SIZE(rates); i++) {
-    SCOPED_TRACE(testing::Message() << "Stereo " << rates[i] << "Hz");
+    SCOPED_TRACE(testing::Message()
+                 << "Stereo " << UNSAFE_TODO(rates[i]) << "Hz");
     AudioParameters params_stereo(kTestFormat, ChannelLayoutConfig::Stereo(),
-                                  rates[i], kTestFramesPerPacket);
+                                  UNSAFE_TODO(rates[i]), kTestFramesPerPacket);
     CaptureSomeFrames(params_stereo, kTestCaptureDurationMs);
   }
 }

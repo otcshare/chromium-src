@@ -41,6 +41,17 @@ class SiteIsolationPolicy {
   // log in via OAuth, as determined by runtime heuristics.
   static bool IsIsolationForOAuthSitesEnabled();
 
+  // Returns true if the isolation mode for isolating origins that match
+  // JavaScript optimizer exceptions is enabled. This is different than
+  // IsOriginIsolationForJsOptExceptionsSupported() because
+  // IsOriginIsolationForJsOptExceptionsEnabled() returns false if the
+  // feature is unneeded due to strict origin isolation being enabled.
+  static bool IsOriginIsolationForJsOptExceptionsEnabled();
+
+  // Returns whether isolating origins that match JavaScript optimizer
+  // exceptions is supported.
+  static bool IsOriginIsolationForJsOptExceptionsSupported();
+
   // Returns true if Site Isolation related enterprise policies should take
   // effect (e.g. such policies might not be applicable to low-end Android
   // devices because of 1) performance impact and 2) infeasibility of
@@ -85,13 +96,17 @@ class SiteIsolationPolicy {
   static bool ShouldDisableSiteIsolationDueToMemoryThreshold(
       content::SiteIsolationMode site_isolation_mode);
 
+  // Determines whether Origin Isolation should be disabled because the device
+  // does not have the minimum required amount of memory.
+  static bool ShouldDisableOriginIsolationDueToMemoryThreshold();
+
   // Returns true if the PDF compositor should be enabled to allow out-of-
   // process iframes (OOPIF's) to print properly.
   static bool ShouldPdfCompositorBeEnabledForOopifs();
 
   // When set to true bypasses the caching of the results of
-  // ShouldDisableSiteIsolationDueToMemoryThreshold(). Setting to false reverts
-  // to the default behavior (caching is controlled by a base::Feature).
+  // ShouldDisableSiteIsolationDueToMemoryThreshold(). Setting to false allows
+  // caching.
   static void SetDisallowMemoryThresholdCachingForTesting(
       bool disallow_caching);
 

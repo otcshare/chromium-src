@@ -6,12 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/mac/permission_process_utils.h"
 #include "remoting/host/version.h"
 
-namespace remoting {
-namespace mac {
+namespace remoting::mac {
 
 PermissionChecker::PermissionChecker(
     HostMode mode,
@@ -51,5 +51,4 @@ void PermissionChecker::CheckScreenRecordingPermission(
       std::move(onResult));
 }
 
-}  // namespace mac
-}  // namespace remoting
+}  // namespace remoting::mac

@@ -1,16 +1,13 @@
-# Copyright 2022 The Chromium Authors. All rights reserved.
+# Copyright 2022 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 import("//build/buildflag_header.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//services/accessibility/buildflags.gni")
 
 buildflag_header("buildflags") {
   header = "buildflags.h"
-  flags = [
-    "ENABLE_ACCESSIBILITY_SERVICE=$enable_accessibility_service_internal",
-    "SUPPORTS_OS_ACCESSIBILITY_SERVICE=$supports_os_accessibility_service",
-  ]
+  flags =
+      [ "ENABLE_ACCESSIBILITY_SERVICE=$enable_accessibility_service_internal" ]
 }
 
 source_set("lib") {
@@ -19,25 +16,7 @@ source_set("lib") {
     "//ui/accessibility:ax_base",
   ]
 
-  if (supports_os_accessibility_service) {
-    sources = [
-      "assistive_technology_controller_impl.cc",
-      "assistive_technology_controller_impl.h",
-      "features/automation_internal_bindings.cc",
-      "features/automation_internal_bindings.h",
-      "features/bindings_isolate_holder.cc",
-      "features/bindings_isolate_holder.h",
-      "features/v8_manager.cc",
-      "features/v8_manager.h",
-      "os_accessibility_service.cc",
-      "os_accessibility_service.h",
-    ]
-    public_deps += [
-      "//gin",
-      "//ui/accessibility:accessibility",
-    ]
-    configs += [ "//v8:external_startup_data" ]
-  } else {
+  if (!is_chromeos && !is_fuchsia) {
     sources = [
       "automation_impl.cc",
       "automation_impl.h",
@@ -55,7 +34,10 @@ static_library("test_support") {
     "fake_service_client.h",
   ]
 
-  deps = [ ":lib" ]
+  deps = [
+    ":buildflags",
+    ":lib",
+  ]
 }
 
 source_set("tests") {
@@ -69,15 +51,7 @@ source_set("tests") {
     "//ui/gfx:test_support",
   ]
 
-  if (supports_os_accessibility_service) {
-    sources = [
-      "assistive_technology_controller_impl_unittest.cc",
-      "features/automation_internal_bindings_unittest.cc",
-      "features/v8_manager_unittest.cc",
-      "os_accessibility_service_unittest.cc",
-    ]
-    deps += [ "//ui/accessibility:accessibility" ]
-  } else {
+  if (!is_chromeos && !is_fuchsia) {
     sources = [ "browser_accessibility_service_unittest.cc" ]
   }
 }

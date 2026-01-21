@@ -5,16 +5,18 @@
 #include "base/test/task_environment.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <string_view>
 
-#include "base/atomicops.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/cancelable_callback.h"
 #include "base/check.h"
 #include "base/debug/debugger.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/current_thread.h"
@@ -31,11 +33,13 @@
 #include "base/test/test_timeouts.h"
 #include "base/test/test_waitable_event.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/sequence_bound.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/threading/thread.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/tick_clock.h"
+#include "base/time/time.h"
 #include "base/win/com_init_util.h"
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -52,8 +56,7 @@
 #include "base/win/scoped_com_initializer.h"
 #endif
 
-namespace base {
-namespace test {
+namespace base::test {
 
 namespace {
 
@@ -181,97 +184,54 @@ void DelayedTasksTest(TaskEnvironment::TimeSource time_source) {
   TaskEnvironment task_environment(
       time_source, TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
 
-  subtle::Atomic32 counter = 0;
+  std::atomic<uint32_t> counter = 0;
+  auto post_on_single_thread_task_runner = [&counter](uint32_t increment,
+                                                      base::TimeDelta delay) {
+    SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, BindLambdaForTesting([increment, &counter]() {
+          counter.fetch_add(increment, std::memory_order_relaxed);
+        }),
+        delay);
+  };
+  auto post_on_thread_pool = [&counter](uint32_t increment,
+                                        base::TimeDelta delay) {
+    ThreadPool::PostDelayedTask(
+        FROM_HERE, BindLambdaForTesting([increment, &counter]() {
+          counter.fetch_add(increment, std::memory_order_relaxed);
+        }),
+        delay);
+  };
 
-  constexpr base::TimeDelta kShortTaskDelay = Days(1);
-  // Should run only in MOCK_TIME environment when time is fast-forwarded.
-  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(
-          [](subtle::Atomic32* counter) {
-            subtle::NoBarrier_AtomicIncrement(counter, 4);
-          },
-          Unretained(&counter)),
-      kShortTaskDelay);
-  ThreadPool::PostDelayedTask(FROM_HERE,
-                              BindOnce(
-                                  [](subtle::Atomic32* counter) {
-                                    subtle::NoBarrier_AtomicIncrement(counter,
-                                                                      128);
-                                  },
-                                  Unretained(&counter)),
-                              kShortTaskDelay);
+  constexpr base::TimeDelta kShortTaskDelay = base::Days(1);
+  post_on_single_thread_task_runner(4, kShortTaskDelay);
+  post_on_thread_pool(128, kShortTaskDelay);
 
   constexpr base::TimeDelta kLongTaskDelay = Days(7);
   // Same as first task, longer delays to exercise
   // FastForwardUntilNoTasksRemain().
-  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(
-          [](subtle::Atomic32* counter) {
-            subtle::NoBarrier_AtomicIncrement(counter, 8);
-          },
-          Unretained(&counter)),
-      Days(5));
-  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(
-          [](subtle::Atomic32* counter) {
-            subtle::NoBarrier_AtomicIncrement(counter, 16);
-          },
-          Unretained(&counter)),
-      kLongTaskDelay);
-  ThreadPool::PostDelayedTask(FROM_HERE,
-                              BindOnce(
-                                  [](subtle::Atomic32* counter) {
-                                    subtle::NoBarrier_AtomicIncrement(counter,
-                                                                      256);
-                                  },
-                                  Unretained(&counter)),
-                              kLongTaskDelay * 2);
-  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(
-          [](subtle::Atomic32* counter) {
-            subtle::NoBarrier_AtomicIncrement(counter, 512);
-          },
-          Unretained(&counter)),
-      kLongTaskDelay * 3);
-  ThreadPool::PostDelayedTask(FROM_HERE,
-                              BindOnce(
-                                  [](subtle::Atomic32* counter) {
-                                    subtle::NoBarrier_AtomicIncrement(counter,
-                                                                      1024);
-                                  },
-                                  Unretained(&counter)),
-                              kLongTaskDelay * 4);
+  post_on_single_thread_task_runner(8, Days(5));
+  post_on_single_thread_task_runner(16, kLongTaskDelay);
+  post_on_thread_pool(256, kLongTaskDelay * 2);
+  post_on_single_thread_task_runner(512, kLongTaskDelay * 3);
+  post_on_thread_pool(1024, kLongTaskDelay * 4);
 
-  SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, BindOnce(
-                     [](subtle::Atomic32* counter) {
-                       subtle::NoBarrier_AtomicIncrement(counter, 1);
-                     },
-                     Unretained(&counter)));
-  ThreadPool::PostTask(FROM_HERE, BindOnce(
-                                      [](subtle::Atomic32* counter) {
-                                        subtle::NoBarrier_AtomicIncrement(
-                                            counter, 2);
-                                      },
-                                      Unretained(&counter)));
+  post_on_single_thread_task_runner(1, TimeDelta());
+  post_on_thread_pool(2, TimeDelta());
 
   // This expectation will fail flakily if the preceding PostTask() is executed
   // asynchronously, indicating a problem with the QUEUED execution mode.
-  int expected_value = 0;
-  EXPECT_EQ(expected_value, counter);
+  uint32_t expected_value = 0;
+  EXPECT_EQ(expected_value, counter.load(std::memory_order_relaxed));
 
   // RunUntilIdle() should process non-delayed tasks only in all queues.
   task_environment.RunUntilIdle();
   expected_value += 1;
   expected_value += 2;
-  EXPECT_EQ(expected_value, counter);
+  EXPECT_EQ(expected_value, counter.load(std::memory_order_relaxed));
 
   if (time_source == TaskEnvironment::TimeSource::MOCK_TIME) {
     const TimeTicks start_time = task_environment.NowTicks();
+    const LiveTicks live_start_time = task_environment.NowLiveTicks();
 
     // Delay inferior to the delay of the first posted task.
     constexpr base::TimeDelta kInferiorTaskDelay = Seconds(1);
@@ -279,15 +239,20 @@ void DelayedTasksTest(TaskEnvironment::TimeSource time_source) {
                   "|kInferiorTaskDelay| should be "
                   "set to a value inferior to the first posted task's delay.");
     task_environment.FastForwardBy(kInferiorTaskDelay);
-    EXPECT_EQ(expected_value, counter);
-    // Time advances to cap even if there was no task at cap.
+    EXPECT_EQ(expected_value, counter.load(std::memory_order_relaxed));
+    // Time advances to cap even if there was no task at cap and live ticks
+    // advances by the same amount.
     EXPECT_EQ(task_environment.NowTicks() - start_time, kInferiorTaskDelay);
+    EXPECT_EQ(task_environment.NowLiveTicks() - live_start_time,
+              kInferiorTaskDelay);
 
     task_environment.FastForwardBy(kShortTaskDelay - kInferiorTaskDelay);
     expected_value += 4;
     expected_value += 128;
-    EXPECT_EQ(expected_value, counter);
+    EXPECT_EQ(expected_value, counter.load(std::memory_order_relaxed));
     EXPECT_EQ(task_environment.NowTicks() - start_time, kShortTaskDelay);
+    EXPECT_EQ(task_environment.NowLiveTicks() - live_start_time,
+              kShortTaskDelay);
 
     task_environment.FastForwardUntilNoTasksRemain();
     expected_value += 8;
@@ -295,8 +260,10 @@ void DelayedTasksTest(TaskEnvironment::TimeSource time_source) {
     expected_value += 256;
     expected_value += 512;
     expected_value += 1024;
-    EXPECT_EQ(expected_value, counter);
+    EXPECT_EQ(expected_value, counter.load(std::memory_order_relaxed));
     EXPECT_EQ(task_environment.NowTicks() - start_time, kLongTaskDelay * 4);
+    EXPECT_EQ(task_environment.NowLiveTicks() - live_start_time,
+              kLongTaskDelay * 4);
   }
 }
 
@@ -391,7 +358,7 @@ TEST_F(TaskEnvironmentTest,
   RunLoop run_loop;
 
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, BindLambdaForTesting([&]() {
+      FROM_HERE, BindLambdaForTesting([&] {
         int64_t x = 1;
         auto ret = write(pipe_fds_[1], &x, sizeof(x));
         ASSERT_EQ(static_cast<size_t>(ret), sizeof(x));
@@ -524,6 +491,26 @@ TEST_F(TaskEnvironmentTest, AdvanceClockAdvancesTimeTicks) {
   EXPECT_EQ(start_time + kDelay, base::TimeTicks::Now());
 }
 
+TEST_F(TaskEnvironmentTest, AdvanceClockAdvancesLiveTicks) {
+  constexpr base::TimeDelta kDelay = Seconds(42);
+  TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
+
+  const LiveTicks start_time = base::LiveTicks::Now();
+  task_environment.AdvanceClock(kDelay);
+  EXPECT_EQ(start_time + kDelay, base::LiveTicks::Now());
+}
+
+TEST_F(TaskEnvironmentTest, SuspendedAdvanceClockDoesntAdvanceLiveTicks) {
+  constexpr base::TimeDelta kDelay = Seconds(42);
+  TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
+
+  const TimeTicks start_time = base::TimeTicks::Now();
+  const LiveTicks live_start_time = base::LiveTicks::Now();
+  task_environment.SuspendedAdvanceClock(kDelay);
+  EXPECT_EQ(live_start_time, base::LiveTicks::Now());
+  EXPECT_EQ(start_time + kDelay, base::TimeTicks::Now());
+}
+
 TEST_F(TaskEnvironmentTest, AdvanceClockDoesNotRunTasks) {
   TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
 
@@ -541,16 +528,52 @@ TEST_F(TaskEnvironmentTest, AdvanceClockDoesNotRunTasks) {
   EXPECT_FALSE(task_environment.NextTaskIsDelayed());
 }
 
-TEST_F(TaskEnvironmentTest, AdvanceClockSchedulesRipeDelayedTasks) {
+TEST_F(TaskEnvironmentTest, SuspendedAdvanceClockDoesNotRunTasks) {
   TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
+
+  constexpr base::TimeDelta kTaskDelay = Days(1);
+  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::DoNothing(), kTaskDelay);
+
+  EXPECT_EQ(1U, task_environment.GetPendingMainThreadTaskCount());
+  EXPECT_TRUE(task_environment.NextTaskIsDelayed());
+
+  task_environment.SuspendedAdvanceClock(kTaskDelay);
+
+  // The task is still pending, but is now runnable.
+  EXPECT_EQ(1U, task_environment.GetPendingMainThreadTaskCount());
+  EXPECT_FALSE(task_environment.NextTaskIsDelayed());
+}
+
+TEST_F(TaskEnvironmentTest, AdvanceClockSchedulesRipeDelayedTasks) {
+  TaskEnvironment task_environment(
+      TaskEnvironment::TimeSource::MOCK_TIME,
+      TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
 
   bool ran = false;
 
   constexpr base::TimeDelta kTaskDelay = Days(1);
   ThreadPool::PostDelayedTask(
-      FROM_HERE, base::BindLambdaForTesting([&]() { ran = true; }), kTaskDelay);
+      FROM_HERE, base::BindLambdaForTesting([&] { ran = true; }), kTaskDelay);
 
   task_environment.AdvanceClock(kTaskDelay);
+  EXPECT_FALSE(ran);
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(ran);
+}
+
+TEST_F(TaskEnvironmentTest, SuspendedAdvanceClockSchedulesRipeDelayedTasks) {
+  TaskEnvironment task_environment(
+      TaskEnvironment::TimeSource::MOCK_TIME,
+      TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
+
+  bool ran = false;
+
+  constexpr base::TimeDelta kTaskDelay = Days(1);
+  ThreadPool::PostDelayedTask(
+      FROM_HERE, base::BindLambdaForTesting([&] { ran = true; }), kTaskDelay);
+
+  task_environment.SuspendedAdvanceClock(kTaskDelay);
   EXPECT_FALSE(ran);
   task_environment.RunUntilIdle();
   EXPECT_TRUE(ran);
@@ -568,14 +591,40 @@ TEST_F(TaskEnvironmentTest, FastForwardOnlyAdvancesWhenIdle) {
   constexpr base::TimeDelta kFastForwardUntil = Seconds(100);
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, BindLambdaForTesting(
-                     [&]() { EXPECT_EQ(start_time, base::TimeTicks::Now()); }));
+                     [&] { EXPECT_EQ(start_time, base::TimeTicks::Now()); }));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, BindLambdaForTesting([&]() {
+      FROM_HERE, BindLambdaForTesting([&] {
         EXPECT_EQ(start_time + kDelay, base::TimeTicks::Now());
       }),
       kDelay);
   task_environment.FastForwardBy(kFastForwardUntil);
   EXPECT_EQ(start_time + kFastForwardUntil, base::TimeTicks::Now());
+}
+
+// Verify that SuspendedFastForwardBy() behaves as FastForwardBy() but doesn't
+// advance `LiveTicks`
+TEST_F(TaskEnvironmentTest, SuspendedFastForwardOnlyAdvancesWhenIdle) {
+  TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
+
+  const TimeTicks start_time = base::TimeTicks::Now();
+  const LiveTicks live_start_time = base::LiveTicks::Now();
+
+  constexpr base::TimeDelta kDelay = Seconds(42);
+  constexpr base::TimeDelta kFastForwardUntil = Seconds(100);
+  SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, BindLambdaForTesting([&] {
+        EXPECT_EQ(start_time, base::TimeTicks::Now());
+        EXPECT_EQ(live_start_time, base::LiveTicks::Now());
+      }));
+  SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, BindLambdaForTesting([&] {
+        EXPECT_EQ(start_time + kDelay, base::TimeTicks::Now());
+        EXPECT_EQ(live_start_time, base::LiveTicks::Now());
+      }),
+      kDelay);
+  task_environment.SuspendedFastForwardBy(kFastForwardUntil);
+  EXPECT_EQ(start_time + kFastForwardUntil, base::TimeTicks::Now());
+  EXPECT_EQ(live_start_time, base::LiveTicks::Now());
 }
 
 // FastForwardBy(0) should be equivalent of RunUntilIdle().
@@ -586,10 +635,10 @@ TEST_F(TaskEnvironmentTest, FastForwardZero) {
 
   for (int i = 0; i < 1000; ++i) {
     SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, BindLambdaForTesting([&]() {
+        FROM_HERE, BindLambdaForTesting([&] {
           run_count.fetch_add(1, std::memory_order_relaxed);
         }));
-    ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+    ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&] {
                            run_count.fetch_add(1, std::memory_order_relaxed);
                          }));
   }
@@ -604,11 +653,12 @@ TEST_F(TaskEnvironmentTest, NestedFastForwardBy) {
 
   constexpr TimeDelta kDelayPerTask = Milliseconds(1);
   const TimeTicks start_time = task_environment.NowTicks();
+  const LiveTicks live_start_time = task_environment.NowLiveTicks();
 
   int max_nesting_level = 0;
 
   RepeatingClosure post_fast_forwarding_task;
-  post_fast_forwarding_task = BindLambdaForTesting([&]() {
+  post_fast_forwarding_task = BindLambdaForTesting([&] {
     if (max_nesting_level < 5) {
       ++max_nesting_level;
       SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -620,6 +670,8 @@ TEST_F(TaskEnvironmentTest, NestedFastForwardBy) {
 
   EXPECT_EQ(max_nesting_level, 5);
   EXPECT_EQ(task_environment.NowTicks(), start_time + kDelayPerTask * 5);
+  EXPECT_EQ(task_environment.NowLiveTicks(),
+            live_start_time + kDelayPerTask * 5);
 }
 
 TEST_F(TaskEnvironmentTest, NestedRunInFastForwardBy) {
@@ -627,11 +679,12 @@ TEST_F(TaskEnvironmentTest, NestedRunInFastForwardBy) {
 
   constexpr TimeDelta kDelayPerTask = Milliseconds(1);
   const TimeTicks start_time = task_environment.NowTicks();
+  const LiveTicks live_start_time = task_environment.NowLiveTicks();
 
   std::vector<RunLoop*> run_loops;
 
   RepeatingClosure post_and_runloop_task;
-  post_and_runloop_task = BindLambdaForTesting([&]() {
+  post_and_runloop_task = BindLambdaForTesting([&] {
     // Run 4 nested run loops on top of the initial FastForwardBy().
     if (run_loops.size() < 4U) {
       SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -654,6 +707,8 @@ TEST_F(TaskEnvironmentTest, NestedRunInFastForwardBy) {
 
   EXPECT_EQ(run_loops.size(), 4U);
   EXPECT_EQ(task_environment.NowTicks(), start_time + kDelayPerTask * 5);
+  EXPECT_EQ(task_environment.NowLiveTicks(),
+            live_start_time + kDelayPerTask * 5);
 }
 
 TEST_F(TaskEnvironmentTest,
@@ -710,7 +765,7 @@ TEST_F(TaskEnvironmentTest, MultiThreadedMockTime) {
   TimeTicks last_thread_pool_ticks = start_time;
 
   RepeatingClosure post_main_thread_delayed_task;
-  post_main_thread_delayed_task = BindLambdaForTesting([&]() {
+  post_main_thread_delayed_task = BindLambdaForTesting([&] {
     // Expect that time only moves forward.
     EXPECT_GE(task_environment.NowTicks(), last_main_thread_ticks);
 
@@ -733,7 +788,7 @@ TEST_F(TaskEnvironmentTest, MultiThreadedMockTime) {
   });
 
   RepeatingClosure post_thread_pool_delayed_task;
-  post_thread_pool_delayed_task = BindLambdaForTesting([&]() {
+  post_thread_pool_delayed_task = BindLambdaForTesting([&] {
     // Expect that time only moves forward.
     EXPECT_GE(task_environment.NowTicks(), last_thread_pool_ticks);
 
@@ -776,6 +831,7 @@ TEST_F(TaskEnvironmentTest, MultiThreadedFastForwardBy) {
   TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
 
   const TimeTicks start_time = task_environment.NowTicks();
+  const LiveTicks live_start_time = task_environment.NowLiveTicks();
 
   // The 1s delayed task in the pool should run but not the 5s delayed task on
   // the main thread and fast-forward by should be capped at +2s.
@@ -786,6 +842,7 @@ TEST_F(TaskEnvironmentTest, MultiThreadedFastForwardBy) {
   task_environment.FastForwardBy(Seconds(2));
 
   EXPECT_EQ(task_environment.NowTicks(), start_time + Seconds(2));
+  EXPECT_EQ(task_environment.NowLiveTicks(), live_start_time + Seconds(2));
 }
 
 // Verify that ThreadPoolExecutionMode::QUEUED doesn't prevent running tasks and
@@ -805,17 +862,16 @@ TEST_F(TaskEnvironmentTest, MultiThreadedMockTimeAndThreadPoolQueuedMode) {
 
   // Neither of these should run automatically per
   // ThreadPoolExecutionMode::QUEUED.
-  ThreadPool::PostTask(FROM_HERE,
-                       BindLambdaForTesting([&]() { count += 128; }));
+  ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&] { count += 128; }));
   ThreadPool::PostDelayedTask(
-      FROM_HERE, {}, BindLambdaForTesting([&]() { count += 256; }), Seconds(5));
+      FROM_HERE, {}, BindLambdaForTesting([&] { count += 256; }), Seconds(5));
 
   // Time should auto-advance to +500s in RunLoop::Run() without having to run
   // the above forcefully QUEUED tasks.
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, BindLambdaForTesting([&]() { count += 1; }));
+      FROM_HERE, BindLambdaForTesting([&] { count += 1; }));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, BindLambdaForTesting([&]() {
+      FROM_HERE, BindLambdaForTesting([&] {
         count += 2;
         run_loop.Quit();
       }),
@@ -839,7 +895,7 @@ TEST_F(TaskEnvironmentTest, MultiThreadedMockTimeAndThreadPoolQueuedMode) {
 
   // Test advancing time to a QUEUED task in the future.
   ThreadPool::PostDelayedTask(
-      FROM_HERE, BindLambdaForTesting([&]() { count += 512; }), Seconds(5));
+      FROM_HERE, BindLambdaForTesting([&] { count += 512; }), Seconds(5));
   task_environment.FastForwardBy(Seconds(7));
   expected_value += 512;
   EXPECT_EQ(expected_value, count);
@@ -847,10 +903,9 @@ TEST_F(TaskEnvironmentTest, MultiThreadedMockTimeAndThreadPoolQueuedMode) {
 
   // Confirm that QUEUED mode is still active after the above fast forwarding
   // (only the main thread task should run from RunLoop).
-  ThreadPool::PostTask(FROM_HERE,
-                       BindLambdaForTesting([&]() { count += 1024; }));
+  ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&] { count += 1024; }));
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, BindLambdaForTesting([&]() { count += 2048; }));
+      FROM_HERE, BindLambdaForTesting([&] { count += 2048; }));
   PlatformThread::Sleep(Milliseconds(1));
   RunLoop().RunUntilIdle();
   expected_value += 2048;
@@ -895,13 +950,13 @@ TEST_F(TaskEnvironmentTest, SetsDefaultRunTimeout) {
     }
     static auto& static_on_timeout_cb = run_timeout->on_timeout;
 #if defined(__clang__) && defined(_MSC_VER)
-    EXPECT_FATAL_FAILURE(
+    EXPECT_NONFATAL_FAILURE(
         static_on_timeout_cb.Run(FROM_HERE),
         "RunLoop::Run() timed out. Timeout set at "
         // We don't test the line number but it would be present.
         "TaskEnvironment@base\\test\\task_environment.cc:");
 #else
-    EXPECT_FATAL_FAILURE(
+    EXPECT_NONFATAL_FAILURE(
         static_on_timeout_cb.Run(FROM_HERE),
         "RunLoop::Run() timed out. Timeout set at "
         // We don't test the line number but it would be present.
@@ -921,11 +976,11 @@ TEST_F(TaskEnvironmentTest, DescribeCurrentTasksHasPendingMainThreadTasks) {
   mock_log.StartCapturingLogs();
 
   // Thread pool tasks (none here) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("ThreadPool currently running tasks")))
       .WillOnce(Return(true));
   // The pending task posted above to the main thread is logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("task_environment_unittest.cc")))
       .WillOnce(Return(true));
   task_environment.DescribeCurrentTasks();
@@ -933,11 +988,11 @@ TEST_F(TaskEnvironmentTest, DescribeCurrentTasksHasPendingMainThreadTasks) {
   task_environment.RunUntilIdle();
 
   // Thread pool tasks (none here) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("ThreadPool currently running tasks")))
       .WillOnce(Return(true));
   // Pending tasks (none left) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("\"immediate_work_queue_size\":0")))
       .WillOnce(Return(true));
   task_environment.DescribeCurrentTasks();
@@ -955,7 +1010,7 @@ TEST_F(TaskEnvironmentTest, DescribeCurrentTasksHasThreadPoolTasks) {
   scoped_refptr<SequencedTaskRunner> thread_pool_task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
           {WithBaseSyncPrimitives(), TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
-  thread_pool_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+  thread_pool_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                                       // The test waits until this task is
                                       // running.
                                       wait_for_thread_pool_task_start.Signal();
@@ -969,11 +1024,11 @@ TEST_F(TaskEnvironmentTest, DescribeCurrentTasksHasThreadPoolTasks) {
   mock_log.StartCapturingLogs();
 
   // The pending task posted above is logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("task_environment_unittest.cc")))
       .WillOnce(Return(true));
   // Pending tasks (none here) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("\"immediate_work_queue_size\":0")))
       .WillOnce(Return(true));
   task_environment.DescribeCurrentTasks();
@@ -983,11 +1038,11 @@ TEST_F(TaskEnvironmentTest, DescribeCurrentTasksHasThreadPoolTasks) {
   task_environment.RunUntilIdle();
 
   // The current thread pool tasks (none left) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             Not(HasSubstr("task_environment_unittest.cc"))))
       .WillOnce(Return(true));
   // Main thread pending tasks (none here) are logged.
-  EXPECT_CALL(mock_log, Log(::logging::LOG_INFO, _, _, _,
+  EXPECT_CALL(mock_log, Log(::logging::LOGGING_INFO, _, _, _,
                             HasSubstr("\"immediate_work_queue_size\":0")))
       .WillOnce(Return(true));
   task_environment.DescribeCurrentTasks();
@@ -1186,7 +1241,7 @@ TEST_F(TaskEnvironmentTest, MainThreadCanContributeWhileFlushingPool) {
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), base::Seconds(1));
   TestWaitableEvent wait_for_collaboration;
-  ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+  ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&] {
                          task_environment.GetMainThreadTaskRunner()->PostTask(
                              FROM_HERE,
                              BindOnce(&TestWaitableEvent::Signal,
@@ -1202,7 +1257,7 @@ TEST_F(TaskEnvironmentTest, CancelPendingTask) {
       TaskEnvironment::TimeSource::MOCK_TIME,
       TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
 
-  CancelableOnceClosure task1(BindOnce([]() {}));
+  CancelableOnceClosure task1(BindOnce([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task1.callback(), Seconds(1));
   EXPECT_TRUE(task_environment.MainThreadIsIdle());
@@ -1214,20 +1269,20 @@ TEST_F(TaskEnvironmentTest, CancelPendingTask) {
   EXPECT_EQ(TimeDelta::Max(),
             task_environment.NextMainThreadPendingTaskDelay());
 
-  CancelableRepeatingClosure task2(BindRepeating([]() {}));
+  CancelableRepeatingClosure task2(BindRepeating([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task2.callback(), Seconds(1));
   task2.Cancel();
   EXPECT_EQ(0u, task_environment.GetPendingMainThreadTaskCount());
 
-  CancelableRepeatingClosure task3(BindRepeating([]() {}));
+  CancelableRepeatingClosure task3(BindRepeating([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task3.callback(), Seconds(1));
   task3.Cancel();
   EXPECT_EQ(TimeDelta::Max(),
             task_environment.NextMainThreadPendingTaskDelay());
 
-  CancelableRepeatingClosure task4(BindRepeating([]() {}));
+  CancelableRepeatingClosure task4(BindRepeating([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task4.callback(), Seconds(1));
   task4.Cancel();
@@ -1238,7 +1293,7 @@ TEST_F(TaskEnvironmentTest, CancelPendingImmediateTask) {
   TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
   EXPECT_TRUE(task_environment.MainThreadIsIdle());
 
-  CancelableOnceClosure task1(BindOnce([]() {}));
+  CancelableOnceClosure task1(BindOnce([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
                                                         task1.callback());
   EXPECT_FALSE(task_environment.MainThreadIsIdle());
@@ -1253,7 +1308,7 @@ TEST_F(TaskEnvironmentTest, NoFastForwardToCancelledTask) {
       TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
 
   TimeTicks start_time = task_environment.NowTicks();
-  CancelableRepeatingClosure task(BindRepeating([]() {}));
+  CancelableRepeatingClosure task(BindRepeating([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task.callback(), Seconds(1));
   EXPECT_EQ(Seconds(1), task_environment.NextMainThreadPendingTaskDelay());
@@ -1266,7 +1321,7 @@ TEST_F(TaskEnvironmentTest, NextTaskIsDelayed) {
   TaskEnvironment task_environment(TaskEnvironment::TimeSource::MOCK_TIME);
 
   EXPECT_FALSE(task_environment.NextTaskIsDelayed());
-  CancelableRepeatingClosure task(BindRepeating([]() {}));
+  CancelableRepeatingClosure task(BindRepeating([] {}));
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, task.callback(), Seconds(1));
   EXPECT_TRUE(task_environment.NextTaskIsDelayed());
@@ -1274,13 +1329,13 @@ TEST_F(TaskEnvironmentTest, NextTaskIsDelayed) {
   EXPECT_FALSE(task_environment.NextTaskIsDelayed());
 
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, BindOnce([]() {}), Seconds(2));
+      FROM_HERE, BindOnce([] {}), Seconds(2));
   EXPECT_TRUE(task_environment.NextTaskIsDelayed());
   task_environment.FastForwardUntilNoTasksRemain();
   EXPECT_FALSE(task_environment.NextTaskIsDelayed());
 
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-                                                        BindOnce([]() {}));
+                                                        BindOnce([] {}));
   EXPECT_FALSE(task_environment.NextTaskIsDelayed());
 }
 
@@ -1290,7 +1345,7 @@ TEST_F(TaskEnvironmentTest, NextMainThreadPendingTaskDelayWithImmediateTask) {
   EXPECT_EQ(TimeDelta::Max(),
             task_environment.NextMainThreadPendingTaskDelay());
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-                                                        BindOnce([]() {}));
+                                                        BindOnce([] {}));
   EXPECT_EQ(TimeDelta(), task_environment.NextMainThreadPendingTaskDelay());
 }
 
@@ -1302,10 +1357,14 @@ TEST_F(TaskEnvironmentTest, TimeSourceMockTimeAlsoMocksNow) {
 
   const Time start_time = Time::Now();
 
+  const LiveTicks start_live_ticks = task_environment.NowLiveTicks();
+  EXPECT_EQ(LiveTicks::Now(), start_live_ticks);
+
   constexpr TimeDelta kDelay = Seconds(10);
   task_environment.FastForwardBy(kDelay);
   EXPECT_EQ(TimeTicks::Now(), start_ticks + kDelay);
   EXPECT_EQ(Time::Now(), start_time + kDelay);
+  EXPECT_EQ(LiveTicks::Now(), start_live_ticks + kDelay);
 }
 
 TEST_F(TaskEnvironmentTest, SingleThread) {
@@ -1314,7 +1373,7 @@ TEST_F(TaskEnvironmentTest, SingleThread) {
 
   bool ran = false;
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindLambdaForTesting([&]() { ran = true; }));
+      FROM_HERE, base::BindLambdaForTesting([&] { ran = true; }));
   RunLoop().RunUntilIdle();
   EXPECT_TRUE(ran);
 
@@ -1333,9 +1392,9 @@ TEST_F(TaskEnvironmentTest, SingleThreadMockTime) {
 
   int counter = 0;
   SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindLambdaForTesting([&]() { counter += 1; }), kDelay);
+      FROM_HERE, base::BindLambdaForTesting([&] { counter += 1; }), kDelay);
   SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindLambdaForTesting([&]() { counter += 2; }));
+      FROM_HERE, base::BindLambdaForTesting([&] { counter += 2; }));
 
   int expected_value = 0;
   EXPECT_EQ(expected_value, counter);
@@ -1403,8 +1462,11 @@ TEST_F(TaskEnvironmentTest, NoCOMEnvironment) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
-// TODO(crbug.com/1318840): Re-enable this test
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+// TODO(crbug.com/40835641): Re-enable this test
+// TODO(crbug.com/475624916): This test is flaky on Fuchsia when host
+// environment is less performant.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_ParallelExecutionFence DISABLED_ParallelExecutionFence
 #else
 #define MAYBE_ParallelExecutionFence ParallelExecutionFence
@@ -1424,28 +1486,33 @@ TEST_F(TaskEnvironmentTest, MAYBE_ParallelExecutionFence) {
 
   // Each task will repost itself until run 500. Run #50 will signal
   // |resume_main_thread|.
-  RepeatingClosure task = BindLambdaForTesting([&]() {
+  RepeatingClosure task = BindLambdaForTesting([&] {
     int this_run = next_run.fetch_add(1, std::memory_order_relaxed);
 
-    if (this_run == 50)
+    if (this_run == 50) {
       resume_main_thread.Signal();
+    }
 
     // Sleep after signaling to increase the likelihood the main thread installs
     // the fence during this run and must wait on this task.
-    if (this_run >= 50 && this_run < 50 + kNumParallelTasks)
+    if (this_run >= 50 && this_run < 50 + kNumParallelTasks) {
       PlatformThread::Sleep(Milliseconds(5));
+    }
 
     // Repost self until the last kNumParallelTasks.
-    if (this_run <= 500 - kNumParallelTasks)
+    if (this_run <= 500 - kNumParallelTasks) {
       ThreadPool::PostTask(task);
+    }
 
     completed_runs.fetch_add(1, std::memory_order_relaxed);
 
-    if (this_run == 500)
+    if (this_run == 500) {
       all_runs_done.Signal();
+    }
   });
-  for (int i = 0; i < kNumParallelTasks; ++i)
+  for (int i = 0; i < kNumParallelTasks; ++i) {
     ThreadPool::PostTask(task);
+  }
 
   resume_main_thread.Wait();
   ASSERT_GE(next_run.load(std::memory_order_relaxed), 50);
@@ -1491,7 +1558,7 @@ TEST_F(TaskEnvironmentTest,
 TEST_F(TaskEnvironmentTest, ParallelExecutionFenceNonMainThreadDeath) {
   TaskEnvironment task_environment;
 
-  ThreadPool::PostTask(BindOnce([]() {
+  ThreadPool::PostTask(BindOnce([] {
 #if CHECK_WILL_STREAM()
     const char kFailureLog[] = "ParallelExecutionFence invoked from worker";
 #else
@@ -1512,8 +1579,8 @@ bool FailOnTaskEnvironmentLog(int severity,
                               int line,
                               size_t message_start,
                               const std::string& str) {
-  StringPiece file_str(file);
-  if (file_str.find("task_environment.cc") != StringPiece::npos) {
+  std::string_view file_str(file);
+  if (file_str.find("task_environment.cc") != std::string_view::npos) {
     ADD_FAILURE() << str;
     return true;
   }
@@ -1532,7 +1599,7 @@ TEST_F(TaskEnvironmentTest, DisallowRunTasksRetriesForFullTimeout) {
   TestWaitableEvent worker_running;
   TestWaitableEvent resume_worker_task;
 
-  ThreadPool::PostTask(BindLambdaForTesting([&]() {
+  ThreadPool::PostTask(BindLambdaForTesting([&] {
     worker_running.Signal();
     resume_worker_task.Wait();
   }));
@@ -1540,9 +1607,10 @@ TEST_F(TaskEnvironmentTest, DisallowRunTasksRetriesForFullTimeout) {
   // Churn on this task so that TestTaskTracker::task_completed_cv_ gets
   // signaled a bunch and reproduces the bug's conditions
   // (TestTaskTracker::DisallowRunTasks gets early chances to quit).
-  RepeatingClosure infinite_repost = BindLambdaForTesting([&]() {
-    if (!resume_worker_task.IsSignaled())
+  RepeatingClosure infinite_repost = BindLambdaForTesting([&] {
+    if (!resume_worker_task.IsSignaled()) {
       ThreadPool::PostTask(infinite_repost);
+    }
   });
   ThreadPool::PostTask(infinite_repost);
 
@@ -1569,5 +1637,171 @@ TEST_F(TaskEnvironmentTest, DisallowRunTasksRetriesForFullTimeout) {
   logging::SetLogMessageHandler(previous_handler);
 }
 
-}  // namespace test
-}  // namespace base
+TEST_F(TaskEnvironmentTest, RunUntilQuit_RunsMainThread) {
+  TaskEnvironment task_environment;
+  bool task_run = false;
+  auto quit = task_environment.QuitClosure();
+
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                     BindLambdaForTesting([&] {
+                                                       task_run = true;
+                                                       quit.Run();
+                                                     }));
+  task_environment.RunUntilQuit();
+
+  ASSERT_TRUE(task_run);
+}
+
+TEST_F(TaskEnvironmentTest, RunUntilQuit_RunsThreadPool) {
+  TaskEnvironment task_environment;
+  bool task_run = false;
+  auto quit = task_environment.QuitClosure();
+
+  ThreadPool::PostTask(FROM_HERE, BindLambdaForTesting([&] {
+                         task_run = true;
+                         quit.Run();
+                       }));
+  task_environment.RunUntilQuit();
+
+  ASSERT_TRUE(task_run);
+}
+
+namespace {
+
+class TestLogger {
+ public:
+  std::vector<std::string> GetLog() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return log_;
+  }
+
+  void LogMessage(std::string s) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    log_.push_back(std::move(s));
+  }
+
+  // If n=0 then executes `done` and returns. Otherwise adds `n` to the log and
+  // reschedules itself with (n - 1).
+  void CountDown(int n, OnceClosure done) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (n == 0) {
+      std::move(done).Run();
+      return;
+    }
+
+    log_.push_back(NumberToString(n));
+
+    SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, BindOnce(&TestLogger::CountDown, Unretained(this), n - 1,
+                            std::move(done)));
+  }
+
+ private:
+  std::vector<std::string> log_ GUARDED_BY_CONTEXT(sequence_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
+};
+
+}  // namespace
+
+TEST_F(TaskEnvironmentTest, RunUntilQuit_QueuedExecution) {
+  TaskEnvironment task_environment(
+      TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
+
+  SequenceBound<TestLogger> logger(ThreadPool::CreateSequencedTaskRunner({}));
+  logger.AsyncCall(&TestLogger::CountDown)
+      .WithArgs(5, task_environment.QuitClosure());
+  // Because `task_environment` was created with
+  // ThreadPoolExecutionMode::QUEUED, we are guaranteed that LogMessage() will
+  // be called after the first run on CountDown() and before the rest.
+  logger.AsyncCall(&TestLogger::LogMessage).WithArgs("Test");
+  task_environment.RunUntilQuit();
+
+  // Get the log and confirm that LogMessage() ran when expected.
+  std::vector<std::string> actual_log;
+  auto quit = task_environment.QuitClosure();
+  logger.AsyncCall(&TestLogger::GetLog)
+      .Then(BindLambdaForTesting([&](std::vector<std::string> log) {
+        actual_log = log;
+        quit.Run();
+      }));
+  task_environment.RunUntilQuit();
+
+  ASSERT_THAT(actual_log,
+              testing::ElementsAre("5", "Test", "4", "3", "2", "1"));
+}
+
+TEST_F(TaskEnvironmentTest, RunUntilQuit_ThreadPoolStaysQueued) {
+  TaskEnvironment task_environment(
+      TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
+
+  ThreadPool::PostTask(FROM_HERE, task_environment.QuitClosure());
+  task_environment.RunUntilQuit();
+
+  // RunUntilQuit() let the thread pool execute until the quit closure was run.
+  // Verify that execution is now queued again.
+
+  bool task_run = false;
+  ThreadPool::PostTask(FROM_HERE,
+                       BindLambdaForTesting([&] { task_run = true; }));
+  // Wait a little bit to let the task run if execution is not queued.
+  PlatformThread::Sleep(Milliseconds(10));
+
+  ASSERT_FALSE(task_run);
+
+  // Run the queued task now (if we don't, it'll run when `task_environment` is
+  // destroyed, and `task_run` is out of scope).
+  task_environment.RunUntilIdle();
+}
+
+TEST_F(TaskEnvironmentTest, RunUntilQuit_QuitClosureInvalidatedByRun) {
+  TaskEnvironment task_environment(
+      TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
+
+  auto quit1 = task_environment.QuitClosure();
+  auto quit2 = task_environment.QuitClosure();
+  quit1.Run();
+  task_environment.RunUntilQuit();  // Invalidates `quit1` and `quit2`.
+  auto quit3 = task_environment.QuitClosure();
+
+  std::vector<std::string> log;
+  // Running `quit1` or `quit2` will have no effect.
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, quit1);
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, quit2);
+  // This line will be logged.
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, BindLambdaForTesting([&] { log.push_back("after quit2"); }));
+  // `quit3` will terminate execution.
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, quit3);
+  // This line will *not* be logged.
+  SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, BindLambdaForTesting([&] { log.push_back("after quit3"); }));
+  task_environment.RunUntilQuit();
+
+  ASSERT_THAT(log, testing::ElementsAre("after quit2"));
+
+  // Run the queued task now (if we don't, it might run when `task_environment`
+  // is destroyed, and `log` is out of scope).
+  task_environment.RunUntilIdle();
+}
+
+TEST_F(TaskEnvironmentTest, RunUntilQuit_MustCallQuitClosureFirst) {
+  TaskEnvironment task_environment;
+  EXPECT_DCHECK_DEATH_WITH(
+      task_environment.RunUntilQuit(),
+      R"(QuitClosure\(\) not called before RunUntilQuit\(\))");
+}
+
+TEST_F(TaskEnvironmentTest, SingleThreadTaskRunnerGetMainThreadDefault) {
+  EXPECT_CHECK_DEATH(
+      { std::ignore = SingleThreadTaskRunner::GetMainThreadDefault(); });
+
+  {
+    TaskEnvironment task_environment;
+    ASSERT_TRUE(SingleThreadTaskRunner::GetMainThreadDefault());
+  }
+
+  EXPECT_CHECK_DEATH(
+      { std::ignore = SingleThreadTaskRunner::GetMainThreadDefault(); });
+}
+
+}  // namespace base::test

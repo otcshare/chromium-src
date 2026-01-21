@@ -51,8 +51,8 @@ inline MojoResult CreateMessagePipe(const MojoCreateMessagePipeOptions* options,
   DCHECK(message_pipe1);
   MessagePipeHandle handle0;
   MessagePipeHandle handle1;
-  MojoResult rv = MojoCreateMessagePipe(
-      options, handle0.mutable_value(), handle1.mutable_value());
+  MojoResult rv = MojoCreateMessagePipe(options, handle0.mutable_value(),
+                                        handle1.mutable_value());
   // Reset even on failure (reduces the chances that a "stale"/incorrect handle
   // will be used).
   message_pipe0->reset(handle0);
@@ -108,8 +108,9 @@ inline MojoResult ReadMessageNew(MessagePipeHandle message_pipe,
   options.flags = flags;
   MojoMessageHandle raw_message;
   MojoResult rv = MojoReadMessage(message_pipe.value(), &options, &raw_message);
-  if (rv != MOJO_RESULT_OK)
+  if (rv != MOJO_RESULT_OK) {
     return rv;
+  }
 
   message->reset(MessageHandle(raw_message));
   return MOJO_RESULT_OK;
@@ -136,21 +137,22 @@ class MessagePipe {
 };
 
 inline MessagePipe::MessagePipe() {
-  MojoResult result = CreateMessagePipe(nullptr, &handle0, &handle1);
+  [[maybe_unused]] MojoResult result =
+      CreateMessagePipe(nullptr, &handle0, &handle1);
   DCHECK_EQ(MOJO_RESULT_OK, result);
   DCHECK(handle0.is_valid());
   DCHECK(handle1.is_valid());
 }
 
 inline MessagePipe::MessagePipe(const MojoCreateMessagePipeOptions& options) {
-  MojoResult result = CreateMessagePipe(&options, &handle0, &handle1);
+  [[maybe_unused]] MojoResult result =
+      CreateMessagePipe(&options, &handle0, &handle1);
   DCHECK_EQ(MOJO_RESULT_OK, result);
   DCHECK(handle0.is_valid());
   DCHECK(handle1.is_valid());
 }
 
-inline MessagePipe::~MessagePipe() {
-}
+inline MessagePipe::~MessagePipe() {}
 
 }  // namespace mojo
 

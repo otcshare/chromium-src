@@ -4,52 +4,67 @@
 
 package org.chromium.chrome.browser.sync.settings;
 
-import android.accounts.Account;
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.UserManager;
 
 import androidx.annotation.LayoutRes;
-import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.fragment.app.DialogFragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
-import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceScreen;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.CallbackUtils;
+import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
-import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileAccountManagementMetrics;
+import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
-import org.chromium.chrome.browser.settings.SettingsLauncherImpl;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+import org.chromium.chrome.browser.signin.services.DisplayableProfileData;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.ProfileDataCache;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninManager.SignInStateObserver;
-import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
-import org.chromium.chrome.browser.superviseduser.FilteringBehavior;
-import org.chromium.chrome.browser.sync.SyncService;
-import org.chromium.chrome.browser.ui.signin.SignOutDialogCoordinator;
-import org.chromium.chrome.browser.ui.signin.SignOutDialogCoordinator.Listener;
+import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.chrome.browser.sync.TrustedVaultClient;
+import org.chromium.chrome.browser.sync.ui.PassphraseDialogFragment;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SignOutCoordinator;
 import org.chromium.chrome.browser.ui.signin.SigninUtils;
 import org.chromium.components.browser_ui.settings.ChromeBasePreference;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.settings.CustomDividerFragment;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.GAIAServiceType;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SignoutReason;
+import org.chromium.components.sync.SyncService;
+import org.chromium.components.sync.UserActionableError;
+import org.chromium.components.trusted_vault.TrustedVaultUserActionTriggerForUMA;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.ui.UiUtils;
 import org.chromium.ui.modaldialog.ModalDialogManagerHolder;
 
 import java.util.List;
@@ -57,70 +72,77 @@ import java.util.List;
 /**
  * The settings screen with information and settings related to the user's accounts.
  *
- * This shows which accounts the user is signed in with, allows the user to sign out of Chrome,
+ * <p>This shows which accounts the user is signed in with, allows the user to sign out of Chrome,
  * links to sync settings, has links to add accounts and go incognito, and shows parental settings
  * if a child account is in use.
  *
- * Note: This can be triggered from a web page, e.g. a GAIA sign-in page.
+ * <p>Note: This can be triggered from a web page, e.g. a GAIA sign-in page.
  */
-public class AccountManagementFragment extends PreferenceFragmentCompat
-        implements Listener, SignInStateObserver, ProfileDataCache.Observer {
-    private static final String TAG = "AcctManagementPref";
+@NullMarked
+public class AccountManagementFragment extends ChromeBaseSettingsFragment
+        implements SignInStateObserver,
+                ProfileDataCache.Observer,
+                CustomDividerFragment,
+                IdentityErrorCardPreference.Listener,
+                PassphraseDialogFragment.Delegate {
+    private static final int REQUEST_CODE_TRUSTED_VAULT_KEY_RETRIEVAL = 1;
+    private static final int REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED = 2;
 
-    private static final String SIGN_OUT_DIALOG_TAG = "sign_out_dialog_tag";
-    private static final String CLEAR_DATA_PROGRESS_DIALOG_TAG = "clear_data_progress";
+    @VisibleForTesting public static final String FRAGMENT_ENTER_PASSPHRASE = "enter_passphase";
 
     /**
-     * The key for an integer value in arguments bundle to
-     * specify the correct GAIA service that has triggered the dialog.
-     * If the argument is not set, GAIA_SERVICE_TYPE_NONE is used as the origin of the dialog.
+     * The key for an integer value in arguments bundle to specify the correct GAIA service that has
+     * triggered the dialog. If the argument is not set, GAIA_SERVICE_TYPE_NONE is used as the
+     * origin of the dialog.
      */
     private static final String SHOW_GAIA_SERVICE_TYPE_EXTRA = "ShowGAIAServiceType";
 
     private static final String PREF_ACCOUNTS_CATEGORY = "accounts_category";
     private static final String PREF_PARENT_ACCOUNT_CATEGORY = "parent_account_category";
-    private static final String PREF_PARENTAL_SETTINGS = "parental_settings";
-    private static final String PREF_PARENT_ACCOUNTS = "parent_accounts";
-    private static final String PREF_CHILD_CONTENT = "child_content";
     private static final String PREF_SIGN_OUT = "sign_out";
     private static final String PREF_SIGN_OUT_DIVIDER = "sign_out_divider";
 
     private @GAIAServiceType int mGaiaServiceType = GAIAServiceType.GAIA_SERVICE_TYPE_NONE;
 
-    private Profile mProfile;
-    private String mSignedInAccountName;
+    private @Nullable CoreAccountInfo mSignedInCoreAccountInfo;
     private ProfileDataCache mProfileDataCache;
-    private @Nullable SyncService.SyncSetupInProgressHandle mSyncSetupInProgressHandle;
+    private SyncService mSyncService;
+    private SyncService.@Nullable SyncSetupInProgressHandle mSyncSetupInProgressHandle;
+    private @Nullable OneshotSupplier<SnackbarManager> mSnackbarManagerSupplier;
+    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
 
     @Override
-    public void onCreatePreferences(Bundle savedState, String rootKey) {
-        SyncService syncService = SyncService.get();
-        if (syncService != null) {
-            // Prevent sync settings changes from taking effect until the user leaves this screen.
-            mSyncSetupInProgressHandle = syncService.getSetupInProgressHandle();
-        }
+    public void onCreatePreferences(@Nullable Bundle savedState, @Nullable String rootKey) {
+        mSyncService = assumeNonNull(SyncServiceFactory.getForProfile(getProfile()));
+        // Prevent sync settings changes from taking effect until the user leaves this screen.
+        mSyncSetupInProgressHandle = mSyncService.getSetupInProgressHandle();
 
         if (getArguments() != null) {
             mGaiaServiceType =
                     getArguments().getInt(SHOW_GAIA_SERVICE_TYPE_EXTRA, mGaiaServiceType);
         }
 
-        mProfile = Profile.getLastUsedRegularProfile();
+        mProfileDataCache =
+                ProfileDataCache.createWithDefaultImageSizeAndNoBadge(
+                        requireContext(), getIdentityManager());
+    }
 
-        SigninMetricsUtils.logProfileAccountManagementMenu(
-                ProfileAccountManagementMetrics.VIEW, mGaiaServiceType);
-
-        mProfileDataCache = ProfileDataCache.createWithDefaultImageSizeAndNoBadge(requireContext());
+    @Override
+    public MonotonicObservableSupplier<String> getPageTitle() {
+        return mPageTitle;
     }
 
     @Override
     public void onActivityCreated(@Nullable Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
 
-        setDivider(null);
-
         // Disable animations of preference changes (crbug.com/986401).
         getListView().setItemAnimator(null);
+    }
+
+    @Override
+    public boolean hasDivider() {
+        return false;
     }
 
     @Override
@@ -132,22 +154,23 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
     }
 
     @Override
+    public void onStart() {
+        super.onStart();
+        update();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
-        IdentityServicesProvider.get()
-                .getSigninManager(Profile.getLastUsedRegularProfile())
-                .addSignInStateObserver(this);
+        getSigninManager().addSignInStateObserver(this);
         mProfileDataCache.addObserver(this);
-        update();
     }
 
     @Override
     public void onPause() {
         super.onPause();
         mProfileDataCache.removeObserver(this);
-        IdentityServicesProvider.get()
-                .getSigninManager(Profile.getLastUsedRegularProfile())
-                .removeSignInStateObserver(this);
+        getSigninManager().removeSignInStateObserver(this);
     }
 
     public void update() {
@@ -156,32 +179,28 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
 
         if (getPreferenceScreen() != null) getPreferenceScreen().removeAll();
 
-        mSignedInAccountName = CoreAccountInfo.getEmailFrom(
-                IdentityServicesProvider.get()
-                        .getIdentityManager(Profile.getLastUsedRegularProfile())
-                        .getPrimaryAccountInfo(ConsentLevel.SIGNIN));
-        if (mSignedInAccountName == null) {
+        mSignedInCoreAccountInfo = getIdentityManager().getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+        List<AccountInfo> accounts =
+                AccountUtils.getAccountsIfFulfilledOrEmpty(
+                        AccountManagerFacadeProvider.getInstance().getAccounts());
+        if (mSignedInCoreAccountInfo == null || accounts.isEmpty()) {
             // The AccountManagementFragment can only be shown when the user is signed in. If the
             // user is signed out, exit the fragment.
-            getActivity().finish();
+            SettingsNavigationFactory.createSettingsNavigation().finishCurrentSettings(this);
             return;
         }
 
-        String fullName = mProfileDataCache.getProfileDataOrDefault(mSignedInAccountName)
-                                  .getFullNameOrEmail();
-        getActivity().setTitle(fullName);
-
-        if (ChromeFeatureList.isEnabled(
-                    ChromeFeatureList.ADD_EDU_ACCOUNT_FROM_ACCOUNT_SETTINGS_FOR_SUPERVISED_USERS)) {
-            addPreferencesFromResource(R.xml.account_management_preferences);
-            configureSignOutSwitch();
-            configureChildAccountPreferences();
-        } else {
-            addPreferencesFromResource(R.xml.account_management_preferences_legacy);
-            configureSignOutSwitch();
-            configureChildAccountPreferencesLegacy();
-        }
-
+        DisplayableProfileData profileData =
+                mProfileDataCache.getProfileDataOrDefault(mSignedInCoreAccountInfo.getEmail());
+        mPageTitle.set(
+                assumeNonNull(
+                        SyncSettingsUtils.getDisplayableFullNameOrEmailWithPreference(
+                                profileData,
+                                getContext(),
+                                SyncSettingsUtils.TitlePreference.FULL_NAME)));
+        addPreferencesFromResource(R.xml.account_management_preferences);
+        configureSignOutSwitch();
+        configureChildAccountPreferences();
         AccountManagerFacadeProvider.getInstance().getAccounts().then(this::updateAccountsList);
     }
 
@@ -199,48 +218,50 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         return !userManager.hasUserRestriction(UserManager.DISALLOW_MODIFY_ACCOUNTS);
     }
 
+    public void setSnackbarManagerSupplier(
+            OneshotSupplier<SnackbarManager> snackbarManagerSupplier) {
+        mSnackbarManagerSupplier = snackbarManagerSupplier;
+    }
+
     private void configureSignOutSwitch() {
         Preference signOutPreference = findPreference(PREF_SIGN_OUT);
-        if (mProfile.isChild()) {
+        if (getProfile().isChild()) {
             getPreferenceScreen().removePreference(signOutPreference);
             getPreferenceScreen().removePreference(findPreference(PREF_SIGN_OUT_DIVIDER));
         } else {
             signOutPreference.setLayoutResource(R.layout.account_management_account_row);
             signOutPreference.setIcon(R.drawable.ic_signout_40dp);
             signOutPreference.setTitle(
-                    IdentityServicesProvider.get()
-                                    .getIdentityManager(Profile.getLastUsedRegularProfile())
-                                    .hasPrimaryAccount(ConsentLevel.SYNC)
+                    getIdentityManager().hasPrimaryAccount(ConsentLevel.SYNC)
                             ? R.string.sign_out_and_turn_off_sync
                             : R.string.sign_out);
-            signOutPreference.setOnPreferenceClickListener(preference -> {
-                if (!isVisible() || !isResumed() || mSignedInAccountName == null) {
-                    return false;
-                }
-
-                if (IdentityServicesProvider.get()
-                                .getIdentityManager(Profile.getLastUsedRegularProfile())
-                                .getPrimaryAccountInfo(ConsentLevel.SYNC)
-                        != null) {
-                    // Only show the sign-out dialog if the user has given sync consent.
-                    SignOutDialogCoordinator.show(requireContext(),
-                            ((ModalDialogManagerHolder) getActivity()).getModalDialogManager(),
-                            this, SignOutDialogCoordinator.ActionType.CLEAR_PRIMARY_ACCOUNT,
-                            mGaiaServiceType);
-                } else {
-                    IdentityServicesProvider.get()
-                            .getSigninManager(Profile.getLastUsedRegularProfile())
-                            .signOut(SignoutReason.USER_CLICKED_SIGNOUT_SETTINGS, null, false);
-                }
-                return true;
-            });
+            signOutPreference.setOnPreferenceClickListener(
+                    preference -> {
+                        if (!isVisible() || !isResumed()) {
+                            return false;
+                        }
+                        if (!getIdentityManager().hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                            // Primary account might have been signed-out asynchronously already.
+                            return false;
+                        }
+                        SignOutCoordinator.startSignOutFlow(
+                                requireContext(),
+                                getProfile(),
+                                getActivity().getSupportFragmentManager(),
+                                ((ModalDialogManagerHolder) getActivity()).getModalDialogManager(),
+                                assertNonNull(assumeNonNull(mSnackbarManagerSupplier).get()),
+                                SignoutReason.USER_CLICKED_SIGNOUT_SETTINGS,
+                                /* showConfirmDialog= */ false,
+                                CallbackUtils.emptyRunnable());
+                        return true;
+                    });
         }
     }
 
     private void configureChildAccountPreferences() {
         Preference parentAccounts = findPreference(PREF_PARENT_ACCOUNT_CATEGORY);
-        if (mProfile.isChild()) {
-            PrefService prefService = UserPrefs.get(mProfile);
+        if (getProfile().isChild()) {
+            PrefService prefService = UserPrefs.get(getProfile());
 
             String firstParent = prefService.getString(Pref.SUPERVISED_USER_CUSTODIAN_EMAIL);
             String secondParent =
@@ -248,8 +269,11 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
             final String parentText;
 
             if (!secondParent.isEmpty()) {
-                parentText = getString(R.string.account_management_header_two_parent_names,
-                        firstParent, secondParent);
+                parentText =
+                        getString(
+                                R.string.account_management_header_two_parent_names,
+                                firstParent,
+                                secondParent);
             } else if (!firstParent.isEmpty()) {
                 parentText =
                         getString(R.string.account_management_header_one_parent_name, firstParent);
@@ -263,53 +287,7 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         }
     }
 
-    private void configureChildAccountPreferencesLegacy() {
-        Preference parentAccounts = findPreference(PREF_PARENT_ACCOUNTS);
-        Preference childContent = findPreference(PREF_CHILD_CONTENT);
-        if (mProfile.isChild()) {
-            PrefService prefService = UserPrefs.get(mProfile);
-
-            String firstParent = prefService.getString(Pref.SUPERVISED_USER_CUSTODIAN_EMAIL);
-            String secondParent =
-                    prefService.getString(Pref.SUPERVISED_USER_SECOND_CUSTODIAN_EMAIL);
-            String parentText;
-
-            if (!secondParent.isEmpty()) {
-                parentText = getString(
-                        R.string.account_management_two_parent_names, firstParent, secondParent);
-            } else if (!firstParent.isEmpty()) {
-                parentText = getString(R.string.account_management_one_parent_name, firstParent);
-            } else {
-                parentText = getString(R.string.account_management_no_parental_data);
-            }
-            parentAccounts.setSummary(parentText);
-
-            final int childContentSummary;
-            int defaultBehavior =
-                    prefService.getInteger(Pref.DEFAULT_SUPERVISED_USER_FILTERING_BEHAVIOR);
-            if (defaultBehavior == FilteringBehavior.BLOCK) {
-                childContentSummary = R.string.account_management_child_content_approved;
-            } else if (prefService.getBoolean(Pref.SUPERVISED_USER_SAFE_SITES)) {
-                childContentSummary = R.string.account_management_child_content_filter_mature;
-            } else {
-                childContentSummary = R.string.account_management_child_content_all;
-            }
-            childContent.setSummary(childContentSummary);
-
-            Drawable newIcon = ApiCompatibilityUtils.getDrawable(
-                    getResources(), R.drawable.ic_drive_site_white_24dp);
-            newIcon.mutate().setColorFilter(
-                    SemanticColorUtils.getDefaultIconColor(getContext()), PorterDuff.Mode.SRC_IN);
-            childContent.setIcon(newIcon);
-        } else {
-            PreferenceScreen prefScreen = getPreferenceScreen();
-            prefScreen.removePreference(findPreference(PREF_PARENTAL_SETTINGS));
-            prefScreen.removePreference(parentAccounts);
-            prefScreen.removePreference(childContent);
-        }
-    }
-
-    private void updateAccountsList(List<Account> accounts) {
+    private void updateAccountsList(List<AccountInfo> accounts) {
         // This method is called asynchronously on accounts fetched from AccountManagerFacade.
         // Make sure the fragment is alive before updating preferences.
         if (!isResumed()) return;
@@ -325,35 +303,37 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         accountsCategory.removeAll();
 
         accountsCategory.addPreference(
-                createAccountPreference(AccountUtils.createAccountFromName(mSignedInAccountName)));
+                createAccountPreference(assumeNonNull(mSignedInCoreAccountInfo)));
         accountsCategory.addPreference(
                 createDividerPreference(R.layout.account_divider_preference));
         accountsCategory.addPreference(createManageYourGoogleAccountPreference());
-        accountsCategory.addPreference(createDividerPreference(R.layout.divider_preference));
+        accountsCategory.addPreference(createDividerPreference(R.layout.horizontal_divider));
 
-        for (Account account : accounts) {
-            if (!mSignedInAccountName.equals(account.name)) {
+        for (CoreAccountInfo account : accounts) {
+            if (!account.equals(mSignedInCoreAccountInfo)) {
                 accountsCategory.addPreference(createAccountPreference(account));
             }
         }
-
-        if (!mProfile.isChild()
-                || ChromeFeatureList.isEnabled(
-                        ChromeFeatureList
-                                .ADD_EDU_ACCOUNT_FROM_ACCOUNT_SETTINGS_FOR_SUPERVISED_USERS)) {
-            accountsCategory.addPreference(createAddAccountPreference());
-        }
+        accountsCategory.addPreference(createAddAccountPreference());
     }
 
-    private Preference createAccountPreference(Account account) {
+    private Preference createAccountPreference(CoreAccountInfo coreAccountInfo) {
         Preference accountPreference = new Preference(getStyledContext());
         accountPreference.setLayoutResource(R.layout.account_management_account_row);
-        accountPreference.setTitle(account.name);
-        accountPreference.setIcon(
-                mProfileDataCache.getProfileDataOrDefault(account.name).getImage());
 
-        accountPreference.setOnPreferenceClickListener(SyncSettingsUtils.toOnClickListener(
-                this, () -> SigninUtils.openSettingsForAccount(getActivity(), account)));
+        DisplayableProfileData profileData =
+                mProfileDataCache.getProfileDataOrDefault(coreAccountInfo.getEmail());
+        accountPreference.setTitle(
+                SyncSettingsUtils.getDisplayableFullNameOrEmailWithPreference(
+                        profileData, getContext(), SyncSettingsUtils.TitlePreference.EMAIL));
+        accountPreference.setIcon(profileData.getImage());
+
+        accountPreference.setOnPreferenceClickListener(
+                SyncSettingsUtils.toOnClickListener(
+                        this,
+                        () ->
+                                SigninUtils.openSettingsForAccount(
+                                        getActivity(), coreAccountInfo.getEmail())));
 
         return accountPreference;
     }
@@ -363,10 +343,22 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         manageYourGoogleAccountPreference.setLayoutResource(
                 R.layout.account_management_account_row);
         manageYourGoogleAccountPreference.setTitle(R.string.manage_your_google_account);
-        manageYourGoogleAccountPreference.setIcon(R.drawable.ic_google_services_48dp);
+        Drawable googleServicesIcon =
+                UiUtils.getTintedDrawable(
+                        getContext(),
+                        R.drawable.ic_google_services_48dp,
+                        R.color.default_icon_color_tint_list);
+        manageYourGoogleAccountPreference.setIcon(googleServicesIcon);
         manageYourGoogleAccountPreference.setOnPreferenceClickListener(
                 SyncSettingsUtils.toOnClickListener(
-                        this, () -> SyncSettingsUtils.openGoogleMyAccount(getActivity())));
+                        this,
+                        () -> {
+                            assert assertNonNull(
+                                            IdentityServicesProvider.get()
+                                                    .getIdentityManager(getProfile()))
+                                    .hasPrimaryAccount(ConsentLevel.SIGNIN);
+                            SyncSettingsUtils.openGoogleMyAccount(getActivity());
+                        }));
 
         return manageYourGoogleAccountPreference;
     }
@@ -383,33 +375,40 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         addAccountPreference.setLayoutResource(R.layout.account_management_account_row);
         addAccountPreference.setIcon(R.drawable.ic_person_add_40dp);
         addAccountPreference.setTitle(R.string.signin_add_account_to_device);
-        addAccountPreference.setOnPreferenceClickListener(preference -> {
-            if (!isVisible() || !isResumed()) return false;
+        addAccountPreference.setOnPreferenceClickListener(
+                preference -> {
+                    if (!isVisible() || !isResumed()) return false;
 
-            SigninMetricsUtils.logProfileAccountManagementMenu(
-                    ProfileAccountManagementMetrics.ADD_ACCOUNT, mGaiaServiceType);
+                    AccountManagerFacade accountManagerFacade =
+                            AccountManagerFacadeProvider.getInstance();
+                    accountManagerFacade.createAddAccountIntent(
+                            null,
+                            (@Nullable Intent intent) -> {
+                                if (!isVisible() || !isResumed()) return;
 
-            AccountManagerFacade accountManagerFacade = AccountManagerFacadeProvider.getInstance();
-            accountManagerFacade.createAddAccountIntent((@Nullable Intent intent) -> {
-                if (!isVisible() || !isResumed()) return;
+                                if (intent != null) {
+                                    startActivity(intent);
+                                } else {
+                                    // AccountManagerFacade couldn't create intent, use SigninUtils
+                                    // to open settings instead.
+                                    SigninUtils.openSettingsForAllAccounts(getActivity());
+                                }
 
-                if (intent != null) {
-                    startActivity(intent);
-                } else {
-                    // AccountManagerFacade couldn't create intent, use SigninUtils to open
-                    // settings instead.
-                    SigninUtils.openSettingsForAllAccounts(getActivity());
-                }
-
-                // Return to the last opened tab if triggered from the content area.
-                if (mGaiaServiceType != GAIAServiceType.GAIA_SERVICE_TYPE_NONE) {
-                    if (isAdded()) getActivity().finish();
-                }
-            });
-            return true;
-        });
+                                // Return to the last opened tab if triggered from the content area.
+                                if (mGaiaServiceType != GAIAServiceType.GAIA_SERVICE_TYPE_NONE) {
+                                    SettingsNavigationFactory.createSettingsNavigation()
+                                            .finishCurrentSettings(this);
+                                }
+                            });
+                    return true;
+                });
         addAccountPreference.setManagedPreferenceDelegate(
-                (ChromeManagedPreferenceDelegate) preference -> !canAddAccounts());
+                new ChromeManagedPreferenceDelegate(getProfile()) {
+                    @Override
+                    public boolean isPreferenceControlledByPolicy(Preference preference) {
+                        return !canAddAccounts();
+                    }
+                });
         return addAccountPreference;
     }
 
@@ -417,15 +416,22 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         return getPreferenceManager().getContext();
     }
 
-    private void setAccountBadges(List<Account> accounts) {
-        for (Account account : accounts) {
-            AccountManagerFacadeProvider.getInstance().checkChildAccountStatus(
-                    account, (isChild, childAccount) -> {
-                        if (isChild) {
-                            mProfileDataCache.setBadge(
-                                    childAccount, R.drawable.ic_account_child_20dp);
-                        }
-                    });
+    private void setAccountBadges(List<AccountInfo> accounts) {
+        for (CoreAccountInfo account : accounts) {
+            AccountManagerFacadeProvider.getInstance()
+                    .checkIsSubjectToParentalControls(
+                            account,
+                            (isChild, childAccount) -> {
+                                Context context = getContext();
+                                if (isChild && context != null) {
+                                    mProfileDataCache.setBadge(
+                                            assumeNonNull(childAccount).getEmail(),
+                                            ProfileDataCache
+                                                    .createDefaultSizeChildAccountBadgeConfig(
+                                                            context,
+                                                            R.drawable.ic_account_child_20dp));
+                                }
+                            });
         }
     }
 
@@ -435,39 +441,7 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         AccountManagerFacadeProvider.getInstance().getAccounts().then(this::updateAccountsList);
     }
 
-    // SignOutDialogListener implementation:
-    @Override
-    public void onSignOutClicked(boolean forceWipeUserData) {
-        // In case the user reached this fragment without being signed in, we guard the sign out so
-        // we do not hit a native crash.
-        if (!IdentityServicesProvider.get()
-                        .getIdentityManager(Profile.getLastUsedRegularProfile())
-                        .hasPrimaryAccount(ConsentLevel.SIGNIN)) {
-            return;
-        }
-        final DialogFragment clearDataProgressDialog = new ClearDataProgressDialog();
-        IdentityServicesProvider.get()
-                .getSigninManager(Profile.getLastUsedRegularProfile())
-                .signOut(SignoutReason.USER_CLICKED_SIGNOUT_SETTINGS,
-                        new SigninManager.SignOutCallback() {
-                            @Override
-                            public void preWipeData() {
-                                clearDataProgressDialog.show(
-                                        getFragmentManager(), CLEAR_DATA_PROGRESS_DIALOG_TAG);
-                            }
-
-                            @Override
-                            public void signOutComplete() {
-                                if (clearDataProgressDialog.isAdded()) {
-                                    clearDataProgressDialog.dismissAllowingStateLoss();
-                                }
-                            }
-                        },
-                        forceWipeUserData);
-    }
-
     // SignInStateObserver implementation:
-
     @Override
     public void onSignedIn() {
         update();
@@ -478,6 +452,113 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
         update();
     }
 
+    // IdentityErrorCardPreference.Listener implementation.
+    @Override
+    public void onIdentityErrorCardButtonClicked(@UserActionableError int error) {
+        assert mSignedInCoreAccountInfo != null;
+        switch (error) {
+            case UserActionableError.SIGN_IN_NEEDS_UPDATE:
+                AccountManagerFacadeProvider.getInstance()
+                        .updateCredentials(
+                                CoreAccountInfo.getAndroidAccountFrom(mSignedInCoreAccountInfo),
+                                getActivity(),
+                                null);
+                return;
+            case UserActionableError.NEEDS_CLIENT_UPGRADE:
+                // Opens the client in play store for update.
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setData(
+                        Uri.parse(
+                                "market://details?id="
+                                        + ContextUtils.getApplicationContext().getPackageName()));
+                startActivity(intent);
+                return;
+            case UserActionableError.NEEDS_PASSPHRASE:
+                displayPassphraseDialog();
+                return;
+            case UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_EVERYTHING:
+            case UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_PASSWORDS:
+                SyncSettingsUtils.openTrustedVaultKeyRetrievalDialog(
+                        this, mSignedInCoreAccountInfo, REQUEST_CODE_TRUSTED_VAULT_KEY_RETRIEVAL);
+                return;
+            case UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_EVERYTHING:
+            case UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_PASSWORDS:
+                SyncSettingsUtils.openTrustedVaultRecoverabilityDegradedDialog(
+                        this,
+                        mSignedInCoreAccountInfo,
+                        REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED);
+                return;
+            case UserActionableError.UNRECOVERABLE_ERROR:
+            case UserActionableError.NEEDS_SETTINGS_CONFIRMATION:
+                // Identity error card is not shown for unrecoverable errors nor for sync setup
+                // incomplete error (the latter is shown as part of sync error in the manage sync
+                // settings page).
+                assert false; // NOTREACHED()
+                // fall through
+            case UserActionableError.NONE:
+            default:
+                return;
+        }
+    }
+
+    /**
+     * Called upon completion of an activity started by a previous call to startActivityForResult()
+     * via SyncSettingsUtils.openTrustedVaultKeyRetrievalDialog() or
+     * SyncSettingsUtils.openTrustedVaultRecoverabilityDegradedDialog().
+     *
+     * @param requestCode Request code of the requested intent.
+     * @param resultCode Result code of the requested intent.
+     * @param data The data returned by the intent.
+     */
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        // Upon key retrieval completion, the keys in TrustedVaultClient could have changed. This is
+        // done even if the user cancelled the flow (i.e. resultCode != RESULT_OK) because it's
+        // harmless to issue a redundant notifyKeysChanged().
+        if (requestCode == REQUEST_CODE_TRUSTED_VAULT_KEY_RETRIEVAL) {
+            TrustedVaultClient.get()
+                    .notifyKeysChanged(TrustedVaultUserActionTriggerForUMA.SETTINGS);
+        }
+        if (requestCode == REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED) {
+            TrustedVaultClient.get().notifyRecoverabilityChanged();
+        }
+    }
+
+    private void displayPassphraseDialog() {
+        FragmentTransaction ft = assumeNonNull(getFragmentManager()).beginTransaction();
+        PassphraseDialogFragment.newInstance(this).show(ft, FRAGMENT_ENTER_PASSPHRASE);
+    }
+
+    /** Returns whether the passphrase successfully decrypted the pending keys. */
+    private boolean handleDecryption(String passphrase) {
+        if (passphrase.isEmpty() || !mSyncService.setDecryptionPassphrase(passphrase)) {
+            return false;
+        }
+        // PassphraseDialogFragment doesn't handle closing itself, so do it here. This is not done
+        // in updateSyncStateFromAndroidSyncSettings() because that happens onResume and possibly in
+        // other cases where the dialog should stay open.
+        closeDialogIfOpen(FRAGMENT_ENTER_PASSPHRASE);
+        // Update UI.
+        update();
+        return true;
+    }
+
+    /** Callback for PassphraseDialogFragment.Listener */
+    @Override
+    public boolean onPassphraseEntered(String passphrase) {
+        if (!mSyncService.isEngineInitialized()
+                || !mSyncService.isPassphraseRequiredForPreferredDataTypes()) {
+            // If the engine was shut down since the dialog was opened, or the passphrase isn't
+            // required anymore, do nothing.
+            return false;
+        }
+        return handleDecryption(passphrase);
+    }
+
+    /** Callback for PassphraseDialogFragment.Listener */
+    @Override
+    public void onPassphraseCanceled() {}
+
     /**
      * Open the account management UI.
      * @param serviceType A signin::GAIAServiceType that triggered the dialog.
@@ -486,8 +567,40 @@ public class AccountManagementFragment extends PreferenceFragmentCompat
             Context context, @GAIAServiceType int serviceType) {
         Bundle arguments = new Bundle();
         arguments.putInt(SHOW_GAIA_SERVICE_TYPE_EXTRA, serviceType);
-        SettingsLauncher settingsLauncher = new SettingsLauncherImpl();
-        settingsLauncher.launchSettingsActivity(
-                context, AccountManagementFragment.class, arguments);
+        SettingsNavigation settingsNavigation =
+                SettingsNavigationFactory.createSettingsNavigation();
+        settingsNavigation.startSettings(
+                context, AccountManagementFragment.class, arguments, /* addToBackStack= */ true);
     }
+
+    private void closeDialogIfOpen(String tag) {
+        FragmentManager manager = getFragmentManager();
+        if (manager == null) {
+            // Do nothing if the manager doesn't exist yet; see http://crbug.com/480544.
+            return;
+        }
+        DialogFragment df = (DialogFragment) manager.findFragmentByTag(tag);
+        if (df != null) {
+            df.dismiss();
+        }
+    }
+
+    @Override
+    public @AnimationType int getAnimationType() {
+        return AnimationType.PROPERTY;
+    }
+
+    IdentityManager getIdentityManager() {
+        return assumeNonNull(IdentityServicesProvider.get().getIdentityManager(getProfile()));
+    }
+
+    SigninManager getSigninManager() {
+        return assumeNonNull(IdentityServicesProvider.get().getSigninManager(getProfile()));
+    }
+
+    // TODO(crbug.com/444470792): Determine what pieces of logic are dynamic and need handling.
+    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
+            new ChromeBaseSearchIndexProvider(
+                    AccountManagementFragment.class.getName(),
+                    R.xml.account_management_preferences);
 }

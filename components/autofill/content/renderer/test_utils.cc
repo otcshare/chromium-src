@@ -4,19 +4,20 @@
 
 #include "components/autofill/content/renderer/test_utils.h"
 
+#include "base/strings/strcat.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
-#include "third_party/blink/public/web/web_form_control_element.h"
-#include "third_party/blink/public/web/web_form_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_node.h"
 #include "third_party/blink/public/web/web_remote_frame.h"
 
 using blink::WebDocument;
 using blink::WebElement;
-using blink::WebFormControlElement;
-using blink::WebFormElement;
+using blink::WebFrame;
+using blink::WebLocalFrame;
+using blink::WebNode;
 using blink::WebString;
 
 namespace autofill {
@@ -24,42 +25,53 @@ namespace autofill {
 using AllowNull = base::StrongAlias<struct AllowNullTag, bool>;
 
 WebElement GetElementById(const WebDocument& doc,
-                          base::StringPiece id,
+                          std::string_view id,
                           AllowNull allow_null) {
   WebElement e = doc.GetElementById(WebString::FromASCII(std::string(id)));
-  CHECK(allow_null || !e.IsNull());
+  CHECK(allow_null || e);
   return e;
 }
 
-WebFormControlElement GetFormControlElementById(const WebDocument& doc,
-                                                base::StringPiece id,
-                                                AllowNull allow_null) {
-  return GetElementById(doc, id, allow_null).To<WebFormControlElement>();
-}
-
-WebFormElement GetFormElementById(const WebDocument& doc,
-                                  base::StringPiece id,
-                                  AllowNull allow_null) {
-  return GetElementById(doc, id, allow_null).To<WebFormElement>();
+WebElement GetElementById(const WebNode& node,
+                          std::string_view id,
+                          AllowNull allow_null) {
+  WebElement e =
+      node.QuerySelector(WebString::FromASCII(base::StrCat({"#", id})));
+  CHECK(allow_null || e);
+  return e;
 }
 
 content::RenderFrame* GetIframeById(const WebDocument& doc,
-                                    base::StringPiece id,
+                                    std::string_view id,
                                     AllowNull allow_null) {
   WebElement iframe = GetElementById(doc, id, allow_null);
   CHECK(allow_null || iframe.HasHTMLTagName("iframe"));
-  return !iframe.IsNull() ? content::RenderFrame::FromWebFrame(
-                                blink::WebFrame::FromFrameOwnerElement(iframe)
-                                    ->ToWebLocalFrame())
-                          : nullptr;
+  return iframe
+             ? content::RenderFrame::FromWebFrame(
+                   WebFrame::FromFrameOwnerElement(iframe)->ToWebLocalFrame())
+             : nullptr;
 }
 
-FrameToken GetFrameToken(const blink::WebDocument& doc,
-                         base::StringPiece id,
+WebDocument GetIframeDocumentById(const WebDocument& doc,
+                                  std::string_view id,
+                                  AllowNull allow_null) {
+  content::RenderFrame* render_frame = GetIframeById(doc, id, allow_null);
+  CHECK(allow_null || render_frame);
+  WebLocalFrame* web_local_frame =
+      render_frame ? render_frame->GetWebFrame() : nullptr;
+  CHECK(allow_null || web_local_frame);
+  WebDocument child_document =
+      web_local_frame ? web_local_frame->GetDocument() : WebDocument();
+  CHECK(allow_null || child_document);
+  return child_document;
+}
+
+FrameToken GetFrameToken(const WebDocument& doc,
+                         std::string_view id,
                          AllowNull allow_null) {
   WebElement iframe = GetElementById(doc, id, allow_null);
   CHECK(allow_null || iframe.HasHTMLTagName("iframe"));
-  blink::WebFrame* frame = blink::WebFrame::FromFrameOwnerElement(iframe);
+  WebFrame* frame = WebFrame::FromFrameOwnerElement(iframe);
   if (frame && frame->IsWebLocalFrame()) {
     return LocalFrameToken(
         frame->ToWebLocalFrame()->GetLocalFrameToken().value());

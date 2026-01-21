@@ -8,20 +8,19 @@
 #include <limits.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
-#include "base/big_endian.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "net/dns/public/dns_protocol.h"
@@ -50,11 +49,16 @@ DohProviderEntry::List GetDohProviderEntriesFromNameservers(
   DohProviderEntry::List entries;
 
   for (const auto& server : dns_servers) {
-    for (const auto* entry : providers) {
+    for (const net::DohProviderEntry* entry : providers) {
       // DoH servers should only be added once.
-      if (base::FeatureList::IsEnabled(entry->feature) &&
-          base::Contains(entry->ip_addresses, server.address()) &&
-          !base::Contains(entries, entry)) {
+      // Note: Check whether the provider is enabled *after* we've determined
+      // that the IP addresses match so that if we are doing experimentation via
+      // Finch, the experiment only includes possible users of the
+      // corresponding DoH provider (since the client will be included in the
+      // experiment if the provider feature flag is checked).
+      if (entry->ip_addresses.contains(server.address()) &&
+          base::FeatureList::IsEnabled(entry->feature.get()) &&
+          !std::ranges::contains(entries, entry)) {
         entries.push_back(entry);
       }
     }
@@ -80,7 +84,7 @@ bool GetTimeDeltaForConnectionTypeFromFieldTrial(
   std::string group = base::FieldTrialList::FindFullName(field_trial);
   if (group.empty())
     return false;
-  std::vector<base::StringPiece> group_parts = base::SplitStringPiece(
+  std::vector<std::string_view> group_parts = base::SplitStringPiece(
       group, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (type < 0)
     return false;
@@ -106,19 +110,17 @@ base::TimeDelta GetTimeDeltaForConnectionTypeFromFieldTrialOrDefault(
   return out;
 }
 
-std::string CreateNamePointer(uint16_t offset) {
+std::array<uint8_t, 2> CreateNamePointer(uint16_t offset) {
   DCHECK_EQ(offset & ~dns_protocol::kOffsetMask, 0);
-  char buf[2];
-  base::WriteBigEndian(buf, offset);
-  buf[0] |= dns_protocol::kLabelPointer;
-  return std::string(buf, sizeof(buf));
+  std::array<uint8_t, 2> buf = base::U16ToBigEndian(offset);
+  buf[0u] |= dns_protocol::kLabelPointer;
+  return buf;
 }
 
 uint16_t DnsQueryTypeToQtype(DnsQueryType dns_query_type) {
   switch (dns_query_type) {
     case DnsQueryType::UNSPECIFIED:
       NOTREACHED();
-      return 0;
     case DnsQueryType::A:
       return dns_protocol::kTypeA;
     case DnsQueryType::AAAA:
@@ -144,7 +146,6 @@ DnsQueryType AddressFamilyToDnsQueryType(AddressFamily address_family) {
       return DnsQueryType::AAAA;
     default:
       NOTREACHED();
-      return DnsQueryType::UNSPECIFIED;
   }
 }
 
@@ -155,9 +156,14 @@ std::vector<DnsOverHttpsServerConfig> GetDohUpgradeServersFromDotHostname(
   if (dot_server.empty())
     return doh_servers;
 
-  for (const auto* entry : DohProviderEntry::GetList()) {
-    if (base::FeatureList::IsEnabled(entry->feature) &&
-        base::Contains(entry->dns_over_tls_hostnames, dot_server)) {
+  for (const net::DohProviderEntry* entry : DohProviderEntry::GetList()) {
+    // Note: Check whether the provider is enabled *after* we've determined that
+    // the hostnames match so that if we are doing experimentation via Finch,
+    // the experiment only includes possible users of the corresponding DoH
+    // provider (since the client will be included in the experiment if the
+    // provider feature flag is checked).
+    if (entry->dns_over_tls_hostnames.contains(dot_server) &&
+        base::FeatureList::IsEnabled(entry->feature.get())) {
       doh_servers.push_back(entry->doh_server_config);
     }
   }
@@ -169,24 +175,23 @@ std::vector<DnsOverHttpsServerConfig> GetDohUpgradeServersFromNameservers(
   const auto entries = GetDohProviderEntriesFromNameservers(dns_servers);
   std::vector<DnsOverHttpsServerConfig> doh_servers;
   doh_servers.reserve(entries.size());
-  std::transform(entries.begin(), entries.end(),
-                 std::back_inserter(doh_servers),
-                 [](const auto* entry) { return entry->doh_server_config; });
+  std::ranges::transform(entries, std::back_inserter(doh_servers),
+                         &DohProviderEntry::doh_server_config);
   return doh_servers;
 }
 
 std::string GetDohProviderIdForHistogramFromServerConfig(
     const DnsOverHttpsServerConfig& doh_server) {
   const auto& entries = DohProviderEntry::GetList();
-  const auto it = base::ranges::find(entries, doh_server,
-                                     &DohProviderEntry::doh_server_config);
-  return it != entries.end() ? (*it)->provider : "Other";
+  const auto it = std::ranges::find(entries, doh_server,
+                                    &DohProviderEntry::doh_server_config);
+  return it != entries.end() ? std::string((*it)->provider) : "Other";
 }
 
 std::string GetDohProviderIdForHistogramFromNameserver(
     const IPEndPoint& nameserver) {
   const auto entries = GetDohProviderEntriesFromNameservers({nameserver});
-  return entries.empty() ? "Other" : entries[0]->provider;
+  return entries.empty() ? "Other" : std::string(entries[0]->provider);
 }
 
 std::string SecureDnsModeToString(const SecureDnsMode secure_dns_mode) {

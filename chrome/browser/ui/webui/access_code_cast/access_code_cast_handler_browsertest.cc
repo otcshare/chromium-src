@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include "chrome/test/media_router/access_code_cast/access_code_cast_integration_browsertest.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
@@ -25,8 +28,7 @@ IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
 
   // This tests that if the network is not present (we are not connected to the
   // internet), we will see a server error in the access code dialog box.
-  SetUpPrimaryAccountWithHostedDomain(signin::ConsentLevel::kSync,
-                                      browser()->profile());
+  SetUpPrimaryAccountWithHostedDomain(browser()->profile());
 
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
       network::mojom::ConnectionType::CONNECTION_NONE);
@@ -78,8 +80,7 @@ IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
 
   EnableAccessCodeCasting();
 
-  SetUpPrimaryAccountWithHostedDomain(signin::ConsentLevel::kSync,
-                                      browser()->profile());
+  SetUpPrimaryAccountWithHostedDomain(browser()->profile());
 
   auto* dialog_contents = ShowDialog();
   SetAccessCode("abcdef", dialog_contents);
@@ -94,13 +95,18 @@ IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
-                       ExpectProfileSynErrorWhenNoSync) {
+                       ExpectErrorWhenNoSigninError) {
   EnableAccessCodeCasting();
 
-  // This tests that an account that does not have Sync enabled will throw a
-  // generic error.
-  SetUpPrimaryAccountWithHostedDomain(signin::ConsentLevel::kSignin,
-                                      browser()->profile());
+  // This tests that an account with auth error will throw a generic error.
+  SetUpPrimaryAccountWithHostedDomain(browser()->profile());
+  signin::IdentityManager* identity_manager =
+      AccessCodeCastSinkServiceFactory::GetForProfile(browser()->profile())
+          ->GetIdentityManager();
+  signin::UpdatePersistentErrorOfRefreshTokenForAccount(
+      identity_manager,
+      identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
+      GoogleServiceAuthError(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
 
   auto* dialog_contents = ShowDialog();
   SetAccessCode("abcdef", dialog_contents);
@@ -114,16 +120,57 @@ IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
   CloseDialog(dialog_contents);
 }
 
-// TODO(b/260627828): This test is flaky on mac.
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-#define MAYBE_ReturnSuccessfulResponseUsingKeyPress \
-  DISABLED_ReturnSuccessfulResponseUsingKeyPress
-#else
-#define MAYBE_ReturnSuccessfulResponseUsingKeyPress \
-  ReturnSuccessfulResponseUsingKeyPress
-#endif
 IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
-                       MAYBE_ReturnSuccessfulResponseUsingKeyPress) {
+                       ExpectDifferentNetworkErrorWhenChannelError) {
+  const char kEndpointResponseSuccess[] =
+      R"({
+      "device": {
+        "displayName": "test_device",
+        "id": "1234",
+        "deviceCapabilities": {
+          "videoOut": true,
+          "videoIn": true,
+          "audioOut": true,
+          "audioIn": true,
+          "devMode": true
+        },
+        "networkInfo": {
+          "hostName": "GoogleNet",
+          "port": "666",
+          "ipV4Address": "192.0.2.146",
+          "ipV6Address": "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+        }
+      }
+    })";
+
+  // Mock a successful fetch from our server.
+  SetEndpointFetcherMockResponse(kEndpointResponseSuccess, net::HTTP_OK,
+                                 net::OK);
+
+  // Simulate the failure of opening a channel. This will trigger the correct
+  // error code below.
+  SetMockOpenChannelCallbackResponse(false);
+
+  EnableAccessCodeCasting();
+
+  SetUpPrimaryAccountWithHostedDomain(browser()->profile());
+
+  auto* dialog_contents = ShowDialog();
+  SetAccessCode("abcdef", dialog_contents);
+
+  PressSubmit(dialog_contents);
+
+  // This error code corresponds to
+  // ErrorMessage.DIFFERENT_NETWORK::AddSinkResultCode.CHANNEL_OPEN_ERROR. This
+  // error code 7 refers to the ErrorMessage described within
+  // chrome/browser/resources/access_code_cast/error_message/error_message.ts
+  EXPECT_EQ(7, WaitForAddSinkErrorCode(dialog_contents));
+  CloseDialog(dialog_contents);
+}
+
+// TODO(b/260627828): This test is flaky on all platforms.
+IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
+                       DISABLED_ReturnSuccessfulResponseUsingKeyPress) {
   const char kEndpointResponseSuccess[] =
       R"({
       "device": {
@@ -154,8 +201,7 @@ IN_PROC_BROWSER_TEST_F(AccessCodeCastHandlerBrowserTest,
 
   EnableAccessCodeCasting();
 
-  SetUpPrimaryAccountWithHostedDomain(signin::ConsentLevel::kSync,
-                                      browser()->profile());
+  SetUpPrimaryAccountWithHostedDomain(browser()->profile());
 
   auto* dialog_contents = ShowDialog();
   SetAccessCodeUsingKeyPress("ABCDEF");

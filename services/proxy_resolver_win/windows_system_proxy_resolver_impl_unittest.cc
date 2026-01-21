@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "services/proxy_resolver_win/windows_system_proxy_resolver_impl.h"
 
 #include <windows.h>
+
 #include <winhttp.h>
 
 #include <memory>
@@ -12,13 +18,14 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
@@ -27,8 +34,9 @@
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_list.h"
 #include "net/proxy_resolution/win/windows_system_proxy_resolution_service.h"
+#include "net/proxy_resolution/win/winhttp_status.h"
 #include "net/test/test_with_task_environment.h"
-#include "services/proxy_resolver_win/public/mojom/proxy_resolver_win.mojom.h"
+#include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
 #include "services/proxy_resolver_win/winhttp_api_wrapper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -38,6 +46,58 @@ namespace proxy_resolver_win {
 namespace {
 
 const GURL kUrl("https://example.test:8080/");
+
+static_assert(static_cast<int>(proxy_resolver::mojom::WinHttpStatus::kOk) ==
+                  static_cast<int>(net::WinHttpStatus::kOk),
+              "WinHttpStatus::kOk mismatch");
+static_assert(
+    static_cast<int>(proxy_resolver::mojom::WinHttpStatus::kAborted) ==
+        static_cast<int>(net::WinHttpStatus::kAborted),
+    "WinHttpStatus::kAborted mismatch");
+static_assert(static_cast<int>(
+                  proxy_resolver::mojom::WinHttpStatus::kWinHttpOpenFailed) ==
+                  static_cast<int>(net::WinHttpStatus::kWinHttpOpenFailed),
+              "WinHttpStatus::kWinHttpOpenFailed mismatch");
+static_assert(
+    static_cast<int>(
+        proxy_resolver::mojom::WinHttpStatus::kWinHttpSetTimeoutsFailed) ==
+        static_cast<int>(net::WinHttpStatus::kWinHttpSetTimeoutsFailed),
+    "WinHttpStatus::kWinHttpSetTimeoutsFailed mismatch");
+static_assert(
+    static_cast<int>(proxy_resolver::mojom::WinHttpStatus::
+                         kWinHttpSetStatusCallbackFailed) ==
+        static_cast<int>(net::WinHttpStatus::kWinHttpSetStatusCallbackFailed),
+    "WinHttpStatus::kWinHttpSetStatusCallbackFailed mismatch");
+static_assert(
+    static_cast<int>(proxy_resolver::mojom::WinHttpStatus::
+                         kWinHttpGetIEProxyConfigForCurrentUserFailed) ==
+        static_cast<int>(
+            net::WinHttpStatus::kWinHttpGetIEProxyConfigForCurrentUserFailed),
+    "WinHttpStatus::kWinHttpGetIEProxyConfigForCurrentUserFailed mismatch");
+static_assert(
+    static_cast<int>(proxy_resolver::mojom::WinHttpStatus::
+                         kWinHttpCreateProxyResolverFailed) ==
+        static_cast<int>(net::WinHttpStatus::kWinHttpCreateProxyResolverFailed),
+    "WinHttpStatus::kWinHttpCreateProxyResolverFailed mismatch");
+static_assert(
+    static_cast<int>(
+        proxy_resolver::mojom::WinHttpStatus::kWinHttpGetProxyForURLExFailed) ==
+        static_cast<int>(net::WinHttpStatus::kWinHttpGetProxyForURLExFailed),
+    "WinHttpStatus::kWinHttpGetProxyForURLExFailed mismatch");
+static_assert(
+    static_cast<int>(
+        proxy_resolver::mojom::WinHttpStatus::kStatusCallbackFailed) ==
+        static_cast<int>(net::WinHttpStatus::kStatusCallbackFailed),
+    "WinHttpStatus::kStatusCallbackFailed mismatch");
+static_assert(
+    static_cast<int>(
+        proxy_resolver::mojom::WinHttpStatus::kWinHttpGetProxyResultFailed) ==
+        static_cast<int>(net::WinHttpStatus::kWinHttpGetProxyResultFailed),
+    "WinHttpStatus::kWinHttpGetProxyResultFailed mismatch");
+static_assert(
+    static_cast<int>(proxy_resolver::mojom::WinHttpStatus::kEmptyProxyList) ==
+        static_cast<int>(net::WinHttpStatus::kEmptyProxyList),
+    "WinHttpStatus::kEmptyProxyList mismatch");
 
 // This limit is arbitrary and exists only to make memory management in this
 // test easier.
@@ -378,14 +438,24 @@ class WindowsSystemProxyResolverImplTest : public testing::Test {
     return winhttp_api_wrapper_.get();
   }
 
-  void ValidateProxyResult(base::OnceClosure closure,
-                           const net::ProxyList& expected_proxy_list,
-                           net::WinHttpStatus expected_winhttp_status,
-                           int expected_windows_error,
-                           const net::ProxyList& actual_proxy_list,
-                           net::WinHttpStatus actual_winhttp_status,
-                           int actual_windows_error) {
+  net::WinHttpStatus CallEnsureInitialized() {
+    return proxy_resolver_->EnsureInitialized();
+  }
+
+  void ValidateProxyResult(
+      base::OnceClosure closure,
+      const net::ProxyList& expected_proxy_list,
+      net::WinHttpStatus expected_winhttp_status,
+      int expected_windows_error,
+      const net::ProxyList& actual_proxy_list,
+      proxy_resolver::mojom::SystemProxyResolutionStatusPtr status) {
     EXPECT_TRUE(expected_proxy_list.Equals(actual_proxy_list));
+
+    ASSERT_TRUE(status);
+    net::WinHttpStatus actual_winhttp_status = status->win_http_status.value_or(
+        net::WinHttpStatus::kStatusCallbackFailed);
+    int actual_windows_error = status->os_error;
+
     EXPECT_EQ(expected_winhttp_status, actual_winhttp_status);
     EXPECT_EQ(expected_windows_error, actual_windows_error);
     std::move(closure).Run();
@@ -407,6 +477,7 @@ class WindowsSystemProxyResolverImplTest : public testing::Test {
   // WindowsSystemProxyResolverImpl.
   void DoFailedGetProxyForUrlTest(net::WinHttpStatus winhttp_status,
                                   int windows_error) {
+    ::SetLastError(windows_error);
     PerformGetProxyForUrlAndValidateResult(net::ProxyList(), winhttp_status,
                                            windows_error);
   }
@@ -427,7 +498,7 @@ class WindowsSystemProxyResolverImplTest : public testing::Test {
     std::wstring proxy;
     if (!proxy_config.proxy_rules().single_proxies.IsEmpty()) {
       proxy = base::UTF8ToWide(
-          proxy_config.proxy_rules().single_proxies.ToPacString());
+          proxy_config.proxy_rules().single_proxies.ToDebugString());
     }
 
     std::wstring proxy_bypass;
@@ -456,7 +527,8 @@ class WindowsSystemProxyResolverImplTest : public testing::Test {
   }
 
  protected:
-  mojo::Remote<mojom::WindowsSystemProxyResolver> proxy_resolver_remote_;
+  mojo::Remote<proxy_resolver::mojom::SystemProxyResolver>
+      proxy_resolver_remote_;
 
  private:
   base::test::TaskEnvironment task_environment_;
@@ -563,14 +635,14 @@ TEST_F(WindowsSystemProxyResolverImplTest,
 TEST_F(WindowsSystemProxyResolverImplTest, GetProxyForUrlDirect) {
   winhttp_api_wrapper()->AddDirectToProxyResults();
   net::ProxyList expected_proxy_list;
-  expected_proxy_list.AddProxyServer(net::ProxyServer::Direct());
+  expected_proxy_list.AddProxyChain(net::ProxyChain::Direct());
   DoGetProxyForUrlTest(expected_proxy_list);
 }
 
 TEST_F(WindowsSystemProxyResolverImplTest, GetProxyForUrlBypass) {
   winhttp_api_wrapper()->AddBypassToProxyResults();
   net::ProxyList expected_proxy_list;
-  expected_proxy_list.AddProxyServer(net::ProxyServer::Direct());
+  expected_proxy_list.AddProxyChain(net::ProxyChain::Direct());
   DoGetProxyForUrlTest(expected_proxy_list);
 }
 
@@ -621,7 +693,7 @@ TEST_F(WindowsSystemProxyResolverImplTest,
 
   winhttp_api_wrapper()->AddDirectToProxyResults();
   net::ProxyList expected_proxy_list;
-  expected_proxy_list.AddProxyServer(net::ProxyServer::Direct());
+  expected_proxy_list.AddProxyChain(net::ProxyChain::Direct());
   DoGetProxyForUrlTest(expected_proxy_list);
 }
 
@@ -633,9 +705,66 @@ TEST_F(WindowsSystemProxyResolverImplTest, GetProxyForUrlMultipleResults) {
   net::ProxyList expected_proxy_list;
   expected_proxy_list.AddProxyServer(
       net::PacResultElementToProxyServer("HTTPS foopy:8443"));
-  expected_proxy_list.AddProxyServer(net::ProxyServer::Direct());
+  expected_proxy_list.AddProxyChain(net::ProxyChain::Direct());
 
   DoGetProxyForUrlTest(expected_proxy_list);
+}
+
+TEST_F(WindowsSystemProxyResolverImplTest, EnsureInitializedSuccess) {
+  base::HistogramTester histogram_tester;
+
+  net::WinHttpStatus status = CallEnsureInitialized();
+
+  EXPECT_EQ(status, net::WinHttpStatus::kOk);
+
+  histogram_tester.ExpectUniqueSample(
+      "Net.HttpProxy.ProxyResolverWin.HttpSessionInitializationState",
+      net::WinHttpStatus::kOk, 1);
+}
+
+TEST_F(WindowsSystemProxyResolverImplTest,
+       EnsureInitializedFailsWithWinHttpOpen) {
+  base::HistogramTester histogram_tester;
+
+  winhttp_api_wrapper()->set_call_winhttp_open_success(false);
+
+  net::WinHttpStatus status = CallEnsureInitialized();
+
+  EXPECT_EQ(status, net::WinHttpStatus::kWinHttpOpenFailed);
+
+  histogram_tester.ExpectUniqueSample(
+      "Net.HttpProxy.ProxyResolverWin.HttpSessionInitializationState",
+      net::WinHttpStatus::kWinHttpOpenFailed, 1);
+}
+
+TEST_F(WindowsSystemProxyResolverImplTest,
+       EnsureInitializedFailsWithWinHttpSetTimeouts) {
+  base::HistogramTester histogram_tester;
+
+  winhttp_api_wrapper()->set_call_winhttp_set_timeouts_success(false);
+
+  net::WinHttpStatus status = CallEnsureInitialized();
+
+  EXPECT_EQ(status, net::WinHttpStatus::kWinHttpSetTimeoutsFailed);
+
+  histogram_tester.ExpectUniqueSample(
+      "Net.HttpProxy.ProxyResolverWin.HttpSessionInitializationState",
+      net::WinHttpStatus::kWinHttpSetTimeoutsFailed, 1);
+}
+
+TEST_F(WindowsSystemProxyResolverImplTest,
+       EnsureInitializedFailsWithWinHttpSetStatusCallback) {
+  base::HistogramTester histogram_tester;
+
+  winhttp_api_wrapper()->set_call_winhttp_set_status_callback_success(false);
+
+  net::WinHttpStatus status = CallEnsureInitialized();
+
+  EXPECT_EQ(status, net::WinHttpStatus::kWinHttpSetStatusCallbackFailed);
+
+  histogram_tester.ExpectUniqueSample(
+      "Net.HttpProxy.ProxyResolverWin.HttpSessionInitializationState",
+      net::WinHttpStatus::kWinHttpSetStatusCallbackFailed, 1);
 }
 
 }  // namespace proxy_resolver_win

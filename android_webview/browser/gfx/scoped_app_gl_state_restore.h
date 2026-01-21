@@ -30,6 +30,8 @@ struct StencilState {
 };
 
 // This class is not thread safe and should only be used on the UI thread.
+//
+// Lifetime: Temporary
 class ScopedAppGLStateRestore {
  public:
   enum CallMode {
@@ -39,7 +41,7 @@ class ScopedAppGLStateRestore {
 
   static ScopedAppGLStateRestore* Current();
 
-  ScopedAppGLStateRestore(CallMode mode, bool save_restore);
+  explicit ScopedAppGLStateRestore(CallMode mode);
 
   ScopedAppGLStateRestore(const ScopedAppGLStateRestore&) = delete;
   ScopedAppGLStateRestore& operator=(const ScopedAppGLStateRestore&) = delete;

@@ -4,13 +4,13 @@
 
 #include "components/prefs/mock_pref_change_callback.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 MockPrefChangeCallback::MockPrefChangeCallback(PrefService* prefs)
     : prefs_(prefs) {
 }
 
-MockPrefChangeCallback::~MockPrefChangeCallback() {}
+MockPrefChangeCallback::~MockPrefChangeCallback() = default;
 
 PrefChangeRegistrar::NamedChangeCallback MockPrefChangeCallback::GetCallback() {
   return base::BindRepeating(&MockPrefChangeCallback::OnPreferenceChanged,

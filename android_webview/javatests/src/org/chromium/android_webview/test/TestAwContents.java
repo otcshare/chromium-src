@@ -5,12 +5,14 @@
 package org.chromium.android_webview.test;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.view.ViewGroup;
 
 import org.chromium.android_webview.AwBrowserContext;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwContentsClient;
 import org.chromium.android_webview.AwSettings;
+import org.chromium.android_webview.gfx.AwDrawFnImpl;
 
 import java.util.ArrayList;
 
@@ -19,9 +21,7 @@ import java.util.ArrayList;
  * of AwContents
  */
 public class TestAwContents extends AwContents {
-    /**
-     * The observer of render process gone events.
-     */
+    /** The observer of render process gone events. */
     public interface RenderProcessGoneObserver {
         /**
          * Invoked when AwContents notified AwContentsClient about render
@@ -29,21 +29,31 @@ public class TestAwContents extends AwContents {
          */
         void onRenderProcessGoneNotifiedToAwContentsClient();
 
-        /**
-         * Invoked when AwContents has been destroyed.
-         */
+        /** Invoked when AwContents has been destroyed. */
         void onAwContentsDestroyed();
     }
 
-    private ArrayList<RenderProcessGoneObserver> mRenderProcessGoneObservers;
-    private RenderProcessGoneHelper mRenderProcessGoneHelper;
+    private final ArrayList<RenderProcessGoneObserver> mRenderProcessGoneObservers;
+    private final RenderProcessGoneHelper mRenderProcessGoneHelper;
 
-    public TestAwContents(AwBrowserContext browserContext, ViewGroup containerView, Context context,
+    public TestAwContents(
+            AwBrowserContext browserContext,
+            ViewGroup containerView,
+            Context context,
             InternalAccessDelegate internalAccessAdapter,
-            NativeDrawFunctorFactory nativeDrawFunctorFactory, AwContentsClient contentsClient,
-            AwSettings settings, DependencyFactory dependencyFactory) {
-        super(browserContext, containerView, context, internalAccessAdapter,
-                nativeDrawFunctorFactory, contentsClient, settings, dependencyFactory);
+            AwDrawFnImpl.DrawFnAccess drawFnAccess,
+            AwContentsClient contentsClient,
+            AwSettings settings,
+            DependencyFactory dependencyFactory) {
+        super(
+                browserContext,
+                containerView,
+                context,
+                internalAccessAdapter,
+                drawFnAccess,
+                contentsClient,
+                settings,
+                dependencyFactory);
 
         mRenderProcessGoneHelper = new RenderProcessGoneHelper();
         mRenderProcessGoneObservers = new ArrayList<RenderProcessGoneObserver>();
@@ -69,5 +79,13 @@ public class TestAwContents extends AwContents {
         for (RenderProcessGoneObserver observer : mRenderProcessGoneObservers) {
             observer.onAwContentsDestroyed();
         }
+    }
+
+    public void setShouldBlockSpecialFileUrls(boolean shouldBlock) {
+        getSettings().setBlockSpecialFileUrls(shouldBlock);
+    }
+
+    public void setFaviconForTesting(Bitmap bitmap) {
+        super.mFavicon = bitmap;
     }
 }

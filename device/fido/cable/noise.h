@@ -8,24 +8,26 @@
 #include <stdint.h>
 
 #include <array>
+#include <optional>
 #include <tuple>
+#include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
 namespace device {
 
 // Noise implements a small subset of the Noise Protocol Framework [1].
 //
-// http://www.noiseprotocol.org/noise.html#the-handshakestate-object
+// https://www.noiseprotocol.org/noise.html#the-handshakestate-object
 class COMPONENT_EXPORT(DEVICE_FIDO) Noise {
  public:
   // HandshakeType enumerates the supported handshake patterns.
   enum class HandshakeType {
     kKNpsk0,  // https://noiseexplorer.com/patterns/KNpsk0/
     kNKpsk0,  // https://noiseexplorer.com/patterns/NKpsk0/
+    kNK,      // https://noiseexplorer.com/patterns/NK/
   };
 
   Noise();
@@ -40,7 +42,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) Noise {
   void MixKey(base::span<const uint8_t> ikm);
   void MixKeyAndHash(base::span<const uint8_t> ikm);
   std::vector<uint8_t> EncryptAndHash(base::span<const uint8_t> plaintext);
-  absl::optional<std::vector<uint8_t>> DecryptAndHash(
+  std::optional<std::vector<uint8_t>> DecryptAndHash(
       base::span<const uint8_t> ciphertext);
   std::array<uint8_t, 32> handshake_hash() const;
 

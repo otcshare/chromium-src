@@ -9,11 +9,12 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/metrics/arc_metrics_service.h"
-#include "ash/components/arc/session/connection_observer.h"
-#include "chrome/browser/ash/throttle_observer.h"
-#include "chrome/browser/ash/throttle_service.h"
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/throttle/throttle_observer.h"
+#include "chromeos/ash/components/throttle/throttle_service.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 namespace base {
@@ -85,6 +86,8 @@ class ArcInstanceThrottle : public KeyedService,
   // ArcMetricsService::BootTypeObserver
   void OnBootTypeRetrieved(mojom::BootType boot_type) override;
 
+  static void EnsureFactoryBuilt();
+
  private:
   // ash::ThrottleService:
   void ThrottleInstance(bool should_throttle) override;
@@ -109,7 +112,7 @@ class ArcInstanceThrottle : public KeyedService,
   bool never_enforce_quota_ = false;
 
   // Owned by ArcServiceManager.
-  ArcBridgeService* const bridge_;
+  const raw_ptr<ArcBridgeService> bridge_;
 };
 
 }  // namespace arc

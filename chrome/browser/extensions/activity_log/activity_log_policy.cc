@@ -18,8 +18,11 @@
 #include "chrome/browser/extensions/activity_log/activity_action_constants.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace constants = activity_log_constants;
 
@@ -27,7 +30,7 @@ namespace extensions {
 
 ActivityLogPolicy::ActivityLogPolicy(Profile* profile) {}
 
-ActivityLogPolicy::~ActivityLogPolicy() {}
+ActivityLogPolicy::~ActivityLogPolicy() = default;
 
 void ActivityLogPolicy::SetClockForTesting(base::Clock* clock) {
   testing_clock_ = clock;
@@ -66,7 +69,7 @@ sql::Database* ActivityLogDatabasePolicy::GetDatabaseConnection() const {
 
 // static
 std::string ActivityLogPolicy::Util::Serialize(
-    absl::optional<base::ValueView> value) {
+    std::optional<base::ValueView> value) {
   std::string value_as_text;
   if (value) {
     JSONStringValueSerializer serializer(&value_as_text);
@@ -120,7 +123,7 @@ void ActivityLogPolicy::Util::StripArguments(const ApiSet& api_allowlist,
                                              scoped_refptr<Action> action) {
   if (api_allowlist.find(std::make_pair(
           action->action_type(), action->api_name())) == api_allowlist.end()) {
-    action->set_args(absl::nullopt);
+    action->set_args(std::nullopt);
   }
 }
 

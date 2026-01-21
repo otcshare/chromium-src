@@ -4,12 +4,8 @@
 
 #include "content/browser/preloading/prefetch/prefetch_network_context_client.h"
 
-#include <memory>
-
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/mojom/trust_tokens.mojom.h"
+#include "net/base/net_errors.h"
 
 namespace content {
 
@@ -48,15 +44,13 @@ void PrefetchNetworkContextClient::OnGenerateHttpNegotiateAuthToken(
 }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS)
-void PrefetchNetworkContextClient::OnTrustAnchorUsed() {}
-#endif
-
+#if BUILDFLAG(IS_CT_SUPPORTED)
 void PrefetchNetworkContextClient::OnCanSendSCTAuditingReport(
     OnCanSendSCTAuditingReportCallback callback) {
   std::move(callback).Run(false);
 }
 
 void PrefetchNetworkContextClient::OnNewSCTAuditingReportSent() {}
+#endif
 
 }  // namespace content

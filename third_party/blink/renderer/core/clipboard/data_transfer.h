@@ -29,6 +29,7 @@
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -81,8 +82,9 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   bool IsForDragAndDrop() const { return transfer_type_ == kDragAndDrop; }
 
   AtomicString dropEffect() const {
-    return DropEffectIsInitialized() ? drop_effect_ : "none";
+    return DropEffectIsInitialized() ? drop_effect_ : keywords::kNone;
   }
+  void resetDropEffect();
   void setDropEffect(const AtomicString&);
   bool DropEffectIsInitialized() const { return !drop_effect_.IsNull(); }
   AtomicString effectAllowed() const { return effect_allowed_; }
@@ -131,6 +133,7 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   DragOperationsMask SourceOperation() const;
   ui::mojom::blink::DragOperation DestinationOperation() const;
   void SetSourceOperation(DragOperationsMask);
+  void SetDestinationOperationFromEffectAllowed();
   void SetDestinationOperation(ui::mojom::blink::DragOperation);
 
   DataTransferItemList* items();

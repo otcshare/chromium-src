@@ -35,7 +35,7 @@ def ApplyInParallel(function, work_list, on_failure=None):
     # crbug.com/953365.
     cpu_count = multiprocessing.cpu_count() // 2
     if sys.platform == 'win32':
-      # TODO(crbug.com/1190269) - we can't use more than 56
+      # TODO(crbug.com/40755900) - we can't use more than 56
       # cores on Windows or Python3 may hang.
       cpu_count = min(cpu_count, 56)
 
@@ -138,6 +138,15 @@ def TryUploadingResultToResultSink(results):
         test_result['summaryHtml'] = buildSummaryHtml(
             test_case['outputArtifacts'])
         test_result['artifacts'] = buildArtifacts(test_case['outputArtifacts'])
+
+      # Source comes from:
+      # infra/go/src/go.chromium.org/luci/resultdb/sink/proto/v1/test_result.proto
+      struct_test_dict = {
+          'coarseName': None,  # Not used for flat/single tests.
+          'fineName': None,  # Not used for flat/single tests.
+          'caseNameComponents': [test_result['testId']],
+      }
+      test_result['testIdStructured'] = struct_test_dict
       test_results.append(test_result)
     return test_results
 

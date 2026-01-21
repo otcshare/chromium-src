@@ -8,10 +8,12 @@
 #include <vector>
 
 #include "ash/ash_export.h"
-#include "ash/capture_mode/capture_mode_session_focus_cycler.h"
-#include "base/callback_forward.h"
+#include "ash/style/system_shadow.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/gfx/animation/animation_delegate.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -27,16 +29,14 @@ class DropToStopRecordingButtonAnimation;
 // A view that displays (optional) icon and text message to the user depending
 // on current capture source and type. In video capture mode, it will later
 // transform into a 3 second countdown timer.
-class ASH_EXPORT CaptureLabelView
-    : public views::View,
-      public CaptureModeSessionFocusCycler::HighlightableView,
-      public gfx::AnimationDelegate {
- public:
-  METADATA_HEADER(CaptureLabelView);
+class ASH_EXPORT CaptureLabelView : public views::View,
+                                    public gfx::AnimationDelegate {
+  METADATA_HEADER(CaptureLabelView, views::View)
 
+ public:
   CaptureLabelView(CaptureModeSession* capture_mode_session,
-                   base::RepeatingClosure on_capture_button_pressed,
-                   base::RepeatingClosure on_drop_down_button_pressed);
+                   views::Button::PressedCallback on_capture_button_pressed,
+                   views::Button::PressedCallback on_drop_down_button_pressed);
   CaptureLabelView(const CaptureLabelView&) = delete;
   CaptureLabelView& operator=(const CaptureLabelView&) = delete;
   ~CaptureLabelView() override;
@@ -73,19 +73,20 @@ class ASH_EXPORT CaptureLabelView
   bool IsInCountDownAnimation() const;
 
   // views::View:
-  void Layout() override;
-  gfx::Size CalculatePreferredSize() const override;
+  void AddedToWidget() override;
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  void Layout(PassKey) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnThemeChanged() override;
-
-  // CaptureModeSessionFocusCycler::HighlightableView:
-  views::View* GetView() override;
-  std::unique_ptr<views::HighlightPathGenerator> CreatePathGenerator() override;
 
   // gfx::AnimationDelegate:
   void AnimationEnded(const gfx::Animation* animation) override;
   void AnimationProgressed(const gfx::Animation* animation) override;
 
  private:
+  friend class CaptureModeSessionTestApi;
+
   // Fades in and out the given `counter_value` (e.g. "3", "2", or "1") as it
   // performs a step in the count down animation.
   void FadeInAndOutCounter(int counter_value);
@@ -107,22 +108,24 @@ class ASH_EXPORT CaptureLabelView
   // performed. If we are in video recording mode, and GIF recording is enabled,
   // this view will also host a drop down button to allow the user to choose the
   // type of the recording format.
-  CaptureButtonView* capture_button_container_ = nullptr;
+  raw_ptr<CaptureButtonView> capture_button_container_ = nullptr;
 
   // The label that displays a text message. Not user interactable.
-  views::Label* label_ = nullptr;
+  raw_ptr<views::Label> label_ = nullptr;
 
   // Callback function to be called after countdown if finished.
   base::OnceClosure countdown_finished_callback_;
 
   // Pointer to the current capture mode session. Not nullptr during this
   // lifecycle.
-  CaptureModeSession* capture_mode_session_;
+  raw_ptr<CaptureModeSession> capture_mode_session_;
 
   // Animates the widget of this view towards the position of the stop recording
   // button at the end of the count down.
   std::unique_ptr<DropToStopRecordingButtonAnimation>
       drop_to_stop_button_animation_;
+
+  std::unique_ptr<SystemShadow> shadow_;
 
   base::WeakPtrFactory<CaptureLabelView> weak_factory_{this};
 };

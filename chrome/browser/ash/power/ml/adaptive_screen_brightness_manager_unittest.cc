@@ -7,10 +7,12 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/power/ml/adaptive_screen_brightness_ukm_logger.h"
 #include "chrome/browser/ash/power/ml/screen_brightness_event.pb.h"
@@ -108,13 +110,15 @@ class AdaptiveScreenBrightnessManagerTest
         task_environment()->GetMainThreadTaskRunner());
     screen_brightness_manager_ =
         std::make_unique<AdaptiveScreenBrightnessManager>(
-            std::move(logger), &user_activity_detector_,
+            std::move(logger), ui::UserActivityDetector::Get(),
             chromeos::FakePowerManagerClient::Get(), nullptr, nullptr,
             observer.InitWithNewPipeAndPassReceiver(),
             std::move(periodic_timer));
+    browser_controller_ = std::make_unique<ash::BrowserControllerImpl>();
   }
 
   void TearDown() override {
+    browser_controller_.reset();
     screen_brightness_manager_.reset();
     chromeos::PowerManagerClient::Shutdown();
     ChromeRenderViewHostTestHarness::TearDown();
@@ -224,7 +228,7 @@ class AdaptiveScreenBrightnessManagerTest
   }
 
   const gfx::Point kEventLocation = gfx::Point(90, 90);
-  const ui::MouseEvent kMouseEvent = ui::MouseEvent(ui::ET_MOUSE_MOVED,
+  const ui::MouseEvent kMouseEvent = ui::MouseEvent(ui::EventType::kMouseMoved,
                                                     kEventLocation,
                                                     kEventLocation,
                                                     base::TimeTicks(),
@@ -238,10 +242,10 @@ class AdaptiveScreenBrightnessManagerTest
 
  private:
   FakeChromeUserManager fake_user_manager_;
-
-  ui::UserActivityDetector user_activity_detector_;
   std::unique_ptr<AdaptiveScreenBrightnessManager> screen_brightness_manager_;
-  TestingAdaptiveScreenBrightnessUkmLogger* ukm_logger_;
+  std::unique_ptr<BrowserControllerImpl> browser_controller_;
+  raw_ptr<TestingAdaptiveScreenBrightnessUkmLogger, DanglingUntriaged>
+      ukm_logger_;
 };
 
 TEST_F(AdaptiveScreenBrightnessManagerTest, PeriodicLogging) {
@@ -591,20 +595,20 @@ TEST_F(AdaptiveScreenBrightnessManagerTest, UserEventCounts) {
   ReportUserActivity(&kMouseEvent);
 
   const ui::TouchEvent kTouchEvent(
-      ui::ET_TOUCH_PRESSED, kEventLocation, base::TimeTicks(),
+      ui::EventType::kTouchPressed, kEventLocation, base::TimeTicks(),
       ui::PointerDetails(ui::EventPointerType::kTouch, 0));
   ReportUserActivity(&kTouchEvent);
   ReportUserActivity(&kTouchEvent);
 
   const ui::KeyEvent kKeyEvent(
-      ui::ET_KEY_PRESSED, ui::VKEY_A, ui::DomCode::US_A, 0,
+      ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A, 0,
       ui::DomKey::FromCharacter('a'), base::TimeTicks());
   ReportUserActivity(&kKeyEvent);
   ReportUserActivity(&kKeyEvent);
   ReportUserActivity(&kKeyEvent);
 
   const ui::TouchEvent kStylusEvent(
-      ui::ET_TOUCH_MOVED, kEventLocation, base::TimeTicks(),
+      ui::EventType::kTouchMoved, kEventLocation, base::TimeTicks(),
       ui::PointerDetails(ui::EventPointerType::kPen, 0), ui::EF_NONE);
   ReportUserActivity(&kStylusEvent);
   ReportUserActivity(&kStylusEvent);

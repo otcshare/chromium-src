@@ -34,20 +34,19 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "net/storage_access_api/status.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
-#include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-blink.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom-blink.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
+#include "third_party/blink/public/mojom/worker/shared_worker_exception_details.mojom-blink.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_network_provider.h"
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/public/platform/url_conversion.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -110,6 +109,23 @@ void WebSharedWorkerImpl::CountFeature(WebFeature feature) {
   host_->OnFeatureUsed(feature);
 }
 
+void WebSharedWorkerImpl::ReportException(const WebString& error_message,
+                                          const WebString& source_url,
+                                          int line_number,
+                                          int column_number,
+                                          int exception_id,
+                                          bool is_eval_error) {
+  DCHECK(IsMainThread());
+  auto details = mojom::blink::SharedWorkerExceptionDetails::New();
+  details->error_message = error_message;
+  details->source_location = network::mojom::blink::SourceLocation::New(
+      source_url, line_number, column_number);
+  details->error_type = is_eval_error
+                            ? mojom::blink::SharedWorkerErrorType::kRuntimeError
+                            : mojom::blink::SharedWorkerErrorType::kParseError;
+  host_->OnReportException(std::move(details));
+}
+
 void WebSharedWorkerImpl::DidFailToFetchClassicScript() {
   DCHECK(IsMainThread());
   host_->OnScriptLoadFailed("Failed to fetch a worker script.");
@@ -126,7 +142,7 @@ void WebSharedWorkerImpl::DidFailToFetchModuleScript() {
 
 void WebSharedWorkerImpl::DidEvaluateTopLevelScript(bool success) {
   DCHECK(IsMainThread());
-  DCHECK(!running_);
+  CHECK(!running_);
   running_ = true;
   DispatchPendingConnections();
 }
@@ -168,8 +184,7 @@ void WebSharedWorkerImpl::ConnectToChannel(int connection_request_id,
   PostCrossThreadTask(
       *task_runner_for_connect_event_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::ConnectTaskOnWorkerThread,
-                          WTF::CrossThreadUnretained(this),
-                          std::move(channel)));
+                          CrossThreadUnretained(this), std::move(channel)));
   host_->OnConnected(connection_request_id);
 }
 
@@ -195,12 +210,11 @@ void WebSharedWorkerImpl::StartWorkerContext(
     network::mojom::CredentialsMode credentials_mode,
     const WebString& name,
     WebSecurityOrigin constructor_origin,
+    WebSecurityOrigin origin_from_browser,
     bool is_constructor_secure_context,
     const WebString& user_agent,
-    const WebString& full_user_agent,
-    const WebString& reduced_user_agent,
     const UserAgentMetadata& ua_metadata,
-    const WebVector<WebContentSecurityPolicy>& content_security_policies,
+    const std::vector<WebContentSecurityPolicy>& content_security_policies,
     const WebFetchClientSettingsObject& outside_fetch_client_settings_object,
     const base::UnguessableToken& devtools_worker_token,
     CrossVariantMojoRemote<
@@ -212,7 +226,12 @@ void WebSharedWorkerImpl::StartWorkerContext(
         worker_main_script_load_params,
     std::unique_ptr<blink::WebPolicyContainer> policy_container,
     scoped_refptr<WebWorkerFetchContext> web_worker_fetch_context,
-    ukm::SourceId ukm_source_id) {
+    ukm::SourceId ukm_source_id,
+    bool require_cross_site_request_for_cookies,
+    CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+        coep_reporting_observer,
+    CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+        dip_reporting_observer) {
   DCHECK(IsMainThread());
   DCHECK(web_worker_fetch_context);
   CHECK(constructor_origin.Get()->CanAccessSharedWorkers());
@@ -235,11 +254,6 @@ void WebSharedWorkerImpl::StartWorkerContext(
               : mojom::blink::InsecureRequestPolicy::kBlockAllMixedContent,
           FetchClientSettingsObject::InsecureNavigationsSet());
 
-  GetWorkerThread()->SetIsConstructorOriginSecure(
-      constructor_origin.IsPotentiallyTrustworthy() ||
-      SchemeRegistry::SchemeShouldBypassSecureContextCheck(
-          constructor_origin.Protocol()));
-
   auto worker_settings = std::make_unique<WorkerSettings>(
       false /* disable_reading_from_canvas */,
       false /* strict_mixed_content_checking */,
@@ -247,29 +261,12 @@ void WebSharedWorkerImpl::StartWorkerContext(
       false /* strictly_block_blockable_mixed_content */,
       GenericFontFamilySettings());
 
-  bool reduced_ua_enabled = false;
-  bool full_ua_enabled = false;
-  if (worker_main_script_load_params &&
-      worker_main_script_load_params->response_head &&
-      worker_main_script_load_params->response_head->headers) {
-    reduced_ua_enabled = blink::TrialTokenValidator().RequestEnablesFeature(
-        blink::WebStringToGURL(script_request_url.GetString()),
-        worker_main_script_load_params->response_head->headers.get(),
-        "UserAgentReduction", base::Time::Now());
-    full_ua_enabled = blink::TrialTokenValidator().RequestEnablesFeature(
-        blink::WebStringToGURL(script_request_url.GetString()),
-        worker_main_script_load_params->response_head->headers.get(),
-        "SendFullUserAgentAfterReduction", base::Time::Now());
-  }
-
   // Some params (e.g. address space) passed to GlobalScopeCreationParams are
   // dummy values. They will be updated after worker script fetch on the worker
   // thread.
   auto creation_params = std::make_unique<GlobalScopeCreationParams>(
-      script_request_url, script_type, name,
-      full_ua_enabled ? full_user_agent
-                      : (reduced_ua_enabled ? reduced_user_agent : user_agent),
-      ua_metadata, std::move(web_worker_fetch_context),
+      script_request_url, script_type, name, user_agent, ua_metadata,
+      std::move(web_worker_fetch_context),
       ConvertToMojoBlink(content_security_policies),
       Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
       outside_settings_object->GetReferrerPolicy(),
@@ -285,7 +282,19 @@ void WebSharedWorkerImpl::StartWorkerContext(
       mojo::NullRemote() /* code_cache_host_interface */,
       mojo::NullRemote() /* blob_url_store */, BeginFrameProviderParams(),
       nullptr /* parent_permissions_policy */, base::UnguessableToken(),
-      ukm_source_id);
+      ukm_source_id,
+      /*parent_context_token=*/std::nullopt,
+      /*parent_cross_origin_isolated_capability=*/false,
+      /*parent_is_isolated_context=*/false,
+      /*interface_registry=*/nullptr,
+      /*agent_group_scheduler_compositor_task_runner=*/nullptr,
+      /*top_level_frame_security_origin=*/nullptr,
+      /*parent_storage_access_api_status=*/
+      net::StorageAccessApiStatus::kNone,
+      require_cross_site_request_for_cookies,
+      blink::SecurityOrigin::CreateFromUrlOrigin(
+          url::Origin(origin_from_browser)),
+      std::move(coep_reporting_observer), std::move(dip_reporting_observer));
 
   auto thread_startup_data = WorkerBackingThreadStartupData::CreateDefault();
   thread_startup_data.atomics_wait_mode =
@@ -348,12 +357,11 @@ std::unique_ptr<WebSharedWorker> WebSharedWorker::CreateAndStart(
     network::mojom::CredentialsMode credentials_mode,
     const WebString& name,
     WebSecurityOrigin constructor_origin,
+    WebSecurityOrigin origin_from_browser,
     bool is_constructor_secure_context,
     const WebString& user_agent,
-    const WebString& full_user_agent,
-    const WebString& reduced_user_agent,
     const UserAgentMetadata& ua_metadata,
-    const WebVector<WebContentSecurityPolicy>& content_security_policies,
+    const std::vector<WebContentSecurityPolicy>& content_security_policies,
     const WebFetchClientSettingsObject& outside_fetch_client_settings_object,
     const base::UnguessableToken& devtools_worker_token,
     CrossVariantMojoRemote<
@@ -367,18 +375,24 @@ std::unique_ptr<WebSharedWorker> WebSharedWorker::CreateAndStart(
     scoped_refptr<WebWorkerFetchContext> web_worker_fetch_context,
     CrossVariantMojoRemote<mojom::SharedWorkerHostInterfaceBase> host,
     WebSharedWorkerClient* client,
-    ukm::SourceId ukm_source_id) {
+    ukm::SourceId ukm_source_id,
+    bool require_cross_site_request_for_cookies,
+    CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+        coep_reporting_observer,
+    CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+        dip_reporting_observer) {
   auto worker =
       base::WrapUnique(new WebSharedWorkerImpl(token, std::move(host), client));
   worker->StartWorkerContext(
       script_request_url, script_type, credentials_mode, name,
-      constructor_origin, is_constructor_secure_context, user_agent,
-      full_user_agent, reduced_user_agent, ua_metadata,
-      content_security_policies, outside_fetch_client_settings_object,
-      devtools_worker_token, std::move(content_settings),
-      std::move(browser_interface_broker), pause_worker_context_on_start,
-      std::move(worker_main_script_load_params), std::move(policy_container),
-      std::move(web_worker_fetch_context), ukm_source_id);
+      constructor_origin, origin_from_browser, is_constructor_secure_context,
+      user_agent, ua_metadata, content_security_policies,
+      outside_fetch_client_settings_object, devtools_worker_token,
+      std::move(content_settings), std::move(browser_interface_broker),
+      pause_worker_context_on_start, std::move(worker_main_script_load_params),
+      std::move(policy_container), std::move(web_worker_fetch_context),
+      ukm_source_id, require_cross_site_request_for_cookies,
+      std::move(coep_reporting_observer), std::move(dip_reporting_observer));
   return worker;
 }
 

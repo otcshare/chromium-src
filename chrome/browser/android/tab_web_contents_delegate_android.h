@@ -38,7 +38,8 @@ class TabWebContentsDelegateAndroid
     : public web_contents_delegate_android::WebContentsDelegateAndroid,
       public find_in_page::FindResultObserver {
  public:
-  TabWebContentsDelegateAndroid(JNIEnv* env, jobject obj);
+  TabWebContentsDelegateAndroid(JNIEnv* env,
+                                const jni_zero::JavaRef<jobject>& obj);
 
   TabWebContentsDelegateAndroid(const TabWebContentsDelegateAndroid&) = delete;
   TabWebContentsDelegateAndroid& operator=(
@@ -46,7 +47,6 @@ class TabWebContentsDelegateAndroid
 
   ~TabWebContentsDelegateAndroid() override;
 
-  void PortalWebContentsCreated(content::WebContents* portal_contents) override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
                       scoped_refptr<content::FileSelectListener> listener,
                       const blink::mojom::FileChooserParams& params) override;
@@ -73,37 +73,46 @@ class TabWebContentsDelegateAndroid
       const content::MediaStreamRequest& request,
       content::MediaResponseCallback callback) override;
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
-                                  const GURL& security_origin,
+                                  const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type) override;
   void SetOverlayMode(bool use_overlay_mode) override;
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   bool ShouldResumeRequestsForCreatedWindow() override;
-  void AddNewContents(content::WebContents* source,
-                      std::unique_ptr<content::WebContents> new_contents,
-                      const GURL& target_url,
-                      WindowOpenDisposition disposition,
-                      const blink::mojom::WindowFeatures& window_features,
-                      bool user_gesture,
-                      bool* was_blocked) override;
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
   void OnDidBlockNavigation(
       content::WebContents* web_contents,
       const GURL& blocked_url,
-      const GURL& initiator_url,
       blink::mojom::NavigationBlockedReason reason) override;
   void UpdateUserGestureCarryoverInfo(
       content::WebContents* web_contents) override;
   content::PictureInPictureResult EnterPictureInPicture(
       content::WebContents* web_contents) override;
   void ExitPictureInPicture() override;
-  bool IsBackForwardCacheSupported() override;
-  bool IsPrerender2Supported(content::WebContents& web_contents) override;
-  std::unique_ptr<content::WebContents> ActivatePortalWebContents(
-      content::WebContents* predecessor_contents,
-      std::unique_ptr<content::WebContents> portal_contents) override;
+  bool IsBackForwardCacheSupported(content::WebContents& web_contents) override;
+  content::PreloadingEligibility IsPrerender2Supported(
+      content::WebContents& web_contents,
+      content::PreloadingTriggerType trigger_type) override;
   device::mojom::GeolocationContext* GetInstalledWebappGeolocationContext()
       override;
+  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override;
+  void RequestPointerLock(content::WebContents* web_contents,
+                          bool user_gesture,
+                          bool last_unlocked_by_target) override;
+
+  void LostPointerLock() override;
 
 #if BUILDFLAG(ENABLE_PRINTING)
   void PrintCrossProcessSubframe(
@@ -138,6 +147,12 @@ class TabWebContentsDelegateAndroid
   const GURL GetManifestScope() const;
   bool IsInstalledWebappDelegateGeolocation() const;
   bool IsModalContextMenu() const;
+  bool IsDynamicSafeAreaInsetsEnabled() const;
+  bool OpenInAppOrChromeFromCct(GURL url);
+
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+      content::WebContents* contents) override;
 
  private:
   std::unique_ptr<device::mojom::GeolocationContext>
@@ -146,6 +161,9 @@ class TabWebContentsDelegateAndroid
   base::ScopedMultiSourceObservation<find_in_page::FindTabHelper,
                                      find_in_page::FindResultObserver>
       find_result_observations_{this};
+
+  // Timestamp when the user last successfully escaped from a lock request.
+  base::TimeTicks pointer_lock_last_user_escape_time_;
 };
 
 }  // namespace android

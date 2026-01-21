@@ -7,6 +7,8 @@
 
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "mojo/public/cpp/bindings/union_traits.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_mojom_traits.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
 #include "third_party/blink/public/mojom/fenced_frame/fenced_frame_config.mojom.h"
@@ -36,14 +38,12 @@ struct BLINK_COMMON_EXPORT
 
 template <>
 struct BLINK_COMMON_EXPORT
-    StructTraits<blink::mojom::FencedFrameReportingDataView,
-                 blink::FencedFrame::FencedFrameReporting> {
-  static const base::flat_map<blink::FencedFrame::ReportingDestination,
-                              base::flat_map<std::string, GURL>>&
-  metadata(const blink::FencedFrame::FencedFrameReporting& input);
-
-  static bool Read(blink::mojom::FencedFrameReportingDataView data,
-                   blink::FencedFrame::FencedFrameReporting* out);
+    EnumTraits<blink::mojom::DeprecatedFencedFrameMode,
+               blink::FencedFrame::DeprecatedFencedFrameMode> {
+  static blink::mojom::DeprecatedFencedFrameMode ToMojom(
+      blink::FencedFrame::DeprecatedFencedFrameMode input);
+  static bool FromMojom(blink::mojom::DeprecatedFencedFrameMode input,
+                        blink::FencedFrame::DeprecatedFencedFrameMode* out);
 };
 
 template <>
@@ -62,13 +62,29 @@ template <>
 struct BLINK_COMMON_EXPORT
     StructTraits<blink::mojom::SharedStorageBudgetMetadataDataView,
                  blink::FencedFrame::SharedStorageBudgetMetadata> {
-  static const url::Origin& origin(
+  static const net::SchemefulSite& site(
       const blink::FencedFrame::SharedStorageBudgetMetadata& input);
   static double budget_to_charge(
+      const blink::FencedFrame::SharedStorageBudgetMetadata& input);
+  static bool top_navigated(
       const blink::FencedFrame::SharedStorageBudgetMetadata& input);
 
   static bool Read(blink::mojom::SharedStorageBudgetMetadataDataView data,
                    blink::FencedFrame::SharedStorageBudgetMetadata* out_data);
+};
+
+template <>
+struct BLINK_COMMON_EXPORT
+    StructTraits<blink::mojom::ParentPermissionsInfoDataView,
+                 blink::FencedFrame::ParentPermissionsInfo> {
+  static const std::vector<network::ParsedPermissionsPolicyDeclaration>&
+  parsed_permissions_policy(
+      const blink::FencedFrame::ParentPermissionsInfo& input);
+  static const url::Origin& origin(
+      const blink::FencedFrame::ParentPermissionsInfo& input);
+
+  static bool Read(blink::mojom::ParentPermissionsInfoDataView data,
+                   blink::FencedFrame::ParentPermissionsInfo* out_data);
 };
 
 template <>
@@ -172,30 +188,6 @@ class BLINK_COMMON_EXPORT UnionTraits<
 };
 
 template <>
-class BLINK_COMMON_EXPORT
-    UnionTraits<blink::mojom::PotentiallyOpaqueReportingMetadataDataView,
-                Prop<blink::FencedFrame::FencedFrameReporting>> {
- public:
-  static const blink::FencedFrame::FencedFrameReporting& transparent(
-      const Prop<blink::FencedFrame::FencedFrameReporting>&
-          fenced_frame_reporting) {
-    return *fenced_frame_reporting.potentially_opaque_value;
-  }
-  static blink::FencedFrame::Opaque opaque(
-      const Prop<blink::FencedFrame::FencedFrameReporting>&) {
-    return blink::FencedFrame::Opaque::kOpaque;
-  }
-
-  static bool Read(
-      blink::mojom::PotentiallyOpaqueReportingMetadataDataView data,
-      Prop<blink::FencedFrame::FencedFrameReporting>* out);
-
-  static blink::mojom::PotentiallyOpaqueReportingMetadataDataView::Tag GetTag(
-      const Prop<blink::FencedFrame::FencedFrameReporting>&
-          fenced_frame_reporting);
-};
-
-template <>
 class BLINK_COMMON_EXPORT UnionTraits<
     blink::mojom::PotentiallyOpaqueSharedStorageBudgetMetadataDataView,
     Prop<blink::FencedFrame::SharedStorageBudgetMetadata>> {
@@ -229,42 +221,53 @@ struct BLINK_COMMON_EXPORT
     // expected to be non-nullopt.
     return config.urn_uuid_.value();
   }
-  static const absl::optional<Prop<GURL>>& mapped_url(
+  static const std::optional<Prop<GURL>>& mapped_url(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.mapped_url_;
   }
-  static const absl::optional<Prop<gfx::Size>>& container_size(
+  static const std::optional<Prop<gfx::Size>>& container_size(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.container_size_;
   }
-  static const absl::optional<Prop<gfx::Size>>& content_size(
+  static const std::optional<Prop<gfx::Size>>& content_size(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.content_size_;
   }
-  static const absl::optional<Prop<bool>>&
-  deprecated_should_freeze_initial_size(
+  static const std::optional<Prop<bool>>& deprecated_should_freeze_initial_size(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.deprecated_should_freeze_initial_size_;
   }
-  static const absl::optional<Prop<blink::FencedFrame::AdAuctionData>>&
+  static const std::optional<Prop<blink::FencedFrame::AdAuctionData>>&
   ad_auction_data(const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.ad_auction_data_;
   }
-  static const absl::optional<
+  static const std::optional<
       Prop<std::vector<blink::FencedFrame::RedactedFencedFrameConfig>>>&
   nested_configs(const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.nested_configs_;
   }
-  static const absl::optional<
+  static const std::optional<
       Prop<blink::FencedFrame::SharedStorageBudgetMetadata>>&
   shared_storage_budget_metadata(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.shared_storage_budget_metadata_;
   }
-  static const absl::optional<Prop<blink::FencedFrame::FencedFrameReporting>>&
-  reporting_metadata(
+
+  static const blink::FencedFrame::DeprecatedFencedFrameMode& mode(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
-    return config.reporting_metadata_;
+    return config.mode_;
+  }
+
+  static const std::vector<network::mojom::PermissionsPolicyFeature>&
+  effective_enabled_permissions(
+      const blink::FencedFrame::RedactedFencedFrameConfig& config) {
+    return config.effective_enabled_permissions_;
+  }
+
+  static const std::optional<blink::FencedFrame::ParentPermissionsInfo>&
+  parent_permissions_info(
+      const blink::FencedFrame::RedactedFencedFrameConfig& config) {
+    return config.parent_permissions_info_;
   }
 
   static bool Read(blink::mojom::FencedFrameConfigDataView data,
@@ -275,24 +278,23 @@ template <>
 struct BLINK_COMMON_EXPORT
     StructTraits<blink::mojom::FencedFramePropertiesDataView,
                  blink::FencedFrame::RedactedFencedFrameProperties> {
-  static const absl::optional<Prop<GURL>>& mapped_url(
+  static const std::optional<Prop<GURL>>& mapped_url(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.mapped_url_;
   }
-  static const absl::optional<Prop<gfx::Size>>& container_size(
+  static const std::optional<Prop<gfx::Size>>& container_size(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.container_size_;
   }
-  static const absl::optional<Prop<gfx::Size>>& content_size(
+  static const std::optional<Prop<gfx::Size>>& content_size(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.content_size_;
   }
-  static const absl::optional<Prop<bool>>&
-  deprecated_should_freeze_initial_size(
+  static const std::optional<Prop<bool>>& deprecated_should_freeze_initial_size(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.deprecated_should_freeze_initial_size_;
   }
-  static const absl::optional<Prop<blink::FencedFrame::AdAuctionData>>&
+  static const std::optional<Prop<blink::FencedFrame::AdAuctionData>>&
   ad_auction_data(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.ad_auction_data_;
@@ -300,16 +302,39 @@ struct BLINK_COMMON_EXPORT
   static blink::mojom::PotentiallyOpaqueURNConfigVectorPtr
   nested_urn_config_pairs(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties);
-  static const absl::optional<
+  static const std::optional<
       Prop<blink::FencedFrame::SharedStorageBudgetMetadata>>&
   shared_storage_budget_metadata(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.shared_storage_budget_metadata_;
   }
-  static const absl::optional<Prop<blink::FencedFrame::FencedFrameReporting>>&
-  reporting_metadata(
+  static const blink::FencedFrame::DeprecatedFencedFrameMode& mode(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
-    return properties.reporting_metadata_;
+    return properties.mode_;
+  }
+
+  static const std::vector<network::mojom::PermissionsPolicyFeature>&
+  effective_enabled_permissions(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.effective_enabled_permissions_;
+  }
+  static bool can_disable_untrusted_network(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.can_disable_untrusted_network_;
+  }
+  static bool is_cross_origin_content(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.is_cross_origin_content_;
+  }
+  static bool allow_cross_origin_event_reporting(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.allow_cross_origin_event_reporting_;
+  }
+
+  static const std::optional<blink::FencedFrame::ParentPermissionsInfo>&
+  parent_permissions_info(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.parent_permissions_info_;
   }
 
   static bool Read(

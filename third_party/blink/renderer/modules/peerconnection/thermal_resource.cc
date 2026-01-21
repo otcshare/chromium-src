@@ -6,6 +6,9 @@
 
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "third_party/blink/renderer/modules/peerconnection/adapters/web_rtc_cross_thread_copier.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 namespace blink {
@@ -17,7 +20,6 @@ const int kReportIntervalSeconds = 10;
 }  // namespace
 
 BASE_FEATURE(kWebRtcThermalResource,
-             "WebRtcThermalResource",
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
@@ -28,7 +30,7 @@ BASE_FEATURE(kWebRtcThermalResource,
 // static
 scoped_refptr<ThermalResource> ThermalResource::Create(
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  return new rtc::RefCountedObject<ThermalResource>(std::move(task_runner));
+  return new webrtc::RefCountedObject<ThermalResource>(std::move(task_runner));
 }
 
 ThermalResource::ThermalResource(
@@ -74,22 +76,23 @@ void ThermalResource::ReportMeasurementWhileHoldingLock(size_t measurement_id) {
     case mojom::blink::DeviceThermalState::kNominal:
     case mojom::blink::DeviceThermalState::kFair:
       listener_->OnResourceUsageStateMeasured(
-          rtc::scoped_refptr<Resource>(this),
+          webrtc::scoped_refptr<Resource>(this),
           webrtc::ResourceUsageState::kUnderuse);
       break;
     case mojom::blink::DeviceThermalState::kSerious:
     case mojom::blink::DeviceThermalState::kCritical:
       listener_->OnResourceUsageStateMeasured(
-          rtc::scoped_refptr<Resource>(this),
+          webrtc::scoped_refptr<Resource>(this),
           webrtc::ResourceUsageState::kOveruse);
       break;
   }
   // Repeat the reporting every 10 seconds until a new measurement is made or
   // the listener is unregistered.
-  task_runner_->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&ThermalResource::ReportMeasurement,
-                     scoped_refptr<ThermalResource>(this), measurement_id),
+  PostDelayedCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(&ThermalResource::ReportMeasurement,
+                          webrtc::scoped_refptr<ThermalResource>(this),
+                          measurement_id),
       base::Seconds(kReportIntervalSeconds));
 }
 

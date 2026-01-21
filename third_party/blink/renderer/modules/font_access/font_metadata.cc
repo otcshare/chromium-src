@@ -4,10 +4,11 @@
 
 #include "third_party/blink/renderer/modules/font_access/font_metadata.h"
 
-#include "base/big_endian.h"
+#include <memory>
+#include <utility>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/sys_byteorder.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
@@ -31,9 +32,7 @@ void SetUpFontUniqueLookupIfNecessary() {
   if (!unique_name_lookup)
     return;
   // Contrary to what the method name might imply, this is not an idempotent
-  // method. It also initializes the state in the FontUniqueNameLookup object
-  // to either retrieve from tables on Windows 7, or direct lookups on
-  // Windows 10.
+  // method. It also initializes state in the FontUniqueNameLookup object.
   unique_name_lookup->IsFontUniqueNameLookupReadyForSyncLookup();
 }
 
@@ -49,16 +48,16 @@ FontMetadata* FontMetadata::Create(const FontEnumerationEntry& entry) {
   return MakeGarbageCollected<FontMetadata>(entry);
 }
 
-ScriptPromise FontMetadata::blob(ScriptState* script_state) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<Blob> FontMetadata::blob(ScriptState* script_state) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<Blob>>(script_state);
+  auto promise = resolver->Promise();
 
   ExecutionContext::From(script_state)
       ->GetTaskRunner(TaskType::kFontLoading)
       ->PostTask(FROM_HERE,
-                 WTF::BindOnce(&FontMetadata::BlobImpl,
-                               WrapPersistent(resolver), postscriptName_));
+                 BindOnce(&FontMetadata::BlobImpl, WrapPersistent(resolver),
+                          postscriptName_));
 
   return promise;
 }
@@ -68,7 +67,7 @@ void FontMetadata::Trace(blink::Visitor* visitor) const {
 }
 
 // static
-void FontMetadata::BlobImpl(ScriptPromiseResolver* resolver,
+void FontMetadata::BlobImpl(ScriptPromiseResolver<Blob>* resolver,
                             const String& postscriptName) {
   if (!resolver->GetScriptState()->ContextIsValid())
     return;
@@ -76,7 +75,7 @@ void FontMetadata::BlobImpl(ScriptPromiseResolver* resolver,
   SetUpFontUniqueLookupIfNecessary();
 
   FontDescription description;
-  scoped_refptr<SimpleFontData> font_data =
+  const SimpleFontData* font_data =
       FontCache::Get().GetFontData(description, AtomicString(postscriptName),
                                    AlternateFontName::kLocalUniqueFace);
   if (!font_data) {

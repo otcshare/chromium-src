@@ -5,11 +5,12 @@
 #include "services/device/geolocation/geolocation_context.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/device/geolocation/geolocation_impl.h"
+#include "url/origin.h"
 
 namespace device {
 
@@ -26,24 +27,47 @@ void GeolocationContext::Create(
 
 void GeolocationContext::BindGeolocation(
     mojo::PendingReceiver<mojom::Geolocation> receiver,
-    const GURL& requesting_url) {
-  GeolocationImpl* impl = new GeolocationImpl(std::move(receiver), this);
+    const GURL& requesting_url,
+    mojom::GeolocationClientId client_id,
+    bool has_precise_permission) {
+  GeolocationImpl* impl =
+      new GeolocationImpl(std::move(receiver), requesting_url, client_id, this,
+                          has_precise_permission);
   impls_.push_back(base::WrapUnique<GeolocationImpl>(impl));
-  if (geoposition_override_)
+  if (geoposition_override_) {
     impl->SetOverride(*geoposition_override_);
-  else
+  } else {
     impl->StartListeningForUpdates();
+  }
+}
+
+void GeolocationContext::OnPermissionUpdated(
+    const url::Origin& origin,
+    mojom::GeolocationPermissionLevel permission_level) {
+  std::erase_if(impls_, [&origin, &permission_level](const auto& impl) {
+    if (!origin.IsSameOriginWith(impl->url())) {
+      return false;
+    }
+    // Pass the permission update to the GeolocationImpl, and erase the impl if
+    // permission has been denied.
+    impl->OnPermissionUpdated(permission_level);
+    const bool should_erase =
+        permission_level == mojom::GeolocationPermissionLevel::kDenied;
+    return should_erase;
+  });
+  return;
 }
 
 void GeolocationContext::OnConnectionError(GeolocationImpl* impl) {
   auto it =
-      base::ranges::find(impls_, impl, &std::unique_ptr<GeolocationImpl>::get);
-  DCHECK(it != impls_.end());
+      std::ranges::find(impls_, impl, &std::unique_ptr<GeolocationImpl>::get);
+  CHECK(it != impls_.end());
   impls_.erase(it);
 }
 
-void GeolocationContext::SetOverride(mojom::GeopositionPtr geoposition) {
-  geoposition_override_ = std::move(geoposition);
+void GeolocationContext::SetOverride(
+    mojom::GeopositionResultPtr geoposition_result) {
+  geoposition_override_ = std::move(geoposition_result);
   for (auto& impl : impls_) {
     impl->SetOverride(*geoposition_override_);
   }

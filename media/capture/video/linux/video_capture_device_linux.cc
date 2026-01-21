@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -27,9 +27,9 @@ namespace {
 
 int TranslatePowerLineFrequencyToV4L2(PowerLineFrequency frequency) {
   switch (frequency) {
-    case PowerLineFrequency::FREQUENCY_50HZ:
+    case PowerLineFrequency::k50Hz:
       return V4L2_CID_POWER_LINE_FREQUENCY_50HZ;
-    case PowerLineFrequency::FREQUENCY_60HZ:
+    case PowerLineFrequency::k60Hz:
       return V4L2_CID_POWER_LINE_FREQUENCY_60HZ;
     default:
       // If we have no idea of the frequency, at least try and set it to AUTO.
@@ -80,12 +80,7 @@ void VideoCaptureDeviceLinux::AllocateAndStart(
       TranslatePowerLineFrequencyToV4L2(GetPowerLineFrequency(params));
   capture_impl_ = std::make_unique<V4L2CaptureDelegate>(
       v4l2_.get(), device_descriptor_, task_runner_, line_frequency, rotation_);
-  if (!capture_impl_) {
-    client->OnError(VideoCaptureError::
-                        kDeviceCaptureLinuxFailedToCreateVideoCaptureDelegate,
-                    FROM_HERE, "Failed to create VideoCaptureDelegate");
-    return;
-  }
+
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&V4L2CaptureDelegate::AllocateAndStart,

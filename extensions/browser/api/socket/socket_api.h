@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 
@@ -21,8 +22,8 @@
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/common/api/socket.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/permissions/api_permission.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -32,7 +33,6 @@
 #include "net/socket/tcp_client_socket.h"
 #include "services/network/public/cpp/resolve_host_client_base.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
-#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/udp_socket.mojom.h"
 
 namespace content {
@@ -50,9 +50,9 @@ class TCPConnectedSocket;
 
 namespace extensions {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 extern const char kCrOSTerminal[];
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 class Socket;
 
@@ -62,17 +62,17 @@ class Socket;
 // "socket" namespace vs new version in "socket.xxx" namespaces).
 class SocketResourceManagerInterface {
  public:
-  virtual ~SocketResourceManagerInterface() {}
+  virtual ~SocketResourceManagerInterface() = default;
 
   virtual bool SetBrowserContext(content::BrowserContext* context) = 0;
   virtual int Add(Socket* socket) = 0;
-  virtual Socket* Get(const std::string& extension_id, int api_resource_id) = 0;
-  virtual void Remove(const std::string& extension_id, int api_resource_id) = 0;
-  virtual void Replace(const std::string& extension_id,
+  virtual Socket* Get(const ExtensionId& extension_id, int api_resource_id) = 0;
+  virtual void Remove(const ExtensionId& extension_id, int api_resource_id) = 0;
+  virtual void Replace(const ExtensionId& extension_id,
                        int api_resource_id,
                        Socket* socket) = 0;
   virtual std::unordered_set<int>* GetResourceIds(
-      const std::string& extension_id) = 0;
+      const ExtensionId& extension_id) = 0;
 };
 
 // Implementation of SocketResourceManagerInterface using an
@@ -97,22 +97,22 @@ class SocketResourceManager : public SocketResourceManagerInterface {
     return manager_->Add(static_cast<T*>(socket));
   }
 
-  Socket* Get(const std::string& extension_id, int api_resource_id) override {
+  Socket* Get(const ExtensionId& extension_id, int api_resource_id) override {
     return manager_->Get(extension_id, api_resource_id);
   }
 
-  void Replace(const std::string& extension_id,
+  void Replace(const ExtensionId& extension_id,
                int api_resource_id,
                Socket* socket) override {
     manager_->Replace(extension_id, api_resource_id, static_cast<T*>(socket));
   }
 
-  void Remove(const std::string& extension_id, int api_resource_id) override {
+  void Remove(const ExtensionId& extension_id, int api_resource_id) override {
     manager_->Remove(extension_id, api_resource_id);
   }
 
   std::unordered_set<int>* GetResourceIds(
-      const std::string& extension_id) override {
+      const ExtensionId& extension_id) override {
     return manager_->GetResourceIds(extension_id);
   }
 
@@ -123,6 +123,9 @@ class SocketResourceManager : public SocketResourceManagerInterface {
 // Base class for socket API functions, with some helper functions.
 class SocketApiFunction : public ExtensionFunction {
  public:
+  inline static constexpr char kExceedWriteQuotaError[] =
+      "Exceeded write quota.";
+
   SocketApiFunction();
 
  protected:
@@ -134,8 +137,8 @@ class SocketApiFunction : public ExtensionFunction {
   // ExtensionFunction:
   ResponseAction Run() final;
 
-  // Convenience wrapper for ErrorWithArguments(), where the arguments are just
-  // one integer value.
+  // Convenience wrapper for ErrorWithArgumentsDoNotUse(), where the arguments
+  // are just one integer value.
   ResponseValue ErrorWithCode(int error_code, const std::string& error);
 
   // Either extension_id() or url origin for CrOS Terminal.
@@ -147,6 +150,13 @@ class SocketApiFunction : public ExtensionFunction {
   // Checks SocketsManifestData::CheckRequest() if extension(), or returns true
   // for CrOS Terminal.
   bool CheckRequest(const content::SocketPermissionRequest& param) const;
+
+  // Adds `bytes_to_write` against the write quota. Returns false if it would
+  // exceed the write quota.
+  bool TakeWriteQuota(size_t bytes_to_write);
+
+  // Returns bytes taken in last `TakeWriteQuota` call to the write quota.
+  void ReturnWriteQuota();
 
   virtual std::unique_ptr<SocketResourceManagerInterface>
   CreateSocketResourceManager();
@@ -163,7 +173,20 @@ class SocketApiFunction : public ExtensionFunction {
                         Socket* socket);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SocketApiTest, ShutdownWithLingeringWriteQuota);
+
+  class ScopedWriteQuota {
+   public:
+    ScopedWriteQuota(SocketApiFunction* owner, size_t bytes_used);
+    ~ScopedWriteQuota();
+
+   private:
+    const raw_ptr<SocketApiFunction> owner_;
+    const size_t bytes_used_;
+  };
+
   std::unique_ptr<SocketResourceManagerInterface> manager_;
+  std::optional<ScopedWriteQuota> write_quota_used_;
 };
 
 class SocketExtensionWithDnsLookupFunction
@@ -181,11 +204,11 @@ class SocketExtensionWithDnsLookupFunction
 
  private:
   // network::mojom::ResolveHostClient implementation:
-  void OnComplete(int result,
-                  const net::ResolveErrorInfo& resolve_error_info,
-                  const absl::optional<net::AddressList>& resolved_addresses,
-                  const absl::optional<net::HostResolverEndpointResults>&
-                      endpoint_results_with_metadata) override;
+  void OnComplete(
+      int result,
+      const net::ResolveErrorInfo& resolve_error_info,
+      const net::AddressList& resolved_addresses,
+      const net::HostResolverEndpointResults& alternative_endpoints) override;
 
   mojo::PendingRemote<network::mojom::HostResolver> pending_host_resolver_;
   mojo::Remote<network::mojom::HostResolver> host_resolver_;
@@ -289,7 +312,7 @@ class SocketListenFunction : public SocketApiFunction {
 
  private:
   void OnCompleted(int result, const std::string& error_msg);
-  std::unique_ptr<api::socket::Listen::Params> params_;
+  std::optional<api::socket::Listen::Params> params_;
 };
 
 class SocketAcceptFunction : public SocketApiFunction {
@@ -307,7 +330,7 @@ class SocketAcceptFunction : public SocketApiFunction {
  private:
   void OnAccept(int result_code,
                 mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
-                const absl::optional<net::IPEndPoint>& remote_addr,
+                const std::optional<net::IPEndPoint>& remote_addr,
                 mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
                 mojo::ScopedDataPipeProducerHandle send_pipe_handle);
 };
@@ -323,7 +346,7 @@ class SocketReadFunction : public SocketApiFunction {
 
   // SocketApiFunction:
   ResponseAction Work() override;
-  void OnCompleted(int result,
+  void OnCompleted(int bytes_read,
                    scoped_refptr<net::IOBuffer> io_buffer,
                    bool socket_destroying);
 };
@@ -417,7 +440,7 @@ class SocketSetNoDelayFunction : public SocketApiFunction {
  private:
   void OnCompleted(bool success);
 
-  std::unique_ptr<api::socket::SetNoDelay::Params> params_;
+  std::optional<api::socket::SetNoDelay::Params> params_;
 };
 
 class SocketGetInfoFunction : public SocketApiFunction {
@@ -445,7 +468,7 @@ class SocketGetNetworkListFunction : public ExtensionFunction {
 
  private:
   void GotNetworkList(
-      const absl::optional<net::NetworkInterfaceList>& interface_list);
+      const std::optional<net::NetworkInterfaceList>& interface_list);
 };
 
 class SocketJoinGroupFunction : public SocketApiFunction {
@@ -545,7 +568,7 @@ class SocketSecureFunction : public SocketApiFunction {
       mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
       mojo::ScopedDataPipeProducerHandle send_pipe_handle);
 
-  std::unique_ptr<api::socket::Secure::Params> params_;
+  std::optional<api::socket::Secure::Params> params_;
 };
 
 }  // namespace extensions

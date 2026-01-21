@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/cocoa/apps/quit_with_apps_controller_mac.h"
-
+#import "base/apple/foundation_util.h"
 #include "base/command_line.h"
-#import "base/mac/foundation_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #import "chrome/browser/app_controller_mac.h"
@@ -20,8 +18,9 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/cocoa/apps/quit_with_apps_controller_mac.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -77,7 +76,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   ASSERT_TRUE(listener.WaitUntilSatisfied());
 
   // One browser and one app window at this point.
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // On the first quit, show notification.
@@ -89,8 +88,8 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   // If notification was dismissed by click, show again on next quit.
   display_service.SimulateClick(
       NotificationHandler::Type::TRANSIENT,
-      QuitWithAppsController::kQuitWithAppsNotificationID, absl::nullopt,
-      absl::nullopt);
+      QuitWithAppsController::kQuitWithAppsNotificationID, std::nullopt,
+      std::nullopt);
   EXPECT_FALSE(display_service.GetNotification(
       QuitWithAppsController::kQuitWithAppsNotificationID));
   EXPECT_FALSE(controller->ShouldQuit());
@@ -98,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   EXPECT_TRUE(display_service.GetNotification(
       QuitWithAppsController::kQuitWithAppsNotificationID));
 
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // If notification is closed by user, don't show it next time.
@@ -110,7 +109,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   EXPECT_FALSE(display_service.GetNotification(
       QuitWithAppsController::kQuitWithAppsNotificationID));
 
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // Get a reference to the open app window before the browser closes.
@@ -120,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   chrome_browser_application_mac::Terminate();
   ui_test_utils::WaitForBrowserToClose();
 
-  EXPECT_TRUE(BrowserList::GetInstance()->empty());
+  EXPECT_TRUE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // Trying to quit while there are no browsers always shows notification.
@@ -140,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   display_service.SimulateClick(
       NotificationHandler::Type::TRANSIENT,
       QuitWithAppsController::kQuitWithAppsNotificationID,
-      0 /* kQuitAllAppsButtonIndex */, absl::nullopt);
+      0 /* kQuitAllAppsButtonIndex */, std::nullopt);
   destroyed_watcher.Wait();
   EXPECT_FALSE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
   quit_observer.Run();
@@ -159,12 +158,10 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitOnPowerOff) {
   // Simulate a terminate triggered by a power off or log out.
   // Cocoa will send an NSWorkspaceWillPowerOffNotification followed by
   // -[NSApplication terminate:].
-  AppController* app_controller =
-      base::mac::ObjCCast<AppController>([NSApp delegate]);
   NSNotification* notification =
       [NSNotification notificationWithName:NSWorkspaceWillPowerOffNotification
                                     object:nil];
-  [app_controller willPowerOff:notification];
+  [AppController.sharedController willPowerOff:notification];
   [NSApp terminate:nil];
   EXPECT_TRUE(browser_shutdown::IsTryingToQuit());
 }

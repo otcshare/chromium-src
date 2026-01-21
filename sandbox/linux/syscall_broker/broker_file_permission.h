@@ -6,9 +6,10 @@
 #define SANDBOX_LINUX_SYSCALL_BROKER_BROKER_FILE_PERMISSION_H_
 
 #include <bitset>
+#include <cstdint>
 #include <string>
+#include <utility>
 
-#include "base/strings/string_piece.h"
 #include "sandbox/sandbox_export.h"
 
 namespace sandbox {
@@ -105,6 +106,26 @@ class SANDBOX_EXPORT BrokerFilePermission {
         StatWithIntermediatesPermission::kBlockStatWithIntermediates,
         InotifyAddWatchWithIntermediatesPermission::
             kBlockInotifyAddWatchWithIntermediates);
+  }
+
+  static BrokerFilePermission AllPermissions(const std::string& path) {
+    return BrokerFilePermission(
+        path, RecursionOption::kNonRecursive, PersistenceOption::kPermanent,
+        ReadPermission::kAllowRead, WritePermission::kAllowWrite,
+        CreatePermission::kAllowCreate,
+        StatWithIntermediatesPermission::kAllowStatWithIntermediates,
+        InotifyAddWatchWithIntermediatesPermission::
+            kAllowInotifyAddWatchWithIntermediates);
+  }
+
+  static BrokerFilePermission AllPermissionsRecursive(const std::string& path) {
+    return BrokerFilePermission(
+        path, RecursionOption::kRecursive, PersistenceOption::kPermanent,
+        ReadPermission::kAllowRead, WritePermission::kAllowWrite,
+        CreatePermission::kAllowCreate,
+        StatWithIntermediatesPermission::kAllowStatWithIntermediates,
+        InotifyAddWatchWithIntermediatesPermission::
+            kAllowInotifyAddWatchWithIntermediates);
   }
 
   // Temporary files must always be newly created and do not confer rights to

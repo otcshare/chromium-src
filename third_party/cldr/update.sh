@@ -12,7 +12,7 @@
 # If needed, update the unzip line as appropriate.
 
 # CLDR release to checkout. See http://cldr.unicode.org/index/downloads
-CLDR_URL='http://unicode.org/Public/cldr/40/cldr-common-40.0.zip'
+CLDR_URL='http://unicode.org/Public/cldr/44/cldr-common-44.0.zip'
 # To update the CLDR files, change this URL and also update the Version
 # field in README.chromium. Then run this script and commit the changes.
 
@@ -27,5 +27,7 @@ curl "$CLDR_URL" -o cldr.zip
 rm -rf src
 
 # Unzip relevant files into src directory and clean zip.
-unzip -d src -o cldr.zip common/annotations{Derived,}/{en,en_001}.xml
+unzip -d src -o cldr.zip common/annotations{Derived,}/{en,en_001,da,de,es,fi,fr,ja,no,sv}.xml \
+                         common/supplemental/plurals.xml
 rm -v cldr.zip
+read -p "Please update revision in README.chromium to match the new version you have downloaded"

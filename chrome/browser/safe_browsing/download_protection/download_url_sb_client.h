@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
@@ -61,11 +62,14 @@ class DownloadUrlSBClient : public SafeBrowsingDatabaseManager::Client,
 
   void CheckDone(SBThreatType threat_type);
 
-  void ReportMalware(SBThreatType threat_type);
+  void ReportMalware();
 
   void IdentifyReferrerChain();
 
   void UpdateDownloadCheckStats(SBStatsType stat_type);
+
+  void CreateAndMaybeSendClientSafeBrowsingWarningShownReport(
+      std::string post_data);
 
   // The DownloadItem we are checking. Must be accessed only on UI thread.
   raw_ptr<download::DownloadItem> item_;
@@ -79,12 +83,10 @@ class DownloadUrlSBClient : public SafeBrowsingDatabaseManager::Client,
   const SBStatsType total_type_;
   const SBStatsType dangerous_type_;
 
-  raw_ptr<DownloadProtectionService> service_;
+  raw_ptr<DownloadProtectionService, DanglingUntriaged> service_;
   CheckDownloadCallback callback_;
   scoped_refptr<SafeBrowsingUIManager> ui_manager_;
   base::TimeTicks start_time_;
-  ExtendedReportingLevel extended_reporting_level_;
-  bool is_enhanced_protection_;
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
   base::ScopedObservation<download::DownloadItem,
                           download::DownloadItem::Observer>

@@ -13,15 +13,15 @@ namespace content {
 
 // Class that bridges BrowserAccessibilityManager and platform-dependent
 // handler.
-// TODO(crbug.com/727210): Expand this class to work on all the platforms.
+// TODO(crbug.com/40522979): Expand this class to work on all the platforms.
 class CONTENT_EXPORT WebContentsAccessibility {
  public:
-  WebContentsAccessibility() {}
+  WebContentsAccessibility() = default;
 
   WebContentsAccessibility(const WebContentsAccessibility&) = delete;
   WebContentsAccessibility& operator=(const WebContentsAccessibility&) = delete;
 
-  virtual ~WebContentsAccessibility() {}
+  virtual ~WebContentsAccessibility() = default;
 };
 }  // namespace content
 

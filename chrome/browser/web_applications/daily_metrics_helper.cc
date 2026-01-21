@@ -4,7 +4,17 @@
 
 #include "chrome/browser/web_applications/daily_metrics_helper.h"
 
-#include "base/cxx17_backports.h"
+#include <stdint.h>
+
+#include <algorithm>
+#include <string>
+#include <utility>
+
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/numerics/clamped_math.h"
+#include "base/value_iterators.h"
+#include "base/values.h"
 #include "chrome/browser/metrics/ukm_background_recorder_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
@@ -12,9 +22,12 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/ukm/app_source_url_recorder.h"
 #include "content/public/browser/browser_thread.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/origin.h"
 
 namespace web_app {
@@ -22,7 +35,7 @@ namespace web_app {
 namespace {
 
 int BucketedDailySeconds(base::TimeDelta delta) {
-  int64_t sample = base::clamp(delta.InSeconds(), static_cast<int64_t>(0),
+  int64_t sample = std::clamp(delta.InSeconds(), static_cast<int64_t>(0),
                                base::Days(1).InSeconds());
   // Result between 1 sec and 1 day, in 50 linear buckets per day.
   int32_t bucket_size = base::Days(1).InSeconds() / 50;
@@ -32,19 +45,19 @@ int BucketedDailySeconds(base::TimeDelta delta) {
 
 }  // namespace
 
-// This class exists just to be friended by |UkmRecorder| to control the
-// emission of Web app UKMs in UkmRecorder.
+// This class exists just to be friended by `AppSourceUrlRecorder` to control
+// the emission of web app AppKMs.
 class DesktopWebAppUkmRecorder {
  public:
   static void Emit(const DailyInteraction& record) {
     DCHECK(record.start_url.is_valid());
     ukm::SourceId source_id =
-        ukm::UkmRecorder::GetSourceIdForDesktopWebAppStartUrl(
-            base::PassKey<DesktopWebAppUkmRecorder>(), record.start_url);
+        ukm::AppSourceUrlRecorder::GetSourceIdForPWA(record.start_url);
     ukm::builders::WebApp_DailyInteraction builder(source_id);
     builder.SetUsed(true)
         .SetInstalled(record.installed)
         .SetDisplayMode(record.effective_display_mode)
+        .SetCapturesLinks(record.captures_links)
         .SetPromotable(record.promotable);
     if (record.install_source)
       builder.SetInstallSource(record.install_source.value());
@@ -57,18 +70,20 @@ class DesktopWebAppUkmRecorder {
     if (record.num_sessions > 0)
       builder.SetNumSessions(record.num_sessions);
     builder.Record(ukm::UkmRecorder::Get());
+    ukm::AppSourceUrlRecorder::MarkSourceForDeletion(source_id);
   }
 };
 
 namespace {
 
-using absl::optional;
+using std::optional;
 
 bool skip_origin_check_for_testing_ = false;
 
 const char kInstalled[] = "installed";
 const char kInstallSource[] = "install_source";
 const char kEffectiveDisplayMode[] = "effective_display_mode";
+const char kCapturesLinks[] = "captures_links";
 const char kPromotable[] = "promotable";
 const char kForegroundDurationSec[] = "foreground_duration_sec";
 const char kBackgroundDurationSec[] = "background_duration_sec";
@@ -78,12 +93,12 @@ optional<DailyInteraction> DictToRecord(const std::string& url,
                                         const base::Value::Dict& record_dict) {
   GURL gurl(url);
   if (!gurl.is_valid())
-    return absl::nullopt;
+    return std::nullopt;
   DailyInteraction record(gurl);
 
   optional<int> installed = record_dict.FindBool(kInstalled);
   if (!installed.has_value())
-    return absl::nullopt;
+    return std::nullopt;
   record.installed = *installed;
 
   record.install_source = record_dict.FindInt(kInstallSource);
@@ -91,12 +106,14 @@ optional<DailyInteraction> DictToRecord(const std::string& url,
   optional<int> effective_display_mode =
       record_dict.FindInt(kEffectiveDisplayMode);
   if (!effective_display_mode.has_value())
-    return absl::nullopt;
+    return std::nullopt;
   record.effective_display_mode = *effective_display_mode;
+
+  record.captures_links = record_dict.FindBool(kCapturesLinks).value_or(false);
 
   optional<bool> promotable = record_dict.FindBool(kPromotable);
   if (!promotable.has_value())
-    return absl::nullopt;
+    return std::nullopt;
   record.promotable = *promotable;
 
   optional<int> foreground_duration_sec =
@@ -125,12 +142,14 @@ base::Value::Dict RecordToDict(DailyInteraction& record) {
   if (record.install_source.has_value())
     record_dict.Set(kInstallSource, *record.install_source);
   record_dict.Set(kEffectiveDisplayMode, record.effective_display_mode);
+  record_dict.Set(kCapturesLinks, record.captures_links);
   record_dict.Set(kPromotable, record.promotable);
   record_dict.Set(kForegroundDurationSec,
                   static_cast<int>(record.foreground_duration.InSeconds()));
   record_dict.Set(kBackgroundDurationSec,
                   static_cast<int>(record.background_duration.InSeconds()));
   record_dict.Set(kNumSessions, record.num_sessions);
+
   return record_dict;
 }
 

@@ -7,33 +7,35 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "chrome/browser/support_tool/data_collector.h"
-#include "components/feedback/pii_types.h"
+#include "components/feedback/redaction_tool/pii_types.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/zlib/google/zip_reader.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 using testing::IsSupersetOf;
 using testing::Pair;
@@ -60,17 +62,17 @@ class TestDataCollector : public DataCollector {
   void CollectDataAndDetectPII(
       DataCollectorDoneCallback on_data_collected_callback,
       scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-      scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container)
+      scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container)
       override {
     // Add fake PII for testing and return error to the callback if required.
     PrepareDataCollectionOutput(std::move(on_data_collected_callback));
   }
 
   void ExportCollectedDataWithPII(
-      std::set<feedback::PIIType> pii_types_to_keep,
+      std::set<redaction::PIIType> pii_types_to_keep,
       base::FilePath target_directory,
       scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool,
-      scoped_refptr<feedback::RedactionToolContainer> redaction_tool_container,
+      scoped_refptr<redaction::RedactionToolContainer> redaction_tool_container,
       DataCollectorDoneCallback on_exported_callback) override {
     on_exported_callback =
         base::BindPostTask(base::SingleThreadTaskRunner::GetCurrentDefault(),
@@ -91,8 +93,8 @@ class TestDataCollector : public DataCollector {
       std::move(callback).Run(SupportToolError(
           SupportToolErrorCode::kDataCollectorError, /*error_message=*/""));
     } else {
-      pii_map_[feedback::PIIType::kUIHierarchyWindowTitles].insert(name_);
-      std::move(callback).Run(absl::nullopt);
+      pii_map_[redaction::PIIType::kUIHierarchyWindowTitles].insert(name_);
+      std::move(callback).Run(std::nullopt);
     }
   }
 
@@ -106,7 +108,7 @@ class TestDataCollector : public DataCollector {
     } else {
       base::FilePath target_file = target_directory.AppendASCII(name_);
       base::WriteFile(target_file, kTestDataToWriteOnFile);
-      std::move(callback).Run(absl::nullopt);
+      std::move(callback).Run(std::nullopt);
     }
   }
 
@@ -130,12 +132,12 @@ class SupportToolHandlerTest : public ::testing::Test {
 
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Set serial number for testing.
     fake_statistics_provider_.SetMachineStatistic("serial_number", "000000");
     ash::system::StatisticsProvider::SetTestProvider(
         &fake_statistics_provider_);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   void TearDown() override {
@@ -179,9 +181,9 @@ class SupportToolHandlerTest : public ::testing::Test {
  private:
   // The temporary directory that we'll store the output files.
   base::ScopedTempDir temp_dir_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::system::FakeStatisticsProvider fake_statistics_provider_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   base::test::TaskEnvironment task_environment;
 };
 
@@ -222,8 +224,8 @@ TEST_F(SupportToolHandlerTest, ExportSupportDataTest) {
       FILE_PATH_LITERAL("support-tool-export-success"));
   base::test::TestFuture<base::FilePath, std::set<SupportToolError>>
       test_future;
-  std::set<feedback::PIIType> pii_types{
-      feedback::PIIType::kUIHierarchyWindowTitles};
+  std::set<redaction::PIIType> pii_types{
+      redaction::PIIType::kUIHierarchyWindowTitles};
   handler->ExportCollectedData(pii_types, target_path,
                                test_future.GetCallback());
   // handler should return the exported path on success.
@@ -301,8 +303,8 @@ TEST_F(SupportToolHandlerTest, ErrorMessageOnExportSupportData) {
   // Export collected data into the target temporary directory.
   base::test::TestFuture<base::FilePath, std::set<SupportToolError>>
       test_future;
-  std::set<feedback::PIIType> pii_types{
-      feedback::PIIType::kUIHierarchyWindowTitles};
+  std::set<redaction::PIIType> pii_types{
+      redaction::PIIType::kUIHierarchyWindowTitles};
   handler->ExportCollectedData(pii_types, target_path,
                                test_future.GetCallback());
   // Check the error message.

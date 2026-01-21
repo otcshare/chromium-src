@@ -7,6 +7,8 @@
 #include <utility>
 
 #include "base/strings/stringprintf.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/common/sync_token.h"
 
 namespace viz {
 
@@ -29,16 +31,20 @@ std::string BlendBitmap::ToString() const {
                             destination_region_.ToString().c_str());
 }
 
-BlitRequest::BlitRequest(
-    const gfx::Point& destination_region_offset,
-    LetterboxingBehavior letterboxing_behavior,
-    const std::array<gpu::MailboxHolder, CopyOutputResult::kMaxPlanes>&
-        mailboxes,
-    bool populates_gpu_memory_buffer)
+BlitRequest::BlitRequest() = default;
+
+BlitRequest::BlitRequest(const gfx::Point& destination_region_offset,
+                         LetterboxingBehavior letterboxing_behavior,
+                         scoped_refptr<gpu::ClientSharedImage> shared_image,
+                         const gpu::SyncToken& sync_token,
+                         bool populates_mappable_shared_image)
     : destination_region_offset_(destination_region_offset),
       letterboxing_behavior_(letterboxing_behavior),
-      mailboxes_(mailboxes),
-      populates_gpu_memory_buffer_(populates_gpu_memory_buffer) {}
+      shared_image_(std::move(shared_image)),
+      sync_token_(sync_token),
+      populates_mappable_shared_image_(populates_mappable_shared_image) {
+  DCHECK(shared_image_);
+}
 
 BlitRequest::BlitRequest(BlitRequest&& other) = default;
 BlitRequest& BlitRequest::operator=(BlitRequest&& other) = default;
@@ -49,7 +55,7 @@ std::string BlitRequest::ToString() const {
   return base::StringPrintf("blit to %s, blend %u bitmaps, populates GMB? %d",
                             destination_region_offset_.ToString().c_str(),
                             static_cast<uint32_t>(blend_bitmaps_.size()),
-                            populates_gpu_memory_buffer_);
+                            populates_mappable_shared_image_);
 }
 
 }  // namespace viz

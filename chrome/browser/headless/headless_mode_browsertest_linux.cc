@@ -4,62 +4,76 @@
 
 #include "chrome/browser/headless/headless_mode_browsertest.h"
 
+#include "chrome/browser/headless/headless_mode_browsertest_utils.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
+#include "ui/aura/window_tree_host_platform.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/platform_window.h"
-#include "ui/platform_window/platform_window_delegate.h"
-#include "ui/platform_window/platform_window_init_properties.h"
+#include "ui/views/widget/widget.h"
+
+namespace headless {
+
+namespace test {
+
+bool IsPlatformWindowVisible(views::Widget* widget) {
+  CHECK(widget);
+
+  gfx::NativeWindow native_window = widget->GetNativeWindow();
+  CHECK(native_window);
+
+  aura::WindowTreeHostPlatform* host =
+      aura::WindowTreeHostPlatform::GetHostForWindow(native_window);
+  CHECK(host);
+
+  ui::PlatformWindow* platform_window = host->platform_window();
+  CHECK(platform_window);
+
+  return platform_window->IsVisible();
+}
+
+gfx::Rect GetPlatformWindowExpectedBounds(views::Widget* widget) {
+  CHECK(widget);
+
+  gfx::NativeWindow native_window = widget->GetNativeWindow();
+  CHECK(native_window);
+
+  aura::WindowTreeHostPlatform* host =
+      aura::WindowTreeHostPlatform::GetHostForWindow(native_window);
+  CHECK(host);
+
+  ui::PlatformWindow* platform_window = host->platform_window();
+  CHECK(platform_window);
+
+  return platform_window->GetBoundsInPixels();
+}
+
+}  // namespace test
 
 namespace {
 
-// Mock platform window delegate for platform window creation.
-class MockPlatformWindowDelegate : public ui::PlatformWindowDelegate {
- public:
-  MockPlatformWindowDelegate() = default;
-
-  MockPlatformWindowDelegate(const MockPlatformWindowDelegate&) = delete;
-  MockPlatformWindowDelegate& operator=(const MockPlatformWindowDelegate&) =
-      delete;
-
-  ~MockPlatformWindowDelegate() override = default;
-
-  // ui::PlatformWindowDelegate:
-  void OnBoundsChanged(const BoundsChange& bounds) override {}
-  void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget) override {}
-  void OnDamageRect(const gfx::Rect& damaged_region) override {}
-  void DispatchEvent(ui::Event* event) override {}
-  void OnCloseRequest() override {}
-  void OnClosed() override {}
-  void OnWindowStateChanged(ui::PlatformWindowState old_state,
-                            ui::PlatformWindowState new_state) override {}
-  void OnLostCapture() override {}
-  void OnWillDestroyAcceleratedWidget() override {}
-  void OnAcceleratedWidgetDestroyed() override {}
-  void OnActivationChanged(bool active) override {}
-  void OnMouseEnter() override {}
-};
-
-}  // namespace
+ui::PlatformWindow* GetPlatformWindow(Browser* browser) {
+  DCHECK(browser);
+  auto* window_tree_host_platform =
+      aura::WindowTreeHostPlatform::GetHostForWindow(
+          browser->window()->GetNativeWindow());
+  return window_tree_host_platform->platform_window();
+}
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, OzonePlatformHeadless) {
-  // On Linux, the Native Headless Chrome uses Ozone/Headless.
+  // On Linux, new headless Chrome uses Ozone/Headless.
   ASSERT_NE(ui::OzonePlatform::GetInstance(), nullptr);
   EXPECT_EQ(ui::OzonePlatform::GetPlatformNameForTest(), "headless");
 }
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, PlatformWindowCantCapture) {
-  ASSERT_TRUE(browser()->window()->GetNativeWindow()->IsVisible());
-  // Ozone/Headless uses StubWindow which is the only PlatformWindow
-  // implementation that does not respect capture setting.
-  MockPlatformWindowDelegate platform_window_delegate;
-  std::unique_ptr<ui::PlatformWindow> platform_window =
-      ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
-          &platform_window_delegate,
-          ui::PlatformWindowInitProperties(gfx::Rect(0, 0)));
-
+  // Ozone/headless uses StubWindow which is the only PlatformWindow
+  // implementation that does not recognize capture setting.
+  ui::PlatformWindow* platform_window = GetPlatformWindow(browser());
   platform_window->SetCapture();
   EXPECT_FALSE(platform_window->HasCapture());
 }
@@ -72,7 +86,10 @@ INSTANTIATE_TEST_SUITE_P(HeadlessModeBrowserTestWithStartWindowMode,
 
 IN_PROC_BROWSER_TEST_P(HeadlessModeBrowserTestWithStartWindowMode,
                        BrowserDesktopWindowVisibility) {
-  // On Linux, the Native Headless Chrome browser window exists and is
-  // visible.
+  // On Linux, new headless Chrome browser window exists and is visible.
   EXPECT_TRUE(browser()->window()->IsVisible());
 }
+
+}  // namespace
+
+}  // namespace headless

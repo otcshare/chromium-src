@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html class=reftest-wait>
-<title>Shared transitions: element with clip</title>
-<link rel="help" href="https://github.com/WICG/view-transitions">
+<title>View transitions: element with clip</title>
+<link rel="help" href="https://drafts.csswg.org/css-view-transitions-1/">
 <link rel="author" href="mailto:khushalsagar@chromium.org">
 <link rel="match" href="content-with-clip-ref.html">
 
 <script src="/common/reftest-wait.js"></script>
 <style>
+:root {
+  scrollbar-width: none;
+}
 .target {
   contain: paint;
   width: 100px;
@@ -34,6 +37,10 @@ body {
   height: 150vh;
 }
 
+html::view-transition {
+  background: pink;
+  height: 100%;
+}
 html::view-transition-group(hidden) { animation-duration: 300s; }
 html::view-transition-image-pair(hidden) { animation: unset; opacity: 0; }
 
@@ -43,6 +50,7 @@ html::view-transition-group(target1), html::view-transition-group(target2) {
 }
 html::view-transition-old(target1) { animation: unset; opacity: 1; }
 html::view-transition-new(target2) { animation: unset; opacity: 1; }
+html::view-transition-group(root) { display: none }
 
 </style>
 
@@ -60,13 +68,11 @@ html::view-transition-new(target2) { animation: unset; opacity: 1; }
 failIfNot(document.startViewTransition, "Missing document.startViewTransition");
 
 async function runTest() {
-  document.startViewTransition(() => {
+  let transition = document.startViewTransition(() => {
     target1.style = "";
     target2.style = "view-transition-name: target2";
-    requestAnimationFrame(() => requestAnimationFrame(() =>
-      requestAnimationFrame(() => requestAnimationFrame(takeScreenshot))
-    ));
   });
+  transition.ready.then(takeScreenshot);
 }
 onload = () => requestAnimationFrame(() => requestAnimationFrame(runTest));
 </script>

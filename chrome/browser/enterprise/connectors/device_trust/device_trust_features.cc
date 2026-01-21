@@ -6,12 +6,31 @@
 
 namespace enterprise_connectors {
 
-BASE_FEATURE(kDeviceTrustConnectorEnabled,
-             "DeviceTrustConnectorEnabled",
+BASE_FEATURE(kDTCKeyRotationEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsKeyRotationEnabled() {
+  return base::FeatureList::IsEnabled(kDTCKeyRotationEnabled);
+}
+
+BASE_FEATURE(kDTCKeyUploadedBySharedAPIEnabled,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-bool IsDeviceTrustConnectorFeatureEnabled() {
-  return base::FeatureList::IsEnabled(kDeviceTrustConnectorEnabled);
+bool IsDTCKeyUploadedBySharedAPI() {
+  return base::FeatureList::IsEnabled(kDTCKeyUploadedBySharedAPIEnabled);
+}
+
+BASE_FEATURE(kDTCKeyRotationUploadedBySharedAPIEnabled,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsDTCKeyRotationUploadedBySharedAPI() {
+  return base::FeatureList::IsEnabled(
+      kDTCKeyRotationUploadedBySharedAPIEnabled);
+}
+
+BASE_FEATURE(kDTCAntivirusSignalEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsDTCAntivirusSignalEnabled() {
+  return base::FeatureList::IsEnabled(kDTCAntivirusSignalEnabled);
 }
 
 }  // namespace enterprise_connectors

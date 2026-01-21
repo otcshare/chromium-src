@@ -2,60 +2,90 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-import("//tools/grit/preprocess_if_expr.gni")
-import("//ui/webui/resources/tools/generate_grd.gni")
-import("./js.gni")
-
-preprocess_folder = "$root_gen_dir/ui/webui/resources/preprocessed/js"
-preprocess_src_manifest = "preprocessed_src_manifest.json"
+import("//components/signin/features.gni")
+import("../tools/build_webui.gni")
 
 include_polymer = !is_android && !is_ios
 
-generate_grd("build_grdp") {
+build_webui("build") {
   grd_prefix = "webui_js"
-  out_grd = "$target_gen_dir/resources.grdp"
-  public_deps = [ ":preprocess" ]
-  manifest_files = [ "$target_gen_dir/$preprocess_src_manifest" ]
-  if (include_polymer) {
-    manifest_files += [ "$target_gen_dir/browser_command/build_ts.manifest" ]
-  }
-  resource_path_prefix = "js"
-}
 
-group("preprocess") {
-  public_deps = [
-    ":preprocess_src",
-    ":preprocess_src_ts",
+  ts_files = [
+    "action_link.ts",
+    "assert.ts",
+    "color_utils.ts",
+    "cr.ts",
+    "cr_router.ts",
+    "custom_element.ts",
+    "drag_wrapper.ts",
+    "event_tracker.ts",
+    "focus_grid.ts",
+    "focus_outline_manager.ts",
+    "focus_row.ts",
+    "focus_without_ink.ts",
+    "icon.ts",
+    "keyboard_shortcut_list.ts",
+    "load_time_data.ts",
+    "load_time_data_deprecated.js",
+    "metrics_reporter/browser_proxy.ts",
+    "metrics_reporter/metrics_reporter.ts",
+    "mojo_type_util.ts",
+    "open_window_proxy.ts",
+    "parse_html_subset.ts",
+    "platform.ts",
+    "plural_string_proxy.ts",
+    "promise_resolver.ts",
+    "search_highlight_utils.ts",
+    "static_types.ts",
+    "store.ts",
+    "test_loader.ts",
+    "test_loader_util.ts",
+    "tracked_element/tracked_element_manager.ts",
+    "tracked_element/tracked_element_proxy.ts",
+    "util.ts",
   ]
-  if (include_polymer) {
-    public_deps += [ "browser_command:build_ts" ]
-  }
-}
-
-# TS files are passed to a separate target so that they are not listed in the
-# |out_manifest|.
-preprocess_if_expr("preprocess_src_ts") {
-  in_folder = "."
-  out_folder = preprocess_folder
-  in_files = ts_files
-}
-
-preprocess_if_expr("preprocess_src") {
-  in_folder = "."
-  out_folder = preprocess_folder
-  out_manifest = "$target_gen_dir/$preprocess_src_manifest"
-  in_files = [ "load_time_data_deprecated.js" ]
-
-  if (is_chromeos_ash || is_ios) {
-    # Used by ChromeOS UIs and ios inspect and omaha UIs
-    in_files += [ "util_deprecated.js" ]
-  }
 
   if (is_ios) {
-    in_files += [
+    ts_files += [
       "ios/mojo_api.js",
       "ios/web_ui.js",
     ]
   }
+
+  if (is_chromeos || is_ios) {
+    # Used by ChromeOS UIs and ios inspect and omaha UIs
+    ts_files += [ "util_deprecated.js" ]
+  }
+
+  if (include_polymer) {
+    ts_files += [ "browser_command/browser_command_proxy.ts" ]
+  }
+
+  if (enable_dice_support) {
+    ts_files += [ "batch_upload_promo/batch_upload_promo_proxy.ts" ]
+  }
+
+  mojo_files_deps = [ "./metrics_reporter:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/ui/webui/resources/js/metrics_reporter/metrics_reporter.mojom-webui.ts" ]
+
+  if (include_polymer) {
+    mojo_files_deps += [ "./browser_command:mojo_bindings_ts__generator" ]
+    mojo_files += [ "$root_gen_dir/ui/webui/resources/js/browser_command/browser_command.mojom-webui.ts" ]
+  }
+
+  if (enable_dice_support) {
+    mojo_files_deps += [ "./batch_upload_promo:mojo_bindings_ts__generator" ]
+    mojo_files += [ "$root_gen_dir/ui/webui/resources/js/batch_upload_promo/batch_upload_promo.mojom-webui.ts" ]
+  }
+
+  ts_out_dir = "$root_gen_dir/ui/webui/resources/tsc/js"
+  ts_composite = true
+  ts_deps = [ "../mojo:build_ts" ]
+  ts_definitions = [
+    "//tools/typescript/definitions/chrome_send.d.ts",
+    "//tools/typescript/definitions/chrome_timeticks.d.ts",
+  ]
+  webui_context_type = "relative"
+  generate_grdp = true
+  grd_resource_path_prefix = rebase_path(".", "//ui/webui/resources")
 }

@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "services/network/throttling/network_conditions.h"
 
 namespace base {
 class TimeDelta;
@@ -40,7 +42,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkInterceptor {
   base::WeakPtr<ThrottlingNetworkInterceptor> GetWeakPtr();
 
   // Applies network emulation configuration.
-  void UpdateConditions(std::unique_ptr<NetworkConditions> conditions);
+  void UpdateConditions(const NetworkConditions& conditions);
 
   // This function implements throttling logic. It is meant to be called after
   // the interaction with a real network to delay invocation of a client
@@ -91,6 +93,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkInterceptor {
   // Calculates buffer len to pass to network transaction Read call.
   int GetReadBufLen(int buf_len) const;
 
+  const NetworkConditions& conditions() const { return conditions_; }
+
  private:
   struct ThrottleRecord {
    public:
@@ -124,7 +128,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkInterceptor {
 
   void RemoveRecord(ThrottleRecords* records, const ThrottleCallback& callback);
 
-  std::unique_ptr<NetworkConditions> conditions_;
+  NetworkConditions conditions_;
 
   // Throttables suspended for a "latency" period.
   ThrottleRecords suspended_;

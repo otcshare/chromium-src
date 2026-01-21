@@ -5,16 +5,13 @@
 #ifndef CHROME_BROWSER_WIN_CONFLICTS_MODULE_INFO_UTIL_H_
 #define CHROME_BROWSER_WIN_CONFLICTS_MODULE_INFO_UTIL_H_
 
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/strings/string_piece.h"
-
-// A format string for generating paths to COM class in-proc server keys under
-// HKEY_CLASSES_ROOT.
-extern const wchar_t kClassIdRegistryKeyFormat[];
 
 // Information about the certificate of a file.
 struct CertificateInfo {
@@ -42,6 +39,10 @@ struct CertificateInfo {
   std::u16string subject;
 };
 
+// Converts a given `guid` to a path to a COM class in-proc server key under
+// HKEY_CLASSES_ROOT.
+std::wstring GuidToClsid(std::wstring_view guid);
+
 // Extracts information about the certificate of the given |file|, populating
 // |certificate_info|. It is expected that |certificate_info| be freshly
 // constructed.
@@ -53,7 +54,7 @@ void GetCertificateInfo(const base::FilePath& file,
 // exist.
 // Note: This is not a secure check to validate the owner of a certificate. It
 //       simply does string comparison on the subject name.
-bool IsMicrosoftModule(base::StringPiece16 subject);
+bool IsMicrosoftModule(std::u16string_view subject);
 
 // Returns a mapping of the value of an environment variable to its name.
 // Removes any existing trailing backslash in the values.

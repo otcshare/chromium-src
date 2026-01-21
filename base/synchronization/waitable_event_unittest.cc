@@ -7,8 +7,10 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -98,23 +100,24 @@ TEST(WaitableEventTest, WaitManyShortcut) {
   }
 
   ev[3]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 3u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 3u);
 
   ev[3]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 3u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 3u);
 
   ev[4]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 4u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 4u);
 
   ev[0]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 0u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 0u);
 
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 }
 
 TEST(WaitableEventTest, WaitManyLeftToRight) {
-  WaitableEvent* ev[5];
+  std::array<WaitableEvent*, 5> ev;
   for (auto*& i : ev) {
     i = new WaitableEvent(WaitableEvent::ResetPolicy::AUTOMATIC,
                           WaitableEvent::InitialState::NOT_SIGNALED);
@@ -125,36 +128,35 @@ TEST(WaitableEventTest, WaitManyLeftToRight) {
   // the WaitableEvents' addresses -- are relevant in determining who wins when
   // multiple events are signaled.
 
-  std::sort(ev, ev + 5);
+  std::ranges::sort(ev);
   do {
     ev[0]->Signal();
     ev[1]->Signal();
-    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev));
 
     ev[2]->Signal();
-    EXPECT_EQ(1u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(1u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
 
     ev[3]->Signal();
     ev[4]->Signal();
     ev[0]->Signal();
-    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(3u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(3u, WaitableEvent::WaitMany(ev));
     ev[2]->Signal();
-    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(4u, WaitableEvent::WaitMany(ev, 5));
-  } while (std::next_permutation(ev, ev + 5));
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(4u, WaitableEvent::WaitMany(ev));
+  } while (std::ranges::next_permutation(ev).found);
 
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 }
 
 class WaitableEventSignaler : public PlatformThread::Delegate {
  public:
   WaitableEventSignaler(TimeDelta delay, WaitableEvent* event)
-      : delay_(delay),
-        event_(event) {
-  }
+      : delay_(delay), event_(event) {}
 
   void ThreadMain() override {
     PlatformThread::Sleep(delay_);
@@ -173,11 +175,13 @@ TEST(WaitableEventTest, WaitAndDelete) {
       new WaitableEvent(WaitableEvent::ResetPolicy::AUTOMATIC,
                         WaitableEvent::InitialState::NOT_SIGNALED);
 
-  WaitableEventSignaler signaler(Milliseconds(10), ev);
   PlatformThreadHandle thread;
-  PlatformThread::Create(0, &signaler, &thread);
-
-  ev->Wait();
+  {
+    // Signaler can't outlive event.
+    WaitableEventSignaler signaler(Milliseconds(10), ev);
+    PlatformThread::Create(0, &signaler, &thread);
+    ev->Wait();
+  }
   delete ev;
 
   PlatformThread::Join(thread);
@@ -192,17 +196,19 @@ TEST(WaitableEventTest, WaitMany) {
                           WaitableEvent::InitialState::NOT_SIGNALED);
   }
 
-  WaitableEventSignaler signaler(Milliseconds(10), ev[2]);
   PlatformThreadHandle thread;
-  PlatformThread::Create(0, &signaler, &thread);
+  {
+    // Signaler can't outlive event.
+    WaitableEventSignaler signaler(Milliseconds(10), ev[2]);
+    PlatformThread::Create(0, &signaler, &thread);
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
+  }
 
-  size_t index = WaitableEvent::WaitMany(ev, 5);
-
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 
   PlatformThread::Join(thread);
-  EXPECT_EQ(2u, index);
 }
 
 // Tests that using TimeDelta::Max() on TimedWait() is not the same as passing
@@ -212,14 +218,16 @@ TEST(WaitableEventTest, TimedWait) {
       new WaitableEvent(WaitableEvent::ResetPolicy::AUTOMATIC,
                         WaitableEvent::InitialState::NOT_SIGNALED);
 
-  TimeDelta thread_delay = Milliseconds(10);
-  WaitableEventSignaler signaler(thread_delay, ev);
   PlatformThreadHandle thread;
-  TimeTicks start = TimeTicks::Now();
-  PlatformThread::Create(0, &signaler, &thread);
-
-  EXPECT_TRUE(ev->TimedWait(TimeDelta::Max()));
-  EXPECT_GE(TimeTicks::Now() - start, thread_delay);
+  TimeDelta thread_delay = Milliseconds(10);
+  {
+    // Signaler can't outlive event.
+    WaitableEventSignaler signaler(thread_delay, ev);
+    TimeTicks start = TimeTicks::Now();
+    PlatformThread::Create(0, &signaler, &thread);
+    EXPECT_TRUE(ev->TimedWait(TimeDelta::Max()));
+    EXPECT_GE(TimeTicks::Now() - start, thread_delay);
+  }
   delete ev;
 
   PlatformThread::Join(thread);

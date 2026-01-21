@@ -8,16 +8,16 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/stl_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/win/windows_version.h"
 #include "device/base/features.h"
 #include "device/bluetooth/bluetooth_adapter_winrt.h"
 #include "device/bluetooth/bluetooth_classic_win.h"
@@ -38,10 +38,7 @@ scoped_refptr<BluetoothAdapter> BluetoothAdapter::CreateAdapter() {
 
 // static
 scoped_refptr<BluetoothAdapter> BluetoothAdapterWin::CreateAdapter() {
-  if (UseNewBLEWinImplementation())
-    return base::WrapRefCounted(new BluetoothAdapterWinrt());
-
-  return BluetoothAdapterWin::CreateClassicAdapter();
+  return base::WrapRefCounted(new BluetoothAdapterWinrt());
 }
 
 // static
@@ -49,18 +46,7 @@ scoped_refptr<BluetoothAdapter> BluetoothAdapterWin::CreateClassicAdapter() {
   return base::WrapRefCounted(new BluetoothAdapterWin());
 }
 
-// static
-bool BluetoothAdapterWin::UseNewBLEWinImplementation() {
-  return base::FeatureList::IsEnabled(kNewBLEWinImplementation) &&
-         base::win::GetVersion() >= base::win::Version::WIN10;
-}
-
-BluetoothAdapterWin::BluetoothAdapterWin()
-    : BluetoothAdapter(),
-      initialized_(false),
-      powered_(false),
-      discovery_status_(NOT_DISCOVERING),
-      force_update_device_for_test_(false) {}
+BluetoothAdapterWin::BluetoothAdapterWin() = default;
 
 BluetoothAdapterWin::~BluetoothAdapterWin() {
   if (task_manager_.get())
@@ -188,6 +174,11 @@ void BluetoothAdapterWin::RemovePairingDelegateInternal(
 void BluetoothAdapterWin::AdapterStateChanged(
     const BluetoothTaskManagerWin::AdapterState& state) {
   DCHECK(thread_checker_.CalledOnValidThread());
+  // Lifetime: If obtained via BluetoothAdapterFactory::GetClassicAdapter() and
+  // the caller did NOT keep the scoped_refptr<BluetoothAdapter>, running
+  // init_callback_.Run() will release the last reference and destroy |this|.
+  // Use keep_alive to avoid use-after-free issues.
+  scoped_refptr<BluetoothAdapterWin> keep_alive(this);
   name_ = state.name;
   bool was_present = IsPresent();
   bool is_present = !state.address.empty();
@@ -204,6 +195,12 @@ void BluetoothAdapterWin::AdapterStateChanged(
   if (!initialized_) {
     initialized_ = true;
     std::move(init_callback_).Run();
+  }
+
+  // When the Bluetooth adapter is powered off or not present, all Bluetooth
+  // devices should be removed.
+  if (!powered_ || !is_present) {
+    ClearAllDevices();
   }
 }
 
@@ -242,17 +239,16 @@ void BluetoothAdapterWin::DevicesPolled(
   DeviceAddressSet changed_devices =
       base::STLSetIntersection<DeviceAddressSet>(known_devices, new_devices);
   for (const auto& device_state : devices) {
-    if (added_devices.find(device_state->address) != added_devices.end()) {
+    if (added_devices.contains(device_state->address)) {
       auto device_win = std::make_unique<BluetoothDeviceWin>(
           this, *device_state, ui_task_runner_, socket_thread_);
       BluetoothDeviceWin* device_win_raw = device_win.get();
       devices_[device_state->address] = std::move(device_win);
       for (auto& observer : observers_)
         observer.DeviceAdded(this, device_win_raw);
-    } else if (changed_devices.find(device_state->address) !=
-               changed_devices.end()) {
+    } else if (changed_devices.contains(device_state->address)) {
       auto iter = devices_.find(device_state->address);
-      DCHECK(iter != devices_.end());
+      CHECK(iter != devices_.end());
       BluetoothDeviceWin* device_win =
           static_cast<BluetoothDeviceWin*>(iter->second.get());
       if (!device_win->IsEqual(*device_state)) {
@@ -278,7 +274,6 @@ base::WeakPtr<BluetoothAdapter> BluetoothAdapterWin::GetWeakPtr() {
 // BluetoothAdapterWin should override SetPowered() instead.
 bool BluetoothAdapterWin::SetPoweredImpl(bool powered) {
   NOTREACHED();
-  return false;
 }
 
 void BluetoothAdapterWin::UpdateFilter(
@@ -323,7 +318,6 @@ void BluetoothAdapterWin::Initialize(base::OnceClosure init_callback) {
 void BluetoothAdapterWin::InitForTest(
     base::OnceClosure init_callback,
     std::unique_ptr<win::BluetoothClassicWrapper> classic_wrapper,
-    std::unique_ptr<win::BluetoothLowEnergyWrapper> le_wrapper,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
     scoped_refptr<base::SequencedTaskRunner> bluetooth_task_runner) {
   init_callback_ = std::move(init_callback);
@@ -331,7 +325,7 @@ void BluetoothAdapterWin::InitForTest(
   if (!ui_task_runner_)
     ui_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
   task_manager_ = BluetoothTaskManagerWin::CreateForTesting(
-      std::move(classic_wrapper), std::move(le_wrapper), ui_task_runner_);
+      std::move(classic_wrapper), ui_task_runner_);
   task_manager_->AddObserver(this);
   task_manager_->InitializeWithBluetoothTaskRunner(bluetooth_task_runner);
 }

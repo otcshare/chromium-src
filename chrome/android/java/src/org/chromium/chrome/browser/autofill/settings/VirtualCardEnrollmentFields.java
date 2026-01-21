@@ -4,60 +4,76 @@
 
 package org.chromium.chrome.browser.autofill.settings;
 
-import android.graphics.Bitmap;
-
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.chrome.browser.autofill.LegalMessageLine;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
 
-import java.util.LinkedList;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.autofill.payments.LegalMessageLine;
+import org.chromium.url.GURL;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Class to represent the fields required to show the {@link AutofillVirtualCardEnrollmentDialog}
  */
 @JNINamespace("autofill")
+@NullMarked
 public class VirtualCardEnrollmentFields {
-    @VisibleForTesting
-    final LinkedList<LegalMessageLine> mGoogleLegalMessages = new LinkedList<>();
-    @VisibleForTesting
-    final LinkedList<LegalMessageLine> mIssuerLegalMessages = new LinkedList<>();
-    private final Bitmap mIssuerCardArt;
-    private final String mCardIdentifierString;
+    @VisibleForTesting final List<LegalMessageLine> mGoogleLegalMessages = new ArrayList<>();
+    @VisibleForTesting final List<LegalMessageLine> mIssuerLegalMessages = new ArrayList<>();
+    private final String mCardName;
+    private final String mCardNumber;
+    private final int mNetworkIconId;
+    private final GURL mCardArtUrl;
 
-    public VirtualCardEnrollmentFields(String cardIdentifierString, Bitmap issuerCardArt) {
-        mCardIdentifierString = cardIdentifierString;
-        mIssuerCardArt = issuerCardArt;
+    public VirtualCardEnrollmentFields(
+            String cardName, String cardNumber, int networkIconId, GURL cardArtUrl) {
+        mCardName = cardName;
+        mCardNumber = cardNumber;
+        mNetworkIconId = networkIconId;
+        mCardArtUrl = cardArtUrl;
     }
 
-    public Bitmap getIssuerCardArt() {
-        return mIssuerCardArt;
+    public String getCardName() {
+        return mCardName;
     }
 
-    public String getCardIdentifierString() {
-        return mCardIdentifierString;
+    public String getCardNumber() {
+        return mCardNumber;
     }
 
-    public LinkedList<LegalMessageLine> getGoogleLegalMessages() {
+    public int getNetworkIconId() {
+        return mNetworkIconId;
+    }
+
+    public GURL getCardArtUrl() {
+        return mCardArtUrl;
+    }
+
+    public List<LegalMessageLine> getGoogleLegalMessages() {
         return mGoogleLegalMessages;
     }
 
-    public LinkedList<LegalMessageLine> getIssuerLegalMessages() {
+    public List<LegalMessageLine> getIssuerLegalMessages() {
         return mIssuerLegalMessages;
     }
 
     /**
      * Returns an instance of {@link VirtualCardEnrollmentFields}.
      *
-     * @param cardIdentifierString The text to be displayed in the enrollment dialog to help with
-     *         identifying the card.
-     * @param issuerCardArt The image associated with the card being enrolled.
+     * @param cardName The name of the card.
+     * @param cardNumber The card's last 4 digits.
+     * @param networkIconId The resource Id for the card's network icon.
+     * @param cardArtUrl The URL to fetch the card art associated with the card being enrolled.
      */
     @CalledByNative
     @VisibleForTesting
-    static VirtualCardEnrollmentFields create(String cardIdentifierString, Bitmap issuerCardArt) {
-        return new VirtualCardEnrollmentFields(cardIdentifierString, issuerCardArt);
+    static VirtualCardEnrollmentFields create(
+            String cardName, String cardNumber, int networkIconId, GURL cardArtUrl) {
+        return new VirtualCardEnrollmentFields(cardName, cardNumber, networkIconId, cardArtUrl);
     }
 
     /**
@@ -79,7 +95,10 @@ public class VirtualCardEnrollmentFields {
      */
     @CalledByNative
     private void addLinkToLastGoogleLegalMessageLine(int start, int end, String url) {
-        mGoogleLegalMessages.getLast().links.add(new LegalMessageLine.Link(start, end, url));
+        mGoogleLegalMessages
+                .get(mGoogleLegalMessages.size() - 1)
+                .links
+                .add(new LegalMessageLine.Link(start, end, url));
     }
 
     /**
@@ -101,6 +120,9 @@ public class VirtualCardEnrollmentFields {
      */
     @CalledByNative
     private void addLinkToLastIssuerLegalMessageLine(int start, int end, String url) {
-        mIssuerLegalMessages.getLast().links.add(new LegalMessageLine.Link(start, end, url));
+        mIssuerLegalMessages
+                .get(mIssuerLegalMessages.size() - 1)
+                .links
+                .add(new LegalMessageLine.Link(start, end, url));
     }
 }

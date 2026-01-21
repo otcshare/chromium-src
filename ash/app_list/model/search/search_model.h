@@ -13,7 +13,7 @@
 #include "ash/app_list/model/app_list_model_export.h"
 #include "ash/app_list/model/search/search_box_model.h"
 #include "ash/app_list/model/search/search_result.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/base/models/list_model.h"
 
 namespace ash {
@@ -38,6 +38,9 @@ class APP_LIST_MODEL_EXPORT SearchModel {
   bool search_engine_is_google() const {
     return search_box_->search_engine_is_google();
   }
+
+  void SetWouldTriggerLauncherSearchIph(bool would_trigger);
+  bool would_trigger_iph() const { return search_box_->would_trigger_iph(); }
 
   // Filter the given |results| by those which |result_filter| returns true for.
   // The returned list is truncated to |max_results|.

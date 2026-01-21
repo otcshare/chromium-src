@@ -40,9 +40,9 @@ class SurfaceFactoryCast : public SurfaceFactoryOzone {
       gfx::AcceleratedWidget widget,
       gpu::VulkanDeviceQueue* device_queue,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
-      absl::optional<gfx::Size> framebuffer_size = absl::nullopt) override;
+      std::optional<gfx::Size> framebuffer_size = std::nullopt) override;
 
  private:
   std::unique_ptr<GLOzoneEglCast> egl_implementation_;

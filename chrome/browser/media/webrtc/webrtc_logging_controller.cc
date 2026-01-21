@@ -8,25 +8,29 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/media/webrtc/webrtc_rtp_dump_handler.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
-#include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/child_process_security_policy.h"
 #include "storage/browser/file_system/isolated_context.h"
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 
 using webrtc_event_logging::WebRtcEventLogManager;
 
@@ -35,17 +39,32 @@ namespace {
 // Key used to attach the handler to the RenderProcessHost.
 constexpr char kRenderProcessHostKey[] = "kWebRtcLoggingControllerKey";
 
+std::string ToString(WebRtcTextLogHandler::LoggingState state) {
+  switch (state) {
+    case WebRtcTextLogHandler::LoggingState::CLOSED:
+      return "CLOSED";
+    case WebRtcTextLogHandler::LoggingState::STARTING:
+      return "STARTING";
+    case WebRtcTextLogHandler::LoggingState::STARTED:
+      return "STARTED";
+    case WebRtcTextLogHandler::LoggingState::STOPPING:
+      return "STOPPING";
+    case WebRtcTextLogHandler::LoggingState::STOPPED:
+      return "STOPPED";
+  }
+  NOTREACHED();
+}
+
 }  // namespace
 
 // static
 void WebRtcLoggingController::AttachToRenderProcessHost(
-    content::RenderProcessHost* host,
-    WebRtcLogUploader* log_uploader) {
+    content::RenderProcessHost* host) {
   host->SetUserData(
       kRenderProcessHostKey,
       std::make_unique<base::UserDataAdapter<WebRtcLoggingController>>(
-          new WebRtcLoggingController(host->GetID(), host->GetBrowserContext(),
-                                      log_uploader)));
+          new WebRtcLoggingController(host->GetDeprecatedID(),
+                                      host->GetBrowserContext())));
 }
 
 // static
@@ -78,7 +97,7 @@ void WebRtcLoggingController::StartLogging(GenericDoneCallback callback) {
   DCHECK(!callback.is_null());
 
   // Request a log_slot from the LogUploader and start logging.
-  if (text_log_handler_->StartLogging(log_uploader_, std::move(callback))) {
+  if (text_log_handler_->StartLogging(std::move(callback))) {
     // Start logging in the renderer. The callback has already been fired since
     // there is no acknowledgement when the renderer actually starts.
     content::RenderProcessHost* host =
@@ -120,7 +139,8 @@ void WebRtcLoggingController::UploadLog(UploadDoneCallback callback) {
 
   base::UmaHistogramSparse("WebRtcTextLogging.UploadStarted", web_app_id_);
 
-  log_uploader_->background_task_runner()->PostTaskAndReplyWithResult(
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->background_task_runner()->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(log_directory_getter_),
       base::BindOnce(&WebRtcLoggingController::TriggerUpload, this,
                      std::move(callback)));
@@ -134,24 +154,30 @@ void WebRtcLoggingController::UploadStoredLog(const std::string& log_id,
   base::UmaHistogramSparse("WebRtcTextLogging.UploadStoredStarted",
                            web_app_id_);
 
-  // Make this a method call on log_uploader_
+  // Make this a method call on log_uploader
 
   WebRtcLogUploader::UploadDoneData upload_data;
   upload_data.callback = std::move(callback);
   upload_data.local_log_id = log_id;
   upload_data.web_app_id = web_app_id_;
 
-  log_uploader_->background_task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](WebRtcLogUploader* log_uploader,
-             WebRtcLogUploader::UploadDoneData upload_data,
-             base::RepeatingCallback<base::FilePath(void)>
-                 log_directory_getter) {
-            upload_data.paths.directory = log_directory_getter.Run();
-            log_uploader->UploadStoredLog(std::move(upload_data));
-          },
-          log_uploader_, std::move(upload_data), log_directory_getter_));
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  if (!IsWebRtcTextLogAllowed(GetBrowserContext())) {
+    log_uploader->NotifyUploadDisabled(std::move(upload_data));
+    return;
+  }
+
+  log_uploader->background_task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](WebRtcLogUploader::UploadDoneData upload_data,
+                        base::RepeatingCallback<base::FilePath(void)>
+                            log_directory_getter) {
+                       upload_data.paths.directory = log_directory_getter.Run();
+                       WebRtcLogUploader* uploader =
+                           WebRtcLogUploader::GetInstance();
+                       uploader->UploadStoredLog(std::move(upload_data));
+                     },
+                     std::move(upload_data), log_directory_getter_));
 }
 
 void WebRtcLoggingController::DiscardLog(GenericDoneCallback callback) {
@@ -162,7 +188,8 @@ void WebRtcLoggingController::DiscardLog(GenericDoneCallback callback) {
     // The callback is fired with an error message by ExpectLoggingStateStopped.
     return;
   }
-  log_uploader_->LoggingStoppedDontUpload();
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->LoggingStoppedDontUpload();
   text_log_handler_->DiscardLog();
   rtp_dump_handler_.reset();
   stop_rtp_dump_callback_.Reset();
@@ -205,7 +232,8 @@ void WebRtcLoggingController::StoreLogContinue(const std::string& log_id,
   std::unique_ptr<WebRtcLogPaths> log_paths(new WebRtcLogPaths());
   ReleaseRtpDumps(log_paths.get());
 
-  log_uploader_->background_task_runner()->PostTaskAndReplyWithResult(
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->background_task_runner()->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(log_directory_getter_),
       base::BindOnce(&WebRtcLoggingController::StoreLogInDirectory, this,
                      log_id, std::move(log_paths), std::move(callback)));
@@ -232,7 +260,8 @@ void WebRtcLoggingController::StartRtpDump(RtpDumpType type,
       base::BindRepeating(&WebRtcLoggingController::OnRtpPacket, this));
 
   if (!rtp_dump_handler_) {
-    log_uploader_->background_task_runner()->PostTaskAndReplyWithResult(
+    WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+    log_uploader->background_task_runner()->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(log_directory_getter_),
         base::BindOnce(&WebRtcLoggingController::CreateRtpDumpHandlerAndStart,
                        this, type, std::move(callback)));
@@ -277,13 +306,19 @@ void WebRtcLoggingController::StartEventLogging(
       web_app_id, callback);
 }
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+base::RepeatingCallback<void(const std::string&)>
+WebRtcLoggingController::GetLogMessageCallback() {
+  return text_log_handler_->GetLogMessageCallback();
+}
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 void WebRtcLoggingController::GetLogsDirectory(
     LogsDirectoryCallback callback,
     LogsDirectoryErrorCallback error_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!callback.is_null());
-  log_uploader_->background_task_runner()->PostTaskAndReplyWithResult(
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->background_task_runner()->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(log_directory_getter_),
       base::BindOnce(&WebRtcLoggingController::GrantLogsDirectoryAccess, this,
                      std::move(callback), std::move(error_callback)));
@@ -322,11 +357,11 @@ void WebRtcLoggingController::GrantLogsDirectoryAccess(
       FROM_HERE,
       base::BindOnce(std::move(callback), file_system.id(), registered_name));
 }
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 
 void WebRtcLoggingController::OnRtpPacket(
-    std::unique_ptr<uint8_t[]> packet_header,
-    size_t header_length,
+    base::HeapArray<uint8_t> packet_header,
     size_t packet_length,
     bool incoming) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -334,7 +369,7 @@ void WebRtcLoggingController::OnRtpPacket(
   // |rtp_dump_handler_| could be null if we are waiting for the FILE thread to
   // create/ensure the log directory.
   if (rtp_dump_handler_) {
-    rtp_dump_handler_->OnRtpPacket(packet_header.get(), header_length,
+    rtp_dump_handler_->OnRtpPacket(packet_header.data(), packet_header.size(),
                                    packet_length, incoming);
   }
 }
@@ -353,12 +388,18 @@ void WebRtcLoggingController::OnAddMessages(
 void WebRtcLoggingController::OnStopped() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (text_log_handler_->GetChannelIsClosing()) {
+    return;
+  }
+
   if (text_log_handler_->GetState() != WebRtcTextLogHandler::STOPPING) {
     // If an out-of-order response is received, stop_callback_ may be invalid,
     // and must not be invoked.
-    DLOG(ERROR) << "OnStopped invoked in state "
-                << text_log_handler_->GetState();
-    receiver_.ReportBadMessage("WRLHH: OnStopped invoked in unexpected state.");
+    std::string error =
+        base::StrCat({"WRLHH: OnStopped invoked in unexpected state ",
+                      ToString(text_log_handler_->GetState())});
+    DLOG(ERROR) << error;
+    receiver_.ReportBadMessage(error);
     return;
   }
   text_log_handler_->StopDone();
@@ -366,8 +407,7 @@ void WebRtcLoggingController::OnStopped() {
 
 WebRtcLoggingController::WebRtcLoggingController(
     int render_process_id,
-    content::BrowserContext* browser_context,
-    WebRtcLogUploader* log_uploader)
+    content::BrowserContext* browser_context)
     : receiver_(this),
       render_process_id_(render_process_id),
       log_directory_getter_(base::BindRepeating(
@@ -375,10 +415,7 @@ WebRtcLoggingController::WebRtcLoggingController(
           browser_context->GetPath())),
       upload_log_on_render_close_(false),
       text_log_handler_(
-          std::make_unique<WebRtcTextLogHandler>(render_process_id)),
-      log_uploader_(log_uploader) {
-  DCHECK(log_uploader_);
-}
+          std::make_unique<WebRtcTextLogHandler>(render_process_id)) {}
 
 WebRtcLoggingController::~WebRtcLoggingController() {
   // If we hit this, then we might be leaking a log reference count (see
@@ -392,6 +429,7 @@ void WebRtcLoggingController::OnAgentDisconnected() {
   if (text_log_handler_->GetChannelIsClosing())
     return;
 
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
   switch (text_log_handler_->GetState()) {
     case WebRtcTextLogHandler::STARTING:
     case WebRtcTextLogHandler::STARTED:
@@ -399,12 +437,12 @@ void WebRtcLoggingController::OnAgentDisconnected() {
     case WebRtcTextLogHandler::STOPPED:
       text_log_handler_->ChannelClosing();
       if (upload_log_on_render_close_) {
-        log_uploader_->background_task_runner()->PostTaskAndReplyWithResult(
+        log_uploader->background_task_runner()->PostTaskAndReplyWithResult(
             FROM_HERE, base::BindOnce(log_directory_getter_),
             base::BindOnce(&WebRtcLoggingController::TriggerUpload, this,
                            UploadDoneCallback()));
       } else {
-        log_uploader_->LoggingStoppedDontUpload();
+        log_uploader->LoggingStoppedDontUpload();
         text_log_handler_->DiscardLog();
       }
       break;
@@ -466,12 +504,21 @@ void WebRtcLoggingController::StoreLogInDirectory(
   CHECK(log_buffer.get()) << "State=" << text_log_handler_->GetState()
                           << ", uorc=" << upload_log_on_render_close_;
 
-  log_uploader_->background_task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&WebRtcLogUploader::LoggingStoppedDoStore,
-                     base::Unretained(log_uploader_), *log_paths, log_id,
-                     std::move(log_buffer), std::move(meta_data),
-                     std::move(done_callback)));
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->background_task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](WebRtcLogPaths paths, const std::string& log_id,
+                        std::unique_ptr<WebRtcLogBuffer> log_buffer,
+                        std::unique_ptr<WebRtcLogMetaDataMap> meta_data,
+                        GenericDoneCallback done_callback) {
+                       WebRtcLogUploader* uploader =
+                           WebRtcLogUploader::GetInstance();
+                       uploader->LoggingStoppedDoStore(
+                           paths, log_id, std::move(log_buffer),
+                           std::move(meta_data), std::move(done_callback));
+                     },
+                     *log_paths, log_id, std::move(log_buffer),
+                     std::move(meta_data), std::move(done_callback)));
 }
 
 void WebRtcLoggingController::DoUploadLogAndRtpDumps(
@@ -521,11 +568,24 @@ void WebRtcLoggingController::DoUploadLogAndRtpDumps(
   CHECK(log_buffer.get()) << "State=" << text_log_handler_->GetState()
                           << ", uorc=" << upload_log_on_render_close_;
 
-  log_uploader_->background_task_runner()->PostTask(
+  content::BrowserContext* browser_context = GetBrowserContext();
+  bool is_text_log_upload_allowed = IsWebRtcTextLogAllowed(browser_context);
+
+  WebRtcLogUploader* log_uploader = WebRtcLogUploader::GetInstance();
+  log_uploader->background_task_runner()->PostTask(
       FROM_HERE,
-      base::BindOnce(&WebRtcLogUploader::LoggingStoppedDoUpload,
-                     base::Unretained(log_uploader_), std::move(log_buffer),
-                     std::move(meta_data), std::move(upload_done_data)));
+      base::BindOnce(
+          [](std::unique_ptr<WebRtcLogBuffer> log_buffer,
+             std::unique_ptr<WebRtcLogMetaDataMap> meta_data,
+             WebRtcLogUploader::UploadDoneData upload_done_data,
+             bool is_text_log_upload_allowed) {
+            WebRtcLogUploader* uploader = WebRtcLogUploader::GetInstance();
+            uploader->OnLoggingStopped(
+                std::move(log_buffer), std::move(meta_data),
+                std::move(upload_done_data), is_text_log_upload_allowed);
+          },
+          std::move(log_buffer), std::move(meta_data),
+          std::move(upload_done_data), is_text_log_upload_allowed));
 }
 
 void WebRtcLoggingController::CreateRtpDumpHandlerAndStart(
@@ -582,7 +642,28 @@ void WebRtcLoggingController::FireGenericDoneCallback(
       FROM_HERE, base::BindOnce(std::move(callback), success, error_message));
 }
 
+content::BrowserContext* WebRtcLoggingController::GetBrowserContext() const {
+  content::RenderProcessHost* host =
+      content::RenderProcessHost::FromID(render_process_id_);
+
+  return host ? host->GetBrowserContext() : nullptr;
+}
+
 // static
+bool WebRtcLoggingController::IsWebRtcTextLogAllowed(
+    content::BrowserContext* browser_context) {
+  // Historically by default webrtc text logs are always uploaded.
+  if (!browser_context) {
+    return true;
+  }
+
+  const Profile* profile = Profile::FromBrowserContext(browser_context);
+  DCHECK(profile);
+
+  return profile->GetPrefs()->GetBoolean(
+      prefs::kWebRtcTextLogCollectionAllowed);
+}
+
 base::FilePath WebRtcLoggingController::GetLogDirectoryAndEnsureExists(
     const base::FilePath& browser_context_directory_path) {
   DCHECK(!browser_context_directory_path.empty());

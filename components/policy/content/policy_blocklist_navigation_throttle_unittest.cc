@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/policy/content/policy_blocklist_navigation_throttle.h"
+
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/policy/content/policy_blocklist_navigation_throttle.h"
 #include "components/policy/content/safe_search_service.h"
 #include "components/policy/content/safe_sites_navigation_throttle.h"
-#include "components/policy/core/browser/url_blocklist_manager.h"
-#include "components/policy/core/browser/url_blocklist_policy_handler.h"
+#include "components/policy/core/browser/url_list/policy_blocklist_service.h"
+#include "components/policy/core/browser/url_list/url_blocklist_manager.h"
+#include "components/policy/core/browser/url_list/url_blocklist_policy_handler.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/safe_search_api/stub_url_checker.h"
 #include "components/safe_search_api/url_checker.h"
@@ -21,8 +26,10 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_navigation_throttle_inserter.h"
 #include "content/public/test/test_renderer_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -35,11 +42,10 @@ constexpr size_t kCacheSize = 2;
 
 }  // namespace
 
-// TODO(crbug.com/1147231): Break out the tests into separate files. The
+// TODO(crbug.com/40156526): Break out the tests into separate files. The
 // SafeSites tests should be parameterized to run the same tests on both types.
 class SafeSitesNavigationThrottleTest
-    : public content::RenderViewHostTestHarness,
-      public content::WebContentsObserver {
+    : public content::RenderViewHostTestHarness {
  public:
   SafeSitesNavigationThrottleTest() = default;
   SafeSitesNavigationThrottleTest(const SafeSitesNavigationThrottleTest&) =
@@ -63,10 +69,7 @@ class SafeSitesNavigationThrottleTest
     SafeSearchFactory::GetInstance()
         ->GetForBrowserContext(browser_context())
         ->SetSafeSearchURLCheckerForTest(
-            stub_url_checker_.BuildURLChecker(kCacheSize));
-
-    // Observe the WebContents to add the throttle.
-    Observe(RenderViewHostTestHarness::web_contents());
+            stub_url_checker().BuildURLChecker(kCacheSize));
   }
 
   void TearDown() override {
@@ -76,20 +79,17 @@ class SafeSitesNavigationThrottleTest
   }
 
  protected:
-  // content::WebContentsObserver:
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override {
-    auto throttle = std::make_unique<SafeSitesNavigationThrottle>(
-        navigation_handle, browser_context());
-
-    navigation_handle->RegisterThrottleForTesting(std::move(throttle));
-  }
-
   std::unique_ptr<content::NavigationSimulator> StartNavigation(
       const GURL& first_url) {
     auto navigation_simulator =
         content::NavigationSimulator::CreateRendererInitiated(first_url,
                                                               main_rfh());
+    auto throttle_inserter =
+        std::make_unique<content::TestNavigationThrottleInserter>(
+            web_contents(),
+            base::BindRepeating(
+                &SafeSitesNavigationThrottleTest::CreateAndAddThrottle,
+                base::Unretained(this)));
     navigation_simulator->SetAutoAdvance(false);
     navigation_simulator->Start();
     return navigation_simulator;
@@ -100,13 +100,25 @@ class SafeSitesNavigationThrottleTest
   // If |expected_error_page_content| is not null, the canceled throttle check
   // result's error_page_content will be expected to match it.
   void TestSafeSitesRedirectAndCachedSites(
-      const char* expected_error_page_content);
+      const char* expected_error_page_content,
+      bool is_proceed_until_response_enabled = false);
 
   // Tests responses for both a safe site and a porn site both when the sites
   // are in the cache and not. If |expected_error_page_content| is not null, the
   // canceled throttle check result's error_page_content will be expected to
   // match it.
-  void TestSafeSitesCachedSites(const char* expected_error_page_content);
+  void TestSafeSitesCachedSites(const char* expected_error_page_content,
+                                bool is_proceed_until_response_enabled = false);
+
+  safe_search_api::StubURLChecker& stub_url_checker() {
+    return stub_url_checker_;
+  }
+
+ private:
+  virtual void CreateAndAddThrottle(content::NavigationThrottleRegistry& registry) {
+    registry.AddThrottle(std::make_unique<SafeSitesNavigationThrottle>(
+        registry, SafeSearchFactory::GetForBrowserContext(browser_context())));
+  }
 
   safe_search_api::StubURLChecker stub_url_checker_;
 };
@@ -116,13 +128,11 @@ class SafeSitesNavigationThrottleWithErrorContentTest
  protected:
   static const char kErrorPageContent[];
 
-  // content::WebContentsObserver:
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override {
-    auto throttle = std::make_unique<SafeSitesNavigationThrottle>(
-        navigation_handle, browser_context(), kErrorPageContent);
-
-    navigation_handle->RegisterThrottleForTesting(std::move(throttle));
+  // SafeSitesNavigationThrottleTest:
+  void CreateAndAddThrottle(content::NavigationThrottleRegistry& registry) override {
+    registry.AddThrottle(std::make_unique<SafeSitesNavigationThrottle>(
+        registry, SafeSearchFactory::GetForBrowserContext(browser_context()),
+        kErrorPageContent));
   }
 };
 
@@ -130,101 +140,275 @@ const char
     SafeSitesNavigationThrottleWithErrorContentTest::kErrorPageContent[] =
         "<html><body>URL was filtered.</body></html>";
 
+struct PolicyBlocklistTestParams {
+  bool is_proceed_until_response_enabled;
+  bool is_incognito_mode;
+};
+
 class PolicyBlocklistNavigationThrottleTest
-    : public SafeSitesNavigationThrottleTest {
+    : public SafeSitesNavigationThrottleTest,
+      public testing::WithParamInterface<PolicyBlocklistTestParams> {
  public:
+  PolicyBlocklistNavigationThrottleTest() {
+    if (IsProceedUntilResponseEnabled()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          policy::features::kPolicyBlocklistProceedUntilResponse);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          policy::features::kPolicyBlocklistProceedUntilResponse);
+    }
+  }
   void SetUp() override {
     SafeSitesNavigationThrottleTest::SetUp();
 
     user_prefs::UserPrefs::Set(browser_context(), &pref_service_);
     policy::URLBlocklistManager::RegisterProfilePrefs(pref_service_.registry());
+
+    // TODO(crbug.com/442891187): Remove this once the prefs are registered in
+    // the URLBlocklistManager::RegisterProfilePrefs.
+    pref_service_.registry()->RegisterListPref(
+        policy::policy_prefs::kIncognitoModeUrlBlocklist);
+    pref_service_.registry()->RegisterListPref(
+        policy::policy_prefs::kIncognitoModeUrlAllowlist);
+
+    auto url_blocklist_manager = std::make_unique<policy::URLBlocklistManager>(
+        &pref_service_, policy::policy_prefs::kUrlBlocklist,
+        policy::policy_prefs::kUrlAllowlist);
+    std::unique_ptr<policy::URLBlocklistManager>
+        incognito_url_blocklist_manager;
+    if (IsIncognitoMode()) {
+      incognito_url_blocklist_manager =
+          std::make_unique<policy::URLBlocklistManager>(
+              &pref_service_, policy::policy_prefs::kIncognitoModeUrlBlocklist,
+              policy::policy_prefs::kIncognitoModeUrlAllowlist);
+    }
+
+    policy_blocklist_service_ = std::make_unique<PolicyBlocklistService>(
+        std::move(url_blocklist_manager),
+        std::move(incognito_url_blocklist_manager), &pref_service_);
+  }
+
+  void TearDown() override {
+    policy_blocklist_service_.reset();
+    SafeSitesNavigationThrottleTest::TearDown();
   }
 
  protected:
-  // content::WebContentsObserver:
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override {
-    auto throttle = std::make_unique<PolicyBlocklistNavigationThrottle>(
-        navigation_handle, browser_context());
-
-    navigation_handle->RegisterThrottleForTesting(std::move(throttle));
+  // SafeSitesNavigationThrottleTest:
+  void CreateAndAddThrottle(content::NavigationThrottleRegistry& registry) override {
+    registry.AddThrottle(std::make_unique<PolicyBlocklistNavigationThrottle>(
+        registry, user_prefs::UserPrefs::Get(browser_context()),
+        policy_blocklist_service_.get(),
+        SafeSearchFactory::GetForBrowserContext(browser_context())));
   }
 
   void SetBlocklistUrlPattern(const std::string& pattern) {
-    auto value = std::make_unique<base::Value>(base::Value::Type::LIST);
-    value->Append(base::Value(pattern));
+    base::Value::List value;
+    value.Append(pattern);
     pref_service_.SetManagedPref(policy::policy_prefs::kUrlBlocklist,
                                  std::move(value));
     task_environment()->RunUntilIdle();
   }
 
   void SetAllowlistUrlPattern(const std::string& pattern) {
-    auto value = std::make_unique<base::Value>(base::Value::Type::LIST);
-    value->Append(base::Value(pattern));
+    base::Value::List value;
+    value.Append(pattern);
     pref_service_.SetManagedPref(policy::policy_prefs::kUrlAllowlist,
                                  std::move(value));
     task_environment()->RunUntilIdle();
   }
 
+  void SetIncognitoBlocklistUrlPattern(const std::string& pattern) {
+    base::Value::List value;
+    value.Append(pattern);
+    pref_service_.SetManagedPref(
+        policy::policy_prefs::kIncognitoModeUrlBlocklist, std::move(value));
+    task_environment()->RunUntilIdle();
+  }
+
+  void SetIncognitoAllowlistUrlPattern(const std::string& pattern) {
+    base::Value::List value;
+    value.Append(pattern);
+    pref_service_.SetManagedPref(
+        policy::policy_prefs::kIncognitoModeUrlAllowlist, std::move(value));
+    task_environment()->RunUntilIdle();
+  }
+
   void SetSafeSitesFilterBehavior(SafeSitesFilterBehavior filter_behavior) {
-    auto value =
-        std::make_unique<base::Value>(static_cast<int>(filter_behavior));
+    base::Value value(static_cast<int>(filter_behavior));
     pref_service_.SetManagedPref(policy::policy_prefs::kSafeSitesFilterBehavior,
                                  std::move(value));
   }
 
+  void TestNavigationThrottleCheckResult(
+      const GURL& url,
+      content::NavigationThrottle::ThrottleAction expected_action,
+      std::optional<net::Error> expected_error = std::nullopt) {
+    auto navigation_simulator = StartNavigation(url);
+    ASSERT_FALSE(navigation_simulator->IsDeferred());
+
+    EXPECT_EQ(expected_action,
+              navigation_simulator->GetLastThrottleCheckResult().action());
+    if (expected_error.has_value()) {
+      EXPECT_EQ(
+          expected_error,
+          navigation_simulator->GetLastThrottleCheckResult().net_error_code());
+    }
+
+    // Call WebContents::Stop() to reset the main rfh's navigation state. It
+    // results in destructing the navigation throttles to flush metrics.
+    RenderViewHostTestHarness::web_contents()->Stop();
+  }
+
+  bool IsProceedUntilResponseEnabled() {
+    return GetParam().is_proceed_until_response_enabled;
+  }
+  bool IsIncognitoMode() { return GetParam().is_incognito_mode; }
+
   sync_preferences::TestingPrefServiceSyncable pref_service_;
+  std::unique_ptr<PolicyBlocklistService> policy_blocklist_service_;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, Blocklist) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, Blocklist) {
+  base::HistogramTester histogram_tester;
+
   SetBlocklistUrlPattern("example.com");
 
   // Block a blocklisted site.
-  auto navigation_simulator = StartNavigation(GURL("http://www.example.com/"));
-  ASSERT_FALSE(navigation_simulator->IsDeferred());
-  EXPECT_EQ(content::NavigationThrottle::BLOCK_REQUEST,
-            navigation_simulator->GetLastThrottleCheckResult());
+  TestNavigationThrottleCheckResult(GURL("http://www.example.com/"),
+                                    content::NavigationThrottle::BLOCK_REQUEST,
+                                    net::ERR_BLOCKED_BY_ADMINISTRATOR);
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, Allowlist) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, Allowlist) {
+  base::HistogramTester histogram_tester;
+
   SetAllowlistUrlPattern("www.example.com");
   SetBlocklistUrlPattern("example.com");
 
   // Allow a allowlisted exception to a blocklisted domain.
-  auto navigation_simulator = StartNavigation(GURL("http://www.example.com/"));
-  ASSERT_FALSE(navigation_simulator->IsDeferred());
-  EXPECT_EQ(content::NavigationThrottle::PROCEED,
-            navigation_simulator->GetLastThrottleCheckResult());
+  TestNavigationThrottleCheckResult(GURL("http://www.example.com/"),
+                                    content::NavigationThrottle::PROCEED);
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Safe) {
-  SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  stub_url_checker_.SetUpValidResponse(false /* is_porn */);
+TEST_P(PolicyBlocklistNavigationThrottleTest, IncognitoBlocklist) {
+  base::HistogramTester histogram_tester;
 
+  SetIncognitoBlocklistUrlPattern("example.com");
+
+  // Block a blocklisted site in incognito mode and allow in regular mode.
+  TestNavigationThrottleCheckResult(
+      GURL("http://www.example.com/"),
+      IsIncognitoMode() ? content::NavigationThrottle::BLOCK_REQUEST
+                        : content::NavigationThrottle::PROCEED,
+      IsIncognitoMode()
+          ? std::make_optional(net::ERR_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR)
+          : std::nullopt);
+}
+
+TEST_P(PolicyBlocklistNavigationThrottleTest,
+       IncognitoAllowlistAgainstIncognitoBlocklist) {
+  base::HistogramTester histogram_tester;
+
+  SetIncognitoAllowlistUrlPattern("www.example.com");
+  SetIncognitoBlocklistUrlPattern("example.com");
+  TestNavigationThrottleCheckResult(GURL("http://www.example.com/"),
+                                    content::NavigationThrottle::PROCEED);
+}
+
+TEST_P(PolicyBlocklistNavigationThrottleTest,
+       IncognitoAllowlistAgainstURLBlocklist) {
+  base::HistogramTester histogram_tester;
+
+  SetIncognitoAllowlistUrlPattern("www.example.com");
+  SetBlocklistUrlPattern("example.com");
+
+  // Allow a allowlisted exception to a regular blocklist in incognito mode and
+  // block in regular mode.
+  TestNavigationThrottleCheckResult(
+      GURL("http://www.example.com/"),
+      IsIncognitoMode() ? content::NavigationThrottle::PROCEED
+                        : content::NavigationThrottle::BLOCK_REQUEST,
+      IsIncognitoMode()
+          ? std::nullopt
+          : std::make_optional(net::ERR_BLOCKED_BY_ADMINISTRATOR));
+}
+
+TEST_P(PolicyBlocklistNavigationThrottleTest,
+       URLAllowlistAgainstIncognitoBlocklist) {
+  base::HistogramTester histogram_tester;
+
+  SetAllowlistUrlPattern("www.example.com");
+  SetIncognitoBlocklistUrlPattern("example.com");
+
+  // A regular URL allowlist against an Incognito blocklist should block in
+  // incognito mode.
+  TestNavigationThrottleCheckResult(
+      GURL("http://www.example.com/"),
+      IsIncognitoMode() ? content::NavigationThrottle::BLOCK_REQUEST
+                        : content::NavigationThrottle::PROCEED,
+      IsIncognitoMode()
+          ? std::make_optional(net::ERR_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR)
+          : std::nullopt);
+}
+
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_Safe) {
+  base::HistogramTester histogram_tester;
+
+  SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
+  stub_url_checker().SetUpValidResponse(false /* is_porn */);
+
+  const GURL url = GURL("http://example.com/");
+  auto navigation_simulator = StartNavigation(url);
+  if (IsProceedUntilResponseEnabled()) {
+    // Proceed with running a background check, will defer on the subsequent
+    // redirect event.
+    EXPECT_FALSE(navigation_simulator->IsDeferred());
+    navigation_simulator->Redirect(url);
+  }
   // Defer, then allow a safe site.
-  auto navigation_simulator = StartNavigation(GURL("http://example.com/"));
   EXPECT_TRUE(navigation_simulator->IsDeferred());
   navigation_simulator->Wait();
   EXPECT_EQ(content::NavigationThrottle::PROCEED,
             navigation_simulator->GetLastThrottleCheckResult());
+
+  // Call WebContents::Stop() to reset the main rfh's navigation state. It
+  // results in destructing the navigation throttles to flush metrics.
+  RenderViewHostTestHarness::web_contents()->Stop();
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Porn) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_Porn) {
+  base::HistogramTester histogram_tester;
+
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+  stub_url_checker().SetUpValidResponse(true /* is_porn */);
 
   // Defer, then cancel a porn site.
-  auto navigation_simulator = StartNavigation(GURL("http://example.com/"));
+  const GURL url = GURL("http://example.com/");
+  auto navigation_simulator = StartNavigation(url);
+  if (IsProceedUntilResponseEnabled()) {
+    // Proceed with running a background check, will defer on the subsequent
+    // redirect event.
+    EXPECT_FALSE(navigation_simulator->IsDeferred());
+    navigation_simulator->Redirect(url);
+  }
   EXPECT_TRUE(navigation_simulator->IsDeferred());
   navigation_simulator->Wait();
   EXPECT_EQ(content::NavigationThrottle::CANCEL,
             navigation_simulator->GetLastThrottleCheckResult());
+
+  // Call WebContents::Stop() to reset the main rfh's navigation state. It
+  // results in destructing the navigation throttles to flush metrics.
+  RenderViewHostTestHarness::web_contents()->Stop();
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Allowlisted) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_Allowlisted) {
   SetAllowlistUrlPattern("example.com");
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+  stub_url_checker().SetUpValidResponse(true /* is_porn */);
 
   // Even with SafeSites enabled, a allowlisted site is immediately allowed.
   auto navigation_simulator = StartNavigation(GURL("http://example.com/"));
@@ -233,9 +417,9 @@ TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Allowlisted) {
             navigation_simulator->GetLastThrottleCheckResult());
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Schemes) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_Schemes) {
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+  stub_url_checker().SetUpValidResponse(true /* is_porn */);
 
   // The safe sites filter is only used for http(s) URLs. This test uses
   // browser-initiated navigation, since renderer-initiated navigations to
@@ -250,8 +434,8 @@ TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Schemes) {
             navigation_simulator->GetLastThrottleCheckResult());
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_PolicyChange) {
-  stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_PolicyChange) {
+  stub_url_checker().SetUpValidResponse(true /* is_porn */);
 
   // The safe sites filter is initially disabled.
   {
@@ -265,6 +449,12 @@ TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_PolicyChange) {
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
   {
     auto navigation_simulator = StartNavigation(GURL("http://example.com/"));
+    if (IsProceedUntilResponseEnabled()) {
+      // Proceed with running a background check, will defer on the subsequent
+      // response event that happens in the ReadyToCommit.
+      EXPECT_FALSE(navigation_simulator->IsDeferred());
+      navigation_simulator->ReadyToCommit();
+    }
     EXPECT_TRUE(navigation_simulator->IsDeferred());
     navigation_simulator->Wait();
     EXPECT_EQ(content::NavigationThrottle::CANCEL,
@@ -281,28 +471,57 @@ TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_PolicyChange) {
   }
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_Failure) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_Failure) {
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  stub_url_checker_.SetUpFailedResponse();
+  stub_url_checker().SetUpFailedResponse();
 
   // If the Safe Search API request fails, the navigation is allowed.
   auto navigation_simulator = StartNavigation(GURL("http://example.com/"));
+  if (IsProceedUntilResponseEnabled()) {
+    // Proceed with running a background check, will defer on the subsequent
+    // response event that happens in the ReadyToCommit.
+    EXPECT_FALSE(navigation_simulator->IsDeferred());
+    navigation_simulator->ReadyToCommit();
+  }
   EXPECT_TRUE(navigation_simulator->IsDeferred());
   navigation_simulator->Wait();
   EXPECT_EQ(content::NavigationThrottle::PROCEED,
             navigation_simulator->GetLastThrottleCheckResult());
 }
 
+// Run all PolicyBlocklistNavigationThrottle tests with and without the
+// kPolicyBlocklistProceedUntilResponse feature enabled and for both incognito
+// and non-Incognito modes.
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PolicyBlocklistNavigationThrottleTest,
+    testing::Values(
+        PolicyBlocklistTestParams{.is_proceed_until_response_enabled = false,
+                                  .is_incognito_mode = false},
+        PolicyBlocklistTestParams{.is_proceed_until_response_enabled = false,
+                                  .is_incognito_mode = true},
+        PolicyBlocklistTestParams{.is_proceed_until_response_enabled = true,
+                                  .is_incognito_mode = false},
+        PolicyBlocklistTestParams{.is_proceed_until_response_enabled = true,
+                                  .is_incognito_mode = true}));
+
 void SafeSitesNavigationThrottleTest::TestSafeSitesCachedSites(
-    const char* expected_error_page_content) {
+    const char* expected_error_page_content,
+    bool is_proceed_until_response_enabled) {
   // Check a couple of sites.
   ASSERT_EQ(2u, kCacheSize);
   const GURL safe_site = GURL("http://example.com/");
   const GURL porn_site = GURL("http://example2.com/");
 
-  stub_url_checker_.SetUpValidResponse(false /* is_porn */);
+  stub_url_checker().SetUpValidResponse(false /* is_porn */);
   {
     auto navigation_simulator = StartNavigation(safe_site);
+    if (is_proceed_until_response_enabled) {
+      // Proceed with running a background check, will defer on the subsequent
+      // response event that happens in the ReadyToCommit.
+      EXPECT_FALSE(navigation_simulator->IsDeferred());
+      navigation_simulator->ReadyToCommit();
+    }
     EXPECT_TRUE(navigation_simulator->IsDeferred());
     navigation_simulator->Wait();
     EXPECT_EQ(content::NavigationThrottle::PROCEED,
@@ -311,9 +530,15 @@ void SafeSitesNavigationThrottleTest::TestSafeSitesCachedSites(
                      .error_page_content());
   }
 
-  stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+  stub_url_checker().SetUpValidResponse(true /* is_porn */);
   {
     auto navigation_simulator = StartNavigation(porn_site);
+    if (is_proceed_until_response_enabled) {
+      // Proceed with running a background check, will defer on the subsequent
+      // response event that happens in the ReadyToCommit.
+      EXPECT_FALSE(navigation_simulator->IsDeferred());
+      navigation_simulator->ReadyToCommit();
+    }
     EXPECT_TRUE(navigation_simulator->IsDeferred());
     navigation_simulator->Wait();
     EXPECT_EQ(content::NavigationThrottle::CANCEL,
@@ -329,7 +554,7 @@ void SafeSitesNavigationThrottleTest::TestSafeSitesCachedSites(
     }
   }
 
-  stub_url_checker_.ClearResponses();
+  stub_url_checker().ClearResponses();
   {
     // This check is synchronous since the site is in the cache.
     auto navigation_simulator = StartNavigation(safe_site);
@@ -366,21 +591,28 @@ TEST_F(SafeSitesNavigationThrottleWithErrorContentTest, SafeSites_CachedSites) {
   TestSafeSitesCachedSites(&kErrorPageContent[0]);
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest, SafeSites_CachedSites) {
+TEST_P(PolicyBlocklistNavigationThrottleTest, SafeSites_CachedSites) {
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
-  TestSafeSitesCachedSites(nullptr);
+  TestSafeSitesCachedSites(nullptr, IsProceedUntilResponseEnabled());
 }
 
 void SafeSitesNavigationThrottleTest::TestSafeSitesRedirectAndCachedSites(
-    const char* expected_error_page_content) {
+    const char* expected_error_page_content,
+    bool is_proceed_until_response_enabled) {
   // Check a couple of sites.
   ASSERT_EQ(2u, kCacheSize);
   const GURL safe_site = GURL("http://example.com/");
   const GURL porn_site = GURL("http://example2.com/");
 
-  stub_url_checker_.SetUpValidResponse(false /* is_porn */);
+  stub_url_checker().SetUpValidResponse(false /* is_porn */);
   {
     auto navigation_simulator = StartNavigation(safe_site);
+    if (is_proceed_until_response_enabled) {
+      // Proceed with running a background check, will defer on the subsequent
+      // redirect event.
+      EXPECT_FALSE(navigation_simulator->IsDeferred());
+      navigation_simulator->Redirect(safe_site);
+    }
     EXPECT_TRUE(navigation_simulator->IsDeferred());
     navigation_simulator->Wait();
     EXPECT_EQ(content::NavigationThrottle::PROCEED,
@@ -388,8 +620,14 @@ void SafeSitesNavigationThrottleTest::TestSafeSitesRedirectAndCachedSites(
     EXPECT_FALSE(navigation_simulator->GetLastThrottleCheckResult()
                      .error_page_content());
 
-    stub_url_checker_.SetUpValidResponse(true /* is_porn */);
+    stub_url_checker().SetUpValidResponse(true /* is_porn */);
     navigation_simulator->Redirect(porn_site);
+    if (is_proceed_until_response_enabled) {
+      // Proceed with running a background check, will defer on the subsequent
+      // response event that happens in the ReadyToCommit.
+      EXPECT_FALSE(navigation_simulator->IsDeferred());
+      navigation_simulator->ReadyToCommit();
+    }
     EXPECT_TRUE(navigation_simulator->IsDeferred());
     navigation_simulator->Wait();
     EXPECT_EQ(content::NavigationThrottle::CANCEL,
@@ -405,7 +643,7 @@ void SafeSitesNavigationThrottleTest::TestSafeSitesRedirectAndCachedSites(
     }
   }
 
-  stub_url_checker_.ClearResponses();
+  stub_url_checker().ClearResponses();
   {
     // This check is synchronous since the site is in the cache.
     auto navigation_simulator = StartNavigation(safe_site);
@@ -440,9 +678,52 @@ TEST_F(SafeSitesNavigationThrottleWithErrorContentTest,
   TestSafeSitesRedirectAndCachedSites(&kErrorPageContent[0]);
 }
 
-TEST_F(PolicyBlocklistNavigationThrottleTest,
+TEST_P(PolicyBlocklistNavigationThrottleTest,
        SafeSites_RedirectAndCachedSites) {
   SetSafeSitesFilterBehavior(SafeSitesFilterBehavior::kSafeSitesFilterEnabled);
 
-  TestSafeSitesRedirectAndCachedSites(nullptr);
+  TestSafeSitesRedirectAndCachedSites(nullptr, IsProceedUntilResponseEnabled());
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_P(PolicyBlocklistNavigationThrottleTest, UseVpnPreConnectFiltering) {
+  SetBlocklistUrlPattern("block-by-general-pref.com");
+  base::Value::List list;
+  list.Append("allowed-preconnect.com");
+  pref_service_.SetManagedPref(
+      policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist,
+      base::Value(std::move(list)));
+
+  policy_blocklist_service_->SetAlwaysOnVpnPreConnectUrlAllowlistEnforced(
+      /*enforced=*/true);
+
+  task_environment()->RunUntilIdle();
+
+  // Verify that the pref kAlwaysOnVpnPreConnectUrlAllowlist is enforced
+  // while kEnforceAlwaysOnVpnPreConnectUrlAllowlist is true.
+  auto navigation_simulator =
+      StartNavigation(GURL("http://allowed-preconnect.com/"));
+  ASSERT_FALSE(navigation_simulator->IsDeferred());
+  EXPECT_EQ(content::NavigationThrottle::PROCEED,
+            navigation_simulator->GetLastThrottleCheckResult());
+  navigation_simulator =
+      StartNavigation(GURL("http://neural-by-general-pref.com/"));
+  EXPECT_EQ(content::NavigationThrottle::BLOCK_REQUEST,
+            navigation_simulator->GetLastThrottleCheckResult());
+
+  policy_blocklist_service_->SetAlwaysOnVpnPreConnectUrlAllowlistEnforced(
+      /*enforced=*/false);
+
+  task_environment()->RunUntilIdle();
+
+  navigation_simulator =
+      StartNavigation(GURL("http://block-by-general-pref.com/"));
+  ASSERT_FALSE(navigation_simulator->IsDeferred());
+  EXPECT_EQ(content::NavigationThrottle::BLOCK_REQUEST,
+            navigation_simulator->GetLastThrottleCheckResult());
+  navigation_simulator =
+      StartNavigation(GURL("http://neural-by-general-pref.com/"));
+  EXPECT_EQ(content::NavigationThrottle::PROCEED,
+            navigation_simulator->GetLastThrottleCheckResult());
+}
+#endif

@@ -3,7 +3,8 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/extension_telemetry/cookies_get_all_signal.h"
-#include <sstream>
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_signal_util.h"
 
 namespace safe_browsing {
@@ -13,17 +14,19 @@ CookiesGetAllSignal::CookiesGetAllSignal(
     const std::string& domain,
     const std::string& name,
     const std::string& path,
-    bool secure,
+    std::optional<bool> secure,
     const std::string& store_id,
     const std::string& url,
-    bool is_session)
+    std::optional<bool> is_session,
+    extensions::StackTrace js_callstack)
     : ExtensionSignal(extension_id),
       domain_(domain),
       name_(name),
       path_(path),
       secure_(secure),
       store_id_(store_id),
-      is_session_(is_session) {
+      is_session_(is_session),
+      js_callstack_(std::move(js_callstack)) {
   url_ = SanitizeURLWithoutFilename(url);
 }
 
@@ -34,10 +37,19 @@ ExtensionSignalType CookiesGetAllSignal::GetType() const {
 }
 
 std::string CookiesGetAllSignal::getUniqueArgSetId() const {
-  std::stringstream ss;
-  ss << domain_ << name_ << path_ << secure_ << store_id_ << url_
-     << is_session_;
-  return ss.str();
+  std::string secure_string;
+  if (secure_.has_value()) {
+    secure_string = base::NumberToString(secure_.value());
+  }
+
+  std::string is_session_string;
+  if (is_session_.has_value()) {
+    is_session_string = base::NumberToString(is_session_.value());
+  }
+
+  return base::JoinString({domain_, name_, path_, secure_string, store_id_,
+                           url_, is_session_string},
+                          ",");
 }
 
 }  // namespace safe_browsing

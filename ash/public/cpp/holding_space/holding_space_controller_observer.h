@@ -15,11 +15,14 @@ class HoldingSpaceModel;
 class ASH_PUBLIC_EXPORT HoldingSpaceControllerObserver
     : public base::CheckedObserver {
  public:
+  // Called when `HoldingSpaceController` is being destroyed.
+  virtual void OnHoldingSpaceControllerDestroying() {}
+
   // Called when a model gets attached to the HoldingSpaceController.
-  virtual void OnHoldingSpaceModelAttached(HoldingSpaceModel* model) = 0;
+  virtual void OnHoldingSpaceModelAttached(HoldingSpaceModel* model) {}
 
   // Called when a model gets detached from the HoldingSpaceController.
-  virtual void OnHoldingSpaceModelDetached(HoldingSpaceModel* model) = 0;
+  virtual void OnHoldingSpaceModelDetached(HoldingSpaceModel* model) {}
 };
 
 }  // namespace ash

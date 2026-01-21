@@ -4,14 +4,17 @@
 
 #include "media/gpu/vaapi/vaapi_jpeg_encoder.h"
 
-#include <array>
-#include <type_traits>
-
 #include <stddef.h>
 #include <string.h>
 
+#include <algorithm>
+#include <array>
+#include <ranges>
+#include <type_traits>
+
 #include "base/check_op.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
@@ -59,7 +62,8 @@ void FillQMatrix(VAQMatrixBufferJPEG* q_matrix) {
                 "Luminance quantization table size mismatch.");
   q_matrix->load_lum_quantiser_matrix = 1;
   for (size_t i = 0; i < std::size(kZigZag8x8); i++) {
-    q_matrix->lum_quantiser_matrix[i] = luminance.value[kZigZag8x8[i]];
+    UNSAFE_TODO(q_matrix->lum_quantiser_matrix[i]) =
+        UNSAFE_TODO(luminance.value[kZigZag8x8[i]]);
   }
 
   const JpegQuantizationTable& chrominance = kDefaultQuantTable[1];
@@ -70,45 +74,51 @@ void FillQMatrix(VAQMatrixBufferJPEG* q_matrix) {
                 "Chrominance quantization table size mismatch.");
   q_matrix->load_chroma_quantiser_matrix = 1;
   for (size_t i = 0; i < std::size(kZigZag8x8); i++) {
-    q_matrix->chroma_quantiser_matrix[i] = chrominance.value[kZigZag8x8[i]];
+    UNSAFE_TODO(q_matrix->chroma_quantiser_matrix[i]) =
+        UNSAFE_TODO(chrominance.value[kZigZag8x8[i]]);
   }
 }
 
 void FillHuffmanTableParameters(
     VAHuffmanTableBufferJPEGBaseline* huff_table_param) {
-  static_assert(std::size(kDefaultDcTable) == std::size(kDefaultAcTable),
+  static_assert(kDefaultDcTable.size() == kDefaultAcTable.size(),
                 "DC table and AC table size mismatch.");
-  static_assert(std::size(kDefaultDcTable) ==
-                    std::extent<decltype(huff_table_param->huffman_table)>(),
+  auto huffman_tables = base::span(huff_table_param->huffman_table);
+  static_assert(kDefaultDcTable.size() == huffman_tables.size(),
                 "DC table and destination table size mismatch.");
 
-  for (size_t i = 0; i < std::size(kDefaultDcTable); ++i) {
+  auto load_huffman_table = base::span(huff_table_param->load_huffman_table);
+  static_assert(load_huffman_table.size() == huffman_tables.size(),
+                "Destination table sizes do not match.");
+
+  for (size_t i = 0; i < kDefaultDcTable.size(); ++i) {
     const JpegHuffmanTable& dcTable = kDefaultDcTable[i];
     const JpegHuffmanTable& acTable = kDefaultAcTable[i];
-    huff_table_param->load_huffman_table[i] = true;
+    load_huffman_table[i] = true;
 
     // Load DC Table.
-    SafeArrayMemcpy(huff_table_param->huffman_table[i].num_dc_codes,
-                    dcTable.code_length);
+    auto num_dc_codes = base::span(huffman_tables[i].num_dc_codes);
+    static_assert(num_dc_codes.size() == dcTable.code_length.size());
+    num_dc_codes.copy_from_nonoverlapping(dcTable.code_length);
     // |code_values| of JpegHuffmanTable needs to hold DC and AC code values
     // so it has different size than
     // |huff_table_param->huffman_table[i].dc_values|. Therefore we can't use
     // SafeArrayMemcpy() here.
-    static_assert(
-        std::extent<decltype(huff_table_param->huffman_table[i].dc_values)>() <=
-            std::extent<decltype(dcTable.code_value)>(),
-        "DC table code value array too small.");
-    memcpy(huff_table_param->huffman_table[i].dc_values, &dcTable.code_value[0],
-           sizeof(huff_table_param->huffman_table[i].dc_values));
+    auto dc_values = base::span(huffman_tables[i].dc_values);
+    static_assert(dc_values.size() <= dcTable.code_value.size());
+    dc_values.copy_from_nonoverlapping(
+        base::span(dcTable.code_value).first(dc_values.size()));
 
     // Load AC Table.
-    SafeArrayMemcpy(huff_table_param->huffman_table[i].num_ac_codes,
-                    acTable.code_length);
-    SafeArrayMemcpy(huff_table_param->huffman_table[i].ac_values,
-                    acTable.code_value);
+    auto num_ac_codes = base::span(huffman_tables[i].num_ac_codes);
+    static_assert(num_ac_codes.size() == acTable.code_length.size());
+    num_ac_codes.copy_from_nonoverlapping(acTable.code_length);
 
-    memset(huff_table_param->huffman_table[i].pad, 0,
-           sizeof(huff_table_param->huffman_table[i].pad));
+    auto ac_values = base::span(huffman_tables[i].ac_values);
+    static_assert(ac_values.size() == acTable.code_value.size());
+    ac_values.copy_from_nonoverlapping(acTable.code_value);
+
+    std::ranges::fill(huffman_tables[i].pad, 0);
   }
 }
 
@@ -133,7 +143,7 @@ size_t FillJpegHeader(const gfx::Size& input_size,
                       const uint8_t* exif_buffer,
                       size_t exif_buffer_size,
                       int quality,
-                      uint8_t* header,
+                      base::span<uint8_t> header,
                       size_t* exif_offset) {
   unsigned int width = input_size.width();
   unsigned int height = input_size.height();
@@ -142,7 +152,7 @@ size_t FillJpegHeader(const gfx::Size& input_size,
 
   // Start Of Input.
   static const uint8_t kSOI[] = {0xFF, JPEG_SOI};
-  memcpy(header, kSOI, sizeof(kSOI));
+  UNSAFE_TODO(memcpy(header.data(), kSOI, sizeof(kSOI)));
   idx += sizeof(kSOI);
 
   if (exif_buffer_size > 0) {
@@ -151,10 +161,12 @@ size_t FillJpegHeader(const gfx::Size& input_size,
     const uint8_t kAppSegment[] = {
         0xFF, JPEG_APP1, static_cast<uint8_t>(exif_segment_size / 256),
         static_cast<uint8_t>(exif_segment_size % 256)};
-    memcpy(header + idx, kAppSegment, sizeof(kAppSegment));
+    UNSAFE_TODO(
+        memcpy(header.subspan(idx).data(), kAppSegment, sizeof(kAppSegment)));
     idx += sizeof(kAppSegment);
     *exif_offset = idx;
-    memcpy(header + idx, exif_buffer, exif_buffer_size);
+    UNSAFE_TODO(
+        memcpy(header.subspan(idx).data(), exif_buffer, exif_buffer_size));
     idx += exif_buffer_size;
   } else {
     // Application Segment - JFIF standard 1.01.
@@ -177,7 +189,8 @@ size_t FillJpegHeader(const gfx::Size& input_size,
         0x00,  // Thumbnail width.
         0x00   // Thumbnail height.
     };
-    memcpy(header + idx, kAppSegment, sizeof(kAppSegment));
+    UNSAFE_TODO(
+        memcpy(header.subspan(idx).data(), kAppSegment, sizeof(kAppSegment)));
     idx += sizeof(kAppSegment);
   }
 
@@ -199,10 +212,12 @@ size_t FillJpegHeader(const gfx::Size& input_size,
         static_cast<uint8_t>(i)  // Precision (4-bit high) = 0,
                                  // Index (4-bit low) = i.
     };
-    memcpy(header + idx, kQuantSegment, sizeof(kQuantSegment));
+    UNSAFE_TODO(memcpy(header.subspan(idx).data(), kQuantSegment,
+                       sizeof(kQuantSegment)));
     idx += sizeof(kQuantSegment);
 
-    const JpegQuantizationTable& quant_table = kDefaultQuantTable[i];
+    const JpegQuantizationTable& quant_table =
+        UNSAFE_TODO(kDefaultQuantTable[i]);
     for (size_t j = 0; j < kDctSize; ++j) {
       // The iHD media driver shifts the quantization values
       // by 50 while encoding. We should add 50 here to
@@ -213,8 +228,10 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       const static uint32_t shift =
           VaapiWrapper::GetImplementationType() == VAImplementation::kIntelIHD ? 50 : 0;
       uint32_t scaled_quant_value =
-          (quant_table.value[kZigZag8x8[j]] * quality_normalized + shift) / 100;
-      scaled_quant_value = base::clamp(scaled_quant_value, 1u, 255u);
+          (UNSAFE_TODO(quant_table.value[kZigZag8x8[j]]) * quality_normalized +
+           shift) /
+          100;
+      scaled_quant_value = std::clamp(scaled_quant_value, 1u, 255u);
       header[idx++] = static_cast<uint8_t>(scaled_quant_value);
     }
   }
@@ -232,7 +249,8 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       static_cast<uint8_t>(width & 0xFF),
       0x03,  // Number of Components.
   };
-  memcpy(header + idx, kStartOfFrame, sizeof(kStartOfFrame));
+  UNSAFE_TODO(
+      memcpy(header.subspan(idx).data(), kStartOfFrame, sizeof(kStartOfFrame)));
   idx += sizeof(kStartOfFrame);
   for (uint8_t i = 0; i < 3; ++i) {
     // These are the values for U and V planes.
@@ -265,7 +283,8 @@ size_t FillJpegHeader(const gfx::Size& input_size,
   // Huffman Tables.
   for (size_t i = 0; i < 2; ++i) {
     // DC Table.
-    memcpy(header + idx, kDcSegment, sizeof(kDcSegment));
+    UNSAFE_TODO(
+        memcpy(header.subspan(idx).data(), kDcSegment, sizeof(kDcSegment)));
     idx += sizeof(kDcSegment);
 
     // Type (4-bit high) = 0:DC, Index (4-bit low).
@@ -278,7 +297,8 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       header[idx++] = dcTable.code_value[j];
 
     // AC Table.
-    memcpy(header + idx, kAcSegment, sizeof(kAcSegment));
+    UNSAFE_TODO(
+        memcpy(header.subspan(idx).data(), kAcSegment, sizeof(kAcSegment)));
     idx += sizeof(kAcSegment);
 
     // Type (4-bit high) = 1:AC, Index (4-bit low).
@@ -297,7 +317,8 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       0x0C,  // Segment Length:12 (2-byte).
       0x03   // Number of components in scan.
   };
-  memcpy(header + idx, kStartOfScan, sizeof(kStartOfScan));
+  UNSAFE_TODO(
+      memcpy(header.subspan(idx).data(), kStartOfScan, sizeof(kStartOfScan)));
   idx += sizeof(kStartOfScan);
 
   for (uint8_t i = 0; i < 3; ++i) {
@@ -374,10 +395,9 @@ bool VaapiJpegEncoder::Encode(const gfx::Size& input_size,
   std::vector<uint8_t> jpeg_header(jpeg_header_size);
   const size_t length_in_bits =
       FillJpegHeader(input_size, exif_buffer, exif_buffer_size, quality,
-                     jpeg_header.data(), exif_offset);
+                     jpeg_header, exif_offset);
 
-  VAEncPackedHeaderParameterBuffer header_param;
-  memset(&header_param, 0, sizeof(header_param));
+  VAEncPackedHeaderParameterBuffer header_param = {};
   header_param.type = VAEncPackedHeaderRawData;
   header_param.bit_length = length_in_bits;
   header_param.has_emulation_bytes = 0;

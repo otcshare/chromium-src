@@ -8,19 +8,19 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/location.h"
 #include "base/time/time.h"
 #include "components/viz/common/viz_common_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace perfetto {
 class EventContext;
 namespace protos {
 namespace pbzero {
-class BeginFrameArgs;
+class BeginFrameArgsV2;
 }
 }  // namespace protos
 }  // namespace perfetto
@@ -61,14 +61,14 @@ struct VIZ_COMMON_EXPORT BeginFrameId {
   // Creates an invalid set of values.
   BeginFrameId();
   BeginFrameId(const BeginFrameId& id);
+  BeginFrameId& operator=(const BeginFrameId& id);
   BeginFrameId(uint64_t source_id, uint64_t sequence_number);
 
-  bool operator<(const BeginFrameId& other) const;
-  bool operator==(const BeginFrameId& other) const;
-  bool operator!=(const BeginFrameId& other) const;
+  friend std::strong_ordering operator<=>(const BeginFrameId&,
+                                          const BeginFrameId&) = default;
+
   bool IsNextInSequenceTo(const BeginFrameId& previous) const;
   bool IsSequenceValid() const;
-  BeginFrameId& operator=(const BeginFrameId& id);
   std::string ToString() const;
 };
 
@@ -165,12 +165,6 @@ struct VIZ_COMMON_EXPORT BeginFrameArgs {
   // max interval supported by the Display.
   static constexpr base::TimeDelta MinInterval() { return base::Seconds(0); }
 
-  // This is the preferred interval to use when the producer doesn't have any
-  // frame rate preference. The Display can use any value which is appropriate.
-  static constexpr base::TimeDelta MaxInterval() {
-    return base::TimeDelta::Max();
-  }
-
   // This is a hard-coded deadline adjustment used by the display compositor.
   // Using 1/3 of the vsync as the default adjustment gives the display
   // compositor the last 1/3 of a frame to produce output, the client impl
@@ -192,7 +186,7 @@ struct VIZ_COMMON_EXPORT BeginFrameArgs {
   std::unique_ptr<base::trace_event::ConvertableToTraceFormat> AsValue() const;
   void AsValueInto(base::trace_event::TracedValue* dict) const;
   void AsProtozeroInto(perfetto::EventContext& ctx,
-                       perfetto::protos::pbzero::BeginFrameArgs* args) const;
+                       perfetto::protos::pbzero::BeginFrameArgsV2* args) const;
 
   std::string ToString() const;
 
@@ -210,6 +204,11 @@ struct VIZ_COMMON_EXPORT BeginFrameArgs {
   // begin-frame. The trace-id is set by the service, and can be used by both
   // the client and service as the id for trace-events.
   int64_t trace_id = -1;
+
+  // The time when viz dispatched this to a client.
+  base::TimeTicks dispatch_time;
+  // For clients to denote when they received this being dispatched.
+  base::TimeTicks client_arrival_time;
 
   BeginFrameArgsType type = INVALID;
   bool on_critical_path = true;
@@ -236,7 +235,7 @@ struct VIZ_COMMON_EXPORT BeginFrameArgs {
   // Note `deadline` is not yet updated to one of these deadline since some
   // code still assumes `deadline` is a multiple of `interval` from
   // `frame_time`.
-  absl::optional<PossibleDeadlines> possible_deadlines;
+  std::optional<PossibleDeadlines> possible_deadlines;
 
  private:
   BeginFrameArgs(uint64_t source_id,
@@ -259,6 +258,9 @@ struct VIZ_COMMON_EXPORT BeginFrameAck {
                 bool has_damage,
                 int64_t trace_id = -1);
 
+  BeginFrameAck(const BeginFrameAck& other) = default;
+  BeginFrameAck& operator=(const BeginFrameAck& other) = default;
+
   // Creates a BeginFrameAck for a manual BeginFrame. Used when clients produce
   // a CompositorFrame without prior BeginFrame, e.g. for synchronous drawing.
   static BeginFrameAck CreateManualAckWithDamage();
@@ -276,7 +278,24 @@ struct VIZ_COMMON_EXPORT BeginFrameAck {
   // |true| if the observer has produced damage (e.g. sent a CompositorFrame or
   // damaged a surface) as part of responding to the BeginFrame.
   bool has_damage = false;
+
+  void AsValueInto(base::trace_event::TracedValue* dict) const;
 };
+
+#if BUILDFLAG(IS_MAC)
+// Sent by DisplayLinkMacMojo. These are the parameters we received from system
+// CADisplayLink.
+struct VIZ_COMMON_EXPORT CADisplayLinkParams {
+  // The display on which this CADisplayLink is created
+  int64_t display_id;
+  // The time that represents when the last frame displayed.
+  base::TimeTicks timestamp;
+  // The time that represents when the next frame displays.
+  base::TimeTicks target_timestamp;
+  // The time interval between screen refresh updates.
+  base::TimeDelta interval;
+};
+#endif
 
 }  // namespace viz
 

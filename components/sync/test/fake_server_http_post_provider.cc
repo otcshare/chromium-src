@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "components/sync/test/fake_server.h"
@@ -36,19 +37,14 @@ FakeServerHttpPostProvider::FakeServerHttpPostProvider(
     const base::WeakPtr<FakeServer>& fake_server,
     scoped_refptr<base::SequencedTaskRunner> fake_server_task_runner)
     : fake_server_(fake_server),
-      fake_server_task_runner_(fake_server_task_runner),
-      synchronous_post_completion_(
-          base::WaitableEvent::ResetPolicy::AUTOMATIC,
-          base::WaitableEvent::InitialState::NOT_SIGNALED),
-      aborted_(false) {}
+      fake_server_task_runner_(fake_server_task_runner) {}
 
 FakeServerHttpPostProvider::~FakeServerHttpPostProvider() = default;
 
-void FakeServerHttpPostProvider::SetExtraRequestHeaders(const char* headers) {
+void FakeServerHttpPostProvider::SetExtraRequestHeaders(
+    const net::HttpRequestHeaders& headers) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  // TODO(pvalenzuela): Add assertions on this value.
-  extra_request_headers_.assign(headers);
+  extra_request_headers_ = headers;
 }
 
 void FakeServerHttpPostProvider::SetURL(const GURL& url) {
@@ -65,8 +61,6 @@ void FakeServerHttpPostProvider::SetPostPayload(const char* content_type,
   request_content_type_.assign(content_type);
   request_content_.assign(content, content_length);
 }
-
-void FakeServerHttpPostProvider::SetAllowBatching(bool allow_batching) {}
 
 bool FakeServerHttpPostProvider::MakeSynchronousPost(int* net_error_code,
                                                      int* http_status_code) {
@@ -135,7 +129,7 @@ const std::string FakeServerHttpPostProvider::GetResponseHeaderValue(
 }
 
 void FakeServerHttpPostProvider::Abort() {
-  // Note: This may be called on any thread, so no |sequence_checker_| here.
+  // Note: This may be called on any thread, so no `sequence_checker_` here.
   // The sync thread could be blocked in MakeSynchronousPost(), waiting
   // for HandleCommandOnFakeServerThread() to be processed and completed.
   // This causes an immediate unblocking which will be returned as
@@ -161,8 +155,14 @@ void FakeServerHttpPostProvider::HandleCommandOnFakeServerThread(
     std::string* response) {
   DCHECK(fake_server_task_runner_->RunsTasksInCurrentSequence());
 
-  if (!fake_server_ || aborted_) {
-    // Command explicitly aborted or server destroyed.
+  if (!fake_server_) {
+    // Server destroyed.
+    Abort();
+  }
+
+  if (aborted_) {
+    // Command explicitly aborted. |synchronous_post_completion_| has already
+    // been signalled by the FakeServerHttpPostProvider::Abort call.
     return;
   }
 

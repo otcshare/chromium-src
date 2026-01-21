@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
 
@@ -36,7 +37,8 @@ class PaintWorkletPendingGeneratorRegistry
   // The map of CSSPaintImageGeneratorImpl which are waiting for a
   // CSSPaintDefinition to be registered. Owners of this registry is expected to
   // outlive the generators hence are held onto with a WeakMember.
-  using GeneratorHashSet = HeapHashSet<WeakMember<CSSPaintImageGeneratorImpl>>;
+  using GeneratorHashSet =
+      GCedHeapHashSet<WeakMember<CSSPaintImageGeneratorImpl>>;
   using PendingGeneratorMap = HeapHashMap<String, Member<GeneratorHashSet>>;
   PendingGeneratorMap pending_generators_;
 };

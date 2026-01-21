@@ -15,29 +15,47 @@ SyntheticTrialsActiveGroupIdProvider::GetInstance() {
   return base::Singleton<SyntheticTrialsActiveGroupIdProvider>::get();
 }
 
-SyntheticTrialsActiveGroupIdProvider::SyntheticTrialsActiveGroupIdProvider() {}
+SyntheticTrialsActiveGroupIdProvider::SyntheticTrialsActiveGroupIdProvider() =
+    default;
 
-SyntheticTrialsActiveGroupIdProvider::~SyntheticTrialsActiveGroupIdProvider() {}
+SyntheticTrialsActiveGroupIdProvider::~SyntheticTrialsActiveGroupIdProvider() =
+    default;
 
-void SyntheticTrialsActiveGroupIdProvider::GetActiveGroupIds(
-    std::vector<ActiveGroupId>* output) {
+std::vector<ActiveGroupId>
+SyntheticTrialsActiveGroupIdProvider::GetActiveGroupIds() {
   base::AutoLock scoped_lock(lock_);
-  for (const auto& group_id : synthetic_trials_)
-    output->push_back(group_id);
+  return group_ids_;
 }
+
+#if !defined(NDEBUG)
+std::vector<SyntheticTrialGroup>
+SyntheticTrialsActiveGroupIdProvider::GetGroups() {
+  base::AutoLock scoped_lock(lock_);
+  return groups_;
+}
+#endif  // !defined(NDEBUG)
 
 void SyntheticTrialsActiveGroupIdProvider::ResetForTesting() {
   base::AutoLock scoped_lock(lock_);
-  synthetic_trials_.clear();
+  group_ids_.clear();
+#if !defined(NDEBUG)
+  groups_.clear();
+#endif  // !defined(NDEBUG)
 }
 
 void SyntheticTrialsActiveGroupIdProvider::OnSyntheticTrialsChanged(
+    const std::vector<SyntheticTrialGroup>& trials_updated,
+    const std::vector<SyntheticTrialGroup>& trials_removed,
     const std::vector<SyntheticTrialGroup>& groups) {
   {
     base::AutoLock scoped_lock(lock_);
-    synthetic_trials_.clear();
-    for (const auto& group : groups)
-      synthetic_trials_.push_back(group.id());
+    group_ids_.clear();
+    for (const auto& group : groups) {
+      group_ids_.push_back(group.id());
+    }
+#if !defined(NDEBUG)
+    groups_ = groups;
+#endif  // !defined(NDEBUG)
   }
 
   // Update the experiments list for crash reports.

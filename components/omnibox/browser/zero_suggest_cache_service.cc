@@ -4,43 +4,59 @@
 
 #include "components/omnibox/browser/zero_suggest_cache_service.h"
 
+#include <algorithm>
+#include <iterator>
+#include <memory>
+#include <utility>
+
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/memory_usage_estimator.h"
+#include "base/values.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
+#include "components/omnibox/browser/autocomplete_scheme_classifier.h"
+#include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/omnibox/browser/search_suggestion_parser.h"
+#include "components/omnibox/common/omnibox_features.h"
+#include "components/prefs/pref_service.h"
 
-using CacheEntry = ZeroSuggestCacheService::CacheEntry;
+using CacheEntry = ZeroSuggestCacheServiceInterface::CacheEntry;
+using CacheEntrySuggestResult =
+    ZeroSuggestCacheServiceInterface::CacheEntrySuggestResult;
 
-ZeroSuggestCacheService::ZeroSuggestCacheService(size_t cache_size)
-    : cache_(cache_size) {}
+ZeroSuggestCacheService::ZeroSuggestCacheService(
+    std::unique_ptr<AutocompleteSchemeClassifier> scheme_classifier,
+    PrefService* prefs)
+    : scheme_classifier_(std::move(scheme_classifier)), prefs_(prefs) {
+  DCHECK(prefs);
+}
 
 ZeroSuggestCacheService::~ZeroSuggestCacheService() = default;
 
 CacheEntry ZeroSuggestCacheService::ReadZeroSuggestResponse(
     const std::string& page_url) const {
-  const auto it = cache_.Get(page_url);
-  return it != cache_.end() ? it->second : CacheEntry();
+  return CacheEntry(
+      omnibox::GetUserPreferenceForZeroSuggestCachedResponse(prefs_, page_url));
 }
 
 void ZeroSuggestCacheService::StoreZeroSuggestResponse(
     const std::string& page_url,
-    const CacheEntry& response) {
-  cache_.Put(page_url, response);
-  base::UmaHistogramCounts1M("Omnibox.ZeroSuggestProvider.CacheMemoryUsage",
-                             base::trace_event::EstimateMemoryUsage(cache_));
+    const std::string& response_json) {
+  auto entry = CacheEntry(std::string(response_json));
+  omnibox::SetUserPreferenceForZeroSuggestCachedResponse(prefs_, page_url,
+                                                         response_json);
 
   for (auto& observer : observers_) {
-    observer.OnZeroSuggestResponseUpdated(page_url, response);
+    observer.OnZeroSuggestResponseUpdated(page_url, entry);
   }
 }
 
 void ZeroSuggestCacheService::ClearCache() {
-  cache_.Clear();
-}
-
-bool ZeroSuggestCacheService::IsCacheEmpty() const {
-  return cache_.empty();
+  // Clear user prefs used for cross-session persistence.
+  prefs_->SetString(omnibox::kZeroSuggestCachedResults, "");
+  prefs_->SetDict(omnibox::kZeroSuggestCachedResultsWithURL,
+                  base::Value::Dict());
 }
 
 void ZeroSuggestCacheService::AddObserver(Observer* observer) {
@@ -51,36 +67,32 @@ void ZeroSuggestCacheService::RemoveObserver(Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
-CacheEntry::CacheEntry() = default;
-
-CacheEntry::CacheEntry(const std::string& response_json)
-    : response_json(response_json) {}
-
-CacheEntry::CacheEntry(const CacheEntry& entry) = default;
-
-CacheEntry::~CacheEntry() = default;
-
-SearchSuggestionParser::SuggestResults CacheEntry::GetSuggestResults(
-    const AutocompleteInput& input,
-    const AutocompleteProviderClient& client) const {
-  SearchSuggestionParser::Results results;
-
+std::vector<CacheEntrySuggestResult> ZeroSuggestCacheService::GetSuggestResults(
+    const CacheEntry& cache_entry) const {
   auto response_data =
-      SearchSuggestionParser::DeserializeJsonData(response_json);
+      SearchSuggestionParser::DeserializeJsonData(cache_entry.response_json);
   if (!response_data) {
-    return results.suggest_results;
+    return {};
   }
 
+  AutocompleteInput input(u"", metrics::OmniboxEventProto::INVALID_SPEC,
+                          *scheme_classifier_);
+  SearchSuggestionParser::Results results;
   if (!SearchSuggestionParser::ParseSuggestResults(
-          *response_data, input, client.GetSchemeClassifier(),
+          *response_data, input, *scheme_classifier_,
           /*default_result_relevance=*/100, /*is_keyword_result=*/false,
           &results)) {
-    return results.suggest_results;
+    return {};
   }
 
-  return results.suggest_results;
-}
+  std::vector<CacheEntrySuggestResult> suggest_results;
+  suggest_results.reserve(results.suggest_results.size());
+  std::ranges::transform(
+      results.suggest_results, std::back_inserter(suggest_results),
+      [](const auto& suggest_result) {
+        return CacheEntrySuggestResult{suggest_result.subtypes(),
+                                       suggest_result.suggestion()};
+      });
 
-size_t CacheEntry::EstimateMemoryUsage() const {
-  return base::trace_event::EstimateMemoryUsage(response_json);
+  return suggest_results;
 }

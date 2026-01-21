@@ -17,7 +17,7 @@ namespace android {
 class DistilledPagePrefsAndroid {
  public:
   DistilledPagePrefsAndroid(JNIEnv* env,
-                            jobject obj,
+                            const base::android::JavaRef<jobject>& obj,
                             DistilledPagePrefs* distilled_page_prefs_ptr);
 
   DistilledPagePrefsAndroid(const DistilledPagePrefsAndroid&) = delete;
@@ -25,27 +25,17 @@ class DistilledPagePrefsAndroid {
       delete;
 
   virtual ~DistilledPagePrefsAndroid();
-  void SetFontFamily(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj,
-                     jint font_family);
-  jint GetFontFamily(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj);
-  void SetTheme(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& obj,
-                jint theme);
-  jint GetTheme(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void SetFontScaling(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jfloat scaling);
-  jfloat GetFontScaling(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj);
+  void SetFontFamily(JNIEnv* env, int32_t font_family);
+  int32_t GetFontFamily(JNIEnv* env);
+  void SetUserPrefTheme(JNIEnv* env, int32_t theme);
+  void SetDefaultTheme(JNIEnv* env, int32_t theme);
+  int32_t GetTheme(JNIEnv* env);
+  void SetUserPrefFontScaling(JNIEnv* env, jfloat scaling);
+  void SetDefaultFontScaling(JNIEnv* env, jfloat scaling);
+  jfloat GetFontScaling(JNIEnv* env);
 
-  void AddObserver(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jlong obs);
-  void RemoveObserver(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jlong obs);
+  void AddObserver(JNIEnv* env, int64_t obs);
+  void RemoveObserver(JNIEnv* env, int64_t obs);
 
  private:
   raw_ptr<DistilledPagePrefs> distilled_page_prefs_;
@@ -53,12 +43,14 @@ class DistilledPagePrefsAndroid {
 
 class DistilledPagePrefsObserverAndroid : public DistilledPagePrefs::Observer {
  public:
-  DistilledPagePrefsObserverAndroid(JNIEnv* env, jobject obj);
-  virtual ~DistilledPagePrefsObserverAndroid();
+  DistilledPagePrefsObserverAndroid(JNIEnv* env,
+                                    const base::android::JavaRef<jobject>& obj);
+  ~DistilledPagePrefsObserverAndroid() override;
 
   // DistilledPagePrefs::Observer implementation.
   void OnChangeFontFamily(mojom::FontFamily new_font_family) override;
-  void OnChangeTheme(mojom::Theme new_theme) override;
+  void OnChangeTheme(mojom::Theme new_theme,
+                     ThemeSettingsUpdateSource source) override;
   void OnChangeFontScaling(float scaling) override;
 
   virtual void DestroyObserverAndroid(JNIEnv* env);

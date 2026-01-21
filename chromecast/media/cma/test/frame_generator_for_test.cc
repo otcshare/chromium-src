@@ -8,6 +8,8 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_refptr.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/cma/base/decoder_buffer_adapter.h"
 #include "media/base/decoder_buffer.h"
@@ -55,21 +57,20 @@ scoped_refptr<DecoderBufferBase> FrameGeneratorForTest::Generate() {
         new DecoderBufferAdapter(::media::DecoderBuffer::CreateEOSBuffer()));
   }
 
-  scoped_refptr< ::media::DecoderBuffer> buffer(
-      new ::media::DecoderBuffer(frame_spec.size));
+  auto buffer = base::MakeRefCounted<::media::DecoderBuffer>(frame_spec.size);
 
   // Timestamp.
   buffer->set_timestamp(frame_spec.timestamp);
 
   // Generate the frame data.
   for (size_t k = 0; k < frame_spec.size; k++) {
-    buffer->writable_data()[k] = total_buffer_size_ & 0xff;
+    UNSAFE_TODO(buffer->writable_data()[k]) = total_buffer_size_ & 0xff;
     total_buffer_size_++;
   }
 
   // Generate the decrypt configuration.
   if (frame_spec.has_decrypt_config) {
-    uint32_t frame_size = buffer->data_size();
+    uint32_t frame_size = buffer->size();
     uint32_t chunk_size = 1;
     std::vector< ::media::SubsampleEntry> subsamples;
     while (frame_size > 0) {

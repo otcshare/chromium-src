@@ -4,6 +4,7 @@
 
 import("//build/config/android/rules.gni")
 import("//chrome/android/features/android_library_factory_tmpl.gni")
+import("//third_party/jni_zero/jni_zero.gni")
 
 # Minimal Java library for the DownloadFileProvider which will be included in
 # the base module.
@@ -15,6 +16,7 @@ android_library("file_provider_java") {
   ]
   deps = [
     "//base:base_java",
+    "//base:content_uri_utils_java",
     "//components/embedder_support/android:util_java",
     "//content/public/android:content_main_dex_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
@@ -38,6 +40,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/download/InsecureDownloadDialogBridge.java",
     "java/src/org/chromium/chrome/browser/download/MediaStoreHelper.java",
     "java/src/org/chromium/chrome/browser/download/MimeUtils.java",
+    "java/src/org/chromium/chrome/browser/download/PolicyWarningDownloadDialogBridge.java",
     "java/src/org/chromium/chrome/browser/download/StringUtils.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/DangerousDownloadDialog.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadDialogUtils.java",
@@ -46,7 +49,11 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogCoordinator.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogProperties.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogViewBinder.java",
+    "java/src/org/chromium/chrome/browser/download/dialogs/DownloadWarningBypassDialog.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/InsecureDownloadDialog.java",
+    "java/src/org/chromium/chrome/browser/download/dialogs/OpenDownloadDialog.java",
+    "java/src/org/chromium/chrome/browser/download/dialogs/PolicyWarningDownloadDialog.java",
+    "java/src/org/chromium/chrome/browser/download/home/DownloadHelpPageLauncher.java",
     "java/src/org/chromium/chrome/browser/download/home/DownloadManagerCoordinator.java",
     "java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfig.java",
     "java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfigHelper.java",
@@ -57,6 +64,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/download/interstitial/NewDownloadTabProvider.java",
     "java/src/org/chromium/chrome/browser/download/items/OfflineContentAggregatorFactory.java",
     "java/src/org/chromium/chrome/browser/download/settings/DownloadDirectoryAdapter.java",
+    "java/src/org/chromium/chrome/browser/download/settings/DownloadLocationHelperImpl.java",
     "java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreference.java",
     "java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceAdapter.java",
     "java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceDialog.java",
@@ -67,25 +75,25 @@ android_library("java") {
     ":file_provider_java",
     ":java_resources",
     "//base:base_java",
-    "//base:jni_java",
+    "//base:content_uri_utils_java",
     "//build/android:build_java",
     "//chrome/browser/flags:java",
-    "//chrome/browser/offline_pages/android:java",
     "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/settings:java",
     "//chrome/browser/tab:java",
+    "//chrome/browser/ui/android/pdf:java",
     "//chrome/browser/ui/messages/android:java",
     "//chrome/browser/util:java",
     "//components/browser_ui/modaldialog/android:java",
     "//components/browser_ui/settings/android:java",
+    "//components/browser_ui/styles/android:java",
     "//components/browser_ui/util/android:java",
     "//components/browser_ui/widget/android:java",
     "//components/download/internal/common:internal_java",
     "//components/download/public/common:public_java",
     "//components/embedder_support/android:util_java",
     "//components/feature_engagement:feature_engagement_java",
-    "//components/feed/core/shared_prefs:feed_shared_prefs",
     "//components/messages/android:java",
     "//components/offline_items_collection/core:core_java",
     "//components/prefs/android:java",
@@ -98,14 +106,18 @@ android_library("java") {
     "//third_party/androidx:androidx_core_core_java",
     "//third_party/androidx:androidx_fragment_fragment_java",
     "//third_party/androidx:androidx_preference_preference_java",
+    "//third_party/jni_zero:jni_zero_java",
     "//ui/android:ui_java",
+    "//ui/edge_to_edge:java",
     "//url:gurl_java",
   ]
 
-  srcjar_deps = [ "//chrome:download_enum_javagen" ]
+  srcjar_deps = [
+    ":jni_headers",
+    "//chrome:download_enum_javagen",
+  ]
 
   resources_package = "org.chromium.chrome.browser.download"
-  annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
 }
 
 android_library_factory("factory_java") {
@@ -138,6 +150,7 @@ generate_jni("jni_headers") {
     "java/src/org/chromium/chrome/browser/download/DownloadStartupUtils.java",
     "java/src/org/chromium/chrome/browser/download/InsecureDownloadDialogBridge.java",
     "java/src/org/chromium/chrome/browser/download/MimeUtils.java",
+    "java/src/org/chromium/chrome/browser/download/PolicyWarningDownloadDialogBridge.java",
     "java/src/org/chromium/chrome/browser/download/StringUtils.java",
     "java/src/org/chromium/chrome/browser/download/items/OfflineContentAggregatorFactory.java",
   ]
@@ -170,8 +183,9 @@ android_library("download_java_tests") {
     "//components/user_prefs/android:java",
     "//content/public/test/android:content_java_test_support",
     "//third_party/android_deps:espresso_java",
-    "//third_party/android_support_test_runner:runner_java",
     "//third_party/androidx:androidx_preference_preference_java",
+    "//third_party/androidx:androidx_test_core_java",
+    "//third_party/androidx:androidx_test_monitor_java",
     "//third_party/androidx:androidx_test_runner_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
@@ -184,38 +198,46 @@ robolectric_library("junit_tests") {
     "java/src/org/chromium/chrome/browser/download/DownloadDirectoryProviderUnitTest.java",
     "java/src/org/chromium/chrome/browser/download/DownloadLocationDialogMetricsUnitTest.java",
     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadDialogUtilsUnitTest.java",
+    "java/src/org/chromium/chrome/browser/download/dialogs/OpenDownloadDialogTest.java",
   ]
 
   deps = [
     ":file_provider_java",
     ":java",
+    ":java_resources",
     "//base:base_java",
     "//base:base_java_test_support",
     "//base:base_junit_test_support",
     "//chrome/browser/flags:java",
     "//chrome/browser/preferences:java",
+    "//chrome/browser/profiles/android:java",
     "//chrome/test/android:chrome_java_unit_test_support",
     "//components/offline_items_collection/core:core_java",
     "//components/prefs/android:java",
     "//net/android:net_java",
+    "//third_party/androidx:androidx_test_core_java",
+    "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
     "//ui/android:ui_full_java",
   ]
+  resources_package = "org.chromium.chrome.browser.download"
 }
 
 android_resources("java_resources") {
   sources = [
+    "java/res/color/error_icon_color_tint_list.xml",
+    "java/res/drawable/dangerous_filled_24dp.xml",
+    "java/res/drawable/ic_download_done_24dp.xml",
     "java/res/drawable/ic_incognito_download_message.xml",
-    "java/res/drawable/infobar_download_complete.xml",
     "java/res/layout/confirm_oma_download.xml",
     "java/res/layout/download_location_dialog.xml",
     "java/res/layout/download_location_preference.xml",
     "java/res/layout/download_location_preference_item.xml",
     "java/res/layout/download_location_spinner_dropdown_item.xml",
     "java/res/layout/download_location_spinner_item.xml",
-    "java/res/values-v17/dimens.xml",
-    "java/res/values-v17/styles.xml",
+    "java/res/values/dimens.xml",
+    "java/res/values/styles.xml",
     "java/res/xml/download_preferences.xml",
   ]
 

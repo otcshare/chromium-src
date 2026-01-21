@@ -10,6 +10,7 @@
 
 #include "base/format_macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/strings/stringprintf.h"
 #include "services/device/public/cpp/hid/hid_item_state_table.h"
 
@@ -214,21 +215,27 @@ void HidCollection::GetMaxReportSizes(size_t* max_input_report_bits,
   DCHECK(max_output_report_bits);
   DCHECK(max_feature_report_bits);
   struct {
-    const std::unordered_map<uint8_t, HidReport>& reports;
-    size_t& max_report_bits;
+    const raw_ref<const std::unordered_map<uint8_t, HidReport>> reports;
+    const raw_ref<size_t> max_report_bits;
   } report_lists[]{
-      {input_reports_, *max_input_report_bits},
-      {output_reports_, *max_output_report_bits},
-      {feature_reports_, *max_feature_report_bits},
+      {ToRawRef(input_reports_), ToRawRef(*max_input_report_bits)},
+      {ToRawRef(output_reports_), ToRawRef(*max_output_report_bits)},
+      {ToRawRef(feature_reports_), ToRawRef(*max_feature_report_bits)},
   };
   auto collection_info = mojom::HidCollectionInfo::New();
   collection_info->usage =
       mojom::HidUsageAndPage::New(usage_.usage, usage_.usage_page);
   collection_info->report_ids.insert(collection_info->report_ids.end(),
                                      report_ids_.begin(), report_ids_.end());
+
+  // Limit logging to avoid timing out in fuzz tests when there are many
+  // invalid items.
+  static constexpr int kMaxLogMessages = 100;
+  int log_message_count = 0;
+
   for (const auto& entry : report_lists) {
-    entry.max_report_bits = 0;
-    for (const auto& report : entry.reports) {
+    *entry.max_report_bits = 0;
+    for (const auto& report : *entry.reports) {
       uint64_t report_bits = 0;
       for (const auto& item : report.second) {
         uint64_t report_size = item->GetReportSize();
@@ -236,10 +243,17 @@ void HidCollection::GetMaxReportSizes(size_t* max_input_report_bits,
         // sizes. Warn if the size is too large, but still allow the report to
         // affect the maximum report size.
         if (report_size > kMaxItemReportSizeBits) {
-          LOG(WARNING) << base::StringPrintf(
-              "encountered report item with invalid report size (%" PRIu64
-              ">%u)",
-              report_size, kMaxItemReportSizeBits);
+          if (log_message_count < kMaxLogMessages) {
+            ++log_message_count;
+            LOG(WARNING) << base::StringPrintf(
+                "encountered report item with invalid report size (%" PRIu64
+                ">%u)",
+                report_size, kMaxItemReportSizeBits);
+          } else if (log_message_count == kMaxLogMessages) {
+            ++log_message_count;
+            LOG(WARNING) << "Too many invalid report items, not reporting any "
+                            "more for this device.";
+          }
         }
         // Report size and report count are both 32-bit values. A 64-bit integer
         // type is needed to avoid overflow when computing the product.
@@ -255,8 +269,8 @@ void HidCollection::GetMaxReportSizes(size_t* max_input_report_bits,
         report_bits += item_bits;
       }
       DCHECK_LE(report_bits, kMaxReasonableReportLengthBits);
-      entry.max_report_bits =
-          std::max(entry.max_report_bits, static_cast<size_t>(report_bits));
+      *entry.max_report_bits =
+          std::max(*entry.max_report_bits, static_cast<size_t>(report_bits));
     }
   }
 }
@@ -264,12 +278,12 @@ void HidCollection::GetMaxReportSizes(size_t* max_input_report_bits,
 mojom::HidCollectionInfoPtr HidCollection::ToMojo() const {
   auto collection = mojom::HidCollectionInfo::New();
   struct {
-    const std::unordered_map<uint8_t, HidReport>& in;
-    std::vector<mojom::HidReportDescriptionPtr>& out;
+    const raw_ref<const std::unordered_map<uint8_t, HidReport>> in;
+    const raw_ref<std::vector<mojom::HidReportDescriptionPtr>> out;
   } report_lists[]{
-      {input_reports_, collection->input_reports},
-      {output_reports_, collection->output_reports},
-      {feature_reports_, collection->feature_reports},
+      {ToRawRef(input_reports_), ToRawRef(collection->input_reports)},
+      {ToRawRef(output_reports_), ToRawRef(collection->output_reports)},
+      {ToRawRef(feature_reports_), ToRawRef(collection->feature_reports)},
   };
 
   collection->usage =
@@ -279,12 +293,12 @@ mojom::HidCollectionInfoPtr HidCollection::ToMojo() const {
   collection->collection_type = collection_type_;
 
   for (const auto& report_list : report_lists) {
-    for (const auto& report : report_list.in) {
+    for (const auto& report : *report_list.in) {
       auto report_description = mojom::HidReportDescription::New();
       report_description->report_id = report.first;
       for (const auto& item : report.second)
         report_description->items.push_back(item->ToMojo());
-      report_list.out.push_back(std::move(report_description));
+      report_list.out->push_back(std::move(report_description));
     }
   }
 

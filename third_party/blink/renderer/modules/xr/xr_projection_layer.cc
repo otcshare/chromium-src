@@ -3,37 +3,40 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_projection_layer.h"
+
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_projection_layer_init.h"
+#include "third_party/blink/renderer/modules/xr/xr_frame_provider.h"
 #include "third_party/blink/renderer/modules/xr/xr_rigid_transform.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
+#include "third_party/blink/renderer/modules/xr/xr_system.h"
 
 namespace blink {
 
-XRProjectionLayer::XRProjectionLayer(XRSession* session,
-                                     const XRProjectionLayerInit* init)
-    : XRCompositionLayer(session) {}
+XRProjectionLayer::XRProjectionLayer(XRGraphicsBinding* binding,
+                                     XRLayerDrawingContext* drawing_context,
+                                     V8XRLayerLayout::Enum final_layout)
+    : XRCompositionLayer(binding, drawing_context) {
+  // Let SetLayout() decide which layout to use.
+  SetLayout(final_layout);
 
-uint16_t XRProjectionLayer::textureWidth() const {
-  return texture_width_;
+  CreateLayerBackend();
+  // Ensure correct viewports are sent to the runtime on the first frame.
+  SetModified(true);
 }
 
-uint16_t XRProjectionLayer::textureHeight() const {
-  return texture_height_;
-}
-
-uint16_t XRProjectionLayer::textureArrayLength() const {
-  return texture_array_length_;
+XRLayerType XRProjectionLayer::LayerType() const {
+  return XRLayerType::kProjectionLayer;
 }
 
 bool XRProjectionLayer::ignoreDepthValues() const {
   return ignore_depth_values_;
 }
 
-absl::optional<float> XRProjectionLayer::fixedFoveation() const {
+std::optional<float> XRProjectionLayer::fixedFoveation() const {
   return fixed_foveation_;
 }
 
-void XRProjectionLayer::setFixedFoveation(absl::optional<float> value) {
+void XRProjectionLayer::setFixedFoveation(std::optional<float> value) {
   fixed_foveation_ = value;
 }
 
@@ -43,6 +46,22 @@ XRRigidTransform* XRProjectionLayer::deltaPose() const {
 
 void XRProjectionLayer::setDeltaPose(XRRigidTransform* value) {
   delta_pose_ = value;
+}
+
+void XRProjectionLayer::UpdateLayerBackend() {
+  session()->xr()->frameProvider()->UpdateLayerViewports(this);
+}
+
+device::mojom::blink::XRNativeOriginInformationPtr
+XRProjectionLayer::NativeOrigin() const {
+  return device::mojom::blink::XRNativeOriginInformation::NewReferenceSpaceType(
+      device::mojom::blink::XRReferenceSpaceType::kLocal);
+}
+
+device::mojom::blink::XRLayerSpecificDataPtr
+XRProjectionLayer::CreateLayerSpecificData() const {
+  return device::mojom::blink::XRLayerSpecificData::NewProjection(
+      device::mojom::blink::XRProjectionLayerData::New());
 }
 
 void XRProjectionLayer::Trace(Visitor* visitor) const {

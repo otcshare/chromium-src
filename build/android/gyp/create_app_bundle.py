@@ -3,7 +3,6 @@
 # Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Create an Android application bundle from one or more bundle modules."""
 
 import argparse
@@ -11,20 +10,22 @@ import concurrent.futures
 import json
 import logging
 import os
+import posixpath
 import shutil
 import sys
+from xml.etree import ElementTree
 import zipfile
 
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from pylib.utils import dexdump
 
+import bundletool
 from util import build_utils
 from util import manifest_utils
 from util import resource_utils
-from xml.etree import ElementTree
-
-import bundletool
+import action_helpers  # build_utils adds //build to sys.path.
+import zip_helpers
 
 # Location of language-based assets in bundle modules.
 _LOCALES_SUBDIR = 'assets/locales/'
@@ -36,7 +37,7 @@ _LOCALES_SUBDIR = 'assets/locales/'
 _FALLBACK_LOCALE = 'en-US'
 
 # List of split dimensions recognized by this tool.
-_ALL_SPLIT_DIMENSIONS = [ 'ABI', 'SCREEN_DENSITY', 'LANGUAGE' ]
+_ALL_SPLIT_DIMENSIONS = ['ABI', 'SCREEN_DENSITY', 'LANGUAGE']
 
 # Due to historical reasons, certain languages identified by Chromium with a
 # 3-letters ISO 639-2 code, are mapped to a nearly equivalent 2-letters
@@ -45,7 +46,7 @@ _ALL_SPLIT_DIMENSIONS = [ 'ABI', 'SCREEN_DENSITY', 'LANGUAGE' ]
 #
 # the same conversion as for Java resources.
 _SHORTEN_LANGUAGE_CODE_MAP = {
-  'fil': 'tl',  # Filipino to Tagalog.
+    'fil': 'tl',  # Filipino to Tagalog.
 }
 
 # A list of extensions corresponding to files that should never be compressed
@@ -66,35 +67,44 @@ _COMPONENT_TYPES = ('activity', 'provider', 'receiver', 'service')
 _DEDUPE_ENTRY_TYPES = _COMPONENT_TYPES + ('activity-alias', 'meta-data')
 
 _ROTATION_METADATA_KEY = 'com.google.play.apps.signing/RotationConfig.textproto'
+_JAVALESS_SERVICE_NAME = 'org.chromium.content.app.NativeOnlySandboxedProcessService'
+
+_ALLOWLISTED_NON_BASE_SERVICES = {
+    # Only on API level 33+ which is past the fix for b/169196314.
+    'androidx.pdf.service.PdfDocumentServiceImpl',
+    'androidx.pdf.service.PdfDocumentService',
+    "com.google.android.apps.chrome.browser.media.ChromeAppContentProjectionService",
+    # These need to be burned down - these have likely never fully worked.
+    'com.google.apps.tiktok.concurrent.AndroidFuturesService',
+    'com.google.apps.tiktok.concurrent.InternalForegroundService',
+}
 
 
 def _ParseArgs(args):
   parser = argparse.ArgumentParser()
-  parser.add_argument('--out-bundle', required=True,
+  parser.add_argument('--out-bundle',
+                      required=True,
                       help='Output bundle zip archive.')
-  parser.add_argument('--module-zips', required=True,
+  parser.add_argument('--module-zips',
+                      required=True,
                       help='GN-list of module zip archives.')
-  parser.add_argument(
-      '--pathmap-in-paths',
-      action='append',
-      help='List of module pathmap files.')
-  parser.add_argument(
-      '--module-name',
-      action='append',
-      dest='module_names',
-      help='List of module names.')
-  parser.add_argument(
-      '--pathmap-out-path', help='Path to combined pathmap file for bundle.')
-  parser.add_argument(
-      '--rtxt-in-paths', action='append', help='GN-list of module R.txt files.')
-  parser.add_argument(
-      '--rtxt-out-path', help='Path to combined R.txt file for bundle.')
-  parser.add_argument('--uncompressed-assets', action='append',
+  parser.add_argument('--pathmap-in-paths',
+                      action='append',
+                      help='List of module pathmap files.')
+  parser.add_argument('--module-name',
+                      action='append',
+                      dest='module_names',
+                      help='List of module names.')
+  parser.add_argument('--pathmap-out-path',
+                      help='Path to combined pathmap file for bundle.')
+  parser.add_argument('--rtxt-in-paths',
+                      action='append',
+                      help='GN-list of module R.txt files.')
+  parser.add_argument('--rtxt-out-path',
+                      help='Path to combined R.txt file for bundle.')
+  parser.add_argument('--uncompressed-assets',
+                      action='append',
                       help='GN-list of uncompressed assets.')
-  parser.add_argument(
-      '--compress-shared-libraries',
-      action='store_true',
-      help='Whether to store native libraries compressed.')
   parser.add_argument('--compress-dex',
                       action='store_true',
                       help='Compress .dex files')
@@ -104,12 +114,11 @@ def _ParseArgs(args):
       '--base-module-rtxt-path',
       help='Optional path to the base module\'s R.txt file, only used with '
       'language split dimension.')
-  parser.add_argument(
-      '--base-allowlist-rtxt-path',
-      help='Optional path to an R.txt file, string resources '
-      'listed there _and_ in --base-module-rtxt-path will '
-      'be kept in the base bundle module, even if language'
-      ' splitting is enabled.')
+  parser.add_argument('--base-allowlist-rtxt-path',
+                      help='Optional path to an R.txt file, string resources '
+                      'listed there _and_ in --base-module-rtxt-path will '
+                      'be kept in the base bundle module, even if language'
+                      ' splitting is enabled.')
   parser.add_argument('--rotation-config',
                       help='Path to a RotationConfig.textproto')
   parser.add_argument('--warnings-as-errors',
@@ -122,34 +131,51 @@ def _ParseArgs(args):
       help='Check if services are in base module if isolatedSplits is enabled.')
 
   options = parser.parse_args(args)
-  options.module_zips = build_utils.ParseGnList(options.module_zips)
-  options.rtxt_in_paths = build_utils.ParseGnList(options.rtxt_in_paths)
-  options.pathmap_in_paths = build_utils.ParseGnList(options.pathmap_in_paths)
+  options.module_zips = action_helpers.parse_gn_list(options.module_zips)
 
   if len(options.module_zips) == 0:
-    raise Exception('The module zip list cannot be empty.')
+    parser.error('The module zip list cannot be empty.')
+  if len(options.module_zips) != len(options.module_names):
+    parser.error('# module zips != # names.')
+  if 'base' not in options.module_names:
+    parser.error('Missing base module.')
+
+  # Sort modules for more stable outputs.
+  per_module_values = list(
+      zip(options.module_names, options.module_zips,
+          options.uncompressed_assets, options.rtxt_in_paths,
+          options.pathmap_in_paths))
+  per_module_values.sort(key=lambda x: (x[0] != 'base', x[0]))
+  options.module_names = [x[0] for x in per_module_values]
+  options.module_zips = [x[1] for x in per_module_values]
+  options.uncompressed_assets = [x[2] for x in per_module_values]
+  options.rtxt_in_paths = [x[3] for x in per_module_values]
+  options.pathmap_in_paths = [x[4] for x in per_module_values]
+
+  options.rtxt_in_paths = action_helpers.parse_gn_list(options.rtxt_in_paths)
+  options.pathmap_in_paths = action_helpers.parse_gn_list(
+      options.pathmap_in_paths)
 
   # Merge all uncompressed assets into a set.
   uncompressed_list = []
-  if options.uncompressed_assets:
-    for l in options.uncompressed_assets:
-      for entry in build_utils.ParseGnList(l):
-        # Each entry has the following format: 'zipPath' or 'srcPath:zipPath'
-        pos = entry.find(':')
-        if pos >= 0:
-          uncompressed_list.append(entry[pos + 1:])
-        else:
-          uncompressed_list.append(entry)
+  for entry in action_helpers.parse_gn_list(options.uncompressed_assets):
+    # Each entry has the following format: 'zipPath' or 'srcPath:zipPath'
+    pos = entry.find(':')
+    if pos >= 0:
+      uncompressed_list.append(entry[pos + 1:])
+    else:
+      uncompressed_list.append(entry)
 
   options.uncompressed_assets = set(uncompressed_list)
 
   # Check that all split dimensions are valid
   if options.split_dimensions:
-    options.split_dimensions = build_utils.ParseGnList(options.split_dimensions)
+    options.split_dimensions = action_helpers.parse_gn_list(
+        options.split_dimensions)
     for dim in options.split_dimensions:
       if dim.upper() not in _ALL_SPLIT_DIMENSIONS:
-        parser.error('Invalid split dimension "%s" (expected one of: %s)' % (
-            dim, ', '.join(x.lower() for x in _ALL_SPLIT_DIMENSIONS)))
+        parser.error('Invalid split dimension "%s" (expected one of: %s)' %
+                     (dim, ', '.join(x.lower() for x in _ALL_SPLIT_DIMENSIONS)))
 
   # As a special case, --base-allowlist-rtxt-path can be empty to indicate
   # that the module doesn't need such a allowlist. That's because it is easier
@@ -175,15 +201,13 @@ def _MakeSplitDimension(value, enabled):
 
 
 def _GenerateBundleConfigJson(uncompressed_assets, compress_dex,
-                              compress_shared_libraries, split_dimensions,
-                              base_master_resource_ids):
+                              split_dimensions, base_master_resource_ids):
   """Generate a dictionary that can be written to a JSON BuildConfig.
 
   Args:
     uncompressed_assets: A list or set of file paths under assets/ that always
       be stored uncompressed.
     compressed_dex: Boolean, whether to compress .dex.
-    compress_shared_libraries: Boolean, whether to compress native libs.
     split_dimensions: list of split dimensions.
     base_master_resource_ids: Optional list of 32-bit resource IDs to keep
       inside the base module, even when split dimensions are enabled.
@@ -196,14 +220,18 @@ def _GenerateBundleConfigJson(uncompressed_assets, compress_dex,
   #    'negate': Boolean, True to indicate that the bundle should *not* be
   #              split (unused at the moment by this script).
 
-  split_dimensions = [ _MakeSplitDimension(dim, dim in split_dimensions)
-                       for dim in _ALL_SPLIT_DIMENSIONS ]
+  split_dimensions = [
+      _MakeSplitDimension(dim, dim in split_dimensions)
+      for dim in _ALL_SPLIT_DIMENSIONS
+  ]
 
   # Locale-specific pak files stored in bundle splits need not be compressed.
   uncompressed_globs = [
       'assets/locales#lang_*/*.pak', 'assets/fallback-locales/*.pak'
   ]
-  uncompressed_globs.extend('assets/' + x for x in uncompressed_assets)
+  # normpath to allow for ../ prefix.
+  uncompressed_globs.extend(
+      posixpath.normpath('assets/' + x) for x in uncompressed_assets)
   # NOTE: Use '**' instead of '*' to work through directories!
   uncompressed_globs.extend('**.' + ext for ext in _UNCOMPRESSED_FILE_EXTS)
   if not compress_dex:
@@ -216,15 +244,23 @@ def _GenerateBundleConfigJson(uncompressed_assets, compress_dex,
 
   data = {
       'optimizations': {
+          'resourceOptimizations': {
+              'collapsedResourceNames': {
+                  'deduplicateResourceEntries': True,
+              },
+              'sparseEncoding': 'VARIANT_FOR_SDK_32',
+          },
           'splitsConfig': {
               'splitDimension': split_dimensions,
           },
           'uncompressNativeLibraries': {
-              'enabled': not compress_shared_libraries,
+              'enabled': True,
+              'alignment': 'PAGE_ALIGNMENT_16K'
           },
           'uncompressDexFiles': {
               'enabled': True,  # Applies only for P+.
-          }
+          },
+          'inject_min_sdk': True,  # Required for sparseEncoding
       },
       'compression': {
           'uncompressedGlob': sorted(uncompressed_globs),
@@ -252,8 +288,12 @@ def _RewriteLanguageAssetPath(src_path):
   if not src_path.startswith(_LOCALES_SUBDIR) or not src_path.endswith('.pak'):
     return [src_path]
 
+  # Note that |locale| may include a gender as well as a language.
   locale = src_path[len(_LOCALES_SUBDIR):-4]
   android_locale = resource_utils.ToAndroidLocaleName(locale)
+
+  # Trim _GENDER suffix so it doesn't end up in a directory name.
+  android_locale = android_locale.split('_')[0]
 
   # The locale format is <lang>-<region> or <lang> or BCP-47 (e.g b+sr+Latn).
   # Extract the language.
@@ -300,7 +340,8 @@ def _SplitModuleForAssetTargeting(src_module_zip, tmp_dir, split_dimensions):
 
   with zipfile.ZipFile(src_module_zip, 'r') as src_zip:
     language_files = [
-      f for f in src_zip.namelist() if f.startswith(_LOCALES_SUBDIR)]
+        f for f in src_zip.namelist() if f.startswith(_LOCALES_SUBDIR)
+    ]
 
     if not language_files:
       # Not language-based assets to split in this module.
@@ -316,11 +357,10 @@ def _SplitModuleForAssetTargeting(src_module_zip, tmp_dir, split_dimensions):
         if src_path in language_files:
           dst_path = _RewriteLanguageAssetPath(src_path)
 
-        build_utils.AddToZipHermetic(
-            dst_zip,
-            dst_path,
-            data=src_zip.read(src_path),
-            compress=is_compressed)
+        zip_helpers.add_to_zip_hermetic(dst_zip,
+                                        dst_path,
+                                        data=src_zip.read(src_path),
+                                        compress=is_compressed)
 
     return tmp_zip
 
@@ -349,11 +389,11 @@ def _ConcatTextFiles(in_paths, out_path):
     in_paths: List of input file paths.
     out_path: Path to output file.
   """
-  with open(out_path, 'w') as out_file:
+  with open(out_path, 'w', encoding='utf-8') as out_file:
     for in_path in in_paths:
       if not os.path.exists(in_path):
         continue
-      with open(in_path, 'r') as in_file:
+      with open(in_path, 'r', encoding='utf-8') as in_file:
         out_file.write('-- Contents of {}\n'.format(os.path.basename(in_path)))
         out_file.write(in_file.read())
 
@@ -368,7 +408,7 @@ def _LoadPathmap(pathmap_path):
     return {}
 
   pathmap = {}
-  with open(pathmap_path, 'r') as f:
+  with open(pathmap_path, 'r', encoding='utf-8') as f:
     for line in f:
       line = line.strip()
       if line.startswith('--') or line == '':
@@ -386,7 +426,7 @@ def _WriteBundlePathmap(module_pathmap_paths, module_names,
   to the bundle pathmap. So res/a.xml inside the base module pathmap would be
   base/res/a.xml in the bundle pathmap.
   """
-  with open(bundle_pathmap_path, 'w') as bundle_pathmap_file:
+  with open(bundle_pathmap_path, 'w', encoding='utf-8') as bundle_pathmap_file:
     for module_pathmap_path, module_name in zip(module_pathmap_paths,
                                                 module_names):
       if not os.path.exists(module_pathmap_path):
@@ -400,15 +440,22 @@ def _WriteBundlePathmap(module_pathmap_paths, module_names,
 
 
 def _GetManifestForModule(bundle_path, module_name):
-  return ElementTree.fromstring(
-      bundletool.RunBundleTool([
-          'dump', 'manifest', '--bundle', bundle_path, '--module', module_name
-      ]))
+  data = bundletool.RunBundleTool(
+      ['dump', 'manifest', '--bundle', bundle_path, '--module', module_name])
+  try:
+    return ElementTree.fromstring(data)
+  except ElementTree.ParseError:
+    sys.stderr.write('Failed to parse:\n')
+    sys.stderr.write(data)
+    raise
 
 
 def _GetComponentNames(manifest, tag_name):
   android_name = '{%s}name' % manifest_utils.ANDROID_NAMESPACE
-  return [s.attrib.get(android_name) for s in manifest.iter(tag_name)]
+  return [
+      s.attrib.get(android_name)
+      for s in manifest.iterfind(f'application/{tag_name}')
+  ]
 
 
 def _ClassesFromZip(module_zip):
@@ -418,6 +465,10 @@ def _ClassesFromZip(module_zip):
       java_package += '.' if java_package else ''
       classes.update(java_package + c for c in package_dict['classes'])
   return classes
+
+
+def _IsJavalessService(service_name):
+  return service_name.startswith(_JAVALESS_SERVICE_NAME)
 
 
 def _ValidateSplits(bundle_path, module_zips):
@@ -459,13 +510,13 @@ def _ValidateSplits(bundle_path, module_zips):
   # Ensure components defined in base manifest exist in base dex.
   for (kind, component), module_name in splits_by_component.items():
     if module_name == 'base' and kind in _COMPONENT_TYPES:
-      if component not in base_classes:
+      if component not in base_classes and not _IsJavalessService(component):
         errors.append(f"{component} is defined in the base manfiest, "
                       f"but the class does not exist in the base splits' dex")
 
   # Remaining checks apply only when isolatedSplits="true".
   isolated_splits = manifests_by_name['base'].get(
-      f'{manifest_utils.ANDROID_NAMESPACE}isolatedSplits')
+      f'{{{manifest_utils.ANDROID_NAMESPACE}}}isolatedSplits')
   if isolated_splits != 'true':
     return errors
 
@@ -476,18 +527,23 @@ def _ValidateSplits(bundle_path, module_zips):
     if module_name == 'base':
       continue
     provider_names = _GetComponentNames(cur_manifest, 'provider')
-    if provider_names:
-      errors.append('Providers should all be declared in the base manifest.'
-                    ' "%s" module declared: %s' % (module_name, provider_names))
+    for p in provider_names:
+      errors.append(f'Provider {p} should be declared in the base manifest,'
+                    f' but is in "{module_name}" module. For details, see '
+                    'https://chromium.googlesource.com/chromium/src/+/main/'
+                    'docs/android_isolated_splits.md#contentproviders')
 
   # Ensure all services are present in base module because service classes are
   # not found if they are not present in the base module. b/169196314
   # It is fine if they are defined in split manifests though.
-  for cur_manifest in manifests_by_name.values():
+  for module_name, cur_manifest in manifests_by_name.items():
     for service_name in _GetComponentNames(cur_manifest, 'service'):
-      if service_name not in base_classes:
-        errors.append("Service %s should be present in the base module's dex."
-                      " See b/169196314 for more details." % service_name)
+      if (service_name not in base_classes
+          and service_name not in _ALLOWLISTED_NON_BASE_SERVICES
+          and not _IsJavalessService(service_name)):
+        errors.append(f'Service {service_name} should be declared in the base'
+                      f' manifest, but is in "{module_name}" module. For'
+                      ' details, see b/169196314.')
 
   return errors
 
@@ -500,7 +556,6 @@ def main(args):
   split_dimensions = []
   if options.split_dimensions:
     split_dimensions = [x.upper() for x in options.split_dimensions]
-
 
   with build_utils.TempDir() as tmp_dir:
     logging.info('Splitting locale assets')
@@ -517,7 +572,6 @@ def main(args):
     logging.info('Creating BundleConfig.pb.json')
     bundle_config = _GenerateBundleConfigJson(options.uncompressed_assets,
                                               options.compress_dex,
-                                              options.compress_shared_libraries,
                                               split_dimensions,
                                               base_master_resource_ids)
 
@@ -527,11 +581,11 @@ def main(args):
     # named with a .pb.json extension.
     tmp_bundle_config = tmp_bundle + '.BundleConfig.pb.json'
 
-    with open(tmp_bundle_config, 'w') as f:
+    with open(tmp_bundle_config, 'w', encoding='utf-8') as f:
       f.write(bundle_config)
 
     logging.info('Running bundletool')
-    cmd_args = build_utils.JavaCmd(options.warnings_as_errors) + [
+    cmd_args = build_utils.JavaCmd() + [
         '-jar',
         bundletool.BUNDLETOOL_JAR_PATH,
         'build-bundle',
@@ -553,7 +607,7 @@ def main(args):
         fail_on_output=options.warnings_as_errors)
 
     if options.validate_services:
-      # TODO(crbug.com/1126301): This step takes 0.4s locally for bundles with
+      # TODO(crbug.com/40148088): This step takes 0.4s locally for bundles with
       # isolated splits disabled and 2s for bundles with isolated splits
       # enabled.  Consider making this run in parallel or move into a separate
       # step before enabling isolated splits by default.

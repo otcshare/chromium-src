@@ -4,10 +4,13 @@
 
 #include "media/audio/android/opensles_input.h"
 
+#include <algorithm>
+
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
 #include "media/audio/android/audio_manager_android.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 
 #define LOG_ON_FAILURE_AND_RETURN(op, ...)      \
   do {                                          \
@@ -22,7 +25,10 @@ namespace media {
 
 OpenSLESInputStream::OpenSLESInputStream(AudioManagerAndroid* audio_manager,
                                          const AudioParameters& params)
-    : audio_manager_(audio_manager),
+    : peak_detector_(base::BindRepeating(&AudioManager::TraceAmplitudePeak,
+                                         base::Unretained(audio_manager),
+                                         /*trace_start=*/true)),
+      audio_manager_(audio_manager),
       callback_(nullptr),
       recorder_(nullptr),
       simple_buffer_queue_(nullptr),
@@ -49,7 +55,7 @@ OpenSLESInputStream::OpenSLESInputStream(AudioManagerAndroid* audio_manager,
   hardware_delay_ = base::Seconds(params.frames_per_buffer() /
                                   static_cast<double>(params.sample_rate()));
 
-  memset(&audio_data_, 0, sizeof(audio_data_));
+  std::ranges::fill(audio_data_, nullptr);
 }
 
 OpenSLESInputStream::~OpenSLESInputStream() {
@@ -307,10 +313,12 @@ void OpenSLESInputStream::ReadBufferQueue() {
       reinterpret_cast<int16_t*>(audio_data_[active_buffer_index_]),
       audio_bus_->frames());
 
+  peak_detector_.FindPeak(audio_bus_.get());
+
   // TODO(henrika): Investigate if it is possible to get an accurate
   // delay estimation.
   callback_->OnData(audio_bus_.get(), base::TimeTicks::Now() - hardware_delay_,
-                    0.0);
+                    0.0, {});
 
   // Done with this buffer. Send it to device for recording.
   SLresult err =

@@ -29,8 +29,11 @@
 #include "third_party/blink/renderer/modules/webaudio/periodic_wave.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_periodic_wave_options.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
@@ -40,6 +43,8 @@
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 #if defined(ARCH_CPU_X86_FAMILY)
 #include <xmmintrin.h>
@@ -73,9 +78,9 @@ PeriodicWave* PeriodicWave::Create(BaseAudioContext& context,
   if (real.size() != imag.size()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "length of real array (" + String::Number(real.size()) +
-            ") and length of imaginary array (" + String::Number(imag.size()) +
-            ") must match.");
+        StrCat({"length of real array (", String::Number(real.size()),
+                ") and length of imaginary array (",
+                String::Number(imag.size()), ") must match."}));
     return nullptr;
   }
 
@@ -176,7 +181,7 @@ PeriodicWaveImpl::PeriodicWaveImpl(float sample_rate)
 }
 
 PeriodicWaveImpl::~PeriodicWaveImpl() {
-  AdjustV8ExternalMemory(-static_cast<int64_t>(v8_external_memory_));
+  external_memory_accounter_.Clear(v8::Isolate::GetCurrent());
 }
 
 unsigned PeriodicWaveImpl::PeriodicWaveSize() const {
@@ -201,8 +206,8 @@ unsigned PeriodicWaveImpl::MaxNumberOfPartials() const {
 
 void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
     float fundamental_frequency,
-    float*& lower_wave_data,
-    float*& higher_wave_data,
+    base::span<const float>& lower_wave_data,
+    base::span<const float>& higher_wave_data,
     float& table_interpolation_factor) {
   // Negative frequencies are allowed, in which case we alias to the positive
   // frequency.
@@ -229,8 +234,8 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
   unsigned range_index2 =
       range_index1 < NumberOfRanges() - 1 ? range_index1 + 1 : range_index1;
 
-  lower_wave_data = band_limited_tables_[range_index2]->Data();
-  higher_wave_data = band_limited_tables_[range_index1]->Data();
+  lower_wave_data = band_limited_tables_[range_index2]->as_span();
+  higher_wave_data = band_limited_tables_[range_index1]->as_span();
 
   // Ranges from 0 -> 1 to interpolate between lower -> higher.
   table_interpolation_factor = pitch_range - range_index1;
@@ -238,15 +243,15 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
 
 #if defined(ARCH_CPU_X86_FAMILY)
 void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
-    const float fundamental_frequency[4],
-    float* lower_wave_data[4],
-    float* higher_wave_data[4],
-    float table_interpolation_factor[4]) {
+    const std::array<float, 4> fundamental_frequency,
+    std::array<base::span<const float>, 4>& lower_wave_data,
+    std::array<base::span<const float>, 4>& higher_wave_data,
+    std::array<float, 4>& table_interpolation_factor) {
   // Negative frequencies are allowed, in which case we alias to the positive
   // frequency.  SSE2 doesn't have an fabs instruction, so just remove the sign
   // bit of the float numbers, effecitvely taking the absolute value.
   const __m128 frequency =
-      _mm_and_ps(_mm_loadu_ps(fundamental_frequency),
+      _mm_and_ps(_mm_loadu_ps(fundamental_frequency.data()),
                  reinterpret_cast<__m128>(_mm_set1_epi32(0x7fffffff)));
 
   // pos = 0xffffffff if freq > 0; otherwise 0
@@ -265,15 +270,17 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
 
   const float* ratio = reinterpret_cast<float*>(&v_ratio);
 
-  float cents_above_lowest_frequency[4] __attribute__((aligned(16)));
+  std::array<float, 4> cents_above_lowest_frequency
+      __attribute__((aligned(16)));
 
   for (int k = 0; k < 4; ++k) {
-    cents_above_lowest_frequency[k] = log2f(ratio[k]) * 1200;
+    cents_above_lowest_frequency[k] = log2f(UNSAFE_TODO(ratio[k])) * 1200;
   }
 
-  __m128 v_pitch_range = _mm_add_ps(
-      _mm_set1_ps(1.0), _mm_div_ps(_mm_load_ps(cents_above_lowest_frequency),
-                                   _mm_set1_ps((cents_per_range_))));
+  __m128 v_pitch_range =
+      _mm_add_ps(_mm_set1_ps(1.0),
+                 _mm_div_ps(_mm_load_ps(cents_above_lowest_frequency.data()),
+                            _mm_set1_ps((cents_per_range_))));
   v_pitch_range = _mm_max_ps(v_pitch_range, _mm_set1_ps(0.0));
   v_pitch_range = _mm_min_ps(v_pitch_range, _mm_set1_ps(NumberOfRanges() - 1));
 
@@ -297,25 +304,27 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
 
   const __m128 table_factor =
       _mm_sub_ps(v_pitch_range, _mm_cvtepi32_ps(v_index1));
-  _mm_storeu_ps(table_interpolation_factor, table_factor);
+  _mm_storeu_ps(table_interpolation_factor.data(), table_factor);
 
   const unsigned* range_index1 = reinterpret_cast<const unsigned*>(&v_index1);
   const unsigned* range_index2 = reinterpret_cast<const unsigned*>(&v_index2);
 
-  for (int k = 0; k < 4; ++k) {
-    lower_wave_data[k] = band_limited_tables_[range_index2[k]]->Data();
-    higher_wave_data[k] = band_limited_tables_[range_index1[k]]->Data();
+  for (unsigned k = 0; k < 4; ++k) {
+    lower_wave_data[k] =
+        band_limited_tables_[UNSAFE_TODO(range_index2[k])]->as_span();
+    higher_wave_data[k] =
+        band_limited_tables_[UNSAFE_TODO(range_index1[k])]->as_span();
   }
 }
 #elif defined(CPU_ARM_NEON)
 void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
-    const float fundamental_frequency[4],
-    float* lower_wave_data[4],
-    float* higher_wave_data[4],
-    float table_interpolation_factor[4]) {
+    const std::array<float, 4> fundamental_frequency,
+    std::array<base::span<const float>, 4>& lower_wave_data,
+    std::array<base::span<const float>, 4>& higher_wave_data,
+    std::array<float, 4>& table_interpolation_factor) {
   // Negative frequencies are allowed, in which case we alias to the positive
   // frequency.
-  float32x4_t frequency = vabsq_f32(vld1q_f32(fundamental_frequency));
+  float32x4_t frequency = vabsq_f32(vld1q_f32(fundamental_frequency.data()));
 
   // pos = 0xffffffff if frequency > 0; otherwise 0.
   uint32x4_t pos = vcgtq_f32(frequency, vdupq_n_f32(0));
@@ -336,7 +345,8 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
   float cents_above_lowest_frequency[4] __attribute__((aligned(16)));
 
   for (int k = 0; k < 4; ++k) {
-    cents_above_lowest_frequency[k] = log2f(ratio[k]) * 1200;
+    UNSAFE_TODO(cents_above_lowest_frequency[k]) =
+        log2f(UNSAFE_TODO(ratio[k])) * 1200;
   }
 
   float32x4_t v_pitch_range = vaddq_f32(
@@ -358,19 +368,21 @@ void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
 
   const float32x4_t table_factor =
       vsubq_f32(v_pitch_range, vcvtq_f32_u32(v_index1));
-  vst1q_f32(table_interpolation_factor, table_factor);
+  vst1q_f32(table_interpolation_factor.data(), table_factor);
 
   for (int k = 0; k < 4; ++k) {
-    lower_wave_data[k] = band_limited_tables_[range_index2[k]]->Data();
-    higher_wave_data[k] = band_limited_tables_[range_index1[k]]->Data();
+    lower_wave_data[k] =
+        band_limited_tables_[UNSAFE_TODO(range_index2[k])]->as_span();
+    higher_wave_data[k] =
+        band_limited_tables_[UNSAFE_TODO(range_index1[k])]->as_span();
   }
 }
 #else
 void PeriodicWaveImpl::WaveDataForFundamentalFrequency(
-    const float fundamental_frequency[4],
-    float* lower_wave_data[4],
-    float* higher_wave_data[4],
-    float table_interpolation_factor[4]) {
+    const std::array<float, 4> fundamental_frequency,
+    std::array<base::span<const float>, 4>& lower_wave_data,
+    std::array<base::span<const float>, 4>& higher_wave_data,
+    std::array<float, 4>& table_interpolation_factor) {
   for (int k = 0; k < 4; ++k) {
     WaveDataForFundamentalFrequency(fundamental_frequency[k],
                                     lower_wave_data[k], higher_wave_data[k],
@@ -393,13 +405,6 @@ unsigned PeriodicWaveImpl::NumberOfPartialsForRange(
   return number_of_partials;
 }
 
-// Tell V8 about the memory we're using so it can properly schedule garbage
-// collects.
-void PeriodicWaveImpl::AdjustV8ExternalMemory(int64_t delta) {
-  v8::Isolate::GetCurrent()->AdjustAmountOfExternalAllocatedMemory(delta);
-  v8_external_memory_ += delta;
-}
-
 // Convert into time-domain wave buffers.  One table is created for each range
 // for non-aliasing playback at different playback rates.  Thus, higher ranges
 // have more high-frequency partials culled out.
@@ -407,8 +412,7 @@ void PeriodicWaveImpl::CreateBandLimitedTables(const float* real_data,
                                                const float* imag_data,
                                                unsigned number_of_components,
                                                bool disable_normalization) {
-  // TODO(rtoy): Figure out why this needs to be 0.5 when normalization is
-  // disabled.
+  // The default scale factor for when normalization is disabled.
   float normalization_scale = 0.5;
 
   unsigned fft_size = PeriodicWaveSize();
@@ -433,9 +437,11 @@ void PeriodicWaveImpl::CreateBandLimitedTables(const float* real_data,
     // arrays.  Need to scale the data by fftSize to remove the scaling that the
     // inverse IFFT would do.
     float scale = fft_size;
-    vector_math::Vsmul(real_data, 1, &scale, real.Data(), 1, number_of_components);
+    vector_math::Vsmul(
+        real_data, 1, &scale, real.Data(), 1, number_of_components);
     scale = -scale;
-    vector_math::Vsmul(imag_data, 1, &scale, imag.Data(), 1, number_of_components);
+    vector_math::Vsmul(
+        imag_data, 1, &scale, imag.Data(), 1, number_of_components);
 
     // Find the starting bin where we should start culling.  We need to clear
     // out the highest frequencies to band-limit the waveform.
@@ -458,7 +464,8 @@ void PeriodicWaveImpl::CreateBandLimitedTables(const float* real_data,
     unsigned wave_size = PeriodicWaveSize();
     std::unique_ptr<AudioFloatArray> table =
         std::make_unique<AudioFloatArray>(wave_size);
-    AdjustV8ExternalMemory(wave_size * sizeof(float));
+    external_memory_accounter_.Increase(v8::Isolate::GetCurrent(),
+                                        wave_size * sizeof(float));
     band_limited_tables_.push_back(std::move(table));
 
     // Apply an inverse FFT to generate the time-domain table data.
@@ -553,12 +560,10 @@ void PeriodicWaveImpl::GenerateBasicWaveform(int shape) {
         break;
       default:
         NOTREACHED();
-        b = 0;
-        break;
     }
 
-    real_p[n] = 0;
-    imag_p[n] = b;
+    UNSAFE_TODO(real_p[n]) = 0;
+    UNSAFE_TODO(imag_p[n]) = b;
   }
 
   CreateBandLimitedTables(real_p, imag_p, half_size, false);

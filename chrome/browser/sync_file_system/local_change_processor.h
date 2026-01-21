@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_SYNC_FILE_SYSTEM_LOCAL_CHANGE_PROCESSOR_H_
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_LOCAL_CHANGE_PROCESSOR_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "chrome/browser/sync_file_system/sync_callbacks.h"
 
 namespace storage {
@@ -21,12 +21,12 @@ class FileChange;
 // This interface is to be implemented/backed by RemoteSyncFileService.
 class LocalChangeProcessor {
  public:
-  LocalChangeProcessor() {}
+  LocalChangeProcessor() = default;
 
   LocalChangeProcessor(const LocalChangeProcessor&) = delete;
   LocalChangeProcessor& operator=(const LocalChangeProcessor&) = delete;
 
-  virtual ~LocalChangeProcessor() {}
+  virtual ~LocalChangeProcessor() = default;
 
   // This is called to apply the local |change|. If the change type is
   // ADD_OR_UPDATE for a file, |local_file_path| points to a local file

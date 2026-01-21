@@ -7,50 +7,46 @@
 
 #include <memory>
 
-#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/linux/status_icon_linux.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/widget/widget.h"
 
-namespace aura {
-class WindowTreeHost;
-}
-
-// A button that is internally mapped as a status icon if the underlaying
+// A button that is internally mapped as a status icon if the underlying
 // platform supports that kind of windows. Otherwise, calls
 // OnImplInitializationFailed.
 class StatusIconButtonLinux : public ui::StatusIconLinux,
                               public views::Button,
                               public views::ContextMenuController {
- public:
-  METADATA_HEADER(StatusIconButtonLinux);
+  METADATA_HEADER(StatusIconButtonLinux, views::Button)
 
+ public:
   StatusIconButtonLinux();
   StatusIconButtonLinux(const StatusIconButtonLinux&) = delete;
   StatusIconButtonLinux& operator=(const StatusIconButtonLinux&) = delete;
   ~StatusIconButtonLinux() override;
 
   // views::StatusIcon:
-  void SetIcon(const gfx::ImageSkia& image) override;
+  void SetImage(const gfx::ImageSkia& image) override;
+  void SetIcon(const gfx::VectorIcon& icon) override;
   void SetToolTip(const std::u16string& tool_tip) override;
   void UpdatePlatformContextMenu(ui::MenuModel* model) override;
   void OnSetDelegate() override;
 
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
+  void ShowContextMenuForViewImpl(
+      View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
 
   // views::Button:
   void PaintButtonContents(gfx::Canvas* canvas) override;
 
  private:
   std::unique_ptr<views::Widget> widget_;
-
-  raw_ptr<aura::WindowTreeHost, DanglingUntriaged> host_ = nullptr;
 
   std::unique_ptr<views::MenuRunner> menu_runner_;
 };

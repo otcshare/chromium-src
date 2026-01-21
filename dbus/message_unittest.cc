@@ -226,15 +226,14 @@ TEST(MessageTest, ArrayOfBytes) {
   bytes.push_back(1);
   bytes.push_back(2);
   bytes.push_back(3);
-  writer.AppendArrayOfBytes(bytes.data(), bytes.size());
+  writer.AppendArrayOfBytes(bytes);
 
   MessageReader reader(message.get());
-  const uint8_t* output_bytes = nullptr;
-  size_t length = 0;
+  base::span<const uint8_t> output_bytes;
   ASSERT_EQ("ay", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopArrayOfBytes(&output_bytes, &length));
+  ASSERT_TRUE(reader.PopArrayOfBytes(&output_bytes));
   ASSERT_FALSE(reader.HasMoreData());
-  ASSERT_EQ(3U, length);
+  ASSERT_EQ(3U, output_bytes.size());
   EXPECT_EQ(1, output_bytes[0]);
   EXPECT_EQ(2, output_bytes[1]);
   EXPECT_EQ(3, output_bytes[2]);
@@ -247,15 +246,14 @@ TEST(MessageTest, ArrayOfInt32s) {
   int32s.push_back(1);
   int32s.push_back(2);
   int32s.push_back(3);
-  writer.AppendArrayOfInt32s(int32s.data(), int32s.size());
+  writer.AppendArrayOfInt32s(int32s);
 
   MessageReader reader(message.get());
-  const int32_t* output_int32s = nullptr;
-  size_t length = 0;
+  base::span<const int32_t> output_int32s;
   ASSERT_EQ("ai", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopArrayOfInt32s(&output_int32s, &length));
+  ASSERT_TRUE(reader.PopArrayOfInt32s(&output_int32s));
   ASSERT_FALSE(reader.HasMoreData());
-  ASSERT_EQ(3U, length);
+  ASSERT_EQ(3U, output_int32s.size());
   EXPECT_EQ(1, output_int32s[0]);
   EXPECT_EQ(2, output_int32s[1]);
   EXPECT_EQ(3, output_int32s[2]);
@@ -268,15 +266,14 @@ TEST(MessageTest, ArrayOfUint32s) {
   uint32s.push_back(1);
   uint32s.push_back(2);
   uint32s.push_back(3);
-  writer.AppendArrayOfUint32s(uint32s.data(), uint32s.size());
+  writer.AppendArrayOfUint32s(uint32s);
 
   MessageReader reader(message.get());
-  const uint32_t* output_uint32s = nullptr;
-  size_t length = 0;
+  base::span<const uint32_t> output_uint32s;
   ASSERT_EQ("au", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopArrayOfUint32s(&output_uint32s, &length));
+  ASSERT_TRUE(reader.PopArrayOfUint32s(&output_uint32s));
   ASSERT_FALSE(reader.HasMoreData());
-  ASSERT_EQ(3U, length);
+  ASSERT_EQ(3U, output_uint32s.size());
   EXPECT_EQ(1U, output_uint32s[0]);
   EXPECT_EQ(2U, output_uint32s[1]);
   EXPECT_EQ(3U, output_uint32s[2]);
@@ -289,15 +286,14 @@ TEST(MessageTest, ArrayOfDoubles) {
   doubles.push_back(0.2);
   doubles.push_back(0.5);
   doubles.push_back(1);
-  writer.AppendArrayOfDoubles(doubles.data(), doubles.size());
+  writer.AppendArrayOfDoubles(doubles);
 
   MessageReader reader(message.get());
-  const double* output_doubles = nullptr;
-  size_t length = 0;
+  base::span<const double> output_doubles;
   ASSERT_EQ("ad", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopArrayOfDoubles(&output_doubles, &length));
+  ASSERT_TRUE(reader.PopArrayOfDoubles(&output_doubles));
   ASSERT_FALSE(reader.HasMoreData());
-  ASSERT_EQ(3U, length);
+  ASSERT_EQ(3U, output_doubles.size());
   EXPECT_EQ(0.2, output_doubles[0]);
   EXPECT_EQ(0.5, output_doubles[1]);
   EXPECT_EQ(1, output_doubles[2]);
@@ -307,16 +303,14 @@ TEST(MessageTest, ArrayOfBytes_Empty) {
   std::unique_ptr<Response> message(Response::CreateEmpty());
   MessageWriter writer(message.get());
   std::vector<uint8_t> bytes;
-  writer.AppendArrayOfBytes(bytes.data(), bytes.size());
+  writer.AppendArrayOfBytes(bytes);
 
   MessageReader reader(message.get());
-  const uint8_t* output_bytes = nullptr;
-  size_t length = 0;
+  base::span<const uint8_t> output_bytes;
   ASSERT_EQ("ay", reader.GetDataSignature());
-  ASSERT_TRUE(reader.PopArrayOfBytes(&output_bytes, &length));
+  ASSERT_TRUE(reader.PopArrayOfBytes(&output_bytes));
   ASSERT_FALSE(reader.HasMoreData());
-  ASSERT_EQ(0U, length);
-  EXPECT_EQ(nullptr, output_bytes);
+  EXPECT_TRUE(output_bytes.empty());
 }
 
 TEST(MessageTest, ArrayOfStrings) {

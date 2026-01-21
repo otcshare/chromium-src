@@ -25,6 +25,9 @@
 
 #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
 
+#include <algorithm>
+
+#include "base/functional/callback_helpers.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -35,6 +38,7 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/webrtc/peer_connection_remote_audio_source.h"
 
 namespace blink {
 
@@ -123,6 +127,7 @@ MediaStream::MediaStream(ExecutionContext* context,
                          TransferredMediaStreamTrack* transferred_track,
                          base::OnceCallback<void(MediaStream*)> callback)
     : ExecutionContextClient(context),
+      ActiveScriptWrappable<MediaStream>({}),
       descriptor_(stream_descriptor),
       media_stream_initialized_callback_(std::move(callback)),
       scheduled_event_timer_(
@@ -149,8 +154,8 @@ MediaStream::MediaStream(ExecutionContext* context,
   for (uint32_t i = 0; i < number_of_video_tracks; i++) {
     MediaStreamTrack* const new_track = MediaStreamTrackImpl::Create(
         context, descriptor_->VideoComponent(i),
-        WTF::BindOnce(&MediaStream::OnMediaStreamTrackInitialized,
-                      WrapPersistent(this)));
+        BindOnce(&MediaStream::OnMediaStreamTrackInitialized,
+                 WrapPersistent(this)));
     new_track->RegisterMediaStream(this);
     video_tracks_.push_back(new_track);
     if (transferred_track) {
@@ -165,9 +170,9 @@ MediaStream::MediaStream(ExecutionContext* context,
 
   if (number_of_video_tracks == 0) {
     context->GetTaskRunner(TaskType::kInternalMedia)
-        ->PostTask(FROM_HERE,
-                   WTF::BindOnce(std::move(media_stream_initialized_callback_),
-                                 WrapPersistent(this)));
+        ->PostTask(FROM_HERE, blink::BindOnce(
+                                  std::move(media_stream_initialized_callback_),
+                                  WrapPersistent(this)));
   }
 }
 
@@ -183,6 +188,7 @@ MediaStream::MediaStream(ExecutionContext* context,
                          const MediaStreamTrackVector& audio_tracks,
                          const MediaStreamTrackVector& video_tracks)
     : ExecutionContextClient(context),
+      ActiveScriptWrappable<MediaStream>({}),
       descriptor_(stream_descriptor),
       scheduled_event_timer_(
           context->GetTaskRunner(TaskType::kMediaElementEvent),
@@ -213,6 +219,7 @@ MediaStream::MediaStream(ExecutionContext* context,
                          const MediaStreamTrackVector& audio_tracks,
                          const MediaStreamTrackVector& video_tracks)
     : ExecutionContextClient(context),
+      ActiveScriptWrappable<MediaStream>({}),
       scheduled_event_timer_(
           context->GetTaskRunner(TaskType::kMediaElementEvent),
           this,
@@ -220,14 +227,13 @@ MediaStream::MediaStream(ExecutionContext* context,
   MediaStreamComponentVector audio_components;
   MediaStreamComponentVector video_components;
 
-  MediaStreamTrackVector::const_iterator iter;
-  for (iter = audio_tracks.begin(); iter != audio_tracks.end(); ++iter) {
-    (*iter)->RegisterMediaStream(this);
-    audio_components.push_back((*iter)->Component());
+  for (const auto& audio_track : audio_tracks) {
+    audio_track->RegisterMediaStream(this);
+    audio_components.push_back(audio_track->Component());
   }
-  for (iter = video_tracks.begin(); iter != video_tracks.end(); ++iter) {
-    (*iter)->RegisterMediaStream(this);
-    video_components.push_back((*iter)->Component());
+  for (const auto& video_track : video_tracks) {
+    video_track->RegisterMediaStream(this);
+    video_components.push_back(video_track->Component());
   }
 
   descriptor_ = MakeGarbageCollected<MediaStreamDescriptor>(audio_components,
@@ -251,15 +257,15 @@ bool MediaStream::EmptyOrOnlyEndedTracks() {
   if (!audio_tracks_.size() && !video_tracks_.size()) {
     return true;
   }
-  for (MediaStreamTrackVector::iterator iter = audio_tracks_.begin();
-       iter != audio_tracks_.end(); ++iter) {
-    if (!iter->Get()->Ended())
+  for (const auto& audio_track : audio_tracks_) {
+    if (!audio_track->Ended()) {
       return false;
+    }
   }
-  for (MediaStreamTrackVector::iterator iter = video_tracks_.begin();
-       iter != video_tracks_.end(); ++iter) {
-    if (!iter->Get()->Ended())
+  for (const auto& video_track : video_tracks_) {
+    if (!video_track->Ended()) {
       return false;
+    }
   }
   return true;
 }
@@ -282,12 +288,12 @@ bool MediaStream::TracksMatchDescriptor() {
 
 MediaStreamTrackVector MediaStream::getTracks() {
   MediaStreamTrackVector tracks;
-  for (MediaStreamTrackVector::iterator iter = audio_tracks_.begin();
-       iter != audio_tracks_.end(); ++iter)
-    tracks.push_back(iter->Get());
-  for (MediaStreamTrackVector::iterator iter = video_tracks_.begin();
-       iter != video_tracks_.end(); ++iter)
-    tracks.push_back(iter->Get());
+  for (const auto& audio_track : audio_tracks_) {
+    tracks.push_back(audio_track.Get());
+  }
+  for (const auto& video_track : video_tracks_) {
+    tracks.push_back(video_track.Get());
+  }
   return tracks;
 }
 
@@ -319,8 +325,12 @@ void MediaStream::addTrack(MediaStreamTrack* track,
     ScheduleDispatchEvent(Event::Create(event_type_names::kActive));
   }
 
-  for (auto& observer : observers_)
-    observer->OnStreamAddTrack(this, track);
+  for (auto& observer : observers_) {
+    // If processing by the observer failed, it is most likely because it was
+    // not necessary and it became a no-op. The exception can be suppressed,
+    // there is nothing to do.
+    observer->OnStreamAddTrack(this, track, IGNORE_EXCEPTION);
+  }
 }
 
 void MediaStream::removeTrack(MediaStreamTrack* track,
@@ -356,21 +366,25 @@ void MediaStream::removeTrack(MediaStreamTrack* track,
     ScheduleDispatchEvent(Event::Create(event_type_names::kInactive));
   }
 
-  for (auto& observer : observers_)
-    observer->OnStreamRemoveTrack(this, track);
+  for (auto& observer : observers_) {
+    // If processing by the observer failed, it is most likely because it was
+    // not necessary and it became a no-op. The exception can be suppressed,
+    // there is nothing to do.
+    observer->OnStreamRemoveTrack(this, track, IGNORE_EXCEPTION);
+  }
 }
 
 MediaStreamTrack* MediaStream::getTrackById(String id) {
-  for (MediaStreamTrackVector::iterator iter = audio_tracks_.begin();
-       iter != audio_tracks_.end(); ++iter) {
-    if ((*iter)->id() == id)
-      return iter->Get();
+  for (const auto& audio_track : audio_tracks_) {
+    if (audio_track->id() == id) {
+      return audio_track.Get();
+    }
   }
 
-  for (MediaStreamTrackVector::iterator iter = video_tracks_.begin();
-       iter != video_tracks_.end(); ++iter) {
-    if ((*iter)->id() == id)
-      return iter->Get();
+  for (const auto& video_track : video_tracks_) {
+    if (video_track->id() == id) {
+      return video_track.Get();
+    }
   }
 
   return nullptr;
@@ -379,29 +393,41 @@ MediaStreamTrack* MediaStream::getTrackById(String id) {
 MediaStream* MediaStream::clone(ScriptState* script_state) {
   MediaStreamTrackVector tracks;
   ExecutionContext* context = ExecutionContext::From(script_state);
-  for (MediaStreamTrackVector::iterator iter = audio_tracks_.begin();
-       iter != audio_tracks_.end(); ++iter)
-    tracks.push_back((*iter)->clone(ExecutionContext::From(script_state)));
-  for (MediaStreamTrackVector::iterator iter = video_tracks_.begin();
-       iter != video_tracks_.end(); ++iter)
-    tracks.push_back((*iter)->clone(ExecutionContext::From(script_state)));
+  for (const auto& audio_track : audio_tracks_) {
+    tracks.push_back(audio_track->clone(ExecutionContext::From(script_state)));
+  }
+  for (const auto& video_track : video_tracks_) {
+    tracks.push_back(video_track->clone(ExecutionContext::From(script_state)));
+  }
   return MediaStream::Create(context, tracks);
 }
 
 void MediaStream::TrackEnded() {
-  for (MediaStreamTrackVector::iterator iter = audio_tracks_.begin();
-       iter != audio_tracks_.end(); ++iter) {
-    if (!(*iter)->Ended())
+  for (const auto& audio_track : audio_tracks_) {
+    if (!audio_track->Ended()) {
       return;
+    }
   }
 
-  for (MediaStreamTrackVector::iterator iter = video_tracks_.begin();
-       iter != video_tracks_.end(); ++iter) {
-    if (!(*iter)->Ended())
+  for (const auto& video_track : video_tracks_) {
+    if (!video_track->Ended()) {
       return;
+    }
   }
 
   StreamEnded();
+}
+
+void MediaStream::NotifyEnabledStateChangeForWebRtcAudio(bool enabled) {
+  CHECK(
+      base::FeatureList::IsEnabled(kPropagateEnabledEventForWebRtcAudioTrack));
+  if (!GetExecutionContext()) {
+    return;
+  }
+
+  if (active()) {
+    descriptor_->NotifyEnabledStateChangeForWebRtcAudio(enabled);
+  }
 }
 
 void MediaStream::RegisterObserver(MediaStreamObserver* observer) {
@@ -434,8 +460,7 @@ bool MediaStream::AddEventListenerInternal(
                       WebFeature::kMediaStreamOnInactive);
   }
 
-  return EventTargetWithInlineData::AddEventListenerInternal(event_type,
-                                                             listener, options);
+  return EventTarget::AddEventListenerInternal(event_type, listener, options);
 }
 
 const AtomicString& MediaStream::InterfaceName() const {
@@ -560,9 +585,9 @@ void MediaStream::ScheduledEventTimerFired(TimerBase*) {
   HeapVector<Member<Event>> events;
   events.swap(scheduled_events_);
 
-  HeapVector<Member<Event>>::iterator it = events.begin();
-  for (; it != events.end(); ++it)
-    DispatchEvent(*it->Release());
+  for (auto& event : events) {
+    DispatchEvent(*event.Release());
+  }
 
   events.clear();
 }
@@ -574,7 +599,7 @@ void MediaStream::Trace(Visitor* visitor) const {
   visitor->Trace(observers_);
   visitor->Trace(scheduled_event_timer_);
   visitor->Trace(scheduled_events_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
   MediaStreamDescriptorClient::Trace(visitor);
 }

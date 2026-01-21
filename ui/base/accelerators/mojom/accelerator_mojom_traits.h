@@ -5,6 +5,7 @@
 #ifndef UI_BASE_ACCELERATORS_MOJOM_ACCELERATOR_MOJOM_TRAITS_H_
 #define UI_BASE_ACCELERATORS_MOJOM_ACCELERATOR_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -24,7 +25,6 @@ struct EnumTraits<ui::mojom::AcceleratorKeyState, ui::Accelerator::KeyState> {
         return ui::mojom::AcceleratorKeyState::RELEASED;
     }
     NOTREACHED();
-    return ui::mojom::AcceleratorKeyState::PRESSED;
   }
 
   static bool FromMojom(ui::mojom::AcceleratorKeyState input,
@@ -38,7 +38,6 @@ struct EnumTraits<ui::mojom::AcceleratorKeyState, ui::Accelerator::KeyState> {
         return true;
     }
     NOTREACHED();
-    return false;
   }
 };
 

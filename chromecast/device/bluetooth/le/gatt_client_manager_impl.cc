@@ -4,13 +4,14 @@
 
 #include "chromecast/device/bluetooth/le/gatt_client_manager_impl.h"
 
+#include <deque>
 #include <string>
 
-#include "base/bind.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chromecast/base/bind_to_task_runner.h"
 #include "chromecast/device/bluetooth/bluetooth_util.h"
@@ -238,7 +239,7 @@ void GattClientManagerImpl::DisconnectAll(StatusCallback cb) {
 bool GattClientManagerImpl::IsConnectedLeDevice(
     const bluetooth_v2_shlib::Addr& addr) {
   DCHECK(io_task_runner_->BelongsToCurrentThread());
-  return connected_devices_.find(addr) != connected_devices_.end();
+  return connected_devices_.contains(addr);
 }
 
 scoped_refptr<base::SingleThreadTaskRunner>
@@ -278,13 +279,13 @@ void GattClientManagerImpl::OnConnectChanged(
       disconnect_timeout_timer_.Stop();
       RunQueuedConnectRequest();
     } else {
-      base::EraseIf(pending_connect_requests_,
+      std::erase_if(pending_connect_requests_,
                     [addr](const PendingRequest& request) {
                       return request.addr == addr;
                     });
     }
 
-    base::Erase(pending_read_remote_rssi_requests_, addr);
+    std::erase(pending_read_remote_rssi_requests_, addr);
     read_remote_rssi_timeout_timer_.Stop();
 
     if (connected_devices_.empty()) {
@@ -433,7 +434,6 @@ void GattClientManagerImpl::OnGetServices(
       addr != pending_connect_requests_.front().addr ||
       !pending_connect_requests_.front().is_connect) {
     NOTREACHED() << "Unexpected call to " << __func__;
-    return;
   }
 
   pending_connect_requests_.pop_front();
@@ -569,7 +569,7 @@ void GattClientManagerImpl::OnConnectTimeout(
   LOG(ERROR) << "Connect (" << addr_str << ")"
              << " timed out. Disconnecting";
 
-  if (connected_devices_.find(addr) != connected_devices_.end()) {
+  if (connected_devices_.contains(addr)) {
     // Connect times out before OnGetServices is received.
     gatt_client_->Disconnect(addr);
   } else {

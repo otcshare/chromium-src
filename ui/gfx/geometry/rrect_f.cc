@@ -4,12 +4,17 @@
 
 #include "ui/gfx/geometry/rrect_f.h"
 
+#include <array>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 
+#include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/values.h"
 #include "third_party/skia/include/core/SkMatrix.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace gfx {
 
@@ -102,7 +107,7 @@ gfx::Vector2dF RRectF::GetCornerRadii(Corner corner) const {
   return gfx::Vector2dF(result.x(), result.y());
 }
 
-void RRectF::GetAllRadii(SkVector radii[4]) const {
+void RRectF::GetAllRadii(base::span<SkVector, 4> radii) const {
   // Unfortunately, the only way to get all radii is one at a time.
   radii[SkRRect::kUpperLeft_Corner] =
       skrrect_.radii(SkRRect::kUpperLeft_Corner);
@@ -116,10 +121,31 @@ void RRectF::GetAllRadii(SkVector radii[4]) const {
 
 void RRectF::SetCornerRadii(Corner corner, float x_rad, float y_rad) {
   // Unfortunately, the only way to set this is to create a new SkRRect.
-  SkVector radii[4];
+  std::array<SkVector, 4> radii;
   GetAllRadii(radii);
   radii[SkRRect::Corner(corner)] = SkPoint::Make(x_rad, y_rad);
-  skrrect_.setRectRadii(skrrect_.rect(), radii);
+  skrrect_.setRectRadii(skrrect_.rect(), radii.data());
+}
+
+gfx::RectF RRectF::CornerBoundingRect(Corner corner) const {
+  auto radii = GetCornerRadii(corner);
+  gfx::RectF bounding_box(radii.x(), radii.y());
+  switch (corner) {
+    case Corner::kUpperLeft:
+      bounding_box.Offset(rect().x(), rect().y());
+      break;
+    case Corner::kUpperRight:
+      bounding_box.Offset(rect().right() - radii.x(), rect().y());
+      break;
+    case Corner::kLowerRight:
+      bounding_box.Offset(rect().right() - radii.x(),
+                          rect().bottom() - radii.y());
+      break;
+    case Corner::kLowerLeft:
+      bounding_box.Offset(rect().x(), rect().bottom() - radii.y());
+      break;
+  }
+  return bounding_box;
 }
 
 void RRectF::Scale(float x_scale, float y_scale) {
@@ -134,8 +160,10 @@ void RRectF::Scale(float x_scale, float y_scale) {
   }
   SkMatrix scale = SkMatrix::Scale(x_scale, y_scale);
   SkRRect result;
-  bool success = skrrect_.transform(scale, &result);
-  DCHECK(success);
+  if (!skrrect_.transform(scale, &result)) {
+    skrrect_ = SkRRect::MakeEmpty();
+    return;
+  }
   skrrect_ = result;
 }
 
@@ -199,6 +227,27 @@ bool RRectF::ApproximatelyEqual(const RRectF& rect, float tolerance) const {
     }
   }
   return true;
+}
+
+// static
+RRectF RRectF::ToEnclosingRRectF(const RRectF& rrect_f) {
+  return RRectF(gfx::RectF(ToEnclosingRect(rrect_f.rect())),
+                rrect_f.GetRoundedCorners());
+}
+
+// static
+RRectF RRectF::ToEnclosingRRectFIgnoringError(const RRectF& rrect_f,
+                                              float error) {
+  return RRectF(gfx::RectF(ToEnclosingRectIgnoringError(rrect_f.rect(), error)),
+                rrect_f.GetRoundedCorners());
+}
+
+gfx::RoundedCornersF RRectF::GetRoundedCorners() const {
+  auto upper_left = GetCornerRadii(Corner::kUpperLeft);
+  auto upper_right = GetCornerRadii(Corner::kUpperRight);
+  auto lower_right = GetCornerRadii(Corner::kLowerRight);
+  auto lower_left = GetCornerRadii(Corner::kLowerLeft);
+  return {upper_left.x(), upper_right.x(), lower_right.x(), lower_left.x()};
 }
 
 }  // namespace gfx

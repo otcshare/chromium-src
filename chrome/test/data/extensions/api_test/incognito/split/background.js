@@ -42,7 +42,7 @@ chrome.tabs.onUpdated.addListener(function(id, info, tab) {
   }
 });
 
-chrome.extension.onRequest.addListener(
+chrome.runtime.onMessage.addListener(
     function(request, sender, sendResponse) {
   if (inIncognitoContext != sender.tab.incognito) {
     chrome.test.notifyFail(
@@ -96,7 +96,7 @@ chrome.test.getConfig(function(config) {
       chrome.tabs.create({windowId: win.id, url: testUrl},
         pass(function(tab) {
           chrome.tabs.executeScript(tab.id,
-            {code: 'chrome.extension.sendRequest({' +
+            {code: 'chrome.runtime.sendMessage({' +
                    '  inIncognitoContext: chrome.extension.inIncognitoContext' +
                    '});'},
             pass(function() {
@@ -104,7 +104,7 @@ chrome.test.getConfig(function(config) {
             }));
         }));
 
-      var done = chrome.test.listenForever(chrome.extension.onRequest,
+      var done = chrome.test.listenForever(chrome.runtime.onMessage,
         function(request, sender, sendResponse) {
           assertEq(inIncognitoContext, request.inIncognitoContext);
           sendResponse();
@@ -148,7 +148,7 @@ chrome.test.getConfig(function(config) {
     // Tests that we can set cookies in both processes.
     function setDocumentCookie() {
       document.cookie = "k=v";
-      chrome.test.assertTrue(document.cookie.indexOf("k=v") != -1);
+      chrome.test.assertNe(-1, document.cookie.indexOf("k=v"));
       chrome.test.succeed();
     }
   ]);

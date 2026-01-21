@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_EXPORT_PASSWORD_CSV_WRITER_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_EXPORT_PASSWORD_CSV_WRITER_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,12 +26,6 @@ class PasswordCSVWriter {
   // password.
   static std::string SerializePasswords(
       const std::vector<CredentialUIEntry>& credentials);
-
- private:
-  // Converts |credential| into a single line in the CSV format. Metadata are
-  // lost, see SerializePasswords.
-  static std::map<std::string, std::string> PasswordFormToRecord(
-      const CredentialUIEntry& credential);
 };
 
 }  // namespace password_manager

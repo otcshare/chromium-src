@@ -32,7 +32,8 @@ _DEFAULT_OUT_DIR = os.path.join(_SRC_ROOT, 'out', 'binary-size-build')
 _SUPERSIZE_PATH = os.path.join(_SRC_ROOT, 'tools', 'binary_size', 'supersize')
 _RESOURCE_SIZES_PATH = os.path.join(
     _SRC_ROOT, 'build', 'android', 'resource_sizes.py')
-_GN_PATH = os.path.join(_SRC_ROOT, 'third_party', 'depot_tools', 'gn')
+_AUTONINJA_PATH = shutil.which('autoninja')
+_GN_PATH = shutil.which('gn')
 _LLVM_TOOLS_DIR = os.path.join(_SRC_ROOT, 'third_party', 'llvm-build',
                                'Release+Asserts', 'bin')
 _CLANG_UPDATE_PATH = os.path.join(_SRC_ROOT, 'tools', 'clang', 'scripts',
@@ -99,8 +100,8 @@ class NativeDiff(BaseDiff):
   def summary_stat(self):
     m = NativeDiff._RE_SUMMARY_STAT.search(self._diff)
     if m:
-      return _DiffResult(
-          NativeDiff._SUMMARY_STAT_NAME, m.group('value'), m.group('units'))
+      return _DiffResult(NativeDiff._SUMMARY_STAT_NAME,
+                         float(m.group('value')), m.group('units'))
     raise Exception('Could not extract total from:\n' + self._diff)
 
   def DetailedResults(self):
@@ -237,16 +238,11 @@ class _BuildHelper:
     self.output_directory = args.output_directory
     self.target = args.target
     self.target_os = args.target_os
-    self.use_goma = args.use_goma
+    self.use_reclient = args.use_reclient
     self.apk_name_override = args.custom_apk_name
     self.main_lib_path_override = args.custom_main_lib_path
     self._SetDefaults()
     self.is_bundle = 'minimal' in self.target
-
-  def _MaybeAddGoogleSuffix(self, path):
-    if self.IsTrichrome() and '_google' in self.target:
-      return path.replace('.', 'Google.', 1)
-    return path
 
   @property
   def abs_apk_paths(self):
@@ -260,32 +256,42 @@ class _BuildHelper:
     return [to_mapping_path(x) for x in self.abs_apk_paths]
 
   @property
+  def abs_extra_paths(self):
+    def to_extra_paths(p):
+      aab_path = p.replace('.minimal.apks', '.aab')
+      return [aab_path + '.unused_resources', aab_path + '.R.txt']
+
+    return [p for x in self.abs_apk_paths for p in to_extra_paths(x)]
+
+  @property
   def apk_name(self):
     if self.apk_name_override:
       return self.apk_name_override
     # my_great_apk -> MyGreat.apk
     apk_name = ''.join(s.title() for s in self.target.split('_')[:-1]) + '.apk'
     if self.is_bundle:
-      # trichrome_minimal_apks->TrichromeMinimal.apk->Trichrome.minimal.apks
+      # trichrome_32_minimal_apks -> Trichrome32Minimal.apk
+      #                           -> Trichrome32.minimal.apks
       apk_name = apk_name.replace('Minimal.apk', '.minimal.apks')
     return apk_name.replace('Webview', 'WebView')
 
   @property
   def supersize_input(self):
     if self.IsTrichrome():
-      return self._MaybeAddGoogleSuffix(
-          os.path.join(self.output_directory, 'apks', 'Trichrome.ssargs'))
+      suffix = self.TrichromeSuffix()
+      return os.path.join(self.output_directory, 'apks',
+                          f'Trichrome{suffix}.ssargs')
     return self.abs_apk_paths[0]
 
   @property
   def apk_paths(self):
     if self.IsTrichrome():
-      ret = [
-          os.path.join('apks', 'TrichromeChrome.minimal.apks'),
-          os.path.join('apks', 'TrichromeWebView.minimal.apks'),
-          os.path.join('apks', 'TrichromeLibrary.apk'),
+      suffix = self.TrichromeSuffix()
+      return [
+          os.path.join('apks', f'TrichromeChrome{suffix}.minimal.apks'),
+          os.path.join('apks', f'TrichromeWebView{suffix}.minimal.apks'),
+          os.path.join('apks', f'TrichromeLibrary{suffix}.apk'),
       ]
-      return [self._MaybeAddGoogleSuffix(x) for x in ret]
 
     return [os.path.join('apks', self.apk_name)]
 
@@ -319,27 +325,13 @@ class _BuildHelper:
     return self.apk_name + '.size'
 
   def _SetDefaults(self):
-    if self.use_goma:
-      try:
-        goma_is_running = not subprocess.call(['goma_ctl', 'status'],
-                                              stdout=subprocess.DEVNULL,
-                                              stderr=subprocess.DEVNULL)
-        self.use_goma = self.use_goma and goma_is_running
-      except Exception:
-        # goma_ctl not in PATH.
-        self.use_goma = False
-
-      if not self.use_goma:
-        logging.warning('GOMA not running. Setting use_goma=false.')
-
-    has_internal = os.path.exists(
-        os.path.join(os.path.dirname(_SRC_ROOT), 'src-internal'))
+    has_internal = os.path.exists(os.path.join(_SRC_ROOT, 'internal', 'OWNERS'))
     if has_internal:
       self.extra_gn_args_str = (
           'is_chrome_branded=true ' + self.extra_gn_args_str)
     else:
       self.extra_gn_args_str = (
-          'ffmpeg_branding="Chrome" proprietary_codecs=true' +
+          'ffmpeg_branding="Chrome" proprietary_codecs=true ' +
           self.extra_gn_args_str)
     if self.IsLinux():
       self.extra_gn_args_str = (
@@ -350,9 +342,15 @@ class _BuildHelper:
       if self.IsLinux():
         self.target = 'chrome'
       elif self.enable_chrome_android_internal:
-        self.target = 'trichrome_google_minimal_apks'
+        if 'target_cpu="arm64"' in self.extra_gn_args_str:
+          self.target = 'trichrome_google_64_minimal_apks'
+        else:
+          self.target = 'trichrome_google_32_minimal_apks'
       else:
-        self.target = 'trichrome_minimal_apks'
+        if 'target_cpu="arm64"' in self.extra_gn_args_str:
+          self.target = 'trichrome_64_minimal_apks'
+        else:
+          self.target = 'trichrome_32_minimal_apks'
 
   def _GenGnCmd(self):
     gn_args = 'is_official_build=true'
@@ -366,7 +364,7 @@ class _BuildHelper:
     # Compiles need at least symbol_level=1 for pak allowlist to work.
     gn_args += ' symbol_level=1'
     gn_args += ' use_errorprone_java_compiler=false'
-    gn_args += ' use_goma=%s' % str(self.use_goma).lower()
+    gn_args += ' use_remoteexec=%s' % str(self.use_reclient).lower()
     gn_args += ' target_os="%s"' % self.target_os
     if self.IsAndroid():
       gn_args += (' enable_chrome_android_internal=%s' %
@@ -375,7 +373,7 @@ class _BuildHelper:
     return [_GN_PATH, 'gen', self.output_directory, '--args=%s' % gn_args]
 
   def _GenNinjaCmd(self):
-    cmd = ['autoninja', '-C', self.output_directory]
+    cmd = [_AUTONINJA_PATH, '-C', self.output_directory]
     cmd += [self.target]
     return cmd
 
@@ -391,14 +389,27 @@ class _BuildHelper:
                       exit_on_failure=False)[1]
     if retcode:
       return retcode
-    return _RunCmd(
-        self._GenNinjaCmd(), verbose=True, exit_on_failure=False)[1]
+    return _RunCmd(self._GenNinjaCmd(),
+                   cwd=_SRC_ROOT,
+                   verbose=True,
+                   exit_on_failure=False)[1]
 
   def IsAndroid(self):
     return self.target_os == 'android'
 
   def IsTrichrome(self):
     return 'trichrome' in self.target
+
+  def TrichromeSuffix(self):
+    assert self.IsTrichrome()
+    ret = ''
+    if '_google' in self.target:
+      ret = 'Google'
+    if '64_32' in self.target:
+      ret += '6432'
+    elif '64' in self.target:
+      ret += '64'
+    return ret
 
   def IsLinux(self):
     return self.target_os == 'linux'
@@ -426,6 +437,9 @@ class _BuildArchive:
         self._ArchiveFile(path)
       for path in self.build.abs_mapping_paths:
         # Some apks have no .mapping files.
+        self._ArchiveFile(path, missing_ok=True)
+      for path in self.build.abs_extra_paths:
+        # These are useful for debugging but not necessary.
         self._ArchiveFile(path, missing_ok=True)
       self._ArchiveResourceSizes()
     self._ArchiveSizeFile()
@@ -489,7 +503,7 @@ class _DiffArchiveManager:
   """Class for maintaining BuildArchives and their related diff artifacts."""
 
   def __init__(self, revs, archive_dir, diffs, build, subrepo, save_unstripped,
-               supersize_archive_args):
+               supersize_archive_args, share):
     self.archive_dir = archive_dir
     self.build = build
     self.build_archives = [
@@ -498,6 +512,7 @@ class _DiffArchiveManager:
     ]
     self.diffs = diffs
     self.subrepo = subrepo
+    self.share = share
     self._summary_stats = []
 
   def MaybeDiff(self, before_id, after_id):
@@ -547,42 +562,55 @@ class _DiffArchiveManager:
         after.archived_size_path, report_path
     ]
 
-    logging.info('Creating .sizediff')
-    _RunCmd(supersize_cmd)
-    oneoffs_dir = 'oneoffs'
-    visibility = '-a public-read '
+    is_single_rev = before_id == after_id
+
+    if not is_single_rev:
+      logging.info('Creating .sizediff')
+      _RunCmd(supersize_cmd)
+
+    gsutil_cmd = ['gsutil.py', 'cp']
     if is_internal:
       oneoffs_dir = 'private-oneoffs'
-      visibility = ''
+    else:
+      oneoffs_dir = 'oneoffs'
+      gsutil_cmd += ['-a', 'public-read']
 
-    unique_name = '{}_{}.sizediff'.format(before.rev, after.rev)
-    msg = (
-        '\n=====================\n'
-        'Saved locally to {local}. To view, upload to '
-        'https://chrome-supersize.firebaseapp.com/viewer.html.\n'
-        'To share, run:\n'
-        '> gsutil.py cp {visibility}{local} '
-        'gs://chrome-supersize/{oneoffs_dir}/{unique_name}\n\n'
-        'Then view it at https://chrome-supersize.firebaseapp.com/viewer.html'
+    if is_single_rev:
+      unique_name = '{}.size'.format(before.rev)
+      local = os.path.relpath(before.archived_size_path)
+    else:
+      unique_name = '{}_{}.sizediff'.format(before.rev, after.rev)
+      local = os.path.relpath(report_path)
+
+    gsutil_cmd += [local, f'gs://chrome-supersize/{oneoffs_dir}/{unique_name}']
+
+    if self.share:
+      msg = 'Automatically uploaded, '
+      _RunCmd(gsutil_cmd)
+    else:
+      msg = (f'Saved locally to {local}. To view, upload to '
+             'https://chrome-supersize.firebaseapp.com/viewer.html.\n'
+             'To share, run:\n'
+             f'> {" ".join(gsutil_cmd)}\n\n'
+             'Then ')
+    msg = '\n=====================\n' + msg + (
+        'view it at https://chrome-supersize.firebaseapp.com/viewer.html'
         '?load_url=https://storage.googleapis.com/chrome-supersize/'
-        '{oneoffs_dir}/{unique_name}'
+        f'{oneoffs_dir}/{unique_name}'
         '\n=====================\n')
-    msg = msg.format(local=os.path.relpath(report_path),
-                     unique_name=unique_name,
-                     visibility=visibility,
-                     oneoffs_dir=oneoffs_dir)
     logging.info(msg)
 
   def Summarize(self):
     path = os.path.join(self.archive_dir, 'last_diff_summary.txt')
     if self._summary_stats:
       with open(path, 'w') as f:
-        stats = sorted(
-            self._summary_stats, key=lambda x: x[0].value, reverse=True)
+        stats = sorted(self._summary_stats,
+                       key=lambda x: x[0].value,
+                       reverse=True)
         _WriteToFile(f, '\nDiff Summary')
         for s, before, after in stats:
           _WriteToFile(f, '{:>+10} {} {} for range: {}..{}',
-                               s.value, s.units, s.name, before, after)
+                       s.value, s.units, s.name, before, after)
 
     # Print cached file if all builds were cached.
     num_archives = len(self.build_archives)
@@ -883,13 +911,16 @@ def main():
   parser.add_argument('--supersize-archive-args',
                       help='Args to pass through to the supersize archive '
                       'command (e.g. --java-only, --no-output-directory, etc).')
+  parser.add_argument('--share',
+                      action='store_true',
+                      help='Automatically upload using gsutil.py.')
 
   build_group = parser.add_argument_group('build arguments')
-  build_group.add_argument('--no-goma',
+  build_group.add_argument('--no-reclient',
                            action='store_false',
-                           dest='use_goma',
+                           dest='use_reclient',
                            default=True,
-                           help='Do not use goma when building with ninja.')
+                           help='Do not use reclient when building with ninja.')
   build_group.add_argument('--clean',
                            action='store_true',
                            help='Do a clean build for each revision.')
@@ -909,9 +940,13 @@ def main():
                            help='Allow downstream targets to be built.')
   build_group.add_argument('--target',
                            help='GN target to build. Linux default: chrome. '
-                           'Android default: trichrome_minimal_apks or '
-                           'trichrome_google_minimal_apks (depending on '
+                           'Android default: trichrome_32_minimal_apks or '
+                           'trichrome_google_32_minimal_apks (depending on '
                            '--enable-chrome-android-internal).')
+  build_group.add_argument('--arm64',
+                           action='store_true',
+                           help='Adds target_cpu="arm64" and sets the default '
+                           'target to trichrome_64_minimal_apks')
   build_group.add_argument('--custom-apk-name',
                            help='The apk name by default is derived from the '
                            'target name, but occasionally targets set a custom '
@@ -936,6 +971,16 @@ def main():
                       format='%(levelname).1s %(relativeCreated)6d %(message)s')
   if args.target and args.target.endswith('_bundle'):
     parser.error('Bundle targets must use _minimal_apks variants')
+  if args.arm64:
+    if args.gn_args:
+      args.gn_args = 'target_cpu="arm64" ' + args.gn_args
+    else:
+      args.gn_args = 'target_cpu="arm64"'
+
+  if _GN_PATH is None:
+    parser.error('Could not find "gn" on your PATH')
+  if _AUTONINJA_PATH is None:
+    parser.error('Could not find "autoninja" on your PATH')
 
   build = _BuildHelper(args)
   subrepo = args.subrepo or _SRC_ROOT
@@ -961,7 +1006,7 @@ def main():
     diffs += [ResourceSizesDiff()]
   diff_mngr = _DiffArchiveManager(revs, args.archive_directory, diffs, build,
                                   subrepo, args.unstripped,
-                                  args.supersize_archive_args)
+                                  args.supersize_archive_args, args.share)
   consecutive_failures = 0
   i = 0
   for i, archive in enumerate(diff_mngr.build_archives):

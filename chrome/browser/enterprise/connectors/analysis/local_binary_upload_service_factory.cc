@@ -5,17 +5,15 @@
 #include "chrome/browser/enterprise/connectors/analysis/local_binary_upload_service_factory.h"
 
 #include "chrome/browser/enterprise/connectors/analysis/local_binary_upload_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/enterprise/signals/system_signals_service_host_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "content/public/browser/browser_context.h"
 
 namespace enterprise_connectors {
 
 // static
-safe_browsing::BinaryUploadService*
-LocalBinaryUploadServiceFactory::GetForProfile(Profile* profile) {
-  return static_cast<safe_browsing::BinaryUploadService*>(
+BinaryUploadService* LocalBinaryUploadServiceFactory::GetForProfile(
+    Profile* profile) {
+  return static_cast<BinaryUploadService*>(
       GetInstance()->GetServiceForBrowserContext(profile, /* create= */
                                                  true));
 }
@@ -23,23 +21,27 @@ LocalBinaryUploadServiceFactory::GetForProfile(Profile* profile) {
 // static
 LocalBinaryUploadServiceFactory*
 LocalBinaryUploadServiceFactory::GetInstance() {
-  return base::Singleton<LocalBinaryUploadServiceFactory>::get();
+  static base::NoDestructor<LocalBinaryUploadServiceFactory> instance;
+  return instance.get();
 }
 
 LocalBinaryUploadServiceFactory::LocalBinaryUploadServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "LocalBinaryUploadService",
-          BrowserContextDependencyManager::GetInstance()) {}
-
-KeyedService* LocalBinaryUploadServiceFactory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
-  return new LocalBinaryUploadService();
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              .Build()) {
+  DependsOn(enterprise_signals::SystemSignalsServiceHostFactory::GetInstance());
 }
 
-content::BrowserContext*
-LocalBinaryUploadServiceFactory::GetBrowserContextToUse(
+std::unique_ptr<KeyedService>
+LocalBinaryUploadServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+  Profile* profile = Profile::FromBrowserContext(context);
+  return std::make_unique<LocalBinaryUploadService>(profile);
 }
 
 }  // namespace enterprise_connectors

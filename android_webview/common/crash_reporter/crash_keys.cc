@@ -16,10 +16,9 @@ const char kAppProcessName[] = "app-process-name";
 
 const char kAndroidSdkInt[] = "android-sdk-int";
 
-const char kSupportLibraryWebkitVersion[] = "androidx-webkit-version";
+const char kContextLossReason[] = "context-loss-reason";
 
-extern const char kWeblayerWebViewCompatMode[] =
-    "WEBLAYER_WEB_VIEW_COMPAT_MODE";
+const char kSupportLibraryWebkitVersion[] = "androidx-webkit-version";
 
 // clang-format off
 const char* const kWebViewCrashKeyAllowList[] = {
@@ -27,6 +26,7 @@ const char* const kWebViewCrashKeyAllowList[] = {
     kAppPackageVersionCode,
     kAppProcessName,
     kAndroidSdkInt,
+    kContextLossReason,
     kSupportLibraryWebkitVersion,
 
     // process type
@@ -34,6 +34,9 @@ const char* const kWebViewCrashKeyAllowList[] = {
 
     // Java exception stack traces
     "exception_info",
+
+    // base
+    "base-OpenApkAssetError",
 
     // gpu
     "gpu-driver",
@@ -50,12 +53,30 @@ const char* const kWebViewCrashKeyAllowList[] = {
 
     // content/:
     "bad_message_reason",
+    "can_access_data_failure_reason",
+    "cpspi_can_commit_url_failure_reason",
     "discardable-memory-allocated",
     "discardable-memory-free",
     "mojo-message-error",
     "total-discardable-memory-allocated",
 
     // Navigation
+    "ever_had_loaddatawithbaseurl_exemption",
+    "ever_had_universal_access_exemption",
+    "rfhi_can_commit_failure_reason",
+    "is_same_document",
+    "is_main_frame",
+    "is_opaque_origin",
+    "is_file_origin",
+    "is_data_url",
+    "is_srcdoc_url",
+    "is_loaddatawithbaseurl_navrequest",
+    "is_loaddatawithbaseurl_samedoc",
+    "is_process_locked",
+    "is_on_initial_empty_doc",
+    "is_renderer_initiated",
+    "is_error_page",
+
     "VerifyDidCommit-prev_ldwb",
     "VerifyDidCommit-prev_ldwbu",
     "VerifyDidCommit-base_url_fdu_type",
@@ -138,11 +159,66 @@ const char* const kWebViewCrashKeyAllowList[] = {
     // crash keys needed for recording finch trials
     "variations",
     "num-experiments",
+    "variations-seed-version",
+
+    // CRX components
+    "crx-components",
+    "crx-components-cohort-hashes",
 
     // sandbox/linux
     "seccomp-sigsys",
+    "seccomp-sigsys-ioctl",
 
-    kWeblayerWebViewCompatMode,
+    // Used to report switches/feature flags overridden in the DevUI
+    "commandline-enabled-feature-*",
+    "commandline-disabled-feature-*",
+    "switch-*",
+    "num-switches",
+
+    // NavigationListener investigation
+    "NoTrackedNav-message",
+    "NoTrackedNav-nav_id",
+    "NoTrackedNav-url_type",
+    "NoTrackedNav-prev_url_type",
+
+    "NoTrackedNav-discard_reason",
+    "NoTrackedNav-tracked_navs_size",
+    "NoTrackedNav-all_navs_size",
+    "NoTrackedNav-net_error_code",
+
+    "NoTrackedNav-has_committed",
+    "NoTrackedNav-was_redirect",
+    "NoTrackedNav-is_activation",
+    "NoTrackedNav-is_same_doc",
+    "NoTrackedNav-is_renderer",
+    "NoTrackedNav-is_reload",
+    "NoTrackedNav-is_history",
+    "NoTrackedNav-is_restore",
+
+    // crbug.com/370872370
+    "OriginCalc-debug_info",
+    "OriginCalc-url_stripped",
+    "OriginCalc-same_ptr",
+    "OriginCalc-origin",
+    "OriginCalc-origin_to_commit",
+    "OriginCalc-origin_local",
+    "OriginCalc-origin_to_commit_local",
+    "OriginCalc-origin_blcok",
+    "OriginCalc-origin_to_commit_block",
+
+    // crbug.com/423037052
+    "SIFactory-DebugLabel",
+    "SIFactory-Format",
+    "SIFactory-GMBType",
+    "SIFactory-SharedBwThreads",
+    "SIFactory-Usage",
+    "SIFactory-Size",
+
+    // crbug.com/453113611
+    "SubprocessMetricsProvider-histogram",
+
+    // crbug.com/456871291
+    "BadHistogramArgs-name",
 
     nullptr};
 // clang-format on

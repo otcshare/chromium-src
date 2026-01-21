@@ -9,9 +9,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -31,16 +31,12 @@ const char kHostTransportCommand[] = "host:transport:%s";
 const char kLocalhost[] = "127.0.0.1";
 
 std::string EncodeMessage(const std::string& message) {
-  static const char kHexChars[] = "0123456789ABCDEF";
-
   size_t length = message.length();
-  std::string result(4, '\0');
-  char b = reinterpret_cast<const char*>(&length)[1];
-  result[0] = kHexChars[(b >> 4) & 0xf];
-  result[1] = kHexChars[b & 0xf];
-  b = reinterpret_cast<const char*>(&length)[0];
-  result[2] = kHexChars[(b >> 4) & 0xf];
-  result[3] = kHexChars[b & 0xf];
+  CHECK_LE(length, 0xffffu);
+  std::string result;
+  result.reserve(4);
+  base::AppendHexEncodedByte(static_cast<uint8_t>(length >> 8), result);
+  base::AppendHexEncodedByte(static_cast<uint8_t>(length & 0xff), result);
   return result + message;
 }
 
@@ -134,7 +130,7 @@ class AdbQuerySocket : AdbClientSocket {
 
   void OnResponse(int result, const std::string& response) {
     if (++current_query_ < queries_.size()) {
-      SendNextQuery(net::OK);
+      SendNextQuery(result);
     } else {
       std::move(callback_).Run(result, response);
       delete this;
@@ -175,8 +171,7 @@ AdbClientSocket::AdbClientSocket(int port)
     : host_(kLocalhost), port_(port) {
 }
 
-AdbClientSocket::~AdbClientSocket() {
-}
+AdbClientSocket::~AdbClientSocket() = default;
 
 void AdbClientSocket::RunConnectCallback(int result) {
   std::move(connect_callback_).Run(result);
@@ -247,8 +242,8 @@ void AdbClientSocket::ReadResponse(CommandCallback callback,
     std::move(callback).Run(result, "IO error");
     return;
   }
-  scoped_refptr<net::IOBuffer> response_buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto response_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
   auto split_callback = base::SplitOnceCallback(
       base::BindOnce(&AdbClientSocket::OnResponseHeader, base::Unretained(this),
                      std::move(callback), is_void, response_buffer));

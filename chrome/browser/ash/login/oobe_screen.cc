@@ -8,11 +8,7 @@
 
 namespace ash {
 
-OobeScreenId::OobeScreenId(const std::string& name) : name(name) {}
-
-OobeScreenId::OobeScreenId(const std::string& name,
-                           const std::string& api_prefix)
-    : name(name), external_api_prefix(api_prefix) {}
+OobeScreenId::OobeScreenId(const std::string& id) : name(id) {}
 
 OobeScreenId::OobeScreenId(const StaticOobeScreenId& id)
     : name(id.name) {
@@ -26,10 +22,6 @@ bool OobeScreenId::operator==(const OobeScreenId& rhs) const {
   return name == rhs.name;
 }
 
-bool OobeScreenId::operator!=(const OobeScreenId& rhs) const {
-  return name != rhs.name;
-}
-
 bool OobeScreenId::operator<(const OobeScreenId& rhs) const {
   return name < rhs.name;
 }
@@ -41,5 +33,9 @@ std::ostream& operator<<(std::ostream& stream, const OobeScreenId& id) {
 OobeScreenId StaticOobeScreenId::AsId() const {
   return OobeScreenId(name);
 }
+
+ScreenSummary::ScreenSummary() = default;
+ScreenSummary::~ScreenSummary() = default;
+ScreenSummary::ScreenSummary(const ScreenSummary& summary) = default;
 
 }  // namespace ash

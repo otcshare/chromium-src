@@ -6,13 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/containers/circular_deque.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -32,14 +31,15 @@ typedef base::OnceCallback<void(int64_t)> GetNecessaryFreeSpaceCallback;
 int64_t ComputeSpaceNeedToBeFreedAfterGetMetadataAsync(
     const base::FilePath& path,
     int64_t snapshot_size) {
-  int64_t free_size = base::SysInfo::AmountOfFreeDiskSpace(path);
-  if (free_size < 0)
+  auto free_size = base::SysInfo::AmountOfFreeDiskSpace(path);
+  if (!free_size) {
     return -1;
+  }
 
   // We need to keep cryptohome::kMinFreeSpaceInBytes free space even after
   // |snapshot_size| is occupied.
-  free_size -= snapshot_size + cryptohome::kMinFreeSpaceInBytes;
-  return (free_size < 0 ? -free_size : 0);
+  *free_size -= snapshot_size + cryptohome::kMinFreeSpaceInBytes;
+  return (*free_size < 0 ? -*free_size : 0);
 }
 
 // Part of ComputeSpaceNeedToBeFreed.
@@ -68,7 +68,7 @@ void GetMetadataOnIOThread(const base::FilePath& path,
                            GetNecessaryFreeSpaceCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   context->operation_runner()->GetMetadata(
-      url, storage::FileSystemOperation::GET_METADATA_FIELD_SIZE,
+      url, {storage::FileSystemOperation::GetMetadataField::kSize},
       base::BindOnce(&ComputeSpaceNeedToBeFreedAfterGetMetadata, path,
                      std::move(callback)));
 }
@@ -202,30 +202,8 @@ void SnapshotManager::CreateManagedSnapshot(
     std::move(callback).Run(base::FilePath());
     return;
   }
-
   storage::FileSystemURL filesystem_url =
       context->CrackURLInFirstPartyContext(url);
-
-  ComputeSpaceNeedToBeFreed(
-      profile_, context, filesystem_url,
-      base::BindOnce(&SnapshotManager::CreateManagedSnapshotAfterSpaceComputed,
-                     weak_ptr_factory_.GetWeakPtr(), filesystem_url,
-                     std::move(callback)));
-}
-
-void SnapshotManager::CreateManagedSnapshot(
-    const storage::FileSystemURL& filesystem_url,
-    LocalPathCallback callback) {
-  scoped_refptr<storage::FileSystemContext> context(
-      util::GetFileManagerFileSystemContext(profile_));
-  DCHECK(context.get());
-
-  storage::ExternalFileSystemBackend* const backend =
-      context->external_backend();
-  if (!backend || !backend->CanHandleType(filesystem_url.type())) {
-    std::move(callback).Run(base::FilePath());
-    return;
-  }
 
   ComputeSpaceNeedToBeFreed(
       profile_, context, filesystem_url,

@@ -8,15 +8,19 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
 // crbug.com/932380
 TEST(XMLDocumentParserTest, NodeNamespaceWithParseError) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
   auto& doc = *Document::CreateForTest(execution_context.GetExecutionContext());
@@ -26,20 +30,29 @@ TEST(XMLDocumentParserTest, NodeNamespaceWithParseError) {
 
   // The first child of <html> is <parseerror>, not <body>.
   auto* foo = To<Element>(doc.documentElement()->lastChild()->firstChild());
-  EXPECT_TRUE(foo->namespaceURI().IsNull()) << foo->namespaceURI();
-  EXPECT_TRUE(foo->prefix().IsNull()) << foo->prefix();
-  EXPECT_EQ(foo->localName(), "d:foo");
+  if (RuntimeEnabledFeatures::XMLParsingRustEnabled() ||
+      RuntimeEnabledFeatures::XMLRustForNonXsltEnabled()) {
+    // The Rust xml parser does not generate an element for the unbound d:foo
+    // prefix. The Rust xml parser also gets used when a document is created
+    // without a window, as in Document::CreateForTest().
+    EXPECT_FALSE(foo);
+  } else {
+    EXPECT_TRUE(foo->namespaceURI().IsNull()) << foo->namespaceURI();
+    EXPECT_TRUE(foo->prefix().IsNull()) << foo->prefix();
+    EXPECT_EQ(foo->localName(), "d:foo");
+  }
 }
 
 // https://crbug.com/1239288
 TEST(XMLDocumentParserTest, ParseFragmentWithUnboundNamespacePrefix) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext execution_context;
   execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
   auto& doc = *Document::CreateForTest(execution_context.GetExecutionContext());
 
   DummyExceptionStateForTesting exception;
-  auto* svg =
-      doc.createElementNS("http://www.w3.org/2000/svg", "svg", exception);
+  auto* svg = doc.createElementNS(svg_names::kNamespaceURI, AtomicString("svg"),
+                                  exception);
   EXPECT_TRUE(svg);
 
   DocumentFragment* fragment = DocumentFragment::Create(doc);
@@ -48,12 +61,12 @@ TEST(XMLDocumentParserTest, ParseFragmentWithUnboundNamespacePrefix) {
   // XMLDocumentParser::StartElementNs should notice that prefix "foo" does not
   // exist and map the element to the null namespace. It should not fall back to
   // the default namespace.
-  EXPECT_TRUE(fragment->ParseXML("<foo:bar/>", svg));
+  EXPECT_TRUE(fragment->ParseXML("<foo:bar/>", svg, ASSERT_NO_EXCEPTION));
   EXPECT_TRUE(fragment->HasOneChild());
   auto* bar = To<Element>(fragment->firstChild());
   EXPECT_TRUE(bar);
-  EXPECT_EQ(bar->prefix(), WTF::g_null_atom);
-  EXPECT_EQ(bar->namespaceURI(), WTF::g_null_atom);
+  EXPECT_EQ(bar->prefix(), g_null_atom);
+  EXPECT_EQ(bar->namespaceURI(), g_null_atom);
   EXPECT_EQ(bar->localName(), "foo:bar");
 }
 

@@ -4,13 +4,15 @@
 
 #include "components/subresource_filter/content/browser/navigation_console_logger.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
+#include "content/public/test/test_utils.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -80,7 +82,7 @@ TEST_F(NavigationConsoleLoggerTest, NavigationCommitsSuccessfully_Logs) {
   EXPECT_TRUE(GetConsoleMessages(main_rfh()).empty());
   navigation->Commit();
 
-  EXPECT_TRUE(base::Contains(GetConsoleMessages(main_rfh()), "foo"));
+  EXPECT_TRUE(std::ranges::contains(GetConsoleMessages(main_rfh()), "foo"));
 }
 
 TEST_F(NavigationConsoleLoggerTest, NavigationAlreadyCommit_Logs) {
@@ -90,7 +92,7 @@ TEST_F(NavigationConsoleLoggerTest, NavigationAlreadyCommit_Logs) {
   };
   NavigationFinishCaller caller(web_contents(), base::BindRepeating(on_finish));
   NavigateAndCommit(GURL("http://example.test/"));
-  EXPECT_TRUE(base::Contains(GetConsoleMessages(main_rfh()), "foo"));
+  EXPECT_TRUE(std::ranges::contains(GetConsoleMessages(main_rfh()), "foo"));
 }
 
 TEST_F(NavigationConsoleLoggerTest, NavigationAlreadyFailed_NoLog) {
@@ -113,9 +115,13 @@ TEST_F(NavigationConsoleLoggerTest, MultipleNavigations_OneLog) {
         navigation->GetNavigationHandle(),
         blink::mojom::ConsoleMessageLevel::kWarning, "foo");
     navigation->Commit();
+    EXPECT_EQ(1u, GetConsoleMessages(main_rfh()).size());
   }
+  content::RenderFrameHostTester::For(main_rfh())->ClearConsoleMessages();
+  EXPECT_TRUE(GetConsoleMessages(main_rfh()).empty());
+
   NavigateAndCommit(GURL("http://example.test/"));
-  EXPECT_EQ(1u, GetConsoleMessages(main_rfh()).size());
+  EXPECT_TRUE(GetConsoleMessages(main_rfh()).empty());
 }
 
 TEST_F(NavigationConsoleLoggerTest, MultipleMessages) {

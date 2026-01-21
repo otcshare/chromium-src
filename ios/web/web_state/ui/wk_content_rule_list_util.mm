@@ -8,17 +8,21 @@
 #import "base/strings/sys_string_conversions.h"
 #import "ios/web/public/web_client.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace web {
 
 NSString* CreateLocalBlockingJsonRuleList() {
-  NSMutableDictionary* local_block = [@{
-    @"trigger" : [@{
+  NSMutableArray* local_schemes_urls = [@[ @"file://.*" ] mutableCopy];
+  WebClient::Schemes schemes;
+  GetWebClient()->AddAdditionalSchemes(&schemes);
+  GetWebClient()->GetAdditionalWebUISchemes(&(schemes.standard_schemes));
+  for (std::string scheme : schemes.standard_schemes) {
+    [local_schemes_urls addObject:base::SysUTF8ToNSString(scheme + "://.*")];
+  }
+
+  NSDictionary* local_block = @{
+    @"trigger" : @{
       @"url-filter" : @"https?://.*",
-      @"if-top-url" : [@[ @"file://.*" ] mutableCopy],
+      @"if-top-url" : local_schemes_urls,
       @"resource-type" : @[
         // These should be all resource types except document.
         // "document" cannot be blocked because it breaks error pages displayed
@@ -26,38 +30,55 @@ NSString* CreateLocalBlockingJsonRuleList() {
         @"image", @"style-sheet", @"script", @"font", @"raw", @"svg-document",
         @"media", @"popup", @"ping"
       ],
-    } mutableCopy],
+    },
     @"action" : @{
       @"type" : @"block",
     },
-  } mutableCopy];
+  };
 
-  NSMutableDictionary* allow_crbug_block = [@{
-    @"trigger" : [@{
-      @"url-filter" : @"https://bugs.chromium.org/.*",
-      @"if-top-url" : @[ @"file://.*" ],
+  NSDictionary* allow_crbug = @{
+    @"trigger" : @{
+      @"url-filter" : @"https://bugs\\.chromium\\.org/.*",
+      @"if-top-url" : @[ @"chrome://.*" ],
       @"resource-type" : @[
         // Allow opening crbug from chrome:// urls
         @"popup"
       ],
-    } mutableCopy],
-    @"action" : @{
-      @"type" : @"allow",
     },
-  } mutableCopy];
+    @"action" : @{
+      @"type" : @"ignore-previous-rules",
+    },
+  };
 
-  WebClient::Schemes schemes;
-  GetWebClient()->AddAdditionalSchemes(&schemes);
-  GetWebClient()->GetAdditionalWebUISchemes(&(schemes.standard_schemes));
-  for (std::string scheme : schemes.standard_schemes) {
-    [local_block[@"trigger"][@"if-top-url"]
-        addObject:base::SysUTF8ToNSString(scheme + "://.*")];
-  }
+  NSData* json_data =
+      [NSJSONSerialization dataWithJSONObject:@[ local_block, allow_crbug ]
+                                      options:NSJSONWritingPrettyPrinted
+                                        error:nil];
+  NSString* json_string = [[NSString alloc] initWithData:json_data
+                                                encoding:NSUTF8StringEncoding];
+  return json_string;
+}
 
-  NSData* json_data = [NSJSONSerialization
-      dataWithJSONObject:@[ local_block, allow_crbug_block ]
-                 options:NSJSONWritingPrettyPrinted
-                   error:nil];
+NSString* CreateMixedContentAutoUpgradeJsonRuleList() {
+  NSDictionary* mixed_content_autoupgrade = @{
+    @"trigger" : @{
+      @"url-filter" : @"http://.*",
+      @"if-top-url" : @[ @"https://.*" ],
+      @"resource-type" : @[
+        // Only upgrade image and media (i.e. audio and video) per
+        // https://www.w3.org/TR/mixed-content/#upgrade-algorithm
+        @"image", @"media"
+      ],
+    },
+    @"action" : @{
+      @"type" : @"make-https",
+    },
+  };
+
+  NSData* json_data =
+      [NSJSONSerialization dataWithJSONObject:@[ mixed_content_autoupgrade ]
+                                      options:NSJSONWritingPrettyPrinted
+                                        error:nil];
   NSString* json_string = [[NSString alloc] initWithData:json_data
                                                 encoding:NSUTF8StringEncoding];
   return json_string;

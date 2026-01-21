@@ -10,7 +10,10 @@
 #include <limits>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "extensions/renderer/script_context.h"
 #include "gin/data_object_builder.h"
@@ -46,7 +49,7 @@ int GetIntPropertyFromV8Object(v8::Local<v8::Object> v8_object,
   v8::Local<v8::Value> v8_property_value;
   if (!v8_object
            ->Get(v8_context, v8::String::NewFromUtf8(
-                                 v8_context->GetIsolate(), property_name,
+                                 v8::Isolate::GetCurrent(), property_name,
                                  v8::NewStringType::kInternalized)
                                  .ToLocalChecked())
            .ToLocal(&v8_property_value)) {
@@ -60,7 +63,7 @@ int GetIntPropertyFromV8Object(v8::Local<v8::Object> v8_object,
                                int index) {
   v8::Local<v8::Value> v8_property_value;
   if (!v8_object
-           ->Get(v8_context, v8::Integer::New(v8_context->GetIsolate(), index))
+           ->Get(v8_context, v8::Integer::New(v8::Isolate::GetCurrent(), index))
            .ToLocal(&v8_property_value)) {
     return 0;
   }
@@ -84,7 +87,7 @@ bool SetIconNatives::ConvertImageDataToBitmapValue(
     const v8::Local<v8::Object> image_data,
     v8::Local<v8::Value>* image_data_bitmap) {
   v8::Local<v8::Context> v8_context = context()->v8_context();
-  v8::Isolate* isolate = v8_context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> value;
   if (!image_data
            ->Get(v8_context,
@@ -130,26 +133,25 @@ bool SetIconNatives::ConvertImageDataToBitmapValue(
   }
   bitmap.eraseARGB(0, 0, 0, 0);
 
-  uint32_t* pixels = bitmap.getAddr32(0, 0);
-  for (int t = 0; t < width * height; t++) {
+  base::span UNSAFE_TODO(pixels(bitmap.getAddr32(0, 0),
+                                base::checked_cast<uint32_t>(width * height)));
+  auto image_data_bytes = [&](size_t index) {
+    return GetIntPropertyFromV8Object(data, v8_context, index) & 0xFF;
+  };
+  for (size_t t = 0; t < pixels.size(); ++t) {
     // |data| is RGBA, pixels is ARGB.
-    pixels[t] = SkPreMultiplyColor(
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 3) & 0xFF)
-         << 24) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 0) & 0xFF)
-         << 16) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 1) & 0xFF)
-         << 8) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 2) & 0xFF)
-         << 0));
+    pixels[t] = SkPreMultiplyColor((image_data_bytes(4 * t + 3) << 24) |
+                                   (image_data_bytes(4 * t + 0) << 16) |
+                                   (image_data_bytes(4 * t + 1) << 8) |
+                                   (image_data_bytes(4 * t + 2) << 0));
   }
 
   // Construct the Value object.
   std::vector<uint8_t> s = skia::mojom::InlineBitmap::Serialize(&bitmap);
   blink::WebArrayBuffer buffer = blink::WebArrayBuffer::Create(s.size(), 1);
-  memcpy(buffer.Data(), s.data(), s.size());
-  *image_data_bitmap = blink::WebArrayBufferConverter::ToV8Value(
-      &buffer, context()->v8_context()->Global(), isolate);
+  UNSAFE_TODO(memcpy(buffer.Data(), s.data(), s.size()));
+  *image_data_bitmap =
+      blink::WebArrayBufferConverter::ToV8Value(&buffer, isolate);
 
   return true;
 }
@@ -158,7 +160,7 @@ bool SetIconNatives::ConvertImageDataSetToBitmapValueSet(
     v8::Local<v8::Object>& details,
     v8::Local<v8::Object>* bitmap_set_value) {
   v8::Local<v8::Context> v8_context = context()->v8_context();
-  v8::Isolate* isolate = v8_context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> v8_value;
   if (!details
            ->Get(v8_context,
@@ -215,7 +217,7 @@ void SetIconNatives::SetIconCommon(
   auto set_null_prototype = [v8_context, isolate](v8::Local<v8::Object> obj) {
     // Avoid any pesky Object.prototype manipulation.
     bool succeeded =
-        obj->SetPrototype(v8_context, v8::Null(isolate)).ToChecked();
+        obj->SetPrototypeV2(v8_context, v8::Null(isolate)).ToChecked();
     CHECK(succeeded);
   };
   set_null_prototype(bitmap_set_value);

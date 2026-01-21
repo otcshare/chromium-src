@@ -8,9 +8,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "remoting/base/logging.h"
 #include "remoting/host/base/username.h"
 #include "remoting/protocol/channel_authenticator.h"
@@ -25,13 +27,17 @@ class PamAuthorizer : public protocol::Authenticator {
   ~PamAuthorizer() override;
 
   // protocol::Authenticator:
+  protocol::CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
+  RejectionDetails rejection_details() const override;
   void ProcessMessage(const jingle_xmpp::XmlElement* message,
                       base::OnceClosure resume_callback) override;
   std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessage() override;
   const std::string& GetAuthKey() const override;
+  const SessionPolicies* GetSessionPolicies() const override;
   std::unique_ptr<protocol::ChannelAuthenticator> CreateChannelAuthenticator()
       const override;
 
@@ -53,9 +59,20 @@ class PamAuthorizer : public protocol::Authenticator {
 
 PamAuthorizer::PamAuthorizer(
     std::unique_ptr<protocol::Authenticator> underlying)
-    : underlying_(std::move(underlying)), local_login_status_(NOT_CHECKED) {}
+    : underlying_(std::move(underlying)), local_login_status_(NOT_CHECKED) {
+  ChainStateChangeAfterAcceptedWithUnderlying(*underlying_);
+}
 
 PamAuthorizer::~PamAuthorizer() {}
+
+protocol::CredentialsType PamAuthorizer::credentials_type() const {
+  return underlying_->credentials_type();
+}
+
+const protocol::Authenticator& PamAuthorizer::implementing_authenticator()
+    const {
+  return underlying_->implementing_authenticator();
+}
 
 protocol::Authenticator::State PamAuthorizer::state() const {
   if (local_login_status_ == DISALLOWED) {
@@ -69,13 +86,21 @@ bool PamAuthorizer::started() const {
   return underlying_->started();
 }
 
-protocol::Authenticator::RejectionReason
-PamAuthorizer::rejection_reason() const {
+protocol::Authenticator::RejectionReason PamAuthorizer::rejection_reason()
+    const {
   if (local_login_status_ == DISALLOWED) {
     return RejectionReason::INVALID_CREDENTIALS;
   } else {
     return underlying_->rejection_reason();
   }
+}
+
+protocol::Authenticator::RejectionDetails PamAuthorizer::rejection_details()
+    const {
+  if (local_login_status_ == DISALLOWED) {
+    return RejectionDetails("Local login check failed.");
+  }
+  return underlying_->rejection_details();
 }
 
 void PamAuthorizer::ProcessMessage(const jingle_xmpp::XmlElement* message,
@@ -93,13 +118,18 @@ void PamAuthorizer::OnMessageProcessed(base::OnceClosure resume_callback) {
 }
 
 std::unique_ptr<jingle_xmpp::XmlElement> PamAuthorizer::GetNextMessage() {
-  std::unique_ptr<jingle_xmpp::XmlElement> result(underlying_->GetNextMessage());
+  std::unique_ptr<jingle_xmpp::XmlElement> result(
+      underlying_->GetNextMessage());
   MaybeCheckLocalLogin();
   return result;
 }
 
 const std::string& PamAuthorizer::GetAuthKey() const {
   return underlying_->GetAuthKey();
+}
+
+const SessionPolicies* PamAuthorizer::GetSessionPolicies() const {
+  return underlying_->GetSessionPolicies();
 }
 
 std::unique_ptr<protocol::ChannelAuthenticator>
@@ -114,21 +144,31 @@ void PamAuthorizer::MaybeCheckLocalLogin() {
 }
 
 bool PamAuthorizer::IsLocalLoginAllowed() {
+  HOST_LOG << "Running local login check.";
   std::string username = GetUsername();
   if (username.empty()) {
+    LOG(ERROR) << "Failed to get username.";
     return false;
   }
-  struct pam_conv conv = { PamConversation, nullptr };
+  struct pam_conv conv = {PamConversation, nullptr};
   pam_handle_t* handle = nullptr;
-  int result = pam_start("chrome-remote-desktop", username.c_str(),
-                         &conv, &handle);
-  if (result == PAM_SUCCESS) {
+  HOST_LOG << "Calling pam_start() with username " << username;
+  int result =
+      pam_start("chrome-remote-desktop", username.c_str(), &conv, &handle);
+  if (result != PAM_SUCCESS) {
+    LOG(ERROR) << "pam_start() returned error " << result;
+  } else {
+    HOST_LOG << "Calling pam_acct_mgmt()";
     result = pam_acct_mgmt(handle, 0);
+    if (result != PAM_SUCCESS) {
+      LOG(ERROR) << "pam_acct_mgmt() returned error " << result;
+    }
   }
+  HOST_LOG << "Calling pam_end()";
   pam_end(handle, result);
 
   HOST_LOG << "Local login check for " << username
-            << (result == PAM_SUCCESS ? " succeeded." : " failed.");
+           << (result == PAM_SUCCESS ? " succeeded." : " failed.");
 
   return result == PAM_SUCCESS;
 }
@@ -141,12 +181,18 @@ int PamAuthorizer::PamConversation(int num_messages,
   // need to be free()-able zero-initialized memory.
   *responses = static_cast<struct pam_response*>(
       calloc(num_messages, sizeof(struct pam_response)));
-
+  // SAFETY: `messages` is a pointer to a dynamically allocated array of
+  // `pam_message`s, which should be at least `num_messages` long.
+  // PamConversation is invoked as a callback from pam_start API, and is
+  // documented to have this signature:
+  // https://man7.org/linux/man-pages/man3/pam_start.3.html,
+  // https://linux.die.net/man/3/pam_conv
+  auto messages_span =
+      UNSAFE_BUFFERS(base::span(messages, static_cast<size_t>(num_messages)));
   // We don't expect this function to be called. Since we have no easy way
   // of returning a response, we consider it to be an error if we're asked
   // for one and abort. Informational and error messages are logged.
-  for (int i = 0; i < num_messages; ++i) {
-    const struct pam_message* message = messages[i];
+  for (const pam_message* message : messages_span) {
     switch (message->msg_style) {
       case PAM_ERROR_MSG:
         LOG(ERROR) << "PAM conversation error message: " << message->msg;
@@ -174,6 +220,11 @@ PamAuthorizationFactory::CreateAuthenticator(const std::string& local_jid,
   std::unique_ptr<protocol::Authenticator> authenticator(
       underlying_->CreateAuthenticator(local_jid, remote_jid));
   return std::make_unique<PamAuthorizer>(std::move(authenticator));
+}
+
+std::unique_ptr<protocol::AuthenticatorFactory> PamAuthorizationFactory::Clone()
+    const {
+  return std::make_unique<PamAuthorizationFactory>(underlying_->Clone());
 }
 
 }  // namespace remoting

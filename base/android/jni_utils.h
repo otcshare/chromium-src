@@ -24,11 +24,7 @@ inline jobject GetClassLoader(JNIEnv* env) {
   return GetSplitClassLoader(env, "");
 }
 
-// Returns true if the current process permits selective JNI registration.
-BASE_EXPORT bool IsSelectiveJniRegistrationEnabled(JNIEnv* env);
-
 }  // namespace android
 }  // namespace base
 
 #endif  // BASE_ANDROID_JNI_UTILS_H_
-

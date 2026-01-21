@@ -8,22 +8,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_span.h"
 #include "crypto/crypto_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-struct evp_aead_st;
+#include "third_party/boringssl/src/include/openssl/aead.h"
+#include "third_party/boringssl/src/include/openssl/aes.h"
 
 namespace crypto {
 
 // This class exposes the AES-128-CTR-HMAC-SHA256 and AES_256_GCM AEAD. Note
 // that there are two versions of most methods: an historical version based
-// around |StringPiece| and a more modern version that takes |base::span|.
+// around |std::string_view| and a more modern version that takes |base::span|.
 // Prefer the latter in new code.
 class CRYPTO_EXPORT Aead {
  public:
@@ -34,36 +35,47 @@ class CRYPTO_EXPORT Aead {
     CHACHA20_POLY1305
   };
 
+  // If you use the one-arg form here, you must call Init() to configure a key.
+  // TODO(https://crbug.com/475891208): remove this; there are no callers (nor
+  // is there any reason) to construct an Aead instance before the key is
+  // available.
   explicit Aead(AeadAlgorithm algorithm);
+
+  // This CHECKs that the passed-in key is of the right length for the passed-in
+  // algorithm.
+  Aead(AeadAlgorithm algorithm, base::span<const uint8_t> key);
+
   Aead(const Aead&) = delete;
   Aead& operator=(const Aead&) = delete;
   ~Aead();
 
-  // Note that Init keeps a reference to the data pointed to by |key| thus that
-  // data must outlive this object.
+  // These are only legal to call if the key was not supplied at construction
+  // time. The key is copied locally and stored inside |this|.
+  //
+  // These CHECK that the passed-in key is of the right length for the given
+  // algorithm.
+  //
+  // TODO(https://crbug.com/475891208): remove this.
   void Init(base::span<const uint8_t> key);
-
-  // Note that Init keeps a reference to the data pointed to by |key| thus that
-  // data must outlive this object.
   void Init(const std::string* key);
 
   std::vector<uint8_t> Seal(base::span<const uint8_t> plaintext,
                             base::span<const uint8_t> nonce,
                             base::span<const uint8_t> additional_data) const;
 
-  bool Seal(base::StringPiece plaintext,
-            base::StringPiece nonce,
-            base::StringPiece additional_data,
+  bool Seal(std::string_view plaintext,
+            std::string_view nonce,
+            std::string_view additional_data,
             std::string* ciphertext) const;
 
-  absl::optional<std::vector<uint8_t>> Open(
+  std::optional<std::vector<uint8_t>> Open(
       base::span<const uint8_t> ciphertext,
       base::span<const uint8_t> nonce,
       base::span<const uint8_t> additional_data) const;
 
-  bool Open(base::StringPiece ciphertext,
-            base::StringPiece nonce,
-            base::StringPiece additional_data,
+  bool Open(std::string_view ciphertext,
+            std::string_view nonce,
+            std::string_view additional_data,
             std::string* plaintext) const;
 
   size_t KeyLength() const;
@@ -71,22 +83,22 @@ class CRYPTO_EXPORT Aead {
   size_t NonceLength() const;
 
  private:
-  bool Seal(base::span<const uint8_t> plaintext,
-            base::span<const uint8_t> nonce,
-            base::span<const uint8_t> additional_data,
-            uint8_t* out,
-            size_t* output_length,
-            size_t max_output_length) const;
+  std::optional<size_t> Seal(base::span<const uint8_t> plaintext,
+                             base::span<const uint8_t> nonce,
+                             base::span<const uint8_t> additional_data,
+                             base::span<uint8_t> out) const;
 
-  bool Open(base::span<const uint8_t> ciphertext,
-            base::span<const uint8_t> nonce,
-            base::span<const uint8_t> additional_data,
-            uint8_t* out,
-            size_t* output_length,
-            size_t max_output_length) const;
+  std::optional<size_t> Open(base::span<const uint8_t> ciphertext,
+                             base::span<const uint8_t> nonce,
+                             base::span<const uint8_t> additional_data,
+                             base::span<uint8_t> out) const;
 
-  absl::optional<base::span<const uint8_t>> key_;
-  raw_ptr<const evp_aead_st> aead_;
+  bssl::ScopedEVP_AEAD_CTX ctx_;
+
+  // It should not be necessary to store this; we only need it to support
+  // two-phase construct-init which is itself deprecated.
+  // TODO(https://crbug.com/475891208): remove this
+  AeadAlgorithm algorithm_;
 };
 
 }  // namespace crypto

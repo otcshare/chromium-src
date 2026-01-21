@@ -6,6 +6,7 @@
 
 #include "base/strings/stringprintf.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
@@ -16,11 +17,6 @@ namespace extensions {
 
 using I18nHooksDelegateTest = NativeExtensionBindingsSystemUnittest;
 
-// NOTE(devlin): This test lives in //chrome (rather than //extensions) since
-// the feature is defined at the chrome level (in
-// chrome/common/extensions/api/i18n.json). However, all the custom bindings
-// for i18n live at the //extensions level. We should move these to all be in
-// the same location.
 TEST_F(I18nHooksDelegateTest, TestI18nGetMessage) {
   scoped_refptr<const Extension> extension = ExtensionBuilder("foo").Build();
   RegisterExtension(extension);
@@ -29,7 +25,7 @@ TEST_F(I18nHooksDelegateTest, TestI18nGetMessage) {
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context);
 

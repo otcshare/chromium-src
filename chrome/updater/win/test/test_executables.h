@@ -15,16 +15,23 @@ class CommandLine;
 namespace updater {
 
 // The name of the executable used for tests.
-extern const wchar_t kTestProcessExecutableName[];
+//
+// If you add another test executable here, also add it to the data_deps in
+// the "test_executables" target of updater/win/test/BUILD.gn.
+inline constexpr wchar_t kTestProcessExecutableName[] =
+    L"updater_test_process.exe";
 
 // Creates a process that will run for a minute, which is long enough to be
 // killed by a reasonably fast unit or integration test.
 // Populates |command_line| with the used command line if it is not nullptr.
-base::Process LongRunningProcess(base::CommandLine* command_line);
+base::Process LongRunningProcess(UpdaterScope scope,
+                                 const std::string& test_name,
+                                 base::CommandLine* command_line);
 
 // Gets the command line for `kTestServiceExecutableName` in the same directory
 // as the current process.
-base::CommandLine GetTestProcessCommandLine(UpdaterScope scope);
+base::CommandLine GetTestProcessCommandLine(UpdaterScope scope,
+                                            const std::string& test_name);
 
 }  // namespace updater
 

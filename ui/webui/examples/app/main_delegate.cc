@@ -7,10 +7,16 @@
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/path_service.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/webui/examples/browser/content_browser_client.h"
 #include "ui/webui/examples/common/content_client.h"
+#include "ui/webui/examples/renderer/content_renderer_client.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "ui/webui/examples/app/mac_init.h"
+#endif
 
 namespace webui_examples {
 
@@ -18,7 +24,7 @@ MainDelegate::MainDelegate() = default;
 
 MainDelegate::~MainDelegate() = default;
 
-absl::optional<int> MainDelegate::BasicStartupComplete() {
+std::optional<int> MainDelegate::BasicStartupComplete() {
   logging::LoggingSettings settings;
   settings.logging_dest =
       logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
@@ -26,7 +32,7 @@ absl::optional<int> MainDelegate::BasicStartupComplete() {
 
   content_client_ = std::make_unique<ContentClient>();
   content::SetContentClient(content_client_.get());
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void MainDelegate::PreSandboxStartup() {
@@ -40,6 +46,18 @@ void MainDelegate::PreSandboxStartup() {
 content::ContentBrowserClient* MainDelegate::CreateContentBrowserClient() {
   content_browser_client_ = std::make_unique<ContentBrowserClient>();
   return content_browser_client_.get();
+}
+
+std::optional<int> MainDelegate::PreBrowserMain() {
+#if BUILDFLAG(IS_MAC)
+  MacPreBrowserMain();
+#endif
+  return content::ContentMainDelegate::PreBrowserMain();
+}
+
+content::ContentRendererClient* MainDelegate::CreateContentRendererClient() {
+  content_renderer_client_ = std::make_unique<ContentRendererClient>();
+  return content_renderer_client_.get();
 }
 
 }  // namespace webui_examples

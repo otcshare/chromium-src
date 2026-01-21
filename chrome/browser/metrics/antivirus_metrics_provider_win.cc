@@ -4,8 +4,8 @@
 
 #include "chrome/browser/metrics/antivirus_metrics_provider_win.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/win/util_win_service.h"
 #include "chrome/common/channel_info.h"
 #include "components/version_info/channel.h"
@@ -27,9 +27,7 @@ bool ShouldReportFullNames() {
 
 }  // namespace
 
-BASE_FEATURE(kReportFullAVProductDetails,
-             "ReportFullAVProductDetails",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kReportFullAVProductDetails, base::FEATURE_DISABLED_BY_DEFAULT);
 
 AntiVirusMetricsProvider::AntiVirusMetricsProvider() = default;
 

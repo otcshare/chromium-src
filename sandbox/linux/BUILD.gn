@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/features.gni")
-import("//build/config/nacl/config.gni")
 import("//sandbox/features.gni")
 import("//testing/test.gni")
 
@@ -96,9 +94,10 @@ source_set("sandbox_linux_unittests_sources") {
   deps = [
     ":sandbox",
     ":sandbox_linux_test_utils",
+    ":sandbox_services_headers",
     "//base",
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
+    "//crypto",
     "//testing/gtest",
   ]
 
@@ -128,6 +127,7 @@ source_set("sandbox_linux_unittests_sources") {
       "bpf_dsl/verifier.h",
       "integration_tests/bpf_dsl_seccomp_unittest.cc",
       "seccomp-bpf-helpers/baseline_policy_unittest.cc",
+      "seccomp-bpf-helpers/sigsys_handlers_unittest.cc",
       "seccomp-bpf-helpers/syscall_parameters_restrictions_unittests.cc",
       "seccomp-bpf/bpf_tests_unittest.cc",
       "seccomp-bpf/sandbox_bpf_unittest.cc",
@@ -168,6 +168,10 @@ source_set("sandbox_linux_unittests_sources") {
   if (use_seccomp_bpf && compile_syscall_broker) {
     sources += [ "integration_tests/seccomp_broker_process_unittest.cc" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 action("bpf_dsl_golden") {
@@ -199,7 +203,6 @@ test("sandbox_linux_unittests") {
     ":sandbox_linux_unittests_sources",
     "//sandbox/policy:tests",
   ]
-  data_deps = [ "//testing/buildbot/filters:sandbox_linux_unittests_filters" ]
   if (is_android) {
     use_raw_android_executable = true
   }
@@ -250,7 +253,6 @@ component("seccomp_bpf") {
   deps = [
     ":sandbox_services",
     "//base",
-    "//build:chromeos_buildflags",
     "//sandbox:sandbox_buildflags",
   ]
 
@@ -295,15 +297,6 @@ if (is_linux || is_chromeos) {
       "suid/process_util.h",
       "suid/process_util_linux.c",
       "suid/sandbox.c",
-    ]
-
-    cflags = [
-      # For ULLONG_MAX
-      "-std=gnu99",
-
-      # These files have a suspicious comparison.
-      # TODO fix this and re-enable this warning.
-      "-Wno-sign-compare",
     ]
   }
 }
@@ -389,6 +382,8 @@ source_set("sandbox_services_headers") {
     "system_headers/i386_linux_ucontext.h",
     "system_headers/linux_filter.h",
     "system_headers/linux_futex.h",
+    "system_headers/linux_landlock.h",
+    "system_headers/linux_memfd.h",
     "system_headers/linux_prctl.h",
     "system_headers/linux_ptrace.h",
     "system_headers/linux_seccomp.h",

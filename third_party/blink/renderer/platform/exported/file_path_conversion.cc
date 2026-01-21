@@ -4,6 +4,8 @@
 
 #include "third_party/blink/public/platform/file_path_conversion.h"
 
+#include <string_view>
+
 #include "base/files/file_path.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -17,17 +19,16 @@ base::FilePath StringToFilePath(const String& str) {
     return base::FilePath();
 
   if (!str.Is8Bit()) {
-    return base::FilePath::FromUTF16Unsafe(
-        base::StringPiece16(str.Characters16(), str.length()));
+    return base::FilePath::FromUTF16Unsafe(str.View16());
   }
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
-  StringUTF8Adaptor utf8(str);
-  return base::FilePath::FromUTF8Unsafe(utf8.AsStringPiece());
+  StringUtf8Adaptor utf8(str);
+  return base::FilePath::FromUTF8Unsafe(utf8.AsStringView());
 #else
-  const LChar* data8 = str.Characters8();
+  auto span8 = str.Span8();
   return base::FilePath::FromUTF16Unsafe(
-      std::u16string(data8, data8 + str.length()));
+      std::u16string(span8.begin(), span8.end()));
 #endif
 }
 

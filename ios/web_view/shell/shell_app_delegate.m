@@ -4,11 +4,9 @@
 
 #import "ios/web_view/shell/shell_app_delegate.h"
 
-#import "ios/web_view/shell/shell_view_controller.h"
+#import <ChromeWebView/ChromeWebView.h>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web_view/shell/shell_view_controller.h"
 
 @implementation ShellAppDelegate
 
@@ -16,6 +14,9 @@
 
 - (BOOL)application:(UIApplication*)application
     willFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
+  [[CWVGlobalState sharedInstance] earlyInit];
+  [[CWVGlobalState sharedInstance] start];
+
   // Note that initialization of the window and the root view controller must be
   // done here, not in -application:didFinishLaunchingWithOptions: when state
   // restoration is supported.
@@ -51,17 +52,40 @@
 }
 
 - (void)applicationWillTerminate:(UIApplication*)application {
+  [[CWVGlobalState sharedInstance] stop];
 }
 
 - (BOOL)application:(UIApplication*)application
-    shouldSaveApplicationState:(NSCoder*)coder {
+    shouldSaveSecureApplicationState:(NSCoder*)coder {
   return YES;
 }
 
 - (BOOL)application:(UIApplication*)application
-    shouldRestoreApplicationState:(NSCoder*)coder {
-  // TODO(crbug.com/710329): Make this value configurable in the settings.
+    shouldRestoreSecureApplicationState:(NSCoder*)coder {
   return YES;
+}
+
+- (void)application:(UIApplication*)application
+    didDecodeRestorableStateWithCoder:(NSCoder*)coder {
+}
+
+- (void)application:(UIApplication*)application
+    willEncodeRestorableStateWithCoder:(NSCoder*)coder {
+}
+
+- (UIViewController*)application:(UIApplication*)application
+    viewControllerWithRestorationIdentifierPath:
+        (NSArray<NSString*>*)identifierComponents
+                                          coder:(NSCoder*)coder {
+  const NSUInteger identifiersCount = identifierComponents.count;
+  if (identifiersCount > 0) {
+    NSString* identifier = identifierComponents[identifiersCount - 1];
+    UIViewController* rootViewController = self.window.rootViewController;
+    if ([identifier isEqualToString:rootViewController.restorationIdentifier]) {
+      return rootViewController;
+    }
+  }
+  return nil;
 }
 
 @end

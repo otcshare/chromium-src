@@ -6,7 +6,8 @@
 
 #include <memory>
 
-#include "base/memory/singleton.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/custom_handlers/chrome_protocol_handler_registry_delegate.h"
@@ -16,7 +17,23 @@
 
 // static
 ProtocolHandlerRegistryFactory* ProtocolHandlerRegistryFactory::GetInstance() {
-  return base::Singleton<ProtocolHandlerRegistryFactory>::get();
+  static base::NoDestructor<ProtocolHandlerRegistryFactory> instance;
+  return instance.get();
+}
+
+// static
+std::unique_ptr<KeyedService> BuildProtocolHandlerRegistryService(
+    content::BrowserContext* context) {
+  PrefService* prefs = user_prefs::UserPrefs::Get(context);
+  DCHECK(prefs);
+  return custom_handlers::ProtocolHandlerRegistry::Create(
+      prefs, std::make_unique<ChromeProtocolHandlerRegistryDelegate>());
+}
+
+// static
+BrowserContextKeyedServiceFactory::TestingFactory
+ProtocolHandlerRegistryFactory::GetDefaultFactory() {
+  return base::BindRepeating(&BuildProtocolHandlerRegistryService);
 }
 
 // static
@@ -31,10 +48,17 @@ ProtocolHandlerRegistryFactory::ProtocolHandlerRegistryFactory()
     : ProfileKeyedServiceFactory(
           "ProtocolHandlerRegistry",
           // Allows the produced registry to be used in incognito mode.
-          ProfileSelections::BuildRedirectedInIncognito()) {}
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {}
 
-ProtocolHandlerRegistryFactory::~ProtocolHandlerRegistryFactory() {
-}
+ProtocolHandlerRegistryFactory::~ProtocolHandlerRegistryFactory() = default;
 
 // Will be created when initializing profile_io_data, so we might
 // as well have the framework create this along with other
@@ -51,11 +75,8 @@ bool ProtocolHandlerRegistryFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
 
-KeyedService* ProtocolHandlerRegistryFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+ProtocolHandlerRegistryFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  PrefService* prefs = user_prefs::UserPrefs::Get(context);
-  DCHECK(prefs);
-  return custom_handlers::ProtocolHandlerRegistry::Create(
-             prefs, std::make_unique<ChromeProtocolHandlerRegistryDelegate>())
-      .release();
+  return BuildProtocolHandlerRegistryService(context);
 }

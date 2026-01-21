@@ -38,21 +38,6 @@ extern ContentType const ContentTypeImage;
 
 - (instancetype)init NS_UNAVAILABLE;
 
-// Returns the copied URL if the clipboard contains a recent URL that has not
-// been suppressed and will not trigger a pasteboard access notification.
-// Otherwise, returns nil.
-- (NSURL*)recentURLFromClipboard;
-
-// Returns the copied string if the clipboard contains a recent string that has
-// not been suppresed and will not trigger a pasteboard access notification.
-// Otherwise, returns nil.
-- (NSString*)recentTextFromClipboard;
-
-// Returns the copied image if the clipboard contains a recent image that has
-// not been suppressed and will not trigger a pasteboard access notification.
-// Otherwise, returns nil.
-- (UIImage*)recentImageFromClipboard;
-
 // Returns the set of content types being currently used on the clipboard; will
 // be nil if the current pasteboard contents are unknown, or if the clipboard
 // content age is expired.
@@ -64,18 +49,15 @@ extern ContentType const ContentTypeImage;
 - (void)hasContentMatchingTypes:(NSSet<ContentType>*)types
               completionHandler:
                   (void (^)(NSSet<ContentType>*))completionHandler;
-// Uses the new iOS 14 pasteboard detection pattern API to asynchronously get a
-// copied URL from the clipboard if it has not been suppressed. Passes nil to
-// the callback otherwise.
-- (void)recentURLFromClipboardAsync:(void (^)(NSURL*))callback;
-// Uses the new iOS 14 pasteboard detection pattern API to asynchronously get a
-// copied string from the clipboard if it has not been suppressed. Passes nil to
-// the callback otherwise.
-- (void)recentTextFromClipboardAsync:(void (^)(NSString*))callback;
+// Asynchronously gets a copied URL from the clipboard if it has not been
+// suppressed. Passes nil to the callback otherwise.
+- (void)recentURLFromClipboard:(void (^)(NSURL*))callback;
+// Asynchronously gets a copied string from the clipboard if it has not been
+// suppressed. Passes nil to the callback otherwise.
+- (void)recentTextFromClipboard:(void (^)(NSString*))callback;
 // Asynchronously gets an image from the clipboard if is has not been
-// suppressed. Passes nil to the callback otherwise. This does not actually use
-// any iOS 14 APIs and could be done synchronously, but is here for consistency.
-- (void)recentImageFromClipboardAsync:(void (^)(UIImage*))callback;
+// suppressed. Passes nil to the callback otherwise.
+- (void)recentImageFromClipboard:(void (^)(UIImage*))callback;
 
 // Returns how old the content of the clipboard is.
 - (NSTimeInterval)clipboardContentAge;

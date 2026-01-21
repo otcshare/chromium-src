@@ -9,7 +9,6 @@ const fileSystemHelpers = requireNative('file_system_natives');
 const entryIdManager = require('entryIdManager');
 
 const GetExternalFileEntry = fileBrowserNatives.GetExternalFileEntry;
-const fileBrowserHandlerInternal = getInternalApi('fileBrowserHandlerInternal');
 const GetIsolatedFileSystem = fileSystemHelpers.GetIsolatedFileSystem;
 
 /**
@@ -35,12 +34,15 @@ function GetFileEntry(resolve, reject, canCreate, item) {
     // here, and require handling.
     const fs = GetIsolatedFileSystem(item.fileSystemId);
     if (item.isDirectory) {
-      fs.root.getDirectory(item.baseName, {}, (dirEntry) => {
-        entryIdManager.registerEntry(item.entryId, dirEntry);
-        resolve(dirEntry);
-      }, (err) => {
-        reject(err.message);
-      });
+      fs.root.getDirectory(
+          item.baseName, {},
+          (dirEntry) => {
+            entryIdManager.registerEntry(item.entryId, dirEntry);
+            resolve(dirEntry);
+          },
+          (err) => {
+            reject(err.message);
+          });
     } else {
       fs.root.getFile(
           item.baseName, canCreate ? {create: true} : {},
@@ -57,74 +59,44 @@ function GetFileEntry(resolve, reject, canCreate, item) {
   }
 }
 
-bindingUtil.registerEventArgumentMassager('fileBrowserHandler.onExecute',
-                                          function(args, dispatch) {
-  if (args.length < 2) {
-    dispatch(args);
-    return;
-  }
-  // The second param for this event's payload is file definition dictionary.
-  const fileList = args[1].entries;
-  if (!fileList) {
-    dispatch(args);
-    return;
-  }
-
-  // Construct File API's Entry instances. $Promise.allSettled() is unavailable,
-  // so use a |barrier| counter and explicitly sort results.
-  const results = [];
-  let barrier = fileList.length;
-  const onFinish = () => {
-    results.sort((a, b) => a.key - b.key);
-    args[1].entries = $Array.map(results, item => item.entry);
-    dispatch(args);
-  };
-  const onResolve = (index, entry) => {
-    results.push({key: index, entry});
-    if (--barrier === 0) onFinish();
-  };
-  const onReject = (message) => {
-    console.error(message);
-    if (--barrier === 0) onFinish();
-  };
-  for (let i = 0; i < fileList.length; ++i) {
-    GetFileEntry(
-        onResolve.bind(null, i), onReject,
-        /*canCreate*/ false, /*item*/ fileList[i]);
-  }
-});
-
-apiBridge.registerCustomHook(function(bindingsAPI) {
-  var apiFunctions = bindingsAPI.apiFunctions;
-
-  apiFunctions.setHandleRequest('selectFile',
-                                function(selectionParams, callback) {
-    function internalCallback(externalCallback, internalResult) {
-      if (!externalCallback)
+bindingUtil.registerEventArgumentMassager(
+    'fileBrowserHandler.onExecute', function(args, dispatch) {
+      if (args.length < 2) {
+        dispatch(args);
         return;
-      let result = undefined;
-      if (internalResult) {
-        result = { success: internalResult.success, entry: null };
-        if (internalResult.success) {
-          GetFileEntry(
-              (fileEntry) => {
-                result.entry = fileEntry;
-                externalCallback(result);
-              },
-              (message) => {
-                result.success = false;
-                result.entry = null;
-                externalCallback(result);
-              },
-              /*canCreate*/ true,
-              /*item*/ internalResult.entry || internalResult.entryForGetFile);
-          return;
-        }
       }
-      externalCallback(result);
-    }
+      // The second param for this event's payload is file definition
+      // dictionary.
+      const fileList = args[1].entries;
+      if (!fileList) {
+        dispatch(args);
+        return;
+      }
 
-    return fileBrowserHandlerInternal.selectFile(
-        selectionParams, $Function.bind(internalCallback, null, callback));
-  });
-});
+      // Construct File API's Entry instances. $Promise.allSettled() is
+      // unavailable, so use a |barrier| counter and explicitly sort results.
+      const results = [];
+      let barrier = fileList.length;
+      const onFinish = () => {
+        results.sort((a, b) => a.key - b.key);
+        args[1].entries = $Array.map(results, item => item.entry);
+        dispatch(args);
+      };
+      const onResolve = (index, entry) => {
+        results.push({key: index, entry});
+        if (--barrier === 0) {
+          onFinish();
+        }
+      };
+      const onReject = (message) => {
+        console.error(message);
+        if (--barrier === 0) {
+          onFinish();
+        }
+      };
+      for (let i = 0; i < fileList.length; ++i) {
+        GetFileEntry(
+            onResolve.bind(null, i), onReject,
+            /*canCreate*/ false, /*item*/ fileList[i]);
+      }
+    });

@@ -4,8 +4,8 @@
 
 #include "components/app_restore/arc_save_handler.h"
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "components/app_restore/app_launch_info.h"
 #include "components/app_restore/app_restore_info.h"
 #include "components/app_restore/app_restore_utils.h"
@@ -38,7 +38,7 @@ void ArcSaveHandler::SaveAppLaunchInfo(AppLaunchInfoPtr app_launch_info) {
 
   // If the ghost window has been created for `session_id`, and the launch info
   // hasn't been added yet, add `app_launch_info` to the restore data.
-  if (base::Contains(ghost_window_session_id_to_app_id_, session_id)) {
+  if (ghost_window_session_id_to_app_id_.contains(session_id)) {
     if (!FullRestoreSaveHandler::GetInstance()->HasAppRestoreData(
             profile_path_, app_launch_info->app_id, session_id)) {
       app_launch_info->window_id = session_id;
@@ -47,7 +47,7 @@ void ArcSaveHandler::SaveAppLaunchInfo(AppLaunchInfoPtr app_launch_info) {
 
       // Go through `arc_window_candidates_`. If the window for `session_id` has
       // been created, call OnAppLaunched to save the window info.
-      auto window_it = base::ranges::find(
+      auto window_it = std::ranges::find(
           arc_window_candidates_, session_id, [](aura::Window* window) {
             return window->GetProperty(app_restore::kGhostWindowSessionIdKey);
           });
@@ -90,7 +90,7 @@ void ArcSaveHandler::ModifyWindowInfo(
 
 void ArcSaveHandler::OnWindowInitialized(aura::Window* window) {
   int32_t task_id = window->GetProperty(app_restore::kWindowIdKey);
-  if (!base::Contains(task_id_to_app_id_, task_id)) {
+  if (!task_id_to_app_id_.contains(task_id)) {
     // Check `session_id` to see whether this is a ghost window.
     int32_t session_id =
         window->GetProperty(app_restore::kGhostWindowSessionIdKey);
@@ -176,14 +176,13 @@ void ArcSaveHandler::OnTaskCreated(const std::string& app_id,
     // `task_id`.
     FullRestoreSaveHandler::GetInstance()->ModifyWindowId(
         profile_path_, session_it->second, session_id, task_id);
+    task_id_to_app_id_[task_id] = session_it->second;
     ghost_window_session_id_to_app_id_.erase(session_it);
-    task_id_to_app_id_[task_id] = app_id;
     return;
   }
 
-  task_id_to_app_id_[task_id] = app_id;
-
   auto app_launch_info = std::move(it->second.first);
+  task_id_to_app_id_[task_id] = app_launch_info->app_id;
   session_id_to_app_launch_info_.erase(it);
   if (session_id_to_app_launch_info_.empty())
     check_timer_.Stop();
@@ -194,7 +193,7 @@ void ArcSaveHandler::OnTaskCreated(const std::string& app_id,
 
   // Go through |arc_window_candidates_|. If the window for |task_id| has been
   // created, call OnAppLaunched to save the window info.
-  auto window_it = base::ranges::find(
+  auto window_it = std::ranges::find(
       arc_window_candidates_, task_id, [](aura::Window* window) {
         return window->GetProperty(app_restore::kWindowIdKey);
       });

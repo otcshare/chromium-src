@@ -31,16 +31,26 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
 #include "third_party/blink/renderer/core/loader/resource/xsl_style_sheet_resource.h"
+#include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
 #include "third_party/blink/renderer/core/xml/document_xslt.h"
 #include "third_party/blink/renderer/core/xml/parser/xml_document_parser.h"  // for parseAttributes()
+#include "third_party/blink/renderer/core/xml/parser/xml_document_parser_rs.h"  // for parseAttributesRust()
 #include "third_party/blink/renderer/core/xml/xsl_style_sheet.h"
+#include "third_party/blink/renderer/core/xml/xslt_processor.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
-
 namespace blink {
+
+namespace {
+
+bool IsLocalSheet(const String& href) {
+  return href.length() > 1 && href[0] == '#';
+}
+
+}  // namespace
 
 ProcessingInstruction::ProcessingInstruction(Document& document,
                                              const String& target,
@@ -54,6 +64,11 @@ ProcessingInstruction::ProcessingInstruction(Document& document,
       listener_for_xslt_(nullptr) {}
 
 ProcessingInstruction::~ProcessingInstruction() = default;
+
+bool ProcessingInstruction::IsXSL() const {
+  CHECK(!is_xsl_ || XSLTProcessor::XSLTEnabled());
+  return is_xsl_;
+}
 
 EventListener* ProcessingInstruction::EventListenerForXSLT() {
   if (!listener_for_xslt_)
@@ -73,12 +88,11 @@ String ProcessingInstruction::nodeName() const {
   return target_;
 }
 
-Node* ProcessingInstruction::Clone(Document& factory, CloneChildrenFlag) const {
-  DCHECK(absl::holds_alternative<String>(data_));
+CharacterData* ProcessingInstruction::CloneWithData(Document& factory,
+                                                    const String& data) const {
   // FIXME: Is it a problem that this does not copy local_href_?
   // What about other data members?
-  return MakeGarbageCollected<ProcessingInstruction>(factory, target_,
-                                                     absl::get<String>(data_));
+  return MakeGarbageCollected<ProcessingInstruction>(factory, target_, data);
 }
 
 void ProcessingInstruction::DidAttributeChanged() {
@@ -100,13 +114,16 @@ bool ProcessingInstruction::CheckStyleSheet(String& href, String& charset) {
       parentNode() != GetDocument())
     return false;
 
-  DCHECK(absl::holds_alternative<String>(data_));
   // see http://www.w3.org/TR/xml-stylesheet/
   // ### support stylesheet included in a fragment of this (or another) document
   // ### make sure this gets called when adding from javascript
   bool attrs_ok;
-  const HashMap<String, String> attrs =
-      ParseAttributes(absl::get<String>(data_), attrs_ok);
+  HashMap<String, String> attrs;
+  if (RuntimeEnabledFeatures::XMLParsingRustEnabled()) {
+    attrs = ParseAttributesRust(data_, attrs_ok);
+  } else {
+    attrs = ParseAttributes(data_, attrs_ok);
+  }
   if (!attrs_ok)
     return false;
   HashMap<String, String>::const_iterator i = attrs.find("type");
@@ -121,8 +138,22 @@ bool ProcessingInstruction::CheckStyleSheet(String& href, String& charset) {
   if (!is_css_ && !is_xsl_)
     return false;
 
+  if (is_xsl_ && !XSLTProcessor::XSLTEnabled()) {
+    XSLTProcessor::ReportXSLTDisabled(GetDocument(),
+                                      /*exception_state*/ nullptr);
+    is_xsl_ = false;
+    return false;
+  }
+
   auto it_href = attrs.find("href");
   href = it_href != attrs.end() ? it_href->value : "";
+
+  // Disallow "external" XSLT stylesheets in SVG documents in image contexts.
+  if (is_xsl_ && SVGImage::IsInSVGImage(this) && !IsLocalSheet(href)) {
+    is_xsl_ = false;
+    return false;
+  }
+
   auto it_charset = attrs.find("charset");
   charset = it_charset != attrs.end() ? it_charset->value : "";
   auto it_alternate = attrs.find("alternate");
@@ -137,7 +168,7 @@ bool ProcessingInstruction::CheckStyleSheet(String& href, String& charset) {
 }
 
 void ProcessingInstruction::Process(const String& href, const String& charset) {
-  if (href.length() > 1 && href[0] == '#') {
+  if (IsLocalSheet(href)) {
     local_href_ = href.Substring(1);
     // We need to make a synthetic XSLStyleSheet that is embedded.
     // It needs to be able to kick off import/include loads that
@@ -165,7 +196,7 @@ void ProcessingInstruction::Process(const String& href, const String& charset) {
     XSLStyleSheetResource::Fetch(params, GetDocument().Fetcher(), this);
   } else {
     params.SetCharset(charset.empty() ? GetDocument().Encoding()
-                                      : WTF::TextEncoding(charset));
+                                      : TextEncoding(charset));
     GetDocument().GetStyleEngine().AddPendingBlockingSheet(
         *this, PendingSheetType::kBlocking);
     CSSStyleSheetResource::Fetch(params, GetDocument().Fetcher(), this);

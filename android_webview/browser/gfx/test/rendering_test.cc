@@ -11,8 +11,8 @@
 #include "android_webview/browser/gfx/child_frame.h"
 #include "android_webview/browser/gfx/gpu_service_webview.h"
 #include "android_webview/browser/gfx/render_thread_manager.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -32,8 +32,9 @@ class TestBrowserViewRenderer : public BrowserViewRenderer {
  public:
   TestBrowserViewRenderer(
       RenderingTest* rendering_test,
-      const scoped_refptr<base::SingleThreadTaskRunner>& ui_task_runner)
-      : BrowserViewRenderer(rendering_test, ui_task_runner),
+      const scoped_refptr<base::SingleThreadTaskRunner>& ui_task_runner,
+      const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner)
+      : BrowserViewRenderer(rendering_test, ui_task_runner, io_task_runner),
         rendering_test_(rendering_test) {}
 
   ~TestBrowserViewRenderer() override {}
@@ -69,7 +70,8 @@ void RenderingTest::SetUpTestHarness() {
   DCHECK(!browser_view_renderer_.get());
   DCHECK(!functor_.get());
   browser_view_renderer_ = std::make_unique<TestBrowserViewRenderer>(
-      this, base::SingleThreadTaskRunner::GetCurrentDefault());
+      this, base::SingleThreadTaskRunner::GetCurrentDefault(),
+      base::SingleThreadTaskRunner::GetCurrentDefault());
   browser_view_renderer_->SetActiveFrameSinkId(viz::FrameSinkId(1, 0));
   browser_view_renderer_->SetDipScale(1.0f);
   InitializeCompositor();
@@ -132,7 +134,9 @@ std::unique_ptr<viz::CompositorFrame> RenderingTest::ConstructEmptyFrame() {
 std::unique_ptr<viz::CompositorFrame> RenderingTest::ConstructFrame(
     viz::ResourceId resource_id) {
   std::unique_ptr<viz::CompositorFrame> compositor_frame(ConstructEmptyFrame());
-  viz::TransferableResource resource;
+  viz::TransferableResource resource = viz::TransferableResource::Make(
+      gpu::ClientSharedImage::CreateForTesting(),
+      viz::TransferableResource::ResourceSource::kTest, gpu::SyncToken());
   resource.id = resource_id;
   compositor_frame->resource_list.push_back(resource);
   return compositor_frame;

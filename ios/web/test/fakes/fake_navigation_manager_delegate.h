@@ -5,6 +5,7 @@
 #ifndef IOS_WEB_TEST_FAKES_FAKE_NAVIGATION_MANAGER_DELEGATE_H_
 #define IOS_WEB_TEST_FAKES_FAKE_NAVIGATION_MANAGER_DELEGATE_H_
 
+#import "base/memory/raw_ptr.h"
 #import "ios/web/navigation/navigation_manager_delegate.h"
 
 @protocol CRWWebViewNavigationProxy;
@@ -24,10 +25,13 @@ class FakeNavigationManagerDelegate : public NavigationManagerDelegate {
   id<CRWWebViewNavigationProxy> GetWebViewNavigationProxy() const override;
   void GoToBackForwardListItem(WKBackForwardListItem* wk_item,
                                NavigationItem* item,
-                               NavigationInitiationType type,
+                               BackForwardNavigationType navigation_type,
+                               NavigationInitiationType initiation_type,
                                bool has_user_gesture) override;
   void RemoveWebView() override;
   NavigationItemImpl* GetPendingItem() override;
+  GURL GetCurrentURL() const override;
+  void UpdateSSLStatusForCurrentNavigationItem() override;
 
   // Setters for tests to inject dependencies.
   void SetWebViewNavigationProxy(id test_web_view);
@@ -35,7 +39,7 @@ class FakeNavigationManagerDelegate : public NavigationManagerDelegate {
 
  private:
   id test_web_view_;
-  WebState* web_state_ = nullptr;
+  raw_ptr<WebState> web_state_ = nullptr;
 };
 
 }  // namespace web

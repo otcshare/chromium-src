@@ -45,6 +45,7 @@
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 
 namespace blink {
@@ -80,7 +81,6 @@ class MutationObserverAgentData
   void Trace(Visitor* visitor) const override {
     Supplement<Agent>::Trace(visitor);
     visitor->Trace(active_mutation_observers_);
-    visitor->Trace(suspended_mutation_observers_);
     visitor->Trace(active_slot_change_list_);
   }
 
@@ -104,13 +104,17 @@ class MutationObserverAgentData
     active_mutation_observers_.insert(observer);
   }
 
+  void ClearActiveObserver(MutationObserver* observer) {
+    active_mutation_observers_.erase(observer);
+  }
+
  private:
   void EnsureEnqueueMicrotask() {
     if (active_mutation_observers_.empty() &&
         active_slot_change_list_.empty()) {
       GetSupplementable()->event_loop()->EnqueueMicrotask(
-          WTF::BindOnce(&MutationObserverAgentData::DeliverMutations,
-                        WrapWeakPersistent(this)));
+          BindOnce(&MutationObserverAgentData::DeliverMutations,
+                   WrapWeakPersistent(this)));
     }
   }
 
@@ -135,7 +139,6 @@ class MutationObserverAgentData
  private:
   // For MutationObserver.
   MutationObserverSet active_mutation_observers_;
-  MutationObserverSet suspended_mutation_observers_;
   SlotChangeList active_slot_change_list_;
 };
 
@@ -189,7 +192,8 @@ MutationObserver* MutationObserver::Create(ScriptState* script_state,
 
 MutationObserver::MutationObserver(ExecutionContext* execution_context,
                                    Delegate* delegate)
-    : ExecutionContextLifecycleStateObserver(execution_context),
+    : ActiveScriptWrappable<MutationObserver>({}),
+      ExecutionContextLifecycleStateObserver(execution_context),
       delegate_(delegate) {
   priority_ = g_observer_priority++;
   UpdateStateIfNeeded();
@@ -324,10 +328,12 @@ static void ActivateObserver(MutationObserver* observer) {
 
 void MutationObserver::EnqueueMutationRecord(MutationRecord* mutation) {
   DCHECK(IsMainThread());
+  if (records_.empty()) {
+    async_task_context_.Schedule(delegate_->GetExecutionContext(),
+                                 mutation->type());
+  }
   records_.push_back(mutation);
   ActivateObserver(this);
-  mutation->async_task_context()->Schedule(delegate_->GetExecutionContext(),
-                                           mutation->type());
 }
 
 void MutationObserver::SetHasTransientRegistration() {
@@ -348,10 +354,18 @@ void MutationObserver::ContextLifecycleStateChanged(
     ActivateObserver(this);
 }
 
+void MutationObserver::ContextDestroyed() {
+  // The 'DeliverMutations' micro task is *not* guaranteed to run.
+  // It's necessary to clear out this observer from the list of active observers
+  // in case the MutationObserverAgentData is reused across navigations.
+  // Otherwise no MutationObserver for the agent can fire again.
+  DCHECK(GetExecutionContext());
+  MutationObserverAgentData::From(*GetExecutionContext()->GetAgent())
+      .ClearActiveObserver(this);
+}
+
 void MutationObserver::CancelInspectorAsyncTasks() {
-  for (auto& record : records_) {
-    record->async_task_context()->Cancel();
-  }
+  async_task_context_.Cancel();
 }
 
 void MutationObserver::Deliver() {
@@ -377,7 +391,7 @@ void MutationObserver::Deliver() {
 
   // Report the first (earliest) stack as the async cause.
   probe::AsyncTask async_task(delegate_->GetExecutionContext(),
-                              records.front()->async_task_context());
+                              &async_task_context_);
   delegate_->Deliver(records, *this);
 }
 

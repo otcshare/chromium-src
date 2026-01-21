@@ -4,54 +4,22 @@
 
 package org.chromium.chrome.browser.tab.state;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 
-import java.util.HashMap;
-import java.util.Map;
-
-/**
- * Creates {@link LevelDBPersistedTabDataStorage} instances per profile
- */
+/** Creates {@link LevelDBPersistedTabDataStorage} instances per profile */
+@NullMarked
 public class LevelDBPersistedTabDataStorageFactory
         implements PersistedTabDataStorageFactory<LevelDBPersistedTabDataStorage> {
-    public static final Map<Profile, LevelDBPersistedTabDataStorage> sProfileToLevelDBStorageMap =
-            new HashMap<>();
-    private static ProfileManager.Observer sProfileManagerObserver;
-
-    LevelDBPersistedTabDataStorageFactory() {
-        if (sProfileManagerObserver == null) {
-            sProfileManagerObserver = new ProfileManager.Observer() {
-                @Override
-                public void onProfileAdded(Profile profile) {}
-
-                @Override
-                public void onProfileDestroyed(Profile destroyedProfile) {
-                    LevelDBPersistedTabDataStorage storageToDestroy =
-                            sProfileToLevelDBStorageMap.get(destroyedProfile);
-                    if (storageToDestroy != null) {
-                        storageToDestroy.destroy();
-                        sProfileToLevelDBStorageMap.remove(destroyedProfile);
-                    }
-
-                    if (sProfileToLevelDBStorageMap.isEmpty()) {
-                        ProfileManager.removeObserver(sProfileManagerObserver);
-                        sProfileManagerObserver = null;
-                    }
-                }
-            };
-            ProfileManager.addObserver(sProfileManagerObserver);
-        }
-    }
+    private static final ProfileKeyedMap<LevelDBPersistedTabDataStorage>
+            sProfileToLevelDBStorageMap = ProfileKeyedMap.createMapOfDestroyables();
 
     @Override
     public LevelDBPersistedTabDataStorage create() {
-        Profile profile = Profile.getLastUsedRegularProfile();
-        LevelDBPersistedTabDataStorage storage = sProfileToLevelDBStorageMap.get(profile);
-        if (storage == null) {
-            storage = new LevelDBPersistedTabDataStorage(profile);
-            sProfileToLevelDBStorageMap.put(profile, storage);
-        }
-        return storage;
+        Profile profile = ProfileManager.getLastUsedRegularProfile();
+        return sProfileToLevelDBStorageMap.getForProfile(
+                profile, LevelDBPersistedTabDataStorage::new);
     }
 }

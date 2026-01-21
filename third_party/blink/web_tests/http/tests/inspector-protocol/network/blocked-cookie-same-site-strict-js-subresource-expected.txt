@@ -1,6 +1,6 @@
 Verifies that making cross origin fetch requests with SameSite=Strict cookies sends us Network.RequestWillBeSentExtraInfo events with corresponding blocked cookies.
 
-Javascript initiated subresource blocked cookies:}[
+Javascript initiated subresource blocked cookies:} [
     [0] : {
         blockedReasons : [
             [0] : SameSiteStrict
@@ -12,7 +12,6 @@ Javascript initiated subresource blocked cookies:}[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             sameSite : Strict
             secure : false
             session : true
@@ -21,6 +20,7 @@ Javascript initiated subresource blocked cookies:}[
             sourceScheme : Secure
             value : value
         }
+        exemptionReason : None
     }
 ]
 

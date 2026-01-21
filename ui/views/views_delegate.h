@@ -15,12 +15,16 @@
 #include <windows.h>
 #endif
 
-#include "base/callback.h"
-#include "ui/base/ui_base_types.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/functional/callback.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/buildflags.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
+
+#if defined(USE_AURA)
+#include "ui/views/accessibility/tree/browser_views_ax_manager.h"
+#endif
 
 namespace gfx {
 class ImageSkia;
@@ -31,13 +35,12 @@ namespace ui {
 #if BUILDFLAG(IS_MAC)
 class ContextFactory;
 #endif
-class TouchEditingControllerFactory;
 }  // namespace ui
 
 namespace views {
 
 class NativeWidget;
-class NonClientFrameView;
+class FrameView;
 class Widget;
 
 #if defined(USE_AURA)
@@ -102,14 +105,15 @@ class VIEWS_EXPORT ViewsDelegate {
   virtual void SaveWindowPlacement(const Widget* widget,
                                    const std::string& window_name,
                                    const gfx::Rect& bounds,
-                                   ui::WindowShowState show_state);
+                                   ui::mojom::WindowShowState show_state);
 
   // Retrieves the saved position and size and "show" state for the window with
   // the specified name.
-  virtual bool GetSavedWindowPlacement(const Widget* widget,
-                                       const std::string& window_name,
-                                       gfx::Rect* bounds,
-                                       ui::WindowShowState* show_state) const;
+  virtual bool GetSavedWindowPlacement(
+      const Widget* widget,
+      const std::string& window_name,
+      gfx::Rect* bounds,
+      ui::mojom::WindowShowState* show_state) const;
 
   // For accessibility, notify the delegate that a menu item was focused
   // so that alternate feedback (speech / magnified text) can be provided.
@@ -143,11 +147,12 @@ class VIEWS_EXPORT ViewsDelegate {
   virtual gfx::ImageSkia* GetDefaultWindowIcon() const;
 #endif
 
-  // Creates a default NonClientFrameView to be used for windows that don't
-  // specify their own. If this function returns NULL, the
-  // views::CustomFrameView type will be used.
-  virtual std::unique_ptr<NonClientFrameView> CreateDefaultNonClientFrameView(
-      Widget* widget);
+  // Creates a default FrameView to be used for windows that don't
+  // specify their own and where no platform frame view is specified.
+  //
+  // Defaults to `DefaultFrameView`. This method should never return null, as a
+  // fallback is needed on all platforms.
+  virtual std::unique_ptr<FrameView> CreateDefaultFrameView(Widget* widget);
 
   // AddRef/ReleaseRef are invoked while a menu is visible. They are used to
   // ensure we don't attempt to exit while a menu is showing.
@@ -166,6 +171,8 @@ class VIEWS_EXPORT ViewsDelegate {
   // |remove_standard_frame| in InitParams). If |maximized|, this applies to
   // maximized windows; otherwise to restored windows.
   virtual bool WindowManagerProvidesTitleBar(bool maximized);
+
+  void InitializeViewsAXManager();
 
 #if BUILDFLAG(IS_MAC)
   // Returns the context factory for new windows.
@@ -195,11 +202,10 @@ class VIEWS_EXPORT ViewsDelegate {
 #endif
 
  private:
-  std::unique_ptr<ui::TouchEditingControllerFactory>
-      editing_controller_factory_;
-
 #if defined(USE_AURA)
   std::unique_ptr<TouchSelectionMenuRunnerViews> touch_selection_menu_runner_;
+  std::unique_ptr<views::BrowserViewsAXManager::LifetimeHandle>
+      browser_views_ax_manager_handle_;
 #endif
 
   NativeWidgetFactory native_widget_factory_;

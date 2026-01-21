@@ -31,20 +31,20 @@ class TestAppListController : public ash::AppListController {
   ash::AppListClient* GetClient() override;
   void AddObserver(ash::AppListControllerObserver* observer) override;
   void RemoveObserver(ash::AppListControllerObserver* obsever) override;
-  void SetActiveModel(int profile_id,
-                      ash::AppListModel* model,
-                      ash::SearchModel* search_model) override {}
+  void SetActiveModel(
+      int profile_id,
+      ash::AppListModel* model,
+      ash::SearchModel* search_model,
+      ash::QuickAppAccessModel* quick_app_access_model) override {}
   void ClearActiveModel() override {}
   void ShowAppList(ash::AppListShowSource source) override;
   ash::AppListShowSource LastAppListShowSource() override;
   void DismissAppList() override;
-  void GetAppInfoDialogBounds(
-      GetAppInfoDialogBoundsCallback callback) override {}
   aura::Window* GetWindow() override;
-  bool IsVisible(const absl::optional<int64_t>& display_id) override;
+  bool IsVisible(const std::optional<int64_t>& display_id) override;
   bool IsVisible() override;
   void UpdateAppListWithNewTemporarySortOrder(
-      const absl::optional<ash::AppListSortOrder>& new_order,
+      const std::optional<ash::AppListSortOrder>& new_order,
       bool animate,
       base::OnceClosure update_position_closure) override;
 
@@ -55,7 +55,7 @@ class TestAppListController : public ash::AppListController {
   bool visible_ = false;
 
   // Tracks the most recent show source for the app list.
-  absl::optional<ash::AppListShowSource> last_open_source_;
+  std::optional<ash::AppListShowSource> last_open_source_;
 
   base::ObserverList<ash::AppListControllerObserver> observers_;
 };

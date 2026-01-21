@@ -10,9 +10,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
@@ -26,7 +27,6 @@
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
-#include "ipc/ipc_message.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
@@ -91,7 +91,6 @@ class WtsSessionProcessDelegate::Core
                      DWORD error) override;
 
   // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnChannelConnected(int32_t peer_pid) override;
   void OnChannelError() override;
   void OnAssociatedInterfaceRequest(
@@ -195,7 +194,7 @@ bool WtsSessionProcessDelegate::Core::Initialize(uint32_t session_id) {
 
     ScopedHandle job;
     job.Set(CreateJobObject(nullptr, nullptr));
-    if (!job.IsValid()) {
+    if (!job.is_valid()) {
       PLOG(ERROR) << "Failed to create a job object";
       return false;
     }
@@ -204,14 +203,12 @@ bool WtsSessionProcessDelegate::Core::Initialize(uint32_t session_id) {
     // process performing elevation and the worker process itself) and make sure
     // that all processes will be killed once the job object is destroyed.
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
-    memset(&info, 0, sizeof(info));
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    UNSAFE_TODO(memset(&info, 0, sizeof(info)));
+    info.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     info.BasicLimitInformation.ActiveProcessLimit = 2;
-    if (!SetInformationJobObject(job.Get(),
-                                 JobObjectExtendedLimitInformation,
-                                 &info,
-                                 sizeof(info))) {
+    if (!SetInformationJobObject(job.Get(), JobObjectExtendedLimitInformation,
+                                 &info, sizeof(info))) {
       PLOG(ERROR) << "Failed to set limits on the job object";
       return false;
     }
@@ -286,11 +283,11 @@ void WtsSessionProcessDelegate::Core::KillProcess() {
   launch_pending_ = false;
 
   if (launch_elevated_) {
-    if (job_.IsValid()) {
+    if (job_.is_valid()) {
       TerminateJobObject(job_.Get(), CONTROL_C_EXIT);
     }
   } else {
-    if (worker_process_.IsValid()) {
+    if (worker_process_.is_valid()) {
       TerminateProcess(worker_process_.Get(), CONTROL_C_EXIT);
     }
   }
@@ -301,7 +298,7 @@ void WtsSessionProcessDelegate::Core::KillProcess() {
 WtsSessionProcessDelegate::Core::~Core() {
   DCHECK(!channel_);
   DCHECK(!event_handler_);
-  DCHECK(!worker_process_.IsValid());
+  DCHECK(!worker_process_.is_valid());
 }
 
 void WtsSessionProcessDelegate::Core::OnIOCompleted(
@@ -358,20 +355,14 @@ void WtsSessionProcessDelegate::Core::OnIOCompleted(
   }
 }
 
-bool WtsSessionProcessDelegate::Core::OnMessageReceived(
-    const IPC::Message& message) {
-  DCHECK(caller_task_runner_->BelongsToCurrentThread());
-  NOTREACHED() << "Received unexpected IPC type: " << message.type();
-  return false;
-}
-
 void WtsSessionProcessDelegate::Core::OnChannelConnected(int32_t peer_pid) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   channel_->GetRemoteAssociatedInterface(&worker_process_control_);
 
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnChannelConnected(peer_pid);
+  }
 }
 
 void WtsSessionProcessDelegate::Core::OnChannelError() {
@@ -392,12 +383,12 @@ void WtsSessionProcessDelegate::Core::OnAssociatedInterfaceRequest(
 void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
   DCHECK(!channel_);
-  DCHECK(!worker_process_.IsValid());
+  DCHECK(!worker_process_.is_valid());
 
   base::CommandLine command_line(target_command_->argv());
   if (launch_elevated_) {
     // The job object is not ready. Retry starting the host process later.
-    if (!job_.IsValid()) {
+    if (!job_.is_valid()) {
       launch_pending_ = true;
       return;
     }
@@ -417,7 +408,7 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
   }
 
   std::string mojo_pipe_token = base::NumberToString(base::RandUint64());
-  std::unique_ptr<IPC::ChannelProxy> channel = IPC::ChannelProxy::Create(
+  channel_ = IPC::ChannelProxy::Create(
       mojo_invitation_.AttachMessagePipe(mojo_pipe_token).release(),
       IPC::Channel::MODE_SERVER, this, io_task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
@@ -467,8 +458,6 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
     return;
   }
 
-  channel_ = std::move(channel);
-
   if (launch_elevated_) {
     // When launching an elevated worker process, an intermediate launcher
     // process launches the worker process. Reporting the launch waits until the
@@ -498,7 +487,7 @@ void WtsSessionProcessDelegate::Core::DrainJobNotifications() {
 void WtsSessionProcessDelegate::Core::DrainJobNotificationsCompleted() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
-  if (job_.IsValid()) {
+  if (job_.is_valid()) {
     job_.Close();
 
     // Drain the completion queue to make sure all job object notification have
@@ -525,7 +514,7 @@ void WtsSessionProcessDelegate::Core::InitializeJob(ScopedHandle job) {
 
 void WtsSessionProcessDelegate::Core::InitializeJobCompleted(ScopedHandle job) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
-  DCHECK(!job_.IsValid());
+  DCHECK(!job_.is_valid());
 
   job_ = std::move(job);
 
@@ -557,7 +546,7 @@ void WtsSessionProcessDelegate::Core::OnProcessLaunchDetected(
       SYNCHRONIZE | PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION;
   base::win::ScopedHandle worker_process(
       OpenProcess(desired_access, false, pid));
-  if (!worker_process.IsValid()) {
+  if (!worker_process.is_valid()) {
     PLOG(ERROR) << "Failed to open process " << pid;
     ReportFatalError();
     return;
@@ -582,7 +571,7 @@ void WtsSessionProcessDelegate::Core::ReportFatalError() {
 void WtsSessionProcessDelegate::Core::ReportProcessLaunched(
     base::win::ScopedHandle worker_process) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
-  DCHECK(!worker_process_.IsValid());
+  DCHECK(!worker_process_.is_valid());
 
   worker_process_ = std::move(worker_process);
 

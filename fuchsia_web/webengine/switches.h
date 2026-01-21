@@ -30,23 +30,11 @@ extern const char kEnableRemoteDebugMode[];
 // Specifies a custom UserAgent product & version to use.
 extern const char kUserAgentProductAndVersion[];
 
-#if BUILDFLAG(ENABLE_CAST_RECEIVER)
-// By default, an HTTPS page cannot run JavaScript, CSS or resources from HTTP
-// URLs. This provides an override to get the old insecure behavior.
-// TODO(crbug.com/1023514): Remove this switch when it is no longer
-// necessary.
-extern const char kAllowRunningInsecureContent[];
-
-// Enables use of the fuchsia.legacymetrics.MetricsRecorder service for
-// telemetry.
-extern const char kUseLegacyMetricsService[];
-#endif
-
 // Specifies a comma-separated list of HTTP headers to exempt from CORS checks.
 extern const char kCorsExemptHeaders[];
 
 // Enables the Cast Streaming Receiver.
-// TODO(crbug.com/1078919): Consider removing this flag when we have a better
+// TODO(crbug.com/40129708): Consider removing this flag when we have a better
 // way of enabling this feature.
 extern const char kEnableCastStreamingReceiver[];
 
@@ -65,9 +53,27 @@ extern const char kGoogleApiKey[];
 // Used to tell the WebEngine executable to run the ContextProvider service.
 extern const char kContextProvider[];
 
-// Used to tell the WebEngine executable that it is being run via a .cm
-// manifest.
-extern const char kEnableCfv2[];
+// Equivalent to Chrome's --proxy-bypass-list switch.
+extern const char kProxyBypassList[];
+
+// Uses a specified proxy server, overrides system settings.
+extern const char kProxyServer[];
+
+// A list of comma-separated ContentSettingsPattern's to match the scope of
+// ServiceWorkers which are protected and never deleted.
+extern const char kProtectedServiceWorkers[];
+
+#if BUILDFLAG(ENABLE_CAST_RECEIVER)
+// By default, an HTTPS page cannot run JavaScript, CSS or resources from HTTP
+// URLs. This provides an override to get the old insecure behavior.
+// TODO(crbug.com/40050660): Remove this switch when it is no longer
+// necessary.
+extern const char kAllowRunningInsecureContent[];
+
+// Enables use of the fuchsia.legacymetrics.MetricsRecorder service for
+// telemetry.
+extern const char kUseLegacyMetricsService[];
+#endif
 
 }  // namespace switches
 

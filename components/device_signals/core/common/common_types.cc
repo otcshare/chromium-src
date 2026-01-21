@@ -51,9 +51,13 @@ bool GetFileSystemInfoOptions::operator==(
          compute_executable_metadata == other.compute_executable_metadata;
 }
 
-absl::optional<base::Value> CrowdStrikeSignals::ToValue() const {
-  if (customer_id.empty() && agent_id.empty()) {
-    return absl::nullopt;
+bool CrowdStrikeSignals::IsEmpty() const {
+  return customer_id.empty() && agent_id.empty();
+}
+
+std::optional<base::Value> CrowdStrikeSignals::ToValue() const {
+  if (IsEmpty()) {
+    return std::nullopt;
   }
 
   base::Value::Dict dict_value;
@@ -67,6 +71,10 @@ absl::optional<base::Value> CrowdStrikeSignals::ToValue() const {
   }
 
   return base::Value(std::move(dict_value));
+}
+
+bool CrowdStrikeSignals::operator==(const CrowdStrikeSignals& other) const {
+  return agent_id == other.agent_id && customer_id == other.customer_id;
 }
 
 }  // namespace device_signals

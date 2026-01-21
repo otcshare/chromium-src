@@ -5,8 +5,7 @@
 // https://wicg.github.io/feature-policy/#reporting
 
 [
-    Exposed=(Window,Worker),
-    RuntimeEnabled=FeaturePolicyReporting
+    LegacyNoInterfaceObject
 ] interface PermissionsPolicyViolationReportBody : ReportBody {
   readonly attribute DOMString featureId;
   readonly attribute DOMString? sourceFile;
@@ -14,5 +13,7 @@
   readonly attribute unsigned long? columnNumber;
   readonly attribute DOMString disposition;
   readonly attribute DOMString? message;
-  [CallWith=ScriptState] object toJSON();
+  [RuntimeEnabled=PotentialPermissionsPolicyReporting] readonly attribute DOMString? allowAttribute;
+  [RuntimeEnabled=PotentialPermissionsPolicyReporting] readonly attribute DOMString? srcAttribute;
+  [CallWith=ScriptState] object toJSON(optional DOMString key);
 };

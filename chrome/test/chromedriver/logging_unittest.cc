@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/test/chromedriver/logging.h"
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -22,11 +24,15 @@
 
 namespace {
 
-const char* const kAllWdLevels[] = {
-  "ALL", "DEBUG", "INFO", "WARNING", "SEVERE", "OFF"
-};
-
-}
+constexpr auto kAllWdLevels = std::to_array<const char*>({
+    "ALL",
+    "DEBUG",
+    "INFO",
+    "WARNING",
+    "SEVERE",
+    "OFF",
+});
+}  // namespace
 
 TEST(Logging, NameLevelConversionHappy) {
   // All names map to a valid enum value.
@@ -113,8 +119,8 @@ TEST(Logging, CreatePerformanceLog) {
   capabilities.logging_prefs["performance"] = Log::kInfo;
   capabilities.logging_prefs["browser"] = Log::kInfo;
 
-  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<WebDriverLog>> logs;
+  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<CommandListener>> command_listeners;
   Status status = CreateLogs(capabilities, &session, &logs, &devtools_listeners,
                              &command_listeners);
@@ -131,8 +137,8 @@ TEST(Logging, IgnoreUnknownLogType) {
   Session session("test");
   capabilities.logging_prefs["gaga"] = Log::kInfo;
 
-  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<WebDriverLog>> logs;
+  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<CommandListener>> command_listeners;
   Status status = CreateLogs(capabilities, &session, &logs, &devtools_listeners,
                              &command_listeners);
@@ -147,8 +153,8 @@ TEST(Logging, DefaultLogs) {
   Capabilities capabilities;
   Session session("test");
 
-  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<WebDriverLog>> logs;
+  std::vector<std::unique_ptr<DevToolsEventListener>> devtools_listeners;
   std::vector<std::unique_ptr<CommandListener>> command_listeners;
   Status status = CreateLogs(capabilities, &session, &logs, &devtools_listeners,
                              &command_listeners);

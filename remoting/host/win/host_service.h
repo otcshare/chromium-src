@@ -6,6 +6,7 @@
 #define REMOTING_HOST_WIN_HOST_SERVICE_H_
 
 #include <windows.h>
+
 #include <stdint.h>
 
 #include <list>
@@ -44,9 +45,8 @@ class HostService : public WtsTerminalMonitor {
 
   // WtsTerminalMonitor implementation
   bool AddWtsTerminalObserver(const std::string& terminal_id,
-                                      WtsTerminalObserver* observer) override;
-  void RemoveWtsTerminalObserver(
-      WtsTerminalObserver* observer) override;
+                              WtsTerminalObserver* observer) override;
+  void RemoveWtsTerminalObserver(WtsTerminalObserver* observer) override;
 
  private:
   HostService();

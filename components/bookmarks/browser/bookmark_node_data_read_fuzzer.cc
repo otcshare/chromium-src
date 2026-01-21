@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "base/at_exit.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
@@ -15,7 +16,7 @@
 class Environment {
  public:
   Environment() {
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
     CHECK(base::i18n::InitializeICU());
   }
   base::AtExitManager at_exit_manager;
@@ -24,7 +25,8 @@ class Environment {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   static Environment env;
 
-  base::Pickle pickle(reinterpret_cast<const char*>(data), size);
+  base::Pickle pickle =
+      base::Pickle::WithUnownedBuffer(UNSAFE_TODO(base::span(data, size)));
   bookmarks::BookmarkNodeData bookmark_node_data;
   bookmark_node_data.ReadFromPickle(&pickle);
   return 0;

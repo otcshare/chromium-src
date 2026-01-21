@@ -12,8 +12,15 @@ namespace viz {
 
 GpuMemoryBufferVideoFramePool::GpuMemoryBufferVideoFramePool(
     int capacity,
-    GmbVideoFramePoolContextProvider* context_provider)
-    : VideoFramePool(capacity), context_provider_(context_provider) {
+    media::VideoPixelFormat format,
+    const gfx::ColorSpace& color_space,
+    GmbVideoFramePoolContextProvider* context_provider,
+    mojom::BufferFormatPreference buffer_format_preference)
+    : VideoFramePool(capacity),
+      format_(format),
+      color_space_(color_space),
+      context_provider_(context_provider),
+      buffer_format_preference_(buffer_format_preference) {
   RecreateVideoFramePool();
 }
 
@@ -25,16 +32,16 @@ scoped_refptr<media::VideoFrame>
 GpuMemoryBufferVideoFramePool::ReserveVideoFrame(media::VideoPixelFormat format,
                                                  const gfx::Size& size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(format, media::VideoPixelFormat::PIXEL_FORMAT_NV12);
-  DCHECK_LE(num_reserved_frames_, capacity());
+  CHECK_EQ(format, format_) << "Reserving a format that is different from the "
+                               "one specified in the constructor.";
+  CHECK_LE(num_reserved_frames_, capacity());
 
   if (num_reserved_frames_ == capacity()) {
     return nullptr;
   }
 
   scoped_refptr<media::VideoFrame> result =
-      video_frame_pool_->MaybeCreateVideoFrame(size,
-                                               gfx::ColorSpace::CreateREC709());
+      video_frame_pool_->MaybeCreateVideoFrame(size, color_space_);
 
   if (result) {
     num_reserved_frames_++;
@@ -49,10 +56,9 @@ GpuMemoryBufferVideoFramePool::ReserveVideoFrame(media::VideoPixelFormat format,
 media::mojom::VideoBufferHandlePtr
 GpuMemoryBufferVideoFramePool::CloneHandleForDelivery(
     const media::VideoFrame& frame) {
-  DCHECK(frame.HasGpuMemoryBuffer());
+  CHECK(frame.HasMappableSharedImage());
 
-  gfx::GpuMemoryBufferHandle handle = frame.GetGpuMemoryBuffer()->CloneHandle();
-  handle.id = gfx::GpuMemoryBufferHandle::kInvalidId;
+  gfx::GpuMemoryBufferHandle handle = frame.GetGpuMemoryBufferHandle();
 
   return media::mojom::VideoBufferHandle::NewGpuMemoryBufferHandle(
       std::move(handle));
@@ -70,8 +76,14 @@ void GpuMemoryBufferVideoFramePool::RecreateVideoFramePool() {
   auto pool_context = context_provider_->CreateContext(
       base::BindOnce(&GpuMemoryBufferVideoFramePool::RecreateVideoFramePool,
                      weak_factory_.GetWeakPtr()));
-  video_frame_pool_ = media::RenderableGpuMemoryBufferVideoFramePool::Create(
-      std::move(pool_context));
+  // Determine whether the video frame pool should use CPU mappable buffers.
+  // If the caller prefers SharedImage with native handle (i.e., no CPU
+  // mapping), pass false. Otherwise, default to requiring CPU access.
+  video_frame_pool_ =
+      media::RenderableMappableSharedImageVideoFramePool::Create(
+          std::move(pool_context), format_,
+          buffer_format_preference_ != mojom::BufferFormatPreference::
+                                           kPreferSharedImageWithNativeHandle);
 
   video_frame_pool_generation_++;
   num_reserved_frames_ = 0;
@@ -82,7 +94,7 @@ void GpuMemoryBufferVideoFramePool::OnVideoFrameDestroyed(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (frame_pool_generation == video_frame_pool_generation_) {
-    DCHECK_GT(num_reserved_frames_, 0u);
+    CHECK_GT(num_reserved_frames_, 0u);
 
     num_reserved_frames_--;
   }

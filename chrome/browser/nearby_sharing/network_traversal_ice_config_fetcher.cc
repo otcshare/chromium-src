@@ -4,7 +4,9 @@
 
 #include "chrome/browser/nearby_sharing/network_traversal_ice_config_fetcher.h"
 
-#include "base/bind.h"
+#include <optional>
+
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/strings/strcat.h"
 #include "chrome/services/sharing/public/cpp/sharing_webrtc_metrics.h"
@@ -14,7 +16,6 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -79,22 +80,24 @@ bool IsLoaderSuccessful(const network::SimpleURLLoader* loader) {
   return is_successful_response_code;
 }
 
-std::vector<sharing::mojom::IceServerPtr> GetDefaultIceServers() {
-  sharing::mojom::IceServerPtr ice_server(sharing::mojom::IceServer::New());
+std::vector<::sharing::mojom::IceServerPtr> GetDefaultIceServers() {
+  ::sharing::mojom::IceServerPtr ice_server(::sharing::mojom::IceServer::New());
   ice_server->urls.emplace_back("stun:stun.l.google.com:19302");
   ice_server->urls.emplace_back("stun:stun1.l.google.com:19302");
   ice_server->urls.emplace_back("stun:stun2.l.google.com:19302");
   ice_server->urls.emplace_back("stun:stun3.l.google.com:19302");
   ice_server->urls.emplace_back("stun:stun4.l.google.com:19302");
 
-  std::vector<sharing::mojom::IceServerPtr> default_servers;
+  std::vector<::sharing::mojom::IceServerPtr> default_servers;
   default_servers.push_back(std::move(ice_server));
   return default_servers;
 }
 
-std::vector<sharing::mojom::IceServerPtr> ParseIceConfigJson(std::string json) {
-  std::vector<sharing::mojom::IceServerPtr> ice_servers;
-  absl::optional<base::Value> response = base::JSONReader::Read(json);
+std::vector<::sharing::mojom::IceServerPtr> ParseIceConfigJson(
+    std::string json) {
+  std::vector<::sharing::mojom::IceServerPtr> ice_servers;
+  std::optional<base::Value> response =
+      base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!response)
     return ice_servers;
 
@@ -121,7 +124,8 @@ std::vector<sharing::mojom::IceServerPtr> ParseIceConfigJson(std::string json) {
     if (urls.empty())
       continue;
 
-    sharing::mojom::IceServerPtr ice_server(sharing::mojom::IceServer::New());
+    ::sharing::mojom::IceServerPtr ice_server(
+        ::sharing::mojom::IceServer::New());
     ice_server->urls = std::move(urls);
 
     std::string* retrieved_username = server_dict.FindString("username");
@@ -139,13 +143,14 @@ std::vector<sharing::mojom::IceServerPtr> ParseIceConfigJson(std::string json) {
 }
 
 void OnIceServersResponse(
-    sharing::mojom::IceConfigFetcher::GetIceServersCallback callback,
+    ::sharing::mojom::IceConfigFetcher::GetIceServersCallback callback,
     std::unique_ptr<network::SimpleURLLoader> url_loader,
-    std::unique_ptr<std::string> response_body) {
-  std::vector<sharing::mojom::IceServerPtr> ice_servers;
+    std::optional<std::string> response_body) {
+  std::vector<::sharing::mojom::IceServerPtr> ice_servers;
 
-  if (IsLoaderSuccessful(url_loader.get()) && response_body)
-    ice_servers = ParseIceConfigJson(*response_body);
+  if (IsLoaderSuccessful(url_loader.get()) && response_body) {
+    ice_servers = ParseIceConfigJson(*std::move(response_body));
+  }
 
   sharing::LogWebRtcIceConfigFetched(ice_servers.size());
 

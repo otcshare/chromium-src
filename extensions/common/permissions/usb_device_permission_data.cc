@@ -9,7 +9,6 @@
 #include <limits>
 #include <memory>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "base/strings/string_number_conversions.h"
@@ -31,7 +30,7 @@ bool ExtractFromDict(const std::string& key,
                      const base::Value::Dict* dict_value,
                      int max,
                      int* value) {
-  absl::optional<int> temp = dict_value->FindInt(key);
+  std::optional<int> temp = dict_value->FindInt(key);
   if (!temp) {
     *value = UsbDevicePermissionData::SPECIAL_VALUE_ANY;
     return true;
@@ -85,12 +84,12 @@ bool UsbDevicePermissionData::Check(
 }
 
 std::unique_ptr<base::Value> UsbDevicePermissionData::ToValue() const {
-  base::DictionaryValue* result = new base::DictionaryValue();
-  result->SetIntKey(kVendorIdKey, vendor_id_);
-  result->SetIntKey(kProductIdKey, product_id_);
-  result->SetIntKey(kInterfaceIdKey, interface_id_);
-  result->SetIntKey(kInterfaceClassKey, interface_class_);
-  return std::unique_ptr<base::Value>(result);
+  base::Value::Dict result;
+  result.Set(kVendorIdKey, vendor_id_);
+  result.Set(kProductIdKey, product_id_);
+  result.Set(kInterfaceIdKey, interface_id_);
+  result.Set(kInterfaceClassKey, interface_class_);
+  return std::make_unique<base::Value>(std::move(result));
 }
 
 bool UsbDevicePermissionData::FromValue(const base::Value* value) {
@@ -142,20 +141,6 @@ bool UsbDevicePermissionData::FromValue(const base::Value* value) {
   }
 
   return true;
-}
-
-bool UsbDevicePermissionData::operator<(
-    const UsbDevicePermissionData& rhs) const {
-  return std::tie(vendor_id_, product_id_, interface_id_, interface_class_) <
-         std::tie(rhs.vendor_id_, rhs.product_id_, rhs.interface_id_,
-                  rhs.interface_class_);
-}
-
-bool UsbDevicePermissionData::operator==(
-    const UsbDevicePermissionData& rhs) const {
-  return vendor_id_ == rhs.vendor_id_ && product_id_ == rhs.product_id_ &&
-         interface_id_ == rhs.interface_id_ &&
-         interface_class_ == rhs.interface_class_;
 }
 
 }  // namespace extensions

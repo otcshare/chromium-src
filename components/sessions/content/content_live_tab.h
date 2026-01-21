@@ -10,11 +10,12 @@
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/core/live_tab.h"
 #include "components/sessions/core/sessions_export.h"
-#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_user_data.h"
 
 namespace content {
+class WebContents;
 class NavigationController;
-}
+}  // namespace content
 
 class TabRestoreServiceImplTest;
 
@@ -24,16 +25,12 @@ namespace sessions {
 // on //content-based platforms.
 class SESSIONS_EXPORT ContentLiveTab
     : public LiveTab,
-      public base::SupportsUserData::Data {
+      public content::WebContentsUserData<ContentLiveTab> {
  public:
   ContentLiveTab(const ContentLiveTab&) = delete;
   ContentLiveTab& operator=(const ContentLiveTab&) = delete;
 
   ~ContentLiveTab() override;
-
-  // Returns the ContentLiveTab associated with |web_contents|, creating it if
-  // it has not already been created.
-  static ContentLiveTab* GetForWebContents(content::WebContents* web_contents);
 
   // LiveTab:
   bool IsInitialBlankNavigation() override;
@@ -42,24 +39,21 @@ class SESSIONS_EXPORT ContentLiveTab
   sessions::SerializedNavigationEntry GetEntryAtIndex(int index) override;
   sessions::SerializedNavigationEntry GetPendingEntry() override;
   int GetEntryCount() override;
-  std::unique_ptr<PlatformSpecificTabData> GetPlatformSpecificTabData()
-      override;
+  std::unique_ptr<tab_restore::PlatformSpecificTabData>
+  GetPlatformSpecificTabData() override;
   SerializedUserAgentOverride GetUserAgentOverride() override;
 
-  content::WebContents* web_contents() { return web_contents_; }
-  const content::WebContents* web_contents() const { return web_contents_; }
-
  private:
-  friend class base::SupportsUserData;
+  friend class content::WebContentsUserData<ContentLiveTab>;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+
   friend class ::TabRestoreServiceImplTest;
 
   explicit ContentLiveTab(content::WebContents* contents);
 
   content::NavigationController& navigation_controller() {
-    return web_contents_->GetController();
+    return GetWebContents().GetController();
   }
-
-  raw_ptr<content::WebContents> web_contents_;
 };
 
 }  // namespace sessions

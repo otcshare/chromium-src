@@ -52,54 +52,24 @@
 #include "third_party/blink/renderer/core/workers/worker_reporting_proxy.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
 namespace blink {
 
-// static
-SharedWorkerGlobalScope::ParsedCreationParams
-SharedWorkerGlobalScope::ParseCreationParams(
-    std::unique_ptr<GlobalScopeCreationParams> creation_params,
-    bool is_constructor_origin_secure) {
-  ParsedCreationParams params;
-
-  params.starter_secure_context = creation_params->starter_secure_context;
-  if (!RuntimeEnabledFeatures::SecureContextFixForSharedWorkersEnabled()) {
-    creation_params->starter_secure_context = is_constructor_origin_secure;
-  }
-
-  params.creation_params = std::move(creation_params);
-  return params;
-}
-
 SharedWorkerGlobalScope::SharedWorkerGlobalScope(
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
-    bool is_constructor_origin_secure,
     SharedWorkerThread* thread,
     base::TimeTicks time_origin,
-    const SharedWorkerToken& token)
-    : SharedWorkerGlobalScope(ParseCreationParams(std::move(creation_params),
-                                                  is_constructor_origin_secure),
-                              thread,
-                              time_origin,
-                              token) {}
-
-SharedWorkerGlobalScope::SharedWorkerGlobalScope(
-    ParsedCreationParams parsed_creation_params,
-    SharedWorkerThread* thread,
-    base::TimeTicks time_origin,
-    const SharedWorkerToken& token)
-    : WorkerGlobalScope(std::move(parsed_creation_params.creation_params),
+    const SharedWorkerToken& token,
+    bool require_cross_site_request_for_cookies)
+    : WorkerGlobalScope(std::move(creation_params),
                         thread,
                         time_origin,
-                        false),
-      token_(token) {
-  if (IsSecureContext() && !parsed_creation_params.starter_secure_context) {
-    CountUse(mojom::blink::WebFeature::kSecureContextIncorrectForSharedWorker);
-  }
-}
+                        /*is_service_worker_global_scope=*/false),
+      token_(token),
+      require_cross_site_request_for_cookies_(
+          require_cross_site_request_for_cookies) {}
 
 SharedWorkerGlobalScope::~SharedWorkerGlobalScope() = default;
 
@@ -183,12 +153,11 @@ void SharedWorkerGlobalScope::FetchAndRunClassicScript(
       script_url, std::move(worker_main_script_load_params), context_type,
       destination, network::mojom::RequestMode::kSameOrigin,
       network::mojom::CredentialsMode::kSameOrigin,
-      WTF::BindOnce(
-          &SharedWorkerGlobalScope::DidReceiveResponseForClassicScript,
-          WrapWeakPersistent(this), WrapPersistent(classic_script_loader)),
-      WTF::BindOnce(&SharedWorkerGlobalScope::DidFetchClassicScript,
-                    WrapWeakPersistent(this),
-                    WrapPersistent(classic_script_loader), stack_id));
+      BindOnce(&SharedWorkerGlobalScope::DidReceiveResponseForClassicScript,
+               WrapWeakPersistent(this), WrapPersistent(classic_script_loader)),
+      BindOnce(&SharedWorkerGlobalScope::DidFetchClassicScript,
+               WrapWeakPersistent(this), WrapPersistent(classic_script_loader),
+               stack_id));
 }
 
 // https://html.spec.whatwg.org/C/#worker-processing-model
@@ -199,9 +168,7 @@ void SharedWorkerGlobalScope::FetchAndRunModuleScript(
     std::unique_ptr<PolicyContainer> policy_container,
     const FetchClientSettingsObjectSnapshot& outside_settings_object,
     WorkerResourceTimingNotifier& outside_resource_timing_notifier,
-    network::mojom::CredentialsMode credentials_mode,
-    RejectCoepUnsafeNone reject_coep_unsafe_none) {
-  DCHECK(!reject_coep_unsafe_none);
+    network::mojom::CredentialsMode credentials_mode) {
   if (worker_main_script_load_params) {
     SetWorkerMainScriptLoadingParametersForModules(
         std::move(worker_main_script_load_params));
@@ -233,8 +200,8 @@ void SharedWorkerGlobalScope::Connect(MessagePortChannel channel) {
   auto* port = MakeGarbageCollected<MessagePort>(*this);
   port->Entangle(std::move(channel));
   MessageEvent* event =
-      MessageEvent::Create(MakeGarbageCollected<MessagePortArray>(1, port),
-                           String(), String(), port);
+      MessageEvent::Create(MakeGarbageCollected<GCedMessagePortArray>(1, port),
+                           /*origin=*/nullptr, String(), port);
   event->initEvent(event_type_names::kConnect, false, false);
   DispatchEvent(*event);
 }

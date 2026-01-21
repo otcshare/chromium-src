@@ -4,56 +4,59 @@
 
 package org.chromium.chrome.browser.customtabs;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.app.Activity;
 import android.view.ViewGroup;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
-import org.chromium.chrome.browser.compositor.layouts.content.TabContentManager;
-import org.chromium.chrome.browser.dependency_injection.ActivityScope;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
+import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import javax.inject.Inject;
-
-import dagger.Lazy;
+import java.util.function.Supplier;
 
 /**
  * Initializes the compositor content (calls {@link ChromeActivity#initializeCompositorContent}).
  */
-@ActivityScope
+@NullMarked
 public class CustomTabCompositorContentInitializer implements NativeInitObserver {
     private final List<Callback<LayoutManagerImpl>> mListeners = new ArrayList<>();
 
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final Activity mActivity;
-    private final Lazy<CompositorViewHolder> mCompositorViewHolder;
-    private final ObservableSupplier<TabContentManager> mTabContentManagerSupplier;
+    private final Supplier<@Nullable CompositorViewHolder> mCompositorViewHolder;
+    private final MonotonicObservableSupplier<TabContentManager> mTabContentManagerSupplier;
     private final CompositorViewHolder.Initializer mCompositorViewHolderInitializer;
     private final TopUiThemeColorProvider mTopUiThemeColorProvider;
 
     private boolean mInitialized;
 
-    @Inject
-    public CustomTabCompositorContentInitializer(ActivityLifecycleDispatcher lifecycleDispatcher,
-            Activity activity, Lazy<CompositorViewHolder> compositorViewHolder,
-            ObservableSupplier<TabContentManager> tabContentManagerSupplier,
+    public CustomTabCompositorContentInitializer(
+            Activity activity,
+            Supplier<@Nullable CompositorViewHolder> compositorViewHolder,
+            MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
             CompositorViewHolder.Initializer compositorViewHolderInitializer,
-            TopUiThemeColorProvider topUiThemeColorProvider) {
-        mLifecycleDispatcher = lifecycleDispatcher;
+            TopUiThemeColorProvider topUiThemeColorProvider,
+            ActivityLifecycleDispatcher lifecycleDispatcher) {
         mActivity = activity;
         mCompositorViewHolder = compositorViewHolder;
         mTabContentManagerSupplier = tabContentManagerSupplier;
         mCompositorViewHolderInitializer = compositorViewHolderInitializer;
         mTopUiThemeColorProvider = topUiThemeColorProvider;
+        mLifecycleDispatcher = lifecycleDispatcher;
 
-        lifecycleDispatcher.register(this);
+        mLifecycleDispatcher.register(this);
     }
 
     /**
@@ -62,7 +65,7 @@ public class CustomTabCompositorContentInitializer implements NativeInitObserver
      */
     public void addCallback(Callback<LayoutManagerImpl> callback) {
         if (mInitialized) {
-            callback.onResult(mCompositorViewHolder.get().getLayoutManager());
+            callback.onResult(assumeNonNull(mCompositorViewHolder.get()).getLayoutManager());
         } else {
             mListeners.add(callback);
         }
@@ -71,15 +74,17 @@ public class CustomTabCompositorContentInitializer implements NativeInitObserver
     @Override
     public void onFinishNativeInitialization() {
         ViewGroup contentContainer = mActivity.findViewById(android.R.id.content);
-        // clang-format off
-        LayoutManagerImpl layoutDriver = new LayoutManagerImpl(mCompositorViewHolder.get(),
-                contentContainer, mTabContentManagerSupplier,
-            () -> mTopUiThemeColorProvider);
-        // clang-format on
+        LayoutManagerImpl layoutDriver =
+                new LayoutManagerImpl(
+                        assertNonNull(mCompositorViewHolder.get()),
+                        contentContainer,
+                        mTabContentManagerSupplier,
+                        () -> mTopUiThemeColorProvider);
 
-        mCompositorViewHolderInitializer.initializeCompositorContent(layoutDriver,
-                mActivity.findViewById(org.chromium.chrome.R.id.url_bar), contentContainer,
-                mActivity.findViewById(org.chromium.chrome.R.id.control_container));
+        mCompositorViewHolderInitializer.initializeCompositorContent(
+                layoutDriver,
+                mActivity.findViewById(R.id.url_bar),
+                mActivity.findViewById(R.id.control_container));
 
         for (Callback<LayoutManagerImpl> listener : mListeners) {
             listener.onResult(layoutDriver);

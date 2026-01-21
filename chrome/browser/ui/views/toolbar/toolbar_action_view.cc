@@ -6,37 +6,38 @@
 
 #include <string>
 
-#include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/toolbar/toolbar_action_view_controller.h"
+#include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/event_utils.h"
 #include "chrome/browser/ui/views/extensions/extension_context_menu_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_icon_container_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/notification_source.h"
 #include "extensions/common/extension_features.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/models/image_model_utils.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/events/event.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/image/image_skia_source.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/controls/button/button.h"
@@ -49,27 +50,21 @@
 using views::LabelButtonBorder;
 
 ////////////////////////////////////////////////////////////////////////////////
-// ToolbarActionView::Delegate
-
-bool ToolbarActionView::Delegate::CanShowIconInToolbar() const {
-  return true;
-}
-
-////////////////////////////////////////////////////////////////////////////////
 // ToolbarActionView
 
-ToolbarActionView::ToolbarActionView(
-    ToolbarActionViewController* view_controller,
-    ToolbarActionView::Delegate* delegate)
+ToolbarActionView::ToolbarActionView(ToolbarActionViewModel* view_model,
+                                     ToolbarActionView::Delegate* delegate)
     : MenuButton(base::BindRepeating(&ToolbarActionView::ButtonPressed,
                                      base::Unretained(this))),
-      view_controller_(view_controller),
+      view_model_(view_model),
       delegate_(delegate) {
   ConfigureInkDropForToolbar(this);
   SetHideInkDropWhenShowingContextMenu(false);
   SetShowInkDropWhenHotTracked(true);
   SetID(VIEW_ID_BROWSER_ACTION);
-  view_controller_->SetDelegate(this);
+  SetProperty(views::kElementIdentifierKey, kToolbarActionViewElementId);
+  model_subscription_ = view_model_->RegisterUpdateObserver(base::BindRepeating(
+      &ToolbarActionView::UpdateState, base::Unretained(this)));
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
   set_drag_controller(delegate_);
   // Normally, the notify action is determined by whether a view is draggable
@@ -82,7 +77,7 @@ ToolbarActionView::ToolbarActionView(
       views::ButtonController::NotifyAction::kOnRelease);
 
   context_menu_controller_ = std::make_unique<ExtensionContextMenuController>(
-      view_controller,
+      view_model, this,
       extensions::ExtensionContextMenuModel::ContextMenuSource::kToolbarAction);
   set_context_menu_controller(context_menu_controller_.get());
 
@@ -90,7 +85,8 @@ ToolbarActionView::ToolbarActionView(
 }
 
 ToolbarActionView::~ToolbarActionView() {
-  view_controller_->SetDelegate(nullptr);
+  set_context_menu_controller(nullptr);
+  view_model_->HidePopup();
 }
 
 gfx::Rect ToolbarActionView::GetAnchorBoundsInScreen() const {
@@ -121,9 +117,26 @@ bool ToolbarActionView::IsTriggerableEvent(const ui::Event& event) {
 }
 
 bool ToolbarActionView::OnKeyPressed(const ui::KeyEvent& event) {
+  std::optional<event_utils::ReorderDirection> reorder_direction =
+      event_utils::GetReorderCommandForKeyboardEvent(event);
+  if (reorder_direction) {
+    int move_by = 0;
+    switch (*reorder_direction) {
+      case event_utils::ReorderDirection::kPrevious:
+        move_by = -1;
+        break;
+      case event_utils::ReorderDirection::kNext:
+        move_by = 1;
+        break;
+    }
+
+    delegate_->MovePinnedActionBy(view_model_->GetId(), move_by);
+    return true;
+  }
+
   if (event.key_code() == ui::VKEY_DOWN) {
-    context_menu_controller()->ShowContextMenuForView(this, gfx::Point(),
-                                                      ui::MENU_SOURCE_KEYBOARD);
+    context_menu_controller()->ShowContextMenuForView(
+        this, gfx::Point(), ui::mojom::MenuSourceType::kKeyboard);
     return true;
   }
   return MenuButton::OnKeyPressed(event);
@@ -142,37 +155,32 @@ void ToolbarActionView::OnMouseEntered(const ui::MouseEvent& event) {
 
 void ToolbarActionView::MaybeUpdateHoverCardStatus(
     const ui::MouseEvent& event) {
-  if (!GetWidget()->IsMouseEventsEnabled())
+  if (!GetWidget()->IsMouseEventsEnabled()) {
     return;
+  }
 
-  view_controller_->UpdateHoverCard(this,
-                                    ToolbarActionHoverCardUpdateType::kHover);
-}
-
-content::WebContents* ToolbarActionView::GetCurrentWebContents() const {
-  return delegate_->GetCurrentWebContents();
+  delegate_->UpdateHoverCard(this, ToolbarActionHoverCardUpdateType::kHover);
 }
 
 void ToolbarActionView::UpdateState() {
-  content::WebContents* web_contents = GetCurrentWebContents();
-  SetAccessibleName(view_controller_->GetAccessibleName(web_contents));
-  if (!sessions::SessionTabHelper::IdForTab(web_contents).is_valid())
+  content::WebContents* web_contents = delegate_->GetCurrentWebContents();
+  GetViewAccessibility().SetName(view_model_->GetAccessibleName(web_contents));
+  if (!sessions::SessionTabHelper::IdForTab(web_contents).is_valid()) {
     return;
+  }
 
-  gfx::ImageSkia icon(
-      view_controller_->GetIcon(web_contents, GetPreferredSize())
-          .AsImageSkia());
-
-  if (!icon.isNull())
-    SetImageModel(views::Button::STATE_NORMAL,
-                  ui::ImageModel::FromImageSkia(icon));
+  ui::ImageModel icon = view_model_->GetIcon(web_contents, GetPreferredSize());
+  if (!icon.IsEmpty()) {
+    SetImageModel(views::Button::STATE_NORMAL, icon);
+    SetImageModel(views::Button::STATE_DISABLED,
+                  ui::GetDefaultDisabledIconFromImageModel(icon));
+  }
 
   if (!base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
-    SetTooltipText(view_controller_->GetTooltip(web_contents));
+    SetTooltipText(view_model_->GetTooltip(web_contents));
   }
 
-  Layout();  // We need to layout since we may have added an icon as a result.
   SchedulePaint();
 }
 
@@ -184,20 +192,20 @@ int ToolbarActionView::GetDragOperationsForTest(const gfx::Point& point) {
   return views::View::GetDragOperations(point);
 }
 
-gfx::Size ToolbarActionView::CalculatePreferredSize() const {
+gfx::Size ToolbarActionView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return delegate_->GetToolbarActionSize();
 }
 
 bool ToolbarActionView::OnMousePressed(const ui::MouseEvent& event) {
-  view_controller_->UpdateHoverCard(nullptr,
-                                    ToolbarActionHoverCardUpdateType::kEvent);
+  delegate_->UpdateHoverCard(nullptr, ToolbarActionHoverCardUpdateType::kEvent);
   if (event.IsOnlyLeftMouseButton()) {
-    if (view_controller()->IsShowingPopup()) {
+    if (view_model()->IsShowingPopup()) {
       // Left-clicking the button should always hide the popup.  In most cases,
       // this would have happened automatically anyway due to the popup losing
       // activation, but if the popup is currently being inspected, the
       // activation loss will not automatically close it, so force-hide here.
-      view_controller_->HidePopup();
+      view_model_->HidePopup();
 
       // Since we just hid the popup, don't allow the mouse release for this
       // click to re-show it.
@@ -221,16 +229,18 @@ void ToolbarActionView::OnMouseReleased(const ui::MouseEvent& event) {
   // of |suppress_next_release_| so it can be updated now.
   const bool suppress_next_release = suppress_next_release_;
   suppress_next_release_ = false;
-  if (!suppress_next_release)
+  if (!suppress_next_release) {
     MenuButton::OnMouseReleased(event);
+  }
 }
 
 void ToolbarActionView::OnGestureEvent(ui::GestureEvent* event) {
   // While the dropdown menu is showing, the button should not handle gestures.
-  if (context_menu_controller_->IsMenuRunning())
+  if (context_menu_controller_->IsMenuRunning()) {
     event->StopPropagation();
-  else
+  } else {
     MenuButton::OnGestureEvent(event);
+  }
 }
 
 void ToolbarActionView::OnDragDone() {
@@ -248,39 +258,39 @@ void ToolbarActionView::AddedToWidget() {
 
   // This cannot happen until there's a focus controller, which lives on the
   // widget.
-  view_controller_->RegisterCommand();
+  view_model_->RegisterCommand();
 }
 
 void ToolbarActionView::RemovedFromWidget() {
   // This must happen before the focus controller, which lives on the widget,
   // becomes unreachable.
-  view_controller_->UnregisterCommand();
+  view_model_->UnregisterCommand();
 
   MenuButton::RemovedFromWidget();
 }
 
-views::View* ToolbarActionView::GetAsView() {
-  return this;
+void ToolbarActionView::OnContextMenuShown() {
+  delegate_->OnContextMenuShown(view_model_->GetId());
 }
 
-views::FocusManager* ToolbarActionView::GetFocusManagerForAccelerator() {
-  return GetFocusManager();
+void ToolbarActionView::OnContextMenuClosed() {
+  delegate_->OnContextMenuClosed(view_model_->GetId());
 }
 
-views::Button* ToolbarActionView::GetReferenceButtonForPopup() {
+views::Button* ToolbarActionView::GetReferenceButtonForPopupInternal() {
   // Browser actions in the overflow menu can still show popups, so we may need
   // a reference view other than this button's parent. If so, use the overflow
   // view which is a BrowserAppMenuButton.
   return GetVisible() ? this : delegate_->GetOverflowReferenceView();
 }
 
-void ToolbarActionView::ShowContextMenuAsFallback() {
-  context_menu_controller()->ShowContextMenuForView(
-      this, GetKeyboardContextMenuLocation(), ui::MENU_SOURCE_NONE);
+views::BubbleAnchor ToolbarActionView::GetReferenceButtonForPopup() {
+  return GetReferenceButtonForPopupInternal();
 }
 
-bool ToolbarActionView::CanShowIconInToolbar() const {
-  return delegate_->CanShowIconInToolbar();
+void ToolbarActionView::ShowContextMenuAsFallback() {
+  context_menu_controller()->ShowContextMenuForView(
+      this, GetKeyboardContextMenuLocation(), ui::mojom::MenuSourceType::kNone);
 }
 
 void ToolbarActionView::OnPopupShown(bool by_user) {
@@ -291,7 +301,7 @@ void ToolbarActionView::OnPopupShown(bool by_user) {
     // This cast is safe because both will have a MenuButtonController.
     views::MenuButtonController* reference_view_controller =
         static_cast<views::MenuButtonController*>(
-            GetReferenceButtonForPopup()->button_controller());
+            GetReferenceButtonForPopupInternal()->button_controller());
     pressed_lock_ = reference_view_controller->TakeLock();
   }
 }
@@ -301,17 +311,17 @@ void ToolbarActionView::OnPopupClosed() {
 }
 
 void ToolbarActionView::ButtonPressed() {
-  if (view_controller_->IsEnabled(GetCurrentWebContents())) {
+  if (view_model_->IsEnabled(delegate_->GetCurrentWebContents())) {
     base::RecordAction(base::UserMetricsAction(
         "Extensions.Toolbar.ExtensionActivatedFromToolbar"));
-    view_controller_->ExecuteUserAction(
-        ToolbarActionViewController::InvocationSource::kToolbarButton);
+    view_model_->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
   } else {
     // If the action isn't enabled, show the context menu as a fallback.
-    context_menu_controller()->ShowContextMenuForView(this, GetMenuPosition(),
-                                                      ui::MENU_SOURCE_NONE);
+    context_menu_controller()->ShowContextMenuForView(
+        this, GetMenuPosition(), ui::mojom::MenuSourceType::kNone);
   }
 }
 
-BEGIN_METADATA(ToolbarActionView, views::MenuButton)
+BEGIN_METADATA(ToolbarActionView)
 END_METADATA

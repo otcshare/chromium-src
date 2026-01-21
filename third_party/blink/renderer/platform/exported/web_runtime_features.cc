@@ -61,8 +61,11 @@ void WebRuntimeFeatures::EnableOverlayScrollbars(bool enable) {
 }
 
 void WebRuntimeFeatures::EnableFluentScrollbars(bool enable) {
-  RuntimeEnabledFeatures::SetFluentScrollbarsEnabled(enable);
   ScrollbarThemeSettings::SetFluentScrollbarsEnabled(enable);
+}
+
+void WebRuntimeFeatures::EnableLocalNetworkAccessWebRTC(bool enable) {
+  RuntimeEnabledFeatures::SetLocalNetworkAccessWebRTCEnabled(enable);
 }
 
 }  // namespace blink

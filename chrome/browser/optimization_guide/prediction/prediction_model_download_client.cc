@@ -4,14 +4,14 @@
 
 #include "chrome/browser/optimization_guide/prediction/prediction_model_download_client.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros_local.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "components/download/public/background_service/download_metadata.h"
-#include "components/optimization_guide/core/prediction_manager.h"
-#include "components/optimization_guide/core/prediction_model_download_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_model_download_manager.h"
 #include "services/network/public/cpp/resource_request_body.h"
 
 namespace optimization_guide {
@@ -19,17 +19,17 @@ namespace optimization_guide {
 namespace {
 
 // Parses the optimization target from |custom_data|.
-absl::optional<proto::OptimizationTarget> ParseOptimizationTarget(
+std::optional<proto::OptimizationTarget> ParseOptimizationTarget(
     const download::DownloadParams::CustomData& custom_data) {
   const auto target_it =
       custom_data.find(kPredictionModelOptimizationTargetCustomDataKey);
   if (target_it == custom_data.end()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   proto::OptimizationTarget optimization_target;
   if (!proto::OptimizationTarget_Parse(target_it->second,
                                        &optimization_target)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return optimization_target;
 }

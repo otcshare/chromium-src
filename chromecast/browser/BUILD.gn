@@ -16,17 +16,11 @@ if (is_android) {
   import("//build/config/android/rules.gni")
 }
 
-buildflag_header("browser_buildflags") {
-  header = "browser_buildflags.h"
-  flags = [ "ENABLE_CAST_AUDIO_MANAGER_MIXER=$enable_cast_audio_manager_mixer" ]
-}
-
 group("prefs") {
-  public_deps = [ ":prefs_base" ]
-
-  if (chromecast_branding == "public") {
-    public_deps += [ ":prefs_simple" ]
-  }
+  public_deps = [
+    ":prefs_base",
+    ":prefs_simple",
+  ]
 }
 
 cast_source_set("prefs_base") {
@@ -91,6 +85,7 @@ cast_source_set("named_message_port_connector_cast") {
   deps = [
     "//base",
     "//chromecast/browser:public",
+    "//components/cast/message_port:blink_message_port_adapter",
     "//components/cast/message_port:message_port_cast",
     "//components/cast/named_message_port_connector",
     "//components/on_load_script_injector/browser",
@@ -150,8 +145,6 @@ cast_source_set("browser") {
     "cast_web_view_default.h",
     "cast_web_view_factory.cc",
     "cast_web_view_factory.h",
-    "default_navigation_throttle.cc",
-    "default_navigation_throttle.h",
     "devtools/cast_devtools_manager_delegate.cc",
     "devtools/cast_devtools_manager_delegate.h",
     "devtools/remote_debugging_server.cc",
@@ -207,7 +200,6 @@ cast_source_set("browser") {
   ]
 
   deps = [
-    ":browser_buildflags",
     ":named_message_port_connector_cast",
     ":web_preferences",
     "//base",
@@ -241,10 +233,10 @@ cast_source_set("browser") {
     "//chromecast/media/audio:audio_io_thread",
     "//chromecast/media/audio/audio_output_service:constants",
     "//chromecast/media/base:media_codec_support",
-    "//chromecast/media/base:video_plane_controller",
     "//chromecast/media/cdm:cdm_origin_provider",
     "//chromecast/media/common:media_pipeline_backend_manager",
     "//chromecast/media/service",
+    "//chromecast/media/service:video_geometry_setter_service",
     "//chromecast/media/service/mojom",
     "//chromecast/net",
     "//chromecast/net:connectivity_checker",
@@ -252,10 +244,12 @@ cast_source_set("browser") {
     "//chromecast/service",
     "//chromecast/ui:display_settings_manager",
     "//chromecast/ui:display_settings_public",
+    "//components/cast/message_port:blink_message_port_adapter",
     "//components/cast/message_port:message_port_cast",
     "//components/cast_receiver/browser:permissions_manager",
     "//components/download/public/common:public",
     "//components/heap_profiling/multi_process",
+    "//components/input",
     "//components/media_control/browser",
     "//components/memory_pressure",
     "//components/metrics",
@@ -270,12 +264,12 @@ cast_source_set("browser") {
     "//components/metrics:ui",
     "//components/network_hints/browser",
     "//components/network_session_configurator/common",
+    "//components/os_crypt/async/browser",
     "//components/policy/core/browser",
     "//components/prefs",
     "//components/proxy_config",
     "//components/safe_search_api",
     "//components/safe_search_api:safe_search_client",
-    "//components/services/app_service/public/mojom",
     "//components/services/heap_profiling",
     "//components/services/heap_profiling/public/cpp",
     "//components/services/heap_profiling/public/mojom",
@@ -287,10 +281,10 @@ cast_source_set("browser") {
     "//content/public/browser",
     "//content/public/common",
     "//device/bluetooth",
-    "//gpu",
     "//ipc",
     "//media",
     "//media/gpu:buildflags",
+    "//media/mojo:buildflags",
     "//media/mojo/mojom",
     "//media/mojo/mojom:remoting",
     "//media/mojo/services",
@@ -324,8 +318,10 @@ cast_source_set("browser") {
       "android/cast_web_service_android.cc",
     ]
     deps += [
-      ":jni_headers",
+      "//chromecast/browser/android:jni_headers",
+      "//components/android_autofill/browser:android",
       "//components/embedder_support/android:view",
+      "//components/variations:variations_associated_data",
     ]
   } else {
     deps += [ ":display_configurator" ]
@@ -335,8 +331,6 @@ cast_source_set("browser") {
     sources += [
       "cast_system_memory_pressure_evaluator.cc",
       "cast_system_memory_pressure_evaluator.h",
-      "memory_pressure_controller_impl.cc",
-      "memory_pressure_controller_impl.h",
     ]
 
     deps += [ "//third_party/fontconfig" ]
@@ -353,7 +347,7 @@ cast_source_set("browser") {
 
     deps += [
       "//ui/aura",
-      "//ui/views:views",
+      "//ui/views",
     ]
 
     if (!is_fuchsia) {
@@ -370,7 +364,7 @@ cast_source_set("browser") {
   }
 
   if (!is_fuchsia) {
-    # TODO(crbug.com/1226159): Complete crash reporting integration on Fuchsia.
+    # TODO(crbug.com/40188745): Complete crash reporting integration on Fuchsia.
     deps += [
       "//components/crash/content/browser",
       "//components/crash/core/app",
@@ -386,15 +380,6 @@ cast_source_set("browser") {
   }
 
   configs += [ "//media/audio:platform_config" ]
-
-  if (chromecast_branding != "public") {
-    deps += [
-      "//chromecast/internal/shell/browser:cast_content_browser_internal_manifest_overlay",
-      "//chromecast/internal/shell/browser:cast_content_packaged_services_internal_manifest_overlay",
-    ]
-
-    defines = [ "USE_INTERNAL_OVERLAY_MANIFESTS=1" ]
-  }
 }
 
 cast_source_set("display_configurator") {
@@ -427,17 +412,6 @@ cast_source_set("simple_main_parts") {
   sources = [ "cast_browser_main_parts_simple.cc" ]
 
   public_deps = [ ":browser" ]
-}
-
-cast_source_set("simple_client") {
-  sources = [ "cast_content_browser_client_simple.cc" ]
-
-  public_deps = [ ":browser" ]
-
-  deps = [
-    "//base",
-    "//chromecast/common:cors_exempt_headers",
-  ]
 }
 
 cast_source_set("base_types") {
@@ -528,6 +502,7 @@ cast_source_set("test_support") {
   deps = [
     "//base",
     "//chromecast/base",
+    "//chromecast/cast_core:cast_core_switches",
     "//components/prefs:test_support",
     "//content/public/browser",
     "//content/public/common",
@@ -563,7 +538,7 @@ cast_source_set("browsertests") {
     "//chromecast/base",
     "//chromecast/base:chromecast_switches",
     "//chromecast/base/metrics",
-    "//chromecast/graphics:graphics",
+    "//chromecast/graphics",
     "//chromecast/mojo",
     "//components/keyed_service/content",
     "//components/prefs",
@@ -620,7 +595,7 @@ cast_source_set("unittests") {
     "//third_party/blink/public/common",
     "//ui/base",
     "//ui/base:test_support",
-    "//ui/events/devices:devices",
+    "//ui/events/devices",
     "//ui/gl:test_support",
   ]
 
@@ -630,33 +605,7 @@ cast_source_set("unittests") {
 }
 
 if (is_android) {
-  generate_jni("jni_headers") {
-    sources = [
-      "android/apk/src/org/chromium/chromecast/shell/CastAccessibilityHelper.java",
-      "android/apk/src/org/chromium/chromecast/shell/CastContentWindowAndroid.java",
-      "android/apk/src/org/chromium/chromecast/shell/CastCrashHandler.java",
-      "android/apk/src/org/chromium/chromecast/shell/CastMetricsHelper.java",
-    ]
-  }
-
   java_cpp_enum("java_enums") {
     sources = [ "visibility_types.h" ]
   }
-}
-
-# Could be used in the internal build if the internal implementation won't be
-# included, for example, some unit tests.
-cast_source_set("simple_browser") {
-  sources = [
-    "cast_browser_main_parts_simple.cc",
-    "cast_content_browser_client_simple.cc",
-    "pref_service_helper_simple.cc",
-  ]
-
-  deps = [
-    ":browser",
-    ":prefs",
-    "//chromecast/base:default_create_sys_info",
-    "//chromecast/common:cors_exempt_headers",
-  ]
 }

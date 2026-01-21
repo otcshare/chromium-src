@@ -4,12 +4,24 @@
 
 #include "media/audio/cras/cras_unified.h"
 
-#include <algorithm>
+#include <inttypes.h>
 
+#include <algorithm>
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/trace_event/typed_macros.h"
 #include "media/audio/cras/audio_manager_cras_base.h"
+#include "media/audio/cras/cras_util.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
+#include "media/base/audio_sample_types.h"
+#include "media/base/audio_timestamp_helper.h"
 
 namespace media {
 
@@ -100,19 +112,17 @@ int GetDevicePin(AudioManagerCrasBase* manager, const std::string& device_id) {
 // before the hardware buffer underruns and fills the buffer with another block
 // of audio.
 
-CrasUnifiedStream::CrasUnifiedStream(const AudioParameters& params,
-                                     AudioManagerCrasBase* manager,
-                                     const std::string& device_id)
-    : client_(NULL),
-      stream_id_(0),
-      params_(params),
-      is_playing_(false),
-      volume_(1.0),
+CrasUnifiedStream::CrasUnifiedStream(
+    const AudioParameters& params,
+    AudioManagerCrasBase* manager,
+    const std::string& device_id,
+    const AudioManager::LogCallback& log_callback)
+    : params_(params),
       manager_(manager),
-      source_callback_(NULL),
       output_bus_(AudioBus::Create(params)),
-      stream_direction_(CRAS_STREAM_OUTPUT),
-      pin_device_(GetDevicePin(manager, device_id)) {
+      pin_device_(GetDevicePin(manager, device_id)),
+      glitch_reporter_(SystemGlitchReporter::StreamType::kRender),
+      log_callback_(std::move(log_callback)) {
   DCHECK(manager_);
   DCHECK_GT(params_.channels(), 0);
 }
@@ -136,16 +146,16 @@ bool CrasUnifiedStream::Open() {
     LOG(WARNING) << "Couldn't create CRAS client.\n";
     ReportStreamOpenResult(
         StreamOpenResult::kCallbackOpenCannotCreateCrasClient);
-    client_ = NULL;
+    client_ = nullptr;
     return false;
   }
 
-  if (libcras_client_connect(client_)) {
+  if (libcras_client_connect_timeout(client_, kCrasConnectTimeoutMs)) {
     LOG(WARNING) << "Couldn't connect CRAS client.\n";
     ReportStreamOpenResult(
         StreamOpenResult::kCallbackOpenCannotConnectToCrasClient);
-    libcras_client_destroy(client_);
-    client_ = NULL;
+    libcras_client_destroy(client_.ExtractAsDangling());
+    client_ = nullptr;
     return false;
   }
 
@@ -153,8 +163,8 @@ bool CrasUnifiedStream::Open() {
   if (libcras_client_run_thread(client_)) {
     LOG(WARNING) << "Couldn't run CRAS client.\n";
     ReportStreamOpenResult(StreamOpenResult::kCallbackOpenCannotRunCrasClient);
-    libcras_client_destroy(client_);
-    client_ = NULL;
+    libcras_client_destroy(client_.ExtractAsDangling());
+    client_ = nullptr;
     return false;
   }
   ReportStreamOpenResult(StreamOpenResult::kCallbackOpenSuccess);
@@ -165,8 +175,8 @@ bool CrasUnifiedStream::Open() {
 void CrasUnifiedStream::Close() {
   if (client_) {
     libcras_client_stop(client_);
-    libcras_client_destroy(client_);
-    client_ = NULL;
+    libcras_client_destroy(client_.ExtractAsDangling());
+    client_ = nullptr;
   }
 
   // Signal to the manager that we're closed and can be removed.
@@ -184,24 +194,15 @@ void CrasUnifiedStream::Start(AudioSourceCallback* callback) {
   // Channel map to CRAS_CHANNEL, values in the same order of
   // corresponding source in Chromium defined Channels.
   static const int kChannelMap[] = {
-    CRAS_CH_FL,
-    CRAS_CH_FR,
-    CRAS_CH_FC,
-    CRAS_CH_LFE,
-    CRAS_CH_RL,
-    CRAS_CH_RR,
-    CRAS_CH_FLC,
-    CRAS_CH_FRC,
-    CRAS_CH_RC,
-    CRAS_CH_SL,
-    CRAS_CH_SR
-  };
+      CRAS_CH_FL,  CRAS_CH_FR,  CRAS_CH_FC, CRAS_CH_LFE, CRAS_CH_RL, CRAS_CH_RR,
+      CRAS_CH_FLC, CRAS_CH_FRC, CRAS_CH_RC, CRAS_CH_SL,  CRAS_CH_SR};
 
   source_callback_ = callback;
 
   // Only start if we can enter the playing state.
-  if (is_playing_)
+  if (is_playing_) {
     return;
+  }
 
   struct libcras_stream_params* stream_params = libcras_stream_params_create();
   if (!stream_params) {
@@ -212,6 +213,7 @@ void CrasUnifiedStream::Start(AudioSourceCallback* callback) {
   }
 
   unsigned int frames_per_packet = params_.frames_per_buffer();
+
   int rc = libcras_stream_params_set(
       stream_params, stream_direction_, frames_per_packet * 2,
       frames_per_packet, CRAS_STREAM_TYPE_DEFAULT, manager_->GetClientType(), 0,
@@ -229,16 +231,18 @@ void CrasUnifiedStream::Start(AudioSourceCallback* callback) {
 
   // Initialize channel layout to all -1 to indicate that none of
   // the channels is set in the layout.
-  int8_t layout[CRAS_CH_MAX] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+  std::array<int8_t, CRAS_CH_MAX> layout;
+  layout.fill(-1);
 
   // Converts to CRAS defined channels. ChannelOrder will return -1
   // for channels that does not present in params_.channel_layout().
-  for (size_t i = 0; i < std::size(kChannelMap); ++i)
-    layout[kChannelMap[i]] = ChannelOrder(params_.channel_layout(),
-                                          static_cast<Channels>(i));
+  for (size_t i = 0; i < std::size(kChannelMap); ++i) {
+    layout.at(kChannelMap[i]) =
+        ChannelOrder(params_.channel_layout(), static_cast<Channels>(i));
+  }
 
   rc = libcras_stream_params_set_channel_layout(stream_params, CRAS_CH_MAX,
-                                                layout);
+                                                layout.data());
   if (rc) {
     DLOG(WARNING) << "Error setting up the channel layout.";
     ReportStreamStartResult(
@@ -247,6 +251,12 @@ void CrasUnifiedStream::Start(AudioSourceCallback* callback) {
     libcras_stream_params_destroy(stream_params);
     return;
   }
+
+  // Recreate `peak_detector_` every time we create a new stream, to
+  // avoid ThreadChecker DCHECKs.
+  peak_detector_ = std::make_unique<AmplitudePeakDetector>(base::BindRepeating(
+      &AudioManager::TraceAmplitudePeak, base::Unretained(manager_),
+      /*trace_start=*/false));
 
   // Adding the stream will start the audio callbacks requesting data.
   if (libcras_client_add_pinned_stream(client_, pin_device_, &stream_id_,
@@ -271,18 +281,24 @@ void CrasUnifiedStream::Start(AudioSourceCallback* callback) {
 }
 
 void CrasUnifiedStream::Stop() {
-  if (!client_)
+  if (!client_) {
     return;
+  }
 
   // Removing the stream from the client stops audio.
   libcras_client_rm_stream(client_, stream_id_);
+
+  peak_detector_.reset();
+
+  ReportAndResetStats();
 
   is_playing_ = false;
 }
 
 void CrasUnifiedStream::SetVolume(double volume) {
-  if (!client_)
+  if (!client_) {
     return;
+  }
   volume_ = static_cast<float>(volume);
   libcras_client_set_stream_volume(client_, stream_id_, volume_);
 }
@@ -297,12 +313,30 @@ int CrasUnifiedStream::UnifiedCallback(struct libcras_stream_cb_data* data) {
   uint8_t* buf;
   struct timespec latency;
   void* usr_arg;
+  struct timespec underrun_duration_ts;
+  cras_stream_id_t stream_id;
   libcras_stream_cb_data_get_frames(data, &frames);
   libcras_stream_cb_data_get_buf(data, &buf);
   libcras_stream_cb_data_get_latency(data, &latency);
   libcras_stream_cb_data_get_usr_arg(data, &usr_arg);
+  libcras_stream_cb_data_get_underrun_duration(data, &underrun_duration_ts);
+  libcras_stream_cb_data_get_stream_id(data, &stream_id);
+  TRACE_EVENT_BEGIN(
+      "audio", "CrasUnifiedStream::UnifiedCallback",
+      perfetto::Flow::ProcessScoped(static_cast<uint64_t>(stream_id)));
+
   CrasUnifiedStream* me = static_cast<CrasUnifiedStream*>(usr_arg);
-  return me->WriteAudio(frames, buf, &latency);
+  base::TimeDelta underrun_duration =
+      base::TimeDelta::FromTimeSpec(underrun_duration_ts);
+  me->CalculateAudioGlitches(underrun_duration);
+  uint32_t filled_frames = me->WriteAudio(frames, buf, &latency);
+  TRACE_EVENT_END("audio", [&](perfetto::EventContext ctx) {
+    auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+    auto* data = event->set_chromeos_cras_unified();
+    data->set_requested_frames(frames);
+    data->set_filled_frames(filled_frames);
+  });
+  return filled_frames;
 }
 
 // Static callback for stream errors.
@@ -319,13 +353,27 @@ uint32_t CrasUnifiedStream::WriteAudio(size_t frames,
                                        uint8_t* buffer,
                                        const timespec* latency_ts) {
   DCHECK_EQ(frames, static_cast<size_t>(output_bus_->frames()));
+  const base::TimeDelta latency = base::TimeDelta::FromTimeSpec(*latency_ts);
+  TRACE_EVENT("audio", "CrasUnifiedStream::WriteAudio",
+              [&](perfetto::EventContext ctx) {
+                auto* event =
+                    ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+                auto* data = event->set_chromeos_cras_unified();
+                data->set_sample_rate(params_.sample_rate());
+                data->set_latency_us(latency.InMicroseconds());
+              });
 
   // Treat negative latency (if we are too slow to render) as 0.
-  const base::TimeDelta delay =
-      std::max(base::TimeDelta::FromTimeSpec(*latency_ts), base::TimeDelta());
+  const base::TimeDelta delay = std::max(latency, base::TimeDelta());
+  const AudioGlitchInfo glitch_info = glitch_info_accumulator_.GetAndReset();
 
-  int frames_filled = source_callback_->OnMoreData(
-      delay, base::TimeTicks::Now(), {}, output_bus_.get());
+  UMA_HISTOGRAM_COUNTS_1000("Media.Audio.Render.SystemDelay",
+                            delay.InMilliseconds());
+  int frames_filled =
+      source_callback_->OnMoreData(BoundedDelay(delay), base::TimeTicks::Now(),
+                                   glitch_info, output_bus_.get());
+
+  peak_detector_->FindPeak(output_bus_.get());
 
   // Note: If this ever changes to output raw float the data must be clipped and
   // sanitized since it may come from an untrusted source such as NaCl.
@@ -339,8 +387,63 @@ void CrasUnifiedStream::NotifyStreamError(int err) {
   // This will remove the stream from the client.
   // TODO(dalecurtis): Consider sending a translated |err| code.
   ReportNotifyStreamErrors(err);
-  if (source_callback_)
+  if (source_callback_) {
     source_callback_->OnError(AudioSourceCallback::ErrorType::kUnknown);
+  }
+}
+
+void CrasUnifiedStream::ReportAndResetStats() {
+  SystemGlitchReporter::Stats stats =
+      glitch_reporter_.GetLongTermStatsAndReset();
+
+  if (!log_callback_.is_null()) {
+    std::string log_message = base::StringPrintf(
+        "CRAS out: (num_glitches_detected=[%d], cumulative_audio_lost=[%" PRId64
+        " ms],largest_glitch=[%" PRId64 " ms])",
+        stats.glitches_detected, stats.total_glitch_duration.InMilliseconds(),
+        stats.largest_glitch_duration.InMilliseconds());
+
+    log_callback_.Run(log_message);
+    if (stats.glitches_detected != 0) {
+      DLOG(WARNING) << log_message;
+    }
+  }
+
+  last_underrun_duration_ = base::TimeDelta();
+  glitch_info_accumulator_.GetAndReset();
+}
+
+void CrasUnifiedStream::CalculateAudioGlitches(
+    base::TimeDelta underrun_duration) {
+  TRACE_EVENT(
+      "audio", "CrasUnifiedStream::CalculateAudioGlitches",
+      [&](perfetto::EventContext ctx) {
+        auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+        auto* data = event->set_chromeos_cras_unified();
+        data->set_underrun_duration_us(underrun_duration.InMicroseconds());
+        data->set_last_underrun_duration_us(
+            last_underrun_duration_.InMicroseconds());
+      });
+  // |underrun_duration| obtained from callback is the cumulative value
+  // of the filled zero frames of the whole stream. Calculate
+  // the filled zero frames duration this callback.
+  DCHECK_GE(underrun_duration, last_underrun_duration_);
+  base::TimeDelta underrun_glitch_duration =
+      underrun_duration - last_underrun_duration_;
+
+  glitch_reporter_.UpdateStats(underrun_glitch_duration);
+
+  if (underrun_glitch_duration.is_positive()) {
+    glitch_info_accumulator_.Add(AudioGlitchInfo::SingleBoundedSystemGlitch(
+        underrun_glitch_duration, AudioGlitchInfo::Direction::kRender));
+    TRACE_EVENT_INSTANT("audio", "glitch", [&](perfetto::EventContext ctx) {
+      auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+      auto* data = event->set_chromeos_cras_unified();
+      data->set_underrun_glitch_duration_us(
+          underrun_glitch_duration.InMicroseconds());
+    });
+  }
+  last_underrun_duration_ = underrun_duration;
 }
 
 }  // namespace media

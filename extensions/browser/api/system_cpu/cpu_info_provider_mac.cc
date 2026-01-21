@@ -6,8 +6,9 @@
 
 #include <mach/mach_host.h>
 
+#include "base/apple/scoped_mach_port.h"
+#include "base/compiler_specific.h"
 #include "base/mac/mac_util.h"
-#include "base/mac/scoped_mach_port.h"
 #include "base/system/sys_info.h"
 
 namespace extensions {
@@ -27,12 +28,11 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
   DCHECK(infos);
 
   natural_t num_of_processors;
-  base::mac::ScopedMachSendRight host(mach_host_self());
+  base::apple::ScopedMachSendRight host(mach_host_self());
   mach_msg_type_number_t type;
   processor_cpu_load_info_data_t* cpu_infos;
 
-  if (host_processor_info(host.get(),
-                          PROCESSOR_CPU_LOAD_INFO,
+  if (host_processor_info(host.get(), PROCESSOR_CPU_LOAD_INFO,
                           &num_of_processors,
                           reinterpret_cast<processor_info_array_t*>(&cpu_infos),
                           &type) == KERN_SUCCESS) {
@@ -41,11 +41,14 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
     DCHECK_EQ(num_of_processors, static_cast<natural_t>(infos->size()));
 
     for (natural_t i = 0; i < num_of_processors; ++i) {
-      double user = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_USER]),
-             sys =
-                 static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_SYSTEM]),
-             nice = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_NICE]),
-             idle = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_IDLE]);
+      double user = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_USER]),
+             sys = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_SYSTEM]),
+             nice = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_NICE]),
+             idle = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_IDLE]);
 
       infos->at(i).usage.kernel = sys;
       infos->at(i).usage.user = user + nice;
@@ -53,8 +56,7 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
       infos->at(i).usage.total = sys + user + nice + idle;
     }
 
-    vm_deallocate(mach_task_self(),
-                  reinterpret_cast<vm_address_t>(cpu_infos),
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(cpu_infos),
                   num_of_processors * sizeof(processor_cpu_load_info));
 
     return true;

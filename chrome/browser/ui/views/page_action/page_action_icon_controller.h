@@ -11,6 +11,7 @@
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view_observer.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/zoom/zoom_event_manager.h"
 #include "components/zoom/zoom_event_manager_observer.h"
 #include "content/public/browser/navigation_handle.h"
@@ -20,6 +21,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/views/view.h"
 
+class Browser;
 class PageActionIconContainer;
 struct PageActionIconParams;
 class ZoomView;
@@ -37,16 +39,12 @@ class PageActionIconController : public PageActionIconViewObserver,
             PageActionIconContainer* icon_container);
 
   PageActionIconView* GetIconView(PageActionIconType type);
-  PageActionIconType GetIconType(PageActionIconView* view);
+  PageActionIconType GetIconType(const PageActionIconView* view) const;
 
   // Updates the visual state of all enabled page action icons.
   void UpdateAll();
 
   bool IsAnyIconVisible() const;
-
-  // Activates the first visible but inactive icon for accessibility. Returns
-  // whether any icons were activated.
-  bool ActivateFirstInactiveBubbleForAccessibility();
 
   // Update the icons' color.
   void SetIconColor(SkColor icon_color);
@@ -69,6 +67,10 @@ class PageActionIconController : public PageActionIconViewObserver,
       const;
 
  private:
+  using IconViews =
+      base::flat_map<PageActionIconType,
+                     raw_ptr<PageActionIconView, CtnExperimental>>;
+
   // PageActionIconViewObserver:
   void OnPageActionIconViewShown(PageActionIconView* view) override;
   void OnPageActionIconViewClicked(PageActionIconView* view) override;
@@ -81,6 +83,9 @@ class PageActionIconController : public PageActionIconViewObserver,
   // include permanent page actions, such as the bookmarks star and sharing
   // hub.
   int VisibleEphemeralActionCount() const;
+
+  // Logs UMA data as appropriate when the current displayed URL changes.
+  void RecordMetricsOnURLChange(GURL url);
 
   // Logs UMA data about the set of currently visible page actions overall, eg.
   // the total number of page actions shown.
@@ -95,12 +100,18 @@ class PageActionIconController : public PageActionIconViewObserver,
   void RecordClickMetrics(PageActionIconType type,
                           PageActionIconView* view) const;
 
+  raw_ptr<Browser> browser_ = nullptr;
+
   raw_ptr<PageActionIconContainer> icon_container_ = nullptr;
 
   raw_ptr<ZoomView> zoom_icon_ = nullptr;
 
-  base::flat_map<PageActionIconType, PageActionIconView*>
-      page_action_icon_views_;
+  IconViews page_action_icon_views_;
+
+  PrefChangeRegistrar pref_change_registrar_;
+
+  std::map<GURL, std::vector<raw_ptr<PageActionIconView, VectorExperimental>>>
+      page_actions_excluded_from_logging_;
 
   base::ScopedObservation<zoom::ZoomEventManager,
                           zoom::ZoomEventManagerObserver>

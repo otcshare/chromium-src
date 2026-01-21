@@ -8,9 +8,10 @@
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "content/browser/font_unique_name_lookup/font_unique_name_lookup.h"
-#include "content/public/common/content_features.h"
+#include "content/browser/font_unique_name_lookup/font_unique_name_lookup_android.h"
+#include "content/common/features.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 

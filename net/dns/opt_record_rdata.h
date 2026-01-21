@@ -10,9 +10,9 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "net/base/net_export.h"
 #include "net/dns/public/dns_protocol.h"
 #include "net/dns/record_rdata.h"
@@ -22,34 +22,49 @@ namespace net {
 // OPT record format (https://tools.ietf.org/html/rfc6891):
 class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
  public:
-  static std::unique_ptr<OptRecordRdata> Create(base::StringPiece data);
+  static std::unique_ptr<OptRecordRdata> Create(base::span<const uint8_t> data);
 
   class NET_EXPORT_PRIVATE Opt {
    public:
     static constexpr size_t kHeaderSize = 4;  // sizeof(code) + sizeof(size)
 
     Opt() = delete;
-    explicit Opt(std::string data);
+    explicit Opt(base::span<const uint8_t> data);
+    explicit Opt(std::vector<uint8_t> data);
 
     Opt(const Opt& other) = delete;
     Opt& operator=(const Opt& other) = delete;
     Opt(Opt&& other) = delete;
     Opt& operator=(Opt&& other) = delete;
-    virtual ~Opt() = default;
+    virtual ~Opt();
 
     bool operator==(const Opt& other) const;
-    bool operator!=(const Opt& other) const;
 
     virtual uint16_t GetCode() const = 0;
-    base::StringPiece data() const { return data_; }
+    base::span<const uint8_t> data() const { return data_; }
 
    private:
     bool IsEqual(const Opt& other) const;
-    std::string data_;
+    std::vector<uint8_t> data_;
   };
 
   class NET_EXPORT_PRIVATE EdeOpt : public Opt {
    public:
+    // Metadata for Filtering Details (ro/inc) are defined in Version 1 of
+    // https://datatracker.ietf.org/doc/draft-nottingham-public-resolver-errors/01/
+    struct NET_EXPORT_PRIVATE FilteringDetails {
+      FilteringDetails();
+      ~FilteringDetails();
+
+      FilteringDetails(const FilteringDetails&);
+      FilteringDetails& operator=(const FilteringDetails&);
+      FilteringDetails(FilteringDetails&&) noexcept;
+      FilteringDetails& operator=(FilteringDetails&&) noexcept;
+
+      std::string resolver_operator_id;   // "ro"
+      std::string filtering_incident_id;  // "inc"
+    };
+
     static const uint16_t kOptCode = dns_protocol::kEdnsExtendedDnsError;
 
     // The following errors are defined by in the IANA registry.
@@ -97,22 +112,31 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
     ~EdeOpt() override;
 
     // Attempts to parse an EDE option from `data`. Returns nullptr on failure.
-    static std::unique_ptr<EdeOpt> Create(std::string data);
+    static std::unique_ptr<EdeOpt> Create(base::span<const uint8_t> data);
+
+    // Allocates an EDE option suitable for a DNS query that indicates support
+    // for EDE with Structured DNS Errors.
+    static std::unique_ptr<EdeOpt> CreateStructuredErrorsRequest();
 
     uint16_t GetCode() const override;
     uint16_t info_code() const { return info_code_; }
-    base::StringPiece extra_text() const { return extra_text_; }
+    std::string_view extra_text() const { return extra_text_; }
 
     EdeInfoCode GetEnumFromInfoCode() const;
 
     // Convert a uint16_t to an EdeInfoCode enum.
     static EdeInfoCode GetEnumFromInfoCode(uint16_t info_code);
 
+    const std::vector<FilteringDetails>& filtering_details() const {
+      return filtering_details_;
+    }
+
    private:
     EdeOpt();
 
     uint16_t info_code_;
     std::string extra_text_;
+    std::vector<FilteringDetails> filtering_details_;
   };
 
   class NET_EXPORT_PRIVATE PaddingOpt : public Opt {
@@ -152,18 +176,19 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
     // This method must purely be used for testing.
     // Only the parser can instantiate an UnknownOpt object (via friend
     // classes).
-    static std::unique_ptr<UnknownOpt> CreateForTesting(uint16_t code,
-                                                        std::string data);
+    static std::unique_ptr<UnknownOpt> CreateForTesting(
+        uint16_t code,
+        base::span<const uint8_t> data);
 
     uint16_t GetCode() const override;
 
    private:
-    UnknownOpt(uint16_t code, std::string data);
+    UnknownOpt(uint16_t code, base::span<const uint8_t> data);
 
     uint16_t code_;
 
     friend std::unique_ptr<OptRecordRdata> OptRecordRdata::Create(
-        base::StringPiece data);
+        base::span<const uint8_t> data);
   };
 
   static constexpr uint16_t kOptsWithDedicatedClasses[] = {
@@ -182,7 +207,6 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
   ~OptRecordRdata() override;
 
   bool operator==(const OptRecordRdata& other) const;
-  bool operator!=(const OptRecordRdata& other) const;
 
   // Checks whether two OptRecordRdata objects are equal. This comparison takes
   // into account the order of insertion. Two OptRecordRdata objects with

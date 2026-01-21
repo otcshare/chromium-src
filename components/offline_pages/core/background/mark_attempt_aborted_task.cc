@@ -4,7 +4,7 @@
 
 #include "components/offline_pages/core/background/mark_attempt_aborted_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace offline_pages {
 
@@ -14,7 +14,7 @@ MarkAttemptAbortedTask::MarkAttemptAbortedTask(
     RequestQueueStore::UpdateCallback callback)
     : UpdateRequestTask(store, request_id, std::move(callback)) {}
 
-MarkAttemptAbortedTask::~MarkAttemptAbortedTask() {}
+MarkAttemptAbortedTask::~MarkAttemptAbortedTask() = default;
 
 void MarkAttemptAbortedTask::UpdateRequestImpl(
     UpdateRequestsResult read_result) {

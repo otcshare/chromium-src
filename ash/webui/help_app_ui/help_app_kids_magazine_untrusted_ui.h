@@ -10,13 +10,13 @@
 
 namespace ash {
 
-class HelpAppKidsMagazineUntrustedUIConfig : public content::WebUIConfig {
+class HelpAppKidsMagazineUntrustedUI;
+
+class HelpAppKidsMagazineUntrustedUIConfig
+    : public content::DefaultWebUIConfig<HelpAppKidsMagazineUntrustedUI> {
  public:
   HelpAppKidsMagazineUntrustedUIConfig();
   ~HelpAppKidsMagazineUntrustedUIConfig() override;
-
-  std::unique_ptr<content::WebUIController> CreateWebUIController(
-      content::WebUI* web_ui) override;
 };
 
 // The Web UI for chrome-untrusted://help-app-kids-magazine.

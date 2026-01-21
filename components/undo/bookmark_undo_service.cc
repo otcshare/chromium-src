@@ -7,10 +7,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
+#include "base/check.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
 #include "components/bookmarks/browser/bookmark_undo_provider.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
@@ -19,12 +24,12 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/undo/undo_operation.h"
 
+namespace {
+
 using bookmarks::BookmarkModel;
 using bookmarks::BookmarkNode;
 using bookmarks::BookmarkNodeData;
 using bookmarks::BookmarkUndoProvider;
-
-namespace {
 
 // BookmarkUndoOperation ------------------------------------------------------
 
@@ -34,7 +39,7 @@ class BookmarkUndoOperation : public UndoOperation {
  public:
   explicit BookmarkUndoOperation(BookmarkModel* bookmark_model)
       : bookmark_model_(bookmark_model) {}
-  ~BookmarkUndoOperation() override {}
+  ~BookmarkUndoOperation() override = default;
 
   BookmarkModel* bookmark_model() { return bookmark_model_; }
 
@@ -54,7 +59,7 @@ class BookmarkAddOperation : public BookmarkUndoOperation {
   BookmarkAddOperation(const BookmarkAddOperation&) = delete;
   BookmarkAddOperation& operator=(const BookmarkAddOperation&) = delete;
 
-  ~BookmarkAddOperation() override {}
+  ~BookmarkAddOperation() override = default;
 
   // UndoOperation:
   void Undo() override;
@@ -79,7 +84,8 @@ void BookmarkAddOperation::Undo() {
       bookmarks::GetBookmarkNodeByID(model, parent_id_);
   DCHECK(parent);
 
-  model->Remove(parent->children()[index_].get());
+  model->Remove(parent->children()[index_].get(),
+                bookmarks::metrics::BookmarkEditSource::kUser, FROM_HERE);
 }
 
 int BookmarkAddOperation::GetUndoLabelId() const {
@@ -99,7 +105,6 @@ int BookmarkAddOperation::GetRedoLabelId() const {
 class BookmarkRemoveOperation : public BookmarkUndoOperation {
  public:
   BookmarkRemoveOperation(BookmarkModel* model,
-                          BookmarkUndoProvider* undo_provider,
                           const BookmarkNode* parent,
                           size_t index,
                           std::unique_ptr<BookmarkNode> node);
@@ -115,7 +120,6 @@ class BookmarkRemoveOperation : public BookmarkUndoOperation {
   int GetRedoLabelId() const override;
 
  private:
-  raw_ptr<BookmarkUndoProvider, DanglingUntriaged> undo_provider_;
   const int64_t parent_node_id_;
   const size_t index_;
   std::unique_ptr<BookmarkNode> node_;
@@ -123,27 +127,23 @@ class BookmarkRemoveOperation : public BookmarkUndoOperation {
 
 BookmarkRemoveOperation::BookmarkRemoveOperation(
     BookmarkModel* model,
-    BookmarkUndoProvider* undo_provider,
     const BookmarkNode* parent,
     size_t index,
     std::unique_ptr<BookmarkNode> node)
     : BookmarkUndoOperation(model),
-      undo_provider_(undo_provider),
       parent_node_id_(parent->id()),
       index_(index),
       node_(std::move(node)) {}
 
-BookmarkRemoveOperation::~BookmarkRemoveOperation() {
-}
+BookmarkRemoveOperation::~BookmarkRemoveOperation() = default;
 
 void BookmarkRemoveOperation::Undo() {
   DCHECK(node_);
-
   const BookmarkNode* parent = bookmarks::GetBookmarkNodeByID(
       bookmark_model(), parent_node_id_);
   DCHECK(parent);
-
-  undo_provider_->RestoreRemovedNode(parent, index_, std::move(node_));
+  static_cast<BookmarkUndoProvider*>(bookmark_model())
+      ->RestoreRemovedNode(parent, index_, std::move(node_));
 }
 
 int BookmarkRemoveOperation::GetUndoLabelId() const {
@@ -165,7 +165,7 @@ class BookmarkEditOperation : public BookmarkUndoOperation {
   BookmarkEditOperation(const BookmarkEditOperation&) = delete;
   BookmarkEditOperation& operator=(const BookmarkEditOperation&) = delete;
 
-  ~BookmarkEditOperation() override {}
+  ~BookmarkEditOperation() override = default;
 
   // UndoOperation:
   void Undo() override;
@@ -220,7 +220,7 @@ class BookmarkMoveOperation : public BookmarkUndoOperation {
   BookmarkMoveOperation(const BookmarkMoveOperation&) = delete;
   BookmarkMoveOperation& operator=(const BookmarkMoveOperation&) = delete;
 
-  ~BookmarkMoveOperation() override {}
+  ~BookmarkMoveOperation() override = default;
   int GetUndoLabelId() const override;
   int GetRedoLabelId() const override;
 
@@ -306,13 +306,11 @@ BookmarkReorderOperation::BookmarkReorderOperation(
     : BookmarkUndoOperation(bookmark_model),
       parent_id_(parent->id()) {
   ordered_bookmarks_.resize(parent->children().size());
-  std::transform(parent->children().cbegin(), parent->children().cend(),
-                 ordered_bookmarks_.begin(),
-                 [](const auto& child) { return child->id(); });
+  std::ranges::transform(parent->children(), ordered_bookmarks_.begin(),
+                         &BookmarkNode::id);
 }
 
-BookmarkReorderOperation::~BookmarkReorderOperation() {
-}
+BookmarkReorderOperation::~BookmarkReorderOperation() = default;
 
 void BookmarkReorderOperation::Undo() {
   BookmarkModel* model = bookmark_model();
@@ -321,9 +319,9 @@ void BookmarkReorderOperation::Undo() {
   DCHECK(parent);
 
   std::vector<const BookmarkNode*> ordered_nodes;
-  for (size_t i = 0; i < ordered_bookmarks_.size(); ++i) {
+  for (int64_t ordered_bookmark : ordered_bookmarks_) {
     ordered_nodes.push_back(
-        bookmarks::GetBookmarkNodeByID(model, ordered_bookmarks_[i]));
+        bookmarks::GetBookmarkNodeByID(model, ordered_bookmark));
   }
 
   model->ReorderChildren(parent, ordered_nodes);
@@ -341,85 +339,85 @@ int BookmarkReorderOperation::GetRedoLabelId() const {
 
 // BookmarkUndoService --------------------------------------------------------
 
-BookmarkUndoService::BookmarkUndoService() : model_(nullptr) {}
+BookmarkUndoService::BookmarkUndoService() = default;
+BookmarkUndoService::~BookmarkUndoService() = default;
 
-BookmarkUndoService::~BookmarkUndoService() {
-}
-
-void BookmarkUndoService::Start(BookmarkModel* model) {
-  DCHECK(!model_);
-  model_ = model;
+void BookmarkUndoService::StartObservingBookmarkModel(BookmarkModel* model) {
+  CHECK(!scoped_observation_.IsObserving());
   scoped_observation_.Observe(model);
-  model->SetUndoDelegate(this);
 }
 
 void BookmarkUndoService::Shutdown() {
-  DCHECK(model_);
-  DCHECK(scoped_observation_.IsObserving());
+  undo_manager_.Shutdown();
   scoped_observation_.Reset();
-  model_->SetUndoDelegate(nullptr);
 }
 
-void BookmarkUndoService::BookmarkModelLoaded(BookmarkModel* model,
-                                              bool ids_reassigned) {
-  undo_manager_.RemoveAllOperations();
+void BookmarkUndoService::BookmarkModelBeingDeleted() {
+  // Delete all undo operations to avoid dangling pointers to `BookmarkModel`
+  // that is getting destroyed. `BookmarkModel` is a `KeyedService`, so it is
+  // destroyed during shutdown along with other services - other `BookmarkModel`
+  // objects and `BookmarkUndoService` itself will be destroyed soon.
+  Shutdown();
 }
 
-void BookmarkUndoService::BookmarkModelBeingDeleted(BookmarkModel* model) {
-  undo_manager_.RemoveAllOperations();
-}
-
-void BookmarkUndoService::BookmarkNodeMoved(BookmarkModel* model,
-                                            const BookmarkNode* old_parent,
+void BookmarkUndoService::BookmarkNodeMoved(const BookmarkNode* old_parent,
                                             size_t old_index,
                                             const BookmarkNode* new_parent,
                                             size_t new_index) {
+  BookmarkModel* model = scoped_observation_.GetSource();
   std::unique_ptr<UndoOperation> op(new BookmarkMoveOperation(
       model, old_parent, old_index, new_parent, new_index));
   undo_manager()->AddUndoOperation(std::move(op));
 }
 
-void BookmarkUndoService::BookmarkNodeAdded(BookmarkModel* model,
-                                            const BookmarkNode* parent,
+void BookmarkUndoService::BookmarkNodeAdded(const BookmarkNode* parent,
                                             size_t index,
                                             bool added_by_user) {
+  BookmarkModel* model = scoped_observation_.GetSource();
   std::unique_ptr<UndoOperation> op(
       new BookmarkAddOperation(model, parent, index));
   undo_manager()->AddUndoOperation(std::move(op));
 }
 
-void BookmarkUndoService::OnWillChangeBookmarkNode(BookmarkModel* model,
-                                                   const BookmarkNode* node) {
+void BookmarkUndoService::OnWillChangeBookmarkNode(const BookmarkNode* node) {
+  BookmarkModel* model = scoped_observation_.GetSource();
   std::unique_ptr<UndoOperation> op(new BookmarkEditOperation(model, node));
   undo_manager()->AddUndoOperation(std::move(op));
 }
 
-void BookmarkUndoService::OnWillReorderBookmarkNode(BookmarkModel* model,
-                                                    const BookmarkNode* node) {
+void BookmarkUndoService::OnWillReorderBookmarkNode(const BookmarkNode* node) {
+  BookmarkModel* model = scoped_observation_.GetSource();
   std::unique_ptr<UndoOperation> op(new BookmarkReorderOperation(model, node));
   undo_manager()->AddUndoOperation(std::move(op));
 }
 
-void BookmarkUndoService::GroupedBookmarkChangesBeginning(
-    BookmarkModel* model) {
+void BookmarkUndoService::ExtensiveBookmarkChangesBeginning() {
+  undo_manager()->SuspendUndoTracking();
+}
+
+void BookmarkUndoService::ExtensiveBookmarkChangesEnded() {
+  undo_manager()->ResumeUndoTracking();
+}
+
+void BookmarkUndoService::GroupedBookmarkChangesBeginning() {
   undo_manager()->StartGroupingActions();
 }
 
-void BookmarkUndoService::GroupedBookmarkChangesEnded(BookmarkModel* model) {
+void BookmarkUndoService::GroupedBookmarkChangesEnded() {
   undo_manager()->EndGroupingActions();
 }
 
-void BookmarkUndoService::SetUndoProvider(BookmarkUndoProvider* undo_provider) {
-  undo_provider_ = undo_provider;
-}
-
-void BookmarkUndoService::OnBookmarkNodeRemoved(
-    BookmarkModel* model,
+void BookmarkUndoService::AddUndoEntryForRemovedNode(
     const BookmarkNode* parent,
     size_t index,
     std::unique_ptr<BookmarkNode> node) {
-  DCHECK(undo_provider_);
-  std::unique_ptr<UndoOperation> op(new BookmarkRemoveOperation(
-      model, undo_provider_, parent, index, std::move(node)));
+  BookmarkModel* model = scoped_observation_.GetSource();
+  CHECK(model);
+
+  // `model` is guaranteed to outlive `BookmarkRemoveOperation`, since all undo
+  // operations are deleted whenever `BookmarkModelBeingDeleted` or `Shutdown`
+  // are invoked.
+  std::unique_ptr<UndoOperation> op(
+      new BookmarkRemoveOperation(model, parent, index, std::move(node)));
   undo_manager()->AddUndoOperation(std::move(op));
 }

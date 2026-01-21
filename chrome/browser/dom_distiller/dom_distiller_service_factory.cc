@@ -6,11 +6,13 @@
 
 #include <utility>
 
+#include "base/callback_list.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "components/dom_distiller/content/browser/distiller_page_web_contents.h"
 #include "components/dom_distiller/core/article_entry.h"
 #include "components/dom_distiller/core/distiller.h"
@@ -28,15 +30,21 @@ DomDistillerContextKeyedService::DomDistillerContextKeyedService(
     std::unique_ptr<DistillerFactory> distiller_factory,
     std::unique_ptr<DistillerPageFactory> distiller_page_factory,
     std::unique_ptr<DistilledPagePrefs> distilled_page_prefs,
-    std::unique_ptr<DistillerUIHandle> distiller_ui_handle)
+    std::unique_ptr<DistillerUIHandle> distiller_ui_handle,
+    base::CallbackListSubscription distilled_page_prefs_subscription)
     : DomDistillerService(std::move(distiller_factory),
                           std::move(distiller_page_factory),
                           std::move(distilled_page_prefs),
-                          std::move(distiller_ui_handle)) {}
+                          std::move(distiller_ui_handle)),
+      distilled_page_prefs_subscription_(
+          std::move(distilled_page_prefs_subscription)) {}
+
+DomDistillerContextKeyedService::~DomDistillerContextKeyedService() = default;
 
 // static
 DomDistillerServiceFactory* DomDistillerServiceFactory::GetInstance() {
-  return base::Singleton<DomDistillerServiceFactory>::get();
+  static base::NoDestructor<DomDistillerServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -52,11 +60,20 @@ DomDistillerServiceFactory::DomDistillerServiceFactory()
           "DomDistillerService",
           // Makes normal profile and off-the-record profile use same service
           // instance.
-          ProfileSelections::BuildRedirectedInIncognito()) {}
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {}
 
-DomDistillerServiceFactory::~DomDistillerServiceFactory() {}
+DomDistillerServiceFactory::~DomDistillerServiceFactory() = default;
 
-KeyedService* DomDistillerServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+DomDistillerServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
   scoped_refptr<base::SequencedTaskRunner> background_task_runner =
@@ -85,8 +102,17 @@ KeyedService* DomDistillerServiceFactory::BuildServiceInstanceFor(
   options.set_pagination_algo("next");
   std::unique_ptr<DistillerFactory> distiller_factory(new DistillerFactoryImpl(
       std::move(distiller_url_fetcher_factory), options));
-  std::unique_ptr<DistilledPagePrefs> distilled_page_prefs(
-      new DistilledPagePrefs(profile->GetPrefs()));
+
+  std::unique_ptr<DistilledPagePrefs> distilled_page_prefs =
+      std::make_unique<DistilledPagePrefs>(profile->GetPrefs());
+  distilled_page_prefs->SetDefaultFontScaling(
+      profile->GetZoomLevelPrefs()->GetDefaultZoomFactor());
+  base::CallbackListSubscription distilled_page_prefs_subscription =
+      profile->GetZoomLevelPrefs()->RegisterDefaultZoomLevelCallback(
+          base::BindRepeating(&DomDistillerServiceFactory::
+                                  UpdateDistilledPagePrefsDefaultFontScaling,
+                              weak_ptr_factory_.GetWeakPtr(),
+                              base::Unretained(context)));
   std::unique_ptr<DistillerUIHandle> distiller_ui_handle;
 
 #if BUILDFLAG(IS_ANDROID)
@@ -94,12 +120,22 @@ KeyedService* DomDistillerServiceFactory::BuildServiceInstanceFor(
       std::make_unique<dom_distiller::android::DistillerUIHandleAndroid>();
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  DomDistillerContextKeyedService* service =
-      new DomDistillerContextKeyedService(
-          std::move(distiller_factory), std::move(distiller_page_factory),
-          std::move(distilled_page_prefs), std::move(distiller_ui_handle));
+  return std::make_unique<DomDistillerContextKeyedService>(
+      std::move(distiller_factory), std::move(distiller_page_factory),
+      std::move(distilled_page_prefs), std::move(distiller_ui_handle),
+      std::move(distilled_page_prefs_subscription));
+}
 
-  return service;
+void DomDistillerServiceFactory::UpdateDistilledPagePrefsDefaultFontScaling(
+    content::BrowserContext* context) const {
+  DomDistillerContextKeyedService* service =
+      DomDistillerServiceFactory::GetForBrowserContext(context);
+  DCHECK(service);
+  DistilledPagePrefs* distilled_page_prefs = service->GetDistilledPagePrefs();
+
+  Profile* profile = Profile::FromBrowserContext(context);
+  distilled_page_prefs->SetDefaultFontScaling(
+      profile->GetZoomLevelPrefs()->GetDefaultZoomFactor());
 }
 
 }  // namespace dom_distiller

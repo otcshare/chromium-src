@@ -1,4 +1,0 @@
-monorail {
-  component: "Blink>Screen>MultiScreen"
-}
-team_email: "pwa-dev@chromium.org"

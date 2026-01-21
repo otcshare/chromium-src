@@ -7,16 +7,15 @@
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited box behind'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited box behind'",
       "bounds": [100, 100],
       "contentsOpaque": true,
       "backgroundColor": "#0000FF",
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='box middle'",
-      "bounds": [150, 150],
-      "contentsOpaqueForText": true
+      "name": "LayoutBlockFlow (positioned) DIV class='box middle'",
+      "bounds": [150, 150]
     }
   ],
   "transforms": [

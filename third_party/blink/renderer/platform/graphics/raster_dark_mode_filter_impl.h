@@ -7,11 +7,10 @@
 
 #include "base/gtest_prod_util.h"
 #include "cc/tiles/raster_dark_mode_filter.h"
+#include "third_party/blink/renderer/platform/graphics/dark_mode_filter.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
-
-class DarkModeFilter;
 
 struct DarkModeSettings;
 
@@ -26,8 +25,8 @@ class PLATFORM_EXPORT RasterDarkModeFilterImpl
   static RasterDarkModeFilterImpl& Instance();
 
   // RasterDarkModeFilter API.
-  sk_sp<SkColorFilter> ApplyToImage(const SkPixmap& pixmap,
-                                    const SkIRect& src) const override;
+  sk_sp<cc::ColorFilter> ApplyToImage(const SkPixmap& pixmap,
+                                      const SkIRect& src) const override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(RasterDarkModeFilterImplTest, ApplyToImageAPI);

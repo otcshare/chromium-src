@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -29,6 +30,12 @@ class GURL;
 using DefaultClientCallback = base::OnceCallback<void(bool)>;
 
 namespace custom_handlers {
+
+enum class RphRegistrationMode {
+  kNone,
+  kAutoAccept,
+  kAutoReject,
+};
 
 class ProtocolHandler;
 
@@ -92,6 +99,8 @@ class ProtocolHandlerRegistry : public KeyedService {
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  void SetDelegateForTesting(std::unique_ptr<Delegate> delegate);
+
   // Called when a site tries to register as a protocol handler. If the request
   // can be handled silently by the registry - either to ignore the request
   // or to update an existing handler - the request will succeed. If this
@@ -130,10 +139,10 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   // Returns the offset in the list of handlers for a protocol of the default
   // handler for that protocol.
-  int GetHandlerIndex(base::StringPiece scheme) const;
+  int GetHandlerIndex(std::string_view scheme) const;
 
   // Get the list of protocol handlers for the given scheme.
-  ProtocolHandlerList GetHandlersFor(base::StringPiece scheme) const;
+  ProtocolHandlerList GetHandlersFor(std::string_view scheme) const;
 
   // Get a list of protocol handlers registered in [begin, end).
   // Does not include predefined or policy installed handlers.
@@ -142,10 +151,17 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   // Clear all protocol handlers registered in [begin, end).
   // Does not delete predefined or policy installed handlers.
-  void ClearUserDefinedHandlers(base::Time begin, base::Time end);
+  void ClearUserDefinedHandlers(base::Time begin,
+                                base::Time end,
+                                bool save = false);
 
   // Get the list of ignored protocol handlers.
   ProtocolHandlerList GetIgnoredHandlers();
+
+  // Get all the handlers registered by extensions, or if passed as argument,
+  // the ones associated to an ExtendionId
+  ProtocolHandlerList GetExtensionProtocolHandlers(
+      std::optional<std::string> extension_id = std::nullopt);
 
   // Yields a list of the protocols that have handlers registered in this
   // registry.
@@ -153,7 +169,7 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   // Returns true if we allow websites to register handlers for the given
   // scheme.
-  bool CanSchemeBeOverridden(base::StringPiece scheme) const;
+  bool CanSchemeBeOverridden(std::string_view scheme) const;
 
   // Returns true if an identical protocol handler has already been registered.
   bool IsRegistered(const ProtocolHandler& handler) const;
@@ -164,7 +180,7 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   // Returns true if the scheme has at least one handler that is registered by
   // policy.
-  bool HasPolicyRegisteredHandler(base::StringPiece scheme);
+  bool HasPolicyRegisteredHandler(std::string_view scheme);
 
   // Returns true if an identical protocol handler is being ignored.
   bool IsIgnored(const ProtocolHandler& handler) const;
@@ -176,20 +192,27 @@ class ProtocolHandlerRegistry : public KeyedService {
   bool HasIgnoredEquivalent(const ProtocolHandler& handler) const;
 
   // Causes the given protocol handler to not be ignored anymore.
-  void RemoveIgnoredHandler(const ProtocolHandler& handler);
+  void RemoveIgnoredHandler(const ProtocolHandler& handler, bool save = true);
 
   // Returns true if the protocol has a default protocol handler.
-  bool IsHandledProtocol(base::StringPiece scheme) const;
+  bool IsHandledProtocol(std::string_view scheme) const;
+
+  // Mark the scheme's default handler as confirmed by the user.
+  void ConfirmProtocolHandler(std::string_view scheme, bool save);
+
+  // Returns true if the user has granted permission to use the scheme's default
+  // handler.
+  bool IsProtocolHandlerConfirmed(std::string_view scheme) const;
 
   // Removes the given protocol handler from the registry.
-  void RemoveHandler(const ProtocolHandler& handler);
+  void RemoveHandler(const ProtocolHandler& handler, bool save = true);
 
   // Remove the default handler for the given protocol.
-  void RemoveDefaultHandler(base::StringPiece scheme);
+  void RemoveDefaultHandler(std::string_view scheme);
 
   // Returns the default handler for this protocol, or an empty handler if none
   // exists.
-  const ProtocolHandler& GetHandlerFor(base::StringPiece scheme) const;
+  const ProtocolHandler& GetHandlerFor(std::string_view scheme) const;
 
   // Returns a translated URL if |url| is handled by a protocol handler,
   // otherwise it returns an empty URL.
@@ -220,6 +243,11 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   base::WeakPtr<ProtocolHandlerRegistry> GetWeakPtr();
 
+  void SetRphRegistrationMode(RphRegistrationMode mode) {
+    registration_mode_ = mode;
+  }
+  RphRegistrationMode registration_mode() const { return registration_mode_; }
+
  private:
   friend class base::DeleteHelper<ProtocolHandlerRegistry>;
   friend struct content::BrowserThread::DeleteOnThread<
@@ -240,10 +268,14 @@ class ProtocolHandlerRegistry : public KeyedService {
 
   // Returns a pointer to the list of handlers registered for the given scheme,
   // or NULL if there are none.
-  const ProtocolHandlerList* GetHandlerList(base::StringPiece scheme) const;
+  const ProtocolHandlerList* GetHandlerList(std::string_view scheme) const;
 
   // Makes this ProtocolHandler the default handler for its protocol.
   void SetDefault(const ProtocolHandler& handler);
+
+  // Determines whether the handler should be promoted to default, in order to
+  // resolve conflicts with registrations performed through different APIs.
+  bool ShouldPromoteToDefault(const ProtocolHandler& handler) const;
 
   // Insert the given ProtocolHandler into the registry.
   void InsertHandler(const ProtocolHandler& handler);
@@ -363,6 +395,10 @@ class ProtocolHandlerRegistry : public KeyedService {
   bool is_loaded_;
 
   base::ObserverList<Observer> observers_;
+
+  // The current registration automation mode for registerProtocolHandler API,
+  // to be used for any future RegisterProtocolHandler requests.
+  RphRegistrationMode registration_mode_ = RphRegistrationMode::kNone;
 
   // Makes it possible to invalidate the callback for the
   // DefaultProtocolClientWorker.

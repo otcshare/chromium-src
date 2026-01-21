@@ -11,32 +11,19 @@ namespace trace_event {
 
 void EnableTracing(const String& category_filter) {
   base::trace_event::TraceLog::GetInstance()->SetEnabled(
-      base::trace_event::TraceConfig(category_filter.Utf8(), ""),
-      base::trace_event::TraceLog::RECORDING_MODE);
+      base::trace_event::TraceConfig(category_filter.Utf8(), ""));
 }
 
 void DisableTracing() {
   base::trace_event::TraceLog::GetInstance()->SetDisabled();
 }
 
-void AddAsyncEnabledStateObserver(
-    base::WeakPtr<AsyncEnabledStateObserver> observer) {
-  base::trace_event::TraceLog::GetInstance()->AddAsyncEnabledStateObserver(
-      observer);
+void AddTraceSessionObserver(TraceSessionObserver* observer) {
+  base::trace_event::TraceSessionObserverList::AddObserver(observer);
 }
 
-void RemoveAsyncEnabledStateObserver(AsyncEnabledStateObserver* observer) {
-  base::trace_event::TraceLog::GetInstance()->RemoveAsyncEnabledStateObserver(
-      observer);
-}
-
-void AddEnabledStateObserver(EnabledStateObserver* observer) {
-  base::trace_event::TraceLog::GetInstance()->AddEnabledStateObserver(observer);
-}
-
-void RemoveEnabledStateObserver(EnabledStateObserver* observer) {
-  base::trace_event::TraceLog::GetInstance()->RemoveEnabledStateObserver(
-      observer);
+void RemoveTraceSessionObserver(TraceSessionObserver* observer) {
+  base::trace_event::TraceSessionObserverList::RemoveObserver(observer);
 }
 
 }  // namespace trace_event

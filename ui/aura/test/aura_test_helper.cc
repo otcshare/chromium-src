@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -27,9 +27,10 @@
 #include "ui/base/ime/init/input_method_initializer.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/test_context_factories.h"
 #include "ui/display/screen.h"
+#include "ui/events/platform/platform_event_source.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/wm/core/cursor_loader.h"
 #include "ui/wm/core/default_activation_client.h"
 #include "ui/wm/core/default_screen_position_client.h"
@@ -67,7 +68,8 @@ AuraTestHelper::AuraTestHelper(ui::ContextFactory* context_factory) {
   ui::test::EnableTestConfigForPlatformWindows();
 #endif
 
-#if BUILDFLAG(IS_OZONE) && BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_OZONE) && BUILDFLAG(IS_CHROMEOS) && \
+    !BUILDFLAG(IS_CHROMEOS_DEVICE)
   ui::DisableNativeUiEventDispatchForTest();
 #endif
 
@@ -80,8 +82,8 @@ AuraTestHelper::AuraTestHelper(ui::ContextFactory* context_factory) {
   ui::test::EventGeneratorDelegate::SetFactoryFunction(
       base::BindRepeating(&EventGeneratorDelegateAura::Create));
 
-  zero_duration_mode_ = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  zero_duration_mode_ = std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+      gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
 
   // Some tests suites create Env globally.
   if (Env::HasInstance())
@@ -89,6 +91,8 @@ AuraTestHelper::AuraTestHelper(ui::ContextFactory* context_factory) {
   else
     env_ = Env::CreateInstance();
   Env* env = GetEnv();
+  CHECK(env) << "No Aura env is set - confirm your test system is set up to "
+                "display graphics";
 
   if (!context_factory) {
     context_factories_ = std::make_unique<ui::TestContextFactories>(false);
@@ -106,6 +110,16 @@ AuraTestHelper::AuraTestHelper(ui::ContextFactory* context_factory) {
   // This must be reset before creating TestScreen, which sets up the display
   // scale factor for this test iteration.
   display::Display::ResetForceDeviceScaleFactorForTesting();
+
+  auto* platform_event_source = ui::PlatformEventSource::GetInstance();
+  if (platform_event_source) {
+    // The previous test (if any) may have left the Wayland event source in
+    // "watching" state even though its message pump was already destroyed.
+    // Reset its state now so that when the current test creates the
+    // WindowTreeHost, Wayland event processing can restart in the new message
+    // pump.
+    platform_event_source->ResetStateForTesting();
+  }
 }
 
 AuraTestHelper::~AuraTestHelper() {
@@ -119,7 +133,7 @@ AuraTestHelper* AuraTestHelper::GetInstance() {
 }
 
 void AuraTestHelper::SetUp() {
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   gfx::Size host_size(screen ? screen->GetPrimaryDisplay().GetSizeInPixel()
                              : kDefaultHostSize);
   test_screen_.reset(TestScreen::Create(host_size));
@@ -150,9 +164,6 @@ void AuraTestHelper::SetUp() {
 void AuraTestHelper::TearDown() {
   g_instance = nullptr;
 
-  if (test_screen_ && (display::Screen::GetScreen() == GetTestScreen()))
-    display::Screen::SetScreenInstance(nullptr);
-
   if (!env_)
     Env::GetInstance()->set_context_factory(context_factory_to_restore_);
 
@@ -170,7 +181,12 @@ void AuraTestHelper::TearDown() {
   capture_client_.reset();
   focus_client_.reset();
   host_.reset();
+
+  if (test_screen_ && (display::Screen::Get() == GetTestScreen())) {
+    display::Screen::SetScreenInstance(nullptr);
+  }
   test_screen_.reset();
+
   context_factories_.reset();
   env_.reset();
   zero_duration_mode_.reset();

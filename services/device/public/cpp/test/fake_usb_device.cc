@@ -4,16 +4,15 @@
 
 #include "services/device/public/cpp/test/fake_usb_device.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
 #include "services/device/public/cpp/test/mock_usb_mojo_device.h"
 #include "services/device/public/cpp/usb/usb_utils.h"
 
@@ -72,7 +71,8 @@ void FakeUsbDevice::CloseHandle() {
 // Device implementation:
 void FakeUsbDevice::Open(OpenCallback callback) {
   if (is_opened_) {
-    std::move(callback).Run(mojom::UsbOpenDeviceError::ALREADY_OPEN);
+    std::move(callback).Run(mojom::UsbOpenDeviceResult::NewError(
+        mojom::UsbOpenDeviceError::ALREADY_OPEN));
     return;
   }
 
@@ -85,17 +85,18 @@ void FakeUsbDevice::Open(OpenCallback callback) {
     return;
   }
 
-  FinishOpen(std::move(callback), mojom::UsbOpenDeviceError::OK);
+  FinishOpen(std::move(callback), mojom::UsbOpenDeviceResult::NewSuccess(
+                                      mojom::UsbOpenDeviceSuccess::OK));
 }
 
 void FakeUsbDevice::FinishOpen(OpenCallback callback,
-                               mojom::UsbOpenDeviceError error) {
+                               mojom::UsbOpenDeviceResultPtr result) {
   DCHECK(!is_opened_);
   is_opened_ = true;
   if (client_)
     client_->OnDeviceOpened();
 
-  std::move(callback).Run(error);
+  std::move(callback).Run(std::move(result));
 }
 
 void FakeUsbDevice::Close(CloseCallback callback) {
@@ -125,7 +126,7 @@ void FakeUsbDevice::ClaimInterface(uint8_t interface_number,
   }
 
   const mojom::UsbDeviceInfo& device_info = device_->GetDeviceInfo();
-  auto config_it = base::ranges::find(
+  auto config_it = std::ranges::find(
       device_info.configurations, device_info.active_configuration,
       &mojom::UsbConfigurationInfo::configuration_value);
   if (config_it == device_info.configurations.end()) {
@@ -135,8 +136,8 @@ void FakeUsbDevice::ClaimInterface(uint8_t interface_number,
   }
 
   auto interface_it =
-      base::ranges::find((*config_it)->interfaces, interface_number,
-                         &mojom::UsbInterfaceInfo::interface_number);
+      std::ranges::find((*config_it)->interfaces, interface_number,
+                        &mojom::UsbInterfaceInfo::interface_number);
   if (interface_it == (*config_it)->interfaces.end()) {
     std::move(callback).Run(mojom::UsbClaimInterfaceResult::kFailure);
     LOG(ERROR) << "No such interface in " << (*config_it)->interfaces.size()
@@ -145,7 +146,7 @@ void FakeUsbDevice::ClaimInterface(uint8_t interface_number,
   }
 
   for (const auto& alternate : (*interface_it)->alternates) {
-    if (base::Contains(blocked_interface_classes_, alternate->class_code)) {
+    if (blocked_interface_classes_.contains(alternate->class_code)) {
       std::move(callback).Run(mojom::UsbClaimInterfaceResult::kProtectedClass);
       return;
     }

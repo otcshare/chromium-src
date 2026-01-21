@@ -4,32 +4,33 @@
 
 package org.chromium.chrome.browser.layouts.scene_layer;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import androidx.annotation.VisibleForTesting;
 
-/**
- * Java representation of a scene layer.
- */
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+
+/** Java representation of a scene layer. */
 @JNINamespace("android")
+@NullMarked
 public class SceneLayer {
     public static final int INVALID_RESOURCE_ID = -1;
     private long mNativePtr;
 
-    /**
-     * Builds an instance of a {@link SceneLayer}.
-     */
+    /** Builds an instance of a {@link SceneLayer}. */
     public SceneLayer() {
         initializeNative();
     }
 
     /**
-     * Initializes the native component of a {@link SceneLayer}.  Must be
-     * overridden to have a custom native component.
+     * Initializes the native component of a {@link SceneLayer}. Must be overridden to have a custom
+     * native component.
      */
     protected void initializeNative() {
         if (mNativePtr == 0) {
-            mNativePtr = SceneLayerJni.get().init(SceneLayer.this);
+            mNativePtr = SceneLayerJni.get().init(this);
         }
         assert mNativePtr != 0;
     }
@@ -37,20 +38,19 @@ public class SceneLayer {
     /** Remove this layer from its parent in the tree. */
     public void removeFromParent() {
         if (mNativePtr == 0) return;
-        SceneLayerJni.get().removeFromParent(mNativePtr, SceneLayer.this);
+        SceneLayerJni.get().removeFromParent(mNativePtr);
     }
 
-    /**
-     * Destroys this object and the corresponding native component.
-     */
+    /** Destroys this object and the corresponding native component. */
     public void destroy() {
         assert mNativePtr != 0;
-        SceneLayerJni.get().destroy(mNativePtr, SceneLayer.this);
+        SceneLayerJni.get().destroy(mNativePtr);
         assert mNativePtr == 0;
     }
 
     @CalledByNative
-    private void setNativePtr(long nativeSceneLayerPtr) {
+    @VisibleForTesting
+    public void setNativePtr(long nativeSceneLayerPtr) {
         assert mNativePtr == 0 || nativeSceneLayerPtr == 0;
         mNativePtr = nativeSceneLayerPtr;
     }
@@ -61,9 +61,12 @@ public class SceneLayer {
     }
 
     @NativeMethods
-    interface Natives {
-        long init(SceneLayer caller);
-        void removeFromParent(long nativeSceneLayer, SceneLayer caller);
-        void destroy(long nativeSceneLayer, SceneLayer caller);
+    @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
+    public interface Natives {
+        long init(SceneLayer self);
+
+        void removeFromParent(long nativeSceneLayer);
+
+        void destroy(long nativeSceneLayer);
     }
 }

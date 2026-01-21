@@ -28,22 +28,38 @@ class SingleClientPrintersSyncTest : public SyncTest {
   SingleClientPrintersSyncTest() : SyncTest(SINGLE_CLIENT) {}
   ~SingleClientPrintersSyncTest() override = default;
 
-  bool UseVerifier() override {
-    // TODO(crbug.com/1137770): rewrite tests to not use verifier.
+  bool SetupClients() override {
+    if (!SyncTest::SetupClients()) {
+      return false;
+    }
+
+    CHECK(UseVerifier());
+    printers_helper::WaitForPrinterStoreToLoad(verifier());
+    printers_helper::WaitForPrinterStoreToLoad(GetProfile(0));
     return true;
+  }
+
+  bool UseVerifier() override {
+    // TODO(crbug.com/40724972): rewrite tests to not use verifier.
+    return true;
+  }
+
+  // This test suite is ChromeOS specific, where there's only Sync-the-feature.
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTheFeature;
   }
 };
 
 // Verify that printers aren't added with a sync call.
 IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, NoPrinters) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
   EXPECT_TRUE(ProfileContainsSamePrintersAsVerifier(0));
 }
 
 // Verify syncing doesn't randomly remove a printer.
 IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, SingleNewPrinter) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   ASSERT_EQ(0, GetVerifierPrinterCount());
 
@@ -59,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, SingleNewPrinter) {
 
 // Verify editing a printer doesn't add it.
 IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, EditPrinter) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   AddPrinter(GetPrinterStore(0), printers_helper::CreateTestPrinter(0));
   AddPrinter(GetVerifierPrinterStore(), printers_helper::CreateTestPrinter(0));
@@ -74,7 +90,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, EditPrinter) {
 
 // Verify that removing a printer works.
 IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, RemovePrinter) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   AddPrinter(GetPrinterStore(0), printers_helper::CreateTestPrinter(0));
   EXPECT_EQ(1, GetPrinterCount(0));
@@ -90,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, AddBeforeSetup) {
   AddPrinter(GetPrinterStore(0), printers_helper::CreateTestPrinter(0));
   EXPECT_EQ(1, GetPrinterCount(0));
 
-  EXPECT_TRUE(SetupSync()) << "SetupSync() failed.";
+  EXPECT_TRUE(SetupSync());
 }
 
 // Verify that adding a print server printer retains the print server URI.
@@ -108,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientPrintersSyncTest, AddPrintServerPrinter) {
 
   // Start the sync.
   ASSERT_TRUE(SetupSync());
-  absl::optional<sync_pb::PrinterSpecifics> spec_printer =
+  std::optional<sync_pb::PrinterSpecifics> spec_printer =
       bridge->GetPrinter(spec_printer_id);
   ASSERT_TRUE(spec_printer);
 

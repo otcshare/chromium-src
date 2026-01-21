@@ -4,13 +4,19 @@
 
 #include "chrome/browser/extensions/api/platform_keys/platform_keys_test_base.h"
 
-#include "base/bind.h"
+#include <array>
+#include <string>
+#include <string_view>
+
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/platform_keys/platform_keys_service_factory.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/extensions/mixin_based_extension_apitest.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -24,6 +30,7 @@
 #include "crypto/scoped_test_system_nss_key_slot.h"
 #include "extensions/test/result_catcher.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/dns/mock_host_resolver.h"
@@ -33,8 +40,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-const char kAffiliationID[] = "some-affiliation-id";
-const char kTestUserinfoToken[] = "fake-userinfo-token";
+constexpr char kAffiliationID[] = "some-affiliation-id";
+constexpr char kTestUserinfoToken[] = "fake-userinfo-token";
 
 PlatformKeysTestBase::PlatformKeysTestBase(
     SystemTokenStatus system_token_status,
@@ -51,9 +58,12 @@ PlatformKeysTestBase::PlatformKeysTestBase(
   // We log in without running browser.
   set_exit_when_last_browser_closes(false);
   cryptohome_mixin_.MarkUserAsExisting(account_id_);
+  cryptohome_mixin_.ApplyAuthConfig(
+      account_id_,
+      ash::test::UserAuthConfig::Create(ash::test::kDefaultAuthSetup));
 }
 
-PlatformKeysTestBase::~PlatformKeysTestBase() {}
+PlatformKeysTestBase::~PlatformKeysTestBase() = default;
 
 void PlatformKeysTestBase::SetUp() {
   base::FilePath test_data_dir;
@@ -61,7 +71,7 @@ void PlatformKeysTestBase::SetUp() {
   embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
 
   net::EmbeddedTestServer::ServerCertificateConfig gaia_cert_config;
-  gaia_cert_config.dns_names = {GaiaUrls::GetInstance()->gaia_url().host()};
+  gaia_cert_config.dns_names = {GaiaUrls::GetInstance()->gaia_url().GetHost()};
   gaia_server_.SetSSLConfig(gaia_cert_config);
   gaia_server_.RegisterRequestHandler(base::BindRepeating(
       &FakeGaia::HandleRequest, base::Unretained(&fake_gaia_)));
@@ -88,7 +98,7 @@ void PlatformKeysTestBase::SetUpCommandLine(base::CommandLine* command_line) {
       command_line);
 
   const GURL gaia_url =
-      gaia_server_.GetURL(GaiaUrls::GetInstance()->gaia_url().host(), "/");
+      gaia_server_.GetURL(GaiaUrls::GetInstance()->gaia_url().GetHost(), "/");
   command_line->AppendSwitchASCII(::switches::kGaiaUrl, gaia_url.spec());
   command_line->AppendSwitchASCII(::switches::kLsoUrl, gaia_url.spec());
   command_line->AppendSwitchASCII(::switches::kGoogleApisUrl, gaia_url.spec());
@@ -107,10 +117,9 @@ void PlatformKeysTestBase::SetUpInProcessBrowserTestFixture() {
           ash::FakeSessionManagerClient::Get());
 
   if (enrollment_status() == EnrollmentStatus::ENROLLED) {
-    std::set<std::string> device_affiliation_ids;
-    device_affiliation_ids.insert(kAffiliationID);
     ASSERT_NO_FATAL_FAILURE(affiliation_helper.SetDeviceAffiliationIDs(
-        &device_policy_test_helper_, device_affiliation_ids));
+        &device_policy_test_helper_,
+        std::array{std::string_view(kAffiliationID)}));
     device_policy_test_helper_.InstallOwnerKey();
     install_attributes_.Get()->SetCloudManaged(
         policy::PolicyBuilder::kFakeDomain,
@@ -118,11 +127,10 @@ void PlatformKeysTestBase::SetUpInProcessBrowserTestFixture() {
   }
 
   if (user_status() == UserStatus::MANAGED_AFFILIATED_DOMAIN) {
-    std::set<std::string> user_affiliation_ids;
-    user_affiliation_ids.insert(kAffiliationID);
     policy::UserPolicyBuilder user_policy;
     ASSERT_NO_FATAL_FAILURE(affiliation_helper.SetUserAffiliationIDs(
-        &user_policy, account_id_, user_affiliation_ids));
+        &user_policy, account_id_,
+        std::array{std::string_view(kAffiliationID)}));
   }
 
   mock_policy_provider_.SetDefaultReturns(

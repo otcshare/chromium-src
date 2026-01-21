@@ -6,42 +6,66 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_PROVIDER_H_
 
 #include <memory>
-#include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/one_shot_event.h"
-#include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/web_app_id.h"
-#include "chrome/browser/web_applications/web_app_registrar.h"
+#include "base/types/pass_key.h"
+#include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/webapps/common/manifest_id_constants.h"
+#include "components/webapps/common/web_app_id.h"
+#include "url/gurl.h"
 
 class Profile;
+
+namespace base {
+class Clock;
+}  // namespace base
 
 namespace content {
 class WebContents;
 }
 
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
-
 namespace web_app {
 
 class AbstractWebAppDatabaseFactory;
-class WebAppSyncBridge;
-class WebAppIconManager;
-class PreinstalledWebAppManager;
-class WebAppInstallFinalizer;
+class ExtensionsManager;
+class ExternallyManagedAppManager;
+class FakeWebAppProvider;
+class FileUtilsWrapper;
+class GeneratedIconFixManager;
+class IsolatedWebAppInstallationManager;
+class IsolatedWebAppPolicyManager;
+class IsolatedWebAppUpdateManager;
 class ManifestUpdateManager;
-class WebAppAudioFocusIdMap;
-class WebAppInstallManager;
-class WebAppPolicyManager;
-class WebAppUiManager;
+class NavigationCapturingLog;
 class OsIntegrationManager;
-class WebAppTranslationManager;
+class PreinstalledWebAppManager;
+class VisitedManifestManager;
+class WebAppAudioFocusIdMap;
 class WebAppCommandManager;
 class WebAppCommandScheduler;
+class WebAppIconManager;
+class WebAppInstallFinalizer;
+class WebAppInstallManager;
+class WebAppOriginAssociationManager;
+class WebAppPolicyManager;
+class WebAppRegistrar;
+class WebAppRegistrarMutable;
+class WebAppSyncBridge;
+class WebAppTranslationManager;
+class WebAppUiManager;
+class WebContentsManager;
+class WebAppProfileDeletionManager;
+enum class FetchManifestAndUpdateResult;
+
+#if BUILDFLAG(IS_CHROMEOS)
+class WebAppRunOnOsLoginManager;
+class IwaBundleCacheManager;
+#endif
 
 // WebAppProvider is the heart of Chrome web app code.
 //
@@ -59,7 +83,7 @@ class WebAppCommandScheduler;
 //       FROM_HERE,
 //       base::BindOnce([](WebAppProvider& provider) {
 //         ...
-//       }, std::ref(*provider));
+//       }, std::ref(*provider)));
 // - All subsystems are constructed independently of each other in the
 //   WebAppProvider constructor.
 // - Subsystem construction should have no side effects and start no tasks.
@@ -70,33 +94,45 @@ class WebAppProvider : public KeyedService {
   // Deprecated: Use GetForWebApps instead.
   static WebAppProvider* GetDeprecated(Profile* profile);
 
-  // On Chrome OS: if Lacros Web App (WebAppsCrosapi) is enabled, returns
-  // WebAppProvider in Lacros and nullptr in Ash. Otherwise does the reverse
-  // (nullptr in Lacros, WebAppProvider in Ash). On other platforms, always
-  // returns a WebAppProvider.
+  // This returns a WebAppProvider for the given `profile`, or `nullptr` if
+  // installed web apps are not supported on the given `profile`. Use
+  // `web_app::AreWebAppsEnabled` to determine if web apps are supported on a
+  // profile.
+  // Note: On ChromeOS, to support the system web app implementation, this also
+  // considers the `profile`'s 'original' profile, if `AreWebAppsEnabled`
+  // returns `false` for `profile`.
+  // TODO(https://crbug.com/384063076): Stop returning the WebAppProvider for
+  // profiles where `AreWebAppsEnabled` returns `false` to support CrOS system
+  // web apps.
   static WebAppProvider* GetForWebApps(Profile* profile);
 
-  // Returns the WebAppProvider for the current process. In particular:
-  // In Ash: Returns the WebAppProvider that hosts System Web Apps.
-  // In Lacros and other platforms: Returns the WebAppProvider that hosts
-  // non-system Web Apps.
+  // Returns the WebAppProvider for the current process.
   //
   // Avoid using this function where possible and prefer GetForWebApps which
-  // provides a guarantee they are being called from the correct process. Only
-  // use this if the calling code is shared between Ash and Lacros and expects
-  // the PWA WebAppProvider in Lacros and the SWA WebAppProvider in Ash.
+  // provides a guarantee they are being called from the correct process.
+  // TODO(https://crbug.com/384063076): Stop returning the WebAppProvider for
+  // profiles where `AreWebAppsEnabled` returns `false` to support CrOS system
+  // web apps.
   static WebAppProvider* GetForLocalAppsUnchecked(Profile* profile);
 
-  // Return the WebAppProvider for tests, regardless of whether this is running
-  // in Lacros/Ash. Blocks if the web app registry is not yet ready.
+  // Return the WebAppProvider for tests. Blocks if the web app registry is not
+  // yet ready.
+  // This returns  `nullptr` if installed web apps are not supported on the
+  // given `profile`. Use `web_app::AreWebAppsEnabled` to determine if web apps
+  // are supported on a profile.
+  // Note: On ChromeOS, to support the system web app implementation, this also
+  // considers the `profile`'s 'original' profile, if `AreWebAppsEnabled`
+  // returns `false` for `profile`.
+  // TODO(https://crbug.com/384063076): Stop returning the WebAppProvider for
+  // profiles where `AreWebAppsEnabled` returns `false` to support CrOS system
+  // web apps.
   static WebAppProvider* GetForTest(Profile* profile);
 
+  // See `GetForWebApps` above for when this returns `nullptr`.
   static WebAppProvider* GetForWebContents(content::WebContents* web_contents);
 
   using OsIntegrationManagerFactory =
       std::unique_ptr<OsIntegrationManager> (*)(Profile*);
-  static void SetOsIntegrationManagerFactoryForTesting(
-      OsIntegrationManagerFactory factory);
 
   explicit WebAppProvider(Profile* profile);
   WebAppProvider(const WebAppProvider&) = delete;
@@ -119,16 +155,14 @@ class WebAppProvider : public KeyedService {
   // chrome/browser/web_applications/locks/ for more info).
   WebAppRegistrar& registrar_unsafe();
   const WebAppRegistrar& registrar_unsafe() const;
-  // Deprecated use registrar_unsafe instead.
-  // TODO(b/260863458): Remove registrar accessor.
-  WebAppRegistrar& registrar();
-  const WebAppRegistrar& registrar() const;
-  // Unsafe access to the app registry controller. For safe access use locks
-  // (see chrome/browser/web_applications/locks/ for more info).
+  // Must be exclusively accessed by WebAppSyncBridge.
+  WebAppRegistrarMutable& registrar_mutable(base::PassKey<WebAppSyncBridge>);
+  // Unsafe access to the WebAppSyncBridge. Reading or data from here should be
+  // considered an 'uncommitted read', and writing data is unsafe and could
+  // interfere with other operations. For safe access use locks to ensure no
+  // operations (like install/update/uninstall/etc) are currently running. See
+  // chrome/browser/web_applications/locks/ for more info.
   WebAppSyncBridge& sync_bridge_unsafe();
-  // Deprecated use sync_bridge_unsafe instead.
-  // TODO(b/260864090): Remove sync_bridge accessor.
-  WebAppSyncBridge& sync_bridge();
   // UIs can use WebAppInstallManager for user-initiated Web Apps install.
   WebAppInstallManager& install_manager();
   // Implements persistence for Web Apps install.
@@ -141,10 +175,30 @@ class WebAppProvider : public KeyedService {
   // Clients can use WebAppPolicyManager to request updates of policy installed
   // Web Apps.
   WebAppPolicyManager& policy_manager();
+  // `IsolatedWebAppInstallationManager` is the entry point for Isolated Web App
+  // installation.
+  IsolatedWebAppInstallationManager& isolated_web_app_installation_manager();
+  // Keeps Isolated Web Apps up to date by regularly checking for updates,
+  // downloading them, and applying them.
+  IsolatedWebAppUpdateManager& iwa_update_manager();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Runs web apps on OS login.
+  WebAppRunOnOsLoginManager& run_on_os_login_manager();
+
+  // Isolated Web App bundle cache manager.
+  IwaBundleCacheManager& iwa_cache_manager();
+#endif
+
+  IsolatedWebAppPolicyManager& iwa_policy_manager();
 
   WebAppUiManager& ui_manager();
 
   WebAppAudioFocusIdMap& audio_focus_id_map();
+
+  // Interface for file access, allowing mocking for tests. `scoped_refptr` for
+  // thread safety as this is used on other task runners.
+  scoped_refptr<FileUtilsWrapper> file_utils();
 
   // Implements fetching of app icons.
   WebAppIconManager& icon_manager();
@@ -154,6 +208,28 @@ class WebAppProvider : public KeyedService {
   // Manage all OS hooks that need to be deployed during Web Apps install
   OsIntegrationManager& os_integration_manager();
   const OsIntegrationManager& os_integration_manager() const;
+
+  WebAppOriginAssociationManager& origin_association_manager();
+
+  WebContentsManager& web_contents_manager();
+
+  PreinstalledWebAppManager& preinstalled_web_app_manager();
+
+  ExtensionsManager& extensions_manager();
+
+  GeneratedIconFixManager& generated_icon_fix_manager();
+
+  AbstractWebAppDatabaseFactory& database_factory();
+
+  VisitedManifestManager& visited_manifest_manager();
+
+  NavigationCapturingLog& navigation_capturing_log();
+
+  base::Clock& clock();
+
+  // TODO(https://crbug.com/440635434): Move this to the FakeWebAppProvider when
+  // it can be used in browsertests.
+  void SetClockForTesting(base::Clock* clock);
 
   // KeyedService:
   void Shutdown() override;
@@ -176,9 +252,19 @@ class WebAppProvider : public KeyedService {
   // Returns whether the app registry is ready.
   bool is_registry_ready() const { return is_registry_ready_; }
 
-  PreinstalledWebAppManager& preinstalled_web_app_manager() {
-    return *preinstalled_web_app_manager_;
-  }
+  base::WeakPtr<WebAppProvider> AsWeakPtr();
+
+  // Returns a nullptr in the default implementation
+  virtual FakeWebAppProvider* AsFakeWebAppProviderForTesting();
+
+  // Calling this will prevent the delayed post-startup work (e.g. the
+  // `DoDelayedPostStartupWork` method) from being scheduled as a delayed task.
+  // This will CHECK-fail if the system has already started.
+  // Returns a callback that, when called, calls `DoDelayedPostStartupWork`. It
+  // is repeating so tests can test the throttle logic.
+  base::RepeatingClosure DisableDelayedPostStartupWorkForTesting();
+
+  Profile* profile() const { return profile_.get(); }
 
  protected:
   virtual void StartImpl();
@@ -194,13 +280,13 @@ class WebAppProvider : public KeyedService {
 
   void CheckIsConnected() const;
 
-  // Performs a migration of some entries from the `web_app_ids` pref
-  // dictionary to the web app database. This should be safe to delete one year
-  // after 02-2022.
-  void DoMigrateProfilePrefs(Profile* profile);
+  void DoDelayedPostStartupWork();
+
+  void OnDefaultAppUpdateComplete(const webapps::AppId& app_id,
+                                  FetchManifestAndUpdateResult result);
 
   std::unique_ptr<AbstractWebAppDatabaseFactory> database_factory_;
-  std::unique_ptr<WebAppRegistrar> registrar_;
+  std::unique_ptr<WebAppRegistrarMutable> registrar_;
   std::unique_ptr<WebAppSyncBridge> sync_bridge_;
   std::unique_ptr<PreinstalledWebAppManager> preinstalled_web_app_manager_;
   std::unique_ptr<WebAppIconManager> icon_manager_;
@@ -211,10 +297,27 @@ class WebAppProvider : public KeyedService {
   std::unique_ptr<WebAppAudioFocusIdMap> audio_focus_id_map_;
   std::unique_ptr<WebAppInstallManager> install_manager_;
   std::unique_ptr<WebAppPolicyManager> web_app_policy_manager_;
+  std::unique_ptr<IsolatedWebAppInstallationManager>
+      isolated_web_app_installation_manager_;
+  std::unique_ptr<IsolatedWebAppUpdateManager> iwa_update_manager_;
+  std::unique_ptr<IsolatedWebAppPolicyManager> isolated_web_app_policy_manager_;
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<WebAppRunOnOsLoginManager> web_app_run_on_os_login_manager_;
+  std::unique_ptr<IwaBundleCacheManager> iwa_cache_manager_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<WebAppUiManager> ui_manager_;
   std::unique_ptr<OsIntegrationManager> os_integration_manager_;
   std::unique_ptr<WebAppCommandManager> command_manager_;
   std::unique_ptr<WebAppCommandScheduler> command_scheduler_;
+  std::unique_ptr<WebAppOriginAssociationManager> origin_association_manager_;
+  std::unique_ptr<WebContentsManager> web_contents_manager_;
+  std::unique_ptr<ExtensionsManager> extensions_manager_;
+  std::unique_ptr<GeneratedIconFixManager> generated_icon_fix_manager_;
+  scoped_refptr<FileUtilsWrapper> file_utils_;
+  std::unique_ptr<VisitedManifestManager> visited_manifest_manager_;
+  std::unique_ptr<NavigationCapturingLog> navigation_capturing_log_;
+  std::unique_ptr<WebAppProfileDeletionManager> profile_deletion_manager_;
+  raw_ptr<base::Clock> clock_;
 
   base::OneShotEvent on_registry_ready_;
   base::OneShotEvent on_external_managers_synchronized_;
@@ -225,6 +328,7 @@ class WebAppProvider : public KeyedService {
   bool started_ = false;
   bool connected_ = false;
   bool is_registry_ready_ = false;
+  bool prevent_delayed_startup_tasks_for_testing_ = false;
 
   base::WeakPtrFactory<WebAppProvider> weak_ptr_factory_{this};
 };

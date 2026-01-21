@@ -33,12 +33,14 @@ namespace {
 
 class TestClient : public SafeBrowsingDatabaseManager::Client {
  public:
-  TestClient() : callback_invoked_(false) {}
+  TestClient()
+      : SafeBrowsingDatabaseManager::Client(GetPassKeyForTesting()),
+        callback_invoked_(false) {}
 
   TestClient(const TestClient&) = delete;
   TestClient& operator=(const TestClient&) = delete;
 
-  ~TestClient() override {}
+  ~TestClient() override = default;
 
   void OnCheckApiBlocklistUrlResult(const GURL& url,
                                     const ThreatMetadata& metadata) override {
@@ -71,21 +73,20 @@ class SafeBrowsingDatabaseManagerTest : public testing::Test {
             &test_url_loader_factory_);
 
     db_manager_ = new TestSafeBrowsingDatabaseManager(
-        base::SequencedTaskRunner::GetCurrentDefault(),
         base::SequencedTaskRunner::GetCurrentDefault());
-    db_manager_->StartOnIOThread(test_shared_loader_factory_,
+    db_manager_->StartOnUIThread(test_shared_loader_factory_,
                                  GetTestV4ProtocolConfig());
   }
 
   void TearDown() override {
-    db_manager_->StopOnIOThread(false);
+    db_manager_->StopOnUIThread(false);
     db_manager_ = nullptr;
     base::RunLoop().RunUntilIdle();
   }
 
   std::string GetStockV4GetHashResponse() {
     ListIdentifier list_id = GetChromeUrlApiId();
-    FullHash full_hash = crypto::SHA256HashString("example.com/");
+    FullHashStr full_hash = crypto::SHA256HashString("example.com/");
 
     FindFullHashesResponse response;
     response.mutable_negative_cache_duration()->set_seconds(600);

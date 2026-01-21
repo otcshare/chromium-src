@@ -5,9 +5,12 @@
 #ifndef COMPONENTS_MEDIA_MESSAGE_CENTER_MEDIA_CONTROLS_PROGRESS_VIEW_H_
 #define COMPONENTS_MEDIA_MESSAGE_CENTER_MEDIA_CONTROLS_PROGRESS_VIEW_H_
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/color/color_id.h"
 #include "ui/views/view.h"
 
 namespace media_session {
@@ -23,8 +26,9 @@ namespace media_message_center {
 
 class COMPONENT_EXPORT(MEDIA_MESSAGE_CENTER) MediaControlsProgressView
     : public views::View {
+  METADATA_HEADER(MediaControlsProgressView, views::View)
+
  public:
-  METADATA_HEADER(MediaControlsProgressView);
   explicit MediaControlsProgressView(
       base::RepeatingCallback<void(double)> seek_callback,
       bool is_modern_notification = false);
@@ -36,22 +40,25 @@ class COMPONENT_EXPORT(MEDIA_MESSAGE_CENTER) MediaControlsProgressView
   void UpdateProgress(const media_session::MediaPosition& media_position);
 
   void SetForegroundColor(SkColor color);
+  void SetForegroundColorId(ui::ColorId color_id);
   void SetBackgroundColor(SkColor color);
+  void SetBackgroundColorId(ui::ColorId color_id);
   void SetTextColor(SkColor color);
+  void SetTextColorId(ui::ColorId color_id);
 
   // views::View:
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
 
   const views::ProgressBar* progress_bar_for_testing() const;
-  const std::u16string& progress_time_for_testing() const;
-  const std::u16string& duration_for_testing() const;
+  std::u16string_view progress_time_for_testing() const;
+  std::u16string_view duration_for_testing() const;
   bool is_duration_visible_for_testing() const;
 
  private:
   void SetBarProgress(double progress);
-  void SetProgressTime(const std::u16string& time);
-  void SetDuration(const std::u16string& duration);
+  void SetProgressTime(std::u16string_view time);
+  void SetDuration(std::u16string_view duration);
 
   void HandleSeeking(const gfx::Point& location);
 

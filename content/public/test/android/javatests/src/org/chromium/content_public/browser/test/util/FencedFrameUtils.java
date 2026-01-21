@@ -4,9 +4,11 @@
 
 package org.chromium.content_public.browser.test.util;
 
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
 import org.junit.Assert;
 
-import org.chromium.base.annotations.JNINamespace;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
@@ -18,9 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * This class implements FencedFrameUtils
- */
+/** This class implements FencedFrameUtils */
 @JNINamespace("content")
 public class FencedFrameUtils {
     private FencedFrameUtils() {
@@ -28,39 +28,48 @@ public class FencedFrameUtils {
     }
 
     private static int getCount(final RenderFrameHost frame) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> { return nativeGetCount(frame); });
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return FencedFrameUtilsJni.get().getCount(frame);
+                });
     }
 
-    private static RenderFrameHost getLastFencedFrame(
+    public static RenderFrameHost getLastFencedFrame(
             final RenderFrameHost frame, final String url) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> { return nativeGetLastFencedFrame(frame, url); });
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return FencedFrameUtilsJni.get().getLastFencedFrame(frame, url);
+                });
     }
 
-    public static RenderFrameHost createFencedFrame(final WebContents webContents,
-            final RenderFrameHost parentFrame, String url) throws TimeoutException {
-        RenderFrameHostTestExt frameExt = TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> new RenderFrameHostTestExt(parentFrame));
+    public static RenderFrameHost createFencedFrame(
+            final WebContents webContents, final RenderFrameHost parentFrame, String url)
+            throws TimeoutException {
+        RenderFrameHostTestExt frameExt =
+                ThreadUtils.runOnUiThreadBlocking(() -> new RenderFrameHostTestExt(parentFrame));
 
         int previousFencedFrameCount = getCount(parentFrame);
         final CountDownLatch latch = new CountDownLatch(1);
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            new WebContentsObserver(webContents) {
-                @Override
-                public void didStopLoading(GURL url, boolean isKnownValid) {
-                    latch.countDown();
-                    webContents.removeObserver(this);
-                }
-            };
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    new WebContentsObserver(webContents) {
+                        @Override
+                        public void didStopLoading(GURL url, boolean isKnownValid) {
+                            latch.countDown();
+                            observe(null);
+                        }
+                    };
 
-            String script = "((async() => {"
-                    + " const fenced_frame = document.createElement('fencedframe');"
-                    + " fenced_frame.src = '" + url + "';"
-                    + " document.body.appendChild(fenced_frame);"
-                    + "})());";
-            frameExt.executeJavaScript(script, (String r) -> {});
-        });
+                    String script =
+                            "((async() => {"
+                                    + " const fenced_frame = document.createElement('fencedframe');"
+                                    + " fenced_frame.config = new FencedFrameConfig('"
+                                    + url
+                                    + "');"
+                                    + " document.body.appendChild(fenced_frame);"
+                                    + "})());";
+                    frameExt.executeJavaScript(script, (String r) -> {});
+                });
 
         try {
             Assert.assertTrue(latch.await(CallbackHelper.WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS));
@@ -74,7 +83,10 @@ public class FencedFrameUtils {
         return fencedFrame;
     }
 
-    private static native int nativeGetCount(RenderFrameHost frame);
-    private static native RenderFrameHost nativeGetLastFencedFrame(
-            RenderFrameHost frame, String url);
+    @NativeMethods
+    interface Natives {
+        int getCount(RenderFrameHost frame);
+
+        RenderFrameHost getLastFencedFrame(RenderFrameHost frame, String url);
+    }
 }

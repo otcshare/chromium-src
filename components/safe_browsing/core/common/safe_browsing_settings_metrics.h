@@ -25,7 +25,9 @@ enum class SettingsAccessPoint : int {
   kSecurityInterstitial = 4,
   // From UX shown due to the Tailored Security setting changing.
   kTailoredSecurity = 5,
-  kMaxValue = kTailoredSecurity
+  // From Tips Notifications bottom sheet promo.
+  kTipsNotificationsPromo = 6,
+  kMaxValue = kTipsNotificationsPromo
 };
 
 // Enum representing actions taken by users visiting the
@@ -63,6 +65,10 @@ enum class UserAction : int {
   kDisableSafeBrowsingDialogDenied = 7,
   kMaxValue = kDisableSafeBrowsingDialogDenied
 };
+
+// Records the user action when the user navigates to the Enhanced Protection
+// page.
+void LogShowEnhancedProtectionAction();
 
 }  // namespace safe_browsing
 

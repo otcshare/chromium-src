@@ -13,14 +13,38 @@
 
 namespace vr {
 
+TexturedElement::ContentTexture::ContentTexture(
+    const gfx::Size& size,
+    base::FunctionRef<void(SkCanvas*)> paint) {
+  // Create SkSurface backed by CPU memory and draw contents to it.
+  auto surface = SkSurfaces::Raster(
+      SkImageInfo::Make(size.width(), size.height(), kRGBA_8888_SkColorType,
+                        kPremul_SkAlphaType));
+  paint(surface->getCanvas());
+  SkPixmap pixmap;
+  surface->peekPixels(&pixmap);
+
+  GLint prev_texture = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_texture);
+
+  glGenTextures(1, &texture_id_);
+  glBindTexture(GL_TEXTURE_2D, texture_id_);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size.width(), size.height(), 0,
+               GL_RGBA, GL_UNSIGNED_BYTE, pixmap.addr());
+
+  glBindTexture(GL_TEXTURE_2D, prev_texture);
+}
+
+TexturedElement::ContentTexture::~ContentTexture() {
+  glDeleteTextures(1, &texture_id_);
+}
+
 TexturedElement::TexturedElement() = default;
 
 TexturedElement::~TexturedElement() = default;
 
 void TexturedElement::Initialize(SkiaSurfaceProvider* provider) {
   TRACE_EVENT0("gpu", "TexturedElement::Initialize");
-  DCHECK(provider);
-  provider_ = provider;
   DCHECK(GetTexture());
   GetTexture()->OnInitialized();
   initialized_ = true;
@@ -59,14 +83,14 @@ void TexturedElement::UpdateTexture() {
   }
 
   if (!texture_size_.IsEmpty()) {
-    surface_ = provider_->MakeSurface(texture_size_);
-    DCHECK(surface_.get());
-    GetTexture()->DrawTexture(surface_->getCanvas(), texture_size_);
-    texture_handle_ = provider_->FlushSurface(surface_.get(), texture_handle_);
+    skia_texture_ = std::make_unique<ContentTexture>(
+        texture_size_, [this](SkCanvas* canvas) {
+          GetTexture()->DrawTexture(canvas, texture_size_);
+        });
+    DCHECK(skia_texture_);
   } else {
-    surface_.reset();
+    skia_texture_.reset();
     GetTexture()->DrawEmptyTexture();
-    texture_handle_ = 0;
   }
 }
 
@@ -83,10 +107,11 @@ void TexturedElement::Render(UiElementRenderer* renderer,
   DCHECK(initialized_);
 
   // Zero-size elements, such as empty text, don't allocate textures.
-  if (texture_handle_ <= 0)
+  if (!skia_texture_) {
     return;
+  }
 
-  renderer->DrawTexturedQuad(texture_handle_, 0, kGlTextureLocationLocal,
+  renderer->DrawTexturedQuad(skia_texture_->texture_id(), 0,
                              model.view_proj_matrix * world_space_transform(),
                              GetClipRect(), computed_opacity(), size(),
                              corner_radius(), true /* blend */);

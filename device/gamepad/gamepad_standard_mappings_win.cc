@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
+#include "device/gamepad/gamepad_standard_mappings.h"
+
 #include <stddef.h>
 
+#include <algorithm>
 #include <iterator>
 
-#include "base/ranges/algorithm.h"
 #include "device/gamepad/gamepad_id_list.h"
-#include "device/gamepad/gamepad_standard_mappings.h"
 
 namespace device {
 
@@ -570,6 +572,10 @@ constexpr struct MappingData {
     {GamepadId::kSonyProduct0ba0, MapperDualshock4},
     // DualSense
     {GamepadId::kSonyProduct0ce6, MapperDualSense},
+    // DualSense Edge
+    {GamepadId::kSonyProduct0df2, MapperDualSense},
+    // PlayStation Access
+    {GamepadId::kSonyProduct0e5f, MapperDualSense},
     // Switch Joy-Con L
     {GamepadId::kNintendoProduct2006, MapperSwitchJoyCon},
     // Switch Joy-Con R
@@ -615,7 +621,7 @@ constexpr struct MappingData {
 }  // namespace
 
 GamepadStandardMappingFunction GetGamepadStandardMappingFunction(
-    const base::StringPiece product_name,
+    std::string_view product_name,
     const uint16_t vendor_id,
     const uint16_t product_id,
     const uint16_t hid_specification_version,
@@ -623,8 +629,8 @@ GamepadStandardMappingFunction GetGamepadStandardMappingFunction(
     GamepadBusType bus_type) {
   GamepadId gamepad_id =
       GamepadIdList::Get().GetGamepadId(product_name, vendor_id, product_id);
-  const auto* find_it = base::ranges::find(kAvailableMappings, gamepad_id,
-                                           &MappingData::gamepad_id);
+  const auto* find_it = std::ranges::find(kAvailableMappings, gamepad_id,
+                                          &MappingData::gamepad_id);
   GamepadStandardMappingFunction mapper =
       (find_it == std::end(kAvailableMappings)) ? nullptr : find_it->function;
 

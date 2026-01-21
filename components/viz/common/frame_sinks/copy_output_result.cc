@@ -4,11 +4,19 @@
 
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 
+#include <cstddef>
+#include <string>
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
-#include "third_party/khronos/GLES2/gl2.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkPixelRef.h"
@@ -16,38 +24,39 @@
 
 namespace viz {
 
-CopyOutputResult::TextureResult::TextureResult(
-    const CopyOutputResult::TextureResult& other) = default;
-CopyOutputResult::TextureResult& CopyOutputResult::TextureResult::operator=(
-    const CopyOutputResult::TextureResult& other) = default;
-
-CopyOutputResult::TextureResult::TextureResult(
-    const gpu::Mailbox& mailbox,
-    const gpu::SyncToken& sync_token,
-    const gfx::ColorSpace& color_space)
-    : color_space(color_space) {
-  planes[0].mailbox = mailbox;
-  planes[0].sync_token = sync_token;
-  planes[0].texture_target = GL_TEXTURE_2D;
-}
-
-CopyOutputResult::TextureResult::TextureResult(
-    const std::array<gpu::MailboxHolder, kMaxPlanes>& planes,
-    const gfx::ColorSpace& color_space)
-    : planes(planes), color_space(color_space) {}
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
+                                   Error error)
+    : CopyOutputResult(format,
+                       destination,
+                       gfx::Rect(),
+                       /*needs_lock_for_bitmap=*/false,
+                       error) {}
 
 CopyOutputResult::CopyOutputResult(Format format,
                                    Destination destination,
                                    const gfx::Rect& rect,
                                    bool needs_lock_for_bitmap)
+    : CopyOutputResult(format,
+                       destination,
+                       rect,
+                       needs_lock_for_bitmap,
+                       Error::kNone) {}
+
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
+                                   const gfx::Rect& rect,
+                                   bool needs_lock_for_bitmap,
+                                   Error error)
     : format_(format),
       destination_(destination),
       rect_(rect),
-      needs_lock_for_bitmap_(needs_lock_for_bitmap) {
-  DCHECK(format_ == Format::RGBA || format_ == Format::I420_PLANES ||
-         format == Format::NV12_PLANES);
+      needs_lock_for_bitmap_(needs_lock_for_bitmap),
+      error_(error) {
+  DCHECK(format_ == Format::RGBA || format_ == Format::RGBAF16 ||
+         format_ == Format::I420_PLANES || format == Format::NV12);
   DCHECK(destination_ == Destination::kSystemMemory ||
-         destination_ == Destination::kNativeTextures);
+         destination_ == Destination::kSharedImage);
 }
 
 CopyOutputResult::~CopyOutputResult() = default;
@@ -72,20 +81,19 @@ CopyOutputResult::ScopedSkBitmap CopyOutputResult::ScopedAccessSkBitmap()
   return ScopedSkBitmap(this);
 }
 
-const CopyOutputResult::TextureResult* CopyOutputResult::GetTextureResult()
-    const {
-  return nullptr;
-}
-
-CopyOutputResult::ReleaseCallbacks CopyOutputResult::TakeTextureOwnership() {
+ReleaseCallback CopyOutputResult::TakeSharedImageOwnership() {
   return {};
 }
 
-bool CopyOutputResult::ReadI420Planes(uint8_t* y_out,
+scoped_refptr<gpu::ClientSharedImage> CopyOutputResult::GetSharedImage() {
+  return nullptr;
+}
+
+bool CopyOutputResult::ReadI420Planes(base::span<uint8_t> y_out,
                                       int y_out_stride,
-                                      uint8_t* u_out,
+                                      base::span<uint8_t> u_out,
                                       int u_out_stride,
-                                      uint8_t* v_out,
+                                      base::span<uint8_t> v_out,
                                       int v_out_stride) const {
   auto scoped_sk_bitmap = ScopedAccessSkBitmap();
   const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
@@ -98,15 +106,16 @@ bool CopyOutputResult::ReadI420Planes(uint8_t* y_out,
   // a perfect conversion using gfx::ColorTransform would execute way too
   // slowly. See SoftwareRenderer for related comments on its lack of color
   // space management (due to performance concerns).
+  // TODO(crbug.com/384959115): Verify span size before calling into libyuv.
   if (bitmap.colorType() == kBGRA_8888_SkColorType) {
-    return 0 == libyuv::ARGBToI420(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, u_out, u_out_stride, v_out,
-                                   v_out_stride, bitmap.width(),
+    return 0 == libyuv::ARGBToI420(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, u_out.data(), u_out_stride,
+                                   v_out.data(), v_out_stride, bitmap.width(),
                                    bitmap.height());
   } else if (bitmap.colorType() == kRGBA_8888_SkColorType) {
-    return 0 == libyuv::ABGRToI420(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, u_out, u_out_stride, v_out,
-                                   v_out_stride, bitmap.width(),
+    return 0 == libyuv::ABGRToI420(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, u_out.data(), u_out_stride,
+                                   v_out.data(), v_out_stride, bitmap.width(),
                                    bitmap.height());
   }
 
@@ -117,9 +126,9 @@ bool CopyOutputResult::ReadI420Planes(uint8_t* y_out,
   return false;
 }
 
-bool CopyOutputResult::ReadNV12Planes(uint8_t* y_out,
+bool CopyOutputResult::ReadNV12Planes(base::span<uint8_t> y_out,
                                       int y_out_stride,
-                                      uint8_t* uv_out,
+                                      base::span<uint8_t> uv_out,
                                       int uv_out_stride) const {
   auto scoped_sk_bitmap = ScopedAccessSkBitmap();
   const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
@@ -132,13 +141,14 @@ bool CopyOutputResult::ReadNV12Planes(uint8_t* y_out,
   // a perfect conversion using gfx::ColorTransform would execute way too
   // slowly. See SoftwareRenderer for related comments on its lack of color
   // space management (due to performance concerns).
+  // TODO(crbug.com/384959115): Verify span size before calling into libyuv.
   if (bitmap.colorType() == kBGRA_8888_SkColorType) {
-    return 0 == libyuv::ARGBToNV12(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, uv_out, uv_out_stride,
+    return 0 == libyuv::ARGBToNV12(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, uv_out.data(), uv_out_stride,
                                    bitmap.width(), bitmap.height());
   } else if (bitmap.colorType() == kRGBA_8888_SkColorType) {
-    return 0 == libyuv::ABGRToNV12(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, uv_out, uv_out_stride,
+    return 0 == libyuv::ABGRToNV12(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, uv_out.data(), uv_out_stride,
                                    bitmap.width(), bitmap.height());
   }
 
@@ -149,7 +159,8 @@ bool CopyOutputResult::ReadNV12Planes(uint8_t* y_out,
   return false;
 }
 
-bool CopyOutputResult::ReadRGBAPlane(uint8_t* dest, int stride) const {
+bool CopyOutputResult::ReadRGBAPlane(base::span<uint8_t> dest,
+                                     int stride) const {
   auto scoped_sk_bitmap = ScopedAccessSkBitmap();
   const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
   if (!bitmap.readyToDraw())
@@ -159,7 +170,8 @@ bool CopyOutputResult::ReadRGBAPlane(uint8_t* dest, int stride) const {
   SkImageInfo image_info =
       SkImageInfo::MakeN32(bitmap.width(), bitmap.height(), kPremul_SkAlphaType,
                            bitmap.refColorSpace());
-  bitmap.readPixels(image_info, dest, stride, 0, 0);
+  CHECK_GE(dest.size(), image_info.computeByteSize(stride));
+  bitmap.readPixels(image_info, dest.data(), stride, 0, 0);
   return true;
 }
 
@@ -217,53 +229,56 @@ const SkBitmap& CopyOutputSkBitmapResult::AsSkBitmap() const {
 
 CopyOutputSkBitmapResult::~CopyOutputSkBitmapResult() = default;
 
-CopyOutputTextureResult::CopyOutputTextureResult(
+CopyOutputSharedImageResult::CopyOutputSharedImageResult(
     Format format,
     const gfx::Rect& rect,
-    TextureResult texture_result,
-    ReleaseCallbacks release_callbacks)
-    : CopyOutputResult(format, Destination::kNativeTextures, rect, false),
-      texture_result_(std::move(texture_result)),
-      release_callbacks_(std::move(release_callbacks)) {
-  // If we're constructing empty result, all mailboxes must be zero.
+    const gpu::Mailbox& mailbox,
+    const gfx::ColorSpace& color_space,
+    std::string_view debug_label,
+    ReleaseCallback release_callback)
+    : CopyOutputSharedImageResult(
+          format,
+          rect,
+          base::WrapRefCounted(new gpu::ClientSharedImage(
+              mailbox,
+              gpu::SharedImageInfo{GetSharedImageFormatFor(format), rect.size(),
+                                   color_space, kDefaultSharedImageUsage,
+                                   debug_label})),
+          std::move(release_callback)) {}
+
+CopyOutputSharedImageResult::CopyOutputSharedImageResult(
+    Format format,
+    const gfx::Rect& rect,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    ReleaseCallback release_callback)
+    : CopyOutputResult(format, Destination::kSharedImage, rect, false),
+      shared_image_(std::move(shared_image)),
+      release_callback_(std::move(release_callback)) {
+  // check non-null `shared_image_`
+  DCHECK(shared_image_);
+  // If we're constructing empty result, all mailbox_holders must be zero.
   // Otherwise, the first mailbox must be non-zero.
-  DCHECK_EQ(rect.IsEmpty(), texture_result_.planes[0].mailbox.IsZero());
-  if (format == Format::NV12_PLANES) {
-    DCHECK_EQ(rect.IsEmpty(), texture_result_.planes[1].mailbox.IsZero());
-  }
+  DCHECK_EQ(rect.IsEmpty(), shared_image_->mailbox().IsZero());
   // If we're constructing empty result, the callbacks must be empty.
   // From definition of implication: p => q  <=>  !p || q.
-  DCHECK(!rect.IsEmpty() || release_callbacks_.empty());
+  DCHECK(!rect.IsEmpty() || release_callback_.is_null());
   // Color space must be valid for non-empty results.
-  DCHECK(rect.IsEmpty() || texture_result_.color_space.IsValid());
+  DCHECK(rect.IsEmpty() || shared_image_->color_space().IsValid());
 }
 
-CopyOutputTextureResult::~CopyOutputTextureResult() {
-  for (auto& release_callback : release_callbacks_) {
-    // No need to check if release_callback is valid, when texture ownership
-    // is taken away from us, we zero out release_callbacks_ and the loop would
-    // not be entered.
-    std::move(release_callback).Run(gpu::SyncToken(), false);
+CopyOutputSharedImageResult::~CopyOutputSharedImageResult() {
+  if (release_callback_) {
+    std::move(release_callback_).Run(gpu::SyncToken(), false);
   }
 }
 
-const CopyOutputResult::TextureResult*
-CopyOutputTextureResult::GetTextureResult() const {
-  return &texture_result_;
+scoped_refptr<gpu::ClientSharedImage>
+CopyOutputSharedImageResult::GetSharedImage() {
+  return shared_image_;
 }
 
-CopyOutputResult::ReleaseCallbacks
-CopyOutputTextureResult::TakeTextureOwnership() {
-  texture_result_.planes = {};
-  texture_result_.color_space = {};
-
-  CopyOutputResult::ReleaseCallbacks result;
-  // std::swap is needed since we cannot just move from release_callbacks_ - the
-  // vector would be left in unspecified state, and we need to be able to
-  // iterate over it in the dtor.
-  std::swap(result, release_callbacks_);
-
-  return result;
+ReleaseCallback CopyOutputSharedImageResult::TakeSharedImageOwnership() {
+  return std::move(release_callback_);
 }
 
 CopyOutputResult::ScopedSkBitmap::ScopedSkBitmap() = default;
@@ -326,6 +341,34 @@ SkBitmap CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmap() const {
     bitmap.readPixels(bitmap_copy.pixmap(), 0, 0);
   }
   return bitmap_copy;
+}
+
+base::expected<CopyOutputBitmapWithMetadata, CopyOutputResult::Error>
+CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmapAndMetadata() const {
+  SkBitmap bitmap = GetOutScopedBitmap();
+  if (bitmap.drawsNothing()) {
+    if (result_) {
+      return base::unexpected<CopyOutputResult::Error>(result_->error());
+    }
+    return base::unexpected<CopyOutputResult::Error>(
+        CopyOutputResult::Error::kUnknown);
+  }
+
+  return CopyOutputBitmapWithMetadata{.bitmap = std::move(bitmap)};
+}
+
+VIZ_COMMON_EXPORT SharedImageFormat
+GetSharedImageFormatFor(CopyOutputResult::Format format) {
+  switch (format) {
+    case CopyOutputResult::Format::RGBA:
+      return SinglePlaneFormat::kRGBA_8888;
+    case CopyOutputResult::Format::RGBAF16:
+      return SinglePlaneFormat::kRGBA_F16;
+    case CopyOutputResult::Format::I420_PLANES:
+      return MultiPlaneFormat::kI420;
+    case CopyOutputResult::Format::NV12:
+      return MultiPlaneFormat::kNV12;
+  }
 }
 
 }  // namespace viz

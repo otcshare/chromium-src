@@ -6,39 +6,15 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
-#include "url/url_canon.h"
-#include "url/url_canon_internal.h"
-#include "url/url_util.h"
 
 namespace net {
-namespace {
-
-// The notion of unescaping used in the application/x-www-form-urlencoded
-// parser. https://url.spec.whatwg.org/#concept-urlencoded-parser
-std::string UnescapePercentEncodedUrl(base::StringPiece input) {
-  std::string result(input);
-  // Replace any 0x2B (+) with 0x20 (SP).
-  for (char& c : result) {
-    if (c == '+')
-      c = ' ';
-  }
-  // Run UTF-8 decoding without BOM on the percent-decoding.
-  url::RawCanonOutputT<char16_t> canon_output;
-  url::DecodeURLEscapeSequences(result.data(), result.size(),
-                                url::DecodeURLMode::kUTF8, &canon_output);
-  return base::UTF16ToUTF8(
-      base::StringPiece16(canon_output.data(), canon_output.length()));
-}
-
-}  // namespace
 
 UrlSearchParams::UrlSearchParams(const GURL& url) {
   for (auto it = QueryIterator(url); !it.IsAtEnd(); it.Advance()) {
@@ -69,13 +45,13 @@ void UrlSearchParams::Sort() {
 
 void UrlSearchParams::DeleteAllWithNames(
     const base::flat_set<std::string>& names) {
-  base::EraseIf(params_,
+  std::erase_if(params_,
                 [&](const auto& pair) { return names.contains(pair.first); });
 }
 
 void UrlSearchParams::DeleteAllExceptWithNames(
     const base::flat_set<std::string>& names) {
-  base::EraseIf(params_,
+  std::erase_if(params_,
                 [&](const auto& pair) { return !names.contains(pair.first); });
 }
 

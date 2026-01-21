@@ -2,21 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
+import * as Sources from 'devtools/panels/sources/sources.js';
+
 (async function() {
   TestRunner.addResult(`Tests that watches pane renders errors in red.\n`);
-  await TestRunner.loadLegacyModule('sources');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPagePromise(`
       var foo = 123
   `);
 
-  var watchExpressionsPane = Sources.WatchExpressionsSidebarPane.instance();
-  UI.panels.sources.sidebarPaneStack.showView(UI.panels.sources.watchSidebarPane).then(() => {
-    watchExpressionsPane.doUpdate();
-    watchExpressionsPane.createWatchExpression('#$%');
-    watchExpressionsPane.saveExpressions();
-    TestRunner.deprecatedRunAfterPendingDispatches(step1);
-  });
+  var watchExpressionsPane = Sources.WatchExpressionsSidebarPane.WatchExpressionsSidebarPane.instance();
+  Sources.SourcesPanel.SourcesPanel.instance()
+      .sidebarPaneStack
+      .showView(Sources.SourcesPanel.SourcesPanel.instance().watchSidebarPane)
+      .then(() => {
+        watchExpressionsPane.performUpdate();
+        watchExpressionsPane.createWatchExpression('#$%');
+        watchExpressionsPane.saveExpressions();
+        TestRunner.deprecatedRunAfterPendingDispatches(step1);
+      });
 
 
   function step1() {

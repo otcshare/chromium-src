@@ -9,13 +9,14 @@
 #include "ash/constants/quick_settings_catalogs.h"
 #include "ash/public/cpp/cast_config_controller.h"
 #include "ash/system/unified/feature_pod_controller_base.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 
 namespace ash {
 
 class UnifiedSystemTrayController;
 
-// Controller of cast feature pod button.
+// Controller of cast feature tile.
 class ASH_EXPORT CastFeaturePodController
     : public FeaturePodControllerBase,
       public CastConfigController::Observer {
@@ -28,9 +29,12 @@ class ASH_EXPORT CastFeaturePodController
 
   ~CastFeaturePodController() override;
 
+  // Referenced by `UnifiedSystemTrayController` to know whether to construct a
+  // Primary or Compact tile.
+  static bool CalculateButtonVisibility();
+
   // FeaturePodControllerBase:
-  FeaturePodButton* CreateButton() override;
-  std::unique_ptr<FeatureTile> CreateTile() override;
+  std::unique_ptr<FeatureTile> CreateTile(bool compact = false) override;
   QsFeatureCatalogName GetCatalogName() override;
   void OnIconPressed() override;
   void OnLabelPressed() override;
@@ -39,17 +43,14 @@ class ASH_EXPORT CastFeaturePodController
   void OnDevicesUpdated(const std::vector<SinkAndRoute>& devices) override;
 
  private:
-  // Updates feature pod button visibility. Used pre-QsRevamp.
-  void Update();
+  // Updates the feature tile.
+  void UpdateFeatureTile();
 
-  // Updates tile sublabel visibility. Used post-QsRevamp.
-  void UpdateSublabelVisibility();
-
-  UnifiedSystemTrayController* const tray_controller_;
+  const raw_ptr<UnifiedSystemTrayController, DanglingUntriaged>
+      tray_controller_;
 
   // Owned by views hierarchy.
-  FeaturePodButton* button_ = nullptr;
-  FeatureTile* tile_ = nullptr;
+  raw_ptr<FeatureTile, DanglingUntriaged> tile_ = nullptr;
 
   base::WeakPtrFactory<CastFeaturePodController> weak_factory_{this};
 };

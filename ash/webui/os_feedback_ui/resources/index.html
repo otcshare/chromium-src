@@ -13,6 +13,10 @@
       overflow: hidden;
     }
 
+    html:has(body.jelly-enabled) {
+      background-color: var(--cros-sys-app_base_shaded);
+    }
+
     body {
       height: 100%;
     }
@@ -29,9 +33,6 @@
 <body>
   <feedback-flow></feedback-flow>
   <script type="module" src="feedback_flow.js"></script>
-  <!-- Below mojo script required to run browser tests -->
-  <script src="chrome://resources/mojo/mojo/public/js/mojo_bindings_lite.js">
-  </script>
 </body>
 
 </html>

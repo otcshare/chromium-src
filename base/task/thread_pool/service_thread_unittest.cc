@@ -6,13 +6,12 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/debug/stack_trace.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -47,5 +46,4 @@ TEST(ThreadPoolServiceThreadTest, MAYBE_StackHasIdentifyingFrame) {
   service_thread.FlushForTesting();
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

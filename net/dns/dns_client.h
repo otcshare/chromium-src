@@ -6,14 +6,15 @@
 #define NET_DNS_DNS_CLIENT_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/values.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
 #include "net/base/rand_callback.h"
 #include "net/dns/dns_config.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/public/dns_config_overrides.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace url {
 
@@ -29,6 +30,16 @@ class DnsSession;
 class DnsTransactionFactory;
 class NetLog;
 class ResolveContext;
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class DnsConfigLocalNameserverState {
+  kNoLocal = 0,
+  kOnlyLoopback = 1,
+  kOnlyNonLoopbackLocal = 2,
+  kLoopbackAndNonLoopback = 3,
+  kMaxValue = kLoopbackAndNonLoopback,
+};
 
 // Entry point for HostResolverManager to interact with the built-in async
 // resolver, as implemented by DnsTransactionFactory. Manages configuration and
@@ -66,7 +77,7 @@ class NET_EXPORT DnsClient {
   // config, unless it is invalid or has |unhandled_options|.
   //
   // Returns whether or not the effective config changed.
-  virtual bool SetSystemConfig(absl::optional<DnsConfig> system_config) = 0;
+  virtual bool SetSystemConfig(std::optional<DnsConfig> system_config) = 0;
   virtual bool SetConfigOverrides(DnsConfigOverrides config_overrides) = 0;
 
   // If there is a current session, forces replacement with a new current
@@ -75,7 +86,7 @@ class NET_EXPORT DnsClient {
   virtual void ReplaceCurrentSession() = 0;
 
   // Used for tracking per-context-per-session data.
-  // TODO(crbug.com/1022059): Once more per-context-per-session data has been
+  // TODO(crbug.com/40106440): Once more per-context-per-session data has been
   // moved to ResolveContext and it doesn't need to call back into DnsSession,
   // convert this to a more limited session handle to prevent overuse of
   // DnsSession outside the DnsClient code.
@@ -89,7 +100,7 @@ class NET_EXPORT DnsClient {
 
   // Returns all preset addresses for the specified endpoint, if any are
   // present in the current effective DnsConfig.
-  virtual absl::optional<std::vector<IPEndPoint>> GetPresetAddrs(
+  virtual std::optional<std::vector<IPEndPoint>> GetPresetAddrs(
       const url::SchemeHostPort& endpoint) const = 0;
 
   // Returns null if the current config is not valid.
@@ -103,13 +114,15 @@ class NET_EXPORT DnsClient {
   // Return the effective DNS configuration as a value that can be recorded in
   // the NetLog. This also synthesizes interpretative data to the Value, e.g.
   // whether secure and insecure transactions are enabled.
-  virtual base::Value GetDnsConfigAsValueForNetLog() const = 0;
+  virtual base::Value::Dict GetDnsConfigAsValueForNetLog() const = 0;
 
-  virtual absl::optional<DnsConfig> GetSystemConfigForTesting() const = 0;
+  virtual std::optional<DnsConfig> GetSystemConfigForTesting() const = 0;
   virtual DnsConfigOverrides GetConfigOverridesForTesting() const = 0;
 
   virtual void SetTransactionFactoryForTesting(
       std::unique_ptr<DnsTransactionFactory> factory) = 0;
+  virtual void SetAddressSorterForTesting(
+      std::unique_ptr<AddressSorter> address_sorter) = 0;
 
   // Creates default client.
   static std::unique_ptr<DnsClient> CreateClient(NetLog* net_log);

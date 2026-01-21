@@ -4,11 +4,9 @@
 
 package org.chromium.chrome.browser.toolbar.adaptive;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.matcher.ViewMatchers.isRoot;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
-import static org.chromium.ui.test.util.ViewUtils.waitForView;
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
 
 import android.content.res.Configuration;
 
@@ -18,24 +16,21 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisableIf;
-import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
+import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ActivityTestUtils;
-import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
-import org.chromium.ui.test.util.UiDisableIf;
-import org.chromium.ui.test.util.ViewUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /**
  * Tests {@link OptionalNewTabButtonController} on tablet. Phone functionality is tested by {@link
@@ -43,23 +38,17 @@ import org.chromium.ui.test.util.ViewUtils;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
-@EnableFeatures({ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR})
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-        "enable-features=" + ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR + "<Study",
-        "force-fieldtrials=Study/Group", "force-fieldtrial-params=Study.Group:mode/always-new-tab"})
-@DisableIf.Device(type = {UiDisableIf.PHONE})
+@CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
+@Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
 public class OptionalNewTabButtonControllerTabletTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/navigate/simple.html";
 
-    @ClassRule
-    public static final ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
-
     @Rule
-    public final BlankCTATabInitialStateRule mInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, /*clearAllTabState=*/false);
+    public final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private String mTestPageUrl;
+    private WebPageStation mPage;
 
     @BeforeClass
     public static void setUpBeforeActivityLaunched() {
@@ -74,33 +63,32 @@ public class OptionalNewTabButtonControllerTabletTest {
 
     @Before
     public void setUp() {
-        mTestPageUrl = sActivityTestRule.getTestServer().getURL(TEST_PAGE);
+        mTestPageUrl = mActivityTestRule.getTestServer().getURL(TEST_PAGE);
+        mPage = mActivityTestRule.startOnBlankPage();
     }
 
     @After
     public void tearDown() {
-        ActivityTestUtils.clearActivityOrientation(sActivityTestRule.getActivity());
+        ActivityTestUtils.clearActivityOrientation(mActivityTestRule.getActivity());
     }
 
     @Test
     @MediumTest
     public void testButton_hiddenOnTablet_landscape() {
         ActivityTestUtils.rotateActivityToOrientation(
-                sActivityTestRule.getActivity(), Configuration.ORIENTATION_LANDSCAPE);
-        sActivityTestRule.loadUrl(mTestPageUrl, /*secondsToWait=*/10);
+                mActivityTestRule.getActivity(), Configuration.ORIENTATION_LANDSCAPE);
+        mActivityTestRule.loadUrl(mTestPageUrl, /* secondsToWait= */ 10);
 
-        onView(isRoot()).check(waitForView(
-                withId(R.id.optional_toolbar_button), ViewUtils.VIEW_GONE | ViewUtils.VIEW_NULL));
+        waitForNoView(withId(R.id.optional_toolbar_button));
     }
 
     @Test
     @MediumTest
     public void testButton_hiddenOnTablet_portrait() {
         ActivityTestUtils.rotateActivityToOrientation(
-                sActivityTestRule.getActivity(), Configuration.ORIENTATION_PORTRAIT);
-        sActivityTestRule.loadUrl(mTestPageUrl, /*secondsToWait=*/10);
+                mActivityTestRule.getActivity(), Configuration.ORIENTATION_PORTRAIT);
+        mActivityTestRule.loadUrl(mTestPageUrl, /* secondsToWait= */ 10);
 
-        onView(isRoot()).check(waitForView(
-                withId(R.id.optional_toolbar_button), ViewUtils.VIEW_GONE | ViewUtils.VIEW_NULL));
+        waitForNoView(withId(R.id.optional_toolbar_button));
     }
 }

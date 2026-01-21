@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "gpu/command_buffer/service/common_decoder.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "gpu/command_buffer/client/client_test_helper.h"
-#include "gpu/command_buffer/service/common_decoder.h"
 #include "gpu/command_buffer/service/mocks.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -47,9 +50,11 @@ TEST(CommonDecoderBucket, SetData) {
 
   bucket.SetSize(10);
   EXPECT_TRUE(bucket.SetData(data, 0, sizeof(data)));
-  EXPECT_EQ(0, memcmp(data, bucket.GetData(0, sizeof(data)), sizeof(data)));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(data, bucket.GetData(0, sizeof(data)), sizeof(data))));
   EXPECT_TRUE(bucket.SetData(data, 2, sizeof(data)));
-  EXPECT_EQ(0, memcmp(data, bucket.GetData(2, sizeof(data)), sizeof(data)));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(data, bucket.GetData(2, sizeof(data)), sizeof(data))));
   EXPECT_FALSE(bucket.SetData(data, 0, sizeof(data) * 2));
   EXPECT_FALSE(bucket.SetData(data, 5, sizeof(data)));
 }
@@ -101,7 +106,8 @@ class CommonDecoderTest : public testing::Test {
   T GetSharedMemoryAs(size_t offset) {
     void* memory =
         command_buffer_service_.GetTransferBuffer(valid_shm_id_)->memory();
-    return reinterpret_cast<T>(static_cast<uint8_t*>(memory) + offset);
+    return reinterpret_cast<T>(
+        UNSAFE_TODO(static_cast<uint8_t*>(memory) + offset));
   }
 
   FakeCommandBufferServiceBase command_buffer_service_;
@@ -180,32 +186,35 @@ TEST_F(CommonDecoderTest, SetBucketData) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(size_cmd));
   CommonDecoder::Bucket* bucket = decoder_.GetBucket(kBucketId);
   // Check the data is not there.
-  EXPECT_NE(0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData)));
+  UNSAFE_TODO(EXPECT_NE(
+      0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData))));
 
   // Check we can set it.
   const uint32_t kSomeOffsetInSharedMemory = 50;
   void* memory = GetSharedMemoryAs<void*>(kSomeOffsetInSharedMemory);
-  memcpy(memory, kData, sizeof(kData));
+  UNSAFE_TODO(memcpy(memory, kData, sizeof(kData)));
   cmd.Init(kBucketId, 0, sizeof(kData), valid_shm_id_,
            kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData)));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData))));
 
   // Check we can set it partially.
   static const char kData2[] = "ABCEDFG";
   const uint32_t kSomeOffsetInBucket = 5;
-  memcpy(memory, kData2, sizeof(kData2));
+  UNSAFE_TODO(memcpy(memory, kData2, sizeof(kData2)));
   cmd.Init(kBucketId, kSomeOffsetInBucket, sizeof(kData2), valid_shm_id_,
            kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(0, memcmp(bucket->GetData(kSomeOffsetInBucket, sizeof(kData2)),
-                      kData2, sizeof(kData2)));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(bucket->GetData(kSomeOffsetInBucket, sizeof(kData2)),
+                          kData2, sizeof(kData2))));
   const char* bucket_data = bucket->GetDataAs<const char*>(0, sizeof(kData));
   // Check that nothing was affected outside of updated area.
-  EXPECT_EQ(kData[kSomeOffsetInBucket - 1],
-            bucket_data[kSomeOffsetInBucket - 1]);
-  EXPECT_EQ(kData[kSomeOffsetInBucket + sizeof(kData2)],
-            bucket_data[kSomeOffsetInBucket + sizeof(kData2)]);
+  UNSAFE_TODO(EXPECT_EQ(kData[kSomeOffsetInBucket - 1],
+                        bucket_data[kSomeOffsetInBucket - 1]));
+  UNSAFE_TODO(EXPECT_EQ(kData[kSomeOffsetInBucket + sizeof(kData2)],
+                        bucket_data[kSomeOffsetInBucket + sizeof(kData2)]));
 
   // Check that it fails if the bucket_id is invalid
   cmd.Init(kInvalidBucketId, kSomeOffsetInBucket, sizeof(kData2), valid_shm_id_,
@@ -225,7 +234,7 @@ TEST_F(CommonDecoderTest, SetBucketData) {
 
 TEST_F(CommonDecoderTest, SetBucketDataImmediate) {
   cmd::SetBucketSize size_cmd;
-  int8_t buffer[1024];
+  std::array<int8_t, 1024> buffer;
   cmd::SetBucketDataImmediate& cmd =
       *reinterpret_cast<cmd::SetBucketDataImmediate*>(&buffer);
 
@@ -238,31 +247,34 @@ TEST_F(CommonDecoderTest, SetBucketDataImmediate) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(size_cmd));
   CommonDecoder::Bucket* bucket = decoder_.GetBucket(kBucketId);
   // Check the data is not there.
-  EXPECT_NE(0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData)));
+  UNSAFE_TODO(EXPECT_NE(
+      0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData))));
 
   // Check we can set it.
-  void* memory = &buffer[0] + sizeof(cmd);
-  memcpy(memory, kData, sizeof(kData));
+  void* memory = UNSAFE_TODO(&buffer[0] + sizeof(cmd));
+  UNSAFE_TODO(memcpy(memory, kData, sizeof(kData)));
   cmd.Init(kBucketId, 0, sizeof(kData));
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(kData)));
-  EXPECT_EQ(0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData)));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(bucket->GetData(0, sizeof(kData)), kData, sizeof(kData))));
 
   // Check we can set it partially.
   static const char kData2[] = "ABCEDFG";
   const uint32_t kSomeOffsetInBucket = 5;
-  memcpy(memory, kData2, sizeof(kData2));
+  UNSAFE_TODO(memcpy(memory, kData2, sizeof(kData2)));
   cmd.Init(kBucketId, kSomeOffsetInBucket, sizeof(kData2));
   EXPECT_EQ(error::kNoError,
             ExecuteImmediateCmd(cmd, sizeof(kData2)));
-  EXPECT_EQ(0, memcmp(bucket->GetData(kSomeOffsetInBucket, sizeof(kData2)),
-                      kData2, sizeof(kData2)));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(bucket->GetData(kSomeOffsetInBucket, sizeof(kData2)),
+                          kData2, sizeof(kData2))));
   const char* bucket_data = bucket->GetDataAs<const char*>(0, sizeof(kData));
   // Check that nothing was affected outside of updated area.
-  EXPECT_EQ(kData[kSomeOffsetInBucket - 1],
-            bucket_data[kSomeOffsetInBucket - 1]);
-  EXPECT_EQ(kData[kSomeOffsetInBucket + sizeof(kData2)],
-            bucket_data[kSomeOffsetInBucket + sizeof(kData2)]);
+  UNSAFE_TODO(EXPECT_EQ(kData[kSomeOffsetInBucket - 1],
+                        bucket_data[kSomeOffsetInBucket - 1]));
+  UNSAFE_TODO(EXPECT_EQ(kData[kSomeOffsetInBucket + sizeof(kData2)],
+                        bucket_data[kSomeOffsetInBucket + sizeof(kData2)]));
 
   // Check that it fails if the bucket_id is invalid
   cmd.Init(kInvalidBucketId, kSomeOffsetInBucket, sizeof(kData2));
@@ -281,6 +293,20 @@ TEST_F(CommonDecoderTest, SetBucketDataImmediate) {
   EXPECT_NE(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(kData)));
 }
 
+namespace {
+
+uint32_t LoadU32Unaligned(const void* ptr) {
+  uint32_t ret;
+  UNSAFE_TODO(memcpy(&ret, ptr, sizeof(uint32_t)));
+  return ret;
+}
+
+void StoreU32Unaligned(uint32_t v, void* ptr) {
+  UNSAFE_TODO(memcpy(ptr, &v, sizeof(uint32_t)));
+}
+
+}  // namespace
+
 TEST_F(CommonDecoderTest, GetBucketStart) {
   cmd::SetBucketSize size_cmd;
   cmd::SetBucketData set_cmd;
@@ -298,39 +324,40 @@ TEST_F(CommonDecoderTest, GetBucketStart) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(size_cmd));
   const uint32_t kSomeOffsetInSharedMemory = 50;
   uint8_t* start = GetSharedMemoryAs<uint8_t*>(kSomeOffsetInSharedMemory);
-  memcpy(start, kData, sizeof(kData));
+  UNSAFE_TODO(memcpy(start, kData, sizeof(kData)));
   set_cmd.Init(kBucketId, 0, sizeof(kData), valid_shm_id_,
                kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(set_cmd));
 
   // Check that the size is correct with no data buffer.
-  uint32_t* memory = GetSharedMemoryAs<uint32_t*>(kSomeOffsetInSharedMemory);
-  *memory = 0x0;
+  void* memory = GetSharedMemoryAs<void*>(kSomeOffsetInSharedMemory);
+  StoreU32Unaligned(0, memory);
   cmd.Init(kBucketId, valid_shm_id_, kSomeOffsetInSharedMemory, 0, 0, 0);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(kBucketSize, *memory);
+  EXPECT_EQ(kBucketSize, LoadU32Unaligned(memory));
 
   // Check that the data is copied with data buffer.
   const uint32_t kDataOffsetInSharedMemory = 54;
   uint8_t* data = GetSharedMemoryAs<uint8_t*>(kDataOffsetInSharedMemory);
-  *memory = 0x0;
-  memset(data, 0, sizeof(kData));
+  StoreU32Unaligned(0, memory);
+  UNSAFE_TODO(memset(data, 0, sizeof(kData)));
   cmd.Init(kBucketId, valid_shm_id_, kSomeOffsetInSharedMemory, kBucketSize,
            valid_shm_id_, kDataOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(kBucketSize, *memory);
-  EXPECT_EQ(0, memcmp(data, kData, kBucketSize));
+  EXPECT_EQ(kBucketSize, LoadU32Unaligned(memory));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(data, kData, kBucketSize)));
 
   // Check that we can get a piece.
-  *memory = 0x0;
-  memset(data, 0, sizeof(kData));
+  StoreU32Unaligned(0, memory);
+  UNSAFE_TODO(memset(data, 0, sizeof(kData)));
   const uint32_t kPieceSize = kBucketSize / 2;
   cmd.Init(kBucketId, valid_shm_id_, kSomeOffsetInSharedMemory, kPieceSize,
            valid_shm_id_, kDataOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(kBucketSize, *memory);
-  EXPECT_EQ(0, memcmp(data, kData, kPieceSize));
-  EXPECT_EQ(0, memcmp(data + kPieceSize, zero, sizeof(kData) - kPieceSize));
+  EXPECT_EQ(kBucketSize, LoadU32Unaligned(memory));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(data, kData, kPieceSize)));
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(data + kPieceSize, zero, sizeof(kData) - kPieceSize)));
 
   // Check that it fails if the result_id is invalid
   cmd.Init(kInvalidBucketId, valid_shm_id_, kSomeOffsetInSharedMemory, 0, 0, 0);
@@ -356,7 +383,7 @@ TEST_F(CommonDecoderTest, GetBucketStart) {
   EXPECT_NE(error::kNoError, ExecuteCmd(cmd));
 
   // Check that it fails if the result size is not set to zero
-  *memory = 0x1;
+  StoreU32Unaligned(0x1, memory);
   cmd.Init(kBucketId, valid_shm_id_, kSomeOffsetInSharedMemory, 0, 0, 0);
   EXPECT_NE(error::kNoError, ExecuteCmd(cmd));
 }
@@ -376,31 +403,32 @@ TEST_F(CommonDecoderTest, GetBucketData) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(size_cmd));
   const uint32_t kSomeOffsetInSharedMemory = 50;
   uint8_t* memory = GetSharedMemoryAs<uint8_t*>(kSomeOffsetInSharedMemory);
-  memcpy(memory, kData, sizeof(kData));
+  UNSAFE_TODO(memcpy(memory, kData, sizeof(kData)));
   set_cmd.Init(kBucketId, 0, sizeof(kData), valid_shm_id_,
                kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(set_cmd));
 
   // Check we can get the whole thing.
-  memset(memory, 0, sizeof(kData));
+  UNSAFE_TODO(memset(memory, 0, sizeof(kData)));
   cmd.Init(kBucketId, 0, sizeof(kData), valid_shm_id_,
            kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(0, memcmp(memory, kData, sizeof(kData)));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(memory, kData, sizeof(kData))));
 
   // Check we can get a piece.
   const uint32_t kSomeOffsetInBucket = 5;
   const uint32_t kLengthOfPiece = 6;
   const uint8_t kSentinel = 0xff;
-  memset(memory, 0, sizeof(kData));
-  memory[-1] = kSentinel;
+  UNSAFE_TODO(memset(memory, 0, sizeof(kData)));
+  UNSAFE_TODO(memory[-1]) = kSentinel;
   cmd.Init(kBucketId, kSomeOffsetInBucket, kLengthOfPiece, valid_shm_id_,
            kSomeOffsetInSharedMemory);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(0, memcmp(memory, kData + kSomeOffsetInBucket, kLengthOfPiece));
-  EXPECT_EQ(0, memcmp(memory + kLengthOfPiece, zero,
-                      sizeof(kData) - kLengthOfPiece));
-  EXPECT_EQ(kSentinel, memory[-1]);
+  UNSAFE_TODO(EXPECT_EQ(
+      0, memcmp(memory, kData + kSomeOffsetInBucket, kLengthOfPiece)));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(memory + kLengthOfPiece, zero,
+                                  sizeof(kData) - kLengthOfPiece)));
+  UNSAFE_TODO(EXPECT_EQ(kSentinel, memory[-1]));
 
   // Check that it fails if the bucket_id is invalid
   cmd.Init(kInvalidBucketId, kSomeOffsetInBucket, sizeof(kData), valid_shm_id_,

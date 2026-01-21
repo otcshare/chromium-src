@@ -4,7 +4,6 @@
 
 #include "extensions/renderer/guest_view/mime_handler_view/post_message_support.h"
 
-#include "base/auto_reset.h"
 #include "base/metrics/histogram_functions.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/v8_value_converter.h"
@@ -15,8 +14,11 @@
 #include "gin/interceptor.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
+#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 
 namespace extensions {
 
@@ -26,19 +28,23 @@ const char kPostMessageName[] = "postMessage";
 
 // The gin-backed scriptable object which is exposed by the BrowserPlugin for
 // PostMessageSupport. This currently only implements "postMessage".
-class ScriptableObject : public gin::Wrappable<ScriptableObject>,
-                         public gin::NamedPropertyInterceptor {
+class ScriptableObject
+    : public gin::WrappableWithNamedPropertyInterceptor<ScriptableObject> {
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin},
+      gin::kPostMessageScriptableObject};
+
+  const gin::WrapperInfo* wrapper_info() const override {
+    return &kWrapperInfo;
+  }
 
   static v8::Local<v8::Object> Create(
       v8::Isolate* isolate,
       base::WeakPtr<PostMessageSupport> post_message_support) {
-    ScriptableObject* scriptable_object =
-        new ScriptableObject(isolate, post_message_support);
-    return gin::CreateHandle(isolate, scriptable_object)
-        .ToV8()
-        .As<v8::Object>();
+    auto* scriptable_object = cppgc::MakeGarbageCollected<ScriptableObject>(
+        isolate->GetCppHeap()->GetAllocationHandle(), post_message_support);
+    return scriptable_object->GetWrapper(isolate).ToLocalChecked();
   }
 
   // gin::NamedPropertyInterceptor
@@ -59,31 +65,28 @@ class ScriptableObject : public gin::Wrappable<ScriptableObject>,
                                                post_message_function_template_);
       v8::Local<v8::Function> function;
       if (function_template->GetFunction(isolate->GetCurrentContext())
-              .ToLocal(&function))
+              .ToLocal(&function)) {
         return function;
+      }
     }
     return v8::Local<v8::Value>();
   }
 
- private:
-  ScriptableObject(v8::Isolate* isolate,
-                   base::WeakPtr<PostMessageSupport> post_message_support)
-      : gin::NamedPropertyInterceptor(isolate, this),
-        post_message_support_(post_message_support) {}
+  explicit ScriptableObject(
+      base::WeakPtr<PostMessageSupport> post_message_support)
+      : post_message_support_(post_message_support) {}
 
-  // gin::Wrappable
+  // gin::DeprecatedWrappable
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override {
-    return gin::Wrappable<ScriptableObject>::GetObjectTemplateBuilder(isolate)
-        .AddNamedPropertyInterceptor();
+    return gin::WrappableWithNamedPropertyInterceptor<
+               ScriptableObject>::GetObjectTemplateBuilder(isolate)
+        .template AddNamedPropertyInterceptor<kWrapperInfo.pointer_tag>();
   }
 
   base::WeakPtr<PostMessageSupport> post_message_support_;
   v8::Persistent<v8::FunctionTemplate> post_message_function_template_;
 };
-
-// static
-gin::WrapperInfo ScriptableObject::kWrapperInfo = {gin::kEmbedderNativeGin};
 
 }  // namespace
 
@@ -139,11 +142,13 @@ void PostMessageSupport::PostJavaScriptMessage(v8::Isolate* isolate,
 
   v8::Context::Scope context_scope(
       delegate_->GetSourceFrame()->MainWorldScriptContext());
-  v8::Local<v8::Object> target_window_proxy = target_frame->GlobalProxy();
+  v8::Local<v8::Object> target_window_proxy =
+      target_frame->GlobalProxy(isolate);
   gin::Dictionary window_object(isolate, target_window_proxy);
   v8::Local<v8::Function> post_message;
-  if (!window_object.Get(std::string(kPostMessageName), &post_message))
+  if (!window_object.Get(std::string(kPostMessageName), &post_message)) {
     return;
+  }
 
   v8::Local<v8::Value> args[] = {
       message,
@@ -157,7 +162,7 @@ void PostMessageSupport::PostJavaScriptMessage(v8::Isolate* isolate,
 
 void PostMessageSupport::PostMessageFromValue(const base::Value& message) {
   auto* frame = delegate_->GetSourceFrame();
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(frame->MainWorldScriptContext());
   PostJavaScriptMessage(isolate, content::V8ValueConverter::Create()->ToV8Value(
@@ -167,17 +172,19 @@ void PostMessageSupport::PostMessageFromValue(const base::Value& message) {
 void PostMessageSupport::SetActive() {
   DCHECK(!is_active_);
   is_active_ = true;
-  if (pending_messages_.empty())
+  if (pending_messages_.empty()) {
     return;
+  }
 
   // Now that the guest has loaded, flush any unsent messages.
   auto* source = delegate_->GetSourceFrame();
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = source->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(source->MainWorldScriptContext());
-  for (const auto& pending_message : pending_messages_)
+  for (const auto& pending_message : pending_messages_) {
     PostJavaScriptMessage(isolate,
                           v8::Local<v8::Value>::New(isolate, pending_message));
+  }
 
   pending_messages_.clear();
 }

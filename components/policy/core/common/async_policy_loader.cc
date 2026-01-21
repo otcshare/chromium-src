@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
@@ -34,9 +34,9 @@ constexpr base::TimeDelta kReloadInterval = base::Minutes(15);
 AsyncPolicyLoader::AsyncPolicyLoader(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     bool periodic_updates)
-    : task_runner_(task_runner),
-      management_service_(nullptr),
-      periodic_updates_(periodic_updates) {}
+    : AsyncPolicyLoader(task_runner,
+                        /*management_service=*/nullptr,
+                        periodic_updates) {}
 
 AsyncPolicyLoader::AsyncPolicyLoader(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
@@ -44,9 +44,10 @@ AsyncPolicyLoader::AsyncPolicyLoader(
     bool periodic_updates)
     : task_runner_(task_runner),
       management_service_(management_service),
-      periodic_updates_(periodic_updates) {}
+      periodic_updates_(periodic_updates),
+      reload_interval_(kReloadInterval) {}
 
-AsyncPolicyLoader::~AsyncPolicyLoader() {}
+AsyncPolicyLoader::~AsyncPolicyLoader() = default;
 
 Time AsyncPolicyLoader::LastModificationTime() {
   return Time();
@@ -66,8 +67,7 @@ void AsyncPolicyLoader::Reload(bool force) {
   // `management_service_` must be called on the main thread.
   // base::Unretained is okay here since `management_service_` is an instance of
   // PlatformManagementService which is a singleton that outlives this class.
-  if (!platform_management_trustworthiness_.has_value() &&
-      management_service_) {
+  if (NeedManagementBitBeforeLoad()) {
     DCHECK_EQ(management_service_, PlatformManagementService::GetInstance());
     ui_thread_task_runner_->PostTaskAndReplyWithResult(
         FROM_HERE,
@@ -98,13 +98,17 @@ void AsyncPolicyLoader::Reload(bool force) {
 
   update_callback_.Run(std::move(bundle));
   if (periodic_updates_) {
-    ScheduleNextReload(kReloadInterval);
+    // Note: it is important to schedule the next reload after calling Load()
+    // to make sure that anything done in Load() that may change the state of
+    // the loader  (e.g. changing the `reload_interval_`) is effective before
+    // scheduling the next reload.
+    ScheduleNextReload(get_reload_interval());
   }
 }
 
 bool AsyncPolicyLoader::ShouldFilterSensitivePolicies() {
-#if BUILDFLAG(IS_WIN)
-  DCHECK(platform_management_trustworthiness_);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  DCHECK(platform_management_trustworthiness_.has_value());
 
   return *platform_management_trustworthiness_ <
          ManagementAuthorityTrustworthiness::TRUSTED;
@@ -118,6 +122,11 @@ void AsyncPolicyLoader::SetPlatformManagementTrustworthinessAndReload(
     ManagementAuthorityTrustworthiness trustworthiness) {
   platform_management_trustworthiness_ = trustworthiness;
   Reload(force);
+}
+
+bool AsyncPolicyLoader::NeedManagementBitBeforeLoad() {
+  return !platform_management_trustworthiness_.has_value() &&
+         management_service_;
 }
 
 PolicyBundle AsyncPolicyLoader::InitialLoad(
@@ -158,7 +167,7 @@ void AsyncPolicyLoader::Init(
 
   // Start periodic refreshes.
   if (periodic_updates_) {
-    ScheduleNextReload(kReloadInterval);
+    ScheduleNextReload(get_reload_interval());
   }
 }
 

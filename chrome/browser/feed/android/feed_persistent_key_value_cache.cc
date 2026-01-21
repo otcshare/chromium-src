@@ -7,7 +7,6 @@
 #include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
-#include "chrome/browser/feed/android/jni_headers/FeedPersistentKeyValueCache_jni.h"
 #include "chrome/browser/feed/feed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -15,9 +14,12 @@
 #include "components/feed/core/v2/public/feed_service.h"
 #include "components/feed/core/v2/public/persistent_key_value_store.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/feed/android/jni_headers/FeedPersistentKeyValueCache_jni.h"
+
 namespace feed {
 namespace {
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 std::string JavaByteArrayToString(
     JNIEnv* env,
@@ -57,10 +59,10 @@ PersistentKeyValueStore* GetStore() {
 
 }  // namespace
 
-void JNI_FeedPersistentKeyValueCache_Lookup(
+static void JNI_FeedPersistentKeyValueCache_Lookup(
     JNIEnv* env,
-    const JavaParamRef<jbyteArray>& j_key,
-    const JavaParamRef<jobject>& j_response_callback) {
+    const JavaRef<jbyteArray>& j_key,
+    const JavaRef<jobject>& j_response_callback) {
   base::android::ScopedJavaGlobalRef<jobject> callback(j_response_callback);
 
   PersistentKeyValueStore* store = GetStore();
@@ -73,11 +75,11 @@ void JNI_FeedPersistentKeyValueCache_Lookup(
       base::BindOnce(&OnLookupFinished, env, std::move(callback)));
 }
 
-void JNI_FeedPersistentKeyValueCache_Put(
+static void JNI_FeedPersistentKeyValueCache_Put(
     JNIEnv* env,
-    const JavaParamRef<jbyteArray>& j_key,
-    const JavaParamRef<jbyteArray>& j_value,
-    const JavaParamRef<jobject>& j_runnable) {
+    const JavaRef<jbyteArray>& j_key,
+    const JavaRef<jbyteArray>& j_value,
+    const JavaRef<jobject>& j_runnable) {
   base::android::ScopedJavaGlobalRef<jobject> callback(j_runnable);
 
   PersistentKeyValueStore* store = GetStore();
@@ -91,10 +93,10 @@ void JNI_FeedPersistentKeyValueCache_Put(
                      base::android::ScopedJavaGlobalRef<jobject>(j_runnable)));
 }
 
-void JNI_FeedPersistentKeyValueCache_Evict(
+static void JNI_FeedPersistentKeyValueCache_Evict(
     JNIEnv* env,
-    const JavaParamRef<jbyteArray>& j_key,
-    const JavaParamRef<jobject>& j_runnable) {
+    const JavaRef<jbyteArray>& j_key,
+    const JavaRef<jobject>& j_runnable) {
   base::android::ScopedJavaGlobalRef<jobject> callback(j_runnable);
 
   PersistentKeyValueStore* store = GetStore();
@@ -109,3 +111,5 @@ void JNI_FeedPersistentKeyValueCache_Evict(
 }
 
 }  // namespace feed
+
+DEFINE_JNI(FeedPersistentKeyValueCache)

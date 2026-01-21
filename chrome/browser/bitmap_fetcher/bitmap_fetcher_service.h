@@ -7,8 +7,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/lru_cache.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_delegate.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -32,12 +32,11 @@ class BitmapFetcherService : public KeyedService, public BitmapFetcherDelegate {
  public:
   typedef int RequestId;
   static const RequestId REQUEST_ID_INVALID = 0;
-  using BitmapFetchedCallback =
-      base::OnceCallback<void(const SkBitmap& bitmap)>;
+  using BitmapFetchedCallback = base::OnceCallback<void(SkBitmap bitmap)>;
 
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     // Called whenever the image changes. Called with an empty image if the
     // fetch failed or the request ended for any reason.

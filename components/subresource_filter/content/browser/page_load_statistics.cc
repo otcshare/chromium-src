@@ -4,16 +4,23 @@
 
 #include "components/subresource_filter/content/browser/page_load_statistics.h"
 
+#include <string_view>
+
 #include "base/check.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
+#include "base/strings/strcat.h"
 #include "components/subresource_filter/core/common/time_measurements.h"
+#include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 
 namespace subresource_filter {
 
-PageLoadStatistics::PageLoadStatistics(const mojom::ActivationState& state)
-    : activation_state_(state) {}
+PageLoadStatistics::PageLoadStatistics(const mojom::ActivationState& state,
+                                       std::string_view uma_filter_tag)
+    : activation_state_(state), uma_filter_tag_(uma_filter_tag) {}
 
-PageLoadStatistics::~PageLoadStatistics() {}
+PageLoadStatistics::~PageLoadStatistics() = default;
 
 void PageLoadStatistics::OnDocumentLoadStatistics(
     const mojom::DocumentLoadStatistics& statistics) {
@@ -32,39 +39,77 @@ void PageLoadStatistics::OnDocumentLoadStatistics(
       statistics.evaluation_total_cpu_duration;
 }
 
-void PageLoadStatistics::OnDidFinishLoad() {
+void PageLoadStatistics::OnDidFinishLoad(bool record_incognito_metrics) {
   if (activation_state_.activation_level != mojom::ActivationLevel::kDisabled) {
-    UMA_HISTOGRAM_COUNTS_1000(
-        "SubresourceFilter.PageLoad.NumSubresourceLoads.Total",
+    if (record_incognito_metrics) {
+      base::UmaHistogramCounts1000(
+          base::StrCat({uma_filter_tag_,
+                        ".PageLoad.NumSubresourceLoads.Total.Incognito"}),
+          aggregated_document_statistics_.num_loads_total);
+      base::UmaHistogramCounts1000(
+          base::StrCat({uma_filter_tag_,
+                        ".PageLoad.NumSubresourceLoads.Evaluated.Incognito"}),
+          aggregated_document_statistics_.num_loads_evaluated);
+      base::UmaHistogramCounts1000(
+          base::StrCat(
+              {uma_filter_tag_,
+               ".PageLoad.NumSubresourceLoads.MatchedRules.Incognito"}),
+          aggregated_document_statistics_.num_loads_matching_rules);
+      base::UmaHistogramCounts1000(
+          base::StrCat({uma_filter_tag_,
+                        ".PageLoad.NumSubresourceLoads.Disallowed.Incognito"}),
+          aggregated_document_statistics_.num_loads_disallowed);
+    }
+    base::UmaHistogramCounts1000(
+        base::StrCat({uma_filter_tag_, ".PageLoad.NumSubresourceLoads.Total"}),
         aggregated_document_statistics_.num_loads_total);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "SubresourceFilter.PageLoad.NumSubresourceLoads.Evaluated",
+    base::UmaHistogramCounts1000(
+        base::StrCat(
+            {uma_filter_tag_, ".PageLoad.NumSubresourceLoads.Evaluated"}),
         aggregated_document_statistics_.num_loads_evaluated);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "SubresourceFilter.PageLoad.NumSubresourceLoads.MatchedRules",
+    base::UmaHistogramCounts1000(
+        base::StrCat(
+            {uma_filter_tag_, ".PageLoad.NumSubresourceLoads.MatchedRules"}),
         aggregated_document_statistics_.num_loads_matching_rules);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "SubresourceFilter.PageLoad.NumSubresourceLoads.Disallowed",
+    base::UmaHistogramCounts1000(
+        base::StrCat(
+            {uma_filter_tag_, ".PageLoad.NumSubresourceLoads.Disallowed"}),
         aggregated_document_statistics_.num_loads_disallowed);
   }
 
   if (activation_state_.measure_performance) {
-    DCHECK(activation_state_.activation_level !=
-           mojom::ActivationLevel::kDisabled);
-    UMA_HISTOGRAM_CUSTOM_MICRO_TIMES(
-        "SubresourceFilter.PageLoad.SubresourceEvaluation.TotalWallDuration",
+    CHECK(activation_state_.activation_level !=
+          mojom::ActivationLevel::kDisabled);
+    if (record_incognito_metrics) {
+      base::UmaHistogramCustomTimes(
+          base::StrCat(
+              {uma_filter_tag_,
+               ".PageLoad.SubresourceEvaluation.TotalWallDuration.Incognito"}),
+          aggregated_document_statistics_.evaluation_total_wall_duration,
+          base::Microseconds(1), base::Seconds(10), 50);
+
+      base::UmaHistogramCustomTimes(
+          base::StrCat(
+              {uma_filter_tag_,
+               ".PageLoad.SubresourceEvaluation.TotalCPUDuration.Incognito"}),
+          aggregated_document_statistics_.evaluation_total_cpu_duration,
+          base::Microseconds(1), base::Seconds(10), 50);
+    }
+    base::UmaHistogramCustomTimes(
+        base::StrCat({uma_filter_tag_,
+                      ".PageLoad.SubresourceEvaluation.TotalWallDuration"}),
         aggregated_document_statistics_.evaluation_total_wall_duration,
         base::Microseconds(1), base::Seconds(10), 50);
-    UMA_HISTOGRAM_CUSTOM_MICRO_TIMES(
-        "SubresourceFilter.PageLoad.SubresourceEvaluation.TotalCPUDuration",
+
+    base::UmaHistogramCustomTimes(
+        base::StrCat({uma_filter_tag_,
+                      ".PageLoad.SubresourceEvaluation.TotalCPUDuration"}),
         aggregated_document_statistics_.evaluation_total_cpu_duration,
         base::Microseconds(1), base::Seconds(10), 50);
-  } else {
-    DCHECK(aggregated_document_statistics_.evaluation_total_wall_duration
-               .is_zero());
-    DCHECK(aggregated_document_statistics_.evaluation_total_cpu_duration
-               .is_zero());
   }
+  // Theoretically, we should be able to add an else case that CHECK()s that the
+  // evaluation durations are zero. However, this causes crashes as the renderer
+  // and browser appear to sometimes get out of sync. See crbug.com/372883698.
 }
 
 }  // namespace subresource_filter

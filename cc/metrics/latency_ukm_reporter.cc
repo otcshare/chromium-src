@@ -6,9 +6,12 @@
 
 #include <climits>
 #include <memory>
+#include <utility>
 
 #include "base/rand_util.h"
-#include "cc/trees/ukm_manager.h"
+#include "cc/metrics/compositor_frame_reporter.h"
+#include "cc/metrics/ukm_manager.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 
 namespace cc {
 
@@ -92,12 +95,14 @@ void LatencyUkmReporter::ReportCompositorLatencyUkm(
     const CompositorFrameReporter::ProcessedBlinkBreakdown&
         processed_blink_breakdown,
     const CompositorFrameReporter::ProcessedVizBreakdown&
-        processed_viz_breakdown) {
+        processed_viz_breakdown,
+    const CompositorFrameReporter::ProcessedTreesInVizBreakdown&
+        processed_trees_in_viz_breakdown) {
   if (ukm_manager_ &&
       compositor_latency_sampling_controller_->ShouldRecordNextEvent()) {
     ukm_manager_->RecordCompositorLatencyUKM(
         report_types, stage_history, active_trackers, processed_blink_breakdown,
-        processed_viz_breakdown);
+        processed_viz_breakdown, processed_trees_in_viz_breakdown);
   }
 }
 
@@ -113,6 +118,17 @@ void LatencyUkmReporter::ReportEventLatencyUkm(
     ukm_manager_->RecordEventLatencyUKM(events_metrics, stage_history,
                                         processed_blink_breakdown,
                                         processed_viz_breakdown);
+  }
+}
+
+void LatencyUkmReporter::InitializeUkmManager(
+    std::unique_ptr<ukm::UkmRecorder> recorder) {
+  ukm_manager_ = std::make_unique<UkmManager>(std::move(recorder));
+}
+
+void LatencyUkmReporter::SetSourceId(ukm::SourceId source_id) {
+  if (ukm_manager_) {
+    ukm_manager_->SetSourceId(source_id);
   }
 }
 

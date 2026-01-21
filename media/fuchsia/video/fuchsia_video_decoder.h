@@ -5,20 +5,21 @@
 #ifndef MEDIA_FUCHSIA_VIDEO_FUCHSIA_VIDEO_DECODER_H_
 #define MEDIA_FUCHSIA_VIDEO_FUCHSIA_VIDEO_DECODER_H_
 
+#include <fuchsia/media/cpp/fidl.h>
+#include <lib/zx/eventpair.h>
+
 #include <deque>
 #include <memory>
 #include <vector>
 
-#include <fuchsia/media/cpp/fidl.h>
-#include <lib/zx/eventpair.h>
-
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "media/base/media_export.h"
 #include "media/base/video_decoder.h"
 #include "media/base/video_decoder_config.h"
 #include "media/fuchsia/common/sysmem_buffer_stream.h"
 #include "media/fuchsia/common/sysmem_client.h"
-#include "media/fuchsia/mojom/fuchsia_media.mojom.h"
+#include "media/mojo/mojom/fuchsia_media.mojom.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 
 namespace gfx {
@@ -79,7 +80,7 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
 
   // SysmemBufferStream::Sink implementation.
   void OnSysmemBufferStreamBufferCollectionToken(
-      fuchsia::sysmem::BufferCollectionTokenPtr token) override;
+      fuchsia::sysmem2::BufferCollectionTokenPtr token) override;
   void OnSysmemBufferStreamOutputPacket(
       StreamProcessorHelper::IoPacket packet) override;
   void OnSysmemBufferStreamEndOfStream() override;
@@ -111,7 +112,7 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
   // Callback for SysmemBufferCollection::CreateSharedToken(), used to send the
   // sysmem buffer collection token to the GPU process.
   void SetBufferCollectionTokenForGpu(
-      fuchsia::sysmem::BufferCollectionTokenPtr token);
+      fuchsia::sysmem2::BufferCollectionTokenPtr token);
 
   // Called by OutputMailbox to signal that the output buffer can be reused.
   void ReleaseOutputPacket(StreamProcessorHelper::IoPacket packet);
@@ -151,6 +152,9 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
   std::unique_ptr<SysmemCollectionClient> output_buffer_collection_;
   zx::eventpair output_buffer_collection_handle_;
   std::vector<OutputMailbox*> output_mailboxes_;
+
+  // Set to true when the output buffers are protected.
+  bool protected_output_ = false;
 
   size_t num_used_output_buffers_ = 0;
 

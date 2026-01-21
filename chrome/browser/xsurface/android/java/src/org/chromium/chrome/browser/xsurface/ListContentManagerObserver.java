@@ -4,7 +4,14 @@
 
 package org.chromium.chrome.browser.xsurface;
 
-/** Interface to observe a list. */
+import org.jspecify.annotations.NullMarked;
+
+/**
+ * Implemented in Chromium.
+ *
+ * Interface to observe a list.
+ */
+@NullMarked
 public interface ListContentManagerObserver {
     /** Called when range from startIndex to startIndex+count has been inserted. */
     default void onItemRangeInserted(int startIndex, int count) {}

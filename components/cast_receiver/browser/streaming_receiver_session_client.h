@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
@@ -19,19 +20,9 @@ namespace base {
 class SequencedTaskRunner;
 }  // namespace base
 
-namespace gfx {
-class Rect;
-}  // namespace gfx
-
 namespace content {
 class WebContents;
 }  // namespace content
-
-namespace media {
-class AudioDecoderConfig;
-class VideoDecoderConfig;
-struct VideoTransformation;
-}  // namespace media
 
 namespace cast_receiver {
 
@@ -58,11 +49,6 @@ class StreamingReceiverSessionClient
     // associated StreamingReceiverSessionClient instance will be placed in an
     // undefined state.
     virtual void OnError() = 0;
-
-    // Called when the resolution as reported to the media pipeline changes.
-    virtual void OnResolutionChanged(
-        const gfx::Rect& size,
-        const ::media::VideoTransformation& transformation) = 0;
   };
 
   // Max time for which streaming may wait for AV Settings receipt before being
@@ -73,7 +59,7 @@ class StreamingReceiverSessionClient
   // lifetime of this instance.
   StreamingReceiverSessionClient(
       scoped_refptr<base::SequencedTaskRunner> task_runner,
-      cast_streaming::NetworkContextGetter network_context_getter,
+      network::NetworkContextGetter network_context_getter,
       std::unique_ptr<cast_api_bindings::MessagePort> message_port,
       content::WebContents* web_contents,
       Handler* handler,
@@ -140,7 +126,7 @@ class StreamingReceiverSessionClient
   // This second ctor is required for Unit Testing.
   StreamingReceiverSessionClient(
       scoped_refptr<base::SequencedTaskRunner> task_runner,
-      cast_streaming::NetworkContextGetter network_context_getter,
+      network::NetworkContextGetter network_context_getter,
       std::unique_ptr<StreamingController> streaming_controller,
       Handler* handler,
       cast_receiver::StreamingConfigManager* config_manager,
@@ -170,10 +156,7 @@ class StreamingReceiverSessionClient
   void TriggerError();
 
   // cast_streaming::ReceiverSession::Client overrides.
-  void OnAudioConfigUpdated(
-      const ::media::AudioDecoderConfig& audio_config) override;
-  void OnVideoConfigUpdated(
-      const ::media::VideoDecoderConfig& video_config) override;
+  void OnStreamingSessionEnded() override;
 
   // cast_receiver::StreamingConfigManager::ConfigObserver overrides.
   void OnStreamingConfigSet(
@@ -185,7 +168,7 @@ class StreamingReceiverSessionClient
   void OnPlaybackStarted();
 
   // Handler for callbacks associated with this class. May be empty.
-  Handler* const handler_;
+  const raw_ptr<Handler> handler_;
 
   // Task runner on which waiting for the result of an AV Settings query should
   // occur.

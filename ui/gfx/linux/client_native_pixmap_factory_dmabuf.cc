@@ -8,8 +8,10 @@
 
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/native_pixmap_handle.h"
 
 // Although, it's compiled for all linux platforms, it does not mean dmabuf
@@ -27,27 +29,24 @@ class ClientNativePixmapOpaque : public ClientNativePixmap {
       : pixmap_handle_(std::move(pixmap_handle)) {}
   ~ClientNativePixmapOpaque() override = default;
 
-  bool Map() override {
-    NOTREACHED();
-    return false;
-  }
+  bool Map() override { return false; }
   void Unmap() override { NOTREACHED(); }
   size_t GetNumberOfPlanes() const override {
     return pixmap_handle_.planes.size();
   }
-  void* GetMemoryAddress(size_t plane) const override {
-    NOTREACHED();
-    return nullptr;
-  }
+  void* GetMemoryAddress(size_t plane) const override { NOTREACHED(); }
   int GetStride(size_t plane) const override {
     CHECK_LT(plane, pixmap_handle_.planes.size());
     // Even though a ClientNativePixmapOpaque should not be mapped, we may still
     // need to query the stride of each plane. See
-    // VideoFrame::WrapExternalGpuMemoryBuffer() for such a use case.
+    // VideoFrame::WrapMappableSharedImage() for such a use case.
     return base::checked_cast<int>(pixmap_handle_.planes[plane].stride);
   }
   NativePixmapHandle CloneHandleForIPC() const override {
     return gfx::CloneHandleForIPC(pixmap_handle_);
+  }
+  uint64_t GetPlaneSize(size_t plane) const override {
+    return pixmap_handle_.planes[plane].size;
   }
 
  private:
@@ -70,7 +69,7 @@ class ClientNativePixmapFactoryDmabuf : public ClientNativePixmapFactory {
   std::unique_ptr<ClientNativePixmap> ImportFromHandle(
       gfx::NativePixmapHandle handle,
       const gfx::Size& size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage) override {
     DCHECK(!handle.planes.empty());
     switch (usage) {
@@ -83,6 +82,7 @@ class ClientNativePixmapFactoryDmabuf : public ClientNativePixmapFactory {
       case gfx::BufferUsage::SCANOUT_FRONT_RENDERING: {
         if (!CanFitImageForSizeAndFormat(
                 handle, size, format, /*assume_single_memory_object=*/false)) {
+          DLOG(ERROR) << "Failed to verify the size and format of the handle.";
           return nullptr;
         }
 
@@ -120,17 +120,17 @@ class ClientNativePixmapFactoryDmabuf : public ClientNativePixmapFactory {
           }
         }
         return ClientNativePixmapDmaBuf::ImportFromDmabuf(std::move(handle),
-                                                          size, format);
+                                                          size);
       }
       case gfx::BufferUsage::GPU_READ:
       case gfx::BufferUsage::SCANOUT:
       case gfx::BufferUsage::SCANOUT_VDA_WRITE:
+      case gfx::BufferUsage::PROTECTED_SCANOUT:
       case gfx::BufferUsage::PROTECTED_SCANOUT_VDA_WRITE:
         return base::WrapUnique(
             new ClientNativePixmapOpaque(std::move(handle)));
     }
     NOTREACHED();
-    return nullptr;
   }
 };
 

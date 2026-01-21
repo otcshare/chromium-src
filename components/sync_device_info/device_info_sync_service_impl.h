@@ -8,10 +8,15 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/sync/invalidations/fcm_registration_token_observer.h"
 #include "components/sync/invalidations/interested_data_types_handler.h"
-#include "components/sync/model/model_type_store.h"
+#include "components/sync/model/data_type_store.h"
 #include "components/sync_device_info/device_info_sync_service.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 namespace syncer {
 
@@ -28,15 +33,17 @@ class DeviceInfoSyncServiceImpl : public DeviceInfoSyncService,
   // |local_device_info_provider| must not be null.
   // |device_info_prefs| must not be null.
   // |device_info_sync_client| must not be null and must outlive this object.
-  // |sync_invalidations_service| can be null if sync invalidations are
-  // disabled.
+  // |sync_invalidations_service| must not be null and must outlive this object.
+  // |pulse_task_runner| must not be null. It will be used to schedule pulses in
+  // DeviceInfoSyncBridge.
   DeviceInfoSyncServiceImpl(
-      OnceModelTypeStoreFactory model_type_store_factory,
+      OnceDataTypeStoreFactory data_type_store_factory,
       std::unique_ptr<MutableLocalDeviceInfoProvider>
           local_device_info_provider,
       std::unique_ptr<DeviceInfoPrefs> device_info_prefs,
       std::unique_ptr<DeviceInfoSyncClient> device_info_sync_client,
-      SyncInvalidationsService* sync_invalidations_service);
+      SyncInvalidationsService* sync_invalidations_service,
+      scoped_refptr<base::SequencedTaskRunner> pulse_task_runner);
 
   DeviceInfoSyncServiceImpl(const DeviceInfoSyncServiceImpl&) = delete;
   DeviceInfoSyncServiceImpl& operator=(const DeviceInfoSyncServiceImpl&) =
@@ -47,7 +54,7 @@ class DeviceInfoSyncServiceImpl : public DeviceInfoSyncService,
   // DeviceInfoSyncService implementation.
   LocalDeviceInfoProvider* GetLocalDeviceInfoProvider() override;
   DeviceInfoTracker* GetDeviceInfoTracker() override;
-  base::WeakPtr<ModelTypeControllerDelegate> GetControllerDelegate() override;
+  base::WeakPtr<DataTypeControllerDelegate> GetControllerDelegate() override;
   void RefreshLocalDeviceInfo() override;
 
   // FCMRegistrationTokenObserver implementation.
@@ -56,7 +63,7 @@ class DeviceInfoSyncServiceImpl : public DeviceInfoSyncService,
   // InterestedDataTypesHandler implementation.
   void OnInterestedDataTypesChanged() override;
   void SetCommittedAdditionalInterestedDataTypesCallback(
-      base::RepeatingCallback<void(const ModelTypeSet&)> callback) override;
+      base::RepeatingCallback<void(const DataTypeSet&)> callback) override;
 
   // KeyedService overrides.
   void Shutdown() override;

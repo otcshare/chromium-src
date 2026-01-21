@@ -13,6 +13,7 @@ namespace blink {
 
 class TextFormatInit;
 class TextFormat;
+class ExceptionState;
 
 // The TextFormat describes how the texts in an active composition should be
 // styled.
@@ -22,37 +23,29 @@ class CORE_EXPORT TextFormat final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static TextFormat* Create(const TextFormatInit* dict);
+  static TextFormat* Create(const TextFormatInit* dict,
+                            ExceptionState& exception_state);
   static TextFormat* Create(wtf_size_t range_start,
                             wtf_size_t range_end,
-                            const String& text_color,
-                            const String& background_color,
-                            const String& underline_color,
                             const String& underline_style,
-                            const String& underline_thickness);
-  explicit TextFormat(const TextFormatInit* dict);
+                            const String& underline_thickness,
+                            ExceptionState& exception_state);
+  explicit TextFormat(const TextFormatInit* dict,
+                      ExceptionState& exception_state);
   TextFormat(wtf_size_t range_start,
              wtf_size_t range_end,
-             const String& text_color,
-             const String& background_color,
-             const String& underline_color,
              const String& underline_style,
-             const String& underline_thickness);
+             const String& underline_thickness,
+             ExceptionState& exception_state);
 
   wtf_size_t rangeStart() const;
   wtf_size_t rangeEnd() const;
-  String textColor() const;
-  String backgroundColor() const;
-  String underlineColor() const;
   String underlineStyle() const;
   String underlineThickness() const;
 
  private:
   wtf_size_t range_start_ = 0;
   wtf_size_t range_end_ = 0;
-  String text_color_;
-  String background_color_;
-  String underline_color_;
   String underline_style_;
   String underline_thickness_;
 };

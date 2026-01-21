@@ -4,8 +4,11 @@
 
 #include "components/performance_manager/execution_context_priority/boosting_vote_aggregator.h"
 
+#include "base/notreached.h"
+#include "components/performance_manager/public/execution_context/execution_context.h"
 #include "components/performance_manager/test_support/voting.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace performance_manager {
 namespace execution_context_priority {
@@ -14,31 +17,47 @@ namespace {
 
 using DummyVoteObserver = voting::test::DummyVoteObserver<Vote>;
 
-// Some dummy execution contexts.
-const ExecutionContext* kExecutionContext0 =
-    reinterpret_cast<const ExecutionContext*>(0xF5A33000);
-const ExecutionContext* kExecutionContext1 =
-    reinterpret_cast<const ExecutionContext*>(0xF5A33001);
-const ExecutionContext* kExecutionContext2 =
-    reinterpret_cast<const ExecutionContext*>(0xF5A33002);
-const ExecutionContext* kExecutionContext3 =
-    reinterpret_cast<const ExecutionContext*>(0xF5A33003);
-const ExecutionContext* kExecutionContext4 =
-    reinterpret_cast<const ExecutionContext*>(0xF5A33004);
+class DummyExecutionContext : public ExecutionContext {
+ public:
+  DummyExecutionContext() = default;
+  ~DummyExecutionContext() override = default;
+
+  execution_context::ExecutionContextType GetType() const override {
+    return execution_context::ExecutionContextType();
+  }
+  blink::ExecutionContextToken GetToken() const override {
+    return blink::ExecutionContextToken();
+  }
+  Graph* GetGraph() const override { return nullptr; }
+  NodeState GetNodeState() const override { NOTREACHED(); }
+  const GURL& GetUrl() const override { return url_; }
+  const ProcessNode* GetProcessNode() const override { return nullptr; }
+  const PriorityAndReason& GetPriorityAndReason() const override {
+    return par_;
+  }
+  const FrameNode* GetFrameNode() const override { return nullptr; }
+  const WorkerNode* GetWorkerNode() const override { return nullptr; }
+
+ private:
+  GURL url_;
+  PriorityAndReason par_;
+};
 
 static const char kReasonBoost[] = "boosted!";
 
-static const Vote kLowPriorityVote0(base::TaskPriority::LOWEST, "low reason 0");
-static const Vote kLowPriorityVote1(base::TaskPriority::LOWEST, "low reason 1");
+static const Vote kLowPriorityVote0(base::Process::Priority::kMinValue,
+                                    "low reason 0");
+static const Vote kLowPriorityVote1(base::Process::Priority::kMinValue,
+                                    "low reason 1");
 
-static const Vote kMediumPriorityVote0(base::TaskPriority::USER_VISIBLE,
+static const Vote kMediumPriorityVote0(base::Process::Priority::kUserVisible,
                                        "medium reason 0");
-static const Vote kMediumPriorityVote1(base::TaskPriority::USER_VISIBLE,
+static const Vote kMediumPriorityVote1(base::Process::Priority::kUserVisible,
                                        "medium reason 1");
 
-static const Vote kHighPriorityVote0(base::TaskPriority::HIGHEST,
+static const Vote kHighPriorityVote0(base::Process::Priority::kMaxValue,
                                      "high reason 0");
-static const Vote kHighPriorityVote1(base::TaskPriority::HIGHEST,
+static const Vote kHighPriorityVote1(base::Process::Priority::kMaxValue,
                                      "high reason 1");
 
 class TestBoostingVoteAggregator : public BoostingVoteAggregator {
@@ -84,6 +103,14 @@ class BoostingVoteAggregatorTest : public testing::Test {
     EXPECT_EQ(mid_priority, node_data.IsActive(1));
     EXPECT_EQ(high_priority, node_data.IsActive(2));
   }
+
+  // Some dummy execution contexts.
+  DummyExecutionContext dummy_contexts[5];
+  raw_ptr<const ExecutionContext> kExecutionContext0 = &dummy_contexts[0];
+  raw_ptr<const ExecutionContext> kExecutionContext1 = &dummy_contexts[1];
+  raw_ptr<const ExecutionContext> kExecutionContext2 = &dummy_contexts[2];
+  raw_ptr<const ExecutionContext> kExecutionContext3 = &dummy_contexts[3];
+  raw_ptr<const ExecutionContext> kExecutionContext4 = &dummy_contexts[4];
 
  private:
   // The id of |aggregator_| as seen by its upstream |observer_|.

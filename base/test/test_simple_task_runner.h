@@ -5,9 +5,9 @@
 #ifndef BASE_TEST_TEST_SIMPLE_TASK_RUNNER_H_
 #define BASE_TEST_TEST_SIMPLE_TASK_RUNNER_H_
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_pending_task.h"
@@ -41,6 +41,9 @@ class TimeDelta;
 // However, TestSimpleTaskRunner allows for reentrancy, in that it
 // handles the running of tasks that in turn call back into itself
 // (e.g., to post more tasks).
+//
+// Tasks are only run with explicit invocation of `TestSimpleTaskRunner::Run*()`
+// methods.
 //
 // Note that, like any TaskRunner, TestSimpleTaskRunner is
 // ref-counted.

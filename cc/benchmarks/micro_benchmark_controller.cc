@@ -4,12 +4,12 @@
 
 #include "cc/benchmarks/micro_benchmark_controller.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "cc/benchmarks/invalidation_benchmark.h"
@@ -26,7 +26,7 @@ namespace {
 
 std::unique_ptr<MicroBenchmark> CreateBenchmark(
     const std::string& name,
-    base::Value settings,
+    base::Value::Dict settings,
     MicroBenchmark::DoneCallback callback) {
   if (name == "invalidation_benchmark") {
     return std::make_unique<InvalidationBenchmark>(std::move(settings),
@@ -56,7 +56,7 @@ MicroBenchmarkController::~MicroBenchmarkController() = default;
 
 int MicroBenchmarkController::ScheduleRun(
     const std::string& micro_benchmark_name,
-    base::Value settings,
+    base::Value::Dict settings,
     MicroBenchmark::DoneCallback callback) {
   std::unique_ptr<MicroBenchmark> benchmark = CreateBenchmark(
       micro_benchmark_name, std::move(settings), std::move(callback));
@@ -78,8 +78,8 @@ int MicroBenchmarkController::GetNextIdAndIncrement() {
   return id;
 }
 
-bool MicroBenchmarkController::SendMessage(int id, base::Value message) {
-  auto it = base::ranges::find(benchmarks_, id, &MicroBenchmark::id);
+bool MicroBenchmarkController::SendMessage(int id, base::Value::Dict message) {
+  auto it = std::ranges::find(benchmarks_, id, &MicroBenchmark::id);
   if (it == benchmarks_.end())
     return false;
   return (*it)->ProcessMessage(std::move(message));
@@ -111,7 +111,7 @@ void MicroBenchmarkController::DidUpdateLayers() {
 }
 
 void MicroBenchmarkController::CleanUpFinishedBenchmarks() {
-  base::EraseIf(benchmarks_,
+  std::erase_if(benchmarks_,
                 [](const std::unique_ptr<MicroBenchmark>& benchmark) {
                   return benchmark->IsDone();
                 });

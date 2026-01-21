@@ -4,12 +4,14 @@
 
 #include "chrome/browser/usb/web_usb_detector.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
@@ -20,17 +22,18 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/web_contents.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
@@ -41,7 +44,7 @@
 #include "ui/message_center/public/cpp/notification_delegate.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/notifier_catalogs.h"
 #endif
 
@@ -91,9 +94,12 @@ GURL GetActiveTabURL() {
 void OpenURL(const GURL& url) {
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(
       ProfileManager::GetLastUsedProfileAllowedByPolicy());
-  browser_displayer.browser()->OpenURL(content::OpenURLParams(
-      url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false /* is_renderer_initialized */));
+  browser_displayer.browser()->OpenURL(
+      content::OpenURLParams(url, content::Referrer(),
+                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
+                             false /* is_renderer_initialized */),
+      /*navigation_handle_callback=*/{});
 }
 
 // Delegate for webusb notification
@@ -107,7 +113,7 @@ class WebUsbNotificationDelegate : public TabStripModelObserver,
         landing_page_(landing_page),
         notification_id_(notification_id),
         disposition_(WEBUSB_NOTIFICATION_CLOSED),
-        browser_tab_strip_tracker_(absl::in_place, this, nullptr) {
+        browser_tab_strip_tracker_(std::in_place, this, nullptr) {
     browser_tab_strip_tracker_->Init();
   }
   WebUsbNotificationDelegate(const WebUsbNotificationDelegate&) = delete;
@@ -131,28 +137,32 @@ class WebUsbNotificationDelegate : public TabStripModelObserver,
     }
   }
 
-  void Click(const absl::optional<int>& button_index,
-             const absl::optional<std::u16string>& reply) override {
+  void Click(const std::optional<int>& button_index,
+             const std::optional<std::u16string>& reply) override {
     disposition_ = WEBUSB_NOTIFICATION_CLOSED_CLICKED;
 
     // If the URL is already open, activate that tab.
-    content::WebContents* tab_to_activate = nullptr;
-    Browser* browser = nullptr;
-    auto& all_tabs = AllTabContentses();
-    for (auto it = all_tabs.begin(), end = all_tabs.end(); it != end; ++it) {
-      if (base::StartsWith(it->GetVisibleURL().spec(), landing_page_.spec(),
+    tabs::TabInterface* tab_to_activate = nullptr;
+    BrowserWindowInterface* browser = nullptr;
+    tabs::ForEachTabInterface([&](tabs::TabInterface* tab) {
+      content::WebContents* const tab_contents = tab->GetContents();
+      if (base::StartsWith(tab_contents->GetVisibleURL().spec(),
+                           landing_page_.spec(),
                            base::CompareCase::INSENSITIVE_ASCII) &&
           (!tab_to_activate ||
-           it->GetLastActiveTime() > tab_to_activate->GetLastActiveTime())) {
-        tab_to_activate = *it;
-        browser = it.browser();
+           tab_contents->GetLastActiveTimeTicks() >
+               tab_to_activate->GetContents()->GetLastActiveTimeTicks())) {
+        tab_to_activate = tab;
+        browser = tab->GetBrowserWindowInterface();
+        return false;
       }
-    }
+      return true;
+    });
     if (tab_to_activate) {
-      TabStripModel* tab_strip_model = browser->tab_strip_model();
+      TabStripModel* tab_strip_model = browser->GetTabStripModel();
       tab_strip_model->ActivateTabAt(
-          tab_strip_model->GetIndexOfWebContents(tab_to_activate));
-      browser->window()->Activate();
+          tab_strip_model->GetIndexOfTab(tab_to_activate));
+      browser->GetWindow()->Activate();
       return;
     }
 
@@ -177,7 +187,7 @@ class WebUsbNotificationDelegate : public TabStripModelObserver,
   GURL landing_page_;
   std::string notification_id_;
   WebUsbNotificationClosed disposition_;
-  absl::optional<BrowserTabStripTracker> browser_tab_strip_tracker_;
+  std::optional<BrowserTabStripTracker> browser_tab_strip_tracker_;
 };
 
 }  // namespace
@@ -241,14 +251,14 @@ void WebUsbDetector::OnDeviceAdded(
       ui::ImageModel::FromVectorIcon(vector_icons::kUsbIcon, ui::kColorIcon,
                                      64),
       std::u16string(), GURL(),
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kNotifierWebUsb,
                                  ash::NotificationCatalogName::kWebUsb),
 #else
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kNotifierWebUsb),
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
       rich_notification_data,
       base::MakeRefCounted<WebUsbNotificationDelegate>(
           weak_factory_.GetWeakPtr(), landing_page, notification_id));

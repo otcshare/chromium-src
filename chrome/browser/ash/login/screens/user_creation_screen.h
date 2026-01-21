@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/login/error_screens_histogram_helper.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
@@ -24,14 +25,17 @@ class UserCreationScreen
  public:
   enum class Result {
     SIGNIN,
-    CHILD_SIGNIN,
-    CHILD_ACCOUNT_CREATE,
-    ENTERPRISE_ENROLL,
+    SIGNIN_TRIAGE,
+    ADD_CHILD,
+    ENTERPRISE_ENROLL_TRIAGE,
+    ENTERPRISE_ENROLL_SHORTCUT,
     CANCEL,
     SKIPPED,
     KIOSK_ENTERPRISE_ENROLL,
+    SIGNIN_SCHOOL,
   };
 
+  using TView = UserCreationView;
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
 
   class UserCreationScreenExitTestDelegate {
@@ -59,6 +63,9 @@ class UserCreationScreen
   static void SetUserCreationScreenExitTestDelegate(
       UserCreationScreenExitTestDelegate* test_delegate);
 
+  void SetChildSetupStep();
+  void SetDefaultStep();
+
  private:
   // BaseScreen:
   bool MaybeSkip(WizardContext& context) override;
@@ -79,7 +86,7 @@ class UserCreationScreen
   base::ScopedObservation<NetworkStateInformer, NetworkStateInformerObserver>
       scoped_observation_{this};
 
-  ErrorScreen* error_screen_ = nullptr;
+  raw_ptr<ErrorScreen> error_screen_ = nullptr;
 
   // TODO(crbug.com/1154669) Refactor error screen usage
   bool error_screen_visible_ = false;

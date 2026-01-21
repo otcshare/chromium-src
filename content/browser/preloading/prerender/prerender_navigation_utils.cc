@@ -19,10 +19,24 @@ bool IsDisallowedHttpResponseCode(int response_code) {
 }
 
 bool IsSameSite(const GURL& target_url, const url::Origin& origin) {
-  return target_url.scheme() == origin.scheme() &&
+  return target_url.GetScheme() == origin.scheme() &&
          net::registry_controlled_domains::SameDomainOrHost(
              target_url, origin,
              net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+}
+
+bool IsSameSiteCrossOrigin(const GURL& target_url, const url::Origin& origin) {
+  if (!IsSameSite(target_url, origin)) {
+    return false;
+  }
+  if (origin.IsSameOriginWith(target_url)) {
+    return false;
+  }
+  return true;
+}
+
+bool IsCrossSite(const GURL& target_url, const url::Origin& origin) {
+  return !IsSameSite(target_url, origin);
 }
 
 }  // namespace content::prerender_navigation_utils

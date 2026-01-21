@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,22 @@ namespace content {
 
 using blink::mojom::ResourceType;
 
+// static
+bool CriticalOriginTrialsThrottle::IsNavigationRequest(
+    const network::ResourceRequest& request) {
+  ResourceType request_resource_type =
+      static_cast<ResourceType>(request.resource_type);
+  return request_resource_type == ResourceType::kMainFrame ||
+         request_resource_type == ResourceType::kSubFrame;
+}
+
 CriticalOriginTrialsThrottle::CriticalOriginTrialsThrottle(
-    OriginTrialsControllerDelegate& origin_trials_delegate)
-    : origin_trials_delegate_(origin_trials_delegate) {}
+    OriginTrialsControllerDelegate& origin_trials_delegate,
+    std::optional<url::Origin> top_frame_origin,
+    std::optional<ukm::SourceId> source_id)
+    : origin_trials_delegate_(origin_trials_delegate),
+      top_frame_origin_(std::move(top_frame_origin)),
+      source_id_(source_id) {}
 
 CriticalOriginTrialsThrottle::~CriticalOriginTrialsThrottle() = default;
 
@@ -30,13 +43,9 @@ void CriticalOriginTrialsThrottle::WillStartRequest(
     network::ResourceRequest* request,
     bool* defer) {
   // Right now, Persistent Origin Trials are only supported on navigation
-  // requests, but this throttle is called for all network loads. Until support
-  // is implemented for other request types, we need to only intercept
-  // navigation requests.
-  ResourceType request_resource_type =
-      static_cast<ResourceType>(request->resource_type);
-  is_navigation_request_ = request_resource_type == ResourceType::kMainFrame ||
-                           request_resource_type == ResourceType::kSubFrame;
+  // requests. Until support is implemented for other request types, we need to
+  // only intercept navigation requests.
+  is_navigation_request_ = IsNavigationRequest(*request);
 
   if (is_navigation_request_)
     SetPreRequestFields(request->url);
@@ -45,29 +54,30 @@ void CriticalOriginTrialsThrottle::WillStartRequest(
 void CriticalOriginTrialsThrottle::BeforeWillProcessResponse(
     const GURL& response_url,
     const network::mojom::URLResponseHead& response_head,
-    bool* defer) {
+    RestartWithURLReset* restart_with_url_reset) {
   if (is_navigation_request_) {
     DCHECK_EQ(response_url, request_url_);
-    MaybeRestartWithTrials(response_head);
+    MaybeRestartWithTrials(response_head, restart_with_url_reset);
   }
 }
 
 void CriticalOriginTrialsThrottle::BeforeWillRedirectRequest(
     net::RedirectInfo* redirect_info,
     const network::mojom::URLResponseHead& response_head,
-    bool* defer,
+    RestartWithURLReset* restart_with_url_reset,
     std::vector<std::string>* to_be_removed_request_headers,
     net::HttpRequestHeaders* modified_request_headers,
     net::HttpRequestHeaders* modified_cors_exempt_request_headers) {
   if (is_navigation_request_) {
-    MaybeRestartWithTrials(response_head);
+    MaybeRestartWithTrials(response_head, restart_with_url_reset);
     // Update the stored information for the new request
     SetPreRequestFields(redirect_info->new_url);
   }
 }
 
 void CriticalOriginTrialsThrottle::MaybeRestartWithTrials(
-    const network::mojom::URLResponseHead& response_head) {
+    const network::mojom::URLResponseHead& response_head,
+    RestartWithURLReset* restart_with_url_reset) {
   if (!response_head.headers)
     return;
 
@@ -113,19 +123,25 @@ void CriticalOriginTrialsThrottle::MaybeRestartWithTrials(
 
   if (needs_restart) {
     // Persist the trials that were set, so we can try again.
-    origin_trials_delegate_->PersistTrialsFromTokens(
-        request_origin, origin_trial_tokens, base::Time::Now());
+    url::Origin partition_origin = top_frame_origin_.value_or(request_origin);
+    // Add the new tokens to the set of persisted trials
+    origin_trials_delegate_->PersistAdditionalTrialsFromTokens(
+        request_origin, partition_origin, /*script_origins=*/{},
+        origin_trial_tokens, base::Time::Now(), source_id_);
     restarted_origins_.insert(request_origin);
-    delegate_->RestartWithURLResetAndFlags(0);
+    *restart_with_url_reset = RestartWithURLReset(true);
   }
 }
 
 void CriticalOriginTrialsThrottle::SetPreRequestFields(
     const GURL& request_url) {
   request_url_ = request_url;
+  url::Origin partition_origin =
+      top_frame_origin_.value_or(url::Origin::Create(request_url_));
   original_persisted_trials_ =
       origin_trials_delegate_->GetPersistedTrialsForOrigin(
-          url::Origin::Create(request_url_), base::Time::Now());
+          url::Origin::Create(request_url_), partition_origin,
+          base::Time::Now());
 }
 
 }  // namespace content

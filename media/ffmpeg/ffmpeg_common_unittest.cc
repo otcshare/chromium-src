@@ -7,10 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <cstring>
 
-#include "base/bind.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media.h"
@@ -57,9 +58,8 @@ void TestConfigConvertExtraData(
   EXPECT_TRUE(converter_fn.Run(stream, decoder_config));
   EXPECT_EQ(static_cast<size_t>(codec_parameters->extradata_size),
             decoder_config->extra_data().size());
-  EXPECT_EQ(
-      0, memcmp(codec_parameters->extradata, &decoder_config->extra_data()[0],
-                decoder_config->extra_data().size()));
+  EXPECT_EQ(AVCodecParametersExtraDataToSpan(codec_parameters),
+            base::span(decoder_config->extra_data()));
 
   // Possible combination: extra_data = nullptr && size != 0, but the converter
   // function considers this valid and having no extra_data, due to behavior of
@@ -84,13 +84,12 @@ void VerifyProfileTest(const char* file_name,
   // Open a file to get a real AVStreams from FFmpeg.
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(GetTestDataFilePath(file_name)));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
   AVFormatContext* format_context = glue.format_context();
 
-  for (size_t i = 0; i < format_context->nb_streams; ++i) {
-    AVStream* stream = format_context->streams[i];
+  for (auto* stream : AVFormatContextToSpan(format_context)) {
     AVCodecParameters* codec_parameters = stream->codecpar;
     AVMediaType codec_type = codec_parameters->codec_type;
 
@@ -109,7 +108,7 @@ TEST_F(FFmpegCommonTest, AVStreamToDecoderConfig) {
   // Open a file to get a real AVStreams from FFmpeg.
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(GetTestDataFilePath("bear-320x240.webm")));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
   AVFormatContext* format_context = glue.format_context();
@@ -118,10 +117,11 @@ TEST_F(FFmpegCommonTest, AVStreamToDecoderConfig) {
   // for extradata and extradata_size.
   bool found_audio = false;
   bool found_video = false;
-  for (size_t i = 0;
-       i < format_context->nb_streams && (!found_audio || !found_video);
-       ++i) {
-    AVStream* stream = format_context->streams[i];
+  for (AVStream* stream : AVFormatContextToSpan(format_context)) {
+    if (found_audio && found_video) {
+      break;
+    }
+
     AVCodecParameters* codec_parameters = stream->codecpar;
     AVMediaType codec_type = codec_parameters->codec_type;
 
@@ -155,7 +155,7 @@ TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_OpusAmbisonics_4ch) {
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(
       GetTestDataFilePath("bear-opus-end-trimming-4ch-channelmapping2.webm")));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
 
@@ -178,7 +178,7 @@ TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_OpusAmbisonics_11ch) {
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(
       GetTestDataFilePath("bear-opus-end-trimming-11ch-channelmapping2.webm")));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
 
@@ -200,7 +200,7 @@ TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_OpusAmbisonics_11ch) {
 TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_9ch_wav) {
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(GetTestDataFilePath("9ch.wav")));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
 
@@ -220,9 +220,11 @@ TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_9ch_wav) {
 }
 
 TEST_F(FFmpegCommonTest, TimeBaseConversions) {
-  const int64_t test_data[][5] = {
-      {1, 2, 1, 500000, 1}, {1, 3, 1, 333333, 1}, {1, 3, 2, 666667, 2},
-  };
+  const auto test_data = std::to_array<std::array<const int64_t, 5>>({
+      {1, 2, 1, 500000, 1},
+      {1, 3, 1, 333333, 1},
+      {1, 3, 2, 666667, 2},
+  });
 
   for (size_t i = 0; i < std::size(test_data); ++i) {
     SCOPED_TRACE(i);
@@ -346,7 +348,7 @@ TEST_F(FFmpegCommonTest, VerifyHDRMetadataAndColorSpaceInfo) {
   // Open a file to get a real AVStreams from FFmpeg.
   base::MemoryMappedFile file;
   ASSERT_TRUE(file.Initialize(GetTestDataFilePath("colour.webm")));
-  InMemoryUrlProtocol protocol(file.data(), file.length(), false);
+  InMemoryUrlProtocol protocol(file.bytes(), false);
   FFmpegGlue glue(&protocol);
   ASSERT_TRUE(glue.OpenContext());
   AVFormatContext* format_context = glue.format_context();
@@ -359,19 +361,21 @@ TEST_F(FFmpegCommonTest, VerifyHDRMetadataAndColorSpaceInfo) {
 
   VideoDecoderConfig video_config;
   EXPECT_TRUE(AVStreamToVideoDecoderConfig(stream, &video_config));
-  ASSERT_TRUE(video_config.hdr_metadata().has_value());
-  const auto& color_volume_metadata =
-      video_config.hdr_metadata()->color_volume_metadata;
-  EXPECT_EQ(30.0, color_volume_metadata.luminance_min);
-  EXPECT_EQ(40.0, color_volume_metadata.luminance_max);
-  EXPECT_EQ(0.1f, color_volume_metadata.primaries.fRX);
-  EXPECT_EQ(0.2f, color_volume_metadata.primaries.fRY);
-  EXPECT_EQ(0.1f, color_volume_metadata.primaries.fGX);
-  EXPECT_EQ(0.2f, color_volume_metadata.primaries.fGY);
-  EXPECT_EQ(0.1f, color_volume_metadata.primaries.fBX);
-  EXPECT_EQ(0.2f, color_volume_metadata.primaries.fBY);
-  EXPECT_EQ(0.1f, color_volume_metadata.primaries.fWX);
-  EXPECT_EQ(0.2f, color_volume_metadata.primaries.fWY);
+  ASSERT_TRUE(video_config.hdr_metadata().smpte_st_2086.has_value());
+  const auto& smpte_st_2086 = video_config.hdr_metadata().smpte_st_2086.value();
+  EXPECT_EQ(30.0, smpte_st_2086.luminance_min);
+  EXPECT_EQ(40.0, smpte_st_2086.luminance_max);
+  EXPECT_EQ(0.1f, smpte_st_2086.primaries.fRX);
+  EXPECT_EQ(0.2f, smpte_st_2086.primaries.fRY);
+  EXPECT_EQ(0.1f, smpte_st_2086.primaries.fGX);
+  EXPECT_EQ(0.2f, smpte_st_2086.primaries.fGY);
+  EXPECT_EQ(0.1f, smpte_st_2086.primaries.fBX);
+  EXPECT_EQ(0.2f, smpte_st_2086.primaries.fBY);
+  EXPECT_EQ(0.1f, smpte_st_2086.primaries.fWX);
+  EXPECT_EQ(0.2f, smpte_st_2086.primaries.fWY);
+  const auto& cta_861_3 = video_config.hdr_metadata().cta_861_3.value();
+  EXPECT_EQ(11.0f, cta_861_3.max_content_light_level);
+  EXPECT_EQ(12.0f, cta_861_3.max_frame_average_light_level);
   EXPECT_EQ(VideoColorSpace(VideoColorSpace::PrimaryID::SMPTEST428_1,
                             VideoColorSpace::TransferID::LOG,
                             VideoColorSpace::MatrixID::RGB,

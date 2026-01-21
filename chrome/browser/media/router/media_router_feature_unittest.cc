@@ -6,9 +6,12 @@
 
 #include <memory>
 
+#include "base/command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/media_router/common/pref_names.h"
@@ -51,6 +54,22 @@ TEST(MediaRouterFeatureTest, GetReceiverIdHashToken) {
   EXPECT_EQ(token, GetReceiverIdHashToken(pref_service.get()));
 }
 
+TEST(MediaRouterFeatureTest, GetCastMirroringPlayoutDelayCommandLine) {
+  base::test::ScopedFeatureList feature_list;
+  // Test that an invalid switch is not returned.
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->AppendSwitchASCII(switches::kCastMirroringTargetPlayoutDelay,
+                                  "foo");
+  EXPECT_FALSE(GetCastMirroringPlayoutDelay().has_value());
+
+  base::TimeDelta expected_delay = base::Milliseconds(150);
+
+  // Test that valid values are passed.
+  command_line->AppendSwitchASCII(switches::kCastMirroringTargetPlayoutDelay,
+                                  "150");
+  EXPECT_EQ(GetCastMirroringPlayoutDelay().value(), expected_delay);
+}
+
 class MediaRouterEnabledTest : public ::testing::Test {
  public:
   MediaRouterEnabledTest() = default;
@@ -71,13 +90,16 @@ TEST_F(MediaRouterEnabledTest, TestEnabledByPolicy) {
       ::prefs::kEnableMediaRouter, std::make_unique<base::Value>(true));
   EXPECT_TRUE(MediaRouterEnabled(&enabled_profile));
 
+  TestingProfile* incognito_profile =
+      TestingProfile::Builder().BuildIncognito(&enabled_profile);
+  EXPECT_TRUE(MediaRouterEnabled(incognito_profile));
+
   enabled_profile.GetTestingPrefService()->SetManagedPref(
       ::prefs::kEnableMediaRouter, std::make_unique<base::Value>(false));
   // Runtime changes are not supported.
   EXPECT_TRUE(MediaRouterEnabled(&enabled_profile));
   // Should remain enabled for incognito too.
-  EXPECT_TRUE(MediaRouterEnabled(
-      TestingProfile::Builder().BuildIncognito(&enabled_profile)));
+  EXPECT_TRUE(MediaRouterEnabled(incognito_profile));
 }
 
 TEST_F(MediaRouterEnabledTest, TestDisabledByPolicy) {
@@ -85,13 +107,16 @@ TEST_F(MediaRouterEnabledTest, TestDisabledByPolicy) {
       ::prefs::kEnableMediaRouter, std::make_unique<base::Value>(false));
   EXPECT_FALSE(MediaRouterEnabled(&disabled_profile));
 
+  TestingProfile* incognito_profile =
+      TestingProfile::Builder().BuildIncognito(&disabled_profile);
+  EXPECT_FALSE(MediaRouterEnabled(incognito_profile));
+
   disabled_profile.GetTestingPrefService()->SetManagedPref(
       ::prefs::kEnableMediaRouter, std::make_unique<base::Value>(true));
   // Runtime changes are not supported.
   EXPECT_FALSE(MediaRouterEnabled(&disabled_profile));
   // Should remain disabled for incognito too.
-  EXPECT_FALSE(MediaRouterEnabled(
-      TestingProfile::Builder().BuildIncognito(&disabled_profile)));
+  EXPECT_FALSE(MediaRouterEnabled(incognito_profile));
 }
 
 }  // namespace media_router

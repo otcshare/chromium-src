@@ -6,6 +6,7 @@
 #define ASH_SYSTEM_USB_PERIPHERAL_USB_PERIPHERAL_NOTIFICATION_CONTROLLER_H_
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/peripheral_notification/peripheral_notification_manager.h"
 
 class PrefRegistrySimple;
@@ -38,6 +39,7 @@ class ASH_EXPORT UsbPeripheralNotificationController
   void OnInvalidUSB4CableWarning() override;
   void OnInvalidTBTCableWarning() override;
   void OnSpeedLimitingCableWarning() override;
+  void OnUsbDeviceOrEndpointLimit() override;
 
   // Stubs from PCIE Notification controller
   void OnLimitedPerformancePeripheralReceived() override {}
@@ -46,7 +48,7 @@ class ASH_EXPORT UsbPeripheralNotificationController
   void OnBillboardDeviceConnected() override {}
 
  private:
-  message_center::MessageCenter* const message_center_;
+  const raw_ptr<message_center::MessageCenter> message_center_;
 };
 
 }  // namespace ash

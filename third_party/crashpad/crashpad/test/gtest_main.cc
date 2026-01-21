@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "build/build_config.h"
 #include "gtest/gtest.h"
 #include "test/main_arguments.h"
@@ -35,7 +36,7 @@
 #endif  // BUILDFLAG(IS_WIN)
 
 #if defined(CRASHPAD_IS_IN_CHROMIUM)
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/launcher/unit_test_launcher.h"
 #include "base/test/test_suite.h"
 #endif  // CRASHPAD_IS_IN_CHROMIUM

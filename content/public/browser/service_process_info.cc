@@ -9,9 +9,11 @@
 namespace content {
 
 ServiceProcessInfo::ServiceProcessInfo(const std::string& name,
+                                       const std::optional<GURL>& site,
                                        const ServiceProcessId& id,
                                        base::Process process)
     : service_interface_name_(name),
+      site_(std::move(site)),
       service_process_id_(id),
       process_(std::move(process)) {}
 
@@ -22,8 +24,12 @@ ServiceProcessInfo& ServiceProcessInfo::operator=(ServiceProcessInfo&&) =
 ServiceProcessInfo::~ServiceProcessInfo() = default;
 
 ServiceProcessInfo ServiceProcessInfo::Duplicate() const {
-  return ServiceProcessInfo(service_interface_name_, service_process_id_,
-                            process_.Duplicate());
+  ServiceProcessInfo info(service_interface_name_, site_, service_process_id_,
+                          process_.Duplicate());
+  if (crashed_pre_ipc_) {
+    info.set_crashed_pre_ipc(crashed_pre_ipc_.value());
+  }
+  return info;
 }
 
 }  // namespace content

@@ -31,7 +31,6 @@
 #include "third_party/blink/renderer/core/dom/document_lifecycle.h"
 
 #include "base/notreached.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 #if DCHECK_IS_ON()
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -198,7 +197,7 @@ bool DocumentLifecycle::CanRewindTo(LifecycleState next_state) const {
   case DocumentLifecycle::StateName: \
     return #StateName
 
-static WTF::String StateAsDebugString(
+static String StateAsDebugString(
     const DocumentLifecycle::LifecycleState& state) {
   switch (state) {
     DEBUG_STRING_CASE(kUninitialized);
@@ -220,10 +219,9 @@ static WTF::String StateAsDebugString(
   }
 
   NOTREACHED();
-  return "Unknown";
 }
 
-WTF::String DocumentLifecycle::ToString() const {
+String DocumentLifecycle::ToString() const {
   return StateAsDebugString(state_);
 }
 #endif

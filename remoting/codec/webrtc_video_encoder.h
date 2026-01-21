@@ -10,7 +10,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "third_party/webrtc/api/video/encoded_image.h"
 #include "third_party/webrtc/api/video/video_codec_type.h"
@@ -56,12 +56,15 @@ class WebrtcVideoEncoder {
   // The destructor is virtual so that implementations can derive from this
   // class to attach more data to the frame.
   struct FrameStats {
-    FrameStats() = default;
-    FrameStats(const FrameStats&) = default;
-    FrameStats& operator=(const FrameStats&) = default;
-    virtual ~FrameStats() = default;
+    FrameStats();
+    FrameStats(const FrameStats&);
+    FrameStats& operator=(const FrameStats&);
+    virtual ~FrameStats();
 
-    // TODO(crbug.com/1192865): Consolidate all the per-frame statistics
+    // Creates a copy of the frame stats.
+    virtual std::unique_ptr<FrameStats> Clone() const;
+
+    // TODO(crbug.com/40175068): Consolidate all the per-frame statistics
     // into a single struct in remoting/protocol.
     base::TimeTicks capture_started_time;
     base::TimeTicks capture_ended_time;
@@ -84,7 +87,7 @@ class WebrtcVideoEncoder {
     ~EncodedFrame();
 
     webrtc::DesktopSize dimensions;
-    rtc::scoped_refptr<webrtc::EncodedImageBuffer> data;
+    webrtc::scoped_refptr<webrtc::EncodedImageBuffer> data;
     bool key_frame;
     int quantizer;
     webrtc::VideoCodecType codec;
@@ -124,8 +127,9 @@ class WebrtcVideoEncoder {
 
   // Encoder configurable settings, may be provided via SDP or OOB via a
   // proprietary message.
-  virtual void SetLosslessEncode(bool want_lossless) {}
-  virtual void SetLosslessColor(bool want_lossless) {}
+  virtual void SetLosslessEncode(bool want_lossless_encode) {}
+  virtual void SetLosslessColor(bool want_lossless_color) {}
+  virtual void SetUseActiveMap(bool use_active_map) {}
   virtual void SetEncoderSpeed(int encoder_speed) {}
 
   // Encode an image stored in |frame|. If frame.updated_region() is empty

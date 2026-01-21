@@ -12,21 +12,20 @@
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
 #include "components/exo/buffer.h"
-#include "gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "ui/compositor/compositor.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 
 namespace exo {
 namespace {
 
-bool IsSupportedFormat(gfx::BufferFormat format) {
-  return format == gfx::BufferFormat::RGBX_8888 ||
-         format == gfx::BufferFormat::RGBA_8888 ||
-         format == gfx::BufferFormat::BGRX_8888 ||
-         format == gfx::BufferFormat::BGRA_8888;
+bool IsSupportedFormat(viz::SharedImageFormat format) {
+  return format == viz::SinglePlaneFormat::kRGBX_8888 ||
+         format == viz::SinglePlaneFormat::kRGBA_8888 ||
+         format == viz::SinglePlaneFormat::kBGRX_8888 ||
+         format == viz::SinglePlaneFormat::kBGRA_8888;
 }
 
 }  // namespace
@@ -37,56 +36,53 @@ bool IsSupportedFormat(gfx::BufferFormat format) {
 SharedMemory::SharedMemory(base::UnsafeSharedMemoryRegion shared_memory_region)
     : shared_memory_region_(std::move(shared_memory_region)) {}
 
-SharedMemory::~SharedMemory() {}
+SharedMemory::~SharedMemory() = default;
 
-std::unique_ptr<Buffer> SharedMemory::CreateBuffer(const gfx::Size& size,
-                                                   gfx::BufferFormat format,
-                                                   unsigned offset,
-                                                   uint32_t stride) {
+std::unique_ptr<Buffer> SharedMemory::CreateBuffer(
+    const gfx::Size& size,
+    viz::SharedImageFormat format,
+    unsigned offset,
+    uint32_t stride) {
   TRACE_EVENT2("exo", "SharedMemory::CreateBuffer", "size", size.ToString(),
-               "format", static_cast<int>(format));
+               "format", format.ToString());
 
   if (!IsSupportedFormat(format)) {
-    DLOG(WARNING) << "Failed to create shm buffer. Unsupported format 0x"
-                  << static_cast<int>(format);
+    DLOG(WARNING) << "Failed to create shm buffer. Unsupported format "
+                  << format.ToString();
     return nullptr;
   }
 
-  if (gfx::RowSizeForBufferFormat(size.width(), format, 0) > stride ||
-      stride & 3) {
+  size_t bytes_per_row =
+      viz::SharedMemoryRowSizeForSharedImageFormat(format, 0, size.width())
+          .value();
+  if (bytes_per_row > stride || stride & 3) {
     DLOG(WARNING) << "Failed to create shm buffer. Unsupported stride "
                   << stride;
     return nullptr;
   }
 
-  gfx::GpuMemoryBufferHandle handle;
-  handle.type = gfx::SHARED_MEMORY_BUFFER;
-  handle.region = shared_memory_region_.Duplicate();
+  gfx::GpuMemoryBufferHandle handle(shared_memory_region_.Duplicate());
   handle.offset = offset;
   handle.stride = stride;
 
-  std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer =
-      gpu::GpuMemoryBufferImplSharedMemory::CreateFromHandle(
-          std::move(handle), size, format, gfx::BufferUsage::GPU_READ,
-          gpu::GpuMemoryBufferImpl::DestructionCallback());
-  if (!gpu_memory_buffer) {
-    LOG(ERROR) << "Failed to create GpuMemoryBuffer from handle";
-    return nullptr;
-  }
+  const gfx::BufferUsage buffer_usage = gfx::BufferUsage::GPU_READ;
+
+  // COMMANDS_ISSUED queries are sufficient for shared memory
+  // buffers as binding to texture is implemented using a call to
+  // glTexImage2D and the buffer can be reused as soon as that
+  // command has been issued.
+  const unsigned query_type = GL_COMMANDS_ISSUED_CHROMIUM;
 
   // Zero-copy doesn't provide a benefit in the case of shared memory as an
   // implicit copy is required when trying to use these buffers as zero-copy
   // buffers. Making the copy explicit allows the buffer to be reused earlier.
-  bool use_zero_copy = false;
+  const bool use_zero_copy = false;
+  const bool is_overlay_candidate = false;
+  const bool y_invert = false;
 
-  return std::make_unique<Buffer>(
-      std::move(gpu_memory_buffer), GL_TEXTURE_2D,
-      // COMMANDS_ISSUED queries are sufficient for shared memory
-      // buffers as binding to texture is implemented using a call to
-      // glTexImage2D and the buffer can be reused as soon as that
-      // command has been issued.
-      GL_COMMANDS_ISSUED_CHROMIUM, use_zero_copy,
-      false /* is_overlay_candidate */, false /* y_invert */);
+  return Buffer::CreateBufferFromGMBHandle(
+      std::move(handle), size, format, buffer_usage, query_type, use_zero_copy,
+      is_overlay_candidate, y_invert);
 }
 
 size_t SharedMemory::GetSize() const {

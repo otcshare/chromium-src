@@ -19,11 +19,11 @@ FloatingMenuPosition DefaultSystemFloatingMenuPosition() {
 
 gfx::Rect GetOnScreenBoundsForFloatingMenuPosition(
     const gfx::Size& menu_bounds,
-    FloatingMenuPosition position) {
+    FloatingMenuPosition position,
+    const aura::Window* root_window) {
   // Calculates the ideal bounds.
-  aura::Window* window = Shell::GetPrimaryRootWindow();
   gfx::Rect work_area =
-      WorkAreaInsets::ForWindow(window)->user_work_area_bounds();
+      WorkAreaInsets::ForWindow(root_window)->user_work_area_bounds();
 
   switch (position) {
     case FloatingMenuPosition::kBottomRight:
@@ -49,7 +49,6 @@ gfx::Rect GetOnScreenBoundsForFloatingMenuPosition(
                        menu_bounds.width(), menu_bounds.height());
     case FloatingMenuPosition::kSystemDefault:
       NOTREACHED();
-      return gfx::Rect();
   }
 }
 
@@ -79,7 +78,6 @@ views::BubbleBorder::Arrow GetAnchorAlignmentForFloatingMenuPosition(
       // It's not possible for position to be kSystemDefault here because we've
       // set it via DefaultSystemPosition() above if it was kSystemDefault.
       NOTREACHED();
-      return views::BubbleBorder::Arrow::TOP_LEFT;
   }
 }
 

@@ -9,6 +9,7 @@
 #include "base/test/bind.h"
 #include "base/time/time.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
@@ -47,21 +48,27 @@ class WidgetFadeAnimatorTest : public test::WidgetTest {
  public:
   void SetUp() override {
     test::WidgetTest::SetUp();
-    widget_ = CreateTestWidget(Widget::InitParams::Type::TYPE_WINDOW);
+    widget_ = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                               Widget::InitParams::Type::TYPE_WINDOW);
     delegate_ = std::make_unique<TestWidgetFadeAnimator>(widget_.get());
     delegate_->set_fade_in_duration(kFadeDuration);
     delegate_->set_fade_out_duration(kFadeDuration);
+    non_zero_duration_.emplace(
+        gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   }
 
   void TearDown() override {
-    if (widget_ && !widget_->IsClosed())
+    non_zero_duration_.reset();
+    if (widget_ && !widget_->IsClosed()) {
       widget_->CloseNow();
+    }
     test::WidgetTest::TearDown();
   }
 
  protected:
   std::unique_ptr<Widget> widget_;
   std::unique_ptr<TestWidgetFadeAnimator> delegate_;
+  std::optional<gfx::ScopedAnimationDurationScaleMode> non_zero_duration_;
 };
 
 TEST_F(WidgetFadeAnimatorTest, FadeIn) {
@@ -270,6 +277,34 @@ TEST_F(WidgetFadeAnimatorTest, FadeOutCallback) {
   delegate_->test_api()->IncrementTime(kHalfFadeDuration);
   EXPECT_EQ(1, called_count);
   EXPECT_EQ(WidgetFadeAnimator::FadeType::kFadeOut, anim_type);
+}
+
+TEST_F(WidgetFadeAnimatorTest, FadeInDefaultIsShowActive) {
+  EXPECT_FALSE(widget_->IsVisible());
+  delegate_->FadeIn();
+
+  // Widget should be shown and active.
+  EXPECT_TRUE(widget_->IsVisible());
+  EXPECT_TRUE(widget_->IsActive());
+}
+
+TEST_F(WidgetFadeAnimatorTest, FadeInShowTypeShowInactive) {
+  EXPECT_FALSE(widget_->IsVisible());
+  delegate_->set_show_type(WidgetFadeAnimator::WidgetShowType::kShowInactive);
+  delegate_->FadeIn();
+
+  // Widget should be shown and inactive.
+  EXPECT_TRUE(widget_->IsVisible());
+  EXPECT_FALSE(widget_->IsActive());
+}
+
+TEST_F(WidgetFadeAnimatorTest, FadeInShowTypeNone) {
+  EXPECT_FALSE(widget_->IsVisible());
+  delegate_->set_show_type(WidgetFadeAnimator::WidgetShowType::kNone);
+  delegate_->FadeIn();
+
+  // Widget should not be shown.
+  EXPECT_FALSE(widget_->IsVisible());
 }
 
 }  // namespace views

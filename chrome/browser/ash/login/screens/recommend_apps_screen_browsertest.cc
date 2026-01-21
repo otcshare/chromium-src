@@ -7,30 +7,32 @@
 #include <memory>
 #include <vector>
 
-#include "ash/components/arc/arc_prefs.h"
-#include "base/bind.h"
+#include "ash/constants/ash_switches.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/run_loop.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
+#include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/recommend_apps_fetcher.h"
+#include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/recommend_apps_fetcher_delegate.h"
+#include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/scoped_test_recommend_apps_fetcher_factory.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-#include "chrome/browser/ash/login/screens/recommend_apps/recommend_apps_fetcher.h"
-#include "chrome/browser/ash/login/screens/recommend_apps/recommend_apps_fetcher_delegate.h"
-#include "chrome/browser/ash/login/screens/recommend_apps/scoped_test_recommend_apps_fetcher_factory.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/recommend_apps_screen_handler.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace ash {
 namespace {
@@ -86,9 +88,10 @@ constexpr char kJsonResponse[] =
   }
   ]})json";
 
-class StubRecommendAppsFetcher : public RecommendAppsFetcher {
+class StubRecommendAppsFetcher : public apps::RecommendAppsFetcher {
  public:
-  explicit StubRecommendAppsFetcher(RecommendAppsFetcherDelegate* delegate)
+  explicit StubRecommendAppsFetcher(
+      apps::RecommendAppsFetcherDelegate* delegate)
       : delegate_(delegate) {}
   ~StubRecommendAppsFetcher() override = default;
 
@@ -100,7 +103,8 @@ class StubRecommendAppsFetcher : public RecommendAppsFetcher {
       delegate_->OnLoadSuccess(base::Value());
       return;
     }
-    auto output = base::JSONReader::ReadAndReturnValueWithError(kJsonResponse);
+    auto output = base::JSONReader::ReadAndReturnValueWithError(
+        kJsonResponse, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(output.has_value());
     delegate_->OnLoadSuccess(std::move(*output));
   }
@@ -123,7 +127,7 @@ class StubRecommendAppsFetcher : public RecommendAppsFetcher {
   void Retry() override { NOTREACHED(); }
 
  protected:
-  RecommendAppsFetcherDelegate* const delegate_;
+  const raw_ptr<apps::RecommendAppsFetcherDelegate> delegate_;
   bool started_ = false;
 };
 
@@ -133,18 +137,27 @@ class RecommendAppsScreenTest : public OobeBaseTest {
   ~RecommendAppsScreenTest() override = default;
 
   // OobeBaseTest:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    OobeBaseTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII(switches::kArcAvailability,
+                                    "officially-supported");
+  }
+
   void SetUpOnMainThread() override {
     OobeBaseTest::SetUpOnMainThread();
+    LoginDisplayHost::default_host()->GetWizardContext()->is_branded_build =
+        true;
+
     recommend_apps_fetcher_factory_ =
-        std::make_unique<ScopedTestRecommendAppsFetcherFactory>(
+        std::make_unique<apps::ScopedTestRecommendAppsFetcherFactory>(
             base::BindRepeating(
                 &RecommendAppsScreenTest::CreateRecommendAppsFetcher,
                 base::Unretained(this)));
 
     recommend_apps_screen_ = WizardController::default_controller()
                                  ->GetScreen<RecommendAppsScreen>();
-    recommend_apps_screen_->set_exit_callback_for_testing(base::BindRepeating(
-        &RecommendAppsScreenTest::HandleScreenExit, base::Unretained(this)));
+    recommend_apps_screen_->set_exit_callback_for_testing(
+        screen_result_waiter_.GetRepeatingCallback());
   }
 
   void TearDownOnMainThread() override {
@@ -161,12 +174,8 @@ class RecommendAppsScreenTest : public OobeBaseTest {
         RecommendAppsScreenView::kScreenId);
   }
 
-  void WaitForScreenExit() {
-    if (screen_result_.has_value())
-      return;
-    base::RunLoop run_loop;
-    screen_exit_callback_ = run_loop.QuitClosure();
-    run_loop.Run();
+  RecommendAppsScreen::Result WaitForScreenExitResult() {
+    return screen_result_waiter_.Take();
   }
 
   void ShowScreenAndExpectLoadingStep() {
@@ -190,24 +199,16 @@ class RecommendAppsScreenTest : public OobeBaseTest {
     test::OobeJS().ExpectHiddenPath({kRecommendAppsId, "loadingDialog"});
   }
 
-  base::raw_ptr<RecommendAppsScreen, DanglingUntriaged> recommend_apps_screen_ =
-      nullptr;
-  absl::optional<RecommendAppsScreen::Result> screen_result_;
-  base::raw_ptr<StubRecommendAppsFetcher, DanglingUntriaged>
+  raw_ptr<RecommendAppsScreen, AcrossTasksDanglingUntriaged>
+      recommend_apps_screen_ = nullptr;
+  raw_ptr<StubRecommendAppsFetcher, AcrossTasksDanglingUntriaged>
       recommend_apps_fetcher_ = nullptr;
 
   LoginManagerMixin login_manager_{&mixin_host_};
 
  private:
-  void HandleScreenExit(RecommendAppsScreen::Result result) {
-    ASSERT_FALSE(screen_result_.has_value());
-    screen_result_ = result;
-    if (screen_exit_callback_)
-      std::move(screen_exit_callback_).Run();
-  }
-
-  std::unique_ptr<RecommendAppsFetcher> CreateRecommendAppsFetcher(
-      RecommendAppsFetcherDelegate* delegate) {
+  std::unique_ptr<apps::RecommendAppsFetcher> CreateRecommendAppsFetcher(
+      apps::RecommendAppsFetcherDelegate* delegate) {
     EXPECT_FALSE(recommend_apps_fetcher_);
 
     auto fetcher = std::make_unique<StubRecommendAppsFetcher>(delegate);
@@ -215,10 +216,10 @@ class RecommendAppsScreenTest : public OobeBaseTest {
     return fetcher;
   }
 
-  std::unique_ptr<ScopedTestRecommendAppsFetcherFactory>
+  std::unique_ptr<apps::ScopedTestRecommendAppsFetcherFactory>
       recommend_apps_fetcher_factory_;
 
-  base::OnceClosure screen_exit_callback_;
+  base::test::TestFuture<RecommendAppsScreen::Result> screen_result_waiter_;
 };
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
@@ -241,8 +242,7 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
 
   test::OobeJS().TapOnPath(kInstallButton);
 
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SELECTED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSelected);
 
   const base::Value::List& fast_reinstall_packages =
       ProfileManager::GetActiveUserProfile()->GetPrefs()->GetList(
@@ -275,8 +275,7 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
 
   test::OobeJS().TapOnPath(kInstallButton);
 
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SELECTED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSelected);
 
   const base::Value::List& fast_reinstall_packages =
       ProfileManager::GetActiveUserProfile()->GetPrefs()->GetList(
@@ -307,8 +306,7 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
 
   test::OobeJS().TapOnPath(kSkipButton);
 
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SKIPPED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSkipped);
 
   const base::Value::List& fast_reinstall_packages =
       ProfileManager::GetActiveUserProfile()->GetPrefs()->GetList(
@@ -339,8 +337,7 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
 
   test::OobeJS().TapOnPath(kSkipButton);
 
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SKIPPED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSkipped);
 
   const base::Value::List& fast_reinstall_packages =
       ProfileManager::GetActiveUserProfile()->GetPrefs()->GetList(
@@ -356,19 +353,15 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest,
 
   ExpectAppSelectionStep();
 
-  // The install button is expected to be disabled at this point. Check that
-  // on install button click does nothing.
+  // The install button is expected to be disabled at this point.
   test::OobeJS().ExpectDisabledPath(kInstallButton);
-  test::OobeJS().TapOnPath(kInstallButton);
-  ASSERT_FALSE(screen_result_.has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, NoRecommendedApps) {
   ShowScreenAndExpectLoadingStep();
   recommend_apps_fetcher_->SimulateSuccess(/*bad_response=*/true);
 
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SKIPPED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSkipped);
 
   const base::Value::List& fast_reinstall_packages =
       ProfileManager::GetActiveUserProfile()->GetPrefs()->GetList(
@@ -381,14 +374,13 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, ParseError) {
 
   recommend_apps_fetcher_->SimulateParseError();
 
-  ASSERT_TRUE(screen_result_.has_value());
-  EXPECT_EQ(RecommendAppsScreen::Result::SKIPPED, screen_result_.value());
+  EXPECT_EQ(WaitForScreenExitResult(), RecommendAppsScreen::Result::kSkipped);
 }
 
 class RecommendAppsScreenManagedTest : public RecommendAppsScreenTest {
  protected:
   const LoginManagerMixin::TestUserInfo test_user_{
-      AccountId::FromUserEmailGaiaId("user@example.com", "1111")};
+      AccountId::FromUserEmailGaiaId("user@example.com", GaiaId("1111"))};
   UserPolicyMixin user_policy_mixin_{&mixin_host_, test_user_.account_id};
 };
 
@@ -402,14 +394,11 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenManagedTest, SkipDueToManagedUser) {
 
   login_manager_.LoginWithDefaultContext(test_user_);
   OobeScreenExitWaiter(GetFirstSigninScreen()).Wait();
-  if (!screen_result_.has_value()) {
-    // Skip screens to the tested one.
-    LoginDisplayHost::default_host()->StartWizard(
-        RecommendAppsScreenView::kScreenId);
-    WaitForScreenExit();
-  }
-  EXPECT_EQ(screen_result_.value(),
-            RecommendAppsScreen::Result::NOT_APPLICABLE);
+  // Skip screens to the tested one.
+  LoginDisplayHost::default_host()->StartWizard(
+      RecommendAppsScreenView::kScreenId);
+  EXPECT_EQ(WaitForScreenExitResult(),
+            RecommendAppsScreen::Result::kNotApplicable);
 }
 
 }  // namespace

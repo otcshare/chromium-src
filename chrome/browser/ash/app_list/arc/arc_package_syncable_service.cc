@@ -8,17 +8,21 @@
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/session/connection_holder.h"
-#include "base/containers/contains.h"
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
+#include "chrome/browser/ash/app_list/arc/arc_package_install_priority_handler.h"
 #include "chrome/browser/ash/app_list/arc/arc_package_syncable_service_factory.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync/model/sync_change_processor.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/protocol/arc_package_specifics.pb.h"
+#include "components/sync/protocol/entity_data.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 
 namespace arc {
@@ -89,24 +93,30 @@ ArcSyncItem::SyncItem(const std::string& package_name,
 // ArcPackageSyncableService public
 ArcPackageSyncableService::ArcPackageSyncableService(Profile* profile,
                                                      ArcAppListPrefs* prefs)
-    : profile_(profile),
-      sync_processor_(nullptr),
-      sync_error_handler_(nullptr),
-      prefs_(prefs) {
+    : profile_(profile), sync_processor_(nullptr), prefs_(prefs) {
   if (prefs_)
     prefs_->AddObserver(this);
+
+  auto* arc_session_manager = arc::ArcSessionManager::Get();
+  DCHECK(arc_session_manager);
+  arc_session_manager->AddObserver(this);
 }
 
 ArcPackageSyncableService::~ArcPackageSyncableService() {
   if (prefs_)
     prefs_->RemoveObserver(this);
+
+  // arc::ArcSessionManager may be released first.
+  if (auto* arc_session_manager = ArcSessionManager::Get()) {
+    arc_session_manager->RemoveObserver(this);
+  }
 }
 
 // static
-ArcPackageSyncableService* ArcPackageSyncableService::Create(
+std::unique_ptr<ArcPackageSyncableService> ArcPackageSyncableService::Create(
     Profile* profile,
     ArcAppListPrefs* prefs) {
-  return new ArcPackageSyncableService(profile, prefs);
+  return std::make_unique<ArcPackageSyncableService>(profile, prefs);
 }
 
 // static
@@ -134,21 +144,20 @@ void ArcPackageSyncableService::WaitUntilReadyToSync(base::OnceClosure done) {
   wait_until_ready_to_sync_cb_ = std::move(done);
 }
 
-absl::optional<syncer::ModelError>
+std::optional<syncer::ModelError>
 ArcPackageSyncableService::MergeDataAndStartSyncing(
-    syncer::ModelType type,
+    syncer::DataType type,
     const syncer::SyncDataList& initial_sync_data,
-    std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
-    std::unique_ptr<syncer::SyncErrorFactory> error_handler) {
+    std::unique_ptr<syncer::SyncChangeProcessor> sync_processor) {
   DCHECK(sync_processor.get());
-  DCHECK(error_handler.get());
   DCHECK_EQ(type, syncer::ARC_PACKAGE);
   DCHECK(!sync_processor_.get());
   DCHECK(!IsArcAppSyncFlowDisabled());
   DCHECK(prefs_->package_list_initial_refreshed());
 
   sync_processor_ = std::move(sync_processor);
-  sync_error_handler_ = std::move(error_handler);
+  metrics_helper_.SetTimeSyncStarted();
+  uint64_t num_expected_apps = 0;
 
   const std::vector<std::string> local_packages =
       prefs_->GetPackagesFromPrefs();
@@ -164,20 +173,30 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
     if (!ShouldSyncPackage(package_name))
       continue;
 
-    if (!base::Contains(local_package_set, package_name)) {
+    if (!local_package_set.contains(package_name)) {
       pending_install_items_[package_name] = std::move(sync_item);
-      InstallPackage(pending_install_items_[package_name].get());
+      if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
+        prefs_->GetInstallPriorityHandler()->InstallSyncedPacakge(
+            package_name, arc::mojom::InstallPriority::kLow);
+      } else {
+        InstallPendingPackage(package_name, arc::mojom::InstallPriority::kLow);
+      }
+      num_expected_apps++;
     } else {
       // TODO(lgcheng@) may need to handle update exsiting package here.
       sync_items_[package_name] = std::move(sync_item);
     }
   }
+  if (profile_->GetPrefs()->GetBoolean(ash::prefs::kRecordArcAppSyncMetrics)) {
+    metrics_helper_.SetAndRecordNumExpectedApps(num_expected_apps);
+  }
 
   // Creates sync items for local unsynced packages.
   syncer::SyncChangeList change_list;
   for (const auto& local_package_name : local_packages) {
-    if (base::Contains(sync_items_, local_package_name))
+    if (sync_items_.contains(local_package_name)) {
       continue;
+    }
 
     if (!ShouldSyncPackage(local_package_name))
       continue;
@@ -189,14 +208,13 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
     sync_items_[local_package_name] = std::move(sync_item);
   }
   sync_processor_->ProcessSyncChanges(FROM_HERE, change_list);
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-void ArcPackageSyncableService::StopSyncing(syncer::ModelType type) {
+void ArcPackageSyncableService::StopSyncing(syncer::DataType type) {
   DCHECK_EQ(type, syncer::ARC_PACKAGE);
 
   sync_processor_.reset();
-  sync_error_handler_.reset();
   flare_.Reset();
 
   sync_items_.clear();
@@ -204,13 +222,13 @@ void ArcPackageSyncableService::StopSyncing(syncer::ModelType type) {
   pending_uninstall_items_.clear();
 }
 
-absl::optional<syncer::ModelError>
-ArcPackageSyncableService::ProcessSyncChanges(
+std::optional<syncer::ModelError> ArcPackageSyncableService::ProcessSyncChanges(
     const base::Location& from_here,
     const syncer::SyncChangeList& change_list) {
   if (!sync_processor_.get()) {
-    return syncer::ModelError(FROM_HERE,
-                              "ARC package syncable service is not started.");
+    return syncer::ModelError(
+        FROM_HERE,
+        syncer::ModelError::Type::kArcPackageSyncableServiceNotStarted);
   }
 
   for (const auto& change : change_list) {
@@ -234,7 +252,16 @@ ArcPackageSyncableService::ProcessSyncChanges(
     }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+base::WeakPtr<syncer::SyncableService> ArcPackageSyncableService::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+std::string ArcPackageSyncableService::GetClientTag(
+    const syncer::EntityData& entity_data) const {
+  return entity_data.specifics.arc_package().package_name();
 }
 
 bool ArcPackageSyncableService::SyncStarted() {
@@ -247,6 +274,41 @@ bool ArcPackageSyncableService::SyncStarted() {
     flare_.Run(syncer::ARC_PACKAGE);
   }
   return false;
+}
+
+void ArcPackageSyncableService::InstallPendingPackage(
+    const std::string& package_name,
+    arc::mojom::InstallPriority priority) {
+  const auto iter = pending_install_items_.find(package_name);
+  if (iter == pending_install_items_.end()) {
+    LOG(ERROR) << "Request to install invalid package: " << package_name;
+    return;
+  }
+  const ArcSyncItem* pending_item = iter->second.get();
+  DCHECK(pending_item);
+
+  if (!prefs_) {
+    VLOG(2) << "Request to install package when bridge service is not ready: "
+            << package_name << ".";
+    return;
+  }
+
+  auto* instance = ARC_GET_INSTANCE_FOR_METHOD(prefs_->app_connection_holder(),
+                                               InstallPackage);
+  if (!instance) {
+    return;
+  }
+
+  mojom::ArcPackageInfo package;
+  package.package_name = pending_item->package_name;
+  package.package_version = pending_item->package_version;
+  package.last_backup_android_id = pending_item->last_backup_android_id;
+  package.last_backup_time = pending_item->last_backup_time;
+  package.sync = true;
+  if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
+    package.priority = priority;
+  }
+  instance->InstallPackage(package.Clone());
 }
 
 // ArcPackageSyncableService private
@@ -308,6 +370,7 @@ void ArcPackageSyncableService::OnPackageInstalled(
 
     sync_items_[package_name] = std::move(install_iter->second);
     pending_install_items_.erase(install_iter);
+    MaybeUpdateInstallMetrics(package_info);
     return;
   }
 
@@ -388,7 +451,12 @@ bool ArcPackageSyncableService::ProcessSyncItemSpecifics(
   std::unique_ptr<ArcSyncItem> sync_item(
       CreateSyncItemFromSyncSpecifics(specifics));
   pending_install_items_[package_name] = std::move(sync_item);
-  InstallPackage(pending_install_items_[package_name].get());
+  if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
+    prefs_->GetInstallPriorityHandler()->InstallSyncedPacakge(
+        package_name, arc::mojom::InstallPriority::kLow);
+  } else {
+    InstallPendingPackage(package_name, arc::mojom::InstallPriority::kLow);
+  }
   return true;
 }
 
@@ -418,28 +486,6 @@ bool ArcPackageSyncableService::DeleteSyncItemSpecifics(
   // TODO(lgcheng@) may need to handle the situation that the package is
   // pending install.
   return true;
-}
-
-void ArcPackageSyncableService::InstallPackage(const ArcSyncItem* sync_item) {
-  DCHECK(sync_item);
-  if (!prefs_) {
-    VLOG(2) << "Request to install package when bridge service is not ready: "
-            << sync_item->package_name << ".";
-    return;
-  }
-
-  auto* instance = ARC_GET_INSTANCE_FOR_METHOD(prefs_->app_connection_holder(),
-                                               InstallPackage);
-  if (!instance)
-    return;
-
-  mojom::ArcPackageInfo package;
-  package.package_name = sync_item->package_name;
-  package.package_version = sync_item->package_version;
-  package.last_backup_android_id = sync_item->last_backup_android_id;
-  package.last_backup_time = sync_item->last_backup_time;
-  package.sync = true;
-  instance->InstallPackage(package.Clone());
 }
 
 void ArcPackageSyncableService::UninstallPackage(const ArcSyncItem* sync_item) {
@@ -476,6 +522,26 @@ bool ArcPackageSyncableService::ShouldSyncPackage(
 
   // A non default package from remote should be synced.
   return true;
+}
+
+void ArcPackageSyncableService::OnArcSessionStopped(ArcStopReason stop_reason) {
+  if (profile_->GetPrefs()->GetBoolean(ash::prefs::kRecordArcAppSyncMetrics)) {
+    metrics_helper_.RecordMetrics();
+  }
+  profile_->GetPrefs()->ClearPref(ash::prefs::kRecordArcAppSyncMetrics);
+}
+
+void ArcPackageSyncableService::MaybeUpdateInstallMetrics(
+    const mojom::ArcPackageInfo& package_info) {
+  if (profile_->GetPrefs()->GetBoolean(ash::prefs::kRecordArcAppSyncMetrics)) {
+    const std::string app_id =
+        prefs_->GetAppIdByPackageName(package_info.package_name);
+    const std::unique_ptr<ArcAppListPrefs::AppInfo> app_info =
+        prefs_->GetApp(app_id);
+    std::optional<uint64_t> app_size =
+        app_info ? app_info->app_size_in_bytes : std::nullopt;
+    metrics_helper_.OnAppInstalled(app_size);
+  }
 }
 
 }  // namespace arc

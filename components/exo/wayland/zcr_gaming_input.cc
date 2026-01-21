@@ -10,7 +10,9 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "components/exo/gamepad.h"
 #include "components/exo/gamepad_delegate.h"
 #include "components/exo/gamepad_observer.h"
@@ -58,16 +60,17 @@ class WaylandGamepadVibratorImpl : public GamepadObserver {
                  int32_t repeat) {
     std::vector<int64_t> extracted_durations;
     int64_t* p;
-    const uint8_t* duration_millis_end =
-        static_cast<uint8_t*>(duration_millis->data) + duration_millis->size;
+    const uint8_t* duration_millis_end = UNSAFE_TODO(
+        static_cast<uint8_t*>(duration_millis->data) + duration_millis->size);
     for (p = static_cast<int64_t*>(duration_millis->data);
-         (const uint8_t*)p < duration_millis_end; p++) {
+         (const uint8_t*)p < duration_millis_end; UNSAFE_TODO(p++)) {
       extracted_durations.emplace_back(*p);
     }
 
     const uint8_t* amplitudes_start = static_cast<uint8_t*>(amplitudes->data);
     size_t amplitude_size = amplitudes->size / sizeof(uint8_t);
-    const uint8_t* amplitudes_end = amplitudes_start + amplitude_size;
+    const uint8_t* amplitudes_end =
+        UNSAFE_TODO(amplitudes_start + amplitude_size);
     std::vector<uint8_t> extracted_amplitudes(amplitudes_start, amplitudes_end);
 
     if (gamepad_)
@@ -86,7 +89,7 @@ class WaylandGamepadVibratorImpl : public GamepadObserver {
   }
 
  private:
-  Gamepad* gamepad_;
+  raw_ptr<Gamepad> gamepad_;
 };
 
 void gamepad_vibrator_vibrate(wl_client* client,
@@ -208,7 +211,7 @@ class WaylandGamepadDelegate : public GamepadDelegate {
       uint64_t* wl_key_bits_ptr =
           static_cast<uint64_t*>(wl_array_add(&wl_key_bits, key_bits_len));
       if (wl_key_bits_ptr) {
-        memcpy(wl_key_bits_ptr, key_bits.data(), key_bits_len);
+        UNSAFE_TODO(memcpy(wl_key_bits_ptr, key_bits.data(), key_bits_len));
         zcr_gamepad_v2_send_supported_key_bits(gamepad_resource_, &wl_key_bits);
       }
       wl_array_release(&wl_key_bits);
@@ -224,7 +227,7 @@ class WaylandGamepadDelegate : public GamepadDelegate {
   }
 
   // The gamepad resource associated with the gamepad.
-  wl_resource* gamepad_resource_;
+  raw_ptr<wl_resource> gamepad_resource_;
 };
 
 void gamepad_destroy(wl_client* client, wl_resource* resource) {
@@ -278,7 +281,7 @@ class WaylandGamingSeatDelegate : public GamingSeatDelegate {
 
  private:
   // The gaming seat resource associated with the gaming seat.
-  wl_resource* const gaming_seat_resource_;
+  const raw_ptr<wl_resource> gaming_seat_resource_;
 };
 
 void gaming_seat_destroy(wl_client* client, wl_resource* resource) {

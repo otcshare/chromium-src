@@ -5,13 +5,15 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_license_checker.h"
 
 #include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -19,7 +21,6 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -33,8 +34,6 @@ namespace plugin_vm {
 
 namespace {
 
-constexpr char kValidationOAuth2Scope[] =
-    "https://www.googleapis.com/auth/applicense.bytebot";
 constexpr char kValidationEndpoint[] = "https://bytebot.googleapis.com/";
 constexpr char kValidationServicePath[] =
     "v1/applications/chromePluginVm:getLicenseStatus";
@@ -102,14 +101,15 @@ bool ResponseIndicatesValidLicense(int response_code,
 
   // Expected response body:
   // { "status": "ACTIVE", ...}
-  absl::optional<base::Value> response = base::JSONReader::Read(response_body);
-  if (!response || !response->is_dict()) {
+  std::optional<base::Value::Dict> response = base::JSONReader::ReadDict(
+      response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!response) {
     LOG(ERROR) << "response_body was of unexpected format.";
     return false;
   }
 
-  std::string* status = response->FindStringKey("status");
-  if (status == nullptr) {
+  std::string* status = response->FindString("status");
+  if (!status) {
     LOG(ERROR) << "response_body did not contain status.";
     return false;
   }
@@ -147,14 +147,12 @@ void PluginVmLicenseChecker::FetchAccessToken() {
       IdentityManagerFactory::GetForProfile(profile_);
   DCHECK(identity_manager);
 
-  signin::ScopeSet validation_scope;
-  validation_scope.insert(kValidationOAuth2Scope);
-
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-      "ChromePluginVm", identity_manager, validation_scope,
+      signin::OAuthConsumerId::kPluginVmLicenseChecker, identity_manager,
       base::BindOnce(&PluginVmLicenseChecker::CallEndpointWithAccessToken,
                      weak_ptr_factory_.GetWeakPtr()),
-      signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate);
+      signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
+      signin::ConsentLevel::kSync);
 }
 
 void PluginVmLicenseChecker::CallEndpointWithAccessToken(
@@ -185,7 +183,7 @@ void PluginVmLicenseChecker::CallEndpointWithAccessToken(
 }
 
 std::unique_ptr<network::ResourceRequest>
-PluginVmLicenseChecker::CreateResourceRequest(base::StringPiece access_token) {
+PluginVmLicenseChecker::CreateResourceRequest(std::string_view access_token) {
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url =
       GURL(base::StrCat({validation_url_.spec(), access_token}));
@@ -196,9 +194,9 @@ PluginVmLicenseChecker::CreateResourceRequest(base::StringPiece access_token) {
 }
 
 void PluginVmLicenseChecker::HandleStringResponse(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   if (!simple_url_loader_->ResponseInfo() ||
-      !simple_url_loader_->ResponseInfo()->headers) {
+      !simple_url_loader_->ResponseInfo()->headers || !response_body) {
     LOG(ERROR) << "Did not recieve a response from server while attempting to"
                << " validate the license.";
     std::move(callback_).Run(false);
@@ -209,7 +207,7 @@ void PluginVmLicenseChecker::HandleStringResponse(
       simple_url_loader_->ResponseInfo()->headers->response_code();
 
   std::move(callback_).Run(
-      ResponseIndicatesValidLicense(response_code, *response_body));
+      ResponseIndicatesValidLicense(response_code, *std::move(response_body)));
 }
 
 }  // namespace plugin_vm

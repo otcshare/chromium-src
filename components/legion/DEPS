@@ -1,0 +1,13 @@
+include_rules = [
+  "+base",
+  "+content/public/browser/service_process_host.h",
+  "+crypto",
+  "+mojo/public/cpp",
+  "+net",
+  "+components/optimization_guide/proto/model_execution.proto",
+  "+services/network",
+  "+services/network/public/cpp",
+  "+services/network/public/mojom",
+  "+third_party/boringssl",
+  "+third_party/oak/chromium/proto",
+]

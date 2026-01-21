@@ -4,9 +4,9 @@
 
 #include "components/safe_browsing/content/browser/triggers/trigger_throttler.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/metrics/field_trial_params.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/time/default_clock.h"
@@ -46,7 +46,7 @@ bool TryFindQuotaForTrigger(
     const TriggerType trigger_type,
     const std::vector<TriggerTypeAndQuotaItem>& trigger_quota_list,
     size_t* out_quota) {
-  const auto& trigger_quota_iter = base::ranges::find(
+  const auto& trigger_quota_iter = std::ranges::find(
       trigger_quota_list, trigger_type, &TriggerTypeAndQuotaItem::first);
   if (trigger_quota_iter != trigger_quota_list.end()) {
     *out_quota = trigger_quota_iter->second;
@@ -64,7 +64,7 @@ TriggerThrottler::TriggerThrottler(PrefService* local_state_prefs)
   LoadTriggerEventsFromPref();
 }
 
-TriggerThrottler::~TriggerThrottler() {}
+TriggerThrottler::~TriggerThrottler() = default;
 
 void TriggerThrottler::SetClockForTesting(base::Clock* test_clock) {
   clock_ = test_clock;
@@ -76,20 +76,24 @@ bool TriggerThrottler::TriggerCanFire(const TriggerType trigger_type) const {
 
   // Some basic corner cases for triggers that always fire, or disabled
   // triggers that never fire.
-  if (trigger_quota == kUnlimitedTriggerQuota)
+  if (trigger_quota == kUnlimitedTriggerQuota) {
     return true;
-  if (trigger_quota == 0)
+  }
+  if (trigger_quota == 0) {
     return false;
+  }
 
   // Other triggers are capped, see how many times this trigger has already
   // fired.
-  if (!base::Contains(trigger_events_, trigger_type))
+  if (!trigger_events_.contains(trigger_type)) {
     return true;
+  }
 
   const std::vector<base::Time>& timestamps = trigger_events_.at(trigger_type);
   // More quota is available, so the trigger can fire again.
-  if (trigger_quota > timestamps.size())
+  if (trigger_quota > timestamps.size()) {
     return true;
+  }
 
   // Otherwise, we have more events than quota, check which day they occurred
   // on. Newest events are at the end of vector so we can simply look at the
@@ -105,8 +109,9 @@ void TriggerThrottler::TriggerFired(const TriggerType trigger_type) {
   const size_t trigger_quota = GetDailyQuotaForTrigger(trigger_type);
 
   // For triggers that always fire, don't bother tracking quota.
-  if (trigger_quota == kUnlimitedTriggerQuota)
+  if (trigger_quota == kUnlimitedTriggerQuota) {
     return;
+  }
 
   // Otherwise, record that the trigger fired.
   std::vector<base::Time>* timestamps = &trigger_events_[trigger_type];
@@ -126,8 +131,9 @@ void TriggerThrottler::CleanupOldEvents() {
     const std::vector<base::Time>& trigger_times = map_iter.second;
 
     // Skip the cleanup if we have quota room, quotas should generally be small.
-    if (trigger_times.size() < trigger_quota)
+    if (trigger_times.size() < trigger_quota) {
       return;
+    }
 
     std::vector<base::Time> tmp_trigger_times;
     base::Time min_timestamp = clock_->Now() - kOneDayTimeDelta;
@@ -135,8 +141,9 @@ void TriggerThrottler::CleanupOldEvents() {
     // newer than |min_timestamp|. We put timestamps in a temp vector that will
     // get swapped into the map in place of the existing vector.
     for (const base::Time timestamp : trigger_times) {
-      if (timestamp > min_timestamp)
+      if (timestamp > min_timestamp) {
         tmp_trigger_times.push_back(timestamp);
+      }
     }
 
     trigger_events_[trigger_type].swap(tmp_trigger_times);
@@ -145,8 +152,9 @@ void TriggerThrottler::CleanupOldEvents() {
 
 void TriggerThrottler::LoadTriggerEventsFromPref() {
   trigger_events_.clear();
-  if (!local_state_prefs_)
+  if (!local_state_prefs_) {
     return;
+  }
 
   const base::Value::Dict& event_dict =
       local_state_prefs_->GetDict(prefs::kSafeBrowsingTriggerEventTimestamps);
@@ -159,27 +167,30 @@ void TriggerThrottler::LoadTriggerEventsFromPref() {
         trigger_type_int > static_cast<int>(TriggerType::kMaxTriggerType)) {
       continue;
     }
-    if (!trigger_pair.second.is_list())
+    if (!trigger_pair.second.is_list()) {
       continue;
+    }
 
     const TriggerType trigger_type = static_cast<TriggerType>(trigger_type_int);
     for (const auto& timestamp : trigger_pair.second.GetList()) {
-      if (timestamp.is_double())
+      if (timestamp.is_double()) {
         trigger_events_[trigger_type].push_back(
-            base::Time::FromDoubleT(timestamp.GetDouble()));
+            base::Time::FromSecondsSinceUnixEpoch(timestamp.GetDouble()));
+      }
     }
   }
 }
 
 void TriggerThrottler::WriteTriggerEventsToPref() {
-  if (!local_state_prefs_)
+  if (!local_state_prefs_) {
     return;
+  }
 
   base::Value::Dict trigger_dict;
   for (const auto& trigger_item : trigger_events_) {
     base::Value::List timestamps;
     for (const base::Time timestamp : trigger_item.second) {
-      timestamps.Append(timestamp.ToDoubleT());
+      timestamps.Append(timestamp.InSecondsFSinceUnixEpoch());
     }
 
     trigger_dict.Set(base::NumberToString(static_cast<int>(trigger_item.first)),
@@ -197,6 +208,7 @@ size_t TriggerThrottler::GetDailyQuotaForTrigger(
     case TriggerType::SECURITY_INTERSTITIAL:
     case TriggerType::GAIA_PASSWORD_REUSE:
     case TriggerType::APK_DOWNLOAD:
+    case TriggerType::PHISHY_SITE_INTERACTION:
       return kUnlimitedTriggerQuota;
 
     case TriggerType::DEPRECATED_AD_POPUP:

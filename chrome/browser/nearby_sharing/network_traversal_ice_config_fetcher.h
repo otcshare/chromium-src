@@ -5,17 +5,16 @@
 #ifndef CHROME_BROWSER_NEARBY_SHARING_NETWORK_TRAVERSAL_ICE_CONFIG_FETCHER_H_
 #define CHROME_BROWSER_NEARBY_SHARING_NETWORK_TRAVERSAL_ICE_CONFIG_FETCHER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "chromeos/ash/services/nearby/public/mojom/webrtc.mojom.h"
-#include "url/gurl.h"
 
 namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
 
 class NetworkTraversalIceConfigFetcher
-    : public sharing::mojom::IceConfigFetcher {
+    : public ::sharing::mojom::IceConfigFetcher {
  public:
   explicit NetworkTraversalIceConfigFetcher(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
@@ -26,7 +25,7 @@ class NetworkTraversalIceConfigFetcher
   NetworkTraversalIceConfigFetcher& operator=(
       const NetworkTraversalIceConfigFetcher& other) = delete;
 
-  // TODO(crbug.com/1124392) - Cache configs fetched from server.
+  // TODO(crbug.com/40147375) - Cache configs fetched from server.
   void GetIceServers(GetIceServersCallback callback) override;
 
  private:

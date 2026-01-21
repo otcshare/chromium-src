@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_NO_CREDS_VIEW_H_
 #define COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_NO_CREDS_VIEW_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 
 namespace content {
@@ -34,6 +34,7 @@ class SecurePaymentConfirmationNoCredsView {
       OptOutCallback opt_out_callback) = 0;
   virtual void HideDialog() = 0;
   virtual bool ClickOptOutForTesting() = 0;
+  virtual bool AcceptDialogForTesting() = 0;
 
  protected:
   SecurePaymentConfirmationNoCredsView();

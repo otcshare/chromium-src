@@ -4,46 +4,19 @@
 
 #include "third_party/blink/renderer/platform/graphics/dark_mode_filter.h"
 
+#include <optional>
+
 #include "cc/paint/paint_flags.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/graphics/dark_mode_settings.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace blink {
 namespace {
 
-TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlags) {
-  DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kSimpleInvertForTesting;
-  DarkModeFilter filter(settings);
-
-  EXPECT_EQ(SkColors::kBlack,
-            filter.InvertColorIfNeeded(
-                SkColors::kWhite, DarkModeFilter::ElementRole::kBackground));
-  EXPECT_EQ(SkColors::kWhite,
-            filter.InvertColorIfNeeded(
-                SkColors::kBlack, DarkModeFilter::ElementRole::kBackground));
-
-  EXPECT_EQ(SkColors::kWhite,
-            filter.InvertColorIfNeeded(SkColors::kBlack,
-                                       DarkModeFilter::ElementRole::kSVG));
-  EXPECT_EQ(SkColors::kBlack,
-            filter.InvertColorIfNeeded(SkColors::kWhite,
-                                       DarkModeFilter::ElementRole::kSVG));
-
-  cc::PaintFlags flags;
-  flags.setColor(SkColors::kWhite);
-  auto flags_or_nullopt = filter.ApplyToFlagsIfNeeded(
-      flags, DarkModeFilter::ElementRole::kBackground, SkColors::kTransparent);
-  ASSERT_NE(flags_or_nullopt, absl::nullopt);
-  EXPECT_EQ(SkColors::kBlack, flags_or_nullopt.value().getColor4f());
-}
-
 TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlagsWithInvertLightnessLAB) {
   constexpr float kPrecision = 0.00001f;
   DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kInvertLightnessLAB;
   DarkModeFilter filter(settings);
   const SkColor4f ColorWhiteWithAlpha =
       SkColor4f::FromColor(SkColorSetARGB(0x80, 0xFF, 0xFF, 0xFF));
@@ -100,7 +73,7 @@ TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlagsWithInvertLightnessLAB) {
   flags.setColor(SkColors::kBlack);
   auto flags_or_nullopt = filter.ApplyToFlagsIfNeeded(
       flags, DarkModeFilter::ElementRole::kBackground, SkColors::kTransparent);
-  ASSERT_NE(flags_or_nullopt, absl::nullopt);
+  ASSERT_NE(flags_or_nullopt, std::nullopt);
   result = flags_or_nullopt.value().getColor4f();
   EXPECT_NEAR(SkColors::kWhite.fR, result.fR, kPrecision);
   EXPECT_NEAR(SkColors::kWhite.fG, result.fG, kPrecision);
@@ -110,7 +83,6 @@ TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlagsWithInvertLightnessLAB) {
 
 TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlagsWithContrast) {
   DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kInvertLightnessLAB;
   settings.background_brightness_threshold = 205;
   DarkModeFilter filter(settings);
 
@@ -132,14 +104,13 @@ TEST(DarkModeFilterTest, ApplyDarkModeToColorsAndFlagsWithContrast) {
   flags.setColor(SkColors::kWhite);
   auto flags_or_nullopt = filter.ApplyToFlagsIfNeeded(
       flags, DarkModeFilter::ElementRole::kBorder, SkColors::kBlack);
-  ASSERT_NE(flags_or_nullopt, absl::nullopt);
+  ASSERT_NE(flags_or_nullopt, std::nullopt);
   EXPECT_EQ(Target_For_White, flags_or_nullopt.value().getColor4f());
 }
 
 // crbug.com/1365680
 TEST(DarkModeFilterTest, AdjustDarkenColorDoesNotInfiniteLoop) {
   DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kInvertLightnessLAB;
   settings.foreground_brightness_threshold = 150;
   settings.background_brightness_threshold = 205;
   DarkModeFilter filter(settings);
@@ -175,15 +146,14 @@ TEST(DarkModeFilterTest, AdjustDarkenColorDoesNotInfiniteLoop) {
 
 TEST(DarkModeFilterTest, InvertedColorCacheSize) {
   DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kSimpleInvertForTesting;
   DarkModeFilter filter(settings);
   EXPECT_EQ(0u, filter.GetInvertedColorCacheSizeForTesting());
-  EXPECT_EQ(SkColors::kBlack,
-            filter.InvertColorIfNeeded(
-                SkColors::kWhite, DarkModeFilter::ElementRole::kBackground));
+
+  const SkColor4f color = filter.InvertColorIfNeeded(
+      SkColors::kWhite, DarkModeFilter::ElementRole::kBackground);
   EXPECT_EQ(1u, filter.GetInvertedColorCacheSizeForTesting());
   // Should get cached value.
-  EXPECT_EQ(SkColors::kBlack,
+  EXPECT_EQ(color,
             filter.InvertColorIfNeeded(
                 SkColors::kWhite, DarkModeFilter::ElementRole::kBackground));
   EXPECT_EQ(1u, filter.GetInvertedColorCacheSizeForTesting());
@@ -191,28 +161,25 @@ TEST(DarkModeFilterTest, InvertedColorCacheSize) {
 
 TEST(DarkModeFilterTest, InvertedColorCacheZeroMaxKeys) {
   DarkModeSettings settings;
-  settings.mode = DarkModeInversionAlgorithm::kSimpleInvertForTesting;
   DarkModeFilter filter(settings);
 
   EXPECT_EQ(0u, filter.GetInvertedColorCacheSizeForTesting());
-  EXPECT_EQ(SkColors::kBlack,
-            filter.InvertColorIfNeeded(
-                SkColors::kWhite, DarkModeFilter::ElementRole::kBackground));
+
+  const SkColor4f color1 = filter.InvertColorIfNeeded(
+      SkColors::kWhite, DarkModeFilter::ElementRole::kBackground);
   EXPECT_EQ(1u, filter.GetInvertedColorCacheSizeForTesting());
-  EXPECT_EQ(
-      SkColors::kTransparent,
-      filter.InvertColorIfNeeded(SkColors::kTransparent,
-                                 DarkModeFilter::ElementRole::kBackground));
+
+  const SkColor4f color2 = filter.InvertColorIfNeeded(
+      SkColors::kTransparent, DarkModeFilter::ElementRole::kBackground);
   EXPECT_EQ(2u, filter.GetInvertedColorCacheSizeForTesting());
 
   // Results returned from cache.
-  EXPECT_EQ(SkColors::kBlack,
+  EXPECT_EQ(color1,
             filter.InvertColorIfNeeded(
                 SkColors::kWhite, DarkModeFilter::ElementRole::kBackground));
-  EXPECT_EQ(
-      SkColors::kTransparent,
-      filter.InvertColorIfNeeded(SkColors::kTransparent,
-                                 DarkModeFilter::ElementRole::kBackground));
+  EXPECT_EQ(color2, filter.InvertColorIfNeeded(
+                        SkColors::kTransparent,
+                        DarkModeFilter::ElementRole::kBackground));
   EXPECT_EQ(2u, filter.GetInvertedColorCacheSizeForTesting());
 }
 

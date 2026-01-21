@@ -7,12 +7,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -21,6 +24,7 @@
 #include "base/system/sys_info.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/gpu_fence.h"
@@ -29,50 +33,12 @@
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_display_egl_util.h"
 #include "ui/gl/gl_display_manager.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/gl_surface_presentation_helper.h"
 #include "ui/gl/gl_surface_stub.h"
 #include "ui/gl/gl_utils.h"
 #include "ui/gl/scoped_make_current.h"
 #include "ui/gl/sync_control_vsync_provider.h"
-
-#if BUILDFLAG(IS_OZONE)
-#include "ui/ozone/buildflags.h"
-#endif  // BUILDFLAG(IS_OZONE)
-
-#if !defined(EGL_FIXED_SIZE_ANGLE)
-#define EGL_FIXED_SIZE_ANGLE 0x3201
-#endif
-
-#if !defined(EGL_OPENGL_ES3_BIT)
-#define EGL_OPENGL_ES3_BIT 0x00000040
-#endif
-
-// Not present egl/eglext.h yet.
-
-#ifndef EGL_EXT_gl_colorspace_display_p3
-#define EGL_EXT_gl_colorspace_display_p3 1
-#define EGL_GL_COLORSPACE_DISPLAY_P3_EXT 0x3363
-#endif /* EGL_EXT_gl_colorspace_display_p3 */
-
-#ifndef EGL_EXT_gl_colorspace_display_p3_passthrough
-#define EGL_EXT_gl_colorspace_display_p3_passthrough 1
-#define EGL_GL_COLORSPACE_DISPLAY_P3_PASSTHROUGH_EXT 0x3490
-#endif /* EGL_EXT_gl_colorspace_display_p3_passthrough */
-
-// From ANGLE's egl/eglext.h.
-
-#ifndef EGL_ANGLE_robust_resource_initialization
-#define EGL_ANGLE_robust_resource_initialization 1
-#define EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE 0x3453
-#endif /* EGL_ANGLE_display_robust_resource_initialization */
-
-#ifndef EGL_ANGLE_surface_orientation
-#define EGL_ANGLE_surface_orientation
-#define EGL_OPTIMAL_SURFACE_ORIENTATION_ANGLE 0x33A7
-#define EGL_SURFACE_ORIENTATION_ANGLE 0x33A8
-#define EGL_SURFACE_ORIENTATION_INVERT_X_ANGLE 0x0001
-#define EGL_SURFACE_ORIENTATION_INVERT_Y_ANGLE 0x0002
-#endif /* EGL_ANGLE_surface_orientation */
 
 using ui::GetLastEGLErrorString;
 
@@ -169,80 +135,54 @@ EGLConfig ChooseConfig(EGLDisplay display,
                        GLSurfaceFormat format,
                        bool surfaceless,
                        bool offscreen,
+                       bool video_encoder_input,
                        EGLint visual_id) {
   // Choose an EGL configuration.
   // On X this is only used for PBuffer surfaces.
 
   std::vector<EGLint> renderable_types;
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableES3GLContext)) {
-    renderable_types.push_back(EGL_OPENGL_ES3_BIT);
-  }
+  renderable_types.push_back(EGL_OPENGL_ES3_BIT);
   renderable_types.push_back(EGL_OPENGL_ES2_BIT);
 
-  EGLint buffer_size = format.GetBufferSize();
   EGLint alpha_size = 8;
-  bool want_rgb565 = buffer_size == 16;
-  EGLint depth_size = format.GetDepthBits();
-  EGLint stencil_size = format.GetStencilBits();
-  EGLint samples = format.GetSamples();
+  bool want_rgb565 = format.IsRGB565();
+  EGLint buffer_size = want_rgb565 ? 16 : 32;
 
   // Some platforms (eg. X11) may want to set custom values for alpha and buffer
   // sizes.
   GLDisplayEglUtil::GetInstance()->ChoosePlatformCustomAlphaAndBufferSize(
       &alpha_size, &buffer_size);
 
-  EGLint surface_type =
-      (surfaceless
-           ? EGL_DONT_CARE
-           : (offscreen ? EGL_PBUFFER_BIT : EGL_WINDOW_BIT | EGL_PBUFFER_BIT));
+  EGLint surface_type = EGL_DONT_CARE;
+  if (!surfaceless) {
+    if (offscreen || video_encoder_input) {
+      surface_type = EGL_PBUFFER_BIT;
+    } else {
+      surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+    }
+  }
 
   for (auto renderable_type : renderable_types) {
-    EGLint config_attribs_8888[] = {EGL_BUFFER_SIZE,
-                                    buffer_size,
-                                    EGL_ALPHA_SIZE,
-                                    alpha_size,
-                                    EGL_BLUE_SIZE,
-                                    8,
-                                    EGL_GREEN_SIZE,
-                                    8,
-                                    EGL_RED_SIZE,
-                                    8,
-                                    EGL_SAMPLES,
-                                    samples,
-                                    EGL_DEPTH_SIZE,
-                                    depth_size,
-                                    EGL_STENCIL_SIZE,
-                                    stencil_size,
-                                    EGL_RENDERABLE_TYPE,
-                                    renderable_type,
-                                    EGL_SURFACE_TYPE,
-                                    surface_type,
-                                    EGL_NONE};
+    std::vector<EGLint> config_attribs_8888 = {
+        EGL_BUFFER_SIZE,  buffer_size, EGL_ALPHA_SIZE,      alpha_size,
+        EGL_BLUE_SIZE,    8,           EGL_GREEN_SIZE,      8,
+        EGL_RED_SIZE,     8,           EGL_RENDERABLE_TYPE, renderable_type,
+        EGL_SURFACE_TYPE, surface_type};
+    if (video_encoder_input) {
+      config_attribs_8888.push_back(EGL_RECORDABLE_ANDROID);
+      config_attribs_8888.push_back(EGL_TRUE);
+    }
+    config_attribs_8888.push_back(EGL_NONE);
 
-    EGLint config_attribs_565[] = {EGL_BUFFER_SIZE,
-                                   16,
-                                   EGL_BLUE_SIZE,
-                                   5,
-                                   EGL_GREEN_SIZE,
-                                   6,
-                                   EGL_RED_SIZE,
-                                   5,
-                                   EGL_SAMPLES,
-                                   samples,
-                                   EGL_DEPTH_SIZE,
-                                   depth_size,
-                                   EGL_STENCIL_SIZE,
-                                   stencil_size,
-                                   EGL_RENDERABLE_TYPE,
-                                   renderable_type,
-                                   EGL_SURFACE_TYPE,
-                                   surface_type,
-                                   EGL_NONE};
+    auto config_attribs_565 =
+        std::to_array({EGL_BUFFER_SIZE, 16, EGL_BLUE_SIZE, 5, EGL_GREEN_SIZE, 6,
+                       EGL_RED_SIZE, 5, EGL_RENDERABLE_TYPE, renderable_type,
+                       EGL_SURFACE_TYPE, surface_type, EGL_NONE});
 
-    EGLint* choose_attributes = config_attribs_8888;
+    EGLint* choose_attributes = config_attribs_8888.data();
     if (want_rgb565) {
-      choose_attributes = config_attribs_565;
+      CHECK(!video_encoder_input);
+      choose_attributes = config_attribs_565.data();
     }
 
     EGLint num_configs;
@@ -255,10 +195,10 @@ EGLConfig ChooseConfig(EGLDisplay display,
       continue;
     }
 
-    std::unique_ptr<EGLConfig[]> matching_configs(new EGLConfig[num_configs]);
+    auto matching_configs = base::HeapArray<EGLConfig>::Uninit(num_configs);
     if (want_rgb565 || visual_id >= 0) {
       config_size = num_configs;
-      config_data = matching_configs.get();
+      config_data = matching_configs.data();
     }
 
     if (!eglChooseConfig(display, choose_attributes, config_data, config_size,
@@ -293,11 +233,12 @@ EGLConfig ChooseConfig(EGLDisplay display,
       if (!match_found) {
         // To fall back to default 32 bit format, choose with
         // the right attributes again.
-        if (!ValidateEglConfig(display, config_attribs_8888, &num_configs)) {
+        if (!ValidateEglConfig(display, config_attribs_8888.data(),
+                               &num_configs)) {
           // Try the next renderable_type
           continue;
         }
-        if (!eglChooseConfig(display, config_attribs_8888, &config, 1,
+        if (!eglChooseConfig(display, config_attribs_8888.data(), &config, 1,
                              &num_configs)) {
           LOG(ERROR) << "eglChooseConfig failed with error "
                      << GetLastEGLErrorString();
@@ -339,7 +280,8 @@ GLDisplay* GLSurfaceEGL::GetGLDisplay() {
 EGLConfig GLSurfaceEGL::GetConfig() {
   if (!config_) {
     config_ = ChooseConfig(display_->GetDisplay(), format_, IsSurfaceless(),
-                           IsOffscreen(), GetNativeVisualID());
+                           IsOffscreen(), /*video_encoder_input=*/false,
+                           GetNativeVisualID());
   }
   return config_;
 }
@@ -358,15 +300,20 @@ GLDisplayEGL* GLSurfaceEGL::GetGLDisplayEGL() {
       GpuPreference::kDefault);
 }
 
-GLSurfaceEGL::~GLSurfaceEGL() = default;
+GLSurfaceEGL::~GLSurfaceEGL() {
+  // InvalidateWeakPtrs should be called from the concrete dtors.
+  CHECK(!HasWeakPtrs());
+}
 
 #if BUILDFLAG(IS_ANDROID)
 NativeViewGLSurfaceEGL::NativeViewGLSurfaceEGL(
     GLDisplayEGL* display,
     ScopedANativeWindow scoped_window,
-    std::unique_ptr<gfx::VSyncProvider> vsync_provider)
+    std::unique_ptr<gfx::VSyncProvider> vsync_provider,
+    bool video_encoder_input)
     : GLSurfaceEGL(display),
       scoped_window_(std::move(scoped_window)),
+      video_encoder_input_(video_encoder_input),
       window_(scoped_window_.a_native_window()),
       vsync_provider_external_(std::move(vsync_provider)) {}
 #else
@@ -379,9 +326,21 @@ NativeViewGLSurfaceEGL::NativeViewGLSurfaceEGL(
       vsync_provider_external_(std::move(vsync_provider)) {
 #if BUILDFLAG(IS_WIN)
   RECT windowRect;
-  if (GetClientRect(window_, &windowRect))
+  if (GetClientRect(window_, &windowRect)) {
     size_ = gfx::Rect(windowRect).size();
+  }
 #endif
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID)
+EGLConfig NativeViewGLSurfaceEGL::GetConfig() {
+  if (!config_) {
+    config_ =
+        ChooseConfig(display_->GetDisplay(), format_, IsSurfaceless(),
+                     IsOffscreen(), video_encoder_input_, GetNativeVisualID());
+  }
+  return config_;
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -399,6 +358,11 @@ bool NativeViewGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
   // the platform-dependant quirks, if any, before creating the surface.
   if (!InitializeNativeWindow()) {
     LOG(ERROR) << "Error trying to initialize the native window.";
+    return false;
+  }
+
+  if (!GetConfig()) {
+    LOG(ERROR) << "No suitable EGL configs found for initialization.";
     return false;
   }
 
@@ -433,44 +397,17 @@ bool NativeViewGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
     egl_window_attributes.push_back(EGL_SURFACE_ORIENTATION_INVERT_Y_ANGLE);
   }
 
-  switch (format_.GetColorSpace()) {
-    case GLSurfaceFormat::COLOR_SPACE_UNSPECIFIED:
-      break;
-    case GLSurfaceFormat::COLOR_SPACE_SRGB:
-      // Note that COLORSPACE_LINEAR refers to the sRGB color space, but
-      // without opting into sRGB blending. It is equivalent to
-      // COLORSPACE_SRGB with Disable(FRAMEBUFFER_SRGB).
-      if (display_->ext->b_EGL_KHR_gl_colorspace) {
-        egl_window_attributes.push_back(EGL_GL_COLORSPACE_KHR);
-        egl_window_attributes.push_back(EGL_GL_COLORSPACE_LINEAR_KHR);
-      }
-      break;
-    case GLSurfaceFormat::COLOR_SPACE_DISPLAY_P3:
-      // Note that it is not the case that
-      //   COLORSPACE_SRGB is to COLORSPACE_LINEAR_KHR
-      // as
-      //   COLORSPACE_DISPLAY_P3 is to COLORSPACE_DISPLAY_P3_LINEAR
-      // COLORSPACE_DISPLAY_P3 is equivalent to COLORSPACE_LINEAR, except with
-      // with the P3 gamut instead of the the sRGB gamut.
-      // COLORSPACE_DISPLAY_P3_LINEAR has a linear transfer function, and is
-      // intended for use with 16-bit formats.
-      bool p3_supported =
-          display_->ext->b_EGL_EXT_gl_colorspace_display_p3 ||
-          display_->ext->b_EGL_EXT_gl_colorspace_display_p3_passthrough;
-      if (display_->ext->b_EGL_KHR_gl_colorspace && p3_supported) {
-        egl_window_attributes.push_back(EGL_GL_COLORSPACE_KHR);
-        // Chrome relied on incorrect Android behavior when dealing with P3 /
-        // framebuffer_srgb interactions. This behavior was fixed in Q, which
-        // causes invalid Chrome rendering. To achieve Android-P behavior in Q+,
-        // use EGL_GL_COLORSPACE_P3_PASSTHROUGH_EXT where possible.
-        if (display_->ext->b_EGL_EXT_gl_colorspace_display_p3_passthrough) {
-          egl_window_attributes.push_back(
-              EGL_GL_COLORSPACE_DISPLAY_P3_PASSTHROUGH_EXT);
-        } else {
-          egl_window_attributes.push_back(EGL_GL_COLORSPACE_DISPLAY_P3_EXT);
-        }
-      }
-      break;
+  // Note that COLORSPACE_LINEAR refers to the sRGB color space, but
+  // without opting into sRGB blending. It is equivalent to
+  // COLORSPACE_SRGB with Disable(FRAMEBUFFER_SRGB).
+  if (display_->ext->b_EGL_KHR_gl_colorspace
+#if BUILDFLAG(IS_ANDROID)
+      // These attributes upset video encoder and cause an internal error
+      && !video_encoder_input_
+#endif
+  ) {
+    egl_window_attributes.push_back(EGL_GL_COLORSPACE_KHR);
+    egl_window_attributes.push_back(EGL_GL_COLORSPACE_LINEAR_KHR);
   }
 
   egl_window_attributes.push_back(EGL_NONE);
@@ -731,16 +668,16 @@ void NativeViewGLSurfaceEGL::TraceSwapEvents(EGLuint64KHR oldFrameId) {
   auto epsilon = base::Microseconds(1);
   static const char* SwapEvents = "SwapEvents";
   const int64_t trace_id = oldFrameId;
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
-      kSwapEventTraceCategories, SwapEvents, trace_id, tracePairs.front().time);
-  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP1(
-      kSwapEventTraceCategories, SwapEvents, trace_id,
-      tracePairs.back().time + epsilon, "id", trace_id);
+  TRACE_EVENT_BEGIN(kSwapEventTraceCategories,
+                    perfetto::StaticString(SwapEvents),
+                    perfetto::Track(trace_id), tracePairs.front().time);
+  TRACE_EVENT_END(kSwapEventTraceCategories, perfetto::Track(trace_id),
+                  tracePairs.back().time + epsilon, "id", trace_id);
 
   // Trace the first event, which does not have a range before it.
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT_WITH_TIMESTAMP0(
-      kSwapEventTraceCategories, tracePairs.front().name, trace_id,
-      tracePairs.front().time);
+  TRACE_EVENT_INSTANT(kSwapEventTraceCategories,
+                      perfetto::StaticString(tracePairs.front().name),
+                      perfetto::Track(trace_id), tracePairs.front().time);
 
   // Trace remaining events and their ranges.
   // Use the first characters to represent events still pending.
@@ -754,16 +691,15 @@ void NativeViewGLSurfaceEGL::TraceSwapEvents(EGLuint64KHR oldFrameId) {
 
   const char* pending_symbols = valid_symbols.c_str();
   for (size_t i = 1; i < tracePairs.size(); i++) {
-    pending_symbols++;
-    TRACE_EVENT_COPY_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
-        kSwapEventTraceCategories, pending_symbols, trace_id,
-        tracePairs[i - 1].time);
-    TRACE_EVENT_COPY_NESTABLE_ASYNC_END_WITH_TIMESTAMP0(
-        kSwapEventTraceCategories, pending_symbols, trace_id,
-        tracePairs[i].time);
-    TRACE_EVENT_NESTABLE_ASYNC_INSTANT_WITH_TIMESTAMP0(
-        kSwapEventTraceCategories, tracePairs[i].name, trace_id,
-        tracePairs[i].time);
+    UNSAFE_TODO(pending_symbols++);
+    TRACE_EVENT_BEGIN(kSwapEventTraceCategories,
+                      perfetto::DynamicString(pending_symbols),
+                      perfetto::Track(trace_id), tracePairs[i - 1].time);
+    TRACE_EVENT_END(kSwapEventTraceCategories, perfetto::Track(trace_id),
+                    tracePairs[i].time);
+    TRACE_EVENT_INSTANT(kSwapEventTraceCategories,
+                        perfetto::StaticString(tracePairs[i].name),
+                        perfetto::Track(trace_id), tracePairs[i].time);
   }
 }
 
@@ -777,8 +713,8 @@ gfx::Size NativeViewGLSurfaceEGL::GetSize() {
   EGLint height;
   if (!eglQuerySurface(display_->GetDisplay(), surface_, EGL_WIDTH, &width) ||
       !eglQuerySurface(display_->GetDisplay(), surface_, EGL_HEIGHT, &height)) {
-    NOTREACHED() << "eglQuerySurface failed with error "
-                 << GetLastEGLErrorString();
+    LOG(ERROR) << "eglQuerySurface failed with error "
+               << GetLastEGLErrorString();
     return gfx::Size();
   }
 
@@ -966,6 +902,20 @@ bool NativeViewGLSurfaceEGL::GetFrameTimestampInfoIfAvailable(
   return true;
 }
 
+#if BUILDFLAG(IS_ANDROID)
+void NativeViewGLSurfaceEGL::SetPresentationTimestamp(
+    base::TimeTicks presentation_time) {
+  DCHECK(surface_);
+  if (!display_->ext->b_EGL_ANDROID_presentation_time) {
+    LOG(ERROR) << "EGL_ANDROID_presentation_time is not supported";
+    return;
+  }
+
+  EGLnsecsANDROID time_nsecs = presentation_time.since_origin().InNanoseconds();
+  eglPresentationTimeANDROID(display_->GetDisplay(), surface_, time_nsecs);
+}
+#endif
+
 gfx::SwapResult NativeViewGLSurfaceEGL::SwapBuffersWithDamage(
     const std::vector<int>& rects,
     PresentationCallback callback,
@@ -1011,17 +961,6 @@ gfx::SwapResult NativeViewGLSurfaceEGL::PostSubBuffer(
   return scoped_swap_buffers.result();
 }
 
-bool NativeViewGLSurfaceEGL::SupportsCommitOverlayPlanes() {
-  return false;
-}
-
-gfx::SwapResult NativeViewGLSurfaceEGL::CommitOverlayPlanes(
-    PresentationCallback callback,
-    gfx::FrameData data) {
-  NOTREACHED();
-  return gfx::SwapResult::SWAP_FAILED;
-}
-
 bool NativeViewGLSurfaceEGL::OnMakeCurrent(GLContext* context) {
   if (presentation_helper_)
     presentation_helper_->OnMakeCurrent(context, this);
@@ -1042,15 +981,8 @@ void NativeViewGLSurfaceEGL::SetVSyncEnabled(bool enabled) {
   }
 }
 
-bool NativeViewGLSurfaceEGL::ScheduleOverlayPlane(
-    OverlayImage image,
-    std::unique_ptr<gfx::GpuFence> gpu_fence,
-    const gfx::OverlayPlaneData& overlay_plane_data) {
-  NOTIMPLEMENTED();
-  return false;
-}
-
 NativeViewGLSurfaceEGL::~NativeViewGLSurfaceEGL() {
+  InvalidateWeakPtrs();
   Destroy();
 }
 
@@ -1070,6 +1002,11 @@ bool PbufferGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
     return false;
   }
 
+  if (!GetConfig()) {
+    LOG(ERROR) << "No suitable EGL configs found for initialization.";
+    return false;
+  }
+
   EGLSurface old_surface = surface_;
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1077,8 +1014,9 @@ bool PbufferGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
   // to use a compatible config. We expect the client to request RGB565
   // onscreen surface also for this to work (with the exception of
   // fullscreen video).
-  if (base::SysInfo::AmountOfPhysicalMemoryMB() <= 512)
+  if (features::PreferRGB565ResourcesForDisplay()) {
     format.SetRGB565();
+  }
 #endif
 
   format_ = format;
@@ -1136,7 +1074,6 @@ bool PbufferGLSurfaceEGL::IsOffscreen() {
 gfx::SwapResult PbufferGLSurfaceEGL::SwapBuffers(PresentationCallback callback,
                                                  gfx::FrameData data) {
   NOTREACHED() << "Attempted to call SwapBuffers on a PbufferGLSurfaceEGL.";
-  return gfx::SwapResult::SWAP_FAILED;
 }
 
 gfx::Size PbufferGLSurfaceEGL::GetSize() {
@@ -1181,7 +1118,6 @@ EGLSurface PbufferGLSurfaceEGL::GetHandle() {
 void* PbufferGLSurfaceEGL::GetShareHandle() {
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
-  return nullptr;
 #else
   if (!display_->ext->b_EGL_ANGLE_query_surface_pointer)
     return nullptr;
@@ -1201,6 +1137,7 @@ void* PbufferGLSurfaceEGL::GetShareHandle() {
 }
 
 PbufferGLSurfaceEGL::~PbufferGLSurfaceEGL() {
+  InvalidateWeakPtrs();
   Destroy();
 }
 
@@ -1250,6 +1187,7 @@ void* SurfacelessEGL::GetShareHandle() {
 }
 
 SurfacelessEGL::~SurfacelessEGL() {
+  InvalidateWeakPtrs();
 }
 
 }  // namespace gl

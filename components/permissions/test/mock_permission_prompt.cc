@@ -4,9 +4,10 @@
 
 #include "components/permissions/test/mock_permission_prompt.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
+#include "components/permissions/features.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
@@ -44,21 +45,51 @@ PermissionPromptDisposition MockPermissionPrompt::GetPromptDisposition() const {
 #endif
 }
 
+std::optional<gfx::Rect> MockPermissionPrompt::GetViewBoundsInScreen() const {
+  return std::make_optional<gfx::Rect>(100, 100, 100, 100);
+}
+
+bool MockPermissionPrompt::ShouldFinalizeRequestAfterDecided() const {
+  return true;
+}
+
+std::vector<permissions::ElementAnchoredBubbleVariant>
+MockPermissionPrompt::GetPromptVariants() const {
+  return {};
+}
+
+std::optional<feature_params::PermissionElementPromptPosition>
+MockPermissionPrompt::GetPromptPosition() const {
+  return std::nullopt;
+}
+
+bool MockPermissionPrompt::IsAskPrompt() const {
+  return true;
+}
+
 MockPermissionPrompt::MockPermissionPrompt(MockPermissionPromptFactory* factory,
                                            Delegate* delegate)
     : factory_(factory), delegate_(delegate) {
-  for (const PermissionRequest* request : delegate_->Requests()) {
+  for (const auto& request : delegate_->Requests()) {
     RequestType request_type = request->request_type();
     // The actual prompt will call these, so test they're sane.
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     // For kStorageAccess, the prompt itself calculates the message text.
-    if (request_type != permissions::RequestType::kStorageAccess)
-      EXPECT_FALSE(request->GetDialogMessageText().empty());
+    if (request_type != permissions::RequestType::kStorageAccess) {
+      EXPECT_FALSE(
+          request
+              ->GetDialogAnnotatedMessageText(delegate_->GetRequestingOrigin())
+              .text.empty());
+    }
+#if BUILDFLAG(IS_ANDROID)
     EXPECT_NE(0, permissions::GetIconId(request_type));
+#endif  // BUILDFLAG(IS_ANDROID)
 #else
     EXPECT_FALSE(request->GetMessageTextFragment().empty());
     EXPECT_FALSE(permissions::GetIconId(request_type).is_empty());
-#endif
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+    EXPECT_EQ(request->ShouldUseTwoOriginPrompt(),
+              request_type == permissions::RequestType::kStorageAccess);
   }
 }
 

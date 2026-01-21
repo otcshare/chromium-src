@@ -9,12 +9,15 @@
 #include <string>
 
 #include "base/time/time.h"
+#include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/proxy_server.h"
+#include "net/base/request_priority.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_info.h"
+#include "net/proxy_resolution/proxy_retry_info.h"
 #include "url/gurl.h"
 
 namespace net {
@@ -46,6 +49,8 @@ class NET_EXPORT ProxyResolutionService {
   // otherwise).  |request| must not be nullptr.
   //
   // Profiling information for the request is saved to |net_log| if non-nullptr.
+  //
+  // |priority| can be used by the service for scheduling optimizations.
   virtual int ResolveProxy(
       const GURL& url,
       const std::string& method,
@@ -53,7 +58,8 @@ class NET_EXPORT ProxyResolutionService {
       ProxyInfo* results,
       CompletionOnceCallback callback,
       std::unique_ptr<ProxyResolutionRequest>* request,
-      const NetLogWithSource& net_log) = 0;
+      const NetLogWithSource& net_log,
+      RequestPriority priority) = 0;
 
   // Called to report that the last proxy connection succeeded.  If |proxy_info|
   // has a non empty proxy_retry_info map, the proxies that have been tried (and
@@ -71,20 +77,6 @@ class NET_EXPORT ProxyResolutionService {
   // ProxyResolutionService was created with is torn down, if it's torn down
   // before the ProxyResolutionService itself.
   virtual void OnShutdown() = 0;
-
-  // Explicitly trigger proxy fallback for the given |results| by updating our
-  // list of bad proxies to include the first entry of |results|, and,
-  // additional bad proxies (can be none). Will retry after |retry_delay| if
-  // positive, and will use the default proxy retry duration otherwise. Proxies
-  // marked as bad will not be retried until |retry_delay| has passed. Returns
-  // true if there will be at least one proxy remaining in the list after
-  // fallback and false otherwise. This method should be used to add proxies to
-  // the bad proxy list only for reasons other than a network error.
-  virtual bool MarkProxiesAsBadUntil(
-      const ProxyInfo& results,
-      base::TimeDelta retry_delay,
-      const std::vector<ProxyServer>& additional_bad_proxies,
-      const NetLogWithSource& net_log) = 0;
 
   // Clears the list of bad proxy servers that has been cached.
   virtual void ClearBadProxiesCache() = 0;
@@ -109,6 +101,27 @@ class NET_EXPORT ProxyResolutionService {
   [[nodiscard]] virtual bool CastToConfiguredProxyResolutionService(
       ConfiguredProxyResolutionService**
           configured_proxy_resolution_service) = 0;
+
+ protected:
+  // Helper method to handle the common logic for ReportSuccess implementations.
+  // This method processes proxy retry information and delegates to proxy
+  // delegate callbacks. Derived classes can call this static method to reuse
+  // the core logic while providing their own logging or other customizations.
+  static void ProcessProxyRetryInfo(const ProxyRetryInfoMap& new_retry_info,
+                                    ProxyRetryInfoMap& proxy_retry_info,
+                                    ProxyDelegate* proxy_delegate);
+
+  // Returns a list for bad proxies from the proxy retry info map.
+  static base::Value::List BuildBadProxiesList(
+      const ProxyRetryInfoMap& proxy_retry_info);
+
+  // Helper method to deprioritize bad proxy chains and log the action.
+  // This handles the common pattern of checking if proxy_retry_info is not
+  // empty, calling DeprioritizeBadProxyChains, and logging the event.
+  static void DeprioritizeBadProxyChains(
+      const ProxyRetryInfoMap& proxy_retry_info,
+      ProxyInfo* result,
+      const NetLogWithSource& net_log);
 };
 
 }  // namespace net

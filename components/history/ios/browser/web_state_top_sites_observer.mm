@@ -11,10 +11,6 @@
 #include "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/navigation/navigation_manager.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace history {
 
 WebStateTopSitesObserver::WebStateTopSitesObserver(web::WebState* web_state,
@@ -29,8 +25,6 @@ WebStateTopSitesObserver::~WebStateTopSitesObserver() {
 void WebStateTopSitesObserver::DidFinishNavigation(
     web::WebState* web_state,
     web::NavigationContext* navigation_context) {
-  // TODO(crbug.com/931841): Remove GetLastCommittedItem nil check once
-  // HasComitted has been fixed.
   if (top_sites_ && navigation_context->HasCommitted() &&
       web_state->GetNavigationManager()->GetLastCommittedItem()) {
     top_sites_->OnNavigationCommitted(
@@ -41,7 +35,5 @@ void WebStateTopSitesObserver::DidFinishNavigation(
 void WebStateTopSitesObserver::WebStateDestroyed(web::WebState* web_state) {
   web_state->RemoveObserver(this);
 }
-
-WEB_STATE_USER_DATA_KEY_IMPL(WebStateTopSitesObserver)
 
 }  // namespace history

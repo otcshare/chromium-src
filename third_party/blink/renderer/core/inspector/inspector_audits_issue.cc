@@ -6,13 +6,16 @@
 
 #include "base/unguessable_token.h"
 #include "services/network/public/mojom/blocked_by_response_reason.mojom-blink.h"
+#include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/capture_source_location.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_security_policy_violation_event_init.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/inspector/protocol/audits.h"
 #include "third_party/blink/renderer/core/inspector/protocol/network.h"
@@ -76,19 +79,6 @@ protocol::Network::CorsError RendererCorsIssueCodeToProtocol(
       return protocol::Network::CorsErrorEnum::DisallowedByMode;
   }
 }
-
-protocol::Audits::GenericIssueErrorType GenericIssueErrorTypeToProtocol(
-    mojom::blink::GenericIssueErrorType error_type) {
-  switch (error_type) {
-    case mojom::blink::GenericIssueErrorType::
-        kCrossOriginPortalPostMessageError:
-      return protocol::Audits::GenericIssueErrorTypeEnum::
-          CrossOriginPortalPostMessageError;
-    case mojom::blink::GenericIssueErrorType::kFormLabelForNameError:
-      return protocol::Audits::GenericIssueErrorTypeEnum::FormLabelForNameError;
-  }
-}
-
 }  // namespace
 
 std::unique_ptr<protocol::Audits::SourceCodeLocation> CreateProtocolLocation(
@@ -99,24 +89,81 @@ std::unique_ptr<protocol::Audits::SourceCodeLocation> CreateProtocolLocation(
                                .setColumnNumber(location.ColumnNumber())
                                .build();
   if (location.ScriptId()) {
-    protocol_location->setScriptId(WTF::String::Number(location.ScriptId()));
+    protocol_location->setScriptId(String::Number(location.ScriptId()));
   }
   return protocol_location;
 }
 
+protocol::Audits::GenericIssueErrorType
+AuditsIssue::GenericIssueErrorTypeToProtocol(
+    mojom::blink::GenericIssueErrorType error_type) {
+  switch (error_type) {
+    case mojom::blink::GenericIssueErrorType::kFormLabelForNameError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::FormLabelForNameError;
+    case mojom::blink::GenericIssueErrorType::kFormDuplicateIdForInputError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormDuplicateIdForInputError;
+    case mojom::blink::GenericIssueErrorType::kFormInputWithNoLabelError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormInputWithNoLabelError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormAutocompleteAttributeEmptyError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormAutocompleteAttributeEmptyError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormEmptyIdAndNameAttributesForInputError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormEmptyIdAndNameAttributesForInputError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormAriaLabelledByToNonExistingIdError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormAriaLabelledByToNonExistingIdError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormInputAssignedAutocompleteValueToIdOrNameAttributeError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormInputAssignedAutocompleteValueToIdOrNameAttributeError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormLabelHasNeitherForNorNestedInputError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormLabelHasNeitherForNorNestedInputError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormLabelForMatchesNonExistingIdError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormLabelForMatchesNonExistingIdError;
+    case mojom::blink::GenericIssueErrorType::
+        kFormInputHasWrongButWellIntendedAutocompleteValueError:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormInputHasWrongButWellIntendedAutocompleteValueError;
+    case mojom::blink::GenericIssueErrorType::kResponseWasBlockedByORB:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          ResponseWasBlockedByORB;
+    case mojom::blink::GenericIssueErrorType::kNavigationEntryMarkedSkippable:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          NavigationEntryMarkedSkippable;
+    case mojom::blink::GenericIssueErrorType::
+        kAutofillAndManualTextPolicyControlledFeaturesInfo:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          AutofillAndManualTextPolicyControlledFeaturesInfo;
+    case mojom::blink::GenericIssueErrorType::
+        kAutofillPolicyControlledFeatureInfo:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          AutofillPolicyControlledFeatureInfo;
+    case mojom::blink::GenericIssueErrorType::
+        kManualTextPolicyControlledFeatureInfo:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          ManualTextPolicyControlledFeatureInfo;
+  }
+}
+
 void AuditsIssue::ReportCorsIssue(
     ExecutionContext* execution_context,
-    int64_t identifier,
     RendererCorsIssueCode code,
     String url,
     String initiator_origin,
     String failedParameter,
-    absl::optional<base::UnguessableToken> issue_id) {
-  String devtools_request_id =
-      IdentifiersFactory::SubresourceRequestId(identifier);
+    std::optional<base::UnguessableToken> issue_id) {
   std::unique_ptr<protocol::Audits::AffectedRequest> affected_request =
       protocol::Audits::AffectedRequest::create()
-          .setRequestId(devtools_request_id)
           .setUrl(url)
           .build();
   auto protocol_cors_error_status =
@@ -131,7 +178,7 @@ void AuditsIssue::ReportCorsIssue(
           .setCorsErrorStatus(std::move(protocol_cors_error_status))
           .build();
   cors_issue_details->setInitiatorOrigin(initiator_origin);
-  auto location = CaptureSourceLocation(execution_context);
+  auto* location = CaptureSourceLocation(execution_context);
   if (location) {
     cors_issue_details->setLocation(CreateProtocolLocation(*location));
   }
@@ -150,15 +197,14 @@ void AuditsIssue::ReportCorsIssue(
 
 namespace {
 
+using mojom::blink::AttributionReportingIssueType;
+
 protocol::Audits::AttributionReportingIssueType
 BuildAttributionReportingIssueType(AttributionReportingIssueType type) {
   switch (type) {
     case AttributionReportingIssueType::kPermissionPolicyDisabled:
       return protocol::Audits::AttributionReportingIssueTypeEnum::
           PermissionPolicyDisabled;
-    case AttributionReportingIssueType::kPermissionPolicyNotDelegated:
-      return protocol::Audits::AttributionReportingIssueTypeEnum::
-          PermissionPolicyNotDelegated;
     case AttributionReportingIssueType::kUntrustworthyReportingOrigin:
       return protocol::Audits::AttributionReportingIssueTypeEnum::
           UntrustworthyReportingOrigin;
@@ -170,12 +216,6 @@ BuildAttributionReportingIssueType(AttributionReportingIssueType type) {
     case AttributionReportingIssueType::kInvalidRegisterTriggerHeader:
       return protocol::Audits::AttributionReportingIssueTypeEnum::
           InvalidRegisterTriggerHeader;
-    case AttributionReportingIssueType::kInvalidEligibleHeader:
-      return protocol::Audits::AttributionReportingIssueTypeEnum::
-          InvalidEligibleHeader;
-    case AttributionReportingIssueType::kTooManyConcurrentRequests:
-      return protocol::Audits::AttributionReportingIssueTypeEnum::
-          TooManyConcurrentRequests;
     case AttributionReportingIssueType::kSourceAndTriggerHeaders:
       return protocol::Audits::AttributionReportingIssueTypeEnum::
           SourceAndTriggerHeaders;
@@ -184,6 +224,47 @@ BuildAttributionReportingIssueType(AttributionReportingIssueType type) {
     case AttributionReportingIssueType::kTriggerIgnored:
       return protocol::Audits::AttributionReportingIssueTypeEnum::
           TriggerIgnored;
+    case AttributionReportingIssueType::kOsSourceIgnored:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          OsSourceIgnored;
+    case AttributionReportingIssueType::kOsTriggerIgnored:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          OsTriggerIgnored;
+    case AttributionReportingIssueType::kInvalidRegisterOsSourceHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          InvalidRegisterOsSourceHeader;
+    case AttributionReportingIssueType::kInvalidRegisterOsTriggerHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          InvalidRegisterOsTriggerHeader;
+    case AttributionReportingIssueType::kWebAndOsHeaders:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          WebAndOsHeaders;
+    case AttributionReportingIssueType::kNoWebOrOsSupport:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NoWebOrOsSupport;
+    case AttributionReportingIssueType::
+        kNavigationRegistrationWithoutTransientUserActivation:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NavigationRegistrationWithoutTransientUserActivation;
+    case AttributionReportingIssueType::kInvalidInfoHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          InvalidInfoHeader;
+    case AttributionReportingIssueType::kNoRegisterSourceHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NoRegisterSourceHeader;
+    case AttributionReportingIssueType::kNoRegisterTriggerHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NoRegisterTriggerHeader;
+    case AttributionReportingIssueType::kNoRegisterOsSourceHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NoRegisterOsSourceHeader;
+    case AttributionReportingIssueType::kNoRegisterOsTriggerHeader:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NoRegisterOsTriggerHeader;
+    case AttributionReportingIssueType::
+        kNavigationRegistrationUniqueScopeAlreadySet:
+      return protocol::Audits::AttributionReportingIssueTypeEnum::
+          NavigationRegistrationUniqueScopeAlreadySet;
   }
 }
 
@@ -192,6 +273,7 @@ BuildAttributionReportingIssueType(AttributionReportingIssueType type) {
 void AuditsIssue::ReportAttributionIssue(ExecutionContext* execution_context,
                                          AttributionReportingIssueType type,
                                          Element* element,
+                                         const String& request_url,
                                          const String& request_id,
                                          const String& invalid_parameter) {
   auto details = protocol::Audits::AttributionReportingIssueDetails::create()
@@ -199,12 +281,15 @@ void AuditsIssue::ReportAttributionIssue(ExecutionContext* execution_context,
                      .build();
 
   if (element) {
-    details->setViolatingNodeId(DOMNodeIds::IdForNode(element));
+    details->setViolatingNodeId(element->GetDomNodeId());
   }
-  if (!request_id.IsNull()) {
-    details->setRequest(protocol::Audits::AffectedRequest::create()
-                            .setRequestId(request_id)
-                            .build());
+  if (!request_url.IsNull()) {
+    auto request =
+        protocol::Audits::AffectedRequest::create().setUrl(request_url).build();
+    if (!request_id.IsNull()) {
+      request->setRequestId(request_id);
+    }
+    details->setRequest(std::move(request));
   }
   if (!invalid_parameter.IsNull()) {
     details->setInvalidParameter(invalid_parameter);
@@ -219,42 +304,6 @@ void AuditsIssue::ReportAttributionIssue(ExecutionContext* execution_context,
                                 AttributionReportingIssue)
                    .setDetails(std::move(issue_details))
                    .build();
-  execution_context->AddInspectorIssue(AuditsIssue(std::move(issue)));
-}
-
-void AuditsIssue::ReportNavigatorUserAgentAccess(
-    ExecutionContext* execution_context,
-    String url) {
-  auto navigator_user_agent_details =
-      protocol::Audits::NavigatorUserAgentIssueDetails::create()
-          .setUrl(url)
-          .build();
-
-  // Try to get only the script name quickly.
-  std::unique_ptr<SourceLocation> location;
-  String script_url = GetCurrentScriptUrl(execution_context->GetIsolate());
-  if (!script_url.empty()) {
-    location =
-        std::make_unique<SourceLocation>(script_url, String(), 1, 0, nullptr);
-  } else {
-    location = CaptureSourceLocation(execution_context);
-  }
-
-  if (location) {
-    navigator_user_agent_details->setLocation(
-        CreateProtocolLocation(*location));
-  }
-
-  auto details = protocol::Audits::InspectorIssueDetails::create()
-                     .setNavigatorUserAgentIssueDetails(
-                         std::move(navigator_user_agent_details))
-                     .build();
-  auto issue =
-      protocol::Audits::InspectorIssue::create()
-          .setCode(
-              protocol::Audits::InspectorIssueCodeEnum::NavigatorUserAgentIssue)
-          .setDetails(std::move(details))
-          .build();
   execution_context->AddInspectorIssue(AuditsIssue(std::move(issue)));
 }
 
@@ -287,8 +336,19 @@ protocol::Audits::BlockedByResponseReason BlockedByResponseReasonToProtocol(
         kCorpNotSameOriginAfterDefaultedToSameOriginByCoep:
       return protocol::Audits::BlockedByResponseReasonEnum::
           CorpNotSameOriginAfterDefaultedToSameOriginByCoep;
+    case network::mojom::BlockedByResponseReason::
+        kCorpNotSameOriginAfterDefaultedToSameOriginByDip:
+      return protocol::Audits::BlockedByResponseReasonEnum::
+          CorpNotSameOriginAfterDefaultedToSameOriginByDip;
+    case network::mojom::BlockedByResponseReason::
+        kCorpNotSameOriginAfterDefaultedToSameOriginByCoepAndDip:
+      return protocol::Audits::BlockedByResponseReasonEnum::
+          CorpNotSameOriginAfterDefaultedToSameOriginByCoepAndDip;
     case network::mojom::BlockedByResponseReason::kCorpNotSameSite:
       return protocol::Audits::BlockedByResponseReasonEnum::CorpNotSameSite;
+    case network::mojom::BlockedByResponseReason::kSRIMessageSignatureMismatch:
+      return protocol::Audits::BlockedByResponseReasonEnum::
+          SRIMessageSignatureMismatch;
   }
 }
 
@@ -330,6 +390,10 @@ RequestContextToMixedContentResourceType(
       return protocol::Audits::MixedContentResourceTypeEnum::Image;
     case mojom::blink::RequestContextType::INTERNAL:
       return protocol::Audits::MixedContentResourceTypeEnum::Resource;
+    case mojom::blink::RequestContextType::JSON:
+      // TODO(crbug.com/1511738): Consider adding a type
+      // specific to JSON modules requests
+      return protocol::Audits::MixedContentResourceTypeEnum::Resource;
     case mojom::blink::RequestContextType::LOCATION:
       return protocol::Audits::MixedContentResourceTypeEnum::Resource;
     case mojom::blink::RequestContextType::MANIFEST:
@@ -348,6 +412,8 @@ RequestContextToMixedContentResourceType(
       return protocol::Audits::MixedContentResourceTypeEnum::ServiceWorker;
     case mojom::blink::RequestContextType::SHARED_WORKER:
       return protocol::Audits::MixedContentResourceTypeEnum::SharedWorker;
+    case mojom::blink::RequestContextType::SPECULATION_RULES:
+      return protocol::Audits::MixedContentResourceTypeEnum::SpeculationRules;
     case mojom::blink::RequestContextType::STYLE:
       return protocol::Audits::MixedContentResourceTypeEnum::Stylesheet;
     case mojom::blink::RequestContextType::SUBRESOURCE:
@@ -406,6 +472,9 @@ protocol::Audits::ContentSecurityPolicyViolationType CSPViolationTypeToProtocol(
     case ContentSecurityPolicyViolationType::kURLViolation:
       return protocol::Audits::ContentSecurityPolicyViolationTypeEnum::
           KURLViolation;
+    case ContentSecurityPolicyViolationType::kSRIViolation:
+      return protocol::Audits::ContentSecurityPolicyViolationTypeEnum::
+          KSRIViolation;
   }
 }
 
@@ -415,7 +484,7 @@ void AuditsIssue::ReportSharedArrayBufferIssue(
     ExecutionContext* execution_context,
     bool shared_buffer_transfer_allowed,
     SharedArrayBufferIssueType issue_type) {
-  auto source_location = CaptureSourceLocation(execution_context);
+  auto* source_location = CaptureSourceLocation(execution_context);
   auto sab_issue_details =
       protocol::Audits::SharedArrayBufferIssueDetails::create()
           .setSourceCodeLocation(CreateProtocolLocation(*source_location))
@@ -437,229 +506,8 @@ void AuditsIssue::ReportSharedArrayBufferIssue(
 
 // static
 void AuditsIssue::ReportDeprecationIssue(ExecutionContext* execution_context,
-                                         DeprecationIssueType type_enum) {
-  protocol::Audits::DeprecationIssueType type;
-  // Please keep this alphabetized.
-  switch (type_enum) {
-    case DeprecationIssueType::kAuthorizationCoveredByWildcard:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          AuthorizationCoveredByWildcard;
-      break;
-    case DeprecationIssueType::kCanRequestURLHTTPContainingNewline:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          CanRequestURLHTTPContainingNewline;
-      break;
-    case DeprecationIssueType::kChromeLoadTimesConnectionInfo:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          ChromeLoadTimesConnectionInfo;
-      break;
-    case DeprecationIssueType::kChromeLoadTimesFirstPaintAfterLoadTime:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          ChromeLoadTimesFirstPaintAfterLoadTime;
-      break;
-    case DeprecationIssueType::kChromeLoadTimesWasAlternateProtocolAvailable:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          ChromeLoadTimesWasAlternateProtocolAvailable;
-      break;
-    case DeprecationIssueType::kCookieWithTruncatingChar:
-      type =
-          protocol::Audits::DeprecationIssueTypeEnum::CookieWithTruncatingChar;
-      break;
-    case DeprecationIssueType::kCrossOriginAccessBasedOnDocumentDomain:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          CrossOriginAccessBasedOnDocumentDomain;
-      break;
-    case DeprecationIssueType::kCrossOriginWindowAlert:
-      type = protocol::Audits::DeprecationIssueTypeEnum::CrossOriginWindowAlert;
-      break;
-    case DeprecationIssueType::kCrossOriginWindowConfirm:
-      type =
-          protocol::Audits::DeprecationIssueTypeEnum::CrossOriginWindowConfirm;
-      break;
-    case DeprecationIssueType::
-        kCSSSelectorInternalMediaControlsOverlayCastButton:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          CSSSelectorInternalMediaControlsOverlayCastButton;
-      break;
-    case DeprecationIssueType::kDeprecationExample:
-      type = protocol::Audits::DeprecationIssueTypeEnum::DeprecationExample;
-      break;
-    case DeprecationIssueType::
-        kDocumentDomainSettingWithoutOriginAgentClusterHeader:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          DocumentDomainSettingWithoutOriginAgentClusterHeader;
-      break;
-    case DeprecationIssueType::kEventPath:
-      type = protocol::Audits::DeprecationIssueTypeEnum::EventPath;
-      break;
-    case DeprecationIssueType::kExpectCTHeader:
-      type = protocol::Audits::DeprecationIssueTypeEnum::ExpectCTHeader;
-      break;
-    case DeprecationIssueType::kGeolocationInsecureOrigin:
-      type =
-          protocol::Audits::DeprecationIssueTypeEnum::GeolocationInsecureOrigin;
-      break;
-    case DeprecationIssueType::kGeolocationInsecureOriginDeprecatedNotRemoved:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          GeolocationInsecureOriginDeprecatedNotRemoved;
-      break;
-    case DeprecationIssueType::kGetUserMediaInsecureOrigin:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          GetUserMediaInsecureOrigin;
-      break;
-    case DeprecationIssueType::kHostCandidateAttributeGetter:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          HostCandidateAttributeGetter;
-      break;
-    case DeprecationIssueType::kInsecurePrivateNetworkSubresourceRequest:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          InsecurePrivateNetworkSubresourceRequest;
-      break;
-    case DeprecationIssueType::kLocalCSSFileExtensionRejected:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          LocalCSSFileExtensionRejected;
-      break;
-    case DeprecationIssueType::kMediaSourceAbortRemove:
-      type = protocol::Audits::DeprecationIssueTypeEnum::MediaSourceAbortRemove;
-      break;
-    case DeprecationIssueType::kMediaSourceDurationTruncatingBuffered:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          MediaSourceDurationTruncatingBuffered;
-      break;
-    case DeprecationIssueType::kNoSysexWebMIDIWithoutPermission:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          NoSysexWebMIDIWithoutPermission;
-      break;
-    case DeprecationIssueType::kNotDeprecated:
-      LOG(FATAL) << "Feature " << type << " is not deprecated.";
-      break;
-    case DeprecationIssueType::kNotificationInsecureOrigin:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          NotificationInsecureOrigin;
-      break;
-    case DeprecationIssueType::kNotificationPermissionRequestedIframe:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          NotificationPermissionRequestedIframe;
-      break;
-    case DeprecationIssueType::kObsoleteWebRtcCipherSuite:
-      type =
-          protocol::Audits::DeprecationIssueTypeEnum::ObsoleteWebRtcCipherSuite;
-      break;
-    case DeprecationIssueType::kOpenWebDatabaseInsecureContext:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          OpenWebDatabaseInsecureContext;
-      break;
-    case DeprecationIssueType::kOverflowVisibleOnReplacedElement:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          OverflowVisibleOnReplacedElement;
-      break;
-    case DeprecationIssueType::kPaymentInstruments:
-      type = protocol::Audits::DeprecationIssueTypeEnum::PaymentInstruments;
-      break;
-    case DeprecationIssueType::kPaymentRequestCSPViolation:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PaymentRequestCSPViolation;
-      break;
-    case DeprecationIssueType::kPersistentQuotaType:
-      type = protocol::Audits::DeprecationIssueTypeEnum::PersistentQuotaType;
-      break;
-    case DeprecationIssueType::kPictureSourceSrc:
-      type = protocol::Audits::DeprecationIssueTypeEnum::PictureSourceSrc;
-      break;
-    case DeprecationIssueType::kPrefixedCancelAnimationFrame:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedCancelAnimationFrame;
-      break;
-    case DeprecationIssueType::kPrefixedRequestAnimationFrame:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedRequestAnimationFrame;
-      break;
-    case DeprecationIssueType::kPrefixedStorageInfo:
-      type = protocol::Audits::DeprecationIssueTypeEnum::PrefixedStorageInfo;
-      break;
-    case DeprecationIssueType::kPrefixedVideoDisplayingFullscreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoDisplayingFullscreen;
-      break;
-    case DeprecationIssueType::kPrefixedVideoEnterFullScreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoEnterFullScreen;
-      break;
-    case DeprecationIssueType::kPrefixedVideoEnterFullscreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoEnterFullscreen;
-      break;
-    case DeprecationIssueType::kPrefixedVideoExitFullScreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoExitFullScreen;
-      break;
-    case DeprecationIssueType::kPrefixedVideoExitFullscreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoExitFullscreen;
-      break;
-    case DeprecationIssueType::kPrefixedVideoSupportsFullscreen:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          PrefixedVideoSupportsFullscreen;
-      break;
-    case DeprecationIssueType::kRangeExpand:
-      type = protocol::Audits::DeprecationIssueTypeEnum::RangeExpand;
-      break;
-    case DeprecationIssueType::kRequestedSubresourceWithEmbeddedCredentials:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          RequestedSubresourceWithEmbeddedCredentials;
-      break;
-    case DeprecationIssueType::kRTCConstraintEnableDtlsSrtpFalse:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          RTCConstraintEnableDtlsSrtpFalse;
-      break;
-    case DeprecationIssueType::kRTCConstraintEnableDtlsSrtpTrue:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          RTCConstraintEnableDtlsSrtpTrue;
-      break;
-    case DeprecationIssueType::
-        kRTCPeerConnectionComplexPlanBSdpUsingDefaultSdpSemantics:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          RTCPeerConnectionComplexPlanBSdpUsingDefaultSdpSemantics;
-      break;
-    case DeprecationIssueType::kRTCPeerConnectionSdpSemanticsPlanB:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          RTCPeerConnectionSdpSemanticsPlanB;
-      break;
-    case DeprecationIssueType::kRtcpMuxPolicyNegotiate:
-      type = protocol::Audits::DeprecationIssueTypeEnum::RtcpMuxPolicyNegotiate;
-      break;
-    case DeprecationIssueType::kSharedArrayBufferConstructedWithoutIsolation:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          SharedArrayBufferConstructedWithoutIsolation;
-      break;
-    case DeprecationIssueType::kTextToSpeech_DisallowedByAutoplay:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          TextToSpeech_DisallowedByAutoplay;
-      break;
-    case DeprecationIssueType::
-        kV8SharedArrayBufferConstructedInExtensionWithoutIsolation:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          V8SharedArrayBufferConstructedInExtensionWithoutIsolation;
-      break;
-    case DeprecationIssueType::kXHRJSONEncodingDetection:
-      type =
-          protocol::Audits::DeprecationIssueTypeEnum::XHRJSONEncodingDetection;
-      break;
-    case DeprecationIssueType::
-        kXMLHttpRequestSynchronousInNonWorkerOutsideBeforeUnload:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          XMLHttpRequestSynchronousInNonWorkerOutsideBeforeUnload;
-      break;
-    case DeprecationIssueType::kXRSupportsSession:
-      type = protocol::Audits::DeprecationIssueTypeEnum::XRSupportsSession;
-      break;
-    case DeprecationIssueType::kIdentityInCanMakePaymentEvent:
-      type = protocol::Audits::DeprecationIssueTypeEnum::
-          IdentityInCanMakePaymentEvent;
-      break;
-  }
-
-  auto source_location = CaptureSourceLocation(execution_context);
+                                         String type) {
+  auto* source_location = CaptureSourceLocation(execution_context);
   auto deprecation_issue_details =
       protocol::Audits::DeprecationIssueDetails::create()
           .setSourceCodeLocation(CreateProtocolLocation(*source_location))
@@ -702,7 +550,7 @@ protocol::Audits::ClientHintIssueReason ClientHintIssueReasonToProtocol(
 // static
 void AuditsIssue::ReportClientHintIssue(LocalDOMWindow* local_dom_window,
                                         ClientHintIssueReason reason) {
-  auto source_location = CaptureSourceLocation(local_dom_window);
+  auto* source_location = CaptureSourceLocation(local_dom_window);
   auto client_hint_issue_details =
       protocol::Audits::ClientHintIssueDetails::create()
           .setSourceCodeLocation(CreateProtocolLocation(*source_location))
@@ -764,7 +612,7 @@ void AuditsIssue::ReportMixedContentIssue(
     const mojom::blink::RequestContextType request_context,
     LocalFrame* frame,
     const MixedContentResolutionStatus resolution_status,
-    const absl::optional<String>& devtools_id) {
+    const String& devtools_id) {
   auto affected_frame =
       protocol::Audits::AffectedFrame::create()
           .setFrameId(frame->GetDevToolsFrameToken().ToString().c_str())
@@ -781,9 +629,9 @@ void AuditsIssue::ReportMixedContentIssue(
           .setFrame(std::move(affected_frame))
           .build();
 
-  if (devtools_id) {
+  if (!devtools_id.IsNull()) {
     auto request = protocol::Audits::AffectedRequest::create()
-                       .setRequestId(*devtools_id)
+                       .setRequestId(devtools_id)
                        .setUrl(insecure_url.GetString())
                        .build();
     mixedContentDetails->setRequest(std::move(request));
@@ -824,6 +672,354 @@ void AuditsIssue::ReportGenericIssue(
   frame->DomWindow()->AddInspectorIssue(AuditsIssue(std::move(issue)));
 }
 
+void AuditsIssue::ReportGenericIssue(
+    LocalFrame* frame,
+    mojom::blink::GenericIssueErrorType error_type,
+    int violating_node_id,
+    const String& violating_node_attribute) {
+  auto audits_issue_details =
+      protocol::Audits::GenericIssueDetails::create()
+          .setErrorType(GenericIssueErrorTypeToProtocol(error_type))
+          .setViolatingNodeId(violating_node_id)
+          .setViolatingNodeAttribute(violating_node_attribute)
+          .build();
+
+  auto issue =
+      protocol::Audits::InspectorIssue::create()
+          .setCode(protocol::Audits::InspectorIssueCodeEnum::GenericIssue)
+          .setDetails(
+              protocol::Audits::InspectorIssueDetails::create()
+                  .setGenericIssueDetails(std::move(audits_issue_details))
+                  .build())
+          .build();
+
+  frame->DomWindow()->AddInspectorIssue(AuditsIssue(std::move(issue)));
+}
+void AuditsIssue::ReportPartitioningBlobURLIssue(
+    LocalDOMWindow* window,
+    String blob_url,
+    mojom::blink::PartitioningBlobURLInfo info) {
+  protocol::String partitioning_blob_url_info_string;
+  switch (info) {
+    case mojom::blink::PartitioningBlobURLInfo::kEnforceNoopenerForNavigation:
+      partitioning_blob_url_info_string = protocol::Audits::
+          PartitioningBlobURLInfoEnum::EnforceNoopenerForNavigation;
+      break;
+    case mojom::blink::PartitioningBlobURLInfo::kBlockedCrossPartitionFetching:
+      // This is logged from the browser process and not used in the renderer.
+    default:
+      NOTREACHED();
+  }
+
+  auto partitioning_blob_url_issue_details =
+      protocol::Audits::PartitioningBlobURLIssueDetails::create()
+          .setUrl(blob_url)
+          .setPartitioningBlobURLInfo(partitioning_blob_url_info_string)
+          .build();
+
+  auto protocol_issue_details =
+      protocol::Audits::InspectorIssueDetails::create()
+          .setPartitioningBlobURLIssueDetails(
+              std::move(partitioning_blob_url_issue_details))
+          .build();
+
+  auto issue = protocol::Audits::InspectorIssue::create()
+                   .setCode(protocol::Audits::InspectorIssueCodeEnum::
+                                PartitioningBlobURLIssue)
+                   .setDetails(std::move(protocol_issue_details))
+                   .build();
+
+  window->AddInspectorIssue(AuditsIssue(std::move(issue)));
+}
+
+void AuditsIssue::ReportPropertyRuleIssue(
+    Document* document,
+    const KURL& url,
+    OrdinalNumber line,
+    OrdinalNumber column,
+    protocol::Audits::PropertyRuleIssueReason reason,
+    const String& propertyValue) {
+  if (!document || !document->GetExecutionContext()) {
+    return;
+  }
+  auto sourceCodeLocation = protocol::Audits::SourceCodeLocation::create()
+                                .setUrl(url)
+                                .setLineNumber(line.ZeroBasedInt())
+                                .setColumnNumber(column.OneBasedInt())
+                                .build();
+
+  auto details = protocol::Audits::PropertyRuleIssueDetails::create()
+                     .setSourceCodeLocation(std::move(sourceCodeLocation))
+                     .setPropertyRuleIssueReason(reason)
+                     .build();
+
+  if (!propertyValue.IsNull()) {
+    details->setPropertyValue(propertyValue);
+  }
+
+  auto issue =
+      protocol::Audits::InspectorIssue::create()
+          .setCode(protocol::Audits::InspectorIssueCodeEnum::PropertyRuleIssue)
+          .setDetails(protocol::Audits::InspectorIssueDetails::create()
+                          .setPropertyRuleIssueDetails(std::move(details))
+                          .build())
+          .build();
+
+  document->GetExecutionContext()->AddInspectorIssue(
+      AuditsIssue(std::move(issue)));
+}
+
+void AuditsIssue::ReportStylesheetLoadingLateImportIssue(Document* document,
+                                                         const KURL& url,
+                                                         OrdinalNumber line,
+                                                         OrdinalNumber column) {
+  if (!document || !document->GetExecutionContext()) {
+    return;
+  }
+  auto sourceCodeLocation = protocol::Audits::SourceCodeLocation::create()
+                                .setUrl(url)
+                                .setLineNumber(line.ZeroBasedInt())
+                                .setColumnNumber(column.OneBasedInt())
+                                .build();
+  auto details = protocol::Audits::StylesheetLoadingIssueDetails::create()
+                     .setSourceCodeLocation(std::move(sourceCodeLocation))
+                     .setStyleSheetLoadingIssueReason(
+                         protocol::Audits::StyleSheetLoadingIssueReasonEnum::
+                             LateImportRule)
+                     .build();
+
+  auto issue =
+      protocol::Audits::InspectorIssue::create()
+          .setCode(
+              protocol::Audits::InspectorIssueCodeEnum::StylesheetLoadingIssue)
+          .setDetails(protocol::Audits::InspectorIssueDetails::create()
+                          .setStylesheetLoadingIssueDetails(std::move(details))
+                          .build())
+          .build();
+
+  document->GetExecutionContext()->AddInspectorIssue(
+      AuditsIssue(std::move(issue)));
+}
+
+void AuditsIssue::ReportStylesheetLoadingRequestFailedIssue(
+    Document* document,
+    const KURL& url,
+    const String& request_id,
+    const KURL& initiator_url,
+    OrdinalNumber initiator_line,
+    OrdinalNumber initiator_column,
+    const String& failureMessage) {
+  if (!document || !document->GetExecutionContext()) {
+    return;
+  }
+  auto sourceCodeLocation = protocol::Audits::SourceCodeLocation::create()
+                                .setUrl(initiator_url)
+                                .setLineNumber(initiator_line.ZeroBasedInt())
+                                .setColumnNumber(initiator_column.OneBasedInt())
+                                .build();
+  auto requestDetails = protocol::Audits::FailedRequestInfo::create()
+                            .setUrl(url)
+                            .setFailureMessage(failureMessage)
+                            .build();
+
+  if (!request_id.IsNull()) {
+    requestDetails->setRequestId(request_id);
+  }
+  auto details =
+      protocol::Audits::StylesheetLoadingIssueDetails::create()
+          .setSourceCodeLocation(std::move(sourceCodeLocation))
+          .setFailedRequestInfo(std::move(requestDetails))
+          .setStyleSheetLoadingIssueReason(
+              protocol::Audits::StyleSheetLoadingIssueReasonEnum::RequestFailed)
+          .build();
+
+  auto issue =
+      protocol::Audits::InspectorIssue::create()
+          .setCode(
+              protocol::Audits::InspectorIssueCodeEnum::StylesheetLoadingIssue)
+          .setDetails(protocol::Audits::InspectorIssueDetails::create()
+                          .setStylesheetLoadingIssueDetails(std::move(details))
+                          .build())
+          .build();
+
+  document->GetExecutionContext()->AddInspectorIssue(
+      AuditsIssue(std::move(issue)));
+}
+
+namespace {
+
+protocol::Audits::ElementAccessibilityIssueReason
+ElementAccessibilityIssueReasonToProtocol(
+    ElementAccessibilityIssueReason reason) {
+  switch (reason) {
+    case ElementAccessibilityIssueReason::kDisallowedSelectChild:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          DisallowedSelectChild;
+    case ElementAccessibilityIssueReason::kDisallowedOptGroupChild:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          DisallowedOptGroupChild;
+    case ElementAccessibilityIssueReason::kNonPhrasingContentOptionChild:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          NonPhrasingContentOptionChild;
+    case ElementAccessibilityIssueReason::kInteractiveContentOptionChild:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          InteractiveContentOptionChild;
+    case ElementAccessibilityIssueReason::kInteractiveContentLegendChild:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          InteractiveContentLegendChild;
+    case ElementAccessibilityIssueReason::kInteractiveContentSummaryDescendant:
+      return protocol::Audits::ElementAccessibilityIssueReasonEnum::
+          InteractiveContentSummaryDescendant;
+    case ElementAccessibilityIssueReason::kValidChild:
+      NOTREACHED();
+  }
+}
+
+}  // namespace
+
+// static
+void AuditsIssue::ReportElementAccessibilityIssue(
+    Document* document,
+    DOMNodeId node_id,
+    ElementAccessibilityIssueReason issue_reason,
+    bool has_disallowed_attributes) {
+  if (!document->GetExecutionContext()) {
+    return;
+  }
+
+  auto select_accessibility_issue_details =
+      protocol::Audits::ElementAccessibilityIssueDetails::create()
+          .setNodeId(node_id)
+          .setElementAccessibilityIssueReason(
+              ElementAccessibilityIssueReasonToProtocol(issue_reason))
+          .setHasDisallowedAttributes(has_disallowed_attributes)
+          .build();
+
+  auto details = protocol::Audits::InspectorIssueDetails::create()
+                     .setElementAccessibilityIssueDetails(
+                         std::move(select_accessibility_issue_details))
+                     .build();
+
+  auto issue = protocol::Audits::InspectorIssue::create()
+                   .setCode(protocol::Audits::InspectorIssueCodeEnum::
+                                ElementAccessibilityIssue)
+                   .setDetails(std::move(details))
+                   .build();
+
+  document->GetExecutionContext()->AddInspectorIssue(
+      AuditsIssue(std::move(issue)));
+}
+
+// static
+void AuditsIssue::ReportUserReidentificationResourceBlockedIssue(
+    LocalFrame* frame,
+    std::optional<std::string> devtools_request_id,
+    const KURL& affected_request_url) {
+  auto reidentification_issue_details =
+      protocol::Audits::UserReidentificationIssueDetails::create()
+          .setType(protocol::Audits::UserReidentificationIssueTypeEnum::
+                       BlockedSubresource)
+          .setRequest(
+              protocol::Audits::AffectedRequest::create()
+                  .setRequestId(devtools_request_id.has_value()
+                                    ? String(devtools_request_id.value())
+                                    : String())
+                  .setUrl(affected_request_url)
+                  .build())
+          .build();
+
+  auto protocol_issue_details =
+      protocol::Audits::InspectorIssueDetails::create()
+          .setUserReidentificationIssueDetails(
+              std::move(reidentification_issue_details))
+          .build();
+
+  auto issue = protocol::Audits::InspectorIssue::create()
+                   .setCode(protocol::Audits::InspectorIssueCodeEnum::
+                                UserReidentificationIssue)
+                   .setDetails(std::move(protocol_issue_details))
+                   .build();
+
+  frame->DomWindow()->AddInspectorIssue(AuditsIssue(std::move(issue)));
+}
+
+// static
+void AuditsIssue::ReportUserReidentificationCanvasNoisedIssue(
+    SourceLocation* source_location,
+    ExecutionContext* execution_context) {
+  auto reidentification_issue_details =
+      protocol::Audits::UserReidentificationIssueDetails::create()
+          .setType(protocol::Audits::UserReidentificationIssueTypeEnum::
+                       NoisedCanvasReadback)
+          .setSourceCodeLocation(CreateProtocolLocation(*source_location))
+          .build();
+
+  auto protocol_issue_details =
+      protocol::Audits::InspectorIssueDetails::create()
+          .setUserReidentificationIssueDetails(
+              std::move(reidentification_issue_details))
+          .build();
+
+  auto issue = protocol::Audits::InspectorIssue::create()
+                   .setCode(protocol::Audits::InspectorIssueCodeEnum::
+                                UserReidentificationIssue)
+                   .setDetails(std::move(protocol_issue_details))
+                   .build();
+
+  execution_context->AddInspectorIssue(AuditsIssue(std::move(issue)));
+}
+
+// static
+void AuditsIssue::ReportPermissionElementIssue(
+    ExecutionContext* execution_context,
+    DOMNodeId node_id,
+    protocol::Audits::PermissionElementIssueType issue_type,
+    const String& type,
+    bool is_warning,
+    const String& permissionName,
+    const String& occluderNodeInfo,
+    const String& occluderParentNodeInfo,
+    const String& disableReason) {
+  auto permission_element_issue_details =
+      protocol::Audits::PermissionElementIssueDetails::create()
+          .setIssueType(issue_type)
+          .setIsWarning(is_warning)
+          .build();
+
+  if (node_id != kInvalidDOMNodeId) {
+    permission_element_issue_details->setNodeId(node_id);
+  }
+  if (!type.IsNull()) {
+    permission_element_issue_details->setType(type);
+  }
+  if (!permissionName.IsNull()) {
+    permission_element_issue_details->setPermissionName(permissionName);
+  }
+  if (!occluderNodeInfo.IsNull()) {
+    permission_element_issue_details->setOccluderNodeInfo(occluderNodeInfo);
+  }
+  if (!occluderParentNodeInfo.IsNull()) {
+    permission_element_issue_details->setOccluderParentNodeInfo(
+        occluderParentNodeInfo);
+  }
+  if (!disableReason.IsNull()) {
+    permission_element_issue_details->setDisableReason(disableReason);
+  }
+
+  auto issue_details = protocol::Audits::InspectorIssueDetails::create()
+                           .setPermissionElementIssueDetails(
+                               std::move(permission_element_issue_details))
+                           .build();
+
+  auto issue =
+      protocol::Audits::InspectorIssue::create()
+          .setCode(
+              protocol::Audits::InspectorIssueCodeEnum::PermissionElementIssue)
+          .setDetails(std::move(issue_details))
+          .build();
+  execution_context->AddInspectorIssue(AuditsIssue(std::move(issue)));
+}
+
 AuditsIssue AuditsIssue::CreateContentSecurityPolicyIssue(
     const blink::SecurityPolicyViolationEventInit& violation_data,
     bool is_report_only,
@@ -831,7 +1027,7 @@ AuditsIssue AuditsIssue::CreateContentSecurityPolicyIssue(
     LocalFrame* frame_ancestor,
     Element* element,
     SourceLocation* source_location,
-    absl::optional<base::UnguessableToken> issue_id) {
+    std::optional<base::UnguessableToken> issue_id) {
   std::unique_ptr<protocol::Audits::ContentSecurityPolicyIssueDetails>
       cspDetails = protocol::Audits::ContentSecurityPolicyIssueDetails::create()
                        .setIsReportOnly(is_report_only)
@@ -858,7 +1054,7 @@ AuditsIssue AuditsIssue::CreateContentSecurityPolicyIssue(
   }
 
   if (element) {
-    cspDetails->setViolatingNodeId(DOMNodeIds::IdForNode(element));
+    cspDetails->setViolatingNodeId(element->GetDomNodeId());
   }
 
   std::unique_ptr<protocol::Audits::InspectorIssueDetails> details =

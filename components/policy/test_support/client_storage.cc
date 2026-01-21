@@ -4,9 +4,12 @@
 
 #include "components/policy/test_support/client_storage.h"
 
+#include <algorithm>
+#include <array>
+
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "crypto/sha2.h"
+#include "base/strings/string_view_util.h"
+#include "crypto/hash.h"
 
 namespace policy {
 
@@ -63,21 +66,23 @@ const ClientStorage::ClientInfo* ClientStorage::GetClientOrNull(
 const ClientStorage::ClientInfo* ClientStorage::LookupByStateKey(
     const std::string& state_key) const {
   for (auto const& [device_id, client_info] : clients_) {
-    if (base::Contains(client_info.state_keys, state_key))
+    if (std::ranges::contains(client_info.state_keys, state_key)) {
       return &client_info;
+    }
   }
   return nullptr;
 }
 
 bool ClientStorage::DeleteClient(const std::string& device_token) {
   auto it = registered_tokens_.find(device_token);
-  if (it == registered_tokens_.end())
+  if (it == registered_tokens_.end()) {
     return false;
+  }
 
   const std::string& device_id = it->second;
   DCHECK(!device_id.empty());
   auto it_clients = clients_.find(device_id);
-  DCHECK(it_clients != clients_.end());
+  CHECK(it_clients != clients_.end());
 
   clients_.erase(it_clients, clients_.end());
   registered_tokens_.erase(it, registered_tokens_.end());
@@ -94,16 +99,18 @@ std::vector<std::string> ClientStorage::GetMatchingStateKeyHashes(
   std::vector<std::string> hashes;
   for (const auto& [device_id, client_info] : clients_) {
     for (const std::string& key : client_info.state_keys) {
-      std::string hash = crypto::SHA256HashString(key);
+      auto hash = crypto::hash::Sha256(key);
       uint64_t hash_remainder = 0;
       // Simulate long division in base 256, which allows us to interpret
       // individual chars in our hash as digits. We only care about the
       // remainder and hence do not compute the quotient in each iteration. This
       // assumes big-endian byte order.
-      for (uint64_t digit : hash)
+      for (uint64_t digit : hash) {
         hash_remainder = (hash_remainder * 256 + digit) % modulus;
-      if (hash_remainder == remainder)
-        hashes.push_back(hash);
+      }
+      if (hash_remainder == remainder) {
+        hashes.emplace_back(base::as_string_view(hash));
+      }
     }
   }
   return hashes;

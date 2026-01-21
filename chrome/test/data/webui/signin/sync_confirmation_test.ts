@@ -4,57 +4,33 @@
 
 import 'chrome://sync-confirmation/sync_confirmation_app.js';
 
-import {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {SyncConfirmationAppElement} from 'chrome://sync-confirmation/sync_confirmation_app.js';
-import {SyncConfirmationBrowserProxyImpl} from 'chrome://sync-confirmation/sync_confirmation_browser_proxy.js';
+import type {SyncConfirmationAppElement} from 'chrome://sync-confirmation/sync_confirmation_app.js';
+import {ScreenMode, SyncConfirmationBrowserProxyImpl} from 'chrome://sync-confirmation/sync_confirmation_browser_proxy.js';
 import {assertArrayEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestSyncConfirmationBrowserProxy} from './test_sync_confirmation_browser_proxy.js';
-
-const isModalDialogDesignEnabled = loadTimeData.getBoolean('isModalDialog');
-const isSigninInterceptFreEnabled =
-    loadTimeData.getBoolean('isSigninInterceptFre');
-
-const STANDARD_CONSENT_CONFIRMATION = 'Yes, I\'m in';
-const SIGNIN_INTERCEPT_CONSENT_CONFIRMATION = 'Turn on sync';
-
-const SETTINGS_CONSENT_CONFIRMATION = 'Settings';
-const SYNC_SETTINGS_CONSENT_CONFIRMATION = 'Sync settings';
-
-const CONSENT_DESCRIPTION_TEXTS = [
-  'Turn on sync?',
-  'Sync your bookmarks, passwords, history, and more on all your devices',
-  'Google may use your history to personalize Search and other Google services',
-];
-const CONSENT_DESCRIPTION_SIGNIN_INTERCEPT_TEXTS = [
-  'Welcome, Person 1',
-  'Turn on sync to get your bookmarks, passwords, history, and more on this device and anywhere else you\'re syncing. Google may use your history to personalize Search and other Google services.',
-];
-
-// <if expr="chromeos_lacros">
-CONSENT_DESCRIPTION_TEXTS[0] = 'Turn on Chrome browser sync?';
-// </if>
 
 suite(`SigninSyncConfirmationTest`, function() {
   let app: SyncConfirmationAppElement;
   let browserProxy: TestSyncConfirmationBrowserProxy;
 
-  function testButtonClick(buttonSelector: string) {
-    const allButtons =
-        Array.from(app.shadowRoot!.querySelectorAll('cr-button')) as
-        CrButtonElement[];
+  async function testButtonClick(buttonSelector: string) {
+    const allButtons = Array.from(app.shadowRoot.querySelectorAll('cr-button'));
     const actionButton =
-        app.shadowRoot!.querySelector(buttonSelector) as CrButtonElement;
-    const spinner = app.shadowRoot!.querySelector('paper-spinner-lite');
+        app.shadowRoot.querySelector<HTMLElement>(buttonSelector);
 
     allButtons.forEach(button => assertFalse(button.disabled));
-    assertFalse(spinner!.active);
+    assertFalse(!!app.shadowRoot.querySelector('.spinner'));
 
+    assertTrue(!!actionButton);
     actionButton.click();
+    await microtasksFinished();
 
     allButtons.forEach(button => assertTrue(button.disabled));
-    assertTrue(spinner!.active);
+    assertTrue(!!app.shadowRoot.querySelector('.spinner'));
   }
 
   setup(async function() {
@@ -68,31 +44,35 @@ suite(`SigninSyncConfirmationTest`, function() {
     await browserProxy.whenCalled('requestAccountInfo');
   });
 
-  // Tests that no DCHECKS are thrown during initialization of the UI.
+  // Tests that the buttons are initially hidden, pending minor-mode compliance
+  // configuration.
   test('LoadPage', function() {
     const cancelButton =
-        app.shadowRoot!.querySelector(
-            isModalDialogDesignEnabled ? '#cancelButton' : '#notNowButton') as
-        HTMLElement;
+        app.shadowRoot.querySelector<HTMLElement>('#notNowButton');
     assertFalse(cancelButton!.hidden);
+    assertTrue(cancelButton!.classList.contains('visibility-hidden'));
+
+    const confirmButton =
+        app.shadowRoot.querySelector<HTMLElement>('#confirmButton');
+    assertFalse(confirmButton!.hidden);
+    assertTrue(confirmButton!.classList.contains('visibility-hidden'));
   });
 
   // Tests clicking on confirm button.
   test('ConfirmClicked', async function() {
-    testButtonClick('#confirmButton');
+    await testButtonClick('#confirmButton');
     await browserProxy.whenCalled('confirm');
   });
 
   // Tests clicking on cancel button.
   test('CancelClicked', async function() {
-    testButtonClick(
-        isModalDialogDesignEnabled ? '#cancelButton' : '#notNowButton');
+    await testButtonClick('#notNowButton');
     await browserProxy.whenCalled('undo');
   });
 
   // Tests clicking on settings button.
   test('SettingsClicked', async function() {
-    testButtonClick('#settingsButton');
+    await testButtonClick('#settingsButton');
     await browserProxy.whenCalled('goToSettings');
   });
 });
@@ -105,13 +85,24 @@ suite(`SigninSyncConfirmationConsentRecordingTest`, function() {
   let app: SyncConfirmationAppElement;
   let browserProxy: TestSyncConfirmationBrowserProxy;
 
-  setup(async function() {
-    // This test suite makes comparisons with strings in their default
-    // locale, which is en-US.
-    assertEquals(
-        'en-US', navigator.language,
-        'Cannot verify strings for the ' + navigator.language + 'locale.');
+  function getConsentDescriptionTexts(i18n: Function) {
+    const consentDescriptionTexts = [
+      i18n('syncConfirmationTitle'),
+      i18n('syncConfirmationSyncInfoTitle'),
+    ];
 
+    const syncBenefitsList =
+        JSON.parse(loadTimeData.getString('syncBenefitsList'));
+
+    for (let i = 0; i < syncBenefitsList.length; i++) {
+      consentDescriptionTexts.push(i18n(syncBenefitsList[i].title));
+    }
+    consentDescriptionTexts.push(i18n('syncConfirmationSyncInfoDesc'));
+
+    return consentDescriptionTexts;
+  }
+
+  setup(async function() {
     browserProxy = new TestSyncConfirmationBrowserProxy();
     SyncConfirmationBrowserProxyImpl.setInstance(browserProxy);
 
@@ -126,39 +117,41 @@ suite(`SigninSyncConfirmationConsentRecordingTest`, function() {
   // Tests that the expected strings are recorded when clicking the
   // Confirm button.
   test('recordConsentOnConfirm', async function() {
-    app.shadowRoot!.querySelector<HTMLElement>('#confirmButton')!.click();
-    const [description, confirmation] =
+    const i18n = app.i18n.bind(app);
+    webUIListenerCallback('screen-mode-changed', ScreenMode.RESTRICTED);
+
+    app.shadowRoot.querySelector<HTMLElement>('#confirmButton')!.click();
+    const [description, confirmation, screenMode] =
         await browserProxy.whenCalled('confirm');
-    if (isSigninInterceptFreEnabled) {
-      // Confirmation button is capitalized on MacOS.
-      assertEquals(
-          SIGNIN_INTERCEPT_CONSENT_CONFIRMATION.toLowerCase(),
-          confirmation.toLowerCase());
-    } else {
-      assertEquals(STANDARD_CONSENT_CONFIRMATION, confirmation);
-    }
-    assertArrayEquals(
-        isSigninInterceptFreEnabled ?
-            CONSENT_DESCRIPTION_SIGNIN_INTERCEPT_TEXTS :
-            CONSENT_DESCRIPTION_TEXTS,
-        description);
+
+    assertEquals(i18n('syncConfirmationConfirmLabel'), confirmation);
+    assertArrayEquals(getConsentDescriptionTexts(i18n), description);
+    assertEquals(ScreenMode.RESTRICTED, screenMode);
   });
 
   // Tests that the expected strings are recorded when clicking the
   // Settings button.
   test('recordConsentOnSettingsLink', async function() {
-    app.shadowRoot!.querySelector<HTMLElement>('#settingsButton')!.click();
-    const [description, confirmation] =
+    const i18n = app.i18n.bind(app);
+    webUIListenerCallback('screen-mode-changed', ScreenMode.RESTRICTED);
+
+    app.shadowRoot.querySelector<HTMLElement>('#settingsButton')!.click();
+    const [description, confirmation, screenMode] =
         await browserProxy.whenCalled('goToSettings');
-    if (isModalDialogDesignEnabled) {
-      assertEquals(SETTINGS_CONSENT_CONFIRMATION, confirmation);
-    } else {
-      assertEquals(SYNC_SETTINGS_CONSENT_CONFIRMATION, confirmation);
-    }
-    assertArrayEquals(
-        isSigninInterceptFreEnabled ?
-            CONSENT_DESCRIPTION_SIGNIN_INTERCEPT_TEXTS :
-            CONSENT_DESCRIPTION_TEXTS,
-        description);
+
+    assertEquals(i18n('syncConfirmationSettingsLabel'), confirmation);
+    assertArrayEquals(getConsentDescriptionTexts(i18n), description);
+    assertEquals(ScreenMode.RESTRICTED, screenMode);
+  });
+
+  // Tests that the expected strings are recorded when clicking the
+  // Settings button.
+  test('passScreenModeOnUndo', async function() {
+    webUIListenerCallback('screen-mode-changed', ScreenMode.RESTRICTED);
+
+    app.shadowRoot.querySelector<HTMLElement>('#notNowButton')!.click();
+    const [screenMode] = await browserProxy.whenCalled('undo');
+
+    assertEquals(ScreenMode.RESTRICTED, screenMode);
   });
 });

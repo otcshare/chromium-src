@@ -11,12 +11,9 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * A fake implementation of {@link RecentlyClosedTabManager} for testing purposes.
- */
+/** A fake implementation of {@link RecentlyClosedTabManager} for testing purposes. */
 public class FakeRecentlyClosedTabManager implements RecentlyClosedTabManager {
-    @Nullable
-    private Runnable mEntriesUpdatedRunnable;
+    @Nullable private Runnable mEntriesUpdatedRunnable;
     private List<RecentlyClosedEntry> mTabs = new ArrayList<>();
 
     public FakeRecentlyClosedTabManager() {
@@ -54,6 +51,15 @@ public class FakeRecentlyClosedTabManager implements RecentlyClosedTabManager {
     @Override
     public void clearRecentlyClosedEntries() {
         mTabs.clear();
+        if (mEntriesUpdatedRunnable != null) mEntriesUpdatedRunnable.run();
+    }
+
+    @Override
+    public void clearLeastRecentlyUsedClosedEntries(int numToRemove) {
+        if (numToRemove == 0) return;
+        for (int i = 0; i < numToRemove; i++) {
+            mTabs.remove(mTabs.size() - 1);
+        }
         if (mEntriesUpdatedRunnable != null) mEntriesUpdatedRunnable.run();
     }
 

@@ -5,13 +5,17 @@
 #ifndef COMPONENTS_METRICS_FIELD_TRIALS_PROVIDER_H_
 #define COMPONENTS_METRICS_FIELD_TRIALS_PROVIDER_H_
 
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "components/metrics/metrics_provider.h"
 #include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
-// TODO(crbug/507665): Once MetricsProvider/SystemProfileProto are moved into
+// TODO(crbug.com/41187035): Once MetricsProvider/SystemProfileProto are moved
+// into
 // //services/metrics, then //components/variations can depend on them, and
 // this should be moved there.
 namespace variations {
@@ -23,12 +27,24 @@ class FieldTrialsProvider : public metrics::MetricsProvider {
  public:
   // |registry| must outlive this metrics provider.
   FieldTrialsProvider(SyntheticTrialRegistry* registry,
-                      base::StringPiece suffix);
+                      std::string_view suffix);
 
   FieldTrialsProvider(const FieldTrialsProvider&) = delete;
   FieldTrialsProvider& operator=(const FieldTrialsProvider&) = delete;
 
   ~FieldTrialsProvider() override;
+
+  // Updates a global variable denoting whether the variations seed applied by
+  // the client has a limited layer that is referenced by any studies in which
+  // the client is eligible to participate based on their channel, platform,
+  // version, and form factor.
+  static void UpdateAppliedSeedHasActiveLimitedLayer(bool has_limited_layer);
+
+  // Resets the global variable described in the function comment of
+  // UpdateAppliedSeedHasActiveLimitedLayer() because it can be set only once.
+  // This reset is needed on platforms in which global state carries over from
+  // one test into subsequent tests.
+  static void ClearSeedHasActiveLimitedLayerForTesting();
 
   // metrics::MetricsProvider:
   void ProvideSystemProfileMetrics(

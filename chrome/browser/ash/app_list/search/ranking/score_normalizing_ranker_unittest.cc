@@ -18,7 +18,7 @@ namespace app_list::test {
 namespace {
 
 Results MakeResults(const std::vector<std::string>& ids,
-                    const std::vector<double> scores,
+                    const std::vector<double>& scores,
                     ResultType result_type) {
   Results res;
   CHECK_EQ(ids.size(), scores.size());
@@ -42,8 +42,9 @@ class ScoreNormalizingRankerTest : public testing::Test {
 
   base::FilePath GetPath() { return temp_dir_.GetPath().Append("proto"); }
 
-  PersistentProto<ScoreNormalizerProto> GetProto() {
-    return PersistentProto<ScoreNormalizerProto>(GetPath(), base::Seconds(0));
+  ash::PersistentProto<ScoreNormalizerProto> GetProto() {
+    return ash::PersistentProto<ScoreNormalizerProto>(GetPath(),
+                                                      base::Seconds(0));
   }
 
   base::test::TaskEnvironment task_environment_{
@@ -72,7 +73,7 @@ TEST_F(ScoreNormalizingRankerTest, UpdateResultRanks) {
   // are ordered by relevance after normalization.
   const auto& app_results = results[ResultType::kInstalledApp];
   for (size_t i = 0; i < 4; ++i) {
-    EXPECT_GT(app_results[i]->scoring().normalized_relevance, 0.0);
+    EXPECT_GT(app_results[i]->scoring().normalized_relevance(), 0.0);
   }
 
   std::vector<ChromeSearchResult*> ordered_app_results;
@@ -82,8 +83,8 @@ TEST_F(ScoreNormalizingRankerTest, UpdateResultRanks) {
 
   std::sort(ordered_app_results.begin(), ordered_app_results.end(),
             [](const auto& r1, const auto& r2) {
-              return r1->scoring().normalized_relevance >
-                     r2->scoring().normalized_relevance;
+              return r1->scoring().normalized_relevance() >
+                     r2->scoring().normalized_relevance();
             });
 
   std::vector<std::string> ordered_app_result_ids;
@@ -96,8 +97,8 @@ TEST_F(ScoreNormalizingRankerTest, UpdateResultRanks) {
 
   // File results should not have been scored.
   const auto& file_results = results[ResultType::kFileSearch];
-  EXPECT_FLOAT_EQ(file_results[0]->scoring().normalized_relevance, 0.0);
-  EXPECT_FLOAT_EQ(file_results[1]->scoring().normalized_relevance, 0.0);
+  EXPECT_FLOAT_EQ(file_results[0]->scoring().normalized_relevance(), 0.0);
+  EXPECT_FLOAT_EQ(file_results[1]->scoring().normalized_relevance(), 0.0);
 }
 
 }  // namespace app_list::test

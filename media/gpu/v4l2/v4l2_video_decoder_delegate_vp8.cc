@@ -2,20 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "v4l2_video_decoder_delegate_vp8.h"
-
-// ChromeOS specific header; does not exist upstream
-#if BUILDFLAG(IS_CHROMEOS)
-#define __LINUX_MEDIA_VP8_CTRLS_LEGACY_H
-#include <linux/media/vp8-ctrls-upstream.h>
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
 #endif
 
+#include "v4l2_video_decoder_delegate_vp8.h"
+
+#include <linux/v4l2-controls.h>
 #include <linux/videodev2.h>
 
+#include <algorithm>
 #include <type_traits>
 
-#include "base/cxx17_backports.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/v4l2/v4l2_decode_surface.h"
@@ -113,7 +114,7 @@ V4L2VideoDecoderDelegateVP8::V4L2VideoDecoderDelegateVP8(
   DCHECK(surface_handler_);
 }
 
-V4L2VideoDecoderDelegateVP8::~V4L2VideoDecoderDelegateVP8() {}
+V4L2VideoDecoderDelegateVP8::~V4L2VideoDecoderDelegateVP8() = default;
 
 scoped_refptr<VP8Picture> V4L2VideoDecoderDelegateVP8::CreateVP8Picture() {
   scoped_refptr<V4L2DecodeSurface> dec_surface =
@@ -121,7 +122,7 @@ scoped_refptr<VP8Picture> V4L2VideoDecoderDelegateVP8::CreateVP8Picture() {
   if (!dec_surface)
     return nullptr;
 
-  return new V4L2VP8Picture(dec_surface);
+  return base::MakeRefCounted<V4L2VP8Picture>(dec_surface);
 }
 
 bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
@@ -177,7 +178,7 @@ bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
   v4l2_frame_hdr.num_dct_parts = frame_hdr->num_of_dct_partitions;
 
   static_assert(std::extent<decltype(v4l2_frame_hdr.dct_part_sizes)>() ==
-                    std::extent<decltype(frame_hdr->dct_partition_sizes)>(),
+                    std::tuple_size<decltype(frame_hdr->dct_partition_sizes)>(),
                 "DCT partition size arrays must have equal number of elements");
   for (size_t i = 0; i < frame_hdr->num_of_dct_partitions &&
                      i < std::size(v4l2_frame_hdr.dct_part_sizes);

@@ -4,49 +4,27 @@
 
 #include "third_party/blink/renderer/modules/compute_pressure/pressure_observer_manager.h"
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_pressure_observer_options.h"
+#include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
+#include "mojo/public/cpp/bindings/pending_flush.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "services/device/public/mojom/pressure_update.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_pressure_source.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/page/focus_controller.h"
-#include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/modules/document_picture_in_picture/picture_in_picture_controller_impl.h"
-#include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/blink/renderer/platform/wtf/vector.h"
 
-using device::mojom::blink::PressureFactor;
-using device::mojom::blink::PressureState;
+using device::mojom::blink::PressureSource;
 
 namespace blink {
 
 namespace {
 
-V8PressureFactor::Enum PressureFactorToV8PressureFactor(PressureFactor factor) {
-  switch (factor) {
-    case PressureFactor::kThermal:
-      return V8PressureFactor::Enum::kThermal;
-    case PressureFactor::kPowerSupply:
-      return V8PressureFactor::Enum::kPowerSupply;
-  }
-  NOTREACHED();
-}
-
-V8PressureState::Enum PressureStateToV8PressureState(PressureState state) {
-  switch (state) {
-    case PressureState::kNominal:
-      return V8PressureState::Enum::kNominal;
-    case PressureState::kFair:
-      return V8PressureState::Enum::kFair;
-    case PressureState::kSerious:
-      return V8PressureState::Enum::kSerious;
-    case PressureState::kCritical:
-      return V8PressureState::Enum::kCritical;
+PressureSource V8PressureSourceToPressureSource(V8PressureSource::Enum source) {
+  switch (source) {
+    case V8PressureSource::Enum::kCpu:
+      return PressureSource::kCpu;
   }
   NOTREACHED();
 }
@@ -58,85 +36,65 @@ const char PressureObserverManager::kSupplementName[] =
     "PressureObserverManager";
 
 // static
-PressureObserverManager* PressureObserverManager::From(LocalDOMWindow& window) {
+PressureObserverManager* PressureObserverManager::From(
+    ExecutionContext* context) {
   PressureObserverManager* manager =
-      Supplement<LocalDOMWindow>::From<PressureObserverManager>(window);
+      Supplement<ExecutionContext>::From<PressureObserverManager>(context);
   if (!manager) {
-    manager = MakeGarbageCollected<PressureObserverManager>(window);
-    Supplement<LocalDOMWindow>::ProvideTo(window, manager);
+    manager = MakeGarbageCollected<PressureObserverManager>(context);
+    Supplement<ExecutionContext>::ProvideTo(*context, manager);
   }
   return manager;
 }
 
-PressureObserverManager::PressureObserverManager(LocalDOMWindow& window)
-    : ExecutionContextLifecycleStateObserver(&window),
-      Supplement<LocalDOMWindow>(window),
-      pressure_service_(GetSupplementable()->GetExecutionContext()),
-      receiver_(this, GetSupplementable()->GetExecutionContext()) {
+PressureObserverManager::PressureObserverManager(ExecutionContext* context)
+    : ExecutionContextLifecycleStateObserver(context),
+      Supplement<ExecutionContext>(*context),
+      pressure_manager_(context) {
   UpdateStateIfNeeded();
+  for (const auto& source : PressureObserver::knownSources()) {
+    source_to_client_.insert(
+        source.AsEnum(),
+        MakeGarbageCollected<PressureClientImpl>(context, this));
+  }
 }
 
 PressureObserverManager::~PressureObserverManager() = default;
 
-ScriptPromise PressureObserverManager::AddObserver(
-    V8PressureSource source,
-    blink::PressureObserver* observer,
-    ScriptState* script_state,
-    ExceptionState& exception_state) {
-  DCHECK(script_state->ContextIsValid());
+void PressureObserverManager::AddObserver(V8PressureSource::Enum source,
+                                          PressureObserver* observer) {
+  PressureClientImpl* client = source_to_client_.at(source);
+  client->AddObserver(observer);
+  const PressureClientImpl::State state = client->state();
+  if (state == PressureClientImpl::State::kUninitialized) {
+    client->set_state(PressureClientImpl::State::kInitializing);
 
-  // TODO(crbug.com/1393210): Determine the behavior when calling observe
-  // method multiple times continuously.
-  if (IsRegistering(source, observer) || IsRegistered(source, observer))
-    return ScriptPromise::CastUndefined(script_state);
+    // Not connected to the browser side for `source` yet. Make the binding.
+    auto task_runner =
+        GetExecutionContext()->GetTaskRunner(TaskType::kUserInteraction);
+    EnsureConnection(task_runner);
 
-  const wtf_size_t source_index = static_cast<wtf_size_t>(source.AsEnum());
-  registering_observers_[source_index].insert(observer);
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
-  EnsureServiceConnection();
-  if (!receiver_.is_bound()) {
-    // Not connected to the browser process yet. Make the binding.
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner =
-        GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI);
-    pressure_service_->BindObserver(
-        receiver_.BindNewPipeAndPassRemote(std::move(task_runner)),
-        resolver->WrapCallbackInScriptScope(WTF::BindOnce(
-            &PressureObserverManager::DidBindObserver, WrapWeakPersistent(this),
-            source, WrapPersistent(observer))));
-    receiver_.set_disconnect_handler(WTF::BindOnce(
-        &PressureObserverManager::Reset, WrapWeakPersistent(this)));
-  } else {
-    DidBindObserver(source, observer, resolver,
-                    mojom::blink::PressureStatus::kOk);
+    pressure_manager_->AddClient(
+        V8PressureSourceToPressureSource(source),
+        client->BindNewEndpointAndPassRemote(task_runner),
+        BindOnce(&PressureObserverManager::DidAddClient,
+                 WrapWeakPersistent(this), source));
+  } else if (state == PressureClientImpl::State::kInitialized) {
+    observer->OnBindingSucceeded(source);
   }
-  return promise;
 }
 
-void PressureObserverManager::RemoveObserver(
-    V8PressureSource source,
-    blink::PressureObserver* observer) {
-  const wtf_size_t source_index = static_cast<wtf_size_t>(source.AsEnum());
-  registering_observers_[source_index].erase(observer);
-  registered_observers_[source_index].erase(observer);
-
-  // Disconnected from the browser process only when PressureObserverManager is
-  // active and there is no other observers.
-  if (receiver_.is_bound() && registered_observers_[source_index].empty() &&
-      registering_observers_[source_index].empty()) {
-    // TODO(crbug.com/1342184): Consider other sources.
-    // For now, "cpu" is the only source, so disconnect directly.
-    receiver_.reset();
-  }
+void PressureObserverManager::RemoveObserver(V8PressureSource::Enum source,
+                                             PressureObserver* observer) {
+  PressureClientImpl* client = source_to_client_.at(source);
+  client->RemoveObserver(observer);
 }
 
 void PressureObserverManager::RemoveObserverFromAllSources(
-    blink::PressureObserver* observer) {
-  // TODO(crbug.com/1342184): Consider other sources.
-  // For now, "cpu" is the only source.
-  auto source = V8PressureSource(V8PressureSource::Enum::kCpu);
-  RemoveObserver(source, observer);
+    PressureObserver* observer) {
+  for (auto source : source_to_client_.Keys()) {
+    RemoveObserver(source, observer);
+  }
 }
 
 void PressureObserverManager::ContextDestroyed() {
@@ -149,154 +107,69 @@ void PressureObserverManager::ContextLifecycleStateChanged(
   // when frozen or send a disconnect event.
 }
 
-void PressureObserverManager::OnUpdate(
-    device::mojom::blink::PressureUpdatePtr update) {
-  if (!PassesPrivacyTest())
-    return;
+void PressureObserverManager::Trace(Visitor* visitor) const {
+  visitor->Trace(pressure_manager_);
+  visitor->Trace(source_to_client_);
+  ExecutionContextLifecycleStateObserver::Trace(visitor);
+  Supplement<ExecutionContext>::Trace(visitor);
+}
 
-  // TODO(crbug.com/1342184): Consider other sources.
-  // For now, "cpu" is the only source.
-  const wtf_size_t source_index =
-      static_cast<wtf_size_t>(V8PressureSource::Enum::kCpu);
+void PressureObserverManager::EnsureConnection(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+  CHECK(GetExecutionContext());
 
-  // New observers may be created and added. Take a snapshot so as
-  // to safely iterate.
-  HeapVector<Member<blink::PressureObserver>> observers(
-      registered_observers_[source_index]);
-  for (const auto& observer : observers) {
-    Vector<V8PressureFactor> v8_factors;
-    for (const auto& factor : update->factors) {
-      v8_factors.push_back(
-          V8PressureFactor(PressureFactorToV8PressureFactor(factor)));
-    }
-    // TODO(crbug.com/1342184): Consider other sources.
-    // For now, "cpu" is the only source.
-    observer->OnUpdate(GetExecutionContext(), V8PressureSource::Enum::kCpu,
-                       PressureStateToV8PressureState(update->state),
-                       std::move(v8_factors),
-                       static_cast<DOMHighResTimeStamp>(
-                           update->timestamp.ToJsTimeIgnoringNull()));
+  if (!pressure_manager_.is_bound()) {
+    GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
+        pressure_manager_.BindNewPipeAndPassReceiver(task_runner));
+    pressure_manager_.set_disconnect_handler(BindOnce(
+        &PressureObserverManager::OnConnectionError, WrapWeakPersistent(this)));
   }
 }
 
-void PressureObserverManager::Trace(blink::Visitor* visitor) const {
-  for (const auto& registering_observers_set : registering_observers_)
-    visitor->Trace(registering_observers_set);
-  for (const auto& registered_observers_set : registered_observers_)
-    visitor->Trace(registered_observers_set);
-  visitor->Trace(pressure_service_);
-  visitor->Trace(receiver_);
-  ExecutionContextLifecycleStateObserver::Trace(visitor);
-  Supplement<LocalDOMWindow>::Trace(visitor);
-}
-
-void PressureObserverManager::EnsureServiceConnection() {
-  DCHECK(GetExecutionContext());
-
-  if (pressure_service_.is_bound())
-    return;
-
-  auto task_runner =
-      GetExecutionContext()->GetTaskRunner(TaskType::kUserInteraction);
-  GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
-      pressure_service_.BindNewPipeAndPassReceiver(task_runner));
-  pressure_service_.set_disconnect_handler(
-      WTF::BindOnce(&PressureObserverManager::OnServiceConnectionError,
-                    WrapWeakPersistent(this)));
-}
-
-// https://wicg.github.io/compute-pressure/#dfn-passes-privacy-test
-bool PressureObserverManager::PassesPrivacyTest() const {
-  LocalFrame* this_frame = GetSupplementable()->GetFrame();
-  // 2. If associated document is not fully active, return false.
-  if (GetSupplementable()->IsContextDestroyed() || !this_frame)
-    return false;
-
-  // 4. If associated document is same-domain with initiators of active
-  // Picture-in-Picture sessions, return true.
-  //
-  // TODO(crbug.com/1396177): A frame should be able to access to
-  // PressureRecord if it is same-domain with initiators of active
-  // Picture-in-Picture sessions. However, it is hard to implement now. In
-  // current implementation, only the frame that triggers Picture-in-Picture
-  // can access to PressureRecord.
-  auto& pip_controller =
-      PictureInPictureControllerImpl::From(*(this_frame->GetDocument()));
-  if (pip_controller.PictureInPictureElement())
-    return true;
-
-  // 5. If browsing context is capturing, return true.
-  if (this_frame->IsCapturingMedia())
-    return true;
-
-  // 7. If top-level browsing context does not have system focus, return false.
-  DCHECK(this_frame->GetPage());
-  LocalFrame* focused_frame =
-      this_frame->GetPage()->GetFocusController().FocusedFrame();
-  if (!focused_frame || !focused_frame->IsOutermostMainFrame())
-    return false;
-
-  // 9. If origin is same origin-domain with focused document, return true.
-  // 10. Otherwise, return false.
-  const SecurityOrigin* focused_frame_origin =
-      focused_frame->GetSecurityContext()->GetSecurityOrigin();
-  const SecurityOrigin* this_origin =
-      this_frame->GetSecurityContext()->GetSecurityOrigin();
-  return focused_frame_origin->CanAccess(this_origin);
-}
-
-void PressureObserverManager::OnServiceConnectionError() {
-  pressure_service_.reset();
+void PressureObserverManager::OnConnectionError() {
+  for (PressureClientImpl* client : source_to_client_.Values()) {
+    // Take a snapshot so as to safely iterate.
+    HeapVector<Member<PressureObserver>> observers(client->observers());
+    for (const auto& observer : observers) {
+      observer->OnConnectionError();
+    }
+  }
   Reset();
 }
 
 void PressureObserverManager::Reset() {
-  receiver_.reset();
-  for (auto& registering_observers_set : registering_observers_)
-    registering_observers_set.clear();
-  for (auto& registered_observers_set : registered_observers_)
-    registered_observers_set.clear();
+  for (PressureClientImpl* client : source_to_client_.Values()) {
+    client->Reset();
+  }
+  pressure_manager_.reset();
 }
 
-bool PressureObserverManager::IsRegistering(
-    V8PressureSource source,
-    blink::PressureObserver* observer) const {
-  const wtf_size_t source_index = static_cast<wtf_size_t>(source.AsEnum());
-  return registering_observers_[source_index].Contains(observer);
-}
-
-bool PressureObserverManager::IsRegistered(
-    V8PressureSource source,
-    blink::PressureObserver* observer) const {
-  const wtf_size_t source_index = static_cast<wtf_size_t>(source.AsEnum());
-  return registered_observers_[source_index].Contains(observer);
-}
-
-void PressureObserverManager::DidBindObserver(
-    V8PressureSource source,
-    blink::PressureObserver* observer,
-    ScriptPromiseResolver* resolver,
-    mojom::blink::PressureStatus status) {
-  // unobserve/disconnect may be called before this method was called.
-  if (!IsRegistering(source, observer)) {
-    resolver->Resolve();
+void PressureObserverManager::DidAddClient(
+    V8PressureSource::Enum source,
+    device::mojom::blink::PressureManagerAddClientResult result) {
+  PressureClientImpl* client = source_to_client_.at(source);
+  // PressureClientImpl may be reset by PressureObserver's
+  // unobserve()/disconnect() before this function is called.
+  if (client->state() != PressureClientImpl::State::kInitializing) {
     return;
   }
+  CHECK(pressure_manager_.is_bound());
 
-  DCHECK(pressure_service_.is_bound());
-
-  switch (status) {
-    case mojom::blink::PressureStatus::kOk: {
-      const wtf_size_t source_index = static_cast<wtf_size_t>(source.AsEnum());
-      registering_observers_[source_index].erase(observer);
-      registered_observers_[source_index].insert(observer);
-      resolver->Resolve();
+  // Take a snapshot so as to safely iterate.
+  HeapVector<Member<PressureObserver>> observers(client->observers());
+  switch (result) {
+    case device::mojom::blink::PressureManagerAddClientResult::kOk: {
+      client->set_state(PressureClientImpl::State::kInitialized);
+      for (const auto& observer : observers) {
+        observer->OnBindingSucceeded(source);
+      }
       break;
     }
-    case mojom::blink::PressureStatus::kNotSupported: {
-      Reset();
-      resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
-                                       "Not available on this platform.");
+    case device::mojom::blink::PressureManagerAddClientResult::kNotSupported: {
+      for (const auto& observer : observers) {
+        observer->OnBindingFailed(source, DOMExceptionCode::kNotSupportedError);
+      }
+      client->Reset();
       break;
     }
   }

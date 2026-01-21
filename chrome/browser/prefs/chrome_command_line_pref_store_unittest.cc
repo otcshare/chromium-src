@@ -6,7 +6,10 @@
 
 #include <stddef.h>
 
+#include <array>
+
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
@@ -56,12 +59,12 @@ class TestCommandLinePrefStore : public ChromeCommandLinePrefStore {
 
     for (const base::Value& cipher_string : value->GetList()) {
       ASSERT_TRUE(cipher_string.is_string());
-      EXPECT_EQ(*ciphers++, cipher_string.GetString());
+      UNSAFE_TODO(EXPECT_EQ(*ciphers++, cipher_string.GetString()));
     }
   }
 
  private:
-  ~TestCommandLinePrefStore() override {}
+  ~TestCommandLinePrefStore() override = default;
 };
 
 // Tests a simple string pref on the command line.
@@ -226,11 +229,11 @@ TEST(ChromeCommandLinePrefStoreTest, ExplicitlyAllowedPorts) {
   cl.AppendSwitchASCII(switches::kExplicitlyAllowedPorts,
                        "79,554,  6000, foo,1000000");
   auto store = base::MakeRefCounted<TestCommandLinePrefStore>(&cl);
-  static constexpr int kExpectedPorts[] = {
+  constexpr static const auto kExpectedPorts = std::to_array<int>({
       79,
       554,
       6000,
-  };
+  });
 
   const base::Value* value = nullptr;
   ASSERT_TRUE(store->GetValue(prefs::kExplicitlyAllowedNetworkPorts, &value));

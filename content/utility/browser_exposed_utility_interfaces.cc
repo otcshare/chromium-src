@@ -8,8 +8,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/public/common/content_client.h"
@@ -74,7 +74,7 @@ void ExposeUtilityInterfacesToBrowser(mojo::BinderMap* binders) {
 #endif  // BUILDFLAG(IS_WIN)
   if (bind_usage_reporter) {
     binders->Add<mojom::ResourceUsageReporter>(
-        base::BindRepeating(&CreateResourceUsageReporter),
+        &CreateResourceUsageReporter,
         base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 #endif  // !BUILDFLAG(IS_ANDROID)

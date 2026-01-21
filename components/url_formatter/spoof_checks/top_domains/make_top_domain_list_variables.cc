@@ -5,10 +5,10 @@
 // This binary generates two C arrays of useful information related to top
 // domains, which we embed directly into
 // the final Chrome binary.  The input is a list of the top domains. The first
-// output is named kTop500EditDistanceSkeletons,
-// containing the skeletons of the top 500 domains suitable for use in the edit
-// distance heuristic. The second output is named kTopKeywords,
-// containing the top 500 keywords suitable for use with the keyword matching
+// output is named kTopBucketEditDistanceSkeletons,
+// containing the skeletons of the top bucket domains suitable for use in the
+// edit distance heuristic. The second output is named kTopKeywords,
+// containing the top bucket keywords suitable for use with the keyword matching
 // heuristic (for instance, www.google.com -> google). Both outputs are written
 // to the same file, which will be formatted as c++ source file with valid
 // syntax.
@@ -19,7 +19,7 @@
 // IMPORTANT: This binary asserts that there are at least enough sites in the
 // input file to generate 500 skeletons and 500 keywords.
 
-#include <cctype>
+#include <algorithm>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -27,11 +27,12 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -44,12 +45,12 @@
 
 namespace {
 
-// The size of the top domain array generated in top500-domains-inc.cc. Must
-// match that in top500_domains.h. If the file has fewer than kMaxDomains
-// eligible top-500 domains marked (e.g. because some are too short), the
+// The size of the top domain array generated in top-bucket-domains-inc.cc. Must
+// match that in top_bucket_domains.h. If the file has fewer than kMaxDomains
+// eligible top bucket domains marked (e.g. because some are too short), the
 // generated array may be padded with blank entries up to kMaxDomains.
 const size_t kMaxDomains = 500;
-const char* kTop500Separator = "###END_TOP_500###";
+const char* kTopBucketSeparator = "###END_TOP_BUCKET###";
 
 // Similar to kMaxDomains, but for kTopKeywords. Unlike the top domain array,
 // this array is a fixed length, and we also output a kNumTopKeywords variable.
@@ -59,7 +60,7 @@ const size_t kMaxKeywords = 500;
 const size_t kMinKeywordLength = 3;
 
 void PrintHelp() {
-  std::cout << "make_top_domain_list_for_edit_distance <input-file>"
+  std::cout << "make_top_domain_list_variables <input-file>"
             << " <namespace-name> <output-file> [--v=1]" << std::endl;
 }
 
@@ -75,7 +76,7 @@ std::string GetSkeleton(const std::string& domain,
 }
 
 bool ContainsOnlyDigits(const std::string& text) {
-  return base::ranges::all_of(text.begin(), text.end(), ::isdigit);
+  return std::ranges::all_of(text.begin(), text.end(), ::isdigit);
 }
 
 }  // namespace
@@ -104,8 +105,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  base::FilePath input_path =
-      base::MakeAbsoluteFilePath(base::FilePath::FromUTF8Unsafe(argv[1]));
+  base::FilePath input_path = base::MakeAbsoluteFilePath(
+      base::FilePath::FromUTF8Unsafe(UNSAFE_TODO(argv[1])));
   if (!base::PathExists(input_path)) {
     LOG(ERROR) << "Input path doesn't exist: " << input_path;
     return 1;
@@ -117,7 +118,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::string namespace_str = argv[2];
+  std::string namespace_str = UNSAFE_TODO(argv[2]);
 
   std::vector<std::string> lines = base::SplitString(
       input_text, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
@@ -141,7 +142,7 @@ int main(int argc, char* argv[]) {
     }
     base::TrimWhitespaceASCII(line, base::TRIM_ALL, &line);
 
-    if (line == kTop500Separator) {
+    if (line == kTopBucketSeparator) {
       break;
     }
 
@@ -176,16 +177,13 @@ int main(int argc, char* argv[]) {
   std::vector<std::string> sorted_skeletons(skeletons.begin(), skeletons.end());
   std::sort(sorted_skeletons.begin(), sorted_skeletons.end());
 
-  std::vector<std::string> sorted_keywords(keywords.begin(), keywords.end());
-  std::sort(sorted_keywords.begin(), sorted_keywords.end());
-
   std::ostringstream output_stream;
   output_stream
       << R"(#include "components/url_formatter/spoof_checks/top_domains/)"
       << namespace_str << R"(.h"
 namespace )"
       << namespace_str << R"( {
-const char* const kTop500EditDistanceSkeletons[] = {
+const char* const kTopBucketEditDistanceSkeletons[] = {
 )";
 
   for (const std::string& skeleton : sorted_skeletons) {
@@ -193,30 +191,17 @@ const char* const kTop500EditDistanceSkeletons[] = {
     output_stream << ",\n";
   }
   output_stream << R"(};
-  constexpr size_t kNumTop500EditDistanceSkeletons = )"
+  constexpr size_t kNumTopBucketEditDistanceSkeletons = )"
                 << sorted_skeletons.size() << R"(;
 
-const char* const kTopKeywords[] = {
+  } // namespace
 )";
-
-  for (const std::string& keyword : sorted_keywords) {
-    output_stream << ("\"" + keyword + "\"");
-    output_stream << ",\n";
-  }
-  output_stream << R"(};
-)";
-  output_stream <<
-      R"(
-constexpr size_t kNumTopKeywords = )"
-                << sorted_keywords.size() << R"(;
-}  // namespace )"
-                << namespace_str;
 
   std::string output = output_stream.str();
 
-  base::FilePath output_path = base::FilePath::FromUTF8Unsafe(argv[3]);
-  if (base::WriteFile(output_path, output.c_str(),
-                      static_cast<uint32_t>(output.size())) <= 0) {
+  base::FilePath output_path =
+      base::FilePath::FromUTF8Unsafe(UNSAFE_TODO(argv[3]));
+  if (!base::WriteFile(output_path, output)) {
     LOG(ERROR) << "Failed to write output: " << output_path;
     return 1;
   }

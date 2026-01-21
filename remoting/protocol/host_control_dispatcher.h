@@ -7,6 +7,7 @@
 
 #include <cstddef>
 
+#include "base/containers/queue.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "remoting/protocol/channel_dispatcher_base.h"
@@ -22,8 +23,7 @@ class PairingResponse;
 // HostControlDispatcher dispatches incoming messages on the control channel to
 // HostStub or ClipboardStub, and also implements ClientStub and CursorShapeStub
 // for outgoing messages.
-class HostControlDispatcher : public ChannelDispatcherBase,
-                              public ClientStub {
+class HostControlDispatcher : public ChannelDispatcherBase, public ClientStub {
  public:
   HostControlDispatcher();
 
@@ -38,12 +38,15 @@ class HostControlDispatcher : public ChannelDispatcherBase,
   void DeliverHostMessage(const ExtensionMessage& message) override;
   void SetVideoLayout(const VideoLayout& layout) override;
   void SetTransportInfo(const TransportInfo& transport_info) override;
+  void SetActiveDisplay(const ActiveDisplay& active_display) override;
 
   // ClipboardStub implementation for sending clipboard data to client.
   void InjectClipboardEvent(const ClipboardEvent& event) override;
 
   // CursorShapeStub implementation for sending cursor shape to client.
   void SetCursorShape(const CursorShapeInfo& cursor_shape) override;
+
+  void SetHostCursorPosition(const HostCursorPosition& position) override;
 
   // KeyboardLayoutStub implementation for sending keyboard layout to client.
   void SetKeyboardLayout(const KeyboardLayout& layout) override;
@@ -56,7 +59,9 @@ class HostControlDispatcher : public ChannelDispatcherBase,
 
   // Sets the HostStub that will be called for each incoming control message.
   // |host_stub| must outlive this object.
-  void set_host_stub(HostStub* host_stub) { host_stub_ = host_stub; }
+  // If there are any messages that have been received prior to this call, they
+  // will be delivered to the host stub.
+  void set_host_stub(HostStub* host_stub);
 
   // Sets the maximum size of outgoing messages, which defaults to 64KiB. This
   // is used to ensure we don't try to send any clipboard messages that the
@@ -75,6 +80,9 @@ class HostControlDispatcher : public ChannelDispatcherBase,
   // 64 KiB is the default message size expected to be supported in absence of a
   // higher value negotiated via SDP.
   std::size_t max_message_size_ = 64 * 1024;
+
+  // Messages that have been received before `set_host_stub` is called.
+  base::queue<std::unique_ptr<CompoundBuffer>> pending_messages_;
 };
 
 }  // namespace remoting::protocol

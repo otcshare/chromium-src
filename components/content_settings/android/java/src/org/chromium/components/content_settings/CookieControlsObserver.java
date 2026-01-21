@@ -4,21 +4,29 @@
 
 package org.chromium.components.content_settings;
 
-/**
- * Interface for a class that wants to receive cookie updates from CookieControlsBridge.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Interface for a class that wants to receive cookie updates from CookieControlsBridge. */
+@NullMarked
 public interface CookieControlsObserver {
     /**
-     * Called when the cookie blocking status for the current page changes.
-     * @param status An enum indicating the cookie blocking status.
+     * Called when the cookie blocking status for the current site changes.
+     *
+     * @param controlsState An enum indicating the state of the controls for the UI to change.
+     * @param enforcement An enum indicating enforcement of cookie policies.
+     * @param expiration Expiration of the cookie blocking exception.
      */
-    public void onCookieBlockingStatusChanged(
-            @CookieControlsStatus int status, @CookieControlsEnforcement int enforcement);
+    default void onStatusChanged(
+            @CookieControlsState int controlsState,
+            @CookieControlsEnforcement int enforcement,
+            long expiration) {}
+
+    /** Called when we should surface a visual indicator due to potential site breakage. */
+    default void onHighlightCookieControl(boolean shouldHighlight) {}
 
     /**
-     * Called when there is an update in the cookies that are currently being used or blocked.
-     * @param allowedCookies An integer indicating the number of cookies being used.
-     * @param blockedCookies An integer indicating the number of cookies being blocked.
+     * Called when we should surface a visual indicator for PWA surface due to potential site
+     * breakage.
      */
-    public void onCookiesCountChanged(int allowedCookies, int blockedCookies);
+    default void onHighlightPwaCookieControl() {}
 }

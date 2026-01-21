@@ -6,25 +6,17 @@ module storage.mojom;
 
 import "mojo/public/mojom/base/time.mojom";
 import "url/mojom/origin.mojom";
+import "third_party/blink/public/mojom/quota/quota_types.mojom";
 
 // Represents a single Storage Bucket entry.
 struct BucketTableEntry {
     int64 bucket_id;
     string storage_key;
-    StorageType type;
     string name;
     int64 usage = -1;
     int64 use_count;
     mojo_base.mojom.Time last_accessed;
     mojo_base.mojom.Time last_modified;
-};
-
-// Represents the Storage Type for a given host.
-// This is a subset of blink::mojom::StorageType.
-enum StorageType {
-  kTemporary = 0,
-  // kPersistent = 1,  DEPRECATED
-  kSyncable = 2,
 };
 
 // Interface for controlling Quota Internals.
@@ -48,7 +40,10 @@ interface QuotaInternalsHandler {
     // Returns an array of Storage Bucket entries stored in the QuotaDatabase.
     RetrieveBucketsTable() => (array<BucketTableEntry> entries);
 
-    // Returns the global usage and unlimited usage for a given storage type.
-    GetGlobalUsageForInternals(StorageType storage_type) =>
+    // Returns the global usage and unlimited usage.
+    GetGlobalUsageForInternals() =>
         (int64 usage, int64 unlimited_usage);
+
+    // Returns whether simulate storage pressure is available.
+    IsSimulateStoragePressureAvailable() => (bool available);
 };

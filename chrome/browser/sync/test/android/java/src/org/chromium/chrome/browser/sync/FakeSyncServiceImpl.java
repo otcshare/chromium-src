@@ -5,17 +5,33 @@
 package org.chromium.chrome.browser.sync;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.Nullable;
 
+import org.json.JSONArray;
+
+import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
-import org.chromium.components.signin.base.GoogleServiceAuthError;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.components.signin.base.CoreAccountInfo;
+import org.chromium.components.sync.LocalDataDescription;
+import org.chromium.components.sync.SyncService;
+import org.chromium.components.sync.SyncServiceImpl;
+import org.chromium.components.sync.UserActionableError;
+import org.chromium.components.sync.UserSelectableType;
+import org.chromium.google_apis.gaia.GoogleServiceAuthError;
+import org.chromium.google_apis.gaia.GoogleServiceAuthErrorState;
+
+import java.util.HashMap;
+import java.util.Set;
 
 /**
  * Fake some SyncService methods for testing.
  *
- * Only what has been needed for tests so far has been faked.
+ * <p>Only what has been needed for tests so far has been faked.
  */
-public class FakeSyncServiceImpl extends SyncServiceImpl {
+public class FakeSyncServiceImpl implements SyncService {
+    private final SyncService mDelegate;
+
     private boolean mEngineInitialized;
     private boolean mPassphraseRequiredForPreferredDataTypes;
     private boolean mTrustedVaultKeyRequired;
@@ -23,12 +39,15 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
     private boolean mTrustedVaultRecoverabilityDegraded;
     private boolean mEncryptEverythingEnabled;
     private boolean mRequiresClientUpgrade;
-    private boolean mCanSyncFeatureStart;
-    @GoogleServiceAuthError.State
-    private int mAuthError;
+    private boolean mHasUnrecoverableError;
+    private boolean mRequiresUpmBackendUpgrade;
+    private boolean mBookmarksLimitExceeded;
+    private GoogleServiceAuthError mAuthError =
+            new GoogleServiceAuthError(GoogleServiceAuthErrorState.NONE);
+    private Set<Integer> mTypesWithUnsyncedData = Set.of();
 
     public FakeSyncServiceImpl() {
-        super();
+        mDelegate = SyncServiceFactory.getForProfile(ProfileManager.getLastUsedRegularProfile());
     }
 
     @Override
@@ -39,24 +58,35 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
 
     @AnyThread
     public void setEngineInitialized(boolean engineInitialized) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mEngineInitialized = engineInitialized;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mEngineInitialized = engineInitialized;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
-    public @GoogleServiceAuthError.State int getAuthError() {
+    public GoogleServiceAuthError getAuthError() {
         ThreadUtils.assertOnUiThread();
         return mAuthError;
     }
 
     @AnyThread
-    public void setAuthError(@GoogleServiceAuthError.State int authError) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mAuthError = authError;
-            syncStateChanged();
-        });
+    public void setAuthError(GoogleServiceAuthError authError) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mAuthError = authError;
+                    notifySyncStateChanged();
+                });
+    }
+
+    @AnyThread
+    public void setHasUnrecoverableError(boolean hasUnrecoverableError) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mHasUnrecoverableError = hasUnrecoverableError;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
@@ -74,10 +104,12 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
     @AnyThread
     public void setPassphraseRequiredForPreferredDataTypes(
             boolean passphraseRequiredForPreferredDataTypes) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mPassphraseRequiredForPreferredDataTypes = passphraseRequiredForPreferredDataTypes;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mPassphraseRequiredForPreferredDataTypes =
+                            passphraseRequiredForPreferredDataTypes;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
@@ -88,10 +120,11 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
 
     @AnyThread
     public void setTrustedVaultKeyRequired(boolean trustedVaultKeyRequired) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mTrustedVaultKeyRequired = trustedVaultKeyRequired;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTrustedVaultKeyRequired = trustedVaultKeyRequired;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
@@ -103,11 +136,12 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
     @AnyThread
     public void setTrustedVaultKeyRequiredForPreferredDataTypes(
             boolean trustedVaultKeyRequiredForPreferredDataTypes) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mTrustedVaultKeyRequiredForPreferredDataTypes =
-                    trustedVaultKeyRequiredForPreferredDataTypes;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTrustedVaultKeyRequiredForPreferredDataTypes =
+                            trustedVaultKeyRequiredForPreferredDataTypes;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
@@ -118,10 +152,11 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
 
     @AnyThread
     public void setTrustedVaultRecoverabilityDegraded(boolean recoverabilityDegraded) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mTrustedVaultRecoverabilityDegraded = recoverabilityDegraded;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTrustedVaultRecoverabilityDegraded = recoverabilityDegraded;
+                    notifySyncStateChanged();
+                });
     }
 
     @Override
@@ -130,37 +165,275 @@ public class FakeSyncServiceImpl extends SyncServiceImpl {
         return mEncryptEverythingEnabled;
     }
 
-    @Override
-    public boolean canSyncFeatureStart() {
-        ThreadUtils.assertOnUiThread();
-        return mCanSyncFeatureStart;
-    }
-
-    @AnyThread
-    public void setCanSyncFeatureStart(boolean canSyncFeatureStart) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mCanSyncFeatureStart = canSyncFeatureStart;
-            syncStateChanged();
-        });
-    }
-
-    @Override
-    public boolean requiresClientUpgrade() {
-        ThreadUtils.assertOnUiThread();
-        return mRequiresClientUpgrade;
-    }
-
     @AnyThread
     public void setRequiresClientUpgrade(boolean requiresClientUpgrade) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mRequiresClientUpgrade = requiresClientUpgrade;
-            syncStateChanged();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mRequiresClientUpgrade = requiresClientUpgrade;
+                    notifySyncStateChanged();
+                });
     }
 
     @AnyThread
     public void setEncryptEverythingEnabled(boolean encryptEverythingEnabled) {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mEncryptEverythingEnabled = encryptEverythingEnabled; });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mEncryptEverythingEnabled = encryptEverythingEnabled;
+                });
+    }
+
+    @AnyThread
+    public void setRequiresUpmBackendUpgrade(boolean requiresUpmBackendUpgrade) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mRequiresUpmBackendUpgrade = requiresUpmBackendUpgrade;
+                    notifySyncStateChanged();
+                });
+    }
+
+    @AnyThread
+    public void setBookmarksLimitExceeded(boolean bookmarksLimitExceeded) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mBookmarksLimitExceeded = bookmarksLimitExceeded;
+                    notifySyncStateChanged();
+                });
+    }
+
+    @Override
+    public void getTypesWithUnsyncedData(Callback<Set<Integer>> callback) {
+        ThreadUtils.assertOnUiThread();
+        callback.onResult(mTypesWithUnsyncedData);
+    }
+
+    @AnyThread
+    public void setTypesWithUnsyncedData(Set<Integer> typesWithUnsyncedData) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTypesWithUnsyncedData = typesWithUnsyncedData;
+                });
+    }
+
+    private void notifySyncStateChanged() {
+        ((SyncServiceImpl) mDelegate).syncStateChanged();
+    }
+
+    @Override
+    public boolean isSyncFeatureEnabled() {
+        return mDelegate.isSyncFeatureEnabled();
+    }
+
+    @Override
+    public boolean isSyncFeatureActive() {
+        return mDelegate.isSyncFeatureActive();
+    }
+
+    @Override
+    public boolean isSyncDisabledByEnterprisePolicy() {
+        return mDelegate.isSyncDisabledByEnterprisePolicy();
+    }
+
+    @Nullable
+    @Override
+    public CoreAccountInfo getAccountInfo() {
+        return mDelegate.getAccountInfo();
+    }
+
+    @Override
+    public boolean hasSyncConsent() {
+        return mDelegate.hasSyncConsent();
+    }
+
+    @Override
+    public Set<Integer> getActiveDataTypes() {
+        return mDelegate.getActiveDataTypes();
+    }
+
+    @Override
+    public Set<Integer> getSelectedTypes() {
+        return mDelegate.getSelectedTypes();
+    }
+
+    @Override
+    public void getLocalDataDescriptions(
+            Set<Integer> types, Callback<HashMap<Integer, LocalDataDescription>> callback) {
+        mDelegate.getLocalDataDescriptions(types, callback);
+    }
+
+    @Override
+    public void triggerLocalDataMigration(Set<Integer> types) {
+        mDelegate.triggerLocalDataMigration(types);
+    }
+
+    @Override
+    public boolean hasKeepEverythingSynced() {
+        return mDelegate.hasKeepEverythingSynced();
+    }
+
+    @Override
+    public boolean isTypeManagedByPolicy(int type) {
+        return mDelegate.isTypeManagedByPolicy(type);
+    }
+
+    @Override
+    public boolean isTypeManagedByCustodian(int type) {
+        return mDelegate.isTypeManagedByCustodian(type);
+    }
+
+    @Override
+    public void setSelectedTypes(boolean syncEverything, Set<Integer> enabledTypes) {
+        mDelegate.setSelectedTypes(syncEverything, enabledTypes);
+    }
+
+    @Override
+    public void setSelectedType(@UserSelectableType int type, boolean isTypeOn) {
+        mDelegate.setSelectedType(type, isTypeOn);
+    }
+
+    @Override
+    public void setInitialSyncFeatureSetupComplete(int syncFirstSetupCompleteSource) {
+        mDelegate.setInitialSyncFeatureSetupComplete(syncFirstSetupCompleteSource);
+    }
+
+    @Override
+    public boolean isInitialSyncFeatureSetupComplete() {
+        return mDelegate.isInitialSyncFeatureSetupComplete();
+    }
+
+    @Override
+    public SyncSetupInProgressHandle getSetupInProgressHandle() {
+        return mDelegate.getSetupInProgressHandle();
+    }
+
+    @Override
+    public void addSyncStateChangedListener(SyncStateChangedListener listener) {
+        mDelegate.addSyncStateChangedListener(listener);
+    }
+
+    @Override
+    public void removeSyncStateChangedListener(SyncStateChangedListener listener) {
+        mDelegate.removeSyncStateChangedListener(listener);
+    }
+
+    @Override
+    public int getPassphraseType() {
+        return mDelegate.getPassphraseType();
+    }
+
+    @Override
+    public int getTransportState() {
+        return mDelegate.getTransportState();
+    }
+
+    @Override
+    public int getUserActionableError() {
+        // No error for not signed-in users.
+        if (getAccountInfo() == null) {
+            return UserActionableError.NONE;
+        }
+
+        if (hasSyncConsent()) {
+            if (!isInitialSyncFeatureSetupComplete()) {
+                return UserActionableError.NEEDS_SETTINGS_CONFIRMATION;
+            }
+            if (mHasUnrecoverableError) {
+                return UserActionableError.UNRECOVERABLE_ERROR;
+            }
+        }
+        if (mAuthError.getState() != GoogleServiceAuthErrorState.NONE) {
+            return UserActionableError.SIGN_IN_NEEDS_UPDATE;
+        }
+        if (mRequiresClientUpgrade) {
+            return UserActionableError.NEEDS_CLIENT_UPGRADE;
+        }
+        if (mPassphraseRequiredForPreferredDataTypes) {
+            return UserActionableError.NEEDS_PASSPHRASE;
+        }
+        if (mTrustedVaultKeyRequiredForPreferredDataTypes) {
+            return mEncryptEverythingEnabled
+                    ? UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_EVERYTHING
+                    : UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_PASSWORDS;
+        }
+        if (mTrustedVaultRecoverabilityDegraded) {
+            return mEncryptEverythingEnabled
+                    ? UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_EVERYTHING
+                    : UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_PASSWORDS;
+        }
+        if (mRequiresUpmBackendUpgrade) {
+            return UserActionableError.NEEDS_UPM_BACKEND_UPGRADE;
+        }
+        if (mBookmarksLimitExceeded) {
+            return UserActionableError.BOOKMARKS_LIMIT_EXCEEDED;
+        }
+        return UserActionableError.NONE;
+    }
+
+    @Override
+    public boolean isCustomPassphraseAllowed() {
+        return mDelegate.isCustomPassphraseAllowed();
+    }
+
+    @Override
+    public void setEncryptionPassphrase(String passphrase) {
+        mDelegate.setEncryptionPassphrase(passphrase);
+    }
+
+    @Override
+    public boolean setDecryptionPassphrase(String passphrase) {
+        return mDelegate.setDecryptionPassphrase(passphrase);
+    }
+
+    @Override
+    public boolean isPassphrasePromptMutedForCurrentProductVersion() {
+        return mDelegate.isPassphrasePromptMutedForCurrentProductVersion();
+    }
+
+    @Override
+    public void markPassphrasePromptMutedForCurrentProductVersion() {
+        mDelegate.markPassphrasePromptMutedForCurrentProductVersion();
+    }
+
+    @Override
+    public void acknowledgeBookmarksLimitExceededError(int source) {
+        if (mBookmarksLimitExceeded) {
+            mBookmarksLimitExceeded = false;
+            notifySyncStateChanged();
+        }
+    }
+
+    @Override
+    public int getBookmarksLimit() {
+        ThreadUtils.assertOnUiThread();
+        return mDelegate.getBookmarksLimit();
+    }
+
+    @Override
+    public boolean shouldOfferTrustedVaultOptIn() {
+        return mDelegate.shouldOfferTrustedVaultOptIn();
+    }
+
+    @Override
+    public boolean isSyncingUnencryptedUrls() {
+        return mDelegate.isSyncingUnencryptedUrls();
+    }
+
+    @Override
+    public long getNativeSyncServiceAndroidBridge() {
+        return mDelegate.getNativeSyncServiceAndroidBridge();
+    }
+
+    @Override
+    public long getLastSyncedTimeForDebugging() {
+        return mDelegate.getLastSyncedTimeForDebugging();
+    }
+
+    @Override
+    public void triggerRefresh() {
+        mDelegate.triggerRefresh();
+    }
+
+    @Override
+    public void getAllNodes(Callback<JSONArray> callback) {
+        mDelegate.getAllNodes(callback);
     }
 }

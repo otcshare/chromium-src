@@ -6,21 +6,21 @@
 #define CHROME_BROWSER_PAINT_PREVIEW_SERVICES_PAINT_PREVIEW_TAB_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/browser/paint_preview_policy.h"
 #include "components/paint_preview/common/proto/paint_preview.pb.h"
 #include "content/public/browser/global_routing_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
@@ -36,7 +36,8 @@ namespace paint_preview {
 // A service for capturing and using Paint Previews per Tab. Captures are stored
 // using Tab IDs as the key such that the data can be accessed even if the
 // browser is restarted.
-class PaintPreviewTabService : public PaintPreviewBaseService {
+class PaintPreviewTabService : public PaintPreviewBaseService,
+                               public base::MemoryPressureListener {
  public:
   PaintPreviewTabService(std::unique_ptr<PaintPreviewFileMixin> file_mixin,
                          std::unique_ptr<PaintPreviewPolicy> policy,
@@ -85,25 +86,30 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 
 #if BUILDFLAG(IS_ANDROID)
   // JNI wrapped versions of the above methods
-  void CaptureTabAndroid(
-      JNIEnv* env,
-      jint j_tab_id,
-      const base::android::JavaParamRef<jobject>& j_web_contents,
-      jboolean j_accessibility_enabled,
-      jfloat j_page_scale_factor,
-      jint j_x,
-      jint j_y,
-      const base::android::JavaParamRef<jobject>& j_callback);
-  void TabClosedAndroid(JNIEnv* env, jint j_tab_id);
-  jboolean HasCaptureForTabAndroid(JNIEnv* env, jint j_tab_id);
+  void CaptureTabAndroid(JNIEnv* env,
+                         int32_t j_tab_id,
+                         const base::android::JavaRef<jobject>& j_web_contents,
+                         bool j_accessibility_enabled,
+                         jfloat j_page_scale_factor,
+                         int32_t j_x,
+                         int32_t j_y,
+                         const base::android::JavaRef<jobject>& j_callback);
+  void TabClosedAndroid(JNIEnv* env, int32_t j_tab_id);
+  bool HasCaptureForTabAndroid(JNIEnv* env, int32_t j_tab_id);
   void AuditArtifactsAndroid(
       JNIEnv* env,
-      const base::android::JavaParamRef<jintArray>& j_tab_ids);
-  jboolean IsCacheInitializedAndroid(JNIEnv* env);
-  base::android::ScopedJavaLocalRef<jstring> GetPathAndroid(JNIEnv* env);
+      const base::android::JavaRef<jintArray>& j_tab_ids);
+  bool IsCacheInitializedAndroid(JNIEnv* env);
+  std::string GetPathAndroid(JNIEnv* env);
 
   base::android::ScopedJavaGlobalRef<jobject> GetJavaRef() { return java_ref_; }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+  // base::MemoryPressureListener:
+  // Note: This class only cares about querying the current level, so no need to
+  // actually react on memory pressure level change.
+  void OnMemoryPressure(
+      base::MemoryPressureLevel memory_pressure_level) override {}
 
  private:
   class TabServiceTask {
@@ -112,7 +118,7 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 
     TabServiceTask(int tab_id,
                    const DirectoryKey& key,
-                   int frame_tree_node_id,
+                   content::FrameTreeNodeId frame_tree_node_id,
                    content::GlobalRenderFrameHostId frame_routing_id,
                    float page_scale_factor,
                    int x,
@@ -125,7 +131,9 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 
     int tab_id() const { return tab_id_; }
     const DirectoryKey& key() const { return key_; }
-    int frame_tree_node_id() const { return frame_tree_node_id_; }
+    content::FrameTreeNodeId frame_tree_node_id() const {
+      return frame_tree_node_id_;
+    }
     content::GlobalRenderFrameHostId frame_routing_id() const {
       return frame_routing_id_;
     }
@@ -162,7 +170,7 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
    private:
     int tab_id_;
     DirectoryKey key_;
-    int frame_tree_node_id_;
+    content::FrameTreeNodeId frame_tree_node_id_;
     content::GlobalRenderFrameHostId frame_routing_id_;
     float page_scale_factor_;
     int scroll_offset_x_;
@@ -186,7 +194,7 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
   // The FTN ID is to look-up the content::WebContents.
   void CaptureTabInternal(base::WeakPtr<TabServiceTask> task,
                           bool accessibility_enabled,
-                          const absl::optional<base::FilePath>& file_path);
+                          const std::optional<base::FilePath>& file_path);
 
   void OnAXTreeWritten(base::WeakPtr<TabServiceTask> task, bool result);
 
@@ -207,6 +215,10 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 #if BUILDFLAG(IS_ANDROID)
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+  base::MemoryPressureListenerRegistration
+      memory_pressure_listener_registration_;
+
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<PaintPreviewTabService> weak_ptr_factory_{this};
 };

@@ -4,37 +4,79 @@
 
 package org.chromium.components.external_intents;
 
-import androidx.annotation.Nullable;
+import static org.chromium.build.NullUtil.assertNonNull;
+
+import androidx.annotation.IntDef;
 
 import org.chromium.base.Callback;
+import org.chromium.base.RequiredCallback;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
-/**
- * A container object for passing navigation parameters to {@link ExternalNavigationHandler}.
- */
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+/** A container object for passing navigation parameters to {@link ExternalNavigationHandler}. */
+@NullMarked
 public class ExternalNavigationParams {
-    /**
-     * A container for parameters passed to the AsyncActionTakenInMainFrameCallback.
-     */
+    /** A container for parameters passed to the AsyncActionTakenCallback. */
     public static class AsyncActionTakenParams {
+        @IntDef({
+            AsyncActionTakenType.NO_ACTION,
+            AsyncActionTakenType.EXTERNAL_INTENT_LAUNCHED,
+            AsyncActionTakenType.NAVIGATE
+        })
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface AsyncActionTakenType {
+            /* Action was cancelled/rejected. */
+            int NO_ACTION = 0;
+            /* An external intent was launched as a result of the action. */
+            int EXTERNAL_INTENT_LAUNCHED = 1;
+            /* A navigation should occur as the result of the action */
+            int NAVIGATE = 2;
+        }
+
+        @AsyncActionTakenType public int actionType;
+
         // Whether the async action taken allows the tab to be closed.
         public boolean canCloseTab;
 
-        // Whether the tab will be clobbered as a result of this async action.
-        public boolean willClobberTab;
-
+        @SuppressWarnings("NullAway.Init")
         public ExternalNavigationParams externalNavigationParams;
 
-        public AsyncActionTakenParams(
-                boolean canCloseTab, boolean willClobberTab, ExternalNavigationParams params) {
-            this.canCloseTab = canCloseTab;
-            this.willClobberTab = willClobberTab;
-            this.externalNavigationParams = params;
+        public @Nullable GURL targetUrl;
 
-            // We can't both close the tab and clobber it.
-            assert !willClobberTab || !canCloseTab;
+        private AsyncActionTakenParams() {
+            this.actionType = AsyncActionTakenType.NO_ACTION;
+        }
+
+        private AsyncActionTakenParams(@Nullable GURL targetUrl, ExternalNavigationParams params) {
+            this.actionType = AsyncActionTakenType.NAVIGATE;
+            this.targetUrl = targetUrl;
+            this.externalNavigationParams = params;
+        }
+
+        private AsyncActionTakenParams(boolean canCloseTab, ExternalNavigationParams params) {
+            this.actionType = AsyncActionTakenType.EXTERNAL_INTENT_LAUNCHED;
+            this.canCloseTab = canCloseTab;
+            this.externalNavigationParams = params;
+        }
+
+        public static AsyncActionTakenParams forNoAction() {
+            return new AsyncActionTakenParams();
+        }
+
+        public static AsyncActionTakenParams forNavigate(
+                @Nullable GURL targetUrl, ExternalNavigationParams params) {
+            return new AsyncActionTakenParams(targetUrl, params);
+        }
+
+        public static AsyncActionTakenParams forExternalIntentLaunched(
+                boolean canCloseTab, ExternalNavigationParams params) {
+            return new AsyncActionTakenParams(canCloseTab, params);
         }
     }
 
@@ -43,42 +85,75 @@ public class ExternalNavigationParams {
     private final GURL mReferrerUrl;
     private final int mPageTransition;
     private final boolean mIsRedirect;
-    private final boolean mApplicationMustBeInForeground;
     private final RedirectHandler mRedirectHandler;
     private final boolean mOpenInNewTab;
     private final boolean mIsBackgroundTabNavigation;
-    private final boolean mIntentLaunchesAllowedInBackgroundTabs;
     private final boolean mIsMainFrame;
-    private final String mNativeClientPackageName;
+    private final @Nullable String mNativeClientPackageName;
     private final boolean mHasUserGesture;
-    private final Callback<AsyncActionTakenParams> mAsyncActionTakenInMainFrameCallback;
-    private boolean mIsRendererInitiated;
-    private Origin mInitiatorOrigin;
+    private final boolean mIsInitialNavigationInFrame;
+    private final boolean mIsHiddenCrossFrameNavigation;
+    private final boolean mIsSandboxedMainFrame;
+    private final @Nullable Callback<AsyncActionTakenParams> mAsyncActionTakenCallback;
+    private final boolean mIsRendererInitiated;
+    private final @Nullable Origin mInitiatorOrigin;
+    private final long mNavigationId;
+    private final boolean mIsTabInPWA;
+    private final boolean mIsInDesktopWindowingMode;
+    private final boolean mIsTabInBrowser;
 
-    private ExternalNavigationParams(GURL url, boolean isIncognito, GURL referrerUrl,
-            int pageTransition, boolean isRedirect, boolean appMustBeInForeground,
-            RedirectHandler redirectHandler, boolean openInNewTab,
-            boolean isBackgroundTabNavigation, boolean intentLaunchesAllowedInBackgroundTabs,
-            boolean isMainFrame, String nativeClientPackageName, boolean hasUserGesture,
-            Callback<AsyncActionTakenParams> asyncActionTakenInMainFrameCallback,
-            boolean isRendererInitiated, @Nullable Origin initiatorOrigin) {
+    // Populated when an async action is taken, ensuring the callback gets called.
+    private @Nullable RequiredCallback<AsyncActionTakenParams> mRequiredAsyncActionTakenCallback;
+
+    private ExternalNavigationParams(
+            GURL url,
+            boolean isIncognito,
+            @Nullable GURL referrerUrl,
+            int pageTransition,
+            boolean isRedirect,
+            RedirectHandler redirectHandler,
+            boolean openInNewTab,
+            boolean isBackgroundTabNavigation,
+            boolean isMainFrame,
+            @Nullable String nativeClientPackageName,
+            boolean hasUserGesture,
+            @Nullable Callback<AsyncActionTakenParams> asyncActionTakenCallback,
+            boolean isRendererInitiated,
+            @Nullable Origin initiatorOrigin,
+            boolean isInitialNavigationInFrame,
+            boolean isHiddenCrossFrameNavigation,
+            boolean isSandboxedMainFrame,
+            long navigationId,
+            boolean isTabInPWA,
+            boolean isInDesktopWindowingMode,
+            boolean isTabInBrowser) {
         mUrl = url;
-        assert mUrl != null;
         mIsIncognito = isIncognito;
         mPageTransition = pageTransition;
         mReferrerUrl = (referrerUrl == null) ? GURL.emptyGURL() : referrerUrl;
         mIsRedirect = isRedirect;
-        mApplicationMustBeInForeground = appMustBeInForeground;
         mRedirectHandler = redirectHandler;
         mOpenInNewTab = openInNewTab;
         mIsBackgroundTabNavigation = isBackgroundTabNavigation;
-        mIntentLaunchesAllowedInBackgroundTabs = intentLaunchesAllowedInBackgroundTabs;
         mIsMainFrame = isMainFrame;
         mNativeClientPackageName = nativeClientPackageName;
         mHasUserGesture = hasUserGesture;
-        mAsyncActionTakenInMainFrameCallback = asyncActionTakenInMainFrameCallback;
+        mAsyncActionTakenCallback = asyncActionTakenCallback;
         mIsRendererInitiated = isRendererInitiated;
         mInitiatorOrigin = initiatorOrigin;
+        mIsInitialNavigationInFrame = isInitialNavigationInFrame;
+        mIsHiddenCrossFrameNavigation = isHiddenCrossFrameNavigation;
+        mIsSandboxedMainFrame = isSandboxedMainFrame;
+        mNavigationId = navigationId;
+        mIsTabInPWA = isTabInPWA;
+        mIsInDesktopWindowingMode = isInDesktopWindowingMode;
+        mIsTabInBrowser = isTabInBrowser;
+    }
+
+    public void onAsyncActionStarted() {
+        if (mAsyncActionTakenCallback != null) {
+            mRequiredAsyncActionTakenCallback = new RequiredCallback(mAsyncActionTakenCallback);
+        }
     }
 
     /** @return The URL to potentially open externally. */
@@ -106,19 +181,16 @@ public class ExternalNavigationParams {
         return mIsRedirect;
     }
 
-    /** @return Whether the application has to be in foreground to open the URL. */
-    public boolean isApplicationMustBeInForeground() {
-        return mApplicationMustBeInForeground;
-    }
-
-    /** @return The redirect handler. */
+    /**
+     * @return The redirect handler.
+     */
     public RedirectHandler getRedirectHandler() {
         return mRedirectHandler;
     }
 
     /**
      * @return Whether the external navigation should be opened in a new tab if handled by Chrome
-     *         through the intent picker.
+     *     through the intent picker.
      */
     public boolean isOpenInNewTab() {
         return mOpenInNewTab;
@@ -129,21 +201,18 @@ public class ExternalNavigationParams {
         return mIsBackgroundTabNavigation;
     }
 
-    /** @return Whether intent launches are allowed in background tabs. */
-    public boolean areIntentLaunchesAllowedInBackgroundTabs() {
-        return mIntentLaunchesAllowedInBackgroundTabs;
-    }
-
-    /** @return Whether this navigation happens in main frame. */
+    /**
+     * @return Whether this navigation happens in main frame.
+     */
     public boolean isMainFrame() {
         return mIsMainFrame;
     }
 
     /**
-     * @return The package name of the TWA or WebAPK within which the navigation is happening.
-     *         Null if the navigation is not within one of these wrapping APKs.
+     * @return The package name of the TWA or WebAPK within which the navigation is happening. Null
+     *     if the navigation is not within one of these wrapping APKs.
      */
-    public String nativeClientPackageName() {
+    public @Nullable String nativeClientPackageName() {
         return mNativeClientPackageName;
     }
 
@@ -152,72 +221,110 @@ public class ExternalNavigationParams {
         return mHasUserGesture;
     }
 
-    /**
-     * @return A callback to be run when an async action is taken.
-     */
-    public Callback<AsyncActionTakenParams> getAsyncActionTakenInMainFrameCallback() {
-        return mAsyncActionTakenInMainFrameCallback;
+    /** @return A callback to be run when an async action is taken. */
+    public @Nullable
+            RequiredCallback<AsyncActionTakenParams> getRequiredAsyncActionTakenCallback() {
+        return mRequiredAsyncActionTakenCallback;
     }
 
-    /**
-     * @return Whether the navigation is initiated by renderer.
-     */
+    /** @return Whether the navigation is initiated by renderer. */
     public boolean isRendererInitiated() {
         return mIsRendererInitiated;
     }
 
-    /**
-     * @return The origin that initiates the navigation.
-     */
-    @Nullable
-    public Origin getInitiatorOrigin() {
+    /** @return The origin that initiates the navigation. */
+    public @Nullable Origin getInitiatorOrigin() {
         return mInitiatorOrigin;
     }
 
-    /**
-     * @return Whether the navigation is from an intent.
-     */
+    /** @return Whether the navigation is from an intent. */
     public boolean isFromIntent() {
         return (mPageTransition & PageTransition.FROM_API) != 0;
     }
 
+    /** @return Whether the navigation is the initial navigation in the frame. */
+    public boolean isInitialNavigationInFrame() {
+        return mIsInitialNavigationInFrame;
+    }
+
+    /** @return Whether the navigation is a cross-frame (non-browser-initiated) navigation. */
+    public boolean isHiddenCrossFrameNavigation() {
+        return mIsHiddenCrossFrameNavigation;
+    }
+
+    /** @return whether this navigation is taking place in a sandboxed main frame. */
+    public boolean isSandboxedMainFrame() {
+        return mIsSandboxedMainFrame;
+    }
+
+    /**
+     * @return the id for this navigation.
+     */
+    public long getNavigationId() {
+        return mNavigationId;
+    }
+
+    /**
+     * @return whether this Tab is in a PWA (TWA or WebAPK), false otherwise.
+     */
+    public boolean isTabInPWA() {
+        return mIsTabInPWA;
+    }
+
+    /**
+     * @return whether this activity is in Android desktop windowing mode or not.
+     */
+    public boolean isInDesktopWindowingMode() {
+        return mIsInDesktopWindowingMode;
+    }
+
+    /**
+     * @return whether the tab is a regular browser tab.
+     */
+    public boolean isTabInBrowser() {
+        return mIsTabInBrowser;
+    }
+
     /** The builder for {@link ExternalNavigationParams} objects. */
     public static class Builder {
-        private GURL mUrl;
-        private boolean mIsIncognito;
-        private GURL mReferrerUrl;
+        private final GURL mUrl;
+        private final boolean mIsIncognito;
+        private @Nullable GURL mReferrerUrl;
         private int mPageTransition;
         private boolean mIsRedirect;
-        private boolean mApplicationMustBeInForeground;
-        private RedirectHandler mRedirectHandler;
+        private @Nullable RedirectHandler mRedirectHandler;
         private boolean mOpenInNewTab;
         private boolean mIsBackgroundTabNavigation;
-        private boolean mIntentLaunchesAllowedInBackgroundTabs;
         private boolean mIsMainFrame;
-        private String mNativeClientPackageName;
+        private @Nullable String mNativeClientPackageName;
         private boolean mHasUserGesture;
-        private Callback<AsyncActionTakenParams> mAsyncActionTakenInMainFrameCallback;
+        private @Nullable Callback<AsyncActionTakenParams> mAsyncActionTakenCallback;
         private boolean mIsRendererInitiated;
-        private Origin mInitiatorOrigin;
+        private @Nullable Origin mInitiatorOrigin;
+        private boolean mIsInitialNavigationInFrame;
+        private boolean mIsHiddenCrossFrameNavigation;
+        private boolean mIsSandboxedMainFrame;
+        private long mNavigationId;
+        private boolean mIsTabInPWA;
+        private boolean mIsInDesktopWindowingMode;
+        private boolean mIsTabInBrowser;
 
         public Builder(GURL url, boolean isIncognito) {
             mUrl = url;
             mIsIncognito = isIncognito;
         }
 
-        public Builder(GURL url, boolean isIncognito, GURL referrer, int pageTransition,
+        public Builder(
+                GURL url,
+                boolean isIncognito,
+                GURL referrer,
+                int pageTransition,
                 boolean isRedirect) {
             mUrl = url;
             mIsIncognito = isIncognito;
             mReferrerUrl = referrer;
             mPageTransition = pageTransition;
             mIsRedirect = isRedirect;
-        }
-
-        /** Specify whether the application must be in foreground to launch an external intent. */
-        public Builder setApplicationMustBeInForeground(boolean v) {
-            mApplicationMustBeInForeground = v;
-            return this;
         }
 
         /** Sets a tab redirect handler. */
@@ -238,19 +345,13 @@ public class ExternalNavigationParams {
             return this;
         }
 
-        /** Sets whether intent launches are allowed in background tabs. */
-        public Builder setIntentLaunchesAllowedInBackgroundTabs(boolean v) {
-            mIntentLaunchesAllowedInBackgroundTabs = v;
-            return this;
-        }
-
         /** Sets whether this navigation happens in main frame. */
         public Builder setIsMainFrame(boolean v) {
             mIsMainFrame = v;
             return this;
         }
 
-        /** Sets the package name of the TWA or WebAPK within which the navigation is happening. **/
+        /** Sets the package name of the TWA or WebAPK within which the navigation is happening. */
         public Builder setNativeClientPackageName(String v) {
             mNativeClientPackageName = v;
             return this;
@@ -262,37 +363,91 @@ public class ExternalNavigationParams {
             return this;
         }
 
-        /**
-         * Sets the callback to be run when an async action is taken.
-         */
-        public Builder setAsyncActionTakenInMainFrameCallback(Callback<AsyncActionTakenParams> v) {
-            mAsyncActionTakenInMainFrameCallback = v;
+        /** Sets the callback to be run when an async action is taken. */
+        public Builder setAsyncActionTakenCallback(Callback<AsyncActionTakenParams> v) {
+            mAsyncActionTakenCallback = v;
             return this;
         }
 
-        /**
-         * Sets whether the navigation is initiated by renderer.
-         */
+        /** Sets whether the navigation is initiated by renderer. */
         public Builder setIsRendererInitiated(boolean v) {
             mIsRendererInitiated = v;
             return this;
         }
 
-        /**
-         * Sets the origin that initiates the navigation.
-         */
+        /** Sets the origin that initiates the navigation. */
         public Builder setInitiatorOrigin(@Nullable Origin v) {
             mInitiatorOrigin = v;
             return this;
         }
 
-        /** @return A fully constructed {@link ExternalNavigationParams} object. */
+        /** Sets whether the navigation is the initial navigation in the frame. */
+        public Builder setIsInitialNavigationInFrame(boolean v) {
+            mIsInitialNavigationInFrame = v;
+            return this;
+        }
+
+        /** Sets whether the navigation is a cross-frame (non-browser-initiated) navigation. */
+        public Builder setIsHiddenCrossFrameNavigation(boolean v) {
+            mIsHiddenCrossFrameNavigation = v;
+            return this;
+        }
+
+        /** Sets whether this navigation is taking place in a sandboxed main frame. */
+        public Builder setIsSandboxedMainFrame(boolean v) {
+            mIsSandboxedMainFrame = v;
+            return this;
+        }
+
+        public Builder setNavigationId(long v) {
+            mNavigationId = v;
+            return this;
+        }
+
+        /** Sets whether this navigation was started in a PWA (TWA or WebAPK). */
+        public Builder setIsTabInPWA(boolean v) {
+            mIsTabInPWA = v;
+            return this;
+        }
+
+        /** Sets whether this application is in a desktop window. */
+        public Builder setIsInDesktopWindowingMode(boolean v) {
+            mIsInDesktopWindowingMode = v;
+            return this;
+        }
+
+        /** Sets whether the tab is a regular browser tab. */
+        public Builder setIsTabInBrowser(boolean v) {
+            mIsTabInBrowser = v;
+            return this;
+        }
+
+        /**
+         * @return A fully constructed {@link ExternalNavigationParams} object.
+         */
         public ExternalNavigationParams build() {
-            return new ExternalNavigationParams(mUrl, mIsIncognito, mReferrerUrl, mPageTransition,
-                    mIsRedirect, mApplicationMustBeInForeground, mRedirectHandler, mOpenInNewTab,
-                    mIsBackgroundTabNavigation, mIntentLaunchesAllowedInBackgroundTabs,
-                    mIsMainFrame, mNativeClientPackageName, mHasUserGesture,
-                    mAsyncActionTakenInMainFrameCallback, mIsRendererInitiated, mInitiatorOrigin);
+            return new ExternalNavigationParams(
+                    mUrl,
+                    mIsIncognito,
+                    mReferrerUrl,
+                    mPageTransition,
+                    mIsRedirect,
+                    assertNonNull(mRedirectHandler),
+                    mOpenInNewTab,
+                    mIsBackgroundTabNavigation,
+                    mIsMainFrame,
+                    mNativeClientPackageName,
+                    mHasUserGesture,
+                    mAsyncActionTakenCallback,
+                    mIsRendererInitiated,
+                    mInitiatorOrigin,
+                    mIsInitialNavigationInFrame,
+                    mIsHiddenCrossFrameNavigation,
+                    mIsSandboxedMainFrame,
+                    mNavigationId,
+                    mIsTabInPWA,
+                    mIsInDesktopWindowingMode,
+                    mIsTabInBrowser);
         }
     }
 }

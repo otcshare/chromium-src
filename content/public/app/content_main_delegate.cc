@@ -4,26 +4,26 @@
 
 #include "content/public/app/content_main_delegate.h"
 
+#include <variant>
+
 #include "base/check.h"
+#include "base/command_line.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/gpu/content_gpu_client.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/utility/content_utility_client.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "sandbox/policy/switches.h"
-#include "ui/gl/gl_switches.h"
-#endif
-
 namespace content {
 
-absl::optional<int> ContentMainDelegate::BasicStartupComplete() {
-  return absl::nullopt;
+std::optional<int> ContentMainDelegate::BasicStartupComplete() {
+  return std::nullopt;
 }
 
-absl::variant<int, MainFunctionParams> ContentMainDelegate::RunProcess(
+std::variant<int, MainFunctionParams> ContentMainDelegate::RunProcess(
     const std::string& process_type,
     MainFunctionParams main_function_params) {
   return std::move(main_function_params);
@@ -37,8 +37,7 @@ void ContentMainDelegate::ZygoteStarting(
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 int ContentMainDelegate::TerminateForFatalInitializationError() {
-  CHECK(false);
-  return 0;
+  NOTREACHED();
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -51,22 +50,8 @@ bool ContentMainDelegate::ShouldLockSchemeRegistry() {
   return true;
 }
 
-absl::optional<int> ContentMainDelegate::PreBrowserMain() {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // On LaCrOS, GPU sandbox failures should always be fatal because we control
-  // the driver environment on ChromeOS.
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      sandbox::policy::switches::kGpuSandboxFailuresFatal, "yes");
-
-  // TODO(crbug.com/1351777): remove this workaround once SwANGLE can work with
-  // the GPU process sandbox.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kOverrideUseSoftwareGLForTests)) {
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        sandbox::policy::switches::kDisableGpuSandbox);
-  }
-#endif
-  return absl::nullopt;
+std::optional<int> ContentMainDelegate::PreBrowserMain() {
+  return std::nullopt;
 }
 
 bool ContentMainDelegate::ShouldCreateFeatureList(InvokedIn invoked_in) {
@@ -82,9 +67,13 @@ ContentMainDelegate::CreateVariationsIdsProvider() {
   return nullptr;
 }
 
-absl::optional<int> ContentMainDelegate::PostEarlyInitialization(
+void ContentMainDelegate::CreateThreadPool(std::string_view name) {
+  base::ThreadPoolInstance::Create(name);
+}
+
+std::optional<int> ContentMainDelegate::PostEarlyInitialization(
     InvokedIn invoked_in) {
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 ContentClient* ContentMainDelegate::CreateContentClient() {
@@ -105,6 +94,31 @@ ContentRendererClient* ContentMainDelegate::CreateContentRendererClient() {
 
 ContentUtilityClient* ContentMainDelegate::CreateContentUtilityClient() {
   return new ContentUtilityClient();
+}
+
+bool ContentMainDelegate::ShouldInitializePerfetto(InvokedIn invoked_in) {
+  return true;
+}
+
+bool ContentMainDelegate::IsInitFeatureListEarly() {
+  return false;
+}
+
+bool ContentMainDelegate::ShouldReconfigurePartitionAlloc() {
+  return true;
+}
+
+bool ContentMainDelegate::ShouldLoadV8Snapshot(
+    const std::string& process_type) {
+  // The gpu does not need v8, and the browser only needs v8 when in single
+  // process mode.
+  if (process_type == switches::kGpuProcess ||
+      (process_type.empty() &&
+       !base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kSingleProcess))) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace content

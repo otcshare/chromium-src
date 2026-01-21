@@ -45,9 +45,11 @@ void EXTDisjointTimerQueryWebGL2::queryCounterEXT(WebGLQuery* query,
     return;
   }
 
-  // Timestamps are disabled in WebGL due to lack of driver support on multiple
-  // platforms, so we don't actually perform a GL call.
-  query->SetTarget(target);
+  scoped.Context()->ContextGL()->QueryCounterEXT(query->Object(), target);
+
+  if (!query->GetTarget()) {
+    query->SetTarget(target);
+  }
   query->ResetCachedResult();
 }
 
@@ -56,7 +58,8 @@ void EXTDisjointTimerQueryWebGL2::Trace(Visitor* visitor) const {
 }
 
 EXTDisjointTimerQueryWebGL2::EXTDisjointTimerQueryWebGL2(
-    WebGLRenderingContextBase* context)
+    WebGLRenderingContextBase* context,
+    ExecutionContext*)
     : WebGLExtension(context) {
   context->ExtensionsUtil()->EnsureExtensionEnabled(
       "GL_EXT_disjoint_timer_query_webgl2");

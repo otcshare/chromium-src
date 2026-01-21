@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_ASH_ATTESTATION_ATTESTATION_CA_CLIENT_H_
 
 #include <list>
-#include <map>
+#include <optional>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/attestation/attestation_flow.h"
 #include "chromeos/ash/components/dbus/constants/attestation_constants.h"
 
@@ -45,7 +46,7 @@ class AttestationCAClient : public ServerProxy {
   void OnURLLoadComplete(
       std::list<std::unique_ptr<network::SimpleURLLoader>>::iterator it,
       DataCallback on_response,
-      std::unique_ptr<std::string> response_body);
+      std::optional<std::string> response_body);
 
   PrivacyCAType GetType() override;
 
@@ -68,7 +69,8 @@ class AttestationCAClient : public ServerProxy {
   // Loaders used for the processing the requests. Invalidated after completion.
   std::list<std::unique_ptr<network::SimpleURLLoader>> url_loaders_;
 
-  network::mojom::NetworkContext* network_context_for_testing_ = nullptr;
+  raw_ptr<network::mojom::NetworkContext> network_context_for_testing_ =
+      nullptr;
 };
 
 }  // namespace attestation

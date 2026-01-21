@@ -5,7 +5,9 @@
 #include "chromeos/ash/components/system/statistics_provider_impl.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -13,13 +15,19 @@
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/path_service.h"
+#include "base/process/launch.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/synchronization/lock.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_runner.h"
@@ -39,14 +47,20 @@ namespace {
 const char kCrosSystemTool[] = "/usr/bin/crossystem";
 const char kCrosSystemValueError[] = "(error)";
 
-// File to get ECHO coupon info from, and key/value delimiters of
-// the file.
-const char kEchoCouponFile[] =
-    "/mnt/stateful_partition/unencrypted/cache/vpd/echo/vpd_echo.txt";
+// Path to the tool to get updated hardware class.
+constexpr char kRuntimeHwidTool[] = "runtime_hwid_tool";
+constexpr char kRuntimeHwidToolArg[] = "get";
 
-const char kVpdRoPartitionStatusKey[] = "RO_VPD_status";
-const char kVpdRwPartitionStatusKey[] = "RW_VPD_status";
-const char kVpdPartitionStatusValid[] = "0";
+// Path to the tool to get VPD info.
+const char kFilteredVpdTool[] = "/usr/sbin/dump_filtered_vpd";
+
+// Exit codes for the dump_filtered_vpd tool.
+enum class DumpVpdExitCodes : int {
+  kValid = 0,
+  kRoInvalid = 1,
+  kRwInvalid = 2,
+  kBothInvalid = kRoInvalid | kRwInvalid,
+};
 
 // The location of OEM manifest file used to trigger OOBE flow for kiosk mode.
 const base::CommandLine::CharType kOemManifestFilePath[] =
@@ -60,6 +74,9 @@ const char kHardwareClassValueUnknown[] = "unknown";
 
 const char kIsVmCrosSystemKey[] = "inside_vm";
 
+// ChromeOS should allow debug features.
+const char kIsCrosDebugCrosSystemKey[] = "cros_debug";
+
 // Items in region dictionary.
 const char kKeyboardsPath[] = "keyboards";
 const char kLocalesPath[] = "locales";
@@ -69,27 +86,45 @@ const char kKeyboardMechanicalLayoutPath[] = "keyboard_mechanical_layout";
 // Timeout that we should wait for statistics to get loaded.
 constexpr base::TimeDelta kLoadTimeout = base::Seconds(3);
 
-// Gets ListValue from given `dictionary` by given `key`, and returns it as a
+// A default activation date for providing results in tests.
+constexpr char kDefaultActivateDateStub[] = "2000-01";
+
+constexpr char kStatisticLoadingTimeMetricNamePrefix[] =
+    "ChromeOS.MachineStatistic.";
+
+// The cache file for VPD info. This file is used to monitor VPD change.
+constexpr base::FilePath::CharType kVpdCacheFilePath[] =
+    FILE_PATH_LITERAL("/run/vpd/rw.txt");
+
+// The file for updated hardware class. This file is used to monitor updated
+// hardware class change.
+constexpr base::FilePath::CharType kUpdatedHwClassFilePath[] =
+    FILE_PATH_LITERAL("/var/cache/hardware_verifier/runtime_hwid");
+
+// Gets the list from the given `dictionary` by given `key`, and returns it as a
 // string with all list values joined by ','. Returns nullopt if `key` is not
 // found.
-absl::optional<std::string> JoinListValuesToString(
-    const base::Value& dictionary,
-    base::StringPiece key) {
-  const base::Value* list_value = dictionary.FindListKey(key);
-  if (list_value == nullptr)
-    return absl::nullopt;
+std::optional<std::string> JoinListValuesToString(
+    const base::Value::Dict& dictionary,
+    std::string_view key) {
+  const base::Value::List* list_value = dictionary.FindList(key);
+  if (list_value == nullptr) {
+    return std::nullopt;
+  }
 
   std::string buffer;
   bool first = true;
-  for (const auto& v : list_value->GetList()) {
+  for (const auto& v : *list_value) {
     const std::string* value = v.GetIfString();
-    if (!value)
-      return absl::nullopt;
+    if (!value) {
+      return std::nullopt;
+    }
 
-    if (first)
+    if (first) {
       first = false;
-    else
+    } else {
       buffer += ',';
+    }
 
     buffer += *value;
   }
@@ -97,61 +132,59 @@ absl::optional<std::string> JoinListValuesToString(
   return buffer;
 }
 
-// Gets ListValue from given `dictionary` by given `key`, and returns the first
-// value of the list as string. Returns nullopt if `key` is not found.
-absl::optional<std::string> GetFirstListValueAsString(
-    const base::Value& dictionary,
-    base::StringPiece key) {
-  const base::Value* list_value = dictionary.FindListKey(key);
-  if (list_value == nullptr || list_value->GetList().empty())
-    return absl::nullopt;
+// Gets the list from the given `dictionary` by given `key`, and returns the
+// first value of the list as string. Returns nullopt if `key` is not found.
+std::optional<std::string> GetFirstListValueAsString(
+    const base::Value::Dict& dictionary,
+    std::string_view key) {
+  const base::Value::List* list_value = dictionary.FindList(key);
+  if (list_value == nullptr || list_value->empty()) {
+    return std::nullopt;
+  }
 
-  const std::string* value = list_value->GetList()[0].GetIfString();
-  if (value == nullptr)
-    return absl::nullopt;
+  const std::string* value = list_value->begin()->GetIfString();
+  if (value == nullptr) {
+    return std::nullopt;
+  }
 
   return *value;
 }
 
-absl::optional<std::string> GetKeyboardLayoutFromRegionalData(
-    const base::Value& region_dict) {
+std::optional<std::string> GetKeyboardLayoutFromRegionalData(
+    const base::Value::Dict& region_dict) {
   return JoinListValuesToString(region_dict, kKeyboardsPath);
 }
 
-absl::optional<std::string> GetKeyboardMechanicalLayoutFromRegionalData(
-    const base::Value& region_dict) {
+std::optional<std::string> GetKeyboardMechanicalLayoutFromRegionalData(
+    const base::Value::Dict& region_dict) {
   const std::string* value =
-      region_dict.FindStringPath(kKeyboardMechanicalLayoutPath);
-  if (value == nullptr)
-    return absl::nullopt;
+      region_dict.FindString(kKeyboardMechanicalLayoutPath);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
 
   return *value;
 }
 
-absl::optional<std::string> GetInitialTimezoneFromRegionalData(
-    const base::Value& region_dict) {
+std::optional<std::string> GetInitialTimezoneFromRegionalData(
+    const base::Value::Dict& region_dict) {
   return GetFirstListValueAsString(region_dict, kTimeZonesPath);
 }
 
-absl::optional<std::string> GetInitialLocaleFromRegionalData(
-    const base::Value& region_dict) {
+std::optional<std::string> GetInitialLocaleFromRegionalData(
+    const base::Value::Dict& region_dict) {
   return JoinListValuesToString(region_dict, kLocalesPath);
 }
 
 // Array mapping region keys to their extracting functions.
 constexpr std::pair<const char*,
-                    absl::optional<std::string> (*)(const base::Value&)>
+                    std::optional<std::string> (*)(const base::Value::Dict&)>
     kRegionKeysToExtractors[] = {
         {kInitialLocaleKey, &GetInitialLocaleFromRegionalData},
         {kKeyboardLayoutKey, &GetKeyboardLayoutFromRegionalData},
         {kKeyboardMechanicalLayoutKey,
          &GetKeyboardMechanicalLayoutFromRegionalData},
         {kInitialTimezoneKey, &GetInitialTimezoneFromRegionalData}};
-
-void ReportVpdCacheReadResult(
-    StatisticsProviderImpl::VpdCacheReadResult result) {
-  base::UmaHistogramEnumeration("Enterprise.VPDCacheReadResult", result);
-}
 
 base::FilePath GetFilePathIgnoreFailure(int key) {
   base::FilePath file_path;
@@ -160,64 +193,163 @@ base::FilePath GetFilePathIgnoreFailure(int key) {
   return file_path;
 }
 
-bool HasOemPrefix(base::StringPiece name) {
+bool HasOemPrefix(std::string_view name) {
   return name.substr(0, 4) == "oem_";
+}
+
+// Called on a background thread to run the command and return the output.
+std::optional<std::string> GetCommandOutput(const base::CommandLine& command) {
+  std::string output;
+  if (!base::GetAppOutput(command, &output)) {
+    LOG(ERROR) << "Failed to run command: " << command.GetProgram();
+    return std::nullopt;
+  }
+  return output;
 }
 
 StatisticsProviderImpl::StatisticsSources CreateDefaultSources() {
   StatisticsProviderImpl::StatisticsSources sources;
   sources.crossystem_tool = base::CommandLine(base::FilePath(kCrosSystemTool));
+  sources.vpd_tool = base::CommandLine(base::FilePath(kFilteredVpdTool));
   sources.machine_info_filepath = GetFilePathIgnoreFailure(FILE_MACHINE_INFO);
-  sources.vpd_echo_filepath = base::FilePath(kEchoCouponFile);
-  sources.vpd_filepath = GetFilePathIgnoreFailure(FILE_VPD);
-  sources.vpd_status_filepath = GetFilePathIgnoreFailure(FILE_VPD_STATUS);
+  sources.runtime_hwid_tool =
+      base::CommandLine({kRuntimeHwidTool, kRuntimeHwidToolArg});
   sources.oem_manifest_filepath = base::FilePath(kOemManifestFilePath);
   sources.cros_regions_filepath = base::FilePath(kCrosRegions);
+  sources.vpd_cache_filepath = base::FilePath(kVpdCacheFilePath);
+  sources.updated_hw_class_filepath = base::FilePath(kUpdatedHwClassFilePath);
   return sources;
 }
 
-// Reads `vpd_status_file`, and loads and checks VPD key-value statuses from it.
-// Returns VpdStatus according to file existence and content.
-StatisticsProvider::VpdStatus LoadVpdStatusFile(
-    const base::FilePath& vpd_status_file) {
-  using Status = StatisticsProvider::VpdStatus;
-  if (!base::PathExists(vpd_status_file)) {
-    return Status::kInvalid;
+// Maps machine statistic name to the MachineStatistic variant in
+// tools/metrics/histograms/metadata/chromeos/histograms.xml.
+std::string_view StatisticNameToMachineStatisticVariant(
+    std::string_view statistic_name) {
+  static constexpr auto kStatisticNameToVariant =
+      base::MakeFixedFlatMap<std::string_view, std::string_view>({
+          {kActivateDateKey, "ActivateDate"},
+          {kBlockDevModeKey, "BlockDevmode"},
+          {kCheckEnrollmentKey, "CheckEnrollment"},
+          {kShouldSendRlzPingKey, "ShouldSendRlzPing"},
+          {kRlzEmbargoEndDateKey, "RlzEmbargoEndDate"},
+          {kCustomizationIdKey, "CustomizationId"},
+          {kDevSwitchBootKey, "DevswBoot"},
+          {kDockMacAddressKey, "DockMac"},
+          {kEthernetMacAddressKey, "EthernetMac"},
+          {kFirmwareWriteProtectCurrentKey, "WpswCur"},
+          {kFirmwareTypeKey, "MainfwType"},
+          {kHardwareClassKey, "HardwareClass"},
+          {kIsVmKey, "IsVm"},
+          {kIsCrosDebugKey, "IsCrosDebug"},
+          {kMachineModelName, "ModelName"},
+          {kMachineOemName, "OemName"},
+          {kManufactureDateKey, "MfgDate"},
+          {kOffersCouponCodeKey, "UbindAttribute"},
+          {kOffersGroupCodeKey, "GbindAttribute"},
+          {kRlzBrandCodeKey, "RlzBrandCode"},
+          {kRegionKey, "Region"},
+          {kSerialNumberKey, "SerialNumber"},
+          {kFlexIdKey, "FlexId"},
+          {kFlexSysVendorKey, "FlexSysVendor"},
+          {kFlexProductNameKey, "FlexProductName"},
+          {kFlexProductVersionKey, "FlexProductVersion"},
+          {kLegacySerialNumberKey, "LegacySerialNumber"},
+          {kInitialLocaleKey, "InitialLocale"},
+          {kInitialTimezoneKey, "InitialTimezone"},
+          {kKeyboardLayoutKey, "KeyboardLayout"},
+          {kKeyboardMechanicalLayoutKey, "KeyboardMechanicalLayout"},
+          {kAttestedDeviceIdKey, "AttestedDeviceId"},
+          {kDisplayProfilesKey, "DisplayProfiles"},
+          {kOemCanExitEnterpriseEnrollmentKey, "OemCanExitEnrollment"},
+          {kOemDeviceRequisitionKey, "OemDeviceRequisition"},
+          {kOemIsEnterpriseManagedKey, "OemEnterpriseManaged"},
+          {kOemKeyboardDrivenOobeKey, "OemKeyboardDrivenOobe"},
+      });
+
+  if (const auto it = kStatisticNameToVariant.find(statistic_name);
+      it != kStatisticNameToVariant.end()) {
+    return it->second;
   }
 
-  NameValuePairsParser::NameValueMap map;
-  NameValuePairsParser parser(&map);
+  LOG(WARNING) << "Unhandled statistic is recorded: " << statistic_name;
+  return statistic_name;
+}
 
-  if (!parser.ParseNameValuePairsFromFile(vpd_status_file,
-                                          NameValuePairsFormat::kVpdDump)) {
-    // Failed to parse one of the values in the status file. Let's still check
-    // if partitions statuses are present. It is safe to ignore malformed
-    // values because a missing key is considered as invalid state.
-    LOG(ERROR) << "Failed to parse VPD status file: " << vpd_status_file;
-  }
-
-  const auto ro_vpd_it = map.find(kVpdRoPartitionStatusKey);
-  const bool is_ro_vpd_valid =
-      ro_vpd_it != map.end() && ro_vpd_it->second == kVpdPartitionStatusValid;
-  LOG_IF(ERROR, !is_ro_vpd_valid)
-      << "RO_VPD partition has non-valid status: '"
-      << (ro_vpd_it == map.end() ? "value missing" : ro_vpd_it->second) << "'";
-
-  const auto rw_vpd_it = map.find(kVpdRwPartitionStatusKey);
-  const bool is_rw_vpd_valid =
-      rw_vpd_it != map.end() && rw_vpd_it->second == kVpdPartitionStatusValid;
-  LOG_IF(ERROR, !is_rw_vpd_valid)
-      << "RW_VPD partition has non-valid status: '"
-      << (rw_vpd_it == map.end() ? "value missing" : rw_vpd_it->second) << "'";
-
-  return is_ro_vpd_valid
-             ? (is_rw_vpd_valid ? Status::kValid : Status::kRwInvalid)
-             : (is_rw_vpd_valid ? Status::kRoInvalid : Status::kInvalid);
+void RecordStatisticsRequestLoadingTimeMetric(std::string_view statistic_name,
+                                              base::TimeDelta loading_time) {
+  // Loading time is expected to be 0 (when requested statistic is already
+  // loaded), or up to short time of `kLoadTimeout`.
+  const std::string metric_name = base::StrCat(
+      {kStatisticLoadingTimeMetricNamePrefix,
+       StatisticNameToMachineStatisticVariant(statistic_name), ".LoadingTime"});
+  base::UmaHistogramTimes(metric_name, loading_time);
 }
 
 }  // namespace
 
-const char kMetricVpdCacheReadResult[] = "Enterprise.VPDCacheReadResult";
+class StatisticsProviderImpl::BackgroundFilePathWatcher {
+ public:
+  static std::unique_ptr<BackgroundFilePathWatcher, base::OnTaskRunnerDeleter>
+  Create(const base::CommandLine& cmd_on_change,
+         const base::FilePath& path_to_watch,
+         scoped_refptr<base::SequencedTaskRunner> main_task_runner,
+         base::RepeatingCallback<void(std::string)> update_callback) {
+    scoped_refptr<base::SequencedTaskRunner> background_task_runner =
+        base::ThreadPool::CreateSequencedTaskRunner(
+            {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+
+    std::unique_ptr<BackgroundFilePathWatcher, base::OnTaskRunnerDeleter>
+        watcher(new BackgroundFilePathWatcher(cmd_on_change, main_task_runner,
+                                              update_callback),
+                base::OnTaskRunnerDeleter(background_task_runner));
+
+    background_task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(&BackgroundFilePathWatcher::StartWatching,
+                       base::Unretained(watcher.get()), path_to_watch));
+
+    return watcher;
+  }
+
+  ~BackgroundFilePathWatcher() = default;
+
+ private:
+  BackgroundFilePathWatcher(
+      const base::CommandLine& cmd_on_change,
+      scoped_refptr<base::SequencedTaskRunner> main_task_runner,
+      base::RepeatingCallback<void(std::string)> update_callback)
+      : cmd_on_change_(cmd_on_change),
+        main_task_runner_(std::move(main_task_runner)),
+        update_callback_(std::move(update_callback)) {}
+
+  void StartWatching(const base::FilePath& path) {
+    CHECK(!watcher_);
+    watcher_ = std::make_unique<base::FilePathWatcher>();
+
+    if (!watcher_->Watch(
+            path, base::FilePathWatcher::Type::kNonRecursive,
+            base::BindRepeating(&BackgroundFilePathWatcher::OnFileChanged,
+                                base::Unretained(this)))) {
+      LOG(ERROR) << "Failed to start file path watcher.";
+    }
+  }
+
+  void OnFileChanged(const base::FilePath& path, bool error) {
+    if (error) {
+      LOG(ERROR) << "Error watching file: " << path.value();
+      return;
+    }
+
+    const auto output = GetCommandOutput(cmd_on_change_);
+    main_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(update_callback_, output.value_or("")));
+  }
+
+  std::unique_ptr<base::FilePathWatcher> watcher_;
+  base::CommandLine cmd_on_change_;
+  scoped_refptr<base::SequencedTaskRunner> main_task_runner_;
+  base::RepeatingCallback<void(std::string)> update_callback_;
+};
 
 StatisticsProviderImpl::StatisticsSources::StatisticsSources() = default;
 
@@ -249,17 +381,39 @@ StatisticsProviderImpl::StatisticsProviderImpl()
 
 StatisticsProviderImpl::StatisticsProviderImpl(StatisticsSources sources)
     : sources_(std::move(sources)),
-      load_statistics_started_(false),
+      loading_state_(LoadingState::kNotStarted),
       oem_manifest_loaded_(false),
       statistics_loaded_(base::WaitableEvent::ResetPolicy::MANUAL,
-                         base::WaitableEvent::InitialState::NOT_SIGNALED) {}
+                         base::WaitableEvent::InitialState::NOT_SIGNALED),
+      updated_hw_class_change_watcher_(nullptr,
+                                       base::OnTaskRunnerDeleter(nullptr)) {
+  if (base::SysInfo::IsRunningOnChromeOS()) {
+    vpd_change_watcher_ = std::make_unique<base::FilePathWatcher>();
+    vpd_change_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+        {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+    vpd_change_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&StatisticsProviderImpl::StartVpdWatcher,
+                                  base::Unretained(this)));
 
-StatisticsProviderImpl::~StatisticsProviderImpl() = default;
+    updated_hw_class_change_watcher_ = BackgroundFilePathWatcher::Create(
+        sources_.runtime_hwid_tool, sources_.updated_hw_class_filepath,
+        base::SequencedTaskRunner::GetCurrentDefault(),
+        base::BindRepeating(&StatisticsProviderImpl::SetUpdatedHardwareClass,
+                            weak_ptr_factory_.GetWeakPtr()));
+  }
+}
+
+StatisticsProviderImpl::~StatisticsProviderImpl() {
+  if (vpd_change_watcher_) {
+    vpd_change_task_runner_->DeleteSoon(FROM_HERE,
+                                        vpd_change_watcher_.release());
+  }
+}
 
 void StatisticsProviderImpl::StartLoadingMachineStatistics(
     bool load_oem_manifest) {
-  CHECK(!load_statistics_started_);
-  load_statistics_started_ = true;
+  CHECK(!HasLoadingStarted());
+  loading_state_ = LoadingState::kStarted;
 
   VLOG(1) << "Started loading statistics. Load OEM Manifest: "
           << load_oem_manifest;
@@ -271,7 +425,9 @@ void StatisticsProviderImpl::StartLoadingMachineStatistics(
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
       base::BindOnce(&StatisticsProviderImpl::LoadMachineStatistics,
-                     base::Unretained(this), load_oem_manifest));
+                     base::Unretained(this),
+                     base::SequencedTaskRunner::GetCurrentDefault(),
+                     weak_ptr_factory_.GetWeakPtr(), load_oem_manifest));
 }
 
 void StatisticsProviderImpl::ScheduleOnMachineStatisticsLoaded(
@@ -296,27 +452,28 @@ void StatisticsProviderImpl::ScheduleOnMachineStatisticsLoaded(
                                                            std::move(callback));
 }
 
-absl::optional<base::StringPiece> StatisticsProviderImpl::GetMachineStatistic(
-    base::StringPiece name) {
+std::optional<std::string_view> StatisticsProviderImpl::GetMachineStatistic(
+    std::string_view name) {
   VLOG(1) << "Machine Statistic requested: " << name;
-  if (!WaitForStatisticsLoaded()) {
+  if (!WaitForStatisticsLoaded(name)) {
     LOG(ERROR) << "GetMachineStatistic called before load started: " << name;
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   // Test region should override any other value.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kCrosRegion)) {
-    if (const absl::optional<base::StringPiece> region_result =
-            GetRegionalInformation(name))
+    if (const std::optional<std::string_view> region_result =
+            GetRegionalInformation(name)) {
       return region_result;
+    }
   }
 
   if (const auto iter = machine_info_.find(name); iter != machine_info_.end()) {
-    return base::StringPiece(iter->second);
+    return std::string_view(iter->second);
   }
 
-  if (const absl::optional<base::StringPiece> region_result =
+  if (const std::optional<std::string_view> region_result =
           GetRegionalInformation(name)) {
     return region_result;
   }
@@ -326,13 +483,13 @@ absl::optional<base::StringPiece> StatisticsProviderImpl::GetMachineStatistic(
     VLOG(1) << "Requested statistic not found: " << name;
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 StatisticsProviderImpl::FlagValue StatisticsProviderImpl::GetMachineFlag(
-    base::StringPiece name) {
+    std::string_view name) {
   VLOG(1) << "Machine Flag requested: " << name;
-  if (!WaitForStatisticsLoaded()) {
+  if (!WaitForStatisticsLoaded(name)) {
     LOG(ERROR) << "GetMachineFlag called before load started: " << name;
     return FlagValue::kUnset;
   }
@@ -352,16 +509,43 @@ StatisticsProviderImpl::FlagValue StatisticsProviderImpl::GetMachineFlag(
 
 void StatisticsProviderImpl::Shutdown() {
   cancellation_flag_.Set();  // Cancel any pending loads
+  if (vpd_change_watcher_) {
+    vpd_change_task_runner_->DeleteSoon(FROM_HERE,
+                                        vpd_change_watcher_.release());
+  }
+  updated_hw_class_change_watcher_.reset();
 }
 
 bool StatisticsProviderImpl::IsRunningOnVm() {
-  if (!base::SysInfo::IsRunningOnChromeOS())
+  if (!base::SysInfo::IsRunningOnChromeOS()) {
     return false;
+  }
   return GetMachineStatistic(kIsVmKey) == kIsVmValueTrue;
+}
+
+bool StatisticsProviderImpl::IsCrosDebugMode() {
+  if (!base::SysInfo::IsRunningOnChromeOS()) {
+    return false;
+  }
+  return GetMachineStatistic(kIsCrosDebugKey) == kIsCrosDebugValueTrue;
 }
 
 StatisticsProvider::VpdStatus StatisticsProviderImpl::GetVpdStatus() const {
   return vpd_status_;
+}
+
+StatisticsProvider::LoadingState StatisticsProviderImpl::GetLoadingState()
+    const {
+  return loading_state_;
+}
+
+std::optional<std::string> StatisticsProviderImpl::GetUpdatedHardwareClass()
+    const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (updated_hardware_class_.empty()) {
+    return std::nullopt;
+  }
+  return updated_hardware_class_;
 }
 
 void StatisticsProviderImpl::SignalStatisticsLoaded() {
@@ -381,22 +565,31 @@ void StatisticsProviderImpl::SignalStatisticsLoaded() {
   }
 
   // Schedule callbacks that were in `statistics_loaded_callbacks_`.
-  for (auto& callback : local_statistics_loaded_callbacks)
+  for (auto& callback : local_statistics_loaded_callbacks) {
     callback.second->PostTask(FROM_HERE, std::move(callback.first));
+  }
 }
 
-bool StatisticsProviderImpl::WaitForStatisticsLoaded() {
-  CHECK(load_statistics_started_);
-  if (statistics_loaded_.IsSignaled())
+bool StatisticsProviderImpl::WaitForStatisticsLoaded(
+    std::string_view statistic_name) {
+  CHECK(HasLoadingStarted());
+  if (statistics_loaded_.IsSignaled()) {
+    RecordStatisticsRequestLoadingTimeMetric(
+        statistic_name,
+        /*loading_time=*/base::TimeDelta());
     return true;
+  }
 
   // Block if the statistics are not loaded yet. Normally this shouldn't
   // happen except during OOBE.
-  base::Time start_time = base::Time::Now();
-  base::ScopedAllowBaseSyncPrimitives allow_wait;
+  const base::Time start_time = base::Time::Now();
+  base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
   statistics_loaded_.TimedWait(kLoadTimeout);
 
-  base::TimeDelta dtime = base::Time::Now() - start_time;
+  const base::TimeDelta dtime = base::Time::Now() - start_time;
+
+  RecordStatisticsRequestLoadingTimeMetric(statistic_name, dtime);
+
   if (statistics_loaded_.IsSignaled()) {
     VLOG(1) << "Statistics loaded after waiting " << dtime.InMilliseconds()
             << "ms.";
@@ -408,12 +601,16 @@ bool StatisticsProviderImpl::WaitForStatisticsLoaded() {
   return false;
 }
 
-void StatisticsProviderImpl::LoadMachineStatistics(bool load_oem_manifest) {
+void StatisticsProviderImpl::LoadMachineStatistics(
+    scoped_refptr<base::SequencedTaskRunner> main_task_runner,
+    base::WeakPtr<StatisticsProviderImpl> weak_ptr,
+    bool load_oem_manifest) {
   // Run from the file task runner. StatisticsProviderImpl is a Singleton<> and
   // will not be destroyed until after threads have been stopped, so this test
   // is always safe.
-  if (cancellation_flag_.IsSet())
+  if (cancellation_flag_.IsSet()) {
     return;
+  }
 
   LoadCrossystemTool();
 
@@ -430,7 +627,7 @@ void StatisticsProviderImpl::LoadMachineStatistics(bool load_oem_manifest) {
   }
 
   LoadMachineInfoFile();
-  LoadVpdFiles();
+  LoadVpd();
 
   // Ensure that the hardware class key is present with the expected
   // key name, and if it couldn't be retrieved, that the value is "unknown".
@@ -448,16 +645,40 @@ void StatisticsProviderImpl::LoadMachineStatistics(bool load_oem_manifest) {
       machine_info_[kIsVmKey] = kIsVmValueTrue;
     }
 
+    // By default, assume that this is *not* in debug mode. If crossystem is not
+    // present, report that we are not in debug mode.
+    machine_info_[kIsCrosDebugKey] = kIsCrosDebugValueFalse;
+    const auto is_debug_iter = machine_info_.find(kIsCrosDebugCrosSystemKey);
+    if (is_debug_iter != machine_info_.end() &&
+        is_debug_iter->second == kIsCrosDebugValueTrue) {
+      machine_info_[kIsCrosDebugKey] = kIsCrosDebugValueTrue;
+    }
+
     // Use the write-protect value from crossystem only if it hasn't been loaded
     // from any other source, since the result of crossystem is less reliable
     // for this key.
-    if (machine_info_.find(kFirmwareWriteProtectCurrentKey) ==
-            machine_info_.end() &&
+    if (!machine_info_.contains(kFirmwareWriteProtectCurrentKey) &&
         !crossystem_wpsw.empty()) {
       LOG(WARNING) << "wpsw_cur missing from machine_info, using value: "
                    << crossystem_wpsw;
       machine_info_[kFirmwareWriteProtectCurrentKey] = crossystem_wpsw;
     }
+
+    // TODO(b/315929204): Remove temporary logging.
+    if (machine_info_.find(kFirmwareWriteProtectCurrentKey) ==
+        machine_info_.end()) {
+      LOG(WARNING) << "Write-protect value unknown.";
+    } else if (machine_info_[kFirmwareWriteProtectCurrentKey] != "1") {
+      LOG(WARNING) << "Write-protect disabled.";
+    }
+
+    // Run the tool once to get the initial value.
+    const auto updated_hardware_class =
+        GetCommandOutput(sources_.runtime_hwid_tool).value_or("");
+    main_task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(&StatisticsProviderImpl::SetUpdatedHardwareClass,
+                       weak_ptr, updated_hardware_class));
   }
 
   if (load_oem_manifest) {
@@ -480,11 +701,12 @@ void StatisticsProviderImpl::LoadMachineStatistics(bool load_oem_manifest) {
     VLOG(1) << "CrOS region set to '" << region << "'";
   }
 
-  LoadRegionsFile(sources_.cros_regions_filepath,
-                  machine_info_.find(kRegionKey) != machine_info_.end()
-                      ? machine_info_[kRegionKey]
-                      : "");
+  const auto it = machine_info_.find(kRegionKey);
 
+  LoadRegionsFile(sources_.cros_regions_filepath,
+                  it != machine_info_.end() ? it->second : "");
+
+  loading_state_ = LoadingState::kFinished;
   SignalStatisticsLoaded();
 }
 
@@ -507,19 +729,23 @@ void StatisticsProviderImpl::LoadCrossystemTool() {
 }
 
 void StatisticsProviderImpl::LoadMachineInfoFile() {
-  if (!base::SysInfo::IsRunningOnChromeOS() &&
-      !base::PathExists(sources_.machine_info_filepath)) {
+  if (!base::PathExists(sources_.machine_info_filepath)) {
+    if (base::SysInfo::IsRunningOnChromeOS()) {
+      // This is unexpected, since the file is supposed to always be populated
+      // by write-machine-info script on ui start.
+      LOG(ERROR) << "Missing machine info: " << sources_.machine_info_filepath;
+      return;
+    }
+
     // Use time value to create an unique stub serial because clashes of the
     // same serial for the same domain invalidate earlier enrollments. Persist
     // to disk to keep it constant across restarts (required for re-enrollment
     // testing).
     std::string stub_contents =
         "\"serial_number\"=\"stub_" +
-        base::NumberToString(base::Time::Now().ToJavaTime()) + "\"\n";
-    int bytes_written =
-        base::WriteFile(sources_.machine_info_filepath, stub_contents.c_str(),
-                        stub_contents.size());
-    if (bytes_written < static_cast<int>(stub_contents.size())) {
+        base::NumberToString(base::Time::Now().InMillisecondsSinceUnixEpoch()) +
+        "\"\n";
+    if (!base::WriteFile(sources_.machine_info_filepath, stub_contents)) {
       PLOG(ERROR) << "Error writing machine info stub "
                   << sources_.machine_info_filepath;
     }
@@ -532,53 +758,59 @@ void StatisticsProviderImpl::LoadMachineInfoFile() {
                                    NameValuePairsFormat::kMachineInfo);
 }
 
-void StatisticsProviderImpl::LoadVpdFiles() {
+void StatisticsProviderImpl::LoadVpd() {
+  if (!base::SysInfo::IsRunningOnChromeOS()) {
+    machine_info_[kActivateDateKey] = kDefaultActivateDateStub;
+    vpd_status_ = VpdStatus::kInvalid;
+    return;
+  }
+
   NameValuePairsParser parser(&machine_info_);
 
-  parser.ParseNameValuePairsFromFile(sources_.vpd_echo_filepath,
-                                     NameValuePairsFormat::kVpdDump);
+  std::string output;
+  int exit_code;
+  if (!base::GetAppOutputWithExitCode(sources_.vpd_tool, &output, &exit_code)) {
+    LOG(ERROR) << "Failed to run VPD tool: " << sources_.vpd_tool.GetProgram();
+    vpd_status_ = VpdStatus::kInvalid;
+    return;
+  }
+  if (!parser.ParseNameValuePairsFromString(output,
+                                            NameValuePairsFormat::kVpdDump)) {
+    LOG(ERROR) << "Errors parsing output from: "
+               << sources_.vpd_tool.GetProgram();
+    vpd_status_ = VpdStatus::kInvalid;
+    return;
+  }
 
-  if (!base::PathExists(sources_.vpd_filepath)) {
-    if (base::SysInfo::IsRunningOnChromeOS()) {
-      // The actual VPD file is missing and there's nothing to load. Record the
-      // metric and continue with loading the next source.
-      ReportVpdCacheReadResult(VpdCacheReadResult::KMissing);
-      LOG(ERROR) << "Missing FILE_VPD: " << sources_.vpd_filepath;
+  switch (exit_code) {
+    case static_cast<int>(DumpVpdExitCodes::kValid):
+      vpd_status_ = VpdStatus::kValid;
+      break;
+    case static_cast<int>(DumpVpdExitCodes::kRoInvalid):
+      vpd_status_ = VpdStatus::kRoInvalid;
+      break;
+    case static_cast<int>(DumpVpdExitCodes::kRwInvalid):
+      vpd_status_ = VpdStatus::kRwInvalid;
+      break;
+    case static_cast<int>(DumpVpdExitCodes::kBothInvalid):
       vpd_status_ = VpdStatus::kInvalid;
-      return;
-    } else {
-      std::string stub_contents = "\"ActivateDate\"=\"2000-01\"\n";
-      int bytes_written = base::WriteFile(
-          sources_.vpd_filepath, stub_contents.c_str(), stub_contents.size());
-      if (bytes_written < static_cast<int>(stub_contents.size())) {
-        PLOG(ERROR) << "Error writing VPD stub " << sources_.vpd_filepath;
-      }
-    }
-  }
+      break;
+    default:
+      vpd_status_ = VpdStatus::kInvalid;
+      LOG(ERROR) << "Unexpected return code from: "
+                 << sources_.vpd_tool.GetProgram() << ", " << exit_code;
+      break;
+  };
 
-  const bool vpd_parse_result = parser.ParseNameValuePairsFromFile(
-      sources_.vpd_filepath, NameValuePairsFormat::kVpdDump);
-  if (base::SysInfo::IsRunningOnChromeOS()) {
-    if (vpd_parse_result) {
-      ReportVpdCacheReadResult(VpdCacheReadResult::kSuccess);
-    } else {
-      ReportVpdCacheReadResult(VpdCacheReadResult::kParseFailed);
-      LOG(ERROR) << "Failed to parse FILE_VPD: " << sources_.vpd_filepath;
-    }
-  }
-
-  vpd_status_ = LoadVpdStatusFile(sources_.vpd_status_filepath);
-
-  LOG_IF(ERROR, vpd_status_ != VpdStatus::kValid)
-      << "Detected invalid VPD state: "
-      << static_cast<std::underlying_type_t<VpdStatus>>(vpd_status_);
+  VLOG(1) << "VPD dump exit status: " << exit_code;
 }
 
 void StatisticsProviderImpl::LoadOemManifestFromFile(
     const base::FilePath& file) {
   // Called from LoadMachineStatistics. Check cancellation_flag_ again here.
-  if (cancellation_flag_.IsSet())
+  if (cancellation_flag_.IsSet()) {
     return;
+  }
 
   KioskOemManifestParser::Manifest oem_manifest;
   if (!KioskOemManifestParser::Load(file, &oem_manifest)) {
@@ -596,16 +828,17 @@ void StatisticsProviderImpl::LoadOemManifestFromFile(
 }
 
 void StatisticsProviderImpl::LoadRegionsFile(const base::FilePath& filename,
-                                             base::StringPiece region) {
+                                             std::string_view region) {
   JSONFileValueDeserializer regions_file(filename);
   int regions_error_code = 0;
   std::string regions_error_message;
   std::unique_ptr<base::Value> json_value =
       regions_file.Deserialize(&regions_error_code, &regions_error_message);
   if (!json_value.get()) {
-    if (base::SysInfo::IsRunningOnChromeOS())
+    if (base::SysInfo::IsRunningOnChromeOS()) {
       LOG(ERROR) << "Failed to load regions file '" << filename.value()
                  << "': error='" << regions_error_message << "'";
+    }
 
     return;
   }
@@ -615,7 +848,7 @@ void StatisticsProviderImpl::LoadRegionsFile(const base::FilePath& filename,
     return;
   }
 
-  base::Value* region_dict = json_value->FindDictKey(region);
+  base::Value::Dict* region_dict = json_value->GetDict().FindDict(region);
   if (region_dict == nullptr) {
     LOG(ERROR) << "Bad regional data: '" << region << "' << not found.";
     return;
@@ -629,15 +862,61 @@ void StatisticsProviderImpl::LoadRegionsFile(const base::FilePath& filename,
   }
 }
 
-absl::optional<base::StringPiece>
-StatisticsProviderImpl::GetRegionalInformation(base::StringPiece name) const {
-  if (machine_info_.find(kRegionKey) == machine_info_.end())
-    return absl::nullopt;
+std::optional<std::string_view> StatisticsProviderImpl::GetRegionalInformation(
+    std::string_view name) const {
+  if (!machine_info_.contains(kRegionKey)) {
+    return std::nullopt;
+  }
 
-  if (const auto iter = region_info_.find(name); iter != region_info_.end())
-    return base::StringPiece(iter->second);
+  if (const auto iter = region_info_.find(name); iter != region_info_.end()) {
+    return std::string_view(iter->second);
+  }
 
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+bool StatisticsProviderImpl::HasLoadingStarted() const {
+  return loading_state_ != LoadingState::kNotStarted;
+}
+
+void StatisticsProviderImpl::StartVpdWatcher() {
+  if (!vpd_change_watcher_->WatchWithChangeInfo(
+          sources_.vpd_cache_filepath,
+          base::FilePathWatcher::WatchOptions{
+              .type = base::FilePathWatcher::Type::kNonRecursive},
+          base::BindRepeating(&StatisticsProviderImpl::OnVpdChange,
+                              base::Unretained(this)))) {
+    LOG(ERROR) << "Failed to set up file watch for: "
+               << sources_.vpd_cache_filepath;
+  }
+  VLOG(1) << "Successfully set up file watch for: "
+          << sources_.vpd_cache_filepath;
+}
+
+void StatisticsProviderImpl::OnVpdChange(
+    const base::FilePathWatcher::ChangeInfo& change_info,
+    const base::FilePath& path,
+    bool error) {
+  if (error) {
+    LOG(ERROR) << "Error watching file: " << path.value();
+    return;
+  }
+  if (change_info.file_path_type !=
+          base::FilePathWatcher::FilePathType::kFile ||
+      change_info.change_type != base::FilePathWatcher::ChangeType::kModified) {
+    return;
+  }
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+      base::BindOnce(&StatisticsProviderImpl::LoadVpd, base::Unretained(this)));
+}
+
+void StatisticsProviderImpl::SetUpdatedHardwareClass(
+    std::string updated_hardware_class) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  updated_hardware_class_ = updated_hardware_class;
 }
 
 }  // namespace ash::system

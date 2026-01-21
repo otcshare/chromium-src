@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_NOTIFICATIONS_SCHEDULER_PUBLIC_CLIENT_OVERVIEW_H_
 #define CHROME_BROWSER_NOTIFICATIONS_SCHEDULER_PUBLIC_CLIENT_OVERVIEW_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 
 #include "chrome/browser/notifications/scheduler/public/impression_detail.h"
 
@@ -18,7 +18,11 @@ struct ClientOverview {
   ClientOverview(ImpressionDetail impression_detail,
                  size_t num_scheduled_notifications);
   ClientOverview(const ClientOverview& other);
+  ClientOverview(ClientOverview&& other);
+  ClientOverview& operator=(const ClientOverview& other);
+  ClientOverview& operator=(ClientOverview&& other);
   ~ClientOverview();
+
   bool operator==(const ClientOverview& other) const;
 
   // Details of impression.

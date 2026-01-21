@@ -7,10 +7,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/command_line.h"
+#include "base/barrier_callback.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/files/safe_base_name.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/file_system_access/features.h"
@@ -20,23 +21,21 @@
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "content/browser/file_system_access/file_system_access_safe_move_helper.h"
 #include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
-#include "content/browser/renderer_host/back_forward_cache_disable.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/file_system_access_permission_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_switches.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "storage/browser/file_system/file_system_operation.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "storage/common/file_system/file_system_util.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom-forward.h"
 
 namespace content {
 
-using WriteLock = FileSystemAccessWriteLockManager::WriteLock;
-using WriteLockType = FileSystemAccessWriteLockManager::WriteLockType;
+using LockHandle = FileSystemAccessLockManager::LockHandle;
 
 namespace {
 std::string GetURLDisplayName(const storage::FileSystemURL& url) {
@@ -72,15 +71,6 @@ FileSystemAccessHandleBase::FileSystemAccessHandleBase(
         WebContentsImpl::FromRenderFrameHostID(context_.frame_id);
     if (web_contents) {
       web_contents_ = web_contents->GetWeakPtr();
-    }
-
-    // Disable back-forward cache as File System Access's usage of
-    // RenderFrameHost::IsActive at the moment is not compatible with bfcache.
-    BackForwardCache::DisableForRenderFrameHost(
-        context_.frame_id,
-        BackForwardCacheDisable::DisabledReason(
-            BackForwardCacheDisable::DisabledReasonId::kFileSystemAccess));
-    if (web_contents_) {
       static_cast<WebContentsImpl*>(web_contents_.get())
           ->IncrementFileSystemAccessHandleCount();
     }
@@ -105,31 +95,57 @@ FileSystemAccessHandleBase::GetReadPermissionStatus() {
 FileSystemAccessHandleBase::PermissionStatus
 FileSystemAccessHandleBase::GetWritePermissionStatus() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // It is not currently possible to have write only handles, so first check the
-  // read permission status. See also:
-  // http://wicg.github.io/file-system-access/#api-filesystemhandle-querypermission
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessWriteMode)) {
+    // It is not currently possible to have write only handles, so no one should
+    // call this method. See also:
+    // http://wicg.github.io/file-system-access/#api-filesystemhandle-querypermission
+    mojo::ReportBadMessage("feature 'FileSystemAccessWriteMode' not enabled");
+    NOTREACHED();
+  }
+  return handle_state_.write_grant->GetStatus();
+}
+
+FileSystemAccessHandleBase::PermissionStatus
+FileSystemAccessHandleBase::GetReadWritePermissionStatus() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PermissionStatus read_status = GetReadPermissionStatus();
-  if (read_status != PermissionStatus::GRANTED)
+  if (read_status != PermissionStatus::GRANTED) {
     return read_status;
+  }
 
   return handle_state_.write_grant->GetStatus();
 }
 
-void FileSystemAccessHandleBase::DoGetPermissionStatus(
-    bool writable,
-    base::OnceCallback<void(PermissionStatus)> callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(writable ? GetWritePermissionStatus()
-                                   : GetReadPermissionStatus());
+FileSystemAccessHandleBase::PermissionStatus
+FileSystemAccessHandleBase::GetEffectiveWritePermissionStatus() {
+  return GetPermissionStatusForMode(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode());
 }
 
+// TODO(crbug.com/40276567): Update callers if they only need write permission.
+void FileSystemAccessHandleBase::DoGetPermissionStatus(
+    blink::mojom::FileSystemAccessPermissionMode mode,
+    base::OnceCallback<void(PermissionStatus)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::move(callback).Run(GetPermissionStatusForMode(mode));
+}
+
+// TODO(crbug.com/40276567): Update callers if they only need write permission.
 void FileSystemAccessHandleBase::DoRequestPermission(
-    bool writable,
+    blink::mojom::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                             PermissionStatus)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  PermissionStatus current_status =
-      writable ? GetWritePermissionStatus() : GetReadPermissionStatus();
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessWriteMode) &&
+      mode == blink::mojom::FileSystemAccessPermissionMode::kWrite) {
+    // Rejects invalid mode at the very beginning.
+    mojo::ReportBadMessage("feature 'FileSystemAccessWriteMode' not enabled");
+    NOTREACHED();
+  }
+
+  PermissionStatus current_status = GetPermissionStatusForMode(mode);
   // If we already have a valid permission status, just return that. Also just
   // return the current permission status if this is called from a worker, as we
   // don't support prompting for increased permissions from workers.
@@ -138,21 +154,70 @@ void FileSystemAccessHandleBase::DoRequestPermission(
   // workers to get File System Access handles. While workers will never be able
   // to call chooseEntries(), they will be able to receive existing handles from
   // windows via postMessage() and IndexedDB.
-  if (current_status != PermissionStatus::ASK || context_.is_worker()) {
+  if (current_status != PermissionStatus::ASK || context_.is_worker) {
     std::move(callback).Run(file_system_access_error::Ok(), current_status);
     return;
   }
-  if (!writable) {
+
+  // 1. Request "read"-only permission.
+  if (mode == blink::mojom::FileSystemAccessPermissionMode::kRead) {
     handle_state_.read_grant->RequestPermission(
         context().frame_id,
         FileSystemAccessPermissionGrant::UserActivationState::kRequired,
         base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
-                       AsWeakPtr(), writable, std::move(callback)));
+                       AsWeakPtr(), mode, std::move(callback)));
     return;
   }
 
-  // Ask for both read and write permission at the same time, the permission
+  // 2. Request "write"-only permission.
+  if (mode == blink::mojom::FileSystemAccessPermissionMode::kWrite) {
+    handle_state_.write_grant->RequestPermission(
+        context().frame_id,
+        FileSystemAccessPermissionGrant::UserActivationState::kRequired,
+        base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
+                       AsWeakPtr(), mode, std::move(callback)));
+    return;
+  }
+
+  // 3. Ask for both read and write permission at the same time, the permission
   // context should coalesce these into one prompt.
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessWriteMode)) {
+    // When the write mode feature is enabled, we need to check both read and
+    // write permission status.
+    if (GetReadPermissionStatus() == PermissionStatus::ASK &&
+        GetWritePermissionStatus() == PermissionStatus::ASK) {
+      handle_state_.read_grant->RequestPermission(
+          context().frame_id,
+          FileSystemAccessPermissionGrant::UserActivationState::kRequired,
+          base::DoNothing());
+      handle_state_.write_grant->RequestPermission(
+          context().frame_id,
+          FileSystemAccessPermissionGrant::UserActivationState::kRequired,
+          base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
+                         AsWeakPtr(), mode, std::move(callback)));
+      return;
+    }
+    if (GetReadPermissionStatus() == PermissionStatus::ASK) {
+      handle_state_.read_grant->RequestPermission(
+          context().frame_id,
+          FileSystemAccessPermissionGrant::UserActivationState::kRequired,
+          base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
+                         AsWeakPtr(), mode, std::move(callback)));
+      return;
+    }
+    if (GetWritePermissionStatus() == PermissionStatus::ASK) {
+      handle_state_.write_grant->RequestPermission(
+          context().frame_id,
+          FileSystemAccessPermissionGrant::UserActivationState::kRequired,
+          base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
+                         AsWeakPtr(), mode, std::move(callback)));
+      return;
+    }
+    NOTREACHED();
+  }
+
   if (GetReadPermissionStatus() == PermissionStatus::ASK) {
     // Ignore callback for the read permission request; if the request fails,
     // the write permission request probably fails the same way. And we check
@@ -164,15 +229,20 @@ void FileSystemAccessHandleBase::DoRequestPermission(
         base::DoNothing());
   }
 
+  // When the standalone write mode feature is disabled, we don't need to
+  // check the write permission status as it's always requested with read
+  // permission, i.e. only `GetReadWritePermissionStatus()` is valid here, and
+  // it must be ASK.
   handle_state_.write_grant->RequestPermission(
       context().frame_id,
       FileSystemAccessPermissionGrant::UserActivationState::kRequired,
       base::BindOnce(&FileSystemAccessHandleBase::DidRequestPermission,
-                     AsWeakPtr(), writable, std::move(callback)));
+                     AsWeakPtr(), mode, std::move(callback)));
+  // Both read & write permission is either granted or denied at this point.
 }
 
 void FileSystemAccessHandleBase::DidRequestPermission(
-    bool writable,
+    blink::mojom::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                             PermissionStatus)> callback,
     FileSystemAccessPermissionGrant::PermissionRequestOutcome outcome) {
@@ -185,14 +255,14 @@ void FileSystemAccessHandleBase::DidRequestPermission(
           file_system_access_error::FromStatus(
               blink::mojom::FileSystemAccessStatus::kSecurityError,
               "Not allowed to request permissions in this context."),
-          writable ? GetWritePermissionStatus() : GetReadPermissionStatus());
+          GetPermissionStatusForMode(mode));
       return;
     case Outcome::kNoUserActivation:
       std::move(callback).Run(
           file_system_access_error::FromStatus(
               blink::mojom::FileSystemAccessStatus::kSecurityError,
               "User activation is required to request permissions."),
-          writable ? GetWritePermissionStatus() : GetReadPermissionStatus());
+          GetPermissionStatusForMode(mode));
       return;
     case Outcome::kBlockedByContentSetting:
     case Outcome::kUserGranted:
@@ -202,9 +272,9 @@ void FileSystemAccessHandleBase::DidRequestPermission(
     case Outcome::kGrantedByContentSetting:
     case Outcome::kGrantedByPersistentPermission:
     case Outcome::kGrantedByAncestorPersistentPermission:
-      std::move(callback).Run(
-          file_system_access_error::Ok(),
-          writable ? GetWritePermissionStatus() : GetReadPermissionStatus());
+    case Outcome::kGrantedByRestorePrompt:
+      std::move(callback).Run(file_system_access_error::Ok(),
+                              GetPermissionStatusForMode(mode));
       return;
   }
   NOTREACHED();
@@ -217,25 +287,8 @@ void FileSystemAccessHandleBase::DoMove(
     bool has_transient_user_activation,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetWritePermissionStatus(),
+  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
             blink::mojom::PermissionStatus::GRANTED);
-
-  // TODO(crbug.com/1247850): Allow moves of files outside of the OPFS.
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableExperimentalWebPlatformFeatures)) {
-    if (url().type() != storage::FileSystemType::kFileSystemTypeTemporary) {
-      std::move(callback).Run(file_system_access_error::FromStatus(
-          blink::mojom::FileSystemAccessStatus::kOperationAborted));
-      return;
-    }
-  }
-
-  if (!FileSystemAccessDirectoryHandleImpl::IsSafePathComponent(
-          new_entry_name)) {
-    std::move(callback).Run(file_system_access_error::FromStatus(
-        blink::mojom::FileSystemAccessStatus::kInvalidArgument));
-    return;
-  }
 
   manager()->ResolveTransferToken(
       std::move(destination_directory),
@@ -249,39 +302,61 @@ void FileSystemAccessHandleBase::DoRename(
     bool has_transient_user_activation,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Must have write access to the entry being moved. However, write access to
-  // the parent directory is not required for renames.
-  DCHECK_EQ(GetWritePermissionStatus(),
+  // To get this far, we must have write access to the entry being moved.
+  // Write access to the parent directory is not required for renames.
+  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
             blink::mojom::PermissionStatus::GRANTED);
 
-  // TODO(crbug.com/1247850): Allow moves of files outside of the OPFS.
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableExperimentalWebPlatformFeatures)) {
-    if (url().type() != storage::FileSystemType::kFileSystemTypeTemporary) {
-      std::move(callback).Run(file_system_access_error::FromStatus(
-          blink::mojom::FileSystemAccessStatus::kOperationAborted));
-      return;
-    }
-  }
-
-  if (!FileSystemAccessDirectoryHandleImpl::IsSafePathComponent(
-          new_entry_name)) {
+  if (!manager()->IsSafePathComponent(
+          url().type(), context_.storage_key.origin(), new_entry_name)) {
     std::move(callback).Run(file_system_access_error::FromStatus(
         blink::mojom::FileSystemAccessStatus::kInvalidArgument));
     return;
   }
 
-  auto dest_parent_url = GetParentURL();
-  auto dir_handle = std::make_unique<FileSystemAccessDirectoryHandleImpl>(
-      manager(), context(), dest_parent_url,
-      manager()->GetSharedHandleStateForPath(
-          dest_parent_url.path(), context_.storage_key,
-          FileSystemAccessPermissionContext::HandleType::kDirectory,
-          FileSystemAccessPermissionContext::UserAction::kNone));
+  auto sibling_safe_name =
+      base::SafeBaseName::Create(storage::StringToFilePath(new_entry_name));
+  CHECK(sibling_safe_name.has_value());
+  storage::FileSystemURL destination_url =
+      url().CreateSibling(*sibling_safe_name);
+#if BUILDFLAG(IS_ANDROID)
+  // Android Content-URIs do not support CreateSibling().
+  if (!destination_url.is_valid()) {
+    CHECK(url().path().IsContentUri());
+    std::move(callback).Run(file_system_access_error::FromStatus(
+        blink::mojom::FileSystemAccessStatus::kInvalidModificationError));
+    return;
+  }
+#endif
+  CHECK(destination_url.is_valid());
 
-  DidCreateDestinationDirectoryHandle(new_entry_name, std::move(dir_handle),
-                                      has_transient_user_activation,
-                                      std::move(callback));
+  SharedHandleState destination_shared_handle_state =
+      url().type() == storage::FileSystemType::kFileSystemTypeTemporary
+          ? manager()->GetSharedHandleStateForSandboxedPath()
+          : manager()->GetSharedHandleStateForNonSandboxedPath(
+                content::PathInfo(destination_url.virtual_path(),
+                                  new_entry_name),
+                context().storage_key,
+                // TODO(crbug.com/40198034): Support directory moves.
+                FileSystemAccessPermissionContext::HandleType::kFile,
+                FileSystemAccessPermissionContext::UserAction::kNone);
+
+  // Require a user gesture if the write access to the destination is not
+  // explicitly granted.
+  bool has_write_access_to_destination =
+      destination_shared_handle_state.write_grant->GetStatus() ==
+      PermissionStatus::GRANTED;
+  if (!has_write_access_to_destination && !has_transient_user_activation) {
+    // Files in the OPFS always have write access and should never be gated on a
+    // user gesture requirement.
+    CHECK_NE(destination_url.type(), storage::kFileSystemTypeTemporary);
+    std::move(callback).Run(file_system_access_error::FromStatus(
+        blink::mojom::FileSystemAccessStatus::kPermissionDenied));
+    return;
+  }
+
+  PrepareForMove(std::move(destination_url), has_write_access_to_destination,
+                 has_transient_user_activation, std::move(callback));
 }
 
 void FileSystemAccessHandleBase::DidResolveTokenToMove(
@@ -306,28 +381,26 @@ void FileSystemAccessHandleBase::DidResolveTokenToMove(
     return;
   }
 
+  if (!manager()->IsSafePathComponent(
+          resolved_destination_directory->url().type(),
+          context_.storage_key.origin(), new_entry_name)) {
+    std::move(callback).Run(file_system_access_error::FromStatus(
+        blink::mojom::FileSystemAccessStatus::kInvalidArgument));
+    return;
+  }
+
   std::unique_ptr<FileSystemAccessDirectoryHandleImpl> dir_handle =
       resolved_destination_directory->CreateDirectoryHandle(context_);
 
   // Must have write access to the target directory for cross-directory moves.
-  if (dir_handle->GetWritePermissionStatus() !=
-      blink::mojom::PermissionStatus::GRANTED) {
+  bool has_write_access_to_parent =
+      dir_handle->GetEffectiveWritePermissionStatus() ==
+      blink::mojom::PermissionStatus::GRANTED;
+  if (!has_write_access_to_parent) {
     std::move(callback).Run(file_system_access_error::FromStatus(
         blink::mojom::FileSystemAccessStatus::kPermissionDenied));
     return;
   }
-
-  DidCreateDestinationDirectoryHandle(new_entry_name, std::move(dir_handle),
-                                      has_transient_user_activation,
-                                      std::move(callback));
-}
-
-void FileSystemAccessHandleBase::DidCreateDestinationDirectoryHandle(
-    const std::string& new_entry_name,
-    std::unique_ptr<FileSystemAccessDirectoryHandleImpl> dir_handle,
-    bool has_transient_user_activation,
-    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   storage::FileSystemURL dest_url;
   blink::mojom::FileSystemAccessErrorPtr error =
@@ -337,76 +410,53 @@ void FileSystemAccessHandleBase::DidCreateDestinationDirectoryHandle(
     return;
   }
 
-  // TODO(crbug.com/1247850): Allow moves of files outside of the OPFS.
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableExperimentalWebPlatformFeatures)) {
-    if (dest_url.type() != storage::FileSystemType::kFileSystemTypeTemporary) {
-      std::move(callback).Run(file_system_access_error::FromStatus(
-          blink::mojom::FileSystemAccessStatus::kOperationAborted));
-      return;
-    }
-  }
-
-  // TODO(https://crbug.com/1396116): Fix FileSystemURL comparison operators
-  // that use a StorageKey.
-  //
-  // This check is held together by a hack in `CreateFileSystemURLFromPath()` in
-  // the FSA manager which ensures all non-sandboxed FileSystemURLs have the
-  // same opaque origin.
-  if (dest_url == url()) {
-    // Nothing to do here.
-    std::move(callback).Run(file_system_access_error::Ok());
-    return;
-  }
-
-  // TODO(crbug.com/1250534): Update this to support directory moves.
-  auto dest_handle = std::make_unique<FileSystemAccessFileHandleImpl>(
-      manager(), context(), dest_url,
-      manager()->GetSharedHandleStateForPath(
-          dest_url.path(), context_.storage_key,
-          FileSystemAccessPermissionContext::HandleType::kFile,
-          FileSystemAccessPermissionContext::UserAction::kNone));
-  // The site cannot write to the destination entry if write access is
-  // explicitly denied.
-  auto dest_status = dest_handle->GetWritePermissionStatus();
-  if (dest_status == blink::mojom::PermissionStatus::DENIED) {
+  // Disallow moves either to or from a sandboxed file system.
+  if (url().type() != dest_url.type() &&
+      (url().type() == storage::FileSystemType::kFileSystemTypeTemporary ||
+       dest_url.type() == storage::FileSystemType::kFileSystemTypeTemporary)) {
     std::move(callback).Run(file_system_access_error::FromStatus(
-        blink::mojom::FileSystemAccessStatus::kPermissionDenied));
+        blink::mojom::FileSystemAccessStatus::kInvalidModificationError));
     return;
   }
 
-  // Ideally we would just check the status of `dest_handle` here, which will
-  // inherit the permissions of its parent if its permission state is not yet
-  // set. However, this permission inheritance logic is not included in the
-  // MockFileSystemAccessPermissionGrants our unit tests use. This is safe
-  // because, due to permission inheritance, a GRANTED state for the parent
-  // implies a GRANTED state for the child, as long as the child is not
-  // explicitly DENIED (which is checked above).
-  auto has_write_access =
-      dest_status == blink::mojom::PermissionStatus::GRANTED ||
-      dir_handle->GetWritePermissionStatus() ==
-          blink::mojom::PermissionStatus::GRANTED;
-  // Require a user gesture if the write access to the destination is not
-  // explicitly granted.
-  if (!has_write_access && !has_transient_user_activation &&
-      base::FeatureList::IsEnabled(
-          features::
-              kFileSystemAccessRenameWithoutParentAccessRequiresUserActivation)) {
-    DCHECK_NE(dest_status, blink::mojom::PermissionStatus::DENIED);
-    // Files in the OPFS always have write access and should never be gated on a
-    // user gesture requirement.
-    DCHECK_NE(dest_url.type(), storage::kFileSystemTypeTemporary);
-    std::move(callback).Run(file_system_access_error::FromStatus(
-        blink::mojom::FileSystemAccessStatus::kPermissionDenied));
-    return;
-  }
+  PrepareForMove(std::move(dest_url), has_write_access_to_parent,
+                 has_transient_user_activation, std::move(callback));
+}
 
-  // The file can only be moved if we can acquire exclusive write locks to both
-  // the source and destination URLs.
-  std::vector<scoped_refptr<WriteLock>> locks;
-  auto source_write_lock =
-      manager()->TakeWriteLock(url(), WriteLockType::kExclusive);
-  if (!source_write_lock) {
+void FileSystemAccessHandleBase::PrepareForMove(
+    storage::FileSystemURL destination_url,
+    bool has_write_access_to_destination,
+    bool has_transient_user_activation,
+    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // The file can only be moved if we can acquire exclusive locks to both the
+  // source and destination URLs.
+  const bool take_destination_lock = destination_url != url();
+  auto barrier_callback = base::BarrierCallback<scoped_refptr<LockHandle>>(
+      take_destination_lock ? 2 : 1,
+      base::BindOnce(&FileSystemAccessHandleBase::DidTakeMoveLocks, AsWeakPtr(),
+                     destination_url, has_transient_user_activation,
+                     has_write_access_to_destination, std::move(callback)));
+
+  manager()->TakeLock(context(), url(), manager()->GetExclusiveLockType(),
+                      barrier_callback);
+  if (take_destination_lock) {
+    manager()->TakeLock(context(), destination_url,
+                        manager()->GetExclusiveLockType(), barrier_callback);
+  }
+}
+
+void FileSystemAccessHandleBase::DidTakeMoveLocks(
+    storage::FileSystemURL destination_url,
+    bool has_transient_user_activation,
+    bool has_write_access_to_destination,
+    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+    std::vector<scoped_refptr<LockHandle>> locks) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  const auto& source_lock = locks[0];
+  if (!source_lock) {
     std::move(callback).Run(file_system_access_error::FromStatus(
         blink::mojom::FileSystemAccessStatus::kNoModificationAllowedError,
         base::StrCat(
@@ -414,47 +464,89 @@ void FileSystemAccessHandleBase::DidCreateDestinationDirectoryHandle(
              ". A FileSystemHandle cannot be moved while it is locked."})));
     return;
   }
-  locks.emplace_back(std::move(source_write_lock));
-
-  // Acquire an exclusive lock to the destination URL.
-  DCHECK(dest_url != url());
-  auto dest_write_lock =
-      manager()->TakeWriteLock(dest_url, WriteLockType::kExclusive);
-  if (!dest_write_lock) {
+  if (locks.size() > 1 && !locks[1]) {
     std::move(callback).Run(file_system_access_error::FromStatus(
         blink::mojom::FileSystemAccessStatus::kNoModificationAllowedError,
         base::StrCat({"Failed to move ", GetURLDisplayName(url()), " to ",
-                      GetURLDisplayName(dest_url),
+                      GetURLDisplayName(destination_url),
                       ". A FileSystemHandle cannot be moved to a destination "
                       "which is locked."})));
     return;
   }
-  locks.emplace_back(std::move(dest_write_lock));
 
-  // Only allow overwriting moves if we have write access to the destination or
-  // its parent.
-  if (has_write_access &&
-      !base::FeatureList::IsEnabled(
-          features::kFileSystemAccessDoNotOverwriteOnMove)) {
-    DoPerformMoveOperation(dest_url, std::move(locks),
+  if (manager()->permission_context() &&
+      destination_url.type() !=
+          storage::FileSystemType::kFileSystemTypeTemporary) {
+    // So far the destination path is considered safe with write access.
+    // However, it might still point to a blocklisted file type. Request a
+    // sensitive entry access check which will decide if the destination path
+    // should be allowed or blocked, and may spawn a confirmation UI.
+    content::PathInfo path_info{
+        destination_url.type() == storage::FileSystemType::kFileSystemTypeLocal
+            ? PathType::kLocal
+            : PathType::kExternal,
+        destination_url.path()};
+    manager()->permission_context()->ConfirmSensitiveEntryAccess(
+        context().storage_key.origin(), path_info,
+        // TODO(crbug.com/40198034): Update once moving directory is supported.
+        FileSystemAccessPermissionContext::HandleType::kFile,
+        // This must be kSave as the move operation will save the file.
+        FileSystemAccessPermissionContext::UserAction::kSave,
+        context().frame_id,
+        base::BindOnce(
+            &FileSystemAccessHandleBase::DidVerifySensitiveEntryAccessForMove,
+            AsWeakPtr(), std::move(destination_url),
+            has_write_access_to_destination, has_transient_user_activation,
+            std::move(callback), std::move(locks)));
+  } else {
+    // Skipping ConfirmSensitiveEntryAccess() as either of the following holds:
+    // (1) no permission context. Possibly because manager() is being destroyed
+    // or in a test.
+    // (2) destination file is in Bucket File System, i.e. not a real file.
+    DidVerifySensitiveEntryAccessForMove(
+        std::move(destination_url), has_write_access_to_destination,
+        has_transient_user_activation, std::move(callback), std::move(locks),
+        FileSystemAccessPermissionContext::SensitiveEntryResult::kAllowed);
+  }
+}
+
+void FileSystemAccessHandleBase::DidVerifySensitiveEntryAccessForMove(
+    storage::FileSystemURL destination_url,
+    bool has_write_access_to_destination,
+    bool has_transient_user_activation,
+    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+    std::vector<scoped_refptr<LockHandle>> locks,
+    FileSystemAccessPermissionContext::SensitiveEntryResult
+        sensitive_entry_result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (sensitive_entry_result !=
+      FileSystemAccessPermissionContext::SensitiveEntryResult::kAllowed) {
+    std::move(callback).Run(file_system_access_error::FromStatus(
+        blink::mojom::FileSystemAccessStatus::kInvalidArgument));
+    return;
+  }
+
+  // Only allow overwriting moves if we have write access to the destination.
+  if (has_write_access_to_destination) {
+    DoPerformMoveOperation(destination_url, std::move(locks),
                            has_transient_user_activation, std::move(callback));
     return;
   }
 
-  // TODO(crbug.com/1250534): Use DirectoryExists() for directory moves.
+  // TODO(crbug.com/40198034): Use DirectoryExists() for directory moves.
   manager()->DoFileSystemOperation(
       FROM_HERE, &storage::FileSystemOperationRunner::FileExists,
       base::BindOnce(
           &FileSystemAccessHandleBase::ConfirmMoveWillNotOverwriteDestination,
-          AsWeakPtr(), has_write_access, dest_url, std::move(locks),
+          AsWeakPtr(), destination_url, std::move(locks),
           has_transient_user_activation, std::move(callback)),
-      dest_url);
+      destination_url);
 }
 
 void FileSystemAccessHandleBase::ConfirmMoveWillNotOverwriteDestination(
-    const bool has_write_access,
     const storage::FileSystemURL& destination_url,
-    std::vector<scoped_refptr<WriteLock>> locks,
+    std::vector<scoped_refptr<LockHandle>> locks,
     bool has_transient_user_activation,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
     base::File::Error result) {
@@ -466,9 +558,7 @@ void FileSystemAccessHandleBase::ConfirmMoveWillNotOverwriteDestination(
       result == base::File::FILE_ERROR_NOT_A_FILE ||
       result == base::File::FILE_ERROR_INVALID_OPERATION) {
     std::move(callback).Run(file_system_access_error::FromStatus(
-        has_write_access
-            ? blink::mojom::FileSystemAccessStatus::kInvalidModificationError
-            : blink::mojom::FileSystemAccessStatus::kPermissionDenied));
+        blink::mojom::FileSystemAccessStatus::kInvalidModificationError));
     return;
   }
 
@@ -478,7 +568,7 @@ void FileSystemAccessHandleBase::ConfirmMoveWillNotOverwriteDestination(
 
 void FileSystemAccessHandleBase::DoPerformMoveOperation(
     const storage::FileSystemURL& destination_url,
-    std::vector<scoped_refptr<WriteLock>> locks,
+    std::vector<scoped_refptr<LockHandle>> locks,
     bool has_transient_user_activation,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -501,14 +591,14 @@ void FileSystemAccessHandleBase::DoPerformMoveOperation(
 
 void FileSystemAccessHandleBase::DidMove(
     storage::FileSystemURL destination_url,
-    std::vector<scoped_refptr<WriteLock>> write_locks,
+    std::vector<scoped_refptr<LockHandle>> locks,
     std::unique_ptr<FileSystemAccessSafeMoveHelper> /*move_helper*/,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
     blink::mojom::FileSystemAccessErrorPtr result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (result->status == blink::mojom::FileSystemAccessStatus::kOk) {
-    // TODO(crbug.com/1247850): Update permission grants appropriately when
+    // TODO(crbug.com/40790187): Update permission grants appropriately when
     // moving into/out of the OPFS. Current state:
     // - Moving out of the OPFS: the destination directory is guaranteed to have
     //   write permission. We _should_ update `handle_state_` to point to this
@@ -519,13 +609,15 @@ void FileSystemAccessHandleBase::DidMove(
     if (ShouldTrackUsage(url_) && ShouldTrackUsage(destination_url) &&
         manager()->permission_context()) {
       manager()->permission_context()->NotifyEntryMoved(
-          context_.storage_key.origin(), url_.path(), destination_url.path());
+          context_.storage_key.origin(), content::PathInfo(url_.path()),
+          content::PathInfo(destination_url.path()));
     }
+
     url_ = std::move(destination_url);
   }
 
   // Destroy locks so they are released by the time the callback runs.
-  write_locks.clear();
+  locks.clear();
 
   std::move(callback).Run(std::move(result));
 }
@@ -533,44 +625,90 @@ void FileSystemAccessHandleBase::DidMove(
 void FileSystemAccessHandleBase::DoRemove(
     const storage::FileSystemURL& url,
     bool recurse,
-    WriteLockType lock_type,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetWritePermissionStatus(),
+  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
             blink::mojom::PermissionStatus::GRANTED);
 
-  if (!base::FeatureList::IsEnabled(features::kFileSystemAccessRemove)) {
-    std::move(callback).Run(file_system_access_error::FromStatus(
-        blink::mojom::FileSystemAccessStatus::kNotSupportedError));
-    return;
-  }
+  // A locked file cannot be removed. Acquire a lock and release it after the
+  // remove operation completes.
+  manager()->TakeLock(
+      context(), url, manager()->GetExclusiveLockType(),
+      base::BindOnce(&FileSystemAccessHandleBase::DidTakeRemoveLock,
+                     AsWeakPtr(), url, recurse, std::move(callback)));
+}
 
-  // A locked file cannot be removed. Acquire a write lock and release it
-  // after the remove operation completes.
-  auto write_lock = manager()->TakeWriteLock(url, lock_type);
-  if (!write_lock) {
+void FileSystemAccessHandleBase::DidTakeRemoveLock(
+    const storage::FileSystemURL& url,
+    bool recurse,
+    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+    scoped_refptr<LockHandle> lock) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!lock) {
     std::move(callback).Run(file_system_access_error::FromStatus(
         blink::mojom::FileSystemAccessStatus::kNoModificationAllowedError));
     return;
   }
 
-  // Bind the `write_lock` to the Remove callback to guarantee the lock is
-  // held until the operation completes.
-  auto wrapped_callback = base::BindOnce(
-      [](scoped_refptr<WriteLock> write_lock,
-         base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
-             callback,
-         base::File::Error result) {
-        // Destroy lock so it is released by the time the callback runs.
-        write_lock.reset();
-        std::move(callback).Run(
-            file_system_access_error::FromFileError(result));
-      },
-      std::move(write_lock), std::move(callback));
+  // Bind the `lock` to the Remove callback to guarantee the lock is held until
+  // the operation completes.
+  auto wrapped_callback =
+      base::BindOnce(&FileSystemAccessHandleBase::DidRemove, AsWeakPtr(), url,
+                     std::move(lock), std::move(callback));
 
   manager()->DoFileSystemOperation(FROM_HERE,
                                    &storage::FileSystemOperationRunner::Remove,
                                    std::move(wrapped_callback), url, recurse);
+}
+
+void FileSystemAccessHandleBase::DidRemove(
+    const storage::FileSystemURL& url,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+    base::File::Error result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Update permission grants appropriately after removing the entry.
+  // See crbug.com/421690393.
+  if (base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessRevokeReadOnRemove) &&
+      result == base::File::FILE_OK && manager()->permission_context() &&
+      ShouldTrackUsage(url_)) {
+    manager()->permission_context()->NotifyEntryRemoved(
+        context_.storage_key.origin(), PathInfo(url.path()));
+  }
+
+  // Destroy lock so it is released by the time the callback runs.
+  lock.reset();
+  std::move(callback).Run(file_system_access_error::FromFileError(result));
+}
+
+void FileSystemAccessHandleBase::DoGetCloudIdentifiers(
+    FileSystemAccessPermissionContext::HandleType handle_type,
+    ContentBrowserClient::GetCloudIdentifiersCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessGetCloudIdentifiers)) {
+    mojo::ReportBadMessage(
+        "feature 'FileSystemAccessGetCloudIdentifiers' not enabled");
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            blink::mojom::FileSystemAccessStatus::kSecurityError),
+        {});
+    return;
+  }
+
+  if (GetReadPermissionStatus() != PermissionStatus::GRANTED) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            blink::mojom::FileSystemAccessStatus::kPermissionDenied),
+        {});
+    return;
+  }
+
+  GetContentClient()->browser()->GetCloudIdentifiers(url_, handle_type,
+                                                     std::move(callback));
 }
 
 // Calculates the parent URL fom current context, propagating any
@@ -587,6 +725,31 @@ storage::FileSystemURL FileSystemAccessHandleBase::GetParentURL() {
     parent.SetBucket(child.bucket().value());
   }
   return parent;
+}
+
+void FileSystemAccessHandleBase::MaybeNotifyEntryModified(
+    const storage::FileSystemURL& url) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessRevokeReadOnRemove) &&
+      manager()->permission_context() && ShouldTrackUsage(url)) {
+    manager()->permission_context()->NotifyEntryModified(
+        context().storage_key.origin(), PathInfo(url.path()));
+  }
+}
+
+FileSystemAccessHandleBase::PermissionStatus
+FileSystemAccessHandleBase::GetPermissionStatusForMode(
+    blink::mojom::FileSystemAccessPermissionMode mode) {
+  switch (mode) {
+    case blink::mojom::FileSystemAccessPermissionMode::kRead:
+      return GetReadPermissionStatus();
+    case blink::mojom::FileSystemAccessPermissionMode::kReadWrite:
+      return GetReadWritePermissionStatus();
+    case blink::mojom::FileSystemAccessPermissionMode::kWrite:
+      return GetWritePermissionStatus();
+  }
 }
 
 }  // namespace content

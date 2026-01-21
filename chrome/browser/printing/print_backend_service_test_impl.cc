@@ -10,7 +10,9 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/printing/print_backend_service_manager.h"
 #include "printing/backend/test_print_backend.h"
 
@@ -65,11 +67,24 @@ struct RenderPrintedPageData {
 
 PrintBackendServiceTestImpl::PrintBackendServiceTestImpl(
     mojo::PendingReceiver<mojom::PrintBackendService> receiver,
+    bool is_sandboxed,
     scoped_refptr<TestPrintBackend> backend)
     : PrintBackendServiceImpl(std::move(receiver)),
+      is_sandboxed_(is_sandboxed),
       test_print_backend_(std::move(backend)) {}
 
-PrintBackendServiceTestImpl::~PrintBackendServiceTestImpl() = default;
+PrintBackendServiceTestImpl::~PrintBackendServiceTestImpl() {
+  if (!skip_dtor_persistent_contexts_check_) {
+    // Make sure that all persistent contexts have been properly cleaned up.
+    DCHECK(persistent_printing_contexts_.empty());
+  }
+  if (is_sandboxed_) {
+    PrintBackendServiceManager::GetInstance().SetServiceForTesting(nullptr);
+  } else {
+    PrintBackendServiceManager::GetInstance().SetServiceForFallbackTesting(
+        nullptr);
+  }
+}
 
 void PrintBackendServiceTestImpl::Init(
 #if BUILDFLAG(IS_WIN)
@@ -107,6 +122,7 @@ void PrintBackendServiceTestImpl::GetDefaultPrinterName(
   PrintBackendServiceImpl::GetDefaultPrinterName(std::move(callback));
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 void PrintBackendServiceTestImpl::GetPrinterSemanticCapsAndDefaults(
     const std::string& printer_name,
     mojom::PrintBackendService::GetPrinterSemanticCapsAndDefaultsCallback
@@ -119,6 +135,7 @@ void PrintBackendServiceTestImpl::GetPrinterSemanticCapsAndDefaults(
   PrintBackendServiceImpl::GetPrinterSemanticCapsAndDefaults(
       printer_name, std::move(callback));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void PrintBackendServiceTestImpl::FetchCapabilities(
     const std::string& printer_name,
@@ -138,6 +155,7 @@ void PrintBackendServiceTestImpl::FetchCapabilities(
 }
 
 void PrintBackendServiceTestImpl::UpdatePrintSettings(
+    uint32_t context_id,
     base::Value::Dict job_settings,
     mojom::PrintBackendService::UpdatePrintSettingsCallback callback) {
   if (terminate_receiver_) {
@@ -145,8 +163,8 @@ void PrintBackendServiceTestImpl::UpdatePrintSettings(
     return;
   }
 
-  PrintBackendServiceImpl::UpdatePrintSettings(std::move(job_settings),
-                                               std::move(callback));
+  PrintBackendServiceImpl::UpdatePrintSettings(
+      context_id, std::move(job_settings), std::move(callback));
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -209,8 +227,8 @@ PrintBackendServiceTestImpl::LaunchForTesting(
       remote.BindNewPipeAndPassReceiver();
 
   // Private ctor.
-  auto service = base::WrapUnique(
-      new PrintBackendServiceTestImpl(std::move(receiver), std::move(backend)));
+  auto service = base::WrapUnique(new PrintBackendServiceTestImpl(
+      std::move(receiver), sandboxed, std::move(backend)));
 #if BUILDFLAG(IS_WIN)
   // Initializes the service with an invalid PrinterXmlParser, so it won't be
   // able to parse XML.
@@ -249,7 +267,7 @@ PrintBackendServiceTestImpl::LaunchForTestingWithServiceThread(
   service_task_runner->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&PrintBackendServiceTestImpl::CreateServiceOnServiceThread,
-                     remote.BindNewPipeAndPassReceiver(), backend,
+                     remote.BindNewPipeAndPassReceiver(), sandboxed, backend,
                      std::move(xml_parser_remote)),
       base::BindLambdaForTesting(
           [&](std::unique_ptr<PrintBackendServiceTestImpl> result_service) {
@@ -274,11 +292,12 @@ PrintBackendServiceTestImpl::LaunchForTestingWithServiceThread(
 std::unique_ptr<PrintBackendServiceTestImpl>
 PrintBackendServiceTestImpl::CreateServiceOnServiceThread(
     mojo::PendingReceiver<mojom::PrintBackendService> receiver,
+    bool is_sandboxed,
     scoped_refptr<TestPrintBackend> backend,
     mojo::PendingRemote<mojom::PrinterXmlParser> xml_parser_remote) {
   // Private ctor.
-  auto service = base::WrapUnique(
-      new PrintBackendServiceTestImpl(std::move(receiver), std::move(backend)));
+  auto service = base::WrapUnique(new PrintBackendServiceTestImpl(
+      std::move(receiver), is_sandboxed, std::move(backend)));
   service->Init(/*locale=*/std::string(), std::move(xml_parser_remote));
 
   return service;

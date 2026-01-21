@@ -7,7 +7,9 @@
 #include <memory>
 #include <utility>
 
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
@@ -35,23 +37,27 @@ WebContentsDisplayObserverView::WebContentsDisplayObserverView(
     display_ = GetDisplayNearestWidget();
     widget_->AddObserver(this);
   }
-  BrowserList::AddObserver(this);
+  browser_collection_observation_.Observe(
+      ProfileBrowserCollection::GetForProfile(
+          Profile::FromBrowserContext(web_contents_->GetBrowserContext())));
 }
 
 WebContentsDisplayObserverView::~WebContentsDisplayObserverView() {
-  if (widget_)
+  if (widget_) {
     widget_->RemoveObserver(this);
-  BrowserList::RemoveObserver(this);
-  CHECK(!IsInObserverList());
+  }
+  CHECK(!WidgetObserver::IsInObserverList());
 }
 
-void WebContentsDisplayObserverView::OnBrowserSetLastActive(Browser* browser) {
+void WebContentsDisplayObserverView::OnBrowserActivated(
+    BrowserWindowInterface* browser) {
   // This gets called when a browser tab detaches from a window or gets merged
   // into another window. We update the widget to observe, if necessary.
   // If |web_contents_| or |widget_| is null, then we no longer have WebContents
   // to observe.
-  if (!web_contents_ || !widget_)
+  if (!web_contents_ || !widget_) {
     return;
+  }
 
   views::Widget* new_widget = views::Widget::GetWidgetForNativeWindow(
       web_contents_->GetTopLevelNativeWindow());
@@ -66,8 +72,9 @@ void WebContentsDisplayObserverView::OnBrowserSetLastActive(Browser* browser) {
 }
 
 void WebContentsDisplayObserverView::OnWidgetDestroying(views::Widget* widget) {
-  if (widget_)
+  if (widget_) {
     widget_->RemoveObserver(this);
+  }
   widget_ = nullptr;
 }
 
@@ -88,8 +95,9 @@ void WebContentsDisplayObserverView::WebContentsDestroyed() {
 
 void WebContentsDisplayObserverView::CheckForDisplayChange() {
   display::Display new_display = GetDisplayNearestWidget();
-  if (new_display.id() == display_.id())
+  if (new_display.id() == display_.id()) {
     return;
+  }
 
   display_ = new_display;
   callback_.Run();
@@ -97,7 +105,7 @@ void WebContentsDisplayObserverView::CheckForDisplayChange() {
 
 display::Display WebContentsDisplayObserverView::GetDisplayNearestWidget()
     const {
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(
+  return display::Screen::Get()->GetDisplayNearestWindow(
       widget_->GetNativeWindow());
 }
 

@@ -12,6 +12,7 @@
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/types/expected.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/storage/policy_value_store.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -30,14 +31,19 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chromeos/constants/chromeos_features.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -86,15 +92,14 @@ class ManagedValueStoreCache::ExtensionTracker
   void OnExtensionsReady();
 
   // Starts a schema load for all extensions that use managed storage.
-  void LoadSchemas(std::unique_ptr<ExtensionSet> added);
+  void LoadSchemas(ExtensionSet added);
 
   bool UsesManagedStorage(const Extension* extension) const;
 
   // Loads the schemas of the |extensions| and passes a ComponentMap to
   // Register().
-  static void LoadSchemasOnFileTaskRunner(
-      std::unique_ptr<ExtensionSet> extensions,
-      base::WeakPtr<ExtensionTracker> self);
+  static void LoadSchemasOnFileTaskRunner(ExtensionSet extensions,
+                                          base::WeakPtr<ExtensionTracker> self);
   void Register(const policy::ComponentMap* components);
 
   raw_ptr<Profile> profile_;
@@ -129,8 +134,8 @@ void ManagedValueStoreCache::ExtensionTracker::OnExtensionWillBeInstalled(
   // most once.
   if (!ExtensionSystem::Get(profile_)->ready().is_signaled())
     return;
-  auto added = std::make_unique<ExtensionSet>();
-  added->Insert(extension);
+  ExtensionSet added;
+  added.Insert(extension);
   LoadSchemas(std::move(added));
 }
 
@@ -152,17 +157,16 @@ void ManagedValueStoreCache::ExtensionTracker::OnExtensionsReady() {
       ExtensionRegistry::Get(profile_)->GenerateInstalledExtensionsSet());
 }
 
-void ManagedValueStoreCache::ExtensionTracker::LoadSchemas(
-    std::unique_ptr<ExtensionSet> added) {
+void ManagedValueStoreCache::ExtensionTracker::LoadSchemas(ExtensionSet added) {
   // Filter out extensions that don't use managed storage.
-  ExtensionSet::const_iterator it = added->begin();
-  while (it != added->end()) {
+  ExtensionSet::const_iterator it = added.begin();
+  while (it != added.end()) {
     std::string to_remove;
     if (!UsesManagedStorage(it->get()))
       to_remove = (*it)->id();
     ++it;
     if (!to_remove.empty())
-      added->Remove(to_remove);
+      added.Remove(to_remove);
   }
 
   GetExtensionFileTaskRunner()->PostTask(
@@ -177,28 +181,29 @@ bool ManagedValueStoreCache::ExtensionTracker::UsesManagedStorage(
 
 // static
 void ManagedValueStoreCache::ExtensionTracker::LoadSchemasOnFileTaskRunner(
-    std::unique_ptr<ExtensionSet> extensions,
+    ExtensionSet extensions,
     base::WeakPtr<ExtensionTracker> self) {
   auto components = std::make_unique<policy::ComponentMap>();
 
-  for (const auto& it : *extensions) {
-    const Extension& extension = *it;
-    if (!extension.manifest()->FindStringPath(
+  for (const auto& extension : extensions) {
+    if (!extension->manifest()->FindStringPath(
             manifest_keys::kStorageManagedSchema)) {
       // TODO(joaodasilva): Remove this. http://crbug.com/325349
-      (*components)[extension.id()] = policy::Schema();
+      (*components)[extension->id()] = policy::Schema();
       continue;
     }
     // The extension should have been validated, so assume the schema exists
-    // and is valid.
-    std::string error;
-    policy::Schema schema =
-        StorageSchemaManifestHandler::GetSchema(&extension, &error);
-    // If the schema is invalid then proceed with an empty schema. The extension
-    // will be listed in chrome://policy but won't be able to load any policies.
-    if (!schema.valid())
+    // and is valid. If the schema is invalid then proceed with an empty schema.
+    // The extension will be listed in chrome://policy but won't be able to load
+    // any policies.
+    base::expected<policy::Schema, std::string> schema =
+        StorageSchemaManifestHandler::GetSchema(extension.get());
+    if (!schema.has_value()) {
+      LOG(ERROR) << "Failed to parse schema for extension " << extension->id()
+                 << " with error: " << schema.error();
       schema = policy::Schema();
-    (*components)[extension.id()] = schema;
+    }
+    (*components)[extension->id()] = std::move(schema.value());
   }
 
   content::GetUIThreadTaskRunner({})->PostTask(
@@ -287,7 +292,7 @@ void ManagedValueStoreCache::RunWithValueStoreForExtension(
 }
 
 void ManagedValueStoreCache::DeleteStorageSoon(
-    const std::string& extension_id) {
+    const ExtensionId& extension_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(backend_sequence_checker_);
   // It's possible that the store exists, but hasn't been loaded yet
   // (because the extension is unloaded, for example). Open the database to
@@ -354,17 +359,22 @@ void ManagedValueStoreCache::OnPolicyUpdated(const policy::PolicyNamespace& ns,
 // static
 policy::PolicyDomain ManagedValueStoreCache::GetPolicyDomain(
     const Profile& profile) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  return ash::ProfileHelper::IsSigninProfile(&profile)
-             ? policy::POLICY_DOMAIN_SIGNIN_EXTENSIONS
-             : policy::POLICY_DOMAIN_EXTENSIONS;
+#if BUILDFLAG(IS_CHROMEOS)
+  bool use_signin_extensions_domain =
+      ash::ProfileHelper::IsSigninProfile(&profile);
+  if (chromeos::features::IsLockScreenBadgeAuthEnabled()) {
+    use_signin_extensions_domain |=
+        ash::ProfileHelper::IsLockScreenProfile(&profile);
+  }
+  return use_signin_extensions_domain ? policy::POLICY_DOMAIN_SIGNIN_EXTENSIONS
+                                      : policy::POLICY_DOMAIN_EXTENSIONS;
 #else
   return policy::POLICY_DOMAIN_EXTENSIONS;
 #endif
 }
 
 void ManagedValueStoreCache::UpdatePolicyOnBackend(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     const policy::PolicyMap& new_policy) {
   if (!HasStore(extension_id) && new_policy.empty()) {
     // Don't create the store now if there are no policies configured for this
@@ -377,7 +387,7 @@ void ManagedValueStoreCache::UpdatePolicyOnBackend(
 }
 
 PolicyValueStore& ManagedValueStoreCache::GetOrCreateStore(
-    const std::string& extension_id) {
+    const ExtensionId& extension_id) {
   const auto& it = store_map_.find(extension_id);
   if (it != store_map_.end())
     return *it->second;
@@ -395,7 +405,7 @@ PolicyValueStore& ManagedValueStoreCache::GetOrCreateStore(
   return *raw_store;
 }
 
-bool ManagedValueStoreCache::HasStore(const std::string& extension_id) const {
+bool ManagedValueStoreCache::HasStore(const ExtensionId& extension_id) const {
   // Note: Currently only manage extensions (not apps).
   return value_store_util::HasValueStore(settings_namespace::MANAGED,
                                          kManagedModelType, extension_id,

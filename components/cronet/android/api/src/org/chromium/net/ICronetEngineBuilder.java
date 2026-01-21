@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 package org.chromium.net;
 
+import androidx.annotation.Nullable;
+
+import java.util.Collections;
 import java.util.Date;
 import java.util.Set;
 
@@ -13,12 +16,28 @@ import java.util.Set;
  * org.chromium.net.CronetEngine.Builder} and {@link
  * org.chromium.net.ExperimentalCronetEngine.Builder}.
  *
- * {@hide internal class}
+ * <p>{@hide internal class}
  */
 public abstract class ICronetEngineBuilder {
+    // The fields below list values which are known to getSupportedConfigOptions().
+    //
+    // Given the fields are final the constant value associated with them is compiled into
+    // class using them. This makes it safe for all implementation to use the field in their code
+    // and not worry about version skew (new implementation aware of values the old API is not),
+    // as long as the values don't change meaning. This isn't true of enums and other dynamic
+    // structures, hence we resort to plain old good ints.
+    public static final int CONNECTION_MIGRATION_OPTIONS = 1;
+    public static final int DNS_OPTIONS = 2;
+    public static final int QUIC_OPTIONS = 3;
+    // No longer used. Keep around to make sure future *_OPTIONS do not use this value.
+    public static final int PROXY_OPTIONS = 4;
+
     // Public API methods.
-    public abstract ICronetEngineBuilder addPublicKeyPins(String hostName, Set<byte[]> pinsSha256,
-            boolean includeSubdomains, Date expirationDate);
+    public abstract ICronetEngineBuilder addPublicKeyPins(
+            String hostName,
+            Set<byte[]> pinsSha256,
+            boolean includeSubdomains,
+            Date expirationDate);
 
     public abstract ICronetEngineBuilder addQuicHint(String host, int port, int alternatePort);
 
@@ -38,6 +57,26 @@ public abstract class ICronetEngineBuilder {
         return this;
     }
 
+    public ICronetEngineBuilder setQuicOptions(QuicOptions quicOptions) {
+        return this;
+    }
+
+    public ICronetEngineBuilder setDnsOptions(DnsOptions dnsOptions) {
+        return this;
+    }
+
+    public ICronetEngineBuilder setConnectionMigrationOptions(
+            ConnectionMigrationOptions connectionMigrationOptions) {
+        return this;
+    }
+
+    public ICronetEngineBuilder setProxyOptions(@Nullable ProxyOptions proxyOptions) {
+        // API layer last resort: prevents calling setProxyOptions on an implementation that does
+        // not know about it.
+        throw new UnsupportedOperationException(
+                "This Cronet implementation does not support ProxyOptions");
+    }
+
     public abstract ICronetEngineBuilder setExperimentalOptions(String options);
 
     public abstract ICronetEngineBuilder setLibraryLoader(
@@ -51,6 +90,17 @@ public abstract class ICronetEngineBuilder {
 
     public abstract ExperimentalCronetEngine build();
 
+    /**
+     * Returns the set of configuration options the builder is able to support natively. This is
+     * used internally to emulate newly added functionality using older APIs where possible.
+     *
+     * <p>The default implementation returns an empty set. Subclasses should override this method to
+     * reflect the supported options that are applicable to them.
+     */
+    protected Set<Integer> getSupportedConfigOptions() {
+        return Collections.emptySet();
+    }
+
     // Experimental API methods.
     //
     // Note: all experimental API methods should have default implementation. This will allow
@@ -63,5 +113,15 @@ public abstract class ICronetEngineBuilder {
 
     public ICronetEngineBuilder setThreadPriority(int priority) {
         return this;
+    }
+
+    /**
+     * Communicates the cronetInitializationRef for use in telemetry/logging, or 0 if the impl does
+     * not support this method.
+     *
+     * <p>Cronet API code with API version level >=31 calls this method shortly after construction.
+     */
+    protected long getLogCronetInitializationRef() {
+        return 0;
     }
 }

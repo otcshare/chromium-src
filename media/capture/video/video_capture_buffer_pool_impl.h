@@ -10,7 +10,6 @@
 #include <map>
 
 #include "base/files/file.h"
-#include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/synchronization/lock.h"
 #include "build/build_config.h"
@@ -21,7 +20,7 @@
 #include "media/capture/video/video_capture_buffer_tracker_factory.h"
 #include "media/capture/video_capture_types.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "media/base/win/dxgi_device_manager.h"
@@ -47,10 +46,14 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
   // VideoCaptureBufferPool implementation.
   base::UnsafeSharedMemoryRegion DuplicateAsUnsafeRegion(
       int buffer_id) override;
-  mojo::ScopedSharedBufferHandle DuplicateAsMojoBuffer(int buffer_id) override;
   std::unique_ptr<VideoCaptureBufferHandle> GetHandleForInProcessAccess(
       int buffer_id) override;
   gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandle(int buffer_id) override;
+  media::mojom::VideoBufferHandlePtr GetVideoBufferHandle(
+      int buffer_id) override;
+
+  VideoCaptureBufferType GetBufferType(int buffer_id) override;
+
   VideoCaptureDevice::Client::ReserveResult ReserveForProducer(
       const gfx::Size& dimensions,
       VideoPixelFormat format,
@@ -59,14 +62,16 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
       int* buffer_id,
       int* buffer_id_to_drop) override;
   void RelinquishProducerReservation(int buffer_id) override;
-  int ReserveIdForExternalBuffer(const gfx::GpuMemoryBufferHandle& handle,
-                                 int* buffer_id_to_drop) override;
+  VideoCaptureDevice::Client::ReserveResult ReserveIdForExternalBuffer(
+      CapturedExternalVideoBuffer buffer,
+      const gfx::Size& dimensions,
+      int* buffer_id_to_drop,
+      int* buffer_id) override;
   double GetBufferPoolUtilization() const override;
   void HoldForConsumers(int buffer_id, int num_clients) override;
   void RelinquishConsumerHold(int buffer_id, int num_clients) override;
 
  private:
-  friend class base::RefCountedThreadSafe<VideoCaptureBufferPoolImpl>;
   ~VideoCaptureBufferPoolImpl() override;
 
   VideoCaptureDevice::Client::ReserveResult ReserveForProducerInternal(

@@ -2,27 +2,48 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web_view/internal/signin/ios_web_view_signin_client.h"
+#import "ios/web_view/internal/signin/ios_web_view_signin_client.h"
 
-#include "components/signin/core/browser/cookie_settings_util.h"
-#include "ios/web_view/internal/signin/web_view_gaia_auth_fetcher.h"
-#include "ios/web_view/internal/web_view_browser_state.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
+#import "base/notimplemented.h"
+#import "components/plus_addresses/core/common/features.h"
+#import "components/signin/ios/browser/wait_for_network_callback_helper_ios.h"
+#import "components/signin/public/identity_manager/primary_account_change_event.h"
+#import "components/version_info/channel.h"
+#import "ios/web_view/internal/signin/web_view_gaia_auth_fetcher.h"
+#import "ios/web_view/internal/web_view_browser_state.h"
+#import "services/network/public/cpp/shared_url_loader_factory.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+namespace {
+
+class IOSWebViewOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
+ protected:
+  signin::OAuthConsumer GetOAuthConsumerForEnterprisePlusAddress()
+      const override {
+    CHECK(base::FeatureList::IsEnabled(
+        plus_addresses::features::kPlusAddressesEnabled));
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kEnterprisePlusAddressName,
+        {plus_addresses::features::kEnterprisePlusAddressOAuthScope.Get()});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForGlicUserStatus() const override {
+    NOTREACHED();
+  }
+};
+
+}  // namespace
 
 IOSWebViewSigninClient::IOSWebViewSigninClient(
     PrefService* pref_service,
     ios_web_view::WebViewBrowserState* browser_state)
     : network_callback_helper_(
-          std::make_unique<WaitForNetworkCallbackHelper>()),
+          std::make_unique<WaitForNetworkCallbackHelperIOS>()),
       pref_service_(pref_service),
-      browser_state_(browser_state) {}
+      browser_state_(browser_state),
+      oauth_consumer_registry_(
+          std::make_unique<IOSWebViewOAuthConsumerRegistry>()) {}
 
-IOSWebViewSigninClient::~IOSWebViewSigninClient() {
-}
+IOSWebViewSigninClient::~IOSWebViewSigninClient() {}
 
 void IOSWebViewSigninClient::Shutdown() {
   network_callback_helper_.reset();
@@ -39,6 +60,10 @@ IOSWebViewSigninClient::GetURLLoaderFactory() {
 
 network::mojom::CookieManager* IOSWebViewSigninClient::GetCookieManager() {
   return browser_state_->GetCookieManager();
+}
+
+network::mojom::NetworkContext* IOSWebViewSigninClient::GetNetworkContext() {
+  return browser_state_->GetNetworkContext();
 }
 
 void IOSWebViewSigninClient::DoFinalInit() {}
@@ -67,8 +92,12 @@ void IOSWebViewSigninClient::PreSignOut(
   std::move(on_signout_decision_reached).Run(SignoutDecision::ALLOW);
 }
 
+bool IOSWebViewSigninClient::AreNetworkCallsDelayed() {
+  return network_callback_helper_->AreNetworkCallsDelayed();
+}
+
 void IOSWebViewSigninClient::DelayNetworkCall(base::OnceClosure callback) {
-  network_callback_helper_->HandleCallback(std::move(callback));
+  network_callback_helper_->DelayNetworkCall(std::move(callback));
 }
 
 std::unique_ptr<GaiaAuthFetcher> IOSWebViewSigninClient::CreateGaiaAuthFetcher(
@@ -78,3 +107,16 @@ std::unique_ptr<GaiaAuthFetcher> IOSWebViewSigninClient::CreateGaiaAuthFetcher(
       consumer, source, GetURLLoaderFactory());
 }
 
+version_info::Channel IOSWebViewSigninClient::GetClientChannel() {
+  // TODO(crbug.com/40216038): pass the correct channel information once
+  // implemented.
+  return version_info::Channel::STABLE;
+}
+
+void IOSWebViewSigninClient::OnPrimaryAccountChanged(
+    signin::PrimaryAccountChangeEvent event_details) {}
+
+signin::OAuthConsumer IOSWebViewSigninClient::GetOAuthConsumerFromId(
+    signin::OAuthConsumerId oauth_consumer_id) const {
+  return oauth_consumer_registry_->GetOAuthConsumerFromId(oauth_consumer_id);
+}

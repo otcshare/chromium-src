@@ -2,20 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// TODO(crbug.com/1231621): Implement some/all of these once Fuchsia supports
-// them.
-
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/notimplemented.h"
 #include "base/task/task_runner.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_registration.h"
 #include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
-
-#include "base/notreached.h"
 
 namespace web_app {
 
@@ -27,17 +24,17 @@ bool FileHandlingIconsSupportedByOs() {
   return false;
 }
 
-void RegisterFileHandlersWithOs(const AppId& app_id,
+void RegisterFileHandlersWithOs(const webapps::AppId& app_id,
                                 const std::string& app_name,
-                                Profile* profile,
+                                const base::FilePath& profile_path,
                                 const apps::FileHandlers& file_handlers,
                                 ResultCallback callback) {
   NOTIMPLEMENTED();
   std::move(callback).Run(Result::kError);
 }
 
-void UnregisterFileHandlersWithOs(const AppId& app_id,
-                                  Profile* profile,
+void UnregisterFileHandlersWithOs(const webapps::AppId& app_id,
+                                  const base::FilePath& profile_path,
                                   ResultCallback callback) {
   NOTIMPLEMENTED();
   std::move(callback).Run(Result::kError);
@@ -45,7 +42,8 @@ void UnregisterFileHandlersWithOs(const AppId& app_id,
 
 namespace internals {
 
-bool RegisterRunOnOsLogin(const ShortcutInfo& shortcut_info) {
+void RegisterRunOnOsLogin(const ShortcutInfo& shortcut_info,
+                          CreateShortcutsCallback callback) {
   NOTIMPLEMENTED();
   return false;
 }
@@ -57,19 +55,21 @@ bool UnregisterRunOnOsLogin(const std::string& app_id,
   return false;
 }
 
-bool CreatePlatformShortcuts(const base::FilePath& web_app_path,
+void CreatePlatformShortcuts(const base::FilePath& web_app_path,
                              const ShortcutLocations& creation_locations,
                              ShortcutCreationReason creation_reason,
-                             const ShortcutInfo& shortcut_info) {
+                             const ShortcutInfo& shortcut_info,
+                             CreateShortcutsCallback callback) {
   NOTIMPLEMENTED();
-  return false;
 }
 
-Result UpdatePlatformShortcuts(const base::FilePath& web_app_path,
-                               const std::u16string& old_app_title,
-                               const ShortcutInfo& shortcut_info) {
+void UpdatePlatformShortcuts(
+    const base::FilePath& shortcut_data_path,
+    const std::u16string& old_app_title,
+    std::optional<ShortcutLocations> user_specified_locations,
+    ResultCallback callback,
+    const ShortcutInfo& shortcut_info) {
   NOTIMPLEMENTED();
-  return Result::kOk;
 }
 
 void DeletePlatformShortcuts(const base::FilePath& web_app_path,

@@ -6,8 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/storage_monitor/storage_info.h"
 #include "components/storage_monitor/storage_info_utils.h"
@@ -24,7 +23,7 @@ MtpManagerClientChromeOS::MtpManagerClientChromeOS(
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-MtpManagerClientChromeOS::~MtpManagerClientChromeOS() {}
+MtpManagerClientChromeOS::~MtpManagerClientChromeOS() = default;
 
 bool MtpManagerClientChromeOS::GetStorageInfoForPath(
     const base::FilePath& path,
@@ -84,7 +83,7 @@ void MtpManagerClientChromeOS::StorageAttached(
   if (device_id.empty() || storage_label.empty())
     return;
 
-  DCHECK(!base::Contains(storage_map_, location));
+  DCHECK(!storage_map_.contains(location));
 
   StorageInfo storage_info(device_id, location, storage_label, vendor_name,
                            product_name, 0);

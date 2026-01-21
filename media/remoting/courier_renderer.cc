@@ -9,21 +9,22 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/numerics/safe_math.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
-#include "components/cast_streaming/public/remoting_proto_enum_utils.h"
-#include "components/cast_streaming/public/remoting_proto_utils.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/buffering_state.h"
 #include "media/base/media_resource.h"
 #include "media/base/renderer_client.h"
 #include "media/base/video_renderer_sink.h"
 #include "media/base/waiting.h"
+#include "media/cast/openscreen/remoting_proto_enum_utils.h"
+#include "media/cast/openscreen/remoting_proto_utils.h"
 #include "media/remoting/demuxer_stream_adapter.h"
 #include "media/remoting/renderer_controller.h"
 
@@ -152,7 +153,7 @@ void CourierRenderer::Initialize(MediaResource* media_resource,
 }
 
 void CourierRenderer::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {}
+    std::optional<base::TimeDelta> latency_hint) {}
 
 void CourierRenderer::Flush(base::OnceClosure flush_cb) {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
@@ -168,10 +169,10 @@ void CourierRenderer::Flush(base::OnceClosure flush_cb) {
   }
 
   state_ = STATE_FLUSHING;
-  absl::optional<uint32_t> flush_audio_count;
+  std::optional<uint32_t> flush_audio_count;
   if (audio_demuxer_stream_adapter_)
     flush_audio_count = audio_demuxer_stream_adapter_->SignalFlush(true);
-  absl::optional<uint32_t> flush_video_count;
+  std::optional<uint32_t> flush_video_count;
   if (video_demuxer_stream_adapter_)
     flush_video_count = video_demuxer_stream_adapter_->SignalFlush(true);
   // Makes sure flush count is valid if stream is available or both audio and
@@ -542,9 +543,8 @@ void CourierRenderer::OnBufferingStateChange(
     OnFatalError(RPC_INVALID);
     return;
   }
-  absl::optional<BufferingState> state =
-      cast_streaming::remoting::ToMediaBufferingState(
-          message->rendererclient_onbufferingstatechange_rpc().state());
+  std::optional<BufferingState> state = media::cast::ToMediaBufferingState(
+      message->rendererclient_onbufferingstatechange_rpc().state());
   BufferingStateChangeReason reason = BUFFERING_CHANGE_REASON_UNKNOWN;
   if (!state.has_value())
     return;
@@ -576,8 +576,8 @@ void CourierRenderer::OnAudioConfigChange(
   const openscreen::cast::AudioDecoderConfig pb_audio_config =
       audio_config_message->audio_decoder_config();
   AudioDecoderConfig out_audio_config;
-  cast_streaming::remoting::ConvertProtoToAudioDecoderConfig(pb_audio_config,
-                                                             &out_audio_config);
+  media::cast::ConvertProtoToAudioDecoderConfig(pb_audio_config,
+                                                &out_audio_config);
   DCHECK(out_audio_config.IsValidConfig());
 
   client_->OnAudioConfigChange(out_audio_config);
@@ -598,8 +598,8 @@ void CourierRenderer::OnVideoConfigChange(
   const openscreen::cast::VideoDecoderConfig pb_video_config =
       video_config_message->video_decoder_config();
   VideoDecoderConfig out_video_config;
-  cast_streaming::remoting::ConvertProtoToVideoDecoderConfig(pb_video_config,
-                                                             &out_video_config);
+  media::cast::ConvertProtoToVideoDecoderConfig(pb_video_config,
+                                                &out_video_config);
   DCHECK(out_video_config.IsValidConfig());
 
   client_->OnVideoConfigChange(out_video_config);
@@ -640,7 +640,7 @@ void CourierRenderer::OnStatisticsUpdate(
     return;
   }
   PipelineStatistics stats;
-  cast_streaming::remoting::ConvertProtoToPipelineStatistics(
+  media::cast::ConvertProtoToPipelineStatistics(
       message->rendererclient_onstatisticsupdate_rpc(), &stats);
   // Note: Each field in |stats| is a delta, not the aggregate amount.
   if (stats.audio_bytes_decoded > 0 || stats.video_frames_decoded > 0 ||
@@ -825,8 +825,9 @@ bool CourierRenderer::IsWaitingForDataFromDemuxers() const {
 
 void CourierRenderer::RegisterForRpcMessaging() {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
-  auto receive_callback = BindToCurrentLoop(base::BindRepeating(
-      &CourierRenderer::OnReceivedRpc, weak_factory_.GetWeakPtr()));
+  auto receive_callback =
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
+          &CourierRenderer::OnReceivedRpc, weak_factory_.GetWeakPtr()));
 
   main_task_runner_->PostTask(
       FROM_HERE,

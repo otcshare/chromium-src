@@ -4,10 +4,8 @@
 
 #include "components/sync_sessions/sessions_global_id_mapper.h"
 
+#include <map>
 #include <utility>
-
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 
 namespace sync_sessions {
 namespace {
@@ -29,7 +27,7 @@ void SessionsGlobalIdMapper::AddGlobalIdChangeObserver(
   global_id_change_observers_.push_back(std::move(callback));
 }
 
-int64_t SessionsGlobalIdMapper::GetLatestGlobalId(int64_t global_id) {
+int64_t SessionsGlobalIdMapper::GetLatestGlobalId(int64_t global_id) const {
   auto g2u_iter = global_to_unique_.find(global_id);
   if (g2u_iter != global_to_unique_.end()) {
     auto u2g_iter = unique_to_current_global_.find(g2u_iter->second);
@@ -94,9 +92,9 @@ void SessionsGlobalIdMapper::CleanupNavigationTracking() {
     // thing to make assumptions about, and an old tab may get refreshed often
     // and still be very important. So instead just delete anything that's
     // orphaned from |global_to_unique_|.
-    base::EraseIf(unique_to_current_global_,
-                  [this](const std::pair<int, int64_t> kv) {
-                    return !base::Contains(global_to_unique_, kv.second);
+    std::erase_if(unique_to_current_global_,
+                  [this](const std::pair<int, int64_t>& kv) {
+                    return !global_to_unique_.contains(kv.second);
                   });
   }
 }

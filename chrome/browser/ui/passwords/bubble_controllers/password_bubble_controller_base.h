@@ -24,7 +24,6 @@ class Profile;
 // password management actions for the corresponding view.
 class PasswordBubbleControllerBase {
  public:
-  enum class PasswordAction { kRemovePassword, kAddPassword };
   enum class DisplayReason { kAutomatic, kUserAction };
   PasswordBubbleControllerBase(
       base::WeakPtr<PasswordsModelDelegate> delegate,
@@ -47,6 +46,12 @@ class PasswordBubbleControllerBase {
   // destroyed.
   void OnBubbleClosing();
 
+  // Called when the mouse enters the bubble view.
+  void OnMouseEntered();
+
+  // Called when the mouse exits the bubble view.
+  void OnMouseExited();
+
   Profile* GetProfile() const;
   content::WebContents* GetWebContents() const;
 
@@ -58,9 +63,6 @@ class PasswordBubbleControllerBase {
   // the reference anymore when we need it.
   scoped_refptr<password_manager::PasswordFormMetricsRecorder>
       metrics_recorder_;
-
-  // True iff bubble should pop up with revealed password value.
-  const bool are_passwords_revealed_when_bubble_is_opened_;
 
   // A bridge to ManagePasswordsUIController instance.
   base::WeakPtr<PasswordsModelDelegate> delegate_;

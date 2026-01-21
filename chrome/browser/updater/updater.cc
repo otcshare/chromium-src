@@ -1,0 +1,92 @@
+// Copyright 2025 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "chrome/browser/updater/updater.h"
+
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "chrome/browser/updater/browser_updater_client.h"
+#include "chrome/browser/updater/browser_updater_client_util.h"
+#include "chrome/updater/mojom/updater_service.mojom.h"
+#include "chrome/updater/updater_scope.h"
+
+namespace updater {
+
+namespace {
+
+void GetUpdaterState(
+    UpdaterScope scope,
+    base::OnceCallback<void(const mojom::UpdaterState&)> callback) {
+  BrowserUpdaterClient::Create(scope)->GetUpdaterState(std::move(callback));
+}
+
+void GetPoliciesJson(UpdaterScope scope,
+                     base::OnceCallback<void(const std::string&)> callback) {
+  BrowserUpdaterClient::Create(scope)->GetPoliciesJson(std::move(callback));
+}
+
+}  // namespace
+
+std::optional<mojom::UpdateState> GetLastOnDemandUpdateState() {
+  return GetLastOnDemandUpdateStateStorage();
+}
+
+std::optional<mojom::AppState> GetLastKnownBrowserRegistration() {
+  return GetLastKnownBrowserRegistrationStorage();
+}
+
+std::optional<mojom::AppState> GetLastKnownUpdaterRegistration() {
+  return GetLastKnownUpdaterRegistrationStorage();
+}
+
+void CheckForUpdate(
+    base::RepeatingCallback<void(const UpdateService::UpdateState&)> callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()}, base::BindOnce(&GetBrowserUpdaterScope),
+      base::BindOnce(
+          [](base::RepeatingCallback<void(
+                 const updater::UpdateService::UpdateState&)> callback,
+             updater::UpdaterScope scope) {
+            BrowserUpdaterClient::Create(scope)->CheckForUpdate(callback);
+          },
+          callback));
+}
+
+void GetSystemUpdaterState(
+    base::OnceCallback<void(const mojom::UpdaterState&)> callback) {
+#if BUILDFLAG(IS_LINUX)
+  // There is no mechanism to support communication across the user/root
+  // boundary for Chromium Updater on Linux.
+  std::move(callback).Run({});
+#else
+  GetUpdaterState(UpdaterScope::kSystem, std::move(callback));
+#endif
+}
+
+void GetUserUpdaterState(
+    base::OnceCallback<void(const mojom::UpdaterState&)> callback) {
+  GetUpdaterState(UpdaterScope::kUser, std::move(callback));
+}
+
+void GetSystemPoliciesJson(
+    base::OnceCallback<void(const std::string&)> callback) {
+#if BUILDFLAG(IS_LINUX)
+  // There is no mechanism to support communication across the user/root
+  // boundary for Chromium Updater on Linux.
+  std::move(callback).Run({});
+#else
+  GetPoliciesJson(UpdaterScope::kSystem, std::move(callback));
+#endif
+}
+
+void GetUserPoliciesJson(
+    base::OnceCallback<void(const std::string&)> callback) {
+  GetPoliciesJson(UpdaterScope::kUser, std::move(callback));
+}
+
+}  // namespace updater

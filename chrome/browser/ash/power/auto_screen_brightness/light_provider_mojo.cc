@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ash/power/auto_screen_brightness/light_provider_mojo.h"
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
@@ -86,7 +86,8 @@ void LightProviderMojo::OnNewDeviceAdded(
     const std::vector<chromeos::sensors::mojom::DeviceType>& types) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!base::Contains(types, chromeos::sensors::mojom::DeviceType::LIGHT)) {
+  if (!std::ranges::contains(types,
+                             chromeos::sensors::mojom::DeviceType::LIGHT)) {
     // Not a light sensor. Ignoring this device.
     return;
   }
@@ -228,7 +229,7 @@ void LightProviderMojo::RegisterLightWithId(int32_t id) {
 
 void LightProviderMojo::GetNameLocationCallback(
     int32_t id,
-    const std::vector<absl::optional<std::string>>& values) {
+    const std::vector<std::optional<std::string>>& values) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(light_device_id_.value_or(-1), id);
 

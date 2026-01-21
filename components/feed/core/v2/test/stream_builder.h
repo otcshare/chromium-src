@@ -12,6 +12,7 @@
 #include "base/time/time.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/proto/v2/wire/web_feeds.pb.h"
+#include "components/feed/core/v2/feedstore_util.h"
 #include "components/feed/core/v2/proto_util.h"
 #include "components/feed/core/v2/protocol_translator.h"
 #include "components/feed/core/v2/public/types.h"
@@ -66,6 +67,8 @@ struct StreamModelUpdateRequestGenerator {
   bool logging_enabled = true;
   bool privacy_notice_fulfilled = false;
   int event_id_number = 123;
+  std::string stream_key =
+      feedstore::StreamKey(StreamType(StreamKind::kForYou));
 
   StreamModelUpdateRequestGenerator();
   ~StreamModelUpdateRequestGenerator();
@@ -82,6 +85,8 @@ struct StreamModelUpdateRequestGenerator {
           StreamModelUpdateRequest::Source::kInitialLoadFromStore) const;
 };
 
+std::unique_ptr<StreamModelUpdateRequest> MakeEmptyModelState();
+
 // Returns data operations to create a typical stream:
 // Root
 // |-Cluster 0
@@ -94,7 +99,9 @@ std::unique_ptr<StreamModelUpdateRequest> MakeTypicalInitialModelState(
     base::Time last_added_time = kTestTimeEpoch,
     bool signed_in = true,
     bool logging_enabled = true,
-    bool privacy_notice_fulfilled = false);
+    bool privacy_notice_fulfilled = false,
+    std::string stream_key =
+        feedstore::StreamKey(StreamType(StreamKind::kForYou)));
 // Returns data operations to create a typical stream for refreshing:
 // Root
 // |-Cluster 2
@@ -128,6 +135,8 @@ WebFeedPageInformation MakeWebFeedPageInformation(const std::string& url);
 feedwire::webfeed::FollowWebFeedResponse SuccessfulFollowResponse(
     const std::string& follow_name);
 feedwire::webfeed::UnfollowWebFeedResponse SuccessfulUnfollowResponse();
+feedwire::webfeed::QueryWebFeedResponse SuccessfulQueryResponse(
+    const std::string& query_name);
 feedwire::webfeed::WebFeedMatcher MakeDomainMatcher(const std::string& domain);
 
 }  // namespace feed

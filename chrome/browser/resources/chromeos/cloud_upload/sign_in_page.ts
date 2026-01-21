@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 
 import {BaseSetupPageElement, CANCEL_SETUP_EVENT, NEXT_PAGE_EVENT} from './base_setup_page.js';
 import {CloudUploadBrowserProxy} from './cloud_upload_browser_proxy.js';
@@ -20,7 +20,9 @@ export class SignInPageElement extends BaseSetupPageElement {
   /**
    * Initialises the page specific content inside the page.
    */
-  connectedCallback(): void {
+  override connectedCallback(): void {
+    super.connectedCallback();
+
     this.innerHTML = getTemplate();
     const connectButton = this.querySelector<HTMLElement>('.action-button')!;
     const cancelButton = this.querySelector<HTMLElement>('.cancel-button')!;
@@ -36,10 +38,13 @@ export class SignInPageElement extends BaseSetupPageElement {
       this.dispatchEvent(
           new CustomEvent(NEXT_PAGE_EVENT, {bubbles: true, composed: true}));
     } else {
-      const connectButton = this.querySelector<HTMLElement>('.action-button')!;
       const errorMessage = this.querySelector<HTMLElement>('#error-message')!;
-      connectButton.innerText = 'Retry';
       errorMessage.toggleAttribute('hidden', false);
+      // Update top/bottom fade style if the dialog's content overflows.
+      const contentElement =
+          this.shadowRoot!.querySelector<HTMLElement>('#content')!;
+      contentElement.scrollTop = 0;
+      this.updateContentFade(contentElement);
     }
   }
 

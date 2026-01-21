@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/core/dom/slot_assignment.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/html_style_element.h"
@@ -38,7 +39,6 @@
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
-#include "third_party/blink/renderer/core/layout/layout_object_factory.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -46,47 +46,36 @@
 
 namespace blink {
 
-namespace {
-
-bool IsFirstSummary(const Node& node) {
-  DCHECK(IsA<HTMLDetailsElement>(node.parentElement()));
-  if (!IsA<HTMLSummaryElement>(node))
-    return false;
-  return node.parentElement() &&
-         &node ==
-             Traversal<HTMLSummaryElement>::FirstChild(*node.parentElement());
-}
-
-}  // namespace
-
 HTMLDetailsElement::HTMLDetailsElement(Document& document)
-    : HTMLElement(html_names::kDetailsTag, document), is_open_(false) {
+    : HTMLElement(html_names::kDetailsTag, document) {
   UseCounter::Count(document, WebFeature::kDetailsElement);
-  EnsureUserAgentShadowRoot().SetSlotAssignmentMode(
-      SlotAssignmentMode::kManual);
+  EnsureUserAgentShadowRoot(SlotAssignmentMode::kManual);
 }
 
 HTMLDetailsElement::~HTMLDetailsElement() = default;
 
 void HTMLDetailsElement::DispatchPendingEvent(
     const AttributeModificationReason reason) {
+  Event* toggle_event = nullptr;
+  CHECK(pending_toggle_event_);
+  toggle_event = pending_toggle_event_.Get();
+  pending_toggle_event_ = nullptr;
+
   if (reason == AttributeModificationReason::kByParser)
     GetDocument().SetToggleDuringParsing(true);
-  DispatchEvent(*Event::Create(event_type_names::kToggle));
+  DispatchEvent(*toggle_event);
   if (reason == AttributeModificationReason::kByParser)
     GetDocument().SetToggleDuringParsing(false);
 }
 
-LayoutObject* HTMLDetailsElement::CreateLayoutObject(const ComputedStyle& style,
-                                                     LegacyLayout legacy) {
-  return LayoutObjectFactory::CreateBlockFlow(*this, style, legacy);
-}
-
-// Creates shadow DOM
-// <SLOT id="details-summary">
-//   <SUMMARY>#text "Details"</SUMMARY>
-// <SLOT id="details-content" style="display: none;">
-// <STYLE>...
+// Creates shadow DOM:
+// #shadowroot
+//   <SLOT id="details-summary">
+//     <SUMMARY>Details</SUMMARY>
+//   </SLOT>
+//   <SLOT id="details-content"
+//         style="content-visibility: hidden; display:block;"></SLOT>
+//   <STYLE>...
 void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
   auto* default_summary =
       MakeGarbageCollected<HTMLSummaryElement>(GetDocument());
@@ -101,6 +90,7 @@ void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
 
   content_slot_ = MakeGarbageCollected<HTMLSlotElement>(GetDocument());
   content_slot_->SetIdAttribute(shadow_element_names::kIdDetailsContent);
+  content_slot_->SetShadowPseudoId(shadow_element_names::kIdDetailsContent);
   content_slot_->SetInlineStyleProperty(CSSPropertyID::kContentVisibility,
                                         CSSValueID::kHidden);
   content_slot_->EnsureDisplayLockContext().SetIsDetailsSlotElement(true);
@@ -108,8 +98,8 @@ void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
                                         CSSValueID::kBlock);
   root.AppendChild(content_slot_);
 
-  auto* default_summary_style = MakeGarbageCollected<HTMLStyleElement>(
-      GetDocument(), CreateElementFlags::ByCreateElement());
+  auto* default_summary_style =
+      MakeGarbageCollected<HTMLStyleElement>(GetDocument());
   // This style is required only if this <details> shows the UA-provided
   // <summary>, not a light child <summary>.
   default_summary_style->setTextContent(R"CSS(
@@ -125,26 +115,27 @@ void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
   root.AppendChild(default_summary_style);
 }
 
-Element* HTMLDetailsElement::FindMainSummary() const {
+Element& HTMLDetailsElement::MainSummary() const {
   if (HTMLSummaryElement* summary =
           Traversal<HTMLSummaryElement>::FirstChild(*this))
-    return summary;
-
-  auto* element = UserAgentShadowRoot()->firstChild();
-  CHECK(!element || IsA<HTMLSlotElement>(element));
-  HTMLSlotElement* slot = To<HTMLSlotElement>(element);
-  DCHECK(slot->firstChild());
-  CHECK(IsA<HTMLSummaryElement>(*slot->firstChild()));
-  return To<Element>(slot->firstChild());
+    return *summary;
+  HTMLSlotElement& slot =
+      To<HTMLSlotElement>(*UserAgentShadowRoot()->firstChild());
+  CHECK(IsA<HTMLSummaryElement>(*slot.firstChild()));
+  return *To<Element>(slot.firstChild());
 }
 
 void HTMLDetailsElement::ManuallyAssignSlots() {
   HeapVector<Member<Node>> summary_nodes;
   HeapVector<Member<Node>> content_nodes;
   for (Node& child : NodeTraversal::ChildrenOf(*this)) {
-    if (!child.IsSlotable())
+    if (!child.IsSlotable()) {
+      CHECK(!IsA<HTMLSummaryElement>(child));
       continue;
-    if (IsFirstSummary(child)) {
+    }
+    bool is_first_summary =
+        summary_nodes.empty() && IsA<HTMLSummaryElement>(child);
+    if (is_first_summary) {
       summary_nodes.push_back(child);
     } else {
       content_nodes.push_back(child);
@@ -155,6 +146,7 @@ void HTMLDetailsElement::ManuallyAssignSlots() {
 }
 
 void HTMLDetailsElement::Trace(Visitor* visitor) const {
+  visitor->Trace(pending_toggle_event_);
   visitor->Trace(summary_slot_);
   visitor->Trace(content_slot_);
   HTMLElement::Trace(visitor);
@@ -162,6 +154,13 @@ void HTMLDetailsElement::Trace(Visitor* visitor) const {
 
 void HTMLDetailsElement::ParseAttribute(
     const AttributeModificationParams& params) {
+  CHECK(params.reason != AttributeModificationReason::kByParser ||
+        !parentNode())
+      << "This code depends on the parser setting attributes before inserting "
+         "into the document; if that were not the case we would need to "
+         "handle setting of either open or name by the parser, and "
+         "potentially change the open attribute during that handling.";
+
   if (params.name == html_names::kOpenAttr) {
     bool old_value = is_open_;
     is_open_ = !params.new_value.IsNull();
@@ -169,72 +168,180 @@ void HTMLDetailsElement::ParseAttribute(
       return;
 
     // Dispatch toggle event asynchronously.
-    pending_event_ = PostCancellableTask(
+    String old_state = is_open_ ? "closed" : "open";
+    String new_state = is_open_ ? "open" : "closed";
+    if (pending_toggle_event_) {
+      old_state = pending_toggle_event_->oldState();
+    }
+    pending_toggle_event_ =
+        ToggleEvent::Create(event_type_names::kToggle, Event::Cancelable::kNo,
+                            old_state, new_state, /*source=*/nullptr);
+    pending_event_task_ = PostCancellableTask(
         *GetDocument().GetTaskRunner(TaskType::kDOMManipulation), FROM_HERE,
-        WTF::BindOnce(&HTMLDetailsElement::DispatchPendingEvent,
-                      WrapPersistent(this), params.reason));
+        BindOnce(&HTMLDetailsElement::DispatchPendingEvent,
+                 WrapPersistent(this), params.reason));
 
-    Element* content = EnsureUserAgentShadowRoot().getElementById(
-        shadow_element_names::kIdDetailsContent);
+    Element* content =
+        EnsureUserAgentShadowRoot(SlotAssignmentMode::kManual)
+            .getElementById(shadow_element_names::kIdDetailsContent);
     DCHECK(content);
 
     if (is_open_) {
       content->RemoveInlineStyleProperty(CSSPropertyID::kContentVisibility);
-      content->RemoveInlineStyleProperty(CSSPropertyID::kDisplay);
+
+      // https://html.spec.whatwg.org/multipage/interactive-elements.html#ensure-details-exclusivity-by-closing-other-elements-if-needed
+      //
+      // The name attribute links multiple details elements into an
+      // exclusive accordion.  So if this one has a name, close the
+      // other ones with the same name.
+      CHECK_NE(params.reason,
+               AttributeModificationReason::kBySynchronizationOfLazyAttribute);
+      // TODO(https://crbug.com/1444057): Should this be in
+      // AttributeChanged instead?
+      if (!GetName().empty() &&
+          params.reason == AttributeModificationReason::kDirectly) {
+        HeapVector<Member<HTMLDetailsElement>> details_with_name(
+            OtherElementsInNameGroup());
+        for (HTMLDetailsElement* other_details : details_with_name) {
+          CHECK_NE(other_details, this);
+          UseCounter::Count(
+              GetDocument(),
+              WebFeature::kHTMLDetailsElementNameAttributeClosesOther);
+          other_details->setAttribute(html_names::kOpenAttr, g_null_atom);
+        }
+      }
     } else {
-      content->SetInlineStyleProperty(CSSPropertyID::kDisplay,
-                                      CSSValueID::kBlock);
       content->SetInlineStyleProperty(CSSPropertyID::kContentVisibility,
                                       CSSValueID::kHidden);
       content->EnsureDisplayLockContext().SetIsDetailsSlotElement(true);
     }
+  } else {
+    HTMLElement::ParseAttribute(params);
+  }
+}
 
+void HTMLDetailsElement::AttributeChanged(
+    const AttributeModificationParams& params) {
+  if (params.name == html_names::kNameAttr) {
+    if (!params.new_value.empty()) {
+      UseCounter::Count(GetDocument(),
+                        WebFeature::kHTMLDetailsElementNameAttribute);
+    }
+    MaybeCloseForExclusivity();
+  }
+  if (params.name == html_names::kOpenAttr &&
+      params.old_value != params.new_value) {
+    PseudoStateChanged(CSSSelector::kPseudoOpen);
+  }
+
+  HTMLElement::AttributeChanged(params);
+}
+
+Node::InsertionNotificationRequest HTMLDetailsElement::InsertedInto(
+    ContainerNode& insertion_point) {
+  Node::InsertionNotificationRequest result =
+      HTMLElement::InsertedInto(insertion_point);
+
+  MaybeCloseForExclusivity();
+
+  return result;
+}
+
+// https://html.spec.whatwg.org/multipage/C#ensure-details-exclusivity-by-closing-the-given-element-if-needed
+void HTMLDetailsElement::MaybeCloseForExclusivity() {
+  if (GetName().empty() || !is_open_) {
     return;
   }
-  HTMLElement::ParseAttribute(params);
+
+  HeapVector<Member<HTMLDetailsElement>> details_with_name(
+      OtherElementsInNameGroup());
+  for (HTMLDetailsElement* other_details : details_with_name) {
+    CHECK_NE(other_details, this);
+    if (other_details->is_open_) {
+      // close this details element
+      UseCounter::Count(GetDocument(),
+                        WebFeature::kHTMLDetailsElementNameAttributeClosesSelf);
+      ToggleOpen();
+      break;
+    }
+  }
 }
 
 void HTMLDetailsElement::ToggleOpen() {
   setAttribute(html_names::kOpenAttr, is_open_ ? g_null_atom : g_empty_atom);
 }
 
+HeapVector<Member<HTMLDetailsElement>>
+HTMLDetailsElement::OtherElementsInNameGroup() {
+  HeapVector<Member<HTMLDetailsElement>> result;
+  const AtomicString& name = GetName();
+  if (name.empty()) {
+    return result;
+  }
+  HTMLDetailsElement* details = Traversal<HTMLDetailsElement>::Next(TreeRoot());
+  while (details) {
+    if (details != this && details->GetName() == name) {
+      result.push_back(details);
+    }
+    details = Traversal<HTMLDetailsElement>::Next(*details);
+  }
+  return result;
+}
+
 bool HTMLDetailsElement::IsInteractiveContent() const {
   return true;
 }
 
-// static
-bool HTMLDetailsElement::ExpandDetailsAncestors(const Node& node) {
-  // Since setting the open attribute fires mutation events which could mess
-  // with the FlatTreeTraversal iterator, we should first iterate details
-  // elements to open and then open them all.
-  HeapVector<Member<HTMLDetailsElement>> details_to_open;
+bool HTMLDetailsElement::IsValidBuiltinCommand(HTMLElement& invoker,
+                                               CommandEventType command) {
+  bool parent_is_valid = HTMLElement::IsValidBuiltinCommand(invoker, command);
+  if (!RuntimeEnabledFeatures::HTMLCommandActionsV2Enabled()) {
+    return parent_is_valid;
+  }
+  return parent_is_valid || command == CommandEventType::kToggle ||
+         command == CommandEventType::kOpen ||
+         command == CommandEventType::kClose;
+}
 
-  for (Node& parent : FlatTreeTraversal::AncestorsOf(node)) {
-    if (HTMLDetailsElement* details = DynamicTo<HTMLDetailsElement>(parent)) {
-      // If the active match is inside the <summary> of a <details>, then we
-      // shouldn't expand the <details> because the active match is already
-      // visible.
-      bool inside_summary = false;
-      Element& summary = *details->FindMainSummary();
-      for (Node& ancestor : FlatTreeTraversal::AncestorsOf(node)) {
-        if (&ancestor == &summary) {
-          inside_summary = true;
-          break;
-        }
-      }
+bool HTMLDetailsElement::HandleCommandInternal(HTMLElement& invoker,
+                                               CommandEventType command) {
+  if (!IsValidBuiltinCommand(invoker, command)) {
+    return false;
+  }
+  if (HTMLElement::HandleCommandInternal(invoker, command)) {
+    return true;
+  }
 
-      if (!inside_summary &&
-          !details->FastHasAttribute(html_names::kOpenAttr)) {
-        details_to_open.push_back(details);
-      }
+  if (command == CommandEventType::kToggle) {
+    ToggleOpen();
+  } else if (command == CommandEventType::kClose) {
+    if (is_open_) {
+      setAttribute(html_names::kOpenAttr, g_null_atom);
     }
+  } else if (command == CommandEventType::kOpen) {
+    if (!is_open_) {
+      setAttribute(html_names::kOpenAttr, g_empty_atom);
+    }
+  } else {
+    return false;
   }
 
-  for (HTMLDetailsElement* details : details_to_open) {
-    details->setAttribute(html_names::kOpenAttr, g_empty_atom);
+  if (pending_toggle_event_) {
+    // pending_toggle_event_ is created inside the attribute handling code which
+    // we can't pass the invoker to, so we set it here instead.
+    pending_toggle_event_ = ToggleEvent::Create(
+        pending_toggle_event_->type(),
+        pending_toggle_event_->cancelable() ? Event::Cancelable::kYes
+                                            : Event::Cancelable::kNo,
+        pending_toggle_event_->oldState(), pending_toggle_event_->newState(),
+        &invoker);
   }
 
-  return details_to_open.size();
+  return true;
+}
+
+bool HTMLDetailsElement::IsAssignedToContentSlot(const Node& node) const {
+  return node.AssignedSlot() == content_slot_;
 }
 
 }  // namespace blink

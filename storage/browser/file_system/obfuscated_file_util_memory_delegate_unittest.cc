@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -344,8 +345,8 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, CopyForeignFile) {
                 FileSystemOperation::CopyOrMoveOptionSet(), sync));
   EXPECT_TRUE(FileExists(valid_to_file));
   EXPECT_EQ(test_data_len, GetSize(valid_to_file));
-  scoped_refptr<net::IOBuffer> content =
-      base::MakeRefCounted<net::IOBuffer>(static_cast<size_t>(test_data_len));
+  auto content = base::MakeRefCounted<net::IOBufferWithSize>(
+      static_cast<size_t>(test_data_len));
   EXPECT_EQ(test_data_len, file_util()->ReadFile(valid_to_file, 0,
                                                  content.get(), test_data_len));
   EXPECT_EQ(std::string(test_data),
@@ -631,8 +632,7 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, PreserveLastModified_NoSync) {
 
   ASSERT_EQ(base::File::FILE_OK,
             file_util()->CopyOrMoveFile(
-                from_file, to_file,
-                CopyOrMoveOptionSet(CopyOrMoveOption::kPreserveLastModified),
+                from_file, to_file, {CopyOrMoveOption::kPreserveLastModified},
                 nosync));
   ASSERT_TRUE(FileExists(to_file));
 
@@ -661,8 +661,7 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, PreserveLastModified_Sync) {
   ASSERT_EQ(
       base::File::FILE_OK,
       file_util()->CopyOrMoveFile(
-          from_file, to_file,
-          CopyOrMoveOptionSet(CopyOrMoveOption::kPreserveLastModified), sync));
+          from_file, to_file, {CopyOrMoveOption::kPreserveLastModified}, sync));
   ASSERT_TRUE(FileExists(to_file));
 
   base::File::Info file_info2;
@@ -690,8 +689,7 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, PreserveLastModified_Move) {
   ASSERT_EQ(
       base::File::FILE_OK,
       file_util()->CopyOrMoveFile(
-          from_file, to_file,
-          CopyOrMoveOptionSet(CopyOrMoveOption::kPreserveLastModified), move));
+          from_file, to_file, {CopyOrMoveOption::kPreserveLastModified}, move));
   ASSERT_TRUE(FileExists(to_file));
 
   base::File::Info file_info2;
@@ -712,15 +710,15 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, ComputeDirectorySize) {
             file_util()->CreateDirectory(dir_name2, false /* exclusive */,
                                          true /* recursive */));
 
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name0, base::span<const char>(content, 10)));
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name1, base::span<const char>(content, 15)));
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name2, base::span<const char>(content, 20)));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name0, base::span<const char>(content, 10u))));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name1, base::span<const char>(content, 15u))));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name2, base::span<const char>(content, 20u))));
 
   ASSERT_EQ(20u, file_util()->ComputeDirectorySize(dir_name2));
   ASSERT_EQ(35u, file_util()->ComputeDirectorySize(dir_name1));

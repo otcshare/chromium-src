@@ -3,8 +3,8 @@ Tests that the security details for an origin are updated if its security state 
 Sidebar Origins --------------------------------
 Group: Main origin
 Group: Secure origins
-<SPAN >
-    <SPAN class=url-scheme-unknown >
+<SPAN class=highlighted-url >
+    <SPAN class=url-scheme-secure >
 https
     </SPAN>
     <SPAN class=url-scheme-separator >
@@ -14,7 +14,7 @@ https
 foo.test
     </SPAN>
 </SPAN>
-<SPAN class=url-scheme-unknown >
+<SPAN class=url-scheme-secure >
 https
 </SPAN>
 <SPAN class=url-scheme-separator >
@@ -23,7 +23,7 @@ https
 <SPAN >
 foo.test
 </SPAN>
-<SPAN >
+<SPAN class=highlighted-url >
     <SPAN class=url-scheme-secure >
 https
     </SPAN>
@@ -43,7 +43,7 @@ https
 <SPAN >
 ecdhe.foo.test
 </SPAN>
-<SPAN >
+<SPAN class=highlighted-url >
     <SPAN class=url-scheme-secure >
 https
     </SPAN>
@@ -63,7 +63,7 @@ https
 <SPAN >
 tls13.foo.test
 </SPAN>
-<SPAN >
+<SPAN class=highlighted-url >
     <SPAN class=url-scheme-secure >
 https
     </SPAN>
@@ -84,7 +84,7 @@ https
 ech.foo.test
 </SPAN>
 Group: Unknown / canceled
-<SPAN >
+<SPAN class=highlighted-url >
     <SPAN class=url-scheme-unknown >
 https
     </SPAN>
@@ -105,15 +105,27 @@ https
 bar.test
 </SPAN>
 Origin view (https://foo.test) -----------------
-<DIV class=widget vbox security-origin-view slot=insertion-point-main >
+<DIV jslog=Pane; context: security.origin-view class=widget vbox security-origin-view slot=main >
+    <STYLE >
+    </STYLE>
+    <STYLE >
+    </STYLE>
     <DIV class=title-section >
         <DIV class=title-section-header role=heading aria-level=1 >
 Origin
         </DIV>
         <DIV class=origin-display >
-            <SPAN class=security-property security-property-secure >
-            </SPAN>
             <SPAN >
+                <DEVTOOLS-ICON role=presentation name=lock class=security-property security-property-secure >
+                    <#document-fragment >
+                        <STYLE >
+                        </STYLE>
+                        <SPAN style=--icon-url: var(--image-file-lock); >
+                        </SPAN>
+                    </#document-fragment>
+                </DEVTOOLS-ICON>
+            </SPAN>
+            <SPAN class=highlighted-url >
                 <SPAN class=url-scheme-secure >
 https
                 </SPAN>
@@ -126,9 +138,29 @@ foo.test
             </SPAN>
         </DIV>
         <DIV class=view-network-button >
-            <BUTTON class=text-button type=button role=link >
+            <DEVTOOLS-BUTTON role=link jslog=Action; track: click; context: reveal-in-network >
 View requests in Network Panel
-            </BUTTON>
+                <#document-fragment >
+                    <#comment >
+                    </#comment>
+                    <STYLE >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                    </STYLE>
+                    <BUTTON class=outlined >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <SLOT >
+                        </SLOT>
+                    </BUTTON>
+                </#document-fragment>
+            </DEVTOOLS-BUTTON>
         </DIV>
     </DIV>
     <DIV class=origin-view-section >
@@ -218,24 +250,56 @@ Super CA
                 <TD >
                 </TD>
                 <TD >
-                    <BUTTON class=origin-button text-button type=button role=button >
+                    <DEVTOOLS-BUTTON role=button class=origin-button jslog=Action; track: click; context: security.view-certificate-for-origin title=Open full certificate details >
 Open full certificate details
-                    </BUTTON>
+                        <#document-fragment >
+                            <#comment >
+                            </#comment>
+                            <STYLE >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                            </STYLE>
+                            <BUTTON class=outlined >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <SLOT >
+                                </SLOT>
+                            </BUTTON>
+                        </#document-fragment>
+                    </DEVTOOLS-BUTTON>
                 </TD>
             </TR>
         </TABLE>
     </DIV>
 </DIV>
 Origin view (https://ecdhe.foo.test) -----------
-<DIV class=widget vbox security-origin-view slot=insertion-point-main >
+<DIV jslog=Pane; context: security.origin-view class=widget vbox security-origin-view slot=main >
+    <STYLE >
+    </STYLE>
+    <STYLE >
+    </STYLE>
     <DIV class=title-section >
         <DIV class=title-section-header role=heading aria-level=1 >
 Origin
         </DIV>
         <DIV class=origin-display >
-            <SPAN class=security-property security-property-secure >
-            </SPAN>
             <SPAN >
+                <DEVTOOLS-ICON role=presentation name=lock class=security-property security-property-secure >
+                    <#document-fragment >
+                        <STYLE >
+                        </STYLE>
+                        <SPAN style=--icon-url: var(--image-file-lock); >
+                        </SPAN>
+                    </#document-fragment>
+                </DEVTOOLS-ICON>
+            </SPAN>
+            <SPAN class=highlighted-url >
                 <SPAN class=url-scheme-secure >
 https
                 </SPAN>
@@ -248,9 +312,29 @@ ecdhe.foo.test
             </SPAN>
         </DIV>
         <DIV class=view-network-button >
-            <BUTTON class=text-button type=button role=link >
+            <DEVTOOLS-BUTTON role=link jslog=Action; track: click; context: reveal-in-network >
 View requests in Network Panel
-            </BUTTON>
+                <#document-fragment >
+                    <#comment >
+                    </#comment>
+                    <STYLE >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                    </STYLE>
+                    <BUTTON class=outlined >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <SLOT >
+                        </SLOT>
+                    </BUTTON>
+                </#document-fragment>
+            </DEVTOOLS-BUTTON>
         </DIV>
     </DIV>
     <DIV class=origin-view-section >
@@ -345,24 +429,56 @@ Super CA
                 <TD >
                 </TD>
                 <TD >
-                    <BUTTON class=origin-button text-button type=button role=button >
+                    <DEVTOOLS-BUTTON role=button class=origin-button jslog=Action; track: click; context: security.view-certificate-for-origin title=Open full certificate details >
 Open full certificate details
-                    </BUTTON>
+                        <#document-fragment >
+                            <#comment >
+                            </#comment>
+                            <STYLE >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                            </STYLE>
+                            <BUTTON class=outlined >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <SLOT >
+                                </SLOT>
+                            </BUTTON>
+                        </#document-fragment>
+                    </DEVTOOLS-BUTTON>
                 </TD>
             </TR>
         </TABLE>
     </DIV>
 </DIV>
 Origin view (https://tls13.foo.test) -----------
-<DIV class=widget vbox security-origin-view slot=insertion-point-main >
+<DIV jslog=Pane; context: security.origin-view class=widget vbox security-origin-view slot=main >
+    <STYLE >
+    </STYLE>
+    <STYLE >
+    </STYLE>
     <DIV class=title-section >
         <DIV class=title-section-header role=heading aria-level=1 >
 Origin
         </DIV>
         <DIV class=origin-display >
-            <SPAN class=security-property security-property-secure >
-            </SPAN>
             <SPAN >
+                <DEVTOOLS-ICON role=presentation name=lock class=security-property security-property-secure >
+                    <#document-fragment >
+                        <STYLE >
+                        </STYLE>
+                        <SPAN style=--icon-url: var(--image-file-lock); >
+                        </SPAN>
+                    </#document-fragment>
+                </DEVTOOLS-ICON>
+            </SPAN>
+            <SPAN class=highlighted-url >
                 <SPAN class=url-scheme-secure >
 https
                 </SPAN>
@@ -375,9 +491,29 @@ tls13.foo.test
             </SPAN>
         </DIV>
         <DIV class=view-network-button >
-            <BUTTON class=text-button type=button role=link >
+            <DEVTOOLS-BUTTON role=link jslog=Action; track: click; context: reveal-in-network >
 View requests in Network Panel
-            </BUTTON>
+                <#document-fragment >
+                    <#comment >
+                    </#comment>
+                    <STYLE >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                    </STYLE>
+                    <BUTTON class=outlined >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <SLOT >
+                        </SLOT>
+                    </BUTTON>
+                </#document-fragment>
+            </DEVTOOLS-BUTTON>
         </DIV>
     </DIV>
     <DIV class=origin-view-section >
@@ -472,24 +608,56 @@ Super CA
                 <TD >
                 </TD>
                 <TD >
-                    <BUTTON class=origin-button text-button type=button role=button >
+                    <DEVTOOLS-BUTTON role=button class=origin-button jslog=Action; track: click; context: security.view-certificate-for-origin title=Open full certificate details >
 Open full certificate details
-                    </BUTTON>
+                        <#document-fragment >
+                            <#comment >
+                            </#comment>
+                            <STYLE >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                            </STYLE>
+                            <BUTTON class=outlined >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <SLOT >
+                                </SLOT>
+                            </BUTTON>
+                        </#document-fragment>
+                    </DEVTOOLS-BUTTON>
                 </TD>
             </TR>
         </TABLE>
     </DIV>
 </DIV>
 Origin view (https://ech.foo.test) -------------
-<DIV class=widget vbox security-origin-view slot=insertion-point-main >
+<DIV jslog=Pane; context: security.origin-view class=widget vbox security-origin-view slot=main >
+    <STYLE >
+    </STYLE>
+    <STYLE >
+    </STYLE>
     <DIV class=title-section >
         <DIV class=title-section-header role=heading aria-level=1 >
 Origin
         </DIV>
         <DIV class=origin-display >
-            <SPAN class=security-property security-property-secure >
-            </SPAN>
             <SPAN >
+                <DEVTOOLS-ICON role=presentation name=lock class=security-property security-property-secure >
+                    <#document-fragment >
+                        <STYLE >
+                        </STYLE>
+                        <SPAN style=--icon-url: var(--image-file-lock); >
+                        </SPAN>
+                    </#document-fragment>
+                </DEVTOOLS-ICON>
+            </SPAN>
+            <SPAN class=highlighted-url >
                 <SPAN class=url-scheme-secure >
 https
                 </SPAN>
@@ -502,9 +670,29 @@ ech.foo.test
             </SPAN>
         </DIV>
         <DIV class=view-network-button >
-            <BUTTON class=text-button type=button role=link >
+            <DEVTOOLS-BUTTON role=link jslog=Action; track: click; context: reveal-in-network >
 View requests in Network Panel
-            </BUTTON>
+                <#document-fragment >
+                    <#comment >
+                    </#comment>
+                    <STYLE >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                    </STYLE>
+                    <BUTTON class=outlined >
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <#comment >
+                        </#comment>
+                        <SLOT >
+                        </SLOT>
+                    </BUTTON>
+                </#document-fragment>
+            </DEVTOOLS-BUTTON>
         </DIV>
     </DIV>
     <DIV class=origin-view-section >
@@ -607,9 +795,29 @@ Super CA
                 <TD >
                 </TD>
                 <TD >
-                    <BUTTON class=origin-button text-button type=button role=button >
+                    <DEVTOOLS-BUTTON role=button class=origin-button jslog=Action; track: click; context: security.view-certificate-for-origin title=Open full certificate details >
 Open full certificate details
-                    </BUTTON>
+                        <#document-fragment >
+                            <#comment >
+                            </#comment>
+                            <STYLE >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                            </STYLE>
+                            <BUTTON class=outlined >
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <#comment >
+                                </#comment>
+                                <SLOT >
+                                </SLOT>
+                            </BUTTON>
+                        </#document-fragment>
+                    </DEVTOOLS-BUTTON>
                 </TD>
             </TR>
         </TABLE>

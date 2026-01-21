@@ -9,12 +9,12 @@
   }
 
   settings-collapse-radio-button {
-    --settings-collapse-toggle-min-height: var(--settings-row-min-height);
+    --settings-collapse-toggle-min-height: var(--cr-section-min-height);
   }
 
   settings-collapse-radio-button.two-line {
     --settings-collapse-toggle-min-height:
-        var(--settings-row-two-line-min-height);
+        var(--cr-section-two-line-min-height);
   }
 
   settings-collapse-radio-button:not(:first-of-type) {
@@ -30,7 +30,8 @@
       id="settingsCategoryDefaultRadioGroup"
       pref="{{pref_}}"
       selectable-elements="settings-collapse-radio-button"
-      on-change="onSelectedChanged_">
+      on-change="onSelectedChanged_"
+      group-aria-label=[[header]]>
     <settings-collapse-radio-button
         id="enabledRadioOption"
         class$="[[getEnabledButtonClass_(allowOptionSubLabel)]]"

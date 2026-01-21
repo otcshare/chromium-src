@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/value_store/value_store.h"
@@ -88,7 +88,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsPreservedAcrossReconstruction) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -122,7 +122,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsClearedOnUninstall) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(
-          browser_context(), id, Manifest::TYPE_LEGACY_PACKAGED_APP);
+          browser_context(), id, Manifest::Type::kLegacyPackagedApp);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -152,7 +152,7 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -186,7 +186,7 @@ TEST_F(ExtensionSettingsFrontendTest,
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* sync_storage = settings_test_util::GetStorage(
       extension, settings::SYNC, frontend_.get());

@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {session, dp} = await testRunner.startBlank(
       `Tests interoperation of Fetch interception with Network instrumentation for CORS preflight requests.`);
 
@@ -12,6 +12,8 @@
   };
 
   await dp.Network.enable();
+  // Disable the cache so that we do not use cached OPTIONS.
+  await dp.Network.setCacheDisabled({cacheDisabled: true});
   await dp.Fetch.enable();
 
   session.evaluate(`

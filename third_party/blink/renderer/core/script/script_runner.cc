@@ -28,23 +28,40 @@
 #include <algorithm>
 
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/typed_macros.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/dom/scriptable_document_parser.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
-#include "third_party/blink/renderer/platform/scheduler/public/cooperative_scheduling_manager.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class RaceTaskPriority {
+  kLowerPriority = 0,
+  kNormalPriority = 1,
+  kMaxValue = kNormalPriority,
+};
+
+const char* RaceTaskPriorityToString(RaceTaskPriority task_priority) {
+  switch (task_priority) {
+    case RaceTaskPriority::kLowerPriority:
+      return "LowerPriority";
+    case RaceTaskPriority::kNormalPriority:
+      return "NormalPriority";
+  }
+}
 
 void PostTaskWithLowPriorityUntilTimeout(
     const base::Location& from_here,
@@ -61,17 +78,37 @@ void PostTaskWithLowPriorityUntilTimeout(
   // |task| doesn't run more than once. |task| runs on either of
   // |lower_priority_task_runner| and |normal_priority_task_runner| whichever
   // comes first.
-  auto run_task_once =
-      [](scoped_refptr<RefCountedOnceClosure> ref_counted_task) {
-        if (!ref_counted_task->data.is_null())
-          std::move(ref_counted_task->data).Run();
-      };
+  auto run_task_once = [](scoped_refptr<RefCountedOnceClosure> ref_counted_task,
+                          RaceTaskPriority task_priority,
+                          base::TimeTicks post_task_time) {
+    if (!ref_counted_task->data.is_null()) {
+      auto duration = base::TimeTicks::Now() - post_task_time;
+      std::move(ref_counted_task->data).Run();
+      base::UmaHistogramEnumeration(
+          "Blink.Script.PostTaskWithLowPriorityUntilTimeout.RaceTaskPriority",
+          task_priority);
+      base::UmaHistogramMediumTimes(
+          "Blink.Script.PostTaskWithLowPriorityUntilTimeout.Time", duration);
+      base::UmaHistogramMediumTimes(
+          base::StrCat(
+              {"Blink.Script.PostTaskWithLowPriorityUntilTimeout.Time.",
+               RaceTaskPriorityToString(task_priority)}),
+          duration);
+    }
+  };
+
+  base::TimeTicks post_task_time = base::TimeTicks::Now();
 
   lower_priority_task_runner->PostTask(
-      from_here, WTF::BindOnce(run_task_once, ref_counted_task));
+      from_here,
+      blink::BindOnce(run_task_once, ref_counted_task,
+                      RaceTaskPriority::kLowerPriority, post_task_time));
 
   normal_priority_task_runner->PostDelayedTask(
-      from_here, WTF::BindOnce(run_task_once, ref_counted_task), timeout);
+      from_here,
+      blink::BindOnce(run_task_once, ref_counted_task,
+                      RaceTaskPriority::kNormalPriority, post_task_time),
+      timeout);
 }
 
 }  // namespace
@@ -106,21 +143,14 @@ void ScriptRunner::QueueScriptForExecution(PendingScript* pending_script,
   switch (pending_script->GetSchedulingType()) {
     case ScriptSchedulingType::kAsync:
       pending_async_scripts_.insert(pending_script, delay_reasons);
-      number_of_async_scripts_not_evaluated_yet_++;
       break;
 
     case ScriptSchedulingType::kInOrder:
       pending_in_order_scripts_.push_back(pending_script);
       break;
 
-    case ScriptSchedulingType::kForceInOrder:
-      pending_force_in_order_scripts_.push_back(pending_script);
-      pending_force_in_order_scripts_count_ += 1;
-      break;
-
     default:
       NOTREACHED();
-      break;
   }
 
   // Note that WatchForLoad() can immediately call PendingScriptFinished().
@@ -136,8 +166,8 @@ void ScriptRunner::RemoveDelayReason(DelayReason delay_reason) {
   DCHECK(IsActive(delay_reason));
   active_delay_reasons_ &= ~static_cast<DelayReasons>(delay_reason);
 
-  HeapVector<Member<PendingScript>> pending_async_scripts;
-  CopyKeysToVector(pending_async_scripts_, pending_async_scripts);
+  HeapVector<Member<PendingScript>> pending_async_scripts(
+      pending_async_scripts_.Keys());
   for (PendingScript* pending_script : pending_async_scripts) {
     RemoveDelayReasonFromScript(pending_script, delay_reason);
   }
@@ -158,7 +188,7 @@ void ScriptRunner::RemoveDelayReasonFromScript(PendingScript* pending_script,
   if (it->value &= ~static_cast<DelayReasons>(delay_reason)) {
     // The delay must be less than a few seconds because some scripts times out
     // otherwise. This is only applied to milestone based delay.
-    static const base::TimeDelta delay_limit =
+    const base::TimeDelta delay_limit =
         features::kDelayAsyncScriptExecutionDelayLimitParam.Get();
     if (!delay_limit.is_zero() && delay_reason == DelayReason::kLoad &&
         (it->value & static_cast<DelayReasons>(DelayReason::kMilestone))) {
@@ -173,10 +203,10 @@ void ScriptRunner::RemoveDelayReasonFromScript(PendingScript* pending_script,
       // following delayed task should not persist a PendingScript.
       task_runner_->PostDelayedTask(
           FROM_HERE,
-          WTF::BindOnce(&ScriptRunner::RemoveDelayReasonFromScript,
-                        WrapWeakPersistent(this),
-                        WrapWeakPersistent(pending_script),
-                        DelayReason::kMilestone),
+          blink::BindOnce(&ScriptRunner::RemoveDelayReasonFromScript,
+                          WrapWeakPersistent(this),
+                          WrapWeakPersistent(pending_script),
+                          DelayReason::kMilestone),
           delay_limit);
     }
     // Still to be delayed.
@@ -185,9 +215,9 @@ void ScriptRunner::RemoveDelayReasonFromScript(PendingScript* pending_script,
 
   // Script is really ready to evaluate.
   pending_async_scripts_.erase(it);
-  base::OnceClosure task =
-      WTF::BindOnce(&ScriptRunner::ExecuteAsyncPendingScript,
-                    WrapWeakPersistent(this), WrapPersistent(pending_script));
+  base::OnceClosure task = blink::BindOnce(
+      &ScriptRunner::ExecuteAsyncPendingScript, WrapWeakPersistent(this),
+      WrapPersistent(pending_script), base::TimeTicks::Now());
   if (pending_script->IsEligibleForLowPriorityAsyncScriptExecution()) {
     PostTaskWithLowPriorityUntilTimeout(
         FROM_HERE, std::move(task),
@@ -198,32 +228,13 @@ void ScriptRunner::RemoveDelayReasonFromScript(PendingScript* pending_script,
   }
 }
 
-void ScriptRunner::ExecuteAsyncPendingScript(PendingScript* pending_script) {
-  DCHECK_GT(number_of_async_scripts_not_evaluated_yet_, 0u);
+void ScriptRunner::ExecuteAsyncPendingScript(
+    PendingScript* pending_script,
+    base::TimeTicks ready_to_evaluate_time) {
+  base::UmaHistogramMediumTimes(
+      "Blink.Script.AsyncScript.FromReadyToStartExecution.Time",
+      base::TimeTicks::Now() - ready_to_evaluate_time);
   ExecutePendingScript(pending_script);
-  number_of_async_scripts_not_evaluated_yet_--;
-  if (base::FeatureList::IsEnabled(
-          features::kDOMContentLoadedWaitForAsyncScript) &&
-      !HasAsyncScripts()) {
-    if (ScriptableDocumentParser* parser =
-            document_->GetScriptableDocumentParser()) {
-      parser->NotifyNoRemainingAsyncScripts();
-    }
-  }
-}
-
-void ScriptRunner::ExecuteForceInOrderPendingScript(
-    PendingScript* pending_script) {
-  DCHECK_GT(pending_force_in_order_scripts_count_, 0u);
-  ExecutePendingScript(pending_script);
-  pending_force_in_order_scripts_count_ -= 1;
-}
-
-void ScriptRunner::ExecuteParserBlockingScriptsBlockedByForceInOrder() {
-  ScriptableDocumentParser* parser = document_->GetScriptableDocumentParser();
-  if (parser && document_->IsScriptExecutionReady()) {
-    parser->ExecuteScriptsWaitingForResources();
-  }
 }
 
 void ScriptRunner::PendingScriptFinished(PendingScript* pending_script) {
@@ -240,35 +251,14 @@ void ScriptRunner::PendingScriptFinished(PendingScript* pending_script) {
              pending_in_order_scripts_.front()->IsReady()) {
         PendingScript* pending_in_order = pending_in_order_scripts_.TakeFirst();
         task_runner_->PostTask(
-            FROM_HERE, WTF::BindOnce(&ScriptRunner::ExecutePendingScript,
-                                     WrapWeakPersistent(this),
-                                     WrapPersistent(pending_in_order)));
-      }
-      break;
-
-    case ScriptSchedulingType::kForceInOrder:
-      while (!pending_force_in_order_scripts_.empty() &&
-             pending_force_in_order_scripts_.front()->IsReady()) {
-        PendingScript* pending_in_order =
-            pending_force_in_order_scripts_.TakeFirst();
-        task_runner_->PostTask(
-            FROM_HERE,
-            WTF::BindOnce(&ScriptRunner::ExecuteForceInOrderPendingScript,
-                          WrapWeakPersistent(this),
-                          WrapPersistent(pending_in_order)));
-      }
-      if (pending_force_in_order_scripts_.empty()) {
-        task_runner_->PostTask(
-            FROM_HERE,
-            WTF::BindOnce(&ScriptRunner::
-                              ExecuteParserBlockingScriptsBlockedByForceInOrder,
-                          WrapWeakPersistent(this)));
+            FROM_HERE, blink::BindOnce(&ScriptRunner::ExecutePendingScript,
+                                       WrapWeakPersistent(this),
+                                       WrapPersistent(pending_in_order)));
       }
       break;
 
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -287,7 +277,6 @@ void ScriptRunner::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
   visitor->Trace(pending_in_order_scripts_);
   visitor->Trace(pending_async_scripts_);
-  visitor->Trace(pending_force_in_order_scripts_);
   PendingScriptClient::Trace(visitor);
 }
 

@@ -4,17 +4,16 @@
 
 #include "chrome/browser/ash/smb_client/smb_url.h"
 
+#include <string_view>
 #include <vector>
 
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/smb_client/smb_constants.h"
 #include "url/url_canon_stdstring.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 namespace {
 
@@ -54,7 +53,7 @@ bool ParseAndValidateUrl(const std::string& url, url::Parsed* parsed) {
   DCHECK(parsed);
   DCHECK(ShouldProcessUrl(url));
 
-  url::ParseStandardURL(url.c_str(), url.size(), parsed);
+  *parsed = url::ParseStandardUrl(url);
   return !ContainsUnnecessaryComponents(*parsed);
 }
 
@@ -134,7 +133,7 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
   url::StdStringCanonOutput canonical_output(&url_);
 
   url::Component scheme;
-  if (!url::CanonicalizeScheme(url.c_str(), initial_parsed.scheme,
+  if (!url::CanonicalizeScheme(initial_parsed.scheme.AsViewOn(url),
                                &canonical_output, &scheme)) {
     Reset();
     return;
@@ -144,9 +143,9 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
   canonical_output.push_back('/');
 
   url::Component path;
-  if (!(url::CanonicalizeHost(url.c_str(), initial_parsed.host,
-                              &canonical_output, &host_) &&
-        url::CanonicalizePath(url.c_str(), initial_parsed.path,
+  if (!(url::CanonicalizeHost(url, initial_parsed.host, &canonical_output,
+                              &host_) &&
+        url::CanonicalizePath(initial_parsed.path.MaybeAsViewOn(url),
                               &canonical_output, &path))) {
     Reset();
     return;
@@ -168,7 +167,7 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
     // So both "smb://foo" and "smb://foo//bar/" have the share name "", but
     // "smb://foo/bar/" has the share name "bar".
     std::string path_str = url_.substr(path.begin, path.len);
-    std::vector<base::StringPiece> split_path = base::SplitStringPiece(
+    std::vector<std::string_view> split_path = base::SplitStringPiece(
         path_str, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
     if (split_path.size() >= 2) {
       DCHECK_EQ(split_path[0], "");
@@ -205,5 +204,4 @@ void SmbUrl::Reset() {
   url_.clear();
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

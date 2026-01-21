@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ash/file_manager/restore_io_task.h"
 
-#include "base/callback.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -52,7 +52,7 @@ RestoreIOTask::RestoreIOTask(
   progress_.total_bytes = 0;
 
   for (const auto& url : file_urls) {
-    progress_.sources.emplace_back(url, absl::nullopt);
+    progress_.sources.emplace_back(url, std::nullopt);
   }
 
   if (file_urls.size() > 0) {
@@ -94,8 +94,7 @@ void RestoreIOTask::Execute(IOTask::ProgressCallback progress_callback,
   }
 
   progress_.state = State::kInProgress;
-  validator_ =
-      std::make_unique<trash::TrashInfoValidator>(profile_, base_path_);
+  validator_ = std::make_unique<trash::TrashInfoValidator>(profile_);
   validator_->SetDisconnectHandler(base::BindOnce(
       &RestoreIOTask::Complete, weak_ptr_factory_.GetWeakPtr(), State::kError));
 
@@ -184,21 +183,19 @@ void RestoreIOTask::RestoreItem(
       CreateFileSystemURL(progress_.sources[idx].url,
                           MakeRelativeFromBasePath(trashed_file_location));
   if (!destination_result.has_value()) {
-    progress_.outputs.emplace_back(source_url, absl::nullopt);
+    progress_.outputs.emplace_back(source_url, std::nullopt);
     OnRestoreItem(idx, destination_result.error());
     return;
   }
-  progress_.outputs.emplace_back(destination_result.value(), absl::nullopt);
+  progress_.outputs.emplace_back(destination_result.value(), std::nullopt);
 
   // File browsers generally default to preserving mtimes on copy/move so we
   // should do the same.
-  storage::FileSystemOperation::CopyOrMoveOptionSet options(
-      storage::FileSystemOperation::CopyOrMoveOption::kPreserveLastModified);
+  storage::FileSystemOperation::CopyOrMoveOptionSet options = {
+      storage::FileSystemOperation::CopyOrMoveOption::kPreserveLastModified};
 
-  auto complete_callback =
-      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
-                         base::BindOnce(&RestoreIOTask::OnRestoreItem,
-                                        weak_ptr_factory_.GetWeakPtr(), idx));
+  auto complete_callback = base::BindPostTaskToCurrentDefault(base::BindOnce(
+      &RestoreIOTask::OnRestoreItem, weak_ptr_factory_.GetWeakPtr(), idx));
 
   // For move operations that occur on the same file system, the progress
   // callback is never invoked.
@@ -217,10 +214,8 @@ void RestoreIOTask::OnRestoreItem(size_t idx, base::File::Error error) {
     return;
   }
 
-  auto complete_callback =
-      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
-                         base::BindOnce(&RestoreIOTask::RestoreComplete,
-                                        weak_ptr_factory_.GetWeakPtr(), idx));
+  auto complete_callback = base::BindPostTaskToCurrentDefault(base::BindOnce(
+      &RestoreIOTask::RestoreComplete, weak_ptr_factory_.GetWeakPtr(), idx));
 
   // On successful file restore, there is a dangling trashinfo file, remove this
   // before restoration is considered complete.

@@ -6,26 +6,31 @@
 #define CHROME_BROWSER_NET_SYSTEM_NETWORK_CONTEXT_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "chrome/browser/net/cert_verifier_service_time_updater.h"
 #include "chrome/browser/net/proxy_config_monitor.h"
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
+#include "chrome/common/buildflags.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
+#include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "services/network/public/mojom/host_resolver.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/network_service.mojom-forward.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
+class NetworkAnnotationMonitor;
 class PrefRegistrySimple;
 class PrefService;
 
@@ -40,6 +45,10 @@ namespace net_log {
 class NetExportFileWriter;
 class NetLogProxySource;
 }
+
+namespace features {
+BASE_DECLARE_FEATURE(kPersistFailedLaunchState);
+}  // namespace features
 
 // Responsible for creating and managing access to the system NetworkContext.
 // Lives on the UI thread. The NetworkContext this owns is intended for requests
@@ -115,6 +124,11 @@ class SystemNetworkContextManager {
   mojo::PendingReceiver<network::mojom::SSLConfigClient>
   GetSSLConfigClientReceiver();
 
+  // Adds a CookieEncryptionManager mojo remote to the specified
+  // `network_context_params`.
+  void AddCookieEncryptionManagerToNetworkContextParams(
+      network::mojom::NetworkContextParams* network_context_params);
+
   // Populates |initial_ssl_config| and |ssl_config_client_receiver| members of
   // |network_context_params|. As long as the SystemNetworkContextManager
   // exists, any NetworkContext created with the params will continue to get
@@ -139,6 +153,14 @@ class SystemNetworkContextManager {
   // or destroyed, and so that it's destroyed before Mojo is shut down.
   net_log::NetExportFileWriter* GetNetExportFileWriter();
 
+  // Updates the network service with the given list of |trust_anchor_ids|
+  // and |mtc_trust_anchor_ids| (lists of TLS Trust Anchor IDs in binary
+  // representation).
+  void UpdateTrustAnchorIDs(
+      std::vector<std::vector<uint8_t>> trust_anchor_ids,
+      std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids,
+      int64_t mtc_update_time_seconds);
+
   // Returns whether the network sandbox is enabled. This depends on policy but
   // also feature status from sandbox. Called before there is an instance of
   // SystemNetworkContextManager.
@@ -154,16 +176,25 @@ class SystemNetworkContextManager {
   // use only.
   void FlushNetworkInterfaceForTesting();
 
+#if BUILDFLAG(IS_CHROMEOS)
+  // Call |FlushForTesting()| on NetworkAnnotationMonitor. For test use only.
+  void FlushNetworkAnnotationMonitorForTesting();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
   static network::mojom::HttpAuthStaticParamsPtr
   GetHttpAuthStaticParamsForTesting();
   static network::mojom::HttpAuthDynamicParamsPtr
   GetHttpAuthDynamicParamsForTesting();
 
   // Enables Certificate Transparency and enforcing the Chrome Certificate
-  // Transparency Policy. For test use only. Use absl::nullopt_t to reset to
+  // Transparency Policy. For test use only. Use std::nullopt_t to reset to
   // the default state.
   static void SetEnableCertificateTransparencyForTesting(
-      absl::optional<bool> enabled);
+      std::optional<bool> enabled);
+
+  // Reloads the static CT log lists but overriding the log list update time
+  // with the current time. For test use only.
+  void SetCTLogListTimelyForTesting();
 
   static bool IsCertificateTransparencyEnabled();
 
@@ -172,6 +203,11 @@ class SystemNetworkContextManager {
     stub_resolver_config_reader_for_testing_ = reader;
   }
 
+  // Returns true if a previous launch of the network service with the current
+  // major version (milestone) has failed to fully reach mojo and IPC startup
+  // successfully.
+  bool HasFailedPreviousRecentLaunch();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(
       SystemNetworkContextServiceCertVerifierBuiltinPermissionsPolicyTest,
@@ -179,6 +215,28 @@ class SystemNetworkContextManager {
 
   class URLLoaderFactoryForSystem;
   class NetworkProcessLaunchWatcher;
+
+#if BUILDFLAG(IS_LINUX)
+  class GssapiLibraryLoadObserver
+      : public network::mojom::GssapiLibraryLoadObserver {
+   public:
+    explicit GssapiLibraryLoadObserver(SystemNetworkContextManager* owner);
+    GssapiLibraryLoadObserver(const GssapiLibraryLoadObserver&) = delete;
+    GssapiLibraryLoadObserver& operator=(const GssapiLibraryLoadObserver&) =
+        delete;
+    ~GssapiLibraryLoadObserver() override;
+
+    void Install(network::mojom::NetworkService* network_service);
+
+    // network::mojom::GssapiLibraryLoadObserver implementation:
+    void OnBeforeGssapiLibraryLoad() override;
+
+   private:
+    mojo::Receiver<network::mojom::GssapiLibraryLoadObserver>
+        gssapi_library_loader_observer_receiver_{this};
+    raw_ptr<SystemNetworkContextManager> owner_;
+  };
+#endif
 
   // Constructor. |pref_service| must out live this object.
   explicit SystemNetworkContextManager(PrefService* pref_service);
@@ -192,6 +250,10 @@ class SystemNetworkContextManager {
   // Send the current value of the net.explicitly_allowed_network_ports pref to
   // the network process.
   void UpdateExplicitlyAllowedNetworkPorts();
+
+  void UpdateIPv6ReachabilityOverrideEnabled();
+
+  void UpdateTLS13EarlyDataEnabled();
 
   // The PrefService to retrieve all the pref values.
   raw_ptr<PrefService> local_state_;
@@ -231,7 +293,19 @@ class SystemNetworkContextManager {
   StubResolverConfigReader stub_resolver_config_reader_;
   static StubResolverConfigReader* stub_resolver_config_reader_for_testing_;
 
-  static absl::optional<bool> certificate_transparency_enabled_for_testing_;
+  static std::optional<bool> certificate_transparency_enabled_for_testing_;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<NetworkAnnotationMonitor> network_annotation_monitor_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_LINUX)
+  GssapiLibraryLoadObserver gssapi_library_loader_observer_{this};
+#endif  // BUILDFLAG(IS_LINUX)
+
+  std::unique_ptr<CookieEncryptionProviderImpl> cookie_encryption_provider_;
+
+  std::unique_ptr<CertVerifierServiceTimeUpdater> cert_verifier_time_updater_;
 };
 
 #endif  // CHROME_BROWSER_NET_SYSTEM_NETWORK_CONTEXT_MANAGER_H_

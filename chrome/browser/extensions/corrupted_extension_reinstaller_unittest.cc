@@ -6,14 +6,15 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/test/simple_test_tick_clock.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_service_test_base.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/test/browser_task_environment.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -52,19 +53,28 @@ class TestReinstallerTracker {
 
  private:
   int call_count_ = 0;
-  absl::optional<base::OnceClosure> saved_callback_;
+  std::optional<base::OnceClosure> saved_callback_;
   CorruptedExtensionReinstaller::ReinstallCallback action_;
 };
 
-using CorruptedExtensionReinstallerUnittest = ExtensionServiceTestBase;
+class CorruptedExtensionReinstallerUnittest : public testing::Test {
+ public:
+  CorruptedExtensionReinstallerUnittest() = default;
+  CorruptedExtensionReinstallerUnittest(
+      const CorruptedExtensionReinstallerUnittest&) = delete;
+  CorruptedExtensionReinstallerUnittest& operator=(
+      const CorruptedExtensionReinstallerUnittest&) = delete;
+  ~CorruptedExtensionReinstallerUnittest() override = default;
+
+ private:
+  content::BrowserTaskEnvironment task_environment_;
+};
 
 // Tests that a single extension corruption will keep retrying reinstallation.
 TEST_F(CorruptedExtensionReinstallerUnittest, Retry) {
-  // Reinstaller depends on the extension service.
-  InitializeEmptyExtensionService();
-
-  CorruptedExtensionReinstaller reinstaller(profile());
-  reinstaller.ExpectReinstallForCorruption(
+  TestingProfile profile;
+  auto* reinstaller = CorruptedExtensionReinstaller::Get(&profile);
+  reinstaller->ExpectReinstallForCorruption(
       kDummyExtensionId,
       CorruptedExtensionReinstaller::PolicyReinstallReason::
           CORRUPTION_DETECTED_WEBSTORE,
@@ -72,7 +82,7 @@ TEST_F(CorruptedExtensionReinstallerUnittest, Retry) {
 
   TestReinstallerTracker tracker;
 
-  reinstaller.NotifyExtensionDisabledDueToCorruption();
+  reinstaller->NotifyExtensionDisabledDueToCorruption();
   EXPECT_EQ(1, tracker.call_count());
   tracker.Proceed();
   EXPECT_EQ(2, tracker.call_count());
@@ -84,11 +94,9 @@ TEST_F(CorruptedExtensionReinstallerUnittest, Retry) {
 // CheckForExternalUpdates() when one is already in-flight through PostTask.
 TEST_F(CorruptedExtensionReinstallerUnittest,
        DoNotScheduleWhenAlreadyInflight) {
-  // Reinstaller depends on the extension service.
-  InitializeEmptyExtensionService();
-
-  CorruptedExtensionReinstaller reinstaller(profile_.get());
-  reinstaller.ExpectReinstallForCorruption(
+  TestingProfile profile;
+  auto* reinstaller = CorruptedExtensionReinstaller::Get(&profile);
+  reinstaller->ExpectReinstallForCorruption(
       kDummyExtensionId,
       CorruptedExtensionReinstaller::PolicyReinstallReason::
           CORRUPTION_DETECTED_WEBSTORE,
@@ -96,13 +104,13 @@ TEST_F(CorruptedExtensionReinstallerUnittest,
 
   TestReinstallerTracker tracker;
 
-  reinstaller.NotifyExtensionDisabledDueToCorruption();
+  reinstaller->NotifyExtensionDisabledDueToCorruption();
   EXPECT_EQ(1, tracker.call_count());
-  reinstaller.NotifyExtensionDisabledDueToCorruption();
+  reinstaller->NotifyExtensionDisabledDueToCorruption();
   // Resolve the reinstall attempt.
   tracker.Proceed();
   EXPECT_EQ(2, tracker.call_count());
-  reinstaller.NotifyExtensionDisabledDueToCorruption();
+  reinstaller->NotifyExtensionDisabledDueToCorruption();
   // Not resolving the pending attempt will not produce further calls.
   EXPECT_EQ(2, tracker.call_count());
 }

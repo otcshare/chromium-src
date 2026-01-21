@@ -8,7 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/token.h"
 #include "content/common/content_export.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
@@ -17,7 +18,7 @@
 #include "media/capture/video/video_frame_receiver.h"
 #include "media/capture/video_capture_types.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 
@@ -41,10 +42,9 @@ class CONTENT_EXPORT VideoCaptureDeviceLauncher {
 
   // Creates an InProcessVideoCaptureDeviceLauncher.
   static std::unique_ptr<VideoCaptureDeviceLauncher>
-  CreateInProcessVideoCaptureDeviceLauncher(
-      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner);
+  CreateDeviceLauncherFromMediaStreamManager();
 
-  // The passed-in |done_cb| must guarantee that the context relevant
+  // The passed-in `done_cb` must guarantee that the context relevant
   // during the asynchronous processing stays alive.
   virtual void LaunchDeviceAsync(
       const std::string& device_id,
@@ -71,10 +71,12 @@ class CONTENT_EXPORT LaunchedVideoCaptureDevice
       media::VideoCaptureDevice::TakePhotoCallback callback) = 0;
   virtual void MaybeSuspendDevice() = 0;
   virtual void ResumeDevice() = 0;
-  virtual void Crop(
-      const base::Token& crop_id,
-      uint32_t crop_version,
-      base::OnceCallback<void(media::mojom::CropRequestResult)> callback) = 0;
+  virtual void ApplySubCaptureTarget(
+      media::mojom::SubCaptureTargetType type,
+      const base::Token& target,
+      uint32_t sub_capture_target_version,
+      base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
+          callback) = 0;
   virtual void RequestRefreshFrame() = 0;
 
   // Methods for specific types of devices.

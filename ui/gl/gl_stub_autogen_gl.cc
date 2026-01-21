@@ -8,6 +8,11 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/gl/gl_stub_api_base.h"
 
 namespace gl {
@@ -19,12 +24,6 @@ GLenum GLStubApiBase::glCheckFramebufferStatusEXTFn(GLenum target) {
 GLenum GLStubApiBase::glClientWaitSyncFn(GLsync sync,
                                          GLbitfield flags,
                                          GLuint64 timeout) {
-  return 0;
-}
-
-GLenum GLStubApiBase::glClientWaitSyncAPPLEFn(GLsync sync,
-                                              GLbitfield flags,
-                                              GLuint64 timeout) {
   return 0;
 }
 
@@ -43,14 +42,6 @@ GLuint GLStubApiBase::glCreateShaderProgramvFn(GLenum type,
 }
 
 GLsync GLStubApiBase::glFenceSyncFn(GLenum condition, GLbitfield flags) {
-  return 0;
-}
-
-GLsync GLStubApiBase::glFenceSyncAPPLEFn(GLenum condition, GLbitfield flags) {
-  return 0;
-}
-
-GLuint GLStubApiBase::glGenPathsNVFn(GLsizei range) {
   return 0;
 }
 
@@ -130,19 +121,11 @@ GLboolean GLStubApiBase::glIsEnablediOESFn(GLenum target, GLuint index) {
   return 0;
 }
 
-GLboolean GLStubApiBase::glIsFenceAPPLEFn(GLuint fence) {
-  return 0;
-}
-
 GLboolean GLStubApiBase::glIsFenceNVFn(GLuint fence) {
   return 0;
 }
 
 GLboolean GLStubApiBase::glIsFramebufferEXTFn(GLuint framebuffer) {
-  return 0;
-}
-
-GLboolean GLStubApiBase::glIsPathNVFn(GLuint path) {
   return 0;
 }
 
@@ -174,10 +157,6 @@ GLboolean GLStubApiBase::glIsSyncFn(GLsync sync) {
   return 0;
 }
 
-GLboolean GLStubApiBase::glIsSyncAPPLEFn(GLsync sync) {
-  return 0;
-}
-
 GLboolean GLStubApiBase::glIsTextureFn(GLuint texture) {
   return 0;
 }
@@ -198,10 +177,6 @@ void* GLStubApiBase::glMapBufferRangeFn(GLenum target,
                                         GLintptr offset,
                                         GLsizeiptr length,
                                         GLbitfield access) {
-  return 0;
-}
-
-GLboolean GLStubApiBase::glTestFenceAPPLEFn(GLuint fence) {
   return 0;
 }
 

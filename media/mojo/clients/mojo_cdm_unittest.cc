@@ -2,21 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "media/mojo/clients/mojo_cdm.h"
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/test_message_loop.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/base/cdm_config.h"
+#include "media/base/cdm_factory.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/mock_filters.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "media/cdm/default_cdm_factory.h"
 #include "media/mojo/mojom/content_decryption_module.mojom.h"
 #include "media/mojo/services/mojo_cdm_service.h"
@@ -41,22 +45,34 @@ MATCHER(NotEmpty, "") {
   return !arg.empty();
 }
 
-ACTION_P2(CdmCreated, cdm, error_message) {
-  arg0.Run(cdm, error_message);
+ACTION_P2(CdmCreated, cdm, status) {
+  arg0.Run(cdm, status);
 }
 
 namespace media {
 
 namespace {
 
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
-
 // Random key ID used to create a session.
-const uint8_t kKeyId[] = {
+const auto kKeyId = std::to_array<uint8_t>({
     // base64 equivalent is AQIDBAUGBwgJCgsMDQ4PEA
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-};
+    0x01,
+    0x02,
+    0x03,
+    0x04,
+    0x05,
+    0x06,
+    0x07,
+    0x08,
+    0x09,
+    0x0a,
+    0x0b,
+    0x0c,
+    0x0d,
+    0x0e,
+    0x0f,
+    0x10,
+});
 
 }  // namespace
 
@@ -103,7 +119,7 @@ class MojoCdmTest : public ::testing::Test {
 
   void OnCdmServiceInitialized(ExpectedResult expected_result,
                                mojom::CdmContextPtr cdm_context,
-                               const std::string& error_message) {
+                               CreateCdmStatus status) {
     cdm_receiver_ =
         std::make_unique<mojo::Receiver<mojom::ContentDecryptionModule>>(
             mojo_cdm_service_.get());
@@ -116,7 +132,7 @@ class MojoCdmTest : public ::testing::Test {
     mojo::Remote<mojom::ContentDecryptionModule> cdm_remote(
         cdm_receiver_->BindNewPipeAndPassRemote());
 
-    media::CdmConfig cdm_config = {"com.foo.bar", false, false, false};
+    CdmConfig cdm_config = {"com.foo.bar", false, false, false};
 
     mojo_cdm_ = base::MakeRefCounted<MojoCdm>(
         std::move(cdm_remote), std::move(cdm_context), cdm_config,
@@ -162,7 +178,9 @@ class MojoCdmTest : public ::testing::Test {
     // order to verify that the data is passed properly.
     const CdmSessionType session_type = CdmSessionType::kTemporary;
     const EmeInitDataType data_type = EmeInitDataType::WEBM;
-    const std::vector<uint8_t> key_id(kKeyId, kKeyId + std::size(kKeyId));
+    const std::vector<uint8_t> key_id(
+        kKeyId.data(),
+        base::span<const uint8_t>(kKeyId).subspan(std::size(kKeyId)).data());
     std::string created_session_id;
 
     if (expected_result == CONNECTION_ERROR_BEFORE) {
@@ -299,7 +317,7 @@ class MojoCdmTest : public ::testing::Test {
         break;
 
       case FAILURE:
-        promise->reject(media::CdmPromise::Exception::NOT_SUPPORTED_ERROR, 0,
+        promise->reject(CdmPromise::Exception::NOT_SUPPORTED_ERROR, 0,
                         "Promise rejected");
         break;
 
@@ -311,7 +329,6 @@ class MojoCdmTest : public ::testing::Test {
       case CONNECTION_ERROR_BEFORE:
         // Connection should be broken before this is called.
         NOTREACHED();
-        break;
 
       case CONNECTION_ERROR_DURING:
         ForceConnectionError();
@@ -335,7 +352,7 @@ class MojoCdmTest : public ::testing::Test {
         break;
 
       case FAILURE:
-        promise->reject(media::CdmPromise::Exception::NOT_SUPPORTED_ERROR, 0,
+        promise->reject(CdmPromise::Exception::NOT_SUPPORTED_ERROR, 0,
                         "Promise rejected");
         break;
 
@@ -347,7 +364,6 @@ class MojoCdmTest : public ::testing::Test {
       case CONNECTION_ERROR_BEFORE:
         // Connection should be broken before this is called.
         NOTREACHED();
-        break;
 
       case CONNECTION_ERROR_DURING:
         ForceConnectionError();
@@ -366,7 +382,7 @@ class MojoCdmTest : public ::testing::Test {
   base::TestMessageLoop message_loop_;
 
   // |remote_cdm_| represents the CDM at the end of the mojo message pipe.
-  scoped_refptr<MockCdm> remote_cdm_{new MockCdm()};
+  scoped_refptr<MockCdm> remote_cdm_{base::MakeRefCounted<MockCdm>()};
   MockCdmFactory cdm_factory_{remote_cdm_};
   MockCdmContext cdm_context_;
 

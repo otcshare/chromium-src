@@ -5,13 +5,9 @@
 #ifndef CHROME_BROWSER_ASH_NOTIFICATIONS_SYSTEM_PROXY_NOTIFICATION_H_
 #define CHROME_BROWSER_ASH_NOTIFICATIONS_SYSTEM_PROXY_NOTIFICATION_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/dbus/system_proxy/system_proxy_service.pb.h"
-
-namespace message_center {
-class Notification;
-}  // namespace message_center
 
 namespace ash {
 
@@ -39,8 +35,6 @@ class SystemProxyNotification {
   const system_proxy::ProtectionSpace protection_space_;
   const bool show_error_;
   OnClickCallback on_click_callback_;
-
-  std::unique_ptr<message_center::Notification> notification_;
 
   base::WeakPtrFactory<SystemProxyNotification> weak_ptr_factory_{this};
 };

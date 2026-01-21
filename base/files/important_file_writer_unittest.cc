@@ -4,11 +4,16 @@
 
 #include "base/files/important_file_writer.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <utility>
+
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
@@ -21,6 +26,7 @@
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "base/timer/mock_timer.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -37,13 +43,11 @@ std::string GetFileContent(const FilePath& path) {
 
 class DataSerializer : public ImportantFileWriter::DataSerializer {
  public:
-  explicit DataSerializer(const std::string& data) : data_(data) {
-  }
+  explicit DataSerializer(const std::string& data) : data_(data) {}
 
-  bool SerializeData(std::string* output) override {
+  std::optional<std::string> SerializeData() override {
     EXPECT_TRUE(sequence_checker_.CalledOnValidSequence());
-    output->assign(data_);
-    return true;
+    return data_;
   }
 
  private:
@@ -53,7 +57,7 @@ class DataSerializer : public ImportantFileWriter::DataSerializer {
 
 class FailingDataSerializer : public ImportantFileWriter::DataSerializer {
  public:
-  bool SerializeData(std::string* output) override { return false; }
+  std::optional<std::string> SerializeData() override { return std::nullopt; }
 };
 
 class BackgroundDataSerializer
@@ -94,8 +98,11 @@ class WriteCallbacksObserver {
   WriteCallbacksObserver& operator=(const WriteCallbacksObserver&) = delete;
 
   // Register OnBeforeWrite() and OnAfterWrite() to be called on the next write
-  // of |writer|.
-  void ObserveNextWriteCallbacks(ImportantFileWriter* writer);
+  // of |writer|. `after_write_closure` will also be invoked from
+  // OnAfterWrite().
+  void ObserveNextWriteCallbacks(
+      ImportantFileWriter* writer,
+      base::OnceClosure after_write_closure = base::DoNothing());
 
   // Returns the |WriteCallbackObservationState| which was observed, then resets
   // it to |NOT_CALLED|.
@@ -111,14 +118,18 @@ class WriteCallbacksObserver {
     EXPECT_EQ(NOT_CALLED, after_write_observation_state_);
     after_write_observation_state_ =
         success ? CALLED_WITH_SUCCESS : CALLED_WITH_ERROR;
+    std::move(after_write_closure_).Run();
   }
 
   bool before_write_called_ = false;
   WriteCallbackObservationState after_write_observation_state_ = NOT_CALLED;
+  base::OnceClosure after_write_closure_ = base::DoNothing();
 };
 
 void WriteCallbacksObserver::ObserveNextWriteCallbacks(
-    ImportantFileWriter* writer) {
+    ImportantFileWriter* writer,
+    base::OnceClosure after_write_closure) {
+  after_write_closure_ = std::move(after_write_closure);
   writer->RegisterOnNextWriteCallbacks(
       base::BindOnce(&WriteCallbacksObserver::OnBeforeWrite,
                      base::Unretained(this)),
@@ -162,7 +173,7 @@ TEST_F(ImportantFileWriterTest, Basic) {
                              SingleThreadTaskRunner::GetCurrentDefault());
   EXPECT_FALSE(PathExists(writer.path()));
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
-  writer.WriteNow(std::make_unique<std::string>("foo"));
+  writer.WriteNow("foo");
   RunLoop().RunUntilIdle();
 
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
@@ -178,7 +189,7 @@ TEST_F(ImportantFileWriterTest, WriteWithObserver) {
 
   // Confirm that the observer is invoked.
   write_callback_observer_.ObserveNextWriteCallbacks(&writer);
-  writer.WriteNow(std::make_unique<std::string>("foo"));
+  writer.WriteNow("foo");
   RunLoop().RunUntilIdle();
 
   EXPECT_EQ(CALLED_WITH_SUCCESS,
@@ -189,7 +200,7 @@ TEST_F(ImportantFileWriterTest, WriteWithObserver) {
   // Confirm that re-installing the observer works for another write.
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
   write_callback_observer_.ObserveNextWriteCallbacks(&writer);
-  writer.WriteNow(std::make_unique<std::string>("bar"));
+  writer.WriteNow("bar");
   RunLoop().RunUntilIdle();
 
   EXPECT_EQ(CALLED_WITH_SUCCESS,
@@ -200,7 +211,7 @@ TEST_F(ImportantFileWriterTest, WriteWithObserver) {
   // Confirm that writing again without re-installing the observer doesn't
   // result in a notification.
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
-  writer.WriteNow(std::make_unique<std::string>("baz"));
+  writer.WriteNow("baz");
   RunLoop().RunUntilIdle();
 
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
@@ -216,7 +227,7 @@ TEST_F(ImportantFileWriterTest, FailedWriteWithObserver) {
   EXPECT_FALSE(PathExists(writer.path()));
   EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
   write_callback_observer_.ObserveNextWriteCallbacks(&writer);
-  writer.WriteNow(std::make_unique<std::string>("foo"));
+  writer.WriteNow("foo");
   RunLoop().RunUntilIdle();
 
   // Confirm that the write observer was invoked with its boolean parameter set
@@ -238,11 +249,10 @@ TEST_F(ImportantFileWriterTest, CallbackRunsOnWriterThread) {
       base::WaitableEvent::ResetPolicy::MANUAL,
       base::WaitableEvent::InitialState::NOT_SIGNALED);
   file_writer_thread.task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&base::WaitableEvent::Wait,
-                                base::Unretained(&wait_helper)));
+      FROM_HERE, wait_helper.GetWaitCallbackForTesting());
 
   write_callback_observer_.ObserveNextWriteCallbacks(&writer);
-  writer.WriteNow(std::make_unique<std::string>("foo"));
+  writer.WriteNow("foo");
   RunLoop().RunUntilIdle();
 
   // Expect the callback to not have been executed before the
@@ -337,7 +347,7 @@ TEST_F(ImportantFileWriterTest, ScheduleWrite_WriteNow) {
   DataSerializer serializer("foo");
   writer.ScheduleWrite(&serializer);
   EXPECT_TRUE(writer.HasPendingWrite());
-  writer.WriteNow(std::make_unique<std::string>("bar"));
+  writer.WriteNow("bar");
   EXPECT_FALSE(writer.HasPendingWrite());
   EXPECT_FALSE(timer.IsRunning());
 
@@ -364,7 +374,10 @@ TEST_F(ImportantFileWriterTest, DoScheduledWrite_FailToSerialize) {
   EXPECT_FALSE(PathExists(writer.path()));
   // We don't record metrics in case the serialization fails.
   histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.All",
+                                    0);
   histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.All", 0);
 }
 
 TEST_F(ImportantFileWriterTest, ScheduleWriteWithBackgroundDataSerializer) {
@@ -380,11 +393,10 @@ TEST_F(ImportantFileWriterTest, ScheduleWriteWithBackgroundDataSerializer) {
   EXPECT_FALSE(writer.HasPendingWrite());
   ASSERT_FALSE(file_writer_thread.task_runner()->RunsTasksInCurrentSequence());
   BackgroundDataSerializer serializer(
-      base::BindLambdaForTesting([&](std::string* data) {
+      base::BindLambdaForTesting([&]() -> std::optional<std::string> {
         EXPECT_TRUE(
             file_writer_thread.task_runner()->RunsTasksInCurrentSequence());
-        *data = "foo";
-        return true;
+        return "foo";
       }));
   writer.ScheduleWriteWithBackgroundDataSerializer(&serializer);
   EXPECT_TRUE(writer.HasPendingWrite());
@@ -400,7 +412,10 @@ TEST_F(ImportantFileWriterTest, ScheduleWriteWithBackgroundDataSerializer) {
   ASSERT_TRUE(PathExists(writer.path()));
   EXPECT_EQ("foo", GetFileContent(writer.path()));
   histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration", 1);
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.All",
+                                    1);
   histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration", 1);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.All", 1);
 }
 
 TEST_F(ImportantFileWriterTest,
@@ -417,10 +432,10 @@ TEST_F(ImportantFileWriterTest,
   EXPECT_FALSE(writer.HasPendingWrite());
   ASSERT_FALSE(file_writer_thread.task_runner()->RunsTasksInCurrentSequence());
   BackgroundDataSerializer serializer(
-      base::BindLambdaForTesting([&](std::string* data) {
+      base::BindLambdaForTesting([&]() -> std::optional<std::string> {
         EXPECT_TRUE(
             file_writer_thread.task_runner()->RunsTasksInCurrentSequence());
-        return false;
+        return std::nullopt;
       }));
   writer.ScheduleWriteWithBackgroundDataSerializer(&serializer);
   EXPECT_TRUE(writer.HasPendingWrite());
@@ -436,7 +451,10 @@ TEST_F(ImportantFileWriterTest,
   // We record the foreground serialization metric despite later failure in
   // background sequence.
   histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration", 1);
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.All",
+                                    1);
   histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.All", 0);
 }
 
 // Test that the chunking to avoid very large writes works.
@@ -460,7 +478,10 @@ TEST_F(ImportantFileWriterTest, SerializationDuration) {
   writer.DoScheduledWrite();
   RunLoop().RunUntilIdle();
   histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration", 1);
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.All",
+                                    1);
   histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration", 1);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.All", 1);
 }
 
 // Verify that a UMA metric for the serialization duration is recorded if the
@@ -476,6 +497,176 @@ TEST_F(ImportantFileWriterTest, SerializationDurationWithCustomSuffix) {
   histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.Foo",
                                     1);
   histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.Foo", 1);
+
+  // Should not be written to the unsuffixed ("unknown") histogram.
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.SerializationDuration.All",
+                                    1);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.WriteDuration.All", 1);
 }
+
+#if BUILDFLAG(IS_WIN)
+// Tests that failures of ReplaceFile are handled. These don't call the OS
+// ReplaceFile because they count the exact number of calls, which could be
+// flaky if the test runs on a machine with file scanners.
+TEST_F(ImportantFileWriterTest, ReplaceFileSuccess) {
+  base::HistogramTester histogram_tester;
+  ImportantFileWriter writer(file_,
+                             SingleThreadTaskRunner::GetCurrentDefault());
+
+  // Unconditional success in ReplaceFile.
+  writer.SetReplaceFileCallbackForTesting(base::BindRepeating(
+      [](const FilePath&, const FilePath&, File::Error* error) {
+        *error = File::FILE_OK;
+        return true;
+      }));
+
+  DataSerializer serializer("foo");
+  EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
+  base::RunLoop run_loop;
+  write_callback_observer_.ObserveNextWriteCallbacks(&writer,
+                                                     run_loop.QuitClosure());
+  writer.WriteNow("foo");
+  run_loop.Run();
+
+  EXPECT_EQ(CALLED_WITH_SUCCESS,
+            write_callback_observer_.GetAndResetObservationState());
+
+  // 0 means no retries were needed.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount", 0,
+                                      1);
+
+  // FileReplaceRetryCount2 is only recorded if retries were needed.
+  histogram_tester.ExpectTotalCount("ImportantFile.FileReplaceRetryCount2", 0);
+  histogram_tester.ExpectTotalCount("ImportantFile.FileReplaceRetryCount2.All",
+                                    0);
+
+  // 0 means no retries were needed.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult", 0, 1);
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult.All", 0,
+                                      1);
+}
+
+TEST_F(ImportantFileWriterTest, ReplaceFileRetry) {
+  base::HistogramTester histogram_tester;
+  ImportantFileWriter writer(file_,
+                             SingleThreadTaskRunner::GetCurrentDefault());
+
+  // Fake a failure on the first two calls to ReplaceFile.
+  size_t retry_count = 0;
+  writer.SetReplaceFileCallbackForTesting(base::BindLambdaForTesting(
+      [&retry_count](const FilePath&, const FilePath&, File::Error* error) {
+        if (retry_count < 2) {
+          retry_count += 1;
+          *error = File::FILE_ERROR_IN_USE;
+          return false;
+        }
+        *error = File::FILE_OK;
+        return true;
+      }));
+
+  DataSerializer serializer("foo");
+  EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
+  base::RunLoop run_loop;
+  write_callback_observer_.ObserveNextWriteCallbacks(&writer,
+                                                     run_loop.QuitClosure());
+  writer.WriteNow("foo");
+  run_loop.Run();
+
+  EXPECT_EQ(CALLED_WITH_SUCCESS,
+            write_callback_observer_.GetAndResetObservationState());
+  EXPECT_EQ(retry_count, 2u);
+
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount", 2,
+                                      1);
+
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount2", 2,
+                                      1);
+  histogram_tester.ExpectUniqueSample(
+      "ImportantFile.FileReplaceRetryCount2.All", 2, 1);
+
+  // 1 means succeeded with retries.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult", 1, 1);
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult.All", 1,
+                                      1);
+}
+
+TEST_F(ImportantFileWriterTest, ReplaceFileFails) {
+  base::HistogramTester histogram_tester;
+  ImportantFileWriter writer(file_,
+                             SingleThreadTaskRunner::GetCurrentDefault());
+
+  // Unconditional failure in ReplaceFile.
+  writer.SetReplaceFileCallbackForTesting(base::BindRepeating(
+      [](const FilePath&, const FilePath&, File::Error* error) {
+        *error = File::FILE_ERROR_IN_USE;
+        return false;
+      }));
+
+  DataSerializer serializer("foo");
+  EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
+  base::RunLoop run_loop;
+  write_callback_observer_.ObserveNextWriteCallbacks(&writer,
+                                                     run_loop.QuitClosure());
+  writer.WriteNow("foo");
+  run_loop.Run();
+
+  EXPECT_EQ(CALLED_WITH_ERROR,
+            write_callback_observer_.GetAndResetObservationState());
+  // 10 means ReplaceFile never succeeded.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount", 10,
+                                      1);
+
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount2", 5,
+                                      1);
+  histogram_tester.ExpectUniqueSample(
+      "ImportantFile.FileReplaceRetryCount2.All", 5, 1);
+
+  // 2 means ReplaceFile never succeeded.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult", 2, 1);
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult.All", 2,
+                                      1);
+}
+
+TEST_F(ImportantFileWriterTest, ReplaceFileFailsWithSuffix) {
+  base::HistogramTester histogram_tester;
+  ImportantFileWriter writer(file_, SingleThreadTaskRunner::GetCurrentDefault(),
+                             "Foo");
+
+  // Unconditional failure in ReplaceFile.
+  writer.SetReplaceFileCallbackForTesting(base::BindRepeating(
+      [](const FilePath&, const FilePath&, File::Error* error) {
+        *error = File::FILE_ERROR_IN_USE;
+        return false;
+      }));
+
+  DataSerializer serializer("foo");
+  EXPECT_EQ(NOT_CALLED, write_callback_observer_.GetAndResetObservationState());
+  base::RunLoop run_loop;
+  write_callback_observer_.ObserveNextWriteCallbacks(&writer,
+                                                     run_loop.QuitClosure());
+  writer.WriteNow("foo");
+  run_loop.Run();
+
+  EXPECT_EQ(CALLED_WITH_ERROR,
+            write_callback_observer_.GetAndResetObservationState());
+
+  // 10 means ReplaceFile never succeeded.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceRetryCount", 10,
+                                      1);
+
+  histogram_tester.ExpectUniqueSample(
+      "ImportantFile.FileReplaceRetryCount2.Foo", 5, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ImportantFile.FileReplaceRetryCount2.All", 5, 1);
+
+  // 2 means ReplaceFile never succeeded.
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult.Foo", 2,
+                                      1);
+  histogram_tester.ExpectUniqueSample("ImportantFile.FileReplaceResult.All", 2,
+                                      1);
+}
+#endif
 
 }  // namespace base

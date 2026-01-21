@@ -9,14 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/values.h"
 #include "net/base/backoff_entry.h"
 #include "url/gurl.h"
 
 namespace base {
 class FilePath;
-class Value;
 }  // namespace base
 
 namespace chromeos {
@@ -87,19 +86,13 @@ class ExternalCache {
                                     const std::string& version,
                                     PutExternalExtensionCallback callback) = 0;
 
-  // Sets backoff policy for extension downloader. Set `absl::nullopt` to
+  // Sets backoff policy for extension downloader. Set `std::nullopt` to
   // restore to the default backoff policy. Used in Kiosk launcher to reduce
   // retry backoff.
   virtual void SetBackoffPolicy(
-      absl::optional<net::BackoffEntry::Policy> backoff_policy) = 0;
+      std::optional<net::BackoffEntry::Policy> backoff_policy) = 0;
 };
 
 }  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::ExternalCache;
-}
 
 #endif  // CHROME_BROWSER_ASH_EXTENSIONS_EXTERNAL_CACHE_H_

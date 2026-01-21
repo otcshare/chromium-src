@@ -26,30 +26,26 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_ATOMIC_HTML_TOKEN_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_ATOMIC_HTML_TOKEN_H_
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/notreached.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/html/parser/html_token.h"
+#include "third_party/blink/renderer/core/html_element_attribute_name_lookup_trie.h"
 #include "third_party/blink/renderer/core/html_element_lookup_trie.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
-
-// TODO(https://crbug.com/1338583): enable on android.
-#if !BUILDFLAG(IS_ANDROID)
-#include "third_party/blink/renderer/core/html_element_attribute_name_lookup_trie.h"  // nogncheck
-#endif
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 
 namespace blink {
-
-// Controls whether attribute name lookup uses LookupHTMLAttributeName().
-CORE_EXPORT extern bool g_use_html_attribute_name_lookup;
 
 class AtomicHTMLToken;
 
@@ -62,7 +58,7 @@ class CORE_EXPORT HTMLTokenName {
  public:
   explicit HTMLTokenName(html_names::HTMLTag tag) : tag_(tag) {
     if (tag != html_names::HTMLTag::kUnknown)
-      local_name_ = html_names::TagToQualifedName(tag).LocalName();
+      local_name_ = html_names::TagToQualifiedName(tag).LocalName();
   }
 
   // Returns an HTMLTokenName for the specified string. This function looks up
@@ -71,14 +67,9 @@ class CORE_EXPORT HTMLTokenName {
     if (local_name.empty())
       return HTMLTokenName(html_names::HTMLTag::kUnknown);
 
-    if (local_name.Is8Bit()) {
-      return HTMLTokenName(
-          lookupHTMLTag(local_name.Characters8(), local_name.length()),
-          local_name);
-    }
-    return HTMLTokenName(
-        lookupHTMLTag(local_name.Characters16(), local_name.length()),
-        local_name);
+    return VisitCharacters(local_name, [&local_name](auto chars) {
+      return HTMLTokenName(LookupHtmlTag(chars), local_name);
+    });
   }
 
   bool operator==(const HTMLTokenName& other) const {
@@ -102,13 +93,9 @@ class CORE_EXPORT HTMLTokenName {
       // If the tag is unknown, then `name` must either be empty, or not
       // identify any other HTMLTag.
       if (!name.empty()) {
-        if (name.Is8Bit()) {
-          DCHECK_EQ(html_names::HTMLTag::kUnknown,
-                    lookupHTMLTag(name.Characters8(), name.length()));
-        } else {
-          DCHECK_EQ(html_names::HTMLTag::kUnknown,
-                    lookupHTMLTag(name.Characters16(), name.length()));
-        }
+        VisitCharacters(name, [](auto chars) {
+          DCHECK_EQ(html_names::HTMLTag::kUnknown, LookupHtmlTag(chars));
+        });
       }
     }
 #endif
@@ -159,6 +146,13 @@ class CORE_EXPORT AtomicHTMLToken {
     return self_closing_;
   }
 
+  void SetSelfClosingToFalse() {
+    DCHECK(self_closing_);
+    DCHECK_EQ(type_, HTMLToken::kStartTag);
+    DCHECK_EQ(GetHTMLTag(), html_names::HTMLTag::kScript);
+    self_closing_ = false;
+  }
+
   bool HasDuplicateAttribute() const { return duplicate_attribute_; }
 
   Attribute* GetAttributeItem(const QualifiedName& attribute_name) {
@@ -198,18 +192,40 @@ class CORE_EXPORT AtomicHTMLToken {
     return doctype_data_->system_identifier_;
   }
 
+  DOMPartTokenType DOMPartType() const {
+    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+    DCHECK_EQ(type_, HTMLToken::kDOMPart);
+    return dom_part_data_->type_;
+  }
+
+  Vector<String> DOMPartMetadata() const {
+    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+    DCHECK_EQ(type_, HTMLToken::kDOMPart);
+    return dom_part_data_->metadata_;
+  }
+
+  DOMPartsNeeded GetDOMPartsNeeded() {
+    DCHECK_EQ(type_, HTMLToken::kStartTag);
+    return dom_parts_needed_;
+  }
+
   explicit AtomicHTMLToken(HTMLToken& token)
       : type_(token.GetType()), name_(HTMLTokenNameFromToken(token)) {
     switch (type_) {
       case HTMLToken::kUninitialized:
         NOTREACHED();
-        break;
       case HTMLToken::DOCTYPE:
         doctype_data_ = token.ReleaseDoctypeData();
+        break;
+      case HTMLToken::kDOMPart:
+        DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+        dom_part_data_ = token.ReleaseDOMPartData();
         break;
       case HTMLToken::kEndOfFile:
         break;
       case HTMLToken::kStartTag:
+        dom_parts_needed_ = token.GetDOMPartsNeeded();
+        [[fallthrough]];
       case HTMLToken::kEndTag: {
         self_closing_ = token.SelfClosing();
         const HTMLToken::AttributeList& attributes = token.Attributes();
@@ -228,10 +244,7 @@ class CORE_EXPORT AtomicHTMLToken {
       }
       case HTMLToken::kCharacter:
       case HTMLToken::kComment:
-        if (token.IsAll8BitData())
-          data_ = token.Data().AsString8();
-        else
-          data_ = token.Data().AsString();
+        data_ = token.Data().AsString();
         break;
     }
   }
@@ -270,8 +283,7 @@ class CORE_EXPORT AtomicHTMLToken {
         [[fallthrough]];
       case HTMLToken::kStartTag:
       case HTMLToken::kEndTag: {
-        const html_names::HTMLTag html_tag =
-            lookupHTMLTag(token.GetName().data(), token.GetName().size());
+        const html_names::HTMLTag html_tag = LookupHtmlTag(token.GetName());
         if (html_tag != html_names::HTMLTag::kUnknown)
           return HTMLTokenName(html_tag);
         return HTMLTokenName(token.GetName().AsAtomicString());
@@ -308,6 +320,10 @@ class CORE_EXPORT AtomicHTMLToken {
   // For DOCTYPE
   std::unique_ptr<DoctypeData> doctype_data_;
 
+  // For DOM Parts
+  std::unique_ptr<DOMPartData> dom_part_data_;
+  DOMPartsNeeded dom_parts_needed_;
+
   // For StartTag and EndTag
   bool self_closing_ = false;
 
@@ -336,15 +352,10 @@ void AtomicHTMLToken::InitializeAttributes(
     if (attribute.NameIsEmpty())
       continue;
 
-    QualifiedName name = g_null_name;
-#if !BUILDFLAG(IS_ANDROID)
-    if (g_use_html_attribute_name_lookup) {
-      name = LookupHTMLAttributeName(attribute.NameBuffer().data(),
-                                     attribute.NameBuffer().size());
-    }
-#endif
+    QualifiedName name = LookupHTMLAttributeName(attribute.NameBuffer().data(),
+                                                 attribute.NameBuffer().size());
     if (name == g_null_name) {
-      name = QualifiedName(g_null_atom, attribute.GetName(), g_null_atom);
+      name = QualifiedName(attribute.GetName());
     }
 
     if constexpr (DedupWithHash) {
@@ -353,8 +364,8 @@ void AtomicHTMLToken::InitializeAttributes(
         continue;
       }
     } else {
-      if (base::Contains(attributes_, name.LocalName(),
-                         &Attribute::LocalName)) {
+      if (std::ranges::contains(attributes_, name.LocalName(),
+                                &Attribute::LocalName)) {
         duplicate_attribute_ = true;
         continue;
       }

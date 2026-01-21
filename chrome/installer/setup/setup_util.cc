@@ -7,9 +7,10 @@
 #include "chrome/installer/setup/setup_util.h"
 
 #include <objbase.h>
-#include <stddef.h>
+
 #include <windows.h>
-#include <wtsapi32.h>
+
+#include <stddef.h>
 
 #include <algorithm>
 #include <initializer_list>
@@ -21,9 +22,9 @@
 #include <vector>
 
 #include "base/base64.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/cpu.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
@@ -41,7 +42,6 @@
 #include "base/win/windows_version.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_for_testing/buildflags.h"
 #include "chrome/install_static/install_details.h"
 #include "chrome/install_static/install_modes.h"
 #include "chrome/install_static/install_util.h"
@@ -59,10 +59,6 @@
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/work_item.h"
 #include "chrome/installer/util/work_item_list.h"
-#include "components/zucchini/zucchini.h"
-#include "components/zucchini/zucchini_integration.h"
-#include "courgette/courgette.h"
-#include "courgette/third_party/bsdiff/bsdiff.h"
 
 namespace installer {
 
@@ -136,74 +132,6 @@ void RemoveLegacyChromeAppCommands(const InstallerState& installer_state) {
 
 const char kUnPackStatusMetricsName[] = "Setup.Install.LzmaUnPackStatus";
 
-int CourgettePatchFiles(const base::FilePath& src,
-                        const base::FilePath& patch,
-                        const base::FilePath& dest) {
-  VLOG(1) << "Applying Courgette patch " << patch.value() << " to file "
-          << src.value() << " and generating file " << dest.value();
-
-  if (src.empty() || patch.empty() || dest.empty())
-    return installer::PATCH_INVALID_ARGUMENTS;
-
-  const courgette::Status patch_status = courgette::ApplyEnsemblePatch(
-      src.value().c_str(), patch.value().c_str(), dest.value().c_str());
-  const int exit_code =
-      (patch_status != courgette::C_OK)
-          ? static_cast<int>(patch_status) + kCourgetteErrorOffset
-          : 0;
-
-  LOG_IF(ERROR, exit_code) << "Failed to apply Courgette patch "
-                           << patch.value() << " to file " << src.value()
-                           << " and generating file " << dest.value()
-                           << ". err=" << exit_code;
-
-  return exit_code;
-}
-
-int BsdiffPatchFiles(const base::FilePath& src,
-                     const base::FilePath& patch,
-                     const base::FilePath& dest) {
-  VLOG(1) << "Applying bsdiff patch " << patch.value() << " to file "
-          << src.value() << " and generating file " << dest.value();
-
-  if (src.empty() || patch.empty() || dest.empty())
-    return installer::PATCH_INVALID_ARGUMENTS;
-
-  const int patch_status = bsdiff::ApplyBinaryPatch(src, patch, dest);
-  const int exit_code =
-      patch_status != bsdiff::OK ? patch_status + kBsdiffErrorOffset : 0;
-
-  LOG_IF(ERROR, exit_code) << "Failed to apply bsdiff patch " << patch.value()
-                           << " to file " << src.value()
-                           << " and generating file " << dest.value()
-                           << ". err=" << exit_code;
-
-  return exit_code;
-}
-
-int ZucchiniPatchFiles(const base::FilePath& src,
-                       const base::FilePath& patch,
-                       const base::FilePath& dest) {
-  VLOG(1) << "Applying Zucchini patch " << patch.value() << " to file "
-          << src.value() << " and generating file " << dest.value();
-
-  if (src.empty() || patch.empty() || dest.empty())
-    return installer::PATCH_INVALID_ARGUMENTS;
-
-  const zucchini::status::Code patch_status = zucchini::Apply(src, patch, dest);
-  const int exit_code =
-      (patch_status != zucchini::status::kStatusSuccess)
-          ? static_cast<int>(patch_status) + kZucchiniErrorOffset
-          : 0;
-
-  LOG_IF(ERROR, exit_code) << "Failed to apply Zucchini patch " << patch.value()
-                           << " to file " << src.value()
-                           << " and generating file " << dest.value()
-                           << ". err=" << exit_code;
-
-  return exit_code;
-}
-
 base::Version* GetMaxVersionFromArchiveDir(const base::FilePath& chrome_path) {
   VLOG(1) << "Looking for Chrome version folder under " << chrome_path.value();
   base::FileEnumerator version_enum(chrome_path, false,
@@ -228,39 +156,6 @@ base::Version* GetMaxVersionFromArchiveDir(const base::FilePath& chrome_path) {
   }
 
   return (version_found ? max_version.release() : nullptr);
-}
-
-base::FilePath FindArchiveToPatch(const InstallationState& original_state,
-                                  const InstallerState& installer_state,
-                                  const base::Version& desired_version) {
-  if (desired_version.IsValid()) {
-    base::FilePath archive(
-        installer_state.GetInstallerDirectory(desired_version)
-            .Append(kChromeArchive));
-    return base::PathExists(archive) ? archive : base::FilePath();
-  }
-
-  // Check based on the version number advertised to Google Update, since that
-  // is the value used to select a specific differential update. If an archive
-  // can't be found using that, fallback to using the newest version present.
-  base::FilePath patch_source;
-  const ProductState* product =
-      original_state.GetProductState(installer_state.system_install());
-  if (product) {
-    patch_source = installer_state.GetInstallerDirectory(product->version())
-                       .Append(installer::kChromeArchive);
-    if (base::PathExists(patch_source))
-      return patch_source;
-  }
-  std::unique_ptr<base::Version> version(
-      installer::GetMaxVersionFromArchiveDir(installer_state.target_path()));
-  if (version) {
-    patch_source = installer_state.GetInstallerDirectory(*version).Append(
-        installer::kChromeArchive);
-    if (base::PathExists(patch_source))
-      return patch_source;
-  }
-  return base::FilePath();
 }
 
 bool DeleteFileFromTempProcess(const base::FilePath& path,
@@ -303,7 +198,6 @@ bool DeleteFileFromTempProcess(const base::FilePath& path,
           reinterpret_cast<PAPCFUNC>(::GetProcAddress(kernel32, "ExitProcess"));
       if (!sleep || !delete_file || !exit_process) {
         NOTREACHED();
-        ok = FALSE;
       } else {
         ::QueueUserAPC(sleep, pi.hThread, delay_before_delete_ms);
         ::QueueUserAPC(delete_file, pi.hThread,
@@ -322,12 +216,15 @@ bool DeleteFileFromTempProcess(const base::FilePath& path,
   return ok != FALSE;
 }
 
-bool AdjustProcessPriority() {
-  DWORD priority_class = ::GetPriorityClass(::GetCurrentProcess());
+bool AdjustThreadPriority() {
+  const DWORD priority_class = ::GetPriorityClass(::GetCurrentProcess());
   if (priority_class == BELOW_NORMAL_PRIORITY_CLASS ||
       priority_class == IDLE_PRIORITY_CLASS) {
-    BOOL result = ::SetPriorityClass(::GetCurrentProcess(),
-                                     PROCESS_MODE_BACKGROUND_BEGIN);
+    // Don't use SetPriorityClass with PROCESS_MODE_BACKGROUND_BEGIN because it
+    // will cap the process working set to 32 MiB. See
+    // https://crbug.com/1475179.
+    const BOOL result =
+        ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
     PLOG_IF(WARNING, !result) << "Failed to enter background mode.";
     return !!result;
   }
@@ -364,8 +261,9 @@ bool ContainsUnsupportedSwitch(const base::CommandLine& cmd_line) {
       "app-launcher",
   };
   for (size_t i = 0; i < std::size(kLegacySwitches); ++i) {
-    if (cmd_line.HasSwitch(kLegacySwitches[i]))
+    if (cmd_line.HasSwitch(UNSAFE_TODO(kLegacySwitches[i]))) {
       return true;
+    }
   }
   return false;
 }
@@ -386,8 +284,8 @@ void DeleteRegistryKeyPartial(
     const std::vector<std::wstring>& keys_to_preserve) {
   // Downcase the list of keys to preserve (all must be ASCII strings).
   std::set<std::wstring> lowered_keys_to_preserve;
-  std::transform(
-      keys_to_preserve.begin(), keys_to_preserve.end(),
+  std::ranges::transform(
+      keys_to_preserve,
       std::inserter(lowered_keys_to_preserve, lowered_keys_to_preserve.begin()),
       [](const std::wstring& str) {
         DCHECK(!str.empty());
@@ -548,14 +446,8 @@ void RecordUnPackMetrics(UnPackStatus unpack_status, UnPackConsumer consumer) {
   std::string consumer_name;
 
   switch (consumer) {
-    case UnPackConsumer::CHROME_ARCHIVE_PATCH:
-      consumer_name = "ChromeArchivePatch";
-      break;
     case UnPackConsumer::COMPRESSED_CHROME_ARCHIVE:
       consumer_name = "CompressedChromeArchive";
-      break;
-    case UnPackConsumer::SETUP_EXE_PATCH:
-      consumer_name = "SetupExePatch";
       break;
     case UnPackConsumer::UNCOMPRESSED_CHROME_ARCHIVE:
       consumer_name = "UncompressedChromeArchive";
@@ -639,36 +531,11 @@ void DoLegacyCleanups(const InstallerState& installer_state,
   RemoveLegacyChromeAppCommands(installer_state);
 }
 
-base::Time GetConsoleSessionStartTime() {
-  constexpr DWORD kInvalidSessionId = 0xFFFFFFFF;
-  DWORD console_session_id = ::WTSGetActiveConsoleSessionId();
-  if (console_session_id == kInvalidSessionId)
-    return base::Time();
-  wchar_t* buffer = nullptr;
-  DWORD buffer_size = 0;
-  if (!::WTSQuerySessionInformation(WTS_CURRENT_SERVER_HANDLE,
-                                    console_session_id, WTSSessionInfo, &buffer,
-                                    &buffer_size)) {
-    return base::Time();
-  }
-  base::ScopedClosureRunner wts_deleter(
-      base::BindOnce(&::WTSFreeMemory, base::Unretained(buffer)));
-
-  WTSINFO* wts_info = nullptr;
-  if (buffer_size < sizeof(*wts_info))
-    return base::Time();
-
-  wts_info = reinterpret_cast<WTSINFO*>(buffer);
-  FILETIME filetime = {wts_info->LogonTime.u.LowPart,
-                       static_cast<DWORD>(wts_info->LogonTime.u.HighPart)};
-  return base::Time::FromFileTime(filetime);
-}
-
-absl::optional<std::string> DecodeDMTokenSwitchValue(
+std::optional<std::string> DecodeDMTokenSwitchValue(
     const std::wstring& encoded_token) {
   if (encoded_token.empty()) {
     LOG(ERROR) << "Empty DMToken specified on the command line";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   // The token passed on the command line is base64-encoded, but since this is
@@ -677,13 +544,13 @@ absl::optional<std::string> DecodeDMTokenSwitchValue(
   if (!base::IsStringASCII(encoded_token) ||
       !base::Base64Decode(base::WideToASCII(encoded_token), &token)) {
     LOG(ERROR) << "DMToken passed on the command line is not correctly encoded";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return token;
 }
 
-absl::optional<std::string> DecodeNonceSwitchValue(
+std::optional<std::string> DecodeNonceSwitchValue(
     const std::string& encoded_nonce) {
   if (encoded_nonce.empty()) {
     // The nonce command line argument is optional.  If none is specified use
@@ -695,7 +562,7 @@ absl::optional<std::string> DecodeNonceSwitchValue(
   std::string nonce;
   if (!base::Base64Decode(encoded_nonce, &nonce)) {
     LOG(ERROR) << "Nonce passed on the command line is not correctly encoded";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return nonce;
@@ -756,7 +623,7 @@ bool DeleteDMToken() {
 
     base::win::RegKey key;
     auto result = key.Open(HKEY_LOCAL_MACHINE, key_path.c_str(),
-                           KEY_SET_VALUE | wow_access);
+                           KEY_QUERY_VALUE | KEY_SET_VALUE | wow_access);
     if (result == ERROR_FILE_NOT_FOUND) {
       // The registry key which stores the DMToken value was not found, so
       // deletion is not necessary.
@@ -780,9 +647,10 @@ bool DeleteDMToken() {
       continue;
     }  // Else ignore the failure to write to the best-effort location.
 
-    // Delete the key if no other values are present.
-    base::win::RegKey(HKEY_LOCAL_MACHINE, L"", KEY_QUERY_VALUE | wow_access)
-        .DeleteEmptyKey(key_path.c_str());
+    // Delete the key if no other values or keys are present.
+    if (key.GetValueCount().value_or(1) == 0) {
+      key.DeleteKey(L"", base::win::RegKey::RecursiveDelete(false));
+    }
   }
 
   VLOG(1) << "Successfully deleted DMToken from the registry.";
@@ -809,6 +677,12 @@ base::FilePath GetElevationServicePath(const base::FilePath& target_path,
                                        const base::Version& version) {
   return target_path.AppendASCII(version.GetString())
       .Append(kElevationServiceExe);
+}
+
+base::FilePath GetTracingServicePath(const base::FilePath& target_path,
+                                     const base::Version& version) {
+  return target_path.AppendASCII(version.GetString())
+      .Append(kElevatedTracingServiceExe);
 }
 
 void AddUpdateDowngradeVersionItem(HKEY root,

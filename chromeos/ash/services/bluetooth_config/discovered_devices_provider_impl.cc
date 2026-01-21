@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/services/bluetooth_config/discovered_devices_provider_impl.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
 
 namespace ash::bluetooth_config {
 
@@ -15,7 +15,7 @@ const base::TimeDelta DiscoveredDevicesProviderImpl::kNotificationDelay =
 DiscoveredDevicesProviderImpl::DiscoveredDevicesProviderImpl(
     DeviceCache* device_cache)
     : device_cache_(device_cache) {
-  device_cache_observation_.Observe(device_cache_);
+  device_cache_observation_.Observe(device_cache_.get());
 }
 
 DiscoveredDevicesProviderImpl::~DiscoveredDevicesProviderImpl() = default;
@@ -58,8 +58,8 @@ void DiscoveredDevicesProviderImpl::OnUnpairedDevicesListChanged() {
     unpaired_device_ids.insert(unpaired_device->id);
 
     // Check if |discovered_devices_| contains |unpaired_device_|.
-    const auto it = base::ranges::find(discovered_devices_, unpaired_device->id,
-                                       &mojom::BluetoothDeviceProperties::id);
+    const auto it = std::ranges::find(discovered_devices_, unpaired_device->id,
+                                      &mojom::BluetoothDeviceProperties::id);
     if (it == discovered_devices_.end()) {
       // If it doesn't contain the device, the device was added. Append to end
       // of the list.

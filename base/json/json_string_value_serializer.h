@@ -7,13 +7,15 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/base_export.h"
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 
+// Use this class to work with code that takes `base::ValueSerializer`.
+// To just serialize a JSON string, use base/json/json_writer.h instead.
 class BASE_EXPORT JSONStringValueSerializer : public base::ValueSerializer {
  public:
   // |json_string| is the string that will be the destination of the
@@ -47,13 +49,15 @@ class BASE_EXPORT JSONStringValueSerializer : public base::ValueSerializer {
   bool pretty_print_;  // If true, serialization will span multiple lines.
 };
 
+// Use this class to work with code that takes `base::ValueDeserializer`.
+// To just deserialize a JSON string, use base/json/json_reader.h instead.
 class BASE_EXPORT JSONStringValueDeserializer : public base::ValueDeserializer {
  public:
   // This retains a reference to the contents of |json_string|, so the data
   // must outlive the JSONStringValueDeserializer. |options| is a bitmask of
   // JSONParserOptions.
   explicit JSONStringValueDeserializer(
-      const base::StringPiece& json_string,
+      std::string_view json_string,
       int options = base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   JSONStringValueDeserializer(const JSONStringValueDeserializer&) = delete;
@@ -76,7 +80,7 @@ class BASE_EXPORT JSONStringValueDeserializer : public base::ValueDeserializer {
 
  private:
   // Data is owned by the caller of the constructor.
-  base::StringPiece json_string_;
+  std::string_view json_string_;
   const int options_;
 };
 

@@ -13,9 +13,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -99,9 +99,7 @@ Status FocusToElement(
     Session* session,
     WebView* web_view,
     const std::string& element_id) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
+  Status status{kOk};
   bool is_displayed = false;
   bool is_focused = false;
   base::TimeTicks start_time = base::TimeTicks::Now();
@@ -132,10 +130,10 @@ Status FocusToElement(
 
   if (!is_focused) {
     base::Value::List args;
-    args.Append(CreateElement(element_id));
-    std::unique_ptr<base::Value> result;
-    status = web_view->CallFunction(
-        session->GetCurrentFrameId(), kFocusScript, args, &result);
+    args.Append(CreateElement(element_id, session->w3c_compliant));
+    std::unique_ptr<base::Value> unused;
+    status = web_view->CallFunction(session->GetCurrentFrameId(), kFocusScript,
+                                    args, &unused);
     if (status.IsError())
       return status;
   }
@@ -164,16 +162,23 @@ Status SendKeysToElement(Session* session,
   // element. keys if element's type is text-related
   if (is_text && !was_previously_focused) {
     base::Value::List args;
-    args.Append(CreateElement(element_id));
-    std::unique_ptr<base::Value> result;
+    args.Append(CreateElement(element_id, session->w3c_compliant));
+    std::unique_ptr<base::Value> unused;
     Status status = web_view->CallFunction(
         session->GetCurrentFrameId(),
         "elem => elem.setSelectionRange(elem.value.length, elem.value.length)",
-        args, &result);
+        args, &unused);
     if (status.IsError())
       return status;
   }
   return SendKeysOnWindow(web_view, key_list, true, &session->sticky_modifiers);
+}
+
+Status WrapIfTargetDetached(Status status, StatusCode new_code) {
+  if (status.code() == kTargetDetached) {
+    return Status{new_code, status};
+  }
+  return status;
 }
 
 }  // namespace
@@ -230,30 +235,31 @@ Status ExecuteGetElementShadowRoot(Session* session,
                                    const std::string& element_id,
                                    const base::Value::Dict& params,
                                    std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-
-  if (status.IsError())
-    return status;
-
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
 
-  status = web_view->CallFunction(session->GetCurrentFrameId(),
-                                  "function(elem) { return elem.shadowRoot; }",
-                                  args, value);
+  std::unique_ptr<base::Value> tmp;
+
+  CallFunctionOptions options;
+  options.include_shadow_root = true;
+  Status status = web_view->CallFunctionWithTimeout(
+      session->GetCurrentFrameId(), "function(elem) { return elem; }", args,
+      base::TimeDelta::Max(), options, &tmp);
 
   if (status.IsError()) {
-    if (status.message().find("no such shadow root") != std::string::npos) {
-      return Status(kNoSuchShadowRoot);
-    }
-
     return status;
   }
 
-  if (value->get()->is_none()) {
-    return Status(kNoSuchShadowRoot);
+  if (!tmp->is_dict()) {
+    return Status(kNoSuchShadowRoot, "result is not a dictionary");
   }
 
+  base::Value::Dict* shadow_root = tmp->GetDict().FindDict("shadowRoot");
+  if (shadow_root == nullptr) {
+    return Status(kNoSuchShadowRoot, "shadow root not found");
+  }
+
+  *value = std::make_unique<base::Value>(std::move(*shadow_root));
   return status;
 }
 
@@ -275,50 +281,70 @@ Status ExecuteClickElement(Session* session,
   std::string tag_name;
   Status status = GetElementTagName(session, web_view, element_id, &tag_name);
   if (status.IsError())
-    return status;
+    return WrapIfTargetDetached(status, kAbortedByNavigation);
   if (tag_name == "option") {
     bool is_toggleable;
     status = IsOptionElementTogglable(
         session, web_view, element_id, &is_toggleable);
     if (status.IsError())
-      return status;
-    if (is_toggleable)
-      return ToggleOptionElement(session, web_view, element_id);
-    return SetOptionElementSelected(session, web_view, element_id, true);
+      return WrapIfTargetDetached(status, kAbortedByNavigation);
+    if (is_toggleable) {
+      status = ToggleOptionElement(session, web_view, element_id);
+      return WrapIfTargetDetached(status, kAbortedByNavigation);
+    }
+    status = SetOptionElementSelected(session, web_view, element_id, true);
+    return WrapIfTargetDetached(status, kAbortedByNavigation);
   }
 
   if (tag_name == "input") {
     std::unique_ptr<base::Value> get_element_type;
     status = GetElementAttribute(session, web_view, element_id, "type",
                                  &get_element_type);
-    if (status.IsError())
-      return status;
+    if (status.IsError()) {
+      return WrapIfTargetDetached(status, kAbortedByNavigation);
+    }
     std::string element_type;
     if (get_element_type->is_string())
       element_type = base::ToLowerASCII(get_element_type->GetString());
     if (element_type == "file")
       return Status(kInvalidArgument);
   }
-  WebPoint location;
-  status =
-      GetElementClickableLocation(session, web_view, element_id, &location);
+  WebPoint absolute_location;
+  status = GetElementClickableLocation(session, web_view, element_id,
+                                       &absolute_location);
   if (status.IsError())
-    return status;
+    return WrapIfTargetDetached(status, kAbortedByNavigation);
+
+  WebView* containing_web_view =
+      web_view->FindContainerForFrame(session->GetCurrentFrameId());
+  if (containing_web_view == nullptr) {
+    return Status{kAbortedByNavigation,
+                  "frame was destroyed before click completion"};
+  }
+
+  WebPoint relative_location;
+  status = GetElementClickableLocation(session, containing_web_view, element_id,
+                                       &relative_location);
+  if (status.IsError()) {
+    return WrapIfTargetDetached(status, kAbortedByNavigation);
+  }
 
   std::vector<MouseEvent> events;
-  events.push_back(MouseEvent(kMovedMouseEventType, kNoneMouseButton,
-                              location.x, location.y, session->sticky_modifiers,
-                              0, 0));
-  events.push_back(MouseEvent(kPressedMouseEventType, kLeftMouseButton,
-                              location.x, location.y, session->sticky_modifiers,
-                              0, 1));
-  events.push_back(MouseEvent(kReleasedMouseEventType, kLeftMouseButton,
-                              location.x, location.y, session->sticky_modifiers,
-                              1, 1));
-  status = web_view->DispatchMouseEvents(events, session->GetCurrentFrameId(),
-                                         false);
-  if (status.IsOk())
-    session->mouse_position = location;
+  events.emplace_back(kMovedMouseEventType, kNoneMouseButton,
+                      relative_location.x, relative_location.y,
+                      session->sticky_modifiers, 0, 0);
+  events.emplace_back(kPressedMouseEventType, kLeftMouseButton,
+                      relative_location.x, relative_location.y,
+                      session->sticky_modifiers, 0, 1);
+  events.emplace_back(kReleasedMouseEventType, kLeftMouseButton,
+                      relative_location.x, relative_location.y,
+                      session->sticky_modifiers, 1, 1);
+  status = containing_web_view->DispatchMouseEvents(
+      events, session->GetCurrentFrameId(), false);
+  // kTargetDetached could be a side effect of the click.
+  if (status.IsOk() || status.code() == kTargetDetached) {
+    session->mouse_position = absolute_location;
+  }
   return status;
 }
 
@@ -391,12 +417,12 @@ Status ExecuteFlick(Session* session,
 
   int xoffset, yoffset, speed;
 
-  absl::optional<int> maybe_xoffset = params.FindInt("xoffset");
+  std::optional<int> maybe_xoffset = params.FindInt("xoffset");
   if (!maybe_xoffset)
     return Status(kInvalidArgument, "'xoffset' must be an integer");
   xoffset = *maybe_xoffset;
 
-  absl::optional<int> maybe_yoffset = params.FindInt("yoffset");
+  std::optional<int> maybe_yoffset = params.FindInt("yoffset");
   if (!maybe_yoffset)
     return Status(kInvalidArgument, "'yoffset' must be an integer");
   yoffset = *maybe_yoffset;
@@ -437,12 +463,8 @@ Status ExecuteClearElement(Session* session,
                            const std::string& element_id,
                            const base::Value::Dict& params,
                            std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
-
   std::string tag_name;
-  status = GetElementTagName(session, web_view, element_id, &tag_name);
+  Status status = GetElementTagName(session, web_view, element_id, &tag_name);
   if (status.IsError())
     return status;
   bool is_input_control = false;
@@ -467,7 +489,7 @@ Status ExecuteClearElement(Session* session,
   if (!is_text && !is_input_control) {
     std::unique_ptr<base::Value> get_content_editable;
     base::Value::List args;
-    args.Append(CreateElement(element_id));
+    args.Append(CreateElement(element_id, session->w3c_compliant));
     status = web_view->CallFunction(session->GetCurrentFrameId(),
                                     "element => element.isContentEditable",
                                     args, &get_content_editable);
@@ -516,12 +538,11 @@ Status ExecuteClearElement(Session* session,
     is_clear_warning_notified = true;
   }
   base::Value::List args;
-  args.Append(CreateElement(element_id));
-  std::unique_ptr<base::Value> result;
+  args.Append(CreateElement(element_id, session->w3c_compliant));
+  std::unique_ptr<base::Value> unused;
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
-      webdriver::atoms::asString(webdriver::atoms::CLEAR),
-      args, &result);
+      webdriver::atoms::asString(webdriver::atoms::CLEAR), args, &unused);
 }
 
 Status ExecuteSendKeysToElement(Session* session,
@@ -529,9 +550,6 @@ Status ExecuteSendKeysToElement(Session* session,
                                 const std::string& element_id,
                                 const base::Value::Dict& params,
                                 std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   const base::Value::List* key_list;
   base::Value::List key_list_local;
   const base::Value* text = nullptr;
@@ -543,11 +561,14 @@ Status ExecuteSendKeysToElement(Session* session,
     key_list = &key_list_local;
   } else {
     key_list = params.FindList("value");
+    if (key_list == nullptr) {
+      return Status(kInvalidArgument, "'value' must be a list");
+    }
   }
 
   bool is_input = false;
-  status = IsElementAttributeEqualToIgnoreCase(session, web_view, element_id,
-                                               "tagName", "input", &is_input);
+  Status status = IsElementAttributeEqualToIgnoreCase(
+      session, web_view, element_id, "tagName", "input", &is_input);
   if (status.IsError())
     return status;
   std::unique_ptr<base::Value> get_element_type;
@@ -611,7 +632,7 @@ Status ExecuteSendKeysToElement(Session* session,
                     "the element can not hold multiple files");
     }
 
-    base::Value element = CreateElement(element_id);
+    base::Value element = CreateElement(element_id, session->w3c_compliant);
     return web_view->SetFileInputFiles(session->GetCurrentFrameId(), element,
                                        paths, multiple);
   }
@@ -625,19 +646,19 @@ Status ExecuteSendKeysToElement(Session* session,
     // text is set only when session.w3c_compliant, so confirm here
     DCHECK(text != nullptr);
     base::Value::List args;
-    args.Append(CreateElement(element_id));
+    args.Append(CreateElement(element_id, session->w3c_compliant));
     args.Append(text->GetString());
-    std::unique_ptr<base::Value> result;
+    std::unique_ptr<base::Value> unused;
     // Set value to text as given by user; if this does not match the defined
     // format for the input type, results are not defined
     return web_view->CallFunction(session->GetCurrentFrameId(),
                                   "(element, text) => element.value = text",
-                                  args, &result);
+                                  args, &unused);
   }
 
   std::unique_ptr<base::Value> get_content_editable;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   status = web_view->CallFunction(session->GetCurrentFrameId(),
                                   "element => element.isContentEditable", args,
                                   &get_content_editable);
@@ -679,7 +700,9 @@ Status ExecuteSendKeysToElement(Session* session,
       return status;
     const base::Value::Dict* element_dict = result->GetIfDict();
     const std::string* top_element_id =
-        element_dict ? element_dict->FindString(GetElementKey()) : nullptr;
+        element_dict
+            ? element_dict->FindString(GetElementKey(session->w3c_compliant))
+            : nullptr;
     if (!top_element_id)
       return Status(kUnknownError, "no element reference returned by script");
 
@@ -725,11 +748,8 @@ Status ExecuteSubmitElement(Session* session,
                             const std::string& element_id,
                             const base::Value::Dict& params,
                             std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::SUBMIT),
@@ -742,11 +762,8 @@ Status ExecuteGetElementText(Session* session,
                              const std::string& element_id,
                              const base::Value::Dict& params,
                              std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::GET_TEXT),
@@ -759,11 +776,8 @@ Status ExecuteGetElementValue(Session* session,
                               const std::string& element_id,
                               const base::Value::Dict& params,
                               std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       "function(elem) { return elem['value'] }",
@@ -776,11 +790,8 @@ Status ExecuteGetElementProperty(Session* session,
                                  const std::string& element_id,
                                  const base::Value::Dict& params,
                                  std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
 
   const std::string* name = params.FindString("name");
   if (!name)
@@ -799,11 +810,8 @@ Status ExecuteGetElementTagName(Session* session,
                                 const std::string& element_id,
                                 const base::Value::Dict& params,
                                 std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       "function(elem) { return elem.tagName.toLowerCase() }",
@@ -816,11 +824,8 @@ Status ExecuteIsElementSelected(Session* session,
                                 const std::string& element_id,
                                 const base::Value::Dict& params,
                                 std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::IS_SELECTED),
@@ -833,14 +838,11 @@ Status ExecuteIsElementEnabled(Session* session,
                                const std::string& element_id,
                                const base::Value::Dict& params,
                                std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
 
   bool is_xml = false;
-  status = IsDocumentTypeXml(session, web_view, &is_xml);
+  Status status = IsDocumentTypeXml(session, web_view, &is_xml);
   if (status.IsError())
     return status;
 
@@ -864,14 +866,14 @@ Status ExecuteGetComputedLabel(Session* session,
     return status;
 
   // Computed label stores as `name` in the AXTree.
-  absl::optional<base::Value> name_node = ax_node->ExtractKey("name");
+  base::Value::Dict* name_node = ax_node->GetDict().FindDict("name");
   if (!name_node) {
     // No computed label found. Return empty string.
     *value = std::make_unique<base::Value>("");
     return Status(kOk);
   }
 
-  absl::optional<base::Value> name_val = name_node->ExtractKey("value");
+  std::optional<base::Value> name_val = name_node->Extract("value");
   if (!name_val)
     return Status(kUnknownError,
                   "No name value found in the node in CDP response");
@@ -891,14 +893,14 @@ Status ExecuteGetComputedRole(Session* session,
   if (status.IsError())
     return status;
 
-  absl::optional<base::Value> role_node = ax_node->ExtractKey("role");
+  base::Value::Dict* role_node = ax_node->GetDict().FindDict("role");
   if (!role_node) {
     // No computed role found. Return empty string.
     *value = std::make_unique<base::Value>("");
     return Status(kOk);
   }
 
-  absl::optional<base::Value> role_val = role_node->ExtractKey("value");
+  std::optional<base::Value> role_val = role_node->Extract("value");
   if (!role_val) {
     return Status(kUnknownError,
                   "No role value found in the node in CDP response");
@@ -914,11 +916,8 @@ Status ExecuteIsElementDisplayed(Session* session,
                                  const std::string& element_id,
                                  const base::Value::Dict& params,
                                  std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::IS_DISPLAYED),
@@ -931,11 +930,8 @@ Status ExecuteGetElementLocation(Session* session,
                                  const std::string& element_id,
                                  const base::Value::Dict& params,
                                  std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::GET_LOCATION),
@@ -948,14 +944,11 @@ Status ExecuteGetElementRect(Session* session,
                              const std::string& element_id,
                              const base::Value::Dict& params,
                              std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
 
   std::unique_ptr<base::Value> location;
-  status = web_view->CallFunction(
+  Status status = web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::GET_LOCATION), args,
       &location);
@@ -978,19 +971,19 @@ Status ExecuteGetElementRect(Session* session,
     return Status(kUnknownError, "could not convert to Value::Dict");
 
   // grab values
-  absl::optional<double> maybe_x = location_dict->FindDouble("x");
+  std::optional<double> maybe_x = location_dict->FindDouble("x");
   if (!maybe_x.has_value())
     return Status(kUnknownError, "x coordinate is missing in element location");
 
-  absl::optional<double> maybe_y = location_dict->FindDouble("y");
+  std::optional<double> maybe_y = location_dict->FindDouble("y");
   if (!maybe_y.has_value())
     return Status(kUnknownError, "y coordinate is missing in element location");
 
-  absl::optional<double> maybe_height = size_dict->FindDouble("height");
+  std::optional<double> maybe_height = size_dict->FindDouble("height");
   if (!maybe_height.has_value())
     return Status(kUnknownError, "height is missing in element size");
 
-  absl::optional<double> maybe_width = size_dict->FindDouble("width");
+  std::optional<double> maybe_width = size_dict->FindDouble("width");
   if (!maybe_width.has_value())
     return Status(kUnknownError, "width is missing in element size");
 
@@ -1024,11 +1017,8 @@ Status ExecuteGetElementSize(Session* session,
                              const std::string& element_id,
                              const base::Value::Dict& params,
                              std::unique_ptr<base::Value>* value) {
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
       webdriver::atoms::asString(webdriver::atoms::GET_SIZE),
@@ -1051,11 +1041,8 @@ Status ExecuteGetElementAttribute(Session* session,
                                value);
   }
 
-  Status status = CheckElement(element_id);
-  if (status.IsError())
-    return status;
   base::Value::List args;
-  args.Append(CreateElement(element_id));
+  args.Append(CreateElement(element_id, session->w3c_compliant));
   args.Append(*attribute_name);
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
@@ -1141,40 +1128,37 @@ Status ExecuteElementScreenshot(Session* session,
       "({x: window.pageXOffset,"
       "  y: window.pageYOffset,"
       "  height: document.documentElement.clientHeight,"
-      "  width: document.documentElement.clientWidth,"
-      "  device_pixel_ratio: window.devicePixelRatio})",
+      "  width: document.documentElement.clientWidth})",
       false, &browser_info);
   if (status.IsError())
     return status;
 
-  double scroll_left = browser_info->FindKey("x")->GetDouble();
-  double scroll_top = browser_info->FindKey("y")->GetDouble();
-  double viewport_height = browser_info->FindKey("height")->GetDouble();
-  double viewport_width = browser_info->FindKey("width")->GetDouble();
-  double device_pixel_ratio =
-         browser_info->FindKey("device_pixel_ratio")->GetDouble();
+  const base::Value::Dict& browser_info_dict = browser_info->GetDict();
+  double scroll_left = browser_info_dict.FindDouble("x").value();
+  double scroll_top = browser_info_dict.FindDouble("y").value();
+  double viewport_height = browser_info_dict.FindDouble("height").value();
+  double viewport_width = browser_info_dict.FindDouble("width").value();
 
   if (!clip->is_dict())
     return Status(kUnknownError, "Element Rect is not a dictionary");
 
   base::Value::Dict screenshot_params;
-  base::Value* clip_dict = screenshot_params.Set(
-      "clip", base::Value::FromUniquePtrValue(std::move(clip)));
+  base::Value::Dict& clip_dict =
+      screenshot_params
+          .Set("clip", base::Value::FromUniquePtrValue(std::move(clip)))
+          ->GetDict();
   // |clip_dict| already contains the right width and height of the target
   // element, but its x and y are relative to containing frame. We replace them
   // with the x and y relative to top-level document origin, as expected by
   // CaptureScreenshot.
-  clip_dict->SetDoubleKey("x", location.x + scroll_left);
-  clip_dict->SetDoubleKey("y", location.y + scroll_top);
-  clip_dict->SetDoubleKey("scale", 1 / device_pixel_ratio);
+  clip_dict.Set("x", location.x + scroll_left);
+  clip_dict.Set("y", location.y + scroll_top);
   // Crop screenshot by viewport if element is larger than viewport
-  clip_dict->SetDoubleKey("height",
-                          std::min(viewport_height - location.y,
-                                   clip_dict->FindKey("height")->GetDouble()));
-  clip_dict->SetDoubleKey("width",
-                          std::min(viewport_width - location.x,
-                                   clip_dict->FindKey("width")->GetDouble()));
-
+  clip_dict.Set("height", std::min(viewport_height - location.y,
+                                   clip_dict.FindDouble("height").value()));
+  clip_dict.Set("width", std::min(viewport_width - location.x,
+                                  clip_dict.FindDouble("width").value()));
+  clip_dict.Set("scale", 1);
   std::string screenshot;
   status = web_view->CaptureScreenshot(&screenshot, screenshot_params);
   if (status.IsError())

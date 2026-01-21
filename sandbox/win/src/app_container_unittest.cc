@@ -7,18 +7,25 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/format_macros.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/win/access_control_list.h"
 #include "base/win/security_descriptor.h"
+#include "base/win/security_util.h"
 #include "base/win/sid.h"
+#include "build/build_config.h"
 #include "sandbox/features.h"
 #include "sandbox/win/src/app_container_base.h"
 #include "sandbox/win/src/security_capabilities.h"
 #include "sandbox/win/src/win_utils.h"
+#include "sandbox/win/tests/common/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sandbox {
@@ -51,10 +58,10 @@ bool ValidSecurityCapabilities(
   for (DWORD index = 0; index < security_capabilities->CapabilityCount;
        ++index) {
     if (!capabilities[index].Equal(
-            security_capabilities->Capabilities[index].Sid)) {
+            UNSAFE_TODO(security_capabilities->Capabilities[index]).Sid)) {
       return false;
     }
-    if (security_capabilities->Capabilities[index].Attributes !=
+    if (UNSAFE_TODO(security_capabilities->Capabilities[index]).Attributes !=
         SE_GROUP_ENABLED) {
       return false;
     }
@@ -94,9 +101,59 @@ bool ProfileExist(const std::wstring& package_name) {
   return base::PathExists(profile_path);
 }
 
+bool FindAce(std::optional<base::win::AccessControlList>& acl,
+             DWORD ace_type,
+             const base::win::Sid& sid,
+             DWORD flags,
+             DWORD mask) {
+  if (!acl || acl->is_null()) {
+    return false;
+  }
+  PACL pacl = acl->get();
+  for (DWORD ace_index = 0; ace_index < pacl->AceCount; ++ace_index) {
+    PACCESS_ALLOWED_ACE ace = nullptr;
+    if (::GetAce(pacl, ace_index, reinterpret_cast<LPVOID*>(&ace)) &&
+        ace->Header.AceType == ace_type &&
+        (ace->Header.AceFlags & flags) == flags && ace->Mask == mask &&
+        sid.Equal(&ace->SidStart)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void CheckProfileDirectorySecurity(const base::FilePath& path,
+                                   const base::win::Sid& package_sid) {
+  DWORD flags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+  std::optional<base::win::SecurityDescriptor> sd =
+      base::win::SecurityDescriptor::FromFile(
+          path, DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
+  ASSERT_TRUE(sd);
+  EXPECT_TRUE(FindAce(sd->dacl(), ACCESS_ALLOWED_ACE_TYPE, package_sid, flags,
+                      FILE_ALL_ACCESS))
+      << path.value();
+  EXPECT_TRUE(
+      FindAce(sd->sacl(), SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+              base::win::Sid::FromIntegrityLevel(SECURITY_MANDATORY_LOW_RID),
+              flags, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP))
+      << path.value();
+}
+
+void CheckProfileDirectoryLayout(const AppContainerBase* profile) {
+  base::FilePath profile_path;
+  ASSERT_TRUE(GetProfilePath(profile->GetPackageName(), &profile_path));
+  ASSERT_TRUE(base::DirectoryExists(profile_path));
+  base::FilePath ac_path = profile_path.Append(L"AC");
+  ASSERT_TRUE(base::DirectoryExists(ac_path));
+  CheckProfileDirectorySecurity(ac_path, profile->GetPackageSid());
+  base::FilePath tmp_path = ac_path.Append(L"Temp");
+  ASSERT_TRUE(base::DirectoryExists(tmp_path));
+  CheckProfileDirectorySecurity(tmp_path, profile->GetPackageSid());
+}
+
 std::wstring GenerateRandomPackageName() {
-  return base::StringPrintf(L"%016lX%016lX", base::RandUint64(),
-                            base::RandUint64());
+  return base::ASCIIToWide(base::StringPrintf(
+      "%016" PRIX64 "%016" PRIX64, base::RandUint64(), base::RandUint64()));
 }
 
 base::win::SecurityDescriptor::SelfRelative CreateSdWithSid(
@@ -126,7 +183,7 @@ void AccessCheckFile(AppContainer* container,
       path.value().c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, &sa,
       CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, nullptr));
 
-  ASSERT_TRUE(file_handle.IsValid());
+  ASSERT_TRUE(file_handle.is_valid());
   DWORD granted_access;
   BOOL access_status;
   ASSERT_TRUE(container->AccessCheck(
@@ -155,6 +212,47 @@ void AccessCheckFile(AppContainer* container,
                      BOOL expected_status) {
   AccessCheckFile(container, path, base::win::Sid(known_cap), desired_access,
                   expected_access, expected_status);
+}
+
+void CheckDaclForPackageSid(HANDLE token,
+                            const base::win::Sid& package_sid,
+                            bool package_sid_required) {
+  auto sd = *base::win::SecurityDescriptor::FromHandle(
+      token, base::win::SecurityObjectType::kKernel, DACL_SECURITY_INFORMATION);
+
+  EXPECT_EQ(package_sid_required,
+            IsSidInDacl(*sd.dacl(), true, TOKEN_ALL_ACCESS, package_sid));
+  EXPECT_NE(package_sid_required,
+            IsSidInDacl(*sd.dacl(), true, TOKEN_ALL_ACCESS,
+                        base::win::Sid(
+                            base::win::WellKnownSid::kAllApplicationPackages)));
+}
+
+void CheckLowBoxToken(AppContainerBase* container,
+                      const base::win::AccessToken& base_token,
+                      bool impersonation,
+                      size_t expected_cap_count) {
+  std::optional<base::win::AccessToken> token =
+      impersonation ? container->BuildImpersonationToken(base_token)
+                    : container->BuildPrimaryToken(base_token);
+  ASSERT_TRUE(token);
+  EXPECT_EQ(token->User(), base_token.User());
+  EXPECT_EQ(base::win::GetGrantedAccess(token->get()), DWORD{TOKEN_ALL_ACCESS});
+  EXPECT_TRUE(token->IsAppContainer());
+  EXPECT_EQ(impersonation, token->IsImpersonation());
+  EXPECT_FALSE(token->IsIdentification());
+  EXPECT_EQ(token->AppContainerSid(), container->GetPackageSid());
+  const std::vector<base::win::Sid>& check_capabilities =
+      impersonation ? container->GetImpersonationCapabilities()
+                    : container->GetCapabilities();
+  auto capabilities = token->Capabilities();
+  ASSERT_EQ(capabilities.size(), check_capabilities.size());
+  EXPECT_EQ(expected_cap_count, capabilities.size());
+  for (size_t index = 0; index < capabilities.size(); ++index) {
+    EXPECT_EQ(capabilities[index].GetAttributes(), DWORD{SE_GROUP_ENABLED});
+    EXPECT_EQ(capabilities[index].GetSid(), check_capabilities[index]);
+  }
+  CheckDaclForPackageSid(token->get(), container->GetPackageSid(), true);
 }
 
 }  // namespace
@@ -188,11 +286,11 @@ TEST(AppContainerTest, CreateAndDeleteAppContainerProfile) {
 
   std::wstring package_name = GenerateRandomPackageName();
   EXPECT_FALSE(ProfileExist(package_name));
-  scoped_refptr<AppContainerBase> profile_container =
-      AppContainerBase::CreateProfile(package_name.c_str(), L"Name",
-                                      L"Description");
+  std::unique_ptr<AppContainerBase> profile_container =
+      AppContainerBase::CreateProfile(package_name.c_str(), L"Name");
   ASSERT_NE(nullptr, profile_container.get());
   EXPECT_TRUE(ProfileExist(package_name));
+  CheckProfileDirectoryLayout(profile_container.get());
   EXPECT_TRUE(AppContainerBase::Delete(package_name.c_str()));
   EXPECT_FALSE(ProfileExist(package_name));
 }
@@ -203,20 +301,40 @@ TEST(AppContainerTest, CreateAndOpenAppContainer) {
 
   std::wstring package_name = GenerateRandomPackageName();
   EXPECT_FALSE(ProfileExist(package_name));
-  scoped_refptr<AppContainerBase> profile_container =
-      AppContainerBase::CreateProfile(package_name.c_str(), L"Name",
-                                      L"Description");
+  std::unique_ptr<AppContainerBase> profile_container =
+      AppContainerBase::CreateProfile(package_name.c_str(), L"Name");
   ASSERT_NE(nullptr, profile_container.get());
   EXPECT_TRUE(ProfileExist(package_name));
-  scoped_refptr<AppContainerBase> open_container =
+  CheckProfileDirectoryLayout(profile_container.get());
+  std::unique_ptr<AppContainerBase> open_container =
       AppContainerBase::Open(package_name.c_str());
   ASSERT_NE(nullptr, open_container.get());
   EXPECT_TRUE(::EqualSid(profile_container->GetPackageSid().GetPSID(),
                          open_container->GetPackageSid().GetPSID()));
   EXPECT_TRUE(AppContainerBase::Delete(package_name.c_str()));
   EXPECT_FALSE(ProfileExist(package_name));
-  scoped_refptr<AppContainerBase> open_container2 =
+  std::unique_ptr<AppContainerBase> open_container2 =
       AppContainerBase::Open(package_name.c_str());
+  EXPECT_FALSE(ProfileExist(package_name));
+}
+
+TEST(AppContainerTest, ReOpenAppContainerProfile) {
+  if (!features::IsAppContainerSandboxSupported()) {
+    return;
+  }
+  std::wstring package_name = GenerateRandomPackageName();
+  EXPECT_FALSE(ProfileExist(package_name));
+  std::unique_ptr<AppContainerBase> profile_container =
+      AppContainerBase::CreateProfile(package_name.c_str(), L"Name");
+  ASSERT_NE(nullptr, profile_container.get());
+  EXPECT_TRUE(ProfileExist(package_name));
+  CheckProfileDirectoryLayout(profile_container.get());
+  std::unique_ptr<AppContainerBase> open_container =
+      AppContainerBase::CreateProfile(package_name.c_str(), L"Name");
+  ASSERT_NE(nullptr, open_container.get());
+  EXPECT_EQ(profile_container->GetPackageSid(),
+            open_container->GetPackageSid());
+  EXPECT_TRUE(AppContainerBase::Delete(package_name.c_str()));
   EXPECT_FALSE(ProfileExist(package_name));
 }
 
@@ -224,7 +342,7 @@ TEST(AppContainerTest, SetLowPrivilegeAppContainer) {
   if (!features::IsAppContainerSandboxSupported())
     return;
   std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> container =
+  std::unique_ptr<AppContainerBase> container =
       AppContainerBase::Open(package_name.c_str());
   ASSERT_NE(nullptr, container.get());
   container->SetEnableLowPrivilegeAppContainer(true);
@@ -236,7 +354,7 @@ TEST(AppContainerTest, OpenAppContainerAndGetSecurityCapabilities) {
     return;
 
   std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> container =
+  std::unique_ptr<AppContainerBase> container =
       AppContainerBase::Open(package_name.c_str());
   ASSERT_NE(nullptr, container.get());
 
@@ -245,12 +363,11 @@ TEST(AppContainerTest, OpenAppContainerAndGetSecurityCapabilities) {
   ASSERT_TRUE(ValidSecurityCapabilities(
       no_capabilities.get(), container->GetPackageSid(), capabilities));
 
-  ASSERT_TRUE(container->AddCapability(L"FakeCapability"));
+  container->AddCapability(L"FakeCapability");
   capabilities.push_back(
       base::win::Sid::FromNamedCapability(L"FakeCapability"));
 
-  ASSERT_TRUE(container->AddCapability(
-      base::win::WellKnownCapability::kInternetClient));
+  container->AddCapability(base::win::WellKnownCapability::kInternetClient);
   capabilities.emplace_back(base::win::WellKnownCapability::kInternetClient);
   const wchar_t kSddlSid[] = L"S-1-15-3-1";
   ASSERT_TRUE(container->AddCapabilitySddl(kSddlSid));
@@ -260,39 +377,13 @@ TEST(AppContainerTest, OpenAppContainerAndGetSecurityCapabilities) {
       with_capabilities.get(), container->GetPackageSid(), capabilities));
 }
 
-TEST(AppContainerTest, GetResources) {
-  if (!features::IsAppContainerSandboxSupported())
-    return;
-
-  std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> profile_container =
-      AppContainerBase::CreateProfile(package_name.c_str(), L"Name",
-                                      L"Description");
-  ASSERT_NE(nullptr, profile_container.get());
-  base::win::ScopedHandle key;
-  EXPECT_TRUE(profile_container->GetRegistryLocation(KEY_READ, &key));
-  EXPECT_TRUE(key.IsValid());
-  key.Close();
-  base::FilePath path;
-  EXPECT_TRUE(profile_container->GetFolderPath(&path));
-  EXPECT_TRUE(base::PathExists(path));
-  base::FilePath pipe_path;
-  EXPECT_TRUE(profile_container->GetPipePath(package_name.c_str(), &pipe_path));
-  base::win::ScopedHandle pipe_handle;
-  pipe_handle.Set(::CreateNamedPipe(
-      pipe_path.value().c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE,
-      PIPE_UNLIMITED_INSTANCES, 0, 0, 0, nullptr));
-  EXPECT_TRUE(pipe_handle.IsValid());
-  EXPECT_TRUE(AppContainerBase::Delete(package_name.c_str()));
-}
-
 TEST(AppContainerTest, AccessCheckFile) {
   if (!features::IsAppContainerSandboxSupported())
     return;
 
   // We don't need a valid profile to do the access check tests.
   std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> container =
+  std::unique_ptr<AppContainerBase> container =
       AppContainerBase::Open(package_name.c_str());
   container->AddCapability(base::win::WellKnownCapability::kInternetClient);
   base::ScopedTempDir temp_dir;
@@ -332,7 +423,7 @@ TEST(AppContainerTest, AccessCheckRegistry) {
 
   // We don't need a valid profile to do the access check tests.
   std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> container =
+  std::unique_ptr<AppContainerBase> container =
       AppContainerBase::Open(package_name.c_str());
   // Ensure the key doesn't exist.
   RegDeleteKey(HKEY_CURRENT_USER, package_name.c_str());
@@ -362,15 +453,14 @@ TEST(AppContainerTest, ImpersonationCapabilities) {
     return;
 
   std::wstring package_name = GenerateRandomPackageName();
-  scoped_refptr<AppContainerBase> container =
+  std::unique_ptr<AppContainerBase> container =
       AppContainerBase::Open(package_name.c_str());
   ASSERT_NE(nullptr, container.get());
 
   std::vector<base::win::Sid> capabilities;
   std::vector<base::win::Sid> impersonation_capabilities;
 
-  ASSERT_TRUE(container->AddCapability(
-      base::win::WellKnownCapability::kInternetClient));
+  container->AddCapability(base::win::WellKnownCapability::kInternetClient);
   capabilities.emplace_back(base::win::WellKnownCapability::kInternetClient);
   impersonation_capabilities.emplace_back(
       base::win::WellKnownCapability::kInternetClient);
@@ -379,12 +469,12 @@ TEST(AppContainerTest, ImpersonationCapabilities) {
   ASSERT_TRUE(CompareSidVectors(container->GetImpersonationCapabilities(),
                                 impersonation_capabilities));
 
-  ASSERT_TRUE(container->AddImpersonationCapability(
-      base::win::WellKnownCapability::kPrivateNetworkClientServer));
+  container->AddImpersonationCapability(
+      base::win::WellKnownCapability::kPrivateNetworkClientServer);
   impersonation_capabilities.emplace_back(
       base::win::WellKnownCapability::kPrivateNetworkClientServer);
 
-  ASSERT_TRUE(container->AddImpersonationCapability(L"FakeCapability"));
+  container->AddImpersonationCapability(L"FakeCapability");
   impersonation_capabilities.push_back(
       base::win::Sid::FromNamedCapability(L"FakeCapability"));
 
@@ -395,6 +485,46 @@ TEST(AppContainerTest, ImpersonationCapabilities) {
   ASSERT_TRUE(CompareSidVectors(container->GetCapabilities(), capabilities));
   ASSERT_TRUE(CompareSidVectors(container->GetImpersonationCapabilities(),
                                 impersonation_capabilities));
+}
+
+TEST(AppContainerTest, BuildImpersonationToken) {
+  if (!features::IsAppContainerSandboxSupported()) {
+    return;
+  }
+  std::optional<base::win::AccessToken> base_token =
+      base::win::AccessToken::FromCurrentProcess(
+          /*impersonation=*/false, TOKEN_DUPLICATE);
+  ASSERT_TRUE(base_token);
+  std::wstring package_name = GenerateRandomPackageName();
+  std::unique_ptr<AppContainerBase> container =
+      AppContainerBase::Open(package_name.c_str());
+  ASSERT_NE(nullptr, container.get());
+
+  CheckLowBoxToken(container.get(), *base_token, true, 0);
+  container->AddCapability(base::win::WellKnownCapability::kInternetClient);
+  container->AddImpersonationCapability(
+      base::win::WellKnownCapability::kPrivateNetworkClientServer);
+  CheckLowBoxToken(container.get(), *base_token, true, 2);
+}
+
+TEST(AppContainerTest, BuildPrimaryToken) {
+  if (!features::IsAppContainerSandboxSupported()) {
+    return;
+  }
+  std::optional<base::win::AccessToken> base_token =
+      base::win::AccessToken::FromCurrentProcess(
+          /*impersonation=*/false, TOKEN_DUPLICATE);
+  ASSERT_TRUE(base_token);
+  std::wstring package_name = GenerateRandomPackageName();
+  std::unique_ptr<AppContainerBase> container =
+      AppContainerBase::Open(package_name.c_str());
+  ASSERT_NE(nullptr, container.get());
+
+  CheckLowBoxToken(container.get(), *base_token, false, 0);
+  container->AddCapability(base::win::WellKnownCapability::kInternetClient);
+  container->AddImpersonationCapability(
+      base::win::WellKnownCapability::kPrivateNetworkClientServer);
+  CheckLowBoxToken(container.get(), *base_token, false, 1);
 }
 
 }  // namespace sandbox

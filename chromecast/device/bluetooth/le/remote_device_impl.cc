@@ -4,9 +4,10 @@
 
 #include "chromecast/device/bluetooth/le/remote_device_impl.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chromecast/base/bind_to_task_runner.h"
 #include "chromecast/device/bluetooth/bluetooth_util.h"
@@ -592,7 +593,7 @@ void RemoteDeviceImpl::ReadCharacteristicImpl(
 
   LOG(ERROR) << __func__ << " failed";
   auto it = handle_to_characteristic_read_cbs_.find(characteristic->handle());
-  DCHECK(it != handle_to_characteristic_read_cbs_.end());
+  CHECK(it != handle_to_characteristic_read_cbs_.end());
   DCHECK(!it->second.empty());
   std::move(it->second.front()).Run(false, {});
   it->second.pop();
@@ -613,7 +614,7 @@ void RemoteDeviceImpl::WriteCharacteristicImpl(
 
   LOG(ERROR) << __func__ << " failed";
   auto it = handle_to_characteristic_write_cbs_.find(characteristic->handle());
-  DCHECK(it != handle_to_characteristic_write_cbs_.end());
+  CHECK(it != handle_to_characteristic_write_cbs_.end());
   DCHECK(!it->second.empty());
   std::move(it->second.front()).Run(false);
   it->second.pop();
@@ -631,7 +632,7 @@ void RemoteDeviceImpl::ReadDescriptorImpl(
 
   LOG(ERROR) << __func__ << " failed";
   auto it = handle_to_descriptor_read_cbs_.find(descriptor->handle());
-  DCHECK(it != handle_to_descriptor_read_cbs_.end());
+  CHECK(it != handle_to_descriptor_read_cbs_.end());
   DCHECK(!it->second.empty());
   std::move(it->second.front()).Run(false, {});
   it->second.pop();
@@ -650,7 +651,7 @@ void RemoteDeviceImpl::WriteDescriptorImpl(
 
   LOG(ERROR) << __func__ << " failed";
   auto it = handle_to_descriptor_write_cbs_.find(descriptor->handle());
-  DCHECK(it != handle_to_descriptor_write_cbs_.end());
+  CHECK(it != handle_to_descriptor_write_cbs_.end());
   DCHECK(!it->second.empty());
   std::move(it->second.front()).Run(false);
   it->second.pop();

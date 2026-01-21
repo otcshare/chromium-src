@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/ash/printing/oauth2/http_exchange.h"
 #include "chrome/browser/ash/printing/oauth2/status_code.h"
 #include "url/gurl.h"

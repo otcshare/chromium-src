@@ -32,7 +32,7 @@ bool EnumTraits<device_signals::mojom::PresenceValue,
                 device_signals::PresenceValue>::
     FromMojom(device_signals::mojom::PresenceValue input,
               device_signals::PresenceValue* output) {
-  absl::optional<device_signals::PresenceValue> parsed_value;
+  std::optional<device_signals::PresenceValue> parsed_value;
   switch (input) {
     case device_signals::mojom::PresenceValue::kUnspecified:
       parsed_value = device_signals::PresenceValue::kUnspecified;
@@ -61,10 +61,12 @@ bool StructTraits<device_signals::mojom::ExecutableMetadataDataView,
     Read(device_signals::mojom::ExecutableMetadataDataView data,
          device_signals::ExecutableMetadata* output) {
   output->is_running = data.is_running();
+  output->is_os_verified = data.is_os_verified();
 
   if (!data.ReadPublicKeysHashes(&output->public_keys_hashes) ||
       !data.ReadProductName(&output->product_name) ||
-      !data.ReadVersion(&output->version)) {
+      !data.ReadVersion(&output->version) ||
+      !data.ReadSubjectName(&output->subject_name)) {
     return false;
   }
 

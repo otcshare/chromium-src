@@ -13,6 +13,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/check_op.h"
 #include "base/files/file.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -20,12 +21,13 @@
 #include "printing/metafile.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/print_job_constants.h"
-#include "printing/printing_jni_headers/PrintingContext_jni.h"
 #include "printing/units.h"
 #include "third_party/icu/source/i18n/unicode/ulocdata.h"
 #include "ui/android/window_android.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "printing/printing_jni_headers/PrintingContext_jni.h"
+
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -63,8 +65,8 @@ void GetPageRanges(JNIEnv* env,
 // static
 std::unique_ptr<PrintingContext> PrintingContext::CreateImpl(
     Delegate* delegate,
-    bool skip_system_calls) {
-  DCHECK(!skip_system_calls);
+    OutOfProcessBehavior out_of_process_behavior) {
+  DCHECK_EQ(out_of_process_behavior, OutOfProcessBehavior::kDisabled);
   return std::make_unique<PrintingContextAndroid>(delegate);
 }
 
@@ -86,7 +88,7 @@ void PrintingContextAndroid::SetPendingPrint(
 }
 
 PrintingContextAndroid::PrintingContextAndroid(Delegate* delegate)
-    : PrintingContext(delegate) {
+    : PrintingContext(delegate, OutOfProcessBehavior::kDisabled) {
   // The constructor is run in the IO thread.
 }
 
@@ -114,10 +116,8 @@ void PrintingContextAndroid::AskUserForSettings(
   }
 }
 
-void PrintingContextAndroid::AskUserForSettingsReply(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    jboolean success) {
+void PrintingContextAndroid::AskUserForSettingsReply(JNIEnv* env,
+                                                     bool success) {
   DCHECK(callback_);
   if (!success) {
     // TODO(cimamoglu): Differentiate between `kFailed` And `kCancel`.
@@ -151,9 +151,7 @@ void PrintingContextAndroid::AskUserForSettingsReply(
   std::move(callback_).Run(mojom::ResultCode::kSuccess);
 }
 
-void PrintingContextAndroid::ShowSystemDialogDone(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
+void PrintingContextAndroid::ShowSystemDialogDone(JNIEnv* env) {
   DCHECK(callback_);
   // Settings are not updated, callback is called only to unblock javascript.
   std::move(callback_).Run(mojom::ResultCode::kCanceled);
@@ -250,3 +248,5 @@ printing::NativeDrawingContext PrintingContextAndroid::context() const {
 }
 
 }  // namespace printing
+
+DEFINE_JNI(PrintingContext)

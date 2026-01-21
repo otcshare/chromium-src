@@ -16,11 +16,20 @@ function deleteTokenWithoutParameters() {
   };
 }
 
-function deleteTokenWithoutCallback() {
+async function deleteTokenWithoutCallback() {
+  const isAndroid = (await chrome.runtime.getPlatformInfo()).os == 'android';
+  if (isAndroid) {
+    // Skip this test on Android because the underlying call to
+    // com.google.android.gms.iid.InstanceID.deleteToken() always succeeds,
+    // even for non-existent tokens.
+    chrome.test.succeed('skipped');
+    return;
+  }
+
   try {
-    chrome.instanceID.deleteToken({"authorizedEntity": "1", "scope": "GCM"});
-    chrome.test.fail(
-        "Calling deleteToken without callback should fail.");
+    await chrome.instanceID.deleteToken(
+        {"authorizedEntity": "1", "scope": "GCM"});
+    deleteTokenShouldFail();
   } catch (e) {
     chrome.test.succeed();
   };
@@ -86,18 +95,29 @@ function deleteTokenWithInvalidScope() {
 }
 
 function deleteTokenBeforeGetToken() {
-  chrome.instanceID.deleteToken(
-    {"authorizedEntity": "1", "scope": "GCM"},
-    function() {
-      if (chrome.runtime.lastError) {
-        chrome.test.succeed();
-        return;
-      }
+  const getPlatformInfo = new Promise((resolve) => {
+    chrome.runtime.getPlatformInfo(info => resolve(info.os == 'android'));
+  });
+  getPlatformInfo.then(isAndroid => {
+    if (isAndroid) {
+      // Skip this test on Android because the underlying call to
+      // com.google.android.gms.iid.InstanceID.deleteToken() always succeeds,
+      // even for non-existent tokens.
+      chrome.test.succeed('skipped');
+      return;
+    } else {
+      chrome.instanceID.deleteToken(
+          {'authorizedEntity': '1', 'scope': 'GCM'}, function() {
+            if (chrome.runtime.lastError) {
+              chrome.test.succeed();
+              return;
+            }
 
-      chrome.test.fail(
-          "deleteToken should fail on deleting a non-existent token.");
+            chrome.test.fail(
+                'deleteToken should fail on deleting a non-existent token.');
+          });
     }
-  );
+  });
 }
 
 function deleteTokenAfterGetToken() {

@@ -8,14 +8,14 @@
 #include <stddef.h>
 
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "chrome/browser/sessions/session_service.h"
 #include "components/sessions/core/session_id.h"
 
 class Profile;
@@ -27,6 +27,7 @@ class SequencedTaskRunner;
 }
 
 namespace sessions {
+class CommandStorageManager;
 class SerializedNavigationEntry;
 struct SerializedUserAgentOverride;
 struct SessionTab;
@@ -46,18 +47,18 @@ class SessionServiceTestHelper {
 
   void SaveNow();
 
-  void PrepareTabInWindow(const SessionID& window_id,
-                          const SessionID& tab_id,
+  void PrepareTabInWindow(SessionID window_id,
+                          SessionID tab_id,
                           int visual_index,
                           bool select);
 
-  void SetTabExtensionAppID(const SessionID& window_id,
-                            const SessionID& tab_id,
+  void SetTabExtensionAppID(SessionID window_id,
+                            SessionID tab_id,
                             const std::string& extension_app_id);
 
   void SetTabUserAgentOverride(
-      const SessionID& window_id,
-      const SessionID& tab_id,
+      SessionID window_id,
+      SessionID tab_id,
       const sessions::SerializedUserAgentOverride& user_agent_override);
 
   void SetForceBrowserNotAliveWithNoWindows(
@@ -66,10 +67,12 @@ class SessionServiceTestHelper {
   // Reads the contents of the last session.
   void ReadWindows(
       std::vector<std::unique_ptr<sessions::SessionWindow>>* windows,
-      SessionID* active_window_id);
+      SessionID* active_window_id,
+      std::string* platform_session_id,
+      std::set<SessionID>* discarded_window_ids);
 
-  void AssertTabEquals(const SessionID& window_id,
-                       const SessionID& tab_id,
+  void AssertTabEquals(SessionID window_id,
+                       SessionID tab_id,
                        int visual_index,
                        int nav_index,
                        size_t nav_count,
@@ -96,9 +99,8 @@ class SessionServiceTestHelper {
 
   scoped_refptr<base::SequencedTaskRunner> GetBackendTaskRunner();
 
-  void SetAvailableRange(const SessionID& tab_id,
-                         const std::pair<int, int>& range);
-  bool GetAvailableRange(const SessionID& tab_id, std::pair<int, int>* range);
+  void SetAvailableRange(SessionID tab_id, const std::pair<int, int>& range);
+  bool GetAvailableRange(SessionID tab_id, std::pair<int, int>* range);
 
   void SetHasOpenTrackableBrowsers(bool has_open_trackable_browsers);
   bool GetHasOpenTrackableBrowsers();
@@ -109,18 +111,14 @@ class SessionServiceTestHelper {
 
   bool HasPendingSave();
 
-  void SetSavingEnabled(bool enabled) { service_->SetSavingEnabled(enabled); }
+  void SetSavingEnabled(bool enabled);
 
-  bool did_save_commands_at_least_once() const {
-    return service_->did_save_commands_at_least_once_;
-  }
+  bool did_save_commands_at_least_once() const;
 
-  sessions::CommandStorageManager* command_storage_manager() {
-    return service_->command_storage_manager_.get();
-  }
+  sessions::CommandStorageManager* command_storage_manager();
 
  private:
-  raw_ptr<SessionService> service_;
+  raw_ptr<SessionService, DanglingUntriaged> service_;
 };
 
 #endif  // CHROME_BROWSER_SESSIONS_SESSION_SERVICE_TEST_HELPER_H_

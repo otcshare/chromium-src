@@ -10,9 +10,9 @@
 
 #include "ash/hud_display/ash_tracing_request.h"
 #include "ash/shell.h"
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/platform_file.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -45,11 +45,10 @@ void AshTracingHandler::Start(AshTracingRequest* request) {
   DCHECK(!tracing_session_);
 
   request_ = request;
-  perfetto::TraceConfig perfetto_config = tracing::GetDefaultPerfettoConfig(
-      base::trace_event::TraceConfig(),
-      /*privacy_filtering_enabled=*/false,
-      /*convert_to_legacy_json=*/false,
-      perfetto::protos::gen::ChromeConfig::USER_INITIATED);
+  perfetto::TraceConfig perfetto_config =
+      tracing::GetDefaultPerfettoConfig(base::trace_event::TraceConfig(),
+                                        /*privacy_filtering_enabled=*/false,
+                                        /*convert_to_legacy_json=*/false);
 
   perfetto_config.set_write_into_file(true);
   tracing_session_ = testing_perfetto_session_creator

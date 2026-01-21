@@ -49,7 +49,7 @@ class LayerTreeHostVideoTestSetNeedsDisplay
   }
 
   DrawResult PrepareToDrawOnThread(LayerTreeHostImpl* host_impl,
-                                   LayerTreeHostImpl::FrameData* frame,
+                                   FrameData* frame,
                                    DrawResult draw_result) override {
     LayerImpl* root_layer = host_impl->active_tree()->root_layer();
     RenderSurfaceImpl* root_surface = GetRenderSurface(root_layer);
@@ -69,7 +69,7 @@ class LayerTreeHostVideoTestSetNeedsDisplay
         break;
     }
 
-    EXPECT_EQ(DRAW_SUCCESS, draw_result);
+    EXPECT_EQ(DrawResult::kSuccess, draw_result);
     return draw_result;
   }
 

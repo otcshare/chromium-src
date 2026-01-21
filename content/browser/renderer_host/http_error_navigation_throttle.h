@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_HTTP_ERROR_NAVIGATION_THROTTLE_H_
 #define CONTENT_BROWSER_RENDERER_HOST_HTTP_ERROR_NAVIGATION_THROTTLE_H_
 
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
@@ -20,13 +21,12 @@ namespace content {
 // response body is empty or not.
 class HttpErrorNavigationThrottle : public NavigationThrottle {
  public:
-  static std::unique_ptr<NavigationThrottle> MaybeCreateThrottleFor(
-      NavigationHandle& navigation_handle);
+  static void MaybeCreateAndAdd(NavigationThrottleRegistry& registry);
 
   ~HttpErrorNavigationThrottle() override;
 
  private:
-  explicit HttpErrorNavigationThrottle(NavigationHandle& navigation_handle);
+  explicit HttpErrorNavigationThrottle(NavigationThrottleRegistry& registry);
 
   // NavigationThrottle overrides.
   const char* GetNameForLogging() override;

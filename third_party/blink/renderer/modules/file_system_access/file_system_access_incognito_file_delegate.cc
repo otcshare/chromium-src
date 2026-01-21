@@ -4,15 +4,17 @@
 
 #include "third_party/blink/renderer/modules/file_system_access/file_system_access_incognito_file_delegate.h"
 
+#include <optional>
+
 #include "base/files/file.h"
 #include "base/files/file_error_or.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/system/string_data_source.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_access_file_delegate.h"
@@ -53,8 +55,7 @@ void WriteDataToProducer(
       << "WriteDataToProducer must not be called on the main thread";
 
   auto data_source = std::make_unique<mojo::StringDataSource>(
-      base::span<const char>(reinterpret_cast<const char*>(data->data.data()),
-                             data->data.size()),
+      base::as_chars(base::span(data->data)),
       mojo::StringDataSource::AsyncWritingMode::
           STRING_STAYS_VALID_UNTIL_COMPLETION);
 
@@ -65,10 +66,10 @@ void WriteDataToProducer(
   // the duration of the write.
   producer_raw->Write(
       std::move(data_source),
-      WTF::BindOnce([](std::unique_ptr<mojo::DataPipeProducer>,
-                       scoped_refptr<base::RefCountedData<Vector<uint8_t>>>,
-                       MojoResult) {},
-                    std::move(producer), std::move(data)));
+      blink::BindOnce([](std::unique_ptr<mojo::DataPipeProducer>,
+                         scoped_refptr<base::RefCountedData<Vector<uint8_t>>>,
+                         MojoResult) {},
+                      std::move(producer), std::move(data)));
 }
 
 }  // namespace
@@ -88,8 +89,10 @@ FileSystemAccessIncognitoFileDelegate::FileSystemAccessIncognitoFileDelegate(
         incognito_file_remote,
     base::PassKey<FileSystemAccessFileDelegate>)
     : mojo_ptr_(context),
-      task_runner_(context->GetTaskRunner(TaskType::kMiscPlatformAPI)) {
-  mojo_ptr_.Bind(std::move(incognito_file_remote), task_runner_);
+      write_helper_task_runner_(
+          base::ThreadPool::CreateSequencedTaskRunner({})) {
+  mojo_ptr_.Bind(std::move(incognito_file_remote),
+                 context->GetTaskRunner(TaskType::kStorage));
   DCHECK(mojo_ptr_.is_bound());
 }
 
@@ -106,7 +109,7 @@ base::FileErrorOr<int> FileSystemAccessIncognitoFileDelegate::Read(
 
   base::File::Error file_error;
   int bytes_read;
-  absl::optional<mojo_base::BigBuffer> buffer;
+  std::optional<mojo_base::BigBuffer> buffer;
   int bytes_to_read = base::saturated_cast<int>(data.size());
   mojo_ptr_->Read(offset, bytes_to_read, &buffer, &file_error, &bytes_read);
 
@@ -116,7 +119,8 @@ base::FileErrorOr<int> FileSystemAccessIncognitoFileDelegate::Read(
     CHECK_LE(bytes_read, bytes_to_read);
     CHECK_LE(buffer->size(), static_cast<uint64_t>(bytes_to_read));
 
-    memcpy(data.data(), buffer->data(), bytes_to_read);
+    data.copy_prefix_from(
+        base::span(*buffer).first(base::checked_cast<size_t>(bytes_read)));
   } else {
     CHECK_EQ(bytes_read, 0);
   }
@@ -126,7 +130,7 @@ base::FileErrorOr<int> FileSystemAccessIncognitoFileDelegate::Read(
 
 base::FileErrorOr<int> FileSystemAccessIncognitoFileDelegate::Write(
     int64_t offset,
-    const base::span<uint8_t> data) {
+    base::span<const uint8_t> data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK_GE(offset, 0);
 
@@ -138,18 +142,15 @@ base::FileErrorOr<int> FileSystemAccessIncognitoFileDelegate::Write(
 
   auto ref_counted_data =
       base::MakeRefCounted<base::RefCountedData<Vector<uint8_t>>>();
-  ref_counted_data->data.Append(data.data(),
-                                static_cast<wtf_size_t>(data.size()));
+  ref_counted_data->data.AppendSpan(data);
 
   // Write the data to the data pipe on another thread. This is safe to run in
   // parallel to the `Write()` call, since the browser can read from the pipe as
   // data is written. The `Write()` call won't complete until the mojo datapipe
   // has closed, so we must write to the data pipe on anther thread to be able
   // to close the pipe when all data has been written.
-  scoped_refptr<base::SequencedTaskRunner> task_runner =
-      base::ThreadPool::CreateSequencedTaskRunner({});
   PostCrossThreadTask(
-      *task_runner, FROM_HERE,
+      *write_helper_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WriteDataToProducer, std::move(producer_handle),
                           ref_counted_data));
 
@@ -170,19 +171,6 @@ base::FileErrorOr<int64_t> FileSystemAccessIncognitoFileDelegate::GetLength() {
   return file_error == base::File::Error::FILE_OK ? length : file_error;
 }
 
-void FileSystemAccessIncognitoFileDelegate::GetLengthAsync(
-    base::OnceCallback<void(base::FileErrorOr<int64_t>)> callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  mojo_ptr_->GetLength(WTF::BindOnce(
-      [](base::OnceCallback<void(base::FileErrorOr<int64_t>)> callback,
-         base::File::Error file_error, int64_t length) {
-        CHECK_GE(length, 0);
-        std::move(callback).Run(
-            file_error == base::File::Error::FILE_OK ? length : file_error);
-      },
-      std::move(callback)));
-}
-
 base::FileErrorOr<bool> FileSystemAccessIncognitoFileDelegate::SetLength(
     int64_t length) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -190,15 +178,6 @@ base::FileErrorOr<bool> FileSystemAccessIncognitoFileDelegate::SetLength(
   base::File::Error file_error;
   mojo_ptr_->SetLength(length, &file_error);
   return file_error == base::File::Error::FILE_OK ? true : file_error;
-}
-
-void FileSystemAccessIncognitoFileDelegate::SetLengthAsync(
-    int64_t length,
-    base::OnceCallback<void(base::File::Error)> callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  CHECK_GE(length, 0);
-
-  mojo_ptr_->SetLength(length, WTF::BindOnce(std::move(callback)));
 }
 
 bool FileSystemAccessIncognitoFileDelegate::Flush() {
@@ -211,29 +190,9 @@ bool FileSystemAccessIncognitoFileDelegate::Flush() {
   return true;
 }
 
-void FileSystemAccessIncognitoFileDelegate::FlushAsync(
-    base::OnceCallback<void(bool)> callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  // Flush is a no-op for in-memory file systems. Even if the file delegate is
-  // used for other FS types, writes through the FileSystemOperationRunner are
-  // automatically flushed. If this proves to be too slow, we can consider
-  // changing the FileSystemAccessFileDelegateHostImpl to write with a
-  // FileStreamWriter and only flushing when this method is called.
-  task_runner_->PostTask(FROM_HERE,
-                         WTF::BindOnce(std::move(callback), /*success=*/true));
-}
-
 void FileSystemAccessIncognitoFileDelegate::Close() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   mojo_ptr_.reset();
-}
-
-void FileSystemAccessIncognitoFileDelegate::CloseAsync(
-    base::OnceClosure callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  mojo_ptr_.reset();
-
-  task_runner_->PostTask(FROM_HERE, std::move(callback));
 }
 
 }  // namespace blink

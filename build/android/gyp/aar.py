@@ -16,9 +16,7 @@ from xml.etree import ElementTree
 import zipfile
 
 from util import build_utils
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                             os.pardir, os.pardir)))
+import action_helpers  # build_utils adds //build to sys.path.
 import gn_helpers
 
 
@@ -78,6 +76,8 @@ def _CreateInfo(aar_file, resource_exclusion_globs):
   data['has_proguard_flags'] = False
   data['has_native_libraries'] = False
   data['has_r_text_file'] = False
+  prefab_headers = []
+  prefab_include_dirs = []
   with zipfile.ZipFile(aar_file) as z:
     manifest_xml = ElementTree.fromstring(z.read('AndroidManifest.xml'))
     data['is_manifest_empty'] = _IsManifestEmpty(manifest_xml)
@@ -114,7 +114,15 @@ def _CreateInfo(aar_file, resource_exclusion_globs):
         # Some AARs, e.g. gvr_controller_java, have empty R.txt. Such AARs
         # have no resources as well. We treat empty R.txt as having no R.txt.
         data['has_r_text_file'] = bool(z.read('R.txt').strip())
+      elif name.startswith('prefab/modules') and '/include/' in name:
+        prefab_headers.append(name)
+        subdir = name[:name.index('/include/')] + '/include'
+        if subdir not in prefab_include_dirs:
+          prefab_include_dirs.append(subdir)
 
+  if prefab_include_dirs:
+    data['prefab_headers'] = prefab_headers
+    data['prefab_include_dirs'] = prefab_include_dirs
   return data
 
 
@@ -125,7 +133,7 @@ def _PerformExtract(aar_file, output_dir, name_allowlist):
     build_utils.ExtractAll(
         aar_file, path=tmp_dir, predicate=name_allowlist.__contains__)
     # Write a breadcrumb so that SuperSize can attribute files back to the .aar.
-    with open(os.path.join(tmp_dir, 'source.info'), 'w') as f:
+    with open(os.path.join(tmp_dir, 'source.info'), 'w', encoding='utf-8') as f:
       f.write('source={}\n'.format(aar_file))
 
     shutil.rmtree(output_dir, ignore_errors=True)
@@ -165,7 +173,7 @@ def main():
 
   args = parser.parse_args()
 
-  args.resource_exclusion_globs = build_utils.ParseGnList(
+  args.resource_exclusion_globs = action_helpers.parse_gn_list(
       args.resource_exclusion_globs)
   if args.ignore_resources:
     args.resource_exclusion_globs.append('res/*')
@@ -199,14 +207,15 @@ def main():
       # under third_party/android_deps/repository. To deal with these, first
       # that its content is correct, and if it is, exit without touching
       # the file system.
-      file_info = open(args.output, 'r').read()
+      with open(args.output, 'r', encoding='utf-8') as f:
+        file_info = f.read()
       if file_info == formatted_info:
         return
 
     # Try to write the file. This may fail for read-only ones that were
     # not updated.
     try:
-      with open(args.output, 'w') as f:
+      with open(args.output, 'w', encoding='utf-8') as f:
         f.write(formatted_info)
     except IOError as e:
       if not aar_output_present:

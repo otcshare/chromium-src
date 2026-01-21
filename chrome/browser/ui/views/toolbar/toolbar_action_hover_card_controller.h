@@ -13,21 +13,21 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/toolbar/toolbar_action_hover_card_types.h"
 #include "ui/views/animation/bubble_slide_animator.h"
 #include "ui/views/animation/widget_fade_animator.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 
 class ToolbarActionHoverCardBubbleView;
-class ExtensionsToolbarContainer;
+class ExtensionsToolbarDesktop;
 class ToolbarActionView;
+enum class ToolbarActionHoverCardUpdateType;
 
 // Controls how hover cards are shown and hidden for toolbar actions.
 class ToolbarActionHoverCardController : public views::ViewObserver {
  public:
   explicit ToolbarActionHoverCardController(
-      ExtensionsToolbarContainer* extensions_container);
+      ExtensionsToolbarDesktop* extensions_container);
   ~ToolbarActionHoverCardController() override;
 
   // Returns whether hover card animations should be shown on the current
@@ -70,7 +70,8 @@ class ToolbarActionHoverCardController : public views::ViewObserver {
   // views::ViewObserver:
   void OnViewIsDeleting(views::View* observed_view) override;
   void OnViewVisibilityChanged(views::View* observed_view,
-                               views::View* starting_view) override;
+                               views::View* starting_view,
+                               bool visible) override;
 
   // Timestamp of the last time the hover card is hidden by the mouse leaving
   // the tab strip. This is used for reshowing the hover card without delay if
@@ -78,7 +79,7 @@ class ToolbarActionHoverCardController : public views::ViewObserver {
   base::TimeTicks last_mouse_exit_timestamp_;
 
   raw_ptr<ToolbarActionView> target_action_view_ = nullptr;
-  const raw_ptr<ExtensionsToolbarContainer> extensions_container_;
+  const raw_ptr<ExtensionsToolbarDesktop> extensions_container_;
   raw_ptr<ToolbarActionHoverCardBubbleView> hover_card_ = nullptr;
 
   base::ScopedObservation<views::View, views::ViewObserver>

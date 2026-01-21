@@ -3,30 +3,34 @@
 # found in the LICENSE file.
 
 import("//build/config/android/rules.gni")
+import("//third_party/jni_zero/jni_zero.gni")
 
 android_library("java") {
+  srcjar_deps = [ ":jni_headers" ]
   sources = [
     "android/java/src/org/chromium/chrome/browser/util/AfterStartupTaskUtils.java",
     "android/java/src/org/chromium/chrome/browser/util/AndroidTaskUtils.java",
+    "android/java/src/org/chromium/chrome/browser/util/BrowserUiUtils.java",
     "android/java/src/org/chromium/chrome/browser/util/ChromeAccessibilityUtil.java",
     "android/java/src/org/chromium/chrome/browser/util/ChromeFileProvider.java",
-    "android/java/src/org/chromium/chrome/browser/util/FileSizeUtil.java",
+    "android/java/src/org/chromium/chrome/browser/util/DefaultBrowserInfo.java",
     "android/java/src/org/chromium/chrome/browser/util/HashUtil.java",
-    "android/java/src/org/chromium/chrome/browser/util/KeyNavigationUtil.java",
+    "android/java/src/org/chromium/chrome/browser/util/PictureInPictureWindowOptions.java",
     "android/java/src/org/chromium/chrome/browser/util/PlatformUtil.java",
+    "android/java/src/org/chromium/chrome/browser/util/WindowFeatures.java",
   ]
   deps = [
     "//base:base_java",
-    "//base:jni_java",
     "//build/android:build_java",
     "//components/browser_ui/util/android:java",
     "//components/embedder_support/android:util_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_core_core_java",
+    "//third_party/jni_zero:jni_zero_java",
+    "//ui/accessibility:ax_base_java",
     "//ui/android:ui_full_java",
     "//url:gurl_java",
   ]
-  annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
 }
 
 generate_jni("jni_headers") {
@@ -40,6 +44,7 @@ robolectric_library("junit_tests") {
   sources = [
     "android/java/src/org/chromium/chrome/browser/util/ChromeFileProviderTest.java",
     "android/java/src/org/chromium/chrome/browser/util/HashUtilTest.java",
+    "android/java/src/org/chromium/chrome/browser/util/PlatformUtilTest.java",
   ]
   deps = [
     ":java",
@@ -49,7 +54,9 @@ robolectric_library("junit_tests") {
     "//base/test:test_support_java",
     "//chrome/test/android:chrome_java_unit_test_support",
     "//content/public/test/android:content_java_test_support",
+    "//third_party/androidx:androidx_test_core_java",
     "//third_party/androidx:androidx_test_runner_java",
+    "//third_party/google-truth:google_truth_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
   ]

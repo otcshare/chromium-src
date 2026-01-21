@@ -5,20 +5,21 @@
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_PENDING_RECEIVER_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_PENDING_RECEIVER_H_
 
-#include <type_traits>
+#include <concepts>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "mojo/public/c/system/types.h"
-#include "mojo/public/cpp/bindings/connection_group.h"
+#include "mojo/public/cpp/bindings/connection_group_ref.h"
 #include "mojo/public/cpp/bindings/disconnect_reason.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
 #include "mojo/public/cpp/bindings/lib/pending_receiver_state.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
@@ -62,20 +63,17 @@ class PendingReceiver {
   explicit PendingReceiver(ScopedMessagePipeHandle pipe)
       : state_(std::move(pipe)) {}
 
-  // Disabled on NaCl since it crashes old version of clang.
-#if !BUILDFLAG(IS_NACL)
   // Move conversion operator for custom receiver types. Only participates in
   // overload resolution if a typesafe conversion is supported.
-  template <typename T,
-            std::enable_if_t<std::is_same<
-                PendingReceiver<Interface>,
-                std::invoke_result_t<decltype(&PendingReceiverConverter<
-                                              T>::template To<Interface>),
-                                     T&&>>::value>* = nullptr>
-  PendingReceiver(T&& other)
+  template <typename T>
+    requires requires(T t) {
+      {
+        PendingReceiverConverter<T>::template To<Interface>(std::move(t))
+      } -> std::same_as<PendingReceiver>;
+    }
+  PendingReceiver(T other)
       : PendingReceiver(PendingReceiverConverter<T>::template To<Interface>(
-            std::forward<T>(other))) {}
-#endif  // !BUILDFLAG(IS_NACL)
+            std::move(other))) {}
 
   PendingReceiver(const PendingReceiver&) = delete;
   PendingReceiver& operator=(const PendingReceiver&) = delete;
@@ -106,7 +104,11 @@ class PendingReceiver {
     MojoResult result =
         WriteMessageNew(state_.pipe.get(), message.TakeMojoMessage(),
                         MOJO_WRITE_MESSAGE_FLAG_NONE);
-    DCHECK_EQ(MOJO_RESULT_OK, result);
+    // Either the message was sent successfully or the message pipe has already
+    // been closed on the other end.
+    DCHECK(result == MOJO_RESULT_OK ||
+           result == MOJO_RESULT_FAILED_PRECONDITION)
+        << "result: " << result;
 
     reset();
   }
@@ -120,17 +122,17 @@ class PendingReceiver {
 
   // Assigns this PendingReceiver to the ConnectionGroup referenced by |ref|.
   // Any Receiver which binds this PendingReceiver will inherit the Ref.
-  void set_connection_group(ConnectionGroup::Ref ref) {
+  void set_connection_group(ConnectionGroupRef ref) {
     state_.connection_group = std::move(ref);
   }
 
-  const ConnectionGroup::Ref& connection_group() const {
+  const ConnectionGroupRef& connection_group() const {
     return state_.connection_group;
   }
 
   // Passes ownership of this PendingReceiver's ConnectionGroup Ref, removing it
   // from its group.
-  ConnectionGroup::Ref PassConnectionGroupRef() {
+  ConnectionGroupRef PassConnectionGroupRef() {
     return std::move(state_.connection_group);
   }
 
@@ -165,6 +167,9 @@ template <typename Interface>
 PendingRemote<Interface>
 PendingReceiver<Interface>::InitWithNewPipeAndPassRemote() {
   DCHECK(!is_valid()) << "PendingReceiver already has a remote";
+  if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+    return PendingRemote<Interface>();
+  }
   MessagePipe pipe;
   state_.pipe = std::move(pipe.handle0);
   return PendingRemote<Interface>(std::move(pipe.handle1), 0u);

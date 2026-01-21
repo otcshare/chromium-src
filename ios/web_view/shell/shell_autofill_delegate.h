@@ -10,7 +10,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface ShellAutofillDelegate : NSObject<CWVAutofillControllerDelegate>
+@interface ShellAutofillDelegate : NSObject <CWVAutofillControllerDelegate>
 @end
 
 NS_ASSUME_NONNULL_END

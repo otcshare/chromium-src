@@ -7,9 +7,12 @@
 
 #include <jni.h>
 
+#include <memory>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "content/browser/android/render_widget_host_connector.h"
+#include "content/public/browser/android/selection_popup_delegate.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-forward.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/touch_selection/selection_event_type.h"
@@ -18,21 +21,36 @@ namespace gfx {
 class PointF;
 }
 
+namespace ui {
+class MenuModel;
+class MenuModelBridge;
+}
+
 namespace content {
 
 class RenderWidgetHostViewAndroid;
 struct ContextMenuParams;
+class SelectionPopupDelegate;
 
 class SelectionPopupController : public RenderWidgetHostConnector {
  public:
+  static SelectionPopupController* FromWebContents(WebContents& web_contents);
+
   SelectionPopupController(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj,
+                           const base::android::JavaRef<jobject>& obj,
                            WebContents* web_contents);
 
-  void SetTextHandlesTemporarilyHidden(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jboolean hidden);
+  void SetTextHandlesHiddenForDropdownMenu(JNIEnv* env, bool hidden);
+
+  void SetTextHandlesTemporarilyHidden(JNIEnv* env, bool hidden);
+
+  base::android::ScopedJavaLocalRef<jobjectArray> GetTouchHandleRects(
+      JNIEnv* env);
+
+  void SetDelegate(
+      std::unique_ptr<SelectionPopupDelegate> selection_popup_delegate) {
+    selection_popup_delegate_ = std::move(selection_popup_delegate);
+  }
 
   // RendetWidgetHostConnector implementation.
   void UpdateRenderProcessConnection(
@@ -48,10 +66,16 @@ class SelectionPopupController : public RenderWidgetHostConnector {
   bool ShowSelectionMenu(RenderFrameHost* render_frame_host,
                          const ContextMenuParams& params,
                          int handle_height);
-  void OnSelectAroundCaretAck(blink::mojom::SelectAroundCaretResultPtr result);
+  void OnSelectAroundCaretAck(int startOffset,
+                              int endOffset,
+                              int surroundingTextLength,
+                              blink::mojom::SelectAroundCaretResultPtr result);
   void HidePopupsAndPreserveSelection();
   void RestoreSelectionPopupsIfNecessary();
-  std::unique_ptr<ui::TouchHandleDrawable> CreateTouchHandleDrawable();
+  void ChildLocalSurfaceIdChanged();
+  std::unique_ptr<ui::TouchHandleDrawable> CreateTouchHandleDrawable(
+      gfx::NativeView parent_native_view,
+      cc::slim::Layer* parent_layer);
   void MoveRangeSelectionExtent(const gfx::PointF& extent);
 
   void SelectBetweenCoordinates(const gfx::PointF& base,
@@ -61,6 +85,10 @@ class SelectionPopupController : public RenderWidgetHostConnector {
   ~SelectionPopupController() override;
   base::android::ScopedJavaLocalRef<jobject> GetContext() const;
   raw_ptr<RenderWidgetHostViewAndroid> rwhva_ = nullptr;
+  std::unique_ptr<SelectionPopupDelegate> selection_popup_delegate_;
+  // Retained to keep the model in scope until the menu is dismissed.
+  std::unique_ptr<ui::MenuModelBridge> menu_model_bridge_;
+  std::unique_ptr<ui::MenuModel> extra_items_menu_model_;
 
   JavaObjectWeakGlobalRef java_obj_;
 };

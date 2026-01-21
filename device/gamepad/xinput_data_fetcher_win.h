@@ -13,14 +13,15 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Unknwn.h>
+#include <windows.h>
+
 #include <WinDef.h>
 #include <XInput.h>
 #include <stdlib.h>
-#include <windows.h>
 
 #include "base/compiler_specific.h"
-#include "base/memory/weak_ptr.h"
 #include "base/scoped_native_library.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/gamepad_data_fetcher.h"
 #include "device/gamepad/gamepad_standard_mappings.h"
 #include "device/gamepad/public/cpp/gamepads.h"
@@ -96,11 +97,6 @@ class DEVICE_GAMEPAD_EXPORT XInputDataFetcherWin : public GamepadDataFetcher {
   static void OverrideXInputGetStateExFuncForTesting(
       XInputGetStateExFunctionCallback callback);
 
-  using XInputEnableFunctionCallback =
-      base::RepeatingCallback<XInputEnableFunc()>;
-  static void OverrideXInputEnableFuncForTesting(
-      XInputEnableFunctionCallback callback);
-
   void InitializeForWgiDataFetcher();
 
   bool IsAnyMetaButtonPressed();
@@ -124,8 +120,6 @@ class DEVICE_GAMEPAD_EXPORT XInputDataFetcherWin : public GamepadDataFetcher {
 
   static XInputGetStateExFunctionCallback&
   GetXInputGetStateExFunctionCallback();
-
-  static XInputEnableFunctionCallback& GetXInputEnableCallback();
 
   base::ScopedNativeLibrary xinput_dll_;
   bool xinput_available_;

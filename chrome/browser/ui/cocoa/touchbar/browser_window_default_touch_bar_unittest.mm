@@ -2,21 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
+#import "chrome/browser/ui/cocoa/touchbar/browser_window_default_touch_bar.h"
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/mac/foundation_util.h"
+#include "base/apple/foundation_util.h"
 #include "base/mac/mac_util.h"
-#include "base/mac/scoped_nsobject.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
-#import "chrome/browser/ui/cocoa/touchbar/browser_window_default_touch_bar.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/common/pref_names.h"
@@ -47,8 +47,8 @@ class BrowserWindowDefaultTouchBarUnitTest : public BrowserWithTestWindowTest {
         content::WebContentsTester::CreateTestWebContents(profile(), nullptr),
         true);
 
-    touch_bar_.reset([[BrowserWindowDefaultTouchBar alloc] init]);
-    touch_bar_.get().browser = browser();
+    touch_bar_ = [[BrowserWindowDefaultTouchBar alloc] init];
+    touch_bar_.browser = browser();
   }
 
   void UpdateCommandEnabled(int id, bool enabled) {
@@ -64,18 +64,19 @@ class BrowserWindowDefaultTouchBarUnitTest : public BrowserWithTestWindowTest {
   }
 
   void TearDown() override {
-    touch_bar_.get().browser = nullptr;
-    touch_bar_.reset();
+    touch_bar_.browser = nullptr;
+    touch_bar_ = nil;
 
     BrowserWithTestWindowTest::TearDown();
   }
 
   CocoaTestHelper cocoa_test_helper_;
-  raw_ptr<CommandUpdater> command_updater_;  // Weak, owned by Browser.
+  raw_ptr<CommandUpdater, DanglingUntriaged>
+      command_updater_;  // Weak, owned by Browser.
 
   std::unique_ptr<TemplateURLServiceFactoryTestUtil> template_service_util_;
 
-  base::scoped_nsobject<BrowserWindowDefaultTouchBar> touch_bar_;
+  BrowserWindowDefaultTouchBar* __strong touch_bar_;
 };
 
 // Test if any known identifiers no longer work. See the message in the test;
@@ -132,8 +133,10 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, TouchBarItems) {
   };
 
   // Set to tab fullscreen.
-  FullscreenController* fullscreen_controller =
-      browser()->exclusive_access_manager()->fullscreen_controller();
+  FullscreenController* fullscreen_controller = browser()
+                                                    ->GetFeatures()
+                                                    .exclusive_access_manager()
+                                                    ->fullscreen_controller();
   fullscreen_controller->set_is_tab_fullscreen_for_testing(true);
   EXPECT_TRUE(fullscreen_controller->IsTabFullscreen());
 
@@ -162,14 +165,14 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, ReloadOrStopTouchBarItem) {
   NSTouchBarItem* item =
       [touch_bar itemForIdentifier:BrowserWindowDefaultTouchBar
                                        .reloadOrStopItemIdentifier];
-  NSButton* button = base::mac::ObjCCast<NSButton>([item view]);
+  NSButton* button = base::apple::ObjCCast<NSButton>([item view]);
   EXPECT_EQ(IDC_RELOAD, [button tag]);
   EXPECT_EQ([BrowserWindowDefaultTouchBar reloadIcon], [button image]);
 
   [touch_bar_ setIsPageLoading:YES];
   item = [touch_bar itemForIdentifier:BrowserWindowDefaultTouchBar
                                           .reloadOrStopItemIdentifier];
-  button = base::mac::ObjCCast<NSButton>([item view]);
+  button = base::apple::ObjCCast<NSButton>([item view]);
   EXPECT_EQ(IDC_STOP, [button tag]);
   EXPECT_EQ([BrowserWindowDefaultTouchBar navigateStopIcon], [button image]);
 }
@@ -182,13 +185,13 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, BookmkarStarTouchBarItem) {
   NSTouchBarItem* item =
       [touch_bar itemForIdentifier:BrowserWindowDefaultTouchBar
                                        .bookmarkStarItemIdentifier];
-  NSButton* button = base::mac::ObjCCast<NSButton>([item view]);
+  NSButton* button = base::apple::ObjCCast<NSButton>([item view]);
   EXPECT_EQ([BrowserWindowDefaultTouchBar starDefaultIcon], [button image]);
 
   [touch_bar_ setIsStarred:YES];
   item = [touch_bar itemForIdentifier:BrowserWindowDefaultTouchBar
                                           .bookmarkStarItemIdentifier];
-  button = base::mac::ObjCCast<NSButton>([item view]);
+  button = base::apple::ObjCCast<NSButton>([item view]);
   EXPECT_EQ([BrowserWindowDefaultTouchBar starActiveIcon], [button image]);
 }
 
@@ -197,7 +200,7 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, BackCommandUpdate) {
   NSTouchBar* touch_bar = [touch_bar_ makeTouchBar];
   NSTouchBarItem* item = [touch_bar
       itemForIdentifier:BrowserWindowDefaultTouchBar.backItemIdentifier];
-  NSButton* button = base::mac::ObjCCast<NSButton>(item.view);
+  NSButton* button = base::apple::ObjCCast<NSButton>(item.view);
 
   UpdateCommandEnabled(IDC_BACK, true);
   EXPECT_TRUE(button.enabled);
@@ -211,7 +214,7 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, ForwardCommandUpdate) {
   NSTouchBar* touch_bar = [touch_bar_ makeTouchBar];
   NSTouchBarItem* item = [touch_bar
       itemForIdentifier:BrowserWindowDefaultTouchBar.forwardItemIdentifier];
-  NSButton* button = base::mac::ObjCCast<NSButton>(item.view);
+  NSButton* button = base::apple::ObjCCast<NSButton>(item.view);
 
   UpdateCommandEnabled(IDC_FORWARD, true);
   EXPECT_TRUE(button.enabled);

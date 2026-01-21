@@ -4,20 +4,21 @@
 
 #include "media/midi/midi_manager_android.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "media/midi/midi_device_android.h"
-#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
-#include "media/midi/midi_manager_usb.h"
 #include "media/midi/midi_output_port_android.h"
 #include "media/midi/midi_service.h"
 #include "media/midi/midi_switches.h"
 #include "media/midi/task_service.h"
-#include "media/midi/usb_midi_device_factory_android.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
+
+using base::android::JavaRef;
 using midi::mojom::PortState;
 using midi::mojom::Result;
 
@@ -28,36 +29,42 @@ namespace {
 bool HasSystemFeatureMidi() {
   // Check if the MIDI service actually runs on the system.
   return Java_MidiManagerAndroid_hasSystemFeatureMidi(
-      base::android::AttachCurrentThread());
+      jni_zero::AttachCurrentThread());
 }
 
 }  // namespace
 
-MidiManager* MidiManager::Create(MidiService* service) {
-  if (HasSystemFeatureMidi())
-    return new MidiManagerAndroid(service);
+bool HasSystemFeatureMidiForTesting() {
+  return HasSystemFeatureMidi();
+}
 
-  return new MidiManagerUsb(service,
-                            std::make_unique<UsbMidiDeviceFactoryAndroid>());
+MidiManager* MidiManager::Create(MidiService* service) {
+  if (HasSystemFeatureMidi()) {
+    return new MidiManagerAndroid(service);
+  }
+
+  return new MidiManager(service);
 }
 
 MidiManagerAndroid::MidiManagerAndroid(MidiService* service)
     : MidiManager(service) {}
 
 MidiManagerAndroid::~MidiManagerAndroid() {
-  if (!service()->task_service()->UnbindInstance())
+  if (!service()->task_service()->UnbindInstance()) {
     return;
+  }
 
   // Finalization steps should be implemented after the UnbindInstance() call.
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   Java_MidiManagerAndroid_stop(env, raw_manager_);
 }
 
 void MidiManagerAndroid::StartInitialization() {
-  if (!service()->task_service()->BindInstance())
+  if (!service()->task_service()->BindInstance()) {
     return CompleteInitialization(Result::INITIALIZATION_ERROR);
+  }
 
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
 
   uintptr_t pointer = reinterpret_cast<uintptr_t>(this);
   raw_manager_.Reset(Java_MidiManagerAndroid_create(env, pointer));
@@ -102,17 +109,15 @@ void MidiManagerAndroid::DispatchSendMidiData(MidiManagerClient* client,
 }
 
 void MidiManagerAndroid::OnReceivedData(MidiInputPortAndroid* port,
-                                        const uint8_t* data,
-                                        size_t size,
+                                        base::span<const uint8_t> data,
                                         base::TimeTicks timestamp) {
   const auto i = input_port_to_index_.find(port);
   DCHECK(input_port_to_index_.end() != i);
-  ReceiveMidiData(i->second, data, size, timestamp);
+  ReceiveMidiData(i->second, data, timestamp);
 }
 
-void MidiManagerAndroid::OnInitialized(
-    JNIEnv* env,
-    const JavaParamRef<jobjectArray>& devices) {
+void MidiManagerAndroid::OnInitialized(JNIEnv* env,
+                                       const JavaRef<jobjectArray>& devices) {
   for (auto raw_device : devices.ReadElements<jobject>()) {
     AddDevice(std::make_unique<MidiDeviceAndroid>(env, raw_device, this));
   }
@@ -130,12 +135,12 @@ void MidiManagerAndroid::OnInitializationFailed(JNIEnv* env) {
 }
 
 void MidiManagerAndroid::OnAttached(JNIEnv* env,
-                                    const JavaParamRef<jobject>& raw_device) {
+                                    const JavaRef<jobject>& raw_device) {
   AddDevice(std::make_unique<MidiDeviceAndroid>(env, raw_device, this));
 }
 
 void MidiManagerAndroid::OnDetached(JNIEnv* env,
-                                    const JavaParamRef<jobject>& raw_device) {
+                                    const JavaRef<jobject>& raw_device) {
   for (auto& device : devices_) {
     if (device->HasRawDevice(env, raw_device)) {
       for (auto& port : device->input_ports()) {
@@ -193,3 +198,5 @@ void MidiManagerAndroid::AddDevice(std::unique_ptr<MidiDeviceAndroid> device) {
 }
 
 }  // namespace midi
+
+DEFINE_JNI(MidiManagerAndroid)

@@ -4,14 +4,16 @@
 
 #include "ui/base/ime/ash/mock_ime_input_context_handler.h"
 
+#include <string_view>
+
 #include "base/logging.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/ime/composition_text.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/gfx/range/range.h"
 
-namespace ui {
+namespace ash {
 
 MockIMEInputContextHandler::MockIMEInputContextHandler()
     : commit_text_call_count_(0),
@@ -22,13 +24,14 @@ MockIMEInputContextHandler::~MockIMEInputContextHandler() = default;
 
 void MockIMEInputContextHandler::CommitText(
     const std::u16string& text,
-    TextInputClient::InsertTextCursorBehavior cursor_behavior) {
+    ui::TextInputClient::InsertTextCursorBehavior cursor_behavior) {
   ++commit_text_call_count_;
   last_commit_text_ = text;
+  observers_.Notify(&Observer::OnCommitText, text);
 }
 
 void MockIMEInputContextHandler::UpdateCompositionText(
-    const CompositionText& text,
+    const ui::CompositionText& text,
     uint32_t cursor_pos,
     bool visible) {
   ++update_preedit_text_call_count_;
@@ -59,14 +62,6 @@ gfx::Range MockIMEInputContextHandler::GetAutocorrectRange() {
   return autocorrect_range_;
 }
 
-gfx::Rect MockIMEInputContextHandler::GetAutocorrectCharacterBounds() {
-  return gfx::Rect();
-}
-
-gfx::Rect MockIMEInputContextHandler::GetTextFieldBounds() {
-  return gfx::Rect();
-}
-
 void MockIMEInputContextHandler::SetAutocorrectRange(
     const gfx::Range& range,
     SetAutocorrectRangeDoneCallback callback) {
@@ -77,20 +72,20 @@ void MockIMEInputContextHandler::SetAutocorrectRange(
   std::move(callback).Run(autocorrect_enabled_);
 }
 
-absl::optional<GrammarFragment>
+std::optional<ui::GrammarFragment>
 MockIMEInputContextHandler::GetGrammarFragmentAtCursor() {
   for (const auto& fragment : grammar_fragments_) {
     if (fragment.range.Contains(cursor_range_)) {
       return fragment;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool MockIMEInputContextHandler::ClearGrammarFragments(
     const gfx::Range& range) {
-  std::vector<GrammarFragment> updated_fragments;
-  for (const GrammarFragment& fragment : grammar_fragments_) {
+  std::vector<ui::GrammarFragment> updated_fragments;
+  for (const ui::GrammarFragment& fragment : grammar_fragments_) {
     if (!range.Contains(fragment.range)) {
       updated_fragments.push_back(fragment);
     }
@@ -100,7 +95,7 @@ bool MockIMEInputContextHandler::ClearGrammarFragments(
 }
 
 bool MockIMEInputContextHandler::AddGrammarFragments(
-    const std::vector<GrammarFragment>& fragments) {
+    const std::vector<ui::GrammarFragment>& fragments) {
   grammar_fragments_.insert(grammar_fragments_.end(), fragments.begin(),
                             fragments.end());
   return true;
@@ -116,9 +111,22 @@ void MockIMEInputContextHandler::DeleteSurroundingText(
       num_char16s_after_cursor;
 }
 
+void MockIMEInputContextHandler::ReplaceSurroundingText(
+    uint32_t length_before_selection,
+    uint32_t length_after_selection,
+    const std::u16string_view replacement_text) {
+  last_replace_surrounding_text_arg_.length_before_selection =
+      length_before_selection;
+  last_replace_surrounding_text_arg_.length_after_selection =
+      length_after_selection;
+  last_replace_surrounding_text_arg_.replacement_text =
+      std::u16string(replacement_text);
+}
+
 SurroundingTextInfo MockIMEInputContextHandler::GetSurroundingTextInfo() {
   SurroundingTextInfo info;
   info.selection_range = cursor_range_;
+  info.offset = 0;
   return info;
 }
 
@@ -131,11 +139,11 @@ void MockIMEInputContextHandler::Reset() {
   sent_key_events_.clear();
 }
 
-void MockIMEInputContextHandler::SendKeyEvent(KeyEvent* event) {
+void MockIMEInputContextHandler::SendKeyEvent(ui::KeyEvent* event) {
   sent_key_events_.emplace_back(*event);
 }
 
-InputMethod* MockIMEInputContextHandler::GetInputMethod() {
+ui::InputMethod* MockIMEInputContextHandler::GetInputMethod() {
   return nullptr;
 }
 
@@ -143,11 +151,13 @@ void MockIMEInputContextHandler::ConfirmComposition(bool reset_engine) {
   // TODO(b/134473433) Modify this function so that the selection is unchanged.
   NOTIMPLEMENTED_LOG_ONCE();
 
-  if (!HasCompositionText())
+  if (!HasCompositionText()) {
     return;
+  }
 
-  CommitText(last_update_composition_arg_.composition_text.text,
-             TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
+  CommitText(
+      last_update_composition_arg_.composition_text.text,
+      ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
   last_update_composition_arg_.composition_text.text = std::u16string();
 }
 
@@ -155,12 +165,16 @@ bool MockIMEInputContextHandler::HasCompositionText() {
   return !last_update_composition_arg_.composition_text.text.empty();
 }
 
-std::u16string MockIMEInputContextHandler::GetCompositionText() {
-  return last_update_composition_arg_.composition_text.text;
-}
-
 ukm::SourceId MockIMEInputContextHandler::GetClientSourceForMetrics() {
   return ukm::kInvalidSourceId;
 }
 
-}  // namespace ui
+void MockIMEInputContextHandler::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void MockIMEInputContextHandler::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
+}  // namespace ash

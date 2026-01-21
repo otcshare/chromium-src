@@ -4,38 +4,37 @@
 
 #include "media/gpu/windows/mf_audio_encoder.h"
 
-#include <mfapi.h>
+#include <codecapi.h>
 #include <mferror.h>
 #include <mfidl.h>
-#include <mftransform.h>
 #include <stddef.h>
 #include <string.h>
 #include <wmcodecdsp.h>
-#include <wrl/client.h>
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/win/com_init_util.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/win_util.h"
-#include "base/win/windows_version.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/channel_layout.h"
 #include "media/base/encoder_status.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/win/mf_helpers.h"
 #include "media/base/win/mf_initializer.h"
-
-using Microsoft::WRL::ComPtr;
+#include "media/gpu/windows/d3d_com_defs.h"
 
 namespace media {
 namespace {
@@ -71,15 +70,13 @@ constexpr DWORD kStreamId = 0;
 constexpr int kMinSamplesForOutput = kSamplesPerFrame * 3;
 constexpr int kMinSamplesForFlush = kSamplesPerFrame * 2;
 
-constexpr const wchar_t kMfPlatDllName[] = L"mfplat.dll";
-
 EncoderStatus::Codes ValidateInputOptions(const AudioEncoder::Options& options,
                                           ChannelLayout* channel_layout,
                                           int* bitrate) {
   if (options.codec != AudioCodec::kAAC)
     return EncoderStatus::Codes::kEncoderUnsupportedCodec;
 
-  if (!base::Contains(kSupportedSampleRates, options.sample_rate)) {
+  if (!std::ranges::contains(kSupportedSampleRates, options.sample_rate)) {
     return EncoderStatus::Codes::kEncoderUnsupportedConfig;
   }
 
@@ -91,18 +88,14 @@ EncoderStatus::Codes ValidateInputOptions(const AudioEncoder::Options& options,
       *channel_layout = CHANNEL_LAYOUT_STEREO;
       break;
     case 6:
-      // 5.1 is only supported by the MF AAC encoder on Win10+.
-      if (base::win::GetVersion() >= base::win::Version::WIN10) {
-        *channel_layout = CHANNEL_LAYOUT_5_1;
-        break;
-      }
-      [[fallthrough]];
+      *channel_layout = CHANNEL_LAYOUT_5_1;
+      break;
     default:
       return EncoderStatus::Codes::kEncoderUnsupportedConfig;
   }
 
   *bitrate = options.bitrate.value_or(kDefaultBitrate);
-  if (!base::Contains(kSupportedBitrates, *bitrate)) {
+  if (!std::ranges::contains(kSupportedBitrates, *bitrate)) {
     return EncoderStatus::Codes::kEncoderUnsupportedConfig;
   }
 
@@ -122,26 +115,32 @@ HRESULT CreateMFEncoder(const IID& iid, void** out_encoder) {
   RETURN_IF_FAILED(MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, flags, &input_type,
                              &output_type, &activates, &num_activates));
 
-  if (num_activates < 1)
+  if (num_activates < 1) {
     return ERROR_NOT_FOUND;
+  }
 
-  HRESULT hr = activates[0]->ActivateObject(iid, out_encoder);
+  // SAFETY: `MFTEnumEx` returns the actual size of `activates` buffer via
+  // `num_activates` out param.
+  auto activates_span =
+      UNSAFE_BUFFERS(base::span<IMFActivate*>(activates.get(), num_activates));
+  HRESULT hr = activates_span[0]->ActivateObject(iid, out_encoder);
 
   // According to Windows App Development doc,
   // https://docs.microsoft.com/en-us/windows/win32/api/mfapi/nf-mfapi-mftenumex
   // the caller must release the pointers before CoTaskMemFree function inside
   // base::win::ScopedCoMem.
-  for (UINT32 i = 0; i < num_activates; i++)
-    activates[i]->Release();
+  for (IMFActivate* activate : activates_span) {
+    activate->Release();
+  }
 
   return hr;
 }
 
 HRESULT CreateInputMediaType(const int sample_rate,
                              const int channels,
-                             ComPtr<IMFMediaType>* input_media_type) {
+                             ComMFMediaType* input_media_type) {
   // https://docs.microsoft.com/en-us/windows/win32/medfound/aac-encoder#input-types
-  ComPtr<IMFMediaType> media_type;
+  ComMFMediaType media_type;
   RETURN_IF_FAILED(MFCreateMediaType(&media_type));
   RETURN_IF_FAILED(media_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio));
   RETURN_IF_FAILED(media_type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM));
@@ -158,9 +157,10 @@ HRESULT CreateInputMediaType(const int sample_rate,
 HRESULT CreateOutputMediaType(const int sample_rate,
                               const int channels,
                               const int bitrate,
-                              ComPtr<IMFMediaType>* output_media_type) {
+                              media::AudioEncoder::AacOutputFormat format,
+                              ComMFMediaType* output_media_type) {
   // https://docs.microsoft.com/en-us/windows/win32/medfound/aac-encoder#output-types
-  ComPtr<IMFMediaType> media_type;
+  ComMFMediaType media_type;
   RETURN_IF_FAILED(MFCreateMediaType(&media_type));
   RETURN_IF_FAILED(media_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio));
   RETURN_IF_FAILED(media_type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC));
@@ -176,19 +176,21 @@ HRESULT CreateOutputMediaType(const int sample_rate,
   RETURN_IF_FAILED(media_type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
                                          adjusted_bitrate / 8));
 
-  // On Win8+, the encoder can produce ADTS headers for us if we set the payload
-  // type to 1. On Win7, only raw AAC frames are produced.
-  if (base::win::GetVersion() >= base::win::Version::WIN8)
+  // Set payload format.
+  // https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-aac-payload-type
+  // 0 - The stream contains raw_data_block elements only. (default)
+  // 1 - Audio Data Transport Stream (ADTS).
+  //     The stream contains an adts_sequence, as defined by MPEG-2.
+  if (format == media::AudioEncoder::AacOutputFormat::ADTS) {
     RETURN_IF_FAILED(media_type->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 1));
-  else
-    RETURN_IF_FAILED(media_type->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0));
+  }
 
   *output_media_type = std::move(media_type);
   return S_OK;
 }
 
-HRESULT GetInputBufferRequirements(const ComPtr<IMFTransform>& mf_encoder,
-                                   const ComPtr<IMFMediaType>& input_media_type,
+HRESULT GetInputBufferRequirements(const ComMFTransform& mf_encoder,
+                                   const ComMFMediaType& input_media_type,
                                    const int channels,
                                    int* input_buffer_alignment,
                                    size_t* min_input_buffer_size) {
@@ -232,11 +234,10 @@ HRESULT GetInputBufferRequirements(const ComPtr<IMFTransform>& mf_encoder,
   return S_OK;
 }
 
-HRESULT GetOutputBufferRequirements(
-    const ComPtr<IMFTransform>& mf_encoder,
-    const ComPtr<IMFMediaType>& output_media_type,
-    const int channels,
-    int* output_buffer_alignment) {
+HRESULT GetOutputBufferRequirements(const ComMFTransform& mf_encoder,
+                                    const ComMFMediaType& output_media_type,
+                                    const int channels,
+                                    int* output_buffer_alignment) {
   MFT_OUTPUT_STREAM_INFO output_stream_info = {};
   RETURN_IF_FAILED(
       mf_encoder->GetOutputStreamInfo(kStreamId, &output_stream_info));
@@ -264,13 +265,13 @@ HRESULT CreateMFSampleFromAudioBus(const AudioBus& audio_bus,
                                    const int buffer_alignment,
                                    const LONGLONG duration,
                                    const LONGLONG timestamp,
-                                   ComPtr<IMFSample>* output_sample) {
+                                   ComMFSample* output_sample) {
   DCHECK_GE(buffer_alignment, kMinimumRecommendedBlockAlignment);
   DCHECK_GT(duration, 0);
 
   // Create `dest_buffer` which we will fill with unencoded data, wrap in an
   // `IMFSample`, and return to the caller.
-  ComPtr<IMFMediaBuffer> dest_buffer;
+  ComMFMediaBuffer dest_buffer;
   size_t source_data_size =
       audio_bus.channels() * audio_bus.frames() * kBytesPerSample;
 
@@ -299,7 +300,7 @@ HRESULT CreateMFSampleFromAudioBus(const AudioBus& audio_bus,
 
   // Create the sample which holds `dest_buffer` and will be delivered to the
   // caller.
-  ComPtr<IMFSample> sample;
+  ComMFSample sample;
   RETURN_IF_FAILED(MFCreateSample(&sample));
   RETURN_IF_FAILED(sample->AddBuffer(dest_buffer.Get()));
   RETURN_IF_FAILED(sample->SetSampleDuration(duration));
@@ -311,8 +312,8 @@ HRESULT CreateMFSampleFromAudioBus(const AudioBus& audio_bus,
 
 HRESULT GetSampleBuffer(const DWORD required_size,
                         const int buffer_alignment,
-                        ComPtr<IMFSample>& sample,
-                        ComPtr<IMFMediaBuffer>& buffer) {
+                        ComMFSample& sample,
+                        ComMFMediaBuffer& buffer) {
   if (!sample)
     RETURN_IF_FAILED(MFCreateSample(&sample));
 
@@ -341,7 +342,7 @@ HRESULT GetSampleBuffer(const DWORD required_size,
 
 }  // namespace
 
-MFAudioEncoder::InputData::InputData(ComPtr<IMFSample>&& sample,
+MFAudioEncoder::InputData::InputData(ComMFSample&& sample,
                                      const int sample_count,
                                      EncoderStatusCB&& done_cb)
     : sample(std::move(sample)),
@@ -358,17 +359,6 @@ MFAudioEncoder::PendingData::PendingData(std::unique_ptr<AudioBus>&& audio_bus,
       done_cb(std::move(done_cb)) {}
 MFAudioEncoder::PendingData::PendingData(PendingData&&) = default;
 MFAudioEncoder::PendingData::~PendingData() = default;
-
-// static
-bool MFAudioEncoder::PreSandboxInitialization() {
-  if (!LoadLibrary(kMfPlatDllName)) {
-    PLOG(ERROR) << "MFAudioEncoder fatal error: could not LoadLibrary: "
-                << kMfPlatDllName;
-    return false;
-  }
-
-  return true;
-}
 
 MFAudioEncoder::MFAudioEncoder(
     scoped_refptr<base::SequencedTaskRunner> task_runner)
@@ -414,13 +404,32 @@ void MFAudioEncoder::Initialize(const Options& options,
     return;
   }
 
+  if (options_.bitrate_mode.has_value() &&
+      options_.bitrate_mode.value() == AudioEncoder::BitrateMode::kVariable &&
+      options.codec == AudioCodec::kAAC) {
+    ComCodecAPI codec_api;
+    hr = mf_encoder_.As(&codec_api);
+
+    if (SUCCEEDED(hr) &&
+        codec_api->IsSupported(&CODECAPI_AVEncAACEnableVBR) == S_OK) {
+      VARIANT var;
+      var.vt = VT_UI4;
+      var.ulVal = TRUE;
+      hr = codec_api->SetValue(&CODECAPI_AVEncAACEnableVBR, &var);
+      if (FAILED(hr)) {
+        DVLOG(2) << "Configuring AAC encoder to VBR mode rejected. Fallback to "
+                    "CBR mode.";
+      }
+    }
+  }
+
   // We skip getting the stream counts and IDs because encoders only have one
   // input and output stream, and the ID of each is always 0.
   // https://docs.microsoft.com/en-us/windows/win32/api/mftransform/nf-mftransform-imftransform-getstreamids#remarks
 
   // Set the input and output media types.
   // https://docs.microsoft.com/en-us/windows/win32/medfound/basic-mft-processing-model#set-media-types
-  ComPtr<IMFMediaType> input_media_type;
+  ComMFMediaType input_media_type;
   hr = CreateInputMediaType(options_.sample_rate, options_.channels,
                             &input_media_type);
   if (FAILED(hr) || !input_media_type) {
@@ -435,9 +444,10 @@ void MFAudioEncoder::Initialize(const Options& options,
     return;
   }
 
-  ComPtr<IMFMediaType> output_media_type;
+  auto format = options_.aac.value_or(AacOptions()).format;
+  ComMFMediaType output_media_type;
   hr = CreateOutputMediaType(options_.sample_rate, options_.channels, bitrate,
-                             &output_media_type);
+                             format, &output_media_type);
   if (FAILED(hr) || !output_media_type) {
     std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializationError);
     return;
@@ -463,6 +473,33 @@ void MFAudioEncoder::Initialize(const Options& options,
   hr =
       GetOutputBufferRequirements(mf_encoder_, output_media_type,
                                   options_.channels, &output_buffer_alignment_);
+
+  /*
+    https://learn.microsoft.com/en-us/windows/win32/medfound/aac-encoder
+
+    After the output type is set, the AAC encoder updates the type by adding
+    the MF_MT_USER_DATA attribute. This attribute contains the portion of
+    the HEAACWAVEINFO structure that appears after the WAVEFORMATEX structure
+    (that is, after the wfx member).
+    This is followed by the AudioSpecificConfig() data,
+    as defined by ISO/IEC 14496-3.
+  */
+  UINT32 desc_size = 0;
+  if (output_media_type->GetBlobSize(MF_MT_USER_DATA, &desc_size) == S_OK &&
+      desc_size > 0 && format == media::AudioEncoder::AacOutputFormat::AAC) {
+    codec_desc_.resize(desc_size);
+    size_t aac_config_offset =
+        sizeof(HEAACWAVEINFO) - offsetof(HEAACWAVEINFO, wPayloadType);
+    hr = output_media_type->GetBlob(MF_MT_USER_DATA, codec_desc_.data(),
+                                    desc_size, nullptr);
+    if (FAILED(hr) || aac_config_offset > codec_desc_.size()) {
+      std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializationError);
+      return;
+    }
+    codec_desc_.erase(codec_desc_.begin(),
+                      codec_desc_.begin() + aac_config_offset);
+  }
+
   if (FAILED(hr)) {
     std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializationError);
     return;
@@ -560,8 +597,8 @@ void MFAudioEncoder::EnqueueInput(std::unique_ptr<AudioBus> audio_bus,
   // after flushing. In either case, we need to notify the encoder that we are
   // about to send data.
   HRESULT hr;
-  if (input_timestamp_tracker_->base_timestamp() == kNoTimestamp) {
-    DCHECK_EQ(output_timestamp_tracker_->base_timestamp(), kNoTimestamp);
+  if (!input_timestamp_tracker_->base_timestamp()) {
+    DCHECK(!output_timestamp_tracker_->base_timestamp());
     hr = mf_encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
                                      /*message_param=*/0);
     if (FAILED(hr)) {
@@ -599,7 +636,7 @@ void MFAudioEncoder::EnqueueInput(std::unique_ptr<AudioBus> audio_bus,
       input_timestamp_tracker_->GetTimestamp().InNanoseconds() / 100LL;
   input_timestamp_tracker_->AddFrames(audio_bus->frames());
 
-  ComPtr<IMFSample> input_sample;
+  ComMFSample input_sample;
   hr = CreateMFSampleFromAudioBus(*audio_bus, input_buffer_alignment_, duration,
                                   timestamp, &input_sample);
   if (FAILED(hr)) {
@@ -734,7 +771,13 @@ void MFAudioEncoder::TryProcessOutput(FlushCB flush_cb) {
       return;
     }
 
-    output_cb_.Run(std::move(encoded_audio), absl::nullopt);
+    std::optional<CodecDescription> desc;
+    if (!codec_desc_.empty()) {
+      desc = codec_desc_;
+      codec_desc_.clear();
+    }
+
+    output_cb_.Run(std::move(encoded_audio), desc);
     samples_in_encoder_ -= kSamplesPerFrame;
     hr = mf_encoder_->GetOutputStatus(&status);
   }
@@ -823,7 +866,7 @@ HRESULT MFAudioEncoder::ProcessOutput(EncodedAudioBuffer& encoded_audio) {
   // On the first run, `output_sample_` will be empty, but `GetSampleBuffer`
   // allocates it, if necessary, and (re)allocates the buffer if it is needed or
   // if it is too small.
-  ComPtr<IMFMediaBuffer> output_buffer;
+  ComMFMediaBuffer output_buffer;
   RETURN_IF_FAILED(GetSampleBuffer(output_stream_info.cbSize,
                                    output_buffer_alignment_, output_sample_,
                                    output_buffer));
@@ -856,13 +899,9 @@ HRESULT MFAudioEncoder::ProcessOutput(EncodedAudioBuffer& encoded_audio) {
   RETURN_IF_FAILED(output_sample_->GetTotalLength(&total_length));
 
   // Copy the data from `output_buffer` into `encoded_data`.
-  size_t encoded_data_size = static_cast<size_t>(total_length);
-  BYTE* output_buffer_ptr = nullptr;
-  std::unique_ptr<uint8_t[]> encoded_data(new uint8_t[encoded_data_size]);
-  RETURN_IF_FAILED(output_buffer->Lock(&output_buffer_ptr, 0, 0));
-
-  memcpy(encoded_data.get(), output_buffer_ptr, encoded_data_size);
-  RETURN_IF_FAILED(output_buffer->Unlock());
+  MediaBufferScopedPointer locked_output_buffer(output_buffer.Get());
+  auto encoded_data = base::HeapArray<uint8_t>::CopiedFrom(
+      locked_output_buffer.as_span().first(total_length));
 
   LONGLONG sample_duration = 0;
   RETURN_IF_FAILED(output_sample_->GetSampleDuration(&sample_duration));
@@ -877,7 +916,7 @@ HRESULT MFAudioEncoder::ProcessOutput(EncodedAudioBuffer& encoded_audio) {
   output_timestamp_tracker_->AddFrames(kSamplesPerFrame);
 
   encoded_audio = EncodedAudioBuffer(audio_params_, std::move(encoded_data),
-                                     encoded_data_size, timestamp, duration);
+                                     timestamp, duration);
   return S_OK;
 }
 
@@ -906,8 +945,8 @@ void MFAudioEncoder::OnFlushComplete(EncoderStatusCB done_cb) {
   samples_in_encoder_ = 0;
   can_produce_output_ = false;
   can_flush_ = false;
-  input_timestamp_tracker_->SetBaseTimestamp(kNoTimestamp);
-  output_timestamp_tracker_->SetBaseTimestamp(kNoTimestamp);
+  input_timestamp_tracker_->Reset();
+  output_timestamp_tracker_->Reset();
   state_ = EncoderState::kIdle;
 
   if (!pending_inputs_.empty()) {
@@ -940,6 +979,23 @@ void MFAudioEncoder::OnError() {
         .Run(EncoderStatus::Codes::kEncoderFailedEncode);
     pending_inputs_.pop_front();
   }
+}
+
+// static.
+uint32_t MFAudioEncoder::ClampAccCodecBitrate(uint32_t bitrate) {
+  // 0 audio bitrate could mean multiple things such as no audio, use
+  // default, etc. So, the client should handle the case by itself.
+  CHECK_GT(bitrate, 0u);
+
+  auto it = std::lower_bound(std::begin(kSupportedBitrates),
+                             std::end(kSupportedBitrates), bitrate);
+  if (it != std::end(kSupportedBitrates)) {
+    return *it;
+  }
+
+  return kSupportedBitrates[sizeof(kSupportedBitrates) /
+                                sizeof(kSupportedBitrates[0]) -
+                            1];
 }
 
 }  // namespace media

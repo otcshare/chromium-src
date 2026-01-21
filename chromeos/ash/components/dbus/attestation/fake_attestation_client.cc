@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -356,7 +357,7 @@ void FakeAttestationClient::DeleteKeys(
     DeleteKeysCallback callback) {
   delete_keys_history_.push_back(request);
   ::attestation::DeleteKeysReply reply;
-  reply.set_status(::attestation::STATUS_SUCCESS);
+  reply.set_status(delete_keys_status_);
   PostProtoResponse(std::move(callback), reply);
 }
 
@@ -385,6 +386,11 @@ void FakeAttestationClient::GetCertifiedNvIndex(
     const ::attestation::GetCertifiedNvIndexRequest& request,
     GetCertifiedNvIndexCallback callback) {
   NOTIMPLEMENTED();
+}
+
+void FakeAttestationClient::WaitForServiceToBeAvailable(
+    chromeos::WaitForServiceToBeAvailableCallback callback) {
+  std::move(callback).Run(/*service_is_available=*/true);
 }
 
 void FakeAttestationClient::ConfigureEnrollmentPreparations(bool is_prepared) {
@@ -569,6 +575,11 @@ std::string FakeAttestationClient::GetFakePcaCertResponse() const {
 
 std::string FakeAttestationClient::GetFakeCertificate() const {
   return kFakeCertificate;
+}
+
+void FakeAttestationClient::set_delete_keys_status(
+    ::attestation::AttestationStatus status) {
+  delete_keys_status_ = status;
 }
 
 AttestationClient::TestInterface* FakeAttestationClient::GetTestInterface() {

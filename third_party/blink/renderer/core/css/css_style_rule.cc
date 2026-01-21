@@ -21,6 +21,7 @@
 
 #include "third_party/blink/renderer/core/css/css_style_rule.h"
 
+#include "third_party/blink/renderer/core/css/css_grouping_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_rule_list.h"
 #include "third_party/blink/renderer/core/css/css_selector.h"
@@ -31,7 +32,11 @@
 #include "third_party/blink/renderer/core/css/style_rule_css_style_declaration.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/disallow_new_wrapper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -39,9 +44,10 @@ namespace blink {
 using SelectorTextCache = HeapHashMap<WeakMember<const CSSStyleRule>, String>;
 
 static SelectorTextCache& GetSelectorTextCache() {
-  DEFINE_STATIC_LOCAL(Persistent<SelectorTextCache>, cache,
-                      (MakeGarbageCollected<SelectorTextCache>()));
-  return *cache;
+  using SelectorTextCacheHolder = DisallowNewWrapper<SelectorTextCache>;
+  DEFINE_STATIC_LOCAL(Persistent<SelectorTextCacheHolder>, cache,
+                      (MakeGarbageCollected<SelectorTextCacheHolder>()));
+  return cache->Value();
 }
 
 CSSStyleRule::CSSStyleRule(StyleRule* style_rule,
@@ -87,29 +93,32 @@ void CSSStyleRule::setSelectorText(const ExecutionContext* execution_context,
   StyleSheetContents* parent_contents =
       parentStyleSheet() ? parentStyleSheet()->Contents() : nullptr;
   HeapVector<CSSSelector> arena;
-  base::span<CSSSelector> selector_vector =
-      CSSParser::ParseSelector(context,
-                               /*parent_rule_for_nesting=*/nullptr,
-                               parent_contents, selector_text, arena);
-  if (selector_vector.empty())
-    return;
 
-  StyleRule* new_style_rule =
-      StyleRule::Create(selector_vector, std::move(*style_rule_));
+  NestingContext nesting_context = CalculateNestingContext(parentRule());
+  base::span<CSSSelector> selector_vector =
+      CSSParser::ParseSelector(context, nesting_context.nesting_type,
+                               nesting_context.parent_rule_for_nesting,
+                               parent_contents, selector_text, arena);
+  if (selector_vector.empty()) {
+    return;
+  }
+
+  StyleRule* new_style_rule = StyleRule::Create(
+      selector_vector, style_rule_->Properties().ImmutableCopyIfNeeded());
+  if (GCedHeapVector<Member<StyleRuleBase>>* child_rules =
+          style_rule_->ChildRules()) {
+    for (StyleRuleBase* child_rule : *child_rules) {
+      new_style_rule->AddChildRule(child_rule->Clone(
+          new_style_rule, /*mixin_parameter_bindings=*/nullptr));
+    }
+  }
   if (parent_contents) {
     position_hint_ = parent_contents->ReplaceRuleIfExists(
         style_rule_, new_style_rule, position_hint_);
   }
 
-  // If we have any nested rules, update their parent selector(s) to point to
-  // our newly created StyleRule instead of the old one.
-  if (new_style_rule->ChildRules()) {
-    for (StyleRuleBase* child_rule : *new_style_rule->ChildRules()) {
-      child_rule->Reparent(style_rule_, new_style_rule);
-    }
-  }
-
-  style_rule_ = new_style_rule;
+  // Updates style_rule_, as well as any inner CSSOM wrappers.
+  Reattach(new_style_rule);
 
   if (HasCachedSelectorText()) {
     GetSelectorTextCache().erase(this);
@@ -133,8 +142,11 @@ String CSSStyleRule::cssText() const {
   unsigned size = length();
   for (unsigned i = 0; i < size; ++i) {
     // Step 6.2 for rules.
-    rules.Append("\n  ");
-    rules.Append(Item(i)->cssText());
+    String item_text = ItemInternal(i)->cssText();
+    if (!item_text.empty()) {
+      rules.Append("\n  ");
+      rules.Append(item_text);
+    }
   }
 
   // Step 4.
@@ -168,8 +180,9 @@ String CSSStyleRule::cssText() const {
 void CSSStyleRule::Reattach(StyleRuleBase* rule) {
   DCHECK(rule);
   style_rule_ = To<StyleRule>(rule);
-  if (properties_cssom_wrapper_)
+  if (properties_cssom_wrapper_) {
     properties_cssom_wrapper_->Reattach(style_rule_->MutableProperties());
+  }
   for (unsigned i = 0; i < child_rule_cssom_wrappers_.size(); ++i) {
     if (child_rule_cssom_wrappers_[i]) {
       child_rule_cssom_wrappers_[i]->Reattach(
@@ -195,15 +208,16 @@ unsigned CSSStyleRule::length() const {
   }
 }
 
-CSSRule* CSSStyleRule::Item(unsigned index) const {
-  if (index >= length())
+CSSRule* CSSStyleRule::Item(unsigned index, bool trigger_use_counters) const {
+  if (index >= length()) {
     return nullptr;
+  }
   DCHECK_EQ(child_rule_cssom_wrappers_.size(),
             style_rule_->ChildRules()->size());
   Member<CSSRule>& rule = child_rule_cssom_wrappers_[index];
   if (!rule) {
     rule = (*style_rule_->ChildRules())[index]->CreateCSSOMWrapper(
-        index, const_cast<CSSStyleRule*>(this));
+        index, const_cast<CSSStyleRule*>(this), trigger_use_counters);
   }
   return rule.Get();
 }
@@ -226,8 +240,9 @@ unsigned CSSStyleRule::insertRule(const ExecutionContext* execution_context,
     if (index > 0) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kIndexSizeError,
-          "the index " + String::Number(index) +
-              " must be less than or equal to the length of the rule list.");
+          StrCat(
+              {"the index ", String::Number(index),
+               " must be less than or equal to the length of the rule list."}));
       return 0;
     }
     style_rule_->EnsureChildRules();
@@ -245,7 +260,7 @@ unsigned CSSStyleRule::insertRule(const ExecutionContext* execution_context,
     return 0;
   } else {
     CSSStyleSheet::RuleMutationScope mutation_scope(this);
-    style_rule_->WrapperInsertRule(index, new_rule);
+    style_rule_->WrapperInsertRule(parentStyleSheet(), index, new_rule);
     child_rule_cssom_wrappers_.insert(index, Member<CSSRule>(nullptr));
     return index;
   }
@@ -256,8 +271,8 @@ void CSSStyleRule::deleteRule(unsigned index, ExceptionState& exception_state) {
       index >= style_rule_->ChildRules()->size()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "the index " + String::Number(index) +
-            " is greated than the length of the rule list.");
+        StrCat({"the index ", String::Number(index),
+                " is greated than the length of the rule list."}));
     return;
   }
 
@@ -266,11 +281,27 @@ void CSSStyleRule::deleteRule(unsigned index, ExceptionState& exception_state) {
 
   CSSStyleSheet::RuleMutationScope mutation_scope(this);
 
-  style_rule_->WrapperRemoveRule(index);
+  style_rule_->WrapperRemoveRule(parentStyleSheet(), index);
 
-  if (child_rule_cssom_wrappers_[index])
+  if (child_rule_cssom_wrappers_[index]) {
     child_rule_cssom_wrappers_[index]->SetParentRule(nullptr);
+  }
   child_rule_cssom_wrappers_.EraseAt(index);
+}
+
+void CSSStyleRule::QuietlyInsertRule(const ExecutionContext* execution_context,
+                                     const String& rule,
+                                     unsigned index) {
+  style_rule_->EnsureChildRules();
+  ParseAndQuietlyInsertRule(execution_context, rule, index,
+                            /*parent_rule=*/*this, *style_rule_->ChildRules(),
+                            child_rule_cssom_wrappers_);
+}
+
+void CSSStyleRule::QuietlyDeleteRule(unsigned index) {
+  CHECK(style_rule_->ChildRules());
+  blink::QuietlyDeleteRule(index, *style_rule_->ChildRules(),
+                           child_rule_cssom_wrappers_);
 }
 
 }  // namespace blink

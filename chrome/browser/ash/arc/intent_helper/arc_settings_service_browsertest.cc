@@ -9,15 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_backup_settings_instance.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "ash/constants/ash_features.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
@@ -34,7 +29,13 @@
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/proxy/proxy_config_handler.h"
-#include "components/arc/test/fake_intent_helper_instance.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_backup_settings_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_instance.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
@@ -45,7 +46,7 @@
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/proxy_config/proxy_prefs.h"
 #include "content/public/test/browser_test.h"
-#include "net/proxy_resolution/proxy_bypass_rules.h"
+#include "net/proxy_resolution/proxy_host_matching_rules.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -199,7 +200,9 @@ int CountProxyBroadcasts(
       DCHECK(count < extras.size())
           << "The expected proxy broadcast count is smaller than "
              "the actual count.";
-      EXPECT_EQ(*base::JSONReader::Read(broadcast.extras), *extras[count]);
+      EXPECT_EQ(*base::JSONReader::Read(broadcast.extras,
+                                        base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+                *extras[count]);
       count++;
     }
   }
@@ -216,7 +219,9 @@ void RunUntilIdle() {
 
 class ArcSettingsServiceTest : public InProcessBrowserTest {
  public:
-  ArcSettingsServiceTest() = default;
+  ArcSettingsServiceTest() {
+    feature_list_.InitAndDisableFeature(ash::features::kCrosPrivacyHub);
+  }
   ArcSettingsServiceTest(const ArcSettingsServiceTest&) = delete;
   ArcSettingsServiceTest& operator=(const ArcSettingsServiceTest&) = delete;
 
@@ -332,6 +337,7 @@ class ArcSettingsServiceTest : public InProcessBrowserTest {
   }
 
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(ArcSettingsServiceTest, BackupRestorePolicyTest) {
@@ -664,7 +670,7 @@ IN_PROC_BROWSER_TEST_F(ArcSettingsServiceTest,
                        ProxyBypassListStringRepresentationTest) {
   fake_intent_helper_instance_->clear_broadcasts();
 
-  net::ProxyBypassRules chrome_proxy_bypass_rules;
+  net::ProxyHostMatchingRules chrome_proxy_bypass_rules;
   chrome_proxy_bypass_rules.AddRuleFromString("test1.org");
   chrome_proxy_bypass_rules.AddRuleFromString("test2.org");
 
@@ -867,8 +873,7 @@ IN_PROC_BROWSER_TEST_F(ArcSettingsServiceTest, WebProxyAutoDiscovery) {
   wpad_config.Set(shill::kWebProxyAutoDiscoveryUrlProperty,
                   base::Value(kWebProxyAutodetectionUrl));
   const std::string kIPConfigPath = "test_ip_config";
-  ip_config_client->AddIPConfig(kIPConfigPath,
-                                base::Value(std::move(wpad_config)));
+  ip_config_client->AddIPConfig(kIPConfigPath, std::move(wpad_config));
 
   ash::ShillServiceClient::TestInterface* service_test =
       ash::ShillServiceClient::Get()->GetTestInterface();

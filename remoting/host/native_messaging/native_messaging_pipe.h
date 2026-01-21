@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/memory/weak_ptr.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
 #include "extensions/browser/api/messaging/native_messaging_channel.h"
 
@@ -38,7 +37,7 @@ class NativeMessagingPipe
   void CloseChannel(const std::string& error_message) override;
 
   // extensions::NativeMessagingChannel::EventHandler implementation.
-  void OnMessage(std::unique_ptr<base::Value> message) override;
+  void OnMessage(const base::Value& message) override;
   void OnDisconnect() override;
 
  private:

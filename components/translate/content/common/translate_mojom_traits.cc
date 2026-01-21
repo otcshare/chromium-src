@@ -41,7 +41,6 @@ translate::mojom::TranslateError EnumTraits<
   }
 
   NOTREACHED();
-  return translate::mojom::TranslateError::NONE;
 }
 
 bool EnumTraits<translate::mojom::TranslateError, translate::TranslateErrors>::
@@ -87,7 +86,6 @@ bool EnumTraits<translate::mojom::TranslateError, translate::TranslateErrors>::
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -95,6 +93,8 @@ bool StructTraits<translate::mojom::LanguageDetectionDetailsDataView,
                   translate::LanguageDetectionDetails>::
     Read(translate::mojom::LanguageDetectionDetailsDataView data,
          translate::LanguageDetectionDetails* out) {
+  out->has_run_lang_detection = data.has_run_lang_detection();
+
   if (!data.ReadTime(&out->time))
     return false;
   if (!data.ReadUrl(&out->url))

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/payments/webapps/twa_package_helper.h"
 #include "components/payments/content/content_payment_request_delegate.h"
 #include "components/payments/content/secure_payment_confirmation_controller.h"
 #include "components/payments/content/secure_payment_confirmation_no_creds.h"
@@ -60,19 +61,22 @@ class ChromePaymentRequestDelegate : public ContentPaymentRequestDelegate {
   content::RenderFrameHost* GetRenderFrameHost() const override;
   std::unique_ptr<webauthn::InternalAuthenticator> CreateInternalAuthenticator()
       const override;
-  scoped_refptr<PaymentManifestWebDataService>
-  GetPaymentManifestWebDataService() const override;
+  scoped_refptr<WebPaymentsWebDataService> GetWebPaymentsWebDataService()
+      const override;
   PaymentRequestDisplayManager* GetDisplayManager() override;
   void EmbedPaymentHandlerWindow(
       const GURL& url,
       PaymentHandlerOpenWindowCallback callback) override;
   bool IsInteractive() const override;
   std::string GetInvalidSslCertificateErrorMessage() override;
-  std::string GetTwaPackageName() const override;
+  void GetTwaPackageName(GetTwaPackageNameCallback callback) const override;
   PaymentRequestDialog* GetDialogForTesting() override;
   SecurePaymentConfirmationNoCreds* GetNoMatchingCredentialsDialogForTesting()
       override;
   const base::WeakPtr<PaymentUIObserver> GetPaymentUIObserver() const override;
+  std::optional<base::UnguessableToken> GetChromeOSTWAInstanceId()
+      const override;
+  std::string GetSecurePaymentConfirmationKeychainAccessGroup() const override;
 
  protected:
   // Reference to the dialog so that we can satisfy calls to CloseDialog(). This
@@ -91,6 +95,8 @@ class ChromePaymentRequestDelegate : public ContentPaymentRequestDelegate {
   std::unique_ptr<SecurePaymentConfirmationNoCreds> spc_no_creds_dialog_;
 
   const content::GlobalRenderFrameHostId frame_routing_id_;
+
+  TwaPackageHelper twa_package_helper_;
 };
 
 }  // namespace payments

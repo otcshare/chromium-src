@@ -2,13 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
+
 #include "chrome/common/importer/firefox_importer_utils.h"
 
 #include <stddef.h>
 
+#include <array>
+
+#include "base/base_paths.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_path_override.h"
 #include "base/values.h"
 #include "chrome/grit/generated_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -25,7 +31,8 @@ struct GetPrefsJsValueCase {
   std::string prefs_content;
   std::string pref_name;
   std::string pref_value;
-} GetPrefsJsValueCases[] = {
+};
+auto GetPrefsJsValueCases = std::to_array<GetPrefsJsValueCase>({
     // Basic case. Single pref, unquoted value.
     {"user_pref(\"foo.bar\", 1);", "foo.bar", "1"},
     // Value is quoted. Quotes should be stripped.
@@ -45,12 +52,13 @@ struct GetPrefsJsValueCase {
      "foo.baz", std::string()},
     // Malformed content.
     {"uesr_pref(\"foo.bar\", 1);", "foo.bar", std::string()},
-};
+});
 
 struct GetFirefoxImporterNameCase {
   std::string app_ini_content;
   int resource_id;
-} GetFirefoxImporterNameCases[] = {
+};
+auto GetFirefoxImporterNameCases = std::to_array<GetFirefoxImporterNameCase>({
     // Basic case
     {"[App]\n"
      "Vendor=Mozilla\n"
@@ -95,7 +103,8 @@ struct GetFirefoxImporterNameCase {
      "Version=10.0.6\n",
      IDS_IMPORT_FROM_ICEWEASEL},
     // Empty file
-    {std::string(), IDS_IMPORT_FROM_FIREFOX}};
+    {std::string(), IDS_IMPORT_FROM_FIREFOX},
+});
 
 }  // anonymous namespace
 
@@ -115,8 +124,7 @@ TEST(FirefoxImporterUtilsTest, GetFirefoxImporterName) {
       temp_dir.GetPath().AppendASCII("application.ini"));
   for (size_t i = 0; i < std::size(GetFirefoxImporterNameCases); ++i) {
     base::WriteFile(app_ini_file,
-                    GetFirefoxImporterNameCases[i].app_ini_content.c_str(),
-                    GetFirefoxImporterNameCases[i].app_ini_content.size());
+                    GetFirefoxImporterNameCases[i].app_ini_content);
     EXPECT_EQ(
         GetFirefoxImporterName(temp_dir.GetPath()),
         l10n_util::GetStringUTF16(GetFirefoxImporterNameCases[i].resource_id));
@@ -126,6 +134,50 @@ TEST(FirefoxImporterUtilsTest, GetFirefoxImporterName) {
       GetFirefoxImporterName(base::FilePath(
                                         FILE_PATH_LITERAL("/invalid/path"))));
 }
+
+#if BUILDFLAG(IS_LINUX)
+
+TEST(FirefoxImporterUtilsTest, GetProfilesINI) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  const base::ScopedPathOverride home(base::DIR_HOME, temp_dir.GetPath());
+  const base::FilePath profiles_ini_subpath =
+      base::FilePath::FromASCII(".mozilla/firefox/profiles.ini");
+
+  const base::FilePath standard_path =
+      temp_dir.GetPath().Append(profiles_ini_subpath);
+  const base::FilePath snap_path = temp_dir.GetPath()
+                                       .AppendASCII("snap/firefox/common")
+                                       .Append(profiles_ini_subpath);
+  const base::FilePath flatpak_path =
+      temp_dir.GetPath()
+          .AppendASCII(".var/app/org.mozilla.firefox")
+          .Append(profiles_ini_subpath);
+
+  const std::array<base::FilePath, 3> paths = {standard_path, snap_path,
+                                               flatpak_path};
+  for (const auto& path : paths) {
+    ASSERT_TRUE(base::CreateDirectory(path.DirName()));
+    ASSERT_TRUE(base::WriteFile(path, "[General]\nStartWithLastProfile=1"));
+  }
+
+  // Ensure that search order is respected:
+  //  1. standard path
+  //  2. snap path
+  //  3. flatpak path
+  EXPECT_EQ(GetProfilesINI(), standard_path);
+  ASSERT_TRUE(base::DeleteFile(standard_path));
+  EXPECT_EQ(GetProfilesINI(), snap_path);
+  ASSERT_TRUE(base::DeleteFile(snap_path));
+  EXPECT_EQ(GetProfilesINI(), flatpak_path);
+
+  // Ensure that an empty path is returned when no profiles.ini file is found
+  ASSERT_TRUE(base::DeleteFile(flatpak_path));
+  EXPECT_EQ(GetProfilesINI(), base::FilePath());
+}
+
+#endif
 
 TEST(FirefoxImporterUtilsTest, GetFirefoxProfilePath) {
   base::Value::Dict no_profiles;

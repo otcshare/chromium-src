@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
@@ -88,6 +88,9 @@ class TrustTokenDatabaseOwner final {
   base::OnceCallback<void(std::unique_ptr<TrustTokenDatabaseOwner>)>
       on_done_initializing_;
 
+  // The backing database.
+  std::unique_ptr<sql::Database> backing_database_;
+
   // |*table_manager_| is responsible for constructing the database's tables and
   // scheduling database tasks.
   scoped_refptr<sqlite_proto::ProtoTableManager> table_manager_;
@@ -95,9 +98,6 @@ class TrustTokenDatabaseOwner final {
   // Keep a handle on the DB task runner so that the destructor
   // can use the DB sequence to clean up the DB.
   scoped_refptr<base::SequencedTaskRunner> db_task_runner_;
-
-  // The backing database.
-  std::unique_ptr<sql::Database> backing_database_;
 
   // Each KeyValueData/KeyValueTable pair is responsible for executing SQL
   // operations against a particular database table. The KeyValueTables help

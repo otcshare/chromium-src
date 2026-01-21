@@ -2,21 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "sandbox/win/src/target_process.h"
 
 #include <windows.h>
 
+#include <processenv.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include <limits>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/free_deleter.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/win/access_token.h"
 #include "base/win/current_module.h"
+#include "base/win/scoped_handle.h"
 #include "base/win/security_util.h"
 #include "base/win/startup_information.h"
 #include "sandbox/win/src/crosscall_client.h"
@@ -25,7 +36,6 @@
 #include "sandbox/win/src/restricted_token_utils.h"
 #include "sandbox/win/src/sandbox_nt_util.h"
 #include "sandbox/win/src/sandbox_types.h"
-#include "sandbox/win/src/security_capabilities.h"
 #include "sandbox/win/src/sharedmem_ipc_server.h"
 #include "sandbox/win/src/startup_information_helper.h"
 #include "sandbox/win/src/win_utils.h"
@@ -34,16 +44,17 @@ namespace sandbox {
 
 namespace {
 
-void CopyPolicyToTarget(const void* source, size_t size, void* dest) {
-  if (!source || !size)
+void CopyPolicyToTarget(base::span<const uint8_t> source, void* dest) {
+  if (!source.size()) {
     return;
-  memcpy(dest, source, size);
+  }
+  memcpy(dest, source.data(), source.size());
   sandbox::PolicyGlobal* policy =
       reinterpret_cast<sandbox::PolicyGlobal*>(dest);
 
-  size_t offset = reinterpret_cast<size_t>(source);
+  size_t offset = reinterpret_cast<size_t>(source.data());
 
-  for (size_t i = 0; i < sandbox::kMaxServiceCount; i++) {
+  for (size_t i = 0; i < sandbox::kSandboxIpcCount; i++) {
     size_t buffer = reinterpret_cast<size_t>(policy->entry[i]);
     if (buffer) {
       buffer -= offset;
@@ -52,45 +63,29 @@ void CopyPolicyToTarget(const void* source, size_t size, void* dest) {
   }
 }
 
-bool GetAppContainerImpersonationToken(
-    HANDLE process,
-    HANDLE initial_token,
-    const std::vector<base::win::Sid>& capabilities,
-    base::win::ScopedHandle* impersonation_token) {
-  absl::optional<base::win::AccessToken> token =
-      base::win::AccessToken::FromProcess(process);
-  if (!token)
-    return false;
-  auto app_container_sid = token->AppContainerSid();
-  if (!app_container_sid)
-    return false;
-  SecurityCapabilities security_caps(*app_container_sid, capabilities);
-  return CreateLowBoxToken(initial_token, IMPERSONATION, &security_caps,
-                           impersonation_token) == ERROR_SUCCESS;
-}
-
 }  // namespace
 
 // 'SAND'
 SANDBOX_INTERCEPT DWORD g_sentinel_value_start = 0x53414E44;
 SANDBOX_INTERCEPT HANDLE g_shared_section;
 SANDBOX_INTERCEPT size_t g_shared_IPC_size;
+// The following may be zero if not needed in the child.
 SANDBOX_INTERCEPT size_t g_shared_policy_size;
+SANDBOX_INTERCEPT size_t g_delegate_data_size;
 // 'BOXY'
 SANDBOX_INTERCEPT DWORD g_sentinel_value_end = 0x424F5859;
 
-TargetProcess::TargetProcess(
-    base::win::ScopedHandle initial_token,
-    base::win::ScopedHandle lockdown_token,
-    ThreadPool* thread_pool,
-    const std::vector<base::win::Sid>& impersonation_capabilities)
-    // This object owns everything initialized here except thread_pool.
-    : lockdown_token_(std::move(lockdown_token)),
-      initial_token_(std::move(initial_token)),
-      thread_pool_(thread_pool),
-      base_address_(nullptr),
-      impersonation_capabilities_(
-          base::win::CloneSidVector(impersonation_capabilities)) {}
+TargetProcess::TargetProcess()
+    : process_handle_(::GetCurrentProcess()),
+      process_id_(::GetCurrentProcessId()) {}
+
+TargetProcess::TargetProcess(HANDLE process_handle) {
+  CHECK(::DuplicateHandle(::GetCurrentProcess(), process_handle,
+                          ::GetCurrentProcess(), &process_handle, 0, FALSE,
+                          DUPLICATE_SAME_ACCESS));
+  process_handle_.Set(process_handle);
+  process_id_ = ::GetProcessId(process_handle_.get());
+}
 
 TargetProcess::~TargetProcess() {
   // Give a chance to the process to die. In most cases the JOB_KILL_ON_CLOSE
@@ -99,11 +94,11 @@ TargetProcess::~TargetProcess() {
   // If this process is already dead, the function will return without waiting.
   // For now, this wait is there only to do a best effort to prevent some leaks
   // from showing up in purify.
-  if (sandbox_process_info_.IsValid()) {
-    ::WaitForSingleObject(sandbox_process_info_.process_handle(), 50);
+  if (process_handle_.is_valid()) {
+    ::WaitForSingleObject(process_handle_.get(), 50);
     // Terminate the process if it's still alive, as its IPC server is going
     // away. 1 is RESULT_CODE_KILLED.
-    ::TerminateProcess(sandbox_process_info_.process_handle(), 1);
+    ::TerminateProcess(process_handle_.get(), 1);
   }
 
   // ipc_server_ references our process handle, so make sure the former is shut
@@ -111,117 +106,36 @@ TargetProcess::~TargetProcess() {
   ipc_server_.reset();
 }
 
-// Creates the target (child) process suspended and assigns it to the job
-// object.
-ResultCode TargetProcess::Create(
-    const wchar_t* exe_path,
-    const wchar_t* command_line,
-    std::unique_ptr<StartupInformationHelper> startup_info_helper,
-    base::win::ScopedProcessInformation* target_info,
-    DWORD* win_error) {
-  exe_name_.reset(_wcsdup(exe_path));
-
-  base::win::StartupInformation* startup_info =
-      startup_info_helper->GetStartupInformation();
-
-  // the command line needs to be writable by CreateProcess().
-  std::unique_ptr<wchar_t, base::FreeDeleter> cmd_line(_wcsdup(command_line));
-
-  // Start the target process suspended.
-  DWORD flags =
-      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS;
-
-  if (startup_info->has_extended_startup_info())
-    flags |= EXTENDED_STARTUPINFO_PRESENT;
-
-  bool inherit_handles = startup_info_helper->ShouldInheritHandles();
-  PROCESS_INFORMATION temp_process_info = {};
-  if (!::CreateProcessAsUserW(lockdown_token_.Get(), exe_path, cmd_line.get(),
-                              nullptr,  // No security attribute.
-                              nullptr,  // No thread attribute.
-                              inherit_handles, flags,
-                              nullptr,  // Use the environment of the caller.
-                              nullptr,  // Use current directory of the caller.
-                              startup_info->startup_info(),
-                              &temp_process_info)) {
-    *win_error = ::GetLastError();
-    return SBOX_ERROR_CREATE_PROCESS;
-  }
-  base::win::ScopedProcessInformation process_info(temp_process_info);
-
-  if (initial_token_.IsValid()) {
-    HANDLE impersonation_token = initial_token_.Get();
-    base::win::ScopedHandle app_container_token;
-    if (GetAppContainerImpersonationToken(
-            process_info.process_handle(), impersonation_token,
-            impersonation_capabilities_, &app_container_token)) {
-      impersonation_token = app_container_token.Get();
-    }
-
-    // Change the token of the main thread of the new process for the
-    // impersonation token with more rights. This allows the target to start;
-    // otherwise it will crash too early for us to help.
-    HANDLE temp_thread = process_info.thread_handle();
-    if (!::SetThreadToken(&temp_thread, impersonation_token)) {
-      *win_error = ::GetLastError();
-      ::TerminateProcess(process_info.process_handle(), 0);
-      return SBOX_ERROR_SET_THREAD_TOKEN;
-    }
-    initial_token_.Close();
-  }
-
-  if (!target_info->DuplicateFrom(process_info)) {
-    *win_error = ::GetLastError();  // This may or may not be correct.
-    ::TerminateProcess(process_info.process_handle(), 0);
-    return SBOX_ERROR_DUPLICATE_TARGET_INFO;
-  }
-
-  base_address_ = GetProcessBaseAddress(process_info.process_handle());
-  DCHECK(base_address_);
-  if (!base_address_) {
-    *win_error = ::GetLastError();
-    ::TerminateProcess(process_info.process_handle(), 0);
-    return SBOX_ERROR_CANNOT_FIND_BASE_ADDRESS;
-  }
-
-  if (base_address_ != CURRENT_MODULE()) {
-    ::TerminateProcess(process_info.process_handle(), 0);
-    return SBOX_ERROR_INVALID_TARGET_BASE_ADDRESS;
-  }
-
-  sandbox_process_info_.Set(process_info.Take());
-  return SBOX_ALL_OK;
-}
-
-ResultCode TargetProcess::TransferVariable(const char* name,
-                                           const void* address,
+ResultCode TargetProcess::TransferVariable(const void* local_address,
+                                           void* target_address,
                                            size_t size) {
-  if (!sandbox_process_info_.IsValid())
+  if (!process_handle_.is_valid()) {
     return SBOX_ERROR_UNEXPECTED_CALL;
-
+  }
   SIZE_T written;
-  if (!::WriteProcessMemory(sandbox_process_info_.process_handle(),
-                            const_cast<void*>(address), address, size,
-                            &written)) {
+  if (!::WriteProcessMemory(process_handle_.get(), target_address,
+                            local_address, size, &written)) {
     return SBOX_ERROR_CANNOT_WRITE_VARIABLE_VALUE;
   }
-  if (written != size)
+  if (written != size) {
     return SBOX_ERROR_INVALID_WRITE_VARIABLE_SIZE;
+  }
 
   return SBOX_ALL_OK;
 }
 
 // Construct the IPC server and the IPC dispatcher. When the target does
 // an IPC it will eventually call the dispatcher.
-ResultCode TargetProcess::Init(Dispatcher* ipc_dispatcher,
-                               void* policy,
-                               uint32_t shared_IPC_size,
-                               uint32_t shared_policy_size,
-                               DWORD* win_error) {
+ResultCode TargetProcess::Init(
+    Dispatcher* ipc_dispatcher,
+    std::optional<base::span<const uint8_t>> policy,
+    std::optional<base::span<const uint8_t>> delegate_data,
+    uint32_t shared_IPC_size,
+    ThreadPool* thread_pool,
+    DWORD* win_error) {
   ResultCode ret = VerifySentinels();
   if (ret != SBOX_ALL_OK)
     return ret;
-
   // We need to map the shared memory on the target. This is necessary for
   // any IPC that needs to take place, even if the target has not yet hit
   // the main( ) function or even has initialized the CRT. So here we set
@@ -229,118 +143,132 @@ ResultCode TargetProcess::Init(Dispatcher* ipc_dispatcher,
   // the rest, which boils down to calling MapViewofFile()
 
   // We use this single memory pool for IPC and for policy.
-  DWORD shared_mem_size =
-      static_cast<DWORD>(shared_IPC_size + shared_policy_size);
-  shared_section_.Set(::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
-                                           PAGE_READWRITE | SEC_COMMIT, 0,
-                                           shared_mem_size, nullptr));
-  if (!shared_section_.IsValid()) {
+  size_t shared_mem_size = shared_IPC_size;
+  if (policy.has_value()) {
+    shared_mem_size += policy->size();
+  }
+  if (delegate_data.has_value()) {
+    shared_mem_size += delegate_data->size();
+  }
+
+  // This region should be small, so we only pass dwMaximumSizeLow below.
+  CHECK(shared_mem_size <= std::numeric_limits<DWORD>::max());
+
+  shared_section_.Set(::CreateFileMappingW(
+      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_COMMIT, 0,
+      static_cast<DWORD>(shared_mem_size), nullptr));
+  if (!shared_section_.is_valid()) {
     *win_error = ::GetLastError();
     return SBOX_ERROR_CREATE_FILE_MAPPING;
   }
 
   void* shared_memory = ::MapViewOfFile(
-      shared_section_.Get(), FILE_MAP_WRITE | FILE_MAP_READ, 0, 0, 0);
+      shared_section_.get(), FILE_MAP_WRITE | FILE_MAP_READ, 0, 0, 0);
   if (!shared_memory) {
     *win_error = ::GetLastError();
     return SBOX_ERROR_MAP_VIEW_OF_SHARED_SECTION;
   }
 
-  CopyPolicyToTarget(policy, shared_policy_size,
-                     reinterpret_cast<char*>(shared_memory) + shared_IPC_size);
+  // The IPC area is just zeros so we skip over it.
+  size_t current_offset = shared_IPC_size;
+  // PolicyGlobal region.
+  if (policy.has_value()) {
+    CopyPolicyToTarget(policy.value(),
+                       reinterpret_cast<char*>(shared_memory) + current_offset);
+    current_offset += policy->size();
+  }
+
+  // Delegate Data region.
+  if (delegate_data.has_value()) {
+    memcpy(reinterpret_cast<char*>(shared_memory) + current_offset,
+           delegate_data->data(), delegate_data->size());
+    current_offset += delegate_data->size();
+  }
+
+  // After all regions are written we should be at the end of the allocation.
+  CHECK_EQ(current_offset, shared_mem_size);
 
   // Set the global variables in the target. These are not used on the broker.
-  g_shared_IPC_size = shared_IPC_size;
-  ret = TransferVariable("g_shared_IPC_size", &g_shared_IPC_size,
+  size_t transfer_shared_IPC_size = shared_IPC_size;
+  static_assert(sizeof(g_shared_IPC_size) == sizeof(transfer_shared_IPC_size));
+  ret = TransferVariable(&transfer_shared_IPC_size, &g_shared_IPC_size,
                          sizeof(g_shared_IPC_size));
-  g_shared_IPC_size = 0;
   if (SBOX_ALL_OK != ret) {
     *win_error = ::GetLastError();
     return ret;
   }
-  g_shared_policy_size = shared_policy_size;
-  ret = TransferVariable("g_shared_policy_size", &g_shared_policy_size,
-                         sizeof(g_shared_policy_size));
-  g_shared_policy_size = 0;
-  if (SBOX_ALL_OK != ret) {
-    *win_error = ::GetLastError();
-    return ret;
+  if (policy.has_value()) {
+    size_t transfer_shared_policy_size = policy->size();
+    static_assert(sizeof(g_shared_policy_size) ==
+                  sizeof(transfer_shared_policy_size));
+    ret = TransferVariable(&transfer_shared_policy_size, &g_shared_policy_size,
+                           sizeof(g_shared_policy_size));
+    if (SBOX_ALL_OK != ret) {
+      *win_error = ::GetLastError();
+      return ret;
+    }
+  }
+  if (delegate_data.has_value()) {
+    size_t transfer_delegate_data_size = delegate_data->size();
+    static_assert(sizeof(g_delegate_data_size) ==
+                  sizeof(transfer_delegate_data_size));
+    ret = TransferVariable(&transfer_delegate_data_size, &g_delegate_data_size,
+                           sizeof(g_delegate_data_size));
+    if (SBOX_ALL_OK != ret) {
+      *win_error = ::GetLastError();
+      return ret;
+    }
   }
 
   ipc_server_ = std::make_unique<SharedMemIPCServer>(
-      sandbox_process_info_.process_handle(),
-      sandbox_process_info_.process_id(), thread_pool_, ipc_dispatcher);
+      process_handle_.get(), process_id_, thread_pool, ipc_dispatcher);
 
   if (!ipc_server_->Init(shared_memory, shared_IPC_size, kIPCChannelSize))
     return SBOX_ERROR_NO_SPACE;
 
   DWORD access = FILE_MAP_READ | FILE_MAP_WRITE | SECTION_QUERY;
   HANDLE target_shared_section;
-  if (!::DuplicateHandle(::GetCurrentProcess(), shared_section_.Get(),
-                         sandbox_process_info_.process_handle(),
-                         &target_shared_section, access, false, 0)) {
+  if (!::DuplicateHandle(::GetCurrentProcess(), shared_section_.get(),
+                         process_handle_.get(), &target_shared_section, access,
+                         false, 0)) {
     *win_error = ::GetLastError();
     return SBOX_ERROR_DUPLICATE_SHARED_SECTION;
   }
 
-  g_shared_section = target_shared_section;
-  ret = TransferVariable("g_shared_section", &g_shared_section,
+  static_assert(sizeof(g_shared_section) == sizeof(target_shared_section));
+  ret = TransferVariable(&target_shared_section, &g_shared_section,
                          sizeof(g_shared_section));
-  g_shared_section = nullptr;
   if (SBOX_ALL_OK != ret) {
     *win_error = ::GetLastError();
     return ret;
   }
 
-  // After this point we cannot use this handle anymore.
-  ::CloseHandle(sandbox_process_info_.TakeThreadHandle());
-
   return SBOX_ALL_OK;
 }
 
 void TargetProcess::Terminate() {
-  if (!sandbox_process_info_.IsValid())
-    return;
-
-  ::TerminateProcess(sandbox_process_info_.process_handle(), 0);
-}
-
-ResultCode TargetProcess::AssignLowBoxToken(
-    const base::win::ScopedHandle& token) {
-  if (!token.IsValid())
-    return SBOX_ALL_OK;
-  PROCESS_ACCESS_TOKEN process_access_token = {};
-  process_access_token.token = token.Get();
-
-  NTSTATUS status = GetNtExports()->SetInformationProcess(
-      sandbox_process_info_.process_handle(),
-      static_cast<PROCESSINFOCLASS>(NtProcessInformationAccessToken),
-      &process_access_token, sizeof(process_access_token));
-  if (!NT_SUCCESS(status)) {
-    ::SetLastError(GetLastErrorFromNtStatus(status));
-    return SBOX_ERROR_SET_LOW_BOX_TOKEN;
+  if (process_handle_.is_valid()) {
+    ::TerminateProcess(process_handle_.get(), 0);
   }
-  return SBOX_ALL_OK;
 }
 
 ResultCode TargetProcess::VerifySentinels() {
-  if (!sandbox_process_info_.IsValid())
+  if (!process_handle_.is_valid()) {
     return SBOX_ERROR_UNEXPECTED_CALL;
+  }
   DWORD value = 0;
   SIZE_T read;
 
-  if (!::ReadProcessMemory(sandbox_process_info_.process_handle(),
-                           &g_sentinel_value_start, &value, sizeof(DWORD),
-                           &read)) {
+  if (!::ReadProcessMemory(process_handle_.get(), &g_sentinel_value_start,
+                           &value, sizeof(DWORD), &read)) {
     return SBOX_ERROR_CANNOT_READ_SENTINEL_VALUE;
   }
   if (read != sizeof(DWORD))
     return SBOX_ERROR_INVALID_READ_SENTINEL_SIZE;
   if (value != g_sentinel_value_start)
     return SBOX_ERROR_MISMATCH_SENTINEL_VALUE;
-  if (!::ReadProcessMemory(sandbox_process_info_.process_handle(),
-                           &g_sentinel_value_end, &value, sizeof(DWORD),
-                           &read)) {
+  if (!::ReadProcessMemory(process_handle_.get(), &g_sentinel_value_end, &value,
+                           sizeof(DWORD), &read)) {
     return SBOX_ERROR_CANNOT_READ_SENTINEL_VALUE;
   }
   if (read != sizeof(DWORD))
@@ -349,20 +277,6 @@ ResultCode TargetProcess::VerifySentinels() {
     return SBOX_ERROR_MISMATCH_SENTINEL_VALUE;
 
   return SBOX_ALL_OK;
-}
-
-// static
-std::unique_ptr<TargetProcess> TargetProcess::MakeTargetProcessForTesting(
-    HANDLE process,
-    HMODULE base_address) {
-  auto target = std::make_unique<TargetProcess>(
-      base::win::ScopedHandle(), base::win::ScopedHandle(), nullptr,
-      std::vector<base::win::Sid>());
-  PROCESS_INFORMATION process_info = {};
-  process_info.hProcess = process;
-  target->sandbox_process_info_.Set(process_info);
-  target->base_address_ = base_address;
-  return target;
 }
 
 }  // namespace sandbox

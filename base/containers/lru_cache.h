@@ -19,15 +19,16 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <concepts>
 #include <functional>
 #include <list>
 #include <map>
+#include <optional>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 
 #include "base/check.h"
-#include "base/functional/identity.h"
 
 namespace base {
 namespace trace_event::internal {
@@ -69,20 +70,32 @@ class LRUCacheBase {
   using reverse_iterator = typename ValueList::reverse_iterator;
   using const_reverse_iterator = typename ValueList::const_reverse_iterator;
 
-  enum { NO_AUTO_EVICT = 0 };
+  static constexpr std::optional<size_type> NO_AUTO_EVICT = std::nullopt;
 
   // The max_size is the size at which the cache will prune its members to when
   // a new item is inserted. If the caller wants to manage this itself (for
   // example, maybe it has special work to do when something is evicted), it
   // can pass NO_AUTO_EVICT to not restrict the cache size.
-  explicit LRUCacheBase(size_type max_size) : max_size_(max_size) {}
+  explicit LRUCacheBase(std::optional<size_type> max_size)
+      : max_size_(max_size) {}
 
-  LRUCacheBase(const LRUCacheBase&) = delete;
-  LRUCacheBase& operator=(const LRUCacheBase&) = delete;
+  // In theory, LRUCacheBase could be copyable, but since copying `ValueList`
+  // might be costly, it's currently move-only to ensure users don't
+  // accidentally incur performance penalties. If you need this to become
+  // copyable, talk to base/ OWNERS.
+  LRUCacheBase(LRUCacheBase&&) noexcept = default;
+  LRUCacheBase& operator=(LRUCacheBase&&) noexcept = default;
 
   ~LRUCacheBase() = default;
 
-  size_type max_size() const { return max_size_; }
+  // Returns the maximum size of the cache. Valid to call only if there is a max
+  // size (NO_AUTO_EVICT was *not* used).
+  size_type max_size() const { return max_size_.value(); }
+
+  void UpdateMaxSize(size_type new_max_size) {
+    max_size_ = new_max_size;
+    ShrinkToSize(new_max_size);
+  }
 
   // Inserts an item into the list. If an existing item has the same key, it is
   // removed prior to insertion. An iterator indicating the inserted item will
@@ -97,10 +110,16 @@ class LRUCacheBase {
       // Erase the reference to it. The index reference will be replaced in the
       // code below.
       Erase(index_iter->second);
-    } else if (max_size_ != NO_AUTO_EVICT) {
+    } else if (max_size_.has_value()) {
+      // The only way an insertion can fail is if max size is zero. In other
+      // cases, another item will be evicted to make room for the new item.
+      if (max_size_.value() == 0u) {
+        return end();
+      }
+
       // New item is being inserted which might make it larger than the maximum
       // size: kick the oldest thing out if necessary.
-      ShrinkToSize(max_size_ - 1);
+      ShrinkToSize(max_size_.value() - 1);
     }
 
     ordering_.push_front(std::move(value));
@@ -111,11 +130,8 @@ class LRUCacheBase {
   // Inserts an item into the list. If an existing item has the same key, it is
   // removed prior to insertion. An iterator indicating the inserted item will
   // be returned (this will always be the front of the list).
-  template <
-      class K,
-      class V,
-      class MapKeyGetter = GetKeyFromKVPair,
-      class = std::enable_if_t<std::is_same_v<MapKeyGetter, GetKeyFromValue>>>
+  template <class K, class V>
+    requires(std::same_as<GetKeyFromValue, GetKeyFromKVPair>)
   iterator Put(K&& key, V&& value) {
     return Put(value_type{std::forward<K>(key), std::forward<V>(value)});
   }
@@ -123,10 +139,13 @@ class LRUCacheBase {
   // Retrieves the contents of the given key, or end() if not found. This method
   // has the side effect of moving the requested item to the front of the
   // recency list.
-  iterator Get(const key_type& key) {
+  template <typename K = key_type>
+    requires requires(KeyIndex index, K key) { index.find(key); }
+  iterator Get(const K& key) {
     typename KeyIndex::iterator index_iter = index_.find(key);
-    if (index_iter == index_.end())
+    if (index_iter == index_.end()) {
       return end();
+    }
     typename ValueList::iterator iter = index_iter->second;
 
     // Move the touched item to the front of the recency ordering.
@@ -136,17 +155,23 @@ class LRUCacheBase {
 
   // Retrieves the item associated with a given key and returns it via
   // result without affecting the ordering (unlike Get()).
-  iterator Peek(const key_type& key) {
+  template <typename K = key_type>
+    requires requires(KeyIndex index, K key) { index.find(key); }
+  iterator Peek(const K& key) {
     typename KeyIndex::const_iterator index_iter = index_.find(key);
-    if (index_iter == index_.end())
+    if (index_iter == index_.end()) {
       return end();
+    }
     return index_iter->second;
   }
 
-  const_iterator Peek(const key_type& key) const {
+  template <typename K = key_type>
+    requires requires(KeyIndex index, K key) { index.find(key); }
+  const_iterator Peek(const K& key) const {
     typename KeyIndex::const_iterator index_iter = index_.find(key);
-    if (index_iter == index_.end())
+    if (index_iter == index_.end()) {
       return end();
+    }
     return index_iter->second;
   }
 
@@ -159,6 +184,9 @@ class LRUCacheBase {
 
   // Erases the item referenced by the given iterator. An iterator to the item
   // following it will be returned. The iterator must be valid.
+  // Note that caller should avoid using std::remove_if() with this container as
+  // the iterator from begin()/end() is not designed to have the key modified,
+  // see comment on begin().
   iterator Erase(iterator pos) {
     index_.erase(GetKeyFromValue()(*pos));
     return ordering_.erase(pos);
@@ -176,8 +204,9 @@ class LRUCacheBase {
   // Shrinks the cache so it only holds |new_size| items. If |new_size| is
   // bigger or equal to the current number of items, this will do nothing.
   void ShrinkToSize(size_type new_size) {
-    for (size_type i = size(); i > new_size; i--)
+    for (size_type i = size(); i > new_size; i--) {
       Erase(rbegin());
+    }
   }
 
   // Deletes everything from the cache.
@@ -200,6 +229,10 @@ class LRUCacheBase {
   // Note that since these iterators are actually iterators over a list, you
   // can keep them as you insert or delete things (as long as you don't delete
   // the one you are pointing to) and they will still be valid.
+  // Also, caller should avoid moving the order of items around, or any
+  // operation that modifies the key in the value with these iterators, such as
+  // using std::remove_if(). This is because the key in index_ is not updated
+  // and the container will be corrupted.
   iterator begin() { return ordering_.begin(); }
   const_iterator begin() const { return ordering_.begin(); }
   iterator end() { return ordering_.end(); }
@@ -209,6 +242,22 @@ class LRUCacheBase {
   const_reverse_iterator rbegin() const { return ordering_.rbegin(); }
   reverse_iterator rend() { return ordering_.rend(); }
   const_reverse_iterator rend() const { return ordering_.rend(); }
+
+  struct IndexRange {
+    using iterator = KeyIndex::const_iterator;
+
+    IndexRange(const iterator& begin, const iterator& end)
+        : begin_(begin), end_(end) {}
+
+    iterator begin() const { return begin_; }
+    iterator end() const { return end_; }
+
+   private:
+    iterator begin_;
+    iterator end_;
+  };
+  // Allows iterating the index, which can be useful when the index is ordered.
+  IndexRange index() const { return IndexRange(index_.begin(), index_.end()); }
 
   bool empty() const { return ordering_.empty(); }
 
@@ -220,7 +269,9 @@ class LRUCacheBase {
   ValueList ordering_;
   KeyIndex index_;
 
-  size_type max_size_;
+  // Indicates the maximum size of the cache. If nullopt, there is no maximum
+  // size and eviction is not done automatically.
+  std::optional<size_type> max_size_;
 };
 
 template <class KeyType, class KeyCompare>
@@ -268,7 +319,7 @@ using HashingLRUCache = internal::LRUCacheBase<
 template <class ValueType, class Compare = std::less<ValueType>>
 using LRUCacheSet =
     internal::LRUCacheBase<ValueType,
-                           identity,
+                           std::identity,
                            internal::LRUCacheKeyIndex<ValueType, Compare>>;
 
 // Implements an LRU cache of `ValueType`, where is value is unique, and may be
@@ -281,7 +332,7 @@ template <class ValueType,
           class Equal = std::equal_to<ValueType>>
 using HashingLRUCacheSet = internal::LRUCacheBase<
     ValueType,
-    identity,
+    std::identity,
     internal::HashingLRUCacheKeyIndex<ValueType, Hash, Equal>>;
 
 }  // namespace base

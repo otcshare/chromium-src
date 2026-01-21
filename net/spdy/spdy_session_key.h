@@ -5,39 +5,38 @@
 #ifndef NET_SPDY_SPDY_SESSION_KEY_H_
 #define NET_SPDY_SPDY_SESSION_KEY_H_
 
+#include <iosfwd>
+#include <optional>
+
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_isolation_key.h"
 #include "net/base/privacy_mode.h"
-#include "net/base/proxy_server.h"
+#include "net/base/proxy_chain.h"
+#include "net/base/session_usage.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/socket/socket_tag.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
 namespace net {
 
 // SpdySessionKey is used as unique index for SpdySessionPool.
 class NET_EXPORT_PRIVATE SpdySessionKey {
  public:
-  enum class IsProxySession {
-    kFalse,
-    // This means this is a ProxyServer::Direct() session for an HTTP2 proxy,
-    // with |host_port_pair| being the proxy host and port. This should not be
-    // confused with a tunnel over an HTTP2 proxy session, for which
-    // |proxy_server| will be information about the proxy being used, and
-    // |host_port_pair| will be information not about the proxy, but the host
-    // that we're proxying the connection to.
-    kTrue,
-  };
-
   SpdySessionKey();
 
+  // Note that if `session_usage` is kProxy, then:
+  // * `privacy_mode` must be PRIVACY_MODE_DISABLED to pool credentialed and
+  //     uncredetialed requests onto the same proxy connections.
+  // * `disable_cert_verification_network_fetches` must be true, to avoid
+  //     depending on cert fetches, which would be made through the proxy.
   SpdySessionKey(const HostPortPair& host_port_pair,
-                 const ProxyServer& proxy_server,
                  PrivacyMode privacy_mode,
-                 IsProxySession is_proxy_session,
+                 const ProxyChain& proxy_chain,
+                 SessionUsage session_usage,
                  const SocketTag& socket_tag,
                  const NetworkAnonymizationKey& network_anonymization_key,
-                 SecureDnsPolicy secure_dns_policy);
+                 SecureDnsPolicy secure_dns_policy,
+                 bool disable_cert_verification_network_fetches);
 
   SpdySessionKey(const SpdySessionKey& other);
 
@@ -47,8 +46,8 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
   bool operator<(const SpdySessionKey& other) const;
 
   // Equality tests of contents.
-  bool operator==(const SpdySessionKey& other) const;
-  bool operator!=(const SpdySessionKey& other) const;
+  friend bool operator==(const SpdySessionKey&,
+                         const SpdySessionKey&) = default;
 
   // Struct returned by CompareForAliasing().
   struct CompareForAliasingResult {
@@ -70,23 +69,15 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
   CompareForAliasingResult CompareForAliasing(
       const SpdySessionKey& other) const;
 
-  const HostPortProxyPair& host_port_proxy_pair() const {
-    return host_port_proxy_pair_;
-  }
-
-  const HostPortPair& host_port_pair() const {
-    return host_port_proxy_pair_.first;
-  }
-
-  const ProxyServer& proxy_server() const {
-    return host_port_proxy_pair_.second;
-  }
+  const HostPortPair& host_port_pair() const { return host_port_pair_; }
 
   PrivacyMode privacy_mode() const {
     return privacy_mode_;
   }
 
-  IsProxySession is_proxy_session() const { return is_proxy_session_; }
+  const ProxyChain& proxy_chain() const { return proxy_chain_; }
+
+  SessionUsage session_usage() const { return session_usage_; }
 
   const SocketTag& socket_tag() const { return socket_tag_; }
 
@@ -96,18 +87,26 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
 
   SecureDnsPolicy secure_dns_policy() const { return secure_dns_policy_; }
 
+  bool disable_cert_verification_network_fetches() const {
+    return disable_cert_verification_network_fetches_;
+  }
+
  private:
-  HostPortProxyPair host_port_proxy_pair_;
+  HostPortPair host_port_pair_;
   // If enabled, then session cannot be tracked by the server.
   PrivacyMode privacy_mode_ = PRIVACY_MODE_DISABLED;
-  IsProxySession is_proxy_session_;
+  ProxyChain proxy_chain_;
+  SessionUsage session_usage_ = SessionUsage::kDestination;
   SocketTag socket_tag_;
-  // Used to separate requests made in different contexts. If
-  // `kPartitionConnectionsByNetworkIsolationKey` is disabled this will be set
-  // to an empty key.
+  // Used to separate requests made in different contexts. If network state
+  // partitioning is disabled this will be set to an empty key.
   NetworkAnonymizationKey network_anonymization_key_;
-  SecureDnsPolicy secure_dns_policy_;
+  SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
+  bool disable_cert_verification_network_fetches_ = false;
 };
+
+NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
+                                            const SpdySessionKey& key);
 
 }  // namespace net
 

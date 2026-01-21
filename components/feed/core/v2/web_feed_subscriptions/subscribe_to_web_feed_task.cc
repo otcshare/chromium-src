@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/feed/core/proto/v2/wire/consistency_token.pb.h"
 #include "components/feed/core/v2/feed_stream.h"
 #include "components/feed/core/v2/feedstore_util.h"
@@ -101,7 +101,7 @@ void SubscribeToWebFeedTask::RequestComplete(
     Done(WebFeedSubscriptionRequestStatus::kSuccess);
     return;
   }
-  // TODO(crbug/1152592): Check for 'too many subscriptions' error.
+  // TODO(crbug.com/40158714): Check for 'too many subscriptions' error.
   Done(WebFeedSubscriptionRequestStatus::kFailedUnknownError);
 }
 

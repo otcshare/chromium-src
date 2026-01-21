@@ -4,23 +4,25 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.components.tabs.TabStripCollection;
 import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.util.List;
 
 /**
- * TabModelSelector is a wrapper class containing both a normal and an incognito TabModel.
- * This class helps the app know which mode it is currently in, and which TabModel it should
- * be using.
+ * TabModelSelector is a wrapper class containing both a normal and an incognito TabModel. This
+ * class helps the app know which mode it is currently in, and which TabModel it should be using.
  */
+@NullMarked
 public interface TabModelSelector {
-    /**
-     * Should be called when the app starts showing a view with multiple tabs.
-     */
+    /** Should be called when the app starts showing a view with multiple tabs. */
     void onTabsViewShown();
 
     /**
@@ -31,58 +33,83 @@ public interface TabModelSelector {
 
     /**
      * Get a specific tab model
-     * @return Never returns null.  Returns a stub when real model is uninitialized.
+     *
+     * @return Never returns null. Returns a stub when real model is uninitialized.
      */
     TabModel getModel(boolean incognito);
 
-    /**
-     * Get the {@link TabModelFilterProvider} that provides {@link TabModelFilter}.
-     * @return  Never returns null. Returns a stub when real model is uninitialized.
-     */
-    TabModelFilterProvider getTabModelFilterProvider();
-
-    /**
-     * @return a list for the underlying models
-     */
+    /** Returns a list for the underlying models */
     List<TabModel> getModels();
 
-    /**
-     * Get the current tab model.
-     * @return Never returns null.  Returns a stub when real model is uninitialized.
-     */
+    /** Returns the current tab model or a stub when real model is uninitialized. */
     TabModel getCurrentModel();
 
     /**
+     * Gets a supplier for the current tab model.
+     *
+     * @return A supplier for the current tab model. This may hold a null value before the {@link
+     *     TabModelSelector} is initialized.
+     */
+    MonotonicObservableSupplier<TabModel> getCurrentTabModelSupplier();
+
+    /**
      * Convenience function to get the current tab on the current model
+     *
      * @return Current tab or null if none exists or if the model is not initialized.
      */
-    @Nullable
-    Tab getCurrentTab();
+    @Nullable Tab getCurrentTab();
 
     /**
      * Convenience function to get the current tab id on the current model.
+     *
      * @return Id of the current tab or {@link Tab#INVALID_TAB_ID} if no tab is selected or the
-     *         model is not initialized.
+     *     model is not initialized.
      */
     int getCurrentTabId();
 
+    /** Returns a supplier for the current tab in the current model. */
+    NullableObservableSupplier<Tab> getCurrentTabSupplier();
+
     /**
-     * Convenience function to get the {@link TabModel} for a {@link Tab} specified by
-     * {@code id}.
+     * Returns a supplier for the current tab count in the current model. This will update as the
+     * current tab model changes so it will always contain the tab count of the current model. If
+     * the tab count of a specific model is desired add an observer to that {@link TabModel}
+     * directly.
+     */
+    NonNullObservableSupplier<Integer> getCurrentModelTabCountSupplier();
+
+    /**
+     * Convenience function to get the {@link TabModel} for a {@link Tab} specified by {@code id}.
+     *
      * @param id The id of the {@link Tab} to find the {@link TabModel} for.
-     * @return   The {@link TabModel} that owns the {@link Tab} specified by {@code id}.
+     * @return The {@link TabModel} that owns the {@link Tab} specified by {@code id}.
      */
-    TabModel getModelForTabId(int id);
+    @Nullable TabModel getModelForTabId(int id);
 
     /**
-     * @return The index of the current {@link TabModel}.
-     */
-    int getCurrentModelIndex();
-
-    /**
+     * TODO(crbug.com/350654700): clean up usages and remove isIncognitoSelected.
+     *
      * @return If the incognito {@link TabModel} is current.
+     * @deprecated Use {@link #isIncognitoBrandedModelSelected()} or {@link
+     *     #isOffTheRecordModelSelected()}.
      */
+    @Deprecated
     boolean isIncognitoSelected();
+
+    /**
+     * @return If the current {@link TabModel} is Incognito branded.
+     * @see {@link Profile#isIncognitoBranded()}
+     */
+    boolean isIncognitoBrandedModelSelected();
+
+    /**
+     * @return If the current {@link TabModel} is off the record.
+     * @see {@link Profile#isOffTheRecord()}
+     */
+    boolean isOffTheRecordModelSelected();
+
+    /** Returns the {@link TabCreatorManager} to create tabs in this tab model selector. */
+    TabCreatorManager getTabCreatorManager();
 
     /**
      * Opens a new tab.
@@ -94,40 +121,41 @@ public interface TabModelSelector {
      * @return The newly opened tab.
      */
     Tab openNewTab(
-            LoadUrlParams loadUrlParams, @TabLaunchType int type, Tab parent, boolean incognito);
+            LoadUrlParams loadUrlParams,
+            @TabLaunchType int type,
+            @Nullable Tab parent,
+            boolean incognito);
 
     /**
      * Searches through all children models for the specified Tab and closes the tab if it exists.
-     * @param tab the non-null tab to close
-     * @return true if the tab was found
+     * If the tab is pending closure it will be committed.
+     *
+     * <p>Note: this method should ONLY be used when either the tab model or closing state of the
+     * tab are hard to discern. Prefer to use {@code
+     * getModel(isIncognito).getTabRemover().closeTabs()}.
+     *
+     * @param tabClosureParams A {@link TabClosureParams} for a single tab.
+     * @param allowDialog Whether to show a tab removal dialog see {@link TabRemover}
+     * @return true if the tab was found and closed.
      */
-    boolean closeTab(Tab tab);
+    boolean tryCloseTab(TabClosureParams tabClosureParams, boolean allowDialog);
 
-    /**
-     * Close all tabs across all tab models
-     */
-    void closeAllTabs();
-
-    /**
-     * Close all tabs across all tab models
-     * @param uponExit true iff the tabs are being closed upon application exit (after user presses
-     *                 the system back button)
-     */
-    void closeAllTabs(boolean uponExit);
-
-    /**
-     * Get total tab count across all tab models
-     */
+    /** Get total tab count across all tab models */
     int getTotalTabCount();
+
+    /** Get total pinned tab count across all tab models */
+    int getTotalPinnedTabCount();
 
     /**
      * Search all TabModels for a tab with the specified id.
+     *
      * @return specified tab or null if tab is not found
      */
-    Tab getTabById(int id);
+    @Nullable Tab getTabById(int id);
 
     /**
      * Add an observer to be notified of changes to the TabModelSelector.
+     *
      * @param observer The {@link TabModelSelectorObserver} to notify.
      */
     void addObserver(TabModelSelectorObserver observer);
@@ -169,9 +197,7 @@ public interface TabModelSelector {
      */
     void addIncognitoTabModelObserver(IncognitoTabModelObserver incognitoObserver);
 
-    /**
-     * Unsubscribe from {@link IncognitoTabModelObserver}.
-     */
+    /** Unsubscribe from {@link IncognitoTabModelObserver}. */
     void removeIncognitoTabModelObserver(IncognitoTabModelObserver incognitoObserver);
 
     /**
@@ -180,13 +206,53 @@ public interface TabModelSelector {
      * onTabModelSelected event have been notified.
      *
      * @param incognitoReauthDialogDelegate A delegate which takes care of triggering an Incognito
-     *         re-authentication.
+     *     re-authentication.
      */
     void setIncognitoReauthDialogDelegate(
             IncognitoTabModelObserver.IncognitoReauthDialogDelegate incognitoReauthDialogDelegate);
 
+    /** Returns the {@link TabModel} for the associated {@link TabStripCollection}. */
+    @Nullable TabModel getTabModelForTabStripCollection(TabStripCollection tabStripCollection);
+
     /**
-     * Destroy all owned {@link TabModel}s and {@link Tab}s referenced by this selector.
+     * This method returns a specific {@link TabGroupModelFilter}.
+     *
+     * @param isIncognito Use to indicate which {@link TabGroupModelFilter} to return.
+     * @return A {@link TabGroupModelFilter}. This returns null, if this called before native
+     *     library is initialized.
      */
+    @Nullable TabGroupModelFilter getTabGroupModelFilter(boolean isIncognito);
+
+    /**
+     * This method adds {@link TabModelObserver} to both {@link TabGroupModelFilter}s. Caches the
+     * observer until {@link TabGroupModelFilter}s are created.
+     *
+     * @param observer {@link TabModelObserver} to add.
+     */
+    void addTabGroupModelFilterObserver(TabModelObserver observer);
+
+    /**
+     * This method removes {@link TabModelObserver} from both {@link TabGroupModelFilter}s.
+     *
+     * @param observer {@link TabModelObserver} to remove.
+     */
+    void removeTabGroupModelFilterObserver(TabModelObserver observer);
+
+    /**
+     * This method returns the current {@link TabGroupModelFilter}.
+     *
+     * @return The current {@link TabGroupModelFilter}. This returns null, if this called before
+     *     native library is initialized.
+     */
+    @Nullable TabGroupModelFilter getCurrentTabGroupModelFilter();
+
+    /** Returns an observable supplier for the current tab model filter. */
+    MonotonicObservableSupplier<@Nullable TabGroupModelFilter>
+            getCurrentTabGroupModelFilterSupplier();
+
+    /** Reset the internal filter list to allow initialization again. */
+    void resetTabGroupModelFilterListForTesting(); // IN-TEST
+
+    /** Destroy all owned {@link TabModel}s and {@link Tab}s referenced by this selector. */
     void destroy();
 }

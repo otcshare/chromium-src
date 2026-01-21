@@ -22,9 +22,7 @@
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-
-namespace device_sync {
+namespace ash::device_sync {
 
 namespace {
 
@@ -62,8 +60,10 @@ class DeviceSyncCryptAuthDeviceRegistryImplTest : public testing::Test {
           "device_better_together_public_key_0";
       const char kDeviceBetterTogetherPublicKey1[] =
           "device_better_together_public_key_1";
-      const base::Time kLastUpdateTime0 = base::Time::FromDoubleT(100);
-      const base::Time kLastUpdateTime1 = base::Time::FromDoubleT(200);
+      const base::Time kLastUpdateTime0 =
+          base::Time::FromSecondsSinceUnixEpoch(100);
+      const base::Time kLastUpdateTime1 =
+          base::Time::FromSecondsSinceUnixEpoch(200);
       const std::map<multidevice::SoftwareFeature,
                      multidevice::SoftwareFeatureState>
           kFakeFeatureStates0 = {
@@ -82,7 +82,7 @@ class DeviceSyncCryptAuthDeviceRegistryImplTest : public testing::Test {
                           kFakeFeatureStates0),
           CryptAuthDevice(kInstanceId1, kDeviceName1,
                           kDeviceBetterTogetherPublicKey1, kLastUpdateTime1,
-                          absl::nullopt /* better_together_device_metadata */,
+                          std::nullopt /* better_together_device_metadata */,
                           kFakeFeatureStates1)};
     }());
 
@@ -90,13 +90,13 @@ class DeviceSyncCryptAuthDeviceRegistryImplTest : public testing::Test {
     return devices->at(index);
   }
 
-  base::Value AsDictionary(
+  base::Value::Dict AsDictionary(
       const CryptAuthDeviceRegistry::InstanceIdToDeviceMap& devices) const {
-    base::Value dict(base::Value::Type::DICTIONARY);
+    base::Value::Dict dict;
     for (const std::pair<std::string, CryptAuthDevice>& id_device_pair :
          devices) {
-      dict.SetKey(util::EncodeAsString(id_device_pair.first),
-                  id_device_pair.second.AsDictionary());
+      dict.Set(util::EncodeAsString(id_device_pair.first),
+               id_device_pair.second.AsDictionary());
     }
 
     return dict;
@@ -142,7 +142,7 @@ TEST_F(DeviceSyncCryptAuthDeviceRegistryImplTest, OverwriteDevice) {
   EXPECT_EQ(GetDeviceForTest(0), *device_registry()->GetDevice(kInstanceId0));
 
   CryptAuthDevice device_with_same_instance_id(
-      kInstanceId0, "name", "key", base::Time::FromDoubleT(5000),
+      kInstanceId0, "name", "key", base::Time::FromSecondsSinceUnixEpoch(5000),
       cryptauthv2::BetterTogetherDeviceMetadata(), {});
   EXPECT_TRUE(device_registry()->AddDevice(device_with_same_instance_id));
   EXPECT_EQ(device_with_same_instance_id,
@@ -180,14 +180,12 @@ TEST_F(DeviceSyncCryptAuthDeviceRegistryImplTest, DeleteDevice) {
 TEST_F(DeviceSyncCryptAuthDeviceRegistryImplTest, PopulateRegistryFromPref) {
   CryptAuthDeviceRegistry::InstanceIdToDeviceMap expected_devices = {
       {kInstanceId0, GetDeviceForTest(0)}, {kInstanceId1, GetDeviceForTest(1)}};
-  pref_service()->Set(prefs::kCryptAuthDeviceRegistry,
-                      AsDictionary(expected_devices));
+  pref_service()->SetDict(prefs::kCryptAuthDeviceRegistry,
+                          AsDictionary(expected_devices));
 
   CreateDeviceRegistry();
 
   VerifyDeviceRegistry(expected_devices);
 }
 
-}  // namespace device_sync
-
-}  // namespace ash
+}  // namespace ash::device_sync

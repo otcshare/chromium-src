@@ -7,8 +7,12 @@
 #include <algorithm>
 #include <cmath>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "cc/base/math_util.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_timestamp_helper.h"
@@ -154,8 +158,9 @@ void AudioRendererAlgorithm::Initialize(const AudioParameters& params,
 void AudioRendererAlgorithm::SetChannelMask(std::vector<bool> channel_mask) {
   DCHECK_EQ(channel_mask.size(), static_cast<size_t>(channels_));
   channel_mask_ = std::move(channel_mask);
-  if (ola_window_)
+  if (!ola_window_.empty()) {
     CreateSearchWrappers();
+  }
 }
 
 void AudioRendererAlgorithm::OnResamplerRead(int frame_delay,
@@ -181,12 +186,12 @@ int AudioRendererAlgorithm::ResampleAndFill(AudioBus* dest,
                                             int dest_offset,
                                             int requested_frames,
                                             double playback_rate) {
-  SetFillBufferMode(FillBufferMode::kResampler);
   if (!resampler_) {
     resampler_ = std::make_unique<MultiChannelResampler>(
         channels_, playback_rate, SincResampler::kDefaultRequestSize,
         base::BindRepeating(&AudioRendererAlgorithm::OnResamplerRead,
                             base::Unretained(this)));
+    resampler_->PrimeWithSilence();
   }
 
   if (reached_end_of_stream_ && resampler_only_has_silence_ &&
@@ -231,51 +236,18 @@ int AudioRendererAlgorithm::ResampleAndFill(AudioBus* dest,
   return requested_frames;
 }
 
-int AudioRendererAlgorithm::FillBuffer(AudioBus* dest,
-                                       int dest_offset,
-                                       int requested_frames,
-                                       double playback_rate) {
-  if (playback_rate == 0)
-    return 0;
-
-  DCHECK_GT(playback_rate, 0);
-  DCHECK_EQ(channels_, dest->channels());
-
-  // In case of compressed bitstream formats, no post processing is allowed.
-  if (is_bitstream_format_)
-    return audio_buffer_.ReadFrames(requested_frames, dest_offset, dest);
-
-  int slower_step = ceil(ola_window_size_ * playback_rate);
-  int faster_step = ceil(ola_window_size_ / playback_rate);
-
-  // Optimize the most common |playback_rate| ~= 1 case to use a single copy
-  // instead of copying frame by frame.
-  if (ola_window_size_ <= faster_step && slower_step >= ola_window_size_) {
-    SetFillBufferMode(FillBufferMode::kPassthrough);
-
-    const int frames_to_copy =
-        std::min(audio_buffer_.frames(), requested_frames);
-    const int frames_read =
-        audio_buffer_.ReadFrames(frames_to_copy, dest_offset, dest);
-    DCHECK_EQ(frames_read, frames_to_copy);
-    return frames_read;
-  }
-
-  // Use resampling when no pitch adjustments are needed.
-  if (!preserves_pitch_)
-    return ResampleAndFill(dest, dest_offset, requested_frames, playback_rate);
-
-  SetFillBufferMode(FillBufferMode::kWSOLA);
-
+int AudioRendererAlgorithm::RunWsolaAndFill(AudioBus* dest,
+                                            int dest_offset,
+                                            int requested_frames,
+                                            double playback_rate) {
   // Allocate structures on first non-1.0 playback rate; these can eat a fair
   // chunk of memory. ~56kB for stereo 48kHz, up to ~765kB for 7.1 192kHz.
-  if (!ola_window_) {
-    ola_window_.reset(new float[ola_window_size_]);
-    internal::GetPeriodicHanningWindow(ola_window_size_, ola_window_.get());
+  if (ola_window_.empty()) {
+    ola_window_ = base::HeapArray<float>::Uninit(ola_window_size_);
+    internal::GetPeriodicHanningWindow(ola_window_);
 
-    transition_window_.reset(new float[ola_window_size_ * 2]);
-    internal::GetPeriodicHanningWindow(2 * ola_window_size_,
-                                       transition_window_.get());
+    transition_window_ = base::HeapArray<float>::Uninit(ola_window_size_ * 2);
+    internal::GetPeriodicHanningWindow(transition_window_);
 
     // Initialize for overlap-and-add of the first block.
     wsola_output_ =
@@ -297,6 +269,10 @@ int AudioRendererAlgorithm::FillBuffer(AudioBus* dest,
   // these cases.
   cc::ScopedSubnormalFloatDisabler disable_subnormals;
 
+  // WSOLA doesn't actually consume input frames until the WSOLA iteration
+  // completes; see RemoveOldInputFrames() in RunOneWsolaIteration().
+  const auto initial_input_frames = audio_buffer_.frames();
+
   int rendered_frames = 0;
   do {
     rendered_frames +=
@@ -304,7 +280,88 @@ int AudioRendererAlgorithm::FillBuffer(AudioBus* dest,
                                dest_offset + rendered_frames, dest);
   } while (rendered_frames < requested_frames &&
            RunOneWsolaIteration(playback_rate));
+
+  // The effective rate is just how many input frames were used to produce the
+  // requested number of output frames. We don't want the cumulative value since
+  // that is just ~`playback_rate`, but instead the "impulse" of this call.
+  //
+  // Note: The effective rate may briefly be zero for playback rates below 1.0.
+  // Note 2: During end-of-stream, `rendered_frames` may be zero.
+  if (rendered_frames > 0) {
+    effective_playback_rate_ = (initial_input_frames - audio_buffer_.frames()) /
+                               static_cast<double>(rendered_frames);
+  } else {
+    effective_playback_rate_ = playback_rate;
+  }
   return rendered_frames;
+}
+
+int AudioRendererAlgorithm::FillBuffer(AudioBus* dest,
+                                       int dest_offset,
+                                       int requested_frames,
+                                       double playback_rate) {
+  if (playback_rate == 0) {
+    return 0;
+  }
+
+  DCHECK_GT(playback_rate, 0);
+  DCHECK_EQ(channels_, dest->channels());
+
+  // In case of compressed bitstream formats, no post processing is allowed.
+  if (is_bitstream_format_) {
+    return audio_buffer_.ReadFrames(requested_frames, dest_offset, dest);
+  }
+
+  const FillBufferMode fill_buffer_mode = ChooseBufferMode(playback_rate);
+  SetFillBufferMode(fill_buffer_mode);
+
+  switch (fill_buffer_mode) {
+    case FillBufferMode::kPassthrough: {
+      // Optimize the most common `playback_rate` ~= 1 case to use a single copy
+      // instead of copying frame by frame.
+      const int frames_to_copy =
+          std::min(audio_buffer_.frames(), requested_frames);
+      const int frames_read =
+          audio_buffer_.ReadFrames(frames_to_copy, dest_offset, dest);
+      DCHECK_EQ(frames_read, frames_to_copy);
+      effective_playback_rate_ = 1.0;
+      return frames_read;
+    }
+    case FillBufferMode::kResampler:
+      effective_playback_rate_ = playback_rate;
+      return ResampleAndFill(dest, dest_offset, requested_frames,
+                             playback_rate);
+
+    case FillBufferMode::kWSOLA:
+      return RunWsolaAndFill(dest, dest_offset, requested_frames,
+                             playback_rate);
+  }
+}
+
+AudioRendererAlgorithm::FillBufferMode AudioRendererAlgorithm::ChooseBufferMode(
+    double playback_rate) {
+  // Always resample when we don't care about pitch. This prevents audio pops
+  // when `playback_rate` goes back & forth between 1.0 and non 1.0 values.
+  // This can happen when making minute adjustment to the playback rate, to fix
+  // timestamp drift between multiple clips.
+  // Always resampling does come at a small performance/memory cost.
+  if (!preserves_pitch_) {
+    return FillBufferMode::kResampler;
+  }
+
+  int slower_step = ceil(ola_window_size_ * playback_rate);
+  int faster_step = ceil(ola_window_size_ / playback_rate);
+
+  const bool is_playback_rate_almost_one =
+      ola_window_size_ <= faster_step && slower_step >= ola_window_size_;
+
+  // Optimize the most common `playback_rate` ~= 1 case to use a single copy
+  // instead of copying frame by frame.
+  if (is_playback_rate_almost_one) {
+    return FillBufferMode::kPassthrough;
+  }
+
+  return FillBufferMode::kWSOLA;
 }
 
 void AudioRendererAlgorithm::SetFillBufferMode(FillBufferMode mode) {
@@ -320,6 +377,7 @@ void AudioRendererAlgorithm::SetFillBufferMode(FillBufferMode mode) {
     if (wsola_output_)
       wsola_output_->Zero();
     num_complete_frames_ = 0;
+    effective_playback_rate_ = 0;
   }
   resampler_.reset();
 
@@ -354,7 +412,7 @@ void AudioRendererAlgorithm::EnqueueBuffer(
 }
 
 void AudioRendererAlgorithm::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+    std::optional<base::TimeDelta> latency_hint) {
   DCHECK_GE(playback_threshold_, min_playback_threshold_);
   DCHECK_LE(playback_threshold_, capacity_);
   DCHECK_LE(capacity_, max_capacity_);
@@ -442,6 +500,10 @@ double AudioRendererAlgorithm::DelayInFrames(double playback_rate) const {
   return unconverted_output_frames + num_complete_frames_;
 }
 
+std::optional<base::TimeDelta> AudioRendererAlgorithm::FrontTimestamp() const {
+  return audio_buffer_.FrontTimestamp();
+}
+
 bool AudioRendererAlgorithm::CanPerformWsola() const {
   const int search_block_size = num_candidate_blocks_ + (ola_window_size_ - 1);
   const int frames = audio_buffer_.frames();
@@ -456,20 +518,23 @@ bool AudioRendererAlgorithm::RunOneWsolaIteration(double playback_rate) {
   GetOptimalBlock();
 
   // Overlap-and-add.
+  const size_t ola_hop_size = base::checked_cast<size_t>(ola_hop_size_);
   for (int k = 0; k < channels_; ++k) {
     if (!channel_mask_[k])
       continue;
 
-    const float* const ch_opt_frame = optimal_block_->channel(k);
-    float* ch_output = wsola_output_->channel(k) + num_complete_frames_;
-    for (int n = 0; n < ola_hop_size_; ++n) {
-      ch_output[n] = ch_output[n] * ola_window_[ola_hop_size_ + n] +
+    const base::span<const float> ch_opt_frame = optimal_block_->channel(k);
+    base::span<float> ch_output = wsola_output_->channel(k).subspan(
+        static_cast<size_t>(num_complete_frames_));
+    for (size_t n = 0u; n < ola_hop_size; ++n) {
+      ch_output[n] = ch_output[n] * ola_window_[ola_hop_size + n] +
                      ch_opt_frame[n] * ola_window_[n];
     }
 
     // Copy the second half to the output.
-    memcpy(&ch_output[ola_hop_size_], &ch_opt_frame[ola_hop_size_],
-           sizeof(*ch_opt_frame) * ola_hop_size_);
+    ch_output.subspan(ola_hop_size, ola_hop_size)
+        .copy_from_nonoverlapping(
+            ch_opt_frame.subspan(ola_hop_size, ola_hop_size));
   }
 
   num_complete_frames_ += ola_hop_size_;
@@ -514,12 +579,13 @@ int AudioRendererAlgorithm::WriteCompletedFramesTo(
   wsola_output_->CopyPartialFramesTo(0, rendered_frames, dest_offset, dest);
 
   // Remove the frames which are read.
-  int frames_to_move = wsola_output_->frames() - rendered_frames;
+  size_t frames_to_move = wsola_output_->frames() - rendered_frames;
   for (int k = 0; k < channels_; ++k) {
     if (!channel_mask_[k])
       continue;
-    float* ch = wsola_output_->channel(k);
-    memmove(ch, &ch[rendered_frames], sizeof(*ch) * frames_to_move);
+    base::span<float> ch = wsola_output_->channel(k);
+    ch.copy_prefix_from(ch.subspan(base::checked_cast<size_t>(rendered_frames),
+                                   frames_to_move));
   }
   num_complete_frames_ -= rendered_frames;
   return rendered_frames;
@@ -574,8 +640,8 @@ void AudioRendererAlgorithm::GetOptimalBlock() {
     for (int k = 0; k < channels_; ++k) {
       if (!channel_mask_[k])
         continue;
-      float* ch_opt = optimal_block_->channel(k);
-      const float* const ch_target = target_block_->channel(k);
+      base::span<float> ch_opt = optimal_block_->channel(k);
+      const base::span<const float> ch_target = target_block_->channel(k);
       for (int n = 0; n < ola_window_size_; ++n) {
         ch_opt[n] = ch_opt[n] * transition_window_[n] +
                     ch_target[n] * transition_window_[ola_window_size_ + n];
@@ -608,8 +674,8 @@ void AudioRendererAlgorithm::PeekAudioWithZeroPrepend(
 void AudioRendererAlgorithm::CreateSearchWrappers() {
   // WSOLA is quite expensive to run, so if a channel mask exists, use it to
   // reduce the size of our search space.
-  std::vector<float*> active_target_channels;
-  std::vector<float*> active_search_channels;
+  AudioBus::ChannelVector active_target_channels;
+  AudioBus::ChannelVector active_search_channels;
   for (int ch = 0; ch < channels_; ++ch) {
     if (channel_mask_[ch]) {
       active_target_channels.push_back(target_block_->channel(ch));
@@ -617,10 +683,19 @@ void AudioRendererAlgorithm::CreateSearchWrappers() {
     }
   }
 
+  auto create_wrapper_bus = [](const AudioBus::ChannelVector& channels,
+                               int frames) {
+    auto bus = AudioBus::CreateWrapper(channels.size());
+    bus->set_frames(frames);
+    bus->SetAllChannels(channels);
+    return bus;
+  };
+
   target_block_wrapper_ =
-      AudioBus::WrapVector(target_block_->frames(), active_target_channels);
+      create_wrapper_bus(active_target_channels, target_block_->frames());
+
   search_block_wrapper_ =
-      AudioBus::WrapVector(search_block_->frames(), active_search_channels);
+      create_wrapper_bus(active_search_channels, search_block_->frames());
 }
 
 void AudioRendererAlgorithm::SetPreservesPitch(bool preserves_pitch) {

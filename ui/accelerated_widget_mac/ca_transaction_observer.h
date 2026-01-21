@@ -7,11 +7,10 @@
 
 #include <set>
 
-#include "base/callback.h"
+#include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
-
 #include "ui/accelerated_widget_mac/accelerated_widget_mac_export.h"
 
 namespace ui {
@@ -59,7 +58,7 @@ class ACCELERATED_WIDGET_MAC_EXPORT CATransactionCoordinator {
     virtual bool ShouldWaitInPostCommit() = 0;
 
    protected:
-    virtual ~PostCommitObserver() {}
+    virtual ~PostCommitObserver() = default;
 
    private:
     friend class base::RefCountedThreadSafe<PostCommitObserver>;

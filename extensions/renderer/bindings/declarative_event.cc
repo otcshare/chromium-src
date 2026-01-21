@@ -97,13 +97,11 @@ std::unique_ptr<APISignature> BuildAddRulesSignature(
   auto returns_async = std::make_unique<APISignature::ReturnsAsync>();
   returns_async->optional = true;
 
-  return std::make_unique<APISignature>(
-      std::move(params), std::move(returns_async), nullptr /*access_checker*/);
+  return std::make_unique<APISignature>(std::move(params),
+                                        std::move(returns_async));
 }
 
 }  // namespace
-
-gin::WrapperInfo DeclarativeEvent::kWrapperInfo = {gin::kEmbedderNativeGin};
 
 DeclarativeEvent::DeclarativeEvent(
     const std::string& name,
@@ -137,21 +135,25 @@ DeclarativeEvent::DeclarativeEvent(
   }
 }
 
-DeclarativeEvent::~DeclarativeEvent() {}
+DeclarativeEvent::~DeclarativeEvent() = default;
 
 gin::ObjectTemplateBuilder DeclarativeEvent::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
-  return Wrappable<DeclarativeEvent>::GetObjectTemplateBuilder(isolate)
+  return gin::Wrappable<DeclarativeEvent>::GetObjectTemplateBuilder(isolate)
       .SetMethod("addRules", &DeclarativeEvent::AddRules)
       .SetMethod("removeRules", &DeclarativeEvent::RemoveRules)
       .SetMethod("getRules", &DeclarativeEvent::GetRules);
 }
 
-const char* DeclarativeEvent::GetTypeName() {
+const char* DeclarativeEvent::GetHumanReadableName() const {
   // NOTE(devlin): Currently, our documentation does not differentiate between
   // "normal" events and declarative events. Use "Event" here so that developers
   // don't think there's separate documentation to look for.
   return "Event";
+}
+
+const gin::WrapperInfo* DeclarativeEvent::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 void DeclarativeEvent::AddRules(gin::Arguments* arguments) {
@@ -179,7 +181,7 @@ void DeclarativeEvent::HandleFunction(const std::string& signature_name,
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = arguments->GetHolderCreationContext();
 
-  std::vector<v8::Local<v8::Value>> argument_list = arguments->GetAll();
+  v8::LocalVector<v8::Value> argument_list = arguments->GetAll();
 
   // The events API has two undocumented parameters for each function: the name
   // of the event, and the "webViewInstanceId". Currently, stub 0 for webview

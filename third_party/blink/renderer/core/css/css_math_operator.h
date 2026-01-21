@@ -19,11 +19,37 @@ enum class CSSMathOperator {
   kMin,
   kMax,
   kClamp,
+  kRoundNearest,
+  kRoundUp,
+  kRoundDown,
+  kRoundToZero,
+  kMod,
+  kRem,
+  kHypot,
+  kAbs,
+  kSign,
+  kLog,
+  kExp,
+  kSqrt,
+  kProgress,
+  kCalcSize,
+  kMediaProgress,
+  kContainerProgress,
+  kPow,
+  kSin,
+  kCos,
+  kTan,
+  kAsin,
+  kAcos,
+  kAtan,
+  kAtan2,
+  kInvert,
   kInvalid
 };
 
 CSSMathOperator ParseCSSArithmeticOperator(const CSSParserToken& token);
-String ToString(CSSMathOperator);
+StringView ToString(CSSMathOperator);
+StringView ToRoundingStrategyString(CSSMathOperator);
 
 bool IsComparison(CSSMathOperator);
 

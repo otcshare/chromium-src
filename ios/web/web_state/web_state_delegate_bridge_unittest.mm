@@ -8,8 +8,8 @@
 
 #import <memory>
 
-#import "base/bind.h"
-#import "base/callback_helpers.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
 #import "base/strings/utf_string_conversions.h"
 #import "ios/web/public/test/crw_fake_web_state_delegate.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
@@ -20,13 +20,9 @@
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/page_transition_types.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 // Class which conforms to CRWWebStateDelegate protocol, but does not implement
 // any optional methods.
-@interface TestEmptyWebStateDelegate : NSObject<CRWWebStateDelegate>
+@interface TestEmptyWebStateDelegate : NSObject <CRWWebStateDelegate>
 @end
 
 @implementation TestEmptyWebStateDelegate
@@ -47,9 +43,7 @@ class WebStateDelegateBridgeTest : public PlatformTest {
     empty_delegate_bridge_.reset(new WebStateDelegateBridge(empty_delegate_));
   }
 
-  void TearDown() override {
-    PlatformTest::TearDown();
-  }
+  void TearDown() override { PlatformTest::TearDown(); }
 
   CRWFakeWebStateDelegate* delegate_;
   id empty_delegate_;
@@ -112,7 +106,8 @@ TEST_F(WebStateDelegateBridgeTest, ShowRepostFormWarningDialog) {
   EXPECT_FALSE([delegate_ repostFormWarningRequested]);
   EXPECT_FALSE([delegate_ webState]);
   base::OnceCallback<void(bool)> callback;
-  bridge_->ShowRepostFormWarningDialog(&fake_web_state_, std::move(callback));
+  bridge_->ShowRepostFormWarningDialog(
+      &fake_web_state_, web::FormWarningType::kRepost, std::move(callback));
   EXPECT_TRUE([delegate_ repostFormWarningRequested]);
   EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
@@ -122,7 +117,8 @@ TEST_F(WebStateDelegateBridgeTest, ShowRepostFormWarningDialog) {
 TEST_F(WebStateDelegateBridgeTest, ShowRepostFormWarningWithNoDelegateMethod) {
   __block bool callback_called = false;
   empty_delegate_bridge_->ShowRepostFormWarningDialog(
-      nullptr, base::BindOnce(^(bool should_repost) {
+      nullptr, web::FormWarningType::kRepost,
+      base::BindOnce(^(bool should_repost) {
         EXPECT_TRUE(should_repost);
         callback_called = true;
       }));
@@ -136,6 +132,38 @@ TEST_F(WebStateDelegateBridgeTest, GetJavaScriptDialogPresenter) {
   EXPECT_TRUE([delegate_ javaScriptDialogPresenterRequested]);
 }
 
+// Tests `HandlePermissionsDecisionRequest` forwarding.
+TEST_F(WebStateDelegateBridgeTest, HandlePermissionsDecisionRequest) {
+  __block bool callback_called = false;
+  EXPECT_FALSE([delegate_ permissionsRequestHandled]);
+  EXPECT_FALSE([delegate_ webState]);
+  bridge_->HandlePermissionsDecisionRequest(
+      &fake_web_state_, @[], ^(PermissionDecision decision) {
+        EXPECT_EQ(decision, PermissionDecisionGrant);
+        callback_called = true;
+      });
+  EXPECT_TRUE([delegate_ permissionsRequestHandled]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `HandlePermissionsDecisionRequest` forwarding to delegate which does
+// not implement `webState:handlePermissions:decisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest,
+       HandlePermissionsDecisionRequestWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->HandlePermissionsDecisionRequest(
+      nullptr, @[], ^(PermissionDecision decision) {
+        // Default decision `PermissionDecisionShowDefaultPrompt` will be used
+        // when delegate doesn't implement
+        // `webState:handlePermissions:decisionHandler:` method to handle the
+        // permissions.
+        EXPECT_EQ(decision, PermissionDecisionShowDefaultPrompt);
+        callback_called = true;
+      });
+  EXPECT_TRUE(callback_called);
+}
+
 // Tests `OnAuthRequired` forwarding.
 TEST_F(WebStateDelegateBridgeTest, OnAuthRequired) {
   EXPECT_FALSE([delegate_ authenticationRequested]);
@@ -146,6 +174,93 @@ TEST_F(WebStateDelegateBridgeTest, OnAuthRequired) {
   bridge_->OnAuthRequired(&fake_web_state_, protection_space, credential,
                           std::move(callback));
   EXPECT_TRUE([delegate_ authenticationRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+}
+
+// Tests `ShouldAllowCopy` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCopy) {
+  ASSERT_FALSE([delegate_ copyAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowCopy(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ copyAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCopy` forwarding to delegate which does not
+// implement `webState:shouldAllowCopyWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCopyWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowCopy(nullptr,
+                                          base::BindOnce(^(bool allowed) {
+                                            EXPECT_TRUE(allowed);
+                                            callback_called = true;
+                                          }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowPaste` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowPaste) {
+  ASSERT_FALSE([delegate_ pasteAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowPaste(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ pasteAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowPaste` forwarding to delegate which does not
+// implement `webState:shouldAllowPasteWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowPasteWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowPaste(nullptr,
+                                           base::BindOnce(^(bool allowed) {
+                                             EXPECT_TRUE(allowed);
+                                             callback_called = true;
+                                           }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCut` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCut) {
+  ASSERT_FALSE([delegate_ cutAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowCut(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ cutAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCut` forwarding to delegate which does not
+// implement `webState:shouldAllowCutWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCutWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowCut(nullptr,
+                                         base::BindOnce(^(bool allowed) {
+                                           EXPECT_TRUE(allowed);
+                                           callback_called = true;
+                                         }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `DidFinishClipboardRead` forwarding.
+TEST_F(WebStateDelegateBridgeTest, DidFinishClipboardRead) {
+  EXPECT_FALSE([delegate_ didFinishClipboardReadRequested]);
+  EXPECT_FALSE([delegate_ webState]);
+  bridge_->DidFinishClipboardRead(&fake_web_state_);
+  EXPECT_TRUE([delegate_ didFinishClipboardReadRequested]);
   EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
 

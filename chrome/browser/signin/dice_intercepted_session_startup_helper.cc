@@ -4,11 +4,11 @@
 
 #include "chrome/browser/signin/dice_intercepted_session_startup_helper.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/signin/public/base/multilogin_parameters.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/accounts_cookie_mutator.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/set_accounts_in_cookie_result.h"
@@ -32,8 +33,8 @@ namespace {
 bool CookieInfoContains(const signin::AccountsInCookieJarInfo& cookie_info,
                         const CoreAccountId& account_id) {
   const std::vector<gaia::ListedAccount>& accounts =
-      cookie_info.signed_in_accounts;
-  return base::Contains(accounts, account_id, &gaia::ListedAccount::id);
+      cookie_info.GetPotentiallyInvalidSignedInAccounts();
+  return std::ranges::contains(accounts, account_id, &gaia::ListedAccount::id);
 }
 
 }  // namespace
@@ -64,7 +65,7 @@ void DiceInterceptedSessionStartupHelper::Startup(base::OnceClosure callback) {
       IdentityManagerFactory::GetForProfile(profile_);
   signin::AccountsInCookieJarInfo cookie_info =
       identity_manager->GetAccountsInCookieJar();
-  if (cookie_info.accounts_are_fresh &&
+  if (cookie_info.AreAccountsFresh() &&
       CookieInfoContains(cookie_info, account_id_)) {
     MoveTab();
   } else {
@@ -90,8 +91,9 @@ void DiceInterceptedSessionStartupHelper::OnAccountsInCookieUpdated(
     const GoogleServiceAuthError& error) {
   if (error != GoogleServiceAuthError::AuthErrorNone())
     return;
-  if (!accounts_in_cookie_jar_info.accounts_are_fresh)
+  if (!accounts_in_cookie_jar_info.AreAccountsFresh()) {
     return;
+  }
   if (!CookieInfoContains(accounts_in_cookie_jar_info, account_id_))
     return;
 
@@ -101,14 +103,14 @@ void DiceInterceptedSessionStartupHelper::OnAccountsInCookieUpdated(
 void DiceInterceptedSessionStartupHelper::OnStateChanged(
     signin_metrics::AccountReconcilorState state) {
   DCHECK(!use_multilogin_);
-  if (state == signin_metrics::ACCOUNT_RECONCILOR_ERROR) {
+  if (state == signin_metrics::AccountReconcilorState::kError) {
     reconcile_error_encountered_ = true;
     return;
   }
 
-  // TODO(https://crbug.com/1051864): remove this when the cookie updates are
+  // TODO(crbug.com/40673982): remove this when the cookie updates are
   // correctly sent after reconciliation.
-  if (state == signin_metrics::ACCOUNT_RECONCILOR_OK) {
+  if (state == signin_metrics::AccountReconcilorState::kOk) {
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(profile_);
     // GetAccountsInCookieJar() automatically re-schedules a /ListAccounts call
@@ -139,7 +141,7 @@ void DiceInterceptedSessionStartupHelper::StartupMultilogin(
 
 void DiceInterceptedSessionStartupHelper::StartupReconcilor(
     signin::IdentityManager* identity_manager) {
-  // TODO(https://crbug.com/1051864): cookie notifications are not triggered
+  // TODO(crbug.com/40673982): cookie notifications are not triggered
   // when the account is added by the reconcilor. Observe the reconcilor and
   // re-trigger the cookie update when it completes.
   reconcilor_observer_.Observe(

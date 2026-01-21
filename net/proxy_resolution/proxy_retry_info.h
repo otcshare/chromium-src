@@ -8,22 +8,16 @@
 #include <map>
 
 #include "base/time/time.h"
+#include "net/base/proxy_chain.h"
 
 namespace net {
 
-// Contains the information about when to retry a proxy server.
+// Contains the information about when to retry a particular proxy chain.
 struct ProxyRetryInfo {
   ProxyRetryInfo() = default;
 
   // We should not retry until this time.
   base::TimeTicks bad_until;
-
-  // This is the current delay. If the proxy is still bad, we need to increase
-  // this delay.
-  base::TimeDelta current_delay;
-
-  // True if this proxy should be considered even if still bad.
-  bool try_while_bad = true;
 
   // The network error received when this proxy failed, or |OK| if the proxy
   // was added to the retry list for a non-network related reason. (e.g. local
@@ -31,9 +25,8 @@ struct ProxyRetryInfo {
   int net_error = 0;
 };
 
-// Map of proxy servers with the associated RetryInfo structures.
-// The key is a proxy URI string [<scheme>"://"]<host>":"<port>.
-typedef std::map<std::string, ProxyRetryInfo> ProxyRetryInfoMap;
+// Map of previously failed ProxyChains to the associated RetryInfo structures.
+typedef std::map<ProxyChain, ProxyRetryInfo> ProxyRetryInfoMap;
 
 }  // namespace net
 

@@ -6,7 +6,8 @@
 #define CHROMEOS_ASH_COMPONENTS_PROXIMITY_AUTH_UNLOCK_MANAGER_IMPL_H_
 
 #include "ash/public/cpp/smartlock_state.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -43,8 +44,7 @@ class UnlockManagerImpl : public UnlockManager,
  public:
   // The |proximity_auth_client| is not owned and should outlive the constructed
   // unlock manager.
-  UnlockManagerImpl(ProximityAuthSystem::ScreenlockType screenlock_type,
-                    ProximityAuthClient* proximity_auth_client);
+  explicit UnlockManagerImpl(ProximityAuthClient* proximity_auth_client);
 
   UnlockManagerImpl(const UnlockManagerImpl&) = delete;
   UnlockManagerImpl& operator=(const UnlockManagerImpl&) = delete;
@@ -76,10 +76,13 @@ class UnlockManagerImpl : public UnlockManager,
     PRIMARY_USER_ABSENT,
   };
 
-  // This enum is tied directly to a UMA enum defined in
-  // //tools/metrics/histograms/enums.xml, and should always reflect it (do not
-  // change one without changing the other). Entries should be never modified
-  // or deleted. Only additions possible.
+  // This enum is tied directly to the
+  // SmartLockGetRemoteStatusResultFailureReason UMA enum defined in
+  // //tools/metrics/histograms/metadata/cross_device/enums.xml, and should
+  // always reflect it (do not change one without changing the other). Entries
+  // should be never modified or deleted. Only additions possible.
+  //
+  // LINT.IfChange(SmartLockGetRemoteStatusResultFailureReason)
   enum class GetRemoteStatusResultFailureReason {
     kCanceledBluetoothDisabled = 0,
     kDeprecatedTimedOutCouldNotEstablishAuthenticatedChannel = 1,
@@ -89,11 +92,11 @@ class UnlockManagerImpl : public UnlockManager,
     kAuthenticatedChannelDropped = 5,
     kMaxValue = kAuthenticatedChannelDropped
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/cross_device/enums.xml:SmartLockGetRemoteStatusResultFailureReason)
 
   // MessengerObserver:
   void OnUnlockEventSent(bool success) override;
   void OnRemoteStatusUpdate(const RemoteStatusUpdate& status_update) override;
-  void OnDecryptResponse(const std::string& decrypted_bytes) override;
   void OnUnlockResponse(bool success) override;
   void OnDisconnected() override;
 
@@ -144,19 +147,6 @@ class UnlockManagerImpl : public UnlockManager,
   // if Bluetooth is available).
   void AttemptToStartRemoteDeviceLifecycle();
 
-  // Called when auth is attempted to send the sign-in challenge to the remote
-  // device for decryption.
-  void SendSignInChallenge();
-
-  // Once the connection metadata is received from a ClientChannel, its channel
-  // binding data can be used to finish a sign-in request.
-  void OnGetConnectionMetadata(ash::secure_channel::mojom::ConnectionMetadataPtr
-                                   connection_metadata_ptr);
-
-  // Called with the sign-in |challenge| so we can send it to the remote device
-  // for decryption.
-  void OnGotSignInChallenge(const std::string& challenge);
-
   // Returns the current state for the Smart Lock UI.
   ash::SmartLockState GetSmartLockState();
 
@@ -175,7 +165,7 @@ class UnlockManagerImpl : public UnlockManager,
   // if and only if |error| is empty. If the auth attempt is accepted, unlocks
   // the screen.
   void FinalizeAuthAttempt(
-      const absl::optional<
+      const std::optional<
           SmartLockMetricsRecorder::SmartLockAuthResultFailureReason>& error);
 
   // Failed to create a connection to the host during the "initial scan". See
@@ -208,20 +198,14 @@ class UnlockManagerImpl : public UnlockManager,
       std::unique_ptr<base::OneShotTimer> timer);
 
   // For recording metrics.
-  void RecordGetRemoteStatusResultSuccess(
-      ProximityAuthSystem::ScreenlockType screenlock_type,
-      bool success = true);
+  void RecordGetRemoteStatusResultSuccess(bool success = true);
   void RecordGetRemoteStatusResultFailure(
-      ProximityAuthSystem::ScreenlockType screenlock_type,
       GetRemoteStatusResultFailureReason failure_reason);
   std::string GetRemoteStatusResultFailureReasonToString(
       GetRemoteStatusResultFailureReason reason);
 
-  // Whether |this| manager is being used for sign-in or session unlock.
-  const ProximityAuthSystem::ScreenlockType screenlock_type_;
-
   // Used to call into the embedder. Expected to outlive |this| instance.
-  ProximityAuthClient* proximity_auth_client_;
+  raw_ptr<ProximityAuthClient> proximity_auth_client_;
 
   // Starts running after resuming from suspension, and fires once enough time
   // has elapsed such that the BluetoothAdapter's presence and power values can
@@ -240,13 +224,9 @@ class UnlockManagerImpl : public UnlockManager,
   // update has yet been received.
   std::unique_ptr<RemoteScreenlockState> remote_screenlock_state_;
 
-  // The sign-in secret received from the remote device by decrypting the
-  // sign-in challenge.
-  std::unique_ptr<std::string> sign_in_secret_;
-
   // Controls the proximity auth flow logic for a remote device. Not owned, and
   // expcted to outlive |this| instance.
-  RemoteDeviceLifeCycle* life_cycle_ = nullptr;
+  raw_ptr<RemoteDeviceLifeCycle> life_cycle_ = nullptr;
 
   // True if the manager is currently processing a user-initiated authentication
   // attempt, which is initiated when the user pod is clicked.
@@ -301,8 +281,8 @@ class UnlockManagerImpl : public UnlockManager,
   // Stores the last value emitted to the
   // SmartLock.GetRemoteStatus.Unlock(.Failure) metrics. Should be |nullopt|
   // until the first time GetRemoteStatus succeeds or fails.
-  absl::optional<bool> get_remote_status_unlock_success_;
-  absl::optional<GetRemoteStatusResultFailureReason>
+  std::optional<bool> get_remote_status_unlock_success_;
+  std::optional<GetRemoteStatusResultFailureReason>
       get_remote_status_unlock_failure_reason_;
 
   // Used to track if the "initial scan" has timed out. See

@@ -4,6 +4,8 @@
 
 #include "ui/base/ime/mojom/ime_types_mojom_traits.h"
 
+#include "base/notreached.h"
+
 namespace mojo {
 
 #define UI_TO_MOJO_ACTION_CASE(name) \
@@ -130,7 +132,6 @@ EnumTraits<ui::mojom::TextInputType, ui::TextInputType>::ToMojom(
       return ui::mojom::TextInputType::TYPE_NULL;
   }
   NOTREACHED();
-  return ui::mojom::TextInputType::NONE;
 }
 
 #undef UI_TO_MOJO_TYPE_CASE
@@ -193,6 +194,7 @@ bool StructTraits<ui::mojom::ImeTextSpanDataView, ui::ImeTextSpan>::Read(
   out->interim_char_selection = data.interim_char_selection();
   if (!data.ReadSuggestions(&out->suggestions))
     return false;
+  out->should_hide_suggestion_menu = data.should_hide_suggestion_menu();
   return true;
 }
 
@@ -214,7 +216,6 @@ EnumTraits<ui::mojom::ImeTextSpanType, ui::ImeTextSpan::Type>::ToMojom(
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanType::kComposition;
 }
 
 // static
@@ -240,7 +241,6 @@ bool EnumTraits<ui::mojom::ImeTextSpanType, ui::ImeTextSpan::Type>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -257,7 +257,6 @@ ui::mojom::ImeTextSpanThickness EnumTraits<
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanThickness::kThin;
 }
 
 // static
@@ -277,7 +276,6 @@ bool EnumTraits<ui::mojom::ImeTextSpanThickness, ui::ImeTextSpan::Thickness>::
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -299,7 +297,6 @@ ui::mojom::ImeTextSpanUnderlineStyle EnumTraits<
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanUnderlineStyle::kSolid;
 }
 
 // static
@@ -326,7 +323,6 @@ bool EnumTraits<ui::mojom::ImeTextSpanUnderlineStyle,
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

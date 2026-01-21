@@ -27,7 +27,8 @@
 
 #include "third_party/blink/renderer/core/xml/xpath_functions.h"
 
-#include "base/cxx17_backports.h"
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/processing_instruction.h"
@@ -309,16 +310,22 @@ inline bool Interval::Contains(int value) const {
   return value >= min_ && value <= max_;
 }
 
-void Function::SetArguments(HeapVector<Member<Expression>>& args) {
+void Function::SetArguments(GCedHeapVector<Member<Expression>>* args) {
   DCHECK(!SubExprCount());
+
+  if (!args) {
+    return;
+  }
 
   // Some functions use context node as implicit argument, so when explicit
   // arguments are added, they may no longer be context node sensitive.
-  if (name_ != "lang" && !args.empty())
+  if (name_ != "lang" && !args->empty()) {
     SetIsContextNodeSensitive(false);
+  }
 
-  for (Expression* arg : args)
+  for (Expression* arg : *args) {
     AddSubExpression(arg);
+  }
 }
 
 Value FunLast::Evaluate(EvaluationContext& context) const {
@@ -417,7 +424,7 @@ static inline String ExpandedName(Node* node) {
   }
 
   return prefix.empty() ? ExpandedNameLocalPart(node)
-                        : prefix + ":" + ExpandedNameLocalPart(node);
+                        : StrCat({prefix, ":", ExpandedNameLocalPart(node)});
 }
 
 Value FunLocalName::Evaluate(EvaluationContext& context) const {
@@ -545,8 +552,8 @@ static std::pair<unsigned, unsigned> ComputeSubstringStartEnd(double start,
   if (std::isnan(start) || std::isnan(end))
     return std::make_pair(1, 1);
   // Neither start nor end are NaN, but may still be +/- Inf
-  const double clamped_start = base::clamp<double>(start, 1, max_len + 1);
-  const double clamped_end = base::clamp(end, clamped_start, max_len + 1);
+  const double clamped_start = std::clamp<double>(start, 1, max_len + 1);
+  const double clamped_end = std::clamp(end, clamped_start, max_len + 1);
   return std::make_pair(static_cast<unsigned>(clamped_start),
                         static_cast<unsigned>(clamped_end));
 }
@@ -640,18 +647,9 @@ Value FunLang::Evaluate(EvaluationContext& context) const {
     return false;
 
   String lang_value = language_attribute->Value();
-  while (true) {
-    if (DeprecatedEqualIgnoringCase(lang_value, lang))
-      return true;
-
-    // Remove suffixes one by one.
-    wtf_size_t index = lang_value.ReverseFind('-');
-    if (index == kNotFound)
-      break;
-    lang_value = lang_value.Left(index);
-  }
-
-  return false;
+  return lang_value.StartsWithIgnoringASCIICase(lang) &&
+         (lang.length() == lang_value.length() ||
+          lang_value[lang.length()] == '-');
 }
 
 Value FunFalse::Evaluate(EvaluationContext&) const {
@@ -690,7 +688,7 @@ Value FunCeiling::Evaluate(EvaluationContext& context) const {
 }
 
 double FunRound::Round(double val) {
-  if (!std::isnan(val) && !std::isinf(val)) {
+  if (std::isfinite(val)) {
     if (std::signbit(val) && val >= -0.5)
       val *= 0;  // negative zero
     else
@@ -746,12 +744,11 @@ static void CreateFunctionMap() {
 }
 
 Function* CreateFunction(const String& name) {
-  HeapVector<Member<Expression>> args;
-  return CreateFunction(name, args);
+  return CreateFunction(name, nullptr);
 }
 
 Function* CreateFunction(const String& name,
-                         HeapVector<Member<Expression>>& args) {
+                         GCedHeapVector<Member<Expression>>* args) {
   if (!g_function_map)
     CreateFunctionMap();
 
@@ -760,8 +757,10 @@ Function* CreateFunction(const String& name,
   FunctionRec* function_rec = nullptr;
 
   if (function_map_iter == g_function_map->end() ||
-      !(function_rec = &function_map_iter->value)->args.Contains(args.size()))
+      !(function_rec = &function_map_iter->value)
+           ->args.Contains(args ? args->size() : 0)) {
     return nullptr;
+  }
 
   Function* function = function_rec->factory_fn();
   function->SetArguments(args);

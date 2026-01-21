@@ -8,6 +8,7 @@
 
 #include "base/check.h"
 #include "base/run_loop.h"
+#include "net/base/net_errors.h"
 #include "net/socket/stream_socket.h"
 #include "net/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"

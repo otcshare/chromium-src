@@ -7,10 +7,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/task/single_thread_task_runner.h"
 #include "cc/raster/raster_buffer.h"
 #include "cc/raster/synchronous_task_graph_runner.h"
@@ -28,7 +28,7 @@ SynchronousTaskGraphRunner* GetGlobalTaskGraphRunner() {
 }
 
 FakeRasterBufferProviderImpl* GetGlobalRasterBufferProvider() {
-  static auto* buffer_provider = new FakeRasterBufferProviderImpl;
+  static auto* buffer_provider = new FakeRasterBufferProviderImpl();
   return buffer_provider;
 }
 
@@ -40,6 +40,7 @@ FakeTileManager::FakeTileManager(TileManagerClient* client,
                   base::SingleThreadTaskRunner::GetCurrentDefault().get(),
                   nullptr,
                   std::numeric_limits<size_t>::max(),
+                  false,
                   TileManagerSettings()),
       image_decode_cache_(
           kN32_SkColorType,
@@ -53,7 +54,7 @@ FakeTileManager::FakeTileManager(TileManagerClient* client,
 FakeTileManager::~FakeTileManager() = default;
 
 bool FakeTileManager::HasBeenAssignedMemory(Tile* tile) {
-  return base::Contains(tiles_for_raster, tile);
+  return std::ranges::contains(tiles_for_raster, tile);
 }
 
 }  // namespace cc

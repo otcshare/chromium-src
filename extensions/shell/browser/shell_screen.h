@@ -5,6 +5,7 @@
 #ifndef EXTENSIONS_SHELL_BROWSER_SHELL_SCREEN_H_
 #define EXTENSIONS_SHELL_BROWSER_SHELL_SCREEN_H_
 
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window_tree_host_observer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen_base.h"
@@ -25,7 +26,7 @@ class ShellDesktopControllerAura;
 class ShellScreen : public display::ScreenBase,
                     public aura::WindowTreeHostObserver {
  public:
-  // Creates a screen occupying |size| physical pixels. |desktop_controller|
+  // Creates a screen occupying `size` physical pixels. `desktop_controller`
   // can be null in tests.
   ShellScreen(ShellDesktopControllerAura* desktop_controller,
               const gfx::Size& size);
@@ -46,7 +47,7 @@ class ShellScreen : public display::ScreenBase,
       gfx::NativeWindow window) const override;
 
  private:
-  ShellDesktopControllerAura* const desktop_controller_;
+  const raw_ptr<ShellDesktopControllerAura> desktop_controller_;
 };
 
 }  // namespace extensions

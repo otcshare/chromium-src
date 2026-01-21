@@ -9,13 +9,21 @@
 #include <string>
 #include <utility>
 
-#include "base/callback_forward.h"
+#include "base/feature_list.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
+#include "build/android_buildflags.h"
+#include "build/buildflag.h"
+#include "chrome/browser/media/webrtc/capture_policy_utils.h"
+#include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class DesktopMediaList;
 
@@ -23,15 +31,34 @@ namespace content {
 class WebContents;
 }
 
+#if BUILDFLAG(IS_ANDROID)
+BASE_DECLARE_FEATURE(kAndroidMediaPicker);
+#endif
+
 // Base class for desktop media picker UI. It's used by Desktop Media API, and
 // by ARC to let user choose a desktop media source.
 //
-// TODO(crbug.com/987001): Rename this class.
+// TODO(crbug.com/40637301): Rename this class.
 class DesktopMediaPicker {
  public:
-  using DoneCallback = base::OnceCallback<void(content::DesktopMediaID id)>;
+  using DoneCallbackArgumentType =
+      base::expected<content::DesktopMediaID,
+                     blink::mojom::MediaStreamRequestResult>;
+  using DoneCallback = base::OnceCallback<void(DoneCallbackArgumentType)>;
 
   struct Params {
+    // Possible sources of the request.
+    enum class RequestSource {
+      kUnknown,
+      kCast,
+      kExtension,
+      kGetDisplayMedia,
+      kScreenshotDataCollector,
+      kArcScreenCapture,
+      kGlic
+    };
+
+    explicit Params(RequestSource request_source);
     Params();
     Params(const Params&);
     Params& operator=(const Params&);
@@ -41,11 +68,11 @@ class DesktopMediaPicker {
     raw_ptr<content::WebContents> web_contents = nullptr;
     // The context whose root window is used for dialog placement, cannot be
     // null for Aura.
-    gfx::NativeWindow context = nullptr;
+    gfx::NativeWindow context = gfx::NativeWindow();
     // Parent window the dialog is relative to, only used on Mac.
-    gfx::NativeWindow parent = nullptr;
+    gfx::NativeWindow parent = gfx::NativeWindow();
     // The modality used for showing the dialog.
-    ui::ModalType modality = ui::ModalType::MODAL_TYPE_CHILD;
+    ui::mojom::ModalType modality = ui::mojom::ModalType::kChild;
     // The name used in the dialog for what is requesting the picker to be
     // shown.
     std::u16string app_name;
@@ -55,10 +82,15 @@ class DesktopMediaPicker {
     std::u16string target_name;
     // Whether audio capture should be shown as an option in the picker.
     bool request_audio = false;
-    // If audio is requested, |exclude_system_audio| can indicate that
-    // system-audio should nevertheless not be offered to the user.
+    // If audio is requested, |exclude_system_audio| indicates that
+    // audio should not be offered to the user when sharing a window surface.
     // Mutually exclusive with |force_audio_checkboxes_to_default_checked|.
     bool exclude_system_audio = false;
+    // If audio is requested, |window_audio_preference| can indicate that
+    // audio should be offered to the user when sharing a window surface.
+    // Mutually exclusive with |force_audio_checkboxes_to_default_checked|.
+    blink::mojom::WindowAudioPreference window_audio_preference =
+        blink::mojom::WindowAudioPreference::kExclude;
     // Normally, the media-picker sets the default states for the audio
     // checkboxes. If |force_audio_checkboxes_to_default_checked| is |true|,
     // it sets them all to |checked|. This is used by Chromecasting.
@@ -67,6 +99,9 @@ class DesktopMediaPicker {
     // Indicates that, if audio ends up being captured, then local playback
     // over the user's local speakers should be suppressed.
     bool suppress_local_audio_playback = false;
+    // Captured audio should not include audio originating from the document
+    // that called getDisplayMedia.
+    bool restrict_own_audio = false;
     // This flag controls the behvior in the case where the picker is invoked to
     // select a screen and there is only one screen available.  If true, the
     // dialog is bypassed entirely and the screen is automatically selected.
@@ -82,18 +117,32 @@ class DesktopMediaPicker {
     // picker.
     blink::mojom::PreferredDisplaySurface preferred_display_surface =
         blink::mojom::PreferredDisplaySurface::NO_PREFERENCE;
-    // True if the source of the call is getDisplayMedia(), false if it's
-    // another source, like an extension or ARC. This is useful for UMA that
+    // `includable_web_contents_filter` is used to restrict any
+    // DesktopMediaList::Type::kWebContents sources. It should return true if a
+    // given WebContents is a valid target, or false if it should be excluded.
+    DesktopMediaList::WebContentsFilter includable_web_contents_filter;
+#if BUILDFLAG(IS_ANDROID)
+    // On Android, this indicates that this is a request to share the current
+    // tab.
+    bool capture_this_tab = false;
+    // On Android, this indicates that the current tab should be excluded.
+    bool exclude_self_browser_surface = false;
+    // On Android, this indicates that screen sharing should be excluded.
+    bool exclude_monitor_type_surfaces = false;
+    // On Android, this indicates the allowed capture level for this request.
+    AllowedScreenCaptureLevel allowed_capture_level =
+        AllowedScreenCaptureLevel::kUnrestricted;
+#endif
     // track the result of the picker, because the behavior with the
     // Extension API is different, and could therefore lead to mismeasurement.
-    bool is_get_display_media_call = false;
+    RequestSource request_source = RequestSource::kUnknown;
   };
 
   // Creates a picker dialog/confirmation box depending on the value of
   // |request|. If no request is available the default picker, namely
-  // DesktopMediaPickerViews is used.
+  // DesktopMediaPickerImpl is used.
   static std::unique_ptr<DesktopMediaPicker> Create(
-      const content::MediaStreamRequest* request = nullptr);
+      const content::MediaStreamRequest* request);
 
   DesktopMediaPicker() = default;
 

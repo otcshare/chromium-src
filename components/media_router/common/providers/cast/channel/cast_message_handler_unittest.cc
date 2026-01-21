@@ -3,19 +3,24 @@
 // found in the LICENSE file.
 
 #include "components/media_router/common/providers/cast/channel/cast_message_handler.h"
-#include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <string>
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/test/values_test_util.h"
+#include "components/media_router/common/providers/cast/channel/cast_channel_enum.h"
+#include "components/media_router/common/providers/cast/channel/cast_channel_metrics.h"
 #include "components/media_router/common/providers/cast/channel/cast_message_util.h"
 #include "components/media_router/common/providers/cast/channel/cast_test_util.h"
 #include "content/public/test/browser_task_environment.h"
@@ -60,31 +65,34 @@ constexpr char kAppParams[] = R"(
 constexpr int kMaxProtocolMessageSize = 64 * 1024;
 
 data_decoder::DataDecoder::ValueOrError ParseJsonLikeDataDecoder(
-    base::StringPiece json) {
+    std::string_view json) {
   return ParseJson(json);
 }
 
-absl::optional<base::Value::Dict> GetDictionaryFromCastMessage(
+std::optional<base::Value::Dict> GetDictionaryFromCastMessage(
     const CastMessage& message) {
-  if (!message.has_payload_utf8())
-    return absl::nullopt;
+  if (!message.has_payload_utf8()) {
+    return std::nullopt;
+  }
 
-  absl::optional<base::Value> value =
-      base::JSONReader::Read(message.payload_utf8());
-  if (!value || !value->is_dict())
-    return absl::nullopt;
-  return std::move(*value).TakeDict();
+  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+      message.payload_utf8(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 CastMessageType GetMessageType(const CastMessage& message) {
-  absl::optional<base::Value::Dict> dict =
-      GetDictionaryFromCastMessage(message);
-  if (!dict)
+  std::optional<base::Value::Dict> dict = GetDictionaryFromCastMessage(message);
+  if (!dict) {
     return CastMessageType::kOther;
+  }
 
   const std::string* message_type = dict->FindString("type");
-  if (!message_type)
+  if (!message_type) {
     return CastMessageType::kOther;
+  }
 
   return CastMessageTypeFromString(*message_type);
 }
@@ -127,8 +135,9 @@ class CastMessageHandlerTest : public testing::Test {
 
   void OnAppAvailability(const std::string& app_id,
                          GetAppAvailabilityResult result) {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
     DoOnAppAvailability(app_id, result);
   }
 
@@ -139,12 +148,14 @@ class CastMessageHandlerTest : public testing::Test {
   void ExpectSessionLaunchResult(LaunchSessionResponse::Result expected_result,
                                  LaunchSessionResponse response,
                                  LaunchSessionCallbackWrapper* out_callback) {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
     ++session_launch_response_count_;
     EXPECT_EQ(expected_result, response.result);
-    if (response.result == LaunchSessionResponse::Result::kOk)
+    if (response.result == LaunchSessionResponse::Result::kOk) {
       EXPECT_TRUE(response.receiver_status);
+    }
   }
 
   void ExpectEnsureConnection() {
@@ -164,7 +175,7 @@ class CastMessageHandlerTest : public testing::Test {
   void CreatePendingRequests() {
     EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
     handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(),
-                           {"WEB"}, /* appParams */ absl::nullopt,
+                           {"WEB"}, /* appParams */ std::nullopt,
                            launch_session_callback_.Get());
     for (int i = 0; i < 2; i++) {
       handler_.RequestAppAvailability(&cast_socket_, kAppId1,
@@ -190,7 +201,7 @@ class CastMessageHandlerTest : public testing::Test {
       EXPECT_CALL(*transport_,
                   SendMessage_(HasMessageType(CastMessageType::kConnect), _))
           .WillOnce(WithArg<0>([&](const CastMessage& message) {
-            absl::optional<base::Value::Dict> dict =
+            std::optional<base::Value::Dict> dict =
                 GetDictionaryFromCastMessage(message);
             EXPECT_EQ(connection_type, dict->FindInt("connType").value());
           }));
@@ -315,10 +326,10 @@ TEST_F(CastMessageHandlerTest, RequestAppAvailability) {
       base::BindOnce(&CastMessageHandlerTest::OnAppAvailability,
                      base::Unretained(this)));
 
-  absl::optional<base::Value::Dict> dict =
+  std::optional<base::Value::Dict> dict =
       GetDictionaryFromCastMessage(last_request_);
   ASSERT_TRUE(dict);
-  const absl::optional<int> request_id_value = dict->FindInt("requestId");
+  const std::optional<int> request_id_value = dict->FindInt("requestId");
   ASSERT_TRUE(request_id_value);
   int request_id = *request_id_value;
   EXPECT_GT(request_id, 0);
@@ -418,26 +429,45 @@ TEST_F(CastMessageHandlerTest, CloseConnectionFromReceiver) {
                             VirtualConnectionType::kStrong);
 }
 
+TEST_F(CastMessageHandlerTest, RemoveConnection) {
+  ExpectEnsureConnection();
+  handler_.EnsureConnection(channel_id_, kSourceId, kDestinationId,
+                            VirtualConnectionType::kStrong);
+
+  // Just removing a connection shouldn't send out a close request.
+  EXPECT_CALL(
+      *transport_,
+      SendMessage_(HasMessageType(CastMessageType::kCloseConnection), _))
+      .Times(0);
+  handler_.RemoveConnection(channel_id_, kSourceId, kDestinationId);
+}
+
 TEST_F(CastMessageHandlerTest, LaunchSession) {
+  base::HistogramTester histogram_tester;
+  cast_socket_.SetFlags(
+      static_cast<CastChannelFlags>(CastChannelFlag::kSha1DigestAlgorithm) |
+      static_cast<CastChannelFlags>(CastChannelFlag::kCRLMissing));
   ExpectEnsureConnectionThen(CastMessageType::kLaunch);
 
-  const absl::optional<base::Value> json = base::JSONReader::Read(kAppParams);
+  const std::optional<base::Value::Dict> json = base::JSONReader::ReadDict(
+      kAppParams, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   handler_.LaunchSession(
-      channel_id_, kAppId1, base::Seconds(30), {"WEB"}, json,
+      channel_id_, kAppId1, base::Seconds(30), {"WEB"},
+      json ? std::make_optional(base::Value(json->Clone())) : std::nullopt,
       base::BindOnce(&CastMessageHandlerTest::ExpectSessionLaunchResult,
                      base::Unretained(this),
                      LaunchSessionResponse::Result::kOk));
 
-  absl::optional<base::Value::Dict> dict =
+  std::optional<base::Value::Dict> dict =
       GetDictionaryFromCastMessage(last_request_);
   ASSERT_TRUE(dict);
-  const absl::optional<int> request_id_value = dict->FindInt("requestId");
+  const std::optional<int> request_id_value = dict->FindInt("requestId");
   ASSERT_TRUE(request_id_value);
   int request_id = *request_id_value;
   EXPECT_GT(request_id, 0);
   const base::Value* app_params = dict->Find("appParams");
-  EXPECT_EQ(json.value(), *app_params);
+  EXPECT_EQ(*json, *app_params);
 
   CastMessage response;
   response.set_namespace_("urn:x-cast:com.google.cast.receiver");
@@ -457,6 +487,13 @@ TEST_F(CastMessageHandlerTest, LaunchSession) {
   OnMessage(response);
   run_loop_->Run();
   EXPECT_EQ(1, session_launch_response_count_);
+  // Flags associated with the CastSocket should be recorded on launch.
+  histogram_tester.ExpectBucketCount(kLaunchSessionChannelFlagsHistogram,
+                                     CastChannelFlag::kFlagsNone, 0);
+  histogram_tester.ExpectBucketCount(kLaunchSessionChannelFlagsHistogram,
+                                     CastChannelFlag::kSha1DigestAlgorithm, 1);
+  histogram_tester.ExpectBucketCount(kLaunchSessionChannelFlagsHistogram,
+                                     CastChannelFlag::kCRLMissing, 1);
 }
 
 TEST_F(CastMessageHandlerTest, LaunchSessionTimedOut) {
@@ -464,7 +501,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionTimedOut) {
 
   handler_.LaunchSession(
       channel_id_, kAppId1, base::Seconds(30), {"WEB"},
-      /* appParams */ absl::nullopt,
+      /* appParams */ std::nullopt,
       base::BindOnce(&CastMessageHandlerTest::ExpectSessionLaunchResult,
                      base::Unretained(this),
                      LaunchSessionResponse::Result::kTimedOut));
@@ -479,7 +516,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionMessageExceedsSizeLimit) {
   json.Set("key", invalid_url);
   handler_.LaunchSession(
       channel_id_, kAppId1, base::Seconds(30), {"WEB"},
-      absl::make_optional<base::Value>(std::move(json)),
+      std::make_optional<base::Value>(std::move(json)),
       base::BindOnce(&CastMessageHandlerTest::ExpectSessionLaunchResult,
                      base::Unretained(this),
                      LaunchSessionResponse::Result::kError));
@@ -552,34 +589,9 @@ TEST_F(CastMessageHandlerTest, SendMediaRequest) {
   std::string message_str = R"({
     "type": "PLAY",
   })";
-  absl::optional<int> request_id = handler_.SendMediaRequest(
+  std::optional<int> request_id = handler_.SendMediaRequest(
       channel_id_, ParseJsonDict(message_str), "theSourceId", kDestinationId);
   EXPECT_EQ(1, request_id);
-}
-
-TEST_F(CastMessageHandlerTest, SendBroadcastMessage) {
-  BroadcastRequest request = BroadcastRequest("namespace", "message");
-  CastMessage message = CreateBroadcastRequest(
-      "theSourceId", /* request_id */ 1, {kAppId1}, request);
-  {
-    InSequence dummy;
-    ExpectEnsureConnection();
-    EXPECT_CALL(*transport_,
-                SendMessage_(HasPayloadUtf8(message.payload_utf8()), _));
-  }
-
-  EXPECT_EQ(Result::kOk,
-            handler_.SendBroadcastMessage(channel_id_, {kAppId1}, request));
-}
-
-TEST_F(CastMessageHandlerTest, SendBroadcastMessageExceedsSizeLimit) {
-  BroadcastRequest request =
-      BroadcastRequest("namespace", std::string(kMaxProtocolMessageSize, 'a'));
-  CastMessage message = CreateBroadcastRequest(
-      "theSourceId", /* request_id */ 1, {kAppId1}, request);
-
-  EXPECT_EQ(Result::kFailed,
-            handler_.SendBroadcastMessage(channel_id_, {kAppId1}, request));
 }
 
 // Check that SendVolumeCommand sends a message created by CreateVolumeRequest
@@ -624,7 +636,7 @@ TEST_F(CastMessageHandlerTest, PendingRequestsDestructor) {
   EXPECT_CALL(launch_session_callback_, Run(_, _))
       .WillOnce(WithArg<0>([&](LaunchSessionResponse response) {
         EXPECT_EQ(LaunchSessionResponse::kError, response.result);
-        EXPECT_EQ(absl::nullopt, response.receiver_status);
+        EXPECT_EQ(std::nullopt, response.receiver_status);
       }));
   EXPECT_CALL(get_app_availability_callback_,
               Run(kAppId1, GetAppAvailabilityResult::kUnknown))
@@ -699,12 +711,12 @@ TEST_F(CastMessageHandlerTest, SendMultipleLaunchRequests) {
       }));
   EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          expect_success_callback.Get());
   // When there already is a launch request queued, we expect subsequent
   // requests to fail.
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          expect_failure_callback.Get());
   // This resolves the first launch request.
   HandlePendingLaunchSessionRequest(next_request_id++);
@@ -717,7 +729,7 @@ TEST_F(CastMessageHandlerTest, SendMultipleStopRequests) {
 
   EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          launch_session_callback_.Get());
   EXPECT_CALL(launch_session_callback_, Run(_, _))
       .WillOnce(WithArg<0>([&](LaunchSessionResponse response) {
@@ -763,7 +775,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionWithPromptUserAllowed) {
 
   EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          expect_user_prompt_callback.Get());
 
   HandleLaunchStatusResponse(request_id, kWaitingUserResponse);
@@ -791,7 +803,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionWithPromptUserNotAllowed) {
 
   EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          expect_user_prompt_callback.Get());
 
   HandleLaunchStatusResponse(request_id, kWaitingUserResponse);
@@ -810,7 +822,7 @@ TEST_F(CastMessageHandlerTest,
 
   EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(AnyNumber());
   handler_.LaunchSession(channel_id_, kAppId1, base::TimeDelta::Max(), {"WEB"},
-                         /* appParams */ absl::nullopt,
+                         /* appParams */ std::nullopt,
                          launch_session_callback_.Get());
 
   HandleLaunchErrorResponse(request_id, kNotificationDisabledError);

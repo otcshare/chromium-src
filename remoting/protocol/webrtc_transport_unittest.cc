@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
@@ -72,14 +72,18 @@ class TestTransportEventHandler : public WebrtcTransport::EventHandler {
 
   // WebrtcTransport::EventHandler interface.
   void OnWebrtcTransportConnecting() override {
-    if (!connecting_callback_.is_null())
+    if (!connecting_callback_.is_null()) {
       connecting_callback_.Run();
+    }
   }
   void OnWebrtcTransportConnected() override {
-    if (!connected_callback_.is_null())
+    if (!connected_callback_.is_null()) {
       connected_callback_.Run();
+    }
   }
-  void OnWebrtcTransportError(ErrorCode error) override {
+  void OnWebrtcTransportError(ErrorCode error,
+                              std::string_view error_details,
+                              const base::Location& error_location) override {
     error_callback_.Run(error);
   }
   void OnWebrtcTransportProtocolChanged() override {}
@@ -93,9 +97,9 @@ class TestTransportEventHandler : public WebrtcTransport::EventHandler {
     }
   }
   void OnWebrtcTransportMediaStreamAdded(
-      rtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override {}
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override {}
   void OnWebrtcTransportMediaStreamRemoved(
-      rtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override {}
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override {}
   void OnWebrtcTransportRouteChanged(const TransportRoute& route) override {}
 
  private:
@@ -133,13 +137,15 @@ class TestMessagePipeEventHandler : public MessagePipe::EventHandler {
   // MessagePipe::EventHandler interface.
   void OnMessagePipeOpen() override {
     is_open_ = true;
-    if (!open_callback_.is_null())
+    if (!open_callback_.is_null()) {
       open_callback_.Run();
+    }
   }
   void OnMessageReceived(std::unique_ptr<CompoundBuffer> message) override {
     received_messages_.push_back(std::move(message));
-    if (!message_callback_.is_null())
+    if (!message_callback_.is_null()) {
       message_callback_.Run();
+    }
   }
   void OnMessagePipeClosed() override {
     if (!closed_callback_.is_null()) {
@@ -178,9 +184,10 @@ class WebrtcTransportTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  void ProcessTransportInfo(std::unique_ptr<WebrtcTransport>* target_transport,
-                            bool normalize_line_endings,
-                            std::unique_ptr<jingle_xmpp::XmlElement> transport_info) {
+  void ProcessTransportInfo(
+      std::unique_ptr<WebrtcTransport>* target_transport,
+      bool normalize_line_endings,
+      std::unique_ptr<jingle_xmpp::XmlElement> transport_info) {
     ASSERT_TRUE(target_transport);
 
     // Reformat the message to normalize line endings by removing CR symbol.
@@ -203,7 +210,7 @@ class WebrtcTransportTest : public testing::Test {
     // If offer_to_receive_video and offer_to_receive_audio are both false,
     // there must be a stream present in order to generate a valid SDP offer.
     host_transport_->peer_connection()->AddTransceiver(
-        cricket::MEDIA_TYPE_VIDEO);
+        webrtc::MediaType::VIDEO);
 
     host_authenticator_ =
         std::make_unique<FakeAuthenticator>(FakeAuthenticator::ACCEPT);
@@ -239,6 +246,9 @@ class WebrtcTransportTest : public testing::Test {
         client_authenticator_.get(),
         base::BindRepeating(&WebrtcTransportTest::ProcessTransportInfo,
                             base::Unretained(this), &host_transport_, false));
+
+    host_transport_->ApplyNetworkSettings(network_settings_);
+    client_transport_->ApplyNetworkSettings(network_settings_);
   }
 
   void WaitUntilConnected() {
@@ -256,8 +266,8 @@ class WebrtcTransportTest : public testing::Test {
     host_event_handler_.set_connected_callback({});
     client_event_handler_.set_connected_callback({});
 
-    EXPECT_EQ(OK, client_error_);
-    EXPECT_EQ(OK, host_error_);
+    EXPECT_EQ(ErrorCode::OK, client_error_);
+    EXPECT_EQ(ErrorCode::OK, host_error_);
   }
 
   void ExpectClientDataStream() {
@@ -278,13 +288,15 @@ class WebrtcTransportTest : public testing::Test {
     client_message_pipe_ = std::move(pipe);
     client_message_pipe_->Start(&client_message_pipe_event_handler_);
 
-    if (run_loop_ && host_message_pipe_event_handler_.is_open())
+    if (run_loop_ && host_message_pipe_event_handler_.is_open()) {
       run_loop_->Quit();
+    }
   }
 
   void OnHostChannelConnected() {
-    if (run_loop_ && client_message_pipe_event_handler_.is_open())
+    if (run_loop_ && client_message_pipe_event_handler_.is_open()) {
       run_loop_->Quit();
+    }
   }
 
   void OnSessionError(TransportRole role, ErrorCode error) {
@@ -312,8 +324,9 @@ class WebrtcTransportTest : public testing::Test {
 
   void QuitRunLoopOnCounter(int* counter) {
     --(*counter);
-    if (*counter == 0)
+    if (*counter == 0) {
       run_loop_->Quit();
+    }
   }
 
  protected:
@@ -335,8 +348,8 @@ class WebrtcTransportTest : public testing::Test {
   std::unique_ptr<MessagePipe> host_message_pipe_;
   TestMessagePipeEventHandler host_message_pipe_event_handler_;
 
-  ErrorCode client_error_ = OK;
-  ErrorCode host_error_ = OK;
+  ErrorCode client_error_ = ErrorCode::OK;
+  ErrorCode host_error_ = ErrorCode::OK;
 
   bool destroy_on_error_ = false;
 };
@@ -361,7 +374,7 @@ TEST_F(WebrtcTransportTest, InvalidAuthKey) {
   run_loop_ = std::make_unique<base::RunLoop>();
   run_loop_->Run();
 
-  EXPECT_EQ(AUTHENTICATION_FAILED, client_error_);
+  EXPECT_EQ(ErrorCode::AUTHENTICATION_FAILED, client_error_);
 }
 
 // crbug.com/1224862: Tests are flaky on Mac.
@@ -458,7 +471,7 @@ TEST_F(WebrtcTransportTest, MAYBE_TerminateDataChannel) {
   run_loop_->Run();
 
   // Check that OnHostChannelClosed() has been called.
-  EXPECT_EQ(OK, host_error_);
+  EXPECT_EQ(ErrorCode::OK, host_error_);
   EXPECT_FALSE(host_message_pipe_);
 }
 

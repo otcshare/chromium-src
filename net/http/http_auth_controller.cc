@@ -6,11 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/platform_thread.h"
 #include "base/values.h"
 #include "net/base/auth.h"
 #include "net/base/url_util.h"
@@ -21,6 +22,7 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_response_headers.h"
+#include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_source_type.h"
@@ -31,11 +33,40 @@ namespace net {
 
 namespace {
 
-base::Value ControllerParamsToValue(HttpAuth::Target target, const GURL& url) {
+enum AuthTarget {
+  AUTH_TARGET_PROXY = 0,
+  AUTH_TARGET_SECURE_PROXY,
+  AUTH_TARGET_SERVER,
+  AUTH_TARGET_SECURE_SERVER,
+  AUTH_TARGET_MAX,
+};
+
+AuthTarget DetermineAuthTarget(const HttpAuthHandler* handler) {
+  switch (handler->target()) {
+    case HttpAuth::AUTH_PROXY:
+      if (GURL::SchemeIsCryptographic(handler->scheme_host_port().scheme())) {
+        return AUTH_TARGET_SECURE_PROXY;
+      } else {
+        return AUTH_TARGET_PROXY;
+      }
+    case HttpAuth::AUTH_SERVER:
+      if (GURL::SchemeIsCryptographic(handler->scheme_host_port().scheme())) {
+        return AUTH_TARGET_SECURE_SERVER;
+      } else {
+        return AUTH_TARGET_SERVER;
+      }
+    default:
+      NOTREACHED();
+  }
+}
+
+base::Value::Dict ControllerParamsToValue(HttpAuth::Target target,
+                                          const GURL& url,
+                                          NetLogCaptureMode capture_mode) {
   base::Value::Dict params;
   params.Set("target", HttpAuth::GetAuthTargetString(target));
-  params.Set("url", url.spec());
-  return base::Value(std::move(params));
+  params.Set("url", SanitizeUrlForNetLog(url, capture_mode));
+  return params;
 }
 
 }  // namespace
@@ -50,7 +81,7 @@ HttpAuthController::HttpAuthController(
     : target_(target),
       auth_url_(auth_url),
       auth_scheme_host_port_(auth_url),
-      auth_path_(auth_url.path()),
+      auth_path_(auth_url.GetPath()),
       network_anonymization_key_(network_anonymization_key),
       http_auth_cache_(http_auth_cache),
       http_auth_handler_factory_(http_auth_handler_factory),
@@ -70,9 +101,10 @@ void HttpAuthController::BindToCallingNetLog(
   if (!net_log_.source().IsValid()) {
     net_log_ = NetLogWithSource::Make(caller_net_log.net_log(),
                                       NetLogSourceType::HTTP_AUTH_CONTROLLER);
-    net_log_.BeginEvent(NetLogEventType::AUTH_CONTROLLER, [&] {
-      return ControllerParamsToValue(target_, auth_url_);
-    });
+    net_log_.BeginEvent(
+        NetLogEventType::AUTH_CONTROLLER, [&](NetLogCaptureMode capture_mode) {
+          return ControllerParamsToValue(target_, auth_url_, capture_mode);
+        });
   }
   caller_net_log.AddEventReferencingSource(
       NetLogEventType::AUTH_BOUND_TO_CONTROLLER, net_log_.source());
@@ -191,6 +223,7 @@ int HttpAuthController::HandleAuthChallenge(
         InvalidateCurrentHandler(INVALIDATE_HANDLER_AND_CACHED_CREDENTIALS);
         break;
       case HttpAuth::AUTHORIZATION_RESULT_REJECT:
+        HistogramAuthEvent(AUTH_EVENT_REJECT);
         InvalidateCurrentHandler(INVALIDATE_HANDLER_AND_CACHED_CREDENTIALS);
         break;
       case HttpAuth::AUTHORIZATION_RESULT_STALE:
@@ -219,7 +252,6 @@ int HttpAuthController::HandleAuthChallenge(
         break;
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -234,6 +266,9 @@ int HttpAuthController::HandleAuthChallenge(
           http_auth_handler_factory_, *headers, ssl_info,
           network_anonymization_key_, target_, auth_scheme_host_port_,
           disabled_schemes_, net_log_, host_resolver_, &handler_);
+      if (handler_.get()) {
+        HistogramAuthEvent(AUTH_EVENT_START);
+      }
     }
 
     if (!handler_.get()) {
@@ -268,6 +303,7 @@ int HttpAuthController::HandleAuthChallenge(
       if (!handler_->AllowsExplicitCredentials()) {
         // If the handler doesn't accept explicit credentials, then we need to
         // choose a different auth scheme.
+        HistogramAuthEvent(AUTH_EVENT_REJECT);
         InvalidateCurrentHandler(INVALIDATE_HANDLER_AND_DISABLE_SCHEME);
       } else {
         // Pass the challenge information back to the client.
@@ -296,7 +332,7 @@ void HttpAuthController::ResetAuth(const AuthCredentials& credentials) {
     identity_.credentials = credentials;
 
     // auth_info_ is no longer necessary.
-    auth_info_ = absl::nullopt;
+    auth_info_ = std::nullopt;
   }
 
   DCHECK(identity_.source != HttpAuth::IDENT_SRC_PATH_LOOKUP);
@@ -416,7 +452,6 @@ bool HttpAuthController::SelectNextAuthIdentityToTry() {
     embedded_identity_used_ = true;
     // TODO(eroman): If the password is blank, should we also try combining
     // with a password from the cache?
-    UMA_HISTOGRAM_BOOLEAN("net.HttpIdentSrcURL", true);
     return true;
   }
 
@@ -489,6 +524,17 @@ int HttpAuthController::HandleGenerateTokenResult(int result) {
 
     // Occurs with GSSAPI, if the user has not already logged in.
     case ERR_MISSING_AUTH_CREDENTIALS:
+      // Usually, GSSAPI doesn't allow explicit credentials and the scheme
+      // cannot succeed anymore hence it gets disabled. However, on ChromeOS
+      // it's not the case so we invalidate the current handler and can ask for
+      // explicit credentials later. (See b/260522530).
+      if (!handler_->AllowsExplicitCredentials()) {
+        InvalidateCurrentHandler(INVALIDATE_HANDLER_AND_DISABLE_SCHEME);
+      } else {
+        InvalidateCurrentHandler(INVALIDATE_HANDLER_AND_CACHED_CREDENTIALS);
+      }
+      auth_token_.clear();
+      return OK;
 
     // Can occur with GSSAPI or SSPI if the underlying library reports
     // a permanent error.
@@ -521,8 +567,62 @@ void HttpAuthController::OnGenerateAuthTokenDone(int result) {
   }
 }
 
-void HttpAuthController::TakeAuthInfo(
-    absl::optional<AuthChallengeInfo>* other) {
+void HttpAuthController::HistogramAuthEvent(AuthEvent auth_event) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  HttpAuth::Scheme auth_scheme = handler_->auth_scheme();
+  DCHECK(auth_scheme >= 0 && auth_scheme < HttpAuth::AUTH_SCHEME_MAX);
+
+  // Record start and rejection events for authentication.
+  //
+  // The results map to:
+  //   Basic Start: 0
+  //   Basic Reject: 1
+  //   Digest Start: 2
+  //   Digest Reject: 3
+  //   NTLM Start: 4
+  //   NTLM Reject: 5
+  //   Negotiate Start: 6
+  //   Negotiate Reject: 7
+  static constexpr int kEventBucketsEnd =
+      int{HttpAuth::AUTH_SCHEME_MAX} * AUTH_EVENT_MAX;
+  int event_bucket = int{auth_scheme} * AUTH_EVENT_MAX + auth_event;
+  DCHECK(event_bucket >= 0 && event_bucket < kEventBucketsEnd);
+  UMA_HISTOGRAM_ENUMERATION("Net.HttpAuthCount", event_bucket,
+                            kEventBucketsEnd);
+
+  // Record the target of the authentication.
+  //
+  // The results map to:
+  //   Basic Proxy: 0
+  //   Basic Secure Proxy: 1
+  //   Basic Server: 2
+  //   Basic Secure Server: 3
+  //   Digest Proxy: 4
+  //   Digest Secure Proxy: 5
+  //   Digest Server: 6
+  //   Digest Secure Server: 7
+  //   NTLM Proxy: 8
+  //   NTLM Secure Proxy: 9
+  //   NTLM Server: 10
+  //   NTLM Secure Server: 11
+  //   Negotiate Proxy: 12
+  //   Negotiate Secure Proxy: 13
+  //   Negotiate Server: 14
+  //   Negotiate Secure Server: 15
+  if (auth_event != AUTH_EVENT_START) {
+    return;
+  }
+  static constexpr int kTargetBucketsEnd =
+      int{HttpAuth::AUTH_SCHEME_MAX} * AUTH_TARGET_MAX;
+  AuthTarget auth_target = DetermineAuthTarget(handler_.get());
+  int target_bucket = int{auth_scheme} * AUTH_TARGET_MAX + auth_target;
+  DCHECK(target_bucket >= 0 && target_bucket < kTargetBucketsEnd);
+  UMA_HISTOGRAM_ENUMERATION("Net.HttpAuthTarget", target_bucket,
+                            kTargetBucketsEnd);
+}
+
+void HttpAuthController::TakeAuthInfo(std::optional<AuthChallengeInfo>* other) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   auth_info_.swap(*other);
 }

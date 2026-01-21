@@ -2,23 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef MEDIA_GPU_V4L2_TEST_VP8_DECODER_H_
 #define MEDIA_GPU_V4L2_TEST_VP8_DECODER_H_
 
-// build_config.h must come before BUILDFLAG()
-#include "build/build_config.h"
+#include <linux/v4l2-controls.h>
 
-// ChromeOS specific header; does not exist upstream
-#if BUILDFLAG(IS_CHROMEOS)
-#include <linux/media/vp8-ctrls-upstream.h>
-#endif
-
+#include <array>
 #include <set>
 
 #include "base/files/memory_mapped_file.h"
-#include "media/filters/ivf_parser.h"
 #include "media/gpu/v4l2/test/v4l2_ioctl_shim.h"
 #include "media/gpu/v4l2/test/video_decoder.h"
+#include "media/parsers/ivf_parser.h"
 #include "media/parsers/vp8_parser.h"
 
 namespace media {
@@ -38,17 +38,17 @@ class Vp8Decoder : public VideoDecoder {
   // Parses next frame from IVF stream and decodes the frame. This method will
   // place the Y, U, and V values into the respective vectors and update the
   // size with the display area size of the decoded frame.
-  VideoDecoder::Result DecodeNextFrame(std::vector<char>& y_plane,
-                                       std::vector<char>& u_plane,
-                                       std::vector<char>& v_plane,
+  VideoDecoder::Result DecodeNextFrame(const int frame_number,
+                                       std::vector<uint8_t>& y_plane,
+                                       std::vector<uint8_t>& u_plane,
+                                       std::vector<uint8_t>& v_plane,
                                        gfx::Size& size,
-                                       const int frame_number) override;
+                                       BitDepth& bit_depth) override;
 
  private:
   Vp8Decoder(std::unique_ptr<IvfParser> ivf_parser,
              std::unique_ptr<V4L2IoctlShim> v4l2_ioctl,
-             std::unique_ptr<V4L2Queue> OUTPUT_queue,
-             std::unique_ptr<V4L2Queue> CAPTURE_queue);
+             gfx::Size display_resolution);
   enum ParseResult { kOk, kEOStream, kError };
 
   // Reads next frame from IVF stream into |vp8_frame_header|
@@ -62,8 +62,8 @@ class Vp8Decoder : public VideoDecoder {
   // Refreshes |ref_frames_| slots and returns the CAPTURE buffers that
   // can be reused for VIDIOC_QBUF ioctl call.
   std::set<int> RefreshReferenceSlots(const Vp8FrameHeader& frame_hdr,
-                                      MmapedBuffer* buffer,
-                                      std::set<uint32_t> queued_buffer_indexes);
+                                      MmappedBuffer* buffer,
+                                      std::set<uint32_t> queued_buffer_ids);
 
   // Manages buffers holding reference frames and return buffer indexes
   // |reusable_buffer_slots| that can be reused in CAPTURE queue.
@@ -78,7 +78,7 @@ class Vp8Decoder : public VideoDecoder {
   const std::unique_ptr<Vp8Parser> vp8_parser_;
 
   // Reference frames currently in use.
-  std::array<scoped_refptr<MmapedBuffer>, kNumVp8ReferenceBuffers> ref_frames_;
+  std::array<scoped_refptr<MmappedBuffer>, kNumVp8ReferenceBuffers> ref_frames_;
 };
 
 }  // namespace v4l2_test

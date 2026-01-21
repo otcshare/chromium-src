@@ -4,18 +4,22 @@
 
 package org.chromium.base;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.NullUnmarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * A simple single-argument callback to handle the result of a computation.
  *
  * @param <T> The type of the computation's result.
  */
+@NullMarked
 @FunctionalInterface
-public interface Callback<T> {
-    /**
-     * Invoked with the result of a computation.
-     */
+public interface Callback<T extends @Nullable Object> {
+
+    /** Invoked with the result of a computation. */
     void onResult(T result);
 
     /**
@@ -31,38 +35,38 @@ public interface Callback<T> {
     }
 
     /**
-     * JNI Generator does not know how to target static methods on interfaces
-     * (which is new in Java 8, and requires desugaring).
+     * Runs a callback checking if the callback may be null.
+     *
+     * <p>Can be used as syntactic sugar for: if (callback != null) callback.onResult(object);
+     *
+     * @param callback The {@link Callback} to run.
+     * @param object The payload to provide to the callback (may be null).
      */
+    @NullUnmarked // https://github.com/uber/NullAway/issues/1075
+    static <T extends @Nullable Object> void runNullSafe(@Nullable Callback<T> callback, T object) {
+        if (callback != null) callback.onResult(object);
+    }
+
+    // TODO(agrieve): Wrapper can be removed once min_supported_sdk_version >= 24.
     abstract class Helper {
-        @SuppressWarnings("unchecked")
         @CalledByNative("Helper")
-        static void onObjectResultFromNative(Callback callback, Object result) {
+        static void onObjectResultFromNative(Callback<Object> callback, Object result) {
             callback.onResult(result);
         }
 
-        @SuppressWarnings("unchecked")
         @CalledByNative("Helper")
-        static void onBooleanResultFromNative(Callback callback, boolean result) {
-            callback.onResult(Boolean.valueOf(result));
+        static void onBooleanResultFromNative(Callback<Boolean> callback, boolean result) {
+            callback.onResult(result);
         }
 
-        @SuppressWarnings("unchecked")
         @CalledByNative("Helper")
-        static void onIntResultFromNative(Callback callback, int result) {
-            callback.onResult(Integer.valueOf(result));
+        static void onIntResultFromNative(Callback<Integer> callback, int result) {
+            callback.onResult(result);
         }
 
-        @SuppressWarnings("unchecked")
         @CalledByNative("Helper")
-        static void onLongResultFromNative(Callback callback, long result) {
-            callback.onResult(Long.valueOf(result));
-        }
-
-        @SuppressWarnings("unchecked")
-        @CalledByNative("Helper")
-        static void onTimeResultFromNative(Callback callback, long result) {
-            callback.onResult(Long.valueOf(result));
+        static void onLongResultFromNative(Callback<Long> callback, long result) {
+            callback.onResult(result);
         }
 
         @CalledByNative("Helper")

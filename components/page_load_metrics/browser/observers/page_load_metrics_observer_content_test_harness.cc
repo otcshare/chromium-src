@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
@@ -17,7 +17,9 @@
 namespace page_load_metrics {
 
 PageLoadMetricsObserverContentTestHarness::
-    PageLoadMetricsObserverContentTestHarness() {
+    PageLoadMetricsObserverContentTestHarness()
+    : RenderViewHostTestHarness(
+          base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
   scoped_feature_list_.InitWithFeaturesAndParameters(
       {
           {blink::features::kFencedFrames, {{"implementation_type", "mparch"}}},
@@ -30,7 +32,7 @@ PageLoadMetricsObserverContentTestHarness::
 }
 
 PageLoadMetricsObserverContentTestHarness::
-    ~PageLoadMetricsObserverContentTestHarness() {}
+    ~PageLoadMetricsObserverContentTestHarness() = default;
 
 void PageLoadMetricsObserverContentTestHarness::SetUp() {
   content::RenderViewHostTestHarness::SetUp();

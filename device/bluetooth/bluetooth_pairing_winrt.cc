@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/win/com_init_util.h"
 #include "base/win/post_async_results.h"
@@ -55,7 +55,7 @@ using ABI::Windows::Foundation::IAsyncOperation;
 using Microsoft::WRL::ComPtr;
 
 void PostTask(BluetoothPairingWinrt::ConnectCallback callback,
-              absl::optional<BluetoothDevice::ConnectErrorCode> error_code) {
+              std::optional<BluetoothDevice::ConnectErrorCode> error_code) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), error_code));
 }
@@ -195,7 +195,7 @@ void BluetoothPairingWinrt::OnConfirmPairingDeferralCompletion(HRESULT hr) {
   }
 }
 
-void BluetoothPairingWinrt::SetPinCode(base::StringPiece pin_code) {
+void BluetoothPairingWinrt::SetPinCode(std::string_view pin_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(2) << "BluetoothPairingWinrt::SetPinCode(" << pin_code << ")";
   auto pin_hstring = base::win::ScopedHString::Create(pin_code);
@@ -391,7 +391,7 @@ void BluetoothPairingWinrt::OnPair(
   switch (status) {
     case DevicePairingResultStatus_AlreadyPaired:
     case DevicePairingResultStatus_Paired:
-      std::move(callback_).Run(/*error_code=*/absl::nullopt);
+      std::move(callback_).Run(/*error_code=*/std::nullopt);
       return;
     case DevicePairingResultStatus_PairingCanceled:
       std::move(callback_).Run(

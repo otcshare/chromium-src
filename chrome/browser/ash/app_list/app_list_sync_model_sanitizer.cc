@@ -6,12 +6,10 @@
 
 #include <vector>
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/guid.h"
 #include "base/strings/string_util.h"
+#include "base/uuid.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "components/sync/model/string_ordinal.h"
@@ -36,12 +34,9 @@ AppListSyncModelSanitizer::AppListSyncModelSanitizer(
 
 AppListSyncModelSanitizer::~AppListSyncModelSanitizer() = default;
 
-void AppListSyncModelSanitizer::SanitizePageBreaksForProductivityLauncher(
+void AppListSyncModelSanitizer::SanitizePageBreaks(
     const std::set<std::string>& top_level_items,
     bool reset_page_breaks) {
-  if (!ash::features::IsProductivityLauncherEnabled())
-    return;
-
   const std::vector<AppListSyncableService::SyncItem*> sync_items =
       syncable_service_->GetSortedTopLevelSyncItems();
 
@@ -108,7 +103,7 @@ void AppListSyncModelSanitizer::SanitizePageBreaksForProductivityLauncher(
     // could also unexpectedly create partially filled pages where they did not
     // previously exist (for example, if sync contains items that are not
     // installed on a portion of the user's devices).
-    if (!base::Contains(top_level_items, item_id)) {
+    if (!top_level_items.contains(item_id)) {
       last_valid_position = item_ordinal;
       continue;
     }
@@ -150,7 +145,8 @@ void AppListSyncModelSanitizer::SanitizePageBreaksForProductivityLauncher(
 
   for (const auto& position : page_breaks_to_add) {
     syncable_service_->AddPageBreakItem(
-        std::string(kImplicitPageBreakIdPrefix) + base::GenerateGUID(),
+        std::string(kImplicitPageBreakIdPrefix) +
+            base::Uuid::GenerateRandomV4().AsLowercaseString(),
         position);
   }
 

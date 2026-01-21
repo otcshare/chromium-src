@@ -4,7 +4,7 @@
 
 #include "chrome/browser/task_manager/providers/vm/crostini_process_task.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
@@ -23,12 +23,19 @@ CrostiniProcessTask::CrostiniProcessTask(base::ProcessId pid,
                     owner_id,
                     vm_name) {}
 
-void CrostiniProcessTask::Kill() {
+bool CrostiniProcessTask::Kill() {
   crostini::CrostiniManager* crostini_manager =
       crostini::CrostiniManager::GetForProfile(
           ProfileManager::GetActiveUserProfile());
-  if (crostini_manager)
+  if (crostini_manager) {
+    // TODO(crbug.com/409837763): Crostini StopVM() doesn't return a value
+    // because it's asynchronous, but a synchronous result would be useful to
+    // bubble upward. This requires some additional design. For now, assume that
+    // calling this function guaranteed stops the VM.
     crostini_manager->StopVm(vm_name_, base::DoNothing());
+    return true;
+  }
+  return false;
 }
 
 Task::Type CrostiniProcessTask::GetType() const {

@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/snapshot/snapshot.h"
-
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
@@ -33,6 +32,7 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/snapshot/snapshot.h"
 
 namespace ui {
 namespace {
@@ -76,7 +76,8 @@ size_t GetFailedPixelsCountWithScaleFactor(const gfx::Image& image,
   size_t result = 0;
   for (int y = 0; y < bitmap->height(); y += scale_factor) {
     for (int x = 0; x < bitmap->width(); x += scale_factor) {
-      if (static_cast<SkColor>(bitmap_data[x + y * bitmap->width()]) !=
+      if (static_cast<SkColor>(
+              UNSAFE_TODO(bitmap_data[x + y * bitmap->width()])) !=
           GetExpectedColorForPoint(x / scale_factor, y / scale_factor)) {
         ++result;
       }
@@ -141,8 +142,9 @@ class SnapshotAuraTest : public testing::Test {
   void SetupTestWindow(const gfx::Rect& window_bounds) {
     delegate_ =
         std::make_unique<TestPaintingWindowDelegate>(window_bounds.size());
-    test_window_.reset(aura::test::CreateTestWindowWithDelegate(
-        delegate_.get(), 0, window_bounds, root_window()));
+    test_window_ = aura::test::CreateTestWindow({.delegate = delegate_.get(),
+                                                 .parent = root_window(),
+                                                 .bounds = window_bounds});
   }
 
   gfx::Image GrabSnapshotForTestWindow() {
@@ -151,7 +153,7 @@ class SnapshotAuraTest : public testing::Test {
         test_window(), root_window(), &source_rect);
 
     scoped_refptr<SnapshotHolder> holder(new SnapshotHolder);
-    ui::GrabWindowSnapshotAsync(
+    ui::GrabWindowSnapshot(
         root_window(), source_rect,
         base::BindOnce(&SnapshotHolder::SnapshotCallback, holder));
 
@@ -204,7 +206,7 @@ class SnapshotAuraTest : public testing::Test {
 #endif
 TEST_F(SnapshotAuraTest, MAYBE_FullScreenWindow) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
-  // TODO(https://crbug.com/1143031): Fix this test to run in < action_timeout()
+  // TODO(crbug.com/40154923): Fix this test to run in < action_timeout()
   // on the Linux Debug & TSAN bots.
   const base::test::ScopedRunLoopTimeout increased_run_timeout(
       FROM_HERE, TestTimeouts::action_max_timeout());
@@ -212,10 +214,10 @@ TEST_F(SnapshotAuraTest, MAYBE_FullScreenWindow) {
         // BUILDFLAG(IS_FUCHSIA)
 
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   SetupTestWindow(root_window()->bounds());
   WaitForDraw();
@@ -228,10 +230,10 @@ TEST_F(SnapshotAuraTest, MAYBE_FullScreenWindow) {
 
 TEST_F(SnapshotAuraTest, PartialBounds) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   gfx::Rect test_bounds(100, 100, 300, 200);
   SetupTestWindow(test_bounds);
@@ -244,10 +246,10 @@ TEST_F(SnapshotAuraTest, PartialBounds) {
 
 TEST_F(SnapshotAuraTest, Rotated) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   test_screen()->SetDisplayRotation(display::Display::ROTATE_90);
 
@@ -262,10 +264,10 @@ TEST_F(SnapshotAuraTest, Rotated) {
 
 TEST_F(SnapshotAuraTest, UIScale) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   const float kUIScale = 0.5f;
   test_screen()->SetUIScale(kUIScale);
@@ -286,10 +288,10 @@ TEST_F(SnapshotAuraTest, UIScale) {
 
 TEST_F(SnapshotAuraTest, DeviceScaleFactor) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   test_screen()->SetDeviceScaleFactor(2.0f);
 
@@ -309,10 +311,10 @@ TEST_F(SnapshotAuraTest, DeviceScaleFactor) {
 
 TEST_F(SnapshotAuraTest, RotateAndUIScale) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   const float kUIScale = 0.5f;
   test_screen()->SetUIScale(kUIScale);
@@ -334,10 +336,10 @@ TEST_F(SnapshotAuraTest, RotateAndUIScale) {
 
 TEST_F(SnapshotAuraTest, RotateAndUIScaleAndScaleFactor) {
 #if BUILDFLAG(IS_WIN)
-  // TODO(https://crbug.com/850556): Make work on Win10.
-  base::win::Version version = base::win::GetVersion();
-  if (version >= base::win::Version::WIN10)
-    return;
+  // TODO(crbug.com/41393300): Make work on Windows.
+  if (::testing::internal::AlwaysTrue()) {
+    GTEST_SKIP();
+  }
 #endif
   test_screen()->SetDeviceScaleFactor(2.0f);
   const float kUIScale = 0.5f;

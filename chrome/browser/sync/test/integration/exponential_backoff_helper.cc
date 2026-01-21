@@ -4,9 +4,9 @@
 
 #include "chrome/browser/sync/test/integration/exponential_backoff_helper.h"
 
+#include <algorithm>
 #include <ostream>
 
-#include "base/cxx17_backports.h"
 #include "components/sync/engine/cycle/model_neutral_state.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/polling_constants.h"
@@ -30,7 +30,7 @@ bool DidLastSyncCycleFail(syncer::SyncService* sync_service) {
 }
 
 base::TimeDelta ClampBackoffDelay(base::TimeDelta delay) {
-  return base::clamp(delay, syncer::kMinBackoffTime, syncer::kMaxBackoffTime);
+  return std::clamp(delay, syncer::kMinBackoffTime, syncer::kMaxBackoffTime);
 }
 
 }  // namespace
@@ -44,23 +44,18 @@ ExponentialBackoffChecker::CalculateDelayRange(base::TimeDelta current_delay) {
   const base::TimeDelta backoff = std::max(
       base::Seconds(1), current_delay * syncer::kBackoffMultiplyFactor);
 
-  DelayRange delay_range;
-  delay_range.min_delay =
-      ClampBackoffDelay(backoff - current_delay * syncer::kBackoffJitterFactor);
-  delay_range.max_delay =
-      ClampBackoffDelay(backoff + current_delay * syncer::kBackoffJitterFactor);
-  return delay_range;
+  return {.min_delay = ClampBackoffDelay(
+              backoff - current_delay * syncer::kBackoffJitterFactor),
+          .max_delay = ClampBackoffDelay(
+              backoff + current_delay * syncer::kBackoffJitterFactor)};
 }
 
-// static
 std::vector<ExponentialBackoffChecker::DelayRange>
-ExponentialBackoffChecker::BuildExpectedDelayTable() {
+ExponentialBackoffChecker::BuildExpectedDelayTable(
+    base::TimeDelta initial_delay) {
   std::vector<DelayRange> delay_table;
 
-  // Start off with the initial value used for tests, where SyncTest forces a
-  // short retry time via command-line kSyncShortInitialRetryOverride.
-  delay_table.push_back(
-      CalculateDelayRange(syncer::kInitialBackoffShortRetryTime));
+  delay_table.push_back(CalculateDelayRange(initial_delay));
 
   for (size_t i = 1; i < kMaxRetriesToVerify; ++i) {
     DelayRange range;
@@ -75,9 +70,10 @@ ExponentialBackoffChecker::BuildExpectedDelayTable() {
 }
 
 ExponentialBackoffChecker::ExponentialBackoffChecker(
-    syncer::SyncServiceImpl* sync_service)
+    syncer::SyncServiceImpl* sync_service,
+    base::TimeDelta initial_delay)
     : SingleClientStatusChangeChecker(sync_service),
-      expected_delay_table_(BuildExpectedDelayTable()) {
+      expected_delay_table_(BuildExpectedDelayTable(initial_delay)) {
   // Upon construction, backoff must not have started, since it's otherwise
   // impossible to determine the precise timestamp corresponding to the first
   // backed-off sync cycle, required to predict the exponential behavior.

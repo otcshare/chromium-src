@@ -7,19 +7,16 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_urls.h"
@@ -108,7 +105,7 @@ void DeviceAccountInitializer::OnOAuthError() {
   // response is bad (empty access token returned).
   LOG(ERROR) << "OAuth protocol error while fetching API refresh token.";
   handling_request_ = false;
-  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/absl::nullopt);
+  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/std::nullopt);
 }
 
 // GaiaOAuthClient::Delegate network error when fetching refresh token.
@@ -116,7 +113,7 @@ void DeviceAccountInitializer::OnNetworkError(int response_code) {
   LOG(ERROR) << "Network error while fetching API refresh token: "
              << response_code;
   handling_request_ = false;
-  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/absl::nullopt);
+  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/std::nullopt);
 }
 
 void DeviceAccountInitializer::StoreToken() {
@@ -141,11 +138,6 @@ void DeviceAccountInitializer::Stop() {
   handling_request_ = false;
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
-
-void DeviceAccountInitializer::OnPolicyFetched(CloudPolicyClient* client) {}
-
-void DeviceAccountInitializer::OnRegistrationStateChanged(
-    CloudPolicyClient* client) {}
 
 void DeviceAccountInitializer::OnClientError(CloudPolicyClient* client) {
   if (!handling_request_)

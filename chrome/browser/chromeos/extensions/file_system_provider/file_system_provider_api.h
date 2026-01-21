@@ -5,39 +5,24 @@
 #ifndef CHROME_BROWSER_CHROMEOS_EXTENSIONS_FILE_SYSTEM_PROVIDER_FILE_SYSTEM_PROVIDER_API_H_
 #define CHROME_BROWSER_CHROMEOS_EXTENSIONS_FILE_SYSTEM_PROVIDER_FILE_SYSTEM_PROVIDER_API_H_
 
+#include <variant>
+
 #include "base/files/file.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chromeos/crosapi/mojom/file_system_provider.mojom.h"
+#include "chrome/common/extensions/api/file_system_provider_internal.h"
 #include "extensions/browser/extension_function.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_service.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+namespace ash::file_system_provider {
+class RequestValue;
+}  // namespace ash::file_system_provider
 
 namespace extensions {
 
 class FileSystemProviderBase : public ExtensionFunction {
  protected:
-  ~FileSystemProviderBase() override {}
+  ~FileSystemProviderBase() override = default;
   std::string GetProviderId() const;
   void RespondWithError(const std::string& error);
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Whether ash supports the FileSystemProviderService interface, and in
-  // particular its `MountFinished` method..
-  bool MountFinishedInterfaceAvailable();
-
-  // Whether ash supports the FileSystemProviderService interface, and in
-  // particular its `OperationFinished` method..
-  bool OperationFinishedInterfaceAvailable();
-
-  // A helper function that returns a reference to a functional remote. Should
-  // only be called if the needed interface method is supported.
-  mojo::Remote<crosapi::mojom::FileSystemProviderService>& GetRemote();
-#endif
 };
 
 class FileSystemProviderMountFunction : public FileSystemProviderBase {
@@ -46,7 +31,7 @@ class FileSystemProviderMountFunction : public FileSystemProviderBase {
                              FILESYSTEMPROVIDER_MOUNT)
 
  protected:
-  ~FileSystemProviderMountFunction() override {}
+  ~FileSystemProviderMountFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -56,7 +41,7 @@ class FileSystemProviderUnmountFunction : public FileSystemProviderBase {
                              FILESYSTEMPROVIDER_UNMOUNT)
 
  protected:
-  ~FileSystemProviderUnmountFunction() override {}
+  ~FileSystemProviderUnmountFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -66,8 +51,7 @@ class FileSystemProviderGetAllFunction : public FileSystemProviderBase {
                              FILESYSTEMPROVIDER_GETALL)
 
  protected:
-  void RespondWithInfos(std::vector<crosapi::mojom::FileSystemInfoPtr>);
-  ~FileSystemProviderGetAllFunction() override {}
+  ~FileSystemProviderGetAllFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -76,8 +60,7 @@ class FileSystemProviderGetFunction : public FileSystemProviderBase {
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.get", FILESYSTEMPROVIDER_GET)
 
  protected:
-  void RespondWithInfo(crosapi::mojom::FileSystemInfoPtr info);
-  ~FileSystemProviderGetFunction() override {}
+  ~FileSystemProviderGetFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -87,7 +70,7 @@ class FileSystemProviderNotifyFunction : public FileSystemProviderBase {
                              FILESYSTEMPROVIDER_NOTIFY)
 
  protected:
-  ~FileSystemProviderNotifyFunction() override {}
+  ~FileSystemProviderNotifyFunction() override = default;
   ResponseAction Run() override;
 
  private:
@@ -97,43 +80,14 @@ class FileSystemProviderNotifyFunction : public FileSystemProviderBase {
 
 class FileSystemProviderInternal : public FileSystemProviderBase {
  protected:
-  ~FileSystemProviderInternal() override {}
-
-  // Returns the operation metadata from FileSystemProviderInternal methods via
-  // output parameters.
-  template <typename Params>
-  void GetOperationMetadata(const Params& params,
-                            crosapi::mojom::FileSystemIdPtr* file_system_id,
-                            int64_t* request_id) {
-    *file_system_id = crosapi::mojom::FileSystemId::New();
-    (*file_system_id)->provider = GetProviderId();
-    (*file_system_id)->id = params->file_system_id;
-    *request_id = params->request_id;
-  }
-
-  // Forwards the result of the mount request to the file system provider
-  // service. Returns false if the forwarding failed.
-  bool ForwardMountResult(int64_t request_id, base::Value::List& args);
+  ~FileSystemProviderInternal() override = default;
 
   // Forwards the result of the operation to the file system provider service.
-  // Returns false if the forwarding failed.
-  template <typename Params>
-  bool ForwardOperationResult(const Params& params,
-                              base::Value::List& args,
-                              crosapi::mojom::FSPOperationResponse response) {
-    crosapi::mojom::FileSystemIdPtr file_system_id;
-    int64_t request_id;
-    GetOperationMetadata(params, &file_system_id, &request_id);
-    return ForwardOperationResultImpl(response, std::move(file_system_id),
-                                      request_id, std::move(args));
-  }
-
- private:
-  bool ForwardOperationResultImpl(
-      crosapi::mojom::FSPOperationResponse response,
-      crosapi::mojom::FileSystemIdPtr file_system_id,
-      int request_id,
-      base::Value::List args);
+  ResponseAction ForwardOperationResult(
+      const std::string& file_system_id,
+      int64_t request_id,
+      const ash::file_system_provider::RequestValue& value,
+      std::variant<bool /*has_more*/, base::File::Error /*error*/> arg);
 };
 
 class FileSystemProviderInternalRespondToMountRequestFunction
@@ -155,7 +109,8 @@ class FileSystemProviderInternalUnmountRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_UNMOUNTREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalUnmountRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalUnmountRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -167,7 +122,8 @@ class FileSystemProviderInternalGetMetadataRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_GETMETADATAREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalGetMetadataRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalGetMetadataRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -179,7 +135,8 @@ class FileSystemProviderInternalGetActionsRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_GETACTIONSREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalGetActionsRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalGetActionsRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -191,7 +148,8 @@ class FileSystemProviderInternalReadDirectoryRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_READDIRECTORYREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalReadDirectoryRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalReadDirectoryRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -203,7 +161,21 @@ class FileSystemProviderInternalReadFileRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_READFILEREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalReadFileRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalReadFileRequestedSuccessFunction() override =
+      default;
+  ResponseAction Run() override;
+};
+
+class FileSystemProviderInternalOpenFileRequestedSuccessFunction
+    : public FileSystemProviderInternal {
+ public:
+  DECLARE_EXTENSION_FUNCTION(
+      "fileSystemProviderInternal.openFileRequestedSuccess",
+      FILESYSTEMPROVIDERINTERNAL_OPENFILEREQUESTEDSUCCESS)
+
+ protected:
+  ~FileSystemProviderInternalOpenFileRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -215,7 +187,8 @@ class FileSystemProviderInternalOperationRequestedSuccessFunction
       FILESYSTEMPROVIDERINTERNAL_OPERATIONREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalOperationRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalOperationRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -227,7 +200,8 @@ class FileSystemProviderInternalOperationRequestedErrorFunction
       FILESYSTEMPROVIDERINTERNAL_OPERATIONREQUESTEDERROR)
 
  protected:
-  ~FileSystemProviderInternalOperationRequestedErrorFunction() override {}
+  ~FileSystemProviderInternalOperationRequestedErrorFunction() override =
+      default;
   ResponseAction Run() override;
 };
 

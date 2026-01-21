@@ -4,7 +4,6 @@
 
 #include "components/global_media_controls/public/media_session_item_producer.h"
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "components/global_media_controls/public/media_item_manager.h"
@@ -19,15 +18,6 @@ namespace {
 constexpr int kAutoDismissTimerInMinutesDefault = 60;  // minutes
 
 constexpr const char kAutoDismissTimerInMinutesParamName[] = "timer_in_minutes";
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class MediaNotificationClickSource {
-  kMedia = 0,
-  kPresentation,
-  kMediaFling,
-  kMaxValue = kMediaFling
-};
 
 // Returns the time value to be used for the auto-dismissing of the
 // notifications after they are inactive.
@@ -68,13 +58,6 @@ MediaSessionItemProducer::Session::~Session() {
 
 void MediaSessionItemProducer::Session::MediaSessionInfoChanged(
     media_session::mojom::MediaSessionInfoPtr session_info) {
-  if (session_info && session_info->has_presentation) {
-    // The presentation gets its own item, so this item has become redundant.
-    // |this| gets deleted here.
-    owner_->RemoveItem(id_);
-    return;
-  }
-
   is_playing_ =
       session_info && session_info->playback_state ==
                           media_session::mojom::MediaPlaybackState::kPlaying;
@@ -100,7 +83,7 @@ void MediaSessionItemProducer::Session::MediaSessionInfoChanged(
 void MediaSessionItemProducer::Session::MediaSessionActionsChanged(
     const std::vector<media_session::mojom::MediaSessionAction>& actions) {
   bool is_audio_device_switching_supported =
-      base::ranges::find(
+      std::ranges::find(
           actions,
           media_session::mojom::MediaSessionAction::kSwitchAudioDevice) !=
       actions.end();
@@ -113,7 +96,7 @@ void MediaSessionItemProducer::Session::MediaSessionActionsChanged(
 }
 
 void MediaSessionItemProducer::Session::MediaSessionPositionChanged(
-    const absl::optional<media_session::MediaPosition>& position) {
+    const std::optional<media_session::MediaPosition>& position) {
   OnSessionInteractedWith();
 }
 
@@ -153,7 +136,11 @@ void MediaSessionItemProducer::Session::OnSessionInteractedWith() {
 }
 
 bool MediaSessionItemProducer::Session::IsPlaying() const {
-  return is_playing_;
+  // Since both MediaSessionItemProducer and MediaSessionNotificationItem
+  // registered for MediaControllerObserver::MediaSessionInfoChanged(), we need
+  // to check both places to get the most recent playback state in case one has
+  // been updated while the other has not yet when this is called.
+  return is_playing_ || item_->IsPlaying();
 }
 
 void MediaSessionItemProducer::Session::SetAudioSinkId(const std::string& id) {
@@ -217,7 +204,7 @@ MediaSessionItemProducer::MediaSessionItemProducer(
     mojo::Remote<media_session::mojom::MediaControllerManager>
         controller_manager_remote,
     MediaItemManager* item_manager,
-    absl::optional<base::UnguessableToken> source_id)
+    std::optional<base::UnguessableToken> source_id)
     : audio_focus_remote_(std::move(audio_focus_remote)),
       controller_manager_remote_(std::move(controller_manager_remote)),
       item_manager_(item_manager),
@@ -282,13 +269,16 @@ void MediaSessionItemProducer::OnFocusGained(
     it->second.item()->SetController(std::move(item_controller),
                                      std::move(session->session_info));
   } else {
+    bool always_hidden =
+        is_id_blocked_callback_ && is_id_blocked_callback_.Run(id);
     sessions_.emplace(
         std::piecewise_construct, std::forward_as_tuple(id),
         std::forward_as_tuple(
             this, id,
             std::make_unique<MediaSessionNotificationItem>(
                 this, id, session->source_name.value_or(std::string()),
-                std::move(item_controller), std::move(session->session_info)),
+                session->source_id, std::move(item_controller),
+                std::move(session->session_info), always_hidden),
             std::move(session_controller)));
   }
 }
@@ -302,8 +292,8 @@ void MediaSessionItemProducer::OnFocusLost(
     return;
 
   // If we're not currently showing this item, then we can just remove it.
-  if (!base::Contains(active_controllable_session_ids_, id) &&
-      !base::Contains(frozen_session_ids_, id)) {
+  if (!active_controllable_session_ids_.contains(id) &&
+      !frozen_session_ids_.contains(id)) {
     RemoveItem(id);
     return;
   }
@@ -328,17 +318,19 @@ void MediaSessionItemProducer::OnRequestIdReleased(
   RemoveItem(id);
 }
 
-void MediaSessionItemProducer::OnMediaItemUIClicked(const std::string& id) {
+void MediaSessionItemProducer::OnMediaItemUIClicked(
+    const std::string& id,
+    bool activate_original_media) {
   auto it = sessions_.find(id);
-  if (it == sessions_.end())
+  if (it == sessions_.end()) {
     return;
+  }
 
   it->second.OnSessionInteractedWith();
 
-  base::UmaHistogramEnumeration("Media.Notification.Click",
-                                MediaNotificationClickSource::kMedia);
-
-  it->second.item()->Raise();
+  if (activate_original_media) {
+    it->second.item()->Raise();
+  }
 }
 
 void MediaSessionItemProducer::OnMediaItemUIDismissed(const std::string& id) {
@@ -371,12 +363,12 @@ void MediaSessionItemProducer::OnItemShown(const std::string& id,
 
 bool MediaSessionItemProducer::IsItemActivelyPlaying(const std::string& id) {
   const auto it = sessions_.find(id);
-  return it == sessions_.end() ? false : it->second.IsPlaying();
+  return it != sessions_.end() && it->second.IsPlaying();
 }
 
 void MediaSessionItemProducer::ActivateItem(const std::string& id) {
   DCHECK(HasSession(id));
-  if (base::Contains(inactive_session_ids_, id))
+  if (inactive_session_ids_.contains(id))
     return;
 
   active_controllable_session_ids_.insert(id);
@@ -400,14 +392,14 @@ void MediaSessionItemProducer::RemoveItem(const std::string& id) {
 
 void MediaSessionItemProducer::RefreshItem(const std::string& id) {
   DCHECK(HasSession(id));
-  if (base::Contains(inactive_session_ids_, id))
+  if (inactive_session_ids_.contains(id))
     return;
 
   item_manager_->RefreshItem(id);
 }
 
 bool MediaSessionItemProducer::HasSession(const std::string& id) const {
-  return base::Contains(sessions_, id);
+  return sessions_.contains(id);
 }
 
 void MediaSessionItemProducer::LogMediaSessionActionButtonPressed(
@@ -420,7 +412,7 @@ void MediaSessionItemProducer::LogMediaSessionActionButtonPressed(
 void MediaSessionItemProducer::SetAudioSinkId(const std::string& id,
                                               const std::string& sink_id) {
   auto it = sessions_.find(id);
-  DCHECK(it != sessions_.end());
+  CHECK(it != sessions_.end());
   it->second.SetAudioSinkId(sink_id);
 }
 
@@ -436,10 +428,15 @@ MediaSessionItemProducer::RegisterIsAudioOutputDeviceSwitchingSupportedCallback(
     const std::string& id,
     base::RepeatingCallback<void(bool)> callback) {
   auto it = sessions_.find(id);
-  DCHECK(it != sessions_.end());
+  CHECK(it != sessions_.end());
 
   return it->second.RegisterIsAudioDeviceSwitchingSupportedCallback(
       std::move(callback));
+}
+
+void MediaSessionItemProducer::SetIsIdBlockedCallback(
+    base::RepeatingCallback<bool(const std::string&)> callback) {
+  is_id_blocked_callback_ = std::move(callback);
 }
 
 void MediaSessionItemProducer::UpdateMediaItemSourceOrigin(
@@ -457,10 +454,10 @@ MediaSessionItemProducer::Session* MediaSessionItemProducer::GetSession(
 }
 
 void MediaSessionItemProducer::OnSessionBecameActive(const std::string& id) {
-  DCHECK(base::Contains(inactive_session_ids_, id));
+  DCHECK(inactive_session_ids_.contains(id));
 
   auto it = sessions_.find(id);
-  DCHECK(it != sessions_.end());
+  CHECK(it != sessions_.end());
 
   inactive_session_ids_.erase(id);
 
@@ -474,7 +471,7 @@ void MediaSessionItemProducer::OnSessionBecameActive(const std::string& id) {
 
 void MediaSessionItemProducer::OnSessionBecameInactive(const std::string& id) {
   // If this session is already marked inactive, then there's nothing to do.
-  if (base::Contains(inactive_session_ids_, id))
+  if (inactive_session_ids_.contains(id))
     return;
 
   inactive_session_ids_.insert(id);
@@ -484,10 +481,6 @@ void MediaSessionItemProducer::OnSessionBecameInactive(const std::string& id) {
 
   // Let the service know that the item is hidden.
   item_manager_->HideItem(id);
-}
-
-void MediaSessionItemProducer::HideMediaDialog() {
-  item_manager_->HideDialog();
 }
 
 void MediaSessionItemProducer::OnReceivedAudioFocusRequests(

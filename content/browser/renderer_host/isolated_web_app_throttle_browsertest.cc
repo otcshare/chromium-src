@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
-#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_mock_cert_verifier.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
@@ -24,16 +24,16 @@ namespace content {
 
 namespace {
 
-static constexpr RenderFrameHost::WebExposedIsolationLevel kNotIsolated =
-    RenderFrameHost::WebExposedIsolationLevel::kNotIsolated;
-static constexpr RenderFrameHost::WebExposedIsolationLevel
-    kMaybeIsolatedApplication =
-        RenderFrameHost::WebExposedIsolationLevel::kMaybeIsolatedApplication;
+static constexpr WebExposedIsolationLevel kNotIsolated =
+    WebExposedIsolationLevel::kNotIsolated;
+static constexpr WebExposedIsolationLevel kIsolatedApplication =
+    WebExposedIsolationLevel::kIsolatedApplication;
 
 const char kAppHost[] = "app.com";
 const char kNonAppHost[] = "other.com";
 
-class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
+class IsolatedWebAppContentBrowserClient
+    : public ContentBrowserTestContentBrowserClient {
  public:
   explicit IsolatedWebAppContentBrowserClient(
       net::EmbeddedTestServer* embedded_https_server) {
@@ -41,12 +41,12 @@ class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
     app_origin_ = url::Origin::Create(app_url);
   }
 
-  bool ShouldUrlUseApplicationIsolationLevel(
-      BrowserContext* browser_context,
-      const GURL& url,
-      bool origin_matches_flag) override {
-    return url.host() == kAppHost;
+  bool ShouldUrlUseApplicationIsolationLevel(BrowserContext* browser_context,
+                                             const GURL& url) override {
+    return url.GetHost() == kAppHost;
   }
+
+  bool AreIsolatedWebAppsEnabled(BrowserContext*) override { return true; }
 
  private:
   url::Origin app_origin_;
@@ -56,12 +56,9 @@ class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
 
 class HttpsBrowserTest : public ContentBrowserTest {
  public:
-  HttpsBrowserTest() : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
-    scoped_feature_list_.InitAndEnableFeature(features::kIsolatedWebApps);
-  }
+  HttpsBrowserTest() : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     mock_cert_verifier_.SetUpCommandLine(command_line);
   }
 
@@ -88,8 +85,6 @@ class HttpsBrowserTest : public ContentBrowserTest {
  private:
   net::EmbeddedTestServer https_server_;
   ContentMockCertVerifier mock_cert_verifier_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 class IsolatedWebAppThrottleBrowserTest : public HttpsBrowserTest {
@@ -99,12 +94,11 @@ class IsolatedWebAppThrottleBrowserTest : public HttpsBrowserTest {
 
     test_client_ =
         std::make_unique<IsolatedWebAppContentBrowserClient>(https_server());
-    old_client_ = SetBrowserClientForTesting(test_client_.get());
   }
 
   void TearDownOnMainThread() override {
     HttpsBrowserTest::TearDownOnMainThread();
-    SetBrowserClientForTesting(old_client_);
+    test_client_.reset();
   }
 
  protected:
@@ -169,7 +163,6 @@ class IsolatedWebAppThrottleBrowserTest : public HttpsBrowserTest {
 
  private:
   std::unique_ptr<IsolatedWebAppContentBrowserClient> test_client_;
-  raw_ptr<ContentBrowserClient> old_client_;
 };
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
@@ -189,8 +182,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
                        CancelCrossOriginNavigationInApp) {
   GURL app_url = GetAppURL("/cross-origin-isolated.html");
   EXPECT_TRUE(NavigateToURL(web_contents(), app_url));
-  EXPECT_EQ(kMaybeIsolatedApplication,
-            main_rfh()->GetWebExposedIsolationLevel());
+  EXPECT_EQ(kIsolatedApplication, main_rfh()->GetWebExposedIsolationLevel());
 
   TestNavigationObserver navigation_observer(web_contents());
   shell()->LoadURL(GetNonAppURL("/simple_page.html"));
@@ -203,15 +195,15 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
                        IframeInitiatedIframeNavigationIntoAppBlocked) {
   GURL app_url = GetAppURL("/cross-origin-isolated.html");
   EXPECT_TRUE(NavigateToURL(web_contents(), app_url));
-  EXPECT_EQ(kMaybeIsolatedApplication,
-            main_rfh()->GetWebExposedIsolationLevel());
+  EXPECT_EQ(kIsolatedApplication, main_rfh()->GetWebExposedIsolationLevel());
 
   RenderFrameHost* iframe =
       CreateChildIframe(main_rfh(), GetNonAppURL("/corp-cross-origin.html"));
+  const blink::LocalFrameToken iframe_token = iframe->GetFrameToken();
 
   std::unique_ptr<TestNavigationObserver> navigation_observer =
       SelfNavigateIframeToURL(iframe, app_url);
-  EXPECT_EQ(iframe->GetFrameToken(),
+  EXPECT_EQ(iframe_token,
             navigation_observer->last_initiator_frame_token().value());
   EXPECT_FALSE(navigation_observer->last_navigation_succeeded());
   EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT,
@@ -222,8 +214,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
                        AppInitiatedIframeNavigationIntoAppAllowed) {
   GURL app_url = GetAppURL("/cross-origin-isolated.html");
   EXPECT_TRUE(NavigateToURL(web_contents(), app_url));
-  EXPECT_EQ(kMaybeIsolatedApplication,
-            main_rfh()->GetWebExposedIsolationLevel());
+  EXPECT_EQ(kIsolatedApplication, main_rfh()->GetWebExposedIsolationLevel());
 
   RenderFrameHost* iframe =
       CreateChildIframe(main_rfh(), GetNonAppURL("/corp-cross-origin.html"));
@@ -234,6 +225,44 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
             navigation_observer->last_initiator_frame_token().value());
   EXPECT_TRUE(navigation_observer->last_navigation_succeeded());
   EXPECT_EQ(net::OK, navigation_observer->last_net_error_code());
+}
+
+IN_PROC_BROWSER_TEST_F(IsolatedWebAppThrottleBrowserTest,
+                       ExternalLinkClickOpensInNewTab) {
+  GURL app_url = GetAppURL("/cross-origin-isolated.html");
+  EXPECT_TRUE(NavigateToURL(web_contents(), app_url));
+  ASSERT_EQ(kIsolatedApplication, main_rfh()->GetWebExposedIsolationLevel());
+
+  GURL external_url("https://www.example.com/");
+  EXPECT_TRUE(ExecJs(main_rfh(), JsReplace(R"(
+        const link = document.createElement('a');
+        link.href = $1;
+        link.id = 'external_link';
+        link.target = '_self';
+        link.rel = 'noopener';
+        link.textContent = 'External Link';
+        document.body.appendChild(link);
+      )",
+                                           external_url)));
+
+  content::WebContentsAddedObserver web_contents_added_observer;
+
+  // Simulate clicking the link, which should create a new tab.
+  EXPECT_TRUE(
+      ExecJs(main_rfh(), "document.getElementById('external_link').click();"));
+
+  // Despite target="_self", navigations from an IWA to a different origin
+  // should always open in a new tab in the main browser.
+  content::WebContents* new_web_contents =
+      web_contents_added_observer.GetWebContents();
+  ASSERT_NE(nullptr, new_web_contents)
+      << "New tab was not opened for external link.";
+
+  content::TestNavigationObserver nav_observer(new_web_contents);
+  nav_observer.Wait();
+
+  EXPECT_EQ(external_url, nav_observer.last_navigation_url());
+  EXPECT_EQ(app_url, web_contents()->GetLastCommittedURL());
 }
 
 }  // namespace content

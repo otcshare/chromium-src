@@ -5,10 +5,14 @@
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 
 #include <algorithm>
+#include <string_view>
 
-#include "base/metrics/histogram_functions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
+#include "net/base/url_util.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 
@@ -46,8 +50,8 @@ PageAbortReason GetAbortReasonForEndReason(PageEndReason end_reason) {
 }
 
 // Common helper for QueryContainsComponent and QueryContainsComponentPrefix.
-bool QueryContainsComponentHelper(const base::StringPiece query,
-                                  const base::StringPiece component,
+bool QueryContainsComponentHelper(std::string_view query,
+                                  std::string_view component,
                                   bool component_is_prefix) {
   if (query.empty() || component.empty() ||
       component.length() > query.length()) {
@@ -60,7 +64,7 @@ bool QueryContainsComponentHelper(const base::StringPiece query,
   // Note: This heuristic can cause a component string that starts with one of
   // these characters to not match a query string which contains it at the
   // beginning.
-  const base::StringPiece trimmed_query =
+  const std::string_view trimmed_query =
       base::TrimString(query, "?#", base::TrimPositions::TRIM_LEADING);
 
   // We shouldn't try to find matches beyond the point where there aren't enough
@@ -103,6 +107,22 @@ bool QueryContainsComponentHelper(const base::StringPiece query,
   return false;
 }
 
+// Returns the category ID given a string if it matches the configured pattern.
+std::optional<uint32_t> GetCategoryId(const std::string& category) {
+  auto category_prefix = features::kBeaconLeakageLoggingCategoryPrefix.Get();
+  if (category_prefix.empty() || !category.starts_with(category_prefix)) {
+    return std::nullopt;
+  }
+
+  uint32_t category_id;
+  if (!base::StringToUint(category.substr(category_prefix.size()),
+                          &category_id)) {
+    return std::nullopt;
+  }
+
+  return category_id;
+}
+
 }  // namespace
 
 void UmaMaxCumulativeShiftScoreHistogram10000x(
@@ -116,15 +136,17 @@ void UmaMaxCumulativeShiftScoreHistogram10000x(
 }
 
 bool WasStartedInForegroundOptionalEventInForeground(
-    const absl::optional<base::TimeDelta>& event,
+    const std::optional<base::TimeDelta>& event,
     const PageLoadMetricsObserverDelegate& delegate) {
   return delegate.StartedInForeground() && event &&
          (!delegate.GetTimeToFirstBackground() ||
           event.value() <= delegate.GetTimeToFirstBackground().value());
 }
 
+// There is a copy of this function in prerender_page_load_metrics_observer.cc.
+// Please keep this consistent with the function.
 bool WasActivatedInForegroundOptionalEventInForeground(
-    const absl::optional<base::TimeDelta>& event,
+    const std::optional<base::TimeDelta>& event,
     const PageLoadMetricsObserverDelegate& delegate) {
   return delegate.WasPrerenderedThenActivatedInForeground() && event &&
          (!delegate.GetTimeToFirstBackground() ||
@@ -132,12 +154,12 @@ bool WasActivatedInForegroundOptionalEventInForeground(
 }
 
 bool WasStartedInForegroundOptionalEventInForegroundAfterBackForwardCacheRestore(
-    const absl::optional<base::TimeDelta>& event,
+    const std::optional<base::TimeDelta>& event,
     const PageLoadMetricsObserverDelegate& delegate,
     size_t index) {
   const auto& back_forward_cache_restore =
       delegate.GetBackForwardCacheRestore(index);
-  absl::optional<base::TimeDelta> first_background_time =
+  std::optional<base::TimeDelta> first_background_time =
       back_forward_cache_restore.first_background_time;
   return back_forward_cache_restore.was_in_foreground && event &&
          (!first_background_time ||
@@ -145,7 +167,7 @@ bool WasStartedInForegroundOptionalEventInForegroundAfterBackForwardCacheRestore
 }
 
 bool WasStartedInBackgroundOptionalEventInForeground(
-    const absl::optional<base::TimeDelta>& event,
+    const std::optional<base::TimeDelta>& event,
     const PageLoadMetricsObserverDelegate& delegate) {
   return !delegate.StartedInForeground() && event &&
          delegate.GetTimeToFirstForeground() &&
@@ -158,10 +180,11 @@ bool WasInForeground(const PageLoadMetricsObserverDelegate& delegate) {
   return delegate.StartedInForeground() || delegate.GetTimeToFirstForeground();
 }
 
-absl::optional<base::TimeDelta> GetNonPrerenderingBackgroundStartTiming(
+std::optional<base::TimeDelta> GetNonPrerenderingBackgroundStartTiming(
     const PageLoadMetricsObserverDelegate& delegate) {
   switch (delegate.GetPrerenderingState()) {
     case PrerenderingState::kNoPrerendering:
+    case PrerenderingState::kInPreview:
       if (delegate.StartedInForeground()) {
         return delegate.GetTimeToFirstBackground();
       } else {
@@ -169,7 +192,7 @@ absl::optional<base::TimeDelta> GetNonPrerenderingBackgroundStartTiming(
       }
     case PrerenderingState::kInPrerendering:
     case PrerenderingState::kActivatedNoActivationStart:
-      return absl::nullopt;
+      return std::nullopt;
     case PrerenderingState::kActivated:
       if (delegate.GetVisibilityAtActivation() == PageVisibility::kForeground) {
         return delegate.GetTimeToFirstBackground();
@@ -192,7 +215,7 @@ bool EventOccurredBeforeNonPrerenderingBackgroundStart(
 
 // Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
 // We'll left the old version for a while.
-// TODO(https://crbug.com/1317494): Use the above version and delete this.
+// TODO(crbug.com/40222513): Use the above version and delete this.
 bool EventOccurredBeforeNonPrerenderingBackgroundStart(
     const PageLoadMetricsObserverDelegate& delegate,
     const page_load_metrics::mojom::PageLoadTiming& timing,
@@ -207,20 +230,22 @@ base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
 
   switch (delegate.GetPrerenderingState()) {
     case PrerenderingState::kNoPrerendering:
+    case PrerenderingState::kInPreview:
       return event;
     case PrerenderingState::kInPrerendering:
     case PrerenderingState::kActivatedNoActivationStart:
       return zero;
     case PrerenderingState::kActivated: {
       base::TimeDelta corrected = event - delegate.GetActivationStart().value();
-      return std::max(zero, corrected);
+      // If the event occurred before activation, return 0.
+      return std::max(corrected, zero);
     }
   }
 }
 
 // Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
 // We'll left the old version for a while.
-// TODO(https://crbug.com/1317494): Use the above version and delete this.
+// TODO(crbug.com/40222513): Use the above version and delete this.
 base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
     const PageLoadMetricsObserverDelegate& delegate,
     const page_load_metrics::mojom::PageLoadTiming& timing,
@@ -248,13 +273,13 @@ PageAbortInfo GetPageAbortInfo(
           delegate.GetTimeToPageEnd().value()};
 }
 
-absl::optional<base::TimeDelta> GetInitialForegroundDuration(
+std::optional<base::TimeDelta> GetInitialForegroundDuration(
     const PageLoadMetricsObserverDelegate& delegate,
     base::TimeTicks app_background_time) {
   if (!delegate.StartedInForeground())
-    return absl::optional<base::TimeDelta>();
+    return std::nullopt;
 
-  absl::optional<base::TimeDelta> time_on_page = OptionalMin(
+  std::optional<base::TimeDelta> time_on_page = OptionalMin(
       delegate.GetTimeToFirstBackground(), delegate.GetTimeToPageEnd());
 
   // If we don't have a time_on_page value yet, and we have an app background
@@ -279,56 +304,18 @@ bool DidObserveLoadingBehaviorInAnyFrame(
   return (all_frame_loading_behavior_flags & behavior) != 0;
 }
 
-bool IsGoogleSearchHostname(const GURL& url) {
-  absl::optional<std::string> result =
-      page_load_metrics::GetGoogleHostnamePrefix(url);
-  return result && result.value() == "www";
+bool IsZstdUrl(const GURL& url) {
+  return url.DomainIs("facebook.com") || url.DomainIs("instagram.com") ||
+         url.DomainIs("whatsapp.com") || url.DomainIs("messenger.com");
 }
 
-bool IsGoogleSearchResultUrl(const GURL& url) {
-  // NOTE: we do not require 'q=' in the query, as AJAXy search may instead
-  // store the query in the URL fragment.
-  if (!IsGoogleSearchHostname(url)) {
-    return false;
-  }
-
-  if (!QueryContainsComponentPrefix(url.query_piece(), "q=") &&
-      !QueryContainsComponentPrefix(url.ref_piece(), "q=")) {
-    return false;
-  }
-
-  const base::StringPiece path = url.path_piece();
-  return path == "/search" || path == "/webhp" || path == "/custom" ||
-         path == "/";
-}
-
-bool IsGoogleSearchRedirectorUrl(const GURL& url) {
-  if (!IsGoogleSearchHostname(url))
-    return false;
-
-  // The primary search redirector.  Google search result redirects are
-  // differentiated from other general google redirects by 'source=web' in the
-  // query string.
-  if (url.path_piece() == "/url" && url.has_query() &&
-      QueryContainsComponent(url.query_piece(), "source=web")) {
-    return true;
-  }
-
-  // Intent-based navigations from search are redirected through a second
-  // redirector, which receives its redirect URL in the fragment/hash/ref
-  // portion of the URL (the portion after '#'). We don't check for the presence
-  // of certain params in the ref since this redirector is only used for
-  // redirects from search.
-  return url.path_piece() == "/searchurl/r.html" && url.has_ref();
-}
-
-bool QueryContainsComponent(const base::StringPiece query,
-                            const base::StringPiece component) {
+bool QueryContainsComponent(std::string_view query,
+                            std::string_view component) {
   return QueryContainsComponentHelper(query, component, false);
 }
 
-bool QueryContainsComponentPrefix(const base::StringPiece query,
-                                  const base::StringPiece component) {
+bool QueryContainsComponentPrefix(std::string_view query,
+                                  std::string_view component) {
   return QueryContainsComponentHelper(query, component, true);
 }
 
@@ -343,7 +330,7 @@ int32_t LayoutShiftUmaValue(float shift_score) {
 }
 
 int32_t LayoutShiftUmaValue10000(float shift_score) {
-  // Report (shift_score * 10000) as an int in the range [0, 1000].
+  // Report (shift_score * 10000) as an int in the range [0, 100000].
   return static_cast<int>(roundf(std::min(shift_score, 10.0f) * 10000.0f));
 }
 
@@ -358,12 +345,47 @@ PageVisitFinalStatus RecordPageVisitFinalStatusForTiming(
                             ? PageVisitFinalStatus::kReachedFCP
                             : PageVisitFinalStatus::kAborted;
   }
-  UMA_HISTOGRAM_ENUMERATION("UserPerceivedPageVisit.PageVisitFinalStatus",
-                            page_visit_status);
   ukm::builders::UserPerceivedPageVisit pageVisitBuilder(source_id);
   pageVisitBuilder.SetPageVisitFinalStatus(static_cast<int>(page_visit_status));
   pageVisitBuilder.Record(ukm::UkmRecorder::Get());
   return page_visit_status;
+}
+
+std::optional<uint32_t> GetCategoryIdFromUrl(const GURL& url) {
+  std::string category;
+  if (net::GetValueForKeyInQuery(
+          url, features::kBeaconLeakageLoggingCategoryParamName.Get(),
+          &category)) {
+    return GetCategoryId(category);
+  }
+  return std::nullopt;
+}
+
+bool IsServiceWorkerControlled(
+    const PageLoadMetricsObserverDelegate& delegate) {
+  return (delegate.GetMainFrameMetadata().behavior_flags &
+          blink::LoadingBehaviorFlag::
+              kLoadingBehaviorServiceWorkerControlled) != 0;
+}
+
+bool IsServiceWorkerSyntheticResponseEnabled(
+    const PageLoadMetricsObserverDelegate& delegate) {
+  if ((delegate.GetMainFrameMetadata().behavior_flags &
+       blink::LoadingBehaviorFlag::
+           kLoadingBehaviorServiceWorkerSyntheticResponse) != 0) {
+    // TODO(crbug.com/40240298): This is added to ensure the tests correctly set
+    // expected loading behaviors. Remove this CHECK once
+    // `ControllerServiceWorkerMode` is updated.
+    CHECK(!IsServiceWorkerControlled(delegate));
+    return true;
+  }
+  return false;
+}
+
+bool IsServiceWorkerControlledOrSyntheticResponseEnabled(
+    const PageLoadMetricsObserverDelegate& delegate) {
+  return IsServiceWorkerControlled(delegate) ||
+         IsServiceWorkerSyntheticResponseEnabled(delegate);
 }
 
 }  // namespace page_load_metrics

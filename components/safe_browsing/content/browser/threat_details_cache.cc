@@ -8,16 +8,22 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
-#include "base/hash/md5.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "components/safe_browsing/content/browser/threat_details.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "crypto/obsolete/md5.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
+#include "net/base/proxy_chain.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -32,6 +38,10 @@ using content::BrowserThread;
 static const uint32_t kMaxBodySizeBytes = 1024;
 
 namespace safe_browsing {
+
+std::string Md5AsHexForBodyDigest(std::string_view data) {
+  return base::HexEncodeLower(crypto::obsolete::Md5::Hash(data));
+}
 
 ThreatDetailsCacheCollector::ThreatDetailsCacheCollector()
     : resources_(nullptr), result_(nullptr), has_started_(false) {}
@@ -63,7 +73,7 @@ bool ThreatDetailsCacheCollector::HasStarted() {
   return has_started_;
 }
 
-ThreatDetailsCacheCollector::~ThreatDetailsCacheCollector() {}
+ThreatDetailsCacheCollector::~ThreatDetailsCacheCollector() = default;
 
 // Fetch a URL and advance to the next one when done.
 void ThreatDetailsCacheCollector::OpenEntry() {
@@ -89,7 +99,8 @@ void ThreatDetailsCacheCollector::OpenEntry() {
             "This request fetches different items from safe browsing cache "
             "and DOES NOT make an actual network request."
           trigger:
-            "When safe browsing extended report is collecting data."
+            "When safe browsing extended report is collecting data. Triggered "
+            "also when HaTS surveys are enabled."
           data:
             "None"
           destination: OTHER
@@ -101,7 +112,8 @@ void ThreatDetailsCacheCollector::OpenEntry() {
             "security incident reports to Google via disabling 'Automatically "
             "report details of possible security incidents to Google.' in "
             "Chrome's settings under Advanced Settings, Privacy. The feature "
-            "is disabled by default."
+            "is disabled by default. Note: if a user takes a survey related "
+            "to security or safety, this feature may be enabled."
           chrome_policy {
             SafeBrowsingExtendedReportingEnabled {
               policy_options {mode: MANDATORY}
@@ -135,7 +147,7 @@ ThreatDetailsCacheCollector::GetResource(const GURL& url) {
 }
 
 void ThreatDetailsCacheCollector::OnURLLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DVLOG(1) << "OnURLLoaderComplete";
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(current_load_);
@@ -165,10 +177,7 @@ void ThreatDetailsCacheCollector::OnURLLoaderComplete(
   }
 
   ReadResponse(resource);
-  std::string data;
-  if (response_body)
-    data = *response_body;
-  ReadData(resource, data);
+  ReadData(resource, std::move(response_body).value_or(""));
   AdvanceEntry();
 }
 
@@ -200,8 +209,8 @@ void ThreatDetailsCacheCollector::ReadResponse(
   }
 
   bool was_fetched_via_proxy =
-      current_load_->ResponseInfo()->proxy_server.is_valid() &&
-      !current_load_->ResponseInfo()->proxy_server.is_direct();
+      current_load_->ResponseInfo()->proxy_chain.IsValid() &&
+      !current_load_->ResponseInfo()->proxy_chain.is_direct();
   if (!was_fetched_via_proxy) {
     pb_response->set_remote_ip(
         current_load_->ResponseInfo()->remote_endpoint.ToString());
@@ -219,7 +228,7 @@ void ThreatDetailsCacheCollector::ReadData(
     pb_response->set_body(data);
   }
   pb_response->set_bodylength(data.size());
-  pb_response->set_bodydigest(base::MD5String(data));
+  pb_response->set_bodydigest(Md5AsHexForBodyDigest(data));
 }
 
 void ThreatDetailsCacheCollector::AdvanceEntry() {

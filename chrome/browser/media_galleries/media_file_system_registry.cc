@@ -11,20 +11,18 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/notreached.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
+#include "chrome/browser/media_galleries/fileapi/mtp_device_map_service.h"
 #include "chrome/browser/media_galleries/gallery_watch_manager.h"
 #include "chrome/browser/media_galleries/media_file_system_context.h"
-#include "chrome/browser/media_galleries/media_galleries_histograms.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/keyed_service/content/browser_context_keyed_service_shutdown_notifier_factory.h"
@@ -41,10 +39,6 @@
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/common/file_system/file_system_mount_option.h"
 #include "storage/common/file_system/file_system_types.h"
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/media_galleries/fileapi/mtp_device_map_service.h"
-#endif
 
 using content::BrowserThread;
 using content::NavigationController;
@@ -79,11 +73,11 @@ class MediaFileSystemRegistryShutdownNotifierFactory
             "MediaFileSystemRegistry") {
     DependsOn(MediaGalleriesPreferencesFactory::GetInstance());
   }
-  ~MediaFileSystemRegistryShutdownNotifierFactory() override {}
+  ~MediaFileSystemRegistryShutdownNotifierFactory() override = default;
 };
 
 struct InvalidatedGalleriesInfo {
-  std::set<ExtensionGalleriesHost*> extension_hosts;
+  std::set<raw_ptr<ExtensionGalleriesHost, SetExperimental>> extension_hosts;
   std::set<MediaGalleryPrefId> pref_ids;
 };
 
@@ -126,10 +120,10 @@ MediaFileSystemInfo::MediaFileSystemInfo(const std::u16string& fs_name,
       removable(removable),
       media_device(media_device) {}
 
-MediaFileSystemInfo::MediaFileSystemInfo() {}
+MediaFileSystemInfo::MediaFileSystemInfo() = default;
 MediaFileSystemInfo::MediaFileSystemInfo(const MediaFileSystemInfo& other) =
     default;
-MediaFileSystemInfo::~MediaFileSystemInfo() {}
+MediaFileSystemInfo::~MediaFileSystemInfo() = default;
 
 // The main owner of this class is
 // |MediaFileSystemRegistry::extension_hosts_map_|, but a callback may
@@ -245,8 +239,9 @@ class ExtensionGalleriesHost {
       const MediaGalleryPrefInfo& gallery_info =
           galleries_info.find(pref_id)->second;
       const std::string& device_id = gallery_info.device_id;
-      if (!base::Contains(*attached_devices, device_id))
+      if (!attached_devices->contains(device_id)) {
         continue;
+      }
 
       PrefIdFsInfoMap::const_iterator existing_info =
           pref_id_map_.find(pref_id);
@@ -296,7 +291,7 @@ class ExtensionGalleriesHost {
       base::FilePath path = gallery.AbsolutePath();
       const std::string& device_id = gallery.device_id;
 
-      if (base::Contains(pref_id_map_, gallery.pref_id)) {
+      if (pref_id_map_.contains(gallery.pref_id)) {
         result = base::File::FILE_OK;
       } else if (MediaStorageUtil::CanCreateFileSystem(device_id, path) &&
                  file_system_context_->RegisterFileSystem(device_id, fs_name,
@@ -342,7 +337,7 @@ class ExtensionGalleriesHost {
   const base::FilePath profile_path_;
 
   // Id of the extension this host belongs to.
-  const std::string extension_id_;
+  const extensions::ExtensionId extension_id_;
 
   // A callback to call when the last WebContents reference goes away.
   base::OnceClosure no_references_callback_;
@@ -404,7 +399,7 @@ void MediaFileSystemRegistry::RegisterMediaFileSystemForExtension(
       preferences->GalleriesForExtension(*extension);
 
   if (gallery == preferences->known_galleries().end() ||
-      !base::Contains(permitted_galleries, pref_id)) {
+      !permitted_galleries.contains(pref_id)) {
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), base::File::FILE_ERROR_NOT_FOUND));
@@ -424,16 +419,15 @@ void MediaFileSystemRegistry::RegisterMediaFileSystemForExtension(
 MediaGalleriesPreferences* MediaFileSystemRegistry::GetPreferences(
     Profile* profile) {
   // Create an empty ExtensionHostMap for this profile on first initialization.
-  if (!base::Contains(extension_hosts_map_, profile)) {
+  if (!extension_hosts_map_.contains(profile)) {
     extension_hosts_map_[profile] = ExtensionHostMap();
-    DCHECK(!base::Contains(profile_subscription_map_, profile));
+    DCHECK(!profile_subscription_map_.contains(profile));
     profile_subscription_map_[profile] =
         MediaFileSystemRegistryShutdownNotifierFactory::GetInstance()
             ->Get(profile)
             ->Subscribe(
                 base::BindRepeating(&MediaFileSystemRegistry::OnProfileShutdown,
                                     base::Unretained(this), profile));
-    media_galleries::UsageCount(media_galleries::PROFILES_WITH_USAGE);
   }
 
   return MediaGalleriesPreferencesFactory::GetForProfile(profile);
@@ -499,13 +493,13 @@ void MediaFileSystemRegistry::OnRemovableStorageDetached(
 class MediaFileSystemRegistry::MediaFileSystemContextImpl
     : public MediaFileSystemContext {
  public:
-  MediaFileSystemContextImpl() {}
+  MediaFileSystemContextImpl() = default;
 
   MediaFileSystemContextImpl(const MediaFileSystemContextImpl&) = delete;
   MediaFileSystemContextImpl& operator=(const MediaFileSystemContextImpl&) =
       delete;
 
-  ~MediaFileSystemContextImpl() override {}
+  ~MediaFileSystemContextImpl() override = default;
 
   bool RegisterFileSystem(const std::string& device_id,
                           const std::string& fs_name,
@@ -518,13 +512,11 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
   void RevokeFileSystem(const std::string& fs_name) override {
     ExternalMountPoints::GetSystemInstance()->RevokeFileSystem(fs_name);
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH)
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(&MTPDeviceMapService::RevokeMTPFileSystem,
                        base::Unretained(MTPDeviceMapService::GetInstance()),
                        fs_name));
-#endif
   }
 
   base::FilePath GetRegisteredPath(const std::string& fs_name) const override {
@@ -557,7 +549,6 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
   bool RegisterFileSystemForMTPDevice(const std::string& device_id,
                                       const std::string fs_name,
                                       const base::FilePath& path) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH)
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
     DCHECK(!StorageInfo::IsMassStorageDevice(device_id));
 
@@ -575,10 +566,6 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
                        base::Unretained(MTPDeviceMapService::GetInstance()),
                        path.value(), fs_name, true /* read only */));
     return result;
-#else
-    NOTREACHED();
-    return false;
-#endif
   }
 };
 
@@ -600,7 +587,7 @@ void MediaFileSystemRegistry::OnPermissionRemoved(
   Profile* profile = prefs->profile();
   ExtensionGalleriesHostMap::const_iterator host_map_it =
       extension_hosts_map_.find(profile);
-  DCHECK(host_map_it != extension_hosts_map_.end());
+  CHECK(host_map_it != extension_hosts_map_.end());
   const ExtensionHostMap& extension_host_map = host_map_it->second;
   auto gallery_host_it = extension_host_map.find(extension_id);
   if (gallery_host_it == extension_host_map.end())
@@ -618,7 +605,7 @@ void MediaFileSystemRegistry::OnGalleryRemoved(
       extensions::ExtensionRegistry::Get(profile);
   ExtensionGalleriesHostMap::const_iterator host_map_it =
       extension_hosts_map_.find(profile);
-  DCHECK(host_map_it != extension_hosts_map_.end());
+  CHECK(host_map_it != extension_hosts_map_.end());
   const ExtensionHostMap& extension_host_map = host_map_it->second;
 
   // Go through ExtensionHosts, and remove indicated gallery, if any.
@@ -632,8 +619,9 @@ void MediaFileSystemRegistry::OnGalleryRemoved(
         extension_registry->enabled_extensions().GetByID(it->first));
   }
   for (size_t i = 0; i < extensions.size(); ++i) {
-    if (!base::Contains(extension_hosts_map_, profile))
+    if (!extension_hosts_map_.contains(profile)) {
       break;
+    }
     auto gallery_host_it = extension_host_map.find(extensions[i]->id());
     if (gallery_host_it == extension_host_map.end())
       continue;
@@ -648,7 +636,7 @@ ExtensionGalleriesHost* MediaFileSystemRegistry::GetExtensionGalleryHost(
   auto extension_hosts = extension_hosts_map_.find(profile);
   // GetPreferences(), which had to be called because preferences is an
   // argument, ensures that profile is in the map.
-  DCHECK(extension_hosts != extension_hosts_map_.end());
+  CHECK(extension_hosts != extension_hosts_map_.end());
   if (extension_hosts->second.empty())
     preferences->AddGalleryChangeObserver(this);
 
@@ -672,7 +660,7 @@ void MediaFileSystemRegistry::OnExtensionGalleriesHostEmpty(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   auto extension_hosts = extension_hosts_map_.find(profile);
-  DCHECK(extension_hosts != extension_hosts_map_.end());
+  CHECK(extension_hosts != extension_hosts_map_.end());
   ExtensionHostMap::size_type erase_count =
       extension_hosts->second.erase(extension_id);
   DCHECK_EQ(1U, erase_count);
@@ -690,10 +678,16 @@ void MediaFileSystemRegistry::OnProfileShutdown(Profile* profile) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   auto extension_hosts_it = extension_hosts_map_.find(profile);
-  DCHECK(extension_hosts_it != extension_hosts_map_.end());
+  CHECK(extension_hosts_it != extension_hosts_map_.end());
   extension_hosts_map_.erase(extension_hosts_it);
 
   auto profile_subscription_it = profile_subscription_map_.find(profile);
-  DCHECK(profile_subscription_it != profile_subscription_map_.end());
+  CHECK(profile_subscription_it != profile_subscription_map_.end());
   profile_subscription_map_.erase(profile_subscription_it);
+}
+
+// static
+BrowserContextKeyedServiceShutdownNotifierFactory*
+MediaFileSystemRegistry::GetFactoryInstance() {
+  return MediaFileSystemRegistryShutdownNotifierFactory::GetInstance();
 }

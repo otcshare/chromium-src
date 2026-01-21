@@ -7,15 +7,17 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 
-#include "content/public/android/content_jni_headers/SmsProviderGms_jni.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/SmsProviderGms_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
@@ -80,7 +82,9 @@ void SmsProviderGms::Retrieve(RenderFrameHost* render_frame_host,
                              fetch_type == SmsFetchType::kLocal);
 }
 
-void SmsProviderGms::OnReceive(JNIEnv* env, jstring message, jint backend) {
+void SmsProviderGms::OnReceive(JNIEnv* env,
+                               const base::android::JavaRef<jstring>& message,
+                               int32_t backend) {
   GmsBackend b = static_cast<GmsBackend>(backend);
   auto consent_requirement = UserConsent::kNotObtained;
   if (b == GmsBackend::kUserConsent)
@@ -111,3 +115,5 @@ void SmsProviderGms::SetClientAndWindowForTesting(
 }
 
 }  // namespace content
+
+DEFINE_JNI(SmsProviderGms)

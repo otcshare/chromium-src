@@ -32,6 +32,8 @@
 
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
+#include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
+#include "third_party/blink/renderer/core/editing/text_offset_mapping.h"
 #include "third_party/blink/renderer/core/editing/text_segments.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
@@ -46,7 +48,7 @@ namespace {
 
 // Helpers used during word movement
 static bool IsLineBreak(UChar ch) {
-  return ch == kNewlineCharacter || ch == kCarriageReturnCharacter;
+  return ch == uchar::kLineFeed || ch == uchar::kCarriageReturn;
 }
 
 PositionInFlatTree EndOfWordPositionInternal(const PositionInFlatTree& position,
@@ -88,6 +90,11 @@ PositionInFlatTree EndOfWordPositionInternal(const PositionInFlatTree& position,
   return TextSegments::FindBoundaryForward(position, &finder);
 }
 
+// IMPORTANT: If you update the logic of this algorithm, please also update the
+// one in `AbstractInlineTextBox::GetWordBoundariesForText`. The word offsets
+// computed over there needs to stay in sync with the ones computed here in
+// order for screen readers to announce the right words when using caret
+// navigation (ctrl + left/right arrow).
 PositionInFlatTree NextWordPositionInternal(
     const PositionInFlatTree& position,
     PlatformWordBehavior platform_word_behavior) {
@@ -118,6 +125,8 @@ PositionInFlatTree NextWordPositionInternal(
       if (offset == text.length() || text.length() == 0)
         return Position();
       TextBreakIterator* it = WordBreakIterator(text.Span16());
+      int punct_runner = -1;
+      bool found_space_before_punct = false;
       for (int runner = it->following(offset); runner != kTextBreakDone;
            runner = it->following(runner)) {
         // Move after line break
@@ -125,11 +134,30 @@ PositionInFlatTree NextWordPositionInternal(
           return SkipWhitespaceIfNeeded(text, runner);
         // Accumulate punctuation/surrogate pair runs.
         if (static_cast<unsigned>(runner) < text.length() &&
-            (WTF::unicode::IsPunct(text[runner]) ||
-             U16_IS_SURROGATE(text[runner]))) {
-          if (WTF::unicode::IsAlphanumeric(text[runner - 1]))
+            IsWordBoundary(text[runner])) {
+          if (unicode::IsAlphanumeric(text[runner - 1])) {
             return SkipWhitespaceIfNeeded(text, runner);
+          }
+          // Track punctuation that follows whitespace for Windows word boundary
+          // behavior. This enables stopping at punctuation after whitespace
+          // (e.g., "word ..." stops at "...") while preserving normal behavior
+          // for punctuation without whitespace (e.g., "word.more")
+          if (platform_word_behavior_ ==
+                  PlatformWordBehavior::kWordSkipSpaces &&
+              punct_runner == -1 && runner > 0 &&
+              IsWhitespace(text[runner - 1])) {
+            punct_runner = runner;
+            found_space_before_punct = true;
+          }
           continue;
+        }
+        // Windows-specific: Return accumulated punctuation boundary if it was
+        // preceded by whitespace. This fixes asymmetric word navigation where
+        // forward/backward movement would stop at different positions for
+        // patterns like "word ..." or "word !!!"
+        if (platform_word_behavior_ == PlatformWordBehavior::kWordSkipSpaces &&
+            punct_runner >= 0 && found_space_before_punct) {
+          return SkipWhitespaceIfNeeded(text, punct_runner);
         }
         // We stop searching in the following conditions:
         // 1. When the character preceding the break is
@@ -147,8 +175,9 @@ PositionInFlatTree NextWordPositionInternal(
                  IsWhitespace(text[runner - 1]) && IsWordBreak(text[runner]))
           return SkipWhitespaceIfNeeded(text, runner);
       }
-      if (text[text.length() - 1] != kNewlineCharacter)
+      if (text[text.length() - 1] != uchar::kLineFeed) {
         return Position::After(text.length() - 1);
+      }
       return Position();
     }
 
@@ -160,10 +189,11 @@ PositionInFlatTree NextWordPositionInternal(
         for (unsigned runner = static_cast<unsigned>(offset);
              runner < text.length(); ++runner) {
           if (!(IsWhitespace(text[runner]) ||
-                WTF::unicode::Direction(text[runner]) ==
-                    WTF::unicode::kWhiteSpaceNeutral) ||
-              IsLineBreak(text[runner]))
+                unicode::Direction(text[runner]) ==
+                    unicode::kWhiteSpaceNeutral) ||
+              IsLineBreak(text[runner])) {
             return Position::Before(runner);
+          }
         }
       }
       return Position::Before(offset);
@@ -206,10 +236,10 @@ PositionInFlatTree PreviousWordPositionInternal(
            runner = it->preceding(runner)) {
         // Accumulate punctuation/surrogate pair runs.
         if (static_cast<unsigned>(runner) < text.length() &&
-            (WTF::unicode::IsPunct(text[runner]) ||
-             U16_IS_SURROGATE(text[runner]))) {
-          if (WTF::unicode::IsAlphanumeric(text[runner - 1]))
+            IsWordBoundary(text[runner])) {
+          if (unicode::IsAlphanumeric(text[runner - 1])) {
             return Position::Before(runner);
+          }
           punct_runner = runner;
           continue;
         }
@@ -338,8 +368,42 @@ Position StartOfWordPosition(const Position& position, WordSide side) {
       StartOfWordPosition(ToPositionInFlatTree(position), side));
 }
 
-bool IsWordBreak(UChar ch) {
-  return (WTF::unicode::IsPrintableChar(ch) && !IsWhitespace(ch)) ||
-         U16_IS_SURROGATE(ch) || IsLineBreak(ch) || ch == kLowLineCharacter;
+PositionInFlatTree MiddleOfWordPosition(const PositionInFlatTree& word_start,
+                                        const PositionInFlatTree& word_end) {
+  if (word_start >= word_end) {
+    return PositionInFlatTree(nullptr, 0);
+  }
+  unsigned middle =
+      TextIteratorAlgorithm<EditingInFlatTreeStrategy>::RangeLength(word_start,
+                                                                    word_end) /
+      2;
+  TextOffsetMapping::ForwardRange range =
+      TextOffsetMapping::ForwardRangeOf(word_start);
+  middle += TextOffsetMapping(*range.begin()).ComputeTextOffset(word_start);
+  for (auto inline_contents : range) {
+    const TextOffsetMapping mapping(inline_contents);
+    unsigned length = mapping.GetText().length();
+    if (middle < length) {
+      return mapping.GetPositionBefore(middle);
+    }
+    middle -= length;
+  }
+  NOTREACHED();
 }
+
+Position MiddleOfWordPosition(const Position& word_start,
+                              const Position& word_end) {
+  return ToPositionInDOMTree(MiddleOfWordPosition(
+      ToPositionInFlatTree(word_start), ToPositionInFlatTree(word_end)));
+}
+
+bool IsWordBreak(UChar ch) {
+  return (unicode::IsPrintableChar(ch) && !IsWhitespace(ch)) ||
+         U16_IS_SURROGATE(ch) || IsLineBreak(ch) || ch == uchar::kLowLine;
+}
+
+bool IsWordBoundary(UChar ch) {
+  return unicode::IsPunct(ch) || unicode::IsSymbol(ch) || U16_IS_SURROGATE(ch);
+}
+
 }  // namespace blink

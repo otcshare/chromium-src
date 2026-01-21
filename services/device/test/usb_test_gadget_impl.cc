@@ -5,15 +5,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -77,13 +79,13 @@ struct UsbTestGadgetConfiguration {
   uint16_t product_id;
 };
 
-static const struct UsbTestGadgetConfiguration kConfigurations[] = {
+static const auto kConfigurations = std::to_array<UsbTestGadgetConfiguration>({
     {UsbTestGadget::DEFAULT, "/unconfigure", 0x58F0},
     {UsbTestGadget::KEYBOARD, "/keyboard/configure", 0x58F1},
     {UsbTestGadget::MOUSE, "/mouse/configure", 0x58F2},
     {UsbTestGadget::HID_ECHO, "/hid_echo/configure", 0x58F3},
     {UsbTestGadget::ECHO, "/echo/configure", 0x58F4},
-};
+});
 
 bool ReadFile(const base::FilePath& file_path, std::string* content) {
   base::File file(file_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
@@ -97,7 +99,7 @@ bool ReadFile(const base::FilePath& file_path, std::string* content) {
   int rv;
   do {
     char buf[4096];
-    rv = file.ReadAtCurrentPos(buf, sizeof buf);
+    rv = UNSAFE_TODO(file.ReadAtCurrentPos(buf, sizeof buf));
     if (rv == -1) {
       LOG(ERROR) << "Cannot read " << file_path.MaybeAsASCII() << ": "
                  << base::File::ErrorToString(file.error_details());
@@ -169,10 +171,10 @@ std::unique_ptr<net::URLRequest> CreateSimpleRequest(
     request->SetExtraRequestHeaders(extra_headers);
   }
   if (!form_data.empty()) {
-    std::unique_ptr<net::UploadElementReader> reader(
-        new net::UploadBytesElementReader(form_data.data(), form_data.size()));
+    auto reader = std::make_unique<net::UploadBytesElementReader>(
+        base::as_byte_span(form_data));
     request->set_upload(
-        net::ElementsUploadDataStream::CreateWithReader(std::move(reader), 0));
+        net::ElementsUploadDataStream::CreateWithReader(std::move(reader)));
   }
   return request;
 }
@@ -196,7 +198,7 @@ int SimplePOSTRequest(
 
 class UsbGadgetFactory : public UsbService::Observer {
  public:
-  // TODO(crbug.com/1010491): Remove `io_task_runner` parameter.
+  // TODO(crbug.com/40101494): Remove `io_task_runner` parameter.
   UsbGadgetFactory(UsbService* usb_service,
                    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
       : usb_service_(usb_service),

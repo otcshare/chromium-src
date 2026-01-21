@@ -4,23 +4,24 @@
 
 #include "media/mojo/clients/mojo_video_decoder.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/command_line.h"
+#include "base/check.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/trace_event/trace_event.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_switches.h"
 #include "media/base/overlay_info.h"
+#include "media/base/supported_types.h"
 #include "media/base/video_frame.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/clients/mojo_media_log_service.h"
@@ -33,6 +34,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
 
@@ -59,20 +61,24 @@ class MojoVideoFrameHandleReleaser
       delete;
 
   void ReleaseVideoFrame(const base::UnguessableToken& release_token,
+                         scoped_refptr<gpu::ClientSharedImage> shared_image,
                          const gpu::SyncToken& release_sync_token) {
+    TRACE_EVENT1("media", "MojoVideoFrameHandleReleaser::ReleaseVideoFrame",
+                 "release_token", release_token.ToString());
     DVLOG(3) << __func__ << "(" << release_token << ")";
-    video_frame_handle_releaser_->ReleaseVideoFrame(release_token,
-                                                    release_sync_token);
+    video_frame_handle_releaser_->ReleaseVideoFrame(
+        release_token, shared_image->EndImport(release_sync_token));
   }
 
   // Create a ReleaseMailboxCB that calls Release(). Since the callback holds a
   // reference to |this|, |this| will remain alive as long as there are
   // outstanding VideoFrames.
   VideoFrame::ReleaseMailboxCB CreateReleaseMailboxCB(
-      const base::UnguessableToken& release_token) {
+      const base::UnguessableToken& release_token,
+      scoped_refptr<gpu::ClientSharedImage> shared_image) {
     DVLOG(3) << __func__ << "(" << release_token.ToString() << ")";
     return base::BindOnce(&MojoVideoFrameHandleReleaser::ReleaseVideoFrame,
-                          this, release_token);
+                          this, release_token, std::move(shared_image));
   }
 
  private:
@@ -93,7 +99,7 @@ MojoVideoDecoder::MojoVideoDecoder(
     : task_runner_(task_runner),
       pending_remote_decoder_(std::move(pending_remote_decoder)),
       gpu_factories_(gpu_factories),
-      media_log_(media_log),
+      media_log_(media_log->Clone()),
       timestamps_(128),
       writer_capacity_(
           GetDefaultDecoderBufferConverterCapacity(DemuxerStream::VIDEO)),
@@ -107,7 +113,7 @@ MojoVideoDecoder::MojoVideoDecoder(
 MojoVideoDecoder::~MojoVideoDecoder() {
   DVLOG(1) << __func__;
   if (request_overlay_info_cb_ && overlay_info_requested_)
-    request_overlay_info_cb_.Run(false, base::NullCallback());
+    request_overlay_info_cb_.Run(base::NullCallback());
 }
 
 bool MojoVideoDecoder::IsPlatformDecoder() const {
@@ -118,12 +124,6 @@ bool MojoVideoDecoder::SupportsDecryption() const {
   // Currently only the Android backends and specific ChromeOS configurations
   // support decryption.
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kLacrosUseChromeosProtectedMedia)) {
-    return false;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   return true;
 #else
   return false;
@@ -151,15 +151,18 @@ void MojoVideoDecoder::Initialize(const VideoDecoderConfig& config,
   if (gpu_factories_)
     decoder_type_ = gpu_factories_->GetDecoderType();
 
-  // Fail immediately if we know that the remote side cannot support |config|.
-  if (gpu_factories_ && gpu_factories_->IsDecoderConfigSupported(config) ==
-                            GpuVideoAcceleratorFactories::Supported::kFalse) {
+  // If the codec has software fallback, fail immediately if we know that the
+  // remote side cannot support |config|.
+  if (gpu_factories_ &&
+      gpu_factories_->IsDecoderConfigSupported(config) ==
+          GpuVideoAcceleratorFactories::Supported::kFalse &&
+      IsDecoderBuiltInVideoCodec(config.codec())) {
     FailInit(std::move(init_cb), DecoderStatus::Codes::kUnsupportedConfig);
     return;
   }
 
-  absl::optional<base::UnguessableToken> cdm_id =
-      cdm_context ? cdm_context->GetCdmId() : absl::nullopt;
+  std::optional<base::UnguessableToken> cdm_id =
+      cdm_context ? cdm_context->GetCdmId() : std::nullopt;
 
   // Fail immediately if the stream is encrypted but |cdm_id| is invalid.
   // This check is needed to avoid unnecessary IPC to the remote process.
@@ -191,7 +194,7 @@ void MojoVideoDecoder::Initialize(const VideoDecoderConfig& config,
 void MojoVideoDecoder::InitializeRemoteDecoder(
     const VideoDecoderConfig& config,
     bool low_delay,
-    absl::optional<base::UnguessableToken> cdm_id) {
+    std::optional<base::UnguessableToken> cdm_id) {
   if (has_connection_error_) {
     DCHECK(init_cb_);
     FailInit(std::move(init_cb_), DecoderStatus::Codes::kDisconnected);
@@ -199,7 +202,8 @@ void MojoVideoDecoder::InitializeRemoteDecoder(
   }
 
   remote_decoder_->Initialize(
-      config, low_delay, cdm_id,
+      config, low_delay,
+      cdm_id ? mojom::Cdm::NewCdmId(cdm_id.value()) : nullptr,
       base::BindOnce(&MojoVideoDecoder::OnInitializeDone,
                      base::Unretained(this)));
 }
@@ -207,9 +211,9 @@ void MojoVideoDecoder::InitializeRemoteDecoder(
 void MojoVideoDecoder::OnInitializeDone(const DecoderStatus& status,
                                         bool needs_bitstream_conversion,
                                         int32_t max_decode_requests,
-                                        VideoDecoderType decoder_type) {
-  DVLOG(1) << __func__ << ": status = " << status.group() << ":"
-           << static_cast<int>(status.code());
+                                        VideoDecoderType decoder_type,
+                                        bool needs_transcryption) {
+  status.DebugLog(1);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   initialized_ = status.is_ok();
   needs_bitstream_conversion_ = needs_bitstream_conversion;
@@ -257,10 +261,12 @@ void MojoVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
 void MojoVideoDecoder::OnVideoFrameDecoded(
     const scoped_refptr<VideoFrame>& frame,
     bool can_read_without_stalling,
-    const absl::optional<base::UnguessableToken>& release_token) {
+    const std::optional<base::UnguessableToken>& release_token) {
   DVLOG(3) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
+  TRACE_EVENT2("media", "MojoVideoDecoder::OnVideoFrameDecoded", "frame",
+               frame->AsHumanReadableString(), "release_token",
+               release_token ? release_token->ToString() : "null");
   // TODO(sandersd): Prove that all paths read this value again after running
   // |output_cb_|. In practice this isn't very important, since all decoders
   // running via MojoVideoDecoder currently use a static value.
@@ -269,7 +275,7 @@ void MojoVideoDecoder::OnVideoFrameDecoded(
   if (release_token) {
     frame->SetReleaseMailboxCB(
         mojo_video_frame_handle_releaser_->CreateReleaseMailboxCB(
-            release_token.value()));
+            release_token.value(), frame->shared_image()));
   }
   const int64_t timestamp = frame->timestamp().InMilliseconds();
   const auto timestamp_it = timestamps_.Peek(timestamp);
@@ -277,11 +283,10 @@ void MojoVideoDecoder::OnVideoFrameDecoded(
     const auto decode_start_time = timestamp_it->second;
     const auto decode_end_time = base::TimeTicks::Now();
 
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
-        "media", "MojoVideoDecoder::Decode", timestamp, decode_start_time);
-    TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP1(
-        "media", "MojoVideoDecoder::Decode", timestamp, decode_end_time,
-        "timestamp", timestamp);
+    TRACE_EVENT_BEGIN("media", "MojoVideoDecoder::Decode",
+                      perfetto::Track(timestamp), decode_start_time);
+    TRACE_EVENT_END("media", perfetto::Track(timestamp), decode_end_time,
+                    "timestamp", timestamp);
     UMA_HISTOGRAM_TIMES("Media.MojoVideoDecoder.Decode",
                         decode_end_time - decode_start_time);
   }
@@ -309,6 +314,7 @@ void MojoVideoDecoder::OnDecodeDone(uint64_t decode_id,
 void MojoVideoDecoder::Reset(base::OnceClosure reset_cb) {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!reset_cb_);
 
   if (has_connection_error_) {
     task_runner_->PostTask(FROM_HERE, std::move(reset_cb));
@@ -323,6 +329,8 @@ void MojoVideoDecoder::Reset(base::OnceClosure reset_cb) {
 void MojoVideoDecoder::OnResetDone() {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(pending_decodes_.empty());
+  can_read_without_stalling_ = true;
   std::move(reset_cb_).Run();
 }
 
@@ -426,15 +434,14 @@ void MojoVideoDecoder::OnWaiting(WaitingReason reason) {
   waiting_cb_.Run(reason);
 }
 
-void MojoVideoDecoder::RequestOverlayInfo(bool restart_for_transitions) {
+void MojoVideoDecoder::RequestOverlayInfo() {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(request_overlay_info_cb_);
 
   overlay_info_requested_ = true;
   request_overlay_info_cb_.Run(
-      restart_for_transitions,
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MojoVideoDecoder::OnOverlayInfoChanged, weak_this_)));
 }
 
@@ -475,6 +482,9 @@ void MojoVideoDecoder::Stop() {
 
   if (reset_cb_)
     std::move(reset_cb_).Run();
+
+  // Drop any outstanding callbacks.
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 }  // namespace media

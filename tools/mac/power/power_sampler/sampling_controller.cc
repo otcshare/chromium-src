@@ -11,8 +11,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "tools/mac/power/power_sampler/monitor.h"
 #include "tools/mac/power/power_sampler/sampler.h"
@@ -60,6 +58,10 @@ void SamplingController::StartSession() {
   started_ = true;
 }
 
+bool SamplingController::HasSamplers() {
+  return !samplers_.empty();
+}
+
 bool SamplingController::OnSamplingEvent() {
   DCHECK(started_);
 
@@ -69,7 +71,7 @@ bool SamplingController::OnSamplingEvent() {
     Sampler::Sample sample = sampler->GetSample(sample_time);
     for (const auto& value : sample) {
       DataColumnKey column_key{sampler->GetName(), value.first};
-      DCHECK(base::Contains(data_columns_units_, column_key));
+      DCHECK(data_columns_units_.contains(column_key));
       data_row.emplace(column_key, value.second);
     }
   }

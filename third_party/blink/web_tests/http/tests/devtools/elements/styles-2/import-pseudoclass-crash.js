@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(
       `Tests that modifying stylesheet text with @import and :last-child selector does not crash (Bug 95324).\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <div>
@@ -25,15 +27,19 @@
   function matchedStylesCallback(matchedResult) {
     styleSheetId = matchedResult.nodeStyles()[1].styleSheetId;
     TestRunner.CSSAgent
-        .setStyleSheetText(
-            styleSheetId, '@import url("import-pseudoclass-crash-empty.css");\n\n:last-child { color: #000001; }\n')
+        .invoke_setStyleSheetText({
+          styleSheetId: styleSheetId,
+          text: '@import url("import-pseudoclass-crash-empty.css");\n\n:last-child { color: #000001; }\n'
+        })
         .then(modifiedCallback);
   }
 
   function modifiedCallback() {
     TestRunner.CSSAgent
-        .setStyleSheetText(
-            styleSheetId, '@import url("import-pseudoclass-crash-empty.css");\n\n:last-child { color: #002001; }\n')
+        .invoke_setStyleSheetText({
+          styleSheetId: styleSheetId,
+          text: '@import url("import-pseudoclass-crash-empty.css");\n\n:last-child { color: #002001; }\n'
+        })
         .then(modifiedCallback2);
   }
 

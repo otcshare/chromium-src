@@ -6,10 +6,10 @@
 #define CHROME_BROWSER_METRICS_PERF_PROCESS_TYPE_COLLECTOR_H_
 
 #include <map>
+#include <string_view>
 #include <vector>
 
 #include "third_party/metrics_proto/execution_context.pb.h"
-#include "third_party/re2/src/re2/stringpiece.h"
 
 namespace metrics {
 // Enables collection of process and thread types for Chrome PIDs and TIDs.
@@ -20,11 +20,8 @@ class ProcessTypeCollector {
   // that disallows blocking, should post a task with MayBlock() task trait to
   // execute these methods or make sure to call these methods asynchronously.
   // Collects process types by running ps command and returns a map of Chrome
-  // PIDs to their process types. It also populates a list of Lacros PID's and
-  // the Lacros binary path, if any.
-  static std::map<uint32_t, Process> ChromeProcessTypes(
-      std::vector<uint32_t>& lacros_pids,
-      std::string& lacros_path);
+  // PIDs to their process types.
+  static std::map<uint32_t, Process> ChromeProcessTypes();
 
   // Collects thread types by running ps command and returns a map of Chrome
   // TIDs to their thread types.
@@ -34,16 +31,13 @@ class ProcessTypeCollector {
   ProcessTypeCollector() = delete;
   ~ProcessTypeCollector() = delete;
   // Parses the output of `ps -ewwo pid,cmd` command and returns a map of Chrome
-  // PIDs to their process types. It also populates a list of Lacros PID's and
-  // the Lacros binary path, if any.
+  // PIDs to their process types.
   static std::map<uint32_t, Process> ParseProcessTypes(
-      re2::StringPiece contents,
-      std::vector<uint32_t>& lacros_pids,
-      std::string& lacros_path);
+      std::string_view contents);
 
   // Parses the output of `ps -ewLo pid,lwp,comm` command and returns a map of
   // Chrome TIDs to their thread types.
-  static std::map<uint32_t, Thread> ParseThreadTypes(re2::StringPiece contents);
+  static std::map<uint32_t, Thread> ParseThreadTypes(std::string_view contents);
 
   // Enumeration representing success and various failure modes for collecting
   // types data. These values are persisted to logs. Entries should not be

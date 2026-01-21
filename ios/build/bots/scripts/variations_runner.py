@@ -4,6 +4,7 @@
 """Runner class for variations smoke tests."""
 
 from datetime import datetime
+import json
 import logging
 import os
 import subprocess
@@ -14,7 +15,7 @@ import test_apps
 import test_runner
 from test_result_util import ResultCollection, TestResult, TestStatus
 from xcodebuild_runner import SimulatorParallelTestRunner
-import xcode_log_parser
+from xcode_log_parser import XcodeLogParser
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _SRC_DIR = os.path.join(_THIS_DIR, os.path.pardir, os.path.pardir,
@@ -30,6 +31,34 @@ _LOCAL_STATE_VARIATIONS_LAST_FETCH_TIME_KEY = 'variations_last_fetch_time'
 # Test argument to make EG2 test verify the fetch happens in current app launch.
 _VERIFY_FETCHED_IN_CURRENT_LAUNCH_ARG = '--verify-fetched-in-current-launch'
 LOGGER = logging.getLogger(__name__)
+# Test arguments to make EG2 test load the seed instead of fetching a new one.
+_SEED_ARG = '--seed={}'
+_SIGNATURE_ARG = '--signature={}'
+# Test arguments to make EG2 test assign the app to a variations channel.
+_VARIATIONS_CHANNEL_ARG = '--variations-channel={}'
+
+
+def _load_crashing_seed():
+  """Reads and parses the test variations seed."""
+  seed_path = os.path.join(_THIS_DIR, 'test_data', 'crash_seed.json')
+  with open(seed_path, 'r') as f:
+    seed_json = json.load(f)
+  return (seed_json['variations_compressed_seed'],
+          seed_json['variations_seed_signature'])
+
+
+class SeedData:
+  """Class to store the Seed Data for the tests."""
+
+  def __init__(self, seed, signature):
+    self.seed = seed
+    self.signature = signature
+
+  def as_test_arguments(self):
+    return [
+      _SEED_ARG.format(self.seed),
+      _SIGNATURE_ARG.format(self.signature),
+    ]
 
 
 class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
@@ -42,7 +71,6 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
                          platform, out_dir, **kwargs)
     self.variations_seed_path = variations_seed_path
     self.host_app_bundle_id = test_apps.get_bundle_id(self.host_app_path)
-    self.log_parser = xcode_log_parser.get_parser()
     self.test_app = self.get_launch_test_app()
 
   def _user_data_dir(self):
@@ -57,16 +85,6 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
                                                        self.udid)
     return os.path.join(app_data_path, 'Library', 'Application Support',
                         'Google', 'Chrome')
-
-  def _write_accepted_eula(self):
-    """Writes eula accepted to Local State.
-
-    This is needed once. Chrome host app doesn't have it accepted and variations
-    seed fetching requires it.
-    """
-    seed_helper.update_local_state(self._user_data_dir(),
-                                   {'EulaAccepted': True})
-    LOGGER.info('Wrote EulaAccepted: true to Local State.')
 
   def _reset_last_fetch_time(self):
     """Resets last fetch time to one day before so the next fetch can happen.
@@ -88,21 +106,40 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
     LOGGER.info('Reset last fetch time to %s in Local State.' %
                 win_one_day_before_microseconds)
 
-  def _launch_app_once(self, out_sub_dir, verify_fetched_within_launch=False):
+  def _launch_app_once(self,
+                       out_sub_dir,
+                       verify_fetched_within_launch=False,
+                       seed_data=None,
+                       variations_channel=None):
     """Launches app once.
 
     Args:
       out_sub_dir: (str) Sub dir under |self.out_dir| for this attempt output.
       verify_fetched_within_launch: (bool) Whether to verify that the fetch
         would happens in current launch.
+      seed_data: (None or SeedData) instance to pass as args to the test.
+      variations_channel: (None or str) variations channel to pass as args to
+        the test.
 
     Returns:
       (test_result_util.ResultCollection): Raw EG test result of the launch.
     """
     launch_out_dir = os.path.join(self.out_dir, out_sub_dir)
 
+    # Args that will be passed to the test and cleared after its execution.
+    current_launch_args = []
+
     if verify_fetched_within_launch:
-      self.test_app.test_args.append(_VERIFY_FETCHED_IN_CURRENT_LAUNCH_ARG)
+      current_launch_args.append(_VERIFY_FETCHED_IN_CURRENT_LAUNCH_ARG)
+
+    if seed_data:
+      current_launch_args.extend(seed_data.as_test_arguments())
+
+    if variations_channel:
+      current_launch_args.append(
+          _VARIATIONS_CHANNEL_ARG.format(variations_channel))
+
+    self.test_app.test_args.extend(current_launch_args)
 
     cmd = self.test_app.command(launch_out_dir, 'id=%s' % self.udid, 1)
     proc = subprocess.Popen(
@@ -113,9 +150,12 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
     )
     output = test_runner.print_process_output(proc, self.readline_timeout)
 
-    if _VERIFY_FETCHED_IN_CURRENT_LAUNCH_ARG in self.test_app.test_args:
-      self.test_app.test_args.remove(_VERIFY_FETCHED_IN_CURRENT_LAUNCH_ARG)
-    return self.log_parser.collect_test_results(launch_out_dir, output)
+    # Clear the current launch args for future launches
+    for arg in current_launch_args:
+      if arg in self.test_app.test_args:
+        self.test_app.test_args.remove(arg)
+
+    return XcodeLogParser.collect_test_results(launch_out_dir, output)
 
   def _launch_variations_smoke_test(self):
     """Runs variations smoke test logic which involves multiple test launches.
@@ -123,17 +163,6 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
     Returns:
       Tuple of (bool, str) Success status and reason.
     """
-    # Launch app once to install app and create Local State file.
-    first_launch_result = self._launch_app_once('first_launch')
-    # Test will fail because there isn't EulaAccepted pref in Local State and no
-    # fetch will happen.
-    if first_launch_result.passed_tests():
-      log = 'Test passed (expected to fail) at first launch (to install app).'
-      LOGGER.error(log)
-      return False, log
-
-    self._write_accepted_eula()
-
     # Launch app to make it fetch seed from server.
     fetch_launch_result = self._launch_app_once(
         'fetch_launch', verify_fetched_within_launch=True)
@@ -142,59 +171,25 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
       LOGGER.error(log)
       return False, log
 
-    # Verify a production version of variations seed was fetched successfully.
-    current_seed, current_signature = seed_helper.get_current_seed(
-        self._user_data_dir())
-    if not current_seed or not current_signature:
-      log = 'Failed to fetch variations seed on initial fetch launch.'
-      LOGGER.error(log)
-      return False, log
-
-    # Inject the test seed.
-    # |seed_helper.load_test_seed_from_file()| tries to find a seed file under
-    # src root first. If it doesn't exist, it will fallback to the one in
-    # |self.variations_seed_path|.
+    # Launch app with a valid seed.
     seed, signature = seed_helper.load_test_seed_from_file(
         self.variations_seed_path)
-    if not seed or not signature:
-      log = ('Ill-formed test seed json file: "%s" and "%s" are required',
-             seed_helper.LOCAL_STATE_SEED_NAME,
-             seed_helper.LOCAL_STATE_SEED_SIGNATURE_NAME)
-      return False, log
-    if not seed_helper.inject_test_seed(seed, signature, self._user_data_dir()):
-      log = 'Failed to inject test seed.'
-      LOGGER.error(log)
-      return False, log
-
-    # Launch app with injected seed.
-    injected_launch_result = self._launch_app_once('injected_launch')
+    injected_launch_result = self._launch_app_once(
+        'injected_launch', seed_data=SeedData(seed, signature))
     if not injected_launch_result.passed_tests():
       log = 'Test failure at app launch after the seed is injected.'
       LOGGER.error(log)
       return False, log
 
-    # Reset last fetch timestamp to one day before now. On mobile devices a
-    # fetch will only happen after 30 min of last fetch.
-    self._reset_last_fetch_time()
-
-    # Launch app again to refetch and update the injected seed with a delta.
-    update_launch_result = self._launch_app_once(
-        'update_launch', verify_fetched_within_launch=True)
-    if not update_launch_result.passed_tests():
-      log = 'Test failure at app launch to update seed with a delta.'
-      LOGGER.error(log)
-      return False, log
-
-    # Verify seed has been updated successfully and it's different from the
-    # injected test seed.
-    #
-    # TODO(crbug.com/1234171): This test expectation may not work correctly when
-    # a field trial config under test does not affect a platform, so it requires
-    # more investigations to figure out the correct behavior.
-    current_seed, current_signature = seed_helper.get_current_seed(
-        self._user_data_dir())
-    if current_seed == seed or current_signature == signature:
-      log = 'Failed to update seed with a delta'
+    # Launch app with a crashing seed. The app should crash on launch.
+    # We need to assign a channel so that the app enables the crashing study.
+    crashing_seed, crashing_signature = _load_crashing_seed()
+    crashing_launch_result = self._launch_app_once(
+        'crashing_launch',
+        seed_data=SeedData(crashing_seed, crashing_signature),
+        variations_channel='dev')
+    if crashing_launch_result.passed_tests():
+      log = "Expected test to crash, but app didn't crash"
       LOGGER.error(log)
       return False, log
 
@@ -205,7 +200,8 @@ class VariationsSimulatorParallelTestRunner(SimulatorParallelTestRunner):
     success, log = self._launch_variations_smoke_test()
 
     test_status = TestStatus.PASS if success else TestStatus.FAIL
-    # Report a single test named |VariationsSmokeTest| as part of runner output.
+    # Report a single test named |VariationsSmokeTest| as part of runner
+    # output.
     overall_result = ResultCollection(test_results=[
         TestResult('VariationsSmokeTest', test_status, test_log=log)
     ])

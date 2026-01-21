@@ -2,12 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
+
+#include <algorithm>
 #include <memory>
 #include <random>
 #include <string>
+#include <string_view>
 
 #include "base/run_loop.h"
-#include "base/strings/string_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/task_environment.h"
@@ -29,8 +34,8 @@ namespace {
 
 // Not threadsafe.
 std::string GenerateFakeHashedString(size_t sym_count) {
-  static constexpr char kSyms[] =
-      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,/=+?#";
+  constexpr static std::array<char, 69> kSyms{
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,/=+?#"};
   static std::mt19937 engine;
   std::uniform_int_distribution<size_t> index_distribution(
       0, std::size(kSyms) - 2 /* trailing \0 */);
@@ -61,13 +66,14 @@ URLRow GeneratePopularURLRow() {
   return row;
 }
 
-using StringPieces = std::vector<base::StringPiece>;
+using StringPieces = std::vector<std::string_view>;
 
-StringPieces AllPrefixes(const std::string& str) {
-  std::vector<base::StringPiece> res;
+StringPieces AllPrefixes(std::string_view str) {
+  std::vector<std::string_view> res;
   res.reserve(str.size());
-  for (auto char_it = str.begin(); char_it != str.end(); ++char_it)
-    res.push_back(base::MakeStringPiece(str.begin(), char_it));
+  for (size_t i = 0; i < str.size(); ++i) {
+    res.push_back(str.substr(0, i));
+  }
   return res;
 }
 
@@ -165,11 +171,12 @@ void HQPPerfTestOnePopularURL::PrintMeasurements(
 
   std::string durations;
   for (const auto& measurement : measurements)
-    durations += std::to_string(measurement.InMillisecondsRoundedUp()) + ',';
+    durations +=
+        base::NumberToString(measurement.InMillisecondsRoundedUp()) + ',';
   // Strip off trailing comma.
   durations.pop_back();
 
-  auto metric_prefix = std::string(test_info->test_case_name()) + "_" +
+  auto metric_prefix = std::string(test_info->test_suite_name()) + "_" +
                        std::string(test_info->name());
   perf_test::PerfResultReporter reporter(metric_prefix, story_name);
   reporter.RegisterImportantMetric(".duration", "ms");
@@ -202,12 +209,12 @@ void HQPPerfTestOnePopularURL::RunAllTests(PieceIt first, PieceIt last) {
     PieceIt group_end = std::min(group_start + kTestGroupSize, last);
 
     std::transform(group_start, group_end, std::back_inserter(measurements),
-                   [this](const base::StringPiece& prefix) {
+                   [this](std::string_view prefix) {
                      return RunTest(base::UTF8ToUTF16(prefix));
                    });
 
-    PrintMeasurements(std::to_string(group_start->size()) + '-' +
-                          std::to_string((group_end - 1)->size()),
+    PrintMeasurements(base::NumberToString(group_start->size()) + '-' +
+                          base::NumberToString((group_end - 1)->size()),
                       measurements);
 
     measurements.clear();

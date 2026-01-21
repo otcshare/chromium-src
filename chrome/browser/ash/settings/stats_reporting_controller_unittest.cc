@@ -7,20 +7,21 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/ash/settings/device_settings_cache.h"
+#include "chrome/browser/ash/settings/cros_settings_holder.h"
+#include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/net/fake_nss_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/device_settings_cache.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -46,7 +47,7 @@ class StatsReportingControllerTest : public testing::Test {
  protected:
   StatsReportingControllerTest()
       : user_manager_enabler_(std::make_unique<ash::FakeChromeUserManager>()) {}
-  ~StatsReportingControllerTest() override {}
+  ~StatsReportingControllerTest() override = default;
 
   void SetUp() override {
     StatsReportingController::Initialize(&local_state_);
@@ -54,9 +55,11 @@ class StatsReportingControllerTest : public testing::Test {
     device_policy_.Build();
     fake_session_manager_client_.set_device_policy(device_policy_.GetBlob());
 
-    both_keys->ImportPrivateKeyAndSetPublicKey(device_policy_.GetSigningKey());
+    both_keys->ImportPrivateKeyAndSetPublicKey(*device_policy_.GetSigningKey());
     public_key_only->SetPublicKeyFromPrivateKey(
         *device_policy_.GetSigningKey());
+    // Prevent new keys from being generated.
+    no_keys->SimulateGenerateKeyFailure(/*fail_times=*/999);
 
     observer_subscription_ = StatsReportingController::Get()->AddObserver(
         base::BindRepeating(&StatsReportingControllerTest::OnNotifiedOfChange,
@@ -89,7 +92,7 @@ class StatsReportingControllerTest : public testing::Test {
   }
 
   void ExpectThatPendingValueIs(bool expected) {
-    absl::optional<base::Value> pending =
+    std::optional<base::Value> pending =
         StatsReportingController::Get()->GetPendingValue();
     EXPECT_TRUE(pending.has_value());
     EXPECT_TRUE(pending->is_bool());
@@ -97,13 +100,13 @@ class StatsReportingControllerTest : public testing::Test {
   }
 
   void ExpectThatPendingValueIsNotSet() {
-    absl::optional<base::Value> pending =
+    std::optional<base::Value> pending =
         StatsReportingController::Get()->GetPendingValue();
     EXPECT_FALSE(pending.has_value());
   }
 
   void ExpectThatSignedStoredValueIs(bool expected) {
-    absl::optional<base::Value> stored =
+    std::optional<base::Value> stored =
         StatsReportingController::Get()->GetSignedStoredValue();
     EXPECT_TRUE(stored.has_value());
     EXPECT_TRUE(stored->is_bool());
@@ -125,7 +128,8 @@ class StatsReportingControllerTest : public testing::Test {
   ScopedStubInstallAttributes scoped_install_attributes_;
   FakeSessionManagerClient fake_session_manager_client_;
   ScopedTestDeviceSettingsService scoped_device_settings_;
-  ScopedTestCrosSettings scoped_cros_settings_{RegisterPrefs(&local_state_)};
+  CrosSettingsHolder cros_settings_holder_{ash::DeviceSettingsService::Get(),
+                                           RegisterPrefs(&local_state_)};
   policy::DevicePolicyBuilder device_policy_;
 
   bool value_at_last_notification_{false};
@@ -141,7 +145,7 @@ class StatsReportingControllerTest : public testing::Test {
 };
 
 TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipUnknown) {
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_UNKNOWN,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipUnknown,
             DeviceSettingsService::Get()->GetOwnershipStatus());
   EXPECT_FALSE(StatsReportingController::Get()->IsEnabled());
   EXPECT_FALSE(value_at_last_notification_);
@@ -165,12 +169,13 @@ TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipUnknown) {
 }
 
 TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipNone) {
-  DeviceSettingsService::Get()->SetSessionManager(&fake_session_manager_client_,
-                                                  no_keys);
+  DeviceSettingsService::Get()->StartProcessing(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      &fake_session_manager_client_, no_keys);
   DeviceSettingsService::Get()->Load();
   content::RunAllTasksUntilIdle();
 
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_NONE,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipNone,
             DeviceSettingsService::Get()->GetOwnershipStatus());
   EXPECT_FALSE(StatsReportingController::Get()->IsEnabled());
   EXPECT_FALSE(value_at_last_notification_);
@@ -193,11 +198,12 @@ TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipNone) {
 }
 
 TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipTaken) {
-  DeviceSettingsService::Get()->SetSessionManager(&fake_session_manager_client_,
-                                                  both_keys);
+  DeviceSettingsService::Get()->StartProcessing(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      &fake_session_manager_client_, both_keys);
   std::unique_ptr<TestingProfile> owner = CreateUser(kOwner, both_keys);
 
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_TAKEN,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipTaken,
             DeviceSettingsService::Get()->GetOwnershipStatus());
   EXPECT_FALSE(StatsReportingController::Get()->IsEnabled());
   EXPECT_FALSE(value_at_last_notification_);
@@ -229,11 +235,12 @@ TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipTaken) {
 }
 
 TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipTaken_NonOwner) {
-  DeviceSettingsService::Get()->SetSessionManager(&fake_session_manager_client_,
-                                                  both_keys);
+  DeviceSettingsService::Get()->StartProcessing(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      &fake_session_manager_client_, both_keys);
   std::unique_ptr<TestingProfile> owner = CreateUser(kOwner, both_keys);
 
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_TAKEN,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipTaken,
             DeviceSettingsService::Get()->GetOwnershipStatus());
   EXPECT_FALSE(StatsReportingController::Get()->IsEnabled());
   EXPECT_FALSE(value_at_last_notification_);
@@ -251,7 +258,7 @@ TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipTaken_NonOwner) {
 }
 
 TEST_F(StatsReportingControllerTest, SetBeforeOwnershipTaken) {
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_UNKNOWN,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipUnknown,
             DeviceSettingsService::Get()->GetOwnershipStatus());
   EXPECT_FALSE(StatsReportingController::Get()->IsEnabled());
   EXPECT_FALSE(value_at_last_notification_);
@@ -267,10 +274,11 @@ TEST_F(StatsReportingControllerTest, SetBeforeOwnershipTaken) {
   ExpectThatPendingValueIs(true);
   ExpectThatSignedStoredValueIs(false);
 
-  DeviceSettingsService::Get()->SetSessionManager(&fake_session_manager_client_,
-                                                  both_keys);
+  DeviceSettingsService::Get()->StartProcessing(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      &fake_session_manager_client_, both_keys);
   std::unique_ptr<TestingProfile> owner = CreateUser(kOwner, both_keys);
-  EXPECT_EQ(DeviceSettingsService::OWNERSHIP_TAKEN,
+  EXPECT_EQ(DeviceSettingsService::OwnershipStatus::kOwnershipTaken,
             DeviceSettingsService::Get()->GetOwnershipStatus());
 
   // After device is owned, the value is written to Cros settings.

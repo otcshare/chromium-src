@@ -7,12 +7,18 @@
 
 #include <memory>
 
-#include "components/signin/ios/browser/wait_for_network_callback_helper.h"
-#include "components/signin/public/base/signin_client.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
+#import "base/memory/raw_ptr.h"
+#import "components/signin/public/base/signin_client.h"
+#import "services/network/public/cpp/shared_url_loader_factory.h"
+
+class WaitForNetworkCallbackHelperIOS;
 
 namespace ios_web_view {
 class WebViewBrowserState;
+}
+
+namespace version_info {
+enum class Channel;
 }
 
 // iOS WebView specific signin client.
@@ -33,6 +39,7 @@ class IOSWebViewSigninClient : public SigninClient {
   PrefService* GetPrefs() override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   network::mojom::CookieManager* GetCookieManager() override;
+  network::mojom::NetworkContext* GetNetworkContext() override;
   void DoFinalInit() override;
   bool AreSigninCookiesAllowed() override;
   bool AreSigninCookiesDeletedOnExit() override;
@@ -43,18 +50,26 @@ class IOSWebViewSigninClient : public SigninClient {
   void PreSignOut(
       base::OnceCallback<void(SignoutDecision)> on_signout_decision_reached,
       signin_metrics::ProfileSignout signout_source_metric) override;
+  bool AreNetworkCallsDelayed() override;
   void DelayNetworkCall(base::OnceClosure callback) override;
   std::unique_ptr<GaiaAuthFetcher> CreateGaiaAuthFetcher(
       GaiaAuthConsumer* consumer,
       gaia::GaiaSource source) override;
+  version_info::Channel GetClientChannel() override;
+  void OnPrimaryAccountChanged(
+      signin::PrimaryAccountChangeEvent event_details) override;
+  signin::OAuthConsumer GetOAuthConsumerFromId(
+      signin::OAuthConsumerId oauth_consumer_id) const override;
 
  private:
   // Helper to delay callbacks until connection becomes online again.
-  std::unique_ptr<WaitForNetworkCallbackHelper> network_callback_helper_;
+  std::unique_ptr<WaitForNetworkCallbackHelperIOS> network_callback_helper_;
   // The PrefService associated with this service.
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
   // The browser_state_ associated with this service.
   ios_web_view::WebViewBrowserState* browser_state_;
+  // Used to convert OAuthConsumerIds to OAuthConsumers.
+  const std::unique_ptr<signin::OAuthConsumerRegistry> oauth_consumer_registry_;
 };
 
 #endif  // IOS_WEB_VIEW_INTERNAL_SIGNIN_IOS_WEB_VIEW_SIGNIN_CLIENT_H_

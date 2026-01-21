@@ -3,8 +3,12 @@
 // found in the LICENSE file.
 
 #include "base/android/jni_string.h"
-#include "components/page_info/android/jni_headers/PageInfoFeatures_jni.h"
+#include "base/compiler_specific.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/page_info/core/features.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/page_info/android/jni_headers/PageInfoFeatures_jni.h"
 
 namespace page_info {
 
@@ -14,14 +18,17 @@ namespace {
 // this array may either refer to features defined in the header of this file or
 // in other locations in the code base (e.g. content_features.h), and must be
 // replicated in the same order in PageInfoFeatures.java.
-const base::Feature* kFeaturesExposedToJava[] = {
-    &kPageInfoStoreInfo,
+const base::Feature* const kFeaturesExposedToJava[] = {
+    &content_settings::features::kUserBypassUI,
 };
 
 }  // namespace
 
-static jlong JNI_PageInfoFeatures_GetFeature(JNIEnv* env, jint ordinal) {
-  return reinterpret_cast<jlong>(kFeaturesExposedToJava[ordinal]);
+static int64_t JNI_PageInfoFeatures_GetFeature(JNIEnv* env, int32_t ordinal) {
+  return reinterpret_cast<int64_t>(
+      UNSAFE_TODO(kFeaturesExposedToJava[ordinal]));
 }
 
 }  // namespace page_info
+
+DEFINE_JNI(PageInfoFeatures)

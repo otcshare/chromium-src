@@ -4,29 +4,30 @@
 
 #include "device/fido/virtual_fido_device.h"
 
+#include <algorithm>
 #include <tuple>
 #include <utility>
+#include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
-#include "crypto/ec_private_key.h"
-#include "crypto/ec_signature_creator.h"
-#include "crypto/openssl_util.h"
+#include "crypto/hash.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
 #include "device/fido/fido_parsing_utils.h"
+#include "device/fido/large_blob.h"
 #include "device/fido/p256_public_key.h"
 #include "device/fido/public_key.h"
 #include "net/cert/x509_util.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
 #include "third_party/boringssl/src/include/openssl/ec_key.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
-#include "third_party/boringssl/src/include/openssl/mem.h"
+// #include "third_party/boringssl/src/include/openssl/mem.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
 
 namespace device {
@@ -57,110 +58,25 @@ constexpr std::array<uint8_t, 17> kDefaultLargeBlobArray = {
     0x80, 0x76, 0xbe, 0x8b, 0x52, 0x8d, 0x00, 0x75, 0xf7,
     0xaa, 0xe9, 0x8d, 0x6f, 0xa5, 0x7a, 0x6d, 0x3c};
 
-// CBBFunctionToVector converts a BoringSSL function that writes to a CBB to one
-// that returns a std::vector. Invoke for a function, f, with:
-//   CBBFunctionToVector<decltype(&f), f>(args, to, f);
-template <typename F, F function, typename... Args>
-std::vector<uint8_t> CBBFunctionToVector(Args&&... args) {
-  uint8_t* der = nullptr;
-  size_t der_len = 0;
-  bssl::ScopedCBB cbb;
-  CHECK(CBB_init(cbb.get(), 0) &&
-        function(cbb.get(), std::forward<Args>(args)...) &&
-        CBB_finish(cbb.get(), &der, &der_len));
-  std::vector<uint8_t> ret(der, der + der_len);
-  OPENSSL_free(der);
-  return ret;
-}
-
-// EVPBackedPrivateKey is an abstract class that implements some of the
-// |PrivateKey| interface using BoringSSL's EVP layer.
-class EVPBackedPrivateKey : public VirtualFidoDevice::PrivateKey {
- protected:
-  EVPBackedPrivateKey(int type, int (*const config_key_gen)(EVP_PKEY_CTX*)) {
-    crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-
-    bssl::UniquePtr<EVP_PKEY_CTX> gen_ctx(
-        EVP_PKEY_CTX_new_id(type, /*e=*/nullptr));
-    EVP_PKEY* pkey_ptr = nullptr;
-    CHECK(EVP_PKEY_keygen_init(gen_ctx.get()) &&
-          config_key_gen(gen_ctx.get()) &&
-          EVP_PKEY_keygen(gen_ctx.get(), &pkey_ptr));
-    pkey_.reset(pkey_ptr);
-  }
-
-  explicit EVPBackedPrivateKey(bssl::UniquePtr<EVP_PKEY> pkey)
-      : pkey_(std::move(pkey)) {}
-
+class P256PrivateKey : public VirtualFidoDevice::PrivateKey {
  public:
-  std::vector<uint8_t> Sign(base::span<const uint8_t> msg) override {
-    crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-    bssl::ScopedEVP_MD_CTX md_ctx;
-    std::vector<uint8_t> ret;
-    ret.resize(EVP_PKEY_size(pkey_.get()));
-
-    size_t sig_len = ret.size();
-    // Ed25519 does not separate out the hash function as an independent
-    // variable so it must be nullptr in that case.
-    const EVP_MD* digest =
-        EVP_PKEY_id(pkey_.get()) == EVP_PKEY_ED25519 ? nullptr : EVP_sha256();
-    CHECK(EVP_DigestSignInit(md_ctx.get(), /*pctx=*/nullptr, digest,
-                             /*e=*/nullptr, pkey_.get()) &&
-          EVP_DigestSign(md_ctx.get(), ret.data(), &sig_len, msg.data(),
-                         msg.size()) &&
-          sig_len <= ret.size());
-    ret.resize(sig_len);
-    return ret;
-  }
-
-  std::vector<uint8_t> GetPKCS8PrivateKey() const override {
-    return CBBFunctionToVector<decltype(&EVP_marshal_private_key),
-                               EVP_marshal_private_key>(pkey_.get());
-  }
-
- protected:
-  bssl::UniquePtr<EVP_PKEY> pkey_;
-};
-
-class P256PrivateKey : public EVPBackedPrivateKey {
- public:
-  P256PrivateKey() : EVPBackedPrivateKey(EVP_PKEY_EC, ConfigureKeyGen) {}
-
-  explicit P256PrivateKey(bssl::UniquePtr<EVP_PKEY> pkey)
-      : EVPBackedPrivateKey(std::move(pkey)) {
-    CHECK_EQ(NID_X9_62_prime256v1, EC_GROUP_get_curve_name(EC_KEY_get0_group(
-                                       EVP_PKEY_get0_EC_KEY(pkey_.get()))));
-  }
-
-  std::vector<uint8_t> GetX962PublicKey() const override {
-    const EC_KEY* ec_key = EVP_PKEY_get0_EC_KEY(pkey_.get());
-    return CBBFunctionToVector<decltype(&EC_POINT_point2cbb),
-                               EC_POINT_point2cbb>(
-        EC_KEY_get0_group(ec_key), EC_KEY_get0_public_key(ec_key),
-        POINT_CONVERSION_UNCOMPRESSED, /*ctx=*/nullptr);
-  }
+  explicit P256PrivateKey(crypto::keypair::PrivateKey key) : PrivateKey(key) {}
+  ~P256PrivateKey() override = default;
 
   std::unique_ptr<PublicKey> GetPublicKey() const override {
     return P256PublicKey::ParseX962Uncompressed(
         static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256),
         GetX962PublicKey());
   }
-
- private:
-  static int ConfigureKeyGen(EVP_PKEY_CTX* ctx) {
-    return EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1);
-  }
 };
 
-class RSAPrivateKey : public EVPBackedPrivateKey {
+class RSAPrivateKey : public VirtualFidoDevice::PrivateKey {
  public:
-  RSAPrivateKey() : EVPBackedPrivateKey(EVP_PKEY_RSA, ConfigureKeyGen) {}
-
-  explicit RSAPrivateKey(bssl::UniquePtr<EVP_PKEY> pkey)
-      : EVPBackedPrivateKey(std::move(pkey)) {}
+  explicit RSAPrivateKey(crypto::keypair::PrivateKey key) : PrivateKey(key) {}
+  ~RSAPrivateKey() override = default;
 
   std::unique_ptr<PublicKey> GetPublicKey() const override {
-    const RSA* rsa = EVP_PKEY_get0_RSA(pkey_.get());
+    const RSA* rsa = EVP_PKEY_get0_RSA(key_.key());
     const BIGNUM* n = RSA_get0_n(rsa);
     const BIGNUM* e = RSA_get0_e(rsa);
 
@@ -180,39 +96,22 @@ class RSAPrivateKey : public EVPBackedPrivateKey {
     map.emplace(static_cast<int64_t>(CoseKeyKey::kRSAPublicExponent),
                 std::move(public_exponent));
 
-    absl::optional<std::vector<uint8_t>> cbor_bytes(
+    std::optional<std::vector<uint8_t>> cbor_bytes(
         cbor::Writer::Write(cbor::Value(std::move(map))));
-
-    std::vector<uint8_t> der_bytes(
-        CBBFunctionToVector<decltype(&EVP_marshal_public_key),
-                            EVP_marshal_public_key>(pkey_.get()));
 
     return std::make_unique<PublicKey>(
         static_cast<int32_t>(CoseAlgorithmIdentifier::kRs256), *cbor_bytes,
-        std::move(der_bytes));
-  }
-
- private:
-  static int ConfigureKeyGen(EVP_PKEY_CTX* ctx) {
-    return EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048);
+        key_.ToSubjectPublicKeyInfo());
   }
 };
 
-class Ed25519PrivateKey : public EVPBackedPrivateKey {
+class Ed25519PrivateKey : public VirtualFidoDevice::PrivateKey {
  public:
-  Ed25519PrivateKey()
-      : EVPBackedPrivateKey(EVP_PKEY_ED25519, ConfigureKeyGen) {}
-
-  explicit Ed25519PrivateKey(bssl::UniquePtr<EVP_PKEY> pkey)
-      : EVPBackedPrivateKey(std::move(pkey)) {}
+  explicit Ed25519PrivateKey(crypto::keypair::PrivateKey key)
+      : PrivateKey(key) {}
+  ~Ed25519PrivateKey() override = default;
 
   std::unique_ptr<PublicKey> GetPublicKey() const override {
-    uint8_t public_key[32];
-    size_t public_key_len = sizeof(public_key);
-    CHECK(
-        EVP_PKEY_get_raw_public_key(pkey_.get(), public_key, &public_key_len) &&
-        public_key_len == sizeof(public_key));
-
     cbor::Value::MapValue map;
     map.emplace(static_cast<int64_t>(CoseKeyKey::kAlg),
                 static_cast<int64_t>(CoseAlgorithmIdentifier::kEdDSA));
@@ -221,35 +120,26 @@ class Ed25519PrivateKey : public EVPBackedPrivateKey {
     map.emplace(static_cast<int64_t>(CoseKeyKey::kEllipticCurve),
                 static_cast<int64_t>(CoseCurves::kEd25519));
     map.emplace(static_cast<int64_t>(CoseKeyKey::kEllipticX),
-                base::span<const uint8_t>(public_key, sizeof(public_key)));
+                key_.ToEd25519PublicKey());
 
-    absl::optional<std::vector<uint8_t>> cbor_bytes(
+    std::optional<std::vector<uint8_t>> cbor_bytes(
         cbor::Writer::Write(cbor::Value(std::move(map))));
 
-    std::vector<uint8_t> der_bytes(
-        CBBFunctionToVector<decltype(&EVP_marshal_public_key),
-                            EVP_marshal_public_key>(pkey_.get()));
-
     return std::make_unique<PublicKey>(
-        static_cast<int32_t>(CoseAlgorithmIdentifier::kRs256), *cbor_bytes,
-        std::move(der_bytes));
+        static_cast<int32_t>(CoseAlgorithmIdentifier::kEdDSA), *cbor_bytes,
+        key_.ToSubjectPublicKeyInfo());
   }
-
- private:
-  static int ConfigureKeyGen(EVP_PKEY_CTX* ctx) { return 1; }
 };
 
 class InvalidForTestingPrivateKey : public VirtualFidoDevice::PrivateKey {
  public:
-  InvalidForTestingPrivateKey() = default;
+  // Even though this is an invalid key, the underlying PrivateKey can't be
+  // empty, so fill it with a random P-256 key that won't be used.
+  InvalidForTestingPrivateKey()
+      : PrivateKey(crypto::keypair::PrivateKey::GenerateEcP256()) {}
 
   std::vector<uint8_t> Sign(base::span<const uint8_t> message) override {
     return {'s', 'i', 'g'};
-  }
-
-  std::vector<uint8_t> GetPKCS8PrivateKey() const override {
-    CHECK(false);
-    return {};
   }
 
   std::unique_ptr<PublicKey> GetPublicKey() const override {
@@ -260,14 +150,27 @@ class InvalidForTestingPrivateKey : public VirtualFidoDevice::PrivateKey {
     map.emplace(static_cast<int64_t>(CoseKeyKey::kKty),
                 static_cast<int64_t>(CoseKeyTypes::kInvalidForTesting));
 
-    absl::optional<std::vector<uint8_t>> cbor_bytes(
+    std::optional<std::vector<uint8_t>> cbor_bytes(
         cbor::Writer::Write(cbor::Value(std::move(map))));
 
     return std::make_unique<PublicKey>(
         static_cast<int32_t>(CoseAlgorithmIdentifier::kInvalidForTesting),
-        *cbor_bytes, absl::nullopt);
+        *cbor_bytes, std::nullopt);
   }
 };
+
+crypto::sign::SignatureKind SignatureKindForKey(
+    const crypto::keypair::PrivateKey& key) {
+  if (key.IsEc()) {
+    return crypto::sign::ECDSA_SHA256;
+  } else if (key.IsRsa()) {
+    return crypto::sign::RSA_PKCS1_SHA256;
+  } else if (key.IsEd25519()) {
+    return crypto::sign::ED25519;
+  } else {
+    NOTREACHED();
+  }
+}
 
 }  // namespace
 
@@ -275,62 +178,46 @@ class InvalidForTestingPrivateKey : public VirtualFidoDevice::PrivateKey {
 
 VirtualFidoDevice::PrivateKey::~PrivateKey() = default;
 
-std::vector<uint8_t> VirtualFidoDevice::PrivateKey::GetX962PublicKey() const {
-  // Not generally possible to encode in X9.62 format. Elliptic-specific
-  // subclasses can override.
-  CHECK(false);
-  return std::vector<uint8_t>();
-}
-
 // static
-absl::optional<std::unique_ptr<VirtualFidoDevice::PrivateKey>>
+std::optional<std::unique_ptr<VirtualFidoDevice::PrivateKey>>
 VirtualFidoDevice::PrivateKey::FromPKCS8(
     base::span<const uint8_t> pkcs8_private_key) {
-  crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-
-  CBS cbs;
-  CBS_init(&cbs, pkcs8_private_key.data(), pkcs8_private_key.size());
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_parse_private_key(&cbs));
-  if (!pkey || CBS_len(&cbs) != 0) {
-    return absl::nullopt;
+  std::optional<crypto::keypair::PrivateKey> key =
+      crypto::keypair::PrivateKey::FromPrivateKeyInfo(pkcs8_private_key);
+  if (!key) {
+    return std::nullopt;
   }
 
-  switch (EVP_PKEY_id(pkey.get())) {
-    case EVP_PKEY_EC:
-      if (EC_GROUP_get_curve_name(EC_KEY_get0_group(
-              EVP_PKEY_get0_EC_KEY(pkey.get()))) != NID_X9_62_prime256v1) {
-        return absl::nullopt;
-      }
-      return std::unique_ptr<PrivateKey>(new P256PrivateKey(std::move(pkey)));
-
-    case EVP_PKEY_RSA:
-      return std::unique_ptr<PrivateKey>(new RSAPrivateKey(std::move(pkey)));
-
-    case EVP_PKEY_ED25519:
-      return std::unique_ptr<PrivateKey>(
-          new Ed25519PrivateKey(std::move(pkey)));
-
-    default:
-      return absl::nullopt;
+  if (key->IsEc()) {
+    return std::make_unique<P256PrivateKey>(*key);
+  } else if (key->IsRsa()) {
+    return std::make_unique<RSAPrivateKey>(*key);
+  } else if (key->IsEd25519()) {
+    return std::make_unique<Ed25519PrivateKey>(*key);
+  } else {
+    NOTREACHED();
   }
 }
 
 // static
 std::unique_ptr<VirtualFidoDevice::PrivateKey>
 VirtualFidoDevice::PrivateKey::FreshP256Key() {
-  return std::make_unique<P256PrivateKey>();
+  return std::make_unique<P256PrivateKey>(
+      crypto::keypair::PrivateKey::GenerateEcP256());
 }
 
 // static
 std::unique_ptr<VirtualFidoDevice::PrivateKey>
 VirtualFidoDevice::PrivateKey::FreshRSAKey() {
-  return std::make_unique<RSAPrivateKey>();
+  return std::make_unique<RSAPrivateKey>(
+      crypto::keypair::PrivateKey::GenerateRsa2048());
 }
 
 // static
 std::unique_ptr<VirtualFidoDevice::PrivateKey>
 VirtualFidoDevice::PrivateKey::FreshEd25519Key() {
-  return std::make_unique<Ed25519PrivateKey>();
+  return std::make_unique<Ed25519PrivateKey>(
+      crypto::keypair::PrivateKey::GenerateEd25519());
 }
 
 // static
@@ -339,11 +226,31 @@ VirtualFidoDevice::PrivateKey::FreshInvalidForTestingKey() {
   return std::make_unique<InvalidForTestingPrivateKey>();
 }
 
+std::vector<uint8_t> VirtualFidoDevice::PrivateKey::Sign(
+    base::span<const uint8_t> message) {
+  return crypto::sign::Sign(SignatureKindForKey(key_), key_, message);
+}
+
+std::vector<uint8_t> VirtualFidoDevice::PrivateKey::GetX962PublicKey() const {
+  if (key_.IsEc()) {
+    return key_.ToUncompressedX962Point();
+  } else {
+    NOTREACHED();
+  }
+}
+
+std::vector<uint8_t> VirtualFidoDevice::PrivateKey::GetPKCS8PrivateKey() const {
+  return key_.ToPrivateKeyInfo();
+}
+
+VirtualFidoDevice::PrivateKey::PrivateKey(crypto::keypair::PrivateKey key)
+    : key_(std::move(key)) {}
+
 // VirtualFidoDevice::RegistrationData ----------------------------------------
 
 VirtualFidoDevice::RegistrationData::RegistrationData() = default;
 VirtualFidoDevice::RegistrationData::RegistrationData(const std::string& rp_id)
-    : application_parameter(fido_parsing_utils::CreateSHA256Hash(rp_id)) {}
+    : application_parameter(crypto::hash::Sha256(rp_id)) {}
 VirtualFidoDevice::RegistrationData::RegistrationData(
     std::unique_ptr<PrivateKey> private_key,
     base::span<const uint8_t, kRpIdHashLength> application_parameter,
@@ -385,6 +292,20 @@ void VirtualFidoDevice::State::NotifyCredentialCreated(
   }
 }
 
+void VirtualFidoDevice::State::NotifyCredentialDeleted(
+    base::span<const uint8_t> credential_id) {
+  for (Observer& observer : observers_) {
+    observer.OnCredentialDeleted(credential_id);
+  }
+}
+
+void VirtualFidoDevice::State::NotifyCredentialUpdated(
+    const std::pair<base::span<const uint8_t>, RegistrationData*>& credential) {
+  for (Observer& observer : observers_) {
+    observer.OnCredentialUpdated(credential);
+  }
+}
+
 void VirtualFidoDevice::State::NotifyAssertion(const Credential& credential) {
   for (Observer& observer : observers_) {
     observer.OnAssertion(credential);
@@ -403,7 +324,10 @@ bool VirtualFidoDevice::State::InjectRegistration(
 bool VirtualFidoDevice::State::InjectRegistration(
     base::span<const uint8_t> credential_id,
     const std::string& relying_party_id) {
-  return InjectRegistration(credential_id, RegistrationData(relying_party_id));
+  RegistrationData registration(relying_party_id);
+  registration.backup_eligible = default_backup_eligibility;
+  registration.backup_state = default_backup_state;
+  return InjectRegistration(credential_id, std::move(registration));
 }
 
 bool VirtualFidoDevice::State::InjectResidentKey(
@@ -412,7 +336,7 @@ bool VirtualFidoDevice::State::InjectResidentKey(
     device::PublicKeyCredentialUserEntity user,
     int32_t signature_counter,
     std::unique_ptr<PrivateKey> private_key) {
-  auto application_parameter = fido_parsing_utils::CreateSHA256Hash(rp.id);
+  auto application_parameter = crypto::hash::Sha256(rp.id);
 
   // Cannot create a duplicate credential for the same (RP ID, user ID) pair.
   for (const auto& registration : registrations) {
@@ -429,6 +353,8 @@ bool VirtualFidoDevice::State::InjectResidentKey(
   registration.is_resident = true;
   registration.rp = std::move(rp);
   registration.user = std::move(user);
+  registration.backup_eligible = default_backup_eligibility;
+  registration.backup_state = default_backup_state;
 
   bool was_inserted;
   std::tie(std::ignore, was_inserted) = registrations.emplace(
@@ -440,17 +366,16 @@ bool VirtualFidoDevice::State::InjectResidentKey(
     base::span<const uint8_t> credential_id,
     device::PublicKeyCredentialRpEntity rp,
     device::PublicKeyCredentialUserEntity user) {
-  return InjectResidentKey(std::move(credential_id), std::move(rp),
-                           std::move(user), /*signature_counter=*/0,
-                           PrivateKey::FreshP256Key());
+  return InjectResidentKey(credential_id, std::move(rp), std::move(user),
+                           /*signature_counter=*/0, PrivateKey::FreshP256Key());
 }
 
 bool VirtualFidoDevice::State::InjectResidentKey(
     base::span<const uint8_t> credential_id,
     const std::string& relying_party_id,
     base::span<const uint8_t> user_id,
-    absl::optional<std::string> user_name,
-    absl::optional<std::string> user_display_name) {
+    std::optional<std::string> user_name,
+    std::optional<std::string> user_display_name) {
   return InjectResidentKey(
       credential_id, PublicKeyCredentialRpEntity(std::move(relying_party_id)),
       PublicKeyCredentialUserEntity(fido_parsing_utils::Materialize(user_id),
@@ -458,48 +383,66 @@ bool VirtualFidoDevice::State::InjectResidentKey(
                                     std::move(user_display_name)));
 }
 
-absl::optional<LargeBlob> VirtualFidoDevice::State::GetLargeBlob(
+std::optional<LargeBlob> VirtualFidoDevice::State::GetLargeBlob(
     const RegistrationData& credential) {
+  if (credential.large_blob) {
+    return credential.large_blob;
+  }
   if (!credential.large_blob_key) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   LargeBlobArrayReader reader;
   reader.Append(large_blob);
-  absl::optional<std::vector<LargeBlobData>> large_blob_array =
+  std::optional<cbor::Value::ArrayValue> large_blob_array =
       reader.Materialize();
   if (!large_blob_array) {
-    return absl::nullopt;
+    return std::nullopt;
   }
-  for (const auto& data : *large_blob_array) {
-    absl::optional<LargeBlob> blob = data.Decrypt(*credential.large_blob_key);
+  for (const cbor::Value& blob_cbor : *large_blob_array) {
+    std::optional<LargeBlobData> data = LargeBlobData::Parse(blob_cbor);
+    if (!data.has_value()) {
+      continue;
+    }
+
+    std::optional<LargeBlob> blob = data->Decrypt(*credential.large_blob_key);
     if (blob) {
       return blob;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void VirtualFidoDevice::State::InjectLargeBlob(RegistrationData* credential,
                                                LargeBlob blob) {
   LargeBlobArrayReader reader;
   reader.Append(large_blob);
-  std::vector<LargeBlobData> large_blob_array =
-      reader.Materialize().value_or(std::vector<LargeBlobData>());
+  cbor::Value::ArrayValue large_blob_array =
+      reader.Materialize().value_or(cbor::Value::ArrayValue());
 
   if (credential->large_blob_key) {
-    base::EraseIf(large_blob_array, [&credential](const LargeBlobData& blob) {
-      return blob.Decrypt(*credential->large_blob_key).has_value();
-    });
+    std::erase_if(
+        large_blob_array, [&credential](const cbor::Value& blob_cbor) {
+          std::optional<LargeBlobData> blob = LargeBlobData::Parse(blob_cbor);
+          return blob && blob->Decrypt(*credential->large_blob_key).has_value();
+        });
   } else {
     credential->large_blob_key.emplace();
-    base::RandBytes(credential->large_blob_key->data(),
-                    credential->large_blob_key->size());
+    base::RandBytes(*credential->large_blob_key);
   }
 
-  large_blob_array.insert(
-      large_blob_array.end(),
-      LargeBlobData(*credential->large_blob_key, std::move(blob)));
-  LargeBlobArrayWriter writer(large_blob_array);
+  large_blob_array.emplace_back(
+      LargeBlobData(*credential->large_blob_key, std::move(blob)).AsCBOR());
+  LargeBlobArrayWriter writer(std::move(large_blob_array));
+  large_blob = writer.Pop(writer.size()).bytes;
+}
+
+void VirtualFidoDevice::State::InjectOpaqueLargeBlob(cbor::Value blob) {
+  LargeBlobArrayReader reader;
+  reader.Append(large_blob);
+  cbor::Value::ArrayValue large_blob_array =
+      reader.Materialize().value_or(cbor::Value::ArrayValue());
+  large_blob_array.emplace_back(std::move(blob));
+  LargeBlobArrayWriter writer(std::move(large_blob_array));
   large_blob = writer.Pop(writer.size()).bytes;
 }
 
@@ -526,19 +469,12 @@ std::vector<uint8_t> VirtualFidoDevice::GetAttestationKey() {
   return fido_parsing_utils::Materialize(kAttestationKey);
 }
 
-bool VirtualFidoDevice::Sign(crypto::ECPrivateKey* private_key,
-                             base::span<const uint8_t> sign_buffer,
-                             std::vector<uint8_t>* signature) {
-  auto signer = crypto::ECSignatureCreator::Create(private_key);
-  return signer->Sign(sign_buffer, signature);
-}
-
-absl::optional<std::vector<uint8_t>>
+std::optional<std::vector<uint8_t>>
 VirtualFidoDevice::GenerateAttestationCertificate(
     bool individual_attestation_requested,
     bool include_transports) const {
-  std::unique_ptr<crypto::ECPrivateKey> attestation_private_key =
-      crypto::ECPrivateKey::CreateFromPrivateKeyInfo(GetAttestationKey());
+  auto attestation_private_key =
+      crypto::keypair::PrivateKey::FromPrivateKeyInfo(GetAttestationKey());
   constexpr uint32_t kAttestationCertSerialNumber = 1;
 
   // https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/fido-u2f-authenticator-transports-extension-v1.2-ps-20170411.html#fido-u2f-certificate-transports-extension
@@ -559,9 +495,8 @@ VirtualFidoDevice::GenerateAttestationCertificate(
     case FidoTransportProtocol::kInternal:
       transport_bit = 4;
       break;
-    case FidoTransportProtocol::kAndroidAccessory:
-      transport_bit = 1;
-      break;
+    case FidoTransportProtocol::kDeprecatedAoa:
+      NOTREACHED();
   }
   const uint8_t kTransportTypesContents[] = {
       3,                                            // BIT STRING
@@ -602,7 +537,7 @@ VirtualFidoDevice::GenerateAttestationCertificate(
           kAttestationCertSerialNumber, base::Time::FromTimeT(1500000000),
           expiry_date, extensions, &attestation_cert)) {
     DVLOG(2) << "Failed to create attestation certificate";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return std::vector<uint8_t>(attestation_cert.begin(), attestation_cert.end());
@@ -616,7 +551,7 @@ void VirtualFidoDevice::StoreNewKey(
   // virtual authenticator API.
   if (registration_data.application_parameter == device::kBogusAppParam ||
       registration_data.application_parameter ==
-          fido_parsing_utils::CreateSHA256Hash(kDummyRpID)) {
+          crypto::hash::Sha256(kDummyRpID)) {
     return;
   }
 
@@ -638,8 +573,8 @@ VirtualFidoDevice::RegistrationData* VirtualFidoDevice::FindRegistrationData(
   if (it == mutable_state()->registrations.end())
     return nullptr;
 
-  if (!base::ranges::equal(application_parameter,
-                           it->second.application_parameter)) {
+  if (!std::ranges::equal(application_parameter,
+                          it->second.application_parameter)) {
     return nullptr;
   }
 
@@ -668,7 +603,7 @@ FidoTransportProtocol VirtualFidoDevice::DeviceTransport() const {
 // static
 std::string VirtualFidoDevice::MakeVirtualFidoDeviceId() {
   uint8_t rand_bytes[32];
-  base::RandBytes(rand_bytes, sizeof(rand_bytes));
+  base::RandBytes(rand_bytes);
   return "VirtualFidoDevice-" + base::HexEncode(rand_bytes);
 }
 

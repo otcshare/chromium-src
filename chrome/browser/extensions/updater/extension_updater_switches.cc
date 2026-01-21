@@ -4,8 +4,27 @@
 
 #include "chrome/browser/extensions/updater/extension_updater_switches.h"
 
+#include "base/command_line.h"
+#include "chrome/common/channel_info.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
 const char kSwitchTestRequestParam[] = "extension-updater-test-request";
+
+const char kSwitchExtensionForceChannel[] = "extension-force-channel";
+
+std::string GetChannelForExtensionUpdates() {
+  std::string forced_channel =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+          extensions::kSwitchExtensionForceChannel);
+  if (!forced_channel.empty()) {
+    return forced_channel;
+  }
+
+  return chrome::GetChannelName(chrome::WithExtendedStable(true));
+}
 
 }  // namespace extensions

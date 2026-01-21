@@ -4,13 +4,6 @@
 
 #include "components/variations/variations_features.h"
 
-namespace variations {
+namespace variations::internal {
 
-namespace internal {
-
-BASE_FEATURE(kRestrictGoogleWebVisibility,
-             "RestrictGoogleWebVisibility",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-}  // namespace internal
-}  // namespace variations
+}  // namespace variations::internal

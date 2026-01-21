@@ -6,18 +6,17 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "build/chromeos_buildflags.h"
 #include "content/public/browser/network_service_instance.h"
-#include "content/public/common/network_service_util.h"
+#include "content/public/browser/network_service_util.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "net/base/network_change_notifier_posix.h"
+#include "net/base/network_change_notifier_passive.h"
 #endif
 
 namespace content {
@@ -39,8 +38,8 @@ void NetworkConnectionChangeSimulator::InitializeChromeosConnectionType() {
   // Manually set the connection type since ChromeOS's NetworkChangeNotifier
   // implementation relies on some other class controlling it (normally
   // NetworkChangeManagerClient), which isn't used on content/.
-  net::NetworkChangeNotifierPosix* network_change_notifier =
-      static_cast<net::NetworkChangeNotifierPosix*>(
+  net::NetworkChangeNotifierPassive* network_change_notifier =
+      static_cast<net::NetworkChangeNotifierPassive*>(
           content::GetNetworkChangeNotifier());
   network_change_notifier->OnConnectionChanged(
       net::NetworkChangeNotifier::CONNECTION_ETHERNET);
@@ -51,7 +50,8 @@ void NetworkConnectionChangeSimulator::InitializeChromeosConnectionType() {
     GetNetworkService()->GetNetworkChangeManager(
         manager.BindNewPipeAndPassReceiver());
     manager->OnNetworkChanged(
-        /*dns_changed=*/false, /*ip_address_changed=*/false,
+        /*dns_changed=*/false,
+        network::mojom::IPAddressChangeType::IP_ADDRESS_CHANGE_NONE,
         /*connection_type_changed=*/true,
         network::mojom::ConnectionType::CONNECTION_ETHERNET,
         /*connection_subtype_changed=*/false,
@@ -92,7 +92,7 @@ void NetworkConnectionChangeSimulator::SimulateNetworkChange(
     network::mojom::ConnectionType type) {
   if (IsOutOfProcessNetworkService()) {
     mojo::Remote<network::mojom::NetworkServiceTest> network_service_test;
-    content::GetNetworkService()->BindTestInterface(
+    content::GetNetworkService()->BindTestInterfaceForTesting(
         network_service_test.BindNewPipeAndPassReceiver());
     base::RunLoop run_loop(kRunLoopType);
     network_service_test->SimulateNetworkChange(type, run_loop.QuitClosure());

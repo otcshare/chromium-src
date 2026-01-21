@@ -13,9 +13,9 @@ namespace content {
 
 namespace {
 
-absl::optional<blink::InspectorPlayerError> ErrorFromParams(
+std::optional<blink::InspectorPlayerError> ErrorFromParams(
     const base::Value::Dict& param) {
-  absl::optional<int> code = param.FindInt(media::StatusConstants::kCodeKey);
+  std::optional<int> code = param.FindInt(media::StatusConstants::kCodeKey);
   const std::string* group =
       param.FindString(media::StatusConstants::kGroupKey);
   const std::string* message =
@@ -31,13 +31,14 @@ absl::optional<blink::InspectorPlayerError> ErrorFromParams(
       caused_by.push_back(*parsed_cause);
   }
 
-  blink::WebVector<blink::InspectorPlayerError::SourceLocation> stack_vec;
+  std::vector<blink::InspectorPlayerError::SourceLocation> stack_vec;
   if (const auto* vec = param.FindList(media::StatusConstants::kStackKey)) {
     for (const auto& loc : *vec) {
+      const auto& loc_dict = loc.GetDict();
       const std::string* file =
-          loc.FindStringKey(media::StatusConstants::kFileKey);
-      absl::optional<int> line =
-          loc.FindIntKey(media::StatusConstants::kLineKey);
+          loc_dict.FindString(media::StatusConstants::kFileKey);
+      std::optional<int> line =
+          loc_dict.FindInt(media::StatusConstants::kLineKey);
       if (!file || !line.has_value())
         continue;
       blink::InspectorPlayerError::SourceLocation entry = {
@@ -46,11 +47,10 @@ absl::optional<blink::InspectorPlayerError> ErrorFromParams(
     }
   }
 
-  blink::WebVector<blink::InspectorPlayerError::Data> data_vec;
+  std::vector<blink::InspectorPlayerError::Data> data_vec;
   if (auto* data = param.FindDict(media::StatusConstants::kDataKey)) {
     for (const auto pair : *data) {
-      std::string json;
-      base::JSONWriter::Write(pair.second, &json);
+      std::string json = base::WriteJson(pair.second).value_or("");
       blink::InspectorPlayerError::Data entry = {
           blink::WebString::FromUTF8(pair.first),
           blink::WebString::FromUTF8(json)};
@@ -73,14 +73,12 @@ blink::WebString ToString(const base::Value& value) {
   if (value.is_string()) {
     return blink::WebString::FromUTF8(value.GetString());
   }
-  std::string output_str;
-  base::JSONWriter::Write(value, &output_str);
+  std::string output_str = base::WriteJson(value).value_or("");
   return blink::WebString::FromUTF8(output_str);
 }
 
 blink::WebString ToString(const base::Value::Dict& value) {
-  std::string output_str;
-  base::JSONWriter::Write(value, &output_str);
+  std::string output_str = base::WriteJson(value).value_or("");
   return blink::WebString::FromUTF8(output_str);
 }
 
@@ -93,18 +91,19 @@ blink::InspectorPlayerMessage::Level LevelFromString(const std::string& level) {
     return blink::InspectorPlayerMessage::Level::kWarning;
   if (level == "info")
     return blink::InspectorPlayerMessage::Level::kInfo;
-  if (level == "debug")
-    return blink::InspectorPlayerMessage::Level::kDebug;
-  NOTREACHED();
-  return blink::InspectorPlayerMessage::Level::kError;
+  CHECK_EQ(level, "debug");
+  return blink::InspectorPlayerMessage::Level::kDebug;
 }
 
 }  // namespace
 
 InspectorMediaEventHandler::InspectorMediaEventHandler(
-    blink::MediaInspectorContext* inspector_context)
+    blink::MediaInspectorContext* inspector_context,
+    int dom_node_id)
     : inspector_context_(inspector_context),
-      player_id_(inspector_context_->CreatePlayer()) {}
+      player_id_(inspector_context_->CreatePlayer()) {
+  inspector_context->SetDomNodeIdForPlayer(player_id_, dom_node_id);
+}
 
 // TODO(tmathmeyer) It would be wonderful if the definition for MediaLogRecord
 // and InspectorPlayerEvent / InspectorPlayerProperty could be unified so that
@@ -145,7 +144,7 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
         break;
       }
       case media::MediaLogRecord::Type::kMediaStatus: {
-        absl::optional<blink::InspectorPlayerError> error =
+        std::optional<blink::InspectorPlayerError> error =
             ErrorFromParams(event.params);
         if (error.has_value())
           errors.emplace_back(std::move(*error));

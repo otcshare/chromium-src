@@ -4,36 +4,48 @@
 
 package org.chromium.chrome.browser.metrics;
 
-import org.chromium.base.StrictModeContext;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.blink.mojom.DisplayMode;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.intents.WebappInfo;
 import org.chromium.chrome.browser.browserservices.metrics.WebApkUkmRecorder;
 import org.chromium.chrome.browser.webapps.WebappDataStorage;
 import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.webapps.ShortcutSource;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Used for recording metrics about Chrome launches that need to be recorded before the native
- * library may have been loaded.  Metrics are cached until the library is known to be loaded, then
+ * library may have been loaded. Metrics are cached until the library is known to be loaded, then
  * committed to the MetricsService all at once.
  */
 @JNINamespace("metrics")
+@NullMarked
 public class LaunchMetrics {
     private static class HomeScreenLaunch {
         public final String mUrl;
+        public final @DisplayMode.EnumType int mDisplayMode;
         public final boolean mIsShortcut;
         // Corresponds to C++ ShortcutInfo::Source
         public final int mSource;
-        public final WebappInfo mWebappInfo;
+        public final @Nullable WebappInfo mWebappInfo;
 
-        public HomeScreenLaunch(String url, boolean isShortcut, int source, WebappInfo webappInfo) {
+        public HomeScreenLaunch(
+                String url,
+                @DisplayMode.EnumType int displayMode,
+                boolean isShortcut,
+                int source,
+                @Nullable WebappInfo webappInfo) {
             mUrl = url;
+            mDisplayMode = displayMode;
             mIsShortcut = isShortcut;
             mSource = source;
             mWebappInfo = webappInfo;
@@ -59,35 +71,56 @@ public class LaunchMetrics {
             source = getSourceForWebApkFromWebappDataStorage(webappInfo);
         }
 
-        sHomeScreenLaunches.add(new HomeScreenLaunch(webappInfo.url(), false, source, webappInfo));
+        sHomeScreenLaunches.add(
+                new HomeScreenLaunch(
+                        webappInfo.url(), webappInfo.displayMode(), false, source, webappInfo));
+    }
+
+    /**
+     * Records the launch of a TWA
+     *
+     * @param url The TWA's url to load
+     * @param displayMode The TWA's resolved DisplayMode
+     */
+    public static void recordTWALaunch(String url, @DisplayMode.EnumType int displayMode) {
+        sHomeScreenLaunches.add(
+                new HomeScreenLaunch(url, displayMode, false, ShortcutSource.UNKNOWN, null));
     }
 
     /**
      * Records the launch of a Tab for a URL (i.e. a Home screen shortcut).
+     *
      * @param url URL that kicked off the Tab's creation.
      * @param source integer id of the source from where the URL was added.
      */
     public static void recordHomeScreenLaunchIntoTab(String url, int source) {
-        sHomeScreenLaunches.add(new HomeScreenLaunch(url, true, source, null));
+        sHomeScreenLaunches.add(
+                new HomeScreenLaunch(url, DisplayMode.UNDEFINED, true, source, null));
     }
 
     /**
-     * Calls out to native code to record URLs that have been launched via the Home screen.
-     * This intermediate step is necessary because Activity.onCreate() may be called when
-     * the native library has not yet been loaded.
+     * Calls out to native code to record URLs that have been launched via the Home screen. This
+     * intermediate step is necessary because Activity.onCreate() may be called when the native
+     * library has not yet been loaded.
+     *
      * @param webContents WebContents for the current Tab.
      */
     public static void commitLaunchMetrics(WebContents webContents) {
         for (HomeScreenLaunch launch : sHomeScreenLaunches) {
             WebappInfo webappInfo = launch.mWebappInfo;
-            @DisplayMode.EnumType
-            int displayMode =
-                    (webappInfo == null) ? DisplayMode.UNDEFINED : webappInfo.displayMode();
-            LaunchMetricsJni.get().recordLaunch(
-                    launch.mIsShortcut, launch.mUrl, launch.mSource, displayMode, webContents);
+            LaunchMetricsJni.get()
+                    .recordLaunch(
+                            launch.mIsShortcut,
+                            launch.mUrl,
+                            launch.mSource,
+                            launch.mDisplayMode,
+                            webContents);
             if (webappInfo != null && webappInfo.isForWebApk()) {
-                WebApkUkmRecorder.recordWebApkLaunch(webappInfo.manifestUrl(),
-                        webappInfo.distributor(), webappInfo.webApkVersionCode(), launch.mSource);
+                WebApkUkmRecorder.recordWebApkLaunch(
+                        webappInfo.manifestIdWithFallback(),
+                        webappInfo.distributor(),
+                        webappInfo.webApkVersionCode(),
+                        launch.mSource);
             }
         }
         sHomeScreenLaunches.clear();
@@ -95,18 +128,18 @@ public class LaunchMetrics {
 
     /**
      * Records metrics about the state of the homepage on launch.
+     *
      * @param showHomeButton Whether the home button is shown.
      * @param homepageIsNtp Whether the homepage is set to the NTP.
-     * @param homepageUrl The value of the homepage URL.
+     * @param homepageGurl The homepage GURL.
      */
     public static void recordHomePageLaunchMetrics(
-            boolean showHomeButton, boolean homepageIsNtp, String homepageUrl) {
-        if (homepageUrl == null) {
-            homepageUrl = "";
-            assert !showHomeButton : "Homepage should be disabled for a null URL";
+            boolean showHomeButton, boolean homepageIsNtp, GURL homepageGurl) {
+        if (homepageGurl.isEmpty()) {
+            assert !showHomeButton : "Homepage should be disabled for an empty GURL";
         }
-        LaunchMetricsJni.get().recordHomePageLaunchMetrics(
-                showHomeButton, homepageIsNtp, homepageUrl);
+        LaunchMetricsJni.get()
+                .recordHomePageLaunchMetrics(showHomeButton, homepageIsNtp, homepageGurl);
     }
 
     /**
@@ -114,12 +147,9 @@ public class LaunchMetrics {
      * {@link ShortcutSource.WEBAPK_UNKNOWN} otherwise.
      */
     private static int getSourceForWebApkFromWebappDataStorage(WebappInfo webappInfo) {
-        WebappDataStorage storage = null;
-
-        try (StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
-            WebappRegistry.warmUpSharedPrefsForId(webappInfo.id());
-            storage = WebappRegistry.getInstance().getWebappDataStorage(webappInfo.id());
-        }
+        WebappRegistry.warmUpSharedPrefsForId(webappInfo.id());
+        WebappDataStorage storage =
+                WebappRegistry.getInstance().getWebappDataStorage(webappInfo.id());
 
         if (storage == null) {
             return ShortcutSource.WEBAPK_UNKNOWN;
@@ -131,9 +161,14 @@ public class LaunchMetrics {
 
     @NativeMethods
     interface Natives {
-        void recordLaunch(boolean isShortcut, String url, int source,
-                @DisplayMode.EnumType int displayMode, WebContents webContents);
+        void recordLaunch(
+                boolean isShortcut,
+                @JniType("std::string") String url,
+                int source,
+                @DisplayMode.EnumType int displayMode,
+                WebContents webContents);
+
         void recordHomePageLaunchMetrics(
-                boolean showHomeButton, boolean homepageIsNtp, String homepageUrl);
+                boolean showHomeButton, boolean homepageIsNtp, GURL homepageGurl);
     }
 }

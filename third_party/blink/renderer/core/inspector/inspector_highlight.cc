@@ -26,23 +26,24 @@
 #include "third_party/blink/renderer/core/inspector/node_content_visibility_state.h"
 #include "third_party/blink/renderer/core/inspector/protocol/overlay.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
+#include "third_party/blink/renderer/core/layout/flex/devtools_flex_info.h"
+#include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
+#include "third_party/blink/renderer/core/layout/grid/layout_grid.h"
+#include "third_party/blink/renderer/core/layout/grid_lanes/layout_grid_lanes.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
-#include "third_party/blink/renderer/core/layout/layout_flexible_box.h"
-#include "third_party/blink/renderer/core/layout/layout_grid.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
-#include "third_party/blink/renderer/core/layout/ng/flex/layout_ng_flexible_box.h"
-#include "third_party/blink/renderer/core/layout/ng/ng_box_fragment.h"
-#include "third_party/blink/renderer/core/layout/ng/ng_physical_box_fragment.h"
+#include "third_party/blink/renderer/core/layout/logical_box_fragment.h"
+#include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/shapes/shape_outside_info.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
-#include "third_party/blink/renderer/core/style/grid_positions_resolver.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
-#include "third_party/blink/renderer/platform/graphics/path.h"
+#include "third_party/blink/renderer/platform/geometry/path.h"
+#include "third_party/blink/renderer/platform/geometry/path_builder.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -53,77 +54,100 @@ namespace blink {
 
 namespace {
 
-class PathBuilder {
+inline LayoutBox* ContentLayoutBoxFromNode(Node* node) {
+  LayoutObject* layout_object = node->GetLayoutObject();
+  if (!layout_object) {
+    return nullptr;
+  }
+  if (auto* block = DynamicTo<LayoutBlock>(layout_object)) {
+    auto* content_layout_box = block->ContentLayoutBox();
+    DCHECK(content_layout_box)
+        << "Node " << node->nodeName() << " has no content layout box.";
+    return content_layout_box;
+  }
+  return nullptr;
+}
+
+class HighlightPathBuilder {
   STACK_ALLOCATED();
 
  public:
-  PathBuilder() : path_(protocol::ListValue::create()) {}
-  PathBuilder(const PathBuilder&) = delete;
-  PathBuilder& operator=(const PathBuilder&) = delete;
-  virtual ~PathBuilder() = default;
+  HighlightPathBuilder() : path_(protocol::ListValue::create()) {}
+  HighlightPathBuilder(const HighlightPathBuilder&) = delete;
+  HighlightPathBuilder& operator=(const HighlightPathBuilder&) = delete;
+  virtual ~HighlightPathBuilder() = default;
 
   std::unique_ptr<protocol::ListValue> Release() { return std::move(path_); }
 
   void AppendPath(const Path& path, float scale) {
-    Path transform_path(path);
-    transform_path.Transform(AffineTransform().Scale(scale));
-    transform_path.Apply(this, &PathBuilder::AppendPathElement);
+    ApplyInfo apply_info{this, scale};
+    path.Apply(&apply_info, &HighlightPathBuilder::AppendPathElement);
   }
 
  protected:
   virtual gfx::PointF TranslatePoint(const gfx::PointF& point) { return point; }
 
  private:
-  static void AppendPathElement(void* path_builder,
-                                const PathElement* path_element) {
-    static_cast<PathBuilder*>(path_builder)->AppendPathElement(path_element);
+  struct ApplyInfo {
+    STACK_ALLOCATED();
+
+   public:
+    HighlightPathBuilder* builder;
+    float scale;
+  };
+
+  static void AppendPathElement(void* info, const PathElement& path_element) {
+    const ApplyInfo* apply_info = static_cast<ApplyInfo*>(info);
+    apply_info->builder->AppendPathElement(path_element, apply_info->scale);
   }
 
-  void AppendPathElement(const PathElement*);
+  void AppendPathElement(const PathElement&, float scale);
   void AppendPathCommandAndPoints(const char* command,
-                                  const gfx::PointF points[],
-                                  size_t length);
+                                  base::span<const gfx::PointF> points,
+                                  float scale);
 
   std::unique_ptr<protocol::ListValue> path_;
 };
 
-void PathBuilder::AppendPathCommandAndPoints(const char* command,
-                                             const gfx::PointF points[],
-                                             size_t length) {
+void HighlightPathBuilder::AppendPathCommandAndPoints(
+    const char* command,
+    base::span<const gfx::PointF> points,
+    float scale) {
   path_->pushValue(protocol::StringValue::create(command));
-  for (size_t i = 0; i < length; i++) {
-    gfx::PointF point = TranslatePoint(points[i]);
+  for (const auto& orig_point : points) {
+    gfx::PointF point = TranslatePoint(gfx::ScalePoint(orig_point, scale));
     path_->pushValue(protocol::FundamentalValue::create(point.x()));
     path_->pushValue(protocol::FundamentalValue::create(point.y()));
   }
 }
 
-void PathBuilder::AppendPathElement(const PathElement* path_element) {
-  switch (path_element->type) {
+void HighlightPathBuilder::AppendPathElement(const PathElement& path_element,
+                                             float scale) {
+  switch (path_element.type) {
     // The points member will contain 1 value.
     case kPathElementMoveToPoint:
-      AppendPathCommandAndPoints("M", path_element->points, 1);
+      AppendPathCommandAndPoints("M", path_element.points, scale);
       break;
     // The points member will contain 1 value.
     case kPathElementAddLineToPoint:
-      AppendPathCommandAndPoints("L", path_element->points, 1);
+      AppendPathCommandAndPoints("L", path_element.points, scale);
       break;
     // The points member will contain 3 values.
     case kPathElementAddCurveToPoint:
-      AppendPathCommandAndPoints("C", path_element->points, 3);
+      AppendPathCommandAndPoints("C", path_element.points, scale);
       break;
     // The points member will contain 2 values.
     case kPathElementAddQuadCurveToPoint:
-      AppendPathCommandAndPoints("Q", path_element->points, 2);
+      AppendPathCommandAndPoints("Q", path_element.points, scale);
       break;
     // The points member will contain no values.
     case kPathElementCloseSubpath:
-      AppendPathCommandAndPoints("Z", nullptr, 0);
+      AppendPathCommandAndPoints("Z", path_element.points, scale);
       break;
   }
 }
 
-class ShapePathBuilder : public PathBuilder {
+class ShapePathBuilder : public HighlightPathBuilder {
  public:
   ShapePathBuilder(LocalFrameView& view,
                    LayoutObject& layout_object,
@@ -167,35 +191,35 @@ std::unique_ptr<protocol::Array<double>> BuildArrayForQuad(
 }
 
 Path QuadToPath(const gfx::QuadF& quad) {
-  Path quad_path;
-  quad_path.MoveTo(quad.p1());
-  quad_path.AddLineTo(quad.p2());
-  quad_path.AddLineTo(quad.p3());
-  quad_path.AddLineTo(quad.p4());
-  quad_path.CloseSubpath();
-  return quad_path;
+  return PathBuilder()
+      .MoveTo(quad.p1())
+      .LineTo(quad.p2())
+      .LineTo(quad.p3())
+      .LineTo(quad.p4())
+      .Close()
+      .Finalize();
 }
 
 Path RowQuadToPath(const gfx::QuadF& quad, bool draw_end_line) {
-  Path quad_path;
+  PathBuilder quad_path;
   quad_path.MoveTo(quad.p1());
-  quad_path.AddLineTo(quad.p2());
+  quad_path.LineTo(quad.p2());
   if (draw_end_line) {
     quad_path.MoveTo(quad.p3());
-    quad_path.AddLineTo(quad.p4());
+    quad_path.LineTo(quad.p4());
   }
-  return quad_path;
+  return quad_path.Finalize();
 }
 
 Path ColumnQuadToPath(const gfx::QuadF& quad, bool draw_end_line) {
-  Path quad_path;
+  PathBuilder quad_path;
   quad_path.MoveTo(quad.p1());
-  quad_path.AddLineTo(quad.p4());
+  quad_path.LineTo(quad.p4());
   if (draw_end_line) {
     quad_path.MoveTo(quad.p3());
-    quad_path.AddLineTo(quad.p2());
+    quad_path.LineTo(quad.p2());
   }
-  return quad_path;
+  return quad_path.Finalize();
 }
 
 gfx::PointF FramePointToViewport(const LocalFrameView* view,
@@ -246,7 +270,7 @@ const ShapeOutsideInfo* ShapeOutsideInfoForNode(Node* node,
 
 String ToHEXA(const Color& color) {
   return String::Format("#%02X%02X%02X%02X", color.Red(), color.Green(),
-                        color.Blue(), color.Alpha());
+                        color.Blue(), color.AlphaAsInteger());
 }
 
 std::unique_ptr<protocol::ListValue> ToRGBAList(const Color& color) {
@@ -277,19 +301,19 @@ String ContrastAlgorithmToString(const ContrastAlgorithm& contrast_algorithm) {
 }
 }  // namespace
 
-void AppendStyleInfo(Node* node,
+void AppendStyleInfo(Element* element,
                      protocol::DictionaryValue* element_info,
                      const InspectorHighlightContrastInfo& node_contrast,
                      const ContrastAlgorithm& contrast_algorithm) {
   std::unique_ptr<protocol::DictionaryValue> computed_style =
       protocol::DictionaryValue::create();
   CSSComputedStyleDeclaration* style =
-      MakeGarbageCollected<CSSComputedStyleDeclaration>(node, true);
+      MakeGarbageCollected<CSSComputedStyleDeclaration>(element, true);
   Vector<CSSPropertyID> properties;
 
   // For text nodes, we can show color & font properties.
   bool has_text_children = false;
-  for (Node* child = node->firstChild(); !has_text_children && child;
+  for (Node* child = element->firstChild(); !has_text_children && child;
        child = child->nextSibling()) {
     has_text_children = child->IsTextNode();
   }
@@ -311,9 +335,11 @@ void AppendStyleInfo(Node* node,
     AtomicString name = CSSPropertyName(properties[i]).ToAtomicString();
     if (value->IsColorValue()) {
       Color color = static_cast<const cssvalue::CSSColor*>(value)->Value();
-      computed_style->setArray(name + "-unclamped-rgba", ToRGBAList(color));
-      if (!color.IsLegacyColor()) {
-        computed_style->setString(name + "-css-text", value->CssText());
+      computed_style->setArray(StrCat({name, "-unclamped-rgba"}),
+                               ToRGBAList(color));
+      if (!Color::IsLegacyColorSpace(color.GetColorSpace())) {
+        computed_style->setString(StrCat({name, "-css-text"}),
+                                  value->CssText());
       }
       computed_style->setString(name, ToHEXA(color));
     } else {
@@ -367,12 +393,35 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
     }
   }
   if (pseudo_element) {
-    if (pseudo_element->GetPseudoId() == kPseudoIdBefore)
+    if (pseudo_element->GetPseudoId() == kPseudoIdCheckMark) {
+      class_names.Append("::checkmark");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdBefore) {
       class_names.Append("::before");
-    else if (pseudo_element->GetPseudoId() == kPseudoIdAfter)
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdAfter) {
       class_names.Append("::after");
-    else if (pseudo_element->GetPseudoId() == kPseudoIdMarker)
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdPickerIcon) {
+      class_names.Append("::picker-icon");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdInterestHint) {
+      class_names.Append("::interest-hint");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdMarker) {
       class_names.Append("::marker");
+    } else if (pseudo_element->GetPseudoIdForStyling() ==
+               kPseudoIdScrollMarkerGroup) {
+      class_names.Append("::scroll-marker-group");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdScrollMarker) {
+      class_names.Append("::scroll-marker");
+    } else if (pseudo_element->GetPseudoId() ==
+               kPseudoIdScrollButtonBlockStart) {
+      class_names.Append("::scroll-button(block-start)");
+    } else if (pseudo_element->GetPseudoId() ==
+               kPseudoIdScrollButtonInlineStart) {
+      class_names.Append("::scroll-button(inline-start)");
+    } else if (pseudo_element->GetPseudoId() ==
+               kPseudoIdScrollButtonInlineEnd) {
+      class_names.Append("::scroll-button(inline-end)");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdScrollButtonBlockEnd) {
+      class_names.Append("::scroll-button(block-end)");
+    }
   }
   if (!class_names.empty())
     element_info->setString("className", class_names.ToString());
@@ -382,7 +431,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
   if (!layout_object || !containing_view)
     return element_info;
 
-  // layoutObject the getBoundingClientRect() data in the tooltip
+  // layoutObject the GetBoundingClientRect() data in the tooltip
   // to be consistent with the rulers (see http://crbug.com/262338).
 
   DCHECK(element->GetDocument().Lifecycle().GetState() >=
@@ -392,9 +441,11 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
   element_info->setString("nodeHeight", String::Number(bounding_box.height()));
 
   element_info->setBoolean("isKeyboardFocusable",
-                           element->IsKeyboardFocusable());
-  element_info->setString("accessibleName", element->computedName());
-  element_info->setString("accessibleRole", element->computedRole());
+                           element->IsKeyboardFocusableSlow());
+  element_info->setString("accessibleName",
+                          element->ComputedNameNoLifecycleUpdate());
+  element_info->setString("accessibleRole",
+                          element->ComputedRoleNoLifecycleUpdate());
 
   element_info->setString("layoutObjectName", layout_object->GetName());
 
@@ -409,7 +460,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildTextNodeInfo(Text* text_node) {
   if (!layout_object || !layout_object->IsText())
     return text_info;
   PhysicalRect bounding_box =
-      To<LayoutText>(layout_object)->PhysicalVisualOverflowRect();
+      To<LayoutText>(layout_object)->VisualOverflowRect();
   text_info->setString("nodeWidth", bounding_box.Width().ToString());
   text_info->setString("nodeHeight", bounding_box.Height().ToString());
   text_info->setString("tagName", "#text");
@@ -418,10 +469,10 @@ std::unique_ptr<protocol::DictionaryValue> BuildTextNodeInfo(Text* text_node) {
 }
 
 void AppendLineStyleConfig(
-    const absl::optional<LineStyle>& line_style,
+    const std::optional<LineStyle>& line_style,
     std::unique_ptr<protocol::DictionaryValue>& parent_config,
     String line_name) {
-  if (!line_style || line_style->IsTransparent()) {
+  if (!line_style || line_style->IsFullyTransparent()) {
     return;
   }
 
@@ -434,10 +485,10 @@ void AppendLineStyleConfig(
 }
 
 void AppendBoxStyleConfig(
-    const absl::optional<BoxStyle>& box_style,
+    const std::optional<BoxStyle>& box_style,
     std::unique_ptr<protocol::DictionaryValue>& parent_config,
     String box_name) {
-  if (!box_style || box_style->IsTransparent()) {
+  if (!box_style || box_style->IsFullyTransparent()) {
     return;
   }
 
@@ -585,19 +636,10 @@ PhysicalOffset Transpose(PhysicalOffset& offset) {
 LayoutUnit TranslateRTLCoordinate(const LayoutObject* layout_object,
                                   LayoutUnit position,
                                   const Vector<LayoutUnit>& column_positions) {
-  // TranslateRTLCoordinate exists in legacy grid, but is not implemented in
-  // GridNG, duplicating implementation from legacy here. Once legacy grid is
-  // removed, the implementation for TranslateRTLCoordinate will only exist
-  // here.
-  // If this is a legacy grid, use the legacy grid method.
-  if (layout_object->IsLayoutGrid()) {
-    return To<LayoutGrid>(layout_object)->TranslateRTLCoordinate(position);
-  }
-  // This should only be called on grid layout objects. If the object is not
-  // legacy grid, it must be GridNG.
-  DCHECK(layout_object->IsLayoutNGGrid());
-
+  // This should only be called on grid or grid-lanes layout objects.
+  DCHECK(layout_object->IsLayoutGridOrGridLanes());
   DCHECK(!layout_object->StyleRef().IsLeftToRightDirection());
+
   LayoutUnit alignment_offset = column_positions.front();
   LayoutUnit right_grid_edge_position = column_positions.back();
   return right_grid_edge_position + alignment_offset - position;
@@ -607,6 +649,7 @@ LayoutUnit GetPositionForTrackAt(const LayoutObject* layout_object,
                                  wtf_size_t index,
                                  GridTrackSizingDirection direction,
                                  const Vector<LayoutUnit>& positions) {
+  CHECK(index >= 0 && index < positions.size());
   if (direction == kForRows)
     return positions.at(index);
 
@@ -632,8 +675,8 @@ LayoutUnit GetPositionForLastTrack(const LayoutObject* layout_object,
 PhysicalOffset LocalToAbsolutePoint(Node* node,
                                     PhysicalOffset local,
                                     float scale) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  PhysicalOffset abs_point = layout_object->LocalToAbsolutePoint(local);
+  LayoutBox* layout_box = ContentLayoutBoxFromNode(node);
+  PhysicalOffset abs_point = layout_box->LocalToAbsolutePoint(local);
   gfx::PointF abs_point_in_viewport = FramePointToViewport(
       node->GetDocument().View(), gfx::PointF(abs_point.left, abs_point.top));
   PhysicalOffset scaled_abs_point =
@@ -659,7 +702,7 @@ std::unique_ptr<protocol::ListValue> BuildPathFromQuad(
     const blink::LocalFrameView* containing_view,
     gfx::QuadF quad) {
   FrameQuadToViewport(containing_view, quad);
-  PathBuilder builder;
+  HighlightPathBuilder builder;
   builder.AppendPath(QuadToPath(quad),
                      DeviceScaleFromFrameView(containing_view));
   return builder.Release();
@@ -695,37 +738,45 @@ std::unique_ptr<protocol::ListValue> BuildGridTrackSizes(
     GridTrackSizingDirection direction,
     float scale,
     LayoutUnit gap,
-    LayoutUnit rtl_offset,
+    std::optional<LayoutUnit> rtl_offset,
     const Vector<LayoutUnit>& positions,
     const Vector<LayoutUnit>& alt_axis_positions,
-    const Vector<String>* authored_values) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  bool is_rtl = !layout_object->StyleRef().IsLeftToRightDirection();
+    const Vector<String>* authored_values,
+    std::optional<LayoutUnit> alt_axis_pos = std::nullopt) {
+  const LayoutBox* layout_box = ContentLayoutBoxFromNode(node);
 
   std::unique_ptr<protocol::ListValue> sizes = protocol::ListValue::create();
   wtf_size_t track_count = positions.size();
-  LayoutUnit alt_axis_pos = GetPositionForFirstTrack(
-      layout_object, direction == kForRows ? kForColumns : kForRows,
-      alt_axis_positions);
-  if (is_rtl && direction == kForRows)
-    alt_axis_pos += rtl_offset;
+  if (track_count == 0) {
+    return sizes;
+  }
+  if (!alt_axis_pos) {
+    alt_axis_pos = GetPositionForFirstTrack(
+        layout_box, direction == kForRows ? kForColumns : kForRows,
+        alt_axis_positions);
+  }
+  if (rtl_offset && direction == kForRows) {
+    *alt_axis_pos += *rtl_offset;
+  }
 
   for (wtf_size_t i = 1; i < track_count; i++) {
     LayoutUnit current_position =
-        GetPositionForTrackAt(layout_object, i, direction, positions);
+        GetPositionForTrackAt(layout_box, i, direction, positions);
     LayoutUnit prev_position =
-        GetPositionForTrackAt(layout_object, i - 1, direction, positions);
+        GetPositionForTrackAt(layout_box, i - 1, direction, positions);
 
     LayoutUnit gap_offset = i < track_count - 1 ? gap : LayoutUnit();
     LayoutUnit width = current_position - prev_position - gap_offset;
-    if (is_rtl && direction == kForColumns)
+    if (rtl_offset && direction == kForColumns) {
       width = prev_position - current_position - gap_offset;
+    }
     LayoutUnit main_axis_pos = prev_position + width / 2;
-    if (is_rtl && direction == kForColumns)
-      main_axis_pos = rtl_offset + prev_position - width / 2;
-    auto adjusted_size = AdjustForAbsoluteZoom::AdjustFloat(
-        width * scale, layout_object->StyleRef());
-    PhysicalOffset track_size_pos(main_axis_pos, alt_axis_pos);
+    if (rtl_offset && direction == kForColumns) {
+      main_axis_pos = *rtl_offset + prev_position - width / 2;
+    }
+    auto adjusted_size =
+        AdjustForAbsoluteZoom::AdjustFloat(width * scale, layout_box->StyleRef());
+    PhysicalOffset track_size_pos(main_axis_pos, *alt_axis_pos);
     if (direction == kForRows)
       track_size_pos = Transpose(track_size_pos);
     std::unique_ptr<protocol::DictionaryValue> size_info =
@@ -745,44 +796,56 @@ std::unique_ptr<protocol::ListValue> BuildGridPositiveLineNumberPositions(
     const LayoutUnit& grid_gap,
     GridTrackSizingDirection direction,
     float scale,
-    LayoutUnit rtl_offset,
+    std::optional<LayoutUnit> rtl_offset,
     const Vector<LayoutUnit>& positions,
-    const Vector<LayoutUnit>& alt_axis_positions) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  auto* grid_interface = ToInterface<LayoutNGGridInterface>(layout_object);
-  bool is_rtl = !layout_object->StyleRef().IsLeftToRightDirection();
+    const Vector<LayoutUnit>& alt_axis_positions,
+    std::optional<LayoutUnit> alt_axis_pos = std::nullopt) {
+  const LayoutBox* layout_box = ContentLayoutBoxFromNode(node);
 
   std::unique_ptr<protocol::ListValue> number_positions =
       protocol::ListValue::create();
 
   wtf_size_t track_count = positions.size();
-  LayoutUnit alt_axis_pos = GetPositionForFirstTrack(
-      layout_object, direction == kForRows ? kForColumns : kForRows,
-      alt_axis_positions);
+  if (track_count == 0) {
+    return number_positions;
+  }
 
-  if (is_rtl && direction == kForRows)
-    alt_axis_pos += rtl_offset;
+  if (!alt_axis_pos) {
+    alt_axis_pos = GetPositionForFirstTrack(
+        layout_box, direction == kForRows ? kForColumns : kForRows,
+        alt_axis_positions);
+  }
+
+  if (rtl_offset && direction == kForRows) {
+    *alt_axis_pos += *rtl_offset;
+  }
 
   // Find index of the first explicit Grid Line.
   wtf_size_t first_explicit_index =
-      grid_interface->ExplicitGridStartForDirection(direction);
-
+      layout_box->IsLayoutGrid()
+          ? To<LayoutGrid>(layout_box)->ExplicitGridStartForDirection(direction)
+          : To<LayoutGridLanes>(layout_box)
+                ->ExplicitGridStartForDirection(direction);
   // Go line by line, calculating the offset to fall in the middle of gaps
   // if needed.
-  for (wtf_size_t i = first_explicit_index; i < track_count; ++i) {
+  for (wtf_size_t i =
+           std::max(first_explicit_index, static_cast<wtf_size_t>(0));
+       i < track_count; ++i) {
     LayoutUnit gapOffset = grid_gap / 2;
-    if (is_rtl && direction == kForColumns)
+    if (rtl_offset && direction == kForColumns) {
       gapOffset *= -1;
+    }
     // No need for a gap offset if there is no gap, or the first line is
     // explicit, or this is the last line.
     if (grid_gap == 0 || i == 0 || i == track_count - 1) {
       gapOffset = LayoutUnit();
     }
     LayoutUnit offset =
-        GetPositionForTrackAt(layout_object, i, direction, positions);
-    if (is_rtl && direction == kForColumns)
-      offset += rtl_offset;
-    PhysicalOffset number_position(offset - gapOffset, alt_axis_pos);
+        GetPositionForTrackAt(layout_box, i, direction, positions);
+    if (rtl_offset && direction == kForColumns) {
+      offset += *rtl_offset;
+    }
+    PhysicalOffset number_position(offset - gapOffset, *alt_axis_pos);
     if (direction == kForRows)
       number_position = Transpose(number_position);
     number_positions->pushValue(
@@ -797,38 +860,49 @@ std::unique_ptr<protocol::ListValue> BuildGridNegativeLineNumberPositions(
     const LayoutUnit& grid_gap,
     GridTrackSizingDirection direction,
     float scale,
-    LayoutUnit rtl_offset,
+    std::optional<LayoutUnit> rtl_offset,
     const Vector<LayoutUnit>& positions,
-    const Vector<LayoutUnit>& alt_axis_positions) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  auto* grid_interface = ToInterface<LayoutNGGridInterface>(layout_object);
-  bool is_rtl = !layout_object->StyleRef().IsLeftToRightDirection();
+    const Vector<LayoutUnit>& alt_axis_positions,
+    std::optional<LayoutUnit> alt_axis_pos = std::nullopt) {
+  const LayoutBox* layout_box = ContentLayoutBoxFromNode(node);
 
   std::unique_ptr<protocol::ListValue> number_positions =
       protocol::ListValue::create();
 
   wtf_size_t track_count = positions.size();
-  LayoutUnit alt_axis_pos = GetPositionForLastTrack(
-      layout_object, direction == kForRows ? kForColumns : kForRows,
-      alt_axis_positions);
-  if (is_rtl && direction == kForRows)
-    alt_axis_pos += rtl_offset;
+  if (track_count == 0 || alt_axis_positions.size() == 0) {
+    return number_positions;
+  }
 
-  // This is the number of tracks from the start of the grid, to the end of the
-  // explicit grid (including any leading implicit tracks).
+  if (!alt_axis_pos) {
+    alt_axis_pos = GetPositionForLastTrack(
+        layout_box, direction == kForRows ? kForColumns : kForRows,
+        alt_axis_positions);
+  }
+
+  if (rtl_offset && direction == kForRows) {
+    *alt_axis_pos += *rtl_offset;
+  }
+
+  // This is the number of tracks from the start of the grid, to the end of
+  // the explicit grid (including any leading implicit tracks).
   size_t explicit_grid_end_track_count =
-      grid_interface->ExplicitGridEndForDirection(direction);
+      layout_box->IsLayoutGrid()
+          ? To<LayoutGrid>(layout_box)->ExplicitGridEndForDirection(direction)
+          : To<LayoutGridLanes>(layout_box)
+                ->ExplicitGridEndForDirection(direction);
 
   {
     LayoutUnit first_offset =
-        GetPositionForFirstTrack(layout_object, direction, positions);
-    if (is_rtl && direction == kForColumns)
-      first_offset += rtl_offset;
+        GetPositionForFirstTrack(layout_box, direction, positions);
+    if (rtl_offset && direction == kForColumns) {
+      first_offset += *rtl_offset;
+    }
 
     // Always start negative numbers at the first line.
     std::unique_ptr<protocol::DictionaryValue> pos =
         protocol::DictionaryValue::create();
-    PhysicalOffset number_position(first_offset, alt_axis_pos);
+    PhysicalOffset number_position(first_offset, *alt_axis_pos);
     if (direction == kForRows)
       number_position = Transpose(number_position);
     number_positions->pushValue(
@@ -837,19 +911,22 @@ std::unique_ptr<protocol::ListValue> BuildGridNegativeLineNumberPositions(
 
   // Then go line by line, calculating the offset to fall in the middle of gaps
   // if needed.
-  for (wtf_size_t i = 1; i <= explicit_grid_end_track_count; i++) {
+  for (wtf_size_t i = 1;
+       i <= explicit_grid_end_track_count && i < positions.size(); i++) {
     LayoutUnit gapOffset = grid_gap / 2;
-    if (is_rtl && direction == kForColumns)
+    if (rtl_offset && direction == kForColumns) {
       gapOffset *= -1;
+    }
     if (grid_gap == 0 ||
         (i == explicit_grid_end_track_count && i == track_count - 1)) {
       gapOffset = LayoutUnit();
     }
     LayoutUnit offset =
-        GetPositionForTrackAt(layout_object, i, direction, positions);
-    if (is_rtl && direction == kForColumns)
-      offset += rtl_offset;
-    PhysicalOffset number_position(offset - gapOffset, alt_axis_pos);
+        GetPositionForTrackAt(layout_box, i, direction, positions);
+    if (rtl_offset && direction == kForColumns) {
+      offset += *rtl_offset;
+    }
+    PhysicalOffset number_position(offset - gapOffset, *alt_axis_pos);
     if (direction == kForRows)
       number_position = Transpose(number_position);
     number_positions->pushValue(
@@ -861,13 +938,13 @@ std::unique_ptr<protocol::ListValue> BuildGridNegativeLineNumberPositions(
 
 bool IsLayoutNGFlexibleBox(const LayoutObject& layout_object) {
   return layout_object.StyleRef().IsDisplayFlexibleBox() &&
-         layout_object.IsLayoutNGFlexibleBox();
+         layout_object.IsFlexibleBox();
 }
 
 bool IsLayoutNGFlexItem(const LayoutObject& layout_object) {
   return !layout_object.GetNode()->IsDocumentNode() &&
          IsLayoutNGFlexibleBox(*layout_object.Parent()) &&
-         To<LayoutBox>(layout_object).IsFlexItemIncludingNG();
+         To<LayoutBox>(layout_object).IsFlexItem();
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePaths(
@@ -875,81 +952,164 @@ std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePaths(
     float scale,
     const Vector<LayoutUnit>& rows,
     const Vector<LayoutUnit>& columns) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  auto* grid_interface = ToInterface<LayoutNGGridInterface>(layout_object);
+  const auto* grid = To<LayoutGrid>(ContentLayoutBoxFromNode(node));
   LocalFrameView* containing_view = node->GetDocument().View();
-  bool is_rtl = !layout_object->StyleRef().IsLeftToRightDirection();
+  bool is_rtl = !grid->StyleRef().IsLeftToRightDirection();
 
   std::unique_ptr<protocol::DictionaryValue> area_paths =
       protocol::DictionaryValue::create();
 
-  LayoutUnit row_gap = grid_interface->GridGap(kForRows);
-  LayoutUnit column_gap = grid_interface->GridGap(kForColumns);
+  if (!grid->StyleRef().GridTemplateAreas()) {
+    return area_paths;
+  }
 
-  NamedGridAreaMap grid_area_map = layout_object->StyleRef().NamedGridArea();
-  for (const auto& item : grid_area_map) {
-    const GridArea& area = item.value;
-    const String& name = item.key;
+  LayoutUnit row_gap = grid->GridGap(kForRows);
+  LayoutUnit column_gap = grid->GridGap(kForColumns);
 
-    LayoutUnit start_column = GetPositionForTrackAt(
-        layout_object, area.columns.StartLine(), kForColumns, columns);
-    LayoutUnit end_column = GetPositionForTrackAt(
-        layout_object, area.columns.EndLine(), kForColumns, columns);
-    LayoutUnit start_row = GetPositionForTrackAt(
-        layout_object, area.rows.StartLine(), kForRows, rows);
-    LayoutUnit end_row = GetPositionForTrackAt(
-        layout_object, area.rows.EndLine(), kForRows, rows);
+  if (const NamedGridAreaMap* named_area_map =
+          grid->CachedPlacementData().line_resolver.NamedAreasMap()) {
+    for (const auto& item : *named_area_map) {
+      const GridArea& area = item.value;
+      const String& name = item.key;
 
-    // Only subtract the gap size if the end line isn't the last line in the
-    // container.
-    LayoutUnit row_gap_offset =
-        area.rows.EndLine() == rows.size() - 1 ? LayoutUnit() : row_gap;
-    LayoutUnit column_gap_offset = area.columns.EndLine() == columns.size() - 1
-                                       ? LayoutUnit()
-                                       : column_gap;
-    if (is_rtl)
-      column_gap_offset *= -1;
+      if (area.columns.StartLine() >= columns.size() ||
+          area.columns.EndLine() >= columns.size() ||
+          area.rows.StartLine() >= rows.size() ||
+          area.rows.EndLine() >= rows.size()) {
+        continue;
+      }
 
-    PhysicalOffset position(start_column, start_row);
-    PhysicalSize size(end_column - start_column - column_gap_offset,
-                      end_row - start_row - row_gap_offset);
-    PhysicalRect area_rect(position, size);
-    gfx::QuadF area_quad = layout_object->LocalRectToAbsoluteQuad(area_rect);
-    FrameQuadToViewport(containing_view, area_quad);
-    PathBuilder area_builder;
-    area_builder.AppendPath(QuadToPath(area_quad), scale);
+      const auto start_column = GetPositionForTrackAt(
+          grid, area.columns.StartLine(), kForColumns, columns);
+      const auto end_column = GetPositionForTrackAt(
+          grid, area.columns.EndLine(), kForColumns, columns);
+      const auto start_row =
+          GetPositionForTrackAt(grid, area.rows.StartLine(), kForRows, rows);
+      const auto end_row =
+          GetPositionForTrackAt(grid, area.rows.EndLine(), kForRows, rows);
 
-    area_paths->setValue(name, area_builder.Release());
+      // Only subtract the gap size if the end line isn't the last line in the
+      // container.
+      const auto row_gap_offset =
+          (area.rows.EndLine() == rows.size() - 1) ? LayoutUnit() : row_gap;
+      auto column_gap_offset = (area.columns.EndLine() == columns.size() - 1)
+                                   ? LayoutUnit()
+                                   : column_gap;
+      if (is_rtl) {
+        column_gap_offset = -column_gap_offset;
+      }
+
+      PhysicalOffset position(start_column, start_row);
+      PhysicalSize size(end_column - start_column - column_gap_offset,
+                        end_row - start_row - row_gap_offset);
+      gfx::QuadF area_quad = grid->LocalRectToAbsoluteQuad({position, size});
+      FrameQuadToViewport(containing_view, area_quad);
+      HighlightPathBuilder area_builder;
+      area_builder.AppendPath(QuadToPath(area_quad), scale);
+
+      area_paths->setValue(name, area_builder.Release());
+    }
+  }
+  return area_paths;
+}
+
+std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePathsForGridLanes(
+    Node* node,
+    float scale,
+    GridTrackSizingDirection direction,
+    const Vector<LayoutUnit>& grid_lanes_tracks,
+    bool is_for_columns) {
+  const auto* grid_lanes = To<LayoutGridLanes>(node->GetLayoutObject());
+  std::unique_ptr<protocol::DictionaryValue> area_paths =
+      protocol::DictionaryValue::create();
+
+  if (!grid_lanes->StyleRef().GridTemplateAreas()) {
+    return area_paths;
+  }
+
+  if (const NamedGridAreaMap* named_area_map =
+          grid_lanes->CachedPlacementData().line_resolver.NamedAreasMap()) {
+    const LayoutUnit gap =
+        grid_lanes->GridGap(is_for_columns ? kForColumns : kForRows);
+
+    // Get container bounds for the cross-axis (non-stacking direction).
+    const LayoutUnit cross_axis_start =
+        is_for_columns ? grid_lanes->ContentTop() : grid_lanes->ContentLeft();
+    const LayoutUnit cross_axis_size = is_for_columns
+                                           ? grid_lanes->ContentHeight()
+                                           : grid_lanes->ContentWidth();
+    for (const auto& item : *named_area_map) {
+      const GridArea& area = item.value;
+      const String& name = item.key;
+      const GridSpan grid_lanes_span =
+          is_for_columns ? area.columns : area.rows;
+
+      // Validate that the area span fits within our grid-lanes tracks.
+      if (grid_lanes_span.StartLine() >= grid_lanes_tracks.size() ||
+          grid_lanes_span.EndLine() >= grid_lanes_tracks.size()) {
+        continue;
+      }
+
+      const LayoutUnit grid_lanes_start_offset = GetPositionForTrackAt(
+          grid_lanes, grid_lanes_span.StartLine(),
+          is_for_columns ? kForColumns : kForRows, grid_lanes_tracks);
+      const LayoutUnit grid_lanes_end_offset = GetPositionForTrackAt(
+          grid_lanes, grid_lanes_span.EndLine(),
+          is_for_columns ? kForColumns : kForRows, grid_lanes_tracks);
+      LayoutUnit gap_offset =
+          (grid_lanes_span.EndLine() == grid_lanes_tracks.size() - 1)
+              ? LayoutUnit()
+              : gap;
+      // In RTL layouts, `gap_offset` need to be negated due to the reversed
+      // coordinate system to ensure correct grid-lanes size calculations.
+      if ((direction == kForColumns) &&
+          !grid_lanes->StyleRef().IsLeftToRightDirection()) {
+        gap_offset = -gap_offset;
+      }
+      const LayoutUnit grid_lanes_area_size =
+          grid_lanes_end_offset - grid_lanes_start_offset - gap_offset;
+
+      PhysicalOffset position =
+          is_for_columns
+              ? PhysicalOffset(grid_lanes_start_offset, cross_axis_start)
+              : PhysicalOffset(cross_axis_start, grid_lanes_start_offset);
+      PhysicalSize size =
+          is_for_columns ? PhysicalSize(grid_lanes_area_size, cross_axis_size)
+                         : PhysicalSize(cross_axis_size, grid_lanes_area_size);
+      gfx::QuadF area_quad =
+          grid_lanes->LocalRectToAbsoluteQuad({position, size});
+      FrameQuadToViewport(node->GetDocument().View(), area_quad);
+      HighlightPathBuilder area_builder;
+      area_builder.AppendPath(QuadToPath(area_quad), scale);
+      area_paths->setValue(name, area_builder.Release());
+    }
   }
 
   return area_paths;
 }
 
-std::unique_ptr<protocol::ListValue> BuildGridLineNames(
+std::unique_ptr<protocol::ListValue> BuildGridLineNamesInfo(
     Node* node,
     GridTrackSizingDirection direction,
     float scale,
     const Vector<LayoutUnit>& positions,
-    const Vector<LayoutUnit>& alt_axis_positions) {
-  LayoutObject* layout_object = node->GetLayoutObject();
-  auto* grid_interface = ToInterface<LayoutNGGridInterface>(layout_object);
-  const ComputedStyle& grid_container_style = layout_object->StyleRef();
-  bool is_rtl = direction == kForColumns &&
-                !grid_container_style.IsLeftToRightDirection();
-
+    const LayoutUnit& alt_axis_pos,
+    const LayoutUnit& gap,
+    const LayoutObject* layout_object,
+    const NamedGridLinesMap& explicit_lines_map,
+    const NamedGridLinesMap& implicit_lines_map,
+    bool is_rtl) {
   std::unique_ptr<protocol::ListValue> lines = protocol::ListValue::create();
-
-  LayoutUnit gap = grid_interface->GridGap(direction);
-  LayoutUnit alt_axis_pos = GetPositionForFirstTrack(
-      layout_object, direction == kForRows ? kForColumns : kForRows,
-      alt_axis_positions);
 
   auto process_grid_lines_map = [&](const NamedGridLinesMap& named_lines_map) {
     for (const auto& item : named_lines_map) {
       const String& name = item.key;
 
       for (const wtf_size_t index : item.value) {
-        LayoutUnit track =
+        if (index < 0 || index >= positions.size()) {
+          continue;
+        }
+        const LayoutUnit track =
             GetPositionForTrackAt(layout_object, index, direction, positions);
 
         LayoutUnit gap_offset =
@@ -957,7 +1117,7 @@ std::unique_ptr<protocol::ListValue> BuildGridLineNames(
         if (is_rtl)
           gap_offset *= -1;
 
-        LayoutUnit main_axis_pos = track - gap_offset;
+        const LayoutUnit main_axis_pos = track - gap_offset;
         PhysicalOffset line_name_pos(main_axis_pos, alt_axis_pos);
 
         if (direction == kForRows)
@@ -973,20 +1133,63 @@ std::unique_ptr<protocol::ListValue> BuildGridLineNames(
     }
   };
 
-  const NamedGridLinesMap& explicit_lines_map =
-      (direction == kForColumns)
-          ? grid_container_style.GridTemplateColumns().named_grid_lines
-          : grid_container_style.GridTemplateRows().named_grid_lines;
-
-  const NamedGridLinesMap& implicit_lines_map =
-      (direction == kForColumns)
-          ? grid_container_style.ImplicitNamedGridColumnLines()
-          : grid_container_style.ImplicitNamedGridRowLines();
-
   process_grid_lines_map(explicit_lines_map);
   process_grid_lines_map(implicit_lines_map);
 
   return lines;
+}
+
+std::unique_ptr<protocol::ListValue> BuildGridLineNamesForGrid(
+    Node* node,
+    GridTrackSizingDirection direction,
+    float scale,
+    const Vector<LayoutUnit>& positions,
+    const Vector<LayoutUnit>& alt_axis_positions) {
+  auto* grid = To<LayoutGrid>(ContentLayoutBoxFromNode(node));
+  const bool is_rtl =
+      (direction == kForColumns) && !grid->StyleRef().IsLeftToRightDirection();
+
+  if (alt_axis_positions.size() == 0) {
+    return protocol::ListValue::create();
+  }
+
+  const LayoutUnit gap = grid->GridGap(direction);
+  const LayoutUnit alt_axis_pos = GetPositionForFirstTrack(
+      grid, direction == kForRows ? kForColumns : kForRows, alt_axis_positions);
+
+  const NamedGridLinesMap& explicit_lines_map =
+      grid->CachedPlacementData().line_resolver.ExplicitNamedLinesMap(
+          direction);
+  const NamedGridLinesMap& implicit_lines_map =
+      grid->CachedPlacementData().line_resolver.ImplicitNamedLinesMap(
+          direction);
+
+  return BuildGridLineNamesInfo(node, direction, scale, positions, alt_axis_pos,
+                                gap, grid, explicit_lines_map,
+                                implicit_lines_map, is_rtl);
+}
+
+std::unique_ptr<protocol::ListValue> BuildGridLineNamesForGridLanes(
+    Node* node,
+    GridTrackSizingDirection direction,
+    float scale,
+    const Vector<LayoutUnit>& positions,
+    LayoutUnit alt_axis_pos) {
+  auto* grid_lanes = To<LayoutGridLanes>(ContentLayoutBoxFromNode(node));
+  const bool is_rtl = (direction == kForColumns) &&
+                      !grid_lanes->StyleRef().IsLeftToRightDirection();
+  const LayoutUnit gap = grid_lanes->GridGap(direction);
+
+  const NamedGridLinesMap& explicit_lines_map =
+      grid_lanes->CachedPlacementData().line_resolver.ExplicitNamedLinesMap(
+          direction);
+  const NamedGridLinesMap& implicit_lines_map =
+      grid_lanes->CachedPlacementData().line_resolver.ImplicitNamedLinesMap(
+          direction);
+
+  return BuildGridLineNamesInfo(node, direction, scale, positions, alt_axis_pos,
+                                gap, grid_lanes, explicit_lines_map,
+                                implicit_lines_map, is_rtl);
 }
 
 // Gets the rotation angle of the grid layout (clock-wise).
@@ -1007,22 +1210,25 @@ int GetRotationAngle(LayoutObject* layout_object) {
 
 String GetWritingMode(const ComputedStyle& computed_style) {
   // The grid overlay uses this to flip the grid lines and labels accordingly.
-  // lr, lr-tb, rl, rl-tb, tb, and tb-rl are deprecated and not handled here.
-  // sideways-lr and sideways-rl are not supported yet and not handled here.
-  WritingMode writing_mode = computed_style.GetWritingMode();
-  if (writing_mode == WritingMode::kVerticalLr) {
-    return "vertical-lr";
+  switch (computed_style.GetWritingMode()) {
+    case WritingMode::kVerticalLr:
+      return "vertical-lr";
+    case WritingMode::kVerticalRl:
+      return "vertical-rl";
+    case WritingMode::kSidewaysLr:
+      return "sideways-lr";
+    case WritingMode::kSidewaysRl:
+      return "sideways-rl";
+    case WritingMode::kHorizontalTb:
+      return "horizontal-tb";
   }
-  if (writing_mode == WritingMode::kVerticalRl) {
-    return "vertical-rl";
-  }
-  return "horizontal-tb";
 }
 
 // Gets the list of authored track size values resolving repeat() functions
 // and skipping line names.
 Vector<String> GetAuthoredGridTrackSizes(const CSSValue* value,
-                                         size_t auto_repeat_count) {
+                                         size_t auto_repeat_count,
+                                         size_t track_count) {
   Vector<String> result;
 
   if (!value)
@@ -1035,11 +1241,12 @@ Vector<String> GetAuthoredGridTrackSizes(const CSSValue* value,
   if (!value_list)
     return result;
 
-  for (auto list_value : *value_list) {
-    if (auto* grid_auto_repeat_value =
-            DynamicTo<cssvalue::CSSGridAutoRepeatValue>(list_value.Get())) {
+  result.reserve(track_count);
+
+  for (const auto& list_value : *value_list) {
+    if (IsA<cssvalue::CSSGridAutoRepeatValue>(list_value.Get())) {
       Vector<String> repeated_track_sizes;
-      for (auto auto_repeat_value : To<CSSValueList>(*list_value)) {
+      for (const auto& auto_repeat_value : To<CSSValueList>(*list_value)) {
         if (!auto_repeat_value->IsGridLineNamesValue())
           repeated_track_sizes.push_back(auto_repeat_value->CssText());
       }
@@ -1052,15 +1259,19 @@ Vector<String> GetAuthoredGridTrackSizes(const CSSValue* value,
 
     if (auto* repeated_values =
             DynamicTo<cssvalue::CSSGridIntegerRepeatValue>(list_value.Get())) {
-      size_t repetitions = repeated_values->Repetitions();
-      for (size_t i = 0; i < repetitions; ++i) {
-        for (auto repeated_value : *repeated_values) {
-          if (repeated_value->IsGridLineNamesValue())
-            continue;
-          result.push_back(repeated_value->CssText());
+      std::optional<wtf_size_t> repetitions =
+          repeated_values->GetRepetitionsIfKnown();
+      if (repetitions.has_value()) {
+        for (size_t i = 0; i < *repetitions; ++i) {
+          for (const auto& repeated_value : *repeated_values) {
+            if (repeated_value->IsGridLineNamesValue()) {
+              continue;
+            }
+            result.push_back(repeated_value->CssText());
+          }
         }
+        continue;
       }
-      continue;
     }
 
     if (list_value->IsGridLineNamesValue())
@@ -1080,7 +1291,7 @@ bool IsHorizontalFlex(LayoutObject* layout_flex) {
 DevtoolsFlexInfo GetFlexLinesAndItems(LayoutBox* layout_box,
                                       bool is_horizontal,
                                       bool is_reverse) {
-  if (auto* layout_ng_flex = DynamicTo<LayoutNGFlexibleBox>(layout_box)) {
+  if (auto* layout_ng_flex = DynamicTo<LayoutFlexibleBox>(layout_box)) {
     const DevtoolsFlexInfo* flex_info_from_layout =
         layout_ng_flex->FlexLayoutData();
     if (flex_info_from_layout)
@@ -1095,7 +1306,7 @@ DevtoolsFlexInfo GetFlexLinesAndItems(LayoutBox* layout_box,
     LayoutUnit progression;
 
     for (const auto& child : fragment.Children()) {
-      const NGPhysicalFragment* child_fragment = child.get();
+      const PhysicalFragment* child_fragment = child.get();
       if (!child_fragment || child_fragment->IsOutOfFlowPositioned())
         continue;
 
@@ -1106,8 +1317,8 @@ DevtoolsFlexInfo GetFlexLinesAndItems(LayoutBox* layout_box,
       const auto* box = To<LayoutBox>(object);
 
       LayoutUnit baseline =
-          NGBoxFragment(layout_box->StyleRef().GetWritingDirection(),
-                        *To<NGPhysicalBoxFragment>(child_fragment))
+          LogicalBoxFragment(layout_box->StyleRef().GetWritingDirection(),
+                             *To<PhysicalBoxFragment>(child_fragment))
               .FirstBaselineOrSynthesize(
                   layout_box->StyleRef().GetFontBaseline());
       float adjusted_baseline = AdjustForAbsoluteZoom::AdjustFloat(
@@ -1139,28 +1350,24 @@ DevtoolsFlexInfo GetFlexLinesAndItems(LayoutBox* layout_box,
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildFlexContainerInfo(
-    Node* node,
+    Element* element,
     const InspectorFlexContainerHighlightConfig&
         flex_container_highlight_config,
     float scale) {
   CSSComputedStyleDeclaration* style =
-      MakeGarbageCollected<CSSComputedStyleDeclaration>(node, true);
-  LocalFrameView* containing_view = node->GetDocument().View();
-  LayoutObject* layout_object = node->GetLayoutObject();
-  auto* layout_box = To<LayoutBox>(layout_object);
-  DCHECK(layout_object);
-  bool is_horizontal = IsHorizontalFlex(layout_object);
-  bool is_reverse =
-      layout_object->StyleRef().ResolvedIsRowReverseFlexDirection() ||
-      layout_object->StyleRef().ResolvedIsColumnReverseFlexDirection();
+      MakeGarbageCollected<CSSComputedStyleDeclaration>(element, true);
+  LocalFrameView* containing_view = element->GetDocument().View();
+  auto* layout_box = ContentLayoutBoxFromNode(element);
+  bool is_horizontal = IsHorizontalFlex(layout_box);
+  bool is_reverse = layout_box->StyleRef().ResolvedIsReverseFlexDirection();
 
   std::unique_ptr<protocol::DictionaryValue> flex_info =
       protocol::DictionaryValue::create();
 
   // Create the path for the flex container
-  PathBuilder container_builder;
+  HighlightPathBuilder container_builder;
   PhysicalRect content_box = layout_box->PhysicalContentBoxRect();
-  gfx::QuadF content_quad = layout_object->LocalRectToAbsoluteQuad(content_box);
+  gfx::QuadF content_quad = layout_box->LocalRectToAbsoluteQuad(content_box);
   FrameQuadToViewport(containing_view, content_quad);
   container_builder.AppendPath(QuadToPath(content_quad), scale);
 
@@ -1180,9 +1387,9 @@ std::unique_ptr<protocol::DictionaryValue> BuildFlexContainerInfo(
           protocol::DictionaryValue::create();
 
       gfx::QuadF item_margin_quad =
-          layout_object->LocalRectToAbsoluteQuad(item_data.rect);
+          layout_box->LocalRectToAbsoluteQuad(item_data.rect);
       FrameQuadToViewport(containing_view, item_margin_quad);
-      PathBuilder item_builder;
+      HighlightPathBuilder item_builder;
       item_builder.AppendPath(QuadToPath(item_margin_quad), scale);
 
       item_info->setValue("itemBorder", item_builder.Release());
@@ -1227,13 +1434,13 @@ std::unique_ptr<protocol::DictionaryValue> BuildFlexContainerInfo(
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildFlexItemInfo(
-    Node* node,
+    Element* element,
     const InspectorFlexItemHighlightConfig& flex_item_highlight_config,
     float scale) {
   std::unique_ptr<protocol::DictionaryValue> flex_info =
       protocol::DictionaryValue::create();
 
-  LayoutObject* layout_object = node->GetLayoutObject();
+  LayoutObject* layout_object = element->GetLayoutObject();
   bool is_horizontal = IsHorizontalFlex(layout_object->Parent());
   Length base_size = Length::Auto();
 
@@ -1248,7 +1455,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildFlexItemInfo(
   }
 
   // For now, we only care about the cases where we can know the base size.
-  if (base_size.IsSpecified()) {
+  if (base_size.IsFixed()) {
     flex_info->setDouble("baseSize", base_size.Pixels() * scale);
     flex_info->setBoolean("isHorizontalFlow", is_horizontal);
     auto box_sizing = layout_object->StyleRef().BoxSizing();
@@ -1264,49 +1471,299 @@ std::unique_ptr<protocol::DictionaryValue> BuildFlexItemInfo(
   return flex_info;
 }
 
-std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
-    Node* node,
-    const InspectorGridHighlightConfig& grid_highlight_config,
+// Builds track paths for grid/grid-lanes layout.
+std::unique_ptr<protocol::ListValue> BuildTrackPaths(
+    const LayoutObject* layout_object,
+    LocalFrameView* containing_view,
+    const Vector<LayoutUnit>& track_positions,
+    LayoutUnit span_start,
+    LayoutUnit span_size,
+    LayoutUnit gap,
+    GridTrackSizingDirection direction,
     float scale,
-    bool isPrimary) {
-  LocalFrameView* containing_view = node->GetDocument().View();
-  LayoutObject* layout_object = node->GetLayoutObject();
-  DCHECK(layout_object);
-  auto* grid_interface = ToInterface<LayoutNGGridInterface>(layout_object);
+    std::optional<LayoutUnit> rtl_offset) {
+  HighlightPathBuilder track_builder;
+  const bool is_for_columns = direction == kForColumns;
 
+  for (wtf_size_t i = 1; i < track_positions.size(); ++i) {
+    LayoutUnit track_start =
+        GetPositionForTrackAt(layout_object, i - 1, direction, track_positions);
+    LayoutUnit track_size = track_positions.at(i) - track_positions.at(i - 1);
+
+    // Adjusts for final gap.
+    if (i != track_positions.size() - 1) {
+      track_size -= gap;
+    }
+
+    // Handles RTL for columns.
+    if (rtl_offset && is_for_columns) {
+      track_start += *rtl_offset - track_size;
+    }
+
+    PhysicalOffset position = is_for_columns
+                                  ? PhysicalOffset(track_start, span_start)
+                                  : PhysicalOffset(span_start, track_start);
+    PhysicalSize size = is_for_columns ? PhysicalSize(track_size, span_size)
+                                       : PhysicalSize(span_size, track_size);
+    PhysicalRect track_rect(position, size);
+    gfx::QuadF track_quad = layout_object->LocalRectToAbsoluteQuad(track_rect);
+    FrameQuadToViewport(containing_view, track_quad);
+
+    const bool draw_end_line = (rtl_offset && is_for_columns)
+                                   ? i == 1
+                                   : i == track_positions.size() - 1;
+    track_builder.AppendPath(
+        is_for_columns ? ColumnQuadToPath(track_quad, draw_end_line || gap > 0)
+                       : RowQuadToPath(track_quad, draw_end_line || gap > 0),
+        scale);
+  }
+
+  return track_builder.Release();
+}
+
+// Builds gap paths for grid/grid-lanes layout.
+std::unique_ptr<protocol::ListValue> BuildGapPaths(
+    const LayoutObject* layout_object,
+    LocalFrameView* containing_view,
+    const Vector<LayoutUnit>& track_positions,
+    LayoutUnit span_start,
+    LayoutUnit span_size,
+    LayoutUnit gap,
+    GridTrackSizingDirection direction,
+    float scale,
+    std::optional<LayoutUnit> rtl_offset) {
+  HighlightPathBuilder gap_builder;
+  const bool is_for_columns = direction == kForColumns;
+
+  for (wtf_size_t i = 1; i < track_positions.size() - 1; ++i) {
+    LayoutUnit gap_start;
+
+    if (!is_for_columns) {
+      gap_start = track_positions.at(i) - gap;
+    } else {
+      gap_start =
+          GetPositionForTrackAt(layout_object, i, direction, track_positions);
+      if (rtl_offset) {
+        gap_start += *rtl_offset;
+      } else {
+        gap_start -= gap;
+      }
+    }
+
+    PhysicalOffset gap_position = is_for_columns
+                                      ? PhysicalOffset(gap_start, span_start)
+                                      : PhysicalOffset(span_start, gap_start);
+    PhysicalSize gap_size = is_for_columns ? PhysicalSize(gap, span_size)
+                                           : PhysicalSize(span_size, gap);
+
+    PhysicalRect gap_rect(gap_position, gap_size);
+    gfx::QuadF gap_quad = layout_object->LocalRectToAbsoluteQuad(gap_rect);
+    FrameQuadToViewport(containing_view, gap_quad);
+    gap_builder.AppendPath(QuadToPath(gap_quad), scale);
+  }
+
+  return gap_builder.Release();
+}
+
+std::unique_ptr<protocol::DictionaryValue> BuildGridInfoForGridLanes(
+    Element* element,
+    const InspectorGridHighlightConfig& grid_highlight_config,
+    float scale) {
+  LocalFrameView* containing_view = element->GetDocument().View();
+  auto* grid_lanes = To<LayoutGridLanes>(ContentLayoutBoxFromNode(element));
   std::unique_ptr<protocol::DictionaryValue> grid_info =
       protocol::DictionaryValue::create();
 
-  const Vector<LayoutUnit> rows = grid_interface->RowPositions();
-  const Vector<LayoutUnit> columns = grid_interface->ColumnPositions();
+  grid_info->setInteger("rotationAngle", GetRotationAngle(grid_lanes));
+  grid_info->setString("writingMode", GetWritingMode(grid_lanes->StyleRef()));
+  const bool is_for_columns =
+      grid_lanes->StyleRef().GridLanesTrackSizingDirection() == kForColumns;
 
-  grid_info->setInteger("rotationAngle", GetRotationAngle(layout_object));
+  const Vector<LayoutUnit> grid_lanes_tracks =
+      grid_lanes->GridTrackPositions(is_for_columns ? kForColumns : kForRows);
+  const LayoutUnit gap =
+      grid_lanes->GridGap(is_for_columns ? kForColumns : kForRows) +
+      grid_lanes->GridLanesItemOffset(is_for_columns ? kForColumns : kForRows);
+  const LayoutUnit span_start =
+      is_for_columns ? grid_lanes->ContentTop() : grid_lanes->ContentLeft();
+  const LayoutUnit span_size =
+      is_for_columns ? grid_lanes->ContentHeight() : grid_lanes->ContentWidth();
+  const LayoutUnit rtl_offset =
+      is_for_columns ? grid_lanes->LogicalWidth() - grid_lanes_tracks.back() -
+                           grid_lanes->BorderAndPaddingInlineEnd()
+                     : LayoutUnit();
+  const bool is_rtl = !grid_lanes->StyleRef().IsLeftToRightDirection();
+  const std::optional<LayoutUnit> optional_rtl_offset =
+      is_rtl ? std::optional<LayoutUnit>(rtl_offset) : std::nullopt;
+
+  // Sets empty value for columns/columnGaps and rows/rowGaps - frontend
+  // expects both dimensions to be present in the `grid_info`.
+  grid_info->setValue(
+      "columns", is_for_columns ? BuildTrackPaths(grid_lanes, containing_view,
+                                                  grid_lanes_tracks, span_start,
+                                                  span_size, gap, kForColumns,
+                                                  scale, optional_rtl_offset)
+                                : protocol::ListValue::create());
+  grid_info->setValue(
+      "columnGaps",
+      is_for_columns
+          ? BuildGapPaths(grid_lanes, containing_view, grid_lanes_tracks,
+                          span_start, span_size, gap, kForColumns, scale,
+                          optional_rtl_offset)
+          : protocol::ListValue::create());
+  grid_info->setValue(
+      "rows", is_for_columns
+                  ? protocol::ListValue::create()
+                  : BuildTrackPaths(grid_lanes, containing_view,
+                                    grid_lanes_tracks, span_start, span_size,
+                                    gap, kForRows, scale, optional_rtl_offset));
+  grid_info->setValue(
+      "rowGaps", is_for_columns ? protocol::ListValue::create()
+                                : BuildGapPaths(grid_lanes, containing_view,
+                                                grid_lanes_tracks, span_start,
+                                                span_size, gap, kForRows, scale,
+                                                optional_rtl_offset));
+
+  // Track sizes.
+  if (grid_highlight_config.show_track_sizes) {
+    StyleResolver& style_resolver = element->GetDocument().GetStyleResolver();
+
+    HeapHashMap<CSSPropertyName, Member<const CSSValue>> cascaded_values =
+        style_resolver.CascadedValuesForElement(element, kPseudoIdNone);
+
+    auto FindCSSValue =
+        [&cascaded_values](CSSPropertyID id) -> const CSSValue* {
+      auto it = cascaded_values.find(CSSPropertyName(id));
+      return it != cascaded_values.end() ? it->value : nullptr;
+    };
+    Vector<String> grid_lanes_tracks_authored_values =
+        GetAuthoredGridTrackSizes(
+            FindCSSValue(is_for_columns ? CSSPropertyID::kGridTemplateColumns
+                                        : CSSPropertyID::kGridTemplateRows),
+            grid_lanes->AutoRepeatCountForDirection(is_for_columns ? kForColumns
+                                                                   : kForRows),
+            grid_lanes_tracks.size());
+    grid_info->setValue(
+        is_for_columns ? "columnTrackSizes" : "rowTrackSizes",
+        BuildGridTrackSizes(element, is_for_columns ? kForColumns : kForRows,
+                            scale, gap, optional_rtl_offset, grid_lanes_tracks,
+                            grid_lanes_tracks,
+                            &grid_lanes_tracks_authored_values, span_start));
+  }
+
+  // Positive column/row line positions.
+  if (grid_highlight_config.show_positive_line_numbers) {
+    grid_info->setValue(
+        is_for_columns ? "positiveColumnLineNumberPositions"
+                       : "positiveRowLineNumberPositions",
+        BuildGridPositiveLineNumberPositions(
+            element, gap, is_for_columns ? kForColumns : kForRows, scale,
+            optional_rtl_offset, grid_lanes_tracks, grid_lanes_tracks,
+            span_start));
+  }
+
+  // Negative column/row line positions.
+  if (grid_highlight_config.show_negative_line_numbers) {
+    LayoutUnit span_end =
+        is_for_columns ? grid_lanes->ContentTop() + grid_lanes->ContentHeight()
+                       : grid_lanes->ContentLeft() + grid_lanes->ContentWidth();
+    grid_info->setValue(
+        is_for_columns ? "negativeColumnLineNumberPositions"
+                       : "negativeRowLineNumberPositions",
+        BuildGridNegativeLineNumberPositions(
+            element, gap, is_for_columns ? kForColumns : kForRows, scale,
+            optional_rtl_offset, grid_lanes_tracks, grid_lanes_tracks,
+            span_end));
+  }
+
+  // Area names.
+  if (grid_highlight_config.show_area_names) {
+    grid_info->setValue(
+        "areaNames",
+        BuildAreaNamePathsForGridLanes(element, scale,
+                                       is_for_columns ? kForColumns : kForRows,
+                                       grid_lanes_tracks, is_for_columns));
+  }
+
+  // Line names.
+  if (grid_highlight_config.show_line_names) {
+    grid_info->setValue(
+        is_for_columns ? "columnLineNameOffsets" : "rowLineNameOffsets",
+        BuildGridLineNamesForGridLanes(element,
+                                       is_for_columns ? kForColumns : kForRows,
+                                       scale, grid_lanes_tracks, span_start));
+  }
+
+  // Grid Lanes layout only has one direction, so it doesn't have a grid border
+  // constructed by two directions data like grid layout. We'll use the
+  // container bounds and grid-lanes tracks to construct the border quad.
+  HighlightPathBuilder grid_lanes_border_builder;
+  LayoutUnit grid_lanes_container_size =
+      GetPositionForLastTrack(grid_lanes,
+                              is_for_columns ? kForColumns : kForRows,
+                              grid_lanes_tracks) -
+      GetPositionForFirstTrack(grid_lanes,
+                               is_for_columns ? kForColumns : kForRows,
+                               grid_lanes_tracks);
+  // In RTL layouts, the track size calculation results in a negative value
+  // (e.g., -150 instead of 150) due to coordinate system differences.
+  // We need to flip the sign to get the correct positive size for rendering.
+  if (is_rtl) {
+    grid_lanes_container_size = -grid_lanes_container_size;
+  }
+  PhysicalSize grid_lanes_size(
+      is_for_columns ? grid_lanes_container_size : grid_lanes->ContentWidth(),
+      is_for_columns ? grid_lanes->ContentHeight() : grid_lanes_container_size);
+  PhysicalRect grid_lanes_rect(
+      PhysicalOffset(is_rtl ? grid_lanes->ContentLeft() + rtl_offset
+                            : grid_lanes->ContentLeft(),
+                     grid_lanes->ContentTop()),
+      grid_lanes_size);
+  gfx::QuadF grid_lanes_quad =
+      grid_lanes->LocalRectToAbsoluteQuad(grid_lanes_rect);
+  FrameQuadToViewport(containing_view, grid_lanes_quad);
+  grid_lanes_border_builder.AppendPath(QuadToPath(grid_lanes_quad), scale);
+  grid_info->setValue("gridBorder", grid_lanes_border_builder.Release());
+  grid_info->setValue("gridHighlightConfig",
+                      BuildGridHighlightConfigInfo(grid_highlight_config));
+
+  return grid_info;
+}
+
+std::unique_ptr<protocol::DictionaryValue> BuildGridInfoForGrid(
+    Element* element,
+    const InspectorGridHighlightConfig& grid_highlight_config,
+    float scale,
+    bool isPrimary) {
+  LocalFrameView* containing_view = element->GetDocument().View();
+  std::unique_ptr<protocol::DictionaryValue> grid_info =
+      protocol::DictionaryValue::create();
+  auto* grid = To<LayoutGrid>(ContentLayoutBoxFromNode(element));
+  const Vector<LayoutUnit> rows = grid->GridTrackPositions(kForRows);
+  const Vector<LayoutUnit> columns = grid->GridTrackPositions(kForColumns);
+
+  grid_info->setInteger("rotationAngle", GetRotationAngle(grid));
 
   // The grid track information collected in this method and sent to the overlay
   // frontend assumes that the grid layout is in a horizontal-tb writing-mode.
   // It is the responsibility of the frontend to flip the rendering of the grid
   // overlay based on the following writingMode value.
-  grid_info->setString("writingMode",
-                       GetWritingMode(layout_object->StyleRef()));
+  grid_info->setString("writingMode", GetWritingMode(grid->StyleRef()));
 
-  auto row_gap = grid_interface->GridGap(kForRows) +
-                 grid_interface->GridItemOffset(kForRows);
-  auto column_gap = grid_interface->GridGap(kForColumns) +
-                    grid_interface->GridItemOffset(kForColumns);
+  auto row_gap = grid->GridGap(kForRows) + grid->GridItemOffset(kForRows);
+  auto column_gap =
+      grid->GridGap(kForColumns) + grid->GridItemOffset(kForColumns);
+  const bool is_rtl = !grid->StyleRef().IsLeftToRightDirection();
 
-  // In legacy grid the last column in rtl will go to the extent of the grid,
-  // all the way to the left. In NG, this is not the case, and will stop sooner
-  // if the tracks don't take up the full size of the grid.
-  LayoutUnit rtl_offset;
-  if (layout_object->IsLayoutNGGrid()) {
-    const LayoutBox* layout_box = To<LayoutBox>(layout_object);
-    rtl_offset = layout_box->LogicalWidth() - columns.back() -
-                 layout_box->BorderAndPaddingLogicalRight();
-  }
+  // The last column in RTL will not go to the extent of the grid if not
+  // necessary, and will stop sooner if the tracks don't take up the full size
+  // of the grid.
+  LayoutUnit rtl_offset =
+      grid->LogicalWidth() - columns.back() - grid->BorderAndPaddingInlineEnd();
+  const std::optional<LayoutUnit> optional_rtl_offset =
+      is_rtl ? std::optional<LayoutUnit>(rtl_offset) : std::nullopt;
 
   if (grid_highlight_config.show_track_sizes) {
-    Element* element = DynamicTo<Element>(node);
-    DCHECK(element);
     StyleResolver& style_resolver = element->GetDocument().GetStyleResolver();
 
     HeapHashMap<CSSPropertyName, Member<const CSSValue>> cascaded_values =
@@ -1319,139 +1776,93 @@ std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
     };
     Vector<String> column_authored_values = GetAuthoredGridTrackSizes(
         FindCSSValue(CSSPropertyID::kGridTemplateColumns),
-        grid_interface->AutoRepeatCountForDirection(kForColumns));
+        grid->AutoRepeatCountForDirection(kForColumns), columns.size());
     Vector<String> row_authored_values = GetAuthoredGridTrackSizes(
         FindCSSValue(CSSPropertyID::kGridTemplateRows),
-        grid_interface->AutoRepeatCountForDirection(kForRows));
+        grid->AutoRepeatCountForDirection(kForRows), rows.size());
 
     grid_info->setValue(
         "columnTrackSizes",
-        BuildGridTrackSizes(node, kForColumns, scale, column_gap, rtl_offset,
-                            columns, rows, &column_authored_values));
-    grid_info->setValue(
-        "rowTrackSizes",
-        BuildGridTrackSizes(node, kForRows, scale, row_gap, rtl_offset, rows,
-                            columns, &row_authored_values));
+        BuildGridTrackSizes(element, kForColumns, scale, column_gap,
+                            optional_rtl_offset, columns, rows,
+                            &column_authored_values));
+    grid_info->setValue("rowTrackSizes",
+                        BuildGridTrackSizes(element, kForRows, scale, row_gap,
+                                            optional_rtl_offset, rows, columns,
+                                            &row_authored_values));
   }
 
-  bool is_ltr = layout_object->StyleRef().IsLeftToRightDirection();
-
-  PathBuilder row_builder;
-  PathBuilder row_gap_builder;
+  // Rows
   LayoutUnit row_left = columns.front();
-  if (!is_ltr) {
+  if (is_rtl) {
     row_left += rtl_offset;
   }
   LayoutUnit row_width = columns.back() - columns.front();
-  for (wtf_size_t i = 1; i < rows.size(); ++i) {
-    // Rows
-    PhysicalOffset position(row_left, rows.at(i - 1));
-    PhysicalSize size(row_width, rows.at(i) - rows.at(i - 1));
-    if (i != rows.size() - 1)
-      size.height -= row_gap;
-    PhysicalRect row(position, size);
-    gfx::QuadF row_quad = layout_object->LocalRectToAbsoluteQuad(row);
-    FrameQuadToViewport(containing_view, row_quad);
-    row_builder.AppendPath(
-        RowQuadToPath(row_quad, i == rows.size() - 1 || row_gap > 0), scale);
-    // Row Gaps
-    if (i != rows.size() - 1) {
-      PhysicalOffset gap_position(row_left, rows.at(i) - row_gap);
-      PhysicalSize gap_size(row_width, row_gap);
-      PhysicalRect gap(gap_position, gap_size);
-      gfx::QuadF gap_quad = layout_object->LocalRectToAbsoluteQuad(gap);
-      FrameQuadToViewport(containing_view, gap_quad);
-      row_gap_builder.AppendPath(QuadToPath(gap_quad), scale);
-    }
-  }
-  grid_info->setValue("rows", row_builder.Release());
-  grid_info->setValue("rowGaps", row_gap_builder.Release());
+  grid_info->setValue(
+      "rows", BuildTrackPaths(grid, containing_view, rows, row_left, row_width,
+                              row_gap, kForRows, scale, optional_rtl_offset));
+  grid_info->setValue(
+      "rowGaps", BuildGapPaths(grid, containing_view, rows, row_left, row_width,
+                               row_gap, kForRows, scale, optional_rtl_offset));
 
-  PathBuilder column_builder;
-  PathBuilder column_gap_builder;
+  // Columns
   LayoutUnit column_top = rows.front();
   LayoutUnit column_height = rows.back() - rows.front();
-  for (wtf_size_t i = 1; i < columns.size(); ++i) {
-    PhysicalSize size(columns.at(i) - columns.at(i - 1), column_height);
-    if (i != columns.size() - 1)
-      size.width -= column_gap;
-    LayoutUnit line_left =
-        GetPositionForTrackAt(layout_object, i - 1, kForColumns, columns);
-    if (!is_ltr) {
-      line_left += rtl_offset - size.width;
-    }
-    PhysicalOffset position(line_left, column_top);
-    PhysicalRect column(position, size);
-    gfx::QuadF column_quad = layout_object->LocalRectToAbsoluteQuad(column);
-    FrameQuadToViewport(containing_view, column_quad);
-    bool draw_end_line = is_ltr ? i == columns.size() - 1 : i == 1;
-    column_builder.AppendPath(
-        ColumnQuadToPath(column_quad, draw_end_line || column_gap > 0), scale);
-    // Column Gaps
-    if (i != columns.size() - 1) {
-      LayoutUnit gap_left =
-          GetPositionForTrackAt(layout_object, i, kForColumns, columns);
-      if (is_ltr)
-        gap_left -= column_gap;
-      else
-        gap_left += rtl_offset;
-      PhysicalOffset gap_position(gap_left, column_top);
-      PhysicalSize gap_size(column_gap, column_height);
-      PhysicalRect gap(gap_position, gap_size);
-      gfx::QuadF gap_quad = layout_object->LocalRectToAbsoluteQuad(gap);
-      FrameQuadToViewport(containing_view, gap_quad);
-      column_gap_builder.AppendPath(QuadToPath(gap_quad), scale);
-    }
-  }
-  grid_info->setValue("columns", column_builder.Release());
-  grid_info->setValue("columnGaps", column_gap_builder.Release());
+  grid_info->setValue(
+      "columns",
+      BuildTrackPaths(grid, containing_view, columns, column_top, column_height,
+                      column_gap, kForColumns, scale, optional_rtl_offset));
+  grid_info->setValue(
+      "columnGaps",
+      BuildGapPaths(grid, containing_view, columns, column_top, column_height,
+                    column_gap, kForColumns, scale, optional_rtl_offset));
 
   // Positive Row and column Line positions
   if (grid_highlight_config.show_positive_line_numbers) {
-    grid_info->setValue(
-        "positiveRowLineNumberPositions",
-        BuildGridPositiveLineNumberPositions(node, row_gap, kForRows, scale,
-                                             rtl_offset, rows, columns));
-    grid_info->setValue(
-        "positiveColumnLineNumberPositions",
-        BuildGridPositiveLineNumberPositions(node, column_gap, kForColumns,
-                                             scale, rtl_offset, columns, rows));
+    grid_info->setValue("positiveRowLineNumberPositions",
+                        BuildGridPositiveLineNumberPositions(
+                            element, row_gap, kForRows, scale,
+                            optional_rtl_offset, rows, columns));
+    grid_info->setValue("positiveColumnLineNumberPositions",
+                        BuildGridPositiveLineNumberPositions(
+                            element, column_gap, kForColumns, scale,
+                            optional_rtl_offset, columns, rows));
   }
 
   // Negative Row and column Line positions
   if (grid_highlight_config.show_negative_line_numbers) {
-    grid_info->setValue(
-        "negativeRowLineNumberPositions",
-        BuildGridNegativeLineNumberPositions(node, row_gap, kForRows, scale,
-                                             rtl_offset, rows, columns));
-    grid_info->setValue(
-        "negativeColumnLineNumberPositions",
-        BuildGridNegativeLineNumberPositions(node, column_gap, kForColumns,
-                                             scale, rtl_offset, columns, rows));
+    grid_info->setValue("negativeRowLineNumberPositions",
+                        BuildGridNegativeLineNumberPositions(
+                            element, row_gap, kForRows, scale,
+                            optional_rtl_offset, rows, columns));
+    grid_info->setValue("negativeColumnLineNumberPositions",
+                        BuildGridNegativeLineNumberPositions(
+                            element, column_gap, kForColumns, scale,
+                            optional_rtl_offset, columns, rows));
   }
 
   // Area names
   if (grid_highlight_config.show_area_names) {
     grid_info->setValue("areaNames",
-                        BuildAreaNamePaths(node, scale, rows, columns));
+                        BuildAreaNamePaths(element, scale, rows, columns));
   }
 
   // line names
   if (grid_highlight_config.show_line_names) {
     grid_info->setValue(
         "rowLineNameOffsets",
-        BuildGridLineNames(node, kForRows, scale, rows, columns));
+        BuildGridLineNamesForGrid(element, kForRows, scale, rows, columns));
     grid_info->setValue(
         "columnLineNameOffsets",
-        BuildGridLineNames(node, kForColumns, scale, columns, rows));
+        BuildGridLineNamesForGrid(element, kForColumns, scale, columns, rows));
   }
 
   // Grid border
-  PathBuilder grid_border_builder;
+  HighlightPathBuilder grid_border_builder;
   PhysicalOffset grid_position(row_left, column_top);
   PhysicalSize grid_size(row_width, column_height);
   PhysicalRect grid_rect(grid_position, grid_size);
-  gfx::QuadF grid_quad = layout_object->LocalRectToAbsoluteQuad(grid_rect);
+  gfx::QuadF grid_quad = grid->LocalRectToAbsoluteQuad(grid_rect);
   FrameQuadToViewport(containing_view, grid_quad);
   grid_border_builder.AppendPath(QuadToPath(grid_quad), scale);
   grid_info->setValue("gridBorder", grid_border_builder.Release());
@@ -1463,7 +1874,21 @@ std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
-    Node* node,
+    Element* element,
+    const InspectorGridHighlightConfig& grid_highlight_config,
+    float scale,
+    bool isPrimary) {
+  auto* layout_object = ContentLayoutBoxFromNode(element);
+
+  if (layout_object->IsLayoutGridLanes()) {
+    return BuildGridInfoForGridLanes(element, grid_highlight_config, scale);
+  }
+
+  return BuildGridInfoForGrid(element, grid_highlight_config, scale, isPrimary);
+}
+
+std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
+    Element* element,
     const InspectorHighlightConfig& highlight_config,
     float scale,
     bool isPrimary) {
@@ -1475,11 +1900,11 @@ std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
     grid_config->column_line_color = highlight_config.css_grid;
     grid_config->row_line_dash = true;
     grid_config->column_line_dash = true;
-    return BuildGridInfo(node, *grid_config, scale, isPrimary);
+    return BuildGridInfo(element, *grid_config, scale, isPrimary);
   }
 
-  return BuildGridInfo(node, *(highlight_config.grid_highlight_config), scale,
-                       isPrimary);
+  return BuildGridInfo(element, *(highlight_config.grid_highlight_config),
+                       scale, isPrimary);
 }
 
 void CollectQuads(Node* node,
@@ -1509,8 +1934,10 @@ void CollectQuads(Node* node,
     for (wtf_size_t i = old_size; i < new_size; i++) {
       if (containing_view)
         FrameQuadToViewport(containing_view, out_quads[i]);
-      if (adjust_for_absolute_zoom)
-        AdjustForAbsoluteZoom::AdjustQuad(out_quads[i], *layout_object);
+      if (adjust_for_absolute_zoom) {
+        AdjustForAbsoluteZoom::AdjustQuadMaybeExcludingCSSZoom(out_quads[i],
+                                                               *layout_object);
+      }
     }
   }
 }
@@ -1535,8 +1962,7 @@ PhysicalRect TextFragmentRectInRootFrame(
     const LayoutObject* layout_object,
     const LayoutText::TextBoxInfo& text_box) {
   PhysicalRect absolute_coords_text_box_rect =
-      layout_object->LocalToAbsoluteRect(
-          layout_object->FlipForWritingMode(text_box.local_rect));
+      layout_object->LocalToAbsoluteRect(text_box.local_rect);
   LocalFrameView* local_frame_view = layout_object->GetFrameView();
   return local_frame_view ? local_frame_view->ConvertToRootFrame(
                                 absolute_coords_text_box_rect)
@@ -1617,7 +2043,7 @@ bool InspectorHighlightBase::BuildNodeQuads(Node* node,
 
   if (layout_object->IsText()) {
     auto* layout_text = To<LayoutText>(layout_object);
-    PhysicalRect text_rect = layout_text->PhysicalVisualOverflowRect();
+    PhysicalRect text_rect = layout_text->VisualOverflowRect();
     content_box = text_rect;
     padding_box = text_rect;
     border_box = text_rect;
@@ -1628,7 +2054,7 @@ bool InspectorHighlightBase::BuildNodeQuads(Node* node,
 
     // Include scrollbars and gutters in the padding highlight.
     padding_box = layout_box->PhysicalPaddingBoxRect();
-    NGPhysicalBoxStrut scrollbars = layout_box->ComputeScrollbars();
+    PhysicalBoxStrut scrollbars = layout_box->ComputeScrollbars();
     padding_box.SetX(padding_box.X() - scrollbars.left);
     padding_box.SetY(padding_box.Y() - scrollbars.top);
     padding_box.SetWidth(padding_box.Width() + scrollbars.HorizontalSum());
@@ -1684,7 +2110,7 @@ void InspectorHighlightBase::AppendQuad(const gfx::QuadF& quad,
                                         const Color& outline_color,
                                         const String& name) {
   Path path = QuadToPath(quad);
-  PathBuilder builder;
+  HighlightPathBuilder builder;
   builder.AppendPath(path, scale_);
   AppendPath(builder.Release(), fill_color, outline_color, name);
 }
@@ -1756,8 +2182,8 @@ InspectorHighlight::InspectorHighlight(
     element_info_ = BuildElementInfo(element);
   else if (append_element_info && text_node)
     element_info_ = BuildTextNodeInfo(text_node);
-  if (element_info_ && highlight_config.show_styles) {
-    AppendStyleInfo(node, element_info_.get(), node_contrast,
+  if (element && element_info_ && highlight_config.show_styles) {
+    AppendStyleInfo(element, element_info_.get(), node_contrast,
                     highlight_config.contrast_algorithm);
   }
 
@@ -1795,19 +2221,22 @@ void InspectorHighlight::AppendDistanceInfo(Node* node) {
   if (!layout_object)
     return;
 
-  CSSComputedStyleDeclaration* style =
-      MakeGarbageCollected<CSSComputedStyleDeclaration>(node, true);
-  for (unsigned i = 0; i < style->length(); ++i) {
-    AtomicString name(style->item(i));
-    const CSSValue* value = style->GetPropertyCSSValue(
-        CssPropertyID(node->GetExecutionContext(), name));
-    if (!value)
-      continue;
-    if (value->IsColorValue()) {
-      Color color = static_cast<const cssvalue::CSSColor*>(value)->Value();
-      computed_style_->setString(name, ToHEXA(color));
-    } else {
-      computed_style_->setString(name, value->CssText());
+  if (Element* element = DynamicTo<Element>(node)) {
+    CSSComputedStyleDeclaration* style =
+        MakeGarbageCollected<CSSComputedStyleDeclaration>(element, true);
+    for (unsigned i = 0; i < style->length(); ++i) {
+      AtomicString name(style->item(i));
+      const CSSValue* value = style->GetPropertyCSSValue(
+          CssPropertyID(element->GetExecutionContext(), name));
+      if (!value) {
+        continue;
+      }
+      if (value->IsColorValue()) {
+        Color color = static_cast<const cssvalue::CSSColor*>(value)->Value();
+        computed_style_->setString(name, ToHEXA(color));
+      } else {
+        computed_style_->setString(name, value->CssText());
+      }
     }
   }
 
@@ -1830,7 +2259,12 @@ void InspectorHighlight::VisitAndCollectDistanceInfo(Node* node) {
         VisitAndCollectDistanceInfo(element->GetPseudoId(), layout_object);
     } else {
       for (PseudoId pseudo_id :
-           {kPseudoIdFirstLetter, kPseudoIdBefore, kPseudoIdAfter}) {
+           {kPseudoIdFirstLetter, kPseudoIdScrollMarkerGroupBefore,
+            kPseudoIdCheckMark, kPseudoIdBefore, kPseudoIdAfter,
+            kPseudoIdPickerIcon, kPseudoIdInterestHint,
+            kPseudoIdScrollMarkerGroupAfter, kPseudoIdScrollMarker,
+            kPseudoIdScrollButtonBlockStart, kPseudoIdScrollButtonInlineStart,
+            kPseudoIdScrollButtonInlineEnd, kPseudoIdScrollButtonBlockEnd}) {
         if (Node* pseudo_node = element->GetPseudoElement(pseudo_id))
           VisitAndCollectDistanceInfo(pseudo_node);
       }
@@ -1848,7 +2282,6 @@ void InspectorHighlight::VisitAndCollectDistanceInfo(Node* node) {
 void InspectorHighlight::VisitAndCollectDistanceInfo(
     PseudoId pseudo_id,
     LayoutObject* layout_object) {
-  protocol::DOM::PseudoType pseudo_type;
   if (pseudo_id == kPseudoIdNone)
     return;
   for (LayoutObject* child = layout_object->SlowFirstChild(); child;
@@ -1903,11 +2336,12 @@ void InspectorHighlight::AppendPathsForShapeOutside(
                  *node->GetDocument().View(), *node->GetLayoutObject(),
                  *shape_outside_info, paths.shape, scale_),
              config.shape, Color::kTransparent);
-  if (paths.margin_shape.length())
+  if (paths.margin_shape.length()) {
     AppendPath(ShapePathBuilder::BuildPath(
                    *node->GetDocument().View(), *node->GetLayoutObject(),
                    *shape_outside_info, paths.margin_shape, scale_),
                config.shape_margin, Color::kTransparent);
+  }
 }
 
 void InspectorHighlight::AppendNodeHighlight(
@@ -1945,9 +2379,9 @@ void InspectorHighlight::AppendNodeHighlight(
   if (highlight_config.css_grid != Color::kTransparent ||
       highlight_config.grid_highlight_config) {
     grid_info_ = protocol::ListValue::create();
-    if (layout_object->IsLayoutGridIncludingNG()) {
+    if (layout_object->IsLayoutGridOrGridLanes()) {
       grid_info_->pushValue(
-          BuildGridInfo(node, highlight_config, scale_, true));
+          BuildGridInfo(To<Element>(node), highlight_config, scale_, true));
     }
   }
 
@@ -1957,7 +2391,8 @@ void InspectorHighlight::AppendNodeHighlight(
     // need to avoid those.
     if (IsLayoutNGFlexibleBox(*layout_object)) {
       flex_container_info_->pushValue(BuildFlexContainerInfo(
-          node, *(highlight_config.flex_container_highlight_config), scale_));
+          To<Element>(node),
+          *(highlight_config.flex_container_highlight_config), scale_));
     }
   }
 
@@ -1965,7 +2400,8 @@ void InspectorHighlight::AppendNodeHighlight(
     flex_item_info_ = protocol::ListValue::create();
     if (IsLayoutNGFlexItem(*layout_object)) {
       flex_item_info_->pushValue(BuildFlexItemInfo(
-          node, *(highlight_config.flex_item_highlight_config), scale_));
+          To<Element>(node), *(highlight_config.flex_item_highlight_config),
+          scale_));
     }
   }
 
@@ -2061,10 +2497,14 @@ bool InspectorHighlight::GetBoxModel(
   }
 
   if (use_absolute_zoom) {
-    AdjustForAbsoluteZoom::AdjustQuad(content, *layout_object);
-    AdjustForAbsoluteZoom::AdjustQuad(padding, *layout_object);
-    AdjustForAbsoluteZoom::AdjustQuad(border, *layout_object);
-    AdjustForAbsoluteZoom::AdjustQuad(margin, *layout_object);
+    AdjustForAbsoluteZoom::AdjustQuadMaybeExcludingCSSZoom(content,
+                                                           *layout_object);
+    AdjustForAbsoluteZoom::AdjustQuadMaybeExcludingCSSZoom(padding,
+                                                           *layout_object);
+    AdjustForAbsoluteZoom::AdjustQuadMaybeExcludingCSSZoom(border,
+                                                           *layout_object);
+    AdjustForAbsoluteZoom::AdjustQuadMaybeExcludingCSSZoom(margin,
+                                                           *layout_object);
   }
 
   float scale = PageScaleFromFrameView(view);
@@ -2077,23 +2517,22 @@ bool InspectorHighlight::GetBoxModel(
       view->ConvertToRootFrame(layout_object->AbsoluteBoundingBoxRect());
   auto* model_object = DynamicTo<LayoutBoxModelObject>(layout_object);
 
-  *model =
-      protocol::DOM::BoxModel::create()
-          .setContent(BuildArrayForQuad(content))
-          .setPadding(BuildArrayForQuad(padding))
-          .setBorder(BuildArrayForQuad(border))
-          .setMargin(BuildArrayForQuad(margin))
-          .setWidth(model_object ? AdjustForAbsoluteZoom::AdjustInt(
-                                       model_object->PixelSnappedOffsetWidth(
-                                           model_object->OffsetParent()),
-                                       model_object)
-                                 : bounding_box.width())
-          .setHeight(model_object ? AdjustForAbsoluteZoom::AdjustInt(
-                                        model_object->PixelSnappedOffsetHeight(
-                                            model_object->OffsetParent()),
-                                        model_object)
-                                  : bounding_box.height())
-          .build();
+  *model = protocol::DOM::BoxModel::create()
+               .setContent(BuildArrayForQuad(content))
+               .setPadding(BuildArrayForQuad(padding))
+               .setBorder(BuildArrayForQuad(border))
+               .setMargin(BuildArrayForQuad(margin))
+               .setWidth(model_object
+                             ? AdjustForAbsoluteZoom::AdjustLayoutUnit(
+                                   model_object->OffsetWidth(), *model_object)
+                                   .Round()
+                             : bounding_box.width())
+               .setHeight(model_object
+                              ? AdjustForAbsoluteZoom::AdjustLayoutUnit(
+                                    model_object->OffsetHeight(), *model_object)
+                                    .Round()
+                              : bounding_box.height())
+               .build();
 
   Shape::DisplayPaths paths;
   gfx::QuadF bounds_quad;
@@ -2163,12 +2602,13 @@ std::unique_ptr<protocol::DictionaryValue> InspectorGridHighlight(
     return nullptr;
 
   float scale = DeviceScaleFromFrameView(frame_view);
-  LayoutObject* layout_object = node->GetLayoutObject();
-  if (!layout_object || !layout_object->IsLayoutGridIncludingNG())
+  const LayoutBox* grid_object = ContentLayoutBoxFromNode(node);
+  if (!grid_object || !grid_object->IsLayoutGridOrGridLanes()) {
     return nullptr;
+  }
 
   std::unique_ptr<protocol::DictionaryValue> grid_info =
-      BuildGridInfo(node, config, scale, true);
+      BuildGridInfo(To<Element>(node), config, scale, true);
   return grid_info;
 }
 
@@ -2185,12 +2625,12 @@ std::unique_ptr<protocol::DictionaryValue> InspectorFlexContainerHighlight(
     return nullptr;
 
   float scale = DeviceScaleFromFrameView(frame_view);
-  LayoutObject* layout_object = node->GetLayoutObject();
+  LayoutObject* layout_object = ContentLayoutBoxFromNode(node);
   if (!layout_object || !IsLayoutNGFlexibleBox(*layout_object)) {
     return nullptr;
   }
 
-  return BuildFlexContainerInfo(node, config, scale);
+  return BuildFlexContainerInfo(To<Element>(node), config, scale);
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildSnapContainerInfo(Node* node) {
@@ -2336,7 +2776,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildContainerQueryContainerInfo(
   std::unique_ptr<protocol::DictionaryValue> container_query_container_info =
       protocol::DictionaryValue::create();
 
-  PathBuilder container_builder;
+  HighlightPathBuilder container_builder;
   auto content_box = layout_box->PhysicalContentBoxRect();
   gfx::QuadF content_quad = layout_box->LocalRectToAbsoluteQuad(content_box);
   FrameQuadToViewport(containing_view, content_quad);
@@ -2348,7 +2788,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildContainerQueryContainerInfo(
   bool include_descendants =
       container_query_container_highlight_config.descendant_border &&
       !container_query_container_highlight_config.descendant_border
-           ->IsTransparent();
+           ->IsFullyTransparent();
   if (element && include_descendants) {
     std::unique_ptr<protocol::ListValue> descendants_info =
         protocol::ListValue::create();
@@ -2533,21 +2973,21 @@ InspectorFlexContainerHighlightConfig
 InspectorHighlight::DefaultFlexContainerConfig() {
   InspectorFlexContainerHighlightConfig config;
   config.container_border =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   config.line_separator =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   config.item_separator =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   config.main_distributed_space =
-      absl::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
+      std::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
   config.cross_distributed_space =
-      absl::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
+      std::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
   config.row_gap_space =
-      absl::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
+      std::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
   config.column_gap_space =
-      absl::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
+      std::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
   config.cross_alignment =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   return config;
 }
 
@@ -2555,11 +2995,11 @@ InspectorHighlight::DefaultFlexContainerConfig() {
 InspectorFlexItemHighlightConfig InspectorHighlight::DefaultFlexItemConfig() {
   InspectorFlexItemHighlightConfig config;
   config.base_size_box =
-      absl::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
+      std::optional<BoxStyle>(InspectorHighlight::DefaultBoxStyle());
   config.base_size_border =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   config.flexibility_arrow =
-      absl::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
+      std::optional<LineStyle>(InspectorHighlight::DefaultLineStyle());
   return config;
 }
 

@@ -5,17 +5,17 @@
 #ifndef CHROME_BROWSER_UPDATER_SCHEDULER_H_
 #define CHROME_BROWSER_UPDATER_SCHEDULER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 
 namespace updater {
 
-// Schedule updater periodic tasks to run five minutes later and every five
-// hours thereafter. This is a backup scheduler so that even if the updater's
-// scheduler is broken or disabled, it will run tasks while Chrome is running.
-void SchedulePeriodicTasks();
+// Do the periodic tasks right away, invoking `callback` when done. If user
+// intervention is needed, calls `prompt`.
+void DoPeriodicTasks(base::RepeatingClosure prompt, base::OnceClosure callback);
 
-// Do the periodic tasks right away, invoking `callback` when done.
-void DoPeriodicTasks(base::OnceClosure callback);
+// Wake up all existing updater instances. May block. Invokes `callback` once
+// the wake process exits.
+void WakeAllUpdaters(base::OnceClosure callback);
 
 }  // namespace updater
 

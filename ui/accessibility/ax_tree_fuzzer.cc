@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 #include "ui/accessibility/ax_tree.h"
+
+#include "base/compiler_specific.h"
 #include "ui/accessibility/ax_tree_observer.h"
 
 class EmptyAXTreeObserver : public ui::AXTreeObserver {
  public:
-  EmptyAXTreeObserver() {}
-  ~EmptyAXTreeObserver() override {}
+  EmptyAXTreeObserver() = default;
+  ~EmptyAXTreeObserver() override = default;
 };
 
 // Entry point for LibFuzzer.
@@ -17,11 +19,11 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   size_t i = 0;
   while (i < size) {
     ui::AXNodeData node;
-    node.id = data[i++];
+    node.id = UNSAFE_TODO(data[i++]);
     if (i < size) {
-      size_t child_count = data[i++];
+      size_t child_count = UNSAFE_TODO(data[i++]);
       for (size_t j = 0; j < child_count && i < size; j++)
-        node.child_ids.push_back(data[i++]);
+        node.child_ids.push_back(UNSAFE_TODO(data[i++]));
     }
     initial_state.nodes.push_back(node);
   }
@@ -42,7 +44,6 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
 
   EmptyAXTreeObserver observer;
   ui::AXTree tree;
-  tree.DisallowFailFastForFuzzing();
   tree.AddObserver(&observer);
   tree.Unserialize(initial_state);
   tree.RemoveObserver(&observer);

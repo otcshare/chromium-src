@@ -6,7 +6,9 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/policy/android/jni_headers/CloudManagementSharedPreferences_jni.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/policy/android/util_jni/CloudManagementSharedPreferences_jni.h"
 
 namespace policy {
 namespace android {
@@ -30,3 +32,5 @@ std::string ReadDmTokenFromSharedPreferences() {
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(CloudManagementSharedPreferences)

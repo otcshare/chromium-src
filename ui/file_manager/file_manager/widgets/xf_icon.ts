@@ -2,81 +2,59 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {classMap, css, customElement, html, property, PropertyValues, XfBase} from './xf_base.js';
+import {iconSetToCSSBackgroundImageValue} from '../common/js/util.js';
+import {ICON_TYPES} from '../foreground/js/constants.js';
+
+import {css, customElement, html, property, type PropertyValues, styleMap, svg, XfBase} from './xf_base.js';
 
 @customElement('xf-icon')
 export class XfIcon extends XfBase {
-  /** The icon size, can be "small" or "large" (from `XfIcon.size`). */
+  /**
+   * The icon size, can be "extra-small", "small" or "large" (from
+   * `XfIcon.size`).
+   */
   @property({type: String, reflect: true}) size: string = XfIcon.sizes.SMALL;
 
   /**
    * The icon type, different type will render different SVG file
-   * (from `XfIcon.types`).
+   * (from `ICON_TYPES`).
    */
   @property({type: String, reflect: true}) type = '';
 
+  /**
+   * Some icon data are directly passed from outside in base64 format. If
+   * `iconSet` is provided, `type` will be ignored.
+   */
+  @property({attribute: false})
+  iconSet: chrome.fileManagerPrivate.IconSet|null = null;
+
   static get sizes() {
     return {
+      EXTRA_SMALL: 'extra_small',
       SMALL: 'small',
+      MEDIUM: 'medium',
       LARGE: 'large',
     } as const;
   }
 
-  static get types() {
+  static get multiColor() {
     return {
-      ANDROID_FILES: 'android_files',
-      ARCHIVE: 'archive',
-      AUDIO: 'audio',
-      BRUSCHETTA: 'bruschetta',
-      CAMERA_FOLDER: 'camera_folder',
-      COMPUTER: 'computer',
-      COMPUTERS_GRAND_ROOT: 'computers_grand_root',
-      CROSTINI: 'crostini',
-      DOWNLOADS: 'downloads',
-      DRIVE_OFFLINE: 'drive_offline',
-      DRIVE_RECENT: 'drive_recent',
-      DRIVE_SHARED_WITH_ME: 'drive_shared_with_me',
-      DRIVE: 'drive',
-      EXCEL: 'excel',
-      EXTERNAL_MEDIA: 'external_media',
-      FOLDER: 'folder',
-      GENERIC: 'generic',
-      GOOGLE_DOC: 'gdoc',
-      GOOGLE_DRAW: 'gdraw',
-      GOOGLE_FORM: 'gform',
-      GOOGLE_LINK: 'glink',
-      GOOGLE_MAP: 'gmap',
-      GOOGLE_SHEET: 'gsheet',
-      GOOGLE_SITE: 'gsite',
-      GOOGLE_SLIDES: 'gslides',
-      GOOGLE_TABLE: 'gtable',
-      IMAGE: 'image',
-      MTP: 'mtp',
-      MY_FILES: 'my_files',
-      OPTICAL: 'optical',
-      PDF: 'pdf',
-      PLUGIN_VM: 'plugin_vm',
-      POWERPOINT: 'ppt',
-      RAW: 'raw',
-      RECENT: 'recent',
-      REMOVABLE: 'removable',
-      SCRIPT: 'script',
-      SD_CARD: 'sd',
-      SERVICE_DRIVE: 'service_drive',
-      SHARED_DRIVE: 'shared_drive',
-      SHARED_DRIVES_GRAND_ROOT: 'shared_drives_grand_root',
-      SHARED_FOLDER: 'shared_folder',
-      SHORTCUT: 'shortcut',
-      SITES: 'sites',
-      SMB: 'smb',
-      TEAM_DRIVE: 'team_drive',
-      THUMBNAIL_GENERIC: 'thumbnail_generic',
-      TINI: 'tini',
-      TRASH: 'trash',
-      UNKNOWN_REMOVABLE: 'unknown_removable',
-      USB: 'usb',
-      VIDEO: 'video',
-      WORD: 'word',
+      [ICON_TYPES.CANT_PIN]:
+          svg`<use xlink:href="foreground/images/files/ui/cant_pin.svg#cant_pin"></use>`,
+      [ICON_TYPES.CLOUD_DONE]:
+          svg`<use xlink:href="foreground/images/files/ui/cloud_done.svg#cloud_done"></use>`,
+      [ICON_TYPES.CLOUD_ERROR]:
+          svg`<use xlink:href="foreground/images/files/ui/cloud_error.svg#cloud_error"></use>`,
+      [ICON_TYPES.CLOUD_OFFLINE]:
+          svg`<use xlink:href="foreground/images/files/ui/cloud_offline.svg#cloud_offline"></use>`,
+      [ICON_TYPES.CLOUD_PAUSED]:
+          svg`<use xlink:href="foreground/images/files/ui/cloud_paused.svg#cloud_paused"></use>`,
+      [ICON_TYPES.CLOUD_SYNC]:
+          svg`<use xlink:href="foreground/images/files/ui/cloud_sync.svg#cloud_sync"></use>`,
+      [ICON_TYPES.ERROR]:
+          svg`<use xlink:href="foreground/images/files/ui/error.svg#error"></use>`,
+      [ICON_TYPES.OFFLINE]:
+          svg`<use xlink:href="foreground/images/files/ui/offline.svg#offline"></use>`,
     };
   }
 
@@ -85,15 +63,29 @@ export class XfIcon extends XfBase {
   }
 
   override render() {
-    const shouldKeepColor = [
-      XfIcon.types.EXCEL,
-      XfIcon.types.POWERPOINT,
-      XfIcon.types.WORD,
-    ].includes(this.type);
-    const spanClass = {'keep-color': shouldKeepColor};
+    if (this.type === ICON_TYPES.BLANK) {
+      return html``;
+    }
+
+    if (Object.keys(XfIcon.multiColor).includes(this.type)) {
+      return html`
+        <span class="multi-color keep-color">
+          <svg>
+            ${XfIcon.multiColor[this.type]}
+          </svg>
+        </span>`;
+    }
+
+    if (this.iconSet) {
+      const backgroundImageStyle = {
+        'background-image': iconSetToCSSBackgroundImageValue(this.iconSet),
+      };
+      return html`<span class="keep-color" style=${
+          styleMap(backgroundImageStyle)}></span>`;
+    }
 
     return html`
-      <span class=${classMap(spanClass)}></span>
+      <span></span>
     `;
   }
 
@@ -104,14 +96,18 @@ export class XfIcon extends XfBase {
   }
 
   private validateTypeProperty_(type: string) {
+    if (this.iconSet) {
+      // Ignore checking "type" if iconSet is provided.
+      return;
+    }
     if (!type) {
       console.warn('Empty type will result in an square being rendered.');
       return;
     }
-    const validTypes = Object.values(XfIcon.types);
+    const validTypes = Object.values(ICON_TYPES);
     if (!validTypes.find((t) => t === type)) {
       console.warn(
-          `Type ${type} is not a valid icon type, please check XfIcon.types.`);
+          `Type ${type} is not a valid icon type, please check ICON_TYPES.`);
     }
   }
 }
@@ -120,6 +116,11 @@ function getCSS() {
   return css`
     :host {
       --xf-icon-color: var(--cros-sys-on_surface);
+      --xf-icon-base-color: var(--cros-sys-app_base);
+      --xf-icon-positive-color: var(--cros-sys-positive);
+      --xf-icon-error-color: var(--cros-sys-error);
+      --xf-icon-progress-color: var(--cros-sys-progress);
+      --xf-secondary-color: var(--cros-sys-secondary);
       display: inline-block;
     }
 
@@ -138,17 +139,53 @@ function getCSS() {
       background-repeat: no-repeat;
     }
 
+    :host-context([disabled]) span.keep-color {
+      opacity: 0.38;
+    }
+
+    span.multi-color {
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    :host([size="extra_small"]) span {
+      height: 16px;
+      width: 16px;
+    }
+
+    :host([size="extra_small"]) span.keep-color {
+      background-size: 16px 16px;
+    }
+
+    :host([size="extra_small"]) span:not(.keep-color) {
+      -webkit-mask-size: 16px;
+    }
+
     :host([size="small"]) span {
       height: 20px;
       width: 20px;
+    }
+
+    :host([size="small"]) span.keep-color {
+      background-size: 20px 20px;
     }
 
     :host([size="small"]) span:not(.keep-color) {
       -webkit-mask-size: 20px;
     }
 
-    :host([size="small"]) span.keep-color {
-      background-size: 20px;
+    :host([size="medium"]) span {
+      height: 32px;
+      width: 32px;
+    }
+
+    :host([size="medium"]) span.keep-color {
+      background-size: 32px 32px;
+    }
+
+    :host([size="medium"]) span:not(.keep-color) {
+      -webkit-mask-size: 32px;
     }
 
     :host([size="large"]) span {
@@ -156,12 +193,12 @@ function getCSS() {
       width: 48px;
     }
 
-    :host([size="large"]) span:not(.keep-color) {
-      -webkit-mask-size: 48px;
+    :host([size="large"]) span.keep-color {
+      background-size: 48px 48px;
     }
 
-    :host([size="large"]) span.keep-color {
-      background-size: 48px;
+    :host([size="large"]) span:not(.keep-color) {
+      -webkit-mask-size: 48px;
     }
 
     :host([type="android_files"]) span {
@@ -176,11 +213,15 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_audio.svg);
     }
 
-    :host([type="bruschetta"]) span, :host([type="crostini"]) span {
+    :host([type="bruschetta"]) span {
+      -webkit-mask-image: url(../foreground/images/volumes/bruschetta.svg);
+    }
+
+    :host([type="crostini"]) span {
       -webkit-mask-image: url(../foreground/images/volumes/linux_files.svg);
     }
 
-    :host([type="camera_folder"]) span {
+    :host([type="camera-folder"]) span {
       -webkit-mask-image: url(../foreground/images/volumes/camera.svg);
     }
 
@@ -196,6 +237,10 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/volumes/downloads.svg);
     }
 
+    :host([type="drive"]) span {
+      -webkit-mask-image: url(../foreground/images/volumes/drive.svg);
+    }
+
     :host([type="drive_offline"]) span {
       -webkit-mask-image: url(../foreground/images/volumes/offline.svg);
     }
@@ -204,8 +249,16 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/volumes/shared.svg);
     }
 
+    :host([type="drive_logo"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/drive_logo.svg);
+    }
+
+    :host([type="drive_bulk_pinning"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/drive_bulk_pinning.svg);
+    }
+
     :host([type="excel"]) span {
-      background-image: url(../foreground/images/filetype/filetype_excel.svg);
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_excel.svg);
     }
 
     :host([type="external_media"]) span,
@@ -242,12 +295,20 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_gmap.svg);
     }
 
+    :host([type="gproject"]) span {
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_gproject.svg);
+    }
+
     :host([type="gsheet"]) span {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_gsheet.svg);
     }
 
     :host([type="gsite"]) span {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_gsite.svg);
+    }
+
+    :host([type="gmaillayout"]) span {
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_gmaillayout.svg);
     }
 
     :host([type="gslides"]) span {
@@ -283,7 +344,7 @@ function getCSS() {
     }
 
     :host([type="ppt"]) span {
-      background-image: url(../foreground/images/filetype/filetype_ppt.svg);
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_ppt.svg);
     }
 
     :host([type="script"]) span {
@@ -294,7 +355,7 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/volumes/sd.svg);
     }
 
-    :host([type="service_drive"]) span, :host([type="drive"]) span {
+    :host([type="service_drive"]) span {
       -webkit-mask-image: url(../foreground/images/volumes/service_drive.svg);
     }
 
@@ -343,7 +404,105 @@ function getCSS() {
     }
 
     :host([type="word"]) span {
-      background-image: url(../foreground/images/filetype/filetype_word.svg);
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_word.svg);
+    }
+
+    :host([type="check"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/check.svg);
+    }
+
+    :host([type="bulk_pinning_battery_saver"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/bulk_pinning_battery_saver.svg);
+    }
+
+    :host([type="bulk_pinning_done"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/bulk_pinning_done.svg);
+    }
+
+    :host([type="bulk_pinning_offline"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/bulk_pinning_offline.svg);
+    }
+
+    :host([type="cloud"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/cloud.svg);
+    }
+
+    :host([type="error_banner"]) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/error_banner_icon.svg);
+    }
+
+    :host([type='star']) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/star.svg);
+    }
+
+    :host([type='odfs']) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/odfs.svg);
+    }
+
+    :host([type='gdoc']) span,
+    :host([type='script']) span,
+    :host([type='tini']) span {
+      background-color: var(--cros-sys-progress);
+    }
+
+    :host([type='audio']) span,
+    :host([type='gdraw']) span,
+    :host([type='image']) span,
+    :host([type='gmap']) span,
+    :host([type='pdf']) span,
+    :host([type='video']) span,
+    :host([type='gmaillayout']) span {
+      background-color: var(--cros-sys-error);
+    }
+
+    :host([type='gsheet']) span,
+    :host([type='gtable']) span {
+      background-color: var(--cros-sys-positive);
+    }
+
+    :host([type='gslides']) span {
+      background-color: var(--cros-sys-warning);
+    }
+
+    :host([type='gform']) span {
+      background-color: var(--cros-sys-file_form);
+    }
+
+    :host([type='gsite']) span,
+    :host([type='sites']) span {
+      background-color: var(--cros-sys-file_site);
+    }
+
+    :host([type='gproject']) span {
+      background-color: var(--cros-sys-file_project);
+    }
+
+    :host([type='excel']) span {
+      background-color: var(--cros-sys-file_ms_excel);
+    }
+
+    :host([type='ppt']) span {
+      background-color: var(--cros-sys-file_ms_ppt);
+    }
+
+    :host([type='word']) span {
+      background-color: var(--cros-sys-file_ms_word);
+    }
+
+    /**
+     * These icons are never shown on their own but are shown as suffix icons,
+     * hence why they are smaller with offset margins. At the moment these are
+     * only supported with "small" size prefix icons.
+     */
+    :host([type='cloud_done']) span,
+    :host([type='cloud_error']) span,
+    :host([type='cloud_offline']) span,
+    :host([type='cloud_paused']) span,
+    :host([type='cloud_sync']) span {
+      margin-inline-start: 10px;
+      margin-top: 8px;
+      height: 12px;
+      width: 12px;
     }
   `;
 }

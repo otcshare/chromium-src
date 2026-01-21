@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/debug/leak_annotations.h"
+#include "base/functional/bind.h"
+#include "base/test/gtest_tags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/api/system_display/display_info_provider.h"
 #include "extensions/browser/api/system_display/system_display_api.h"
@@ -20,8 +22,6 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/shell/test/shell_apitest.h"
 #include "extensions/test/result_catcher.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/display/screen.h"
 
 namespace extensions {
 
@@ -44,12 +44,12 @@ class SystemDisplayApiTest : public ShellApiTest {
                const api::system_display::DisplayProperties& properties) {
     provider_->SetDisplayProperties(
         display_id, properties,
-        base::BindOnce([](absl::optional<std::string>) {}));
+        base::BindOnce([](std::optional<std::string>) {}));
   }
   std::unique_ptr<MockDisplayInfoProvider> provider_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 // TODO(stevenjb): Add API tests for {GS}etDisplayLayout. That code currently
 // lives in src/chrome but should be getting moved soon.
@@ -69,7 +69,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetDisplayNotKioskEnabled) {
       api_test_utils::RunFunctionAndReturnError(
           set_info_function.get(), "[\"display_id\", {}]", browser_context()));
 
-  absl::optional<base::Value::Dict> set_info = provider_->GetSetInfoValue();
+  std::optional<base::Value::Dict> set_info = provider_->GetSetInfoValue();
   EXPECT_FALSE(set_info);
 }
 
@@ -97,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetDisplayKioskEnabled) {
       "}]",
       browser_context()));
 
-  absl::optional<base::Value::Dict> set_info = provider_->GetSetInfoValue();
+  std::optional<base::Value::Dict> set_info = provider_->GetSetInfoValue();
   ASSERT_TRUE(set_info);
 
   EXPECT_TRUE(api_test_utils::GetBoolean(*set_info, "isPrimary"));
@@ -116,6 +116,9 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetDisplayKioskEnabled) {
 }
 
 IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, EnableUnifiedDesktop) {
+  base::AddFeatureIdTagToTestResult(
+      "screenplay-49098611-4862-4326-a90f-3f04b49eb336");
+
   scoped_refptr<const Extension> test_extension =
       ExtensionBuilder("Test", ExtensionBuilder::Type::PLATFORM_APP)
           .SetManifestKey("kiosk_enabled", true)
@@ -198,15 +201,16 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, OverscanCalibrationAppNoComplete) {
   SetInfo(id, params);
 
   ResultCatcher catcher;
-  const Extension* extension = LoadApp("system/display/overscan_no_complete");
+  scoped_refptr<const Extension> extension =
+      LoadApp("system/display/overscan_no_complete");
   ASSERT_TRUE(extension);
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 
   // Calibration was started by the app but not completed.
   ASSERT_TRUE(provider_->calibration_started(id));
 
-  // Unloading the app should complete the calibraiton (and hide the overlay).
-  UnloadApp(extension);
+  // Unloading the app should complete the calibration (and hide the overlay).
+  UnloadApp(extension.get());
   ASSERT_FALSE(provider_->calibration_changed(id));
   ASSERT_FALSE(provider_->calibration_started(id));
 }
@@ -249,7 +253,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, ShowNativeTouchCalibration) {
 
   provider_->SetTouchCalibrationWillSucceed(true);
 
-  absl::optional<base::Value> result(
+  std::optional<base::Value> result(
       api_test_utils::RunFunctionAndReturnSingleResult(
           show_native_calibration.get(), "[\"" + id + "\"]",
           browser_context()));
@@ -275,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetMirrorMode) {
                                             "  \"mode\": \"normal\"\n"
                                             "}]",
                                             browser_context()));
-    EXPECT_EQ(api::system_display::MIRROR_MODE_NORMAL,
+    EXPECT_EQ(api::system_display::MirrorMode::kNormal,
               provider_->mirror_mode());
   }
   {
@@ -292,7 +296,8 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetMirrorMode) {
                                     "  \"mirroringDestinationIds\": [\"11\"]\n"
                                     "}]",
                                     browser_context()));
-    EXPECT_EQ(api::system_display::MIRROR_MODE_MIXED, provider_->mirror_mode());
+    EXPECT_EQ(api::system_display::MirrorMode::kMixed,
+              provider_->mirror_mode());
   }
   {
     auto set_mirror_mode_function =
@@ -306,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetMirrorMode) {
                                             "  \"mode\": \"off\"\n"
                                             "}]",
                                             browser_context()));
-    EXPECT_EQ(api::system_display::MIRROR_MODE_OFF, provider_->mirror_mode());
+    EXPECT_EQ(api::system_display::MirrorMode::kOff, provider_->mirror_mode());
   }
 }
 
@@ -331,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, ResetDisplayIds) {
           var bar_frame = document.createElement('iframe');
           document.body.appendChild(bar_frame);
       )"));
-  content::RenderFrameHostWrapper sub_frame_rfh_wrapper(
+  content::RenderFrameHostWrapper sub_frame_render_frame_host_wrapper(
       ChildFrameAt(host->host_contents()->GetPrimaryMainFrame(), 0));
 
   // By loading the app, calibration is started.
@@ -340,20 +345,22 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, ResetDisplayIds) {
   EXPECT_TRUE(ExecJs(host->host_contents()->GetPrimaryMainFrame(),
                      "const iframe = document.querySelector('iframe');\
                      iframe.remove();"));
-  ASSERT_TRUE(sub_frame_rfh_wrapper.WaitUntilRenderFrameDeleted());
+  ASSERT_TRUE(
+      sub_frame_render_frame_host_wrapper.WaitUntilRenderFrameDeleted());
 
   // Removing the sub frame doesn't affect calibration.
   ASSERT_TRUE(provider_->calibration_started(id));
 
-  content::RenderFrameHostWrapper main_frame_rfh_wrapper(
+  content::RenderFrameHostWrapper main_frame_render_frame_host_wrapper(
       host->host_contents()->GetPrimaryMainFrame());
   host->host_contents()->ClosePage();
-  ASSERT_TRUE(main_frame_rfh_wrapper.WaitUntilRenderFrameDeleted());
+  ASSERT_TRUE(
+      main_frame_render_frame_host_wrapper.WaitUntilRenderFrameDeleted());
 
   ASSERT_FALSE(provider_->calibration_started(id));
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 using SystemDisplayGetInfoTest = ShellApiTest;

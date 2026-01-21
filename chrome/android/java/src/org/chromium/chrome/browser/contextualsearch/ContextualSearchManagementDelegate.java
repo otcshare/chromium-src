@@ -6,17 +6,18 @@ package org.chromium.chrome.browser.contextualsearch;
 
 import android.app.Activity;
 
-import org.chromium.chrome.browser.compositor.bottombar.OverlayContentDelegate;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContentDelegate;
 import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanelInterface;
-import org.chromium.components.browser_ui.widget.scrim.ScrimCoordinator;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 
 /**
  * Provides an interface to allow external objects like the {@link ContextualSearchPanel} to drive
- * specific actions in the {@link ContextualSearchManager} e.g tell it to close or promote the
- * panel into a separate Tab.
+ * specific actions in the {@link ContextualSearchManager} e.g tell it to close or promote the panel
+ * into a separate Tab.
  */
+@NullMarked
 public interface ContextualSearchManagementDelegate {
 
     /**
@@ -24,20 +25,20 @@ public interface ContextualSearchManagementDelegate {
      */
     Activity getActivity();
 
-    /**
-     * Promotes the current Content View Core in the Contextual Search Panel to its own Tab.
-     */
+    /** Promotes the current Content View Core in the Contextual Search Panel to its own Tab. */
     void promoteToTab();
 
     /**
      * Sets the handle to the ContextualSearchPanel.
+     *
      * @param panel The ContextualSearchPanel.
      */
-    void setContextualSearchPanel(ContextualSearchPanelInterface panel);
+    void setContextualSearchPanel(ContextualSearchPanel panel);
 
     /**
-     * Gets whether the device is running in compatibility mode for Contextual Search.
-     * If so, a new tab showing search results should be opened instead of showing the panel.
+     * Gets whether the device is running in compatibility mode for Contextual Search. If so, a new
+     * tab showing search results should be opened instead of showing the panel.
+     *
      * @return whether the device is running in compatibility mode.
      */
     boolean isRunningInCompatibilityMode();
@@ -70,37 +71,33 @@ public interface ContextualSearchManagementDelegate {
     void onPanelCollapsing();
 
     /**
-     * @return An OverlayContentDelegate to watch events on the panel's content.
+     * @return An OverlayPanelContentDelegate to watch events on the panel's content.
      */
-    OverlayContentDelegate getOverlayContentDelegate();
+    OverlayPanelContentDelegate getOverlayPanelContentDelegate();
 
-    /**
-     * Log the current state of Contextual Search.
-     */
+    /** Log the current state of Contextual Search. */
     void logCurrentState();
 
-    /**
-     * Called when the Contextual Search panel is closed.
-     */
+    /** Called when the Contextual Search panel is closed. */
     void onPanelFinishedShowing();
 
     /**
      * Notifies that a Related Searches suggestion has been clicked, and whether it was shown in the
      * Bar or the content area of the Panel.
-     * @param suggestionIndex The 0-based index into the list of suggestions provided by the
-     *        panel and presented in the UI. E.g. if the user clicked the second chip this value
-     *        would be 1.
+     *
+     * @param suggestionIndex The 0-based index into the list of suggestions provided by the panel
+     *     and presented in the UI. E.g. if the user clicked the second chip this value would be 1.
      */
     void onRelatedSearchesSuggestionClicked(int suggestionIndex);
 
-    /**
-     * @return A {@link ScrimCoordinator} to fade the status bar in and out.
-     */
-    ScrimCoordinator getScrimCoordinator();
+    /** Returns the {@link ScrimManager} to fade the status bar in and out. */
+    ScrimManager getScrimManager();
 
     /**
-     * Returns whether the Delayed Intelligence Feature is currently active for the current user.
-     * A user must be in the undecided privacy state for Delayed Intelligence to take affect.
+     * @param enabled Whether The user to choose fully Contextual Search privacy opt-in.
      */
-    boolean isDelayedIntelligenceActive();
+    void setContextualSearchPromoCardSelection(boolean enabled);
+
+    /** Notifies that a promo card has been shown. */
+    void onPromoShown();
 }

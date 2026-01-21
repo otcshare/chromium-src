@@ -7,12 +7,16 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
 #include <memory>
 #include <random>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "content/test/fuzzer/fuzzer_support.h"
 #include "testing/libfuzzer/libfuzzer_exports.h"
@@ -42,7 +46,7 @@ class ReservoirSampler {
   }
 
  private:
-  Random* const rnd_;
+  const raw_ptr<Random> rnd_;
   T t_;
   int n_;
 };
@@ -52,7 +56,7 @@ static size_t MutateString(std::string* str, size_t maxLen) {
   static std::vector<uint8_t> v;
   v.resize(maxLen);
   size_t inLen = std::min(maxLen, str->length());
-  memcpy(v.data(), str->data(), inLen);
+  UNSAFE_TODO(memcpy(v.data(), str->data(), inLen));
   size_t len =
       LLVMFuzzerMutate(reinterpret_cast<uint8_t*>(v.data()), inLen, maxLen);
   if (!len)
@@ -114,8 +118,9 @@ class NodeList : public std::vector<std::unique_ptr<Node>> {
                                                    size_t size) {
     auto nodes = std::make_unique<NodeList>();
 
-    absl::optional<base::Value> value(base::JSONReader::Read(
-        std::string(reinterpret_cast<const char*>(data), size)));
+    std::optional<base::Value> value(base::JSONReader::Read(
+        std::string(reinterpret_cast<const char*>(data), size),
+        base::JSON_PARSE_CHROMIUM_EXTENSIONS));
     if (value && value->is_list())
       nodes->ParseJsonList(value->GetList());
 
@@ -244,9 +249,12 @@ class Element : public Node {
 
  protected:
   void ParseJson(const base::Value::Dict& dict) override {
-    const std::string* e_str = dict.FindString("e");
-    CHECK(e_str);
-    tag_name_ = *e_str;
+    const base::Value* e_value = dict.Find("e");
+    CHECK(e_value);
+    const std::string* e_str = e_value->GetIfString();
+    if (e_str) {
+      tag_name_ = *e_str;
+    }
 
     const base::Value::List* c_list = dict.FindList("c");
     if (c_list)
@@ -297,9 +305,12 @@ class Text : public Node {
   }
 
   void ParseJson(const base::Value::Dict& dict) override {
-    const std::string* t_str = dict.FindString("t");
-    CHECK(t_str);
-    text_ = *t_str;
+    const base::Value* t_value = dict.Find("t");
+    CHECK(t_value);
+    const std::string* t_str = t_value->GetIfString();
+    if (t_str) {
+      text_ = *t_str;
+    }
   }
 
   bool IsText() const override { return true; }
@@ -356,13 +367,12 @@ AttrPosition NodeList::PickRandomAttribute(Random* rnd) {
 
 std::unique_ptr<Node> Node::CreateRandom(Random* rnd) {
   switch ((*rnd)() % 2) {
-    default:
-      LOG(FATAL) << "SHOULD NOT HAPPEN";
-      return nullptr;
     case 0:
       return Element::CreateRandom(rnd);
     case 1:
       return Text::CreateRandom(rnd);
+    default:
+      NOTREACHED() << "SHOULD NOT HAPPEN";
   }
 }
 
@@ -548,7 +558,7 @@ extern "C" size_t LLVMFuzzerCustomMutator(uint8_t* data,
     return 0;
   }
 
-  memcpy(data, result.data(), result.size());
+  UNSAFE_TODO(memcpy(data, result.data(), result.size()));
   return result.size();
 }
 

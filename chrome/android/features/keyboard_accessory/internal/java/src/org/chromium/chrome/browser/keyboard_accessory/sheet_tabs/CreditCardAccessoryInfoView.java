@@ -11,8 +11,7 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.keyboard_accessory.R;
 import org.chromium.components.browser_ui.widget.chips.ChipView;
 
@@ -20,7 +19,6 @@ import org.chromium.components.browser_ui.widget.chips.ChipView;
  * This view represents a section of user credit card details in the payment method tab of the
  * keyboard accessory (manual fallback) sheet.
  */
-
 class CreditCardAccessoryInfoView extends LinearLayout {
     private ImageView mIcon;
     private ChipView mCCNumber;
@@ -30,9 +28,7 @@ class CreditCardAccessoryInfoView extends LinearLayout {
     private ChipView mCardholder;
     private ChipView mCvc;
 
-    /**
-     * Constructor for inflating from XML.
-     */
+    /** Constructor for inflating from XML. */
     public CreditCardAccessoryInfoView(Context context, AttributeSet attrs) {
         super(context, attrs);
     }

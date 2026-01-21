@@ -4,6 +4,8 @@
 
 #include "content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h"
 
+#include <string_view>
+
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
@@ -13,24 +15,26 @@
 #include <windows.h>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/win/nt_status.h"
+#include "sandbox/policy/features.h"
 #include "sandbox/policy/win/sandbox_win.h"
 #include "sandbox/win/src/sandbox_policy_base.h"
 #include "sandbox/win/src/security_level.h"
 #include "third_party/blink/public/common/switches.h"
 #endif
 
-#if BUILDFLAG(USE_ZYGOTE_HANDLE)
+#if BUILDFLAG(USE_ZYGOTE)
 #include "content/public/common/content_switches.h"
 #include "content/public/common/zygote/zygote_handle.h"  // nogncheck
 #endif
 
 namespace content {
 
-#if BUILDFLAG(USE_ZYGOTE_HANDLE)
-ZygoteHandle RendererSandboxedProcessLauncherDelegate::GetZygote() {
+#if BUILDFLAG(USE_ZYGOTE)
+ZygoteCommunication* RendererSandboxedProcessLauncherDelegate::GetZygote() {
   const base::CommandLine& browser_command_line =
       *base::CommandLine::ForCurrentProcess();
   base::CommandLine::StringType renderer_prefix =
@@ -39,7 +43,7 @@ ZygoteHandle RendererSandboxedProcessLauncherDelegate::GetZygote() {
     return nullptr;
   return GetGenericZygote();
 }
-#endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
+#endif  // BUILDFLAG(USE_ZYGOTE)
 
 #if BUILDFLAG(IS_MAC)
 bool RendererSandboxedProcessLauncherDelegate::EnableCpuSecurityMitigations() {
@@ -54,20 +58,27 @@ RendererSandboxedProcessLauncherDelegate::GetSandboxType() {
 
 #if BUILDFLAG(IS_WIN)
 RendererSandboxedProcessLauncherDelegateWin::
-    RendererSandboxedProcessLauncherDelegateWin(base::CommandLine* cmd_line,
-                                                bool is_jit_disabled)
-    : renderer_code_integrity_enabled_(
-          GetContentClient()->browser()->IsRendererCodeIntegrityEnabled()),
-      renderer_app_container_disabled_(
-          GetContentClient()->browser()->IsRendererAppContainerDisabled()) {
+    RendererSandboxedProcessLauncherDelegateWin(
+        const base::CommandLine& cmd_line,
+        bool is_pdf_renderer,
+        bool is_jit_disabled)
+    : renderer_app_container_disabled_(
+          GetContentClient()->browser()->IsAppContainerDisabled(
+              sandbox::mojom::Sandbox::kRenderer)),
+      is_pdf_renderer_(is_pdf_renderer),
+      restrict_core_sharing_(GetContentClient()
+                                 ->browser()
+                                 ->ShouldRestrictCoreSharingOnRenderer()) {
+  // PDF renderers must be jitless.
+  CHECK(!is_pdf_renderer || is_jit_disabled);
   if (is_jit_disabled) {
     dynamic_code_can_be_disabled_ = true;
     return;
   }
-  if (cmd_line->HasSwitch(blink::switches::kJavaScriptFlags)) {
+  if (cmd_line.HasSwitch(blink::switches::kJavaScriptFlags)) {
     std::string js_flags =
-        cmd_line->GetSwitchValueASCII(blink::switches::kJavaScriptFlags);
-    std::vector<base::StringPiece> js_flag_list = base::SplitStringPiece(
+        cmd_line.GetSwitchValueASCII(blink::switches::kJavaScriptFlags);
+    std::vector<std::string_view> js_flag_list = base::SplitStringPiece(
         js_flags, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     for (const auto& js_flag : js_flag_list) {
       if (js_flag == "--jitless") {
@@ -81,51 +92,53 @@ RendererSandboxedProcessLauncherDelegateWin::
 }
 
 std::string RendererSandboxedProcessLauncherDelegateWin::GetSandboxTag() {
-  // PDF renderers may have jit disabled while normal renderers will not.
-  return sandbox::policy::SandboxWin::GetSandboxTagForDelegate(
-      dynamic_code_can_be_disabled_ ? "renderer-jitless" : "renderer",
-      GetSandboxType());
+  if (is_pdf_renderer_) {
+    // All pdf renderers are jitless so only need one tag for these.
+    return sandbox::policy::SandboxWin::GetSandboxTagForDelegate(
+        "renderer-pdfium", GetSandboxType());
+  } else {
+    // Some renderers can be jitless so need different tags.
+    return sandbox::policy::SandboxWin::GetSandboxTagForDelegate(
+        dynamic_code_can_be_disabled_ ? "renderer-jitless" : "renderer",
+        GetSandboxType());
+  }
 }
 
-bool RendererSandboxedProcessLauncherDelegateWin::PreSpawnTarget(
-    sandbox::TargetPolicy* policy) {
-  sandbox::TargetConfig* config = policy->GetConfig();
-  if (!config->IsConfigured()) {
-    sandbox::policy::SandboxWin::AddBaseHandleClosePolicy(config);
+bool RendererSandboxedProcessLauncherDelegateWin::InitializeConfig(
+    sandbox::TargetConfig* config) {
+  DCHECK(!config->IsConfigured());
 
-    ContentBrowserClient::AppContainerFlags ac_flags(
-        ContentBrowserClient::AppContainerFlags::kAppContainerFlagNone);
-    if (renderer_app_container_disabled_) {
-      ac_flags = ContentBrowserClient::AppContainerFlags::
-          kAppContainerFlagDisableAppContainer;
-    }
-    const std::wstring& sid =
-        GetContentClient()->browser()->GetAppContainerSidForSandboxType(
-            GetSandboxType(), ac_flags);
-    if (!sid.empty())
-      sandbox::policy::SandboxWin::AddAppContainerPolicy(config, sid.c_str());
+  sandbox::policy::SandboxWin::AddBaseHandleClosePolicy(config);
 
-    // If the renderer process is protected by code integrity, more
-    // mitigations become available.
-    if (renderer_code_integrity_enabled_ && dynamic_code_can_be_disabled_) {
-      sandbox::MitigationFlags mitigation_flags =
-          config->GetDelayedProcessMitigations();
-      mitigation_flags |= sandbox::MITIGATION_DYNAMIC_CODE_DISABLE;
-      if (sandbox::SBOX_ALL_OK !=
-          config->SetDelayedProcessMitigations(mitigation_flags)) {
-        return false;
-      }
+  ContentBrowserClient::AppContainerFlags ac_flags(
+      ContentBrowserClient::AppContainerFlags::kAppContainerFlagNone);
+  if (renderer_app_container_disabled_) {
+    ac_flags = ContentBrowserClient::AppContainerFlags::
+        kAppContainerFlagDisableAppContainer;
+  }
+  const std::wstring& sid =
+      GetContentClient()->browser()->GetAppContainerSidForSandboxType(
+          GetSandboxType(), ac_flags);
+  if (!sid.empty()) {
+    sandbox::policy::SandboxWin::AddAppContainerPolicy(config, sid.c_str());
+  }
+
+  if (dynamic_code_can_be_disabled_) {
+    sandbox::MitigationFlags mitigation_flags =
+        config->GetDelayedProcessMitigations();
+    mitigation_flags |= sandbox::MITIGATION_DYNAMIC_CODE_DISABLE;
+    if (sandbox::SBOX_ALL_OK !=
+        config->SetDelayedProcessMitigations(mitigation_flags)) {
+      return false;
     }
   }
+
+  config->SetFilterEnvironment(/*filter=*/true);
 
   ContentBrowserClient::ChildSpawnFlags flags(
       ContentBrowserClient::ChildSpawnFlags::kChildSpawnFlagNone);
-  if (renderer_code_integrity_enabled_) {
-    flags = ContentBrowserClient::ChildSpawnFlags::
-        kChildSpawnFlagRendererCodeIntegrity;
-  }
   return GetContentClient()->browser()->PreSpawnChild(
-      policy, sandbox::mojom::Sandbox::kRenderer, flags);
+      config, sandbox::mojom::Sandbox::kRenderer, flags);
 }
 
 void RendererSandboxedProcessLauncherDelegateWin::PostSpawnTarget(
@@ -155,6 +168,15 @@ bool RendererSandboxedProcessLauncherDelegateWin::CetCompatible() {
   // non-compliant way. CET can be enabled where the renderer is known to
   // be jitless.
   return dynamic_code_can_be_disabled_;
+}
+
+bool RendererSandboxedProcessLauncherDelegateWin::
+    ShouldUseUntrustedMojoInvitation() {
+  return true;
+}
+
+bool RendererSandboxedProcessLauncherDelegateWin::RestrictCoreSharing() {
+  return restrict_core_sharing_;
 }
 
 #endif  // BUILDFLAG(IS_WIN)

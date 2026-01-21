@@ -4,31 +4,25 @@
 
 module new_tab_page.mojom;
 
+import "components/ntp_tiles/tile_type.mojom";
+import "chrome/browser/ui/webui/ntp_microsoft_auth/ntp_microsoft_auth_shared_ui.mojom";
 import "skia/public/mojom/skcolor.mojom";
 import "ui/webui/resources/cr_components/most_visited/most_visited.mojom";
 import "url/mojom/url.mojom";
 
-// A collection of background images.
-struct BackgroundCollection {
-  // Collection identifier.
-  string id;
-  // Localized string of the collection name.
-  string label;
-  // URL to a preview image for the collection. Can point to untrusted content.
-  url.mojom.Url preview_image_url;
-};
-
-// A background image in a collection.
-struct CollectionImage {
-  // Human readable attributions of the background image.
-  string attribution_1;
-  string attribution_2;
-  // URL associated with the background image. Used for href.
-  url.mojom.Url attribution_url;
-  // URL of image. Can point to untrusted content.
-  url.mojom.Url image_url;
-  // URL to a preview of the image. Can point to untrusted content.
-  url.mojom.Url preview_image_url;
+/**
+ * New Tab Page image sources. This enum must match the numbering for
+ * NTPBackgroundImageSource in enums.xml. These values are persisted to
+ * logs. Entries should not be renumbered, removed or reused.
+ */
+ enum NtpBackgroundImageSource {
+  kNoImage,
+  kFirstPartyThemeWithoutDailyRefresh,
+  kFirstPartyThemeWithDailyRefresh,
+  kThirdPartyTheme,
+  kUploadedImage,
+  kWallpaperSearch,
+  kWallpaperSearchInspiration,
 };
 
 // The background image URL and styling.
@@ -45,24 +39,28 @@ struct BackgroundImage {
   string? repeat_y;
   string? position_x;
   string? position_y;
-  // The CSS styling property set on the background image's scrim.
-  string? scrim_display;
+  // Source of background image.
+  NtpBackgroundImageSource image_source;
 };
 
 // A generic theme.
 struct Theme {
   skia.mojom.SkColor text_color;
   skia.mojom.SkColor background_color;
+  // True if user color mode is baseline.
+  bool is_baseline;
+  // True if theme is GM3 (uses user color pref).
+  bool is_gm3;
   // True if the background is custom.
   bool is_custom_background;
+  // True if daily refresh is enabled.
+  bool daily_refresh_enabled;
   // True if the theme is dark (e.g. NTP background color is dark).
   bool is_dark;
-  // True if the realbox icons should be themed based on the background color.
-  bool theme_realbox_icons;
   // Color of Google logo. If not set show the logo multi-colored.
   skia.mojom.SkColor? logo_color;
-  // Selected collection for daily refresh.
-  string? daily_refresh_collection_id;
+  // Collection id of the background image.
+  string? background_image_collection_id;
   // The background image.
   BackgroundImage? background_image;
   // Human readable attributions of the background image.
@@ -72,17 +70,6 @@ struct Theme {
   url.mojom.Url? background_image_attribution_url;
   // Theme settings for the NTP MV tiles.
   most_visited.mojom.MostVisitedTheme most_visited;
-};
-
-// Specifies look of the doodle share button.
-struct DoodleShareButton {
-  // Position in pixels relative to the doodle's upper left corner.
-  int32 x;
-  int32 y;
-  // Button background color.
-  skia.mojom.SkColor background_color;
-  // Data URL of icon shown on the button.
-  url.mojom.Url icon_url;
 };
 
 // Type of image of an image doodle. Used for metrics logging only.
@@ -107,8 +94,6 @@ struct ImageDoodle {
   // Color of the background the doodle was designed for. If the NTP background
   // differs from that color we show the doodle in a box of that color.
   skia.mojom.SkColor background_color;
-  // Specification of the share button.
-  DoodleShareButton? share_button;
   // URLs to be pinged when an image has been shown.
   url.mojom.Url image_impression_log_url;
   url.mojom.Url? animation_impression_log_url;
@@ -224,33 +209,14 @@ interface PageHandlerFactory {
 
 // Browser-side handler for requests from WebUI page.
 interface PageHandler {
-  // Sets the background image and notifies all NTPs of the change.
-  SetBackgroundImage(string attribution_1, string attribution_2,
-      url.mojom.Url attribution_url, url.mojom.Url image_url,
-      url.mojom.Url thumbnail_url);
-  // Sets collection id for daily refresh. When |collection_id| is empty, the
-  // daily refresh is turned off.
-  SetDailyRefreshCollectionId(string collection_id);
-  // Clears the background and daily refresh settings.
-  SetNoBackgroundImage();
-  // Reverts any changes to the background when a background preview
-  // is cancelled.
-  RevertBackgroundChanges();
-  // Confirms that background has been changed.
-  ConfirmBackgroundChanges();
-  // Sets the visibility of NTP tiles and whether custom links are enabled.
-  SetMostVisitedSettings(bool custom_links_enabled, bool shortcuts_visible);
-  // Returns the visibility of NTP tiles and whether custom links are enabled.
-  GetMostVisitedSettings() => (bool custom_links_enabled,
-                               bool shortcuts_visible);
-  // Returns the collections of background images.
-  GetBackgroundCollections() => (array<BackgroundCollection> collections);
-  // Returns the images of a collection identified by |collection_id|.
-  GetBackgroundImages(string collection_id) => (array<CollectionImage> images);
+  // Sets the visibility of NTP tiles and the shortcuts type.
+  SetMostVisitedSettings(ntp_tiles.mojom.TileType shortcuts_type,
+    bool shortcuts_visible);
+  // Returns the visibility of NTP tiles and the shortcuts type.
+  GetMostVisitedSettings() => (ntp_tiles.mojom.TileType shortcuts_type,
+    bool shortcuts_visible);
   // Gets current doodle if there is one.
   GetDoodle() => (Doodle? doodle);
-  // Choose custom background from local file system.
-  ChooseLocalCustomBackground() => (bool success);
   // Updates middle slot promo data. Triggers a call to |SetPromo|.
   UpdatePromoData();
   // Marks a promo as blocked.
@@ -263,31 +229,41 @@ interface PageHandler {
   OnRestoreModule(string module_id);
   // If |visible| the modules will be shown.
   SetModulesVisible(bool visible);
-  // Disables module with ID |module_id| if |disabled|. Enables otherwise.
-  SetModuleDisabled(string module_id, bool disabled);
   // Triggers a call to |SetDisabledModules|.
   UpdateDisabledModules();
   // Called when at least one module has loaded with data.
   // `module_ids` is an array of module descriptor ids that identifies the
   // modules that loaded with data.
   OnModulesLoadedWithData(array<string> module_ids);
+  // Called when a user uses a module. May lead to a HaTS survey being
+  // displayed or an in product help promo being closed.
+  OnModuleUsed(string module_id);
   // Returns a list of available module id and name pairs.
   GetModulesIdNames() => (array<ModuleIdName> data);
+  // Returns a list of module ids that are eligible for auto removal.
+  GetModulesEligibleForRemoval() => (array<string> module_ids);
   // Sets the order of modules.
   SetModulesOrder(array<string> module_ids);
   // Returns the order of modules or an empty array if the user has not
   // reordered them before.
   GetModulesOrder() => (array<string> module_ids);
-  // Increment the number of times the user has seen modules.
-  IncrementModulesShownCount();
-  // If |visible| Modular NTP Desktop v1 First Run Experience will be shown.
-  SetModulesFreVisible(bool visible);
-  // Triggers a call to |SetModulesFreVisibility|.
-  UpdateModulesFreVisibility();
-  // Log user's FRE |optInStatus|.
-  LogModulesFreOptInStatus(OptInStatus opt_in_status);
-  // Shows customize chrome in unified side panel.
-  ShowCustomizeChromeSidePanel();
+  // Triggers a call to |SetModulesLoadable|.
+  UpdateModulesLoadable();
+  // Disables modules with IDs |module_ids| if |disabled|. Enables otherwise.
+  // `is_user_action` is true if the action was triggered by a user action.
+  SetModulesDisabled(array<string> module_ids,
+                     bool disabled,
+                     bool is_user_action);
+  // Updates the visibility of the action chips in the NTP on any pref changes.
+  UpdateActionChipsVisibility();
+  // Triggers a call to |FooterVisibilityUpdated|.
+  UpdateFooterVisibility();
+  // Increments count of times the compose button was shown.
+  IncrementComposeButtonShownCount();
+  // Opens Customize Chrome if eligibility conditions are met.
+  MaybeTriggerAutomaticCustomizeChromePromo();
+  // Records that the context menu was clicked.
+  RecordContextMenuClick();
 
   // ======= METRICS =======
   // Logs that the One Google Bar was added to the DOM / loaded in an iframe at
@@ -324,15 +300,25 @@ interface PageHandler {
 
 // WebUI-side handler for requests from the browser.
 interface Page {
-  // Called when the customize chrome side panel is shown/hidden.
-  CustomizeChromeSidePanelVisibilityChanged(bool visible);
   // Sets the current theme.
   SetTheme(Theme theme);
   // Disables the modules in |ids|. If |all|, disables all modules and passes an
   // empty list for |ids|.
   SetDisabledModules(bool all, array<string> ids);
-  // Sets Modular NTP Desktop v1 First Run Experience's visibility to |visible|.
-  SetModulesFreVisibility(bool visible);
+  // Allows modules to load on NTP when the UI has postponed module loading for
+  // some reason.
+  SetModulesLoadable();
+  // Sets the action chips visibility.
+  SetActionChipsVisibility(bool visible);
   // Sets NTP homepage promo.
   SetPromo(Promo? promo);
+  // Shows a toast with information about Chrome Webstore themes.
+  ShowWebstoreToast();
+  // Sets wallpaper search button's visibility to |visible|.
+  SetWallpaperSearchButtonVisibility(bool visible);
+  // Called when the NTP footer is shown or hidden.
+  FooterVisibilityUpdated(bool visible);
+  // Called when the embedded chrome-untrusted:// document wants to bind Mojo
+  // interfaces for communicating with the chrome:// document.
+  ConnectToParentDocument(pending_remote<MicrosoftAuthUntrustedDocument> child_untrusted_document_remote);
 };

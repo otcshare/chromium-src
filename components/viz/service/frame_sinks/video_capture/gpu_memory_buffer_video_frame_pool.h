@@ -7,10 +7,12 @@
 
 #include <memory>
 
+#include "base/sequence_checker.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/service/frame_sinks/video_capture/video_frame_pool.h"
 #include "components/viz/service/viz_service_export.h"
-#include "media/video/renderable_gpu_memory_buffer_video_frame_pool.h"
+#include "media/video/renderable_mappable_shared_image_video_frame_pool.h"
+#include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
 
 namespace viz {
 
@@ -22,7 +24,10 @@ class VIZ_SERVICE_EXPORT GpuMemoryBufferVideoFramePool : public VideoFramePool {
   // The |context_provider| must outlive this instance.
   explicit GpuMemoryBufferVideoFramePool(
       int capacity,
-      GmbVideoFramePoolContextProvider* context_provider);
+      media::VideoPixelFormat format,
+      const gfx::ColorSpace& color_space,
+      GmbVideoFramePoolContextProvider* context_provider,
+      mojom::BufferFormatPreference buffer_format_preference);
   ~GpuMemoryBufferVideoFramePool() override;
 
   GpuMemoryBufferVideoFramePool(const GpuMemoryBufferVideoFramePool&& other) =
@@ -40,6 +45,12 @@ class VIZ_SERVICE_EXPORT GpuMemoryBufferVideoFramePool : public VideoFramePool {
 
   size_t GetNumberOfReservedFrames() const override;
 
+  // Returns the buffer format preference used to configure this pool.
+  // This can be used in tests to verify how the pool was initialized.
+  mojom::BufferFormatPreference buffer_format_preference() const {
+    return buffer_format_preference_;
+  }
+
  private:
   void RecreateVideoFramePool();
 
@@ -48,10 +59,14 @@ class VIZ_SERVICE_EXPORT GpuMemoryBufferVideoFramePool : public VideoFramePool {
   // number of reserved frames will be decremented.
   void OnVideoFrameDestroyed(uint32_t frame_pool_generation);
 
+  // Support multiple format & color space
+  const media::VideoPixelFormat format_;
+  const gfx::ColorSpace color_space_;
+
   raw_ptr<GmbVideoFramePoolContextProvider> context_provider_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
-  std::unique_ptr<media::RenderableGpuMemoryBufferVideoFramePool>
+  std::unique_ptr<media::RenderableMappableSharedImageVideoFramePool>
       video_frame_pool_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Number of reserved video frames.
@@ -66,6 +81,10 @@ class VIZ_SERVICE_EXPORT GpuMemoryBufferVideoFramePool : public VideoFramePool {
       0;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  // Our consumer preferred VideoBufferHandle type.
+  mojom::BufferFormatPreference buffer_format_preference_ =
+      mojom::BufferFormatPreference::kDefault;
 
   base::WeakPtrFactory<GpuMemoryBufferVideoFramePool> weak_factory_{this};
 };

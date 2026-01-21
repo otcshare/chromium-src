@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
@@ -16,11 +17,8 @@
 #include "components/invalidation/impl/channels_states.h"
 #include "components/invalidation/impl/per_user_topic_subscription_request.h"
 #include "components/invalidation/public/identity_provider.h"
-#include "components/invalidation/public/invalidation_export.h"
 #include "components/invalidation/public/invalidation_util.h"
-#include "components/invalidation/public/invalidator_state.h"
 #include "net/base/backoff_entry.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -37,20 +35,25 @@ namespace invalidation {
 // Manages the details of subscribing to topics for invalidations. For example,
 // Chrome Sync uses the ModelTypes (bookmarks, passwords, autofill data) as
 // topics.
-class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
+class PerUserTopicSubscriptionManager {
  public:
+  using RequestType = PerUserTopicSubscriptionRequest::RequestType;
   class Observer {
    public:
+    virtual ~Observer() = default;
+
     virtual void OnSubscriptionChannelStateChanged(
         SubscriptionChannelState state) = 0;
+    virtual void OnSubscriptionRequestFinished(Topic topic,
+                                               RequestType request_type,
+                                               Status code) = 0;
   };
 
   PerUserTopicSubscriptionManager(
       IdentityProvider* identity_provider,
       PrefService* pref_service,
       network::mojom::URLLoaderFactory* url_loader_factory,
-      const std::string& project_id,
-      bool migrate_prefs);
+      const std::string& project_id);
   PerUserTopicSubscriptionManager(
       const PerUserTopicSubscriptionManager& other) = delete;
   PerUserTopicSubscriptionManager& operator=(
@@ -59,11 +62,10 @@ class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
 
   // Just calls std::make_unique. For ease of base::Bind'ing
   static std::unique_ptr<PerUserTopicSubscriptionManager> Create(
+      network::mojom::URLLoaderFactory* url_loader_factory,
       IdentityProvider* identity_provider,
       PrefService* pref_service,
-      network::mojom::URLLoaderFactory* url_loader_factory,
-      const std::string& project_id,
-      bool migrate_prefs);
+      const std::string& project_id);
 
   // RegisterProfilePrefs and RegisterPrefs register the same prefs, because on
   // device level (sign in screen, device local account) we spin up separate
@@ -77,10 +79,11 @@ class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
   virtual void Init();
 
   // Triggers subscription and/or unsubscription requests so that the set of
-  // subscribed topics matches |topics|. If the |instance_id_token| has changed,
-  // triggers re-subscription for all topics.
-  virtual void UpdateSubscribedTopics(const Topics& topics,
-                                      const std::string& instance_id_token);
+  // subscribed topics matches |topics|. If the |new_instance_id_token| has
+  // changed, triggers re-subscription for all topics.
+  virtual void UpdateSubscribedTopics(const TopicMap& topics,
+                                      const std::string& new_instance_id_token);
+  void UpdateSubscribedTopics(const TopicMap& topics);
 
   // Called when the InstanceID token (previously passed to
   // UpdateSubscribedTopics()) is deleted or revoked. Clears the cached token
@@ -93,9 +96,7 @@ class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  base::Value::Dict CollectDebugData() const;
-
-  virtual absl::optional<Topic> LookupSubscribedPublicTopicByPrivateTopic(
+  virtual std::optional<Topic> LookupSubscribedPublicTopicByPrivateTopic(
       const std::string& private_topic) const;
 
   TopicSet GetSubscribedTopicsForTest() const;
@@ -104,9 +105,20 @@ class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
     return pending_subscriptions_.empty();
   }
 
+  size_t GetPendingSubscriptionsCountForTest() const {
+    return pending_subscriptions_.size();
+  }
+
+ protected:
+  // These are protected so that the mock can access them.
+  void NotifySubscriptionChannelStateChange(
+      SubscriptionChannelState invalidator_state);
+  void NotifySubscriptionRequestFinished(Topic topic,
+                                         RequestType request_type,
+                                         Status code);
+
  private:
   struct SubscriptionEntry;
-  enum class TokenStateOnSubscriptionRequest;
 
   void StartPendingSubscriptions();
 
@@ -133,19 +145,25 @@ class INVALIDATION_EXPORT PerUserTopicSubscriptionManager {
   void OnAccessTokenRequestSucceeded(const std::string& access_token);
   void OnAccessTokenRequestFailed(GoogleServiceAuthError error);
 
-  void DropAllSavedSubscriptionsOnTokenChange();
-  TokenStateOnSubscriptionRequest DropAllSavedSubscriptionsOnTokenChangeImpl();
+  // Compares `new_instance_id_token` and `instance_id_token_` to report the
+  // nature of the change (if any) to UMA.
+  void ReportNewInstanceIdTokenState(
+      const std::string& new_instance_id_token) const;
 
-  void NotifySubscriptionChannelStateChange(
-      SubscriptionChannelState invalidator_state);
+  // In case `new_instance_id_token` differs from `instance_id_token_`, this
+  // drops subscriptions from memory and `pref_service_`.
+  void DropAllSavedSubscriptionsOnTokenChange(
+      const std::string& new_instance_id_token);
+
+  // Stores `new_instance_id_token` as `instance_id_token_` and persists it in
+  // `pref_service_`.
+  void StoreNewToken(const std::string& new_instance_id_token);
 
   const raw_ptr<PrefService> pref_service_;
   const raw_ptr<IdentityProvider> identity_provider_;
   const raw_ptr<network::mojom::URLLoaderFactory> url_loader_factory_;
 
   const std::string project_id_;
-
-  const bool migrate_prefs_;
 
   // Subscription or unsubscription requests that are either scheduled or
   // started, but not finished yet.

@@ -38,6 +38,11 @@ class FindInPageManager;
     didSelectMatchAtIndex:(NSInteger)index
         withContextString:(NSString*)contextString
               forWebState:(web::WebState*)webState;
+
+// Called when the Find in Page manager detects the Find session has been ended
+// by the user through the system Find panel.
+- (void)userDismissedFindNavigatorForManager:(web::FindInPageManager*)manager;
+
 @end
 
 namespace web {
@@ -59,12 +64,15 @@ class FindInPageManagerDelegateBridge : public web::FindInPageManagerDelegate {
   ~FindInPageManagerDelegateBridge() override;
 
   // FindInPageManagerDelegate overrides.
-  void DidHighlightMatches(WebState* web_state,
+  void DidHighlightMatches(FindInPageManager* manager,
+                           WebState* web_state,
                            int match_count,
                            NSString* query) override;
-  void DidSelectMatch(WebState* web_state,
+  void DidSelectMatch(FindInPageManager* manager,
+                      WebState* web_state,
                       int index,
                       NSString* context_string) override;
+  void UserDismissedFindNavigator(FindInPageManager* manager) override;
 
  private:
   __weak id<CRWFindInPageManagerDelegate> delegate_ = nil;

@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests that DOMAgent.setOuterHTML can handle whitespace-only text nodes.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <div id="container" style="display:none">
@@ -18,7 +20,7 @@
   async function setChildTextContent(textContent) {
     var text = ElementsTestRunner.containerText.replace(/<child id="identity">.*<\/child>/, `<child id="identity">${textContent}</child>`);
     TestRunner.addResult(`Setting textContent to "${textContent}"`)
-    await TestRunner.DOMAgent.setOuterHTML(ElementsTestRunner.containerId, text);
+    await TestRunner.DOMAgent.invoke_setOuterHTML({nodeId: ElementsTestRunner.containerId, outerHTML: text});
     dumpEvents();
   }
 
@@ -28,7 +30,7 @@
     for (let i = 0; i < ElementsTestRunner.events.length; ++i)
       TestRunner.addResult(ElementsTestRunner.events[i]);
 
-    ElementsTestRunner.events = [];
+    ElementsTestRunner.events.length = 0; // 'events' is readonly.
     TestRunner.addResult("");
   }
 

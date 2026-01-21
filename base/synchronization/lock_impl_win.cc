@@ -4,9 +4,9 @@
 
 #include "base/synchronization/lock_impl.h"
 
-#include "base/debug/activity_tracker.h"
-
 #include <windows.h>
+
+#include "base/synchronization/lock_metrics_recorder.h"
 
 namespace base {
 namespace internal {
@@ -15,8 +15,8 @@ LockImpl::LockImpl() : native_handle_(SRWLOCK_INIT) {}
 
 LockImpl::~LockImpl() = default;
 
-void LockImpl::LockInternalWithTracking() {
-  base::debug::ScopedLockAcquireActivity lock_activity(this);
+void LockImpl::LockInternal() {
+  LockMetricsRecorder::ScopedLockAcquisitionTimer timer;
   ::AcquireSRWLockExclusive(reinterpret_cast<PSRWLOCK>(&native_handle_));
 }
 

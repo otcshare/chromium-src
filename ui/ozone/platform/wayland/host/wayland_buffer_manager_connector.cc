@@ -4,19 +4,28 @@
 
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_connector.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_wp_color_manager.h"
 
 namespace ui {
 
 WaylandBufferManagerConnector::WaylandBufferManagerConnector(
+    WaylandConnection* connection,
     WaylandBufferManagerHost* buffer_manager_host)
-    : buffer_manager_host_(buffer_manager_host) {
-}
+    : connection_(connection), buffer_manager_host_(buffer_manager_host) {}
 
 WaylandBufferManagerConnector::~WaylandBufferManagerConnector() {
   DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
+}
+
+void WaylandBufferManagerConnector::OnHdrEnabledChanged(bool hdr_enabled) {
+  DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
+  if (auto* color_manager = connection_->wp_color_manager()) {
+    color_manager->OnHdrEnabledChanged(hdr_enabled);
+  }
 }
 
 void WaylandBufferManagerConnector::OnChannelDestroyed(int host_id) {
@@ -35,7 +44,7 @@ void WaylandBufferManagerConnector::OnGpuServiceLaunched(
 
   auto on_terminate_gpu_cb =
       base::BindOnce(&WaylandBufferManagerConnector::OnTerminateGpuProcess,
-                     base::Unretained(this));
+                     weak_factory_.GetWeakPtr());
   buffer_manager_host_->SetTerminateGpuCallback(std::move(on_terminate_gpu_cb));
   terminate_callback_ = std::move(terminate_callback);
 
@@ -47,17 +56,18 @@ void WaylandBufferManagerConnector::OnGpuServiceLaunched(
       buffer_manager_gpu_remote.BindNewPipeAndPassReceiver().PassPipe());
   DCHECK(buffer_manager_gpu_remote);
 
-  wl::BufferFormatsWithModifiersMap buffer_formats_with_modifiers =
-      buffer_manager_host_->GetSupportedBufferFormats();
+  wl::SharedImageFormatsWithModifiersMap shared_image_formats_with_modifiers =
+      buffer_manager_host_->GetSupportedSharedImageFormats();
   bool supports_dma_buf = false;
 #if defined(WAYLAND_GBM)
   supports_dma_buf = buffer_manager_host_->SupportsDmabuf();
 #endif
   buffer_manager_gpu_remote->Initialize(
-      std::move(pending_remote), buffer_formats_with_modifiers,
+      std::move(pending_remote), shared_image_formats_with_modifiers,
       supports_dma_buf, buffer_manager_host_->SupportsViewporter(),
       buffer_manager_host_->SupportsAcquireFence(),
-      buffer_manager_host_->GetSurfaceAugmentorVersion());
+      buffer_manager_host_->SupportsOverlays(),
+      buffer_manager_host_->SupportsSinglePixelBuffer());
 }
 
 void WaylandBufferManagerConnector::OnTerminateGpuProcess(std::string message) {

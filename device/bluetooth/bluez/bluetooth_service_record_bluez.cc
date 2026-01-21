@@ -23,8 +23,9 @@ const std::vector<uint16_t> BluetoothServiceRecordBlueZ::GetAttributeIds()
     const {
   std::vector<uint16_t> ids;
   ids.reserve(attributes_.size());
-  for (const auto& attribute : attributes_)
+  for (const auto& attribute : attributes_) {
     ids.emplace_back(attribute.first);
+  }
   return ids;
 }
 
@@ -39,14 +40,15 @@ void BluetoothServiceRecordBlueZ::AddRecordEntry(
     uint16_t id,
     const BluetoothServiceAttributeValueBlueZ& value) {
   auto it = attributes_.find(id);
-  if (it != attributes_.end())
+  if (it != attributes_.end()) {
     attributes_.erase(it);
+  }
   attributes_.insert(
       std::pair<uint16_t, BluetoothServiceAttributeValueBlueZ>(id, value));
 }
 
-bool BluetoothServiceRecordBlueZ::IsAttributePresented(uint16_t id) {
-  return attributes_.find(id) != attributes_.end();
+bool BluetoothServiceRecordBlueZ::IsAttributePresented(uint16_t id) const {
+  return attributes_.contains(id);
 }
 
 }  // namespace bluez

@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "net/base/net_export.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_result.h"
@@ -20,10 +20,11 @@ namespace net {
 class CanonicalCookie;
 
 // The publicly relevant reasons a cookie might be changed.
+// LINT.IfChange(CookieChangeCause)
 enum class CookieChangeCause {
   // The cookie was inserted.
   INSERTED,
-  // The cookie was changed directly by a consumer's action.
+  // The cookie was deleted directly by a consumer's action.
   EXPLICIT,
   // The cookie was deleted, but no more details are known.
   UNKNOWN_DELETION,
@@ -35,8 +36,17 @@ enum class CookieChangeCause {
   // The cookie was automatically evicted during garbage collection.
   EVICTED,
   // The cookie was overwritten with an already-expired expiration date.
-  EXPIRED_OVERWRITE
+  EXPIRED_OVERWRITE,
+  // The newly inserted cookie overwrote a cookie but did not result in any
+  // change.
+  INSERTED_NO_CHANGE_OVERWRITE,
+  // The newly inserted cookie overwrote a cookie but did not result in any
+  // value change, but it's web observable (e.g. updates the expiry).
+  INSERTED_NO_VALUE_CHANGE_OVERWRITE,
+
+  kMaxValue = INSERTED_NO_VALUE_CHANGE_OVERWRITE,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:CookieChangeCause)
 
 struct NET_EXPORT CookieChangeInfo {
   CookieChangeInfo();
@@ -140,7 +150,7 @@ class CookieChangeDispatcher {
   AddCallbackForCookie(
       const GURL& url,
       const std::string& name,
-      const absl::optional<CookiePartitionKey>& cookie_partition_key,
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
       CookieChangeCallback callback) = 0;
 
   // Observe changes to the cookies that would be sent for a request to `url`.
@@ -153,14 +163,14 @@ class CookieChangeDispatcher {
   [[nodiscard]] virtual std::unique_ptr<CookieChangeSubscription>
   AddCallbackForUrl(
       const GURL& url,
-      const absl::optional<CookiePartitionKey>& cookie_partition_key,
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
       CookieChangeCallback callback) = 0;
 
   // Observe all the CookieStore's changes.
   //
   // The callback will not observe a few bookkeeping changes.
   // See kChangeCauseMapping in cookie_monster.cc for details.
-  // TODO(crbug.com/1225444): Add support for Partitioned cookies.
+  // TODO(crbug.com/40188414): Add support for Partitioned cookies.
   [[nodiscard]] virtual std::unique_ptr<CookieChangeSubscription>
   AddCallbackForAllChanges(CookieChangeCallback callback) = 0;
 };

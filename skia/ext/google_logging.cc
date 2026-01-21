@@ -12,9 +12,9 @@
 
 void SkDebugf_FileLine(const char* file, int line, const char* format, ...) {
 #if DCHECK_IS_ON()
-  int severity = logging::LOG_ERROR;
+  int severity = logging::LOGGING_ERROR;
 #else
-  int severity = logging::LOG_INFO;
+  int severity = logging::LOGGING_INFO;
 #endif
   if (severity < logging::GetMinLogLevel())
     return;
@@ -23,20 +23,20 @@ void SkDebugf_FileLine(const char* file, int line, const char* format, ...) {
   va_start(ap, format);
 
   std::string msg;
-  base::StringAppendV(&msg, format, ap);
+  UNSAFE_TODO(base::StringAppendV(&msg, format, ap));
   va_end(ap);
 
   logging::LogMessage(file, line, severity).stream() << msg;
 }
 
 void SkAbort_FileLine(const char* file, int line, const char* format, ...) {
-  int severity = logging::LOG_FATAL;
+  int severity = logging::LOGGING_FATAL;
 
   va_list ap;
   va_start(ap, format);
 
   std::string msg;
-  base::StringAppendV(&msg, format, ap);
+  UNSAFE_TODO(base::StringAppendV(&msg, format, ap));
   va_end(ap);
 
   logging::LogMessage(file, line, severity).stream() << msg;

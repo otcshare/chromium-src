@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/animation/css/css_animation.h"
+
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/trigger_scoped_name.h"
 
 namespace blink {
 
@@ -17,16 +19,20 @@ CSSAnimation::CSSAnimation(ExecutionContext* execution_context,
                            const String& animation_name)
     : Animation(execution_context, timeline, content),
       animation_index_(animation_index),
-      animation_name_(animation_name),
-      ignore_css_play_state_(false),
-      ignore_css_timeline_(false) {
+      animation_name_(animation_name) {
   // The owning_element does not always equal to the target element of an
   // animation. The following spec gives an example:
   // https://drafts.csswg.org/css-animations-2/#owning-element-section
   owning_element_ = To<KeyframeEffect>(effect())->EffectTarget();
 }
 
-String CSSAnimation::playState() const {
+bool CSSAnimation::IsEventDispatchAllowed() const {
+  // If there is no owning element, CSS animation events are not dispatched:
+  // https://drafts.csswg.org/css-animations-2/#event-dispatch
+  return OwningElement() && Animation::IsEventDispatchAllowed();
+}
+
+V8AnimationPlayState CSSAnimation::playState() const {
   FlushStyles();
   return Animation::playState();
 }
@@ -60,6 +66,32 @@ void CSSAnimation::setTimeline(AnimationTimeline* timeline) {
   ignore_css_timeline_ = true;
 }
 
+void CSSAnimation::setRangeStart(const RangeBoundary* range_start,
+                                 ExceptionState& exception_state) {
+  Animation::setRangeStart(range_start, exception_state);
+  ignore_css_range_start_ = true;
+}
+
+void CSSAnimation::setRangeEnd(const RangeBoundary* range_end,
+                               ExceptionState& exception_state) {
+  Animation::setRangeEnd(range_end, exception_state);
+  ignore_css_range_end_ = true;
+}
+
+void CSSAnimation::SetRange(const std::optional<TimelineOffset>& range_start,
+                            const std::optional<TimelineOffset>& range_end) {
+  if (GetIgnoreCSSRangeStart() && GetIgnoreCSSRangeEnd()) {
+    return;
+  }
+
+  const std::optional<TimelineOffset>& adjusted_range_start =
+      GetIgnoreCSSRangeStart() ? GetRangeStartInternal() : range_start;
+  const std::optional<TimelineOffset>& adjusted_range_end =
+      GetIgnoreCSSRangeEnd() ? GetRangeEndInternal() : range_end;
+
+  Animation::SetRange(adjusted_range_start, adjusted_range_end);
+}
+
 void CSSAnimation::setStartTime(const V8CSSNumberish* start_time,
                                 ExceptionState& exception_state) {
   PlayStateTransitionScope scope(*this);
@@ -76,8 +108,9 @@ AnimationEffect::EventDelegate* CSSAnimation::CreateEventDelegate(
 void CSSAnimation::FlushStyles() const {
   // TODO(1043778): Flush is likely not required once the CSSAnimation is
   // disassociated from its owning element.
-  if (GetDocument())
+  if (GetDocument()) {
     GetDocument()->UpdateStyleAndLayoutTree();
+  }
 }
 
 CSSAnimation::PlayStateTransitionScope::PlayStateTransitionScope(
@@ -90,6 +123,19 @@ CSSAnimation::PlayStateTransitionScope::~PlayStateTransitionScope() {
   bool is_paused = animation_.Paused();
   if (was_paused_ != is_paused)
     animation_.ignore_css_play_state_ = true;
+}
+
+void CSSAnimation::SetNamedTriggerAttachment(
+    Member<const TriggerScopedName> scope,
+    AnimationTrigger* trigger) {
+  named_trigger_attachments_.Set(scope, trigger);
+}
+
+void CSSAnimation::Trace(blink::Visitor* visitor) const {
+  Animation::Trace(visitor);
+  visitor->Trace(owning_element_);
+  visitor->Trace(trigger_attachments_);
+  visitor->Trace(named_trigger_attachments_);
 }
 
 }  // namespace blink

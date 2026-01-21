@@ -40,5 +40,7 @@ export function fakeMetricsPrivate(): MetricsTracker {
   chrome.metricsPrivate.recordValue = (m, v) => metrics.record(m.metricName, v);
   chrome.metricsPrivate.recordEnumerationValue = (m, v) => metrics.record(m, v);
   chrome.metricsPrivate.recordSmallCount = (m, v) => metrics.record(m, v);
+  chrome.metricsPrivate.recordMediumCount = (m, v) => metrics.record(m, v);
+  chrome.metricsPrivate.recordTime = (m, v) => metrics.record(m, v);
   return metrics;
 }

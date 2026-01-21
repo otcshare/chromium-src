@@ -5,13 +5,13 @@
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 
 #include "base/time/time.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/renderer/platform/loader/fetch/code_cache_host.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -22,12 +22,13 @@ class CachedMetadataSenderImpl : public CachedMetadataSender {
                            mojom::blink::CodeCacheType);
   ~CachedMetadataSenderImpl() override = default;
 
-  void Send(CodeCacheHost*, const uint8_t*, size_t) override;
+  void Send(CodeCacheHost*, base::span<const uint8_t>) override;
   bool IsServedFromCacheStorage() override { return false; }
 
  private:
   const KURL response_url_;
   const base::Time response_time_;
+  const base::Time original_response_time_;
   const mojom::blink::CodeCacheType code_cache_type_;
 };
 
@@ -36,6 +37,7 @@ CachedMetadataSenderImpl::CachedMetadataSenderImpl(
     mojom::blink::CodeCacheType code_cache_type)
     : response_url_(response.CurrentRequestUrl()),
       response_time_(response.ResponseTime()),
+      original_response_time_(response.OriginalResponseTime()),
       code_cache_type_(code_cache_type) {
   // WebAssembly always uses the site isolated code cache.
   DCHECK(response.CacheStorageCacheName().IsNull() ||
@@ -46,15 +48,14 @@ CachedMetadataSenderImpl::CachedMetadataSenderImpl(
 }
 
 void CachedMetadataSenderImpl::Send(CodeCacheHost* code_cache_host,
-                                    const uint8_t* data,
-                                    size_t size) {
+                                    base::span<const uint8_t> data) {
   if (!code_cache_host)
     return;
   // TODO(crbug.com/862940): This should use the Blink variant of the
   // interface.
   code_cache_host->get()->DidGenerateCacheableMetadata(
-      code_cache_type_, response_url_, response_time_,
-      mojo_base::BigBuffer(base::make_span(data, size)));
+      code_cache_type_, response_url_, original_response_time_,
+      mojo_base::BigBuffer(data));
 }
 
 // This is a CachedMetadataSender implementation that does nothing.
@@ -63,7 +64,7 @@ class NullCachedMetadataSender : public CachedMetadataSender {
   NullCachedMetadataSender() = default;
   ~NullCachedMetadataSender() override = default;
 
-  void Send(CodeCacheHost*, const uint8_t*, size_t) override {}
+  void Send(CodeCacheHost*, base::span<const uint8_t>) override {}
   bool IsServedFromCacheStorage() override { return false; }
 };
 
@@ -75,7 +76,7 @@ class ServiceWorkerCachedMetadataSender : public CachedMetadataSender {
                                     scoped_refptr<const SecurityOrigin>);
   ~ServiceWorkerCachedMetadataSender() override = default;
 
-  void Send(CodeCacheHost*, const uint8_t*, size_t) override;
+  void Send(CodeCacheHost*, base::span<const uint8_t>) override;
   bool IsServedFromCacheStorage() override { return true; }
 
  private:
@@ -96,37 +97,32 @@ ServiceWorkerCachedMetadataSender::ServiceWorkerCachedMetadataSender(
 }
 
 void ServiceWorkerCachedMetadataSender::Send(CodeCacheHost* code_cache_host,
-                                             const uint8_t* data,
-                                             size_t size) {
+                                             base::span<const uint8_t> data) {
   if (!code_cache_host)
     return;
   code_cache_host->get()->DidGenerateCacheableMetadataInCacheStorage(
-      response_url_, response_time_,
-      mojo_base::BigBuffer(base::make_span(data, size)),
-      WebSecurityOrigin(security_origin_), cache_storage_cache_name_);
+      response_url_, response_time_, mojo_base::BigBuffer(data),
+      cache_storage_cache_name_);
 }
 
 // static
 void CachedMetadataSender::SendToCodeCacheHost(
     CodeCacheHost* code_cache_host,
     mojom::blink::CodeCacheType code_cache_type,
-    WTF::String url,
+    String url,
     base::Time response_time,
-    scoped_refptr<const SecurityOrigin> origin,
     const String& cache_storage_name,
-    const uint8_t* data,
-    size_t size) {
-  if (!code_cache_host)
+    base::span<const uint8_t> data) {
+  if (!code_cache_host) {
     return;
+  }
   if (cache_storage_name.IsNull()) {
     code_cache_host->get()->DidGenerateCacheableMetadata(
-        code_cache_type, KURL(url), response_time,
-        mojo_base::BigBuffer(base::make_span(data, size)));
+        code_cache_type, KURL(url), response_time, mojo_base::BigBuffer(data));
   } else {
     code_cache_host->get()->DidGenerateCacheableMetadataInCacheStorage(
-        KURL(url), response_time,
-        mojo_base::BigBuffer(base::make_span(data, size)),
-        WebSecurityOrigin(origin), cache_storage_name);
+        KURL(url), response_time, mojo_base::BigBuffer(data),
+        cache_storage_name);
   }
 }
 

@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/pickle.h"
+
 #include <fuzzer/FuzzedDataProvider.h>
 
+#include <string_view>
 #include <tuple>
 
-#include "base/pickle.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 
 namespace {
 constexpr int kIterations = 16;
@@ -23,10 +27,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Use the first kReadControlBytes bytes of the fuzzer input to control how
   // the pickled data is read.
   FuzzedDataProvider data_provider(data, kReadControlBytes);
-  data += kReadControlBytes;
+  UNSAFE_TODO(data += kReadControlBytes);
   size -= kReadControlBytes;
 
-  base::Pickle pickle(reinterpret_cast<const char*>(data), size);
+  base::Pickle pickle =
+      base::Pickle::WithUnownedBuffer(UNSAFE_BUFFERS(base::span(data, size)));
   base::PickleIterator iter(pickle);
   for (int i = 0; i < kIterations; i++) {
     uint8_t read_type = data_provider.ConsumeIntegral<uint8_t>();
@@ -82,7 +87,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         break;
       }
       case 10: {
-        base::StringPiece result;
+        std::string_view result;
         std::ignore = iter.ReadStringPiece(&result);
         break;
       }
@@ -92,7 +97,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         break;
       }
       case 12: {
-        base::StringPiece16 result;
+        std::u16string_view result;
         std::ignore = iter.ReadStringPiece16(&result);
         break;
       }

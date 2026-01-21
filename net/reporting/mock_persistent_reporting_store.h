@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/reporting/reporting_cache.h"
 #include "net/reporting/reporting_endpoint.h"
@@ -157,8 +157,6 @@ class MockPersistentReportingStore
 };
 
 bool operator==(const MockPersistentReportingStore::Command& lhs,
-                const MockPersistentReportingStore::Command& rhs);
-bool operator!=(const MockPersistentReportingStore::Command& lhs,
                 const MockPersistentReportingStore::Command& rhs);
 std::ostream& operator<<(std::ostream& out,
                          const MockPersistentReportingStore::Command& cmd);

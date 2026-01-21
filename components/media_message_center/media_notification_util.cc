@@ -4,9 +4,13 @@
 
 #include "components/media_message_center/media_notification_util.h"
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/media_message_center/vector_icons/vector_icons.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/url_formatter/elide_url.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/button/button.h"
 
 namespace media_message_center {
@@ -56,6 +60,19 @@ std::u16string GetAccessibleNameFromMetadata(
   return accessible_name;
 }
 
+bool IsOriginGoodForDisplay(const url::Origin& origin) {
+  return !origin.opaque() ||
+         origin.GetTupleOrPrecursorTupleIfOpaque().IsValid();
+}
+
+std::u16string GetOriginNameForDisplay(const url::Origin& origin) {
+  const auto url = origin.opaque()
+                       ? origin.GetTupleOrPrecursorTupleIfOpaque().GetURL()
+                       : origin.GetURL();
+  return url_formatter::FormatUrlForSecurityDisplay(
+      url, url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
+}
+
 base::flat_set<MediaSessionAction> GetTopVisibleActions(
     const base::flat_set<MediaSessionAction>& enabled_actions,
     const base::flat_set<MediaSessionAction>& ignored_actions,
@@ -66,8 +83,7 @@ base::flat_set<MediaSessionAction> GetTopVisibleActions(
     if (visible_actions.size() >= max_actions)
       break;
 
-    if (!base::Contains(enabled_actions, action) ||
-        base::Contains(ignored_actions, action))
+    if (!enabled_actions.contains(action) || ignored_actions.contains(action))
       continue;
 
     visible_actions.insert(action);
@@ -92,6 +108,89 @@ MediaSessionAction GetPictureInPictureIgnoredAction(
   return current_action == MediaSessionAction::kEnterPictureInPicture
              ? MediaSessionAction::kExitPictureInPicture
              : MediaSessionAction::kEnterPictureInPicture;
+}
+
+const gfx::VectorIcon* GetVectorIconForMediaAction(MediaSessionAction action) {
+  switch (action) {
+    case MediaSessionAction::kPreviousTrack:
+      return &kMediaPreviousTrackIcon;
+    case MediaSessionAction::kSeekBackward:
+      return &kMediaSeekBackwardIcon;
+    case MediaSessionAction::kPlay:
+      return &kPlayArrowIcon;
+    case MediaSessionAction::kPause:
+      return &kPauseIcon;
+    case MediaSessionAction::kSeekForward:
+      return &kMediaSeekForwardIcon;
+    case MediaSessionAction::kNextTrack:
+      return &kMediaNextTrackIcon;
+    case MediaSessionAction::kEnterPictureInPicture:
+      return &kMediaEnterPipIcon;
+    case MediaSessionAction::kExitPictureInPicture:
+      return &kMediaExitPipIcon;
+    case MediaSessionAction::kStop:
+    case MediaSessionAction::kSkipAd:
+    case MediaSessionAction::kSeekTo:
+    case MediaSessionAction::kScrubTo:
+    case MediaSessionAction::kSwitchAudioDevice:
+    case MediaSessionAction::kToggleMicrophone:
+    case MediaSessionAction::kToggleCamera:
+    case MediaSessionAction::kHangUp:
+    case MediaSessionAction::kRaise:
+    case MediaSessionAction::kSetMute:
+    case MediaSessionAction::kPreviousSlide:
+    case MediaSessionAction::kNextSlide:
+    case MediaSessionAction::kEnterAutoPictureInPicture:
+      NOTREACHED();
+  }
+
+  return nullptr;
+}
+
+const std::u16string GetAccessibleNameForMediaAction(
+    MediaSessionAction action) {
+  switch (action) {
+    case MediaSessionAction::kPreviousTrack:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PREVIOUS_TRACK);
+    case MediaSessionAction::kSeekBackward:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SEEK_BACKWARD);
+    case MediaSessionAction::kPlay:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY);
+    case MediaSessionAction::kPause:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PAUSE);
+    case MediaSessionAction::kSeekForward:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SEEK_FORWARD);
+    case MediaSessionAction::kNextTrack:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_NEXT_TRACK);
+    case MediaSessionAction::kEnterPictureInPicture:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP);
+    case MediaSessionAction::kExitPictureInPicture:
+      return l10n_util::GetStringUTF16(
+          IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_EXIT_PIP);
+    case MediaSessionAction::kStop:
+    case MediaSessionAction::kSkipAd:
+    case MediaSessionAction::kSeekTo:
+    case MediaSessionAction::kScrubTo:
+    case MediaSessionAction::kSwitchAudioDevice:
+    case MediaSessionAction::kToggleMicrophone:
+    case MediaSessionAction::kToggleCamera:
+    case MediaSessionAction::kHangUp:
+    case MediaSessionAction::kRaise:
+    case MediaSessionAction::kSetMute:
+    case MediaSessionAction::kPreviousSlide:
+    case MediaSessionAction::kNextSlide:
+    case MediaSessionAction::kEnterAutoPictureInPicture:
+      NOTREACHED();
+  }
+
+  return std::u16string();
 }
 
 void RecordConcurrentNotificationCount(size_t count) {

@@ -19,7 +19,7 @@ class DialInternalMessageUtilTest : public ::testing::Test {
  public:
   DialInternalMessageUtilTest()
       : launch_info_("YouTube",
-                     absl::nullopt,
+                     std::nullopt,
                      "152127444812943594",
                      GURL("http://172.17.32.151/app/YouTube")),
         util_("hash-token") {
@@ -32,11 +32,12 @@ class DialInternalMessageUtilTest : public ::testing::Test {
 
   void ExpectMessagesEqual(const std::string& expected_message,
                            const std::string& message) {
-    auto expected_message_value =
-        base::JSONReader::ReadDeprecated(expected_message);
+    auto expected_message_value = base::JSONReader::Read(
+        expected_message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(expected_message_value);
 
-    auto message_value = base::JSONReader::ReadDeprecated(message);
+    auto message_value =
+        base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(message_value);
 
     EXPECT_EQ(*expected_message_value, *message_value);
@@ -124,7 +125,7 @@ TEST_F(DialInternalMessageUtilTest, CreateReceiverActionCastMessage) {
           "friendlyName":"Lab Roku",
           "ipAddress":"172.17.32.151",
           "isActiveInput":null,
-          "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+          "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
           "receiverType":"dial",
           "volume":null
         }
@@ -152,7 +153,7 @@ TEST_F(DialInternalMessageUtilTest, CreateReceiverActionStopMessage) {
           "friendlyName":"Lab Roku",
           "ipAddress":"172.17.32.151",
           "isActiveInput":null,
-          "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+          "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
           "receiverType":"dial",
           "volume":null
         }
@@ -184,7 +185,7 @@ TEST_F(DialInternalMessageUtilTest, CreateNewSessionMessage) {
         "friendlyName":"Lab Roku",
         "ipAddress":"172.17.32.151",
         "isActiveInput":null,
-        "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+        "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
         "receiverType":"dial",
         "volume":null
       },
@@ -217,7 +218,7 @@ TEST_F(DialInternalMessageUtilTest, CreateCustomDialLaunchMessage) {
         "friendlyName":"Lab Roku",
         "ipAddress":"172.17.32.151",
         "isActiveInput":null,
-        "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+        "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
         "receiverType":"dial",
         "volume":null
       },

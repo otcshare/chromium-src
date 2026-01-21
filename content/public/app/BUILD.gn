@@ -22,7 +22,6 @@
 
 import("//build/config/chrome_build.gni")
 import("//build/config/ui.gni")
-import("//chromeos/ash/components/assistant/assistant.gni")
 import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
 import("//ui/base/ui_features.gni")
 
@@ -36,12 +35,12 @@ public_app_shared_sources = [
 ]
 
 public_app_shared_public_deps = [
+  "//base",
   "//content:export",
   "//third_party/abseil-cpp:absl",
 ]
 
 public_app_shared_deps = [
-  "//base",
   "//base:i18n",
   "//content/app",
   "//content/public/common:common_sources",
@@ -58,7 +57,7 @@ if (is_win) {
 if (is_component_build) {
   source_set("app_sources") {
     # Only the main content shared library can pull this in.
-    visibility = [ "//content:content" ]
+    visibility = [ "//content" ]
 
     sources = public_app_shared_sources
 

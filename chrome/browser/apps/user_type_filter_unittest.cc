@@ -11,6 +11,7 @@
 
 #include "base/values.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -73,7 +74,6 @@ class UserTypeFilterTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
 };
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 TEST_F(UserTypeFilterTest, ChildUser) {
   const auto profile = CreateProfile();
   profile->SetIsSupervisedProfile();
@@ -82,7 +82,6 @@ TEST_F(UserTypeFilterTest, ChildUser) {
   EXPECT_TRUE(Match(
       profile, CreateJsonWithFilter({kUserTypeUnmanaged, kUserTypeChild})));
 }
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
 
 TEST_F(UserTypeFilterTest, GuestUser) {
   auto profile = CreateGuestProfile();
@@ -100,6 +99,18 @@ TEST_F(UserTypeFilterTest, ManagedUser) {
   EXPECT_TRUE(Match(
       profile, CreateJsonWithFilter({kUserTypeUnmanaged, kUserTypeManaged})));
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(UserTypeFilterTest, ManagedGuestUser) {
+  profiles::testing::ScopedTestManagedGuestSession test_managed_guest_session;
+  const auto profile = CreateProfile();
+  profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
+  EXPECT_FALSE(Match(profile, CreateJsonWithFilter({kUserTypeManaged})));
+  EXPECT_TRUE(Match(profile, CreateJsonWithFilter({kUserTypeManagedGuest})));
+  EXPECT_TRUE(Match(profile, CreateJsonWithFilter(
+                                 {kUserTypeUnmanaged, kUserTypeManagedGuest})));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(UserTypeFilterTest, UnmanagedUser) {
   EXPECT_TRUE(
@@ -120,11 +131,9 @@ TEST_F(UserTypeFilterTest, DefaultFilter) {
   EXPECT_TRUE(MatchDefault(profile, default_filter));
   // Guest user.
   EXPECT_TRUE(MatchDefault(CreateGuestProfile(), default_filter));
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   // Child user.
   profile->SetIsSupervisedProfile();
   EXPECT_FALSE(MatchDefault(profile, default_filter));
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
   // Managed user.
   profile = CreateProfile();
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);

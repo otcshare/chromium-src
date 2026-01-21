@@ -12,6 +12,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/views_test_base.h"
+#include "ui/views/view_utils.h"
 
 namespace ash {
 
@@ -34,14 +35,11 @@ class TestEchoDialogListener : public EchoDialogListener {
 };
 
 bool IsLabelWithText(const views::View* view, const std::u16string& text) {
-  const char* class_name = view->GetClassName();
-  if (!strcmp(class_name, "Label")) {
-    auto* label = static_cast<const views::Label*>(view);
-    return label->GetText().find(text) != label->GetText().npos;
+  if (const auto* label = views::AsViewClass<views::Label>(view)) {
+    return label->GetText().contains(text);
   }
-  if (!strcmp(class_name, "StyledLabel")) {
-    auto* styled_label = static_cast<const views::StyledLabel*>(view);
-    return styled_label->GetText().find(text) != styled_label->GetText().npos;
+  if (const auto* styled_label = views::AsViewClass<views::StyledLabel>(view)) {
+    return styled_label->GetText().contains(text);
   }
   return false;
 }
@@ -49,7 +47,7 @@ bool IsLabelWithText(const views::View* view, const std::u16string& text) {
 views::View* FindLabelWithText(views::View* root, const std::u16string& text) {
   if (IsLabelWithText(root, text))
     return root;
-  for (auto* child : root->children()) {
+  for (views::View* child : root->children()) {
     views::View* matched = FindLabelWithText(child, text);
     if (matched)
       return matched;

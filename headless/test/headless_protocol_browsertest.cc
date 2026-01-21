@@ -10,38 +10,70 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "headless/app/headless_shell_switches.h"
+#include "build/config/linux/dbus/buildflags.h"
+#include "components/headless/test/shared_test_util.h"
+#include "content/public/common/content_switches.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/public/switches.h"
 #include "headless/test/headless_browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 
 namespace headless {
 
 namespace switches {
-static const char kResetResults[] = "reset-results";
-static const char kDumpConsoleMessages[] = "dump-console-messages";
 static const char kDumpDevToolsProtocol[] = "dump-devtools-protocol";
-static const char kDumpTestResult[] = "dump-test-result";
 }  // namespace switches
 
 namespace {
+static const base::FilePath kTestDataDir(
+    FILE_PATH_LITERAL("headless/test/data"));
+static const base::FilePath kSharedTestDataDir(
+    FILE_PATH_LITERAL("components/headless/test/data"));
 
-static const base::FilePath kTestsDirectory(
-    FILE_PATH_LITERAL("headless/test/data/protocol"));
-
+constexpr char kProtocolTestDir[] = "protocol";
 }  // namespace
 
-HeadlessProtocolBrowserTest::HeadlessProtocolBrowserTest() {
-  embedded_test_server()->ServeFilesFromSourceDirectory(
-      "third_party/blink/web_tests/http/tests/inspector-protocol");
-  EXPECT_TRUE(embedded_test_server()->Start());
+HeadlessProtocolBrowserTest::HeadlessProtocolBrowserTest() = default;
+HeadlessProtocolBrowserTest::~HeadlessProtocolBrowserTest() = default;
+
+base::FilePath HeadlessProtocolBrowserTest::GetTestDataDir() {
+  return IsSharedTestScript() ? kSharedTestDataDir : kTestDataDir;
 }
 
-HeadlessProtocolBrowserTest::~HeadlessProtocolBrowserTest() = default;
+base::FilePath HeadlessProtocolBrowserTest::GetScriptPath() {
+  base::FilePath src_dir;
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &src_dir));
+  return src_dir.Append(GetTestDataDir())
+      .AppendASCII(kProtocolTestDir)
+      .AppendASCII(GetScriptName());
+}
+
+base::FilePath HeadlessProtocolBrowserTest::GetTestExpectationFilePath() {
+  return headless::GetTestExpectationFilePath(GetScriptPath(), test_meta_info_,
+                                              HeadlessType::kHeadlessShell);
+}
+
+bool HeadlessProtocolBrowserTest::IsSharedTestScript() {
+  return headless::IsSharedTestScript(GetScriptName());
+}
+
+void HeadlessProtocolBrowserTest::SetUp() {
+  LoadTestMetaInfo();
+  HeadlessDevTooledBrowserTest::SetUp();
+}
 
 void HeadlessProtocolBrowserTest::SetUpCommandLine(
     base::CommandLine* command_line) {
@@ -49,25 +81,39 @@ void HeadlessProtocolBrowserTest::SetUpCommandLine(
                                   "MAP *.test 127.0.0.1");
   HeadlessDevTooledBrowserTest::SetUpCommandLine(command_line);
 
-  if (RequiresSitePerProcess()) {
-    // Make sure the navigations spawn new processes. We run test harness
-    // in one process (harness.test) and tests in another.
-    command_line->AppendSwitch(::switches::kSitePerProcess);
-  }
-  // Make sure proxy related tests are not affected by a platform specific
-  // system proxy configuration service.
-  command_line->AppendSwitch(switches::kNoSystemProxyConfigService);
-}
-
-bool HeadlessProtocolBrowserTest::RequiresSitePerProcess() {
-  return true;
+  feature_list_ = test_meta_info_.ProcessCommandLineSwitches(*command_line);
 }
 
 base::Value::Dict HeadlessProtocolBrowserTest::GetPageUrlExtraParams() {
   return base::Value::Dict();
 }
 
+void HeadlessProtocolBrowserTest::LoadTestMetaInfo() {
+  base::FilePath script_path = GetScriptPath();
+  std::string script_body;
+  CHECK(base::ReadFileToString(script_path, &script_body))
+      << "script_path=" << script_path;
+
+  auto test_meta_info = TestMetaInfo::FromString(script_body);
+  CHECK(test_meta_info.has_value()) << test_meta_info.error();
+
+  test_meta_info_ = test_meta_info.value();
+}
+
+void HeadlessProtocolBrowserTest::StartEmbeddedTestServer() {
+  embedded_test_server()->ServeFilesFromSourceDirectory(
+      "third_party/blink/web_tests/http/tests/inspector-protocol");
+
+  if (IsSharedTestScript()) {
+    embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataDir());
+  }
+
+  CHECK(embedded_test_server()->Start());
+}
+
 void HeadlessProtocolBrowserTest::RunDevTooledTest() {
+  StartEmbeddedTestServer();
+
   scoped_refptr<content::DevToolsAgentHost> agent_host =
       content::DevToolsAgentHost::GetOrCreateFor(
           HeadlessWebContentsImpl::From(web_contents_)->web_contents());
@@ -79,23 +125,17 @@ void HeadlessProtocolBrowserTest::RunDevTooledTest() {
                           base::Unretained(this)));
   devtools_client_.SendCommand("Page.enable");
 
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDumpConsoleMessages)) {
-    // Set up Runtime domain to intercept console messages.
-    devtools_client_.AddEventHandler(
-        "Runtime.consoleAPICalled",
-        base::BindRepeating(&HeadlessProtocolBrowserTest::OnConsoleAPICalled,
-                            base::Unretained(this)));
-    devtools_client_.SendCommand("Runtime.enable");
-  }
-
   // Expose DevTools protocol to the target.
-  browser_devtools_client_.SendCommand("Target.exposeDevToolsProtocol",
-                                       Param("targetId", agent_host->GetId()));
+  browser_devtools_client_.SendCommand(
+      "Target.exposeDevToolsProtocol", Param("targetId", agent_host->GetId()),
+      base::BindOnce(&HeadlessProtocolBrowserTest::OnceSetUp,
+                     base::Unretained(this)));
+}
 
+void HeadlessProtocolBrowserTest::OnceSetUp(base::Value::Dict) {
   // Navigate to test harness page
   GURL page_url = embedded_test_server()->GetURL(
-      "harness.test", "/protocol/inspector-protocol-test.html");
+      "harness.test", "/resources/inspector-protocol-test-subtarget.html");
   devtools_client_.SendCommand("Page.navigate", Param("url", page_url.spec()));
 }
 
@@ -103,21 +143,11 @@ void HeadlessProtocolBrowserTest::OnLoadEventFired(
     const base::Value::Dict& params) {
   ASSERT_THAT(params, DictHasValue("method", "Page.loadEventFired"));
 
-  base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath src_dir;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &src_dir));
-  base::FilePath test_path =
-      src_dir.Append(kTestsDirectory).AppendASCII(script_name_);
-  std::string script;
-  if (!base::ReadFileToString(test_path, &script)) {
-    ADD_FAILURE() << "Unable to read test at " << test_path;
-    FinishTest();
-    return;
-  }
+  std::string script_name = GetScriptName();
   GURL test_url = embedded_test_server()->GetURL("harness.test",
-                                                 "/protocol/" + script_name_);
+                                                 "/protocol/" + script_name);
   GURL target_url =
-      embedded_test_server()->GetURL("127.0.0.1", "/protocol/" + script_name_);
+      embedded_test_server()->GetURL("127.0.0.1", "/protocol/" + script_name);
 
   base::Value::Dict test_params;
   test_params.Set("test", test_url.spec());
@@ -128,8 +158,7 @@ void HeadlessProtocolBrowserTest::OnLoadEventFired(
   }
   test_params.Merge(GetPageUrlExtraParams());
 
-  std::string json_test_params;
-  base::JSONWriter::Write(test_params, &json_test_params);
+  std::string json_test_params = base::WriteJson(test_params).value_or("");
   std::string evaluate_script = "runTest(" + json_test_params + ")";
 
   base::Value::Dict evaluate_params;
@@ -143,13 +172,6 @@ void HeadlessProtocolBrowserTest::OnLoadEventFired(
 }
 
 void HeadlessProtocolBrowserTest::OnEvaluateResult(base::Value::Dict params) {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDumpTestResult)) {
-    std::string json_params;
-    base::JSONWriter::Write(params, &json_params);
-    LOG(ERROR) << "Test result: " << json_params;
-  }
-
   ProcessTestResult(DictString(params, "result.result.value"));
 
   FinishTest();
@@ -158,20 +180,12 @@ void HeadlessProtocolBrowserTest::OnEvaluateResult(base::Value::Dict params) {
 void HeadlessProtocolBrowserTest::ProcessTestResult(
     const std::string& test_result) {
   base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath expectation_path = GetTestExpectationFilePath();
 
-  base::FilePath src_dir;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &src_dir));
-  base::FilePath expectation_path =
-      src_dir.Append(kTestsDirectory)
-          .AppendASCII(script_name_.substr(0, script_name_.length() - 3) +
-                       "-expected.txt");
-
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kResetResults)) {
+  if (ShouldUpdateExpectations()) {
     LOG(INFO) << "Updating expectations at " << expectation_path;
-    int result = base::WriteFile(expectation_path, test_result.data(),
-                                 static_cast<int>(test_result.size()));
-    CHECK(test_result.size() == static_cast<size_t>(result));
+    bool succcess = base::WriteFile(expectation_path, test_result);
+    CHECK(succcess);
   }
 
   std::string expectation;
@@ -182,57 +196,17 @@ void HeadlessProtocolBrowserTest::ProcessTestResult(
   EXPECT_EQ(expectation, test_result);
 }
 
-void HeadlessProtocolBrowserTest::OnConsoleAPICalled(
-    const base::Value::Dict& params) {
-  ASSERT_THAT(params, DictHasValue("method", "Runtime.consoleAPICalled"));
-
-  const base::Value::List* args = params.FindListByDottedPath("params.args");
-  if (!args || args->empty())
-    return;
-
-  const base::Value* value = args->front().GetDict().Find("value");
-  switch (value->type()) {
-    case base::Value::Type::NONE:
-    case base::Value::Type::BOOLEAN:
-    case base::Value::Type::INTEGER:
-    case base::Value::Type::DOUBLE:
-    case base::Value::Type::STRING:
-      LOG(INFO) << value->DebugString();
-      return;
-    default:
-      LOG(INFO) << "Unhandled value type: " << value->type();
-      return;
-  }
-}
-
 void HeadlessProtocolBrowserTest::FinishTest() {
   test_finished_ = true;
   FinishAsynchronousTest();
 }
-
-// TODO(crbug.com/1086872): The whole test suite is flaky on Mac ASAN.
-#if (BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER))
-#define HEADLESS_PROTOCOL_TEST(TEST_NAME, SCRIPT_NAME)                        \
-  IN_PROC_BROWSER_TEST_F(HeadlessProtocolBrowserTest, DISABLED_##TEST_NAME) { \
-    test_folder_ = "/protocol/";                                              \
-    script_name_ = SCRIPT_NAME;                                               \
-    RunTest();                                                                \
-  }
-#else
-#define HEADLESS_PROTOCOL_TEST(TEST_NAME, SCRIPT_NAME)             \
-  IN_PROC_BROWSER_TEST_F(HeadlessProtocolBrowserTest, TEST_NAME) { \
-    test_folder_ = "/protocol/";                                   \
-    script_name_ = SCRIPT_NAME;                                    \
-    RunTest();                                                     \
-  }
-#endif
 
 // Headless-specific tests
 HEADLESS_PROTOCOL_TEST(VirtualTimeBasics, "emulation/virtual-time-basics.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeInterrupt,
                        "emulation/virtual-time-interrupt.js")
 
-// Flaky on Linux, Mac & Win. TODO(crbug.com/930717): Re-enable.
+// Flaky on Linux, Mac & Win. TODO(crbug.com/41440558): Re-enable.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_VirtualTimeCrossProcessNavigation \
@@ -257,25 +231,45 @@ HEADLESS_PROTOCOL_TEST(VirtualTimeSessionStorage,
 HEADLESS_PROTOCOL_TEST(VirtualTimeStarvation,
                        "emulation/virtual-time-starvation.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeVideo, "emulation/virtual-time-video.js")
-// Flaky on all platforms. https://crbug.com/1295644
-HEADLESS_PROTOCOL_TEST(DISABLED_VirtualTimeErrorLoop,
+HEADLESS_PROTOCOL_TEST(VirtualTimeErrorLoop,
                        "emulation/virtual-time-error-loop.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeFetchStream,
                        "emulation/virtual-time-fetch-stream.js")
+HEADLESS_PROTOCOL_TEST(VirtualTimeFetchReadBody,
+                       "emulation/virtual-time-fetch-read-body.js")
+HEADLESS_PROTOCOL_TEST(VirtualTimeFetchBlobReadBodyBlob,
+                       "emulation/virtual-time-fetch-read-body-blob.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeDialogWhileLoading,
                        "emulation/virtual-time-dialog-while-loading.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeHistoryNavigation,
                        "emulation/virtual-time-history-navigation.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeHistoryNavigationSameDoc,
                        "emulation/virtual-time-history-navigation-same-doc.js")
+HEADLESS_PROTOCOL_TEST(VirtualTimeSVG, "emulation/virtual-time-svg.js")
 
-// Flaky on Mac. TODO(crbug.com/1164173): Re-enable.
+// Flaky on Mac. TODO(crbug.com/352304682): Re-enable.
 #if BUILDFLAG(IS_MAC)
-#define MAYBE_VirtualTimeFetchKeepalive DISABLED_VirtualTimeFetchKeepalive
+#define MAYBE_VirtualTimeWorkerBasic DISABLED_VirtualTimeWorkerBasic
 #else
-#define MAYBE_VirtualTimeFetchKeepalive VirtualTimeFetchKeepalive
+#define MAYBE_VirtualTimeWorkerBasic VirtualTimeWorkerBasic
 #endif
-HEADLESS_PROTOCOL_TEST(MAYBE_VirtualTimeFetchKeepalive,
+HEADLESS_PROTOCOL_TEST(MAYBE_VirtualTimeWorkerBasic,
+                       "emulation/virtual-time-worker-basic.js")
+HEADLESS_PROTOCOL_TEST(VirtualTimeWorkerLockstep,
+                       "emulation/virtual-time-worker-lockstep.js")
+
+// Flaky on Mac. TODO(crbug.com/352304682): Re-enable.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_VirtualTimeWorkerFetch DISABLED_VirtualTimeWorkerFetch
+#else
+#define MAYBE_VirtualTimeWorkerFetch VirtualTimeWorkerFetch
+#endif
+HEADLESS_PROTOCOL_TEST(MAYBE_VirtualTimeWorkerFetch,
+                       "emulation/virtual-time-worker-fetch.js")
+HEADLESS_PROTOCOL_TEST(VirtualTimeWorkerTerminate,
+                       "emulation/virtual-time-worker-terminate.js")
+
+HEADLESS_PROTOCOL_TEST(VirtualTimeFetchKeepalive,
                        "emulation/virtual-time-fetch-keepalive.js")
 HEADLESS_PROTOCOL_TEST(VirtualTimeDisposeWhileRunning,
                        "emulation/virtual-time-dispose-while-running.js")
@@ -303,13 +297,19 @@ HEADLESS_PROTOCOL_TEST(Geolocation, "emulation/geolocation-crash.js")
 
 HEADLESS_PROTOCOL_TEST(DragStarted, "input/dragIntercepted.js")
 
-// https://crbug.com/1204620
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+// https://crbug.com/1414190
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_InputClipboardOps DISABLED_InputClipboardOps
 #else
 #define MAYBE_InputClipboardOps InputClipboardOps
 #endif
 HEADLESS_PROTOCOL_TEST(MAYBE_InputClipboardOps, "input/input-clipboard-ops.js")
+
+HEADLESS_PROTOCOL_TEST(ClipboardApiCopyPaste,
+                       "input/clipboard-api-copy-paste.js")
+
+HEADLESS_PROTOCOL_TEST(FocusBlurNotifications,
+                       "input/focus-blur-notifications.js")
 
 HEADLESS_PROTOCOL_TEST(HeadlessSessionBasicsTest,
                        "sessions/headless-session-basics.js")
@@ -323,11 +323,123 @@ HEADLESS_PROTOCOL_TEST(BrowserSetInitialProxyConfig,
 HEADLESS_PROTOCOL_TEST(BrowserUniversalNetworkAccess,
                        "sanity/universal-network-access.js")
 
+// TODO(445548057): the test actually passes on regular Linux
+// configurations that include D-Bus, however they take 25s
+// due to an unrelated problem. Once this is fixed, the tests
+// can be re-enabled on linux.
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+#define MAYBE_GetClientCapabilities DISABLED_GetClientCapabilities
+#else
+#define MAYBE_GetClientCapabilities GetClientCapabilities
+#endif
+
+HEADLESS_PROTOCOL_TEST(MAYBE_GetClientCapabilities,
+                       "sanity/get-client-capabilities.js")
+
 HEADLESS_PROTOCOL_TEST(ShowDirectoryPickerNoCrash,
                        "sanity/show-directory-picker-no-crash.js")
 
 HEADLESS_PROTOCOL_TEST(ShowFilePickerInterception,
                        "sanity/show-file-picker-interception.js")
+
+// The `change-window-*.js` tests cover DevTools methods, while `window-*.js`
+// cover `window.*` JS APIs.
+HEADLESS_PROTOCOL_TEST(ChangeWindowSize, "shared/change-window-size.js")
+HEADLESS_PROTOCOL_TEST(ChangeWindowState, "shared/change-window-state.js")
+
+HEADLESS_PROTOCOL_TEST(WindowOuterSize, "shared/window-outer-size.js")
+HEADLESS_PROTOCOL_TEST(WindowInnerSize, "shared/window-inner-size.js")
+HEADLESS_PROTOCOL_TEST(WindowInnerSizeScaled,
+                       "shared/window-inner-size-scaled.js")
+HEADLESS_PROTOCOL_TEST(WindowInnerSizeLargerThanScreen,
+                       "shared/window-inner-size-larger-than-screen.js")
+
+// This is not shared because Chrome Headless Mode window.resizeTo() only works
+// under certain conditions which are note currently satisfied by the test.
+HEADLESS_PROTOCOL_TEST(WindowResizeTo, "sanity/window-resize-to.js")
+
+HEADLESS_PROTOCOL_TEST(HiddenTargetCreate, "shared/hidden-target-create.js")
+HEADLESS_PROTOCOL_TEST(HiddenTargetClose, "shared/hidden-target-close.js")
+HEADLESS_PROTOCOL_TEST(HiddenTargetCreateInvalidParams,
+                       "shared/hidden-target-create-invalid-params.js")
+HEADLESS_PROTOCOL_TEST(HiddenTargetPageEnable,
+                       "shared/hidden-target-page-enable.js")
+
+// https://crbug.com/378531862
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_CreateTargetPosition DISABLED_CreateTargetPosition
+#else
+#define MAYBE_CreateTargetPosition CreateTargetPosition
+#endif
+HEADLESS_PROTOCOL_TEST(MAYBE_CreateTargetPosition,
+                       "shared/create-target-position.js")
+
+HEADLESS_PROTOCOL_TEST(WindowSizeOnStart, "sanity/window-size-on-start.js")
+
+HEADLESS_PROTOCOL_TEST(LargeBrowserWindowSize,
+                       "shared/large-browser-window-size.js")
+
+HEADLESS_PROTOCOL_TEST(ScreencastBasics, "shared/screencast-basics.js")
+HEADLESS_PROTOCOL_TEST(ScreencastViewport, "shared/screencast-viewport.js")
+
+HEADLESS_PROTOCOL_TEST(GrantPermissions, "sanity/grant_permissions.js")
+
+#if !defined(HEADLESS_USE_EMBEDDED_RESOURCES)
+HEADLESS_PROTOCOL_TEST(AutoHyphenation, "sanity/auto-hyphenation.js")
+#endif
+
+// Web Bluetooth is still experimental on Linux.
+#if !BUILDFLAG(IS_LINUX)
+HEADLESS_PROTOCOL_TEST(Bluetooth, "emulation/bluetooth.js")
+#endif
+
+class HeadlessProtocolBrowserTestWithKnownPermission
+    : public HeadlessProtocolBrowserTest {
+ public:
+  HeadlessProtocolBrowserTestWithKnownPermission() = default;
+
+ protected:
+  base::Value::Dict GetPageUrlExtraParams() override {
+    base::Value::List permissions;
+    const std::vector<blink::PermissionType>& types =
+        blink::GetAllPermissionTypes();
+    for (blink::PermissionType type : types) {
+      std::string permission = blink::GetPermissionString(type);
+      NormalizePermissionName(permission);
+      permissions.Append(permission);
+    }
+
+    base::Value::Dict dict;
+    dict.Set("permissions", std::move(permissions));
+    return dict;
+  }
+
+  static void NormalizePermissionName(std::string& permission) {
+    if (IsAllAsciiUpper(permission)) {
+      permission = base::ToLowerASCII(permission);
+    } else {
+      permission[0] = base::ToLowerASCII(permission[0]);
+    }
+
+    // Handle known exceptions.
+    if (permission == "midiSysEx") {
+      permission = "midiSysex";
+    }
+  }
+
+  static bool IsAllAsciiUpper(const std::string& permission) {
+    for (char ch : permission) {
+      if (!base::IsAsciiUpper(ch)) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+HEADLESS_PROTOCOL_TEST_F(HeadlessProtocolBrowserTestWithKnownPermission,
+                         KnownPermissionTypes,
+                         "sanity/known-permission-types.js")
 
 class HeadlessProtocolBrowserTestWithProxy
     : public HeadlessProtocolBrowserTest {
@@ -362,32 +474,36 @@ class HeadlessProtocolBrowserTestWithProxy
   net::EmbeddedTestServer proxy_server_;
 };
 
-#define HEADLESS_PROTOCOL_TEST_WITH_PROXY(TEST_NAME, SCRIPT_NAME)           \
-  IN_PROC_BROWSER_TEST_F(HeadlessProtocolBrowserTestWithProxy, TEST_NAME) { \
-    test_folder_ = "/protocol/";                                            \
-    script_name_ = SCRIPT_NAME;                                             \
-    RunTest();                                                              \
+HEADLESS_PROTOCOL_TEST_F(HeadlessProtocolBrowserTestWithProxy,
+                         BrowserSetProxyConfig,
+                         "sanity/browser-set-proxy-config.js")
+
+class PopupWindowOpenTest : public HeadlessProtocolBrowserTest,
+                            public testing::WithParamInterface<bool> {
+ protected:
+  PopupWindowOpenTest() = default;
+
+  void CustomizeHeadlessBrowserContext(
+      HeadlessBrowserContext::Builder& builder) override {
+    builder.SetBlockNewWebContents(ShouldBlockNewWebContents());
   }
 
-HEADLESS_PROTOCOL_TEST_WITH_PROXY(BrowserSetProxyConfig,
-                                  "sanity/browser-set-proxy-config.js")
-
-// TODO(crbug.com/1086872): The whole test suite is flaky on Mac ASAN.
-#if (BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER))
-#define MAYBE_IN_PROC_BROWSER_TEST_F(CLASS, TEST_NAME) \
-  IN_PROC_BROWSER_TEST_F(CLASS, DISABLED_##TEST_NAME)
-#else
-#define MAYBE_IN_PROC_BROWSER_TEST_F(CLASS, TEST_NAME) \
-  IN_PROC_BROWSER_TEST_F(CLASS, TEST_NAME)
-#endif
-
-#define HEADLESS_PROTOCOL_TEST_WITHOUT_SITE_ISOLATION(TEST_NAME, SCRIPT_NAME) \
-  MAYBE_IN_PROC_BROWSER_TEST_F(                                               \
-      HeadlessProtocolBrowserTestWithoutSiteIsolation, TEST_NAME) {           \
-    test_folder_ = "/protocol/";                                              \
-    script_name_ = SCRIPT_NAME;                                               \
-    RunTest();                                                                \
+  base::Value::Dict GetPageUrlExtraParams() override {
+    base::Value::Dict params;
+    params.Set("blockingNewWebContents", ShouldBlockNewWebContents());
+    return params;
   }
+
+  bool ShouldBlockNewWebContents() const { return GetParam(); }
+};
+
+HEADLESS_PROTOCOL_TEST_P(PopupWindowOpenTest,
+                         Open,
+                         "sanity/popup-window-open.js")
+
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
+                         PopupWindowOpenTest_Open,
+                         ::testing::Bool());
 
 class HeadlessProtocolBrowserTestWithoutSiteIsolation
     : public HeadlessProtocolBrowserTest {
@@ -395,48 +511,216 @@ class HeadlessProtocolBrowserTestWithoutSiteIsolation
   HeadlessProtocolBrowserTestWithoutSiteIsolation() = default;
 
  protected:
-  bool RequiresSitePerProcess() override { return false; }
+  bool ShouldEnableSitePerProcess() override { return false; }
 };
 
-HEADLESS_PROTOCOL_TEST_WITHOUT_SITE_ISOLATION(
+HEADLESS_PROTOCOL_TEST_F(
+    HeadlessProtocolBrowserTestWithoutSiteIsolation,
     VirtualTimeLocalStorageDetachedFrame,
     "emulation/virtual-time-local-storage-detached-frame.js")
 
-class HeadlessProtocolBrowserTestWithDataPath
+class HeadlessProtocolBrowserTestWithFileInputDirectoryUpload
     : public HeadlessProtocolBrowserTest {
  protected:
+  static constexpr char kFileInputDirectoryUpload[] =
+      "resources/file-input-directory-upload";
+
   base::Value::Dict GetPageUrlExtraParams() override {
-    base::FilePath src_dir;
-    CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &src_dir));
-    base::FilePath path =
-        src_dir.Append(kTestsDirectory).AppendASCII(data_path_);
+    base::FilePath data_path =
+        GetScriptPath().DirName().AppendASCII(kFileInputDirectoryUpload);
+
     base::Value::Dict dict;
-    dict.Set("data_path", path.AsUTF8Unsafe());
+    dict.Set("data_path", data_path.AsUTF8Unsafe());
     return dict;
   }
-
-  std::string data_path_;
 };
 
-#define HEADLESS_PROTOCOL_TEST_WITH_DATA_PATH(TEST_NAME, SCRIPT_NAME, PATH) \
-  MAYBE_IN_PROC_BROWSER_TEST_F(HeadlessProtocolBrowserTestWithDataPath,     \
-                               TEST_NAME) {                                 \
-    test_folder_ = "/protocol/";                                            \
-    script_name_ = SCRIPT_NAME;                                             \
-    data_path_ = PATH;                                                      \
-    RunTest();                                                              \
+HEADLESS_PROTOCOL_TEST_F(
+    HeadlessProtocolBrowserTestWithFileInputDirectoryUpload,
+    Upload,
+    "sanity/file-input-directory-upload.js")
+
+HEADLESS_PROTOCOL_TEST(GetDOMCountersForLeakDetection,
+                       "sanity/get-dom-counters-for-leak-detection.js")
+
+class HeadlessProtocolBrowserTestSitePerProcess
+    : public HeadlessProtocolBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  bool ShouldEnableSitePerProcess() override { return GetParam(); }
+
+  base::Value::Dict GetPageUrlExtraParams() override {
+    base::Value::Dict params;
+    params.Set("sitePerProcessEnabled", ShouldEnableSitePerProcess());
+    return params;
   }
+};
 
-// TODO(crbug.com/1396402)  Re-enable after resolving MSAN flaky failures.
-#if defined(MEMORY_SANITIZER)
-#define MAYBE_FileInputDirectoryUpload DISABLED_FileInputDirectoryUpload
+HEADLESS_PROTOCOL_TEST_P(HeadlessProtocolBrowserTestSitePerProcess,
+                         SitePerProcess,
+                         "sanity/site-per-process.js")
+
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    HeadlessProtocolBrowserTestSitePerProcess_SitePerProcess,
+    ::testing::Bool());
+
+HEADLESS_PROTOCOL_TEST(DataURIIframe, "sanity/data-uri-iframe.js")
+
+// The test brlow requires beginFrameControl which is currently not supported
+// on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_IOCommandAfterInput DISABLED_IOCommandAfterInput
 #else
-#define MAYBE_FileInputDirectoryUpload FileInputDirectoryUpload
+#define MAYBE_IOCommandAfterInput IOCommandAfterInput
 #endif
+HEADLESS_PROTOCOL_TEST(MAYBE_IOCommandAfterInput,
+                       "input/io-command-after-input.js")
 
-HEADLESS_PROTOCOL_TEST_WITH_DATA_PATH(
-    MAYBE_FileInputDirectoryUpload,
-    "sanity/file-input-directory-upload.js",
-    "sanity/resources/file-input-directory-upload")
+HEADLESS_PROTOCOL_TEST(PrintToPdfTinyPage, "shared/print-to-pdf-tiny-page.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsRotationAngle,
+                       "shared/screen-details-rotation-angle.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenOrientationLockNaturalLandscape,
+                       "sanity/screen-orientation-lock-natural-landscape.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenOrientationLockNaturalPortrait,
+                       "sanity/screen-orientation-lock-natural-portrait.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsMultipleScreens,
+                       "shared/screen-details-multiple-screens.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsMultipleScreensScaled,
+                       "shared/screen-details-multiple-screens-scaled.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsPixelRatio,
+                       "shared/screen-details-pixel-ratio.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsColorDepth,
+                       "shared/screen-details-color-depth.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsWorkArea,
+                       "shared/screen-details-work-area.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenDetailsWorkAreaScaled,
+                       "shared/screen-details-work-area-scaled.js")
+
+HEADLESS_PROTOCOL_TEST(RequestFullscreen, "shared/request-fullscreen.js")
+
+HEADLESS_PROTOCOL_TEST(RequestFullscreenOnSecondaryScreen,
+                       "shared/request-fullscreen-on-secondary-screen.js")
+
+HEADLESS_PROTOCOL_TEST(MinimizeRestoreWindow,
+                       "shared/minimize-restore-window.js")
+
+HEADLESS_PROTOCOL_TEST(MaximizeRestoreWindow,
+                       "shared/maximize-restore-window.js")
+
+HEADLESS_PROTOCOL_TEST(FullscreenRestoreWindow,
+                       "shared/fullscreen-restore-window.js")
+
+HEADLESS_PROTOCOL_TEST(MaximizedWindowSize, "shared/maximized-window-size.js")
+
+HEADLESS_PROTOCOL_TEST(FullscreenWindowSize, "shared/fullscreen-window-size.js")
+
+HEADLESS_PROTOCOL_TEST(FullscreenWindowSizeScaled,
+                       "shared/fullscreen-window-size-scaled.js")
+
+HEADLESS_PROTOCOL_TEST(WindowOpenOnSecondaryScreen,
+                       "shared/window-open-on-secondary-screen.js")
+
+HEADLESS_PROTOCOL_TEST(ScreenRotationSecondaryScreen,
+                       "sanity/screen-rotation-secondary-screen.js")
+
+HEADLESS_PROTOCOL_TEST(MoveWindowBetweenScreens,
+                       "shared/move-window-between-screens.js")
+
+// This fails on Mac with RenderDocument enabled, http://crbug.com/446689489.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_CreateTargetSecondaryScreen DISABLED_CreateTargetSecondaryScreen
+#else
+#define MAYBE_CreateTargetSecondaryScreen CreateTargetSecondaryScreen
+#endif
+HEADLESS_PROTOCOL_TEST(MAYBE_CreateTargetSecondaryScreen,
+                       "shared/create-target-secondary-screen.js")
+
+HEADLESS_PROTOCOL_TEST(CreateTargetWindowState,
+                       "shared/create-target-window-state.js")
+
+HEADLESS_PROTOCOL_TEST(DocumentVisibilityState,
+                       "shared/document-visibility-state.js")
+
+HEADLESS_PROTOCOL_TEST(DocumentVisibilityStatePopup,
+                       "shared/document-visibility-state-popup.js")
+
+// This currently results in an unexpected screen orientation type,
+// see http://crbug.com/398150465.
+HEADLESS_PROTOCOL_TEST(MultipleScreenDetails,
+                       "shared/multiple-screen-details.js")
+
+HEADLESS_PROTOCOL_TEST(WindowOpenPopupPlacement,
+                       "shared/window-open-popup-placement.js")
+
+HEADLESS_PROTOCOL_TEST(WindowSizeSwitchHandling,
+                       "shared/window-size-switch-handling.js")
+
+HEADLESS_PROTOCOL_TEST(WindowSizeSwitchLargerThanScreen,
+                       "shared/window-size-switch-larger-than-screen.js")
+
+HEADLESS_PROTOCOL_TEST(WindowScreenAvail, "shared/window-screen-avail.js")
+
+HEADLESS_PROTOCOL_TEST(WindowStateTransitions,
+                       "shared/window-state-transitions.js")
+
+HEADLESS_PROTOCOL_TEST(WindowZoomOnSecondaryScreen,
+                       "shared/window-zoom-on-secondary-screen.js")
+
+HEADLESS_PROTOCOL_TEST(WindowZoomSizeMatchesWorkArea,
+                       "shared/window-zoom-size-matches-work-area.js")
+
+HEADLESS_PROTOCOL_TEST(WindowScreenScaleFactor,
+                       "shared/window-screen-scale-factor.js")
+
+HEADLESS_PROTOCOL_TEST(WindowScreenSizeOrientation,
+                       "shared/window-screen-size-orientation.js")
+
+HEADLESS_PROTOCOL_TEST(GetScreenInfos, "shared/get-screen-infos.js")
+
+HEADLESS_PROTOCOL_TEST(AddScreen, "shared/add-screen.js")
+
+HEADLESS_PROTOCOL_TEST(AddScreenScaleFactor,
+                       "shared/add-screen-scale-factor.js")
+
+HEADLESS_PROTOCOL_TEST(AddScreenWorkArea, "shared/add-screen-work-area.js")
+
+HEADLESS_PROTOCOL_TEST(AddScreenGetScreenDetails,
+                       "shared/add-screen-get-screen-details.js")
+
+HEADLESS_PROTOCOL_TEST(RemoveScreen, "shared/remove-screen.js")
+
+HEADLESS_PROTOCOL_TEST(RemoveScreenGetScreenDetails,
+                       "shared/remove-screen-get-screen-details.js")
+
+HEADLESS_PROTOCOL_TEST(AddRemoveScreen, "shared/add-remove-screen.js")
+
+HEADLESS_PROTOCOL_TEST(DispatchMouseEventScreenCoordinates,
+                       "shared/dispatch-mouse-event-screen-coordinates.js")
+
+HEADLESS_PROTOCOL_TEST(DispatchTouchEventScreenCoordinates,
+                       "shared/dispatch-touch-event-screen-coordinates.js")
+
+HEADLESS_PROTOCOL_TEST(
+    EmulateTouchFromMouseEventScreenCoordinates,
+    "shared/emulate-touch-from-mouse-event-screen-coordinates.js")
+
+HEADLESS_PROTOCOL_TEST(WindowWithNewContext,
+                       "shared/window-with-new-context.js")
+
+HEADLESS_PROTOCOL_TEST(SetZoomedWindowBounds,
+                       "shared/set-zoomed-window-bounds.js")
+
+HEADLESS_PROTOCOL_TEST(RangeMouseEventAfterNodeRemoval,
+                       "shared/range-mouse-event-after-node-removal.js")
 
 }  // namespace headless

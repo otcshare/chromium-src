@@ -6,26 +6,29 @@ package org.chromium.services.media_session;
 
 import android.os.SystemClock;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
+import androidx.annotation.VisibleForTesting;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+
+import org.chromium.build.annotations.NullMarked;
 
 /**
- * The MediaPosition class carries the position information.
- * It is the counterpart of media_session::MediaImage.
+ * The MediaPosition class carries the position information. It is the counterpart of
+ * media_session::MediaImage.
  */
 @JNINamespace("media_session")
+@NullMarked
 public final class MediaPosition {
-    private Long mDuration;
+    private final Long mDuration;
 
-    private Long mPosition;
+    private final Long mPosition;
 
-    private Float mPlaybackRate;
+    private final Float mPlaybackRate;
 
-    private Long mLastUpdatedTime;
+    private final Long mLastUpdatedTime;
 
-    /**
-     * Creates a new MediaPosition.
-     */
+    /** Creates a new MediaPosition. */
     public MediaPosition(long duration, long position, float playbackRate, long lastUpdatedTime) {
         mDuration = duration;
         mPosition = position;
@@ -55,8 +58,7 @@ public final class MediaPosition {
     }
 
     /**
-     * @return The time the position was last updated in ms relative to the
-     * boot time.
+     * @return The time the position was last updated in ms relative to the boot time.
      */
     public long getLastUpdatedTime() {
         return mLastUpdatedTime;
@@ -68,7 +70,8 @@ public final class MediaPosition {
         if (!(obj instanceof MediaPosition)) return false;
 
         MediaPosition other = (MediaPosition) obj;
-        return mDuration == other.getDuration() && mPosition == other.getPosition()
+        return mDuration == other.getDuration()
+                && mPosition == other.getPosition()
                 && mPlaybackRate == other.getPlaybackRate()
                 && mLastUpdatedTime == other.getLastUpdatedTime();
     }
@@ -84,25 +87,38 @@ public final class MediaPosition {
 
     @Override
     public String toString() {
-        return "duration=" + mDuration + ", position=" + mPosition + ", rate=" + mPlaybackRate
-                + ", updated=" + mLastUpdatedTime;
+        return "duration="
+                + mDuration
+                + ", position="
+                + mPosition
+                + ", rate="
+                + mPlaybackRate
+                + ", updated="
+                + mLastUpdatedTime;
     }
 
     /**
      * Create a new {@link MediaPosition} from the C++ code.
+     *
      * @param duration The duration of the media in ms.
      * @param position The position of the media in ms.
      * @param playbackRate The playback rate of the media as a coefficient.
-     * @param lastUpdatedTime The time the position was last updated in ms (epoch time).
+     * @param lastUpdatedUpTime The time the position was last updated in ms (uptimeMillis). It
+     *     tracks the time since boot time and doesn't account for device sleep time.
      */
     @CalledByNative
-    private static MediaPosition create(
-            long duration, long position, float playbackRate, long lastUpdatedTime) {
-        long currentTime = System.currentTimeMillis();
-        long elapsedRealtime = SystemClock.elapsedRealtime();
-        long bootTime = currentTime - elapsedRealtime;
-        lastUpdatedTime -= (currentTime - elapsedRealtime);
+    @VisibleForTesting
+    static MediaPosition create(
+            long duration, long position, float playbackRate, long lastUpdatedUpTime) {
+        long nowUptime = SystemClock.uptimeMillis();
+        // Calculate the 'age' of the update using uptimeMillis (which pauses in deep sleep).
+        long age = nowUptime - lastUpdatedUpTime;
 
-        return new MediaPosition(duration, position, playbackRate, lastUpdatedTime);
+        // We project the age onto elapsedRealtime. This is the time base expected by Android's
+        // PlaybackStateCompat and internal consumers (like MediaSessionHelper), allowing them to
+        // correctly calculate position even if the device slept.
+        long lastUpdatedTimeElapsed = SystemClock.elapsedRealtime() - age;
+
+        return new MediaPosition(duration, position, playbackRate, lastUpdatedTimeElapsed);
     }
 }

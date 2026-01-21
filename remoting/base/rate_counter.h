@@ -26,6 +26,9 @@ class RateCounter {
   // Constructs a rate counter over the specified |time_window|.
   explicit RateCounter(base::TimeDelta time_window);
 
+  // Construct a RateCounter for tests with an alternate tick clock.
+  RateCounter(base::TimeDelta time_window, const base::TickClock* tick_clock);
+
   RateCounter(const RateCounter&) = delete;
   RateCounter& operator=(const RateCounter&) = delete;
 
@@ -37,10 +40,6 @@ class RateCounter {
   // Returns the rate-per-second of values recorded over the time window.
   // Note that rates reported before |time_window| has elapsed are not accurate.
   double Rate() const;
-
-  void set_tick_clock_for_tests(const base::TickClock* tick_clock) {
-    tick_clock_ = tick_clock;
-  }
 
  private:
   // Type used to store data points with timestamps.
@@ -56,9 +55,9 @@ class RateCounter {
   base::queue<DataPoint> data_points_;
 
   // Sum of values in |data_points_|.
-  int64_t sum_;
+  int64_t sum_ = 0;
 
-  raw_ptr<const base::TickClock> tick_clock_ =
+  const raw_ptr<const base::TickClock> tick_clock_ =
       base::DefaultTickClock::GetInstance();
 
   SEQUENCE_CHECKER(sequence_checker_);

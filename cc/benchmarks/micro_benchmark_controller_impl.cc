@@ -5,9 +5,10 @@
 #include "cc/benchmarks/micro_benchmark_controller_impl.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
 #include "cc/trees/layer_tree_host_impl.h"
 
@@ -36,7 +37,7 @@ void MicroBenchmarkControllerImpl::DidCompleteCommit() {
 }
 
 void MicroBenchmarkControllerImpl::CleanUpFinishedBenchmarks() {
-  base::EraseIf(benchmarks_,
+  std::erase_if(benchmarks_,
                 [](const std::unique_ptr<MicroBenchmarkImpl>& benchmark) {
                   return benchmark->IsDone();
                 });

@@ -4,43 +4,51 @@
 
 package org.chromium.components.crash;
 
-import androidx.annotation.Nullable;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * This class allows setting crash keys from the Java side. The set of crash keys is defined at
  * build time. To add a new crash key, add a new entry to:
+ *
  * <ol>
- *     <li>The CrashKeyIndex enum in {@code crash_keys_android.h}</li>
- *     <li>The CrashKeyString array in {@code crash_keys_android.cc}</li>
- *     <li>The {@link #KEYS} array in this class.</li>
+ *   <li>The CrashKeyIndex enum in {@code crash_keys_android.h}
+ *   <li>The CrashKeyString array in {@code crash_keys_android.cc}
+ *   <li>The {@link #KEYS} array in this class.
  * </ol>
+ *
  * The crash keys will only be included in browser process crash reports.
  */
+@NullMarked
 public class CrashKeys {
-    private static final String[] KEYS = new String[] {"loaded_dynamic_module",
-            "active_dynamic_module", "application_status", "installed_modules", "emulated_modules",
-            "dynamic_module_dex_name", "partner_customization_config", "first_run"};
+    private static final String[] KEYS =
+            new String[] {
+                "application_status",
+                "installed_modules",
+                "partner_customization_config",
+                "first_run"
+            };
 
     private final AtomicReferenceArray<String> mValues = new AtomicReferenceArray<>(KEYS.length);
 
     // Outside of assertions only accessed on the UI thread.
     private boolean mFlushed;
 
-    private static class Holder { static final CrashKeys INSTANCE = new CrashKeys(); }
+    private static class Holder {
+        static final CrashKeys INSTANCE = new CrashKeys();
+    }
 
     private CrashKeys() {
         assert CrashKeyIndex.NUM_ENTRIES == KEYS.length;
     }
 
-    /**
-     * @return The shared instance of this class.
-     */
+    /** @return The shared instance of this class. */
     @CalledByNative
     public static CrashKeys getInstance() {
         return Holder.INSTANCE;
@@ -75,7 +83,7 @@ public class CrashKeys {
     public void set(@CrashKeyIndex int keyIndex, @Nullable String value) {
         ThreadUtils.assertOnUiThread();
         if (mFlushed) {
-            CrashKeysJni.get().set(CrashKeys.this, keyIndex, value);
+            CrashKeysJni.get().set(keyIndex, value);
             return;
         }
         mValues.set(keyIndex, value);
@@ -91,13 +99,13 @@ public class CrashKeys {
 
         assert !mFlushed : "Tried to flush to native twice";
         for (@CrashKeyIndex int i = 0; i < mValues.length(); i++) {
-            CrashKeysJni.get().set(CrashKeys.this, i, mValues.getAndSet(i, null));
+            CrashKeysJni.get().set(i, mValues.getAndSet(i, null));
         }
         mFlushed = true;
     }
 
     @NativeMethods
     interface Natives {
-        void set(CrashKeys caller, int key, String value);
+        void set(int key, @Nullable String value);
     }
 }

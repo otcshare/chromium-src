@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -17,19 +18,18 @@
 #include "base/test/metrics/histogram_enum_reader.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_version.h"
-#include "components/flags_ui/feature_entry.h"
-#include "components/flags_ui/feature_entry_macros.h"
-#include "components/flags_ui/flags_test_helpers.h"
-#include "components/flags_ui/flags_ui_metrics.h"
+#include "components/webui/flags/feature_entry.h"
+#include "components/webui/flags/feature_entry_macros.h"
+#include "components/webui/flags/flags_test_helpers.h"
+#include "components/webui/flags/flags_ui_metrics.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace about_flags {
 
 namespace {
 
-using Sample = base::HistogramBase::Sample;
-using SwitchToIdMap = std::map<std::string, Sample>;
+using Sample32 = base::HistogramBase::Sample32;
+using SwitchToIdMap = std::map<std::string, Sample32>;
 
 // Get all associated switches corresponding to defined about_flags.cc entries.
 std::set<std::string> GetAllPublicSwitchesAndFeaturesForTesting() {
@@ -39,7 +39,7 @@ std::set<std::string> GetAllPublicSwitchesAndFeaturesForTesting() {
     // Skip over flags that are part of the flags system itself - they don't
     // have any of the usual metadata or histogram entries for flags, since they
     // are synthesized during the build process.
-    // TODO(https://crbug.com/1068258): Remove the need for this by generating
+    // TODO(crbug.com/40125404): Remove the need for this by generating
     // histogram entries automatically.
     if (entry.supported_platforms & flags_ui::kFlagInfrastructure)
       continue;
@@ -50,7 +50,9 @@ std::set<std::string> GetAllPublicSwitchesAndFeaturesForTesting() {
         result.insert(entry.switches.command_line_switch);
         break;
       case flags_ui::FeatureEntry::ORIGIN_LIST_VALUE:
-        // Do nothing, origin list values are not added as feature flags.
+      case flags_ui::FeatureEntry::STRING_VALUE:
+        // Do nothing, origin list values and string values are not added as
+        // feature flags.
         break;
       case flags_ui::FeatureEntry::MULTI_VALUE:
         for (int j = 0; j < entry.NumOptions(); ++j) {
@@ -66,14 +68,14 @@ std::set<std::string> GetAllPublicSwitchesAndFeaturesForTesting() {
         result.insert(std::string(entry.feature.feature->name) + ":enabled");
         result.insert(std::string(entry.feature.feature->name) + ":disabled");
         break;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       case flags_ui::FeatureEntry::PLATFORM_FEATURE_NAME_VALUE:
       case flags_ui::FeatureEntry::PLATFORM_FEATURE_NAME_WITH_PARAMS_VALUE:
         std::string name(entry.platform_feature_name.name);
         result.insert(name + ":enabled");
         result.insert(name + ":disabled");
         break;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     }
   }
   return result;
@@ -86,10 +88,10 @@ std::vector<std::string> GetAllVariationIds() {
     // Only FEATURE_WITH_PARAMS_VALUE or PLATFORM_FEATURE_NAME_WITH_PARAMS_VALUE
     // entries can have a variation id.
     if (entry.type != flags_ui::FeatureEntry::FEATURE_WITH_PARAMS_VALUE
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
         && entry.type !=
                flags_ui::FeatureEntry::PLATFORM_FEATURE_NAME_WITH_PARAMS_VALUE
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     ) {
       continue;
     }
@@ -102,17 +104,22 @@ std::vector<std::string> GetAllVariationIds() {
   return variation_ids;
 }
 
-// Returns the parsed |variation_id|. If it is malformed, returns absl::nullopt.
-absl::optional<int> ParseVariationId(const std::string& variation_id) {
-  // Remove the "t" prefix if it is there.
-  std::string trimmed_id =
-      base::StartsWith(variation_id, "t", base::CompareCase::SENSITIVE)
-          ? variation_id.substr(1)
-          : variation_id;
-  int id;
-  if (base::StringToInt(trimmed_id, &id) && id >= 0)
-    return id;
-  return absl::nullopt;
+// Returns the parsed pair: <variation_id, is_triggering>.
+std::pair<int, bool> ParseVariationId(const std::string& variation_str) {
+  // Fail if an empty string has been supplied as variation_id.
+  EXPECT_FALSE(variation_str.empty())
+      << "Empty string used to denote variation ID. Use `nullptr` instead.";
+
+  int variation_id{};
+  bool is_triggering = variation_str[0] == 't';
+
+  // Fail if we could not process the integer value.
+  EXPECT_TRUE(
+      base::StringToInt(&variation_str[is_triggering ? 1 : 0], &variation_id))
+      << "Invalid variation string: \"" << variation_str
+      << "\": must be either `#######` or `t#######`";
+
+  return {variation_id, is_triggering};
 }
 
 }  // namespace
@@ -166,20 +173,49 @@ TEST(AboutFlagsTest, RecentUnexpireFlagsArePresent) {
       testing::GetFeatureEntries(), CHROME_VERSION_MAJOR);
 }
 
-// Ensures that all variation IDs specified are well-formed and unique.
+// Ensures that all variation IDs specified are well-formed.
+// - Variation IDs may be re-used, when multiple variants change client-side
+//   behavior alone.
+// - Variation IDs must be associated with the appropriate pool of valid numbers
 TEST(AboutFlagsTest, VariationIdsAreValid) {
-  std::set<int> variation_ids;
+  std::set<int> nontriggering_variation_ids;
+  std::set<int> triggering_variation_ids;
 
-  for (const std::string& variation_id : GetAllVariationIds()) {
-    absl::optional<int> id = ParseVariationId(variation_id);
-    EXPECT_TRUE(id)
+  struct VariationIdRange {
+    int start;
+    int end;
+
+    bool Contains(int id) const { return id >= start && id <= end; }
+    std::string ToString() const {
+      return base::StringPrintf("[%d, %d]", start, end);
+    }
+  };
+  // See: go/finch-allocating-gws-ids.
+  const VariationIdRange kVariationIdRange1{3340000, 3399999};
+  const VariationIdRange kVariationIdRange2{101000000, 101099999};
+
+  for (const std::string& variation_str : GetAllVariationIds()) {
+    auto [variation_id, is_triggering] = ParseVariationId(variation_str);
+    // Reject variation IDs used both as triggering and non-triggering.
+    // This is generally considered invalid.
+    EXPECT_FALSE(
+        // Triggering, but already recorded as visible.
+        (is_triggering && nontriggering_variation_ids.contains(variation_id)) ||
+        // Visible, but already recorded as triggering.
+        (!is_triggering && triggering_variation_ids.contains(variation_id)))
         << "Variation ID \"" << variation_id
-        << "\" is malformed. It must be a nonnegative integer and can "
-           "optionally start with a \"t\".";
+        << "\" used both as triggering and non-triggering.";
 
-    if (id.has_value()) {
-      EXPECT_TRUE(variation_ids.insert(id.value()).second)
-          << "Variation ID " << variation_id << " is duplicated.";
+    EXPECT_TRUE(kVariationIdRange1.Contains(variation_id) ||
+                kVariationIdRange2.Contains(variation_id))
+        << "Variation ID \"" << variation_id << "\" falls outside of ranges of "
+        << "valid variation IDs: " << kVariationIdRange1.ToString() << " and "
+        << kVariationIdRange2.ToString() << ".";
+
+    if (is_triggering) {
+      triggering_variation_ids.insert(variation_id);
+    } else {
+      nontriggering_variation_ids.insert(variation_id);
     }
   }
 }
@@ -189,7 +225,7 @@ TEST(AboutFlagsTest, VariationIdsAreValid) {
 TEST(AboutFlagsTest, ScopedFeatureEntriesRestoresFeatureEntries) {
   const base::span<const flags_ui::FeatureEntry> old_entries =
       testing::GetFeatureEntries();
-  EXPECT_GT(old_entries.size(), 0U);
+  EXPECT_FALSE(old_entries.empty());
   const char* first_feature_name = old_entries[0].internal_name;
   {
     static BASE_FEATURE(kTestFeature1, "FeatureName1",
@@ -212,9 +248,9 @@ class AboutFlagsHistogramTest : public ::testing::Test {
   // This is a helper function to check that all IDs in enum LoginCustomFlags in
   // histograms.xml are unique.
   void SetSwitchToHistogramIdMapping(const std::string& switch_name,
-                                     const Sample switch_histogram_id,
-                                     std::map<std::string, Sample>* out_map) {
-    const std::pair<std::map<std::string, Sample>::iterator, bool> status =
+                                     const Sample32 switch_histogram_id,
+                                     std::map<std::string, Sample32>* out_map) {
+    const std::pair<std::map<std::string, Sample32>::iterator, bool> status =
         out_map->insert(std::make_pair(switch_name, switch_histogram_id));
     if (!status.second) {
       EXPECT_TRUE(status.first->second == switch_histogram_id)
@@ -227,14 +263,14 @@ class AboutFlagsHistogramTest : public ::testing::Test {
   // This method generates a hint for the user for what string should be added
   // to the enum LoginCustomFlags to make in consistent.
   std::string GetHistogramEnumEntryText(const std::string& switch_name,
-                                        Sample value) {
+                                        Sample32 value) {
     return base::StringPrintf(
         "<int value=\"%d\" label=\"%s\"/>", value, switch_name.c_str());
   }
 };
 
 TEST_F(AboutFlagsHistogramTest, CheckHistograms) {
-  absl::optional<base::HistogramEnumEntryMap> login_custom_flags =
+  std::optional<base::HistogramEnumEntryMap> login_custom_flags =
       base::ReadEnumFromEnumsXml("LoginCustomFlags");
   ASSERT_TRUE(login_custom_flags)
       << "Error reading enum 'LoginCustomFlags' from "
@@ -257,7 +293,7 @@ TEST_F(AboutFlagsHistogramTest, CheckHistograms) {
                                     &metadata_switches_ids);
       continue;
     }
-    const Sample uma_id = flags_ui::GetSwitchUMAId(entry.second);
+    const Sample32 uma_id = flags_ui::GetSwitchUMAId(entry.second);
     EXPECT_EQ(uma_id, entry.first)
         << "tools/metrics/histograms/enums.xml enum LoginCustomFlags "
            "entry '"
@@ -274,7 +310,7 @@ TEST_F(AboutFlagsHistogramTest, CheckHistograms) {
     // Skip empty placeholders.
     if (flag.empty())
       continue;
-    const Sample uma_id = flags_ui::GetSwitchUMAId(flag);
+    const Sample32 uma_id = flags_ui::GetSwitchUMAId(flag);
     EXPECT_NE(flags_ui::testing::kBadSwitchFormatHistogramId, uma_id)
         << "Command-line switch '" << flag
         << "' from about_flags.cc has UMA ID equal to reserved value "

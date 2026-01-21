@@ -7,8 +7,8 @@
 #include <memory>
 #include <tuple>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -311,7 +311,7 @@ TEST_F(NetworkConnectionTrackerTest, GetConnectionType) {
 
   ConnectionTypeGetter getter1(network_connection_tracker());
   ConnectionTypeGetter getter2(network_connection_tracker());
-  // These two GetConnectionType() will finish asynchonously because network
+  // These two GetConnectionType() will finish asynchronously because network
   // service is not yet set up.
   EXPECT_FALSE(getter1.GetConnectionType());
   EXPECT_FALSE(getter2.GetConnectionType());
@@ -394,8 +394,8 @@ TEST_F(NetworkGetConnectionTest, GetConnectionTypeOnDifferentThread) {
   // Flush pending OnInitialConnectionType() notification and force |tracker| to
   // use async for GetConnectionType() calls.
   base::RunLoop().RunUntilIdle();
-  base::subtle::NoBarrier_Store(&network_connection_tracker()->connection_type_,
-                                -1);
+  network_connection_tracker()->connection_type_.store(-1,
+      std::memory_order_relaxed);
   {
     base::RunLoop run_loop;
     getter_thread()->task_runner()->PostTaskAndReply(

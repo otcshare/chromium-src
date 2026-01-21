@@ -6,9 +6,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "ash/webui/os_feedback_ui/mojom/os_feedback_ui.mojom.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
@@ -20,12 +23,11 @@
 #include "google_apis/google_api_keys.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace ash {
@@ -73,6 +75,15 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           data:
             "The free-form text that user has entered."
           destination: GOOGLE_OWNED_SERVICE
+          internal {
+            contacts {
+              email: "cros-device-enablement@google.com"
+            }
+          }
+          user_data {
+            type: ARBITRARY_DATA
+          }
+          last_reviewed: "2023-08-14"
         }
         policy {
           cookies_allowed: NO
@@ -188,8 +199,7 @@ std::string ConvertSearchRequestToJson(
     requested_results += kExtraItemsInRawResponse;
   }
   request_dict.Set("max_results", base::NumberToString(requested_results));
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
+  std::string request_content = base::WriteJson(request_dict).value_or("");
   VLOG(2) << request_content;
   return request_content;
 }
@@ -202,7 +212,7 @@ HelpContentType ToHelpContentType(const std::string& result_type) {
     return HelpContentType::kArticle;
   }
 
-  if (result_type.find("FORUM") != std::string::npos) {
+  if (result_type.contains("FORUM")) {
     return HelpContentType::kForum;
   }
   LOG(WARNING) << "HelpContentProvider unknown content type: " << result_type;
@@ -312,34 +322,19 @@ void HelpContentProvider::OnHelpContentSearchResponse(
     const uint32_t max_results,
     GetHelpContentsCallback callback,
     std::unique_ptr<network::SimpleURLLoader> url_loader,
-    std::unique_ptr<std::string> response_body) {
-  if (IsLoaderSuccessful(url_loader.get()) && response_body) {
-    DVLOG(2) << "HelpContentProvider response body: " << *response_body;
-    // Send the JSON string to a dedicated service for safe parsing.
-    data_decoder_.ParseJson(
-        *response_body,
-        base::BindOnce(&HelpContentProvider::OnResponseJsonParsed,
-                       weak_ptr_factory_.GetWeakPtr(), max_results,
-                       std::move(callback)));
-  } else {
-    SearchResponsePtr response = SearchResponse::New();
-    std::move(callback).Run(std::move(response));
-  }
-}
-
-void HelpContentProvider::OnResponseJsonParsed(
-    const uint32_t max_results,
-    GetHelpContentsCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
+    std::optional<std::string> response_body) {
   SearchResponsePtr response = SearchResponse::New();
 
-  if (result.has_value()) {
-    PopulateSearchResponse(app_locale_, is_child_account_, max_results, *result,
-                           response);
-  } else {
-    LOG(ERROR)
-        << "HelpContentProvider data decoder failed to parse json. Error: "
-        << result.error();
+  if (IsLoaderSuccessful(url_loader.get()) && response_body) {
+    DVLOG(2) << "HelpContentProvider response body: " << *response_body;
+    std::optional<base::Value> result = base::JSONReader::Read(
+        *response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+    if (result.has_value()) {
+      PopulateSearchResponse(app_locale_, is_child_account_, max_results,
+                             *result, response);
+    } else {
+      LOG(ERROR) << "HelpContentProvider failed to parse json";
+    }
   }
 
   std::move(callback).Run(std::move(response));

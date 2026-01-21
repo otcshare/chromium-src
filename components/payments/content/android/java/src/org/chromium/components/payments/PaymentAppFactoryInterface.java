@@ -4,7 +4,10 @@
 
 package org.chromium.components.payments;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Interface for factories that create payment apps. */
+@NullMarked
 public interface PaymentAppFactoryInterface {
     /**
      * Creates payment apps for the |delegate|. When this method is invoked, each factory must:
@@ -21,4 +24,9 @@ public interface PaymentAppFactoryInterface {
      * apps.
      */
     void create(PaymentAppFactoryDelegate delegate);
+
+    /** Returns true if this factory creates internal payment apps. */
+    default boolean isInternal() {
+        return false;
+    }
 }

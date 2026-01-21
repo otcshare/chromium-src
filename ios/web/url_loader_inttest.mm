@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #import <memory>
+#import <optional>
+#import <string>
 
 #import "base/run_loop.h"
 #import "base/test/bind.h"
@@ -15,15 +17,11 @@
 #import "services/network/public/cpp/simple_url_loader.h"
 #import "services/network/public/mojom/url_response_head.mojom.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace web {
 
 class URLLoaderTest : public WebTest {
  protected:
-  URLLoaderTest() : WebTest(WebTaskEnvironment::Options::IO_MAINLOOP) {}
+  URLLoaderTest() : WebTest(WebTaskEnvironment::MainThreadType::IO) {}
 
  protected:
   net::EmbeddedTestServer server_;
@@ -49,12 +47,12 @@ TEST_F(URLLoaderTest, Basic) {
   base::RunLoop run_loop;
   loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
       GetBrowserState()->GetURLLoaderFactory(),
-      base::BindLambdaForTesting(
-          [&](std::unique_ptr<std::string> response_body) {
-            if (response_body)
-              result = *response_body;
-            run_loop.Quit();
-          }));
+      base::BindLambdaForTesting([&](std::optional<std::string> response_body) {
+        if (response_body) {
+          result = std::move(response_body).value();
+        }
+        run_loop.Quit();
+      }));
   run_loop.Run();
 
   EXPECT_EQ(0, loader->NetError());

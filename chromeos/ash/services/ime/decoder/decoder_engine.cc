@@ -4,9 +4,10 @@
 
 #include "chromeos/ash/services/ime/decoder/decoder_engine.h"
 
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
 #include "chromeos/ash/services/ime/constants.h"
 
 namespace ash {
@@ -29,16 +30,16 @@ class ClientDelegate : public ImeClientDelegate {
 
   ~ClientDelegate() override {}
 
-  const char* ImeSpec() override { return ime_spec_.c_str(); }
+  void Unused1() override { NOTIMPLEMENTED(); }
 
   void Process(const uint8_t* data, size_t size) override {
     if (client_remote_ && client_remote_.is_bound()) {
-      std::vector<uint8_t> msg(data, data + size);
+      std::vector<uint8_t> msg(data, UNSAFE_TODO(data + size));
       client_remote_->ProcessMessage(msg, base::DoNothing());
     }
   }
 
-  void Destroy() override {}
+  void Destroy() override { delete this; }
 
  private:
   void OnDisconnected() {
@@ -57,7 +58,7 @@ class ClientDelegate : public ImeClientDelegate {
 
 DecoderEngine::DecoderEngine(
     ImeCrosPlatform* platform,
-    absl::optional<ImeSharedLibraryWrapper::EntryPoints> entry_points) {
+    std::optional<ImeSharedLibraryWrapper::EntryPoints> entry_points) {
   if (!entry_points) {
     LOG(WARNING) << "DecoderEngine INIT INCOMPLETE.";
     return;
@@ -83,8 +84,8 @@ bool DecoderEngine::BindRequest(
   // Activates an IME engine via the shared lib. Passing a |ClientDelegate| for
   // engine instance created by the shared lib to make safe calls on the client.
   if (decoder_entry_points_ &&
-      decoder_entry_points_->supports(ime_spec.c_str()) &&
-      decoder_entry_points_->activate_ime(
+      decoder_entry_points_->proto_mode_supports(ime_spec.c_str()) &&
+      decoder_entry_points_->proto_mode_activate_ime(
           ime_spec.c_str(), new ClientDelegate(ime_spec, std::move(remote)))) {
     decoder_channel_receivers_.Add(this, std::move(receiver));
     // TODO(https://crbug.com/837156): Registry connection error handler.
@@ -100,7 +101,7 @@ void DecoderEngine::ProcessMessage(const std::vector<uint8_t>& message,
 
   // Handle message via corresponding functions of loaded decoder.
   if (decoder_entry_points_) {
-    decoder_entry_points_->process(message.data(), message.size());
+    decoder_entry_points_->proto_mode_process(message.data(), message.size());
   }
 
   std::move(callback).Run(result);

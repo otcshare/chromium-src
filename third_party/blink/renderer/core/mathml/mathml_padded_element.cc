@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/mathml/mathml_padded_element.h"
 
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
-#include "third_party/blink/renderer/core/layout/ng/mathml/layout_ng_mathml_block_with_anonymous_mrow.h"
+#include "third_party/blink/renderer/core/layout/mathml/layout_mathml_block_with_anonymous_mrow.h"
 
 namespace blink {
 
@@ -16,50 +16,49 @@ void MathMLPaddedElement::AddMathBaselineIfNeeded(
     ComputedStyleBuilder& builder,
     const CSSToLengthConversionData& conversion_data) {
   if (auto length_or_percentage_value = AddMathLengthToComputedStyle(
-          conversion_data, mathml_names::kHeightAttr, AllowPercentages::kNo))
+          conversion_data, mathml_names::kHeightAttr, AllowPercentages::kNo,
+          CSSPrimitiveValue::ValueRange::kNonNegative)) {
     builder.SetMathBaseline(std::move(*length_or_percentage_value));
+  }
 }
 
 void MathMLPaddedElement::AddMathPaddedDepthIfNeeded(
     ComputedStyleBuilder& builder,
     const CSSToLengthConversionData& conversion_data) {
   if (auto length_or_percentage_value = AddMathLengthToComputedStyle(
-          conversion_data, mathml_names::kDepthAttr, AllowPercentages::kNo))
+          conversion_data, mathml_names::kDepthAttr, AllowPercentages::kNo,
+          CSSPrimitiveValue::ValueRange::kNonNegative)) {
     builder.SetMathPaddedDepth(std::move(*length_or_percentage_value));
+  }
 }
 
 void MathMLPaddedElement::AddMathPaddedLSpaceIfNeeded(
     ComputedStyleBuilder& builder,
     const CSSToLengthConversionData& conversion_data) {
   if (auto length_or_percentage_value = AddMathLengthToComputedStyle(
-          conversion_data, mathml_names::kLspaceAttr))
+          conversion_data, mathml_names::kLspaceAttr, AllowPercentages::kNo,
+          CSSPrimitiveValue::ValueRange::kNonNegative)) {
     builder.SetMathLSpace(std::move(*length_or_percentage_value));
+  }
 }
 
 void MathMLPaddedElement::AddMathPaddedVOffsetIfNeeded(
     ComputedStyleBuilder& builder,
     const CSSToLengthConversionData& conversion_data) {
   if (auto length_or_percentage_value = AddMathLengthToComputedStyle(
-          conversion_data, mathml_names::kVoffsetAttr))
+          conversion_data, mathml_names::kVoffsetAttr, AllowPercentages::kNo)) {
     builder.SetMathPaddedVOffset(std::move(*length_or_percentage_value));
+  }
 }
 
 void MathMLPaddedElement::ParseAttribute(
     const AttributeModificationParams& param) {
   if (param.name == mathml_names::kLspaceAttr ||
       param.name == mathml_names::kVoffsetAttr) {
-    // TODO(crbug.com/1121113): Isn't it enough to set needs style recalc and
-    // let the style system perform proper layout and paint invalidation?
     SetNeedsStyleRecalc(
         kLocalStyleChange,
         StyleChangeReasonForTracing::Create(style_change_reason::kAttribute));
-    if (GetLayoutObject() && GetLayoutObject()->IsMathML()) {
-      GetLayoutObject()
-          ->SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
-              layout_invalidation_reason::kAttributeChanged);
-    }
   }
-
   MathMLRowElement::ParseAttribute(param);
 }
 
@@ -73,11 +72,13 @@ bool MathMLPaddedElement::IsPresentationAttribute(
 void MathMLPaddedElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == mathml_names::kWidthAttr) {
-    if (!value.EndsWith('%')) {
+    if (const CSSPrimitiveValue* width_value =
+            ParseMathLength(name, AllowPercentages::kNo,
+                            CSSPrimitiveValue::ValueRange::kNonNegative)) {
       AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWidth,
-                                              value);
+                                              *width_value);
     }
   } else {
     MathMLElement::CollectStyleForPresentationAttribute(name, value, style);
@@ -85,12 +86,11 @@ void MathMLPaddedElement::CollectStyleForPresentationAttribute(
 }
 
 LayoutObject* MathMLPaddedElement::CreateLayoutObject(
-    const ComputedStyle& style,
-    LegacyLayout legacy) {
-  if (!RuntimeEnabledFeatures::MathMLCoreEnabled() ||
-      !style.IsDisplayMathType() || legacy == LegacyLayout::kForce)
-    return MathMLElement::CreateLayoutObject(style, legacy);
-  return MakeGarbageCollected<LayoutNGMathMLBlockWithAnonymousMrow>(this);
+    const ComputedStyle& style) {
+  if (!style.IsDisplayMathType()) {
+    return MathMLElement::CreateLayoutObject(style);
+  }
+  return MakeGarbageCollected<LayoutMathMLBlockWithAnonymousMrow>(this);
 }
 
 }  // namespace blink

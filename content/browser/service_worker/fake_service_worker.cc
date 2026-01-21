@@ -6,7 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -33,8 +34,9 @@ void FakeServiceWorker::Bind(
 }
 
 void FakeServiceWorker::RunUntilInitializeGlobalScope() {
-  if (host_)
+  if (host_) {
     return;
+  }
   base::RunLoop loop;
   quit_closure_for_initialize_global_scope_ = loop.QuitClosure();
   loop.Run();
@@ -44,15 +46,22 @@ void FakeServiceWorker::FlushForTesting() {
   receiver_.FlushForTesting();
 }
 
+base::WeakPtr<FakeServiceWorker> FakeServiceWorker::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void FakeServiceWorker::InitializeGlobalScope(
     mojo::PendingAssociatedRemote<blink::mojom::ServiceWorkerHost>
         service_worker_host,
+    mojo::PendingAssociatedRemote<blink::mojom::AssociatedInterfaceProvider>
+        associated_interfaces_from_browser,
+    mojo::PendingAssociatedReceiver<blink::mojom::AssociatedInterfaceProvider>
+        associated_interfaces_to_browser,
     blink::mojom::ServiceWorkerRegistrationObjectInfoPtr registration_info,
     blink::mojom::ServiceWorkerObjectInfoPtr service_worker_info,
     blink::mojom::FetchHandlerExistence fetch_handler_existence,
-    mojo::PendingReceiver<blink::mojom::ReportingObserver>
-        reporting_observer_receiver,
-    blink::mojom::AncestorFrameType ancestor_frame_type) {
+    blink::mojom::AncestorFrameType ancestor_frame_type,
+    const blink::StorageKey& storage_key) {
   host_.Bind(std::move(service_worker_host));
 
   // Enable callers to use these endpoints without us actually binding them
@@ -73,8 +82,9 @@ void FakeServiceWorker::InitializeGlobalScope(
 
   registration_info_ = std::move(registration_info);
   service_worker_info_ = std::move(service_worker_info);
-  if (quit_closure_for_initialize_global_scope_)
+  if (quit_closure_for_initialize_global_scope_) {
     std::move(quit_closure_for_initialize_global_scope_).Run();
+  }
 
   fetch_handler_existence_ = fetch_handler_existence;
 }
@@ -143,7 +153,7 @@ void FakeServiceWorker::DispatchNotificationClickEvent(
     const std::string& notification_id,
     const blink::PlatformNotificationData& notification_data,
     int action_index,
-    const absl::optional<std::u16string>& reply,
+    const std::optional<std::u16string>& reply,
     DispatchNotificationClickEventCallback callback) {
   std::move(callback).Run(blink::mojom::ServiceWorkerEventStatus::COMPLETED);
 }
@@ -156,9 +166,16 @@ void FakeServiceWorker::DispatchNotificationCloseEvent(
 }
 
 void FakeServiceWorker::DispatchPushEvent(
-    const absl::optional<std::string>& payload,
+    const std::optional<std::string>& payload,
     DispatchPushEventCallback callback) {
   std::move(callback).Run(blink::mojom::ServiceWorkerEventStatus::COMPLETED);
+}
+
+void FakeServiceWorker::DispatchPushEventRecordingNetworkRequests(
+    const std::optional<std::string>& payload,
+    DispatchPushEventRecordingNetworkRequestsCallback callback) {
+  std::move(callback).Run(blink::mojom::ServiceWorkerEventStatus::COMPLETED,
+                          std::nullopt);
 }
 
 void FakeServiceWorker::DispatchPushSubscriptionChangeEvent(
@@ -237,11 +254,11 @@ void FakeServiceWorker::SetIdleDelay(base::TimeDelta delay) {
 }
 
 void FakeServiceWorker::AddKeepAlive() {
-  NOTIMPLEMENTED();
+  idle_delay_.reset();
 }
 
 void FakeServiceWorker::ClearKeepAlive() {
-  NOTIMPLEMENTED();
+  idle_delay_ = base::Seconds(30);
 }
 
 void FakeServiceWorker::AddMessageToConsole(

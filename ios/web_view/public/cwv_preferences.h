@@ -38,8 +38,8 @@ CWV_EXPORT
 // |YES|. When it is NO, it doesn't ask if you want to save passwords but will
 // continue to fill passwords.
 //
-// TODO(crbug.com/905221): Preference should also control autofill behavior for
-// the passwords.
+// TODO(crbug.com/40602365): Preference should also control autofill behavior
+// for the passwords.
 @property(nonatomic, assign, getter=isPasswordAutofillEnabled)
     BOOL passwordAutofillEnabled;
 
@@ -55,6 +55,30 @@ CWV_EXPORT
 @property(nonatomic, assign, getter=isSafeBrowsingEnabled)
     BOOL safeBrowsingEnabled;
 
+// Whether or not address sync is enabled.
+@property(nonatomic, assign, getter=isAutofillAddressSyncEnabled)
+    BOOL autofillAddressSyncEnabled;
+
+// Whether or not address sync is enabled.
+@property(nonatomic, assign, getter=isPasswordAffiliationEnabled)
+    BOOL passwordAffiliationEnabled;
+
+// Whether or not credit card virtual card usage is enabled.
+@property(nonatomic, assign, getter=isAutofillVCNUsageEnabled)
+    BOOL autofillVCNUsageEnabled;
+
+// Whether or not image fetcher usage is enabled.
+@property(nonatomic, assign, getter=isUseImageFetcherEnabled)
+    BOOL useImageFetcherEnabled;
+
+// Whether or not card custom image usage is enabled.
+@property(nonatomic, assign, getter=isUseCardCustomImageEnabled)
+    BOOL useCardCustomImageEnabled;
+
+// Whether or not risk based authentication is enabled.
+@property(nonatomic, assign, getter=isRiskBasedAuthenticationEnabled)
+    BOOL riskBasedAuthenticationEnabled;
+
 - (instancetype)init NS_UNAVAILABLE;
 
 // Resets all translation settings back to default. In particular, this will
@@ -63,6 +87,10 @@ CWV_EXPORT
 // incognito to non-incognito, this has no effect if this instance is from an
 // incognito CWVWebViewConfiguration.
 - (void)resetTranslationSettings;
+
+// Immediately writes any changes in memory to disk.
+// `completionHandler` callback when writes are committed.
+- (void)commitPendingWrite:(void (^)(void))completionHandler;
 
 @end
 

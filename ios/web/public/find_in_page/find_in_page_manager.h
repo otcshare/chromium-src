@@ -1,17 +1,14 @@
-// Copyright 2019 The Chromium Authors
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_WEB_PUBLIC_FIND_IN_PAGE_FIND_IN_PAGE_MANAGER_H_
 #define IOS_WEB_PUBLIC_FIND_IN_PAGE_FIND_IN_PAGE_MANAGER_H_
 
+#import "ios/web/public/find_in_page/find_in_page_manager_delegate.h"
 #import "ios/web/public/web_state_user_data.h"
 
-@class NSString;
-
 namespace web {
-
-class FindInPageManagerDelegate;
 
 // Indicates what action the FindinPageManager should take.
 enum class FindInPageOptions {
@@ -29,9 +26,14 @@ enum class FindInPageOptions {
   FindInPagePrevious,
 };
 
-// Manager for searching text on a page. Supports searching within all iframes.
-class FindInPageManager : public web::WebStateUserData<FindInPageManager> {
+// Manager for searching text on a page. This manager relies on the Find
+// interaction API available on iOS 16 or later.
+class FindInPageManager : public WebStateUserData<FindInPageManager> {
  public:
+  static std::unique_ptr<FindInPageManager> Create(WebState* web_state);
+  static std::unique_ptr<FindInPageManager> Create(WebState* web_state,
+                                                   base::TimeDelta delay);
+
   // Searches for string `query`. Executes new search or traverses results based
   // on `options`. `query` must not be null if `options` is `FindInPageSearch`.
   // `query` is ignored if `options` is not `FindInPageSearch`. If new search is
@@ -49,22 +51,14 @@ class FindInPageManager : public web::WebStateUserData<FindInPageManager> {
   // FindInPageOptions::FindInPageSearch is never called.
   virtual void StopFinding() = 0;
 
-  // Returns false if page content can not be searched (for example: an image)
-  // or if search is not supported (for example: PDF files).
+  // Returns false if page content can not be searched.
   virtual bool CanSearchContent() = 0;
 
   virtual FindInPageManagerDelegate* GetDelegate() = 0;
   virtual void SetDelegate(FindInPageManagerDelegate* delegate) = 0;
 
-  FindInPageManager(const FindInPageManager&) = delete;
-  FindInPageManager& operator=(const FindInPageManager&) = delete;
-
-  ~FindInPageManager() override {}
-
-  WEB_STATE_USER_DATA_KEY_DECL();
-
  protected:
-  FindInPageManager() {}
+  friend class WebStateUserData<FindInPageManager>;
 };
 
 }  // namespace web

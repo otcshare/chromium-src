@@ -16,6 +16,13 @@ bool StructTraits<ax::mojom::AXModeDataView, ui::AXMode>::Read(
   }
 
   out->flags_ = data.flags();
+
+  // This is a bit field. Check that flags fall within accepted bounds.
+  if (data.filter_flags() >= ui::AXMode::kLastModeFlag * 2) {
+    return false;
+  }
+
+  out->filter_flags_ = data.filter_flags();
   return true;
 }
 

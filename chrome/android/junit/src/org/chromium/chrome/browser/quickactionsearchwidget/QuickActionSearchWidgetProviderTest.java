@@ -4,10 +4,10 @@
 
 package org.chromium.chrome.browser.quickactionsearchwidget;
 
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyInt;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,15 +36,16 @@ import org.robolectric.shadows.ShadowLog;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.quickactionsearchwidget.QuickActionSearchWidgetProvider.QuickActionSearchWidgetProviderDino;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
+import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 
-/**
- * Tests for the (@link QuickActionSearchWidgetProvider}.
- */
+/** Tests for the (@link QuickActionSearchWidgetProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = {ShadowLog.class})
+@Config(
+        manifest = Config.NONE,
+        shadows = {ShadowLog.class})
 public class QuickActionSearchWidgetProviderTest {
     private static final int WIDGET_A_ID = 123;
     private static final int WIDGET_B_ID = 987;
@@ -63,12 +64,12 @@ public class QuickActionSearchWidgetProviderTest {
 
     @Before
     public void setUp() {
-        ShadowLog.stream = System.out;
         mContext = Mockito.spy(ApplicationProvider.getApplicationContext());
         mOptionsWidgetA = new Bundle();
         mOptionsWidgetB = new Bundle();
-        mPreferences = new SearchActivityPreferences(
-                "Search Engine", "https://search.engine.com", true, true, true);
+        mPreferences =
+                new SearchActivityPreferences(
+                        "Search Engine", new GURL("https://search.engine.com"), true, true, true);
 
         // Inflate an actual RemoteViews to avoid stubbing internal methods or making
         // any other assumptions about the class.
@@ -182,7 +183,7 @@ public class QuickActionSearchWidgetProviderTest {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
         // Lastly, set the empty array of sizes.
         mOptionsWidgetA.putParcelableArrayList(
-                AppWidgetManager.OPTION_APPWIDGET_SIZES, new ArrayList<SizeF>());
+                AppWidgetManager.OPTION_APPWIDGET_SIZES, new ArrayList<>());
         mWidgetProvider.getRemoteViews(mContext, mPreferences, mOptionsWidgetA);
 
         // There are 2 fake widgets that we work with, so expect both being evaluated
@@ -199,8 +200,9 @@ public class QuickActionSearchWidgetProviderTest {
     public void testCreateWidgetFromSizeSpecs() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
         // Lastly, set a different array of sizes and confirm it is used instead.
-        mOptionsWidgetA.putParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES,
-                new ArrayList<SizeF>(Arrays.asList(new SizeF(50, 50))));
+        mOptionsWidgetA.putParcelableArrayList(
+                AppWidgetManager.OPTION_APPWIDGET_SIZES,
+                new ArrayList<>(Arrays.asList(new SizeF(50, 50))));
         mWidgetProvider.getRemoteViews(mContext, mPreferences, mOptionsWidgetA);
 
         // Only one call is expected here, because we declare only one size in our list.
@@ -215,8 +217,9 @@ public class QuickActionSearchWidgetProviderTest {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
         // Define new sizes. These must be ignored, because RemoteViews constructor is not
         // supported.
-        mOptionsWidgetA.putParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES,
-                new ArrayList<SizeF>(Arrays.asList(new SizeF(50, 50))));
+        mOptionsWidgetA.putParcelableArrayList(
+                AppWidgetManager.OPTION_APPWIDGET_SIZES,
+                new ArrayList<>(Arrays.asList(new SizeF(50, 50))));
         mWidgetProvider.getRemoteViews(mContext, mPreferences, mOptionsWidgetA);
 
         // There are 2 fake widgets that we work with, so expect both being evaluated

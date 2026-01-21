@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/run_loop.h"
 #include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/mock_exported_object.h"
 #include "dbus/mock_object_proxy.h"
@@ -79,7 +80,7 @@ class ServiceProviderTestHelper {
       const std::string& interface_name,
       const std::string& signal_name,
       dbus::ObjectProxy::SignalCallback signal_callback,
-      dbus::ObjectProxy::OnConnectedCallback* connected_callback);
+      dbus::ObjectProxy::OnConnectedCallback connected_callback);
 
   // Behaves as |mock_exported_object_|'s SendSignal().
   void MockSendSignal(dbus::Signal* signal);
@@ -94,6 +95,7 @@ class ServiceProviderTestHelper {
   dbus::ExportedObject::MethodCallCallback method_callback_;
   dbus::ObjectProxy::SignalCallback on_signal_callback_;
   std::string exported_method_name_;
+  base::RunLoop loop_;
 };
 
 }  // namespace ash

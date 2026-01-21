@@ -4,8 +4,9 @@
 
 #include <stddef.h>
 
-#include "base/bind.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
@@ -17,7 +18,8 @@
 #include "chrome/browser/extensions/api/braille_display_private/brlapi_connection.h"
 #include "chrome/browser/extensions/api/braille_display_private/stub_braille_controller.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/extensions/profile_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_names.h"
@@ -26,7 +28,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace extensions {
 namespace api {
@@ -140,7 +142,7 @@ class MockBrlapiConnection : public BrlapiConnection {
     }
   }
 
-  MockBrlapiConnectionData* data_;
+  raw_ptr<MockBrlapiConnectionData, LeakedDanglingUntriaged> data_;
   OnDataReadyCallback on_data_ready_;
 };
 
@@ -153,6 +155,7 @@ class BrailleDisplayPrivateApiTest : public ExtensionApiTest {
     connection_data_.display_columns = 0;
     connection_data_.error.brlerrno = BRLAPI_ERROR_SUCCESS;
     connection_data_.reappear_on_disconnect = false;
+    BrailleControllerImpl::GetInstance()->use_self_in_tests_ = true;
     BrailleControllerImpl::GetInstance()->SetCreateBrlapiConnectionForTesting(
         base::BindOnce(&BrailleDisplayPrivateApiTest::CreateBrlapiConnection,
                        base::Unretained(this)));
@@ -187,16 +190,59 @@ IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateApiTest, WriteDots) {
   ASSERT_TRUE(RunExtensionTest("braille_display_private/write_dots", {},
                                {.load_as_component = true}))
       << message_;
-  ASSERT_EQ(3U, connection_data_.written_content.size());
-  const std::string expected_content(
-      connection_data_.display_columns * connection_data_.display_rows, '\0');
-  for (size_t i = 0; i < connection_data_.written_content.size(); ++i) {
-    ASSERT_EQ(std::string(connection_data_.display_columns *
-                              connection_data_.display_rows,
-                          static_cast<char>(i)),
-              connection_data_.written_content[i])
-        << "String " << i << " doesn't match";
-  }
+  ASSERT_EQ(4U, connection_data_.written_content.size());
+
+  // testWriteEmptyCells.
+  EXPECT_EQ(std::string(11, 0), connection_data_.written_content[0]);
+
+  // testWriteOversizedCells.
+  EXPECT_EQ(std::string(11, 1), connection_data_.written_content[1]);
+  EXPECT_EQ(std::string(11, 2), connection_data_.written_content[2]);
+
+  // testWriteUndersizedCellsNoCrash.
+  EXPECT_EQ(std::string(9, 3) + std::string(2, 0),
+            connection_data_.written_content[3]);
+}
+
+IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateApiTest, WriteDotsMultiLine) {
+  connection_data_.display_columns = 20;
+  connection_data_.display_rows = 7;
+  connection_data_.cell_size = 6;
+  ASSERT_TRUE(RunExtensionTest("braille_display_private/write_dots_multi_line",
+                               {}, {.load_as_component = true}))
+      << message_;
+  ASSERT_EQ(6U, connection_data_.written_content.size());
+
+  // testWriteEmptyCells.
+  EXPECT_EQ(std::string(140, 0), connection_data_.written_content[0]);
+  EXPECT_EQ(std::string(140, 0), connection_data_.written_content[1]);
+  EXPECT_EQ(std::string(140, 0), connection_data_.written_content[2]);
+
+  // testWriteOversizedCells.
+
+  // The test passes a grid of cells 19x9 on a display of 20x7. (cols x rows).
+  // Thus, the last two rows get truncated, and the last column is unfilled
+  // (0s).
+  std::string grid;
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  grid += std::string(19, 1) + std::string(1, 0);
+  EXPECT_EQ(grid, connection_data_.written_content[3]);
+
+  // This one is 21x8, so only the last row is truncated.
+  EXPECT_EQ(std::string(140, 2), connection_data_.written_content[4]);
+
+  // testWriteUndersizedCellsNoCrash.
+
+  // 10x2.
+  std::string grid2 = std::string(10, 3) + std::string(10, 0) +
+                      std::string(10, 3) + std::string(10, 0) +
+                      std::string(100, 0);
+  EXPECT_EQ(grid2, connection_data_.written_content[5]);
 }
 
 IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateApiTest, KeyEvents) {
@@ -314,8 +360,8 @@ class BrailleDisplayPrivateAPIUserTest : public BrailleDisplayPrivateApiTest {
   void SetUpInProcessBrowserTestFixture() override {
     BrailleDisplayPrivateApiTest::SetUpInProcessBrowserTestFixture();
     zero_duration_mode_ =
-        std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+        std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   }
 
   // BrailleDisplayPrivateApiTest:
@@ -324,7 +370,7 @@ class BrailleDisplayPrivateAPIUserTest : public BrailleDisplayPrivateApiTest {
   }
 
  protected:
-  std::unique_ptr<ui::ScopedAnimationDurationScaleMode> zero_duration_mode_;
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode> zero_duration_mode_;
 };
 
 IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateAPIUserTest, KeyEventOnLockScreen) {
@@ -332,7 +378,7 @@ IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateAPIUserTest, KeyEventOnLockScreen) {
 
   // Make sure the signin profile and active profile are different.
   Profile* signin_profile = ash::ProfileHelper::GetSigninProfile();
-  Profile* user_profile = ProfileManager::GetActiveUserProfile();
+  Profile* user_profile = profile_util::GetActiveUserProfile();
   ASSERT_FALSE(signin_profile->IsSameOrParent(user_profile))
       << signin_profile->GetDebugName() << " vs "
       << user_profile->GetDebugName();
@@ -347,7 +393,7 @@ IN_PROC_BROWSER_TEST_F(BrailleDisplayPrivateAPIUserTest, KeyEventOnLockScreen) {
 
   // Send key event to both profiles.
   KeyEvent key_event;
-  key_event.command = KEY_COMMAND_LINE_UP;
+  key_event.command = KeyCommand::kLineUp;
   signin_api.OnBrailleKeyEvent(key_event);
   user_api.OnBrailleKeyEvent(key_event);
   EXPECT_EQ(0, signin_delegate->GetEventCount());

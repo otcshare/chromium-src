@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/audio_codec_factory.h"
@@ -30,15 +30,13 @@ WebrtcDecodingInfoHandler::WebrtcDecodingInfoHandler()
     : WebrtcDecodingInfoHandler(
           blink::CreateWebrtcVideoDecoderFactory(
               Platform::Current()->GetGpuFactories(),
-              {},
-              {},
               Platform::Current()->GetRenderingColorSpace(),
               base::DoNothing()),
           blink::CreateWebrtcAudioDecoderFactory()) {}
 
 WebrtcDecodingInfoHandler::WebrtcDecodingInfoHandler(
     std::unique_ptr<webrtc::VideoDecoderFactory> video_decoder_factory,
-    rtc::scoped_refptr<webrtc::AudioDecoderFactory> audio_decoder_factory)
+    webrtc::scoped_refptr<webrtc::AudioDecoderFactory> audio_decoder_factory)
     : video_decoder_factory_(std::move(video_decoder_factory)),
       audio_decoder_factory_(std::move(audio_decoder_factory)) {
   std::vector<webrtc::AudioCodecSpec> supported_audio_specs =
@@ -52,8 +50,8 @@ WebrtcDecodingInfoHandler::WebrtcDecodingInfoHandler(
 WebrtcDecodingInfoHandler::~WebrtcDecodingInfoHandler() = default;
 
 void WebrtcDecodingInfoHandler::DecodingInfo(
-    const absl::optional<webrtc::SdpAudioFormat> sdp_audio_format,
-    const absl::optional<webrtc::SdpVideoFormat> sdp_video_format,
+    const std::optional<webrtc::SdpAudioFormat> sdp_audio_format,
+    const std::optional<webrtc::SdpVideoFormat> sdp_video_format,
     const bool video_spatial_scalability,
     OnMediaCapabilitiesDecodingInfoCallback callback) const {
   DCHECK(sdp_audio_format || sdp_video_format);
@@ -64,7 +62,7 @@ void WebrtcDecodingInfoHandler::DecodingInfo(
   if (sdp_audio_format) {
     const String codec_name =
         String::FromUTF8(sdp_audio_format->name).LowerASCII();
-    supported = base::Contains(supported_audio_codecs_, codec_name);
+    supported = supported_audio_codecs_.Contains(codec_name);
     // Audio is always assumed to be power efficient whenever it is
     // supported.
     power_efficient = supported;

@@ -5,9 +5,9 @@
 #ifndef COMPONENTS_OFFLINE_PAGES_CORE_ARCHIVE_MANAGER_H_
 #define COMPONENTS_OFFLINE_PAGES_CORE_ARCHIVE_MANAGER_H_
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 
 namespace base {
 class SequencedTaskRunner;

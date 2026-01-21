@@ -11,6 +11,7 @@
 #import "base/check.h"
 #import "base/memory/ptr_util.h"
 #import "base/memory/ref_counted.h"
+#import "base/task/single_thread_task_runner.h"
 #import "ios/net/cookies/cookie_store_ios.h"
 #import "ios/web/public/browsing_data/system_cookie_store_util.h"
 #import "ios/web/public/web_client.h"
@@ -25,10 +26,6 @@
 #import "net/url_request/url_request_context.h"
 #import "net/url_request/url_request_context_builder.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace web {
 
 ShellURLRequestContextGetter::ShellURLRequestContextGetter(
@@ -38,8 +35,11 @@ ShellURLRequestContextGetter::ShellURLRequestContextGetter(
     : base_path_(base_path),
       network_task_runner_(network_task_runner),
       proxy_config_service_(
-          new net::ProxyConfigServiceIOS(NO_TRAFFIC_ANNOTATION_YET)),
-      system_cookie_store_(web::CreateSystemCookieStore(browser_state)) {}
+          new net::ProxyConfigServiceIOS(NO_TRAFFIC_ANNOTATION_YET)) {
+  auto pair = web::CreateSystemCookieStore(browser_state);
+  system_cookie_store_ = std::move(pair.first);
+  cookie_store_handle_ = std::move(pair.second);
+}
 
 ShellURLRequestContextGetter::~ShellURLRequestContextGetter() {}
 
@@ -56,7 +56,8 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
         web::GetWebClient()->GetUserAgent(web::UserAgentType::MOBILE));
     builder.set_proxy_resolution_service(
         net::ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
-            std::move(proxy_config_service_), net::NetLog::Get(),
+            std::move(proxy_config_service_),
+            /*host_resolver_for_override_rules=*/nullptr, net::NetLog::Get(),
             /*quick_check_enabled=*/true));
     net::URLRequestContextBuilder::HttpCacheParams cache_params;
     cache_params.type = net::URLRequestContextBuilder::HttpCacheParams::DISK;

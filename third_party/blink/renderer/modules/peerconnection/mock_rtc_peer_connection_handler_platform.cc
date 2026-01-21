@@ -8,9 +8,14 @@
 #include <utility>
 
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
+#include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
+#include "third_party/blink/renderer/modules/mediastream/mock_media_stream_video_source.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_dtmf_sender_handler.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_encoded_audio_stream_transformer.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_encoded_video_stream_transformer.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_sender_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_source.h"
@@ -33,7 +38,7 @@ webrtc::PeerConnectionInterface::RTCConfiguration DefaultConfiguration() {
 // Having a refcounted helper class allows multiple DummyRTCRtpSenderPlatform to
 // share the same internal states.
 class DummyRtpSenderInternal
-    : public WTF::ThreadSafeRefCounted<DummyRtpSenderInternal> {
+    : public ThreadSafeRefCounted<DummyRtpSenderInternal> {
  private:
   static uintptr_t last_id_;
 
@@ -55,10 +60,20 @@ uintptr_t DummyRtpSenderInternal::last_id_ = 0;
 class DummyRTCRtpSenderPlatform : public RTCRtpSenderPlatform {
  public:
   explicit DummyRTCRtpSenderPlatform(MediaStreamComponent* component)
-      : internal_(base::MakeRefCounted<DummyRtpSenderInternal>(component)) {}
+      : internal_(base::MakeRefCounted<DummyRtpSenderInternal>(component)),
+        audio_transformer_(std::make_unique<RTCEncodedAudioStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())),
+        video_transformer_(std::make_unique<RTCEncodedVideoStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
+            nullptr)) {}
   DummyRTCRtpSenderPlatform(const DummyRTCRtpSenderPlatform& other)
-      : internal_(other.internal_) {}
-  ~DummyRTCRtpSenderPlatform() override {}
+      : internal_(other.internal_),
+        audio_transformer_(std::make_unique<RTCEncodedAudioStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())),
+        video_transformer_(std::make_unique<RTCEncodedVideoStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
+            nullptr)) {}
+  ~DummyRTCRtpSenderPlatform() override = default;
 
   scoped_refptr<DummyRtpSenderInternal> internal() const { return internal_; }
 
@@ -66,7 +81,8 @@ class DummyRTCRtpSenderPlatform : public RTCRtpSenderPlatform {
     return nullptr;
   }
   uintptr_t Id() const override { return internal_->id(); }
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport() override {
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport()
+      override {
     return nullptr;
   }
   webrtc::DtlsTransportInformation DtlsTransportInformation() override {
@@ -86,14 +102,25 @@ class DummyRTCRtpSenderPlatform : public RTCRtpSenderPlatform {
     return std::unique_ptr<webrtc::RtpParameters>();
   }
   void SetParameters(Vector<webrtc::RtpEncodingParameters>,
-                     absl::optional<webrtc::DegradationPreference>,
+                     std::optional<webrtc::DegradationPreference>,
                      RTCVoidRequest*) override {}
-  void GetStats(RTCStatsReportCallback,
-                const Vector<webrtc::NonStandardGroupId>&) override {}
+  void GetStats(RTCStatsReportCallback) override {}
   void SetStreams(const Vector<String>& stream_ids) override {}
+
+  RTCEncodedAudioStreamTransformer* GetEncodedAudioStreamTransformer()
+      const override {
+    return audio_transformer_.get();
+  }
+
+  RTCEncodedVideoStreamTransformer* GetEncodedVideoStreamTransformer()
+      const override {
+    return video_transformer_.get();
+  }
 
  private:
   scoped_refptr<DummyRtpSenderInternal> internal_;
+  std::unique_ptr<RTCEncodedAudioStreamTransformer> audio_transformer_;
+  std::unique_ptr<RTCEncodedVideoStreamTransformer> video_transformer_;
 };
 
 class DummyRTCRtpReceiverPlatform : public RTCRtpReceiverPlatform {
@@ -102,35 +129,54 @@ class DummyRTCRtpReceiverPlatform : public RTCRtpReceiverPlatform {
 
  public:
   explicit DummyRTCRtpReceiverPlatform(MediaStreamSource::StreamType type)
-      : id_(++last_id_) {
+      : id_(++last_id_),
+        audio_transformer_(std::make_unique<RTCEncodedAudioStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())),
+        video_transformer_(std::make_unique<RTCEncodedVideoStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
+            nullptr)) {
     if (type == MediaStreamSource::StreamType::kTypeAudio) {
       auto* source = MakeGarbageCollected<MediaStreamSource>(
           String::FromUTF8("remoteAudioId"),
           MediaStreamSource::StreamType::kTypeAudio,
           String::FromUTF8("remoteAudioName"), /*remote=*/true,
           /*platform_source=*/nullptr);
-      component_ =
-          MakeGarbageCollected<MediaStreamComponentImpl>(source->Id(), source);
+      component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
+          source->Id(), source,
+          std::make_unique<MediaStreamAudioTrack>(/*is_local_track=*/false));
     } else {
       DCHECK_EQ(type, MediaStreamSource::StreamType::kTypeVideo);
+      auto platform_source = std::make_unique<MockMediaStreamVideoSource>();
+      auto* platform_source_ptr = platform_source.get();
       auto* source = MakeGarbageCollected<MediaStreamSource>(
           String::FromUTF8("remoteVideoId"),
           MediaStreamSource::StreamType::kTypeVideo,
           String::FromUTF8("remoteVideoName"), /*remote=*/true,
-          /*platform_source=*/nullptr);
-      component_ =
-          MakeGarbageCollected<MediaStreamComponentImpl>(source->Id(), source);
+          std::move(platform_source));
+      component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
+          source->Id(), source,
+          std::make_unique<MediaStreamVideoTrack>(
+              platform_source_ptr,
+              MediaStreamVideoSource::ConstraintsOnceCallback(),
+              /*enabled=*/true));
     }
   }
   DummyRTCRtpReceiverPlatform(const DummyRTCRtpReceiverPlatform& other)
-      : id_(other.id_), component_(other.component_) {}
+      : id_(other.id_),
+        component_(other.component_),
+        audio_transformer_(std::make_unique<RTCEncodedAudioStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())),
+        video_transformer_(std::make_unique<RTCEncodedVideoStreamTransformer>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
+            nullptr)) {}
   ~DummyRTCRtpReceiverPlatform() override = default;
 
   std::unique_ptr<RTCRtpReceiverPlatform> ShallowCopy() const override {
     return nullptr;
   }
   uintptr_t Id() const override { return id_; }
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport() override {
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport()
+      override {
     return nullptr;
   }
   webrtc::DtlsTransportInformation DtlsTransportInformation() override {
@@ -143,18 +189,29 @@ class DummyRTCRtpReceiverPlatform : public RTCRtpReceiverPlatform {
   Vector<std::unique_ptr<RTCRtpSource>> GetSources() override {
     return Vector<std::unique_ptr<RTCRtpSource>>();
   }
-  void GetStats(RTCStatsReportCallback,
-                const Vector<webrtc::NonStandardGroupId>&) override {}
+  void GetStats(RTCStatsReportCallback) override {}
   std::unique_ptr<webrtc::RtpParameters> GetParameters() const override {
     return nullptr;
   }
 
   void SetJitterBufferMinimumDelay(
-      absl::optional<double> delay_seconds) override {}
+      std::optional<double> delay_seconds) override {}
+
+  RTCEncodedAudioStreamTransformer* GetEncodedAudioStreamTransformer()
+      const override {
+    return audio_transformer_.get();
+  }
+
+  RTCEncodedVideoStreamTransformer* GetEncodedVideoStreamTransformer()
+      const override {
+    return video_transformer_.get();
+  }
 
  private:
   const uintptr_t id_;
   Persistent<MediaStreamComponent> component_;
+  std::unique_ptr<RTCEncodedAudioStreamTransformer> audio_transformer_;
+  std::unique_ptr<RTCEncodedVideoStreamTransformer> video_transformer_;
 };
 
 uintptr_t DummyRTCRtpReceiverPlatform::last_id_ = 0;
@@ -162,7 +219,7 @@ uintptr_t DummyRTCRtpReceiverPlatform::last_id_ = 0;
 // Having a refcounted helper class allows multiple
 // DummyRTCRtpTransceiverPlatforms to share the same internal states.
 class DummyTransceiverInternal
-    : public WTF::ThreadSafeRefCounted<DummyTransceiverInternal> {
+    : public ThreadSafeRefCounted<DummyTransceiverInternal> {
  private:
   static uintptr_t last_id_;
 
@@ -232,23 +289,28 @@ class MockRTCPeerConnectionHandlerPlatform::DummyRTCRtpTransceiverPlatform
       webrtc::RtpTransceiverDirection direction) override {
     return internal_->set_direction(direction);
   }
-  absl::optional<webrtc::RtpTransceiverDirection> CurrentDirection()
+  std::optional<webrtc::RtpTransceiverDirection> CurrentDirection()
       const override {
-    return absl::nullopt;
+    return std::nullopt;
   }
-  absl::optional<webrtc::RtpTransceiverDirection> FiredDirection()
+  std::optional<webrtc::RtpTransceiverDirection> FiredDirection()
       const override {
-    return absl::nullopt;
+    return std::nullopt;
   }
-  webrtc::RTCError SetOfferedRtpHeaderExtensions(
+  webrtc::RTCError Stop() override { return webrtc::RTCError::OK(); }
+  webrtc::RTCError SetCodecPreferences(
+      Vector<webrtc::RtpCodecCapability>) override {
+    return webrtc::RTCError::OK();
+  }
+  webrtc::RTCError SetHeaderExtensionsToNegotiate(
       Vector<webrtc::RtpHeaderExtensionCapability> header_extensions) override {
     return webrtc::RTCError(webrtc::RTCErrorType::UNSUPPORTED_OPERATION);
   }
-  Vector<webrtc::RtpHeaderExtensionCapability> HeaderExtensionsNegotiated()
+  Vector<webrtc::RtpHeaderExtensionCapability> GetNegotiatedHeaderExtensions()
       const override {
     return {};
   }
-  Vector<webrtc::RtpHeaderExtensionCapability> HeaderExtensionsToOffer()
+  Vector<webrtc::RtpHeaderExtensionCapability> GetHeaderExtensionsToNegotiate()
       const override {
     return {};
   }
@@ -259,7 +321,8 @@ class MockRTCPeerConnectionHandlerPlatform::DummyRTCRtpTransceiverPlatform
 
 MockRTCPeerConnectionHandlerPlatform::MockRTCPeerConnectionHandlerPlatform()
     : RTCPeerConnectionHandler(
-          scheduler::GetSingleThreadTaskRunnerForTesting()) {}
+          scheduler::GetSingleThreadTaskRunnerForTesting()),
+      native_peer_connection_(webrtc::MockPeerConnectionInterface::Create()) {}
 
 MockRTCPeerConnectionHandlerPlatform::~MockRTCPeerConnectionHandlerPlatform() =
     default;
@@ -267,7 +330,6 @@ MockRTCPeerConnectionHandlerPlatform::~MockRTCPeerConnectionHandlerPlatform() =
 bool MockRTCPeerConnectionHandlerPlatform::Initialize(
     ExecutionContext*,
     const webrtc::PeerConnectionInterface::RTCConfiguration&,
-    GoogMediaConstraints*,
     WebLocalFrame*,
     ExceptionState&) {
   return true;
@@ -312,11 +374,7 @@ void MockRTCPeerConnectionHandlerPlatform::AddIceCandidate(
 
 void MockRTCPeerConnectionHandlerPlatform::RestartIce() {}
 
-void MockRTCPeerConnectionHandlerPlatform::GetStats(RTCStatsRequest*) {}
-
-void MockRTCPeerConnectionHandlerPlatform::GetStats(
-    RTCStatsReportCallback,
-    const Vector<webrtc::NonStandardGroupId>&) {}
+void MockRTCPeerConnectionHandlerPlatform::GetStats(RTCStatsReportCallback) {}
 
 webrtc::RTCErrorOr<std::unique_ptr<RTCRtpTransceiverPlatform>>
 MockRTCPeerConnectionHandlerPlatform::AddTransceiverWithTrack(
@@ -369,7 +427,7 @@ MockRTCPeerConnectionHandlerPlatform::RemoveTrack(
   return std::unique_ptr<RTCRtpTransceiverPlatform>(std::move(copy));
 }
 
-scoped_refptr<webrtc::DataChannelInterface>
+webrtc::scoped_refptr<webrtc::DataChannelInterface>
 MockRTCPeerConnectionHandlerPlatform::CreateDataChannel(
     const String& label,
     const webrtc::DataChannelInit&) {
@@ -381,12 +439,8 @@ void MockRTCPeerConnectionHandlerPlatform::CloseAndUnregister() {}
 
 webrtc::PeerConnectionInterface*
 MockRTCPeerConnectionHandlerPlatform::NativePeerConnection() {
-  return nullptr;
+  return native_peer_connection_.get();
 }
-
-void MockRTCPeerConnectionHandlerPlatform::
-    RunSynchronousOnceClosureOnSignalingThread(CrossThreadOnceClosure closure,
-                                               const char* trace_event_name) {}
 
 void MockRTCPeerConnectionHandlerPlatform::
     RunSynchronousOnceClosureOnSignalingThread(base::OnceClosure closure,

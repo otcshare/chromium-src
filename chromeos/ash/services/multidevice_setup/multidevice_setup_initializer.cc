@@ -30,21 +30,18 @@ MultiDeviceSetupInitializer::Factory::Create(
     OobeCompletionTracker* oobe_completion_tracker,
     AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
     bool is_secondary_user) {
   if (test_factory_) {
     return test_factory_->CreateInstance(
         pref_service, device_sync_client, auth_token_validator,
         oobe_completion_tracker, android_sms_app_helper_delegate,
-        android_sms_pairing_state_tracker, gcm_device_info_provider,
-        is_secondary_user);
+        android_sms_pairing_state_tracker, is_secondary_user);
   }
 
   return base::WrapUnique(new MultiDeviceSetupInitializer(
       pref_service, device_sync_client, auth_token_validator,
       oobe_completion_tracker, android_sms_app_helper_delegate,
-      android_sms_pairing_state_tracker, gcm_device_info_provider,
-      is_secondary_user));
+      android_sms_pairing_state_tracker, is_secondary_user));
 }
 
 // static
@@ -80,7 +77,6 @@ MultiDeviceSetupInitializer::MultiDeviceSetupInitializer(
     OobeCompletionTracker* oobe_completion_tracker,
     AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
     bool is_secondary_user)
     : pref_service_(pref_service),
       device_sync_client_(device_sync_client),
@@ -88,7 +84,6 @@ MultiDeviceSetupInitializer::MultiDeviceSetupInitializer(
       oobe_completion_tracker_(oobe_completion_tracker),
       android_sms_app_helper_delegate_(android_sms_app_helper_delegate),
       android_sms_pairing_state_tracker_(android_sms_pairing_state_tracker),
-      gcm_device_info_provider_(gcm_device_info_provider),
       is_secondary_user_(is_secondary_user) {
   // If |device_sync_client_| is null, this interface cannot perform its tasks.
   if (!device_sync_client_)
@@ -206,7 +201,7 @@ void MultiDeviceSetupInitializer::GetHostStatus(
 void MultiDeviceSetupInitializer::SetFeatureEnabledState(
     mojom::Feature feature,
     bool enabled,
-    const absl::optional<std::string>& auth_token,
+    const std::optional<std::string>& auth_token,
     SetFeatureEnabledStateCallback callback) {
   if (multidevice_setup_impl_) {
     multidevice_setup_impl_->SetFeatureEnabledState(
@@ -251,6 +246,26 @@ void MultiDeviceSetupInitializer::TriggerEventForDebugging(
   std::move(callback).Run(false /* success */);
 }
 
+void MultiDeviceSetupInitializer::SetQuickStartPhoneInstanceID(
+    const std::string& qs_phone_instance_id) {
+  if (multidevice_setup_impl_) {
+    multidevice_setup_impl_->SetQuickStartPhoneInstanceID(qs_phone_instance_id);
+    return;
+  }
+
+  pending_set_qs_phone_instance_id_args_.push_back(qs_phone_instance_id);
+}
+
+void MultiDeviceSetupInitializer::GetQuickStartPhoneInstanceID(
+    GetQuickStartPhoneInstanceIDCallback callback) {
+  if (multidevice_setup_impl_) {
+    multidevice_setup_impl_->GetQuickStartPhoneInstanceID(std::move(callback));
+    return;
+  }
+
+  pending_get_qs_phone_instance_id_args_.push_back(std::move(callback));
+}
+
 void MultiDeviceSetupInitializer::SetHostDeviceWithoutAuthToken(
     const std::string& host_instance_id_or_legacy_device_id,
     mojom::PrivilegedHostDeviceSetter::SetHostDeviceCallback callback) {
@@ -285,8 +300,7 @@ void MultiDeviceSetupInitializer::InitializeImplementation() {
   multidevice_setup_impl_ = MultiDeviceSetupImpl::Factory::Create(
       pref_service_, device_sync_client_, auth_token_validator_,
       oobe_completion_tracker_, android_sms_app_helper_delegate_,
-      android_sms_pairing_state_tracker_, gcm_device_info_provider_,
-      is_secondary_user_);
+      android_sms_pairing_state_tracker_, is_secondary_user_);
 
   if (pending_delegate_) {
     multidevice_setup_impl_->SetAccountStatusChangeDelegate(
@@ -354,6 +368,18 @@ void MultiDeviceSetupInitializer::InitializeImplementation() {
   for (auto& get_host_callback : pending_get_host_args_)
     multidevice_setup_impl_->GetHostStatus(std::move(get_host_callback));
   pending_get_host_args_.clear();
+
+  for (auto& qs_phone_instance_id : pending_set_qs_phone_instance_id_args_) {
+    multidevice_setup_impl_->SetQuickStartPhoneInstanceID(qs_phone_instance_id);
+  }
+  pending_set_qs_phone_instance_id_args_.clear();
+
+  for (auto& get_qs_phone_instance_id_callback :
+       pending_get_qs_phone_instance_id_args_) {
+    multidevice_setup_impl_->GetQuickStartPhoneInstanceID(
+        std::move(get_qs_phone_instance_id_callback));
+  }
+  pending_get_qs_phone_instance_id_args_.clear();
 }
 
 }  // namespace multidevice_setup

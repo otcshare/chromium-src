@@ -1,5 +1,0 @@
-include_rules = [
-    "+chromeos/components/disks",
-    "+ui/base/l10n",
-    "+ui/chromeos/strings",
-]

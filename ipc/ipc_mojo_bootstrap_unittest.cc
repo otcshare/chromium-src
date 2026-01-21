@@ -12,9 +12,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "ipc/ipc.mojom.h"
-#include "ipc/ipc_test_base.h"
 #include "mojo/core/test/multiprocess_test_helper.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 
 namespace {
 
@@ -83,18 +83,6 @@ class PeerPidReceiver : public IPC::mojom::Channel {
     std::move(on_peer_pid_set_).Run();
   }
 
-  void Receive(IPC::MessageView message_view) override {
-    ASSERT_NE(MessageExpectation::kNotExpected, message_expectation_);
-    received_message_ = true;
-
-    IPC::Message message(
-        reinterpret_cast<const char*>(message_view.bytes().data()),
-        message_view.bytes().size());
-    bool expected_valid =
-        message_expectation_ == MessageExpectation::kExpectedValid;
-    EXPECT_EQ(expected_valid, message.IsValid());
-  }
-
   void GetAssociatedInterface(
       mojo::GenericPendingAssociatedReceiver receiver) override {}
 
@@ -159,59 +147,6 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
   run_loop.Run();
 
   EXPECT_EQ(kTestServerPid, impl.peer_pid());
-
-  return 0;
-}
-
-TEST_F(IPCMojoBootstrapTest, ReceiveEmptyMessage) {
-  base::test::SingleThreadTaskEnvironment task_environment;
-  Connection connection(
-      IPC::MojoBootstrap::Create(
-          helper_.StartChild("IPCMojoBootstrapTestEmptyMessage"),
-          IPC::Channel::MODE_SERVER,
-          base::SingleThreadTaskRunner::GetCurrentDefault(),
-          base::SingleThreadTaskRunner::GetCurrentDefault()),
-      kTestServerPid);
-
-  mojo::PendingAssociatedReceiver<IPC::mojom::Channel> receiver;
-  connection.TakeReceiver(&receiver);
-
-  base::RunLoop run_loop;
-  PeerPidReceiver impl(std::move(receiver), run_loop.QuitClosure(),
-                       PeerPidReceiver::MessageExpectation::kExpectedInvalid);
-  run_loop.Run();
-
-  // Wait for the Channel to be disconnected so we can reasonably assert that
-  // the child's empty message must have been received before we pass the test.
-  impl.RunUntilDisconnect();
-
-  EXPECT_TRUE(helper_.WaitForChildTestShutdown());
-}
-
-// A long running process that connects to us.
-MULTIPROCESS_TEST_MAIN_WITH_SETUP(
-    IPCMojoBootstrapTestEmptyMessageTestChildMain,
-    ::mojo::core::test::MultiprocessTestHelper::ChildSetup) {
-  base::test::SingleThreadTaskEnvironment task_environment;
-  Connection connection(
-      IPC::MojoBootstrap::Create(
-          std::move(mojo::core::test::MultiprocessTestHelper::primordial_pipe),
-          IPC::Channel::MODE_CLIENT,
-          base::SingleThreadTaskRunner::GetCurrentDefault(),
-          base::SingleThreadTaskRunner::GetCurrentDefault()),
-      kTestClientPid);
-
-  mojo::PendingAssociatedReceiver<IPC::mojom::Channel> receiver;
-  connection.TakeReceiver(&receiver);
-  auto& sender = connection.GetSender();
-
-  uint8_t data = 0;
-  sender->Receive(
-      IPC::MessageView(base::make_span(&data, 0), absl::nullopt /* handles */));
-
-  base::RunLoop run_loop;
-  PeerPidReceiver impl(std::move(receiver), run_loop.QuitClosure());
-  run_loop.Run();
 
   return 0;
 }

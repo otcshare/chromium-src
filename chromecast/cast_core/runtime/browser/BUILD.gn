@@ -30,35 +30,6 @@ cast_source_set("metrics_recorder") {
   ]
 }
 
-cast_source_set("grpc_webui") {
-  sources = [
-    "grpc_resource_data_source.cc",
-    "grpc_resource_data_source.h",
-    "grpc_webui_controller.cc",
-    "grpc_webui_controller.h",
-    "grpc_webui_controller_factory.cc",
-    "grpc_webui_controller_factory.h",
-  ]
-
-  deps = [
-    "//base",
-    "//chromecast:chromecast_buildflags",
-    "//chromecast/base",
-    "//chromecast/base:chromecast_switches",
-    "//chromecast/base:default_create_sys_info",
-    "//chromecast/browser",
-    "//net",
-    "//third_party/blink/public/common:headers",
-    "//third_party/grpc:grpc++",
-  ]
-
-  public_deps = [
-    "//chromecast/browser:public",
-    "//third_party/abseil-cpp:absl",
-    "//third_party/cast_core/public/src/proto/v2:core_application_service_proto_castcore",
-  ]
-}
-
 cast_source_set("runtime_service_impl") {
   public = [ "runtime_service_impl.h" ]
   sources = [
@@ -78,22 +49,20 @@ cast_source_set("runtime_service_impl") {
   public_deps = [ "//third_party/cast_core/public/src/proto/runtime:runtime_service_proto_castcore" ]
 
   deps = [
-    ":grpc_webui",
     ":metrics_recorder",
     "//base",
     "//chromecast:chromecast_buildflags",
+    "//chromecast/base:cast_version",
     "//chromecast/browser",
     "//chromecast/cast_core:cast_core_switches",
     "//chromecast/cast_core/runtime/browser/url_rewrite",
     "//chromecast/common:feature_constants",
-    "//chromecast/metrics:cast_event_builder_simple",
+    "//chromecast/metrics:cast_event_builder_impl",
     "//chromecast/shared:platform_info_serializer",
     "//components/cast/message_port",
     "//components/cast_receiver/browser",
     "//components/cast_receiver/common",
     "//components/cast_streaming/browser",
-    "//components/cast_streaming/public",
-    "//components/cast_streaming/public/mojom",
     "//components/media_control/browser",
     "//components/url_rewrite/browser",
     "//content/public/browser",
@@ -128,8 +97,6 @@ cast_source_set("browser") {
     "//base",
     "//chromecast/cast_core:cast_core_switches",
     "//chromecast/common:cors_exempt_headers",
-    "//chromecast/media/base:video_plane_controller",
-    "//chromecast/metrics:cast_event_builder_simple",
     "//components/url_rewrite/browser",
     "//components/url_rewrite/common",
     "//content/public/browser",
@@ -152,6 +119,27 @@ cast_source_set("browser_simple") {
   ]
 }
 
+cast_source_set("browser_starboard") {
+  sources = [
+    "cast_runtime_content_browser_client_starboard.cc",
+    "cast_runtime_content_browser_client_starboard.h",
+    "cast_runtime_content_browser_client_starboard_factory.cc",
+  ]
+  deps = [
+    ":browser",
+    "//base",
+    "//chromecast/common:cors_exempt_headers",
+    "//chromecast/media/cdm",
+    "//chromecast/media/cdm:cdm_origin_provider",
+    "//chromecast/media/common:media_resource_tracker",
+    "//chromecast/service",
+    "//chromecast/starboard/media/cdm:starboard_decryptor_cast",
+    "//media",
+    "//media/mojo/mojom",
+    "//media/mojo/services",
+  ]
+}
+
 # TODO(b/194439829): Upstream additional metrics unit tests.
 cast_source_set("unit_tests") {
   testonly = true
@@ -161,11 +149,9 @@ cast_source_set("unit_tests") {
     "cast_runtime_metrics_test_helpers.cc",
     "cast_runtime_metrics_test_helpers.h",
     "core_streaming_config_manager_unittest.cc",
-    "grpc_resource_data_source_unittest.cc",
   ]
 
   deps = [
-    ":grpc_webui",
     ":metrics_recorder",
     ":runtime_service_impl",
     "//base",
@@ -175,7 +161,6 @@ cast_source_set("unit_tests") {
     "//components/cast_receiver/browser",
     "//components/cast_receiver/common",
     "//components/cast_streaming/browser",
-    "//components/cast_streaming/public",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/cast_core/public/src/proto/metrics:metrics_recorder_proto",

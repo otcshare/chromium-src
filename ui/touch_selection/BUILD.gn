@@ -22,19 +22,19 @@ component("touch_selection") {
     "touch_selection_controller.cc",
     "touch_selection_controller.h",
     "touch_selection_draggable.h",
-    "touch_selection_magnifier_runner.cc",
-    "touch_selection_magnifier_runner.h",
     "touch_selection_menu_runner.cc",
     "touch_selection_menu_runner.h",
+    "touch_selection_metrics.cc",
+    "touch_selection_metrics.h",
     "ui_touch_selection_export.h",
   ]
 
   defines = [ "UI_TOUCH_SELECTION_IMPLEMENTATION" ]
 
   deps = [
-    "//base:base",
-    "//ui/base:base",
-    "//ui/events:events",
+    "//base",
+    "//ui/base",
+    "//ui/events",
     "//ui/events:gesture_detection",
     "//ui/gfx",
     "//ui/gfx/geometry",
@@ -42,18 +42,31 @@ component("touch_selection") {
 
   if (use_aura) {
     deps += [
-      "//skia:skia",
+      "//cc/paint",
+      "//skia",
       "//ui/aura",
-      "//ui/aura_extra",
-      "//ui/compositor:compositor",
-      "//ui/gfx:gfx",
+      "//ui/base",
+      "//ui/color",
+      "//ui/color:mixers",
+      "//ui/compositor",
+      "//ui/gfx",
+      "//ui/native_theme",
       "//ui/resources",
+      "//ui/touch_selection/vector_icons",
     ]
 
     sources += [
       "touch_handle_drawable_aura.cc",
       "touch_handle_drawable_aura.h",
+      "touch_selection_magnifier_aura.cc",
+      "touch_selection_magnifier_aura.h",
     ]
+  }
+
+  if (use_blink) {
+    sources += [ "touch_editing_controller.h" ]
+
+    deps += [ "//ui/menus" ]
   }
 }
 
@@ -67,7 +80,7 @@ static_library("test_support") {
 
   deps = [
     ":touch_selection",
-    "//base:base",
+    "//base",
   ]
 }
 
@@ -84,15 +97,21 @@ test("ui_touch_selection_unittests") {
     ":test_support",
     ":touch_selection",
     "//base/test:run_all_unittests",
-    "//testing/gmock:gmock",
-    "//testing/gtest:gtest",
-    "//ui/base:base",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/base",
     "//ui/events:test_support",
-    "//ui/gfx:gfx",
+    "//ui/gfx",
     "//ui/gfx:test_support",
   ]
 
-  data_deps = [ "//third_party/mesa_headers" ]
+  data_deps = [ "//third_party/angle:includes" ]
+
+  if (use_aura) {
+    deps += [ "//ui/compositor" ]
+
+    sources += [ "touch_selection_magnifier_aura_unittest.cc" ]
+  }
 }
 
 if (is_android) {

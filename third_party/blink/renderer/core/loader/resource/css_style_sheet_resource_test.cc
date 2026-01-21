@@ -5,40 +5,26 @@
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
 
 #include "base/memory/scoped_refptr.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
-#include "third_party/blink/public/platform/web_url_response.h"
-#include "third_party/blink/renderer/core/css/css_crossfade_value.h"
-#include "third_party/blink/renderer/core/css/css_image_value.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value.h"
-#include "third_party/blink/renderer/core/css/css_property_value.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
-#include "third_party/blink/renderer/core/css/css_selector_list.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
-#include "third_party/blink/renderer/core/css/style_rule.h"
+#include "third_party/blink/renderer/core/css/resolver/scoped_style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
+#include "third_party/blink/renderer/core/css/style_sheet_list.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_request.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/loader/fetch/fetch_context.h"
-#include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_loader.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
-#include "third_party/blink/renderer/platform/loader/testing/mock_fetch_context.h"
-#include "third_party/blink/renderer/platform/loader/testing/test_resource_fetcher_properties.h"
-#include "third_party/blink/renderer/platform/testing/mock_context_lifecycle_notifier.h"
-#include "third_party/blink/renderer/platform/testing/noop_web_url_loader.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
-#include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -49,67 +35,11 @@ class Document;
 
 namespace {
 
-class NoopLoaderFactory final : public ResourceFetcher::LoaderFactory {
-  std::unique_ptr<WebURLLoader> CreateURLLoader(
-      const ResourceRequest& request,
-      const ResourceLoaderOptions& options,
-      scoped_refptr<base::SingleThreadTaskRunner> freezable_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> unfreezable_task_runner,
-      WebBackForwardCacheLoaderHelper back_forward_cache_loader_helper)
-      override {
-    return std::make_unique<NoopWebURLLoader>(std::move(freezable_task_runner));
-  }
-  std::unique_ptr<WebCodeCacheLoader> CreateCodeCacheLoader() override {
-    return std::make_unique<CodeCacheLoaderMock>();
-  }
-};
-
-ResourceFetcher* CreateFetcher() {
-  auto* properties = MakeGarbageCollected<TestResourceFetcherProperties>();
-  return MakeGarbageCollected<ResourceFetcher>(ResourceFetcherInit(
-      properties->MakeDetachable(), MakeGarbageCollected<MockFetchContext>(),
-      scheduler::GetSingleThreadTaskRunnerForTesting(),
-      scheduler::GetSingleThreadTaskRunnerForTesting(),
-      MakeGarbageCollected<NoopLoaderFactory>(),
-      MakeGarbageCollected<MockContextLifecycleNotifier>(),
-      nullptr /* back_forward_cache_loader_helper */));
-}
-
-// ResourceClient which can wait for the resource load to finish.
-class TestResourceClient : public GarbageCollected<TestResourceClient>,
-                           public ResourceClient {
- public:
-  void NotifyFinished(Resource* resource) override {
-    has_finished_ = true;
-    if (run_loop_)
-      run_loop_->Quit();
-  }
-  String DebugName() const override { return "TestResourceClient"; }
-
-  void WaitForFinish() {
-    if (has_finished_)
-      return;
-
-    run_loop_ = std::make_unique<base::RunLoop>();
-    run_loop_->Run();
-  }
-
- protected:
-  std::unique_ptr<base::RunLoop> run_loop_;
-  bool has_finished_ = false;
-};
-
 class CSSStyleSheetResourceTest : public PageTestBase {
  protected:
-  CSSStyleSheetResourceTest() {
-    original_memory_cache_ =
-        ReplaceMemoryCacheForTesting(MakeGarbageCollected<MemoryCache>(
-            blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
-  }
-
-  ~CSSStyleSheetResourceTest() override {
-    ReplaceMemoryCacheForTesting(original_memory_cache_.Release());
-  }
+  CSSStyleSheetResourceTest()
+      : scoped_memory_cache_(MakeGarbageCollected<MemoryCache>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())) {}
 
   void SetUp() override {
     PageTestBase::SetUp(gfx::Size());
@@ -120,17 +50,17 @@ class CSSStyleSheetResourceTest : public PageTestBase {
     const char kUrl[] = "https://localhost/style.css";
     const KURL css_url(kUrl);
     ResourceResponse response(css_url);
-    response.SetMimeType("style/css");
+    response.SetMimeType(AtomicString("style/css"));
 
     CSSStyleSheetResource* css_resource =
-        CSSStyleSheetResource::CreateForTest(css_url, UTF8Encoding());
+        CSSStyleSheetResource::CreateForTest(css_url, Utf8Encoding());
     css_resource->ResponseReceived(response);
     css_resource->FinishForTest();
     MemoryCache::Get()->Add(css_resource);
     return css_resource;
   }
 
-  Persistent<MemoryCache> original_memory_cache_;
+  ScopedMemoryCacheForTesting scoped_memory_cache_;
 };
 
 TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
@@ -138,7 +68,7 @@ TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
   const KURL image_url(kUrl);
   const KURL css_url(kUrl);
   ResourceResponse response(css_url);
-  response.SetMimeType("style/css");
+  response.SetMimeType(AtomicString("style/css"));
 
   // Emulate using <img> to do async stylesheet preloads.
 
@@ -148,7 +78,7 @@ TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
   ASSERT_TRUE(MemoryCache::Get()->Contains(image_resource));
 
   CSSStyleSheetResource* css_resource =
-      CSSStyleSheetResource::CreateForTest(css_url, UTF8Encoding());
+      CSSStyleSheetResource::CreateForTest(css_url, Utf8Encoding());
   css_resource->ResponseReceived(response);
   css_resource->FinishForTest();
 
@@ -193,8 +123,7 @@ TEST_F(CSSStyleSheetResourceTest, CreateFromCacheRestoresOriginalSheet) {
   ASSERT_EQ(contents, parsed_stylesheet);
 }
 
-TEST_F(CSSStyleSheetResourceTest,
-       CreateFromCacheWithMediaQueriesCopiesOriginalSheet) {
+TEST_F(CSSStyleSheetResourceTest, CreateFromCacheWithMediaQueries) {
   CSSStyleSheetResource* css_resource = CreateAndSaveTestStyleSheetResource();
 
   auto* parser_context = MakeGarbageCollected<CSSParserContext>(
@@ -209,7 +138,7 @@ TEST_F(CSSStyleSheetResourceTest,
   EXPECT_TRUE(contents->IsCacheableForResource());
 
   contents->EnsureRuleSet(MediaQueryEvaluator(GetDocument().GetFrame()),
-                          kRuleHasNoSpecialState);
+                          /*mixins=*/{});
   EXPECT_TRUE(contents->HasRuleSet());
 
   css_resource->SaveParsedStyleSheet(contents);
@@ -225,68 +154,173 @@ TEST_F(CSSStyleSheetResourceTest,
   ASSERT_TRUE(sheet);
 
   EXPECT_TRUE(contents->HasSingleOwnerDocument());
-  EXPECT_EQ(0U, contents->ClientSize());
+  EXPECT_EQ(1U, contents->ClientSize());
   EXPECT_TRUE(contents->IsReferencedFromResource());
   EXPECT_TRUE(contents->HasRuleSet());
 
   EXPECT_TRUE(parsed_stylesheet->HasSingleOwnerDocument());
   EXPECT_TRUE(parsed_stylesheet->HasOneClient());
-  EXPECT_FALSE(parsed_stylesheet->IsReferencedFromResource());
-  EXPECT_FALSE(parsed_stylesheet->HasRuleSet());
+  EXPECT_TRUE(parsed_stylesheet->IsReferencedFromResource());
+  EXPECT_TRUE(parsed_stylesheet->HasRuleSet());
 }
 
-TEST_F(CSSStyleSheetResourceTest, TokenizerCreated) {
-  base::test::ScopedFeatureList feature_list(features::kPretokenizeCSS);
-  auto* fetcher = CreateFetcher();
+class CSSStyleSheetResourceSimTest : public SimTest {};
 
-  KURL url("https://www.example.com/");
-  ResourceRequest request(url);
-  request.SetRequestContext(mojom::blink::RequestContextType::FETCH);
+TEST_F(CSSStyleSheetResourceSimTest, CachedWithDifferentMQEval) {
+  SimRequest main_resource("https://example.com/test.html", "text/html");
+  SimRequest frame1_resource("https://example.com/frame1.html", "text/html");
+  SimRequest frame2_resource("https://example.com/frame2.html", "text/html");
 
-  auto* client = MakeGarbageCollected<TestResourceClient>();
-  auto params = FetchParameters::CreateForTest(std::move(request));
-  auto* resource = CSSStyleSheetResource::Fetch(params, fetcher, client);
+  SimRequest::Params params;
+  params.response_http_headers = {{"Cache-Control", "max-age=3600"}};
+  SimSubresourceRequest css_resource("https://example.com/frame.css",
+                                     "text/css", params);
 
-  mojo::ScopedDataPipeProducerHandle producer;
-  mojo::ScopedDataPipeConsumerHandle consumer;
-  ASSERT_EQ(mojo::CreateDataPipe(100, producer, consumer), MOJO_RESULT_OK);
+  LoadURL("https://example.com/test.html");
+  main_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <style>
+      #frame1 {
+        width: 200px;
+        height: 200px;
+      }
+      #frame2 {
+        width: 400px;
+        height: 200px;
+      }
+    </style>
+    <div></div>
+    <iframe id="frame1" src="frame1.html"></iframe>
+    <iframe id="frame2" src="frame2.html"></iframe>
+  )HTML");
 
-  ResourceResponse response(url);
-  response.SetHttpStatusCode(200);
+  frame1_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="frame.css">
+    <div id="target"></div>
+  )HTML");
 
-  ResourceLoader* loader = resource->Loader();
-  loader->DidReceiveResponse(WrappedResourceResponse(response));
-  loader->DidStartLoadingResponseBody(std::move(consumer));
-  loader->DidFinishLoading(base::TimeTicks(), 0, 0, 0, false);
+  css_resource.Complete(R"HTML(
+    #target { opacity: 0; }
+    @media (width > 300px) {
+      #target { opacity: 0.3; }
+    }
+    @media (width > 500px) {
+      #target { opacity: 0.5; }
+    }
+  )HTML");
 
-  // Send the body in two chunks to make sure this is handled correctly.
-  uint32_t num_bytes = 4;
-  MojoResult result =
-      producer->WriteData(".foo", &num_bytes, MOJO_WRITE_DATA_FLAG_NONE);
-  ASSERT_EQ(result, MOJO_RESULT_OK);
-  ASSERT_EQ(num_bytes, 4u);
+  test::RunPendingTasks();
 
-  num_bytes = 5;
-  result = producer->WriteData("{a:b}", &num_bytes, MOJO_WRITE_DATA_FLAG_NONE);
-  ASSERT_EQ(result, MOJO_RESULT_OK);
-  ASSERT_EQ(num_bytes, 5u);
+  frame2_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="frame.css">
+    <div id="target"></div>
+  )HTML");
 
-  producer.reset();
-  client->WaitForFinish();
+  test::RunPendingTasks();
 
-  // A non-empty tokenizer should be created, and the sheet text will contain
-  // the full response body.
-  auto tokenizer = resource->TakeTokenizer();
-  EXPECT_NE(tokenizer, nullptr);
+  Compositor().BeginFrame();
 
-  // Finish tokenizing and grab the token count.
-  while (tokenizer->TokenizeSingle().GetType() != kEOFToken) {
+  Document* frame1_doc = To<HTMLIFrameElement>(GetDocument().getElementById(
+                                                   AtomicString("frame1")))
+                             ->contentDocument();
+  Document* frame2_doc = To<HTMLIFrameElement>(GetDocument().getElementById(
+                                                   AtomicString("frame2")))
+                             ->contentDocument();
+  ASSERT_TRUE(frame1_doc);
+  ASSERT_TRUE(frame2_doc);
+  frame1_doc->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  frame2_doc->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+  const ActiveStyleSheetVector& frame1_sheets =
+      frame1_doc->GetScopedStyleResolver()->GetActiveStyleSheets();
+  const ActiveStyleSheetVector& frame2_sheets =
+      frame2_doc->GetScopedStyleResolver()->GetActiveStyleSheets();
+  ASSERT_EQ(frame1_sheets.size(), 1u);
+  ASSERT_EQ(frame2_sheets.size(), 1u);
+
+  // The two frames should share the same cached StyleSheetContents ...
+  EXPECT_EQ(frame1_sheets[0].first->Contents(),
+            frame2_sheets[0].first->Contents());
+
+  // ... but have different RuleSets due to different media query evaluation.
+  EXPECT_NE(frame1_sheets[0].second, frame2_sheets[0].second);
+
+  // Verify styling based on MQ evaluation.
+  Element* target1 = frame1_doc->getElementById(AtomicString("target"));
+  ASSERT_TRUE(target1);
+  EXPECT_EQ(target1->GetComputedStyle()->Opacity(), 0);
+  Element* target2 = frame2_doc->getElementById(AtomicString("target"));
+  ASSERT_TRUE(target2);
+  EXPECT_EQ(target2->GetComputedStyle()->Opacity(), 0.3f);
+}
+
+// https://crbug.com/417406834
+TEST_F(CSSStyleSheetResourceSimTest, CopyOnWriteSharedContentsCrash) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimRequest::Params params;
+  params.response_http_headers = {{"Cache-Control", "max-age=3600"}};
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css", params);
+  SimRequest frame_resource("https://example.com/frame.html", "text/html");
+
+  LoadURL("https://example.com");
+
+  // This is intentionally in quirks mode, while the iframe's document
+  // is in standards mode. This is to make that we're using different
+  // CSSParserContexts against the same resource.
+  main_resource.Complete(R"HTML(
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css">
+    Some content
+    <iframe src="frame.html"></iframe>
+  )HTML");
+
+  test::RunPendingTasks();
+
+  css_resource.Complete(R"HTML(
+    div { color: green; }
+  )HTML");
+
+  // This frame exists to access style.css under a CSSParserContext which is
+  // different from the parent document's CSSParserContext.
+  frame_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="style.css">
+    <div>iframe</div>
+  )HTML");
+
+  test::RunPendingTasks();
+
+  ASSERT_EQ(2u, GetDocument().StyleSheets().length());
+  auto* sheet0 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(0));
+  auto* sheet1 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(1));
+
+  // Make sure CSSStyleRule wrappers exist. (Don't crash.)
+  for (wtf_size_t i = 0; i < sheet0->length(); ++i) {
+    ASSERT_TRUE(sheet0->ItemInternal(i));
   }
-  EXPECT_GT(tokenizer->TokenCount(), 1u);
+  for (wtf_size_t i = 0; i < sheet1->length(); ++i) {
+    ASSERT_TRUE(sheet1->ItemInternal(i));
+  }
 
-  EXPECT_EQ(
-      resource->SheetText(nullptr, CSSStyleSheetResource::MIMETypeCheck::kLax),
-      ".foo{a:b}");
+  EXPECT_EQ(sheet0->Contents(), sheet1->Contents());
+
+  DummyExceptionStateForTesting exception_state;
+  // Copy-on-write should occur here:
+  sheet1->insertRule("div { left:0; }", /*index=*/0u, exception_state);
+
+  // Access CSSStyleRule wrappers again. (Don't crash.)
+  for (wtf_size_t i = 0; i < sheet0->length(); ++i) {
+    ASSERT_TRUE(sheet0->ItemInternal(i));
+  }
+  for (wtf_size_t i = 0; i < sheet1->length(); ++i) {
+    ASSERT_TRUE(sheet1->ItemInternal(i));
+  }
+
+  // Copy-on-write should have happened:
+  EXPECT_NE(sheet0->Contents(), sheet1->Contents());
 }
 
 }  // namespace

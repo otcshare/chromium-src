@@ -187,9 +187,9 @@ TEST(BluetoothDiscoveryFilterTest, MergeUUIDs) {
   // df3 should contain all uuids from df1 and df2
   std::set<device::BluetoothUUID> out_uuids;
   df3->GetUUIDs(out_uuids);
-  EXPECT_TRUE(out_uuids.find(uuid1020) != out_uuids.end());
-  EXPECT_TRUE(out_uuids.find(uuid1003) != out_uuids.end());
-  EXPECT_TRUE(out_uuids.find(uuid1004) != out_uuids.end());
+  EXPECT_TRUE(out_uuids.contains(uuid1020));
+  EXPECT_TRUE(out_uuids.contains(uuid1003));
+  EXPECT_TRUE(out_uuids.contains(uuid1004));
 
   // Merging with empty filter would return empty filter
   df3 = BluetoothDiscoveryFilter::Merge(&df1, nullptr);

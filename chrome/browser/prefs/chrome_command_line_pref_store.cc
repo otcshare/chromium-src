@@ -8,17 +8,16 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/browser_sync/browser_sync_switches.h"
@@ -33,11 +32,17 @@
 #include "services/network/public/cpp/network_switches.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/display_switches.h"
+#include "ui/gl/gl_switches.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/ash/borealis/borealis_prefs.h"
 #include "chrome/browser/ash/borealis/borealis_switches.h"
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/common/switches.h"
 #endif
 
 const CommandLinePrefStore::SwitchToPreferenceMapEntry
@@ -52,8 +57,9 @@ const CommandLinePrefStore::SwitchToPreferenceMapEntry
         {switches::kAuthAndroidNegotiateAccountType,
          prefs::kAuthAndroidNegotiateAccountType},
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-        {switches::kSchedulerConfiguration, prefs::kSchedulerConfiguration},
+#if BUILDFLAG(IS_CHROMEOS)
+        {ash::switches::kSchedulerConfiguration,
+         ash::prefs::kSchedulerConfiguration},
         {borealis::switches::kLaunchOptions,
          borealis::prefs::kExtraLaunchOptions},
 #endif
@@ -68,7 +74,7 @@ const CommandLinePrefStore::SwitchToPreferenceMapEntry
 const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
     ChromeCommandLinePrefStore::boolean_switch_map_[] = {
         {switches::kDisable3DAPIs, prefs::kDisable3DAPIs, true},
-        {switches::kEnableCloudPrintProxy, prefs::kCloudPrintProxyEnabled,
+        {switches::kEnableUnsafeSwiftShader, prefs::kEnableUnsafeSwiftShader,
          true},
         {switches::kNoPings, prefs::kEnableHyperlinkAuditing, false},
         {switches::kAllowRunningInsecureContent,
@@ -78,16 +84,16 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
         {switches::kDisablePrintPreview, prefs::kPrintPreviewDisabled, true},
         {safe_browsing::switches::kSbEnableEnhancedProtection,
          prefs::kSafeBrowsingEnhanced, true},
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
         {ash::switches::kEnableTouchpadThreeFingerClick,
-         prefs::kEnableTouchpadThreeFingerClick, true},
+         ash::prefs::kEnableTouchpadThreeFingerClick, true},
         {switches::kEnableUnifiedDesktop,
          prefs::kUnifiedDesktopEnabledByDefault, true},
         {ash::switches::kEnableCastReceiver, prefs::kCastReceiverEnabled, true},
 #endif
         {switches::kEnableLocalSyncBackend,
          syncer::prefs::kEnableLocalSyncBackend, true},
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
         {switches::kUseSystemDefaultPrinter,
          prefs::kPrintPreviewUseSystemDefaultPrinter, true},
 #endif
@@ -109,7 +115,7 @@ ChromeCommandLinePrefStore::ChromeCommandLinePrefStore(
   ApplyExplicitlyAllowedPortSwitch();
 }
 
-ChromeCommandLinePrefStore::~ChromeCommandLinePrefStore() {}
+ChromeCommandLinePrefStore::~ChromeCommandLinePrefStore() = default;
 
 bool ChromeCommandLinePrefStore::ValidateProxySwitches() {
   if (command_line()->HasSwitch(switches::kNoProxyServer) &&
@@ -126,10 +132,10 @@ bool ChromeCommandLinePrefStore::ValidateProxySwitches() {
 
 void ChromeCommandLinePrefStore::ApplySimpleSwitches() {
   // Look for each switch we know about and set its preference accordingly.
-  ApplyStringSwitches(string_switch_map_, std::size(string_switch_map_));
-  ApplyPathSwitches(path_switch_map_, std::size(path_switch_map_));
-  ApplyIntegerSwitches(integer_switch_map_, std::size(integer_switch_map_));
-  ApplyBooleanSwitches(boolean_switch_map_, std::size(boolean_switch_map_));
+  ApplyStringSwitches(string_switch_map_);
+  ApplyPathSwitches(path_switch_map_);
+  ApplyIntegerSwitches(integer_switch_map_);
+  ApplyBooleanSwitches(boolean_switch_map_);
 }
 
 void ChromeCommandLinePrefStore::ApplyProxyMode() {
@@ -175,10 +181,12 @@ void ChromeCommandLinePrefStore::ApplySSLSwitches() {
 }
 
 void ChromeCommandLinePrefStore::ApplyBackgroundModeSwitches() {
-  if (command_line()->HasSwitch(switches::kDisableExtensions)) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (command_line()->HasSwitch(extensions::switches::kDisableExtensions)) {
     SetValue(prefs::kBackgroundModeEnabled, base::Value(false),
              WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
   }
+#endif
 }
 
 void ChromeCommandLinePrefStore::ApplyExplicitlyAllowedPortSwitch() {
@@ -186,7 +194,7 @@ void ChromeCommandLinePrefStore::ApplyExplicitlyAllowedPortSwitch() {
     return;
   }
 
-  base::Value integer_list(base::Value::Type::LIST);
+  base::Value::List integer_list;
   std::string switch_value =
       command_line()->GetSwitchValueASCII(switches::kExplicitlyAllowedPorts);
   const auto& split = base::SplitStringPiece(
@@ -199,6 +207,7 @@ void ChromeCommandLinePrefStore::ApplyExplicitlyAllowedPortSwitch() {
       continue;
     integer_list.Append(base::Value(port));
   }
-  SetValue(prefs::kExplicitlyAllowedNetworkPorts, std::move(integer_list),
+  SetValue(prefs::kExplicitlyAllowedNetworkPorts,
+           base::Value(std::move(integer_list)),
            WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
 }

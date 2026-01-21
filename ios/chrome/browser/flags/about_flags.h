@@ -9,11 +9,12 @@
 #define IOS_CHROME_BROWSER_FLAGS_ABOUT_FLAGS_H_
 
 #include <stddef.h>
+
 #include <string>
 #include <vector>
 
 #include "base/values.h"
-#include "components/flags_ui/flags_state.h"
+#include "components/webui/flags/flags_state.h"
 
 namespace base {
 class CommandLine;
@@ -57,6 +58,10 @@ void SetFeatureEntryEnabled(flags_ui::FlagsStorage* flags_storage,
 
 // Reset all flags to the default state by clearing all flags.
 void ResetAllFlags(flags_ui::FlagsStorage* flags_storage);
+
+// Returns true if a browser restart is needed for uncommitted changes to take
+// effect.
+bool IsRestartNeededToCommitChanges();
 
 namespace testing {
 

@@ -4,7 +4,7 @@
 
 #include "services/device/public/cpp/test/scoped_pressure_manager_overrider.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "services/device/device_service.h"
 #include "services/device/public/mojom/pressure_update.mojom.h"
 
@@ -16,27 +16,31 @@ FakePressureManager::~FakePressureManager() = default;
 
 void FakePressureManager::Bind(
     mojo::PendingReceiver<mojom::PressureManager> receiver) {
-  receivers_.Add(this, std::move(receiver));
+  manager_receivers_.Add(this, std::move(receiver));
 }
 
 bool FakePressureManager::is_bound() const {
-  return !receivers_.empty();
+  return !manager_receivers_.empty();
 }
 
 void FakePressureManager::AddClient(
-    mojo::PendingRemote<mojom::PressureClient> client,
+    mojom::PressureSource source,
+    const std::optional<base::UnguessableToken>& token,
+    mojo::PendingAssociatedRemote<mojom::PressureClient> client,
     AddClientCallback callback) {
   if (is_supported_) {
-    clients_.Add(std::move(client));
-    std::move(callback).Run(true);
+    clients_[source].Add(std::move(client));
+    std::move(callback).Run(mojom::PressureManagerAddClientResult::kOk);
   } else {
-    std::move(callback).Run(false);
+    std::move(callback).Run(
+        mojom::PressureManagerAddClientResult::kNotSupported);
   }
 }
 
 void FakePressureManager::UpdateClients(const mojom::PressureUpdate& update) {
-  for (auto& client : clients_)
-    client->PressureStateChanged(update.Clone());
+  for (auto& client : clients_[update.source]) {
+    client->OnPressureUpdated(update.Clone());
+  }
 }
 
 void FakePressureManager::set_is_supported(bool is_supported) {
@@ -64,7 +68,7 @@ void ScopedPressureManagerOverrider::set_is_supported(bool is_supported) {
 
 void ScopedPressureManagerOverrider::set_fake_pressure_manager(
     std::unique_ptr<FakePressureManager> pressure_manager) {
-  DCHECK(!pressure_manager_->is_bound());
+  CHECK(!pressure_manager_->is_bound());
   pressure_manager_ = std::move(pressure_manager);
   DeviceService::OverridePressureManagerBinderForTesting(base::BindRepeating(
       &FakePressureManager::Bind, base::Unretained(pressure_manager_.get())));

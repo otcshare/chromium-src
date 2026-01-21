@@ -9,12 +9,16 @@ assert(!is_android)
 mojom("mojo_bindings") {
   sources = [ "new_tab_page.mojom" ]
   webui_module_path = "/"
-  use_typescript_sources = true
 
   public_deps = [
+    "//chrome/browser/ui/webui/new_tab_page/action_chips:mojo_bindings",
+    "//chrome/browser/ui/webui/new_tab_page/ntp_promo:mojo_bindings",
+    "//chrome/browser/ui/webui/ntp_microsoft_auth:shared",
+    "//components/ntp_tiles:mojo_bindings",
     "//components/omnibox/browser:mojo_bindings",
     "//skia/public/mojom",
     "//ui/webui/resources/cr_components/color_change_listener:mojom",
+    "//ui/webui/resources/cr_components/composebox:mojo_bindings",
     "//ui/webui/resources/cr_components/most_visited:mojom",
     "//url/mojom:url_mojom_gurl",
   ]

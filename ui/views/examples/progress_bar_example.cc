@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -62,11 +61,13 @@ void ProgressBarExample::CreateExampleView(View* container) {
 
   container->AddChildView(
       std::make_unique<Label>(GetStringUTF16(IDS_PROGRESS_LOADER_SHORT_LABEL)));
-  container->AddChildView(std::make_unique<ProgressBar>(2))->SetValue(-1);
+  auto* short_bar = container->AddChildView(std::make_unique<ProgressBar>());
+  short_bar->SetValue(-1);
+  short_bar->SetPreferredHeight(2);
 }
 
 void ProgressBarExample::ButtonPressed(double step) {
-  current_percent_ = base::clamp(current_percent_ + step, 0.0, 1.0);
+  current_percent_ = std::clamp(current_percent_ + step, 0.0, 1.0);
   progress_bar_->SetValue(current_percent_);
 }
 

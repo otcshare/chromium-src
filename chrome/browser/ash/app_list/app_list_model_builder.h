@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "components/sync/protocol/app_list_specifics.pb.h"
@@ -35,7 +36,7 @@ class AppListModelBuilder {
     ~ScopedAppPositionInitCallbackForTest();
 
    private:
-    AppListModelBuilder* const builder_;
+    const raw_ptr<AppListModelBuilder> builder_;
     AppPositionInitCallback callback_;
   };
 
@@ -81,20 +82,20 @@ class AppListModelBuilder {
 
  private:
   // Unowned pointers to the service that owns this and associated profile.
-  app_list::AppListSyncableService* service_ = nullptr;
-  Profile* profile_ = nullptr;
+  raw_ptr<app_list::AppListSyncableService> service_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
 
   // Unowned pointer to an app list model updater.
-  AppListModelUpdater* model_updater_ = nullptr;
+  raw_ptr<AppListModelUpdater, DanglingUntriaged> model_updater_ = nullptr;
 
   // Unowned pointer to the app list controller.
-  AppListControllerDelegate* controller_;
+  raw_ptr<AppListControllerDelegate, DanglingUntriaged> controller_;
 
   // Global constant defined for each item type.
   const char* item_type_;
 
   // The callback to initialize an app's position in tests.
-  AppPositionInitCallback* position_setter_for_test_ = nullptr;
+  raw_ptr<AppPositionInitCallback> position_setter_for_test_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_ASH_APP_LIST_APP_LIST_MODEL_BUILDER_H_

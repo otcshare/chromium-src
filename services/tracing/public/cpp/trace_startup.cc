@@ -6,276 +6,247 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/memory/shared_memory_switch.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_log.h"
-#include "components/tracing/common/trace_startup_config.h"
-#include "components/tracing/common/trace_to_console.h"
+#include "base/trace_event/trace_session_observer.h"
+#include "build/build_config.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
-#include "services/tracing/public/cpp/perfetto/producer_client.h"
-#include "services/tracing/public/cpp/perfetto/system_producer.h"
-#include "services/tracing/public/cpp/perfetto/trace_event_data_source.h"
-#include "services/tracing/public/cpp/trace_event_agent.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
+#include "services/tracing/public/cpp/perfetto/shared_memory.h"
+#include "services/tracing/public/cpp/perfetto/traced_value_proto_writer.h"
 #include "services/tracing/public/cpp/trace_event_args_allowlist.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "components/tracing/common/etw_export_win.h"
+#endif
+
+#if BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_IOS_TVOS)
+#include "base/apple/mach_port_rendezvous.h"
+#endif
 
 namespace tracing {
 namespace {
 
-constexpr char kJsonFormat[] = "json";
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-constexpr uint32_t kStartupTracingTimeoutMs = 30 * 1000;  // 30 sec
+#if BUILDFLAG(IS_APPLE)
+using base::shared_memory::SharedMemoryMachPortRendezvousKey;
+constexpr SharedMemoryMachPortRendezvousKey kTraceConfigRendezvousKey = 'trcc';
+constexpr SharedMemoryMachPortRendezvousKey kTraceBufferRendezvousKey = 'trbc';
 #endif
 
 using base::trace_event::TraceConfig;
 using base::trace_event::TraceLog;
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-bool CanBePropagatedViaCommandLine(
-    const base::trace_event::TraceConfig& trace_config) {
-  base::trace_event::TraceConfig reconstructed_config(
-      trace_config.ToCategoryFilterString(),
-      trace_config.ToTraceOptionsString());
-  return reconstructed_config.ToString() == trace_config.ToString();
-}
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+class StartupTrackEventConfigObserver
+    : public perfetto::TrackEventSessionObserver {
+ public:
+  static StartupTrackEventConfigObserver& GetInstance() {
+    static base::NoDestructor<StartupTrackEventConfigObserver> instance;
+    return *instance;
+  }
+
+  StartupTrackEventConfigObserver() {
+    base::TrackEvent::AddSessionObserver(this);
+  }
+
+  // perfetto::TrackEventSessionObserver implementation.
+  void OnSetup(const perfetto::DataSourceBase::SetupArgs& args) override {
+    if (args.backend_type != perfetto::kCustomBackend ||
+        args.config->has_interceptor_config()) {
+      return;
+    }
+    base::AutoLock lock(lock_);
+    track_event_sessions_.emplace(args.internal_instance_index,
+                                  TrackEventSession(false, *args.config));
+  }
+
+  void OnStart(const perfetto::DataSourceBase::StartArgs& args) override {
+    base::AutoLock lock(lock_);
+    auto it = track_event_sessions_.find(args.internal_instance_index);
+    if (it != track_event_sessions_.end()) {
+      it->second.started = true;
+    }
+  }
+
+  void OnStop(const perfetto::DataSourceBase::StopArgs& args) override {
+    base::AutoLock lock(lock_);
+    track_event_sessions_.erase(args.internal_instance_index);
+  }
+
+  std::optional<perfetto::DataSourceConfig> GetTrackEventConfig() {
+    base::AutoLock lock(lock_);
+    for (const auto& [session_id, session] : track_event_sessions_) {
+      if (session.started) {
+        return session.config;
+      }
+    }
+    return std::nullopt;
+  }
+
+ private:
+  ~StartupTrackEventConfigObserver() override {
+    base::TrackEvent::RemoveSessionObserver(this);
+  }
+
+  struct TrackEventSession {
+    bool started;
+    perfetto::DataSourceConfig config;
+  };
+  base::Lock lock_;
+  base::flat_map<uint32_t, TrackEventSession> track_event_sessions_
+      GUARDED_BY(lock_);
+};
 
 }  // namespace
 
-bool g_tracing_initialized_after_threadpool_and_featurelist = false;
+bool g_tracing_initialized = false;
 
 bool IsTracingInitialized() {
-  return g_tracing_initialized_after_threadpool_and_featurelist;
+  return g_tracing_initialized;
 }
 
-void EnableStartupTracingIfNeeded() {
-  const base::CommandLine& command_line =
-      *base::CommandLine::ForCurrentProcess();
+void InitTracing(
+    bool enable_consumer,
+    bool will_trace_thread_restart,
+    bool enable_system_backend,
+    base::RepeatingCallback<bool()> allow_system_tracing_consumer) {
+  DCHECK(!g_tracing_initialized);
+  g_tracing_initialized = true;
 
-  TraceEventDataSource::GetInstance()->RegisterStartupHooks();
+  std::optional<uint64_t> maybe_process_track_uuid;
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kTraceProcessTrackUuid)) {
+    uint64_t process_track_uuid;
+    if (base::StringToUint64(
+            command_line->GetSwitchValueASCII(switches::kTraceProcessTrackUuid),
+            &process_track_uuid)) {
+      maybe_process_track_uuid = process_track_uuid;
+    }
+  }
 
   // Create the PerfettoTracedProcess.
-  PerfettoTracedProcess::Get();
+  auto& traced_process =
+      PerfettoTracedProcess::MaybeCreateInstance(will_trace_thread_restart);
+  if (allow_system_tracing_consumer) {
+    traced_process.SetAllowSystemTracingConsumerCallback(
+        std::move(allow_system_tracing_consumer));
+  }
+  traced_process.SetupClientLibrary(enable_consumer, enable_system_backend,
+                                    maybe_process_track_uuid);
 
-  // Initialize the client library's TrackRegistry to support trace points
-  // during startup tracing. We don't setup the client library completely here
-  // yet, because we don't have field trials loaded yet (which influence which
-  // backends we enable).
-  // TODO(eseckler): Make it possible to initialize client lib backends after
-  // setting up the client library?
-  perfetto::internal::TrackRegistry::InitializeInstance();
+  RegisterTracedValueProtoWriter();
 
   // Ensure TraceLog is initialized first.
   // https://crbug.com/764357
   TraceLog::GetInstance();
-  auto* startup_config = TraceStartupConfig::GetInstance();
+  StartupTrackEventConfigObserver::GetInstance();
+  base::trace_event::TraceSessionObserverList::Initialize();
 
-  if (startup_config->IsEnabled()) {
-    // Ensure that data sources are created and registered.
-    TraceEventAgent::GetInstance();
+#if BUILDFLAG(IS_WIN)
+  tracing::EnableETWExport();
+#endif  // BUILDFLAG(IS_WIN)
 
-    TraceConfig trace_config = startup_config->GetTraceConfig();
+  auto& startup_config = TraceStartupConfig::GetInstance();
 
-    bool privacy_filtering_enabled =
-        startup_config->GetSessionOwner() ==
-            TraceStartupConfig::SessionOwner::kBackgroundTracing ||
-        command_line.HasSwitch(switches::kTraceStartupEnablePrivacyFiltering);
+  if (startup_config.IsEnabled()) {
+    auto perfetto_config = startup_config.GetPerfettoConfig();
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-    bool convert_to_legacy_json = startup_config->GetOutputFormat() ==
-                                  TraceStartupConfig::OutputFormat::kLegacyJSON;
-
-    perfetto::TraceConfig perfetto_config = tracing::GetDefaultPerfettoConfig(
-        trace_config, privacy_filtering_enabled, convert_to_legacy_json);
-    int duration_in_seconds =
-        tracing::TraceStartupConfig::GetInstance()->GetStartupDuration();
-    if (duration_in_seconds > 0)
-      perfetto_config.set_duration_ms(duration_in_seconds * 1000);
     perfetto::Tracing::SetupStartupTracingOpts opts;
     opts.timeout_ms = kStartupTracingTimeoutMs;
     // TODO(khokhlov): Support startup tracing with the system backend in the
     // SDK build.
     opts.backend = perfetto::kCustomBackend;
-    // TODO(khokhlov): After client library is moved onto a separate thread
-    // and it's possible to start startup tracing early, replace this call with
-    // perfetto::Tracing::SetupStartupTracing(perfetto_config, args).
-    PerfettoTracedProcess::Get()->RequestStartupTracing(perfetto_config, opts);
-#else   // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-    PerfettoProducer* producer =
-        PerfettoTracedProcess::Get()->producer_client();
-    if (startup_config->GetSessionOwner() ==
-        TraceStartupConfig::SessionOwner::kSystemTracing) {
-      PerfettoTracedProcess::Get()->SetupSystemTracing();
-      producer = PerfettoTracedProcess::Get()->system_producer();
-    }
 
-    if (!PerfettoTracedProcess::Get()->SetupStartupTracing(
-            producer, trace_config, privacy_filtering_enabled)) {
-      startup_config->SetDisabled();
-    }
-#endif  // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+    perfetto::Tracing::SetupStartupTracingBlocking(perfetto_config, opts);
   }
 }
 
-bool EnableStartupTracingForProcess(
-    const base::trace_event::TraceConfig& trace_config,
-    bool privacy_filtering_enabled) {
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  perfetto::TraceConfig perfetto_config =
-      tracing::GetDefaultPerfettoConfig(trace_config, privacy_filtering_enabled,
-                                        /*convert_to_legacy_json=*/false);
-  perfetto::Tracing::SetupStartupTracingOpts opts;
-  opts.timeout_ms = kStartupTracingTimeoutMs;
-  opts.backend = perfetto::kCustomBackend;
-  // TODO(khokhlov): After client library is moved onto a separate thread
-  // and it's possible to start startup tracing early, replace this call with
-  // perfetto::Tracing::SetupStartupTracing(perfetto_config, args).
-  PerfettoTracedProcess::Get()->RequestStartupTracing(perfetto_config, opts);
-  return true;
-#else   // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  return PerfettoTracedProcess::Get()->SetupStartupTracing(
-      PerfettoTracedProcess::Get()->producer_client(), trace_config,
-      privacy_filtering_enabled);
-#endif  // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-}
-
-void InitTracingPostThreadPoolStartAndFeatureList(bool enable_consumer) {
-  if (g_tracing_initialized_after_threadpool_and_featurelist)
-    return;
-  g_tracing_initialized_after_threadpool_and_featurelist = true;
-  DCHECK(base::ThreadPoolInstance::Get());
+void InitTracingPostFeatureList(
+    bool enable_consumer,
+    bool will_trace_thread_restart,
+    base::RepeatingCallback<bool()> allow_system_tracing_consumer) {
   DCHECK(base::FeatureList::GetInstance());
-
-  PerfettoTracedProcess::Get()->OnThreadPoolAvailable(enable_consumer);
-
-#if !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  if (ShouldSetupSystemTracing()) {
-    // Ensure that data sources are created and registered.
-    TraceEventAgent::GetInstance();
-    // Connect to system service if available (currently a no-op except on
-    // Posix). Has to happen on the producer's sequence, as all communication
-    // with the system Perfetto service should occur on a single sequence.
-    if (!PerfettoTracedProcess::Get()->system_producer())
-      PerfettoTracedProcess::Get()->SetupSystemTracing();
-    PerfettoTracedProcess::Get()
-        ->GetTaskRunner()
-        ->GetOrCreateTaskRunner()
-        ->PostTask(FROM_HERE, base::BindOnce([]() {
-                     PerfettoTracedProcess::Get()
-                         ->system_producer()
-                         ->ConnectToSystemService();
-                   }));
-  }
-#endif  // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+  InitTracing(enable_consumer, will_trace_thread_restart,
+              ShouldSetupSystemTracing(),
+              std::move(allow_system_tracing_consumer));
 }
 
-void PropagateTracingFlagsToChildProcessCmdLine(base::CommandLine* cmd_line) {
-  base::trace_event::TraceLog* trace_log =
-      base::trace_event::TraceLog::GetInstance();
-
-  base::trace_event::TraceConfig trace_config;
-  bool privacy_filtering_enabled = false;
-  bool convert_to_legacy_json = false;
-
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  // TODO(khokhlov): Figure out if we are using custom or system backend and
-  // propagate this info to the child process (after startup tracing w/system
-  // backend is supported in the SDK build).
-  const auto* startup_config = TraceStartupConfig::GetInstance();
-  const base::CommandLine& command_line =
-      *base::CommandLine::ForCurrentProcess();
-  if (startup_config->IsEnabled()) {
-    trace_config = startup_config->GetTraceConfig();
-    privacy_filtering_enabled =
-        startup_config->GetSessionOwner() ==
-            TraceStartupConfig::SessionOwner::kBackgroundTracing ||
-        command_line.HasSwitch(switches::kTraceStartupEnablePrivacyFiltering);
-    convert_to_legacy_json = startup_config->GetOutputFormat() ==
-                             TraceStartupConfig::OutputFormat::kLegacyJSON;
-  } else if (trace_log->IsEnabled()) {
-    const auto chrome_config =
-        trace_log->GetCurrentTrackEventDataSourceConfig().chrome_config();
-    trace_config = base::trace_event::TraceConfig(chrome_config.trace_config());
-    privacy_filtering_enabled = chrome_config.privacy_filtering_enabled();
-    convert_to_legacy_json = chrome_config.convert_to_legacy_json();
+base::ReadOnlySharedMemoryRegion CreateTracingConfigSharedMemory() {
+  const auto& startup_config = TraceStartupConfig::GetInstance();
+  perfetto::TraceConfig trace_config;
+  if (startup_config.IsEnabled()) {
+    trace_config = startup_config.GetPerfettoConfig();
+  } else if (auto maybe_config = StartupTrackEventConfigObserver::GetInstance()
+                                     .GetTrackEventConfig();
+             maybe_config.has_value()) {
+    *trace_config.add_data_sources()->mutable_config() = *maybe_config;
   } else {
-    return;
-  }
-#else   // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  if (!trace_log->IsEnabled())
-    return;
-
-  // It's possible that tracing is enabled only for atrace, in which case the
-  // TraceEventDataSource isn't registered. In that case, there's no reason to
-  // enable startup tracing in the child process (and we wouldn't know the
-  // correct value for privacy_filtering_enabled below).
-  if (!TraceEventDataSource::GetInstance()->IsEnabled())
-    return;
-
-  // (Posix)SystemProducer doesn't currently support startup tracing, so don't
-  // attempt to enable startup tracing in child processes if system tracing is
-  // active.
-  if (PerfettoTracedProcess::Get()->system_producer() &&
-      PerfettoTracedProcess::Get()->system_producer()->IsTracingActive()) {
-    return;
+    return base::ReadOnlySharedMemoryRegion();
   }
 
-  // The child process startup may race with a concurrent disabling of the
-  // tracing session by the tracing service. To avoid being stuck in startup
-  // tracing mode forever, the child process will discard the startup session
-  // after a timeout (|startup_tracing_timer_| in TraceEventDataSource).
-  //
-  // Note that we disregard the config's process filter, since it's possible
-  // that the trace consumer will update the config to include the process
-  // shortly. Otherwise, the startup tracing timeout in the child will
-  // eventually disable tracing for the process.
+  std::vector<uint8_t> serialized_config = trace_config.SerializeAsArray();
 
-  trace_config = trace_log->GetCurrentTraceConfig();
-  privacy_filtering_enabled =
-      TraceEventDataSource::GetInstance()->IsPrivacyFilteringEnabled();
-#endif  // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+  base::MappedReadOnlyRegion shm =
+      base::ReadOnlySharedMemoryRegion::Create(serialized_config.size());
+  if (!shm.IsValid()) {
+    return base::ReadOnlySharedMemoryRegion();
+  }
+  base::span(shm.mapping).copy_from(serialized_config);
+  return std::move(shm.region);
+}
 
-  // We can't currently propagate event filter options, histogram names, memory
-  // dump configs, or trace buffer sizes via command line flags (they only
-  // support categories, trace options, record mode). If event filters or
-  // histogram names are set, we bail out here to avoid recording events that we
-  // shouldn't in the child process. Even if memory dump config is set, it's OK
-  // to propagate the remaining config, because the child won't record events it
-  // shouldn't without it and will adopt the memory dump config once it connects
-  // to the tracing service. Buffer sizes configure the tracing service's
-  // central buffer, so also don't affect local tracing.
-  //
-  // TODO(eseckler): Support propagating the full config via command line flags
-  // somehow (--trace-config?). This will also need some rethinking to support
-  // multiple concurrent tracing sessions in the future.
-  if (!trace_config.event_filters().empty())
-    return;
-  if (!trace_config.histogram_names().empty())
-    return;
+base::UnsafeSharedMemoryRegion CreateTracingOutputSharedMemory() {
+  auto shm = base::UnsafeSharedMemoryRegion::Create(
+      features::kPerfettoSharedMemorySizeBytes.Get());
+  if (!shm.IsValid()) {
+    return base::UnsafeSharedMemoryRegion();
+  }
+  return shm;
+}
 
-  // In SDK build, any difference between startup config and the config
-  // supplied to the tracing service will prevent the service from adopting
-  // the startup session. So if the config contains any field that can't be
-  // propagated via command line, we bail out here.
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  if (!CanBePropagatedViaCommandLine(trace_config))
-    return;
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+void COMPONENT_EXPORT(TRACING_CPP) AddTraceConfigToLaunchParameters(
+    const base::ReadOnlySharedMemoryRegion& read_only_memory_region,
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+    base::GlobalDescriptors::Key descriptor_key,
+    base::ScopedFD& out_descriptor_to_share,
+#endif
+    base::CommandLine* command_line,
+    base::LaunchOptions* launch_options) {
+  base::shared_memory::AddToLaunchParameters(switches::kTraceConfigHandle,
+                                             read_only_memory_region,
+#if BUILDFLAG(IS_APPLE)
+                                             kTraceConfigRendezvousKey,
+#elif BUILDFLAG(IS_POSIX)
+                                             descriptor_key,
+                                             out_descriptor_to_share,
+#endif
+                                             command_line, launch_options);
+}
 
-  // Make sure that the startup session uses privacy filtering mode if it's
-  // enabled for the browser's session.
-  if (privacy_filtering_enabled)
-    cmd_line->AppendSwitch(switches::kTraceStartupEnablePrivacyFiltering);
-  if (convert_to_legacy_json)
-    cmd_line->AppendSwitchASCII(switches::kTraceStartupFormat, kJsonFormat);
-
-  cmd_line->AppendSwitchASCII(switches::kTraceStartup,
-                              trace_config.ToCategoryFilterString());
-  // The argument filtering setting is passed via trace options as part of
-  // --trace-startup-record-mode.
-  cmd_line->AppendSwitchASCII(switches::kTraceStartupRecordMode,
-                              trace_config.ToTraceOptionsString());
+void COMPONENT_EXPORT(TRACING_CPP) AddTraceOutputToLaunchParameters(
+    const base::UnsafeSharedMemoryRegion& unsafe_memory_region,
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+    base::GlobalDescriptors::Key descriptor_key,
+    base::ScopedFD& out_descriptor_to_share,
+#endif
+    base::CommandLine* command_line,
+    base::LaunchOptions* launch_options) {
+  base::shared_memory::AddToLaunchParameters(switches::kTraceBufferHandle,
+                                             unsafe_memory_region,
+#if BUILDFLAG(IS_APPLE)
+                                             kTraceBufferRendezvousKey,
+#elif BUILDFLAG(IS_POSIX)
+                                             descriptor_key,
+                                             out_descriptor_to_share,
+#endif
+                                             command_line, launch_options);
 }
 
 }  // namespace tracing

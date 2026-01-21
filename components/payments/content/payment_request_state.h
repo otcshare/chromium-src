@@ -23,7 +23,6 @@
 #include "components/payments/core/payments_profile_comparator.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/payment_app_provider.h"
-#include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
 #include "url/origin.h"
 
@@ -36,6 +35,7 @@ class RegionDataLoader;
 
 namespace content {
 class RenderFrameHost;
+class WebContents;
 }  // namespace content
 
 namespace payments {
@@ -68,7 +68,7 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
     virtual void OnSelectedInformationChanged() = 0;
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   class Delegate {
@@ -90,7 +90,7 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
     virtual void OnPayerInfoSelected(mojom::PayerDetailPtr payer_info) = 0;
 
    protected:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
   };
 
   using StatusCallback = base::OnceCallback<void(bool)>;
@@ -124,7 +124,7 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
       const override;
   void ShowProcessingSpinner() override;
   base::WeakPtr<PaymentRequestSpec> GetSpec() const override;
-  std::string GetTwaPackageName() const override;
+  void GetTwaPackageName(GetTwaPackageNameCallback callback) override;
   const GURL& GetTopOrigin() override;
   const GURL& GetFrameOrigin() override;
   const url::Origin& GetFrameSecurityOrigin() override;
@@ -135,9 +135,10 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
       const override;
   std::unique_ptr<webauthn::InternalAuthenticator> CreateInternalAuthenticator()
       const override;
-  scoped_refptr<PaymentManifestWebDataService>
-  GetPaymentManifestWebDataService() const override;
+  scoped_refptr<WebPaymentsWebDataService> GetWebPaymentsWebDataService()
+      const override;
   bool IsOffTheRecord() const override;
+  bool PrefsCanMakePayment() const override;
   void OnPaymentAppCreated(std::unique_ptr<PaymentApp> app) override;
   void OnPaymentAppCreationError(
       const std::string& error_message,
@@ -147,6 +148,8 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
   void SetCanMakePaymentEvenWithoutApps() override;
   base::WeakPtr<CSPChecker> GetCSPChecker() override;
   void SetOptOutOffered() override;
+  std::optional<base::UnguessableToken> GetChromeOSTWAInstanceId()
+      const override;
 
   // PaymentResponseHelper::Delegate
   void OnPaymentResponseReady(
@@ -219,10 +222,12 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
 
   // Returns the appropriate Autofill Profiles for this user. The profiles
   // returned are owned by the PaymentRequestState.
-  const std::vector<autofill::AutofillProfile*>& shipping_profiles() {
+  const std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>&
+  shipping_profiles() {
     return shipping_profiles_;
   }
-  const std::vector<autofill::AutofillProfile*>& contact_profiles() {
+  const std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>&
+  contact_profiles() {
     return contact_profiles_;
   }
   const std::vector<std::unique_ptr<PaymentApp>>& available_apps() {
@@ -327,6 +332,9 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
   void OnAddressNormalized(bool success,
                            const autofill::AutofillProfile& normalized_profile);
 
+  void OnGetTwaPackageName(GetTwaPackageNameCallback callback,
+                           const std::string& twa_package_name);
+
   // Returns whether the browser is currently in a TWA.
   bool IsInTwa() const;
 
@@ -348,6 +356,10 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
 
   // Whether getting all available apps is finished.
   bool get_all_apps_finished_ = false;
+
+  // The Android package name of the Trusted Web Activity that invoked this
+  // browser, if any.
+  std::string twa_package_name_;
 
   // The value returned by hasEnrolledInstrument(). Can be used only after
   // |get_all_apps_finished_| is true.
@@ -396,8 +408,10 @@ class PaymentRequestState : public PaymentAppFactory::Delegate,
   // loading and owned here. They are populated once only, and ordered by
   // frecency.
   std::vector<std::unique_ptr<autofill::AutofillProfile>> profile_cache_;
-  std::vector<autofill::AutofillProfile*> shipping_profiles_;
-  std::vector<autofill::AutofillProfile*> contact_profiles_;
+  std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
+      shipping_profiles_;
+  std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
+      contact_profiles_;
 
   std::vector<std::unique_ptr<PaymentApp>> available_apps_;
 

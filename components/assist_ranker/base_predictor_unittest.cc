@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -68,7 +68,7 @@ class FakePredictor : public BasePredictor {
   ~FakePredictor() override {}
   // Validation will always succeed.
   static RankerModelStatus ValidateModel(const RankerModel& model) {
-    return RankerModelStatus::OK;
+    return RankerModelStatus::kOk;
   }
 
  protected:

@@ -8,6 +8,7 @@
 #include "base/android/scoped_java_ref.h"
 #include "content/browser/android/java/jni_reflect.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/browser/reflection_jni_headers/Object_jni.h"
 
 using base::android::AttachCurrentThread;
@@ -27,8 +28,8 @@ GinJavaBoundObject* GinJavaBoundObject::CreateNamed(
 GinJavaBoundObject* GinJavaBoundObject::CreateTransient(
     const JavaObjectWeakGlobalRef& ref,
     const base::android::JavaRef<jclass>& safe_annotation_clazz,
-    int32_t holder) {
-  std::set<int32_t> holders;
+    const GlobalRenderFrameHostId& holder) {
+  std::set<GlobalRenderFrameHostId> holders;
   holders.insert(holder);
   return new GinJavaBoundObject(ref, safe_annotation_clazz, holders);
 }
@@ -45,7 +46,7 @@ GinJavaBoundObject::GinJavaBoundObject(
 GinJavaBoundObject::GinJavaBoundObject(
     const JavaObjectWeakGlobalRef& ref,
     const base::android::JavaRef<jclass>& safe_annotation_clazz,
-    const std::set<int32_t>& holders)
+    const std::set<GlobalRenderFrameHostId>& holders)
     : ref_(ref),
       names_count_(0),
       holders_(holders),
@@ -68,7 +69,7 @@ std::set<std::string> GinJavaBoundObject::GetMethodNames() {
 
 bool GinJavaBoundObject::HasMethod(const std::string& method_name) {
   EnsureMethodsAreSetUp();
-  return methods_.find(method_name) != methods_.end();
+  return methods_.contains(method_name);
 }
 
 const JavaMethod* GinJavaBoundObject::FindMethod(
@@ -97,14 +98,15 @@ const JavaMethod* GinJavaBoundObject::FindMethod(
 }
 
 bool GinJavaBoundObject::IsObjectGetClassMethod(const JavaMethod* method) {
+  static std::atomic<jmethodID> cached_method_id(nullptr);
   EnsureMethodsAreSetUp();
   // As java.lang.Object.getClass is declared to be final, it is sufficient to
   // compare methodIDs.
   JNIEnv* env = AttachCurrentThread();
   jmethodID get_class_method_id =
       base::android::MethodID::LazyGet<base::android::MethodID::TYPE_INSTANCE>(
-          env, java_lang_Object_clazz(env), "getClass", "()Ljava/lang/Class;",
-          &JNI_Object::g_java_lang_Object_getClass);
+          env, jni_zero::g_object_class, "getClass", "()Ljava/lang/Class;",
+          &cached_method_id);
   return method->id() == get_class_method_id;
 }
 

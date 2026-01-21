@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/data_decoder/xml_parser.h"
+
 #include <memory>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/test/values_test_util.h"
-#include "services/data_decoder/xml_parser.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -16,9 +16,9 @@ namespace data_decoder {
 namespace {
 
 void TestParseXmlCallback(std::unique_ptr<base::Value>* value_out,
-                          absl::optional<std::string>* error_out,
-                          absl::optional<base::Value> value,
-                          const absl::optional<std::string>& error) {
+                          std::optional<std::string>* error_out,
+                          std::optional<base::Value> value,
+                          const std::optional<std::string>& error) {
   std::unique_ptr<base::Value> value_ptr =
       value ? base::Value::ToUniquePtrValue(std::move(value.value())) : nullptr;
   *value_out = std::move(value_ptr);
@@ -38,7 +38,7 @@ void TestParseXml(const std::string& xml,
   mojom::XmlParser& parser = parser_impl;
 
   std::unique_ptr<base::Value> actual_value;
-  absl::optional<std::string> error;
+  std::optional<std::string> error;
   parser.Parse(xml, whitespace_behavior,
                base::BindOnce(&TestParseXmlCallback, &actual_value, &error));
   if (json.empty()) {
@@ -66,11 +66,11 @@ TEST_F(XmlParserTest, ParseBadXml) {
     const char* input;
     const char* expected_error;
   } test_cases[] = {
-      {"", "Extra content at the end of the document"},
-      {"  ", "Extra content at the end of the document"},
-      {"Awesome possum", "Document is empty"},
-      {R"( ["json", "or", "xml?"] )", "Document is empty"},
-      {"<unbalanced>", "Extra content at the end of the document"},
+      {"", "Document is empty"},
+      {"  ", "Start tag expected"},
+      {"Awesome possum", "Start tag expected"},
+      {R"( ["json", "or", "xml?"] )", "Start tag expected"},
+      {"<unbalanced>", "Premature end of data in tag"},
       {"<hello>bad tag</goodbye>",
        "Opening and ending tag mismatch: hello line 1 and goodbye"},
   };

@@ -4,8 +4,8 @@
 
 #include "remoting/protocol/spake2_authenticator.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/protocol/authenticator_test_base.h"
@@ -25,9 +25,6 @@ namespace {
 
 const int kMessageSize = 100;
 const int kMessages = 1;
-
-const char kClientId[] = "alice@gmail.com/abc";
-const char kHostId[] = "alice@gmail.com/123";
 
 const char kTestSharedSecret[] = "1234-1234-5678";
 const char kTestSharedSecretBad[] = "0000-0000-0001";

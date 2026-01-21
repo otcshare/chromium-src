@@ -6,32 +6,31 @@
 
 #include "content/browser/preloading/prefetch/prefetch_document_manager.h"
 #include "content/browser/preloading/prefetch/prefetch_serving_page_metrics_container.h"
-#include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/render_frame_host.h"
+#include "third_party/blink/public/mojom/tokens/tokens.mojom.h"
 
 namespace content {
 
 // static
-absl::optional<PrefetchReferringPageMetrics>
+std::optional<PrefetchReferringPageMetrics>
 PrefetchReferringPageMetrics::GetForCurrentDocument(RenderFrameHost* rfh) {
   DCHECK(rfh);
   PrefetchDocumentManager* prefetch_document_manager =
       PrefetchDocumentManager::GetForCurrentDocument(rfh);
   if (!prefetch_document_manager)
-    return absl::nullopt;
+    return std::nullopt;
 
   return prefetch_document_manager->GetReferringPageMetrics();
 }
 
 // static
-absl::optional<PrefetchServingPageMetrics>
+std::optional<PrefetchServingPageMetrics>
 PrefetchServingPageMetrics::GetForNavigationHandle(
     NavigationHandle& navigation_handle) {
   PrefetchServingPageMetricsContainer* prefetch_serving_page_metrics_container =
       PrefetchServingPageMetricsContainer::GetForNavigationHandle(
           navigation_handle);
   if (!prefetch_serving_page_metrics_container)
-    return absl::nullopt;
+    return std::nullopt;
 
   return prefetch_serving_page_metrics_container->GetServingPageMetrics();
 }

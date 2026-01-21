@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.browserservices;
 
 import android.app.Notification;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.RemoteException;
 
@@ -15,12 +16,11 @@ import androidx.browser.trusted.TokenStore;
 import androidx.browser.trusted.TrustedWebActivityCallbackRemote;
 import androidx.browser.trusted.TrustedWebActivityService;
 
-/**
- * A TrustedWebActivityService to be used in TrustedWebActivityClientTest.
- */
-public class TestTrustedWebActivityService extends TrustedWebActivityService {
-    private static final String TAG = "TestTWAService";
+import java.util.ArrayList;
+import java.util.Arrays;
 
+/** A TrustedWebActivityService to be used in TrustedWebActivityClientTest. */
+public class TestTrustedWebActivityService extends TrustedWebActivityService {
     public static final String COMMAND_SET_RESPONSE = "setResponse";
     public static final String SET_RESPONSE_NAME = "setResponse.name";
     public static final String SET_RESPONSE_BUNDLE = "setResponse.bundle";
@@ -35,9 +35,13 @@ public class TestTrustedWebActivityService extends TrustedWebActivityService {
     private static final String LOCATION_PERMISSION_RESULT = "locationPermissionResult";
     private static final String START_LOCATION_COMMAND_NAME = "startLocation";
     private static final String STOP_LOCATION_COMMAND_NAME = "stopLocation";
-    private static final String LOCATION_ARG_ENABLE_HIGH_ACCURACY = "enableHighAccuracy";
     private static final String EXTRA_NEW_LOCATION_AVAILABLE_CALLBACK = "onNewLocationAvailable";
-    private static final String EXTRA_NEW_LOCATION_ERROR_CALLBACK = "onNewLocationError";
+
+    private static final String COMMAND_CHECK_CONTACT_PERMISSION = "checkContactPermission";
+    private static final String CONTACT_PERMISSION_RESULT = "contactPermissionResult";
+    private static final String COMMAND_FETCH_CONTACTS = "fetchContacts";
+    private static final String COMMAND_FETCH_CONTACT_ICON = "fetchContactIcon";
+
     private static final String EXTRA_COMMAND_SUCCESS = "success";
 
     private final TokenStore mTokenStore = new InMemoryStore();
@@ -59,10 +63,10 @@ public class TestTrustedWebActivityService extends TrustedWebActivityService {
     }
 
     @Override
-    public boolean onNotifyNotificationWithChannel(String platformTag, int platformId,
-            Notification notification, String channelName) {
-        MessengerService.sMessageHandler
-                .recordNotifyNotification(platformTag, platformId, channelName);
+    public boolean onNotifyNotificationWithChannel(
+            String platformTag, int platformId, Notification notification, String channelName) {
+        MessengerService.sMessageHandler.recordNotifyNotification(
+                platformTag, platformId, channelName);
         return true;
     }
 
@@ -116,6 +120,40 @@ public class TestTrustedWebActivityService extends TrustedWebActivityService {
                 mResponseBundle = args.getBundle(SET_RESPONSE_BUNDLE);
                 runCallback(callback, SET_RESPONSE_RESPONSE, null);
                 break;
+            case COMMAND_CHECK_CONTACT_PERMISSION:
+                if (callback == null) break;
+
+                Bundle contactPermission = new Bundle();
+                contactPermission.putBoolean(CONTACT_PERMISSION_RESULT, true);
+                runCallback(callback, COMMAND_CHECK_CONTACT_PERMISSION, contactPermission);
+                break;
+            case COMMAND_FETCH_CONTACTS:
+                if (callback == null) break;
+
+                Bundle contact = new Bundle();
+                contact.putString("id", "id123");
+                contact.putString("name", "Tomoki Sakurai");
+                contact.putStringArrayList(
+                        "email", new ArrayList<>(Arrays.asList("stomoki@example.com")));
+                contact.putStringArrayList("tel", new ArrayList<>(Arrays.asList("012-3456-7890")));
+                contact.putParcelableArrayList("address", new ArrayList<>());
+
+                Bundle contactsResult = new Bundle();
+                contactsResult.putParcelableArrayList(
+                        "contacts", new ArrayList<>(Arrays.asList(contact)));
+                runCallback(callback, COMMAND_FETCH_CONTACTS, contactsResult);
+                break;
+            case COMMAND_FETCH_CONTACT_ICON:
+                if (callback == null) break;
+
+                Uri uri = Uri.EMPTY;
+
+                Bundle iconResult = new Bundle();
+
+                iconResult.putParcelable("icon", uri);
+
+                runCallback(callback, COMMAND_FETCH_CONTACT_ICON, iconResult);
+                break;
             default:
                 if (mResponseBundle != null) {
                     runCallback(callback, mResponseName, mResponseBundle);
@@ -126,8 +164,8 @@ public class TestTrustedWebActivityService extends TrustedWebActivityService {
         return executionResult;
     }
 
-    private static void runCallback(TrustedWebActivityCallbackRemote callback, String name,
-            Bundle args) {
+    private static void runCallback(
+            TrustedWebActivityCallbackRemote callback, String name, Bundle args) {
         if (callback == null) return;
         try {
             callback.runExtraCallback(name, args);

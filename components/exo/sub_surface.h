@@ -7,11 +7,11 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "components/exo/surface_delegate.h"
 #include "components/exo/surface_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/class_property.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -42,13 +42,12 @@ class SubSurface : public SurfaceDelegate,
 
   ~SubSurface() override;
 
+  Surface* surface() { return surface_; }
+
   // This schedules a sub-surface position change. The sub-surface will be
   // moved so, that its origin (top-left corner pixel) will be at the |position|
   // of the parent surface coordinate system.
   void SetPosition(const gfx::PointF& position);
-
-  // This schedules a clip rect to be applied when drawing this sub-surface.
-  void SetClipRect(const absl::optional<gfx::RectF>& clip_rect);
 
   // This schedules a matrix transform to be applied when drawing this
   // sub-surface.
@@ -93,6 +92,8 @@ class SubSurface : public SurfaceDelegate,
   void UnsetCanGoBack() override {}
   void SetPip() override {}
   void UnsetPip() override {}
+  void SetFloatToLocation(
+      chromeos::FloatStartLocation float_start_location) override {}
   void SetAspectRatio(const gfx::SizeF& aspect_ratio) override {}
   void MoveToDesk(int desk_index) override {}
   void SetVisibleOnAllWorkspaces() override {}
@@ -100,6 +101,7 @@ class SubSurface : public SurfaceDelegate,
   void Pin(bool trusted) override {}
   void Unpin() override {}
   void SetSystemModal(bool system_modal) override {}
+  void SetTopInset(int height) override {}
   SecurityDelegate* GetSecurityDelegate() override;
 
   // Overridden from SurfaceObserver:
@@ -110,8 +112,8 @@ class SubSurface : public SurfaceDelegate,
   void RemoveSubSurfaceObserver(SubSurfaceObserver* observer);
 
  private:
-  Surface* surface_;
-  Surface* parent_;
+  raw_ptr<Surface> surface_;
+  raw_ptr<Surface> parent_;
   bool is_synchronized_ = true;
 
   // Surface observer list. Surface does not own the observers.

@@ -29,7 +29,8 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/style_color.h"
 #include "ui/gfx/geometry/outsets_f.h"
-#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/size_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 
@@ -38,47 +39,77 @@ enum class ShadowStyle { kNormal, kInset };
 // This class holds information about shadows for the text-shadow and box-shadow
 // properties, as well as the drop-shadow(...) filter operation.
 class CORE_EXPORT ShadowData {
-  USING_FAST_MALLOC(ShadowData);
+  DISALLOW_NEW();
 
  public:
-  ShadowData(const gfx::PointF& location,
+  ShadowData(gfx::Vector2dF offset,
              float blur,
              float spread,
              ShadowStyle style,
-             StyleColor color)
-      : location_(location),
+             StyleColor color,
+             float opacity = 1.0f)
+      : offset_(offset),
+        blur_(blur, blur),
+        spread_(spread),
+        color_(color),
+        style_(style),
+        opacity_(opacity) {}
+
+  ShadowData(gfx::Vector2dF offset,
+             gfx::SizeF blur,
+             float spread,
+             ShadowStyle style,
+             StyleColor color,
+             float opacity = 1.0f)
+      : offset_(offset),
         blur_(blur),
         spread_(spread),
         color_(color),
-        style_(style) {}
+        style_(style),
+        opacity_(opacity) {}
 
-  bool operator==(const ShadowData&) const;
-  bool operator!=(const ShadowData& o) const { return !(*this == o); }
+  void Trace(Visitor* visitor) const { visitor->Trace(color_); }
+
+  bool operator==(const ShadowData&) const = default;
 
   static ShadowData NeutralValue();
+  static inline float BlurRadiusToStdDev(float radius) {
+    DCHECK_GE(radius, 0);
+    // Per spec, sigma is exactly half the blur radius:
+    // https://www.w3.org/TR/css-backgrounds-3/#shadow-blur
+    // https://html.spec.whatwg.org/C/#when-shadows-are-drawn
+    return radius * 0.5f;
+  }
 
-  float X() const { return location_.x(); }
-  float Y() const { return location_.y(); }
-  gfx::PointF Location() const { return location_; }
-  float Blur() const { return blur_; }
+  float X() const { return offset_.x(); }
+  float Y() const { return offset_.y(); }
+  gfx::Vector2dF Offset() const { return offset_; }
+  float BlurRadius() const { return BlurValue(); }
+  float BlurAsSigma() const { return BlurRadiusToStdDev(BlurValue()); }
+  // Accessors for the underlying blur value(s). Prefer the more "semantic"
+  // accessors above if possible.
+  float BlurValue() const { return blur_.width(); }
+  gfx::SizeF BlurValueXY() const { return blur_; }
   float Spread() const { return spread_; }
   ShadowStyle Style() const { return style_; }
-  StyleColor GetColor() const { return color_; }
-
-  void OverrideColor(Color color) { color_ = StyleColor(color); }
+  const StyleColor& GetColor() const { return color_; }
+  float Opacity() const { return opacity_; }
 
   // Outsets needed to adjust a source rectangle to the one cast by this
   // shadow.
   gfx::OutsetsF RectOutsets() const;
 
  private:
-  gfx::PointF location_;
-  float blur_;
+  gfx::Vector2dF offset_;
+  gfx::SizeF blur_;
   float spread_;
   StyleColor color_;
   ShadowStyle style_;
+  float opacity_;
 };
 
 }  // namespace blink
+
+WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(blink::ShadowData)
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SHADOW_DATA_H_

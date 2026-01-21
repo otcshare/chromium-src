@@ -4,7 +4,6 @@
 #ifndef CHROME_BROWSER_PREDICTORS_LOADING_TEST_UTIL_H_
 #define CHROME_BROWSER_PREDICTORS_LOADING_TEST_UTIL_H_
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -14,6 +13,7 @@
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor_tables.h"
 #include "components/sessions/core/session_id.h"
+#include "content/public/browser/preconnect_request.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
@@ -27,14 +27,13 @@ class MockResourcePrefetchPredictor : public ResourcePrefetchPredictor {
                                 Profile* profile);
   ~MockResourcePrefetchPredictor() override;
 
-  void RecordPageRequestSummary(
-      std::unique_ptr<PageRequestSummary> summary) override {
-    RecordPageRequestSummaryProxy(summary.get());
+  void RecordPageRequestSummary(const PageRequestSummary& summary) override {
+    RecordPageRequestSummaryProxy(summary);
   }
 
   MOCK_CONST_METHOD2(PredictPreconnectOrigins,
                      bool(const GURL&, PreconnectPrediction*));
-  MOCK_METHOD1(RecordPageRequestSummaryProxy, void(PageRequestSummary*));
+  MOCK_METHOD1(RecordPageRequestSummaryProxy, void(const PageRequestSummary&));
 };
 
 // |include_scheme| and |include_port| can be set to false to simulate legacy
@@ -65,7 +64,8 @@ PageRequestSummary CreatePageRequestSummary(
     const std::string& main_frame_url,
     const std::string& initial_url,
     const std::vector<blink::mojom::ResourceLoadInfoPtr>& resource_load_infos,
-    base::TimeTicks navigation_started = base::TimeTicks::Now());
+    base::TimeTicks navigation_started = base::TimeTicks::Now(),
+    bool main_frame_load_complete = true);
 
 blink::mojom::ResourceLoadInfoPtr CreateResourceLoadInfo(
     const std::string& url,
@@ -86,7 +86,7 @@ blink::mojom::ResourceLoadInfoPtr CreateResourceLoadInfoWithRedirects(
 PreconnectPrediction CreatePreconnectPrediction(
     std::string host,
     bool is_redirected,
-    const std::vector<PreconnectRequest>& requests);
+    const std::vector<content::PreconnectRequest>& requests);
 
 void PopulateTestConfig(LoadingPredictorConfig* config, bool small_db = true);
 
@@ -98,7 +98,8 @@ std::ostream& operator<<(std::ostream& stream,
 
 std::ostream& operator<<(std::ostream& os, const OriginData& data);
 std::ostream& operator<<(std::ostream& os, const OriginStat& redirect);
-std::ostream& operator<<(std::ostream& os, const PreconnectRequest& request);
+std::ostream& operator<<(std::ostream& os,
+                         const content::PreconnectRequest& request);
 std::ostream& operator<<(std::ostream& os,
                          const PreconnectPrediction& prediction);
 
@@ -109,7 +110,6 @@ bool operator==(const OriginRequestSummary& lhs,
                 const OriginRequestSummary& rhs);
 bool operator==(const OriginData& lhs, const OriginData& rhs);
 bool operator==(const OriginStat& lhs, const OriginStat& rhs);
-bool operator==(const PreconnectRequest& lhs, const PreconnectRequest& rhs);
 bool operator==(const PreconnectPrediction& lhs,
                 const PreconnectPrediction& rhs);
 bool operator==(const OptimizationGuidePrediction& lhs,

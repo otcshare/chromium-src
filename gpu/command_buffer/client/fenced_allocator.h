@@ -12,10 +12,12 @@
 
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "gpu/gpu_export.h"
+#include "base/memory/raw_span.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 
 namespace gpu {
 class CommandBufferHelper;
@@ -30,7 +32,7 @@ class CommandBufferHelper;
 // environment which is multi-process, this class isn't "thread safe", because
 // it isn't meant to be shared across modules. It is thread-compatible though
 // (see http://www.corp.google.com/eng/doc/cpp_primer.html#thread_safety).
-class GPU_EXPORT FencedAllocator {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT FencedAllocator {
  public:
   typedef uint32_t Offset;
   // Invalid offset, returned by Alloc in case of failure.
@@ -160,8 +162,10 @@ class FencedAllocatorWrapper {
  public:
   FencedAllocatorWrapper() = delete;
 
-  FencedAllocatorWrapper(uint32_t size, CommandBufferHelper* helper, void* base)
-      : allocator_(size, helper), base_(base) {}
+  FencedAllocatorWrapper(uint32_t size,
+                         CommandBufferHelper* helper,
+                         base::span<uint8_t> span)
+      : allocator_(size, helper), span_(span) {}
 
   FencedAllocatorWrapper(const FencedAllocatorWrapper&) = delete;
   FencedAllocatorWrapper& operator=(const FencedAllocatorWrapper&) = delete;
@@ -174,27 +178,14 @@ class FencedAllocatorWrapper {
   //   size: the size of the memory block to allocate.
   //
   // Returns:
-  //   the pointer to the allocated memory block, or NULL if out of
+  //   the span to the allocated memory block, or an empty span if out of
   //   memory.
-  void* Alloc(uint32_t size) {
+  base::span<uint8_t> Alloc(uint32_t size) {
     FencedAllocator::Offset offset = allocator_.Alloc(size);
-    return GetPointer(offset);
-  }
-
-  // Allocates a block of memory. If the buffer is out of directly available
-  // memory, this function may wait until memory that was freed "pending a
-  // token" can be re-used.
-  // This is a type-safe version of Alloc, returning a typed pointer.
-  //
-  // Parameters:
-  //   count: the number of elements to allocate.
-  //
-  // Returns:
-  //   the pointer to the allocated memory block, or NULL if out of
-  //   memory.
-  template <typename T>
-  T* AllocTyped(uint32_t count) {
-    return static_cast<T *>(Alloc(count * sizeof(T)));
+    if (offset == FencedAllocator::kInvalidOffset) {
+      return {};
+    }
+    return span_.subspan(offset, size);
   }
 
   // Frees a block of memory.
@@ -222,21 +213,12 @@ class FencedAllocatorWrapper {
     allocator_.FreeUnused();
   }
 
-  // Gets a pointer to a memory block given the base memory and the offset.
-  // It translates FencedAllocator::kInvalidOffset to nullptr.
-  void *GetPointer(FencedAllocator::Offset offset) {
-    return (offset == FencedAllocator::kInvalidOffset)
-               ? nullptr
-               : static_cast<char*>(base_) + offset;
-  }
-
   // Gets the offset to a memory block given the base memory and the address.
   // It translates nullptr to FencedAllocator::kInvalidOffset.
-  FencedAllocator::Offset GetOffset(void *pointer) {
-    return pointer ?
-        static_cast<FencedAllocator::Offset>(
-            static_cast<char*>(pointer) - static_cast<char*>(base_)) :
-        FencedAllocator::kInvalidOffset;
+  FencedAllocator::Offset GetOffset(void* pointer) {
+    return pointer ? static_cast<FencedAllocator::Offset>(
+                         static_cast<uint8_t*>(pointer) - span_.data())
+                   : FencedAllocator::kInvalidOffset;
   }
 
   // Gets the size of the largest free block that is available without waiting.
@@ -272,7 +254,7 @@ class FencedAllocatorWrapper {
 
  private:
   FencedAllocator allocator_;
-  raw_ptr<void> base_;
+  base::raw_span<uint8_t> span_;
 };
 
 }  // namespace gpu

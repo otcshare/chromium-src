@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_TEST_FAKE_WIDGET_SCHEDULER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_TEST_FAKE_WIDGET_SCHEDULER_H_
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/scheduler/public/widget_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
 
@@ -39,11 +40,11 @@ class FakeWidgetScheduler : public WidgetScheduler {
       WebInputEvent::Type web_input_event_type,
       const WebInputEventAttribution& web_input_event_attribution) override {}
   void DidHandleInputEventOnMainThread(const WebInputEvent& web_input_event,
-                                       WebInputEventResult result) override {}
-  void DidAnimateForInputOnCompositorThread() override {}
+                                       WebInputEventResult result,
+                                       bool frame_requested) override {}
   void DidRunBeginMainFrame() override {}
   void SetHidden(bool hidden) override {}
-  void SetHasTouchHandler(bool has_touch_handler) override {}
+  void WillShutdown() override {}
 
  private:
   scoped_refptr<FakeTaskRunner> input_task_runner_;

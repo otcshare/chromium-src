@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/os_feedback_ui/os_feedback_untrusted_ui.h"
 
 #include <memory>
 
+#include "ash/webui/common/trusted_types_util.h"
 #include "ash/webui/grit/ash_os_feedback_resources.h"
 #include "ash/webui/grit/ash_os_feedback_untrusted_resources.h"
 #include "ash/webui/grit/ash_os_feedback_untrusted_resources_map.h"
@@ -33,6 +35,10 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
       {"helpContentOfflineAltText",
        IDS_FEEDBACK_TOOL_HELP_CONTENT_OFFLINE_ALT_TEXT},
       {"helpContentLabelTooltip", IDS_FEEDBACK_TOOL_HELP_CONTENT_LABEL_TOOLTIP},
+      {"helpContentNotAvailableMessage",
+       IDS_FEEDBACK_TOOL_HELP_CONTENT_NOT_AVAILABLE_MESSAGE},
+      {"helpContentNotAvailableAltText",
+       IDS_FEEDBACK_TOOL_HELP_CONTENT_NOT_AVAILABLE_ALT_TEXT},
   };
 
   source->AddLocalizedStrings(kLocalizedStrings);
@@ -42,15 +48,10 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
 }  // namespace
 
 OsFeedbackUntrustedUIConfig::OsFeedbackUntrustedUIConfig()
-    : WebUIConfig(content::kChromeUIUntrustedScheme,
-                  kChromeUIOSFeedbackUntrustedHost) {}
+    : DefaultWebUIConfig(content::kChromeUIUntrustedScheme,
+                         kChromeUIOSFeedbackUntrustedHost) {}
 
 OsFeedbackUntrustedUIConfig::~OsFeedbackUntrustedUIConfig() = default;
-
-std::unique_ptr<content::WebUIController>
-OsFeedbackUntrustedUIConfig::CreateWebUIController(content::WebUI* web_ui) {
-  return std::make_unique<OsFeedbackUntrustedUI>(web_ui);
-}
 
 OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
     : ui::UntrustedWebUIController(web_ui) {
@@ -59,23 +60,19 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
           web_ui->GetWebContents()->GetBrowserContext(),
           kChromeUIOSFeedbackUntrustedUrl);
 
-  untrusted_source->AddResourcePaths(base::make_span(
-      kAshOsFeedbackUntrustedResources, kAshOsFeedbackUntrustedResourcesSize));
+  untrusted_source->AddResourcePaths(kAshOsFeedbackUntrustedResources);
   untrusted_source->AddResourcePath("help_content.js",
                                     IDR_ASH_OS_FEEDBACK_HELP_CONTENT_JS);
+  untrusted_source->AddResourcePath("help_content.html.js",
+                                    IDR_ASH_OS_FEEDBACK_HELP_CONTENT_HTML_JS);
   untrusted_source->AddResourcePath("feedback_types.js",
                                     IDR_ASH_OS_FEEDBACK_FEEDBACK_TYPES_JS);
   untrusted_source->AddResourcePath(
-      "file_path.mojom-lite.js",
-      IDR_ASH_OS_FEEDBACK_MOJO_PUBLIC_MOJOM_BASE_FILE_PATH_MOJOM_LITE_JS);
+      "help_resources_icons.html.js",
+      IDR_ASH_OS_FEEDBACK_HELP_RESOURCES_ICONS_HTML_JS);
   untrusted_source->AddResourcePath(
-      "safe_base_name.mojom-lite.js",
-      IDR_ASH_OS_FEEDBACK_MOJO_PUBLIC_MOJOM_BASE_SAFE_BASE_NAME_MOJOM_LITE_JS);
-  untrusted_source->AddResourcePath(
-      "help_resources_icons.js", IDR_ASH_OS_FEEDBACK_HELP_RESOURCES_ICONS_JS);
-  untrusted_source->AddResourcePath(
-      "mojom/os_feedback_ui.mojom-lite.js",
-      IDR_ASH_OS_FEEDBACK_MOJOM_OS_FEEDBACK_UI_MOJOM_LITE_JS);
+      "os_feedback_ui.mojom-webui.js",
+      IDR_ASH_OS_FEEDBACK_OS_FEEDBACK_UI_MOJOM_WEBUI_JS);
 
   untrusted_source->SetDefaultResource(
       IDR_ASH_OS_FEEDBACK_UNTRUSTED_UNTRUSTED_INDEX_HTML);
@@ -86,11 +83,7 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
   // chrome-untrusted://os-feedback WebUI.
   untrusted_source->AddFrameAncestor(GURL(kChromeUIOSFeedbackUrl));
 
-  // DisableTrustedTypesCSP to support TrustedTypePolicy named 'goog#html'.
-  // It is the Closure templating system that renders our UI, as it does many
-  // other web apps using it.
-  untrusted_source->DisableTrustedTypesCSP();
-  // TODO(b/194964287): Audit and tighten CSP.
+  ash::EnableTrustedTypesCSP(untrusted_source);
   untrusted_source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::DefaultSrc, "");
 
@@ -101,5 +94,6 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
 
 OsFeedbackUntrustedUI::~OsFeedbackUntrustedUI() = default;
 
+WEB_UI_CONTROLLER_TYPE_IMPL(OsFeedbackUntrustedUI)
 }  // namespace feedback
 }  // namespace ash

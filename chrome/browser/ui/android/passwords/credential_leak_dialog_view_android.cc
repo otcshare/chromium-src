@@ -8,9 +8,11 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/CredentialLeakDialogBridge_jni.h"
 #include "chrome/browser/password_manager/android/credential_leak_controller_android.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/CredentialLeakDialogBridge_jni.h"
 
 CredentialLeakDialogViewAndroid::CredentialLeakDialogViewAndroid(
     CredentialLeakControllerAndroid* controller)
@@ -27,32 +29,24 @@ void CredentialLeakDialogViewAndroid::Show(ui::WindowAndroid* window_android) {
       env, window_android->GetJavaObject(), reinterpret_cast<intptr_t>(this)));
 
   Java_CredentialLeakDialogBridge_showDialog(
-      env, java_object_,
-      base::android::ConvertUTF16ToJavaString(env, controller_->GetTitle()),
-      base::android::ConvertUTF16ToJavaString(env,
-                                              controller_->GetDescription()),
-      base::android::ConvertUTF16ToJavaString(
-          env, controller_->GetAcceptButtonLabel()),
+      env, java_object_, controller_->GetTitle(), controller_->GetDescription(),
+      controller_->GetAcceptButtonLabel(),
       controller_->ShouldShowCancelButton()
           ? base::android::ConvertUTF16ToJavaString(
                 env, controller_->GetCancelButtonLabel())
           : nullptr);
 }
 
-void CredentialLeakDialogViewAndroid::Accepted(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Accepted(JNIEnv* env) {
   controller_->OnAcceptDialog();
 }
 
-void CredentialLeakDialogViewAndroid::Cancelled(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Cancelled(JNIEnv* env) {
   controller_->OnCancelDialog();
 }
 
-void CredentialLeakDialogViewAndroid::Closed(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Closed(JNIEnv* env) {
   controller_->OnCloseDialog();
 }
+
+DEFINE_JNI(CredentialLeakDialogBridge)

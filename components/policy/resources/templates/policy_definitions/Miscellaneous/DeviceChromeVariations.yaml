@@ -28,7 +28,8 @@ items:
 owners:
 - pastarmovj@chromium.org
 - asvitkine@chromium.org
-- amraboelkher@chromium.org
+- mpolzer@google.com
+- chromeos-commercial-remote-management@google.com
 schema:
   enum:
   - 0
@@ -39,3 +40,4 @@ supported_on:
 - chrome_os:83-
 tags: []
 type: int-enum
+generate_device_proto: False

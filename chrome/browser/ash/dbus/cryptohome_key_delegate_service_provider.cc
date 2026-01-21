@@ -4,19 +4,19 @@
 
 #include "chrome/browser/ash/dbus/cryptohome_key_delegate_service_provider.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
+#include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/certificate_provider/certificate_provider_service.h"
-#include "chrome/browser/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/cryptohome/key.pb.h"
@@ -25,6 +25,7 @@
 #include "components/user_manager/common_types.h"
 #include "components/user_manager/known_user.h"
 #include "dbus/message.h"
+#include "extensions/common/extension_id.h"
 #include "net/base/net_errors.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 #include "third_party/cros_system_api/dbus/cryptohome/dbus-constants.h"
@@ -140,7 +141,7 @@ void HandleSignatureKeyChallenge(
   }
 
   std::vector<uint16_t> supported_ssl_algorithms;
-  std::string extension_id_ignored;
+  extensions::ExtensionId extension_id_ignored;
   if (!certificate_provider_service->LookUpSpki(
           challenge_request_data.public_key_spki_der(),
           &supported_ssl_algorithms, &extension_id_ignored)) {
@@ -149,7 +150,7 @@ void HandleSignatureKeyChallenge(
                                                  "Key is unavailable"));
     return;
   }
-  if (!base::Contains(supported_ssl_algorithms, ssl_algorithm)) {
+  if (!std::ranges::contains(supported_ssl_algorithms, ssl_algorithm)) {
     std::move(response_sender)
         .Run(dbus::ErrorResponse::FromMethodCall(method_call, DBUS_ERROR_FAILED,
                                                  "Unsupported algorithm"));
@@ -158,8 +159,7 @@ void HandleSignatureKeyChallenge(
 
   certificate_provider_service->RequestSignatureBySpki(
       challenge_request_data.public_key_spki_der(), ssl_algorithm,
-      base::as_bytes(base::make_span(challenge_request_data.data_to_sign())),
-      account_id,
+      base::as_byte_span(challenge_request_data.data_to_sign()), account_id,
       base::BindOnce(&CompleteSignatureKeyChallenge,
                      base::Unretained(method_call),
                      std::move(response_sender)));

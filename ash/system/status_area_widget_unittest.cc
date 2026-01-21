@@ -8,16 +8,17 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/focus_cycler.h"
+#include "ash/focus/focus_cycler.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/keyboard/ui/keyboard_util.h"
 #include "ash/keyboard/ui/test/keyboard_test_util.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "ash/public/cpp/locale_update_controller.h"
-#include "ash/public/cpp/system_tray_observer.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
+#include "ash/shelf/drag_handle.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
 #include "ash/system/accessibility/dictation_button_tray.h"
 #include "ash/system/accessibility/select_to_speak/select_to_speak_tray.h"
@@ -32,13 +33,18 @@
 #include "ash/system/status_area_widget_test_helper.h"
 #include "ash/system/tray/status_area_overflow_button_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
+#include "ash/system/tray/system_tray_observer.h"
 #include "ash/system/unified/date_tray.h"
 #include "ash/system/unified/unified_system_tray.h"
+#include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/system/virtual_keyboard/virtual_keyboard_tray.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/test_ash_web_view_factory.h"
-#include "base/callback_helpers.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/window_pin_util.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
 #include "chromeos/ash/components/network/network_handler.h"
@@ -46,15 +52,25 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/session_manager/session_manager_types.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
+#include "ui/events/event_constants.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/image/image.h"
 
 using session_manager::SessionState;
+using testing::NotNull;
 
 namespace ash {
 
-using StatusAreaWidgetTest = AshTestBase;
+class StatusAreaWidgetTest : public AshTestBase {
+ protected:
+  TrayBackgroundView::RoundedCornerBehavior GetTrayCornerBehavior(
+      TrayBackgroundView* tray) {
+    return tray->corner_behavior_;
+  }
+};
 
 // Tests that status area trays are constructed.
 TEST_F(StatusAreaWidgetTest, Basics) {
@@ -150,6 +166,101 @@ TEST_F(StatusAreaWidgetTest, HandleOnLocaleChange) {
   base::i18n::SetRTLForTesting(false);
 }
 
+TEST_F(StatusAreaWidgetTest, OpenTrayBubble) {
+  Shell::Get()->ime_controller()->ShowImeMenuOnShelf(true);
+
+  StatusAreaWidget* status_area = GetPrimaryShelf()->GetStatusAreaWidget();
+  TrayBackgroundView* ime_menu = status_area->ime_menu_tray();
+  UnifiedSystemTray* system_tray = status_area->unified_system_tray();
+
+  // Clicking on the system tray should set the open tray bubble in
+  // `status_area`.
+  LeftClickOn(system_tray);
+
+  EXPECT_EQ(status_area->open_shelf_pod_bubble(),
+            system_tray->bubble()->GetBubbleView());
+
+  // Clicking on the ime menu should set the open tray bubble in
+  // `status_area`.
+  LeftClickOn(ime_menu);
+
+  EXPECT_EQ(status_area->open_shelf_pod_bubble(), ime_menu->GetBubbleView());
+}
+
+TEST_F(StatusAreaWidgetTest, OnlyOneOpenTrayBubble) {
+  Shell::Get()->ime_controller()->ShowImeMenuOnShelf(true);
+
+  StatusAreaWidget* status_area = GetPrimaryShelf()->GetStatusAreaWidget();
+  TrayBackgroundView* ime_menu = status_area->ime_menu_tray();
+  UnifiedSystemTray* system_tray = status_area->unified_system_tray();
+
+  LeftClickOn(ime_menu);
+  ASSERT_EQ(status_area->open_shelf_pod_bubble(), ime_menu->GetBubbleView());
+
+  // Open Quick Settings through the accelerator.
+  Shell::Get()->accelerator_controller()->PerformActionIfEnabled(
+      AcceleratorAction::kToggleSystemTrayBubble, {});
+
+  // When there's an open shelf pod bubble and we open another bubble through
+  // shortcuts, the previous bubble should hide for the next one to show.
+  EXPECT_FALSE(ime_menu->GetBubbleView());
+  ASSERT_TRUE(system_tray->bubble());
+
+  EXPECT_EQ(status_area->open_shelf_pod_bubble(),
+            system_tray->bubble()->GetBubbleView());
+}
+
+// The corner radius of the date tray changes based on the visibility of the
+// `NotificationCenterTray`. The date tray should have rounded corners on the
+// left if the `NotificationCenterTray` is not visible and no rounded corners
+// otherwise.
+TEST_F(StatusAreaWidgetTest, DateTrayRoundedCornerBehavior) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  EXPECT_FALSE(status_area->notification_center_tray()->GetVisible());
+  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
+            TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
+
+  status_area->notification_center_tray()->SetVisiblePreferred(true);
+
+  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
+            TrayBackgroundView::RoundedCornerBehavior::kNotRounded);
+
+  status_area->notification_center_tray()->SetVisiblePreferred(false);
+
+  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
+            TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
+}
+
+class LockedFullscreenStatusAreaWidgetTest
+    : public AshTestBase,
+      public testing::WithParamInterface<bool> {
+ protected:
+  bool IsLocked() const { return GetParam(); }
+};
+
+TEST_P(LockedFullscreenStatusAreaWidgetTest,
+       TrayBubbleVisibilityWithPinnedWindow) {
+  // Create a window for testing purposes.
+  const std::unique_ptr<aura::Window> window = CreateTestWindow();
+
+  // Show the unified system tray bubble before pinning the window.
+  auto* const status_area_widget = GetPrimaryShelf()->GetStatusAreaWidget();
+  ASSERT_THAT(status_area_widget, NotNull());
+  auto* const unified_system_tray = status_area_widget->unified_system_tray();
+  ASSERT_THAT(unified_system_tray, NotNull());
+  unified_system_tray->ShowBubble();
+  ASSERT_TRUE(unified_system_tray->IsBubbleShown());
+
+  // Pin the window and verify tray bubble visibility.
+  PinWindow(window.get(), IsLocked());
+  EXPECT_EQ(unified_system_tray->IsBubbleShown(), !IsLocked());
+}
+
+INSTANTIATE_TEST_SUITE_P(LockedFullscreenStatusAreaWidgetTests,
+                         LockedFullscreenStatusAreaWidgetTest,
+                         testing::Bool());
+
 class SystemTrayFocusTestObserver : public SystemTrayObserver {
  public:
   SystemTrayFocusTestObserver() = default;
@@ -184,91 +295,12 @@ class StatusAreaWidgetFocusTest : public AshTestBase {
 
   ~StatusAreaWidgetFocusTest() override = default;
 
-  // AshTestBase:
-  void SetUp() override {
-    AshTestBase::SetUp();
-    test_observer_ = std::make_unique<SystemTrayFocusTestObserver>();
-    Shell::Get()->system_tray_notifier()->AddSystemTrayObserver(
-        test_observer_.get());
-  }
-
-  // AshTestBase:
-  void TearDown() override {
-    Shell::Get()->system_tray_notifier()->RemoveSystemTrayObserver(
-        test_observer_.get());
-    test_observer_.reset();
-    AshTestBase::TearDown();
-  }
-
   void GenerateTabEvent(bool reverse) {
-    ui::KeyEvent tab_pressed(ui::ET_KEY_PRESSED, ui::VKEY_TAB,
+    ui::KeyEvent tab_pressed(ui::EventType::kKeyPressed, ui::VKEY_TAB,
                              reverse ? ui::EF_SHIFT_DOWN : ui::EF_NONE);
     StatusAreaWidgetTestHelper::GetStatusAreaWidget()->OnKeyEvent(&tab_pressed);
   }
-
- protected:
-  std::unique_ptr<SystemTrayFocusTestObserver> test_observer_;
 };
-
-// Tests that tab traversal through status area widget in non-active session
-// could properly send FocusOut event.
-// TODO(crbug.com/934939): Failing on trybot.
-TEST_F(StatusAreaWidgetFocusTest, DISABLED_FocusOutObserverUnified) {
-  // Set session state to LOCKED.
-  SessionControllerImpl* session = Shell::Get()->session_controller();
-  ASSERT_TRUE(session->IsActiveUserSessionStarted());
-  TestSessionControllerClient* client = GetSessionControllerClient();
-  client->SetSessionState(SessionState::LOCKED);
-  ASSERT_TRUE(session->IsScreenLocked());
-
-  StatusAreaWidget* status = StatusAreaWidgetTestHelper::GetStatusAreaWidget();
-  // Default trays are constructed.
-  ASSERT_TRUE(status->overview_button_tray());
-  ASSERT_TRUE(status->unified_system_tray());
-  ASSERT_TRUE(status->logout_button_tray_for_testing());
-  ASSERT_TRUE(status->ime_menu_tray());
-  ASSERT_TRUE(status->virtual_keyboard_tray_for_testing());
-
-  // Default trays are visible.
-  ASSERT_FALSE(status->overview_button_tray()->GetVisible());
-  ASSERT_TRUE(status->unified_system_tray()->GetVisible());
-  ASSERT_FALSE(status->logout_button_tray_for_testing()->GetVisible());
-  ASSERT_FALSE(status->ime_menu_tray()->GetVisible());
-  ASSERT_FALSE(status->virtual_keyboard_tray_for_testing()->GetVisible());
-
-  // In Unified, we don't have notification tray, so ImeMenuTray is used for
-  // tab testing.
-  status->ime_menu_tray()->OnIMEMenuActivationChanged(true);
-  ASSERT_TRUE(status->ime_menu_tray()->GetVisible());
-
-  // Set focus to status area widget. The first focused view will be the IME
-  // tray.
-  ASSERT_TRUE(Shell::Get()->focus_cycler()->FocusWidget(status));
-  views::FocusManager* focus_manager = status->GetFocusManager();
-  EXPECT_EQ(status->ime_menu_tray(), focus_manager->GetFocusedView());
-
-  // A tab key event will move focus to the system tray.
-  GenerateTabEvent(false);
-  EXPECT_EQ(status->unified_system_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(0, test_observer_->focus_out_count());
-  EXPECT_EQ(0, test_observer_->reverse_focus_out_count());
-
-  // Another tab key event will send FocusOut event, since we are not handling
-  // this event, focus will remain within the status widhet and will be
-  // moved to the IME tray.
-  GenerateTabEvent(false);
-  EXPECT_EQ(status->ime_menu_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(1, test_observer_->focus_out_count());
-  EXPECT_EQ(0, test_observer_->reverse_focus_out_count());
-
-  // A reverse tab key event will send reverse FocusOut event, since we are not
-  // handling this event, focus will remain within the status widget and will
-  // be moved to the system tray.
-  GenerateTabEvent(true);
-  EXPECT_EQ(status->unified_system_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(1, test_observer_->focus_out_count());
-  EXPECT_EQ(1, test_observer_->reverse_focus_out_count());
-}
 
 class StatusAreaWidgetPaletteTest : public AshTestBase {
  public:
@@ -311,11 +343,11 @@ class UnifiedStatusAreaWidgetTest : public AshTestBase {
     // Initializing NetworkHandler before ash is more like production.
     AshTestBase::SetUp();
     network_handler_test_helper_.RegisterPrefs(profile_prefs_.registry(),
-                                               local_state_.registry());
+                                               local_state()->registry());
     PrefProxyConfigTrackerImpl::RegisterPrefs(profile_prefs_.registry());
 
     network_handler_test_helper_.InitializePrefs(&profile_prefs_,
-                                                 &local_state_);
+                                                 local_state());
 
     // Networking stubs may have asynchronous initialization.
     base::RunLoop().RunUntilIdle();
@@ -368,7 +400,7 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
   status->ime_menu_tray()->SetVisiblePreferred(true);
 
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // The keyboard should hide when clicked.
   ui::test::EventGenerator* generator = GetEventGenerator();
@@ -377,7 +409,7 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
           ->GetBoundsInScreen()
           .CenterPoint());
   generator->ClickLeftButton();
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 // See https://crbug.com/897672.
@@ -389,14 +421,14 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
   status->ime_menu_tray()->SetVisiblePreferred(true);
 
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // The keyboard should hide when tapped.
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->GestureTapAt(status->virtual_keyboard_tray_for_testing()
                               ->GetBoundsInScreen()
                               .CenterPoint());
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
@@ -411,12 +443,12 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
   generator->ClickLeftButton();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -426,12 +458,12 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   generator->PressTouch();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, DoesNotHideLockedVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -440,10 +472,10 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, DoesNotHideLockedVirtualKeyboard) {
           .CenterPoint());
 
   generator->ClickLeftButton();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 
   generator->PressTouch();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 }
 
 class StatusAreaWidgetCollapseStateTest : public AshTestBase {
@@ -466,6 +498,17 @@ class StatusAreaWidgetCollapseStateTest : public AshTestBase {
     select_to_speak_->SetVisiblePreferred(true);
   }
 
+  void TearDown() override {
+    select_to_speak_ = nullptr;
+    dictation_button_ = nullptr;
+    palette_ = nullptr;
+    ime_menu_ = nullptr;
+    virtual_keyboard_ = nullptr;
+    overflow_button_ = nullptr;
+    status_area_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
   void SetCollapseState(StatusAreaWidget::CollapseState collapse_state) {
     status_area_->set_collapse_state_for_test(collapse_state);
 
@@ -480,13 +523,13 @@ class StatusAreaWidgetCollapseStateTest : public AshTestBase {
     return status_area_->collapse_state();
   }
 
-  StatusAreaWidget* status_area_;
-  StatusAreaOverflowButtonTray* overflow_button_;
-  TrayBackgroundView* virtual_keyboard_;
-  TrayBackgroundView* ime_menu_;
-  TrayBackgroundView* palette_;
-  TrayBackgroundView* dictation_button_;
-  TrayBackgroundView* select_to_speak_;
+  raw_ptr<StatusAreaWidget> status_area_;
+  raw_ptr<StatusAreaOverflowButtonTray> overflow_button_;
+  raw_ptr<TrayBackgroundView> virtual_keyboard_;
+  raw_ptr<TrayBackgroundView> ime_menu_;
+  raw_ptr<TrayBackgroundView> palette_;
+  raw_ptr<TrayBackgroundView> dictation_button_;
+  raw_ptr<TrayBackgroundView> select_to_speak_;
 };
 
 TEST_F(StatusAreaWidgetCollapseStateTest, TrayVisibility) {
@@ -557,10 +600,7 @@ TEST_F(StatusAreaWidgetCollapseStateTest, ClickOverflowButton) {
   EXPECT_TRUE(overflow_button_->GetVisible());
 
   // Click overflow button.
-  gfx::Point point = overflow_button_->GetBoundsInScreen().origin();
-  ui::MouseEvent click(ui::ET_MOUSE_PRESSED, point, point,
-                       base::TimeTicks::Now(), 0, 0);
-  overflow_button_->PerformAction(click);
+  LeftClickOn(overflow_button_);
 
   // All tray buttons should be visible in the expanded state.
   EXPECT_EQ(StatusAreaWidget::CollapseState::EXPANDED, collapse_state());
@@ -571,7 +611,7 @@ TEST_F(StatusAreaWidgetCollapseStateTest, ClickOverflowButton) {
   EXPECT_TRUE(overflow_button_->GetVisible());
 
   // Clicking the overflow button again should go back to the collapsed state.
-  overflow_button_->PerformAction(click);
+  LeftClickOn(overflow_button_);
   EXPECT_EQ(StatusAreaWidget::CollapseState::COLLAPSED, collapse_state());
   EXPECT_FALSE(select_to_speak_->GetVisible());
   EXPECT_FALSE(ime_menu_->GetVisible());
@@ -599,6 +639,9 @@ TEST_F(StatusAreaWidgetCollapseStateTest, NewTrayShownWhileCollapsed) {
   EXPECT_FALSE(ime_menu_->GetVisible());
   EXPECT_FALSE(virtual_keyboard_->GetVisible());
   EXPECT_TRUE(palette_->GetVisible());
+  // We should also check the opacity to make sure the tray isn't visible with
+  // zero opacity; see b/265165818.
+  EXPECT_EQ(palette_->layer()->opacity(), 1);
 }
 
 TEST_F(StatusAreaWidgetCollapseStateTest, TrayHiddenWhileCollapsed) {
@@ -636,47 +679,63 @@ TEST_F(StatusAreaWidgetCollapseStateTest, AllTraysFitInCollapsedState) {
   EXPECT_FALSE(overflow_button_->GetVisible());
 }
 
-class StatusAreaWidgetQSRevampTest : public AshTestBase {
- protected:
-  void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kQsRevamp, features::kQsRevampWip}, {});
-    AshTestBase::SetUp();
-  }
+TEST_F(StatusAreaWidgetCollapseStateTest,
+       HideDragHandleOnOverlapInExpandedState) {
+  std::unique_ptr<aura::Window> test_window =
+      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  status_area_->UpdateCollapseState();
 
-  TrayBackgroundView::RoundedCornerBehavior GetTrayCornerBehavior(
-      TrayBackgroundView* tray) {
-    return tray->corner_behavior_;
-  }
+  // By default, status area is collapsed.
+  EXPECT_EQ(StatusAreaWidget::CollapseState::COLLAPSED, collapse_state());
+  ShelfWidget* const shelf_widget =
+      AshTestBase::GetPrimaryShelf()->shelf_widget();
+  DragHandle* const drag_handle = shelf_widget->GetDragHandle();
+  ASSERT_TRUE(drag_handle);
+  EXPECT_TRUE(drag_handle->GetVisible());
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+  // Expand the status area.
+  GetEventGenerator()->GestureTapAt(
+      overflow_button_->GetBoundsInScreen().CenterPoint());
+  EXPECT_EQ(StatusAreaWidget::CollapseState::EXPANDED, collapse_state());
 
-// The corner radius of the date tray changes based on the visibility of the
-// `NotificationCenterTray`. The date tray should have rounded corners on the
-// left if the `NotificationCenterTray` is not visible and no rounded corners
-// otherwise.
-TEST_F(StatusAreaWidgetQSRevampTest, DateTrayRoundedCornerBehavior) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({features::kQsRevamp, features::kQsRevampWip},
-                                {});
+  // Verify that the drag handle was hidden.
+  EXPECT_FALSE(drag_handle->GetVisible());
+}
 
-  StatusAreaWidget* status_area =
-      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
-  EXPECT_FALSE(status_area->notification_center_tray()->GetVisible());
-  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
-            TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
+TEST_F(StatusAreaWidgetCollapseStateTest,
+       HideDragHandleWithNudgeOnOverlapInExpandedState) {
+  std::unique_ptr<aura::Window> test_window =
+      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  status_area_->UpdateCollapseState();
 
-  status_area->notification_center_tray()->SetVisiblePreferred(true);
+  // By default, status area is collapsed.
+  EXPECT_EQ(StatusAreaWidget::CollapseState::COLLAPSED, collapse_state());
 
-  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
-            TrayBackgroundView::RoundedCornerBehavior::kNotRounded);
+  ShelfWidget* const shelf_widget =
+      AshTestBase::GetPrimaryShelf()->shelf_widget();
 
-  status_area->notification_center_tray()->SetVisiblePreferred(false);
+  DragHandle* const drag_handle = shelf_widget->GetDragHandle();
+  ASSERT_TRUE(drag_handle);
+  EXPECT_TRUE(drag_handle->GetVisible());
 
-  EXPECT_EQ(GetTrayCornerBehavior(status_area->date_tray()),
-            TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
+  // Tap on the drag handle to show drag handle nudge.
+  GetEventGenerator()->GestureTapAt(
+      drag_handle->GetBoundsInScreen().CenterPoint());
+  ASSERT_TRUE(drag_handle->drag_handle_nudge());
+  base::WeakPtr<views::Widget> drag_handle_widget =
+      drag_handle->drag_handle_nudge()->GetWidget()->GetWeakPtr();
+
+  // Expand the status area.
+  GetEventGenerator()->GestureTapAt(
+      overflow_button_->GetBoundsInScreen().CenterPoint());
+  EXPECT_EQ(StatusAreaWidget::CollapseState::EXPANDED, collapse_state());
+
+  // Verify that the drag handle, and drag handle nudge were hidden.
+  EXPECT_FALSE(drag_handle->GetVisible());
+  EXPECT_FALSE(drag_handle->drag_handle_nudge());
+  EXPECT_TRUE(!drag_handle_widget || drag_handle_widget->IsClosed());
 }
 
 class StatusAreaWidgetEcheTest : public AshTestBase {
@@ -704,9 +763,11 @@ TEST_F(StatusAreaWidgetEcheTest, EcheTrayShowHide) {
   bitmap.allocN32Pixels(30, 30);
   gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
   image_skia.MakeThreadSafe();
-  status_area->eche_tray()->LoadBubble(GURL("http://google.com"),
-                                       gfx::Image(image_skia), u"app 1",
-                                       u"your phone");
+  status_area->eche_tray()->LoadBubble(
+      GURL("http://google.com"), gfx::Image(image_skia), u"app 1",
+      u"your phone",
+      eche_app::mojom::ConnectionStatus::kConnectionStatusDisconnected,
+      eche_app::mojom::AppStreamLaunchEntryPoint::APPS_LIST);
   status_area->eche_tray()->ShowBubble();
 
   // Auto-hidden shelf would be forced to be visible.
@@ -716,6 +777,30 @@ TEST_F(StatusAreaWidgetEcheTest, EcheTrayShowHide) {
 
   // Auto-hidden shelf would not be forced to be visible.
   EXPECT_FALSE(status_area->ShouldShowShelf());
+}
+
+// Tests that `StatusAreaWidget` keep track of its `open_shelf_pod_bubble()`
+// when eche is showing/hiding its bubble.
+TEST_F(StatusAreaWidgetEcheTest, StatusAreaOpenTrayBubble) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  auto* eche_tray = status_area->eche_tray();
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(30, 30);
+  gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+  image_skia.MakeThreadSafe();
+  eche_tray->LoadBubble(
+      GURL("http://google.com"), gfx::Image(image_skia), u"app 1",
+      u"your phone",
+      eche_app::mojom::ConnectionStatus::kConnectionStatusDisconnected,
+      eche_app::mojom::AppStreamLaunchEntryPoint::APPS_LIST);
+  eche_tray->ShowBubble();
+
+  EXPECT_EQ(eche_tray->GetBubbleView(), status_area->open_shelf_pod_bubble());
+
+  eche_tray->HideBubble();
+
+  EXPECT_EQ(nullptr, status_area->open_shelf_pod_bubble());
 }
 
 }  // namespace ash

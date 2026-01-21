@@ -4,11 +4,16 @@
 
 #include "chrome/renderer/extensions/api/extension_hooks_delegate.h"
 
+#include <string_view>
+
+#include "base/strings/string_util.h"
 #include "content/public/renderer/v8_value_converter.h"
 #include "extensions/common/api/messaging/message.h"
+#include "extensions/common/api/messaging/messaging_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/common/view_type_util.h"
 #include "extensions/renderer/api/messaging/message_target.h"
@@ -54,7 +59,8 @@ void GetAliasedFeature(v8::Local<v8::Name> property_name,
                        const v8::PropertyCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Context> context = info.Holder()->GetCreationContextChecked();
+  v8::Local<v8::Context> context =
+      info.HolderV2()->GetCreationContextChecked(isolate);
 
   v8::TryCatch try_catch(isolate);
   v8::Local<v8::Value> chrome;
@@ -102,18 +108,27 @@ void ThrowDeprecatedAccessError(
       v8::Exception::Error(gin::StringToV8(isolate, kError)));
 }
 
+void EmptySetterCallback(v8::Local<v8::Name> name,
+                         v8::Local<v8::Value> value,
+                         const v8::PropertyCallbackInfo<void>& info) {
+  // Empty setter is required to keep the native data property in "accessor"
+  // state even in case the value is updated by user code.
+  // TODO(337075390): consider not using empty setter and let the property
+  // be reconfigured to a data property on write.
+}
+
 }  // namespace
 
 ExtensionHooksDelegate::ExtensionHooksDelegate(
     NativeRendererMessagingService* messaging_service)
     : messaging_service_(messaging_service) {}
-ExtensionHooksDelegate::~ExtensionHooksDelegate() {}
+ExtensionHooksDelegate::~ExtensionHooksDelegate() = default;
 
 RequestResult ExtensionHooksDelegate::HandleRequest(
     const std::string& method_name,
     const APISignature* signature,
     v8::Local<v8::Context> context,
-    std::vector<v8::Local<v8::Value>>* arguments,
+    v8::LocalVector<v8::Value>* arguments,
     const APITypeReferenceMap& refs) {
   // TODO(devlin): This logic is the same in the RuntimeCustomHooksDelegate -
   // would it make sense to share it?
@@ -121,7 +136,7 @@ RequestResult ExtensionHooksDelegate::HandleRequest(
       ScriptContext*, const APISignature::V8ParseResult&);
   static struct {
     Handler handler;
-    base::StringPiece method;
+    std::string_view method;
   } kHandlers[] = {
       {&ExtensionHooksDelegate::HandleSendRequest, kSendExtensionRequest},
       {&ExtensionHooksDelegate::HandleGetURL, kGetURL},
@@ -144,8 +159,8 @@ RequestResult ExtensionHooksDelegate::HandleRequest(
     return RequestResult(RequestResult::NOT_HANDLED);
 
   if (method_name == kSendExtensionRequest) {
-    messaging_util::MassageSendMessageArguments(context->GetIsolate(), false,
-                                                arguments);
+    messaging_util::MassageSendMessageArguments(v8::Isolate::GetCurrent(),
+                                                false, arguments);
   }
 
   APISignature::V8ParseResult parse_result =
@@ -171,7 +186,7 @@ void ExtensionHooksDelegate::InitializeTemplate(
 void ExtensionHooksDelegate::InitializeInstance(
     v8::Local<v8::Context> context,
     v8::Local<v8::Object> instance) {
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   ScriptContext* script_context = GetScriptContextFromV8ContextChecked(context);
 
   // Throw access errors for deprecated sendRequest-related properties. This
@@ -181,9 +196,9 @@ void ExtensionHooksDelegate::InitializeInstance(
     static constexpr const char* kDeprecatedSendRequestProperties[] = {
         "sendRequest", "onRequest", "onRequestExternal"};
     for (const char* property : kDeprecatedSendRequestProperties) {
-      v8::Maybe<bool> success =
-          instance->SetAccessor(context, gin::StringToV8(isolate, property),
-                                &ThrowDeprecatedAccessError);
+      v8::Maybe<bool> success = instance->SetNativeDataProperty(
+          context, gin::StringToV8(isolate, property),
+          &ThrowDeprecatedAccessError, &EmptySetterCallback);
       DCHECK(success.IsJust());
       DCHECK(success.FromJust());
     }
@@ -200,8 +215,9 @@ void ExtensionHooksDelegate::InitializeInstance(
     };
 
     for (const auto* alias : kAliases) {
-      v8::Maybe<bool> success = instance->SetAccessor(
-          context, gin::StringToV8(isolate, alias), &GetAliasedFeature);
+      v8::Maybe<bool> success = instance->SetNativeDataProperty(
+          context, gin::StringToV8(isolate, alias), &GetAliasedFeature,
+          &EmptySetterCallback);
       DCHECK(success.IsJust());
       DCHECK(success.FromJust());
     }
@@ -211,7 +227,7 @@ void ExtensionHooksDelegate::InitializeInstance(
 RequestResult ExtensionHooksDelegate::HandleSendRequest(
     ScriptContext* script_context,
     const APISignature::V8ParseResult& parse_result) {
-  const std::vector<v8::Local<v8::Value>>& arguments = *parse_result.arguments;
+  const v8::LocalVector<v8::Value>& arguments = *parse_result.arguments;
   DCHECK_EQ(3u, arguments.size());
   // This DCHECK() is correct because no context with sendRequest-related
   // APIs disabled should have scriptable access to a context with them
@@ -230,9 +246,12 @@ RequestResult ExtensionHooksDelegate::HandleSendRequest(
 
   v8::Local<v8::Value> v8_message = arguments[1];
 
+  mojom::ChannelType channel_type = mojom::ChannelType::kSendRequest;
   std::unique_ptr<Message> message = messaging_util::MessageFromV8(
       script_context->v8_context(), v8_message,
-      messaging_util::GetSerializationFormat(*script_context), &error);
+      messaging_util::GetSerializationFormat(script_context->extension(),
+                                             channel_type),
+      &error);
   if (!message) {
     RequestResult result(RequestResult::INVALID_INVOCATION);
     result.error = std::move(error);
@@ -243,16 +262,19 @@ RequestResult ExtensionHooksDelegate::HandleSendRequest(
   if (!arguments[2]->IsNull())
     response_callback = arguments[2].As<v8::Function>();
 
-  // extension.sendRequest() is restricted to MV2, so it should never be called
-  // with a promise based request as they are restricted to MV3 and above.
-  DCHECK_NE(binding::AsyncResponseType::kPromise, parse_result.async_type);
+  v8::Local<v8::Promise> promise = messaging_service_->SendOneTimeMessage(
+      script_context, MessageTarget::ForExtension(target_id), channel_type,
+      *message, parse_result.async_type, response_callback);
+  DCHECK_EQ(parse_result.async_type == binding::AsyncResponseType::kPromise,
+            !promise.IsEmpty())
+      << "SendOneTimeMessage should only return a Promise for promise based "
+         "API calls, otherwise it should be empty";
 
-  messaging_service_->SendOneTimeMessage(
-      script_context, MessageTarget::ForExtension(target_id),
-      messaging_util::kSendRequestChannel, *message, parse_result.async_type,
-      response_callback);
-
-  return RequestResult(RequestResult::HANDLED);
+  RequestResult result(RequestResult::HANDLED);
+  if (parse_result.async_type == binding::AsyncResponseType::kPromise) {
+    result.return_value = promise;
+  }
+  return result;
 }
 
 RequestResult ExtensionHooksDelegate::HandleGetURL(
@@ -267,7 +289,7 @@ RequestResult ExtensionHooksDelegate::HandleGetURL(
 APIBindingHooks::RequestResult ExtensionHooksDelegate::HandleGetViews(
     ScriptContext* script_context,
     const APISignature::V8ParseResult& parse_result) {
-  const std::vector<v8::Local<v8::Value>>& arguments = *parse_result.arguments;
+  const v8::LocalVector<v8::Value>& arguments = *parse_result.arguments;
   DCHECK_EQ(binding::AsyncResponseType::kNone, parse_result.async_type);
   const Extension* extension = script_context->extension();
   DCHECK(extension);
@@ -287,7 +309,6 @@ APIBindingHooks::RequestResult ExtensionHooksDelegate::HandleGetViews(
         !options_dict.Get("type", &v8_view_type)) {
       NOTREACHED()
           << "Unexpected exception: argument parsing produces plain objects";
-      return RequestResult(RequestResult::THROWN);
     }
 
     if (!v8_window_id->IsUndefined()) {
@@ -321,7 +342,7 @@ APIBindingHooks::RequestResult ExtensionHooksDelegate::HandleGetViews(
 RequestResult ExtensionHooksDelegate::HandleGetExtensionTabs(
     ScriptContext* script_context,
     const APISignature::V8ParseResult& parse_result) {
-  const std::vector<v8::Local<v8::Value>>& arguments = *parse_result.arguments;
+  const v8::LocalVector<v8::Value>& arguments = *parse_result.arguments;
   DCHECK_EQ(binding::AsyncResponseType::kNone, parse_result.async_type);
   const Extension* extension = script_context->extension();
   DCHECK(extension);

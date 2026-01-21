@@ -29,8 +29,6 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_segmented_font_face.h"
-#include "third_party/blink/renderer/core/css/font_face.h"
-#include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -41,6 +39,8 @@
 namespace blink {
 
 class FontDescription;
+class FontFace;
+class StyleRuleFontFace;
 
 class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
  public:
@@ -63,9 +63,6 @@ class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
   const HeapLinkedHashSet<Member<FontFace>>& CssConnectedFontFaces() const {
     return css_connected_font_faces_;
   }
-
-  unsigned Version() const { return version_; }
-  void IncrementVersion();
 
   void Trace(Visitor*) const;
 
@@ -105,10 +102,7 @@ class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
   class FontSelectionQueryResult final
       : public GarbageCollected<FontSelectionQueryResult> {
     using Map =
-        HeapHashMap<FontSelectionRequestKey,
-                    Member<CSSSegmentedFontFace>,
-                    FontSelectionRequestKeyHash,
-                    WTF::SimpleClassHashTraits<FontSelectionRequestKey>>;
+        HeapHashMap<FontSelectionRequestKey, Member<CSSSegmentedFontFace>>;
 
    public:
     CSSSegmentedFontFace* GetOrCreate(const FontSelectionRequest& request,
@@ -124,8 +118,9 @@ class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
   class FontSelectionQueryCache final {
     DISALLOW_NEW();
 
-    using Map =
-        HeapHashMap<String, Member<FontSelectionQueryResult>, CaseFoldingHash>;
+    using Map = HeapHashMap<String,
+                            Member<FontSelectionQueryResult>,
+                            CaseFoldingHashTraits<String>>;
 
    public:
     void Clear();
@@ -157,7 +152,9 @@ class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
     void Trace(Visitor*) const;
 
    private:
-    using Map = HeapHashMap<String, Member<CapabilitiesSet>, CaseFoldingHash>;
+    using Map = HeapHashMap<String,
+                            Member<CapabilitiesSet>,
+                            CaseFoldingHashTraits<String>>;
 
     Map map_;
   };
@@ -179,10 +176,6 @@ class CORE_EXPORT FontFaceCache final : public GarbageCollected<FontFaceCache> {
   // StyleEngine, which clears all those faces from the FontCache which are
   // originating from CSS, as opposed to those originating from JS.
   HeapLinkedHashSet<Member<FontFace>> css_connected_font_faces_;
-
-  // FIXME: See if this could be ditched
-  // Used to compare Font instances, and the usage seems suspect.
-  unsigned version_;
 };
 
 }  // namespace blink

@@ -7,17 +7,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
+#include "base/check_op.h"
+#include "components/reporting/encryption/primitives.h"
 #include "crypto/aead.h"
-#include "crypto/openssl_util.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
 #include "third_party/boringssl/src/include/openssl/digest.h"
 #include "third_party/boringssl/src/include/openssl/hkdf.h"
-
-#include "components/reporting/encryption/primitives.h"
-#include "testing/gmock/include/gmock/gmock.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::Eq;
 using ::testing::Ge;
@@ -27,39 +26,32 @@ using ::testing::Ne;
 namespace reporting {
 namespace test {
 
-void GenerateEncryptionKeyPair(uint8_t private_key[kKeySize],
-                               uint8_t public_value[kKeySize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
-  X25519_keypair(public_value, private_key);
+void GenerateEncryptionKeyPair(base::span<uint8_t, kKeySize> private_key,
+                               base::span<uint8_t, kKeySize> public_value) {
+  X25519_keypair(public_value.data(), private_key.data());
 }
 
-void RestoreSharedSecret(const uint8_t private_key[kKeySize],
-                         const uint8_t peer_public_value[kKeySize],
-                         uint8_t shared_secret[kKeySize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
-  ASSERT_TRUE(X25519(shared_secret, private_key, peer_public_value));
+// TODO(https://issues.chromium.org/issues/431824286): use crypto/keyexchange
+void RestoreSharedSecret(base::span<const uint8_t, kKeySize> private_key,
+                         base::span<const uint8_t, kKeySize> peer_public_value,
+                         base::span<uint8_t, kKeySize> shared_secret) {
+  ASSERT_TRUE(X25519(shared_secret.data(), private_key.data(),
+                     peer_public_value.data()));
 }
 
-void PerformSymmetricDecryption(const uint8_t symmetric_key[kKeySize],
-                                base::StringPiece input_data,
+void PerformSymmetricDecryption(base::span<const uint8_t, kKeySize> key,
+                                std::string_view input_data,
                                 std::string* output_data) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
   // Decrypt the data with symmetric key using AEAD interface.
   crypto::Aead aead(crypto::Aead::CHACHA20_POLY1305);
-  DCHECK_EQ(aead.KeyLength(), kKeySize);
+  CHECK_EQ(aead.KeyLength(), kKeySize);
 
   // Use the symmetric key for data decryption.
-  aead.Init(base::make_span(symmetric_key, kKeySize));
+  aead.Init(key);
 
   // Get nonce at the head of input_data.
-  DCHECK_EQ(aead.NonceLength(), kNonceSize);
-  base::StringPiece nonce = input_data.substr(0, kNonceSize);
+  CHECK_EQ(aead.NonceLength(), kNonceSize);
+  std::string_view nonce = input_data.substr(0, kNonceSize);
 
   // Decrypt collected record.
   std::string decrypted;
@@ -67,24 +59,18 @@ void PerformSymmetricDecryption(const uint8_t symmetric_key[kKeySize],
                         output_data));
 }
 
-void GenerateSigningKeyPair(uint8_t private_key[kSignKeySize],
-                            uint8_t public_value[kKeySize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
-  ED25519_keypair(public_value, private_key);
+void GenerateSigningKeyPair(base::span<uint8_t, kSignKeySize> private_key,
+                            base::span<uint8_t, kKeySize> public_value) {
+  ED25519_keypair(public_value.data(), private_key.data());
 }
 
-void SignMessage(const uint8_t signing_key[kSignKeySize],
-                 base::StringPiece message,
-                 uint8_t signature[kSignatureSize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
-  ASSERT_THAT(
-      ED25519_sign(signature, reinterpret_cast<const uint8_t*>(message.data()),
-                   message.size(), signing_key),
-      Eq(1));
+void SignMessage(base::span<const uint8_t, kSignKeySize> signing_key,
+                 std::string_view message,
+                 base::span<uint8_t, kSignatureSize> signature) {
+  ASSERT_THAT(ED25519_sign(signature.data(),
+                           reinterpret_cast<const uint8_t*>(message.data()),
+                           message.size(), signing_key.data()),
+              Eq(1));
 }
 
 }  // namespace test

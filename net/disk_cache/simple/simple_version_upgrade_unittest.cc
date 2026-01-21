@@ -15,7 +15,6 @@
 #include "net/base/net_errors.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/simple/simple_backend_version.h"
-#include "net/disk_cache/simple/simple_entry_format_history.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -33,17 +32,41 @@ const char kIndexDirName[] = "index-dir";
 // Same as |SimpleIndexFile::kIndexFileName|.
 const char kIndexFileName[] = "the-real-index";
 
-bool WriteFakeIndexFileV5(const base::FilePath& cache_path) {
+bool WriteFakeIndexFileV8(const base::FilePath& cache_path) {
   disk_cache::FakeIndexData data;
-  data.version = 5;
+  data.version = 8;
   data.initial_magic_number = kSimpleInitialMagicNumber;
   data.zero = 0;
   data.zero2 = 0;
   const base::FilePath file_name = cache_path.AppendASCII("index");
-  return sizeof(data) ==
-         base::WriteFile(
-             file_name, reinterpret_cast<const char*>(&data), sizeof(data));
+  return base::WriteFile(file_name, base::byte_span_from_ref(data));
 }
+
+bool WriteFakeIndexFile(const base::FilePath& cache_path,
+                        uint32_t version,
+                        int encryption_status) {
+  disk_cache::FakeIndexData data;
+  data.version = version;
+  data.initial_magic_number = kSimpleInitialMagicNumber;
+  data.zero = 0;
+  data.zero2 = 0;
+  data.encryption_status = encryption_status;
+  const base::FilePath file_name = cache_path.AppendASCII(kFakeIndexFileName);
+  return base::WriteFile(file_name, base::byte_span_from_ref(data));
+}
+
+// Mock `BackendFileOperations` to expose and change the encryption field for
+// testing.
+class TestFileOperations : public disk_cache::TrivialFileOperations {
+ public:
+  explicit TestFileOperations(bool is_encrypted)
+      : is_encrypted_(is_encrypted) {}
+
+  bool IsEncrypted() const override { return is_encrypted_; }
+
+ private:
+  const bool is_encrypted_;
+};
 
 TEST(SimpleVersionUpgradeTest, FailsToMigrateBackwards) {
   base::ScopedTempDir cache_dir;
@@ -56,9 +79,7 @@ TEST(SimpleVersionUpgradeTest, FailsToMigrateBackwards) {
   data.zero = 0;
   data.zero2 = 0;
   const base::FilePath file_name = cache_path.AppendASCII(kFakeIndexFileName);
-  ASSERT_EQ(static_cast<int>(sizeof(data)),
-            base::WriteFile(file_name, reinterpret_cast<const char*>(&data),
-                            sizeof(data)));
+  ASSERT_TRUE(base::WriteFile(file_name, base::byte_span_from_ref(data)));
   disk_cache::TrivialFileOperations file_operations;
   EXPECT_EQ(disk_cache::SimpleCacheConsistencyResult::kVersionFromTheFuture,
             disk_cache::UpgradeSimpleCacheOnDisk(&file_operations,
@@ -76,9 +97,7 @@ TEST(SimpleVersionUpgradeTest, ExperimentBacktoDefault) {
   data.zero = 2;
   data.zero2 = 4;
   const base::FilePath file_name = cache_path.AppendASCII(kFakeIndexFileName);
-  ASSERT_EQ(static_cast<int>(sizeof(data)),
-            base::WriteFile(file_name, reinterpret_cast<const char*>(&data),
-                            sizeof(data)));
+  ASSERT_TRUE(base::WriteFile(file_name, base::byte_span_from_ref(data)));
 
   disk_cache::TrivialFileOperations file_operations;
   // The cache needs to transition from a deprecated experiment back to not
@@ -88,17 +107,57 @@ TEST(SimpleVersionUpgradeTest, ExperimentBacktoDefault) {
                                                  cache_dir.GetPath()));
 }
 
+TEST(SimpleVersionUpgradeTest, WritesEncryptionStatusToFakeIndexFile) {
+  base::ScopedTempDir cache_dir;
+  ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
+  const base::FilePath cache_path = cache_dir.GetPath();
+  const base::FilePath fake_index_path =
+      cache_path.AppendASCII(kFakeIndexFileName);
+
+  TestFileOperations file_operations(true);
+  ASSERT_EQ(disk_cache::SimpleCacheConsistencyResult::kOK,
+            disk_cache::UpgradeSimpleCacheOnDisk(&file_operations, cache_path));
+
+  disk_cache::FakeIndexData data;
+  ASSERT_TRUE(base::ReadFile(fake_index_path, base::byte_span_from_ref(data)));
+  EXPECT_EQ(1, data.encryption_status);
+  EXPECT_EQ(disk_cache::kSimpleVersion, data.version);
+}
+
+TEST(SimpleVersionUpgradeTest, EncryptionStatusMismatch) {
+  auto run_and_check = [](int cache_encrypted_status,
+                          bool backend_is_encrypted) {
+    base::ScopedTempDir cache_dir;
+    ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
+    const base::FilePath cache_path = cache_dir.GetPath();
+
+    // Create a fake index file with the specified encryption status.
+    ASSERT_TRUE(WriteFakeIndexFile(cache_path, disk_cache::kSimpleVersion,
+                                   cache_encrypted_status));
+
+    // Simulate opening the cache with a backend of a different encryption
+    // status.
+    TestFileOperations file_operations(backend_is_encrypted);
+    EXPECT_EQ(
+        disk_cache::SimpleCacheConsistencyResult::kEncryptionStatusMismatch,
+        disk_cache::UpgradeSimpleCacheOnDisk(&file_operations,
+                                             cache_dir.GetPath()));
+  };
+
+  run_and_check(0, true);
+  run_and_check(1, false);
+}
+
 TEST(SimpleVersionUpgradeTest, FakeIndexVersionGetsUpdated) {
   base::ScopedTempDir cache_dir;
   ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
   const base::FilePath cache_path = cache_dir.GetPath();
 
-  WriteFakeIndexFileV5(cache_path);
+  ASSERT_TRUE(WriteFakeIndexFileV8(cache_path));
+
   const std::string file_contents("incorrectly serialized data");
   const base::FilePath index_file = cache_path.AppendASCII(kIndexFileName);
-  ASSERT_EQ(
-      static_cast<int>(file_contents.size()),
-      base::WriteFile(index_file, file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(index_file, file_contents));
 
   disk_cache::TrivialFileOperations file_operations;
   // Upgrade.
@@ -111,58 +170,12 @@ TEST(SimpleVersionUpgradeTest, FakeIndexVersionGetsUpdated) {
                                      &new_fake_index_contents));
   const disk_cache::FakeIndexData* fake_index_header;
   EXPECT_EQ(sizeof(*fake_index_header), new_fake_index_contents.size());
-  fake_index_header = reinterpret_cast<const disk_cache::FakeIndexData*>(
-      new_fake_index_contents.data());
+  // TODO(crbug.com/428945428): Fix unsafe uses of std::string::data().
+  fake_index_header =
+      UNSAFE_TODO(reinterpret_cast<const disk_cache::FakeIndexData*>(
+          new_fake_index_contents.data()));
   EXPECT_EQ(disk_cache::kSimpleVersion, fake_index_header->version);
   EXPECT_EQ(kSimpleInitialMagicNumber, fake_index_header->initial_magic_number);
-}
-
-TEST(SimpleVersionUpgradeTest, UpgradeV5V6IndexMustDisappear) {
-  base::ScopedTempDir cache_dir;
-  ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
-  const base::FilePath cache_path = cache_dir.GetPath();
-
-  WriteFakeIndexFileV5(cache_path);
-  const std::string file_contents("incorrectly serialized data");
-  const base::FilePath index_file = cache_path.AppendASCII(kIndexFileName);
-  ASSERT_EQ(
-      static_cast<int>(file_contents.size()),
-      base::WriteFile(index_file, file_contents.data(), file_contents.size()));
-
-  // Create a few entry-like files.
-  const uint64_t kEntries = 5;
-  for (uint64_t entry_hash = 0; entry_hash < kEntries; ++entry_hash) {
-    for (int index = 0; index < 3; ++index) {
-      std::string file_name =
-          base::StringPrintf("%016" PRIx64 "_%1d", entry_hash, index);
-      std::string entry_contents =
-          file_contents +
-          base::StringPrintf(" %" PRIx64, static_cast<uint64_t>(entry_hash));
-      ASSERT_EQ(static_cast<int>(entry_contents.size()),
-                base::WriteFile(cache_path.AppendASCII(file_name),
-                                entry_contents.data(), entry_contents.size()));
-    }
-  }
-
-  disk_cache::TrivialFileOperations file_operations;
-  // Upgrade.
-  ASSERT_TRUE(disk_cache::UpgradeIndexV5V6(&file_operations, cache_path));
-
-  // Check that the old index disappeared but the files remain unchanged.
-  EXPECT_FALSE(base::PathExists(index_file));
-  for (uint64_t entry_hash = 0; entry_hash < kEntries; ++entry_hash) {
-    for (int index = 0; index < 3; ++index) {
-      std::string file_name =
-          base::StringPrintf("%016" PRIx64 "_%1d", entry_hash, index);
-      std::string expected_contents =
-          file_contents +
-          base::StringPrintf(" %" PRIx64, static_cast<uint64_t>(entry_hash));
-      std::string real_contents;
-      EXPECT_TRUE(base::ReadFileToString(cache_path.AppendASCII(file_name),
-                                         &real_contents));
-      EXPECT_EQ(expected_contents, real_contents);
-    }
-  }
 }
 
 TEST(SimpleVersionUpgradeTest, DeleteAllIndexFilesWhenCacheIsEmpty) {
@@ -173,16 +186,13 @@ TEST(SimpleVersionUpgradeTest, DeleteAllIndexFilesWhenCacheIsEmpty) {
   const base::FilePath cache_path = cache_dir.GetPath();
 
   const base::FilePath fake_index = cache_path.AppendASCII(kFakeIndexFileName);
-  ASSERT_EQ(
-      static_cast<int>(kCorruptData.length()),
-      base::WriteFile(fake_index, kCorruptData.data(), kCorruptData.length()));
+  ASSERT_TRUE(base::WriteFile(fake_index, kCorruptData));
 
   const base::FilePath index_path = cache_path.AppendASCII(kIndexDirName);
   ASSERT_TRUE(base::CreateDirectory(index_path));
 
   const base::FilePath index = index_path.AppendASCII(kIndexFileName);
-  ASSERT_EQ(static_cast<int>(kCorruptData.length()),
-            base::WriteFile(index, kCorruptData.data(), kCorruptData.length()));
+  ASSERT_TRUE(base::WriteFile(index, kCorruptData));
 
   EXPECT_TRUE(disk_cache::DeleteIndexFilesIfCacheIsEmpty(cache_path));
   EXPECT_TRUE(base::PathExists(cache_path));
@@ -197,21 +207,16 @@ TEST(SimpleVersionUpgradeTest, DoesNotDeleteIndexFilesWhenCacheIsNotEmpty) {
   const base::FilePath cache_path = cache_dir.GetPath();
 
   const base::FilePath fake_index = cache_path.AppendASCII(kFakeIndexFileName);
-  ASSERT_EQ(
-      static_cast<int>(kCorruptData.length()),
-      base::WriteFile(fake_index, kCorruptData.data(), kCorruptData.length()));
+  ASSERT_TRUE(base::WriteFile(fake_index, kCorruptData));
 
   const base::FilePath index_path = cache_path.AppendASCII(kIndexDirName);
   ASSERT_TRUE(base::CreateDirectory(index_path));
 
   const base::FilePath index = index_path.AppendASCII(kIndexFileName);
-  ASSERT_EQ(static_cast<int>(kCorruptData.length()),
-            base::WriteFile(index, kCorruptData.data(), kCorruptData.length()));
+  ASSERT_TRUE(base::WriteFile(index, kCorruptData));
 
   const base::FilePath entry_file = cache_path.AppendASCII("01234567_0");
-  ASSERT_EQ(
-      static_cast<int>(kCorruptData.length()),
-      base::WriteFile(entry_file, kCorruptData.data(), kCorruptData.length()));
+  ASSERT_TRUE(base::WriteFile(entry_file, kCorruptData));
 
   EXPECT_FALSE(disk_cache::DeleteIndexFilesIfCacheIsEmpty(cache_path));
   EXPECT_TRUE(base::PathExists(cache_path));

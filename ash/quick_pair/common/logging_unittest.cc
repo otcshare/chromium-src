@@ -12,8 +12,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 namespace {
 
@@ -68,28 +67,28 @@ TEST_F(QuickPairLoggingTest, LogsSavedToBuffer) {
   EXPECT_EQ(kLog1, log_message1.text);
   EXPECT_EQ(__FILE__, log_message1.file);
   EXPECT_EQ(base_line_number + 1, log_message1.line);
-  EXPECT_EQ(logging::LOG_INFO, log_message1.severity);
+  EXPECT_EQ(logging::LOGGING_INFO, log_message1.severity);
 
   ++iterator;
   const LogBuffer::LogMessage& log_message2 = *iterator;
   EXPECT_EQ(kLog2, log_message2.text);
   EXPECT_EQ(__FILE__, log_message2.file);
   EXPECT_EQ(base_line_number + 2, log_message2.line);
-  EXPECT_EQ(logging::LOG_WARNING, log_message2.severity);
+  EXPECT_EQ(logging::LOGGING_WARNING, log_message2.severity);
 
   ++iterator;
   const LogBuffer::LogMessage& log_message3 = *iterator;
   EXPECT_EQ(kLog3, log_message3.text);
   EXPECT_EQ(__FILE__, log_message3.file);
   EXPECT_EQ(base_line_number + 3, log_message3.line);
-  EXPECT_EQ(logging::LOG_ERROR, log_message3.severity);
+  EXPECT_EQ(logging::LOGGING_ERROR, log_message3.severity);
 
   ++iterator;
   const LogBuffer::LogMessage& log_message4 = *iterator;
   EXPECT_EQ(kLog3, log_message4.text);
   EXPECT_EQ(__FILE__, log_message4.file);
   EXPECT_EQ(base_line_number + 4, log_message4.line);
-  EXPECT_EQ(logging::LOG_VERBOSE, log_message4.severity);
+  EXPECT_EQ(logging::LOGGING_VERBOSE, log_message4.severity);
 }
 
 TEST_F(QuickPairLoggingTest, LogWhenBufferIsFull) {
@@ -124,5 +123,4 @@ TEST_F(QuickPairLoggingTest, StandardLogsCreated) {
   EXPECT_NE(std::string::npos, g_standard_logs.Get()[2].find(kLog3));
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

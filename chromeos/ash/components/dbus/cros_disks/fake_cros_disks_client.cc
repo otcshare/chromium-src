@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
@@ -40,9 +41,7 @@ MountError PerformFakeMount(const std::string& source_path,
   const base::FilePath dummy_file_path =
       mounted_path.Append("SUCCESSFULLY_PERFORMED_FAKE_MOUNT.txt");
   const std::string dummy_file_content = "This is a dummy file.";
-  const int write_result = base::WriteFile(
-      dummy_file_path, dummy_file_content.data(), dummy_file_content.size());
-  if (write_result != static_cast<int>(dummy_file_content.size())) {
+  if (!base::WriteFile(dummy_file_path, dummy_file_content)) {
     DLOG(ERROR) << "Failed to put a dummy file at " << dummy_file_path.value();
     return MountError::kMountProgramFailed;
   }
@@ -107,7 +106,6 @@ void FakeCrosDisksClient::Mount(const std::string& source_path,
       break;
     case MountType::kInvalid:
       NOTREACHED();
-      return;
   }
   mounted_paths_.insert(mounted_path);
 

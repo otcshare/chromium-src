@@ -28,7 +28,6 @@
 <translation id="2329392777730037872"><ph name="URL" /> не се отвори на устройството клиент.</translation>
 <translation id="2359808026110333948">Напред</translation>
 <translation id="2366718077645204424">Не можем да се свържем с хоста. Това вероятно се дължи на конфигурацията на използваната от вас мрежа.</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" /> Последно онлайн: <ph name="RELATIVE_TIMESTAMP" />.</translation>
 <translation id="2504109125669302160">Предоставяне на разрешение за достъпност на <ph name="PRODUCT_NAME" /></translation>
 <translation id="2509394361235492552">Установена е връзка с хоста „<ph name="HOSTNAME" />“</translation>
 <translation id="2540992418118313681">Искате ли да споделите компютъра с друг потребител, така че да вижда какво се случва и да управлява?</translation>
@@ -36,17 +35,18 @@
 <translation id="2599300881200251572">Тази услуга активира входящите връзки от клиентски програми за отдалечен работен плот на Chrome.</translation>
 <translation id="2647232381348739934">Услуга за Chromoting</translation>
 <translation id="2676780859508944670">В процес на работа…</translation>
-<translation id="2692522824157224199">Авторски права 2022 г. Google LLC. Всички права запазени.</translation>
 <translation id="2699970397166997657">Chromoting</translation>
 <translation id="2758123043070977469">При удостоверяването възникна проблем. Моля, влезте отново в профила си.</translation>
 <translation id="2803375539583399270">Въведете ПИН кодa</translation>
 <translation id="2919669478609886916">Понастоящем споделяте този компютър с друг потребител. Искате ли да продължите споделянето?</translation>
+<translation id="2929683002824598593">Споделяне на устройството</translation>
 <translation id="2939145106548231838">Удостоверяване пред хоста</translation>
 <translation id="3027681561976217984">Сензорен режим</translation>
 <translation id="3106379468611574572">Отдалеченият компютър не отговаря на заявките за връзка. Моля, потвърдете, че е онлайн, и опитайте отново.</translation>
 <translation id="3150823315463303127">Хостът не успя да прочете правилото.</translation>
 <translation id="3171922709365450819">Устройството не се поддържа от тази клиентска програма, защото то изисква удостоверяване от трета страна.</translation>
 <translation id="3197730452537982411">Отдал. раб. плот</translation>
+<translation id="3236334139428307578">Авторски права 2026 г. Авторите на Chromium. Всички права запазени.</translation>
 <translation id="324272851072175193">Изпращане на имейл с тези инструкции</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> иска да направи промени.</translation>
 <translation id="3339299787263251426">Осъществявайте сигурен достъп до компютъра си през интернет</translation>
@@ -54,7 +54,6 @@
 <translation id="3423542133075182604">Процес за отдалечен достъп чрез ключ за сигурност</translation>
 <translation id="3581045510967524389">Не можа да се установи връзка с мрежата. Моля, проверете дали устройството ви е онлайн.</translation>
 <translation id="3596628256176442606">Тази услуга активира входящите връзки от клиентски програми за Chromoting.</translation>
-<translation id="369442766917958684">Офлайн.</translation>
 <translation id="3695446226812920698">Научете как</translation>
 <translation id="3776024066357219166">Сесията ви в отдалечения работен плот на Chrome приключи.</translation>
 <translation id="3858860766373142691">Име</translation>
@@ -73,7 +72,6 @@
 <translation id="4257751272692708833">Пренасочване на URL адреси за „<ph name="PRODUCT_NAME" />“</translation>
 <translation id="4277736576214464567">Кодът за достъп е невалиден. Моля, опитайте отново.</translation>
 <translation id="4281844954008187215">Условия за ползване</translation>
-<translation id="4372650392690220936">Авторски права 2022 г. Авторите на Chromium. Всички права запазени.</translation>
 <translation id="4405930547258349619">Библиотека на ядрото</translation>
 <translation id="443560535555262820">Отваряне на предпочитанията за достъпност</translation>
 <translation id="4450893287417543264">Да не се показва отново</translation>
@@ -95,6 +93,7 @@
 <translation id="4987330545941822761">Отдалеченият работен плот на Chrome не може да избере браузъра, с който да се отварят URL адреси локално. Моля, изберете браузър от списъка по-долу.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (офлайн)</translation>
 <translation id="507204348399810022">Наистина ли искате да деактивирате отдалечените връзки с/ъс <ph name="HOSTNAME" />?</translation>
+<translation id="5095424396646120601">Сигнали за сривове</translation>
 <translation id="5170982930780719864">Невалиден идентификатор на хост.</translation>
 <translation id="5204575267916639804">ЧЗВ</translation>
 <translation id="5222676887888702881">Изход</translation>
@@ -107,12 +106,12 @@
 <translation id="5601503069213153581">ПИН код</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">Понастоящем <ph name="USER" /> споделя работния ви плот.</translation>
-<translation id="5750083143895808682">Влязохте като <ph name="EMAIL_ADDRESS" />.</translation>
 <translation id="579702532610384533">Повторно свързване</translation>
 <translation id="5810269635982033450">Екранът работи като тракпад</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> поиска достъп с цел да вижда екрана ви и да управлява клавиатурата и мишката ви. Натиснете „<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />“, ако не очаквате тази заявка. В противен случай изберете „<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />“, за да разрешите осъществяването на връзката, когато имате готовност.</translation>
 <translation id="5823658491130719298">Отворете Chrome на компютъра, до който искате да осъществите отдалечен достъп, и посетете <ph name="INSTALLATION_LINK" /></translation>
 <translation id="5841343754884244200">Опции за изгледа</translation>
+<translation id="5965133372831030509">Авторски права 2026 г. Google LLC. Всички права запазени.</translation>
 <translation id="6033507038939587647">Опции за клавиатурата</translation>
 <translation id="6040143037577758943">Затваряне</translation>
 <translation id="6062854958530969723">Стартирането на хоста не бе успешно.</translation>
@@ -121,10 +120,12 @@
 <translation id="6178645564515549384">Хост за обмен на съобщения с приложения с директно изпълнение за отдалечено съдействие</translation>
 <translation id="618120821413932081">Актуализиране на разделителната способност на отдалечения работен плот спрямо размера на прозореца</translation>
 <translation id="6223301979382383752">Отваряне на предпочитанията за записване на екрана</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> поиска достъп с цел да вижда екрана ви и да управлява клавиатурата и мишката ви. Искате ли да споделите устройството си?</translation>
 <translation id="6284412385303060032">Хостът, изпълняван на екрана за вход в конзолата, е спрян, за да се поддържа режимът на прикриване, като се превключи към хост, работещ в сесия на конкретен потребител.</translation>
 <translation id="6542902059648396432">Подаване на сигнал за проблем…</translation>
 <translation id="6583902294974160967">Поддръжка</translation>
 <translation id="6612717000975622067">Изпращане на Ctrl-Alt-Del</translation>
+<translation id="6625262630437221505">{0,plural, =1{Ако не направите нищо, споделянето на устройството ви ще започне автоматично след # секунда.}other{Ако не направите нищо, споделянето на устройството ви ще започне автоматично след # секунди.}}</translation>
 <translation id="6654753848497929428">Споделяне</translation>
 <translation id="677755392401385740">За потребителя е стартиран хост: <ph name="HOST_USERNAME" />.</translation>
 <translation id="6902524959760471898">Помощно приложение, чрез което URL адресите се отварят на клиента в „<ph name="PRODUCT_NAME" />“</translation>

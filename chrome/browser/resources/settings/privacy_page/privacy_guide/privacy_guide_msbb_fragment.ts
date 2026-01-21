@@ -7,16 +7,18 @@
  * 'privacy-guide-msbb-fragment' is the fragment in a privacy guide card
  * that contains the MSBB setting with a two-column description.
  */
+
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import '/shared/settings/prefs/prefs.js';
 import '../../controls/settings_toggle_button.js';
-import '../../prefs/prefs.js';
-import './privacy_guide_description_item.js';
+import '../../icons.html.js';
 import './privacy_guide_fragment_shared.css.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {loadTimeData} from '../../i18n_setup.js';
-import {MetricsBrowserProxy, MetricsBrowserProxyImpl, PrivacyGuideSettingsStates} from '../../metrics_browser_proxy.js';
-import {PrefsMixin} from '../../prefs/prefs_mixin.js';
+import type {MetricsBrowserProxy} from '../../metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached} from '../../metrics_browser_proxy.js';
 
 import {getTemplate} from './privacy_guide_msbb_fragment.html.js';
 
@@ -32,23 +34,6 @@ export class PrivacyGuideMsbbFragmentElement extends
     return getTemplate();
   }
 
-  static get properties() {
-    return {
-      /**
-       * Preferences state.
-       */
-      prefs: {
-        type: Object,
-        notify: true,
-      },
-
-      enablePrivacyGuide2_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('privacyGuide2Enabled'),
-      },
-    };
-  }
-
   private metricsBrowserProxy_: MetricsBrowserProxy =
       MetricsBrowserProxyImpl.getInstance();
   private startStateMsbbOn_: boolean;
@@ -60,6 +45,11 @@ export class PrivacyGuideMsbbFragmentElement extends
   }
 
   override focus() {
+    // The fragment element is focused when it becomes visible. Move the focus
+    // to the fragment header, so that the newly shown content of the fragment
+    // is downwards from the focus position. This allows users of screen readers
+    // to continue navigating the screen reader position downwards through the
+    // newly visible content.
     this.shadowRoot!.querySelector<HTMLElement>('[focus-element]')!.focus();
   }
 
@@ -67,6 +57,9 @@ export class PrivacyGuideMsbbFragmentElement extends
     this.startStateMsbbOn_ =
         this.getPref<boolean>('url_keyed_anonymized_data_collection.enabled')
             .value;
+    this.metricsBrowserProxy_
+        .recordPrivacyGuideStepsEligibleAndReachedHistogram(
+            PrivacyGuideStepsEligibleAndReached.MSBB_REACHED);
   }
 
   private onViewExitFinish_() {
@@ -82,7 +75,7 @@ export class PrivacyGuideMsbbFragmentElement extends
       state = endStateMsbbOn ? PrivacyGuideSettingsStates.MSBB_OFF_TO_ON :
                                PrivacyGuideSettingsStates.MSBB_OFF_TO_OFF;
     }
-    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state!);
+    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state);
   }
 
   private onMsbbToggleClick_() {
@@ -93,6 +86,12 @@ export class PrivacyGuideMsbbFragmentElement extends
       this.metricsBrowserProxy_.recordAction(
           'Settings.PrivacyGuide.ChangeMSBBOff');
     }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'privacy-guide-msbb-fragment': PrivacyGuideMsbbFragmentElement;
   }
 }
 

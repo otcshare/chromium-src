@@ -2,11 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"  // nogncheck
@@ -39,7 +47,8 @@ using url::Origin;
 namespace content {
 
 const size_t kNumRenderers = 2;
-const char* kCmdline[] = {"file_system_manager_mojolpm_fuzzer", nullptr};
+constexpr const char* kCmdline[] = {"file_system_manager_mojolpm_fuzzer",
+                                    nullptr};
 
 mojolpm::FuzzerEnvironment& GetEnvironment() {
   static base::NoDestructor<mojolpm::FuzzerEnvironmentWithTaskEnvironment>
@@ -224,7 +233,7 @@ void FileSystemManagerTestcase::RunAction(const ProtoAction& action,
 
     case ProtoAction::kRunThread:
       if (action.run_thread().id() == ThreadId_UI) {
-        content::GetUIThreadTaskRunner({})->PostTaskAndReply(
+        GetUIThreadTaskRunner({})->PostTaskAndReply(
             FROM_HERE, base::DoNothing(), std::move(run_closure));
       } else if (action.run_thread().id() == ThreadId_IO) {
         content::GetIOThreadTaskRunner({})->PostTaskAndReply(

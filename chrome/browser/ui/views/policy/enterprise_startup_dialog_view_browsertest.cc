@@ -4,9 +4,10 @@
 
 #include "chrome/browser/ui/views/policy/enterprise_startup_dialog_view.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "content/public/test/browser_test.h"
@@ -55,7 +56,7 @@ class EnterpriseStartupDialogViewBrowserTest : public DialogBrowserTest {
 #endif
 
  private:
-  raw_ptr<EnterpriseStartupDialogView, DanglingUntriaged> dialog;
+  raw_ptr<EnterpriseStartupDialogView, AcrossTasksDanglingUntriaged> dialog;
 };
 
 IN_PROC_BROWSER_TEST_F(EnterpriseStartupDialogViewBrowserTest,

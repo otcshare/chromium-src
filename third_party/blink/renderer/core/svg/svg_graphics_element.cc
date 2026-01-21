@@ -21,38 +21,83 @@
 
 #include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
 
-#include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/core/svg/svg_animated_transform_list.h"
-#include "third_party/blink/renderer/core/svg/svg_element_rare_data.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_container.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_foreign_object.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_image.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_root.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_shape.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_text.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_viewport_container.h"
+#include "third_party/blink/renderer/core/svg/svg_foreign_object_element.h"
+#include "third_party/blink/renderer/core/svg/svg_image_element.h"
 #include "third_party/blink/renderer/core/svg/svg_matrix_tear_off.h"
 #include "third_party/blink/renderer/core/svg/svg_rect_tear_off.h"
-#include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/core/svg/svg_svg_element.h"
+#include "third_party/blink/renderer/core/svg/svg_symbol_element.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
 namespace blink {
 
+namespace {
+
+bool HasValidBoundingBoxForContainer(const LayoutObject* object) {
+  if (auto* svg_shape = DynamicTo<LayoutSVGShape>(object)) {
+    return !svg_shape->IsShapeEmpty();
+  }
+  if (auto* text = DynamicTo<LayoutSVGText>(object)) {
+    return text->IsObjectBoundingBoxValid();
+  }
+  if (auto* svg_container = DynamicTo<LayoutSVGContainer>(object)) {
+    return svg_container->IsObjectBoundingBoxValid() &&
+           !svg_container->IsSVGHiddenContainer();
+  }
+  if (auto* foreign_object = DynamicTo<LayoutSVGForeignObject>(object)) {
+    return foreign_object->IsObjectBoundingBoxValid();
+  }
+  if (auto* svg_image = DynamicTo<LayoutSVGImage>(object)) {
+    return svg_image->IsObjectBoundingBoxValid();
+  }
+
+  return false;
+}
+
+}  // namespace
+
 SVGGraphicsElement::SVGGraphicsElement(const QualifiedName& tag_name,
                                        Document& document,
                                        ConstructionType construction_type)
-    : SVGElement(tag_name, document, construction_type),
-      SVGTests(this),
-      transform_(MakeGarbageCollected<SVGAnimatedTransformList>(
-          this,
-          svg_names::kTransformAttr,
-          CSSPropertyID::kTransform)) {
-  AddToPropertyMap(transform_);
-}
+    : SVGTransformableElement(tag_name, document, construction_type),
+      SVGTests(this) {}
 
 SVGGraphicsElement::~SVGGraphicsElement() = default;
 
 void SVGGraphicsElement::Trace(Visitor* visitor) const {
-  visitor->Trace(transform_);
-  SVGElement::Trace(visitor);
+  SVGTransformableElement::Trace(visitor);
   SVGTests::Trace(visitor);
+}
+
+// TODO : This function performs an upward traversal of the layout tree to check
+// if the element is inside a `LayoutSVGHiddenContainer`, this is not very
+// efficient. Consider using a cache based system where each svg element (or its
+// corresponding layout object) has a flag that indicates if it is inside a
+// `LayoutSVGHiddenContainer`.
+bool SVGGraphicsElement::IsNonRendered(const LayoutObject* object) const {
+  for (; object; object = object->Parent()) {
+    // Check if the Element's LayoutObject or any ancestor is a
+    // LayoutSVGHiddenContainer
+    if (object->IsSVGHiddenContainer()) {
+      return true;
+    }
+
+    if (IsA<LayoutSVGRoot>(*object)) {
+      break;
+    }
+  }
+  return false;
 }
 
 static bool IsViewportElement(const Element& element) {
@@ -107,52 +152,16 @@ SVGMatrixTearOff* SVGGraphicsElement::getScreenCTM() {
   return MakeGarbageCollected<SVGMatrixTearOff>(ComputeCTM(kScreenScope));
 }
 
-void SVGGraphicsElement::CollectStyleForPresentationAttribute(
-    const QualifiedName& name,
-    const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
-  if (name == svg_names::kTransformAttr) {
-    AddPropertyToPresentationAttributeStyle(
-        style, CSSPropertyID::kTransform,
-        *transform_->CurrentValue()->CssValue());
-    return;
-  }
-  SVGElement::CollectStyleForPresentationAttribute(name, value, style);
-}
-
-AffineTransform SVGGraphicsElement::LocalCoordinateSpaceTransform(
-    CTMScope) const {
-  return CalculateTransform(kIncludeMotionTransform);
-}
-
-AffineTransform* SVGGraphicsElement::AnimateMotionTransform() {
-  return EnsureSVGRareData()->AnimateMotionTransform();
-}
-
 void SVGGraphicsElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   const QualifiedName& attr_name = params.name;
   // Reattach so the isValid() check will be run again during layoutObject
   // creation.
   if (SVGTests::IsKnownAttribute(attr_name)) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     SetForceReattachLayoutTree();
     return;
   }
-
-  if (attr_name == svg_names::kTransformAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
-    InvalidateSVGPresentationAttributeStyle();
-    // TODO(fs): The InvalidationGuard will make sure all instances are
-    // invalidated, but the style recalc will propagate to instances too. So
-    // there is some redundant operations being performed here. Could we get
-    // away with removing the InvalidationGuard?
-    SetNeedsStyleRecalc(kLocalStyleChange,
-                        StyleChangeReasonForTracing::FromAttribute(attr_name));
-    return;
-  }
-
-  SVGElement::SvgAttributeChanged(params);
+  SVGTransformableElement::SvgAttributeChanged(params);
 }
 
 SVGElement* SVGGraphicsElement::nearestViewportElement() const {
@@ -176,8 +185,33 @@ SVGElement* SVGGraphicsElement::farthestViewportElement() const {
 }
 
 gfx::RectF SVGGraphicsElement::GetBBox() {
-  DCHECK(GetLayoutObject());
-  return GetLayoutObject()->ObjectBoundingBox();
+  auto* layout_object = GetLayoutObject();
+  DCHECK(layout_object);
+  gfx::RectF bbox = layout_object->ObjectBoundingBox();
+
+  if (bbox != gfx::RectF(0, 0, 0, 0) &&
+      (!HasValidBoundingBoxForContainer(layout_object) ||
+       IsNonRendered(layout_object))) {
+    UseCounter::Count(GetDocument(),
+                      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight);
+  }
+
+  // TODO: Having zero width or height in viewport makes the container element
+  // non-rendered, currently we return the bbox of its contents, which can
+  // change if we decided to return an empty bbox for such cases. Depending on
+  // the count of `kGetBBoxForNestedSVGElementWithZeroWidthOrHeight` it might be
+  // safe to not consider this case at all.
+  if (auto* svg_viewport_container =
+          DynamicTo<LayoutSVGViewportContainer>(layout_object)) {
+    if (bbox != gfx::RectF(0, 0, 0, 0) &&
+        svg_viewport_container->Viewport().IsEmpty()) {
+      UseCounter::Count(
+          GetDocument(),
+          WebFeature::kGetBBoxForNestedSVGElementWithZeroWidthOrHeight);
+    }
+  }
+
+  return bbox;
 }
 
 SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
@@ -189,10 +223,26 @@ SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
   if (const auto* layout_object = GetLayoutObject()) {
     bounding_box = GetBBox();
 
-    if (layout_object->IsSVGText() || layout_object->IsSVGInline())
+    if (layout_object->IsSVGInline()) {
       UseCounter::Count(GetDocument(), WebFeature::kGetBBoxForText);
+    }
   }
   return SVGRectTearOff::CreateDetached(bounding_box);
+}
+
+SVGAnimatedPropertyBase* SVGGraphicsElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  SVGAnimatedPropertyBase* ret =
+      SVGTests::PropertyFromAttribute(attribute_name);
+  if (ret) {
+    return ret;
+  }
+  return SVGTransformableElement::PropertyFromAttribute(attribute_name);
+}
+
+void SVGGraphicsElement::SynchronizeAllSVGAttributes() const {
+  SVGTests::SynchronizeAllSVGAttributes();
+  SVGTransformableElement::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

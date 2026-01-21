@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/scoped_feature_list.h"
@@ -96,7 +97,10 @@ class SubresourceFilterAbusiveTest
         blocked_content::SafeBrowsingTriggeredPopupBlocker::FromWebContents(
             web_contents());
   }
-
+  void TearDown() override {
+    popup_blocker_ = nullptr;
+    subresource_filter::SubresourceFilterTestHarness::TearDown();
+  }
   void ConfigureUrl(const GURL& url) {
     safe_browsing::ThreatMetadata metadata;
     metadata.subresource_filter_match = GetMatch(abusive_level_, bas_level_);
@@ -109,7 +113,7 @@ class SubresourceFilterAbusiveTest
   bool DidSendConsoleMessage(const std::string& message) {
     const auto& messages =
         content::RenderFrameHostTester::For(main_rfh())->GetConsoleMessages();
-    return base::Contains(messages, message);
+    return std::ranges::contains(messages, message);
   }
 
  protected:

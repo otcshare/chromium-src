@@ -8,11 +8,11 @@
 #include <memory>
 #include <set>
 
-#include "base/callback_helpers.h"
 #include "base/containers/span.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -39,13 +39,8 @@ class ShellDevToolsBindings : public WebContentsObserver,
                         WebContents* inspected_contents,
                         ShellDevToolsDelegate* delegate);
 
-  static std::vector<ShellDevToolsBindings*> GetInstancesForWebContents(
-      WebContents* web_contents);
-
   void InspectElementAt(int x, int y);
   virtual void Attach();
-  void UpdateInspectedWebContents(WebContents* new_contents,
-                                  base::OnceCallback<void()> callback);
 
   void CallClientFunction(
       const std::string& object_name,
@@ -74,15 +69,15 @@ class ShellDevToolsBindings : public WebContentsObserver,
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void WebContentsDestroyed() override;
 
-  void SendMessageAck(int request_id, const base::Value arg);
+  void SendMessageAck(int request_id, const base::Value::Dict arg);
   void AttachInternal();
 
-  raw_ptr<WebContents> inspected_contents_;
-  raw_ptr<ShellDevToolsDelegate> delegate_;
+  raw_ptr<WebContents, FlakyDanglingUntriaged> inspected_contents_;
+  raw_ptr<ShellDevToolsDelegate, FlakyDanglingUntriaged> delegate_;
   scoped_refptr<DevToolsAgentHost> agent_host_;
   int inspect_element_at_x_;
   int inspect_element_at_y_;
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA)
   std::unique_ptr<DevToolsFrontendHost> frontend_host_;
 #endif
 
@@ -90,7 +85,7 @@ class ShellDevToolsBindings : public WebContentsObserver,
   std::set<std::unique_ptr<NetworkResourceLoader>, base::UniquePtrComparator>
       loaders_;
 
-  base::DictionaryValue preferences_;
+  base::Value::Dict preferences_;
 
   using ExtensionsAPIs = std::map<std::string, std::string>;
   ExtensionsAPIs extensions_api_;

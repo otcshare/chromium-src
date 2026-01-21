@@ -72,44 +72,53 @@ message GarbageCollectionDirective {
   enum Type {
     UNKNOWN = 0;
     VERSION_WATERMARK = 1;
-    AGE_WATERMARK = 2;
+    DEPRECATED_AGE_WATERMARK = 2 [deprecated = true];
     DEPRECATED_MAX_ITEM_COUNT = 3 [deprecated = true];
   }
 
-  optional Type type = 1 [default = UNKNOWN];
+  // Deprecated in M124. This field is unused because it would be hard to use
+  // `active_collaboration_ids`. The client should rely on the presence of the
+  // corresponding fields instead.
+  optional Type type = 1 [default = UNKNOWN, deprecated = true];
 
   // This field specifies the watermark for the versions which should get
   // garbage collected.  The client should purge all sync entities when
   // receiving any value of this.  This is a change from previous behavior,
   // where the client would only be required to purge items older than the
   // specified watermark.
-  // TODO(crbug.com/877951): Rename this to make clear that whenever it's set,
+  // TODO(crbug.com/41410173): Rename this to make clear that whenever it's set,
   // the client will delete ALL data, regardless of its value.
   optional int64 version_watermark = 2;
 
-  // This field specifies the watermark in terms of age in days.  The client
-  // should purge all sync entities which are older than this specific value
-  // based on last modified time.
-  optional int32 age_watermark_in_days = 3;
+  reserved 3;
+  reserved "age_watermark_in_days";
 
   reserved 4;
   reserved "max_number_of_items";
+
+  // This field contains a list of active collaboration IDs which are available
+  // to the user. The client should stop tracking any shared sync entities with
+  // collaborations which are not in the list. Note that if the list is empty,
+  // an empty `collaboration_gc` is expected to be provided by the server.
+  // Introduced in M124.
+  message CollaborationGarbageCollection {
+    repeated string active_collaboration_ids = 1;
+  }
+  optional CollaborationGarbageCollection collaboration_gc = 5;
 }
 
 // This message communicates additional per-type information related to
 // requests with origin GU_TRIGGER.  This message is not relevant when any
 // other origin value is used.
-// Introduced in M29.
 message GetUpdateTriggers {
   // An opaque-to-the-client string of bytes, received through a notification,
   // that the server may interpret as a hint about the location of the latest
   // version of the data for this type.
-  // Introduced in M29.
   repeated string notification_hint = 1;
 
   // This flag is set if the client was forced to drop hints because the number
   // of queued hints exceeded its limit.  The oldest hints will be discarded
-  // first.  Introduced in M29.
+  // first.
   optional bool client_dropped_hints = 2;
 
   // This flag is set when the client suspects that its list of invalidation
@@ -126,8 +135,6 @@ message GetUpdateTriggers {
   // support invalidation ack-tracking, transient invalidation error) and is
   // unset only after we've experienced one successful sync cycle while
   // notifications were enabled.
-  //
-  // This flag was introduced in M29.
   optional bool invalidations_out_of_sync = 3;
 
   // This counts the number of times the syncer has been asked to commit
@@ -135,7 +142,6 @@ message GetUpdateTriggers {
   // nudges may not be related to the actual number of items modified.  It
   // often correlates with the number of user actions, but that's not always
   // the case.
-  // Introduced in M29.
   optional int64 local_modification_nudges = 4;
 
   // This counts the number of times the syncer has been explicitly asked to
@@ -145,28 +151,23 @@ message GetUpdateTriggers {
   // the most common (only?) source of refresh requests is when a user opens
   // the new tab page on a platform that does not support sessions
   // invalidations.
-  // Introduced in M29.
   optional int64 datatype_refresh_nudges = 5;
 
   // This flag is set if the invalidation server reports that it may have
-  // dropped some invalidations at some point.  Introduced in M33.
+  // dropped some invalidations at some point.
   optional bool server_dropped_hints = 6;
 
-  // This flag is set if this GetUpdate request is due at least in part due
-  // to the fact that this type has not finished initial sync yet, and the
-  // client would like to initialize itself with the server data.
+  // This flag is set if this GetUpdate request is at least in part due to the
+  // fact that this type has not finished initial sync yet, and the client would
+  // like to initialize itself with the server data.
   //
   // Only some types support performing an initial sync as part of a normal
   // GetUpdate request.  Many types must be in configure mode when fetching
   // initial sync data.
-  //
-  // Introduced in M38.
   optional bool initial_sync_in_progress = 7;
 
-  // This flag is set if this GetUpdate request is due to client receiving
-  // conflict response from server, so client needs to sync and then resolve
-  // conflict locally, and then commit again.
-  //
-  // Introduced in M42.
+  // This flag is set if this GetUpdate request is due to the client receiving
+  // a conflict response from the server, so the client needs to sync and then
+  // resolve the conflict locally, and then commit again.
   optional bool sync_for_resolve_conflict_in_progress = 8;
 }

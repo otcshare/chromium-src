@@ -6,11 +6,11 @@
 #define CONTENT_TEST_TEST_NAVIGATION_URL_LOADER_DELEGATE_H_
 
 #include <memory>
+#include <optional>
 
 #include "content/browser/loader/navigation_url_loader_delegate.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class RunLoop;
@@ -35,14 +35,23 @@ class TestNavigationURLLoaderDelegate : public NavigationURLLoaderDelegate {
   int net_error() const { return net_error_; }
   const net::SSLInfo& ssl_info() const { return ssl_info_; }
   int on_request_handled_counter() const { return on_request_handled_counter_; }
+  int on_redirect_handled_counter() const {
+    return on_redirect_handled_counter_;
+  }
 
   // Waits for various navigation events.
   // Note: if the event already happened, the functions will hang.
   // TODO(clamy): Make the functions not hang if they are called after the
   // event happened.
+  void WaitForOnReceiveRedirect();
   void WaitForRequestRedirected();
   void WaitForResponseStarted();
   void WaitForRequestFailed();
+
+  void set_clear_parsed_headers_on_redirect(
+      bool clear_parsed_headers_on_redirect) {
+    clear_parsed_headers_on_redirect_ = clear_parsed_headers_on_redirect;
+  }
 
   // NavigationURLLoaderDelegate implementation.
   void OnRequestRedirected(
@@ -56,23 +65,30 @@ class TestNavigationURLLoaderDelegate : public NavigationURLLoaderDelegate {
       GlobalRequestID request_id,
       bool is_download,
       net::NetworkAnonymizationKey network_anonymization_key,
-      absl::optional<SubresourceLoaderParams> subresource_loader_params,
+      SubresourceLoaderParams subresource_loader_params,
       EarlyHints early_hints) override;
   void OnRequestFailed(
       const network::URLLoaderCompletionStatus& status) override;
-  absl::optional<NavigationEarlyHintsManagerParams>
+  std::optional<NavigationEarlyHintsManagerParams>
   CreateNavigationEarlyHintsManagerParams(
       const network::mojom::EarlyHints& early_hints) override;
+  bool ShouldClearParsedHeadersOnTestReceiveRedirect() override;
 
  private:
   net::RedirectInfo redirect_info_;
   network::mojom::URLResponseHeadPtr redirect_response_;
   network::mojom::URLResponseHeadPtr response_head_;
   mojo::ScopedDataPipeConsumerHandle response_body_;
-  int net_error_;
+  int net_error_ = 0;
   net::SSLInfo ssl_info_;
-  int on_request_handled_counter_;
+  int on_request_handled_counter_ = 0;
+  int on_redirect_handled_counter_ = 0;
 
+  // See `NavigationURLLoaderImpl::ParseHeaders()` and
+  // `OnReceiveRedirect()`.
+  bool clear_parsed_headers_on_redirect_ = false;
+
+  std::unique_ptr<base::RunLoop> on_receive_redirect_;
   std::unique_ptr<base::RunLoop> request_redirected_;
   std::unique_ptr<base::RunLoop> response_started_;
   std::unique_ptr<base::RunLoop> request_failed_;

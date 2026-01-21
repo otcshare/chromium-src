@@ -4,6 +4,8 @@
 
 #include "ios/chrome/common/x_callback_url.h"
 
+#include <array>
+
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -37,7 +39,7 @@ TEST_F(XCallbackURLTest, IsXCallbackURL) {
 }
 
 TEST_F(XCallbackURLTest, URLWithScheme) {
-  const XCallbackURLEncodeTestCase test_cases[] = {
+  const auto kTestCases = std::to_array<XCallbackURLEncodeTestCase>({
       {
           "chrome",
           "",
@@ -106,10 +108,9 @@ TEST_F(XCallbackURLTest, URLWithScheme) {
           "chrome://x-callback-url/command?x-success="
           "chrome%3A%2F%2Fpath%2Fwith%2520spaces",
       },
-  };
+  });
 
-  for (size_t i = 0; i < std::size(test_cases); ++i) {
-    const XCallbackURLEncodeTestCase& test_case = test_cases[i];
+  for (const XCallbackURLEncodeTestCase& test_case : kTestCases) {
     const GURL x_callback_url = CreateXCallbackURLWithParameters(
         test_case.scheme, test_case.action, test_case.success_url,
         test_case.error_url, test_case.cancel_url, test_case.parameters);
@@ -124,7 +125,7 @@ struct XCallbackURLDecodeTestCase {
 };
 
 TEST_F(XCallbackURLTest, QueryParameters) {
-  const XCallbackURLDecodeTestCase test_cases[] = {
+  const auto kTestCases = std::to_array<XCallbackURLDecodeTestCase>({
       {
           GURL("chrome://x-callback-url/"),
 
@@ -168,10 +169,9 @@ TEST_F(XCallbackURLTest, QueryParameters) {
 
           {{"x-success", "chrome://path/with%20spaces"}},
       },
-  };
+  });
 
-  for (size_t i = 0; i < std::size(test_cases); ++i) {
-    const XCallbackURLDecodeTestCase& test_case = test_cases[i];
+  for (const XCallbackURLDecodeTestCase& test_case : kTestCases) {
     const std::map<std::string, std::string> parameters =
         ExtractQueryParametersFromXCallbackURL(test_case.x_callback_url);
     EXPECT_EQ(test_case.expected, parameters);

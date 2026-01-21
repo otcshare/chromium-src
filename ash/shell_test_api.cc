@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/public/cpp/test/shell_test_api.h"
+#include "base/memory/raw_ptr.h"
 
 #include <memory>
 
@@ -15,7 +16,7 @@
 #include "ash/public/cpp/tablet_mode_observer.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "ash/system/message_center/session_state_notification_blocker.h"
+#include "ash/system/notification_center/session_state_notification_blocker.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
 #include "ash/system/power/power_button_controller.h"
 #include "ash/wm/overview/overview_animation_state_waiter.h"
@@ -23,7 +24,7 @@
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/workspace_controller.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "components/prefs/testing_pref_service.h"
 #include "ui/compositor/compositor.h"
@@ -62,7 +63,7 @@ class WindowAnimationWaiter : public ui::LayerAnimationObserver {
   void Wait() { run_loop_.Run(); }
 
  private:
-  ui::LayerAnimator* animator_;
+  raw_ptr<ui::LayerAnimator, DanglingUntriaged> animator_;
   base::RunLoop run_loop_;
 };
 
@@ -182,7 +183,7 @@ void ShellTestApi::WaitForWindowFinishAnimating(aura::Window* window) {
 }
 
 bool ShellTestApi::IsContextMenuShown() const {
-  return Shell::GetPrimaryRootWindowController()->IsContextMenuShown();
+  return Shell::GetPrimaryRootWindowController()->IsContextMenuShownForTest();
 }
 
 bool ShellTestApi::IsActionForAcceleratorEnabled(

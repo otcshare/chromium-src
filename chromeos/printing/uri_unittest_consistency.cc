@@ -30,7 +30,7 @@ bool IsStdChar(char c) {
 std::string Encode(const std::string& input, const std::string& allowed_chars) {
   std::string out;
   for (char c : input) {
-    if (IsStdChar(c) || allowed_chars.find(c) != std::string::npos) {
+    if (IsStdChar(c) || allowed_chars.contains(c)) {
       out.push_back(c);
     } else {
       out.push_back('%');

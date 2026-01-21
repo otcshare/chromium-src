@@ -8,16 +8,17 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_checker.h"
+#include "components/leveldb_proto/internal/leveldb_proto_feature_list.h"
 #include "components/leveldb_proto/public/proto_database.h"
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
@@ -142,7 +143,7 @@ bool LevelDB::Save(const base::StringPairs& entries_to_save,
     updates.Delete(leveldb::Slice(key));
 
   leveldb::WriteOptions options;
-  options.sync = true;
+  options.sync = !base::FeatureList::IsEnabled(kLevelDBProtoAsyncWrite);
 
   *status = db_->Write(options, &updates);
   if (status->ok())
@@ -189,7 +190,7 @@ bool LevelDB::UpdateWithRemoveFilter(const base::StringPairs& entries_to_save,
   }
 
   leveldb::WriteOptions write_options;
-  write_options.sync = true;
+  write_options.sync = !base::FeatureList::IsEnabled(kLevelDBProtoAsyncWrite);
   *status = db_->Write(write_options, &updates);
   if (status->ok())
     return true;

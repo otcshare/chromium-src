@@ -66,6 +66,7 @@ class SquareInkDropRippleCalculateTransformsTest : public WidgetTest {
 
   // The test target.
   SquareInkDropRipple ink_drop_ripple_{
+      nullptr,
       gfx::Size(kDrawnSize, kDrawnSize),
       2,
       gfx::Size(kHalfDrawnSize, kHalfDrawnSize),
@@ -221,7 +222,7 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
   // scale factor.
   constexpr gfx::Point kCenter(14, 14);
   constexpr gfx::Rect kDrawnRectBounds(0, 0, 10, 10);
-  SquareInkDropRipple ink_drop_ripple(kDrawnRectBounds.size(), 2,
+  SquareInkDropRipple ink_drop_ripple(nullptr, kDrawnRectBounds.size(), 2,
                                       gfx::Size(1, 1),  // unimportant
                                       1, kCenter, SK_ColorBLACK, 0.175f);
   SquareInkDropRippleTestApi test_api(&ink_drop_ripple);
@@ -229,9 +230,9 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
   // Add to a widget so we can control the DSF.
   auto* widget = CreateTopLevelPlatformWidget();
   widget->SetBounds(gfx::Rect(0, 0, 100, 100));
-  auto* host_view = new View();
+  auto* host_view =
+      widget->GetContentsView()->AddChildView(std::make_unique<View>());
   host_view->SetPaintToLayer();
-  widget->GetContentsView()->AddChildView(host_view);
   host_view->layer()->Add(ink_drop_ripple.GetRootLayer());
 
   // Test a variety of scale factors and target transform sizes.

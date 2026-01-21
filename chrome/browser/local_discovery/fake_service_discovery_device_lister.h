@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/task_runner.h"
 #include "chrome/browser/local_discovery/service_discovery_client.h"
@@ -32,6 +32,7 @@ class DeferringDelegate : public ServiceDiscoveryDeviceLister::Delegate {
   void OnDeviceRemoved(const std::string& service_type,
                        const std::string& service_name) override;
   void OnDeviceCacheFlushed(const std::string& service_type) override;
+  void OnPermissionRejected() override {}
 
   // Sets the delegate that callbacks should be called on.
   void SetActual(ServiceDiscoveryDeviceLister::Delegate* actual);

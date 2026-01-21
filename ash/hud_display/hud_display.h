@@ -6,6 +6,7 @@
 #define ASH_HUD_DISPLAY_HUD_DISPLAY_H_
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "ui/views/view.h"
 
@@ -19,9 +20,9 @@ class HUDSettingsView;
 
 // HUDDisplayView class can be used to display a system monitoring overview.
 class HUDDisplayView : public views::View {
- public:
-  METADATA_HEADER(HUDDisplayView);
+  METADATA_HEADER(HUDDisplayView, views::View)
 
+ public:
   HUDDisplayView();
   HUDDisplayView(const HUDDisplayView&) = delete;
   HUDDisplayView& operator=(const HUDDisplayView&) = delete;
@@ -58,9 +59,9 @@ class HUDDisplayView : public views::View {
   ASH_EXPORT void ToggleSettingsForTesting();
 
  private:
-  HUDHeaderView* header_view_ = nullptr;             // not owned
-  GraphsContainerView* graphs_container_ = nullptr;  // not owned
-  HUDSettingsView* settings_view_ = nullptr;         // not owned
+  raw_ptr<HUDHeaderView> header_view_ = nullptr;             // not owned
+  raw_ptr<GraphsContainerView> graphs_container_ = nullptr;  // not owned
+  raw_ptr<HUDSettingsView> settings_view_ = nullptr;         // not owned
 
   SEQUENCE_CHECKER(ui_sequence_checker_);
 };

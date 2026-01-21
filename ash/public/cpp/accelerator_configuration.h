@@ -9,22 +9,13 @@
 #include <vector>
 
 #include "ash/public/cpp/ash_public_export.h"
+#include "ash/public/mojom/accelerator_configuration.mojom.h"
 #include "ash/public/mojom/accelerator_info.mojom.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/types/optional_ref.h"
 #include "ui/base/accelerators/accelerator.h"
 
 namespace ash {
-
-// Error codes associated with mutating accelerators.
-enum class AcceleratorConfigResult {
-  kSuccess,            // Success
-  kActionLocked,       // Failure, locked actions cannot be modified
-  kAcceleratorLocked,  // Failure, locked accelerators cannot be modified
-  kConflict,           // Transient failure, conflict with existing accelerator
-  kNotFound,           // Failure, accelerator not found
-  kDuplicate,          // Failure, adding a duplicate accelerator to the same
-                       // action
-};
 
 using AcceleratorActionId = uint32_t;
 using ActionIdToAcceleratorsMap =
@@ -48,8 +39,8 @@ class ASH_PUBLIC_EXPORT AcceleratorConfiguration {
   void RemoveAcceleratorsUpdatedCallback(AcceleratorsUpdatedCallback callback);
 
   // Get the accelerators for a single action.
-  virtual const std::vector<ui::Accelerator>& GetAcceleratorsForAction(
-      AcceleratorActionId action_id) = 0;
+  virtual base::optional_ref<const std::vector<ui::Accelerator>>
+  GetAcceleratorsForAction(AcceleratorActionId action_id) = 0;
 
   // Whether this source of shortcuts can be modified. If this returns false
   // then any of the Add/Remove/Replace class will DCHECK. The two Restore
@@ -59,29 +50,33 @@ class ASH_PUBLIC_EXPORT AcceleratorConfiguration {
   // Return true if the accelerator is deprecated.
   virtual bool IsDeprecated(const ui::Accelerator& accelerator) const = 0;
 
+  // Return true if the accelerator data does not allow users to modify.
+  virtual bool IsAcceleratorLocked(
+      const ui::Accelerator& accelerator) const = 0;
+
   // Add a new user defined accelerator.
-  virtual AcceleratorConfigResult AddUserAccelerator(
+  virtual mojom::AcceleratorConfigResult AddUserAccelerator(
       AcceleratorActionId action_id,
       const ui::Accelerator& accelerator) = 0;
 
   // Remove a shortcut. This will delete a user-defined shortcut, or
   // mark a default one disabled.
-  virtual AcceleratorConfigResult RemoveAccelerator(
+  virtual mojom::AcceleratorConfigResult RemoveAccelerator(
       AcceleratorActionId action_id,
       const ui::Accelerator& accelerator) = 0;
 
   // Atomic version of Remove then Add.
-  virtual AcceleratorConfigResult ReplaceAccelerator(
+  virtual mojom::AcceleratorConfigResult ReplaceAccelerator(
       AcceleratorActionId action_id,
       const ui::Accelerator& old_acc,
       const ui::Accelerator& new_acc) = 0;
 
   // Restore the defaults for the given action.
-  virtual AcceleratorConfigResult RestoreDefault(
+  virtual mojom::AcceleratorConfigResult RestoreDefault(
       AcceleratorActionId action_id) = 0;
 
   // Restore all defaults.
-  virtual AcceleratorConfigResult RestoreAllDefaults() = 0;
+  virtual mojom::AcceleratorConfigResult RestoreAllDefaults() = 0;
 
  protected:
   // Updates the local cache and notifies observers of the updated accelerators.

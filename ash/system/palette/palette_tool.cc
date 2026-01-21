@@ -6,14 +6,14 @@
 
 #include <memory>
 
-#include "ash/assistant/util/assistant_util.h"
+#include "ash/constants/ash_features.h"
 #include "ash/system/palette/palette_tool_manager.h"
 #include "ash/system/palette/palette_utils.h"
 #include "ash/system/palette/tools/create_note_action.h"
 #include "ash/system/palette/tools/enter_capture_mode.h"
 #include "ash/system/palette/tools/laser_pointer_mode.h"
 #include "ash/system/palette/tools/magnifier_mode.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 
 namespace ash {
 
@@ -38,7 +38,7 @@ void PaletteTool::OnDisable() {
 }
 
 const gfx::VectorIcon& PaletteTool::GetActiveTrayIcon() const {
-  return gfx::kNoneIcon;
+  return gfx::VectorIcon::EmptyIcon();
 }
 
 }  // namespace ash

@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_THEME_INSTALLED_INFOBAR_DELEGATE_H_
 #define CHROME_BROWSER_EXTENSIONS_THEME_INSTALLED_INFOBAR_DELEGATE_H_
 
+#include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_observer.h"
@@ -19,13 +19,25 @@ namespace infobars {
 class ContentInfoBarManager;
 }
 
+class Profile;
+
 // When a user installs a theme, we display it immediately, but provide an
 // infobar allowing them to cancel.
 class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
                                       public ThemeServiceObserver {
  public:
+  // This method does nothing if there is no tabbed browser open for `profile`.
+  static void CreateForLastActiveTab(
+      Profile* profile,
+      const std::string& theme_name,
+      const std::string& theme_id,
+      std::unique_ptr<ThemeService::ThemeReinstaller> prev_theme_reinstaller);
+
+ private:
+  friend class InfoBarUiTest;
+
   // Creates a theme installed infobar and delegate and adds the infobar to
-  // |infobar_manager|, replacing any previous theme infobar.
+  // `infobar_manager`, replacing any previous theme infobar.
   static void Create(
       infobars::ContentInfoBarManager* infobar_manager,
       ThemeService* theme_service,
@@ -33,7 +45,6 @@ class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
       const std::string& theme_id,
       std::unique_ptr<ThemeService::ThemeReinstaller> prev_theme_reinstaller);
 
- private:
   ThemeInstalledInfoBarDelegate(
       ThemeService* theme_service,
       const std::string& theme_name,

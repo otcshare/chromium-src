@@ -12,7 +12,6 @@
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "base/values.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 
 namespace file_manager {
@@ -80,8 +79,9 @@ GURL GetFileManagerMainPageUrlWithParams(
   arg_value.Set("currentDirectoryURL", current_directory_url.spec());
   arg_value.Set("selectionURL", selection_url.spec());
   // |targetName| is only relevant for SaveAs.
-  if (type == ui::SelectFileDialog::Type::SELECT_SAVEAS_FILE)
+  if (type == ui::SelectFileDialog::Type::SELECT_SAVEAS_FILE) {
     arg_value.Set("targetName", target_name);
+  }
   arg_value.Set("searchQuery", search_query);
   arg_value.Set("showAndroidPickerApps", show_android_picker_apps);
 
@@ -89,8 +89,9 @@ GURL GetFileManagerMainPageUrlWithParams(
     base::Value::List types_list;
     for (size_t i = 0; i < file_types->extensions.size(); ++i) {
       base::Value::List extensions_list;
-      for (size_t j = 0; j < file_types->extensions[i].size(); ++j)
+      for (size_t j = 0; j < file_types->extensions[i].size(); ++j) {
         extensions_list.Append(file_types->extensions[i][j]);
+      }
 
       base::Value::Dict dict;
       dict.Set("extensions", std::move(extensions_list));
@@ -128,13 +129,13 @@ GURL GetFileManagerMainPageUrlWithParams(
 
   if (!volume_filter.empty()) {
     base::Value::List volume_filter_list;
-    for (const auto& item : volume_filter)
+    for (const auto& item : volume_filter) {
       volume_filter_list.Append(item);
+    }
     arg_value.Set("volumeFilter", std::move(volume_filter_list));
   }
 
-  std::string json_args;
-  base::JSONWriter::Write(arg_value, &json_args);
+  std::string json_args = base::WriteJson(arg_value).value_or("");
 
   std::string url =
       GetFileManagerMainPageUrl().spec() + '?' +

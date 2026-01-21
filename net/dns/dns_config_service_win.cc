@@ -6,30 +6,35 @@
 
 #include <sysinfoapi.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/free_deleter.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/types/expected.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_types.h"
@@ -82,28 +87,33 @@ inline DnsWindowsCompatibility& operator|=(DnsWindowsCompatibility& a,
 
 // Wrapper for GetAdaptersAddresses to get unicast addresses.
 // Returns nullptr if failed.
-std::unique_ptr<IP_ADAPTER_ADDRESSES, base::FreeDeleter>
-ReadAdapterUnicastAddresses() {
+base::HeapArray<uint8_t> ReadAdapterUnicastAddresses() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
-  std::unique_ptr<IP_ADAPTER_ADDRESSES, base::FreeDeleter> out;
-  ULONG len = 15000;  // As recommended by MSDN for GetAdaptersAddresses.
+  ULONG len = 15000;  // As recommended by MSDN.
   UINT rv = ERROR_BUFFER_OVERFLOW;
+  base::HeapArray<uint8_t> buffer;
+
   // Try up to three times.
   for (unsigned tries = 0; (tries < 3) && (rv == ERROR_BUFFER_OVERFLOW);
        tries++) {
-    out.reset(static_cast<PIP_ADAPTER_ADDRESSES>(malloc(len)));
-    memset(out.get(), 0, len);
-    rv = GetAdaptersAddresses(AF_UNSPEC,
-                              GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER |
-                              GAA_FLAG_SKIP_MULTICAST |
-                              GAA_FLAG_SKIP_FRIENDLY_NAME,
-                              nullptr, out.get(), &len);
+    buffer = base::HeapArray<uint8_t>::WithSize(len);
+
+    // SAFETY: `buffer` is `len` bytes in length and ::GetAdaptersAddresses
+    // shouldn't write more than `len` bytes.
+    rv = ::GetAdaptersAddresses(
+        AF_UNSPEC,
+        GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER |
+            GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_FRIENDLY_NAME,
+        nullptr, reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()), &len);
   }
-  if (rv != NO_ERROR)
-    out.reset();
-  return out;
+
+  if (rv != NO_ERROR) {
+    return {};
+  }
+
+  return buffer;
 }
 
 // Default address of "localhost" and local computer name can be overridden
@@ -113,10 +123,10 @@ bool AddLocalhostEntriesTo(DnsHosts& in_out_hosts) {
   IPAddress loopback_ipv6 = IPAddress::IPv6Localhost();
 
   // This does not override any pre-existing entries from the HOSTS file.
-  in_out_hosts.insert(std::make_pair(
-      DnsHostsKey("localhost", ADDRESS_FAMILY_IPV4), loopback_ipv4));
-  in_out_hosts.insert(std::make_pair(
-      DnsHostsKey("localhost", ADDRESS_FAMILY_IPV6), loopback_ipv6));
+  in_out_hosts.emplace(DnsHostsKey("localhost", ADDRESS_FAMILY_IPV4),
+                       loopback_ipv4);
+  in_out_hosts.emplace(DnsHostsKey("localhost", ADDRESS_FAMILY_IPV6),
+                       loopback_ipv6);
 
   wchar_t buffer[MAX_PATH];
   DWORD size = MAX_PATH;
@@ -135,14 +145,14 @@ bool AddLocalhostEntriesTo(DnsHosts& in_out_hosts) {
   if (have_ipv4 && have_ipv6)
     return true;
 
-  std::unique_ptr<IP_ADAPTER_ADDRESSES, base::FreeDeleter> addresses =
-      ReadAdapterUnicastAddresses();
-  if (!addresses.get())
+  auto addresses = ReadAdapterUnicastAddresses();
+  if (addresses.empty()) {
     return false;
-
-  // The order of adapters is the network binding order, so stick to the
-  // first good adapter for each family.
-  for (const IP_ADAPTER_ADDRESSES* adapter = addresses.get();
+  }
+  // The order of adapters is the network binding order, so stick to the first
+  // good adapter for each family.
+  for (const auto* adapter =
+           reinterpret_cast<IP_ADAPTER_ADDRESSES*>(addresses.data());
        adapter != nullptr && (!have_ipv4 || !have_ipv6);
        adapter = adapter->Next) {
     if (adapter->OperStatus != IfOperStatusUp)
@@ -300,7 +310,7 @@ void ConfigureSuffixSearch(const WinDnsSystemSettings& settings,
   // behavior (see also ParseSearchList). If a suffix is not valid, it will be
   // discarded when the fully-qualified name is converted to DNS format.
 
-  unsigned num_dots = base::ranges::count(primary_suffix, '.');
+  unsigned num_dots = std::ranges::count(primary_suffix, '.');
 
   for (size_t offset = 0; num_dots >= devolution.level.value(); --num_dots) {
     offset = primary_suffix.find('.', offset + 1);
@@ -308,7 +318,7 @@ void ConfigureSuffixSearch(const WinDnsSystemSettings& settings,
   }
 }
 
-absl::optional<std::vector<IPEndPoint>> GetNameServers(
+std::optional<std::vector<IPEndPoint>> GetNameServers(
     const IP_ADAPTER_ADDRESSES* adapter) {
   std::vector<IPEndPoint> nameservers;
   for (const IP_ADAPTER_DNS_SERVER_ADDRESS* address =
@@ -324,7 +334,7 @@ absl::optional<std::vector<IPEndPoint>> GetNameServers(
         ipe = IPEndPoint(ipe.address(), dns_protocol::kDefaultPort);
       nameservers.push_back(ipe);
     } else {
-      return absl::nullopt;
+      return std::nullopt;
     }
   }
   return nameservers;
@@ -352,7 +362,7 @@ bool CheckAndRecordCompatibility(bool have_name_resolution_policy,
 
 }  // namespace
 
-std::string ParseDomainASCII(base::WStringPiece widestr) {
+std::string ParseDomainASCII(std::wstring_view widestr) {
   if (widestr.empty())
     return "";
 
@@ -364,21 +374,19 @@ std::string ParseDomainASCII(base::WStringPiece widestr) {
   // Otherwise try to convert it from IDN to punycode.
   const int kInitialBufferSize = 256;
   url::RawCanonOutputT<char16_t, kInitialBufferSize> punycode;
-  if (!url::IDNToASCII(base::as_u16cstr(widestr), widestr.length(), &punycode))
+  if (!url::IDNToASCII(base::AsStringPiece16(widestr), &punycode)) {
     return "";
+  }
 
   // |punycode_output| should now be ASCII; convert it to a std::string.
   // (We could use UTF16ToASCII() instead, but that requires an extra string
   // copy. Since ASCII is a subset of UTF8 the following is equivalent).
-  std::string converted;
-  bool success =
-      base::UTF16ToUTF8(punycode.data(), punycode.length(), &converted);
-  DCHECK(success);
+  std::string converted = base::UTF16ToUTF8(punycode.view());
   DCHECK(base::IsStringASCII(converted));
   return converted;
 }
 
-std::vector<std::string> ParseSearchList(base::WStringPiece value) {
+std::vector<std::string> ParseSearchList(std::wstring_view value) {
   if (value.empty())
     return {};
 
@@ -388,7 +396,7 @@ std::vector<std::string> ParseSearchList(base::WStringPiece value) {
   // Although nslookup and network connection property tab ignore such
   // fragments ("a,b,,c" becomes ["a", "b", "c"]), our reference is getaddrinfo
   // (which sees ["a", "b"]). WMI queries also return a matching search list.
-  for (base::WStringPiece t : base::SplitStringPiece(
+  for (std::wstring_view t : base::SplitStringPiece(
            value, L",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
     // Convert non-ASCII to punycode, although getaddrinfo does not properly
     // handle such suffixes.
@@ -400,8 +408,14 @@ std::vector<std::string> ParseSearchList(base::WStringPiece value) {
   return output;
 }
 
-absl::optional<DnsConfig> ConvertSettingsToDnsConfig(
-    const WinDnsSystemSettings& settings) {
+base::expected<DnsConfig, ReadWinSystemDnsSettingsError>
+ConvertSettingsToDnsConfig(
+    const base::expected<WinDnsSystemSettings, ReadWinSystemDnsSettingsError>&
+        settings_or_error) {
+  if (!settings_or_error.has_value()) {
+    return base::unexpected(settings_or_error.error());
+  }
+  const WinDnsSystemSettings& settings = *settings_or_error;
   bool uses_vpn = false;
   bool has_adapter_specific_nameservers = false;
 
@@ -421,10 +435,12 @@ absl::optional<DnsConfig> ConvertSettingsToDnsConfig(
       uses_vpn = true;
     }
 
-    absl::optional<std::vector<IPEndPoint>> nameservers =
+    std::optional<std::vector<IPEndPoint>> nameservers =
         GetNameServers(adapter);
-    if (!nameservers)
-      return absl::nullopt;
+    if (!nameservers) {
+      return base::unexpected(
+          ReadWinSystemDnsSettingsError::kGetNameServersFailed);
+    }
 
     if (!nameservers->empty() && (adapter->OperStatus == IfOperStatusUp)) {
       // Check if the |adapter| has adapter specific nameservers.
@@ -456,8 +472,9 @@ absl::optional<DnsConfig> ConvertSettingsToDnsConfig(
       dns_config.search.push_back(std::move(dns_suffix));
   }
 
-  if (dns_config.nameservers.empty())
-    return absl::nullopt;  // No point continuing.
+  if (dns_config.nameservers.empty()) {
+    return base::unexpected(ReadWinSystemDnsSettingsError::kNoNameServerFound);
+  }
 
   // Windows always tries a multi-label name "as is" before using suffixes.
   dns_config.ndots = 1;
@@ -545,7 +562,8 @@ class DnsConfigServiceWin::Watcher
   }
 
   // NetworkChangeNotifier::IPAddressObserver:
-  void OnIPAddressChanged() override {
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override {
     // Need to update non-loopback IP of local host.
     OnHostsChanged(true);
   }
@@ -576,8 +594,16 @@ class DnsConfigServiceWin::ConfigReader : public SerialWorker {
     DCHECK(!IsCancelled());
 
     WorkItem* work_item = static_cast<WorkItem*>(serial_worker_work_item.get());
-    if (work_item->dns_config_.has_value()) {
-      service_->OnConfigRead(std::move(work_item->dns_config_).value());
+    base::UmaHistogramEnumeration(
+        base::StrCat({"Net.DNS.DnsConfig.Windows.ReadSystemSettings",
+                      base::NumberToString(GetFailureCount())}),
+        work_item->dns_config_or_error_.has_value()
+            ? ReadWinSystemDnsSettingsError::kOk
+            : work_item->dns_config_or_error_.error());
+
+    if (work_item->dns_config_or_error_.has_value()) {
+      service_->OnConfigRead(
+          std::move(work_item->dns_config_or_error_).value());
       return true;
     } else {
       LOG(WARNING) << "Failed to read DnsConfig.";
@@ -591,15 +617,14 @@ class DnsConfigServiceWin::ConfigReader : public SerialWorker {
     ~WorkItem() override = default;
 
     void DoWork() override {
-      absl::optional<WinDnsSystemSettings> settings =
-          ReadWinSystemDnsSettings();
-      if (settings.has_value())
-        dns_config_ = ConvertSettingsToDnsConfig(settings.value());
+      dns_config_or_error_ =
+          ConvertSettingsToDnsConfig(ReadWinSystemDnsSettings());
     }
 
    private:
     friend DnsConfigServiceWin::ConfigReader;
-    absl::optional<DnsConfig> dns_config_;
+    base::expected<DnsConfig, ReadWinSystemDnsSettingsError>
+        dns_config_or_error_;
   };
 
   raw_ptr<DnsConfigServiceWin> service_;
@@ -643,7 +668,7 @@ class DnsConfigServiceWin::HostsReader : public DnsConfigService::HostsReader {
 
 DnsConfigServiceWin::DnsConfigServiceWin()
     : DnsConfigService(GetHostsPath().value(),
-                       absl::nullopt /* config_change_delay */) {
+                       std::nullopt /* config_change_delay */) {
   // Allow constructing on one sequence and living on another.
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }

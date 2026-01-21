@@ -7,41 +7,37 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/attestation/mock_tpm_challenge_key.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "extensions/browser/api_test_utils.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::NiceMock;
 
-namespace utils = extension_function_test_utils;
-
 namespace extensions {
+
+namespace utils = api_test_utils;
+
 namespace {
 
 const char kUserEmail[] = "test@google.com";
 
 class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
  protected:
-  EPKPChallengeKeyTestBase()
-      : fake_user_manager_(new ash::FakeChromeUserManager()),
-        user_manager_enabler_(base::WrapUnique(fake_user_manager_)) {
-    extension_ = ExtensionBuilder("Test").Build();
-  }
+  EPKPChallengeKeyTestBase() : extension_(ExtensionBuilder("Test").Build()) {}
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    prefs_ = browser()->profile()->GetPrefs();
+    prefs_ = profile()->GetPrefs();
     SetAuthenticatedUser();
   }
 
@@ -54,26 +50,24 @@ class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
   }
 
   // This will be called by BrowserWithTestWindowTest::SetUp();
-  TestingProfile* CreateProfile() override {
-    fake_user_manager_->AddUserWithAffiliation(
-        AccountId::FromUserEmail(kUserEmail), true);
-    return profile_manager()->CreateTestingProfile(kUserEmail);
+  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
+    BrowserWithTestWindowTest::LogIn(email, gaia_id);
+    user_manager()->SetUserPolicyStatus(
+        AccountId::FromUserEmailGaiaId(email, gaia_id),
+        /*is_managed=*/true,
+        /*is_affiliated=*/true);
   }
 
   // Derived classes can override this method to set the required authenticated
   // user in the IdentityManager class.
   virtual void SetAuthenticatedUser() {
-    auto* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile());
     signin::MakePrimaryAccountAvailable(identity_manager, kUserEmail,
                                         signin::ConsentLevel::kSync);
   }
 
   scoped_refptr<const Extension> extension_;
-  // fake_user_manager_ is owned by user_manager_enabler_.
-  ash::FakeChromeUserManager* fake_user_manager_ = nullptr;
-  user_manager::ScopedUserManager user_manager_enabler_;
-  PrefService* prefs_ = nullptr;
+  raw_ptr<PrefService, DanglingUntriaged> prefs_ = nullptr;
 };
 
 class EPKPChallengeMachineKeyTest : public EPKPChallengeKeyTestBase {
@@ -92,23 +86,25 @@ class EPKPChallengeMachineKeyTest : public EPKPChallengeKeyTestBase {
 const char EPKPChallengeMachineKeyTest::kFuncArgs[] = "[\"Y2hhbGxlbmdl\"]";
 
 TEST_F(EPKPChallengeMachineKeyTest, ExtensionNotAllowlisted) {
-  base::Value empty_allowlist(base::Value::Type::LIST);
-  prefs_->Set(prefs::kAttestationExtensionAllowlist, empty_allowlist);
+  base::Value::List empty_allowlist;
+  prefs_->SetList(prefs::kAttestationExtensionAllowlist,
+                  std::move(empty_allowlist));
 
   EXPECT_EQ(
       ash::attestation::TpmChallengeKeyResult::kExtensionNotAllowedErrorMsg,
-      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, browser()));
+      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, profile()));
 }
 
 TEST_F(EPKPChallengeMachineKeyTest, Success) {
   SetMockTpmChallenger();
 
-  base::Value allowlist(base::Value::Type::LIST);
-  allowlist.GetList().Append(extension_->id());
-  prefs_->Set(prefs::kAttestationExtensionAllowlist, allowlist);
+  base::Value::List allowlist;
+  allowlist.Append(extension_->id());
+  prefs_->SetList(prefs::kAttestationExtensionAllowlist, std::move(allowlist));
 
-  std::unique_ptr<base::Value> value(utils::RunFunctionAndReturnSingleResult(
-      func_.get(), kFuncArgs, browser(), extensions::api_test_utils::NONE));
+  std::optional<base::Value> value = utils::RunFunctionAndReturnSingleResult(
+      func_.get(), kFuncArgs, profile(),
+      extensions::api_test_utils::FunctionMode::kNone);
 
   ASSERT_TRUE(value->is_string());
   EXPECT_EQ("cmVzcG9uc2U=" /* Base64 encoding of 'response' */,
@@ -131,23 +127,25 @@ class EPKPChallengeUserKeyTest : public EPKPChallengeKeyTestBase {
 const char EPKPChallengeUserKeyTest::kFuncArgs[] = "[\"Y2hhbGxlbmdl\", true]";
 
 TEST_F(EPKPChallengeUserKeyTest, ExtensionNotAllowlisted) {
-  base::Value empty_allowlist(base::Value::Type::LIST);
-  prefs_->Set(prefs::kAttestationExtensionAllowlist, empty_allowlist);
+  base::Value::List empty_allowlist;
+  prefs_->SetList(prefs::kAttestationExtensionAllowlist,
+                  std::move(empty_allowlist));
 
   EXPECT_EQ(
       ash::attestation::TpmChallengeKeyResult::kExtensionNotAllowedErrorMsg,
-      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, browser()));
+      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, profile()));
 }
 
 TEST_F(EPKPChallengeUserKeyTest, Success) {
   SetMockTpmChallenger();
 
-  base::Value allowlist(base::Value::Type::LIST);
-  allowlist.GetList().Append(extension_->id());
-  prefs_->Set(prefs::kAttestationExtensionAllowlist, allowlist);
+  base::Value::List allowlist;
+  allowlist.Append(extension_->id());
+  prefs_->SetList(prefs::kAttestationExtensionAllowlist, std::move(allowlist));
 
-  std::unique_ptr<base::Value> value(utils::RunFunctionAndReturnSingleResult(
-      func_.get(), kFuncArgs, browser(), extensions::api_test_utils::NONE));
+  std::optional<base::Value> value = utils::RunFunctionAndReturnSingleResult(
+      func_.get(), kFuncArgs, profile(),
+      extensions::api_test_utils::FunctionMode::kNone);
 
   ASSERT_TRUE(value->is_string());
   EXPECT_EQ("cmVzcG9uc2U=" /* Base64 encoding of 'response' */,

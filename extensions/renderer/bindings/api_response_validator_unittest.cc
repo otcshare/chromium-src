@@ -4,10 +4,11 @@
 
 #include "extensions/renderer/bindings/api_response_validator.h"
 
+#include <optional>
 #include <vector>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/bindings/api_binding_util.h"
@@ -18,7 +19,6 @@
 #include "extensions/renderer/bindings/argument_spec_builder.h"
 #include "extensions/renderer/bindings/returns_async_builder.h"
 #include "gin/converter.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "v8/include/v8.h"
 
 namespace extensions {
@@ -33,20 +33,20 @@ std::unique_ptr<APISignature> OneStringCallbackSignature() {
       ArgumentSpecBuilder(ArgumentType::STRING, "str").Build());
   return std::make_unique<APISignature>(
       std::move(empty_specs),
-      ReturnsAsyncBuilder(std::move(async_specs)).Build(), nullptr);
+      ReturnsAsyncBuilder(std::move(async_specs)).Build());
 }
 
-std::vector<v8::Local<v8::Value>> StringToV8Vector(
-    v8::Local<v8::Context> context,
-    const char* args) {
+v8::LocalVector<v8::Value> StringToV8Vector(v8::Local<v8::Context> context,
+                                            const char* args) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> v8_args = V8ValueFromScriptSource(context, args);
   if (v8_args.IsEmpty()) {
     ADD_FAILURE() << "Could not convert args: " << args;
-    return std::vector<v8::Local<v8::Value>>();
+    return v8::LocalVector<v8::Value>(isolate);
   }
   EXPECT_TRUE(v8_args->IsArray());
-  std::vector<v8::Local<v8::Value>> vector_args;
-  EXPECT_TRUE(gin::ConvertFromV8(context->GetIsolate(), v8_args, &vector_args));
+  v8::LocalVector<v8::Value> vector_args(isolate);
+  EXPECT_TRUE(gin::ConvertFromV8(isolate, v8_args, &vector_args));
   return vector_args;
 }
 
@@ -79,16 +79,16 @@ class APIResponseValidatorTest : public APIBindingTest {
   }
 
   APIResponseValidator* validator() { return &validator_; }
-  const absl::optional<std::string>& failure_method() const {
+  const std::optional<std::string>& failure_method() const {
     return failure_method_;
   }
-  const absl::optional<std::string>& failure_error() const {
+  const std::optional<std::string>& failure_error() const {
     return failure_error_;
   }
 
   void reset() {
-    failure_method_ = absl::nullopt;
-    failure_error_ = absl::nullopt;
+    failure_method_ = std::nullopt;
+    failure_error_ = std::nullopt;
   }
 
  private:
@@ -104,8 +104,8 @@ class APIResponseValidatorTest : public APIBindingTest {
   APIResponseValidator::TestHandler test_handler_;
   APIResponseValidator validator_;
 
-  absl::optional<std::string> failure_method_;
-  absl::optional<std::string> failure_error_;
+  std::optional<std::string> failure_method_;
+  std::optional<std::string> failure_error_;
 };
 
 TEST_F(APIResponseValidatorTest, TestValidation) {
@@ -150,8 +150,8 @@ TEST_F(APIResponseValidatorTest, TestDoesNotValidateWhenAPIErrorPresent) {
   v8::Local<v8::Context> context = MainContext();
 
   validator()->ValidateResponse(
-      context, kMethodName, {}, "Some API Error",
-      APIResponseValidator::CallbackType::kCallerProvided);
+      context, kMethodName, v8::LocalVector<v8::Value>(isolate()),
+      "Some API Error", APIResponseValidator::CallbackType::kCallerProvided);
   EXPECT_FALSE(failure_method());
   EXPECT_FALSE(failure_error());
 }

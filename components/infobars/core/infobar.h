@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "ui/gfx/animation/animation_delegate_notifier.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -44,7 +45,8 @@ class InfoBar : public gfx::AnimationDelegate {
   ~InfoBar() override;
 
   InfoBarManager* owner() { return owner_; }
-  InfoBarDelegate* delegate() const { return delegate_.get(); }
+  InfoBarDelegate* delegate() { return delegate_.get(); }
+  const InfoBarDelegate* delegate() const { return delegate_.get(); }
   void set_container(InfoBarContainer* container) { container_ = container; }
 
   // Sets |owner_|.  This also sets the nav entry ID on |delegate_|.  This must
@@ -77,6 +79,13 @@ class InfoBar : public gfx::AnimationDelegate {
 
   const gfx::SlideAnimation& animation() const { return animation_; }
   int computed_height() const { return height_; }
+  int target_height() const { return target_height_; }
+
+  InfoBarDelegate::InfoBarIdentifier GetIdentifier() const {
+    return delegate_->GetIdentifier();
+  }
+
+  base::WeakPtr<InfoBar> AsWeakPtr();
 
  protected:
   // gfx::AnimationDelegate:
@@ -85,7 +94,6 @@ class InfoBar : public gfx::AnimationDelegate {
   const InfoBarContainer* container() const { return container_; }
   InfoBarContainer* container() { return container_; }
   gfx::SlideAnimation* animation() { return &animation_; }
-  int target_height() const { return target_height_; }
 
   // Platforms may optionally override these if they need to do work during
   // processing of the given calls.
@@ -120,6 +128,8 @@ class InfoBar : public gfx::AnimationDelegate {
   // The current and target heights.
   int height_;  // Includes both fill and bottom separator.
   int target_height_;
+
+  base::WeakPtrFactory<InfoBar> weak_factory_{this};
 };
 
 }  // namespace infobars

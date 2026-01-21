@@ -15,30 +15,35 @@ namespace media {
 // Reported to metrics, please never modify or reuse existing values.
 // For new values, please also add them to enums.xml.
 
-constexpr HRESULT kErrorInitializeMediaFoundation =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA01);
-constexpr HRESULT kErrorInitializeVideoWindowClass =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA02);
-constexpr HRESULT kErrorCdmProxyReceivedInInvalidState =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA03);
-constexpr HRESULT kErrorResolveCoreWinRTStringDelayload =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA04);
-constexpr HRESULT kErrorZeroProtectionSystemId =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA05);
-constexpr HRESULT kErrorLoadLibrary =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA06);
-constexpr HRESULT kErrorGetFunctionPointer =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA07);
-constexpr HRESULT kErrorInvalidCdmProxy =
-    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA08);
+inline constexpr HRESULT kErrorInitializeMediaFoundation =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA01);  // 0x8004FA01
+inline constexpr HRESULT kErrorInitializeVideoWindowClass =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA02);  // 0x8004FA02
+inline constexpr HRESULT kErrorCdmProxyReceivedInInvalidState =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA03);  // 0x8004FA03
+inline constexpr HRESULT kErrorResolveCoreWinRTStringDelayload =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA04);  // 0x8004FA04
+inline constexpr HRESULT kErrorZeroProtectionSystemId =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA05);  // 0x8004FA05
+inline constexpr HRESULT kErrorLoadLibrary =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA06);  // 0x8004FA06
+inline constexpr HRESULT kErrorGetFunctionPointer =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA07);  // 0x8004FA07
+inline constexpr HRESULT kErrorInvalidCdmProxy =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0xFA08);  // 0x8004FA08
 
 // HRESULTs defined by Windows but are not exposed in public header files.
 
 // HRESULT 0x8004CD12 is DRM_E_TEE_INVALID_HWDRM_STATE, which can happen
 // during OS sleep/resume, or moving video to different graphics adapters.
 // When it happens, the HWDRM state is reset.
-constexpr HRESULT DRM_E_TEE_INVALID_HWDRM_STATE =
+inline constexpr HRESULT DRM_E_TEE_INVALID_HWDRM_STATE =
     static_cast<HRESULT>(0x8004CD12);
+
+// HRESULT 0x8004DD2E is a value that old OEM drivers may return instead of
+// DRM_E_TEE_INVALID_HWDRM_STATE
+inline constexpr HRESULT DRM_OEM_E_ASD_ACTIVE_DISPLAY_FAIL =
+    static_cast<HRESULT>(0x8004DD2E);
 
 }  // namespace media
 

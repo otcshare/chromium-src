@@ -17,10 +17,7 @@ NoOpUserEventService::~NoOpUserEventService() = default;
 void NoOpUserEventService::RecordUserEvent(
     std::unique_ptr<UserEventSpecifics> specifics) {}
 
-void NoOpUserEventService::RecordUserEvent(
-    const UserEventSpecifics& specifics) {}
-
-base::WeakPtr<syncer::ModelTypeControllerDelegate>
+base::WeakPtr<syncer::DataTypeControllerDelegate>
 NoOpUserEventService::GetControllerDelegate() {
   return nullptr;
 }

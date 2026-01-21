@@ -16,16 +16,16 @@ class OptimizationGuideTabUrlProviderTest : public BrowserWithTestWindowTest {
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    otr_browser_window_ = CreateBrowserWindow();
     otr_browser_ = CreateBrowser(
         profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
         browser()->type(),
-        /*hosted_app=*/false, otr_browser_window_.get());
+        /*hosted_app=*/false);
     tab_url_provider_ =
         std::make_unique<OptimizationGuideTabUrlProvider>(profile());
   }
 
   void TearDown() override {
+    tab_url_provider_.reset();
     // Also destroy |otr_browser_| before the profile. browser()'s destruction
     // is handled in BrowserWithTestWindowTest::TearDown().
     otr_browser_->tab_strip_model()->CloseAllTabs();
@@ -40,7 +40,6 @@ class OptimizationGuideTabUrlProviderTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  std::unique_ptr<BrowserWindow> otr_browser_window_;
   std::unique_ptr<Browser> otr_browser_;
   std::unique_ptr<OptimizationGuideTabUrlProvider> tab_url_provider_;
 };

@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_AUTOFILL_ANDROID_SAVE_UPDATE_ADDRESS_PROFILE_PROMPT_VIEW_H_
 #define CHROME_BROWSER_AUTOFILL_ANDROID_SAVE_UPDATE_ADDRESS_PROFILE_PROMPT_VIEW_H_
 
+#include "chrome/browser/autofill/android/save_update_address_profile_prompt_mode.h"
+
 namespace autofill {
 
 class AutofillProfile;
@@ -16,7 +18,7 @@ class SaveUpdateAddressProfilePromptView {
  public:
   virtual bool Show(SaveUpdateAddressProfilePromptController* controller,
                     const AutofillProfile& autofill_profile,
-                    bool is_update) = 0;
+                    SaveUpdateAddressProfilePromptMode prompt_mode) = 0;
 
   virtual ~SaveUpdateAddressProfilePromptView() = default;
 };

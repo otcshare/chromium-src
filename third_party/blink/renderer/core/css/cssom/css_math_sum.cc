@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/core/css/cssom/css_math_sum.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/css/css_math_expression_node.h"
 #include "third_party/blink/renderer/core/css/cssom/css_math_negate.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -30,7 +31,7 @@ bool CanCreateNumericTypeFromSumValue(const CSSNumericSumValue& sum) {
   DCHECK(!sum.terms.empty());
 
   const auto first_type = NumericTypeFromUnitMap(sum.terms[0].units);
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       sum.terms, [&first_type](const CSSNumericSumValue::Term& term) {
         bool error = false;
         CSSNumericValueType::Add(first_type, NumericTypeFromUnitMap(term.units),
@@ -77,31 +78,35 @@ CSSMathSum* CSSMathSum::Create(CSSNumericValueVector values,
             : MakeGarbageCollected<CSSMathSum>(
                   MakeGarbageCollected<CSSNumericArray>(std::move(values)),
                   final_type);
-  if (!result)
+  if (!result) {
     exception_state.ThrowTypeError("Incompatible types");
+  }
 
   return result;
 }
 
-absl::optional<CSSNumericSumValue> CSSMathSum::SumValue() const {
+std::optional<CSSNumericSumValue> CSSMathSum::SumValue() const {
   CSSNumericSumValue sum;
   for (const auto& value : NumericValues()) {
     const auto child_sum = value->SumValue();
-    if (!child_sum.has_value())
-      return absl::nullopt;
+    if (!child_sum.has_value()) {
+      return std::nullopt;
+    }
 
     // Collect like-terms
     for (const auto& term : child_sum->terms) {
       wtf_size_t index = sum.terms.Find(UnitMapComparator{term});
-      if (index == kNotFound)
+      if (index == kNotFound) {
         sum.terms.push_back(term);
-      else
+      } else {
         sum.terms[index].value += term.value;
+      }
     }
   }
 
-  if (!CanCreateNumericTypeFromSumValue(sum))
-    return absl::nullopt;
+  if (!CanCreateNumericTypeFromSumValue(sum)) {
+    return std::nullopt;
+  }
 
   return sum;
 }
@@ -113,8 +118,9 @@ CSSMathExpressionNode* CSSMathSum::ToCalcExpressionNode() const {
 void CSSMathSum::BuildCSSText(Nested nested,
                               ParenLess paren_less,
                               StringBuilder& result) const {
-  if (paren_less == ParenLess::kNo)
+  if (paren_less == ParenLess::kNo) {
     result.Append(nested == Nested::kYes ? "(" : "calc(");
+  }
 
   const auto& values = NumericValues();
   DCHECK(!values.empty());
@@ -132,8 +138,9 @@ void CSSMathSum::BuildCSSText(Nested nested,
     }
   }
 
-  if (paren_less == ParenLess::kNo)
+  if (paren_less == ParenLess::kNo) {
     result.Append(")");
+  }
 }
 
 }  // namespace blink

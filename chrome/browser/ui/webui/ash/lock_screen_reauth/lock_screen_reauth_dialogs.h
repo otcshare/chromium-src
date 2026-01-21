@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_ASH_LOCK_SCREEN_REAUTH_LOCK_SCREEN_REAUTH_DIALOGS_H_
 #define CHROME_BROWSER_UI_WEBUI_ASH_LOCK_SCREEN_REAUTH_LOCK_SCREEN_REAUTH_DIALOGS_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/login/helper.h"
@@ -12,24 +13,28 @@
 #include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/base_lock_dialog.h"
 #include "chrome/browser/ui/webui/ash/login/network_state_informer.h"
+#include "chromeos/ash/components/http_auth_dialog/http_auth_dialog.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "ui/web_dialogs/web_dialog_ui.h"
+
+namespace content {
+class WebContents;
+}
 
 namespace ash {
 
 class LockScreenCaptivePortalDialog;
 class LockScreenNetworkDialog;
+class LockScreenReauthHandler;
 
 class LockScreenStartReauthDialog
     : public BaseLockDialog,
       public NetworkStateInformer::NetworkStateInformerObserver,
       public ChromeWebModalDialogManagerDelegate,
       public web_modal::WebContentsModalDialogHost,
-      public content::NotificationObserver {
+      public HttpAuthDialog::Observer {
  public:
   LockScreenStartReauthDialog();
   LockScreenStartReauthDialog(LockScreenStartReauthDialog const&) = delete;
@@ -41,7 +46,7 @@ class LockScreenStartReauthDialog
       const content::MediaStreamRequest& request,
       content::MediaResponseCallback callback) override;
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
-                                  const GURL& security_origin,
+                                  const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type) override;
 
   // Creates singleton instance of LockScreenStartReauthDialog. It will
@@ -58,11 +63,16 @@ class LockScreenStartReauthDialog
   void DismissLockScreenCaptivePortalDialog();
   void ShowLockScreenNetworkDialog();
   void ShowLockScreenCaptivePortalDialog();
-  static gfx::Size CalculateLockScreenReauthDialogSize(
-      bool is_new_layout_enabled);
 
   // Forces network state update because webview reported frame loading error.
   void OnWebviewLoadAborted();
+
+  // Autoreload is active if `DeviceAuthenticationFlowAutoReloadInterval` policy
+  // is set and the lockscreen dialog is shown. Once authentication is
+  // successful or the lockscreen dialog is closed/hidden, the autoreload should
+  // be terminated to prevent the timer from running indefinitely.
+  void TerminateAutoReload();
+  void ReactivateAutoReload();
 
   // Used for waiting for the corresponding dialogs in tests.
   // Similar methods exist for the main dialog in InSessionPasswordSyncManager.
@@ -80,6 +90,8 @@ class LockScreenStartReauthDialog
 
   // Notify test that the dialog is ready for testing.
   void OnReadyForTesting();
+
+  void ForceUpdateStateForTesting(NetworkError::ErrorReason reason);
 
   LockScreenNetworkDialog* get_network_dialog_for_testing() {
     return lock_screen_network_dialog_.get();
@@ -107,8 +119,8 @@ class LockScreenStartReauthDialog
   void UpdateState(NetworkError::ErrorReason reason) override;
 
   // ChromeWebModalDialogManagerDelegate:
-  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
-      override;
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
 
   // web_modal::WebContentsModalDialogHost:
   gfx::Size GetMaximumDialogSize() override;
@@ -117,10 +129,13 @@ class LockScreenStartReauthDialog
   void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
   void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
 
-  // content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // HttpAuthDialog::Observer implementation:
+  void HttpAuthDialogShown(content::WebContents* web_contents) override;
+  void HttpAuthDialogCancelled(content::WebContents* web_contents) override;
+  void HttpAuthDialogSupplied(content::WebContents* web_contents) override;
+
+  // Returns whether `web_contents` is associated with this instance.
+  bool Matches(content::WebContents* web_contents);
 
   // Copies proxy authentication details that were entered in the lock screen
   // profile to system network context and to the profile of active user.
@@ -130,20 +145,24 @@ class LockScreenStartReauthDialog
 
   void OnCaptivePortalDialogReadyForTesting();
 
+  bool IsAutoReloadActive();
+
+  LockScreenReauthHandler* GetHandler();
+
   scoped_refptr<NetworkStateInformer> network_state_informer_;
   bool is_network_dialog_visible_ = false;
   bool is_proxy_auth_in_progress_ = false;
   bool should_reload_gaia_ = false;
 
   base::ScopedObservation<NetworkStateInformer, NetworkStateInformerObserver>
-      scoped_observation_{this};
+      network_state_scoped_observation_{this};
 
   std::unique_ptr<LockScreenNetworkDialog> lock_screen_network_dialog_;
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
 
   std::unique_ptr<LockScreenCaptivePortalDialog> captive_portal_dialog_;
 
-  content::NotificationRegistrar registrar_;
+  std::unique_ptr<HttpAuthDialog::ScopedEnabler> enable_system_httpauth_;
 
   // Callbacks and flags that are used in tests to check that the corresponding
   // dialog is loaded or closed.

@@ -7,10 +7,14 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
 #include "extensions/browser/blocklist_state.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -35,10 +39,10 @@ void Partition(const ExtensionIdSet& before,
 SafeBrowsingVerdictHandler::SafeBrowsingVerdictHandler(
     ExtensionPrefs* extension_prefs,
     ExtensionRegistry* registry,
-    ExtensionService* extension_service)
+    ExtensionRegistrar* registrar)
     : extension_prefs_(extension_prefs),
       registry_(registry),
-      extension_service_(extension_service) {
+      registrar_(registrar) {
   extension_registry_observation_.Observe(registry_.get());
 }
 
@@ -47,10 +51,10 @@ SafeBrowsingVerdictHandler::~SafeBrowsingVerdictHandler() = default;
 void SafeBrowsingVerdictHandler::Init() {
   TRACE_EVENT0("browser,startup", "SafeBrowsingVerdictHandler::Init");
 
-  std::unique_ptr<ExtensionSet> all_extensions =
+  const ExtensionSet all_extensions =
       registry_->GenerateInstalledExtensionsSet();
 
-  for (const auto& extension : *all_extensions) {
+  for (const auto& extension : all_extensions) {
     const BitMapBlocklistState state =
         blocklist_prefs::GetSafeBrowsingExtensionBlocklistState(
             extension->id(), extension_prefs_);
@@ -76,11 +80,11 @@ void SafeBrowsingVerdictHandler::ManageBlocklist(
   ExtensionIdSet unchanged;
 
   ExtensionIdSet installed_ids =
-      registry_->GenerateInstalledExtensionsSet()->GetIDs();
+      registry_->GenerateInstalledExtensionsSet().GetIDs();
   for (const auto& it : state_map) {
     // It is possible that an extension is uninstalled when the blocklist is
     // fetching asynchronously. In this case, we should ignore this extension.
-    if (!base::Contains(installed_ids, it.first)) {
+    if (!installed_ids.contains(it.first)) {
       continue;
     }
     switch (it.second) {
@@ -119,7 +123,7 @@ void SafeBrowsingVerdictHandler::UpdateBlocklistedExtensions(
     blocklist_.Remove(id);
     blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
         id, BitMapBlocklistState::NOT_BLOCKLISTED, extension_prefs_);
-    extension_service_->OnBlocklistStateRemoved(id);
+    registrar_->OnBlocklistStateRemoved(id);
     UMA_HISTOGRAM_ENUMERATION("ExtensionBlacklist.UnblacklistInstalled",
                               extension->location());
   }
@@ -133,7 +137,7 @@ void SafeBrowsingVerdictHandler::UpdateBlocklistedExtensions(
     blocklist_.Insert(extension);
     blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
         id, BitMapBlocklistState::BLOCKLISTED_MALWARE, extension_prefs_);
-    extension_service_->OnBlocklistStateAdded(id);
+    registrar_->OnBlocklistStateAdded(id);
     UMA_HISTOGRAM_ENUMERATION("ExtensionBlacklist.BlacklistInstalled",
                               extension->location());
   }
@@ -157,7 +161,7 @@ void SafeBrowsingVerdictHandler::UpdateGreylistedExtensions(
     blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
         extension->id(), BitMapBlocklistState::NOT_BLOCKLISTED,
         extension_prefs_);
-    extension_service_->OnGreylistStateRemoved(extension->id());
+    registrar_->OnGreylistStateRemoved(extension->id());
     UMA_HISTOGRAM_ENUMERATION("Extensions.Greylist.Enabled",
                               extension->location());
   }
@@ -177,7 +181,7 @@ void SafeBrowsingVerdictHandler::UpdateGreylistedExtensions(
         blocklist_prefs::BlocklistStateToBitMapBlocklistState(greylist_state);
     blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
         extension->id(), bitmap_greylist_state, extension_prefs_);
-    extension_service_->OnGreylistStateAdded(id, bitmap_greylist_state);
+    registrar_->OnGreylistStateAdded(id, bitmap_greylist_state);
     UMA_HISTOGRAM_ENUMERATION("Extensions.Greylist.Disabled",
                               extension->location());
   }
@@ -185,8 +189,8 @@ void SafeBrowsingVerdictHandler::UpdateGreylistedExtensions(
 
 void SafeBrowsingVerdictHandler::OnExtensionUninstalled(
     content::BrowserContext* browser_context,
-    const extensions::Extension* extension,
-    extensions::UninstallReason reason) {
+    const Extension* extension,
+    UninstallReason reason) {
   blocklist_.Remove(extension->id());
   greylist_.Remove(extension->id());
 }

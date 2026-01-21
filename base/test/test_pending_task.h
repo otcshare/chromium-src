@@ -7,12 +7,16 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/time/time.h"
-#include "base/trace_event/base_tracing_forward.h"
 
 namespace base {
+
+namespace trace_event {
+class TracedValue;
+class ConvertableToTraceFormat;
+}  // namespace trace_event
 
 // TestPendingTask is a helper class for test TaskRunner
 // implementations.  See test_simple_task_runner.h for example usage.

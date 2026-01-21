@@ -40,9 +40,10 @@ class TextInputType final : public BaseTextInputType {
   TextInputType(HTMLInputElement& element)
       : BaseTextInputType(Type::kText, element) {}
 
+  bool SupportsBaseAppearance(Element::BaseAppearanceValue) const override;
+
  private:
   void CountUsage() override;
-  const AtomicString& FormControlType() const override;
   bool SupportsInputModeAttribute() const override;
 };
 

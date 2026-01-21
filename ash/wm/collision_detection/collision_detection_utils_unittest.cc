@@ -15,7 +15,7 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
-#include "ash/system/message_center/ash_message_popup_collection.h"
+#include "ash/system/notification_center/ash_message_popup_collection.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/test_window_builder.h"
@@ -23,7 +23,8 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
 #include "ash/wm/work_area_insets.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "ui/aura/window.h"
 #include "ui/display/scoped_display_for_new_windows.h"
@@ -35,7 +36,7 @@ namespace ash {
 namespace {
 
 display::Display GetDisplayForWindow(aura::Window* window) {
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(window);
+  return display::Screen::Get()->GetDisplayNearestWindow(window);
 }
 
 gfx::Rect ConvertToScreenForWindow(aura::Window* window,
@@ -86,7 +87,8 @@ TEST_F(CollisionDetectionUtilsTest, AvoidObstaclesAvoidsUnifiedSystemTray) {
 
 TEST_F(CollisionDetectionUtilsTest, AvoidObstaclesAvoidsPopupNotification) {
   UpdateDisplay("1000x900");
-  auto* window = CreateTestWindowInShellWithId(kShellWindowId_ShelfContainer);
+  auto* window =
+      CreateTestWindowInShell({.window_id = kShellWindowId_ShelfContainer});
   window->SetName(AshMessagePopupCollection::kMessagePopupWidgetName);
   window->Show();
 
@@ -138,7 +140,7 @@ class CollisionDetectionUtilsDisplayTest
     const std::size_t root_window_index = std::get<1>(GetParam());
     UpdateWorkArea(display_string);
     ASSERT_LT(root_window_index, Shell::GetAllRootWindows().size());
-    root_window_ = Shell::GetAllRootWindows()[root_window_index];
+    root_window_ = Shell::GetAllRootWindows()[root_window_index].get();
     scoped_display_ =
         std::make_unique<display::ScopedDisplayForNewWindows>(root_window_);
     for (auto* root_window_controller : Shell::GetAllRootWindowControllers()) {
@@ -194,7 +196,7 @@ class CollisionDetectionUtilsDisplayTest
 
  private:
   std::unique_ptr<display::ScopedDisplayForNewWindows> scoped_display_;
-  aura::Window* root_window_;
+  raw_ptr<aura::Window, DanglingUntriaged> root_window_;
 };
 
 TEST_P(CollisionDetectionUtilsDisplayTest, MovementAreaIsInset) {
@@ -208,7 +210,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest,
        MovementAreaIncludesKeyboardIfKeyboardIsShown) {
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(GetDisplay());
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
 
   constexpr int keyboard_height = 100;
@@ -303,7 +305,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest,
   keyboard_controller->SetContainerType(keyboard::ContainerType::kFloating,
                                         gfx::Rect(), base::DoNothing());
   keyboard_controller->ShowKeyboardInDisplay(display);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 0, 100, 100));
 
@@ -405,7 +407,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest, GetRestingPositionAvoidsKeyboard) {
 
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(display);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
 
   constexpr int keyboard_height = 100;

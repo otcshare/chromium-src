@@ -8,10 +8,9 @@
 // updateCharacterBounds when receiving this event.
 
 // Spec draft:
-// https://w3c.github.io/editing/docs/EditContext/index.html#characterboundsupdateevent
+// https://w3c.github.io/edit-context/#characterboundsupdateevent
 [
-    Exposed=Window,
-    RuntimeEnabled=EditContext
+  Exposed=Window
 ] interface CharacterBoundsUpdateEvent : Event {
     constructor(DOMString type, optional CharacterBoundsUpdateEventInit options = {});
     readonly attribute unsigned long rangeStart;

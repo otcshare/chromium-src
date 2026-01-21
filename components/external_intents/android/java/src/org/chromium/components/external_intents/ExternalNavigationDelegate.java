@@ -9,17 +9,17 @@ import android.content.Intent;
 import android.content.pm.ResolveInfo;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.Supplier;
-import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
 import java.util.List;
+import java.util.function.Supplier;
 
-/**
- * A delegate for {@link ExternalNavigationHandler}.
- */
+/** A delegate for {@link ExternalNavigationHandler}. */
+@NullMarked
 public interface ExternalNavigationDelegate {
     /**
      * Returns the Context with which this delegate is associated, or null if there is no such
@@ -30,7 +30,7 @@ public interface ExternalNavigationDelegate {
      * resource fetching via special logic in the ContextWrapper object that is wrapping the
      * Activity.
      */
-    Context getContext();
+    @Nullable Context getContext();
 
     /**
      * Determine if this app is the default or only handler for a given intent. If true, this app
@@ -40,15 +40,19 @@ public interface ExternalNavigationDelegate {
 
     /**
      * Returns whether to disable forwarding URL requests to external intents for the passed-in URL.
+     *
+     * <p>This method may have the side effect of modifying the given {@link Intent}. For specific
+     * navigation scenarios defined by {@code params}, it may add the {@link
+     * Intent#FLAG_ACTIVITY_MULTIPLE_TASK} flag. This ensures that the external application is
+     * launched in a new task.
+     *
+     * @param params The parameters describing the navigation.
+     * @param intent The external {@link Intent} that will be used for the navigation. This object
+     *     may be modified by this method.
+     * @return true to disable the external intent request, false to allow it.
      */
-    boolean shouldDisableExternalIntentRequestsForUrl(GURL url);
-
-    /**
-     * Loads a URL as specified by |loadUrlParams| if possible. May fail in exceptional conditions
-     * (e.g., if there is no valid tab).
-     * @param loadUrlParams parameters of the URL to be loaded
-     */
-    void loadUrlIfPossible(LoadUrlParams loadUrlParams);
+    boolean shouldDisableExternalIntentRequestsForUrl(
+            ExternalNavigationParams params, Intent intent);
 
     /** Adds a window id to the intent, if necessary. */
     void maybeSetWindowId(Intent intent);
@@ -69,20 +73,18 @@ public interface ExternalNavigationDelegate {
      */
     void maybeSetPendingIncognitoUrl(Intent intent);
 
-    /**
-     * Determine if the application of the embedder is in the foreground.
-     */
+    /** Determine if the application of the embedder is in the foreground. */
     boolean isApplicationInForeground();
 
     /**
      * @return The WindowAndroid instance associated with this delegate instance.
      */
-    WindowAndroid getWindowAndroid();
+    @Nullable WindowAndroid getWindowAndroid();
 
     /**
      * @return The WebContents instance associated with this delegate instance.
      */
-    WebContents getWebContents();
+    @Nullable WebContents getWebContents();
 
     /**
      * @return Whether this delegate has a valid tab available.
@@ -90,18 +92,13 @@ public interface ExternalNavigationDelegate {
     boolean hasValidTab();
 
     /**
-     * @return Whether it's possible to close the current tab on launching on an incognito intent.
-     * TODO(blundell): Investigate whether it would be feasible to change the //chrome
-     * implementation of this method to be identical to that of its implementation of
-     * ExternalNavigationDelegate#hasValidTab() and then eliminate this method in favor of
-     * ExternalNavigationHandler calling hasValidTab() if so.
+     * @return Whether it's possible to close the current tab on launching on an intent.
+     *     TODO(blundell): Investigate whether it would be feasible to change the //chrome
+     *     implementation of this method to be identical to that of its implementation of
+     *     ExternalNavigationDelegate#hasValidTab() and then eliminate this method in favor of
+     *     ExternalNavigationHandler calling hasValidTab() if so.
      */
-    boolean canCloseTabOnIncognitoIntentLaunch();
-
-    /**
-     * @return whether it's possible to load a URL in the current tab.
-     */
-    boolean canLoadUrlInCurrentTab();
+    boolean canCloseTabOnIntentLaunch();
 
     /* Invoked when the tab associated with this delegate should be closed. */
     void closeTab();
@@ -123,32 +120,111 @@ public interface ExternalNavigationDelegate {
     void presentLeavingIncognitoModalDialog(Callback<Boolean> onUserDecision);
 
     /**
-     * @param intent The intent to launch.
+     * @param resolveInfoSupplier The resolveInfos to check.
      * @return Whether the Intent points to an app that we trust and that launched this app.
      */
-    boolean isIntentForTrustedCallingApp(
-            Intent intent, Supplier<List<ResolveInfo>> resolveInfoSupplier);
+    boolean isForTrustedCallingApp(Supplier<List<ResolveInfo>> resolveInfoSupplier);
 
-    /**
-     * Whether WebAPKs should be launched even on the initial Intent.
-     */
+    /** Whether WebAPKs should be launched even on the initial Intent. */
     boolean shouldLaunchWebApksOnInitialIntent();
 
-    /**
-     * Potentially adds a target package to the Intent. Returns whether the package was set.
-     */
-    boolean maybeSetTargetPackage(Intent intent, Supplier<List<ResolveInfo>> resolveInfoSupplier);
+    /** Adds a target package to the Intent. Only called if isForTrustedCallingApp is true. */
+    void setPackageForTrustedCallingApp(Intent intent);
 
     /**
      * Whether the Activity launch should be aborted if the disambiguation prompt is going to be
      * shown and Chrome is able to handle the navigation.
      */
-    boolean shouldAvoidDisambiguationDialog(Intent intent);
+    boolean shouldAvoidDisambiguationDialog(GURL intentDataUrl);
 
     /**
-     * Whether navigations started by the embedder (i.e. not by the renderer) should stay in the
-     * browser by default. Note that there are many exceptions to this, like redirects off of the
-     * navigation still being allowed to leave the browser.
+     * Returns the scheme (or null) used by web pages to start up the browser (Chrome Stable for
+     * Chrome) without an explicit Intent.
      */
-    boolean shouldEmbedderInitiatedNavigationsStayInBrowser();
+    @Nullable String getSelfScheme();
+
+    /** Returns whether all the external intents are supposed to be disabled per embedder. */
+    boolean shouldDisableAllExternalIntents();
+
+    /**
+     * Returns whether the url should be returned as the result of the current activity.
+     *
+     * @param url The {@link GURL} to return as activity result.
+     */
+    boolean shouldReturnAsActivityResult(GURL url);
+
+    /**
+     * Sets the url as the result of the current activity and finishes it if conditions are met.
+     *
+     * @param url The {@link GURL} to return as activity result.
+     */
+    void returnAsActivityResult(GURL url);
+
+    /**
+     * Records the scheme of the external navigation if this is likely a CCT launched for auth
+     * purposes.
+     *
+     * @param url The {@link GURL} of the external navigation.
+     */
+    void maybeRecordExternalNavigationSchemeHistogram(GURL url);
+
+    /**
+     * Records metrics relevant to password saving in CCTs if the recorder exists. A recorder might
+     * not exist if there was no form submission preceding the external navigation.
+     */
+    void notifyCctPasswordSavingRecorderOfExternalNavigation();
+
+    void reportIntentToSafeBrowsing(Intent intent);
+
+    /**
+     * Returns an intent that targets the embedder application if opening the url in incognito
+     * should be prevented. Returns null otherwise.
+     */
+    @Nullable Intent createIntentToPreventIncognitoAccess(GURL url);
+
+    /**
+     * Returns true if the tab associated with this client was launched from a link opening a new
+     * foreground tab.
+     */
+    boolean wasTabLaunchedFromLinkCreatingNewForegroundTab();
+
+    /**
+     * Returns true if the tab associated with this client was launched from a link opening a new
+     * window.
+     */
+    boolean wasTabLaunchedFromLinkCreatingNewWindow();
+
+    /**
+     * Returns true if the tab associated with this client should be launched in a new window.
+     *
+     * @param params The parameters describing the navigation.
+     */
+    boolean shouldLaunchNewWindow(ExternalNavigationParams params);
+
+    /**
+     * Returns true if this is a self navigation that should be launched as a multiple task intent.
+     *
+     * @param params The parameters describing the navigation.
+     */
+    boolean shouldSelfNavigationLaunchAsMultipleTask(ExternalNavigationParams params);
+
+    /**
+     * Returns whether an app should be set for the current page to be opened by the user on demand
+     * at a later time.
+     */
+    boolean shouldSetAppForCurrentPage();
+
+    /**
+     * Set the app for the current page and stay in the embedder app. The provided runnable is going
+     * to be used to open the current page in the app when the user requests it.
+     *
+     * @param openInApp A {@link Runnable} to be run to open the current page in the app.
+     */
+    void setAppForCurrentPage(Runnable openInApp);
+
+    /**
+     * Clears the app set for the page. This should be called when the app becomes invalid for the
+     * current page, e.g. navigation to another domain.
+     */
+    void clearAppForCurrentPage();
 }

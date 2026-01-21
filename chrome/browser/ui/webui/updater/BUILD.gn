@@ -1,0 +1,16 @@
+# Copyright 2025 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+assert(is_mac || is_win || is_linux)
+
+mojom("mojo_bindings") {
+  sources = [ "updater_ui.mojom" ]
+  public_deps = [
+    "//chrome/updater/mojom",
+    "//mojo/public/mojom/base",
+  ]
+  webui_module_path = "/"
+}

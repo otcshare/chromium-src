@@ -5,10 +5,12 @@
 #include "chrome/browser/webshare/win/fake_random_access_stream.h"
 
 #include <robuffer.h>
+
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
@@ -209,7 +211,7 @@ class StreamData final : public base::RefCountedThreadSafe<StreamData> {
  private:
   friend class base::RefCountedThreadSafe<StreamData>;
 
-  virtual ~StreamData() {
+  ~StreamData() {
     EXPECT_FALSE(flush_async_in_progress_)
         << "StreamData destroyed while flush operation is in progress.";
     EXPECT_FALSE(read_async_in_progress_)
@@ -249,7 +251,7 @@ class StreamData final : public base::RefCountedThreadSafe<StreamData> {
     // length
     EXPECT_HRESULT_SUCCEEDED(buffer->put_Length(count));
     for (UINT32 i = 0; i < count; i++) {
-      raw_buffer[i] = data_[position->data + i];
+      UNSAFE_TODO(raw_buffer[i]) = data_[position->data + i];
     }
     position->data += count;
 
@@ -279,7 +281,7 @@ class StreamData final : public base::RefCountedThreadSafe<StreamData> {
 
     // Write the buffer to our inner |data_| and update the position.
     for (UINT32 i = 0; i < length; i++) {
-      data_[position->data + i] = raw_buffer[i];
+      data_[position->data + i] = UNSAFE_TODO(raw_buffer[i]);
     }
     position->data += length;
 
@@ -383,7 +385,6 @@ IFACEMETHODIMP FakeRandomAccessStream::Seek(UINT64 position) {
 IFACEMETHODIMP
 FakeRandomAccessStream::CloneStream(IRandomAccessStream** stream) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP FakeRandomAccessStream::get_CanRead(boolean* value) {

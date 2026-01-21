@@ -7,13 +7,13 @@
 
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/login/auth/auth_status_consumer.h"
 #include "chromeos/ash/components/login/auth/authenticator.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "components/user_manager/user_type.h"
 
 class AccountId;
 
@@ -25,15 +25,6 @@ class StubAuthenticatorBuilder;
 class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
     : public Authenticator {
  public:
-  enum class DataRecoveryStatus {
-    kNone,
-    kRecovered,
-    kRecoveryFailed,
-    kResynced
-  };
-  using DataRecoveryNotifier =
-      base::RepeatingCallback<void(DataRecoveryStatus status)>;
-
   StubAuthenticator(AuthStatusConsumer* consumer,
                     const UserContext& expected_user_context);
 
@@ -41,20 +32,25 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
   StubAuthenticator& operator=(const StubAuthenticator&) = delete;
 
   // Authenticator:
-  void CompleteLogin(std::unique_ptr<UserContext> user_context) override;
-  void AuthenticateToLogin(std::unique_ptr<UserContext> user_context) override;
+  void CompleteLogin(bool ephemeral,
+                     std::unique_ptr<UserContext> user_context) override;
+  void AuthenticateToLogin(bool ephemeral,
+                           std::unique_ptr<UserContext> user_context) override;
   void LoginOffTheRecord() override;
   void LoginAsPublicSession(const UserContext& user_context) override;
-  void AuthenticateToUnlock(std::unique_ptr<UserContext> user_context) override;
-  void LoginAsKioskAccount(const AccountId& app_account_id) override;
-  void LoginAsArcKioskAccount(const AccountId& app_account_id) override;
-  void LoginAsWebKioskAccount(const AccountId& app_account_id) override;
+  void AuthenticateToUnlock(bool ephemeral,
+                            std::unique_ptr<UserContext> user_context) override;
+  void LoginAsKioskAccount(const AccountId& app_account_id,
+                           bool ephemeral) override;
+  void LoginAsWebKioskAccount(const AccountId& app_account_id,
+                              bool ephemeral) override;
+  void LoginAsIwaKioskAccount(const AccountId& app_account_id,
+                              bool ephemeral) override;
+  void LoginAsArcvmKioskAccount(const AccountId& app_account_id,
+                                bool ephemeral) override;
   void LoginAuthenticated(std::unique_ptr<UserContext> user_context) override;
   void OnAuthSuccess() override;
   void OnAuthFailure(const AuthFailure& failure) override;
-  void RecoverEncryptedData(std::unique_ptr<UserContext> user_context,
-                            const std::string& old_password) override;
-  void ResyncEncryptedData(std::unique_ptr<UserContext> user_context) override;
 
   void SetExpectedCredentials(const UserContext& user_context);
 
@@ -64,18 +60,15 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
  private:
   friend class StubAuthenticatorBuilder;
 
-  enum class AuthAction {
-    kAuthSuccess,
-    kAuthFailure,
-    kPasswordChange,
-    kOldEncryption
-  };
+  enum class AuthAction { kAuthSuccess, kAuthFailure, kOldEncryption };
 
   // Returns a copy of expected_user_context_ with a transformed key.
   UserContext ExpectedUserContextWithTransformedKey() const;
 
   void OnPasswordChangeDetected();
   void OnOldEncryptionDetected();
+
+  void LoginAsKioskAccountStub(user_manager::UserType kiosk_type);
 
   UserContext expected_user_context_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
@@ -85,10 +78,6 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
 
   // For password change requests - the old user password.
   std::string old_password_;
-
-  // If set, the callback that will be called as authenticator handles user
-  // encrypted data recovery during password change flow.
-  DataRecoveryNotifier data_recovery_notifier_;
 
   // For requests that detect old encryption -  whether there is an incomplete
   // encryption migration attempt.

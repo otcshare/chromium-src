@@ -14,16 +14,15 @@ bool StructTraits<display::mojom::ScreenInfoDataView, display::ScreenInfo>::
   if (!data.ReadDisplayColorSpaces(&out->display_color_spaces) ||
       !data.ReadRect(&out->rect) ||
       !data.ReadAvailableRect(&out->available_rect) ||
-      !data.ReadSizeOverride(&out->size_override) ||
       !data.ReadLabel(&out->label)) {
     return false;
   }
 
   out->device_scale_factor = data.device_scale_factor();
   out->depth = data.depth();
+  out->handwriting_radius = data.handwriting_radius();
   out->depth_per_component = data.depth_per_component();
   out->is_monochrome = data.is_monochrome();
-  out->display_frequency = data.display_frequency();
   out->orientation_type = data.orientation_type();
   out->orientation_angle = data.orientation_angle();
   out->is_extended = data.is_extended();

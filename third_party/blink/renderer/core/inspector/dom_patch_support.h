@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -62,8 +63,8 @@ class DOMPatchSupport final {
     explicit Digest(Node* node) : node_(node) {}
     void Trace(Visitor*) const;
 
-    String sha1_;
-    String attrs_sha1_;
+    String sha256_;
+    String attrs_sha256_;
     Member<Node> node_;
     HeapVector<Member<Digest>> children_;
   };

@@ -4,19 +4,23 @@
 
 #include "chromeos/printing/ppd_cache.h"
 
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chromeos/printing/printing_constants.h"
@@ -30,8 +34,7 @@ namespace {
 // Return the (full) path to the file we expect to find the given key at.
 base::FilePath FilePathForKey(const base::FilePath& base_dir,
                               const std::string& key) {
-  std::string hashed_key = crypto::SHA256HashString(key);
-  return base_dir.Append(base::HexEncode(hashed_key.data(), hashed_key.size()));
+  return base_dir.Append(base::HexEncode(crypto::SHA256HashString(key)));
 }
 
 // If the cache doesn't already exist, create it.
@@ -68,21 +71,21 @@ PpdCache::FindResult FindImpl(const base::FilePath& cache_dir,
     return result;
   }
 
-  std::vector<char> buf(info.size);
-  if (file.ReadAtCurrentPos(buf.data(), info.size) != info.size)
+  std::vector<uint8_t> buf(static_cast<size_t>(info.size));
+  if (file.ReadAtCurrentPos(buf) != buf.size()) {
     return result;
+  }
 
-  base::StringPiece contents(buf.data(), info.size - crypto::kSHA256Length);
-  base::StringPiece checksum(buf.data() + info.size - crypto::kSHA256Length,
-                             crypto::kSHA256Length);
-  if (crypto::SHA256HashString(contents) != checksum) {
+  const auto [contents, checksum] =
+      base::span(buf).split_at(buf.size() - crypto::kSHA256Length);
+  if (crypto::SHA256Hash(contents) != checksum) {
     LOG(ERROR) << "Bad checksum for cache key " << key;
     return result;
   }
 
   result.success = true;
   result.age = base::Time::Now() - info.last_modified;
-  result.contents = std::string(contents);
+  result.contents = std::string(base::as_string_view(contents));
   return result;
 }
 
@@ -98,28 +101,28 @@ void StoreImpl(const base::FilePath& cache_dir,
   MaybeCreateCache(cache_dir);
   if (contents.size() > kMaxPpdSizeBytes) {
     LOG(ERROR) << "Ignoring attempt to cache large object";
-  } else {
-    auto path = FilePathForKey(cache_dir, key);
-    base::File file(path,
-                    base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-    std::string checksum = crypto::SHA256HashString(contents);
-    if (!file.IsValid() ||
-        file.WriteAtCurrentPos(contents.data(), contents.size()) !=
-            static_cast<int>(contents.size()) ||
-        file.WriteAtCurrentPos(checksum.data(), checksum.size()) !=
-            static_cast<int>(checksum.size())) {
-      LOG(ERROR) << "Failed to create ppd cache file";
-      file.Close();
-      if (!base::DeleteFile(path)) {
-        LOG(ERROR) << "Failed to cleanup failed creation.";
-      }
-    } else {
-      // Successfully wrote the file, adjust the age if requested.
-      if (!age.is_zero()) {
-        base::Time mod_time = base::Time::Now() - age;
-        file.SetTimes(mod_time, mod_time);
-      }
+    return;
+  }
+
+  auto path = FilePathForKey(cache_dir, key);
+  base::File file(path,
+                  base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
+  std::string checksum = crypto::SHA256HashString(contents);
+  if (!file.IsValid() ||
+      !file.WriteAtCurrentPosAndCheck(base::as_byte_span(contents)) ||
+      !file.WriteAtCurrentPosAndCheck(base::as_byte_span(checksum))) {
+    LOG(ERROR) << "Failed to create ppd cache file";
+    file.Close();
+    if (!base::DeleteFile(path)) {
+      LOG(ERROR) << "Failed to cleanup failed creation.";
     }
+    return;
+  }
+
+  // Successfully wrote the file, adjust the age if requested.
+  if (!age.is_zero()) {
+    base::Time mod_time = base::Time::Now() - age;
+    file.SetTimes(mod_time, mod_time);
   }
 }
 

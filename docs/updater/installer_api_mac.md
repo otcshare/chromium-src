@@ -3,7 +3,7 @@ This document describes how macOS software integrates with Chromium Updater for
 software updates.
 
 ## Design
-macOS software updates are delivered as archives (often DMG or ZIP) that contain
+macOS software updates are delivered as CRX archives that contain
 an `.install` executable at the root of the archive. (Typically the archives
 also contain an app bundle, i.e. the new version of the app.)
 
@@ -30,6 +30,8 @@ environment variables:
 
 -   `KS_TICKET_AP`: The ap value of the currently-installed version of the app.
  (Note: "ap" was called "tag" in Keystone.)
+-   `KS_TICKET_SERVER_URL`: The URL used for update-checking with the server,
+ regardless of what was in the Keystone ticket.
 -   `KS_TICKET_XC_PATH`: The absolute path to the installation of the app, based
  on its existence-checker value.
 -   `PATH`: '/bin:/usr/bin:/Path/To/ksadmin'.
@@ -42,6 +44,10 @@ environment variables:
     -   1 if the updater is cross-user.
 -   `UNPACK_DIR`: The absolute path to the unpacked update archive (i.e. the
  parent directory of the install executable.)
+-   `%COMPANY%_USAGE_STATS_ENABLED`: where %COMPANY% is the uppercase company
+    short name from branding.gni.
+    -   0 if the updater does not send usage stats.
+    -   1 if the updater sends usage stats.
 
 ### Command-Line Arguments
 Installer executables are passed the following arguments, in this order:
@@ -63,3 +69,14 @@ If the installers must also change other elements of the installation, such as
 the brand, path, ap, or similar, they may do so by executing ksadmin, for
 example by running
 `ksadmin --register --product-id com.google.MyProductId --tag MyNewAp`.
+
+## Updating with DMGs
+Many products distribute their app to first-time users as a DMG archive. It is
+possible to reuse the same DMG for updates, but this is not recommended: failure
+to mount DMGs is a common update error, and any compression applied to the DMG
+can frustrate the updater's attempts to use transparent differential updates.
+
+Instead, it is better to have your build system output a simple ZIP archive
+for the purposes of update, which can be repackaged into a CRX by release
+tooling.
+

@@ -4,10 +4,9 @@
 
 #import "content/browser/renderer_host/text_input_client_mac.h"
 
-#include "base/bind.h"
-#include "base/memory/singleton.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/no_destructor.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "content/browser/renderer_host/frame_tree.h"
@@ -15,6 +14,7 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/common/features.h"
 #include "ui/base/mojom/attributed_string.mojom.h"
 
 namespace content {
@@ -31,14 +31,15 @@ RenderFrameHostImpl* GetFocusedRenderFrameHostImpl(RenderWidgetHost* widget) {
 }  // namespace
 
 TextInputClientMac::TextInputClientMac()
-    : character_index_(UINT32_MAX), lock_(), condition_(&lock_) {}
+    : condition_(&lock_),
+      wait_timeout_(features::kTextInputClientIPCTimeout.Get()) {}
 
-TextInputClientMac::~TextInputClientMac() {
-}
+TextInputClientMac::~TextInputClientMac() = default;
 
 // static
 TextInputClientMac* TextInputClientMac::GetInstance() {
-  return base::Singleton<TextInputClientMac>::get();
+  static base::NoDestructor<TextInputClientMac> client;
+  return client.get();
 }
 
 void TextInputClientMac::GetStringAtPoint(RenderWidgetHost* rwh,
@@ -57,10 +58,11 @@ void TextInputClientMac::GetStringFromRange(RenderWidgetHost* rwh,
                                             const gfx::Range& range,
                                             GetStringCallback callback) {
   RenderFrameHostImpl* rfhi = GetFocusedRenderFrameHostImpl(rwh);
-  // If it doesn't have a focused frame, it calls |callback| with
-  // an empty string and point.
-  if (!rfhi)
+  // If it doesn't have a focused frame, it calls |callback| with an empty
+  // string and point.
+  if (!rfhi) {
     return std::move(callback).Run(nullptr, gfx::Point());
+  }
 
   rfhi->GetAssociatedLocalFrame()->GetStringForRange(range,
                                                      std::move(callback));
@@ -69,18 +71,17 @@ void TextInputClientMac::GetStringFromRange(RenderWidgetHost* rwh,
 uint32_t TextInputClientMac::GetCharacterIndexAtPoint(RenderWidgetHost* rwh,
                                                       const gfx::Point& point) {
   RenderFrameHostImpl* rfhi = GetFocusedRenderFrameHostImpl(rwh);
-  // If it doesn't have a focused frame, it calls
-  // SetCharacterIndexAndSignal() with index 0.
-  if (!rfhi)
+  // If it doesn't have a focused frame, it calls SetCharacterIndexAndSignal()
+  // with index 0.
+  if (!rfhi) {
     return 0;
+  }
 
   rfhi->GetAssociatedLocalFrame()->GetCharacterIndexAtPoint(point);
 
   base::TimeTicks start = base::TimeTicks::Now();
 
   BeforeRequest();
-
-  // http://crbug.com/121917
   base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
   condition_.TimedWait(wait_timeout_);
   AfterRequest();
@@ -95,16 +96,15 @@ uint32_t TextInputClientMac::GetCharacterIndexAtPoint(RenderWidgetHost* rwh,
 gfx::Rect TextInputClientMac::GetFirstRectForRange(RenderWidgetHost* rwh,
                                                    const gfx::Range& range) {
   RenderFrameHostImpl* rfhi = GetFocusedRenderFrameHostImpl(rwh);
-  if (!rfhi)
+  if (!rfhi) {
     return gfx::Rect();
+  }
 
   rfhi->GetAssociatedLocalFrame()->GetFirstRectForRange(range);
 
   base::TimeTicks start = base::TimeTicks::Now();
 
   BeforeRequest();
-
-  // http://crbug.com/121917
   base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
   condition_.TimedWait(wait_timeout_);
   AfterRequest();

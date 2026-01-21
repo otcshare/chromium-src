@@ -10,12 +10,13 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/mojom/file_system.mojom-forward.h"
-#include "ash/components/arc/session/connection_observer.h"
-#include "ash/components/arc/volume_mounter/arc_volume_mounter_bridge.h"
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom-forward.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
+#include "chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 namespace base {
@@ -63,6 +64,8 @@ class ArcFileSystemWatcherService
                                    base::OnceClosure callback) override;
   void StopWatchingRemovableMedia(const std::string& mount_path) override;
 
+  static void EnsureFactoryBuilt();
+
  private:
   class FileSystemWatcher;
 
@@ -79,8 +82,9 @@ class ArcFileSystemWatcherService
       base::OnceClosure callback);
   void OnFileSystemChanged(const std::vector<std::string>& paths);
 
-  content::BrowserContext* const context_;
-  ArcBridgeService* const arc_bridge_service_;  // Owned by ArcServiceManager.
+  const raw_ptr<content::BrowserContext> context_;
+  const raw_ptr<ArcBridgeService>
+      arc_bridge_service_;  // Owned by ArcServiceManager.
 
   bool watching_file_system_changes_ = false;
 

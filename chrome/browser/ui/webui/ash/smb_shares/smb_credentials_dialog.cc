@@ -6,7 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "ash/webui/common/trusted_types_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_handler.h"
@@ -14,13 +15,15 @@
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "ui/webui/webui_util.h"
 
 namespace ash::smb_dialog {
 namespace {
 
-constexpr int kSmbCredentialsDialogHeight = 230;
+constexpr int kSmbCredentialsDialogHeight = 295;
 
 void AddSmbCredentialsDialogStrings(content::WebUIDataSource* html_source) {
   static const struct {
@@ -73,7 +76,6 @@ SmbCredentialsDialog::SmbCredentialsDialog(const std::string& mount_id,
                                            RequestCallback callback)
     : SystemWebDialogDelegate(GURL(GetDialogId(mount_id)),
                               std::u16string() /* title */),
-      mount_id_(mount_id),
       share_path_(share_path),
       callback_(std::move(callback)) {}
 
@@ -97,19 +99,15 @@ void SmbCredentialsDialog::GetDialogSize(gfx::Size* size) const {
 
 std::string SmbCredentialsDialog::GetDialogArgs() const {
   base::Value::Dict args;
-  args.Set("mid", mount_id_);
   args.Set("path", share_path_);
-  std::string json;
-  base::JSONWriter::Write(args, &json);
-  return json;
+  return base::WriteJson(args).value_or("");
 }
 
 SmbCredentialsDialogUI::SmbCredentialsDialogUI(content::WebUI* web_ui)
     : ui::WebDialogUI(web_ui) {
-  content::WebUIDataSource* source =
-      content::WebUIDataSource::Create(chrome::kChromeUISmbCredentialsHost);
-
-  source->DisableTrustedTypesCSP();
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      Profile::FromWebUI(web_ui), chrome::kChromeUISmbCredentialsHost);
+  ash::EnableTrustedTypesCSP(source);
 
   AddSmbCredentialsDialogStrings(source);
 
@@ -122,8 +120,6 @@ SmbCredentialsDialogUI::SmbCredentialsDialogUI(content::WebUI* web_ui)
       Profile::FromWebUI(web_ui),
       base::BindOnce(&SmbCredentialsDialogUI::OnUpdateCredentials,
                      base::Unretained(this))));
-
-  content::WebUIDataSource::Add(Profile::FromWebUI(web_ui), source);
 }
 
 SmbCredentialsDialogUI::~SmbCredentialsDialogUI() = default;
@@ -140,5 +136,7 @@ void SmbCredentialsDialogUI::OnUpdateCredentials(const std::string& username,
 bool SmbCredentialsDialog::ShouldShowCloseButton() const {
   return false;
 }
+
+WEB_UI_CONTROLLER_TYPE_IMPL(SmbCredentialsDialogUI)
 
 }  // namespace ash::smb_dialog

@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "device/gamepad/gamepad_standard_mappings.h"
+
 #include <stddef.h>
 
+#include <algorithm>
 #include <iterator>
 
-#include "base/ranges/algorithm.h"
 #include "device/gamepad/gamepad_id_list.h"
-#include "device/gamepad/gamepad_standard_mappings.h"
 
 namespace device {
 
@@ -936,6 +937,35 @@ void MapperDjiFpv(const Gamepad& input, Gamepad* mapped) {
   mapped->axes_length = kDjiFpvAxisCount;
 }
 
+void MapperAcer(const Gamepad& input, Gamepad* mapped) {
+  *mapped = input;
+  mapped->buttons_length = BUTTON_INDEX_COUNT - 1;  // no meta
+  mapped->axes_length = AXIS_INDEX_COUNT;
+}
+
+void MapperAcerAppMode(const Gamepad& input, Gamepad* mapped) {
+  *mapped = input;
+  mapped->buttons[BUTTON_INDEX_PRIMARY] = input.buttons[0];
+  mapped->buttons[BUTTON_INDEX_SECONDARY] = input.buttons[1];
+  mapped->buttons[BUTTON_INDEX_TERTIARY] = input.buttons[3];
+  mapped->buttons[BUTTON_INDEX_QUATERNARY] = input.buttons[4];
+  mapped->buttons[BUTTON_INDEX_LEFT_SHOULDER] = input.buttons[6];
+  mapped->buttons[BUTTON_INDEX_RIGHT_SHOULDER] = input.buttons[7];
+  mapped->buttons[BUTTON_INDEX_LEFT_TRIGGER] = input.buttons[8];
+  mapped->buttons[BUTTON_INDEX_RIGHT_TRIGGER] = input.buttons[9];
+  mapped->buttons[BUTTON_INDEX_BACK_SELECT] = input.buttons[10];
+  mapped->buttons[BUTTON_INDEX_START] = input.buttons[11];
+  mapped->buttons[BUTTON_INDEX_LEFT_THUMBSTICK] = input.buttons[13];
+  mapped->buttons[BUTTON_INDEX_RIGHT_THUMBSTICK] = input.buttons[14];
+  mapped->buttons[BUTTON_INDEX_DPAD_UP] = AxisNegativeAsButton(input.axes[7]);
+  mapped->buttons[BUTTON_INDEX_DPAD_DOWN] = AxisPositiveAsButton(input.axes[7]);
+  mapped->buttons[BUTTON_INDEX_DPAD_LEFT] = AxisNegativeAsButton(input.axes[6]);
+  mapped->buttons[BUTTON_INDEX_DPAD_RIGHT] =
+      AxisPositiveAsButton(input.axes[6]);
+  mapped->buttons_length = BUTTON_INDEX_COUNT - 1;  // no meta
+  mapped->axes_length = AXIS_INDEX_COUNT;
+}
+
 constexpr struct MappingData {
   GamepadId gamepad_id;
   GamepadStandardMappingFunction function;
@@ -968,6 +998,14 @@ constexpr struct MappingData {
     {GamepadId::kLogitechProductc219, MapperLogitechDInput},
     // Samsung Gamepad EI-GP20
     {GamepadId::kSamsungElectronicsProducta000, MapperSamsung_EI_GP20},
+    // Acer GC501 X-INPUT mode
+    {GamepadId::kAcerProduct1304, MapperAcer},
+    // Acer Gaming Controller Nitro X-INPUT mode
+    {GamepadId::kAcerProduct1305, MapperAcer},
+    // Acer GC501 APP mode
+    {GamepadId::kAcerProduct1316, MapperAcerAppMode},
+    // Acer Gaming Controller Nitro APP mode
+    {GamepadId::kAcerProduct1317, MapperAcerAppMode},
     // Dualshock 3 / SIXAXIS
     {GamepadId::kSonyProduct0268, MapperDualshock3SixAxis},
     // Playstation Dualshock 4
@@ -978,6 +1016,10 @@ constexpr struct MappingData {
     {GamepadId::kSonyProduct0ba0, MapperDualshock4},
     // DualSense
     {GamepadId::kSonyProduct0ce6, MapperDualSense},
+    // DualSense Edge
+    {GamepadId::kSonyProduct0df2, MapperDualSense},
+    // PlayStation Access
+    {GamepadId::kSonyProduct0e5f, MapperDualSense},
     // Switch Joy-Con L
     {GamepadId::kNintendoProduct2006, MapperSwitchJoyCon},
     // Switch Joy-Con R
@@ -1047,7 +1089,7 @@ constexpr struct MappingData {
 }  // namespace
 
 GamepadStandardMappingFunction GetGamepadStandardMappingFunction(
-    const base::StringPiece product_name,
+    std::string_view product_name,
     const uint16_t vendor_id,
     const uint16_t product_id,
     const uint16_t hid_specification_version,
@@ -1055,8 +1097,8 @@ GamepadStandardMappingFunction GetGamepadStandardMappingFunction(
     GamepadBusType bus_type) {
   GamepadId gamepad_id =
       GamepadIdList::Get().GetGamepadId(product_name, vendor_id, product_id);
-  const auto* find_it = base::ranges::find(kAvailableMappings, gamepad_id,
-                                           &MappingData::gamepad_id);
+  const auto* find_it = std::ranges::find(kAvailableMappings, gamepad_id,
+                                          &MappingData::gamepad_id);
   GamepadStandardMappingFunction mapper =
       (find_it == std::end(kAvailableMappings)) ? nullptr : find_it->function;
 

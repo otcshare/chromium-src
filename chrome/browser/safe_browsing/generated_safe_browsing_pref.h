@@ -9,18 +9,11 @@
 #include "chrome/browser/extensions/api/settings_private/generated_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 namespace safe_browsing {
 
 extern const char kGeneratedSafeBrowsingPref[];
-
-// Must be kept in sync with the SafeBrowsing enum located in
-// chrome/browser/resources/settings/privacy_page/security_page.js.
-enum class SafeBrowsingSetting {
-  ENHANCED,
-  STANDARD,
-  DISABLED,
-};
 
 // A generated preference which represents the effective Safe Browsing setting
 // state (including non-user management) based on the underlying Safe Browsing
@@ -35,8 +28,7 @@ class GeneratedSafeBrowsingPref
   // Generated Preference Interface.
   extensions::settings_private::SetPrefResult SetPref(
       const base::Value* value) override;
-  std::unique_ptr<extensions::api::settings_private::PrefObject> GetPrefObject()
-      const override;
+  extensions::api::settings_private::PrefObject GetPrefObject() const override;
 
   // Fired when underlying Safe Browsing preferences are changed.
   void OnSafeBrowsingPreferencesChanged();
@@ -45,8 +37,8 @@ class GeneratedSafeBrowsingPref
   // Applies the effective management state of Safe Browsing for |profile| to
   // |pref_object|.
   static void ApplySafeBrowsingManagementState(
-      const Profile* profile,
-      extensions::api::settings_private::PrefObject* pref_object);
+      const Profile& profile,
+      extensions::api::settings_private::PrefObject& pref_object);
 
   // Weak reference to the profile this preference is generated for.
   const raw_ptr<Profile> profile_;

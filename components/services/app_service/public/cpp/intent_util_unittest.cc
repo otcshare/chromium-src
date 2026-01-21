@@ -36,8 +36,8 @@ class IntentUtilTest : public testing::Test {
 
   std::vector<apps::IntentFilePtr> CreateIntentFiles(
       const GURL& url,
-      absl::optional<std::string> mime_type,
-      absl::optional<bool> is_directory) {
+      std::optional<std::string> mime_type,
+      std::optional<bool> is_directory) {
     auto file = std::make_unique<apps::IntentFile>(url);
     file->mime_type = mime_type;
     file->is_directory = is_directory;
@@ -218,41 +218,12 @@ TEST_F(IntentUtilTest, GlobMatchType) {
       apps_util::ConditionValueMatches("/acb", condition_value_escape_star));
 }
 
-// TODO(crbug.com/1253250): Remove after migrating to non-mojo AppService.
-TEST_F(IntentUtilTest, FilterMatchLevelMojom) {
-  auto filter_scheme_only = apps_util::CreateSchemeOnlyFilter("http");
-  auto filter_scheme_and_host_only =
-      apps_util::CreateSchemeAndHostOnlyFilter("https", "www.abc.com");
-  auto filter_url = apps_util::CreateIntentFilterForUrlScope(
-      GURL("https:://www.google.com/"));
-  auto filter_empty = apps::mojom::IntentFilter::New();
-
-  EXPECT_EQ(apps_util::GetFilterMatchLevel(filter_url),
-            static_cast<int>(apps::IntentFilterMatchLevel::kScheme) +
-                static_cast<int>(apps::IntentFilterMatchLevel::kHost) +
-                static_cast<int>(apps::IntentFilterMatchLevel::kPath));
-  EXPECT_EQ(apps_util::GetFilterMatchLevel(filter_scheme_and_host_only),
-            static_cast<int>(apps::IntentFilterMatchLevel::kScheme) +
-                static_cast<int>(apps::IntentFilterMatchLevel::kHost));
-  EXPECT_EQ(apps_util::GetFilterMatchLevel(filter_scheme_only),
-            static_cast<int>(apps::IntentFilterMatchLevel::kScheme));
-  EXPECT_EQ(apps_util::GetFilterMatchLevel(filter_empty),
-            static_cast<int>(apps::IntentFilterMatchLevel::kNone));
-
-  EXPECT_TRUE(apps_util::GetFilterMatchLevel(filter_url) >
-              apps_util::GetFilterMatchLevel(filter_scheme_and_host_only));
-  EXPECT_TRUE(apps_util::GetFilterMatchLevel(filter_scheme_and_host_only) >
-              apps_util::GetFilterMatchLevel(filter_scheme_only));
-  EXPECT_TRUE(apps_util::GetFilterMatchLevel(filter_scheme_only) >
-              apps_util::GetFilterMatchLevel(filter_empty));
-}
-
 TEST_F(IntentUtilTest, FilterMatchLevel) {
   auto filter_scheme_only = apps_util::MakeSchemeOnlyFilter("http");
   auto filter_scheme_and_host_only =
       apps_util::MakeSchemeAndHostOnlyFilter("https", "www.abc.com");
   auto filter_url =
-      apps_util::MakeIntentFilterForUrlScope(GURL("https:://www.google.com/"));
+      apps_util::MakeIntentFilterForUrlScope(GURL("https://www.google.com/"));
   auto filter_empty = std::make_unique<apps::IntentFilter>();
 
   EXPECT_TRUE(filter_scheme_only->IsBrowserFilter());
@@ -262,11 +233,11 @@ TEST_F(IntentUtilTest, FilterMatchLevel) {
 
   EXPECT_EQ(filter_url->GetFilterMatchLevel(),
             static_cast<int>(apps::IntentFilterMatchLevel::kScheme) +
-                static_cast<int>(apps::IntentFilterMatchLevel::kHost) +
+                static_cast<int>(apps::IntentFilterMatchLevel::kAuthority) +
                 static_cast<int>(apps::IntentFilterMatchLevel::kPath));
   EXPECT_EQ(filter_scheme_and_host_only->GetFilterMatchLevel(),
             static_cast<int>(apps::IntentFilterMatchLevel::kScheme) +
-                static_cast<int>(apps::IntentFilterMatchLevel::kHost));
+                static_cast<int>(apps::IntentFilterMatchLevel::kAuthority));
   EXPECT_EQ(filter_scheme_only->GetFilterMatchLevel(),
             static_cast<int>(apps::IntentFilterMatchLevel::kScheme));
   EXPECT_EQ(filter_empty->GetFilterMatchLevel(),
@@ -297,6 +268,89 @@ TEST_F(IntentUtilTest, ActionMatch) {
   send_intent_filter->conditions[0]->condition_values[0]->value =
       apps_util::kIntentActionSend;
   EXPECT_FALSE(intent->MatchFilter(send_intent_filter));
+}
+
+TEST_F(IntentUtilTest, AuthorityMatch) {
+  auto MakeAuthorityFilter = [](const std::string& authority,
+                                apps::PatternMatchType match_type =
+                                    apps::PatternMatchType::kLiteral) {
+    auto intent_filter = std::make_unique<apps::IntentFilter>();
+    intent_filter->AddSingleValueCondition(apps::ConditionType::kAuthority,
+                                           authority, match_type);
+    return intent_filter;
+  };
+
+  auto MakeViewIntent = [](std::string_view url_spec) {
+    return std::make_unique<apps::Intent>(apps_util::kIntentActionView,
+                                          GURL(url_spec));
+  };
+
+  std::vector<std::string> explicit_ports{
+      apps_util::AuthorityView::Encode(GURL("https://example.com:1234")),
+      apps_util::AuthorityView::Encode(
+          url::Origin::CreateFromNormalizedTuple("https", "example.com", 1234)),
+  };
+  for (const auto& explicit_port : explicit_ports) {
+    auto authority_filter = MakeAuthorityFilter(explicit_port);
+    EXPECT_TRUE(MakeViewIntent("https://example.com:1234")
+                    ->MatchFilter(authority_filter));
+    EXPECT_FALSE(
+        MakeViewIntent("https://example.com")->MatchFilter(authority_filter));
+    EXPECT_FALSE(MakeViewIntent("https://example.com:5678")
+                     ->MatchFilter(authority_filter));
+    EXPECT_FALSE(MakeViewIntent("https://example.org:1234")
+                     ->MatchFilter(authority_filter));
+  }
+
+  auto implicit_port = MakeAuthorityFilter(
+      apps_util::AuthorityView::Encode(GURL("https://example.com")));
+  EXPECT_TRUE(
+      MakeViewIntent("https://example.com")->MatchFilter(implicit_port));
+  EXPECT_TRUE(
+      MakeViewIntent("https://example.com:443")->MatchFilter(implicit_port));
+  EXPECT_FALSE(
+      MakeViewIntent("https://example.com:80")->MatchFilter(implicit_port));
+  EXPECT_FALSE(
+      MakeViewIntent("https://example.com:1234")->MatchFilter(implicit_port));
+  EXPECT_FALSE(
+      MakeViewIntent("https://example.org")->MatchFilter(implicit_port));
+
+  auto portless_scheme = MakeAuthorityFilter(
+      apps_util::AuthorityView::Encode(GURL("file://test")));
+  EXPECT_TRUE(MakeViewIntent("file://test")->MatchFilter(portless_scheme));
+  EXPECT_FALSE(
+      MakeViewIntent("file://test:1234")->MatchFilter(portless_scheme));
+  EXPECT_FALSE(MakeViewIntent("file://other")->MatchFilter(portless_scheme));
+
+  std::vector<std::string> host_onlys{
+      "example.com",
+      apps_util::AuthorityView::Encode(
+          url::Origin::CreateFromNormalizedTuple("https", "example.com", 0)),
+  };
+  for (const auto& host_only : host_onlys) {
+    auto authority_filter = MakeAuthorityFilter(host_only);
+    EXPECT_TRUE(
+        MakeViewIntent("https://example.com")->MatchFilter(authority_filter));
+    EXPECT_TRUE(MakeViewIntent("https://example.com:80")
+                    ->MatchFilter(authority_filter));
+    EXPECT_TRUE(MakeViewIntent("https://example.com:1234")
+                    ->MatchFilter(authority_filter));
+    EXPECT_FALSE(
+        MakeViewIntent("https://example.org")->MatchFilter(authority_filter));
+  }
+
+  auto host_suffix = MakeAuthorityFilter(
+      apps_util::AuthorityView::Encode(GURL("https://example.com:1234")),
+      apps::PatternMatchType::kSuffix);
+  EXPECT_TRUE(
+      MakeViewIntent("https://example.com:1234")->MatchFilter(host_suffix));
+  EXPECT_TRUE(MakeViewIntent("https://test.example.com:1234")
+                  ->MatchFilter(host_suffix));
+  EXPECT_FALSE(
+      MakeViewIntent("https://example.com.au:1234")->MatchFilter(host_suffix));
+  EXPECT_FALSE(MakeViewIntent("https://test.example.com.au:1234")
+                   ->MatchFilter(host_suffix));
+  EXPECT_FALSE(MakeViewIntent("https://example.com")->MatchFilter(host_suffix));
 }
 
 TEST_F(IntentUtilTest, MimeTypeMatch) {
@@ -595,6 +649,31 @@ TEST_F(IntentUtilTest, FileExtensionMatch) {
   EXPECT_TRUE(intent->MatchFilter(file_filter_dot));
 }
 
+TEST_F(IntentUtilTest, FileExtensionMatchCaseInsensitive) {
+  auto lowercase_filter =
+      apps_util::MakeFileFilterForView("text/csv", "csv", "label");
+  auto uppercase_filter =
+      apps_util::MakeFileFilterForView("text/csv", "CSV", "label");
+
+  auto lowercase_intent = std::make_unique<apps::Intent>(
+      apps_util::kIntentActionView,
+      CreateIntentFiles(test_url("abc.csv"), std::nullopt, false));
+  EXPECT_TRUE(lowercase_intent->MatchFilter(lowercase_filter));
+  EXPECT_TRUE(lowercase_intent->MatchFilter(uppercase_filter));
+
+  auto uppercase_intent = std::make_unique<apps::Intent>(
+      apps_util::kIntentActionView,
+      CreateIntentFiles(test_url("abc.CSV"), std::nullopt, false));
+  EXPECT_TRUE(uppercase_intent->MatchFilter(lowercase_filter));
+  EXPECT_TRUE(uppercase_intent->MatchFilter(uppercase_filter));
+
+  auto mixcase_intent = std::make_unique<apps::Intent>(
+      apps_util::kIntentActionView,
+      CreateIntentFiles(test_url("abc.CsV"), std::nullopt, false));
+  EXPECT_TRUE(mixcase_intent->MatchFilter(lowercase_filter));
+  EXPECT_TRUE(mixcase_intent->MatchFilter(uppercase_filter));
+}
+
 TEST_F(IntentUtilTest, FileURLMatch) {
   std::string mp3_url_pattern = R"(filesystem:chrome-extension://.*/.*\.mp3)";
 
@@ -706,6 +785,42 @@ TEST_F(IntentUtilTest, FileWithTitleText) {
   EXPECT_FALSE(intent->share_text.has_value());
   EXPECT_FALSE(intent->share_title.has_value());
   EXPECT_TRUE(intent->MatchFilter(filter));
+}
+
+TEST_F(IntentUtilTest, FileWithDlpSourceUrls) {
+  const std::string mime_type = "image/jpeg";
+  const GURL file_url = GURL("https://www.google.com/");
+  const std::string dlp_source_url = "https://www.example.com/";
+
+  auto filter = apps_util::MakeIntentFilterForSend(mime_type);
+  const std::vector<GURL> urls{file_url};
+  const std::vector<std::string> mime_types{mime_type};
+  const std::vector<std::string> dlp_source_urls{dlp_source_url};
+
+  auto intent = apps_util::MakeShareIntent(urls, mime_types, dlp_source_urls);
+  ASSERT_EQ(1u, intent->files.size());
+  EXPECT_EQ(file_url, intent->files[0]->url);
+  EXPECT_EQ(dlp_source_url, intent->files[0]->dlp_source_url);
+  EXPECT_TRUE(intent->MatchFilter(filter));
+}
+
+/*
+ * Tests that the MakeShareIntent function overload for making intent for a
+ * single files creates an intent with consistent mime types.
+ */
+TEST_F(IntentUtilTest, ShareSingleIntent) {
+  const std::string mime_type = "image/jpeg";
+  const GURL file_url = GURL("https://www.google.com/");
+  const GURL drive_share_url = GURL("https://drive.google.com/");
+
+  auto intent = apps_util::MakeShareIntent(file_url, mime_type, drive_share_url,
+                                           /* is_directory: */ false);
+
+  ASSERT_EQ(1u, intent->files.size());
+  ASSERT_TRUE(intent->mime_type);
+  EXPECT_EQ(mime_type, intent->mime_type.value());
+  ASSERT_TRUE(intent->files[0]->mime_type);
+  EXPECT_EQ(mime_type, intent->files[0]->mime_type.value());
 }
 
 TEST_F(IntentUtilTest, TextMatch) {

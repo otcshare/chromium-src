@@ -6,15 +6,17 @@
 #define UI_ACCESSIBILITY_PLATFORM_AX_FRAGMENT_ROOT_WIN_H_
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
-#include "ui/accessibility/platform/ax_platform_node_delegate_base.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "ui/accessibility/platform/ax_platform_node_delegate.h"
+#include "ui/accessibility/platform/ax_unique_id.h"
 
-#include <wrl/client.h>
+struct IRawElementProviderSimple;
 
 namespace ui {
 
 class AXFragmentRootDelegateWin;
-class AXFragmentRootPlatformNodeWin;
 
 // UI Automation on Windows requires the root of a multi-element provider to
 // implement IRawElementProviderFragmentRoot. Our internal accessibility trees
@@ -29,7 +31,7 @@ class AXFragmentRootPlatformNodeWin;
 // expose one fragment root per HWND. The class that owns the HWND is expected
 // to own the corresponding AXFragmentRootWin.
 class COMPONENT_EXPORT(AX_PLATFORM) AXFragmentRootWin
-    : public ui::AXPlatformNodeDelegateBase {
+    : public AXPlatformNodeDelegate {
  public:
   AXFragmentRootWin(gfx::AcceleratedWidget widget,
                     AXFragmentRootDelegateWin* delegate);
@@ -58,18 +60,30 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXFragmentRootWin
   // If a child node is available, return its delegate.
   AXPlatformNodeDelegate* GetChildNodeDelegate() const;
 
+  void OnEventListenerAdded(int event_id, base::span<const int> property_ids);
+  void OnEventListenerRemoved(int event_id, base::span<const int> property_ids);
+
+  bool HasEventListenerForEvent(int event_id);
+  bool HasEventListenerForProperty(int property_id);
+
+  // Returns the fragment root's element provider. This provides direct access
+  // to the interface without increasing the instance's refcount. Prefer
+  // `GetNativeViewAccessible()` when returning the provider in response to a
+  // WM_GETOBJECT message, as that performs additional required bookkeeping.
+  IRawElementProviderSimple* GetProvider();
+
  private:
   // AXPlatformNodeDelegate overrides.
   gfx::NativeViewAccessible GetParent() const override;
   size_t GetChildCount() const override;
-  gfx::NativeViewAccessible ChildAtIndex(size_t index) override;
-  gfx::NativeViewAccessible GetNextSibling() override;
-  gfx::NativeViewAccessible GetPreviousSibling() override;
+  gfx::NativeViewAccessible ChildAtIndex(size_t index) const override;
+  gfx::NativeViewAccessible GetNextSibling() const override;
+  gfx::NativeViewAccessible GetPreviousSibling() const override;
   gfx::NativeViewAccessible HitTestSync(int x, int y) const override;
   gfx::NativeViewAccessible GetFocus() const override;
-  const ui::AXUniqueId& GetUniqueId() const override;
+  AXPlatformNodeId GetUniqueId() const override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
-  AXPlatformNode* GetFromTreeIDAndNodeID(const ui::AXTreeID& ax_tree_id,
+  AXPlatformNode* GetFromTreeIDAndNodeID(const AXTreeID& ax_tree_id,
                                          int32_t id) override;
 
   // A fragment root does not correspond to any node in the platform neutral
@@ -83,8 +97,13 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXFragmentRootWin
 
   gfx::AcceleratedWidget widget_;
   const raw_ptr<AXFragmentRootDelegateWin> delegate_;
-  Microsoft::WRL::ComPtr<ui::AXFragmentRootPlatformNodeWin> platform_node_;
-  ui::AXUniqueId unique_id_;
+  const AXUniqueId unique_id_{AXUniqueId::Create()};
+  AXPlatformNode::Pointer platform_node_;
+
+  // Track the listeners count for each event and property ID in maps, so that
+  // we can retrieve it quickly to decide whether to raise a UIA event.
+  absl::flat_hash_map<int, int> event_listener_count_;
+  absl::flat_hash_map<int, int> property_listener_count_;
 };
 
 }  // namespace ui

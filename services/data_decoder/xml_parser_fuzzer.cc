@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "services/data_decoder/xml_parser.h"
@@ -16,8 +16,8 @@
 namespace {
 
 void OnParseXml(base::OnceClosure quit_loop,
-                absl::optional<base::Value> value,
-                const absl::optional<std::string>& error) {
+                std::optional<base::Value> value,
+                const std::optional<std::string>& error) {
   std::move(quit_loop).Run();
 }
 

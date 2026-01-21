@@ -12,11 +12,6 @@ found in the LICENSE file.
     <org.chromium.chrome.browser.sync.settings.SyncErrorCardPreference
         android:key="sync_error_card"
         app:isPreferenceVisible="false"/>
-    <!-- This category is only shown for advanced sync consent flow. -->
-    <PreferenceCategory
-        android:key="syncing_category"
-        android:title="@string/syncing_category"
-        app:isPreferenceVisible="false"/>
 
     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
         android:key="sync_everything"
@@ -31,6 +26,11 @@ found in the LICENSE file.
     <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
         android:key="sync_bookmarks"
         android:title="@string/sync_bookmarks"
+        android:persistent="false"/>
+
+    <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
+        android:key="sync_extensions"
+        android:title="@string/sync_extensions"
         android:persistent="false"/>
 
     <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
@@ -63,6 +63,11 @@ found in the LICENSE file.
         android:title="@string/sync_settings"
         android:persistent="false"/>
 
+    <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
+        android:key="sync_apps"
+        android:title="@string/sync_apps"
+        android:persistent="false"/>
+
     <org.chromium.components.browser_ui.settings.ChromeBasePreference
         android:key="turn_off_sync"
         android:title="@string/sign_out_and_turn_off_sync"
@@ -76,8 +81,8 @@ found in the LICENSE file.
 
     <org.chromium.components.browser_ui.settings.ChromeBasePreference
         android:key="google_activity_controls"
-        android:title="@string/sign_in_google_activity_controls_title"
-        android:summary="@string/sign_in_google_activity_controls_summary"/>
+        android:title="@string/sign_in_personalize_google_services_title"
+        android:summary="@string/sign_in_personalize_google_services_summary"/>
 
     <org.chromium.components.browser_ui.settings.ChromeBasePreference
         android:key="encryption"
@@ -86,17 +91,4 @@ found in the LICENSE file.
     <org.chromium.components.browser_ui.settings.ChromeBasePreference
         android:key="sync_review_data"
         android:title="@string/sync_review_data"/>
-
-    <!-- This category is only shown for advanced sync consent flow. -->
-    <PreferenceCategory
-        android:key="search_and_browse_category"
-        android:title="@string/search_and_browse_category"
-        app:isPreferenceVisible="false">
-
-        <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
-            android:key="url_keyed_anonymized_data"
-            android:title="@string/url_keyed_anonymized_data_title"
-            android:summary="@string/url_keyed_anonymized_data_summary"/>
-    </PreferenceCategory>
-
 </PreferenceScreen>

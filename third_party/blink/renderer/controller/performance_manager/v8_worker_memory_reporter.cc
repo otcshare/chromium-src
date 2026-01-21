@@ -7,7 +7,10 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_count.h"
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/core/timing/measure_memory/measure_memory_controller.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
@@ -24,26 +27,17 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
-namespace WTF {
-template <>
-struct CrossThreadCopier<blink::V8WorkerMemoryReporter::WorkerMemoryUsage>
-    : public CrossThreadCopierPassThrough<
-          blink::V8WorkerMemoryReporter::WorkerMemoryUsage> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-}  // namespace WTF
-
 namespace blink {
 
 const base::TimeDelta V8WorkerMemoryReporter::kTimeout = base::Seconds(60);
 
 namespace {
 
-// TODO(906991): Remove this once PlzDedicatedWorker ships. Until then
-// the browser does not know URLs of dedicated workers, so we pass them
-// together with the measurement result. We limit the max length of the
-// URLs to reduce memory allocations and the traffic between the renderer
-// and the browser processes.
+// TODO(https://crbug.com/400455021): Remove because PlzDedicatedWorker shipped.
+// Before then, the browser did not know URLs of dedicated workers, so we passed
+// them together with the measurement result. We limited the max length of the
+// URLs to reduce memory allocations and the traffic between the renderer and
+// the browser processes.
 constexpr size_t kMaxReportedUrlLength = 2000;
 
 // This delegate is provided to v8::Isolate::MeasureMemory API.
@@ -66,17 +60,14 @@ class WorkerMeasurementDelegate : public v8::MeasureMemoryDelegate {
 
   // v8::MeasureMemoryDelegate overrides.
   bool ShouldMeasure(v8::Local<v8::Context> context) override { return true; }
-  void MeasurementComplete(
-      const std::vector<std::pair<v8::Local<v8::Context>, size_t>>&
-          context_sizes,
-      size_t unattributed_size) override;
+  void MeasurementComplete(v8::MeasureMemoryDelegate::Result result) override;
 
  private:
   void NotifyMeasurementSuccess(
       std::unique_ptr<V8WorkerMemoryReporter::WorkerMemoryUsage> memory_usage);
   void NotifyMeasurementFailure();
   base::WeakPtr<V8WorkerMemoryReporter> worker_memory_reporter_;
-  WorkerThread* worker_thread_;
+  raw_ptr<WorkerThread> worker_thread_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   bool did_notify_ = false;
 };
@@ -91,21 +82,21 @@ WorkerMeasurementDelegate::~WorkerMeasurementDelegate() {
 }
 
 void WorkerMeasurementDelegate::MeasurementComplete(
-    const std::vector<std::pair<v8::Local<v8::Context>, size_t>>& context_sizes,
-    size_t unattributed_size) {
+    v8::MeasureMemoryDelegate::Result result) {
   DCHECK(worker_thread_->IsCurrentThread());
   WorkerOrWorkletGlobalScope* global_scope = worker_thread_->GlobalScope();
   DCHECK(global_scope);
-  DCHECK_LE(context_sizes.size(), 1u);
-  size_t bytes = unattributed_size;
-  for (auto& context_size : context_sizes) {
-    bytes += context_size.second;
+  DCHECK_LE(result.contexts.size(), 1u);
+  DCHECK_LE(result.sizes_in_bytes.size(), 1u);
+  base::ByteSize bytes(result.unattributed_size_in_bytes);
+  for (size_t size : result.sizes_in_bytes) {
+    bytes += base::ByteSize(size);
   }
   auto* worker_global_scope = To<WorkerGlobalScope>(global_scope);
   auto memory_usage =
       std::make_unique<V8WorkerMemoryReporter::WorkerMemoryUsage>();
   memory_usage->token = worker_global_scope->GetWorkerToken();
-  memory_usage->bytes = bytes;
+  memory_usage->memory = bytes;
   if (worker_global_scope->IsUrlValid() &&
       worker_global_scope->Url().GetString().length() < kMaxReportedUrlLength) {
     memory_usage->url = worker_global_scope->Url();
@@ -150,16 +141,16 @@ void V8WorkerMemoryReporter::GetMemoryUsage(ResultCallback callback,
       main_thread_task_runner, worker_memory_reporter->GetWeakPtr(), mode);
   if (worker_count == 0) {
     main_thread_task_runner->PostTask(
-        FROM_HERE, WTF::BindOnce(&V8WorkerMemoryReporter::InvokeCallback,
-                                 std::move(worker_memory_reporter)));
+        FROM_HERE, BindOnce(&V8WorkerMemoryReporter::InvokeCallback,
+                            std::move(worker_memory_reporter)));
     return;
   }
   worker_memory_reporter->SetWorkerCount(worker_count);
   // Transfer the ownership of the instance to the timeout task.
   main_thread_task_runner->PostDelayedTask(
       FROM_HERE,
-      WTF::BindOnce(&V8WorkerMemoryReporter::OnTimeout,
-                    std::move(worker_memory_reporter)),
+      BindOnce(&V8WorkerMemoryReporter::OnTimeout,
+               std::move(worker_memory_reporter)),
       kTimeout);
 }
 

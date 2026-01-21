@@ -1,0 +1,34 @@
+# Copyright 2025 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("features") {
+  sources = [
+    "features.h",
+    "features.mm",
+  ]
+
+  public_deps = [ "//base" ]
+
+  deps = [
+    "//components/application_locale_storage",
+    "//components/feature_engagement/public:feature_constants",
+    "//components/page_content_annotations/core",
+    "//components/prefs",
+    "//components/variations/service",
+    "//ios/chrome/browser/intelligence/actuation:actuation_util",
+    "//ios/chrome/browser/shared/model/application_context",
+    "//ios/chrome/browser/tabs/model/inactive_tabs:features",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "features_unittest.mm" ]
+  deps = [
+    ":features",
+    "//base/test:test_support",
+    "//ios/chrome/browser/intelligence/actuation:actuation_util",
+    "//testing/gtest",
+  ]
+}

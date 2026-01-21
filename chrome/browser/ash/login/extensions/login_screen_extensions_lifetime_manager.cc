@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ash/login/extensions/login_screen_extensions_lifetime_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -19,7 +20,9 @@
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
+#include "content/public/browser/browser_context.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/pref_names.h"
@@ -88,11 +91,13 @@ void LoginScreenExtensionsLifetimeManager::OnProfileManagerDestroying() {
 }
 
 void LoginScreenExtensionsLifetimeManager::OnSessionStateChanged() {
+  TRACE_EVENT0("login",
+               "LoginScreenExtensionsLifetimeManager::OnSessionStateChanged");
   UpdateStateIfProfileReady();
 }
 
 void LoginScreenExtensionsLifetimeManager::OnExtensionLoaded(
-    content::BrowserContext* /*browser_context*/,
+    content::BrowserContext* browser_context,
     const extensions::Extension* extension) {
   if (extension->location() ==
           extensions::mojom::ManifestLocation::kExternalPolicyDownload &&
@@ -105,15 +110,16 @@ void LoginScreenExtensionsLifetimeManager::OnExtensionLoaded(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&LoginScreenExtensionsLifetimeManager::DisableExtension,
-                       weak_factory_.GetWeakPtr(), extension->id()));
+                       weak_factory_.GetWeakPtr(), browser_context,
+                       extension->id()));
   }
 }
 
 bool LoginScreenExtensionsLifetimeManager::
     ShouldEnableLoginScreenPolicyExtensions() const {
   // Note that extensions are intentionally allowed during the intermediate
-  // transition states between the login screen and the user session, since the
-  // user may still see some pieces of the login screen that rely on these
+  // transition states between the login/lock screen and the user session, since
+  // the user may still see some pieces of the login screen that rely on these
   // extensions.
   return session_manager_->session_state() !=
          session_manager::SessionState::ACTIVE;
@@ -160,22 +166,25 @@ LoginScreenExtensionsLifetimeManager::GetPolicyExtensionIds() const {
   const PrefService::Preference* const pref =
       prefs->FindPreference(extensions::pref_names::kInstallForceList);
   if (!pref || !pref->IsManaged() ||
-      pref->GetType() != base::Value::Type::DICTIONARY) {
+      pref->GetType() != base::Value::Type::DICT) {
     return {};
   }
   extensions::ExtensionIdList extension_ids;
-  for (const auto item : pref->GetValue()->DictItems())
+  for (const auto item : pref->GetValue()->GetDict()) {
     extension_ids.push_back(item.first);
+  }
   return extension_ids;
 }
 
 void LoginScreenExtensionsLifetimeManager::DisablePolicyExtensions() {
-  extensions::ExtensionService* const extension_service = GetExtensionService();
-  if (!extension_service)
+  if (!GetExtensionService()) {
     return;
+  }
+  auto* extension_registrar =
+      extensions::ExtensionRegistrar::Get(signin_original_profile_);
   for (const extensions::ExtensionId& extension_id : GetPolicyExtensionIds()) {
-    extension_service->DisableExtension(
-        extension_id, extensions::disable_reason::DISABLE_BLOCKED_BY_POLICY);
+    extension_registrar->DisableExtension(
+        extension_id, {extensions::disable_reason::DISABLE_BLOCKED_BY_POLICY});
   }
 }
 
@@ -196,12 +205,15 @@ void LoginScreenExtensionsLifetimeManager::EnablePolicyExtensions() {
 }
 
 void LoginScreenExtensionsLifetimeManager::DisableExtension(
+    content::BrowserContext* browser_context,
     const extensions::ExtensionId& extension_id) {
-  extensions::ExtensionService* const extension_service = GetExtensionService();
-  if (!extension_service)
+  if (!GetExtensionService()) {
     return;
-  extension_service->DisableExtension(
-      extension_id, extensions::disable_reason::DISABLE_BLOCKED_BY_POLICY);
+  }
+  auto* extension_registrar =
+      extensions::ExtensionRegistrar::Get(browser_context);
+  extension_registrar->DisableExtension(
+      extension_id, {extensions::disable_reason::DISABLE_BLOCKED_BY_POLICY});
 }
 
 }  // namespace ash

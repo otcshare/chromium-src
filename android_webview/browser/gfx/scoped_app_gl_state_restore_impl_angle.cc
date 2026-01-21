@@ -7,7 +7,8 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
+#include "base/logging.h"
 #include "base/native_library.h"
 #include "base/threading/thread_restrictions.h"
 #include "ui/gl/gl_context.h"
@@ -24,6 +25,7 @@ typedef EGLContext(EGLAPIENTRYP PFNEGLGETCURRENTCONTEXTPROC)(void);
 PFNEGLGETPROCADDRESSPROC eglGetProcAddressFn = nullptr;
 PFNGLGETBOOLEANVPROC glGetBooleanvFn = nullptr;
 PFNGLGETINTEGERVPROC glGetIntegervFn = nullptr;
+PFNGLGETERRORPROC glGetErrorFn = nullptr;
 
 #if DCHECK_IS_ON()
 PFNEGLGETCURRENTCONTEXTPROC eglGetCurrentContextFn = nullptr;
@@ -52,29 +54,47 @@ void InitializeGLBindings() {
 
   AssignProc(glGetBooleanvFn, "glGetBooleanv");
   AssignProc(glGetIntegervFn, "glGetIntegerv");
+  AssignProc(glGetErrorFn, "glGetError");
 
 #if DCHECK_IS_ON()
   AssignProc(eglGetCurrentContextFn, "eglGetCurrentContext");
 #endif
 }
 
+bool ClearGLErrors(bool warn, const char* msg) {
+  bool no_error = true;
+  GLenum error;
+#if DCHECK_IS_ON()
+  DCHECK(eglGetCurrentContextFn());
+#endif
+  while ((error = glGetErrorFn()) != GL_NO_ERROR) {
+    DLOG_IF(WARNING, warn) << error << " " << msg;
+    no_error = false;
+  }
+
+  return no_error;
+}
+
 }  // namespace os
+
 }  // namespace
 
 namespace internal {
 
 ScopedAppGLStateRestoreImplAngle::ScopedAppGLStateRestoreImplAngle(
-    ScopedAppGLStateRestore::CallMode mode,
-    bool save_restore) {
+    ScopedAppGLStateRestore::CallMode mode) {
   os::InitializeGLBindings();
+
+  os::ClearGLErrors(true, "Incoming GLError");
 
 #if DCHECK_IS_ON()
   egl_context_ = os::eglGetCurrentContextFn();
   DCHECK_NE(egl_context_, EGL_NO_CONTEXT) << " no native context is current.";
 #endif
 
-  if (base::android::BuildInfo::GetInstance()->sdk_int() ==
-      base::android::SDK_VERSION_S) {
+  if (mode == ScopedAppGLStateRestore::MODE_DRAW &&
+      base::android::android_info::sdk_int() ==
+          base::android::android_info::SDK_VERSION_S) {
     GLint red_bits = 0;
     GLint green_bits = 0;
     GLint blue_bits = 0;
@@ -120,18 +140,17 @@ ScopedAppGLStateRestoreImplAngle::ScopedAppGLStateRestoreImplAngle(
   // always 0.
   framebuffer_binding_ext_ = 0;
 
-  // There should be no gl::GLContext current.
-  DCHECK(!gl::GLContext::GetCurrent());
+  os::ClearGLErrors(false, nullptr);
 }
 
 ScopedAppGLStateRestoreImplAngle::~ScopedAppGLStateRestoreImplAngle() {
-  // There should be no gl::GLContext current.
-  DCHECK(!gl::GLContext::GetCurrent());
-
 #if DCHECK_IS_ON()
   DCHECK_EQ(egl_context_, os::eglGetCurrentContextFn())
       << " the native context is changed.";
 #endif
+
+  // Do not leak GLError out of chromium.
+  os::ClearGLErrors(true, "Chromium GLError");
 }
 
 }  // namespace internal

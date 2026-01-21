@@ -7,35 +7,29 @@ package org.chromium.chrome.browser.suggestions.tile;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.Drawable;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.suggestions.OfflinableSuggestion;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
 import org.chromium.components.favicon.IconType;
 import org.chromium.url.GURL;
 
-/**
- * Holds the details to populate a site suggestion tile.
- */
+/** Holds the details to populate a site suggestion tile. */
+@NullMarked
 public class Tile implements OfflinableSuggestion {
     private final SiteSuggestion mSiteData;
 
     private final int mIndex;
 
-    @TileVisualType
-    private int mType = TileVisualType.NONE;
+    private @TileVisualType int mType = TileVisualType.NONE;
 
-    @IconType
-    private int mIconType = IconType.INVALID;
+    private @IconType int mIconType = IconType.INVALID;
 
-    @Nullable
-    private Drawable mIcon;
+    private @Nullable Drawable mIcon;
 
-    @Nullable
-    private ColorStateList mIconTint;
+    private @Nullable ColorStateList mIconTint;
 
-    @Nullable
-    private Long mOfflinePageOfflineId;
+    private @Nullable Long mOfflinePageOfflineId;
 
     /**
      * @param suggestion The site data we want to populate the tile with.
@@ -60,9 +54,8 @@ public class Tile implements OfflinableSuggestion {
         mOfflinePageOfflineId = offlineId;
     }
 
-    @Nullable
     @Override
-    public Long getOfflinePageOfflineId() {
+    public @Nullable Long getOfflinePageOfflineId() {
         return mOfflinePageOfflineId;
     }
 
@@ -96,25 +89,22 @@ public class Tile implements OfflinableSuggestion {
      * @return The source of this tile's title. Used for metrics tracking. Valid values are listed
      * in {@code TileTitleSource}.
      */
-    @TileTitleSource
-    public int getTitleSource() {
+    public @TileTitleSource int getTitleSource() {
         return mSiteData.titleSource;
     }
 
     /**
-     * @return The source of this tile. Used for metrics tracking. Valid values are listed in
-     * {@code TileSource}.
+     * @return The source of this tile. Used for metrics tracking. Valid values are listed in {@code
+     *     TileSource}.
      */
-    @TileSource
-    public int getSource() {
+    public @TileSource.EnumType int getSource() {
         return mSiteData.source;
     }
 
     /**
      * @return The visual type of this tile. Valid values are listed in {@link TileVisualType}.
      */
-    @TileVisualType
-    public int getType() {
+    public @TileVisualType int getType() {
         return mType;
     }
 
@@ -129,14 +119,11 @@ public class Tile implements OfflinableSuggestion {
     /**
      * @return The icon type of this tile. Valid values are listed in {@link IconType}.
      */
-    @IconType
-    public int getIconType() {
+    public @IconType int getIconType() {
         return mIconType;
     }
 
-    /**
-     * Sets the icon type of this tile. Valid values are listed in {@link IconType}.
-     */
+    /** Sets the icon type of this tile. Valid values are listed in {@link IconType}. */
     public void setIconType(@IconType int iconType) {
         mIconType = iconType;
     }
@@ -144,31 +131,25 @@ public class Tile implements OfflinableSuggestion {
     /**
      * @return The icon, may be null.
      */
-    @Nullable
-    public Drawable getIcon() {
+    public @Nullable Drawable getIcon() {
         return mIcon;
     }
 
-    /**
-     * Updates the icon drawable.
-     */
+    /** Updates the icon drawable. */
     public void setIcon(@Nullable Drawable icon) {
         mIcon = icon;
     }
 
-    /**
-     * Updates the icon tint color.
-     */
+    /** Updates the icon tint color. */
     public void setIconTint(@Nullable ColorStateList iconTint) {
         mIconTint = iconTint;
     }
 
-    public ColorStateList getIconTint() {
+    public @Nullable ColorStateList getIconTint() {
         return mIconTint;
     }
 
-    @TileSectionType
-    public int getSectionType() {
+    public @TileSectionType int getSectionType() {
         return mSiteData.sectionType;
     }
 }

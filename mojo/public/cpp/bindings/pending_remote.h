@@ -5,8 +5,8 @@
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_PENDING_REMOTE_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_PENDING_REMOTE_H_
 
+#include <concepts>
 #include <cstdint>
-#include <type_traits>
 #include <utility>
 
 #include "base/check.h"
@@ -18,6 +18,7 @@
 #include "mojo/public/cpp/bindings/lib/pending_remote_state.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
@@ -64,20 +65,17 @@ class PendingRemote {
   PendingRemote(ScopedMessagePipeHandle pipe, uint32_t version)
       : state_(std::move(pipe), version) {}
 
-  // Disabled on NaCl since it crashes old version of clang.
-#if !BUILDFLAG(IS_NACL)
   // Move conversion operator for custom remote types. Only participates in
   // overload resolution if a typesafe conversion is supported.
-  template <typename T,
-            std::enable_if_t<std::is_same<
-                PendingRemote<Interface>,
-                std::invoke_result_t<decltype(&PendingRemoteConverter<
-                                              T>::template To<Interface>),
-                                     T&&>>::value>* = nullptr>
-  PendingRemote(T&& other)
+  template <typename T>
+    requires requires(T t) {
+      {
+        PendingRemoteConverter<T>::template To<Interface>(std::move(t))
+      } -> std::same_as<PendingRemote>;
+    }
+  PendingRemote(T other)
       : PendingRemote(PendingRemoteConverter<T>::template To<Interface>(
             std::move(other))) {}
-#endif  // !BUILDFLAG(IS_NACL)
 
   PendingRemote(const PendingRemote&) = delete;
   PendingRemote& operator=(const PendingRemote&) = delete;
@@ -168,6 +166,9 @@ template <typename Interface>
 PendingReceiver<Interface>
 PendingRemote<Interface>::InitWithNewPipeAndPassReceiver() {
   DCHECK(!is_valid()) << "PendingReceiver already has a remote";
+  if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+    return PendingReceiver<Interface>();
+  }
   MessagePipe pipe;
   state_.pipe = std::move(pipe.handle0);
   return PendingReceiver<Interface>(std::move(pipe.handle1));

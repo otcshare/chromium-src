@@ -4,11 +4,13 @@
 
 #include "content/web_test/browser/web_test_shell_platform_delegate.h"
 
-#include "base/containers/contains.h"
-#import "base/mac/foundation_util.h"
+#import "base/apple/foundation_util.h"
+#include "content/browser/renderer_host/render_frame_host_delegate.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/shell/browser/shell.h"
 
 namespace content {
@@ -39,7 +41,7 @@ void WebTestShellPlatformDelegate::CreatePlatformWindow(
     return;
   }
 
-  DCHECK(!base::Contains(web_test_shell_data_map_, shell));
+  DCHECK(!web_test_shell_data_map_.contains(shell));
   WebTestShellData& shell_data = web_test_shell_data_map_[shell];
 
   shell_data.initial_size = initial_size;
@@ -50,7 +52,6 @@ gfx::NativeWindow WebTestShellPlatformDelegate::GetNativeWindow(Shell* shell) {
     return ShellPlatformDelegate::GetNativeWindow(shell);
 
   NOTREACHED();
-  return {};
 }
 
 void WebTestShellPlatformDelegate::CleanUp(Shell* shell) {
@@ -59,7 +60,7 @@ void WebTestShellPlatformDelegate::CleanUp(Shell* shell) {
     return;
   }
 
-  DCHECK(base::Contains(web_test_shell_data_map_, shell));
+  DCHECK(web_test_shell_data_map_.contains(shell));
   web_test_shell_data_map_.erase(shell);
   if (shell == activated_headless_shell_)
     activated_headless_shell_ = nullptr;
@@ -97,13 +98,15 @@ void WebTestShellPlatformDelegate::SetTitle(Shell* shell,
   }
 }
 
-void WebTestShellPlatformDelegate::MainFrameCreated(Shell* shell) {
+void WebTestShellPlatformDelegate::MainFrameCreated(
+    Shell* shell,
+    RenderFrameHost* main_frame) {
   if (!IsHeadless()) {
-    ShellPlatformDelegate::MainFrameCreated(shell);
+    ShellPlatformDelegate::MainFrameCreated(shell, main_frame);
     return;
   }
 
-  DCHECK(base::Contains(web_test_shell_data_map_, shell));
+  DCHECK(web_test_shell_data_map_.contains(shell));
   WebTestShellData& shell_data = web_test_shell_data_map_[shell];
 
   // In mac headless mode, the OS view for the WebContents is not attached to a
@@ -119,8 +122,24 @@ void WebTestShellPlatformDelegate::MainFrameCreated(Shell* shell) {
   // We use the signal that the `blink::WebView` has been created in the
   // renderer as a proxy for knowing when the top level RenderWidgetHostView is
   // created, since they are created at the same time.
-  DCHECK(shell->web_contents()->GetPrimaryMainFrame()->GetView());
   ResizeWebContent(shell, shell_data.initial_size);
+
+  // The above code changes the widget screen rects of the currently navigated
+  // RenderWidgetHostView, but not the RenderWidgetHostView of the new main
+  // frame. If there is no render frame swap (i.e. RenderDocument is disabled),
+  // then this doesn't matter. However, if there is a swap, then the new RWHV
+  // will also need to have its screen rects updated so they are not left at
+  // 0x0. Popups are left alone since there are some tests that modify the
+  // window size mid-navigation, and this code block can race with that and undo
+  // the resize.
+  if (!RenderFrameHostImpl::From(main_frame)->delegate()->IsPopup()) {
+    DCHECK(main_frame->GetView());
+    auto* rwhv_mac =
+        static_cast<RenderWidgetHostViewMac*>(main_frame->GetView());
+    if (rwhv_mac) {
+      rwhv_mac->SetWindowFrameInScreen(gfx::Rect(shell_data.initial_size));
+    }
+  }
 }
 
 bool WebTestShellPlatformDelegate::DestroyShell(Shell* shell) {
@@ -138,13 +157,13 @@ void WebTestShellPlatformDelegate::ResizeWebContent(
   }
 
   NSView* web_view = shell->web_contents()->GetNativeView().GetNativeNSView();
-  NSRect frame = NSMakeRect(0, 0, content_size.width(), content_size.height());
-  [web_view setFrame:frame];
+  web_view.frame =
+      NSMakeRect(0, 0, content_size.width(), content_size.height());
 
   // The above code changes the RenderWidgetHostView's size, but does not change
-  // the widget's screen rects, since the RenerWidgetHostView is not attached to
-  // a window in headless mode. So this call causes them to be updated so they
-  // are not left as 0x0.
+  // the widget's screen rects, since the RenderWidgetHostView is not attached
+  // to a window in headless mode. So this call causes them to be updated so
+  // they are not left as 0x0.
   auto* rwhv_mac = shell->web_contents()->GetPrimaryMainFrame()->GetView();
   if (rwhv_mac)
     rwhv_mac->SetWindowFrameInScreen(gfx::Rect(content_size));
@@ -200,7 +219,7 @@ void WebTestShellPlatformDelegate::DidNavigatePrimaryMainFramePostCommit(
 bool WebTestShellPlatformDelegate::HandleKeyboardEvent(
     Shell* shell,
     WebContents* source,
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (IsHeadless())
     return false;
   return ShellPlatformDelegate::HandleKeyboardEvent(shell, source, event);

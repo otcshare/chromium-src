@@ -4,11 +4,7 @@
 
 #include "chrome/browser/ash/arc/idle_manager/arc_cpu_throttle_observer.h"
 
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
-#include "ash/components/arc/power/arc_power_bridge.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/fake_arc_session.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/arc/idle_manager/arc_throttle_test_observer.h"
 #include "chrome/browser/ash/arc/instance_throttle/arc_instance_throttle.h"
@@ -16,10 +12,18 @@
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
+#include "chromeos/ash/experiences/arc/power/arc_power_bridge.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/display/test/test_screen.h"
 
 namespace arc {
 
@@ -36,10 +40,13 @@ class ArcCpuThrottleObserverTest : public testing::Test {
   void SetUp() override {
     chromeos::PowerManagerClient::InitializeFake();
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
+    ash::DlcserviceClient::InitializeFake();
     service_manager_ = std::make_unique<ArcServiceManager>();
-    session_manager_ =
-        CreateTestArcSessionManager(std::make_unique<ArcSessionRunner>(
-            base::BindRepeating(FakeArcSession::Create)));
+    arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
+    session_manager_ = CreateTestArcSessionManager(
+        std::make_unique<ArcSessionRunner>(
+            base::BindRepeating(FakeArcSession::Create)),
+        arc_dlc_installer_.get());
     testing_profile_ = std::make_unique<TestingProfile>();
 
     StabilityMetricsManager::Initialize(&local_state_);
@@ -49,7 +56,7 @@ class ArcCpuThrottleObserverTest : public testing::Test {
     arc_metrics_service_ = ArcMetricsService::GetForBrowserContextForTesting(
         testing_profile_.get());
     arc_metrics_service_->SetHistogramNamerCallback(base::BindLambdaForTesting(
-        [](const std::string&) -> std::string { return ""; }));
+        [](const std::string& s) -> std::string { return s; }));
 
     test_instance_throttle_ =
         ArcInstanceThrottle::GetForBrowserContextForTesting(
@@ -61,7 +68,9 @@ class ArcCpuThrottleObserverTest : public testing::Test {
     arc::StabilityMetricsManager::Shutdown();
     testing_profile_.reset();
     session_manager_.reset();
+    arc_dlc_installer_.reset();
     service_manager_.reset();
+    ash::DlcserviceClient::Shutdown();
     chromeos::PowerManagerClient::Shutdown();
   }
 
@@ -72,13 +81,16 @@ class ArcCpuThrottleObserverTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
+  display::test::TestScreen test_screen_{/*create_display=*/true,
+                                         /*register_screen=*/true};
   TestingPrefServiceSimple local_state_;
-  ArcMetricsService* arc_metrics_service_ = nullptr;
+  raw_ptr<ArcMetricsService, DanglingUntriaged> arc_metrics_service_ = nullptr;
   ArcCpuThrottleObserver cpu_throttle_observer_;
   std::unique_ptr<ArcServiceManager> service_manager_;
+  std::unique_ptr<ArcDlcInstaller> arc_dlc_installer_;
   std::unique_ptr<ArcSessionManager> session_manager_;
   std::unique_ptr<TestingProfile> testing_profile_;
-  ArcInstanceThrottle* test_instance_throttle_;
+  raw_ptr<ArcInstanceThrottle, DanglingUntriaged> test_instance_throttle_;
 };
 
 TEST_F(ArcCpuThrottleObserverTest, TestConstructDestruct) {}
@@ -93,7 +105,7 @@ TEST_F(ArcCpuThrottleObserverTest, TestStatusChanges) {
                                      base::Unretained(&test_observer)));
   EXPECT_TRUE(throttle()->HasServiceObserverForTesting(observer()));
 
-  EXPECT_EQ(0, test_observer.count());
+  EXPECT_EQ(1, test_observer.count());
   EXPECT_EQ(0, test_observer.active_count());
   EXPECT_EQ(0, test_observer.enforced_count());
 
@@ -101,14 +113,14 @@ TEST_F(ArcCpuThrottleObserverTest, TestStatusChanges) {
   EXPECT_FALSE(observer()->enforced());
 
   observer()->OnThrottle(false);  // Not throttled.
-  EXPECT_EQ(1, test_observer.count());
+  EXPECT_EQ(2, test_observer.count());
   EXPECT_EQ(1, test_observer.active_count());
   EXPECT_EQ(0, test_observer.enforced_count());
   EXPECT_TRUE(observer()->active());
   EXPECT_FALSE(observer()->enforced());
 
   observer()->OnThrottle(true);  // Yes, throttled.
-  EXPECT_EQ(2, test_observer.count());
+  EXPECT_EQ(3, test_observer.count());
   EXPECT_EQ(1, test_observer.active_count());
   EXPECT_EQ(0, test_observer.enforced_count());
   EXPECT_FALSE(observer()->active());

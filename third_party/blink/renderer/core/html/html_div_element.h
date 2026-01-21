@@ -34,13 +34,11 @@ class CORE_EXPORT HTMLDivElement : public HTMLElement {
  public:
   explicit HTMLDivElement(Document&);
 
-  bool IsSupportedByRegionCapture() const override { return true; }
-
  private:
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 };
 
 }  // namespace blink

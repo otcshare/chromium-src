@@ -7,12 +7,12 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_math.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chrome_pdf {
 
@@ -104,17 +104,48 @@ template <class AdapterType,
           class StringType,
           typename BufferType,
           typename ReturnType>
-absl::optional<StringType> CallPDFiumStringBufferApiAndReturnOptional(
+std::optional<StringType> CallPDFiumStringBufferApiAndReturnOptional(
     base::RepeatingCallback<ReturnType(BufferType*, ReturnType)> api,
     bool check_expected_size) {
   ReturnType expected_size = api.Run(nullptr, 0);
   if (expected_size == 0)
-    return absl::nullopt;
+    return std::nullopt;
 
   StringType str;
   AdapterType api_string_adapter(&str, expected_size, check_expected_size);
   auto* data = reinterpret_cast<BufferType*>(api_string_adapter.GetData());
   api_string_adapter.Close(api.Run(data, expected_size));
+  return str;
+}
+
+// Variation of helper function for API endpoints where success of the call is
+// returned as a boolean and the length of the necessary buffer is returned in
+// an argument.
+template <class AdapterType,
+          class StringType,
+          typename BufferType,
+          typename ReturnType>
+std::optional<StringType> CallPDFiumStringBufferApiAndReturnOptional(
+    base::RepeatingCallback<
+        ReturnType(BufferType*, unsigned long, unsigned long*)> api,
+    bool check_expected_size) {
+  unsigned long expected_size;
+  ReturnType success = api.Run(nullptr, 0, &expected_size);
+  if (!success || expected_size == 0) {
+    return std::nullopt;
+  }
+
+  StringType str;
+  AdapterType api_string_adapter(&str, expected_size, check_expected_size);
+  auto* data = reinterpret_cast<BufferType*>(api_string_adapter.GetData());
+
+  unsigned long actual_size = 0;
+  success = api.Run(data, expected_size, &actual_size);
+  if (!success) {
+    return std::nullopt;
+  }
+
+  api_string_adapter.Close(actual_size);
   return str;
 }
 
@@ -125,7 +156,7 @@ template <class AdapterType,
 StringType CallPDFiumStringBufferApi(
     base::RepeatingCallback<ReturnType(BufferType*, ReturnType)> api,
     bool check_expected_size) {
-  absl::optional<StringType> result =
+  std::optional<StringType> result =
       CallPDFiumStringBufferApiAndReturnOptional<AdapterType, StringType>(
           api, check_expected_size);
   return result.value_or(StringType());
@@ -147,7 +178,7 @@ std::u16string CallPDFiumWideStringBufferApi(
 // Variant of CallPDFiumWideStringBufferApi() that distinguishes between API
 // call failures and empty string return values.
 template <typename BufferType>
-absl::optional<std::u16string> CallPDFiumWideStringBufferApiAndReturnOptional(
+std::optional<std::u16string> CallPDFiumWideStringBufferApiAndReturnOptional(
     base::RepeatingCallback<unsigned long(BufferType*, unsigned long)> api,
     bool check_expected_size) {
   using adapter_type = internal::PDFiumAPIStringBufferSizeInBytesAdapter;
@@ -165,6 +196,36 @@ std::string CallPDFiumStringBufferApi(
   using adapter_type = internal::PDFiumAPIStringBufferAdapter<std::string>;
   return internal::CallPDFiumStringBufferApi<adapter_type, std::string>(
       api, check_expected_size);
+}
+
+// Helper function to call PDFium APIs where the output buffer is expected to
+// hold UTF-16 data, the output buffer length is specified in bytes, and the
+// success of the call is returned as a boolean value, such as
+// FPDF_StructElement_Attr_GetStringValue.
+template <typename BufferType, typename ReturnType>
+std::optional<std::u16string> CallPDFiumWideStringBufferApiAndReturnOptional(
+    base::RepeatingCallback<
+        ReturnType(BufferType*, unsigned long, unsigned long*)> api,
+    bool check_expected_size) {
+  using adapter_type = internal::PDFiumAPIStringBufferSizeInBytesAdapter;
+  return internal::CallPDFiumStringBufferApiAndReturnOptional<
+      adapter_type, std::u16string, BufferType, ReturnType>(
+      api, check_expected_size);
+}
+
+// Helper function to call PDFium APIs where the output buffer is expected to
+// hold UTF-8 data, the output buffer length is specified in characters, and the
+// success of the call is returned as a boolean value, such as
+// FPDF_StructElement_Attr_GetName.
+template <typename BufferType, typename ReturnType>
+std::optional<std::string> CallPDFiumStringBufferApiAndReturnOptional(
+    base::RepeatingCallback<
+        ReturnType(BufferType*, unsigned long, unsigned long*)> api,
+    bool check_expected_size) {
+  using adapter_type = internal::PDFiumAPIStringBufferAdapter<std::string>;
+  return internal::CallPDFiumStringBufferApiAndReturnOptional<
+      adapter_type, std::string, BufferType, ReturnType>(api,
+                                                         check_expected_size);
 }
 
 // Expose internal::PDFiumAPIStringBufferAdapter for special cases that cannot

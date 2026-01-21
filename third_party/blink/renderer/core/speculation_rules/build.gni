@@ -3,10 +3,14 @@
 # found in the LICENSE file.
 
 blink_core_sources_speculation_rules = [
+  "auto_speculation_rules_config.cc",
+  "auto_speculation_rules_config.h",
   "document_rule_predicate.cc",
   "document_rule_predicate.h",
   "document_speculation_rules.cc",
   "document_speculation_rules.h",
+  "speculation_candidate.cc",
+  "speculation_candidate.h",
   "speculation_rule.cc",
   "speculation_rule.h",
   "speculation_rule_set.cc",
@@ -18,10 +22,10 @@ blink_core_sources_speculation_rules = [
 ]
 
 blink_core_tests_speculation_rules = [
-  "no_vary_search_origin_trial_test.cc",
+  "auto_speculation_rules_config_test.cc",
   "speculation_rule_set_test.cc",
   "speculation_rules_header_test.cc",
-  "speculation_rules_origin_trial_test.cc",
+  "document_speculation_rules_test.cc",
   "stub_speculation_host.cc",
   "stub_speculation_host.h",
 ]

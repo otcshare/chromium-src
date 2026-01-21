@@ -12,17 +12,17 @@ class TabBrowserControlsConstraintsHelper {
  public:
   TabBrowserControlsConstraintsHelper(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
+      const base::android::JavaRef<jobject>& obj);
   ~TabBrowserControlsConstraintsHelper();
 
-  void UpdateState(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   const base::android::JavaParamRef<jobject>& jweb_contents,
-                   jint constraints,
-                   jint current,
-                   jboolean animate);
-  void OnDestroyed(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj);
+  void UpdateState(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& jweb_contents,
+      int32_t constraints,
+      int32_t current,
+      bool animate,
+      const base::android::JavaRef<jobject>& joffset_tag_modifications);
+  void OnDestroyed(JNIEnv* env);
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> jobj_;

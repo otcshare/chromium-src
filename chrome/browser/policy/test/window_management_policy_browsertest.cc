@@ -17,6 +17,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -24,26 +25,48 @@ namespace policy {
 
 namespace {
 
-constexpr char kGetScreens[] = R"(
+constexpr char kGetScreensScript[] = R"(
   (async () => {
     try {
       const screenDetails = await self.getScreenDetails();
     } catch {
       return 'error';
     }
-    return (await navigator.permissions.query({name:'window-placement'})).state;
+    try {
+      return (await navigator.permissions.query({name:'window-management'}))
+              .state;
+    } catch {
+      return "permission_error";
+    }
   })();
 )";
 
-constexpr char kCheckPermission[] = R"(
+constexpr char kCheckPermissionScript[] = R"(
   (async () => {
-    return (await navigator.permissions.query({name:'window-placement'})).state;
+    try {
+      return (await navigator.permissions.query({name:'window-management'}))
+              .state;
+     } catch {
+      return 'permission_error';
+    }
   })();
 )";
 
-class PolicyTestWindowManagement : public PolicyTest {};
+struct PolicySet {
+  const char* default_setting;
+  const char* allowed_for_urls_setting;
+  const char* blocked_for_urls_setting;
+};
 
-IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, DefaultSetting) {
+class PolicyTestWindowManagement
+    : public PolicyTest,
+      public testing::WithParamInterface<PolicySet> {
+ public:
+ protected:
+  const PolicySet& PolicySet() const { return GetParam(); }
+};
+
+IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, DefaultSetting) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -57,10 +80,11 @@ IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, DefaultSetting) {
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetContentSetting(
                 url, url, ContentSettingsType::WINDOW_MANAGEMENT));
-  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermission));
+
+  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermissionScript));
 
   PolicyMap policies;
-  SetPolicy(&policies, key::kDefaultWindowPlacementSetting, base::Value(2));
+  SetPolicy(&policies, PolicySet().default_setting, base::Value(2));
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
@@ -69,10 +93,11 @@ IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, DefaultSetting) {
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             host_content_settings_map->GetContentSetting(
                 url, url, ContentSettingsType::WINDOW_MANAGEMENT));
-  EXPECT_EQ("denied", EvalJs(tab, kCheckPermission));
-  EXPECT_EQ("error", EvalJs(tab, kGetScreens));
 
-  SetPolicy(&policies, key::kDefaultWindowPlacementSetting, base::Value(3));
+  EXPECT_EQ("denied", EvalJs(tab, kCheckPermissionScript));
+  EXPECT_EQ("error", EvalJs(tab, kGetScreensScript));
+
+  SetPolicy(&policies, PolicySet().default_setting, base::Value(3));
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(CONTENT_SETTING_ASK,
@@ -81,19 +106,21 @@ IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, DefaultSetting) {
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetContentSetting(
                 url, url, ContentSettingsType::WINDOW_MANAGEMENT));
-  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermission));
+
+  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermissionScript));
 }
 
-IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, AllowedForUrlsSettings) {
+IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, AllowedForUrlsSettings) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   PolicyMap policies;
-  base::Value list(base::Value::Type::LIST);
+  base::Value::List list;
   list.Append(url.spec());
-  SetPolicy(&policies, key::kWindowPlacementAllowedForUrls, std::move(list));
+  SetPolicy(&policies, PolicySet().allowed_for_urls_setting,
+            base::Value(std::move(list)));
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
@@ -104,20 +131,21 @@ IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, AllowedForUrlsSettings) {
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             host_content_settings_map->GetContentSetting(
                 url, url, ContentSettingsType::WINDOW_MANAGEMENT));
-  EXPECT_EQ("granted", EvalJs(tab, kCheckPermission));
-  EXPECT_EQ("granted", EvalJs(tab, kGetScreens));
+  EXPECT_EQ("granted", EvalJs(tab, kCheckPermissionScript));
+  EXPECT_EQ("granted", EvalJs(tab, kGetScreensScript));
 }
 
-IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, BlockedForUrlsSettings) {
+IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, BlockedForUrlsSettings) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   PolicyMap policies;
-  base::Value list(base::Value::Type::LIST);
+  base::Value::List list;
   list.Append(url.spec());
-  SetPolicy(&policies, key::kWindowPlacementBlockedForUrls, std::move(list));
+  SetPolicy(&policies, PolicySet().blocked_for_urls_setting,
+            base::Value(std::move(list)));
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
@@ -128,10 +156,19 @@ IN_PROC_BROWSER_TEST_F(PolicyTestWindowManagement, BlockedForUrlsSettings) {
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             host_content_settings_map->GetContentSetting(
                 url, url, ContentSettingsType::WINDOW_MANAGEMENT));
-  EXPECT_EQ("denied", EvalJs(tab, kCheckPermission));
-  EXPECT_EQ("error", EvalJs(tab, kGetScreens));
+  EXPECT_EQ("denied", EvalJs(tab, kCheckPermissionScript));
+  EXPECT_EQ("error", EvalJs(tab, kGetScreensScript));
 }
 
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PolicyTestWindowManagement,
+    ::testing::Values(PolicySet{key::kDefaultWindowPlacementSetting,
+                                key::kWindowPlacementAllowedForUrls,
+                                key::kWindowPlacementBlockedForUrls},
+                      PolicySet{key::kDefaultWindowManagementSetting,
+                                key::kWindowManagementAllowedForUrls,
+                                key::kWindowManagementBlockedForUrls}));
 }  // namespace
 
 }  // namespace policy

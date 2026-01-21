@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ui/ash/holding_space/holding_space_persistence_delegate.h"
 
-#include "ash/constants/ash_features.h"
+#include <algorithm>
+
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
+#include "ash/public/cpp/holding_space/holding_space_file.h"
 #include "ash/public/cpp/holding_space/holding_space_image.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_progress.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,7 +28,7 @@ namespace {
 // backed items in a secondary user profile.
 bool ShouldIgnoreItem(Profile* profile, const HoldingSpaceItem* item) {
   return file_manager::util::GetAndroidFilesPath().IsParent(
-             item->file_path()) &&
+             item->file().file_path) &&
          !ProfileHelper::IsPrimaryProfile(profile);
 }
 
@@ -63,45 +64,51 @@ void HoldingSpacePersistenceDelegate::Init() {
 
 void HoldingSpacePersistenceDelegate::OnHoldingSpaceItemsAdded(
     const std::vector<const HoldingSpaceItem*>& items) {
-  if (is_restoring_persistence())
+  if (is_restoring_persistence()) {
     return;
+  }
 
   // Write the new finalized `items` to persistent storage.
   ScopedListPrefUpdate update(profile()->GetPrefs(), kPersistencePath);
   for (const HoldingSpaceItem* item : items) {
-    if (item->progress().IsComplete())
+    if (item->progress().IsComplete()) {
       update->Append(item->Serialize());
+    }
   }
 }
 
 void HoldingSpacePersistenceDelegate::OnHoldingSpaceItemsRemoved(
     const std::vector<const HoldingSpaceItem*>& items) {
-  if (is_restoring_persistence())
+  if (is_restoring_persistence()) {
     return;
+  }
 
   // Remove the `items` from persistent storage.
   ScopedListPrefUpdate update(profile()->GetPrefs(), kPersistencePath);
   update->EraseIf([&items](const base::Value& persisted_item) {
     const std::string& persisted_item_id =
         HoldingSpaceItem::DeserializeId(persisted_item.GetDict());
-    return base::Contains(items, persisted_item_id, &HoldingSpaceItem::id);
+    return std::ranges::contains(items, persisted_item_id,
+                                 &HoldingSpaceItem::id);
   });
 }
 
 void HoldingSpacePersistenceDelegate::OnHoldingSpaceItemUpdated(
     const HoldingSpaceItem* item,
-    uint32_t updated_fields) {
-  if (is_restoring_persistence())
+    const HoldingSpaceItemUpdatedFields& updated_fields) {
+  if (is_restoring_persistence()) {
     return;
+  }
 
   // Only finalized items are persisted.
-  if (!item->progress().IsComplete())
+  if (!item->progress().IsComplete()) {
     return;
+  }
 
   // Attempt to find the finalized `item` in persistent storage.
   ScopedListPrefUpdate update(profile()->GetPrefs(), kPersistencePath);
   base::Value::List& list = update.Get();
-  auto item_it = base::ranges::find(
+  auto item_it = std::ranges::find(
       list, item->id(), [](const base::Value& persisted_item) {
         return HoldingSpaceItem::DeserializeId(persisted_item.GetDict());
       });
@@ -120,8 +127,9 @@ void HoldingSpacePersistenceDelegate::OnHoldingSpaceItemUpdated(
       list.Insert(item_it, base::Value(item->Serialize()));
       return;
     }
-    if (candidate_item->progress().IsComplete())
+    if (candidate_item->progress().IsComplete()) {
       ++item_it;
+    }
   }
 
   // The finalized `item` should exist in the model and be handled above.
@@ -131,16 +139,18 @@ void HoldingSpacePersistenceDelegate::OnHoldingSpaceItemUpdated(
 void HoldingSpacePersistenceDelegate::RestoreModelFromPersistence() {
   DCHECK(model()->items().empty());
 
-  // Clear suggestions before restoration if needed.
-  MaybeRemoveSuggestionsFromPersistence();
+  // Remove items from persistent storage that should not be restored to the
+  // in-memory holding space model.
+  MaybeRemoveItemsFromPersistence();
 
   const base::Value::List& persisted_holding_space_items =
       profile()->GetPrefs()->GetList(kPersistencePath);
 
   // If persistent storage is empty we can immediately notify the callback of
   // persistence restoration completion and quit early.
+  std::vector<std::unique_ptr<HoldingSpaceItem>> restored_items;
   if (persisted_holding_space_items.empty()) {
-    std::move(persistence_restored_callback_).Run();
+    std::move(persistence_restored_callback_).Run(std::move(restored_items));
     return;
   }
 
@@ -152,24 +162,25 @@ void HoldingSpacePersistenceDelegate::RestoreModelFromPersistence() {
             base::BindOnce(&holding_space_util::ResolveImage,
                            base::Unretained(thumbnail_loader_)));
 
-    if (!ShouldIgnoreItem(profile(), holding_space_item.get()))
-      service()->AddItem(std::move(holding_space_item));
+    if (!ShouldIgnoreItem(profile(), holding_space_item.get())) {
+      restored_items.push_back(std::move(holding_space_item));
+    }
   }
 
   // Notify completion of persistence restoration.
-  std::move(persistence_restored_callback_).Run();
+  std::move(persistence_restored_callback_).Run(std::move(restored_items));
 }
 
-void HoldingSpacePersistenceDelegate::MaybeRemoveSuggestionsFromPersistence() {
-  DCHECK(is_restoring_persistence());
+void HoldingSpacePersistenceDelegate::MaybeRemoveItemsFromPersistence() {
+  CHECK(is_restoring_persistence());
 
-  if (features::IsHoldingSpaceSuggestionsEnabled())
-    return;
+  const auto known_types = holding_space_util::GetAllItemTypes();
 
+  // Remove items associated with unknown types.
   ScopedListPrefUpdate update(profile()->GetPrefs(), kPersistencePath);
-  update->EraseIf([](const base::Value& persisted_item) {
-    return HoldingSpaceItem::IsSuggestion(
-        HoldingSpaceItem::DeserializeType(persisted_item.GetDict()));
+  update->EraseIf([&](const base::Value& persisted_item) {
+    auto type = HoldingSpaceItem::DeserializeType(persisted_item.GetDict());
+    return !known_types.contains(type);
   });
 }
 

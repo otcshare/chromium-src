@@ -1,6 +1,6 @@
 Verifies that storing and sending Secure cookies over http sends Network.*ExtraInfo events with corresponding blocked cookies.
 
-ResponseReceivedExtraInfo blocked cookies:[
+ResponseReceivedExtraInfo blocked cookies: [
     [0] : {
         blockedReasons : [
             [0] : SecureOnly
@@ -12,18 +12,17 @@ ResponseReceivedExtraInfo blocked cookies:[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             secure : true
             session : true
             size : 9
             sourcePort : 8000
-            sourceScheme : NonSecure
+            sourceScheme : Secure
             value : value
         }
         cookieLine : name=value; Secure
     }
 ]
-RequestWillBeSentExtraInfo blocked cookies:[
+RequestWillBeSentExtraInfo blocked cookies: [
     [0] : {
         blockedReasons : [
             [0] : SecureOnly
@@ -35,7 +34,6 @@ RequestWillBeSentExtraInfo blocked cookies:[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             secure : true
             session : true
             size : 9
@@ -43,6 +41,7 @@ RequestWillBeSentExtraInfo blocked cookies:[
             sourceScheme : Secure
             value : value
         }
+        exemptionReason : None
     }
 ]
 

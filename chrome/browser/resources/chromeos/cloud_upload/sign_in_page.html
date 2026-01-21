@@ -1,11 +1,11 @@
 <style>
   a {
-    color: var(--cros-text-color-prominent);
+    color: var(--cros-sys-primary);
   }
 
   #error-message {
     align-items: center;
-    color: var(--cros-text-color-alert);
+    color: var(--cros-sys-error);
     display: flex;
   }
 
@@ -16,7 +16,7 @@
 
   .icon {
     -webkit-mask-image: url(icons/error.svg);
-    background-color: var(--cros-icon-color-alert);
+    background-color: var(--cros-sys-error);
     height: 16px;
     width: 17px;
   }
@@ -24,29 +24,63 @@
   .error-text {
     margin-inline-start: 5px;
   }
+
+  cr-button {
+    --active-bg: transparent;
+    --active-shadow: none;
+    --active-shadow-action: none;
+    --bg-action: var(--cros-sys-primary);
+    --cr-button-height: 36px;
+    --disabled-bg-action:
+        var(--cros-sys-disabled_container);
+    --disabled-bg: var(--cros-sys-disabled_container);;
+    --disabled-text-color: var(--cros-sys-disabled);
+    /* Use the default bg color as hover color because we
+        rely on hoverBackground layer below.  */
+    --hover-bg-action: var(--cros-sys-primary);
+    --hover-bg-color: var(--cros-sys-primary_container);
+    --ink-color: var(--cros-sys-ripple_primary);
+    --ripple-opacity-action: 1;
+    --ripple-opacity: 1;
+    --text-color-action: var(--cros-sys-on_primary);
+    --text-color: var(--cros-sys-on_primary_container);
+    border: none;
+    border-radius: 18px;
+    box-shadow: none;
+  }
+
+  cr-button.cancel-button {
+    background-color: var(--cros-sys-primary_container);
+  }
+
+  cr-button.cancel-button:hover::part(hoverBackground) {
+    background-color: var(--cros-sys-hover_on_subtle);
+    display: block;
+  }
+
+  cr-button.action-button:hover::part(hoverBackground) {
+    background-color: var(--cros-sys-hover_on_prominent);
+    display: block;
+  }
+
+  :host-context(.focus-outline-visible) cr-button:focus {
+    outline: 2px solid var(--cros-sys-focus_ring);
+    outline-offset: 2px;
+  }
 </style>
 
-<!-- TODO(b/254586358): Use localized strings -->
-<img src="images/connect_one_drive.png" slot="header-image"></img>
-<div slot="title">
-  Connect to Microsoft OneDrive to open files in Microsoft 365
-</div>
+<svg slot="header-image" viewBox="0 0 448 200">
+  <use href="images/connect_one_drive.svg#EXPORT_image"></use>
+</svg>
+<div slot="title">$i18n{connectToOneDriveTitle}</div>
 <div slot="body">
-  <p>
-    To edit files in Microsoft 365, they need to be stored in Microsoft OneDrive
-    cloud storage. If you open a file not already in OneDrive, your Chromebook
-    can move it for you.
-    <a href="https://support.google.com/chromebook">Learn more</a>
-  </p>
-  <p>
-    You'll need to sign in with your Microsoft account to continue.
-  </p>
   <div id="error-message" hidden>
     <div class="icon"></div>
-    <p class="error-text">Unable to connect to OneDrive. Please try again.</p>
+    <span class="error-text">$i18n{cantConnectOneDrive}</span>
   </div>
+  <p>$i18nRaw{connectToOneDriveSignInFlowBodyText}</p>
 </div>
 <div slot="button-container">
   <cr-button class="cancel-button">$i18n{cancel}</cr-button>
-  <cr-button class="action-button">Connect to OneDrive</cr-button>
+  <cr-button class="action-button">$i18n{connectOneDrive}</cr-button>
 </div>

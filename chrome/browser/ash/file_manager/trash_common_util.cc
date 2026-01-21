@@ -8,8 +8,10 @@
 #include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
+#include "chrome/browser/ash/policy/skyvault/policy_utils.h"
 #include "components/prefs/pref_service.h"
 
 namespace file_manager::trash {
@@ -44,8 +46,8 @@ bool IsTrashEnabledForProfile(Profile* profile) {
   if (!profile || !profile->GetPrefs()) {
     return false;
   }
-  return base::FeatureList::IsEnabled(ash::features::kFilesTrash) &&
-         profile->GetPrefs()->GetBoolean(ash::prefs::kFilesAppTrashEnabled);
+  return profile->GetPrefs()->GetBoolean(ash::prefs::kFilesAppTrashEnabled) &&
+         policy::local_user_files::LocalUserFilesAllowed();
 }
 
 const base::FilePath GenerateTrashPath(const base::FilePath& trash_path,
@@ -59,9 +61,7 @@ const base::FilePath GenerateTrashPath(const base::FilePath& trash_path,
   return path;
 }
 
-TrashPathsMap GenerateEnabledTrashLocationsForProfile(
-    Profile* profile,
-    const base::FilePath& base_path) {
+TrashPathsMap GenerateEnabledTrashLocationsForProfile(Profile* profile) {
   TrashPathsMap enabled_trash_locations;
 
   enabled_trash_locations.try_emplace(
@@ -78,6 +78,19 @@ TrashPathsMap GenerateEnabledTrashLocationsForProfile(
           util::GetMyFilesFolderForProfile(profile),
           /*prefix_path=*/
           util::GetDownloadsFolderForProfile(profile).BaseName()));
+
+  if (base::FeatureList::IsEnabled(ash::features::kFilesTrashDrive)) {
+    auto* integration_service =
+        drive::DriveIntegrationServiceFactory::FindForProfile(profile);
+    if (integration_service) {
+      enabled_trash_locations.try_emplace(
+          integration_service->GetMountPointPath(),
+          TrashLocation(
+              /*supplied_relative_folder_path=*/base::FilePath(".Trash-1000"),
+              /*supplied_mount_point_path=*/integration_service
+                  ->GetMountPointPath()));
+    }
+  }
 
   return enabled_trash_locations;
 }

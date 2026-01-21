@@ -4,24 +4,34 @@
 
 #include "device/vr/openxr/openxr_path_helper.h"
 
+#include <algorithm>
+
 #include "base/check.h"
+#include "device/vr/openxr/openxr_interaction_profiles.h"
 #include "device/vr/openxr/openxr_util.h"
+#include "device/vr/public/mojom/openxr_interaction_profile_type.mojom.h"
 
 namespace device {
 
-OpenXRPathHelper::OpenXRPathHelper() {}
+using device::mojom::OpenXrInteractionProfileType;
+
+namespace {
+constexpr std::array<OpenXrInteractionProfileType, 3> kHandProfiles{
+    OpenXrInteractionProfileType::kHandSelectGrasp,
+    OpenXrInteractionProfileType::kExtHand,
+    OpenXrInteractionProfileType::kMetaHandAim,
+};
+}  // namespace
+
+OpenXRPathHelper::OpenXRPathHelper() = default;
 
 OpenXRPathHelper::~OpenXRPathHelper() = default;
 
-XrResult OpenXRPathHelper::Initialize(XrInstance instance, XrSystemId system) {
+XrResult OpenXRPathHelper::Initialize(XrInstance instance,
+                                      const std::string& system_name) {
   DCHECK(!initialized_);
 
-  // Get the system properties, which is needed to determine the name of the
-  // hardware being used. This helps disambiguate certain sets of controllers.
-  XrSystemProperties system_properties = {XR_TYPE_SYSTEM_PROPERTIES};
-  RETURN_IF_XR_FAILED(
-      xrGetSystemProperties(instance, system, &system_properties));
-  system_name_ = std::string(system_properties.systemName);
+  system_name_ = system_name;
 
   // Create path declarations
   for (const auto& profile : GetOpenXrControllerInteractionProfiles()) {
@@ -42,18 +52,25 @@ OpenXrInteractionProfileType OpenXRPathHelper::GetInputProfileType(
       return it.first;
     }
   }
-  return OpenXrInteractionProfileType::kCount;
+  return OpenXrInteractionProfileType::kInvalid;
 }
 
 std::vector<std::string> OpenXRPathHelper::GetInputProfiles(
-    OpenXrInteractionProfileType interaction_profile) const {
+    OpenXrInteractionProfileType interaction_profile,
+    bool hand_joints_enabled) const {
   DCHECK(initialized_);
+
+  bool can_use_hand_joint_profile =
+      hand_joints_enabled &&
+      std::ranges::contains(kHandProfiles, interaction_profile);
 
   const auto& input_profiles_map = GetOpenXrInputProfilesMap();
   if (input_profiles_map.contains(interaction_profile)) {
     const OpenXrSystemInputProfiles* active_system = nullptr;
     for (const auto& system : input_profiles_map.at(interaction_profile)) {
-      if (system.system_name.empty()) {
+      if ((!can_use_hand_joint_profile && system.system_name.empty()) ||
+          (can_use_hand_joint_profile &&
+           system.system_name.compare(kOpenXrHandJointSystem) == 0)) {
         active_system = &system;
       } else if (system_name_.compare(system.system_name) == 0) {
         active_system = &system;
@@ -62,7 +79,8 @@ std::vector<std::string> OpenXRPathHelper::GetInputProfiles(
     }
 
     // Each interaction profile should always at least have a null system_name
-    // entry.
+    // entry. Profiles that support hand joints should have both a null
+    // system_name and a `kOpenXrHandJointSystem` system_name.
     DCHECK(active_system);
     return active_system->input_profiles;
   }
@@ -72,7 +90,7 @@ std::vector<std::string> OpenXRPathHelper::GetInputProfiles(
 
 XrPath OpenXRPathHelper::GetInteractionProfileXrPath(
     OpenXrInteractionProfileType type) const {
-  if (type == OpenXrInteractionProfileType::kCount) {
+  if (type == OpenXrInteractionProfileType::kInvalid) {
     return XR_NULL_PATH;
   }
   return declared_interaction_profile_paths_.at(type);

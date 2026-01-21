@@ -5,11 +5,12 @@
 #include "components/exo/wayland/fuzzer/harness.h"
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "components/exo/display.h"
 #include "components/exo/test/exo_test_base.h"
-#include "components/exo/test/exo_test_base_views.h"
+#include "components/exo/test/test_security_delegate.h"
 #include "components/exo/wayland/fuzzer/actions.pb.h"
 #include "components/exo/wayland/server.h"
 
@@ -33,7 +34,8 @@ class WaylandFuzzerTest : public TestBase {
            1 /* overwrite */);
     TestBase::SetUp();
     display_ = std::make_unique<exo::Display>();
-    server_ = wayland::Server::Create(display_.get());
+    server_ = wayland::Server::Create(
+        display_.get(), std::make_unique<test::TestSecurityDelegate>());
     server_->StartWithDefaultPath(base::DoNothing());
   }
 

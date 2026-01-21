@@ -4,8 +4,7 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/strings/string_piece.h"
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
 #include "chrome/browser/ui/browser.h"
@@ -79,7 +78,7 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterSpecialSubframeNavigationsBrowserTest,
   content::RenderFrameHost* target = content::FrameMatchingPredicate(
       web_contents()->GetPrimaryPage(),
       base::BindRepeating([](content::RenderFrameHost* rfh) {
-        return rfh->GetLastCommittedURL().scheme_piece() == url::kDataScheme;
+        return rfh->GetLastCommittedURL().scheme() == url::kDataScheme;
       }));
   ASSERT_NE(target, nullptr);
   EXPECT_TRUE(target->GetLastCommittedOrigin().opaque());

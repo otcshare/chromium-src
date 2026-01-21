@@ -4,7 +4,7 @@
 
 #include "ui/ozone/platform/x11/x11_canvas_surface.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/base/x/x11_display_util.h"
@@ -15,7 +15,7 @@
 namespace ui {
 
 X11CanvasSurface::X11CanvasSurface(gfx::AcceleratedWidget widget)
-    : x11_software_bitmap_presenter_(x11::Connection::Get(), widget, true) {}
+    : x11_software_bitmap_presenter_(*x11::Connection::Get(), widget, true) {}
 
 X11CanvasSurface::~X11CanvasSurface() = default;
 

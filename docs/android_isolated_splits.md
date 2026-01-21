@@ -83,7 +83,7 @@ enforce that no Service subclasses exist outside of the base split.
 
 [b/169196314]: https://issuetracker.google.com/169196314
 [SplitCompatService]: https://source.chromium.org/search?q=symbol:SplitCompatService&ss=chromium
-[compile-time check]: https://source.chromium.org/search?q=symbol:_MaybeCheckServicesAndProvidersPresentInBase&ss=chromium
+[compile-time check]: https://source.chromium.org/chromium/chromium/src/+/main:build/android/gyp/create_app_bundle.py;l=446;drc=c4dd266492ad1e242161b415ac5a1d9fccd7a041
 
 ### Corrupted .odex (Android O MR1)
 
@@ -100,10 +100,10 @@ happens whenever Chrome is updated rather than when the user launches Chrome.
 [preemptively run]: https://source.chromium.org/search?q=symbol:DexFixer.needsDexCompile&ss=chromium
 [PackageReplacedBroadcastReceiver]: https://source.chromium.org/search?q=symbol:PackageReplacedBroadcastReceiver&ss=chromium
 
-### Conflicting ClassLoaders
+### Conflicting ClassLoaders #1
 
-Missing synchronization can cause the parent ClassLoader of split contexts to
-be different from the Application's ClassLoader. This manifests as odd-looking
+Tracked by [b/172602571], sometimes a split's parent ClassLoader is different
+from the Application's ClassLoader. This manifests as odd-looking
 `ClassCastExceptions` where `"TypeA cannot be cast to TypeA"` (since the two
 `TypeAs` are from different ClassLoaders).
 
@@ -124,6 +124,19 @@ corrected for `ContextImpl` instances, which we do via
 [AppComponentFactory]: https://developer.android.com/reference/android/app/AppComponentFactory
 [detect and fix]: https://source.chromium.org/search?q=f:splitcompatappcomponentfactory&ss=chromium
 [ChromeBaseAppCompatActivity.attachBaseContext()]: https://source.chromium.org/search?q=BundleUtils\.checkContextClassLoader&ss=chromium
+
+### Conflicting ClassLoaders #2
+
+Tracked by [b/172602571], when a new split language split or feature split is
+installed, the ClassLoaders for non-base splits are recreated. Any reference to
+a class from the previous ClassLoader (e.g. due to native code holding
+references to them) will result in `ClassCastExceptions` where
+`"TypeA cannot be cast to TypeA"`.
+
+**Work-around:**
+
+There is no work-around. This is a source of crashes. We could potentially
+mitigate by restarting chrome when a split is installed.
 
 ### System.loadLibrary() Broken for Libraries in Splits
 
@@ -179,6 +192,28 @@ Do not add too many splits, and monitor the size of our `ApplicationInfo` object
 
 [crbug/1298496]: https://bugs.chromium.org/p/chromium/issues/detail?id=1298496
 [Application Zygote]: https://developer.android.com/reference/android/app/ZygotePreload
+
+### AppComponentFactory does not Hook Split ClassLoaders
+
+`AppComponentFactory#instantiateClassLoader()` is meant to allow apps to hook
+`ClassLoader` creation. The hook is called for the base split, but not for other
+isolated splits. Tracked by [b/265583114]. There is no work-around.
+
+[b/265583114]: https://issuetracker.google.com/265583114
+
+### Incorrect Handling of Shared Libraries
+
+Tracked by [b/265589431]. If an APK split has `<uses-library>` in its manifest,
+the classloader for the split is meant to have that library added to it by the
+framework. However, Android does not add the library to the classpath when a
+split is dynamically installed, but instead adds it to the classpath of the base
+split's classloader upon subsequent app launches.
+
+**Work-around:**
+
+ * Always add `<uses-library>` to the base split.
+
+[b/265589431]: https://issuetracker.google.com/265589431
 
 ## Other Quirks & Subtleties
 
@@ -299,10 +334,11 @@ Having Android Framework call `Bundle.setClassLoader()` is tracked in
 [a custom ClassLoader]: https://source.chromium.org/search?q=symbol:ChromeBaseAppCompatActivity.getClassLoader&ss=chromium
 [b/260574161]: https://issuetracker.google.com/260574161
 
-### Calling Methods Across a Split Boundary
+### Package Private Methods
 
 Due to having different ClassLoaders, package-private methods don't work across
-the boundary, even though they will compile.
+the boundary, even though they will compile. Release builds will fail during
+the R8 step, which has a check for cross-split package-private access.
 
 **Work around:**
 
@@ -325,6 +361,17 @@ only).
 
 [proguard.py]: https://source.chromium.org/search?q=symbol:_DeDupeInputJars%20f:proguard.py&ss=chromium
 [b/225876019]: https://issuetracker.google.com/225876019
+
+### Metadata in Splits
+
+Metadata is queried on a per-app basis (not a per-split basis). E.g.:
+
+```java
+ApplicationInfo ai = context.getPackageManager().getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA);
+Bundle b = ai.metaData;
+```
+
+This bundle contains merged values from all fully-installed apk splits.
 
 ## Other Resources
 

@@ -9,10 +9,6 @@
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/web/shell/test/earl_grey/shell_earl_grey_app_interface.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::kWaitForUIElementTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -34,9 +30,6 @@ using base::test::ios::WaitUntilConditionOrTimeout;
   BOOL pageLoaded =
       [condition waitWithTimeout:kWaitForPageLoadTimeout.InSecondsF()];
   EG_TEST_HELPER_ASSERT_TRUE(pageLoaded, loadingErrorDescription);
-
-  EG_TEST_HELPER_ASSERT_NO_ERROR(
-      [ShellEarlGreyAppInterface waitForWindowIDInjectedInCurrentWebState]);
 
   // Ensure any UI elements handled by EarlGrey become idle for any subsequent
   // EarlGrey steps.

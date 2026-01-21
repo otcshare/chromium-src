@@ -27,19 +27,17 @@ class SkiaOutputDeviceWebView : public SkiaOutputDevice {
   SkiaOutputDeviceWebView(
       gpu::SharedContextState* context_state,
       scoped_refptr<gl::GLSurface> gl_surface,
-      gpu::MemoryTracker* memory_tracker,
+      scoped_refptr<gpu::MemoryTracker> memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
   SkiaOutputDeviceWebView(const SkiaOutputDeviceWebView&) = delete;
   SkiaOutputDeviceWebView& operator=(const SkiaOutputDeviceWebView&) = delete;
   ~SkiaOutputDeviceWebView() override;
 
   // SkiaOutputDevice implementation:
-  bool Reshape(const SkSurfaceCharacterization& characterization,
-               const gfx::ColorSpace& color_space,
-               float device_scale_factor,
-               gfx::OverlayTransform transform) override;
-  void SwapBuffers(BufferPresentedCallback feedback,
-                   OutputSurfaceFrame frame) override;
+  bool Reshape(const ReshapeParams& params) override;
+  void Present(const std::optional<gfx::Rect>& update_rect,
+               BufferPresentedCallback feedback,
+               OutputSurfaceFrame frame) override;
 
   SkSurface* BeginPaint(
       std::vector<GrBackendSemaphore>* end_semaphores) override;

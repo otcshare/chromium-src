@@ -13,7 +13,7 @@ StubDevToolsClient::StubDevToolsClient() : id_("stub-id") {}
 
 StubDevToolsClient::StubDevToolsClient(const std::string& id) : id_(id) {}
 
-StubDevToolsClient::~StubDevToolsClient() {}
+StubDevToolsClient::~StubDevToolsClient() = default;
 
 const std::string& StubDevToolsClient::GetId() {
   return id_;
@@ -32,7 +32,9 @@ Status StubDevToolsClient::SetTunnelSessionId(std::string session_id) {
   return Status{kOk};
 }
 
-Status StubDevToolsClient::StartBidiServer(std::string bidi_mapper_script) {
+Status StubDevToolsClient::StartBidiServer(
+    std::string bidi_mapper_script,
+    bool enable_unsafe_extension_debugging) {
   return Status{kOk};
 }
 
@@ -44,13 +46,24 @@ bool StubDevToolsClient::IsConnected() const {
   return is_connected_;
 }
 
+bool StubDevToolsClient::IsTabTarget() const {
+  return is_tab_;
+}
+
 bool StubDevToolsClient::WasCrashed() {
   return false;
 }
 
-Status StubDevToolsClient::Connect() {
-  is_connected_ = true;
-  return Status(kOk);
+bool StubDevToolsClient::IsDialogOpen() const {
+  return false;
+}
+
+bool StubDevToolsClient::AutoAcceptsBeforeunload() const {
+  return autoaccept_beforeunload_;
+}
+
+void StubDevToolsClient::SetAutoAcceptBeforeunload(bool value) {
+  autoaccept_beforeunload_ = value;
 }
 
 Status StubDevToolsClient::PostBidiCommand(base::Value::Dict command) {
@@ -107,6 +120,13 @@ void StubDevToolsClient::AddListener(DevToolsEventListener* listener) {
   listeners_.push_back(listener);
 }
 
+void StubDevToolsClient::RemoveListener(DevToolsEventListener* listener) {
+  auto it = std::find(listeners_.begin(), listeners_.end(), listener);
+  if (it != listeners_.end()) {
+    listeners_.erase(it);
+  }
+}
+
 Status StubDevToolsClient::HandleEventsUntil(
     const ConditionalFunc& conditional_func,
     const Timeout& timeout) {
@@ -119,14 +139,12 @@ Status StubDevToolsClient::HandleReceivedEvents() {
 
 void StubDevToolsClient::SetDetached() {}
 
-void StubDevToolsClient::SetOwner(WebViewImpl* owner) {}
-
-WebViewImpl* StubDevToolsClient::GetOwner() const {
-  return nullptr;
+void StubDevToolsClient::SetOwner(WebViewImpl* owner) {
+  owner_ = owner;
 }
 
-DevToolsClient* StubDevToolsClient::GetRootClient() {
-  return this;
+WebViewImpl* StubDevToolsClient::GetOwner() const {
+  return owner_;
 }
 
 DevToolsClient* StubDevToolsClient::GetParentClient() const {
@@ -135,4 +153,64 @@ DevToolsClient* StubDevToolsClient::GetParentClient() const {
 
 bool StubDevToolsClient::IsMainPage() const {
   return true;
+}
+
+Status StubDevToolsClient::SendRaw(const std::string& message) {
+  return Status{kOk};
+}
+
+bool StubDevToolsClient::HasMessageForAnySession() const {
+  return false;
+}
+
+Status StubDevToolsClient::AttachTo(DevToolsClient* parent) {
+  return Status{kOk};
+}
+
+void StubDevToolsClient::RegisterSessionHandler(const std::string& session_id,
+                                                DevToolsClient* client) {}
+
+void StubDevToolsClient::UnregisterSessionHandler(
+    const std::string& session_id) {}
+
+Status StubDevToolsClient::OnConnected() {
+  return Status{kOk};
+}
+
+Status StubDevToolsClient::ProcessEvent(InspectorEvent event) {
+  return Status{kOk};
+}
+
+Status StubDevToolsClient::ProcessCommandResponse(
+    InspectorCommandResponse response) {
+  return Status{kOk};
+}
+
+int StubDevToolsClient::NextMessageId() const {
+  return 0;
+}
+
+int StubDevToolsClient::AdvanceNextMessageId() {
+  return 0;
+}
+
+Status StubDevToolsClient::ProcessNextMessage(int expected_id,
+                                              bool log_timeout,
+                                              const Timeout& timeout,
+                                              DevToolsClient* caller) {
+  return Status{kOk};
+}
+
+Status StubDevToolsClient::GetDialogMessage(std::string& message) const {
+  return Status{kOk};
+}
+
+Status StubDevToolsClient::GetTypeOfDialog(std::string& type) const {
+  return Status{kOk};
+}
+
+Status StubDevToolsClient::HandleDialog(
+    bool accept,
+    const std::optional<std::string>& text) {
+  return Status{kOk};
 }

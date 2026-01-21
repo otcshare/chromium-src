@@ -5,7 +5,7 @@
 #include "chrome/browser/spellchecker/spelling_request.h"
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/char_iterator.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -90,11 +90,11 @@ void SpellingRequest::CombineResults(
     remote_iter->spelling_service_used = true;
 
     // Unless local and remote result coincide, result is GRAMMAR.
-    remote_iter->decoration = SpellCheckResult::GRAMMAR;
+    remote_iter->decoration = spellcheck::Decoration::GRAMMAR;
     if (local_iter != local_results.end() &&
         local_iter->location == remote_iter->location &&
         local_iter->length == remote_iter->length) {
-      remote_iter->decoration = SpellCheckResult::SPELLING;
+      remote_iter->decoration = spellcheck::Decoration::SPELLING;
     }
   }
 }

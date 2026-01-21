@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_ASH_APP_LIST_SEARCH_TEST_RANKING_TEST_UTIL_H_
 #define CHROME_BROWSER_ASH_APP_LIST_SEARCH_TEST_RANKING_TEST_UTIL_H_
 
+#include <vector>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/task_environment.h"
@@ -24,7 +26,7 @@ class RankerTestBase : public testing::Test {
   // A helper function for creating results. For convenience, the provided
   // scores are set as both the display score and normalized relevance.
   Results MakeScoredResults(const std::vector<std::string>& ids,
-                            const std::vector<double> scores,
+                            const std::vector<double>& scores,
                             ResultType result_type = ResultType::kUnknown,
                             Category category = Category::kUnknown);
 
@@ -45,6 +47,11 @@ class RankerTestBase : public testing::Test {
     return proto;
   }
 
+  // A helper function that set ftrl_score for the given results from one
+  // provider.
+  void SetFtrlScore(const ResultsMap& results,
+                    ProviderType provider,
+                    const std::vector<double>& ftrl_scores);
   void Wait();
 
  protected:

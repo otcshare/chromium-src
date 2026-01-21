@@ -8,14 +8,19 @@ import android.text.TextUtils;
 
 import androidx.annotation.VisibleForTesting;
 
-import java.util.Locale;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * A state to keep track of EditText and autocomplete.
- */
+import java.util.Locale;
+import java.util.Objects;
+
+/** A state to keep track of EditText and autocomplete. */
+@NullMarked
 class AutocompleteState {
     private String mUserText;
-    private String mAutocompleteText;
+    private @Nullable String mAutocompleteText;
+    private @Nullable String mAdditionalText;
     private int mSelStart;
     private int mSelEnd;
 
@@ -23,36 +28,55 @@ class AutocompleteState {
         copyFrom(a);
     }
 
-    public AutocompleteState(String userText, String autocompleteText, int selStart, int selEnd) {
-        set(userText, autocompleteText, selStart, selEnd);
+    public AutocompleteState(
+            String userText,
+            @Nullable String autocompleteText,
+            @Nullable String additionalText,
+            int selStart,
+            int selEnd) {
+        set(
+                userText,
+                TextUtils.isEmpty(autocompleteText) ? null : autocompleteText,
+                TextUtils.isEmpty(additionalText) ? null : additionalText,
+                selStart,
+                selEnd);
     }
 
-    public void set(String userText, String autocompleteText, int selStart, int selEnd) {
+    @Initializer
+    public void set(
+            String userText,
+            @Nullable String autocompleteText,
+            @Nullable String additionalText,
+            int selStart,
+            int selEnd) {
         mUserText = userText;
         mAutocompleteText = autocompleteText;
+        mAdditionalText = additionalText;
         mSelStart = selStart;
         mSelEnd = selEnd;
     }
 
     public void copyFrom(AutocompleteState a) {
-        set(a.mUserText, a.mAutocompleteText, a.mSelStart, a.mSelEnd);
+        set(a.mUserText, a.mAutocompleteText, a.mAdditionalText, a.mSelStart, a.mSelEnd);
     }
 
     public String getUserText() {
         return mUserText;
     }
 
-    public String getAutocompleteText() {
+    public @Nullable String getAutocompleteText() {
         return mAutocompleteText;
     }
 
-    public boolean hasAutocompleteText() {
-        return !TextUtils.isEmpty(mAutocompleteText);
+    public @Nullable String getAdditionalText() {
+        return mAdditionalText;
     }
 
-    /** @return The whole text including autocomplete text. */
+    /**
+     * @return The whole text including autocomplete text.
+     */
     public String getText() {
-        return mUserText + mAutocompleteText;
+        return mUserText.concat(mAutocompleteText != null ? mAutocompleteText : "");
     }
 
     public int getSelStart() {
@@ -72,12 +96,12 @@ class AutocompleteState {
         mUserText = userText;
     }
 
-    public void setAutocompleteText(String autocompleteText) {
+    public void setAutocompleteText(@Nullable String autocompleteText) {
         mAutocompleteText = autocompleteText;
     }
 
     public void clearAutocompleteText() {
-        mAutocompleteText = "";
+        mAutocompleteText = null;
     }
 
     public boolean isCursorAtEndOfUserText() {
@@ -93,7 +117,8 @@ class AutocompleteState {
      * @return Whether the current state is backward-deleted from prevState.
      */
     public boolean isBackwardDeletedFrom(AutocompleteState prevState) {
-        return isCursorAtEndOfUserText() && prevState.isCursorAtEndOfUserText()
+        return isCursorAtEndOfUserText()
+                && prevState.isCursorAtEndOfUserText()
                 && isPrefix(mUserText, prevState.mUserText);
     }
 
@@ -102,7 +127,8 @@ class AutocompleteState {
      * @return Whether the current state is forward-typed from prevState.
      */
     public boolean isForwardTypedFrom(AutocompleteState prevState) {
-        return isCursorAtEndOfUserText() && prevState.isCursorAtEndOfUserText()
+        return isCursorAtEndOfUserText()
+                && prevState.isCursorAtEndOfUserText()
                 && isPrefix(prevState.mUserText, mUserText);
     }
 
@@ -110,7 +136,7 @@ class AutocompleteState {
      * @param prevState The previous state to compare the current state with.
      * @return The differential string that has been backward deleted.
      */
-    public String getBackwardDeletedTextFrom(AutocompleteState prevState) {
+    public @Nullable String getBackwardDeletedTextFrom(AutocompleteState prevState) {
         if (!isBackwardDeletedFrom(prevState)) return null;
         return prevState.mUserText.substring(mUserText.length());
     }
@@ -125,6 +151,7 @@ class AutocompleteState {
      * autocomplete, then the suggestion is still valid if we simply remove one character from the
      * beginning of it. For example, if prev = "a[bc]" and current text is "ab", this method
      * constructs "ab[c]".
+     *
      * @param prevState The previous state.
      * @return Whether the shifting was successful.
      */
@@ -134,13 +161,18 @@ class AutocompleteState {
         int diff = mUserText.length() - prevState.mUserText.length();
         if (diff < 0) return false;
         if (!isPrefix(mUserText, prevState.getText())) return false;
-        mAutocompleteText = prevState.mAutocompleteText.substring(diff);
+        if (prevState.getAutocompleteText() != null) {
+            mAutocompleteText = prevState.getAutocompleteText().substring(diff);
+        } else {
+            mAutocompleteText = null;
+        }
+        mAdditionalText = prevState.mAdditionalText;
         return true;
     }
 
     public void commitAutocompleteText() {
-        mUserText += mAutocompleteText;
-        mAutocompleteText = "";
+        if (mAutocompleteText != null) mUserText += mAutocompleteText;
+        mAutocompleteText = null;
     }
 
     @Override
@@ -148,19 +180,28 @@ class AutocompleteState {
         if (!(o instanceof AutocompleteState)) return false;
         if (o == this) return true;
         AutocompleteState a = (AutocompleteState) o;
-        return mUserText.equals(a.mUserText) && mAutocompleteText.equals(a.mAutocompleteText)
-                && mSelStart == a.mSelStart && mSelEnd == a.mSelEnd;
+        return mUserText.equals(a.mUserText)
+                && Objects.equals(mAutocompleteText, a.mAutocompleteText)
+                && mSelStart == a.mSelStart
+                && mSelEnd == a.mSelEnd;
     }
 
     @Override
     public int hashCode() {
-        return mUserText.hashCode() * 2 + mAutocompleteText.hashCode() * 3 + mSelStart * 5
+        return mUserText.hashCode() * 2
+                + (mAutocompleteText != null ? mAutocompleteText.hashCode() : 0) * 3
+                + mSelStart * 5
                 + mSelEnd * 7;
     }
 
     @Override
     public String toString() {
-        return String.format(Locale.US, "AutocompleteState {[%s][%s] [%d-%d]}", mUserText,
-                mAutocompleteText, mSelStart, mSelEnd);
+        return String.format(
+                Locale.US,
+                "AutocompleteState {[%s][%s] [%d-%d]}",
+                mUserText,
+                mAutocompleteText,
+                mSelStart,
+                mSelEnd);
     }
 }

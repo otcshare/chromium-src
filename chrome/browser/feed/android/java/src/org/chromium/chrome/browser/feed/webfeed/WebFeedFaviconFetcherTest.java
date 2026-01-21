@@ -20,13 +20,14 @@ import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.embedder_support.util.ShadowUrlUtilities;
 import org.chromium.components.favicon.IconType;
 import org.chromium.components.favicon.LargeIconBridge;
+import org.chromium.components.image_fetcher.ImageDataFetchResult;
+import org.chromium.components.image_fetcher.ImageFetchResult;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.components.image_fetcher.ImageFetcherConfig;
 import org.chromium.url.GURL;
@@ -35,46 +36,48 @@ import org.chromium.url.JUnitTestGURLs;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import jp.tomorrowkey.android.gifplayer.BaseGifImage;
-
-/**
- * Tests {@link WebFeedFaviconFetcher}.
- */
+/** Tests {@link WebFeedFaviconFetcher}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = {ShadowUrlUtilities.class})
+@Config(
+        manifest = Config.NONE,
+        shadows = {ShadowUrlUtilities.class})
 @SmallTest
 public class WebFeedFaviconFetcherTest {
-    private static final GURL TEST_URL = JUnitTestGURLs.getGURL(JUnitTestGURLs.EXAMPLE_URL);
-    private static final GURL FAVICON_URL = JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1);
+    private static final GURL TEST_URL = JUnitTestGURLs.EXAMPLE_URL;
+    private static final GURL FAVICON_URL = JUnitTestGURLs.RED_1;
 
     private Bitmap mBitmapFromImageFetcher;
     private Bitmap mBitmapFromIconBridge;
     private Activity mActivity;
-    private TestImageFetcher mImageFetcher = Mockito.spy(new TestImageFetcher());
-    private TestLargeIconBridge mLargeIconBridge = Mockito.spy(new TestLargeIconBridge());
-    private WebFeedFaviconFetcher mFaviconFetcher =
+    private final TestImageFetcher mImageFetcher = Mockito.spy(new TestImageFetcher());
+    private final TestLargeIconBridge mLargeIconBridge = Mockito.spy(new TestLargeIconBridge());
+    private final WebFeedFaviconFetcher mFaviconFetcher =
             new WebFeedFaviconFetcher(mLargeIconBridge, mImageFetcher);
 
     @Before
     public void setUp() {
         // Print logs to stdout.
-        ShadowLog.stream = System.out;
 
         mActivity = Robolectric.setupActivity(Activity.class);
         mBitmapFromImageFetcher =
-                Bitmap.createBitmap(/*width=*/1, /*height=*/1, Bitmap.Config.ARGB_8888);
+                Bitmap.createBitmap(/* width= */ 1, /* height= */ 1, Bitmap.Config.ARGB_8888);
         mBitmapFromIconBridge =
-                Bitmap.createBitmap(/*width=*/2, /*height=*/2, Bitmap.Config.ARGB_8888);
+                Bitmap.createBitmap(/* width= */ 2, /* height= */ 2, Bitmap.Config.ARGB_8888);
     }
 
     @Test
     public void beginFetch_withFaviconUrl_allFetchesFail_returnsMonogram() {
         AtomicBoolean callbackCalled = new AtomicBoolean(false);
         AtomicReference<Bitmap> returnedImage = new AtomicReference(null);
-        mFaviconFetcher.beginFetch(3, 1, TEST_URL, FAVICON_URL, (Bitmap bitmap) -> {
-            returnedImage.set(bitmap);
-            callbackCalled.set(true);
-        });
+        mFaviconFetcher.beginFetch(
+                3,
+                1,
+                TEST_URL,
+                FAVICON_URL,
+                (Bitmap bitmap) -> {
+                    returnedImage.set(bitmap);
+                    callbackCalled.set(true);
+                });
         mImageFetcher.answerWithNull();
         mLargeIconBridge.answerWithNull();
 
@@ -88,10 +91,15 @@ public class WebFeedFaviconFetcherTest {
     public void beginFetch_withFaviconUrl_successfulImageFetch() {
         AtomicBoolean callbackCalled = new AtomicBoolean(false);
         AtomicReference<Bitmap> returnedImage = new AtomicReference(null);
-        mFaviconFetcher.beginFetch(1, 1, TEST_URL, FAVICON_URL, (Bitmap bitmap) -> {
-            returnedImage.set(bitmap);
-            callbackCalled.set(true);
-        });
+        mFaviconFetcher.beginFetch(
+                1,
+                1,
+                TEST_URL,
+                FAVICON_URL,
+                (Bitmap bitmap) -> {
+                    returnedImage.set(bitmap);
+                    callbackCalled.set(true);
+                });
         mImageFetcher.answerWithBitmap();
 
         assertTrue(callbackCalled.get());
@@ -102,10 +110,15 @@ public class WebFeedFaviconFetcherTest {
     public void beginFetch_withFaviconUrl_failedImageFetch_successfulIconFetch() {
         AtomicBoolean callbackCalled = new AtomicBoolean(false);
         AtomicReference<Bitmap> returnedImage = new AtomicReference(null);
-        mFaviconFetcher.beginFetch(1, 1, TEST_URL, FAVICON_URL, (Bitmap bitmap) -> {
-            returnedImage.set(bitmap);
-            callbackCalled.set(true);
-        });
+        mFaviconFetcher.beginFetch(
+                1,
+                1,
+                TEST_URL,
+                FAVICON_URL,
+                (Bitmap bitmap) -> {
+                    returnedImage.set(bitmap);
+                    callbackCalled.set(true);
+                });
         mImageFetcher.answerWithNull();
         mLargeIconBridge.answerWithBitmap();
 
@@ -117,10 +130,15 @@ public class WebFeedFaviconFetcherTest {
     public void beginFetch_withoutFaviconUrl_allFetchesFail_returnsMonogram() {
         AtomicBoolean callbackCalled = new AtomicBoolean(false);
         AtomicReference<Bitmap> returnedImage = new AtomicReference(null);
-        mFaviconFetcher.beginFetch(1, 1, TEST_URL, null, (Bitmap bitmap) -> {
-            returnedImage.set(bitmap);
-            callbackCalled.set(true);
-        });
+        mFaviconFetcher.beginFetch(
+                1,
+                1,
+                TEST_URL,
+                null,
+                (Bitmap bitmap) -> {
+                    returnedImage.set(bitmap);
+                    callbackCalled.set(true);
+                });
         mLargeIconBridge.answerWithNull();
 
         assertTrue(callbackCalled.get());
@@ -131,10 +149,15 @@ public class WebFeedFaviconFetcherTest {
     public void beginFetch_withInvalidFaviconUrl_successfulIconFetch() {
         AtomicBoolean callbackCalled = new AtomicBoolean(false);
         AtomicReference<Bitmap> returnedImage = new AtomicReference(null);
-        mFaviconFetcher.beginFetch(1, 1, TEST_URL, GURL.emptyGURL(), (Bitmap bitmap) -> {
-            returnedImage.set(bitmap);
-            callbackCalled.set(true);
-        });
+        mFaviconFetcher.beginFetch(
+                1,
+                1,
+                TEST_URL,
+                GURL.emptyGURL(),
+                (Bitmap bitmap) -> {
+                    returnedImage.set(bitmap);
+                    callbackCalled.set(true);
+                });
         mLargeIconBridge.answerWithBitmap();
 
         assertTrue(callbackCalled.get());
@@ -156,6 +179,7 @@ public class WebFeedFaviconFetcherTest {
             mCallback.onResult(mBitmapFromImageFetcher);
             mCallback = null;
         }
+
         private void answerWithNull() {
             mCallback.onResult(null);
             mCallback = null;
@@ -165,14 +189,23 @@ public class WebFeedFaviconFetcherTest {
         public void fetchImage(final ImageFetcher.Params params, Callback<Bitmap> callback) {
             mCallback = callback;
         }
+
         @Override
-        public void fetchGif(final ImageFetcher.Params params, Callback<BaseGifImage> callback) {}
+        public void fetchImageWithRequestMetadata(
+                final ImageFetcher.Params params, Callback<ImageFetchResult> callback) {}
+
+        @Override
+        public void fetchGif(
+                final ImageFetcher.Params params, Callback<ImageDataFetchResult> callback) {}
+
         @Override
         public void clear() {}
+
         @Override
         public @ImageFetcherConfig int getConfig() {
             return ImageFetcherConfig.IN_MEMORY_ONLY;
         }
+
         @Override
         public void destroy() {}
     }

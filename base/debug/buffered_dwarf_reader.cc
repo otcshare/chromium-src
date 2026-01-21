@@ -4,6 +4,8 @@
 
 #include "base/debug/buffered_dwarf_reader.h"
 
+#include "base/compiler_specific.h"
+
 #ifdef USE_SYMBOLIZE
 
 #include <algorithm>
@@ -28,12 +30,12 @@ size_t BufferedDwarfReader::ReadCString(uint64_t max_position,
     }
 
     if (out && bytes_written < out_size) {
-      out[bytes_written++] = character;
+      UNSAFE_TODO(out[bytes_written++]) = character;
     }
   } while (character != '\0' && position() < max_position);
 
   if (out) {
-    out[std::min(bytes_written, out_size - 1)] = '\0';
+    UNSAFE_TODO(out[std::min(bytes_written, out_size - 1)]) = '\0';
   }
 
   return bytes_written;
@@ -44,8 +46,9 @@ bool BufferedDwarfReader::ReadLeb128(uint64_t& value) {
   uint8_t byte;
   int shift = 0;
   do {
-    if (!ReadInt8(byte))
+    if (!ReadInt8(byte)) {
       return false;
+    }
     value |= static_cast<uint64_t>(byte & 0x7F) << shift;
     shift += 7;
   } while (byte & 0x80);
@@ -58,8 +61,9 @@ bool BufferedDwarfReader::ReadLeb128(int64_t& value) {
   int shift = 0;
   bool sign_bit = false;
   do {
-    if (!ReadInt8(byte))
+    if (!ReadInt8(byte)) {
       return false;
+    }
     value |= static_cast<uint64_t>(byte & 0x7F) << shift;
     shift += 7;
     sign_bit = byte & 0x40;
@@ -120,22 +124,25 @@ bool BufferedDwarfReader::ReadAddress(uint8_t address_size, uint64_t& address) {
   switch (address_size) {
     case 2: {
       uint16_t tmp;
-      if (!ReadInt16(tmp))
+      if (!ReadInt16(tmp)) {
         return false;
+      }
       address = tmp;
     } break;
 
     case 4: {
       uint32_t tmp;
-      if (!ReadInt32(tmp))
+      if (!ReadInt32(tmp)) {
         return false;
+      }
       address = tmp;
     } break;
 
     case 8: {
       uint64_t tmp;
-      if (!ReadInt64(tmp))
+      if (!ReadInt64(tmp)) {
         return false;
+      }
       address = tmp;
     } break;
 
@@ -176,10 +183,12 @@ bool BufferedDwarfReader::BufferedRead(void* out, const size_t bytes) {
   while (bytes_left > 0) {
     // Refresh the buffer.
     if (unconsumed_amount_ == 0) {
-      if (!base::IsValueInRangeForNumericType<size_t>(next_chunk_start_))
+      if (!base::IsValueInRangeForNumericType<size_t>(next_chunk_start_)) {
         return false;
+      }
       const ssize_t unconsumed_amount = google::ReadFromOffset(
-          fd_, buf_, sizeof(buf_), static_cast<size_t>(next_chunk_start_));
+          fd_, buf_.data(), (buf_.size() * sizeof(decltype(buf_)::value_type)),
+          static_cast<size_t>(next_chunk_start_));
       if (unconsumed_amount <= 0) {
         // Read error.
         return false;
@@ -192,7 +201,7 @@ bool BufferedDwarfReader::BufferedRead(void* out, const size_t bytes) {
     }
 
     size_t to_copy = std::min(bytes_left, unconsumed_amount_);
-    memcpy(out, &buf_[cursor_in_buffer_], to_copy);
+    UNSAFE_TODO(memcpy(out, &buf_[cursor_in_buffer_], to_copy));
     unconsumed_amount_ -= to_copy;
     cursor_in_buffer_ += to_copy;
     bytes_left -= to_copy;

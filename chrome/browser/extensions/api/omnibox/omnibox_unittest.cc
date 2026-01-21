@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/common/extensions/api/omnibox.h"
+
 #include <stddef.h>
 
 #include <utility>
 
 #include "base/values.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
-#include "chrome/common/extensions/api/omnibox.h"
-#include "extensions/common/value_builder.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -46,28 +49,19 @@ void CompareClassification(const ACMatchClassifications& expected,
 // = nmmmmndddn
 TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
   base::Value::List list =
-      ListBuilder()
-          .Append(42)
-          .Append(ListBuilder()
-                      .Append(DictionaryBuilder()
-                                  .Set("content", "content")
-                                  .Set("description", "description")
-                                  .Set("descriptionStyles",
-                                       ListBuilder()
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 1)
-                                                       .Set("length", 4)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 6)
-                                                       .Set("length", 3)
-                                                       .BuildDict())
-                                           .BuildList())
-                                  .BuildDict())
-                      .BuildList())
-          .BuildList();
+      base::Value::List().Append(42).Append(base::Value::List().Append(
+          base::Value::Dict()
+              .Set("content", "content")
+              .Set("description", "description")
+              .Set("descriptionStyles", base::Value::List()
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 1)
+                                                        .Set("length", 4))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 6)
+                                                        .Set("length", 3)))));
 
   ACMatchClassifications styles_expected;
   styles_expected.push_back(ACMatchClassification(0, kNone));
@@ -76,45 +70,41 @@ TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
   styles_expected.push_back(ACMatchClassification(6, kDim));
   styles_expected.push_back(ACMatchClassification(9, kNone));
 
-  std::unique_ptr<SendSuggestions::Params> params(
-      SendSuggestions::Params::Create(list));
+  std::optional<SendSuggestions::Params> params =
+      SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 
   // Same input, but swap the order. Ensure it still works.
   base::Value::List swap_list =
-      ListBuilder()
-          .Append(42)
-          .Append(ListBuilder()
-                      .Append(DictionaryBuilder()
-                                  .Set("content", "content")
-                                  .Set("description", "description")
-                                  .Set("descriptionStyles",
-                                       ListBuilder()
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 6)
-                                                       .Set("length", 3)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 1)
-                                                       .Set("length", 4)
-                                                       .BuildDict())
-                                           .BuildList())
-                                  .BuildDict())
-                      .BuildList())
-          .BuildList();
+      base::Value::List().Append(42).Append(base::Value::List().Append(
+          base::Value::Dict()
+              .Set("content", "content")
+              .Set("description", "description")
+              .Set("descriptionStyles", base::Value::List()
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 6)
+                                                        .Set("length", 3))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 1)
+                                                        .Set("length", 4)))));
 
-  std::unique_ptr<SendSuggestions::Params> swapped_params(
-      SendSuggestions::Params::Create(swap_list));
+  std::optional<SendSuggestions::Params> swapped_params =
+      SendSuggestions::Params::Create(swap_list);
   EXPECT_TRUE(swapped_params);
   ASSERT_FALSE(swapped_params->suggest_results.empty());
   CompareClassification(
       styles_expected,
-      StyleTypesToACMatchClassifications(swapped_params->suggest_results[0]));
+      StyleTypesToACMatchClassifications(
+          &swapped_params->suggest_results[0].description_styles.value(),
+          swapped_params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -126,43 +116,31 @@ TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
 // = 3773unnnn66
 TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
   base::Value::List list =
-      ListBuilder()
-          .Append(42)
-          .Append(ListBuilder()
-                      .Append(DictionaryBuilder()
-                                  .Set("content", "content")
-                                  .Set("description", "description")
-                                  .Set("descriptionStyles",
-                                       ListBuilder()
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "url")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 5)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 9)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 9)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 4)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 1)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .BuildList())
-                                  .BuildDict())
-                      .BuildList())
-          .BuildList();
+      base::Value::List().Append(42).Append(base::Value::List().Append(
+          base::Value::Dict()
+              .Set("content", "content")
+              .Set("description", "description")
+              .Set("descriptionStyles", base::Value::List()
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "url")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 5))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 9)
+                                                        .Set("length", 2))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 9)
+                                                        .Set("length", 2))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 4))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 1)
+                                                        .Set("length", 2)))));
 
   ACMatchClassifications styles_expected;
   styles_expected.push_back(ACMatchClassification(0, kUrl | kMatch));
@@ -172,60 +150,54 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
   styles_expected.push_back(ACMatchClassification(5, kNone));
   styles_expected.push_back(ACMatchClassification(9, kMatch | kDim));
 
-  std::unique_ptr<SendSuggestions::Params> params(
-      SendSuggestions::Params::Create(list));
+  std::optional<SendSuggestions::Params> params =
+      SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 
   // Try moving the "dim/match" style pair at offset 9. Output should be the
   // same.
   base::Value::List moved_list =
-      ListBuilder()
-          .Append(42)
-          .Append(ListBuilder()
-                      .Append(DictionaryBuilder()
-                                  .Set("content", "content")
-                                  .Set("description", "description")
-                                  .Set("descriptionStyles",
-                                       ListBuilder()
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "url")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 5)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 4)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 9)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 9)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 1)
-                                                       .Set("length", 2)
-                                                       .BuildDict())
-                                           .BuildList())
-                                  .BuildDict())
-                      .BuildList())
-          .BuildList();
+      base::Value::List().Append(42).Append(base::Value::List().Append(
+          base::Value::Dict()
+              .Set("content", "content")
+              .Set("description", "description")
+              .Set("descriptionStyles", base::Value::List()
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "url")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 5))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 4))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 9)
+                                                        .Set("length", 2))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 9)
+                                                        .Set("length", 2))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 1)
+                                                        .Set("length", 2)))));
 
-  std::unique_ptr<SendSuggestions::Params> moved_params(
-      SendSuggestions::Params::Create(moved_list));
+  std::optional<SendSuggestions::Params> moved_params =
+      SendSuggestions::Params::Create(moved_list);
   EXPECT_TRUE(moved_params);
   ASSERT_FALSE(moved_params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             moved_params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &moved_params->suggest_results[0].description_styles.value(),
+          moved_params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -237,54 +209,45 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
 // = 77777nnnnn
 TEST(ExtensionOmniboxTest, DescriptionStylesCombine2) {
   base::Value::List list =
-      ListBuilder()
-          .Append(42)
-          .Append(ListBuilder()
-                      .Append(DictionaryBuilder()
-                                  .Set("content", "content")
-                                  .Set("description", "description")
-                                  .Set("descriptionStyles",
-                                       ListBuilder()
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "url")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 5)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 5)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "match")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 3)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 2)
-                                                       .Set("length", 3)
-                                                       .BuildDict())
-                                           .Append(DictionaryBuilder()
-                                                       .Set("type", "dim")
-                                                       .Set("offset", 0)
-                                                       .Set("length", 3)
-                                                       .BuildDict())
-                                           .BuildList())
-                                  .BuildDict())
-                      .BuildList())
-          .BuildList();
+      base::Value::List().Append(42).Append(base::Value::List().Append(
+          base::Value::Dict()
+              .Set("content", "content")
+              .Set("description", "description")
+              .Set("descriptionStyles", base::Value::List()
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "url")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 5))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 5))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "match")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 3))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 2)
+                                                        .Set("length", 3))
+                                            .Append(base::Value::Dict()
+                                                        .Set("type", "dim")
+                                                        .Set("offset", 0)
+                                                        .Set("length", 3)))));
 
   ACMatchClassifications styles_expected;
   styles_expected.push_back(ACMatchClassification(0, kUrl | kMatch | kDim));
   styles_expected.push_back(ACMatchClassification(5, kNone));
 
-  std::unique_ptr<SendSuggestions::Params> params(
-      SendSuggestions::Params::Create(list));
+  std::optional<SendSuggestions::Params> params =
+      SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -296,43 +259,33 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine2) {
 // = 77777nnnnn
 TEST(ExtensionOmniboxTest, DefaultSuggestResult) {
   // Default suggestions should not have a content parameter.
-  base::Value::List list =
-      ListBuilder()
-          .Append(DictionaryBuilder()
-                      .Set("description", "description")
-                      .Set("descriptionStyles",
-                           ListBuilder()
-                               .Append(DictionaryBuilder()
-                                           .Set("type", "url")
-                                           .Set("offset", 0)
-                                           .Set("length", 5)
-                                           .BuildDict())
-                               .Append(DictionaryBuilder()
-                                           .Set("type", "match")
-                                           .Set("offset", 0)
-                                           .Set("length", 5)
-                                           .BuildDict())
-                               .Append(DictionaryBuilder()
-                                           .Set("type", "match")
-                                           .Set("offset", 0)
-                                           .Set("length", 3)
-                                           .BuildDict())
-                               .Append(DictionaryBuilder()
-                                           .Set("type", "dim")
-                                           .Set("offset", 2)
-                                           .Set("length", 3)
-                                           .BuildDict())
-                               .Append(DictionaryBuilder()
-                                           .Set("type", "dim")
-                                           .Set("offset", 0)
-                                           .Set("length", 3)
-                                           .BuildDict())
-                               .BuildList())
-                      .BuildDict())
-          .BuildList();
+  base::Value::List list = base::Value::List().Append(
+      base::Value::Dict()
+          .Set("description", "description")
+          .Set("descriptionStyles", base::Value::List()
+                                        .Append(base::Value::Dict()
+                                                    .Set("type", "url")
+                                                    .Set("offset", 0)
+                                                    .Set("length", 5))
+                                        .Append(base::Value::Dict()
+                                                    .Set("type", "match")
+                                                    .Set("offset", 0)
+                                                    .Set("length", 5))
+                                        .Append(base::Value::Dict()
+                                                    .Set("type", "match")
+                                                    .Set("offset", 0)
+                                                    .Set("length", 3))
+                                        .Append(base::Value::Dict()
+                                                    .Set("type", "dim")
+                                                    .Set("offset", 2)
+                                                    .Set("length", 3))
+                                        .Append(base::Value::Dict()
+                                                    .Set("type", "dim")
+                                                    .Set("offset", 0)
+                                                    .Set("length", 3))));
 
-  std::unique_ptr<SetDefaultSuggestion::Params> params(
-      SetDefaultSuggestion::Params::Create(list));
+  std::optional<SetDefaultSuggestion::Params> params =
+      SetDefaultSuggestion::Params::Create(list);
   EXPECT_TRUE(params);
 }
 

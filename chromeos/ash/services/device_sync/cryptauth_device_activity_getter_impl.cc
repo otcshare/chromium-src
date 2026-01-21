@@ -7,7 +7,7 @@
 #include <array>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
@@ -58,14 +58,14 @@ void CryptAuthDeviceActivityGetterImpl::Factory::SetFactoryForTesting(
 }
 
 // static
-absl::optional<base::TimeDelta>
+std::optional<base::TimeDelta>
 CryptAuthDeviceActivityGetterImpl::GetTimeoutForState(State state) {
   switch (state) {
     case State::kWaitingForGetDevicesActivityStatusResponse:
       return kWaitingForGetDevicesActivityStatusResponseTimeout;
     default:
       // Signifies that there should not be a timeout.
-      return absl::nullopt;
+      return std::nullopt;
   }
 }
 
@@ -107,7 +107,7 @@ void CryptAuthDeviceActivityGetterImpl::SetState(State state) {
   state_ = state;
   last_state_change_timestamp_ = base::TimeTicks::Now();
 
-  absl::optional<base::TimeDelta> timeout_for_state = GetTimeoutForState(state);
+  std::optional<base::TimeDelta> timeout_for_state = GetTimeoutForState(state);
   if (!timeout_for_state)
     return;
 

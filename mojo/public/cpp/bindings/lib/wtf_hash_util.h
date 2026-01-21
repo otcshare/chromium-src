@@ -21,34 +21,29 @@ size_t WTFHashCombine(size_t seed, const T& value) {
   // Based on proposal in:
   // http://www.open-std.org/JTC1/SC22/WG21/docs/papers/2005/n1756.pdf
   //
-  // TODO(tibell): We'd like to use WTF::DefaultHash instead of std::hash, but
+  // TODO(tibell): We'd like to use blink::DefaultHash instead of std::hash, but
   //     there is no general template specialization of DefaultHash for enums
   //     and there can't be an instance for bool.
   return seed ^ (std::hash<T>()(value) + (seed << 6) + (seed >> 2));
 }
 
-template <typename T, bool has_hash_method = HasHashMethod<T>::value>
-struct WTFHashTraits;
-
 template <typename T>
-size_t WTFHash(size_t seed, const T& value);
-
-template <typename T>
-struct WTFHashTraits<T, true> {
-  static size_t Hash(size_t seed, const T& value) { return value.Hash(seed); }
-};
-
-template <typename T>
-struct WTFHashTraits<T, false> {
+struct WTFHashTraits {
   static size_t Hash(size_t seed, const T& value) {
     return WTFHashCombine(seed, value);
   }
 };
 
+template <typename T>
+  requires(HasHashMethod<T>)
+struct WTFHashTraits<T> {
+  static size_t Hash(size_t seed, const T& value) { return value.Hash(seed); }
+};
+
 template <>
-struct WTFHashTraits<WTF::String, false> {
-  static size_t Hash(size_t seed, const WTF::String& value) {
-    return HashCombine(seed, WTF::StringHash::GetHash(value));
+struct WTFHashTraits<blink::String> {
+  static size_t Hash(size_t seed, const blink::String& value) {
+    return HashCombine(seed, blink::GetHash(value));
   }
 };
 
@@ -60,10 +55,11 @@ size_t WTFHash(size_t seed, const T& value) {
 }  // namespace internal
 }  // namespace mojo
 
-namespace WTF {
+namespace blink {
 
 template <typename T>
-struct DefaultHash<mojo::StructPtr<T>> {
+struct HashTraits<mojo::StructPtr<T>>
+    : public GenericHashTraits<mojo::StructPtr<T>> {
   static unsigned GetHash(const mojo::StructPtr<T>& value) {
     return static_cast<unsigned>(value.Hash(mojo::internal::kHashSeed));
   }
@@ -71,17 +67,11 @@ struct DefaultHash<mojo::StructPtr<T>> {
                     const mojo::StructPtr<T>& right) {
     return left.Equals(right);
   }
-  static const bool safe_to_compare_to_empty_or_deleted = false;
-};
-
-template <typename T>
-struct HashTraits<mojo::StructPtr<T>>
-    : public GenericHashTraits<mojo::StructPtr<T>> {
-  static const bool kHasIsEmptyValueFunction = true;
+  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
   static bool IsEmptyValue(const mojo::StructPtr<T>& value) {
     return value.is_null();
   }
-  static void ConstructDeletedValue(mojo::StructPtr<T>& slot, bool) {
+  static void ConstructDeletedValue(mojo::StructPtr<T>& slot) {
     mojo::internal::StructPtrWTFHelper<T>::ConstructDeletedValue(slot);
   }
   static bool IsDeletedValue(const mojo::StructPtr<T>& value) {
@@ -91,7 +81,8 @@ struct HashTraits<mojo::StructPtr<T>>
 };
 
 template <typename T>
-struct DefaultHash<mojo::InlinedStructPtr<T>> {
+struct HashTraits<mojo::InlinedStructPtr<T>>
+    : public GenericHashTraits<mojo::InlinedStructPtr<T>> {
   static unsigned GetHash(const mojo::InlinedStructPtr<T>& value) {
     return static_cast<unsigned>(value.Hash(mojo::internal::kHashSeed));
   }
@@ -99,17 +90,11 @@ struct DefaultHash<mojo::InlinedStructPtr<T>> {
                     const mojo::InlinedStructPtr<T>& right) {
     return left.Equals(right);
   }
-  static const bool safe_to_compare_to_empty_or_deleted = false;
-};
-
-template <typename T>
-struct HashTraits<mojo::InlinedStructPtr<T>>
-    : public GenericHashTraits<mojo::InlinedStructPtr<T>> {
-  static const bool kHasIsEmptyValueFunction = true;
+  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
   static bool IsEmptyValue(const mojo::InlinedStructPtr<T>& value) {
     return value.is_null();
   }
-  static void ConstructDeletedValue(mojo::InlinedStructPtr<T>& slot, bool) {
+  static void ConstructDeletedValue(mojo::InlinedStructPtr<T>& slot) {
     mojo::internal::InlinedStructPtrWTFHelper<T>::ConstructDeletedValue(slot);
   }
   static bool IsDeletedValue(const mojo::InlinedStructPtr<T>& value) {
@@ -118,6 +103,6 @@ struct HashTraits<mojo::InlinedStructPtr<T>>
   }
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // MOJO_PUBLIC_CPP_BINDINGS_LIB_WTF_HASH_UTIL_H_

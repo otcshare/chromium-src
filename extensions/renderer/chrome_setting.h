@@ -7,8 +7,10 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "extensions/renderer/bindings/argument_spec.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
 #include "v8/include/v8-forward.h"
 
@@ -24,8 +26,19 @@ class BindingAccessChecker;
 // The custom implementation of the ChromeSetting type exposed to APIs.
 class ChromeSetting final : public gin::Wrappable<ChromeSetting> {
  public:
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kChromeSetting};
+
   ChromeSetting(const ChromeSetting&) = delete;
+
   ChromeSetting& operator=(const ChromeSetting&) = delete;
+
+  ChromeSetting(APIRequestHandler* request_handler,
+                APIEventHandler* event_handler,
+                const APITypeReferenceMap* type_refs,
+                const BindingAccessChecker* access_checker,
+                const std::string& pref_name,
+                const base::Value::Dict& argument_spec);
 
   ~ChromeSetting() override;
 
@@ -39,19 +52,14 @@ class ChromeSetting final : public gin::Wrappable<ChromeSetting> {
       APITypeReferenceMap* type_refs,
       const BindingAccessChecker* access_checker);
 
-  static gin::WrapperInfo kWrapperInfo;
-
-  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) override;
-  const char* GetTypeName() override;
-
  private:
-  ChromeSetting(APIRequestHandler* request_handler,
-                APIEventHandler* event_handler,
-                const APITypeReferenceMap* type_refs,
-                const BindingAccessChecker* access_checker,
-                const std::string& pref_name,
-                const base::DictionaryValue& argument_spec);
+  // gin::Wrappable:
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) final;
+
+  const char* GetHumanReadableName() const override;
+
+  const gin::WrapperInfo* wrapper_info() const override;
 
   // JS function handlers:
   void Get(gin::Arguments* arguments);
@@ -65,13 +73,13 @@ class ChromeSetting final : public gin::Wrappable<ChromeSetting> {
   void HandleFunction(const std::string& function_name,
                       gin::Arguments* arguments);
 
-  APIRequestHandler* request_handler_;
+  raw_ptr<APIRequestHandler, DanglingUntriaged> request_handler_;
 
-  APIEventHandler* event_handler_;
+  raw_ptr<APIEventHandler, DanglingUntriaged> event_handler_;
 
-  const APITypeReferenceMap* type_refs_;
+  raw_ptr<const APITypeReferenceMap, DanglingUntriaged> type_refs_;
 
-  const BindingAccessChecker* const access_checker_;
+  const raw_ptr<const BindingAccessChecker, DanglingUntriaged> access_checker_;
 
   // The name of the preference this ChromeSetting is managing.
   std::string pref_name_;

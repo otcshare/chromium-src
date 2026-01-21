@@ -19,22 +19,16 @@ namespace {
 // reporting collection of types.
 const char kUmaHistogramName[] = "ChromeOS.CWP.CollectProcessTypes";
 
-void SkipLine(re2::StringPiece* contents) {
+void SkipLine(std::string_view* contents) {
   static const LazyRE2 kSkipLine = {R"(.+\n?)"};
   RE2::Consume(contents, *kSkipLine);
 }
 
-// Matches both Ash-Chrome and Lacros binaries.
-const LazyRE2 kChromeExePathMatcher = {
-    R"((/opt/google/chrome/chrome|\S*lacros\S*/chrome))"};
+const LazyRE2 kChromeExePathMatcher = {R"(/opt/google/chrome/chrome)"};
 
-// Matches Lacros binaries.
-const LazyRE2 kLacrosExePathMatcher = {R"((\S*lacros\S*/chrome))"};
 }  // namespace
 
-std::map<uint32_t, Process> ProcessTypeCollector::ChromeProcessTypes(
-    std::vector<uint32_t>& lacros_pids,
-    std::string& lacros_path) {
+std::map<uint32_t, Process> ProcessTypeCollector::ChromeProcessTypes() {
   std::string output;
   if (!base::GetAppOutput(std::vector<std::string>({"ps", "-ewwo", "pid,cmd"}),
                           &output)) {
@@ -43,7 +37,7 @@ std::map<uint32_t, Process> ProcessTypeCollector::ChromeProcessTypes(
     return std::map<uint32_t, Process>();
   }
 
-  return ParseProcessTypes(output, lacros_pids, lacros_path);
+  return ParseProcessTypes(output);
 }
 
 std::map<uint32_t, Thread> ProcessTypeCollector::ChromeThreadTypes() {
@@ -60,9 +54,7 @@ std::map<uint32_t, Thread> ProcessTypeCollector::ChromeThreadTypes() {
 }
 
 std::map<uint32_t, Process> ProcessTypeCollector::ParseProcessTypes(
-    re2::StringPiece contents,
-    std::vector<uint32_t>& lacros_pids,
-    std::string& lacros_path) {
+    std::string_view contents) {
   static const LazyRE2 kLineMatcher = {
       R"(\s*(\d+))"    // PID
       R"(\s+(.+)\n?)"  // COMMAND LINE
@@ -81,7 +73,7 @@ std::map<uint32_t, Process> ProcessTypeCollector::ParseProcessTypes(
   bool is_truncated = false;
   while (!contents.empty()) {
     uint32_t pid = 0;
-    re2::StringPiece cmd_line;
+    std::string_view cmd_line;
     if (!RE2::Consume(&contents, *kLineMatcher, &pid, &cmd_line)) {
       SkipLine(&contents);
       is_truncated = true;
@@ -93,18 +85,8 @@ std::map<uint32_t, Process> ProcessTypeCollector::ParseProcessTypes(
       continue;
     }
 
-    re2::StringPiece cmd;
-    if (!RE2::Consume(&cmd_line, *kChromeExePathMatcher, &cmd)) {
+    if (!RE2::Consume(&cmd_line, *kChromeExePathMatcher)) {
       continue;
-    }
-
-    // Use a second match to record any Lacros PID.
-    re2::StringPiece lacros_cmd;
-    if (RE2::Consume(&cmd, *kLacrosExePathMatcher, &lacros_cmd)) {
-      lacros_pids.emplace_back(pid);
-      if (lacros_path.empty()) {
-        lacros_path = lacros_cmd;
-      }
     }
 
     std::string type;
@@ -121,8 +103,6 @@ std::map<uint32_t, Process> ProcessTypeCollector::ParseProcessTypes(
       process = Process::UTILITY_PROCESS;
     } else if (type == switches::kZygoteProcess) {
       process = Process::ZYGOTE_PROCESS;
-    } else if (type == switches::kPpapiPluginProcess) {
-      process = Process::PPAPI_PLUGIN_PROCESS;
     }
 
     process_types.emplace(pid, process);
@@ -142,7 +122,7 @@ std::map<uint32_t, Process> ProcessTypeCollector::ParseProcessTypes(
 }
 
 std::map<uint32_t, Thread> ProcessTypeCollector::ParseThreadTypes(
-    re2::StringPiece contents) {
+    std::string_view contents) {
   static const LazyRE2 kLineMatcher = {
       R"(\s*(\d+))"    // PID
       R"(\s+(\d+))"    // TID
@@ -156,7 +136,7 @@ std::map<uint32_t, Thread> ProcessTypeCollector::ParseThreadTypes(
   bool is_truncated = false;
   while (!contents.empty()) {
     uint32_t pid = 0, tid = 0;
-    re2::StringPiece comm_cmd;
+    std::string_view comm_cmd;
     if (!RE2::Consume(&contents, *kLineMatcher, &pid, &tid, &comm_cmd)) {
       SkipLine(&contents);
       is_truncated = true;
@@ -205,6 +185,12 @@ std::map<uint32_t, Thread> ProcessTypeCollector::ParseThreadTypes(
       thread = Thread::AUDIO_THREAD;
     } else if (comm_cmd.starts_with("AudioOutputDevi")) {
       thread = Thread::AUDIO_DEVICE_THREAD;
+    } else if (comm_cmd.starts_with("StackSamplingPr")) {
+      thread = Thread::STACK_SAMPLING_THREAD;
+    } else if (comm_cmd.starts_with("VideoFrameCompo")) {
+      thread = Thread::VIDEO_FRAME_COMPOSITOR_THREAD;
+    } else if (comm_cmd.starts_with("CodecWorker")) {
+      thread = Thread::CODEC_WORKER_THREAD;
     }
 
     thread_types.emplace(tid, thread);

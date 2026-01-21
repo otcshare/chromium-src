@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -13,8 +14,9 @@
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chromeos/components/kiosk/kiosk_utils.h"
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -88,16 +90,18 @@ void UserTypeByDeviceTypeMetricsProvider::OnUserSessionStarted(
 
 UserTypeByDeviceTypeMetricsProvider::UserSegment
 UserTypeByDeviceTypeMetricsProvider::GetUserSegment(Profile* profile) {
-  // Check for Managed Guest Session
-  if (profiles::IsPublicSession()) {
+  if (profiles::IsDemoSession()) {
+    return UserSegment::kDemoMode;
+  }
+
+  if (chromeos::IsManagedGuestSession()) {
     return UserSegment::kManagedGuestSession;
   }
 
-  if (profiles::IsKioskSession()) {
+  if (chromeos::IsKioskSession()) {
     return UserSegment::kKioskApp;
   }
 
-  // Check for off-the-record profiles.
   if (profile->IsOffTheRecord()) {
     return UserSegment::kUnmanaged;
   }
@@ -123,7 +127,6 @@ UserTypeByDeviceTypeMetricsProvider::GetUserSegment(Profile* profile) {
       return UserSegment::kEnterprise;
   }
   NOTREACHED();
-  return UserSegment::kUnmanaged;
 }
 
 // static

@@ -9,7 +9,9 @@
 
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/public/cpp/style/dark_light_mode_controller.h"
+#include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "ash/style/color_util.h"
 #include "ash/system/network/active_network_icon.h"
 #include "ash/system/network/tray_network_state_model.h"
 #include "ash/test/ash_test_base.h"
@@ -18,22 +20,23 @@
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_state_test_helper.h"
 #include "chromeos/ash/components/network/tether_constants.h"
-#include "chromeos/services/network_config/public/cpp/cros_network_config_test_helper.h"
+#include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/native_theme/mock_os_settings_provider.h"
+#include "ui/native_theme/native_theme.h"
+#include "ui/views/controls/image_view.h"
 
 // This tests both the helper functions in network_icon, and ActiveNetworkIcon
 // which is a primary consumer of the helper functions.
+
+namespace ash::network_icon {
 
 using chromeos::network_config::mojom::ConnectionStateType;
 using chromeos::network_config::mojom::NetworkStateProperties;
 using chromeos::network_config::mojom::NetworkStatePropertiesPtr;
 using chromeos::network_config::mojom::NetworkType;
-
-namespace ash {
-
-namespace network_icon {
 
 class NetworkIconTest : public AshTestBase {
  public:
@@ -56,6 +59,13 @@ class NetworkIconTest : public AshTestBase {
     active_network_icon_.reset();
     PurgeNetworkIconCache(std::set<std::string>());
     AshTestBase::TearDown();
+  }
+
+  const ui::ColorProvider* GetColorProvider() {
+    // TODO(b/279177422): Replace with a stable ColorProvider
+    return ColorUtil::GetColorProviderSourceForWindow(
+               Shell::GetPrimaryRootWindow())
+        ->GetColorProvider();
   }
 
   std::string ConfigureService(const std::string& shill_json_string) {
@@ -100,7 +110,7 @@ class NetworkIconTest : public AshTestBase {
   gfx::Image GetImageForNonVirtualNetwork(const NetworkStateProperties* network,
                                           bool badge_vpn) {
     return gfx::Image(network_icon::GetImageForNonVirtualNetwork(
-        network, icon_type_, badge_vpn));
+        GetColorProvider(), network, icon_type_, badge_vpn));
   }
 
   gfx::Image ImageForNetwork(const NetworkStateProperties* network) {
@@ -108,7 +118,8 @@ class NetworkIconTest : public AshTestBase {
   }
 
   gfx::ImageSkia GetDefaultNetworkImage(IconType icon_type, bool* animating) {
-    return active_network_icon_->GetImage(ActiveNetworkIcon::Type::kSingle,
+    return active_network_icon_->GetImage(GetColorProvider(),
+                                          ActiveNetworkIcon::Type::kSingle,
                                           icon_type, animating);
   }
 
@@ -156,7 +167,7 @@ class NetworkIconTest : public AshTestBase {
   IconType icon_type_ = ICON_TYPE_TRAY_REGULAR;
 
  private:
-  chromeos::network_config::CrosNetworkConfigTestHelper network_config_helper_;
+  network_config::CrosNetworkConfigTestHelper network_config_helper_;
   std::unique_ptr<TrayNetworkStateModel> network_state_model_;
   std::unique_ptr<ActiveNetworkIcon> active_network_icon_;
 
@@ -286,7 +297,6 @@ TEST_F(NetworkIconTest, ConnectingIconChangesInDarkMode) {
       GetDefaultNetworkImage(icon_type_, &animating);
   ASSERT_FALSE(light_mode_image.isNull());
   EXPECT_TRUE(animating);
-
   EXPECT_FALSE(gfx::test::AreImagesEqual(gfx::Image(default_image),
                                          gfx::Image(light_mode_image)));
 }
@@ -563,11 +573,22 @@ TEST_F(NetworkIconTest, DefaultNetworkVpnBadge) {
   SetServiceProperty(wifi1_path(), shill::kSignalStrengthProperty,
                      base::Value(45));
 
-  // With Ethernet and WiFi connected, the default icon should be empty.
+  // Gets the benchmark ethernet images.
+  NetworkStatePropertiesPtr reference_eth = CreateStandaloneNetworkProperties(
+      "reference_eth", NetworkType::kEthernet, ConnectionStateType::kOnline, 0);
+  gfx::Image reference_eth_unbadged = GetImageForNonVirtualNetwork(
+      reference_eth.get(), false /* show_vpn_badge */);
+  gfx::Image reference_eth_badged = GetImageForNonVirtualNetwork(
+      reference_eth.get(), true /* show_vpn_badge */);
+
+  // With Ethernet and WiFi connected, the default icon should be the Ethernet
+  // icon.
   bool animating = false;
   gfx::ImageSkia default_image = GetDefaultNetworkImage(icon_type_, &animating);
-  ASSERT_TRUE(default_image.isNull());
+  ASSERT_FALSE(default_image.isNull());
   EXPECT_FALSE(animating);
+  EXPECT_TRUE(gfx::test::AreImagesEqual(gfx::Image(default_image),
+                                        reference_eth_unbadged));
 
   // Add a connected VPN.
   std::string vpn_path = ConfigureService(
@@ -578,13 +599,6 @@ TEST_F(NetworkIconTest, DefaultNetworkVpnBadge) {
   default_image = GetDefaultNetworkImage(icon_type_, &animating);
   ASSERT_FALSE(default_image.isNull());
   EXPECT_FALSE(animating);
-
-  NetworkStatePropertiesPtr reference_eth = CreateStandaloneNetworkProperties(
-      "reference_eth", NetworkType::kEthernet, ConnectionStateType::kOnline, 0);
-  gfx::Image reference_eth_unbadged = GetImageForNonVirtualNetwork(
-      reference_eth.get(), false /* show_vpn_badge */);
-  gfx::Image reference_eth_badged = GetImageForNonVirtualNetwork(
-      reference_eth.get(), true /* show_vpn_badge */);
 
   EXPECT_FALSE(gfx::test::AreImagesEqual(gfx::Image(default_image),
                                          reference_eth_unbadged));
@@ -660,6 +674,26 @@ TEST_F(NetworkIconTest, DefaultNetworkImageVpnAndCellular) {
       gfx::Image(default_image), ImageForNetwork(reference_network.get())));
 }
 
-}  // namespace network_icon
+// Tests the case of getting the WiFi Enabled state icon when there is
+// no color provider, in which case the window background color is used.
+TEST_F(NetworkIconTest, GetImageModelForWiFiEnabledState) {
+  ui::MockOsSettingsProvider os_settings_provider;
 
-}  // namespace ash
+  views::ImageView* image_view =
+      new views::ImageView(GetImageModelForWiFiEnabledState(true));
+  std::unique_ptr<views::Widget> widget = CreateFramelessTestWidget();
+
+  widget->SetFullscreen(true);
+  widget->SetContentsView(image_view);
+
+  os_settings_provider.SetPreferredColorScheme(
+      ui::NativeTheme::PreferredColorScheme::kDark);
+  gfx::Image dark_mode_image = gfx::Image(image_view->GetImage());
+
+  os_settings_provider.SetPreferredColorScheme(
+      ui::NativeTheme::PreferredColorScheme::kLight);
+  gfx::Image light_mode_image = gfx::Image(image_view->GetImage());
+  EXPECT_FALSE(gfx::test::AreImagesEqual(dark_mode_image, light_mode_image));
+}
+
+}  // namespace ash::network_icon

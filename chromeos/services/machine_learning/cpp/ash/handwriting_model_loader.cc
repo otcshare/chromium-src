@@ -5,12 +5,13 @@
 #include "chromeos/services/machine_learning/cpp/ash/handwriting_model_loader.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "ash/constants/ash_switches.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
+#include "chromeos/services/machine_learning/public/cpp/ml_switches.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -41,9 +42,9 @@ constexpr char kLanguageCodeGesture[] = "gesture_in_context";
 // kOndeviceHandwritingSwitch.
 bool HandwritingSwitchHasValue(const std::string& value) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  return command_line->HasSwitch(ash::switches::kOndeviceHandwritingSwitch) &&
+  return command_line->HasSwitch(::switches::kOndeviceHandwritingSwitch) &&
          command_line->GetSwitchValueASCII(
-             ash::switches::kOndeviceHandwritingSwitch) == value;
+             switches::kOndeviceHandwritingSwitch) == value;
 }
 
 // Returns true if switch kOndeviceHandwritingSwitch is set to use_rootfs.
@@ -85,7 +86,7 @@ void OnGetExistingDlcsComplete(
     HandwritingRecognizer receiver,
     LoadHandwritingModelCallback callback,
     DlcserviceClient* const dlc_client,
-    const std::string& err,
+    std::string_view err,
     const dlcservice::DlcsWithContent& dlcs_with_content) {
   // Loop over dlcs_with_content, and installs libhandwriting if already exists.
   // Since we don't want to trigger downloading here, we only install(mount)

@@ -17,10 +17,6 @@
 #import "ios/web/shell/test/earl_grey/web_shell_test_case.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 using testing::ButtonWithAccessibilityLabel;
 using testing::ElementToDismissAlert;
 
@@ -36,6 +32,7 @@ const char kHtmlFile[] = "/context_menu.html";
 @implementation ContextMenuTestCase
 
 // Tests context menu appears on a regular link.
+// TODO(crbug.com/40896396): Test is flaky. Re-enable the test.
 - (void)testContextMenu {
   const char linkID[] = "normal-link";
   NSString* const linkText = @"normal-link-text";
@@ -64,6 +61,7 @@ const char kHtmlFile[] = "/context_menu.html";
 
 // Tests context menu on element that has WebkitTouchCallout set to none from an
 // ancestor and overridden.
+// TODO(crbug.com/40896396): Test is flaky. Re-enable the test.
 - (void)testContextMenuWebkitTouchCalloutOverride {
   const char linkID[] = "no-webkit-link";
   NSString* const linkText = @"no-webkit-link-text";

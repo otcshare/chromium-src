@@ -16,15 +16,10 @@ FakeUserEventService::~FakeUserEventService() = default;
 void FakeUserEventService::RecordUserEvent(
     std::unique_ptr<UserEventSpecifics> specifics) {
   DCHECK(specifics);
-  RecordUserEvent(*specifics);
+  recorded_user_events_.push_back(*specifics);
 }
 
-void FakeUserEventService::RecordUserEvent(
-    const UserEventSpecifics& specifics) {
-  recorded_user_events_.push_back(specifics);
-}
-
-base::WeakPtr<syncer::ModelTypeControllerDelegate>
+base::WeakPtr<syncer::DataTypeControllerDelegate>
 FakeUserEventService::GetControllerDelegate() {
   return fake_controller_delegate_.GetWeakPtr();
 }

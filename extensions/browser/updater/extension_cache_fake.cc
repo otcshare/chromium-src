@@ -4,8 +4,7 @@
 
 #include "extensions/browser/updater/extension_cache_fake.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -35,10 +34,12 @@ bool ExtensionCacheFake::GetExtension(const std::string& id,
   if (it == cache_.end()) {
     return false;
   } else {
-    if (version)
+    if (version) {
       *version = it->second.first;
-    if (file_path)
+    }
+    if (file_path) {
       *file_path = it->second.second;
+    }
     return true;
   }
 }
@@ -48,7 +49,7 @@ void ExtensionCacheFake::PutExtension(const std::string& id,
                                       const base::FilePath& file_path,
                                       const std::string& version,
                                       PutExtensionCallback callback) {
-  if (base::Contains(allowed_extensions_, id)) {
+  if (allowed_extensions_.contains(id)) {
     cache_[id].first = version;
     cache_[id].second = file_path;
     content::GetUIThreadTaskRunner({})->PostTask(

@@ -2,16 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "content/browser/network/network_errors_listing_ui.h"
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/values.h"
-#include "content/grit/dev_ui_content_resources.h"
+#include "content/grit/network_errors_resources.h"
+#include "content/grit/network_errors_resources_map.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -63,8 +65,7 @@ void HandleWebUIRequestCallback(BrowserContext* current_context,
 
   base::Value::Dict data;
   data.Set(kErrorCodesDataName, GetNetworkErrorData());
-  std::string json_string;
-  base::JSONWriter::Write(data, &json_string);
+  std::string json_string = base::WriteJson(data).value_or("");
   std::move(callback).Run(
       base::MakeRefCounted<base::RefCountedString>(std::move(json_string)));
 }
@@ -80,11 +81,9 @@ NetworkErrorsListingUI::NetworkErrorsListingUI(WebUI* web_ui)
 
   // Add required resources.
   html_source->UseStringsJs();
-  html_source->AddResourcePath("network_errors_listing.css",
-                               IDR_NETWORK_ERROR_LISTING_CSS);
-  html_source->AddResourcePath("network_errors_listing.js",
-                               IDR_NETWORK_ERROR_LISTING_JS);
-  html_source->SetDefaultResource(IDR_NETWORK_ERROR_LISTING_HTML);
+  html_source->AddResourcePaths(kNetworkErrorsResources);
+  html_source->SetDefaultResource(
+      IDR_NETWORK_ERRORS_NETWORK_ERRORS_LISTING_HTML);
   html_source->SetRequestFilter(
       base::BindRepeating(&ShouldHandleWebUIRequestCallback),
       base::BindRepeating(&HandleWebUIRequestCallback,

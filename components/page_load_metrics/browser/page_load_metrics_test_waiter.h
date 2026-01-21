@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -41,7 +42,8 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
     kRequestAnimationFrameAfterBackForwardCacheRestore = 1 << 11,
     kFirstScrollDelay = 1 << 12,
     kSoftNavigationCountUpdated = 1 << 13,
-    kTotalInputDelay = 1 << 14,
+    kMonotonicFirstPaint = 1 << 14,
+    kMonotonicFirstContentfulPaint = 1 << 15,
   };
 
   // Identify which frame the layout shift happens.
@@ -52,12 +54,9 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
     NoLayoutShift,
   };
 
-  using FrameTreeNodeId =
-      page_load_metrics::PageLoadMetricsObserver::FrameTreeNodeId;
-
   explicit PageLoadMetricsTestWaiter(content::WebContents* web_contents);
-  explicit PageLoadMetricsTestWaiter(content::WebContents* web_contents,
-                                     const char* observer_name_);
+  PageLoadMetricsTestWaiter(content::WebContents* web_contents,
+                            const char* observer_name);
 
   ~PageLoadMetricsTestWaiter() override;
 
@@ -81,6 +80,10 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   // TODO(skobes): Unify this API with AddMainFrameIntersectionExpectation.
   void SetMainFrameIntersectionExpectation();
 
+  // Indicates that we expect at least one notification for the main frame ad
+  // rectangles update, with any rect allowed.
+  void SetMainFrameAdRectsExpectation();
+
   // Add a main frame viewport intersection expectation. Expects that the
   // mainframe receives its viewport rectangle in the main frame document's
   // coornidate. Subsequent calls overwrite unmet expectations.
@@ -103,22 +106,42 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
       int expected_minimum_complete_resources);
 
   // Add aggregate received resource bytes expectation.
-  void AddMinimumNetworkBytesExpectation(int expected_minimum_network_bytes);
+  void AddMinimumNetworkBytesExpectation(
+      base::ByteCount expected_minimum_network_bytes);
 
   // Add aggregate time spent in cpu for page expectation.
   void AddMinimumAggregateCpuTimeExpectation(base::TimeDelta minimum);
-
-  // Inserts `routing_id` into `expected_.memory_update_frame_ids_`, the set of
-  // frame routing IDs expected to receive a memory measurement update.
-  void AddMemoryUpdateExpectation(content::GlobalRenderFrameHostId routing_id);
 
   // Adds all |blink::LoadingBehaviorFlag|s set in |behavior_flags| to the
   // set of expected behaviors.
   void AddLoadingBehaviorExpectation(int behavior_flags);
 
+  // Add minimum largest contentful paint image update count to be expected.
+  // Also reset observed largest contentful paint image count.
+  void AddMinimumLargestContentfulPaintImageExpectation(int expected_minumum);
+
+  // Add minimum largest contentful paint text update count to be expected.
+  // Also reset observed largest contentful paint text count.
+  void AddMinimumLargestContentfulPaintTextExpectation(int expected_minumum);
+
+  void AddLargestContentfulPaintGreaterThanExpectation(double timestamp);
+
+  void AddSoftNavigationCountExpectation(int expected_count);
+
+  void AddSoftNavigationImageLCPExpectation(
+      int expected_soft_nav_image_lcp_update);
+
+  void AddSoftNavigationTextLCPExpectation(
+      int expected_soft_nav_text_lcp_update);
+
   // Add a main/sub frame layout shift expectation.
   void AddPageLayoutShiftExpectation(
-      ShiftFrame frame = ShiftFrame::LayoutShiftOnlyInMainFrame);
+      ShiftFrame frame = ShiftFrame::LayoutShiftOnlyInMainFrame,
+      uint64_t num_layout_shifts = 1);
+
+  // Adds a condition to wait for OnComplete invocation that indicates the
+  // observer will be gone, and Wait() can ensure all metrics are recorded.
+  void AddOnCompleteCalledExpectation();
 
   // Whether the given TimingField was observed in the page.
   bool DidObserveInPage(TimingField field) const;
@@ -126,20 +149,20 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   // Whether the given WebFeature was observed in the page.
   bool DidObserveWebFeature(blink::mojom::WebFeature feature) const;
 
+  // Whether the given ad rect was observed in the page.
+  bool DidObserveMainFrameAdRect(const gfx::Rect& rect) const;
+
   // Waits for PageLoadMetrics events that match the fields set by the add
   // expectation methods. All matching fields must be set to end this wait.
   // All expectations are reset when the wait ends.
   void Wait();
 
-  int64_t current_network_bytes() const { return current_network_bytes_; }
-
-  int64_t current_network_body_bytes() const {
-    return current_network_body_bytes_;
+  base::ByteCount current_network_bytes() const {
+    return current_network_bytes_;
   }
 
-  // Add the number of input events count expectation.
-  void AddNumInputEventsExpectation(uint64_t expected_num_input_events) {
-    expected_num_input_events_ = expected_num_input_events;
+  base::ByteCount current_network_body_bytes() const {
+    return current_network_body_bytes_;
   }
 
   // Add the number of interactions count expectation.
@@ -165,7 +188,7 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   // Manages a bitset of TimingFields.
   class TimingFieldBitSet {
    public:
-    TimingFieldBitSet() {}
+    TimingFieldBitSet() = default;
 
     // Returns whether this bitset has all bits unset.
     bool Empty() const { return bitmask_ == 0; }
@@ -223,13 +246,14 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   void OnTimingUpdated(content::RenderFrameHost* subframe_rfh,
                        const page_load_metrics::mojom::PageLoadTiming& timing);
 
-  void OnSoftNavigationCountUpdated();
+  void OnSoftNavigationMetricsUpdated(
+      const page_load_metrics::mojom::SoftNavigationMetrics&
+          soft_navigation_metrics);
 
   // Updates observed page fields when a input timing update is received by the
   // MetricsWebContentsObserver. Stops waiting if expectations are satsfied
   // after update.
-  void OnPageInputTimingUpdated(uint64_t num_interactions,
-                                uint64_t num_input_events);
+  void OnPageInputTimingUpdated(uint64_t num_interactions);
 
   // Updates observed page fields when a timing update is received by the
   // MetricsWebContentsObserver. Stops waiting if expectations are satsfied
@@ -276,11 +300,13 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   void OnMainFrameViewportRectChanged(
       const gfx::Rect& main_frame_viewport_rect);
 
+  void OnMainFrameAdRectsChanged(
+      const base::flat_map<int, gfx::Rect>& main_frame_ad_rects);
+
   void OnDidFinishSubFrameNavigation(
       content::NavigationHandle* navigation_handle);
 
-  // Called when V8 per-frame memory usage updates are available.
-  void OnV8MemoryChanged(const std::vector<MemoryUpdate>& memory_updates);
+  void OnComplete(const mojom::PageLoadTiming& timing);
 
   void OnTrackerCreated(page_load_metrics::PageLoadTracker* tracker) override;
 
@@ -298,10 +324,15 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   bool SubframeDataExpectationsSatisfied() const;
   bool MainFrameIntersectionExpectationsSatisfied() const;
   bool MainFrameViewportRectExpectationsSatisfied() const;
-  bool MemoryUpdateExpectationsSatisfied() const;
-  bool TotalInputDelayExpectationsSatisfied() const;
+  bool MainFrameAdRectsExpectationsSatisfied() const;
   bool LayoutShiftExpectationsSatisfied() const;
   bool NumInteractionsExpectationsSatisfied() const;
+  bool NumLargestContentfulPaintImageSatisfied() const;
+  bool NumLargestContentfulPaintTextSatisfied() const;
+  bool LargestContentfulPaintGreaterThanExpectationSatisfied() const;
+  bool SoftNavigationCountExpectationSatisfied() const;
+  bool SoftNavigationImageLCPExpectationSatisfied() const;
+  bool SoftNavigationTextLCPExpectationSatisfied() const;
 
   void AddObserver(page_load_metrics::PageLoadTracker* tracker);
 
@@ -321,23 +352,26 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
     bool subframe_data_ = false;
     std::set<gfx::Size, FrameSizeComparator> frame_sizes_;
     bool did_set_main_frame_intersection_ = false;
+    bool did_observed_main_frame_ad_rects_ = false;
     std::vector<gfx::Rect> main_frame_intersections_;
-    absl::optional<gfx::Rect> main_frame_viewport_rect_;
-    std::unordered_set<content::GlobalRenderFrameHostId,
-                       content::GlobalRenderFrameHostIdHasher>
-        memory_update_frame_ids_;
-    bool layout_shift_ = false;
+    std::optional<gfx::Rect> main_frame_viewport_rect_;
+    uint64_t num_layout_shifts_ = 0;
+    bool on_complete_ = false;
   };
   State expected_;
   State observed_;
 
   int current_complete_resources_ = 0;
-  int64_t current_network_bytes_ = 0;
+  base::ByteCount current_network_bytes_;
+
+  // The last observed main frame ad rectangle for each id. This doesn't
+  // get reset in `ResetExpectations`.
+  base::flat_map<int, gfx::Rect> main_frame_ad_rects_;
 
   // Network body bytes are only counted for complete resources.
-  int64_t current_network_body_bytes_ = 0;
+  base::ByteCount current_network_body_bytes_;
   int expected_minimum_complete_resources_ = 0;
-  int expected_minimum_network_bytes_ = 0;
+  base::ByteCount expected_minimum_network_bytes_;
 
   // Total time spent int the cpu aggregated across the frames on the page.
   base::TimeDelta current_aggregate_cpu_time_;
@@ -347,14 +381,28 @@ class PageLoadMetricsTestWaiter : public MetricsLifecycleObserver {
   bool did_add_observer_ = false;
   bool soft_navigation_count_updated_ = false;
 
-  double last_main_frame_layout_shift_score_ = 0;
-  double last_sub_frame_layout_shift_score_ = 0;
-
-  uint64_t current_num_input_events_ = 0;
-  uint64_t expected_num_input_events_ = 0;
-
   uint64_t current_num_interactions_ = 0;
   uint64_t expected_num_interactions_ = 0;
+
+  uint64_t expected_num_largest_contentful_paint_image_ = 0;
+  uint64_t current_num_largest_contentful_paint_image_ = 0;
+
+  uint64_t expected_num_largest_contentful_paint_text_ = 0;
+  uint64_t current_num_largest_contentful_paint_text_ = 0;
+
+  uint64_t expected_soft_navigation_count_ = 0;
+  uint64_t current_soft_navigation_count_ = 0;
+
+  uint64_t expected_soft_navigation_image_lcp_update_ = 0;
+  uint64_t observed_soft_navigation_image_lcp_update_ = 0;
+  uint64_t observed_soft_navigation_image_lcp_ = 0;
+
+  uint64_t expected_soft_navigation_text_lcp_update_ = 0;
+  uint64_t observed_soft_navigation_text_lcp_update_ = 0;
+  uint64_t observed_soft_navigation_text_lcp_ = 0;
+
+  double expected_min_largest_contentful_paint_ = -1.0;
+  double observed_largest_contentful_paint_ = 0.0;
 
   ShiftFrame shift_frame_ = ShiftFrame::NoLayoutShift;
 

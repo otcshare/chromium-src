@@ -7,9 +7,10 @@
 #include <pango/pango-attributes.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <string>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/char_iterator.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/ime/composition_text.h"
@@ -42,7 +43,7 @@ void ExtractCompositionTextFromGtkPreedit(const char* utf8_text,
   char16_offsets.push_back(length);
 
   size_t cursor_offset =
-      char16_offsets[base::clamp(cursor_position, 0, char_length)];
+      char16_offsets[std::clamp(cursor_position, 0, char_length)];
 
   composition->selection = gfx::Range(cursor_offset);
 
@@ -61,8 +62,9 @@ void ExtractCompositionTextFromGtkPreedit(const char* utf8_text,
       if (start >= end)
         continue;
 
-      start = g_utf8_pointer_to_offset(utf8_text, utf8_text + start);
-      end = g_utf8_pointer_to_offset(utf8_text, utf8_text + end);
+      start =
+          g_utf8_pointer_to_offset(utf8_text, UNSAFE_TODO(utf8_text + start));
+      end = g_utf8_pointer_to_offset(utf8_text, UNSAFE_TODO(utf8_text + end));
 
       // Double check, in case |utf8_text| is not a valid utf-8 string.
       start = std::min(start, char_length);

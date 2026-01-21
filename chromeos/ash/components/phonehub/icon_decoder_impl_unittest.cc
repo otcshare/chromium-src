@@ -6,15 +6,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chromeos/ash/components/phonehub/icon_decoder.h"
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -203,5 +202,4 @@ TEST_F(IconDecoderImplTest, BatchDecodeWithInProgresRequests) {
   VerifyDecodedItems(result);
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

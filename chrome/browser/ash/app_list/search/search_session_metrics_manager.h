@@ -16,6 +16,8 @@ class Profile;
 
 namespace app_list {
 
+inline constexpr int kMaxLoggedQueryLengthOnSessionConclusion = 20;
+
 // Records launcher search backend metrics. This includes impression,
 // abandonment, and launch information reported by the AppListNotifier.
 class SearchSessionMetricsManager : ash::AppListNotifier::Observer {
@@ -30,14 +32,14 @@ class SearchSessionMetricsManager : ash::AppListNotifier::Observer {
   SearchSessionMetricsManager& operator=(const SearchSessionMetricsManager&) =
       delete;
 
-  void EndSearchSession();
+  void EndSearchSession(const std::u16string& query);
 
   // ash::AppListNotifier::Observer:
   void OnSearchSessionStarted() override;
-  void OnSearchSessionEnded() override;
-  void OnImpression(Location location,
-                    const std::vector<Result>& results,
-                    const std::u16string& query) override;
+  void OnSearchSessionEnded(const std::u16string& query) override;
+  void OnSeen(Location location,
+              const std::vector<Result>& results,
+              const std::u16string& query) override;
   void OnLaunch(Location location,
                 const Result& launched,
                 const std::vector<Result>& shown,
@@ -47,7 +49,8 @@ class SearchSessionMetricsManager : ash::AppListNotifier::Observer {
   // Whether the metrics manager is tracking an active search session.
   bool session_active_ = false;
   // Tracks the metric recorded when EndSearchSession() is called.
-  ash::SearchSessionResult session_result_ = ash::SearchSessionResult::kQuit;
+  ash::SearchSessionConclusion session_result_ =
+      ash::SearchSessionConclusion::kQuit;
 
   base::ScopedObservation<ash::AppListNotifier, ash::AppListNotifier::Observer>
       observation_{this};

@@ -8,10 +8,12 @@ package ash.phonehub.proto;
 
 option optimize_for = LITE_RUNTIME;
 
-// This enum is tied directly to a UMA enum defined in
-// //tools/metrics/histograms/enums.xml, and should always reflect it (do not
-// change one without changing the other). Entries should be never modified
-// or deleted. Only additions possible.
+// This enum is tied directly to the PhoneHubMessageType enum defined in
+// //tools/metrics/histograms/metadata/phonehub/enums.xml, and should always
+// reflect it (do not change one without changing the other). Entries should be
+// never modified or deleted. Only additions possible.
+//
+// LINT.IfChange(PhoneHubMessageType)
 enum MessageType {
   PROVIDE_CROS_STATE = 0;
   PHONE_STATUS_SNAPSHOT = 1;
@@ -43,7 +45,9 @@ enum MessageType {
   PING_RESPONSE = 27;
   APP_STREAM_UPDATE = 28;
   APP_LIST_UPDATE = 29;
+  APP_LIST_INCREMENTAL_UPDATE = 30;
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/phonehub/enums.xml:PhoneHubMessageTypes)
 
 enum NotificationSetting {
   NOTIFICATIONS_OFF = 0;
@@ -53,14 +57,6 @@ enum NotificationSetting {
 enum CameraRollSetting {
   CAMERA_ROLL_OFF = 0;
   CAMERA_ROLL_ON = 1;
-}
-
-enum NotificationIconStyling {
-  // Use multicolor Android app icon logic. Keep as the zero default for
-  // backwards compatibility.
-  ICON_STYLE_DEFAULT_LEGACY_APP_ICON = 0;
-  // Use monochrome icon styling logic.
-  ICON_STYLE_MONOCHROME_SMALL_ICON = 1;
 }
 
 enum AppStreamabilityStatus {
@@ -194,6 +190,12 @@ message FeatureSetupConfig {
   bool ping_capability_supported = 2;
 }
 
+enum NetworkStatus {
+  DISCONNECTED = 0;
+  CELLULAR = 1;
+  WIFI = 2;
+}
+
 message PhoneProperties {
   int32 battery_percentage = 1;
   ChargingState charging_state = 2;
@@ -231,7 +233,17 @@ message PhoneProperties {
 
   FeatureStatus eche_feature_status = 20;
 
-  // Next ID: 21
+  // Used for Phone Hub Structured Metrics
+  optional string phone_manufacturer = 21;
+  optional string phone_model = 22;
+  optional int64 ambient_version = 23;
+  optional NetworkStatus network_status = 24;
+  optional bytes ssid = 25;
+  optional string locale = 26;
+  optional string phone_pseudonymous_id = 27;
+  optional int64 pseudonymous_id_next_rotation_date = 28;
+
+  // Next ID: 29
 }
 
 message UserState {
@@ -247,19 +259,44 @@ message App {
   bytes icon = 3;
   int64 user_id = 4;
 
-  NotificationIconStyling icon_styling = 5;
-  // Optionally used only when icon_styling is ICON_STYLE_MONOCHROME_SMALL_ICON.
   // When unset, the ChromeOS side uses the system theme's default color.
-  ColorRgb icon_color = 6;
-
+  ColorRgb monochrome_icon_color = 6;
   AppStreamabilityStatus app_streamability_status = 7;
+  optional bytes monochrome_icon_mask = 8;
+
+  reserved 5;  // deprecated icon_stying field.
+}
+
+// Data required to verify the remote device.
+// Next ID: 3
+message AttestationData {
+  enum Type {
+    UNKNOWN = 0;
+
+    // A Chrome OS "soft-bind" certificate chain.
+    // The |certificates| field holds a PEM encoded X.509 certificate chain
+    // ordered from leaf to root.
+    CROS_SOFT_BIND_CERT_CHAIN = 1;
+  }
+
+  Type type = 1;
+
+  // The certificate data as specified by |type|.
+  repeated bytes certificates = 2;
 }
 
 message CrosState {
   NotificationSetting notification_setting = 1;
   CameraRollSetting camera_roll_setting = 2;
-  // Optional in the case of un-updated phones.
-  NotificationIconStyling notification_icon_styling = 3;
+  // Optional for older Chromebooks pre-attestation.
+  AttestationData attestation_data = 4;
+  // Request Eche feature status info from the phone through Phone hub.
+  bool should_provide_eche_status = 5;
+
+  optional int64 pseudonymous_id_next_rotation_date = 6;
+  optional string phone_hub_session_id = 7;
+
+  reserved 3;  // deprecated notification_icon_styling field.
 }
 
 message Action {
@@ -396,6 +433,13 @@ message AppListUpdate {
   // List of apps available to stream, sorted by recency.
   optional StreamableApps all_apps = 1;
   optional StreamableApps recent_apps = 2;
+}
+
+message AppListIncrementalUpdate {
+  // For removed apps, only package_names and user_ids are populated in the
+  // apps.
+  optional StreamableApps removed_apps = 3;
+  optional StreamableApps installed_apps = 4;
 }
 
 // When adding new fields to this message, update CameraRollItem#operator==

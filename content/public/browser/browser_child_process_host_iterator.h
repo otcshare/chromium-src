@@ -7,11 +7,8 @@
 
 #include <list>
 
+#include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
-
-namespace IPC {
-class Message;
-}
 
 namespace content {
 class BrowserChildProcessHostDelegate;
@@ -34,14 +31,14 @@ class CONTENT_EXPORT BrowserChildProcessHostIterator {
   bool operator++();
   bool Done();
   const ChildProcessData& GetData();
-  bool Send(IPC::Message* message);
   BrowserChildProcessHostDelegate* GetDelegate();
   ChildProcessHost* GetHost();
 
  private:
   bool all_;
   int process_type_;
-  std::list<BrowserChildProcessHostImpl*>::iterator iterator_;
+  std::list<raw_ptr<BrowserChildProcessHostImpl, CtnExperimental>>::iterator
+      iterator_;
 };
 
 // Helper class so that subclasses of BrowserChildProcessHostDelegate can be

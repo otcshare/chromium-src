@@ -12,7 +12,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/apps/app_service/app_icon/app_icon_util.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "ui/base/resource/resource_scale_factor.h"
 
@@ -20,11 +19,10 @@ class Profile;
 
 namespace apps {
 
-class AppPublisher;
+class CompressedIconGetter;
 
-// AppIconWriter writes app icons to the icon image files in the local disk.
-//
-// TODO(crbug.com/1380608): Implement the icon writing function.
+// AppIconWriter writes app icons and shortcut icons to the icon image files in
+// the local disk.
 class AppIconWriter {
  public:
   explicit AppIconWriter(Profile* profile);
@@ -32,14 +30,12 @@ class AppIconWriter {
   AppIconWriter& operator=(const AppIconWriter&) = delete;
   ~AppIconWriter();
 
-  // Calls `publisher`'s GetCompressedIconData to get the compressed icon data
-  // for `app_id`, and saves the icon data to the local disk. Calls `callback`
-  // with true if saving and loading the data was successful.
-  void InstallIcon(AppPublisher* publisher,
-                   const std::string& app_id,
+  // Calls `compressed_icon_getter`'s GetCompressedIconData to get the
+  // compressed icon data for `id`, and saves the icon data to the local disk.
+  // Calls `callback` with true if saving and loading the data was successful.
+  void InstallIcon(CompressedIconGetter* compressed_icon_getter,
+                   const std::string& id,
                    int32_t size_in_dip,
-                   IconEffects icon_effects,
-                   IconType icon_type,
                    base::OnceCallback<void(bool)> callback);
 
  private:
@@ -47,10 +43,7 @@ class AppIconWriter {
   // it can be the "K" in a "map<K, V>".
   class Key {
    public:
-    Key(const std::string& app_id,
-        int32_t size_in_dip,
-        IconEffects icon_effects,
-        IconType icon_type);
+    Key(const std::string& id, int32_t size_in_dip);
 
     Key(const Key&) = delete;
     Key& operator=(const Key&) = delete;
@@ -62,10 +55,8 @@ class AppIconWriter {
 
     bool operator<(const Key& other) const;
 
-    std::string app_id_;
+    std::string id_;
     int32_t size_in_dip_;
-    IconEffects icon_effects_;
-    IconType icon_type_;
   };
 
   // Contains the scale factors and the callback for the compressed app icon
@@ -81,24 +72,32 @@ class AppIconWriter {
     PendingResult(PendingResult&&);
     PendingResult& operator=(PendingResult&&);
 
+    // The requested scale factors for the icon requests with `id` and
+    // `size_in_dip`.
     std::set<ui::ResourceScaleFactor> scale_factors;
+
+    // The finished icon requested for scale factors. E.g. the icon data for the
+    // scale factor(k100Percent) has been fetched, and saved in the icon file,
+    // and the icon data for the scale factor(k200Percent) has not been fetched.
+    // Then we have:
+    // scale_factors = {k100Percent, k200Percent}
+    // complete_scale_factors = {k100Percent}
+    std::set<ui::ResourceScaleFactor> complete_scale_factors;
+
+    // The callbacks for the icon requests with `id` and `size_in_dip`.
     std::vector<base::OnceCallback<void(bool)>> callbacks;
   };
 
   // Saves the compressed icon data in `iv` to the local disk.
-  void OnIconLoad(const std::string& app_id,
+  void OnIconLoad(const std::string& id,
                   int32_t size_in_dip,
-                  IconEffects icon_effects,
-                  IconType icon_type,
                   ui::ResourceScaleFactor scale_factor,
                   IconValuePtr iv);
 
-  void OnWriteIconFile(const std::string& app_id,
+  void OnWriteIconFile(const std::string& id,
                        int32_t size_in_dip,
-                       IconEffects icon_effects,
-                       IconType icon_type,
                        ui::ResourceScaleFactor scale_factor,
-                       IconValuePtr iv);
+                       bool ret);
 
   const raw_ptr<Profile> profile_;
 

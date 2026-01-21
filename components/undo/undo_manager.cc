@@ -146,7 +146,7 @@ void UndoManager::RemoveAllOperations() {
   undo_actions_.clear();
   redo_actions_.clear();
 
-  NotifyOnUndoManagerStateChange();
+  observers_.Notify(&UndoManagerObserver::OnUndoManagerStateChange);
 }
 
 void UndoManager::AddObserver(UndoManagerObserver* observer) {
@@ -155,6 +155,15 @@ void UndoManager::AddObserver(UndoManagerObserver* observer) {
 
 void UndoManager::RemoveObserver(UndoManagerObserver* observer) {
   observers_.RemoveObserver(observer);
+}
+
+void UndoManager::Shutdown() {
+  // After the `RemoveAllOperations` call below - this instance won't be
+  // notified of `BookmarkModel` destruction. Undo operations keep a pointer to
+  // `BookmarkModel` - delete them to avoid dangling pointers.
+  RemoveAllOperations();
+  observers_.Notify(&UndoManagerObserver::OnUndoManagerShutdown);
+  DCHECK(observers_.empty());
 }
 
 void UndoManager::Undo(
@@ -168,8 +177,8 @@ void UndoManager::Undo(
 
   base::AutoReset<bool> incoming_changes(performing_indicator, true);
   std::unique_ptr<UndoGroup> action = std::move(active_undo_group->back());
-  base::AutoReset<UndoGroup*> action_context(&undo_in_progress_action_,
-      action.get());
+  base::AutoReset<raw_ptr<UndoGroup>> action_context(&undo_in_progress_action_,
+                                                     action.get());
   active_undo_group->erase(active_undo_group->begin() +
                            active_undo_group->size() - 1);
 
@@ -177,12 +186,7 @@ void UndoManager::Undo(
   action->Undo();
   EndGroupingActions();
 
-  NotifyOnUndoManagerStateChange();
-}
-
-void UndoManager::NotifyOnUndoManagerStateChange() {
-  for (auto& observer : observers_)
-    observer.OnUndoManagerStateChange();
+  observers_.Notify(&UndoManagerObserver::OnUndoManagerStateChange);
 }
 
 void UndoManager::AddUndoGroup(std::unique_ptr<UndoGroup> new_undo_group) {
@@ -196,7 +200,7 @@ void UndoManager::AddUndoGroup(std::unique_ptr<UndoGroup> new_undo_group) {
   if (GetActiveUndoGroup()->size() > kMaxUndoGroups)
     GetActiveUndoGroup()->erase(GetActiveUndoGroup()->begin());
 
-  NotifyOnUndoManagerStateChange();
+  observers_.Notify(&UndoManagerObserver::OnUndoManagerStateChange);
 }
 
 std::vector<std::unique_ptr<UndoGroup>>* UndoManager::GetActiveUndoGroup() {

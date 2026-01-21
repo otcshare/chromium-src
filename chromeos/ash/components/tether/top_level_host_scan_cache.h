@@ -10,10 +10,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/components/tether/host_scan_cache.h"
+
+namespace ash::timer_factory {
+class TimerFactory;
+}  // namespace ash::timer_factory
 
 namespace ash {
 
@@ -21,7 +25,6 @@ namespace tether {
 
 class ActiveHost;
 class PersistentHostScanCache;
-class TimerFactory;
 
 // HostScanCache implementation which interfaces with the network stack as well
 // as storing scanned device properties persistently and recovering stored
@@ -41,10 +44,11 @@ class TopLevelHostScanCache : public HostScanCache {
   // cache which are not discovered during the scan are removed.
   static constexpr int kNumMinutesBeforeCacheEntryExpires = 120;
 
-  TopLevelHostScanCache(std::unique_ptr<TimerFactory> timer_factory,
-                        ActiveHost* active_host,
-                        HostScanCache* network_host_scan_cache,
-                        PersistentHostScanCache* persistent_host_scan_cache);
+  TopLevelHostScanCache(
+      std::unique_ptr<ash::timer_factory::TimerFactory> timer_factory,
+      ActiveHost* active_host,
+      HostScanCache* network_host_scan_cache,
+      PersistentHostScanCache* persistent_host_scan_cache);
 
   TopLevelHostScanCache(const TopLevelHostScanCache&) = delete;
   TopLevelHostScanCache& operator=(const TopLevelHostScanCache&) = delete;
@@ -68,12 +72,13 @@ class TopLevelHostScanCache : public HostScanCache {
   void StartTimer(const std::string& tether_network_guid);
   void OnTimerFired(const std::string& tether_network_guid);
 
-  std::unique_ptr<TimerFactory> timer_factory_;
-  ActiveHost* active_host_;
-  HostScanCache* network_host_scan_cache_;
-  PersistentHostScanCache* persistent_host_scan_cache_;
+  std::unique_ptr<ash::timer_factory::TimerFactory> timer_factory_;
+  raw_ptr<ActiveHost> active_host_;
+  raw_ptr<HostScanCache> network_host_scan_cache_;
+  raw_ptr<PersistentHostScanCache> persistent_host_scan_cache_;
 
-  bool is_initializing_;
+  bool is_initializing_ = false;
+  bool is_shutting_down_ = false;
 
   // Maps from the Tether network GUID to a Timer object. While a scan result is
   // active in the cache, the corresponding Timer object starts running; if the

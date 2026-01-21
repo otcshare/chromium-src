@@ -6,22 +6,23 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/extensions/api/messaging/native_message_port.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "content/public/common/child_process_host.h"
+#include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/api/messaging/channel_endpoint.h"
 #include "extensions/browser/api/messaging/message_service.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
+#include "extensions/browser/api/messaging/native_message_port.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
 #include "extensions/common/api/messaging/port_id.h"
-#include "extensions/common/api/messaging/serialization_format.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/test/result_catcher.h"
-#include "ipc/ipc_message.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -73,9 +74,9 @@ class ExtensionIncomingNativeMessagingTest
   void OpenMessageChannelToExtension(
       std::unique_ptr<extensions::NativeMessageHost> native_message_host) {
     auto* const message_service = extensions::MessageService::Get(profile());
-    const extensions::PortId port_id(base::UnguessableToken::Create(),
-                                     1 /* port_number */, true /* is_opener */,
-                                     extensions::SerializationFormat::kJson);
+    const extensions::PortId port_id(
+        base::UnguessableToken::Create(), 1 /* port_number */,
+        true /* is_opener */, extensions::mojom::SerializationFormat::kJson);
     auto native_message_port = std::make_unique<extensions::NativeMessagePort>(
         message_service->GetChannelDelegate(), port_id,
         std::move(native_message_host));
@@ -83,11 +84,12 @@ class ExtensionIncomingNativeMessagingTest
         extensions::ChannelEndpoint(profile()), port_id,
         extensions::MessagingEndpoint::ForNativeApp(kFakeNativeAppName),
         std::move(native_message_port), extension_->id(), GURL(),
+        extensions::mojom::ChannelType::kNative,
         std::string() /* channel_name */);
   }
 
  private:
-  const extensions::Extension* extension_ = nullptr;
+  raw_ptr<const extensions::Extension, DanglingUntriaged> extension_ = nullptr;
 };
 
 // Tests that the extension receives the onConnectNative event when the native

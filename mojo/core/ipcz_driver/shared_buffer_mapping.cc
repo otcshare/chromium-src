@@ -28,7 +28,9 @@ std::unique_ptr<base::SharedMemoryMapping> MapRegion(
   if (!m.IsValid()) {
     return nullptr;
   }
-  *memory = const_cast<void*>(m.memory());
+  // TODO(crbug.com/355607629): This function should give back a span instead of
+  // an unbounded pointer.
+  *memory = const_cast<uint8_t*>(m.data());
   return std::make_unique<typename RegionType::MappingType>(std::move(m));
 }
 
@@ -88,8 +90,8 @@ scoped_refptr<SharedBufferMapping> SharedBufferMapping::Create(
 }
 
 void SharedBufferMapping::Close() {
-  mapping_.reset();
   memory_ = nullptr;
+  mapping_.reset();
 }
 
 }  // namespace mojo::core::ipcz_driver

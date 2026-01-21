@@ -4,32 +4,37 @@
 
 #include "components/password_manager/core/browser/password_manager_util.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_client.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
-#include "components/autofill/core/browser/payments/local_card_migration_manager.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/test_autofill_client.h"
+#include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
-#include "components/autofill/core/browser/ui/popup_types.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/password_generation_util.h"
-#include "components/device_reauth/mock_biometric_authenticator.h"
+#include "components/device_reauth/mock_device_authenticator.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/mock_password_feature_manager.h"
+#include "components/password_manager/core/browser/mock_password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
+#include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
-#include "components/password_manager/core/browser/test_password_store.h"
-#include "components/password_manager/core/common/password_manager_features.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -39,12 +44,17 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using autofill::password_generation::PasswordGenerationType;
-using device_reauth::MockBiometricAuthenticator;
-using password_manager::PasswordForm;
 
 namespace password_manager_util {
 namespace {
+
+using ::affiliations::Facet;
+using ::affiliations::FacetURI;
+using ::affiliations::GroupedFacets;
+using ::autofill::password_generation::PasswordGenerationType;
+using ::device_reauth::MockDeviceAuthenticator;
+using ::password_manager::PasswordForm;
+using ::testing::Not;
 
 constexpr char kTestAndroidRealm[] = "android://hash@com.example.beta.android";
 constexpr char kTestFederationURL[] = "https://google.com/";
@@ -52,7 +62,6 @@ constexpr char kTestProxyOrigin[] = "http://proxy.com/";
 constexpr char kTestProxySignonRealm[] = "proxy.com/realm";
 constexpr char kTestURL[] = "https://example.com/login/";
 constexpr char16_t kTestUsername[] = u"Username";
-constexpr char16_t kTestUsername2[] = u"Username2";
 constexpr char16_t kTestPassword[] = u"12345";
 
 class MockPasswordManagerClient
@@ -61,247 +70,22 @@ class MockPasswordManagerClient
   MockPasswordManagerClient() = default;
   ~MockPasswordManagerClient() override = default;
 
-  MOCK_METHOD(void,
-              TriggerReauthForPrimaryAccount,
-              (signin_metrics::ReauthAccessPoint,
-               base::OnceCallback<void(
-                   password_manager::PasswordManagerClient::ReauthSucceeded)>),
-              (override));
   MOCK_METHOD(void, GeneratePassword, (PasswordGenerationType), (override));
   MOCK_METHOD(PrefService*, GetPrefs, (), (const, override));
   MOCK_METHOD(PrefService*, GetLocalStatePrefs, (), (const, override));
-  MOCK_METHOD(scoped_refptr<device_reauth::BiometricAuthenticator>,
-              GetBiometricAuthenticator,
+  MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthenticator>,
+              GetDeviceAuthenticator,
               (),
               (override));
-};
-
-class MockAutofillClient : public autofill::AutofillClient {
- public:
-  MockAutofillClient() = default;
-  MockAutofillClient(const MockAutofillClient&) = delete;
-  MockAutofillClient& operator=(const MockAutofillClient&) = delete;
-  ~MockAutofillClient() override = default;
-
-  MOCK_METHOD(version_info::Channel, GetChannel, (), (const, override));
-  MOCK_METHOD(autofill::PersonalDataManager*,
-              GetPersonalDataManager,
-              (),
-              (override));
-  MOCK_METHOD(autofill::AutocompleteHistoryManager*,
-              GetAutocompleteHistoryManager,
-              (),
-              (override));
-  MOCK_METHOD(PrefService*, GetPrefs, (), (override));
-  MOCK_METHOD(const PrefService*, GetPrefs, (), (const, override));
-  MOCK_METHOD(syncer::SyncService*, GetSyncService, (), (override));
-  MOCK_METHOD(signin::IdentityManager*, GetIdentityManager, (), (override));
-  MOCK_METHOD(autofill::FormDataImporter*, GetFormDataImporter, (), (override));
-  MOCK_METHOD(autofill::payments::PaymentsClient*,
-              GetPaymentsClient,
-              (),
-              (override));
-  MOCK_METHOD(autofill::StrikeDatabase*, GetStrikeDatabase, (), (override));
-  MOCK_METHOD(ukm::UkmRecorder*, GetUkmRecorder, (), (override));
-  MOCK_METHOD(ukm::SourceId, GetUkmSourceId, (), (override));
-  MOCK_METHOD(autofill::AddressNormalizer*,
-              GetAddressNormalizer,
-              (),
-              (override));
-  MOCK_METHOD(const GURL&,
-              GetLastCommittedPrimaryMainFrameURL,
+  MOCK_METHOD(password_manager::PasswordStoreInterface*,
+              GetProfilePasswordStore,
               (),
               (const, override));
-  MOCK_METHOD(url::Origin,
-              GetLastCommittedPrimaryMainFrameOrigin,
+  MOCK_METHOD(password_manager::PasswordStoreInterface*,
+              GetAccountPasswordStore,
               (),
               (const, override));
-  MOCK_METHOD(security_state::SecurityLevel,
-              GetSecurityLevelForUmaHistograms,
-              (),
-              (override));
-  MOCK_METHOD(const translate::LanguageState*,
-              GetLanguageState,
-              (),
-              (override));
-  MOCK_METHOD(translate::TranslateDriver*, GetTranslateDriver, (), (override));
-  MOCK_METHOD(void, ShowAutofillSettings, (bool), (override));
-  MOCK_METHOD(void,
-              ShowUnmaskPrompt,
-              (const autofill::CreditCard&,
-               const autofill::CardUnmaskPromptOptions&,
-               base::WeakPtr<autofill::CardUnmaskDelegate>),
-              (override));
-  MOCK_METHOD(void,
-              OnUnmaskVerificationResult,
-              (PaymentsRpcResult),
-              (override));
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  MOCK_METHOD(std::vector<std::string>,
-              GetAllowedMerchantsForVirtualCards,
-              (),
-              (override));
-  MOCK_METHOD(std::vector<std::string>,
-              GetAllowedBinRangesForVirtualCards,
-              (),
-              (override));
-  MOCK_METHOD(void,
-              ShowLocalCardMigrationDialog,
-              (base::OnceClosure),
-              (override));
-  MOCK_METHOD(void,
-              ConfirmMigrateLocalCardToCloud,
-              (const autofill::LegalMessageLines&,
-               const std::string&,
-               const std::vector<autofill::MigratableCreditCard>&,
-               LocalCardMigrationCallback),
-              (override));
-  MOCK_METHOD(void,
-              ShowLocalCardMigrationResults,
-              (const bool,
-               const std::u16string&,
-               const std::vector<autofill::MigratableCreditCard>&,
-               MigrationDeleteCardCallback),
-              (override));
-  MOCK_METHOD(void,
-              ConfirmSaveIBANLocally,
-              (const autofill::IBAN&, bool, LocalSaveIBANPromptCallback),
-              (override));
-  MOCK_METHOD(void,
-              ShowWebauthnOfferDialog,
-              (WebauthnDialogCallback),
-              (override));
-  MOCK_METHOD(void,
-              ShowWebauthnVerifyPendingDialog,
-              (WebauthnDialogCallback),
-              (override));
-  MOCK_METHOD(void, UpdateWebauthnOfferDialogWithError, (), (override));
-  MOCK_METHOD(bool, CloseWebauthnDialog, (), (override));
-  MOCK_METHOD(void,
-              ConfirmSaveUpiIdLocally,
-              (const std::string&,
-               base::OnceCallback<void(bool user_decision)>),
-              (override));
-  MOCK_METHOD(void,
-              OfferVirtualCardOptions,
-              (const std::vector<autofill::CreditCard*>&,
-               base::OnceCallback<void(const std::string&)>),
-              (override));
-#else  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  MOCK_METHOD(void,
-              ConfirmAccountNameFixFlow,
-              (base::OnceCallback<void(const std::u16string&)>),
-              (override));
-  MOCK_METHOD(
-      void,
-      ConfirmExpirationDateFixFlow,
-      (const autofill::CreditCard&,
-       base::OnceCallback<void(const std::u16string&, const std::u16string&)>),
-      (override));
-#endif
-  MOCK_METHOD(void,
-              ConfirmSaveCreditCardLocally,
-              (const autofill::CreditCard&,
-               autofill::AutofillClient::SaveCreditCardOptions,
-               LocalSaveCardPromptCallback),
-              (override));
-  MOCK_METHOD(void,
-              ConfirmSaveCreditCardToCloud,
-              (const autofill::CreditCard&,
-               const autofill::LegalMessageLines&,
-               SaveCreditCardOptions,
-               UploadSaveCardPromptCallback),
-              (override));
-  MOCK_METHOD(void, CreditCardUploadCompleted, (bool), (override));
-  MOCK_METHOD(void,
-              ConfirmCreditCardFillAssist,
-              (const autofill::CreditCard&, base::OnceClosure),
-              (override));
-  MOCK_METHOD(void,
-              ConfirmSaveAddressProfile,
-              (const autofill::AutofillProfile&,
-               const autofill::AutofillProfile*,
-               SaveAddressProfilePromptOptions,
-               AddressProfileSavePromptCallback),
-              (override));
-  MOCK_METHOD(bool, HasCreditCardScanFeature, (), (override));
-  MOCK_METHOD(void, ScanCreditCard, (CreditCardScanCallback), (override));
-  MOCK_METHOD(bool, IsFastCheckoutSupported, (), (override));
-  MOCK_METHOD(bool,
-              IsFastCheckoutTriggerForm,
-              (const autofill::FormData&, const autofill::FormFieldData&),
-              (override));
-  MOCK_METHOD(bool,
-              ShowFastCheckout,
-              (base::WeakPtr<autofill::FastCheckoutDelegate>),
-              (override));
-  MOCK_METHOD(void, HideFastCheckout, (), (override));
-  MOCK_METHOD(bool, IsTouchToFillCreditCardSupported, (), (override));
-  MOCK_METHOD(bool,
-              ShowTouchToFillCreditCard,
-              (base::WeakPtr<autofill::TouchToFillDelegate>,
-               base::span<const autofill::CreditCard* const>),
-              (override));
-  MOCK_METHOD(void, HideTouchToFillCreditCard, (), (override));
-  MOCK_METHOD(void,
-              ShowAutofillPopup,
-              (const PopupOpenArgs&,
-               base::WeakPtr<autofill::AutofillPopupDelegate>),
-              (override));
-  MOCK_METHOD(void,
-              UpdateAutofillPopupDataListValues,
-              (const std::vector<std::u16string>&,
-               const std::vector<std::u16string>&),
-              (override));
-  MOCK_METHOD(void, PinPopupView, (), (override));
-  MOCK_METHOD(PopupOpenArgs, GetReopenPopupArgs, (), (const, override));
-  MOCK_METHOD(base::span<const autofill::Suggestion>,
-              GetPopupSuggestions,
-              (),
-              (const, override));
-  MOCK_METHOD(void,
-              UpdatePopup,
-              (const std::vector<autofill::Suggestion>&, autofill::PopupType),
-              (override));
-  MOCK_METHOD(void,
-              HideAutofillPopup,
-              (autofill::PopupHidingReason),
-              (override));
-  MOCK_METHOD(bool, IsAutocompleteEnabled, (), (const, override));
-  MOCK_METHOD(bool, IsPasswordManagerEnabled, (), (override));
-  MOCK_METHOD(void,
-              PropagateAutofillPredictions,
-              (autofill::AutofillDriver*,
-               const std::vector<autofill::FormStructure*>&),
-              (override));
-  MOCK_METHOD(void,
-              DidFillOrPreviewField,
-              (const std::u16string&, const std::u16string&),
-              (override));
-  MOCK_METHOD(bool, IsContextSecure, (), (const, override));
-  MOCK_METHOD(bool, ShouldShowSigninPromo, (), (override));
-  MOCK_METHOD(bool, AreServerCardsSupported, (), (const, override));
-  MOCK_METHOD(void, ExecuteCommand, (int), (override));
-  MOCK_METHOD(autofill::LogManager*, GetLogManager, (), (const, override));
-  MOCK_METHOD(const autofill::AutofillAblationStudy&,
-              GetAblationStudy,
-              (),
-              (const, override));
-#if BUILDFLAG(IS_IOS)
-  MOCK_METHOD(bool, IsLastQueriedField, (autofill::FieldGlobalId), (override));
-#endif
-  MOCK_METHOD(void,
-              LoadRiskData,
-              (base::OnceCallback<void(const std::string&)>),
-              (override));
-  MOCK_METHOD(void,
-              OpenPromoCodeOfferDetailsURL,
-              (const GURL& url),
-              (override));
-  MOCK_METHOD(autofill::FormInteractionsFlowId,
-              GetCurrentFormInteractionsFlowId,
-              (),
-              (override));
+  MOCK_METHOD(syncer::SyncService*, GetSyncService, (), (const, override));
 };
 
 PasswordForm GetTestAndroidCredential() {
@@ -344,8 +128,7 @@ using testing::Return;
 class PasswordManagerUtilTest : public testing::Test {
  public:
   PasswordManagerUtilTest() {
-    authenticator_ =
-        base::MakeRefCounted<device_reauth::MockBiometricAuthenticator>();
+    authenticator_ = std::make_unique<device_reauth::MockDeviceAuthenticator>();
     pref_service_.registry()->RegisterBooleanPref(
         password_manager::prefs::kCredentialsEnableService, true);
     pref_service_.registry()->RegisterBooleanPref(
@@ -354,25 +137,23 @@ class PasswordManagerUtilTest : public testing::Test {
     pref_service_.registry()->RegisterBooleanPref(
         password_manager::prefs::kOfferToSavePasswordsEnabledGMS, true);
     pref_service_.registry()->RegisterBooleanPref(
-        password_manager::prefs::kSavePasswordsSuspendedByError, false);
-    pref_service_.registry()->RegisterBooleanPref(
         password_manager::prefs::kAutoSignInEnabledGMS, true);
 #endif
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-    pref_service_.registry()->RegisterBooleanPref(
-        password_manager::prefs::kBiometricAuthenticationBeforeFilling, false);
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
     pref_service_.registry()->RegisterBooleanPref(
         password_manager::prefs::kHadBiometricsAvailable, false);
+    pref_service_.registry()->RegisterBooleanPref(
+        password_manager::prefs::kBiometricAuthenticationBeforeFilling, false);
     ON_CALL(mock_client_, GetLocalStatePrefs())
         .WillByDefault(Return(&pref_service_));
-    ON_CALL(mock_client_, GetPrefs()).WillByDefault(Return(&pref_service_));
-    ON_CALL(mock_client_, GetBiometricAuthenticator())
-        .WillByDefault(Return(authenticator_));
-    ON_CALL(*authenticator_, CanAuthenticate).WillByDefault(Return(true));
+    ON_CALL(*authenticator_.get(), CanAuthenticateWithBiometrics)
+        .WillByDefault(Return(true));
 #endif
+    ON_CALL(mock_client_, GetPrefs).WillByDefault(Return(&pref_service_));
+    ON_CALL(mock_client_, GetSyncService).WillByDefault(Return(&sync_service_));
   }
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   void SetBiometricAuthenticationBeforeFilling(bool available) {
     pref_service_.SetBoolean(
         password_manager::prefs::kBiometricAuthenticationBeforeFilling,
@@ -380,37 +161,24 @@ class PasswordManagerUtilTest : public testing::Test {
   }
 #endif
 
+  void EnableSyncForTestAccount() {
+    sync_service_.GetUserSettings()->SetSelectedTypes(
+        /*sync_everything=*/false, {syncer::UserSelectableType::kPasswords});
+  }
+
+  void DisableSyncFeature() {
+    sync_service_.GetUserSettings()->SetSelectedTypes(
+        /*sync_everything=*/false, /*types=*/{});
+  }
+
+  PrefService* pref_service() { return &pref_service_; }
+
  protected:
   MockPasswordManagerClient mock_client_;
-  scoped_refptr<device_reauth::MockBiometricAuthenticator> authenticator_;
+  std::unique_ptr<device_reauth::MockDeviceAuthenticator> authenticator_;
   TestingPrefServiceSimple pref_service_;
   syncer::TestSyncService sync_service_;
 };
-
-TEST(PasswordManagerUtil, TrimUsernameOnlyCredentials) {
-  std::vector<std::unique_ptr<PasswordForm>> forms;
-  std::vector<std::unique_ptr<PasswordForm>> expected_forms;
-  forms.push_back(std::make_unique<PasswordForm>(GetTestAndroidCredential()));
-  expected_forms.push_back(
-      std::make_unique<PasswordForm>(GetTestAndroidCredential()));
-
-  PasswordForm username_only;
-  username_only.scheme = PasswordForm::Scheme::kUsernameOnly;
-  username_only.signon_realm = kTestAndroidRealm;
-  username_only.username_value = kTestUsername2;
-  forms.push_back(std::make_unique<PasswordForm>(username_only));
-
-  username_only.federation_origin =
-      url::Origin::Create(GURL(kTestFederationURL));
-  username_only.skip_zero_click = false;
-  forms.push_back(std::make_unique<PasswordForm>(username_only));
-  username_only.skip_zero_click = true;
-  expected_forms.push_back(std::make_unique<PasswordForm>(username_only));
-
-  TrimUsernameOnlyCredentials(&forms);
-
-  EXPECT_THAT(forms, UnorderedPasswordFormElementsAre(&expected_forms));
-}
 
 TEST(PasswordManagerUtil, GetSignonRealmWithProtocolExcluded) {
   PasswordForm http_form;
@@ -433,28 +201,29 @@ TEST(PasswordManagerUtil, GetSignonRealmWithProtocolExcluded) {
 
 TEST(PasswordManagerUtil, GetMatchType_Android) {
   PasswordForm form = GetTestAndroidCredential();
-  form.is_affiliation_based_match = true;
+  form.match_type = PasswordForm::MatchType::kAffiliated;
 
-  EXPECT_EQ(GetLoginMatchType::kExact, GetMatchType(form));
+  EXPECT_EQ(GetLoginMatchType::kAffiliated, GetMatchType(form));
 }
 
 TEST(PasswordManagerUtil, GetMatchType_Web) {
   PasswordForm form = GetTestCredential();
-  form.is_public_suffix_match = true;
-  form.is_affiliation_based_match = true;
+
+  form.match_type = PasswordForm::MatchType::kExact;
+  EXPECT_EQ(GetLoginMatchType::kExact, GetMatchType(form));
+
+  form.match_type =
+      PasswordForm::MatchType::kPSL | PasswordForm::MatchType::kAffiliated;
   EXPECT_EQ(GetLoginMatchType::kAffiliated, GetMatchType(form));
 
-  form.is_public_suffix_match = false;
-  form.is_affiliation_based_match = true;
+  form.match_type = PasswordForm::MatchType::kAffiliated;
   EXPECT_EQ(GetLoginMatchType::kAffiliated, GetMatchType(form));
 
-  form.is_public_suffix_match = true;
-  form.is_affiliation_based_match = false;
+  form.match_type = PasswordForm::MatchType::kPSL;
   EXPECT_EQ(GetLoginMatchType::kPSL, GetMatchType(form));
 
-  form.is_public_suffix_match = false;
-  form.is_affiliation_based_match = false;
-  EXPECT_EQ(GetLoginMatchType::kExact, GetMatchType(form));
+  form.match_type = PasswordForm::MatchType::kGrouped;
+  EXPECT_EQ(GetLoginMatchType::kGrouped, GetMatchType(form));
 }
 
 TEST(PasswordManagerUtil, FindBestMatches) {
@@ -463,9 +232,10 @@ TEST(PasswordManagerUtil, FindBestMatches) {
   const base::Time k2DaysAgo = kNow - base::Days(2);
   const int kNotFound = -1;
   struct TestMatch {
-    bool is_psl_match;
+    PasswordForm::MatchType match_type;
     base::Time date_last_used;
     std::u16string username;
+    std::string signon_realm = kTestURL;
   };
   struct TestCase {
     const char* description;
@@ -474,75 +244,121 @@ TEST(PasswordManagerUtil, FindBestMatches) {
     std::map<std::string, size_t> expected_best_matches_indices;
   } test_cases[] = {
       {"Empty matches", {}, kNotFound, {}},
-      {"1 non-psl match",
-       {{.is_psl_match = false, .date_last_used = kNow, .username = u"u"}},
-       0,
+      {"1 exact match",
+       {{.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = kNow,
+         .username = u"u"}},
+       /*expected_preferred_match_index=*/0,
        {{"u", 0}}},
       {"1 psl match",
-       {{.is_psl_match = true, .date_last_used = kNow, .username = u"u"}},
-       0,
+       {{.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kNow,
+         .username = u"u"}},
+       /*expected_preferred_match_index=*/0,
        {{"u", 0}}},
       {"2 matches with the same username",
-       {{.is_psl_match = false, .date_last_used = kNow, .username = u"u"},
-        {.is_psl_match = false,
+       {{.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = kNow,
+         .username = u"u"},
+        {.match_type = PasswordForm::MatchType::kExact,
          .date_last_used = kYesterday,
          .username = u"u"}},
-       0,
+       /*expected_preferred_match_index=*/0,
        {{"u", 0}}},
       {"2 matches with different usernames, most recently used taken",
-       {{.is_psl_match = false, .date_last_used = kNow, .username = u"u1"},
-        {.is_psl_match = false,
+       {{.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = kNow,
+         .username = u"u1"},
+        {.match_type = PasswordForm::MatchType::kExact,
          .date_last_used = kYesterday,
          .username = u"u2"}},
-       0,
+       /*expected_preferred_match_index=*/0,
        {{"u1", 0}, {"u2", 1}}},
-      {"2 matches with different usernames, non-psl much taken",
-       {{.is_psl_match = false,
+      {"2 matches with different usernames, exact match taken",
+       {{.match_type = PasswordForm::MatchType::kExact,
          .date_last_used = kYesterday,
          .username = u"u1"},
-        {.is_psl_match = true, .date_last_used = kNow, .username = u"u2"}},
-       0,
+        {.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kNow,
+         .username = u"u2"}},
+       /*expected_preferred_match_index=*/0,
        {{"u1", 0}, {"u2", 1}}},
       {"8 matches, 3 usernames",
-       {{.is_psl_match = false,
+       {{.match_type = PasswordForm::MatchType::kExact,
          .date_last_used = kYesterday,
          .username = u"u2"},
-        {.is_psl_match = true, .date_last_used = kYesterday, .username = u"u3"},
-        {.is_psl_match = true, .date_last_used = kYesterday, .username = u"u1"},
-        {.is_psl_match = false, .date_last_used = k2DaysAgo, .username = u"u3"},
-        {.is_psl_match = true, .date_last_used = kNow, .username = u"u1"},
-        {.is_psl_match = false, .date_last_used = kNow, .username = u"u2"},
-        {.is_psl_match = true, .date_last_used = kYesterday, .username = u"u3"},
-        {.is_psl_match = false,
+        {.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kYesterday,
+         .username = u"u3"},
+        {.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kYesterday,
+         .username = u"u1"},
+        {.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = k2DaysAgo,
+         .username = u"u3"},
+        {.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kNow,
+         .username = u"u1"},
+        {.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = kNow,
+         .username = u"u2"},
+        {.match_type = PasswordForm::MatchType::kPSL,
+         .date_last_used = kYesterday,
+         .username = u"u3"},
+        {.match_type = PasswordForm::MatchType::kExact,
          .date_last_used = k2DaysAgo,
          .username = u"u1"}},
-       5,
+       /*expected_preferred_match_index=*/5,
        {{"u1", 7}, {"u2", 5}, {"u3", 3}}},
-
+      {"Affiliated Android app and exact matches, exact match taken",
+       {{.match_type = PasswordForm::MatchType::kAffiliated,
+         .date_last_used = kNow,
+         .username = u"uAndroid",
+         .signon_realm = kTestAndroidRealm},
+        {.match_type = PasswordForm::MatchType::kExact,
+         .date_last_used = kYesterday,
+         .username = u"uExact"}},
+       /*expected_preferred_match_index=*/1,
+       {{"uExact", 1}, {"uAndroid", 0}}},
+      {"Affiliated Android app and affiliated website matches, most recently "
+       "used taken",
+       {{.match_type = PasswordForm::MatchType::kAffiliated,
+         .date_last_used = kYesterday,
+         .username = u"uAffiliatedAndroid",
+         .signon_realm = kTestAndroidRealm},
+        {.match_type = PasswordForm::MatchType::kAffiliated,
+         .date_last_used = kNow,
+         .username = u"uAffiliatedWebsite"}},
+       /*expected_preferred_match_index=*/1,
+       {{"uAffiliatedWebsite", 1}, {"uAffiliatedAndroid", 0}}},
   };
 
   for (const TestCase& test_case : test_cases) {
     SCOPED_TRACE(testing::Message("Test description: ")
                  << test_case.description);
     // Convert TestMatch to PasswordForm.
-    std::vector<PasswordForm> owning_matches;
+    std::vector<PasswordForm> matches;
     for (const TestMatch& match : test_case.matches) {
       PasswordForm form;
-      form.is_public_suffix_match = match.is_psl_match;
+      form.match_type = match.match_type;
+      form.signon_realm = match.signon_realm;
       form.date_last_used = match.date_last_used;
       form.username_value = match.username;
-      owning_matches.push_back(form);
+      matches.push_back(form);
     }
-    std::vector<const PasswordForm*> matches;
-    for (const PasswordForm& match : owning_matches)
-      matches.push_back(&match);
 
-    std::vector<const PasswordForm*> best_matches;
+    // TODO(crbug.com/343879843) Copy is needed as FindBestMatches mutates its
+    // parameter. This is okay for FormFetcher logic, but not good for a
+    // standalone function. To be fixed with moving FindBestMatches into
+    // FormFetcher.
+    auto copy_matches = matches;
+
+    std::vector<PasswordForm> best_matches = FindBestMatches(copy_matches);
+
     const PasswordForm* preferred_match = nullptr;
-
-    std::vector<const PasswordForm*> same_scheme_matches;
-    FindBestMatches(matches, PasswordForm::Scheme::kHtml, &same_scheme_matches,
-                    &best_matches, &preferred_match);
+    if (!best_matches.empty()) {
+      preferred_match = &best_matches[0];
+    }
 
     if (test_case.expected_preferred_match_index == kNotFound) {
       // Case of empty |matches|.
@@ -551,19 +367,22 @@ TEST(PasswordManagerUtil, FindBestMatches) {
     } else {
       // Check |preferred_match|.
       EXPECT_EQ(matches[test_case.expected_preferred_match_index],
-                preferred_match);
+                *preferred_match);
       // Check best matches.
       ASSERT_EQ(test_case.expected_best_matches_indices.size(),
                 best_matches.size());
 
-      for (const PasswordForm* match : best_matches) {
-        std::string username = base::UTF16ToUTF8(match->username_value);
+      for (const PasswordForm& match : best_matches) {
+        std::string username = base::UTF16ToUTF8(match.username_value);
         ASSERT_NE(test_case.expected_best_matches_indices.end(),
                   test_case.expected_best_matches_indices.find(username));
         size_t expected_index =
             test_case.expected_best_matches_indices.at(username);
-        size_t actual_index =
-            std::distance(matches.begin(), base::ranges::find(matches, match));
+        size_t actual_index = std::distance(
+            matches.begin(),
+            std::ranges::find_if(matches, [&match](const auto& non_federated) {
+              return non_federated == match;
+            }));
         EXPECT_EQ(expected_index, actual_index);
       }
     }
@@ -577,7 +396,7 @@ TEST(PasswordManagerUtil, FindBestMatchesInProfileAndAccountStores) {
   const std::u16string kPassword2 = u"Password2";
 
   PasswordForm form;
-  form.is_public_suffix_match = false;
+  form.match_type = PasswordForm::MatchType::kExact;
   form.date_last_used = base::Time::Now();
 
   // Add the same credentials in account and profile stores.
@@ -600,27 +419,24 @@ TEST(PasswordManagerUtil, FindBestMatchesInProfileAndAccountStores) {
   profile_form2.password_value = kPassword2;
   profile_form2.in_store = PasswordForm::Store::kProfileStore;
 
-  std::vector<const PasswordForm*> matches;
-  matches.push_back(&account_form1);
-  matches.push_back(&profile_form1);
-  matches.push_back(&account_form2);
-  matches.push_back(&profile_form2);
+  std::vector<PasswordForm> matches{account_form1, profile_form1, account_form2,
+                                    profile_form2};
 
-  std::vector<const PasswordForm*> best_matches;
-  const PasswordForm* preferred_match = nullptr;
-  std::vector<const PasswordForm*> same_scheme_matches;
-  FindBestMatches(matches, PasswordForm::Scheme::kHtml, &same_scheme_matches,
-                  &best_matches, &preferred_match);
-  // |profile_form1| is filtered out because it's the same as |account_form1|.
+  std::vector<PasswordForm> best_matches = FindBestMatches(matches);
   EXPECT_EQ(best_matches.size(), 3U);
-  EXPECT_TRUE(base::Contains(best_matches, &account_form1));
-  EXPECT_TRUE(base::Contains(best_matches, &account_form2));
-  EXPECT_FALSE(base::Contains(best_matches, &profile_form1));
-  EXPECT_TRUE(base::Contains(best_matches, &profile_form2));
+  account_form1.in_store =
+      password_manager::PasswordForm::Store::kProfileStore |
+      password_manager::PasswordForm::Store::kAccountStore;
+  EXPECT_THAT(best_matches, testing::Contains(account_form1));
+  EXPECT_THAT(best_matches, testing::Contains(account_form2));
+  // |profile_form1| is filtered out because it's the same as |account_form1|.
+  EXPECT_THAT(best_matches, Not(testing::Contains(profile_form1)));
+  EXPECT_THAT(best_matches, testing::Contains(profile_form2));
 }
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsername) {
   PasswordForm stored = GetTestCredential();
+  stored.match_type = PasswordForm::MatchType::kExact;
   PasswordForm parsed = GetTestCredential();
   parsed.password_value = u"new_password";
 
@@ -629,6 +445,7 @@ TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsername) {
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_RejectUnknownUsername) {
   PasswordForm stored = GetTestCredential();
+  stored.match_type = PasswordForm::MatchType::kExact;
   PasswordForm parsed = GetTestCredential();
   parsed.username_value = u"other_username";
 
@@ -637,16 +454,17 @@ TEST(PasswordManagerUtil, GetMatchForUpdating_RejectUnknownUsername) {
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_FederatedCredential) {
   PasswordForm stored = GetTestCredential();
+  stored.match_type = PasswordForm::MatchType::kExact;
   PasswordForm parsed = GetTestCredential();
   parsed.password_value.clear();
-  parsed.federation_origin = url::Origin::Create(GURL(kTestFederationURL));
+  parsed.federation_origin = url::SchemeHostPort(GURL(kTestFederationURL));
 
   EXPECT_EQ(nullptr, GetMatchForUpdating(parsed, {&stored}));
 }
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsernamePSL) {
   PasswordForm stored = GetTestCredential();
-  stored.is_public_suffix_match = true;
+  stored.match_type = PasswordForm::MatchType::kPSL;
   PasswordForm parsed = GetTestCredential();
 
   EXPECT_EQ(&stored, GetMatchForUpdating(parsed, {&stored}));
@@ -654,7 +472,7 @@ TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsernamePSL) {
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsernamePSLAnotherPassword) {
   PasswordForm stored = GetTestCredential();
-  stored.is_public_suffix_match = true;
+  stored.match_type = PasswordForm::MatchType::kPSL;
   PasswordForm parsed = GetTestCredential();
   parsed.password_value = u"new_password";
 
@@ -662,9 +480,31 @@ TEST(PasswordManagerUtil, GetMatchForUpdating_MatchUsernamePSLAnotherPassword) {
 }
 
 TEST(PasswordManagerUtil,
+     GetMatchForUpdating_PasswordChangeCredentialPSLAnotherPassword) {
+  PasswordForm stored = GetTestCredential();
+  stored.match_type = PasswordForm::MatchType::kPSL;
+  PasswordForm parsed = GetTestCredential();
+  parsed.password_value = u"new_password";
+  parsed.type = PasswordForm::Type::kChangeSubmission;
+
+  EXPECT_EQ(&stored, GetMatchForUpdating(parsed, {&stored}));
+}
+
+TEST(PasswordManagerUtil,
+     GetMatchForUpdating_PasswordChangeCredentialGroupedAnotherPassword) {
+  PasswordForm stored = GetTestCredential();
+  stored.match_type = PasswordForm::MatchType::kGrouped;
+  PasswordForm parsed = GetTestCredential();
+  parsed.password_value = u"new_password";
+  parsed.type = PasswordForm::Type::kChangeSubmission;
+
+  EXPECT_EQ(nullptr, GetMatchForUpdating(parsed, {&stored}));
+}
+
+TEST(PasswordManagerUtil,
      GetMatchForUpdating_MatchUsernamePSLNewPasswordKnown) {
   PasswordForm stored = GetTestCredential();
-  stored.is_public_suffix_match = true;
+  stored.match_type = PasswordForm::MatchType::kPSL;
   PasswordForm parsed = GetTestCredential();
   parsed.new_password_value = parsed.password_value;
   parsed.password_value.clear();
@@ -675,7 +515,7 @@ TEST(PasswordManagerUtil,
 TEST(PasswordManagerUtil,
      GetMatchForUpdating_MatchUsernamePSLNewPasswordUnknown) {
   PasswordForm stored = GetTestCredential();
-  stored.is_public_suffix_match = true;
+  stored.match_type = PasswordForm::MatchType::kPSL;
   PasswordForm parsed = GetTestCredential();
   parsed.new_password_value = u"new_password";
   parsed.password_value.clear();
@@ -693,7 +533,7 @@ TEST(PasswordManagerUtil, GetMatchForUpdating_EmptyUsernameFindByPassword) {
 
 TEST(PasswordManagerUtil, GetMatchForUpdating_EmptyUsernameFindByPasswordPSL) {
   PasswordForm stored = GetTestCredential();
-  stored.is_public_suffix_match = true;
+  stored.match_type = PasswordForm::MatchType::kPSL;
   PasswordForm parsed = GetTestCredential();
   parsed.username_value.clear();
 
@@ -773,77 +613,34 @@ TEST(PasswordManagerUtil, MakeNormalizedBlocklistedForm_Proxy) {
   EXPECT_EQ(GURL(kTestProxyOrigin), blocklisted_credential.url);
 }
 
-TEST(PasswordManagerUtil, ManualGenerationShouldNotReauthIfNotNeeded) {
+TEST(PasswordManagerUtil, ManualGeneration) {
   MockPasswordManagerClient mock_client;
-  ON_CALL(*(mock_client.GetPasswordFeatureManager()),
-          ShouldShowAccountStorageOptIn)
-      .WillByDefault(Return(false));
 
-  EXPECT_CALL(mock_client, TriggerReauthForPrimaryAccount).Times(0);
   EXPECT_CALL(mock_client, GeneratePassword(PasswordGenerationType::kManual));
-
-  UserTriggeredManualGenerationFromContextMenu(&mock_client, nullptr);
-}
-
-TEST(PasswordManagerUtil,
-     ManualGenerationShouldGeneratePasswordIfReauthSucessful) {
-  MockPasswordManagerClient mock_client;
-  ON_CALL(*(mock_client.GetPasswordFeatureManager()),
-          ShouldShowAccountStorageOptIn)
-      .WillByDefault(Return(true));
-
-  EXPECT_CALL(
-      mock_client,
-      TriggerReauthForPrimaryAccount(
-          signin_metrics::ReauthAccessPoint::kGeneratePasswordContextMenu, _))
-      .WillOnce(
-          [](signin_metrics::ReauthAccessPoint,
-             base::OnceCallback<void(
-                 password_manager::PasswordManagerClient::ReauthSucceeded)>
-                 callback) {
-            std::move(callback).Run(
-                password_manager::PasswordManagerClient::ReauthSucceeded(true));
-          });
-  EXPECT_CALL(mock_client, GeneratePassword(PasswordGenerationType::kManual));
-
-  UserTriggeredManualGenerationFromContextMenu(&mock_client, nullptr);
-}
-
-TEST(PasswordManagerUtil,
-     ManualGenerationShouldNotGeneratePasswordIfReauthFailed) {
-  MockPasswordManagerClient mock_client;
-  ON_CALL(*(mock_client.GetPasswordFeatureManager()),
-          ShouldShowAccountStorageOptIn)
-      .WillByDefault(Return(true));
-
-  EXPECT_CALL(
-      mock_client,
-      TriggerReauthForPrimaryAccount(
-          signin_metrics::ReauthAccessPoint::kGeneratePasswordContextMenu, _))
-      .WillOnce(
-          [](signin_metrics::ReauthAccessPoint,
-             base::OnceCallback<void(
-                 password_manager::PasswordManagerClient::ReauthSucceeded)>
-                 callback) {
-            std::move(callback).Run(
-                password_manager::PasswordManagerClient::ReauthSucceeded(
-                    false));
-          });
-  EXPECT_CALL(mock_client, GeneratePassword).Times(0);
 
   UserTriggeredManualGenerationFromContextMenu(&mock_client, nullptr);
 }
 
 TEST(PasswordManagerUtil, AvoidOverlappingAutofillMenuAndManualGeneration) {
+  base::test::TaskEnvironment task_environment;
   password_manager::StubPasswordManagerClient stub_password_client;
-  MockAutofillClient mock_autofill_client;
+  autofill::TestAutofillClient test_autofill_client;
 
-  EXPECT_CALL(mock_autofill_client,
-              HideAutofillPopup(autofill::PopupHidingReason::
-                                    kOverlappingWithPasswordGenerationPopup));
+  test_autofill_client.ShowAutofillSuggestions(
+      autofill::AutofillClient::PopupOpenArgs(), /*delegate=*/nullptr);
+  test_autofill_client.ShowAutofillFieldIphForFeature(
+      autofill::FormFieldData(),
+      autofill::AutofillClient::IphFeature::kAutofillAi);
+
+  ASSERT_TRUE(test_autofill_client.IsShowingAutofillPopup());
+  ASSERT_TRUE(test_autofill_client.IsShowingAutofillAiIph());
 
   UserTriggeredManualGenerationFromContextMenu(&stub_password_client,
-                                               &mock_autofill_client);
+                                               &test_autofill_client);
+  EXPECT_EQ(test_autofill_client.popup_hiding_reason(),
+            autofill::SuggestionHidingReason::
+                kOverlappingWithPasswordGenerationPopup);
+  EXPECT_FALSE(test_autofill_client.IsShowingAutofillAiIph());
 }
 
 TEST(PasswordManagerUtil, StripAuthAndParams) {
@@ -863,18 +660,6 @@ TEST(PasswordManagerUtil, ConstructGURLWithScheme) {
   }
 }
 
-TEST(PasswordManagerUtil, IsValidPasswordURL) {
-  std::vector<std::pair<GURL, bool>> test_cases = {
-      {GURL("noscheme.com"), false},
-      {GURL("https://;/invalid"), false},
-      {GURL("scheme://unsupported"), false},
-      {GURL("http://example.com"), true},
-      {GURL("https://test.com/login"), true}};
-  for (const auto& test_case : test_cases) {
-    EXPECT_EQ(test_case.second, IsValidPasswordURL(test_case.first));
-  }
-}
-
 TEST(PasswordManagerUtil, GetSignonRealm) {
   std::vector<std::pair<GURL, std::string>> test_cases = {
       {GURL("http://example.com/"), "http://example.com/"},
@@ -886,66 +671,78 @@ TEST(PasswordManagerUtil, GetSignonRealm) {
   }
 }
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-TEST_F(PasswordManagerUtilTest, CanUseBiometricAuth) {
-  EXPECT_CALL(*(mock_client_.GetPasswordFeatureManager()),
-              IsBiometricAuthenticationBeforeFillingEnabled)
-      .WillOnce(Return(false));
-  EXPECT_FALSE(CanUseBiometricAuth(
-      authenticator_.get(),
-      device_reauth::BiometricAuthRequester::kAutofillSuggestion,
-      &mock_client_));
+TEST(PasswordManagerUtil, FindLoginWithChangedPassword) {
+  PasswordForm submitted_form;
+  submitted_form.username_value = u"username";
+  submitted_form.password_value = u"password";
+  PasswordForm backup_password_match(submitted_form);
+  backup_password_match.SetPasswordBackupNote(u"backup_password");
+  backup_password_match.type =
+      password_manager::PasswordForm::Type::kChangeSubmission;
+  auto form_manager = std::make_unique<
+      testing::StrictMock<password_manager::MockPasswordFormManagerForUI>>();
+  EXPECT_CALL(*form_manager, GetBestMatches())
+      .WillOnce(
+          testing::Return(std::vector<PasswordForm>{backup_password_match}));
+  EXPECT_CALL(*form_manager, GetPendingCredentials())
+      .WillOnce(testing::ReturnRef(submitted_form));
 
-  EXPECT_CALL(*(mock_client_.GetPasswordFeatureManager()),
-              IsBiometricAuthenticationBeforeFillingEnabled)
-      .WillOnce(Return(true));
-  EXPECT_TRUE(CanUseBiometricAuth(
-      authenticator_.get(),
-      device_reauth::BiometricAuthRequester::kAutofillSuggestion,
-      &mock_client_));
+  EXPECT_EQ(*FindChangedPasswordLoginWithBackup(*form_manager.get()),
+            backup_password_match);
 }
 
-TEST_F(PasswordManagerUtilTest, BiometricsUnavailable) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      password_manager::features::kBiometricAuthenticationForFilling);
+TEST_F(PasswordManagerUtilTest, IsAbleToSavePasswords_Syncing) {
+  EnableSyncForTestAccount();
 
-  SetBiometricAuthenticationBeforeFilling(/*available=*/false);
-  EXPECT_CALL(*authenticator_.get(), CanAuthenticate).WillOnce(Return(false));
-  EXPECT_FALSE(
-      ShouldShowBiometricAuthenticationBeforeFillingPromo(&mock_client_));
+  scoped_refptr<password_manager::MockPasswordStoreInterface> account_store(
+      new password_manager::MockPasswordStoreInterface);
+  scoped_refptr<password_manager::MockPasswordStoreInterface> profile_store(
+      new password_manager::MockPasswordStoreInterface);
+  EXPECT_CALL(mock_client_, GetAccountPasswordStore)
+      .WillRepeatedly(testing::Return(account_store.get()));
+  EXPECT_CALL(mock_client_, GetProfilePasswordStore)
+      .WillRepeatedly(testing::Return(profile_store.get()));
+
+  password_manager::MockPasswordStoreInterface* used_store =
+      profile_store.get();
+  password_manager::MockPasswordStoreInterface* unused_store =
+      account_store.get();
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, users with ConsentLevel::kSync save to the account store
+  // instead of the profile store. See go/upm-local-passwords for context
+  // (sorry, Googlers only).
+  std::swap(used_store, unused_store);
+#endif
+  EXPECT_CALL(*used_store, IsAbleToSavePasswords).WillOnce(Return(true));
+  EXPECT_CALL(*unused_store, IsAbleToSavePasswords).Times(0);
+
+  EXPECT_TRUE(IsAbleToSavePasswords(&mock_client_));
+
+  EXPECT_CALL(*used_store, IsAbleToSavePasswords).WillOnce(Return(false));
+
+  EXPECT_FALSE(IsAbleToSavePasswords(&mock_client_));
 }
 
-TEST_F(PasswordManagerUtilTest, BiometricForFillingFlagDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      password_manager::features::kBiometricAuthenticationForFilling);
-  SetBiometricAuthenticationBeforeFilling(/*available=*/false);
-  EXPECT_CALL(*authenticator_.get(), CanAuthenticate).WillOnce(Return(true));
-  EXPECT_FALSE(
-      ShouldShowBiometricAuthenticationBeforeFillingPromo(&mock_client_));
-}
+TEST_F(PasswordManagerUtilTest, IsAbleToSavePasswords_NotSyncing) {
+  DisableSyncFeature();
 
-TEST_F(PasswordManagerUtilTest, BiometricForFillingEnabed) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      password_manager::features::kBiometricAuthenticationForFilling);
-  SetBiometricAuthenticationBeforeFilling(/*available=*/true);
-  EXPECT_CALL(*authenticator_.get(), CanAuthenticate).WillOnce(Return(true));
-  EXPECT_FALSE(
-      ShouldShowBiometricAuthenticationBeforeFillingPromo(&mock_client_));
-}
+  scoped_refptr<password_manager::MockPasswordStoreInterface> account_store(
+      new password_manager::MockPasswordStoreInterface);
+  scoped_refptr<password_manager::MockPasswordStoreInterface> profile_store(
+      new password_manager::MockPasswordStoreInterface);
+  EXPECT_CALL(mock_client_, GetAccountPasswordStore)
+      .WillRepeatedly(testing::Return(account_store.get()));
+  EXPECT_CALL(mock_client_, GetProfilePasswordStore)
+      .WillRepeatedly(testing::Return(profile_store.get()));
 
-TEST_F(PasswordManagerUtilTest, ShouldShowBiometricAuthPromo) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      password_manager::features::kBiometricAuthenticationForFilling);
-  SetBiometricAuthenticationBeforeFilling(/*available=*/false);
-  EXPECT_CALL(*authenticator_.get(), CanAuthenticate).WillOnce(Return(true));
-  EXPECT_TRUE(
-      ShouldShowBiometricAuthenticationBeforeFillingPromo(&mock_client_));
-}
+  EXPECT_CALL(*profile_store, IsAbleToSavePasswords).WillOnce(Return(true));
+  EXPECT_CALL(*account_store, IsAbleToSavePasswords).Times(0);
 
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  EXPECT_TRUE(IsAbleToSavePasswords(&mock_client_));
+
+  EXPECT_CALL(*profile_store, IsAbleToSavePasswords).WillOnce(Return(false));
+
+  EXPECT_FALSE(IsAbleToSavePasswords(&mock_client_));
+}
 
 }  // namespace password_manager_util

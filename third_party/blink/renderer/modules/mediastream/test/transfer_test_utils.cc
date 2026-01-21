@@ -1,9 +1,10 @@
-// Copyright (c) 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/mediastream/test/transfer_test_utils.h"
 
+#include "base/functional/callback_helpers.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.h"
@@ -24,9 +25,9 @@ void SetFromTransferredStateImplForTesting(
 ScopedMockMediaStreamTrackFromTransferredState::
     ScopedMockMediaStreamTrackFromTransferredState() {
   SetFromTransferredStateImplForTesting(
-      WTF::BindRepeating(&ScopedMockMediaStreamTrackFromTransferredState::Impl,
-                         // The destructor removes this callback.
-                         WTF::Unretained(this)));
+      BindRepeating(&ScopedMockMediaStreamTrackFromTransferredState::Impl,
+                    // The destructor removes this callback.
+                    Unretained(this)));
 }
 ScopedMockMediaStreamTrackFromTransferredState::
     ~ScopedMockMediaStreamTrackFromTransferredState() {
@@ -57,7 +58,8 @@ MediaStreamComponent* MakeTabCaptureVideoComponentForTest(
   device.display_media_info = media::mojom::DisplayMediaInformation::New(
       media::mojom::DisplayCaptureSurfaceType::BROWSER,
       /*logical_surface=*/true, media::mojom::CursorCaptureType::NEVER,
-      /*capture_handle=*/nullptr);
+      /*capture_handle=*/nullptr,
+      /*initial_zoom_level=*/100);
   mock_source->SetDevice(device);
   MediaStreamSource* source = MakeGarbageCollected<MediaStreamSource>(
       "test_id", MediaStreamSource::StreamType::kTypeVideo, "test_name",
@@ -83,7 +85,8 @@ MediaStreamComponent* MakeTabCaptureAudioComponentForTest(
   device.display_media_info = media::mojom::DisplayMediaInformation::New(
       media::mojom::DisplayCaptureSurfaceType::BROWSER,
       /*logical_surface=*/true, media::mojom::CursorCaptureType::NEVER,
-      /*capture_handle=*/nullptr);
+      /*capture_handle=*/nullptr,
+      /*initial_zoom_level=*/100);
   mock_source->SetDevice(device);
   MediaStreamSource* source = MakeGarbageCollected<MediaStreamSource>(
       "test_id", MediaStreamSource::StreamType::kTypeAudio, "test_name",

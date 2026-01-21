@@ -12,7 +12,9 @@
 #include "third_party/blink/public/common/features.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/common/mojom/event_router.mojom.h"
 #include "extensions/common/mojom/frame.mojom.h"
+#include "extensions/common/mojom/renderer_host.mojom.h"
 #endif
 
 namespace {
@@ -43,12 +45,29 @@ void RegisterPoliciesForChannelAssociatedInterfaces(
   // under proper permission managements beyond the page boundaries.
   policy_map.SetAssociatedPolicy<extensions::mojom::LocalFrameHost>(
       content::MojoBinderAssociatedPolicy::kGrant);
+
+  // Grants Prerendering to use EventRouter, and sensitive behaviors are
+  // prohibited by permission request boundary.
+  policy_map.SetAssociatedPolicy<extensions::mojom::EventRouter>(
+      content::MojoBinderAssociatedPolicy::kGrant);
+
+  // Grants Prerendering to use RendererHost. This API is used for activity log,
+  // and it is safe to grant this API instead of default API behavior (deferring
+  // until prerender activation).
+  policy_map.SetAssociatedPolicy<extensions::mojom::RendererHost>(
+      content::MojoBinderAssociatedPolicy::kGrant);
 #endif
 }
 
 }  // namespace
 
 void RegisterChromeMojoBinderPoliciesForSameOriginPrerendering(
+    content::MojoBinderPolicyMap& policy_map) {
+  RegisterPoliciesForNonAssociatedInterfaces(policy_map);
+  RegisterPoliciesForChannelAssociatedInterfaces(policy_map);
+}
+
+void RegisterChromeMojoBinderPoliciesForPreview(
     content::MojoBinderPolicyMap& policy_map) {
   RegisterPoliciesForNonAssociatedInterfaces(policy_map);
   RegisterPoliciesForChannelAssociatedInterfaces(policy_map);

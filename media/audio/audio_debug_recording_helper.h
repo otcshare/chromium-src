@@ -6,9 +6,10 @@
 #define MEDIA_AUDIO_AUDIO_DEBUG_RECORDING_HELPER_H_
 
 #include "base/atomicops.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
 #include "base/threading/thread_checker.h"
 #include "media/audio/audio_debug_file_writer.h"
@@ -23,7 +24,11 @@ namespace media {
 
 class AudioBus;
 
-enum class AudioDebugRecordingStreamType { kInput = 0, kOutput = 1 };
+enum class AudioDebugRecordingStreamType {
+  kInput = 0,
+  kOutput = 1,
+  kLoopback = 2
+};
 
 // Interface for feeding data to a recorder.
 class AudioDebugRecorder {
@@ -75,6 +80,9 @@ class MEDIA_EXPORT AudioDebugRecordingHelper : public AudioDebugRecorder {
   virtual AudioDebugFileWriter::Ptr CreateAudioDebugFileWriter(
       const AudioParameters& params,
       base::File file);
+
+  // Notifier for AudioDebugFileWriter destruction. Overridden by test.
+  virtual void WillDestroyAudioDebugFileWriter();
 
   // Passed to |create_file_callback| in EnableDebugRecording, to be called
   // after debug recording file was created.

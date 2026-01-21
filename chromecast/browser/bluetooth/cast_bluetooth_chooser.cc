@@ -4,7 +4,7 @@
 
 #include "chromecast/browser/bluetooth/cast_bluetooth_chooser.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
@@ -32,7 +32,7 @@ void CastBluetoothChooser::GrantAccess(const std::string& address) {
     return;
   }
 
-  if (available_devices_.find(address) != available_devices_.end()) {
+  if (available_devices_.contains(address)) {
     RunEventHandlerAndResetReceiver(content::BluetoothChooserEvent::SELECTED,
                                     address);
     return;
@@ -59,8 +59,7 @@ void CastBluetoothChooser::AddOrUpdateDevice(const std::string& device_id,
   DCHECK(event_handler_);
 
   // Note: |device_id| is just a canonical Bluetooth address.
-  if (all_devices_approved_ ||
-      approved_devices_.find(device_id) != approved_devices_.end()) {
+  if (all_devices_approved_ || approved_devices_.contains(device_id)) {
     RunEventHandlerAndResetReceiver(content::BluetoothChooserEvent::SELECTED,
                                     device_id);
     return;

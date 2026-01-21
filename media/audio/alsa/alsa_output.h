@@ -30,6 +30,7 @@
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -50,17 +51,19 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
  public:
   // String for the generic "default" ALSA device that has the highest
   // compatibility and chance of working.
-  static const char kDefaultDevice[];
+  static constexpr char kDefaultDevice[] = "default";
 
   // Pass this to the AlsaPcmOutputStream if you want to attempt auto-selection
   // of the audio device.
-  static const char kAutoSelectDevice[];
+  static constexpr char kAutoSelectDevice[] = "";
 
   // Prefix for device names to enable ALSA library resampling.
-  static const char kPlugPrefix[];
+  static constexpr char kPlugPrefix[] = "plug:";
 
   // The minimum latency that is accepted by the device.
-  static const uint32_t kMinLatencyMicros;
+  // We use 40ms as our minimum required latency. If it is needed, we may be
+  // able to get it down to 20ms.
+  static constexpr uint32_t kMinLatencyMicros = 40 * 1000;
 
   // Create a PCM Output stream for the ALSA device identified by
   // |device_name|.  The AlsaPcmOutputStream uses |wrapper| to communicate with
@@ -154,7 +157,7 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   //
   // TODO(ajwong): This is necessary because the ownership semantics for the
   // |source_callback_| object are incorrect in AudioRenderHost. The callback
-  // is passed into the output stream, but ownership is not transfered which
+  // is passed into the output stream, but ownership is not transferred which
   // requires a synchronization on access of the |source_callback_| to avoid
   // using a deleted callback.
   int RunDataCallback(base::TimeDelta delay,
@@ -181,32 +184,32 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   uint32_t packet_size_;
   base::TimeDelta latency_;
   uint32_t bytes_per_output_frame_;
-  uint32_t alsa_buffer_frames_;
+  uint32_t alsa_buffer_frames_ = 0;
 
   // Flag indicating the code should stop reading from the data source or
   // writing to the ALSA device.  This is set because the device has entered
   // an unrecoverable error state, or the ClosedTask() has executed.
-  bool stop_stream_;
+  bool stop_stream_ = false;
 
   // Wrapper class to invoke all the ALSA functions.
   raw_ptr<AlsaWrapper> wrapper_;
 
   // Audio manager that created us.  Used to report that we've been closed.
-  raw_ptr<AudioManagerBase> manager_;
+  const raw_ref<AudioManagerBase> manager_;
 
   // Task runner to use for polling.
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   // Handle to the actual PCM playback device.
-  raw_ptr<snd_pcm_t> playback_handle_;
+  raw_ptr<snd_pcm_t> playback_handle_ = nullptr;
 
   std::unique_ptr<SeekableBuffer> buffer_;
   uint32_t frames_per_packet_;
 
-  InternalState state_;
-  float volume_;  // Volume level from 0.0 to 1.0.
+  InternalState state_ = kCreated;
+  float volume_ = 1.0f;  // Volume level from 0.0 to 1.0.
 
-  raw_ptr<AudioSourceCallback> source_callback_;
+  raw_ptr<AudioSourceCallback> source_callback_ = nullptr;
 
   // Container for retrieving data from AudioSourceCallback::OnMoreData().
   std::unique_ptr<AudioBus> audio_bus_;

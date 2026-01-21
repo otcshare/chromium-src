@@ -8,10 +8,16 @@
 #include <linux/input.h>
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/events/event.h"
 #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#endif
 
 namespace ui {
 
@@ -22,9 +28,16 @@ float ScaleTilt(int value, int min_value, int num_values) {
   return 180.f * (value - min_value) / num_values - 90.f;
 }
 
-EventPointerType GetToolType(int button_tool) {
-  if (button_tool == BTN_TOOL_RUBBER)
+uint8_t ToolMaskFromButtonTool(int button_tool) {
+  DCHECK_GE(button_tool, BTN_TOOL_PEN);
+  DCHECK_LE(button_tool, BTN_TOOL_LENS);
+  return 1 << (button_tool - BTN_TOOL_PEN);
+}
+
+EventPointerType GetToolType(uint8_t tool_mask) {
+  if (tool_mask & ToolMaskFromButtonTool(BTN_TOOL_RUBBER)) {
     return EventPointerType::kEraser;
+  }
   return EventPointerType::kPen;
 }
 
@@ -85,14 +98,37 @@ void TabletEventConverterEvdev::OnFileCanReadWithoutBlocking(int fd) {
   if (!IsEnabled())
     return;
 
-  DCHECK_EQ(read_size % sizeof(*inputs), 0u);
-  ProcessEvents(inputs, read_size / sizeof(*inputs));
+  DCHECK_EQ(read_size % sizeof(inputs[0]), 0u);
+  // SAFETY: `read_size` is the number of bytes read from the file descriptor.
+  // It is capped by `sizeof(inputs)`, so it cannot overflow the buffer.
+  ProcessEvents(
+      UNSAFE_BUFFERS(base::span(inputs, read_size / sizeof(inputs[0]))));
 }
 
-void TabletEventConverterEvdev::ProcessEvents(const input_event* inputs,
-                                              int count) {
-  for (int i = 0; i < count; ++i) {
-    const input_event& input = inputs[i];
+bool TabletEventConverterEvdev::HasGraphicsTablet() const {
+  return true;
+}
+
+std::ostream& TabletEventConverterEvdev::DescribeForLog(
+    std::ostream& os) const {
+  os << "class=ui::TabletEventConverterEvdev id=" << input_device_.id
+     << std::endl
+     << " x_abs_min=" << x_abs_min_ << std::endl
+     << " x_abs_range=" << x_abs_range_ << std::endl
+     << " y_abs_min=" << y_abs_min_ << std::endl
+     << " y_abs_range=" << y_abs_range_ << std::endl
+     << " tilt_x_min=" << tilt_x_min_ << std::endl
+     << " tilt_x_range=" << tilt_x_range_ << std::endl
+     << " tilt_y_min=" << tilt_y_min_ << std::endl
+     << " tilt_y_range=" << tilt_y_range_ << std::endl
+     << " pressure_max=" << pressure_max_ << std::endl
+     << "base ";
+  return EventConverterEvdev::DescribeForLog(os);
+}
+
+void TabletEventConverterEvdev::ProcessEvents(
+    base::span<const input_event> inputs) {
+  for (const input_event& input : inputs) {
     switch (input.type) {
       case EV_KEY:
         ConvertKeyEvent(input);
@@ -110,10 +146,11 @@ void TabletEventConverterEvdev::ProcessEvents(const input_event* inputs,
 void TabletEventConverterEvdev::ConvertKeyEvent(const input_event& input) {
   // Only handle other events if we have a stylus in proximity
   if (input.code >= BTN_TOOL_PEN && input.code <= BTN_TOOL_LENS) {
+    uint8_t tool_mask = ToolMaskFromButtonTool(input.code);
     if (input.value == 1)
-      stylus_ = input.code;
+      active_tools_ |= tool_mask;
     else if (input.value == 0)
-      stylus_ = 0;
+      active_tools_ &= ~tool_mask;
     else
       LOG(WARNING) << "Unexpected value: " << input.value
                    << " for code: " << input.code;
@@ -123,6 +160,21 @@ void TabletEventConverterEvdev::ConvertKeyEvent(const input_event& input) {
     DispatchMouseButton(input);
     return;
   }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!ash::features::IsPeripheralCustomizationEnabled()) {
+    return;
+  }
+
+  if ((input.code >= BTN_0 && input.code <= BTN_9) ||
+      (input.code >= BTN_A && input.code <= BTN_Z)) {
+    dispatcher_->DispatchKeyEvent(KeyEventParams{
+        input_device_.id, EF_NONE, input.code, input.code,
+        static_cast<bool>(input.value), /*suppress_auto_repeat=*/false,
+        TimeTicksFromInputEvent(input)});
+    return;
+  }
+#endif
 }
 
 void TabletEventConverterEvdev::ConvertAbsEvent(const input_event& input) {
@@ -147,7 +199,7 @@ void TabletEventConverterEvdev::ConvertAbsEvent(const input_event& input) {
       abs_value_dirty_ = true;
       break;
     case ABS_PRESSURE:
-      pressure_ = (float)input.value / pressure_max_;
+      pressure_ = static_cast<float>(input.value) / pressure_max_;
       abs_value_dirty_ = true;
       break;
   }
@@ -155,11 +207,10 @@ void TabletEventConverterEvdev::ConvertAbsEvent(const input_event& input) {
 
 void TabletEventConverterEvdev::UpdateCursor() {
   gfx::Rect confined_bounds = cursor_->GetCursorConfinedBounds();
-
-  int x =
-      ((x_abs_location_ - x_abs_min_) * confined_bounds.width()) / x_abs_range_;
-  int y = ((y_abs_location_ - y_abs_min_) * confined_bounds.height()) /
-          y_abs_range_;
+  float x = ((x_abs_location_ - x_abs_min_) * confined_bounds.width()) /
+            static_cast<float>(x_abs_range_);
+  float y = ((y_abs_location_ - y_abs_min_) * confined_bounds.height()) /
+            static_cast<float>(y_abs_range_);
 
   x += confined_bounds.x();
   y += confined_bounds.y();
@@ -196,7 +247,7 @@ void TabletEventConverterEvdev::DispatchMouseButton(const input_event& input) {
   dispatcher_->DispatchMouseButtonEvent(MouseButtonEventParams(
       input_device_.id, EF_NONE, cursor_->GetLocation(), button, down,
       MouseButtonMapType::kNone,
-      PointerDetails(GetToolType(stylus_), /* pointer_id*/ 0,
+      PointerDetails(GetToolType(active_tools_), /* pointer_id*/ 0,
                      /* radius_x */ 0.0f, /* radius_y */ 0.0f, pressure_,
                      /* twist */ 0.0f, tilt_x_, tilt_y_),
       TimeTicksFromInputEvent(input)));
@@ -207,7 +258,7 @@ void TabletEventConverterEvdev::FlushEvents(const input_event& input) {
     return;
 
   // Prevent propagation of invalid data on stylus lift off
-  if (stylus_ == 0) {
+  if (active_tools_ == 0) {
     abs_value_dirty_ = false;
     return;
   }
@@ -224,7 +275,7 @@ void TabletEventConverterEvdev::FlushEvents(const input_event& input) {
   dispatcher_->DispatchMouseMoveEvent(MouseMoveEventParams(
       input_device_.id, event_flags, cursor_->GetLocation(),
       /* ordinal_delta */ nullptr,
-      PointerDetails(GetToolType(stylus_), /* pointer_id*/ 0,
+      PointerDetails(GetToolType(active_tools_), /* pointer_id*/ 0,
                      /* radius_x */ 0.0f, /* radius_y */ 0.0f, pressure_,
                      /* twist */ 0.0f, tilt_x_, tilt_y_),
       TimeTicksFromInputEvent(input)));

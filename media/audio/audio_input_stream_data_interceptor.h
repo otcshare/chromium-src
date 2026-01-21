@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/audio/audio_io.h"
@@ -56,14 +56,18 @@ class MEDIA_EXPORT AudioInputStreamDataInterceptor
   // Implementation of AudioInputCallback
   void OnData(const AudioBus* source,
               base::TimeTicks capture_time,
-              double volume) override;
+              double volume,
+              const AudioGlitchInfo& audio_glitch_info) override;
 
   void OnError() override;
+
+  // Returns the underlying stream.
+  AudioInputStream* GetUnderlyingStreamForTesting() const { return stream_; }
 
  private:
   const CreateDebugRecorderCB create_debug_recorder_cb_;
   std::unique_ptr<AudioDebugRecorder> debug_recorder_;
-  const raw_ptr<AudioInputStream, DanglingUntriaged> stream_;
+  raw_ptr<AudioInputStream> stream_;
   raw_ptr<AudioInputStream::AudioInputCallback> callback_;
   SEQUENCE_CHECKER(sequence_checker_);
 };

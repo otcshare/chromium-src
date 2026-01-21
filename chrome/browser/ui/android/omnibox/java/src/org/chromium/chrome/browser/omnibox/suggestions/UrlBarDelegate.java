@@ -4,13 +4,17 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** An interface for modifying the location bar and its contents. */
+@NullMarked
 public interface UrlBarDelegate {
     /** Remove focus from the omnibox. */
     void clearOmniboxFocus();
 
     /**
      * Set the text in the omnibox.
+     *
      * @param text The text that should be displayed in the omnibox.
      */
     void setOmniboxEditingText(String text);

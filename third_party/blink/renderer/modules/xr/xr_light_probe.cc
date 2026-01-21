@@ -25,7 +25,7 @@ const double kReflectionChangeDelta = 1000.0;
 
 XRLightProbe::XRLightProbe(XRSession* session, XRLightProbeInit* options)
     : session_(session) {
-  if (options->reflectionFormat() == "rgba16f") {
+  if (options->reflectionFormat() == V8XRReflectionFormat::Enum::kRgba16F) {
     reflection_format_ = kReflectionFormatRGBA16F;
   } else {
     reflection_format_ = kReflectionFormatSRGBA8;
@@ -38,7 +38,7 @@ XRSpace* XRLightProbe::probeSpace() const {
         MakeGarbageCollected<XRObjectSpace<XRLightProbe>>(session_, this);
   }
 
-  return probe_space_;
+  return probe_space_.Get();
 }
 
 device::mojom::blink::XRNativeOriginInformationPtr XRLightProbe::NativeOrigin()
@@ -47,7 +47,7 @@ device::mojom::blink::XRNativeOriginInformationPtr XRLightProbe::NativeOrigin()
       device::mojom::XRReferenceSpaceType::kLocal);
 }
 
-absl::optional<gfx::Transform> XRLightProbe::MojoFromObject() const {
+std::optional<gfx::Transform> XRLightProbe::MojoFromObject() const {
   // For the moment we're making an assumption that the lighting estimations
   // are always generated from the local space origin. This is the case for
   // ARCore, but will need to be made more flexible as other runtimes or methods
@@ -103,7 +103,7 @@ void XRLightProbe::Trace(Visitor* visitor) const {
   visitor->Trace(session_);
   visitor->Trace(probe_space_);
   visitor->Trace(light_estimate_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
 }
 
 }  // namespace blink

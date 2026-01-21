@@ -16,14 +16,12 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chromecast.base.Box;
 import org.chromium.chromecast.base.Observable.Scheduler;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
-/**
- * Tests for HandlerScheduler.
- */
-@RunWith(LocalRobolectricTestRunner.class)
+/** Tests for HandlerScheduler. */
+@RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.LEGACY)
 public class HandlerSchedulerTest {

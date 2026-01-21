@@ -3,11 +3,10 @@
 // found in the LICENSE file.
 
 import 'chrome://access-code-cast/passcode_input/passcode_input.js';
-import 'chrome://webui-test/mojo_webui_test_support.js';
 
-import {PasscodeInputElement} from 'chrome://access-code-cast/passcode_input/passcode_input';
+import type {PasscodeInputElement} from 'chrome://access-code-cast/passcode_input/passcode_input.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 suite('PasscodeInputElementTest', () => {
   let c2cInput: PasscodeInputElement;
@@ -19,36 +18,40 @@ suite('PasscodeInputElementTest', () => {
     c2cInput.length = 6;
     document.body.appendChild(c2cInput);
 
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
   });
 
-  test('value set correctly', () => {
+  test('value set correctly', async () => {
     const testValue = 'hello';
     c2cInput.value = testValue;
+    await microtasksFinished();
     assertEquals(c2cInput.$.inputElement.value, testValue);
   });
 
   test('focus shown correctly', async () => {
     c2cInput.value = '';
     c2cInput.focusInput();
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
-    assertTrue(c2cInput.focused);
-    assertTrue(c2cInput.getCharBox(0).classList.contains('focused'));
-    assertTrue(c2cInput.getCharBox(1).classList.contains('focused'));
-    assertTrue(c2cInput.getCharBox(2).classList.contains('focused'));
+    assertTrue(c2cInput.focused, 'input not focused');
+    const charBoxes = c2cInput.shadowRoot.querySelectorAll('.char-box');
+    assertEquals(6, charBoxes.length);
+    assertTrue(charBoxes[0]!.classList.contains('focused'));
+    assertTrue(charBoxes[1]!.classList.contains('focused'));
+    assertTrue(charBoxes[2]!.classList.contains('focused'));
   });
 
   test('cursor is rendered correctly', async () => {
     const testValue = 'test';
     c2cInput.value = testValue;
     c2cInput.focusInput();
+    await microtasksFinished();
 
     // Case 1: Cursor is after all text.
     c2cInput.$.inputElement
         .setSelectionRange(testValue.length, testValue.length);
     c2cInput.$.inputElement.dispatchEvent(new Event('select'));
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
     assertTrue(c2cInput.getDisplayChar(testValue.length).classList
         .contains('cursor-empty'));
@@ -72,7 +75,7 @@ suite('PasscodeInputElementTest', () => {
     // Case 2: Cursor is before all text
     c2cInput.$.inputElement.setSelectionRange(0, 0);
     c2cInput.$.inputElement.dispatchEvent(new Event('select'));
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
     assertFalse(c2cInput.getDisplayChar(0).classList
         .contains('cursor-empty'));
@@ -96,7 +99,7 @@ suite('PasscodeInputElementTest', () => {
     // Case 3: Cursor is between characters of text
     c2cInput.$.inputElement.setSelectionRange(1, 1);
     c2cInput.$.inputElement.dispatchEvent(new Event('select'));
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
     assertFalse(c2cInput.getDisplayChar(0).classList
         .contains('cursor-empty'));
@@ -121,7 +124,7 @@ suite('PasscodeInputElementTest', () => {
   test('disabled state propogates correctly', async () => {
     c2cInput.value = '';
     c2cInput.disabled = false;
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
     assertFalse(c2cInput.$.inputElement.disabled);
     assertFalse(c2cInput.getDisplayChar(0).classList.contains('disabled'));
@@ -129,7 +132,7 @@ suite('PasscodeInputElementTest', () => {
     assertFalse(c2cInput.getDisplayChar(2).classList.contains('disabled'));
 
     c2cInput.disabled = true;
-    await waitAfterNextRender(c2cInput);
+    await microtasksFinished();
 
     assertTrue(c2cInput.$.inputElement.disabled);
     assertTrue(c2cInput.getDisplayChar(0).classList.contains('disabled'));

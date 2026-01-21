@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/metrics/incognito_observer.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list_observer.h"
@@ -24,8 +24,10 @@ class IncognitoObserverAndroid : public IncognitoObserver,
   ~IncognitoObserverAndroid() override { TabModelList::RemoveObserver(this); }
 
   // TabModelListObserver:
-  void OnTabModelAdded() override { update_closure_.Run(); }
-  void OnTabModelRemoved() override { update_closure_.Run(); }
+  void OnTabModelAdded(TabModel* tab_model) override { update_closure_.Run(); }
+  void OnTabModelRemoved(TabModel* tab_model) override {
+    update_closure_.Run();
+  }
 
  private:
   const base::RepeatingClosure update_closure_;

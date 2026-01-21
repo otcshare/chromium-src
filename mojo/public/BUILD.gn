@@ -8,8 +8,8 @@ group("public") {
   deps = [
     ":sdk",
     "cpp/bindings",
-    "cpp/test:test_mojom",
     "interfaces/bindings/tests:test_interfaces",
+    "rust:all",
   ]
 
   if (is_android) {
@@ -24,6 +24,7 @@ group("sdk") {
   deps = [
     "c/system",
     "cpp/bindings",
+    "rust:mojo_rust_system_api",
   ]
 }
 

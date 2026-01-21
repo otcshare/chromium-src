@@ -8,20 +8,21 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/dbus/shill/shill_client_helper.h"
 #include "chromeos/ash/components/dbus/shill/shill_property_changed_observer.h"
 #include "chromeos/ash/components/dbus/shill/shill_third_party_vpn_observer.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "dbus/mock_bus.h"
 #include "dbus/mock_object_proxy.h"
 #include "dbus/object_proxy.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using ::testing::MakeMatcher;
 using ::testing::Matcher;
@@ -53,7 +54,7 @@ class ValueMatcher : public MatcherInterface<const base::Value&> {
   void DescribeNegationTo(::std::ostream* os) const override;
 
  private:
-  std::unique_ptr<base::Value> expected_value_;
+  base::Value expected_value_;
 };
 
 inline Matcher<const base::Value&> ValueEq(const base::Value& expected_value) {
@@ -93,7 +94,7 @@ class ShillClientUnittestBase : public testing::Test {
   void SendPlatformMessageSignal(dbus::Signal* signal);
 
   // Sends packet received signal to the tested client.
-  void SendPacketReceievedSignal(dbus::Signal* signal);
+  void SendPacketReceivedSignal(dbus::Signal* signal);
 
   // Sends property changed signal to the tested client.
   void SendPropertyChangedSignal(dbus::Signal* signal);
@@ -109,6 +110,10 @@ class ShillClientUnittestBase : public testing::Test {
 
   // Expects the reader to have a uint32_t
   static void ExpectUint32Argument(uint32_t expected_value,
+                                   dbus::MessageReader* reader);
+
+  // Expects the reader to have a int
+  static void ExpectIntArgument(int expected_value,
                                    dbus::MessageReader* reader);
 
   // Expects the reader to have an array of bytes
@@ -134,33 +139,12 @@ class ShillClientUnittestBase : public testing::Test {
 
   // Expects the reader to have a string-to-variant dictionary.
   static void ExpectValueDictionaryArgument(
-      const base::Value* expected_dictionary,
+      const base::Value::Dict* expected_dictionary,
       bool string_valued,
       dbus::MessageReader* reader);
 
-  // Creates a dictionary Value with example Service properties.
-  static base::Value CreateExampleServiceProperties();
-
-  // Expects the call status to be SUCCESS.
-  static void ExpectNoResultValue(bool result);
-
-  static void ExpectObjectPathResultWithoutStatus(
-      const dbus::ObjectPath& expected_result,
-      const dbus::ObjectPath& result);
-
-  static void ExpectBoolResultWithoutStatus(bool expected_result, bool result);
-
-  static void ExpectStringResultWithoutStatus(
-      const std::string& expected_result,
-      const std::string& result);
-
-  // Checks the result and expects the call status to be SUCCESS.
-  static void ExpectValueResult(const base::Value* expected_result,
-                                absl::optional<base::Value> result);
-
-  // Expects the |expected_result| to match the |result|.
-  static void ExpectValueResultWithoutStatus(const base::Value* expected_result,
-                                             base::Value result);
+  // Creates a dictionary with example Service properties.
+  static base::Value::Dict CreateExampleServiceProperties();
 
   // A message loop to emulate asynchronous behavior.
   base::test::SingleThreadTaskEnvironment task_environment_;
@@ -174,7 +158,7 @@ class ShillClientUnittestBase : public testing::Test {
       const std::string& interface_name,
       const std::string& signal_name,
       const dbus::ObjectProxy::SignalCallback& signal_callback,
-      dbus::ObjectProxy::OnConnectedCallback* on_connected_callback);
+      dbus::ObjectProxy::OnConnectedCallback on_connected_callback);
 
   // Checks the requested interface name and signal name.
   // Used to implement the mock proxy.
@@ -182,7 +166,7 @@ class ShillClientUnittestBase : public testing::Test {
       const std::string& interface_name,
       const std::string& signal_name,
       const dbus::ObjectProxy::SignalCallback& signal_callback,
-      dbus::ObjectProxy::OnConnectedCallback* on_connected_callback);
+      dbus::ObjectProxy::OnConnectedCallback on_connected_callback);
 
   // Checks the requested interface name and signal name.
   // Used to implement the mock proxy.
@@ -190,22 +174,17 @@ class ShillClientUnittestBase : public testing::Test {
       const std::string& interface_name,
       const std::string& signal_name,
       const dbus::ObjectProxy::SignalCallback& signal_callback,
-      dbus::ObjectProxy::OnConnectedCallback* on_connected_callback);
+      dbus::ObjectProxy::OnConnectedCallback on_connected_callback);
 
   // These check the content of the method call and returns the response.
   // Used to implement the mock proxy.
   void OnCallMethod(dbus::MethodCall* method_call,
                     int timeout_ms,
-                    dbus::ObjectProxy::ResponseCallback* response_callback);
+                    dbus::ObjectProxy::ResponseCallback response_callback);
   void OnCallMethodWithErrorResponse(
       dbus::MethodCall* method_call,
       int timeout_ms,
-      dbus::ObjectProxy::ResponseOrErrorCallback* response_callback);
-  void OnCallMethodWithErrorCallback(
-      dbus::MethodCall* method_call,
-      int timeout_ms,
-      dbus::ObjectProxy::ResponseCallback* response_callback,
-      dbus::ObjectProxy::ErrorCallback* error_callback);
+      dbus::ObjectProxy::ResponseOrErrorCallback response_callback);
 
   // The interface name.
   const std::string interface_name_;
@@ -222,7 +201,7 @@ class ShillClientUnittestBase : public testing::Test {
   // The name of the method which is expected to be called.
   std::string expected_method_name_;
   // The response which the mock object proxy returns.
-  dbus::Response* response_;
+  raw_ptr<dbus::Response, DanglingUntriaged> response_;
   // A callback to intercept and check the method call arguments.
   ArgumentCheckCallback argument_checker_;
 };

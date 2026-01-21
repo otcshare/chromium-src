@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {startColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+import {COLOR_PROVIDER_CHANGED, ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+import {assert} from 'chrome://resources/js/assert.js';
 
 import {getRGBAFromComputedStyle} from './utils.js';
 import {startObservingWallpaperColors} from './wallpaper_colors.js';
@@ -79,8 +80,7 @@ async function requestJSON(): Promise<JSON> {
 
 async function populateTokenTable() {
   function addTokens(table: HTMLTableSectionElement, tokens: Token[]) {
-    Object.values(tokens).forEach(
-        t => appendTokenRowToTable(table, t as Token));
+    Object.values(tokens).forEach(t => appendTokenRowToTable(table, t));
   }
   const json = await requestJSON();
   const tokens = json as unknown as TokenArray;
@@ -92,8 +92,22 @@ async function populateTokenTable() {
   addTokens(sysTable, tokens.sys_tokens);
 }
 
+function onColorChange() {
+  const formatter = new Intl.DateTimeFormat('en', {
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+  });
+  const span = document.querySelector<HTMLElement>('#last-updated');
+  assert(span);
+  span.innerText = formatter.format(new Date());
+}
+
 window.onload = () => {
   populateTokenTable();
-  startColorChangeUpdater();
+  ColorChangeUpdater.forDocument().start();
   startObservingWallpaperColors();
+  ColorChangeUpdater.forDocument().eventTarget.addEventListener(
+      COLOR_PROVIDER_CHANGED, onColorChange);
+  onColorChange();
 };

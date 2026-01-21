@@ -7,6 +7,7 @@
 
 #include <Windows.h>
 
+#include <string>
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
@@ -20,7 +21,7 @@ using base::win::StartupInformation;
 
 // Wraps base::win::StartupInformation and allows some querying of what is
 // set. This is specialized for the dance between
-// BrokerServices::SpawnTarget() and TargetProcess::Create().
+// BrokerServices::SpawnTargetAsync() and TargetProcess::Create().
 class StartupInformationHelper {
  public:
   StartupInformationHelper();
@@ -42,7 +43,7 @@ class StartupInformationHelper {
   // Create PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES and
   //        PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY
   // based on |container|. |container| should be valid.
-  void SetAppContainer(scoped_refptr<AppContainer> container);
+  void SetAppContainer(AppContainer* container);
   // Creates PROC_THREAD_ATTRIBUTE_JOB_LIST with |job_handle|.
   void AddJobToAssociate(HANDLE job_handle);
 
@@ -54,6 +55,15 @@ class StartupInformationHelper {
   // Compiles fields into PROC_THREAD_ attributes and populates startup
   // information. Must be called before GetStartupInformation().
   bool BuildStartupInformation();
+
+  // Sets the environment block to use with CreateProcessAsUser. The string must
+  // end with a NUL character to ensure it's correctly terminated for use when
+  // creating a process.
+  void SetEnvironment(std::wstring environment);
+
+  // Obtains the environment block to use with CreateProcessAsUser. If this has
+  // not been set using `SetEnvironment` then it will return nullptr.
+  wchar_t* GetEnvironment();
 
   // Gets wrapped object, valid once BuildStartupInformation() has been called.
   base::win::StartupInformation* GetStartupInformation() {
@@ -67,15 +77,19 @@ class StartupInformationHelper {
   DWORD CountAttributes();
 
   // Fields that are not passed into CreateProcessAsUserW().
-  scoped_refptr<AppContainer> app_container_;
+  // This can only be true if security_capabilities_ is also initialized.
+  bool enable_low_privilege_app_container_ = false;
   bool restrict_child_process_creation_ = false;
-  HANDLE stdout_handle_ = INVALID_HANDLE_VALUE;
-  HANDLE stderr_handle_ = INVALID_HANDLE_VALUE;
+  HANDLE stdout_handle_ = nullptr;
+  HANDLE stderr_handle_ = nullptr;
   bool inherit_handles_ = false;
   size_t mitigations_size_ = 0;
 
   // startup_info_.startup_info() is passed to CreateProcessAsUserW().
   StartupInformation startup_info_;
+  // Passed as the environment block to CreateProcessAsUserW(). If empty then
+  // nullptr will passed instead.
+  std::wstring environment_;
 
   // These need to have the same lifetime as startup_info_.startup_info();
   std::wstring desktop_;

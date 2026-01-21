@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_SAFE_BROWSING_EXTENSION_TELEMETRY_EXTENSION_TELEMETRY_UPLOADER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/profiles/profile.h"
+#include "base/types/optional_ref.h"
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -34,8 +35,12 @@ class ExtensionTelemetryUploader {
 
   virtual ~ExtensionTelemetryUploader();
 
-  // A callback run by the uploader upon success or failure.
-  using OnUploadCallback = base::OnceCallback<void(bool success)>;
+  // A callback run by the uploader upon success or failure. `response_data`
+  // is the response body from the server and won't be empty if `success` is
+  // true.
+  using OnUploadCallback =
+      base::OnceCallback<void(bool success,
+                              base::optional_ref<std::string> response_data)>;
 
   ExtensionTelemetryUploader(
       OnUploadCallback callback,
@@ -58,10 +63,12 @@ class ExtensionTelemetryUploader {
   void SendRequest(const std::string& access_token);
 
   // Callback when SimpleURLLoader gets the response.
-  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoaderComplete(std::optional<std::string> response_body);
 
   // Called by OnURLLoaderComplete to handle successful/failed upload.
-  void RetryOrFinish(int net_error, int response_code);
+  void RetryOrFinish(int net_error,
+                     int response_code,
+                     base::optional_ref<std::string> response_data);
 
   OnUploadCallback callback_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

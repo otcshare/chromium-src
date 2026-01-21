@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
 #include "components/viz/service/display/bsp_walk_action.h"
 #include "components/viz/service/display/draw_polygon.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -27,7 +29,7 @@ namespace {
   } while (false);
 
 #define INT_VECTOR_FROM_ARRAY(array) \
-  std::vector<int>(array, array + std::size(array))
+  std::vector<int>(std::begin(array), std::end(array))
 
 #define CREATE_DRAW_POLYGON(vertex_vector, normal, polygon_id) \
   new DrawPolygon(NULL, vertex_vector, normal, polygon_id)
@@ -39,7 +41,7 @@ class BspTreeTest {
       const std::vector<int>& compare_list) {
     BspTree bsp_tree(test_polygons);
 
-    std::vector<DrawPolygon*> sorted_list;
+    std::vector<raw_ptr<DrawPolygon, VectorExperimental>> sorted_list;
     BspWalkActionToVector action_handler(&sorted_list);
     bsp_tree.TraverseWithActionHandler(&action_handler);
 
@@ -334,12 +336,12 @@ TEST(BspTreeTest, Coplanar) {
 
   // Now check that all of the things above still work when the polygons
   // are facing backwards.
-  std::vector<gfx::Point3F> vertices_a_rev(vertices_a);
-  std::vector<gfx::Point3F> vertices_b_rev(vertices_b);
-  std::vector<gfx::Point3F> vertices_c_rev(vertices_c);
-  std::reverse(vertices_a_rev.begin(), vertices_a_rev.end());
-  std::reverse(vertices_b_rev.begin(), vertices_b_rev.end());
-  std::reverse(vertices_c_rev.begin(), vertices_c_rev.end());
+  std::vector<gfx::Point3F> vertices_a_rev(vertices_a.rbegin(),
+                                           vertices_a.rend());
+  std::vector<gfx::Point3F> vertices_b_rev(vertices_b.rbegin(),
+                                           vertices_b.rend());
+  std::vector<gfx::Point3F> vertices_c_rev(vertices_c.rbegin(),
+                                           vertices_c.rend());
 
   std::unique_ptr<DrawPolygon> polygon_a_rev(CREATE_DRAW_POLYGON(
       vertices_a_rev, gfx::Vector3dF(0.0f, 0.0f, -1.0f), 0));

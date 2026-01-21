@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_scheduled_source_node.h"
@@ -51,10 +52,6 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
              double grain_duration,
              ExceptionState&);
 
-  // Note: the attribute was originally exposed as `.looping`, but to be more
-  // consistent in naming with <audio> and with how it's described in the
-  // specification, the proper attribute name is `.loop`. The old attribute is
-  // kept for backwards compatibility.
   bool Loop() const { return is_looping_; }
   void SetLoop(bool looping);
 
@@ -109,6 +106,21 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   void ClampGrainParameters(const SharedAudioBuffer*)
       EXCLUSIVE_LOCKS_REQUIRED(process_lock_);
 
+  bool DidSetLooping() const { return did_set_looping_; }
+  void SetDidSetLooping(bool loop) {
+    if (loop) {
+      did_set_looping_ = true;
+    }
+  }
+
+  base::WeakPtr<AudioScheduledSourceHandler> AsWeakPtr() override;
+
+  // Compute playback rate (k-rate) by incorporating the sample rate
+  // conversion factor, and the value of playbackRate and detune AudioParams.
+  double ComputePlaybackRate();
+
+  double GetMinPlaybackRate();
+
   // Sample data for the outputs of this node. The shared buffer can safely be
   // accessed from the audio thread.
   std::unique_ptr<SharedAudioBuffer> shared_buffer_;
@@ -119,13 +131,6 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
 
   scoped_refptr<AudioParamHandler> playback_rate_;
   scoped_refptr<AudioParamHandler> detune_;
-
-  bool DidSetLooping() const { return did_set_looping_; }
-  void SetDidSetLooping(bool loop) {
-    if (loop) {
-      did_set_looping_ = true;
-    }
-  }
 
   // If `is_looping_` is false, then this node will be done playing and become
   // inactive after it reaches the end of the sample data in the buffer.  If
@@ -156,18 +161,14 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   // True if `grain_duration_` is given explicitly (via 3 arg start method).
   bool is_duration_given_;
 
-  // Compute playback rate (k-rate) by incorporating the sample rate
-  // conversion factor, and the value of playbackRate and detune AudioParams.
-  double ComputePlaybackRate();
-
-  double GetMinPlaybackRate();
-
   // The minimum playbackRate value ever used for this source.
   double min_playback_rate_ = 1.0;
 
   // True if the `buffer` attribute has ever been set to a non-null
   // value.  Defaults to false.
   bool buffer_has_been_set_ = false;
+
+  base::WeakPtrFactory<AudioScheduledSourceHandler> weak_ptr_factory_{this};
 };
 
 }  // namespace blink

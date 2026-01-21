@@ -5,24 +5,26 @@
 #include "chromeos/printing/printer_config_cache.h"
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/network/public/cpp/simple_url_loader.h"
 #include "url/gurl.h"
 
 namespace chromeos {
@@ -30,19 +32,26 @@ namespace chromeos {
 namespace {
 
 // Defines the serving root in which all PPDs and PPD metadata reside.
-const char kServingRoot[] =
+constexpr char kServingRoot[] =
     "https://printerconfigurations.googleusercontent.com/"
     "chromeos_printing/";
+constexpr char kLocalhostRoot[] = "http://localhost:7002/";
 
 // Prepends the serving root to |name|, returning the result.
-std::string PrependServingRoot(const std::string& name) {
-  return base::StrCat({base::StringPiece(kServingRoot), name});
+std::string PrependServingRoot(const std::string& name,
+                               bool use_localhost_as_root) {
+  if (use_localhost_as_root) {
+    return base::StrCat({kLocalhostRoot, name});
+  }
+  return base::StrCat({kServingRoot, name});
 }
 
 // Accepts a relative |path| to a value in the Chrome OS Printing
 // serving root) and returns a resource request to satisfy the same.
-std::unique_ptr<network::ResourceRequest> FormRequest(const std::string& path) {
-  GURL full_url(PrependServingRoot(path));
+std::unique_ptr<network::ResourceRequest> FormRequest(
+    const std::string& path,
+    bool use_localhost_as_root) {
+  GURL full_url(PrependServingRoot(path, use_localhost_as_root));
   if (!full_url.is_valid()) {
     return nullptr;
   }
@@ -78,9 +87,11 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
   explicit PrinterConfigCacheImpl(
       const base::Clock* clock,
       base::RepeatingCallback<network::mojom::URLLoaderFactory*()>
-          loader_factory_dispenser)
+          loader_factory_dispenser,
+      bool use_localhost_as_root)
       : clock_(clock),
         loader_factory_dispenser_(std::move(loader_factory_dispenser)),
+        use_localhost_as_root_(use_localhost_as_root),
         weak_factory_(this) {}
 
   ~PrinterConfigCacheImpl() override {
@@ -154,11 +165,59 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
 
     std::unique_ptr<FetchContext> context = std::move(fetch_queue_.front());
     fetch_queue_.pop();
-    auto request = FormRequest(context->key);
+    auto request = FormRequest(context->key, use_localhost_as_root_);
 
-    // TODO(crbug.com/888189): add traffic annotation.
+    // Create traffic annotation tag.
+    net::NetworkTrafficAnnotationTag traffic_annotation =
+        net::DefineNetworkTrafficAnnotation("printer_config_fetch", R"(
+          semantics {
+            sender: "Printer Configuration"
+            description:
+              "This component sends requests to the Chrome OS Printing "
+              "serving root during printer configuration. This can return "
+              "two pieces of information, depending on the request: "
+              "PostScript Printer Description (PPD) files for a specified "
+              "printer, and PPD file metadata to help locate the desired PPD "
+              "file."
+            trigger: "On printer setup in ChromeOS."
+            data: "Printer names (comprising of make and/or model)."
+            user_data: {
+              type: OTHER
+            }
+            destination: GOOGLE_OWNED_SERVICE
+            internal: {
+              contacts: {
+                email: "bmgordon@google.com"
+              }
+            }
+            last_reviewed: "2023-01-18"
+          }
+          policy {
+            cookies_allowed: NO
+            setting:
+              "Admins must disable access to both enterprise and "
+              "non-enterprise printers. Enterprise printers should be left "
+              "empty under 'Devices > Chrome > Printers'. Non-enterprise "
+              "printers can be disabled under 'Devices > Chrome > Settings > "
+              "Printer management' by setting to: 'Do not allow users to add "
+              "new printers'."
+            chrome_policy {
+              UserPrintersAllowed {
+                UserPrintersAllowed: false
+              }
+              PrintersBulkConfiguration: {
+                PrintersBulkConfiguration: ""
+              }
+            }
+            chrome_device_policy {
+              # DevicePrinters
+              device_printers: {
+                external_policy: ""
+              }
+            }
+          })");
     fetcher_ = network::SimpleURLLoader::Create(std::move(request),
-                                                MISSING_TRAFFIC_ANNOTATION);
+                                                traffic_annotation);
 
     fetcher_->DownloadToString(
         loader_factory_dispenser_.Run(),
@@ -169,16 +228,18 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
 
   // Called by |fetcher_| once DownloadToString() completes.
   void FinishNetworkedFetch(std::unique_ptr<FetchContext> context,
-                            std::unique_ptr<std::string> contents) {
+                            std::optional<std::string> contents) {
     // Wherever |fetcher_| works its sorcery, it had better have posted
     // back onto _our_ sequence.
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     if (fetcher_->NetError() == net::Error::OK) {
+      CHECK(contents);
       // We only want to update our local cache if the |fetcher_|
       // succeeded; otherwise, prefer to either retain the stale entry
       // (if extant) or retain no entry at all (if not).
-      const Entry newly_inserted = Entry(*contents, clock_->Now());
+      const Entry newly_inserted =
+          Entry(std::move(contents).value(), clock_->Now());
       cache_.insert_or_assign(context->key, newly_inserted);
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(context->cb),
@@ -216,6 +277,9 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
   // TryToStartNetworkedFetch() and FinishNetworkedFetch() methods.
   std::unique_ptr<network::SimpleURLLoader> fetcher_;
 
+  // Determines the address of the server.
+  const bool use_localhost_as_root_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 
   // Dispenses weak pointers to our |fetcher_|. This is necessary
@@ -228,9 +292,10 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
 std::unique_ptr<PrinterConfigCache> PrinterConfigCache::Create(
     const base::Clock* clock,
     base::RepeatingCallback<network::mojom::URLLoaderFactory*()>
-        loader_factory_dispenser) {
+        loader_factory_dispenser,
+    bool use_localhost_as_root) {
   return std::make_unique<PrinterConfigCacheImpl>(
-      clock, std::move(loader_factory_dispenser));
+      clock, std::move(loader_factory_dispenser), use_localhost_as_root);
 }
 
 }  // namespace chromeos

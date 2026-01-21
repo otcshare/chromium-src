@@ -4,17 +4,17 @@
 
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/values.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/strings/grit/ui_strings.h"
 
-PluralStringHandler::PluralStringHandler() {}
+PluralStringHandler::PluralStringHandler() = default;
 
-PluralStringHandler::~PluralStringHandler() {}
+PluralStringHandler::~PluralStringHandler() = default;
 
 void PluralStringHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -44,7 +44,7 @@ void PluralStringHandler::HandleGetPluralString(const base::Value::List& args) {
   CHECK_EQ(3U, args.size());
 
   const base::Value& callback_id = args[0];
-  std::string message_name = args[1].GetString();
+  const std::string& message_name = args[1].GetString();
   int count = args[2].GetInt();
 
   auto string = GetPluralizedStringForMessageName(message_name, count);
@@ -68,9 +68,9 @@ void PluralStringHandler::GetPluralStringTuple(const base::Value::List& args,
   CHECK_EQ(5U, args.size());
 
   const base::Value& callback_id = args[0];
-  std::string message_name1 = args[1].GetString();
+  const std::string& message_name1 = args[1].GetString();
   int count1 = args[2].GetInt();
-  std::string message_name2 = args[3].GetString();
+  const std::string& message_name2 = args[3].GetString();
   int count2 = args[4].GetInt();
 
   auto string1 = GetPluralizedStringForMessageName(message_name1, count1);

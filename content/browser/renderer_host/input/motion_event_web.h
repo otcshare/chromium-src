@@ -10,7 +10,7 @@
 
 #include "content/common/content_export.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
-#include "ui/events/gesture_detection/motion_event.h"
+#include "ui/events/velocity_tracker/motion_event.h"
 
 namespace content {
 
@@ -36,6 +36,7 @@ class CONTENT_EXPORT MotionEventWeb : public ui::MotionEvent {
   float GetRawY(size_t pointer_index) const override;
   float GetTouchMajor(size_t pointer_index) const override;
   float GetTouchMinor(size_t pointer_index) const override;
+  bool HasNativeTouchMajor(size_t pointer_index) const override;
   float GetOrientation(size_t pointer_index) const override;
   float GetPressure(size_t pointer_index) const override;
   float GetTiltX(size_t pointer_index) const override;

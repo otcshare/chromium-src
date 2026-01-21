@@ -20,12 +20,15 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_blend_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_blend.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
@@ -53,31 +56,30 @@ static BlendMode ToBlendMode(SVGFEBlendElement::Mode mode) {
     MAP_BLEND_MODE(Luminosity);
     default:
       NOTREACHED();
-      return BlendMode::kNormal;
   }
 #undef MAP_BLEND_MODE
 }
 
 template <>
 const SVGEnumerationMap& GetEnumerationMap<SVGFEBlendElement::Mode>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {SVGFEBlendElement::kModeNormal, "normal"},
-      {SVGFEBlendElement::kModeMultiply, "multiply"},
-      {SVGFEBlendElement::kModeScreen, "screen"},
-      {SVGFEBlendElement::kModeDarken, "darken"},
-      {SVGFEBlendElement::kModeLighten, "lighten"},
-      {SVGFEBlendElement::kModeOverlay, "overlay"},
-      {SVGFEBlendElement::kModeColorDodge, "color-dodge"},
-      {SVGFEBlendElement::kModeColorBurn, "color-burn"},
-      {SVGFEBlendElement::kModeHardLight, "hard-light"},
-      {SVGFEBlendElement::kModeSoftLight, "soft-light"},
-      {SVGFEBlendElement::kModeDifference, "difference"},
-      {SVGFEBlendElement::kModeExclusion, "exclusion"},
-      {SVGFEBlendElement::kModeHue, "hue"},
-      {SVGFEBlendElement::kModeSaturation, "saturation"},
-      {SVGFEBlendElement::kModeColor, "color"},
-      {SVGFEBlendElement::kModeLuminosity, "luminosity"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "normal",
+      "multiply",
+      "screen",
+      "darken",
+      "lighten",
+      "overlay",
+      "color-dodge",
+      "color-burn",
+      "hard-light",
+      "soft-light",
+      "difference",
+      "exclusion",
+      "hue",
+      "saturation",
+      "color",
+      "luminosity",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
@@ -89,11 +91,7 @@ SVGFEBlendElement::SVGFEBlendElement(Document& document)
       mode_(MakeGarbageCollected<SVGAnimatedEnumeration<Mode>>(
           this,
           svg_names::kModeAttr,
-          SVGFEBlendElement::kModeNormal)) {
-  AddToPropertyMap(in1_);
-  AddToPropertyMap(in2_);
-  AddToPropertyMap(mode_);
-}
+          SVGFEBlendElement::kModeNormal)) {}
 
 void SVGFEBlendElement::Trace(Visitor* visitor) const {
   visitor->Trace(in1_);
@@ -117,13 +115,11 @@ void SVGFEBlendElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   const QualifiedName& attr_name = params.name;
   if (attr_name == svg_names::kModeAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr || attr_name == svg_names::kIn2Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -133,6 +129,7 @@ void SVGFEBlendElement::SvgAttributeChanged(
 
 FilterEffect* SVGFEBlendElement::Build(SVGFilterBuilder* filter_builder,
                                        Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEBlendElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   FilterEffect* input2 = filter_builder->GetEffectById(
@@ -147,6 +144,26 @@ FilterEffect* SVGFEBlendElement::Build(SVGFilterBuilder* filter_builder,
   input_effects.push_back(input1);
   input_effects.push_back(input2);
   return effect;
+}
+
+SVGAnimatedPropertyBase* SVGFEBlendElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kInAttr) {
+    return in1_.Get();
+  } else if (attribute_name == svg_names::kIn2Attr) {
+    return in2_.Get();
+  } else if (attribute_name == svg_names::kModeAttr) {
+    return mode_.Get();
+  } else {
+    return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+        attribute_name);
+  }
+}
+
+void SVGFEBlendElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{in1_.Get(), in2_.Get(), mode_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

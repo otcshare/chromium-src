@@ -8,15 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <string>
-
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/context_result.h"
-#include "gpu/command_buffer/service/abstract_texture.h"
 #include "gpu/command_buffer/service/async_api_interface.h"
 #include "gpu/command_buffer/service/gl_context_virtual_delegate.h"
 #include "gpu/gpu_gles2_export.h"
@@ -24,13 +22,11 @@
 
 namespace gl {
 class GLContext;
-class GLImage;
 class GLSurface;
 }  // namespace gl
 
 namespace gpu {
 class TextureBase;
-struct ContextCreationAttribs;
 
 namespace gles2 {
 class ContextGroup;
@@ -39,7 +35,6 @@ class FeatureInfo;
 class GpuFenceManager;
 class Outputter;
 class Texture;
-struct DisallowedFeatures;
 }  // namespace gles2
 
 // Abstract interface implemented by {Raster,GLES2}Decoder. It is called a
@@ -54,29 +49,13 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
   //
   // Methods required by CommandBufferStub.
   //
-  // Initializes the graphics context. Can create an offscreen
-  // decoder with a frame buffer that can be referenced from the parent.
-  // Takes ownership of GLContext.
-  // Parameters:
-  //  surface: the GL surface to render to.
-  //  context: the GL context to render to.
-  //  offscreen: whether to make the context offscreen or not. When FBO 0 is
-  //      bound, offscreen contexts render to an internal buffer, onscreen ones
-  //      to the surface.
-  //  offscreen_size: the size if the GL context is offscreen.
-  // Returns:
-  //   true if successful.
-  virtual gpu::ContextResult Initialize(
-      const scoped_refptr<gl::GLSurface>& surface,
-      const scoped_refptr<gl::GLContext>& context,
-      bool offscreen,
-      const gles2::DisallowedFeatures& disallowed_features,
-      const ContextCreationAttribs& attrib_helper) = 0;
 
   // Destroys the graphics context.
   virtual void Destroy(bool have_context) = 0;
 
   virtual Capabilities GetCapabilities() = 0;
+
+  virtual GLCapabilities GetGLCapabilities() = 0;
 
   virtual const gles2::FeatureInfo* GetFeatureInfo() const = 0;
 
@@ -110,6 +89,9 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
   // invalid, the callback must be called immediately.
   virtual void SetQueryCallback(unsigned int query_client_id,
                                 base::OnceClosure callback) = 0;
+
+  // Cancel and clear all in progress Callbacks.
+  virtual void CancelAllQueries() = 0;
 
   // Gets the GpuFenceManager for this context.
   virtual gles2::GpuFenceManager* GetGpuFenceManager() = 0;
@@ -148,20 +130,6 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
                             unsigned type,
                             const gfx::Rect& cleared_rect) = 0;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-  // Attaches |image| to the texture referred to by |client_texture_id|, marking
-  // the image as needing on-demand binding by the decoder.
-  virtual void AttachImageToTextureWithDecoderBinding(
-      uint32_t client_texture_id,
-      uint32_t texture_target,
-      gl::GLImage* image) = 0;
-#elif !BUILDFLAG(IS_ANDROID)
-  // Attaches |image| to the texture referred to by |client_texture_id|, marking
-  // the image as not needing on-demand binding by the decoder.
-  virtual void AttachImageToTextureWithClientBinding(uint32_t client_texture_id,
-                                                     uint32_t texture_target,
-                                                     gl::GLImage* image) = 0;
-#endif
   virtual base::WeakPtr<DecoderContext> AsWeakPtr() = 0;
 
   //
@@ -170,17 +138,6 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
   //
   virtual gles2::ContextGroup* GetContextGroup() = 0;
   virtual gles2::ErrorState* GetErrorState() = 0;
-#if !BUILDFLAG(IS_ANDROID)
-  virtual std::unique_ptr<gpu::gles2::AbstractTexture> CreateAbstractTexture(
-      unsigned /* GLenum */ target,
-      unsigned /* GLenum */ internal_format,
-      int /* GLsizei */ width,
-      int /* GLsizei */ height,
-      int /* GLsizei */ depth,
-      int /* GLint */ border,
-      unsigned /* GLenum */ format,
-      unsigned /* GLenum */ type) = 0;
-#endif
 
   //
   // Methods required by Texture.

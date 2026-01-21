@@ -26,13 +26,18 @@
 // User tapped on "Generate Strong Password" button.
 - (void)userDidRequestGeneratedPassword;
 
-// Asks the handler to save a credential with the given `username` and
-// `password`. If `shouldReplace` is true, then the user has already been warned
+// Asks the handler to save a credential with the given `username`, `password`
+// and `note`. If `shouldReplace` is true, then the user has already been warned
 // that they may be replacing an existing credential. Otherwise, the handler
 // should not replace an existing credential.
 - (void)saveCredentialWithUsername:(NSString*)username
                           password:(NSString*)password
+                              note:(NSString*)note
+                              gaia:(NSString*)gaia
                      shouldReplace:(BOOL)shouldReplace;
+
+// Returns the gaia for the account used for credential creation.
+- (NSString*)gaia;
 
 @end
 
@@ -46,7 +51,7 @@
 @property(nonatomic, weak) id<NewCredentialHandler> credentialHandler;
 
 // The host for the password being generated.
-@property(nonatomic, strong) NSString* currentHost;
+@property(nonatomic, copy) NSString* currentHost;
 
 @end
 

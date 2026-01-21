@@ -6,7 +6,9 @@
 #define IOS_WEB_WEBUI_URL_DATA_SOURCE_IOS_IMPL_H_
 
 #include <memory>
+#include <string_view>
 
+#import "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "ios/web/webui/url_data_manager_ios.h"
@@ -53,8 +55,7 @@ class URLDataSourceIOSImpl
  public:
   // See source_name_ below for docs on that parameter. Takes ownership of
   // `source`.
-  URLDataSourceIOSImpl(const std::string& source_name,
-                       URLDataSourceIOS* source);
+  URLDataSourceIOSImpl(std::string_view source_name, URLDataSourceIOS* source);
 
   // Report that a request has resulted in the data `bytes`.
   // If the request can't be satisfied, pass NULL for `bytes` to indicate
@@ -98,7 +99,7 @@ class URLDataSourceIOSImpl
   // should only be accessed on the IO thread. This reference can't be via a
   // scoped_refptr else there would be a cycle between the backend and data
   // source.
-  URLDataManagerIOSBackend* backend_;
+  raw_ptr<URLDataManagerIOSBackend> backend_;
 
   std::unique_ptr<URLDataSourceIOS> source_;
 };

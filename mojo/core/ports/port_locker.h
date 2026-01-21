@@ -7,7 +7,9 @@
 
 #include <stdint.h>
 
-#include "base/memory/raw_ptr_exclusion.h"
+#include "base/auto_reset.h"
+#include "base/compiler_specific.h"
+#include "base/memory/stack_allocated.h"
 #include "mojo/core/ports/port_ref.h"
 
 namespace mojo {
@@ -24,6 +26,8 @@ class PortRef;
 // Port locks are acquired upon construction of this object and released upon
 // destruction.
 class PortLocker {
+  STACK_ALLOCATED();
+
  public:
   // Constructs a PortLocker over a sequence of |num_ports| contiguous
   // |PortRef*|s. The sequence may be reordered by this constructor, and upon
@@ -39,15 +43,17 @@ class PortLocker {
   // doesn't do anything other than pass through to the private accessor on
   // |port_ref|, but it does force callers to go through a PortLocker to get to
   // the state, thus minimizing the likelihood that they'll go and do something
-  // stupid.
+  // bad.
   Port* GetPort(const PortRef& port_ref) const {
 #if DCHECK_IS_ON()
     // Sanity check when DCHECK is on to ensure this is actually a port whose
     // lock is held by this PortLocker.
     bool is_port_locked = false;
-    for (size_t i = 0; i < num_ports_ && !is_port_locked; ++i)
-      if (port_refs_[i]->port() == port_ref.port())
+    for (size_t i = 0; i < num_ports_ && !is_port_locked; ++i) {
+      if (UNSAFE_TODO(port_refs_[i])->port() == port_ref.port()) {
         is_port_locked = true;
+      }
+    }
     DCHECK(is_port_locked);
 #endif
     return port_ref.port();
@@ -62,15 +68,18 @@ class PortLocker {
 #endif
 
  private:
-  // `port_refs_` is not a raw_ptr<T> for performance reasons: PortLocker is
-  // usually short-lived (e.g. allocated on the stack) + the stack (not on the
-  // heap).
-  RAW_PTR_EXCLUSION const PortRef** const port_refs_;
+#if DCHECK_IS_ON()
+  const base::AutoReset<const PortLocker*> resetter_;
+#endif
+
+  const PortRef** const port_refs_;
   const size_t num_ports_;
 };
 
 // Convenience wrapper for a PortLocker that locks a single port.
 class COMPONENT_EXPORT(MOJO_CORE_PORTS) SinglePortLocker {
+  STACK_ALLOCATED();
+
  public:
   explicit SinglePortLocker(const PortRef* port_ref);
 

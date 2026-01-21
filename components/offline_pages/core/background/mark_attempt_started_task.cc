@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/offline_pages/core/offline_clock.h"
 
 namespace offline_pages {
@@ -17,7 +17,7 @@ MarkAttemptStartedTask::MarkAttemptStartedTask(
     RequestQueueStore::UpdateCallback callback)
     : UpdateRequestTask(store, request_id, std::move(callback)) {}
 
-MarkAttemptStartedTask::~MarkAttemptStartedTask() {}
+MarkAttemptStartedTask::~MarkAttemptStartedTask() = default;
 
 void MarkAttemptStartedTask::UpdateRequestImpl(
     UpdateRequestsResult read_result) {

@@ -7,19 +7,27 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/mojom/policy.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/fake_policy_instance.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
+#include "chromeos/ash/experiences/arc/mojom/policy.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/test/fake_policy_instance.h"
 #include "components/policy/core/common/remote_commands/remote_commands_queue.h"
 #include "content/public/test/browser_task_environment.h"
-#include "crypto/rsa_private_key.h"
+#include "crypto/keypair.h"
+#include "crypto/test_support.h"
 #include "net/cert/scoped_nss_types.h"
 #include "net/cert/x509_util.h"
 #include "net/cert/x509_util_nss.h"
@@ -29,7 +37,6 @@
 namespace arc {
 
 using testing::_;
-using testing::Invoke;
 using testing::StrictMock;
 using testing::WithArg;
 
@@ -72,17 +79,16 @@ class MockPolicyInstance : public FakePolicyInstance {
 void AddCert(const std::string& cn, std::vector<CertDescription>* certs) {
   std::string der_cert;
   net::ScopedCERTCertificate cert;
-  std::unique_ptr<crypto::RSAPrivateKey> key(
-      crypto::RSAPrivateKey::Create(1024));
+  auto key = crypto::test::FixedRsa2048PrivateKeyForTesting();
 
   ASSERT_TRUE(net::x509_util::CreateSelfSignedCert(
-      key->key(), net::x509_util::DIGEST_SHA256, cn, 1, base::Time::UnixEpoch(),
+      key.key(), net::x509_util::DIGEST_SHA256, cn, 1, base::Time::UnixEpoch(),
       base::Time::UnixEpoch(), {}, &der_cert));
   cert = net::x509_util::CreateCERTCertificateFromBytes(
-      reinterpret_cast<const uint8_t*>(der_cert.data()), der_cert.size());
+      base::as_byte_span(der_cert));
   ASSERT_TRUE(cert);
-  certs->emplace_back(key.release(), cert.release(),
-                      keymaster::mojom::ChapsSlot::kUser, kLabel, kId);
+  certs->emplace_back(key, cert.release(),
+                      keymanagement::mojom::ChapsSlot::kUser, kLabel, kId);
 }
 
 }  // namespace
@@ -91,23 +97,24 @@ class ArcCertInstallerTest : public testing::Test {
  public:
   ArcCertInstallerTest()
       : arc_service_manager_(std::make_unique<arc::ArcServiceManager>()),
-        profile_(std::make_unique<TestingProfile>()),
-        arc_policy_bridge_(arc::ArcPolicyBridge::GetForBrowserContextForTesting(
-            profile_.get())),
-        policy_instance_(std::make_unique<arc::MockPolicyInstance>()) {
-    arc_service_manager_->arc_bridge_service()->policy()->SetInstance(
-        policy_instance_.get());
-  }
+        profile_(std::make_unique<TestingProfile>()) {}
 
   ArcCertInstallerTest(const ArcCertInstallerTest&) = delete;
   ArcCertInstallerTest& operator=(const ArcCertInstallerTest&) = delete;
 
-  ~ArcCertInstallerTest() override {
-    arc_service_manager_->arc_bridge_service()->policy()->CloseInstance(
-        policy_instance_.get());
-  }
-
   void SetUp() override {
+    ash::ConciergeClient::InitializeFake(nullptr);
+    ash::DlcserviceClient::InitializeFake();
+    arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
+    arc_session_manager_ = CreateTestArcSessionManager(
+        std::make_unique<arc::ArcSessionRunner>(
+            base::BindRepeating(arc::FakeArcSession::Create)),
+        arc_dlc_installer_.get());
+    arc_policy_bridge_ =
+        arc::ArcPolicyBridge::GetForBrowserContextForTesting(profile_.get());
+    policy_instance_ = std::make_unique<arc::MockPolicyInstance>();
+    arc_service_manager_->arc_bridge_service()->policy()->SetInstance(
+        policy_instance_.get());
     auto mock_queue = std::make_unique<policy::RemoteCommandsQueue>();
     queue_ = mock_queue.get();
     installer_ =
@@ -117,19 +124,25 @@ class ArcCertInstallerTest : public testing::Test {
 
   void TearDown() override {
     queue_->RemoveObserver(&observer_);
+    arc_service_manager_->arc_bridge_service()->policy()->CloseInstance(
+        policy_instance_.get());
     installer_.reset();
     queue_ = nullptr;
+    arc_session_manager_.reset();
+    arc_dlc_installer_.reset();
+    ash::DlcserviceClient::Shutdown();
+    ash::ConciergeClient::Shutdown();
   }
 
   void ExpectArcCommandForName(const std::string& name,
                                mojom::CommandResultType status) {
     EXPECT_CALL(*policy_instance_.get(),
                 OnCommandReceived(IsCommandPayloadForName(name), _))
-        .WillOnce(WithArg<1>(Invoke(
+        .WillOnce(WithArg<1>(
             [status](FakePolicyInstance::OnCommandReceivedCallback callback) {
               base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
                   FROM_HERE, base::BindOnce(std::move(callback), status));
-            })));
+            }));
   }
 
   Profile* profile() { return profile_.get(); }
@@ -144,11 +157,13 @@ class ArcCertInstallerTest : public testing::Test {
   // (because BrowserContextKeyedServices are destroyed together with Profile,
   // and ArcPolicyBridge is such a service).
   const std::unique_ptr<arc::ArcServiceManager> arc_service_manager_;
+  std::unique_ptr<ArcDlcInstaller> arc_dlc_installer_;
+  std::unique_ptr<arc::ArcSessionManager> arc_session_manager_;
   const std::unique_ptr<TestingProfile> profile_;
-  arc::ArcPolicyBridge* const arc_policy_bridge_;
-  const std::unique_ptr<arc::MockPolicyInstance> policy_instance_;
+  raw_ptr<arc::ArcPolicyBridge> arc_policy_bridge_;
+  std::unique_ptr<arc::MockPolicyInstance> policy_instance_;
 
-  policy::RemoteCommandsQueue* queue_;
+  raw_ptr<policy::RemoteCommandsQueue, DanglingUntriaged> queue_;
   std::unique_ptr<ArcCertInstaller> installer_;
   MockRemoteCommandsQueueObserver observer_;
 };

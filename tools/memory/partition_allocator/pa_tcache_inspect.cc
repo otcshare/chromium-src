@@ -16,14 +16,14 @@
 #include <ios>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/allocator/partition_allocator/partition_root.h"
-#include "base/allocator/partition_allocator/partition_stats.h"
-#include "base/allocator/partition_allocator/thread_cache.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/debug/proc_maps_linux.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
@@ -36,20 +36,22 @@
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/thread_annotations.h"
-#include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "partition_alloc/bucket_lookup.h"
+#include "partition_alloc/partition_alloc_base/threading/platform_thread.h"
+#include "partition_alloc/partition_root.h"
+#include "partition_alloc/partition_stats.h"
+#include "partition_alloc/thread_cache.h"
 #include "tools/memory/partition_allocator/inspect_utils.h"
 
 namespace partition_alloc::tools {
 
-using ::base::PlatformThreadId;
-using partition_alloc::internal::BucketIndexLookup;
+using partition_alloc::BucketIndexLookup;
 using partition_alloc::internal::PartitionBucket;
 using partition_alloc::internal::SlotSpanMetadata;
-using partition_alloc::internal::ThreadSafe;
+using partition_alloc::internal::base::PlatformThreadId;
 
 namespace {
 
@@ -60,8 +62,8 @@ uintptr_t FindThreadCacheRegistry(RemoteProcessMemoryReader& reader) {
 }
 
 // List all thread names for a given PID.
-std::map<base::PlatformThreadId, std::string> ThreadNames(pid_t pid) {
-  std::map<base::PlatformThreadId, std::string> result;
+std::map<PlatformThreadId, std::string> ThreadNames(pid_t pid) {
+  std::map<PlatformThreadId, std::string> result;
 
   base::FilePath root_path =
       base::FilePath(base::StringPrintf("/proc/%d/task", pid));
@@ -79,10 +81,13 @@ std::map<base::PlatformThreadId, std::string> ThreadNames(pid_t pid) {
     }
 
     char buffer[4096 + 1];
-    int bytes_read = stat_file.ReadAtCurrentPos(buffer, 4096);
-    if (bytes_read <= 0)
+    base::span<uint8_t> buffer_span = base::as_writable_byte_span(buffer);
+    std::optional<size_t> bytes_read =
+        stat_file.ReadAtCurrentPos(buffer_span.first(4096u));
+    if (!bytes_read || *bytes_read == 0) {
       continue;
-    buffer[bytes_read] = '\0';
+    }
+    buffer_span[*bytes_read] = 0;
 
     int process_id, ppid, pgrp;
     char name[256];
@@ -96,13 +101,14 @@ std::map<base::PlatformThreadId, std::string> ThreadNames(pid_t pid) {
       LOG(WARNING) << "Invalid file: " << status_path.value();
       continue;
     }
-    bytes_read = status_file.ReadAtCurrentPos(buffer, 4096);
-    if (bytes_read <= 0)
+    bytes_read = status_file.ReadAtCurrentPos(buffer_span.first(4096u));
+    if (!bytes_read || *bytes_read == 0) {
       continue;
-    buffer[bytes_read] = '\0';
+    }
+    buffer_span[*bytes_read] = 0;
     auto lines = SplitString(buffer, "\n", base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
-    for (base::StringPiece sp : lines) {
+    for (std::string_view sp : lines) {
       if (sp.rfind("NSpid:\t", 0) == 0) {
         auto line_parts = SplitString(sp, "\t", base::TRIM_WHITESPACE,
                                       base::SPLIT_WANT_NONEMPTY);
@@ -111,7 +117,7 @@ std::map<base::PlatformThreadId, std::string> ThreadNames(pid_t pid) {
       }
     }
 
-    result[base::PlatformThreadId(process_id)] = std::string(name);
+    result[PlatformThreadId(process_id)] = std::string(name);
   }
 
   return result;
@@ -142,7 +148,7 @@ class ThreadCacheInspector {
   }
 
   std::vector<BucketStats> AccumulateThreadCacheBuckets();
-  std::uint8_t largest_active_bucket_index() {
+  std::uint16_t largest_active_bucket_index() {
     return registry_.get()->largest_active_bucket_index_;
   }
 
@@ -161,12 +167,12 @@ class PartitionRootInspector {
     size_t allocated_slots = 0;
     size_t freelist_size = 0;
 
-    PartitionBucket<ThreadSafe> bucket;
+    PartitionBucket bucket;
     std::vector<size_t> freelist_sizes;
     // Flattened versions of the lists.
-    std::vector<SlotSpanMetadata<ThreadSafe>> active_slot_spans;
-    std::vector<SlotSpanMetadata<ThreadSafe>> empty_slot_spans;
-    std::vector<SlotSpanMetadata<ThreadSafe>> decommitted_slot_spans;
+    std::vector<SlotSpanMetadata> active_slot_spans;
+    std::vector<SlotSpanMetadata> empty_slot_spans;
+    std::vector<SlotSpanMetadata> decommitted_slot_spans;
   };
 
   PartitionRootInspector(uintptr_t root_addr, pid_t pid)
@@ -174,7 +180,7 @@ class PartitionRootInspector {
   // Returns true for success.
   bool GatherStatistics();
   const std::vector<BucketStats>& bucket_stats() const { return bucket_stats_; }
-  const PartitionRoot<ThreadSafe>* root() { return root_.get(); }
+  const PartitionRoot* root() { return root_.get(); }
 
  private:
   void Update();
@@ -182,7 +188,7 @@ class PartitionRootInspector {
   uintptr_t root_addr_;
   pid_t pid_;
   RemoteProcessMemoryReader reader_;
-  RawBuffer<PartitionRoot<ThreadSafe>> root_;
+  RawBuffer<PartitionRoot> root_;
   std::vector<BucketStats> bucket_stats_;
 };
 
@@ -243,30 +249,29 @@ ThreadCacheInspector::AccumulateThreadCacheBuckets() {
     }
   }
 
-  BucketIndexLookup lookup{};
   for (int i = 0; i < ThreadCache::kBucketCount; i++) {
-    result[i].size = lookup.bucket_sizes()[i];
+    result[i].size = BucketIndexLookup::GetBucketSize(i);
   }
   return result;
 }
 
 void PartitionRootInspector::Update() {
-  auto root = RawBuffer<PartitionRoot<ThreadSafe>>::ReadFromProcessMemory(
-      reader_, root_addr_);
+  auto root =
+      RawBuffer<PartitionRoot>::ReadFromProcessMemory(reader_, root_addr_);
   if (root.has_value())
     root_ = *root;
 }
 
 namespace {
 
-bool CopySlotSpanList(std::vector<SlotSpanMetadata<ThreadSafe>>& list,
+bool CopySlotSpanList(std::vector<SlotSpanMetadata>& list,
                       uintptr_t head_address,
                       RemoteProcessMemoryReader& reader) {
-  absl::optional<RawBuffer<SlotSpanMetadata<ThreadSafe>>> metadata;
+  std::optional<RawBuffer<SlotSpanMetadata>> metadata;
   for (uintptr_t slot_span_address = head_address; slot_span_address;
        slot_span_address =
            reinterpret_cast<uintptr_t>(metadata->get()->next_slot_span)) {
-    metadata = RawBuffer<SlotSpanMetadata<ThreadSafe>>::ReadFromProcessMemory(
+    metadata = RawBuffer<SlotSpanMetadata>::ReadFromProcessMemory(
         reader, slot_span_address);
     if (!metadata.has_value())
       return false;
@@ -357,7 +362,7 @@ void DisplayBucket(const ThreadCacheInspector::BucketStats& bucket,
 
 void DisplayPerThreadData(
     ThreadCacheInspector& inspector,
-    std::map<base::PlatformThreadId, std::string>& tid_to_name) {
+    std::map<PlatformThreadId, std::string>& tid_to_name) {
   std::cout << "Found " << inspector.thread_caches().size()
             << " caches, total cached memory = "
             << inspector.CachedMemory() / 1024 << "kiB"
@@ -482,86 +487,77 @@ void DisplayRootData(PartitionRootInspector& root_inspector,
             << "kiB";
 }
 
-base::Value Dump(PartitionRootInspector& root_inspector) {
-  auto slot_span_to_value = [](const SlotSpanMetadata<ThreadSafe>& slot_span,
-                               size_t slots_per_span) -> base::Value {
-    auto result = base::Value(base::Value::Type::DICTIONARY);
+base::Value::Dict Dump(PartitionRootInspector& root_inspector) {
+  auto slot_span_to_value = [](const SlotSpanMetadata& slot_span,
+                               size_t slots_per_span) {
+    base::Value::Dict result;
 
-    result.SetKey("num_allocated_slots",
-                  base::Value{slot_span.num_allocated_slots});
-    result.SetKey("num_unprovisioned_slots",
-                  base::Value{slot_span.num_unprovisioned_slots});
-    result.SetKey("freelist_is_sorted",
-                  base::Value{slot_span.freelist_is_sorted()});
-    result.SetKey("freelist_is_sorted",
-                  base::Value{slot_span.freelist_is_sorted()});
+    result.Set("num_allocated_slots", slot_span.num_allocated_slots);
+    result.Set("num_unprovisioned_slots", slot_span.num_unprovisioned_slots);
+    result.Set("freelist_is_sorted", slot_span.freelist_is_sorted());
+    result.Set("freelist_is_sorted", slot_span.freelist_is_sorted());
     size_t freelist_size =
         slot_span.is_decommitted()
             ? 0
             : (slots_per_span - slot_span.num_allocated_slots -
                slot_span.num_unprovisioned_slots);
-    result.SetKey("freelist_size",
-                  base::Value{static_cast<int>(freelist_size)});
-    result.SetKey("marked_full", base::Value{slot_span.marked_full});
-    result.SetKey("is_empty", base::Value{slot_span.is_empty()});
-    result.SetKey("is_decommitted", base::Value{slot_span.is_decommitted()});
+    result.Set("freelist_size", static_cast<int>(freelist_size));
+    result.Set("marked_full", slot_span.marked_full);
+    result.Set("is_empty", slot_span.is_empty());
+    result.Set("is_decommitted", slot_span.is_decommitted());
     return result;
   };
 
-  auto bucket_to_value =
-      [&](const PartitionRootInspector::BucketStats& stats) -> base::Value {
-    auto result = base::Value(base::Value::Type::DICTIONARY);
+  auto bucket_to_value = [&](const PartitionRootInspector::BucketStats& stats) {
+    base::Value::Dict result;
     const size_t kPageSize = base::GetPageSize();
     size_t slots_per_span =
         (stats.bucket.num_system_pages_per_slot_span * kPageSize) /
         stats.slot_size;
 
-    result.SetKey("slot_size", base::Value{static_cast<int>(stats.slot_size)});
-    result.SetKey("num_system_pages_per_slot_span",
-                  base::Value{stats.bucket.num_system_pages_per_slot_span});
-    result.SetKey("num_slots_per_span",
-                  base::Value{static_cast<int>(slots_per_span)});
-    result.SetKey("num_full_slot_spans",
-                  base::Value{stats.bucket.num_full_slot_spans});
-    result.SetKey("allocated_slots",
-                  base::Value{static_cast<int>(stats.allocated_slots)});
-    result.SetKey("freelist_size",
-                  base::Value{static_cast<int>(stats.freelist_size)});
+    result.Set("slot_size", static_cast<int>(stats.slot_size));
+    result.Set("num_system_pages_per_slot_span",
+               stats.bucket.num_system_pages_per_slot_span);
+    result.Set("num_slots_per_span", static_cast<int>(slots_per_span));
+    result.Set("num_full_slot_spans", stats.bucket.num_full_slot_spans);
+    result.Set("allocated_slots", static_cast<int>(stats.allocated_slots));
+    result.Set("freelist_size", static_cast<int>(stats.freelist_size));
 
-    auto active_list = base::Value(base::Value::Type::LIST);
+    base::Value::List active_list;
     for (auto& slot_span : stats.active_slot_spans) {
       active_list.Append(slot_span_to_value(slot_span, slots_per_span));
     }
-    result.SetKey("active_slot_spans", std::move(active_list));
+    result.Set("active_slot_spans", std::move(active_list));
 
-    auto empty_list = base::Value(base::Value::Type::LIST);
+    base::Value::List empty_list;
     for (auto& slot_span : stats.empty_slot_spans) {
       empty_list.Append(slot_span_to_value(slot_span, slots_per_span));
     }
-    result.SetKey("empty_slot_spans", std::move(empty_list));
+    result.Set("empty_slot_spans", std::move(empty_list));
 
-    auto decommitted_list = base::Value(base::Value::Type::LIST);
+    base::Value::List decommitted_list;
     for (auto& slot_span : stats.decommitted_slot_spans) {
       decommitted_list.Append(slot_span_to_value(slot_span, slots_per_span));
     }
-    result.SetKey("decommitted_slot_spans", std::move(decommitted_list));
+    result.Set("decommitted_slot_spans", std::move(decommitted_list));
 
     return result;
   };
 
-  auto result = base::Value(base::Value::Type::DICTIONARY);
-
-  auto bucket_stats = base::Value(base::Value::Type::LIST);
+  base::Value::List bucket_stats;
   for (const auto& stats : root_inspector.bucket_stats()) {
     bucket_stats.Append(bucket_to_value(stats));
   }
 
-  result.SetKey("buckets", std::move(bucket_stats));
+  base::Value::Dict result;
+  result.Set("buckets", std::move(bucket_stats));
   return result;
 }
 }  // namespace partition_alloc::tools
 
 int main(int argc, char** argv) {
+  using partition_alloc::tools::PlatformThreadId;
+
   base::CommandLine::Init(argc, argv);
 
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch("pid")) {
@@ -586,7 +582,7 @@ int main(int argc, char** argv) {
   LOG(INFO) << "Getting the thread cache registry";
   partition_alloc::tools::ThreadCacheInspector thread_cache_inspector{
       registry_address, pid};
-  std::map<base::PlatformThreadId, std::string> tid_to_name;
+  std::map<PlatformThreadId, std::string> tid_to_name;
 
   size_t iter = 0;
   while (true) {
@@ -626,17 +622,16 @@ int main(int argc, char** argv) {
                       (iter / 50) % root_inspector.bucket_stats().size());
 
       if (!json_filename.empty()) {
-        base::Value dump = Dump(root_inspector);
+        base::Value::Dict dump = Dump(root_inspector);
         std::string json_string;
         ok = base::JSONWriter::WriteWithOptions(
-            dump, base::JSONWriter::Options::OPTIONS_PRETTY_PRINT,
-            &json_string);
+            dump, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_string);
         if (ok) {
           auto f =
               base::File(json_filename, base::File::Flags::FLAG_OPEN_ALWAYS |
                                             base::File::Flags::FLAG_WRITE);
           if (f.IsValid()) {
-            f.WriteAtCurrentPos(json_string.c_str(), json_string.size());
+            f.WriteAtCurrentPos(base::as_byte_span(json_string));
             std::cout << "\n\nDumped JSON to " << json_filename << std::endl;
             return 0;
           }

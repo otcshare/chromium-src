@@ -8,9 +8,25 @@ chrome.test.runTests([
       chrome.test.assertEq('normal', w.type);
     }));
   },
-  function typePopup() {
-    chrome.windows.create({'type': 'popup'}, chrome.test.callbackPass(w => {
-      chrome.test.assertEq('popup', w.type);
+  async function typePopup() {
+    const w = await new Promise((resolve) => {
+        chrome.windows.create({'type': 'popup'}, resolve);
+    });
+    chrome.test.assertEq('popup', w.type);
+    chrome.test.succeed();
+  },
+  function sizeTooBig() {
+    // Setting origin + bad width/height should not crash.
+    chrome.windows.create({
+      'type': 'normal',
+      'left': 0,
+      'top': 0,
+      'width': 2147483647,
+      'height': 2147483647,
+    }, (w => {
+      chrome.test.assertLastError('Invalid value for bounds. Bounds must be ' +
+                                  'at least 50% within visible screen space.');
+      chrome.test.succeed();
     }));
   },
 ]);

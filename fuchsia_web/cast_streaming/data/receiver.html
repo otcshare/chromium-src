@@ -8,17 +8,20 @@ found in the LICENSE file.
 <head>
   <meta charset="utf-8">
   <style>
-    html, body {
-      height: 100%;
-    }
     body {
+      background-color: black;
+      /* The following do not apply to <video> as it is fixed position. */
+      height: 100%;
       display: flex;
       margin: 0;
     }
     video {
-      background-color: black;
-      max-width: 100%;
-      height: auto;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      position: absolute;
+      top: 0;
+      left: 0;
     }
   </style>
 </head>
@@ -27,7 +30,8 @@ found in the LICENSE file.
   <video src="data:cast_streaming_receiver">
 
   <script>
-    // The Cast Streaming session must stop when the stream is no longer visible. crbug.com/1111886
+    // The Cast Streaming session must stop when the stream is no longer
+    // visible. See crbug.com/1111886.
     document.addEventListener('visibilitychange', function(e) {
       if (document.hidden) {
         window.close();
@@ -37,7 +41,12 @@ found in the LICENSE file.
     var video = document.querySelector('video');
     video.addEventListener('ended', window.close);
     video.addEventListener('error', window.close);
-    video.play().catch(window.close);
+
+    // Await video element being able to play before calling play, as this
+    // script can execute when the video element exists but before its playable.
+    video.addEventListener('canplay', () => {
+      video.play().catch(window.close);
+    });
   </script>
 </body>
 </html>

@@ -6,6 +6,7 @@
 
 #include "base/location.h"
 #include "base/task/sequence_manager/task_queue.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
 
 namespace blink {
@@ -33,6 +34,10 @@ void MainThreadImpl::AddTaskTimeObserver(
 void MainThreadImpl::RemoveTaskTimeObserver(
     base::sequence_manager::TaskTimeObserver* task_time_observer) {
   scheduler_->RemoveTaskTimeObserver(task_time_observer);
+}
+
+base::TimeTicks MainThreadImpl::CurrentTaskStartTime() const {
+  return scheduler_->CurrentTaskStartTime();
 }
 
 }  // namespace scheduler

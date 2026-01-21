@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {String16} from 'chrome://resources/mojo/mojo/public/mojom/base/string16.mojom-webui.js';
 import * as AcceleratorTypes from 'chrome://resources/mojo/ui/base/accelerators/mojom/accelerator.mojom-webui.js';
 
-import * as AcceleratorInfoTypes from '../mojom-webui/ash/public/mojom/accelerator_info.mojom-webui.js';
-import {AcceleratorConfigurationProviderInterface, AcceleratorsUpdatedObserverRemote} from '../mojom-webui/ash/webui/shortcut_customization_ui/mojom/shortcut_customization.mojom-webui.js';
+import * as AcceleratorConfigurationTypes from '../mojom-webui/accelerator_configuration.mojom-webui.js';
+import * as AcceleratorInfoTypes from '../mojom-webui/accelerator_info.mojom-webui.js';
+import * as MetaKeyTypes from '../mojom-webui/meta_key.mojom-webui.js';
+import type {SearchHandlerInterface, SearchResult, SearchResultsAvailabilityObserverRemote} from '../mojom-webui/search.mojom-webui.js';
+import {SearchHandler} from '../mojom-webui/search.mojom-webui.js';
+import type {AcceleratorConfigurationProviderInterface, AcceleratorResultData, AcceleratorsUpdatedObserverRemote, UserAction} from '../mojom-webui/shortcut_customization.mojom-webui.js';
 
 
 /**
  * @fileoverview
  * Type aliases for the mojo API.
- *
- * TODO(zentaro): When the fake API is replaced by mojo these can be
- * re-aliased to the corresponding mojo types, or replaced by them.
  */
 
 /**
@@ -21,13 +23,30 @@ import {AcceleratorConfigurationProviderInterface, AcceleratorsUpdatedObserverRe
  * ui::Accelerator and ui::KeyEvent.
  */
 export enum Modifier {
+  NONE = 0,
   SHIFT = 1 << 1,
   CONTROL = 1 << 2,
   ALT = 1 << 3,
   COMMAND = 1 << 4,
+  FN_KEY = 1 << 5,
+}
+
+/**
+ * The actions that can be done in the accelerator edit dialog. These should
+ * be consistent with the representation in
+ * `ash/webui/shortcut_customization_ui/mojom/shortcut_customization.mojom`.
+ */
+export enum EditAction {
+  NONE = 0,
+  ADD = 1 << 0,
+  EDIT = 1 << 1,
+  REMOVE = 1 << 2,
+  RESET = 1 << 3,
 }
 
 export type TextAcceleratorPart = AcceleratorInfoTypes.TextAcceleratorPart;
+export type TextAcceleratorPartType =
+    AcceleratorInfoTypes.TextAcceleratorPartType;
 export const TextAcceleratorPartType =
     AcceleratorInfoTypes.TextAcceleratorPartType;
 
@@ -53,27 +72,34 @@ export const AcceleratorType = AcceleratorInfoTypes.AcceleratorType;
 export type AcceleratorState = AcceleratorInfoTypes.AcceleratorState;
 export const AcceleratorState = AcceleratorInfoTypes.AcceleratorState;
 
+export type AcceleratorKeyState = AcceleratorTypes.AcceleratorKeyState;
+export const AcceleratorKeyState = AcceleratorTypes.AcceleratorKeyState;
+
 /**
  * Enumeration of accelerator config results from adding/replacing/removing an
  * accelerator.
  */
-export enum AcceleratorConfigResult {
-  SUCCESS,
-  ACTION_LOCKED,
-  ACCELERATOR_LOCKED,
-  CONFLICT,
-  NOT_FOUND,
-  DUPLICATE,
-}
+export type AcceleratorConfigResult =
+    AcceleratorConfigurationTypes.AcceleratorConfigResult;
+export const AcceleratorConfigResult =
+    AcceleratorConfigurationTypes.AcceleratorConfigResult;
+
+/**
+ * Enumeration of meta key denoting all the possible options deducable from
+ * the users keyboard. Used to show the correct key to the user in the settings
+ * UI.
+ */
+export type MetaKey = MetaKeyTypes.MetaKey;
+export const MetaKey = MetaKeyTypes.MetaKey;
 
 /**
  * Type alias for Accelerator.
  *
- * The Pick utility type is used here because only `keyCode` and `modifiers`
- * are necessary for this app.
+ * The Pick utility type is used here because only `keyCode`, `modifiers`, and
+ * `keyState` are necessary for this app.
  */
 export type Accelerator =
-    Pick<AcceleratorTypes.Accelerator, 'keyCode'|'modifiers'>;
+    Pick<AcceleratorTypes.Accelerator, 'keyCode'|'modifiers'|'keyState'>;
 
 export type MojoAccelerator = AcceleratorTypes.Accelerator;
 
@@ -84,24 +110,26 @@ export type MojoAccelerator = AcceleratorTypes.Accelerator;
  * to replace the types of `accelerator` and `keyDisplay` with more accurate
  * types.
  */
-
-
-
-export type DefaultAcceleratorInfo =
-    Omit<AcceleratorInfoTypes.AcceleratorInfo, 'layoutProperties'>&{
-      layoutProperties:
-          {defaultAccelerator: {accelerator: Accelerator, keyDisplay: string}},
-    };
-
-export type TextAcceleratorInfo =
+export type StandardAcceleratorInfo =
     Omit<AcceleratorInfoTypes.AcceleratorInfo, 'layoutProperties'>&{
       layoutProperties: {
-        textAccelerator:
-            {textAccelerator: AcceleratorInfoTypes.TextAcceleratorPart[]},
+        standardAccelerator: {
+          accelerator: Accelerator,
+          keyDisplay: string,
+          originalAccelerator?: Accelerator,
+        },
       },
     };
 
-export type AcceleratorInfo = TextAcceleratorInfo|DefaultAcceleratorInfo;
+export type TextAcceleratorInfo = Omit<
+    AcceleratorInfoTypes.AcceleratorInfo,
+    'layoutProperties'|'acceleratorLocked'>&{
+  layoutProperties: {
+    textAccelerator: {parts: AcceleratorInfoTypes.TextAcceleratorPart[]},
+  },
+};
+
+export type AcceleratorInfo = TextAcceleratorInfo|StandardAcceleratorInfo;
 
 /**
  * Type alias for the Mojo version of AcceleratorInfo.
@@ -142,6 +170,9 @@ export const AcceleratorCategory = AcceleratorInfoTypes.AcceleratorCategory;
 export type LayoutStyle = AcceleratorInfoTypes.AcceleratorLayoutStyle;
 export const LayoutStyle = AcceleratorInfoTypes.AcceleratorLayoutStyle;
 
+export type ShortcutSearchHandler = SearchHandler;
+export const ShortcutSearchHandler = SearchHandler;
+
 /**
  * Type alias for LayoutInfo. This describes one row (corresponding to an
  * AcceleratorRow) within the layout hierarchy. The `category`, `subCategory`,
@@ -172,22 +203,45 @@ export type LayoutInfo =
 export type MojoLayoutInfo = AcceleratorInfoTypes.AcceleratorLayoutInfo;
 
 /**
+ * Type alias for the Mojo version of SearchResult.
+ */
+export type MojoSearchResult = SearchResult;
+
+/**
+ * Type alias for the ShortcutSearchHandlerInterface.
+ */
+export interface ShortcutSearchHandlerInterface extends SearchHandlerInterface {
+  search(query: String16, maxNumResults: number):
+      Promise<{results: MojoSearchResult[]}>;
+  addSearchResultsAvailabilityObserver(
+      observer: SearchResultsAvailabilityObserverRemote): void;
+}
+
+/**
  * Type alias for the ShortcutProviderInterface.
- * TODO(zentaro): Replace with a real mojo type when implemented.
  */
 export interface ShortcutProviderInterface extends
     AcceleratorConfigurationProviderInterface {
   getAccelerators(): Promise<{config: MojoAcceleratorConfig}>;
   getAcceleratorLayoutInfos(): Promise<{layoutInfos: MojoLayoutInfo[]}>;
+  getDefaultAcceleratorsForId(action: number):
+      Promise<{accelerators: Accelerator[]}>;
   isMutable(source: AcceleratorSource): Promise<{isMutable: boolean}>;
+  getMetaKeyToDisplay(): Promise<{metaKey: MetaKey}>;
+  addAccelerator(
+      source: AcceleratorSource, action: number,
+      accelerator: Accelerator): Promise<{result: AcceleratorResultData}>;
   removeAccelerator(
       source: AcceleratorSource, action: number,
-      accelerator: Accelerator): Promise<AcceleratorConfigResult>;
+      accelerator: Accelerator): Promise<{result: AcceleratorResultData}>;
   replaceAccelerator(
       source: AcceleratorSource, action: number, oldAccelerator: Accelerator,
-      newAccelerator: Accelerator): Promise<AcceleratorConfigResult>;
-  addUserAccelerator(
-      source: AcceleratorSource, action: number,
-      accelerator: Accelerator): Promise<AcceleratorConfigResult>;
+      newAccelerator: Accelerator): Promise<{result: AcceleratorResultData}>;
   addObserver(observer: AcceleratorsUpdatedObserverRemote): void;
+  restoreDefault(source: AcceleratorSource, actionId: number):
+      Promise<{result: AcceleratorResultData}>;
+  restoreAllDefaults(): Promise<{result: AcceleratorResultData}>;
+  preventProcessingAccelerators(preventProcessingAccelerators: boolean):
+      Promise<void>;
+  recordUserAction(userAction: UserAction): void;
 }

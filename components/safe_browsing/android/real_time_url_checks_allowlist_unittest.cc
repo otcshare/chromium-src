@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "components/safe_browsing/android/real_time_url_checks_allowlist.h"
-#include "components/safe_browsing/android/proto/realtimeallowlist.pb.h"
 
 #include <string.h>
 
@@ -11,6 +10,7 @@
 
 #include "base/files/file_path.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "components/safe_browsing/core/common/proto/realtimeallowlist.pb.h"
 #include "crypto/sha2.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -128,7 +128,11 @@ TEST_F(RealTimeUrlChecksAllowlistTest,
   EXPECT_EQ(allowlist_.IsInAllowlist(example_url),
             RealTimeUrlChecksAllowlist::IsInAllowlistResult::kNotInAllowlist);
 
-  allowlist_.PopulateFromDynamicUpdate(serialized_valid_hca_);
+  // Make sure the new version id is bigger than the resource file's version
+  HighConfidenceAllowlist new_allowlist = CreateHighConfidenceAllowlist(
+      std::numeric_limits<int>::max(), valid_hca_.scheme_id(),
+      valid_hca_.url_hashes());
+  allowlist_.PopulateFromDynamicUpdate(new_allowlist.SerializeAsString());
   CheckPopulateHistogramResult(
       "DynamicUpdate", RealTimeUrlChecksAllowlist::PopulateResult::kSuccess, 1);
   EXPECT_EQ(allowlist_.IsInAllowlist(fb_url),

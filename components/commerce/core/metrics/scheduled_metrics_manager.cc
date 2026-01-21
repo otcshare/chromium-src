@@ -6,12 +6,14 @@
 
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
-#include "components/bookmarks/browser/bookmark_model.h"
+#include "components/commerce/core/feature_utils.h"
 #include "components/commerce/core/pref_names.h"
 #include "components/commerce/core/price_tracking_utils.h"
+#include "components/commerce/core/shopping_service.h"
+#include "components/commerce/core/subscriptions/commerce_subscription.h"
 #include "components/prefs/pref_service.h"
 
 namespace commerce::metrics {
@@ -27,8 +29,8 @@ const char kTrackedProductCountHistogramName[] =
 
 ScheduledMetricsManager::ScheduledMetricsManager(
     PrefService* prefs,
-    bookmarks::BookmarkModel* bookmark_model)
-    : pref_service_(prefs), bookmark_model_(bookmark_model) {
+    ShoppingService* shopping_service)
+    : pref_service_(prefs), shopping_service_(shopping_service) {
   daily_last_run_ = pref_service_->GetTime(kCommerceDailyMetricsLastUpdateTime);
 
   base::TimeDelta time_since_last = base::Time::Now() - daily_last_run_;
@@ -53,22 +55,36 @@ void ScheduledMetricsManager::RunDailyTask() {
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, daily_scheduled_task_->callback(), kDailyInterval);
 
-  std::vector<const bookmarks::BookmarkNode*> tracked_products =
-      GetAllPriceTrackedBookmarks(bookmark_model_);
+  // These metrics should only ever be recorded if the user is eligible for the
+  // feature.
+  if (commerce::IsShoppingListEligible(
+          shopping_service_->GetAccountChecker()) &&
+      IsSubscriptionsApiEnabled(shopping_service_->GetAccountChecker())) {
+    shopping_service_->GetAllSubscriptions(
+        SubscriptionType::kPriceTrack,
+        base::BindOnce(
+            [](base::WeakPtr<ScheduledMetricsManager> manager,
+               std::vector<CommerceSubscription> tracked_products) {
+              base::UmaHistogramCounts100(kTrackedProductCountHistogramName,
+                                          tracked_products.size());
 
-  base::UmaHistogramCounts100(kTrackedProductCountHistogramName,
-                              tracked_products.size());
-
-  PriceNotificationEmailState state =
-      PriceNotificationEmailState::kNotResponded;
-  if (tracked_products.size() > 0) {
-    if (pref_service_->GetBoolean(kPriceEmailNotificationsEnabled)) {
-      state = PriceNotificationEmailState::kEnabled;
-    } else {
-      state = PriceNotificationEmailState::kDisabled;
-    }
+              PrefService* pref_service =
+                  manager ? manager->pref_service_ : nullptr;
+              PriceNotificationEmailState state =
+                  PriceNotificationEmailState::kNotResponded;
+              if (tracked_products.size() > 0) {
+                if (pref_service &&
+                    pref_service->GetBoolean(kPriceEmailNotificationsEnabled)) {
+                  state = PriceNotificationEmailState::kEnabled;
+                } else {
+                  state = PriceNotificationEmailState::kDisabled;
+                }
+              }
+              base::UmaHistogramEnumeration(
+                  kPriceNotificationEmailHistogramName, state);
+            },
+            weak_ptr_factory_.GetWeakPtr()));
   }
-  base::UmaHistogramEnumeration(kPriceNotificationEmailHistogramName, state);
 }
 
 }  // namespace commerce::metrics

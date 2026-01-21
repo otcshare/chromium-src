@@ -6,6 +6,7 @@
 #define SERVICES_AUDIO_REALTIME_AUDIO_THREAD_H_
 
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 
 namespace audio {
 
@@ -26,4 +27,4 @@ class RealtimeAudioThread : public base::Thread {
 
 }  // namespace audio
 
-#endif  // SERVICES_AUDIO_PROCESSING_AUDIO_FIFO_H_
+#endif  // SERVICES_AUDIO_REALTIME_AUDIO_THREAD_H_

@@ -5,56 +5,121 @@
 #ifndef DEVICE_VR_OPENXR_OPENXR_EXTENSION_HELPER_H_
 #define DEVICE_VR_OPENXR_OPENXR_EXTENSION_HELPER_H_
 
-#include <d3d11.h>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "build/buildflag.h"
+#include "device/vr/openxr/openxr_anchor_manager.h"
+#include "device/vr/openxr/openxr_depth_sensor.h"
+#include "device/vr/openxr/openxr_hand_tracker.h"
+#include "device/vr/openxr/openxr_light_estimator.h"
+#include "device/vr/openxr/openxr_platform.h"
+#include "device/vr/openxr/openxr_scene_understanding_manager.h"
+#include "device/vr/openxr/openxr_stage_bounds_provider.h"
+#include "device/vr/openxr/openxr_unbounded_space_provider.h"
+#include "device/vr/public/mojom/xr_session.mojom-forward.h"
+#include "third_party/openxr/dev/xr_android.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
-#include "third_party/openxr/src/include/openxr/openxr_platform.h"
 
 namespace device {
+// Helper macro to facilitate declaring the method names of functions that will
+// be loaded from the OpenXR Runtime.
+// Expands to e.g.
+// PFN_xrCreateHandTrackerEXT xrCreateHandTrackerEXT{nullptr};
+#define OPENXR_DECLARE_FN(name) PFN_##name name = nullptr
+
 struct OpenXrExtensionMethods {
   OpenXrExtensionMethods();
   ~OpenXrExtensionMethods();
-  // D3D
-  PFN_xrGetD3D11GraphicsRequirementsKHR xrGetD3D11GraphicsRequirementsKHR{
-      nullptr};
+  // General Methods
+  OPENXR_DECLARE_FN(xrPollFutureEXT);
 
   // Hand Tracking
-  PFN_xrCreateHandTrackerEXT xrCreateHandTrackerEXT{nullptr};
-  PFN_xrDestroyHandTrackerEXT xrDestroyHandTrackerEXT{nullptr};
-  PFN_xrLocateHandJointsEXT xrLocateHandJointsEXT{nullptr};
+  OPENXR_DECLARE_FN(xrCreateHandTrackerEXT);
+  OPENXR_DECLARE_FN(xrDestroyHandTrackerEXT);
+  OPENXR_DECLARE_FN(xrLocateHandJointsEXT);
 
   // Anchors
-  PFN_xrCreateSpatialAnchorMSFT xrCreateSpatialAnchorMSFT{nullptr};
-  PFN_xrDestroySpatialAnchorMSFT xrDestroySpatialAnchorMSFT{nullptr};
-  PFN_xrCreateSpatialAnchorSpaceMSFT xrCreateSpatialAnchorSpaceMSFT{nullptr};
+  OPENXR_DECLARE_FN(xrCreateSpatialAnchorMSFT);
+  OPENXR_DECLARE_FN(xrDestroySpatialAnchorMSFT);
+  OPENXR_DECLARE_FN(xrCreateSpatialAnchorSpaceMSFT);
 
   // Scene Understanding
-  PFN_xrEnumerateSceneComputeFeaturesMSFT xrEnumerateSceneComputeFeaturesMSFT{
-      nullptr};
-  PFN_xrCreateSceneObserverMSFT xrCreateSceneObserverMSFT{nullptr};
-  PFN_xrDestroySceneObserverMSFT xrDestroySceneObserverMSFT{nullptr};
-  PFN_xrCreateSceneMSFT xrCreateSceneMSFT{nullptr};
-  PFN_xrDestroySceneMSFT xrDestroySceneMSFT{nullptr};
-  PFN_xrComputeNewSceneMSFT xrComputeNewSceneMSFT{nullptr};
-  PFN_xrGetSceneComputeStateMSFT xrGetSceneComputeStateMSFT{nullptr};
-  PFN_xrGetSceneComponentsMSFT xrGetSceneComponentsMSFT{nullptr};
-  PFN_xrLocateSceneComponentsMSFT xrLocateSceneComponentsMSFT{nullptr};
-  PFN_xrGetSceneMeshBuffersMSFT xrGetSceneMeshBuffersMSFT{nullptr};
+  OPENXR_DECLARE_FN(xrEnumerateSceneComputeFeaturesMSFT);
+  OPENXR_DECLARE_FN(xrCreateSceneObserverMSFT);
+  OPENXR_DECLARE_FN(xrDestroySceneObserverMSFT);
+  OPENXR_DECLARE_FN(xrCreateSceneMSFT);
+  OPENXR_DECLARE_FN(xrDestroySceneMSFT);
+  OPENXR_DECLARE_FN(xrComputeNewSceneMSFT);
+  OPENXR_DECLARE_FN(xrGetSceneComputeStateMSFT);
+  OPENXR_DECLARE_FN(xrGetSceneComponentsMSFT);
+  OPENXR_DECLARE_FN(xrLocateSceneComponentsMSFT);
+  OPENXR_DECLARE_FN(xrGetSceneMeshBuffersMSFT);
 
+  // Spatial Entities
+  OPENXR_DECLARE_FN(xrCreateSpatialContextAsyncEXT);
+  OPENXR_DECLARE_FN(xrCreateSpatialContextCompleteEXT);
+  OPENXR_DECLARE_FN(xrCreateSpatialDiscoverySnapshotAsyncEXT);
+  OPENXR_DECLARE_FN(xrCreateSpatialDiscoverySnapshotCompleteEXT);
+  OPENXR_DECLARE_FN(xrCreateSpatialUpdateSnapshotEXT);
+  OPENXR_DECLARE_FN(xrDestroySpatialContextEXT);
+  OPENXR_DECLARE_FN(xrDestroySpatialEntityEXT);
+  OPENXR_DECLARE_FN(xrDestroySpatialSnapshotEXT);
+  OPENXR_DECLARE_FN(xrEnumerateSpatialCapabilitiesEXT);
+  OPENXR_DECLARE_FN(xrEnumerateSpatialCapabilityComponentTypesEXT);
+  OPENXR_DECLARE_FN(xrQuerySpatialComponentDataEXT);
+  OPENXR_DECLARE_FN(xrGetSpatialBufferVector2fEXT);
+
+  // Spatial Anchors
+  OPENXR_DECLARE_FN(xrCreateSpatialAnchorEXT);
+  OPENXR_DECLARE_FN(xrEnumerateSpatialAnchorAttachableComponentsANDROID);
+
+  // Spatial HitTest
+  OPENXR_DECLARE_FN(xrCreateSpatialRaycastSnapshotANDROID);
+
+  // Visibility Mask
+  OPENXR_DECLARE_FN(xrGetVisibilityMaskKHR);
+
+#if BUILDFLAG(IS_WIN)
   // Time
-  PFN_xrConvertWin32PerformanceCounterToTimeKHR
-      xrConvertWin32PerformanceCounterToTimeKHR{nullptr};
-};
+  OPENXR_DECLARE_FN(xrConvertWin32PerformanceCounterToTimeKHR);
+#endif
 
+  // While these extensions don't need to be gated to a particular platform,
+  // since the API is still under development we'll try to limit the scope for
+  // the time being.
+#if BUILDFLAG(IS_ANDROID)
+  // Trackables and Raycasting.
+  OPENXR_DECLARE_FN(xrCreateTrackableTrackerANDROID);
+  OPENXR_DECLARE_FN(xrDestroyTrackableTrackerANDROID);
+  OPENXR_DECLARE_FN(xrRaycastANDROID);
+
+  OPENXR_DECLARE_FN(xrCreateAnchorSpaceANDROID);
+
+  OPENXR_DECLARE_FN(xrCreateLightEstimatorANDROID);
+  OPENXR_DECLARE_FN(xrDestroyLightEstimatorANDROID);
+  OPENXR_DECLARE_FN(xrGetLightEstimateANDROID);
+
+  OPENXR_DECLARE_FN(xrCreateDepthSwapchainANDROID);
+  OPENXR_DECLARE_FN(xrDestroyDepthSwapchainANDROID);
+  OPENXR_DECLARE_FN(xrEnumerateDepthSwapchainImagesANDROID);
+  OPENXR_DECLARE_FN(xrEnumerateDepthResolutionsANDROID);
+  OPENXR_DECLARE_FN(xrAcquireDepthSwapchainImagesANDROID);
+#endif
+};
+// Ensure that we don't export our helper macro.
+#undef OPENXR_DECLARE_FN
+
+class OpenXrApiWrapper;
 class OpenXrExtensionEnumeration {
  public:
   OpenXrExtensionEnumeration();
   ~OpenXrExtensionEnumeration();
 
-  bool ExtensionSupported(const char* extension_name) const;
+  bool ExtensionSupported(std::string_view extension_name) const;
 
  private:
   std::vector<XrExtensionProperties> extension_properties_;
@@ -62,6 +127,9 @@ class OpenXrExtensionEnumeration {
 
 class OpenXrExtensionHelper {
  public:
+  // Gets the set of extensions required to support WebXR Layers.
+  static std::vector<const char*> GetRequiredExtensionsForLayers();
+
   OpenXrExtensionHelper(
       XrInstance instance,
       const OpenXrExtensionEnumeration* const extension_enumeration);
@@ -75,7 +143,50 @@ class OpenXrExtensionHelper {
     return extension_methods_;
   }
 
+  // Returns whether or not we can support a given feature. If a given feature
+  // is determined to be supported solely by the core spec, we will simply
+  // return true for that feature as we assume the entire core spec is
+  // supported.
+  bool IsFeatureSupported(device::mojom::XRSessionFeature feature) const;
+
+  // Feature Implementation Helpers ---------------------------------------
+  //
+  // There may be multiple extensions that can support a given WebXR feature,
+  // though each device will likely only implement one of them. The following
+  // methods help provide managers for the various WebXR features that can
+  // abstract the *actual* extension that we need to use, since different
+  // extensions will be looking for different methods.
+
+  std::unique_ptr<OpenXrDepthSensor> CreateDepthSensor(
+      XrSession session,
+      XrSpace base_space,
+      const mojom::XRDepthOptions& depth_options) const;
+
+  std::unique_ptr<OpenXrHandTracker> CreateHandTracker(
+      XrSession session,
+      OpenXrHandednessType handedness) const;
+
+  std::unique_ptr<OpenXrLightEstimator> CreateLightEstimator(
+      XrSession session,
+      XrSpace base_space) const;
+
+  std::unique_ptr<OpenXRSceneUnderstandingManager>
+  CreateSceneUnderstandingManager(
+      OpenXrApiWrapper* openxr,
+      XrSpace base_space,
+      const std::vector<mojom::XRSessionFeature>& required_features,
+      const std::vector<mojom::XRSessionFeature>& optional_features) const;
+
+  std::unique_ptr<OpenXrStageBoundsProvider> CreateStageBoundsProvider(
+      XrSession session) const;
+
+  std::unique_ptr<OpenXrUnboundedSpaceProvider> CreateUnboundedSpaceProvider()
+      const;
+
  private:
+  // Small helper method to check if a given extension is enabled.
+  bool IsExtensionSupported(const char* extension_name) const;
+
   const OpenXrExtensionMethods extension_methods_;
   const raw_ptr<const OpenXrExtensionEnumeration> extension_enumeration_;
 };

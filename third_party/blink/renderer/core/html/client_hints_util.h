@@ -6,7 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CLIENT_HINTS_UTIL_H_
 
 #include "services/network/public/cpp/client_hints.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -29,7 +29,8 @@ void UpdateWindowPermissionsPolicyWithDelegationSupportForClientHints(
     const KURL& url,
     ClientHintsPreferences::Context* context,
     network::MetaCHType type,
-    bool is_doc_preloader_or_sync_parser);
+    bool is_doc_preloader,
+    bool is_sync_parser);
 
 // This modifies `container_policy` to reflect any changes to client hint
 // permissions which may have occurred via the named accept-ch meta tag.
@@ -39,7 +40,7 @@ void UpdateWindowPermissionsPolicyWithDelegationSupportForClientHints(
 // of the iframe.
 // TODO(crbug.com/1278127): Replace w/ generic HTML policy modification.
 void UpdateIFrameContainerPolicyWithDelegationSupportForClientHints(
-    ParsedPermissionsPolicy& container_policy,
+    network::ParsedPermissionsPolicy& container_policy,
     LocalDOMWindow* local_dom_window);
 
 }  // namespace blink

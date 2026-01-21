@@ -10,10 +10,12 @@
 
 #include <array>
 #include <memory>
+#include <optional>
+#include <string_view>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/sys_byteorder.h"
 #include "build/build_config.h"
 #include "net/base/address_list.h"
@@ -64,17 +66,17 @@ class MockAddrInfoGetter : public AddrInfoGetter {
   template <size_t N>
   static std::unique_ptr<addrinfo, FreeAddrInfoFunc> MakeAddrInfoList(
       const IpAndPort (&ipp)[N],
-      base::StringPiece canonical_name);
+      std::string_view canonical_name);
 
   static std::unique_ptr<addrinfo, FreeAddrInfoFunc> MakeAddrInfo(
       IpAndPort ipp,
-      base::StringPiece canonical_name);
+      std::string_view canonical_name);
 };
 
 template <size_t N>
 std::unique_ptr<addrinfo, FreeAddrInfoFunc>
 MockAddrInfoGetter::MakeAddrInfoList(const IpAndPort (&ipp)[N],
-                                     base::StringPiece canonical_name) {
+                                     std::string_view canonical_name) {
   struct Buffer {
     addrinfo ai[N];
     sockaddr_in addr[N];
@@ -84,16 +86,18 @@ MockAddrInfoGetter::MakeAddrInfoList(const IpAndPort (&ipp)[N],
   CHECK_LE(canonical_name.size(), 255u);
 
   Buffer* const buffer = new Buffer();
-  memset(buffer, 0x0, sizeof(Buffer));
+  UNSAFE_TODO(memset(buffer, 0x0, sizeof(Buffer)));
 
   // At least one trailing nul byte on buffer->canonical_name was added by
   // memset() above.
-  memcpy(buffer->canonical_name, canonical_name.data(), canonical_name.size());
+  UNSAFE_TODO(memcpy(buffer->canonical_name, canonical_name.data(),
+                     canonical_name.size()));
 
   for (size_t i = 0; i < N; ++i) {
-    InitializeAddrinfo(ipp[i], buffer->canonical_name,
-                       i + 1 < N ? buffer->ai + i + 1 : nullptr,
-                       buffer->addr + i, buffer->ai + i);
+    InitializeAddrinfo(UNSAFE_TODO(ipp[i]), buffer->canonical_name,
+                       i + 1 < N ? UNSAFE_TODO(buffer->ai + i + 1) : nullptr,
+                       UNSAFE_TODO(buffer->addr + i),
+                       UNSAFE_TODO(buffer->ai + i));
   }
 
   return {reinterpret_cast<addrinfo*>(buffer),
@@ -102,7 +106,7 @@ MockAddrInfoGetter::MakeAddrInfoList(const IpAndPort (&ipp)[N],
 
 std::unique_ptr<addrinfo, FreeAddrInfoFunc> MockAddrInfoGetter::MakeAddrInfo(
     IpAndPort ipp,
-    base::StringPiece canonical_name) {
+    std::string_view canonical_name) {
   return MakeAddrInfoList({ipp}, canonical_name);
 }
 
@@ -113,7 +117,7 @@ void MockAddrInfoGetter::InitializeAddrinfo(const IpAndPort& ip_and_port,
                                             addrinfo* ai) {
   const uint8_t ip[4] = {ip_and_port.ip.a, ip_and_port.ip.b, ip_and_port.ip.c,
                          ip_and_port.ip.d};
-  memcpy(&addr->sin_addr, ip, 4);
+  UNSAFE_TODO(memcpy(&addr->sin_addr, ip, 4));
   addr->sin_family = AF_INET;
   addr->sin_port =
       base::HostToNet16(base::checked_cast<uint16_t>(ip_and_port.port));
@@ -234,7 +238,7 @@ TEST(AddressInfoTest, Canonical) {
   EXPECT_EQ(err, OK);
   EXPECT_EQ(os_error, 0);
   EXPECT_THAT(ai->GetCanonicalName(),
-              absl::optional<std::string>("canonical.bar.com"));
+              std::optional<std::string>("canonical.bar.com"));
 }
 
 TEST(AddressInfoTest, Iteration) {

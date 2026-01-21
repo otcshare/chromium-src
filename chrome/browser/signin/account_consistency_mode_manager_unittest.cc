@@ -11,8 +11,8 @@
 #include "base/test/scoped_command_line.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/prefs/browser_prefs.h"
+#include "chrome/browser/signin/account_consistency_mode_manager_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_notifier_impl.h"
@@ -164,7 +164,7 @@ TEST(AccountConsistencyModeManagerTest, DiceOnlyForRegularProfile) {
     EXPECT_FALSE(AccountConsistencyModeManager::IsDiceEnabledForProfile(
         incognito_profile));
     EXPECT_FALSE(
-        AccountConsistencyModeManager::GetForProfile(incognito_profile));
+        AccountConsistencyModeManagerFactory::GetForProfile(incognito_profile));
     EXPECT_EQ(
         signin::AccountConsistencyMethod::kDisabled,
         AccountConsistencyModeManager::GetMethodForProfile(incognito_profile));
@@ -177,7 +177,8 @@ TEST(AccountConsistencyModeManagerTest, DiceOnlyForRegularProfile) {
         /*create_if_needed=*/true);
     EXPECT_FALSE(
         AccountConsistencyModeManager::IsDiceEnabledForProfile(otr_profile));
-    EXPECT_FALSE(AccountConsistencyModeManager::GetForProfile(otr_profile));
+    EXPECT_FALSE(
+        AccountConsistencyModeManagerFactory::GetForProfile(otr_profile));
     EXPECT_EQ(signin::AccountConsistencyMethod::kDisabled,
               AccountConsistencyModeManager::GetMethodForProfile(otr_profile));
     EXPECT_FALSE(AccountConsistencyModeManager::ShouldBuildServiceForProfile(

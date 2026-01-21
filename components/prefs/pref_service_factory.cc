@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/default_pref_store.h"
 #include "components/prefs/json_pref_store.h"
@@ -19,7 +19,7 @@
 PrefServiceFactory::PrefServiceFactory()
     : read_error_callback_(base::DoNothing()), async_(false) {}
 
-PrefServiceFactory::~PrefServiceFactory() {}
+PrefServiceFactory::~PrefServiceFactory() = default;
 
 void PrefServiceFactory::SetUserPrefsFile(
     const base::FilePath& prefs_file,
@@ -33,11 +33,10 @@ std::unique_ptr<PrefService> PrefServiceFactory::Create(
   auto pref_notifier = std::make_unique<PrefNotifierImpl>();
   auto pref_value_store = std::make_unique<PrefValueStore>(
       managed_prefs_.get(), supervised_user_prefs_.get(),
-      extension_prefs_.get(), standalone_browser_prefs_.get(),
-      command_line_prefs_.get(), user_prefs_.get(), recommended_prefs_.get(),
-      pref_registry->defaults().get(), pref_notifier.get());
+      extension_prefs_.get(), command_line_prefs_.get(), user_prefs_.get(),
+      recommended_prefs_.get(), pref_registry->defaults().get(),
+      pref_notifier.get());
   return std::make_unique<PrefService>(
       std::move(pref_notifier), std::move(pref_value_store), user_prefs_.get(),
-      standalone_browser_prefs_.get(), std::move(pref_registry),
-      read_error_callback_, async_);
+      std::move(pref_registry), read_error_callback_, async_);
 }

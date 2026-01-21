@@ -5,9 +5,11 @@
 #ifndef CHROME_BROWSER_CHROMEOS_VIDEO_CONFERENCE_VIDEO_CONFERENCE_MEDIA_LISTENER_H_
 #define CHROME_BROWSER_CHROMEOS_VIDEO_CONFERENCE_VIDEO_CONFERENCE_MEDIA_LISTENER_H_
 
+#include <string>
 #include "base/functional/callback_forward.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
+#include "chromeos/crosapi/mojom/video_conference.mojom-forward.h"
 #include "content/public/browser/web_contents.h"
 
 namespace video_conference {
@@ -25,7 +27,10 @@ class VideoConferenceMediaListener
   VideoConferenceMediaListener(
       base::RepeatingCallback<void()> media_usage_update_callback,
       base::RepeatingCallback<VideoConferenceWebApp*(content::WebContents*)>
-          create_vc_web_app_callback);
+          create_vc_web_app_callback,
+      base::RepeatingCallback<void(crosapi::mojom::VideoConferenceMediaDevice,
+                                   const std::u16string&)>
+          device_used_while_disabled_callback);
 
   VideoConferenceMediaListener(const VideoConferenceMediaListener&) = delete;
   VideoConferenceMediaListener& operator=(const VideoConferenceMediaListener&) =
@@ -33,17 +38,26 @@ class VideoConferenceMediaListener
 
   ~VideoConferenceMediaListener() override;
 
+  void SetSystemMediaDeviceStatus(
+      crosapi::mojom::VideoConferenceMediaDevice device,
+      bool enabled);
+
   // MediaStreamCaptureIndicator::Observer overrides
   void OnIsCapturingVideoChanged(content::WebContents* contents,
                                  bool is_capturing_video) override;
   void OnIsCapturingAudioChanged(content::WebContents* contents,
                                  bool is_capturing_audio) override;
+  void OnIsCapturingTabChanged(content::WebContents* contents,
+                               bool is_capturing_tab) override;
   void OnIsCapturingWindowChanged(content::WebContents* contents,
                                   bool is_capturing_window) override;
   void OnIsCapturingDisplayChanged(content::WebContents* contents,
                                    bool is_capturing_display) override;
 
  private:
+  friend class FakeVideoConferenceManagerClient;
+  friend class FakeVideoConferenceMediaListener;
+
   // Returns the `VideoConferenceWebApp` corresponding to this
   // webcontents. If it doesn't exist, also first creates it if `is_capturing`
   // is true.
@@ -55,9 +69,17 @@ class VideoConferenceMediaListener
   void OnIsCapturingScreenChanged(content::WebContents* contents,
                                   bool is_capturing_screen);
 
+  // The following two fields are false if the camera/microphone is system-wide
+  // software disabled OR disabled via a hardware switch.
+  bool camera_system_enabled_{true};
+  bool microphone_system_enabled_{true};
+
   base::RepeatingCallback<void()> media_usage_update_callback_;
   base::RepeatingCallback<VideoConferenceWebApp*(content::WebContents*)>
       create_vc_web_app_callback_;
+  base::RepeatingCallback<void(crosapi::mojom::VideoConferenceMediaDevice,
+                               const std::u16string&)>
+      device_used_while_disabled_callback_;
 
   base::ScopedObservation<MediaStreamCaptureIndicator,
                           MediaStreamCaptureIndicator::Observer>

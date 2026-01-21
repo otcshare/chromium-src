@@ -5,6 +5,7 @@
 #include "media/mojo/mojom/video_encode_accelerator_mojom_traits.h"
 
 #include "media/base/video_bitrate_allocation.h"
+#include "media/base/video_types.h"
 #include "media/mojo/mojom/video_encode_accelerator.mojom.h"
 #include "media/mojo/mojom/video_encoder_info_mojom_traits.h"
 #include "media/video/video_encode_accelerator.h"
@@ -13,6 +14,17 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
+
+TEST(SVCScalabilityModeTest, RoundTrip) {
+  auto hw_supported_svc_modes =
+      ::media::GetSupportedScalabilityModesByHWEncoderForTesting();
+  for (::media::SVCScalabilityMode input_svc_mode : hw_supported_svc_modes) {
+    SVCScalabilityMode output_svc_mode;
+    ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::SVCScalabilityMode>(
+        input_svc_mode, output_svc_mode));
+    EXPECT_EQ(input_svc_mode, output_svc_mode);
+  }
+}
 
 TEST(VideoEncodeAcceleratorSupportedProfile, RoundTrip) {
   ::media::VideoEncodeAccelerator::SupportedProfile input;
@@ -25,6 +37,8 @@ TEST(VideoEncodeAcceleratorSupportedProfile, RoundTrip) {
                              VideoEncodeAccelerator::kVariableMode;
   input.scalability_modes.push_back(::media::SVCScalabilityMode::kL1T3);
   input.scalability_modes.push_back(::media::SVCScalabilityMode::kL3T3Key);
+  input.scalability_modes.push_back(::media::SVCScalabilityMode::kS2T3);
+  input.scalability_modes.push_back(::media::SVCScalabilityMode::kS3T1);
 
   ::media::VideoEncodeAccelerator::SupportedProfile output;
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<
@@ -35,19 +49,26 @@ TEST(VideoEncodeAcceleratorSupportedProfile, RoundTrip) {
 TEST(VideoEncoderInfoStructTraitTest, RoundTrip) {
   ::media::VideoEncoderInfo input;
   input.implementation_name = "FakeVideoEncodeAccelerator";
+  // Set `frame_delay` but leave `input_capacity` empty.
+  input.frame_delay = 3;
   // FPS allocation.
   for (size_t i = 0; i < ::media::VideoEncoderInfo::kMaxSpatialLayers; ++i)
     input.fps_allocation[i] = {5, 5, 10};
   // Resolution bitrate limits.
-  input.resolution_bitrate_limits.push_back(::media::ResolutionBitrateLimit(
-      gfx::Size(123, 456), 123456, 123456, 789012));
-  input.resolution_bitrate_limits.push_back(::media::ResolutionBitrateLimit(
-      gfx::Size(789, 1234), 1234567, 1234567, 7890123));
+  input.resolution_rate_limits.push_back(::media::ResolutionRateLimit(
+      gfx::Size(123, 456), 123456, 123456, 789012, 30, 1));
+  input.resolution_rate_limits.push_back(::media::ResolutionRateLimit(
+      gfx::Size(789, 1234), 1234567, 1234567, 7890123, 30, 1));
   // Other bool values.
   input.supports_native_handle = true;
   input.has_trusted_rate_controller = true;
   input.is_hardware_accelerated = true;
   input.supports_simulcast = true;
+  input.supports_gpu_shared_images = true;
+  input.gpu_supported_pixel_formats.push_back(
+      ::media::VideoPixelFormat::PIXEL_FORMAT_NV12);
+  input.gpu_supported_pixel_formats.push_back(
+      ::media::VideoPixelFormat::PIXEL_FORMAT_BGRA);
 
   ::media::VideoEncoderInfo output = input;
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::VideoEncoderInfo>(
@@ -165,11 +186,12 @@ TEST(VideoEncodeAcceleratorConfigStructTraitTest, RoundTrip) {
 
   ::media::VideoEncodeAccelerator::Config input_config(
       ::media::PIXEL_FORMAT_NV12, kBaseSize, ::media::VP9PROFILE_PROFILE0,
-      kBitrate, kBaseFramerate, absl::nullopt, absl::nullopt, false,
+      kBitrate, kBaseFramerate,
       ::media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer,
-      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera,
-      input_spatial_layers,
-      ::media::VideoEncodeAccelerator::Config::InterLayerPredMode::kOnKeyPic);
+      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+  input_config.drop_frame_thresh_percentage = 30;
+  input_config.spatial_layers = input_spatial_layers;
+  input_config.inter_layer_pred = ::media::SVCInterLayerPredMode::kOnKeyPic;
 
   ::media::VideoEncodeAccelerator::Config output_config{};
   ASSERT_TRUE(
@@ -186,13 +208,65 @@ TEST(VideoEncodeAcceleratorConfigStructTraitTest, RoundTripVariableBitrate) {
       ::media::Bitrate::VariableBitrate(kBaseBitrateBps, kMaximumBitrate);
   ::media::VideoEncodeAccelerator::Config input_config(
       ::media::PIXEL_FORMAT_NV12, kBaseSize, ::media::VP9PROFILE_PROFILE0,
-      kBitrate);
+      kBitrate, 30,
+      ::media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer,
+      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+  input_config.manual_reference_buffer_control = true;
 
   ::media::VideoEncodeAccelerator::Config output_config{};
   ASSERT_TRUE(
       mojo::test::SerializeAndDeserialize<mojom::VideoEncodeAcceleratorConfig>(
           input_config, output_config));
   EXPECT_EQ(input_config, output_config);
+}
+
+TEST(VideoEncodeAcceleratorConfigStructTraitTest,
+     NonEmptySpatialLayerWithManualReference_Rejected) {
+  constexpr gfx::Size kBaseSize(320, 180);
+  constexpr uint32_t kBaseBitrateBps = 123456u;
+  const ::media::Bitrate kBitrate =
+      ::media::Bitrate::ConstantBitrate(kBaseBitrateBps);
+
+  ::media::VideoEncodeAccelerator::Config input_config(
+      ::media::PIXEL_FORMAT_NV12, kBaseSize, ::media::VP9PROFILE_PROFILE0,
+      kBitrate, 30,
+      ::media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer,
+      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+  input_config.manual_reference_buffer_control = true;
+
+  ::media::VideoEncodeAccelerator::Config::SpatialLayer spatial_layer;
+  spatial_layer.width = kBaseSize.width();
+  spatial_layer.height = kBaseSize.height();
+  spatial_layer.bitrate_bps = kBaseBitrateBps;
+  spatial_layer.framerate = 30;
+  spatial_layer.num_of_temporal_layers = 1;
+  input_config.spatial_layers.push_back(spatial_layer);
+
+  ::media::VideoEncodeAccelerator::Config output_config{};
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::VideoEncodeAcceleratorConfig>(
+          input_config, output_config));
+}
+
+TEST(VideoEncodeAcceleratorConfigStructTraitTest,
+     InterLayerPredNotOffWithManualReference_Rejected) {
+  constexpr gfx::Size kBaseSize(320, 180);
+  constexpr uint32_t kBaseBitrateBps = 123456u;
+  const ::media::Bitrate kBitrate =
+      ::media::Bitrate::ConstantBitrate(kBaseBitrateBps);
+
+  ::media::VideoEncodeAccelerator::Config input_config(
+      ::media::PIXEL_FORMAT_NV12, kBaseSize, ::media::VP9PROFILE_PROFILE0,
+      kBitrate, 30,
+      ::media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer,
+      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+  input_config.manual_reference_buffer_control = true;
+  input_config.inter_layer_pred = ::media::SVCInterLayerPredMode::kOn;
+
+  ::media::VideoEncodeAccelerator::Config output_config{};
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::VideoEncodeAcceleratorConfig>(
+          input_config, output_config));
 }
 
 TEST(VariableBitrateStructTraitTest, PeakZeroBps_Rejected) {
@@ -253,17 +327,41 @@ TEST(BitstreamBufferMetadataTraitTest, RoundTrip) {
   EXPECT_EQ(input_metadata, output_metadata);
   input_metadata.vp8.reset();
 
+  SVCGenericMetadata svc_generic;
+  svc_generic.follow_svc_spec = true;
+  svc_generic.temporal_idx = 2;
+  svc_generic.spatial_idx = 1;
+  svc_generic.refresh_flags = 0b11111111;
+  svc_generic.reference_flags = 0b00000001;
+  input_metadata.svc_generic = svc_generic;
+  output_metadata = ::media::BitstreamBufferMetadata();
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<mojom::BitstreamBufferMetadata>(
+          input_metadata, output_metadata));
+  EXPECT_EQ(input_metadata, output_metadata);
+  input_metadata.svc_generic.reset();
+
   Vp9Metadata vp9;
   vp9.inter_pic_predicted = true;
   vp9.temporal_up_switch = true;
   vp9.referenced_by_upper_spatial_layers = true;
   vp9.reference_lower_spatial_layers = true;
-  vp9.end_of_picture = true;
+  vp9.end_of_picture = false;
   vp9.temporal_idx = 2;
   vp9.spatial_idx = 0;
   vp9.spatial_layer_resolutions = {gfx::Size(320, 180), gfx::Size(640, 360)};
   vp9.p_diffs = {0, 1};
   input_metadata.vp9 = vp9;
+  output_metadata = ::media::BitstreamBufferMetadata();
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<mojom::BitstreamBufferMetadata>(
+          input_metadata, output_metadata));
+  EXPECT_EQ(input_metadata, output_metadata);
+
+  input_metadata =
+      BitstreamBufferMetadata::CreateForDropFrame(base::Milliseconds(123456),
+                                                  /*spatial_idx=*/1u, false);
+  CHECK(input_metadata.drop);
   output_metadata = ::media::BitstreamBufferMetadata();
   ASSERT_TRUE(
       mojo::test::SerializeAndDeserialize<mojom::BitstreamBufferMetadata>(

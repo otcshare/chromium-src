@@ -1,12 +1,14 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/commerce/price_tracking_icon_view.h"
+
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
-#include "chrome/browser/ui/views/commerce/price_tracking_icon_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -25,7 +27,8 @@ const char kTestURL[] = "about:blank";
 class PriceTrackingIconViewBrowserTest : public UiBrowserTest {
  public:
   PriceTrackingIconViewBrowserTest() {
-    test_features_.InitAndEnableFeature(commerce::kShoppingList);
+    test_features_.InitWithFeatures({commerce::kShoppingList},
+                                    {commerce::kPriceInsights});
   }
 
   // UiBrowserTest:
@@ -34,11 +37,10 @@ class PriceTrackingIconViewBrowserTest : public UiBrowserTest {
     if (name == "forced_show_tracking_price") {
       SimulateServerPriceTrackState(true);
       icon_view->ForceVisibleForTesting(/*is_tracking_price=*/true);
-    } else if (name == "forced_show_track_price") {
+    } else {
+      CHECK_EQ(name, "forced_show_track_price");
       SimulateServerPriceTrackState(false);
       icon_view->ForceVisibleForTesting(/*is_tracking_price=*/false);
-    } else {
-      NOTREACHED();
     }
   }
 
@@ -58,17 +60,7 @@ class PriceTrackingIconViewBrowserTest : public UiBrowserTest {
     ui_test_utils::WaitForBrowserToClose();
   }
 
- private:
-  base::test::ScopedFeatureList test_features_;
-
-  BrowserView* GetBrowserView() {
-    return BrowserView::GetBrowserViewForBrowser(browser());
-  }
-
-  LocationBarView* GetLocationBarView() {
-    return GetBrowserView()->toolbar()->location_bar();
-  }
-
+ protected:
   PriceTrackingIconView* GetChip() {
     const ui::ElementContext context =
         views::ElementTrackerViews::GetContextForView(GetLocationBarView());
@@ -79,6 +71,17 @@ class PriceTrackingIconViewBrowserTest : public UiBrowserTest {
     return matched_view
                ? views::AsViewClass<PriceTrackingIconView>(matched_view)
                : nullptr;
+  }
+
+ private:
+  base::test::ScopedFeatureList test_features_;
+
+  BrowserView* GetBrowserView() {
+    return BrowserView::GetBrowserViewForBrowser(browser());
+  }
+
+  LocationBarView* GetLocationBarView() {
+    return GetBrowserView()->toolbar()->location_bar();
   }
 
   void SimulateServerPriceTrackState(bool is_price_tracked) {
@@ -92,10 +95,18 @@ class PriceTrackingIconViewBrowserTest : public UiBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(PriceTrackingIconViewBrowserTest,
                        InvokeUi_forced_show_tracking_price) {
-  ShowAndVerifyUi();
+  if (IsPageActionMigrated(PageActionIconType::kPriceTracking)) {
+    ASSERT_FALSE(GetChip());
+  } else {
+    ShowAndVerifyUi();
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(PriceTrackingIconViewBrowserTest,
                        InvokeUi_forced_show_track_price) {
-  ShowAndVerifyUi();
+  if (IsPageActionMigrated(PageActionIconType::kPriceTracking)) {
+    ASSERT_FALSE(GetChip());
+  } else {
+    ShowAndVerifyUi();
+  }
 }

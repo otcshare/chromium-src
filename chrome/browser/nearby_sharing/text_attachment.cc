@@ -14,12 +14,12 @@
 namespace {
 
 // Tries to get a valid host name from the |text|. Returns nullopt otherwise.
-absl::optional<std::string> GetHostFromText(const std::string& text) {
+std::optional<std::string> GetHostFromText(const std::string& text) {
   GURL url(text);
   if (!url.is_valid() || !url.has_host())
-    return absl::nullopt;
+    return std::nullopt;
 
-  return url.host();
+  return url.GetHost();
 }
 
 // Masks the given |number| depending on the string length:
@@ -75,7 +75,7 @@ std::string GetTextTitle(const std::string& text_body,
 
   switch (type) {
     case TextAttachment::Type::kUrl: {
-      absl::optional<std::string> host = GetHostFromText(text_body);
+      std::optional<std::string> host = GetHostFromText(text_body);
       if (host)
         return *host;
 
@@ -97,8 +97,8 @@ std::string GetTextTitle(const std::string& text_body,
 
 TextAttachment::TextAttachment(Type type,
                                std::string text_body,
-                               absl::optional<std::string> text_title,
-                               absl::optional<std::string> mime_type)
+                               std::optional<std::string> text_title,
+                               std::optional<std::string> mime_type)
     : Attachment(Attachment::Family::kText, text_body.size()),
       type_(type),
       text_title_(text_title && !text_title->empty()

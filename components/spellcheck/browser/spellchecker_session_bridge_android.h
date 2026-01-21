@@ -9,9 +9,11 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/android/scoped_java_ref.h"
 #include "components/spellcheck/common/spellcheck.mojom.h"
+#include "components/spellcheck/common/spelling_marker.h"
 
 // A class used to interface between the Java class of the same name and the
 // android SpellCheckHost.  This class receives text to be spellchecked, sends
@@ -30,18 +32,23 @@ class SpellCheckerSessionBridge {
   using RequestTextCheckCallback =
       spellcheck::mojom::SpellCheckHost::RequestTextCheckCallback;
 
-  // Receives text to be checked and sends it to Java to be spellchecked.
-  void RequestTextCheck(const std::u16string& text,
-                        RequestTextCheckCallback callback);
+  // Receives text to be checked and sends it to Java to be
+  // spellchecked.
+  void RequestTextCheck(
+      const std::u16string& text,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+      RequestTextCheckCallback callback);
 
   // Receives information from Java side about the typos in a given string
   // of text, processes these and sends them to the renderer.
   void ProcessSpellCheckResults(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jintArray>& offset_array,
-      const base::android::JavaParamRef<jintArray>& length_array,
-      const base::android::JavaParamRef<jobjectArray>& suggestions_array);
+      const base::android::JavaRef<jintArray>& offset_array,
+      const base::android::JavaRef<jintArray>& length_array,
+      const base::android::JavaRef<jobjectArray>& suggestions_array,
+      const base::android::JavaRef<jintArray>& spellcheck_result_decorations,
+      const base::android::JavaRef<jbooleanArray>&
+          hide_suggestion_menu_booleans_array);
 
   // Sets the handle to the Java SpellCheckerSessionBridge object to null,
   // marking the Java object for garbage collection.
@@ -50,8 +57,10 @@ class SpellCheckerSessionBridge {
  private:
   class SpellingRequest {
    public:
-    SpellingRequest(const std::u16string& text,
-                    RequestTextCheckCallback callback);
+    SpellingRequest(
+        const std::u16string& text,
+        const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+        RequestTextCheckCallback callback);
 
     SpellingRequest(const SpellingRequest&) = delete;
     SpellingRequest& operator=(const SpellingRequest&) = delete;
@@ -59,6 +68,7 @@ class SpellCheckerSessionBridge {
     ~SpellingRequest();
 
     std::u16string text_;
+    std::vector<spellcheck::SpellingMarker> spelling_markers_;
     RequestTextCheckCallback callback_;
   };
 

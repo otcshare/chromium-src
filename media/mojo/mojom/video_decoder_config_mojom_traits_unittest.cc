@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "media/base/media_util.h"
 #include "media/base/video_decoder_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,7 +24,7 @@ static const gfx::Size kNaturalSize(320, 240);
 TEST(VideoDecoderConfigStructTraitsTest, ConvertVideoDecoderConfig_Normal) {
   const uint8_t kExtraData[] = "config extra data";
   const std::vector<uint8_t> kExtraDataVector(
-      &kExtraData[0], &kExtraData[0] + std::size(kExtraData));
+      &kExtraData[0], UNSAFE_TODO(&kExtraData[0] + std::size(kExtraData)));
   VideoDecoderConfig input(VideoCodec::kVP8, VP8PROFILE_ANY,
                            VideoDecoderConfig::AlphaMode::kIsOpaque,
                            VideoColorSpace(), kNoTransformation, kCodedSize,
@@ -67,6 +68,26 @@ TEST(VideoDecoderConfigStructTraitsTest, ConvertVideoDecoderConfig_Encrypted) {
 }
 
 TEST(VideoDecoderConfigStructTraitsTest,
+     ConvertVideoDecoderConfig_AspectRatio) {
+  VideoDecoderConfig input(
+      VideoCodec::kVP8, VP8PROFILE_ANY,
+      VideoDecoderConfig::AlphaMode::kIsOpaque,
+      VideoColorSpace(VideoColorSpace::PrimaryID::BT2020,
+                      VideoColorSpace::TransferID::SMPTEST2084,
+                      VideoColorSpace::MatrixID::BT2020_CL,
+                      gfx::ColorSpace::RangeID::LIMITED),
+      kNoTransformation, kCodedSize, kVisibleRect, kNaturalSize,
+      EmptyExtraData(), EncryptionScheme::kUnencrypted);
+  input.set_aspect_ratio(VideoAspectRatio::DAR(3, 1));
+  std::vector<uint8_t> data =
+      media::mojom::VideoDecoderConfig::Serialize(&input);
+  VideoDecoderConfig output;
+  EXPECT_TRUE(
+      media::mojom::VideoDecoderConfig::Deserialize(std::move(data), &output));
+  EXPECT_TRUE(output.Matches(input));
+}
+
+TEST(VideoDecoderConfigStructTraitsTest,
      ConvertVideoDecoderConfig_ColorSpaceInfo) {
   VideoDecoderConfig input(
       VideoCodec::kVP8, VP8PROFILE_ANY,
@@ -93,13 +114,11 @@ TEST(VideoDecoderConfigStructTraitsTest,
                            kVisibleRect, kNaturalSize, EmptyExtraData(),
                            EncryptionScheme::kUnencrypted);
   gfx::HDRMetadata hdr_metadata;
-  hdr_metadata.max_frame_average_light_level = 123;
-  hdr_metadata.max_content_light_level = 456;
-  hdr_metadata.color_volume_metadata.primaries = {
-      0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f,
-  };
-  hdr_metadata.color_volume_metadata.luminance_max = 1000;
-  hdr_metadata.color_volume_metadata.luminance_min = 0;
+  hdr_metadata.cta_861_3 = gfx::HdrMetadataCta861_3(123, 456);
+  hdr_metadata.smpte_st_2086 = gfx::HdrMetadataSmpteSt2086(
+      {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f},
+      /*luminance_max=*/1000,
+      /*luminance_min=*/0);
   input.set_hdr_metadata(hdr_metadata);
   std::vector<uint8_t> data =
       media::mojom::VideoDecoderConfig::Serialize(&input);

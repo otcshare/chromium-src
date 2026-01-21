@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/app_list/search/app_result.h"
 
-#include "ash/public/cpp/app_list/app_list_switches.h"
 #include "base/time/time.h"
 
 namespace app_list {
@@ -23,8 +22,7 @@ AppResult::AppResult(Profile* profile,
   SetCategory(Category::kApps);
 }
 
-AppResult::~AppResult() {
-}
+AppResult::~AppResult() = default;
 
 void AppResult::UpdateFromLastLaunchedOrInstalledTime(
     const base::Time& current_time,

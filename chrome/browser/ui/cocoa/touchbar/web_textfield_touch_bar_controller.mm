@@ -4,27 +4,29 @@
 
 #import "chrome/browser/ui/cocoa/touchbar/web_textfield_touch_bar_controller.h"
 
-#include "base/debug/stack_trace.h"
-#include "base/mac/scoped_nsobject.h"
-#include "chrome/browser/ui/autofill/autofill_popup_controller.h"
+#include "chrome/browser/ui/autofill/autofill_suggestion_controller.h"
 #import "chrome/browser/ui/cocoa/touchbar/browser_window_touch_bar_controller.h"
 #import "chrome/browser/ui/cocoa/touchbar/credit_card_autofill_touch_bar_controller.h"
-#include "chrome/browser/ui/views/frame/browser_frame_mac.h"
+#include "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/web_contents.h"
 #import "ui/base/cocoa/touch_bar_util.h"
 
-@implementation WebTextfieldTouchBarController
+@implementation WebTextfieldTouchBarController {
+  BrowserWindowTouchBarController* __weak _controller;
+  CreditCardAutofillTouchBarController* __strong _autofillTouchBarController;
+}
 
 + (WebTextfieldTouchBarController*)controllerForWindow:(NSWindow*)window {
   BrowserView* browser_view =
-      BrowserView::GetBrowserViewForNativeWindow(window);
-  if (!browser_view)
+      BrowserView::GetBrowserViewForNativeWindow(gfx::NativeWindow(window));
+  if (!browser_view) {
     return nil;
+  }
 
-  BrowserFrameMac* browser_frame = static_cast<BrowserFrameMac*>(
-      browser_view->frame()->native_browser_frame());
-  return [browser_frame->GetTouchBarController() webTextfieldTouchBar];
+  BrowserNativeWidgetMac* native_widget = static_cast<BrowserNativeWidgetMac*>(
+      browser_view->browser_widget()->browser_native_widget());
+  return [native_widget->GetTouchBarController() webTextfieldTouchBar];
 }
 
 - (instancetype)initWithController:
@@ -37,20 +39,18 @@
 }
 
 - (void)dealloc {
-  [[NSNotificationCenter defaultCenter] removeObserver:self];
-  [super dealloc];
+  [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)showCreditCardAutofillWithController:
     (autofill::AutofillPopupController*)controller {
-  _autofillTouchBarController.reset(
-      [[CreditCardAutofillTouchBarController alloc]
-          initWithController:controller]);
+  _autofillTouchBarController = [[CreditCardAutofillTouchBarController alloc]
+      initWithController:controller];
   [self invalidateTouchBar];
 }
 
 - (void)hideCreditCardAutofillTouchBar {
-  _autofillTouchBarController.reset();
+  _autofillTouchBarController = nil;
   [self invalidateTouchBar];
 }
 
@@ -59,8 +59,9 @@
 }
 
 - (NSTouchBar*)makeTouchBar {
-  if (_autofillTouchBarController)
+  if (_autofillTouchBarController) {
     return [_autofillTouchBarController makeTouchBar];
+  }
   return nil;
 }
 

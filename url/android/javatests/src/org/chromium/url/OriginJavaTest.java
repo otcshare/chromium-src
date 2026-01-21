@@ -32,7 +32,7 @@ public class OriginJavaTest {
     @SmallTest
     @Test
     public void testOriginEquivalence() {
-        OriginJavaTestHelper.nativeTestOriginEquivalence();
+        OriginJavaTestHelper.testOriginEquivalence();
     }
 
     @SmallTest
@@ -95,5 +95,19 @@ public class OriginJavaTest {
         Assert.assertEquals("https", opaque.getScheme());
         Assert.assertEquals("host.name", opaque.getHost());
         Assert.assertEquals(61234, opaque.getPort());
+    }
+
+    @SmallTest
+    @Test
+    public void testToStringForLargePortNumbers() {
+        int port = 1 << 15; // signed short max value + 1.
+        String url = "https://host.name:" + port;
+        Origin origin = Origin.create(new GURL(url));
+        Assert.assertEquals(url, origin.toString());
+
+        int port2 = (1 << 16) - 1;
+        String url2 = "http://host.name:" + port2;
+        Origin origin2 = Origin.create(new GURL(url2));
+        Assert.assertEquals(url2, origin2.toString());
     }
 }

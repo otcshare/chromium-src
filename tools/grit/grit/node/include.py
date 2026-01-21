@@ -5,7 +5,6 @@
 """Handling of the <include> element.
 """
 
-from __future__ import print_function
 
 import os
 
@@ -19,7 +18,7 @@ class IncludeNode(base.Node):
   """An <include> element."""
 
   def __init__(self):
-    super(IncludeNode, self).__init__()
+    super().__init__()
 
     # Cache flattened data so that we don't flatten the same file
     # multiple times.
@@ -98,7 +97,7 @@ class IncludeNode(base.Node):
 
     return self.ToRealPath(input_path)
 
-  def GetDataPackValue(self, lang, encoding):
+  def GetDataPackValue(self, lang, gender, encoding):
     '''Returns bytes or a str represenation for a data_pack entry.'''
     filename = self.ToRealPath(self.GetInputPath())
     if self.attrs['flattenhtml'] == 'true':

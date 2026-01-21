@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/values.h"
 
 struct Session;
@@ -60,5 +60,10 @@ Status ExecuteRemoveAllCredentials(WebView* web_view,
 Status ExecuteSetUserVerified(WebView* web_view,
                               const base::Value::Dict& params,
                               std::unique_ptr<base::Value>* value);
+
+// Sets a credential's properties.
+Status ExecuteSetCredentialProperties(WebView* web_view,
+                                      const base::Value::Dict& params,
+                                      std::unique_ptr<base::Value>* value);
 
 #endif  // CHROME_TEST_CHROMEDRIVER_WEBAUTHN_COMMANDS_H_

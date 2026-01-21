@@ -7,8 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -90,8 +89,8 @@ TEST_F(BluetoothDeviceWinTest, GetUUIDs) {
   BluetoothDevice::UUIDSet uuids = device_->GetUUIDs();
 
   EXPECT_EQ(2u, uuids.size());
-  EXPECT_TRUE(base::Contains(uuids, kTestAudioSdpUuid));
-  EXPECT_TRUE(base::Contains(uuids, kTestVideoSdpUuid));
+  EXPECT_TRUE(uuids.contains(kTestAudioSdpUuid));
+  EXPECT_TRUE(uuids.contains(kTestVideoSdpUuid));
 
   uuids = empty_device_->GetUUIDs();
   EXPECT_EQ(0u, uuids.size());

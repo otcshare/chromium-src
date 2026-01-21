@@ -4,14 +4,15 @@
 
 #include "chrome/browser/extensions/api/force_installed_affiliated_extension_apitest.h"
 
-#include "ash/constants/ash_features.h"
+#include <optional>
+
 #include "base/files/file_path.h"
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -19,7 +20,6 @@
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/test/result_catcher.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -32,25 +32,17 @@ base::FilePath GetTestDataDir() {
 namespace extensions {
 
 ForceInstalledAffiliatedExtensionApiTest::
-    ForceInstalledAffiliatedExtensionApiTest(bool is_affiliated,
-                                             bool is_auth_session_enabled)
+    ForceInstalledAffiliatedExtensionApiTest(bool is_affiliated)
     : test_install_attributes_(
           ash::StubInstallAttributes::CreateCloudManaged("fake-domain",
                                                          "fake-id")) {
-  // TODO(b/239422391): This test is run with the feature
-  // kUseAuthFactors enabled and disabled because of a
-  // transitive dependency of AffiliationTestHelper on that feature. Remove
-  // the parameter when kUseAuthFactors is removed.
-  if (is_auth_session_enabled) {
-    feature_list_.InitAndEnableFeature(ash::features::kUseAuthFactors);
-  } else {
-    feature_list_.InitAndDisableFeature(ash::features::kUseAuthFactors);
-  }
-
   set_exit_when_last_browser_closes(false);
   set_chromeos_user_ = false;
   affiliation_mixin_.set_affiliated(is_affiliated);
   cryptohome_mixin_.MarkUserAsExisting(affiliation_mixin_.account_id());
+  cryptohome_mixin_.ApplyAuthConfig(
+      affiliation_mixin_.account_id(),
+      ash::test::UserAuthConfig::Create(ash::test::kDefaultAuthSetup));
 }
 
 ForceInstalledAffiliatedExtensionApiTest::
@@ -112,12 +104,10 @@ ForceInstalledAffiliatedExtensionApiTest::ForceInstallExtension(
 void ForceInstalledAffiliatedExtensionApiTest::TestExtension(
     Browser* browser,
     const GURL& page_url,
-    const base::Value& custom_arg_value) {
+    const base::Value::Dict& custom_arg_value) {
   DCHECK(page_url.is_valid()) << "page_url must be valid";
 
-  std::string custom_arg;
-  base::JSONWriter::Write(custom_arg_value, &custom_arg);
-  SetCustomArg(custom_arg);
+  SetCustomArg(base::WriteJson(custom_arg_value).value_or(""));
 
   extensions::ResultCatcher catcher;
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, GURL(page_url)));

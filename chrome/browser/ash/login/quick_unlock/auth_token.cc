@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/login/quick_unlock/auth_token.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
@@ -25,21 +25,21 @@ AuthToken::AuthToken(const UserContext& user_context)
 
 AuthToken::~AuthToken() = default;
 
-absl::optional<std::string> AuthToken::Identifier() const {
+std::optional<std::string> AuthToken::Identifier() const {
   if (!user_context_)
-    return absl::nullopt;
+    return std::nullopt;
   return identifier_.ToString();
 }
 
-absl::optional<base::UnguessableToken> AuthToken::GetUnguessableToken() const {
+std::optional<base::UnguessableToken> AuthToken::GetUnguessableToken() const {
   if (!user_context_)
-    return absl::nullopt;
+    return std::nullopt;
   return identifier_;
 }
 
-absl::optional<base::TimeDelta> AuthToken::GetAge() const {
+std::optional<base::TimeDelta> AuthToken::GetAge() const {
   if (!user_context_)
-    return absl::nullopt;
+    return std::nullopt;
   return base::TimeTicks::Now() - creation_time_;
 }
 

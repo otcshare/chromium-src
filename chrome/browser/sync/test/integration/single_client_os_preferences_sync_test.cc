@@ -12,10 +12,10 @@
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/sync/base/model_type.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_user_settings.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_user_settings.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,37 +31,38 @@ class SingleClientOsPreferencesSyncTest : public SyncTest {
   SingleClientOsPreferencesSyncTest() : SyncTest(SINGLE_CLIENT) {}
   ~SingleClientOsPreferencesSyncTest() override = default;
 
+  // This test suite is ChromeOS specific, where there's only Sync-the-feature.
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTheFeature;
+  }
+
  protected:
   static std::string ConvertToSyncedPrefValue(const base::Value& value) {
-    std::string result;
-    bool success = base::JSONWriter::Write(value, &result);
-    DCHECK(success);
-    return result;
+    return base::WriteJson(value).value();
   }
 
   sync_pb::PreferenceSpecifics* GetPreferenceSpecifics(
-      syncer::ModelType model_type,
+      syncer::DataType data_type,
       sync_pb::EntitySpecifics& specifics) {
-    switch (model_type) {
-      case syncer::ModelType::PREFERENCES:
+    switch (data_type) {
+      case syncer::DataType::PREFERENCES:
         return specifics.mutable_preference();
-      case syncer::ModelType::PRIORITY_PREFERENCES:
+      case syncer::DataType::PRIORITY_PREFERENCES:
         return specifics.mutable_priority_preference()->mutable_preference();
-      case syncer::ModelType::OS_PREFERENCES:
+      case syncer::DataType::OS_PREFERENCES:
         return specifics.mutable_os_preference()->mutable_preference();
-      case syncer::ModelType::OS_PRIORITY_PREFERENCES:
+      case syncer::DataType::OS_PRIORITY_PREFERENCES:
         return specifics.mutable_os_priority_preference()->mutable_preference();
       default:
         NOTREACHED();
-        return specifics.mutable_preference();
     }
   }
-  void InjectPreferenceToFakeServer(syncer::ModelType model_type,
+  void InjectPreferenceToFakeServer(syncer::DataType data_type,
                                     const char* name,
                                     const base::Value& value) {
     sync_pb::EntitySpecifics specifics;
     sync_pb::PreferenceSpecifics* preference_specifics =
-        GetPreferenceSpecifics(model_type, specifics);
+        GetPreferenceSpecifics(data_type, specifics);
     preference_specifics->set_name(name);
     preference_specifics->set_value(ConvertToSyncedPrefValue(value));
 
@@ -75,12 +76,12 @@ class SingleClientOsPreferencesSyncTest : public SyncTest {
   const char* const kOsPreferenceKey = ash::prefs::kShelfAutoHideBehavior;
   const base::Value kOsPreferenceNewValue =
       base::Value(ash::kShelfAutoHideBehaviorAlways);
-  const char* const kOsPriorityPreferenceKey = ::prefs::kTapToClickEnabled;
+  const char* const kOsPriorityPreferenceKey = ash::prefs::kTapToClickEnabled;
   const base::Value kOsPriorityPreferenceNewValue = base::Value(false);
 };
 
 IN_PROC_BROWSER_TEST_F(SingleClientOsPreferencesSyncTest, Sanity) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   // Shelf alignment is a Chrome OS only preference.
   ChangeStringPref(/*index=*/0, ash::prefs::kShelfAlignment,
@@ -90,11 +91,9 @@ IN_PROC_BROWSER_TEST_F(SingleClientOsPreferencesSyncTest, Sanity) {
               Eq(ash::kShelfAlignmentRight));
 }
 
-// OS preferences should sync from the new clients as both preferences and OS
-// preferences.
 IN_PROC_BROWSER_TEST_F(SingleClientOsPreferencesSyncTest,
-                       OSPreferencesSyncAsBothTypes) {
-  ASSERT_TRUE(SetupClients()) << "SetupClients() failed.";
+                       OSPreferencesAreUploaded) {
+  ASSERT_TRUE(SetupClients());
   ASSERT_NE(GetPrefs(0)->GetValue(kOsPreferenceKey), kOsPreferenceNewValue);
   ASSERT_NE(GetPrefs(0)->GetValue(kOsPriorityPreferenceKey),
             kOsPriorityPreferenceNewValue);
@@ -105,25 +104,12 @@ IN_PROC_BROWSER_TEST_F(SingleClientOsPreferencesSyncTest,
   GetPrefs(/*index=*/0)
       ->Set(kOsPriorityPreferenceKey, kOsPriorityPreferenceNewValue);
 
-  // OS preferences are syncing both as OS_PREFERENCES and PREFERENCES to
-  // support sync to the old clients.
   EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
-                  syncer::ModelType::OS_PREFERENCES, kOsPreferenceKey,
+                  syncer::DataType::OS_PREFERENCES, kOsPreferenceKey,
                   ConvertToSyncedPrefValue(kOsPreferenceNewValue))
                   .Wait());
   EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
-                  syncer::ModelType::PREFERENCES, kOsPreferenceKey,
-                  ConvertToSyncedPrefValue(kOsPreferenceNewValue))
-                  .Wait());
-
-  // Same with OS priority preferences.
-  EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
-                  syncer::ModelType::OS_PRIORITY_PREFERENCES,
-                  kOsPriorityPreferenceKey,
-                  ConvertToSyncedPrefValue(kOsPriorityPreferenceNewValue))
-                  .Wait());
-  EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
-                  syncer::ModelType::PRIORITY_PREFERENCES,
+                  syncer::DataType::OS_PRIORITY_PREFERENCES,
                   kOsPriorityPreferenceKey,
                   ConvertToSyncedPrefValue(kOsPriorityPreferenceNewValue))
                   .Wait());
@@ -139,7 +125,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientOsPreferencesSyncTest,
                                kOsPriorityPreferenceKey,
                                kOsPriorityPreferenceNewValue);
 
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   EXPECT_TRUE(GetPrefs(/*index=*/0)
                   ->FindPreference(kOsPreferenceKey)

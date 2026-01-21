@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_controller.h"
 
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/test/fake_app_instance.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -19,10 +19,10 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_test.h"
+#include "chrome/browser/ash/child_accounts/apps/app_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_activity_registry.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limit_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limits_policy_builder.h"
-#include "chrome/browser/ash/child_accounts/time_limits/app_time_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/common/chrome_features.h"
@@ -30,19 +30,19 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/system_clock/system_clock_client.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/icon_loader.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/message_center/public/cpp/notification.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
@@ -60,17 +60,19 @@ const AppId kApp2(apps::AppType::kArc, "2");
 base::Time GetLastResetTime(base::Time timestamp) {
   base::Time nearest_midnight = timestamp.LocalMidnight();
   base::Time prev_midnight;
-  if (timestamp > nearest_midnight)
+  if (timestamp > nearest_midnight) {
     prev_midnight = nearest_midnight;
-  else
+  } else {
     prev_midnight = nearest_midnight - base::Hours(24);
+  }
 
   // Reset time is at 6 am for the tests.
   base::Time reset_time = prev_midnight + base::Hours(6);
-  if (reset_time <= timestamp)
+  if (reset_time <= timestamp) {
     return reset_time;
-  else
+  } else {
     return reset_time - base::Hours(24);
+  }
 }
 
 }  // namespace
@@ -85,8 +87,7 @@ class AppTimeControllerTest : public testing::Test {
     ~FakeIconLoader() override = default;
 
     std::unique_ptr<apps::IconLoader::Releaser> LoadIconFromIconKey(
-        apps::AppType app_type,
-        const std::string& app_id,
+        const std::string& id,
         const apps::IconKey& icon_key,
         apps::IconType icon_type,
         int32_t size_hint_in_dip,
@@ -138,21 +139,21 @@ class AppTimeControllerTest : public testing::Test {
   }
 
   NotificationDisplayServiceTester& notification_tester() {
-    return notification_tester_;
+    return *notification_tester_.get();
   }
 
   apps::AppServiceTest& app_service_test() { return app_service_test_; }
 
-  Profile& profile() { return profile_; }
+  Profile& profile() { return *profile_.get(); }
 
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  TestingProfile profile_;
-  NotificationDisplayServiceTester notification_tester_{&profile_};
+  std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<NotificationDisplayServiceTester> notification_tester_;
   FakeIconLoader icon_loader_;
   apps::AppServiceTest app_service_test_;
-  ArcAppTest arc_test_;
+  ArcAppTest arc_app_test_;
 
   std::unique_ptr<AppTimeController> controller_;
   std::unique_ptr<AppTimeController::TestApi> test_api_;
@@ -160,7 +161,6 @@ class AppTimeControllerTest : public testing::Test {
 
 void AppTimeControllerTest::SetUp() {
   SystemClockClient::InitializeFake();
-  testing::Test::SetUp();
 
   // The tests are going to start at local midnight on January 1.
   base::Time time;
@@ -169,12 +169,17 @@ void AppTimeControllerTest::SetUp() {
   base::TimeDelta forward_by = local_midnight - base::Time::Now();
   task_environment_.FastForwardBy(forward_by);
 
-  app_service_test_.SetUp(&profile_);
-  apps::AppServiceProxyFactory::GetForProfile(&profile_)
+  arc_app_test_.PreProfileSetUp();
+  profile_ = std::make_unique<TestingProfile>();
+  notification_tester_ =
+      std::make_unique<NotificationDisplayServiceTester>(profile_.get());
+
+  app_service_test_.SetUp(profile_.get());
+  apps::AppServiceProxyFactory::GetForProfile(profile_.get())
       ->OverrideInnerIconLoaderForTesting(&icon_loader_);
 
-  arc_test_.SetUp(&profile_);
-  arc_test_.app_instance()->set_icon_response_type(
+  arc_app_test_.PostProfileSetUp(profile_.get());
+  arc_app_test_.app_instance()->set_icon_response_type(
       arc::FakeAppInstance::IconResponseType::ICON_RESPONSE_SKIP);
   task_environment_.RunUntilIdle();
 
@@ -186,9 +191,10 @@ void AppTimeControllerTest::SetUp() {
 void AppTimeControllerTest::TearDown() {
   test_api_.reset();
   controller_.reset();
-  arc_test_.TearDown();
+  arc_app_test_.PreProfileTearDown();
+  profile_.reset();
+  arc_app_test_.PostProfileTearDown();
   SystemClockClient::Shutdown();
-  testing::Test::TearDown();
 }
 
 void AppTimeControllerTest::CreateActivityForApp(const AppId& app_id,
@@ -213,10 +219,10 @@ void AppTimeControllerTest::CreateActivityForApp(const AppId& app_id,
 void AppTimeControllerTest::SimulateInstallArcApp(const AppId& app_id,
                                                   const std::string& app_name) {
   std::string package_name = app_id.app_id();
-  arc_test_.AddPackage(CreateArcAppPackage(package_name)->Clone());
+  arc_app_test_.AddPackage(CreateArcAppPackage(package_name)->Clone());
   std::vector<arc::mojom::AppInfoPtr> apps;
   apps.emplace_back(CreateArcAppInfo(package_name, app_name));
-  arc_test_.app_instance()->SendPackageAppListRefreshed(package_name, apps);
+  arc_app_test_.app_instance()->SendPackageAppListRefreshed(package_name, apps);
   task_environment_.RunUntilIdle();
   return;
 }
@@ -235,24 +241,23 @@ bool AppTimeControllerTest::HasNotificationFor(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   notification_id = base::StrCat({notification_id, app_name});
 
-  absl::optional<message_center::Notification> message_center_notification =
-      notification_tester_.GetNotification(notification_id);
+  std::optional<message_center::Notification> message_center_notification =
+      notification_tester_->GetNotification(notification_id);
   return message_center_notification.has_value();
 }
 
 size_t AppTimeControllerTest::GetNotificationsCount() {
   return notification_tester_
-      .GetDisplayedNotificationsForType(NotificationHandler::Type::TRANSIENT)
+      ->GetDisplayedNotificationsForType(NotificationHandler::Type::TRANSIENT)
       .size();
 }
 
 void AppTimeControllerTest::DismissNotifications() {
-  notification_tester_.RemoveAllNotifications(
+  notification_tester_->RemoveAllNotifications(
       NotificationHandler::Type::TRANSIENT, true /* by_user */);
 }
 
@@ -263,7 +268,7 @@ void AppTimeControllerTest::DeleteController() {
 
 void AppTimeControllerTest::InstantiateController() {
   controller_ =
-      std::make_unique<AppTimeController>(&profile_, base::DoNothing());
+      std::make_unique<AppTimeController>(profile_.get(), base::DoNothing());
   controller_->Init();
   test_api_ = std::make_unique<AppTimeController::TestApi>(controller_.get());
 }
@@ -450,7 +455,7 @@ TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
                                         kOneHour / 2, base::Time::Now()));
     builder.SetResetTime(6, 0);
     profile().GetPrefs()->SetDict(prefs::kPerAppTimeLimitsPolicy,
-                                  builder.value().GetDict().Clone());
+                                  builder.value().Clone());
   }
 
   // If there was no valid last reset time stored in user pref,
@@ -525,14 +530,14 @@ TEST_F(AppTimeControllerTest, MetricsTest) {
     AppTimeLimitsPolicyBuilder builder;
     AppId absent_app(apps::AppType::kArc, "absent_app");
     AppLimit app_limit(AppRestriction::kTimeLimit, kOneHour, base::Time::Now());
-    AppLimit blocked_app(AppRestriction::kBlocked, absl::nullopt,
+    AppLimit blocked_app(AppRestriction::kBlocked, std::nullopt,
                          base::Time::Now());
     builder.AddAppLimit(kApp1, app_limit);
     builder.AddAppLimit(absent_app, app_limit);
     builder.AddAppLimit(kApp2, blocked_app);
     builder.SetResetTime(6, 0);
     profile().GetPrefs()->SetDict(prefs::kPerAppTimeLimitsPolicy,
-                                  builder.value().GetDict().Clone());
+                                  builder.value().Clone());
   }
 
   // Enagagement is recorded at the beginning of the session when
@@ -572,10 +577,11 @@ TEST_F(AppTimeControllerTest, SetLastResetTimeTest) {
   base::Time now = base::Time::Now();
   base::Time nearest_midnight = now.LocalMidnight();
   base::Time prev_midnight;
-  if (now > nearest_midnight)
+  if (now > nearest_midnight) {
     prev_midnight = nearest_midnight;
-  else
+  } else {
     prev_midnight = nearest_midnight - kDay;
+  }
 
   base::Time reset_time = prev_midnight + kSixHours;
 
@@ -595,5 +601,4 @@ TEST_F(AppTimeControllerTest, SetLastResetTimeTest) {
   EXPECT_EQ(test_api()->GetLastResetTime(), reset_time);
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

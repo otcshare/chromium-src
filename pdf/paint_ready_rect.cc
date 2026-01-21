@@ -7,18 +7,28 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/feature_list.h"
+#include "pdf/pdf_features.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace chrome_pdf {
 
+PaintReadyRect::PaintReadyRect(const gfx::Rect& rect, sk_sp<SkImage> image)
+    : PaintReadyRect(rect, std::move(image), /*flush_now=*/false) {}
+
 PaintReadyRect::PaintReadyRect(const gfx::Rect& rect,
                                sk_sp<SkImage> image,
                                bool flush_now)
     : rect_(rect), image_(std::move(image)), flush_now_(flush_now) {
-  DCHECK(image_);
+  CHECK(image_ ||
+        base::FeatureList::IsEnabled(features::kPdfBufferedPaintManager));
 }
+
+PaintReadyRect::PaintReadyRect(PaintReadyRect&&) noexcept = default;
+
+PaintReadyRect& PaintReadyRect::operator=(PaintReadyRect&&) noexcept = default;
 
 PaintReadyRect::PaintReadyRect(const PaintReadyRect& other) = default;
 

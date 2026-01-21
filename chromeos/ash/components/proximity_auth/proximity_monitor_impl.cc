@@ -9,7 +9,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -69,13 +69,7 @@ void ProximityMonitorImpl::RecordProximityMetricsOnAuthSuccess() {
                                     ? *rssi_rolling_average_
                                     : metrics::kUnknownProximityValue;
 
-  std::string remote_device_model = metrics::kUnknownDeviceModel;
-  ash::multidevice::RemoteDeviceRef remote_device = remote_device_;
-  if (!remote_device.name().empty())
-    remote_device_model = remote_device.name();
-
   metrics::RecordAuthProximityRollingRssi(round(rssi_rolling_average));
-  metrics::RecordAuthProximityRemoteDeviceModelHash(remote_device_model);
 }
 
 void ProximityMonitorImpl::OnAdapterInitialized(
@@ -133,10 +127,10 @@ void ProximityMonitorImpl::OnGetConnectionMetadata(
   if (connection_metadata->bluetooth_connection_metadata)
     OnGetRssi(connection_metadata->bluetooth_connection_metadata->current_rssi);
   else
-    OnGetRssi(absl::nullopt);
+    OnGetRssi(std::nullopt);
 }
 
-void ProximityMonitorImpl::OnGetRssi(const absl::optional<int32_t>& rssi) {
+void ProximityMonitorImpl::OnGetRssi(const std::optional<int32_t>& rssi) {
   if (!is_active_) {
     PA_LOG(VERBOSE) << "Received RSSI after stopping.";
     return;

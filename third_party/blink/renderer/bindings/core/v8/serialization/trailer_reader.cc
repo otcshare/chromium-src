@@ -4,8 +4,11 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/serialization/trailer_reader.h"
 
+#include <algorithm>
+#include <bit>
+
+#include "base/numerics/byte_conversions.h"
 #include "base/numerics/clamped_math.h"
-#include "base/sys_byteorder.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialization_tag.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 
@@ -64,16 +67,20 @@ base::expected<bool, TrailerReader::Error> TrailerReader::SkipToTrailer() {
   // uint64_t, since that would require proper alignment to avoid undefined
   // behavior.
   uint64_t trailer_offset = 0;
-  if (auto offset_raw = iterator_.CopyObject<uint64_t>())
-    trailer_offset = base::NetToHost64(*offset_raw);
-  else
+  if (auto offset_raw = iterator_.Span<uint8_t, sizeof(uint64_t)>();
+      offset_raw.has_value()) {
+    trailer_offset = base::U64FromBigEndian(*offset_raw);
+  } else {
     return invalid_header();
+  }
 
   uint32_t trailer_size = 0;
-  if (auto size_raw = iterator_.CopyObject<uint32_t>())
-    trailer_size = base::NetToHost32(*size_raw);
-  else
+  if (auto size_raw = iterator_.Span<uint8_t, sizeof(uint32_t)>();
+      size_raw.has_value()) {
+    trailer_size = base::U32FromBigEndian(*size_raw);
+  } else {
     return invalid_header();
+  }
 
   // If there's no trailer, we're done here.
   if (trailer_size == 0 && trailer_offset == 0)
@@ -98,20 +105,20 @@ base::expected<void, TrailerReader::Error> TrailerReader::Read() {
       return base::unexpected(Error::kInvalidTrailer);
 
     uint32_t num_exposed = 0;
-    if (auto num_exposed_raw = iterator_.CopyObject<uint32_t>())
-      num_exposed = base::NetToHost32(*num_exposed_raw);
-    else
+    if (auto num_exposed_raw = iterator_.CopyObject<uint32_t>()) {
+      num_exposed = std::byteswap(*num_exposed_raw);  // Big-endian.
+    } else {
       return base::unexpected(Error::kInvalidTrailer);
+    }
 
     auto exposed_raw = iterator_.Span<uint8_t>(num_exposed);
     if (exposed_raw.size() != num_exposed)
       return base::unexpected(Error::kInvalidTrailer);
 
     required_exposed_interfaces_.Grow(num_exposed);
-    std::transform(exposed_raw.begin(), exposed_raw.end(),
-                   required_exposed_interfaces_.begin(), [](uint8_t raw) {
-                     return static_cast<SerializationTag>(raw);
-                   });
+    std::ranges::transform(
+        exposed_raw, required_exposed_interfaces_.begin(),
+        [](uint8_t raw) { return static_cast<SerializationTag>(raw); });
   }
   return {};
 }

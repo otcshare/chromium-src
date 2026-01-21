@@ -5,6 +5,7 @@
 #include "extensions/browser/network_permissions_updater.h"
 
 #include "base/barrier_closure.h"
+#include "base/functional/callback_helpers.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/cors_origin_pattern_setter.h"
 #include "extensions/browser/extension_registry.h"
@@ -31,8 +32,9 @@ void SetCorsOriginAccessListForExtensionHelper(
     // profile if the extension is actually allowed to run in an incognito
     // profile (not just by the extension manifest, but also by user
     // preferences).
-    if (browser_context->IsOffTheRecord())
+    if (browser_context->IsOffTheRecord()) {
       DCHECK(util::IsIncognitoEnabled(extension.id(), browser_context));
+    }
 
     content::CorsOriginPatternSetter::Set(
         browser_context, extension.origin(), mojo::Clone(allow_patterns),

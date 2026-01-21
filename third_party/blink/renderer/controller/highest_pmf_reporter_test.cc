@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time.h"
@@ -79,9 +80,7 @@ class MockMemoryUsageMonitor : public MemoryUsageMonitor {
         agent_group_scheduler_(Thread::MainThread()
                                    ->Scheduler()
                                    ->ToMainThreadScheduler()
-                                   ->CreateAgentGroupScheduler()) {
-    memset(&mock_memory_usage_, 0, sizeof(mock_memory_usage_));
-  }
+                                   ->CreateAgentGroupScheduler()) {}
   ~MockMemoryUsageMonitor() override = default;
 
   MemoryUsage GetCurrentMemoryUsage() override { return mock_memory_usage_; }
@@ -112,7 +111,7 @@ class MockMemoryUsageMonitor : public MemoryUsageMonitor {
 
     std::vector<Persistent<Page>>::iterator it = dummy_pages_.begin();
     while (Page::OrdinaryPages().size() < page_count) {
-      DCHECK(it != dummy_pages_.end());
+      CHECK(it != dummy_pages_.end());
       Page::OrdinaryPages().insert(it->Get());
       it++;
     }
@@ -122,11 +121,12 @@ class MockMemoryUsageMonitor : public MemoryUsageMonitor {
   MockMemoryUsageMonitor() = delete;
 
   Page* CreateDummyPage() {
-    return Page::CreateNonOrdinary(GetStaticEmptyChromeClientInstance(),
-                                   *agent_group_scheduler_);
+    return Page::CreateNonOrdinary(*MakeGarbageCollected<EmptyChromeClient>(),
+                                   *agent_group_scheduler_,
+                                   /*color_provider_colors=*/nullptr);
   }
 
-  MemoryUsage mock_memory_usage_;
+  MemoryUsage mock_memory_usage_ = {};
   std::vector<Persistent<Page>> dummy_pages_;
   Persistent<AgentGroupScheduler> agent_group_scheduler_;
 };
@@ -184,7 +184,13 @@ TEST_F(HighestPmfReporterTest, ReportNoMetricBeforeNavigationStart) {
   EXPECT_EQ(0U, reporter_->GetReportedPeakRss().size());
 }
 
-TEST_F(HighestPmfReporterTest, ReportMetric) {
+// TODO(https://crbug.com/1408949): This test fails on ASAN bots.
+#if defined(ADDRESS_SANITIZER)
+#define MAYBE_ReportMetric DISABLED_ReportMetric
+#else
+#define MAYBE_ReportMetric ReportMetric
+#endif
+TEST_F(HighestPmfReporterTest, MAYBE_ReportMetric) {
   EXPECT_TRUE(memory_usage_monitor_->TimerIsActive());
   Page::OrdinaryPages().insert(&GetPage());
   AdvanceClock(base::Seconds(1));

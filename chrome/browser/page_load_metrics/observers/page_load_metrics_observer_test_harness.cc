@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/features.h"
@@ -15,7 +15,8 @@
 
 namespace page_load_metrics {
 
-PageLoadMetricsObserverTestHarness::~PageLoadMetricsObserverTestHarness() {}
+PageLoadMetricsObserverTestHarness::~PageLoadMetricsObserverTestHarness() =
+    default;
 
 void PageLoadMetricsObserverTestHarness::SetUp() {
   ChromeRenderViewHostTestHarness::SetUp();
@@ -28,8 +29,13 @@ void PageLoadMetricsObserverTestHarness::SetUp() {
       web_contents(), this,
       base::BindRepeating(
           &PageLoadMetricsObserverTestHarness::RegisterObservers,
-          base::Unretained(this)));
+          base::Unretained(this)),
+      IsNonTabWebUI());
   web_contents()->WasShown();
+}
+
+bool PageLoadMetricsObserverTestHarness::IsNonTabWebUI() const {
+  return false;
 }
 
 void PageLoadMetricsObserverTestHarness::InitializeFeatureList() {

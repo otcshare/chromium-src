@@ -2,57 +2,48 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './strings.m.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import '/strings.m.js';
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
-import 'chrome://resources/cr_elements/md_select.css.js';
-import './support_tool_shared.css.js';
+import 'chrome://resources/cr_elements/cr_textarea/cr_textarea.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxy, BrowserProxyImpl, IssueDetails} from './browser_proxy.js';
-import {getTemplate} from './issue_details.html.js';
-import {SupportToolPageMixin} from './support_tool_page_mixin.js';
+import type {BrowserProxy, IssueDetails} from './browser_proxy.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
+import {getCss} from './issue_details.css.js';
+import {getHtml} from './issue_details.html.js';
+import {SupportToolPageMixinLit} from './support_tool_page_mixin_lit.js';
 
-const DONT_INCLUDE_EMAIL: string = 'Do not include email address';
-
-const IssueDetailsElementBase = SupportToolPageMixin(PolymerElement);
+const IssueDetailsElementBase = SupportToolPageMixinLit(CrLitElement);
 
 export class IssueDetailsElement extends IssueDetailsElementBase {
   static get is() {
     return 'issue-details';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      caseId_: {
-        type: String,
-        value: () => loadTimeData.getString('caseId'),
-      },
-      emails_: {
-        type: Array,
-        value: () => [DONT_INCLUDE_EMAIL],
-      },
-      issueDescription_: {
-        type: String,
-        value: '',
-      },
-      selectedEmail_: {
-        type: String,
-        value: '',
-      },
+      caseId_: {type: String},
+      emails_: {type: Array},
+      issueDescription_: {type: String},
+      selectedEmail_: {type: String},
     };
   }
 
-  private caseId_: string;
-  private emails_: string[];
-  private issueDescription_: string;
-  private selectedEmail_: string;
+  protected accessor caseId_: string = loadTimeData.getString('caseId');
+  protected accessor emails_: string[] =
+      [loadTimeData.getString('dontIncludeEmailAddress')];
+  protected accessor issueDescription_: string = '';
+  protected accessor selectedEmail_: string = '';
   private browserProxy_: BrowserProxy = BrowserProxyImpl.getInstance();
 
   override connectedCallback() {
@@ -62,7 +53,7 @@ export class IssueDetailsElement extends IssueDetailsElementBase {
       this.emails_ = emails;
       // Add default email at the end of emails list for user to be able to
       // choose to not include email address.
-      this.emails_.push(DONT_INCLUDE_EMAIL);
+      this.emails_.push(this.i18n('dontIncludeEmailAddress'));
     });
   }
 
@@ -71,11 +62,20 @@ export class IssueDetailsElement extends IssueDetailsElementBase {
       caseId: this.caseId_,
       // Set emailAddress field to empty string if user selected to not include
       // email address.
-      emailAddress: (this.selectedEmail_ === DONT_INCLUDE_EMAIL) ?
+      emailAddress:
+          (this.selectedEmail_ === this.i18n('dontIncludeEmailAddress')) ?
           '' :
           this.selectedEmail_,
       issueDescription: this.issueDescription_,
     };
+  }
+
+  protected onSelectedEmailChange_(e: Event) {
+    this.selectedEmail_ = (e.target as HTMLSelectElement).value;
+  }
+
+  protected onIssueDescriptionInput_(e: Event) {
+    this.issueDescription_ = (e.target as HTMLTextAreaElement).value;
   }
 }
 

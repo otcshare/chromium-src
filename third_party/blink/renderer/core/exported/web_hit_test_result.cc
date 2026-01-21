@@ -61,6 +61,14 @@ WebNode WebHitTestResult::GetNode() const {
   return WebNode(private_->Result().InnerNode());
 }
 
+WebNode WebHitTestResult::GetNodeOrPseudoNode() const {
+  return WebNode(private_->Result().InnerPossiblyPseudoNode());
+}
+
+WebElement WebHitTestResult::GetElement() const {
+  return WebElement(private_->Result().InnerElement());
+}
+
 WebElement WebHitTestResult::UrlElement() const {
   return WebElement(private_->Result().URLElement());
 }
@@ -77,8 +85,8 @@ bool WebHitTestResult::IsContentEditable() const {
   return private_->Result().IsContentEditable();
 }
 
-uint64_t WebHitTestResult::GetScrollableContainerId() const {
-  return private_->Result().GetScrollableContainer().GetStableId();
+cc::ElementId WebHitTestResult::GetScrollableContainerId() const {
+  return private_->Result().GetScrollableContainer();
 }
 
 WebHitTestResult::WebHitTestResult(const HitTestResult& result)

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
@@ -166,7 +167,6 @@ TEST_F(ProxyCallTranslatorTest, TestExternalResume) {
   target_buffer_info.buffer_id = buffer_id;
   target_buffer_info.timestamp_micros = timestamp;
 
-  // TODO(rwkeane): Validate the duration in the ResumeAsync call.
   EXPECT_CALL(*decoder_channel_, ResumeAsync(testing::_))
       .WillOnce(
           testing::WithArgs<0>(CompareTimestampInfos(buffer_id, timestamp)));
@@ -202,8 +202,8 @@ TEST_F(ProxyCallTranslatorTest, TestExternalPushBuffer) {
   scoped_refptr<CastDecoderBufferImpl> buffer(
       new CastDecoderBufferImpl(3, StreamId::kPrimary));
   buffer->writable_data()[0] = 1;
-  buffer->writable_data()[1] = 2;
-  buffer->writable_data()[2] = 3;
+  UNSAFE_TODO(buffer->writable_data()[1]) = 2;
+  UNSAFE_TODO(buffer->writable_data()[2]) = 3;
   EXPECT_EQ(translator_.PushBuffer(buffer, 1),
             CmaBackend::BufferStatus::kBufferSuccess);
 

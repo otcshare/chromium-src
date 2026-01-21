@@ -16,17 +16,21 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/unix_domain_socket.h"
@@ -67,7 +71,7 @@ TEST(BrokerProcess, CreateAndDestroy) {
   {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly("/proc/cpuinfo")};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED);
 
@@ -83,8 +87,8 @@ TEST(BrokerProcess, TestOpenAccessNull) {
       MakeBrokerCommandSet({COMMAND_ACCESS, COMMAND_OPEN});
 
   std::vector<BrokerFilePermission> empty;
-  auto policy = absl::make_optional<BrokerSandboxConfig>(command_set, empty,
-                                                         kFakeErrnoSentinel);
+  auto policy = std::make_optional<BrokerSandboxConfig>(command_set, empty,
+                                                        kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED);
 
   ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
@@ -113,7 +117,7 @@ void TestOpenFilePerms(bool fast_check_in_client, int denied_errno) {
       BrokerFilePermission::ReadOnly(kR_AllowListedButDenied),
       BrokerFilePermission::WriteOnly(kW_AllowListed),
       BrokerFilePermission::ReadWrite(kRW_AllowListed)};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, denied_errno);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                             fast_check_in_client);
@@ -302,7 +306,7 @@ void TestBadPaths(bool fast_check_in_client) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadOnlyRecursive("/proc/")};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                             fast_check_in_client);
@@ -374,7 +378,7 @@ void TestOpenCpuinfo(bool fast_check_in_client, bool recursive) {
         recursive ? BrokerFilePermission::ReadOnlyRecursive(kDirProc)
                   : BrokerFilePermission::ReadOnly(kFileCpuInfo));
 
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -400,7 +404,7 @@ void TestOpenCpuinfo(bool fast_check_in_client, bool recursive) {
     base::ScopedFD cpuinfo_fd_closer(cpuinfo_fd);
     EXPECT_GE(cpuinfo_fd, 0);
     char buf[3];
-    memset(buf, 0, sizeof(buf));
+    UNSAFE_TODO(memset(buf, 0, sizeof(buf)));
     int read_len1 = read(cpuinfo_fd, buf, sizeof(buf));
     EXPECT_GT(read_len1, 0);
 
@@ -409,7 +413,7 @@ void TestOpenCpuinfo(bool fast_check_in_client, bool recursive) {
     base::ScopedFD cpuinfo_fd2_closer(cpuinfo_fd2);
     EXPECT_GE(cpuinfo_fd2, 0);
     char buf2[3];
-    memset(buf2, 1, sizeof(buf2));
+    UNSAFE_TODO(memset(buf2, 1, sizeof(buf2)));
     int read_len2 = read(cpuinfo_fd2, buf2, sizeof(buf2));
     EXPECT_GT(read_len1, 0);
 
@@ -417,7 +421,7 @@ void TestOpenCpuinfo(bool fast_check_in_client, bool recursive) {
     EXPECT_EQ(read_len1, read_len2);
     // Compare the cpuinfo as returned by the broker with the one we opened
     // ourselves.
-    EXPECT_EQ(memcmp(buf, buf2, read_len1), 0);
+    UNSAFE_TODO(EXPECT_EQ(memcmp(buf, buf2, read_len1), 0));
 
     ASSERT_TRUE(TestUtils::CurrentProcessHasChildren());
   }
@@ -460,7 +464,7 @@ TEST(BrokerProcess, OpenFileRW) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadWrite(tempfile_name)};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED);
 
@@ -487,7 +491,7 @@ TEST(BrokerProcess, OpenFileRW) {
   len = read(tempfile.fd(), buf, sizeof(buf));
 
   ASSERT_EQ(len, static_cast<ssize_t>(sizeof(test_text)));
-  ASSERT_EQ(memcmp(test_text, buf, sizeof(test_text)), 0);
+  UNSAFE_TODO(ASSERT_EQ(memcmp(test_text, buf, sizeof(test_text)), 0));
 
   ASSERT_EQ(close(tempfile2), 0);
 }
@@ -502,7 +506,7 @@ SANDBOX_TEST(BrokerProcess, BrokerDied) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadOnly(kCpuInfo)};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                             true /* fast_check_in_client */,
@@ -535,7 +539,7 @@ void TestOpenComplexFlags(bool fast_check_in_client) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadOnly(kCpuInfo)};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                             fast_check_in_client);
@@ -604,9 +608,9 @@ SANDBOX_TEST_ALLOW_NOISE(BrokerProcess, MAYBE_RecvMsgDescriptorLeak) {
   LOG(INFO) << "Ensure Android LOG socket is allocated";
 
   // Find the four lowest available file descriptors.
-  int available_fds[4];
-  SANDBOX_ASSERT(0 == pipe(available_fds));
-  SANDBOX_ASSERT(0 == pipe(available_fds + 2));
+  std::array<int, 4> available_fds;
+  SANDBOX_ASSERT(0 == pipe(available_fds.data()));
+  SANDBOX_ASSERT(0 == pipe(base::span(available_fds).subspan(2u).data()));
 
   // Save one FD to send to the broker later, and close the others.
   base::ScopedFD message_fd(available_fds[0]);
@@ -619,8 +623,10 @@ SANDBOX_TEST_ALLOW_NOISE(BrokerProcess, MAYBE_RecvMsgDescriptorLeak) {
   // descriptors a process can have: it only limits the highest value that can
   // be assigned to newly-created descriptors allocated by the process.)
   const rlim_t fd_limit =
-      1 + *std::max_element(available_fds,
-                            available_fds + std::size(available_fds));
+      1 + *std::max_element(available_fds.data(),
+                            base::span<int>(available_fds)
+                                .subspan(std::size(available_fds))
+                                .data());
 
   struct rlimit rlim;
   SANDBOX_ASSERT(0 == getrlimit(RLIMIT_NOFILE, &rlim));
@@ -635,7 +641,7 @@ SANDBOX_TEST_ALLOW_NOISE(BrokerProcess, MAYBE_RecvMsgDescriptorLeak) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadOnly(kCpuInfo)};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED);
 
@@ -691,7 +697,7 @@ TEST(BrokerProcess, BrokerDiesOnClosedChannel) {
 
   std::vector<BrokerFilePermission> permissions = {
       BrokerFilePermission::ReadOnly("/proc/cpuinfo")};
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                             true /* fast_check_in_client */,
@@ -730,7 +736,7 @@ void TestRewriteProcSelfHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with no permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, proc_status_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -744,23 +750,25 @@ void TestRewriteProcSelfHelper(bool fast_check_in_client) {
 
     // Reading /proc/self/status should return the same PID as the current
     // process's PID, not the broker's.
-    char buf[4096];
+    std::array<char, 4096> buf;
 
-    ssize_t num_read = HANDLE_EINTR(read(fd, buf, sizeof(buf)));
+    ssize_t num_read = HANDLE_EINTR(
+        read(fd, buf.data(), (buf.size() * sizeof(decltype(buf)::value_type))));
     ASSERT_GE(IGNORE_EINTR(close(fd)), 0);
 
     ASSERT_GT(num_read, 0);
 
-    base::StringPiece status(buf, static_cast<size_t>(num_read));
-    base::StringPiece tracer("Pid:\t");
+    std::string_view status(buf.data(), static_cast<size_t>(num_read));
+    std::string_view tracer("Pid:\t");
 
-    base::StringPiece::size_type pid_index = status.find(tracer);
-    ASSERT_NE(pid_index, base::StringPiece::npos);
+    std::string_view::size_type pid_index = status.find(tracer);
+    ASSERT_NE(pid_index, std::string_view::npos);
     pid_index += tracer.size();
-    base::StringPiece::size_type pid_end_index = status.find('\n', pid_index);
-    ASSERT_NE(pid_end_index, base::StringPiece::npos);
+    std::string_view::size_type pid_end_index = status.find('\n', pid_index);
+    ASSERT_NE(pid_end_index, std::string_view::npos);
 
-    base::StringPiece pid_str(buf + pid_index, pid_end_index - pid_index);
+    std::string_view pid_str(base::span<char>(buf).subspan(pid_index).data(),
+                             pid_end_index - pid_index);
     int pid = 0;
     ASSERT_TRUE(base::StringToInt(pid_str, &pid));
 
@@ -800,7 +808,7 @@ TEST(BrokerProcess, CreateFile) {
       BrokerFilePermission::ReadWriteCreate(permfile_name),
   };
 
-  auto policy = absl::make_optional<BrokerSandboxConfig>(
+  auto policy = std::make_optional<BrokerSandboxConfig>(
       command_set, permissions, kFakeErrnoSentinel);
   BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED);
 
@@ -872,7 +880,7 @@ TEST(BrokerProcess, CreateFile) {
     char buf[1024];
     ssize_t len = HANDLE_EINTR(read(fd_check, buf, sizeof(buf)));
     ASSERT_EQ(len, static_cast<ssize_t>(sizeof(kTestText)));
-    ASSERT_EQ(memcmp(kTestText, buf, sizeof(kTestText)), 0);
+    UNSAFE_TODO(ASSERT_EQ(memcmp(kTestText, buf, sizeof(kTestText)), 0));
   }
 
   // Cleanup.
@@ -903,14 +911,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
     // Actual file with permissions to see file but command not allowed.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(tempfile_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(-kFakeErrnoSentinel,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   tempfile_name, follow_links, &sb));
@@ -922,14 +930,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
   {
     // Nonexistent file with no permissions to see file.
     std::vector<BrokerFilePermission> permissions;
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(-kFakeErrnoSentinel,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   nonesuch_name, follow_links, &sb));
@@ -937,14 +945,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
   {
     // Actual file with no permission to see file.
     std::vector<BrokerFilePermission> permissions;
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(-kFakeErrnoSentinel,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   tempfile_name, follow_links, &sb));
@@ -953,14 +961,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
     // Nonexistent file with permissions to see file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(nonesuch_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(-ENOENT,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   nonesuch_name, follow_links, &sb));
@@ -1000,14 +1008,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
     // Nonexistent file with permissions to create file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadWriteCreate(nonesuch_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(-ENOENT,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   nonesuch_name, follow_links, &sb));
@@ -1049,14 +1057,14 @@ void TestStatHelper(bool fast_check_in_client, bool follow_links) {
     // Actual file with permissions to see file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(tempfile_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
 
     ASSERT_TRUE(open_broker.Fork(base::BindOnce(&NoOpCallback)));
 
-    memset(&sb, 0, sizeof(sb));
+    UNSAFE_TODO(memset(&sb, 0, sizeof(sb)));
     EXPECT_EQ(0,
               open_broker.GetBrokerClientSignalBased()->DefaultStatForTesting(
                   tempfile_name, follow_links, &sb));
@@ -1119,7 +1127,7 @@ void TestRenameHelper(bool fast_check_in_client) {
   {
     // Check rename fails with write permissions to both files but command
     // itself is not allowed.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1140,7 +1148,7 @@ void TestRenameHelper(bool fast_check_in_client) {
     // Check rename fails when no permission to new file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadWriteCreate(oldpath)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1158,7 +1166,7 @@ void TestRenameHelper(bool fast_check_in_client) {
     // Check rename fails when no permission to old file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadWriteCreate(newpath)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1177,7 +1185,7 @@ void TestRenameHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(oldpath),
         BrokerFilePermission::ReadWriteCreate(newpath)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1196,7 +1204,7 @@ void TestRenameHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadWriteCreate(oldpath),
         BrokerFilePermission::ReadOnly(newpath)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1212,7 +1220,7 @@ void TestRenameHelper(bool fast_check_in_client) {
   }
   {
     // Check rename passes with write permissions to both files.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1260,7 +1268,7 @@ void TestReadlinkHelper(bool fast_check_in_client) {
     // Actual file with permissions to see file but command itself not allowed.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(newpath_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1277,7 +1285,7 @@ void TestReadlinkHelper(bool fast_check_in_client) {
   {
     // Nonexistent file with no permissions to see file.
     std::vector<BrokerFilePermission> permissions;
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1290,7 +1298,7 @@ void TestReadlinkHelper(bool fast_check_in_client) {
   {
     // Actual file with no permissions to see file.
     std::vector<BrokerFilePermission> permissions;
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1304,7 +1312,7 @@ void TestReadlinkHelper(bool fast_check_in_client) {
     // Nonexistent file with permissions to see file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(nonesuch_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1317,7 +1325,7 @@ void TestReadlinkHelper(bool fast_check_in_client) {
     // Actual file with permissions to see file.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(newpath_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1326,13 +1334,13 @@ void TestReadlinkHelper(bool fast_check_in_client) {
     ssize_t retlen = open_broker.GetBrokerClientSignalBased()->Readlink(
         newpath_name, buf, sizeof(buf));
     EXPECT_TRUE(retlen == static_cast<ssize_t>(strlen(oldpath_name)));
-    EXPECT_EQ(0, memcmp(oldpath_name, buf, retlen));
+    UNSAFE_TODO(EXPECT_EQ(0, memcmp(oldpath_name, buf, retlen)));
   }
   {
     // Actual file with permissions to see file, but too small a buffer.
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::ReadOnly(newpath_name)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1380,7 +1388,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
 
   {
     // Actual file with permissions to use but command itself not allowed.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1394,7 +1402,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with no permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1406,7 +1414,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Actual file with no permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1417,7 +1425,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Nonexistent file with insufficient permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1429,7 +1437,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Actual file with insufficient permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1440,7 +1448,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Nonexistent file with insufficient permissions to see file, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1452,7 +1460,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Actual file with insufficient permissions to see file, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1463,7 +1471,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Nonexistent file with permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1474,7 +1482,7 @@ void TestMkdirHelper(bool fast_check_in_client) {
   }
   {
     // Actual file with permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1524,7 +1532,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Actual dir with permissions to use but command itself not allowed.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1539,7 +1547,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent dir with no permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1552,7 +1560,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Actual dir with no permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1565,7 +1573,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent dir with insufficient permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1578,7 +1586,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Actual dir with insufficient permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1591,7 +1599,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent dir with insufficient permissions to see dir, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1604,7 +1612,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Actual dir with insufficient permissions to see dir, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1617,7 +1625,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent dir with permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1630,7 +1638,7 @@ void TestRmdirHelper(bool fast_check_in_client) {
 
   {
     // Actual dir with permissions to see dir.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1681,7 +1689,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Actual file with permissions to use but command itself not allowed.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1696,7 +1704,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with no permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1709,7 +1717,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Actual file with no permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, no_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1722,7 +1730,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with insufficient permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1735,7 +1743,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Actual file with insufficient permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, ro_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1748,7 +1756,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with insufficient permissions to see file, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1761,7 +1769,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Actual file with insufficient permissions to see file, case 2.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rw_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1774,7 +1782,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Nonexistent file with permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1787,7 +1795,7 @@ void TestUnlinkHelper(bool fast_check_in_client) {
 
   {
     // Actual file with permissions to see file.
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, rwc_permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1834,7 +1842,7 @@ void TestInotifyAddWatchHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::InotifyAddWatchWithIntermediateDirs(
             nested_temp_dir_str)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         BrokerCommandSet(), permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1855,7 +1863,7 @@ void TestInotifyAddWatchHelper(bool fast_check_in_client) {
   {
     // Try to watch a directory with no permission.
     std::vector<BrokerFilePermission> permissions;
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1874,7 +1882,7 @@ void TestInotifyAddWatchHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::InotifyAddWatchWithIntermediateDirs(
             nested_temp_dir_str)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1894,7 +1902,7 @@ void TestInotifyAddWatchHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::InotifyAddWatchWithIntermediateDirs(
             nested_temp_dir_str)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -1926,7 +1934,7 @@ void TestInotifyAddWatchHelper(bool fast_check_in_client) {
     std::vector<BrokerFilePermission> permissions = {
         BrokerFilePermission::InotifyAddWatchWithIntermediateDirs(
             nested_temp_dir_str)};
-    auto policy = absl::make_optional<BrokerSandboxConfig>(
+    auto policy = std::make_optional<BrokerSandboxConfig>(
         command_set, permissions, kFakeErrnoSentinel);
     BrokerProcess open_broker(std::move(policy), BrokerType::SIGNAL_BASED,
                               fast_check_in_client);
@@ -2058,7 +2066,7 @@ TEST(BrokerProcess, IsSyscallAllowed) {
       BrokerCommand command = test.first;
       const base::flat_set<int>& sysnos = test.second;
       SCOPED_TRACE(base::StringPrintf("fast check, command=%d", command));
-      auto policy = absl::make_optional<BrokerSandboxConfig>(
+      auto policy = std::make_optional<BrokerSandboxConfig>(
           MakeBrokerCommandSet({command}), std::vector<BrokerFilePermission>(),
           ENOSYS);
       BrokerProcess process(std::move(policy), BrokerType::SIGNAL_BASED,
@@ -2075,7 +2083,7 @@ TEST(BrokerProcess, IsSyscallAllowed) {
     {
       BrokerCommand command = test.first;
       SCOPED_TRACE(base::StringPrintf("no fast check, command=%d", command));
-      auto policy = absl::make_optional<BrokerSandboxConfig>(
+      auto policy = std::make_optional<BrokerSandboxConfig>(
           MakeBrokerCommandSet({command}), std::vector<BrokerFilePermission>(),
           ENOSYS);
       BrokerProcess process(std::move(policy), BrokerType::SIGNAL_BASED,

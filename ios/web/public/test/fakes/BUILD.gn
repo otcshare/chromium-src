@@ -3,28 +3,26 @@
 # found in the LICENSE file.
 
 source_set("fakes") {
-  configs += [ "//build/config/compiler:enable_arc" ]
   testonly = true
 
   deps = [
     "//base",
+    "//components/sessions:session_id",
     "//ios/web/common",
     "//ios/web/common:uikit",
-    "//ios/web/js_messaging:web_frames_manager_impl_header",
+    "//ios/web/js_messaging",
     "//ios/web/navigation:core",
-    "//ios/web/public/deprecated",
     "//ios/web/public/download",
     "//ios/web/public/find_in_page",
     "//ios/web/public/js_messaging",
     "//ios/web/public/permissions",
     "//ios/web/public/security",
-    "//ios/web/public/session",
     "//ios/web/public/test:util",
     "//ios/web/session",
     "//ios/web/test:test_constants",
     "//ios/web/web_state:policy_decision_state_tracker",
     "//ios/web/web_state/ui:crw_web_view_navigation_proxy",
-    "//ios/web/webui:webui",
+    "//ios/web/webui",
     "//net",
     "//net:test_support",
     "//testing/gtest",
@@ -38,6 +36,12 @@ source_set("fakes") {
     "async_web_state_policy_decider.mm",
     "crw_fake_find_in_page_manager_delegate.h",
     "crw_fake_find_in_page_manager_delegate.mm",
+    "crw_fake_find_interaction.h",
+    "crw_fake_find_interaction.mm",
+    "crw_fake_find_session.h",
+    "crw_fake_find_session.mm",
+    "crw_fake_web_frames_manager_observer.h",
+    "crw_fake_web_frames_manager_observer.mm",
     "crw_fake_web_state_observer.h",
     "crw_fake_web_state_observer.mm",
     "crw_fake_web_state_policy_decider.h",

@@ -43,12 +43,12 @@ const OAuth2Info& OAuth2ManifestHandler::GetOAuth2Info(
 bool OAuth2ManifestHandler::Parse(Extension* extension, std::u16string* error) {
   OAuth2ManifestKeys manifest_keys;
   if (!OAuth2ManifestKeys::ParseFromDictionary(
-          extension->manifest()->available_values().GetDict(), &manifest_keys,
-          error)) {
+          extension->manifest()->available_values(), manifest_keys, *error)) {
     return false;
   }
 
-  OAuth2Info& info = manifest_keys.oauth2;
+  CHECK(manifest_keys.oauth2.has_value());
+  OAuth2Info& info = *manifest_keys.oauth2;
 
   // Allowlisted component apps (where the allowlisting is enforced by the
   // features files) using `auto_approve` may use Chrome's client ID by omitting

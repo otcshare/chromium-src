@@ -4,9 +4,9 @@
 
 #include "chromecast/browser/metrics/cast_browser_metrics.h"
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chromecast/base/chromecast_switches.h"
@@ -62,9 +62,6 @@ void CastBrowserMetrics::Initialize() {
   auto stability_provider_unique_ptr =
       std::make_unique<CastStabilityMetricsProvider>(
           metrics_service, metrics_service_client_->pref_service());
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  auto* stability_provider = stability_provider_unique_ptr.get();
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   metrics_service->RegisterMetricsProvider(
       std::move(stability_provider_unique_ptr));
 
@@ -89,11 +86,9 @@ void CastBrowserMetrics::Initialize() {
   // Start external metrics collection, which feeds data from external
   // processes into the main external metrics.
   external_metrics_ = new ExternalMetrics(
-      stability_provider,
       GetHomePathASCII(kExternalUmaEventsRelativePath).value());
   external_metrics_->Start();
-  platform_metrics_ =
-      new ExternalMetrics(stability_provider, kPlatformUmaEventsPath);
+  platform_metrics_ = new ExternalMetrics(kPlatformUmaEventsPath);
   platform_metrics_->Start();
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 }

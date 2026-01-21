@@ -63,20 +63,24 @@ class KioskExternalUpdater : public disks::DiskMountManager::Observer,
       const disks::DiskMountManager::MountPoint& mount_info) override;
 
   // KioskExternalUpdateValidatorDelegate overrides:
-  void OnExternalUpdateUnpackSuccess(const std::string& app_id,
-                                     const std::string& version,
-                                     const std::string& min_browser_version,
-                                     const base::FilePath& temp_dir) override;
+  void OnExternalUpdateUnpackSuccess(
+      const std::string& app_id,
+      const std::string& version,
+      const std::string& min_browser_version,
+      const base::FilePath& temp_dir,
+      const base::FilePath& validated_crx_path) override;
   void OnExternalUpdateUnpackFailure(const std::string& app_id) override;
+  void OnExternalUpdateCopyFailure(
+      const std::string& app_id,
+      const base::FilePath& crx_file_path) override;
 
   // Processes the parsed external update manifest, check the ErrorCode in
-  // |result| for any manifest parsing error.
-  using ParseManifestResult =
-      std::pair<std::unique_ptr<base::DictionaryValue>, ErrorCode>;
+  // `result` for any manifest parsing error.
+  using ParseManifestResult = std::pair<base::Value, ErrorCode>;
   void ProcessParsedManifest(const base::FilePath& external_update_dir,
                              const ParseManifestResult& result);
 
-  // Returns true if |external_update_| is interrupted before the updating
+  // Returns true if `external_update_` is interrupted before the updating
   // completes.
   bool CheckExternalUpdateInterrupted();
 
@@ -90,21 +94,20 @@ class KioskExternalUpdater : public disks::DiskMountManager::Observer,
   // completed successfully.
   bool IsAllExternalUpdatesSucceeded() const;
 
-  // Returns true if the app with |app_id| should be updated to
-  // |external_extension|.
+  // Returns true if the app with `app_id` should be updated to
+  // `external_extension`.
   bool ShouldDoExternalUpdate(const std::string& app_id,
                               const std::string& version,
                               const std::string& min_browser_version);
 
   // Installs the validated extension into cache.
-  // |crx_copied| indicates whether the |crx_file| is copied successfully.
+  // `crx_copied` indicates whether the `crx_file` is copied successfully.
   void PutValidatedExtension(const std::string& app_id,
                              const base::FilePath& crx_file,
-                             const std::string& version,
-                             bool crx_copied);
+                             const std::string& version);
 
   // Called upon completion of installing the validated external extension into
-  // the local cache. |success| is true if the operation succeeded.
+  // the local cache. `success` is true if the operation succeeded.
   void OnPutValidatedExtension(const std::string& app_id, bool success);
 
   void NotifyKioskUpdateProgress(const std::u16string& message);

@@ -4,10 +4,12 @@
 
 #include "net/cert/ct_serialization.h"
 
+#include <array>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/strings/string_view_util.h"
 #include "net/base/test_completion_callback.h"
 #include "net/cert/merkle_tree_leaf.h"
 #include "net/cert/signed_certificate_timestamp.h"
@@ -34,7 +36,7 @@ class CtSerializationTest : public ::testing::Test {
 };
 
 TEST_F(CtSerializationTest, DecodesDigitallySigned) {
-  base::StringPiece digitally_signed(test_digitally_signed_);
+  std::string_view digitally_signed(test_digitally_signed_);
   ct::DigitallySigned parsed;
 
   ASSERT_TRUE(ct::DecodeDigitallySigned(&digitally_signed, &parsed));
@@ -58,8 +60,8 @@ TEST_F(CtSerializationTest, DecodesDigitallySigned) {
 
 
 TEST_F(CtSerializationTest, FailsToDecodePartialDigitallySigned) {
-  base::StringPiece digitally_signed(test_digitally_signed_);
-  base::StringPiece partial_digitally_signed(
+  std::string_view digitally_signed(test_digitally_signed_);
+  std::string_view partial_digitally_signed(
       digitally_signed.substr(0, test_digitally_signed_.size() - 5));
   ct::DigitallySigned parsed;
 
@@ -104,8 +106,7 @@ TEST_F(CtSerializationTest, EncodesSignedEntryForPrecert) {
   // First two bytes are the log entry type.
   EXPECT_EQ(std::string("\x00\x01", 2), encoded.substr(0, 2));
   // Next comes the 32-byte issuer key hash
-  EXPECT_THAT(encoded.substr(2, 32),
-              ElementsAreArray(entry.issuer_key_hash.data));
+  EXPECT_THAT(encoded.substr(2, 32), ElementsAreArray(entry.issuer_key_hash));
   // Then the length of the TBS cert (604 bytes = 0x237)
   EXPECT_EQ(std::string("\x00\x02\x37", 3), encoded.substr(34, 3));
   // Then the TBS cert itself
@@ -137,8 +138,8 @@ TEST_F(CtSerializationTest, EncodesV1SCTSignedData) {
 
 TEST_F(CtSerializationTest, DecodesSCTList) {
   // Two items in the list: "abc", "def"
-  base::StringPiece encoded("\x0\xa\x0\x3\x61\x62\x63\x0\x3\x64\x65\x66", 12);
-  std::vector<base::StringPiece> decoded;
+  std::string_view encoded("\x0\xa\x0\x3\x61\x62\x63\x0\x3\x64\x65\x66", 12);
+  std::vector<std::string_view> decoded;
 
   ASSERT_TRUE(ct::DecodeSCTList(encoded, &decoded));
   ASSERT_STREQ("abc", decoded[0].data());
@@ -147,15 +148,15 @@ TEST_F(CtSerializationTest, DecodesSCTList) {
 
 TEST_F(CtSerializationTest, FailsDecodingInvalidSCTList) {
   // A list with one item that's too short
-  base::StringPiece encoded("\x0\xa\x0\x3\x61\x62\x63\x0\x5\x64\x65\x66", 12);
-  std::vector<base::StringPiece> decoded;
+  std::string_view encoded("\x0\xa\x0\x3\x61\x62\x63\x0\x5\x64\x65\x66", 12);
+  std::vector<std::string_view> decoded;
 
   ASSERT_FALSE(ct::DecodeSCTList(encoded, &decoded));
 }
 
 TEST_F(CtSerializationTest, EncodeSignedCertificateTimestamp) {
   std::string encoded_test_sct(ct::GetTestSignedCertificateTimestamp());
-  base::StringPiece encoded_sct(encoded_test_sct);
+  std::string_view encoded_sct(encoded_test_sct);
 
   scoped_refptr<ct::SignedCertificateTimestamp> sct;
   ASSERT_TRUE(ct::DecodeSignedCertificateTimestamp(&encoded_sct, &sct));
@@ -167,7 +168,7 @@ TEST_F(CtSerializationTest, EncodeSignedCertificateTimestamp) {
 
 TEST_F(CtSerializationTest, DecodesSignedCertificateTimestamp) {
   std::string encoded_test_sct(ct::GetTestSignedCertificateTimestamp());
-  base::StringPiece encoded_sct(encoded_test_sct);
+  std::string_view encoded_sct(encoded_test_sct);
 
   scoped_refptr<ct::SignedCertificateTimestamp> sct;
   ASSERT_TRUE(ct::DecodeSignedCertificateTimestamp(&encoded_sct, &sct));
@@ -184,14 +185,14 @@ TEST_F(CtSerializationTest, DecodesSignedCertificateTimestamp) {
 
 TEST_F(CtSerializationTest, FailsDecodingInvalidSignedCertificateTimestamp) {
   // Invalid version
-  base::StringPiece invalid_version_sct("\x2\x0", 2);
+  std::string_view invalid_version_sct("\x2\x0", 2);
   scoped_refptr<ct::SignedCertificateTimestamp> sct;
 
   ASSERT_FALSE(
       ct::DecodeSignedCertificateTimestamp(&invalid_version_sct, &sct));
 
   // Valid version, invalid length (missing data)
-  base::StringPiece invalid_length_sct("\x0\xa\xb\xc", 4);
+  std::string_view invalid_length_sct("\x0\xa\xb\xc", 4);
   ASSERT_FALSE(
       ct::DecodeSignedCertificateTimestamp(&invalid_length_sct, &sct));
 }
@@ -239,7 +240,7 @@ TEST_F(CtSerializationTest, EncodesMerkleTreeLeafForPrecert) {
   EXPECT_EQ(std::string("\x00\x01", 2), encoded.substr(10, 2)) <<
       "Log entry type encoded incorrectly";
   EXPECT_THAT(encoded.substr(12, 32),
-              ElementsAreArray(tree_leaf.signed_entry.issuer_key_hash.data))
+              ElementsAreArray(tree_leaf.signed_entry.issuer_key_hash))
       << "Issuer key hash encoded incorrectly";
   EXPECT_EQ(std::string("\x00\x02\x37", 3), encoded.substr(44, 3)) <<
       "TBS certificate length encoded incorrectly";
@@ -265,7 +266,8 @@ TEST_F(CtSerializationTest, EncodesValidSignedTreeHead) {
   ASSERT_EQ(50u, encoded.length());
   std::string expected_buffer(
       "\x0\x1\x0\x0\x1\x45\x3c\x5f\xb8\x35\x0\x0\x0\x0\x0\x0\x0\x15", 18);
-  expected_buffer.append(ct::GetSampleSTHSHA256RootHash());
+  expected_buffer.append(
+      base::as_string_view(ct::GetSampleSTHSHA256RootHash()));
   ASSERT_EQ(expected_buffer, encoded);
 }
 

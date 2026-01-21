@@ -2,100 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {AppearanceBrowserProxy, AppearanceBrowserProxyImpl,HomeUrlInputElement, SettingsAppearancePageElement, SystemTheme} from 'chrome://settings/settings.js';
-import {assertEquals,assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-// clang-format on
+import type {CustomizeColorSchemeModeClientRemote, SettingsAppearancePageElement, SettingsDropdownMenuElement, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
+import {AppearanceBrowserProxyImpl, ColorSchemeMode, CustomizeColorSchemeModeBrowserProxy, CustomizeColorSchemeModeClientCallbackRouter, CustomizeColorSchemeModeHandlerRemote, loadTimeData, SystemTheme} from 'chrome://settings/settings.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {TestMock} from 'chrome://webui-test/test_mock.js';
+import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-class TestAppearanceBrowserProxy extends TestBrowserProxy implements
-    AppearanceBrowserProxy {
-  private defaultZoom_: number = 1;
-  private isChildAccount_: boolean = false;
-  private isHomeUrlValid_: boolean = true;
-
-  constructor() {
-    super([
-      'getDefaultZoom',
-      'getThemeInfo',
-      'isChildAccount',
-      'useDefaultTheme',
-      // <if expr="is_linux">
-      'useGtkTheme',
-      'useQtTheme',
-      // </if>
-      'validateStartupPage',
-    ]);
-  }
-
-  getDefaultZoom() {
-    this.methodCalled('getDefaultZoom');
-    return Promise.resolve(this.defaultZoom_);
-  }
-
-  getThemeInfo(themeId: string) {
-    this.methodCalled('getThemeInfo', themeId);
-    return Promise.resolve({
-      id: '',
-      name: 'Sports car red',
-      shortName: '',
-      description: '',
-      version: '',
-      mayDisable: false,
-      enabled: false,
-      isApp: false,
-      offlineEnabled: false,
-      optionsUrl: '',
-      permissions: [],
-      hostPermissions: [],
-    });
-  }
-
-  isChildAccount() {
-    this.methodCalled('isChildAccount');
-    return this.isChildAccount_;
-  }
-
-  useDefaultTheme() {
-    this.methodCalled('useDefaultTheme');
-  }
-
-  // <if expr="is_linux">
-  useGtkTheme() {
-    this.methodCalled('useGtkTheme');
-  }
-
-  useQtTheme() {
-    this.methodCalled('useQtTheme');
-  }
-  // </if>
-
-  setDefaultZoom(defaultZoom: number) {
-    this.defaultZoom_ = defaultZoom;
-  }
-
-  setIsChildAccount(isChildAccount: boolean) {
-    this.isChildAccount_ = isChildAccount;
-  }
-
-  validateStartupPage(url: string) {
-    this.methodCalled('validateStartupPage', url);
-    return Promise.resolve(this.isHomeUrlValid_);
-  }
-
-  setValidStartupPageResponse(isValid: boolean) {
-    this.isHomeUrlValid_ = isValid;
-  }
-}
+import {TestAppearanceBrowserProxy} from './test_appearance_browser_proxy.js';
 
 let appearancePage: SettingsAppearancePageElement;
 let appearanceBrowserProxy: TestAppearanceBrowserProxy;
+let colorSchemeHandler: TestMock<CustomizeColorSchemeModeHandlerRemote>&
+    CustomizeColorSchemeModeHandlerRemote;
+let colorSchemeCallbackRouter: CustomizeColorSchemeModeClientRemote;
 
 function createAppearancePage() {
   appearanceBrowserProxy.reset();
   document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+  colorSchemeHandler =
+      TestMock.fromClass(CustomizeColorSchemeModeHandlerRemote);
+  CustomizeColorSchemeModeBrowserProxy.setInstance(
+      colorSchemeHandler, new CustomizeColorSchemeModeClientCallbackRouter());
+  colorSchemeCallbackRouter = CustomizeColorSchemeModeBrowserProxy.getInstance()
+                                  .callbackRouter.$.bindNewPipeAndPassRemote();
 
   appearancePage = document.createElement('settings-appearance-page');
   appearancePage.set('prefs', {
@@ -103,25 +34,46 @@ function createAppearancePage() {
       theme: {
         policy: {
           color: {
+            type: chrome.settingsPrivate.PrefType.NUMBER,
             value: 0,
           },
         },
       },
     },
+    browser: {
+      show_forward_button: {
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      show_home_button: {
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: false,
+      },
+    },
     extensions: {
       theme: {
         id: {
+          type: chrome.settingsPrivate.PrefType.STRING,
           value: '',
         },
         system_theme: {
+          type: chrome.settingsPrivate.PrefType.NUMBER,
           value: SystemTheme.DEFAULT,
         },
       },
     },
-  });
-
-  appearancePage.set('pageVisibility', {
-    setWallpaper: true,
+    tab_search: {
+      is_right_aligned: {
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: false,
+      },
+    },
+    vertical_tabs: {
+      enabled: {
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: false,
+      },
+    },
   });
 
   document.body.appendChild(appearancePage);
@@ -132,6 +84,7 @@ suite('AppearanceHandler', function() {
   setup(function() {
     appearanceBrowserProxy = new TestAppearanceBrowserProxy();
     AppearanceBrowserProxyImpl.setInstance(appearanceBrowserProxy);
+
     createAppearancePage();
   });
 
@@ -144,16 +97,22 @@ suite('AppearanceHandler', function() {
   // <if expr="is_linux">
   const SYSTEM_THEME_PREF = 'prefs.extensions.theme.system_theme.value';
 
-  test('useDefaultThemeLinux', function() {
+  test('useDefaultThemeLinux', async () => {
+    await colorSchemeHandler.whenCalled('initializeColorSchemeMode');
+
     assertFalse(!!appearancePage.get(THEME_ID_PREF));
     assertEquals(appearancePage.get(SYSTEM_THEME_PREF), SystemTheme.DEFAULT);
     // No custom nor system theme in use; "USE CLASSIC" should be hidden.
     assertFalse(!!appearancePage.shadowRoot!.querySelector('#useDefault'));
+    // The color scheme toggle should be visible when the classic theme is used.
+    assertTrue(isVisible(appearancePage.$.colorSchemeModeRow));
 
     appearancePage.set(SYSTEM_THEME_PREF, SystemTheme.GTK);
     flush();
     // If the system theme is in use, "USE CLASSIC" should show.
     assertTrue(!!appearancePage.shadowRoot!.querySelector('#useDefault'));
+    // The color scheme toggle should be hidden when the GTK theme is used.
+    assertFalse(isVisible(appearancePage.$.colorSchemeModeRow));
 
     appearancePage.set(SYSTEM_THEME_PREF, SystemTheme.DEFAULT);
     appearancePage.set(THEME_ID_PREF, 'fake theme id');
@@ -164,16 +123,20 @@ suite('AppearanceHandler', function() {
         appearancePage.shadowRoot!.querySelector<HTMLElement>('#useDefault');
     assertTrue(!!button);
 
-    button!.click();
+    button.click();
     return appearanceBrowserProxy.whenCalled('useDefaultTheme');
   });
 
-  test('useGtkThemeLinux', function() {
+  test('useGtkThemeLinux', async () => {
+    await colorSchemeHandler.whenCalled('initializeColorSchemeMode');
+
     assertFalse(!!appearancePage.get(THEME_ID_PREF));
     appearancePage.set(SYSTEM_THEME_PREF, SystemTheme.GTK);
     flush();
     // The "USE GTK+" button shouldn't be showing if it's already in use.
     assertFalse(!!appearancePage.shadowRoot!.querySelector('#useGtk'));
+    // The color scheme toggle should be hidden when the GTK theme is used.
+    assertFalse(isVisible(appearancePage.$.colorSchemeModeRow));
 
     appearanceBrowserProxy.setIsChildAccount(true);
     appearancePage.set(SYSTEM_THEME_PREF, SystemTheme.DEFAULT);
@@ -185,6 +148,9 @@ suite('AppearanceHandler', function() {
     assertTrue(
         appearancePage.shadowRoot!
             .querySelector<HTMLElement>('#themesSecondaryActions')!.hidden);
+    // The color scheme toggle should be visible when the classic theme is used,
+    // for child accounts.
+    assertTrue(isVisible(appearancePage.$.colorSchemeModeRow));
 
     appearanceBrowserProxy.setIsChildAccount(false);
     appearancePage.set(THEME_ID_PREF, 'fake theme id');
@@ -194,12 +160,14 @@ suite('AppearanceHandler', function() {
     assertFalse(
         appearancePage.shadowRoot!
             .querySelector<HTMLElement>('#themesSecondaryActions')!.hidden);
+    // The color scheme toggle should be visible when a custom theme is used.
+    assertTrue(isVisible(appearancePage.$.colorSchemeModeRow));
 
     const button =
         appearancePage.shadowRoot!.querySelector<HTMLElement>('#useGtk');
     assertTrue(!!button);
 
-    button!.click();
+    button.click();
     return appearanceBrowserProxy.whenCalled('useGtkTheme');
   });
   // </if>
@@ -217,7 +185,7 @@ suite('AppearanceHandler', function() {
         appearancePage.shadowRoot!.querySelector<HTMLElement>('#useDefault');
     assertTrue(!!button);
 
-    button!.click();
+    button.click();
     return appearanceBrowserProxy.whenCalled('useDefaultTheme');
   });
 
@@ -251,7 +219,7 @@ suite('AppearanceHandler', function() {
     assertEquals(
         null, appearancePage.shadowRoot!.querySelector('managed-dialog'));
 
-    button!.click();
+    button.click();
     flush();
 
     assertFalse(
@@ -259,10 +227,77 @@ suite('AppearanceHandler', function() {
   });
   // </if>
 
+  test('openCustomizeChrome', function() {
+    createAppearancePage();
+    const button =
+        appearancePage.shadowRoot!.querySelector<HTMLElement>('#openTheme');
+    assertTrue(!!button);
+
+    button.click();
+    return appearanceBrowserProxy.whenCalled('openCustomizeChrome');
+  });
+
+  test('openCustomizeChromeToolbarSection', function() {
+    createAppearancePage();
+    const button = appearancePage.shadowRoot!.querySelector<HTMLElement>(
+        '#customizeToolbar');
+    assertTrue(!!button);
+
+    button.click();
+    return appearanceBrowserProxy.whenCalled(
+        'openCustomizeChromeToolbarSection');
+  });
+
+  test('resetPinnedToolbarActions', async function() {
+    appearanceBrowserProxy.setPinnedToolbarActionsAreDefaultResponse(false);
+    createAppearancePage();
+    await microtasksFinished();
+
+    const button = appearancePage.shadowRoot!.querySelector<HTMLElement>(
+        '#resetPinnedToolbarActions');
+    assertTrue(!!button);
+
+    button.click();
+    return appearanceBrowserProxy.whenCalled('resetPinnedToolbarActions');
+  });
+
+  test('resetHiddenWhenNoPinnedActions', async function() {
+    appearanceBrowserProxy.setPinnedToolbarActionsAreDefaultResponse(true);
+    createAppearancePage();
+    await microtasksFinished();
+
+    const button = appearancePage.shadowRoot!.querySelector<HTMLElement>(
+        '#resetPinnedToolbarActions');
+    assertFalse(!!button);
+  });
+
+  test('ColorSchemeMode', async () => {
+    colorSchemeHandler.reset();
+    createAppearancePage();
+    await colorSchemeHandler.whenCalled('initializeColorSchemeMode');
+
+    assertTrue(isVisible(appearancePage.$.colorSchemeModeRow));
+    assertEquals(
+        1, colorSchemeHandler.getCallCount('initializeColorSchemeMode'));
+
+    // Assert that changes to the color scheme mode updates the select menu.
+    colorSchemeCallbackRouter.setColorSchemeMode(ColorSchemeMode.kLight);
+    assertEquals(
+        `${ColorSchemeMode.kLight}`,
+        appearancePage.$.colorSchemeModeSelect.value);
+
+    // Assert that changing the select menu updates the color scheme.
+    appearancePage.$.colorSchemeModeSelect.value = `${ColorSchemeMode.kDark}`;
+    appearancePage.$.colorSchemeModeSelect.dispatchEvent(new Event('change'));
+    const handlerArg =
+        await colorSchemeHandler.whenCalled('setColorSchemeMode');
+    assertEquals(ColorSchemeMode.kDark, handlerArg);
+  });
+
   test('default zoom handling', async function() {
     function getDefaultZoomText() {
       const zoomLevel = appearancePage.$.zoomLevel;
-      return zoomLevel.options[zoomLevel.selectedIndex]!.textContent!.trim();
+      return zoomLevel.options[zoomLevel.selectedIndex]!.textContent.trim();
     }
 
     await appearanceBrowserProxy.whenCalled('getDefaultZoom');
@@ -295,6 +330,7 @@ suite('AppearanceHandler', function() {
       autogenerated: {theme: {policy: {color: {value: 0}}}},
       browser: {show_home_button: {value: true}},
       extensions: {theme: {id: {value: ''}}},
+      toolbar: {pinned_actions: {value: []}},
     });
     flush();
 
@@ -303,57 +339,93 @@ suite('AppearanceHandler', function() {
   });
 
   test('show side panel options', function() {
-    loadTimeData.overrideValues({
-      showSidePanelOptions: true,
-    });
     createAppearancePage();
-    assertTrue(!!appearancePage.shadowRoot!.querySelector('#side-panel'));
-
-    loadTimeData.overrideValues({
-      showSidePanelOptions: false,
-    });
-    createAppearancePage();
-    assertFalse(!!appearancePage.shadowRoot!.querySelector('#side-panel'));
+    assertTrue(
+        !!appearancePage.shadowRoot!.querySelector('#sidePanelPosition'));
   });
 
+
+
+  test('show split view drag and drop options', async function() {
+    loadTimeData.overrideValues({
+      showSplitViewDragAndDropSetting: true,
+    });
+    createAppearancePage();
+    await microtasksFinished();
+    assertTrue(
+        !!appearancePage.shadowRoot!.querySelector('#splitViewDragAndDrop'));
+    assertFalse(!!appearancePage.shadowRoot!
+                      .querySelector<SettingsToggleButtonElement>(
+                          '#splitViewDragAndDrop')!.hidden);
+  });
+
+  test('split view drag and drop toggle updates pref', async function() {
+    loadTimeData.overrideValues({
+      showSplitViewDragAndDropSetting: true,
+    });
+    createAppearancePage();
+    appearancePage.set('prefs.browser.split_view_drag_and_drop_enabled', {
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    });
+    await microtasksFinished();
+
+    const toggle =
+        appearancePage.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+            '#splitViewDragAndDrop');
+    assertTrue(!!toggle);
+    assertTrue(toggle.checked);
+
+    toggle.click();
+    await microtasksFinished();
+    assertFalse(appearancePage.get(
+        'prefs.browser.split_view_drag_and_drop_enabled.value'));
+  });
 });
 
-suite('HomeUrlInput', function() {
-  let homeUrlInput: HomeUrlInputElement;
+suite('TabStripPositionSettings', () => {
+  setup(async () => {
+    loadTimeData.overrideValues({
+      showVerticalTabsEnabled: true,
+    });
 
-  setup(function() {
     appearanceBrowserProxy = new TestAppearanceBrowserProxy();
     AppearanceBrowserProxyImpl.setInstance(appearanceBrowserProxy);
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
-    homeUrlInput = document.createElement('home-url-input');
-    homeUrlInput.set(
-        'pref', {type: chrome.settingsPrivate.PrefType.URL, value: 'test'});
+    createAppearancePage();
 
-    document.body.appendChild(homeUrlInput);
-    flush();
+    await microtasksFinished();
   });
 
-  test('home button urls', async function() {
-    assertFalse(homeUrlInput.invalid);
-    assertEquals(homeUrlInput.value, 'test');
+  teardown(function() {
+    appearancePage.remove();
+  });
 
-    homeUrlInput.value = '@@@';
-    appearanceBrowserProxy.setValidStartupPageResponse(false);
-    homeUrlInput.$.input.dispatchEvent(
-        new CustomEvent('input', {bubbles: true, composed: true}));
+  test('Dropdown menu updates vertical_tabs.enabled.value', async function() {
+    assertFalse(appearancePage.get('prefs.vertical_tabs.enabled.value'));
 
-    const url = await appearanceBrowserProxy.whenCalled('validateStartupPage');
+    const dropdown =
+        appearancePage.shadowRoot!.querySelector<SettingsDropdownMenuElement>(
+            '#tabStripPosition');
+    assertTrue(!!dropdown);
 
-    assertEquals(homeUrlInput.value, url);
-    flush();
-    assertEquals(homeUrlInput.value, '@@@');  // Value hasn't changed.
-    assertTrue(homeUrlInput.invalid);
+    const selectElement = dropdown.$.dropdownMenu;
+    assertTrue(!!selectElement);
 
-    // Should reset to default value on change event.
-    homeUrlInput.$.input.dispatchEvent(
-        new CustomEvent('change', {bubbles: true, composed: true}));
-    flush();
-    assertEquals(homeUrlInput.value, 'test');
+    assertEquals('false', selectElement.value);
+
+    selectElement.value = 'true';
+    selectElement.dispatchEvent(new Event('change'));
+    await microtasksFinished();
+
+    assertTrue(appearancePage.get('prefs.vertical_tabs.enabled.value'));
+    assertEquals('true', selectElement.value);
+
+    selectElement.value = 'false';
+    selectElement.dispatchEvent(new Event('change'));
+    await microtasksFinished();
+
+    assertFalse(appearancePage.get('prefs.vertical_tabs.enabled.value'));
+    assertEquals('false', selectElement.value);
   });
 });

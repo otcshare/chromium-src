@@ -6,19 +6,19 @@
 
 #include <stddef.h>
 
+#include <string_view>
 #include <tuple>
 #include <utility>
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "components/browser_ui/client_certificate/android/jni_headers/SSLClientCertificateRequest_jni.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
@@ -29,15 +29,17 @@
 #include "net/cert/cert_database.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cert_request_info.h"
-#include "net/ssl/ssl_client_cert_type.h"
 #include "net/ssl/ssl_platform_key_android.h"
 #include "net/ssl/ssl_private_key.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/browser_ui/client_certificate/android/jni_headers/SSLClientCertificateRequest_jni.h"
+
 namespace browser_ui {
 namespace {
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 class SSLClientCertPendingRequests;
@@ -162,22 +164,8 @@ static void StartClientCertificateRequest(
   }
 
   // Build the |key_types| JNI parameter, as a String[]
-  std::vector<std::string> key_types;
-  for (size_t n = 0; n < request->cert_request_info()->cert_key_types.size();
-       ++n) {
-    switch (request->cert_request_info()->cert_key_types[n]) {
-      case net::CLIENT_CERT_RSA_SIGN:
-        key_types.push_back("RSA");
-        break;
-      case net::CLIENT_CERT_ECDSA_SIGN:
-        key_types.push_back("EC");
-        break;
-      default:
-        // Ignore unknown types.
-        break;
-    }
-  }
-
+  std::vector<std::string> key_types = net::SignatureAlgorithmsToJavaKeyTypes(
+      request->cert_request_info()->signature_algorithms);
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobjectArray> key_types_ref =
       base::android::ToJavaArrayOfStrings(env, key_types);
@@ -196,13 +184,13 @@ static void StartClientCertificateRequest(
   }
 
   // Build the |host_name| and |port| JNI parameters, as a String and
-  // a jint.
+  // a int32_t.
   ScopedJavaLocalRef<jstring> host_name_ref =
       base::android::ConvertUTF8ToJavaString(
           env, request->cert_request_info()->host_and_port.host());
 
   // Pass the address of the delegate through to Java.
-  jlong request_id = reinterpret_cast<intptr_t>(request.get());
+  int64_t request_id = reinterpret_cast<intptr_t>(request.get());
 
   if (!Java_SSLClientCertificateRequest_selectClientCertificate(
           env, request_id, window->GetJavaObject(), key_types_ref,
@@ -330,9 +318,9 @@ void ClientCertRequest::OnCancel() {
 // the user didn't select a certificate.
 static void JNI_SSLClientCertificateRequest_OnSystemRequestCompletion(
     JNIEnv* env,
-    jlong request_id,
-    const JavaParamRef<jobjectArray>& encoded_chain_ref,
-    const JavaParamRef<jobject>& private_key_ref) {
+    int64_t request_id,
+    const JavaRef<jobjectArray>& encoded_chain_ref,
+    const JavaRef<jobject>& private_key_ref) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // Take back ownership of the request object.
@@ -351,7 +339,7 @@ static void JNI_SSLClientCertificateRequest_OnSystemRequestCompletion(
     base::android::JavaArrayOfByteArrayToStringVector(env, encoded_chain_ref,
                                                       &encoded_chain_strings);
   }
-  const std::vector<base::StringPiece> encoded_chain(
+  const std::vector<std::string_view> encoded_chain(
       encoded_chain_strings.cbegin(), encoded_chain_strings.cend());
 
   // Create the X509Certificate object from the encoded chain.
@@ -374,7 +362,7 @@ static void JNI_SSLClientCertificateRequest_OnSystemRequestCompletion(
 }
 
 static void NotifyClientCertificatesChanged() {
-  net::CertDatabase::GetInstance()->NotifyObserversCertDBChanged();
+  net::CertDatabase::GetInstance()->NotifyObserversClientCertStoreChanged();
 }
 
 static void
@@ -414,3 +402,5 @@ size_t GetCountOfSSLClientCertificateSelectorForTesting(  // IN-TEST
 }
 
 }  // namespace browser_ui
+
+DEFINE_JNI(SSLClientCertificateRequest)

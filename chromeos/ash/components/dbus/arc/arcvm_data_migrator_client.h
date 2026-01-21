@@ -7,12 +7,19 @@
 
 #include "base/component_export.h"
 #include "base/observer_list_types.h"
+#include "base/time/time.h"
 #include "chromeos/ash/components/dbus/arcvm_data_migrator/arcvm_data_migrator.pb.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 
 namespace ash {
+
+// Timeout for the GetAndroidDataInfo D-Bus method of ArcVmDataMigrator.
+// We need to use a longer timeout than the default (25 seconds) because the
+// method can take long when the migration source has a large number of files.
+constexpr base::TimeDelta kArcVmDataMigratorGetAndroidDataInfoTimeout =
+    base::Minutes(10);
 
 // ArcVmDataMigratorClient is used to communicate with arcvm-data-migrator.
 class COMPONENT_EXPORT(ASH_DBUS_ARC) ArcVmDataMigratorClient {
@@ -23,6 +30,9 @@ class COMPONENT_EXPORT(ASH_DBUS_ARC) ArcVmDataMigratorClient {
     virtual void OnDataMigrationProgress(
         const arc::data_migrator::DataMigrationProgress& progress) = 0;
   };
+
+  using GetAndroidDataInfoCallback = chromeos::DBusMethodCallback<
+      arc::data_migrator::GetAndroidDataInfoResponse>;
 
   // Creates and initializes the global instance. |bus| must not be null.
   static void Initialize(dbus::Bus* bus);
@@ -35,6 +45,18 @@ class COMPONENT_EXPORT(ASH_DBUS_ARC) ArcVmDataMigratorClient {
 
   // Returns the global instance if initialized. May return null.
   static ArcVmDataMigratorClient* Get();
+
+  // Checks whether the host's /home/root/<hash>/android-data/data has data that
+  // needs to be migrated.
+  virtual void HasDataToMigrate(
+      const arc::data_migrator::HasDataToMigrateRequest& request,
+      chromeos::DBusMethodCallback<bool> callback) = 0;
+
+  // Obtains some information about the host's
+  // /home/root/<hash>/android-data/data.
+  virtual void GetAndroidDataInfo(
+      const arc::data_migrator::GetAndroidDataInfoRequest& request,
+      GetAndroidDataInfoCallback callback) = 0;
 
   // Starts the migration.
   virtual void StartMigration(

@@ -4,7 +4,12 @@
 
 #include "extensions/browser/updater/update_service_factory.h"
 
+#include <memory>
+
+#include "base/memory/scoped_refptr.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/update_client/configurator.h"
+#include "components/update_client/crx_cache.h"
 #include "components/update_client/update_client.h"
 #include "extensions/browser/extension_registry_factory.h"
 #include "extensions/browser/extensions_browser_client.h"
@@ -32,10 +37,20 @@ UpdateServiceFactory::UpdateServiceFactory()
 
 UpdateServiceFactory::~UpdateServiceFactory() = default;
 
-KeyedService* UpdateServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+UpdateServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new UpdateService(
-      context, ExtensionsBrowserClient::Get()->CreateUpdateClient(context));
+  scoped_refptr<update_client::Configurator> configurator =
+      ExtensionsBrowserClient::Get()->CreateUpdateClientConfigurator(context);
+  return std::make_unique<UpdateService>(
+      context, ExtensionsBrowserClient::Get()->CreateUpdateClient(configurator),
+      base::BindRepeating(&update_client::CrxCache::RemoveIfNot,
+                          configurator->GetCrxCache()));
+}
+
+content::BrowserContext* UpdateServiceFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return ExtensionsBrowserClient::Get()->GetContextForOriginalOnly(context);
 }
 
 }  // namespace extensions

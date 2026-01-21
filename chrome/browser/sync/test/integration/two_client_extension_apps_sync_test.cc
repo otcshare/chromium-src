@@ -3,16 +3,16 @@
 // found in the LICENSE file.
 
 #include <stddef.h>
+
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/extensions/extension_sync_data.h"
-#include "chrome/browser/extensions/extension_sync_service.h"
 #include "chrome/browser/extensions/launch_util.h"
+#include "chrome/browser/extensions/sync/extension_sync_data.h"
+#include "chrome/browser/extensions/sync/extension_sync_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
 #include "chrome/browser/sync/test/integration/apps_sync_test_base.h"
@@ -20,19 +20,21 @@
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/preinstalled_web_apps/preinstalled_web_apps.h"
-#include "chrome/browser/web_applications/user_display_mode.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "components/sync/base/features.h"
 #include "components/sync/model/string_ordinal.h"
-#include "content/public/browser/notification_service.h"
+#include "components/sync/service/sync_service_impl.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/launch_util.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/constants.h"
 
@@ -66,18 +68,26 @@ class TwoClientExtensionAppsSyncTest : public AppsSyncTestBase {
       const TwoClientExtensionAppsSyncTest&) = delete;
 
   ~TwoClientExtensionAppsSyncTest() override = default;
+
+  // Apps sync is only supported with Sync-the-feature.
+  SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTheFeature;
+  }
 };
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Chrome Apps are fully deprecated on all platforms except ChromeOS.
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(StartWithNoApps)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 }
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(StartWithSameApps)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupClients());
 
   const int kNumApps = 5;
@@ -128,7 +138,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, StartWithDifferentApps) {
 // end up with all apps, and the app and page ordinals should be identical.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(InstallDifferentApps)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupClients());
 
   int i = 0;
@@ -155,7 +165,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 }
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ENABLED(Add)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -165,7 +175,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ENABLED(Add)) {
 }
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ENABLED(Uninstall)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -182,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ENABLED(Uninstall)) {
 // ordinals.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UninstallThenInstall)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -196,10 +206,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
   ASSERT_TRUE(AppsMatchChecker().Wait());
 }
 
-// TODO(https://crbug.com/1265969): Change back to E2E_ENABLED when flakiness is
-// fixed.
-IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ONLY(Merge)) {
-  ResetSyncForPrimaryAccount();
+IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ENABLED(Merge)) {
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -219,7 +227,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, E2E_ONLY(Merge)) {
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdateEnableDisableApp)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -235,7 +243,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdateIncognitoEnableDisable)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -254,7 +262,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 // the app.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdatePageOrdinal)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -273,7 +281,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 // launch ordinal for the app.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdateAppLaunchOrdinal)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -293,7 +301,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 // page and app launch ordinal values for the CWS.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdateCWSOrdinals)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
@@ -324,38 +332,36 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
 // have the same launch type values for the CWS.
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                        E2E_ENABLED(UpdateLaunchType)) {
-  ResetSyncForPrimaryAccount();
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
   // Change the launch type to window.
   extensions::SetLaunchType(GetProfile(1), extensions::kWebStoreAppId,
-                            extensions::LAUNCH_TYPE_WINDOW);
+                            extensions::LaunchType::kWindow);
   ASSERT_TRUE(AppsMatchChecker().Wait());
   ASSERT_EQ(extensions::GetLaunchTypePrefValue(
                 extensions::ExtensionPrefs::Get(GetProfile(0)),
                 extensions::kWebStoreAppId),
-            extensions::LAUNCH_TYPE_WINDOW);
+            extensions::LaunchType::kWindow);
 
   // Change the launch type to regular tab.
   extensions::SetLaunchType(GetProfile(1), extensions::kWebStoreAppId,
-                            extensions::LAUNCH_TYPE_REGULAR);
+                            extensions::LaunchType::kRegular);
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
   ASSERT_EQ(extensions::GetLaunchTypePrefValue(
                 extensions::ExtensionPrefs::Get(GetProfile(0)),
                 extensions::kWebStoreAppId),
-            extensions::LAUNCH_TYPE_REGULAR);
+            extensions::LaunchType::kRegular);
 }
 
 IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, UnexpectedLaunchType) {
   ASSERT_TRUE(SetupSync());
-  // Wait until sync settles before we override the apps below.
-  ASSERT_TRUE(AwaitQuiescence());
   ASSERT_TRUE(AllProfilesHaveSameApps());
 
   extensions::SetLaunchType(GetProfile(1), extensions::kWebStoreAppId,
-                            extensions::LAUNCH_TYPE_REGULAR);
+                            extensions::LaunchType::kRegular);
   ASSERT_TRUE(AppsMatchChecker().Wait());
 
   const extensions::Extension* extension =
@@ -377,7 +383,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest, UnexpectedLaunchType) {
       *extension, original_data.enabled(), original_data.disable_reasons(),
       original_data.incognito_enabled(), original_data.remote_install(),
       original_data.update_url(), original_data.app_launch_ordinal(),
-      original_data.page_ordinal(), extensions::NUM_LAUNCH_TYPES);
+      original_data.page_ordinal(), extensions::LaunchType::kNumLaunchTypes);
   extension_sync_service->ApplySyncData(invalid_launch_type_data);
 
   // The launch type should remain the same.
@@ -397,20 +403,20 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
   web_app::ScopedTestingPreinstalledAppData preinstalled_app_data;
   {
     const GURL kStartUrl = GURL("https://www.example.com/start_url");
-    const web_app::AppId kWebAppId =
-        web_app::GenerateAppId(absl::nullopt, kStartUrl);
+    const webapps::AppId kWebAppId =
+        web_app::GenerateAppId(std::nullopt, kStartUrl);
     web_app::ExternalInstallOptions options(
         GURL("https://www.example.com/install_url"),
-        web_app::UserDisplayMode::kStandalone,
+        web_app::mojom::UserDisplayMode::kStandalone,
         web_app::ExternalInstallSource::kExternalDefault);
     options.user_type_allowlist = {"unmanaged"};
     options.uninstall_and_replace = {kHostedAppId0};
     options.only_use_app_info_factory = true;
     options.app_info_factory = base::BindRepeating(
         [](GURL start_url) {
-          auto info = std::make_unique<WebAppInstallInfo>();
+          auto info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+              start_url);
           info->title = u"Test app";
-          info->start_url = start_url;
           return info;
         },
         kStartUrl);
@@ -446,6 +452,58 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
                    ->enabled_extensions()
                    .Contains(kHostedAppId0));
 }
+
+#elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+IN_PROC_BROWSER_TEST_F(TwoClientExtensionAppsSyncTest,
+                       UninstallOnWML) {
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
+  ASSERT_TRUE(SetupClients());
+
+  auto appid1 = InstallHostedApp(GetProfile(0), 0);
+  auto appid2 = InstallHostedApp(GetProfile(1), 0);
+  EXPECT_EQ(appid1, appid2);
+
+  int i = 1;
+
+  const int kNumCommonApps = 4;
+  for (int j = 0; j < kNumCommonApps; ++i, ++j) {
+    InstallHostedApp(GetProfile(0), i);
+    InstallHostedApp(GetProfile(1), i);
+  }
+
+  ASSERT_TRUE(SetupSync());
+  const int kNumProfile0Apps = 10;
+  for (int j = 0; j < kNumProfile0Apps; ++i, ++j) {
+    InstallHostedApp(GetProfile(0), i);
+  }
+
+  const int kNumProfile1Apps = 10;
+  for (int j = 0; j < kNumProfile1Apps; ++i, ++j) {
+    InstallHostedApp(GetProfile(1), i);
+  }
+
+  ASSERT_TRUE(AwaitQuiescence());
+
+  // Chrome App installs via sync are disabled on WML.
+  ASSERT_FALSE(apps_helper::HasSameApps(GetProfile(0), GetProfile(1)));
+
+  ASSERT_TRUE(
+      GetExtensionRegistry(GetProfile(0))->GetInstalledExtension(appid1));
+  ASSERT_TRUE(
+      GetExtensionRegistry(GetProfile(1))->GetInstalledExtension(appid2));
+
+  UninstallApp(GetProfile(0), 0);
+  ASSERT_TRUE(AwaitQuiescence());
+
+  // Uninstalls are still sync-ed and applied on WML devices.
+  ASSERT_FALSE(
+      GetExtensionRegistry(GetProfile(0))->GetInstalledExtension(appid1));
+  ASSERT_FALSE(
+      GetExtensionRegistry(GetProfile(1))->GetInstalledExtension(appid1));
+}
+
+#endif
 
 // TODO(akalin): Add tests exercising:
 //   - Offline installation/uninstallation behavior

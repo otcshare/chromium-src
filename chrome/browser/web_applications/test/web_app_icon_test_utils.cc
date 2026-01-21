@@ -4,13 +4,15 @@
 
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "chrome/browser/profiles/profile.h"
@@ -87,7 +89,8 @@ bool AreColorsEqual(SkColor expected_color,
          abs_error_b <= threshold && abs_error_a <= threshold;
 }
 
-base::FilePath GetAppIconsAnyDir(Profile* profile, const AppId& app_id) {
+base::FilePath GetAppIconsAnyDir(Profile* profile,
+                                 const webapps::AppId& app_id) {
   base::FilePath web_apps_root_directory = GetWebAppsRootDirectory(profile);
   base::FilePath app_dir =
       GetManifestResourcesDirectoryForApp(web_apps_root_directory, app_id);
@@ -95,7 +98,8 @@ base::FilePath GetAppIconsAnyDir(Profile* profile, const AppId& app_id) {
   return icons_dir;
 }
 
-base::FilePath GetAppIconsMaskableDir(Profile* profile, const AppId& app_id) {
+base::FilePath GetAppIconsMaskableDir(Profile* profile,
+                                      const webapps::AppId& app_id) {
   base::FilePath web_apps_root_directory = GetWebAppsRootDirectory(profile);
   base::FilePath app_dir =
       GetManifestResourcesDirectoryForApp(web_apps_root_directory, app_id);
@@ -103,7 +107,8 @@ base::FilePath GetAppIconsMaskableDir(Profile* profile, const AppId& app_id) {
   return icons_dir;
 }
 
-base::FilePath GetOtherIconsDir(Profile* profile, const AppId& app_id) {
+base::FilePath GetOtherIconsDir(Profile* profile,
+                                const webapps::AppId& app_id) {
   base::FilePath web_apps_root_directory = GetWebAppsRootDirectory(profile);
   base::FilePath app_dir =
       GetManifestResourcesDirectoryForApp(web_apps_root_directory, app_id);
@@ -111,26 +116,23 @@ base::FilePath GetOtherIconsDir(Profile* profile, const AppId& app_id) {
   return icons_dir;
 }
 
-bool ReadBitmap(FileUtilsWrapper* utils,
-                const base::FilePath& file_path,
-                SkBitmap* bitmap) {
+SkBitmap ReadBitmap(FileUtilsWrapper* utils, const base::FilePath& file_path) {
   std::string icon_data;
-  if (!utils->ReadFileToString(file_path, &icon_data))
-    return false;
+  if (!utils->ReadFileToString(file_path, &icon_data)) {
+    return SkBitmap();
+  }
 
-  return gfx::PNGCodec::Decode(
-      reinterpret_cast<const unsigned char*>(icon_data.c_str()),
-      icon_data.size(), bitmap);
+  return gfx::PNGCodec::Decode(base::as_byte_span(icon_data));
 }
 
 base::span<const int> GetIconSizes() {
-  return base::span<const int>(kIconSizes, std::size(kIconSizes));
+  return kIconSizes;
 }
 
 bool ContainsOneIconOfEachSize(
     const std::map<SquareSizePx, SkBitmap>& icon_bitmaps) {
   for (int size_px : kIconSizes) {
-    int num_icons_for_size = base::ranges::count(
+    int num_icons_for_size = std::ranges::count(
         icon_bitmaps, size_px, &std::pair<const SquareSizePx, SkBitmap>::first);
     if (num_icons_for_size != 1)
       return false;
@@ -176,13 +178,12 @@ std::map<SquareSizePx, SkBitmap> ReadPngsFromDirectory(
        path = enumerator.Next()) {
     EXPECT_TRUE(path.MatchesExtension(FILE_PATH_LITERAL(".png")));
 
-    SkBitmap bitmap;
-    EXPECT_TRUE(ReadBitmap(file_utils, path, &bitmap));
-
+    SkBitmap bitmap = ReadBitmap(file_utils, path);
+    EXPECT_FALSE(bitmap.empty());
     EXPECT_EQ(bitmap.width(), bitmap.height());
 
     const int size_px = bitmap.width();
-    EXPECT_FALSE(base::Contains(pngs, size_px));
+    EXPECT_FALSE(pngs.contains(size_px));
 
     base::FilePath size_file_name;
     size_file_name =
@@ -233,21 +234,25 @@ void AddIconsToWebAppInstallInfo(
     for (size_t i = 0; i < info.sizes_px.size(); ++i) {
       apps::IconInfo apps_icon_info =
           CreateIconInfo(icons_base_url, info.purpose, info.sizes_px[i]);
-      install_info->manifest_icons.push_back(std::move(apps_icon_info));
+      install_info->manifest_icons.push_back(apps_icon_info);
+      install_info->trusted_icons.push_back(apps_icon_info);
 
       AddGeneratedIcon(&generated_bitmaps, info.sizes_px[i], info.colors[i]);
     }
 
-    install_info->icon_bitmaps.SetBitmapsForPurpose(
+    install_info->icon_bitmaps.SetBitmapsForPurpose(info.purpose,
+                                                    generated_bitmaps);
+    install_info->trusted_icon_bitmaps.SetBitmapsForPurpose(
         info.purpose, std::move(generated_bitmaps));
   }
 }
 
 void IconManagerWriteGeneratedIcons(
     WebAppIconManager& icon_manager,
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     const std::vector<GeneratedIconsInfo>& icons_info) {
-  IconBitmaps icon_bitmaps;
+  IconBitmaps manifest_icon_bitmaps;
+  IconBitmaps trusted_icon_bitmaps;
 
   for (const GeneratedIconsInfo& info : icons_info) {
     DCHECK_EQ(info.sizes_px.size(), info.colors.size());
@@ -257,12 +262,14 @@ void IconManagerWriteGeneratedIcons(
     for (size_t i = 0; i < info.sizes_px.size(); ++i)
       AddGeneratedIcon(&generated_bitmaps, info.sizes_px[i], info.colors[i]);
 
-    icon_bitmaps.SetBitmapsForPurpose(info.purpose,
-                                      std::move(generated_bitmaps));
+    manifest_icon_bitmaps.SetBitmapsForPurpose(info.purpose, generated_bitmaps);
+    trusted_icon_bitmaps.SetBitmapsForPurpose(info.purpose,
+                                              std::move(generated_bitmaps));
   }
 
   base::RunLoop run_loop;
-  icon_manager.WriteData(app_id, std::move(icon_bitmaps), {}, {},
+  icon_manager.WriteData(app_id, std::move(manifest_icon_bitmaps),
+                         std::move(trusted_icon_bitmaps), {}, {},
                          base::BindLambdaForTesting([&](bool success) {
                            DCHECK(success);
                            run_loop.Quit();
@@ -271,20 +278,19 @@ void IconManagerWriteGeneratedIcons(
 }
 
 SkColor IconManagerReadAppIconPixel(WebAppIconManager& icon_manager,
-                                    const AppId& app_id,
+                                    const webapps::AppId& app_id,
                                     SquareSizePx size_px,
                                     int x,
                                     int y) {
   SkColor result = SK_ColorTRANSPARENT;
   base::RunLoop run_loop;
-  icon_manager.ReadIcons(
-      app_id, IconPurpose::ANY, {size_px},
-      base::BindLambdaForTesting(
-          [&](std::map<SquareSizePx, SkBitmap> icon_bitmaps) {
-            DCHECK(base::Contains(icon_bitmaps, size_px));
-            result = icon_bitmaps.at(size_px).getColor(x, y);
-            run_loop.Quit();
-          }));
+  icon_manager.ReadTrustedIconsWithFallbackToManifestIcons(
+      app_id, {size_px}, IconPurpose::ANY,
+      base::BindLambdaForTesting([&](IconMetadataFromDisk icon_metadata) {
+        DCHECK(icon_metadata.icons_map.contains(size_px));
+        result = icon_metadata.icons_map.at(size_px).getColor(x, y);
+        run_loop.Quit();
+      }));
   run_loop.Run();
   return result;
 }

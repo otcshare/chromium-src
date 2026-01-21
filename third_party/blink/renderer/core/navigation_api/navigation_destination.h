@@ -8,6 +8,8 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/navigation_api/navigate_event_dispatch_params.h"
+#include "third_party/blink/renderer/core/navigation_api/navigation_history_entry.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
@@ -19,38 +21,36 @@ class CORE_EXPORT NavigationDestination final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  NavigationDestination(const KURL& url,
-                        bool same_document,
-                        SerializedScriptValue* state)
-      : url_(url), same_document_(same_document), state_(state) {}
+  NavigationDestination(NavigateEventDispatchParams* params,
+                        SerializedScriptValue* state,
+                        NavigationHistoryEntry* entry)
+      : dispatch_params_(params), state_(state), entry_(entry) {}
   ~NavigationDestination() final = default;
 
-  void SetTraverseProperties(const String& key,
-                             const String& id,
-                             int64_t index) {
-    key_ = key;
-    id_ = id;
-    index_ = index;
+  String key() const { return entry_ ? entry_->key() : String(); }
+  String id() const { return entry_ ? entry_->id() : String(); }
+  const KURL& url() const { return dispatch_params_->url; }
+  int64_t index() const { return entry_ ? entry_->index() : -1; }
+  bool sameDocument() const {
+    return dispatch_params_->event_type != NavigateEventType::kCrossDocument;
+  }
+  v8::Local<v8::Value> getState(v8::Isolate* isolate) {
+    return state_ ? state_->Deserialize(isolate) : v8::Local<v8::Value>();
+  }
+  void SetSerializedState(scoped_refptr<SerializedScriptValue> state) {
+    state_ = state;
   }
 
-  const String& key() const { return key_; }
-  const String& id() const { return id_; }
-  const KURL& url() const { return url_; }
-  int64_t index() const { return index_; }
-  bool sameDocument() const { return same_document_; }
-  ScriptValue getState(ScriptState* script_state) {
-    v8::Isolate* isolate = script_state->GetIsolate();
-    return state_ ? ScriptValue(isolate, state_->Deserialize(isolate))
-                  : ScriptValue();
+  void Trace(Visitor* visitor) const override {
+    ScriptWrappable::Trace(visitor);
+    visitor->Trace(dispatch_params_);
+    visitor->Trace(entry_);
   }
 
  private:
-  String key_;
-  String id_;
-  KURL url_;
-  int64_t index_ = -1;
-  bool same_document_;
+  Member<NavigateEventDispatchParams> dispatch_params_;
   scoped_refptr<SerializedScriptValue> state_;
+  Member<NavigationHistoryEntry> entry_;
 };
 
 }  // namespace blink

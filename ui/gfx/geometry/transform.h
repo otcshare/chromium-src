@@ -7,12 +7,19 @@
 
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/compiler_specific.h"
+#include "base/component_export.h"
+#include "base/containers/span.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
-#include "ui/gfx/geometry/geometry_skia_export.h"
 #include "ui/gfx/geometry/matrix44.h"
+
+namespace mojo {
+template <typename DataView, typename T>
+struct UnionTraits;
+}  // namespace mojo
 
 namespace gfx {
 
@@ -28,6 +35,10 @@ class Vector2dF;
 class Vector3dF;
 struct DecomposedTransform;
 
+namespace mojom {
+class TransformDataDataView;
+}  // namespace mojom
+
 // 4x4 Transformation matrix. Depending on the complexity of the matrix, it may
 // be internally stored as an AxisTransform2d (float precision) or a full
 // Matrix44 (4x4 double precision). Which one is used only affects precision and
@@ -42,7 +53,7 @@ struct DecomposedTransform;
 //   in the method comments.
 // - On assignment, the new matrix will keep the choice of the rhs matrix.
 //
-class GEOMETRY_SKIA_EXPORT Transform {
+class COMPONENT_EXPORT(GEOMETRY_SKIA) Transform {
  public:
   constexpr Transform() : axis_2d_() {}
 
@@ -80,7 +91,7 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // Creates a transform from explicit 2d elements. All other matrix elements
   // remain the same as the corresponding elements of an identity matrix.
   // Always creates a double precision 4x4 matrix.
-  // TODO(crbug.com/1359528): Revisit the above statement. Evaluate performance
+  // TODO(crbug.com/40237414): Revisit the above statement. Evaluate performance
   // and precision requirements of SVG and CSS transform:matrix().
   static constexpr Transform Affine(double a,    // a.k.a. r0c0 or scale_x
                                     double b,    // a.k.a. r1c0 or tan(skew_y)
@@ -126,24 +137,24 @@ class GEOMETRY_SKIA_EXPORT Transform {
   }
 
   bool operator==(const Transform& rhs) const {
-    if (LIKELY(!full_matrix_ && !rhs.full_matrix_))
+    if (!full_matrix_ && !rhs.full_matrix_) [[likely]] {
       return axis_2d_ == rhs.axis_2d_;
+    }
     if (full_matrix_ && rhs.full_matrix_)
       return matrix_ == rhs.matrix_;
     return GetFullMatrix() == rhs.GetFullMatrix();
   }
-  bool operator!=(const Transform& rhs) const { return !(*this == rhs); }
 
   // Gets a value at |row|, |col| from the matrix.
   constexpr double rc(int row, int col) const {
     DCHECK_LE(static_cast<unsigned>(row), 3u);
     DCHECK_LE(static_cast<unsigned>(col), 3u);
-    if (LIKELY(!full_matrix_)) {
+    if (!full_matrix_) [[likely]] {
       float m[4][4] = {{axis_2d_.scale().x(), 0, 0, axis_2d_.translation().x()},
                        {0, axis_2d_.scale().y(), 0, axis_2d_.translation().y()},
                        {0, 0, 1, 0},
                        {0, 0, 0, 1}};
-      return m[row][col];
+      return UNSAFE_TODO(m[row][col]);
     }
     return matrix_.rc(row, col);
   }
@@ -158,16 +169,16 @@ class GEOMETRY_SKIA_EXPORT Transform {
 
   // Constructs Transform from a double col-major array.
   // Always creates a double precision 4x4 matrix.
-  static Transform ColMajor(const double a[16]);
+  static Transform ColMajor(base::span<const double, 16> a);
 
   // Constructs Transform from a float col-major array. Creates an
   // AxisTransform2d or a Matrix44 depending on the values. GetColMajorF() and
   // ColMajorF() are used when passing a Transform through mojo.
-  static Transform ColMajorF(const float a[16]);
+  static Transform ColMajorF(base::span<const float, 16> a);
 
   // Gets col-major data.
-  void GetColMajor(double a[16]) const;
-  void GetColMajorF(float a[16]) const;
+  void GetColMajor(base::span<double, 16> a) const;
+  void GetColMajorF(base::span<float, 16> a) const;
   double ColMajorData(int index) const { return rc(index % 4, index / 4); }
 
   // Applies a transformation on the current transformation,
@@ -245,22 +256,26 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // Returns true if this is the identity matrix.
   // This function modifies a mutable variable in |matrix_|.
   bool IsIdentity() const {
-    return LIKELY(!full_matrix_) ? axis_2d_ == AxisTransform2d()
-                                 : matrix_.IsIdentity();
+    if (!full_matrix_) [[likely]] {
+      return axis_2d_ == AxisTransform2d();
+    }
+    return matrix_.IsIdentity();
   }
 
   // Returns true if the matrix is either identity or pure translation.
   bool IsIdentityOrTranslation() const {
-    return LIKELY(!full_matrix_) ? axis_2d_.scale() == Vector2dF(1, 1)
-                                 : matrix_.IsIdentityOrTranslation();
+    if (!full_matrix_) [[likely]] {
+      return axis_2d_.scale() == Vector2dF(1, 1);
+    }
+    return matrix_.IsIdentityOrTranslation();
   }
 
   // Returns true if the matrix is either the identity or a 2d translation.
-  // TODO(crbug.com/1359528): Rename "2D" to "2d".
-  bool IsIdentityOr2DTranslation() const {
-    return LIKELY(!full_matrix_)
-               ? axis_2d_.scale() == Vector2dF(1, 1)
-               : matrix_.IsIdentityOrTranslation() && matrix_.rc(2, 3) == 0;
+  bool IsIdentityOr2dTranslation() const {
+    if (!full_matrix_) [[likely]] {
+      return axis_2d_.scale() == Vector2dF(1, 1);
+    }
+    return matrix_.IsIdentityOrTranslation() && matrix_.rc(2, 3) == 0;
   }
 
   // Returns true if the matrix is either identity or pure translation,
@@ -270,8 +285,9 @@ class GEOMETRY_SKIA_EXPORT Transform {
 
   // Returns true if the matrix is either a positive scale and/or a translation.
   bool IsPositiveScaleOrTranslation() const {
-    if (LIKELY(!full_matrix_))
+    if (!full_matrix_) [[likely]] {
       return axis_2d_.scale().x() > 0.0 && axis_2d_.scale().y() > 0.0;
+    }
 
     if (!matrix_.IsScaleOrTranslation())
       return false;
@@ -298,15 +314,24 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // Returns true if the matrix has only x and y scaling components, including
   // identity.
   bool IsScale2d() const {
-    return LIKELY(!full_matrix_) ? axis_2d_.translation().IsZero()
-                                 : matrix_.IsScale() && matrix_.rc(2, 2) == 1;
+    if (!full_matrix_) [[likely]] {
+      return axis_2d_.translation().IsZero();
+    }
+    return matrix_.IsScale() && matrix_.rc(2, 2) == 1;
   }
 
   // Returns true if the matrix is has only scaling and translation components,
   // including identity.
   bool IsScaleOrTranslation() const {
-    return LIKELY(!full_matrix_) || matrix_.IsScaleOrTranslation();
+    if (!full_matrix_) [[likely]] {
+      return true;
+    }
+    return matrix_.IsScaleOrTranslation();
   }
+
+  // Returns true if, for 2d rects on the x/y plane, this matrix can be
+  // represented as a 2d affine transform on the x/y plane.
+  bool Preserves2dAffine() const;
 
   // Returns true if axis-aligned 2d rects will remain axis-aligned after being
   // transformed by this matrix.
@@ -321,13 +346,18 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // Returns true if the matrix has any perspective component that would
   // change the w-component of a homogeneous point.
   bool HasPerspective() const {
-    return UNLIKELY(full_matrix_) && matrix_.HasPerspective();
+    if (!full_matrix_) [[likely]] {
+      return false;
+    }
+    return matrix_.HasPerspective();
   }
 
   // Returns true if this transform is non-singular.
   bool IsInvertible() const {
-    return LIKELY(!full_matrix_) ? axis_2d_.IsInvertible()
-                                 : matrix_.IsInvertible();
+    if (!full_matrix_) [[likely]] {
+      return axis_2d_.IsInvertible();
+    }
+    return matrix_.IsInvertible();
   }
 
   // If |this| is invertible, inverts |this| and stores the result in
@@ -408,20 +438,20 @@ class GEOMETRY_SKIA_EXPORT Transform {
 
   // Applies the transformation to the vector. The results are clamped with
   // ClampFloatGeometry().
-  void TransformVector4(float vector[4]) const;
+  void TransformVector4(base::span<float, 4> vector) const;
 
   // Returns the point with reverse transformation applied to `point`, clamped
-  // with ClampFloatGeometry(), or `absl::nullopt` if the transformation cannot
+  // with ClampFloatGeometry(), or `std::nullopt` if the transformation cannot
   // be inverted.
-  [[nodiscard]] absl::optional<PointF> InverseMapPoint(
+  [[nodiscard]] std::optional<PointF> InverseMapPoint(
       const PointF& point) const;
-  [[nodiscard]] absl::optional<Point3F> InverseMapPoint(
+  [[nodiscard]] std::optional<Point3F> InverseMapPoint(
       const Point3F& point) const;
 
-  // Applies the reverse transformation on `point`. Returns `absl::nullopt` if
+  // Applies the reverse transformation on `point`. Returns `std::nullopt` if
   // the transformation cannot be inverted. Rounds the result to the nearest
   // point.
-  [[nodiscard]] absl::optional<Point> InverseMapPoint(const Point& point) const;
+  [[nodiscard]] std::optional<Point> InverseMapPoint(const Point& point) const;
 
   // Returns the rect that is the smallest axis aligned bounding rect
   // containing the transformed rect, clamped with ClampFloatGeometry().
@@ -429,11 +459,11 @@ class GEOMETRY_SKIA_EXPORT Transform {
   [[nodiscard]] Rect MapRect(const Rect& rect) const;
 
   // Applies the reverse transformation on the given rect. Returns
-  // `absl::nullopt` if the transformation cannot be inverted, or the rect that
+  // `std::nullopt` if the transformation cannot be inverted, or the rect that
   // is the smallest axis aligned bounding rect containing the transformed rect,
   // clamped with ClampFloatGeometry().
-  [[nodiscard]] absl::optional<RectF> InverseMapRect(const RectF& rect) const;
-  [[nodiscard]] absl::optional<Rect> InverseMapRect(const Rect& rect) const;
+  [[nodiscard]] std::optional<RectF> InverseMapRect(const RectF& rect) const;
+  [[nodiscard]] std::optional<Rect> InverseMapRect(const Rect& rect) const;
 
   // Returns the box with transformation applied on the given box. The returned
   // box will be the smallest axis aligned bounding box containing the
@@ -483,7 +513,7 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // scale inversion, but causes transformed objects to needlessly shrink and
   // grow as they transform through scale = 0 along multiple axes. Thus 2d
   // transforms should follow the 2d spec regarding matrix decomposition.
-  absl::optional<DecomposedTransform> Decompose() const;
+  std::optional<DecomposedTransform> Decompose() const;
 
   // Composes a transform from the given |decomp|, following the routines
   // detailed in this specs:
@@ -518,6 +548,9 @@ class GEOMETRY_SKIA_EXPORT Transform {
 
   // Rounds 2d translation components rc(0, 3), rc(1, 3) to integers.
   void Round2dTranslationComponents();
+
+  // Makes rc(0, 3) and rc(1, 3) components integers by flooring.
+  void Floor2dTranslationComponents();
 
   // Rounds translation components to integers, and all other components to
   // identity. Normally this function is meaningful only if
@@ -558,6 +591,7 @@ class GEOMETRY_SKIA_EXPORT Transform {
   }
 
   void EnsureFullMatrixForTesting() { EnsureFullMatrix(); }
+  bool IsFullMatrixForTesting() const { return full_matrix_; }
 
   // Returns a string in the format of "[ row0\n, row1\n, row2\n, row3 ]\n".
   std::string ToString() const;
@@ -566,6 +600,8 @@ class GEOMETRY_SKIA_EXPORT Transform {
   std::string ToDecomposedString() const;
 
  private:
+  friend struct mojo::UnionTraits<gfx::mojom::TransformDataDataView, Transform>;
+
   // Used internally to construct Transform with parameters in col-major order.
   // clang-format off
   constexpr Transform(double r0c0, double r1c0, double r2c0, double r3c0,

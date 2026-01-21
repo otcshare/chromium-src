@@ -13,10 +13,11 @@ namespace switches {
 
 GFX_SWITCHES_EXPORT extern const char kAnimationDurationScale[];
 GFX_SWITCHES_EXPORT extern const char kDisableFontSubpixelPositioning[];
-GFX_SWITCHES_EXPORT extern const char kDisablePPAPISharedImagesSwapChain[];
 GFX_SWITCHES_EXPORT extern const char kEnableNativeGpuMemoryBuffers[];
 GFX_SWITCHES_EXPORT extern const char kForcePrefersReducedMotion[];
+GFX_SWITCHES_EXPORT extern const char kForcePrefersNoReducedMotion[];
 GFX_SWITCHES_EXPORT extern const char kHeadless[];
+GFX_SWITCHES_EXPORT extern const char kScreenInfo[];
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 GFX_SWITCHES_EXPORT extern const char kX11Display[];
@@ -26,11 +27,16 @@ GFX_SWITCHES_EXPORT extern const char kNoXshm[];
 }  // namespace switches
 
 namespace features {
-GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kOddHeightMultiPlanarBuffers);
-GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kOddWidthMultiPlanarBuffers);
-GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kPPAPISharedImagesSwapChain);
 
-GFX_SWITCHES_EXPORT bool UseSharedImagesSwapChainForPPAPI();
+GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kUseSmartRefForGPUFenceHandle);
+GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kUseRoundedPointConversion);
+GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kHdrAgtm);
+
+// Workaround for an issue in Windows where icons with fully transparent
+// pixels are rendered as black squares. See https://crbug.com/441293180
+// Used as a killswitch in case an issue is discovered with the implementation.
+GFX_SWITCHES_EXPORT BASE_DECLARE_FEATURE(kTransparentIconWorkaround);
+
 }  // namespace features
 
 #endif  // UI_GFX_SWITCHES_H_

@@ -8,10 +8,13 @@ desc: |-
 
         If 'Forced' is selected, pages may be opened ONLY in Incognito mode. Note that 'Forced' does not work for Android-on-Chrome
 
+        The <ph name="INCOGNITO_MODE_URL_ALLOWLIST_POLICY_NAME">IncognitoModeUrlAllowlist</ph> policy takes precedence over this policy and can re-enable Incognito mode for specific URLs. When Incognito mode is disabled by this policy when an allowlist is provided, Incognito mode is available only for URLs matching the allowlist, while all other pages are blocked.
+
         Note: On iOS, if the policy is changed during a session, it will only take effect on relaunch.
+default: 0
 example_value: 1
 features:
-  dynamic_refresh: true
+  dynamic_refresh: false
   per_profile: true
 future_on:
 - fuchsia
@@ -27,10 +30,10 @@ items:
   supported_on:
   - chrome.*:14-
   - chrome_os:14-
+  - ios:90-
   value: 2
 owners:
 - file://components/policy/OWNERS
-- emaxx@chromium.org
 schema:
   enum:
   - 0

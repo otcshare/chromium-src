@@ -5,7 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_PRELOAD_HELPER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_PRELOAD_HELPER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 
 namespace blink {
@@ -24,26 +25,48 @@ class PreloadHelper final {
   STATIC_ONLY(PreloadHelper);
 
  public:
-  enum CanLoadResources {
-    kOnlyLoadResources,
-    kDoNotLoadResources,
-    kLoadResourcesAndPreconnect
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(LoadLinksFromHeaderMode)
+  enum class LoadLinksFromHeaderMode {
+    kDocumentBeforeCommit = 0,
+    kDocumentAfterCommitWithoutViewport = 1,
+    kDocumentAfterCommitWithViewport = 2,
+    kDocumentAfterLoadCompleted = 3,
+    kSubresourceFromMemoryCache = 4,
+    kSubresourceNotFromMemoryCache = 5,
+    kMaxValue = kSubresourceNotFromMemoryCache,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:LoadLinksFromHeaderMode)
 
-  // Media links cannot be preloaded until the first chunk is parsed. The rest
-  // can be preloaded at commit time.
-  enum MediaPreloadPolicy { kLoadAll, kOnlyLoadNonMedia, kOnlyLoadMedia };
+  // Distinguishes whether a preloading request is initiated by a resource from
+  // 'Same-' or 'Cross-' origin from the document's origin, and whether the
+  // request refers to the resource from 'Same-' or 'Cross-' origin from the
+  // documents's one as well.
+  //
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(OriginStatusOnSubresource)
+  enum class OriginStatusOnSubresource {
+    kFromSameOriginToSameOrigin = 0,
+    kFromSameOriginToCrossOrigin = 1,
+    kFromCrossOriginToSameOrigin = 2,
+    kFromCrossOriginToCrossOrigin = 3,
+    kMaxValue = kFromCrossOriginToCrossOrigin,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:OriginStatusOnSubresource)
 
   static void LoadLinksFromHeader(
       const String& header_value,
       const KURL& base_url,
       LocalFrame&,
       Document*,  // can be nullptr
-      CanLoadResources,
-      MediaPreloadPolicy,
+      LoadLinksFromHeaderMode,
       const ViewportDescription*,  // can be nullptr
       std::unique_ptr<AlternateSignedExchangeResourceInfo>,
-      const base::UnguessableToken* /* can be nullptr */);
+      const base::UnguessableToken*
+          recursive_prefetch_token /* can be nullptr */);
   static Resource* StartPreload(ResourceType, FetchParameters&, Document&);
 
   // Currently only used for UseCounter.
@@ -74,8 +97,11 @@ class PreloadHelper final {
                                     Document&,
                                     const ViewportDescription*,
                                     PendingLinkPreload*);
+  static void FetchCompressionDictionaryIfNeeded(const LinkLoadParameters&,
+                                                 Document&,
+                                                 PendingLinkPreload*);
 
-  static absl::optional<ResourceType> GetResourceTypeFromAsAttribute(
+  static std::optional<ResourceType> GetResourceTypeFromAsAttribute(
       const String& as);
 };
 

@@ -8,16 +8,16 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
 #include "content/browser/service_worker/fake_embedded_worker_instance_client.h"
 #include "content/browser/service_worker/fake_service_worker.h"
 #include "content/browser/service_worker/service_worker_test_utils.h"
 #include "content/browser/service_worker/service_worker_version.h"
-#include "content/browser/url_loader_factory_getter.h"
 #include "content/test/fake_network_url_loader_factory.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "storage/browser/test/mock_quota_manager_proxy.h"
@@ -36,6 +36,7 @@ namespace content {
 
 class FakeServiceWorker;
 class MockRenderProcessHost;
+class ReconnectableURLLoaderFactory;
 class ServiceWorkerContextCore;
 class ServiceWorkerContextWrapper;
 
@@ -126,13 +127,7 @@ class EmbeddedWorkerTestHelper {
   static std::unique_ptr<ServiceWorkerVersion::MainScriptResponse>
   CreateMainScriptResponse();
 
-  URLLoaderFactoryGetter* url_loader_factory_getter() {
-    return url_loader_factory_getter_.get();
-  }
-
-  // Overrides the network URLLoaderFactory for subsequent requests. Passing a
-  // null pointer will restore the default behavior.
-  void SetNetworkFactory(network::mojom::URLLoaderFactory* factory);
+  scoped_refptr<network::SharedURLLoaderFactory> GetNetworkFactory();
 
   // Adds the given client to the pending queue. The next time this helper
   // receives a
@@ -245,7 +240,6 @@ class EmbeddedWorkerTestHelper {
       fake_loader_factory_wrapper_;
 
   const base::FilePath user_data_directory_;
-  scoped_refptr<base::SequencedTaskRunner> database_task_runner_;
   std::unique_ptr<storage::ServiceWorkerStorageControlImpl> storage_control_;
 
   base::queue<std::unique_ptr<FakeEmbeddedWorkerInstanceClient>>
@@ -262,7 +256,7 @@ class EmbeddedWorkerTestHelper {
   int mock_render_process_id_;
   int new_mock_render_process_id_;
 
-  scoped_refptr<URLLoaderFactoryGetter> url_loader_factory_getter_;
+  scoped_refptr<ReconnectableURLLoaderFactory> url_loader_factory_;
 
   // Mojo endpoints.
   std::vector<mojo::Remote<blink::mojom::ControllerServiceWorker>> controllers_;

@@ -5,7 +5,7 @@
 #include "ash/quick_pair/keyed_service/fast_pair_bluetooth_config_delegate.h"
 
 #include "ash/quick_pair/repository/fast_pair_repository.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "chromeos/ash/services/bluetooth_config/device_name_manager.h"
 #include "chromeos/ash/services/bluetooth_config/public/cpp/device_image_info.h"
 
@@ -14,34 +14,36 @@ namespace quick_pair {
 
 FastPairBluetoothConfigDelegate::FastPairBluetoothConfigDelegate() = default;
 
+FastPairBluetoothConfigDelegate::FastPairBluetoothConfigDelegate(
+    Delegate* delegate)
+    : delegate_(delegate) {}
+
 FastPairBluetoothConfigDelegate::~FastPairBluetoothConfigDelegate() = default;
 
-void FastPairBluetoothConfigDelegate::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
-}
-
-void FastPairBluetoothConfigDelegate::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
-}
-
-absl::optional<bluetooth_config::DeviceImageInfo>
+std::optional<bluetooth_config::DeviceImageInfo>
 FastPairBluetoothConfigDelegate::GetDeviceImageInfo(
-    const std::string& device_id) {
-  return FastPairRepository::Get()->GetImagesForDevice(device_id);
+    const std::string& mac_address) {
+  return FastPairRepository::Get()->GetImagesForDevice(mac_address);
 }
 
 void FastPairBluetoothConfigDelegate::ForgetDevice(
     const std::string& mac_address) {
   FastPairRepository::Get()->DeleteAssociatedDevice(mac_address,
                                                     base::DoNothing());
+  FastPairRepository::Get()->EvictDeviceImages(mac_address);
+}
+
+void FastPairBluetoothConfigDelegate::UpdateDeviceNickname(
+    const std::string& mac_address,
+    const std::string& nickname) {
+  FastPairRepository::Get()->UpdateAssociatedDeviceFootprintsName(
+      mac_address, nickname, /*cache_may_be_stale=*/true);
 }
 
 void FastPairBluetoothConfigDelegate::SetAdapterStateController(
     bluetooth_config::AdapterStateController* adapter_state_controller) {
   adapter_state_controller_ = adapter_state_controller;
-  for (auto& observer : observers_) {
-    observer.OnAdapterStateControllerChanged(adapter_state_controller_);
-  }
+  delegate_->OnAdapterStateControllerChanged(adapter_state_controller_);
 }
 
 void FastPairBluetoothConfigDelegate::SetDeviceNameManager(

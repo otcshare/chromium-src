@@ -9,16 +9,15 @@
 
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/check_deref.h"
+#include "base/check_op.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 
@@ -26,6 +25,8 @@ namespace ash {
 namespace parent_access {
 
 namespace {
+
+static ParentAccessService* g_instance = nullptr;
 
 // Returns true when the device owner is a child.
 bool IsDeviceOwnedByChild() {
@@ -53,20 +54,6 @@ bool IsDeviceOwnedByChild() {
   return device_owner->IsChild();
 }
 
-// Returns true is any parent code config is available on the device.
-bool IsParentCodeConfigAvailable() {
-  const user_manager::UserList& users =
-      user_manager::UserManager::Get()->GetUsers();
-  user_manager::KnownUser known_user(g_browser_process->local_state());
-  for (const auto* user : users) {
-    if (known_user.FindPath(user->GetAccountId(),
-                            prefs::kKnownUserParentAccessCodeConfig)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 // static
@@ -76,8 +63,7 @@ void ParentAccessService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
 
 // static
 ParentAccessService& ParentAccessService::Get() {
-  static base::NoDestructor<ParentAccessService> instance;
-  return *instance;
+  return CHECK_DEREF(g_instance);
 }
 
 // static
@@ -85,18 +71,11 @@ bool ParentAccessService::IsApprovalRequired(SupervisedAction action) {
   switch (action) {
     case SupervisedAction::kUpdateClock:
     case SupervisedAction::kUpdateTimezone:
-      if (user_manager::UserManager::Get()->IsUserLoggedIn())
+      if (user_manager::UserManager::Get()->IsUserLoggedIn()) {
         return user_manager::UserManager::Get()->GetActiveUser()->IsChild();
+      }
       return IsDeviceOwnedByChild();
     case SupervisedAction::kAddUser:
-      if (!features::IsParentAccessCodeForOnlineLoginEnabled())
-        return false;
-      return IsDeviceOwnedByChild();
-    case SupervisedAction::kReauth:
-      if (!features::IsParentAccessCodeForOnlineLoginEnabled())
-        return false;
-      if (!IsParentCodeConfigAvailable())
-        return false;
       return IsDeviceOwnedByChild();
     case SupervisedAction::kUnlockTimeLimits:
       DCHECK(user_manager::UserManager::Get()->IsUserLoggedIn());
@@ -104,9 +83,16 @@ bool ParentAccessService::IsApprovalRequired(SupervisedAction action) {
   }
 }
 
-ParentAccessService::ParentAccessService() = default;
+ParentAccessService::ParentAccessService(PrefService* local_state)
+    : config_source_(local_state) {
+  CHECK(!g_instance);
+  g_instance = this;
+}
 
-ParentAccessService::~ParentAccessService() = default;
+ParentAccessService::~ParentAccessService() {
+  CHECK_EQ(g_instance, this);
+  g_instance = nullptr;
+}
 
 ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
     const AccountId& account_id,
@@ -116,7 +102,7 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
 
   if (config_source_.config_map().empty() ||
       (account_id.is_valid() &&
-       !base::Contains(config_source_.config_map(), account_id))) {
+       !config_source_.config_map().contains(account_id))) {
     result = ParentCodeValidationResult::kNoConfig;
     NotifyObservers(result, account_id);
     return result;
@@ -138,8 +124,14 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
   return result;
 }
 
-void ParentAccessService::LoadConfigForUser(const user_manager::User* user) {
-  config_source_.LoadConfigForUser(user);
+void ParentAccessService::UpdateConfigForUser(
+    const AccountId& account_id,
+    std::optional<base::Value::Dict> config) {
+  if (config) {
+    config_source_.UpdateConfigForUser(account_id, std::move(config.value()));
+  } else {
+    config_source_.RemoveConfigForUser(account_id);
+  }
 }
 
 void ParentAccessService::AddObserver(Observer* observer) {

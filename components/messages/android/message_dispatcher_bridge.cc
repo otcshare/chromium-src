@@ -9,8 +9,10 @@
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/no_destructor.h"
-#include "components/messages/android/jni_headers/MessageDispatcherBridge_jni.h"
 #include "content/public/browser/web_contents.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/messages/android/jni_headers/MessageDispatcherBridge_jni.h"
 
 namespace messages {
 
@@ -93,3 +95,5 @@ void MessageDispatcherBridge::Initialize(ResourceIdMapper resource_id_mapper) {
 }
 
 }  // namespace messages
+
+DEFINE_JNI(MessageDispatcherBridge)

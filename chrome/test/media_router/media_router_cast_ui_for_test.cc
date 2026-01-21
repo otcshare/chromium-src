@@ -4,48 +4,28 @@
 
 #include "chrome/test/media_router/media_router_cast_ui_for_test.h"
 
-#include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "base/run_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/ui/media_router/media_router_ui.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_coordinator.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_sink_button.h"
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
-#include "ui/events/base_event_utils.h"
-#include "ui/events/event.h"
-#include "ui/events/event_constants.h"
-#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/views/test/button_test_api.h"
 
 namespace media_router {
 
-namespace {
-
-ui::MouseEvent CreateMousePressedEvent() {
-  return ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(0, 0),
-                        gfx::Point(0, 0), ui::EventTimeForNow(),
-                        ui::EF_LEFT_MOUSE_BUTTON, 0);
-}
-
-}  // namespace
-
-// static
-MediaRouterCastUiForTest* MediaRouterCastUiForTest::GetOrCreateForWebContents(
-    content::WebContents* web_contents) {
-  // No-op if an instance already exists for the WebContents.
-  MediaRouterCastUiForTest::CreateForWebContents(web_contents);
-  return MediaRouterCastUiForTest::FromWebContents(web_contents);
-}
+MediaRouterCastUiForTest::MediaRouterCastUiForTest(
+    content::WebContents* web_contents)
+    : MediaRouterUiForTestBase(web_contents) {}
 
 MediaRouterCastUiForTest::~MediaRouterCastUiForTest() {
   CHECK(!watch_callback_);
 }
 
-void MediaRouterCastUiForTest::SetUp() {
-  feature_list_.InitAndDisableFeature(kGlobalMediaControlsCastStartStop);
-}
+void MediaRouterCastUiForTest::SetUp() {}
 
 void MediaRouterCastUiForTest::ShowDialog() {
   dialog_controller_->ShowMediaRouterDialog(
@@ -67,8 +47,7 @@ void MediaRouterCastUiForTest::ChooseSourceType(
   CastDialogView* dialog_view = GetDialogView();
   CHECK(dialog_view);
 
-  views::test::ButtonTestApi(dialog_view->sources_button_for_test())
-      .NotifyClick(CreateMousePressedEvent());
+  ClickOnButton(dialog_view->sources_button_for_test());
   int source_index;
   switch (source_type) {
     case CastDialogView::kTab:
@@ -86,6 +65,45 @@ CastDialogView::SourceType MediaRouterCastUiForTest::GetChosenSourceType()
   const CastDialogView* dialog_view = GetDialogView();
   CHECK(dialog_view);
   return dialog_view->selected_source_;
+}
+
+void MediaRouterCastUiForTest::StartCasting(const std::string& sink_name) {
+  CastDialogSinkView* sink_view = GetSinkView(sink_name);
+  ClickOnButton(sink_view->cast_sink_button_for_test());
+}
+
+void MediaRouterCastUiForTest::StopCasting(const std::string& sink_name) {
+  CastDialogSinkView* sink_view = GetSinkView(sink_name);
+  if (sink_view->stop_button_for_test()) {
+    ClickOnButton(sink_view->stop_button_for_test());
+    return;
+  }
+  NOTREACHED() << "No stop button found for sink " << sink_name;
+}
+
+MediaRoute::Id MediaRouterCastUiForTest::GetRouteIdForSink(
+    const std::string& sink_name) const {
+  CastDialogSinkView* sink_view = GetSinkView(sink_name);
+  if (!sink_view->sink().route) {
+    return "";
+  }
+  return sink_view->sink().route->media_route_id();
+}
+
+std::string MediaRouterCastUiForTest::GetStatusTextForSink(
+    const std::string& sink_name) const {
+  CastDialogSinkView* sink_view = GetSinkView(sink_name);
+  return base::UTF16ToUTF8(sink_view->sink().status_text);
+}
+
+std::string MediaRouterCastUiForTest::GetIssueTextForSink(
+    const std::string& sink_name) const {
+  CastDialogSinkButton* sink_button =
+      static_cast<CastDialogSinkButton*>(GetSinkButton(sink_name));
+  if (!sink_button->sink().issue) {
+    NOTREACHED() << "Issue not found for sink " << sink_name;
+  }
+  return sink_button->sink().issue->info().title;
 }
 
 void MediaRouterCastUiForTest::WaitForSink(const std::string& sink_name) {
@@ -126,11 +144,6 @@ void MediaRouterCastUiForTest::OnDialogCreated() {
   GetDialogView()->KeepShownForTesting();
 }
 
-MediaRouterCastUiForTest::MediaRouterCastUiForTest(
-    content::WebContents* web_contents)
-    : MediaRouterUiForTestBase(web_contents),
-      content::WebContentsUserData<MediaRouterCastUiForTest>(*web_contents) {}
-
 void MediaRouterCastUiForTest::OnDialogModelUpdated(
     CastDialogView* dialog_view) {
   if (!watch_callback_ || watch_type_ == WatchType::kDialogShown ||
@@ -138,29 +151,27 @@ void MediaRouterCastUiForTest::OnDialogModelUpdated(
     return;
   }
 
-  const std::vector<CastDialogSinkButton*>& sink_buttons =
-      dialog_view->sink_buttons_for_test();
-  if (base::ranges::any_of(
-          sink_buttons, [&, this](CastDialogSinkButton* sink_button) {
+  const std::vector<raw_ptr<CastDialogSinkView, DanglingUntriaged>>&
+      sink_views = dialog_view->sink_views_for_test();
+  if (std::ranges::any_of(
+          sink_views, [&, this](CastDialogSinkView* sink_view) {
             switch (watch_type_) {
               case WatchType::kSink:
-                return sink_button->sink().friendly_name ==
+                return sink_view->sink().friendly_name ==
                        base::UTF8ToUTF16(*watch_sink_name_);
               case WatchType::kSinkAvailable:
-                return sink_button->sink().friendly_name ==
+                return sink_view->sink().friendly_name ==
                            base::UTF8ToUTF16(*watch_sink_name_) &&
-                       sink_button->sink().state ==
-                           UIMediaSinkState::AVAILABLE &&
-                       sink_button->GetEnabled();
+                       sink_view->sink().state == UIMediaSinkState::AVAILABLE &&
+                       sink_view->cast_sink_button_for_test()->GetEnabled();
               case WatchType::kAnyIssue:
-                return sink_button->sink().issue.has_value();
+                return sink_view->sink().issue.has_value();
               case WatchType::kAnyRoute:
-                return sink_button->sink().route.has_value();
+                return sink_view->sink().route.has_value();
               case WatchType::kNone:
               case WatchType::kDialogShown:
               case WatchType::kDialogHidden:
                 NOTREACHED() << "Invalid WatchType";
-                return false;
             }
           })) {
     std::move(*watch_callback_).Run();
@@ -184,16 +195,12 @@ void MediaRouterCastUiForTest::OnDialogWillClose(CastDialogView* dialog_view) {
 
 CastDialogSinkButton* MediaRouterCastUiForTest::GetSinkButton(
     const std::string& sink_name) const {
-  const CastDialogView* dialog_view = GetDialogView();
-  CHECK(dialog_view);
-  const std::vector<CastDialogSinkButton*>& sink_buttons =
-      dialog_view->sink_buttons_for_test();
-  return GetSinkButtonWithName(sink_buttons, sink_name);
+  return GetSinkView(sink_name)->cast_sink_button_for_test();
 }
 
 void MediaRouterCastUiForTest::ObserveDialog(
     WatchType watch_type,
-    absl::optional<std::string> sink_name) {
+    std::optional<std::string> sink_name) {
   CHECK(!watch_sink_name_);
   CHECK(!watch_callback_);
   CHECK_EQ(watch_type_, WatchType::kNone);
@@ -222,6 +229,21 @@ CastDialogView* MediaRouterCastUiForTest::GetDialogView() {
       .GetCastDialogView();
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(MediaRouterCastUiForTest);
+CastDialogSinkView* MediaRouterCastUiForTest::GetSinkView(
+    const std::string& sink_name) const {
+  const CastDialogView* dialog_view = GetDialogView();
+  CHECK(dialog_view);
+  const std::vector<raw_ptr<CastDialogSinkView, DanglingUntriaged>>&
+      sink_views = dialog_view->sink_views_for_test();
+  auto it = std::ranges::find(sink_views, base::UTF8ToUTF16(sink_name),
+                              [](CastDialogSinkView* sink_view) {
+                                return sink_view->sink().friendly_name;
+                              });
+  if (it == sink_views.end()) {
+    NOTREACHED() << "Sink view not found for sink: " << sink_name;
+  } else {
+    return it->get();
+  }
+}
 
 }  // namespace media_router

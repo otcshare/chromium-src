@@ -17,7 +17,6 @@ scoped_refptr<VideoLayer> VideoLayer::Create(
 VideoLayer::VideoLayer(VideoFrameProvider* provider,
                        media::VideoTransformation transform)
     : provider_(provider), transform_(transform) {
-  SetMayContainVideo(true);
   DCHECK(provider_.Read(*this));
 }
 
@@ -27,6 +26,12 @@ std::unique_ptr<LayerImpl> VideoLayer::CreateLayerImpl(
     LayerTreeImpl* tree_impl) const {
   return VideoLayerImpl::Create(tree_impl, id(), provider_.Read(*this),
                                 transform_);
+}
+
+bool VideoLayer::RequiresSetNeedsDisplayOnHdrHeadroomChange() const {
+  // TODO(crbug.com/40065199): Only return true if the contents of the
+  // video are HDR.
+  return true;
 }
 
 bool VideoLayer::Update() {

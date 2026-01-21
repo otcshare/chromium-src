@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/socket/fuzzed_socket.h"
@@ -19,7 +19,9 @@ FuzzedServerSocket::FuzzedServerSocket(FuzzedDataProvider* data_provider,
 
 FuzzedServerSocket::~FuzzedServerSocket() = default;
 
-int FuzzedServerSocket::Listen(const IPEndPoint& address, int backlog) {
+int FuzzedServerSocket::Listen(const IPEndPoint& address,
+                               int backlog,
+                               std::optional<bool> ipv6_only) {
   DCHECK(!listen_called_);
   listening_on_ = address;
   listen_called_ = true;

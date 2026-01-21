@@ -9,71 +9,73 @@
 
 #include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
-#include "content/common/private_aggregation_host.mojom.h"
 #include "content/services/auction_worklet/context_recycler.h"
 #include "content/services/auction_worklet/public/mojom/private_aggregation_request.mojom-forward.h"
+#include "third_party/blink/public/mojom/private_aggregation/private_aggregation_host.mojom.h"
 #include "v8/include/v8-forward.h"
 
 namespace auction_worklet {
 
 class AuctionV8Helper;
+class AuctionV8Logger;
 
 // Class to manage bindings for the Private Aggregation API. Expected to be used
 // for a context managed by `ContextRecycler`. Throws exceptions when invalid
 // arguments are detected.
 class CONTENT_EXPORT PrivateAggregationBindings : public Bindings {
  public:
-  explicit PrivateAggregationBindings(AuctionV8Helper* v8_helper);
+  explicit PrivateAggregationBindings(
+      AuctionV8Helper* v8_helper,
+      AuctionV8Logger* v8_logger,
+      bool private_aggregation_permissions_policy_allowed,
+      bool reserved_once_allowed);
   PrivateAggregationBindings(const PrivateAggregationBindings&) = delete;
   PrivateAggregationBindings& operator=(const PrivateAggregationBindings&) =
       delete;
   ~PrivateAggregationBindings() override;
 
-  // Add privateAggregation object to `global_template`. `this` must outlive the
-  // template.
-  void FillInGlobalTemplate(
-      v8::Local<v8::ObjectTemplate> global_template) override;
+  // Add privateAggregation object to global context. `this` must outlive the
+  // context.
+  void AttachToContext(v8::Local<v8::Context> context) override;
   void Reset() override;
 
+  // Callers must pass a boolean indicating whether the script runner was
+  // terminated due to an uncaught exception or if another error occurred.
   std::vector<auction_worklet::mojom::PrivateAggregationRequestPtr>
-  TakePrivateAggregationRequests();
-
-  std::vector<auction_worklet::mojom::PrivateAggregationForEventRequestPtr>
-  TakePrivateAggregationForEventRequests(const std::string& event_type);
+  TakePrivateAggregationRequests(bool did_uncaught_error_occur);
 
  private:
-  static void SendHistogramReport(
+  static void ContributeToHistogram(
       const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void ReportContributionForEvent(
+  static void ContributeToHistogramOnEvent(
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void EnableDebugMode(const v8::FunctionCallbackInfo<v8::Value>& args);
 
-  // Creates private aggregation for event requests from given `contributions`,
-  // and returns the requests.
-  std::vector<auction_worklet::mojom::PrivateAggregationForEventRequestPtr>
-  PrivateAggregationRequestsFromContribution(
-      std::vector<
-          auction_worklet::mojom::AggregatableReportForEventContributionPtr>
-          contributions);
-
   const raw_ptr<AuctionV8Helper> v8_helper_;
+  const raw_ptr<AuctionV8Logger> v8_logger_;
+
+  const bool private_aggregation_permissions_policy_allowed_;
+  const bool enforce_permission_policy_for_on_event_;
+  const bool additional_extensions_allowed_;
+  const bool error_reporting_allowed_;
+
+  // This is true if the binding is used for functions where reserved.once is
+  // permitted; it's irrelevant if reserved.once is turned off by
+  // `additional_extensions_allowed_` being false.
+  const bool reserved_once_allowed_;
 
   // Defaults to debug mode being disabled.
-  content::mojom::DebugModeDetails debug_mode_details_;
+  blink::mojom::DebugModeDetails debug_mode_details_;
 
-  // Contributions from `sendHistogramReport()`.
-  std::vector<content::mojom::AggregatableReportHistogramContributionPtr>
+  // Contributions from calling Private Aggregation APIs, excluding those
+  // conditional on an uncaught error.
+  std::vector<auction_worklet::mojom::AggregatableReportContributionPtr>
       private_aggregation_contributions_;
 
-  // Contributions of event type "reserved.win" from
-  // `reportContributionsForEvent()`.
-  std::vector<auction_worklet::mojom::AggregatableReportForEventContributionPtr>
-      private_aggregation_for_event_win_contributions_;
-
-  // Contributions of event type "reserved.loss" from
-  // `reportContributionsForEvent()`.
-  std::vector<auction_worklet::mojom::AggregatableReportForEventContributionPtr>
-      private_aggregation_for_event_loss_contributions_;
+  // Private Aggregation contributions that are conditional on an uncaught
+  // error occurring.
+  std::vector<auction_worklet::mojom::AggregatableReportContributionPtr>
+      private_aggregation_uncaught_error_contributions_;
 };
 
 }  // namespace auction_worklet

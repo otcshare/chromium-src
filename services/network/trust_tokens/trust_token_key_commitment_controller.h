@@ -6,19 +6,15 @@
 #define SERVICES_NETWORK_TRUST_TOKENS_TRUST_TOKEN_KEY_COMMITMENT_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece_forward.h"
+#include "base/functional/callback.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/trust_tokens.mojom-forward.h"
 #include "url/gurl.h"
-
-namespace mojom {
-class URLLoaderFactory;
-class URLResponseHead;
-}  // namespace mojom
 
 namespace net {
 struct NetworkTrafficAnnotationTag;
@@ -31,6 +27,11 @@ class Origin;
 }
 
 namespace network {
+
+namespace mojom {
+class URLLoaderFactory;
+class URLResponseHead;
+}  // namespace mojom
 
 namespace internal {
 
@@ -72,7 +73,7 @@ class TrustTokenKeyCommitmentController final {
    public:
     virtual ~Parser() = default;
     virtual mojom::TrustTokenKeyCommitmentResultPtr Parse(
-        base::StringPiece response_body) = 0;
+        std::string_view response_body) = 0;
   };
 
   // Constructor. Immediately starts a request:
@@ -125,13 +126,14 @@ class TrustTokenKeyCommitmentController final {
 
   // On redirect, fails (key commitment endpoints must not redirect
   // their clients).
-  void HandleRedirect(const net::RedirectInfo& redirect_info,
+  void HandleRedirect(const GURL& url_before_redirect,
+                      const net::RedirectInfo& redirect_info,
                       const mojom::URLResponseHead& response_head,
                       std::vector<std::string>* to_be_removed_headers);
 
   // On completion, parses the given response (if the request was
   // successful). Calls |completion_callback_| with an error
-  void HandleResponseBody(std::unique_ptr<std::string> response_body);
+  void HandleResponseBody(std::optional<std::string> response_body);
 
   // |url_loader_| performs the actual key commitment request.
   std::unique_ptr<SimpleURLLoader> url_loader_;

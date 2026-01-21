@@ -10,118 +10,19 @@
 #ifndef SKIA_CONFIG_SKUSERCONFIG_H_
 #define SKIA_CONFIG_SKUSERCONFIG_H_
 
-/*  SkTypes.h, the root of the public header files, does the following trick:
-
-    #include "include/config/SkUserConfig.h"
-    #include "include/core/SkPostConfig.h"
-    #include "include/core/SkPreConfig.h"
-
-    SkPreConfig.h runs first, and it is responsible for initializing certain
-    skia defines.
-
-    SkPostConfig.h runs last, and its job is to just check that the final
-    defines are consistent (i.e. that we don't have mutually conflicting
-    defines).
-
-    SkUserConfig.h (this file) runs in the middle. It gets to change or augment
-    the list of flags initially set in preconfig, and then postconfig checks
-    that everything still makes sense.
+/*  SkTypes.h, the root of the public header files, includes this file
+    SkUserConfig.h after first initializing certain Skia defines, letting
+    this file change or augment those flags.
 
     Below are optional defines that add, subtract, or change default behavior
     in Skia. Your port can locally edit this file to enable/disable flags as
-    you choose, or these can be delared on your command line (i.e. -Dfoo).
+    you choose, or these can be declared on your command line (i.e. -Dfoo).
 
-    By default, this include file will always default to having all of the flags
+    By default, this #include file will always default to having all the flags
     commented out, so including it will have no effect.
 */
 
-///////////////////////////////////////////////////////////////////////////////
-
-/*  Skia has lots of debug-only code. Often this is just null checks or other
-    parameter checking, but sometimes it can be quite intrusive (e.g. check that
-    each 32bit pixel is in premultiplied form). This code can be very useful
-    during development, but will slow things down in a shipping product.
-
-    By default, these mutually exclusive flags are defined in SkPreConfig.h,
-    based on the presence or absence of NDEBUG, but that decision can be changed
-    here.
- */
-//#define SK_DEBUG
-//#define SK_RELEASE
-
-/*  Skia has certain debug-only code that is extremely intensive even for debug
-    builds.  This code is useful for diagnosing specific issues, but is not
-    generally applicable, therefore it must be explicitly enabled to avoid
-    the performance impact. By default these flags are undefined, but can be
-    enabled by uncommenting them below.
- */
-//#define SK_DEBUG_GLYPH_CACHE
-//#define SK_DEBUG_PATH
-
-/*  preconfig will have attempted to determine the endianness of the system,
-    but you can change these mutually exclusive flags here.
- */
-//#define SK_CPU_BENDIAN
-//#define SK_CPU_LENDIAN
-
-/*  Most compilers use the same bit endianness for bit flags in a byte as the
-    system byte endianness, and this is the default. If for some reason this
-    needs to be overridden, specify which of the mutually exclusive flags to
-    use. For example, some atom processors in certain configurations have big
-    endian byte order but little endian bit orders.
-*/
-//#define SK_UINT8_BITFIELD_BENDIAN
-//#define SK_UINT8_BITFIELD_LENDIAN
-
-
-/*  To write debug messages to a console, skia will call SkDebugf(...) following
-    printf conventions (e.g. const char* format, ...). If you want to redirect
-    this to something other than printf, define yours here
- */
-//#define SkDebugf(...)  MyFunction(__VA_ARGS__)
-
-/*
- *  To specify a different default font cache limit, define this. If this is
- *  undefined, skia will use a built-in value.
- */
-//#define SK_DEFAULT_FONT_CACHE_LIMIT   (1024 * 1024)
-
-/*
- *  To specify the default size of the image cache, undefine this and set it to
- *  the desired value (in bytes). SkGraphics.h as a runtime API to set this
- *  value as well. If this is undefined, a built-in value will be used.
- */
-//#define SK_DEFAULT_IMAGE_CACHE_LIMIT (1024 * 1024)
-
-/*  Define this to set the upper limit for text to support LCD. Values that
-    are very large increase the cost in the font cache and draw slower, without
-    improving readability. If this is undefined, Skia will use its default
-    value (e.g. 48)
- */
-//#define SK_MAX_SIZE_FOR_LCDTEXT     48
-
-/*  Change the kN32_SkColorType ordering to BGRA to work in X windows.
- */
-//#define SK_R32_SHIFT    16
-
-
-/* Determines whether to build code that supports the GPU backend. Some classes
-   that are not GPU-specific, such as SkShader subclasses, have optional code
-   that is used allows them to interact with the GPU backend. If you'd like to
-   omit this code set SK_SUPPORT_GPU to 0. This also allows you to omit the gpu
-   directories from your include search path when you're not building the GPU
-   backend. Defaults to 1 (build the GPU code).
- */
-//#define SK_SUPPORT_GPU 1
-
-/* Skia makes use of histogram logging macros to trace the frequency of
- * events. By default, Skia provides no-op versions of these macros.
- * Skia consumers can provide their own definitions of these macros to
- * integrate with their histogram collection backend.
- */
-//#define SK_HISTOGRAM_BOOLEAN(name, sample)
-//#define SK_HISTOGRAM_EXACT_LINEAR(name, sample, value_max)
-//#define SK_HISTOGRAM_MEMORY_KB(name, sample)
+#include "base/component_export.h"
 #include "skia/ext/skia_histogram.h"
 
 // ===== Begin Chrome-specific definitions =====
@@ -135,6 +36,15 @@
     PDF documents.
  */
 #define SK_PDF_USE_HARFBUZZ_SUBSET
+
+/*  This controls how much space should be pre-allocated in an SkCanvas object
+    to store the SkMatrix and clip via calls to SkCanvas::save() (and balanced
+    with SkCanvas::restore()).
+*/
+#define SK_CANVAS_SAVE_RESTORE_PREALLOC_COUNT 16
+
+// Handle exporting using base/component_export.h
+#define SK_API COMPONENT_EXPORT(SKIA)
 
 // Chromium does not use these fonts.  This define causes type1 fonts to be
 // converted to type3 when producing PDFs, and reduces build size.
@@ -192,32 +102,38 @@ SK_API void SkDebugf_FileLine(const char* file,
 
 #endif
 
+#if defined(__has_attribute)
+#if __has_attribute(trivial_abi)
+#define SK_TRIVIAL_ABI [[clang::trivial_abi]]
+#else
+#define SK_TRIVIAL_ABI
+#endif
+#else
+#define SK_TRIVIAL_ABI
+#endif
+
 // These flags are no longer defined in Skia, but we have them (temporarily)
 // until we update our call-sites (typically these are for API changes).
 //
 // Remove these as we update our sites.
-
-#define SK_LEGACY_LAYER_BOUNDS_EXPANSION  // skbug.com/12083, skbug.com/12303
 
 // Workaround for poor anisotropic mipmap quality,
 // pending Skia ripmap support.
 // (https://bugs.chromium.org/p/skia/issues/detail?id=4863)
 #define SK_SUPPORT_LEGACY_ANISOTROPIC_MIPMAP_SCALE
 
-// Temporarily insulate Chrome pixel tests from Skia LOD bias change on GPU.
-#define SK_USE_LEGACY_MIPMAP_LOD_BIAS
-
 // Max. verb count for paths rendered by the edge-AA tessellating path renderer.
 #define GR_AA_TESSELLATOR_MAX_VERB_COUNT 100
 
-#define SK_SUPPORT_LEGACY_AAA_CHOICE
+#define SK_SUPPORT_LEGACY_CONIC_CHOP
 
-#define SK_SUPPORT_LEGACY_DRAWLOOPER
+#define SK_USE_PADDED_BLUR_UPSCALE
 
-#define SK_USE_LEGACY_MIPMAP_BUILDER
+#define SK_LEGACY_INITWITHPREV_LAYER_SIZING
 
-// Temporary until web tests can be rebaselined (skbug.com/13752)
-#define SK_DISABLE_RASTER_PIPELINE_SAMPLING_FIXES
+#define SK_AVOID_SLOW_RASTER_PIPELINE_BLURS
+
+#define SK_SUPPORT_LEGACY_RRECT_TRANSFORM
 
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 
@@ -229,10 +145,12 @@ SK_API void SkDebugf_FileLine(const char* file,
 /* Restrict formats for Skia font matching to SFNT type fonts. */
 #define SK_FONT_CONFIG_INTERFACE_ONLY_ALLOW_SFNT_FONTS
 
-#define SK_IGNORE_BLURRED_RRECT_OPT
+// Temporarily enable new strike cache pinning logic, for staging.
+#define SK_STRIKE_CACHE_DOESNT_AUTO_CHECK_PINNERS
+
 #define SK_USE_DISCARDABLE_SCALEDIMAGECACHE
 
-#define SK_ATTR_DEPRECATED          SK_NOTHING_ARG1
-#define GR_GL_CUSTOM_SETUP_HEADER   "GrGLConfig_chrome.h"
+// glGetError() forces a sync with gpu process on chrome
+#define GR_GL_CHECK_ERROR_START 0
 
 #endif  // SKIA_CONFIG_SKUSERCONFIG_H_

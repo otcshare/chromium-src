@@ -234,7 +234,7 @@ and hence is not useful on third_party projects that use another style.
 
     ```shell
     cd /path/to/chromium/src
-    cp buildtools/clang_format/script/clang-format-sublime.py ~/.config/sublime-text-3/Packages/User/
+    cp third_party/clang-format/script/clang-format-sublime.py ~/.config/sublime-text-3/Packages/User/
     ```
 
 1. This installs a plugin that defines the command "clang\_format". You can add
@@ -390,15 +390,15 @@ your friend. Here are some basic errors which have workarounds:
 ### Mac (not working)
 
 1.  Install cmake if you don't already have it
-1.  Install XCode
-1.  Copy libclang.dylib from XCode to the SublimeClang/internals folder:
+1.  Install Xcode
+1.  Copy libclang.dylib from Xcode to the SublimeClang/internals folder:
 
     ```shell
     cd ~/Library/Application\ Support/Sublime\ Text\ 3/Packages
     git clone --recursive https://github.com/quarnster/SublimeClang SublimeClang
     cd SublimeClang
     cp /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib internals/libclang.dylib
-    # Remove i386 from the build file since XCode's libclang.dylib is only a 64-bit version
+    # Remove i386 from the build file since Xcode's libclang.dylib is only a 64-bit version
     sed -ie 's/CMAKE_OSX_ARCHITECTURES i386 x86_64/CMAKE_OSX_ARCHITECTURES x86_64/' src/CMakeLists.txt
     # Copy libclang.dylib to the internals dir
     # Make the project - should be really quick, since libclang.dylib is already built
@@ -504,7 +504,7 @@ replacing `out/Debug` with your output directory (on Windows, replace /'s with
 
 The file regex will allow you to click on errors to go to the error line.
 
-If you're using goma, add the -j parameter (replace out/Debug with your out directory):
+If you're using reclient, add the -j parameter (replace out/Debug with your out directory):
 ```
     "cmd": ["ninja", "-j", "1000", "-C", "out/Debug", "chrome"],
 ```

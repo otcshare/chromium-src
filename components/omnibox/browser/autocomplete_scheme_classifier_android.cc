@@ -7,14 +7,15 @@
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "components/omnibox/browser/autocomplete_scheme_classifier.h"
-#include "components/omnibox/browser/jni_headers/AutocompleteSchemeClassifier_jni.h"
+#include "components/omnibox/browser/scheme_classifier_jni/AutocompleteSchemeClassifier_jni.h"
 
 // static
 AutocompleteSchemeClassifier* AutocompleteSchemeClassifierAndroid::FromJavaObj(
-    const base::android::JavaParamRef<jobject>&
-        jautocomplete_scheme_classifier) {
+    const base::android::JavaRef<jobject>& jautocomplete_scheme_classifier) {
   return reinterpret_cast<AutocompleteSchemeClassifier*>(
       Java_AutocompleteSchemeClassifier_getNativePtr(
           base::android::AttachCurrentThread(),
           jautocomplete_scheme_classifier));
 }
+
+DEFINE_JNI(AutocompleteSchemeClassifier)

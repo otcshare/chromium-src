@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ApplicationTestRunner} from 'application_test_runner';
+
+import * as TextUtils from 'devtools/models/text_utils/text_utils.js';
+
 (async function() {
   TestRunner.addResult(
-      `Tests resource content is correctly loaded if Resource.requestContent was called before network request was finished. https://bugs.webkit.org/show_bug.cgi?id=90153\n`);
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('application_test_runner');
+      `Tests resource content is correctly loaded if Resource.requestContentData was called before network request was finished. https://bugs.webkit.org/show_bug.cgi?id=90153\n`);
   await TestRunner.showPanel('resources');
   await TestRunner.addStylesheetTag('resources/styles-initial.css');
   TestRunner.addResult('Adding dynamic script: ');
@@ -21,11 +25,11 @@
   await TestRunner.waitForUISourceCode('dynamic-script.js');
 
   TestRunner.addResult('Clearing memory cache: ');
-  await TestRunner.NetworkAgent.setCacheDisabled(true);
-  await TestRunner.NetworkAgent.setCacheDisabled(false);
+  await TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: true});
+  await TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: false});
   TestRunner.addResult('Requesting content: ');
   var resource = ApplicationTestRunner.resourceMatchingURL('dynamic-script.js');
-  var { content } = await resource.requestContent();
+  var { content } = await resource.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent);
   TestRunner.assertTrue(!!content, 'No content available.');
   TestRunner.addResult('Resource url: ' + resource.url);
   TestRunner.addResult('Resource content: ' + content);

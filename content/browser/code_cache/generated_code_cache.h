@@ -6,7 +6,6 @@
 #define CONTENT_BROWSER_CODE_CACHE_GENERATED_CODE_CACHE_H_
 
 #include <map>
-#include <queue>
 
 #include "base/containers/queue.h"
 #include "base/files/file_path.h"
@@ -37,8 +36,8 @@ namespace content {
 // renderer is not locked to an origin (ex:SitePerProcess is disabled) and it
 // is safe to use only |resource_url| as the key in such cases.
 //
-// This uses a simple disk_cache backend. It just stores one data stream and
-// stores response_time + generated code as one data blob.
+// This stores response_time and generated code using either a simple disk_cache
+// backend or PersistentCache depending on experiment status.
 //
 // There exists one cache per storage partition and is owned by the storage
 // partition. This cache is created, accessed and destroyed on the I/O
@@ -98,6 +97,21 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   ~GeneratedCodeCache();
 
+  // Generates the cache key for the given `resource_url`.
+  // `resource_url` is the url corresponding to the requested resource.
+  static std::string GetResourceKey(
+      const GURL& resource_url,
+      GeneratedCodeCache::CodeCacheType cache_type);
+
+  // Generates the cache key for the given `origin_lock` and `nik`.
+  // `origin_lock` is the origin that the renderer which requested this
+  // resource is locked to. `nik` is the network isolation key that consists
+  // of top-level-site that initiated the request.
+  static std::string GetContextKey(
+      const GURL& origin_lock,
+      const net::NetworkIsolationKey& nik,
+      GeneratedCodeCache::CodeCacheType cache_type);
+
   // Runs the callback with a raw pointer to the backend. If we could not create
   // the backend then it will return a null. This runs the callback
   // synchronously if the backend is already open or asynchronously on the
@@ -135,6 +149,10 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   // Clears the in-memory cache.
   void ClearInMemoryCache();
+
+  void CollectStatisticsForTest(const GURL& resource_url,
+                                const GURL& origin_lock,
+                                GeneratedCodeCache::CacheEntryStatus status);
 
   const base::FilePath& path() const { return path_; }
 
@@ -206,7 +224,9 @@ class CONTENT_EXPORT GeneratedCodeCache {
                                          base::OnceClosure callback,
                                          disk_cache::EntryResult result);
 
-  void CollectStatistics(GeneratedCodeCache::CacheEntryStatus status);
+  void CollectStatistics(const GURL& resource_url,
+                         const GURL& origin_lock,
+                         GeneratedCodeCache::CacheEntryStatus status);
 
   // Whether very large cache entries are deduplicated in this cache.
   // Deduplication is disabled in the WebUI code cache, as an additional defense
@@ -221,8 +241,6 @@ class CONTENT_EXPORT GeneratedCodeCache {
   // obsolete formats. These reads should fail and be doomed as soon as
   // possible.
   bool IsValidHeader(scoped_refptr<net::IOBufferWithSize> small_buffer) const;
-
-  void ReportPeriodicalHistograms();
 
   std::unique_ptr<disk_cache::Backend> backend_;
   BackendState backend_state_;
@@ -240,7 +258,6 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   // A hypothetical memory-backed code cache. Used to collect UMAs.
   SimpleLruCache lru_cache_;
-  base::RepeatingTimer histograms_timer_;
   static constexpr int64_t kLruCacheCapacity = 50 * 1024 * 1024;
 
   base::WeakPtrFactory<GeneratedCodeCache> weak_ptr_factory_{this};

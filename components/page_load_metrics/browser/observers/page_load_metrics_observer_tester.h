@@ -7,11 +7,12 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/byte_count.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
-#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
 #include "components/page_load_metrics/common/test/weak_mock_timer.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/cookie_access_details.h"
@@ -19,7 +20,6 @@
 #include "ui/base/page_transition_types.h"
 
 namespace base {
-class GURL;
 class HistogramTester;
 }  // namespace base
 
@@ -32,13 +32,10 @@ class RenderFrameHost;
 class RenderViewHostTestHarness;
 class WebContents;
 struct GlobalRequestID;
+class NavigationHandle;
 }  // namespace content
 
-namespace mojom {
-class FrameRenderDataUpdate;
-class FrameMetadata;
-class PageLoadTiming;
-}  // namespace mojom
+class GURL;
 
 namespace ukm {
 class TestAutoSetUkmRecorder;
@@ -64,7 +61,8 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
   PageLoadMetricsObserverTester(
       content::WebContents* web_contents,
       content::RenderViewHostTestHarness* rfh_test_harness,
-      const RegisterObserversCallback& callback);
+      const RegisterObserversCallback& callback,
+      bool is_non_tab_webui = false);
 
   PageLoadMetricsObserverTester(const PageLoadMetricsObserverTester&) = delete;
   PageLoadMetricsObserverTester& operator=(
@@ -114,7 +112,12 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
       const mojom::FrameRenderDataUpdate& render_data);
   void SimulateRenderDataUpdate(const mojom::FrameRenderDataUpdate& render_data,
                                 content::RenderFrameHost* render_frame_host);
-  void SimulateSoftNavigationCountUpdate(uint32_t soft_navigation_count);
+  void SimulateSoftNavigation(content::NavigationHandle* navigation_handle);
+  void SimulateDidFinishNavigation(
+      content::NavigationHandle* navigation_handle);
+  void SimulateSoftNavigationCountUpdate(
+      const mojom::SoftNavigationMetrics& soft_navigation_metrics);
+  void SimulateCustomUserTimingUpdate(mojom::CustomUserTimingMarkPtr timing);
 
   // Simulates a loaded resource. Main frame resources must specify a
   // GlobalRequestID, using the SimulateLoadedResource() method that takes a
@@ -150,7 +153,7 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
 
   // Simulate a V8 per-frame memory update.
   void SimulateMemoryUpdate(content::RenderFrameHost* render_frame_host,
-                            int64_t delta_bytes);
+                            base::ByteCount delta_bytes);
 
   MetricsWebContentsObserver* metrics_web_contents_observer() {
     return metrics_web_contents_observer_;
@@ -164,6 +167,8 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
   const PageLoadMetricsObserverDelegate& GetDelegateForCommittedLoad() const;
   void RegisterObservers(PageLoadTracker* tracker);
 
+  bool is_non_tab_webui() const { return is_non_tab_webui_; }
+
  private:
   void SimulatePageLoadTimingUpdate(
       const mojom::PageLoadTiming& timing,
@@ -172,18 +177,22 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
       const mojom::FrameRenderDataUpdate& render_data,
       const mojom::CpuTiming& cpu_timing,
       const mojom::InputTiming& input_timing,
-      const mojom::SubresourceLoadMetrics& subresource_load_metrics,
+      const std::optional<blink::SubresourceLoadMetrics>&
+          subresource_load_metrics,
       content::RenderFrameHost* rfh,
-      uint32_t soft_navigation_count = 0);
+      const mojom::SoftNavigationMetrics& soft_navigation_metrics);
 
   content::WebContents* web_contents() const { return web_contents_; }
 
   RegisterObserversCallback register_callback_;
-  raw_ptr<content::WebContents> web_contents_;
+  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
   raw_ptr<content::RenderViewHostTestHarness> rfh_test_harness_;
-  raw_ptr<MetricsWebContentsObserver> metrics_web_contents_observer_;
+  raw_ptr<MetricsWebContentsObserver, DanglingUntriaged>
+      metrics_web_contents_observer_;
   base::HistogramTester histogram_tester_;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder_;
+
+  bool is_non_tab_webui_ = false;
 };
 
 }  // namespace page_load_metrics

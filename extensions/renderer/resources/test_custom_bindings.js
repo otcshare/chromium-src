@@ -5,40 +5,212 @@
 // test_custom_bindings.js
 // mini-framework for ExtensionApiTest browser tests
 
-var environmentSpecificBindings = require('test_environment_specific_bindings');
-var GetExtensionAPIDefinitionsForTest =
+const environmentSpecificBindings =
+    require('test_environment_specific_bindings');
+const GetExtensionAPIDefinitionsForTest =
     requireNative('apiDefinitions').GetExtensionAPIDefinitionsForTest;
-var GetAPIFeatures = requireNative('test_features').GetAPIFeatures;
-var natives = requireNative('test_native_handler');
-var userGestures = requireNative('user_gestures');
+const GetAPIFeatures = requireNative('test_features').GetAPIFeatures;
+const userGestures = requireNative('user_gestures');
 
-var GetModuleSystem = requireNative('v8_context').GetModuleSystem;
+const GetModuleSystem = requireNative('v8_context').GetModuleSystem;
 
 function handleException(message, error) {
   bindingUtil.handleException(message || 'Unknown error', error);
 }
 
+/**
+ * Checks if two collections (Maps or Sets) are deeply equal, ignoring order.
+ * @param expected The expected collection.
+ * @param actual The actual collection.
+ * @param isMap True if the collections are Maps, false if Sets.
+ * @return True if the collections are equal.
+ */
+function checkCollectionEq(expected, actual, isMap) {
+  if (expected.size !== actual.size) {
+    return false;
+  }
+
+  const actualItems = Array.from(isMap ? actual.entries() : actual.values());
+  const matchedIndices = new Set();
+
+  const expectedIter = isMap ? expected.entries() : expected.values();
+  for (const expItem of expectedIter) {
+    let found = false;
+    for (let i = 0; i < actualItems.length; ++i) {
+      if (matchedIndices.has(i)) {
+        continue;
+      }
+      const actItem = actualItems[i];
+      let eq = false;
+      if (isMap) {
+        // For Maps, expItem and actItem are [key, value] pairs.
+        eq = checkEq(expItem[0], actItem[0]) && checkEq(expItem[1], actItem[1]);
+      } else {
+        // For Sets, they are values.
+        eq = checkEq(expItem, actItem);
+      }
+
+      if (eq) {
+        matchedIndices.add(i);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Checks if two values are deeply equal.
+ * @param expected The expected value.
+ * @param actual The actual value.
+ * @return True if the values are equal.
+ */
+function checkEq(expected, actual) {
+  if ((expected === null) != (actual === null)) {
+    return false;
+  }
+
+  // Check for strict equality (handles primitives and same object
+  // references).
+  if (expected === actual) {
+    return true;
+  }
+
+  if (Number.isNaN(expected) && Number.isNaN(actual)) {
+    return true;
+  }
+
+  if (typeof expected !== typeof actual) {
+    return false;
+  }
+
+  // If they are not objects, and not functions, and not strictly equal
+  // (checked above), they are unequal primitives.
+  if (typeof expected !== 'object' && typeof expected !== 'function') {
+    return false;
+  }
+
+  if (typeof expected === 'function') {
+    return expected.toString() === actual.toString();
+  }
+
+  // Initial checks for Arrays.
+  if ($Array.isArray(expected) !== $Array.isArray(actual)) {
+    return false;
+  }
+  if ($Array.isArray(expected) && expected.length !== actual.length) {
+    return false;
+  }
+
+  // Handle the ArrayBuffer cases. Bail out in case of type mismatch, to
+  // prevent the ArrayBuffer from being treated as an empty enumerable below.
+  if ((actual instanceof ArrayBuffer) !== (expected instanceof ArrayBuffer)) {
+    return false;
+  }
+  if ((actual instanceof ArrayBuffer) && (expected instanceof ArrayBuffer)) {
+    if (actual.byteLength != expected.byteLength) {
+      return false;
+    }
+    let actualView = new Uint8Array(actual);
+    let expectedView = new Uint8Array(expected);
+    for (let i = 0; i < actualView.length; ++i) {
+      if (actualView[i] != expectedView[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Check Date objects.
+  if (expected instanceof Date) {
+    if (!(actual instanceof Date)) {
+      return false;
+    }
+    return expected.getTime() === actual.getTime() ||
+        (Number.isNaN(expected.getTime()) && Number.isNaN(actual.getTime()));
+  }
+
+  // Check primitive wrappers.
+  if ((expected instanceof String) || (expected instanceof Number) ||
+      (expected instanceof Boolean)) {
+    if (Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual)) {
+      return false;
+    }
+    const expVal = expected.valueOf();
+    const actVal = actual.valueOf();
+    if (Number.isNaN(expVal) && Number.isNaN(actVal)) {
+      return true;
+    }
+    return expVal === actVal;
+  }
+
+  // Check Maps.
+  if (expected instanceof Map) {
+    if (!(actual instanceof Map)) {
+      return false;
+    }
+    return checkCollectionEq(expected, actual, /* isMap= */ true);
+  }
+
+  // Check Sets.
+  if (expected instanceof Set) {
+    if (!(actual instanceof Set)) {
+      return false;
+    }
+    return checkCollectionEq(expected, actual, /* isMap= */ false);
+  }
+
+  // Standard Object / Array property checking.
+  for (let p in actual) {
+    if ($Object.hasOwnProperty(actual, p) &&
+        !$Object.hasOwnProperty(expected, p)) {
+      return false;
+    }
+  }
+  for (let p in expected) {
+    if ($Object.hasOwnProperty(expected, p) &&
+        !$Object.hasOwnProperty(actual, p)) {
+      return false;
+    }
+  }
+
+  for (let p in expected) {
+    if (!checkEq(expected[p], actual[p])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 apiBridge.registerCustomHook(function(api) {
-  var chromeTest = api.compiledApi;
-  var apiFunctions = api.apiFunctions;
+  const kFailureException = 'chrome.test.failure';
+
+  const chromeTest = api.compiledApi;
+  const apiFunctions = api.apiFunctions;
 
   chromeTest.tests = chromeTest.tests || [];
 
-  var currentTest = null;
-  var lastTest = null;
-  var testsFailed = 0;
-  var testCount = 1;
-  var failureException = 'chrome.test.failure';
-  var pendingCallbacks = 0;
-  var pendingPromiseRejections = 0;
+  let currentTest = null;
+  let lastTest = null;
+  let testsFailed = 0;
+  let testCount = 1;
+  let pendingCallbacks = 0;
+  let pendingPromiseRejections = 0;
 
   function safeFunctionApply(func, args) {
     try {
-      if (func)
+      if (func) {
         return $Function.apply(func, undefined, args);
+      }
     } catch (e) {
-      if (e === failureException)
+      if (e === kFailureException) {
         throw e;
+      }
       handleException(e.message, e);
     }
   }
@@ -58,10 +230,11 @@ apiBridge.registerCustomHook(function(api) {
     }
 
     try {
-      chromeTest.log("( RUN      ) " + testName(currentTest));
+      chromeTest.log(`( RUN      ) ${testName(currentTest)}`);
       bindingUtil.setExceptionHandler(function(message, e) {
-        if (e !== failureException)
-          chromeTest.fail('uncaught exception: ' + message);
+        if (e !== kFailureException) {
+          chromeTest.fail(`uncaught exception: ${message}`);
+        }
       });
       const result = $Function.call(currentTest);
       if (result instanceof Promise) {
@@ -75,7 +248,7 @@ apiBridge.registerCustomHook(function(api) {
   // Helper function to get around the fact that function names in javascript
   // are read-only, and you can't assign one to anonymous functions.
   function testName(test) {
-    return test ? (test.name || test.generatedName) : "(no test)";
+    return test ? (test.name || test.generatedName) : '(no test)';
   }
 
   function testDone() {
@@ -86,19 +259,19 @@ apiBridge.registerCustomHook(function(api) {
     if (testsFailed == 0) {
       chromeTest.notifyPass();
     } else {
-      chromeTest.notifyFail('Failed ' + testsFailed + ' of ' +
-                             testCount + ' tests');
+      chromeTest.notifyFail(`Failed ${testsFailed} of ${testCount} tests`);
     }
   }
 
   // Helper function for boolean asserts. Compares |test| to |expected|.
   function assertBool(test, expected, message) {
     if (test !== expected) {
-      if (typeof(test) == "string") {
-        if (message)
-          message = test + "\n" + message;
-        else
+      if (typeof test == 'string') {
+        if (message) {
+          message = `${test}\n${message}`;
+        } else {
           message = test;
+        }
       }
       chromeTest.fail(message);
     }
@@ -107,16 +280,16 @@ apiBridge.registerCustomHook(function(api) {
   apiFunctions.setHandleRequest('callbackAdded', function() {
     pendingCallbacks++;
 
-    var called = null;
+    let called = null;
     return function() {
       if (called != null) {
-        var redundantPrefix = 'Error\n';
+        const redundantPrefixLength = 'Error\n'.length;
         chromeTest.fail(
           'Callback has already been run. ' +
           'First call:\n' +
-          $String.slice(called, redundantPrefix.length) + '\n' +
+          $String.slice(called, redundantPrefixLength) + '\n' +
           'Second call:\n' +
-          $String.slice(new Error().stack, redundantPrefix.length));
+          $String.slice(new Error().stack, redundantPrefixLength));
       }
       called = new Error().stack;
 
@@ -128,9 +301,9 @@ apiBridge.registerCustomHook(function(api) {
   });
 
   apiFunctions.setHandleRequest('fail', function failHandler(message) {
-    chromeTest.log("(  FAILED  ) " + testName(currentTest));
+    chromeTest.log(`(  FAILED  ) ${testName(currentTest)}`);
 
-    var stack = {};
+    let stack = {};
     // NOTE(devlin): captureStackTrace() populates a stack property of the
     // passed-in object with the stack trace. The second parameter (failHandler)
     // represents a function to serve as a relative point, and is removed from
@@ -140,16 +313,17 @@ apiBridge.registerCustomHook(function(api) {
     // really fancy, there may be more sophisticated ways of doing this.
     Error.captureStackTrace(stack, failHandler);
 
-    if (!message)
-      message = "FAIL (no message)";
+    if (!message) {
+      message = 'FAIL (no message)';
+    }
 
-    message += "\n" + stack.stack;
-    console.log("[FAIL] " + testName(currentTest) + ": " + message);
+    message += '\n' + stack.stack;
+    console.log(`[FAIL] ${testName(currentTest)}: ${message}`);
     testsFailed++;
     testDone();
 
     // Interrupt the rest of the test.
-    throw failureException;
+    throw kFailureException;
   });
 
   apiFunctions.setHandleRequest('succeed', function() {
@@ -159,8 +333,8 @@ apiBridge.registerCustomHook(function(api) {
         'not waiting for the promise returned by `assertPromiseRejects()` to ' +
         'resolve. Instead, use `await assertPromiseRejects(...)` or ' +
         '`assertPromiseRejects(...).then(...).`.');
-    console.log("[SUCCESS] " + testName(currentTest));
-    chromeTest.log("(  SUCCESS )");
+    console.log(`[SUCCESS] ${testName(currentTest)}`);
+    chromeTest.log('(  SUCCESS )');
     testDone();
   });
 
@@ -177,103 +351,61 @@ apiBridge.registerCustomHook(function(api) {
   });
 
   apiFunctions.setHandleRequest('checkDeepEq', function(expected, actual) {
-    if ((expected === null) != (actual === null))
-      return false;
+    return checkEq(expected, actual);
+  });
 
-    if (expected === actual)
-      return true;
-
-    if (typeof(expected) !== typeof(actual))
-      return false;
-    if (Array.isArray(expected) !== Array.isArray(actual))
-      return false;
-
-    // Handle the ArrayBuffer cases. Bail out in case of type mismatch, to
-    // prevent the ArrayBuffer from being treated as an empty enumerable below.
-    if ((actual instanceof ArrayBuffer) !== (expected instanceof ArrayBuffer))
-      return false;
-    if ((actual instanceof ArrayBuffer) && (expected instanceof ArrayBuffer)) {
-      if (actual.byteLength != expected.byteLength)
-        return false;
-      var actualView = new Uint8Array(actual);
-      var expectedView = new Uint8Array(expected);
-      for (var i = 0; i < actualView.length; ++i) {
-        if (actualView[i] != expectedView[i]) {
-          return false;
+  apiFunctions.setHandleRequest(
+      'assertEq', function(expected, actual, message) {
+        if (chromeTest.checkDeepEq(expected, actual)) {
+          return;
         }
-      }
-      return true;
-    }
 
-    for (var p in actual) {
-      if ($Object.hasOwnProperty(actual, p) &&
-          !$Object.hasOwnProperty(expected, p)) {
-        return false;
-      }
-    }
-    for (var p in expected) {
-      if ($Object.hasOwnProperty(expected, p) &&
-          !$Object.hasOwnProperty(actual, p)) {
-        return false;
-      }
-    }
+        let errorMsg = 'API Test Error in ' + testName(currentTest);
+        if (message) {
+          errorMsg += ': ' + message;
+        }
 
-    for (var p in expected) {
-      var eq = true;
-      switch (typeof(expected[p])) {
-        case 'object':
-          eq = chromeTest.checkDeepEq(expected[p], actual[p]);
-          break;
-        case 'function':
-          eq = (typeof(actual[p]) != 'undefined' &&
-                expected[p].toString() == actual[p].toString());
-          break;
-        default:
-          eq = (expected[p] == actual[p] &&
-                typeof(expected[p]) == typeof(actual[p]));
-          break;
-      }
-      if (!eq)
-        return false;
-    }
-    return true;
-  });
+        if (typeof expected == 'object' || typeof actual == 'object') {
+          errorMsg += '\nActual: ' + ($JSON.stringify(actual) || '' + actual) +
+              '\nExpected: ' + ($JSON.stringify(expected) || '' + expected);
+        } else {
+          errorMsg += `\nActual: ${actual}\nExpected: ${expected}`;
+          if (typeof expected != typeof actual) {
+            errorMsg += ` (type mismatch)\nActual Type: ${
+                typeof actual}\nExpected Type:${typeof expected}`;
+          }
+        }
+        chromeTest.fail(errorMsg);
+      });
 
-  apiFunctions.setHandleRequest('assertEq',
-                                function(expected, actual, message) {
-    var error_msg = "API Test Error in " + testName(currentTest);
-    if (message)
-      error_msg += ": " + message;
-    if (typeof(expected) == 'object') {
-      if (!chromeTest.checkDeepEq(expected, actual)) {
-        error_msg += "\nActual: " + $JSON.stringify(actual) +
-                     "\nExpected: " + $JSON.stringify(expected);
-        chromeTest.fail(error_msg);
-      }
-      return;
-    }
-    if (expected != actual) {
-      chromeTest.fail(error_msg +
-                       "\nActual: " + actual + "\nExpected: " + expected);
-    }
-    if (typeof(expected) != typeof(actual)) {
-      chromeTest.fail(error_msg +
-                       " (type mismatch)\nActual Type: " + typeof(actual) +
-                       "\nExpected Type:" + typeof(expected));
-    }
-  });
+  apiFunctions.setHandleRequest(
+      'assertNe', function(expected, actual, message) {
+        if (!chromeTest.checkDeepEq(expected, actual)) {
+          return;
+        }
+
+        let errorMsg = 'API Test Error in ' + testName(currentTest);
+        if (message) {
+          errorMsg += ': ' + message;
+        }
+
+        errorMsg += '\nExpected unequal values, but both are ' +
+            $JSON.stringify(expected);
+        chromeTest.fail(errorMsg);
+      });
 
   apiFunctions.setHandleRequest('assertNoLastError', function() {
     if (chrome.runtime.lastError != undefined) {
-      chromeTest.fail("lastError.message == " +
+      chromeTest.fail('lastError.message == ' +
                        chrome.runtime.lastError.message);
     }
   });
 
   apiFunctions.setHandleRequest('assertLastError', function(expectedError) {
-    chromeTest.assertEq(typeof(expectedError), 'string');
-    chromeTest.assertTrue(chrome.runtime.lastError != undefined,
-        "No lastError, but expected " + expectedError);
+    chromeTest.assertEq(typeof expectedError, 'string');
+    chromeTest.assertTrue(
+        chrome.runtime.lastError != undefined,
+        `No lastError, but expected ${expectedError}`);
     chromeTest.assertEq(expectedError, chrome.runtime.lastError.message);
   });
 
@@ -284,7 +416,7 @@ apiBridge.registerCustomHook(function(api) {
       fn.apply(self, args);
       chromeTest.fail('Did not throw error: ' + fn);
     } catch (e) {
-      if (e != failureException && message !== undefined) {
+      if (e != kFailureException && message !== undefined) {
         if (message instanceof RegExp) {
           chromeTest.assertTrue(message.test(e.message),
                                 e.message + ' should match ' + message)
@@ -301,12 +433,11 @@ apiBridge.registerCustomHook(function(api) {
     const inServiceWorker = 'ServiceWorkerGlobalScope' in self;
 
     function createError(exception) {
-      let errorStr = 'Unable to load script: "' + scriptUrl + '"';
+      const errorStr = `Unable to load script: "${scriptUrl}"`;
       if (inServiceWorker) {
-        return new Error(errorStr, { cause:exception });
-      } else {
-        return new Error(errorStr);
+        return new Error(errorStr, {cause: exception});
       }
+      return new Error(errorStr);
     }
 
     if (inServiceWorker) {
@@ -317,8 +448,8 @@ apiBridge.registerCustomHook(function(api) {
       }
       return Promise.resolve();
     }
-    let script = document.createElement('script');
-    let onScriptLoad = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const onScriptLoad = new Promise((resolve, reject) => {
       script.onload = resolve;
       function onError() {
         reject(createError());
@@ -348,7 +479,7 @@ apiBridge.registerCustomHook(function(api) {
           if (expectedMessage instanceof RegExp) {
             chromeTest.assertTrue(
                 expectedMessage.test(e.toString()),
-                `"${e.message}" should match "${expectedMessage}"`);
+                `'${e.message}' should match '${expectedMessage}'`);
           } else {
             chromeTest.assertEq('string', typeof expectedMessage);
             chromeTest.assertEq(expectedMessage, e.toString());
@@ -360,9 +491,9 @@ apiBridge.registerCustomHook(function(api) {
   // assertNoLastError() and (optionally) succeed() for you.
   apiFunctions.setHandleRequest('callback', function(func, expectedError) {
     if (func) {
-      chromeTest.assertEq(typeof(func), 'function');
+      chromeTest.assertEq(typeof func, 'function');
     }
-    var callbackCompleted = chromeTest.callbackAdded();
+    const callbackCompleted = chromeTest.callbackAdded();
 
     return function() {
       if (expectedError == null) {
@@ -371,7 +502,7 @@ apiBridge.registerCustomHook(function(api) {
         chromeTest.assertLastError(expectedError);
       }
 
-      var result;
+      let result;
       if (func) {
         result = safeFunctionApply(func, arguments);
       }
@@ -382,8 +513,8 @@ apiBridge.registerCustomHook(function(api) {
   });
 
   apiFunctions.setHandleRequest('listenOnce', function(event, func) {
-    var callbackCompleted = chromeTest.callbackAdded();
-    var listener = function() {
+    const callbackCompleted = chromeTest.callbackAdded();
+    const listener = function() {
       event.removeListener(listener);
       safeFunctionApply(func, arguments);
       callbackCompleted();
@@ -392,13 +523,13 @@ apiBridge.registerCustomHook(function(api) {
   });
 
   apiFunctions.setHandleRequest('listenForever', function(event, func) {
-    var callbackCompleted = chromeTest.callbackAdded();
+    const callbackCompleted = chromeTest.callbackAdded();
 
-    var listener = function() {
+    const listener = function() {
       safeFunctionApply(func, arguments);
     };
 
-    var done = function() {
+    const done = function() {
       event.removeListener(listener);
       callbackCompleted();
     };
@@ -441,10 +572,6 @@ apiBridge.registerCustomHook(function(api) {
   apiFunctions.setHandleRequest('setExceptionHandler', function(callback) {
     chromeTest.assertEq(typeof(callback), 'function');
     bindingUtil.setExceptionHandler(callback);
-  });
-
-  apiFunctions.setHandleRequest('getWakeEventPage', function() {
-    return natives.GetWakeEventPage();
   });
 
   environmentSpecificBindings.registerHooks(api);

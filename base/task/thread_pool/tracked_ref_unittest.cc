@@ -8,15 +8,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -147,5 +146,4 @@ TEST(TrackedRefTest, CopyAndMoveSemantics) {
   EXPECT_EQ(1, foo.factory.live_tracked_refs_.SubtleRefCountForDebug());
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

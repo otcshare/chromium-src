@@ -4,9 +4,9 @@
 
 #include "extensions/common/manifest_handlers/requirements_info.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "extensions/common/api/requirements.h"
@@ -49,8 +49,7 @@ bool RequirementsHandler::AlwaysParseForType(Manifest::Type type) const {
 bool RequirementsHandler::Parse(Extension* extension, std::u16string* error) {
   ManifestKeys manifest_keys;
   if (!ManifestKeys::ParseFromDictionary(
-          extension->manifest()->available_values().GetDict(), &manifest_keys,
-          error)) {
+          extension->manifest()->available_values(), manifest_keys, *error)) {
     return false;
   }
 
@@ -77,12 +76,9 @@ bool RequirementsHandler::Parse(Extension* extension, std::u16string* error) {
   if (requirements._3d) {
     // css3d is always available, so no check is needed, but no error is
     // generated.
-    requirements_info->webgl = base::Contains(
-        requirements._3d->features, api::requirements::_3D_FEATURE_WEBGL);
+    requirements_info->webgl = std::ranges::contains(
+        requirements._3d->features, api::requirements::_3DFeature::kWebgl);
   }
-
-  if (requirements.window && requirements.window->shape)
-    requirements_info->window_shape = *requirements.window->shape;
 
   extension->SetManifestData(ManifestKeys::kRequirements,
                              std::move(requirements_info));

@@ -4,6 +4,8 @@
 
 #import "ios/web/test/web_int_test.h"
 
+#import "base/apple/foundation_util.h"
+#import "base/functional/callback_helpers.h"
 #import "base/ios/block_types.h"
 #import "base/memory/ptr_util.h"
 #import "base/scoped_observation.h"
@@ -12,16 +14,15 @@
 #import "base/test/scoped_run_loop_timeout.h"
 #import "ios/web/common/uikit_ui_util.h"
 #import "ios/web/common/web_view_creation_util.h"
+#import "ios/web/public/browser_state_utils.h"
 #import "ios/web/public/test/js_test_util.h"
 #import "ios/web/public/test/web_view_interaction_test_util.h"
 #import "ios/web/public/web_state_observer.h"
+#import "ios/web/web_state/web_state_impl.h"
+#import "ui/display/screen.h"
 
 #if DCHECK_IS_ON()
 #import "ui/display/screen_base.h"
-#endif
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
 #endif
 
 using base::test::ios::kWaitForClearBrowsingDataTimeout;
@@ -60,14 +61,17 @@ class IntTestWebStateObserver : public WebStateObserver {
 
 #pragma mark - WebIntTest
 
-WebIntTest::WebIntTest() {}
+WebIntTest::WebIntTest()
+    : screen_(std::make_unique<display::ScopedNativeScreen>()) {}
 WebIntTest::~WebIntTest() {}
 
 void WebIntTest::SetUp() {
   WebTest::SetUp();
 
   // Remove any previously existing WKWebView data.
-  RemoveWKWebViewCreatedData([WKWebsiteDataStore defaultDataStore],
+  WKWebsiteDataStore* data_store =
+      GetDataStoreForBrowserState(GetBrowserState());
+  RemoveWKWebViewCreatedData(data_store,
                              [WKWebsiteDataStore allWebsiteDataTypes]);
 
   // Create the WebState.
@@ -82,17 +86,32 @@ void WebIntTest::SetUp() {
 }
 
 void WebIntTest::TearDown() {
-  RemoveWKWebViewCreatedData([WKWebsiteDataStore defaultDataStore],
+  // Tests can create an unresponsive WebProcess. WebIntTest::TearDown will
+  // call ClearBrowingData, which can take a very long time with an unresponsive
+  // WebProcess. Work around this problem by force closing WKWebView and its
+  // network process via private APIs.
+  WKWebsiteDataStore* data_store =
+      GetDataStoreForBrowserState(GetBrowserState());
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+  WKWebView* web_view = base::apple::ObjCCast<WKWebView>(
+      web::WebStateImpl::FromWebState(web_state())
+          ->GetWebViewNavigationProxy());
+  [web_view performSelector:@selector(_close)];
+
+  [data_store performSelector:@selector(_terminateNetworkProcess)];
+#pragma clang diagnostic pop
+
+  RemoveWKWebViewCreatedData(data_store,
                              [WKWebsiteDataStore allWebsiteDataTypes]);
 
   WebTest::TearDown();
 
 #if DCHECK_IS_ON()
-  // The same screen object is shared across multiple test runs on IOS build.
   // Make sure that all display observers are removed at the end of each
   // test.
   display::ScreenBase* screen =
-      static_cast<display::ScreenBase*>(display::Screen::GetScreen());
+      static_cast<display::ScreenBase*>(display::Screen::Get());
   DCHECK(!screen->HasDisplayObservers());
 #endif
 }
@@ -133,32 +152,9 @@ bool WebIntTest::LoadWithParams(
 void WebIntTest::RemoveWKWebViewCreatedData(WKWebsiteDataStore* data_store,
                                             NSSet* websiteDataTypes) {
   base::RunLoop run_loop;
-  __block base::OnceClosure quit_closure = run_loop.QuitClosure();
-
-  ProceduralBlock remove_data = ^{
-    [data_store removeDataOfTypes:websiteDataTypes
-                    modifiedSince:NSDate.distantPast
-                completionHandler:^{
-                  std::move(quit_closure).Run();
-                }];
-  };
-
-  if ([websiteDataTypes containsObject:WKWebsiteDataTypeCookies]) {
-    // TODO(crbug.com/554225): This approach of creating a WKWebView and
-    // executing JS to clear cookies is a workaround for
-    // https://bugs.webkit.org/show_bug.cgi?id=149078.
-    // Remove this, when that bug is fixed. The `marker_web_view` will be
-    // released when cookies have been cleared.
-    WKWebView* marker_web_view =
-        web::BuildWKWebView(CGRectZero, GetBrowserState());
-    [marker_web_view evaluateJavaScript:@""
-                      completionHandler:^(id, NSError*) {
-                        [marker_web_view self];
-                        remove_data();
-                      }];
-  } else {
-    remove_data();
-  }
+  [data_store removeDataOfTypes:websiteDataTypes
+                  modifiedSince:NSDate.distantPast
+              completionHandler:base::CallbackToBlock(run_loop.QuitClosure())];
 
   // Wait until the data is removed. We increase the timeout to 90 seconds here
   // since this action has been timing out frequently on the bots.
@@ -172,8 +168,9 @@ void WebIntTest::RemoveWKWebViewCreatedData(WKWebsiteDataStore* data_store,
 NSInteger WebIntTest::GetIndexOfNavigationItem(
     const web::NavigationItem* item) {
   for (NSInteger i = 0; i < navigation_manager()->GetItemCount(); ++i) {
-    if (navigation_manager()->GetItemAtIndex(i) == item)
+    if (navigation_manager()->GetItemAtIndex(i) == item) {
       return i;
+    }
   }
   return NSNotFound;
 }

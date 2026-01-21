@@ -12,7 +12,7 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/time/time.h"
 #include "base/win/scoped_handle.h"
-#include "base/win/win_util.h"
+#include "base/win/windows_handle_util.h"
 #include "chrome/updater/constants.h"
 
 namespace updater {
@@ -32,7 +32,7 @@ std::unique_ptr<base::WaitableEvent> SignalInitializationDone() {
   }
 
   std::unique_ptr<base::WaitableEvent> notifier_event;
-  if (init_done_notifier.IsValid()) {
+  if (init_done_notifier.is_valid()) {
     notifier_event =
         std::make_unique<base::WaitableEvent>(std::move(init_done_notifier));
     notifier_event->Signal();
@@ -50,8 +50,9 @@ void NotifyInitializationDoneForTesting() {
   // immediately reset. Wait at most 5 seconds for the test to signal that
   // it's ready using the same event before continuing. If the test takes
   // longer than that stop waiting to prevent hangs.
-  if (notifier_event)
+  if (notifier_event) {
     notifier_event->TimedWait(base::Seconds(5));
+  }
 }
 
 }  // namespace updater

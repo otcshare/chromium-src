@@ -8,15 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <limits>
-#include <new>
-
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
-#include "mojo/public/c/system/macros.h"
+#include "base/types/is_instantiation.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
-#include "mojo/public/cpp/bindings/lib/buffer.h"
 #include "mojo/public/cpp/bindings/lib/message_fragment.h"
 #include "mojo/public/cpp/bindings/lib/template_util.h"
 #include "mojo/public/cpp/bindings/lib/validate_params.h"
@@ -52,10 +50,12 @@ struct ArrayDataTraits {
   static uint32_t GetStorageSize(uint32_t num_elements) {
     return MessageFragmentArrayTraits<T>::GetStorageSize(num_elements);
   }
-  static Ref ToRef(StorageType* storage, size_t offset) {
-    return storage[offset];
+  static Ref ToRef(StorageType* storage, size_t offset, uint32_t num_elements) {
+    return UNSAFE_TODO(storage[offset]);
   }
-  static ConstRef ToConstRef(const StorageType* storage, size_t offset) {
+  static ConstRef ToConstRef(base::span<const StorageType> storage,
+                             size_t offset,
+                             uint32_t num_elements) {
     return storage[offset];
   }
 };
@@ -95,12 +95,178 @@ struct ArrayDataTraits<bool> {
   static uint32_t GetStorageSize(uint32_t num_elements) {
     return MessageFragmentArrayTraits<bool>::GetStorageSize(num_elements);
   }
-  static BitRef ToRef(StorageType* storage, size_t offset) {
-    return BitRef(&storage[offset / 8],
+  static BitRef ToRef(StorageType* storage,
+                      size_t offset,
+                      uint32_t num_elements) {
+    return BitRef(UNSAFE_TODO(&storage[offset / 8]),
                   static_cast<uint8_t>(1 << (offset % 8)));
   }
-  static bool ToConstRef(const StorageType* storage, size_t offset) {
+  static bool ToConstRef(base::span<const StorageType> storage, size_t offset) {
     return (storage[offset / 8] & (1 << (offset % 8))) != 0;
+  }
+};
+
+// Similar to the bool specialization, except this optional specialization
+// returns an |OptionalBitRef|. The |OptionalBitRef| will write to both the
+// flag bit and the value bit.
+template <>
+struct ArrayDataTraits<std::optional<bool>> {
+  using StorageType = uint8_t;
+
+  class OptionalBitRef {
+   public:
+    ~OptionalBitRef() = default;
+
+    OptionalBitRef& operator=(std::optional<bool> value) {
+      if (value) {
+        *flag_storage_ |= mask_;
+        if (*value) {
+          *value_storage_ |= mask_;
+        } else {
+          *value_storage_ &= ~mask_;
+        }
+      } else {
+        *flag_storage_ &= ~mask_;
+      }
+      return *this;
+    }
+
+    std::optional<bool> ToOptional() {
+      if (*flag_storage_ & mask_) {
+        return *value_storage_ & mask_;
+      } else {
+        return std::nullopt;
+      }
+    }
+
+    explicit operator std::optional<bool>() { return ToOptional(); }
+
+   private:
+    friend struct ArrayDataTraits<std::optional<bool>>;
+    OptionalBitRef(StorageType* value_storage,
+                   uint8_t* flag_storage,
+                   uint8_t mask)
+        : value_storage_(value_storage),
+          flag_storage_(flag_storage),
+          mask_(mask) {}
+
+    OptionalBitRef() = delete;
+
+    raw_ptr<StorageType> value_storage_;
+    raw_ptr<uint8_t> flag_storage_;
+    const uint8_t mask_;
+  };
+
+  using Ref = OptionalBitRef;
+  using ConstRef = std::optional<bool>;
+  using OptionalBoolTrait = MessageFragmentArrayTraits<std::optional<bool>>;
+
+  static const uint32_t kMaxNumElements = OptionalBoolTrait::kMaxNumElements;
+
+  static uint32_t GetStorageSize(uint32_t num_elements) {
+    return OptionalBoolTrait::GetStorageSize(num_elements);
+  }
+
+  static OptionalBitRef ToRef(StorageType* storage,
+                              size_t offset,
+                              uint32_t num_elements) {
+    return OptionalBitRef(
+        UNSAFE_TODO(storage +
+                    OptionalBoolTrait::GetEngagedBitfieldSize(num_elements) +
+                    (offset / 8)),
+        UNSAFE_TODO(reinterpret_cast<uint8_t*>(storage) + (offset / 8)),
+        static_cast<uint8_t>(1 << (offset % 8)));
+  }
+
+  static ConstRef ToConstRef(const StorageType* storage,
+                             size_t offset,
+                             uint32_t num_elements) {
+    return ToRef(const_cast<StorageType*>(storage), offset, num_elements)
+        .ToOptional();
+  }
+};
+
+// Optional specialization that returns |OptionalRef|s. |OptionalRef| will
+// write to both the data address and the flag field bit.
+// TODO(ffred): consider merging with the optional<bool> specialization using
+// if constexpr.
+template <typename T>
+  requires(base::is_instantiation<T, std::optional>)
+struct ArrayDataTraits<T> {
+  using StorageType = typename T::value_type;
+
+  template <typename StorageType>
+  class OptionalRef {
+   public:
+    ~OptionalRef() = default;
+
+    OptionalRef& operator=(std::optional<StorageType> value) {
+      if (value) {
+        *flag_storage_ |= mask_;
+        *value_storage_ = *value;
+      } else {
+        *flag_storage_ &= ~mask_;
+      }
+      return *this;
+    }
+
+    T ToOptional() {
+      if (*flag_storage_ & mask_) {
+        return *value_storage_;
+      } else {
+        return std::nullopt;
+      }
+    }
+
+    explicit operator T() { return ToOptional(); }
+
+   private:
+    friend struct ArrayDataTraits<T>;
+    OptionalRef(StorageType* value_storage, uint8_t* flag_storage, uint8_t mask)
+        : value_storage_(value_storage),
+          flag_storage_(flag_storage),
+          mask_(mask) {}
+
+    OptionalRef() = delete;
+
+    raw_ptr<StorageType> value_storage_;
+    raw_ptr<uint8_t> flag_storage_;
+    const uint8_t mask_;
+  };
+
+  using Ref = OptionalRef<StorageType>;
+  using ConstRef = T;
+  using OptionalTypeTrait = MessageFragmentArrayTraits<T>;
+
+  static const uint32_t kMaxNumElements = OptionalTypeTrait::kMaxNumElements;
+
+  static uint32_t GetStorageSize(uint32_t num_elements) {
+    return OptionalTypeTrait::GetStorageSize(num_elements);
+  }
+
+  static OptionalRef<StorageType> ToRef(StorageType* storage,
+                                        size_t offset,
+                                        size_t num_elements) {
+    // Check for proper alignment. Header is already aligned.
+    DCHECK(OptionalTypeTrait::GetEngagedBitfieldSize(num_elements) %
+               sizeof(StorageType) ==
+           0)
+        << "bitfield size should be multiple of StorageType";
+
+    uint8_t* value_start =
+        UNSAFE_TODO(reinterpret_cast<uint8_t*>(storage) +
+                    OptionalTypeTrait)::GetEngagedBitfieldSize(num_elements);
+    return OptionalRef<StorageType>(
+        UNSAFE_TODO(reinterpret_cast<StorageType*>(value_start) + offset),
+        UNSAFE_TODO(reinterpret_cast<uint8_t*>(storage) + (offset / 8)),
+        static_cast<uint8_t>(1 << (offset % 8)));
+  }
+
+  static T ToConstRef(const StorageType* storage,
+                      size_t offset,
+                      uint32_t num_elements) {
+    return ToRef(const_cast<StorageType*>(storage), offset, num_elements)
+        .ToOptional();
   }
 };
 
@@ -132,8 +298,9 @@ struct ArraySerializationHelper<T, false, false> {
     DCHECK(!validate_params->element_validate_params)
         << "Primitive type should not have array validate params";
 
-    if (!validate_params->validate_enum_func)
+    if (!validate_params->validate_enum_func) {
       return true;
+    }
 
     // Enum validation.
     for (uint32_t i = 0; i < header->num_elements; ++i) {
@@ -144,8 +311,43 @@ struct ArraySerializationHelper<T, false, false> {
           << "Enum validation should never take place on a primitive type of "
              "width greater than 32-bit";
       if (!validate_params->validate_enum_func(
-              static_cast<int32_t>(elements[i]), validation_context))
+              static_cast<int32_t>(UNSAFE_TODO(elements[i])),
+              validation_context)) {
         return false;
+      }
+    }
+    return true;
+  }
+};
+
+template <typename T>
+struct ArraySerializationHelper<std::optional<T>, false, false> {
+  using ElementType = typename ArrayDataTraits<T>::StorageType;
+
+  static bool ValidateElements(const ArrayHeader* header,
+                               const ElementType* elements,
+                               ValidationContext* validation_context,
+                               const ContainerValidateParams* validate_params) {
+    DCHECK(!validate_params->element_validate_params)
+        << "Primitive type should not have array validate params";
+
+    if (!validate_params->validate_enum_func) {
+      return true;
+    }
+    // Enum validation.
+    for (uint32_t i = 0; i < header->num_elements; ++i) {
+      // Enums are defined by mojo to be 32-bit, but this code is also compiled
+      // for arrays of primitives such as uint64_t (but never called), so it's
+      // safe to do a static_cast here.
+      std::optional<int32_t> element =
+          ArrayDataTraits<std::optional<T>>::ToConstRef(elements, i,
+                                                        header->num_elements);
+      if (element) {
+        if (!validate_params->validate_enum_func(*element,
+                                                 validation_context)) {
+          return false;
+        }
+      }
     }
     return true;
   }
@@ -164,7 +366,7 @@ struct ArraySerializationHelper<T, false, true> {
 
     for (uint32_t i = 0; i < header->num_elements; ++i) {
       if (!validate_params->element_is_nullable &&
-          !IsHandleOrInterfaceValid(elements[i])) {
+          !IsHandleOrInterfaceValid(UNSAFE_TODO(elements[i]))) {
         static const ValidationError kError =
             std::is_same<T, Interface_Data>::value ||
                     std::is_same<T, Handle_Data>::value
@@ -179,8 +381,10 @@ struct ArraySerializationHelper<T, false, true> {
                 .c_str());
         return false;
       }
-      if (!ValidateHandleOrInterface(elements[i], validation_context))
+      if (!ValidateHandleOrInterface(UNSAFE_TODO(elements[i]),
+                                     validation_context)) {
         return false;
+      }
     }
     return true;
   }
@@ -195,16 +399,16 @@ struct ArraySerializationHelper<Pointer<T>, false, false> {
                                ValidationContext* validation_context,
                                const ContainerValidateParams* validate_params) {
     for (uint32_t i = 0; i < header->num_elements; ++i) {
-      if (!validate_params->element_is_nullable && !elements[i].offset) {
+      if (!validate_params->element_is_nullable &&
+          !UNSAFE_TODO(elements[i]).offset) {
         ReportValidationError(
-            validation_context,
-            VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
+            validation_context, VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
             MakeMessageWithArrayIndex("null in array expecting valid pointers",
-                                      header->num_elements,
-                                      i).c_str());
+                                      header->num_elements, i)
+                .c_str());
         return false;
       }
-      if (!ValidateCaller<T>::Run(elements[i], validation_context,
+      if (!ValidateCaller<T>::Run(UNSAFE_TODO(elements[i]), validation_context,
                                   validate_params->element_validate_params)) {
         return false;
       }
@@ -246,17 +450,18 @@ struct ArraySerializationHelper<U, true, false> {
                                ValidationContext* validation_context,
                                const ContainerValidateParams* validate_params) {
     for (uint32_t i = 0; i < header->num_elements; ++i) {
-      if (!validate_params->element_is_nullable && elements[i].is_null()) {
+      if (!validate_params->element_is_nullable &&
+          UNSAFE_TODO(elements[i]).is_null()) {
         ReportValidationError(
-            validation_context,
-            VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
+            validation_context, VALIDATION_ERROR_UNEXPECTED_NULL_POINTER,
             MakeMessageWithArrayIndex("null in array expecting valid unions",
                                       header->num_elements, i)
                 .c_str());
         return false;
       }
-      if (!ValidateInlinedUnion(elements[i], validation_context))
+      if (!ValidateInlinedUnion(UNSAFE_TODO(elements[i]), validation_context)) {
         return false;
+      }
     }
     return true;
   }
@@ -281,8 +486,9 @@ class Array_Data {
   static bool Validate(const void* data,
                        ValidationContext* validation_context,
                        const ContainerValidateParams* validate_params) {
-    if (!data)
+    if (!data) {
       return true;
+    }
     if (!IsAligned(data)) {
       ReportValidationError(validation_context,
                             VALIDATION_ERROR_MISALIGNED_OBJECT);
@@ -303,12 +509,11 @@ class Array_Data {
     if (validate_params->expected_num_elements != 0 &&
         header->num_elements != validate_params->expected_num_elements) {
       ReportValidationError(
-          validation_context,
-          VALIDATION_ERROR_UNEXPECTED_ARRAY_HEADER,
+          validation_context, VALIDATION_ERROR_UNEXPECTED_ARRAY_HEADER,
           MakeMessageWithExpectedArraySize(
               "fixed-size array has wrong number of elements",
-              header->num_elements,
-              validate_params->expected_num_elements).c_str());
+              header->num_elements, validate_params->expected_num_elements)
+              .c_str());
       return false;
     }
     if (!validation_context->ClaimMemory(data, header->num_bytes)) {
@@ -326,7 +531,7 @@ class Array_Data {
 
   Ref at(size_t offset) {
     DCHECK(offset < static_cast<size_t>(header_.num_elements));
-    return Traits::ToRef(storage(), offset);
+    return Traits::ToRef(storage(), offset, header_.num_elements);
   }
 
   ConstRef at(size_t offset) const {
@@ -335,12 +540,12 @@ class Array_Data {
   }
 
   StorageType* storage() {
-    return reinterpret_cast<StorageType*>(reinterpret_cast<char*>(this) +
-                                          sizeof(*this));
+    return reinterpret_cast<StorageType*>(
+        UNSAFE_TODO(reinterpret_cast<char*>(this) + sizeof(*this)));
   }
 
   const StorageType* storage() const {
-    return reinterpret_cast<const StorageType*>(this + 1);
+    return reinterpret_cast<const StorageType*>(UNSAFE_TODO(this + 1));
   }
 
  private:

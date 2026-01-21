@@ -22,20 +22,18 @@ import org.robolectric.Robolectric;
 import org.robolectric.android.util.concurrent.RoboExecutorService;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLog;
 import org.robolectric.util.Scheduler;
 
 import org.chromium.base.Log;
 import org.chromium.base.task.AsyncTask.Status;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Tests for {@link AsyncTask}.
- */
+/** Tests for {@link AsyncTask}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.LEGACY)
@@ -96,15 +94,13 @@ public class AsyncTaskThreadTest {
     private final RoboExecutorService mRoboExecutorService = new RoboExecutorService();
     private final Scheduler mBackgroundScheduler = Robolectric.getBackgroundThreadScheduler();
 
-    @Rule
-    public ExpectedException thrown = ExpectedException.none();
+    @Rule public ExpectedException thrown = ExpectedException.none();
 
-    public AsyncTaskThreadTest() {
-        if (DEBUG) ShadowLog.stream = System.out;
-    }
+    public AsyncTaskThreadTest() {}
 
     @Before
     public void setUp() {
+        BaseRobolectricTestRule.uninstallPausedExecutorService();
         mBackgroundScheduler.pause();
         assertEquals(Status.PENDING, mTask.getStatus());
     }
@@ -129,9 +125,9 @@ public class AsyncTaskThreadTest {
         mBackgroundScheduler.runOneTask();
 
         // Cannot cancel. The task is already run.
-        assertFalse(mTask.cancel(false /* mayInterruptIfRunning */));
+        assertFalse(mTask.cancel(/* mayInterruptIfRunning= */ false));
         assertTrue(mTask.get());
-        assertEquals(Boolean.TRUE, mTask.getPostExecuteResult());
+        assertEquals(true, mTask.getPostExecuteResult());
 
         // Note: This is somewhat counter-intuitive since cancel() failed.
         assertTrue(mTask.isCancelled());
@@ -174,7 +170,7 @@ public class AsyncTaskThreadTest {
 
         // This reflects FutureTask#cancel() behavior. Note that the task is
         // started but cancel can still return true.
-        assertTrue(mTask.cancel(false /* mayInterruptIfRunning */));
+        assertTrue(mTask.cancel(/* mayInterruptIfRunning= */ false));
 
         // Continue the task.
         mTask.feedData(true);
@@ -205,9 +201,9 @@ public class AsyncTaskThreadTest {
         mBackgroundScheduler.runOneTask();
 
         // Cannot cancel. The task is already run.
-        assertFalse(mTask.cancel(true /* mayInterruptIfRunning */));
+        assertFalse(mTask.cancel(/* mayInterruptIfRunning= */ true));
         assertTrue(mTask.get());
-        assertEquals(Boolean.TRUE, mTask.getPostExecuteResult());
+        assertEquals(true, mTask.getPostExecuteResult());
 
         // Note: This is somewhat counter-intuitive since cancel() failed.
         assertTrue(mTask.isCancelled());
@@ -226,7 +222,7 @@ public class AsyncTaskThreadTest {
         assertEquals(Status.RUNNING, mTask.getStatus());
 
         // Cancel and interrupt the current task.
-        assertTrue(mTask.cancel(true /* mayInterruptIfRunning */));
+        assertTrue(mTask.cancel(/* mayInterruptIfRunning= */ true));
 
         // Do not feed data here because task may finish before it gets interrupted.
 
@@ -241,7 +237,7 @@ public class AsyncTaskThreadTest {
         // Task was interrupted.
         // Note: interruption is raised and handled in the background thread, so we need to
         // wait here.
-        assertEquals(Boolean.TRUE, mTask.getInterruptedExceptionQueue().poll(3, TimeUnit.SECONDS));
+        assertEquals(true, mTask.getInterruptedExceptionQueue().poll(3, TimeUnit.SECONDS));
 
         assertTrue(mTask.isCancelled());
         assertEquals(Status.RUNNING, mTask.getStatus());

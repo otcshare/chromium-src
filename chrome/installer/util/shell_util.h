@@ -9,26 +9,25 @@
 #ifndef CHROME_INSTALLER_UTIL_SHELL_UTIL_H_
 #define CHROME_INSTALLER_UTIL_SHELL_UTIL_H_
 
-#include <windows.h>
-
 #include <stddef.h>
 #include <stdint.h>
 
 #include <array>
-#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
 #include "base/containers/flat_map.h"
-#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
+#include "base/strings/cstring_view.h"
+#include "base/win/windows_types.h"
 #include "chrome/installer/util/work_item_list.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class RegistryEntry;
 
@@ -78,7 +77,6 @@ class ShellUtil {
     SHORTCUT_LOCATION_DESKTOP = SHORTCUT_LOCATION_FIRST,
     SHORTCUT_LOCATION_QUICK_LAUNCH,
     SHORTCUT_LOCATION_START_MENU_ROOT,
-    SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,  // now placed in root
     SHORTCUT_LOCATION_START_MENU_CHROME_APPS_DIR,
     SHORTCUT_LOCATION_TASKBAR_PINS,   // base::win::Version::WIN7 +
     SHORTCUT_LOCATION_APP_SHORTCUTS,  // base::win::Version::WIN8 +
@@ -101,6 +99,18 @@ class ShellUtil {
     SHELL_SHORTCUT_UPDATE_EXISTING,
   };
 
+  enum class ShowSystemUIResult {
+    // The system UI was purposely not shown because it was unneeded.
+    kNotShown = 0,
+    // The system UI was shown successfully.
+    kSuccess,
+    // A fallback system UI was shown.
+    kFallback,
+    // No system UI was shown due to an error.
+    kError,
+    kMaxValue = kError
+  };
+
   // Properties for shortcuts. Properties set will be applied to
   // the shortcut on creation/update. On update, unset properties are ignored;
   // on create (and replaced) unset properties might have a default value (see
@@ -115,8 +125,7 @@ class ShellUtil {
       PROPERTIES_ICON = 1 << 3,
       PROPERTIES_APP_ID = 1 << 4,
       PROPERTIES_SHORTCUT_NAME = 1 << 5,
-      PROPERTIES_DUAL_MODE = 1 << 6,
-      PROPERTIES_TOAST_ACTIVATOR_CLSID = 1 << 7,
+      PROPERTIES_TOAST_ACTIVATOR_CLSID = 1 << 6,
     };
 
     explicit ShortcutProperties(ShellChange level_in);
@@ -307,8 +316,10 @@ class ShellUtil {
   static const wchar_t* kDefaultFileAssociations[];
 
   // File extensions that Chrome registers itself as being capable of
-  // handling.
-  static const wchar_t* kPotentialFileAssociations[];
+  // handling as a web browser.
+  static constexpr std::array<std::wstring_view, 8> kPotentialFileAssociations =
+      {L".htm", L".html", L".mhtml", L".shtml",
+       L".svg", L".xht",  L".xhtml", L".webp"};
 
   // Protocols that Chrome registers itself as the default handler for
   // when the user makes Chrome the default browser.
@@ -385,13 +396,6 @@ class ShellUtil {
   static void AddDefaultShortcutProperties(const base::FilePath& target_exe,
                                            ShortcutProperties* properties);
 
-  // Move an existing shortcut from |old_location| to |new_location| for the
-  // set |shortcut_level|.  If the folder containing |old_location| is then
-  // empty, it will be removed.
-  static bool MoveExistingShortcut(ShortcutLocation old_location,
-                                   ShortcutLocation new_location,
-                                   const ShortcutProperties& properties);
-
   // This converts ShellUtil's `location`, `properties`, and `operation` into
   // their base::win equivalents so callers can get the behavior of
   // CreateOrUpdateShortcut, but handle the actual shortcut creation themselves,
@@ -433,7 +437,7 @@ class ShellUtil {
   // location. The input should be formatted by FormatIconLocation above,
   // or follow one of the formats specified in
   // http://msdn.microsoft.com/library/windows/desktop/dd391573.aspx.
-  static absl::optional<std::pair<base::FilePath, int>> ParseIconLocation(
+  static std::optional<std::pair<base::FilePath, int>> ParseIconLocation(
       const std::wstring& argument);
 
   // This method returns the command to open URLs/files using chrome. Typically
@@ -447,15 +451,6 @@ class ShellUtil {
   // |chrome_exe|: the full path to chrome.exe
   static std::wstring GetChromeDelegateCommand(
       const base::FilePath& chrome_exe);
-
-  // Gets a mapping of all registered browser names (excluding the current
-  // browser) and their reinstall command (which usually sets browser as
-  // default).
-  // Given browsers can be registered in HKCU (as of Win7) and/or in HKLM, this
-  // method looks in both and gives precedence to values in HKCU as per the msdn
-  // standard: http://goo.gl/xjczJ.
-  static void GetRegisteredBrowsers(
-      std::map<std::wstring, std::wstring>* browsers);
 
   // Returns the suffix this user's Chrome install is registered with.
   // Always returns the empty string on system-level installs.
@@ -490,24 +485,6 @@ class ShellUtil {
   static std::wstring BuildAppUserModelId(
       const std::vector<std::wstring>& components);
 
-  // Returns true if Chrome can make itself the default browser without relying
-  // on the Windows shell to prompt the user. This is the case for versions of
-  // Windows prior to Windows 8.
-  static bool CanMakeChromeDefaultUnattended();
-
-  enum InteractiveSetDefaultMode {
-    // The intent picker is opened with the different choices available to the
-    // user.
-    INTENT_PICKER,
-    // The Windows default apps settings page is opened with the current default
-    // app focused.
-    SYSTEM_SETTINGS,
-  };
-
-  // Returns the interactive mode that should be used to set the default browser
-  // or default protocol client on Windows 8+.
-  static InteractiveSetDefaultMode GetInteractiveSetDefaultMode();
-
   // Returns the DefaultState of Chrome for HTTP and HTTPS and updates the
   // default browser beacons as appropriate.
   static DefaultState GetChromeDefaultState();
@@ -519,70 +496,46 @@ class ShellUtil {
 
   // Returns the DefaultState of Chrome for |protocol|.
   static DefaultState GetChromeDefaultProtocolClientState(
-      const std::wstring& protocol);
+      base::wcstring_view protocol);
 
-  // Make Chrome the default browser. This function works by going through
-  // the url protocols and file associations that are related to general
-  // browsing, e.g. http, https, .html etc., and requesting to become the
-  // default handler for each. If any of these fails the operation will return
-  // false to indicate failure, which is consistent with the return value of
-  // shell_integration::GetDefaultBrowser.
-  //
-  // In the case of failure any successful changes will be left, however no
-  // more changes will be attempted.
-  // TODO(benwells): Attempt to undo any changes that were successfully made.
-  // http://crbug.com/83970
-  //
-  // shell_change: Defines whether to register as default browser at system
-  //               level or user level. If value has ShellChange::SYSTEM_LEVEL
-  //               we should be running as admin user.
-  // chrome_exe: The chrome.exe path to register as default browser.
-  // elevate_if_not_admin: On Win7 if user is not admin, try to elevate for
-  //                       Chrome registration.
-  static bool MakeChromeDefault(int shell_change,
-                                const base::FilePath& chrome_exe,
-                                bool elevate_if_not_admin);
+  // Returns the DefaultState of Chrome for `file_extension`. `file_extension`
+  // must include a leading `.`, e.g., ".pdf".
+  static DefaultState GetChromeDefaultFileHandlerState(
+      base::wcstring_view file_extension);
 
-  // Make Chrome the default browser on Windows 10. This function works by going
-  // through the url protocols and file associations that are related to general
-  // browsing, e.g. http, https, .html etc., and directly setting the relevant
-  // registry entries for each. If any of these fails the operation will return
-  // false to indicate failure, which is consistent with the return value of
-  // shell_integration::GetDefaultBrowser. This function will also return false
-  // if it can't set the default directly on the current platform.
-  //
-  // shell_change: Defines whether to register as default browser at system
-  //               level or user level. If value has ShellChange::SYSTEM_LEVEL
-  //               we should be running as admin user.
-  // chrome_exe: The chrome.exe path to register as default browser.
-  // elevate_if_not_admin: If user is not admin, try to elevate for
-  //                       Chrome registration.
-  static bool MakeChromeDefaultDirectly(int shell_change,
-                                        const base::FilePath& chrome_exe,
-                                        bool elevate_if_not_admin);
 
   // Opens the Apps & Features page in the Windows settings in branded builds.
   //
   // This function DCHECKS that it is only called on Windows 10 or higher.
   static bool LaunchUninstallAppsSettings();
 
-  // Windows 8: Shows and waits for the "How do you want to open webpages?"
-  // dialog if Chrome is not already the default HTTP/HTTPS handler. Also does
-  // XP-era registrations if Chrome is chosen or was already the default. Do
-  // not use on pre-Win8 OSes.
+  // Windows 10: Launches the settings dialog focused on default apps.
   //
-  // Windows 10: The associations dialog cannot be launched so the settings
-  // dialog focused on default apps is launched. The function does not wait
-  // in this case.
+  // Windows 11: Launches the default apps settings dialog and navigates to the
+  // Chrome settings page. Falls back to Win10 behavior if the launch fails.
   //
-  // |chrome_exe| The chrome.exe path to register as default browser.
+  // Returns true if the dialog was launched, false otherwise.
+  //
+  // `chrome_exe` The chrome.exe path to register as default browser.
   static bool ShowMakeChromeDefaultSystemUI(const base::FilePath& chrome_exe);
 
-  // Make Chrome the default application for a protocol.
-  // chrome_exe: The chrome.exe path to register as default browser.
-  // protocol: The protocol to register as the default handler for.
-  static bool MakeChromeDefaultProtocolClient(const base::FilePath& chrome_exe,
-                                              const std::wstring& protocol);
+  // Opens the Windows settings dialog allowing the user to choose the default
+  // app for the given `file_extension`. It must be one of the extensions for
+  // which the browser is registered to handle. The dialog will be parented to
+  // `parent_hwnd`.
+  // It reads:
+  //   * Windows 10: "How do you want to open `file_extension` files from now
+  //     on?"
+  //   * Windows 11: "Select a default app for `file_extension` files"
+  // If opening the dialog fails, falls back to opening:
+  //   * Windows 10: The main "Choose default apps by file type" page
+  //   * Windows 11: The "Default apps" settings page for `chrome_exe`
+  // Returns a `ShowSystemUIResult` indicating whether a dialog was launched,
+  // and which if so.
+  static ShowSystemUIResult ShowSetDefaultForFileExtensionSystemUI(
+      const base::FilePath& chrome_exe,
+      base::wcstring_view file_extension,
+      HWND parent_hwnd);
 
   // Shows and waits for the Windows 8 "How do you want to open links of this
   // type?" dialog if Chrome is not already the default |protocol|
@@ -645,7 +598,7 @@ class ShellUtil {
     std::wstring ToCommandLineArgument() const;
 
     // Parses a ProtocolAssociations instance from a string command line arg.
-    static absl::optional<ProtocolAssociations> FromCommandLineArgument(
+    static std::optional<ProtocolAssociations> FromCommandLineArgument(
         const std::wstring& argument);
 
     base::flat_map<std::wstring, std::wstring> associations;
@@ -872,18 +825,6 @@ class ShellUtil {
       HKEY root,
       const std::vector<std::unique_ptr<RegistryEntry>>& entries,
       bool best_effort_no_rollback = false);
-
-  static std::array<uint32_t, 4> ComputeHashForTesting(
-      base::span<const uint8_t> input);
-
-  static std::wstring ComputeUserChoiceHashForTesting(
-      const std::wstring& extension,
-      const std::wstring& sid,
-      const std::wstring& prog_id,
-      const std::wstring& datetime);
-
-  static std::wstring GetCurrentProgIdForTesting(
-      const base::FilePath& chrome_exe);
 };
 
 #endif  // CHROME_INSTALLER_UTIL_SHELL_UTIL_H_

@@ -7,15 +7,18 @@
 
 #include <memory>
 
-#include "components/prefs/testing_pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
-#include "components/sync/base/features.h"
-#include "components/sync/driver/sync_service_impl.h"
-#include "components/sync/test/fake_sync_api_component_factory.h"
+#include "components/sync/service/sync_service_impl.h"
+#include "components/sync/test/fake_sync_engine_factory.h"
 #include "components/sync/test/mock_sync_invalidations_service.h"
-#include "components/sync/test/mock_trusted_vault_client.h"
 #include "components/sync/test/sync_client_mock.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/trusted_vault/test/fake_trusted_vault_client.h"
 #include "services/network/test/test_url_loader_factory.h"
+
+namespace os_crypt_async {
+class OSCryptAsync;
+}  // namespace os_crypt_async
 
 namespace syncer {
 
@@ -34,16 +37,16 @@ class SyncServiceImplBundle {
   // Creates a mock sync client that leverages the dependencies in this bundle.
   std::unique_ptr<SyncClientMock> CreateSyncClientMock();
 
-  // Creates an InitParams instance with the specified |start_behavior| and
-  // |sync_client|, and fills the rest with dummy values and objects owned by
-  // the bundle.
+  // Creates an InitParams instance with the specified `sync_client`, and fills
+  // the rest with fake values and objects owned by the bundle.
   SyncServiceImpl::InitParams CreateBasicInitParams(
-      SyncServiceImpl::StartBehavior start_behavior,
       std::unique_ptr<SyncClient> sync_client);
 
   // Accessors
 
-  TestingPrefServiceSimple* pref_service() { return &pref_service_; }
+  sync_preferences::TestingPrefServiceSyncable* pref_service() {
+    return &pref_service_;
+  }
 
   signin::IdentityTestEnvironment* identity_test_env() {
     return &identity_test_env_;
@@ -53,29 +56,24 @@ class SyncServiceImplBundle {
     return identity_test_env_.identity_manager();
   }
 
-  FakeSyncApiComponentFactory* component_factory() {
-    return &component_factory_;
-  }
+  FakeSyncEngineFactory* engine_factory() { return &engine_factory_; }
 
   MockSyncInvalidationsService* sync_invalidations_service() {
-    if (base::FeatureList::IsEnabled(kSyncSendInterestedDataTypes)) {
-      return &sync_invalidations_service_;
-    } else {
-      return nullptr;
-    }
+    return &sync_invalidations_service_;
   }
 
-  MockTrustedVaultClient* trusted_vault_client() {
+  trusted_vault::FakeTrustedVaultClient* trusted_vault_client() {
     return &trusted_vault_client_;
   }
 
  private:
-  TestingPrefServiceSimple pref_service_;
+  sync_preferences::TestingPrefServiceSyncable pref_service_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   signin::IdentityTestEnvironment identity_test_env_;
-  FakeSyncApiComponentFactory component_factory_;
+  FakeSyncEngineFactory engine_factory_;
   testing::NiceMock<MockSyncInvalidationsService> sync_invalidations_service_;
-  testing::NiceMock<MockTrustedVaultClient> trusted_vault_client_;
+  trusted_vault::FakeTrustedVaultClient trusted_vault_client_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 };
 
 }  // namespace syncer

@@ -43,54 +43,45 @@ class OfflineContentAggregatorBridge : public OfflineContentProvider::Observer,
 
   // Methods called from Java via JNI.
   void OpenItem(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& jobj,
-                jint launch_location,
-                jboolean j_open_in_incognito,
-                const base::android::JavaParamRef<jstring>& j_namespace,
-                const base::android::JavaParamRef<jstring>& j_id);
+                int32_t launch_location,
+                bool j_open_in_incognito,
+                const base::android::JavaRef<jstring>& j_namespace,
+                const base::android::JavaRef<jstring>& j_id);
   void RemoveItem(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  const base::android::JavaParamRef<jstring>& j_namespace,
-                  const base::android::JavaParamRef<jstring>& j_id);
+                  const base::android::JavaRef<jstring>& j_namespace,
+                  const base::android::JavaRef<jstring>& j_id);
   void CancelDownload(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& jobj,
-                      const base::android::JavaParamRef<jstring>& j_namespace,
-                      const base::android::JavaParamRef<jstring>& j_id);
+                      const base::android::JavaRef<jstring>& j_namespace,
+                      const base::android::JavaRef<jstring>& j_id);
   void PauseDownload(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& jobj,
-                     const base::android::JavaParamRef<jstring>& j_namespace,
-                     const base::android::JavaParamRef<jstring>& j_id);
+                     const base::android::JavaRef<jstring>& j_namespace,
+                     const base::android::JavaRef<jstring>& j_id);
   void ResumeDownload(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& jobj,
-                      const base::android::JavaParamRef<jstring>& j_namespace,
-                      const base::android::JavaParamRef<jstring>& j_id,
-                      jboolean j_has_user_gesture);
+                      const base::android::JavaRef<jstring>& j_namespace,
+                      const base::android::JavaRef<jstring>& j_id);
+  void ValidateDangerousDownload(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& j_namespace,
+      const base::android::JavaRef<jstring>& j_id);
   void GetItemById(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   const base::android::JavaParamRef<jstring>& j_namespace,
-                   const base::android::JavaParamRef<jstring>& j_id,
-                   const base::android::JavaParamRef<jobject>& jcallback);
+                   const base::android::JavaRef<jstring>& j_namespace,
+                   const base::android::JavaRef<jstring>& j_id,
+                   const base::android::JavaRef<jobject>& jcallback);
   void GetAllItems(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   const base::android::JavaParamRef<jobject>& jcallback);
-  void GetVisualsForItem(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& j_namespace,
-      const base::android::JavaParamRef<jstring>& j_id,
-      const base::android::JavaParamRef<jobject>& j_callback);
-  void GetShareInfoForItem(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& j_namespace,
-      const base::android::JavaParamRef<jstring>& j_id,
-      const base::android::JavaParamRef<jobject>& j_callback);
+                   const base::android::JavaRef<jobject>& jcallback);
+  void GetVisualsForItem(JNIEnv* env,
+                         const base::android::JavaRef<jstring>& j_namespace,
+                         const base::android::JavaRef<jstring>& j_id,
+                         const base::android::JavaRef<jobject>& j_callback);
+  void GetShareInfoForItem(JNIEnv* env,
+                           const base::android::JavaRef<jstring>& j_namespace,
+                           const base::android::JavaRef<jstring>& j_id,
+                           const base::android::JavaRef<jobject>& j_callback);
   void RenameItem(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  const base::android::JavaParamRef<jstring>& j_namespace,
-                  const base::android::JavaParamRef<jstring>& j_id,
-                  const base::android::JavaParamRef<jstring>& j_name,
-                  const base::android::JavaParamRef<jobject>& j_callback);
+                  const base::android::JavaRef<jstring>& j_namespace,
+                  const base::android::JavaRef<jstring>& j_id,
+                  const base::android::JavaRef<jstring>& j_name,
+                  const base::android::JavaRef<jobject>& j_callback);
 
  private:
   OfflineContentAggregatorBridge(OfflineContentAggregator* aggregator);
@@ -100,7 +91,7 @@ class OfflineContentAggregatorBridge : public OfflineContentProvider::Observer,
       const OfflineContentProvider::OfflineItemList& items) override;
   void OnItemRemoved(const ContentId& id) override;
   void OnItemUpdated(const OfflineItem& item,
-                     const absl::optional<UpdateDelta>& update_delta) override;
+                     const std::optional<UpdateDelta>& update_delta) override;
   void OnContentProviderGoingDown() override;
 
   // A reference to the Java counterpart of this class.  See

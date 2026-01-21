@@ -8,7 +8,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/permissions/permission_request_manager.h"
-#include "content/browser/screen_enumeration/screen_details_test_utils.h"
+#include "content/browser/screen_details/screen_details_test_utils.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -18,7 +18,7 @@
 using ScreenDetailsTest = InProcessBrowserTest;
 
 // Tests the basic structure and values of the ScreenDetails API.
-// TODO(crbug.com/1119974): Need content_browsertests permission controls.
+// TODO(crbug.com/40145721): Need content_browsertests permission controls.
 IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, GetScreenDetailsBasic) {
   auto* tab = chrome_test_utils::GetActiveWebContents(this);
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -34,35 +34,12 @@ IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, GetScreenDetailsBasic) {
   ASSERT_TRUE(EvalJs(tab, "'getScreenDetails' in self").ExtractBool());
   content::EvalJsResult result =
       EvalJs(tab, content::test::kGetScreenDetailsScript);
-  EXPECT_EQ(content::test::GetExpectedScreenDetails(), result.value);
+  EXPECT_EQ(content::test::GetExpectedScreenDetails(), result);
 }
 
-class ScreenDetailsFullscreenScreenSizeTest
-    : public ScreenDetailsTest,
-      public testing::WithParamInterface<bool> {
- public:
-  ScreenDetailsFullscreenScreenSizeTest() {
-    scoped_feature_list_.InitWithFeatureState(
-        blink::features::kFullscreenScreenSizeMatchesDisplay,
-        FullscreenScreenSizeMatchesDisplayEnabled());
-  }
-  bool FullscreenScreenSizeMatchesDisplayEnabled() { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         ScreenDetailsFullscreenScreenSizeTest,
-                         testing::Bool());
-
-// Test screen size in fullscreen. ScreenDetailed always yields display metrics,
-// but `window.screen` may yield smaller viewport dimensions while the frame is
-// fullscreen as a speculative site compatibility measure, because web authors
-// may assume that screen dimensions match window.innerWidth/innerHeight while a
-// page is fullscreen, but that is not always true. crbug.com/1367416
-// TODO(crbug.com/1119974): Need content_browsertests permission controls.
-IN_PROC_BROWSER_TEST_P(ScreenDetailsFullscreenScreenSizeTest, FullscreenSize) {
+// Tests that ScreenDetailed and window.screen both yield display metrics, not
+// viewport dimensions, while the frame is fullscreen. See crbug.com/1367416
+IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, FullscreenSize) {
   auto* tab = chrome_test_utils::GetActiveWebContents(this);
   ASSERT_TRUE(embedded_test_server()->Start());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -87,37 +64,36 @@ IN_PROC_BROWSER_TEST_P(ScreenDetailsFullscreenScreenSizeTest, FullscreenSize) {
   EXPECT_NE(display_size, EvalJs(tab, "`${innerWidth}x${innerHeight}`"));
   EXPECT_EQ(display_size, EvalJs(tab, kGetCurrentScreenSizeScript));
 
-  // Enter fullscreen; and show docked devtools, which shrinks the content area.
-  constexpr char kEnterFullscreenScript[] = R"JS(
-    document.documentElement.requestFullscreen().then(() => {
-        return !!document.fullscreenElement;
-    });
+  // Check dimensions after entering fullscreen yields a `resize`, and after
+  // docking DevTools yields a `resize` as the fullscreen content area shrinks.
+  constexpr char kEnterFullscreenAndResizeScript[] = R"JS(
+    Promise.all([ document.documentElement.requestFullscreen(),
+                  new Promise(r => { onresize = r; })
+                ]).then(() => {
+                  window.nextResize = new Promise(r => { onresize = r; });
+                  return !!document.fullscreenElement;
+                });
   )JS";
-  ASSERT_TRUE(EvalJs(tab, kEnterFullscreenScript).ExtractBool());
+  ASSERT_TRUE(EvalJs(tab, kEnterFullscreenAndResizeScript).ExtractBool());
+  DevToolsWindowTesting::OpenDevToolsWindowSync(tab, true);
+  ASSERT_TRUE(EvalJs(tab, "window.nextResize").is_ok());
   ASSERT_TRUE(tab->IsFullscreen());
-  DevToolsWindow* dev_tools_window =
-      DevToolsWindowTesting::OpenDevToolsWindowSync(tab, true);
-  ASSERT_TRUE(tab->IsFullscreen());
-  if (FullscreenScreenSizeMatchesDisplayEnabled()) {
-    // `window.screen` dimensions match the display size.
-    EXPECT_EQ(display_size, EvalJs(tab, "`${screen.width}x${screen.height}`"));
-  } else {
-    // `window.screen` dimensions match the smaller viewport size.
-    EXPECT_NE(display_size, EvalJs(tab, "`${screen.width}x${screen.height}`"));
-  }
-  EXPECT_NE(display_size, EvalJs(tab, "`${innerWidth}x${innerHeight}`"));
+  // `window.screen` dimensions match the display size.
+  EXPECT_EQ(display_size, EvalJs(tab, "`${screen.width}x${screen.height}`"));
+  EXPECT_NE(EvalJs(tab, "`${screen.width}x${screen.height}`").ExtractString(),
+            EvalJs(tab, "`${innerWidth}x${innerHeight}`").ExtractString());
   EXPECT_EQ(display_size, EvalJs(tab, kGetCurrentScreenSizeScript));
 
-  // Check dimensions again after exiting fullscreen and closing dev tools.
-  DevToolsWindowTesting::CloseDevToolsWindowSync(dev_tools_window);
-  constexpr char kExitFullscreenScript[] = R"JS(
-    document.exitFullscreen().then(() => {
-        return !document.fullscreenElement;
-    });
+  // Check dimensions again after exiting fullscreen yields a `resize`.
+  constexpr char kExitFullscreenAndResizeScript[] = R"JS(
+    Promise.all([ document.exitFullscreen(),
+                  new Promise(r => { onresize = r; })
+                ]).then(() => {
+                  return !document.fullscreenElement;
+                });
   )JS";
-  ASSERT_TRUE(EvalJs(tab, kExitFullscreenScript).ExtractBool());
+  ASSERT_TRUE(EvalJs(tab, kExitFullscreenAndResizeScript).ExtractBool());
   ASSERT_FALSE(tab->IsFullscreen());
   EXPECT_EQ(display_size, EvalJs(tab, "`${screen.width}x${screen.height}`"));
-  EXPECT_NE(display_size, EvalJs(tab, "`${innerWidth}x${innerHeight}`"));
   EXPECT_EQ(display_size, EvalJs(tab, kGetCurrentScreenSizeScript));
 }

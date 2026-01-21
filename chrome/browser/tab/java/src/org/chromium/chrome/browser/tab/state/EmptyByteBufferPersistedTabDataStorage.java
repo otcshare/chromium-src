@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.tab.state;
 
 import org.chromium.base.Callback;
 import org.chromium.base.task.PostTask;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -16,6 +18,7 @@ import java.util.List;
  * this implementation mocks a non-null Bytebuffer with limit 0 simulating what
  * we saw in crbug.com/1287632.
  */
+@NullMarked
 public class EmptyByteBufferPersistedTabDataStorage implements PersistedTabDataStorage {
     // Unused
     @Override
@@ -24,15 +27,21 @@ public class EmptyByteBufferPersistedTabDataStorage implements PersistedTabDataS
     }
 
     @Override
-    public void save(int tabId, String tabDataId, Serializer<ByteBuffer> serializer,
+    public void save(
+            int tabId,
+            String tabDataId,
+            Serializer<ByteBuffer> serializer,
             Callback<Integer> callback) {
         assert false : "save is currently unused in EmptyByteBufferPersistedTabDataStorage";
     }
 
     @Override
-    public void restore(int tabId, String tabDataId, Callback<ByteBuffer> callback) {
-        PostTask.runOrPostTask(UiThreadTaskTraits.DEFAULT,
-                () -> { callback.onResult(ByteBuffer.allocateDirect(0)); });
+    public void restore(int tabId, String tabDataId, Callback<@Nullable ByteBuffer> callback) {
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    callback.onResult(ByteBuffer.allocateDirect(0));
+                });
     }
 
     // Unused
@@ -57,11 +66,6 @@ public class EmptyByteBufferPersistedTabDataStorage implements PersistedTabDataS
     @Override
     public void delete(int tabId, String tabDataId) {
         assert false : "delete is currently unused in EmptyByteBufferPersistedTabDataStorage";
-    }
-
-    @Override
-    public String getUmaTag() {
-        return "MPTDS";
     }
 
     @Override

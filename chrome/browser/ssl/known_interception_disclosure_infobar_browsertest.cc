@@ -5,7 +5,6 @@
 #include "base/files/file_util.h"
 #include "base/test/simple_test_clock.h"
 #include "base/threading/thread_restrictions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/known_interception_disclosure_infobar_delegate.h"
 #include "chrome/browser/ui/browser.h"
@@ -22,6 +21,7 @@
 #include "net/cert/crl_set.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/test_data_directory.h"
+#include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "ui/base/window_open_disposition.h"
 
 namespace {
@@ -29,16 +29,14 @@ namespace {
 size_t GetInfobarCount(content::WebContents* contents) {
   infobars::ContentInfoBarManager* infobar_manager =
       infobars::ContentInfoBarManager::FromWebContents(contents);
-  if (!infobar_manager)
-    return 0;
-  return infobar_manager->infobar_count();
+  return infobar_manager ? infobar_manager->infobars().size() : 0;
 }
 
 infobars::InfoBar* GetInfobar(content::WebContents* contents) {
   infobars::ContentInfoBarManager* infobar_manager =
       infobars::ContentInfoBarManager::FromWebContents(contents);
   DCHECK(infobar_manager);
-  return infobar_manager->infobar_at(0);
+  return infobar_manager->infobars()[0];
 }
 
 // Follows same logic as clicking the "Continue" button would.
@@ -47,9 +45,8 @@ void CloseInfobar(content::WebContents* contents) {
   if (!infobar)
     return;
 
-  ConfirmInfoBarDelegate* delegate =
-      static_cast<ConfirmInfoBarDelegate*>(infobar->delegate());
-  delegate->Accept();
+  ASSERT_TRUE(
+      static_cast<ConfirmInfoBarDelegate*>(infobar->delegate())->Accept());
   infobar->RemoveSelf();
 }
 
@@ -78,12 +75,9 @@ class KnownInterceptionDisclosureInfobarTest : public InProcessBrowserTest {
                                  "crlset_known_interception_by_root.raw"),
                              &crl_set_bytes);
     }
-    network::mojom::NetworkService* network_service =
-        content::GetNetworkService();
-    DCHECK(network_service);
     base::RunLoop run_loop;
-    network_service->UpdateCRLSet(
-        base::as_bytes(base::make_span(crl_set_bytes)), run_loop.QuitClosure());
+    content::GetCertVerifierServiceFactory()->UpdateCRLSet(
+        base::as_byte_span(crl_set_bytes), run_loop.QuitClosure());
     run_loop.Run();
   }
 
@@ -155,15 +149,8 @@ IN_PROC_BROWSER_TEST_F(KnownInterceptionDisclosureInfobarTest,
   EXPECT_EQ(0u, GetInfobarCount(tab));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_CooldownResetsOnBrowserRestartDesktop \
-  DISABLED_CooldownResetsOnBrowserRestartDesktop
-#else
-#define MAYBE_CooldownResetsOnBrowserRestartDesktop \
-  CooldownResetsOnBrowserRestartDesktop
-#endif
 IN_PROC_BROWSER_TEST_F(KnownInterceptionDisclosureInfobarTest,
-                       MAYBE_CooldownResetsOnBrowserRestartDesktop) {
+                       CooldownResetsOnBrowserRestartDesktop) {
   const GURL kInterceptedUrl(https_server_.GetURL("/ssl/google.html"));
 
   // On restart, no infobar should be shown initially.

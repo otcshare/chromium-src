@@ -18,6 +18,7 @@
 #include "ash/app_list/views/apps_grid_view_test_api.h"
 #include "ash/app_list/views/scrollable_apps_grid_view.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
@@ -29,7 +30,6 @@ namespace ash {
 class FolderHeaderViewTest : public AshTestBase {
  public:
   FolderHeaderViewTest() = default;
-
   FolderHeaderViewTest(const FolderHeaderViewTest&) = delete;
   FolderHeaderViewTest& operator=(const FolderHeaderViewTest&) = delete;
 
@@ -58,9 +58,12 @@ class FolderHeaderViewTest : public AshTestBase {
  protected:
   void UpdateFolderName(const std::string& name) {
     std::u16string folder_name = base::UTF8ToUTF16(name);
-    folder_header_view_->SetFolderNameForTest(folder_name);
-    folder_header_view_->ContentsChanged(
-        folder_header_view_->GetFolderNameViewForTest(), folder_name);
+    views::Textfield* textfield =
+        folder_header_view_->GetFolderNameViewForTest();
+    textfield->SetText(u"");
+    textfield->InsertText(
+        folder_name,
+        ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
   }
 
   const std::string GetFolderNameFromUI() {
@@ -79,8 +82,8 @@ class FolderHeaderViewTest : public AshTestBase {
     PressAndReleaseKey(key_code, flags);
   }
 
-  test::AppListTestModel* model_ = nullptr;
-  FolderHeaderView* folder_header_view_ = nullptr;
+  raw_ptr<test::AppListTestModel, DanglingUntriaged> model_ = nullptr;
+  raw_ptr<FolderHeaderView, DanglingUntriaged> folder_header_view_ = nullptr;
 };
 
 TEST_F(FolderHeaderViewTest, WhitespaceCollapsedWhenFolderNameViewLosesFocus) {
@@ -145,21 +148,20 @@ template <typename GestureHandler>
 void SendTap(GestureHandler* handler, const gfx::Point& location) {
   ui::GestureEvent tap_down(
       location.x(), location.y(), 0, base::TimeTicks::Now(),
-      ui::GestureEventDetails(ui::EventType::ET_GESTURE_TAP_DOWN));
+      ui::GestureEventDetails(ui::EventType::kGestureTapDown));
   handler->OnGestureEvent(&tap_down);
-  ui::GestureEvent tap_up(
-      location.x(), location.y(), 0, base::TimeTicks::Now(),
-      ui::GestureEventDetails(ui::EventType::ET_GESTURE_TAP));
+  ui::GestureEvent tap_up(location.x(), location.y(), 0, base::TimeTicks::Now(),
+                          ui::GestureEventDetails(ui::EventType::kGestureTap));
   handler->OnGestureEvent(&tap_up);
 }
 
 template <typename EventHandler>
 void SendPress(EventHandler* handler, const gfx::Point& location) {
-  ui::MouseEvent press_down(ui::ET_MOUSE_PRESSED,
+  ui::MouseEvent press_down(ui::EventType::kMousePressed,
                             gfx::PointF(location.x(), location.y()),
                             gfx::PointF(0, 0), base::TimeTicks::Now(), 0, 0);
   handler->OnMouseEvent(&press_down);
-  ui::MouseEvent press_up(ui::ET_MOUSE_RELEASED,
+  ui::MouseEvent press_up(ui::EventType::kMouseReleased,
                           gfx::PointF(location.x(), location.y()),
                           gfx::PointF(0, 0), base::TimeTicks::Now(), 0, 0);
   handler->OnMouseEvent(&press_up);
@@ -226,7 +228,7 @@ TEST_F(FolderHeaderViewTest, SetFolderNameOnReturn) {
 
   // Make sure the return press unfocused the text and registered the name
   // change.
-  EXPECT_FALSE(HasTextFocus());
+  EXPECT_EQ(false, HasTextFocus());
   EXPECT_EQ("ret", folder_item->name());
 }
 
@@ -246,11 +248,11 @@ TEST_F(FolderHeaderViewTest, RevertFolderNameOnEscape) {
   UpdateFolderName("esc");
   EXPECT_EQ("esc", GetFolderNameFromUI());
 
-  // Press escape.
+  // Press escape.a
   SendKey(ui::VKEY_ESCAPE);
 
   // Make sure the escape press unfocused the text and reverted the name change.
-  EXPECT_FALSE(HasTextFocus());
+  EXPECT_EQ(false, HasTextFocus());
   EXPECT_EQ("", folder_item->name());
 }
 

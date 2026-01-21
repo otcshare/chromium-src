@@ -5,12 +5,13 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_WEBGPU_DECODER_H_
 #define GPU_COMMAND_BUFFER_SERVICE_WEBGPU_DECODER_H_
 
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
 #include "gpu/command_buffer/service/common_decoder.h"
 #include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/gpu_gles2_export.h"
 #include "gpu/ipc/common/gpu_disk_cache_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace gpu {
 
@@ -33,17 +34,17 @@ class DawnCachingInterfaceFactory;
 // Options specifically passed for Dawn caching;
 struct DawnCacheOptions {
   raw_ptr<DawnCachingInterfaceFactory> caching_interface_factory = nullptr;
-  absl::optional<GpuDiskCacheHandle> handle = {};
+  std::optional<GpuDiskCacheHandle> handle = {};
 };
 
 class GPU_GLES2_EXPORT WebGPUDecoder : public DecoderContext,
                                        public CommonDecoder {
  public:
-  static WebGPUDecoder* Create(
+  static std::unique_ptr<WebGPUDecoder> Create(
       DecoderClient* client,
       CommandBufferServiceBase* command_buffer_service,
       SharedImageManager* shared_image_manager,
-      MemoryTracker* memory_tracker,
+      scoped_refptr<MemoryTracker> memory_tracker,
       gles2::Outputter* outputter,
       const GpuPreferences& gpu_preferences,
       scoped_refptr<SharedContextState> shared_context_state,
@@ -55,15 +56,7 @@ class GPU_GLES2_EXPORT WebGPUDecoder : public DecoderContext,
 
   ~WebGPUDecoder() override;
 
-  // WebGPU-specific initialization that's different than DecoderContext's
-  // Initialize that is tied to GLES2 concepts and a noop for WebGPU decoders.
   virtual ContextResult Initialize(const GpuFeatureInfo& gpu_feature_info) = 0;
-
-  ContextResult Initialize(const scoped_refptr<gl::GLSurface>& surface,
-                           const scoped_refptr<gl::GLContext>& context,
-                           bool offscreen,
-                           const gles2::DisallowedFeatures& disallowed_features,
-                           const ContextCreationAttribs& attrib_helper) final;
 
  protected:
   WebGPUDecoder(DecoderClient* client,

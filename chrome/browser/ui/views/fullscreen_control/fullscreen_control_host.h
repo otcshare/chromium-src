@@ -5,13 +5,14 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_FULLSCREEN_CONTROL_FULLSCREEN_CONTROL_HOST_H_
 #define CHROME_BROWSER_UI_VIEWS_FULLSCREEN_CONTROL_FULLSCREEN_CONTROL_HOST_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "components/fullscreen_control/fullscreen_control_popup.h"
 #include "ui/events/event_observer.h"
 
 class BrowserView;
+class ExclusiveAccessManager;
 
 namespace ui {
 class GestureEvent;
@@ -32,7 +33,8 @@ class EventMonitor;
 // requires user to press-and-hold ESC key to exit fullscreen.
 class FullscreenControlHost : public ui::EventObserver {
  public:
-  explicit FullscreenControlHost(BrowserView* browser_view);
+  FullscreenControlHost(BrowserView* browser_view,
+                        ExclusiveAccessManager* exclusive_access_manager);
 
   FullscreenControlHost(const FullscreenControlHost&) = delete;
   FullscreenControlHost& operator=(const FullscreenControlHost&) = delete;
@@ -52,6 +54,13 @@ class FullscreenControlHost : public ui::EventObserver {
   void Hide(bool animate);
 
   bool IsVisible() const;
+
+  // Called when entering fullscreen mode. Enables event monitoring.
+  void OnEnterFullscreen();
+
+  // Called when exiting fullscreen mode. Hides the popup and may disable event
+  // monitoring.
+  void OnExitFullscreen();
 
  private:
   friend class FullscreenControlViewTest;
@@ -74,13 +83,16 @@ class FullscreenControlHost : public ui::EventObserver {
                          base::TimeDelta timeout);
   void OnPopupTimeout(InputEntryMethod expected_input_method);
   bool IsExitUiNeeded();
+  bool IsPointerLocked();
   float CalculateCursorBufferHeight() const;
+  void OnExitFullscreenPopupClicked();
 
   InputEntryMethod input_entry_method_ = InputEntryMethod::NOT_ACTIVE;
 
   bool in_mouse_cooldown_mode_ = false;
 
   const raw_ptr<BrowserView> browser_view_;
+  const raw_ref<ExclusiveAccessManager> exclusive_access_manager_;
 
   std::unique_ptr<FullscreenControlPopup> fullscreen_control_popup_;
 

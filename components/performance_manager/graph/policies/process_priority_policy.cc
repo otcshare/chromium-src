@@ -4,10 +4,7 @@
 
 #include "components/performance_manager/graph/policies/process_priority_policy.h"
 
-#include "base/bind.h"
-#include "base/memory/ptr_util.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
-#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 
@@ -25,52 +22,31 @@ size_t g_instance_count = 0;
 // the RenderProcessHost.
 ProcessPriorityPolicy::SetPriorityOnUiThreadCallback* g_callback = nullptr;
 
-// Maps a TaskPriority to a "is_foreground" bool. Process priorities are
-// currently simply "background" or "foreground", despite there actually being
-// more expressive power on most platforms.
-bool IsForegroundTaskPriority(base::TaskPriority priority) {
-  switch (priority) {
-    case base::TaskPriority::BEST_EFFORT:
-      return false;
-
-    case base::TaskPriority::USER_VISIBLE:
-    case base::TaskPriority::USER_BLOCKING:
-      break;
-  }
-
-  return true;
-}
-
-// Helper function for setting the RenderProcessHost priority.
-void SetProcessPriorityOnUIThread(RenderProcessHostProxy rph_proxy,
-                                  bool foreground) {
+// Dispatches a process priority change to the RenderProcessHost associated with
+// a given ProcessNode.
+void SetProcessPriority(const ProcessNode* process_node,
+                        base::Process::Priority priority) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  // Deliver the policy message if the RPH still exists by the time the
-  // message arrives. Note that this will involve yet another bounce over to
-  // the process launcher thread.
-  auto* rph = rph_proxy.Get();
-  if (rph)
-    rph->SetPriorityOverride(foreground);
+  if (process_node->GetProcessType() != content::PROCESS_TYPE_RENDERER) {
+    // This is triggered from ProcessNode observers that fire for all process
+    // types, but only renderer processes have a RenderProcessHostProxy.
+    return;
+  }
+
+  // If the process has already exited, don't attempt to set the priority.
+  if (process_node->GetExitStatus().has_value()) {
+    return;
+  }
+
+  RenderProcessHostProxy rph_proxy = process_node->GetRenderProcessHostProxy();
+  CHECK(rph_proxy.Get());
+  rph_proxy.Get()->SetPriorityOverride(priority);
 
   // Invoke the testing seam callback if one was provided.
-  if (g_callback && !g_callback->is_null())
-    g_callback->Run(rph_proxy, foreground);
-}
-
-// Dispatches a process priority change to the RenderProcessHost associated with
-// a given ProcessNode. The task is posted to the UI thread, where the RPH
-// lives.
-void DispatchSetProcessPriority(const ProcessNode* process_node,
-                                bool foreground) {
-  // TODO(chrisha): This will actually result in a further thread-hop over to
-  // the process launcher thread. If we migrate to process priority logic being
-  // driven 100% from the PM, we could post directly to the launcher thread
-  // via the base::Process directly.
-  const auto& proxy = process_node->GetRenderProcessHostProxy();
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&SetProcessPriorityOnUIThread, proxy, foreground));
+  if (g_callback && !g_callback->is_null()) {
+    g_callback->Run(rph_proxy, priority);
+  }
 }
 
 }  // namespace
@@ -114,6 +90,7 @@ void ProcessPriorityPolicy::OnTakenFromGraph(Graph* graph) {
 
 void ProcessPriorityPolicy::OnProcessNodeAdded(
     const ProcessNode* process_node) {
+  CHECK_NE(process_node->GetPriority(), base::Process::Priority::kUserVisible);
   // Set the initial process priority.
   // TODO(chrisha): Get provisional nodes working so we can make an informed
   // choice in the graph (processes launching ads-to-be, or extensions, or
@@ -122,20 +99,18 @@ void ProcessPriorityPolicy::OnProcessNodeAdded(
   // TODO(chrisha): Make process creation take a detour through the graph in
   // order to get the initial priority parameter that is set here. Currently
   // this is effectively a nop.
-  DispatchSetProcessPriority(
-      process_node, IsForegroundTaskPriority(process_node->GetPriority()));
+  SetProcessPriority(process_node, process_node->GetPriority());
 }
 
 void ProcessPriorityPolicy::OnPriorityChanged(
     const ProcessNode* process_node,
-    base::TaskPriority previous_value) {
-  bool previous_foreground = IsForegroundTaskPriority(previous_value);
-  bool current_foreground =
-      IsForegroundTaskPriority(process_node->GetPriority());
+    base::Process::Priority previous_priority) {
+  base::Process::Priority current_priority = process_node->GetPriority();
 
-  // Only dispatch a message if the resulting process priority has changed.
-  if (previous_foreground != current_foreground)
-    DispatchSetProcessPriority(process_node, current_foreground);
+  // Only set if the resulting process priority has changed.
+  if (previous_priority != current_priority) {
+    SetProcessPriority(process_node, current_priority);
+  }
 }
 
 }  // namespace policies

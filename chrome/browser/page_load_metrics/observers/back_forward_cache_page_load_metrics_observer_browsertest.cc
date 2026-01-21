@@ -2,22 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/page_load_metrics/browser/observers/back_forward_cache_page_load_metrics_observer.h"
+
 #include <memory>
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
-#include "chrome/browser/scoped_disable_client_side_decorations_for_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
-#include "components/page_load_metrics/browser/observers/back_forward_cache_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "components/page_load_metrics/common/test/page_load_metrics_test_util.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -35,12 +37,11 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     feature_list_.InitWithFeaturesAndParameters(
-        {{features::kBackForwardCache,
-          {{"TimeToLiveInBackForwardCacheInSeconds", "3600"},
-           {"ignore_outstanding_network_request_for_testing", "true"}}},
-         {internal::kBackForwardCacheEmitZeroSamplesForKeyMetrics, {{}}}},
-        // Allow BackForwardCache for all devices regardless of their memory.
-        {features::kBackForwardCacheMemoryControls});
+        content::GetDefaultEnabledBackForwardCacheFeaturesForTesting(
+            {{page_load_metrics::features::
+                  kBackForwardCacheEmitZeroSamplesForKeyMetrics,
+              {{}}}}),
+        content::GetDefaultDisabledBackForwardCacheFeaturesForTesting());
 
     MetricIntegrationTest::SetUpCommandLine(command_line);
   }
@@ -59,7 +60,8 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
   void ExpectMetricValueForUrl(const GURL& url,
                                const char* metric_name,
                                const int expected_value) {
-    for (auto* entry : ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
+    for (const ukm::mojom::UkmEntry* entry :
+         ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
       // As the source ID is generated from the back-forward restore navigation,
       // this should not match with the source ID by the ID used by the initial
       // navigation which loaded the page.
@@ -67,10 +69,12 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
 
       auto* source = ukm_recorder().GetSourceForSourceId(entry->source_id);
       DCHECK(source);
-      if (source->url() != url)
+      if (source->url() != url) {
         continue;
-      if (!ukm_recorder().EntryHasMetric(entry, metric_name))
+      }
+      if (!ukm_recorder().EntryHasMetric(entry, metric_name)) {
         continue;
+      }
       ukm_recorder().ExpectEntryMetric(entry, metric_name, expected_value);
     }
   }
@@ -79,7 +83,8 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
                                const char* metric_name,
                                const int expected_count) {
     int count = 0;
-    for (auto* entry : ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
+    for (const ukm::mojom::UkmEntry* entry :
+         ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
       // As the source ID is generated from the back-forward restore navigation,
       // this should not match with the source ID by the ID used by the initial
       // navigation which loaded the page.
@@ -87,10 +92,12 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
 
       auto* source = ukm_recorder().GetSourceForSourceId(entry->source_id);
       DCHECK(source);
-      if (source->url() != url)
+      if (source->url() != url) {
         continue;
-      if (!ukm_recorder().EntryHasMetric(entry, metric_name))
+      }
+      if (!ukm_recorder().EntryHasMetric(entry, metric_name)) {
         continue;
+      }
       count++;
     }
     EXPECT_EQ(count, expected_count);
@@ -99,10 +106,12 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
   void VerifyHistoryNavPageEndReasons(const std::vector<PageEndReason>& reasons,
                                       const GURL& url) {
     unsigned int reason_index = 0;
-    for (auto* entry : ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
+    for (const ukm::mojom::UkmEntry* entry :
+         ukm_recorder().GetEntriesByName(UkmEntry::kEntryName)) {
       auto* source = ukm_recorder().GetSourceForSourceId(entry->source_id);
-      if (source->url() != url)
+      if (source->url() != url) {
         continue;
+      }
       if (ukm_recorder().EntryHasMetric(
               entry,
               UkmEntry::kPageEndReasonAfterBackForwardCacheRestoreName)) {
@@ -121,8 +130,16 @@ class BackForwardCachePageLoadMetricsObserverBrowserTest
 
 }  // namespace
 
+// TODO(crbug.com/334416161): Re-enble this test.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_FirstPaintAfterBackForwardCacheRestore \
+  DISABLED_FirstPaintAfterBackForwardCacheRestore
+#else
+#define MAYBE_FirstPaintAfterBackForwardCacheRestore \
+  FirstPaintAfterBackForwardCacheRestore
+#endif
 IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
-                       FirstPaintAfterBackForwardCacheRestore) {
+                       MAYBE_FirstPaintAfterBackForwardCacheRestore) {
   Start();
   GURL url_a(embedded_test_server()->GetURL("a.com", "/title1.html"));
   GURL url_b(embedded_test_server()->GetURL("b.com", "/title1.html"));
@@ -245,8 +262,17 @@ IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
   }
 }
 
-IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
-                       FirstInputDelayAfterBackForwardCacheRestoreBackground) {
+// TODO(https://crbug.com/40799125): Test is flaky on Windows and Mac.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#define MAYBE_FirstInputDelayAfterBackForwardCacheRestoreBackground \
+  DISABLED_FirstInputDelayAfterBackForwardCacheRestoreBackground
+#else
+#define MAYBE_FirstInputDelayAfterBackForwardCacheRestoreBackground \
+  FirstInputDelayAfterBackForwardCacheRestoreBackground
+#endif
+IN_PROC_BROWSER_TEST_F(
+    BackForwardCachePageLoadMetricsObserverBrowserTest,
+    MAYBE_FirstInputDelayAfterBackForwardCacheRestoreBackground) {
   Start();
   GURL url_a(embedded_test_server()->GetURL("a.com", "/title1.html"));
   GURL url_b(embedded_test_server()->GetURL("b.com", "/title1.html"));
@@ -332,13 +358,17 @@ IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
   ExpectMetricValueForUrl(url_a, UkmEntry::kBackForwardCache_IsAmpPageName, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
-                       CumulativeLayoutShiftAfterBackForwardCacheRestore) {
-  // TODO(crbug.com/1240482): the test expectations fail if the window gets CSD
-  // and becomes smaller because of that.  Investigate this and remove the line
-  // below if possible.
-  ui::ScopedDisableClientSideDecorationsForTest scoped_disabled_csd;
-
+// TODO(crbug.com/334416161): Re-enble this test.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_CumulativeLayoutShiftAfterBackForwardCacheRestore \
+  DISABLED_CumulativeLayoutShiftAfterBackForwardCacheRestore
+#else
+#define MAYBE_CumulativeLayoutShiftAfterBackForwardCacheRestore \
+  CumulativeLayoutShiftAfterBackForwardCacheRestore
+#endif
+IN_PROC_BROWSER_TEST_F(
+    BackForwardCachePageLoadMetricsObserverBrowserTest,
+    MAYBE_CumulativeLayoutShiftAfterBackForwardCacheRestore) {
   Start();
 
   const char path[] = "/layout-instability/simple-block-movement.html";
@@ -404,17 +434,6 @@ return score;
   EXPECT_EQ(rfh_a->GetLifecycleState(),
             content::RenderFrameHost::LifecycleState::kInBackForwardCache);
 
-  auto samples = histogram_tester().GetAllSamples(
-      internal::
-          kHistogramCumulativeShiftScoreMainFrameAfterBackForwardCacheRestore);
-  EXPECT_EQ(1ul, samples.size());
-  EXPECT_EQ(base::Bucket(page_load_metrics::LayoutShiftUmaValue(next_score), 1),
-            samples[0]);
-
-  histogram_tester().ExpectTotalCount(
-      internal::
-          kHistogramCumulativeShiftScoreMainFrameAfterBackForwardCacheRestore,
-      1);
   histogram_tester().ExpectTotalCount(
       internal::kHistogramCumulativeShiftScoreAfterBackForwardCacheRestore, 1);
 
@@ -426,8 +445,6 @@ return score;
   // kBackForwardCacheEmitZeroSamplesForKeyMetrics.
   // As back-foward cache is used twice (once for A and once for B), the current
   // total count is 2.
-  histogram_tester().ExpectBucketCount(
-      "PageLoad.LayoutInstability.CumulativeShiftScore.MainFrame", 0, 2);
   histogram_tester().ExpectBucketCount(
       "PageLoad.LayoutInstability.CumulativeShiftScore", 0, 2);
 
@@ -444,10 +461,6 @@ return score;
             content::RenderFrameHost::LifecycleState::kInBackForwardCache);
 
   histogram_tester().ExpectTotalCount(
-      internal::
-          kHistogramCumulativeShiftScoreMainFrameAfterBackForwardCacheRestore,
-      2);
-  histogram_tester().ExpectTotalCount(
       internal::kHistogramCumulativeShiftScoreAfterBackForwardCacheRestore, 2);
 
   ExpectMetricCountForUrl(
@@ -455,12 +468,10 @@ return score;
 
   // As back-foward cache is used fourth in total.
   histogram_tester().ExpectBucketCount(
-      "PageLoad.LayoutInstability.CumulativeShiftScore.MainFrame", 0, 4);
-  histogram_tester().ExpectBucketCount(
       "PageLoad.LayoutInstability.CumulativeShiftScore", 0, 4);
 }
 
-// TODO(crbug.com/1184305): Disabled for being flaky.
+// TODO(crbug.com/40752530): Disabled for being flaky.
 IN_PROC_BROWSER_TEST_F(
     BackForwardCachePageLoadMetricsObserverBrowserTest,
     DISABLED_RequestAnimationFramesAfterBackForwardCacheRestore) {
@@ -511,8 +522,17 @@ IN_PROC_BROWSER_TEST_F(
   }
 }
 
-IN_PROC_BROWSER_TEST_F(BackForwardCachePageLoadMetricsObserverBrowserTest,
-                       LayoutShiftNormalization_AfterBackForwardCacheRestore) {
+// TODO(crbug.com/334416161): Re-enble this test.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_LayoutShiftNormalization_AfterBackForwardCacheRestore \
+  DISABLED_LayoutShiftNormalization_AfterBackForwardCacheRestore
+#else
+#define MAYBE_LayoutShiftNormalization_AfterBackForwardCacheRestore \
+  LayoutShiftNormalization_AfterBackForwardCacheRestore
+#endif
+IN_PROC_BROWSER_TEST_F(
+    BackForwardCachePageLoadMetricsObserverBrowserTest,
+    MAYBE_LayoutShiftNormalization_AfterBackForwardCacheRestore) {
   Start();
 
   const char path[] = "/layout-instability/simple-block-movement.html";
@@ -581,10 +601,11 @@ return score;
   ExpectMetricValueForUrl(url_a,
                           "CumulativeShiftScoreAfterBackForwardCacheRestore",
                           page_load_metrics::LayoutShiftUkmValue(next_score));
-  ExpectMetricValueForUrl(url_a,
-                          "MaxCumulativeShiftScoreAfterBackForwardCacheRestore."
-                          "SessionWindow.Gap1000ms.Max5000ms",
-                          page_load_metrics::LayoutShiftUkmValue(next_score));
+  ExpectMetricValueForUrl(
+      url_a,
+      "MaxCumulativeShiftScoreAfterBackForwardCacheRestore."
+      "SessionWindow.Gap1000ms.Max5000ms2",
+      page_load_metrics::LayoutShiftUmaValue10000(next_score));
   // Go back to A again.
   web_contents()->GetController().GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
@@ -605,7 +626,7 @@ return score;
                           2);
   histogram_tester().ExpectTotalCount(
       "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-      "AfterBackForwardCacheRestore.SessionWindow.Gap1000ms.Max5000ms",
+      "AfterBackForwardCacheRestore.SessionWindow.Gap1000ms.Max5000ms2",
       2);
 }
 
@@ -674,9 +695,18 @@ IN_PROC_BROWSER_TEST_F(
   VerifyHistoryNavPageEndReasons(expected_reasons_b, url_b);
 }
 
+// TODO(crbug.com/40937315): Test is flaky on MSAN.
+// TODO(https://crbug.com/40799125): Test is flaky on Windows and Mac.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#define MAYBE_ResponsivenessMetricsNormalizationWithSendingAllLatencies \
+  DISABLED_ResponsivenessMetricsNormalizationWithSendingAllLatencies
+#else
+#define MAYBE_ResponsivenessMetricsNormalizationWithSendingAllLatencies \
+  ResponsivenessMetricsNormalizationWithSendingAllLatencies
+#endif
 IN_PROC_BROWSER_TEST_F(
     BackForwardCachePageLoadMetricsObserverBrowserTest,
-    ResponsivenessMetricsNormalizationWithSendingAllLatencies) {
+    MAYBE_ResponsivenessMetricsNormalizationWithSendingAllLatencies) {
   Start();
   GURL url_a(embedded_test_server()->GetURL("a.com", "/title1.html"));
   GURL url_b(embedded_test_server()->GetURL("b.com", "/title1.html"));
@@ -723,30 +753,19 @@ IN_PROC_BROWSER_TEST_F(
   std::vector<std::string> ukm_list = {
       "WorstUserInteractionLatencyAfterBackForwardCacheRestore."
       "MaxEventDuration2",
-      "SumOfUserInteractionLatencyOverBudgetAfterBackForwardCacheRestore."
-      "MaxEventDuration2",
-      "SlowUserInteractionLatencyOverBudgetAfterBackForwardCacheRestore."
-      "HighPercentile2.MaxEventDuration2",
-      "AverageUserInteractionLatencyOverBudgetAfterBackForwardCacheRestore."
-      "MaxEventDuration2",
       "UserInteractionLatencyAfterBackForwardCacheRestore."
       "HighPercentile2.MaxEventDuration",
       "NumInteractionsAfterBackForwardCacheRestore"};
 
   for (auto& ukm : ukm_list) {
+    SCOPED_TRACE(ukm);
     ExpectMetricCountForUrl(url_a, ukm.c_str(), 1);
     ExpectMetricCountForUrl(url_b, ukm.c_str(), 0);
   }
 
   std::vector<std::string> uma_list = {
       internal::
-          kAverageUserInteractionLatencyOverBudget_MaxEventDuration_AfterBackForwardCacheRestore,
-      internal::
-          kSlowUserInteractionLatencyOverBudgetHighPercentile2_MaxEventDuration_AfterBackForwardCacheRestore,
-      internal::
           kUserInteractionLatencyHighPercentile2_MaxEventDuration_AfterBackForwardCacheRestore,
-      internal::
-          kSumOfUserInteractionLatencyOverBudget_MaxEventDuration_AfterBackForwardCacheRestore,
       internal::
           kWorstUserInteractionLatency_MaxEventDuration_AfterBackForwardCacheRestore};
 

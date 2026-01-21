@@ -8,10 +8,11 @@
 #include <deque>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/dbus/attestation/interface.pb.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 
 namespace dbus {
 class Bus;
@@ -206,6 +207,9 @@ class COMPONENT_EXPORT(ASH_DBUS_ATTESTATION) AttestationClient {
     // Gets the fake certificate that is returned by
     // successful `FinishCertificateRequest()`.
     virtual std::string GetFakeCertificate() const = 0;
+    // Sets the status code returned by `DeleteKeys()`.
+    virtual void set_delete_keys_status(
+        ::attestation::AttestationStatus status) = 0;
   };
 
   // Not copyable or movable.
@@ -326,6 +330,10 @@ class COMPONENT_EXPORT(ASH_DBUS_ATTESTATION) AttestationClient {
   virtual void GetCertifiedNvIndex(
       const ::attestation::GetCertifiedNvIndexRequest& request,
       GetCertifiedNvIndexCallback callback) = 0;
+
+  // Runs the callback as soon as the service becomes available.
+  virtual void WaitForServiceToBeAvailable(
+      chromeos::WaitForServiceToBeAvailableCallback callback) = 0;
 
   // Returns an interface for testing (fake only), or returns nullptr.
   virtual TestInterface* GetTestInterface() = 0;

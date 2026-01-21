@@ -4,21 +4,27 @@
 
 #include "content/browser/renderer_host/navigation_request.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "content/browser/renderer_host/navigation_throttle_runner.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/origin_trials_controller_delegate.h"
+#include "content/public/browser/process_selection_user_data.h"
 #include "content/public/browser/ssl_status.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/test/mock_web_contents_observer.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_navigation_throttle.h"
 #include "content/test/fenced_frame_test_utils.h"
@@ -26,52 +32,38 @@
 #include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_web_contents.h"
+#include "net/base/features.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
+#include "services/network/public/cpp/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/navigation/navigation_params.h"
+#include "third_party/blink/public/common/navigation/navigation_params_mojom_traits.h"
 #include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
+#include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_context.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 
 namespace content {
 
-// Test version of a NavigationThrottle that will execute a callback when
-// called.
-class DeletingNavigationThrottle : public NavigationThrottle {
+namespace {
+
+// A simple ProcessSelectionUserData::Data implementation for testing.
+class ProcessSelectionTestData
+    : public ProcessSelectionUserData::Data<ProcessSelectionTestData> {
  public:
-  DeletingNavigationThrottle(NavigationHandle* handle,
-                             const base::RepeatingClosure& deletion_callback)
-      : NavigationThrottle(handle), deletion_callback_(deletion_callback) {}
-  ~DeletingNavigationThrottle() override = default;
-
-  NavigationThrottle::ThrottleCheckResult WillStartRequest() override {
-    deletion_callback_.Run();
-    return NavigationThrottle::PROCEED;
-  }
-
-  NavigationThrottle::ThrottleCheckResult WillRedirectRequest() override {
-    deletion_callback_.Run();
-    return NavigationThrottle::PROCEED;
-  }
-
-  NavigationThrottle::ThrottleCheckResult WillFailRequest() override {
-    deletion_callback_.Run();
-    return NavigationThrottle::PROCEED;
-  }
-
-  NavigationThrottle::ThrottleCheckResult WillProcessResponse() override {
-    deletion_callback_.Run();
-    return NavigationThrottle::PROCEED;
-  }
-
-  const char* GetNameForLogging() override {
-    return "DeletingNavigationThrottle";
-  }
+  explicit ProcessSelectionTestData(int value) : value_(value) {}
+  int value() const { return value_; }
 
  private:
-  base::RepeatingClosure deletion_callback_;
+  friend ProcessSelectionUserData::Data<ProcessSelectionTestData>;
+  PROCESS_SELECTION_USER_DATA_KEY_DECL();
+  int value_;
 };
+
+PROCESS_SELECTION_USER_DATA_KEY_IMPL(ProcessSelectionTestData);
+
+}  // namespace
 
 class NavigationRequestTest : public RenderViewHostImplTestHarness {
  public:
@@ -130,7 +122,7 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
   // throttle checks when they are finished.
   void SimulateWillFailRequest(
       net::Error net_error_code,
-      const absl::optional<net::SSLInfo> ssl_info = absl::nullopt) {
+      const std::optional<net::SSLInfo> ssl_info = std::nullopt) {
     was_callback_called_ = false;
     callback_result_ = NavigationThrottle::DEFER;
     GetNavigationRequest()->set_net_error(net_error_code);
@@ -142,6 +134,22 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
                        base::Unretained(this)));
 
     GetNavigationRequest()->WillFailRequest();
+  }
+
+  // Helper function to call WillCommitWithoutUrlLoader on |handle|. If this
+  // function returns DEFER, |callback_result_| will be set to the actual result
+  // of the throttle checks when they are finished.
+  void SimulateWillCommitWithoutUrlLoader() {
+    was_callback_called_ = false;
+    callback_result_ = NavigationThrottle::DEFER;
+
+    // It's safe to use base::Unretained since the NavigationRequest is owned by
+    // the NavigationRequestTest.
+    GetNavigationRequest()->set_complete_callback_for_testing(
+        base::BindOnce(&NavigationRequestTest::UpdateThrottleCheckResult,
+                       base::Unretained(this)));
+
+    GetNavigationRequest()->WillCommitWithoutUrlLoader();
   }
 
   // Whether the callback was called.
@@ -160,7 +168,8 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
                          int start,
                          int redirect,
                          int failure,
-                         int process) {
+                         int process,
+                         int withoutUrlLoader) {
     return start == throttle->GetCallCount(
                         TestNavigationThrottle::WILL_START_REQUEST) &&
            redirect == throttle->GetCallCount(
@@ -168,15 +177,18 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
            failure == throttle->GetCallCount(
                           TestNavigationThrottle::WILL_FAIL_REQUEST) &&
            process == throttle->GetCallCount(
-                          TestNavigationThrottle::WILL_PROCESS_RESPONSE);
+                          TestNavigationThrottle::WILL_PROCESS_RESPONSE) &&
+           withoutUrlLoader ==
+               throttle->GetCallCount(
+                   TestNavigationThrottle::WILL_COMMIT_WITHOUT_URL_LOADER);
   }
 
   // Creates, register and returns a TestNavigationThrottle that will
   // synchronously return |result| on checks by default.
   TestNavigationThrottle* CreateTestNavigationThrottle(
       NavigationThrottle::ThrottleCheckResult result) {
-    TestNavigationThrottle* test_throttle =
-        new TestNavigationThrottle(GetNavigationRequest());
+    TestNavigationThrottle* test_throttle = new TestNavigationThrottle(
+        *GetNavigationRequest()->GetNavigationThrottleRegistryForTesting());
     test_throttle->SetResponseForAllMethods(TestNavigationThrottle::SYNCHRONOUS,
                                             result);
     GetNavigationRequest()->RegisterThrottleForTesting(
@@ -209,11 +221,9 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
     auto request = NavigationRequest::CreateBrowserInitiated(
         main_test_rfh()->frame_tree_node(), std::move(common_params),
         std::move(commit_params), false /* was_opener_suppressed */,
-        nullptr /* initiator_frame_token */,
-        ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
         std::string() /* extra_headers */, nullptr /* frame_entry */,
         nullptr /* entry */, false /* is_form_submission */,
-        nullptr /* navigation_ui_data */, absl::nullopt /* impression */,
+        nullptr /* navigation_ui_data */, std::nullopt /* impression */,
         false /* is_pdf */);
     main_test_rfh()->frame_tree_node()->TakeNavigationRequest(
         std::move(request));
@@ -270,25 +280,23 @@ TEST_F(NavigationRequestTest, SimpleDataChecksRedirectAndProcess) {
   EXPECT_EQ(blink::mojom::RequestContextType::LOCATION,
             NavigationRequest::From(navigation->GetNavigationHandle())
                 ->request_context_type());
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
+  EXPECT_EQ(net::HttpConnectionInfo::kUNKNOWN,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
-  navigation->set_http_connection_info(
-      net::HttpResponseInfo::CONNECTION_INFO_HTTP1_1);
+  navigation->set_http_connection_info(net::HttpConnectionInfo::kHTTP1_1);
   navigation->Redirect(kUrl2);
   EXPECT_EQ(blink::mojom::RequestContextType::LOCATION,
             NavigationRequest::From(navigation->GetNavigationHandle())
                 ->request_context_type());
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_HTTP1_1,
+  EXPECT_EQ(net::HttpConnectionInfo::kHTTP1_1,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
-  navigation->set_http_connection_info(
-      net::HttpResponseInfo::CONNECTION_INFO_QUIC_35);
+  navigation->set_http_connection_info(net::HttpConnectionInfo::kQUIC_35);
   navigation->ReadyToCommit();
   EXPECT_EQ(blink::mojom::RequestContextType::LOCATION,
             NavigationRequest::From(navigation->GetNavigationHandle())
                 ->request_context_type());
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_QUIC_35,
+  EXPECT_EQ(net::HttpConnectionInfo::kQUIC_35,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 }
 
@@ -297,13 +305,12 @@ TEST_F(NavigationRequestTest, SimpleDataCheckNoRedirect) {
   auto navigation =
       NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
   navigation->Start();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
+  EXPECT_EQ(net::HttpConnectionInfo::kUNKNOWN,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
-  navigation->set_http_connection_info(
-      net::HttpResponseInfo::CONNECTION_INFO_QUIC_35);
+  navigation->set_http_connection_info(net::HttpConnectionInfo::kQUIC_35);
   navigation->ReadyToCommit();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_QUIC_35,
+  EXPECT_EQ(net::HttpConnectionInfo::kQUIC_35,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 }
 
@@ -315,7 +322,7 @@ TEST_F(NavigationRequestTest, SimpleDataChecksFailure) {
   EXPECT_EQ(blink::mojom::RequestContextType::LOCATION,
             NavigationRequest::From(navigation->GetNavigationHandle())
                 ->request_context_type());
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
+  EXPECT_EQ(net::HttpConnectionInfo::kUNKNOWN,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
   navigation->Fail(net::ERR_CERT_DATE_INVALID);
@@ -332,21 +339,21 @@ TEST_F(NavigationRequestTest, CancelDeferredWillStart) {
   TestNavigationThrottle* test_throttle =
       CreateTestNavigationThrottle(NavigationThrottle::DEFER);
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
 
   // Simulate WillStartRequest. The request should be deferred. The callback
   // should not have been called.
   SimulateWillStartRequest();
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
   EXPECT_FALSE(was_callback_called());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 
   // Cancel the request. The callback should have been called.
   CancelDeferredNavigation(NavigationThrottle::CANCEL_AND_IGNORE);
   EXPECT_EQ(NavigationRequest::CANCELING, state());
   EXPECT_TRUE(was_callback_called());
   EXPECT_EQ(NavigationThrottle::CANCEL_AND_IGNORE, callback_result());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 }
 
 // Checks that a navigation deferred during WillRedirectRequest can be properly
@@ -355,21 +362,21 @@ TEST_F(NavigationRequestTest, CancelDeferredWillRedirect) {
   TestNavigationThrottle* test_throttle =
       CreateTestNavigationThrottle(NavigationThrottle::DEFER);
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
 
   // Simulate WillRedirectRequest. The request should be deferred. The callback
   // should not have been called.
   SimulateWillRedirectRequest();
   EXPECT_EQ(NavigationRequest::WILL_REDIRECT_REQUEST, state());
   EXPECT_FALSE(was_callback_called());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 1, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 1, 0, 0, 0));
 
   // Cancel the request. The callback should have been called.
   CancelDeferredNavigation(NavigationThrottle::CANCEL_AND_IGNORE);
   EXPECT_EQ(NavigationRequest::CANCELING, state());
   EXPECT_TRUE(was_callback_called());
   EXPECT_EQ(NavigationThrottle::CANCEL_AND_IGNORE, callback_result());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 1, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 1, 0, 0, 0));
 }
 
 // Checks that a navigation deferred during WillFailRequest can be properly
@@ -378,25 +385,25 @@ TEST_F(NavigationRequestTest, CancelDeferredWillFail) {
   TestNavigationThrottle* test_throttle = CreateTestNavigationThrottle(
       TestNavigationThrottle::WILL_FAIL_REQUEST, NavigationThrottle::DEFER);
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
 
   // Simulate WillStartRequest.
   SimulateWillStartRequest();
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 
   // Simulate WillFailRequest. The request should be deferred. The callback
   // should not have been called.
   SimulateWillFailRequest(net::ERR_CERT_DATE_INVALID);
   EXPECT_EQ(NavigationRequest::WILL_FAIL_REQUEST, state());
   EXPECT_FALSE(was_callback_called());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0, 0));
 
   // Cancel the request. The callback should have been called.
   CancelDeferredNavigation(NavigationThrottle::CANCEL_AND_IGNORE);
   EXPECT_EQ(NavigationRequest::CANCELING, state());
   EXPECT_TRUE(was_callback_called());
   EXPECT_EQ(NavigationThrottle::CANCEL_AND_IGNORE, callback_result());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0, 0));
 }
 
 // Checks that a navigation deferred can be canceled and not ignored.
@@ -404,13 +411,13 @@ TEST_F(NavigationRequestTest, CancelDeferredWillRedirectNoIgnore) {
   TestNavigationThrottle* test_throttle =
       CreateTestNavigationThrottle(NavigationThrottle::DEFER);
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
 
   // Simulate WillStartRequest. The request should be deferred. The callback
   // should not have been called.
   SimulateWillStartRequest();
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 
   // Cancel the request. The callback should have been called with CANCEL, and
   // not CANCEL_AND_IGNORE.
@@ -418,7 +425,7 @@ TEST_F(NavigationRequestTest, CancelDeferredWillRedirectNoIgnore) {
   EXPECT_EQ(NavigationRequest::CANCELING, state());
   EXPECT_TRUE(was_callback_called());
   EXPECT_EQ(NavigationThrottle::CANCEL, callback_result());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 }
 
 // Checks that a navigation deferred by WillFailRequest can be canceled and not
@@ -427,18 +434,18 @@ TEST_F(NavigationRequestTest, CancelDeferredWillFailNoIgnore) {
   TestNavigationThrottle* test_throttle = CreateTestNavigationThrottle(
       TestNavigationThrottle::WILL_FAIL_REQUEST, NavigationThrottle::DEFER);
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
-  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
 
   // Simulate WillStartRequest.
   SimulateWillStartRequest();
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 0, 0, 0));
 
   // Simulate WillFailRequest. The request should be deferred. The callback
   // should not have been called.
   SimulateWillFailRequest(net::ERR_CERT_DATE_INVALID);
   EXPECT_EQ(NavigationRequest::WILL_FAIL_REQUEST, state());
   EXPECT_FALSE(was_callback_called());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0, 0));
 
   // Cancel the request. The callback should have been called with CANCEL, and
   // not CANCEL_AND_IGNORE.
@@ -446,7 +453,30 @@ TEST_F(NavigationRequestTest, CancelDeferredWillFailNoIgnore) {
   EXPECT_EQ(NavigationRequest::CANCELING, state());
   EXPECT_TRUE(was_callback_called());
   EXPECT_EQ(NavigationThrottle::CANCEL, callback_result());
-  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0));
+  EXPECT_TRUE(call_counts_match(test_throttle, 1, 0, 1, 0, 0));
+}
+
+// Checks that a navigation deferred during WillCommitWithoutUrlLoader can be
+// properly cancelled.
+TEST_F(NavigationRequestTest, CancelDeferredWillCommitWithoutUrlLoader) {
+  TestNavigationThrottle* test_throttle =
+      CreateTestNavigationThrottle(NavigationThrottle::DEFER);
+  EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, state());
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 0));
+
+  // Simulate WillCommitWithoutUrlLoader. The request should be deferred. The
+  // callback should not have been called.
+  SimulateWillCommitWithoutUrlLoader();
+  EXPECT_EQ(NavigationRequest::WILL_COMMIT_WITHOUT_URL_LOADER, state());
+  EXPECT_FALSE(was_callback_called());
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 1));
+
+  // Cancel the request. The callback should have been called.
+  CancelDeferredNavigation(NavigationThrottle::CANCEL_AND_IGNORE);
+  EXPECT_EQ(NavigationRequest::CANCELING, state());
+  EXPECT_TRUE(was_callback_called());
+  EXPECT_EQ(NavigationThrottle::CANCEL_AND_IGNORE, callback_result());
+  EXPECT_TRUE(call_counts_match(test_throttle, 0, 0, 0, 0, 1));
 }
 
 // Checks that data from the SSLInfo passed into SimulateWillStartRequest() is
@@ -473,6 +503,91 @@ TEST_F(NavigationRequestTest, WillFailRequestSetsSSLInfo) {
             navigation->GetNavigationHandle()->GetSSLInfo()->connection_status);
 }
 
+TEST_F(NavigationRequestTest, SharedStorageWritable) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{network::features::kSharedStorageAPI,
+                            blink::features::kFencedFrames},
+      /*disabled_features=*/{});
+
+  // Create and start a simulated `NavigationRequest` for the main frame.
+  GURL main_url = GURL("https://main.com");
+  auto main_navigation =
+      NavigationSimulatorImpl::CreateBrowserInitiated(main_url, contents());
+  main_navigation->Start();
+  main_navigation->ReadyToCommit();
+
+  // Verify that the main frame's `NavigationRequest` will not be
+  // SharedStorageWritable.
+  ASSERT_TRUE(main_navigation->GetNavigationHandle());
+  EXPECT_FALSE(main_navigation->GetNavigationHandle()
+                   ->shared_storage_writable_eligible());
+
+  // Commit the navigation.
+  main_navigation->Commit();
+
+  // Append a child frame and set its `shared_storage_writable` attribute to
+  // true.
+  TestRenderFrameHost* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
+  blink::mojom::IframeAttributesPtr child_attributes =
+      blink::mojom::IframeAttributes::New();
+  child_attributes->shared_storage_writable_opted_in = true;
+  child_frame->frame_tree_node()->SetAttributes(std::move(child_attributes));
+
+  // Create and start a simulated `NavigationRequest` for the child frame.
+  GURL a_url = GURL("https://a.com");
+  auto child_navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(a_url, child_frame);
+  child_navigation->Start();
+
+  // Verify that the `NavigationRequest` will be SharedStorageWritable.
+  ASSERT_TRUE(child_navigation->GetNavigationHandle());
+  EXPECT_TRUE(child_navigation->GetNavigationHandle()
+                  ->shared_storage_writable_eligible());
+
+  // Commit the navigation.
+  child_navigation->Commit();
+
+  // Append a fenced frame and give it permission to access Shared Storage.
+  TestRenderFrameHost* fenced_frame_root = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame());
+  FrameTreeNode* fenced_frame_node =
+      static_cast<RenderFrameHostImpl*>(fenced_frame_root)->frame_tree_node();
+  FencedFrameConfig new_config = FencedFrameConfig(GURL("about:blank"));
+  new_config.AddEffectiveEnabledPermissionForTesting(
+      network::mojom::PermissionsPolicyFeature::kSharedStorage);
+  FencedFrameProperties new_props = FencedFrameProperties(new_config);
+  fenced_frame_node->set_fenced_frame_properties(new_props);
+  fenced_frame_root->ResetPermissionsPolicy({});
+
+  // Append a child frame to the fenced frame root and set its
+  // `shared_storage_writable` attribute to true.
+  TestRenderFrameHost* child_of_fenced_frame =
+      static_cast<TestRenderFrameHost*>(
+          fenced_frame_root->AppendChild("child_of_fenced"));
+  blink::mojom::IframeAttributesPtr child_of_fenced_frame_attributes =
+      blink::mojom::IframeAttributes::New();
+  child_of_fenced_frame_attributes->shared_storage_writable_opted_in = true;
+  child_of_fenced_frame->frame_tree_node()->SetAttributes(
+      std::move(child_of_fenced_frame_attributes));
+
+  // Create and start a simulated `NavigationRequest` for the child frame.
+  GURL b_url = GURL("https://b.com");
+  auto child_of_fenced_frame_navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(b_url,
+                                                       child_of_fenced_frame);
+  child_of_fenced_frame_navigation->Start();
+
+  // Verify that the `NavigationRequest` will be SharedStorageWritable.
+  ASSERT_TRUE(child_of_fenced_frame_navigation->GetNavigationHandle());
+  EXPECT_TRUE(child_of_fenced_frame_navigation->GetNavigationHandle()
+                  ->shared_storage_writable_eligible());
+
+  // Commit the navigation.
+  child_of_fenced_frame_navigation->Commit();
+}
+
 namespace {
 
 // Helper throttle which checks that it can access NavigationHandle's
@@ -481,8 +596,8 @@ class GetRenderFrameHostOnFailureNavigationThrottle
     : public NavigationThrottle {
  public:
   explicit GetRenderFrameHostOnFailureNavigationThrottle(
-      NavigationHandle* handle)
-      : NavigationThrottle(handle) {}
+      NavigationThrottleRegistry& registry)
+      : NavigationThrottle(registry) {}
 
   GetRenderFrameHostOnFailureNavigationThrottle(
       const GetRenderFrameHostOnFailureNavigationThrottle&) = delete;
@@ -502,13 +617,11 @@ class GetRenderFrameHostOnFailureNavigationThrottle
 };
 
 class ThrottleTestContentBrowserClient : public ContentBrowserClient {
-  std::vector<std::unique_ptr<NavigationThrottle>> CreateThrottlesForNavigation(
-      NavigationHandle* navigation_handle) override {
-    std::vector<std::unique_ptr<NavigationThrottle>> throttle;
-    throttle.push_back(
+  void CreateThrottlesForNavigation(
+      NavigationThrottleRegistry& registry) override {
+    registry.AddThrottle(
         std::make_unique<GetRenderFrameHostOnFailureNavigationThrottle>(
-            navigation_handle));
-    return throttle;
+            registry));
   }
 };
 
@@ -534,9 +647,11 @@ TEST_F(NavigationRequestTest, WillFailRequestCanAccessRenderFrameHost) {
       NavigationRequest::WILL_FAIL_REQUEST,
       NavigationRequest::From(navigation->GetNavigationHandle())->state());
   EXPECT_TRUE(navigation->GetNavigationHandle()->GetRenderFrameHost());
-  NavigationRequest::From(navigation->GetNavigationHandle())
-      ->GetNavigationThrottleRunnerForTesting()
-      ->CallResumeForTesting();
+  auto* registry = NavigationRequest::From(navigation->GetNavigationHandle())
+                       ->GetNavigationThrottleRegistryForTesting();
+  ASSERT_EQ(1u, registry->GetDeferringThrottles().size());
+  registry->ResumeProcessingNavigationEvent(
+      *registry->GetDeferringThrottles().cbegin());
   EXPECT_TRUE(navigation->GetNavigationHandle()->GetRenderFrameHost());
 
   SetBrowserClientForTesting(old_browser_client);
@@ -601,14 +716,13 @@ TEST_F(NavigationRequestTest, DnsAliasesCanBeAccessed) {
 
   // Start the navigation.
   navigation->Start();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
+  EXPECT_EQ(net::HttpConnectionInfo::kUNKNOWN,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
   // Commit the navigation.
-  navigation->set_http_connection_info(
-      net::HttpResponseInfo::CONNECTION_INFO_QUIC_35);
+  navigation->set_http_connection_info(net::HttpConnectionInfo::kQUIC_35);
   navigation->ReadyToCommit();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_QUIC_35,
+  EXPECT_EQ(net::HttpConnectionInfo::kQUIC_35,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
   // Verify that the aliases are accessible from the NavigationRequest.
@@ -627,18 +741,38 @@ TEST_F(NavigationRequestTest, NoDnsAliases) {
 
   // Start the navigation.
   navigation->Start();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
+  EXPECT_EQ(net::HttpConnectionInfo::kUNKNOWN,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
   // Commit the navigation.
-  navigation->set_http_connection_info(
-      net::HttpResponseInfo::CONNECTION_INFO_QUIC_35);
+  navigation->set_http_connection_info(net::HttpConnectionInfo::kQUIC_35);
   navigation->ReadyToCommit();
-  EXPECT_EQ(net::HttpResponseInfo::CONNECTION_INFO_QUIC_35,
+  EXPECT_EQ(net::HttpConnectionInfo::kQUIC_35,
             navigation->GetNavigationHandle()->GetConnectionInfo());
 
   // Verify that there are no aliases in the NavigationRequest.
   EXPECT_TRUE(navigation->GetNavigationHandle()->GetDnsAliases().empty());
+}
+
+TEST_F(NavigationRequestTest, ProcessSelectionUserDataIsAvailableFromUrlInfo) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kProcessSelectionDeferringConditions);
+
+  NavigationRequest* request =
+      main_test_rfh()->frame_tree_node()->navigation_request();
+  ProcessSelectionUserData& user_data = request->GetProcessSelectionUserData();
+  user_data.SetUserData(ProcessSelectionTestData::UserDataKey(),
+                        std::make_unique<ProcessSelectionTestData>(42));
+
+  UrlInfo url_info = request->GetUrlInfo();
+  ASSERT_TRUE(url_info.process_selection_user_data);
+
+  const ProcessSelectionTestData* retrieved_data_from_url_info =
+      ProcessSelectionTestData::FromProcessSelectionUserData(
+          url_info.process_selection_user_data);
+  ASSERT_TRUE(retrieved_data_from_url_info);
+  EXPECT_EQ(42, retrieved_data_from_url_info->value());
 }
 
 TEST_F(NavigationRequestTest, StorageKeyToCommit) {
@@ -655,7 +789,7 @@ TEST_F(NavigationRequestTest, StorageKeyToCommit) {
   NavigationRequest* request =
       NavigationRequest::From(navigation->GetNavigationHandle());
   EXPECT_TRUE(request->commit_params().storage_key.nonce().has_value());
-  EXPECT_EQ(child_document->GetMainFrame()->credentialless_iframes_nonce(),
+  EXPECT_EQ(child_document->GetPage().credentialless_iframes_nonce(),
             request->commit_params().storage_key.nonce().value());
 
   navigation->Commit();
@@ -664,8 +798,8 @@ TEST_F(NavigationRequestTest, StorageKeyToCommit) {
   EXPECT_TRUE(child_document->IsCredentialless());
   EXPECT_EQ(blink::StorageKey::CreateWithNonce(
                 url::Origin::Create(kUrl),
-                child_document->GetMainFrame()->credentialless_iframes_nonce()),
-            child_document->storage_key());
+                child_document->GetPage().credentialless_iframes_nonce()),
+            child_document->GetStorageKey());
 }
 
 TEST_F(NavigationRequestTest,
@@ -682,72 +816,96 @@ TEST_F(NavigationRequestTest,
           GURL("https://example.com/navigation.html"), child_frame);
   navigation->ReadyToCommit();
 
-  EXPECT_EQ(main_test_rfh()->credentialless_iframes_nonce(),
+  EXPECT_EQ(main_test_rfh()->GetPage().credentialless_iframes_nonce(),
             static_cast<NavigationRequest*>(navigation->GetNavigationHandle())
                 ->isolation_info_for_subresources()
                 .network_isolation_key()
                 .GetNonce());
-  EXPECT_EQ(main_test_rfh()->credentialless_iframes_nonce(),
+  EXPECT_EQ(main_test_rfh()->GetPage().credentialless_iframes_nonce(),
             static_cast<NavigationRequest*>(navigation->GetNavigationHandle())
                 ->GetIsolationInfo()
                 .network_isolation_key()
                 .GetNonce());
 }
 
-class ScopedIsolatedAppBrowserClient : public ContentBrowserClient {
- public:
-  explicit ScopedIsolatedAppBrowserClient(const GURL& isolated_url)
-      : isolated_host_(isolated_url.host()),
-        old_client_(SetBrowserClientForTesting(this)) {}
+TEST_F(NavigationRequestTest, UpdatePrivateNetworkRequestPolicy) {
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(GURL("https://example.com/"),
+                                                   main_test_rfh());
+  navigation->SetSocketAddress(net::IPEndPoint());
 
-  ~ScopedIsolatedAppBrowserClient() override {
-    SetBrowserClientForTesting(old_client_);
-  }
-
-  bool ShouldUrlUseApplicationIsolationLevel(
-      BrowserContext* browser_context,
-      const GURL& url,
-      bool origin_matches_flag) override {
-    return url.host() == isolated_host_;
-  }
-
- private:
-  std::string isolated_host_;
-  raw_ptr<ContentBrowserClient> old_client_;
-};
-
-TEST_F(NavigationRequestTest, IsolatedAppPolicyInjection) {
-  const GURL kUrl = GURL("https://chromium.org");
-  ScopedIsolatedAppBrowserClient client(kUrl);
-
-  auto navigation =
-      NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
   navigation->ReadyToCommit();
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  EXPECT_FALSE(request->GetSocketAddress().address().IsValid());
+  navigation->Commit();
+}
 
-  // Validate the COOP/COEP headers.
-  const PolicyContainerPolicies& policies =
-      navigation->GetNavigationHandle()->GetPolicyContainerPolicies();
-  EXPECT_EQ(network::mojom::CrossOriginOpenerPolicyValue::kSameOriginPlusCoep,
-            policies.cross_origin_opener_policy.value);
-  EXPECT_EQ(network::mojom::CrossOriginEmbedderPolicyValue::kRequireCorp,
-            policies.cross_origin_embedder_policy.value);
+// Test to ensure that the SanitizeRedirectsForCommit method correctly removes
+// the query parameters parts of the URL that can contain sensitive information.
+TEST_F(NavigationRequestTest, SanitizeRedirectsForCommit) {
+  const GURL start_url("https://a.com?param=1");
+  const GURL url_2("https://b.com?param=2#foo");
+  const GURL url_3("https://c.com?param=3");
+  const GURL final_url("https://d.com?param=4");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(start_url, main_test_rfh());
+  navigation->Start();
+  navigation->Redirect(url_2);
+  navigation->Redirect(url_3);
+  navigation->Redirect(final_url);
 
-  // Validate CSP.
-  EXPECT_EQ(1UL, policies.content_security_policies.size());
-  const auto& csp = policies.content_security_policies[0];
-  EXPECT_EQ(10UL, csp->raw_directives.size());
-  using Directive = network::mojom::CSPDirectiveName;
-  EXPECT_EQ("'none'", csp->raw_directives[Directive::BaseURI]);
-  EXPECT_EQ("'none'", csp->raw_directives[Directive::ObjectSrc]);
-  EXPECT_EQ("'self'", csp->raw_directives[Directive::DefaultSrc]);
-  EXPECT_EQ("'self' https:", csp->raw_directives[Directive::FrameSrc]);
-  EXPECT_EQ("'self' https:", csp->raw_directives[Directive::ConnectSrc]);
-  EXPECT_EQ("'self' 'wasm-unsafe-eval'",
-            csp->raw_directives[Directive::ScriptSrc]);
-  EXPECT_EQ("'self' data:", csp->raw_directives[Directive::ImgSrc]);
-  EXPECT_EQ("'self' data:", csp->raw_directives[Directive::MediaSrc]);
-  EXPECT_EQ("'self' data:", csp->raw_directives[Directive::FontSrc]);
-  EXPECT_EQ("'script'", csp->raw_directives[Directive::RequireTrustedTypesFor]);
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  auto commit_params = request->commit_params().Clone();
+  request->SanitizeRedirectsForCommit(commit_params);
+
+  // redirect_infos contains entries for B, C, and D, but not the starting URL.
+  // Ensure that the full URL for D is preserved.
+  EXPECT_EQ(3, commit_params->redirect_infos.size());
+  EXPECT_EQ(GURL("https://b.com"), commit_params->redirect_infos[0].new_url);
+  EXPECT_EQ(GURL("https://c.com"), commit_params->redirect_infos[1].new_url);
+  EXPECT_EQ(final_url, commit_params->redirect_infos[2].new_url);
+
+  // In contrast, redirects contains A, B, and C (i.e., the starting URL but not
+  // the final URL).
+  EXPECT_EQ(3, commit_params->redirects.size());
+  EXPECT_EQ(GURL("https://a.com"), commit_params->redirects[0]);
+  EXPECT_EQ(GURL("https://b.com"), commit_params->redirects[1]);
+  EXPECT_EQ(GURL("https://c.com"), commit_params->redirects[2]);
+}
+
+TEST_F(NavigationRequestTest, AbortsDeletedNavigationInProgress) {
+  const GURL kUrl1 = GURL("http://a.com");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl1, main_rfh());
+  navigation->Start();
+
+  testing::NiceMock<MockWebContentsObserver> failed_observer(web_contents());
+  EXPECT_CALL(failed_observer, DidFinishNavigation(testing::_))
+      .WillOnce([](NavigationHandle* navigation_handle) {
+        EXPECT_EQ(navigation_handle->GetNetErrorCode(),
+                  net::Error::ERR_ABORTED);
+      });
+  DeleteContents();
+}
+
+TEST_F(NavigationRequestTest, AbortsDeletedNavigationInProgressWithRedirect) {
+  const GURL kUrl1 = GURL("http://a.com");
+  const GURL kUrl2 = GURL("http://b.com");
+
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl1, main_rfh());
+  navigation->Start();
+  navigation->Redirect(kUrl2);
+
+  testing::NiceMock<MockWebContentsObserver> failed_observer(web_contents());
+  EXPECT_CALL(failed_observer, DidFinishNavigation(testing::_))
+      .WillOnce([](NavigationHandle* navigation_handle) {
+        EXPECT_EQ(navigation_handle->GetNetErrorCode(),
+                  net::Error::ERR_ABORTED);
+      });
+  DeleteContents();
 }
 
 // Test that the required CSP of every frame is computed/inherited correctly and
@@ -788,9 +946,9 @@ class CSPEmbeddedEnforcementUnitTest : public NavigationRequestTest {
     navigation->Start();
     NavigationRequest* request =
         NavigationRequest::From(navigation->GetNavigationHandle());
-    std::string sec_required_csp;
-    request->GetRequestHeaders().GetHeader("sec-required-csp",
-                                           &sec_required_csp);
+    std::string sec_required_csp = request->GetRequestHeaders()
+                                       .GetHeader("sec-required-csp")
+                                       .value_or(std::string());
 
     // Complete the navigation so that the required csp is stored in the
     // RenderFrameHost, so that when we will add children to this document they
@@ -969,20 +1127,33 @@ class OriginTrialsControllerDelegateMock
 
   void PersistTrialsFromTokens(
       const url::Origin& origin,
+      const url::Origin& partition_origin,
       const base::span<const std::string> header_tokens,
-      const base::Time current_time) override {
+      const base::Time current_time,
+      std::optional<ukm::SourceId> source_id) override {
     persisted_tokens_[origin] =
         std::vector<std::string>(header_tokens.begin(), header_tokens.end());
   }
-  bool IsTrialPersistedForOrigin(const url::Origin& origin,
-                                 const base::StringPiece trial_name,
-                                 const base::Time current_time) override {
+  void PersistAdditionalTrialsFromTokens(
+      const url::Origin& origin,
+      const url::Origin& partition_origin,
+      const base::span<const url::Origin> script_origins,
+      const base::span<const std::string> header_tokens,
+      const base::Time current_time,
+      std::optional<ukm::SourceId> source_id) override {
+    NOTREACHED() << "not used by test";
+  }
+  bool IsFeaturePersistedForOrigin(const url::Origin& origin,
+                                   const url::Origin& partition_origin,
+                                   blink::mojom::OriginTrialFeature feature,
+                                   const base::Time current_time) override {
     DCHECK(false) << "Method not implemented for test.";
     return false;
   }
 
   base::flat_set<std::string> GetPersistedTrialsForOrigin(
       const url::Origin& origin,
+      const url::Origin& partition_origin,
       base::Time current_time) override {
     DCHECK(false) << "Method not implemented for test.";
     return base::flat_set<std::string>();
@@ -1000,7 +1171,6 @@ class PersistentOriginTrialNavigationRequestTest
  public:
   PersistentOriginTrialNavigationRequestTest()
       : delegate_mock_(std::make_unique<OriginTrialsControllerDelegateMock>()) {
-
   }
   ~PersistentOriginTrialNavigationRequestTest() override = default;
 
@@ -1037,8 +1207,6 @@ TEST_F(PersistentOriginTrialNavigationRequestTest,
       "SI"
       "6ICJGcm9idWxhdGVQZXJzaXN0ZW50IiwgImV4cGlyeSI6IDIwMDAwMDAwMDB9";
 
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kPersistentOriginTrials);
   blink::ScopedTestOriginTrialPolicy origin_trial_policy_;
 
   const GURL kUrl = GURL("https://example.com");
@@ -1060,6 +1228,168 @@ TEST_F(PersistentOriginTrialNavigationRequestTest,
   // still updated and cleared.
   NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh())->Commit();
   EXPECT_EQ(std::vector<std::string>(), GetPersistedTokens(origin));
+}
+
+namespace {
+
+// Test version of a NavigationThrottle that requests the response body.
+class ResponseBodyNavigationThrottle : public NavigationThrottle {
+ public:
+  using ResponseBodyCallback = base::OnceCallback<void(const std::string&)>;
+
+  ResponseBodyNavigationThrottle(NavigationThrottleRegistry& registry,
+                                 ResponseBodyCallback callback)
+      : NavigationThrottle(registry), callback_(std::move(callback)) {}
+  ResponseBodyNavigationThrottle(const ResponseBodyNavigationThrottle&) =
+      delete;
+  ResponseBodyNavigationThrottle& operator=(
+      const ResponseBodyNavigationThrottle&) = delete;
+  ~ResponseBodyNavigationThrottle() override = default;
+
+  NavigationThrottle::ThrottleCheckResult WillProcessResponse() override {
+    navigation_handle()->GetResponseBody(
+        base::BindOnce(&ResponseBodyNavigationThrottle::OnResponseBodyReady,
+                       base::Unretained(this)));
+    return NavigationThrottle::DEFER;
+  }
+
+  const char* GetNameForLogging() override {
+    return "ResponseBodyNavigationThrottle";
+  }
+
+ private:
+  void OnResponseBodyReady(const std::string& response_body) {
+    std::move(callback_).Run(response_body);
+    NavigationRequest::From(navigation_handle())
+        ->GetNavigationThrottleRegistryForTesting()
+        ->ResumeProcessingNavigationEvent(this);
+  }
+
+  ResponseBodyCallback callback_;
+};
+
+}  // namespace
+
+// Tests response body.
+class NavigationRequestResponseBodyTest : public NavigationRequestTest {
+ public:
+  std::unique_ptr<NavigationSimulator> CreateNavigationSimulator() {
+    auto navigation = NavigationSimulatorImpl::CreateRendererInitiated(
+        GURL("http://example.test"), main_rfh());
+    navigation->SetAutoAdvance(false);
+    navigation->Start();
+    // It is safe to use base::Unretained as the NavigationThrottle will not be
+    // destroyed before the callback is called.
+    auto& registry = navigation->GetNavigationThrottleRegistry();
+    auto throttle = std::make_unique<ResponseBodyNavigationThrottle>(
+        registry,
+        base::BindOnce(&NavigationRequestResponseBodyTest::UpdateResponseBody,
+                       base::Unretained(this)));
+    registry.AddThrottle(std::move(throttle));
+    return navigation;
+  }
+
+  void UpdateResponseBody(const std::string& response_body) {
+    response_body_ = response_body;
+    was_callback_called_ = true;
+  }
+
+  bool was_callback_called() const { return was_callback_called_; }
+
+  const std::string& response_body() const { return response_body_; }
+
+ protected:
+  mojo::ScopedDataPipeProducerHandle producer_handle_;
+  mojo::ScopedDataPipeConsumerHandle consumer_handle_;
+
+ private:
+  bool was_callback_called_ = false;
+  std::string response_body_;
+};
+
+TEST_F(NavigationRequestResponseBodyTest, Received) {
+  auto navigation = CreateNavigationSimulator();
+  std::string response = "response-body-content";
+  ASSERT_EQ(MOJO_RESULT_OK,
+            mojo::CreateDataPipe(response.size(), producer_handle_,
+                                 consumer_handle_));
+  navigation->SetResponseBody(std::move(consumer_handle_));
+
+  navigation->ReadyToCommit();
+  EXPECT_EQ(
+      NavigationRequest::WILL_PROCESS_RESPONSE,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_FALSE(was_callback_called());
+  EXPECT_EQ(std::string(), response_body());
+
+  size_t actually_written_bytes = 0;
+  ASSERT_EQ(MOJO_RESULT_OK,
+            producer_handle_->WriteData(base::as_byte_span(response),
+                                        MOJO_WRITE_DATA_FLAG_NONE,
+                                        actually_written_bytes));
+  EXPECT_EQ(actually_written_bytes, response.size());
+
+  navigation->Wait();
+  EXPECT_EQ(
+      NavigationRequest::READY_TO_COMMIT,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_TRUE(was_callback_called());
+  EXPECT_EQ(response, response_body());
+}
+
+TEST_F(NavigationRequestResponseBodyTest, PartiallyReceived) {
+  auto navigation = CreateNavigationSimulator();
+
+  // The data pipe size is smaller than the response body size.
+  uint32_t pipe_size = 8u;
+  ASSERT_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(pipe_size, producer_handle_,
+                                                 consumer_handle_));
+  navigation->SetResponseBody(std::move(consumer_handle_));
+
+  navigation->ReadyToCommit();
+  EXPECT_EQ(
+      NavigationRequest::WILL_PROCESS_RESPONSE,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_FALSE(was_callback_called());
+  EXPECT_EQ(std::string(), response_body());
+
+  std::string response = "response-body-content";
+  size_t actually_written_bytes = 0;
+  ASSERT_EQ(MOJO_RESULT_OK,
+            producer_handle_->WriteData(base::as_byte_span(response),
+                                        MOJO_WRITE_DATA_FLAG_NONE,
+                                        actually_written_bytes));
+  EXPECT_EQ(actually_written_bytes, pipe_size);
+
+  navigation->Wait();
+  EXPECT_EQ(
+      NavigationRequest::READY_TO_COMMIT,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_TRUE(was_callback_called());
+  // Only the first part of the response body that fits in the pipe is received.
+  EXPECT_EQ("response", response_body());
+}
+
+TEST_F(NavigationRequestResponseBodyTest, PipeClosed) {
+  auto navigation = CreateNavigationSimulator();
+  ASSERT_EQ(MOJO_RESULT_OK,
+            mojo::CreateDataPipe(10u, producer_handle_, consumer_handle_));
+  navigation->SetResponseBody(std::move(consumer_handle_));
+  navigation->ReadyToCommit();
+  EXPECT_EQ(
+      NavigationRequest::WILL_PROCESS_RESPONSE,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_FALSE(was_callback_called());
+  EXPECT_EQ(std::string(), response_body());
+
+  // Close the pipe before any data is sent.
+  producer_handle_.reset();
+  navigation->Wait();
+  EXPECT_EQ(
+      NavigationRequest::READY_TO_COMMIT,
+      NavigationRequest::From(navigation->GetNavigationHandle())->state());
+  EXPECT_TRUE(was_callback_called());
+  EXPECT_EQ(std::string(), response_body());
 }
 
 }  // namespace content

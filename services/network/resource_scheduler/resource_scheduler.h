@@ -10,14 +10,14 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
@@ -30,7 +30,6 @@
 #include "services/network/resource_scheduler/resource_scheduler_params_manager.h"
 
 namespace base {
-class SequencedTaskRunner;
 class TickClock;
 }  // namespace base
 
@@ -55,7 +54,7 @@ namespace network {
 // has been deleted.
 //
 // The ResourceScheduler tracks many Clients, which should correlate with tabs.
-// A client is uniquely identified by its child_id and route_id.
+// A client is uniquely identified by an opaque identifier.
 //
 // Each Client may have many Requests in flight. Requests are uniquely
 // identified within a Client by its ScheduledResourceRequest.
@@ -67,22 +66,25 @@ namespace network {
 // The scheduler may defer issuing the request via the ResourceThrottle
 // interface or it may alter the request's priority by calling set_priority() on
 // the URLRequest.
-class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
+class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler final {
  public:
-  class ClientId final {
+  class COMPONENT_EXPORT(NETWORK_SERVICE) ClientId final {
    public:
-    explicit constexpr ClientId(uint64_t id) : id_(id) {}
+    static ClientId Create();
+
+    ClientId(const ClientId& that) = default;
+    ClientId& operator=(const ClientId& that) = default;
+
     ~ClientId() = default;
 
-    void Increment() { ++id_; }
     bool operator<(const ClientId& that) const { return id_ < that.id_; }
     bool operator==(const ClientId& that) const { return id_ == that.id_; }
 
-    constexpr ClientId AddForTesting(uint64_t n) const {
-      return ClientId(id_ + n);
-    }
+    static ClientId CreateForTest(uint64_t id) { return ClientId(id); }
 
    private:
+    explicit ClientId(uint64_t id) : id_(id) {}
+
     uint64_t id_;
   };
 
@@ -106,12 +108,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
   ResourceScheduler(const ResourceScheduler&) = delete;
   ResourceScheduler& operator=(const ResourceScheduler&) = delete;
 
-  virtual ~ResourceScheduler();
+  ~ResourceScheduler();
 
   // Requests that this ResourceScheduler schedule, and eventually loads, the
   // specified |url_request|. Caller should delete the returned ResourceThrottle
   // when the load completes or is canceled, before |url_request| is deleted.
-  virtual std::unique_ptr<ScheduledResourceRequest> ScheduleRequest(
+  std::unique_ptr<ScheduledResourceRequest> ScheduleRequest(
       ClientId client_id,
       bool is_async,
       net::URLRequest* url_request);
@@ -120,23 +122,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
 
   // Called when a renderer is created. |network_quality_estimator| is allowed
   // to be null.
-  virtual void OnClientCreated(
-      ClientId client_id,
-      IsBrowserInitiated is_browser_initiated,
-      net::NetworkQualityEstimator* network_quality_estimator);
+  void OnClientCreated(ClientId client_id,
+                       IsBrowserInitiated is_browser_initiated,
+                       net::NetworkQualityEstimator* network_quality_estimator);
 
   // Called when a renderer is destroyed.
-  virtual void OnClientDeleted(ClientId client_id);
-
-  // Counts the number of active resource scheduler clients.
-  // A client is active when it has at least one request either in the pending
-  // request queue owned by the client or in flight.
-  // Note: the counter is expected to be 0 for the most of time.
-  virtual size_t ActiveSchedulerClientsCounter() const;
-
-  // Records the metrics related to number of in-flight requests that are
-  // observed by the global resource scheduler.
-  virtual void RecordGlobalRequestCountMetrics() const;
+  void OnClientDeleted(ClientId client_id);
 
   // Client functions:
 
@@ -144,23 +135,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
   // start the request loading if it wasn't already started.
   // If the scheduler does not know about the request, |new_priority| is set but
   // |intra_priority_value| is ignored.
-  virtual void ReprioritizeRequest(net::URLRequest* request,
-                                   net::RequestPriority new_priority,
-                                   int intra_priority_value);
-  // Same as above, but keeps the existing intra priority value.
-  virtual void ReprioritizeRequest(net::URLRequest* request,
-                                   net::RequestPriority new_priority);
+  void ReprioritizeRequest(net::URLRequest* request,
+                           net::RequestPriority new_priority,
+                           int intra_priority_value);
 
   // Returns true if the timer that dispatches long queued requests is running.
-  virtual bool IsLongQueuedRequestsDispatchTimerRunning() const;
-
-  virtual base::SequencedTaskRunner* task_runner();
-
-  // Testing setters
-  void SetTaskRunnerForTesting(
-      scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner) {
-    task_runner_ = std::move(sequenced_task_runner);
-  }
+  bool IsLongQueuedRequestsDispatchTimerRunning() const;
 
   void SetResourceSchedulerParamsManagerForTests(
       const ResourceSchedulerParamsManager& resource_scheduler_params_manager);
@@ -179,7 +159,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
   };
 
   using ClientMap = std::map<ClientId, std::unique_ptr<Client>>;
-  using RequestSet = std::set<ScheduledResourceRequestImpl*>;
+  using RequestSet =
+      std::set<raw_ptr<ScheduledResourceRequestImpl, SetExperimental>>;
 
   // Called when a ScheduledResourceRequest is destroyed.
   void RemoveRequest(ScheduledResourceRequestImpl* request);
@@ -207,9 +188,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ResourceScheduler {
   const base::TimeDelta queued_requests_dispatch_periodicity_;
 
   ResourceSchedulerParamsManager resource_scheduler_params_manager_;
-
-  // The TaskRunner to post tasks on. Can be overridden for tests.
-  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

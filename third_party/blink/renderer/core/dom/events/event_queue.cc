@@ -26,6 +26,7 @@
 
 #include "third_party/blink/renderer/core/dom/events/event_queue.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -53,7 +54,7 @@ bool EventQueue::EnqueueEvent(const base::Location& from_here, Event& event) {
   if (is_closed_)
     return false;
 
-  DCHECK(event.target());
+  DCHECK(event.RawTarget());
   DCHECK(GetExecutionContext());
 
   event.async_task_context()->Schedule(GetExecutionContext(), event.type());
@@ -67,8 +68,8 @@ bool EventQueue::EnqueueEvent(const base::Location& from_here, Event& event) {
   // Pass the event as a weak persistent so that GC can collect an event-related
   // object like IDBTransaction as soon as possible.
   task_runner->PostTask(
-      from_here, WTF::BindOnce(&EventQueue::DispatchEvent, WrapPersistent(this),
-                               WrapWeakPersistent(&event)));
+      from_here, BindOnce(&EventQueue::DispatchEvent, WrapPersistent(this),
+                          WrapWeakPersistent(&event)));
 
   return true;
 }
@@ -97,7 +98,7 @@ void EventQueue::DispatchEvent(Event* event) {
 
   probe::AsyncTask async_task(GetExecutionContext(),
                               event->async_task_context());
-  EventTarget* target = event->target();
+  EventTarget* target = event->RawTarget();
   if (LocalDOMWindow* window = target->ToLocalDOMWindow())
     window->DispatchEvent(*event, nullptr);
   else

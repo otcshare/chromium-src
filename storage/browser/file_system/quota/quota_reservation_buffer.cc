@@ -8,8 +8,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "storage/browser/file_system/quota/open_file_handle.h"
@@ -40,10 +40,11 @@ std::unique_ptr<OpenFileHandle> QuotaReservationBuffer::GetOpenFileHandle(
     QuotaReservation* reservation,
     const base::FilePath& platform_path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  OpenFileHandleContext** open_file = &open_files_[platform_path];
-  if (!*open_file)
-    *open_file = new OpenFileHandleContext(platform_path, this);
-  return base::WrapUnique(new OpenFileHandle(reservation, *open_file));
+  auto& open_file = open_files_[platform_path];
+  if (!open_file) {
+    open_file = new OpenFileHandleContext(platform_path, this);
+  }
+  return base::WrapUnique(new OpenFileHandle(reservation, open_file));
 }
 
 void QuotaReservationBuffer::CommitFileGrowth(

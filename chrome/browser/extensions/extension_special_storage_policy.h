@@ -12,9 +12,17 @@
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_set.h"
 #include "storage/browser/quota/special_storage_policy.h"
 #include "url/gurl.h"
+#include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace content {
+class BrowserContext;
+}
 
 namespace content_settings {
 class CookieSettings;
@@ -42,17 +50,23 @@ class ExtensionSpecialStoragePolicy : public storage::SpecialStoragePolicy {
   bool IsStorageDurable(const GURL& origin) override;
 
   // Methods used by the ExtensionService to populate this class.
-  void GrantRightsForExtension(const extensions::Extension* extension);
-  void RevokeRightsForExtension(const extensions::Extension* extension);
+  void GrantRightsForExtension(const extensions::Extension* extension,
+                               content::BrowserContext* context);
+  void RevokeRightsForExtension(const extensions::Extension* extension,
+                                content::BrowserContext* context);
   void RevokeRightsForAllExtensions();
 
-  // Decides whether the storage for |extension|'s web extent needs protection.
+  // Decides whether the storage for `extension`'s web extent needs protection.
   bool NeedsProtection(const extensions::Extension* extension);
 
   // Returns the set of extensions protecting this origin. The caller does not
   // take ownership of the return value.
   const extensions::ExtensionSet* ExtensionsProtectingOrigin(
       const GURL& origin);
+
+  // Marks an origin as having unlimited storage. This is currently used by web
+  // kiosk to give unlimited storage to the kiosk origin.
+  void AddOriginWithUnlimitedStorage(const url::Origin& origin);
 
  protected:
   ~ExtensionSpecialStoragePolicy() override;
@@ -89,6 +103,8 @@ class ExtensionSpecialStoragePolicy : public storage::SpecialStoragePolicy {
   SpecialCollection file_handler_extensions_ GUARDED_BY_CONTEXT(lock_);
   SpecialCollection isolated_extensions_ GUARDED_BY_CONTEXT(lock_);
   SpecialCollection content_capabilities_unlimited_extensions_
+      GUARDED_BY_CONTEXT(lock_);
+  std::set<url::Origin> origins_with_unlimited_storage_
       GUARDED_BY_CONTEXT(lock_);
 
   // GUARDED_BY_CONTEXT() not needed because the data member is thread-safe. The

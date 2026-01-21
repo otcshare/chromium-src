@@ -5,6 +5,7 @@
 #include "remoting/host/win/event_trace_data.h"
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/logging_win.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,7 +56,7 @@ void EventTraceDataTest::InitForLogMessage() {
 
   size_t message_length = strlen(kTestLogMessage) + 1;
   buffer_.resize(message_length);
-  memcpy(buffer_.data(), kTestLogMessage, message_length);
+  UNSAFE_TODO(memcpy(buffer_.data(), kTestLogMessage, message_length));
 
   event_trace_.MofData = buffer_.data();
   event_trace_.MofLength = buffer_.size();
@@ -67,27 +68,27 @@ void EventTraceDataTest::InitForLogMessageFull() {
   // Set up the stack trace info.
   size_t data_size = sizeof(DWORD);
   size_t offset = ReserveBufferSpace(data_size);
-  memcpy(buffer_.data() + offset, &kStackDepth, data_size);
+  UNSAFE_TODO(memcpy(buffer_.data() + offset, &kStackDepth, data_size));
 
   // Allocate space for the 'stack trace' info.
   data_size = kStackDepth * sizeof(intptr_t);
   offset = ReserveBufferSpace(data_size);
-  memset(buffer_.data() + offset, 0, data_size);
+  UNSAFE_TODO(memset(buffer_.data() + offset, 0, data_size));
 
   // Set the line number.
   data_size = sizeof(DWORD);
   offset = ReserveBufferSpace(data_size);
-  memcpy(buffer_.data() + offset, &kLineNumber, data_size);
+  UNSAFE_TODO(memcpy(buffer_.data() + offset, &kLineNumber, data_size));
 
   // Set the file path.
   data_size = strlen(kFilePath) + 1;
   offset = ReserveBufferSpace(data_size);
-  memcpy(buffer_.data() + offset, &kFilePath, data_size);
+  UNSAFE_TODO(memcpy(buffer_.data() + offset, &kFilePath, data_size));
 
   // Set the log message.
   data_size = strlen(kTestLogMessage) + 1;
   offset = ReserveBufferSpace(data_size);
-  memcpy(buffer_.data() + offset, &kTestLogMessage, data_size);
+  UNSAFE_TODO(memcpy(buffer_.data() + offset, &kTestLogMessage, data_size));
 
   event_trace_.MofData = buffer_.data();
   event_trace_.MofLength = buffer_.size();
@@ -105,10 +106,9 @@ TEST_F(EventTraceDataTest, LogMessage) {
   EventTraceData data = EventTraceData::Create(&event_trace_);
 
   EXPECT_EQ(logging::LOG_MESSAGE, data.event_type);
-  EXPECT_EQ(logging::LOG_WARNING, data.severity);
+  EXPECT_EQ(logging::LOGGING_WARNING, data.severity);
   EXPECT_EQ(kProcessId, data.process_id);
   EXPECT_EQ(kThreadId, data.thread_id);
-  EXPECT_TRUE(data.time_stamp.HasValidValues());
   EXPECT_STREQ(kTestLogMessage, data.message.c_str());
 
   // File and line data should not be filled in for this log message type.
@@ -122,11 +122,10 @@ TEST_F(EventTraceDataTest, LogFullMessage) {
   EventTraceData data = EventTraceData::Create(&event_trace_);
 
   EXPECT_EQ(logging::LOG_MESSAGE_FULL, data.event_type);
-  EXPECT_EQ(logging::LOG_WARNING, data.severity);
+  EXPECT_EQ(logging::LOGGING_WARNING, data.severity);
   EXPECT_EQ(kWarning, EventTraceData::SeverityToString(data.severity));
   EXPECT_EQ(kProcessId, data.process_id);
   EXPECT_EQ(kThreadId, data.thread_id);
-  EXPECT_TRUE(data.time_stamp.HasValidValues());
   EXPECT_EQ(kLineNumber, data.line);
   EXPECT_STREQ(kFileName, data.file_name.c_str());
   EXPECT_STREQ(kTestLogMessage, data.message.c_str());

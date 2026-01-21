@@ -9,7 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/mojom/app.mojom-forward.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom-forward.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/scoped_user_manager.h"
 
 namespace arc {
 namespace mojom {
@@ -17,18 +21,14 @@ class AppInfo;
 }
 class ArcPlayStoreEnabledPreferenceHandler;
 class ArcServiceManager;
+class ArcDlcInstaller;
 class ArcSessionManager;
 class FakeAppInstance;
-class FakeIntentHelperHost;
+class FakeCompatibilityModeInstance;
 class FakeIntentHelperInstance;
 }  // namespace arc
 
-namespace ash {
-class FakeChromeUserManager;
-}
-
 namespace user_manager {
-class ScopedUserManager;
 class User;
 }
 
@@ -38,21 +38,47 @@ class Profile;
 // Helper class to initialize arc bridge to work with arc apps in unit tests.
 class ArcAppTest {
  public:
-  ArcAppTest();
+  enum UserManagerMode {
+    kDoNothing,
+    kCreate,
+  };
+  explicit ArcAppTest(
+      UserManagerMode user_manager_mode = UserManagerMode::kCreate);
 
   ArcAppTest(const ArcAppTest&) = delete;
   ArcAppTest& operator=(const ArcAppTest&) = delete;
 
   virtual ~ArcAppTest();
 
-  void SetUp(Profile* profile);
-  void TearDown();
+  // Tests should call the SetUp / TearDown methods in the following order.
+  // 1. (Optionally, SetUserEmail. See the comment below.)
+  // 2. PreProfileSetUp
+  // 3. (create a profile)
+  // 4. PostProfileSetUp
+  // 5. PreProfileTearDown
+  // 6. (delete the profile)
+  // 7. PostProfileTearDown
+
+  // This must be called before `PreProfileSetUp` if `user_manager_mode` is
+  // `kCreate` and the profile user name is other than
+  // `TestingProfile::kDefaultProfileUserName`.
+  void SetUserEmail(const std::string& email);
+
+  // Perform initialization that's supposed to be done before profile creation.
+  // `PostProfileTearDown` must also be called afterward.
+  void PreProfileSetUp();
+  // Perform initialization that's supposed to be done after profile creation.
+  // `PreProfileSetUp` must be called beforehand and `PreProfileTearDown` must
+  // be called afterward.
+  void PostProfileSetUp(Profile* profile);
+  // Perform shutdown that's supposed to be done before profile deletion.
+  void PreProfileTearDown();
+  // Perform shutdown that's supposed to be done after profile deletion.
+  void PostProfileTearDown();
 
   // Public methods to modify AppInstance for unit_tests.
   void StopArcInstance();
   void RestartArcInstance();
-
-  void SetUpIntentHelper();
 
   static std::string GetAppId(const arc::mojom::AppInfo& app_info);
   static std::string GetAppId(const arc::mojom::ShortcutInfo& shortcut);
@@ -93,9 +119,11 @@ class ArcAppTest {
     return fake_shortcuts_;
   }
 
-  ash::FakeChromeUserManager* GetUserManager();
-
   arc::FakeAppInstance* app_instance() { return app_instance_.get(); }
+
+  arc::FakeCompatibilityModeInstance* compatibility_mode_instance() {
+    return compatibility_mode_instance_.get();
+  }
 
   arc::FakeIntentHelperInstance* intent_helper_instance() {
     return intent_helper_instance_.get();
@@ -122,23 +150,26 @@ class ArcAppTest {
     persist_service_manager_ = persist_service_manager;
   }
 
-  void set_start_app_service_publisher(bool start_app_service_publisher) {
-    start_app_service_publisher_ = start_app_service_publisher;
-  }
-
   void set_initialize_real_intent_helper_bridge(bool value) {
     initialize_real_intent_helper_bridge_ = value;
   }
 
+  void set_wait_compatibility_mode(bool value) {
+    wait_compatibility_mode_ = value;
+  }
+
  private:
-  const user_manager::User* CreateUserAndLogin();
+  void CreateUserAndLogin();
   bool FindPackage(const std::string& package_name);
   void CreateFakeAppsAndPackages();
 
-  // Unowned pointer.
-  Profile* profile_ = nullptr;
+  const UserManagerMode user_manager_mode_;
 
-  ArcAppListPrefs* arc_app_list_pref_ = nullptr;
+  // Unowned pointer.
+  raw_ptr<const user_manager::User> user_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
+
+  raw_ptr<ArcAppListPrefs, DanglingUntriaged> arc_app_list_pref_ = nullptr;
 
   bool wait_default_apps_ = true;
 
@@ -149,29 +180,39 @@ class ArcAppTest {
   // down.
   bool persist_service_manager_ = false;
 
-  // Whether the ArcApps AppService publisher should be started during
-  // initialization.
-  bool start_app_service_publisher_ = true;
-
   // If set to true, the real ArcIntentHelperBridge is initialized on test start
   // up.
   bool initialize_real_intent_helper_bridge_ = false;
 
+  bool wait_compatibility_mode_ = false;
+
+  std::unique_ptr<session_manager::SessionManager> session_manager_;
+  user_manager::ScopedUserManager user_manager_;
+
   std::unique_ptr<arc::ArcServiceManager> arc_service_manager_;
+  std::unique_ptr<arc::ArcDlcInstaller> arc_dlc_installer_;
   std::unique_ptr<arc::ArcSessionManager> arc_session_manager_;
   std::unique_ptr<arc::ArcPlayStoreEnabledPreferenceHandler>
       arc_play_store_enabled_preference_handler_;
   std::unique_ptr<arc::FakeAppInstance> app_instance_;
-  std::unique_ptr<arc::FakeIntentHelperHost> intent_helper_host_;
+  std::unique_ptr<arc::FakeCompatibilityModeInstance>
+      compatibility_mode_instance_;
   std::unique_ptr<arc::FakeIntentHelperInstance> intent_helper_instance_;
 
-  std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
   std::vector<arc::mojom::AppInfoPtr> fake_apps_;
   std::vector<arc::mojom::AppInfoPtr> fake_default_apps_;
   std::vector<arc::mojom::ArcPackageInfoPtr> fake_packages_;
   std::vector<arc::mojom::ShortcutInfo> fake_shortcuts_;
 
+  std::string user_email_;
+
   bool concierge_client_initialized_ = false;
+
+  bool dlcservice_client_initialized_ = false;
+
+  bool is_pre_profile_setup_called_ = false;
+  bool need_pre_profile_teardown_ = false;
+  bool need_post_profile_teardown_ = false;
 };
 
 #endif  // CHROME_BROWSER_ASH_APP_LIST_ARC_ARC_APP_TEST_H_

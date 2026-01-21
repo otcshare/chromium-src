@@ -26,7 +26,6 @@ struct EnumTraits<gfx::mojom::SwapResult, gfx::SwapResult> {
         return gfx::mojom::SwapResult::NAK_RECREATE_BUFFERS;
     }
     NOTREACHED();
-    return gfx::mojom::SwapResult::FAILED;
   }
 
   static bool FromMojom(gfx::mojom::SwapResult input, gfx::SwapResult* out) {
@@ -45,7 +44,6 @@ struct EnumTraits<gfx::mojom::SwapResult, gfx::SwapResult> {
         return true;
     }
     NOTREACHED();
-    return false;
   }
 };
 

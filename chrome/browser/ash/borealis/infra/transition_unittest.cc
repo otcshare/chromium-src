@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/borealis/testing/callback_factory.h"
@@ -36,10 +36,10 @@ TEST(TransitionTest, TransitionCanTransformInputToOutput) {
   CallbackFactory<ParseIntTransition::OnCompleteSignature> callback_handler;
 
   EXPECT_CALL(callback_handler, Call(testing::_))
-      .WillOnce(testing::Invoke([](ParseIntTransition::Result result) {
-        ASSERT_TRUE(result);
-        EXPECT_EQ(*result.Value(), 12345);
-      }));
+      .WillOnce([](ParseIntTransition::Result result) {
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(*result.value(), 12345);
+      });
 
   transition.Begin(std::make_unique<std::string>("12345"),
                    callback_handler.BindOnce());
@@ -52,9 +52,9 @@ TEST(TransitionTest, TransitionCanFail) {
   CallbackFactory<ParseIntTransition::OnCompleteSignature> callback_handler;
 
   EXPECT_CALL(callback_handler, Call(testing::_))
-      .WillOnce(testing::Invoke([](ParseIntTransition::Result result) {
-        EXPECT_TRUE(result.Unexpected());
-      }));
+      .WillOnce([](ParseIntTransition::Result result) {
+        EXPECT_FALSE(result.has_value());
+      });
 
   transition.Begin(std::make_unique<std::string>("not a number"),
                    callback_handler.BindOnce());
@@ -76,11 +76,11 @@ TEST(TransitionTest, MultipleCompletionFiresCallbackOnce) {
       callback_handler;
 
   EXPECT_CALL(callback_handler, Call(testing::_))
-      .WillOnce(testing::Invoke([](MultiCompletionTransition::Result result) {
+      .WillOnce([](MultiCompletionTransition::Result result) {
         // The transition completes twice but only the first one will be used.
-        EXPECT_TRUE(result.Unexpected());
-        EXPECT_EQ(result.Error(), "foo");
-      }));
+        EXPECT_FALSE(result.has_value());
+        EXPECT_EQ(result.error(), "foo");
+      });
 
   transition.Begin(nullptr, callback_handler.BindOnce());
   task_environment.RunUntilIdle();

@@ -7,7 +7,9 @@
 
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/public/cpp/tablet_mode_observer.h"
+#include "ash/system/diagnostics/mojom/input.mojom.h"
 #include "ash/webui/diagnostics_ui/backend/input/event_watcher_factory.h"
+#include "ash/webui/diagnostics_ui/backend/input/healthd_event_reporter.h"
 #include "ash/webui/diagnostics_ui/backend/input/input_data_event_watcher.h"
 #include "ash/webui/diagnostics_ui/backend/input/input_data_provider_keyboard.h"
 #include "ash/webui/diagnostics_ui/backend/input/input_data_provider_touch.h"
@@ -27,9 +29,9 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "ui/aura/window.h"
-#include "ui/chromeos/events/event_rewriter_chromeos.h"
 #include "ui/display/manager/display_configurator.h"
 #include "ui/display/types/display_constants.h"
+#include "ui/events/ash/event_rewriter_ash.h"
 #include "ui/events/ozone/device/device_event.h"
 #include "ui/events/ozone/device/device_event_observer.h"
 #include "ui/events/ozone/device/device_manager.h"
@@ -38,8 +40,6 @@
 #include "ui/views/widget/widget_observer.h"
 
 namespace ash::diagnostics {
-
-class KeyboardInputLog;
 
 // Provides information about input devices connected to the system. Implemented
 // in the browser process, constructed within the Diagnostics_UI in the browser
@@ -52,15 +52,13 @@ class InputDataProvider : public mojom::InputDataProvider,
                           public display::DisplayConfigurator::Observer,
                           public chromeos::PowerManagerClient::Observer {
  public:
-  explicit InputDataProvider(aura::Window* window,
-                             KeyboardInputLog* keyboard_input_log_ptr);
+  explicit InputDataProvider(aura::Window* window);
   explicit InputDataProvider(
       aura::Window* window,
       std::unique_ptr<ui::DeviceManager> device_manager,
       std::unique_ptr<EventWatcherFactory> watcher_factory,
-      KeyboardInputLog* keyboard_input_log_ptr,
       AcceleratorControllerImpl* accelerator_controller,
-      ui::EventRewriterChromeOS::Delegate* event_rewriter_delegate);
+      ui::EventRewriterAsh::Delegate* event_rewriter_delegate);
   InputDataProvider(const InputDataProvider&) = delete;
   InputDataProvider& operator=(const InputDataProvider&) = delete;
   ~InputDataProvider() override;
@@ -122,7 +120,7 @@ class InputDataProvider : public mojom::InputDataProvider,
   void LidEventReceived(chromeos::PowerManagerClient::LidState state,
                         base::TimeTicks time) override;
   void OnReceiveSwitchStates(
-      absl::optional<chromeos::PowerManagerClient::SwitchStates> switch_states);
+      std::optional<chromeos::PowerManagerClient::SwitchStates> switch_states);
 
   // display::DisplayConfigurator::Observer
   void OnPowerStateChanged(chromeos::DisplayPowerState power_state) override;
@@ -130,16 +128,14 @@ class InputDataProvider : public mojom::InputDataProvider,
   // Get the value of is_internal_display_on_ for testing purpose.
   bool is_internal_display_on() { return is_internal_display_on_; }
 
-  void SetLogForTesting(KeyboardInputLog* keyboard_input_log_ptr) {
-    keyboard_input_log_ptr_ = keyboard_input_log_ptr;
-  }
-
  protected:
   base::SequenceBound<InputDeviceInfoHelper> info_helper_{
       base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})};
 
  private:
   void Initialize(aura::Window* window);
+
+  void GetConnectedDevicesHelper(GetConnectedDevicesCallback callback);
 
   void ProcessDeviceInfo(std::unique_ptr<InputDeviceInformation> device_info);
 
@@ -169,11 +165,6 @@ class InputDataProvider : public mojom::InputDataProvider,
   void UnforwardKeyboardInput(uint32_t id);
 
   const std::string GetKeyboardName(uint32_t id);
-
-  bool IsLoggingEnabled() const;
-
-  base::raw_ptr<KeyboardInputLog> keyboard_input_log_ptr_ =
-      nullptr;  // Not Owned.
 
   // Denotes whether DiagnosticsDialog should be closed when escape is pressed.
   // Currently, this is only false when the keyboard tester is actively in use.
@@ -212,7 +203,7 @@ class InputDataProvider : public mojom::InputDataProvider,
   base::Time keyboard_tester_start_timestamp_;
 
   bool logged_not_dispatching_key_events_ = false;
-  views::Widget* widget_ = nullptr;
+  raw_ptr<views::Widget> widget_ = nullptr;
 
   mojo::RemoteSet<mojom::ConnectedDevicesObserver> connected_devices_observers_;
 
@@ -230,7 +221,11 @@ class InputDataProvider : public mojom::InputDataProvider,
   std::unique_ptr<EventWatcherFactory> watcher_factory_;
 
   raw_ptr<AcceleratorControllerImpl> accelerator_controller_;
-  raw_ptr<ui::EventRewriterChromeOS::Delegate> event_rewriter_delegate_;
+  raw_ptr<ui::EventRewriterAsh::Delegate> event_rewriter_delegate_;
+
+  HealthdEventReporter healthd_event_reporter_;
+
+  base::OnceCallback<void()> get_connected_devices_callback_;
 
   base::WeakPtrFactory<InputDataProvider> weak_factory_{this};
 };

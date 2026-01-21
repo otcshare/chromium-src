@@ -6,6 +6,7 @@
 #define CONTENT_PUBLIC_TEST_FAKE_REMOTE_FRAME_H_
 
 #include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
@@ -64,9 +65,6 @@ class FakeRemoteFrame : public blink::mojom::RemoteFrame {
       const base::UnguessableToken& embedding_token) override;
   void SetPageFocus(bool is_focused) override;
   void RenderFallbackContent() override;
-  void RenderFallbackContentWithResourceTiming(
-      blink::mojom::ResourceTimingInfoPtr,
-      const std::string& server_timing_value) override;
   void AddResourceTimingFromChild(
       blink::mojom::ResourceTimingInfoPtr timing) override;
 
@@ -79,28 +77,36 @@ class FakeRemoteFrame : public blink::mojom::RemoteFrame {
       blink::mojom::IntrinsicSizingInfoPtr sizing_info) override;
   void DidSetFramePolicyHeaders(
       network::mojom::WebSandboxFlags sandbox_flags,
-      const std::vector<blink::ParsedPermissionsPolicyDeclaration>&
+      const std::vector<network::ParsedPermissionsPolicyDeclaration>&
           parsed_permissions_policy) override {}
   void DidUpdateFramePolicy(const blink::FramePolicy& frame_policy) override {}
   void UpdateOpener(
-      const absl::optional<blink::FrameToken>& opener_frame_token) override;
+      const std::optional<blink::FrameToken>& opener_frame_token) override;
   void DetachAndDispose() override;
   void EnableAutoResize(const gfx::Size& min_size,
                         const gfx::Size& max_size) override;
   void DisableAutoResize() override;
   void DidUpdateVisualProperties(
       const cc::RenderFrameMetadata& metadata) override;
-  void SetFrameSinkId(const viz::FrameSinkId& frame_sink_id) override;
+  void SetFrameSinkId(const viz::FrameSinkId& frame_sink_id,
+                      bool allow_paint_holding) override;
   void ChildProcessGone() override;
   void CreateRemoteChild(
       const blink::RemoteFrameToken& token,
-      const absl::optional<blink::FrameToken>& opener_frame_token,
+      const std::optional<blink::FrameToken>& opener_frame_token,
       blink::mojom::TreeScopeType tree_scope_type,
       blink::mojom::FrameReplicationStatePtr replication_state,
+      blink::mojom::FrameOwnerPropertiesPtr owner_properties,
       bool is_loading,
       const base::UnguessableToken& devtools_frame_token,
       blink::mojom::RemoteFrameInterfacesFromBrowserPtr remote_frame_interfaces)
       override;
+  void CreateRemoteChildren(
+      std::vector<blink::mojom::CreateRemoteChildParamsPtr> params,
+      const std::optional<base::UnguessableToken>& navigation_metrics_token)
+      override;
+  void ForwardFencedFrameEventToEmbedder(
+      const std::string& event_type) override;
 
  private:
   mojo::AssociatedReceiver<blink::mojom::RemoteFrame> receiver_{this};

@@ -6,21 +6,23 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <algorithm>
+#include <array>
 #include <locale>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
@@ -28,15 +30,15 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_local.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/test/chromedriver/constants/version.h"
+#include "chrome/test/chromedriver/keycode_text_conversion.h"
 #include "chrome/test/chromedriver/logging.h"
 #include "chrome/test/chromedriver/server/http_handler.h"
 #include "chrome/test/chromedriver/server/http_server.h"
@@ -48,9 +50,7 @@
 
 namespace {
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 // Ensure that there is a writable shared memory directory. We use
 // network::SimpleURLLoader to connect to Chrome, and it calls
 // base::subtle::PlatformSharedMemoryRegion::Create to get a shared memory
@@ -86,7 +86,7 @@ void HandleRequestOnCmdThread(
     const HttpResponseSenderFunc& send_response_func) {
   if (!allowed_ips.empty()) {
     const net::IPAddress& peer_address = request.peer.address();
-    if (!base::Contains(allowed_ips, peer_address)) {
+    if (!std::ranges::contains(allowed_ips, peer_address)) {
       LOG(WARNING) << "unauthorized access from " << request.peer.ToString();
       std::unique_ptr<net::HttpServerResponseInfo> response(
           new net::HttpServerResponseInfo(net::HTTP_UNAUTHORIZED));
@@ -113,20 +113,15 @@ void HandleRequestOnIOThread(
                               send_response_func)));
 }
 
-base::LazyInstance<base::ThreadLocalPointer<HttpServer>>::DestructorAtExit
-    lazy_tls_server_ipv4 = LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<base::ThreadLocalPointer<HttpServer>>::DestructorAtExit
-    lazy_tls_server_ipv6 = LAZY_INSTANCE_INITIALIZER;
+constinit thread_local HttpServer* server_ipv4 = nullptr;
+constinit thread_local HttpServer* server_ipv6 = nullptr;
 
 void StopServerOnIOThread() {
-  // Note, |server| may be NULL.
-  HttpServer* server = lazy_tls_server_ipv4.Pointer()->Get();
-  lazy_tls_server_ipv4.Pointer()->Set(nullptr);
-  delete server;
+  delete server_ipv4;
+  server_ipv4 = nullptr;
 
-  server = lazy_tls_server_ipv6.Pointer()->Get();
-  lazy_tls_server_ipv6.Pointer()->Set(nullptr);
-  delete server;
+  delete server_ipv6;
+  server_ipv4 = nullptr;
 }
 
 void StartServerOnIOThread(
@@ -157,7 +152,8 @@ void StartServerOnIOThread(
       cmd_task_runner);
   int ipv4_status = temp_server->Start(port, allow_remote, true);
   if (ipv4_status == net::OK) {
-    lazy_tls_server_ipv4.Pointer()->Set(temp_server.release());
+    port = temp_server->LocalAddress().port();
+    server_ipv4 = temp_server.release();
   } else if (ipv4_status == net::ERR_ADDRESS_IN_USE) {
     // ERR_ADDRESS_IN_USE causes an immediate exit, since it indicates the port
     // is being used by another process. Other errors are assumed to indicate
@@ -175,7 +171,8 @@ void StartServerOnIOThread(
       cmd_task_runner);
   int ipv6_status = temp_server->Start(port, allow_remote, false);
   if (ipv6_status == net::OK) {
-    lazy_tls_server_ipv6.Pointer()->Set(temp_server.release());
+    port = temp_server->LocalAddress().port();
+    server_ipv6 = temp_server.release();
   } else if (ipv6_status == net::ERR_ADDRESS_IN_USE) {
     printf("IPv6 port not available. Exiting...\n");
     exit(1);
@@ -227,7 +224,7 @@ void StartServerOnIOThread(
         cmd_task_runner);
     ipv4_status = temp_server->Start(port, allow_remote, true);
     if (ipv4_status == net::OK) {
-      lazy_tls_server_ipv4.Pointer()->Set(temp_server.release());
+      server_ipv4 = temp_server.release();
     } else if (ipv4_status == net::ERR_ADDRESS_IN_USE) {
       if (need_ipv4 == NeedIPv4::NEEDED) {
         printf("IPv4 port not available. Exiting...\n");
@@ -243,7 +240,17 @@ void StartServerOnIOThread(
     printf("Unable to start server with either IPv4 or IPv6. Exiting...\n");
     exit(1);
   }
-  printf("%s was started successfully.\n", kChromeDriverProductShortName);
+
+  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
+  if (!cmd_line->HasSwitch("silent") &&
+      cmd_line->GetSwitchValueASCII("log-level") != "OFF") {
+    UNSAFE_TODO(printf("%s was started successfully on port %u.\n",
+                       kChromeDriverProductShortName, port));
+  }
+  if (cmd_line->HasSwitch("log-path")) {
+    VLOG(0) << kChromeDriverProductShortName
+            << " was started successfully on port " << port;
+  }
   fflush(stdout);
 }
 
@@ -299,7 +306,7 @@ int main(int argc, char *argv[]) {
 #endif
 
   // Parse command line flags.
-  uint16_t port = 9515;
+  uint16_t port = 0;
   int adb_port = 5037;
   bool allow_remote = false;
   std::vector<net::IPAddress> allowed_ips;
@@ -309,41 +316,47 @@ int main(int argc, char *argv[]) {
   std::string url_base;
   if (cmd_line->HasSwitch("h") || cmd_line->HasSwitch("help")) {
     std::string options;
-    const char* const kOptionAndDescriptions[] = {
-      "port=PORT",
-      "port to listen on",
-      "adb-port=PORT",
-      "adb server port",
-      "log-path=FILE",
-      "write server log to file instead of stderr, "
-      "increases log level to INFO",
-      "log-level=LEVEL",
-      "set log level: ALL, DEBUG, INFO, WARNING, SEVERE, OFF",
-      "verbose",
-      "log verbosely (equivalent to --log-level=ALL)",
-      "silent",
-      "log nothing (equivalent to --log-level=OFF)",
-      "append-log",
-      "append log file instead of rewriting",
-      "replayable",
-      "(experimental) log verbosely and don't truncate long "
-      "strings so that the log can be replayed.",
-      "version",
-      "print the version number and exit",
-      "url-base",
-      "base URL path prefix for commands, e.g. wd/url",
-      "readable-timestamp",
-      "add readable timestamps to log",
-      "enable-chrome-logs",
-      "show logs from the browser (overrides other logging options)",
-    // TODO(crbug.com/1052397): Revisit the macro expression once build flag
-    // switch of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-      "disable-dev-shm-usage",
-      "do not use /dev/shm "
-      "(add this switch if seeing errors related to shared memory)",
+    const auto kOptionAndDescriptions = std::to_array<const char*>({
+        "port=PORT",
+        "port to listen on",
+        "adb-port=PORT",
+        "adb server port",
+        "log-path=FILE",
+        "write server log to file instead of stderr, "
+        "increases log level to INFO",
+        "log-level=LEVEL",
+        "set log level: ALL, DEBUG, INFO, WARNING, SEVERE, OFF",
+        "verbose",
+        "log verbosely (equivalent to --log-level=ALL)",
+        "silent",
+        "log nothing (equivalent to --log-level=OFF)",
+        "append-log",
+        "append log file instead of rewriting",
+        "replayable",
+        "(experimental) log verbosely and don't truncate long "
+        "strings so that the log can be replayed.",
+        "version",
+        "print the version number and exit",
+        "url-base",
+        "base URL path prefix for commands, e.g. wd/url",
+        "readable-timestamp",
+        "add readable timestamps to log",
+        "enable-chrome-logs",
+        "show logs from the browser (overrides other logging options)",
+        "bidi-mapper-path=PATH",
+        "custom bidi mapper path",
+#if BUILDFLAG(IS_LINUX)
+        "disable-dev-shm-usage",
+        "do not use /dev/shm "
+        "(add this switch if seeing errors related to shared memory)",
 #endif
-    };
+        // TODO(crbug.com/354135326): This is a temporary flag needed to
+        // smooothly migrate the web platform tests to auto-assigned port.
+        // This switch will be removed in M132. Don't rely on it!
+        "ignore-explicit-port",
+        "(experimental) ignore the port specified explicitly, "
+        "find a free port instead",
+    });
     for (size_t i = 0; i < std::size(kOptionAndDescriptions) - 1; i += 2) {
       options += base::StringPrintf(
           "  --%-30s%s\n",
@@ -362,12 +375,14 @@ int main(int argc, char *argv[]) {
         "dangerous!\n",
         "allowed-origins=LIST", kChromeDriverProductShortName);
 
-    printf("Usage: %s [OPTIONS]\n\nOptions\n%s", argv[0], options.c_str());
+    UNSAFE_TODO(
+        printf("Usage: %s [OPTIONS]\n\nOptions\n%s", argv[0], options.c_str()));
     return 0;
   }
   bool early_exit = false;
   if (cmd_line->HasSwitch("v") || cmd_line->HasSwitch("version")) {
-    printf("%s %s\n", kChromeDriverProductFullName, kChromeDriverVersion);
+    UNSAFE_TODO(
+        printf("%s %s\n", kChromeDriverProductFullName, kChromeDriverVersion));
     early_exit = true;
   }
   if (early_exit)
@@ -381,6 +396,9 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     port = static_cast<uint16_t>(cmd_line_port);
+  }
+  if (cmd_line->HasSwitch("ignore-explicit-port")) {
+    port = 0;
   }
   if (cmd_line->HasSwitch("adb-port")) {
     if (!base::StringToInt(cmd_line->GetSwitchValueASCII("adb-port"),
@@ -408,7 +426,7 @@ int main(int argc, char *argv[]) {
     if (!allowlist_ip_strs.empty()) {
       // Convert IP address strings into net::IPAddress objects.
       for (const auto& ip_str : allowlist_ip_strs) {
-        base::StringPiece ip_str_piece(ip_str);
+        std::string_view ip_str_piece(ip_str);
         if (ip_str_piece.size() >= 2 && ip_str_piece.front() == '[' &&
             ip_str_piece.back() == ']') {
           ip_str_piece.remove_prefix(1);
@@ -441,8 +459,9 @@ int main(int argc, char *argv[]) {
 
   if (!cmd_line->HasSwitch("silent") &&
       cmd_line->GetSwitchValueASCII("log-level") != "OFF") {
-    printf("Starting %s %s on port %u\n", kChromeDriverProductShortName,
-           kChromeDriverVersion, port);
+    UNSAFE_TODO(printf("Starting %s %s on port %u\n",
+                       kChromeDriverProductShortName, kChromeDriverVersion,
+                       port));
     if (!allow_remote) {
       printf("Only local connections are allowed.\n");
     } else if (!allowed_ips.empty()) {
@@ -451,22 +470,30 @@ int main(int argc, char *argv[]) {
     } else {
       printf("All remote connections are allowed. Use an allowlist instead!\n");
     }
-    printf("%s\n", GetPortProtectionMessage());
+    UNSAFE_TODO(printf("%s\n", GetPortProtectionMessage()));
     fflush(stdout);
   }
 
-  if (!InitLogging(port)) {
+  if (!InitLogging()) {
     printf("Unable to initialize logging. Exiting...\n");
     return 1;
   }
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  if (cmd_line->HasSwitch("log-path")) {
+    VLOG(0) << "Starting " << kChromeDriverProductFullName << " "
+            << kChromeDriverVersion << " on port " << port;
+    VLOG(0) << GetPortProtectionMessage();
+  }
+
+#if BUILDFLAG(IS_LINUX)
   EnsureSharedMemory(cmd_line);
 #endif
 
   mojo::core::Init();
+
+#if BUILDFLAG(IS_OZONE)
+  InitializeOzoneKeyboardEngineManager();
+#endif
 
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams(
       kChromeDriverProductShortName);

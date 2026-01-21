@@ -4,15 +4,23 @@
 
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
 
+#include <map>
 #include <tuple>
 
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/sync/base/features.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "ui/base/l10n/l10n_util.h"
+
+// ------------------------------ SigninUIError --------------------------------
 
 // static
 SigninUIError SigninUIError::Ok() {
@@ -20,16 +28,13 @@ SigninUIError SigninUIError::Ok() {
 }
 
 // static
-SigninUIError SigninUIError::Other(const std::string& email) {
-  return SigninUIError(Type::kOther, email, std::u16string());
-}
-
-// static
 SigninUIError SigninUIError::UsernameNotAllowedByPatternFromPrefs(
     const std::string& email) {
   return SigninUIError(
       Type::kUsernameNotAllowedByPatternFromPrefs, email,
-      l10n_util::GetStringUTF16(IDS_SYNC_LOGIN_NAME_PROHIBITED));
+      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+          ? l10n_util::GetStringUTF16(IDS_SIGN_IN_LOGIN_NAME_PROHIBITED)
+          : l10n_util::GetStringUTF16(IDS_SYNC_LOGIN_NAME_PROHIBITED));
 }
 
 // static
@@ -83,10 +88,20 @@ SigninUIError SigninUIError::FromCredentialProviderUiExitCode(
 }
 #endif
 
-// static
-SigninUIError SigninUIError::ProfileIsBlocked() {
-  return SigninUIError(Type::kProfileIsBlocked, /*email=*/std::string(),
-                       /*error_message=*/std::u16string());
+SigninUIError SigninUIError::NoProfile(const std::string& email) {
+  return SigninUIError(Type::kNoProfile, email, std::u16string());
+}
+
+SigninUIError SigninUIError::SigninDisallowed(const std::string& email) {
+  return SigninUIError(Type::kSigninDisallowed, email, std::u16string());
+}
+
+SigninUIError SigninUIError::SigninCookiesDisallowed(const std::string& email) {
+  return SigninUIError(Type::kSigninCookiesDisallowed, email, std::u16string());
+}
+
+SigninUIError SigninUIError::NoIdentityManager(const std::string& email) {
+  return SigninUIError(Type::kNoIdentityManager, email, std::u16string());
 }
 
 SigninUIError::SigninUIError(const SigninUIError& other) = default;
@@ -121,22 +136,96 @@ credential_provider::UiExitCodes SigninUIError::credential_provider_exit_code()
 }
 #endif
 
-bool SigninUIError::operator==(const SigninUIError& other) const {
-  bool result = std::tie(type_, email_, message_, another_profile_path_) ==
-                std::tie(other.type_, other.email_, other.message_,
-                         other.another_profile_path_);
-#if BUILDFLAG(IS_WIN)
-  result = result && credential_provider_exit_code_ ==
-                         other.credential_provider_exit_code_;
-#endif
-  return result;
-}
-
-bool SigninUIError::operator!=(const SigninUIError& other) const {
-  return !(*this == other);
-}
-
 SigninUIError::SigninUIError(Type type,
                              const std::string& email,
                              const std::u16string& error_message)
     : type_(type), email_(base::UTF8ToUTF16(email)), message_(error_message) {}
+
+// ---------------------------- ForceSigninUIError -----------------------------
+
+ForceSigninUIError::ForceSigninUIError(const ForceSigninUIError& other) =
+    default;
+ForceSigninUIError& ForceSigninUIError::operator=(
+    const ForceSigninUIError& other) = default;
+
+// static
+ForceSigninUIError ForceSigninUIError::ErrorNone() {
+  return ForceSigninUIError(Type::kNone, std::string());
+}
+
+// static
+ForceSigninUIError ForceSigninUIError::ReauthNotAllowed() {
+  return ForceSigninUIError(Type::kReauthNotAllowed, std::string());
+}
+
+// static
+ForceSigninUIError ForceSigninUIError::ReauthWrongAccount(
+    const std::string& email) {
+  CHECK(!email.empty());
+  return ForceSigninUIError(Type::kReauthWrongAccount, email);
+}
+
+// static
+ForceSigninUIError ForceSigninUIError::ReauthTimeout() {
+  return ForceSigninUIError(Type::kReauthTimeout, std::string());
+}
+
+// static
+ForceSigninUIError ForceSigninUIError::SigninPatternNotMatching(
+    const std::string& email) {
+  CHECK(!email.empty());
+  return ForceSigninUIError(Type::kSigninPatternNotMatching, email);
+}
+
+// static
+ForceSigninUIError ForceSigninUIError::ReauthNotSupportedByGlicFlow() {
+  return ForceSigninUIError(Type::kReauthNotSupportedByGlicFlow, std::string());
+}
+
+ForceSigninUIError::UiTexts ForceSigninUIError::GetErrorTexts() const {
+  CHECK_NE(type_, Type::kNone);
+  switch (type_) {
+    case Type::kReauthNotAllowed:
+      return {
+          l10n_util::GetStringUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_NOT_ALLOWED_TITLE),
+          l10n_util::GetStringUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_NOT_ALLOWED_BODY)};
+    case Type::kReauthWrongAccount:
+      CHECK(!email_.empty());
+      return {
+          l10n_util::GetStringUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_WRONG_ACCOUNT_TITLE),
+          l10n_util::GetStringFUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_WRONG_ACCOUNT_BODY,
+              base::UTF8ToUTF16(email_))};
+    case Type::kReauthTimeout:
+      return {l10n_util::GetStringUTF16(
+                  IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_TIMEOUT_TITLE),
+              l10n_util::GetStringUTF16(
+                  IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_TIMEOUT_BODY)};
+    case Type::kSigninPatternNotMatching:
+      CHECK(!email_.empty());
+      return {l10n_util::GetStringFUTF16(IDS_SIGNIN_ERROR_EMAIL_TITLE,
+                                         base::UTF8ToUTF16(email_)),
+              base::FeatureList::IsEnabled(
+                  syncer::kReplaceSyncPromosWithSignInPromos)
+                  ? l10n_util::GetStringUTF16(IDS_SIGN_IN_LOGIN_NAME_PROHIBITED)
+                  : l10n_util::GetStringUTF16(IDS_SYNC_LOGIN_NAME_PROHIBITED)};
+    case Type::kReauthNotSupportedByGlicFlow:
+      return {
+          l10n_util::GetStringUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_NOT_SUPPORTED_BY_GLIC_FLOW_TITLE),
+          l10n_util::GetStringUTF16(
+              IDS_PROFILE_PICKER_FORCE_SIGN_IN_ERROR_DIALOG_NOT_SUPPORTED_BY_GLIC_FLOW_BODY)};
+    case Type::kNone:
+      NOTREACHED();
+  }
+}
+
+ForceSigninUIError::Type ForceSigninUIError::type() const {
+  return type_;
+}
+
+ForceSigninUIError::ForceSigninUIError(Type type, const std::string& email)
+    : type_(type), email_(email) {}

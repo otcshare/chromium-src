@@ -130,6 +130,8 @@ class TestDownloader : public PaymentManifestDownloader {
   //   "https://bobpay.test": "https://127.0.0.1:9090"
   // }
   std::map<std::string, GURL> test_server_url_;
+
+  base::WeakPtrFactory<TestDownloader> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

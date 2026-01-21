@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser;
 
-import android.support.test.InstrumentationRegistry;
-
 import androidx.test.filters.MediumTest;
 
 import org.junit.After;
@@ -15,6 +13,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
@@ -22,32 +21,32 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 
 /** Test suite for navigator.getInstalledRelatedApps functionality. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({
-        ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-        "enable-blink-features=InstalledApp",
+    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    "enable-blink-features=InstalledApp",
 })
 public class InstalledAppTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
     private static final String TEST_FILE = "/content/test/data/android/installedapp.html";
-
-    private EmbeddedTestServer mTestServer;
 
     private String mUrl;
 
     private Tab mTab;
     private InstalledAppUpdateWaiter mUpdateWaiter;
+    private WebPageStation mPage;
 
     /** Waits until the JavaScript code supplies a result. */
     private class InstalledAppUpdateWaiter extends EmptyTabObserver {
-        private CallbackHelper mCallbackHelper;
+        private final CallbackHelper mCallbackHelper;
         private String mStatus;
 
         public InstalledAppUpdateWaiter() {
@@ -56,7 +55,7 @@ public class InstalledAppTest {
 
         @Override
         public void onTitleUpdated(Tab tab) {
-            String title = mActivityTestRule.getActivity().getActivityTab().getTitle();
+            String title = mActivityTestRule.getActivityTab().getTitle();
             // Wait until the title indicates either success or failure.
             if (!title.startsWith("Success:") && !title.startsWith("Fail:")) return;
             mStatus = title;
@@ -71,38 +70,31 @@ public class InstalledAppTest {
 
     @Before
     public void setUp() throws Exception {
-        mActivityTestRule.startMainActivityOnBlankPage();
-
-        mTestServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
-
-        mUrl = mTestServer.getURL(TEST_FILE);
-
-        mTab = mActivityTestRule.getActivity().getActivityTab();
+        mUrl = mActivityTestRule.getTestServer().getURL(TEST_FILE);
+        mPage = mActivityTestRule.startOnBlankPage();
+        mTab = mActivityTestRule.getActivityTab();
         mUpdateWaiter = new InstalledAppUpdateWaiter();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mTab.addObserver(mUpdateWaiter));
+        ThreadUtils.runOnUiThreadBlocking(() -> mTab.addObserver(mUpdateWaiter));
     }
 
     @After
     public void tearDown() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> mTab.removeObserver(mUpdateWaiter));
-        mTestServer.stopAndDestroyServer();
+        ThreadUtils.runOnUiThreadBlocking(() -> mTab.removeObserver(mUpdateWaiter));
     }
 
     /**
      * Verify that InstalledApp succeeds.
      *
-     * Note this isn't a very thorough test; it just expects an empty response. Testing any real
+     * <p>Note this isn't a very thorough test; it just expects an empty response. Testing any real
      * response would require setting up (or mocking) a real APK. There are extremely thorough
      * layout tests and Java unit tests for this feature. This end-to-end test just ensures that the
      * Mojo bridge between Blink and Java is working (regression: https://crbug.com/750348).
-     *
-     * @throws Exception
      */
     @Test
     @MediumTest
     @Feature({"InstalledApp"})
     public void testGetInstalledRelatedApps() throws Exception {
-        mActivityTestRule.loadUrl(mUrl);
+        mPage = mPage.loadWebPageProgrammatically(mUrl);
         mActivityTestRule.runJavaScriptCodeInCurrentTab("doGetInstalledRelatedApps()");
         Assert.assertEquals("Success: 0 related apps", mUpdateWaiter.waitForUpdate());
     }

@@ -5,10 +5,12 @@
 #ifndef CHROME_CREDENTIAL_PROVIDER_TEST_GCP_FAKES_H_
 #define CHROME_CREDENTIAL_PROVIDER_TEST_GCP_FAKES_H_
 
+#include <condition_variable>
 #include <deque>
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -17,6 +19,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/credential_provider/extension/extension_utils.h"
@@ -38,6 +41,8 @@
 #include "chrome/credential_provider/gaiacp/user_policies_manager.h"
 #include "chrome/credential_provider/gaiacp/win_http_url_fetcher.h"
 #include "chrome/credential_provider/setup/gcpw_files.h"
+
+class GaiaId;
 
 namespace base {
 class WaitableEvent;
@@ -121,9 +126,11 @@ class FakeOSUserManager : public OSUserManager {
                            const wchar_t* password,
                            bool interactive,
                            base::win::ScopedHandle* token) override;
+
   HRESULT GetUserSID(const wchar_t* domain,
                      const wchar_t* username,
                      PSID* sid) override;
+
   HRESULT FindUserBySID(const wchar_t* sid,
                         wchar_t* username,
                         DWORD username_size,
@@ -182,7 +189,7 @@ class FakeOSUserManager : public OSUserManager {
                            const std::wstring& password,
                            const std::wstring& fullname,
                            const std::wstring& comment,
-                           const std::wstring& gaia_id,
+                           const GaiaId& gaia_id,
                            const std::wstring& email,
                            BSTR* sid);
 
@@ -195,7 +202,7 @@ class FakeOSUserManager : public OSUserManager {
                            const std::wstring& password,
                            const std::wstring& fullname,
                            const std::wstring& comment,
-                           const std::wstring& gaia_id,
+                           const GaiaId& gaia_id,
                            const std::wstring& email,
                            const std::wstring& domain,
                            BSTR* sid);
@@ -295,7 +302,7 @@ class FakeScopedUserProfileFactory {
 
 class FakeScopedUserProfile : public ScopedUserProfile {
  public:
-  HRESULT SaveAccountInfo(const base::Value& properties) override;
+  HRESULT SaveAccountInfo(const base::Value::Dict& properties) override;
 
  private:
   friend class FakeScopedUserProfileFactory;

@@ -8,20 +8,16 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/buildflags.h"
-#include "components/nacl/common/buildflags.h"
 #include "content/public/common/content_client.h"
-#include "ppapi/buildflags/buildflags.h"
-
-#if BUILDFLAG(ENABLE_NACL)
-#include "content/public/common/content_plugin_info.h"
-#endif  // BUILDFLAG(ENABLE_NACL)
 
 namespace embedder_support {
 class OriginTrialPolicyImpl;
@@ -36,9 +32,8 @@ class ChromeContentClient : public content::ContentClient {
   static const base::FilePath::CharType kNotPresent[];
 #endif
 
-  static const char kPDFExtensionPluginName[];
-  static const char kPDFInternalPluginName[];
-  static const base::FilePath::CharType kPDFPluginPath[];
+  static const base::FilePath::CharType kPDFExtensionPluginPath[];
+  static const base::FilePath::CharType kPDFInternalPluginPath[];
 
   ChromeContentClient();
   ~ChromeContentClient() override;
@@ -47,16 +42,10 @@ class ChromeContentClient : public content::ContentClient {
   // pointers for built-in plugins. We avoid linking these plugins into
   // chrome_common because then on Windows we would ship them twice because of
   // the split DLL.
-#if BUILDFLAG(ENABLE_NACL)
-  static void SetNaClEntryFunctions(
-      content::ContentPluginInfo::GetInterfaceFunc get_interface,
-      content::ContentPluginInfo::PPP_InitializeModuleFunc initialize_module,
-      content::ContentPluginInfo::PPP_ShutdownModuleFunc shutdown_module);
-#endif
 
   void SetActiveURL(const GURL& url, std::string top_origin) override;
   void SetGpuInfo(const gpu::GPUInfo& gpu_info) override;
-  void AddPlugins(std::vector<content::ContentPluginInfo>* plugins) override;
+  void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
   void AddContentDecryptionModules(
       std::vector<content::CdmInfo>* cdms,
       std::vector<media::CdmHostFilePath>* cdm_host_file_paths) override;
@@ -64,19 +53,17 @@ class ChromeContentClient : public content::ContentClient {
   std::u16string GetLocalizedString(int message_id) override;
   std::u16string GetLocalizedString(int message_id,
                                     const std::u16string& replacement) override;
-  base::StringPiece GetDataResource(
+  bool HasDataResource(int resource_id) const override;
+  std::string_view GetDataResource(
       int resource_id,
       ui::ResourceScaleFactor scale_factor) override;
   base::RefCountedMemory* GetDataResourceBytes(int resource_id) override;
   std::string GetDataResourceString(int resource_id) override;
   gfx::Image& GetNativeImageNamed(int resource_id) override;
-#if BUILDFLAG(IS_MAC)
-  base::FilePath GetChildProcessPath(
-      int child_flags,
-      const base::FilePath& helpers_path) override;
-#endif  // BUILDFLAG(IS_MAC)
   std::string GetProcessTypeNameInEnglish(int type) override;
   blink::OriginTrialPolicy* GetOriginTrialPolicy() override;
+  bool IsFilePickerAllowedForCrossOriginSubframe(
+      const url::Origin& origin) override;
 #if BUILDFLAG(IS_ANDROID)
   media::MediaDrmBridgeClient* GetMediaDrmBridgeClient() override;
 #endif  // BUILDFLAG(IS_ANDROID)

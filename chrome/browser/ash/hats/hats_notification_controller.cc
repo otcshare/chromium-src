@@ -4,31 +4,33 @@
 
 #include "chrome/browser/ash/hats/hats_notification_controller.h"
 
-#include "ash/constants/ash_features.h"
+#include <optional>
+
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/escape.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/hats/hats_config.h"
 #include "chrome/browser/ash/hats/hats_dialog.h"
 #include "chrome/browser/ash/hats/hats_finch_helper.h"
 #include "chrome/browser/ash/login/startup_utils.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -38,7 +40,9 @@
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/strings/grit/ui_strings.h"
@@ -50,10 +54,6 @@ namespace {
 const char kNotificationOriginUrl[] = "chrome://hats";
 
 const char kNotifierHats[] = "ash.hats";
-
-// Minimum amount of time before the notification is displayed again after a
-// user has interacted with it.
-constexpr base::TimeDelta kHatsThreshold = base::Days(60);
 
 // The state specific UMA enumerations
 const int kSurveyTriggeredEnumeration = 1;
@@ -88,21 +88,57 @@ const std::string KeyEnumToString(DeviceInfoKey key) {
       return "locale";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
-// Returns true if the given |profile| interacted with HaTS by either
-// dismissing the notification or taking the survey within a given
-// |threshold_time|.
-bool DidShowSurveyToProfileRecently(Profile* profile,
-                                    base::TimeDelta threshold_time) {
+// Returns true if the given `profile` interacted with non-prioritized HaTS
+// by either dismissing the notification or taking the survey within a given
+// `threshold_time`.
+bool DidShowNonPrioritizedHatsToProfileRecently(
+    const Profile* profile,
+    const base::TimeDelta& threshold_time) {
   int64_t serialized_timestamp =
       profile->GetPrefs()->GetInt64(prefs::kHatsLastInteractionTimestamp);
 
   base::Time previous_interaction_timestamp =
       base::Time::FromInternalValue(serialized_timestamp);
   return previous_interaction_timestamp + threshold_time > base::Time::Now();
+}
+
+// Returns true if the given |profile| interacted with a prioritized HaTS
+// by either dismissing the notification or taking another prioritized survey
+// within |prioritized_threshold_time|.
+// If |hats_config| is given, then also check if the given |profile| interacted
+// with that specific prioritized HaTS |hats_config| based on the pref timestamp
+// |HatsConfig::survey_last_interaction_timestamp_pref_name| within the
+// |HatsConfig::threshold_time|.
+bool DidShowPrioritizedHatsToProfileRecently(
+    const Profile* profile,
+    std::optional<raw_ref<const HatsConfig>> hats_config,
+    const base::TimeDelta& prioritized_threshold_time) {
+  base::Time prev_prioritized_interaction = profile->GetPrefs()->GetTime(
+      prefs::kHatsPrioritizedLastInteractionTimestamp);
+  if (prev_prioritized_interaction + prioritized_threshold_time >
+      base::Time::Now()) {
+    return true;
+  }
+
+  if (!hats_config.has_value()) {
+    return false;
+  }
+
+  base::Time previous_interaction_timestamp = profile->GetPrefs()->GetTime(
+      hats_config.value()->survey_last_interaction_timestamp_pref_name);
+
+  return previous_interaction_timestamp + hats_config.value()->threshold_time >
+         base::Time::Now();
+}
+
+bool DidShowAnyHatsToProfileRecently(const Profile* profile,
+                                     const base::TimeDelta& threshold_time) {
+  return DidShowNonPrioritizedHatsToProfileRecently(profile, threshold_time) ||
+         DidShowPrioritizedHatsToProfileRecently(
+             profile, /*hats_config=*/std::nullopt, threshold_time);
 }
 
 // Returns true if at least |new_device_threshold| time has passed since
@@ -135,19 +171,22 @@ const char HatsNotificationController::kNotificationId[] = "hats_notification";
 HatsNotificationController::HatsNotificationController(
     Profile* profile,
     const HatsConfig& hats_config,
-    const base::flat_map<std::string, std::string>& product_specific_data)
+    const base::flat_map<std::string, std::string>& product_specific_data,
+    std::u16string title,
+    std::u16string body)
     : profile_(profile),
       hats_config_(hats_config),
-      product_specific_data_(product_specific_data) {
+      product_specific_data_(product_specific_data),
+      title_(std::move(title)),
+      body_(std::move(body)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (features::IsHatsUseNewHistogramsEnabled()) {
-    std::string histogram_name =
-        HatsFinchHelper::GetHistogramName(hats_config_);
-    if (!histogram_name.empty()) {
-      base::UmaHistogramSparse(histogram_name, kSurveyTriggeredEnumeration);
-    }
+  std::string histogram_name = HatsFinchHelper::GetHistogramName(*hats_config_);
+  if (!histogram_name.empty()) {
+    base::UmaHistogramSparse(histogram_name, kSurveyTriggeredEnumeration);
   }
+
+  profile_observation_.Observe(profile_);
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
@@ -155,6 +194,17 @@ HatsNotificationController::HatsNotificationController(
       base::BindOnce(&HatsNotificationController::Initialize,
                      weak_pointer_factory_.GetWeakPtr()));
 }
+
+HatsNotificationController::HatsNotificationController(
+    Profile* profile,
+    const HatsConfig& hats_config,
+    const base::flat_map<std::string, std::string>& product_specific_data)
+    : HatsNotificationController(
+          profile,
+          hats_config,
+          product_specific_data,
+          l10n_util::GetStringUTF16(IDS_HATS_NOTIFICATION_TITLE),
+          l10n_util::GetStringUTF16(IDS_HATS_NOTIFICATION_BODY)) {}
 
 HatsNotificationController::HatsNotificationController(
     Profile* profile,
@@ -175,7 +225,7 @@ HatsNotificationController::~HatsNotificationController() {
 void HatsNotificationController::Initialize(bool is_new_device) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (is_new_device && !IsTestingEnabled(hats_config_)) {
+  if (is_new_device && !IsTestingEnabled(*hats_config_)) {
     // This device has been chosen for a survey, but it is too new. Instead
     // of showing the user the survey, just mark it as completed.
     UpdateLastInteractionTime();
@@ -193,7 +243,7 @@ void HatsNotificationController::Initialize(bool is_new_device) {
     // Create an immediate update for the current default network.
     const NetworkState* default_network = handler->DefaultNetwork();
     NetworkState::PortalState portal_state =
-        default_network ? default_network->GetPortalState()
+        default_network ? default_network->portal_state()
                         : NetworkState::PortalState::kUnknown;
     PortalStateChanged(default_network, portal_state);
   }
@@ -222,40 +272,68 @@ bool HatsNotificationController::ShouldShowSurveyToProfile(
   if (profile->IsChild())
     return false;
 
-  const bool is_enterprise_enrolled = g_browser_process->platform_part()
-                                          ->browser_policy_connector_ash()
-                                          ->IsDeviceEnterpriseManaged();
+  const bool is_enterprise_enrolled =
+      ash::InstallAttributes::Get()->IsEnterpriseManaged();
+
+  HatsFinchHelper hats_finch_helper(profile, hats_config);
 
   // Do not show survey to enterprise users.
-  if (is_enterprise_enrolled)
-    return false;
-
-  // Do not show survey to non-owners.
-  if (!ProfileHelper::IsOwnerProfile(profile))
-    return false;
-
-  // Call finch helper only after all the profile checks are complete.
-  HatsFinchHelper hats_finch_helper(profile, hats_config);
-  if (!hats_finch_helper.IsDeviceSelectedForCurrentCycle())
-    return false;
-
-  const base::TimeDelta threshold_time = kHatsThreshold;
-
-  // Do not show survey to user if user has interacted with HaTS within the past
-  // |threshold_time| time delta.
-  if (DidShowSurveyToProfileRecently(profile, threshold_time)) {
-    base::UmaHistogramEnumeration("Browser.ChromeOS.HatsStatus",
-                                  HatsState::kSurveyShownRecently);
+  // Exceptions for Googlers if the survey wants Googlers participation.
+  if (is_enterprise_enrolled &&
+      !(gaia::IsGoogleInternalAccountEmail(profile->GetProfileUserName()) &&
+        hats_finch_helper.IsEnabledForGooglers(hats_config))) {
     return false;
   }
 
+  // Do not show survey to non-owners. However, enterprise-enrolled Googlers
+  // who passed the previous check will not be owners; don't exclude them.
+  if (!is_enterprise_enrolled && !ProfileHelper::IsOwnerProfile(profile)) {
+    return false;
+  }
+
+  if (!hats_finch_helper.IsDeviceSelectedForCurrentCycle())
+    return false;
+
+  // There are two types of HaTS: prioritized and the non prioritized,
+  // both are kept track separately. The following checks both track records.
+  if (DidShowAnyHatsToProfileRecently(profile, kMinimumHatsThreshold)) {
+    return false;
+  }
+
+  if (hats_config.prioritized) {
+    // Do not show survey to user if the survey is prioritized and:
+    // - User already interacted with the survey within
+    //   the threshold set in the config, or
+    // - User already interacted with other prioritized survey within
+    //   the past |kPrioritizedHatsThreshold|.
+    if (DidShowPrioritizedHatsToProfileRecently(
+            profile, raw_ref<const HatsConfig>(hats_config),
+            kPrioritizedHatsThreshold)) {
+      return false;
+    }
+  } else {
+    const base::TimeDelta threshold_time =
+        gaia::IsGoogleInternalAccountEmail(profile->GetProfileUserName())
+            ? kHatsGooglerThreshold
+            : kHatsThreshold;
+    // Do not show survey to user if user has interacted with HaTS within the
+    // past |threshold_time| time delta. This is a global cap applied across
+    // surveys that have not opted out of the global cap of 1 per kHatsThreshold
+    // days.
+    if (DidShowNonPrioritizedHatsToProfileRecently(profile, threshold_time)) {
+      base::UmaHistogramEnumeration("Browser.ChromeOS.HatsStatus",
+                                    HatsState::kSurveyShownRecently);
+      return false;
+    }
+  }
   return true;
 }
 
 void HatsNotificationController::Click(
-    const absl::optional<int>& button_index,
-    const absl::optional<std::u16string>& reply) {
+    const std::optional<int>& button_index,
+    const std::optional<std::u16string>& reply) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(profile_) << "Profile must NOT be null.";
 
   UpdateLastInteractionTime();
 
@@ -276,9 +354,9 @@ void HatsNotificationController::Click(
 
   // Remove the notification.
   NetworkHandler::Get()->network_state_handler()->RemoveObserver(this);
-  notification_.reset(nullptr);
-  NotificationDisplayService::GetForProfile(profile_)->Close(
-      NotificationHandler::Type::TRANSIENT, kNotificationId);
+  message_center::MessageCenter::Get()->RemoveNotification(notification_id_,
+                                                           false /* by_user */);
+  notification_id_.clear();
 }
 
 void HatsNotificationController::ShowDialog(const std::string& site_context) {
@@ -287,8 +365,8 @@ void HatsNotificationController::ShowDialog(const std::string& site_context) {
     return;
   }
 
-  HatsDialog::Show(HatsFinchHelper::GetTriggerID(hats_config_),
-                   HatsFinchHelper::GetHistogramName(hats_config_),
+  HatsDialog::Show(HatsFinchHelper::GetTriggerID(*hats_config_),
+                   HatsFinchHelper::GetHistogramName(*hats_config_),
                    site_context);
 }
 
@@ -299,7 +377,9 @@ void HatsNotificationController::Close(bool by_user) {
   if (by_user) {
     UpdateLastInteractionTime();
     NetworkHandler::Get()->network_state_handler()->RemoveObserver(this);
-    notification_.reset(nullptr);
+    message_center::MessageCenter::Get()->RemoveNotification(notification_id_,
+                                                             by_user);
+    notification_id_.clear();
     state_ = HatsState::kNotificationDismissed;
   }
 }
@@ -309,39 +389,50 @@ void HatsNotificationController::PortalStateChanged(
     const NetworkState* default_network,
     NetworkState::PortalState portal_state) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(profile_) << "Profile must NOT be null.";
   VLOG(1) << "PortalStateChanged: default_network="
           << (default_network ? default_network->path() : "")
           << ", portal_state=" << portal_state;
   if (portal_state == NetworkState::PortalState::kOnline) {
-    // Create and display the notification for the user.
-    if (!notification_) {
-      notification_ = CreateSystemNotificationPtr(
-          message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId,
-          l10n_util::GetStringUTF16(IDS_HATS_NOTIFICATION_TITLE),
-          l10n_util::GetStringUTF16(IDS_HATS_NOTIFICATION_BODY),
+    // Create and display the notification for the user if it doesn't exist.
+    if (notification_id_.empty()) {
+      notification_id_ = kNotificationId;
+      message_center::NotifierId notifier_id(
+          message_center::NotifierType::SYSTEM_COMPONENT, kNotifierHats,
+          NotificationCatalogName::kHats);
+      // Set the profile_id for the NotifierId.
+      // This string should match what InactiveUserNotificationBlocker
+      // expects.
+      notifier_id.profile_id = profile_->GetProfileUserName();
+
+      auto notification = ash::CreateSystemNotificationPtr(
+          message_center::NOTIFICATION_TYPE_SIMPLE, notification_id_, title_,
+          body_,
           l10n_util::GetStringUTF16(IDS_MESSAGE_CENTER_NOTIFIER_HATS_NAME),
-          GURL(kNotificationOriginUrl),
-          message_center::NotifierId(
-              message_center::NotifierType::SYSTEM_COMPONENT, kNotifierHats,
-              NotificationCatalogName::kHats),
+          GURL(kNotificationOriginUrl), notifier_id,
           message_center::RichNotificationData(), this, kNotificationGoogleIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
+      message_center::MessageCenter::Get()->AddNotification(
+          std::move(notification));
     }
 
-    NotificationDisplayService::GetForProfile(profile_)->Display(
-        NotificationHandler::Type::TRANSIENT, *notification_,
-        /*metadata=*/nullptr);
-
     state_ = HatsState::kNotificationDisplayed;
-  } else if (notification_) {
+  } else if (!notification_id_.empty()) {
     // Hide the notification if device loses its connection to the internet.
-    NotificationDisplayService::GetForProfile(profile_)->Close(
-        NotificationHandler::Type::TRANSIENT, kNotificationId);
+    message_center::MessageCenter::Get()->RemoveNotification(notification_id_,
+                                                             /*by_user=*/false);
+    notification_id_.clear();
   }
 }
 
 void HatsNotificationController::OnShuttingDown() {
   NetworkHandler::Get()->network_state_handler()->RemoveObserver(this);
+}
+
+void HatsNotificationController::OnProfileWillBeDestroyed(Profile* profile) {
+  CHECK_EQ(profile_, profile);
+  profile_ = nullptr;
+  profile_observation_.Reset();
 }
 
 // TODO(jackshira): Migrate this to a manager class.
@@ -354,7 +445,7 @@ std::string HatsNotificationController::GetFormattedSiteContext(
   context[KeyEnumToString(DeviceInfoKey::BROWSER)] =
       version_info::GetVersionNumber();
 
-  absl::optional<std::string> version = chromeos::version_loader::GetVersion(
+  std::optional<std::string> version = chromeos::version_loader::GetVersion(
       chromeos::version_loader::VERSION_FULL);
   context[KeyEnumToString(DeviceInfoKey::PLATFORM)] =
       version.value_or("0.0.0.0");
@@ -389,10 +480,19 @@ std::string HatsNotificationController::GetFormattedSiteContext(
 
 void HatsNotificationController::UpdateLastInteractionTime() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(profile_) << "Profile must NOT be null.";
 
   PrefService* pref_service = profile_->GetPrefs();
-  pref_service->SetInt64(prefs::kHatsLastInteractionTimestamp,
-                         base::Time::Now().ToInternalValue());
+  if (!hats_config_->prioritized) {
+    pref_service->SetInt64(prefs::kHatsLastInteractionTimestamp,
+                           base::Time::Now().since_origin().InMicroseconds());
+  } else {
+    pref_service->SetTime(
+        hats_config_->survey_last_interaction_timestamp_pref_name,
+        base::Time::Now());
+    pref_service->SetTime(prefs::kHatsPrioritizedLastInteractionTimestamp,
+                           base::Time::Now());
+  }
 }
 
 }  // namespace ash

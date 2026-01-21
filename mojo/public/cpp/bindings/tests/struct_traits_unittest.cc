@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -16,9 +16,9 @@
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl_traits.h"
 #include "mojo/public/cpp/bindings/tests/variant_test_util.h"
 #include "mojo/public/cpp/system/wait.h"
-#include "mojo/public/interfaces/bindings/tests/struct_with_traits.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom-blink.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/struct_with_traits.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom-blink.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -64,8 +64,9 @@ class ChromiumRectServiceImpl : public RectService {
 
   // mojo::test::RectService:
   void AddRect(const RectChromium& r) override {
-    if (r.GetArea() > largest_rect_.GetArea())
+    if (r.GetArea() > largest_rect_.GetArea()) {
       largest_rect_ = r;
+    }
   }
 
   void GetLargestRect(GetLargestRectCallback callback) override {
@@ -110,8 +111,7 @@ class BlinkRectServiceImpl : public blink::RectService {
 };
 
 // A test which runs both Chromium and Blink implementations of a RectService.
-class StructTraitsTest : public testing::Test,
-                         public TraitsTestService {
+class StructTraitsTest : public testing::Test, public TraitsTestService {
  public:
   StructTraitsTest() = default;
 
@@ -160,7 +160,7 @@ class StructTraitsTest : public testing::Test,
   }
 
   void EchoNullableMoveOnlyStructWithTraits(
-      absl::optional<MoveOnlyStructWithTraitsImpl> s,
+      std::optional<MoveOnlyStructWithTraitsImpl> s,
       EchoNullableMoveOnlyStructWithTraitsCallback callback) override {
     std::move(callback).Run(std::move(s));
   }
@@ -362,8 +362,8 @@ TEST_F(StructTraitsTest, EchoTrivialStructWithTraits) {
 void CaptureMessagePipe(ScopedMessagePipeHandle* storage,
                         base::OnceClosure closure,
                         MoveOnlyStructWithTraitsImpl passed) {
-  storage->reset(MessagePipeHandle(
-      passed.get_mutable_handle().release().value()));
+  storage->reset(
+      MessagePipeHandle(passed.get_mutable_handle().release().value()));
   std::move(closure).Run();
 }
 
@@ -401,9 +401,9 @@ TEST_F(StructTraitsTest, EchoMoveOnlyStructWithTraits) {
 }
 
 void CaptureNullableMoveOnlyStructWithTraitsImpl(
-    absl::optional<MoveOnlyStructWithTraitsImpl>* storage,
+    std::optional<MoveOnlyStructWithTraitsImpl>* storage,
     base::OnceClosure closure,
-    absl::optional<MoveOnlyStructWithTraitsImpl> passed) {
+    std::optional<MoveOnlyStructWithTraitsImpl> passed) {
   *storage = std::move(passed);
   std::move(closure).Run();
 }
@@ -412,11 +412,10 @@ TEST_F(StructTraitsTest, EchoNullableMoveOnlyStructWithTraits) {
   base::RunLoop loop;
   Remote<TraitsTestService> proxy = GetTraitsTestProxy();
 
-  absl::optional<MoveOnlyStructWithTraitsImpl> received;
+  std::optional<MoveOnlyStructWithTraitsImpl> received;
   proxy->EchoNullableMoveOnlyStructWithTraits(
-      absl::nullopt,
-      base::BindOnce(&CaptureNullableMoveOnlyStructWithTraitsImpl, &received,
-                     loop.QuitClosure()));
+      std::nullopt, base::BindOnce(&CaptureNullableMoveOnlyStructWithTraitsImpl,
+                                   &received, loop.QuitClosure()));
   loop.Run();
 
   EXPECT_FALSE(received);
@@ -447,7 +446,7 @@ TEST_F(StructTraitsTest, SerializeStructWithTraits) {
   input.set_uint32(7);
   input.set_uint64(42);
   input.set_string("hello world!");
-  input.get_mutable_string_array().assign({ "hello", "world!" });
+  input.get_mutable_string_array().assign({"hello", "world!"});
   input.get_mutable_string_set().insert("hello");
   input.get_mutable_string_set().insert("world!");
   input.get_mutable_struct().value = 42;
@@ -477,8 +476,9 @@ void ExpectUniquePtr(std::unique_ptr<int> expected,
                      base::OnceClosure closure,
                      std::unique_ptr<int> value) {
   ASSERT_EQ(!expected, !value);
-  if (expected)
+  if (expected) {
     EXPECT_EQ(*expected, *value);
+  }
   std::move(closure).Run();
 }
 

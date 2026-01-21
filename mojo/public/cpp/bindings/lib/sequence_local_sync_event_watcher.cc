@@ -5,19 +5,15 @@
 #include "mojo/public/cpp/bindings/sequence_local_sync_event_watcher.h"
 
 #include <map>
-#include <memory>
-#include <set>
 
-#include "base/bind.h"
 #include "base/containers/flat_set.h"
-#include "base/memory/ptr_util.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/sequence_local_storage_slot.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "mojo/public/cpp/bindings/sync_event_watcher.h"
 
 namespace mojo {
@@ -102,8 +98,9 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
     {
       base::AutoLock lock(ready_watchers_lock_);
       ready_watchers_.erase(iter->first);
-      if (ready_watchers_.empty())
+      if (ready_watchers_.empty()) {
         event_.Reset();
+      }
     }
 
     registered_watchers_.erase(iter);
@@ -113,8 +110,9 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
       // Check if the SequenceLocalStorageMap is valid before doing this to
       // avoid races at shutdown when other objects use SequenceLocalStorageSlot
       // and indirectly call to here.
-      if (base::internal::SequenceLocalStorageMap::IsSetForCurrentThread())
+      if (base::internal::SequenceLocalStorageMap::IsSetForCurrentThread()) {
         GetStorageSlot().reset();
+      }
     }
   }
 
@@ -128,8 +126,9 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
 
     // If we didn't have any ready watchers before, the event may not have
     // been signaled. Signal it to ensure that |OnEventSignaled()| is run.
-    if (must_signal)
+    if (must_signal) {
       event_.Signal();
+    }
   }
 
   void ResetForWatcher(const SequenceLocalSyncEventWatcher* watcher) {
@@ -138,8 +137,9 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
 
     // No more watchers are ready, so we can reset the event. The next watcher
     // to call |SignalForWatcher()| will re-signal the event.
-    if (ready_watchers_.empty())
+    if (ready_watchers_.empty()) {
       event_.Reset();
+    }
   }
 
   bool SyncWatch(const SequenceLocalSyncEventWatcher* watcher,
@@ -164,9 +164,10 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
 
     // |SyncWatch()| may delete |this|.
     auto weak_self = weak_ptr_factory_.GetWeakPtr();
-    bool result = event_watcher_.SyncWatch(stop_flags, 2);
-    if (!weak_self)
+    bool result = event_watcher_.SyncWatch(stop_flags);
+    if (!weak_self) {
       return false;
+    }
 
     top_watcher_state_ = outer_watcher_state;
     top_watcher_ = outer_watcher;
@@ -174,7 +175,10 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
   }
 
  private:
-  using StorageSlotType = base::SequenceLocalStorageSlot<SequenceLocalState>;
+  // GenericSequenceLocalStorageSlot needs to be specified since
+  // SequenceLocalStorageSlot doesn't support forward declared types.
+  using StorageSlotType =
+      base::GenericSequenceLocalStorageSlot<SequenceLocalState>;
   static StorageSlotType& GetStorageSlot() {
     static StorageSlotType storage;
     return storage;
@@ -197,14 +201,17 @@ class SequenceLocalSyncEventWatcher::SequenceLocalState {
   // Set of all SequenceLocalSyncEventWatchers in a signaled state, guarded by
   // a lock for sequence-safe signaling.
   base::Lock ready_watchers_lock_;
-  base::flat_set<const SequenceLocalSyncEventWatcher*> ready_watchers_;
+  base::flat_set<raw_ptr<const SequenceLocalSyncEventWatcher, CtnExperimental>>
+      ready_watchers_;
 
   base::WeakPtrFactory<SequenceLocalState> weak_ptr_factory_{this};
 };
 
 void SequenceLocalSyncEventWatcher::SequenceLocalState::OnEventSignaled() {
   for (;;) {
-    base::flat_set<const SequenceLocalSyncEventWatcher*> ready_watchers;
+    base::flat_set<
+        raw_ptr<const SequenceLocalSyncEventWatcher, CtnExperimental>>
+        ready_watchers;
     {
       base::AutoLock lock(ready_watchers_lock_);
       std::swap(ready_watchers_, ready_watchers);
@@ -215,13 +222,14 @@ void SequenceLocalSyncEventWatcher::SequenceLocalState::OnEventSignaled() {
     }
 
     auto weak_self = weak_ptr_factory_.GetWeakPtr();
-    for (auto* watcher : ready_watchers) {
+    for (const SequenceLocalSyncEventWatcher* watcher : ready_watchers) {
       if (top_watcher_ == watcher || watcher->can_wake_up_during_any_watch_) {
         watcher->callback_.Run();
 
         // The callback may have deleted |this|.
-        if (!weak_self)
+        if (!weak_self) {
           return;
+        }
       }
     }
   }
@@ -259,7 +267,7 @@ class SequenceLocalSyncEventWatcher::Registration {
 
  private:
   const base::WeakPtr<SequenceLocalState> weak_shared_state_;
-  const raw_ptr<SequenceLocalState, DanglingUntriaged> shared_state_;
+  const raw_ptr<SequenceLocalState, AcrossTasksDanglingUntriaged> shared_state_;
   WatcherStateMap::iterator watcher_state_iterator_;
   const scoped_refptr<WatcherState> watcher_state_;
 };

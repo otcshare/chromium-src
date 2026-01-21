@@ -5,18 +5,30 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_DAWN_PLATFORM_H_
 #define GPU_COMMAND_BUFFER_SERVICE_DAWN_PLATFORM_H_
 
-#include <memory>
-
 #include <dawn/platform/DawnPlatform.h>
 
+#include <memory>
+
+#include "base/containers/flat_map.h"
+#include "base/memory/ref_counted.h"
+#include "base/synchronization/lock.h"
+#include "base/time/time.h"
 #include "gpu/command_buffer/service/dawn_caching_interface.h"
+#include "gpu/gpu_gles2_export.h"
+
+namespace gl {
+class ProgressReporter;
+}  // namespace gl
 
 namespace gpu::webgpu {
 
-class DawnPlatform : public dawn::platform::Platform {
+class GPU_GLES2_EXPORT DawnPlatform : public dawn::platform::Platform {
  public:
   explicit DawnPlatform(
-      std::unique_ptr<DawnCachingInterface> dawn_caching_interface = nullptr);
+      std::unique_ptr<DawnCachingInterface> dawn_caching_interface,
+      gl::ProgressReporter* progress_reporter,
+      const char* uma_prefix,
+      bool record_cache_count_uma);
   ~DawnPlatform() override;
 
   const unsigned char* GetTraceCategoryEnabledFlag(
@@ -35,12 +47,68 @@ class DawnPlatform : public dawn::platform::Platform {
                          const uint64_t* arg_values,
                          unsigned char flags) override;
 
+  void HistogramCustomCounts(const char* name,
+                             int sample,
+                             int min,
+                             int max,
+                             int bucketCount) override;
+
+  void HistogramCustomCountsHPC(const char* name,
+                                int sample,
+                                int min,
+                                int max,
+                                int bucketCount) override;
+
+  void HistogramEnumeration(const char* name,
+                            int sample,
+                            int boundaryValue) override;
+
+  void HistogramSparse(const char* name, int sample) override;
+
+  void HistogramBoolean(const char* name, bool sample) override;
+
   dawn::platform::CachingInterface* GetCachingInterface() override;
 
   std::unique_ptr<dawn::platform::WorkerTaskPool> CreateWorkerTaskPool()
       override;
 
-  std::unique_ptr<DawnCachingInterface> dawn_caching_interface_ = nullptr;
+  bool IsFeatureEnabled(dawn::platform::Features feature) override;
+
+  void OnFramePresented();
+
+  struct CacheCountsMap : public base::RefCountedThreadSafe<CacheCountsMap> {
+    struct CacheCounts {
+      CacheCounts() = default;
+      ~CacheCounts() = default;
+
+      uint32_t cache_miss_count = 0;
+      uint32_t cache_hit_count = 0;
+    };
+
+    CacheCountsMap();
+
+    base::Lock lock;
+    base::flat_map<std::string, CacheCounts> counts GUARDED_BY(lock);
+
+   private:
+    friend class base::RefCountedThreadSafe<CacheCountsMap>;
+    ~CacheCountsMap();
+  };
+
+ private:
+  void HistogramCacheCountHelper(std::string name,
+                                 int sample,
+                                 int min,
+                                 int max,
+                                 int bucketCount);
+
+  std::unique_ptr<DawnCachingInterface> dawn_caching_interface_;
+  const raw_ptr<gl::ProgressReporter> progress_reporter_;
+  const std::string uma_prefix_;
+
+  scoped_refptr<CacheCountsMap> cache_map_;
+  base::TimeTicks startup_time_;
+  bool did_report_1st_present_cache_stats_ = false;
 };
 
 }  // namespace gpu::webgpu

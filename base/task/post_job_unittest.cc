@@ -4,12 +4,12 @@
 
 #include "base/task/post_job.h"
 
+#include <array>
 #include <atomic>
 #include <iterator>
 #include <numeric>
 
 #include "base/barrier_closure.h"
-#include "base/task/test_task_traits_extension.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
 #include "base/test/task_environment.h"
@@ -38,9 +38,8 @@ TEST(PostJobTest, CreateJobSimple) {
   std::atomic_size_t num_tasks_to_run(4);
   TestWaitableEvent threads_continue;
   RepeatingClosure barrier = BarrierClosure(
-      num_tasks_to_run, BindLambdaForTesting([&threads_continue]() {
-        threads_continue.Signal();
-      }));
+      num_tasks_to_run,
+      BindLambdaForTesting([&threads_continue] { threads_continue.Signal(); }));
   bool job_started = false;
   auto handle =
       CreateJob(FROM_HERE, {}, BindLambdaForTesting([&](JobDelegate* delegate) {
@@ -61,16 +60,6 @@ TEST(PostJobTest, CreateJobSimple) {
   EXPECT_EQ(num_tasks_to_run, 0U);
 }
 
-TEST(PostJobTest, PostJobExtension) {
-  testing::FLAGS_gtest_death_test_style = "threadsafe";
-  EXPECT_DCHECK_DEATH({
-    auto handle = PostJob(
-        FROM_HERE, TestExtensionBoolTrait(),
-        BindRepeating([](JobDelegate* delegate) {}),
-        BindRepeating([](size_t /*worker_count*/) -> size_t { return 0; }));
-  });
-}
-
 // Verify that concurrent accesses with task_id as the only form of
 // synchronisation doesn't trigger a race.
 TEST(PostJobTest, TaskIds) {
@@ -78,7 +67,7 @@ TEST(PostJobTest, TaskIds) {
   static constexpr size_t kNumTasksToRun = 1000;
   base::test::TaskEnvironment task_environment;
 
-  size_t concurrent_array[kNumConcurrentThreads] = {0};
+  std::array<size_t, kNumConcurrentThreads> concurrent_array = {};
   std::atomic_size_t remaining_tasks{kNumTasksToRun};
   base::JobHandle handle = base::PostJob(
       FROM_HERE, {}, BindLambdaForTesting([&](base::JobDelegate* job) {

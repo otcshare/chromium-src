@@ -18,49 +18,42 @@ namespace {
 // when the app identity update confirmation dialog is set to show. The behavior
 // is determined by the IdentityUpdateDialogAction enum in
 // web_app_ui_manager.h.
-absl::optional<AppIdentityUpdate>
-    g_auto_resolve_app_identity_update_dialog_for_testing = absl::nullopt;
+std::optional<AppIdentityUpdate>
+    g_auto_resolve_app_identity_update_dialog_for_testing = std::nullopt;
 
 }  // namespace
 
-base::AutoReset<absl::optional<AppIdentityUpdate>>
+base::AutoReset<std::optional<AppIdentityUpdate>>
 SetIdentityUpdateDialogActionForTesting(  // IN-TEST
-    absl::optional<AppIdentityUpdate> auto_accept_action) {
-  return base::AutoReset<absl::optional<AppIdentityUpdate>>(
+    std::optional<AppIdentityUpdate> auto_accept_action) {
+  return base::AutoReset<std::optional<AppIdentityUpdate>>(
       &g_auto_resolve_app_identity_update_dialog_for_testing,
       auto_accept_action);
 }
 
-absl::optional<AppIdentityUpdate>
+std::optional<AppIdentityUpdate>
 GetIdentityUpdateDialogActionForTesting() {  // IN-TEST
   return g_auto_resolve_app_identity_update_dialog_for_testing;
 }
 
 // static
 apps::AppLaunchParams WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     const base::CommandLine& command_line,
     const base::FilePath& current_directory,
-    const absl::optional<GURL>& url_handler_launch_url,
-    const absl::optional<GURL>& protocol_handler_launch_url,
-    const absl::optional<GURL>& file_launch_url,
+    const std::optional<GURL>& protocol_handler_launch_url,
+    const std::optional<GURL>& file_launch_url,
     const std::vector<base::FilePath>& launch_files) {
   // At most one of these parameters should be non-empty.
-  DCHECK_LE(url_handler_launch_url.has_value() +
-                protocol_handler_launch_url.has_value() + !launch_files.empty(),
-            1);
+  DCHECK_LE(protocol_handler_launch_url.has_value() + !launch_files.empty(), 1);
 
   apps::LaunchSource launch_source = apps::LaunchSource::kFromCommandLine;
-
-  if (url_handler_launch_url.has_value()) {
-    launch_source = apps::LaunchSource::kFromUrlHandler;
-  } else if (!launch_files.empty()) {
+  if (!launch_files.empty()) {
     DCHECK(file_launch_url.has_value());
     launch_source = apps::LaunchSource::kFromFileManager;
   }
 
-  if (base::FeatureList::IsEnabled(features::kDesktopPWAsRunOnOsLogin) &&
-      command_line.HasSwitch(switches::kAppRunOnOsLoginMode)) {
+  if (command_line.HasSwitch(switches::kAppRunOnOsLoginMode)) {
     launch_source = apps::LaunchSource::kFromOsLogin;
   } else if (protocol_handler_launch_url.has_value()) {
     launch_source = apps::LaunchSource::kFromProtocolHandler;
@@ -72,7 +65,6 @@ apps::AppLaunchParams WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
   params.command_line = command_line;
   params.current_directory = current_directory;
   params.launch_files = launch_files;
-  params.url_handler_launch_url = url_handler_launch_url;
   params.protocol_handler_launch_url = protocol_handler_launch_url;
   if (file_launch_url) {
     params.override_url = *file_launch_url;
@@ -104,7 +96,7 @@ void WebAppUiManager::RemoveObserver(WebAppUiManagerObserver* observer) {
 }
 
 void WebAppUiManager::NotifyReadyToCommitNavigation(
-    const AppId& app_id,
+    const webapps::AppId& app_id,
     content::NavigationHandle* navigation_handle) {
   for (WebAppUiManagerObserver& observer : observers_)
     observer.OnReadyToCommitNavigation(app_id, navigation_handle);

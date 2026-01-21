@@ -13,10 +13,9 @@ Cors issue: {
                 columnNumber : 7
                 lineNumber : 2
                 scriptId : <string>
-                url : 
+                url :
             }
             request : {
-                requestId : <string>
                 url : file://doesnt.matter/
             }
         }
@@ -30,7 +29,7 @@ Cors issue: {
         corsIssueDetails : {
             corsErrorStatus : {
                 corsError : DisallowedByMode
-                failedParameter : 
+                failedParameter :
             }
             initiatorOrigin : http://127.0.0.1:8000
             isWarning : false
@@ -38,10 +37,9 @@ Cors issue: {
                 columnNumber : 7
                 lineNumber : 6
                 scriptId : <string>
-                url : 
+                url :
             }
             request : {
-                requestId : <string>
                 url : https://devtools-b.oopif.test:8443/index.html
             }
         }
@@ -55,7 +53,7 @@ Cors issue: {
         corsIssueDetails : {
             corsErrorStatus : {
                 corsError : NoCorsRedirectModeNotFollow
-                failedParameter : 
+                failedParameter :
             }
             initiatorOrigin : http://127.0.0.1:8000
             isWarning : false
@@ -63,10 +61,9 @@ Cors issue: {
                 columnNumber : 7
                 lineNumber : 11
                 scriptId : <string>
-                url : 
+                url :
             }
             request : {
-                requestId : <string>
                 url : https://devtools-b.oopif.test:8443/index.html
             }
         }

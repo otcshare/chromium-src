@@ -5,14 +5,13 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_TETHER_FAKE_ASYNCHRONOUS_SHUTDOWN_OBJECT_CONTAINER_H_
 #define CHROMEOS_ASH_COMPONENTS_TETHER_FAKE_ASYNCHRONOUS_SHUTDOWN_OBJECT_CONTAINER_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/tether/asynchronous_shutdown_object_container.h"
 
-namespace ash {
-
-namespace tether {
+namespace ash::tether {
 
 // Test double for FakeAsynchronousShutdownObjectContainer.
 class FakeAsynchronousShutdownObjectContainer
@@ -52,6 +51,11 @@ class FakeAsynchronousShutdownObjectContainer
     wifi_hotspot_disconnector_ = wifi_hotspot_disconnector;
   }
 
+  void set_host_connection_factory(
+      HostConnection::Factory* host_connection_factory) {
+    host_connection_factory_ = host_connection_factory;
+  }
+
   // AsynchronousShutdownObjectContainer:
   void Shutdown(base::OnceClosure shutdown_complete_callback) override;
   TetherHostFetcher* tether_host_fetcher() override;
@@ -59,20 +63,20 @@ class FakeAsynchronousShutdownObjectContainer
       override;
   NetworkConfigurationRemover* network_configuration_remover() override;
   WifiHotspotDisconnector* wifi_hotspot_disconnector() override;
+  HostConnection::Factory* host_connection_factory() override;
 
  private:
   base::OnceClosure deletion_callback_;
   base::OnceClosure shutdown_complete_callback_;
 
-  TetherHostFetcher* tether_host_fetcher_ = nullptr;
-  DisconnectTetheringRequestSender* disconnect_tethering_request_sender_ =
-      nullptr;
-  NetworkConfigurationRemover* network_configuration_remover_ = nullptr;
-  WifiHotspotDisconnector* wifi_hotspot_disconnector_ = nullptr;
+  raw_ptr<TetherHostFetcher> tether_host_fetcher_ = nullptr;
+  raw_ptr<HostConnection::Factory> host_connection_factory_ = nullptr;
+  raw_ptr<DisconnectTetheringRequestSender>
+      disconnect_tethering_request_sender_ = nullptr;
+  raw_ptr<NetworkConfigurationRemover> network_configuration_remover_ = nullptr;
+  raw_ptr<WifiHotspotDisconnector> wifi_hotspot_disconnector_ = nullptr;
 };
 
-}  // namespace tether
-
-}  // namespace ash
+}  // namespace ash::tether
 
 #endif  // CHROMEOS_ASH_COMPONENTS_TETHER_FAKE_ASYNCHRONOUS_SHUTDOWN_OBJECT_CONTAINER_H_

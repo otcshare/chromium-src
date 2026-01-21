@@ -4,17 +4,19 @@
 
 #include <string>
 
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/public/cpp/accessibility_controller.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/run_loop.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/repeating_test_future.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
@@ -22,7 +24,8 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
+#include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -40,45 +43,6 @@ using ::ash::MagnificationManager;
 const int kDisabledScreenMagnifier = 0;
 const int kFullScreenMagnifier = 1;
 const int kDockedScreenMagnifier = 2;
-
-// Spins the loop until a notification is received from |prefs| that the value
-// of |pref_name| has changed. If the notification is received before Wait()
-// has been called, Wait() returns immediately and no loop is spun.
-class PrefChangeWatcher {
- public:
-  PrefChangeWatcher(const char* pref_name, PrefService* prefs);
-
-  PrefChangeWatcher(const PrefChangeWatcher&) = delete;
-  PrefChangeWatcher& operator=(const PrefChangeWatcher&) = delete;
-
-  void Wait();
-
-  void OnPrefChange();
-
- private:
-  bool pref_changed_ = false;
-
-  base::RunLoop run_loop_;
-  PrefChangeRegistrar registrar_;
-};
-
-PrefChangeWatcher::PrefChangeWatcher(const char* pref_name,
-                                     PrefService* prefs) {
-  registrar_.Init(prefs);
-  registrar_.Add(pref_name,
-                 base::BindRepeating(&PrefChangeWatcher::OnPrefChange,
-                                     base::Unretained(this)));
-}
-
-void PrefChangeWatcher::Wait() {
-  if (!pref_changed_)
-    run_loop_.Run();
-}
-
-void PrefChangeWatcher::OnPrefChange() {
-  pref_changed_ = true;
-  run_loop_.Quit();
-}
 
 }  // namespace
 
@@ -103,16 +67,18 @@ class LoginScreenAccessibilityPolicyBrowsertest
 
   bool IsPrefManaged(const char* pref_name) const;
 
+  bool IsPrefRecommended(const char* pref_name) const;
+
   base::Value GetPrefValue(const char* pref_name) const;
 
-  Profile* login_profile_ = nullptr;
+  raw_ptr<Profile, DanglingUntriaged> login_profile_ = nullptr;
 };
 
 LoginScreenAccessibilityPolicyBrowsertest::
-    LoginScreenAccessibilityPolicyBrowsertest() {}
+    LoginScreenAccessibilityPolicyBrowsertest() = default;
 
 LoginScreenAccessibilityPolicyBrowsertest::
-    ~LoginScreenAccessibilityPolicyBrowsertest() {}
+    ~LoginScreenAccessibilityPolicyBrowsertest() = default;
 
 void LoginScreenAccessibilityPolicyBrowsertest::SetUpOnMainThread() {
   DevicePolicyCrosBrowserTest::SetUpOnMainThread();
@@ -137,9 +103,15 @@ void LoginScreenAccessibilityPolicyBrowsertest::SetUpOnMainThread() {
 
 void LoginScreenAccessibilityPolicyBrowsertest::
     RefreshDevicePolicyAndWaitForPrefChange(const char* pref_name) {
-  PrefChangeWatcher watcher(pref_name, login_profile_->GetPrefs());
+  PrefService* prefs = login_profile_->GetPrefs();
+  ASSERT_TRUE(prefs);
+  PrefChangeRegistrar registrar;
+  base::test::RepeatingTestFuture<const char*> pref_changed_future;
+  registrar.Init(prefs);
+  registrar.Add(pref_name, base::BindRepeating(
+                               pref_changed_future.GetCallback(), pref_name));
   RefreshDevicePolicy();
-  watcher.Wait();
+  EXPECT_EQ(pref_name, pref_changed_future.Take());
 }
 
 void LoginScreenAccessibilityPolicyBrowsertest::SetUpCommandLine(
@@ -154,6 +126,13 @@ bool LoginScreenAccessibilityPolicyBrowsertest::IsPrefManaged(
   const PrefService::Preference* pref =
       login_profile_->GetPrefs()->FindPreference(pref_name);
   return pref && pref->IsManaged();
+}
+
+bool LoginScreenAccessibilityPolicyBrowsertest::IsPrefRecommended(
+    const char* pref_name) const {
+  const PrefService::Preference* pref =
+      login_profile_->GetPrefs()->FindPreference(pref_name);
+  return pref && pref->IsRecommended();
 }
 
 base::Value LoginScreenAccessibilityPolicyBrowsertest::GetPrefValue(
@@ -498,6 +477,57 @@ IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
   EXPECT_FALSE(IsPrefManaged(ash::prefs::kAccessibilityVirtualKeyboardEnabled));
   EXPECT_EQ(base::Value(false),
             GetPrefValue(ash::prefs::kAccessibilityVirtualKeyboardEnabled));
+}
+
+// TODO(b/448267171): Move LoginScreenAccessibilityPolicyBrowsertest tests
+// to a separate file since this is not accessibility related.
+
+IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
+                       DeviceLoginScreenTouchVirtualKeyboardEnabledDefault) {
+  auto* keyboard_client = ChromeKeyboardControllerClient::Get();
+  ASSERT_TRUE(keyboard_client);
+
+  // Verify keyboard disabled by default.
+  EXPECT_FALSE(keyboard_client->is_keyboard_enabled());
+
+  // Verify keyboard can be toggled by default.
+  keyboard_client->SetEnableFlag(keyboard::KeyboardEnableFlag::kTouchEnabled);
+  EXPECT_TRUE(keyboard_client->is_keyboard_enabled());
+  keyboard_client->ClearEnableFlag(keyboard::KeyboardEnableFlag::kTouchEnabled);
+  EXPECT_FALSE(keyboard_client->is_keyboard_enabled());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    LoginScreenAccessibilityPolicyBrowsertest,
+    DeviceLoginScreenTouchVirtualKeyboardEnabledTrueEnablesVirtualKeyboard) {
+  auto* keyboard_client = ChromeKeyboardControllerClient::Get();
+  ASSERT_TRUE(keyboard_client);
+
+  em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
+  proto.mutable_deviceloginscreentouchvirtualkeyboardenabled()->set_value(true);
+  RefreshDevicePolicyAndWaitForPrefChange(prefs::kTouchVirtualKeyboardEnabled);
+
+  // Verify the virtual keyboard cannot be disabled.
+  EXPECT_TRUE(keyboard_client->is_keyboard_enabled());
+  keyboard_client->ClearEnableFlag(keyboard::KeyboardEnableFlag::kTouchEnabled);
+  EXPECT_TRUE(keyboard_client->is_keyboard_enabled());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    LoginScreenAccessibilityPolicyBrowsertest,
+    DeviceLoginScreenTouchVirtualKeyboardEnabledFalseDisablesVirtualKeyboard) {
+  auto* keyboard_client = ChromeKeyboardControllerClient::Get();
+  ASSERT_TRUE(keyboard_client);
+
+  em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
+  proto.mutable_deviceloginscreentouchvirtualkeyboardenabled()->set_value(
+      false);
+  RefreshDevicePolicyAndWaitForPrefChange(prefs::kTouchVirtualKeyboardEnabled);
+
+  // Verify the virtual keyboard cannot be enabled.
+  EXPECT_FALSE(keyboard_client->is_keyboard_enabled());
+  keyboard_client->SetEnableFlag(keyboard::KeyboardEnableFlag::kTouchEnabled);
+  EXPECT_FALSE(keyboard_client->is_keyboard_enabled());
 }
 
 IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
@@ -1103,5 +1133,93 @@ IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
   // manually.
   prefs->SetBoolean(ash::prefs::kAccessibilityShortcutsEnabled, true);
   EXPECT_FALSE(prefs->GetBoolean(ash::prefs::kAccessibilityShortcutsEnabled));
+}
+
+IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
+                       DeviceLoginScreenFaceGazeEnabled) {
+  // Verifies that the state of the FaceGaze accessibility feature on the
+  // login screen can be controlled through device policy.
+  AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
+  ASSERT_TRUE(accessibility_manager);
+  EXPECT_FALSE(accessibility_manager->IsFaceGazeEnabled());
+
+  // Manually enable FaceGaze.
+  PrefService* prefs = login_profile_->GetPrefs();
+  ASSERT_TRUE(prefs);
+  prefs->SetBoolean(ash::prefs::kAccessibilityFaceGazeEnabled, true);
+  EXPECT_TRUE(accessibility_manager->IsFaceGazeEnabled());
+
+  // Disable FaceGaze through device policy and wait for the change to take
+  // effect.
+  em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
+  proto.mutable_accessibility_settings()->set_login_screen_face_gaze_enabled(
+      false);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kAccessibilityFaceGazeEnabled);
+
+  // Verify that the pref which controls FaceGaze in the login profile is
+  // managed by the policy.
+  EXPECT_TRUE(IsPrefManaged(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_EQ(base::Value(false),
+            GetPrefValue(ash::prefs::kAccessibilityFaceGazeEnabled));
+
+  // Verify that FaceGaze cannot be enabled manually anymore.
+  prefs->SetBoolean(ash::prefs::kAccessibilityFaceGazeEnabled, true);
+  EXPECT_FALSE(accessibility_manager->IsFaceGazeEnabled());
+
+  // Enable FaceGaze through device policy as a recommended value and wait for
+  // the change to take effect.
+  proto.mutable_accessibility_settings()->set_login_screen_face_gaze_enabled(
+      true);
+  proto.mutable_accessibility_settings()
+      ->mutable_login_screen_face_gaze_enabled_options()
+      ->set_mode(em::PolicyOptions::RECOMMENDED);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kAccessibilityFaceGazeEnabled);
+
+  // Verify that the pref which controls FaceGaze in the login profile is being
+  // applied as recommended by the policy.
+  EXPECT_FALSE(IsPrefManaged(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_EQ(base::Value(true),
+            GetPrefValue(ash::prefs::kAccessibilityFaceGazeEnabled));
+
+  // Verify that FaceGaze can be enabled manually again.
+  prefs->SetBoolean(ash::prefs::kAccessibilityFaceGazeEnabled, false);
+  EXPECT_FALSE(accessibility_manager->IsFaceGazeEnabled());
+}
+
+IN_PROC_BROWSER_TEST_F(LoginScreenAccessibilityPolicyBrowsertest,
+                       DeviceLoginScreenFaceGazeEnabledRecommended) {
+  // Disable FaceGaze through device policy and wait for the change to take
+  // effect.
+  em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
+  proto.mutable_accessibility_settings()->set_login_screen_face_gaze_enabled(
+      false);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kAccessibilityFaceGazeEnabled);
+
+  // Verify that the pref which controls FaceGaze in the login profile is
+  // managed by the policy.
+  EXPECT_TRUE(IsPrefManaged(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_FALSE(IsPrefRecommended(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_EQ(base::Value(false),
+            GetPrefValue(ash::prefs::kAccessibilityFaceGazeEnabled));
+
+  // Enable FaceGaze through device policy as a recommended value and wait for
+  // the change to take effect.
+  proto.mutable_accessibility_settings()->set_login_screen_face_gaze_enabled(
+      true);
+  proto.mutable_accessibility_settings()
+      ->mutable_login_screen_face_gaze_enabled_options()
+      ->set_mode(em::PolicyOptions::RECOMMENDED);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kAccessibilityFaceGazeEnabled);
+
+  // Verify that the pref which controls FaceGaze in the login profile is being
+  // applied as recommended by the policy.
+  EXPECT_FALSE(IsPrefManaged(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_TRUE(IsPrefRecommended(ash::prefs::kAccessibilityFaceGazeEnabled));
+  EXPECT_EQ(base::Value(true),
+            GetPrefValue(ash::prefs::kAccessibilityFaceGazeEnabled));
 }
 }  // namespace policy

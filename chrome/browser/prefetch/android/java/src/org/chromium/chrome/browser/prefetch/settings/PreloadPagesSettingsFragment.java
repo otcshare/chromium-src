@@ -10,37 +10,29 @@ import android.os.Bundle;
 import androidx.annotation.VisibleForTesting;
 import androidx.preference.Preference;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
-import org.chromium.components.browser_ui.settings.FragmentSettingsLauncher;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
-import org.chromium.components.browser_ui.settings.SettingsFeatureList;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.components.browser_ui.settings.TextMessagePreference;
 
-/**
- * Fragment containing Preload Pages settings.
- */
+/** Fragment containing Preload Pages settings. */
+@NullMarked
 public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBase
-        implements FragmentSettingsLauncher,
-                   RadioButtonGroupPreloadPagesSettings.OnPreloadPagesStateDetailsRequested,
-                   Preference.OnPreferenceChangeListener {
-    @VisibleForTesting
-    static final String PREF_MANAGED_DISCLAIMER_TEXT = "managed_disclaimer_text";
-    @VisibleForTesting
-    static final String PREF_TEXT_MANAGED_LEGACY = "text_managed_legacy";
-    @VisibleForTesting
-    static final String PREF_PRELOAD_PAGES = "preload_pages_radio_button_group";
+        implements RadioButtonGroupPreloadPagesSettings.OnPreloadPagesStateDetailsRequested,
+                Preference.OnPreferenceChangeListener {
+    @VisibleForTesting static final String PREF_MANAGED_DISCLAIMER_TEXT = "managed_disclaimer_text";
+    @VisibleForTesting static final String PREF_PRELOAD_PAGES = "preload_pages_radio_button_group";
 
-    // An instance of SettingsLauncher that is used to launch Preload Pages subsections.
-    private SettingsLauncher mSettingsLauncher;
     private RadioButtonGroupPreloadPagesSettings mPreloadPagesPreference;
 
     /**
      * @return A summary that describes the current Preload Pages state.
      */
-    public static String getPreloadPagesSummaryString(Context context) {
-        @PreloadPagesState
-        int preloadPagesState = PreloadPagesSettingsBridge.getState();
+    public static String getPreloadPagesSummaryString(Context context, Profile profile) {
+        @PreloadPagesState int preloadPagesState = PreloadPagesSettingsBridge.getState(profile);
         if (preloadPagesState == PreloadPagesState.EXTENDED_PRELOADING) {
             return context.getString(R.string.preload_pages_extended_preloading_title);
         }
@@ -55,29 +47,17 @@ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBa
     }
 
     @Override
-    protected void onCreatePreferencesInternal(Bundle bundle, String s) {
+    protected void onCreatePreferencesInternal(@Nullable Bundle bundle, @Nullable String s) {
         ManagedPreferenceDelegate managedPreferenceDelegate = createManagedPreferenceDelegate();
 
         mPreloadPagesPreference = findPreference(PREF_PRELOAD_PAGES);
-        mPreloadPagesPreference.init(PreloadPagesSettingsBridge.getState());
-        mPreloadPagesPreference.setPreloadPagesStateDetailsRequestedListener(this);
-        mPreloadPagesPreference.setManagedPreferenceDelegate(managedPreferenceDelegate);
+        mPreloadPagesPreference.init(
+                PreloadPagesSettingsBridge.getState(getProfile()), this, managedPreferenceDelegate);
         mPreloadPagesPreference.setOnPreferenceChangeListener(this);
 
-        Preference managedDisclaimerText = findPreference(PREF_MANAGED_DISCLAIMER_TEXT);
-        TextMessagePreference textManagedLegacy = findPreference(PREF_TEXT_MANAGED_LEGACY);
-        boolean managedTextVisible = managedPreferenceDelegate.isPreferenceClickDisabledByPolicy(
-                mPreloadPagesPreference);
-
-        if (SettingsFeatureList.isEnabled(
-                    SettingsFeatureList.HIGHLIGHT_MANAGED_PREF_DISCLAIMER_ANDROID)) {
-            textManagedLegacy.setVisible(false);
-            managedDisclaimerText.setVisible(managedTextVisible);
-        } else {
-            textManagedLegacy.setManagedPreferenceDelegate(managedPreferenceDelegate);
-            textManagedLegacy.setVisible(managedTextVisible);
-            managedDisclaimerText.setVisible(false);
-        }
+        Preference disclaimerPref = findPreference(PREF_MANAGED_DISCLAIMER_TEXT);
+        disclaimerPref.setVisible(
+                managedPreferenceDelegate.isPreferenceClickDisabled(mPreloadPagesPreference));
     }
 
     @Override
@@ -88,27 +68,33 @@ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBa
     @Override
     public void onPreloadPagesStateDetailsRequested(@PreloadPagesState int preloadPagesState) {
         if (preloadPagesState == PreloadPagesState.EXTENDED_PRELOADING) {
-            mSettingsLauncher.launchSettingsActivity(
-                    getActivity(), ExtendedPreloadingSettingsFragment.class);
+            SettingsNavigationFactory.createSettingsNavigation()
+                    .startSettings(
+                            getActivity(),
+                            ExtendedPreloadingSettingsFragment.class,
+                            /* fragmentArgs= */ null,
+                            /* addToBackStack= */ true);
         } else if (preloadPagesState == PreloadPagesState.STANDARD_PRELOADING) {
-            mSettingsLauncher.launchSettingsActivity(
-                    getActivity(), StandardPreloadingSettingsFragment.class);
+            SettingsNavigationFactory.createSettingsNavigation()
+                    .startSettings(
+                            getActivity(),
+                            StandardPreloadingSettingsFragment.class,
+                            /* fragmentArgs= */ null,
+                            /* addToBackStack= */ true);
         } else {
             assert false : "Should not be reached";
         }
     }
 
-    @Override
-    public void setSettingsLauncher(SettingsLauncher settingsLauncher) {
-        mSettingsLauncher = settingsLauncher;
-    }
-
     private ChromeManagedPreferenceDelegate createManagedPreferenceDelegate() {
-        return preference -> {
-            String key = preference.getKey();
-            assert PREF_MANAGED_DISCLAIMER_TEXT.equals(key) || PREF_TEXT_MANAGED_LEGACY.equals(key)
-                    || PREF_PRELOAD_PAGES.equals(key) : "Wrong preference key: " + key;
-            return PreloadPagesSettingsBridge.isNetworkPredictionManaged();
+        return new ChromeManagedPreferenceDelegate(getProfile()) {
+            @Override
+            public boolean isPreferenceControlledByPolicy(Preference preference) {
+                String key = preference.getKey();
+                assert PREF_MANAGED_DISCLAIMER_TEXT.equals(key) || PREF_PRELOAD_PAGES.equals(key)
+                        : "Wrong preference key: " + key;
+                return PreloadPagesSettingsBridge.isNetworkPredictionManaged(getProfile());
+            }
         };
     }
 
@@ -116,14 +102,23 @@ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBa
     public boolean onPreferenceChange(Preference preference, Object newValue) {
         String key = preference.getKey();
         assert PREF_PRELOAD_PAGES.equals(key) : "Unexpected preference key.";
-        @PreloadPagesState
-        int newState = (int) newValue;
-        @PreloadPagesState
-        int currentState = PreloadPagesSettingsBridge.getState();
+        @PreloadPagesState int newState = (int) newValue;
+        @PreloadPagesState int currentState = PreloadPagesSettingsBridge.getState(getProfile());
         if (newState == currentState) {
             return true;
         }
-        PreloadPagesSettingsBridge.setState(newState);
+        PreloadPagesSettingsBridge.setState(getProfile(), newState);
         return true;
     }
+
+    @Override
+    public @AnimationType int getAnimationType() {
+        return AnimationType.PROPERTY;
+    }
+
+    // TODO(crbug.com/444470792): Determine what pieces of logic are dynamic and need handling. For
+    // this one, it's going to be the disclaimer text. But check for other prefs.
+    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
+            new ChromeBaseSearchIndexProvider(
+                    PreloadPagesSettingsFragment.class.getName(), R.xml.preload_pages_preferences);
 }

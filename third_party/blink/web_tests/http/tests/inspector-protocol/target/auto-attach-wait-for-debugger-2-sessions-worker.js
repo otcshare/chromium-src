@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       `Tests that worker is only resumed when all sessions issue runIfWaitingForDebugger.`);
 
@@ -38,7 +38,10 @@
   await wp1.Runtime.runIfWaitingForDebugger();
   testRunner.log(`Session 2 resumed!`);
 
-  await worker_session1.evaluate('');
+  await Promise.all([
+    wp1.Inspector.onceWorkerScriptLoaded(),
+    wp2.Inspector.onceWorkerScriptLoaded(),
+  ]);
 
   testRunner.completeTest();
 })

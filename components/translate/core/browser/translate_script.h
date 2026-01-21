@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/callback_list.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -59,7 +59,8 @@ class TranslateScript {
   FRIEND_TEST_ALL_PREFIXES(TranslateScriptTest, CheckScriptURL);
 
   static const char kScriptURL[];
-  static const char kRequestHeader[];
+  static const char kRequestHeaderName[];
+  static const char kRequestHeaderValue[];
 
   // Used in kTranslateScriptURL to specify using always ssl to load resources.
   static const char kAlwaysUseSslQueryName[];

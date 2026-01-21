@@ -4,7 +4,9 @@
 
 #include "third_party/blink/renderer/core/html/link_style.h"
 
+#include "base/metrics/histogram_functions.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -14,10 +16,10 @@
 #include "third_party/blink/renderer/core/html/cross_origin_attribute.h"
 #include "third_party/blink/renderer/core/html/html_link_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
 #include "third_party/blink/renderer/core/loader/fetch_priority_attribute.h"
 #include "third_party/blink/renderer/core/loader/link_load_parameters.h"
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
-#include "third_party/blink/renderer/core/loader/subresource_integrity_helper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/subresource_integrity.h"
@@ -58,20 +60,23 @@ void LinkStyle::NotifyFinished(Resource* resource) {
     return;
   }
 
+  if (resource->LoadFailedOrCanceled()) {
+    AuditsIssue::ReportStylesheetLoadingRequestFailedIssue(
+        &GetDocument(), resource->Url(),
+        resource->LastResourceRequest().GetDevToolsId(), GetDocument().Url(),
+        resource->Options().initiator_info.position.line_,
+        resource->Options().initiator_info.position.column_,
+        resource->GetResourceError().LocalizedDescription());
+  }
+
   auto* cached_style_sheet = To<CSSStyleSheetResource>(resource);
-  // See the comment in pending_script.cc about why this check is necessary
-  // here, instead of in the resource fetcher. https://crbug.com/500701.
   if ((!cached_style_sheet->ErrorOccurred() &&
        !owner_->FastGetAttribute(html_names::kIntegrityAttr).empty() &&
        !cached_style_sheet->IntegrityMetadata().empty()) ||
-      resource->IsLinkPreload()) {
-    ResourceIntegrityDisposition disposition =
-        cached_style_sheet->IntegrityDisposition();
+      resource->ForceIntegrityChecks()) {
+    cached_style_sheet->IntegrityReport().SendReports(GetExecutionContext());
 
-    SubresourceIntegrityHelper::DoReport(
-        *GetExecutionContext(), cached_style_sheet->IntegrityReportInfo());
-
-    if (disposition == ResourceIntegrityDisposition::kFailed) {
+    if (!cached_style_sheet->PassedIntegrityChecks()) {
       loading_ = false;
       RemovePendingSheet();
       NotifyLoadedSheetAndAllCriticalSubresources(
@@ -107,6 +112,7 @@ void LinkStyle::NotifyFinished(Resource* resource) {
     return;
   }
 
+  auto parser_start_time = base::TimeTicks::Now();
   auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(
       parser_context, cached_style_sheet->Url());
 
@@ -130,6 +136,9 @@ void LinkStyle::NotifyFinished(Resource* resource) {
     const_cast<CSSStyleSheetResource*>(cached_style_sheet)
         ->SaveParsedStyleSheet(style_sheet);
   }
+  base::UmaHistogramMicrosecondsTimes(
+      "Blink.CSSStyleSheetResource.ParseTime",
+      base::TimeTicks::Now() - parser_start_time);
   ClearResource();
 }
 
@@ -143,8 +152,10 @@ bool LinkStyle::SheetLoaded() {
 
 void LinkStyle::NotifyLoadedSheetAndAllCriticalSubresources(
     Node::LoadedSheetErrorStatus error_status) {
-  if (fired_load_)
+  if (fired_load_ &&
+      !RuntimeEnabledFeatures::HTMLLinkElementAttributeValueChangesEnabled()) {
     return;
+  }
   loaded_sheet_ = (error_status == Node::kNoErrorLoadingSubresource);
   if (owner_)
     owner_->ScheduleEvent();
@@ -246,13 +257,13 @@ void LinkStyle::SetDisabledState(bool disabled) {
 
 LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
     const LinkLoadParameters& params,
-    const WTF::TextEncoding& charset) {
+    const TextEncoding& charset) {
   if (disabled_state_ == kDisabled || !owner_->RelAttribute().IsStyleSheet() ||
       !StyleSheetTypeIsSupported(params.type) || !ShouldLoadResource() ||
       !params.href.IsValid())
     return kNotNeeded;
 
-  if (GetResource()) {
+  if (GetResource() && !GetDocument().StatePreservingAtomicMoveInProgress()) {
     RemovePendingSheet();
     ClearResource();
   }
@@ -273,8 +284,9 @@ LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
   if (!owner_->Media().empty() && frame) {
     MediaQuerySet* media =
         MediaQuerySet::Create(owner_->Media(), GetExecutionContext());
-    MediaQueryEvaluator evaluator(frame);
-    media_query_matches = evaluator.Eval(*media);
+    MediaQueryEvaluator* evaluator =
+        MakeGarbageCollected<MediaQueryEvaluator>(frame);
+    media_query_matches = evaluator->Eval(*media);
   }
 
   // Don't hold up layout tree construction and script execution on
@@ -284,7 +296,9 @@ LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
       *owner_, critical_style, owner_->IsCreatedByParser());
   PendingSheetType type = type_and_behavior.first;
 
-  AddPendingSheet(type);
+  if (!GetDocument().StatePreservingAtomicMoveInProgress()) {
+    AddPendingSheet(type);
+  }
 
   // Load stylesheets that are not needed for the layout immediately with low
   // priority.  When the link element is created by scripts, load the
@@ -325,7 +339,7 @@ void LinkStyle::Process(LinkLoadParameters::Reason reason) {
       owner_->FastGetAttribute(html_names::kImagesizesAttr),
       owner_->FastGetAttribute(html_names::kBlockingAttr), reason);
 
-  WTF::TextEncoding charset = GetCharset();
+  TextEncoding charset = GetCharset();
 
   if (owner_->RelAttribute().GetIconType() !=
           mojom::blink::FaviconIconType::kInvalid &&
@@ -373,8 +387,10 @@ void LinkStyle::SetSheetTitle(const String& title) {
 }
 
 void LinkStyle::OwnerRemoved() {
-  if (StyleSheetIsLoading())
+  if (StyleSheetIsLoading() &&
+      !GetDocument().StatePreservingAtomicMoveInProgress()) {
     RemovePendingSheet();
+  }
 
   if (sheet_)
     ClearSheet();

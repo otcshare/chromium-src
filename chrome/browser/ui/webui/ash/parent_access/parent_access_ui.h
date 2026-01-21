@@ -18,7 +18,7 @@
 namespace ash {
 
 class ParentAccessUI;
-class ParentAccessUIHandler;
+class ParentAccessUiHandler;
 
 // WebUIConfig for chrome://parent-access
 class ParentAccessUIConfig
@@ -41,18 +41,18 @@ class ParentAccessUI : public ui::MojoWebDialogUI {
 
   static void SetUpForTest(signin::IdentityManager* identity_manager);
 
-  // Instantiates the implementor of the mojom::ParentAccessUIHandler mojo
+  // Instantiates the implementor of the mojom::ParentAccessUiHandler mojo
   // interface passing the pending receiver that will be internally bound.
   void BindInterface(
-      mojo::PendingReceiver<parent_access_ui::mojom::ParentAccessUIHandler>
+      mojo::PendingReceiver<parent_access_ui::mojom::ParentAccessUiHandler>
           receiver);
 
-  parent_access_ui::mojom::ParentAccessUIHandler* GetHandlerForTest();
+  parent_access_ui::mojom::ParentAccessUiHandler* GetHandlerForTest();
 
  private:
   void SetUpResources();
 
-  std::unique_ptr<parent_access_ui::mojom::ParentAccessUIHandler>
+  std::unique_ptr<parent_access_ui::mojom::ParentAccessUiHandler>
       mojo_api_handler_;
 
   static signin::IdentityManager* test_identity_manager_;

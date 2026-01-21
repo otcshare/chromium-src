@@ -5,11 +5,15 @@
 #ifndef CONTENT_BROWSER_NETWORK_TRUST_TOKEN_BROWSERTEST_H_
 #define CONTENT_BROWSER_NETWORK_TRUST_TOKEN_BROWSERTEST_H_
 
+#include <string_view>
+
 #include "base/memory/raw_ref.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/trust_token_access_details.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/content_browser_test.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/test/trust_token_request_handler.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -32,7 +36,8 @@ using network::test::TrustTokenRequestHandler;
 // diamond inheriting from ContentBrowserTest directly, needs to do so
 // virtually. Otherwise DevtoolsTrustTokenBrowsertest would contain multiple
 // copies of ContentBrowserTest's members.
-class TrustTokenBrowsertest : virtual public ContentBrowserTest {
+class TrustTokenBrowsertest : virtual public ContentBrowserTest,
+                              public WebContentsObserver {
  public:
   TrustTokenBrowsertest();
 
@@ -45,12 +50,18 @@ class TrustTokenBrowsertest : virtual public ContentBrowserTest {
   // verification key was previously bound to a successful token redemption.
   void SetUpOnMainThread() override;
 
+  void OnTrustTokensAccessed(RenderFrameHost* render_frame_host,
+                             const TrustTokenAccessDetails& details) override;
+
+  void OnTrustTokensAccessed(NavigationHandle* navigation_handle,
+                             const TrustTokenAccessDetails& details) override;
+
  protected:
   // Provides the network service key commitments from the internal
   // TrustTokenRequestHandler. All hosts in |hosts| will be provided identical
   // commitments.
   void ProvideRequestHandlerKeyCommitmentsToNetworkService(
-      std::vector<base::StringPiece> hosts = {});
+      std::vector<std::string_view> hosts = {});
 
   // Given a host (e.g. "a.test"), returns the corresponding storage origin
   // for Trust Tokens state. (This adds the correct scheme---probably https---as
@@ -65,6 +76,9 @@ class TrustTokenBrowsertest : virtual public ContentBrowserTest {
   TrustTokenRequestHandler request_handler_;
 
   net::EmbeddedTestServer server_{net::EmbeddedTestServer::TYPE_HTTPS};
+
+  // Number of accesses reported by the Trust Token observer.
+  int access_count_ = 0;
 };
 
 }  // namespace content

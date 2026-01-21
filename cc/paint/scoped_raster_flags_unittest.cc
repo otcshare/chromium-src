@@ -5,8 +5,8 @@
 #include "cc/paint/scoped_raster_flags.h"
 
 #include <utility>
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "cc/paint/paint_op.h"
 #include "cc/paint/paint_shader.h"
 #include "cc/test/skia_common.h"
@@ -34,7 +34,7 @@ class MockImageProvider : public ImageProvider {
 
     SkBitmap bitmap;
     bitmap.allocN32Pixels(10, 10);
-    sk_sp<SkImage> image = SkImage::MakeFromBitmap(bitmap);
+    sk_sp<SkImage> image = SkImages::RasterFromBitmap(bitmap);
 
     return ScopedResult(
         DecodedDrawImage(image, nullptr, SkSize::MakeEmpty(),

@@ -6,11 +6,15 @@
 
 #include <utility>
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/modules/nfc/ndef_reader.h"
 #include "third_party/blink/renderer/modules/nfc/nfc_type_converters.h"
+
+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+#include "third_party/blink/renderer/modules/nfc/nfc_parser_ios.h"
+#endif
 
 namespace blink {
 
@@ -30,12 +34,14 @@ NFCProxy* NFCProxy::From(LocalDOMWindow& window) {
 // NFCProxy
 NFCProxy::NFCProxy(LocalDOMWindow& window)
     : Supplement<LocalDOMWindow>(window),
+      nfc_remote_(window.GetExecutionContext()),
       client_receiver_(this, window.GetExecutionContext()) {}
 
 NFCProxy::~NFCProxy() = default;
 
 void NFCProxy::Trace(Visitor* visitor) const {
   visitor->Trace(client_receiver_);
+  visitor->Trace(nfc_remote_);
   visitor->Trace(writers_);
   visitor->Trace(readers_);
   Supplement<LocalDOMWindow>::Trace(visitor);
@@ -47,10 +53,11 @@ void NFCProxy::StartReading(NDEFReader* reader,
   DCHECK(!readers_.Contains(reader));
 
   EnsureMojoConnection();
-  nfc_remote_->Watch(next_watch_id_,
-                     WTF::BindOnce(&NFCProxy::OnReaderRegistered,
-                                   WrapPersistent(this), WrapPersistent(reader),
-                                   next_watch_id_, std::move(callback)));
+  nfc_remote_->Watch(
+      next_watch_id_,
+      blink::BindOnce(&NFCProxy::OnReaderRegistered, WrapPersistent(this),
+                      WrapPersistent(reader), next_watch_id_,
+                      std::move(callback)));
   readers_.insert(reader, next_watch_id_);
   next_watch_id_++;
 }
@@ -88,7 +95,8 @@ void NFCProxy::CancelPush() {
   nfc_remote_->CancelPush();
 }
 
-void NFCProxy::MakeReadOnly(device::mojom::blink::NFC::PushCallback cb) {
+void NFCProxy::MakeReadOnly(
+    device::mojom::blink::NFC::MakeReadOnlyCallback cb) {
   EnsureMojoConnection();
   nfc_remote_->MakeReadOnly(std::move(cb));
 }
@@ -99,10 +107,9 @@ void NFCProxy::CancelMakeReadOnly() {
   nfc_remote_->CancelMakeReadOnly();
 }
 
-// device::mojom::blink::NFCClient implementation.
-void NFCProxy::OnWatch(const Vector<uint32_t>& watch_ids,
-                       const String& serial_number,
-                       device::mojom::blink::NDEFMessagePtr message) {
+void NFCProxy::NotifyWatchers(const Vector<uint32_t>& watch_ids,
+                              const String& serial_number,
+                              device::mojom::blink::NDEFMessagePtr message) {
   // Dispatch the event to all matched readers. We iterate on a copy of
   // |readers_| because a reader's onreading event handler may remove itself
   // from |readers_| just during the iteration process. This loop is O(n^2),
@@ -113,6 +120,25 @@ void NFCProxy::OnWatch(const Vector<uint32_t>& watch_ids,
       pair.key->OnReading(serial_number, *message);
   }
 }
+
+// device::mojom::blink::NFCClient implementation.
+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+void NFCProxy::OnWatch(const Vector<uint32_t>& watch_ids,
+                       device::mojom::blink::NDEFRawMessagePtr message) {
+  auto ndef_message = ParseRawNDEFMessage(std::move(message));
+  if (!ndef_message) {
+    return;
+  }
+
+  NotifyWatchers(watch_ids, String(), std::move(ndef_message));
+}
+#else
+void NFCProxy::OnWatch(const Vector<uint32_t>& watch_ids,
+                       const String& serial_number,
+                       device::mojom::blink::NDEFMessagePtr message) {
+  NotifyWatchers(watch_ids, serial_number, std::move(message));
+}
+#endif  // BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
 
 void NFCProxy::OnError(device::mojom::blink::NDEFErrorPtr error) {
   // Dispatch the event to all readers. We iterate on a copy of |readers_|
@@ -162,8 +188,8 @@ void NFCProxy::EnsureMojoConnection() {
 
   GetSupplementable()->GetBrowserInterfaceBroker().GetInterface(
       nfc_remote_.BindNewPipeAndPassReceiver(task_runner));
-  nfc_remote_.set_disconnect_handler(WTF::BindOnce(
-      &NFCProxy::OnMojoConnectionError, WrapWeakPersistent(this)));
+  nfc_remote_.set_disconnect_handler(
+      BindOnce(&NFCProxy::OnMojoConnectionError, WrapWeakPersistent(this)));
 
   // Set client for OnWatch event.
   nfc_remote_->SetClient(

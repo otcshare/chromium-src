@@ -1,16 +1,15 @@
 #include <zxcvbn/util.hpp>
 
 #include <algorithm>
-#include <codecvt>
-#include <locale>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <cassert>
 
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversion_utils.h"
+#include "base/strings/utf_string_conversions.h"
 
 namespace zxcvbn {
 
@@ -18,7 +17,7 @@ namespace util {
 
 bool utf8_valid(std::string::const_iterator start,
                 std::string::const_iterator end) {
-  return base::IsStringUTF8(base::MakeStringPiece(start, end));
+  return base::IsStringUTF8(std::string_view(start, end));
 }
 
 bool utf8_valid(const std::string & str) {
@@ -33,10 +32,9 @@ std::string reverse_string(const std::string & in) {
   if (!utf8_valid(in))
     return std::string(in.rbegin(), in.rend());
 
-  std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
-  auto ret = conv.from_bytes(in);
+  std::wstring ret = base::UTF8ToWide(in);
   std::reverse(ret.begin(), ret.end());
-  return conv.to_bytes(ret);
+  return base::WideToUTF8(ret);
 }
 
 template<class It>

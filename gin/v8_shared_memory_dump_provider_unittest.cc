@@ -19,7 +19,7 @@ TEST_F(V8SharedMemoryDumpProviderTest, DumpStatistics) {
   V8SharedMemoryDumpProvider provider;
 
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::DETAILED};
+      base::trace_event::MemoryDumpLevelOfDetail::kDetailed};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   provider.OnMemoryDump(dump_args, process_memory_dump.get());
@@ -30,10 +30,10 @@ TEST_F(V8SharedMemoryDumpProviderTest, DumpStatistics) {
   bool did_dump_read_only_space = false;
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("v8/shared") != std::string::npos) {
+    if (name.contains("v8/shared")) {
       did_dump_shared_memory_stats = true;
     }
-    if (name.find("v8/shared/read_only_space") != std::string::npos) {
+    if (name.contains("v8/shared/read_only_space")) {
       did_dump_read_only_space = true;
     }
   }

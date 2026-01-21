@@ -7,6 +7,7 @@
 
 #include <list>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -21,7 +22,6 @@
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/registry.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/tracing_observer.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace memory_instrumentation {
 
@@ -54,7 +54,7 @@ class CoordinatorImpl : public Registry,
       mojo::PendingRemote<mojom::ClientProcess> client_process,
       mojom::ProcessType process_type,
       base::ProcessId process_id,
-      const absl::optional<std::string>& service_name) override;
+      const std::optional<std::string>& service_name) override;
 
   // mojom::Coordinator implementation.
   void RequestGlobalMemoryDump(
@@ -84,8 +84,8 @@ class CoordinatorImpl : public Registry,
 
  private:
   using OSMemDumpMap = base::flat_map<base::ProcessId, mojom::RawOSMemDumpPtr>;
-  using RequestGlobalMemoryDumpInternalCallback =
-      base::OnceCallback<void(bool, uint64_t, mojom::GlobalMemoryDumpPtr)>;
+  using RequestGlobalMemoryDumpInternalCallback = base::OnceCallback<
+      void(mojom::RequestOutcome, uint64_t, mojom::GlobalMemoryDumpPtr)>;
   friend class CoordinatorImplTest;  // For testing
   FRIEND_TEST_ALL_PREFIXES(CoordinatorImplTest,
                            DumpsAreAddedToTraceWhenRequested);
@@ -96,12 +96,12 @@ class CoordinatorImpl : public Registry,
   struct ClientInfo {
     ClientInfo(mojo::Remote<mojom::ClientProcess> client,
                mojom::ProcessType,
-               absl::optional<std::string> service_name);
+               std::optional<std::string> service_name);
     ~ClientInfo();
 
     const mojo::Remote<mojom::ClientProcess> client;
     const mojom::ProcessType process_type;
-    const absl::optional<std::string> service_name;
+    const std::optional<std::string> service_name;
   };
 
   void UnregisterClientProcess(base::ProcessId);
@@ -113,20 +113,20 @@ class CoordinatorImpl : public Registry,
   // Callback of RequestChromeMemoryDump.
   void OnChromeMemoryDumpResponse(
       base::ProcessId process_id,
-      bool success,
+      mojom::RequestOutcome outcome,
       uint64_t dump_guid,
       std::unique_ptr<base::trace_event::ProcessMemoryDump> chrome_memory_dump);
 
   // Callback of RequestOSMemoryDump.
   void OnOSMemoryDumpResponse(uint64_t dump_guid,
                               base::ProcessId process_id,
-                              bool success,
+                              mojom::RequestOutcome outcome,
                               OSMemDumpMap);
 
   // Callback of RequestOSMemoryDumpForVmRegions.
   void OnOSMemoryDumpForVMRegions(uint64_t dump_guid,
                                   base::ProcessId process_id,
-                                  bool success,
+                                  mojom::RequestOutcome outcome,
                                   OSMemDumpMap);
 
   void FinalizeVmRegionDumpIfAllManagersReplied(uint64_t dump_guid);
@@ -182,7 +182,6 @@ class CoordinatorImpl : public Registry,
 
   // Dump IDs are unique across both heap dump and memory dump requests.
   uint64_t next_dump_id_;
-  std::unique_ptr<TracingObserver> tracing_observer_;
 
   // Timeout for registered client processes to respond to dump requests.
   base::TimeDelta client_process_timeout_;
@@ -192,7 +191,6 @@ class CoordinatorImpl : public Registry,
   mojo::Receiver<mojom::HeapProfilerHelper> heap_profiler_helper_receiver_{
       this};
 
-  const bool use_proto_writer_;
   const bool write_proto_heap_profile_;
 
   THREAD_CHECKER(thread_checker_);

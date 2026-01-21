@@ -10,17 +10,19 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "components/payments/content/android/jni_headers/ErrorMessageUtil_jni.h"
 #include "components/payments/core/error_message_util.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/jni_headers/ErrorMessageUtil_jni.h"
 
 namespace payments {
 namespace android {
 
 // static
-base::android::ScopedJavaLocalRef<jstring>
+static base::android::ScopedJavaLocalRef<jstring>
 JNI_ErrorMessageUtil_GetNotSupportedErrorMessage(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobjectArray>& jmethods) {
+    const base::android::JavaRef<jobjectArray>& jmethods) {
   std::vector<std::string> method_vector;
   base::android::AppendJavaStringArrayToStringVector(env, jmethods,
                                                      &method_vector);
@@ -31,3 +33,5 @@ JNI_ErrorMessageUtil_GetNotSupportedErrorMessage(
 
 }  // namespace android
 }  // namespace payments
+
+DEFINE_JNI(ErrorMessageUtil)

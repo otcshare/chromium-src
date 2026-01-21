@@ -6,19 +6,20 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/android/media_codec_bridge_impl.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/limits.h"
 #include "media/base/timestamp_constants.h"
 
@@ -76,10 +77,10 @@ void CodecAllocator::CreateMediaCodecAsync(
   if (!task_runner_->RunsTasksInCurrentSequence()) {
     task_runner_->PostTask(
         FROM_HERE,
-        base::BindOnce(&CodecAllocator::CreateMediaCodecAsync,
-                       base::Unretained(this),
-                       BindToCurrentLoop(std::move(codec_created_cb)),
-                       std::move(codec_config)));
+        base::BindOnce(
+            &CodecAllocator::CreateMediaCodecAsync, base::Unretained(this),
+            base::BindPostTaskToCurrentDefault(std::move(codec_created_cb)),
+            std::move(codec_config)));
     return;
   }
 
@@ -130,10 +131,10 @@ void CodecAllocator::ReleaseMediaCodec(std::unique_ptr<MediaCodecBridge> codec,
 
   if (!task_runner_->RunsTasksInCurrentSequence()) {
     task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&CodecAllocator::ReleaseMediaCodec,
-                       base::Unretained(this), std::move(codec),
-                       BindToCurrentLoop(std::move(codec_released_cb))));
+        FROM_HERE, base::BindOnce(&CodecAllocator::ReleaseMediaCodec,
+                                  base::Unretained(this), std::move(codec),
+                                  base::BindPostTaskToCurrentDefault(
+                                      std::move(codec_released_cb))));
     return;
   }
 
@@ -216,8 +217,7 @@ base::SequencedTaskRunner* CodecAllocator::SelectCodecTaskRunner() {
 void CodecAllocator::CompletePendingOperation(base::TimeTicks start_time) {
   // Note: This intentionally only erases the first instance, since there may be
   // multiple instances of the same value.
-  pending_operations_.erase(
-      base::ranges::find(pending_operations_, start_time));
+  pending_operations_.erase(std::ranges::find(pending_operations_, start_time));
 }
 
 }  // namespace media

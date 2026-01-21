@@ -54,12 +54,9 @@ TEST(DownloadStatsTest, RecordDownloadOpen) {
       /*sample=*/DOWNLOAD_OPEN_METHOD_DEFAULT_BROWSER,
       /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
-      "Download.OpenMethod.PDF",
-      /*sample=*/DOWNLOAD_OPEN_METHOD_DEFAULT_BROWSER,
+      "Download.Open.ContentType",
+      /*sample=*/download::DownloadContent::kPdf,
       /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample("Download.Open.ContentType",
-                                      /*sample=*/download::DownloadContent::PDF,
-                                      /*expected_bucket_count=*/1);
 }
 
 }  // namespace

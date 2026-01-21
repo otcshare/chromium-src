@@ -88,7 +88,7 @@ class ImmersiveFocusWatcher::BubbleObserver : public aura::WindowObserver {
 
   raw_ptr<ImmersiveFullscreenController> controller_;
 
-  std::set<aura::Window*> bubbles_;
+  std::set<raw_ptr<aura::Window, SetExperimental>> bubbles_;
 
   // Lock which keeps the top-of-window views revealed based on whether any of
   // |bubbles_| is visible.
@@ -185,13 +185,11 @@ ImmersiveFocusWatcher::~ImmersiveFocusWatcher() {
 
 void ImmersiveFocusWatcher::UpdateFocusRevealedLock() {
   views::Widget* widget = GetWidget();
-  views::View* top_container =
-      immersive_fullscreen_controller_->top_container();
-  bool hold_lock = false;
+  bool should_acquire_lock = false;
   if (widget->IsActive()) {
     views::View* focused_view = widget->GetFocusManager()->GetFocusedView();
-    if (top_container->Contains(focused_view))
-      hold_lock = true;
+    should_acquire_lock =
+        immersive_fullscreen_controller_->ShouldRevealTopChrome(focused_view);
   } else {
     aura::Window* native_window = GetWidgetWindow();
     aura::Window* active_window =
@@ -216,12 +214,12 @@ void ImmersiveFocusWatcher::UpdateFocusRevealedLock() {
       // reactivated.
       if (immersive_fullscreen_controller_->IsRevealed() &&
           IsWindowTransientChildOf(active_window, native_window)) {
-        hold_lock = true;
+        should_acquire_lock = true;
       }
     }
   }
 
-  if (hold_lock) {
+  if (should_acquire_lock) {
     if (!lock_.get()) {
       lock_.reset(immersive_fullscreen_controller_->GetRevealedLock(
           ImmersiveFullscreenController::ANIMATE_REVEAL_YES));
@@ -246,21 +244,19 @@ aura::Window* ImmersiveFocusWatcher::GetWidgetWindow() {
 void ImmersiveFocusWatcher::RecreateBubbleObserver() {
   bubble_observer_ =
       std::make_unique<BubbleObserver>(immersive_fullscreen_controller_);
-  const std::vector<aura::Window*> transient_children =
-      aura::client::GetTransientWindowClient()->GetTransientChildren(
-          GetWidgetWindow());
-  for (size_t i = 0; i < transient_children.size(); ++i) {
-    aura::Window* transient_child = transient_children[i];
+  const std::vector<raw_ptr<aura::Window, VectorExperimental>>
+      transient_children =
+          aura::client::GetTransientWindowClient()->GetTransientChildren(
+              GetWidgetWindow());
+  for (const auto& transient_child : transient_children) {
     views::View* anchor_view = GetAnchorView(transient_child);
     if (anchor_view &&
         immersive_fullscreen_controller_->top_container()->Contains(
-            anchor_view))
+            anchor_view)) {
       bubble_observer_->StartObserving(transient_child);
+    }
   }
 }
-
-void ImmersiveFocusWatcher::OnWillChangeFocus(views::View* focused_before,
-                                              views::View* focused_now) {}
 
 void ImmersiveFocusWatcher::OnDidChangeFocus(views::View* focused_before,
                                              views::View* focused_now) {
@@ -278,8 +274,9 @@ void ImmersiveFocusWatcher::OnTransientChildWindowAdded(
     aura::Window* window,
     aura::Window* transient) {
   views::View* anchor = GetAnchorView(transient);
+
   if (anchor &&
-      immersive_fullscreen_controller_->top_container()->Contains(anchor)) {
+      immersive_fullscreen_controller_->ShouldRevealTopChrome(anchor)) {
     // Observe the aura::Window because the BubbleDelegateView may not be
     // parented to the widget's root view yet so |bubble_delegate->GetWidget()|
     // may still return null.

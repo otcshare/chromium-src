@@ -4,12 +4,12 @@
 
 #include "chromecast/browser/cast_web_service.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -35,8 +35,7 @@ uint32_t remove_data_mask =
     content::StoragePartition::REMOVE_DATA_MASK_COOKIES |
     content::StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
     content::StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
-    content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE |
-    content::StoragePartition::REMOVE_DATA_MASK_WEBSQL;
+    content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE;
 
 }  // namespace
 
@@ -94,34 +93,32 @@ void CastWebService::CreateWebView(
 }
 
 void CastWebService::FlushDomLocalStorage() {
-  browser_context_->ForEachStoragePartition(
-      base::BindRepeating([](content::StoragePartition* storage_partition) {
-        DVLOG(1) << "Starting DOM localStorage flush.";
-        storage_partition->Flush();
-      }));
+  browser_context_->ForEachLoadedStoragePartition(
+      &content::StoragePartition::Flush);
 }
 
 void CastWebService::ClearLocalStorage(ClearLocalStorageCallback callback) {
-  browser_context_->ForEachStoragePartition(
-      base::BindRepeating(
-          [](base::OnceClosure cb, content::StoragePartition* partition) {
-            auto cookie_delete_filter =
-                network::mojom::CookieDeletionFilter::New();
-            cookie_delete_filter->session_control =
-                network::mojom::CookieDeletionSessionControl::IGNORE_CONTROL;
-            partition->ClearData(
-                remove_data_mask,
-                content::StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
-                /*filter_builder=*/nullptr,
-                content::StoragePartition::StorageKeyPolicyMatcherFunction(),
-                std::move(cookie_delete_filter), /*perform_cleanup=*/true,
-                base::Time::Min(), base::Time::Max(), std::move(cb));
-          },
-          base::Passed(std::move(callback))));
+  // TODO(crbug.com/40944952): Only the first StoragePartition gets a
+  // non-null `callback`; the subsequent ones all get a null callback, so this
+  // only ends up waiting for the first storage partition beofre invoking the
+  // reply callback.
+  browser_context_->ForEachLoadedStoragePartition(
+      [&](content::StoragePartition* partition) {
+        auto cookie_delete_filter = network::mojom::CookieDeletionFilter::New();
+        cookie_delete_filter->session_control =
+            network::mojom::CookieDeletionSessionControl::IGNORE_CONTROL;
+        partition->ClearData(
+            remove_data_mask,
+            content::StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
+            /*filter_builder=*/nullptr,
+            content::StoragePartition::StorageKeyPolicyMatcherFunction(),
+            std::move(cookie_delete_filter), /*perform_cleanup=*/true,
+            base::Time::Min(), base::Time::Max(), std::move(callback));
+      });
 }
 
 bool CastWebService::IsCastWebUIOrigin(const url::Origin& origin) {
-  return base::Contains(cast_webui_hosts_, origin.host());
+  return std::ranges::contains(cast_webui_hosts_, origin.host());
 }
 
 void CastWebService::RegisterWebUiClient(
@@ -151,7 +148,8 @@ void CastWebService::OwnerDestroyed(CastWebView* web_view) {
     content::MediaSession::Get(web_contents)
         ->Suspend(content::MediaSession::SuspendType::kSystem);
   }
-  if (!base::Contains(web_views_, web_view, &std::unique_ptr<CastWebView>::get))
+  if (!std::ranges::contains(web_views_, web_view,
+                             &std::unique_ptr<CastWebView>::get))
     web_views_.emplace(web_view);
   auto delay = web_view->shutdown_delay();
   if (delay <= base::TimeDelta() || immediately_delete_webviews_) {

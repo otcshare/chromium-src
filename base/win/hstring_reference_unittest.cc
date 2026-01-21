@@ -5,8 +5,8 @@
 #include "base/win/hstring_reference.h"
 
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
 #include "base/win/scoped_hstring.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -19,16 +19,13 @@ constexpr wchar_t kEmptyString[] = L"";
 
 void VerifyHSTRINGEquals(HSTRING hstring, const wchar_t* test_string) {
   const ScopedHString scoped_hstring(hstring);
-  const WStringPiece hstring_contents = scoped_hstring.Get();
+  const std::wstring_view hstring_contents = scoped_hstring.Get();
   EXPECT_EQ(hstring_contents.compare(test_string), 0);
 }
 
 }  // namespace
 
 TEST(HStringReferenceTest, Init) {
-  EXPECT_TRUE(HStringReference::ResolveCoreWinRTStringDelayload());
-  EXPECT_TRUE(ScopedHString::ResolveCoreWinRTStringDelayload());
-
   const HStringReference string(kTestString);
   EXPECT_NE(string.Get(), nullptr);
   VerifyHSTRINGEquals(string.Get(), kTestString);
@@ -38,8 +35,8 @@ TEST(HStringReferenceTest, Init) {
   EXPECT_EQ(empty_string.Get(), nullptr);
   VerifyHSTRINGEquals(empty_string.Get(), kEmptyString);
 
-  // Passing a zero length and null string should also return a null HSTRING.
-  const HStringReference null_string(nullptr, 0);
+  // Passing a null string should also return a null HSTRING.
+  const HStringReference null_string(nullptr);
   EXPECT_EQ(null_string.Get(), nullptr);
   VerifyHSTRINGEquals(null_string.Get(), kEmptyString);
 }

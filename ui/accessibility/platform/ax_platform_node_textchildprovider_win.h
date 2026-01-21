@@ -9,21 +9,24 @@
 
 #include "base/component_export.h"
 #include "ui/accessibility/platform/ax_platform_node_win.h"
+#include "ui/accessibility/platform/sequence_affine_com_object_root_win.h"
 
 namespace ui {
 class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNodeTextChildProviderWin
-    : public CComObjectRootEx<CComMultiThreadModel>,
-      public ITextChildProvider {
+    : public SequenceAffineComObjectRoot,
+      public ITextChildProvider,
+      public IFastRundown {
  public:
   BEGIN_COM_MAP(AXPlatformNodeTextChildProviderWin)
   COM_INTERFACE_ENTRY(ITextChildProvider)
+  COM_INTERFACE_ENTRY(IFastRundown)
   END_COM_MAP()
 
   AXPlatformNodeTextChildProviderWin();
   ~AXPlatformNodeTextChildProviderWin();
 
-  static AXPlatformNodeTextChildProviderWin* Create(
-      ui::AXPlatformNodeWin* owner);
+  static Microsoft::WRL::ComPtr<AXPlatformNodeTextChildProviderWin> Create(
+      AXPlatformNodeWin* owner);
   static void CreateIUnknown(AXPlatformNodeWin* owner, IUnknown** unknown);
 
   // Retrieves this element's nearest ancestor provider that supports the Text

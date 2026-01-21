@@ -10,7 +10,8 @@
  */
 
 
-import {CategoryEnum, SubcategoryData} from './types.js';
+import type {CategoryData, GifSubcategoryData, SubcategoryData} from './types.js';
+import {CategoryEnum} from './types.js';
 
 const RECENTLY_USED_NAME = 'Recently used';
 
@@ -67,11 +68,10 @@ function makeGroupTabs(
   return groupTabs;
 }
 
-export const CATEGORY_METADATA:
-    Array<{name: CategoryEnum, icon: string, active: boolean}> = [
+export const CATEGORY_METADATA: CategoryData[] = [
       {
         name: CategoryEnum.EMOJI,
-        icon: 'emoji_picker_v2:emoji_emojis',
+        icon: 'emoji_picker_v2:emoji_emojis_outlined',
         active: true,
       },
       {
@@ -86,8 +86,7 @@ export const CATEGORY_METADATA:
       },
     ];
 
-export const GIF_CATEGORY_METADATA:
-    Array<{name: CategoryEnum, icon: string, active: boolean}> = [
+export const GIF_CATEGORY_METADATA: CategoryData[] = [
       ...CATEGORY_METADATA,
       {
         name: CategoryEnum.GIF,
@@ -96,11 +95,11 @@ export const GIF_CATEGORY_METADATA:
       },
     ];
 
-const CATEGORY_TABS = {
+export const CATEGORY_TABS = {
   'emoji': [
     {
       name: 'Smileys & Emotions',
-      icon: 'emoji_picker_v2:emoji_emojis',
+      icon: 'emoji_picker_v2:emoji_emojis_filled',
       pagination: 1,
     },
     {
@@ -173,10 +172,26 @@ export const SUBCATEGORY_TABS = makeGroupTabs(
     CATEGORY_TABS,
 );
 
+const SUBCATEGORY_TABS_GIF_SUPPORT = makeGroupTabs(
+    GIF_CATEGORY_METADATA.map(item => item.name),
+    CATEGORY_TABS,
+);
+
+export const gifCategoryTabs =
+    (categories: Record<string, GifSubcategoryData[]>) => makeGroupTabs(
+        GIF_CATEGORY_METADATA.map(item => item.name),
+        categories,
+    );
+
 // A mapping from each category to the index of their first tab.
 export const TABS_CATEGORY_START_INDEX: Map<CategoryEnum, number> = new Map(
     SUBCATEGORY_TABS.map((item, index) => [item.category, index] as const)
         .reverse());
+
+export const TABS_CATEGORY_START_INDEX_GIF_SUPPORT: Map<CategoryEnum, number> =
+    new Map(SUBCATEGORY_TABS_GIF_SUPPORT
+                .map((item, index) => [item.category, index] as const)
+                .reverse());
 
 export const EMOJI_GROUP_TABS =
     makeGroupTabs([CategoryEnum.EMOJI], CATEGORY_TABS);

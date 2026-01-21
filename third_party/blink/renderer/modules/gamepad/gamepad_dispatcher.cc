@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <utility>
-
 #include "third_party/blink/renderer/modules/gamepad/gamepad_dispatcher.h"
 
+#include <utility>
+
 #include "device/gamepad/public/cpp/gamepads.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/gamepad/gamepad_shared_memory_reader.h"
 #include "third_party/blink/renderer/modules/gamepad/navigator_gamepad.h"
@@ -73,9 +73,13 @@ void GamepadDispatcher::DidDisconnectGamepad(uint32_t index,
   DispatchDidConnectOrDisconnectGamepad(index, gamepad, false);
 }
 
-void GamepadDispatcher::ButtonOrAxisDidChange(uint32_t index,
-                                              const device::Gamepad& gamepad) {
-  DCHECK_LT(index, device::Gamepads::kItemsLengthCap);
+void GamepadDispatcher::DidChangeGamepadRawInput(
+    uint32_t index,
+    const device::Gamepad& gamepad) {
+  CHECK_LT(index, device::Gamepads::kItemsLengthCap);
+  CHECK_EQ(true, gamepad.connected);
+  // TODO(https://crbug.com/438906421): Queue gamepad input changes in the
+  // renderer.
   NotifyControllers();
 }
 

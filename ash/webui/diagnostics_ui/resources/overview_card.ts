@@ -5,11 +5,12 @@
 import './diagnostics_shared.css.js';
 
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
+import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getSystemDataProvider} from './mojo_interface_provider.js';
 import {getTemplate} from './overview_card.html.js';
-import {SystemDataProviderInterface, SystemInfo} from './system_data_provider.mojom-webui.js';
+import type {SystemDataProviderInterface, SystemInfo} from './system_data_provider.mojom-webui.js';
 
 /**
  * @fileoverview
@@ -18,55 +19,55 @@ import {SystemDataProviderInterface, SystemInfo} from './system_data_provider.mo
  */
 
 export class OverviewCardElement extends PolymerElement {
-  static get is() {
-    return 'overview-card';
+  static get is(): 'overview-card' {
+    return 'overview-card' as const;
   }
 
-  static get template() {
+  static get template(): HTMLTemplateElement {
     return getTemplate();
   }
 
-  static get properties() {
+  static get properties(): PolymerElementProperties {
     return {
-      systemInfo_: {
+      systemInfo: {
         type: Object,
       },
 
-      deviceInfo_: {
+      deviceInfo: {
         type: String,
         value: '',
-        computed: 'getDeviceInfo_(systemInfo_.versionInfo.fullVersionString,' +
-            'systemInfo_.boardName)',
+        computed: 'getDeviceInfo(systemInfo.versionInfo.fullVersionString,' +
+            'systemInfo.boardName)',
       },
 
     };
   }
 
-  private systemInfo_: SystemInfo;
-  private deviceInfo_: string;
-  private systemDataProvider_: SystemDataProviderInterface =
+  private systemInfo: SystemInfo;
+  private deviceInfo: string;
+  private systemDataProvider: SystemDataProviderInterface =
       getSystemDataProvider();
 
   constructor() {
     super();
-    this.fetchSystemInfo_();
+    this.fetchSystemInfo();
   }
 
-  private fetchSystemInfo_(): void {
-    this.systemDataProvider_.getSystemInfo().then(
+  private fetchSystemInfo(): void {
+    this.systemDataProvider.getSystemInfo().then(
         (result: {systemInfo: SystemInfo}) => {
-          this.onSystemInfoReceived_(result.systemInfo);
+          this.onSystemInfoReceived(result.systemInfo);
         });
   }
 
-  private onSystemInfoReceived_(systemInfo: SystemInfo): void {
-    this.systemInfo_ = systemInfo;
+  private onSystemInfoReceived(systemInfo: SystemInfo): void {
+    this.systemInfo = systemInfo;
   }
 
-  private getDeviceInfo_(): string {
-    const marketingNameValid = !this.shouldHideMarketingName_();
-    const boardName = this.systemInfo_.boardName;
-    const version = this.systemInfo_.versionInfo.fullVersionString;
+  private getDeviceInfo(): string {
+    const marketingNameValid = !this.shouldHideMarketingName();
+    const boardName = this.systemInfo.boardName;
+    const version = this.systemInfo.versionInfo.fullVersionString;
 
     if (!boardName && !marketingNameValid) {
       const versionInfo = loadTimeData.getStringF('versionInfo', version);
@@ -74,22 +75,22 @@ export class OverviewCardElement extends PolymerElement {
       return versionInfo[0].toUpperCase() + versionInfo.slice(1);
     }
 
-    const deviceInfo = this.systemInfo_.boardName ?
+    const deviceInfo = this.systemInfo.boardName ?
         loadTimeData.getStringF(
-            'boardAndVersionInfo', this.systemInfo_.boardName, version) :
+            'boardAndVersionInfo', this.systemInfo.boardName, version) :
         loadTimeData.getStringF('versionInfo', version);
     return marketingNameValid ? `(${deviceInfo})` : deviceInfo;
   }
 
-  protected shouldHideMarketingName_(): boolean {
-    return this.systemInfo_.marketingName === 'TBD' ||
-        this.systemInfo_.marketingName === '';
+  protected shouldHideMarketingName(): boolean {
+    return this.systemInfo.marketingName === 'TBD' ||
+        this.systemInfo.marketingName === '';
   }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'overview-card': OverviewCardElement;
+    [OverviewCardElement.is]: OverviewCardElement;
   }
 }
 

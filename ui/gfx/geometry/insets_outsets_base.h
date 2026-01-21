@@ -6,9 +6,10 @@
 #define UI_GFX_GEOMETRY_INSETS_OUTSETS_BASE_H_
 
 #include <string>
+#include <utility>
 
+#include "base/component_export.h"
 #include "base/numerics/clamped_math.h"
-#include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace gfx {
@@ -46,6 +47,13 @@ class InsetsOutsetsBase {
 
   // Returns true if the insets/outsets are empty.
   bool IsEmpty() const { return width() == 0 && height() == 0; }
+
+  // Flips x- and y-axes.
+  void Transpose() {
+    using std::swap;
+    swap(top_, left_);
+    swap(bottom_, right_);
+  }
 
   // These setters can be used together with the default constructor and the
   // single-parameter constructor to construct Insets instances, for example:
@@ -107,14 +115,8 @@ class InsetsOutsetsBase {
     right_ = std::max(right_, other.right_);
   }
 
-  bool operator==(const InsetsOutsetsBase<T>& other) const {
-    return top_ == other.top_ && left_ == other.left_ &&
-           bottom_ == other.bottom_ && right_ == other.right_;
-  }
-
-  bool operator!=(const InsetsOutsetsBase<T>& other) const {
-    return !(*this == other);
-  }
+  friend bool operator==(const InsetsOutsetsBase<T>&,
+                         const InsetsOutsetsBase<T>&) = default;
 
   void operator+=(const T& other) {
     top_ = base::ClampAdd(top_, other.top_);
@@ -132,16 +134,14 @@ class InsetsOutsetsBase {
 
   T operator-() const {
     return T()
-        .set_left_right(-base::MakeClampedNum(left_),
-                        -base::MakeClampedNum(right_))
-        .set_top_bottom(-base::MakeClampedNum(top_),
-                        -base::MakeClampedNum(bottom_));
+        .set_left_right(-base::ClampedNumeric(left_),
+                        -base::ClampedNumeric(right_))
+        .set_top_bottom(-base::ClampedNumeric(top_),
+                        -base::ClampedNumeric(bottom_));
   }
 
   // Returns a string representation of the insets/outsets.
-  std::string ToString() const {
-    return base::StringPrintf("x:%d,%d y:%d,%d", left_, right_, top_, bottom_);
-  }
+  COMPONENT_EXPORT(GEOMETRY) std::string ToString() const;
 
  private:
   // Clamp the bottom/right to avoid integer over/underflow in width() and

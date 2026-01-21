@@ -6,15 +6,18 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
+#include "base/uuid.h"
 #include "net/base/io_buffer.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "storage/browser/blob/blob_reader.h"
@@ -57,8 +60,10 @@ base::WeakPtr<storage::BlobStorageContext> BlobStorageContextGetter(
 
 class MockDelegate : public InMemoryDownload::Delegate {
  public:
-  MockDelegate(BlobContextGetter blob_context_getter)
-      : blob_context_getter_(blob_context_getter) {}
+  MockDelegate(BlobContextGetter blob_context_getter,
+               network::TestURLLoaderFactory* url_loader_factory)
+      : blob_context_getter_(blob_context_getter),
+        url_loader_factory_(url_loader_factory) {}
 
   MockDelegate(const MockDelegate&) = delete;
   MockDelegate& operator=(const MockDelegate&) = delete;
@@ -80,10 +85,17 @@ class MockDelegate : public InMemoryDownload::Delegate {
       base::OnceCallback<void(BlobContextGetter)> callback) override {
     std::move(callback).Run(blob_context_getter_);
   }
+  void RetrievedURLLoaderFactory(
+      URLLoaderFactoryGetterCallback callback) override {
+    std::move(callback).Run(
+        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+            url_loader_factory_));
+  }
 
  private:
   base::RunLoop run_loop_;
   BlobContextGetter blob_context_getter_;
+  network::TestURLLoaderFactory* url_loader_factory_;
 };
 
 class InMemoryDownloadTest : public testing::Test {
@@ -111,8 +123,8 @@ class InMemoryDownloadTest : public testing::Test {
 
     auto blob_storage_context_getter = base::BindRepeating(
         &BlobStorageContextGetter, blob_storage_context_.get());
-    mock_delegate_ =
-        std::make_unique<NiceMock<MockDelegate>>(blob_storage_context_getter);
+    mock_delegate_ = std::make_unique<NiceMock<MockDelegate>>(
+        blob_storage_context_getter, &url_loader_factory_);
   }
 
   void TearDown() override {
@@ -125,8 +137,8 @@ class InMemoryDownloadTest : public testing::Test {
   // Helper method to create a download with request_params.
   void CreateDownload(const RequestParams& request_params) {
     download_ = std::make_unique<InMemoryDownloadImpl>(
-        base::GenerateGUID(), request_params, /* request_body= */ nullptr,
-        TRAFFIC_ANNOTATION_FOR_TESTS, delegate(), &url_loader_factory_,
+        base::Uuid::GenerateRandomV4().AsLowercaseString(), request_params,
+        /* request_body= */ nullptr, TRAFFIC_ANNOTATION_FOR_TESTS, delegate(),
         io_thread_->task_runner());
   }
 
@@ -155,8 +167,7 @@ class InMemoryDownloadTest : public testing::Test {
     DCHECK(blob);
     int bytes_read = 0;
     int async_bytes_read = 0;
-    scoped_refptr<net::IOBuffer> buffer =
-        base::MakeRefCounted<net::IOBuffer>(expected.size());
+    auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(expected.size());
 
     auto blob_reader = blob->CreateReader();
 
@@ -172,7 +183,7 @@ class InMemoryDownloadTest : public testing::Test {
     EXPECT_EQ(bytes_read, static_cast<int>(expected.size()));
     EXPECT_EQ(async_bytes_read, 0);
     for (size_t i = 0; i < expected.size(); i++) {
-      EXPECT_EQ(expected[i], buffer->data()[i]);
+      UNSAFE_TODO(EXPECT_EQ(expected[i], buffer->data()[i]));
     }
   }
 

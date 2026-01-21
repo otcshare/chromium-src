@@ -50,6 +50,7 @@ proto::SchedulerClientType ToSchedulerClientType(SchedulerClientType type) {
     case SchedulerClientType::kTest3:
       return proto::SchedulerClientType::TEST_3;
     case SchedulerClientType::kUnknown:
+    case SchedulerClientType::kDeprecatedFeatureGuide:
       return proto::SchedulerClientType::UNKNOWN;
     case SchedulerClientType::kWebUI:
       return proto::SchedulerClientType::WEBUI;
@@ -59,8 +60,8 @@ proto::SchedulerClientType ToSchedulerClientType(SchedulerClientType type) {
       return proto::SchedulerClientType::PREFETCH;
     case SchedulerClientType::kReadingList:
       return proto::SchedulerClientType::READING_LIST;
-    case SchedulerClientType::kFeatureGuide:
-      return proto::SchedulerClientType::FEATURE_GUIDE;
+    case SchedulerClientType::kTips:
+      return proto::SchedulerClientType::TIPS;
   }
   NOTREACHED();
 }
@@ -85,8 +86,8 @@ SchedulerClientType FromSchedulerClientType(
       return SchedulerClientType::kPrefetch;
     case proto::SchedulerClientType::READING_LIST:
       return SchedulerClientType::kReadingList;
-    case proto::SchedulerClientType::FEATURE_GUIDE:
-      return SchedulerClientType::kFeatureGuide;
+    case proto::SchedulerClientType::TIPS:
+      return SchedulerClientType::kTips;
   }
   NOTREACHED();
 }

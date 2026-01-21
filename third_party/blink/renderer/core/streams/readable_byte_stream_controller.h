@@ -5,10 +5,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STREAMS_READABLE_BYTE_STREAM_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STREAMS_READABLE_BYTE_STREAM_CONTROLLER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/streams/readable_stream_byob_reader.h"
 #include "third_party/blink/renderer/core/streams/readable_stream_controller.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -23,10 +23,11 @@ class DOMArrayBufferView;
 class ExceptionState;
 class ReadableStream;
 class ReadableStreamBYOBRequest;
+class ReadIntoRequest;
+class ReadRequest;
 class ScriptState;
 class StreamAlgorithm;
 class StreamStartAlgorithm;
-class StreamPromiseResolver;
 class UnderlyingSource;
 
 class CORE_EXPORT ReadableByteStreamController
@@ -39,11 +40,15 @@ class CORE_EXPORT ReadableByteStreamController
   // https://streams.spec.whatwg.org/#rbs-controller-byob-request
   ReadableStreamBYOBRequest* byobRequest();
 
+  // https://streams.spec.whatwg.org/#abstract-opdef-readablebytestreamcontrollergetbyobrequest
+  static ReadableStreamBYOBRequest* GetBYOBRequest(
+      ReadableByteStreamController*);
+
   // https://streams.spec.whatwg.org/#rbs-controller-desired-size
-  absl::optional<double> desiredSize();
+  std::optional<double> desiredSize();
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-get-desired-size
-  static absl::optional<double> GetDesiredSize(ReadableByteStreamController*);
+  static std::optional<double> GetDesiredSize(ReadableByteStreamController*);
 
   // https://streams.spec.whatwg.org/#rbs-controller-close
   void close(ScriptState*, ExceptionState&);
@@ -63,6 +68,9 @@ class CORE_EXPORT ReadableByteStreamController
   void Trace(Visitor*) const override;
 
  private:
+  friend class BodyStreamBuffer;
+  friend class BodyStreamBufferUnderlyingByteSource;
+  friend class ByteStreamTeeEngine;
   friend class ReadableStream;
   friend class ReadableStreamBYOBReader;
   friend class ReadableStreamBYOBRequest;
@@ -97,6 +105,7 @@ class CORE_EXPORT ReadableByteStreamController
                                 size_t byte_offset,
                                 size_t byte_length,
                                 size_t bytes_filled,
+                                uint64_t minimum_fill,
                                 size_t element_size,
                                 ViewConstructorType view_constructor,
                                 ReaderType reader_type);
@@ -106,6 +115,7 @@ class CORE_EXPORT ReadableByteStreamController
     size_t byte_offset;
     const size_t byte_length;
     size_t bytes_filled;
+    const uint64_t minimum_fill;
     const size_t element_size;
     const ViewConstructorType view_constructor;
     ReaderType reader_type;
@@ -114,7 +124,7 @@ class CORE_EXPORT ReadableByteStreamController
   };
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-close
-  void Close(ScriptState*, ReadableByteStreamController*, ExceptionState&);
+  void Close(ScriptState*, ReadableByteStreamController*);
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-error
   static void Error(ScriptState*,
@@ -146,12 +156,12 @@ class CORE_EXPORT ReadableByteStreamController
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-process-pull-into-descriptors-using-queue
   static void ProcessPullIntoDescriptorsUsingQueue(
       ScriptState*,
-      ReadableByteStreamController*,
-      ExceptionState&);
+      ReadableByteStreamController*);
 
   // https://streams.spec.whatwg.org/#abstract-opdef-readablebytestreamcontrollerprocessreadrequestsusingqueue
   static void ProcessReadRequestsUsingQueue(ScriptState*,
-                                            ReadableByteStreamController*);
+                                            ReadableByteStreamController*,
+                                            ExceptionState&);
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-call-pull-if-needed
   static void CallPullIfNeeded(ScriptState*, ReadableByteStreamController*);
@@ -210,18 +220,21 @@ class CORE_EXPORT ReadableByteStreamController
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-fill-pull-into-descriptor-from-queue
   static bool FillPullIntoDescriptorFromQueue(ReadableByteStreamController*,
-                                              PullIntoDescriptor*);
+                                              PullIntoDescriptor*,
+                                              ExceptionState&);
 
   // https://streams.spec.whatwg.org/#abstract-opdef-readablebytestreamcontrollerfillreadrequestfromqueue
   static void FillReadRequestFromQueue(ScriptState*,
                                        ReadableByteStreamController*,
-                                       StreamPromiseResolver* read_request);
+                                       ReadRequest* read_request,
+                                       ExceptionState&);
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-pull-into
   static void PullInto(ScriptState*,
                        ReadableByteStreamController*,
                        NotShared<DOMArrayBufferView> view,
-                       ReadableStreamBYOBReader::ReadIntoRequest*,
+                       uint64_t min,
+                       ReadIntoRequest*,
                        ExceptionState&);
 
   // https://streams.spec.whatwg.org/#readable-byte-stream-controller-handle-queue-drain
@@ -270,11 +283,11 @@ class CORE_EXPORT ReadableByteStreamController
                                              ExceptionState&);
 
   // https://streams.spec.whatwg.org/#rbs-controller-private-cancel
-  v8::Local<v8::Promise> CancelSteps(ScriptState*,
-                                     v8::Local<v8::Value> reason) override;
+  ScriptPromise<IDLUndefined> CancelSteps(ScriptState*,
+                                          v8::Local<v8::Value> reason) override;
 
   // https://streams.spec.whatwg.org/#rbs-controller-private-pull
-  StreamPromiseResolver* PullSteps(ScriptState*) override;
+  void PullSteps(ScriptState*, ReadRequest*, ExceptionState&) override;
 
   // https://streams.spec.whatwg.org/#abstract-opdef-readablebytestreamcontroller-releasesteps
   void ReleaseSteps() override;

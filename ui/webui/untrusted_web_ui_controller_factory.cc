@@ -42,7 +42,7 @@ UntrustedWebUIControllerFactory::CreateWebUIControllerForURL(
   if (!config)
     return nullptr;
 
-  return config->CreateWebUIController(web_ui);
+  return config->CreateWebUIController(web_ui, url);
 }
 
 content::WebUIConfig* UntrustedWebUIControllerFactory::GetConfigIfWebUIEnabled(
@@ -52,7 +52,7 @@ content::WebUIConfig* UntrustedWebUIControllerFactory::GetConfigIfWebUIEnabled(
   if (!url.SchemeIs(content::kChromeUIUntrustedScheme))
     return nullptr;
 
-  auto it = GetWebUIConfigMap().find(url.host_piece());
+  auto it = GetWebUIConfigMap().find(url.host());
   if (it == GetWebUIConfigMap().end())
     return nullptr;
 

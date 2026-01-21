@@ -8,26 +8,22 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "base/component_export.h"
 #include "base/containers/span.h"
-#include "base/memory/ptr_util.h"
-#include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/async_flusher.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
-#include "mojo/public/cpp/bindings/connection_group.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
-#include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/lib/multiplex_router.h"
 #include "mojo/public/cpp/bindings/lib/pending_receiver_state.h"
 #include "mojo/public/cpp/bindings/lib/sync_method_traits.h"
-#include "mojo/public/cpp/bindings/message_header_validator.h"
 #include "mojo/public/cpp/bindings/pending_flush.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
@@ -54,7 +50,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) BindingStateBase {
   void FlushAsync(AsyncFlusher flusher);
 
   void Close();
-  void CloseWithReason(uint32_t custom_reason, base::StringPiece description);
+  void CloseWithReason(uint32_t custom_reason, std::string_view description);
 
   void RaiseError() { endpoint_client_->RaiseError(); }
 

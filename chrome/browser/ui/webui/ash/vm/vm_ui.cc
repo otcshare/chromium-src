@@ -6,19 +6,20 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_diagnostics.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/vm/vm.mojom.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/vm_resources.h"
+#include "chrome/grit/vm_resources_map.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/webui_util.h"
 
 namespace ash {
 
@@ -61,19 +62,23 @@ void AddStringResources(content::WebUIDataSource* source) {
 
 VmUI::VmUI(content::WebUI* web_ui) : ui::MojoWebUIController(web_ui) {
   auto* profile = Profile::FromWebUI(web_ui);
-  auto source = base::WrapUnique(
-      content::WebUIDataSource::Create(chrome::kChromeUIVmHost));
-  webui::SetJSModuleDefaults(source.get());
+  content::WebUIDataSource* source =
+      content::WebUIDataSource::CreateAndAdd(profile, chrome::kChromeUIVmHost);
+  webui::SetJSModuleDefaults(source);
 
-  AddStringResources(source.get());
+  AddStringResources(source);
 
   source->SetDefaultResource(IDR_VM_INDEX_HTML);
   source->AddResourcePath("app.js", IDR_VM_APP_JS);
-  source->AddResourcePath("vm.mojom-webui.js", IDR_VM_MOJOM_WEBUI_JS);
+  source->AddResourcePath("app.html.js", IDR_VM_APP_HTML_JS);
+  source->AddResourcePath("vm.mojom-webui.js", IDR_VM_VM_MOJOM_WEBUI_JS);
   source->AddResourcePath("guest_os_diagnostics.mojom-webui.js",
-                          IDR_GUEST_OS_DIAGNOSTICS_MOJOM_WEBUI_JS);
-
-  content::WebUIDataSource::Add(profile, source.release());
+                          IDR_VM_GUEST_OS_DIAGNOSTICS_MOJOM_WEBUI_JS);
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types "
+      // Add TrustedTypes policies necessary for using Polymer.
+      "polymer-html-literal polymer-template-event-attribute-policy;");
 }
 
 VmUI::~VmUI() = default;

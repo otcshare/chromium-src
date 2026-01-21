@@ -8,10 +8,17 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // Silence presubmit and Tricium warnings about include guards
 // no-include-guard-because-multiply-included
 // NOLINT(build/header_guard)
 
+static void GL_BINDING_CALL
+Mock_eglAcquireExternalContextANGLE(EGLDisplay dpy, EGLSurface readAndDraw);
 static EGLBoolean GL_BINDING_CALL Mock_eglBindAPI(EGLenum api);
 static EGLBoolean GL_BINDING_CALL Mock_eglBindTexImage(EGLDisplay dpy,
                                                        EGLSurface surface,
@@ -207,6 +214,7 @@ static EGLint GL_BINDING_CALL Mock_eglLabelObjectKHR(EGLDisplay display,
                                                      EGLenum objectType,
                                                      EGLObjectKHR object,
                                                      EGLLabelKHR label);
+static void GL_BINDING_CALL Mock_eglLockVulkanQueueANGLE(EGLDisplay dpy);
 static EGLBoolean GL_BINDING_CALL Mock_eglMakeCurrent(EGLDisplay dpy,
                                                       EGLSurface draw,
                                                       EGLSurface read,
@@ -217,6 +225,10 @@ static EGLBoolean GL_BINDING_CALL Mock_eglPostSubBufferNV(EGLDisplay dpy,
                                                           EGLint y,
                                                           EGLint width,
                                                           EGLint height);
+static EGLBoolean GL_BINDING_CALL
+Mock_eglPresentationTimeANDROID(EGLDisplay dpy,
+                                EGLSurface surface,
+                                EGLnsecsANDROID time);
 static EGLenum GL_BINDING_CALL Mock_eglQueryAPI(void);
 static EGLBoolean GL_BINDING_CALL Mock_eglQueryContext(EGLDisplay dpy,
                                                        EGLContext ctx,
@@ -278,6 +290,7 @@ Mock_eglQuerySurfacePointerANGLE(EGLDisplay dpy,
                                  void** value);
 static void GL_BINDING_CALL Mock_eglReacquireHighPowerGPUANGLE(EGLDisplay dpy,
                                                                EGLContext ctx);
+static void GL_BINDING_CALL Mock_eglReleaseExternalContextANGLE(EGLDisplay dpy);
 static void GL_BINDING_CALL Mock_eglReleaseHighPowerGPUANGLE(EGLDisplay dpy,
                                                              EGLContext ctx);
 static EGLBoolean GL_BINDING_CALL Mock_eglReleaseTexImage(EGLDisplay dpy,
@@ -288,6 +301,8 @@ static void GL_BINDING_CALL
 Mock_eglSetBlobCacheFuncsANDROID(EGLDisplay dpy,
                                  EGLSetBlobFuncANDROID set,
                                  EGLGetBlobFuncANDROID get);
+static void GL_BINDING_CALL
+Mock_eglSetValidationEnabledANGLE(EGLBoolean validationState);
 static EGLBoolean GL_BINDING_CALL Mock_eglStreamAttribKHR(EGLDisplay dpy,
                                                           EGLStreamKHR stream,
                                                           EGLenum attribute,
@@ -321,6 +336,7 @@ Mock_eglSwapBuffersWithDamageKHR(EGLDisplay dpy,
 static EGLBoolean GL_BINDING_CALL Mock_eglSwapInterval(EGLDisplay dpy,
                                                        EGLint interval);
 static EGLBoolean GL_BINDING_CALL Mock_eglTerminate(EGLDisplay dpy);
+static void GL_BINDING_CALL Mock_eglUnlockVulkanQueueANGLE(EGLDisplay dpy);
 static EGLBoolean GL_BINDING_CALL Mock_eglWaitClient(void);
 static EGLBoolean GL_BINDING_CALL Mock_eglWaitGL(void);
 static EGLBoolean GL_BINDING_CALL Mock_eglWaitNative(EGLint engine);
@@ -330,3 +346,4 @@ static EGLint GL_BINDING_CALL Mock_eglWaitSync(EGLDisplay dpy,
 static EGLint GL_BINDING_CALL Mock_eglWaitSyncKHR(EGLDisplay dpy,
                                                   EGLSyncKHR sync,
                                                   EGLint flags);
+static void GL_BINDING_CALL Mock_eglWaitUntilWorkScheduledANGLE(EGLDisplay dpy);

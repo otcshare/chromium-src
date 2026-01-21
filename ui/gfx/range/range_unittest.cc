@@ -197,6 +197,22 @@ TYPED_TEST(RangeTest, SetReversedRange) {
   EXPECT_EQ(25U, r.GetMax());
 }
 
+TYPED_TEST(RangeTest, MatchDirection) {
+  TypeParam r(20, 10);
+  EXPECT_TRUE(r.is_reversed());
+  EXPECT_EQ(20U, r.start());
+  EXPECT_EQ(10U, r.end());
+  EXPECT_EQ(10U, r.length());
+  EXPECT_TRUE(r.IsValid());
+
+  r.MatchDirection(TypeParam(10, 20));
+  EXPECT_FALSE(r.is_reversed());
+  EXPECT_EQ(10U, r.start());
+  EXPECT_EQ(20U, r.end());
+  EXPECT_EQ(10U, r.length());
+  EXPECT_TRUE(r.IsValid());
+}
+
 TYPED_TEST(RangeTest, ContainAndIntersect) {
   {
     SCOPED_TRACE("contain and intersect");
@@ -523,4 +539,14 @@ TEST(RangeTest, ToString) {
   std::ostringstream expected;
   expected << "{" << range.start() << "," << range.end() << "}";
   EXPECT_EQ(expected.str(), range.ToString());
+}
+
+TEST(RangeTest, ToIntVector) {
+  gfx::Range range(4, 7);
+  std::vector<int> indices{4, 5, 6};
+  EXPECT_EQ(indices, range.ToIntVector());
+
+  gfx::Range reverse_range(5, 2);
+  std::vector<int> reverse_indices{4, 3, 2};
+  EXPECT_EQ(reverse_indices, reverse_range.ToIntVector());
 }

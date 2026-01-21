@@ -4,7 +4,8 @@
 
 #include "content/public/common/origin_util.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/lazy_instance.h"
 #include "base/strings/pattern.h"
 #include "content/common/url_schemes.h"
@@ -15,10 +16,15 @@
 namespace content {
 
 bool OriginCanAccessServiceWorkers(const GURL& url) {
-  if (url.SchemeIsHTTPOrHTTPS() && network::IsUrlPotentiallyTrustworthy(url))
-    return true;
+  if (!url.is_valid()) {
+    return false;
+  }
 
-  if (base::Contains(GetServiceWorkerSchemes(), url.scheme())) {
+  if (url.SchemeIsHTTPOrHTTPS() && network::IsUrlPotentiallyTrustworthy(url)) {
+    return true;
+  }
+
+  if (std::ranges::contains(GetServiceWorkerSchemes(), url.GetScheme())) {
     return true;
   }
 

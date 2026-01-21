@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
@@ -37,7 +38,8 @@ class FakeAppListModelUpdater : public AppListModelUpdater {
   void RemoveItem(const std::string& id, bool is_uninstall) override;
   void SetItemIconAndColor(const std::string& id,
                            const gfx::ImageSkia& icon,
-                           const ash::IconColor& icon_color) override;
+                           const ash::IconColor& icon_color,
+                           bool is_placeholder_icon) override;
   void SetItemFolderId(const std::string& id,
                        const std::string& folder_id) override;
   void SetItemPosition(const std::string& id,
@@ -46,7 +48,8 @@ class FakeAppListModelUpdater : public AppListModelUpdater {
   // For SearchModel:
   void SetSearchEngineIsGoogle(bool is_google) override;
   void PublishSearchResults(
-      const std::vector<ChromeSearchResult*>& results,
+      const std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>&
+          results,
       const std::vector<ash::AppListSearchResultCategory>& categories) override;
   void ClearSearchResults() override;
 
@@ -62,7 +65,6 @@ class FakeAppListModelUpdater : public AppListModelUpdater {
   ChromeAppListItem* ItemAtForTest(size_t index) override;
   ChromeAppListItem* FindFolderItem(const std::string& folder_id) override;
   bool FindItemIndexForTest(const std::string& id, size_t* index) override;
-  void GetIdToAppListIndexMap(GetIdToAppListIndexMapCallback callback) override;
   syncer::StringOrdinal GetPositionBeforeFirstItem() const override;
   void GetContextMenuModel(const std::string& id,
                            ash::AppListItemContext item_context,
@@ -71,12 +73,13 @@ class FakeAppListModelUpdater : public AppListModelUpdater {
 
   // For SearchModel:
   bool SearchEngineIsGoogle() override;
-  const std::vector<ChromeSearchResult*>& search_results() const {
+  void RecalculateWouldTriggerLauncherSearchIph() override;
+  const std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>&
+  search_results() const {
     return search_results_;
   }
 
   void OnAppListHidden() override {}
-  void CommitTemporarySortOrder() override {}
 
   void AddObserver(AppListModelUpdaterObserver* observer) override;
   void RemoveObserver(AppListModelUpdaterObserver* observer) override;
@@ -86,11 +89,11 @@ class FakeAppListModelUpdater : public AppListModelUpdater {
   size_t update_image_count() const { return update_image_count_; }
 
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   bool search_engine_is_google_ = false;
   std::vector<std::unique_ptr<ChromeAppListItem>> items_;
-  std::vector<ChromeSearchResult*> search_results_;
+  std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>> search_results_;
   base::ObserverList<AppListModelUpdaterObserver> observers_;
 
   size_t update_image_count_ = 0;

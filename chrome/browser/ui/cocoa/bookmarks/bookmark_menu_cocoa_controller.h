@@ -7,11 +7,12 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/guid.h"
+#include "base/uuid.h"
 #include "ui/base/window_open_disposition.h"
 
 class BookmarkMenuBridge;
 class Profile;
+enum class WindowOpenDisposition;
 
 namespace bookmarks {
 class BookmarkNode;
@@ -20,7 +21,8 @@ class BookmarkNode;
 // Controller (MVC) for the bookmark menu.
 // All bookmark menu item commands get directed here.
 // Unfortunately there is already a C++ class named BookmarkMenuController.
-@interface BookmarkMenuCocoaController : NSObject<NSMenuDelegate>
+@interface BookmarkMenuCocoaController
+    : NSObject <NSMenuDelegate, NSMenuItemValidation>
 
 // Make a relevant tooltip string for node.
 + (NSString*)tooltipForNode:(const bookmarks::BookmarkNode*)node;
@@ -33,15 +35,10 @@ class BookmarkNode;
 
 @end  // BookmarkMenuCocoaController
 
-
 @interface BookmarkMenuCocoaController (ExposedForUnitTests)
-- (const bookmarks::BookmarkNode*)nodeForGUID:(const base::GUID&)guid
-                                    inProfile:(Profile*)profile;
-- (void)openURLForIdentifier:(base::GUID)guid inProfile:(Profile*)profile;
-- (void)openURLForIdentifier:(base::GUID)guid;
-- (void)openAll:(NSInteger)tag
-    withDisposition:(WindowOpenDisposition)disposition;
-- (base::GUID)guidForIdentifier:(int)identifier;
++ (void)openBookmarkByGUID:(base::Uuid)guid
+                 inProfile:(Profile*)profile
+           withDisposition:(WindowOpenDisposition)disposition;
 @end  // BookmarkMenuCocoaController (ExposedForUnitTests)
 
 #endif  // CHROME_BROWSER_UI_COCOA_BOOKMARKS_BOOKMARK_MENU_COCOA_CONTROLLER_H_

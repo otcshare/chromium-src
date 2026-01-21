@@ -7,24 +7,27 @@ package org.chromium.chrome.browser.feedback;
 import android.graphics.Bitmap;
 
 import org.chromium.base.task.PostTask;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /** A implementation of {@link ScreenshotSource} that returns back a {@link Bitmap} given to it. */
+@NullMarked
 class StaticScreenshotSource implements ScreenshotSource {
-    private final Bitmap mBitmap;
+    private final @Nullable Bitmap mBitmap;
 
     /**
      * Creates a new {@link StaticScreenshotSource}.
      * @param screenshot The {@link Bitmap} to use as a screenshot.
      */
-    public StaticScreenshotSource(Bitmap screenshot) {
+    public StaticScreenshotSource(@Nullable Bitmap screenshot) {
         mBitmap = screenshot;
     }
 
     // ScreenshotSource implementation.
     @Override
     public void capture(Runnable callback) {
-        PostTask.postTask(UiThreadTaskTraits.DEFAULT, callback);
+        PostTask.postTask(TaskTraits.UI_DEFAULT, callback);
     }
 
     @Override
@@ -33,7 +36,7 @@ class StaticScreenshotSource implements ScreenshotSource {
     }
 
     @Override
-    public Bitmap getScreenshot() {
+    public @Nullable Bitmap getScreenshot() {
         return mBitmap;
     }
 }

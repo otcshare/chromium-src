@@ -38,6 +38,9 @@ void PowerButtonTestBase::SetUp() {
 }
 
 void PowerButtonTestBase::TearDown() {
+  lock_state_test_api_.reset();
+  lock_state_controller_ = nullptr;
+
   AshTestBase::TearDown();
 }
 
@@ -97,19 +100,6 @@ void PowerButtonTestBase::ReleaseKey(ui::KeyboardCode key_code) {
 
 void PowerButtonTestBase::GenerateMouseMoveEvent() {
   GetEventGenerator()->MoveMouseTo(10, 10);
-}
-
-void PowerButtonTestBase::Initialize(
-    PowerButtonController::ButtonType button_type,
-    LoginStatus status) {
-  power_button_test_api_->SetPowerButtonType(button_type);
-  if (status == LoginStatus::NOT_LOGGED_IN)
-    ClearLogin();
-  else
-    CreateUserSessions(1);
-
-  if (status == LoginStatus::GUEST)
-    SetCanLockScreen(false);
 }
 
 void PowerButtonTestBase::LockScreen() {

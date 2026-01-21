@@ -11,9 +11,8 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/translate/core/browser/translate_step.h"
@@ -26,8 +25,7 @@ namespace translate {
 
 class TranslateManager;
 class TranslateUIDelegate;
-
-BASE_DECLARE_FEATURE(kTranslateMessageUI);
+class TranslateUILanguagesManager;
 
 class TranslateMessage {
  public:
@@ -51,7 +49,7 @@ class TranslateMessage {
   // Called by Java in response to the user clicking the primary button.
   void HandlePrimaryAction(JNIEnv* env);
   // Called by Java in response to the message being dismissed.
-  void HandleDismiss(JNIEnv* env, jint dismiss_reason);
+  void HandleDismiss(JNIEnv* env, int32_t dismiss_reason);
 
   // Called by Java in order to build the secondary overflow menu.
   base::android::ScopedJavaLocalRef<jobjectArray> BuildOverflowMenu(
@@ -73,9 +71,9 @@ class TranslateMessage {
   base::android::ScopedJavaLocalRef<jobjectArray>
   HandleSecondaryMenuItemClicked(
       JNIEnv* env,
-      jint overflow_menu_item_id,
+      int32_t overflow_menu_item_id,
       const base::android::JavaRef<jstring>& language_code,
-      jboolean had_checkmark);
+      bool had_checkmark);
 
   // Passes on JNI calls to the stored Java TranslateMessage object, if
   // applicable. This interface exists in order to make it easier to test
@@ -91,7 +89,7 @@ class TranslateMessage {
         JNIEnv* env,
         content::WebContents* web_contents,
         TranslateMessage* native_translate_message,
-        jint dismissal_duration_seconds) = 0;
+        int32_t dismissal_duration_seconds) = 0;
 
     virtual void ShowTranslateError(JNIEnv* env,
                                     content::WebContents* web_contents) = 0;
@@ -101,7 +99,7 @@ class TranslateMessage {
         base::android::ScopedJavaLocalRef<jstring> title,
         base::android::ScopedJavaLocalRef<jstring> description,
         base::android::ScopedJavaLocalRef<jstring> primary_button_text,
-        jboolean has_overflow_menu) = 0;
+        bool has_overflow_menu) = 0;
 
     virtual base::android::ScopedJavaLocalRef<jobjectArray>
     ConstructMenuItemArray(
@@ -161,6 +159,7 @@ class TranslateMessage {
 
   // Constructed the first time ShowTranslateStep is called.
   std::unique_ptr<TranslateUIDelegate> ui_delegate_;
+  raw_ptr<TranslateUILanguagesManager> ui_languages_manager_;
   State state_ = State::kDismissed;
 
   // Keeps track of whether or not this TranslateMessage has ever been

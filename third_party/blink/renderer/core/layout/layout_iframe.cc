@@ -32,31 +32,48 @@ namespace blink {
 LayoutIFrame::LayoutIFrame(HTMLFrameOwnerElement* element)
     : LayoutEmbeddedContent(element) {}
 
-bool LayoutIFrame::ShouldComputeSizeAsReplaced() const {
-  NOT_DESTROYED();
-  return true;
+bool LayoutIFrame::IsResponsivelySized() const {
+  return StyleRef().ContainIntrinsicBlockSize().IsFromElement();
 }
 
-bool LayoutIFrame::IsInlineBlockOrInlineTable() const {
+void LayoutIFrame::UpdateAfterLayout() {
   NOT_DESTROYED();
-  return IsInline();
+  LayoutEmbeddedContent::UpdateAfterLayout();
+  if (!IsResponsivelySized()) {
+    return;
+  }
+  DCHECK(RuntimeEnabledFeatures::ResponsiveIframesEnabled());
+  if (!GetEmbeddedContentView() && GetFrameView()) {
+    GetFrameView()->AddPartToUpdate(*this);
+  }
 }
 
-void LayoutIFrame::UpdateLayout() {
+PhysicalNaturalSizingInfo LayoutIFrame::GetNaturalDimensions() const {
   NOT_DESTROYED();
-  DCHECK(NeedsLayout());
+  if (IsResponsivelySized()) {
+    DCHECK(RuntimeEnabledFeatures::ResponsiveIframesEnabled());
+    if (FrameView* frame_view = ChildFrameView()) {
+      // Use the natural size received from the child frame if it exists.
+      if (std::optional<NaturalSizingInfo> sizing_info =
+              frame_view->GetNaturalDimensions()) {
+        // Scale based on our zoom as the embedded document doesn't have that
+        // info.
+        sizing_info->size.Scale(StyleRef().EffectiveZoom());
+        return PhysicalNaturalSizingInfo::FromSizingInfo(*sizing_info);
+      }
 
-  if (!RuntimeEnabledFeatures::LayoutNGReplacedNoBoxSettersEnabled()) {
-    UpdateLogicalWidth();
-    // No kids to layout as a replaced element.
-    UpdateLogicalHeight();
+      // Otherwise, use the fallback size if it is specified.
+      const ComputedStyle& style = StyleRef();
+      const StyleIntrinsicLength& intrinsic = style.ContainIntrinsicBlockSize();
+      if (const std::optional<Length>& length = intrinsic.GetLength()) {
+        const float value = FloatValueForLength(*length, 0);
+        const NaturalSizingInfo info = NaturalSizingInfo::MakeHeight(value);
+        return PhysicalNaturalSizingInfo::FromSizingInfo(info);
+      }
+    }
   }
 
-  ClearLayoutOverflow();
-  if (!RuntimeEnabledFeatures::LayoutNGUnifyUpdateAfterLayoutEnabled())
-    UpdateAfterLayout();
-
-  ClearNeedsLayout();
+  return LayoutEmbeddedContent::GetNaturalDimensions();
 }
 
 }  // namespace blink

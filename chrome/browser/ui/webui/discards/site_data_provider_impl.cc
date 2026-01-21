@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/webui/discards/site_data_provider_impl.h"
 
-#include "base/callback_helpers.h"
+#include "base/byte_count.h"
+#include "base/functional/callback_helpers.h"
 #include "base/sequence_checker.h"
 #include "components/performance_manager/persistence/site_data/site_data.pb.h"
 #include "components/performance_manager/persistence/site_data/site_data_cache_factory.h"
@@ -103,8 +104,11 @@ void SiteDataProviderImpl::CreateAndBind(
 void SiteDataProviderImpl::GetSiteDataArray(
     const std::vector<std::string>& explicitly_requested_origins,
     GetSiteDataArrayCallback callback) {
-  auto* inspector = performance_manager::SiteDataCacheFactory::GetInstance()
-                        ->GetInspectorForBrowserContext(profile_id_);
+  performance_manager::SiteDataCacheInspector* inspector = nullptr;
+  if (auto* factory =
+          performance_manager::SiteDataCacheFactory::GetInstance()) {
+    inspector = factory->GetInspectorForBrowserContext(profile_id_);
+  }
   if (!inspector) {
     // Early return with a nullptr if there's no inspector.
     std::move(callback).Run(nullptr);
@@ -156,8 +160,11 @@ void SiteDataProviderImpl::GetSiteDataArray(
 
 void SiteDataProviderImpl::GetSiteDataDatabaseSize(
     GetSiteDataDatabaseSizeCallback callback) {
-  auto* inspector = performance_manager::SiteDataCacheFactory::GetInstance()
-                        ->GetInspectorForBrowserContext(profile_id_);
+  performance_manager::SiteDataCacheInspector* inspector = nullptr;
+  if (auto* factory =
+          performance_manager::SiteDataCacheFactory::GetInstance()) {
+    inspector = factory->GetInspectorForBrowserContext(profile_id_);
+  }
   if (!inspector) {
     // Early return with a nullptr if there's no inspector.
     std::move(callback).Run(nullptr);
@@ -167,13 +174,13 @@ void SiteDataProviderImpl::GetSiteDataDatabaseSize(
   // Adapt the inspector callback to the mojom callback with this lambda.
   auto inspector_callback = base::BindOnce(
       [](GetSiteDataDatabaseSizeCallback callback,
-         absl::optional<int64_t> num_rows,
-         absl::optional<int64_t> on_disk_size_kb) {
+         std::optional<int64_t> num_rows,
+         std::optional<base::ByteCount> on_disk_size) {
         discards::mojom::SiteDataDatabaseSizePtr result =
             discards::mojom::SiteDataDatabaseSize::New();
         result->num_rows = num_rows.has_value() ? num_rows.value() : -1;
         result->on_disk_size_kb =
-            on_disk_size_kb.has_value() ? on_disk_size_kb.value() : -1;
+            on_disk_size.has_value() ? on_disk_size.value().InKiB() : -1;
 
         std::move(callback).Run(std::move(result));
       },
@@ -185,17 +192,7 @@ void SiteDataProviderImpl::GetSiteDataDatabaseSize(
 // static
 void SiteDataProviderImpl::OnConnectionError(SiteDataProviderImpl* impl) {
   std::unique_ptr<performance_manager::GraphOwned> owned_impl =
-      impl->graph_->TakeFromGraph(impl);
-}
-
-void SiteDataProviderImpl::OnPassedToGraph(performance_manager::Graph* graph) {
-  DCHECK(!graph_);
-  graph_ = graph;
-}
-
-void SiteDataProviderImpl::OnTakenFromGraph(performance_manager::Graph* graph) {
-  DCHECK_EQ(graph_, graph);
-  graph_ = nullptr;
+      impl->GetOwningGraph()->TakeFromGraph(impl);
 }
 
 void SiteDataProviderImpl::Bind(

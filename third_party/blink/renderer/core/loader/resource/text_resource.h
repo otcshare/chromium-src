@@ -14,13 +14,8 @@
 
 namespace blink {
 
-class ResourceFetcher;
-
 class CORE_EXPORT TextResource : public Resource {
  public:
-  static TextResource* FetchSVGDocument(FetchParameters&,
-                                        ResourceFetcher*,
-                                        ResourceClient*);
   TextResource(const ResourceRequest&,
                ResourceType,
                const ResourceLoaderOptions&,
@@ -31,10 +26,7 @@ class CORE_EXPORT TextResource : public Resource {
   // call time.
   String DecodedText() const;
 
-  // Returns the raw data - without decoding - as a String.
-  String RawText() const;
-
-  WTF::TextEncoding Encoding() const override;
+  TextEncoding Encoding() const override;
 
   void SetEncodingForTest(const String& encoding) { SetEncoding(encoding); }
 

@@ -13,12 +13,12 @@
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/cookie_controls_state.h"
 #include "components/page_info/page_info.h"
 #include "components/permissions/object_permission_context_base.h"
 #include "components/privacy_sandbox/canonical_topic.h"
 #include "components/safe_browsing/buildflags.h"
 #include "ui/base/models/image_model.h"
-#include "ui/gfx/native_widget_types.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "ui/gfx/image/image_skia.h"
@@ -39,10 +39,9 @@ class X509Certificate;
 // etc.).
 class PageInfoUI {
  public:
-  enum class SecuritySummaryColor {
-    RED,
-    GREEN,
-  };
+  // Specifies security icons and sections shown for the page info UI. For
+  // ENTERPRISE, a red business icon is shown in the omnibox.
+  enum class SecuritySummaryColor { RED, GREEN, ENTERPRISE };
 
   enum class SecurityDescriptionType {
     // The UI describes whether the connection is secure, e.g. secure
@@ -71,56 +70,41 @@ class PageInfoUI {
     SecurityDescriptionType type;
   };
 
-  // |CookieInfo| contains information about the cookies from a specific source.
-  // A source can for example be a specific origin or an entire wildcard domain.
-  // TODO(crbug.com/1346305): Remove after finishing cookies subpage
-  // implementation.
-  struct CookieInfo {
-    CookieInfo();
+  // `CookiesRwsInfo` contains information about a specific Related website set.
+  struct CookiesRwsInfo {
+    explicit CookiesRwsInfo(const std::u16string& owner_name);
+    ~CookiesRwsInfo();
 
-    // The number of allowed cookies.
-    int allowed;
-    // The number of blocked cookies.
-    int blocked;
-
-    // Whether these cookies are from the current top-level origin as seen by
-    // the user, or from third-party origins.
-    bool is_first_party;
-  };
-
-  // |CookiesFpsInfo| contains information about a specific First-Party Set.
-  struct CookiesFpsInfo {
-    explicit CookiesFpsInfo(const std::u16string& owner_name);
-    ~CookiesFpsInfo();
-
-    // The name of the owner of the FPS.
+    // The name of the owner of the RWS.
     std::u16string owner_name;
 
-    // Whether the Fps are managed by the company.
+    // Whether the Rws are managed by the company.
     bool is_managed = false;
   };
 
-  // |CookiesNewInfo| contains information about the sites that are allowed
-  // to access cookies and fps cookies info for new UI.
-  // TODO(crbug.com/1346305):  Change the name to "CookieInfo" after finishing
-  // cookies subpage implementation
-  struct CookiesNewInfo {
-    CookiesNewInfo();
-    ~CookiesNewInfo();
-
-    // The number of third-party sites blocked.
-    int blocked_sites_count = -1;
+  // `CookiesInfo` contains information about the sites that are allowed
+  // to access cookies and rws cookies info for new UI.
+  struct CookiesInfo {
+    CookiesInfo();
+    CookiesInfo(CookiesInfo&&);
+    ~CookiesInfo();
 
     // The number of sites allowed to access cookies.
     int allowed_sites_count = -1;
 
-    // The status of blocking third-party cookies.
-    CookieControlsStatus status;
-
     // The status of enforcement of blocking third-party cookies.
     CookieControlsEnforcement enforcement;
 
-    absl::optional<CookiesFpsInfo> fps_info;
+    // The state of cookie controls to display.
+    CookieControlsState controls_state;
+
+    std::optional<CookiesRwsInfo> rws_info;
+
+    // The expiration of the active third-party cookie exception.
+    base::Time expiration;
+
+    // Whether the current profile is incognito.
+    bool is_incognito = false;
   };
 
   // |ChosenObjectInfo| contains information about a single |chooser_object| of
@@ -166,6 +150,8 @@ class PageInfoUI {
 
     // The server certificate if a secure connection.
     scoped_refptr<net::X509Certificate> certificate;
+    // The 2-QWAC certificate if the site has a valid 2-QWAC.
+    scoped_refptr<net::X509Certificate> two_qwac;
     // Status of the site's connection.
     PageInfo::SiteConnectionStatus connection_status;
     // Textual description of the site's connection status that is displayed to
@@ -206,7 +192,6 @@ class PageInfoUI {
     std::vector<privacy_sandbox::CanonicalTopic> accessed_topics;
   };
 
-  using CookieInfoList = std::vector<CookieInfo>;
   using PermissionInfoList = std::vector<PageInfo::PermissionInfo>;
   using ChosenObjectInfoList = std::vector<std::unique_ptr<ChosenObjectInfo>>;
 
@@ -218,20 +203,16 @@ class PageInfoUI {
   // mid-sentence.
   static std::u16string PermissionTypeToUIStringMidSentence(
       ContentSettingsType type);
+  // Returns a tooltip for permission |type|.
+  static std::u16string PermissionTooltipUiString(
+      ContentSettingsType type,
+      const std::optional<url::Origin>& requesting_origin);
+  // Returns a tooltip for a subpage button for permission |type|.
+  static std::u16string PermissionSubpageButtonTooltipString(
+      ContentSettingsType type);
+
   static base::span<const PermissionUIInfo>
   GetContentSettingsUIInfoForTesting();
-
-  // Returns the UI string describing the action taken for a permission,
-  // including why that action was taken. E.g. "Allowed by you",
-  // "Blocked by default". If |setting| is default, specify the actual default
-  // setting using |default_setting|.
-  static std::u16string PermissionActionToUIString(
-      PageInfoUiDelegate* delegate,
-      ContentSettingsType type,
-      ContentSetting setting,
-      ContentSetting default_setting,
-      content_settings::SettingSource source,
-      bool is_one_time);
 
   static std::u16string PermissionStateToUIString(
       PageInfoUiDelegate* delegate,
@@ -263,9 +244,6 @@ class PageInfoUI {
   // Returns the identity icon ID for the given identity |status|.
   static int GetIdentityIconID(PageInfo::SiteIdentityStatus status);
 
-  // Returns the connection icon ID for the given connection |status|.
-  static int GetConnectionIconID(PageInfo::SiteConnectionStatus status);
-
   // Returns the identity icon color ID for the given identity |status|.
   static int GetIdentityIconColorID(PageInfo::SiteIdentityStatus status);
 
@@ -280,10 +258,7 @@ class PageInfoUI {
   CreateSafetyTipSecurityDescription(const security_state::SafetyTipInfo& info);
 
   // Sets cookie information.
-  // TODO(crbug.com/1346305) remove unused function overload after finished
-  // project. Sets cookie information.
-  virtual void SetCookieInfo(const CookieInfoList& cookie_info_list) {}
-  virtual void SetCookieInfo(const CookiesNewInfo& cookie_info) {}
+  virtual void SetCookieInfo(const CookiesInfo& cookie_info) {}
 
   // Sets permission information.
   virtual void SetPermissionInfo(const PermissionInfoList& permission_info_list,
@@ -306,7 +281,6 @@ class PageInfoUI {
       const IdentityInfo& identity_info) const;
 };
 
-typedef PageInfoUI::CookieInfoList CookieInfoList;
 typedef PageInfoUI::PermissionInfoList PermissionInfoList;
 typedef PageInfoUI::ChosenObjectInfoList ChosenObjectInfoList;
 

@@ -5,11 +5,17 @@
 #include "net/quic/quic_proxy_client_socket.h"
 
 #include <cstdio>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/types/expected.h"
+#include "base/types/expected_macros.h"
 #include "base/values.h"
+#include "net/base/completion_once_callback.h"
+#include "net/base/net_errors.h"
+#include "net/base/proxy_chain.h"
 #include "net/base/proxy_delegate.h"
 #include "net/http/http_auth_controller.h"
 #include "net/http/http_log_util.h"
@@ -25,7 +31,8 @@ namespace net {
 QuicProxyClientSocket::QuicProxyClientSocket(
     std::unique_ptr<QuicChromiumClientStream::Handle> stream,
     std::unique_ptr<QuicChromiumClientSession::Handle> session,
-    const ProxyServer& proxy_server,
+    const ProxyChain& proxy_chain,
+    size_t proxy_chain_index,
     const std::string& user_agent,
     const HostPortPair& endpoint,
     const NetLogWithSource& net_log,
@@ -35,7 +42,8 @@ QuicProxyClientSocket::QuicProxyClientSocket(
       session_(std::move(session)),
       endpoint_(endpoint),
       auth_(std::move(auth_controller)),
-      proxy_server_(proxy_server),
+      proxy_chain_(proxy_chain),
+      proxy_chain_index_(proxy_chain_index),
       proxy_delegate_(proxy_delegate),
       user_agent_(user_agent),
       net_log_(net_log) {
@@ -128,16 +136,10 @@ bool QuicProxyClientSocket::WasEverUsed() const {
   return session_->WasEverUsed();
 }
 
-bool QuicProxyClientSocket::WasAlpnNegotiated() const {
-  // Do not delegate to `session_`. While `session_` negotiates ALPN with the
-  // proxy, this object represents the tunneled TCP connection to the origin.
-  return false;
-}
-
 NextProto QuicProxyClientSocket::GetNegotiatedProtocol() const {
   // Do not delegate to `session_`. While `session_` negotiates ALPN with the
   // proxy, this object represents the tunneled TCP connection to the origin.
-  return kProtoUnknown;
+  return NextProto::kProtoUnknown;
 }
 
 bool QuicProxyClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
@@ -223,7 +225,7 @@ int QuicProxyClientSocket::Write(
                                 buf->data());
 
   int rv = stream_->WriteStreamData(
-      base::StringPiece(buf->data(), buf_len), false,
+      std::string_view(buf->data(), buf_len), false,
       base::BindOnce(&QuicProxyClientSocket::OnWriteComplete,
                      weak_factory_.GetWeakPtr()));
   if (rv == OK)
@@ -288,6 +290,13 @@ int QuicProxyClientSocket::DoLoop(int last_io_result) {
       case STATE_GENERATE_AUTH_TOKEN_COMPLETE:
         rv = DoGenerateAuthTokenComplete(rv);
         break;
+      case STATE_CALCULATE_HEADERS:
+        DCHECK_EQ(OK, rv);
+        rv = DoCalculateHeaders();
+        break;
+      case STATE_CALCULATE_HEADERS_COMPLETE:
+        rv = DoCalculateHeadersComplete(rv);
+        break;
       case STATE_SEND_REQUEST:
         DCHECK_EQ(OK, rv);
         net_log_.BeginEvent(
@@ -307,10 +316,19 @@ int QuicProxyClientSocket::DoLoop(int last_io_result) {
         net_log_.EndEventWithNetErrorCode(
             NetLogEventType::HTTP_TRANSACTION_TUNNEL_READ_HEADERS, rv);
         break;
+      case STATE_PROCESS_RESPONSE_HEADERS:
+        DCHECK_EQ(OK, rv);
+        rv = DoProcessResponseHeaders();
+        break;
+      case STATE_PROCESS_RESPONSE_HEADERS_COMPLETE:
+        rv = DoProcessResponseHeadersComplete(rv);
+        break;
+      case STATE_PROCESS_RESPONSE_CODE:
+        DCHECK_EQ(OK, rv);
+        rv = DoProcessResponseCode();
+        break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_DISCONNECTED &&
            next_state_ != STATE_CONNECT_COMPLETE);
@@ -328,37 +346,65 @@ int QuicProxyClientSocket::DoGenerateAuthToken() {
 
 int QuicProxyClientSocket::DoGenerateAuthTokenComplete(int result) {
   DCHECK_NE(ERR_IO_PENDING, result);
-  if (result == OK)
-    next_state_ = STATE_SEND_REQUEST;
+  if (result == OK) {
+    next_state_ = STATE_CALCULATE_HEADERS;
+  }
+  return result;
+}
+
+int QuicProxyClientSocket::DoCalculateHeaders() {
+  next_state_ = STATE_CALCULATE_HEADERS_COMPLETE;
+
+  authorization_headers_.Clear();
+  proxy_delegate_headers_.Clear();
+
+  // Add Proxy-Authentication header if necessary.
+  if (auth_->HaveAuth()) {
+    auth_->AddAuthorizationHeader(&authorization_headers_);
+  }
+
+  if (proxy_delegate_) {
+    ASSIGN_OR_RETURN(
+        proxy_delegate_headers_,
+        proxy_delegate_->OnBeforeTunnelRequest(
+            proxy_chain_, proxy_chain_index_,
+            base::BindOnce(
+                &QuicProxyClientSocket::OnBeforeTunnelRequestComplete,
+                weak_factory_.GetWeakPtr())),
+        [](const auto& e) {
+          // Success should always be reported via a base::expected containing
+          // an HttpRequestHeaders, see ProxyDelegate::OnBeforeTunnelRequest.
+          CHECK_NE(OK, e);
+          return e;
+        });
+  }
+  return OK;
+}
+
+int QuicProxyClientSocket::DoCalculateHeadersComplete(int result) {
+  DCHECK_NE(ERR_IO_PENDING, result);
+  if (result != OK) {
+    return result;
+  }
+  next_state_ = STATE_SEND_REQUEST;
+  request_.extra_headers.MergeFrom(proxy_delegate_headers_);
   return result;
 }
 
 int QuicProxyClientSocket::DoSendRequest() {
   next_state_ = STATE_SEND_REQUEST_COMPLETE;
 
-  // Add Proxy-Authentication header if necessary.
-  HttpRequestHeaders authorization_headers;
-  if (auth_->HaveAuth()) {
-    auth_->AddAuthorizationHeader(&authorization_headers);
-  }
-
-  if (proxy_delegate_) {
-    HttpRequestHeaders proxy_delegate_headers;
-    proxy_delegate_->OnBeforeTunnelRequest(proxy_server_,
-                                           &proxy_delegate_headers);
-    request_.extra_headers.MergeFrom(proxy_delegate_headers);
-  }
-
   std::string request_line;
-  BuildTunnelRequest(endpoint_, authorization_headers, user_agent_,
+  BuildTunnelRequest(endpoint_, authorization_headers_, user_agent_,
                      &request_line, &request_.extra_headers);
 
   NetLogRequestHeaders(net_log_,
                        NetLogEventType::HTTP_TRANSACTION_SEND_TUNNEL_HEADERS,
                        request_line, &request_.extra_headers);
 
-  spdy::Http2HeaderBlock headers;
-  CreateSpdyHeadersFromHttpRequest(request_, request_.extra_headers, &headers);
+  quiche::HttpHeaderBlock headers;
+  CreateSpdyHeadersFromHttpRequest(request_, std::nullopt,
+                                   request_.extra_headers, &headers);
 
   return stream_->WriteHeaders(std::move(headers), false, nullptr);
 }
@@ -401,19 +447,39 @@ int QuicProxyClientSocket::DoReadReplyComplete(int result) {
   if (response_.headers->GetHttpVersion() < HttpVersion(1, 0))
     return ERR_TUNNEL_CONNECTION_FAILED;
 
+  next_state_ = STATE_PROCESS_RESPONSE_HEADERS;
+
   NetLogResponseHeaders(
       net_log_, NetLogEventType::HTTP_TRANSACTION_READ_TUNNEL_RESPONSE_HEADERS,
       response_.headers.get());
 
+  return OK;
+}
+
+int QuicProxyClientSocket::DoProcessResponseHeaders() {
+  next_state_ = STATE_PROCESS_RESPONSE_HEADERS_COMPLETE;
+
   if (proxy_delegate_) {
-    int rv = proxy_delegate_->OnTunnelHeadersReceived(proxy_server_,
-                                                      *response_.headers);
-    if (rv != OK) {
-      DCHECK_NE(ERR_IO_PENDING, rv);
-      return rv;
-    }
+    return proxy_delegate_->OnTunnelHeadersReceived(
+        proxy_chain_, proxy_chain_index_, *response_.headers,
+        base::BindOnce(&QuicProxyClientSocket::OnIOComplete,
+                       weak_factory_.GetWeakPtr()));
   }
 
+  return OK;
+}
+
+int QuicProxyClientSocket::DoProcessResponseHeadersComplete(int result) {
+  DCHECK_NE(ERR_IO_PENDING, result);
+  if (result != OK) {
+    return result;
+  }
+
+  next_state_ = STATE_PROCESS_RESPONSE_CODE;
+  return OK;
+}
+
+int QuicProxyClientSocket::DoProcessResponseCode() {
   switch (response_.headers->response_code()) {
     case 200:  // OK
       next_state_ = STATE_CONNECT_COMPLETE;
@@ -432,7 +498,7 @@ int QuicProxyClientSocket::DoReadReplyComplete(int result) {
 }
 
 void QuicProxyClientSocket::OnReadResponseHeadersComplete(int result) {
-  // Convert the now-populated spdy::Http2HeaderBlock to HttpResponseInfo
+  // Convert the now-populated quiche::HttpHeaderBlock to HttpResponseInfo
   if (result > 0)
     result = ProcessResponseHeaders(response_header_block_);
 
@@ -441,12 +507,28 @@ void QuicProxyClientSocket::OnReadResponseHeadersComplete(int result) {
 }
 
 int QuicProxyClientSocket::ProcessResponseHeaders(
-    const spdy::Http2HeaderBlock& headers) {
+    const quiche::HttpHeaderBlock& headers) {
   if (SpdyHeadersToHttpResponse(headers, &response_) != OK) {
     DLOG(WARNING) << "Invalid headers";
     return ERR_QUIC_PROTOCOL_ERROR;
   }
   return OK;
+}
+
+void QuicProxyClientSocket::OnBeforeTunnelRequestComplete(
+    base::expected<HttpRequestHeaders, Error> result) {
+  if (result.has_value()) {
+    proxy_delegate_headers_ = std::move(result.value());
+    OnIOComplete(OK);
+  } else {
+    // OnBeforeTunnelRequestComplete should never report ERR_IO_PENDING since
+    // it's used to signal that IO has completed.
+    CHECK_NE(ERR_IO_PENDING, result.error());
+    // Success should always be reported via a base::expected containing an
+    // HttpRequestHeaders, see ProxyDelegate::OnBeforeTunnelRequest.
+    CHECK_NE(OK, result.error());
+    OnIOComplete(result.error());
+  }
 }
 
 }  // namespace net

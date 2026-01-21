@@ -5,6 +5,7 @@
 #ifndef CHROME_UTILITY_CHROME_CONTENT_UTILITY_CLIENT_H_
 #define CHROME_UTILITY_CHROME_CONTENT_UTILITY_CLIENT_H_
 
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/public/utility/content_utility_client.h"
 
@@ -25,6 +26,10 @@ class ChromeContentUtilityClient : public content::ContentUtilityClient {
   void UtilityThreadStarted() override;
   void RegisterMainThreadServices(mojo::ServiceFactory& services) override;
   void RegisterIOThreadServices(mojo::ServiceFactory& services) override;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  mojo::GenericPendingReceiver InitMojoServiceManager() override;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
  private:
   // True if the utility process runs with elevated privileges.

@@ -8,10 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "ash/utility/persistent_proto.h"
 #include "base/files/file_path.h"
-#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/app_list/search/util/ftrl_optimizer.pb.h"
-#include "chrome/browser/ash/app_list/search/util/persistent_proto.h"
 
 namespace app_list {
 
@@ -61,13 +60,15 @@ class FtrlOptimizer {
     size_t num_experts = 0;
   };
 
-  using Proto = PersistentProto<FtrlOptimizerProto>;
+  using Proto = ash::PersistentProto<FtrlOptimizerProto>;
 
   FtrlOptimizer(FtrlOptimizer::Proto, const Params& params);
   ~FtrlOptimizer();
 
   FtrlOptimizer(const FtrlOptimizer&) = delete;
   FtrlOptimizer& operator=(const FtrlOptimizer&) = delete;
+
+  void Clear();
 
   // Score the given |items| using the given |scores| from experts. The outer
   // vector of |scores| must be Params.num_experts long, with inner vectors the
@@ -80,20 +81,16 @@ class FtrlOptimizer {
  private:
   double Loss(size_t expert, const std::string& item);
 
-  void OnProtoRead(ReadStatus status);
+  void OnProtoInit();
 
   Params params_;
 
-  // The items most recently passed to |Score|.
-  std::vector<std::string> last_items_;
-  // For each expert (outer vector) the scores returned by that expert for the
-  // content of |last_items_|. The inner vector will be the same size as
-  // |last_items_|.
-  std::vector<std::vector<double>> last_expert_scores_;
+  // For each result id it matched a vector that contains result from
+  // different experts. The vector size will equal the number of experts,
+  // and the scores are always in the same order of experts.
+  std::map<std::string, std::vector<double>> last_expert_scores_;
 
-  PersistentProto<FtrlOptimizerProto> proto_;
-
-  base::WeakPtrFactory<FtrlOptimizer> weak_factory_{this};
+  ash::PersistentProto<FtrlOptimizerProto> proto_;
 };
 
 }  // namespace app_list

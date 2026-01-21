@@ -5,16 +5,24 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_NAVIGATION_CONTROLLER_DELEGATE_H_
 #define CONTENT_BROWSER_RENDERER_HOST_NAVIGATION_CONTROLLER_DELEGATE_H_
 
-#include <stdint.h>
-
 #include "content/public/browser/invalidate_type.h"
-#include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/navigation_details.h"
+
+#if BUILDFLAG(IS_ANDROID)
+namespace gfx {
+class ColorSpace;
+enum class ContentColorUsage : uint8_t;
+}  // namespace gfx
+
+namespace viz {
+class RasterContextProvider;
+}  // namespace viz
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
 
+struct EntryChangedDetails;
 struct LoadCommittedDetails;
-class WebContents;
+struct PrunedDetails;
 
 // Interface for objects embedding a NavigationController to provide the
 // functionality NavigationController needs.
@@ -42,11 +50,15 @@ class NavigationControllerDelegate {
   // preserved in the omnibox.  Defaults to false.
   virtual bool ShouldPreserveAbortedURLs() = 0;
 
-  // TODO(crbug.com/1225205): Remove this. It is a layering violation as
-  // renderer_host/ cannot depend on WebContents.
-  virtual WebContents* DeprecatedGetWebContents() = 0;
-
   virtual void UpdateOverridingUserAgent() = 0;
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual scoped_refptr<viz::RasterContextProvider>
+  GetRasterContextProvider() = 0;
+  virtual gfx::ColorSpace GetOutputColorSpace(
+      gfx::ContentColorUsage color_usage,
+      bool needs_alpha) = 0;
+#endif  // BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace content

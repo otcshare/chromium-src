@@ -4,8 +4,9 @@
 
 #include "media/renderers/decrypting_renderer.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/base/cdm_context.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_log.h"
@@ -47,9 +48,6 @@ void DecryptingRenderer::Initialize(MediaResource* media_resource,
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(media_resource);
   DCHECK(client);
-
-  // Using |this| with a MediaResource::Type::URL will result in a crash.
-  DCHECK_EQ(media_resource->GetType(), MediaResource::Type::STREAM);
 
   media_resource_ = media_resource;
   client_ = client;
@@ -107,7 +105,7 @@ void DecryptingRenderer::SetCdm(CdmContext* cdm_context,
 }
 
 void DecryptingRenderer::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+    std::optional<base::TimeDelta> latency_hint) {
   renderer_->SetLatencyHint(latency_hint);
 }
 
@@ -115,9 +113,10 @@ void DecryptingRenderer::SetPreservesPitch(bool preserves_pitch) {
   renderer_->SetPreservesPitch(preserves_pitch);
 }
 
-void DecryptingRenderer::SetWasPlayedWithUserActivation(
-    bool was_played_with_user_activation) {
-  renderer_->SetWasPlayedWithUserActivation(was_played_with_user_activation);
+void DecryptingRenderer::SetWasPlayedWithUserActivationAndHighMediaEngagement(
+    bool was_played_with_user_activation_and_high_media_engagement) {
+  renderer_->SetWasPlayedWithUserActivationAndHighMediaEngagement(
+      was_played_with_user_activation_and_high_media_engagement);
 }
 
 void DecryptingRenderer::Flush(base::OnceClosure flush_cb) {
@@ -140,18 +139,12 @@ base::TimeDelta DecryptingRenderer::GetMediaTime() {
   return renderer_->GetMediaTime();
 }
 
-void DecryptingRenderer::OnSelectedVideoTracksChanged(
-    const std::vector<DemuxerStream*>& enabled_tracks,
+void DecryptingRenderer::OnTracksChanged(
+    DemuxerStream::Type track_type,
+    DemuxerStream* enabled_track,
     base::OnceClosure change_completed_cb) {
-  renderer_->OnSelectedVideoTracksChanged(enabled_tracks,
-                                          std::move(change_completed_cb));
-}
-
-void DecryptingRenderer::OnEnabledAudioTracksChanged(
-    const std::vector<DemuxerStream*>& enabled_tracks,
-    base::OnceClosure change_completed_cb) {
-  renderer_->OnEnabledAudioTracksChanged(enabled_tracks,
-                                         std::move(change_completed_cb));
+  renderer_->OnTracksChanged(track_type, enabled_track,
+                             std::move(change_completed_cb));
 }
 
 RendererType DecryptingRenderer::GetRendererType() {
@@ -192,7 +185,7 @@ void DecryptingRenderer::InitializeRenderer(bool success) {
 bool DecryptingRenderer::HasEncryptedStream() {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
 
-  for (auto* stream : media_resource_->GetAllStreams()) {
+  for (media::DemuxerStream* stream : media_resource_->GetAllStreams()) {
     if ((stream->type() == DemuxerStream::AUDIO &&
          stream->audio_decoder_config().is_encrypted()) ||
         (stream->type() == DemuxerStream::VIDEO &&

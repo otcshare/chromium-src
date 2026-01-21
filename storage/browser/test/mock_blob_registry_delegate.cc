@@ -3,8 +3,12 @@
 // found in the LICENSE file.
 
 #include "storage/browser/test/mock_blob_registry_delegate.h"
+#include "base/functional/callback_helpers.h"
 
 namespace storage {
+
+MockBlobRegistryDelegate::MockBlobRegistryDelegate() = default;
+MockBlobRegistryDelegate::~MockBlobRegistryDelegate() = default;
 
 bool MockBlobRegistryDelegate::CanReadFile(const base::FilePath& file) {
   return can_read_file_result;

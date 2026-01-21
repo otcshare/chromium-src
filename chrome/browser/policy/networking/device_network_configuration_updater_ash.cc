@@ -6,18 +6,18 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_device_handler.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
@@ -110,8 +110,8 @@ void DeviceNetworkConfigurationUpdaterAsh::ImportClientCertificates() {
 }
 
 void DeviceNetworkConfigurationUpdaterAsh::ApplyNetworkPolicy(
-    base::Value::List network_configs_onc,
-    base::Value::Dict global_network_config) {
+    const base::Value::List& network_configs_onc,
+    const base::Value::Dict& global_network_config) {
   // Ensure this is runnng on the UI thead because we're accessing global data
   // to populate the substitutions.
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -129,10 +129,9 @@ void DeviceNetworkConfigurationUpdaterAsh::ApplyNetworkPolicy(
 
   network_config_handler_->SetProfileWideVariableExpansions(
       /*userhash=*/std::string(), std::move(substitutions));
-  network_config_handler_->SetPolicy(
-      onc_source_, /*userhash=*/std::string(),
-      base::Value(std::move(network_configs_onc)),
-      base::Value(std::move(global_network_config)));
+  network_config_handler_->SetPolicy(onc_source_, /*userhash=*/std::string(),
+                                     network_configs_onc,
+                                     global_network_config);
 }
 
 void DeviceNetworkConfigurationUpdaterAsh::OnDataRoamingSettingChanged() {

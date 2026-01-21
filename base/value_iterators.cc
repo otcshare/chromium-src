@@ -6,9 +6,7 @@
 
 #include "base/values.h"
 
-namespace base {
-
-namespace detail {
+namespace base::detail {
 
 // ----------------------------------------------------------------------------
 // dict_iterator.
@@ -27,11 +25,11 @@ dict_iterator& dict_iterator::operator=(const dict_iterator& dict_iter) =
 
 dict_iterator::~dict_iterator() = default;
 
-dict_iterator::reference dict_iterator::operator*() {
+dict_iterator::reference dict_iterator::operator*() const {
   return {dict_iter_->first, *dict_iter_->second};
 }
 
-dict_iterator::pointer dict_iterator::operator->() {
+dict_iterator::pointer dict_iterator::operator->() const {
   return pointer(operator*());
 }
 
@@ -59,10 +57,6 @@ dict_iterator dict_iterator::operator--(int) {
 
 bool operator==(const dict_iterator& lhs, const dict_iterator& rhs) {
   return lhs.dict_iter_ == rhs.dict_iter_;
-}
-
-bool operator!=(const dict_iterator& lhs, const dict_iterator& rhs) {
-  return !(lhs == rhs);
 }
 
 // ----------------------------------------------------------------------------
@@ -118,121 +112,4 @@ bool operator==(const const_dict_iterator& lhs,
   return lhs.dict_iter_ == rhs.dict_iter_;
 }
 
-bool operator!=(const const_dict_iterator& lhs,
-                const const_dict_iterator& rhs) {
-  return !(lhs == rhs);
-}
-
-// ----------------------------------------------------------------------------
-// dict_iterator_proxy.
-
-dict_iterator_proxy::dict_iterator_proxy(DictStorage* storage)
-    : storage_(storage) {}
-
-dict_iterator_proxy::size_type dict_iterator_proxy::size() const {
-  return storage_->size();
-}
-
-dict_iterator_proxy::iterator dict_iterator_proxy::begin() {
-  return iterator(storage_->begin());
-}
-
-dict_iterator_proxy::const_iterator dict_iterator_proxy::begin() const {
-  return const_iterator(storage_->begin());
-}
-
-dict_iterator_proxy::iterator dict_iterator_proxy::end() {
-  return iterator(storage_->end());
-}
-
-dict_iterator_proxy::const_iterator dict_iterator_proxy::end() const {
-  return const_iterator(storage_->end());
-}
-
-dict_iterator_proxy::reverse_iterator dict_iterator_proxy::rbegin() {
-  return reverse_iterator(end());
-}
-
-dict_iterator_proxy::const_reverse_iterator dict_iterator_proxy::rbegin()
-    const {
-  return const_reverse_iterator(end());
-}
-
-dict_iterator_proxy::reverse_iterator dict_iterator_proxy::rend() {
-  return reverse_iterator(begin());
-}
-
-dict_iterator_proxy::const_reverse_iterator dict_iterator_proxy::rend() const {
-  return const_reverse_iterator(begin());
-}
-
-dict_iterator_proxy::const_iterator dict_iterator_proxy::cbegin() const {
-  return const_iterator(begin());
-}
-
-dict_iterator_proxy::const_iterator dict_iterator_proxy::cend() const {
-  return const_iterator(end());
-}
-
-dict_iterator_proxy::const_reverse_iterator dict_iterator_proxy::crbegin()
-    const {
-  return const_reverse_iterator(rbegin());
-}
-
-dict_iterator_proxy::const_reverse_iterator dict_iterator_proxy::crend() const {
-  return const_reverse_iterator(rend());
-}
-
-// ----------------------------------------------------------------------------
-// const_dict_iterator_proxy.
-
-const_dict_iterator_proxy::const_dict_iterator_proxy(const DictStorage* storage)
-    : storage_(storage) {}
-
-const_dict_iterator_proxy::const_iterator const_dict_iterator_proxy::begin()
-    const {
-  return const_iterator(storage_->begin());
-}
-
-const_dict_iterator_proxy::size_type const_dict_iterator_proxy::size() const {
-  return storage_->size();
-}
-
-const_dict_iterator_proxy::const_iterator const_dict_iterator_proxy::end()
-    const {
-  return const_iterator(storage_->end());
-}
-
-const_dict_iterator_proxy::const_reverse_iterator
-const_dict_iterator_proxy::rbegin() const {
-  return const_reverse_iterator(end());
-}
-
-const_dict_iterator_proxy::const_reverse_iterator
-const_dict_iterator_proxy::rend() const {
-  return const_reverse_iterator(begin());
-}
-
-const_dict_iterator_proxy::const_iterator const_dict_iterator_proxy::cbegin()
-    const {
-  return const_iterator(begin());
-}
-
-const_dict_iterator_proxy::const_iterator const_dict_iterator_proxy::cend()
-    const {
-  return const_iterator(end());
-}
-
-const_dict_iterator_proxy::const_reverse_iterator
-const_dict_iterator_proxy::crbegin() const {
-  return const_reverse_iterator(rbegin());
-}
-
-const_dict_iterator_proxy::const_reverse_iterator
-const_dict_iterator_proxy::crend() const {
-  return const_reverse_iterator(rend());
-}
-
-}  // namespace detail
-
-}  // namespace base
+}  // namespace base::detail

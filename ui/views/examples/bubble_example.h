@@ -5,6 +5,7 @@
 #ifndef UI_VIEWS_EXAMPLES_BUBBLE_EXAMPLE_H_
 #define UI_VIEWS_EXAMPLES_BUBBLE_EXAMPLE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "ui/events/event.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/examples/example_base.h"
@@ -30,15 +31,14 @@ class VIEWS_EXAMPLES_EXPORT BubbleExample : public ExampleBase {
   void CreateExampleView(View* container) override;
 
  private:
-  void ShowBubble(Button** button,
+  void ShowBubble(raw_ptr<Button>* button,
                   BubbleBorder::Shadow shadow,
                   bool persistent,
                   const ui::Event& event);
 
-  Button* no_shadow_legacy_;
-  Button* standard_shadow_;
-  Button* no_shadow_;
-  Button* persistent_;
+  raw_ptr<Button> standard_shadow_;
+  raw_ptr<Button> no_shadow_;
+  raw_ptr<Button> persistent_;
 };
 
 }  // namespace examples

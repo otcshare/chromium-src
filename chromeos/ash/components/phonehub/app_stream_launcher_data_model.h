@@ -10,6 +10,7 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "chromeos/ash/components/phonehub/notification.h"
+#include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 
 namespace ash::phonehub {
 
@@ -38,6 +39,10 @@ class AppStreamLauncherDataModel {
   void SetShouldShowMiniLauncher(bool should_show_mini_launcher);
   bool GetShouldShowMiniLauncher();
 
+  int launcher_height() { return launcher_height_; }
+  int launcher_width() { return launcher_width_; }
+  void SetLauncherSize(int height, int width);
+
   // Resets the internal state w/o updating the UI.
   void ResetState();
 
@@ -48,11 +53,15 @@ class AppStreamLauncherDataModel {
       const std::vector<Notification::AppMetadata>& streamable_apps);
   const std::vector<Notification::AppMetadata>* GetAppsList();
   const std::vector<Notification::AppMetadata>* GetAppsListSortedByName();
+  void AddAppToList(const Notification::AppMetadata& app);
+  void RemoveAppFromList(const proto::App app);
 
  private:
   // Indicates if the Mini Launcher should be shown when the status is
   // "phone connected" or not.
   bool should_show_app_stream_launcher_ = false;
+  int launcher_height_ = 0;
+  int launcher_width_ = 0;
   std::vector<Notification::AppMetadata> apps_list_;
   std::vector<Notification::AppMetadata> apps_list_sorted_by_name_;
   base::ObserverList<Observer> observer_list_;

@@ -3,10 +3,16 @@
 // found in the LICENSE file.
 
 #include <windows.h>
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <algorithm>
+#include <array>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
@@ -41,8 +47,7 @@ class EdgeDatabaseReaderTest : public ::testing::Test {
                  const std::string& contents,
                  base::FilePath* output_path) {
     *output_path = temp_dir_.GetPath().Append(name);
-    return base::WriteFile(*output_path, contents.c_str(), contents.size()) >=
-           0;
+    return base::WriteFile(*output_path, contents);
   }
 
   void SetUp() override {
@@ -59,8 +64,7 @@ class EdgeDatabaseReaderTest : public ::testing::Test {
       return false;
     if (!compression::GzipUncompress(gzip_data, &gzip_data))
       return false;
-    return base::WriteFile(output_file, gzip_data.c_str(), gzip_data.size()) >=
-           0;
+    return base::WriteFile(output_file, gzip_data);
   }
 
   base::ScopedTempDir temp_dir_;
@@ -167,8 +171,8 @@ TEST_F(EdgeDatabaseReaderTest, OpenTableAndReadDataDatabaseTest) {
     GUID guid_col_value = {};
     GUID expected_guid_col_value = {};
     EXPECT_TRUE(table_enum->RetrieveColumn(L"GuidCol", &guid_col_value));
-    memset(&expected_guid_col_value, row_count,
-           sizeof(expected_guid_col_value));
+    std::ranges::fill(base::byte_span_from_ref(expected_guid_col_value),
+                      static_cast<uint8_t>(row_count));
     EXPECT_EQ(expected_guid_col_value, guid_col_value);
 
     FILETIME filetime_col_value = {};
@@ -187,7 +191,7 @@ TEST_F(EdgeDatabaseReaderTest, OpenTableAndReadDataDatabaseTest) {
               filetime_col_value.dwHighDateTime);
 
     std::u16string row_string =
-        base::AsString16(base::StringPrintf(L"String: %d", row_count));
+        base::ASCIIToUTF16(base::StringPrintf("String: %d", row_count));
     std::u16string str_col_value;
     EXPECT_TRUE(table_enum->RetrieveColumn(L"StrCol", &str_col_value));
     EXPECT_EQ(row_string, str_col_value);
@@ -263,7 +267,7 @@ TEST_F(EdgeDatabaseReaderTest, EmptyTableDatabaseTest) {
 }
 
 TEST_F(EdgeDatabaseReaderTest, UnicodeStringsDatabaseTest) {
-  const char* utf8_strings[] = {
+  static constexpr std::array utf8_strings = {
       "\xE3\x81\x93\xE3\x81\xAB\xE3\x81\xA1\xE3\x81\xAF",
       "\xE4\xBD\xA0\xE5\xA5\xBD",
       ("\xD0\x97\xD0\xB4\xD1\x80\xD0\xB0\xD0\xB2\xD1\x81\xD1\x82\xD0\xB2\xD1"
@@ -279,16 +283,16 @@ TEST_F(EdgeDatabaseReaderTest, UnicodeStringsDatabaseTest) {
   std::unique_ptr<EdgeDatabaseTableEnumerator> table_enum =
       reader.OpenTableEnumerator(L"UnicodeTable");
   EXPECT_NE(nullptr, table_enum);
-  size_t utf8_strings_count = std::size(utf8_strings);
-  for (size_t row_count = 0; row_count < utf8_strings_count; ++row_count) {
+  for (size_t row_count = 0; row_count < utf8_strings.size(); ++row_count) {
     std::u16string row_string = base::UTF8ToUTF16(utf8_strings[row_count]);
     std::u16string str_col_value;
     EXPECT_TRUE(table_enum->RetrieveColumn(L"StrCol", &str_col_value));
     EXPECT_EQ(row_string, str_col_value);
-    if (row_count < utf8_strings_count - 1)
+    if (row_count < utf8_strings.size() - 1) {
       EXPECT_TRUE(table_enum->Next());
-    else
+    } else {
       EXPECT_FALSE(table_enum->Next());
+    }
   }
 }
 
@@ -330,9 +334,8 @@ TEST_F(EdgeDatabaseReaderTest, CheckNullColumnDatabaseTest) {
 
   GUID guid_col_value = {};
   GUID expected_guid_col_value = {};
-  memset(&guid_col_value, 0x1, sizeof(guid_col_value));
+  std::ranges::fill(base::byte_span_from_ref(guid_col_value), 0x1);
   EXPECT_TRUE(table_enum->RetrieveColumn(L"GuidCol", &guid_col_value));
-  memset(&expected_guid_col_value, 0, sizeof(expected_guid_col_value));
   EXPECT_EQ(expected_guid_col_value, guid_col_value);
 
   FILETIME filetime_col_value = {1, 1};

@@ -9,7 +9,8 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -18,15 +19,16 @@ using storage::FileStreamReader;
 
 namespace {
 
-const size_t kDesiredNumberOfBuffers = 2;  // So we are always one buffer ahead.
-const int kBufferSize = 1024*1024;  // 1MB to minimize transaction costs.
+// So that we are always one buffer ahead.
+constexpr size_t kDesiredNumberOfBuffers = 2;
+constexpr int kBufferSize = 1024 * 1024;  // 1MB to minimize transaction costs.
 
 }  // namespace
 
 ReadaheadFileStreamReader::ReadaheadFileStreamReader(FileStreamReader* source)
     : source_(source), source_error_(0), source_has_pending_read_(false) {}
 
-ReadaheadFileStreamReader::~ReadaheadFileStreamReader() {}
+ReadaheadFileStreamReader::~ReadaheadFileStreamReader() = default;
 
 int ReadaheadFileStreamReader::Read(net::IOBuffer* buf,
                                     int buf_len,
@@ -72,13 +74,11 @@ int ReadaheadFileStreamReader::FinishReadFromCacheOrStoredError(
   while (sink->BytesRemaining() > 0 && !buffers_.empty()) {
     net::DrainableIOBuffer* source_buffer = buffers_.front().get();
 
-    DCHECK(source_buffer->BytesRemaining() > 0);
+    DCHECK_GT(source_buffer->BytesRemaining(), 0);
 
-    int copy_len = std::min(source_buffer->BytesRemaining(),
-                            sink->BytesRemaining());
-    std::copy(source_buffer->data(), source_buffer->data() + copy_len,
-              sink->data());
-
+    const int copy_len =
+        std::min(source_buffer->BytesRemaining(), sink->BytesRemaining());
+    sink->first(copy_len).copy_from(source_buffer->first(copy_len));
     source_buffer->DidConsume(copy_len);
     sink->DidConsume(copy_len);
 
@@ -102,7 +102,7 @@ void ReadaheadFileStreamReader::ReadFromSourceIfNeeded() {
   source_has_pending_read_ = true;
 
   scoped_refptr<net::IOBuffer> buf =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+      base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
   int result = source_->Read(
       buf.get(), kBufferSize,
       base::BindOnce(&ReadaheadFileStreamReader::OnFinishReadFromSource,

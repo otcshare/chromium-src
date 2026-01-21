@@ -4,14 +4,15 @@
 
 #include "net/http/http_server_properties.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -23,15 +24,19 @@
 #include "net/base/features.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/ip_address.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/base/privacy_mode.h"
 #include "net/base/schemeful_site.h"
 #include "net/http/http_network_session.h"
+#include "net/quic/quic_context.h"
 #include "net/test/test_with_task_environment.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
 namespace net {
 
-const base::TimeDelta BROKEN_ALT_SVC_EXPIRE_DELAYS[10] = {
+const std::array<base::TimeDelta, 10> BROKEN_ALT_SVC_EXPIRE_DELAYS = {
     base::Seconds(300),    base::Seconds(600),   base::Seconds(1200),
     base::Seconds(2400),   base::Seconds(4800),  base::Seconds(9600),
     base::Seconds(19200),  base::Seconds(38400), base::Seconds(76800),
@@ -48,7 +53,7 @@ class HttpServerPropertiesPeer {
           NetworkAnonymizationKey()) {
     BrokenAlternativeService broken_alternative_service(
         alternative_service, network_anonymization_key,
-        true /* use_network_anonymization_key */);
+        /*use_network_anonymization_key=*/true);
     BrokenAlternativeServiceList::iterator unused_it;
     impl->broken_alternative_services_.AddToBrokenListAndMap(
         broken_alternative_service, when, &unused_it);
@@ -76,8 +81,8 @@ namespace {
 HttpServerProperties::ServerInfoMapKey CreateSimpleKey(
     const url::SchemeHostPort& server) {
   return HttpServerProperties::ServerInfoMapKey(
-      server, net::NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      server, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
 }
 
 class HttpServerPropertiesTest : public TestWithTaskEnvironment {
@@ -88,17 +93,19 @@ class HttpServerPropertiesTest : public TestWithTaskEnvironment {
         // Many tests assume partitioning is disabled by default.
         feature_list_(CreateFeatureListWithPartitioningDisabled()),
         test_tick_clock_(GetMockTickClock()),
-        impl_(nullptr /* pref_delegate */,
-              nullptr /* net_log */,
+        impl_(/*pref_delegate=*/nullptr,
+              /*net_log=*/nullptr,
               test_tick_clock_,
               &test_clock_) {
     // Set |test_clock_| to some random time.
     test_clock_.Advance(base::Seconds(12345));
 
     SchemefulSite site1(GURL("https://foo.test/"));
-    network_anonymization_key1_ = NetworkAnonymizationKey(site1, site1);
+    network_anonymization_key1_ =
+        NetworkAnonymizationKey::CreateSameSite(site1);
     SchemefulSite site2(GURL("https://bar.test/"));
-    network_anonymization_key2_ = NetworkAnonymizationKey(site2, site2);
+    network_anonymization_key2_ =
+        NetworkAnonymizationKey::CreateSameSite(site2);
   }
 
   // This is a little awkward, but need to create and configure the
@@ -108,7 +115,7 @@ class HttpServerPropertiesTest : public TestWithTaskEnvironment {
     std::unique_ptr<base::test::ScopedFeatureList> feature_list =
         std::make_unique<base::test::ScopedFeatureList>();
     feature_list->InitAndDisableFeature(
-        features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+        features::kPartitionConnectionsByNetworkIsolationKey);
     return feature_list;
   }
 
@@ -123,7 +130,7 @@ class HttpServerPropertiesTest : public TestWithTaskEnvironment {
   void SetAlternativeService(const url::SchemeHostPort& origin,
                              const AlternativeService& alternative_service) {
     const base::Time expiration = test_clock_.Now() + base::Days(1);
-    if (alternative_service.protocol == kProtoQUIC) {
+    if (alternative_service.protocol == NextProto::kProtoQUIC) {
       impl_.SetQuicAlternativeService(origin, NetworkAnonymizationKey(),
                                       alternative_service, expiration,
                                       DefaultSupportedQuicVersions());
@@ -133,9 +140,36 @@ class HttpServerPropertiesTest : public TestWithTaskEnvironment {
     }
   }
 
-  void MarkBrokenAndLetExpireAlternativeServiceNTimes(
-      const AlternativeService& alternative_service,
-      int num_times) {}
+  // Test that HTTP/1.1 is required for the provided server, and that
+  // MaybeForceHTTP11() modifies the `alpn_protos` of a passed in SSLConfig as
+  // expected.
+  static void ExpectHttp11Required(HttpServerProperties& properties,
+                                   const url::SchemeHostPort& server,
+                                   const NetworkAnonymizationKey& nak) {
+    EXPECT_TRUE(properties.RequiresHTTP11(server, nak));
+
+    SSLConfig ssl_config;
+    ssl_config.alpn_protos = {NextProto::kProtoHTTP2, NextProto::kProtoHTTP11};
+    properties.MaybeForceHTTP11(server, nak, &ssl_config);
+    EXPECT_THAT(ssl_config.alpn_protos,
+                testing::ElementsAre(NextProto::kProtoHTTP11));
+  }
+
+  // Test that HTTP/1.1 is not required for the provided server, and that
+  // MaybeForceHTTP11() does not affect the `alpn_protos` of a passed in
+  // SSLConfig.
+  static void ExpectHttp11NotRequired(HttpServerProperties& properties,
+                                      const url::SchemeHostPort& server,
+                                      const NetworkAnonymizationKey& nak) {
+    EXPECT_FALSE(properties.RequiresHTTP11(server, nak));
+
+    SSLConfig ssl_config;
+    ssl_config.alpn_protos = {NextProto::kProtoHTTP2, NextProto::kProtoHTTP11};
+    properties.MaybeForceHTTP11(server, nak, &ssl_config);
+    EXPECT_THAT(
+        ssl_config.alpn_protos,
+        testing::ElementsAre(NextProto::kProtoHTTP2, NextProto::kProtoHTTP11));
+  }
 
   std::unique_ptr<base::test::ScopedFeatureList> feature_list_;
 
@@ -203,44 +237,6 @@ TEST_F(HttpServerPropertiesTest, SetSupportsSpdy) {
                                             NetworkAnonymizationKey()));
 }
 
-TEST_F(HttpServerPropertiesTest, SetSupportsSpdyWebSockets) {
-  // The https and wss servers should be treated as the same server, as should
-  // the http and ws servers.
-  url::SchemeHostPort https_server("https", "www.test.com", 443);
-  url::SchemeHostPort wss_server("wss", "www.test.com", 443);
-  url::SchemeHostPort http_server("http", "www.test.com", 443);
-  url::SchemeHostPort ws_server("ws", "www.test.com", 443);
-
-  EXPECT_FALSE(impl_.GetSupportsSpdy(https_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(wss_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(http_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(ws_server, NetworkAnonymizationKey()));
-
-  impl_.SetSupportsSpdy(wss_server, NetworkAnonymizationKey(), true);
-  EXPECT_TRUE(impl_.GetSupportsSpdy(https_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(wss_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(http_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(ws_server, NetworkAnonymizationKey()));
-
-  impl_.SetSupportsSpdy(http_server, NetworkAnonymizationKey(), true);
-  EXPECT_TRUE(impl_.GetSupportsSpdy(https_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(wss_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(http_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(ws_server, NetworkAnonymizationKey()));
-
-  impl_.SetSupportsSpdy(https_server, NetworkAnonymizationKey(), false);
-  EXPECT_FALSE(impl_.GetSupportsSpdy(https_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(wss_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(http_server, NetworkAnonymizationKey()));
-  EXPECT_TRUE(impl_.GetSupportsSpdy(ws_server, NetworkAnonymizationKey()));
-
-  impl_.SetSupportsSpdy(ws_server, NetworkAnonymizationKey(), false);
-  EXPECT_FALSE(impl_.GetSupportsSpdy(https_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(wss_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(http_server, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetSupportsSpdy(ws_server, NetworkAnonymizationKey()));
-}
-
 TEST_F(HttpServerPropertiesTest, SetSupportsSpdyWithNetworkIsolationKey) {
   const url::SchemeHostPort kServer("https", "foo.test", 443);
 
@@ -277,11 +273,11 @@ TEST_F(HttpServerPropertiesTest, SetSupportsSpdyWithNetworkIsolationKey) {
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   EXPECT_FALSE(
@@ -479,15 +475,16 @@ TEST_F(HttpServerPropertiesTest, SupportsRequestPriority) {
 
   // Add www.youtube.com:443 as supporting QUIC.
   url::SchemeHostPort youtube_server("https", "www.youtube.com", 443);
-  const AlternativeService alternative_service1(kProtoQUIC, "www.youtube.com",
-                                                443);
+  const AlternativeService alternative_service1(NextProto::kProtoQUIC,
+                                                "www.youtube.com", 443);
   SetAlternativeService(youtube_server, alternative_service1);
   EXPECT_TRUE(
       impl_.SupportsRequestPriority(youtube_server, NetworkAnonymizationKey()));
 
   // Add www.example.com:443 with two alternative services, one supporting QUIC.
   url::SchemeHostPort example_server("https", "www.example.com", 443);
-  const AlternativeService alternative_service2(kProtoHTTP2, "", 443);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "",
+                                                443);
   SetAlternativeService(example_server, alternative_service2);
   SetAlternativeService(example_server, alternative_service1);
   EXPECT_TRUE(
@@ -577,7 +574,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, Basic) {
   url::SchemeHostPort test_server("http", "foo", 80);
   EXPECT_FALSE(HasAlternativeService(test_server, NetworkAnonymizationKey()));
 
-  AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo", 443);
   SetAlternativeService(test_server, alternative_service);
   const AlternativeServiceInfoVector alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(test_server, NetworkAnonymizationKey());
@@ -595,22 +592,22 @@ TEST_F(AlternateProtocolServerPropertiesTest, ExcludeOrigin) {
   // Same hostname, same port, TCP: should be ignored.
   AlternativeServiceInfo alternative_service_info1 =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "foo", 443), expiration);
+          AlternativeService(NextProto::kProtoHTTP2, "foo", 443), expiration);
   alternative_service_info_vector.push_back(alternative_service_info1);
   // Different hostname: GetAlternativeServiceInfos should return this one.
   AlternativeServiceInfo alternative_service_info2 =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "bar", 443), expiration);
+          AlternativeService(NextProto::kProtoHTTP2, "bar", 443), expiration);
   alternative_service_info_vector.push_back(alternative_service_info2);
   // Different port: GetAlternativeServiceInfos should return this one too.
   AlternativeServiceInfo alternative_service_info3 =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "foo", 80), expiration);
+          AlternativeService(NextProto::kProtoHTTP2, "foo", 80), expiration);
   alternative_service_info_vector.push_back(alternative_service_info3);
   // QUIC: GetAlternativeServices should return this one too.
   AlternativeServiceInfo alternative_service_info4 =
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
-          AlternativeService(kProtoQUIC, "foo", 443), expiration,
+          AlternativeService(NextProto::kProtoQUIC, "foo", 443), expiration,
           DefaultSupportedQuicVersions());
   alternative_service_info_vector.push_back(alternative_service_info4);
 
@@ -632,7 +629,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, Set) {
   // |server_info_map| does not have an entry for
   // |test_server1|.
   url::SchemeHostPort test_server1("http", "foo1", 80);
-  const AlternativeService alternative_service1(kProtoHTTP2, "bar1", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "bar1",
+                                                443);
   const base::Time now = test_clock_.Now();
   base::Time expiration1 = now + base::Days(1);
   // 1st entry in the memory.
@@ -643,7 +641,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, Set) {
   // overwritten by OnServerInfoLoadedForTesting(), because
   // |server_info_map| has an entry for |test_server2|.
   AlternativeServiceInfoVector alternative_service_info_vector;
-  const AlternativeService alternative_service2(kProtoHTTP2, "bar2", 443);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "bar2",
+                                                443);
   base::Time expiration2 = now + base::Days(2);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
@@ -656,7 +655,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, Set) {
   // Prepare |server_info_map| to be loaded by OnServerInfoLoadedForTesting().
   std::unique_ptr<HttpServerProperties::ServerInfoMap> server_info_map =
       std::make_unique<HttpServerProperties::ServerInfoMap>();
-  const AlternativeService alternative_service3(kProtoHTTP2, "bar3", 123);
+  const AlternativeService alternative_service3(NextProto::kProtoHTTP2, "bar3",
+                                                123);
   base::Time expiration3 = now + base::Days(3);
   const AlternativeServiceInfo alternative_service_info1 =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
@@ -667,7 +667,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, Set) {
       AlternativeServiceInfoVector(/*size=*/1, alternative_service_info1);
 
   url::SchemeHostPort test_server3("http", "foo3", 80);
-  const AlternativeService alternative_service4(kProtoHTTP2, "bar4", 1234);
+  const AlternativeService alternative_service4(NextProto::kProtoHTTP2, "bar4",
+                                                1234);
   base::Time expiration4 = now + base::Days(4);
   const AlternativeServiceInfo alternative_service_info2 =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
@@ -723,7 +724,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetWebSockets) {
   url::SchemeHostPort http_server("http", "www.test.com", 443);
   url::SchemeHostPort ws_server("ws", "www.test.com", 443);
 
-  AlternativeService alternative_service(kProtoHTTP2, "bar", 443);
+  AlternativeService alternative_service(NextProto::kProtoHTTP2, "bar", 443);
 
   EXPECT_EQ(
       0u,
@@ -816,8 +817,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetWithNetworkIsolationKey) {
   const url::SchemeHostPort kServer("https", "foo.test", 443);
   const AlternativeServiceInfoVector kAlternativeServices(
       {AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "foo", 443),
-          base::Time::Now() + base::Days(1) /* expiration */)});
+          AlternativeService(NextProto::kProtoHTTP2, "foo", 443),
+          /*expiration=*/base::Time::Now() + base::Days(1))});
 
   EXPECT_TRUE(
       impl_.GetAlternativeServiceInfos(kServer, network_anonymization_key1_)
@@ -852,11 +853,11 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetWithNetworkIsolationKey) {
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   properties.SetAlternativeServices(kServer, network_anonymization_key1_,
@@ -899,10 +900,10 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetWithNetworkIsolationKey) {
 // empty hostname is the mapping.
 TEST_F(AlternateProtocolServerPropertiesTest, SetWithEmptyHostname) {
   url::SchemeHostPort server("https", "foo", 443);
-  const AlternativeService alternative_service_with_empty_hostname(kProtoHTTP2,
-                                                                   "", 1234);
-  const AlternativeService alternative_service_with_foo_hostname(kProtoHTTP2,
-                                                                 "foo", 1234);
+  const AlternativeService alternative_service_with_empty_hostname(
+      NextProto::kProtoHTTP2, "", 1234);
+  const AlternativeService alternative_service_with_foo_hostname(
+      NextProto::kProtoHTTP2, "foo", 1234);
   SetAlternativeService(server, alternative_service_with_empty_hostname);
   impl_.MarkAlternativeServiceBroken(alternative_service_with_foo_hostname,
                                      NetworkAnonymizationKey());
@@ -920,12 +921,12 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetWithEmptyHostname) {
             alternative_service_info_vector[0].alternative_service());
 }
 
-// Regression test for https://crbug.com/516486:
 // GetAlternativeServiceInfos() should remove |server_info_map_|
 // elements with empty value.
-TEST_F(AlternateProtocolServerPropertiesTest, DISABLED_EmptyVector) {
+TEST_F(AlternateProtocolServerPropertiesTest, EmptyVector) {
   url::SchemeHostPort server("https", "foo", 443);
-  const AlternativeService alternative_service(kProtoHTTP2, "bar", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "bar",
+                                               443);
   base::Time expiration = test_clock_.Now() - base::Days(1);
   const AlternativeServiceInfo alternative_service_info =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
@@ -963,7 +964,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, DISABLED_EmptyVector) {
 TEST_F(AlternateProtocolServerPropertiesTest, EmptyVectorForCanonical) {
   url::SchemeHostPort server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  const AlternativeService alternative_service(kProtoHTTP2, "", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "", 443);
   base::Time expiration = test_clock_.Now() - base::Days(1);
   const AlternativeServiceInfo alternative_service_info =
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
@@ -1003,7 +1004,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, EmptyVectorForCanonical) {
 TEST_F(AlternateProtocolServerPropertiesTest, ClearServerWithCanonical) {
   url::SchemeHostPort server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  const AlternativeService alternative_service(kProtoQUIC, "", 443);
+  const AlternativeService alternative_service(NextProto::kProtoQUIC, "", 443);
   base::Time expiration = test_clock_.Now() + base::Days(1);
   const AlternativeServiceInfo alternative_service_info =
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
@@ -1017,7 +1018,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearServerWithCanonical) {
   const AlternativeServiceInfoVector alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(server, NetworkAnonymizationKey());
   ASSERT_EQ(1u, alternative_service_info_vector.size());
-  EXPECT_EQ(kProtoQUIC,
+  EXPECT_EQ(NextProto::kProtoQUIC,
             alternative_service_info_vector[0].alternative_service().protocol);
   EXPECT_EQ(443, alternative_service_info_vector[0].alternative_service().port);
 
@@ -1035,10 +1036,12 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearServerWithCanonical) {
 
 TEST_F(AlternateProtocolServerPropertiesTest, MRUOfGetAlternativeServiceInfos) {
   url::SchemeHostPort test_server1("http", "foo1", 80);
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo1", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo1",
+                                                443);
   SetAlternativeService(test_server1, alternative_service1);
   url::SchemeHostPort test_server2("http", "foo2", 80);
-  const AlternativeService alternative_service2(kProtoHTTP2, "foo2", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "foo2",
+                                                1234);
   SetAlternativeService(test_server2, alternative_service2);
 
   const HttpServerProperties::ServerInfoMap& map =
@@ -1069,7 +1072,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, MRUOfGetAlternativeServiceInfos) {
 
 TEST_F(AlternateProtocolServerPropertiesTest, SetBroken) {
   url::SchemeHostPort test_server("http", "foo", 80);
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   SetAlternativeService(test_server, alternative_service1);
   AlternativeServiceInfoVector alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(test_server, NetworkAnonymizationKey());
@@ -1096,7 +1100,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetBroken) {
   alternative_service_info_vector2.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, expiration));
-  const AlternativeService alternative_service2(kProtoHTTP2, "foo", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "foo",
+                                                1234);
   alternative_service_info_vector2.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, expiration));
@@ -1128,7 +1133,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, SetBroken) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        SetBrokenUntilDefaultNetworkChanges) {
   url::SchemeHostPort test_server("http", "foo", 80);
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   SetAlternativeService(test_server, alternative_service1);
   AlternativeServiceInfoVector alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(test_server, NetworkAnonymizationKey());
@@ -1156,7 +1162,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
   alternative_service_info_vector2.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, expiration));
-  const AlternativeService alternative_service2(kProtoHTTP2, "foo", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "foo",
+                                                1234);
   alternative_service_info_vector2.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, expiration));
@@ -1192,14 +1199,16 @@ TEST_F(AlternateProtocolServerPropertiesTest, MaxAge) {
 
   // First alternative service expired one day ago, should not be returned by
   // GetAlternativeServiceInfos().
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, now - one_day));
 
   // Second alterrnative service will expire one day from now, should be
-  // returned by GetAlternativeSerices().
-  const AlternativeService alternative_service2(kProtoHTTP2, "bar", 1234);
+  // returned by GetAlternativeServices().
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "bar",
+                                                1234);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, now + one_day));
@@ -1222,14 +1231,16 @@ TEST_F(AlternateProtocolServerPropertiesTest, MaxAgeCanonical) {
 
   // First alternative service expired one day ago, should not be returned by
   // GetAlternativeServiceInfos().
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, now - one_day));
 
   // Second alterrnative service will expire one day from now, should be
   // returned by GetAlternativeSerices().
-  const AlternativeService alternative_service2(kProtoHTTP2, "bar", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "bar",
+                                                1234);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, now + one_day));
@@ -1248,12 +1259,14 @@ TEST_F(AlternateProtocolServerPropertiesTest, MaxAgeCanonical) {
 
 TEST_F(AlternateProtocolServerPropertiesTest, AlternativeServiceWithScheme) {
   AlternativeServiceInfoVector alternative_service_info_vector;
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   base::Time expiration = test_clock_.Now() + base::Days(1);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, expiration));
-  const AlternativeService alternative_service2(kProtoHTTP2, "bar", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "bar",
+                                                1234);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, expiration));
@@ -1262,7 +1275,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, AlternativeServiceWithScheme) {
   impl_.SetAlternativeServices(http_server, NetworkAnonymizationKey(),
                                alternative_service_info_vector);
 
-  const net::HttpServerProperties::ServerInfoMap& map =
+  const HttpServerProperties::ServerInfoMap& map =
       impl_.server_info_map_for_testing();
   auto it = map.begin();
   EXPECT_EQ(http_server, it->first.server);
@@ -1309,12 +1322,14 @@ TEST_F(AlternateProtocolServerPropertiesTest, AlternativeServiceWithScheme) {
 
 TEST_F(AlternateProtocolServerPropertiesTest, ClearAlternativeServices) {
   AlternativeServiceInfoVector alternative_service_info_vector;
-  const AlternativeService alternative_service1(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service1(NextProto::kProtoHTTP2, "foo",
+                                                443);
   base::Time expiration = test_clock_.Now() + base::Days(1);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service1, expiration));
-  const AlternativeService alternative_service2(kProtoHTTP2, "bar", 1234);
+  const AlternativeService alternative_service2(NextProto::kProtoHTTP2, "bar",
+                                                1234);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           alternative_service2, expiration));
@@ -1322,7 +1337,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearAlternativeServices) {
   impl_.SetAlternativeServices(test_server, NetworkAnonymizationKey(),
                                alternative_service_info_vector);
 
-  const net::HttpServerProperties::ServerInfoMap& map =
+  const HttpServerProperties::ServerInfoMap& map =
       impl_.server_info_map_for_testing();
   auto it = map.begin();
   EXPECT_EQ(test_server, it->first.server);
@@ -1346,7 +1361,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearAlternativeServices) {
 TEST_F(AlternateProtocolServerPropertiesTest, BrokenShadowsCanonical) {
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  AlternativeService canonical_alternative_service(kProtoQUIC,
+  AlternativeService canonical_alternative_service(NextProto::kProtoQUIC,
                                                    "bar.c.youtube.com", 1234);
   SetAlternativeService(canonical_server, canonical_alternative_service);
   AlternativeServiceInfoVector alternative_service_info_vector =
@@ -1355,7 +1370,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, BrokenShadowsCanonical) {
   EXPECT_EQ(canonical_alternative_service,
             alternative_service_info_vector[0].alternative_service());
 
-  const AlternativeService broken_alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService broken_alternative_service(NextProto::kProtoHTTP2,
+                                                      "foo", 443);
   impl_.MarkAlternativeServiceBroken(broken_alternative_service,
                                      NetworkAnonymizationKey());
   EXPECT_TRUE(impl_.IsAlternativeServiceBroken(broken_alternative_service,
@@ -1373,7 +1389,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, BrokenShadowsCanonical) {
 
 TEST_F(AlternateProtocolServerPropertiesTest, ClearBroken) {
   url::SchemeHostPort test_server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   SetAlternativeService(test_server, alternative_service);
   impl_.MarkAlternativeServiceBroken(alternative_service,
                                      NetworkAnonymizationKey());
@@ -1391,7 +1408,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearBroken) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        MarkBrokenWithNetworkIsolationKey) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   const base::Time expiration = test_clock_.Now() + base::Days(1);
 
   // Without NetworkIsolationKeys enabled, the NetworkAnonymizationKey parameter
@@ -1431,11 +1449,11 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   properties.SetHttp2AlternativeService(server, network_anonymization_key1_,
@@ -1499,7 +1517,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
 TEST_F(AlternateProtocolServerPropertiesTest, MarkRecentlyBroken) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   SetAlternativeService(server, alternative_service);
 
   EXPECT_FALSE(impl_.IsAlternativeServiceBroken(alternative_service,
@@ -1525,7 +1544,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, MarkRecentlyBroken) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        MarkRecentlyBrokenWithNetworkIsolationKey) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   const base::Time expiration = test_clock_.Now() + base::Days(1);
 
   // Without NetworkIsolationKeys enabled, the NetworkAnonymizationKey parameter
@@ -1565,11 +1585,11 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   properties.SetHttp2AlternativeService(server, network_anonymization_key1_,
@@ -1633,7 +1653,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest,
        MarkBrokenUntilDefaultNetworkChanges) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   SetAlternativeService(server, alternative_service);
 
   EXPECT_FALSE(impl_.IsAlternativeServiceBroken(alternative_service,
@@ -1659,7 +1680,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest,
        MarkBrokenUntilDefaultNetworkChangesWithNetworkIsolationKey) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
   const base::Time expiration = test_clock_.Now() + base::Days(1);
 
   // Without NetworkIsolationKeys enabled, the NetworkAnonymizationKey parameter
@@ -1700,11 +1722,11 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   properties.SetHttp2AlternativeService(server, network_anonymization_key1_,
@@ -1768,7 +1790,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
 TEST_F(AlternateProtocolServerPropertiesTest, OnDefaultNetworkChanged) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
 
   SetAlternativeService(server, alternative_service);
   EXPECT_FALSE(impl_.IsAlternativeServiceBroken(alternative_service,
@@ -1832,15 +1855,16 @@ TEST_F(AlternateProtocolServerPropertiesTest, OnDefaultNetworkChanged) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        OnDefaultNetworkChangedWithNetworkIsolationKey) {
   url::SchemeHostPort server("http", "foo", 80);
-  const AlternativeService alternative_service(kProtoHTTP2, "foo", 443);
+  const AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo",
+                                               443);
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   const base::Time expiration = test_clock_.Now() + base::Days(1);
@@ -1893,13 +1917,14 @@ TEST_F(AlternateProtocolServerPropertiesTest, Canonical) {
 
   AlternativeServiceInfoVector alternative_service_info_vector;
   const AlternativeService canonical_alternative_service1(
-      kProtoQUIC, "bar.c.youtube.com", 1234);
+      NextProto::kProtoQUIC, "bar.c.youtube.com", 1234);
   base::Time expiration = test_clock_.Now() + base::Days(1);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           canonical_alternative_service1, expiration,
           DefaultSupportedQuicVersions()));
-  const AlternativeService canonical_alternative_service2(kProtoHTTP2, "", 443);
+  const AlternativeService canonical_alternative_service2(
+      NextProto::kProtoHTTP2, "", 443);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           canonical_alternative_service2, expiration));
@@ -1934,7 +1959,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, Canonical) {
 TEST_F(AlternateProtocolServerPropertiesTest, ClearCanonical) {
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  AlternativeService canonical_alternative_service(kProtoQUIC,
+  AlternativeService canonical_alternative_service(NextProto::kProtoQUIC,
                                                    "bar.c.youtube.com", 1234);
 
   SetAlternativeService(canonical_server, canonical_alternative_service);
@@ -1947,11 +1972,11 @@ TEST_F(AlternateProtocolServerPropertiesTest,
        CanonicalWithNetworkIsolationKey) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
@@ -1963,13 +1988,14 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 
   AlternativeServiceInfoVector alternative_service_info_vector;
   const AlternativeService canonical_alternative_service1(
-      kProtoQUIC, "bar.c.youtube.com", 1234);
+      NextProto::kProtoQUIC, "bar.c.youtube.com", 1234);
   base::Time expiration = test_clock_.Now() + base::Days(1);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           canonical_alternative_service1, expiration,
           DefaultSupportedQuicVersions()));
-  const AlternativeService canonical_alternative_service2(kProtoHTTP2, "", 443);
+  const AlternativeService canonical_alternative_service2(
+      NextProto::kProtoHTTP2, "", 443);
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
           canonical_alternative_service2, expiration));
@@ -2040,7 +2066,7 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest, CanonicalBroken) {
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  AlternativeService canonical_alternative_service(kProtoQUIC,
+  AlternativeService canonical_alternative_service(NextProto::kProtoQUIC,
                                                    "bar.c.youtube.com", 1234);
 
   SetAlternativeService(canonical_server, canonical_alternative_service);
@@ -2054,7 +2080,7 @@ TEST_F(AlternateProtocolServerPropertiesTest,
        CanonicalBrokenUntilDefaultNetworkChanges) {
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  AlternativeService canonical_alternative_service(kProtoQUIC,
+  AlternativeService canonical_alternative_service(NextProto::kProtoQUIC,
                                                    "bar.c.youtube.com", 1234);
 
   SetAlternativeService(canonical_server, canonical_alternative_service);
@@ -2068,8 +2094,8 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest, CanonicalOverride) {
   url::SchemeHostPort foo_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort bar_server("https", "bar.c.youtube.com", 443);
-  AlternativeService bar_alternative_service(kProtoQUIC, "bar.c.youtube.com",
-                                             1234);
+  AlternativeService bar_alternative_service(NextProto::kProtoQUIC,
+                                             "bar.c.youtube.com", 1234);
   SetAlternativeService(bar_server, bar_alternative_service);
   AlternativeServiceInfoVector alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(foo_server, NetworkAnonymizationKey());
@@ -2078,8 +2104,8 @@ TEST_F(AlternateProtocolServerPropertiesTest, CanonicalOverride) {
             alternative_service_info_vector[0].alternative_service());
 
   url::SchemeHostPort qux_server("https", "qux.c.youtube.com", 443);
-  AlternativeService qux_alternative_service(kProtoQUIC, "qux.c.youtube.com",
-                                             443);
+  AlternativeService qux_alternative_service(NextProto::kProtoQUIC,
+                                             "qux.c.youtube.com", 443);
   SetAlternativeService(qux_server, qux_alternative_service);
   alternative_service_info_vector =
       impl_.GetAlternativeServiceInfos(foo_server, NetworkAnonymizationKey());
@@ -2091,7 +2117,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, CanonicalOverride) {
 TEST_F(AlternateProtocolServerPropertiesTest, ClearWithCanonical) {
   url::SchemeHostPort test_server("https", "foo.c.youtube.com", 443);
   url::SchemeHostPort canonical_server("https", "bar.c.youtube.com", 443);
-  AlternativeService canonical_alternative_service(kProtoQUIC,
+  AlternativeService canonical_alternative_service(NextProto::kProtoQUIC,
                                                    "bar.c.youtube.com", 1234);
 
   SetAlternativeService(canonical_server, canonical_alternative_service);
@@ -2102,7 +2128,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, ClearWithCanonical) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        ExpireBrokenAlternateProtocolMappings) {
   url::SchemeHostPort server("https", "foo", 443);
-  AlternativeService alternative_service(kProtoQUIC, "foo", 443);
+  AlternativeService alternative_service(NextProto::kProtoQUIC, "foo", 443);
   SetAlternativeService(server, alternative_service);
   EXPECT_TRUE(HasAlternativeService(server, NetworkAnonymizationKey()));
   EXPECT_FALSE(impl_.IsAlternativeServiceBroken(alternative_service,
@@ -2129,18 +2155,18 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest,
        ExpireBrokenAlternateProtocolMappingsWithNetworkIsolationKey) {
   url::SchemeHostPort server("https", "foo", 443);
-  AlternativeService alternative_service(kProtoHTTP2, "foo", 444);
+  AlternativeService alternative_service(NextProto::kProtoHTTP2, "foo", 444);
   base::TimeTicks past = test_tick_clock_->NowTicks() - base::Seconds(42);
   base::TimeTicks future = test_tick_clock_->NowTicks() + base::Seconds(42);
   const base::Time alt_service_expiration = test_clock_.Now() + base::Days(1);
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   properties.SetHttp2AlternativeService(server, network_anonymization_key1_,
@@ -2212,17 +2238,18 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 // Regression test for https://crbug.com/505413.
 TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc) {
   url::SchemeHostPort foo_server("https", "foo", 443);
-  AlternativeService bar_alternative_service(kProtoQUIC, "bar", 443);
+  AlternativeService bar_alternative_service(NextProto::kProtoQUIC, "bar", 443);
   SetAlternativeService(foo_server, bar_alternative_service);
   EXPECT_TRUE(HasAlternativeService(foo_server, NetworkAnonymizationKey()));
 
   url::SchemeHostPort bar_server1("http", "bar", 80);
-  AlternativeService nohost_alternative_service(kProtoQUIC, "", 443);
+  AlternativeService nohost_alternative_service(NextProto::kProtoQUIC, "", 443);
   SetAlternativeService(bar_server1, nohost_alternative_service);
   EXPECT_TRUE(HasAlternativeService(bar_server1, NetworkAnonymizationKey()));
 
   url::SchemeHostPort bar_server2("https", "bar", 443);
-  AlternativeService baz_alternative_service(kProtoQUIC, "baz", 1234);
+  AlternativeService baz_alternative_service(NextProto::kProtoQUIC, "baz",
+                                             1234);
   SetAlternativeService(bar_server2, baz_alternative_service);
   EXPECT_TRUE(HasAlternativeService(bar_server2, NetworkAnonymizationKey()));
 
@@ -2250,7 +2277,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc) {
 TEST_F(AlternateProtocolServerPropertiesTest,
        SetBrokenAlternativeServicesDelayParams1) {
   url::SchemeHostPort server("https", "foo", 443);
-  AlternativeService alternative_service(kProtoQUIC, "foo", 443);
+  AlternativeService alternative_service(NextProto::kProtoQUIC, "foo", 443);
   SetAlternativeService(server, alternative_service);
 
   const base::TimeDelta initial_delay = base::Seconds(1);
@@ -2278,7 +2305,7 @@ TEST_F(AlternateProtocolServerPropertiesTest,
 TEST_F(AlternateProtocolServerPropertiesTest,
        SetBrokenAlternativeServicesDelayParams2) {
   url::SchemeHostPort server("https", "foo", 443);
-  AlternativeService alternative_service(kProtoQUIC, "foo", 443);
+  AlternativeService alternative_service(NextProto::kProtoQUIC, "foo", 443);
   SetAlternativeService(server, alternative_service);
 
   const base::TimeDelta initial_delay = base::Seconds(5);
@@ -2318,11 +2345,11 @@ TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc2) {
   // expire before A.
 
   url::SchemeHostPort server1("https", "foo", 443);
-  AlternativeService alternative_service1(kProtoQUIC, "foo", 443);
+  AlternativeService alternative_service1(NextProto::kProtoQUIC, "foo", 443);
   SetAlternativeService(server1, alternative_service1);
 
   url::SchemeHostPort server2("https", "bar", 443);
-  AlternativeService alternative_service2(kProtoQUIC, "bar", 443);
+  AlternativeService alternative_service2(NextProto::kProtoQUIC, "bar", 443);
   SetAlternativeService(server2, alternative_service2);
 
   // Repeatedly mark alt svc 1 broken and wait for its brokenness to expire.
@@ -2380,7 +2407,7 @@ TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc2) {
 TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc3) {
   // Add an altertive service entry.
   const url::SchemeHostPort kServer1("https", "foo", 443);
-  const AlternativeService kAltService(kProtoQUIC, "bar", 443);
+  const AlternativeService kAltService(NextProto::kProtoQUIC, "bar", 443);
   SetAlternativeService(kServer1, kAltService);
   EXPECT_TRUE(HasAlternativeService(kServer1, NetworkAnonymizationKey()));
 
@@ -2402,47 +2429,49 @@ TEST_F(AlternateProtocolServerPropertiesTest, RemoveExpiredBrokenAltSvc3) {
 
 TEST_F(AlternateProtocolServerPropertiesTest,
        GetAlternativeServiceInfoAsValue) {
-  base::Time::Exploded now_exploded;
-  now_exploded.year = 2018;
-  now_exploded.month = 1;
-  now_exploded.day_of_week = 3;
-  now_exploded.day_of_month = 24;
-  now_exploded.hour = 15;
-  now_exploded.minute = 12;
-  now_exploded.second = 53;
-  now_exploded.millisecond = 0;
+  constexpr base::Time::Exploded kNowExploded = {.year = 2018,
+                                                 .month = 1,
+                                                 .day_of_week = 3,
+                                                 .day_of_month = 24,
+                                                 .hour = 15,
+                                                 .minute = 12,
+                                                 .second = 53};
   base::Time now;
-  bool result = base::Time::FromLocalExploded(now_exploded, &now);
+  bool result = base::Time::FromLocalExploded(kNowExploded, &now);
   DCHECK(result);
   test_clock_.SetNow(now);
 
   AlternativeServiceInfoVector alternative_service_info_vector;
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "foo", 443), now + base::Minutes(1)));
+          AlternativeService(NextProto::kProtoHTTP2, "foo", 443),
+          now + base::Minutes(1)));
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
-          AlternativeService(kProtoQUIC, "bar", 443), now + base::Hours(1),
-          DefaultSupportedQuicVersions()));
+          AlternativeService(NextProto::kProtoQUIC, "bar", 443),
+          now + base::Hours(1), DefaultSupportedQuicVersions()));
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
-          AlternativeService(kProtoQUIC, "baz", 443), now + base::Hours(1),
-          DefaultSupportedQuicVersions()));
+          AlternativeService(NextProto::kProtoQUIC, "baz", 443),
+          now + base::Hours(1), DefaultSupportedQuicVersions()));
 
   impl_.SetAlternativeServices(url::SchemeHostPort("https", "youtube.com", 443),
                                NetworkAnonymizationKey(),
                                alternative_service_info_vector);
 
-  impl_.MarkAlternativeServiceBroken(AlternativeService(kProtoQUIC, "bar", 443),
-                                     NetworkAnonymizationKey());
+  impl_.MarkAlternativeServiceBroken(
+      AlternativeService(NextProto::kProtoQUIC, "bar", 443),
+      NetworkAnonymizationKey());
 
   impl_.MarkAlternativeServiceBrokenUntilDefaultNetworkChanges(
-      AlternativeService(kProtoQUIC, "baz", 443), NetworkAnonymizationKey());
+      AlternativeService(NextProto::kProtoQUIC, "baz", 443),
+      NetworkAnonymizationKey());
 
   alternative_service_info_vector.clear();
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateHttp2AlternativeServiceInfo(
-          AlternativeService(kProtoHTTP2, "foo2", 443), now + base::Days(1)));
+          AlternativeService(NextProto::kProtoHTTP2, "foo2", 443),
+          now + base::Days(1)));
   impl_.SetAlternativeServices(url::SchemeHostPort("http", "test.com", 80),
                                NetworkAnonymizationKey(),
                                alternative_service_info_vector);
@@ -2452,7 +2481,7 @@ TEST_F(AlternateProtocolServerPropertiesTest,
       "{"
       "\"alternative_service\":"
       "[\"h2 foo2:443, expires 2018-01-25 15:12:53\"],"
-      "\"network_anonymization_key\":\"null null\","
+      "\"network_anonymization_key\":\"null\","
       "\"server\":\"http://test.com\""
       "},"
       "{"
@@ -2462,7 +2491,7 @@ TEST_F(AlternateProtocolServerPropertiesTest,
       " (broken until 2018-01-24 15:17:53)\","
       "\"quic baz:443, expires 2018-01-24 16:12:53"
       " (broken until 2018-01-24 15:17:53)\"],"
-      "\"network_anonymization_key\":\"null null\","
+      "\"network_anonymization_key\":\"null\","
       "\"server\":\"https://youtube.com\""
       "}"
       "]";
@@ -2680,10 +2709,10 @@ TEST_F(HttpServerPropertiesTest, ClearServerNetworkStats) {
 }
 
 TEST_F(HttpServerPropertiesTest, OnQuicServerInfoMapLoaded) {
-  quic::QuicServerId google_quic_server_id("www.google.com", 443, true);
+  quic::QuicServerId google_quic_server_id("www.google.com", 443);
   HttpServerProperties::QuicServerInfoMapKey google_key(
-      google_quic_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      google_quic_server_id, PRIVACY_MODE_ENABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
 
   const int kMaxQuicServerEntries = 10;
   impl_.SetMaxServerConfigsStoredInProperties(kMaxQuicServerEntries);
@@ -2709,22 +2738,22 @@ TEST_F(HttpServerPropertiesTest, OnQuicServerInfoMapLoaded) {
 
   // Verify data for www.google.com:443.
   EXPECT_EQ(1u, impl_.quic_server_info_map().size());
-  EXPECT_EQ(google_server_info,
-            *impl_.GetQuicServerInfo(google_quic_server_id,
-                                     NetworkAnonymizationKey()));
+  EXPECT_EQ(google_server_info, *impl_.GetQuicServerInfo(
+                                    google_quic_server_id, PRIVACY_MODE_ENABLED,
+                                    NetworkAnonymizationKey()));
 
   // Test recency order and overwriting of data.
   //
   // |docs_server| has a QuicServerInfo, which will be overwritten by
   // SetQuicServerInfoMap(), because |quic_server_info_map| has an
   // entry for |docs_server|.
-  quic::QuicServerId docs_quic_server_id("docs.google.com", 443, true);
+  quic::QuicServerId docs_quic_server_id("docs.google.com", 443);
   HttpServerProperties::QuicServerInfoMapKey docs_key(
-      docs_quic_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      docs_quic_server_id, PRIVACY_MODE_ENABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string docs_server_info("docs_quic_server_info");
-  impl_.SetQuicServerInfo(docs_quic_server_id, NetworkAnonymizationKey(),
-                          docs_server_info);
+  impl_.SetQuicServerInfo(docs_quic_server_id, PRIVACY_MODE_ENABLED,
+                          NetworkAnonymizationKey(), docs_server_info);
 
   // Recency order will be |docs_server| and |google_server|.
   const HttpServerProperties::QuicServerInfoMap& map =
@@ -2747,10 +2776,10 @@ TEST_F(HttpServerPropertiesTest, OnQuicServerInfoMapLoaded) {
   std::string new_docs_server_info("new_docs_quic_server_info");
   quic_server_info_map->Put(docs_key, new_docs_server_info);
   // Add data for mail.google.com:443.
-  quic::QuicServerId mail_quic_server_id("mail.google.com", 443, true);
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 443);
   HttpServerProperties::QuicServerInfoMapKey mail_key(
-      mail_quic_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      mail_quic_server_id, PRIVACY_MODE_ENABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string mail_server_info("mail_quic_server_info");
   quic_server_info_map->Put(mail_key, mail_server_info);
   impl_.OnQuicServerInfoMapLoadedForTesting(std::move(quic_server_info_map));
@@ -2784,13 +2813,14 @@ TEST_F(HttpServerPropertiesTest, OnQuicServerInfoMapLoaded) {
   EXPECT_EQ(memory_map1_it->first, google_key);
   EXPECT_EQ(google_server_info, memory_map1_it->second);
   // |QuicServerInfo| for |mail_quic_server_id| shouldn't be there.
-  EXPECT_EQ(nullptr, impl_.GetQuicServerInfo(mail_quic_server_id,
-                                             NetworkAnonymizationKey()));
+  EXPECT_EQ(nullptr,
+            impl_.GetQuicServerInfo(mail_quic_server_id, PRIVACY_MODE_ENABLED,
+                                    NetworkAnonymizationKey()));
 }
 
 TEST_F(HttpServerPropertiesTest, SetQuicServerInfo) {
-  quic::QuicServerId server1("foo", 80, false /* privacy_mode_enabled */);
-  quic::QuicServerId server2("foo", 80, true /* privacy_mode_enabled */);
+  quic::QuicServerId server1("foo", 80);
+  quic::QuicServerId server2("foo", 80);
 
   std::string quic_server_info1("quic_server_info1");
   std::string quic_server_info2("quic_server_info2");
@@ -2798,94 +2828,116 @@ TEST_F(HttpServerPropertiesTest, SetQuicServerInfo) {
 
   // Without network isolation keys enabled for HttpServerProperties, passing in
   // a NetworkAnonymizationKey should have no effect on behavior.
-  impl_.SetQuicServerInfo(server1, NetworkAnonymizationKey(),
-                          quic_server_info1);
+  impl_.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), quic_server_info1);
   EXPECT_EQ(quic_server_info1,
-            *(impl_.GetQuicServerInfo(server1, NetworkAnonymizationKey())));
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      NetworkAnonymizationKey())));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                       NetworkAnonymizationKey()));
   EXPECT_EQ(quic_server_info1,
-            *(impl_.GetQuicServerInfo(server1, network_anonymization_key1_)));
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, network_anonymization_key1_));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      network_anonymization_key1_)));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                       network_anonymization_key1_));
 
-  impl_.SetQuicServerInfo(server2, network_anonymization_key1_,
-                          quic_server_info2);
+  impl_.SetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                          network_anonymization_key1_, quic_server_info2);
   EXPECT_EQ(quic_server_info1,
-            *(impl_.GetQuicServerInfo(server1, NetworkAnonymizationKey())));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      NetworkAnonymizationKey())));
   EXPECT_EQ(quic_server_info2,
-            *(impl_.GetQuicServerInfo(server2, NetworkAnonymizationKey())));
+            *(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                      NetworkAnonymizationKey())));
   EXPECT_EQ(quic_server_info1,
-            *(impl_.GetQuicServerInfo(server1, network_anonymization_key1_)));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      network_anonymization_key1_)));
   EXPECT_EQ(quic_server_info2,
-            *(impl_.GetQuicServerInfo(server2, network_anonymization_key1_)));
+            *(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                      network_anonymization_key1_)));
 
-  impl_.SetQuicServerInfo(server1, network_anonymization_key1_,
-                          quic_server_info3);
+  impl_.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                          network_anonymization_key1_, quic_server_info3);
   EXPECT_EQ(quic_server_info3,
-            *(impl_.GetQuicServerInfo(server1, NetworkAnonymizationKey())));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      NetworkAnonymizationKey())));
   EXPECT_EQ(quic_server_info2,
-            *(impl_.GetQuicServerInfo(server2, NetworkAnonymizationKey())));
+            *(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                      NetworkAnonymizationKey())));
   EXPECT_EQ(quic_server_info3,
-            *(impl_.GetQuicServerInfo(server1, network_anonymization_key1_)));
+            *(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                      network_anonymization_key1_)));
   EXPECT_EQ(quic_server_info2,
-            *(impl_.GetQuicServerInfo(server2, network_anonymization_key1_)));
+            *(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                      network_anonymization_key1_)));
 
   impl_.Clear(base::OnceClosure());
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server1, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server1, network_anonymization_key1_));
-  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, network_anonymization_key1_));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                       NetworkAnonymizationKey()));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                       NetworkAnonymizationKey()));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                       network_anonymization_key1_));
+  EXPECT_FALSE(impl_.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                       network_anonymization_key1_));
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
-  properties.SetQuicServerInfo(server1, NetworkAnonymizationKey(),
-                               quic_server_info1);
-  EXPECT_EQ(quic_server_info1, *(properties.GetQuicServerInfo(
-                                   server1, NetworkAnonymizationKey())));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, network_anonymization_key1_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_));
+  properties.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                               NetworkAnonymizationKey(), quic_server_info1);
+  EXPECT_EQ(quic_server_info1,
+            *(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                           NetworkAnonymizationKey())));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key1_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            network_anonymization_key1_));
 
-  properties.SetQuicServerInfo(server1, network_anonymization_key1_,
-                               quic_server_info2);
-  EXPECT_EQ(quic_server_info1, *(properties.GetQuicServerInfo(
-                                   server1, NetworkAnonymizationKey())));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
-  EXPECT_EQ(quic_server_info2, *(properties.GetQuicServerInfo(
-                                   server1, network_anonymization_key1_)));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_));
+  properties.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                               network_anonymization_key1_, quic_server_info2);
+  EXPECT_EQ(quic_server_info1,
+            *(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                           NetworkAnonymizationKey())));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_EQ(quic_server_info2,
+            *(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                           network_anonymization_key1_)));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            network_anonymization_key1_));
 
-  properties.SetQuicServerInfo(server2, network_anonymization_key1_,
-                               quic_server_info3);
-  EXPECT_EQ(quic_server_info1, *(properties.GetQuicServerInfo(
-                                   server1, NetworkAnonymizationKey())));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
-  EXPECT_EQ(quic_server_info2, *(properties.GetQuicServerInfo(
-                                   server1, network_anonymization_key1_)));
-  EXPECT_EQ(quic_server_info3, *(properties.GetQuicServerInfo(
-                                   server2, network_anonymization_key1_)));
+  properties.SetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                               network_anonymization_key1_, quic_server_info3);
+  EXPECT_EQ(quic_server_info1,
+            *(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                           NetworkAnonymizationKey())));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_EQ(quic_server_info2,
+            *(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                           network_anonymization_key1_)));
+  EXPECT_EQ(quic_server_info3,
+            *(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                           network_anonymization_key1_)));
 
   properties.Clear(base::OnceClosure());
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, network_anonymization_key1_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key1_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_ENABLED,
+                                            network_anonymization_key1_));
 }
 
 // Tests that GetQuicServerInfo() returns server info of a host
@@ -2893,23 +2945,23 @@ TEST_F(HttpServerPropertiesTest, SetQuicServerInfo) {
 TEST_F(HttpServerPropertiesTest, QuicServerInfoCanonicalSuffixMatch) {
   // Set up HttpServerProperties.
   // Add a host with a canonical suffix.
-  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443, false);
+  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443);
   std::string foo_server_info("foo_server_info");
-  impl_.SetQuicServerInfo(foo_server_id, NetworkAnonymizationKey(),
-                          foo_server_info);
+  impl_.SetQuicServerInfo(foo_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), foo_server_info);
 
   // Add a host that has a different canonical suffix.
-  quic::QuicServerId baz_server_id("baz.video.com", 443, false);
+  quic::QuicServerId baz_server_id("baz.video.com", 443);
   std::string baz_server_info("baz_server_info");
-  impl_.SetQuicServerInfo(baz_server_id, NetworkAnonymizationKey(),
-                          baz_server_info);
+  impl_.SetQuicServerInfo(baz_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), baz_server_info);
 
   // Create SchemeHostPort with a host that has the initial canonical suffix.
-  quic::QuicServerId bar_server_id("bar.googlevideo.com", 443, false);
+  quic::QuicServerId bar_server_id("bar.googlevideo.com", 443);
 
   // Check the the server info associated with "foo" is returned for "bar".
-  const std::string* bar_server_info =
-      impl_.GetQuicServerInfo(bar_server_id, NetworkAnonymizationKey());
+  const std::string* bar_server_info = impl_.GetQuicServerInfo(
+      bar_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey());
   ASSERT_TRUE(bar_server_info != nullptr);
   EXPECT_EQ(foo_server_info, *bar_server_info);
 }
@@ -2919,85 +2971,83 @@ TEST_F(HttpServerPropertiesTest, QuicServerInfoCanonicalSuffixMatch) {
 TEST_F(HttpServerPropertiesTest,
        QuicServerInfoCanonicalSuffixMatchWithNetworkIsolationKey) {
   // Two servers with same canonical suffix.
-  quic::QuicServerId server1("foo.googlevideo.com", 80,
-                             false /* privacy_mode_enabled */);
-  quic::QuicServerId server2("bar.googlevideo.com", 80,
-                             false /* privacy_mode_enabled */);
+  quic::QuicServerId server1("foo.googlevideo.com", 80);
+  quic::QuicServerId server2("bar.googlevideo.com", 80);
 
   std::string server_info1("server_info1");
   std::string server_info2("server_info2");
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
   // Since HttpServerProperties caches the feature value, have to create a new
   // one.
-  HttpServerProperties properties(nullptr /* pref_delegate */,
-                                  nullptr /* net_log */, test_tick_clock_,
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
                                   &test_clock_);
 
   // Set QuicServerInfo for one canononical suffix and
   // |network_anonymization_key1_|. It should be accessible via another
   // SchemeHostPort, but only when the NetworkIsolationKeys match.
-  properties.SetQuicServerInfo(server1, network_anonymization_key1_,
-                               server_info1);
-  const std::string* fetched_server_info =
-      properties.GetQuicServerInfo(server1, network_anonymization_key1_);
+  properties.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                               network_anonymization_key1_, server_info1);
+  const std::string* fetched_server_info = properties.GetQuicServerInfo(
+      server1, PRIVACY_MODE_DISABLED, network_anonymization_key1_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info1, *fetched_server_info);
-  fetched_server_info =
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_);
+  fetched_server_info = properties.GetQuicServerInfo(
+      server2, PRIVACY_MODE_DISABLED, network_anonymization_key1_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info1, *fetched_server_info);
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, network_anonymization_key2_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key2_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key2_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key2_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
 
   // Set different QuicServerInfo for the same canononical suffix and
   // |network_anonymization_key2_|. Both infos should be retriveable by using
   // the different NetworkIsolationKeys.
-  properties.SetQuicServerInfo(server1, network_anonymization_key2_,
-                               server_info2);
-  fetched_server_info =
-      properties.GetQuicServerInfo(server1, network_anonymization_key1_);
+  properties.SetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                               network_anonymization_key2_, server_info2);
+  fetched_server_info = properties.GetQuicServerInfo(
+      server1, PRIVACY_MODE_DISABLED, network_anonymization_key1_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info1, *fetched_server_info);
-  fetched_server_info =
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_);
+  fetched_server_info = properties.GetQuicServerInfo(
+      server2, PRIVACY_MODE_DISABLED, network_anonymization_key1_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info1, *fetched_server_info);
-  fetched_server_info =
-      properties.GetQuicServerInfo(server1, network_anonymization_key2_);
+  fetched_server_info = properties.GetQuicServerInfo(
+      server1, PRIVACY_MODE_DISABLED, network_anonymization_key2_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info2, *fetched_server_info);
-  fetched_server_info =
-      properties.GetQuicServerInfo(server2, network_anonymization_key2_);
+  fetched_server_info = properties.GetQuicServerInfo(
+      server2, PRIVACY_MODE_DISABLED, network_anonymization_key2_);
   ASSERT_TRUE(fetched_server_info);
   EXPECT_EQ(server_info2, *fetched_server_info);
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
 
   // Clearing should destroy all information.
   properties.Clear(base::OnceClosure());
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, network_anonymization_key1_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key1_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, network_anonymization_key2_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, network_anonymization_key2_));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server1, NetworkAnonymizationKey()));
-  EXPECT_FALSE(
-      properties.GetQuicServerInfo(server2, NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key1_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key1_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key2_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            network_anonymization_key2_));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server1, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(properties.GetQuicServerInfo(server2, PRIVACY_MODE_DISABLED,
+                                            NetworkAnonymizationKey()));
 }
 
 // Verifies that GetQuicServerInfo() returns the MRU entry if multiple records
@@ -3006,31 +3056,32 @@ TEST_F(HttpServerPropertiesTest,
        QuicServerInfoCanonicalSuffixMatchReturnsMruEntry) {
   // Set up HttpServerProperties by adding two hosts with the same canonical
   // suffixes.
-  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443, false);
+  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443);
   std::string h1_server_info("h1_server_info");
-  impl_.SetQuicServerInfo(h1_server_id, NetworkAnonymizationKey(),
-                          h1_server_info);
+  impl_.SetQuicServerInfo(h1_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), h1_server_info);
 
-  quic::QuicServerId h2_server_id("h2.googlevideo.com", 443, false);
+  quic::QuicServerId h2_server_id("h2.googlevideo.com", 443);
   std::string h2_server_info("h2_server_info");
-  impl_.SetQuicServerInfo(h2_server_id, NetworkAnonymizationKey(),
-                          h2_server_info);
+  impl_.SetQuicServerInfo(h2_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), h2_server_info);
 
   // Create quic::QuicServerId to use for the search.
-  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443, false);
+  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443);
 
   // Check that 'h2' info is returned since it is MRU.
-  const std::string* server_info =
-      impl_.GetQuicServerInfo(foo_server_id, NetworkAnonymizationKey());
+  const std::string* server_info = impl_.GetQuicServerInfo(
+      foo_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey());
   ASSERT_TRUE(server_info != nullptr);
   EXPECT_EQ(h2_server_info, *server_info);
 
   // Access 'h1' info, so it becomes MRU.
-  impl_.GetQuicServerInfo(h1_server_id, NetworkAnonymizationKey());
+  impl_.GetQuicServerInfo(h1_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey());
 
   // Check that 'h1' info is returned since it is MRU now.
-  server_info =
-      impl_.GetQuicServerInfo(foo_server_id, NetworkAnonymizationKey());
+  server_info = impl_.GetQuicServerInfo(foo_server_id, PRIVACY_MODE_DISABLED,
+                                        NetworkAnonymizationKey());
   ASSERT_TRUE(server_info != nullptr);
   EXPECT_EQ(h1_server_info, *server_info);
 }
@@ -3040,31 +3091,31 @@ TEST_F(HttpServerPropertiesTest,
 TEST_F(HttpServerPropertiesTest,
        QuicServerInfoCanonicalSuffixMatchDoesntChangeOrder) {
   // Add a host with a matching canonical name.
-  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443, false);
+  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443);
   HttpServerProperties::QuicServerInfoMapKey h1_key(
-      h1_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      h1_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string h1_server_info("h1_server_info");
-  impl_.SetQuicServerInfo(h1_server_id, NetworkAnonymizationKey(),
-                          h1_server_info);
+  impl_.SetQuicServerInfo(h1_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), h1_server_info);
 
   // Add a host hosts with a non-matching canonical name.
-  quic::QuicServerId h2_server_id("h2.video.com", 443, false);
+  quic::QuicServerId h2_server_id("h2.video.com", 443);
   HttpServerProperties::QuicServerInfoMapKey h2_key(
-      h2_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      h2_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string h2_server_info("h2_server_info");
-  impl_.SetQuicServerInfo(h2_server_id, NetworkAnonymizationKey(),
-                          h2_server_info);
+  impl_.SetQuicServerInfo(h2_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), h2_server_info);
 
   // Check that "h2.video.com" is the MRU entry in the map.
   EXPECT_EQ(h2_key, impl_.quic_server_info_map().begin()->first);
 
   // Search for the entry that matches the canonical name
   // ("h1.googlevideo.com").
-  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443, false);
-  const std::string* server_info =
-      impl_.GetQuicServerInfo(foo_server_id, NetworkAnonymizationKey());
+  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443);
+  const std::string* server_info = impl_.GetQuicServerInfo(
+      foo_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey());
   ASSERT_TRUE(server_info != nullptr);
 
   // Check that the search (although successful) hasn't changed the MRU order of
@@ -3072,7 +3123,8 @@ TEST_F(HttpServerPropertiesTest,
   EXPECT_EQ(h2_key, impl_.quic_server_info_map().begin()->first);
 
   // Search for "h1.googlevideo.com" directly, so it becomes MRU
-  impl_.GetQuicServerInfo(h1_server_id, NetworkAnonymizationKey());
+  impl_.GetQuicServerInfo(h1_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey());
 
   // Check that "h1.googlevideo.com" is the MRU entry now.
   EXPECT_EQ(h1_key, impl_.quic_server_info_map().begin()->first);
@@ -3086,23 +3138,23 @@ TEST_F(HttpServerPropertiesTest,
 TEST_F(HttpServerPropertiesTest, QuicServerInfoCanonicalSuffixMatchSetInfoMap) {
   // Add a host info using SetQuicServerInfo(). That will simulate an info
   // entry stored in memory cache.
-  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443, false);
+  quic::QuicServerId h1_server_id("h1.googlevideo.com", 443);
   std::string h1_server_info("h1_server_info_memory_cache");
-  impl_.SetQuicServerInfo(h1_server_id, NetworkAnonymizationKey(),
-                          h1_server_info);
+  impl_.SetQuicServerInfo(h1_server_id, PRIVACY_MODE_DISABLED,
+                          NetworkAnonymizationKey(), h1_server_info);
 
   // Prepare a map with host info and add it using SetQuicServerInfoMap(). That
   // will simulate info records read from the persistence storage.
-  quic::QuicServerId h2_server_id("h2.googlevideo.com", 443, false);
+  quic::QuicServerId h2_server_id("h2.googlevideo.com", 443);
   HttpServerProperties::QuicServerInfoMapKey h2_key(
-      h2_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      h2_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string h2_server_info("h2_server_info_from_disk");
 
-  quic::QuicServerId h3_server_id("h3.ggpht.com", 443, false);
+  quic::QuicServerId h3_server_id("h3.ggpht.com", 443);
   HttpServerProperties::QuicServerInfoMapKey h3_key(
-      h3_server_id, NetworkAnonymizationKey(),
-      false /* use_network_anonymization_key */);
+      h3_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
+      /*use_network_anonymization_key=*/false);
   std::string h3_server_info("h3_server_info_from_disk");
 
   const int kMaxQuicServerEntries = 10;
@@ -3119,19 +3171,337 @@ TEST_F(HttpServerPropertiesTest, QuicServerInfoCanonicalSuffixMatchSetInfoMap) {
   // Check that the server info from the memory cache is returned since unique
   // entries from the memory cache are added after entries from the
   // persistence storage and, therefore, are most recently used.
-  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443, false);
-  const std::string* server_info =
-      impl_.GetQuicServerInfo(foo_server_id, NetworkAnonymizationKey());
+  quic::QuicServerId foo_server_id("foo.googlevideo.com", 443);
+  const std::string* server_info = impl_.GetQuicServerInfo(
+      foo_server_id, PRIVACY_MODE_DISABLED, NetworkAnonymizationKey());
   ASSERT_TRUE(server_info != nullptr);
   EXPECT_EQ(h1_server_info, *server_info);
 
   // Check that server info that was added using SetQuicServerInfoMap() can be
   // found.
-  foo_server_id = quic::QuicServerId("foo.ggpht.com", 443, false);
-  server_info =
-      impl_.GetQuicServerInfo(foo_server_id, NetworkAnonymizationKey());
+  foo_server_id = quic::QuicServerId("foo.ggpht.com", 443);
+  server_info = impl_.GetQuicServerInfo(foo_server_id, PRIVACY_MODE_DISABLED,
+                                        NetworkAnonymizationKey());
   ASSERT_TRUE(server_info != nullptr);
   EXPECT_EQ(h3_server_info, *server_info);
+}
+
+static constexpr char kTestQuicHints[] =
+    "www.example.test,443,443,"
+    "www.example.com,443,8443,"
+    ".example.test,443,443,"
+    "www.example.org,www.example.org,443,"
+    "www.example.net,443,www.example.net,"
+    "www.broken-example.test,443,443";
+
+static constexpr char kTestWildcardQuicHints[] =
+    ".example1.test,443,443,"
+    ".example2.test,443,8443,"
+    "www.example3.test,443,443,"
+    ".broken-example1.test,443,443";
+
+class HttpServerPropertiesQuicHintsTest
+    : public HttpServerPropertiesTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  HttpServerPropertiesQuicHintsTest()
+      : scoped_feature_list_(CreateFeatureList()),
+        properties_(/*pref_delegate=*/nullptr,
+                    /*net_log=*/nullptr,
+                    /*tick_clock=*/nullptr,
+                    /*clock=*/nullptr) {}
+
+ protected:
+  bool Enabled() const { return GetParam(); }
+
+  // Create the feature list before constructing the HttpServerProperties.
+  static std::unique_ptr<base::test::ScopedFeatureList> CreateFeatureList() {
+    std::unique_ptr<base::test::ScopedFeatureList> feature_list =
+        std::make_unique<base::test::ScopedFeatureList>();
+    if (GetParam()) {
+      feature_list->InitAndEnableFeatureWithParameters(
+          features::kConfigureQuicHints,
+          {{"quic_hints", kTestQuicHints},
+           {"wildcard_quic_hints", kTestWildcardQuicHints}});
+    } else {
+      feature_list->InitAndDisableFeature(features::kConfigureQuicHints);
+    }
+    return feature_list;
+  }
+
+  std::unique_ptr<base::test::ScopedFeatureList> scoped_feature_list_;
+  HttpServerProperties properties_;
+};
+
+INSTANTIATE_TEST_SUITE_P(/*no prefix*/,
+                         HttpServerPropertiesQuicHintsTest,
+                         testing::Bool());
+
+TEST_P(HttpServerPropertiesQuicHintsTest, SamePort) {
+  const url::SchemeHostPort test_server("https", "www.example.test", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+
+    // Validate that the alternative service matches the corresponding hint.
+    AlternativeServiceInfo first_hint = alternative_services[0];
+    ASSERT_EQ(first_hint.alternative_service().host, "www.example.test");
+    ASSERT_EQ(first_hint.alternative_service().port, 443);
+    ASSERT_EQ(first_hint.expiration(), base::Time::Max());
+    ASSERT_EQ(first_hint.advertised_versions(), DefaultSupportedQuicVersions());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, DifferentPort) {
+  const url::SchemeHostPort test_server("https", "www.example.com", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+
+    // Validate that the alternative service matches the corresponding hint.
+    AlternativeServiceInfo first_hint = alternative_services[0];
+    ASSERT_EQ(first_hint.alternative_service().host, "www.example.com");
+    ASSERT_EQ(first_hint.alternative_service().port, 8443);
+    ASSERT_EQ(first_hint.expiration(), base::Time::Max());
+    ASSERT_EQ(first_hint.advertised_versions(), DefaultSupportedQuicVersions());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, InvalidHost) {
+  const url::SchemeHostPort test_server("https", ".example.test", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  ASSERT_TRUE(alternative_services.empty());
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, InvalidPort) {
+  const url::SchemeHostPort test_server("https", "www.example.org", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  ASSERT_TRUE(alternative_services.empty());
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, InvalidAlternatePort) {
+  const url::SchemeHostPort test_server("https", "www.example.net", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  ASSERT_TRUE(alternative_services.empty());
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, BrokenAlternativeService) {
+  const url::SchemeHostPort test_server("https", "www.broken-example.test",
+                                        443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+
+  // Mark the alternative service broken and validate that it is no longer
+  // found.
+  net::AlternativeService alternative_service(
+      net::NextProto::kProtoQUIC, test_server.host(), test_server.port());
+  properties_.MarkAlternativeServiceBroken(alternative_service,
+                                           net::NetworkAnonymizationKey());
+
+  alternative_services = properties_.GetAlternativeServiceInfos(
+      test_server, net::NetworkAnonymizationKey());
+
+  ASSERT_TRUE(alternative_services.empty());
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, WildcardSamePort) {
+  const url::SchemeHostPort test_server("https", "www.example1.test", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+
+    // Validate that the alternative service matches the corresponding hint.
+    AlternativeServiceInfo first_hint = alternative_services[0];
+    ASSERT_EQ(first_hint.alternative_service().host, "www.example1.test");
+    ASSERT_EQ(first_hint.alternative_service().port, 443);
+    ASSERT_EQ(first_hint.expiration(), base::Time::Max());
+    ASSERT_EQ(first_hint.advertised_versions(), DefaultSupportedQuicVersions());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, WildcardDifferentPort) {
+  const url::SchemeHostPort test_server("https", "www.example2.test", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+
+    // Validate that the alternative service matches the corresponding hint.
+    AlternativeServiceInfo first_hint = alternative_services[0];
+    ASSERT_EQ(first_hint.alternative_service().host, "www.example2.test");
+    ASSERT_EQ(first_hint.alternative_service().port, 8443);
+    ASSERT_EQ(first_hint.expiration(), base::Time::Max());
+    ASSERT_EQ(first_hint.advertised_versions(), DefaultSupportedQuicVersions());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, WildcardMissingDotPrefix) {
+  const url::SchemeHostPort test_server("https", "www.example3.test", 443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  // Wildcard QUIC hints need to start with "." to be considered valid.
+  ASSERT_TRUE(alternative_services.empty());
+}
+
+TEST_P(HttpServerPropertiesQuicHintsTest, WildcardBrokenAlternativeService) {
+  const url::SchemeHostPort test_server("https", "www.broken-example1.test",
+                                        443);
+  AlternativeServiceInfoVector alternative_services =
+      properties_.GetAlternativeServiceInfos(test_server,
+                                             net::NetworkAnonymizationKey());
+
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+
+  // Mark the alternative service broken and validate that it is no longer
+  // found.
+  net::AlternativeService alternative_service(
+      net::NextProto::kProtoQUIC, test_server.host(), test_server.port());
+  properties_.MarkAlternativeServiceBroken(alternative_service,
+                                           net::NetworkAnonymizationKey());
+
+  alternative_services = properties_.GetAlternativeServiceInfos(
+      test_server, net::NetworkAnonymizationKey());
+
+  ASSERT_TRUE(alternative_services.empty());
+
+  // Other wildcard matches should be unaffected by the broken service.
+  const url::SchemeHostPort test_server2("https", "test.broken-example1.test",
+                                         443);
+  alternative_services = properties_.GetAlternativeServiceInfos(
+      test_server2, net::NetworkAnonymizationKey());
+  if (Enabled()) {
+    ASSERT_EQ(1u, alternative_services.size());
+
+    // Validate that the alternative service matches the corresponding hint.
+    AlternativeServiceInfo first_hint = alternative_services[0];
+    ASSERT_EQ(first_hint.alternative_service().host,
+              "test.broken-example1.test");
+    ASSERT_EQ(first_hint.alternative_service().port, 443);
+    ASSERT_EQ(first_hint.expiration(), base::Time::Max());
+    ASSERT_EQ(first_hint.advertised_versions(), DefaultSupportedQuicVersions());
+  } else {
+    ASSERT_TRUE(alternative_services.empty());
+  }
+}
+
+// Check the behavior for RequiresHTTP11 and related function.
+TEST_F(HttpServerPropertiesTest, RequiresHTTP11) {
+  // Only check the partitioned case, to make sure NAK is respected. The
+  // unpartitioned case is strictly less interesting, and if values are
+  // incorrectly being partitioned here, it's not really a big deal, since this
+  // is just an optimization.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+
+  // Since HttpServerProperties caches the feature value, have to create a new
+  // one.
+  HttpServerProperties properties(/*pref_delegate=*/nullptr,
+                                  /*net_log=*/nullptr, test_tick_clock_,
+                                  &test_clock_);
+
+  // Since HTTP/2 is never used for HTTP, only test with https/wss.
+  const url::SchemeHostPort kServer1("https", "foo.test", 443);
+  const url::SchemeHostPort kServer2("https", "bar.test", 443);
+  // "wss" SchemeHostPorts should be treated like they are "https" ones.
+  const url::SchemeHostPort kServer1Wss("wss", "foo.test", 443);
+  const url::SchemeHostPort kServer2Wss("wss", "bar.test", 443);
+
+  ExpectHttp11NotRequired(properties, kServer1, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer1, network_anonymization_key2_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key2_);
+  ExpectHttp11NotRequired(properties, kServer1Wss, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2Wss, network_anonymization_key1_);
+
+  properties.SetHTTP11Required(kServer1, network_anonymization_key1_);
+  ExpectHttp11Required(properties, kServer1, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer1, network_anonymization_key2_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer1Wss, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2Wss, network_anonymization_key1_);
+
+  properties.SetHTTP11Required(kServer2Wss, network_anonymization_key1_);
+  ExpectHttp11Required(properties, kServer1, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer1, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer2, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer1Wss, network_anonymization_key1_);
+  ExpectHttp11Required(properties, kServer2Wss, network_anonymization_key1_);
+
+  properties.SetHTTP11Required(kServer1, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer1, network_anonymization_key1_);
+  ExpectHttp11Required(properties, kServer1, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer2, network_anonymization_key1_);
+  ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key2_);
+  ExpectHttp11Required(properties, kServer1Wss, network_anonymization_key1_);
+  ExpectHttp11Required(properties, kServer2Wss, network_anonymization_key1_);
+
+  // Test eviction. Add `kMaxServersRequiringHttp11Entries` entries, checking
+  // the first three that were added after each one is added. The 3 least
+  // recently used entries should be evicted. Since the entries that were added
+  // above are constantly being re-checked, the least recently used entries will
+  // actually be the first three entries the loop below adds.
+  for (int i = 0; i < HttpServerProperties::kMaxServersRequiringHttp11Entries;
+       ++i) {
+    url::SchemeHostPort server("https", "foo.test", i + 1);
+    properties.SetHTTP11Required(server, network_anonymization_key1_);
+    ExpectHttp11Required(properties, server, network_anonymization_key1_);
+
+    ExpectHttp11Required(properties, kServer1, network_anonymization_key1_);
+    ExpectHttp11Required(properties, kServer1, network_anonymization_key2_);
+    ExpectHttp11Required(properties, kServer2, network_anonymization_key1_);
+    ExpectHttp11NotRequired(properties, kServer2, network_anonymization_key2_);
+  }
+
+  // Check that the 3 least recently used entries were evicted as expected.
+  for (int i = 0; i < HttpServerProperties::kMaxServersRequiringHttp11Entries;
+       ++i) {
+    url::SchemeHostPort server("https", "foo.test", i + 1);
+    if (i < 3) {
+      ExpectHttp11NotRequired(properties, server, network_anonymization_key1_);
+    } else {
+      ExpectHttp11Required(properties, server, network_anonymization_key1_);
+    }
+  }
 }
 
 }  // namespace

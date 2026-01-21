@@ -4,9 +4,8 @@
 
 #include "chrome/services/sharing/nearby/platform/mutex.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -16,9 +15,7 @@
 #include "base/unguessable_token.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 class MutexTest : public testing::Test {
  protected:
@@ -51,7 +48,7 @@ class MutexTest : public testing::Test {
   bool HasSuccessfullyLockedWithAttemptId(
       const base::UnguessableToken& attempt_id) {
     base::AutoLock al(lock_);
-    return base::Contains(successful_mutex_attempts_, attempt_id);
+    return successful_mutex_attempts_.contains(attempt_id);
   }
 
   Mutex& mutex() { return mutex_; }
@@ -92,6 +89,4 @@ TEST_F(MutexTest, CannotUnlockBeforeAnyLocks) {
   EXPECT_DCHECK_DEATH(mutex().Unlock());
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

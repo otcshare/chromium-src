@@ -5,10 +5,11 @@
 #include "chromecast/bindings/bindings_manager_cast.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/cast/message_port/cast/message_port_cast.h"
 
 namespace chromecast {
@@ -29,8 +30,8 @@ mojo::PendingRemote<mojom::ApiBindings> BindingsManagerCast::CreateRemote() {
   return pending_remote;
 }
 
-void BindingsManagerCast::AddBinding(base::StringPiece binding_name,
-                                     base::StringPiece binding_script) {
+void BindingsManagerCast::AddBinding(std::string_view binding_name,
+                                     std::string_view binding_script) {
   std::pair<std::string, std::string> new_entry = {std::string(binding_name),
                                                    std::string(binding_script)};
   for (auto it = bindings_.begin(); it != bindings_.end(); ++it) {

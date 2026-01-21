@@ -12,19 +12,18 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map.h"
-#include "components/autofill/core/browser/personal_data_manager_observer.h"
-
-class PrefService;
 
 namespace autofill {
-
-class PersonalDataManager;
 
 using CountryToStateNamesListMapping =
     std::map<AlternativeStateNameMap::CountryCode,
@@ -32,20 +31,20 @@ using CountryToStateNamesListMapping =
 
 // The AlternativeStateNameMap is a singleton to map between canonical state
 // names and alternative representations. This class acts as an observer to the
-// PersonalDataManager and encapsulates all aspects about loading state data
-// from disk and adding it to the AlternativeStateNameMap.
-class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
+// AddressDataManager and encapsulates all aspects about loading state data from
+// disk and adding it to the AlternativeStateNameMap.
+class AlternativeStateNameMapUpdater : public AddressDataManager::Observer {
  public:
-  AlternativeStateNameMapUpdater(PrefService* local_state,
-                                 PersonalDataManager* personal_data_manager);
+  explicit AlternativeStateNameMapUpdater(
+      AddressDataManager* address_data_manager);
   ~AlternativeStateNameMapUpdater() override;
   AlternativeStateNameMapUpdater(const AlternativeStateNameMapUpdater&) =
       delete;
   AlternativeStateNameMapUpdater& operator=(
       const AlternativeStateNameMapUpdater&) = delete;
 
-  // PersonalDataManagerObserver:
-  void OnPersonalDataFinishedProfileTasks() override;
+  // AddressDataManager::Observer:
+  void OnAddressDataChanged() override;
 
   // Extracts the country and state values from the profiles and adds them to
   // the AlternativeStateNameMap.
@@ -61,9 +60,8 @@ class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
   // A wrapper around |LoadStatesData| used for testing purposes.
   void LoadStatesDataForTesting(
       CountryToStateNamesListMapping country_to_state_names_map,
-      PrefService* pref_service,
       base::OnceClosure done_callback) {
-    LoadStatesData(std::move(country_to_state_names_map), pref_service,
+    LoadStatesData(std::move(country_to_state_names_map),
                    std::move(done_callback));
   }
 
@@ -87,11 +85,6 @@ class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
     return ContainsState(stripped_alternative_state_names,
                          stripped_state_value_from_profile);
   }
-
-  // Setter for |local_state_| used for testing purposes.
-  void set_local_state_for_testing(PrefService* pref_service) {
-    local_state_ = pref_service;
-  }
 #endif  // defined(UNIT_TEST)
 
  private:
@@ -111,7 +104,6 @@ class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
   // Each call to LoadStatesData triggers loading state data files, so requests
   // should be batched up.
   void LoadStatesData(CountryToStateNamesListMapping country_to_state_names_map,
-                      PrefService* pref_service,
                       base::OnceClosure done_callback);
 
   // Each entry in |state_values_from_profiles| is compared with the states
@@ -133,12 +125,9 @@ class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
   // TaskRunner for reading files from disk.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
-  // A pointer to an instance of PersonalDataManager used to fetch the profiles
+  // A pointer to an instance of AddressDataManager used to fetch the profiles
   // data and register this class as an obsever.
-  const raw_ptr<PersonalDataManager> personal_data_manager_ = nullptr;
-
-  // The browser local_state that stores the states data installation path.
-  raw_ptr<PrefService> local_state_ = nullptr;
+  const raw_ptr<AddressDataManager> address_data_manager_ = nullptr;
 
   // In case of concurrent requests to load states data, the callbacks are
   // queued in |pending_init_done_callbacks_| and triggered once the
@@ -157,10 +146,17 @@ class AlternativeStateNameMapUpdater : public PersonalDataManagerObserver {
 
   SEQUENCE_CHECKER(sequence_checker_);
 
+  base::ScopedObservation<AddressDataManager, AddressDataManager::Observer>
+      adm_observer_{this};
+
   // base::WeakPtr ensures that the callback bound to the object is canceled
   // when that object is destroyed.
   base::WeakPtrFactory<AlternativeStateNameMapUpdater> weak_ptr_factory_{this};
 };
+
+// Finds a resource ID based on a 2 character uppercase country code.
+// Returns -1 in case the country code was not found.
+int32_t FindResourceIdForCountry(std::string_view country_code);
 
 }  // namespace autofill
 

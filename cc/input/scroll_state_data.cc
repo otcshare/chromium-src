@@ -14,8 +14,6 @@ ScrollStateData::ScrollStateData()
       delta_y_hint(0),
       position_x(0),
       position_y(0),
-      velocity_x(0),
-      velocity_y(0),
       is_beginning(false),
       is_in_inertial_phase(false),
       is_ending(false),
@@ -26,8 +24,7 @@ ScrollStateData::ScrollStateData()
       delta_granularity(ui::ScrollGranularity::kScrollByPrecisePixel),
       caused_scroll_x(false),
       caused_scroll_y(false),
-      is_scroll_chain_cut(false),
-      is_main_thread_hit_tested(false) {}
+      is_scroll_chain_cut(false) {}
 
 ScrollStateData::ScrollStateData(const ScrollStateData&) = default;
 

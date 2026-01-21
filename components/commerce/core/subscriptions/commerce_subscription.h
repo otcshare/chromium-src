@@ -5,9 +5,10 @@
 #ifndef COMPONENTS_COMMERCE_CORE_SUBSCRIPTIONS_COMMERCE_SUBSCRIPTION_H_
 #define COMPONENTS_COMMERCE_CORE_SUBSCRIPTIONS_COMMERCE_SUBSCRIPTION_H_
 
-#include <string>
+#include <stdint.h>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+#include <string>
 
 /**
  * To add a new SubscriptionType / IdentifierType / ManagementType:
@@ -22,6 +23,8 @@
 namespace commerce {
 
 // The type of subscription.
+// A Java counterpart will be generated for this enum.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.commerce.core
 enum class SubscriptionType {
   // Unspecified type.
   kTypeUnspecified = 0,
@@ -30,6 +33,8 @@ enum class SubscriptionType {
 };
 
 // The type of subscription identifier.
+// A Java counterpart will be generated for this enum.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.commerce.core
 enum class IdentifierType {
   // Unspecified identifier type.
   kIdentifierTypeUnspecified = 0,
@@ -40,6 +45,8 @@ enum class IdentifierType {
 };
 
 // The type of subscription management.
+// A Java counterpart will be generated for this enum.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.commerce.core
 enum class ManagementType {
   // Unspecified management type.
   kTypeUnspecified = 0,
@@ -54,7 +61,8 @@ enum class ManagementType {
 struct UserSeenOffer {
   UserSeenOffer(std::string offer_id,
                 long user_seen_price,
-                std::string country_code);
+                std::string country_code,
+                std::string locale);
   UserSeenOffer(const UserSeenOffer&);
   UserSeenOffer& operator=(const UserSeenOffer&);
   ~UserSeenOffer();
@@ -65,9 +73,12 @@ struct UserSeenOffer {
   long user_seen_price;
   // Country code of the offer.
   std::string country_code;
+  // Locale of the offer.
+  std::string locale;
 };
 
 extern const int64_t kUnknownSubscriptionTimestamp;
+extern const uint64_t kInvalidSubscriptionId;
 
 struct CommerceSubscription {
   // The CommerceSubscription instantiation outside of this subscriptions/
@@ -78,7 +89,7 @@ struct CommerceSubscription {
       std::string id,
       ManagementType management_type,
       int64_t timestamp = kUnknownSubscriptionTimestamp,
-      absl::optional<UserSeenOffer> user_seen_offer = absl::nullopt);
+      std::optional<UserSeenOffer> user_seen_offer = std::nullopt);
   CommerceSubscription(const CommerceSubscription&);
   CommerceSubscription& operator=(const CommerceSubscription&);
   ~CommerceSubscription();
@@ -91,7 +102,7 @@ struct CommerceSubscription {
   // successful creation on the server side, the valid timestamp will be passed
   // back to client side and then stored locally.
   int64_t timestamp;
-  absl::optional<UserSeenOffer> user_seen_offer;
+  std::optional<UserSeenOffer> user_seen_offer;
 };
 
 std::string SubscriptionTypeToString(SubscriptionType type);
@@ -100,6 +111,11 @@ std::string SubscriptionIdTypeToString(IdentifierType type);
 IdentifierType StringToSubscriptionIdType(const std::string& s);
 std::string SubscriptionManagementTypeToString(ManagementType type);
 ManagementType StringToSubscriptionManagementType(const std::string& s);
+
+// Gets a key for the provided subscription that can be used for storage or
+// caching.
+std::string GetStorageKeyForSubscription(
+    const CommerceSubscription& subscription);
 
 }  // namespace commerce
 

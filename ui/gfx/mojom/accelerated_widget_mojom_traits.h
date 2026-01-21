@@ -8,7 +8,7 @@
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "ui/gfx/mojom/accelerated_widget.mojom.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace mojo {
 
@@ -22,7 +22,6 @@ struct StructTraits<gfx::mojom::AcceleratedWidgetDataView,
     return static_cast<uint64_t>(widget);
 #else
     NOTREACHED();
-    return 0;
 #endif
   }
 
@@ -36,7 +35,6 @@ struct StructTraits<gfx::mojom::AcceleratedWidgetDataView,
     return true;
 #else
     NOTREACHED();
-    return false;
 #endif
   }
 };

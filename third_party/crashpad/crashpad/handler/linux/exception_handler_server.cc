@@ -25,6 +25,7 @@
 
 #include <utility>
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
@@ -34,7 +35,6 @@
 #include "util/file/filesystem.h"
 #include "util/linux/proc_task_reader.h"
 #include "util/linux/socket.h"
-#include "util/misc/as_underlying_type.h"
 
 namespace crashpad {
 
@@ -324,8 +324,8 @@ void ExceptionHandlerServer::Stop() {
 }
 
 void ExceptionHandlerServer::HandleEvent(Event* event, uint32_t event_type) {
-  DCHECK_NE(AsUnderlyingType(event->type),
-            AsUnderlyingType(Event::Type::kShutdown));
+  DCHECK_NE(std::to_underlying(event->type),
+            std::to_underlying(Event::Type::kShutdown));
 
   if (event_type & EPOLLERR) {
     LogSocketError(event->fd.get());

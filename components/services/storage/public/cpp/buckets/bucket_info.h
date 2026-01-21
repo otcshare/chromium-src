@@ -5,14 +5,18 @@
 #ifndef COMPONENTS_SERVICES_STORAGE_PUBLIC_CPP_BUCKETS_BUCKET_INFO_H_
 #define COMPONENTS_SERVICES_STORAGE_PUBLIC_CPP_BUCKETS_BUCKET_INFO_H_
 
+#include <stdint.h>
+
+#include <set>
+#include <string>
+
+#include "base/component_export.h"
 #include "base/time/time.h"
 #include "components/services/storage/public/cpp/buckets/bucket_id.h"
 #include "components/services/storage/public/cpp/buckets/bucket_locator.h"
 #include "components/services/storage/public/cpp/buckets/constants.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
-#include "third_party/blink/public/mojom/buckets/bucket_manager_host.mojom.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom-shared.h"
-#include "url/origin.h"
 
 namespace storage {
 
@@ -24,7 +28,6 @@ namespace storage {
 struct COMPONENT_EXPORT(STORAGE_SERVICE_BUCKETS_SUPPORT) BucketInfo {
   BucketInfo(BucketId bucket_id,
              blink::StorageKey storage_key,
-             blink::mojom::StorageType type,
              std::string name,
              base::Time expiration,
              int64_t quota,
@@ -43,13 +46,10 @@ struct COMPONENT_EXPORT(STORAGE_SERVICE_BUCKETS_SUPPORT) BucketInfo {
   friend bool operator==(const BucketInfo& lhs, const BucketInfo& rhs);
 
   COMPONENT_EXPORT(STORAGE_SERVICE_BUCKETS_SUPPORT)
-  friend bool operator!=(const BucketInfo& lhs, const BucketInfo& rhs);
-
-  COMPONENT_EXPORT(STORAGE_SERVICE_BUCKETS_SUPPORT)
   friend bool operator<(const BucketInfo& lhs, const BucketInfo& rhs);
 
   BucketLocator ToBucketLocator() const {
-    return BucketLocator(id, storage_key, type, name == kDefaultBucketName);
+    return BucketLocator(id, storage_key, name == kDefaultBucketName);
   }
 
   bool is_default() const { return name == kDefaultBucketName; }
@@ -57,7 +57,6 @@ struct COMPONENT_EXPORT(STORAGE_SERVICE_BUCKETS_SUPPORT) BucketInfo {
 
   BucketId id;
   blink::StorageKey storage_key;
-  blink::mojom::StorageType type = blink::mojom::StorageType::kTemporary;
   std::string name;
   base::Time expiration;
   int64_t quota = 0;

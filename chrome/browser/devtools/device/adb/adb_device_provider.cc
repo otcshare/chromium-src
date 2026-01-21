@@ -4,8 +4,9 @@
 
 #include "chrome/browser/devtools/device/adb/adb_device_provider.h"
 
-#include "base/bind.h"
-#include "base/strings/string_piece.h"
+#include <string_view>
+
+#include "base/functional/bind.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/devtools/device/adb/adb_client_socket.h"
@@ -29,23 +30,32 @@ static void RunCommand(const std::string& serial,
 static void ReceivedAdbDevices(AdbDeviceProvider::SerialsCallback callback,
                                int result_code,
                                const std::string& response) {
-  std::vector<std::string> result;
+  std::vector<
+      std::pair<std::string, AndroidDeviceManager::DeviceInfo::ConnectedState>>
+      result;
   if (result_code < 0) {
     std::move(callback).Run(std::move(result));
     return;
   }
-  for (const base::StringPiece& line :
-       base::SplitStringPiece(response, "\n", base::KEEP_WHITESPACE,
-                              base::SPLIT_WANT_NONEMPTY)) {
-    std::vector<base::StringPiece> tokens =
-        base::SplitStringPiece(line, "\t ", base::KEEP_WHITESPACE,
-                               base::SPLIT_WANT_NONEMPTY);
-    result.push_back(std::string(tokens[0]));
+  for (std::string_view line : base::SplitStringPiece(
+           response, "\n", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    std::vector<std::string_view> tokens = base::SplitStringPiece(
+        line, "\t ", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    AndroidDeviceManager::DeviceInfo::ConnectedState state =
+        AndroidDeviceManager::DeviceInfo::kUnknown;
+    if (tokens[1] == "device") {
+      state = AndroidDeviceManager::DeviceInfo::kConnected;
+    } else if (tokens[1] == "unauthorized") {
+      state = AndroidDeviceManager::DeviceInfo::kUnauthorized;
+    } else if (tokens[1] == "offline" || tokens[1] == "authorizing") {
+      state = AndroidDeviceManager::DeviceInfo::kOffline;
+    }
+    result.emplace_back(std::string(tokens[0]), state);
   }
   std::move(callback).Run(std::move(result));
 }
 
-} // namespace
+}  // namespace
 
 void AdbDeviceProvider::QueryDevices(SerialsCallback callback) {
   AdbClientSocket::AdbQuery(
@@ -68,5 +78,4 @@ void AdbDeviceProvider::OpenSocket(const std::string& serial,
                                   std::move(callback));
 }
 
-AdbDeviceProvider::~AdbDeviceProvider() {
-}
+AdbDeviceProvider::~AdbDeviceProvider() = default;

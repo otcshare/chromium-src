@@ -3,22 +3,52 @@
 // found in the LICENSE file.
 
 // Include test fixture.
-GEN_INCLUDE([
-  '../select_to_speak/select_to_speak_e2e_test_base.js',
-]);
+GEN_INCLUDE(['testing/e2e_test_base.js']);
 
-/** Test fixture for array_util.js. */
-RepeatedTreeChangeHandlerTest = class extends SelectToSpeakE2ETest {
+/**
+ * Test fixture for repeated_tree_change_handler.js.
+ * Note it uses SwitchAccess extension because `repeated_tree_change_handler.js`
+ * is only loaded there.
+ */
+AccessibilityExtensionRepeatedTreeChangeHandlerTest =
+    class extends E2ETestBase {
+  /** @override */
+  testGenCppIncludes() {
+    super.testGenCppIncludes();
+    GEN(`
+#include "ash/accessibility/accessibility_controller.h"
+#include "chrome/browser/ash/accessibility/accessibility_manager.h"
+    `);
+  }
+
+  /** @override */
+  testGenPreamble() {
+    super.testGenPreamble();
+    GEN(`
+    auto* controller = ash::AccessibilityController::Get();
+    controller->DisableSwitchAccessDisableConfirmationDialogTesting();
+    // Don't show the dialog saying Switch Access was enabled.
+    controller->DisableSwitchAccessEnableNotificationTesting();
+    base::OnceClosure load_cb =
+        base::BindOnce(&ash::AccessibilityManager::SetSwitchAccessEnabled,
+            base::Unretained(ash::AccessibilityManager::Get()),
+            true);
+    `);
+    super.testGenPreambleCommon('kSwitchAccessExtensionId');
+  }
+
   /** @override */
   async setUpDeferred() {
-    await importModule(
-        'RepeatedTreeChangeHandler', '/common/repeated_tree_change_handler.js');
+    await super.setUpDeferred();
+
+    const imports = TestImportManager.getImports();
+    globalThis.RepeatedTreeChangeHandler = imports.RepeatedTreeChangeHandler;
   }
 };
 
 TEST_F(
-    'RepeatedTreeChangeHandlerTest', 'RepeatedTreeChangeHandledOnce',
-    function() {
+    'AccessibilityExtensionRepeatedTreeChangeHandlerTest',
+    'RepeatedTreeChangeHandledOnce', function() {
       this.runWithLoadedDesktop(() => {
         this.handlerCallCount = 0;
         const handler = () => this.handlerCallCount++;
@@ -38,28 +68,31 @@ TEST_F(
       });
     });
 
-TEST_F('RepeatedTreeChangeHandlerTest', 'Predicate', function() {
-  this.runWithLoadedDesktop(() => {
-    this.handlerCallCount = 0;
-    const handler = () => this.handlerCallCount++;
+TEST_F(
+    'AccessibilityExtensionRepeatedTreeChangeHandlerTest', 'Predicate',
+    function() {
+      this.runWithLoadedDesktop(() => {
+        this.handlerCallCount = 0;
+        const handler = () => this.handlerCallCount++;
 
-    const repeatedHandler = new RepeatedTreeChangeHandler(
-        'allTreeChanges', handler, {predicate: c => c.type === 'nodeRemoved'});
+        const repeatedHandler = new RepeatedTreeChangeHandler(
+            'allTreeChanges', handler,
+            {predicate: c => c.type === 'nodeRemoved'});
 
-    // Simulate events being fired.
-    repeatedHandler.onChange_({type: 'nodeAdded'});
-    repeatedHandler.onChange_({type: 'nodeAdded'});
-    repeatedHandler.onChange_({type: 'nodeAdded'});
-    repeatedHandler.onChange_({type: 'nodeRemoved'});
-    repeatedHandler.onChange_({type: 'nodeRemoved'});
-    repeatedHandler.onChange_({type: 'nodeRemoved'});
-    repeatedHandler.onChange_({type: 'nodeRemoved'});
+        // Simulate events being fired.
+        repeatedHandler.onChange_({type: 'nodeAdded'});
+        repeatedHandler.onChange_({type: 'nodeAdded'});
+        repeatedHandler.onChange_({type: 'nodeAdded'});
+        repeatedHandler.onChange_({type: 'nodeRemoved'});
+        repeatedHandler.onChange_({type: 'nodeRemoved'});
+        repeatedHandler.onChange_({type: 'nodeRemoved'});
+        repeatedHandler.onChange_({type: 'nodeRemoved'});
 
-    // Verify that nodes that don't satisfy the predicate aren't added to the
-    // change stack.
-    assertEquals(repeatedHandler.changeStack_.length, 4);
+        // Verify that nodes that don't satisfy the predicate aren't added to
+        // the change stack.
+        assertEquals(repeatedHandler.changeStack_.length, 4);
 
-    // Yield before verifying how many times the handler was called.
-    setTimeout(() => assertEquals(this.handlerCallCount, 1), 0);
-  });
-});
+        // Yield before verifying how many times the handler was called.
+        setTimeout(() => assertEquals(this.handlerCallCount, 1), 0);
+      });
+    });

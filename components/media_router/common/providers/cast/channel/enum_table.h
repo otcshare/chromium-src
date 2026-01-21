@@ -7,13 +7,15 @@
 
 #include <cstdint>
 #include <cstring>
+#include <new>
+#include <optional>
 #include <ostream>
+#include <string_view>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // TODO(crbug.com/1291730): Move this file to a more appropriate directory.
 //
@@ -62,7 +64,7 @@
 // a special zero-argument form of EnumToString(), (and a corresponding member
 // function in EnumTable):
 //
-//     // Compiles to base::StringPiece("FOO").
+//     // Compiles to std::string_view("FOO").
 //     EnumToString<MyEnum, MyEnum::kFoo>();
 //
 // The syntax is a little awkward, but it saves you from having to duplicate
@@ -185,7 +187,7 @@ class
         GenericEnumTableEntry {
  public:
   inline constexpr GenericEnumTableEntry(int32_t value);
-  inline constexpr GenericEnumTableEntry(int32_t value, base::StringPiece str);
+  inline constexpr GenericEnumTableEntry(int32_t value, std::string_view str);
 
   GenericEnumTableEntry(const GenericEnumTableEntry&) = delete;
   GenericEnumTableEntry& operator=(const GenericEnumTableEntry&) = delete;
@@ -194,18 +196,18 @@ class
   static const GenericEnumTableEntry* FindByString(
       const GenericEnumTableEntry data[],
       std::size_t size,
-      base::StringPiece str);
-  static absl::optional<base::StringPiece>
+      std::string_view str);
+  static std::optional<std::string_view>
   FindByValue(const GenericEnumTableEntry data[], std::size_t size, int value);
 
-  constexpr base::StringPiece str() const {
+  constexpr std::string_view str() const {
     DCHECK(has_str());
     return {chars, length};
   }
 
   constexpr bool has_str() const { return chars != nullptr; }
 
-  // Instead of storing a base::StringPiece, it's broken apart and stored as a
+  // Instead of storing a std::string_view, it's broken apart and stored as a
   // pointer and an unsigned int (rather than a std::size_t) so that table
   // entries fit in 16 bytes with no padding on 64-bit platforms.
   const char* chars;
@@ -226,7 +228,7 @@ inline constexpr GenericEnumTableEntry::GenericEnumTableEntry(int32_t value)
 
 inline constexpr GenericEnumTableEntry::GenericEnumTableEntry(
     int32_t value,
-    base::StringPiece str)
+    std::string_view str)
     : chars(str.data()),
       length(static_cast<uint32_t>(str.length())),
       value(value) {}
@@ -250,7 +252,7 @@ class EnumTable {
         : GenericEnumTableEntry(static_cast<int32_t>(value)) {}
 
     // Constructor for regular entries.
-    constexpr Entry(E value, base::StringPiece str)
+    constexpr Entry(E value, std::string_view str)
         : GenericEnumTableEntry(static_cast<int32_t>(value), str) {}
 
     Entry(const Entry&) = delete;
@@ -286,7 +288,7 @@ class EnumTable {
                    << *found;
 
     const auto int_max_value = static_cast<int32_t>(max_value);
-    DCHECK(data.end()[-1].value == int_max_value)
+    DCHECK(UNSAFE_TODO(data.end()[-1].value) == int_max_value)
         << "Missing entry for enum value " << int_max_value;
 #endif  // NDEBUG
   }
@@ -308,15 +310,16 @@ class EnumTable {
 
   // Gets the string associated with the given enum value.  When the argument
   // is a constant, prefer the zero-argument form below.
-  inline absl::optional<base::StringPiece> GetString(E value) const {
+  inline std::optional<std::string_view> GetString(E value) const {
     if (is_sorted_) {
       const std::size_t index = static_cast<std::size_t>(value);
       if (ANALYZER_ASSUME_TRUE(index < data_.size())) {
-        const auto& entry = data_.begin()[index];
-        if (ANALYZER_ASSUME_TRUE(entry.has_str()))
+        const auto& entry = UNSAFE_TODO(data_.begin()[index]);
+        if (ANALYZER_ASSUME_TRUE(entry.has_str())) {
           return entry.str();
+        }
       }
-      return absl::nullopt;
+      return std::nullopt;
     }
     return GenericEnumTableEntry::FindByValue(
         reinterpret_cast<const GenericEnumTableEntry*>(data_.begin()),
@@ -332,25 +335,25 @@ class EnumTable {
   // possible to report an error in evaluating a constexpr function at compile
   // time without using exceptions.
   template <E Value>
-  constexpr base::StringPiece GetString() const {
+  constexpr std::string_view GetString() const {
     for (const auto& entry : data_) {
-      if (entry.value == static_cast<int32_t>(Value) && entry.has_str())
+      if (entry.value == static_cast<int32_t>(Value) && entry.has_str()) {
         return entry.str();
+      }
     }
 
     NOTREACHED() << "No string for enum value: " << static_cast<int32_t>(Value);
-    return "[invalid enum value]";
   }
 
   // Gets the enum value associated with the given string.  Unlike
   // GetString(), this method is not defined as a constexpr, because it should
   // never be called with a literal string; it's simpler to just refer to the
   // enum value directly.
-  absl::optional<E> GetEnum(base::StringPiece str) const {
+  std::optional<E> GetEnum(std::string_view str) const {
     auto* entry = GenericEnumTableEntry::FindByString(
         reinterpret_cast<const GenericEnumTableEntry*>(data_.begin()),
         data_.size(), str);
-    return entry ? static_cast<E>(entry->value) : absl::optional<E>();
+    return entry ? static_cast<E>(entry->value) : std::optional<E>();
   }
 
   // The default instance of this class.  There should normally only be one
@@ -361,8 +364,7 @@ class EnumTable {
 
  private:
 #ifdef ARCH_CPU_64_BITS
-  // Align the data on a cache line boundary.
-  alignas(64)
+  alignas(std::hardware_destructive_interference_size)
 #endif
       std::initializer_list<Entry> data_;
   bool is_sorted_;
@@ -376,8 +378,8 @@ class EnumTable {
 
     for (std::size_t i = 0; i < data.size(); i++) {
       for (std::size_t j = i + 1; j < data.size(); j++) {
-        const Entry& ei = data.begin()[i];
-        const Entry& ej = data.begin()[j];
+        const Entry& ei = UNSAFE_TODO(data.begin()[i]);
+        const Entry& ej = UNSAFE_TODO(data.begin()[j]);
         DCHECK(ei.value != ej.value)
             << "Found duplicate enum values at indices " << i << " and " << j;
         DCHECK(!(ei.has_str() && ej.has_str() && ei.str() == ej.str()))
@@ -389,7 +391,7 @@ class EnumTable {
 
 #ifndef NDEBUG
   // Finds and returns the first i for which data[i].value != i;
-  constexpr static absl::optional<std::size_t> FindNonConsecutiveEntry(
+  constexpr static std::optional<std::size_t> FindNonConsecutiveEntry(
       std::initializer_list<Entry> data) {
     int32_t counter = 0;
     for (const auto& entry : data) {
@@ -406,7 +408,7 @@ class EnumTable {
 // Converts an enum value to a string using the default table
 // (EnumTable<E>::instance) for the given enum type.
 template <typename E>
-inline absl::optional<base::StringPiece> EnumToString(E value) {
+inline std::optional<std::string_view> EnumToString(E value) {
   return EnumTable<E>::GetInstance().GetString(value);
 }
 
@@ -417,20 +419,20 @@ inline absl::optional<base::StringPiece> EnumToString(E value) {
 // function to have only one template parameter:
 //
 //   template <auto Value>
-//   inline base::StringPiece EnumToString() {
+//   inline std::string_view EnumToString() {
 //     return EnumTable<decltype(Value)
 //         >::GetInstance().template GetString<Value>();
 //   }
 //
 template <typename E, E Value>
-inline base::StringPiece EnumToString() {
+inline std::string_view EnumToString() {
   return EnumTable<E>::GetInstance().template GetString<Value>();
 }
 
 // Converts a string to an enum value using the default table
 // (EnumTable<E>::instance) for the given enum type.
 template <typename E>
-inline absl::optional<E> StringToEnum(base::StringPiece str) {
+inline std::optional<E> StringToEnum(std::string_view str) {
   return EnumTable<E>::GetInstance().GetEnum(str);
 }
 

@@ -9,14 +9,16 @@
 #include <stdint.h>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/timer/timer.h"
+#include "components/country_codes/country_codes.h"
+#include "components/regional_capabilities/regional_capabilities_country_id.h"
 #include "components/search_engines/keyword_table.h"
 #include "components/search_engines/template_url_id.h"
 #include "components/webdata/common/web_data_service_base.h"
 
 namespace base {
-class SingleThreadTaskRunner;
+class SequencedTaskRunner;
 }
 
 class WebDatabaseService;
@@ -29,17 +31,46 @@ struct WDKeywordsResult {
   ~WDKeywordsResult();
 
   KeywordTable::Keywords keywords;
-  // Identifies the ID of the TemplateURL that is the default search. A value of
-  // 0 indicates there is no default search provider.
-  int64_t default_search_provider_id = 0;
-  // Version of the built-in keywords and starter pack engines. A value of 0
-  // indicates a first run.
-  int builtin_keyword_version = 0;
-  int starter_pack_version = 0;
+
+  // Context qualifying the built-in keywords and starter pack engines data.
+  struct Metadata {
+    // Version number of the most recent prepopulate data that has been merged
+    // into the current keyword data.
+    int builtin_keyword_data_version = 0;
+
+    // Country associated with the keywords data, stored as a country ID,
+    // see `country_codes::CountryId()`.
+    std::optional<regional_capabilities::CountryIdHolder>
+        builtin_keyword_country;
+
+    // Version number of the most recent starter pack data that has been merged
+    // into the current keyword data.
+    int starter_pack_version = 0;
+
+    Metadata();
+    Metadata(const Metadata&);
+    Metadata& operator=(const Metadata&);
+    ~Metadata();
+
+    // Whether any metadata associated with the keywords bundle is set.
+    bool HasBuiltinKeywordData() const {
+      return builtin_keyword_data_version != 0 ||
+             builtin_keyword_country.has_value();
+    }
+
+    // Whether any metadata associated with the starter pack bundle is set.
+    bool HasStarterPackData() const { return starter_pack_version != 0; }
+  };
+  Metadata metadata;
 };
 
 class WebDataServiceConsumer;
 
+// KeywordWebDataService is a specialization of WebDataServiceBase that manages
+// the keywords table. It is responsible for persisting search engine data to
+// the web database and is used by the TemplateURLService to load and save
+// search engine information. All database operations are performed on a
+// background thread.
 class KeywordWebDataService : public WebDataServiceBase {
  public:
   // Instantiate this to turn on batch mode on the provided |service|
@@ -67,7 +98,7 @@ class KeywordWebDataService : public WebDataServiceBase {
 
   KeywordWebDataService(
       scoped_refptr<WebDatabaseService> wdbs,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+      scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
 
   KeywordWebDataService(const KeywordWebDataService&) = delete;
   KeywordWebDataService& operator=(const KeywordWebDataService&) = delete;
@@ -87,11 +118,11 @@ class KeywordWebDataService : public WebDataServiceBase {
   // On success, consumer is notified with WDResult<KeywordTable::Keywords>.
   Handle GetKeywords(WebDataServiceConsumer* consumer);
 
-  // Sets the ID of the default search provider.
-  void SetDefaultSearchProviderID(TemplateURLID id);
+  // Sets the version of the builtin keyword data.
+  void SetBuiltinKeywordDataVersion(int version);
 
-  // Sets the version of the builtin keywords.
-  void SetBuiltinKeywordVersion(int version);
+  // Sets the country ID associated with the builtin keyword data.
+  void SetBuiltinKeywordCountry(country_codes::CountryId country_id);
 
   // Sets the version of the starter pack keywords.
   void SetStarterPackKeywordVersion(int version);

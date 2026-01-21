@@ -13,6 +13,17 @@ namespace signin {
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.signin
 enum class Tribool { kUnknown = -1, kFalse = 0, kTrue = 1 };
 
+// Returns `kTrue` if `b` is true and `kFalse` otherwise.
+// Guaranteed to never return `kUnknown`.
+Tribool TriboolFromBool(bool b);
+
+// Returns the bool value of `tribool` and crashes if `tribool` is `kUnknown`.
+bool TriboolToBoolOrDie(Tribool tribool);
+
+// Returns the bool value of `tribool` or returns `default_value` if `tribool`
+// is `kUnknown`.
+bool TriboolToBoolOr(Tribool tribool, bool default_value);
+
 // Returns the string representation of a tribool.
 std::string TriboolToString(Tribool tribool);
 

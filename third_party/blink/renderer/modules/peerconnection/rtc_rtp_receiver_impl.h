@@ -11,6 +11,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
+#include "third_party/blink/renderer/platform/allow_discouraged_type.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_receiver_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_transceiver_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
@@ -83,7 +84,7 @@ class MODULES_EXPORT RtpReceiverState {
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner() const;
   scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner() const;
   scoped_refptr<webrtc::RtpReceiverInterface> webrtc_receiver() const;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport()
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport()
       const;
   webrtc::DtlsTransportInformation webrtc_dtls_transport_information() const;
 
@@ -95,12 +96,13 @@ class MODULES_EXPORT RtpReceiverState {
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner_;
   scoped_refptr<webrtc::RtpReceiverInterface> webrtc_receiver_;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport_;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport_;
   webrtc::DtlsTransportInformation webrtc_dtls_transport_information_;
   bool is_initialized_;
   std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
       track_ref_;
-  std::vector<std::string> stream_ids_;
+  std::vector<std::string> stream_ids_ ALLOW_DISCOURAGED_TYPE(
+      "Avoids conversions when passed from/to webrtc API");
 };
 
 // Used to surface |webrtc::RtpReceiverInterface| to blink. Multiple
@@ -111,10 +113,10 @@ class MODULES_EXPORT RTCRtpReceiverImpl : public RTCRtpReceiverPlatform {
   static uintptr_t getId(
       const webrtc::RtpReceiverInterface* webrtc_rtp_receiver);
 
-  RTCRtpReceiverImpl(
-      scoped_refptr<webrtc::PeerConnectionInterface> native_peer_connection,
-      RtpReceiverState state,
-      bool encoded_insertable_streams);
+  RTCRtpReceiverImpl(webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
+                         native_peer_connection,
+                     RtpReceiverState state,
+                     std::unique_ptr<webrtc::Metronome> decode_metronome);
   RTCRtpReceiverImpl(const RTCRtpReceiverImpl& other);
   ~RTCRtpReceiverImpl() override;
 
@@ -125,17 +127,17 @@ class MODULES_EXPORT RTCRtpReceiverImpl : public RTCRtpReceiverPlatform {
 
   std::unique_ptr<RTCRtpReceiverPlatform> ShallowCopy() const override;
   uintptr_t Id() const override;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport() override;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport()
+      override;
   webrtc::DtlsTransportInformation DtlsTransportInformation() override;
 
   MediaStreamComponent* Track() const override;
   Vector<String> StreamIds() const override;
   Vector<std::unique_ptr<RTCRtpSource>> GetSources() override;
-  void GetStats(RTCStatsReportCallback,
-                const Vector<webrtc::NonStandardGroupId>&) override;
+  void GetStats(RTCStatsReportCallback) override;
   std::unique_ptr<webrtc::RtpParameters> GetParameters() const override;
   void SetJitterBufferMinimumDelay(
-      absl::optional<double> delay_seconds) override;
+      std::optional<double> delay_seconds) override;
   RTCEncodedAudioStreamTransformer* GetEncodedAudioStreamTransformer()
       const override;
   RTCEncodedVideoStreamTransformer* GetEncodedVideoStreamTransformer()

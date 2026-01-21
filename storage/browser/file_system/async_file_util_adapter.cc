@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
@@ -23,7 +23,6 @@
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/common/file_system/file_system_util.h"
 
-using base::Owned;
 using base::Unretained;
 
 namespace storage {
@@ -132,7 +131,9 @@ void ReadDirectoryHelper(FileSystemFileUtil* file_util,
 
   base::FilePath current;
   while (!(current = file_enum->Next()).empty()) {
-    entries.emplace_back(VirtualPath::BaseName(current),
+    auto name = base::SafeBaseName::Create(current);
+    CHECK(name) << current;
+    entries.emplace_back(*name, file_enum->GetName().AsUTF8Unsafe(),
                          file_enum->IsDirectory()
                              ? filesystem::mojom::FsFileType::DIRECTORY
                              : filesystem::mojom::FsFileType::REGULAR_FILE);
@@ -144,9 +145,16 @@ void ReadDirectoryHelper(FileSystemFileUtil* file_util,
       entries.clear();
     }
   }
-  origin_runner->PostTask(FROM_HERE,
-                          base::BindOnce(callback, base::File::FILE_OK, entries,
-                                         false /* has_more */));
+
+  error = file_enum->GetError();
+  if ((error != base::File::FILE_OK) && !entries.empty()) {
+    origin_runner->PostTask(
+        FROM_HERE, base::BindOnce(callback, base::File::FILE_OK, entries,
+                                  true /* has_more */));
+    entries.clear();
+  }
+  origin_runner->PostTask(FROM_HERE, base::BindOnce(callback, error, entries,
+                                                    false /* has_more */));
 }
 
 void RunCreateOrOpenCallback(FileSystemOperationContext* context,
@@ -156,7 +164,7 @@ void RunCreateOrOpenCallback(FileSystemOperationContext* context,
     // If |callback| been cancelled, free |file| on the correct task runner.
     context->task_runner()->PostTask(
         FROM_HERE,
-        BindOnce([](base::File file) { file.Close(); }, std::move(file)));
+        base::BindOnce([](base::File file) { file.Close(); }, std::move(file)));
     return;
   }
 
@@ -181,10 +189,11 @@ void AsyncFileUtilAdapter::CreateOrOpen(
   FileSystemOperationContext* context_ptr = context.release();
   context_ptr->task_runner()->PostTaskAndReplyWithResult(
       FROM_HERE,
-      BindOnce(&FileSystemFileUtil::CreateOrOpen,
-               Unretained(sync_file_util_.get()), context_ptr, url, file_flags),
-      BindOnce(&RunCreateOrOpenCallback, base::Owned(context_ptr),
-               std::move(callback)));
+      base::BindOnce(&FileSystemFileUtil::CreateOrOpen,
+                     Unretained(sync_file_util_.get()), context_ptr, url,
+                     file_flags),
+      base::BindOnce(&RunCreateOrOpenCallback, base::Owned(context_ptr),
+                     std::move(callback)));
 }
 
 void AsyncFileUtilAdapter::EnsureFileExists(
@@ -195,10 +204,10 @@ void AsyncFileUtilAdapter::EnsureFileExists(
   FileSystemOperationContext* context_ptr = context.release();
   const bool success = context_ptr->task_runner()->PostTaskAndReply(
       FROM_HERE,
-      BindOnce(&EnsureFileExistsHelper::RunWork, Unretained(helper),
-               sync_file_util_.get(), base::Owned(context_ptr), url),
-      BindOnce(&EnsureFileExistsHelper::Reply, Owned(helper),
-               std::move(callback)));
+      base::BindOnce(&EnsureFileExistsHelper::RunWork, Unretained(helper),
+                     sync_file_util_.get(), base::Owned(context_ptr), url),
+      base::BindOnce(&EnsureFileExistsHelper::Reply, base::Owned(helper),
+                     std::move(callback)));
   DCHECK(success);
 }
 
@@ -221,19 +230,19 @@ void AsyncFileUtilAdapter::CreateDirectory(
 void AsyncFileUtilAdapter::GetFileInfo(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
-    int fields,
+    GetMetadataFieldSet fields,
     GetFileInfoCallback callback) {
   FileSystemOperationContext* context_ptr = context.release();
   GetFileInfoHelper* helper = new GetFileInfoHelper;
   bool calculate_total_size =
-      (fields & FileSystemOperation::GET_METADATA_FIELD_TOTAL_SIZE);
+      fields.Has(FileSystemOperation::GetMetadataField::kRecursiveSize);
   const bool success = context_ptr->task_runner()->PostTaskAndReply(
       FROM_HERE,
-      BindOnce(&GetFileInfoHelper::GetFileInfo, Unretained(helper),
-               sync_file_util_.get(), base::Owned(context_ptr), url,
-               calculate_total_size),
-      BindOnce(&GetFileInfoHelper::ReplyFileInfo, Owned(helper),
-               std::move(callback)));
+      base::BindOnce(&GetFileInfoHelper::GetFileInfo, Unretained(helper),
+                     sync_file_util_.get(), base::Owned(context_ptr), url,
+                     calculate_total_size),
+      base::BindOnce(&GetFileInfoHelper::ReplyFileInfo, base::Owned(helper),
+                     std::move(callback)));
   DCHECK(success);
 }
 
@@ -244,7 +253,7 @@ void AsyncFileUtilAdapter::ReadDirectory(
   FileSystemOperationContext* context_ptr = context.release();
   const bool success = context_ptr->task_runner()->PostTask(
       FROM_HERE,
-      BindOnce(
+      base::BindOnce(
           &ReadDirectoryHelper, sync_file_util_.get(), base::Owned(context_ptr),
           url,
           base::RetainedRef(base::SingleThreadTaskRunner::GetCurrentDefault()),
@@ -377,10 +386,10 @@ void AsyncFileUtilAdapter::CreateSnapshotFile(
   GetFileInfoHelper* helper = new GetFileInfoHelper;
   const bool success = context_ptr->task_runner()->PostTaskAndReply(
       FROM_HERE,
-      BindOnce(&GetFileInfoHelper::CreateSnapshotFile, Unretained(helper),
-               sync_file_util_.get(), base::Owned(context_ptr), url),
-      BindOnce(&GetFileInfoHelper::ReplySnapshotFile, Owned(helper),
-               std::move(callback)));
+      base::BindOnce(&GetFileInfoHelper::CreateSnapshotFile, Unretained(helper),
+                     sync_file_util_.get(), base::Owned(context_ptr), url),
+      base::BindOnce(&GetFileInfoHelper::ReplySnapshotFile, base::Owned(helper),
+                     std::move(callback)));
   DCHECK(success);
 }
 

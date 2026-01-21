@@ -5,10 +5,10 @@
 #ifndef CHROME_BROWSER_AFTER_STARTUP_TASK_UTILS_H_
 #define CHROME_BROWSER_AFTER_STARTUP_TASK_UTILS_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 
 namespace android {
 class AfterStartupTaskUtilsJNI;

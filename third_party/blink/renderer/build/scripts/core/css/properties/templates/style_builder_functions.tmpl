@@ -17,6 +17,13 @@ void {{class_name}}::ApplyInitial(StyleResolverState& state) const {
   {% if property.style_builder_declare %}
     {% if property.style_builder_generate_inherit %}
 void {{class_name}}::ApplyInherit(StyleResolverState& state) const {
+      {% if property.affected_by_zoom %}
+  if (state.GetDocument().StandardizedBrowserZoomEnabled()) {
+    if (ApplyParentValueIfZoomChanged(state)) {
+      return;
+    }
+  }
+      {% endif %}
 {{(caller(property) ~ '}')}}
     {% endif %}
   {% endif %}
@@ -26,24 +33,20 @@ void {{class_name}}::ApplyInherit(StyleResolverState& state) const {
   {% set class_name = property.name.to_upper_camel_case() %}
   {% if property.style_builder_declare %}
     {% if property.style_builder_generate_value %}
-void {{class_name}}::ApplyValue(StyleResolverState& state, const CSSValue& value) const {
-      {% if property.tree_scoped_value %}
-  NOTREACHED();
-}
-void {{class_name}}::ApplyValue(StyleResolverState& state, const ScopedCSSValue& value) const {
-      {% endif %}
+void {{class_name}}::ApplyValue(StyleResolverState& state, const CSSValue& value, ValueMode) const {
+{% if property.anchor_mode %}
+  blink::AnchorScope anchor_scope(
+      blink::AnchorScope::Mode::{{property.anchor_mode.to_enum_value()}},
+      state.CssToLengthConversionData().GetAnchorEvaluator());
+{% endif %}
 {{(caller(property) ~ '}')}}
     {% endif %}
   {% endif %}
 {% endmacro %}
 
 {% macro style_access(property) %}
-  {%- if property.writable %}
-state.Style()->
-  {%- else %}
 state.StyleBuilder().
-  {%- endif %}
-{% endmacro %}
+{%- endmacro %}
 
 {% macro set_value(property) %}
   {%- if property.font %}
@@ -55,27 +58,11 @@ state.GetFontBuilder().{{property.setter}}
 
 {% macro convert_and_set_value(property) %}
   {% if property.converter == 'CSSPrimitiveValue' %}
-{{set_value(property)}}(To<CSSPrimitiveValue>(value).ConvertTo<{{property.type_name}}>());
+{{set_value(property)}}(To<CSSPrimitiveValue>(value).ConvertTo<{{property.type_name}}>(state.CssToLengthConversionData()));
   {%- elif property.converter == 'CSSIdentifierValue' %}
 {{set_value(property)}}(To<CSSIdentifierValue>(value).ConvertTo<blink::{{property.type_name}}>());
   {%- elif property.converter %}
 {{set_value(property)}}(StyleBuilderConverter::{{property.converter}}(state, value));
-  {%- endif %}
-{% endmacro %}
-
-{% macro add_tree_scope(property, value, tree_scope) %}
-  {%- if property.tree_scoped_value %}
-ScopedCSSValue({{value}}, {{tree_scope}})
-  {%- else %}
-{{value}}
-  {%- endif %}
-{% endmacro %}
-
-{% macro remove_tree_scope(property, value) %}
-  {%- if property.tree_scoped_value %}
-{{value}}.GetCSSValue()
-  {%- else %}
-{{value}}
   {%- endif %}
 {% endmacro %}
 
@@ -239,11 +226,13 @@ ScopedCSSValue({{value}}, {{tree_scope}})
     {% endcall %}
 
     {% call(property) apply_value(property) %}
+  const CSSValueList& list = To<CSSValueList>(value);
   CSS{{animation}}Data& data = state.StyleBuilder().Access{{animation}}s();
   data.{{vector}}.clear();
-  for (const CSSValue* list_value : To<CSSValueList>({{remove_tree_scope(property, 'value')}})) {
-    const auto& item = {{add_tree_scope(property, '*list_value', 'value.GetTreeScope()')}};
-    data.{{vector}}.push_back(CSSToStyleMap::MapAnimation{{attribute}}(item));
+  data.{{vector}}.reserve(list.length());
+  for (const CSSValue* list_value : list) {
+    const auto& item = *list_value;
+    data.{{vector}}.push_back(CSSToStyleMap::MapAnimation{{attribute}}(state, item));
   }
     {% endcall %}
   {% elif property.style_builder_template in ['background_layer', 'mask_layer'] %}
@@ -359,35 +348,32 @@ ScopedCSSValue({{value}}, {{tree_scope}})
   CounterDirectiveMap& map = state.StyleBuilder().AccessCounterDirectives();
 
   for (const CSSValue* item : *list) {
-    const auto& pair = To<CSSValuePair>(*item);
-    AtomicString identifier(To<CSSCustomIdentValue>(pair.First()).Value());
-    int counter_value = To<CSSPrimitiveValue>(pair.Second()).GetIntValue();
+    const auto& counter_data = To<cssvalue::CSSCounterValue>(*item);
+    AtomicString identifier(To<CSSCustomIdentValue>(counter_data.Identifier())->Value());
     CounterDirectives& directives =
-    map.insert(identifier, CounterDirectives()).stored_value->value;
+        map.insert(identifier, CounterDirectives()).stored_value->value;
         {% if action == 'Reset' %}
-    directives.SetResetValue(counter_value);
-        {% elif action == 'Increment' %}
-    directives.AddIncrementValue(counter_value);
-        {% else %}
-    directives.SetSetValue(counter_value);
+    if (counter_data.IsReversed()) {
+      directives.SetIsResetReversed();
+    }
         {% endif %}
+    if (const CSSPrimitiveValue* counter_data_value = counter_data.Value()) {
+          {% if action == 'Reset' %}
+      int64_t counter_value = counter_data_value->ComputeNumber(state.CssToLengthConversionData());
+          {% else %}
+      int counter_value = counter_data_value->ComputeInteger(state.CssToLengthConversionData());
+          {% endif %}
+
+          {% if action == 'Reset' %}
+      directives.SetResetValue(counter_value);
+          {% elif action == 'Increment' %}
+      directives.AddIncrementValue(counter_value);
+          {% else %}
+      directives.SetSetValue(counter_value);
+          {% endif %}
+    }
   }
   DCHECK(!map.empty());
-    {% endcall %}
-  {% elif property.style_builder_template == 'grid' %}
-    {% set type = property.style_builder_template_args['type'] %}
-    {% call(property) apply_initial(property) %}
-  {{style_access(property)}}SetGridTemplate{{type}}s(ComputedStyleInitialValues::InitialGridTemplate{{type}}s());
-    {% endcall %}
-
-    {% call(property) apply_inherit(property) %}
-  {{style_access(property)}}SetGridTemplate{{type}}s(state.ParentStyle()->GridTemplate{{type}}s());
-    {% endcall %}
-
-    {% call(property) apply_value(property) %}
-  ComputedGridTrackList computed_grid_track_list;
-  StyleBuilderConverter::ConvertGridTrackList(value, computed_grid_track_list, state);
-  {{style_access(property)}}SetGridTemplate{{type}}s(computed_grid_track_list);
     {% endcall %}
   {% endif %}
 {%- endmacro %}

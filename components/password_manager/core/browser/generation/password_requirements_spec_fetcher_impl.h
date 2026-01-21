@@ -8,10 +8,11 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/password_manager/core/browser/generation/password_requirements_spec_fetcher.h"
@@ -65,7 +66,7 @@ class PasswordRequirementsSpecFetcherImpl
   ~PasswordRequirementsSpecFetcherImpl() override;
 
   // Implementation for PasswordRequirementsSpecFetcher:
-  // TODO(https://crbug.com/1300422): Pass GURL by const reference here.
+  // TODO(crbug.com/40216268): Pass GURL by const reference here.
   void Fetch(GURL origin, FetchCallback callback) override;
 
  private:
@@ -97,7 +98,7 @@ class PasswordRequirementsSpecFetcherImpl
   // the entry corresponding to |hash_prefix| out of |lookups_in_flight_| as
   // their first order of business.
   void OnFetchComplete(const std::string& hash_prefix,
-                       std::unique_ptr<std::string> response_body);
+                       std::optional<std::string> response_body);
   void OnFetchTimeout(const std::string& hash_prefix);
 
   // Calls all |callbacks| in order. Note that these callbacks are OnceCallback

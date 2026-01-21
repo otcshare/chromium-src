@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_NEARBY_SHARING_INSTANTMESSAGING_SEND_MESSAGE_EXPRESS_H_
 #define CHROME_BROWSER_NEARBY_SHARING_INSTANTMESSAGING_SEND_MESSAGE_EXPRESS_H_
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/nearby_sharing/instantmessaging/token_fetcher.h"
@@ -54,7 +54,7 @@ class SendMessageExpress {
       const std::string& message_id,
       std::unique_ptr<network::SimpleURLLoader> url_loader,
       SuccessCallback callback,
-      std::unique_ptr<std::string> response_body);
+      std::optional<std::string> response_body);
 
   TokenFetcher token_fetcher_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

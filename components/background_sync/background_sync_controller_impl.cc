@@ -4,7 +4,7 @@
 
 #include "components/background_sync/background_sync_controller_impl.h"
 
-#include "base/containers/contains.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -12,7 +12,6 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
-#include "components/variations/variations_associated_data.h"
 #include "content/public/browser/background_sync_context.h"
 #include "content/public/browser/background_sync_controller.h"
 #include "content/public/browser/background_sync_parameters.h"
@@ -111,8 +110,9 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
 #endif
 
   std::map<std::string, std::string> field_params;
-  if (!variations::GetVariationParams(kFieldTrialName, &field_params))
+  if (!base::GetFieldTrialParams(kFieldTrialName, &field_params)) {
     return;
+  }
 
   if (base::EqualsCaseInsensitiveASCII(field_params[kDisabledParameterName],
                                        "true")) {
@@ -129,8 +129,8 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     parameters->skip_permissions_check_for_testing = true;
   }
 
-  if (base::Contains(field_params,
-                     kMaxAttemptsWithNotificationPermissionParameterName)) {
+  if (field_params.contains(
+          kMaxAttemptsWithNotificationPermissionParameterName)) {
     int max_attempts;
     if (base::StringToInt(
             field_params[kMaxAttemptsWithNotificationPermissionParameterName],
@@ -139,7 +139,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kMaxAttemptsParameterName)) {
+  if (field_params.contains(kMaxAttemptsParameterName)) {
     int max_attempts;
     if (base::StringToInt(field_params[kMaxAttemptsParameterName],
                           &max_attempts)) {
@@ -147,7 +147,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kInitialRetryParameterName)) {
+  if (field_params.contains(kInitialRetryParameterName)) {
     int initial_retry_delay_sec;
     if (base::StringToInt(field_params[kInitialRetryParameterName],
                           &initial_retry_delay_sec)) {
@@ -155,7 +155,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kRetryDelayFactorParameterName)) {
+  if (field_params.contains(kRetryDelayFactorParameterName)) {
     int retry_delay_factor;
     if (base::StringToInt(field_params[kRetryDelayFactorParameterName],
                           &retry_delay_factor)) {
@@ -163,7 +163,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kMinSyncRecoveryTimeName)) {
+  if (field_params.contains(kMinSyncRecoveryTimeName)) {
     int min_sync_recovery_time_sec;
     if (base::StringToInt(field_params[kMinSyncRecoveryTimeName],
                           &min_sync_recovery_time_sec)) {
@@ -172,7 +172,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kMaxSyncEventDurationName)) {
+  if (field_params.contains(kMaxSyncEventDurationName)) {
     int max_sync_event_duration_sec;
     if (base::StringToInt(field_params[kMaxSyncEventDurationName],
                           &max_sync_event_duration_sec)) {
@@ -181,7 +181,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
     }
   }
 
-  if (base::Contains(field_params, kMinPeriodicSyncEventsInterval)) {
+  if (field_params.contains(kMinPeriodicSyncEventsInterval)) {
     int min_periodic_sync_events_interval_sec;
     if (base::StringToInt(field_params[kMinPeriodicSyncEventsInterval],
                           &min_periodic_sync_events_interval_sec)) {
@@ -194,7 +194,7 @@ void BackgroundSyncControllerImpl::GetParameterOverrides(
   // Check if the delegate explicitly disabled this feature.
   if (delegate_->ShouldDisableAndroidNetworkDetection()) {
     parameters->rely_on_android_network_detection = false;
-  } else if (base::Contains(field_params, kRelyOnAndroidNetworkDetection)) {
+  } else if (field_params.contains(kRelyOnAndroidNetworkDetection)) {
     if (base::EqualsCaseInsensitiveASCII(
             field_params[kRelyOnAndroidNetworkDetection], "true")) {
       parameters->rely_on_android_network_detection = true;

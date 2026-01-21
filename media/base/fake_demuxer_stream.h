@@ -5,6 +5,8 @@
 #ifndef MEDIA_BASE_FAKE_DEMUXER_STREAM_H_
 #define MEDIA_BASE_FAKE_DEMUXER_STREAM_H_
 
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
@@ -46,7 +48,7 @@ class FakeDemuxerStream : public DemuxerStream {
   ~FakeDemuxerStream() override;
 
   // DemuxerStream implementation.
-  void Read(ReadCB read_cb) override;
+  void Read(uint32_t count, ReadCB read_cb) override;
   AudioDecoderConfig audio_decoder_config() override;
   VideoDecoderConfig video_decoder_config() override;
   Type type() const override;
@@ -90,7 +92,7 @@ class FakeDemuxerStream : public DemuxerStream {
 
  private:
   void UpdateVideoDecoderConfig();
-  void DoRead();
+  void DoRead(int read_count = 1);
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 

@@ -5,37 +5,50 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_INFO_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_INFO_H_
 
+#include <array>
 #include <functional>
-#include <iosfwd>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/check.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/types/expected.h"
 #include "base/values.h"
-#include "chrome/browser/web_applications/user_display_mode.h"
+#include "build/build_config.h"
+#include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/localized_text.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/web_applications/proto/web_app.pb.h"
+#include "chrome/browser/web_applications/scope_extension_info.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/services/app_service/public/cpp/icon_info.h"
 #include "components/services/app_service/public/cpp/protocol_handler_info.h"
 #include "components/services/app_service/public/cpp/share_target.h"
-#include "components/services/app_service/public/cpp/url_handler_info.h"
-#include "components/webapps/common/web_page_metadata.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
+#include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/types/iwa_version.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
+#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-shared.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
-class SkBitmap;
+static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+              BUILDFLAG(IS_CHROMEOS));
+
+namespace web_app {
 
 // A map of icon urls to the bitmaps provided by that url.
 using IconsMap = std::map<GURL, std::vector<SkBitmap>>;
-
-// A map of icon urls to http status results. `http_status_code` is never 0.
-using DownloadedIconsHttpResults = std::map<GURL, int /*http_status_code*/>;
 
 using SquareSizePx = int;
 // Iterates in ascending order (checked in SortedSizesPxIsAscending test).
@@ -46,6 +59,18 @@ constexpr std::array<IconPurpose,
                          static_cast<int>(IconPurpose::kMinValue) + 1>
     kIconPurposes{IconPurpose::ANY, IconPurpose::MONOCHROME,
                   IconPurpose::MASKABLE};
+struct SizeComparator {
+  constexpr bool operator()(const gfx::Size& left,
+                            const gfx::Size& right) const {
+    if (left.height() != right.height()) {
+      return left.height() < right.height();
+    }
+
+    return left.width() < right.width();
+  }
+};
+
+using SizeSet = base::flat_set<gfx::Size, SizeComparator>;
 
 apps::IconInfo::Purpose ManifestPurposeToIconInfoPurpose(
     IconPurpose manifest_purpose);
@@ -59,6 +84,8 @@ struct IconBitmaps {
   IconBitmaps& operator=(const IconBitmaps&);
   IconBitmaps& operator=(IconBitmaps&&) noexcept;
 
+  bool operator==(const IconBitmaps&) const;
+
   const std::map<SquareSizePx, SkBitmap>& GetBitmapsForPurpose(
       IconPurpose purpose) const;
   void SetBitmapsForPurpose(IconPurpose purpose,
@@ -66,7 +93,7 @@ struct IconBitmaps {
 
   bool empty() const;
 
-  // TODO(crbug.com/1152661): Consider using base::flat_map.
+  // TODO(crbug.com/40158740): Consider using base::flat_map.
 
   // Icon bitmaps suitable for any context, keyed by their square size.
   // See https://www.w3.org/TR/appmanifest/#dfn-any-purpose
@@ -89,6 +116,7 @@ struct IconSizes {
   IconSizes(IconSizes&&) noexcept;
   IconSizes& operator=(const IconSizes&);
   IconSizes& operator=(IconSizes&&) noexcept;
+  base::Value AsDebugValue() const;
 
   const std::vector<SquareSizePx>& GetSizesForPurpose(
       IconPurpose purpose) const;
@@ -163,6 +191,50 @@ struct WebAppShortcutsMenuItemInfo {
   // designed for monochrome contexts.
   // See https://www.w3.org/TR/appmanifest/#purpose-member
   std::vector<Icon> monochrome;
+
+  // Sizes of successfully downloaded icons for this shortcut menu item.
+  IconSizes downloaded_icon_sizes;
+};
+
+struct IconsWithSizeAny {
+  IconsWithSizeAny();
+  ~IconsWithSizeAny();
+  IconsWithSizeAny(const IconsWithSizeAny& icons_with_size_any);
+  IconsWithSizeAny& operator=(const IconsWithSizeAny& icons_with_size_any);
+  bool operator==(const IconsWithSizeAny& icons_with_size_any) const;
+
+  base::Value ToDebugValue() const;
+  std::string ToString() const;
+
+  // 4 different maps are needed to keep track of the icons since there is no
+  // guarantee that the icons specified for each component that uses icons (like
+  // file handlers) will exist at the higher level `icons` entry for the
+  // manifest.
+  // A single GURL is stored per IconPurpose since only the last available icon
+  // needs to be considered as per the manifest spec.
+  base::flat_map<IconPurpose, GURL> manifest_icons;
+  SizeSet manifest_icon_provided_sizes;
+  base::flat_map<IconPurpose, GURL> shortcut_menu_icons;
+  SizeSet shortcut_menu_icons_provided_sizes;
+  base::flat_map<IconPurpose, GURL> file_handling_icons;
+  SizeSet file_handling_icon_provided_sizes;
+  base::flat_map<IconPurpose, GURL> home_tab_icons;
+  SizeSet home_tab_icon_provided_sizes;
+};
+
+// Data structure to store information about whether the icons obtained from the
+// manifest need to be masked to be shown in dialogs or other UX surfaces while
+// the app has not been installed yet.
+struct DialogImageInfo {
+  DialogImageInfo();
+  ~DialogImageInfo();
+  DialogImageInfo(const DialogImageInfo& dialog_image_info);
+  DialogImageInfo& operator=(const DialogImageInfo& dialog_image_info);
+  DialogImageInfo(DialogImageInfo&& dialog_image_info);
+  DialogImageInfo& operator=(DialogImageInfo&& dialog_image_info);
+
+  std::map<SquareSizePx, SkBitmap> bitmaps;
+  bool is_maskable = false;
 };
 
 // Structure used when installing a web page as an app.
@@ -173,46 +245,99 @@ struct WebAppInstallInfo {
     MOBILE_CAPABLE_APPLE
   };
 
-  // Returns a copy of the |other| that has only the fields that should be
-  // copied/derived from various sources (e.g generated icons, manifest
-  // properties). This will strip out app-like fields such as file handlers etc.
-  static WebAppInstallInfo CreateInstallInfoForCreateShortcut(
-      const GURL& document_url,
-      const WebAppInstallInfo& other);
+  // This creates WebAppInstallInfo in the same way as the default constructor
+  // does, but it will return an error on invalid arguments instead of failing
+  // with a CHECK().
+  static base::expected<WebAppInstallInfo, std::string> Create(
+      const GURL& manifest_url,
+      const webapps::ManifestId& manifest_id,
+      const GURL& start_url);
 
-  WebAppInstallInfo();
+  // This creates a WebAppInstallInfo where the `manifest_id` is derived from
+  // the `start_url` using `GenerateManifestIdFromStartUrlOnly`, and the `scope`
+  // is generated from the `start_url` without the filename.
+  static std::unique_ptr<WebAppInstallInfo> CreateWithStartUrlForTesting(
+      const GURL& start_url);
+
+  // Creates a WebAppInstallInfo from a `start_url`, where the `manifest_id` is
+  // derived from the `start_url` using `GenerateManifestIdFromStartUrlOnly`,
+  // and the `scope` is generated from the `start_url` without the filename.
+  // This also populates some common required fields like the title, as well as
+  // allows easy specification of often-modified fields like `display` and
+  // `user_display_mode`.
+  static std::unique_ptr<WebAppInstallInfo> CreateForTesting(
+      const GURL& start_url,
+      blink::mojom::DisplayMode display = blink::mojom::DisplayMode::kMinimalUi,
+      mojom::UserDisplayMode user_display_mode =
+          mojom::UserDisplayMode::kStandalone,
+      std::optional<blink::mojom::ManifestLaunchHandler_ClientMode>
+          client_mode = std::nullopt);
+
+  // The `manifest_id` and the `start_url` MUST be valid and same-origin. The
+  // `manifest_id` MUST NOT contain refs (e.g. '#refs').
+  WebAppInstallInfo(const webapps::ManifestId& manifest_id,
+                    const GURL& start_url);
 
   // Deleted to prevent accidental copying. Use Clone() to deep copy explicitly.
   WebAppInstallInfo& operator=(const WebAppInstallInfo&) = delete;
 
   WebAppInstallInfo(WebAppInstallInfo&&);
   WebAppInstallInfo& operator=(WebAppInstallInfo&&);
-
-  explicit WebAppInstallInfo(const webapps::mojom::WebPageMetadata& metadata);
   ~WebAppInstallInfo();
 
   // Creates a deep copy of this struct.
   WebAppInstallInfo Clone() const;
 
-  // Id specified in the manifest.
-  absl::optional<std::string> manifest_id;
+  // Returns the version of the Isolated Web App.
+  // PRECONDITION: Must only be called if an IWA version is actually set.
+  const IwaVersion& isolated_web_app_version() const {
+    CHECK(isolated_web_app_version_.has_value())
+        << "Attempted to access Isolated Web App version when not set.";
+    return *isolated_web_app_version_;
+  }
 
-  // Title of the application.
-  std::u16string title;
+  // Sets the version for an Isolated Web App.
+  void set_isolated_web_app_version(IwaVersion version) {
+    isolated_web_app_version_ = std::move(version);
+  }
 
-  // Description of the application.
-  std::u16string description;
+  // ID specified in the manifest.
+  // Guaranteed to be valid & non-empty & same-origin with `start_url()` & have
+  // no "#ref" part in the URL.
+  // https://www.w3.org/TR/appmanifest/#id-member
+  const webapps::ManifestId& manifest_id() const { return manifest_id_; }
 
-  // The URL the site would prefer the user agent load when launching the app.
+  // URL the site would prefer the user agent load when launching the app.
+  // Guaranteed to be valid & non-empty & same-origin with `manifest_id()`.
   // https://www.w3.org/TR/appmanifest/#start_url-member
-  GURL start_url;
+  const GURL& start_url() const { return start_url_; }
+
+  // Set the `manifest_id` and `start_url` fields. Both are set at once to allow
+  // origin changes if necessary. The `manifest_id` and the `start_url` have the
+  // same requirements as in the WebAppInstallInfo constructor.
+  void SetManifestIdAndStartUrl(const webapps::ManifestId& manifest_id,
+                                const GURL& start_url);
+
+  // Returns the icons to be shown on security sensitive surfaces that are
+  // visible to the user as part of Chrome (like install/update dialogs).
+  // Returns trusted icons if available, falling back to `any` icons if not
+  // found.
+  DialogImageInfo GetIconBitmapsForSecureSurfaces() const;
+
+  // Title of the application, stored in a localized format to allow
+  // translations and text direction information to be preserved.
+  LocalizedText title;
+
+  // Description of the application, stored in a localized format to allow
+  // translations and text direction information to be preserved.
+  LocalizedText description;
 
   // The URL of the manifest.
   // https://www.w3.org/TR/appmanifest/#web-application-manifest
   GURL manifest_url;
 
   // Optional query parameters to add to the start_url when launching the app.
-  absl::optional<std::string> launch_query_params;
+  std::optional<std::string> launch_query_params;
 
   // Scope for the app. Dictates what URLs will be opened in the app.
   // https://www.w3.org/TR/appmanifest/#scope-member
@@ -225,6 +350,10 @@ struct WebAppInstallInfo {
 
   // Icon bitmaps, keyed by their square size.
   IconBitmaps icon_bitmaps;
+
+  // Icon bitmaps that are considered trusted by the user, keyed by their square
+  // size. Can be autogenerated if no icons are considered trusted.
+  IconBitmaps trusted_icon_bitmaps;
 
   // A collection of unprocessed icons keyed by their download URL. The usage
   // and purpose of these icons is tracked elsewhere, such as in
@@ -241,19 +370,19 @@ struct WebAppInstallInfo {
   MobileCapable mobile_capable = MOBILE_CAPABLE_UNSPECIFIED;
 
   // The color to use for the web app frame.
-  absl::optional<SkColor> theme_color;
+  std::optional<SkColor> theme_color;
 
   // The color to use for the web app frame when
   // launched in dark mode. This doesn't yet have manifest support.
-  absl::optional<SkColor> dark_mode_theme_color;
+  std::optional<SkColor> dark_mode_theme_color;
 
   // The expected page background color of the web app.
   // https://www.w3.org/TR/appmanifest/#background_color-member
-  absl::optional<SkColor> background_color;
+  std::optional<SkColor> background_color;
 
   // The color to use for the background when
   // launched in dark mode. This doesn't yet have manifest support.
-  absl::optional<SkColor> dark_mode_background_color;
+  std::optional<SkColor> dark_mode_background_color;
 
   // App preference regarding whether the app should be opened in a tab,
   // in a window (with or without minimal-ui buttons), or full screen. Defaults
@@ -262,19 +391,23 @@ struct WebAppInstallInfo {
   blink::mojom::DisplayMode display_mode = blink::mojom::DisplayMode::kBrowser;
 
   // App preference to control display fallback ordering
-  std::vector<blink::mojom::DisplayMode> display_override;
+  std::vector<web_app::DisplayOverride> display_override;
 
   // User preference for whether the app should be opened as a tab or in an app
   // window. Must be either kBrowser or kStandalone, this will be checked by
   // WebApp::SetUserDisplayMode().
-  absl::optional<web_app::UserDisplayMode> user_display_mode =
-      web_app::UserDisplayMode::kBrowser;
+  std::optional<web_app::mojom::UserDisplayMode> user_display_mode =
+      web_app::mojom::UserDisplayMode::kBrowser;
+
+  // URL patterns used to decide when a window should have display mode
+  // `kBorderless`.
+  std::vector<blink::SafeUrlPattern> borderless_url_patterns;
 
   // The extensions and mime types the app can handle.
   apps::FileHandlers file_handlers;
 
   // File types the app accepts as a Web Share Target.
-  absl::optional<apps::ShareTarget> share_target;
+  std::optional<apps::ShareTarget> share_target;
 
   // Additional search terms that users can use to find the app.
   std::vector<std::string> additional_search_terms;
@@ -286,14 +419,30 @@ struct WebAppInstallInfo {
   // Vector of shortcut icon bitmaps keyed by their square size. The index of a
   // given |IconBitmaps| matches that of the shortcut in
   // |shortcuts_menu_item_infos| whose bitmaps it contains.
+  // Notes: It is not guaranteed that these are populated if the menu items are.
+  // See https://crbug.com/1427444.
   ShortcutsMenuIconBitmaps shortcuts_menu_icon_bitmaps;
 
   // The URL protocols/schemes that the app can handle.
   std::vector<apps::ProtocolHandlerInfo> protocol_handlers;
 
-  // The app intends to act as a URL handler for URLs described by this
+  // The app intends to have an extended scope containing URLs described by this
   // information.
-  apps::UrlHandlers url_handlers;
+  // Note: All specified 'scope' members of these extensions will have queries
+  // and fragments stripped, per specification.
+  // https://w3c.github.io/manifest/#scope-member
+  base::flat_set<web_app::ScopeExtensionInfo> scope_extensions;
+
+  // `scope_extensions` after going through validation with associated origins.
+  // Only entries that have been validated by the corresponding origins remain.
+  // See
+  // https://github.com/WICG/manifest-incubations/blob/gh-pages/scope_extensions-explainer.md
+  // for association requirements.
+  // Note: All specified 'scope' members of these extensions will have queries
+  // and fragments stripped, per specification.
+  // https://w3c.github.io/manifest/#scope-member
+  std::optional<base::flat_set<web_app::ScopeExtensionInfo>>
+      validated_scope_extensions;
 
   // URL within scope to launch on the lock screen for a "show on lock screen"
   // action. Valid iff this is considered a lock-screen-capable app.
@@ -303,23 +452,15 @@ struct WebAppInstallInfo {
   // considered a note-taking app.
   GURL note_taking_new_note_url;
 
-  // The link capturing behaviour to use for navigations into in the app's
-  // scope.
-  blink::mojom::CaptureLinks capture_links =
-      blink::mojom::CaptureLinks::kUndefined;
-
-  // Whether the app should be loaded in a dedicated storage partition.
-  bool is_storage_isolated = false;
-
   // The window selection behaviour of app launches.
-  absl::optional<blink::Manifest::LaunchHandler> launch_handler;
+  std::optional<blink::Manifest::LaunchHandler> launch_handler;
 
   // A mapping from locales to translated fields.
   base::flat_map<std::string, blink::Manifest::TranslationItem> translations;
 
   // The declared permissions policy to apply as the baseline policy for all
   // documents belonging to the application.
-  blink::ParsedPermissionsPolicy permissions_policy;
+  network::ParsedPermissionsPolicy permissions_policy;
 
   // See ExternallyManagedAppManager for placeholder app documentation.
   // Intended to be a temporary app while we wait for the install_url to
@@ -333,11 +474,69 @@ struct WebAppInstallInfo {
 
   // Customisations to the tab strip. This field is only used when the
   // display mode is set to 'tabbed'.
-  absl::optional<blink::Manifest::TabStrip> tab_strip;
+  std::optional<blink::Manifest::TabStrip> tab_strip;
+
+  // Id of the app that called the SUB_APP API to install this app. This field
+  // is only used when the app is installed as a sub app through the SUB_APP
+  // API.
+  std::optional<webapps::AppId> parent_app_id;
+
+  // ManifestId of the app that called the SUB_APP API to install this app. This
+  // field is only used when the app is installed as a sub app through the
+  // SUB_APP API.
+  std::optional<webapps::ManifestId> parent_app_manifest_id;
+
+  // A list of additional terms to use when matching this app against
+  // identifiers in admin policies (for shelf pinning, default file handlers,
+  // etc).
+  // Note that list is not meant to be an exhaustive enumeration of all possible
+  // policy_ids but rather just a supplement for tricky cases.
+  std::vector<std::string> additional_policy_ids;
+
+  // Bookkeeping details about attempts to fix broken icons from sync installed
+  // web apps.
+  std::optional<proto::GeneratedIconFix> generated_icon_fix;
+
+  IconsWithSizeAny icons_with_size_any;
+
+  // A DIY app isn't installable or promotable, and the user was able to
+  // customize the title, etc.
+  bool is_diy_app = false;
+
+  // Apps that are listed as related applications in the manifest.
+  std::vector<blink::Manifest::RelatedApplication> related_applications;
+
+  // List of icon URLs with associated square size and purpose that is
+  // considered trusted. This is used to write to the web_app post installation
+  // or updates, and is used to store metadata about the icon that will be shown
+  // for the web app on security sensitive surfaces.
+  std::vector<apps::IconInfo> trusted_icons;
+
+  // The URL of the page that requested installation via the Web Install API.
+  // Converted to AppInstalledBy during finalization. Only used for
+  // background document installs.
+  std::optional<GURL> installed_by;
+
+  // The URL of the Isolated Web App's update manifest. Used to detect updates.
+  // Note that the `update_manifest_url` specified in the
+  // IsolatedWebAppInstallForceList policy takes precedence over this value.
+  std::optional<GURL> iwa_update_manifest_url;
+
+  // Migration sources to be associated with the app.
+  std::vector<proto::WebAppMigrationSource> migration_sources;
 
  private:
   // Used this method in Clone() method. Use Clone() to deep copy explicitly.
   WebAppInstallInfo(const WebAppInstallInfo& other);
+
+  // See `manifest_id()`.
+  webapps::ManifestId manifest_id_;
+
+  // Used to specify the version of an Isolated Web App that is being installed.
+  std::optional<IwaVersion> isolated_web_app_version_;
+
+  // See `start_url()`.
+  GURL start_url_;
 };
 
 bool operator==(const IconSizes& icon_sizes1, const IconSizes& icon_sizes2);
@@ -347,5 +546,9 @@ bool operator==(const WebAppShortcutsMenuItemInfo::Icon& icon1,
 
 bool operator==(const WebAppShortcutsMenuItemInfo& shortcut_info1,
                 const WebAppShortcutsMenuItemInfo& shortcut_info2);
+
+bool operator==(const DialogImageInfo& info1, const DialogImageInfo& info2);
+
+}  // namespace web_app
 
 #endif  // CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_INFO_H_

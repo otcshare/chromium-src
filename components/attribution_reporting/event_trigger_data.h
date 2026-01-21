@@ -7,14 +7,17 @@
 
 #include <stdint.h>
 
+#include <optional>
+
 #include "base/component_export.h"
 #include "base/types/expected.h"
-#include "base/values.h"
-#include "components/attribution_reporting/bounded_list.h"
-#include "components/attribution_reporting/constants.h"
 #include "components/attribution_reporting/filters.h"
 #include "components/attribution_reporting/trigger_registration_error.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace base {
+class DictValue;
+class Value;
+}  // namespace base
 
 namespace attribution_reporting {
 
@@ -35,29 +38,24 @@ struct COMPONENT_EXPORT(ATTRIBUTION_REPORTING) EventTriggerData {
   // Key specified in conversion redirect for deduplication against existing
   // conversions with the same source. If absent, no deduplication is
   // performed.
-  absl::optional<uint64_t> dedup_key;
+  std::optional<uint64_t> dedup_key;
 
   // The filters used to determine whether this `EventTriggerData'`s fields
   // are used.
-  Filters filters;
-
-  // The negated filters used to determine whether this `EventTriggerData'`s
-  // fields are used.
-  Filters not_filters;
+  FilterPair filters;
 
   EventTriggerData();
 
   EventTriggerData(uint64_t data,
                    int64_t priority,
-                   absl::optional<uint64_t> dedup_key,
-                   Filters filters,
-                   Filters not_filters);
+                   std::optional<uint64_t> dedup_key,
+                   FilterPair);
 
-  base::Value::Dict ToJson() const;
+  base::DictValue ToJson() const;
+
+  friend bool operator==(const EventTriggerData&,
+                         const EventTriggerData&) = default;
 };
-
-using EventTriggerDataList =
-    BoundedList<EventTriggerData, kMaxEventTriggerData>;
 
 }  // namespace attribution_reporting
 

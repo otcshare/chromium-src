@@ -15,11 +15,10 @@
 #ifndef SERVICES_DEVICE_GEOLOCATION_WIFI_DATA_PROVIDER_HANDLE_H_
 #define SERVICES_DEVICE_GEOLOCATION_WIFI_DATA_PROVIDER_HANDLE_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_util.h"
 #include "services/device/geolocation/wifi_data.h"
 
 namespace device {

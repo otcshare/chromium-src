@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/crostini/crostini_update_filesystem_view.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_base.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -20,6 +20,7 @@
 #include "components/crx_file/id_util.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 
 ash::FakeCiceroneClient* GetFakeCiceroneClient() {
   return ash::FakeCiceroneClient::Get();
@@ -86,7 +87,8 @@ IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest, HitOK) {
 
   ShowUi("default");
   ExpectView();
-  EXPECT_EQ(ui::DIALOG_BUTTON_OK, ActiveView()->GetDialogButtons());
+  EXPECT_EQ(static_cast<int>(ui::mojom::DialogButton::kOk),
+            ActiveView()->buttons());
 
   EXPECT_TRUE(HasAcceptButton());
   EXPECT_FALSE(HasCancelButton());
@@ -97,7 +99,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest, HitOK) {
 
   histogram_tester.ExpectUniqueSample(
       "Crostini.UpgradeContainerSource",
-      static_cast<base::HistogramBase::Sample>(
+      static_cast<base::HistogramBase::Sample32>(
           crostini::CrostiniUISurface::kAppList),
       1);
 }
@@ -114,28 +116,4 @@ IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest,
   crostini::CrostiniManager::GetForProfile(browser()->profile())
       ->StartLxdContainer(kGuestId, base::DoNothing());
   ExpectNoView();
-}
-
-IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest,
-                       StartLxdContainerUpgradeNeeded) {
-  base::HistogramTester histogram_tester;
-  crostini::SetCrostiniUpdateFilesystemSkipDelayForTesting(true);
-
-  vm_tools::cicerone::StartLxdContainerResponse reply;
-  reply.set_status(vm_tools::cicerone::StartLxdContainerResponse::REMAPPING);
-  GetFakeCiceroneClient()->set_start_lxd_container_response(reply);
-
-  crostini::CrostiniManager::GetForProfile(browser()->profile())
-      ->StartLxdContainer(kGuestId, base::DoNothing());
-  ExpectView();
-
-  ActiveView()->AcceptDialog();
-  EXPECT_TRUE(ActiveView()->GetWidget()->IsClosed());
-  ExpectNoView();
-
-  histogram_tester.ExpectUniqueSample(
-      "Crostini.UpgradeContainerSource",
-      static_cast<base::HistogramBase::Sample>(
-          crostini::CrostiniUISurface::kAppList),
-      1);
 }

@@ -4,7 +4,6 @@
 
 #include "services/network/public/cpp/supports_loading_mode/supports_loading_mode_parser.h"
 
-#include "base/strings/string_piece.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/mojom/supports_loading_mode.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -36,6 +35,10 @@ TEST(SupportsLoadingModeParserTest, Valid) {
                   "uncredentialed-prefetch, uncredentialed-prefetch"),
               SupportedModesAre(mojom::LoadingMode::kDefault,
                                 mojom::LoadingMode::kUncredentialedPrefetch));
+  EXPECT_THAT(
+      ParseSupportsLoadingMode("prerender-cross-origin-frames"),
+      SupportedModesAre(mojom::LoadingMode::kDefault,
+                        mojom::LoadingMode::kPrerenderCrossOriginFrames));
   EXPECT_THAT(ParseSupportsLoadingMode(
                   "uncredentialed-prerender, credentialed-prerender, "
                   "uncredentialed-prefetch"),

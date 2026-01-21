@@ -6,19 +6,28 @@
 #define BASE_TASK_CURRENT_THREAD_H_
 
 #include <ostream>
+#include <type_traits>
 
 #include "base/base_export.h"
-#include "base/callback_forward.h"
 #include "base/check.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/message_loop/ios_cronet_buildflags.h"
 #include "base/message_loop/message_pump_for_io.h"
 #include "base/message_loop/message_pump_for_ui.h"
 #include "base/pending_task.h"
 #include "base/task/sequence_manager/task_time_observer.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_observer.h"
 #include "build/build_config.h"
+
+namespace autofill {
+class NextIdleBarrier;
+}
+
+namespace content {
+class BrowserMainLoop;
+}
 
 namespace web {
 class WebTaskEnvironment;
@@ -26,11 +35,23 @@ class WebTaskEnvironment;
 
 namespace base {
 
+class CallbackListSubscription;
+class SingleThreadTaskRunner;
+
+namespace test {
+bool RunUntil(FunctionRef<bool(void)>);
+void TestPredicateOrRegisterOnNextIdleCallback(base::FunctionRef<bool(void)>,
+                                               CallbackListSubscription*,
+                                               OnceClosure);
+}  // namespace test
+
 namespace sequence_manager {
 namespace internal {
 class SequenceManagerImpl;
 }
 }  // namespace sequence_manager
+
+class IOWatcher;
 
 // CurrentThread is a proxy to a subset of Task related APIs bound to the
 // current thread
@@ -60,7 +81,7 @@ class BASE_EXPORT CurrentThread {
   CurrentThread(CurrentThread&& other) = default;
   CurrentThread& operator=(const CurrentThread& other) = default;
 
-  bool operator==(const CurrentThread& other) const;
+  friend bool operator==(const CurrentThread&, const CurrentThread&) = default;
 
   // Returns a proxy object to interact with the Task related APIs for the
   // current thread. It must only be used on the thread it was obtained.
@@ -94,7 +115,7 @@ class BASE_EXPORT CurrentThread {
   // thread/sequence.
   class BASE_EXPORT DestructionObserver {
    public:
-    // TODO(https://crbug.com/891670): Rename to
+    // TODO(crbug.com/40596446): Rename to
     // WillDestroyCurrentTaskExecutionEnvironment
     virtual void WillDestroyCurrentMessageLoop() = 0;
 
@@ -125,12 +146,25 @@ class BASE_EXPORT CurrentThread {
   // posted tasks.
   void SetAddQueueTimeToTasks(bool enable);
 
-  // Registers a OnceClosure to be called on this thread the next time it goes
+  // Registers a `OnceClosure` to be called on this thread the next time it goes
   // idle. This is meant for internal usage; callers should use BEST_EFFORT
   // tasks instead of this for generic work that needs to wait until quiescence
-  // to run. There can only be one OnNextIdleCallback at a time. Can be called
-  // with a null callback to clear any potentially pending callbacks.
-  void RegisterOnNextIdleCallback(OnceClosure on_next_idle_callback);
+  // to run.
+  class RegisterOnNextIdleCallbackPasskey {
+   private:
+    RegisterOnNextIdleCallbackPasskey() = default;
+
+    friend autofill::NextIdleBarrier;
+    friend content::BrowserMainLoop;
+    friend bool test::RunUntil(FunctionRef<bool(void)>);
+    friend void test::TestPredicateOrRegisterOnNextIdleCallback(
+        base::FunctionRef<bool(void)>,
+        CallbackListSubscription*,
+        OnceClosure);
+  };
+  [[nodiscard]] CallbackListSubscription RegisterOnNextIdleCallback(
+      RegisterOnNextIdleCallbackPasskey,
+      OnceClosure on_next_idle_callback);
 
   // Enables nested task processing in scope of an upcoming native message loop.
   // Some unwanted message loops may occur when using common controls or printer
@@ -178,7 +212,15 @@ class BASE_EXPORT CurrentThread {
 
   // Enables ThreadControllerWithMessagePumpImpl's TimeKeeper metrics.
   // `thread_name` will be used as a suffix.
-  void EnableMessagePumpTimeKeeperMetrics(const char* thread_name);
+  // Setting `wall_time_based_metrics_enabled_for_testing` adds wall-time
+  // based metrics for this thread. This is only for test environments as it
+  // disables subsampling.
+  void EnableMessagePumpTimeKeeperMetrics(
+      const char* thread_name,
+      bool wall_time_based_metrics_enabled_for_testing = false);
+
+  // Returns the IOWatcher instance exposed by this thread, if any.
+  IOWatcher* GetIOWatcher();
 
  protected:
   explicit CurrentThread(
@@ -188,7 +230,6 @@ class BASE_EXPORT CurrentThread {
   static sequence_manager::internal::SequenceManagerImpl*
   GetCurrentSequenceManagerImpl();
 
-  friend class MessagePumpLibeventTest;
   friend class ScheduleWorkTest;
   friend class Thread;
   friend class sequence_manager::internal::SequenceManagerImpl;
@@ -197,8 +238,6 @@ class BASE_EXPORT CurrentThread {
 
   raw_ptr<sequence_manager::internal::SequenceManagerImpl> current_;
 };
-
-#if !BUILDFLAG(IS_NACL)
 
 // UI extension of CurrentThread.
 class BASE_EXPORT CurrentUIThread : public CurrentThread {
@@ -212,11 +251,11 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
 
   CurrentUIThread* operator->() { return this; }
 
-#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA)
   static_assert(
-      std::is_base_of<WatchableIOMessagePumpPosix, MessagePumpForUI>::value,
+      std::is_base_of_v<WatchableIOMessagePumpPosix, MessagePumpForUI>,
       "CurrentThreadForUI::WatchFileDescriptor is supported only"
-      "by MessagePumpLibevent and MessagePumpGlib implementations.");
+      "by MessagePumpEpoll and MessagePumpGlib implementations.");
   bool WatchFileDescriptor(int fd,
                            bool persistent,
                            MessagePumpForUI::Mode mode,
@@ -226,15 +265,15 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
 
 #if BUILDFLAG(IS_IOS)
   // Forwards to SequenceManager::Attach().
-  // TODO(https://crbug.com/825327): Plumb the actual SequenceManager* to
+  // TODO(crbug.com/40568517): Plumb the actual SequenceManager* to
   // callers and remove ability to access this method from
   // CurrentUIThread.
   void Attach();
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-  // Forwards to MessagePumpForUI::Abort().
-  // TODO(https://crbug.com/825327): Plumb the actual MessagePumpForUI* to
+  // Forwards to MessagePumpAndroid::Abort().
+  // TODO(crbug.com/40568517): Plumb the actual MessagePumpForUI* to
   // callers and remove ability to access this method from
   // CurrentUIThread.
   void Abort();
@@ -253,8 +292,6 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
   MessagePumpForUI* GetMessagePumpForUI() const;
 };
 
-#endif  // !BUILDFLAG(IS_NACL)
-
 // ForIO extension of CurrentThread.
 class BASE_EXPORT CurrentIOThread : public CurrentThread {
  public:
@@ -267,11 +304,10 @@ class BASE_EXPORT CurrentIOThread : public CurrentThread {
 
   CurrentIOThread* operator->() { return this; }
 
-#if !BUILDFLAG(IS_NACL)
-
 #if BUILDFLAG(IS_WIN)
   // Please see MessagePumpWin for definitions of these methods.
-  HRESULT RegisterIOHandler(HANDLE file, MessagePumpForIO::IOHandler* handler);
+  [[nodiscard]] bool RegisterIOHandler(HANDLE file,
+                                       MessagePumpForIO::IOHandler* handler);
   bool RegisterJobObject(HANDLE job, MessagePumpForIO::IOHandler* handler);
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   // Please see WatchableIOMessagePumpPosix for definition.
@@ -283,7 +319,8 @@ class BASE_EXPORT CurrentIOThread : public CurrentThread {
                            MessagePumpForIO::FdWatcher* delegate);
 #endif  // BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || \
+    (BUILDFLAG(IS_IOS) && !BUILDFLAG(CRONET_BUILD) && !BUILDFLAG(IS_IOS_TVOS))
   bool WatchMachReceivePort(
       mach_port_t port,
       MessagePumpForIO::MachPortWatchController* controller,
@@ -298,8 +335,6 @@ class BASE_EXPORT CurrentIOThread : public CurrentThread {
                      MessagePumpForIO::ZxHandleWatchController* controller,
                      MessagePumpForIO::ZxHandleWatcher* delegate);
 #endif  // BUILDFLAG(IS_FUCHSIA)
-
-#endif  // !BUILDFLAG(IS_NACL)
 
  private:
   explicit CurrentIOThread(

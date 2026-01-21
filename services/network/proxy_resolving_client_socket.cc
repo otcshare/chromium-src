@@ -5,13 +5,16 @@
 #include "services/network/proxy_resolving_client_socket.h"
 
 #include <stdint.h>
+
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
@@ -19,6 +22,7 @@
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_delegate.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_auth_controller.h"
 #include "net/http/http_network_session.h"
@@ -30,9 +34,7 @@
 #include "net/proxy_resolution/proxy_resolution_request.h"
 #include "net/socket/connect_job_factory.h"
 #include "net/socket/socket_tag.h"
-#include "net/ssl/ssl_config.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace network {
 
@@ -176,16 +178,10 @@ bool ProxyResolvingClientSocket::WasEverUsed() const {
   return false;
 }
 
-bool ProxyResolvingClientSocket::WasAlpnNegotiated() const {
-  if (socket_)
-    return socket_->WasAlpnNegotiated();
-  return false;
-}
-
 net::NextProto ProxyResolvingClientSocket::GetNegotiatedProtocol() const {
   if (socket_)
     return socket_->GetNegotiatedProtocol();
-  return net::kProtoUnknown;
+  return net::NextProto::kProtoUnknown;
 }
 
 bool ProxyResolvingClientSocket::GetSSLInfo(net::SSLInfo* ssl_info) {
@@ -233,8 +229,6 @@ int ProxyResolvingClientSocket::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = net::ERR_FAILED;
-        break;
     }
   } while (rv != net::ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;
@@ -244,14 +238,12 @@ int ProxyResolvingClientSocket::DoProxyResolve() {
   next_state_ = STATE_PROXY_RESOLVE_COMPLETE;
   // base::Unretained(this) is safe because resolution request is canceled when
   // |proxy_resolve_request_| is destroyed.
-  //
-  // TODO(https://crbug.com/1023439): Pass along a NetworkAnonymizationKey.
   return network_session_->proxy_resolution_service()->ResolveProxy(
       url_, net::HttpRequestHeaders::kPostMethod, network_anonymization_key_,
       &proxy_info_,
       base::BindOnce(&ProxyResolvingClientSocket::OnIOComplete,
                      base::Unretained(this)),
-      &proxy_resolve_request_, net_log_);
+      &proxy_resolve_request_, net_log_, net::DEFAULT_PRIORITY);
 }
 
 int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
@@ -259,12 +251,12 @@ int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
   if (result == net::OK) {
     // Removes unsupported proxies from the list. Currently, this removes
     // just the SCHEME_QUIC proxy.
-    // TODO(crbug.com/876885): Allow QUIC proxy once net::QuicProxyClientSocket
-    // supports ReadIfReady() and CancelReadIfReady().
+    // TODO(crbug.com/41409577): Allow QUIC proxy once
+    // net::QuicProxyClientSocket supports ReadIfReady() and
+    // CancelReadIfReady().
     proxy_info_.RemoveProxiesWithoutScheme(
-        net::ProxyServer::SCHEME_DIRECT | net::ProxyServer::SCHEME_HTTP |
-        net::ProxyServer::SCHEME_HTTPS | net::ProxyServer::SCHEME_SOCKS4 |
-        net::ProxyServer::SCHEME_SOCKS5);
+        net::ProxyServer::SCHEME_HTTP | net::ProxyServer::SCHEME_HTTPS |
+        net::ProxyServer::SCHEME_SOCKS4 | net::ProxyServer::SCHEME_SOCKS5);
 
     if (proxy_info_.is_empty()) {
       // No proxies/direct to choose from. This happens when we don't support
@@ -280,29 +272,22 @@ int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
 int ProxyResolvingClientSocket::DoInitConnection() {
   DCHECK(!socket_);
   // QUIC proxies are currently not supported.
-  DCHECK(!proxy_info_.is_quic());
+  DCHECK(proxy_info_.is_direct() ||
+         !proxy_info_.proxy_chain().Last().is_quic());
 
   next_state_ = STATE_INIT_CONNECTION_COMPLETE;
 
-  absl::optional<net::NetworkTrafficAnnotationTag> proxy_annotation_tag =
-      proxy_info_.is_direct()
-          ? absl::nullopt
-          : absl::optional<net::NetworkTrafficAnnotationTag>(
-                proxy_info_.traffic_annotation());
+  std::optional<net::NetworkTrafficAnnotationTag> proxy_annotation_tag =
+      proxy_info_.is_direct() ? std::nullopt
+                              : std::optional<net::NetworkTrafficAnnotationTag>(
+                                    proxy_info_.traffic_annotation());
 
-  // Now that the proxy is resolved, create and start a ConnectJob. Using an
-  // empty NetworkAnonymizationKey means that tunnels over H2 or QUIC proxies
-  // will be shared, which may result in privacy leaks, depending on the nature
-  // of the consumer.
-  //
-  // TODO(mmenke): Investigate that.
-  net::SSLConfig ssl_config;
   connect_job_ = connect_job_factory_->CreateConnectJob(
-      use_tls_, net::HostPortPair::FromURL(url_), proxy_info_.proxy_server(),
-      proxy_annotation_tag, &ssl_config, &ssl_config, true /* force_tunnel */,
-      net::PRIVACY_MODE_DISABLED, net::OnHostResolutionCallback(),
-      net::MAXIMUM_PRIORITY, net::SocketTag(), network_anonymization_key_,
-      net::SecureDnsPolicy::kAllow, common_connect_job_params_, this);
+      use_tls_, net::HostPortPair::FromURL(url_), proxy_info_.proxy_chain(),
+      proxy_annotation_tag, /*force_tunnel=*/true, net::PRIVACY_MODE_DISABLED,
+      net::OnHostResolutionCallback(), net::MAXIMUM_PRIORITY, net::SocketTag(),
+      network_anonymization_key_, net::SecureDnsPolicy::kAllow,
+      common_connect_job_params_, this);
   return connect_job_->Connect();
 }
 
@@ -358,8 +343,11 @@ int ProxyResolvingClientSocket::ReconsiderProxyAfterError(int error) {
   DCHECK_NE(error, net::ERR_IO_PENDING);
 
   // Check if the error was a proxy failure.
-  if (!net::CanFalloverToNextProxy(proxy_info_.proxy_server(), error, &error))
+  if (!net::CanFalloverToNextProxy(
+          proxy_info_.proxy_chain(), error, &error,
+          common_connect_job_params_->proxy_delegate)) {
     return error;
+  }
 
   // TODO(davidben): When adding proxy client certificate support to this class,
   // clear the SSLClientAuthCache entries on error.

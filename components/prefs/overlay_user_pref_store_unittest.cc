@@ -39,7 +39,7 @@ class OverlayUserPrefStoreTest : public testing::Test {
     overlay_->RegisterPersistentPref(shared_key);
   }
 
-  ~OverlayUserPrefStoreTest() override {}
+  ~OverlayUserPrefStoreTest() override = default;
 
   base::test::TaskEnvironment task_environment_;
   scoped_refptr<TestingPrefStore> underlay_;
@@ -132,20 +132,20 @@ TEST_F(OverlayUserPrefStoreTest, GetAndSet) {
 
 // Check that GetMutableValue does not return the dictionary of the underlay.
 TEST_F(OverlayUserPrefStoreTest, ModifyDictionaries) {
-  underlay_->SetValue(regular_key, DictionaryValue(),
+  underlay_->SetValue(regular_key, base::Value(base::Value::Dict()),
                       WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
 
   Value* modify = nullptr;
   EXPECT_TRUE(overlay_->GetMutableValue(regular_key, &modify));
   ASSERT_TRUE(modify);
   ASSERT_TRUE(modify->is_dict());
-  modify->SetIntPath(regular_key, 42);
+  modify->GetDict().SetByDottedPath(regular_key, 42);
 
   Value* original_in_underlay = nullptr;
   EXPECT_TRUE(underlay_->GetMutableValue(regular_key, &original_in_underlay));
   ASSERT_TRUE(original_in_underlay);
   ASSERT_TRUE(original_in_underlay->is_dict());
-  EXPECT_TRUE(original_in_underlay->DictEmpty());
+  EXPECT_TRUE(original_in_underlay->GetDict().empty());
 
   Value* modified = nullptr;
   EXPECT_TRUE(overlay_->GetMutableValue(regular_key, &modified));
@@ -241,6 +241,15 @@ TEST_F(OverlayUserPrefStoreTest, GetValues) {
 
 TEST_F(OverlayUserPrefStoreTest, CommitPendingWriteWithCallback) {
   TestCommitPendingWriteWithCallback(overlay_.get(), &task_environment_);
+}
+
+TEST_F(OverlayUserPrefStoreTest, HasReadErrorDelegate) {
+  ASSERT_FALSE(underlay_->HasReadErrorDelegate());
+  EXPECT_FALSE(overlay_->HasReadErrorDelegate());
+
+  underlay_->ReadPrefsAsync(nullptr);
+  ASSERT_TRUE(underlay_->HasReadErrorDelegate());
+  EXPECT_TRUE(overlay_->HasReadErrorDelegate());
 }
 
 }  // namespace base

@@ -2,18 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/media/webrtc/webrtc_rtp_dump_handler.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
@@ -97,8 +100,10 @@ class WebRtcRtpDumpHandlerTest : public testing::Test {
     *incoming_dump = dir.AppendASCII("recv");
     *outgoing_dump = dir.AppendASCII("send");
     const char dummy[] = "dummy";
-    EXPECT_GT(base::WriteFile(*incoming_dump, dummy, std::size(dummy)), 0);
-    EXPECT_GT(base::WriteFile(*outgoing_dump, dummy, std::size(dummy)), 0);
+    EXPECT_TRUE(base::WriteFile(*incoming_dump,
+                                std::string_view(dummy, std::size(dummy))));
+    EXPECT_TRUE(base::WriteFile(*outgoing_dump,
+                                std::string_view(dummy, std::size(dummy))));
   }
 
   void FlushTaskRunners() {
@@ -119,7 +124,7 @@ class WebRtcRtpDumpHandlerTest : public testing::Test {
 TEST_F(WebRtcRtpDumpHandlerTest, StateTransition) {
   std::string error;
 
-  RtpDumpType types[3];
+  std::array<RtpDumpType, 3> types;
   types[0] = RTP_DUMP_INCOMING;
   types[1] = RTP_DUMP_OUTGOING;
   types[2] = RTP_DUMP_BOTH;
@@ -212,7 +217,7 @@ TEST_F(WebRtcRtpDumpHandlerTest, CannotStartMoreThanFiveDumps) {
 
   handler_.reset();
 
-  std::unique_ptr<WebRtcRtpDumpHandler> handlers[6];
+  std::array<std::unique_ptr<WebRtcRtpDumpHandler>, 6> handlers;
 
   for (size_t i = 0; i < std::size(handlers); ++i) {
     handlers[i] = std::make_unique<WebRtcRtpDumpHandler>(base::FilePath());

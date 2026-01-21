@@ -5,15 +5,16 @@
 #ifndef GPU_CONFIG_GPU_FEATURE_INFO_H_
 #define GPU_CONFIG_GPU_FEATURE_INFO_H_
 
+#include <stdint.h>
+
+#include <array>
 #include <string>
 #include <vector>
 
+#include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/config/gpu_config_export.h"
 #include "gpu/config/gpu_feature_type.h"
-#include "gpu/gpu_export.h"
-
-namespace gfx {
-enum class BufferFormat;
-}
 
 namespace gl {
 class GLContext;
@@ -31,7 +32,7 @@ enum GpuFeatureStatus {
   kGpuFeatureStatusMax
 };
 
-struct GPU_EXPORT GpuFeatureInfo {
+struct GPU_CONFIG_EXPORT GpuFeatureInfo {
   GpuFeatureInfo();
   GpuFeatureInfo(const GpuFeatureInfo&);
   GpuFeatureInfo(GpuFeatureInfo&&);
@@ -48,9 +49,9 @@ struct GPU_EXPORT GpuFeatureInfo {
   GpuFeatureInfo& operator=(const GpuFeatureInfo&);
   GpuFeatureInfo& operator=(GpuFeatureInfo&&);
 
-  // A vector of GpuFeatureStatus values, one per GpuFeatureType.
+  // An array of GpuFeatureStatus values, one per GpuFeatureType.
   // By default, all features are disabled.
-  GpuFeatureStatus status_values[NUMBER_OF_GPU_FEATURE_TYPES];
+  std::array<GpuFeatureStatus, NUMBER_OF_GPU_FEATURE_TYPES> status_values;
   // Active gpu driver bug workaround IDs.
   // See gpu/config/gpu_driver_bug_workaround_type.h for ID mappings.
   std::vector<int32_t> enabled_gpu_driver_bug_workarounds;
@@ -63,10 +64,15 @@ struct GPU_EXPORT GpuFeatureInfo {
   // Applied gpu driver bug list entry indices.
   std::vector<uint32_t> applied_gpu_driver_bug_list_entries;
 
-  // BufferFormats that can be allocated and then bound, if known and provided
-  // by the platform.
-  std::vector<gfx::BufferFormat>
-      supported_buffer_formats_for_allocation_and_texturing;
+  // NV12 / P010 formats that can be allocated and then bound, if known and
+  // provided by the platform.
+  bool supports_nv12_for_allocation_and_texturing = false;
+  bool supports_p010_for_allocation_and_texturing = false;
+#if BUILDFLAG(IS_OZONE)
+  // SharedImageFormats of native pixmaps that can be imported in GL context.
+  std::vector<viz::SharedImageFormat>
+      supported_formats_for_gl_native_pixmap_import;
+#endif  // BUILDFLAG(IS_OZONE)
 };
 
 }  // namespace gpu

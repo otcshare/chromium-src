@@ -14,7 +14,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/sampled_profile.pb.h"
@@ -182,7 +182,7 @@ class MetricCollectorTest : public testing::Test {
 };
 
 TEST_F(MetricCollectorTest, CheckSetup) {
-  EXPECT_GT(perf_data_proto_.ByteSize(), 0);
+  EXPECT_GT(perf_data_proto_.ByteSizeLong(), 0U);
 
   // Timer is active after user logs in.
   EXPECT_TRUE(metric_collector_->IsRunning());

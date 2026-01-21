@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 
 namespace autofill {
 
@@ -18,7 +18,7 @@ class RiskDataLoader {
       base::OnceCallback<void(const std::string&)> callback) = 0;
 
  protected:
-  virtual ~RiskDataLoader() {}
+  virtual ~RiskDataLoader() = default;
 };
 
 }  // namespace autofill

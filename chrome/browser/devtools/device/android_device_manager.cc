@@ -7,9 +7,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump_type.h"
@@ -21,12 +24,15 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "chrome/browser/devtools/device/usb/usb_device_manager_helper.h"
 #include "chrome/browser/devtools/device/usb/usb_device_provider.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
 #include "net/socket/stream_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
@@ -138,8 +144,7 @@ class HttpRequest {
               CommandCallback callback)
       : socket_(std::move(socket)),
         command_callback_(std::move(callback)),
-        expected_total_size_(0),
-        header_size_(std::string::npos) {
+        expected_total_size_(0) {
     SendRequest(path, headers);
   }
 
@@ -149,13 +154,11 @@ class HttpRequest {
               HttpUpgradeCallback callback)
       : socket_(std::move(socket)),
         http_upgrade_callback_(std::move(callback)),
-        expected_total_size_(0),
-        header_size_(std::string::npos) {
+        expected_total_size_(0) {
     SendRequest(path, headers);
   }
 
-  ~HttpRequest() {
-  }
+  ~HttpRequest() = default;
 
   void DoSendRequest(int result) {
     while (result != net::ERR_IO_PENDING) {
@@ -171,10 +174,10 @@ class HttpRequest {
         return;
       }
 
-      result = socket_->Write(
-          request_.get(), request_->BytesRemaining(),
-          base::BindOnce(&HttpRequest::DoSendRequest, base::Unretained(this)),
-          kAndroidDeviceManagerTrafficAnnotation);
+      result = socket_->Write(request_.get(), request_->BytesRemaining(),
+                              base::BindOnce(&HttpRequest::DoSendRequest,
+                                             weak_ptr_factory_.GetWeakPtr()),
+                              kAndroidDeviceManagerTrafficAnnotation);
     }
   }
 
@@ -189,7 +192,7 @@ class HttpRequest {
     std::string crlf = "\r\n";
     std::string colon = ": ";
 
-    std::vector<base::StringPiece> pieces = {requestLine, crlf};
+    std::vector<std::string_view> pieces = {requestLine, crlf};
     for (const auto& header_and_value : headers) {
       pieces.insert(pieces.end(), {header_and_value.first, colon,
                                    header_and_value.second, crlf});
@@ -197,12 +200,15 @@ class HttpRequest {
     pieces.insert(pieces.end(), {crlf});
 
     std::string request = base::StrCat(pieces);
-    scoped_refptr<net::IOBuffer> base_buffer =
-        base::MakeRefCounted<net::IOBuffer>(request.size());
-    memcpy(base_buffer->data(), request.data(), request.size());
+    auto base_buffer =
+        base::MakeRefCounted<net::IOBufferWithSize>(request.size());
+    base_buffer->span().copy_from(base::as_byte_span(request));
     request_ = base::MakeRefCounted<net::DrainableIOBuffer>(
         std::move(base_buffer), request.size());
-
+    timeout_timer_.Start(
+        FROM_HERE, base::Seconds(1),
+        base::BindOnce(&HttpRequest::Die, weak_ptr_factory_.GetWeakPtr(),
+                       net::ERR_TIMED_OUT));
     DoSendRequest(net::OK);
   }
 
@@ -210,16 +216,19 @@ class HttpRequest {
     if (!CheckNetResultOrDie(result))
       return;
 
-    response_buffer_ = base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+    response_buffer_ = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
 
-    result = socket_->Read(
-        response_buffer_.get(), kBufferSize,
-        base::BindOnce(&HttpRequest::OnResponseData, base::Unretained(this)));
+    result = socket_->Read(response_buffer_.get(), kBufferSize,
+                           base::BindOnce(&HttpRequest::OnResponseData,
+                                          weak_ptr_factory_.GetWeakPtr()));
     if (result != net::ERR_IO_PENDING)
       OnResponseData(result);
   }
 
   void OnResponseData(int result) {
+    scoped_refptr<net::HttpResponseHeaders> headers = nullptr;
+    size_t header_size;
+
     do {
       if (!CheckNetResultOrDie(result))
         return;
@@ -230,24 +239,26 @@ class HttpRequest {
 
       response_.append(response_buffer_->data(), result);
 
-      if (header_size_ == std::string::npos) {
-        header_size_ = response_.find("\r\n\r\n");
+      if (!headers) {
+        header_size = response_.find("\r\n\r\n");
 
-        if (header_size_ != std::string::npos) {
-          header_size_ += 4;
+        if (header_size != std::string::npos) {
+          header_size += 4;
+          headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+              net::HttpUtil::AssembleRawHeaders(
+                  std::string_view(response_.data(), header_size)));
 
           int expected_body_size = 0;
 
-          // TODO(kaznacheev): Use net::HttpResponseHeader to parse the header.
-          std::string content_length = ExtractHeader("Content-Length:");
-          if (!content_length.empty()) {
-            if (!base::StringToInt(content_length, &expected_body_size)) {
+          if (std::optional<std::string> content_length =
+                  headers->GetNormalizedHeader("Content-Length")) {
+            if (!base::StringToInt(*content_length, &expected_body_size)) {
               CheckNetResultOrDie(net::ERR_FAILED);
               return;
             }
           }
 
-          expected_total_size_ = header_size_ + expected_body_size;
+          expected_total_size_ = header_size + expected_body_size;
         }
       }
 
@@ -257,15 +268,17 @@ class HttpRequest {
       //
       // Some (part of) WebSocket frames can be already received into
       // |response_|.
-      if (header_size_ != std::string::npos &&
-          response_.length() >= expected_total_size_) {
-        const std::string& body = response_.substr(header_size_);
+      if (headers && response_.length() >= expected_total_size_) {
+        const std::string& body = response_.substr(header_size);
 
         if (!command_callback_.is_null()) {
           std::move(command_callback_).Run(net::OK, body);
         } else {
+          std::string sec_websocket_extensions =
+              headers->GetNormalizedHeader("Sec-WebSocket-Extensions")
+                  .value_or(std::string());
           std::move(http_upgrade_callback_)
-              .Run(net::OK, ExtractHeader("Sec-WebSocket-Extensions:"), body,
+              .Run(net::OK, sec_websocket_extensions, body,
                    std::move(socket_));
         }
 
@@ -273,30 +286,13 @@ class HttpRequest {
         return;
       }
 
-      result = socket_->Read(
-          response_buffer_.get(), kBufferSize,
-          base::BindOnce(&HttpRequest::OnResponseData, base::Unretained(this)));
+      result = socket_->Read(response_buffer_.get(), kBufferSize,
+                             base::BindOnce(&HttpRequest::OnResponseData,
+                                            weak_ptr_factory_.GetWeakPtr()));
     } while (result != net::ERR_IO_PENDING);
   }
 
-  std::string ExtractHeader(const std::string& header) {
-    size_t start_pos = response_.find(header);
-    if (start_pos == std::string::npos)
-      return std::string();
-
-    size_t endline_pos = response_.find("\n", start_pos);
-    if (endline_pos == std::string::npos)
-      return std::string();
-
-    std::string value = response_.substr(
-        start_pos + header.length(), endline_pos - start_pos - header.length());
-    base::TrimWhitespaceASCII(value, base::TRIM_ALL, &value);
-    return value;
-  }
-
-  bool CheckNetResultOrDie(int result) {
-    if (result >= 0)
-      return true;
+  void Die(int result) {
     if (!command_callback_.is_null()) {
       std::move(command_callback_).Run(result, std::string());
     } else {
@@ -305,12 +301,25 @@ class HttpRequest {
                base::WrapUnique<net::StreamSocket>(nullptr));
     }
     delete this;
+  }
+
+  bool CheckNetResultOrDie(int result) {
+    if (result >= 0) {
+      // Reset the timer whenever a non-error is received from network.
+      // It means network is responsive for now, so we reset the timer
+      // and wait for a new result until the next timeout.
+      timeout_timer_.Reset();
+      return true;
+    }
+
+    Die(result);
     return false;
   }
 
   std::unique_ptr<net::StreamSocket> socket_;
   scoped_refptr<net::DrainableIOBuffer> request_;
   std::string response_;
+  base::OneShotTimer timeout_timer_;
   CommandCallback command_callback_;
   HttpUpgradeCallback http_upgrade_callback_;
 
@@ -323,10 +332,7 @@ class HttpRequest {
   // - Otherwise, this variable is set to the size of the header (including the
   //   last two CRLFs).
   size_t expected_total_size_;
-  // Initially set to std::string::npos. Once the end of the header is seen,
-  // set to the size of the header part in |response_| including the two CRLFs
-  // at the end.
-  size_t header_size_;
+  base::WeakPtrFactory<HttpRequest> weak_ptr_factory_{this};
 };
 
 class DevicesRequest : public base::RefCountedThreadSafe<DevicesRequest> {
@@ -369,13 +375,14 @@ class DevicesRequest : public base::RefCountedThreadSafe<DevicesRequest> {
         base::BindOnce(std::move(callback_), std::move(descriptors_)));
   }
 
-  using Serials = std::vector<std::string>;
+  using Serials = std::vector<std::pair<std::string, DeviceInfo::ConnectedState>>;
 
   void ProcessSerials(scoped_refptr<DeviceProvider> provider, Serials serials) {
     for (auto it = serials.begin(); it != serials.end(); ++it) {
       descriptors_->resize(descriptors_->size() + 1);
       descriptors_->back().provider = provider;
-      descriptors_->back().serial = *it;
+      descriptors_->back().serial = it->first;
+      descriptors_->back().connected_state = it->second;
     }
   }
 
@@ -401,23 +408,18 @@ AndroidDeviceManager::BrowserInfo::BrowserInfo(const BrowserInfo& other) =
 AndroidDeviceManager::BrowserInfo& AndroidDeviceManager::BrowserInfo::operator=(
     const BrowserInfo& other) = default;
 
-AndroidDeviceManager::DeviceInfo::DeviceInfo()
-    : model(kModelOffline), connected(false) {
-}
+AndroidDeviceManager::DeviceInfo::DeviceInfo() : model(kModelOffline) {}
 
 AndroidDeviceManager::DeviceInfo::DeviceInfo(const DeviceInfo& other) = default;
 
-AndroidDeviceManager::DeviceInfo::~DeviceInfo() {
-}
+AndroidDeviceManager::DeviceInfo::~DeviceInfo() = default;
 
-AndroidDeviceManager::DeviceDescriptor::DeviceDescriptor() {
-}
+AndroidDeviceManager::DeviceDescriptor::DeviceDescriptor() = default;
 
 AndroidDeviceManager::DeviceDescriptor::DeviceDescriptor(
     const DeviceDescriptor& other) = default;
 
-AndroidDeviceManager::DeviceDescriptor::~DeviceDescriptor() {
-}
+AndroidDeviceManager::DeviceDescriptor::~DeviceDescriptor() = default;
 
 void AndroidDeviceManager::DeviceProvider::SendJsonRequest(
     const std::string& serial,
@@ -444,11 +446,9 @@ void AndroidDeviceManager::DeviceProvider::ReleaseDevice(
     const std::string& serial) {
 }
 
-AndroidDeviceManager::DeviceProvider::DeviceProvider() {
-}
+AndroidDeviceManager::DeviceProvider::DeviceProvider() = default;
 
-AndroidDeviceManager::DeviceProvider::~DeviceProvider() {
-}
+AndroidDeviceManager::DeviceProvider::~DeviceProvider() = default;
 
 void AndroidDeviceManager::Device::QueryDeviceInfo(
     DeviceInfoCallback callback) {
@@ -499,12 +499,13 @@ void AndroidDeviceManager::Device::HttpUpgrade(const std::string& socket_name,
 AndroidDeviceManager::Device::Device(
     scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
     scoped_refptr<DeviceProvider> provider,
-    const std::string& serial)
+    const std::string& serial, const DeviceInfo::ConnectedState connected_state)
     : RefCountedDeleteOnSequence<Device>(
           base::SingleThreadTaskRunner::GetCurrentDefault()),
       task_runner_(device_task_runner),
       provider_(provider),
-      serial_(serial) {}
+      serial_(serial),
+      connected_state_(connected_state) {}
 
 AndroidDeviceManager::Device::~Device() {
   task_runner_->PostTask(
@@ -612,9 +613,10 @@ void AndroidDeviceManager::UpdateDevices(
     if (found == devices_.end() || !found->second ||
         found->second->provider_.get() != it->provider.get()) {
       device =
-          new Device(handler_thread_->message_loop(), it->provider, it->serial);
+          new Device(handler_thread_->message_loop(), it->provider, it->serial, it->connected_state);
     } else {
       device = found->second.get();
+      device->connected_state_ = it->connected_state;
     }
     response.push_back(device);
     new_devices[it->serial] = device->weak_factory_.GetWeakPtr();

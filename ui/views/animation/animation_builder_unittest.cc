@@ -4,19 +4,25 @@
 
 #include "ui/views/animation/animation_builder.h"
 
-#include "base/bind.h"
+#include <memory>
+#include <optional>
+#include <utility>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/gtest_util.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/compositor/property_change_reason.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animator_test_controller.h"
 #include "ui/compositor/test/test_layer_animation_delegate.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/interpolated_transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/animation_abort_handle.h"
 
 namespace views {
@@ -86,8 +92,9 @@ class AnimationBuilderTest : public testing::Test {
     animator_controllers_.clear();
     AnimationBuilder::SetObserverDeletedCallbackForTesting(
         base::NullCallback());
-    if (expected_observers_deleted_)
+    if (expected_observers_deleted_) {
       EXPECT_EQ(expected_observers_deleted_.value(), deleted_observers_);
+    }
   }
 
   // Call this function to also ensure any implicitly created observers have
@@ -102,7 +109,7 @@ class AnimationBuilderTest : public testing::Test {
   std::vector<std::unique_ptr<ui::LayerAnimatorTestController>>
       animator_controllers_;
   base::TimeDelta elapsed_;
-  absl::optional<int> expected_observers_deleted_;
+  std::optional<int> expected_observers_deleted_;
   int deleted_observers_ = 0;
 };
 
@@ -153,8 +160,8 @@ TEST_F(AnimationBuilderTest, SimpleAnimation) {
 // This test checks that after setting the animation duration scale to be larger
 // than 1, animations behave as expected of that scale.
 TEST_F(AnimationBuilderTest, ModifiedSlowAnimationDuration) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   TestAnimatibleLayerOwner* first_animating_view = CreateTestLayerOwner();
   TestAnimatibleLayerOwner* second_animating_view = CreateTestLayerOwner();
   ui::LayerAnimationDelegate* first_delegate = first_animating_view->delegate();
@@ -180,7 +187,7 @@ TEST_F(AnimationBuilderTest, ModifiedSlowAnimationDuration) {
         .SetOpacity(second_animating_view, 0.4f);
   }
 
-  Step(kDelay * ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  Step(kDelay * gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   EXPECT_FLOAT_EQ(first_delegate->GetOpacityForAnimation(), 0.4f);
   // Sanity check one of the corners.
   EXPECT_FLOAT_EQ(first_delegate->GetRoundedCornersForAnimation().upper_left(),
@@ -188,18 +195,18 @@ TEST_F(AnimationBuilderTest, ModifiedSlowAnimationDuration) {
   // This animation should not be finished yet.
   EXPECT_NE(second_delegate->GetOpacityForAnimation(), 0.9f);
 
-  Step(kDelay * ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  Step(kDelay * gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   EXPECT_FLOAT_EQ(second_delegate->GetOpacityForAnimation(), 0.9f);
 
-  Step(kDelay * 2 * ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  Step(kDelay * 2 * gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   EXPECT_FLOAT_EQ(second_delegate->GetOpacityForAnimation(), 0.4f);
 }
 
 // This test checks that after setting the animation duration scale to be
 // between 0 and 1, animations behave as expected of that scale.
 TEST_F(AnimationBuilderTest, ModifiedFastAnimationDuration) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::FAST_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
   TestAnimatibleLayerOwner* first_animating_view = CreateTestLayerOwner();
   TestAnimatibleLayerOwner* second_animating_view = CreateTestLayerOwner();
   ui::LayerAnimationDelegate* first_delegate = first_animating_view->delegate();
@@ -225,7 +232,7 @@ TEST_F(AnimationBuilderTest, ModifiedFastAnimationDuration) {
         .SetOpacity(second_animating_view, 0.4f);
   }
 
-  Step(kDelay * ui::ScopedAnimationDurationScaleMode::FAST_DURATION);
+  Step(kDelay * gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
   EXPECT_FLOAT_EQ(first_delegate->GetOpacityForAnimation(), 0.4f);
   // Sanity check one of the corners.
   EXPECT_FLOAT_EQ(first_delegate->GetRoundedCornersForAnimation().upper_left(),
@@ -233,18 +240,18 @@ TEST_F(AnimationBuilderTest, ModifiedFastAnimationDuration) {
   // This animation should not be finished yet.
   EXPECT_NE(second_delegate->GetOpacityForAnimation(), 0.9f);
 
-  Step(kDelay * ui::ScopedAnimationDurationScaleMode::FAST_DURATION);
+  Step(kDelay * gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
   EXPECT_FLOAT_EQ(second_delegate->GetOpacityForAnimation(), 0.9f);
 
-  Step(kDelay * 2 * ui::ScopedAnimationDurationScaleMode::FAST_DURATION);
+  Step(kDelay * 2 * gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
   EXPECT_FLOAT_EQ(second_delegate->GetOpacityForAnimation(), 0.4f);
 }
 
 // This test checks that after setting the animation duration scale to be 0,
 // animations behave as expected of that scale.
 TEST_F(AnimationBuilderTest, ModifiedZeroAnimationDuration) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   TestAnimatibleLayerOwner* first_animating_view = CreateTestLayerOwner();
   TestAnimatibleLayerOwner* second_animating_view = CreateTestLayerOwner();
   ui::LayerAnimationDelegate* first_delegate = first_animating_view->delegate();
@@ -281,8 +288,8 @@ TEST_F(AnimationBuilderTest, ModifiedZeroAnimationDuration) {
 // all sequences have finished running. This test will crash if .OnEnded is
 // called prematurely.
 TEST_F(AnimationBuilderTest, ModifiedZeroAnimationDurationWithOnEndedCallback) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto first_animating_view = std::make_unique<TestAnimatibleLayerOwner>();
   auto second_animating_view = std::make_unique<TestAnimatibleLayerOwner>();
 
@@ -1082,6 +1089,36 @@ TEST_F(AnimationBuilderTest, AbortHandle) {
     EXPECT_FLOAT_EQ(delegate->GetOpacityForAnimation(), 0.7f);
   }
 
+  // The state change of the previous animation will not affect the
+  // state of the next animation.
+  {
+    delegate->SetBrightnessFromAnimation(
+        1.0f, ui::PropertyChangeReason::NOT_FROM_ANIMATION);
+    delegate->SetOpacityFromAnimation(
+        1.0f, ui::PropertyChangeReason::NOT_FROM_ANIMATION);
+
+    {
+      AnimationBuilder b;
+      abort_handle = b.GetAbortHandle();
+      b.Once().SetDuration(kDuration).SetOpacity(view, 0.4f);
+      b.Once().At(kDuration).SetDuration(kDuration).SetBrightness(view, 0.4f);
+    }
+
+    Step(kDuration);
+    EXPECT_FLOAT_EQ(delegate->GetBrightnessForAnimation(), 1.0f);
+    EXPECT_FLOAT_EQ(delegate->GetOpacityForAnimation(), 0.4f);
+    Step(kStepSize);
+    EXPECT_TRUE(view->layer()->GetAnimator()->is_animating());
+    // Destroy abort handle should stop all animations.
+    abort_handle.reset();
+    EXPECT_FALSE(view->layer()->GetAnimator()->is_animating());
+    EXPECT_FLOAT_EQ(delegate->GetBrightnessForAnimation(), 0.7f);
+    EXPECT_FLOAT_EQ(delegate->GetOpacityForAnimation(), 0.4f);
+    Step(kStepSize);
+    EXPECT_FLOAT_EQ(delegate->GetBrightnessForAnimation(), 0.7f);
+    EXPECT_FLOAT_EQ(delegate->GetOpacityForAnimation(), 0.4f);
+  }
+
   // The builder crashes if the handle is destroyed before animation starts.
   {
     delegate->SetBrightnessFromAnimation(
@@ -1177,6 +1214,66 @@ TEST_F(AnimationBuilderTest, BuildAnimationWithBuilderFromScope) {
   EXPECT_FALSE(second_animating_view->layer()->GetAnimator()->is_animating());
   EXPECT_EQ(0.f, first_animating_view->delegate()->GetOpacityForAnimation());
   EXPECT_EQ(0.f, second_animating_view->delegate()->GetOpacityForAnimation());
+}
+
+// Verifies that it is disallowed to animate transform using both
+// `SetInterpolatedTransform()` and `SetTransform()` in the same block on the
+// same target.
+TEST_F(AnimationBuilderTest,
+       DisallowMultipleSameBlockSameTargetTransformPropertyAnimations) {
+  TestAnimatibleLayerOwner* target = CreateTestLayerOwner();
+  EXPECT_DCHECK_DEATH_WITH(
+      AnimationBuilder()
+          .Once()
+          .SetInterpolatedTransform(
+              target, std::make_unique<ui::InterpolatedMatrixTransform>(
+                          /*start_transform=*/gfx::Transform(),
+                          /*end_transform=*/gfx::Transform()))
+          .SetTransform(target, gfx::Transform()),
+      "Animate \\(target, property\\) at most once per block.");
+}
+
+// Verifies that transform can be animated using `SetInterpolatedTransform()`.
+TEST_F(AnimationBuilderTest, SetInterpolatedTransform) {
+  // Create a nested transform. Note the use of irregular `start_time` and
+  // `end_time` to verify that out of bounds values are handled.
+  auto transform = std::make_unique<ui::InterpolatedScale>(
+      /*start_scale=*/0.f, /*end_scale=*/1.f, /*start_time=*/-1.f,
+      /*end_time=*/2.f);
+  transform->SetChild(std::make_unique<ui::InterpolatedRotation>(
+      /*start_degrees=*/0.f, /*end_degrees=*/360.f, /*start_time=*/0.5f,
+      /*end_time=*/0.75f));
+
+  // Cache expected transforms at key animation points.
+  const gfx::Transform expected_start_transform = transform->Interpolate(0.f);
+  const gfx::Transform expected_mid_transform = transform->Interpolate(0.5f);
+  const gfx::Transform expected_end_transform = transform->Interpolate(1.f);
+
+  // Verify initial state.
+  TestAnimatibleLayerOwner* target = CreateTestLayerOwner();
+  EXPECT_EQ(target->delegate()->GetTransformForAnimation(), gfx::Transform());
+
+  // Start animation.
+  constexpr auto kDuration = base::Seconds(2);
+  AnimationBuilder().Once().SetDuration(kDuration).SetInterpolatedTransform(
+      target, std::move(transform));
+
+  // Verify state at animation start.
+  EXPECT_TRUE(target->layer()->GetAnimator()->is_animating());
+  EXPECT_EQ(target->delegate()->GetTransformForAnimation(),
+            expected_start_transform);
+
+  // Verify state at animation midpoint.
+  Step(kDuration / 2);
+  EXPECT_TRUE(target->layer()->GetAnimator()->is_animating());
+  EXPECT_EQ(target->delegate()->GetTransformForAnimation(),
+            expected_mid_transform);
+
+  // Verify state at animation end.
+  Step(kDuration / 2);
+  EXPECT_FALSE(target->layer()->GetAnimator()->is_animating());
+  EXPECT_EQ(target->delegate()->GetTransformForAnimation(),
+            expected_end_transform);
 }
 
 }  // namespace views

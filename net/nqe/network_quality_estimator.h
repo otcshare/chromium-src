@@ -7,8 +7,11 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <map>
 #include <memory>
+#include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
@@ -18,7 +21,6 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 #include "net/log/net_log_with_source.h"
@@ -36,7 +38,6 @@
 #include "net/nqe/peer_to_peer_connections_count_observer.h"
 #include "net/nqe/rtt_throughput_estimates_observer.h"
 #include "net/nqe/socket_watcher_factory.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class TickClock;
@@ -44,6 +45,7 @@ class TickClock;
 
 namespace net {
 
+class HostPortPair;
 class NetLog;
 
 namespace nqe::internal {
@@ -144,18 +146,18 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // time from when the request was sent (this happens after the connection is
   // established) to the time when the response headers were received.
   // Virtualized for testing.
-  virtual absl::optional<base::TimeDelta> GetHttpRTT() const;
+  virtual std::optional<base::TimeDelta> GetHttpRTT() const;
 
   // Returns the current transport RTT estimate. If the estimate is
   // unavailable, the returned optional value is null.  The RTT at the transport
   // layer provides an aggregate estimate of the transport RTT as computed by
   // various underlying TCP and QUIC connections. Virtualized for testing.
-  virtual absl::optional<base::TimeDelta> GetTransportRTT() const;
+  virtual std::optional<base::TimeDelta> GetTransportRTT() const;
 
   // Returns the current downstream throughput estimate (in kilobits per
   // second). If the estimate is unavailable, the returned optional value is
   // null.
-  absl::optional<int32_t> GetDownstreamThroughputKbps() const;
+  std::optional<int32_t> GetDownstreamThroughputKbps() const;
 
   // Adds |observer| to the list of RTT and throughput estimate observers.
   // The observer must register and unregister itself on the same thread.
@@ -184,7 +186,7 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
 
   // Notifies NetworkQualityEstimator that the headers of |request| are about to
   // be sent.
-  void NotifyStartTransaction(const URLRequest& request);
+  void NotifyStartTransaction(URLRequest& request);
 
   // Notifies NetworkQualityEstimator that the response body of |request| has
   // been received.
@@ -252,14 +254,14 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
 
   const NetworkQualityEstimatorParams* params() { return params_.get(); }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Enables getting the network id asynchronously when
   // GatherEstimatesForNextConnectionType(). This should always be called in
   // production, because getting the network id involves a blocking call to
   // recv() in AddressTrackerLinux, and the IO thread should never be blocked.
-  // TODO(https://crbug.com/821607): Remove after the bug is resolved.
+  // TODO(crbug.com/41376341): Remove after the bug is resolved.
   void EnableGetNetworkIdAsynchronously();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Forces the effective connection type to be recomputed as |type|. Once
   // called, effective connection type would always be computed as |type|.
@@ -341,7 +343,7 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   void OnUpdatedTransportRTTAvailable(
       SocketPerformanceWatcherFactory::Protocol protocol,
       const base::TimeDelta& rtt,
-      const absl::optional<nqe::internal::IPHash>& host);
+      const std::optional<nqe::internal::IPHash>& host);
 
   // Returns an estimate of network quality at the specified |percentile|.
   // Only the observations later than |start_time| are taken into account.
@@ -393,7 +395,7 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
 
   // Returns a non-null value if the value of the effective connection type has
   // been overridden for testing.
-  virtual absl::optional<net::EffectiveConnectionType> GetOverrideECT() const;
+  virtual std::optional<net::EffectiveConnectionType> GetOverrideECT() const;
 
   // Observer list for RTT or throughput estimates. Protected for testing.
   base::ObserverList<RTTAndThroughputEstimatesObserver>::Unchecked
@@ -442,13 +444,6 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // should discard RTT if it is set to the value returned by |InvalidRTT()|.
   static const base::TimeDelta InvalidRTT();
 
-  // Records UMA on whether the NetworkID was available or not. Called right
-  // after a network change event.
-  void RecordNetworkIDAvailability() const;
-
-  // Records UMA on main frame requests.
-  void RecordMetricsOnMainFrameRequest() const;
-
   // Records a downstream throughput observation to the observation buffer if
   // a valid observation is available. |downstream_kbps| is the downstream
   // throughput in kilobits per second.
@@ -472,17 +467,32 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // be computed. If so, it recomputes effective connection type.
   void MaybeComputeEffectiveConnectionType();
 
+  // Notifies NetworkQualityEstimator that the headers of |request| are about to
+  // be sent. This is the internal implementation that is called either
+  // synchronously or asynchronously.
+  void NotifyStartTransactionInternal(const URLRequest& request,
+                                      const base::TimeTicks& time);
+
+  // Asynchronously calls NotifyStartTransactionInternal.
+  void NotifyStartTransactionInternalAsync(base::WeakPtr<URLRequest> request);
+
+  // If NotifyStartTransaction was called asynchronously and not called yet,
+  // this function calls NotifyStartTransactionInternal() immediately.
+  // This is to ensure that the function is completed before other notifications
+  // for the same request.
+  void WaitNotifyStartTransactionDone(const URLRequest& request);
+
   // Notifies observers of a change in effective connection type.
   void NotifyObserversOfEffectiveConnectionTypeChanged();
 
   // Notifies |observer| of the current effective connection type if |observer|
   // is still registered as an observer.
   void NotifyEffectiveConnectionTypeObserverIfPresent(
-      EffectiveConnectionTypeObserver* observer) const;
+      MayBeDangling<EffectiveConnectionTypeObserver> observer) const;
 
   // Notifies |observer| of the current count of peer to peer connections.
   void NotifyPeerToPeerConnectionsCountObserverIfPresent(
-      PeerToPeerConnectionsCountObserver* observer) const;
+      MayBeDangling<PeerToPeerConnectionsCountObserver> observer) const;
 
   // Records NQE accuracy metrics. |measuring_duration| should belong to the
   // vector returned by AccuracyRecordingIntervals().
@@ -532,11 +542,6 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // type.
   void ClampKbpsBasedOnEct();
 
-  // Earliest timestamp since when there is at least one active peer to peer
-  // connection count. Set to current timestamp when |p2p_connections_count_|
-  // changes from 0 to 1. Reset to null when |p2p_connections_count_| becomes 0.
-  absl::optional<base::TimeTicks> p2p_connections_count_active_timestamp_;
-
   // Determines if the requests to local host can be used in estimating the
   // network quality. Set to true only for tests.
   bool use_localhost_requests_ = false;
@@ -564,17 +569,8 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // entries in the nqe::internal:ObservationCategory enum.
   // Each observation buffer in |rtt_ms_observations_| stores RTT observations
   // in milliseconds. Within a buffer, the observations are sorted by timestamp.
-  ObservationBuffer
-      rtt_ms_observations_[nqe::internal::OBSERVATION_CATEGORY_COUNT];
-
-  // Time when the transaction for the last main frame request was started.
-  base::TimeTicks last_main_frame_request_;
-
-  // Estimated network quality when the transaction for the last main frame
-  // request was started.
-  nqe::internal::NetworkQuality estimated_quality_at_last_main_frame_;
-  EffectiveConnectionType effective_connection_type_at_last_main_frame_ =
-      EFFECTIVE_CONNECTION_TYPE_UNKNOWN;
+  std::array<ObservationBuffer, nqe::internal::OBSERVATION_CATEGORY_COUNT>
+      rtt_ms_observations_;
 
   // Observer lists for round trip times and throughput measurements.
   base::ObserverList<RTTObserver>::Unchecked rtt_observer_list_;
@@ -590,8 +586,7 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
 
   // Minimum duration between two consecutive computations of effective
   // connection type. Set to non-zero value as a performance optimization.
-  const base::TimeDelta effective_connection_type_recomputation_interval_ =
-      base::Seconds(10);
+  const base::TimeDelta effective_connection_type_recomputation_interval_;
 
   // Time when the effective connection type was last computed.
   base::TimeTicks last_effective_connection_type_computation_;
@@ -614,7 +609,7 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
 
   // Current estimate of the network quality.
   nqe::internal::NetworkQuality network_quality_;
-  absl::optional<base::TimeDelta> end_to_end_rtt_;
+  std::optional<base::TimeDelta> end_to_end_rtt_;
 
   // Current effective connection type. It is updated on connection change
   // events. It is also updated every time there is network traffic (provided
@@ -640,14 +635,20 @@ class NET_EXPORT_PRIVATE NetworkQualityEstimator
   // Time when the last RTT observation from a socket watcher was received.
   base::TimeTicks last_socket_watcher_rtt_notification_;
 
-  absl::optional<base::TimeTicks> last_signal_strength_check_timestamp_;
+  std::optional<base::TimeTicks> last_signal_strength_check_timestamp_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Whether the network id should be obtained on a worker thread.
   bool get_network_id_asynchronously_ = false;
 #endif
 
   bool force_report_wifi_as_slow_2g_for_testing_ = false;
+
+  // A map of URLRequests for which NotifyStartTransaction has been called
+  // asynchronously, but the asynchronous task has not yet completed. The value
+  // is the time at which NotifyStartTransaction was called.
+  std::unordered_map<raw_ptr<const URLRequest>, base::TimeTicks>
+      waiting_async_notify_start_transactions_;
 
   base::WeakPtrFactory<NetworkQualityEstimator> weak_ptr_factory_{this};
 };

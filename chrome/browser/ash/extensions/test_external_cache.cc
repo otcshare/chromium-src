@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
 #include "chrome/browser/ash/extensions/external_cache_delegate.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
@@ -44,7 +44,9 @@ void TestExternalCache::UpdateExtensionsList(base::Value::Dict prefs) {
 void TestExternalCache::OnDamagedFileDetected(const base::FilePath& path) {
   for (const auto [id, value] : cached_extensions_) {
     const std::string* entry_path =
-        value.FindStringKey(extensions::ExternalProviderImpl::kExternalCrx);
+        value.is_dict() ? value.GetDict().FindString(
+                              extensions::ExternalProviderImpl::kExternalCrx)
+                        : nullptr;
     if (entry_path && *entry_path == path.value()) {
       RemoveExtensions({id});
       return;
@@ -89,7 +91,7 @@ void TestExternalCache::PutExternalExtension(
 }
 
 void TestExternalCache::SetBackoffPolicy(
-    absl::optional<net::BackoffEntry::Policy> new_backoff_policy) {
+    std::optional<net::BackoffEntry::Policy> new_backoff_policy) {
   backoff_policy_ = new_backoff_policy;
 }
 

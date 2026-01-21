@@ -38,15 +38,8 @@ class VolumeControlAndroid : SystemVolumeTableAccessApi {
   float DbFSToVolumeCached(AudioContentType type, float db);
 
   // Called from java to signal a change volume.
-  void OnVolumeChange(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jint type,
-                      jfloat level);
-
-  void OnMuteChange(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj,
-                    jint type,
-                    jboolean muted);
+  void OnVolumeChange(JNIEnv* env, int32_t type, jfloat level);
+  void OnMuteChange(JNIEnv* env, int32_t type, bool muted);
 
   // SystemVolumeTableAccessApi implementation.
   int GetMaxVolumeIndex(AudioContentType type) override;

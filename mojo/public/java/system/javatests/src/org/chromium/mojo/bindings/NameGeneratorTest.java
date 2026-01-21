@@ -15,9 +15,7 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.mojo.bindings.test.mojom.sample.NameGeneratorConstants;
 import org.chromium.mojo.bindings.test.mojom.sample.SupportedCases;
 
-/**
- * Test mojom constant names generated for java.
- */
+/** Test mojom constant names generated for java. */
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class NameGeneratorTest {
@@ -73,7 +71,8 @@ public class NameGeneratorTest {
 
     private static <T> boolean classHasField(Class<T> clazz, String fieldName) {
         try {
-            clazz.getField(fieldName);
+            // We don't use the returned value, we are only checking if the field exists.
+            var unused = clazz.getField(fieldName);
             return true;
         } catch (NoSuchFieldException e) {
             return false;

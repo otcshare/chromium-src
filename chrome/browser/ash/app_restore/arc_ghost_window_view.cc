@@ -4,18 +4,22 @@
 
 #include "chrome/browser/ash/app_restore/arc_ghost_window_view.h"
 
-#include "ash/components/arc/arc_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/style/dark_light_mode_controller.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_handler.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_shell_surface.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/window_predictor/window_predictor_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_styles.h"
@@ -30,6 +34,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash::full_restore {
 
@@ -66,11 +71,19 @@ enum class GhostWindowType {
   kMaxValue = kIconSpinningWithFixupText,
 };
 
-bool IsGhostWindowNewStyleEnabled() {
-  return base::FeatureList::IsEnabled(arc::kGhostWindowNewStyle);
+std::u16string GetGhostWindowAppLaunchString(const std::string& app_name) {
+  return l10n_util::GetStringFUTF16(IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_MESSAGE,
+                                    base::UTF8ToUTF16(app_name));
+}
+
+std::u16string GetGhostWindowAppLaunchAodString() {
+  return l10n_util::GetStringUTF16(
+      IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_AOD_MESSAGE);
 }
 
 class Throbber : public views::View {
+  METADATA_HEADER(Throbber, views::View)
+
  public:
   explicit Throbber(uint32_t color) : color_(color) {
     start_time_ = base::TimeTicks::Now();
@@ -78,6 +91,9 @@ class Throbber : public views::View {
         FROM_HERE, base::Milliseconds(30),
         base::BindRepeating(&Throbber::SchedulePaint, base::Unretained(this)));
     SchedulePaint();  // paint right away
+    GetViewAccessibility().SetRole(ax::mojom::Role::kProgressIndicator);
+    GetViewAccessibility().SetName(
+        l10n_util::GetStringUTF16(IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_THROBBER));
   }
   Throbber(const Throbber&) = delete;
   Throbber operator=(const Throbber&) = delete;
@@ -89,18 +105,14 @@ class Throbber : public views::View {
                                elapsed_time);
   }
 
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
-    // A valid role must be set prior to setting the name.
-    node_data->role = ax::mojom::Role::kProgressIndicator;
-    node_data->SetName(
-        l10n_util::GetStringUTF16(IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_THROBBER));
-  }
-
  private:
   uint32_t color_;              // Throbber color.
   base::TimeTicks start_time_;  // Time when Start was called.
   base::RepeatingTimer timer_;  // Used to schedule Run calls.
 };
+
+BEGIN_METADATA(Throbber)
+END_METADATA
 
 }  // namespace
 
@@ -133,7 +145,7 @@ void ArcGhostWindowView::SetGhostWindowViewType(arc::GhostWindowType type) {
 
   // DarkLightModeController maybe null in test env.
   if (type != arc::GhostWindowType::kFullRestore &&
-      IsGhostWindowNewStyleEnabled() && DarkLightModeController::Get()) {
+      DarkLightModeController::Get()) {
     // New style use ChromeOS system provided background color.
     auto color = cros_styles::ResolveColor(
         cros_styles::ColorName::kBgColor,
@@ -146,11 +158,10 @@ void ArcGhostWindowView::SetGhostWindowViewType(arc::GhostWindowType type) {
     SetBackground(views::CreateSolidBackground(theme_color_));
   }
 
-  if (type == arc::GhostWindowType::kFullRestore ||
-      !IsGhostWindowNewStyleEnabled()) {
+  if (type == arc::GhostWindowType::kFullRestore) {
     // If not enabled new style flag, all types will use original UI.
     AddChildView(views::Builder<views::ImageView>()
-                     .SetImage(icon_raw_data_)
+                     .SetImage(ui::ImageModel::FromImageSkia(icon_raw_data_))
                      .SetAccessibleName(l10n_util::GetStringUTF16(
                          IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_ICON))
                      .SetID(ContentID::ID_ICON_IMAGE)
@@ -160,7 +171,7 @@ void ArcGhostWindowView::SetGhostWindowViewType(arc::GhostWindowType type) {
         color_utils::GetColorWithMaxContrast(theme_color_)));
     throbber->SetPreferredSize(gfx::Size(kThrobberDiameterOriginalStyle,
                                          kThrobberDiameterOriginalStyle));
-    throbber->GetViewAccessibility().OverrideRole(ax::mojom::Role::kImage);
+    throbber->GetViewAccessibility().SetRole(ax::mojom::Role::kImage);
     throbber->SetID(ContentID::ID_THROBBER);
     // TODO(sstan): Set window title and accessible name from saved data.
   } else {
@@ -175,14 +186,13 @@ void ArcGhostWindowView::SetGhostWindowViewType(arc::GhostWindowType type) {
     }
   }
 
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 void ArcGhostWindowView::OnThemeChanged() {
   views::View::OnThemeChanged();
   // DarkLightModeController maybe null in test env.
-  if (!IsGhostWindowNewStyleEnabled() ||
-      ghost_window_type_ == arc::GhostWindowType::kFullRestore ||
+  if (ghost_window_type_ == arc::GhostWindowType::kFullRestore ||
       !DarkLightModeController::Get()) {
     return;
   }
@@ -203,7 +213,7 @@ void ArcGhostWindowView::LoadIcon(const std::string& app_id) {
       apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile));
 
   apps::AppServiceProxyFactory::GetForProfile(profile)->LoadIcon(
-      apps::AppType::kArc, app_id, apps::IconType::kStandard,
+      app_id, apps::IconType::kStandard,
       SharedAppListConfig::instance().default_grid_icon_dimension(),
       /*allow_placeholder_icon=*/false,
       icon_loaded_cb_for_testing_.is_null()
@@ -223,14 +233,15 @@ void ArcGhostWindowView::OnIconLoaded(apps::IconValuePtr icon_value) {
 void ArcGhostWindowView::AddCommonChildrenViews() {
   static_cast<views::BoxLayout*>(GetLayoutManager())
       ->set_between_child_spacing(kSpaceBetweenIconAndMessage);
-  AddChildView(views::Builder<views::ImageView>()
-                   .SetImage(ResizeAndShadowedImage(
-                       icon_raw_data_,
-                       gfx::Size(kAppIconSizeNewStyle, kAppIconSizeNewStyle)))
-                   .SetAccessibleName(l10n_util::GetStringUTF16(
-                       IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_ICON))
-                   .SetID(ContentID::ID_ICON_IMAGE)
-                   .Build());
+  AddChildView(
+      views::Builder<views::ImageView>()
+          .SetImage(ui::ImageModel::FromImageSkia(ResizeAndShadowedImage(
+              icon_raw_data_,
+              gfx::Size(kAppIconSizeNewStyle, kAppIconSizeNewStyle))))
+          .SetAccessibleName(l10n_util::GetStringUTF16(
+              IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_ICON))
+          .SetID(ContentID::ID_ICON_IMAGE)
+          .Build());
 }
 
 void ArcGhostWindowView::AddChildrenViewsForFixupType() {
@@ -258,6 +269,9 @@ void ArcGhostWindowView::AddChildrenViewsForFixupType() {
 }
 
 void ArcGhostWindowView::AddChildrenViewsForAppLaunchType() {
+  auto app_launch_message = arc::ArcSessionManager::Get()->IsActivationDelayed()
+                                ? GetGhostWindowAppLaunchAodString()
+                                : GetGhostWindowAppLaunchString(app_name_);
   AddChildView(
       views::Builder<views::BoxLayoutView>()
           .SetOrientation(views::BoxLayout::Orientation::kHorizontal)
@@ -269,9 +283,7 @@ void ArcGhostWindowView::AddChildrenViewsForAppLaunchType() {
                   .SetPreferredSize(gfx::Size(kThrobberDiameterNewStyle,
                                               kThrobberDiameterNewStyle)),
               views::Builder<views::Label>()
-                  .SetText(l10n_util::GetStringFUTF16(
-                      IDS_ARC_GHOST_WINDOW_APP_LAUNCHING_MESSAGE,
-                      base::UTF8ToUTF16(app_name_)))
+                  .SetText(app_launch_message)
                   .SetTextContext(views::style::CONTEXT_LABEL)
                   .SetTextStyle(views::style::STYLE_SECONDARY)
                   .SetMultiLine(true)
@@ -282,7 +294,7 @@ void ArcGhostWindowView::AddChildrenViewsForAppLaunchType() {
   base::UmaHistogramEnumeration(kGhostWindowTypeHistogram,
                                 GhostWindowType::kIconSpinning);
 }
-BEGIN_METADATA(ArcGhostWindowView, views::View)
+BEGIN_METADATA(ArcGhostWindowView)
 END_METADATA
 
 }  // namespace ash::full_restore

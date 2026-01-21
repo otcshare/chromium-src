@@ -6,16 +6,16 @@
 
 #include <utility>
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 
 // Enable VLOG level 1.
 #undef ENABLED_VLOG_LEVEL
@@ -47,7 +47,6 @@ const char* TimedCloudDpcOpToString(mojom::TimedCloudDpcOp op) {
   switch (op) {
     case mojom::TimedCloudDpcOp::UNKNOWN_OP:
       NOTREACHED();  // handled by if-statement in calling method
-      return "";
     case mojom::TimedCloudDpcOp::SETUP_TOTAL:
       return "SetupService.Total";
     case mojom::TimedCloudDpcOp::SETUP_PULL_AND_APPLY_POLICIES:
@@ -71,7 +70,6 @@ const char* TimedCloudDpcOpToString(mojom::TimedCloudDpcOp op) {
   }
 
   NOTREACHED();
-  return "";
 }
 
 }  // namespace
@@ -103,19 +101,6 @@ ArcEnterpriseReportingService::~ArcEnterpriseReportingService() {
   arc_bridge_service_->enterprise_reporting()->SetHost(nullptr);
 }
 
-void ArcEnterpriseReportingService::ReportManagementState(
-    mojom::ManagementState state) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  VLOG(1) << "ReportManagementState state=" << state;
-
-  if (state == mojom::ManagementState::MANAGED_DO_LOST) {
-    DCHECK(ArcServiceManager::Get());
-    VLOG(1) << "Management state lost. Removing ARC user data.";
-    ArcSessionManager::Get()->RequestArcDataRemoval();
-    ArcSessionManager::Get()->StopAndEnableArc();
-  }
-}
-
 void ArcEnterpriseReportingService::ReportCloudDpcOperationTime(
     int64_t time_ms,
     mojom::TimedCloudDpcOp op,
@@ -133,6 +118,11 @@ void ArcEnterpriseReportingService::ReportCloudDpcOperationTime(
   } else {
     DLOG(ERROR) << "Attempted to record time for unknown op";
   }
+}
+
+// static
+void ArcEnterpriseReportingService::EnsureFactoryBuilt() {
+  ArcEnterpriseReportingServiceFactory::GetInstance();
 }
 
 }  // namespace arc

@@ -9,17 +9,22 @@ import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.annotation.DrawableRes;
-import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
-import org.chromium.base.supplier.UnownedUserDataSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.share.ShareDelegate;
+import org.chromium.chrome.browser.share.ShareDelegateSupplier;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.widget.ChromeTransitionDrawable;
 import org.chromium.components.browser_ui.widget.FadingShadow;
@@ -42,14 +47,13 @@ import org.chromium.url.GURL;
  * Represents creator tab content and the toolbar, which can be included inside the bottom sheet.
  * This is based on the implementation of bottombar/ephemeraltab/EphemeralTabSheetContent.java.
  */
+@NullMarked
 public class CreatorTabSheetContent implements BottomSheetContent {
     /**
      * The base duration of the settling animation of the sheet. 218 ms is a spec for material
      * design (this is the minimum time a user is guaranteed to pay attention to something).
      */
     private static final int BASE_ANIMATION_DURATION_MS = 218;
-
-    private static final float PEEK_TOOLBAR_HEIGHT_MULTIPLE = 2.f;
 
     /** Ratio of the height when in full mode. Used in half-open variation. */
     private static final float FULL_HEIGHT_RATIO = 0.9f;
@@ -58,23 +62,21 @@ public class CreatorTabSheetContent implements BottomSheetContent {
     private final Runnable mOpenNewTabCallback;
     private final Runnable mToolbarClickCallback;
     private final Runnable mCloseButtonCallback;
-    private final int mToolbarHeightPx;
-    private final UnownedUserDataSupplier<ShareDelegate> mShareDelegateSupplier;
-    private final ObservableSupplierImpl<Boolean> mBackPressStateChangedSupplier =
-            new ObservableSupplierImpl<>();
+    private final MonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier;
 
     private ViewGroup mToolbarView;
     private ViewGroup mSheetContentView;
 
-    private WebContents mWebContents;
-    private ContentView mWebContentView;
+    private @Nullable WebContents mWebContents;
+    private @Nullable ContentView mWebContentView;
     private ThinWebView mThinWebView;
     private FadingShadowView mShadow;
-    private Drawable mCurrentFavicon;
+    private @Nullable Drawable mCurrentFavicon;
     private ImageView mFaviconView;
 
     /**
      * Constructor.
+     *
      * @param context An Android context.
      * @param openNewTabCallback Callback invoked to open a new tab.
      * @param toolbarClickCallback Callback invoked when user clicks on the toolbar.
@@ -82,21 +84,22 @@ public class CreatorTabSheetContent implements BottomSheetContent {
      * @param maxViewHeight The height of the sheet in full height position.
      * @param intentRequestTracker The {@link IntentRequestTracker} of the current activity.
      */
-    public CreatorTabSheetContent(Context context, Runnable openNewTabCallback,
-            Runnable toolbarClickCallback, Runnable closeButtonCallback, int maxViewHeight,
+    public CreatorTabSheetContent(
+            Context context,
+            Runnable openNewTabCallback,
+            Runnable toolbarClickCallback,
+            Runnable closeButtonCallback,
+            int maxViewHeight,
             IntentRequestTracker intentRequestTracker,
-            UnownedUserDataSupplier<ShareDelegate> shareDelegateSupplier) {
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier) {
         mContext = context;
         mOpenNewTabCallback = openNewTabCallback;
         mToolbarClickCallback = toolbarClickCallback;
         mCloseButtonCallback = closeButtonCallback;
-        mToolbarHeightPx =
-                mContext.getResources().getDimensionPixelSize(R.dimen.creator_tab_toolbar_height);
 
-        createThinWebView((int) (maxViewHeight * FULL_HEIGHT_RATIO), intentRequestTracker);
-        createToolbarView();
+        createThinWebView(getMaxSheetHeight(maxViewHeight), intentRequestTracker);
+        createToolbarView(maxViewHeight);
 
-        mBackPressStateChangedSupplier.set(true);
         mShareDelegateSupplier = shareDelegateSupplier;
     }
 
@@ -107,7 +110,9 @@ public class CreatorTabSheetContent implements BottomSheetContent {
      * @param delegate The {@link WebContentsDelegateAndroid} that handles requests on WebContents.
      */
     public void attachWebContents(
-            WebContents webContents, ContentView contentView, WebContentsDelegateAndroid delegate) {
+            WebContents webContents,
+            ContentView contentView,
+            @Nullable WebContentsDelegateAndroid delegate) {
         mWebContents = webContents;
         mWebContentView = contentView;
         if (mWebContentView.getParent() != null) {
@@ -120,7 +125,7 @@ public class CreatorTabSheetContent implements BottomSheetContent {
         // the share feature disabled on Preview Tab.
         WindowAndroid window = mWebContents.getTopLevelNativeWindow();
         assert window != null;
-        mShareDelegateSupplier.attach(window.getUnownedUserDataHost());
+        ShareDelegateSupplier.attach(window.getUnownedUserDataHost(), mShareDelegateSupplier);
     }
 
     /**
@@ -128,33 +133,49 @@ public class CreatorTabSheetContent implements BottomSheetContent {
      * bottom sheet.
      */
     private void createThinWebView(int maxSheetHeight, IntentRequestTracker intentRequestTracker) {
-        mThinWebView = ThinWebViewFactory.create(
-                mContext, new ThinWebViewConstraints(), intentRequestTracker);
+        mThinWebView =
+                ThinWebViewFactory.create(
+                        mContext, new ThinWebViewConstraints(), intentRequestTracker);
 
         mSheetContentView = new FrameLayout(mContext);
-        mThinWebView.getView().setLayoutParams(new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, maxSheetHeight - mToolbarHeightPx));
+        mThinWebView
+                .getView()
+                .setLayoutParams(
+                        new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, maxSheetHeight));
         mSheetContentView.addView(mThinWebView.getView());
-
-        mSheetContentView.setPadding(0, mToolbarHeightPx, 0, 0);
     }
 
-    private void createToolbarView() {
-        mToolbarView = (ViewGroup) LayoutInflater.from(mContext).inflate(
-                R.layout.creator_bottomsheet_toolbar, null);
+    private void createToolbarView(int maxViewHeight) {
+        mToolbarView =
+                (ViewGroup)
+                        LayoutInflater.from(mContext)
+                                .inflate(R.layout.creator_bottomsheet_toolbar, null);
         mShadow = mToolbarView.findViewById(R.id.shadow);
         mShadow.init(mContext.getColor(R.color.toolbar_shadow_color), FadingShadow.POSITION_TOP);
         ImageView openInNewTabButton = mToolbarView.findViewById(R.id.open_in_new_tab);
         openInNewTabButton.setOnClickListener(view -> mOpenNewTabCallback.run());
 
-        View toolbar = mToolbarView.findViewById(R.id.toolbar);
-        toolbar.setOnClickListener(view -> mToolbarClickCallback.run());
+        mToolbarView.setOnClickListener(view -> mToolbarClickCallback.run());
 
         View closeButton = mToolbarView.findViewById(R.id.close);
         closeButton.setOnClickListener(view -> mCloseButtonCallback.run());
 
         mFaviconView = mToolbarView.findViewById(R.id.favicon);
         mCurrentFavicon = mFaviconView.getDrawable();
+
+        final ViewTreeObserver observer = mToolbarView.getViewTreeObserver();
+        observer.addOnPreDrawListener(
+                new ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        // Once the toolbar layout is completed, reflect the change in height
+                        // to the content view.
+                        mToolbarView.getViewTreeObserver().removeOnPreDrawListener(this);
+                        updateContentHeight(maxViewHeight);
+                        return true;
+                    }
+                });
     }
 
     /**
@@ -163,13 +184,25 @@ public class CreatorTabSheetContent implements BottomSheetContent {
      */
     void updateContentHeight(int maxViewHeight) {
         if (maxViewHeight == 0) return;
-        ViewGroup.LayoutParams layoutParams = mThinWebView.getView().getLayoutParams();
 
-        // This should never be more than the tab height for it to function correctly.
+        ViewGroup.LayoutParams layoutParams = mThinWebView.getView().getLayoutParams();
+        int toolbarHeight = getToolbarHeight();
+        layoutParams.height = getMaxSheetHeight(maxViewHeight) - toolbarHeight;
+        mSheetContentView.setPadding(0, toolbarHeight, 0, 0);
+        ViewUtils.requestLayout(mSheetContentView, "EphemeralTabSheetContent.updateContentHeight");
+    }
+
+    private int getToolbarHeight() {
+        int shadowHeight =
+                mContext.getResources().getDimensionPixelSize(R.dimen.action_bar_shadow_height);
+        return mToolbarView.getHeight() - shadowHeight;
+    }
+
+    private int getMaxSheetHeight(int maxViewHeight) {
+        // This sheet should never be taller than the tab height for it to function correctly.
         // We scale it by |FULL_HEIGHT_RATIO| to make the size equal to that of
         // ThinWebView and so it can leave a portion of the page below it visible.
-        layoutParams.height = (int) (maxViewHeight * FULL_HEIGHT_RATIO) - mToolbarHeightPx;
-        ViewUtils.requestLayout(mSheetContentView, "CreatorTabSheetContent.updateContentHeight");
+        return (int) (maxViewHeight * FULL_HEIGHT_RATIO);
     }
 
     /** Method to be called to start the favicon anmiation. */
@@ -244,9 +277,13 @@ public class CreatorTabSheetContent implements BottomSheetContent {
         return mSheetContentView;
     }
 
-    @Nullable
     @Override
-    public View getToolbarView() {
+    public boolean hasSolidBackgroundColor() {
+        return false;
+    }
+
+    @Override
+    public @Nullable View getToolbarView() {
         return mToolbarView;
     }
 
@@ -273,11 +310,6 @@ public class CreatorTabSheetContent implements BottomSheetContent {
     }
 
     @Override
-    public int getPeekHeight() {
-        return HeightMode.DISABLED;
-    }
-
-    @Override
     public float getHalfHeightRatio() {
         return HeightMode.DEFAULT;
     }
@@ -294,8 +326,8 @@ public class CreatorTabSheetContent implements BottomSheetContent {
     }
 
     @Override
-    public ObservableSupplierImpl<Boolean> getBackPressStateChangedSupplier() {
-        return mBackPressStateChangedSupplier;
+    public NonNullObservableSupplier<Boolean> getBackPressStateChangedSupplier() {
+        return ObservableSuppliers.alwaysTrue();
     }
 
     @Override
@@ -304,22 +336,22 @@ public class CreatorTabSheetContent implements BottomSheetContent {
     }
 
     @Override
-    public int getSheetContentDescriptionStringId() {
-        return R.string.ephemeral_tab_sheet_description;
+    public String getSheetContentDescription(Context context) {
+        return context.getString(R.string.ephemeral_tab_sheet_description);
     }
 
     @Override
-    public int getSheetHalfHeightAccessibilityStringId() {
+    public @StringRes int getSheetHalfHeightAccessibilityStringId() {
         return R.string.ephemeral_tab_sheet_opened_half;
     }
 
     @Override
-    public int getSheetFullHeightAccessibilityStringId() {
+    public @StringRes int getSheetFullHeightAccessibilityStringId() {
         return R.string.ephemeral_tab_sheet_opened_full;
     }
 
     @Override
-    public int getSheetClosedAccessibilityStringId() {
+    public @StringRes int getSheetClosedAccessibilityStringId() {
         return R.string.ephemeral_tab_sheet_closed;
     }
 }

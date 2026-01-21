@@ -5,7 +5,7 @@
 #ifndef REMOTING_CODEC_WEBRTC_VIDEO_ENCODER_AV1_H_
 #define REMOTING_CODEC_WEBRTC_VIDEO_ENCODER_AV1_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "remoting/codec/encoder_bitrate_filter.h"
 #include "remoting/codec/video_encoder_active_map.h"
 #include "remoting/codec/webrtc_video_encoder.h"
@@ -32,6 +32,8 @@ class WebrtcVideoEncoderAV1 : public WebrtcVideoEncoder {
 
   // WebrtcVideoEncoder interface.
   void SetLosslessColor(bool want_lossless) override;
+  void SetUseActiveMap(bool use_active_map) override;
+  void SetEncoderSpeed(int encoder_speed) override;
   void Encode(std::unique_ptr<webrtc::DesktopFrame> frame,
               const FrameParams& params,
               EncodeCallback done) override;
@@ -55,16 +57,18 @@ class WebrtcVideoEncoderAV1 : public WebrtcVideoEncoder {
   // Indicates whether the frames provided to the encoder will use I420 (lossy)
   // or I444 (lossless) format.
   bool lossless_color_ = false;
+  int av1_encoder_speed_ = -1;
 
-  // Active map used to optimize out processing of unchanged macroblocks.
-  VideoEncoderActiveMap active_map_;
-  // Disable |active_map_| until we've verified it improves performance.
-  const bool use_active_map_ = false;
+  // An active map is used to skip processing of unchanged macroblocks.
+  VideoEncoderActiveMap active_map_data_;
+  aom_active_map_t active_map_;
+  // Disable |active_map_| by default until we've tuned it.
+  bool use_active_map_ = false;
 
   // This timestamp is monotonically increased using the current frame duration.
   // It's only used for rate control and is not related to the timestamps on the
   // incoming frames to encode.
-  aom_codec_pts_t artificial_timestamp_us_ = 0;
+  aom_codec_pts_t artificial_timestamp_ms_ = 0;
 
   EncoderBitrateFilter bitrate_filter_;
 };

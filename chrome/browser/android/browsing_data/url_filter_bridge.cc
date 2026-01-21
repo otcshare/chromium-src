@@ -6,10 +6,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/UrlFilterBridge_jni.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/UrlFilterBridge_jni.h"
+
+using base::android::JavaRef;
 
 UrlFilterBridge::UrlFilterBridge(
     const base::RepeatingCallback<bool(const GURL&)>& url_filter)
@@ -18,17 +20,16 @@ UrlFilterBridge::UrlFilterBridge(
           Java_UrlFilterBridge_create(base::android::AttachCurrentThread(),
                                       reinterpret_cast<uintptr_t>(this))) {}
 
-UrlFilterBridge::~UrlFilterBridge() {}
+UrlFilterBridge::~UrlFilterBridge() = default;
 
-void UrlFilterBridge::Destroy(JNIEnv* env,
-                              const JavaParamRef<jobject>& obj) {
+void UrlFilterBridge::Destroy(JNIEnv* env) {
   delete this;
 }
 
-bool UrlFilterBridge::MatchesUrl(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& jurl) const {
-  GURL url(base::android::ConvertJavaStringToUTF8(env, jurl));
+bool UrlFilterBridge::MatchesUrl(JNIEnv* env,
+                                 std::string& url_spec) const {
+  GURL url(url_spec);
   return url_filter_.Run(url);
 }
+
+DEFINE_JNI(UrlFilterBridge)

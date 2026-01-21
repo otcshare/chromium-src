@@ -6,19 +6,19 @@
 
 #include <fuchsia/web/cpp/fidl.h>
 #include <lib/fit/function.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/fuchsia/file_utils.h"
-#include "base/fuchsia/filtered_service_directory.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/process/process.h"
 #include "base/strings/strcat.h"
@@ -40,57 +40,16 @@ namespace {
 constexpr char kAudioCapturerWithEchoCancellationSwitch[] =
     "audio-capturer-with-echo-cancellation";
 
-// List of services in CastRunner's Service Directory that will be passed
-// through to each WebEngine instance it creates. Each service in
-// web_instance.cmx/.cml must appear on a line below, and cast_runner.cml
-// must include all of these services.
-static constexpr const char* kServices[] = {
-    "fuchsia.accessibility.semantics.SemanticsManager",
-    "fuchsia.buildinfo.Provider",
-    "fuchsia.camera3.DeviceWatcher",
-    "fuchsia.device.NameProvider",
-    "fuchsia.fonts.Provider",
-    "fuchsia.hwinfo.Product",
-    "fuchsia.input.virtualkeyboard.ControllerCreator",
-    "fuchsia.intl.PropertyProvider",
-    "fuchsia.legacymetrics.MetricsRecorder",
-    "fuchsia.logger.LogSink",
-    "fuchsia.media.Audio",
-    "fuchsia.media.AudioDeviceEnumerator",
-    "fuchsia.media.ProfileProvider",
-    "fuchsia.media.SessionAudioConsumerFactory",
-    "fuchsia.media.drm.PlayReady",
-    "fuchsia.media.drm.Widevine",
-    "fuchsia.mediacodec.CodecFactory",
-    "fuchsia.memorypressure.Provider",
-    "fuchsia.net.interfaces.State",
-    "fuchsia.net.name.Lookup",
-    "fuchsia.posix.socket.Provider",
-    "fuchsia.process.Launcher",
-    "fuchsia.settings.Display",
-    "fuchsia.sysmem.Allocator",
-    "fuchsia.tracing.perfetto.ProducerConnector",
-    "fuchsia.tracing.provider.Registry",
-    "fuchsia.ui.composition.Allocator",
-    "fuchsia.ui.composition.Flatland",
-    "fuchsia.ui.input3.Keyboard",
-    "fuchsia.ui.scenic.Scenic",
-    "fuchsia.vulkan.loader.Loader",
-};
-
 // Names used to partition the Runner's persistent storage for different uses.
 constexpr char kCdmDataSubdirectoryName[] = "cdm_data";
 constexpr char kProfileSubdirectoryName[] = "web_profile";
 
 // Name of the file used to detect cache erasure.
-// TODO(crbug.com/1188780): Remove once an explicit cache flush signal exists.
+// TODO(crbug.com/40755074): Remove once an explicit cache flush signal exists.
 constexpr char kSentinelFileName[] = ".sentinel";
 
 // Ephemeral remote debugging port used by child contexts.
 const uint16_t kEphemeralRemoteDebuggingPort = 0;
-
-// Application URL for the pseudo-component providing fuchsia.web.FrameHost.
-constexpr char kFrameHostComponentName[] = "cast:fuchsia.web.FrameHost";
 
 // Subdirectory used to stage persistent directories to be deleted upon next
 // startup.
@@ -103,7 +62,7 @@ base::FilePath GetStagedForDeletionDirectoryPath() {
 
 // Deletes files/directories staged for deletion during the previous run.
 // We delete synchronously on main thread for simplicity. Note that this
-// overall mechanism is a temporary solution. TODO(crbug.com/1146480): migrate
+// overall mechanism is a temporary solution. TODO(crbug.com/40730097): migrate
 // to the framework mechanism of clearing session data when available.
 void DeleteStagedForDeletionDirectoryIfExists() {
   const base::FilePath staged_for_deletion_directory =
@@ -124,7 +83,7 @@ void DeleteStagedForDeletionDirectoryIfExists() {
                << " ms";
 }
 
-// TODO(crbug.com/1134719): Consider removing this flag once Media Capabilities
+// TODO(crbug.com/40151573): Consider removing this flag once Media Capabilities
 // is supported.
 void EnsureSoftwareVideoDecodersAreDisabled(
     ::fuchsia::web::ContextFeatureFlags* features) {
@@ -139,19 +98,19 @@ void EnsureSoftwareVideoDecodersAreDisabled(
 // Exits the Runner process if creation of data storage fails for any reason.
 void SetDataParamsForMainContext(fuchsia::web::CreateContextParams* params) {
   // Set the web data quota based on the CastRunner configuration.
-  const absl::optional<base::Value::Dict>& config =
+  const std::optional<base::Value::Dict>& config =
       fuchsia_component_support::LoadPackageConfig();
   if (!config)
     return;
 
   constexpr char kDataQuotaBytesSwitch[] = "data-quota-bytes";
-  const absl::optional<int> data_quota_bytes =
+  const std::optional<int> data_quota_bytes =
       config->FindInt(kDataQuotaBytesSwitch);
   if (!data_quota_bytes)
     return;
 
   // Allow best-effort persistent of Cast application data.
-  // TODO(crbug.com/1148334): Remove the need for an explicit quota to be
+  // TODO(crbug.com/42050202): Remove the need for an explicit quota to be
   // configured, once the platform provides storage quotas.
   const auto profile_path = base::FilePath(base::kPersistedCacheDirectoryPath)
                                 .Append(kProfileSubdirectoryName);
@@ -172,11 +131,11 @@ void SetDataParamsForMainContext(fuchsia::web::CreateContextParams* params) {
 // CDM data persistence is always enabled, with an optional soft quota.
 // Exits the Runner if creation of CDM storage fails for any reason.
 void SetCdmParamsForMainContext(fuchsia::web::CreateContextParams* params) {
-  const absl::optional<base::Value::Dict>& config =
+  const std::optional<base::Value::Dict>& config =
       fuchsia_component_support::LoadPackageConfig();
   if (config) {
     constexpr char kCdmDataQuotaBytesSwitch[] = "cdm-data-quota-bytes";
-    const absl::optional<int> cdm_data_quota_bytes =
+    const std::optional<int> cdm_data_quota_bytes =
         config->FindInt(kCdmDataQuotaBytesSwitch);
     if (cdm_data_quota_bytes)
       params->set_cdm_data_quota_bytes(*cdm_data_quota_bytes);
@@ -204,78 +163,20 @@ void SetCdmParamsForMainContext(fuchsia::web::CreateContextParams* params) {
   params->set_playready_key_system(kCastPlayreadyKeySystem);
 }
 
-// TODO(crbug.com/1120914): Remove this once Component Framework v2 can be
-// used to route fuchsia.web.FrameHost capabilities cleanly.
-class FrameHostComponent final
-    : public fuchsia::component::runner::ComponentController {
- public:
-  // Creates a FrameHostComponent with lifetime managed by |controller_request|.
-  static void Start(
-      std::unique_ptr<base::StartupContext> startup_context,
-      fidl::InterfaceRequest<fuchsia::component::runner::ComponentController>
-          controller_request,
-      fidl::InterfaceRequestHandler<fuchsia::web::FrameHost>
-          frame_host_request_handler) {
-    // |frame_host_component| deletes itself when the client disconnects.
-    new FrameHostComponent(std::move(startup_context),
-                           std::move(controller_request),
-                           std::move(frame_host_request_handler));
-  }
-
- private:
-  FrameHostComponent(
-      std::unique_ptr<base::StartupContext> startup_context,
-      fidl::InterfaceRequest<fuchsia::component::runner::ComponentController>
-          controller_request,
-      fidl::InterfaceRequestHandler<fuchsia::web::FrameHost>
-          frame_host_request_handler)
-      : startup_context_(std::move(startup_context)),
-        frame_host_binding_(startup_context_->outgoing(),
-                            std::move(frame_host_request_handler)) {
-    startup_context_->ServeOutgoingDirectory();
-    binding_.Bind(std::move(controller_request));
-    binding_.set_error_handler([this](zx_status_t) { Kill(); });
-  }
-  ~FrameHostComponent() override = default;
-
-  // fuchsia::component::runner::ComponentController interface.
-  void Kill() override { delete this; }
-  void Stop() override { delete this; }
-
-  const std::unique_ptr<base::StartupContext> startup_context_;
-  const base::ScopedServicePublisher<fuchsia::web::FrameHost>
-      frame_host_binding_;
-  fidl::Binding<fuchsia::component::runner::ComponentController> binding_{this};
-};
-
 }  // namespace
 
 CastRunner::CastRunner(WebInstanceHost& web_instance_host, Options options)
     : web_instance_host_(web_instance_host),
       is_headless_(options.headless),
       disable_codegen_(options.disable_codegen),
-      main_services_(std::make_unique<base::FilteredServiceDirectory>(
-          base::ComponentContextForProcess()->svc())),
       main_context_(std::make_unique<WebContentRunner>(
           base::BindRepeating(
               &WebInstanceHost::CreateInstanceForContextWithCopiedArgs,
               base::Unretained(&web_instance_host_.get())),
           base::BindRepeating(&CastRunner::GetMainWebInstanceConfig,
-                              base::Unretained(this)))),
-      isolated_services_(std::make_unique<base::FilteredServiceDirectory>(
-          base::ComponentContextForProcess()->svc())) {
+                              base::Unretained(this)))) {
   // Delete persisted data staged for deletion during the previous run.
   DeleteStagedForDeletionDirectoryIfExists();
-
-  // Specify the services to connect via the Runner process' service directory.
-  for (const char* name : kServices) {
-    zx_status_t status = main_services_->AddService(name);
-    ZX_CHECK(status == ZX_OK, status)
-        << "AddService(" << name << ") to main failed";
-    status = isolated_services_->AddService(name);
-    ZX_CHECK(status == ZX_OK, status)
-        << "AddService(" << name << ") to isolated failed";
-  }
 
   // Fetch the list of CORS-exempt headers to apply for all components launched
   // under this Runner.
@@ -339,6 +240,11 @@ void CastRunner::Start(
   }
 }
 
+void CastRunner::handle_unknown_method(uint64_t ordinal,
+                                       bool method_has_response) {
+  LOG(ERROR) << "Unknown method called on CastRunner. Ordinal: " << ordinal;
+}
+
 void CastRunner::DeletePersistentData(DeletePersistentDataCallback callback) {
   if (data_reset_in_progress_) {
     // Repeated requests to DeletePersistentData are not supported.
@@ -355,7 +261,7 @@ void CastRunner::LaunchPendingComponent(PendingCastComponent* pending_component,
                                         CastComponent::Params params) {
   DCHECK(cors_exempt_headers_);
 
-  // TODO(crbug.com/1082821): Remove |web_content_url| once the Cast Streaming
+  // TODO(crbug.com/40131115): Remove |web_content_url| once the Cast Streaming
   // Receiver component has been implemented.
   GURL web_content_url(params.application_config.web_url());
   if (IsAppConfigForCastStreaming(params.application_config))
@@ -410,15 +316,14 @@ WebContentRunner::WebInstanceConfig CastRunner::GetCommonWebInstanceConfig() {
 
   WebContentRunner::WebInstanceConfig config;
 
-  constexpr char const* kSwitchesToCopy[] = {
+  static constexpr char const* kSwitchesToCopy[] = {
       // Must match the value in `content/public/common/content_switches.cc`.
       "enable-logging",
       // Must match the value in `ui/ozone/public/ozone_switches.cc`.
       "ozone-platform",
   };
   config.extra_args.CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
-                                     kSwitchesToCopy,
-                                     std::size(kSwitchesToCopy));
+                                     kSwitchesToCopy);
 
   config.params.set_features(fuchsia::web::ContextFeatureFlags::AUDIO);
 
@@ -458,7 +363,7 @@ WebContentRunner::WebInstanceConfig CastRunner::GetMainWebInstanceConfig() {
   // The fuchsia.media.Audio implementation provided to the Runner in existing
   // integrations always supports echo cancellation.
   //
-  // TODO(crbug.com/852834): Remove once AudioManagerFuchsia is updated to
+  // TODO(crbug.com/42050621): Remove once AudioManagerFuchsia is updated to
   // get this information from AudioCapturerFactory.
   config.extra_args.AppendSwitch(kAudioCapturerWithEchoCancellationSwitch);
 
@@ -473,10 +378,6 @@ WebContentRunner::WebInstanceConfig CastRunner::GetMainWebInstanceConfig() {
   config.params.set_user_agent_product("CrKey");
   config.params.set_user_agent_version(chromecast::kFrozenCrKeyValue);
 
-  zx_status_t status = main_services_->ConnectClient(
-      config.params.mutable_service_directory()->NewRequest());
-  ZX_CHECK(status == ZX_OK, status) << "ConnectClient failed";
-
   if (!disable_vulkan_for_test_) {
     SetCdmParamsForMainContext(&config.params);
   }
@@ -484,10 +385,11 @@ WebContentRunner::WebInstanceConfig CastRunner::GetMainWebInstanceConfig() {
   SetDataParamsForMainContext(&config.params);
 
   // Create a sentinel file to detect if the cache is erased.
-  // TODO(crbug.com/1188780): Remove once an explicit cache flush signal exists.
+  // TODO(crbug.com/40755074): Remove once an explicit cache flush signal
+  // exists.
   CreatePersistedCacheSentinel();
 
-  // TODO(crbug.com/1023514): Remove this switch when it is no longer
+  // TODO(crbug.com/40050660): Remove this switch when it is no longer
   // necessary.
   config.params.set_unsafely_treat_insecure_origins_as_secure(
       {"allow-running-insecure-content", "disable-mixed-content-autoupgrade"});
@@ -506,10 +408,6 @@ CastRunner::GetIsolatedWebInstanceConfigWithFuchsiaDirs(
   config.params.set_remote_debugging_port(kEphemeralRemoteDebuggingPort);
   config.params.set_content_directories(std::move(content_directories));
 
-  zx_status_t status = isolated_services_->ConnectClient(
-      config.params.mutable_service_directory()->NewRequest());
-  ZX_CHECK(status == ZX_OK, status) << "ConnectClient failed";
-
   return config;
 }
 
@@ -520,35 +418,29 @@ CastRunner::GetIsolatedWebInstanceConfigForCastStreaming() {
   ApplyCastStreamingContextParams(&config.params);
   config.params.set_remote_debugging_port(kEphemeralRemoteDebuggingPort);
 
-  // TODO(crbug.com/1069746): Use a different FilteredServiceDirectory for Cast
-  // Streaming Contexts.
-  zx_status_t status = main_services_->ConnectClient(
-      config.params.mutable_service_directory()->NewRequest());
-  ZX_CHECK(status == ZX_OK, status) << "ConnectClient failed";
-
   return config;
 }
 
-absl::optional<WebContentRunner::WebInstanceConfig>
+std::optional<WebContentRunner::WebInstanceConfig>
 CastRunner::GetWebInstanceConfigForAppConfig(
     chromium::cast::ApplicationConfig* app_config) {
   if (IsAppConfigForCastStreaming(*app_config)) {
-    // TODO(crbug.com/1082821): Remove this once the CastStreamingReceiver
+    // TODO(crbug.com/40131115): Remove this once the CastStreamingReceiver
     // Component has been implemented.
-    return absl::make_optional(GetIsolatedWebInstanceConfigForCastStreaming());
+    return std::make_optional(GetIsolatedWebInstanceConfigForCastStreaming());
   }
 
   const bool is_isolated_app =
       app_config->has_content_directories_for_isolated_application();
   if (is_isolated_app) {
-    return absl::make_optional(
+    return std::make_optional(
         GetIsolatedWebInstanceConfigWithFuchsiaDirs(std::move(
             *app_config
                  ->mutable_content_directories_for_isolated_application())));
   }
 
   // No need to create an isolated context in other cases.
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 WebContentRunner* CastRunner::CreateIsolatedRunner(
@@ -569,7 +461,7 @@ WebContentRunner* CastRunner::CreateIsolatedRunner(
 
 void CastRunner::OnIsolatedContextEmpty(WebContentRunner* context) {
   auto it = isolated_contexts_.find(context);
-  DCHECK(it != isolated_contexts_.end());
+  CHECK(it != isolated_contexts_.end());
   isolated_contexts_.erase(it);
 }
 
@@ -578,15 +470,6 @@ void CastRunner::StartComponentInternal(
     std::unique_ptr<base::StartupContext> startup_context,
     fidl::InterfaceRequest<fuchsia::component::runner::ComponentController>
         controller_request) {
-  // TODO(crbug.com/1120914): Remove this once Component Framework v2 can be
-  // used to route fuchsia.web.FrameHost capabilities cleanly.
-  if (enable_frame_host_component_ && (url.spec() == kFrameHostComponentName)) {
-    FrameHostComponent::Start(std::move(startup_context),
-                              std::move(controller_request),
-                              main_context_->GetFrameHostRequestHandler());
-    return;
-  }
-
   pending_components_.emplace(std::make_unique<PendingCastComponent>(
       this, std::move(startup_context), std::move(controller_request),
       url.GetContent()));

@@ -7,13 +7,9 @@
 #import "base/test/ios/wait_util.h"
 #import "ios/web_view/test/web_view_inttest_base.h"
 #import "ios/web_view/test/web_view_test_util.h"
-#import "net/base/mac/url_conversions.h"
+#import "net/base/apple/url_conversions.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest_mac.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace {
 NSString* const kMessageHandlerCommandName = @"messageHandlerCommand";
@@ -34,13 +30,35 @@ class WebViewScriptMessageHandlerTest : public WebViewInttestBase {
 
   // Uses GetUrlForPageWithHtmlBody() instead of simply using about:blank
   // because it looks __gCrWeb may not be available on about:blank.
-  // TODO(crbug.com/836114): Analyze why.
+  // TODO(crbug.com/40573199): Analyze why.
   void LoadTestPage() {
     NSURL* url = net::NSURLWithGURL(GetUrlForPageWithHtmlBody(""));
     ASSERT_TRUE(test::LoadUrl(web_view_, url));
     ASSERT_TRUE(test::WaitForWebViewLoadCompletionOrTimeout(web_view_));
   }
 };
+
+// Tests that a handler added by -[CWVUserContentController
+// isMessageHandlerRegisteredForCommand:] returns TRUE only if a handler is
+// installed.
+TEST_F(WebViewScriptMessageHandlerTest, IsMessageInstalled) {
+  CWVUserContentController* userContentController =
+      web_view_.configuration.userContentController;
+  [userContentController
+      addMessageHandler:^(NSDictionary* payload) {
+        // No op.
+      }
+             forCommand:kMessageHandlerCommandName];
+
+  EXPECT_TRUE([userContentController
+      isMessageHandlerRegisteredForCommand:kMessageHandlerCommandName]);
+
+  [userContentController
+      removeMessageHandlerForCommand:kMessageHandlerCommandName];
+
+  EXPECT_FALSE([userContentController
+      isMessageHandlerRegisteredForCommand:kMessageHandlerCommandName]);
+}
 
 // Tests that a handler added by -[CWVWebView
 // addMessageHandler:forCommand:] is invoked by JavaScript.
@@ -52,9 +70,9 @@ TEST_F(WebViewScriptMessageHandlerTest, MessageReceived) {
       }
              forCommand:kMessageHandlerCommandName];
 
-  NSString* script =
-      @"let payload = {'key1':'value1', 'key2':42};"
-      @"__gCrWeb.cwvMessaging.messageHost('messageHandlerCommand', payload);";
+  NSString* script = @"let payload = {'key1':'value1', 'key2':42};"
+                     @"__gCrWeb.getRegisteredApi('cwvMessaging').getFunction('"
+                     @"messageHost')('messageHandlerCommand', payload);";
   NSError* error;
   test::EvaluateJavaScript(web_view_, script, &error);
   ASSERT_FALSE(error);
@@ -84,9 +102,9 @@ TEST_F(WebViewScriptMessageHandlerTest, MessageReceivedAfterStateRestoration) {
 
   LoadTestPage();
 
-  NSString* script =
-      @"let payload = {'key1':'value1', 'key2':42};"
-      @"__gCrWeb.cwvMessaging.messageHost('messageHandlerCommand', payload);";
+  NSString* script = @"let payload = {'key1':'value1', 'key2':42};"
+                     @"__gCrWeb.getRegisteredApi('cwvMessaging').getFunction('"
+                     @"messageHost')('messageHandlerCommand', payload);";
   NSError* error;
   test::EvaluateJavaScript(web_view_, script, &error);
   ASSERT_FALSE(error);
@@ -122,11 +140,13 @@ TEST_F(WebViewScriptMessageHandlerTest, NonregisteredMessagesIgnored) {
 
   [web_view_ removeMessageHandlerForCommand:@"command1"];
 
-  NSString* script =
-      @"let payload = {'key1':'value1', 'key2':42};"
-      @"__gCrWeb.cwvMessaging.messageHost('invalidCommand', payload);"
-      @"__gCrWeb.cwvMessaging.messageHost('command1', payload);"
-      @"__gCrWeb.cwvMessaging.messageHost('command2', payload);";
+  NSString* script = @"let payload = {'key1':'value1', 'key2':42};"
+                     @"__gCrWeb.getRegisteredApi('cwvMessaging').getFunction('"
+                     @"messageHost')('invalidCommand', payload);"
+                     @"__gCrWeb.getRegisteredApi('cwvMessaging').getFunction('"
+                     @"messageHost')('command1', payload);"
+                     @"__gCrWeb.getRegisteredApi('cwvMessaging').getFunction('"
+                     @"messageHost')('command2', payload);";
   NSError* error;
   test::EvaluateJavaScript(web_view_, script, &error);
   ASSERT_FALSE(error);

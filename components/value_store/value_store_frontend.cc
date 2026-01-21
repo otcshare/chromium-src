@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
@@ -40,7 +40,7 @@ class ValueStoreFrontend::Backend : public base::RefCountedThreadSafe<Backend> {
 
     // Extract the value from the ReadResult and pass ownership of it to the
     // callback.
-    absl::optional<base::Value> value;
+    std::optional<base::Value> value;
     if (result.status().ok()) {
       value = result.settings().Extract(key);
     } else {
@@ -86,7 +86,7 @@ class ValueStoreFrontend::Backend : public base::RefCountedThreadSafe<Backend> {
   }
 
   void RunCallback(ValueStoreFrontend::ReadCallback callback,
-                   absl::optional<base::Value> value) {
+                   std::optional<base::Value> value) {
     DCHECK(origin_task_runner_->RunsTasksInCurrentSequence());
     std::move(callback).Run(std::move(value));
   }

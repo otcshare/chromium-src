@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "components/services/storage/indexed_db/scopes/varint_coding.h"
+
+#include <string_view>
+
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace content {
+namespace content::indexed_db {
 namespace {
 
 static std::string WrappedEncodeVarInt(int64_t value) {
@@ -22,45 +26,39 @@ TEST(VarIntCoding, Encode) {
   EXPECT_EQ(5u, WrappedEncodeVarInt(0xffffffff).size());
   EXPECT_EQ(8u, WrappedEncodeVarInt(0xfffffffffffffll).size());
   EXPECT_EQ(9u, WrappedEncodeVarInt(0x7fffffffffffffffll).size());
-#if !DCHECK_IS_ON()
-  EXPECT_EQ(10u, WrappedEncodeVarInt(-100).size());
-#endif
 }
 
 TEST(VarIntCoding, Decode) {
   std::vector<int64_t> test_cases = {
-    0,
-    1,
-    255,
-    256,
-    65535,
-    655536,
-    7711192431755665792ll,
-    0x7fffffffffffffffll,
-#if !DCHECK_IS_ON()
-    -3,
-#endif
+      0,
+      1,
+      255,
+      256,
+      65535,
+      655536,
+      7711192431755665792ll,
+      0x7fffffffffffffffll,
   };
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
     int64_t n = test_cases[i];
     std::string v = WrappedEncodeVarInt(n);
     ASSERT_GT(v.size(), 0u);
-    base::StringPiece slice(v);
+    std::string_view slice(v);
     int64_t res;
     EXPECT_TRUE(DecodeVarInt(&slice, &res));
     EXPECT_EQ(n, res);
     EXPECT_TRUE(slice.empty());
 
-    slice = base::StringPiece(&*v.begin(), v.size() - 1);
+    slice = std::string_view(&*v.begin(), v.size() - 1);
     EXPECT_FALSE(DecodeVarInt(&slice, &res));
 
-    slice = base::StringPiece(&*v.begin(), static_cast<size_t>(0));
+    slice = std::string_view(&*v.begin(), static_cast<size_t>(0));
     EXPECT_FALSE(DecodeVarInt(&slice, &res));
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = base::StringPiece(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeVarInt(&slice, &res));
     EXPECT_EQ(n, res);
     EXPECT_TRUE(slice.empty());
@@ -81,5 +79,21 @@ TEST(VarIntCoding, SingleByteCases) {
   }
 }
 
+TEST(VarIntCoding, EmbeddedZeroByte) {
+  auto arr = std::array<char, 3>{'\x81', '\x00', '\x07'};
+  std::string_view input(arr.data(), arr.size());
+  int64_t ignored;
+  EXPECT_FALSE(DecodeVarInt(&input, &ignored));
+}
+
+// When using the max number of bytes (10), the top byte must be exactly 1.
+TEST(VarIntCoding, JunkBitsInTopByte) {
+  auto arr = std::array<char, 10>{'\x80', '\x80', '\x80', '\x80', '\x80',
+                                  '\x80', '\x80', '\x80', '\x80', '\x05'};
+  std::string_view input(arr.data(), arr.size());
+  int64_t ignored;
+  EXPECT_FALSE(DecodeVarInt(&input, &ignored));
+}
+
 }  // namespace
-}  // namespace content
+}  // namespace content::indexed_db

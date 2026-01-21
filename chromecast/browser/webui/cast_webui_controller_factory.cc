@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <mutex>
 
-#include "base/containers/contains.h"
 #include "chromecast/browser/webui/cast_resource_data_source.h"
 #include "chromecast/browser/webui/cast_webui.h"
 #include "chromecast/browser/webui/constants.h"
@@ -30,7 +29,7 @@ CastWebUiControllerFactory::~CastWebUiControllerFactory() = default;
 content::WebUI::TypeID CastWebUiControllerFactory::GetWebUIType(
     content::BrowserContext* browser_context,
     const GURL& url) {
-  if (base::Contains(hosts_, url.host())) {
+  if (std::ranges::contains(hosts_, url.GetHost())) {
     return const_cast<CastWebUiControllerFactory*>(this);
   }
   return content::WebUI::kNoWebUI;
@@ -55,7 +54,7 @@ CastWebUiControllerFactory::CreateWebUIControllerForURL(content::WebUI* web_ui,
                                 std::move(cast_resources));
   });
 
-  return CastWebUI::Create(web_ui, url.host(), client_.get());
+  return CastWebUI::Create(web_ui, url.GetHost(), client_.get());
 }
 
 }  // namespace chromecast

@@ -7,13 +7,16 @@
 
 #include <map>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_base.h"
+#include "content/public/browser/render_widget_host_view.h"
 
 // Implementation of DesktopMediaList that shows tab/WebContents.
 class TabDesktopMediaList : public DesktopMediaListBase {
  public:
   TabDesktopMediaList(
+      content::WebContents* web_contents,
       DesktopMediaList::WebContentsFilter includable_web_contents_filter,
       bool include_chrome_app_windows);
 
@@ -23,7 +26,7 @@ class TabDesktopMediaList : public DesktopMediaListBase {
   ~TabDesktopMediaList() override;
 
   void SetPreviewedSource(
-      const absl::optional<content::DesktopMediaID>& id) override;
+      const std::optional<content::DesktopMediaID>& id) override;
 
  private:
   class RefreshCompleter {
@@ -35,11 +38,11 @@ class TabDesktopMediaList : public DesktopMediaListBase {
     base::WeakPtr<TabDesktopMediaList> list_;
   };
 
-  typedef std::map<content::DesktopMediaID, uint32_t> ImageHashesMap;
+  using ImageHashesMap = std::map<content::DesktopMediaID, uint32_t>;
 
-  void Refresh(bool update_thumnails) override;
+  void Refresh(bool update_thumbnails) override;
 
-  // TODO(crbug.com/1224342): Combine the below logic for screenshotting with
+  // TODO(crbug.com/40187992): Combine the below logic for screenshotting with
   // the very similar behaviour in current_tab_desktop_media_list.h
 
   // Called on the UI thread after the captured image is handled. If the
@@ -60,12 +63,16 @@ class TabDesktopMediaList : public DesktopMediaListBase {
       int remaining_retries,
       const content::DesktopMediaID& id,
       std::unique_ptr<TabDesktopMediaList::RefreshCompleter> refresh_completer,
-      const SkBitmap& bitmap);
+      const content::CopyFromSurfaceResult& result);
   void CompleteRefreshAfterThumbnailProcessing();
+
+  // The WebContents from which the media-picker was invoked, if such
+  // a WebContents was ever set.
+  const std::optional<base::WeakPtr<content::WebContents>> web_contents_;
 
   // The hash of the last captured preview frame. Used to detect identical
   // frames and prevent needless rescaling.
-  absl::optional<uint32_t> last_hash_;
+  std::optional<uint32_t> last_hash_;
 
   ImageHashesMap favicon_hashes_;
   const DesktopMediaList::WebContentsFilter includable_web_contents_filter_;
@@ -74,7 +81,7 @@ class TabDesktopMediaList : public DesktopMediaListBase {
   // Task runner used for resizing thumbnail and preview images.
   scoped_refptr<base::SequencedTaskRunner> image_resize_task_runner_;
 
-  absl::optional<content::DesktopMediaID> previewed_source_;
+  std::optional<content::DesktopMediaID> previewed_source_;
 
   // Handle returned when incrementing the visible capturer count on the
   // WebContents instance being previewed, if there is one. Allowing this to go

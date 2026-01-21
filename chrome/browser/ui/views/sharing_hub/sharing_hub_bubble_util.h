@@ -10,14 +10,16 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/table_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace sharing_hub {
 
 // Defines a title view with a back button and a label. Used by first party
 // action dialogs for the sharing hub (e.g. qr code, send tab to self).
 class TitleWithBackButtonView : public views::TableLayoutView {
+  METADATA_HEADER(TitleWithBackButtonView, views::TableLayoutView)
+
  public:
-  METADATA_HEADER(TitleWithBackButtonView);
   explicit TitleWithBackButtonView(views::Button::PressedCallback callback,
                                    const std::u16string& window_title);
   ~TitleWithBackButtonView() override;

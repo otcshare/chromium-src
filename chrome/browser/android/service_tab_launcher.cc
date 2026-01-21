@@ -7,23 +7,26 @@
 #include <memory>
 
 #include "base/android/jni_string.h"
-#include "base/callback.h"
-#include "chrome/android/chrome_jni_headers/ServiceTabLauncher_jni.h"
+#include "base/functional/callback.h"
+#include "base/notimplemented.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "url/android/gurl_android.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ServiceTabLauncher_jni.h"
+
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 // Called by Java when the WebContents instance for a request Id is available.
-void JNI_ServiceTabLauncher_OnWebContentsForRequestAvailable(
+static void JNI_ServiceTabLauncher_OnWebContentsForRequestAvailable(
     JNIEnv* env,
-    jint request_id,
-    const JavaParamRef<jobject>& android_web_contents) {
+    int32_t request_id,
+    const JavaRef<jobject>& android_web_contents) {
   ServiceTabLauncher::GetInstance()->OnTabLaunched(
       request_id,
       content::WebContents::FromJavaWebContents(android_web_contents));
@@ -34,10 +37,9 @@ ServiceTabLauncher* ServiceTabLauncher::GetInstance() {
   return base::Singleton<ServiceTabLauncher>::get();
 }
 
-ServiceTabLauncher::ServiceTabLauncher() {
-}
+ServiceTabLauncher::ServiceTabLauncher() = default;
 
-ServiceTabLauncher::~ServiceTabLauncher() {}
+ServiceTabLauncher::~ServiceTabLauncher() = default;
 
 void ServiceTabLauncher::LaunchTab(content::BrowserContext* browser_context,
                                    const content::OpenURLParams& params,
@@ -53,10 +55,6 @@ void ServiceTabLauncher::LaunchTab(content::BrowserContext* browser_context,
   }
 
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jstring> referrer_url =
-      ConvertUTF8ToJavaString(env, params.referrer.url.spec());
-  ScopedJavaLocalRef<jstring> headers = ConvertUTF8ToJavaString(
-      env, params.extra_headers);
 
   ScopedJavaLocalRef<jobject> post_data;
 
@@ -68,16 +66,19 @@ void ServiceTabLauncher::LaunchTab(content::BrowserContext* browser_context,
   Java_ServiceTabLauncher_launchTab(
       env, request_id, browser_context->IsOffTheRecord(),
       url::GURLAndroid::FromNativeGURL(env, params.url),
-      static_cast<int>(disposition), referrer_url,
-      static_cast<int>(params.referrer.policy), headers, post_data);
+      static_cast<int>(disposition), params.referrer.url.spec(),
+      static_cast<int>(params.referrer.policy), params.extra_headers,
+      post_data);
 }
 
 void ServiceTabLauncher::OnTabLaunched(int request_id,
                                        content::WebContents* web_contents) {
   TabLaunchedCallback* callback = tab_launched_callbacks_.Lookup(request_id);
-  // TODO(crbug.com/962873): The Lookup() can fail though we don't expect that
+  // TODO(crbug.com/41458698): The Lookup() can fail though we don't expect that
   // it should be able to. It would be nice if this was a DCHECK() instead.
   if (callback)
     std::move(*callback).Run(web_contents);
   tab_launched_callbacks_.Remove(request_id);
 }
+
+DEFINE_JNI(ServiceTabLauncher)

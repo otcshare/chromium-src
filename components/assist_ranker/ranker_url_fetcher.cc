@@ -4,7 +4,11 @@
 
 #include "components/assist_ranker/ranker_url_fetcher.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
@@ -25,7 +29,7 @@ const int kMaxRetry = 16;
 RankerURLFetcher::RankerURLFetcher()
     : state_(IDLE), retry_count_(0), max_retry_on_5xx_(0) {}
 
-RankerURLFetcher::~RankerURLFetcher() {}
+RankerURLFetcher::~RankerURLFetcher() = default;
 
 bool RankerURLFetcher::Request(
     const GURL& url,
@@ -35,7 +39,6 @@ bool RankerURLFetcher::Request(
   // finished.
   if (state_ == REQUESTING) {
     NOTREACHED();
-    return false;
   }
 
   if (retry_count_ >= kMaxRetry)
@@ -93,11 +96,11 @@ bool RankerURLFetcher::Request(
 }
 
 void RankerURLFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   std::string data;
   if (response_body) {
     state_ = COMPLETED;
-    data = std::move(*response_body);
+    data = std::move(response_body).value();
   } else {
     state_ = FAILED;
   }

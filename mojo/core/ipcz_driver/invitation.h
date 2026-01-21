@@ -5,11 +5,11 @@
 #ifndef MOJO_CORE_IPCZ_DRIVER_INVITATION_H_
 #define MOJO_CORE_IPCZ_DRIVER_INVITATION_H_
 
+#include <array>
 #include <cstdint>
 #include <string>
 
 #include "base/containers/span.h"
-#include "base/containers/stack_container.h"
 #include "mojo/core/ipcz_driver/object.h"
 #include "mojo/core/scoped_ipcz_handle.h"
 #include "mojo/public/c/system/invitation.h"

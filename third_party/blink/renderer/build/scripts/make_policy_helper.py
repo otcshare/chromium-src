@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import json5_generator
+import os
 import template_expander
 from collections import defaultdict
 from make_runtime_features_utilities import origin_trials
@@ -14,6 +15,13 @@ class PermissionsPolicyFeatureWriter(json5_generator.Writer):
     def __init__(self, json5_file_path, output_dir):
         super(PermissionsPolicyFeatureWriter,
               self).__init__(json5_file_path, output_dir)
+
+        for path in json5_file_path:
+            file_root, file_ext = os.path.splitext(path)
+            override_file_path = f"{file_root}.override{file_ext}"
+            if os.path.exists(override_file_path):
+                self.json5_file.load_override_file(override_file_path)
+
         runtime_features = []
         permissions_policy_features = []
         # Note: there can be feature with same 'name' attribute in
@@ -30,11 +38,13 @@ class PermissionsPolicyFeatureWriter(json5_generator.Writer):
                 for name in permissions_policy_name.split('-')
             ])
 
+        name_to_permissions_policy_map = {}
         for feature in self.json5_file.name_dictionaries:
             if feature['permissions_policy_name']:
                 feature['devtools_enum_name'] = to_devtools_enum_format(
                     feature['permissions_policy_name'])
                 permissions_policy_features.append(feature)
+                name_to_permissions_policy_map[feature['name']] = feature
             elif feature['document_policy_name']:
                 document_policy_features.append(feature)
             else:
@@ -73,6 +83,8 @@ class PermissionsPolicyFeatureWriter(json5_generator.Writer):
                     self._input_files,
                     'permissions_policy_features':
                     permissions_policy_features,
+                    'name_to_permissions_policy_map':
+                    name_to_permissions_policy_map,
                     'document_policy_features':
                     document_policy_features,
                     'pp_origin_trial_dependency_map':

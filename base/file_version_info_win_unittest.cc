@@ -10,6 +10,8 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/file_version_info.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
@@ -23,7 +25,7 @@ namespace {
 
 FilePath GetTestDataPath() {
   FilePath path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
   path = path.AppendASCII("base");
   path = path.AppendASCII("test");
   path = path.AppendASCII("data");
@@ -82,7 +84,7 @@ TYPED_TEST(FileVersionInfoTest, HardCodedProperties) {
   const base::FilePath::CharType kDLLName[] =
       FILE_PATH_LITERAL("FileVersionInfoTest1.dll");
 
-  const wchar_t* const kExpectedValues[15] = {
+  static constexpr std::wstring_view kExpectedValues[15] = {
       // FileVersionInfoTest.dll
       L"Goooooogle",                      // company_name
       L"Google",                          // company_short_name
@@ -96,6 +98,8 @@ TYPED_TEST(FileVersionInfoTest, HardCodedProperties) {
       L"1.2.3.4",                         // file_version
   };
 
+  auto expected_span = base::span(kExpectedValues);
+
   FilePath dll_path = GetTestDataPath();
   dll_path = dll_path.Append(kDLLName);
 
@@ -104,26 +108,26 @@ TYPED_TEST(FileVersionInfoTest, HardCodedProperties) {
   ASSERT_TRUE(version_info);
 
   int j = 0;
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->company_name()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->company_short_name()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->product_name()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->product_short_name()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->internal_name()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->product_version()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->special_build()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->original_filename()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->file_description()));
-  EXPECT_EQ(kExpectedValues[j++],
-            base::AsWStringPiece(version_info->file_version()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->company_name()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->company_short_name()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->product_name()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->product_short_name()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->internal_name()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->product_version()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->special_build()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->original_filename()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->file_description()));
+  EXPECT_EQ(expected_span[j++],
+            base::AsWStringView(version_info->file_version()));
 }
 
 TYPED_TEST(FileVersionInfoTest, CustomProperties) {

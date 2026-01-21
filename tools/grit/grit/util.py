@@ -5,21 +5,18 @@
 '''Utilities used by GRIT.
 '''
 
-from __future__ import print_function
-
 import codecs
+import html.entities
 import io
 import os
 import re
 import shutil
 import sys
 import tempfile
+
 from xml.sax import saxutils
 
-import six
-from six import StringIO
-from six.moves import html_entities as entities
-
+from grit import constants
 from grit import lazy_re
 
 _root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -211,7 +208,7 @@ def ReadFile(filename, encoding):
   else:
     mode = 'r'
 
-  with io.open(filename, mode, encoding=encoding) as f:
+  with open(filename, mode, encoding=encoding) as f:
     return f.read()
 
 
@@ -224,7 +221,7 @@ def WrapOutputStream(stream, encoding = 'utf-8'):
 def ChangeStdoutEncoding(encoding = 'utf-8'):
   '''Changes STDOUT to print characters using the specified encoding.'''
   # If we're unittesting, don't reconfigure.
-  if isinstance(sys.stdout, StringIO):
+  if isinstance(sys.stdout, io.StringIO):
     return
 
   if sys.version_info.major < 3:
@@ -270,16 +267,16 @@ def UnescapeHtml(text, replace_nbsp=True):
   def Replace(match):
     groups = match.groupdict()
     if groups['hex']:
-      return six.unichr(int(groups['hex'], 16))
+      return chr(int(groups['hex'], 16))
     elif groups['decimal']:
-      return six.unichr(int(groups['decimal'], 10))
+      return chr(int(groups['decimal'], 10))
     else:
       name = groups['named']
       if name == 'nbsp' and not replace_nbsp:
         return match.group()  # Don't replace &nbsp;
       assert name != None
-      if name in entities.name2codepoint:
-        return six.unichr(entities.name2codepoint[name])
+      if name in html.entities.name2codepoint:
+        return chr(html.entities.name2codepoint[name])
       else:
         return match.group()  # Unknown HTML character entity - don't replace
 
@@ -347,7 +344,7 @@ def ParseGrdForUnittest(body, base_dir=None, predetermined_ids_file=None,
     base_dir: The base_dir attribute of the <grit> tag.
   '''
   from grit import grd_reader
-  if isinstance(body, six.text_type):
+  if isinstance(body, str):
     body = body.encode('utf-8')
   if base_dir is None:
     base_dir = PathFromRoot('.')
@@ -531,7 +528,7 @@ def ParseDefine(define):
   return (name, val)
 
 
-class Substituter(object):
+class Substituter:
   '''Finds and substitutes variable names in text strings.
 
   Given a dictionary of variable names and values, prepares to
@@ -561,7 +558,8 @@ class Substituter(object):
       messages: a list of node.Message objects.
       lang: The translation language to use in substitutions.
     '''
-    subs = [(str(msg.attrs['name']), msg.Translate(lang)) for msg in messages]
+    subs = [(str(msg.attrs['name']),
+             msg.Translate(lang, constants.DEFAULT_GENDER)) for msg in messages]
     self.AddSubstitutions(dict(subs))
     self.dirty_ = True
 
@@ -648,7 +646,7 @@ class Substituter(object):
       return msg
 
 
-class TempDir(object):
+class TempDir:
   '''Creates files with the specified contents in a temporary directory,
   for unit testing.
   '''
@@ -681,7 +679,7 @@ class TempDir(object):
   def AsCurrentDir(self):
     return self._AsCurrentDirClass(self.GetPath())
 
-  class _AsCurrentDirClass(object):
+  class _AsCurrentDirClass:
     def __init__(self, path):
       self.path = path
     def __enter__(self):

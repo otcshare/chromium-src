@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/webrtc/net_address_utils.h"
@@ -14,10 +14,10 @@
 
 namespace remoting {
 
-FakeNetworkManager::FakeNetworkManager(const rtc::IPAddress& address)
+FakeNetworkManager::FakeNetworkManager(const webrtc::IPAddress& address)
     : started_(false) {
   network_ =
-      std::make_unique<rtc::Network>("fake", "Fake Network", address, 32);
+      std::make_unique<webrtc::Network>("fake", "Fake Network", address, 32);
   network_->AddIP(address);
 }
 
@@ -34,16 +34,17 @@ void FakeNetworkManager::StopUpdating() {
   started_ = false;
 }
 
-std::vector<const rtc::Network*> FakeNetworkManager::GetNetworks() const {
+std::vector<const webrtc::Network*> FakeNetworkManager::GetNetworks() const {
   return {network_.get()};
 }
 
-std::vector<const rtc::Network*> FakeNetworkManager::GetAnyAddressNetworks() {
+std::vector<const webrtc::Network*>
+FakeNetworkManager::GetAnyAddressNetworks() {
   return {};
 }
 
 void FakeNetworkManager::SendNetworksChangedSignal() {
-  SignalNetworksChanged();
+  NotifyNetworksChanged();
 }
 
 }  // namespace remoting

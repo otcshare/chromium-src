@@ -52,7 +52,7 @@ class ZygoteForkDelegate {
   // Indexes of FDs in the vector passed to Fork().
   enum {
     // Used to pass in the descriptor for talking to the Browser.
-    // Because the children use ChannelMojo, this is actually the Mojo fd.
+    // Because the children use Channel, this is actually the Mojo fd.
     kBrowserFDIndex,
     // The PID oracle is used in the protocol for discovering the
     // child process's real PID from within the SUID sandbox.
@@ -62,7 +62,13 @@ class ZygoteForkDelegate {
     // A descriptor for a read-only shared memory region that can be mapped and
     // used to initialize a base::FieldTrialList.
     kFieldTrialFDIndex,
-    kNumPassedFDs  // Number of FDs in the vector passed to Fork().
+    // A descriptor for the read-write shared memory region that is passed from
+    // the parent process for use by the child for allocating histograms. This
+    // is then accessed by the parent process for metrics reporting.
+    kHistogramFDIndex,
+
+    // Number of FDs in the vector passed to Fork().
+    kNumPassedFDs
   };
 
   // Delegate forks, returning a -1 on failure. Outside the

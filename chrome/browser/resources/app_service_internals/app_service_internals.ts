@@ -2,49 +2,73 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {EventTracker} from 'chrome://resources/js/event_tracker.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {getTemplate} from './app_service_internals.html.js';
-import {AppInfo, AppServiceInternalsPageHandler, PreferredAppInfo} from './app_service_internals.mojom-webui.js';
+import {getHtml} from './app_service_internals.html.js';
+import type {AppCapabilityInfo, AppInfo, DebugInfo, PreferredAppInfo, PromiseAppInfo} from './app_service_internals.mojom-webui.js';
+import {AppServiceInternalsPageHandler} from './app_service_internals.mojom-webui.js';
 
-export class AppServiceInternalsElement extends PolymerElement {
+export class AppServiceInternalsElement extends CrLitElement {
   static get is() {
     return 'app-service-internals';
   }
 
-  static get template() {
-    return getTemplate();
+  override render() {
+    return getHtml.bind(this)();
   }
 
-  static get properties() {
+  static override get properties() {
     return {
-      appList_: Array,
-      preferredAppList_: Array,
+      appList_: {type: Array},
+
+      preferredAppList_: {type: Array},
+
+      promiseAppList_: {type: Array},
+
+      appCapabilityList_: {type: Array},
     };
   }
 
   /** List containing debug information for all installed apps. */
-  private appList_: AppInfo[] = [];
-  private hashChangeListener_ = () => this.onHashChanged_();
+  protected accessor appList_: AppInfo[] = [];
   /** List containing preferred app debug information for installed apps. */
-  private preferredAppList_: PreferredAppInfo[] = [];
+  protected accessor preferredAppList_: PreferredAppInfo[] = [];
+  /** List containing debug information for all promise apps. */
+  protected accessor promiseAppList_: PromiseAppInfo[] = [];
+  /** List containing app capability access information. */
+  protected accessor appCapabilityList_: AppCapabilityInfo[] = [];
 
-  override ready() {
-    super.ready();
-    (async () => {
-      const remote = AppServiceInternalsPageHandler.getRemote();
+  private eventTracker_: EventTracker = new EventTracker();
 
-      this.appList_ = (await remote.getApps()).appList;
-      this.preferredAppList_ =
-          (await remote.getPreferredApps()).preferredAppList;
+  override firstUpdated(changedProperties: PropertyValues<this>) {
+    super.firstUpdated(changedProperties);
+    const remote = AppServiceInternalsPageHandler.getRemote();
+    remote.getDebugInfo().then(
+        response => this.initializeUi_(response.debugInfo));
+  }
 
-      this.onHashChanged_();
-      window.addEventListener('hashchange', this.hashChangeListener_);
-    })();
+  override connectedCallback() {
+    super.connectedCallback();
+    this.eventTracker_.add(window, 'hashchange', () => this.onHashChanged_());
   }
 
   override disconnectedCallback() {
-    window.removeEventListener('hashchange', this.hashChangeListener_);
+    super.disconnectedCallback();
+    this.eventTracker_.removeAll();
+  }
+
+  private async initializeUi_(debugInfo: DebugInfo|null) {
+    if (debugInfo) {
+      this.appList_ = debugInfo.appList;
+      this.preferredAppList_ = debugInfo.preferredAppList;
+      this.promiseAppList_ = debugInfo.promiseAppList;
+      this.appCapabilityList_ = debugInfo.appCapabilityList;
+    }
+    // Apply any hash only after all the page content has rendered.
+    await this.updateComplete;
+    this.onHashChanged_();
   }
 
   /**
@@ -65,8 +89,8 @@ export class AppServiceInternalsElement extends PolymerElement {
     selected.scrollIntoView();
   }
 
-  private save_() {
-    const fileParts = [];
+  protected save_() {
+    const fileParts: string[] = [];
     fileParts.push('App List\n');
     fileParts.push('========\n\n');
     for (const app of this.appList_) {
@@ -78,9 +102,25 @@ export class AppServiceInternalsElement extends PolymerElement {
     fileParts.push('Preferred Apps\n');
     fileParts.push('==============\n\n');
     for (const preferredApp of this.preferredAppList_) {
-      fileParts.push(preferredApp.name + '\n');
+      fileParts.push(preferredApp.name + ' (' + preferredApp.id + ')\n');
       fileParts.push('-----\n');
       fileParts.push(preferredApp.preferredFilters + '\n');
+    }
+
+    fileParts.push('App Capabilities\n');
+    fileParts.push('================\n\n');
+    for (const appCapability of this.appCapabilityList_) {
+      fileParts.push(appCapability.name + '\n');
+      fileParts.push('-----\n');
+      fileParts.push(appCapability.debugInfo + '\n');
+    }
+
+    fileParts.push('Promise App List\n');
+    fileParts.push('================\n\n');
+    for (const promiseApp of this.promiseAppList_) {
+      fileParts.push(promiseApp.packageId + '\n');
+      fileParts.push('-----\n');
+      fileParts.push(promiseApp.debugInfo + '\n');
     }
 
     const file = new Blob(fileParts);

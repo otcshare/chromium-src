@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
@@ -72,7 +72,8 @@ class NET_EXPORT_PRIVATE ThroughputAnalyzer {
   virtual ~ThroughputAnalyzer();
 
   // Notifies |this| that the headers of |request| are about to be sent.
-  void NotifyStartTransaction(const URLRequest& request);
+  void NotifyStartTransaction(const URLRequest& request,
+                              const base::TimeTicks& time);
 
   // Notifies |this| that unfiltered bytes have been read for |request|.
   void NotifyBytesRead(const URLRequest& request);
@@ -135,9 +136,7 @@ class NET_EXPORT_PRIVATE ThroughputAnalyzer {
 
   // Returns true if the current throughput observation window is heuristically
   // determined to contain hanging requests.
-  bool IsHangingWindow(int64_t bits_received,
-                       base::TimeDelta duration,
-                       double downstream_kbps_double) const;
+  bool IsHangingWindow(int64_t bits_received, base::TimeDelta duration) const;
 
  private:
   friend class TestThroughputAnalyzer;
@@ -154,7 +153,8 @@ class NET_EXPORT_PRIVATE ThroughputAnalyzer {
   // Set of URL requests to hold the requests that reduce the accuracy of
   // throughput computation. These requests are not used in throughput
   // computation.
-  typedef std::unordered_set<const URLRequest*> AccuracyDegradingRequests;
+  typedef std::unordered_set<raw_ptr<const URLRequest, CtnExperimental>>
+      AccuracyDegradingRequests;
 
   // Updates the response content size map for |request|. Also keeps the total
   // response content size counter updated. Adds an new entry if there is no

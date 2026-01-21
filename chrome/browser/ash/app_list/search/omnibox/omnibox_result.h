@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ash/public/cpp/style/color_mode_observer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_delegate.h"
@@ -37,6 +38,7 @@ class OmniboxResult : public ChromeSearchResult,
   OmniboxResult& operator=(const OmniboxResult&) = delete;
 
   // ChromeSearchResult:
+  std::optional<GURL> url() const override;
   void Open(int event_flags) override;
 
   // BitmapFetcherDelegate:
@@ -62,6 +64,12 @@ class OmniboxResult : public ChromeSearchResult,
   // description.
   bool IsUrlResultWithDescription() const;
 
+  // Returns the relevance from a fuzzy string match between the query and
+  // title.
+  double CalculateTitleRelevance() const;
+
+  void UpdateRelevance();
+
   // Returns true if match has an image url.
   bool IsRichEntity() const;
   void FetchRichEntityImage(const GURL& url);
@@ -79,8 +87,8 @@ class OmniboxResult : public ChromeSearchResult,
   // Mojo.
   const mojo::Receiver<crosapi::mojom::SearchResultConsumer> consumer_receiver_;
 
-  Profile* const profile_;
-  AppListControllerDelegate* const list_controller_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<AppListControllerDelegate> list_controller_;
   crosapi::mojom::SearchResultPtr search_result_;
   const std::u16string query_;
   std::unique_ptr<BitmapFetcher> bitmap_fetcher_;

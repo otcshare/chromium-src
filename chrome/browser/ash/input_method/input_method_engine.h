@@ -10,12 +10,14 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/types/expected.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ash/input_method/assistive_window_properties.h"
 #include "chrome/browser/ash/input_method/input_method_engine_observer.h"
 #include "chrome/browser/ash/input_method/screen_projection_change_monitor.h"
@@ -23,6 +25,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "extensions/common/extension_id.h"
 #include "ui/base/ime/ash/input_method_descriptor.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/ime/ash/text_input_method.h"
@@ -30,11 +33,10 @@
 #include "ui/base/ime/composition_text.h"
 #include "ui/events/event.h"
 
-static_assert(BUILDFLAG(IS_CHROMEOS_ASH), "For ChromeOS ash-chrome only");
+static_assert(BUILDFLAG(IS_CHROMEOS), "For ChromeOS only");
 
 namespace ui {
 struct CompositionText;
-class TextInputMethod;
 class KeyEvent;
 
 namespace ime {
@@ -45,6 +47,7 @@ struct SuggestionDetails;
 }  // namespace ui
 
 namespace ash {
+
 namespace ime {
 struct AssistiveWindow;
 }  // namespace ime
@@ -53,7 +56,7 @@ namespace input_method {
 
 struct AssistiveWindowProperties;
 
-class InputMethodEngine : virtual public ui::TextInputMethod,
+class InputMethodEngine : virtual public TextInputMethod,
                           public ProfileObserver,
                           public SuggestionHandlerInterface {
  public:
@@ -112,6 +115,11 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
     int total_candidates = 0;
   };
 
+  enum class Error {
+    kInputMethodNotActive,
+    kIncorrectContextId,
+  };
+
   InputMethodEngine();
   InputMethodEngine(const InputMethodEngine&) = delete;
   InputMethodEngine& operator=(const InputMethodEngine&) = delete;
@@ -151,6 +159,16 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
                              int offset,
                              size_t number_of_chars,
                              std::string* error);
+
+  // Deletes any active composition, and the current selection plus the
+  // specified number of char16 values before and after the selection, and
+  // replaces it with |replacement_string|.
+  // Places the cursor at the end of |replacement_string|.
+  base::expected<void, Error> ReplaceSurroundingText(
+      int context_id,
+      int length_before_selection,
+      int length_after_selection,
+      std::u16string_view replacement_text);
 
   // Commit the text currently being composed to the composition.
   // Fails if the context is not focused.
@@ -203,15 +221,10 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
   // Returns the request ID for this key event.
   std::string AddPendingKeyEvent(
       const std::string& component_id,
-      ui::TextInputMethod::KeyEventDoneCallback callback);
+      TextInputMethod::KeyEventDoneCallback callback);
 
   // Resolves all the pending key event callbacks as not handled.
   void CancelPendingKeyEvents();
-
-  // Get the composition bounds.
-  const std::vector<gfx::Rect>& composition_bounds() const {
-    return composition_bounds_;
-  }
 
   int GetContextIdForTesting() const { return context_id_; }
 
@@ -219,20 +232,17 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
     return pref_change_registrar_.get();
   }
 
-  // ui::TextInputMethod overrides.
-  void Focus(const ui::TextInputMethod::InputContext& input_context) override;
+  // TextInputMethod overrides.
+  void Focus(const TextInputMethod::InputContext& input_context) override;
   void Blur() override;
-  void OnTouch(ui::EventPointerType pointerType) override;
   void Enable(const std::string& component_id) override;
   void Disable() override;
   void Reset() override;
   void ProcessKeyEvent(const ui::KeyEvent& key_event,
                        KeyEventDoneCallback callback) override;
   void SetSurroundingText(const std::u16string& text,
-                          uint32_t cursor_pos,
-                          uint32_t anchor_pos,
+                          gfx::Range selection_range,
                           uint32_t offset_pos) override;
-  void SetCompositionBounds(const std::vector<gfx::Rect>& bounds) override;
   void SetCaretBounds(const gfx::Rect& caret_bounds) override;
   void PropertyActivate(const std::string& property_name) override;
   void CandidateClicked(uint32_t index) override;
@@ -310,7 +320,7 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
  private:
   struct PendingKeyEvent {
     PendingKeyEvent(const std::string& component_id,
-                    ui::TextInputMethod::KeyEventDoneCallback callback);
+                    TextInputMethod::KeyEventDoneCallback callback);
     PendingKeyEvent(PendingKeyEvent&& other);
 
     PendingKeyEvent(const PendingKeyEvent&) = delete;
@@ -319,8 +329,11 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
     ~PendingKeyEvent();
 
     std::string component_id;
-    ui::TextInputMethod::KeyEventDoneCallback callback;
+    TextInputMethod::KeyEventDoneCallback callback;
   };
+
+  // Called when Diacritics setting changed for metrics.
+  void DiacriticsSettingsChanged();
 
   // Notifies InputContextHandler that the composition is changed.
   void UpdateComposition(const ui::CompositionText& composition_text,
@@ -335,6 +348,10 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
                           ui::ime::InputMethodMenuItem* property);
 
   void OnScreenProjectionChanged(bool is_projected);
+
+  // Infers if the user is choosing from a candidate from the window.
+  // TODO(b/300576550): get this information from IME.
+  bool InferIsUserSelecting(base::span<const Candidate> candidates);
 
   // The current candidate window.
   ui::CandidateWindow candidate_window_;
@@ -363,7 +380,7 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
   std::string active_component_id_;
 
   // The IME extension ID.
-  std::string extension_id_;
+  extensions::ExtensionId extension_id_;
 
   raw_ptr<Profile> profile_;
 
@@ -375,10 +392,6 @@ class InputMethodEngine : virtual public ui::TextInputMethod,
   ui::CompositionText composition_;
 
   bool composition_changed_;
-
-  // The composition bounds returned by inputMethodPrivate.getCompositionBounds
-  // API.
-  std::vector<gfx::Rect> composition_bounds_;
 
   // The text to be committed from calling input.ime.commitText API.
   std::u16string text_;

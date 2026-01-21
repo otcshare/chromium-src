@@ -10,7 +10,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/unguessable_token_android.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/bind_post_task.h"
@@ -21,12 +21,15 @@
 #include "base/unguessable_token.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/player/android/convert_to_java_bitmap.h"
-#include "components/paint_preview/player/android/jni_headers/PlayerCompositorDelegateImpl_jni.h"
 #include "components/services/paint_preview_compositor/public/mojom/paint_preview_compositor.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/paint_preview/player/android/jni_headers/PlayerCompositorDelegateImpl_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -35,46 +38,21 @@ namespace paint_preview {
 namespace {
 
 // To minimize peak memory usage limit the number of concurrent bitmap requests.
-// These correspond to memory pressure levels None, Moderate, Critical
-// respectively. If a value of 0 is used for any level the process will abort
-// once that memory level is reached.
-constexpr std::
-    array<size_t, PlayerCompositorDelegateAndroid::PressureLevelCount::kLevels>
-        kMaxParallelBitmapRequests = {3, 2, 0};
-constexpr std::
-    array<size_t, PlayerCompositorDelegateAndroid::PressureLevelCount::kLevels>
-        kMaxParallelBitmapRequestsLowMemory = {2, 1, 0};
-
-ScopedJavaLocalRef<jobjectArray> ToJavaUnguessableTokenArray(
-    JNIEnv* env,
-    const std::vector<base::UnguessableToken>& tokens) {
-  ScopedJavaLocalRef<jclass> j_unguessable_token_class =
-      base::android::GetClass(env, "org/chromium/base/UnguessableToken");
-  jobjectArray joa = env->NewObjectArray(
-      tokens.size(), j_unguessable_token_class.obj(), nullptr);
-  base::android::CheckException(env);
-
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    ScopedJavaLocalRef<jobject> j_unguessable_token =
-        base::android::UnguessableTokenAndroid::Create(env, tokens[i]);
-    env->SetObjectArrayElement(joa, i, j_unguessable_token.obj());
-  }
-
-  return ScopedJavaLocalRef<jobjectArray>(env, joa);
-}
+constexpr size_t kMaxParallelBitmapRequests = 3;
+constexpr size_t kMaxParallelBitmapRequestsLowMemory = 2;
 
 }  // namespace
 
-jlong JNI_PlayerCompositorDelegateImpl_Initialize(
+static int64_t JNI_PlayerCompositorDelegateImpl_Initialize(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_object,
-    jlong paint_preview_service,
-    jlong j_capture_result_ptr,
-    const JavaParamRef<jstring>& j_url_spec,
-    const JavaParamRef<jstring>& j_directory_key,
-    jboolean j_main_frame_mode,
-    const JavaParamRef<jobject>& j_compositor_error_callback,
-    jboolean j_is_low_mem) {
+    const JavaRef<jobject>& j_object,
+    int64_t paint_preview_service,
+    int64_t j_capture_result_ptr,
+    const JavaRef<jstring>& j_url_spec,
+    const JavaRef<jstring>& j_directory_key,
+    bool j_main_frame_mode,
+    const JavaRef<jobject>& j_compositor_error_callback,
+    bool j_is_low_mem) {
   TRACE_EVENT0("paint_preview", "JNI_PlayerCompositorDelegateImpl_Initialize");
   PlayerCompositorDelegateAndroid* delegate =
       new PlayerCompositorDelegateAndroid(
@@ -87,14 +65,14 @@ jlong JNI_PlayerCompositorDelegateImpl_Initialize(
 
 PlayerCompositorDelegateAndroid::PlayerCompositorDelegateAndroid(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_object,
+    const JavaRef<jobject>& j_object,
     PaintPreviewBaseService* paint_preview_service,
-    jlong j_capture_result_ptr,
-    const JavaParamRef<jstring>& j_url_spec,
-    const JavaParamRef<jstring>& j_directory_key,
-    jboolean j_main_frame_mode,
-    const JavaParamRef<jobject>& j_compositor_error_callback,
-    jboolean j_is_low_mem)
+    int64_t j_capture_result_ptr,
+    const JavaRef<jstring>& j_url_spec,
+    const JavaRef<jstring>& j_directory_key,
+    bool j_main_frame_mode,
+    const JavaRef<jobject>& j_compositor_error_callback,
+    bool j_is_low_mem)
     : PlayerCompositorDelegate(),
       request_id_(0),
       task_runner_(base::ThreadPool::CreateTaskRunner(
@@ -115,12 +93,12 @@ PlayerCompositorDelegateAndroid::PlayerCompositorDelegateAndroid(
       paint_preview_service, GURL(url_string),
       DirectoryKey{
           base::android::ConvertJavaStringToUTF8(env, j_directory_key)},
-      static_cast<bool>(j_main_frame_mode),
+      j_main_frame_mode,
       base::BindOnce(&base::android::RunIntCallbackAndroid,
                      ScopedJavaGlobalRef<jobject>(j_compositor_error_callback)),
       base::Seconds(15),
-      (static_cast<bool>(j_is_low_mem) ? kMaxParallelBitmapRequestsLowMemory
-                                       : kMaxParallelBitmapRequests));
+      (j_is_low_mem ? kMaxParallelBitmapRequestsLowMemory
+                    : kMaxParallelBitmapRequests));
 
   java_ref_.Reset(env, j_object);
 }
@@ -152,11 +130,11 @@ void PlayerCompositorDelegateAndroid::OnCompositorReady(
   JNIEnv* env = base::android::AttachCurrentThread();
 
   std::vector<base::UnguessableToken> all_guids;
-  std::vector<int> scroll_extents;
-  std::vector<int> scroll_offsets;
-  std::vector<int> subframe_count;
+  std::vector<int32_t> scroll_extents;
+  std::vector<int32_t> scroll_offsets;
+  std::vector<int32_t> subframe_count;
   std::vector<base::UnguessableToken> subframe_ids;
-  std::vector<int> subframe_rects;
+  std::vector<int32_t> subframe_rects;
   base::UnguessableToken root_frame_guid;
 
   if (composite_response) {
@@ -171,24 +149,9 @@ void PlayerCompositorDelegateAndroid::OnCompositorReady(
     root_frame_guid = base::UnguessableToken::Create();
   }
 
-  ScopedJavaLocalRef<jobjectArray> j_all_guids =
-      ToJavaUnguessableTokenArray(env, all_guids);
-  ScopedJavaLocalRef<jintArray> j_scroll_extents =
-      base::android::ToJavaIntArray(env, scroll_extents);
-  ScopedJavaLocalRef<jintArray> j_scroll_offsets =
-      base::android::ToJavaIntArray(env, scroll_offsets);
-  ScopedJavaLocalRef<jintArray> j_subframe_count =
-      base::android::ToJavaIntArray(env, subframe_count);
-  ScopedJavaLocalRef<jobjectArray> j_subframe_ids =
-      ToJavaUnguessableTokenArray(env, subframe_ids);
-  ScopedJavaLocalRef<jintArray> j_subframe_rects =
-      base::android::ToJavaIntArray(env, subframe_rects);
-  ScopedJavaLocalRef<jobject> j_root_frame_guid =
-      base::android::UnguessableTokenAndroid::Create(env, root_frame_guid);
-
   Java_PlayerCompositorDelegateImpl_onCompositorReady(
-      env, java_ref_, j_root_frame_guid, j_all_guids, j_scroll_extents,
-      j_scroll_offsets, j_subframe_count, j_subframe_ids, j_subframe_rects,
+      env, java_ref_, root_frame_guid, all_guids, scroll_extents,
+      scroll_offsets, subframe_count, subframe_ids, subframe_rects,
       page_scale_factor, reinterpret_cast<intptr_t>(ax_tree.release()));
 }
 
@@ -198,18 +161,6 @@ PlayerCompositorDelegateAndroid::GetRootFrameOffsets(JNIEnv* env) {
   ScopedJavaLocalRef<jintArray> j_offsets = base::android::ToJavaIntArray(
       env, std::vector<int>({offsets.x(), offsets.y()}));
   return j_offsets;
-}
-
-void PlayerCompositorDelegateAndroid::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  // Don't handle the critical case leave that to the base class implementation
-  // which should kill the preview.
-  if (memory_pressure_level ==
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE) {
-    Java_PlayerCompositorDelegateImpl_onModerateMemoryPressure(
-        base::android::AttachCurrentThread(), java_ref_);
-  }
-  PlayerCompositorDelegate::OnMemoryPressure(memory_pressure_level);
 }
 
 // static
@@ -248,54 +199,44 @@ void PlayerCompositorDelegateAndroid::CompositeResponseFramesToVectors(
   }
 }
 
-jint PlayerCompositorDelegateAndroid::RequestBitmap(
+int32_t PlayerCompositorDelegateAndroid::RequestBitmap(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_frame_guid,
-    const JavaParamRef<jobject>& j_bitmap_callback,
-    const JavaParamRef<jobject>& j_error_callback,
+    std::optional<base::UnguessableToken>& frame_guid,
+    const JavaRef<jobject>& j_bitmap_callback,
+    const JavaRef<jobject>& j_error_callback,
     jfloat j_scale_factor,
-    jint j_clip_x,
-    jint j_clip_y,
-    jint j_clip_width,
-    jint j_clip_height) {
+    int32_t j_clip_x,
+    int32_t j_clip_y,
+    int32_t j_clip_width,
+    int32_t j_clip_height) {
   TRACE_EVENT0("paint_preview", "RequestBitmap");
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(
-      "paint_preview", "PlayerCompositorDelegateAndroid::RequestBitmap",
-      TRACE_ID_LOCAL(request_id_));
+  TRACE_EVENT_BEGIN("paint_preview",
+                    "PlayerCompositorDelegateAndroid::RequestBitmap",
+                    perfetto::Track(request_id_));
   gfx::Rect rect(j_clip_x, j_clip_y, j_clip_width, j_clip_height);
   auto callback = base::BindPostTask(
       task_runner_,
       base::BindOnce(
           &ConvertToJavaBitmap,
-          base::BindPostTask(
-              base::SequencedTaskRunner::GetCurrentDefault(),
-              base::BindOnce(
-                  &PlayerCompositorDelegateAndroid::OnJavaBitmapCallback,
-                  weak_factory_.GetWeakPtr(),
-                  ScopedJavaGlobalRef<jobject>(j_bitmap_callback),
-                  ScopedJavaGlobalRef<jobject>(j_error_callback),
-                  request_id_))));
+          base::BindPostTaskToCurrentDefault(base::BindOnce(
+              &PlayerCompositorDelegateAndroid::OnJavaBitmapCallback,
+              weak_factory_.GetWeakPtr(),
+              ScopedJavaGlobalRef<jobject>(j_bitmap_callback),
+              ScopedJavaGlobalRef<jobject>(j_error_callback), request_id_))));
   ++request_id_;
 
-  absl::optional<base::UnguessableToken> frame_guid;
-  if (j_frame_guid) {
-    frame_guid =
-        base::android::UnguessableTokenAndroid::FromJavaUnguessableToken(
-            env, j_frame_guid);
-  }
-
   // Callback can skip UI thread.
-  return static_cast<jint>(
+  return static_cast<int32_t>(
       PlayerCompositorDelegate::RequestBitmap(frame_guid, rect, j_scale_factor,
                                               std::move(callback)),
       /*run_callback_on_default_task_runner=*/false);
 }
 
-jboolean PlayerCompositorDelegateAndroid::CancelBitmapRequest(
+bool PlayerCompositorDelegateAndroid::CancelBitmapRequest(
     JNIEnv* env,
-    jint j_request_id) {
-  return static_cast<jboolean>(PlayerCompositorDelegate::CancelBitmapRequest(
-      static_cast<int32_t>(j_request_id)));
+    int32_t j_request_id) {
+  return static_cast<bool>(
+      PlayerCompositorDelegate::CancelBitmapRequest(j_request_id));
 }
 
 void PlayerCompositorDelegateAndroid::CancelAllBitmapRequests(JNIEnv* env) {
@@ -308,17 +249,15 @@ void PlayerCompositorDelegateAndroid::OnJavaBitmapCallback(
     int request_id,
     JavaBitmapResult result) {
   TRACE_EVENT0("paint_preview", "OnBitmapReceived");
-  TRACE_EVENT_NESTABLE_ASYNC_END2(
-      "paint_preview", "PlayerCompositorDelegateAndroid::RequestBitmap",
-      TRACE_ID_LOCAL(request_id), "status", static_cast<int>(result.status),
+  TRACE_EVENT_END(
+      "paint_preview", /* PlayerCompositorDelegateAndroid::RequestBitmap */
+      perfetto::Track(request_id), "status", static_cast<int>(result.status),
       "bytes", result.bytes);
 
   if (result.status ==
       mojom::PaintPreviewCompositor::BitmapStatus::kAllocFailed) {
     base::android::RunRunnableAndroid(j_error_callback);
-    // Treat this as a critical memory pressure failure. We should abort.
-    OnMemoryPressure(
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+    PlayerCompositorDelegate::OnAllocationFailure();
     return;
   }
 
@@ -341,27 +280,28 @@ void PlayerCompositorDelegateAndroid::OnJavaBitmapCallback(
 
 ScopedJavaLocalRef<jstring> PlayerCompositorDelegateAndroid::OnClick(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_frame_guid,
-    jint j_x,
-    jint j_y) {
+    std::optional<base::UnguessableToken>& frame_guid,
+    int32_t j_x,
+    int32_t j_y) {
+  if (!frame_guid.has_value()) {
+    return jni_zero::g_empty_string.AsLocalRef(env);
+  }
   auto res = PlayerCompositorDelegate::OnClick(
-      base::android::UnguessableTokenAndroid::FromJavaUnguessableToken(
-          env, j_frame_guid),
+      frame_guid.value(),
       gfx::Rect(static_cast<int>(j_x), static_cast<int>(j_y), 1U, 1U));
   if (res.empty())
-    return base::android::ConvertUTF8ToJavaString(env, "");
+    return jni_zero::g_empty_string.AsLocalRef(env);
 
   base::UmaHistogramBoolean("Browser.PaintPreview.Player.LinkClicked", true);
-  // TODO(crbug/1061435): Resolve cases where there are multiple links.
+  // TODO(crbug.com/40122441): Resolve cases where there are multiple links.
   // For now just return the first in the list.
   return base::android::ConvertUTF8ToJavaString(env, res[0]->spec());
 }
 
 void PlayerCompositorDelegateAndroid::SetCompressOnClose(
     JNIEnv* env,
-    jboolean compress_on_close) {
-  PlayerCompositorDelegate::SetCompressOnClose(
-      static_cast<bool>(compress_on_close));
+    bool compress_on_close) {
+  PlayerCompositorDelegate::SetCompressOnClose(compress_on_close);
 }
 
 void PlayerCompositorDelegateAndroid::Destroy(JNIEnv* env) {
@@ -371,3 +311,5 @@ void PlayerCompositorDelegateAndroid::Destroy(JNIEnv* env) {
 PlayerCompositorDelegateAndroid::~PlayerCompositorDelegateAndroid() = default;
 
 }  // namespace paint_preview
+
+DEFINE_JNI(PlayerCompositorDelegateImpl)

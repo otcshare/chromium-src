@@ -9,7 +9,8 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/sequenced_task_runner.h"
@@ -77,8 +78,10 @@ void UsbDeviceImpl::ReadAllConfigurations() {
         continue;
       }
 
-      if (!usb_descriptor.Parse(base::make_span(buffer, rv)))
+      if (!usb_descriptor.Parse(
+              UNSAFE_TODO(base::span(buffer, static_cast<size_t>(rv))))) {
         USB_LOG(EVENT) << "Config descriptor index " << i << " was corrupt.";
+      }
       free(buffer);
     }
 
@@ -113,8 +116,8 @@ void UsbDeviceImpl::OpenOnBlockingThread(
   libusb_device_handle* handle = nullptr;
   const int rv = libusb_open(platform_device(), &handle);
   if (LIBUSB_SUCCESS == rv) {
-    ScopedLibusbDeviceHandle scoped_handle(handle,
-                                           platform_device_.GetContext());
+    ScopedLibusbDeviceHandle scoped_handle(
+        handle, platform_device_.GetContext(), platform_device_);
     task_runner->PostTask(
         FROM_HERE,
         base::BindOnce(&UsbDeviceImpl::Opened, this, std::move(scoped_handle),

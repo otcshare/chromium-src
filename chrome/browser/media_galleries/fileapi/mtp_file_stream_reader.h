@@ -7,9 +7,9 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/files/file.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_async_delegate.h"

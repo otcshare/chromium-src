@@ -6,8 +6,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
@@ -20,6 +20,7 @@
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
+#include "services/network/public/cpp/header_util.h"
 
 namespace content {
 namespace protocol {
@@ -32,13 +33,20 @@ std::vector<FetchHandler*> FetchHandler::ForAgentHost(
 
 FetchHandler::FetchHandler(
     DevToolsIOContext* io_context,
-    UpdateLoaderFactoriesCallback update_loader_factories_callback)
+    UpdateLoaderFactoriesCallback update_loader_factories_callback,
+    base::OnceClosure cleanup_after_modifications_callback)
     : DevToolsDomainHandler(Fetch::Metainfo::domainName),
       io_context_(io_context),
       update_loader_factories_callback_(
-          std::move(update_loader_factories_callback)) {}
+          std::move(update_loader_factories_callback)),
+      cleanup_after_modifications_callback_(
+          std::move(cleanup_after_modifications_callback)) {}
 
-FetchHandler::~FetchHandler() = default;
+FetchHandler::~FetchHandler() {
+  if (did_modifications_ && cleanup_after_modifications_callback_) {
+    std::move(cleanup_after_modifications_callback_).Run();
+  }
+}
 
 void FetchHandler::Wire(UberDispatcher* dispatcher) {
   frontend_ = std::make_unique<Fetch::Frontend>(dispatcher->channel());
@@ -47,25 +55,25 @@ void FetchHandler::Wire(UberDispatcher* dispatcher) {
 
 DevToolsURLLoaderInterceptor::InterceptionStage RequestStageToInterceptorStage(
     const Fetch::RequestStage& stage) {
-  if (stage == Fetch::RequestStageEnum::Request)
-    return DevToolsURLLoaderInterceptor::REQUEST;
-  if (stage == Fetch::RequestStageEnum::Response)
-    return DevToolsURLLoaderInterceptor::RESPONSE;
+  if (stage == Fetch::RequestStageEnum::Request) {
+    return DevToolsURLLoaderInterceptor::kRequest;
+  }
+  if (stage == Fetch::RequestStageEnum::Response) {
+    return DevToolsURLLoaderInterceptor::kResponse;
+  }
   NOTREACHED();
-  return DevToolsURLLoaderInterceptor::REQUEST;
 }
 
 Response ToInterceptionPatterns(
-    const Maybe<Array<Fetch::RequestPattern>>& maybe_patterns,
+    std::unique_ptr<Array<Fetch::RequestPattern>>& maybe_patterns,
     std::vector<DevToolsURLLoaderInterceptor::Pattern>* result) {
   result->clear();
-  if (!maybe_patterns.isJust()) {
+  if (!maybe_patterns) {
     result->emplace_back("*", base::flat_set<blink::mojom::ResourceType>(),
-                         DevToolsURLLoaderInterceptor::REQUEST);
+                         DevToolsURLLoaderInterceptor::kRequest);
     return Response::Success();
   }
-  Array<Fetch::RequestPattern>& patterns = *maybe_patterns.fromJust();
-  for (const std::unique_ptr<Fetch::RequestPattern>& pattern : patterns) {
+  for (const auto& pattern : *maybe_patterns) {
     base::flat_set<blink::mojom::ResourceType> resource_types;
     std::string resource_type = pattern->GetResourceType("");
     if (!resource_type.empty()) {
@@ -90,15 +98,19 @@ bool FetchHandler::MaybeCreateProxyForInterception(
     const base::UnguessableToken& frame_token,
     bool is_navigation,
     bool is_download,
-    network::mojom::URLLoaderFactoryOverride* intercepting_factory) {
-  return interceptor_ && interceptor_->CreateProxyForInterception(
-                             process_id, storage_partition, frame_token,
-                             is_navigation, is_download, intercepting_factory);
+    network::mojom::URLLoaderFactoryOverride* intercepting_factory,
+    mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>*
+        header_client) {
+  return interceptor_ &&
+         interceptor_->CreateProxyForInterception(
+             process_id, storage_partition, frame_token, is_navigation,
+             is_download, intercepting_factory, header_client);
 }
 
-void FetchHandler::Enable(Maybe<Array<Fetch::RequestPattern>> patterns,
-                          Maybe<bool> handleAuth,
-                          std::unique_ptr<EnableCallback> callback) {
+void FetchHandler::Enable(
+    std::unique_ptr<Array<Fetch::RequestPattern>> patterns,
+    std::optional<bool> handleAuth,
+    std::unique_ptr<EnableCallback> callback) {
   if (!interceptor_) {
     interceptor_ =
         std::make_unique<DevToolsURLLoaderInterceptor>(base::BindRepeating(
@@ -110,13 +122,13 @@ void FetchHandler::Enable(Maybe<Array<Fetch::RequestPattern>> patterns,
     callback->sendFailure(response);
     return;
   }
-  if (!interception_patterns.size() && handleAuth.fromMaybe(false)) {
+  if (!interception_patterns.size() && handleAuth.value_or(false)) {
     callback->sendFailure(Response::InvalidParams(
         "Can\'t specify empty patterns with handleAuth set"));
     return;
   }
   interceptor_->SetPatterns(std::move(interception_patterns),
-                            handleAuth.fromMaybe(false));
+                            handleAuth.value_or(false));
   update_loader_factories_callback_.Run(
       base::BindOnce(&EnableCallback::sendSuccess, std::move(callback)));
 }
@@ -124,8 +136,9 @@ void FetchHandler::Enable(Maybe<Array<Fetch::RequestPattern>> patterns,
 Response FetchHandler::Disable() {
   const bool was_enabled = !!interceptor_;
   interceptor_.reset();
-  if (was_enabled)
+  if (was_enabled) {
     update_loader_factories_callback_.Run(base::DoNothing());
+  }
   return Response::Success();
 }
 
@@ -166,7 +179,22 @@ template <typename Callback>
 bool ValidateHeaders(Fetch::HeaderEntry* entry, Callback* callback) {
   if (!net::HttpUtil::IsValidHeaderName(entry->GetName()) ||
       !net::HttpUtil::IsValidHeaderValue(entry->GetValue())) {
-    callback->sendFailure(Response::InvalidParams("Invalid header"));
+    callback->sendFailure(
+        Response::InvalidParams("Invalid header: " + entry->GetName()));
+    return false;
+  }
+  return true;
+}
+
+bool ValidateHeadersForRequest(
+    Fetch::HeaderEntry* entry,
+    Fetch::Backend::ContinueRequestCallback* callback) {
+  if (!ValidateHeaders(entry, callback)) {
+    return false;
+  }
+  if (!network::IsRequestHeaderSafe(entry->GetName(), entry->GetValue())) {
+    callback->sendFailure(
+        Response::InvalidParams("Unsafe header: " + entry->GetName()));
     return false;
   }
   return true;
@@ -188,27 +216,33 @@ void FetchHandler::FailRequest(const String& requestId,
   }
   auto modifications =
       std::make_unique<DevToolsURLLoaderInterceptor::Modifications>(reason);
+  did_modifications_ = true;
   interceptor_->ContinueInterceptedRequest(requestId, std::move(modifications),
                                            WrapCallback(std::move(callback)));
 }
 
+namespace {
+std::string GetReasonPhrase(int response_code) {
+  return std::string(
+      net::GetHttpReasonPhrase(response_code, /*default_value=*/""));
+}
+}  // namespace
+
 void FetchHandler::FulfillRequest(
     const String& requestId,
     int responseCode,
-    Maybe<Array<Fetch::HeaderEntry>> responseHeaders,
-    Maybe<Binary> binaryResponseHeaders,
-    Maybe<Binary> body,
-    Maybe<String> responsePhrase,
+    std::unique_ptr<Array<Fetch::HeaderEntry>> responseHeaders,
+    std::optional<Binary> binaryResponseHeaders,
+    std::optional<Binary> body,
+    std::optional<String> responsePhrase,
     std::unique_ptr<FulfillRequestCallback> callback) {
   if (!interceptor_) {
     callback->sendFailure(Response::ServerError("Fetch domain is not enabled"));
     return;
   }
-  std::string status_phrase =
-      responsePhrase.isJust()
-          ? responsePhrase.fromJust()
-          : net::GetHttpReasonPhrase(
-                static_cast<net::HttpStatusCode>(responseCode));
+  const std::string status_phrase = responsePhrase.has_value()
+                                        ? responsePhrase.value()
+                                        : GetReasonPhrase(responseCode);
   if (status_phrase.empty()) {
     callback->sendFailure(
         Response::InvalidParams("Invalid http status code or phrase"));
@@ -217,43 +251,46 @@ void FetchHandler::FulfillRequest(
   std::string headers =
       base::StringPrintf("HTTP/1.1 %d %s", responseCode, status_phrase.c_str());
   headers.append(1, '\0');
-  if (responseHeaders.isJust()) {
-    if (binaryResponseHeaders.isJust()) {
+  if (responseHeaders) {
+    if (binaryResponseHeaders) {
       callback->sendFailure(Response::InvalidParams(
           "Only one of responseHeaders or binaryHeaders may be present"));
       return;
     }
-    for (const auto& entry : *responseHeaders.fromJust()) {
-      if (!ValidateHeaders(entry.get(), callback.get()))
+    for (const auto& entry : *responseHeaders) {
+      if (!ValidateHeaders(entry.get(), callback.get())) {
         return;
+      }
       headers.append(entry->GetName());
       headers.append(":");
       headers.append(entry->GetValue());
       headers.append(1, '\0');
     }
-  } else if (binaryResponseHeaders.isJust()) {
-    Binary response_headers = binaryResponseHeaders.fromJust();
+  } else if (binaryResponseHeaders) {
+    Binary response_headers = std::move(*binaryResponseHeaders);
     headers.append(reinterpret_cast<const char*>(response_headers.data()),
                    response_headers.size());
-    if (headers.back() != '\0')
+    if (headers.back() != '\0') {
       headers.append(1, '\0');
+    }
   }
   headers.append(1, '\0');
   auto modifications =
       std::make_unique<DevToolsURLLoaderInterceptor::Modifications>(
           base::MakeRefCounted<net::HttpResponseHeaders>(headers),
-          body.isJust() ? body.fromJust().bytes() : nullptr);
+          body ? body->bytes() : nullptr);
+  did_modifications_ = true;
   interceptor_->ContinueInterceptedRequest(requestId, std::move(modifications),
                                            WrapCallback(std::move(callback)));
 }
 
 void FetchHandler::ContinueRequest(
     const String& requestId,
-    Maybe<String> url,
-    Maybe<String> method,
-    Maybe<protocol::Binary> postData,
-    Maybe<Array<Fetch::HeaderEntry>> headers,
-    Maybe<bool> interceptResponse,
+    std::optional<String> url,
+    std::optional<String> method,
+    std::optional<protocol::Binary> postData,
+    std::unique_ptr<Array<Fetch::HeaderEntry>> headers,
+    std::optional<bool> interceptResponse,
     std::unique_ptr<ContinueRequestCallback> callback) {
   if (!interceptor_) {
     callback->sendFailure(Response::ServerError("Fetch domain is not enabled"));
@@ -261,16 +298,18 @@ void FetchHandler::ContinueRequest(
   }
   std::unique_ptr<DevToolsURLLoaderInterceptor::Modifications::HeadersVector>
       request_headers;
-  if (headers.isJust()) {
+  if (headers) {
     request_headers = std::make_unique<
         DevToolsURLLoaderInterceptor::Modifications::HeadersVector>();
-    for (const std::unique_ptr<Fetch::HeaderEntry>& entry :
-         *headers.fromJust()) {
-      if (!ValidateHeaders(entry.get(), callback.get()))
+    for (const auto& entry : *headers) {
+      if (!ValidateHeadersForRequest(entry.get(), callback.get())) {
         return;
+      }
       request_headers->emplace_back(entry->GetName(), entry->GetValue());
     }
   }
+  did_modifications_ = url.has_value() || method.has_value() ||
+                       postData.has_value() || request_headers;
   auto modifications =
       std::make_unique<DevToolsURLLoaderInterceptor::Modifications>(
           std::move(url), std::move(method), std::move(postData),
@@ -311,33 +350,33 @@ void FetchHandler::ContinueWithAuth(
   auto modifications =
       std::make_unique<DevToolsURLLoaderInterceptor::Modifications>(
           std::move(auth_response));
+  did_modifications_ = true;
   interceptor_->ContinueInterceptedRequest(requestId, std::move(modifications),
                                            WrapCallback(std::move(callback)));
 }
 
 void FetchHandler::ContinueResponse(
     const String& requestId,
-    Maybe<int> responseCode,
-    Maybe<String> responsePhrase,
-    Maybe<Array<Fetch::HeaderEntry>> responseHeaders,
-    Maybe<Binary> binaryResponseHeaders,
+    std::optional<int> responseCode,
+    std::optional<String> responsePhrase,
+    std::unique_ptr<Array<Fetch::HeaderEntry>> responseHeaders,
+    std::optional<Binary> binaryResponseHeaders,
     std::unique_ptr<ContinueResponseCallback> callback) {
   if (!interceptor_) {
     callback->sendFailure(Response::ServerError("Fetch domain is not enabled"));
     return;
   }
-  if (responseCode.isJust() &&
-      (responseHeaders.isJust() || binaryResponseHeaders.isJust())) {
+  if (responseCode.has_value() && (responseHeaders || binaryResponseHeaders)) {
     auto wrapped_callback = std::make_unique<
         CallbackWrapper<ContinueResponseCallback, FulfillRequestCallback>>(
         std::move(callback));
-    FulfillRequest(requestId, responseCode.fromJust(),
-                   std::move(responseHeaders), std::move(binaryResponseHeaders),
-                   {}, std::move(responsePhrase), std::move(wrapped_callback));
+    FulfillRequest(requestId, *responseCode, std::move(responseHeaders),
+                   std::move(binaryResponseHeaders), {},
+                   std::move(responsePhrase), std::move(wrapped_callback));
     return;
   }
-  if (!responseCode.isJust() && !responsePhrase.isJust() &&
-      !responseHeaders.isJust() && !binaryResponseHeaders.isJust()) {
+  if (!responseCode.has_value() && !responsePhrase.has_value() &&
+      !responseHeaders && !binaryResponseHeaders) {
     interceptor_->ContinueInterceptedRequest(
         requestId,
         std::make_unique<DevToolsURLLoaderInterceptor::Modifications>(),
@@ -387,9 +426,7 @@ void FetchHandler::OnResponseBodyPipeTaken(
     return;
   }
   // The pipe stream is owned only by io_context after we return.
-  bool is_binary = !DevToolsIOContext::IsTextMimeType(mime_type);
-  auto stream =
-      DevToolsStreamPipe::Create(io_context_, std::move(pipe), is_binary);
+  auto stream = DevToolsStreamPipe::Create(io_context_, std::move(pipe));
   callback->sendSuccess(stream->handle());
 }
 
@@ -412,13 +449,14 @@ std::unique_ptr<Array<Fetch::HeaderEntry>> ToHeaderEntryArray(
 
 void FetchHandler::RequestIntercepted(
     std::unique_ptr<InterceptedRequestInfo> info) {
-  protocol::Maybe<protocol::Network::ErrorReason> error_reason;
-  if (info->response_error_code < 0)
+  std::optional<protocol::Network::ErrorReason> error_reason;
+  if (info->response_error_code < 0) {
     error_reason = NetworkHandler::NetErrorToString(info->response_error_code);
+  }
 
-  Maybe<int> status_code;
-  Maybe<std::string> status_text;
-  Maybe<Array<Fetch::HeaderEntry>> response_headers;
+  std::optional<int> status_code;
+  std::optional<std::string> status_text;
+  std::unique_ptr<Array<Fetch::HeaderEntry>> response_headers;
   if (info->response_headers) {
     status_code = info->response_headers->response_code();
     status_text = info->response_headers->GetStatusText();

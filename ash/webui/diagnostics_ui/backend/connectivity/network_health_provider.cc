@@ -8,18 +8,20 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/system/diagnostics/diagnostics_log_controller.h"
 #include "ash/system/diagnostics/networking_log.h"
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
-#include "chromeos/services/network_config/in_process_instance.h"
+#include "base/uuid.h"
+#include "chromeos/ash/services/network_config/in_process_instance.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 
 namespace ash {
 namespace diagnostics {
+
 namespace {
 
 namespace network_mojom = ::chromeos::network_config::mojom;
@@ -225,8 +227,7 @@ bool ClearDisconnectedNetwork(NetworkObserverInfo* network_info) {
   return true;
 }
 
-mojom::RoamingState GetRoamingState(
-    absl::optional<std::string>& roaming_state) {
+mojom::RoamingState GetRoamingState(std::optional<std::string>& roaming_state) {
   if (!roaming_state.has_value()) {
     return mojom::RoamingState::kNone;
   }
@@ -239,13 +240,24 @@ mojom::RoamingState GetRoamingState(
 }
 
 constexpr mojom::LockType GetLockType(const std::string& lock_type) {
-  // Possible values are 'sim-pin', 'sim-puk' or empty.
+  // Possible values are 'sim-pin', 'sim-puk', 'network-pin' or empty.
   if (lock_type.empty()) {
     return mojom::LockType::kNone;
   }
-  DCHECK(lock_type == "sim-pin" || lock_type == "sim-puk");
-  return lock_type == "sim-pin" ? mojom::LockType::kSimPin
-                                : mojom::LockType::kSimPuk;
+
+  DCHECK(lock_type == "sim-pin" || lock_type == "sim-puk" ||
+         lock_type == "network-pin");
+
+  if (lock_type == "sim-pin") {
+    return mojom::LockType::kSimPin;
+  }
+  if (lock_type == "sim-puk") {
+    return mojom::LockType::kSimPuk;
+  }
+  if (lock_type == "network-pin") {
+    return mojom::LockType::kNetworkPin;
+  }
+  return mojom::LockType::kNone;
 }
 
 void UpdateNetwork(
@@ -279,7 +291,6 @@ void UpdateNetwork(
     }
     case mojom::NetworkType::kUnsupported:
       NOTREACHED();
-      break;
   }
 }
 
@@ -386,12 +397,16 @@ int GetScoreForNetwork(const mojom::NetworkPtr& network) {
            {mojom::NetworkType::kCellular, 1}});
 
   int state_priority = 0;
-  if (base::Contains(kNetworkStatePriorityMap, network->state)) {
+  if (kNetworkStatePriorityMap.contains(network->state)) {
     state_priority += kNetworkStatePriorityMap.at(network->state);
   }
 
-  DCHECK(base::Contains(kNetworkTypePriorityMap, network->type));
+  DCHECK(kNetworkTypePriorityMap.contains(network->type));
   return kNetworkTypePriorityMap.at(network->type) + state_priority;
+}
+
+bool IsLoggingEnabled() {
+  return diagnostics::DiagnosticsLogController::IsInitialized();
 }
 
 }  // namespace
@@ -402,11 +417,7 @@ NetworkObserverInfo& NetworkObserverInfo::operator=(NetworkObserverInfo&&) =
     default;
 NetworkObserverInfo::~NetworkObserverInfo() = default;
 
-NetworkHealthProvider::NetworkHealthProvider()
-    : NetworkHealthProvider(/*networking_log_ptr_=*/nullptr) {}
-
-NetworkHealthProvider::NetworkHealthProvider(NetworkingLog* networking_log_ptr)
-    : networking_log_ptr_(networking_log_ptr) {
+NetworkHealthProvider::NetworkHealthProvider() {
   network_config::BindToInProcessInstance(
       remote_cros_network_config_.BindNewPipeAndPassReceiver());
   remote_cros_network_config_->AddObserver(
@@ -525,7 +536,7 @@ void NetworkHealthProvider::OnDeviceStateListReceived(
   // Remove any entry in |networks_| that doesn't match a device.
   for (auto it = networks_.begin(); it != networks_.end();) {
     const std::string& observer_guid = it->first;
-    if (!base::Contains(networks_seen, observer_guid)) {
+    if (!networks_seen.contains(observer_guid)) {
       it = networks_.erase(it);
       continue;
     }
@@ -542,8 +553,9 @@ void NetworkHealthProvider::OnDeviceStateListReceived(
 }
 
 std::string NetworkHealthProvider::AddNewNetwork(
-    const chromeos::network_config::mojom::DeviceStatePropertiesPtr& device) {
-  std::string observer_guid = base::GenerateGUID();
+    const network_mojom::DeviceStatePropertiesPtr& device) {
+  std::string observer_guid =
+      base::Uuid::GenerateRandomV4().AsLowercaseString();
   auto network = mojom::Network::New();
   network->observer_guid = observer_guid;
 
@@ -632,7 +644,6 @@ void NetworkHealthProvider::OnManagedPropertiesReceived(
 
 void NetworkHealthProvider::BindInterface(
     mojo::PendingReceiver<mojom::NetworkHealthProvider> pending_receiver) {
-  DCHECK(features::IsNetworkingInDiagnosticsAppEnabled());
   receiver_.reset();
   receiver_.Bind(std::move(pending_receiver));
 }
@@ -644,8 +655,9 @@ void NetworkHealthProvider::NotifyNetworkListObservers() {
     observer->OnNetworkListChanged(mojo::Clone(observer_guids), active_guid_);
   }
 
-  if (IsLoggingEnabled()) {
-    networking_log_ptr_->UpdateNetworkList(observer_guids, active_guid_);
+  if (IsLoggingEnabled() && !active_guid_.empty()) {
+    DiagnosticsLogController::Get()->GetNetworkingLog().UpdateNetworkList(
+        observer_guids, active_guid_);
   }
 }
 
@@ -659,7 +671,8 @@ void NetworkHealthProvider::NotifyNetworkStateObserver(
       mojo::Clone(network_info.network));
 
   if (IsLoggingEnabled()) {
-    networking_log_ptr_->UpdateNetworkState(network_info.network.Clone());
+    DiagnosticsLogController::Get()->GetNetworkingLog().UpdateNetworkState(
+        network_info.network.Clone());
   }
 }
 
@@ -676,15 +689,6 @@ void NetworkHealthProvider::GetDeviceState() {
   remote_cros_network_config_->GetDeviceStateList(
       base::BindOnce(&NetworkHealthProvider::OnDeviceStateListReceived,
                      base::Unretained(this)));
-}
-
-void NetworkHealthProvider::SetNetworkingLogForTesting(
-    NetworkingLog* networking_log_ptr) {
-  networking_log_ptr_ = networking_log_ptr;
-}
-
-bool NetworkHealthProvider::IsLoggingEnabled() const {
-  return networking_log_ptr_ != nullptr;
 }
 
 mojom::NetworkState NetworkHealthProvider::GetNetworkStateForGuid(

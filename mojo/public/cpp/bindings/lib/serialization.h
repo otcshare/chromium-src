@@ -5,11 +5,9 @@
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_LIB_SERIALIZATION_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_LIB_SERIALIZATION_H_
 
-#include <string.h>
-
 #include <type_traits>
 
-#include "base/numerics/safe_math.h"
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/bindings/array_traits_span.h"
 #include "mojo/public/cpp/bindings/array_traits_stl.h"
 #include "mojo/public/cpp/bindings/lib/array_serialization.h"
@@ -29,14 +27,12 @@
 namespace mojo {
 namespace internal {
 
-template <typename MojomType, typename EnableType = void>
+template <typename MojomType>
 struct MojomSerializationImplTraits;
 
 template <typename MojomType>
-struct MojomSerializationImplTraits<
-    MojomType,
-    typename std::enable_if<
-        BelongsTo<MojomType, MojomTypeCategory::kStruct>::value>::type> {
+  requires(BelongsTo<MojomType, MojomTypeCategory::kStruct>::value)
+struct MojomSerializationImplTraits<MojomType> {
   template <typename MaybeConstUserType, typename FragmentType>
   static void Serialize(MaybeConstUserType& input, FragmentType& fragment) {
     mojo::internal::Serialize<MojomType>(input, fragment);
@@ -44,10 +40,8 @@ struct MojomSerializationImplTraits<
 };
 
 template <typename MojomType>
-struct MojomSerializationImplTraits<
-    MojomType,
-    typename std::enable_if<
-        BelongsTo<MojomType, MojomTypeCategory::kUnion>::value>::type> {
+  requires(BelongsTo<MojomType, MojomTypeCategory::kUnion>::value)
+struct MojomSerializationImplTraits<MojomType> {
   template <typename MaybeConstUserType, typename FragmentType>
   static void Serialize(MaybeConstUserType& input, FragmentType& fragment) {
     mojo::internal::Serialize<MojomType>(input, fragment, false /* inline */);
@@ -75,8 +69,9 @@ DataArrayType SerializeImpl(UserType* input) {
   Message message = SerializeAsMessageImpl<MojomType>(input);
   uint32_t size = message.payload_num_bytes();
   DataArrayType result(size);
-  if (size)
-    memcpy(&result.front(), message.payload(), size);
+  if (size) {
+    UNSAFE_TODO(memcpy(&result.front(), message.payload(), size));
+  }
   return result;
 }
 
@@ -101,7 +96,7 @@ bool DeserializeImpl(Message& message,
   if (need_copy) {
     aligned_input_buffer = malloc(data_num_bytes);
     DCHECK(IsAligned(aligned_input_buffer));
-    memcpy(aligned_input_buffer, data, data_num_bytes);
+    UNSAFE_TODO(memcpy(aligned_input_buffer, data, data_num_bytes));
     input_buffer = aligned_input_buffer;
   }
 
@@ -116,8 +111,9 @@ bool DeserializeImpl(Message& message,
         &message);
   }
 
-  if (aligned_input_buffer)
+  if (aligned_input_buffer) {
     free(aligned_input_buffer);
+  }
 
   return result;
 }

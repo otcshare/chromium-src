@@ -10,7 +10,6 @@
 #include "components/download/public/common/download_url_parameters.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace download {
 
@@ -47,18 +46,9 @@ InProgressInfo CreateInProgressInfo() {
   info.bytes_wasted = 1234;
   info.auto_resume_count = 3;
   info.fetch_error_body = true;
-  info.request_headers.emplace_back(
-      std::make_pair<std::string, std::string>("123", "456"));
-  info.request_headers.emplace_back(
-      std::make_pair<std::string, std::string>("ABC", "def"));
+  info.request_headers.emplace_back("123", "456");
+  info.request_headers.emplace_back("ABC", "def");
   info.credentials_mode = ::network::mojom::CredentialsMode::kOmit;
-  return info;
-}
-
-InProgressInfo CreateInProgressInfoWithRerouteInfo(
-    DownloadItemRerouteInfo reroute_info) {
-  InProgressInfo info = CreateInProgressInfo();
-  info.reroute_info = std::move(reroute_info);
   return info;
 }
 
@@ -90,10 +80,8 @@ TEST_F(DownloadDBConversionsTest, DownloadEntry) {
   entry.ukm_download_id = 123;
   entry.bytes_wasted = 1234;
   entry.fetch_error_body = true;
-  entry.request_headers.emplace_back(
-      std::make_pair<std::string, std::string>("123", "456"));
-  entry.request_headers.emplace_back(
-      std::make_pair<std::string, std::string>("ABC", "def"));
+  entry.request_headers.emplace_back("123", "456");
+  entry.request_headers.emplace_back("ABC", "def");
   EXPECT_EQ(entry, DownloadEntryFromProto(DownloadEntryToProto(entry)));
 }
 
@@ -104,17 +92,14 @@ TEST_F(DownloadDBConversionsTest, DownloadEntries) {
 
   // Entries vector with one entry.
   DownloadUrlParameters::RequestHeadersType request_headers;
-  entries.push_back(DownloadEntry("guid", "request origin",
-                                  DownloadSource::UNKNOWN, false,
-                                  request_headers, 123));
+  entries.emplace_back("guid", "request origin", DownloadSource::UNKNOWN, false,
+                       request_headers, 123);
   EXPECT_EQ(entries, DownloadEntriesFromProto(DownloadEntriesToProto(entries)));
 
   // Entries vector with multiple entries.
-  request_headers.emplace_back(
-      DownloadUrlParameters::RequestHeadersNameValuePair("key", "value"));
-  entries.push_back(DownloadEntry("guid2", "request origin",
-                                  DownloadSource::UNKNOWN, true,
-                                  request_headers, 456));
+  request_headers.emplace_back("key", "value");
+  entries.emplace_back("guid2", "request origin", DownloadSource::UNKNOWN, true,
+                       request_headers, 456);
   EXPECT_EQ(entries, DownloadEntriesFromProto(DownloadEntriesToProto(entries)));
 }
 
@@ -155,19 +140,6 @@ TEST_F(DownloadDBConversionsTest, InProgressInfo) {
   info.range_request_from = 5;
   info.range_request_from = 10;
   EXPECT_EQ(info, InProgressInfoFromProto(InProgressInfoToProto(info)));
-}
-
-TEST_F(DownloadDBConversionsTest, RerouteInfo) {
-  DownloadItemRerouteInfo reroute_info;
-  reroute_info.set_service_provider(
-      enterprise_connectors::FileSystemServiceProvider::BOX);
-  reroute_info.mutable_box()->set_file_id("12345");
-
-  // InProgressInfo with valid fields.
-  InProgressInfo info = CreateInProgressInfoWithRerouteInfo(reroute_info);
-  EXPECT_EQ(info, InProgressInfoFromProto(InProgressInfoToProto(info)));
-  EXPECT_EQ(reroute_info.SerializeAsString(),
-            info.reroute_info.SerializeAsString());
 }
 
 TEST_F(DownloadDBConversionsTest, UkmInfo) {

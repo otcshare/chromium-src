@@ -27,16 +27,19 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "v8/include/v8-profiler.h"
 #include "v8/include/v8.h"
@@ -53,8 +56,9 @@ const v8::HeapGraphNode* GetProperty(v8::Isolate* isolate,
     const v8::HeapGraphEdge* prop = node->GetChild(i);
     if (prop->GetType() == type) {
       v8::String::Utf8Value prop_name(isolate, prop->GetName());
-      if (!strcmp(name, *prop_name))
+      if (!UNSAFE_TODO(strcmp(name, *prop_name))) {
         return prop->GetToNode();
+      }
     }
   }
   return nullptr;
@@ -72,15 +76,16 @@ int GetNumObjects(v8::Isolate* isolate, const char* constructor) {
     if (node->GetType() != v8::HeapGraphNode::kObject)
       continue;
     v8::String::Utf8Value node_name(isolate, node->GetName());
-    if (!strcmp(constructor, *node_name)) {
+    if (!UNSAFE_TODO(strcmp(constructor, *node_name))) {
       const v8::HeapGraphNode* constructor_prop = GetProperty(
           isolate, node, v8::HeapGraphEdge::kProperty, "constructor");
       // Skip an Object instance named after the constructor.
       if (constructor_prop) {
         v8::String::Utf8Value constructor_name(isolate,
                                                constructor_prop->GetName());
-        if (!strcmp(constructor, *constructor_name))
+        if (!UNSAFE_TODO(strcmp(constructor, *constructor_name))) {
           continue;
+        }
       }
       ++count;
     }
@@ -111,6 +116,7 @@ class ListenerLeakTest : public testing::Test {
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   frame_test_helpers::WebViewHelper web_view_helper;
 };
 

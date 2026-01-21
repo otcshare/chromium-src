@@ -5,35 +5,40 @@
 #include "device/fido/cable/fido_cable_device.h"
 
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/command_line.h"
+#include "base/check.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "crypto/aead.h"
 #include "device/bluetooth/test/bluetooth_test.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "device/fido/cable/mock_fido_ble_connection.h"
 #include "device/fido/fido_parsing_utils.h"
-#include "device/fido/test_callback_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
 namespace {
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::Test;
-using TestDeviceCallbackReceiver =
-    test::ValueCallbackReceiver<absl::optional<std::vector<uint8_t>>>;
+using TestDeviceFuture =
+    base::test::TestFuture<std::optional<std::vector<uint8_t>>>;
 using NiceMockBluetoothAdapter = ::testing::NiceMock<MockBluetoothAdapter>;
 
 // Sufficiently large test control point length as we are not interested
@@ -95,7 +100,7 @@ class FakeCableAuthenticator {
 
     std::string ciphertext;
     aead.Seal(
-        message, fido_parsing_utils::ConvertToStringPiece(encryption_nonce),
+        message, base::as_string_view(encryption_nonce),
         std::string(1, base::strict_cast<uint8_t>(FidoBleDeviceCommand::kMsg)),
         &ciphertext);
     authenticator_counter_++;
@@ -116,8 +121,7 @@ class FakeCableAuthenticator {
 
     std::string ciphertext;
     aead.Open(
-        fido_parsing_utils::ConvertToStringPiece(message),
-        fido_parsing_utils::ConvertToStringPiece(encryption_nonce),
+        base::as_string_view(message), base::as_string_view(encryption_nonce),
         std::string(1, base::strict_cast<uint8_t>(FidoBleDeviceCommand::kMsg)),
         &ciphertext);
     expected_client_counter_++;
@@ -146,12 +150,12 @@ class FidoCableDeviceTest : public Test {
   }
 
   void ConnectWithLength(uint16_t length) {
-    EXPECT_CALL(*connection(), ConnectPtr).WillOnce(Invoke([](auto* callback) {
+    EXPECT_CALL(*connection(), ConnectPtr).WillOnce([](auto* callback) {
       std::move(*callback).Run(true);
-    }));
+    });
 
     EXPECT_CALL(*connection(), ReadControlPointLengthPtr(_))
-        .WillOnce(Invoke([length](auto* cb) { std::move(*cb).Run(length); }));
+        .WillOnce([length](auto* cb) { std::move(*cb).Run(length); });
 
     device()->Connect();
   }
@@ -168,14 +172,14 @@ class FidoCableDeviceTest : public Test {
   scoped_refptr<MockBluetoothAdapter> adapter_ =
       base::MakeRefCounted<NiceMockBluetoothAdapter>();
   FakeCableAuthenticator authenticator_;
-  raw_ptr<MockFidoBleConnection> connection_;
+  raw_ptr<MockFidoBleConnection, DanglingUntriaged> connection_;
   std::unique_ptr<FidoCableDevice> device_;
 };
 
 TEST_F(FidoCableDeviceTest, ConnectionFailureTest) {
-  EXPECT_CALL(*connection(), ConnectPtr).WillOnce(Invoke([](auto* callback) {
+  EXPECT_CALL(*connection(), ConnectPtr).WillOnce([](auto* callback) {
     std::move(*callback).Run(false);
-  }));
+  });
 
   device()->Connect();
 }
@@ -192,40 +196,40 @@ TEST_F(FidoCableDeviceTest, GetIdTest) {
 
 TEST_F(FidoCableDeviceTest, Timeout) {
   EXPECT_CALL(*connection(), ConnectPtr);
-  TestDeviceCallbackReceiver callback_receiver;
-  device()->SendPing(std::vector<uint8_t>(), callback_receiver.callback());
+  TestDeviceFuture future;
+  device()->SendPing(std::vector<uint8_t>(), future.GetCallback());
 
   task_environment_.FastForwardUntilNoTasksRemain();
   EXPECT_EQ(FidoDevice::State::kDeviceError, device()->state_for_testing());
-  EXPECT_TRUE(callback_receiver.was_called());
-  EXPECT_FALSE(callback_receiver.value());
+  EXPECT_TRUE(future.IsReady());
+  EXPECT_FALSE(future.Get());
 }
 
 TEST_F(FidoCableDeviceTest, TestCaBleDeviceSendData) {
   ConnectWithLength(kControlPointLength);
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
-      .WillRepeatedly(Invoke([this](const auto& data, auto* cb) {
+      .WillRepeatedly([this](const auto& data, auto* cb) {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
 
         const auto authenticator_reply = authenticator()->ReplyWithSameMessage(
-            base::make_span(data).subspan(kCTAPFramingLength));
+            base::span(data).template subspan<kCTAPFramingLength>());
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(connection()->read_callback(),
                                       ConstructSerializedOutgoingFragment(
                                           authenticator_reply)));
-      }));
+      });
 
   for (size_t i = 0; i < 3; i++) {
     SCOPED_TRACE(i);
 
-    TestDeviceCallbackReceiver callback_receiver;
+    TestDeviceFuture future;
     device()->DeviceTransact(fido_parsing_utils::Materialize(kTestData),
-                             callback_receiver.callback());
+                             future.GetCallback());
 
-    callback_receiver.WaitForCallback();
-    const auto& value = callback_receiver.value();
+    EXPECT_TRUE(future.Wait());
+    const auto& value = future.Get();
     ASSERT_TRUE(value);
     EXPECT_THAT(*value, ::testing::ElementsAreArray(kTestData));
   }
@@ -236,27 +240,26 @@ TEST_F(FidoCableDeviceTest, TestCableDeviceFailOnIncorrectSessionKey) {
   ConnectWithLength(kControlPointLength);
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
-      .WillOnce(Invoke([this, &kIncorrectSessionKey](const auto& data,
-                                                     auto* cb) {
+      .WillOnce([this, &kIncorrectSessionKey](const auto& data, auto* cb) {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
 
         authenticator()->SetSessionKey(kIncorrectSessionKey);
         const auto authenticator_reply = authenticator()->ReplyWithSameMessage(
-            base::make_span(data).subspan(kCTAPFramingLength));
+            base::span(data).template subspan<kCTAPFramingLength>());
 
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(connection()->read_callback(),
                                       ConstructSerializedOutgoingFragment(
                                           authenticator_reply)));
-      }));
+      });
 
-  TestDeviceCallbackReceiver callback_receiver;
+  TestDeviceFuture future;
   device()->DeviceTransact(fido_parsing_utils::Materialize(kTestData),
-                           callback_receiver.callback());
+                           future.GetCallback());
 
-  callback_receiver.WaitForCallback();
-  const auto& value = callback_receiver.value();
+  EXPECT_TRUE(future.Wait());
+  const auto& value = future.Get();
   EXPECT_FALSE(value);
 }
 
@@ -265,27 +268,27 @@ TEST_F(FidoCableDeviceTest, TestCableDeviceFailOnUnexpectedCounter) {
   ConnectWithLength(kControlPointLength);
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
-      .WillOnce(Invoke([this](const auto& data, auto* cb) {
+      .WillOnce([this](const auto& data, auto* cb) {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
 
         authenticator()->SetAuthenticatorCounter(
             kIncorrectAuthenticatorCounter);
         const auto authenticator_reply = authenticator()->ReplyWithSameMessage(
-            base::make_span(data).subspan(kCTAPFramingLength));
+            base::span(data).template subspan<kCTAPFramingLength>());
 
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(connection()->read_callback(),
                                       ConstructSerializedOutgoingFragment(
                                           authenticator_reply)));
-      }));
+      });
 
-  TestDeviceCallbackReceiver callback_receiver;
+  TestDeviceFuture future;
   device()->DeviceTransact(fido_parsing_utils::Materialize(kTestData),
-                           callback_receiver.callback());
+                           future.GetCallback());
 
-  callback_receiver.WaitForCallback();
-  const auto& value = callback_receiver.value();
+  EXPECT_TRUE(future.Wait());
+  const auto& value = future.Get();
   EXPECT_FALSE(value);
 }
 
@@ -298,27 +301,27 @@ TEST_F(FidoCableDeviceTest, TestCableDeviceErrorOnMaxCounter) {
   ConnectWithLength(kControlPointLength);
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
-      .WillOnce(Invoke([this](const auto& data, auto* cb) {
+      .WillOnce([this](const auto& data, auto* cb) {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
 
         authenticator()->SetAuthenticatorCounter(kInvalidCounter);
         const auto authenticator_reply = authenticator()->ReplyWithSameMessage(
-            base::make_span(data).subspan(kCTAPFramingLength));
+            base::span(data).template subspan<kCTAPFramingLength>());
 
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, base::BindOnce(connection()->read_callback(),
                                       ConstructSerializedOutgoingFragment(
                                           authenticator_reply)));
-      }));
+      });
 
-  TestDeviceCallbackReceiver callback_receiver;
+  TestDeviceFuture future;
   device()->SetSequenceNumbersForTesting(kInvalidCounter, 0);
   device()->DeviceTransact(fido_parsing_utils::Materialize(kTestData),
-                           callback_receiver.callback());
+                           future.GetCallback());
 
-  callback_receiver.WaitForCallback();
-  const auto& value = callback_receiver.value();
+  EXPECT_TRUE(future.Wait());
+  const auto& value = future.Get();
   EXPECT_FALSE(value);
 }
 

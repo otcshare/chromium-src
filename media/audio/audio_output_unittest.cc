@@ -28,10 +28,6 @@
 #include "media/base/media_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "media/audio/android/audio_manager_android.h"
-#endif
-
 namespace media {
 
 class AudioOutputTest : public testing::TestWithParam<bool> {
@@ -43,26 +39,22 @@ class AudioOutputTest : public testing::TestWithParam<bool> {
         std::make_unique<AudioDeviceInfoAccessorForTests>(audio_manager_.get());
 #if BUILDFLAG(IS_ANDROID)
     // The only parameter is used to enable/disable AAudio.
-    should_use_aaudio_ = GetParam();
-    if (should_use_aaudio_) {
-      features_.InitAndEnableFeature(features::kUseAAudioDriver);
-
-      aaudio_is_supported_ =
-          reinterpret_cast<AudioManagerAndroid*>(audio_manager_.get())
-              ->IsUsingAAudioForTesting();
-    }
+    features_.InitWithFeatureState(features::kUseAAudioDriver, GetParam());
 #endif
     base::RunLoop().RunUntilIdle();
   }
   ~AudioOutputTest() override {
-    if (stream_)
+    if (stream_) {
       stream_->Close();
+    }
     audio_manager_->Shutdown();
   }
 
   void CreateWithDefaultParameters() {
-    stream_params_ =
-        audio_manager_device_info_->GetDefaultOutputStreamParameters();
+    std::string default_device_id =
+        audio_manager_device_info_->GetDefaultOutputDeviceID();
+    stream_params_ = audio_manager_device_info_->GetOutputStreamParameters(
+        default_device_id);
     stream_ = audio_manager_->MakeAudioOutputStream(
         stream_params_, std::string(), AudioManager::LogCallback());
   }
@@ -81,9 +73,7 @@ class AudioOutputTest : public testing::TestWithParam<bool> {
   std::unique_ptr<AudioManager> audio_manager_;
   std::unique_ptr<AudioDeviceInfoAccessorForTests> audio_manager_device_info_;
   AudioParameters stream_params_;
-  raw_ptr<AudioOutputStream> stream_ = nullptr;
-  bool should_use_aaudio_ = false;
-  bool aaudio_is_supported_ = false;
+  raw_ptr<AudioOutputStream, DanglingUntriaged> stream_ = nullptr;
 #if BUILDFLAG(IS_ANDROID)
   base::test::ScopedFeatureList features_;
 #endif
@@ -91,9 +81,6 @@ class AudioOutputTest : public testing::TestWithParam<bool> {
 
 // Test that can it be created and closed.
 TEST_P(AudioOutputTest, GetAndClose) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
   CreateWithDefaultParameters();
   ASSERT_TRUE(stream_);
@@ -101,9 +88,6 @@ TEST_P(AudioOutputTest, GetAndClose) {
 
 // Test that it can be opened and closed.
 TEST_P(AudioOutputTest, OpenAndClose) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
   CreateWithDefaultParameters();
@@ -113,9 +97,6 @@ TEST_P(AudioOutputTest, OpenAndClose) {
 
 // Verify that Stop() can be called before Start().
 TEST_P(AudioOutputTest, StopBeforeStart) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
   CreateWithDefaultParameters();
   EXPECT_TRUE(stream_->Open());
@@ -124,9 +105,6 @@ TEST_P(AudioOutputTest, StopBeforeStart) {
 
 // Verify that Stop() can be called more than once.
 TEST_P(AudioOutputTest, StopTwice) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
   CreateWithDefaultParameters();
   EXPECT_TRUE(stream_->Open());
@@ -138,14 +116,20 @@ TEST_P(AudioOutputTest, StopTwice) {
 }
 
 // This test produces actual audio for .25 seconds on the default device.
-TEST_P(AudioOutputTest, Play200HzTone) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
+#if BUILDFLAG(IS_IOS)
+// TODO(crbug.com/40283968): audio output unit startup fails with partition
+// alloc.
+#define MAYBE_Play200HzTone DISABLED_Play200HzTone
+#else
+#define MAYBE_Play200HzTone Play200HzTone
+#endif
+TEST_P(AudioOutputTest, MAYBE_Play200HzTone) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
+  std::string default_device_id =
+      audio_manager_device_info_->GetDefaultOutputDeviceID();
   stream_params_ =
-      audio_manager_device_info_->GetDefaultOutputStreamParameters();
+      audio_manager_device_info_->GetOutputStreamParameters(default_device_id);
   stream_ = audio_manager_->MakeAudioOutputStream(stream_params_, std::string(),
                                                   AudioManager::LogCallback());
   ASSERT_TRUE(stream_);
@@ -183,9 +167,6 @@ TEST_P(AudioOutputTest, Play200HzTone) {
 
 // Test that SetVolume() and GetVolume() work as expected.
 TEST_P(AudioOutputTest, VolumeControl) {
-  if (should_use_aaudio_ && !aaudio_is_supported_)
-    return;
-
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
   CreateWithDefaultParameters();

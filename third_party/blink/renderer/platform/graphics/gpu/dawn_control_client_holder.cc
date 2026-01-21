@@ -4,10 +4,21 @@
 
 #include "third_party/blink/renderer/platform/graphics/gpu/dawn_control_client_holder.h"
 
+#include <dawn/wire/WireClient.h>
+
 #include "base/check.h"
+#include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/strings/string_split.h"
+#include "base/task/single_thread_task_runner.h"
+#include "gpu/config/gpu_finch_features.h"
+#include "gpu/config/gpu_switches.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/webgpu_mailbox_texture.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_resource_provider_cache.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "ui/gl/buildflags.h"
 
 namespace blink {
 
@@ -26,7 +37,7 @@ scoped_refptr<DawnControlClientHolder> DawnControlClientHolder::Create(
   // shared memory. There may still be outstanding mapped GPUBuffers pointing to
   // this memory.
   dawn_control_client_holder->context_provider_->ContextProvider()
-      ->SetLostContextCallback(WTF::BindRepeating(
+      .SetLostContextCallback(blink::BindRepeating(
           &DawnControlClientHolder::MarkContextLost,
           dawn_control_client_holder->weak_ptr_factory_.GetWeakPtr()));
   return dawn_control_client_holder;
@@ -39,14 +50,20 @@ DawnControlClientHolder::DawnControlClientHolder(
           std::move(context_provider))),
       task_runner_(task_runner),
       api_channel_(context_provider_->ContextProvider()
-                       ->WebGPUInterface()
+                       .WebGPUInterface()
                        ->GetAPIChannel()),
-      procs_(api_channel_->GetProcs()),
       recyclable_resource_cache_(GetContextProviderWeakPtr(), task_runner) {}
 
 DawnControlClientHolder::~DawnControlClientHolder() = default;
 
 void DawnControlClientHolder::Destroy() {
+  // Dissociate all mailbox textures to ensure their scoped access objects are
+  // destroyed before the context is lost.
+  for (auto& mailbox_texture : mailbox_textures_) {
+    if (mailbox_texture) {
+      mailbox_texture->Dissociate();
+    }
+  }
   MarkContextLost();
 
   // Destroy the WebGPU context.
@@ -77,8 +94,8 @@ DawnControlClientHolder::GetContextProviderWeakPtr() const {
   return context_provider_->GetWeakPtr();
 }
 
-WGPUInstance DawnControlClientHolder::GetWGPUInstance() const {
-  return api_channel_->GetWGPUInstance();
+wgpu::Instance DawnControlClientHolder::GetWGPUInstance() const {
+  return wgpu::Instance(api_channel_->GetWGPUInstance());
 }
 
 void DawnControlClientHolder::MarkContextLost() {
@@ -94,40 +111,127 @@ bool DawnControlClientHolder::IsContextLost() const {
 }
 
 std::unique_ptr<RecyclableCanvasResource>
-DawnControlClientHolder::GetOrCreateCanvasResource(const SkImageInfo& info,
-                                                   bool is_origin_top_left) {
-  return recyclable_resource_cache_.GetOrCreateCanvasResource(
-      info, is_origin_top_left);
+DawnControlClientHolder::GetOrCreateCanvasResource(const SkImageInfo& info) {
+  return recyclable_resource_cache_.GetOrCreateCanvasResource(info);
 }
 
 void DawnControlClientHolder::Flush() {
   auto context_provider = GetContextProviderWeakPtr();
-  if (LIKELY(context_provider)) {
-    context_provider->ContextProvider()->WebGPUInterface()->FlushCommands();
+  if (context_provider) [[likely]] {
+    context_provider->ContextProvider().WebGPUInterface()->FlushCommands();
   }
 }
 
 void DawnControlClientHolder::EnsureFlush(scheduler::EventLoop& event_loop) {
   auto context_provider = GetContextProviderWeakPtr();
-  if (UNLIKELY(!context_provider))
+  if (!context_provider) [[unlikely]] {
     return;
+  }
   if (!context_provider->ContextProvider()
-           ->WebGPUInterface()
+           .WebGPUInterface()
            ->EnsureAwaitingFlush()) {
     // We've already enqueued a task to flush, or the command buffer
     // is empty. Do nothing.
     return;
   }
-  event_loop.EnqueueMicrotask(WTF::BindOnce(
+  event_loop.EnqueueMicrotask(blink::BindOnce(
       [](scoped_refptr<DawnControlClientHolder> dawn_control_client) {
         if (auto context_provider =
                 dawn_control_client->GetContextProviderWeakPtr()) {
           context_provider->ContextProvider()
-              ->WebGPUInterface()
+              .WebGPUInterface()
               ->FlushAwaitingCommands();
         }
       },
       scoped_refptr<DawnControlClientHolder>(this)));
+}
+
+void DawnControlClientHolder::TrackMailboxTexture(
+    base::WeakPtr<WebGPUMailboxTexture> mailbox_texture) {
+  mailbox_textures_.push_back(std::move(mailbox_texture));
+}
+
+void DawnControlClientHolder::UntrackMailboxTexture(
+    base::WeakPtr<WebGPUMailboxTexture> mailbox_texture) {
+  for (wtf_size_t i = 0; i < mailbox_textures_.size(); ++i) {
+    if (mailbox_textures_[i].get() == mailbox_texture.get()) {
+      mailbox_textures_.EraseAt(i);
+      return;
+    }
+  }
+}
+
+std::vector<wgpu::WGSLLanguageFeatureName> GatherWGSLLanguageFeatures() {
+#if BUILDFLAG(USE_DAWN)
+  // Create a dawn::wire::WireClient on a noop serializer, to get an instance
+  // from it.
+  class NoopSerializer : public dawn::wire::CommandSerializer {
+   public:
+    size_t GetMaximumAllocationSize() const override { return sizeof(buf); }
+    void* GetCmdSpace(size_t size) override { return buf; }
+    bool Flush() override { return true; }
+
+   private:
+    char buf[1024];
+  };
+
+  NoopSerializer noop_serializer;
+  dawn::wire::WireClient client{{.serializer = &noop_serializer}};
+
+  // Control which WGSL features are exposed based on flags.
+  wgpu::DawnWireWGSLControl wgsl_control = {{
+      .enableUnsafe = base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableUnsafeWebGPU),
+      // This can be changed to true for manual testing with the
+      // chromium_testing_* WGSL features.
+      .enableTesting = false,
+  }};
+  wgsl_control.enableExperimental =
+      wgsl_control.enableUnsafe ||
+      RuntimeEnabledFeatures::WebGPUExperimentalFeaturesEnabled();
+
+  // Additionally populate the WGSL blocklist based on the Finch feature.
+  std::vector<std::string> wgsl_unsafe_features_owned;
+  std::vector<const char*> wgsl_unsafe_features;
+
+  if (!wgsl_control.enableUnsafe) {
+    wgsl_unsafe_features_owned =
+        base::SplitString(features::kWGSLUnsafeFeatures.Get(), ",",
+                          base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+    wgsl_unsafe_features.reserve(wgsl_unsafe_features_owned.size());
+    for (const auto& f : wgsl_unsafe_features_owned) {
+      wgsl_unsafe_features.push_back(f.c_str());
+    }
+  }
+  wgpu::DawnWGSLBlocklist wgsl_blocklist = {{
+      .nextInChain = &wgsl_control,
+      .blocklistedFeatureCount = wgsl_unsafe_features.size(),
+      .blocklistedFeatures = wgsl_unsafe_features.data(),
+  }};
+  // Create the instance from all the chained structures and gather features
+  // from it.
+  wgpu::InstanceDescriptor instance_desc = {
+      .nextInChain = &wgsl_blocklist,
+  };
+  wgpu::Instance instance = wgpu::Instance::Acquire(
+      client
+          .ReserveInstance(
+              &static_cast<const WGPUInstanceDescriptor&>(instance_desc))
+          .instance);
+
+  wgpu::SupportedWGSLLanguageFeatures supported_features = {};
+  instance.GetWGSLLanguageFeatures(&supported_features);
+
+  // SAFETY: Required from caller
+  const auto feature_span =
+      UNSAFE_BUFFERS(base::span<const wgpu::WGSLLanguageFeatureName>(
+          supported_features.features, supported_features.featureCount));
+  std::vector<wgpu::WGSLLanguageFeatureName> features(feature_span.begin(),
+                                                      feature_span.end());
+  return features;
+#else
+  return {};
+#endif
 }
 
 }  // namespace blink

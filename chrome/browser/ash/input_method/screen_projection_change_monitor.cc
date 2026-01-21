@@ -18,8 +18,8 @@ ScreenProjectionChangeMonitor::ScreenProjectionChangeMonitor(
   // ScopedObservation here. Manually manage the observer lifetimes.
   // Shell::Get() and CastConfigController::Get() might be null in tests.
   if (Shell::HasInstance()) {
-    Shell::Get()->display_manager()->AddObserver(this);
-    Shell::Get()->system_tray_notifier()->AddScreenCaptureObserver(this);
+    Shell::Get()->display_manager()->AddDisplayObserver(this);
+    Shell::Get()->system_tray_notifier()->AddScreenSecurityObserver(this);
   }
 
   if (CastConfigController::Get()) {
@@ -33,8 +33,8 @@ ScreenProjectionChangeMonitor::~ScreenProjectionChangeMonitor() {
   }
 
   if (Shell::HasInstance()) {
-    Shell::Get()->system_tray_notifier()->RemoveScreenCaptureObserver(this);
-    Shell::Get()->display_manager()->RemoveObserver(this);
+    Shell::Get()->system_tray_notifier()->RemoveScreenSecurityObserver(this);
+    Shell::Get()->display_manager()->RemoveDisplayObserver(this);
   }
 }
 
@@ -63,14 +63,14 @@ void ScreenProjectionChangeMonitor::OnDevicesUpdated(
   UpdateCastingAndMirroringState(casting_desktop, is_mirroring_);
 }
 
-void ScreenProjectionChangeMonitor::OnScreenCaptureStart(
+void ScreenProjectionChangeMonitor::OnScreenAccessStart(
     base::OnceClosure stop_callback,
     const base::RepeatingClosure& source_callback,
-    const std::u16string& screen_capture_status) {
+    const std::u16string& access_app_name) {
   UpdateCastingAndMirroringState(true, is_mirroring_);
 }
 
-void ScreenProjectionChangeMonitor::OnScreenCaptureStop() {
+void ScreenProjectionChangeMonitor::OnScreenAccessStop() {
   UpdateCastingAndMirroringState(false, is_mirroring_);
 }
 

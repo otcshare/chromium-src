@@ -40,6 +40,8 @@ const char* ProcessNameFromSandboxType(sandbox::mojom::Sandbox sandbox_type) {
       return "audio";
     case sandbox::mojom::Sandbox::kCdm:
       return "cdm";
+    case sandbox::mojom::Sandbox::kOnDeviceModelExecution:
+      return "on-device-model-execution";
     case sandbox::mojom::Sandbox::kPrintCompositor:
       return "print-compositor";
     case sandbox::mojom::Sandbox::kSpeechRecognition:
@@ -53,11 +55,11 @@ const char* ProcessNameFromSandboxType(sandbox::mojom::Sandbox sandbox_type) {
 
 }  // namespace
 
-void ChildProcessLauncherHelper::SetProcessBackgroundedOnLauncherThread(
+void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
     base::Process process,
-    bool is_background) {
+    base::Process::Priority priority) {
   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
-  // TODO(https://crbug.com/926583): Fuchsia does not currently support this.
+  // TODO(crbug.com/40611633): Fuchsia does not currently support this.
 }
 
 ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
@@ -88,6 +90,10 @@ ChildProcessLauncherHelper::GetFilesToMap() {
   return nullptr;
 }
 
+bool ChildProcessLauncherHelper::IsUsingLaunchOptions() {
+  return true;
+}
+
 bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
     PosixFileDescriptorInfo& files_to_register,
     base::LaunchOptions* options) {
@@ -109,7 +115,7 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
 
 ChildProcessLauncherHelper::Process
 ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
-    const base::LaunchOptions& options,
+    const base::LaunchOptions* options,
     std::unique_ptr<FileMappedForLaunch> files_to_register,
     bool* is_synchronous_launch,
     int* launch_result) {
@@ -122,14 +128,13 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
   // Move `sandbox_policy_` into the child process object so that it doesn't get
   // destroyed before the child process.
   child_process.sandbox_policy = std::move(sandbox_policy_);
-  child_process.process = base::LaunchProcess(*command_line(), options);
+  child_process.process = base::LaunchProcess(*command_line(), *options);
   return child_process;
 }
 
 void ChildProcessLauncherHelper::AfterLaunchOnLauncherThread(
     const ChildProcessLauncherHelper::Process& process,
-    const base::LaunchOptions& options) {
-}
+    const base::LaunchOptions* options) {}
 
 // static
 void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(

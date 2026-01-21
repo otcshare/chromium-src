@@ -4,6 +4,7 @@
 
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/scheduler/public/agent_group_scheduler.h"
 
 namespace blink::scheduler {
@@ -20,11 +21,6 @@ AgentGroupScheduler& WebAgentGroupScheduler::GetAgentGroupScheduler() {
   return *private_;
 }
 
-void WebAgentGroupScheduler::BindInterfaceBroker(
-    mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker) {
-  private_->BindInterfaceBroker(std::move(broker));
-}
-
 scoped_refptr<base::SingleThreadTaskRunner>
 WebAgentGroupScheduler::DefaultTaskRunner() {
   return private_->DefaultTaskRunner();
@@ -37,6 +33,14 @@ WebAgentGroupScheduler::CompositorTaskRunner() {
 
 v8::Isolate* WebAgentGroupScheduler::Isolate() {
   return private_->Isolate();
+}
+
+void WebAgentGroupScheduler::OnUrgentMessageReceived() {
+  private_->OnUrgentMessageReceived();
+}
+
+void WebAgentGroupScheduler::OnUrgentMessageProcessed() {
+  private_->OnUrgentMessageProcessed();
 }
 
 }  // namespace blink::scheduler

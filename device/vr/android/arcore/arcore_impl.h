@@ -5,72 +5,27 @@
 #ifndef DEVICE_VR_ANDROID_ARCORE_ARCORE_IMPL_H_
 #define DEVICE_VR_ANDROID_ARCORE_ARCORE_IMPL_H_
 
+#include <optional>
+
 #include "base/component_export.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "base/types/id_type.h"
 #include "device/vr/android/arcore/arcore.h"
 #include "device/vr/android/arcore/arcore_anchor_manager.h"
 #include "device/vr/android/arcore/arcore_plane_manager.h"
 #include "device/vr/android/arcore/arcore_sdk.h"
 #include "device/vr/android/arcore/scoped_arcore_objects.h"
+#include "device/vr/create_anchor_request.h"
+#include "device/vr/hit_test_subscription_data.h"
+#include "device/vr/public/mojom/anchor_id.h"
+#include "device/vr/public/mojom/plane_id.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
-#include "device/vr/util/hit_test_subscription_data.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/vr/public/mojom/xr_session.mojom.h"
 
 namespace device {
 
 class ArCorePlaneManager;
 
-using AnchorId = base::IdTypeU64<class AnchorTag>;
-
-class CreateAnchorRequest {
- public:
-  mojom::XRNativeOriginInformation GetNativeOriginInformation() const;
-  gfx::Transform GetNativeOriginFromAnchor() const;
-  base::TimeTicks GetRequestStartTime() const;
-
-  ArCore::CreateAnchorCallback TakeCallback();
-
-  CreateAnchorRequest(
-      const mojom::XRNativeOriginInformation& native_origin_information,
-      const gfx::Transform& native_origin_from_anchor,
-      ArCore::CreateAnchorCallback callback);
-  CreateAnchorRequest(CreateAnchorRequest&& other);
-  ~CreateAnchorRequest();
-
- private:
-  const mojom::XRNativeOriginInformation native_origin_information_;
-  const gfx::Transform native_origin_from_anchor_;
-  const base::TimeTicks request_start_time_;
-
-  ArCore::CreateAnchorCallback callback_;
-};
-
-class CreatePlaneAttachedAnchorRequest {
- public:
-  uint64_t GetPlaneId() const;
-  mojom::XRNativeOriginInformation GetNativeOriginInformation() const;
-  gfx::Transform GetNativeOriginFromAnchor() const;
-  base::TimeTicks GetRequestStartTime() const;
-
-  ArCore::CreateAnchorCallback TakeCallback();
-
-  CreatePlaneAttachedAnchorRequest(
-      const mojom::XRNativeOriginInformation& native_origin_information,
-      const gfx::Transform& native_origin_from_anchor,
-      uint64_t plane_id,
-      ArCore::CreateAnchorCallback callback);
-  CreatePlaneAttachedAnchorRequest(CreatePlaneAttachedAnchorRequest&& other);
-  ~CreatePlaneAttachedAnchorRequest();
-
- private:
-  const mojom::XRNativeOriginInformation native_origin_information_;
-  const gfx::Transform native_origin_from_anchor_;
-  const uint64_t plane_id_;
-  const base::TimeTicks request_start_time_;
-
-  ArCore::CreateAnchorCallback callback_;
-};
 
 // This class should be created and accessed entirely on a Gl thread.
 class ArCoreImpl : public ArCore {
@@ -82,14 +37,14 @@ class ArCoreImpl : public ArCore {
 
   ~ArCoreImpl() override;
 
-  absl::optional<ArCore::InitializeResult> Initialize(
+  std::optional<ArCore::InitializeResult> Initialize(
       base::android::ScopedJavaLocalRef<jobject> application_context,
       const std::unordered_set<device::mojom::XRSessionFeature>&
           required_features,
       const std::unordered_set<device::mojom::XRSessionFeature>&
           optional_features,
       const std::vector<device::mojom::XRTrackedImagePtr>& tracked_images,
-      absl::optional<ArCore::DepthSensingConfiguration> depth_sensing_config)
+      std::optional<ArCore::DepthSensingConfiguration> depth_sensing_config)
       override;
   MinMaxRange GetTargetFramerateRange() override;
   void SetDisplayGeometry(const gfx::Size& frame_size,
@@ -120,11 +75,11 @@ class ArCoreImpl : public ArCore {
       const std::vector<mojom::EntityTypeForHitTest>& entity_types,
       std::vector<mojom::XRHitResultPtr>* hit_results);
 
-  absl::optional<uint64_t> SubscribeToHitTest(
+  std::optional<HitTestSubscriptionId> SubscribeToHitTest(
       mojom::XRNativeOriginInformationPtr nativeOriginInformation,
       const std::vector<mojom::EntityTypeForHitTest>& entity_types,
       mojom::XRRayPtr ray) override;
-  absl::optional<uint64_t> SubscribeToHitTestForTransientInput(
+  std::optional<HitTestSubscriptionId> SubscribeToHitTestForTransientInput(
       const std::string& profile_name,
       const std::vector<mojom::EntityTypeForHitTest>& entity_types,
       mojom::XRRayPtr ray) override;
@@ -133,16 +88,12 @@ class ArCoreImpl : public ArCore {
       const gfx::Transform& mojo_from_viewer,
       const std::vector<mojom::XRInputSourceStatePtr>& input_state) override;
 
-  void UnsubscribeFromHitTest(uint64_t subscription_id) override;
+  void UnsubscribeFromHitTest(HitTestSubscriptionId subscription_id) override;
 
   void CreateAnchor(
       const mojom::XRNativeOriginInformation& native_origin_information,
       const device::Pose& native_origin_from_anchor,
-      CreateAnchorCallback callback) override;
-  void CreatePlaneAttachedAnchor(
-      const mojom::XRNativeOriginInformation& native_origin_information,
-      const device::Pose& native_origin_from_anchor,
-      uint64_t plane_id,
+      const std::optional<PlaneId>& plane_id,
       CreateAnchorCallback callback) override;
 
   void ProcessAnchorCreationRequests(
@@ -150,7 +101,7 @@ class ArCoreImpl : public ArCore {
       const std::vector<mojom::XRInputSourceStatePtr>& input_state,
       const base::TimeTicks& frame_time) override;
 
-  void DetachAnchor(uint64_t anchor_id) override;
+  void DetachAnchor(AnchorId anchor_id) override;
 
   mojom::XRDepthDataPtr GetDepthData() override;
 
@@ -203,7 +154,7 @@ class ArCoreImpl : public ArCore {
   // list of images. The index values are needed for blink communication.
   std::unordered_map<int32_t, uint64_t> tracked_image_arcore_id_to_index_;
 
-  absl::optional<device::mojom::XRDepthConfig> depth_configuration_;
+  std::optional<device::mojom::XRDepthConfig> depth_configuration_;
 
   uint64_t next_id_ = 1;
 
@@ -213,8 +164,6 @@ class ArCoreImpl : public ArCore {
       hit_test_subscription_id_to_transient_hit_test_data_;
 
   std::vector<CreateAnchorRequest> create_anchor_requests_;
-  std::vector<CreatePlaneAttachedAnchorRequest>
-      create_plane_attached_anchor_requests_;
 
   // The time delta (relative to ARCore's depth data time base) of the last
   // retrieved depth API data. Used to ensure that we do not return same data to
@@ -253,8 +202,8 @@ class ArCoreImpl : public ArCore {
 
   // Returns mojo_from_native_origin transform given native origin
   // information. If the transform cannot be found or is unknown, it will return
-  // absl::nullopt.
-  absl::optional<gfx::Transform> GetMojoFromNativeOrigin(
+  // std::nullopt.
+  std::optional<gfx::Transform> GetMojoFromNativeOrigin(
       const mojom::XRNativeOriginInformation& native_origin_information,
       const gfx::Transform& mojo_from_viewer,
       const std::vector<mojom::XRInputSourceStatePtr>& input_state);
@@ -262,8 +211,8 @@ class ArCoreImpl : public ArCore {
   // Returns mojo_from_reference_space transform given reference space type.
   // Mojo_from_reference_space is equivalent to mojo_from_native_origin for
   // native origins that are reference spaces. If the transform cannot be found,
-  // it will return absl::nullopt.
-  absl::optional<gfx::Transform> GetMojoFromReferenceSpace(
+  // it will return std::nullopt.
+  std::optional<gfx::Transform> GetMojoFromReferenceSpace(
       device::mojom::XRReferenceSpaceType type,
       const gfx::Transform& mojo_from_viewer);
 
@@ -278,56 +227,50 @@ class ArCoreImpl : public ArCore {
       const gfx::Transform& mojo_from_viewer,
       const std::vector<mojom::XRInputSourceStatePtr>& maybe_input_state);
 
-  // Processes deferred anchor creation requests.
-  // |mojo_from_viewer| - viewer pose in world space of the current frame.
-  // |input_state| - current input state.
-  // |anchor_creation_requests| - vector of deferred anchor creation requests
-  // that are supposed to be processed now; post-call, the vector will only
-  // contain the requests that have not been processed.
-  // |create_anchor_function| - function to call to actually create the anchor;
-  // it will receive the specific anchor creation request, along with position
-  // and orientation for the anchor, and must return absl::optional<AnchorId>.
-  template <typename T, typename FunctionType>
-  void ProcessAnchorCreationRequestsHelper(
-      const gfx::Transform& mojo_from_viewer,
-      const std::vector<mojom::XRInputSourceStatePtr>& input_state,
-      std::vector<T>* anchor_creation_requests,
-      const base::TimeTicks& frame_time,
-      FunctionType&& create_anchor_function);
 
   // Helper, attempts to configure ArSession's camera for use. Note that this is
   // happening during initialization, before arcore_session_ is set.
-  // Returns true if configuration succeeded, false otherwise.
-  bool ConfigureCamera(ArSession* ar_session);
+  // Returns `true` if configuration succeeded, false otherwise.
+  // It can modify `enabled_features` if the camera was configured such that
+  // some features have been disabled.
+  bool ConfigureCamera(
+      ArSession* ar_session,
+      const std::unordered_set<device::mojom::XRSessionFeature>&
+          required_features,
+      const std::unordered_set<device::mojom::XRSessionFeature>&
+          optional_features,
+      std::unordered_set<device::mojom::XRSessionFeature>& enabled_features);
 
   // Helper, attempts to configure ArSession's features based on required and
   // optional features. Note that this is happening during initialization,
-  // before arcore_session_ is set. Returns a collection of features that were
-  // successfully enabled on a session or a nullopt on failure.
-  absl::optional<std::unordered_set<device::mojom::XRSessionFeature>>
-  ConfigureFeatures(
+  // before arcore_session_ is set. Returns `true` if feature configuration
+  // succeeded (i.e. all required features have been configured), `false`
+  // otherwise. It can modify `enabled_features` if some optional features could
+  // not have been configured.
+  bool ConfigureFeatures(
       ArSession* ar_session,
       const std::unordered_set<device::mojom::XRSessionFeature>&
           required_features,
       const std::unordered_set<device::mojom::XRSessionFeature>&
           optional_features,
       const std::vector<device::mojom::XRTrackedImagePtr>& tracked_images,
-      const absl::optional<ArCore::DepthSensingConfiguration>&
-          depth_sensing_config);
+      const std::optional<ArCore::DepthSensingConfiguration>&
+          depth_sensing_config,
+      std::unordered_set<device::mojom::XRSessionFeature>& enabled_features);
 
   // Configures depth sensing API - selects depth sensing usage and mode that is
   // compatible with the device. Returns false if it was unable to pick a
   // supported combination of mode and data format. Affects
   // |depth_sensing_usage_| and |depth_sensing_data_format_| members.
   bool ConfigureDepthSensing(
-      const absl::optional<ArCore::DepthSensingConfiguration>&
+      const std::optional<ArCore::DepthSensingConfiguration>&
           depth_sensing_config);
 
   // Must be last.
   base::WeakPtrFactory<ArCoreImpl> weak_ptr_factory_{this};
 };
 
-// TODO(https://crbug.com/843374): Once the arcore_device class is moved,
+// TODO(crbug.com/41389193): Once the arcore_device class is moved,
 // determine if this is still necessary or if we should have some other form of
 // factory that can abstract this.
 class COMPONENT_EXPORT(VR_ARCORE) ArCoreImplFactory : public ArCoreFactory {

@@ -14,11 +14,10 @@
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/layout.h"
 #include "ui/display/display_finder.h"
 #include "ui/display/display_layout.h"
 #include "ui/display/manager/display_manager.h"
-#include "ui/display/manager/display_manager_utilities.h"
+#include "ui/display/manager/util/display_manager_util.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/geometry/transform.h"
@@ -83,7 +82,7 @@ bool UnifiedMouseWarpController::WarpMouseCursor(ui::MouseEvent* event) {
 
   // TODO(afakhry): Remove implicit grab. crbug.com/773348.
   const display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
+      display::Screen::Get()->GetDisplayNearestWindow(
           const_cast<aura::Window*>(host->window()));
   return WarpMouseCursorInNativeCoords(display.id(), point_in_native,
                                        point_in_unified_host,

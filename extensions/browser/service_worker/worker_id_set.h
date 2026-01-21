@@ -8,8 +8,13 @@
 #include <set>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/extension_id.h"
+
+namespace content {
+class BrowserContext;
+}
 
 // Set of WorkersIds that provides faster retrieval/removal of workers by
 // extension id, render process id etc.
@@ -24,15 +29,18 @@ class WorkerIdSet {
 
   ~WorkerIdSet();
 
-  void Add(const WorkerId& worker_id);
+  void Add(const WorkerId& worker_id, content::BrowserContext* context);
   bool Remove(const WorkerId& worker_id);
   bool Contains(const WorkerId& worker_id) const;
   std::vector<WorkerId> GetAllForExtension(
       const ExtensionId& extension_id) const;
   std::vector<WorkerId> GetAllForExtension(const ExtensionId& extension_id,
                                            int render_process_id) const;
+  std::vector<WorkerId> GetAllForExtension(const ExtensionId& extension_id,
+                                           int64_t worker_version_id) const;
 
   std::vector<WorkerId> GetAllForTesting() const;
+  static base::AutoReset<bool> AllowMultipleWorkersPerExtensionForTesting();
   size_t count_for_testing() const { return workers_.size(); }
 
  private:

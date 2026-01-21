@@ -7,16 +7,16 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 
 namespace remoting {
 
-class ProtobufHttpStatus;
+class HttpStatus;
 
 // Interface for registering the user with signaling service.
 class RegistrationManager {
  public:
-  using DoneCallback = base::OnceCallback<void(const ProtobufHttpStatus&)>;
+  using DoneCallback = base::OnceCallback<void(const HttpStatus&)>;
 
   virtual ~RegistrationManager() = default;
 

@@ -8,10 +8,11 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 
 class GURL;
@@ -27,33 +28,38 @@ class NetworkFetcher {
   // If the request does not have an X-Retry-After header, implementations
   // should pass -1 for |xheader_retry_after_sec|.
   using PostRequestCompleteCallback =
-      base::OnceCallback<void(std::unique_ptr<std::string> response_body,
+      base::OnceCallback<void(std::optional<std::string> response_body,
                               int net_error,
                               const std::string& header_etag,
                               const std::string& header_x_cup_server_proof,
+                              const std::string& header_set_cookie,
                               int64_t xheader_retry_after_sec)>;
   using DownloadToFileCompleteCallback =
       base::OnceCallback<void(int net_error, int64_t content_size)>;
+
+  // `content_length` is -1 if the value is not known.
   using ResponseStartedCallback =
-      base::OnceCallback<void(int response_code, int64_t content_length)>;
+      base::RepeatingCallback<void(int response_code, int64_t content_length)>;
+
+  // `current` is the number of bytes received thus far.
   using ProgressCallback = base::RepeatingCallback<void(int64_t current)>;
 
-  // The following two headers carry the ECSDA signature of the POST response,
-  // if signing has been used. Two headers are used for redundancy purposes.
-  // The value of the `X-Cup-Server-Proof` is preferred.
+  // The ECSDA signature of the POST response, if signing has been used. Two
+  // headers are used for redundancy purposes. The value of the
+  // `X-Cup-Server-Proof` is preferred.
   static constexpr char kHeaderEtag[] = "ETag";
   static constexpr char kHeaderXCupServerProof[] = "X-Cup-Server-Proof";
 
-  // The server uses the optional X-Retry-After header to indicate that the
-  // current request should not be attempted again.
-  //
-  // The value of the header is the number of seconds to wait before trying to
-  // do a subsequent update check. Only the values retrieved over HTTPS are
-  // trusted.
+  // Number of seconds to wait before trying to do a subsequent update check.
+  // Only the values retrieved over HTTPS are trusted. The server uses the
+  // optional X-Retry-After header to indicate that the current request should
+  // not be attempted again.
   static constexpr char kHeaderXRetryAfter[] = "X-Retry-After";
 
-  NetworkFetcher(const NetworkFetcher&) = delete;
-  NetworkFetcher& operator=(const NetworkFetcher&) = delete;
+  // The HTTP cookie headers. These aren't used by the Omaha update protocol but
+  // are necessary for other uses of `NetworkFetcher`.
+  static constexpr char kHeaderCookie[] = "Cookie";
+  static constexpr char kHeaderSetCookie[] = "Set-Cookie";
 
   virtual ~NetworkFetcher() = default;
 
@@ -65,7 +71,9 @@ class NetworkFetcher {
       ResponseStartedCallback response_started_callback,
       ProgressCallback progress_callback,
       PostRequestCompleteCallback post_request_complete_callback) = 0;
-  virtual void DownloadToFile(
+
+  // Returns a cancellation closure.
+  virtual base::OnceClosure DownloadToFile(
       const GURL& url,
       const base::FilePath& file_path,
       ResponseStartedCallback response_started_callback,
@@ -81,12 +89,8 @@ class NetworkFetcherFactory
  public:
   virtual std::unique_ptr<NetworkFetcher> Create() const = 0;
 
-  NetworkFetcherFactory(const NetworkFetcherFactory&) = delete;
-  NetworkFetcherFactory& operator=(const NetworkFetcherFactory&) = delete;
-
  protected:
   friend class base::RefCountedThreadSafe<NetworkFetcherFactory>;
-  NetworkFetcherFactory() = default;
   virtual ~NetworkFetcherFactory() = default;
 };
 

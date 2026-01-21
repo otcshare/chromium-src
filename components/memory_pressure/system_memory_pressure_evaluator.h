@@ -6,6 +6,8 @@
 #define COMPONENTS_MEMORY_PRESSURE_SYSTEM_MEMORY_PRESSURE_EVALUATOR_H_
 
 #include "base/memory/memory_pressure_listener.h"
+#include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "components/memory_pressure/memory_pressure_voter.h"
 #include "components/memory_pressure/multi_source_memory_pressure_monitor.h"
 
@@ -15,6 +17,10 @@ namespace memory_pressure {
 // MemoryPressureVoters to cast their vote on the overall MemoryPressureLevel.
 class SystemMemoryPressureEvaluator {
  public:
+  // The period at which the system is re-notified when the pressure is not
+  // none.
+  static const base::TimeDelta kRenotifyVotePeriod;
+
   // Used by the MemoryPressureMonitor to create the correct Evaluator for the
   // platform in use.
   static std::unique_ptr<SystemMemoryPressureEvaluator>
@@ -26,9 +32,7 @@ class SystemMemoryPressureEvaluator {
   SystemMemoryPressureEvaluator& operator=(
       const SystemMemoryPressureEvaluator&) = delete;
 
-  base::MemoryPressureListener::MemoryPressureLevel current_vote() const {
-    return current_vote_;
-  }
+  base::MemoryPressureLevel current_vote() const { return current_vote_; }
 
  protected:
   explicit SystemMemoryPressureEvaluator(
@@ -36,7 +40,7 @@ class SystemMemoryPressureEvaluator {
 
   // Sets the Evaluator's |current_vote_| member without casting vote to the
   // MemoryPressureVoteAggregator.
-  void SetCurrentVote(base::MemoryPressureListener::MemoryPressureLevel level);
+  void SetCurrentVote(base::MemoryPressureLevel level);
 
   // Uses the Evaluators' |voter_| to cast/update its vote on memory pressure
   // level. The MemoryPressureListeners will only be notified of the newly
@@ -44,7 +48,7 @@ class SystemMemoryPressureEvaluator {
   void SendCurrentVote(bool notify) const;
 
  private:
-  base::MemoryPressureListener::MemoryPressureLevel current_vote_;
+  base::MemoryPressureLevel current_vote_;
 
   // In charge of forwarding votes from here to the
   // MemoryPressureVoteAggregator.

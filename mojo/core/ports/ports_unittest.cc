@@ -7,17 +7,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <array>
 #include <map>
 #include <sstream>
+#include <string_view>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
@@ -44,7 +48,7 @@ class TestMessage : public UserMessage {
  public:
   static const TypeInfo kUserMessageTypeInfo;
 
-  TestMessage(const base::StringPiece& payload)
+  TestMessage(const std::string_view& payload)
       : UserMessage(&kUserMessageTypeInfo), payload_(payload) {}
   ~TestMessage() override = default;
 
@@ -56,14 +60,14 @@ class TestMessage : public UserMessage {
 
 const UserMessage::TypeInfo TestMessage::kUserMessageTypeInfo = {};
 
-ScopedMessage NewUserMessageEvent(const base::StringPiece& payload,
+ScopedMessage NewUserMessageEvent(const std::string_view& payload,
                                   size_t num_ports) {
   auto event = std::make_unique<UserMessageEvent>(num_ports);
   event->AttachMessage(std::make_unique<TestMessage>(payload));
   return event;
 }
 
-bool MessageEquals(const ScopedMessage& message, const base::StringPiece& s) {
+bool MessageEquals(const ScopedMessage& message, const std::string_view& s) {
   return message->GetMessage<TestMessage>()->payload() == s;
 }
 
@@ -144,8 +148,9 @@ class TestNode : public NodeDelegate {
   int SendMultipleMessages(const PortRef& port, size_t num_messages) {
     for (size_t i = 0; i < num_messages; ++i) {
       int result = SendStringMessage(port, "");
-      if (result != OK)
+      if (result != OK) {
         return result;
+      }
     }
     return OK;
   }
@@ -181,8 +186,9 @@ class TestNode : public NodeDelegate {
   bool ReadMultipleMessages(const PortRef& port, size_t num_messages) {
     for (size_t i = 0; i < num_messages; ++i) {
       ScopedMessage message;
-      if (!ReadMessage(port, &message))
+      if (!ReadMessage(port, &message)) {
         return false;
+      }
     }
     return true;
   }
@@ -233,15 +239,17 @@ class TestNode : public NodeDelegate {
   void PortStatusChanged(const PortRef& port) override {
     // The port may be closed, in which case we ignore the notification.
     base::AutoLock lock(lock_);
-    if (!save_messages_)
+    if (!save_messages_) {
       return;
+    }
 
     for (;;) {
       ScopedMessage message;
       {
         base::AutoUnlock unlock(lock_);
-        if (!ReadMessage(port, &message))
+        if (!ReadMessage(port, &message)) {
           break;
+        }
       }
 
       saved_messages_.emplace(std::move(message));
@@ -249,21 +257,23 @@ class TestNode : public NodeDelegate {
   }
 
   void ClosePortsInEvent(Event* event) {
-    if (event->type() != Event::Type::kUserMessage)
+    if (event->type() != Event::Type::kUserMessage) {
       return;
+    }
 
     UserMessageEvent* message_event = static_cast<UserMessageEvent*>(event);
-    for (size_t i = 0; i < message_event->num_ports(); ++i) {
+    for (const auto& port_name : message_event->ports()) {
       PortRef port;
-      ASSERT_EQ(OK, node_.GetPort(message_event->ports()[i], &port));
+      ASSERT_EQ(OK, node_.GetPort(port_name, &port));
       EXPECT_EQ(OK, node_.ClosePort(port));
     }
   }
 
   uint64_t GetUnacknowledgedMessageCount(const PortRef& port_ref) {
     PortStatus status;
-    if (node_.GetStatus(port_ref, &status) != OK)
+    if (node_.GetStatus(port_ref, &status) != OK) {
       return 0;
+    }
 
     return status.unacknowledged_message_count;
   }
@@ -279,8 +289,9 @@ class TestNode : public NodeDelegate {
       events_available_event_.Wait();
       base::AutoLock lock(lock_);
 
-      if (should_quit_)
+      if (should_quit_) {
         return;
+      }
 
       dispatching_ = true;
       while (!incoming_events_.empty()) {
@@ -346,8 +357,9 @@ class PortsTest : public testing::Test, public MessageRouter {
       nodes_.erase(node->name());
     }
 
-    for (const auto& entry : nodes_)
+    for (const auto& entry : nodes_) {
       entry.second->node().LostConnectionToNode(node->name());
+    }
   }
 
   // Waits until all known Nodes are idle. Message forwarding and processing
@@ -360,19 +372,22 @@ class PortsTest : public testing::Test, public MessageRouter {
       base::AutoLock global_lock(global_lock_);
       bool all_nodes_idle = true;
       for (const auto& entry : nodes_) {
-        if (!entry.second->IsIdle())
+        if (!entry.second->IsIdle()) {
           all_nodes_idle = false;
+        }
         entry.second->WakeUp();
       }
-      if (all_nodes_idle)
+      if (all_nodes_idle) {
         return;
+      }
 
       // Wait for any Node to signal that it's idle.
       base::AutoUnlock global_unlock(global_lock_);
       std::vector<base::WaitableEvent*> events;
-      for (const auto& entry : nodes_)
+      for (const auto& entry : nodes_) {
         events.push_back(&entry.second->idle_event());
-      base::WaitableEvent::WaitMany(events.data(), events.size());
+      }
+      base::WaitableEvent::WaitMany(events);
     }
   }
 
@@ -402,7 +417,7 @@ class PortsTest : public testing::Test, public MessageRouter {
     base::AutoLock global_lock(global_lock_);
     base::AutoLock lock(lock_);
     // Drop messages from nodes that have been removed.
-    if (nodes_.find(from_node->name()) == nodes_.end()) {
+    if (!nodes_.contains(from_node->name())) {
       from_node->ClosePortsInEvent(event.get());
       return;
     }
@@ -415,9 +430,9 @@ class PortsTest : public testing::Test, public MessageRouter {
 
     // Serialize and de-serialize all forwarded events.
     size_t buf_size = event->GetSerializedSize();
-    std::unique_ptr<char[]> buf(new char[buf_size]);
-    event->Serialize(buf.get());
-    ScopedEvent copy = Event::Deserialize(buf.get(), buf_size);
+    auto buf = base::HeapArray<char>::Uninit(buf_size);
+    event->Serialize(buf.data());
+    ScopedEvent copy = Event::Deserialize(buf.data(), buf.size());
     // This should always succeed unless serialization or deserialization
     // is broken. In that case, the loss of events should cause a test failure.
     ASSERT_TRUE(copy);
@@ -441,14 +456,16 @@ class PortsTest : public testing::Test, public MessageRouter {
     base::AutoLock lock(lock_);
 
     // Drop messages from nodes that have been removed.
-    if (nodes_.find(from_node->name()) == nodes_.end())
+    if (!nodes_.contains(from_node->name())) {
       return;
+    }
 
     for (const auto& entry : nodes_) {
       TestNode* node = entry.second;
       // Broadcast doesn't deliver to the local node.
-      if (node == from_node)
+      if (node == from_node) {
         continue;
+      }
       node->EnqueueEvent(from_node->name(), event->CloneForBroadcast());
     }
   }
@@ -460,7 +477,7 @@ class PortsTest : public testing::Test, public MessageRouter {
   base::Lock global_lock_;
 
   base::Lock lock_;
-  std::map<NodeName, TestNode*> nodes_;
+  std::map<NodeName, raw_ptr<TestNode, CtnExperimental>> nodes_;
 };
 
 }  // namespace
@@ -857,16 +874,17 @@ TEST_F(PortsTest, GetMessage3) {
   PortRef a0, a1;
   EXPECT_EQ(OK, node.node().CreatePortPair(&a0, &a1));
 
-  const char* kStrings[] = {"1", "2", "3"};
+  const std::array<const char*, 3> kStrings = {"1", "2", "3"};
 
-  for (size_t i = 0; i < sizeof(kStrings) / sizeof(kStrings[0]); ++i)
-    EXPECT_EQ(OK, node.SendStringMessage(a1, kStrings[i]));
+  for (const char* s : kStrings) {
+    EXPECT_EQ(OK, node.SendStringMessage(a1, s));
+  }
 
   ScopedMessage message;
-  for (size_t i = 0; i < sizeof(kStrings) / sizeof(kStrings[0]); ++i) {
+  for (const char* s : kStrings) {
     EXPECT_EQ(OK, node.node().GetMessage(a0, &message, nullptr));
     ASSERT_TRUE(message);
-    EXPECT_TRUE(MessageEquals(message, kStrings[i]));
+    EXPECT_TRUE(MessageEquals(message, s));
   }
 
   EXPECT_EQ(OK, node.node().ClosePort(a0));
@@ -1521,8 +1539,8 @@ TEST_F(PortsTest, MergePortsFailsGracefully) {
   EXPECT_EQ(OK, node1.node().InitializePort(Y, node0.name(), X.name(),
                                             node0.name(), X.name()));
 
-  // Block the merge from proceeding until we can do something stupid with port
-  // C. This avoids the test logic racing with async merge logic.
+  // Block the merge from proceeding until we can do something with port C. This
+  // avoids the test logic racing with async merge logic.
   node1.BlockOnEvent(Event::Type::kMergePort);
 
   // Initiate the merge between B and C.

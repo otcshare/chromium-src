@@ -6,8 +6,6 @@
 
 #include <stdint.h>
 
-#include <limits>
-
 #include "base/containers/adapters.h"
 #include "base/strings/stringprintf.h"
 #include "mojo/public/cpp/bindings/lib/message_internal.h"
@@ -62,8 +60,9 @@ bool ValidateStructHeaderAndVersionSizeAndClaimMemory(
     const void* data,
     base::span<const StructVersionSize> version_sizes,
     ValidationContext* validation_context) {
-  if (!ValidateStructHeaderAndClaimMemory(data, validation_context))
+  if (!ValidateStructHeaderAndClaimMemory(data, validation_context)) {
     return false;
+  }
 
   DCHECK(data);
   DCHECK(!version_sizes.empty());
@@ -72,8 +71,9 @@ bool ValidateStructHeaderAndVersionSizeAndClaimMemory(
     // Scan in reverse order to optimize for more recent versions.
     for (const auto& version_size : base::Reversed(version_sizes)) {
       if (header.version >= version_size.version) {
-        if (header.num_bytes == version_size.num_bytes)
+        if (header.num_bytes == version_size.num_bytes) {
           break;
+        }
         ReportValidationError(validation_context,
                               VALIDATION_ERROR_UNEXPECTED_STRUCT_HEADER);
         return false;
@@ -92,8 +92,9 @@ bool ValidateUnversionedStructHeaderAndSizeAndClaimMemory(
     const void* data,
     size_t v0_size,
     ValidationContext* validation_context) {
-  if (!ValidateStructHeaderAndClaimMemory(data, validation_context))
+  if (!ValidateStructHeaderAndClaimMemory(data, validation_context)) {
     return false;
+  }
 
   DCHECK(data);
   const auto& header = *static_cast<const StructHeader*>(data);
@@ -181,8 +182,9 @@ bool ValidateHandleOrInterfaceNonNullable(
     const AssociatedInterface_Data& input,
     int field_index,
     ValidationContext* validation_context) {
-  if (IsHandleOrInterfaceValid(input))
+  if (IsHandleOrInterfaceValid(input)) {
     return true;
+  }
 
   ReportNonNullableValidationError(
       validation_context, VALIDATION_ERROR_UNEXPECTED_INVALID_INTERFACE_ID,
@@ -194,8 +196,9 @@ bool ValidateHandleOrInterfaceNonNullable(
     const AssociatedEndpointHandle_Data& input,
     int field_index,
     ValidationContext* validation_context) {
-  if (IsHandleOrInterfaceValid(input))
+  if (IsHandleOrInterfaceValid(input)) {
     return true;
+  }
 
   ReportNonNullableValidationError(
       validation_context, VALIDATION_ERROR_UNEXPECTED_INVALID_INTERFACE_ID,
@@ -207,8 +210,9 @@ bool ValidateHandleOrInterfaceNonNullable(
     const Interface_Data& input,
     int field_index,
     ValidationContext* validation_context) {
-  if (IsHandleOrInterfaceValid(input))
+  if (IsHandleOrInterfaceValid(input)) {
     return true;
+  }
 
   ReportNonNullableValidationError(validation_context,
                                    VALIDATION_ERROR_UNEXPECTED_INVALID_HANDLE,
@@ -220,8 +224,9 @@ bool ValidateHandleOrInterfaceNonNullable(
     const Handle_Data& input,
     int field_index,
     ValidationContext* validation_context) {
-  if (IsHandleOrInterfaceValid(input))
+  if (IsHandleOrInterfaceValid(input)) {
     return true;
+  }
 
   ReportNonNullableValidationError(validation_context,
                                    VALIDATION_ERROR_UNEXPECTED_INVALID_HANDLE,
@@ -231,8 +236,9 @@ bool ValidateHandleOrInterfaceNonNullable(
 
 bool ValidateHandleOrInterface(const AssociatedInterface_Data& input,
                                ValidationContext* validation_context) {
-  if (validation_context->ClaimAssociatedEndpointHandle(input.handle))
+  if (validation_context->ClaimAssociatedEndpointHandle(input.handle)) {
     return true;
+  }
 
   ReportValidationError(validation_context,
                         VALIDATION_ERROR_ILLEGAL_INTERFACE_ID);
@@ -241,8 +247,9 @@ bool ValidateHandleOrInterface(const AssociatedInterface_Data& input,
 
 bool ValidateHandleOrInterface(const AssociatedEndpointHandle_Data& input,
                                ValidationContext* validation_context) {
-  if (validation_context->ClaimAssociatedEndpointHandle(input))
+  if (validation_context->ClaimAssociatedEndpointHandle(input)) {
     return true;
+  }
 
   ReportValidationError(validation_context,
                         VALIDATION_ERROR_ILLEGAL_INTERFACE_ID);
@@ -251,8 +258,9 @@ bool ValidateHandleOrInterface(const AssociatedEndpointHandle_Data& input,
 
 bool ValidateHandleOrInterface(const Interface_Data& input,
                                ValidationContext* validation_context) {
-  if (validation_context->ClaimHandle(input.handle))
+  if (validation_context->ClaimHandle(input.handle)) {
     return true;
+  }
 
   ReportValidationError(validation_context, VALIDATION_ERROR_ILLEGAL_HANDLE);
   return false;
@@ -260,8 +268,9 @@ bool ValidateHandleOrInterface(const Interface_Data& input,
 
 bool ValidateHandleOrInterface(const Handle_Data& input,
                                ValidationContext* validation_context) {
-  if (validation_context->ClaimHandle(input))
+  if (validation_context->ClaimHandle(input)) {
     return true;
+  }
 
   ReportValidationError(validation_context, VALIDATION_ERROR_ILLEGAL_HANDLE);
   return false;

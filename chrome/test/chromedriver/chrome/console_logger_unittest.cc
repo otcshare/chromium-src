@@ -25,7 +25,7 @@ class FakeDevToolsClient : public StubDevToolsClient {
  public:
   explicit FakeDevToolsClient(const std::string& id)
       : id_(id), listener_(nullptr) {}
-  ~FakeDevToolsClient() override {}
+  ~FakeDevToolsClient() override = default;
 
   std::string PopSentCommand() {
     std::string command;
@@ -40,9 +40,6 @@ class FakeDevToolsClient : public StubDevToolsClient {
                       const base::Value::Dict& params) {
     return listener_->OnEvent(this, method, params);
   }
-
-  // Overridden from DevToolsClient:
-  Status Connect() override { return listener_->OnConnected(this); }
 
   Status SendCommandAndGetResult(const std::string& method,
                                  const base::Value::Dict& params,
@@ -141,10 +138,9 @@ void ConsoleLogParams(base::Value::Dict* out_dict,
 }  // namespace
 
 TEST(ConsoleLogger, ConsoleMessages) {
-  FakeDevToolsClient client("webview");
   FakeLog log;
   ConsoleLogger logger(&log);
-
+  FakeDevToolsClient client("webview");
   client.AddListener(&logger);
   logger.OnConnected(&client);
   EXPECT_EQ("Log.enable", client.PopSentCommand());

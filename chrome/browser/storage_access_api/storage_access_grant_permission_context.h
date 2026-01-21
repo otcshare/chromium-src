@@ -5,21 +5,22 @@
 #ifndef CHROME_BROWSER_STORAGE_ACCESS_API_STORAGE_ACCESS_GRANT_PERMISSION_CONTEXT_H_
 #define CHROME_BROWSER_STORAGE_ACCESS_API_STORAGE_ACCESS_GRANT_PERMISSION_CONTEXT_H_
 
-#include "base/gtest_prod_util.h"
-#include "base/memory/weak_ptr.h"
-#include "components/permissions/permission_context_base.h"
-#include "net/first_party_sets/first_party_set_metadata.h"
+#include <memory>
 
-extern const int kDefaultImplicitGrantLimit;
+#include "base/memory/weak_ptr.h"
+#include "base/types/pass_key.h"
+#include "components/permissions/content_setting_permission_context_base.h"
+#include "net/first_party_sets/first_party_set_metadata.h"
 
 class GURL;
 
 namespace permissions {
-class PermissionRequestID;
-}
+struct PermissionPromptDecision;
+}  // namespace permissions
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// Update StorageAccessAPIRequestOutcome in enums.xml when you add entries.
 enum class RequestOutcome {
   // The request was granted because the requesting site and the top level site
   // were in the same First-Party Set.
@@ -31,7 +32,9 @@ enum class RequestOutcome {
   kGrantedByUser = 2,
   // The request was denied because the requesting site and the top level site
   // were not in the same First-Party Set.
-  kDeniedByFirstPartySet = 3,
+  // This variant is no longer used.
+  // kDeniedByFirstPartySet = 3,
+
   // The request was denied by the user.
   kDeniedByUser = 4,
   // The request was denied because it lacked user gesture, or one of the
@@ -42,12 +45,32 @@ enum class RequestOutcome {
   // The user has already been asked and made a choice (and was not asked
   // again).
   kReusedPreviousDecision = 7,
-  kMaxValue = kReusedPreviousDecision,
+  // The request was denied because the most recent top-level interaction on
+  // the embedded site was too long ago, or there is no such interaction.
+  kDeniedByTopLevelInteractionHeuristic = 8,
+  // 3p cookies are already allowed by user agent, so there is no need to ask.
+  kAllowedByCookieSettings = 9,
+  // The permission was previously granted without user action. E.g. through
+  // FPS.
+  kReusedImplicitGrant = 10,
+  // 3p cookies are blocked by user explicitly, so there is no need to ask.
+  kDeniedByCookieSettings = 11,
+  // The requesting origin is same-site with the embedding origin.
+  kAllowedBySameSite = 12,
+  // The request was aborted by the browser (e.g. because the RenderFrameHost
+  // was deleted).
+  kDeniedAborted = 13,
+  // The request was allowed by SAA/FedCM integration.
+  kAllowedByFedCM = 14,
+
+  kMaxValue = kAllowedByFedCM,
 };
 
 class StorageAccessGrantPermissionContext
-    : public permissions::PermissionContextBase {
+    : public permissions::ContentSettingPermissionContextBase {
  public:
+  using PassKey = base::PassKey<StorageAccessGrantPermissionContext>;
+
   explicit StorageAccessGrantPermissionContext(
       content::BrowserContext* browser_context);
 
@@ -58,70 +81,68 @@ class StorageAccessGrantPermissionContext
 
   ~StorageAccessGrantPermissionContext() override;
 
+  // Exposes `RequestPermission` for tests.
+  void RequestPermissionForTesting(
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
+      permissions::BrowserPermissionCallback callback);
+
   // Exposes `DecidePermission` for tests.
   void DecidePermissionForTesting(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      bool user_gesture,
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
       permissions::BrowserPermissionCallback callback);
+
+  static int GetImplicitGrantLimitForTesting();
+  static void SetImplicitGrantLimitForTesting(int limit);
 
  private:
   // PermissionContextBase:
-  bool IsRestrictedToSecureOrigins() const override;
-  void DecidePermission(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      bool user_gesture,
+  void RequestPermission(
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
       permissions::BrowserPermissionCallback callback) override;
-  ContentSetting GetPermissionStatusInternal(
+  void DecidePermission(
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
+      permissions::BrowserPermissionCallback callback) override;
+  void NotifyPermissionSet(
+      const permissions::PermissionRequestData& request_data,
+      permissions::BrowserPermissionCallback callback,
+      bool persist,
+      const permissions::PermissionPromptDecision& decision) override;
+
+  // ContentSettingPermissionContextBase
+  ContentSetting GetContentSettingStatusInternal(
       content::RenderFrameHost* render_frame_host,
       const GURL& requesting_origin,
       const GURL& embedding_origin) const override;
-  void NotifyPermissionSet(const permissions::PermissionRequestID& id,
-                           const GURL& requesting_origin,
-                           const GURL& embedding_origin,
-                           permissions::BrowserPermissionCallback callback,
-                           bool persist,
-                           ContentSetting content_setting,
-                           bool is_one_time,
-                           bool is_final_decision) override;
-  void UpdateContentSetting(const GURL& requesting_origin,
-                            const GURL& embedding_origin,
-                            ContentSetting content_setting,
-                            bool is_one_time) override;
+  void UpdateContentSetting(
+      const permissions::PermissionRequestData& request_data,
+      ContentSetting content_setting,
+      bool is_one_time) override;
 
   // Internal implementation for NotifyPermissionSet.
   void NotifyPermissionSetInternal(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
+      const permissions::PermissionRequestData& request_data,
       permissions::BrowserPermissionCallback callback,
       bool persist,
-      ContentSetting content_setting,
+      PermissionDecision decision,
       RequestOutcome outcome);
 
   // Checks First-Party Sets metadata to determine if auto-grants or
   // auto-denials are applicable. If no autogrant or autodenial is applicable,
-  // this tries to to use an implicit grant, and finally prompts the user if
+  // this tries to to use an implicit grant, and finally may prompt the user if
   // necessary.
   void CheckForAutoGrantOrAutoDenial(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      bool user_gesture,
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
       permissions::BrowserPermissionCallback callback,
       net::FirstPartySetMetadata metadata);
 
-  // Determines whether an implicit grant is available, and otherwise prompts
-  // the user.
-  void UseImplicitGrantOrPrompt(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      bool user_gesture,
-      permissions::BrowserPermissionCallback callback);
+  // Determines whether the top-level user-interaction heuristic was satisfied,
+  // and if so, prompts the user.
+  void OnCheckedUserInteractionHeuristic(
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
+      permissions::BrowserPermissionCallback callback,
+      bool had_top_level_user_interaction);
+
+  void ReportRelatedWebsiteSetsDeprecation(content::RenderFrameHost* rfh);
 
   base::WeakPtrFactory<StorageAccessGrantPermissionContext> weak_factory_{this};
 };

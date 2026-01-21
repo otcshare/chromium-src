@@ -11,10 +11,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
@@ -35,7 +35,6 @@ using base::ScopedTempDir;
 using base::test::TaskEnvironment;
 using leveldb_env::Options;
 using testing::_;
-using testing::Invoke;
 using testing::MakeMatcher;
 using testing::Matcher;
 using testing::MatcherInterface;

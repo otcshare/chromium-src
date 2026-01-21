@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/supports_user_data.h"
 #include "ios/web/public/webui/url_data_source_ios.h"
 #include "ios/web/webui/url_data_manager_ios.h"
@@ -58,7 +57,7 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
  private:
   friend class URLRequestChromeJob;
 
-  typedef std::map<std::string, scoped_refptr<URLDataSourceIOSImpl> >
+  typedef std::map<std::string, scoped_refptr<URLDataSourceIOSImpl>>
       DataSourceMap;
   typedef std::map<RequestID, URLRequestChromeJob*> PendingRequestMap;
 

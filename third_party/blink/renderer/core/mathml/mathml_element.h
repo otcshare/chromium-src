@@ -5,7 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_MATHML_MATHML_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_MATHML_MATHML_ELEMENT_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
@@ -14,6 +15,7 @@
 
 namespace blink {
 
+class CSSPrimitiveValue;
 class CSSToLengthConversionData;
 class QualifiedName;
 
@@ -27,6 +29,7 @@ class CORE_EXPORT MathMLElement : public Element {
   ~MathMLElement() override;
 
   bool HasTagName(const MathMLQualifiedName& name) const {
+    DCHECK_EQ(name.NamespaceURI(), namespaceURI());
     return HasLocalName(name.LocalName());
   }
 
@@ -42,33 +45,27 @@ class CORE_EXPORT MathMLElement : public Element {
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 
   enum class AllowPercentages { kYes, kNo };
-  absl::optional<Length> AddMathLengthToComputedStyle(
+  const CSSPrimitiveValue* ParseMathLength(
+      const QualifiedName& attr_name,
+      AllowPercentages allow_percentages = AllowPercentages::kYes,
+      CSSPrimitiveValue::ValueRange value_range =
+          CSSPrimitiveValue::ValueRange::kAll);
+  std::optional<Length> AddMathLengthToComputedStyle(
       const CSSToLengthConversionData&,
       const QualifiedName&,
-      AllowPercentages allow_percentages = AllowPercentages::kYes);
+      AllowPercentages allow_percentages = AllowPercentages::kYes,
+      CSSPrimitiveValue::ValueRange value_range =
+          CSSPrimitiveValue::ValueRange::kAll);
 
   void ParseAttribute(const AttributeModificationParams&) override;
 
   // https://w3c.github.io/mathml-core/#dfn-boolean
-  absl::optional<bool> BooleanAttribute(const QualifiedName& name) const;
-
-  LayoutObject* CreateLayoutObject(const ComputedStyle&,
-                                   LegacyLayout legacy) override;
+  std::optional<bool> BooleanAttribute(const QualifiedName& name) const;
 };
 
-template <typename T>
-bool IsElementOfType(const MathMLElement&);
-template <>
-inline bool IsElementOfType<const MathMLElement>(const MathMLElement&) {
-  return true;
-}
-template <>
-inline bool IsElementOfType<const MathMLElement>(const Node& node) {
-  return IsA<MathMLElement>(node);
-}
 template <>
 struct DowncastTraits<MathMLElement> {
   static bool AllowFrom(const Node& node) { return node.IsMathMLElement(); }

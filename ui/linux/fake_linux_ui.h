@@ -19,14 +19,13 @@ class FakeLinuxUi : public LinuxUiAndTheme {
 
   // ui::LinuxUi:
   bool Initialize() override;
-  base::TimeDelta GetCursorBlinkInterval() const override;
+  void InitializeFontSettings() override;
   gfx::Image GetIconForContentType(const std::string& content_type,
                                    int size,
                                    float scale) const override;
-  float GetDeviceScaleFactor() const override;
   base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;
 #if BUILDFLAG(ENABLE_PRINTING)
-  printing::PrintDialogLinuxInterface* CreatePrintDialog(
+  std::unique_ptr<printing::PrintDialogLinuxInterface> CreatePrintDialog(
       printing::PrintingContextLinux* context) override;
   gfx::Size GetPdfPaperSize(printing::PrintingContextLinux* context) override;
 #endif
@@ -37,36 +36,36 @@ class FakeLinuxUi : public LinuxUiAndTheme {
   int GetCursorThemeSize() override;
   std::unique_ptr<ui::LinuxInputMethodContext> CreateInputMethodContext(
       ui::LinuxInputMethodContextDelegate* delegate) const override;
-  bool GetTextEditCommandsForEvent(
-      const ui::Event& event,
-      std::vector<ui::TextEditCommandAuraLinux>* commands) override;
-  gfx::FontRenderParams GetDefaultFontRenderParams() const override;
-  void GetDefaultFontDescription(
-      std::string* family_out,
-      int* size_pixels_out,
-      int* style_out,
-      int* weight_out,
-      gfx::FontRenderParams* params_out) const override;
+  ui::TextEditCommand GetTextEditCommandForEvent(const ui::Event& event,
+                                                 int text_flags) override;
+  gfx::FontRenderParams GetDefaultFontRenderParams() override;
   bool AnimationsEnabled() const override;
   void AddWindowButtonOrderObserver(
       ui::WindowButtonOrderObserver* observer) override;
   void RemoveWindowButtonOrderObserver(
       ui::WindowButtonOrderObserver* observer) override;
+  bool PrimaryPasteEnabled() const override;
+  int GetWindowDragThresholdPx() const override;
   WindowFrameAction GetWindowFrameAction(
       WindowFrameActionSource source) override;
+  std::vector<std::string> GetCmdLineFlagsForCopy() const override;
 
   // ui::LinuxUiTheme:
   ui::NativeTheme* GetNativeTheme() const override;
   bool GetColor(int id, SkColor* color, bool use_custom_frame) const override;
   bool GetDisplayProperty(int id, int* result) const override;
-  SkColor GetFocusRingColor() const override;
-  SkColor GetActiveSelectionBgColor() const override;
-  SkColor GetActiveSelectionFgColor() const override;
-  SkColor GetInactiveSelectionBgColor() const override;
-  SkColor GetInactiveSelectionFgColor() const override;
+  void GetFocusRingColor(SkColor* color) const override;
+  void GetActiveSelectionBgColor(SkColor* color) const override;
+  void GetActiveSelectionFgColor(SkColor* color) const override;
+  void GetInactiveSelectionBgColor(SkColor* color) const override;
+  void GetInactiveSelectionFgColor(SkColor* color) const override;
   bool PreferDarkTheme() const override;
+  void SetDarkTheme(bool dark) override;
+  void SetAccentColor(std::optional<SkColor> accent_color) override;
   std::unique_ptr<ui::NavButtonProvider> CreateNavButtonProvider() override;
-  ui::WindowFrameProvider* GetWindowFrameProvider(bool solid_frame) override;
+  ui::WindowFrameProvider* GetWindowFrameProvider(bool solid_frame,
+                                                  bool tiled,
+                                                  bool maximized) override;
 };
 
 }  // namespace ui

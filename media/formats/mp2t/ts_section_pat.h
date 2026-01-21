@@ -5,8 +5,8 @@
 #ifndef MEDIA_FORMATS_MP2T_TS_SECTION_PAT_H_
 #define MEDIA_FORMATS_MP2T_TS_SECTION_PAT_H_
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "media/formats/mp2t/ts_section_psi.h"
 
 namespace media {
@@ -32,7 +32,7 @@ class TsSectionPat : public TsSectionPsi {
   const RegisterPmtCB register_pmt_cb_;
 
   // Parameters from the PAT.
-  int version_number_;
+  std::optional<uint8_t> version_number_;
 };
 
 }  // namespace mp2t

@@ -7,12 +7,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/gmock_callback_support.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/reporting/client/mock_report_queue.h"
 #include "components/reporting/client/report_queue.h"
 #include "components/reporting/client/report_queue_configuration.h"
@@ -54,7 +53,7 @@ void MockReportQueueProvider::
     ExpectCreateNewSpeculativeQueueAndReturnNewMockQueue(size_t times) {
   CheckOnThread();
 
-  EXPECT_CALL(*this, CreateNewSpeculativeQueueMock())
+  EXPECT_CALL(*this, CreateNewSpeculativeQueueMock(_))
       .Times(times)
       .WillRepeatedly([]() {
         auto report_queue =
@@ -86,9 +85,10 @@ void MockReportQueueProvider::CreateNewQueue(
 }
 
 StatusOr<std::unique_ptr<ReportQueue, base::OnTaskRunnerDeleter>>
-MockReportQueueProvider::CreateNewSpeculativeQueue() {
+MockReportQueueProvider::CreateNewSpeculativeQueue(
+    const ReportQueue::SpeculativeConfigSettings& config_settings) {
   CheckOnThread();
-  return CreateNewSpeculativeQueueMock();
+  return CreateNewSpeculativeQueueMock(config_settings);
 }
 
 void MockReportQueueProvider::ConfigureReportQueue(

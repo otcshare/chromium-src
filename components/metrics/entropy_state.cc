@@ -5,9 +5,12 @@
 #include "components/metrics/entropy_state.h"
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/token.h"
+#include "base/unguessable_token.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_switches.h"
 #include "components/prefs/pref_service.h"
@@ -69,6 +72,7 @@ void EntropyState::ClearPrefs(PrefService* local_state) {
   local_state->ClearPref(prefs::kMetricsLowEntropySource);
   local_state->ClearPref(prefs::kMetricsOldLowEntropySource);
   local_state->ClearPref(prefs::kMetricsPseudoLowEntropySource);
+  local_state->ClearPref(prefs::kMetricsLimitedEntropyRandomizationSource);
 }
 
 // static
@@ -79,6 +83,8 @@ void EntropyState::RegisterPrefs(PrefRegistrySimple* registry) {
                                 kLowEntropySourceNotSet);
   registry->RegisterIntegerPref(prefs::kMetricsPseudoLowEntropySource,
                                 kLowEntropySourceNotSet);
+  registry->RegisterStringPref(prefs::kMetricsLimitedEntropyRandomizationSource,
+                               std::string());
 }
 
 std::string EntropyState::GetHighEntropySource(
@@ -97,8 +103,9 @@ std::string EntropyState::GetHighEntropySource(
   // sources ever becomes small enough (see UMA.LowEntropySourceValue), we could
   // remove it, and just use the new source here.
   int low_entropy_source = GetOldLowEntropySource();
-  if (low_entropy_source == kLowEntropySourceNotSet)
+  if (low_entropy_source == kLowEntropySourceNotSet) {
     low_entropy_source = GetLowEntropySource();
+  }
 
   return initial_client_id + base::NumberToString(low_entropy_source);
 }
@@ -118,12 +125,57 @@ int EntropyState::GetOldLowEntropySource() {
   return old_low_entropy_source_;
 }
 
+std::string EntropyState::GenerateLimitedEntropyRandomizationSource() {
+  // Uses a cryptographically strong random source to generate a random 128 bit
+  // value. The value cannot be all zeros.
+  auto token = base::UnguessableToken::Create().ToString();
+  DCHECK(IsValidLimitedEntropyRandomizationSource(token));
+  return token;
+}
+
+std::string_view EntropyState::GetLimitedEntropyRandomizationSource() {
+  UpdateLimitedEntropyRandomizationSource();
+  return limited_entropy_randomization_source_;
+}
+
+void EntropyState::UpdateLimitedEntropyRandomizationSource() {
+  // The default value for limited entropy randomization source is an empty
+  // string. If it's not empty, it must have been set during this session and an
+  // update is not needed.
+  if (!limited_entropy_randomization_source_.empty()) {
+    return;
+  }
+
+  auto* pref_name = prefs::kMetricsLimitedEntropyRandomizationSource;
+  const auto* command_line = base::CommandLine::ForCurrentProcess();
+  // Load the previously set value from prefs, unless the reset variations state
+  // command line flag is given.
+  if (!command_line->HasSwitch(switches::kResetVariationState)) {
+    auto pref_value = local_state_->GetString(pref_name);
+    if (IsValidLimitedEntropyRandomizationSource(pref_value)) {
+      limited_entropy_randomization_source_ = pref_value;
+    }
+  }
+
+  // If a previously set value is not found, or if the the reset variations
+  // state command line flag is given, generate a new value and store it into
+  // prefs.
+  if (limited_entropy_randomization_source_.empty()) {
+    limited_entropy_randomization_source_ =
+        GenerateLimitedEntropyRandomizationSource();
+    local_state_->SetString(pref_name, limited_entropy_randomization_source_);
+  }
+
+  CHECK(!limited_entropy_randomization_source_.empty());
+}
+
 void EntropyState::UpdateLowEntropySources() {
   // The default value for |low_entropy_source_| and the default pref value are
   // both |kLowEntropySourceNotSet|, which indicates the value has not been set.
   if (low_entropy_source_ != kLowEntropySourceNotSet &&
-      pseudo_low_entropy_source_ != kLowEntropySourceNotSet)
+      pseudo_low_entropy_source_ != kLowEntropySourceNotSet) {
     return;
+  }
 
   const base::CommandLine* command_line(base::CommandLine::ForCurrentProcess());
   // Only try to load the value from prefs if the user did not request a reset.
@@ -133,15 +185,18 @@ void EntropyState::UpdateLowEntropySources() {
   // UpdateLowEntropySources().
   if (!command_line->HasSwitch(switches::kResetVariationState)) {
     int new_pref = local_state_->GetInteger(prefs::kMetricsLowEntropySource);
-    if (IsValidLowEntropySource(new_pref))
+    if (IsValidLowEntropySource(new_pref)) {
       low_entropy_source_ = new_pref;
+    }
     int old_pref = local_state_->GetInteger(prefs::kMetricsOldLowEntropySource);
-    if (IsValidLowEntropySource(old_pref))
+    if (IsValidLowEntropySource(old_pref)) {
       old_low_entropy_source_ = old_pref;
+    }
     int pseudo_pref =
         local_state_->GetInteger(prefs::kMetricsPseudoLowEntropySource);
-    if (IsValidLowEntropySource(pseudo_pref))
+    if (IsValidLowEntropySource(pseudo_pref)) {
       pseudo_low_entropy_source_ = pseudo_pref;
+    }
   }
 
   // If the new source is missing or corrupt (or requested to be reset), then
@@ -174,16 +229,6 @@ void EntropyState::UpdateLowEntropySources() {
   }
 
   DCHECK_NE(low_entropy_source_, kLowEntropySourceNotSet);
-  // TODO(crbug/1041710): Currently, these metrics might be recorded multiple
-  // times but that shouldn't matter because we can workaround it by using count
-  // unique user mode. Also, once we verify that we can persist
-  // low_entropy_source to our system profile proto, These two metrics are
-  // longer needed and should be removed.
-  base::UmaHistogramSparse("UMA.LowEntropySource3Value", low_entropy_source_);
-  if (old_low_entropy_source_ != kLowEntropySourceNotSet) {
-    base::UmaHistogramSparse("UMA.LowEntropySourceValue",
-                             old_low_entropy_source_);
-  }
 }
 
 // static
@@ -191,4 +236,20 @@ bool EntropyState::IsValidLowEntropySource(int value) {
   return value >= 0 && value < kMaxLowEntropySize;
 }
 
+// static
+bool EntropyState::IsValidLimitedEntropyRandomizationSource(
+    std::string_view value) {
+  if (value.empty()) {
+    return false;
+  }
+  // Use Token::FromString() to check whether the given value is a valid
+  // `base::UnguessableToken`.
+  auto token = base::Token::FromString(value);
+  return token.has_value() && !token.value().is_zero();
+}
+
 }  // namespace metrics
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(LowEntropySource)
+#endif

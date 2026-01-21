@@ -6,17 +6,18 @@
 
 #include <stdint.h>
 
+#include <optional>
+
 #include "base/time/time.h"
 #include "chrome/browser/push_messaging/push_messaging_app_identifier.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 namespace {
 
-void ExpectAppIdentifiersEqual(const PushMessagingAppIdentifier& a,
-                               const PushMessagingAppIdentifier& b) {
+void ExpectAppIdentifiersEqual(const push_messaging::AppIdentifier& a,
+                               const push_messaging::AppIdentifier& b) {
   EXPECT_EQ(a.app_id(), b.app_id());
   EXPECT_EQ(a.origin(), b.origin());
   EXPECT_EQ(a.service_worker_registration_id(),
@@ -31,9 +32,9 @@ const int64_t kTestServiceWorkerId = 42;
 class PushMessagingRefresherTest : public testing::Test {
  protected:
   void SetUp() override {
-    old_app_identifier_ = PushMessagingAppIdentifier::Generate(
+    old_app_identifier_ = push_messaging::AppIdentifier::Generate(
         GURL(kTestOrigin), kTestServiceWorkerId);
-    new_app_identifier_ = PushMessagingAppIdentifier::Generate(
+    new_app_identifier_ = push_messaging::AppIdentifier::Generate(
         GURL(kTestOrigin), kTestServiceWorkerId);
   }
 
@@ -41,8 +42,8 @@ class PushMessagingRefresherTest : public testing::Test {
 
   PushMessagingRefresher* refresher() { return &refresher_; }
 
-  absl::optional<PushMessagingAppIdentifier> old_app_identifier_;
-  absl::optional<PushMessagingAppIdentifier> new_app_identifier_;
+  std::optional<push_messaging::AppIdentifier> old_app_identifier_;
+  std::optional<push_messaging::AppIdentifier> new_app_identifier_;
 
  private:
   content::BrowserTaskEnvironment task_environment_;
@@ -63,7 +64,7 @@ TEST_F(PushMessagingRefresherTest, LookupOldSubscription) {
   refresher()->Refresh(old_app_identifier_.value(),
                        new_app_identifier_.value().app_id(), kTestSenderId);
   {
-    absl::optional<PushMessagingAppIdentifier> found_old_app_identifier =
+    std::optional<push_messaging::AppIdentifier> found_old_app_identifier =
         refresher()->FindActiveAppIdentifier(
             old_app_identifier_.value().app_id());
     EXPECT_TRUE(found_old_app_identifier.has_value());
@@ -72,7 +73,7 @@ TEST_F(PushMessagingRefresherTest, LookupOldSubscription) {
   }
   refresher()->OnUnsubscribed(old_app_identifier_.value().app_id());
   {
-    absl::optional<PushMessagingAppIdentifier> found_after_unsubscribe =
+    std::optional<push_messaging::AppIdentifier> found_after_unsubscribe =
         refresher()->FindActiveAppIdentifier(
             old_app_identifier_.value().app_id());
     EXPECT_FALSE(found_after_unsubscribe.has_value());

@@ -6,13 +6,17 @@
 #define EXTENSIONS_RENDERER_API_MESSAGING_GIN_PORT_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "extensions/common/api/messaging/port_id.h"
+#include "extensions/common/mojom/message_port.mojom.h"
 #include "extensions/renderer/bindings/api_binding_util.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "v8/include/v8-forward.h"
 
 namespace gin {
@@ -21,9 +25,9 @@ class Arguments;
 
 namespace extensions {
 class APIEventHandler;
-struct Message;
+class Message;
 
-// A gin::Wrappable implementation of runtime.Port exposed to extensions. This
+// A gin::Wrappable implementation of `runtime.Port` exposed to extensions. This
 // provides a means for extensions to communicate with themselves and each
 // other. This message-passing usually involves IPCs to the browser; we delegate
 // out this responsibility. This class only handles the JS interface (both calls
@@ -37,19 +41,17 @@ class GinPort final : public gin::Wrappable<GinPort> {
     // Posts a message to the port.
     virtual void PostMessageToPort(v8::Local<v8::Context> context,
                                    const PortId& port_id,
-                                   int routing_id,
                                    std::unique_ptr<Message> message) = 0;
 
     // Closes the port.
     virtual void ClosePort(v8::Local<v8::Context> context,
-                           const PortId& port_id,
-                           int routing_id) = 0;
+                           const PortId& port_id) = 0;
   };
 
   GinPort(v8::Local<v8::Context> context,
           const PortId& port_id,
-          int routing_id,
           const std::string& name,
+          const mojom::ChannelType channel_type,
           APIEventHandler* event_handler,
           Delegate* delegate);
 
@@ -58,12 +60,13 @@ class GinPort final : public gin::Wrappable<GinPort> {
 
   ~GinPort() override;
 
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin}, gin::kGinPort};
 
   // gin::Wrappable:
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
-  const char* GetTypeName() override;
+  const char* GetHumanReadableName() const override;
 
   // Dispatches an event to any listeners of the onMessage event.
   void DispatchOnMessage(v8::Local<v8::Context> context,
@@ -73,19 +76,24 @@ class GinPort final : public gin::Wrappable<GinPort> {
   // the port.
   void DispatchOnDisconnect(v8::Local<v8::Context> context);
 
-  // Sets the |sender| property on the port. Note: this can only be called
+  // Sets the `sender` property on the port. Note: this can only be called
   // before the `sender` property is accessed on the JS object, since it is
   // lazily set as a data property in first access.
   void SetSender(v8::Local<v8::Context> context, v8::Local<v8::Value> sender);
 
+  // Called when the `ServiceWorkerData` owning the `Delegate` and
+  // `APIEventHandler` is destroyed.
+  void OnContextDestroyed();
+
   const PortId& port_id() const { return port_id_; }
-  int routing_id() const { return routing_id_; }
   const std::string& name() const { return name_; }
 
-  bool is_closed_for_testing() const { return state_ == kDisconnected; }
+  bool is_closed_for_testing() const { return state_ == State::kDisconnected; }
 
  private:
-  enum State {
+  const gin::WrapperInfo* wrapper_info() const override;
+
+  enum class State {
     kActive,        // The port is currently active.
     kDisconnected,  // The port was disconnected by calling port.disconnect().
     kInvalidated,   // The associated v8::Context has been invalidated.
@@ -107,15 +115,15 @@ class GinPort final : public gin::Wrappable<GinPort> {
   // Port.sender
   v8::Local<v8::Value> GetSender(gin::Arguments* arguments);
 
-  // Helper method to return the event with the given |name| (either
+  // Helper method to return the event with the given `name` (either
   // onDisconnect or onMessage).
   v8::Local<v8::Object> GetEvent(v8::Local<v8::Context> context,
-                                 base::StringPiece event_name);
+                                 std::string_view event_name);
 
   // Helper method to dispatch an event.
   void DispatchEvent(v8::Local<v8::Context> context,
-                     std::vector<v8::Local<v8::Value>>* args,
-                     base::StringPiece event_name);
+                     v8::LocalVector<v8::Value>* args,
+                     std::string_view event_name);
 
   // Invalidates the port (due to the context being removed). Any further calls
   // to postMessage() or instantiating new events will fail.
@@ -124,37 +132,37 @@ class GinPort final : public gin::Wrappable<GinPort> {
   // Invalidates the port's events after the port has been disconnected.
   void InvalidateEvents(v8::Local<v8::Context> context);
 
-  // Throws the given |error|.
-  void ThrowError(v8::Isolate* isolate, base::StringPiece error);
+  // Throws the given `error`.
+  void ThrowError(v8::Isolate* isolate, std::string_view error);
 
   // The current state of the port.
-  State state_ = kActive;
+  State state_ = State::kActive;
 
   // The associated port id.
   const PortId port_id_;
 
-  // The routing id associated with the port's context's render frame.
-  // TODO(devlin/lazyboy): This won't work with service workers.
-  const int routing_id_;
-
   // The port's name.
   const std::string name_;
 
-  // The associated APIEventHandler. Guaranteed to outlive this object.
-  APIEventHandler* const event_handler_;
+  // The type of the associated channel.
+  const mojom::ChannelType channel_type_;
+
+  // The associated APIEventHandler. Guaranteed to live until
+  // `OnContextDestroyed` is called.
+  raw_ptr<APIEventHandler> event_handler_;
 
   // The delegate for handling the message passing between ports. Guaranteed to
-  // outlive this object.
-  Delegate* const delegate_;
+  // live until `OnContextDestroyed` is called.
+  raw_ptr<Delegate> delegate_;
 
   // Whether the `sender` property has been accessed, and thus set on the
   // port JS object.
   bool accessed_sender_;
 
   // A listener for context invalidation. Note: this isn't actually optional;
-  // it just needs to be created after |weak_factory_|, which needs to be the
+  // it just needs to be created after `weak_factory_`, which needs to be the
   // final member.
-  absl::optional<binding::ContextInvalidationListener>
+  std::optional<binding::ContextInvalidationListener>
       context_invalidation_listener_;
 
   base::WeakPtrFactory<GinPort> weak_factory_{this};

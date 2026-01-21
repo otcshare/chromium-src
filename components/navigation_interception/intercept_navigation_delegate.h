@@ -8,9 +8,13 @@
 #include <memory>
 
 #include "base/android/jni_weak_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "components/navigation_interception/intercept_navigation_throttle.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
 #include "ui/base/page_transition_types.h"
 
@@ -19,6 +23,15 @@ class NavigationHandle;
 class NavigationThrottle;
 class WebContents;
 }
+
+namespace network {
+struct ResourceRequest;
+
+namespace mojom {
+class URLLoader;
+class URLLoaderClient;
+}  // namespace mojom
+}  // namespace network
 
 namespace url {
 class Origin;
@@ -45,7 +58,7 @@ class InterceptNavigationDelegate : public base::SupportsUserData::Data {
   // base::EscapeExternalHandlerValue() invoked on URLs passed to
   // ShouldIgnoreNavigation() before the navigation is processed.
   InterceptNavigationDelegate(JNIEnv* env,
-                              jobject jdelegate,
+                              const jni_zero::JavaRef<jobject>& jdelegate,
                               bool escape_external_handler_value = false);
 
   InterceptNavigationDelegate(const InterceptNavigationDelegate&) = delete;
@@ -66,11 +79,20 @@ class InterceptNavigationDelegate : public base::SupportsUserData::Data {
 
   // Creates a InterceptNavigationThrottle that will direct all callbacks to
   // the InterceptNavigationDelegate.
-  static std::unique_ptr<content::NavigationThrottle> MaybeCreateThrottleFor(
-      content::NavigationHandle* handle,
-      navigation_interception::SynchronyMode mode);
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry,
+                                navigation_interception::SynchronyMode mode);
 
-  bool ShouldIgnoreNavigation(content::NavigationHandle* navigation_handle);
+  void ShouldIgnoreNavigation(
+      content::NavigationHandle* navigation_handle,
+      bool should_run_async,
+      InterceptNavigationThrottle::ResultCallback result_callback);
+
+  void OnShouldIgnoreNavigationResult(bool should_ignore);
+
+  // Requests that clients finish any pending ShouldIgnore checks synchronously.
+  // If finishing the check synchronously is not possible, further
+  // redirects/commits will be deferred.
+  void RequestFinishPendingShouldIgnoreCheck();
 
   // See ContentBrowserClient::HandleExternalProtocol for the semantics around
   // |out_factory|.
@@ -78,16 +100,36 @@ class InterceptNavigationDelegate : public base::SupportsUserData::Data {
       const GURL& url,
       ui::PageTransition page_transition,
       bool has_user_gesture,
-      const absl::optional<url::Origin>& initiating_origin,
+      const std::optional<url::Origin>& initiating_origin,
       mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory);
 
   // To be called when a main frame requests a resource with a user gesture (eg.
   // xrh, fetch, etc.)
   void OnResourceRequestWithGesture();
 
+  void OnSubframeAsyncActionTaken(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& j_gurl);
+
  private:
+  void LoaderCallback(
+      const network::ResourceRequest& resource_request,
+      mojo::PendingReceiver<network::mojom::URLLoader> pending_receiver,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> pending_client);
+
+  void MaybeHandleSubframeAction();
+
   JavaObjectWeakGlobalRef weak_jdelegate_;
   bool escape_external_handler_value_ = false;
+
+  mojo::SelfOwnedReceiverRef<network::mojom::URLLoader> url_loader_;
+  // An empty URL if an async action is pending, or a URL to redirect to when
+  // the URLLoader is ready.
+  std::unique_ptr<GURL> subframe_redirect_url_;
+
+  InterceptNavigationThrottle::ResultCallback should_ignore_result_callback_;
+
+  base::WeakPtrFactory<InterceptNavigationDelegate> weak_ptr_factory_{this};
 };
 
 }  // namespace navigation_interception

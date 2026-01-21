@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_FAVICON_IOS_WEB_FAVICON_DRIVER_H_
 #define COMPONENTS_FAVICON_IOS_WEB_FAVICON_DRIVER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/favicon/core/favicon_driver_impl.h"
 #import "components/image_fetcher/ios/ios_image_data_fetcher_wrapper.h"
 #include "ios/web/public/web_state_observer.h"
@@ -30,6 +31,9 @@ class WebFaviconDriver : public web::WebStateObserver,
   WebFaviconDriver& operator=(const WebFaviconDriver&) = delete;
 
   ~WebFaviconDriver() override;
+
+  // Returns a pointer to the owning `WebState`.
+  web::WebState* web_state() { return web_state_; }
 
   // FaviconDriver implementation.
   gfx::Image GetFavicon() const override;
@@ -83,9 +87,7 @@ class WebFaviconDriver : public web::WebStateObserver,
 
   // The WebState this instance is observing. Will be null after
   // WebStateDestroyed has been called.
-  web::WebState* web_state_ = nullptr;
-
-  WEB_STATE_USER_DATA_KEY_DECL();
+  raw_ptr<web::WebState> web_state_ = nullptr;
 };
 
 }  // namespace favicon

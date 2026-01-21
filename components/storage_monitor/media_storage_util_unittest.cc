@@ -4,10 +4,10 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,18 +19,12 @@
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace {
-
-const char kImageCaptureDeviceId[] = "ic:xyz";
-
-}  // namespace
-
 namespace storage_monitor {
 
 class MediaStorageUtilTest : public testing::Test {
  public:
-  MediaStorageUtilTest() {}
-  ~MediaStorageUtilTest() override {}
+  MediaStorageUtilTest() = default;
+  ~MediaStorageUtilTest() override = default;
 
   // Verify mounted device type.
   void CheckDCIMDeviceType(const base::FilePath& mount_point) {
@@ -72,7 +66,7 @@ class MediaStorageUtilTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-  raw_ptr<TestStorageMonitor> monitor_;
+  raw_ptr<TestStorageMonitor, DanglingUntriaged> monitor_;
   base::ScopedTempDir scoped_temp_dir_;
 };
 
@@ -100,33 +94,6 @@ TEST_F(MediaStorageUtilTest, NonMediaDeviceAttached) {
       base::BindOnce(&MediaStorageUtilTest::CheckNonDCIMDeviceType,
                      base::Unretained(this), mount_point));
   RunUntilIdle();
-}
-
-TEST_F(MediaStorageUtilTest, CanCreateFileSystemForImageCapture) {
-  EXPECT_TRUE(MediaStorageUtil::CanCreateFileSystem(kImageCaptureDeviceId,
-                                                    base::FilePath()));
-  EXPECT_FALSE(MediaStorageUtil::CanCreateFileSystem(
-      "dcim:xyz", base::FilePath()));
-  EXPECT_FALSE(MediaStorageUtil::CanCreateFileSystem(
-      "dcim:xyz", base::FilePath(FILE_PATH_LITERAL("relative"))));
-  EXPECT_FALSE(MediaStorageUtil::CanCreateFileSystem(
-      "dcim:xyz", base::FilePath(FILE_PATH_LITERAL("../refparent"))));
-}
-
-TEST_F(MediaStorageUtilTest, DetectDeviceFiltered) {
-  MediaStorageUtil::DeviceIdSet devices;
-  devices.insert(kImageCaptureDeviceId);
-
-  MediaStorageUtil::FilterAttachedDevices(&devices, base::DoNothing());
-  RunUntilIdle();
-  EXPECT_FALSE(devices.find(kImageCaptureDeviceId) != devices.end());
-
-  ProcessAttach(kImageCaptureDeviceId, FILE_PATH_LITERAL("/location"));
-  devices.insert(kImageCaptureDeviceId);
-  MediaStorageUtil::FilterAttachedDevices(&devices, base::DoNothing());
-  RunUntilIdle();
-
-  EXPECT_TRUE(devices.find(kImageCaptureDeviceId) != devices.end());
 }
 
 }  // namespace storage_monitor

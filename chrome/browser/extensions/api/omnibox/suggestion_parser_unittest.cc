@@ -5,24 +5,29 @@
 #include "chrome/browser/extensions/api/omnibox/suggestion_parser.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 namespace {
 
 constexpr api::omnibox::DescriptionStyleType kMatch =
-    api::omnibox::DESCRIPTION_STYLE_TYPE_MATCH;
+    api::omnibox::DescriptionStyleType::kMatch;
 constexpr api::omnibox::DescriptionStyleType kDim =
-    api::omnibox::DESCRIPTION_STYLE_TYPE_DIM;
+    api::omnibox::DescriptionStyleType::kDim;
 constexpr api::omnibox::DescriptionStyleType kUrl =
-    api::omnibox::DESCRIPTION_STYLE_TYPE_URL;
+    api::omnibox::DescriptionStyleType::kUrl;
 
 // A custom matcher for an omnibox::MatchClassification.
 testing::Matcher<api::omnibox::MatchClassification> GetStyleMatcher(
@@ -47,7 +52,7 @@ class SuggestionParserUnitTest : public testing::Test {
 
   // A helper method to synchronously parses `str` as input and return the
   // result.
-  DescriptionAndStyles ParseSingleInput(base::StringPiece str) {
+  DescriptionAndStyles ParseSingleInput(std::string_view str) {
     DescriptionAndStylesResult result;
     ParseImpl({str}, &result);
     if (result.descriptions_and_styles.size() != 1) {
@@ -60,45 +65,31 @@ class SuggestionParserUnitTest : public testing::Test {
   }
   // Same as above, accepting multiple string inputs.
   std::vector<DescriptionAndStyles> ParseInputs(
-      const std::vector<base::StringPiece>& strs) {
+      const std::vector<std::string_view>& strs) {
     DescriptionAndStylesResult result;
     ParseImpl(strs, &result);
     EXPECT_EQ(std::string(), result.error);
     return std::move(result.descriptions_and_styles);
   }
 
-  // Returns the parsing error from attempting to parse `str`.
-  std::string GetParseError(base::StringPiece str) {
-    DescriptionAndStylesResult result;
-    ParseImpl({str}, &result);
-    return result.error;
-  }
-  // Same as above, accepting multiple string inputs.
-  std::string GetParseError(const std::vector<base::StringPiece>& strs) {
+  // Returns the parsing error from attempting to parse `strs`.
+  std::string GetParseError(const std::vector<std::string_view>& strs) {
     DescriptionAndStylesResult result;
     ParseImpl(strs, &result);
     return result.error;
   }
 
  private:
-  void ParseImpl(const std::vector<base::StringPiece>& strs,
+  void ParseImpl(const std::vector<std::string_view>& strs,
                  DescriptionAndStylesResult* result_out) {
-    base::RunLoop run_loop;
-    auto get_result = [&run_loop,
-                       result_out](DescriptionAndStylesResult result) {
-      *result_out = std::move(result);
-      run_loop.Quit();
-    };
-
-    auto get_result_callback = base::BindLambdaForTesting(get_result);
+    base::test::TestFuture<DescriptionAndStylesResult> parse_future;
     if (strs.size() == 1) {
-      ParseDescriptionAndStyles(strs[0], std::move(get_result_callback));
+      ParseDescriptionAndStyles(strs[0], parse_future.GetCallback());
     } else {
-      ParseDescriptionsAndStyles(strs, std::move(get_result_callback));
+      ParseDescriptionsAndStyles(strs, parse_future.GetCallback());
     }
 
-    run_loop.Run();
-
+    *result_out = parse_future.Take();
     // Exactly one of error and result should be populated.
     bool has_parsed_entries = !result_out->descriptions_and_styles.empty();
     bool has_error = !result_out->error.empty();
@@ -186,9 +177,9 @@ TEST_F(SuggestionParserUnitTest, MultipleEntries) {
 TEST_F(SuggestionParserUnitTest, ParsingFails) {
   // Note: These aren't expected to be terribly robust tests, since XML parsing
   // is exercised significantly more in the XmlParser-related tests.
-  EXPECT_THAT(GetParseError("<dim>no closing tag"),
+  EXPECT_THAT(GetParseError({"<dim>no closing tag"}),
               testing::HasSubstr("Opening and ending tag mismatch"));
-  EXPECT_THAT(GetParseError("<dim>hello <url>foo</dim> world</url>"),
+  EXPECT_THAT(GetParseError({"<dim>hello <url>foo</dim> world</url>"}),
               testing::HasSubstr("Opening and ending tag mismatch"));
   // Test an error in one of three inputs.
   EXPECT_THAT(GetParseError({"first <match>match</match> entry",
@@ -200,7 +191,7 @@ TEST_F(SuggestionParserUnitTest, ParsingFails) {
   // do any escaping for the element tags we use ("fragment" and
   // "internal-suggestion"), extensions can prematurely end our tags. This is
   // safe; it just results in invalid XML.
-  EXPECT_THAT(GetParseError("first </fragment>DROP TABLE supersecret"),
+  EXPECT_THAT(GetParseError({"first </fragment>DROP TABLE supersecret"}),
               testing::HasSubstr("Extra content at the end of the document"));
   EXPECT_THAT(
       GetParseError(
@@ -214,7 +205,7 @@ TEST_F(SuggestionParserUnitTest, ParsingFails) {
   // <fragment>first suggestion</fragment>
   // <fragment>second</fragment>
   EXPECT_THAT(
-      GetParseError("first suggestion</fragment><fragment>second</fragment>"),
+      GetParseError({"first suggestion</fragment><fragment>second</fragment>"}),
       testing::HasSubstr("Extra content at the end of the document"));
 
   // Test an injection that inserts unexpected children in our synthesized XML

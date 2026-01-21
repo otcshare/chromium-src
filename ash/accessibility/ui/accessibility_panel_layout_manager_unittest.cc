@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ash/accessibility/magnifier/docked_magnifier_controller.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -32,8 +33,8 @@ AccessibilityPanelLayoutManager* GetLayoutManager() {
 std::unique_ptr<views::Widget> CreateChromeVoxPanel() {
   std::unique_ptr<views::Widget> widget = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   aura::Window* root_window = Shell::GetPrimaryRootWindow();
   params.parent = Shell::GetContainer(
       root_window, kShellWindowId_AccessibilityPanelContainer);
@@ -77,7 +78,7 @@ TEST_F(AccessibilityPanelLayoutManagerTest, Shutdown) {
 
 TEST_F(AccessibilityPanelLayoutManagerTest, PanelFullscreen) {
   AccessibilityPanelLayoutManager* layout_manager = GetLayoutManager();
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
 
   std::unique_ptr<views::Widget> widget = CreateChromeVoxPanel();
   widget->Show();
@@ -123,7 +124,7 @@ TEST_F(AccessibilityPanelLayoutManagerTest, DisplayBoundsChange) {
   // When the display resolution changes the panel still sits at the top of the
   // screen.
   UpdateDisplay("1200x700,1300x800");
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   gfx::Rect expected_bounds(0, 0, screen->GetPrimaryDisplay().bounds().width(),
                             kDefaultPanelHeight);
   EXPECT_EQ(widget->GetNativeWindow()->bounds(), expected_bounds);
@@ -131,6 +132,32 @@ TEST_F(AccessibilityPanelLayoutManagerTest, DisplayBoundsChange) {
   gfx::Rect expected_work_area = screen->GetPrimaryDisplay().bounds();
   expected_work_area.Inset(gfx::Insets::TLBR(
       kDefaultPanelHeight, 0, ShelfConfig::Get()->shelf_size(), 0));
+  EXPECT_EQ(screen->GetPrimaryDisplay().work_area(), expected_work_area);
+}
+
+TEST_F(AccessibilityPanelLayoutManagerTest, DockedMagnifierEnabled) {
+  auto* docked_magnifier_controller =
+      Shell::Get()->docked_magnifier_controller();
+  std::unique_ptr<views::Widget> widget = CreateChromeVoxPanel();
+  widget->Show();
+  GetLayoutManager()->SetPanelBounds(gfx::Rect(0, 0, 0, kDefaultPanelHeight),
+                                     AccessibilityPanelState::FULL_WIDTH);
+
+  // When Docked Magnifier is enabled, panel sits right below, and work area
+  // sits below the panel.
+  docked_magnifier_controller->SetEnabled(true);
+  int magnifier_height = docked_magnifier_controller->GetTotalMagnifierHeight();
+
+  display::Screen* screen = display::Screen::Get();
+  gfx::Rect expected_bounds(0, magnifier_height,
+                            screen->GetPrimaryDisplay().bounds().width(),
+                            kDefaultPanelHeight);
+  EXPECT_EQ(widget->GetNativeWindow()->bounds(), expected_bounds);
+
+  gfx::Rect expected_work_area = screen->GetPrimaryDisplay().bounds();
+  expected_work_area.Inset(
+      gfx::Insets::TLBR(magnifier_height + kDefaultPanelHeight, 0,
+                        ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(screen->GetPrimaryDisplay().work_area(), expected_work_area);
 }
 

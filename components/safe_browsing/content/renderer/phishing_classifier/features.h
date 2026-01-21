@@ -26,6 +26,7 @@
 #define COMPONENTS_SAFE_BROWSING_CONTENT_RENDERER_PHISHING_CLASSIFIER_FEATURES_H_
 
 #include <stddef.h>
+
 #include <string>
 #include <unordered_map>
 

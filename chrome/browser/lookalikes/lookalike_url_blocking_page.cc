@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/strings/string_number_conversions.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/grit/components_resources.h"
 #include "components/lookalikes/core/lookalike_url_ui_util.h"
@@ -17,6 +18,8 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/net_errors.h"
 
+using lookalikes::LookalikeUrlBlockingPageUserAction;
+using lookalikes::LookalikeUrlMatchType;
 using security_interstitials::MetricsHelper;
 
 // static
@@ -58,12 +61,12 @@ LookalikeUrlBlockingPage::GetTypeForTesting() {
 
 void LookalikeUrlBlockingPage::PopulateInterstitialStrings(
     base::Value::Dict& load_time_data) {
-  PopulateLookalikeUrlBlockingPageStrings(load_time_data, safe_url_,
-                                          request_url());
+  lookalikes::PopulateLookalikeUrlBlockingPageStrings(load_time_data, safe_url_,
+                                                      request_url());
 }
 
 void LookalikeUrlBlockingPage::OnInterstitialClosing() {
-  ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+  lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
       source_id_, match_type_, LookalikeUrlBlockingPageUserAction::kCloseOrBack,
       triggered_by_initial_url_);
 }
@@ -88,7 +91,7 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_DONT_PROCEED:
       controller()->metrics_helper()->RecordUserDecision(
           MetricsHelper::DONT_PROCEED);
-      ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+      lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
           source_id_, match_type_,
           LookalikeUrlBlockingPageUserAction::kAcceptSuggestion,
           triggered_by_initial_url_);
@@ -103,7 +106,7 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_PROCEED:
       controller()->metrics_helper()->RecordUserDecision(
           MetricsHelper::PROCEED);
-      ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+      lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
           source_id_, match_type_,
           LookalikeUrlBlockingPageUserAction::kClickThrough,
           triggered_by_initial_url_);
@@ -122,7 +125,6 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_REPORT_PHISHING_ERROR:
       // Not supported by the lookalike URL warning page.
       NOTREACHED() << "Unsupported command: " << command;
-      break;
     case security_interstitials::CMD_ERROR:
     case security_interstitials::CMD_TEXT_FOUND:
     case security_interstitials::CMD_TEXT_NOT_FOUND:

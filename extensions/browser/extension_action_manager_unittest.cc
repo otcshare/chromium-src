@@ -7,13 +7,14 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_test.h"
 #include "extensions/common/api/extension_action/action_info.h"
+#include "extensions/common/api/extension_action/action_info_test_util.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -39,8 +40,8 @@ class ExtensionActionManagerTest
   ExtensionRegistry* registry() { return registry_; }
 
  private:
-  raw_ptr<ExtensionRegistry> registry_;
-  raw_ptr<ExtensionActionManager> manager_;
+  raw_ptr<ExtensionRegistry, DanglingUntriaged> registry_;
+  raw_ptr<ExtensionActionManager, DanglingUntriaged> manager_;
 };
 
 ExtensionActionManagerTest::ExtensionActionManagerTest() = default;
@@ -59,10 +60,10 @@ TEST_P(ExtensionActionManagerTest, TestPopulateMissingValues_Icons) {
   // replaced because "128" can always be used in its place.
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Test Extension")
-          .SetManifestKey("icons", DictionaryBuilder()
+          .SetManifestKey("icons", base::Value::Dict()
                                        .Set("48", "icon48.png")
-                                       .Set("128", "icon128.png")
-                                       .BuildDict())
+                                       .Set("128", "icon128.png"))
+          .SetManifestVersion(GetManifestVersionForActionType(GetParam()))
           .SetManifestKey(ActionInfo::GetManifestKeyForActionType(GetParam()),
                           base::Value::Dict())
           .Build();
@@ -83,6 +84,7 @@ TEST_P(ExtensionActionManagerTest, TestPopulateMissingValues_Icons) {
 TEST_P(ExtensionActionManagerTest, TestPopulateMissingValues_Title) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Test Extension")
+          .SetManifestVersion(GetManifestVersionForActionType(GetParam()))
           .SetManifestKey(ActionInfo::GetManifestKeyForActionType(GetParam()),
                           base::Value::Dict())
           .Build();
@@ -102,15 +104,13 @@ TEST_P(ExtensionActionManagerTest, TestPopulateMissingValues_Title) {
 TEST_P(ExtensionActionManagerTest, TestDontOverrideIfDefaultsProvided) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Test Extension")
-          .SetManifestKey(
-              "icons", DictionaryBuilder().Set("24", "icon24.png").BuildDict())
-          .SetManifestKey(
-              ActionInfo::GetManifestKeyForActionType(GetParam()),
-              DictionaryBuilder()
-                  .Set("default_icon",
-                       DictionaryBuilder().Set("19", "icon19.png").BuildDict())
-                  .Set("default_title", "Action!")
-                  .BuildDict())
+          .SetManifestVersion(GetManifestVersionForActionType(GetParam()))
+          .SetManifestKey("icons", base::Value::Dict().Set("24", "icon24.png"))
+          .SetManifestKey(ActionInfo::GetManifestKeyForActionType(GetParam()),
+                          base::Value::Dict()
+                              .Set("default_icon",
+                                   base::Value::Dict().Set("19", "icon19.png"))
+                              .Set("default_title", "Action!"))
           .Build();
 
   ASSERT_TRUE(extension);
@@ -131,8 +131,8 @@ TEST_P(ExtensionActionManagerTest, TestDontOverrideIfDefaultsProvided) {
 
 INSTANTIATE_TEST_SUITE_P(All,
                          ExtensionActionManagerTest,
-                         testing::Values(ActionInfo::TYPE_ACTION,
-                                         ActionInfo::TYPE_BROWSER,
-                                         ActionInfo::TYPE_PAGE));
+                         testing::Values(ActionInfo::Type::kAction,
+                                         ActionInfo::Type::kBrowser,
+                                         ActionInfo::Type::kPage));
 
 }  // namespace extensions

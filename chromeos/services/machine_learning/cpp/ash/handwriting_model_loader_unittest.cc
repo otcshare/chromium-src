@@ -5,15 +5,16 @@
 #include "chromeos/services/machine_learning/cpp/ash/handwriting_model_loader.h"
 
 #include <string>
+#include <string_view>
 
-#include "ash/constants/ash_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/dbus/dlcservice/fake_dlcservice_client.h"
 #include "chromeos/services/machine_learning/public/cpp/fake_service_connection.h"
+#include "chromeos/services/machine_learning/public/cpp/ml_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -69,7 +70,7 @@ class HandwritingModelLoaderTest : public testing::Test {
   }
 
   // Sets InstallDlc error.
-  void SetInstallError(const std::string& error) {
+  void SetInstallError(std::string_view error) {
     fake_client_.set_install_error(error);
     fake_client_.set_install_root_path("/any-path");
   }
@@ -77,7 +78,7 @@ class HandwritingModelLoaderTest : public testing::Test {
   // Sets "ondevice_handwriting" value.
   void SetSwitchValue(const std::string& switch_value) {
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        ash::switches::kOndeviceHandwritingSwitch, switch_value);
+        ::switches::kOndeviceHandwritingSwitch, switch_value);
   }
 
  private:

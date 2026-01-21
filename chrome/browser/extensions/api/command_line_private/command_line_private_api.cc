@@ -4,7 +4,6 @@
 
 #include "chrome/browser/extensions/api/command_line_private/command_line_private_api.h"
 
-#include <memory>
 #include <string>
 
 #include "base/command_line.h"
@@ -22,12 +21,13 @@ namespace extensions {
 namespace command_line_private = api::command_line_private;
 
 ExtensionFunction::ResponseAction CommandLinePrivateHasSwitchFunction::Run() {
-  std::unique_ptr<command_line_private::HasSwitch::Params> params(
-      command_line_private::HasSwitch::Params::Create(args()));
+  std::optional<command_line_private::HasSwitch::Params> params =
+      command_line_private::HasSwitch::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  if (params->name.empty())
+  if (params->name.empty()) {
     return RespondNow(Error(kEmptySwitchName));
+  }
 
   return RespondNow(
       ArgumentList(command_line_private::HasSwitch::Results::Create(

@@ -10,8 +10,6 @@
 # win tool. The script assumes that the root build directory is the current dir
 # and the files will be written to the current directory.
 
-from __future__ import print_function
-
 import errno
 import json
 import os
@@ -23,27 +21,30 @@ sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 import gn_helpers
 
 SCRIPT_DIR = os.path.dirname(__file__)
+SDK_VERSION = '10.0.26100.0'
+MSVC_DIR = re.compile('^.*/VC/Tools/MSVC/[^/]+/include$')
+WINDOWS_KITS_DIR = re.compile(r'^(.*/Windows Kits/\d+/Include/[^/]+)/.*')
+
 
 def _ExtractImportantEnvironment(output_of_set):
   """Extracts environment variables required for the toolchain to run from
   a textual dump output by the cmd.exe 'set' command."""
   envvars_to_save = (
-      'cipd_cache_dir', # needed by vpython
-      'homedrive', # needed by vpython
-      'homepath', # needed by vpython
-      'goma_.*', # TODO(scottmg): This is ugly, but needed for goma.
+      'cipd_cache_dir',  # needed by vpython
+      'homedrive',  # needed by vpython
+      'homepath',  # needed by vpython
       'include',
       'lib',
       'libpath',
-      'luci_context', # needed by vpython
+      'luci_context',  # needed by vpython
       'path',
       'pathext',
       'systemroot',
       'temp',
       'tmp',
-      'userprofile', # needed by vpython
-      'vpython_virtualenv_root' # needed by vpython
-      )
+      'userprofile',  # needed by vpython
+      'vpython_virtualenv_root'  # needed by vpython
+  )
   env = {}
   # This occasionally happens and leads to misleading SYSTEMROOT error messages
   # if not caught here.
@@ -92,8 +93,10 @@ def _LoadEnvFromBat(args):
   """Given a bat command, runs it and returns env vars set by it."""
   args = args[:]
   args.extend(('&&', 'set'))
-  popen = subprocess.Popen(
-      args, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  popen = subprocess.Popen(args,
+                           shell=True,
+                           stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT)
   variables, _ = popen.communicate()
   if popen.returncode != 0:
     raise Exception('"%s" failed with error %d' % (args, popen.returncode))
@@ -147,9 +150,8 @@ def _LoadToolchainEnv(cpu, toolchain_root, sdk_dir, target_store):
     if 'GYP_MSVS_OVERRIDE_PATH' not in os.environ:
       os.environ['GYP_MSVS_OVERRIDE_PATH'] = _DetectVisualStudioPath()
     # We only support x64-hosted tools.
-    script_path = os.path.normpath(os.path.join(
-                                       os.environ['GYP_MSVS_OVERRIDE_PATH'],
-                                       'VC/vcvarsall.bat'))
+    script_path = os.path.normpath(
+        os.path.join(os.environ['GYP_MSVS_OVERRIDE_PATH'], 'VC/vcvarsall.bat'))
     if not os.path.exists(script_path):
       # vcvarsall.bat for VS 2017 fails if run after running vcvarsall.bat from
       # VS 2013 or VS 2015. Fix this by clearing the vsinstalldir environment
@@ -166,9 +168,9 @@ def _LoadToolchainEnv(cpu, toolchain_root, sdk_dir, target_store):
           del os.environ['LIB']
         if 'LIBPATH' in os.environ:
           del os.environ['LIBPATH']
-      other_path = os.path.normpath(os.path.join(
-                                        os.environ['GYP_MSVS_OVERRIDE_PATH'],
-                                        'VC/Auxiliary/Build/vcvarsall.bat'))
+      other_path = os.path.normpath(
+          os.path.join(os.environ['GYP_MSVS_OVERRIDE_PATH'],
+                       'VC/Auxiliary/Build/vcvarsall.bat'))
       if not os.path.exists(other_path):
         raise Exception('%s is missing - make sure VC++ tools are installed.' %
                         script_path)
@@ -177,14 +179,17 @@ def _LoadToolchainEnv(cpu, toolchain_root, sdk_dir, target_store):
     if (cpu != 'x64'):
       # x64 is default target CPU thus any other CPU requires a target set
       cpu_arg += '_' + cpu
-    args = [script_path, cpu_arg, ]
+    args = [
+        script_path,
+        cpu_arg,
+    ]
     # Store target must come before any SDK version declaration
     if (target_store):
       args.append('store')
     # Explicitly specifying the SDK version to build with to avoid accidentally
     # building with a new and untested SDK. This should stay in sync with the
     # packaged toolchain in build/vs_toolchain.py.
-    args.append('10.0.20348.0')
+    args.append(SDK_VERSION)
     variables = _LoadEnvFromBat(args)
   return _ExtractImportantEnvironment(variables)
 
@@ -254,9 +259,8 @@ def main():
   vc_bin_dir = ''
   include = ''
   lib = ''
-
-  # TODO(scottmg|goma): Do we need an equivalent of
-  # ninja_use_custom_environment_files?
+  windows_kits_dir = ''
+  msvc_dir = ''
 
   def relflag(s):  # Make s relative to builddir when cwd and sdk on same drive.
     try:
@@ -283,32 +287,55 @@ def main():
       lib = [p.replace('"', r'\"') for p in env['LIB'].split(';') if p]
       lib = list(map(relflag, lib))
 
-      include_I = ' '.join([q('/I' + i) for i in include])
-      include_imsvc = ' '.join([q('-imsvc' + i) for i in include])
-      libpath_flags = ' '.join([q('-libpath:' + i) for i in lib])
+      for i in include:
+        msvc_match = MSVC_DIR.match(i)
+        if msvc_match is not None:
+          msvc_dir = msvc_match.group(0)
+        windows_kits_match = WINDOWS_KITS_DIR.match(i)
+        if windows_kits_match is not None:
+          windows_kits_dir = windows_kits_match.group(1)
+
+      include_I = ['/I' + i for i in include]
+      include_imsvc = ['-imsvc' + i for i in include]
+      libpath_flags = ['-libpath:' + i for i in lib]
 
       if (environment_block_name != ''):
         env_block = _FormatAsEnvironmentBlock(env)
         with open(environment_block_name, 'w', encoding='utf8') as f:
           f.write(env_block)
 
+  def ListToArgString(x):
+    return gn_helpers.ToGNString(' '.join(q(i) for i in x))
+
+  def ListToArgList(x):
+    return f'[{", ".join(gn_helpers.ToGNString(i) for i in x)}]'
+
   print('vc_bin_dir = ' + gn_helpers.ToGNString(vc_bin_dir))
   assert include_I
-  print('include_flags_I = ' + gn_helpers.ToGNString(include_I))
+  print(f'include_flags_I = {ListToArgString(include_I)}')
+  print(f'include_flags_I_list = {ListToArgList(include_I)}')
   assert include_imsvc
   if bool(int(os.environ.get('DEPOT_TOOLS_WIN_TOOLCHAIN', 1))) and win_sdk_path:
-    print('include_flags_imsvc = ' +
-          gn_helpers.ToGNString(q('/winsysroot' + relflag(toolchain_root))))
+    flags = ['/winsysroot' + relflag(toolchain_root)]
+    print(f'include_flags_imsvc = {ListToArgString(flags)}')
+    print(f'include_flags_imsvc_list = {ListToArgList(flags)}')
   else:
-    print('include_flags_imsvc = ' + gn_helpers.ToGNString(include_imsvc))
+    print(f'include_flags_imsvc = {ListToArgString(include_imsvc)}')
+    print(f'include_flags_imsvc_list = {ListToArgList(include_imsvc)}')
   print('paths = ' + gn_helpers.ToGNString(env['PATH']))
   assert libpath_flags
-  print('libpath_flags = ' + gn_helpers.ToGNString(libpath_flags))
+  print(f'libpath_flags = {ListToArgString(libpath_flags)}')
+  print(f'libpath_flags_list = {ListToArgList(libpath_flags)}')
   if bool(int(os.environ.get('DEPOT_TOOLS_WIN_TOOLCHAIN', 1))) and win_sdk_path:
-    print('libpath_lldlink_flags = ' +
-          gn_helpers.ToGNString(q('/winsysroot:' + relflag(toolchain_root))))
+    flags = ['/winsysroot:' + relflag(toolchain_root)]
+    print(f'libpath_lldlink_flags = {ListToArgString(flags)}')
+    print(f'libpath_lldlink_flags_list = {ListToArgList(flags)}')
   else:
-    print('libpath_lldlink_flags = ' + gn_helpers.ToGNString(libpath_flags))
+    print(f'libpath_lldlink_flags = {ListToArgString(libpath_flags)}')
+    print(f'libpath_lldlink_flags_list = {ListToArgList(libpath_flags)}')
+
+  print(f'msvc_dir = {gn_helpers.ToGNString(msvc_dir)}')
+  print(f'windows_kits_dir = {gn_helpers.ToGNString(windows_kits_dir)}')
 
 
 if __name__ == '__main__':

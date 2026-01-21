@@ -4,8 +4,9 @@
 
 #include "content/test/web_contents_observer_consistency_checker.h"
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
 #include "base/memory/ptr_util.h"
 #include "base/pending_task.h"
 #include "base/strings/stringprintf.h"
@@ -40,7 +41,8 @@ using LifecycleStateImpl = RenderFrameHostImpl::LifecycleStateImpl;
 GlobalRoutingID GetRoutingPair(RenderFrameHost* host) {
   if (!host)
     return GlobalRoutingID(0, 0);
-  return GlobalRoutingID(host->GetProcess()->GetID(), host->GetRoutingID());
+  return GlobalRoutingID(host->GetProcess()->GetDeprecatedID(),
+                         host->GetRoutingID());
 }
 
 }  // namespace
@@ -62,10 +64,9 @@ void WebContentsObserverConsistencyChecker::RenderFrameCreated(
   bool frame_exists = !live_routes_.insert(routing_pair).second;
   deleted_routes_.erase(routing_pair);
 
-  if (frame_exists) {
-    CHECK(false) << "RenderFrameCreated called more than once for routing pair:"
-                 << Format(render_frame_host);
-  }
+  CHECK(!frame_exists)
+      << "RenderFrameCreated called more than once for routing pair:"
+      << Format(render_frame_host);
 
   CHECK(render_frame_host->GetProcess()->IsInitializedAndNotDead())
       << "RenderFrameCreated was called for a RenderFrameHost whose render "
@@ -101,14 +102,12 @@ void WebContentsObserverConsistencyChecker::RenderFrameDeleted(
   bool was_live = !!live_routes_.erase(routing_pair);
   bool was_dead_already = !deleted_routes_.insert(routing_pair).second;
 
-  if (was_dead_already) {
-    CHECK(false) << "RenderFrameDeleted called more than once for routing pair "
-                 << Format(render_frame_host);
-  } else if (!was_live) {
-    CHECK(false) << "RenderFrameDeleted called for routing pair "
-                 << Format(render_frame_host)
-                 << " for which RenderFrameCreated was never called";
-  }
+  CHECK(!was_dead_already)
+      << "RenderFrameDeleted called more than once for routing pair "
+      << Format(render_frame_host);
+  CHECK(was_live) << "RenderFrameDeleted called for routing pair "
+                  << Format(render_frame_host)
+                  << " for which RenderFrameCreated was never called";
 
   EnsureStableParentValue(render_frame_host);
   CHECK(!HasAnyChildren(render_frame_host));
@@ -129,7 +128,7 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
   CHECK(GetRoutingPair(old_host) != GetRoutingPair(new_host));
 
   if (old_host) {
-    CHECK(base::Contains(frame_tree_node_ids_, new_host->GetFrameTreeNodeId()));
+    CHECK(frame_tree_node_ids_.contains(new_host->GetFrameTreeNodeId()));
     EnsureStableParentValue(old_host);
     CHECK_EQ(old_host->GetParent(), new_host->GetParent());
     GlobalRoutingID routing_pair = GetRoutingPair(old_host);
@@ -137,11 +136,9 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
     // false.
     CHECK(!old_host->IsActive());
     bool old_did_exist = !!current_hosts_.erase(routing_pair);
-    if (!old_did_exist) {
-      CHECK(false)
-          << "RenderFrameHostChanged called with old host that did not exist:"
-          << Format(old_host);
-    }
+    CHECK(old_did_exist)
+        << "RenderFrameHostChanged called with old host that did not exist:"
+        << Format(old_host);
   } else {
     CHECK(frame_tree_node_ids_.insert(new_host->GetFrameTreeNodeId()).second);
   }
@@ -154,15 +151,12 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
     AssertRenderFrameExists(new_host->GetParent());
     // RenderFrameCreated should be called before RenderFrameHostChanged for all
     // the subframes except for those which are the outer delegates for:
-    //  - Portals
     //  - Fenced frames based specifically on MPArch
     // This is because those special-case frames do not have live RenderFrames
     // in the renderer process.
     bool is_render_frame_created_needed_for_child =
-        (new_host->GetFrameOwnerElementType() !=
-             blink::FrameOwnerElementType::kPortal &&
-         new_host->GetFrameOwnerElementType() !=
-             blink::FrameOwnerElementType::kFencedframe);
+        new_host->GetFrameOwnerElementType() !=
+        blink::FrameOwnerElementType::kFencedframe;
     if (is_render_frame_created_needed_for_child) {
       AssertRenderFrameExists(new_host);
     }
@@ -175,7 +169,7 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
 }
 
 void WebContentsObserverConsistencyChecker::FrameDeleted(
-    int frame_tree_node_id) {
+    FrameTreeNodeId frame_tree_node_id) {
   // A frame can be deleted before RenderFrame in the renderer process is
   // created, so there is not much that can be enforced here.
   CHECK(!web_contents_destroyed_);
@@ -188,10 +182,9 @@ void WebContentsObserverConsistencyChecker::FrameDeleted(
   // Will be nullptr if this is main frame of a non primary FrameTree whose page
   // was moved out (e.g. due Prerender activation).
   if (!render_frame_host) {
-    DCHECK_NE(FrameTreeNode::GloballyFindByID(frame_tree_node_id)
-                  ->frame_tree()
-                  .type(),
-              FrameTree::Type::kPrimary);
+    DCHECK(!FrameTreeNode::GloballyFindByID(frame_tree_node_id)
+                ->frame_tree()
+                .is_primary());
     return;
   }
 
@@ -292,8 +285,7 @@ void WebContentsObserverConsistencyChecker::DidFinishNavigation(
   // If ReadyToCommitNavigation was dispatched, verify that the
   // |navigation_handle| has the same RenderFrameHost at this time as the one
   // returned at ReadyToCommitNavigation.
-  if (base::Contains(ready_to_commit_hosts_,
-                     navigation_handle->GetNavigationId())) {
+  if (ready_to_commit_hosts_.contains(navigation_handle->GetNavigationId())) {
     CHECK_EQ(ready_to_commit_hosts_[navigation_handle->GetNavigationId()],
              navigation_handle->GetRenderFrameHost());
     ready_to_commit_hosts_.erase(navigation_handle->GetNavigationId());
@@ -348,7 +340,7 @@ void WebContentsObserverConsistencyChecker::MediaStartedPlaying(
     const MediaPlayerInfo& media_info,
     const MediaPlayerId& id) {
   CHECK(!web_contents_destroyed_);
-  CHECK(!base::Contains(active_media_players_, id));
+  CHECK(!std::ranges::contains(active_media_players_, id));
   active_media_players_.push_back(id);
 }
 
@@ -357,17 +349,8 @@ void WebContentsObserverConsistencyChecker::MediaStoppedPlaying(
     const MediaPlayerId& id,
     WebContentsObserver::MediaStoppedReason reason) {
   CHECK(!web_contents_destroyed_);
-  CHECK(base::Contains(active_media_players_, id));
-  base::Erase(active_media_players_, id);
-}
-
-bool WebContentsObserverConsistencyChecker::OnMessageReceived(
-    const IPC::Message& message,
-    RenderFrameHost* render_frame_host) {
-  CHECK(render_frame_host->IsRenderFrameLive());
-
-  AssertRenderFrameExists(render_frame_host);
-  return false;
+  CHECK(std::ranges::contains(active_media_players_, id));
+  std::erase(active_media_players_, id);
 }
 
 void WebContentsObserverConsistencyChecker::WebContentsDestroyed() {
@@ -382,15 +365,15 @@ void WebContentsObserverConsistencyChecker::WebContentsDestroyed() {
 void WebContentsObserverConsistencyChecker::DidStartLoading() {
   // TODO(clamy): add checks for the loading state in the rest of observer
   // methods.
-  // TODO(crbug.com/1145572): Add back CHECK(!is_loading_). The CHECK was
+  // TODO(crbug.com/40155922): Add back CHECK(!is_loading_). The CHECK was
   // removed because of flaky failures during some browser_tests.
   CHECK(web_contents()->IsLoading());
   is_loading_ = true;
 }
 
 void WebContentsObserverConsistencyChecker::DidStopLoading() {
-  // TODO(crbug.com/466089): Add back CHECK(is_loading_). The CHECK was removed
-  // because of flaky failures during browser_test shutdown.
+  // TODO(crbug.com/40409075): Add back CHECK(is_loading_). The CHECK was
+  // removed because of flaky failures during browser_test shutdown.
   CHECK(!web_contents()->IsLoading());
   is_loading_ = false;
 }
@@ -432,15 +415,14 @@ void WebContentsObserverConsistencyChecker::AssertMainFrameExists() {
 std::string WebContentsObserverConsistencyChecker::Format(
     RenderFrameHost* render_frame_host) {
   return base::StringPrintf(
-      "(%d, %d -> %s)", render_frame_host->GetProcess()->GetID(),
+      "(%d, %d -> %s)", render_frame_host->GetProcess()->GetDeprecatedID(),
       render_frame_host->GetRoutingID(),
       render_frame_host->GetSiteInstance()->GetSiteURL().spec().c_str());
 }
 
 bool WebContentsObserverConsistencyChecker::NavigationIsOngoing(
     NavigationHandle* navigation_handle) {
-  auto it = ongoing_navigations_.find(navigation_handle);
-  return it != ongoing_navigations_.end();
+  return ongoing_navigations_.contains(navigation_handle);
 }
 
 void WebContentsObserverConsistencyChecker::EnsureStableParentValue(
@@ -488,10 +470,13 @@ class WebContentsObserverConsistencyChecker::TestInputEventObserver
       render_widget_host_->RemoveInputEventObserver(this);
   }
 
-  void OnInputEvent(const blink::WebInputEvent&) override {
+  void OnInputEvent(const RenderWidgetHost& widget,
+                    const blink::WebInputEvent&,
+                    InputEventSource) override {
     EnsureRenderFrameHostNotPrerendered();
   }
-  void OnInputEventAck(blink::mojom::InputEventResultSource source,
+  void OnInputEventAck(const RenderWidgetHost& widget,
+                       blink::mojom::InputEventResultSource source,
                        blink::mojom::InputEventResultState state,
                        const blink::WebInputEvent&) override {
     EnsureRenderFrameHostNotPrerendered();
@@ -521,9 +506,8 @@ void WebContentsObserverConsistencyChecker::AddInputEventObserver(
 
 void WebContentsObserverConsistencyChecker::RemoveInputEventObserver(
     RenderFrameHost* render_frame_host) {
-  auto it = input_observer_map_.find(render_frame_host);
-  CHECK(it != input_observer_map_.end());
-  input_observer_map_.erase(it);
+  DCHECK(input_observer_map_.contains(render_frame_host));
+  input_observer_map_.erase(render_frame_host);
 }
 
 WebContentsObserverConsistencyChecker::TaskChecker::TaskChecker()
@@ -537,12 +521,12 @@ bool WebContentsObserverConsistencyChecker::TaskChecker::IsRunningInSameTask() {
   return sequence_num_ == GetSequenceNumberOfCurrentTask();
 }
 
-absl::optional<int> WebContentsObserverConsistencyChecker::TaskChecker::
+std::optional<int> WebContentsObserverConsistencyChecker::TaskChecker::
     GetSequenceNumberOfCurrentTask() {
   return base::TaskAnnotator::CurrentTaskForThread()
-             ? absl::make_optional(
+             ? std::make_optional(
                    base::TaskAnnotator::CurrentTaskForThread()->sequence_num)
-             : absl::nullopt;
+             : std::nullopt;
 }
 
 }  // namespace content

@@ -6,9 +6,8 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "ui/display/display.h"
@@ -17,7 +16,7 @@
 namespace extensions {
 
 MockDisplayInfoProvider::MockDisplayInfoProvider()
-    : DisplayInfoProvider(&screen_) {}
+    : DisplayInfoProviderBase(&screen_) {}
 
 MockDisplayInfoProvider::~MockDisplayInfoProvider() = default;
 
@@ -30,7 +29,7 @@ void MockDisplayInfoProvider::SetDisplayProperties(
   set_info_value_ = properties.ToValue();
   set_info_display_id_ = display_id;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+      FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
 }
 
 void MockDisplayInfoProvider::EnableUnifiedDesktop(bool enable) {
@@ -38,8 +37,9 @@ void MockDisplayInfoProvider::EnableUnifiedDesktop(bool enable) {
 }
 
 bool MockDisplayInfoProvider::OverscanCalibrationStart(const std::string& id) {
-  if (base::Contains(overscan_started_, id))
+  if (overscan_started_.contains(id)) {
     return false;
+  }
   overscan_started_.insert(id);
   return true;
 }
@@ -47,33 +47,36 @@ bool MockDisplayInfoProvider::OverscanCalibrationStart(const std::string& id) {
 bool MockDisplayInfoProvider::OverscanCalibrationAdjust(
     const std::string& id,
     const api::system_display::Insets& delta) {
-  if (!base::Contains(overscan_started_, id))
+  if (!overscan_started_.contains(id)) {
     return false;
+  }
   overscan_adjusted_.insert(id);
   return true;
 }
 
 bool MockDisplayInfoProvider::OverscanCalibrationReset(const std::string& id) {
-  if (!base::Contains(overscan_started_, id))
+  if (!overscan_started_.contains(id)) {
     return false;
+  }
   overscan_adjusted_.erase(id);
   return true;
 }
 
 bool MockDisplayInfoProvider::OverscanCalibrationComplete(
     const std::string& id) {
-  if (!base::Contains(overscan_started_, id))
+  if (!overscan_started_.contains(id)) {
     return false;
+  }
   overscan_started_.erase(id);
   return true;
 }
 
 bool MockDisplayInfoProvider::calibration_started(const std::string& id) const {
-  return base::Contains(overscan_started_, id);
+  return overscan_started_.contains(id);
 }
 
 bool MockDisplayInfoProvider::calibration_changed(const std::string& id) const {
-  return base::Contains(overscan_adjusted_, id);
+  return overscan_adjusted_.contains(id);
 }
 
 void MockDisplayInfoProvider::ShowNativeTouchCalibration(
@@ -82,8 +85,8 @@ void MockDisplayInfoProvider::ShowNativeTouchCalibration(
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback),
                                 native_touch_calibration_success_
-                                    ? absl::nullopt
-                                    : absl::optional<std::string>("failed")));
+                                    ? std::nullopt
+                                    : std::optional<std::string>("failed")));
 }
 
 void MockDisplayInfoProvider::SetMirrorMode(
@@ -91,7 +94,7 @@ void MockDisplayInfoProvider::SetMirrorMode(
     ErrorCallback callback) {
   mirror_mode_ = info.mode;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+      FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
 }
 
 void MockDisplayInfoProvider::UpdateDisplayUnitInfoForPlatform(
@@ -100,8 +103,9 @@ void MockDisplayInfoProvider::UpdateDisplayUnitInfoForPlatform(
   for (size_t i = 0; i < displays.size(); i++) {
     int64_t id = displays[i].id();
     units[i].name = "DISPLAY NAME FOR " + base::NumberToString(id);
-    if (id == 1)
+    if (id == 1) {
       units[i].mirroring_source_id = "0";
+    }
 
     units[i].is_primary = (id == 0);
     units[i].is_internal = (id == 0);

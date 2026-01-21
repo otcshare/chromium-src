@@ -7,6 +7,7 @@
 
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/clipboard/clipboard.mojom-blink.h"
@@ -25,6 +26,22 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
   // Clears all clipboard data.
   void Reset();
 
+  // These write methods exist only in the mock class because
+  // mojom::ClipboardHost does not provide equivalent methods.  These are here
+  // to simplify testing of the system clipboard.
+  void WriteRtf(const String& rtf_text);
+  void WriteFiles(mojom::blink::ClipboardFilesPtr files);
+
+  // Method to simulate clipboard data change only for testing.
+  void OnClipboardDataChanged();
+
+#if BUILDFLAG(IS_MAC)
+  // Test helper to configure the permission state returned by the mock
+  void SetPlatformPermissionState(
+      mojom::blink::PlatformClipboardPermissionState state) {
+    platform_permission_state_ = state;
+  }
+#endif
  private:
   // mojom::ClipboardHost
   void GetSequenceNumber(mojom::ClipboardBuffer clipboard_buffer,
@@ -46,14 +63,16 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
                ReadPngCallback callback) override;
   void ReadFiles(mojom::ClipboardBuffer clipboard_buffer,
                  ReadFilesCallback callback) override;
-  void ReadCustomData(mojom::ClipboardBuffer clipboard_buffer,
-                      const String& type,
-                      ReadCustomDataCallback callback) override;
+  void ReadDataTransferCustomData(
+      mojom::ClipboardBuffer clipboard_buffer,
+      const String& type,
+      ReadDataTransferCustomDataCallback callback) override;
   void WriteText(const String& text) override;
   void WriteHtml(const String& markup, const KURL& url) override;
   void WriteSvg(const String& markup) override;
   void WriteSmartPasteMarker() override;
-  void WriteCustomData(const HashMap<String, String>& data) override;
+  void WriteDataTransferCustomData(
+      const HashMap<String, String>& data) override;
   void WriteBookmark(const String& url, const String& title) override;
   void WriteImage(const SkBitmap& bitmap) override;
   void CommitWrite() override;
@@ -64,16 +83,23 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
       ReadUnsanitizedCustomFormatCallback callback) override;
   void WriteUnsanitizedCustomFormat(const String& format,
                                     mojo_base::BigBuffer data) override;
+  void RegisterClipboardListener(
+      mojo::PendingRemote<mojom::blink::ClipboardListener> listener) override;
 #if BUILDFLAG(IS_MAC)
   void WriteStringToFindPboard(const String& text) override;
+  void GetPlatformPermissionState(
+      GetPlatformPermissionStateCallback callback) override;
 #endif
   Vector<String> ReadStandardFormatNames();
 
   mojo::ReceiverSet<mojom::blink::ClipboardHost> receivers_;
+  mojo::Remote<mojom::blink::ClipboardListener> clipboard_listener_;
   ClipboardSequenceNumberToken sequence_number_;
   String plain_text_ = g_empty_string;
   String html_text_ = g_empty_string;
   String svg_text_ = g_empty_string;
+  String rtf_text_ = g_empty_string;
+  mojom::blink::ClipboardFilesPtr files_ = mojom::blink::ClipboardFiles::New();
   KURL url_;
   Vector<uint8_t> png_;
   // TODO(asully): Remove `image_` once ReadImage() path is removed.
@@ -82,6 +108,10 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
   bool write_smart_paste_ = false;
   bool needs_reset_ = false;
   HashMap<String, Vector<uint8_t>> unsanitized_custom_data_map_;
+#if BUILDFLAG(IS_MAC)
+  mojom::blink::PlatformClipboardPermissionState platform_permission_state_ =
+      mojom::blink::PlatformClipboardPermissionState::kAsk;
+#endif
 };
 
 }  // namespace blink

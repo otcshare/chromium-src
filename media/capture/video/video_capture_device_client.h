@@ -9,14 +9,21 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_collision_warner.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/video_frame_receiver.h"
+
+namespace gpu {
+class ClientSharedImage;
+}
 
 namespace media {
 class VideoCaptureBufferPool;
@@ -25,6 +32,10 @@ class VideoCaptureJpegDecoder;
 
 using VideoCaptureJpegDecoderFactoryCB =
     base::OnceCallback<std::unique_ptr<VideoCaptureJpegDecoder>()>;
+
+#if BUILDFLAG(IS_MAC)
+CAPTURE_EXPORT BASE_DECLARE_FEATURE(kFallbackToSharedMemoryIfNotNv12OnMac);
+#endif
 
 // Implementation of VideoCaptureDevice::Client that uses a buffer pool
 // to provide buffers and converts incoming data to the I420 format for
@@ -43,17 +54,15 @@ using VideoCaptureJpegDecoderFactoryCB =
 class CAPTURE_EXPORT VideoCaptureDeviceClient
     : public VideoCaptureDevice::Client {
  public:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   VideoCaptureDeviceClient(
-      VideoCaptureBufferType target_buffer_type,
       std::unique_ptr<VideoFrameReceiver> receiver,
       scoped_refptr<VideoCaptureBufferPool> buffer_pool,
       VideoCaptureJpegDecoderFactoryCB jpeg_decoder_factory_callback);
 #else
-  VideoCaptureDeviceClient(VideoCaptureBufferType target_buffer_type,
-                           std::unique_ptr<VideoFrameReceiver> receiver,
+  VideoCaptureDeviceClient(std::unique_ptr<VideoFrameReceiver> receiver,
                            scoped_refptr<VideoCaptureBufferPool> buffer_pool);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   VideoCaptureDeviceClient(const VideoCaptureDeviceClient&) = delete;
   VideoCaptureDeviceClient& operator=(const VideoCaptureDeviceClient&) = delete;
@@ -66,79 +75,105 @@ class CAPTURE_EXPORT VideoCaptureDeviceClient
       int frame_feedback_id);
 
   // VideoCaptureDevice::Client implementation.
-  // TODO(crbug.com/978143): remove |frame_feedback_id| default value.
-  void OnIncomingCapturedData(const uint8_t* data,
-                              int length,
-                              const VideoCaptureFormat& frame_format,
-                              const gfx::ColorSpace& color_space,
-                              int clockwise_rotation,
-                              bool flip_y,
-                              base::TimeTicks reference_time,
-                              base::TimeDelta timestamp,
-                              int frame_feedback_id = 0) override;
-  // TODO(crbug.com/978143): remove |frame_feedback_id| default value.
-  void OnIncomingCapturedGfxBuffer(gfx::GpuMemoryBuffer* buffer,
-                                   const VideoCaptureFormat& frame_format,
-                                   int clockwise_rotation,
-                                   base::TimeTicks reference_time,
-                                   base::TimeDelta timestamp,
-                                   int frame_feedback_id = 0) override;
-  void OnIncomingCapturedExternalBuffer(
-      CapturedExternalVideoBuffer buffer,
-      std::vector<CapturedExternalVideoBuffer> scaled_buffers,
+  void OnCaptureConfigurationChanged() override;
+  void OnIncomingCapturedData(
+      const uint8_t* data,
+      int length,
+      const VideoCaptureFormat& frame_format,
+      const gfx::ColorSpace& color_space,
+      int clockwise_rotation,
+      bool flip_y,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
-      gfx::Rect visible_rect) override;
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const std::optional<VideoFrameMetadata>& metadata,
+      int frame_feedback_id) override;
+  void OnIncomingCapturedImage(
+      scoped_refptr<gpu::ClientSharedImage> shared_image,
+      const VideoCaptureFormat& frame_format,
+      int clockwise_rotation,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const std::optional<VideoFrameMetadata>& metadata,
+      int frame_feedback_id) override;
+
+  void OnIncomingCapturedImageZeroCopy(
+      scoped_refptr<gpu::ClientSharedImage> shared_image,
+      const VideoCaptureFormat& frame_format,
+      int clockwise_rotation,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const std::optional<VideoFrameMetadata>& metadata,
+      int frame_feedback_id);
+  void OnIncomingCapturedExternalBuffer(
+      CapturedExternalVideoBuffer buffer,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const gfx::Rect& visible_rect,
+      const std::optional<VideoFrameMetadata>& metadata) override;
   ReserveResult ReserveOutputBuffer(const gfx::Size& dimensions,
                                     VideoPixelFormat format,
                                     int frame_feedback_id,
-                                    Buffer* buffer) override;
-  void OnIncomingCapturedBuffer(Buffer buffer,
-                                const VideoCaptureFormat& format,
-                                base::TimeTicks reference_time,
-                                base::TimeDelta timestamp) override;
+                                    Buffer* buffer,
+                                    int* require_new_buffer_id,
+                                    int* retire_old_buffer_id) override;
+  void OnIncomingCapturedBuffer(
+      Buffer buffer,
+      const VideoCaptureFormat& format,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const std::optional<VideoFrameMetadata>& metadata) override;
   void OnIncomingCapturedBufferExt(
       Buffer buffer,
       const VideoCaptureFormat& format,
       const gfx::ColorSpace& color_space,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
       gfx::Rect visible_rect,
-      const VideoFrameMetadata& additional_metadata) override;
+      const std::optional<VideoFrameMetadata>& additional_metadata) override;
   void OnError(VideoCaptureError error,
                const base::Location& from_here,
                const std::string& reason) override;
   void OnFrameDropped(VideoCaptureFrameDropReason reason) override;
   void OnLog(const std::string& message) override;
-  void OnStarted() override;
   double GetBufferPoolUtilization() const override;
+  void OnStarted() override;
 
  private:
-  ReadyFrameInBuffer CreateReadyFrameFromExternalBuffer(
+  VideoCaptureDevice::Client::ReserveResult CreateReadyFrameFromExternalBuffer(
       CapturedExternalVideoBuffer buffer,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
-      gfx::Rect visible_rect);
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const gfx::Rect& visible_rect,
+      const std::optional<VideoFrameMetadata>& metadata,
+      ReadyFrameInBuffer* ready_buffer);
 
   // A branch of OnIncomingCapturedData for Y16 frame_format.pixel_format.
-  void OnIncomingCapturedY16Data(const uint8_t* data,
-                                 int length,
-                                 const VideoCaptureFormat& frame_format,
-                                 base::TimeTicks reference_time,
-                                 base::TimeDelta timestamp,
-                                 int frame_feedback_id);
-
-  const VideoCaptureBufferType target_buffer_type_;
+  void OnIncomingCapturedY16Data(
+      const uint8_t* data,
+      int length,
+      const VideoCaptureFormat& frame_format,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_timestamp,
+      const std::optional<VideoFrameMetadata>& metadata,
+      int frame_feedback_id);
 
   // The receiver to which we post events.
   const std::unique_ptr<VideoFrameReceiver> receiver_;
   std::vector<int> buffer_ids_known_by_receiver_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   VideoCaptureJpegDecoderFactoryCB optional_jpeg_decoder_factory_callback_;
   std::unique_ptr<VideoCaptureJpegDecoder> external_jpeg_decoder_;
   base::OnceClosure on_started_using_gpu_cb_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // The pool of shared-memory buffers used for capturing.
   const scoped_refptr<VideoCaptureBufferPool> buffer_pool_;

@@ -5,12 +5,17 @@
 package org.chromium.chrome.browser.ntp.search;
 
 import android.content.Context;
-import android.graphics.drawable.Drawable;
 import android.text.TextWatcher;
 import android.view.View;
 import android.view.View.OnClickListener;
+import android.view.View.OnDragListener;
 import android.view.ViewGroup;
 
+import androidx.annotation.StyleRes;
+
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
@@ -23,6 +28,7 @@ import org.chromium.ui.modelutil.PropertyModel;
  * coordinators, running most of the business logic associated with the fake search box component,
  * and updating the model accordingly.
  */
+@NullMarked
 public class SearchBoxCoordinator {
     private final PropertyModel mModel;
     private final ViewGroup mView;
@@ -37,8 +43,11 @@ public class SearchBoxCoordinator {
         mMediator = new SearchBoxMediator(context, mModel, mView);
     }
 
-    public void initialize(ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            boolean isIncognito, WindowAndroid windowAndroid) {
+    @Initializer
+    public void initialize(
+            ActivityLifecycleDispatcher activityLifecycleDispatcher,
+            boolean isIncognito,
+            WindowAndroid windowAndroid) {
         mMediator.initialize(activityLifecycleDispatcher);
         mIsIncognito = isIncognito;
         mWindowAndroid = windowAndroid;
@@ -48,20 +57,12 @@ public class SearchBoxCoordinator {
         return mView;
     }
 
-    public View getVoiceSearchButton() {
-        return mView.findViewById(R.id.voice_search_button);
-    }
-
     public void destroy() {
         mMediator.onDestroy();
     }
 
     public void setAlpha(float alpha) {
         mModel.set(SearchBoxProperties.ALPHA, alpha);
-    }
-
-    public void setBackground(Drawable background) {
-        mModel.set(SearchBoxProperties.BACKGROUND, background);
     }
 
     public void setVisibility(boolean visible) {
@@ -76,12 +77,12 @@ public class SearchBoxCoordinator {
         mMediator.setSearchBoxClickListener(listener);
     }
 
-    public void setSearchBoxTextWatcher(TextWatcher textWatcher) {
-        mModel.set(SearchBoxProperties.SEARCH_BOX_TEXT_WATCHER, textWatcher);
+    public void setSearchBoxDragListener(OnDragListener listener) {
+        mMediator.setSearchBoxDragListener(listener);
     }
 
-    public void setSearchBoxHintColor(int hintTextColor) {
-        mModel.set(SearchBoxProperties.SEARCH_BOX_HINT_COLOR, hintTextColor);
+    public void setSearchBoxTextWatcher(TextWatcher textWatcher) {
+        mModel.set(SearchBoxProperties.SEARCH_BOX_TEXT_WATCHER, textWatcher);
     }
 
     public void setVoiceSearchButtonVisibility(boolean visible) {
@@ -100,6 +101,18 @@ public class SearchBoxCoordinator {
         mMediator.addLensButtonClickListener(listener);
     }
 
+    public void setComposeplateButtonVisibility(boolean visible) {
+        mModel.set(SearchBoxProperties.COMPOSEPLATE_BUTTON_VISIBILITY, visible);
+    }
+
+    public void setComposeplateButtonClickListener(OnClickListener listener) {
+        mMediator.setComposeplateButtonClickListener(listener);
+    }
+
+    public void setComposeplateButtonIconRawResId(int iconRawResId) {
+        mMediator.setComposeplateButtonIconRawResId(iconRawResId);
+    }
+
     public boolean isLensEnabled(@LensEntryPoint int lensEntryPoint) {
         return mMediator.isLensEnabled(
                 lensEntryPoint, mIsIncognito, DeviceFormFactor.isWindowOnTablet(mWindowAndroid));
@@ -107,10 +120,6 @@ public class SearchBoxCoordinator {
 
     public void startLens(@LensEntryPoint int lensEntryPoint) {
         mMediator.startLens(lensEntryPoint, mWindowAndroid, mIsIncognito);
-    }
-
-    public void setIncognitoMode(boolean isIncognito) {
-        mIsIncognito = isIncognito;
     }
 
     public void setHeight(int height) {
@@ -125,19 +134,23 @@ public class SearchBoxCoordinator {
         mMediator.setEndPadding(endPadding);
     }
 
-    public void setTextViewTranslationX(float translationX) {
-        mMediator.setTextViewTranslationX(translationX);
+    public void setStartPadding(int startPadding) {
+        mMediator.setStartPadding(startPadding);
     }
 
-    public void setButtonsHeight(int height) {
-        mMediator.setButtonsHeight(height);
+    public void setSearchBoxTextAppearance(@StyleRes int resId) {
+        mMediator.setSearchBoxTextAppearance(resId);
     }
 
-    public void setButtonsWidth(int width) {
-        mMediator.setButtonsWidth(width);
+    public void enableSearchBoxEditText(boolean enabled) {
+        mMediator.enableSearchBoxEditText(enabled);
     }
 
-    public void setLensButtonLeftMargin(int leftMargin) {
-        mMediator.setLensButtonLeftMargin(leftMargin);
+    public void setSearchBoxHintText(@Nullable String hint) {
+        mMediator.setSearchBoxHintText(hint);
+    }
+
+    public void applyWhiteBackgroundWithShadow(boolean apply) {
+        mMediator.applyWhiteBackgroundWithShadow(apply);
     }
 }

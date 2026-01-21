@@ -4,18 +4,18 @@
 
 #include "base/threading/platform_thread.h"
 
+#include <fidl/fuchsia.media/cpp/fidl.h>
+#include <lib/fdio/directory.h>
+#include <lib/sys/cpp/component_context.h>
 #include <pthread.h>
 #include <sched.h>
 #include <zircon/syscalls.h>
 
 #include <mutex>
+#include <string_view>
 
-#include <fuchsia/media/cpp/fidl.h>
-#include <lib/fdio/directory.h>
-#include <lib/sys/cpp/component_context.h>
-
+#include "base/fuchsia/fuchsia_component_connect.h"
 #include "base/fuchsia/fuchsia_logging.h"
-#include "base/fuchsia/process_context.h"
 #include "base/fuchsia/scheduler.h"
 #include "base/no_destructor.h"
 #include "base/threading/platform_thread_internal_posix.h"
@@ -26,31 +26,34 @@ namespace base {
 
 namespace {
 
-fuchsia::media::ProfileProviderSyncPtr ConnectProfileProvider() {
-  fuchsia::media::ProfileProviderSyncPtr profile_provider;
-  const zx_status_t status = base::ComponentContextForProcess()->svc()->Connect(
-      profile_provider.NewRequest());
-  if (status != ZX_OK) {
-    ZX_LOG(ERROR, status)
-        << "Failed to connect to ProfileProvider! Is "
-           "fuchsia.media.ProfileProvider in the component sandbox?";
+fidl::SyncClient<fuchsia_media::ProfileProvider> ConnectProfileProvider() {
+  auto profile_provider_client_end =
+      base::fuchsia_component::Connect<fuchsia_media::ProfileProvider>();
+  if (profile_provider_client_end.is_error()) {
+    LOG(ERROR) << base::FidlConnectionErrorMessage(profile_provider_client_end);
+    return {};
   }
-  return profile_provider;
+  return fidl::SyncClient(std::move(profile_provider_client_end.value()));
 }
 
 // Sets the current thread to the given scheduling role, optionally including
 // hints about the workload period and max CPU runtime (capacity * period) in
 // that period.
-// TODO(crbug.com/1365682): Migrate to the new fuchsia.scheduler.ProfileProvider
-// API when available.
-void SetThreadRole(StringPiece role_name,
+// TODO(crbug.com/42050523): Migrate to the new
+// fuchsia.scheduler.ProfileProvider API when available.
+void SetThreadRole(std::string_view role_name,
                    TimeDelta period = {},
                    float capacity = 0.0f) {
   DCHECK_GE(capacity, 0.0);
   DCHECK_LE(capacity, 1.0);
 
-  static const base::NoDestructor<fuchsia::media::ProfileProviderSyncPtr>
+  static const base::NoDestructor<
+      fidl::SyncClient<fuchsia_media::ProfileProvider>>
       profile_provider(ConnectProfileProvider());
+
+  if (!profile_provider->is_valid()) {
+    return;
+  }
 
   zx::thread dup_thread;
   zx_status_t status =
@@ -58,11 +61,16 @@ void SetThreadRole(StringPiece role_name,
   ZX_CHECK(status == ZX_OK, status) << "zx_object_duplicate";
 
   std::string role_selector{role_name};
-  int64_t out_period, out_capacity;
-  (*profile_provider)
-      ->RegisterHandlerWithCapacity(std::move(dup_thread), role_selector,
-                                    period.ToZxDuration(), capacity,
-                                    &out_period, &out_capacity);
+  auto result = (*profile_provider)
+                    ->RegisterHandlerWithCapacity(
+                        {{.thread_handle = std::move(dup_thread),
+                          .name = role_selector,
+                          .period = period.ToZxDuration(),
+                          .capacity = capacity}});
+  if (result.is_error()) {
+    ZX_DLOG(ERROR, result.error_value().status())
+        << "Failed call to RegisterHandlerWithCapacity";
+  }
 }
 
 }  // namespace
@@ -77,23 +85,24 @@ size_t GetDefaultThreadStackSize(const pthread_attr_t& attributes) {
 
 // static
 void PlatformThread::SetName(const std::string& name) {
-  zx_status_t status = zx_object_set_property(CurrentId(), ZX_PROP_NAME,
-                                              name.data(), name.size());
+  zx_status_t status =
+      zx::thread::self()->set_property(ZX_PROP_NAME, name.data(), name.size());
   DCHECK_EQ(status, ZX_OK);
 
-  ThreadIdNameManager::GetInstance()->SetName(name);
+  SetNameCommon(name);
 }
 
 // static
 bool PlatformThread::CanChangeThreadType(ThreadType from, ThreadType to) {
   return from == to || to == ThreadType::kDisplayCritical ||
-         to == ThreadType::kRealtimeAudio;
+         to == ThreadType::kInteractive || to == ThreadType::kRealtimeAudio;
 }
 
 namespace internal {
 
 void SetCurrentThreadTypeImpl(ThreadType thread_type,
-                              MessagePumpType pump_type_hint) {
+                              MessagePumpType pump_type_hint,
+                              bool may_change_affinity) {
   switch (thread_type) {
     case ThreadType::kDefault:
       SetThreadRole("chromium.base.threading.default");
@@ -108,16 +117,8 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
       SetThreadRole("chromium.base.threading.utility");
       break;
 
-    case ThreadType::kResourceEfficient:
-      SetThreadRole("chromium.base.threading.resource-efficient");
-      break;
-
-    case ThreadType::kCompositing:
-      SetThreadRole("chromium.base.threading.compositing",
-                    kDisplaySchedulingPeriod, kDisplaySchedulingCapacity);
-      break;
-
     case ThreadType::kDisplayCritical:
+    case ThreadType::kInteractive:
       SetThreadRole("chromium.base.threading.display", kDisplaySchedulingPeriod,
                     kDisplaySchedulingCapacity);
       break;
@@ -129,25 +130,28 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
   }
 }
 
+PlatformPriorityOverride SetThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    ThreadType thread_type) {
+  return false;
+}
+
+void RemoveThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    const PlatformPriorityOverride& priority_override_handle,
+    ThreadType initial_thread_type) {}
+
 }  // namespace internal
 
 // static
-ThreadPriorityForTest PlatformThread::GetCurrentThreadPriorityForTest() {
+ThreadType PlatformThread::GetCurrentEffectiveThreadTypeForTest() {
   // Fuchsia doesn't provide a way to get the current thread's priority.
   // Use ThreadType stored in TLS as a proxy.
   const ThreadType thread_type = PlatformThread::GetCurrentThreadType();
-  switch (thread_type) {
-    case ThreadType::kBackground:
-    case ThreadType::kUtility:
-    case ThreadType::kResourceEfficient:
-    case ThreadType::kDefault:
-    case ThreadType::kCompositing:
-      return ThreadPriorityForTest::kNormal;
-    case ThreadType::kDisplayCritical:
-      return ThreadPriorityForTest::kDisplay;
-    case ThreadType::kRealtimeAudio:
-      return ThreadPriorityForTest::kRealtimeAudio;
+  if (thread_type == ThreadType::kInteractive) {
+    return ThreadType::kDisplayCritical;
   }
+  return thread_type;
 }
 
 }  // namespace base

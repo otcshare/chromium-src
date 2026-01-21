@@ -8,6 +8,7 @@
 #include <bitset>
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
@@ -72,6 +73,9 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   // Return true if any of the VMs is using the device. Note that if the camera
   // privacy switch is on, this always returns false for `kCamera`.
   bool IsDeviceActive(DeviceType device) const;
+  // Return true if the selected VM is using the device. Note that if the camera
+  // privacy switch is on, this always returns false for `kCamera`.
+  bool IsDeviceActive(VmType vm, DeviceType device) const;
   // Return true if any of the VMs is displaying the `notification`.
   bool IsNotificationActive(NotificationType notification) const;
 
@@ -107,7 +111,7 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   void UpdateVmInfo(VmType vm, void (VmInfo::*updator)(bool), bool value);
   void NotifyActiveChanged();
 
-  Profile* primary_profile_ = nullptr;
+  raw_ptr<Profile, LeakedDanglingUntriaged> primary_profile_ = nullptr;
   std::map<VmType, VmInfo> vm_info_map_;
 
   base::ObserverList<Observer> observers_;

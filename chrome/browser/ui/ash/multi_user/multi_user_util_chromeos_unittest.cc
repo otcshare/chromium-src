@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
+
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/account_id/account_id.h"
@@ -17,6 +19,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/test_helper.h"
 #include "components/user_manager/user.h"
 
 namespace ash {
@@ -29,19 +32,19 @@ const char kTestAccountEmail[] = "test@test.com";
 
 class MultiUserUtilTest : public ChromeAshTestBase {
  public:
-  MultiUserUtilTest() {}
+  MultiUserUtilTest() = default;
 
   MultiUserUtilTest(const MultiUserUtilTest&) = delete;
   MultiUserUtilTest& operator=(const MultiUserUtilTest&) = delete;
 
-  ~MultiUserUtilTest() override {}
+  ~MultiUserUtilTest() override = default;
 
   void SetUp() override {
     ChromeAshTestBase::SetUp();
 
     fake_user_manager_ = new FakeChromeUserManager;
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
-        base::WrapUnique(fake_user_manager_));
+        base::WrapUnique(fake_user_manager_.get()));
 
     profile_.reset(IdentityTestEnvironmentProfileAdaptor::
                        CreateProfileForIdentityTestEnvironment()
@@ -64,8 +67,8 @@ class MultiUserUtilTest : public ChromeAshTestBase {
     auto* user = fake_user_manager_->AddUser(
         multi_user_util::GetAccountIdFromEmail(account_info.email));
     fake_user_manager_->UserLoggedIn(
-        user->GetAccountId(), user->username_hash(),
-        false /* browser_restart */, false /* is_child */);
+        user->GetAccountId(),
+        user_manager::TestHelper::GetFakeUsernameHash(user->GetAccountId()));
 
     return account_info.account_id;
   }
@@ -85,7 +88,7 @@ class MultiUserUtilTest : public ChromeAshTestBase {
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_adaptor_;
   // |fake_user_manager_| is owned by |user_manager_enabler_|.
-  FakeChromeUserManager* fake_user_manager_;
+  raw_ptr<FakeChromeUserManager, DanglingUntriaged> fake_user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
 };
 

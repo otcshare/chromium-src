@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/observer_list_types.h"
 #include "ui/events/keycodes/keyboard_codes.h"

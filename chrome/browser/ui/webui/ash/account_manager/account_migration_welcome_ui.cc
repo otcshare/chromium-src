@@ -7,26 +7,25 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/signin/ash/inline_login_dialog.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "components/account_manager_core/account_manager_facade.h"
-#include "components/account_manager_core/chromeos/account_manager_facade_factory.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/resources/grit/webui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
+#include "ui/webui/webui_util.h"
 
 namespace ash {
 
@@ -63,11 +62,12 @@ class MigrationMessageHandler : public content::WebUIMessageHandler {
     const std::string& account_email = args[0].GetString();
 
     Profile* profile = Profile::FromWebUI(web_ui());
-    ::GetAccountManagerFacade(profile->GetPath().value())
+    AccountManagerFactory::Get()
+        ->GetAccountManagerFacade(profile->GetPath().value())
         ->ShowReauthAccountDialog(
             account_manager::AccountManagerFacade::AccountAdditionSource::
                 kAccountManagerMigrationWelcomeScreen,
-            account_email, base::OnceClosure());
+            account_email, base::DoNothing());
     HandleCloseDialog(args);
   }
 
@@ -84,10 +84,12 @@ class MigrationMessageHandler : public content::WebUIMessageHandler {
 
 AccountMigrationWelcomeUI::AccountMigrationWelcomeUI(content::WebUI* web_ui)
     : ui::WebDialogUI(web_ui) {
-  content::WebUIDataSource* html_source = content::WebUIDataSource::Create(
-      chrome::kChromeUIAccountMigrationWelcomeHost);
+  content::WebUIDataSource* html_source =
+      content::WebUIDataSource::CreateAndAdd(
+          Profile::FromWebUI(web_ui),
+          chrome::kChromeUIAccountMigrationWelcomeHost);
   webui::SetJSModuleDefaults(html_source);
-  html_source->DisableTrustedTypesCSP();
+  webui::EnableTrustedTypesCSP(html_source);
 
   // Add localized strings.
   html_source->AddLocalizedString("welcomePageTitle",
@@ -124,9 +126,6 @@ AccountMigrationWelcomeUI::AccountMigrationWelcomeUI(content::WebUI* web_ui)
   web_ui->AddMessageHandler(std::make_unique<MigrationMessageHandler>(
       base::BindRepeating(&WebDialogUI::CloseDialog, weak_factory_.GetWeakPtr(),
                           base::Value::List() /* args */)));
-
-  Profile* profile = Profile::FromWebUI(web_ui);
-  content::WebUIDataSource::Add(profile, html_source);
 }
 
 AccountMigrationWelcomeUI::~AccountMigrationWelcomeUI() = default;

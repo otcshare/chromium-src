@@ -3,17 +3,16 @@
 // found in the LICENSE file.
 
 #include "components/exo/wayland/zwp_linux_dmabuf.h"
+#include "base/memory/raw_ptr.h"
 
 #include <drm_fourcc.h>
 #include <linux-dmabuf-unstable-v1-server-protocol.h>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "components/exo/buffer.h"
 #include "components/exo/display.h"
 #include "components/exo/wayland/server_util.h"
 #include "components/exo/wayland/wayland_dmabuf_feedback_manager.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/linux/drm_util_linux.h"
 
 namespace exo {
@@ -48,7 +47,7 @@ struct LinuxBufferParams {
   explicit LinuxBufferParams(WaylandDmabufFeedbackManager* feedback_manager)
       : feedback_manager(feedback_manager) {}
 
-  WaylandDmabufFeedbackManager* const feedback_manager;
+  const raw_ptr<WaylandDmabufFeedbackManager> feedback_manager;
   std::map<uint32_t, Plane> planes;
 };
 
@@ -82,7 +81,6 @@ void linux_buffer_params_add(wl_client* client,
 bool ValidateLinuxBufferParams(wl_resource* resource,
                                int32_t width,
                                int32_t height,
-                               gfx::BufferFormat format,
                                uint32_t flags) {
   if (width <= 0 || height <= 0) {
     wl_resource_post_error(resource,
@@ -111,7 +109,7 @@ bool ValidateLinuxBufferParams(wl_resource* resource,
 
   // Validate that we have planes 0..num_planes-1
   for (uint32_t i = 0; i < num_planes; ++i) {
-    if (!base::Contains(linux_buffer_params->planes, i)) {
+    if (!linux_buffer_params->planes.contains(i)) {
       wl_resource_post_error(resource,
                              ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE,
                              "missing a plane");
@@ -150,28 +148,13 @@ wl_resource* create_buffer(wl_client* client,
     return nullptr;
   }
 
-  gfx::BufferFormat buffer_format = ui::GetBufferFormatFromFourCCFormat(format);
-  if (!ValidateLinuxBufferParams(resource, width, height, buffer_format,
-                                 flags)) {
+  if (!ValidateLinuxBufferParams(resource, width, height, flags)) {
     return nullptr;
   }
 
   gfx::NativePixmapHandle handle;
 
-  // A lot of clients (arc++, arcvm, sommelier etc) pass 0
-  // (DRM_FORMAT_MOD_LINEAR) when they don't know the format modifier.
-  // They're supposed to pass DRM_FORMAT_MOD_INVALID, which triggers
-  // EGL import without an explicit modifier and lets the driver pick
-  // up the buffer layout from out-of-band channels like kernel ioctls.
-  //
-  // We can't fix all the clients in one go, but we can preserve the
-  // behaviour that 0 means implicit modifier, but only setting the
-  // handle modifier if we get a non-0 modifier.
-  //
-  // TODO(hoegsberg): Once we've fixed all relevant clients, we should
-  // remove this so as to catch future misuse.
-  if (linux_buffer_params->planes[0].modifier != 0)
-    handle.modifier = linux_buffer_params->planes[0].modifier;
+  handle.modifier = linux_buffer_params->planes[0].modifier;
 
   for (uint32_t i = 0; i < linux_buffer_params->planes.size(); ++i) {
     auto& plane = linux_buffer_params->planes[i];
@@ -183,8 +166,10 @@ wl_resource* create_buffer(wl_client* client,
 
   std::unique_ptr<Buffer> buffer =
       linux_buffer_params->feedback_manager->GetDisplay()
-          ->CreateLinuxDMABufBuffer(gfx::Size(width, height), buffer_format,
-                                    std::move(handle), y_invert);
+          ->CreateLinuxDMABufBuffer(
+              gfx::Size(width, height),
+              ui::GetSharedImageFormatFromFourCCFormat(format),
+              std::move(handle), y_invert);
   if (!buffer) {
     zwp_linux_buffer_params_v1_send_failed(resource);
     return nullptr;

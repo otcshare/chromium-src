@@ -6,11 +6,14 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PARSER_CSS_PARSER_TOKEN_H_
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/parser/at_rule_descriptors.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_mode.h"
+#include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 
 namespace blink {
@@ -71,8 +74,6 @@ enum HashTokenType {
 };
 
 class CORE_EXPORT CSSParserToken {
-  USING_FAST_MALLOC(CSSParserToken);
-
  public:
   enum BlockType {
     kNotBlock,
@@ -80,14 +81,28 @@ class CORE_EXPORT CSSParserToken {
     kBlockEnd,
   };
 
-  CSSParserToken(CSSParserTokenType type, BlockType block_type = kNotBlock)
-      : type_(type), block_type_(block_type), value_is_inline_(false) {}
+  // NOTE: There are some fields that we don't actually use (marked here
+  // as “Don't care”), but we still set them explicitly, since otherwise,
+  // Clang works really hard to preserve their contents.
+  explicit CSSParserToken(CSSParserTokenType type,
+                          BlockType block_type = kNotBlock)
+      : type_(type),
+        block_type_(block_type),
+        numeric_value_type_(0),  // Don't care.
+        numeric_sign_(0),        // Don't care.
+        unit_(0),                // Don't care.
+        value_is_inline_(false),
+        value_is_8bit_(false),  // Don't care.
+        padding_(0)             // Don't care.
+  {}
+
+  // The resulting CSSParserToken may hold a reference to the data in value.
   CSSParserToken(CSSParserTokenType type,
                  StringView value,
-                 BlockType block_type = kNotBlock)
-      : type_(type), block_type_(block_type) {
+                 BlockType block_type = kNotBlock,
+                 int id = -1)
+      : type_(type), block_type_(block_type), id_(id) {
     InitValueFromStringView(value);
-    id_ = -1;
   }
 
   CSSParserToken(CSSParserTokenType, UChar);  // for DelimiterToken
@@ -102,9 +117,6 @@ class CORE_EXPORT CSSParserToken {
   CSSParserToken(HashTokenType, StringView);
 
   bool operator==(const CSSParserToken& other) const;
-  bool operator!=(const CSSParserToken& other) const {
-    return !(*this == other);
-  }
 
   // Converts NumberToken to DimensionToken.
   void ConvertToDimensionWithUnit(StringView);
@@ -116,16 +128,7 @@ class CORE_EXPORT CSSParserToken {
     return static_cast<CSSParserTokenType>(type_);
   }
   StringView Value() const {
-    if (value_is_inline_) {
-      DCHECK(value_is_8bit_);
-      return StringView(reinterpret_cast<const LChar*>(value_data_char_inline_),
-                        value_length_);
-    }
-    if (value_is_8bit_)
-      return StringView(reinterpret_cast<const LChar*>(value_data_char_raw_),
-                        value_length_);
-    return StringView(reinterpret_cast<const UChar*>(value_data_char_raw_),
-                      value_length_);
+    return value_is_8bit_ ? StringView(Span8()) : StringView(Span16());
   }
 
   bool IsEOF() const { return type_ == static_cast<unsigned>(kEOFToken); }
@@ -150,8 +153,15 @@ class CORE_EXPORT CSSParserToken {
     DCHECK_EQ(type_, static_cast<unsigned>(kUnicodeRangeToken));
     return unicode_range_.end;
   }
+
   CSSValueID Id() const;
-  CSSValueID FunctionId() const;
+
+  CSSValueID FunctionId() const {
+    if (type_ != kFunctionToken) {
+      return CSSValueID::kInvalid;
+    }
+    return static_cast<CSSValueID>(id_);
+  }
 
   bool HasStringBacking() const;
 
@@ -163,6 +173,13 @@ class CORE_EXPORT CSSParserToken {
   void Serialize(StringBuilder&) const;
 
   CSSParserToken CopyWithUpdatedString(const StringView&) const;
+  CSSParserToken CopyWithoutValue() const {
+    CSSParserToken token = *this;
+    token.value_is_inline_ = false;
+    token.value_length_ = 0;
+    token.value_data_char_raw_ = nullptr;
+    return token;
+  }
 
   static CSSParserTokenType ClosingTokenType(CSSParserTokenType opening_type) {
     switch (opening_type) {
@@ -175,7 +192,20 @@ class CORE_EXPORT CSSParserToken {
         return kRightBraceToken;
       default:
         NOTREACHED();
-        return kEOFToken;
+    }
+  }
+
+  // For debugging/logging only.
+  friend std::ostream& operator<<(std::ostream& stream,
+                                  const CSSParserToken& token) {
+    if (token.GetType() == kEOFToken) {
+      return stream << "<EOF>";
+    } else if (token.GetType() == kCommentToken) {
+      return stream << "/* comment */";
+    } else {
+      StringBuilder sb;
+      token.Serialize(sb);
+      return stream << sb.ToString();
     }
   }
 
@@ -184,7 +214,8 @@ class CORE_EXPORT CSSParserToken {
     value_length_ = string.length();
     value_is_8bit_ = string.Is8Bit();
     if (value_is_8bit_ && value_length_ <= sizeof(value_data_char_inline_)) {
-      memcpy(value_data_char_inline_, string.Bytes(), value_length_);
+      UNSAFE_BUFFERS(
+          memcpy(value_data_char_inline_, string.Bytes(), value_length_));
       value_is_inline_ = true;
     } else {
       value_data_char_raw_ = string.Bytes();
@@ -199,6 +230,23 @@ class CORE_EXPORT CSSParserToken {
       return value_data_char_raw_;
     }
   }
+  base::span<const LChar> Span8() const {
+    DCHECK(value_is_8bit_);
+    // SAFETY: InitValueFromStringView() ensures the expression is safe.
+    return UNSAFE_BUFFERS(
+        {static_cast<const LChar*>(ValueDataCharRaw()), value_length_});
+  }
+  base::span<const UChar> Span16() const {
+    DCHECK(!value_is_8bit_);
+    DCHECK(!value_is_inline_);
+    // SAFETY: InitValueFromStringView() ensures the expression is safe.
+    return UNSAFE_BUFFERS(
+        {static_cast<const UChar*>(value_data_char_raw_), value_length_});
+  }
+
+  // Bitfields are all declared as type `unsigned` based on observation that
+  // on Windows, adjacent bitfields of differing types do not get packed
+  // together, for binary compatibility with code generated by MSVC.
 
   unsigned type_ : 6;                // CSSParserTokenType
   unsigned block_type_ : 2;          // BlockType
@@ -214,11 +262,15 @@ class CORE_EXPORT CSSParserToken {
   // contents (saving RAM and a little time). If so, value_is_inline_
   // is set to mark that the buffer contains the string itself instead of
   // a pointer to the string. It also guarantees value_is_8bit_ == true.
-  bool value_is_inline_ : 1;
+  unsigned value_is_inline_ : 1;
 
   // value_... is an unpacked StringView so that we can pack it
   // tightly with the rest of this object for a smaller object size.
-  bool value_is_8bit_ : 1;
+  unsigned value_is_8bit_ : 1;
+
+  // These are free bits. You may take from them if you need.
+  [[maybe_unused]] unsigned padding_ : 12;
+
   unsigned value_length_;
   union {
     char value_data_char_inline_[8];   // If value_is_inline_ is true.
@@ -228,6 +280,12 @@ class CORE_EXPORT CSSParserToken {
   union {
     UChar delimiter_;
     HashTokenType hash_token_type_;
+    // NOTE: For DimensionToken, this value stores the numeric part,
+    // value_data_char_raw_ (or value_data_char_inline_) stores the
+    // unit as text, and unit_ stores the unit as enum (assuming it
+    // is a valid unit). So for e.g. “100px”, numeric_value_ = 100.0,
+    // value_length_ = 2, value_data_char_inline_ = "px", and
+    // unit_ = kPixels.
     double numeric_value_;
     mutable int id_;
 
@@ -237,6 +295,11 @@ class CORE_EXPORT CSSParserToken {
     } unicode_range_;
   };
 };
+
+// If this assert fails, check the comment above about bitfields.
+static_assert(sizeof(CSSParserToken) == 24);
+
+bool NeedsInsertedComment(const CSSParserToken& a, const CSSParserToken& b);
 
 }  // namespace blink
 

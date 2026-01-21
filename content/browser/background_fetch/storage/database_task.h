@@ -115,7 +115,6 @@ class DatabaseTask : public DatabaseTaskHost {
   // UMA reporting.
   void SetStorageError(BackgroundFetchStorageError error);
   void SetStorageErrorAndFinish(BackgroundFetchStorageError error);
-  void ReportStorageError();
   bool HasStorageError();
 
   // Quota.
@@ -153,15 +152,12 @@ class DatabaseTask : public DatabaseTaskHost {
   // 3) Call Finished().
   virtual void FinishWithError(blink::mojom::BackgroundFetchError error) = 0;
 
-  // The Histogram name to report with the Error.
-  virtual std::string HistogramName() const;
-
   void DidGetStorageVersion(StorageVersionCallback callback,
                             const std::vector<std::string>& data,
                             blink::ServiceWorkerStatusCode status);
   void DidOpenCache(
       base::OnceCallback<void(blink::mojom::CacheStorageError)> callback,
-      blink::mojom::OpenResultPtr result);
+      blink::mojom::CacheStorage::OpenResult result);
 
   base::WeakPtr<DatabaseTaskHost> GetWeakPtr() override;
 

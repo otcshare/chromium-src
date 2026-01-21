@@ -6,34 +6,40 @@ package org.chromium.components.browser_ui.widget.tile;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
+import androidx.core.widget.ImageViewCompat;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.widget.R;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
 
 /**
  * The view for a tile with icon and text.
  *
- * Displays the title of the site beneath a large icon.
+ * <p>Displays the title of the site beneath a large icon.
  */
+@NullMarked
 public class TileView extends FrameLayout {
-    private ImageView mBadgeView;
+    private ImageView mOfflineBadgeView;
+    private ImageView mPinnedShortcutBadgeView;
     private TextView mTitleView;
-    private Runnable mOnFocusViaSelectionListener;
-    private ImageView mIconView;
+    private @Nullable Runnable mOnFocusViaSelectionListener;
     private RoundedCornerOutlineProvider mRoundingOutline;
+    protected ImageView mIconView;
+    protected View mIconBackgroundView;
 
-    /**
-     * Constructor for inflating from XML.
-     */
+    /** Constructor for inflating from XML. */
     public TileView(Context context, AttributeSet attrs) {
         super(context, attrs);
     }
@@ -52,8 +58,10 @@ public class TileView extends FrameLayout {
         super.onFinishInflate();
 
         mIconView = findViewById(R.id.tile_view_icon);
-        mBadgeView = findViewById(R.id.offline_badge);
+        mOfflineBadgeView = findViewById(R.id.offline_badge);
+        mPinnedShortcutBadgeView = findViewById(R.id.pinned_shortcut_badge);
         mTitleView = findViewById(R.id.tile_view_title);
+        mIconBackgroundView = findViewById(R.id.tile_view_icon_background);
         mRoundingOutline = new RoundedCornerOutlineProvider();
         mIconView.setOutlineProvider(mRoundingOutline);
         mIconView.setClipToOutline(true);
@@ -64,33 +72,64 @@ public class TileView extends FrameLayout {
      *
      * @param title The title of the tile.
      * @param showOfflineBadge Whether to show the offline badge.
+     * @param showPinnedShortcutBadge Whether to show the pinned shortcut badge.
      * @param icon The icon to display on the tile.
      * @param titleLines The number of text lines to use for the tile title.
      */
-    protected void initialize(
-            String title, boolean showOfflineBadge, Drawable icon, int titleLines) {
+    public void initialize(
+            String title,
+            boolean showOfflineBadge,
+            boolean showPinnedShortcutBadge,
+            @Nullable Drawable icon,
+            int titleLines) {
         setOfflineBadgeVisibility(showOfflineBadge);
+        togglePinnedShortcutBadge(showPinnedShortcutBadge);
         setIconDrawable(icon);
         setTitle(title, titleLines);
     }
 
-    /**
-     * Renders the icon or clears it from the view if the icon is null.
-     */
-    public void setIconDrawable(Drawable icon) {
+    /** Renders the icon or clears it from the view if the icon is null. */
+    public void setIconDrawable(@Nullable Drawable icon) {
         mIconView.setImageDrawable(icon);
     }
 
-    /**
-     * Applies or clears icon tint.
-     */
-    public void setIconTint(ColorStateList color) {
-        ApiCompatibilityUtils.setImageTintList(mIconView, color);
+    /** Applies or clears icon tint. */
+    public void setIconTint(@Nullable ColorStateList color) {
+        ImageViewCompat.setImageTintList(mIconView, color);
     }
 
     /** Shows or hides the offline badge to reflect the offline availability. */
-    protected void setOfflineBadgeVisibility(boolean showOfflineBadge) {
-        mBadgeView.setVisibility(showOfflineBadge ? VISIBLE : GONE);
+    public void setOfflineBadgeVisibility(boolean isVisible) {
+        mOfflineBadgeView.setVisibility(isVisible ? VISIBLE : GONE);
+    }
+
+    /**
+     * Shows or hides the pinned shortcut badge to reflect whether the tile is a Custom Tile and
+     * adjusts surrounding views to accommodate.
+     */
+    public void togglePinnedShortcutBadge(boolean isVisible) {
+        if (isVisible) {
+            // Recompute scaling on each call (instead of caching as static member) to be robust
+            // against display size and font size changes -- this is relatively cheap anyway.
+            Matrix matrix = new Matrix();
+
+            // The interior "pin" shape of ic_keep_24dp.xml is at (6dp, 3dp) - (18dp, 23dp), i.e.,
+            // size of 12dp x 20dp. Crop and map to (0sp, 0sp) - (6sp, 10sp) of the badge.
+            float dp = getResources().getDisplayMetrics().density;
+            float sp = getResources().getDisplayMetrics().scaledDensity;
+            RectF src = new RectF(6f * dp, 3f * dp, 18f * dp, 23f * dp);
+            RectF dst = new RectF(0f, 0f, 6f * sp, 10f * sp);
+            matrix.setRectToRect(src, dst, Matrix.ScaleToFit.FILL);
+            mPinnedShortcutBadgeView.setImageMatrix(matrix);
+        }
+
+        mPinnedShortcutBadgeView.setVisibility(isVisible ? VISIBLE : GONE);
+
+        // When badge is shown, horizontally align title text to start so that spacing between is
+        // consistent. When badge is hidden, horizontally align text to center so that when title
+        // text is maximized with ellipsis is shown, the interior text will truly be centered.
+        mTitleView.setGravity(
+                Gravity.TOP | (isVisible ? Gravity.START : Gravity.CENTER_HORIZONTAL));
     }
 
     /** Sets the title text and number lines. */
@@ -99,15 +138,9 @@ public class TileView extends FrameLayout {
         mTitleView.setText(title);
     }
 
-    /**
-     * Returns the ImageView for the icon.
-     * This method is only to allow legacy code to continue to work. New code should not use this
-     * method.
-     * TODO(crbug.com/1179455): Clean up all usages and remove this method.
-     */
-    @Deprecated
-    public ImageView getIconView() {
-        return mIconView;
+    /** Sets the max number of lines taken by the title. */
+    public void setTitleMaxLines(int maxLines) {
+        mTitleView.setMaxLines(maxLines);
     }
 
     /** Specify the handler that will be invoked when this tile is highlighted by the user. */
@@ -121,13 +154,13 @@ public class TileView extends FrameLayout {
     }
 
     /** Retrieves the radius used to round the image content. */
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
     int getRoundingRadiusForTesting() {
         return mRoundingOutline.getRadiusForTesting();
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
-    public @NonNull TextView getTitleView() {
+    @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+    public TextView getTitleView() {
         return mTitleView;
     }
 
@@ -139,8 +172,8 @@ public class TileView extends FrameLayout {
         }
     }
 
-    @Override
-    public boolean isFocused() {
-        return super.isFocused() || (isSelected() && !isInTouchMode());
+    /** Returns whether the tile can be moved using drag-and-drop. */
+    public boolean isDraggable() {
+        return false;
     }
 }

@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
@@ -23,7 +23,7 @@
 namespace chromecast {
 
 namespace {
-int kClockPollInterval = 5;
+constexpr int kClockPollInterval = 5;
 
 void VerifyHandleCallback(base::OnceClosure task,
                           base::WeakPtr<AlarmHandle> handle) {
@@ -33,6 +33,9 @@ void VerifyHandleCallback(base::OnceClosure task,
   std::move(task).Run();
 }
 }  // namespace
+
+AlarmHandle::AlarmHandle() = default;
+AlarmHandle::~AlarmHandle() = default;
 
 AlarmManager::AlarmInfo::AlarmInfo(
     base::OnceClosure task,

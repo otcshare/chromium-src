@@ -8,10 +8,10 @@ import android.graphics.Bitmap;
 import android.graphics.Point;
 import android.graphics.Rect;
 
-import androidx.annotation.NonNull;
-
 import org.chromium.base.Callback;
 import org.chromium.base.UnguessableToken;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.paintpreview.browser.NativePaintPreviewServiceProvider;
 import org.chromium.url.GURL;
 
@@ -19,17 +19,25 @@ import org.chromium.url.GURL;
  * Used for communicating with the Paint Preview delegate for requesting new bitmaps and forwarding
  * click events.
  */
+@NullMarked
 public interface PlayerCompositorDelegate {
     /** An interface that creates an instance of {@link PlayerCompositorDelegate}. */
     interface Factory {
-        PlayerCompositorDelegate create(NativePaintPreviewServiceProvider service, GURL url,
-                String directoryKey, boolean mainFrameMode,
-                @NonNull CompositorListener compositorListener,
+        PlayerCompositorDelegate create(
+                NativePaintPreviewServiceProvider service,
+                GURL url,
+                String directoryKey,
+                boolean mainFrameMode,
+                CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback);
 
-        PlayerCompositorDelegate createForCaptureResult(NativePaintPreviewServiceProvider service,
-                long nativeCaptureResultPtr, GURL url, String directoryKey, boolean mainFrameMode,
-                @NonNull CompositorListener compositorListener,
+        PlayerCompositorDelegate createForCaptureResult(
+                NativePaintPreviewServiceProvider service,
+                long nativeCaptureResultPtr,
+                GURL url,
+                String directoryKey,
+                boolean mainFrameMode,
+                CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback);
     }
 
@@ -66,17 +74,17 @@ public interface PlayerCompositorDelegate {
          * @param nativeAxTree Native pointer to the accessibility tree snapshot. The implementer
          * of this method will be the owner of this object and should delete it once it's used.
          */
-        void onCompositorReady(UnguessableToken rootFrameGuid, UnguessableToken[] frameGuids,
-                int[] frameContentSize, int[] scrollOffsets, int[] subFramesCount,
-                UnguessableToken[] subFrameGuids, int[] subFrameClipRects, float pageScaleFactor,
+        void onCompositorReady(
+                UnguessableToken rootFrameGuid,
+                UnguessableToken[] frameGuids,
+                int[] frameContentSize,
+                int[] scrollOffsets,
+                int[] subFramesCount,
+                UnguessableToken[] subFrameGuids,
+                int[] subFrameClipRects,
+                float pageScaleFactor,
                 long nativeAxTree);
     }
-
-    /**
-     * Sets a runnable that is invoked when we are under memory pressure.
-     * @param runnable The runnable to be invoked when under memory pressure.
-     */
-    void addMemoryPressureListener(Runnable runnable);
 
     /**
      * Requests a new bitmap for a frame from the Paint Preview compositor.
@@ -90,8 +98,12 @@ public interface PlayerCompositorDelegate {
      * @return an int representing the ID for the bitmap request. Can be used with {@link
      * cancelBitmapRequest(int)} to cancel the request if possible.
      */
-    int requestBitmap(UnguessableToken frameGuid, Rect clipRect, float scaleFactor,
-            Callback<Bitmap> bitmapCallback, Runnable errorCallback);
+    int requestBitmap(
+            UnguessableToken frameGuid,
+            Rect clipRect,
+            float scaleFactor,
+            Callback<Bitmap> bitmapCallback,
+            Runnable errorCallback);
 
     /**
      * Requests a new bitmap for a frame from the Paint Preview compositor if {@link mainFrameMode}
@@ -105,7 +117,10 @@ public interface PlayerCompositorDelegate {
      * @return an int representing the ID for the bitmap request. Can be used with {@link
      * cancelBitmapRequest(int)} to cancel the request if possible.
      */
-    int requestBitmap(Rect clipRect, float scaleFactor, Callback<Bitmap> bitmapCallback,
+    int requestBitmap(
+            Rect clipRect,
+            float scaleFactor,
+            Callback<Bitmap> bitmapCallback,
             Runnable errorCallback);
 
     /**
@@ -115,9 +130,7 @@ public interface PlayerCompositorDelegate {
      */
     boolean cancelBitmapRequest(int requestId);
 
-    /**
-     * Cancels all outstanding bitmap requests.
-     */
+    /** Cancels all outstanding bitmap requests. */
     void cancelAllBitmapRequests();
 
     /**
@@ -127,7 +140,7 @@ public interface PlayerCompositorDelegate {
      * @param y The y coordinate of the click event, relative to the frame.
      * @return The URL that was clicked on. Null if there are no URLs.
      */
-    GURL onClick(UnguessableToken frameGuid, int x, int y);
+    @Nullable GURL onClick(UnguessableToken frameGuid, int x, int y);
 
     /**
      * Gets the Root Frame Offsets for scroll matching.
@@ -143,8 +156,6 @@ public interface PlayerCompositorDelegate {
      */
     default void setCompressOnClose(boolean compressOnClose) {}
 
-    /**
-     * Called when PlayerCompositorDelegate needs to be destroyed.
-     */
+    /** Called when PlayerCompositorDelegate needs to be destroyed. */
     default void destroy() {}
 }

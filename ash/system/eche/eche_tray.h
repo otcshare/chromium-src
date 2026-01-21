@@ -10,19 +10,28 @@
 #include "ash/ash_export.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "ash/public/cpp/tablet_mode_observer.h"
 #include "ash/shelf/shelf_observer.h"
 #include "ash/shell_observer.h"
 #include "ash/system/eche/eche_icon_loading_indicator_view.h"
 #include "ash/system/screen_layout_observer.h"
+#include "ash/system/tray/system_tray_observer.h"
 #include "ash/system/tray/tray_background_view.h"
+#include "ash/webui/eche_app_ui/eche_connection_status_handler.h"
 #include "ash/webui/eche_app_ui/mojom/eche_app.mojom.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/tablet_state.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/button/button.h"
 #include "url/gurl.h"
+
+namespace display {
+enum class TabletState;
+}  // namespace display
 
 namespace views {
 
@@ -50,7 +59,6 @@ namespace ash {
 
 class AshWebView;
 class PhoneHubTray;
-class TabletModeController;
 class TrayBubbleView;
 class TrayBubbleWrapper;
 class SessionControllerImpl;
@@ -59,20 +67,26 @@ class Shell;
 
 // This class represents the Eche tray button in the status area and
 // controls the bubble that is shown when the tray button is clicked.
-class ASH_EXPORT EcheTray : public TrayBackgroundView,
-                            public SessionObserver,
-                            public ScreenLayoutObserver,
-                            public ShelfObserver,
-                            public TabletModeObserver,
-                            public KeyboardControllerObserver,
-                            public ShellObserver {
- public:
-  METADATA_HEADER(EcheTray);
+class ASH_EXPORT EcheTray
+    : public TrayBackgroundView,
+      public SessionObserver,
+      public ScreenLayoutObserver,
+      public ShelfObserver,
+      public SystemTrayObserver,
+      public display::DisplayObserver,
+      public KeyboardControllerObserver,
+      public ShellObserver,
+      public eche_app::EcheConnectionStatusHandler::Observer {
+  METADATA_HEADER(EcheTray, TrayBackgroundView)
 
+ public:
   // TODO(b/226687249): Move to ash/webui/eche_app_ui if dependency cycle error
   // is fixed. Enum representing the connection fail reason. These values are
   // persisted to logs. Entries should not be renumbered and numeric values
-  // should never be reused.
+  // should never be reused. Keep in sync with the ConnectionFailReason UMA enum
+  // defined in //tools/metrics/histograms/enums.xml.
+  //
+  // LINT.IfChange(ConnectionFailReason)
   enum class ConnectionFailReason {
     // Initial state.
     kUnknown = 0,
@@ -98,11 +112,21 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
     // from EcheTray.
     kConnectionFailInTabletMode = 5,
 
-    kMaxValue = kConnectionFailInTabletMode,
+    // Connection fail because the devices are on different networks. Report
+    // this from EcheTray.
+    kConnectionFailSsidDifferent = 6,
+
+    // Connection fail because the remote device is on cellular network. Report
+    // this from EcheTray.
+    kConnectionFailRemoteDeviceOnCellular = 7,
+
+    kMaxValue = kConnectionFailRemoteDeviceOnCellular,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/enums.xml:ConnectionFailReason)
 
   using GracefulCloseCallback = base::OnceCallback<void()>;
   using GracefulGoBackCallback = base::RepeatingCallback<void()>;
+  using BubbleShownCallback = base::RepeatingCallback<void(AshWebView* view)>;
 
   explicit EcheTray(Shelf* shelf);
   EcheTray(const EcheTray&) = delete;
@@ -112,19 +136,17 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   bool IsInitialized() const;
 
   // TrayBackgroundView:
-  void ClickedOutsideBubble() override;
-  std::u16string GetAccessibleNameForTray() override;
+  void ClickedOutsideBubble(const ui::LocatedEvent& event) override;
+  void UpdateTrayItemColor(bool is_active) override;
   void HandleLocaleChange() override;
   void HideBubbleWithView(const TrayBubbleView* bubble_view) override;
   void AnchorUpdated() override;
   void Initialize() override;
-  void CloseBubble() override;
+  void CloseBubbleInternal() override;
   void ShowBubble() override;
   TrayBubbleView* GetBubbleView() override;
   views::Widget* GetBubbleWidget() const override;
   void OnVirtualKeyboardVisibilityChanged() override;
-  void OnAnyBubbleVisibilityChanged(views::Widget* bubble_widget,
-                                    bool visible) override;
   bool CacheBubbleViewForHide() const override;
 
   // TrayBubbleView::Delegate:
@@ -138,6 +160,19 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   // KeyboardControllerObserver:
   void OnKeyboardUIDestroyed() override;
   void OnKeyboardHidden(bool is_temporary_hide) override;
+
+  // eche_app::EcheConnectionStatusHandler::Observer:
+  void OnConnectionStatusChanged(
+      eche_app::mojom::ConnectionStatus connection_status) override;
+  void OnRequestBackgroundConnectionAttempt() override;
+
+  // SystemTrayObserver:
+  void OnFocusLeavingSystemTray(bool reverse) override {}
+  void OnStatusAreaAnchoredBubbleVisibilityChanged(TrayBubbleView* tray_bubble,
+                                                   bool visible) override;
+
+  // Callback called when the eche icon or tray button is pressed.
+  void OnButtonPressed();
 
   // Sets the url that will be passed to the webview.
   // Setting a new value will cause the current bubble be destroyed.
@@ -168,6 +203,10 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   void SetGracefulGoBackCallback(
       GracefulGoBackCallback graceful_go_back_callback);
 
+  // Sets a callback that runs when the bubble is shown for the first time, and
+  // returns the webview.
+  void SetBubbleShownCallback(BubbleShownCallback bubble_shown_callback);
+
   views::Button* GetMinimizeButtonForTesting() const;
   views::Button* GetCloseButtonForTesting() const;
   views::Button* GetArrowBackButtonForTesting() const;
@@ -183,7 +222,9 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   bool LoadBubble(const GURL& url,
                   const gfx::Image& icon,
                   const std::u16string& visible_name,
-                  const std::u16string& phone_name);
+                  const std::u16string& phone_name,
+                  eche_app::mojom::ConnectionStatus last_connection_status,
+                  eche_app::mojom::AppStreamLaunchEntryPoint entry_point);
 
   // Destroys the view inclusing the web view.
   // Note: `CloseBubble` only hides the view.
@@ -197,25 +238,45 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   // started. 2. Purges and closes the bubble when the streaming is stopped.
   void OnStreamStatusChanged(eche_app::mojom::StreamStatus status);
 
+  // Receives the `orientation` change when the stream switches between
+  // landscape and portrait.
+  void OnStreamOrientationChanged(bool is_landscape);
+
   // Set up the params and init the bubble.
   // Note: This function makes the bubble active and makes the
   // TrayBackgroundView's background inkdrop activate.
-  void InitBubble(const std::u16string& phone_name);
+  void InitBubble(const std::u16string& phone_name,
+                  eche_app::mojom::ConnectionStatus last_connection_status,
+                  eche_app::mojom::AppStreamLaunchEntryPoint entry_point);
 
   // Starts graceful close to ensure the connection resource is released before
   // the window is closed.
   void StartGracefulClose();
 
+  void OnBackgroundConnectionTimeout();
+
+  void SetEcheConnectionStatusHandler(
+      eche_app::EcheConnectionStatusHandler* eche_connection_status_handler);
+
+  bool IsBackgroundConnectionAttemptInProgress();
+
   // Test helpers
+  bool get_is_landscape_for_test() { return is_landscape_; }
   TrayBubbleWrapper* get_bubble_wrapper_for_test() { return bubble_.get(); }
   AshWebView* get_web_view_for_test() { return web_view_; }
+  AshWebView* get_initializer_webview_for_test() {
+    return initializer_webview_.get();
+  }
   views::ImageButton* GetIcon();
+
+  std::u16string GetAccessibleName();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(EcheTrayTest, EcheTrayCreatesBubbleButHideFirst);
   FRIEND_TEST_ALL_PREFIXES(EcheTrayTest, EcheTrayOnDisplayConfigurationChanged);
   FRIEND_TEST_ALL_PREFIXES(EcheTrayTest,
                            EcheTrayKeyboardShowHideUpdateBubbleBounds);
+  FRIEND_TEST_ALL_PREFIXES(EcheTrayTest, EcheTrayOnStreamOrientationChanged);
 
   // Intercepts all the events targeted to the internal webview in order to
   // process the accelerator keys.
@@ -232,7 +293,7 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
     void OnKeyEvent(ui::KeyEvent* event) override;
 
    private:
-    EcheTray* const eche_tray_;
+    const raw_ptr<EcheTray> eche_tray_;
   };
 
   // Calculates and returns the size of the Exo bubble based on the screen size
@@ -258,21 +319,20 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   void UpdateEcheSizeAndBubbleBounds();
 
   // ScreenLayoutObserver:
-  void OnDisplayConfigurationChanged() override;
+  void OnDidApplyDisplayChanges() override;
 
   // ShelfObserver:
   void OnAutoHideStateChanged(ShelfAutoHideState new_state) override;
 
-  // TabletModeObserver:
-  void OnTabletModeStarted() override;
-  void OnTabletModeEnded() override;
+  // display::DisplayObserver:
+  void OnDisplayTabletStateChanged(display::TabletState state) override;
 
   // ShellObserver:
   void OnShelfAlignmentChanged(aura::Window* root_window,
                                ShelfAlignment old_alignment) override;
 
-  // returns the position of the anchor that bubble needs to be anchored to.
-  gfx::Rect GetAnchor();
+  // Called when the display tablet state is changed to kInTabletMode.
+  void OnTabletModeStarted();
 
   // Processes the accelerator keys and returns true if the accelerator was
   // processed completely in this method and no further processing is needed.
@@ -281,6 +341,12 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   // Returns true only if the bubble is initialized and visible.
   bool IsBubbleVisible();
 
+  // Starts graceful shutdown for the initializer.
+  void StartGracefulCloseInitializer();
+
+  // Kills the renderer.
+  void CloseInitializer();
+
   // The url that is transferred to the web view.
   // In the current implementation, this is supposed to be
   // Eche window URL. However, the bubble does not interpret,
@@ -288,42 +354,59 @@ class ASH_EXPORT EcheTray : public TrayBackgroundView,
   GURL url_;
 
   // Icon of the tray. Unowned.
-  views::ImageView* const icon_;
+  const raw_ptr<views::ImageView> icon_;
 
   // The bubble that appears after clicking the tray button.
   std::unique_ptr<TrayBubbleWrapper> bubble_;
 
   // The webview shown in the bubble that contains the Eche SWA.
   // owned by `bubble_`
-  AshWebView* web_view_ = nullptr;
+  raw_ptr<AshWebView> web_view_ = nullptr;
+
+  // Webview used to create a prewarming channel, before we have a video to
+  // attach to.
+  std::unique_ptr<AshWebView> initializer_webview_{};
+  std::unique_ptr<base::DelayTimer> initializer_timeout_{};
+  base::OnceClosure on_initializer_closed_;
+  bool has_reported_initializer_result_ = false;
+  bool has_retried_initializer_ = false;
+
+  raw_ptr<eche_app::EcheConnectionStatusHandler>
+      eche_connection_status_handler_ = nullptr;
 
   GracefulCloseCallback graceful_close_callback_;
   GracefulGoBackCallback graceful_go_back_callback_;
+  BubbleShownCallback bubble_shown_callback_;
 
   // The unload timer to force close EcheTray in case unload error.
   std::unique_ptr<base::DelayTimer> unload_timer_;
 
-  views::Button* close_button_ = nullptr;
-  views::Button* minimize_button_ = nullptr;
-  views::Button* arrow_back_button_ = nullptr;
+  raw_ptr<views::View, DanglingUntriaged> header_view_ = nullptr;
+  raw_ptr<views::Button> close_button_ = nullptr;
+  raw_ptr<views::Button> minimize_button_ = nullptr;
+  raw_ptr<views::Button> arrow_back_button_ = nullptr;
   std::unique_ptr<EventInterceptor> event_interceptor_;
 
   // The time a stream is initializing. Used to record the elapsed time from
   // when the stream is initializing to when the stream is closed by user.
-  absl::optional<base::TimeTicks> init_stream_timestamp_;
+  std::optional<base::TimeTicks> init_stream_timestamp_;
+
+  // The orientation of the stream (portrait vs landscape). The default
+  // orientation is portrait.
+  bool is_landscape_ = false;
 
   bool is_stream_started_ = false;
+  std::u16string phone_name_;
 
   // Observers
   base::ScopedObservation<SessionControllerImpl, SessionObserver>
       observed_session_{this};
   base::ScopedObservation<Shelf, ShelfObserver> shelf_observation_{this};
-  base::ScopedObservation<TabletModeController, TabletModeObserver>
-      tablet_mode_observation_{this};
   base::ScopedObservation<Shell, ShellObserver> shell_observer_{this};
   base::ScopedObservation<keyboard::KeyboardUIController,
                           KeyboardControllerObserver>
       keyboard_observation_{this};
+  display::ScopedDisplayObserver display_observer_{this};
 
   base::WeakPtrFactory<EcheTray> weak_factory_{this};
 };

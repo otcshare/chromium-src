@@ -5,26 +5,29 @@
 #ifndef CHROME_BROWSER_PRELOADING_PREFETCH_SEARCH_PREFETCH_SEARCH_PREFETCH_BROWSER_TEST_BASE_H_
 #define CHROME_BROWSER_PRELOADING_PREFETCH_SEARCH_PREFETCH_SEARCH_PREFETCH_BROWSER_TEST_BASE_H_
 
-#include <string>
-
 #include <map>
 #include <memory>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_request.h"
+#include "chrome/browser/preloading/prefetch/search_prefetch/search_preload_test_response_utils.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "content/public/test/content_mock_cert_verifier.h"
+#include "content/public/test/preloading_test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 
 class DevToolsWindow;
 
 // A base class with basic search suggestion environment set.
-class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
+class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest,
+                                      public SearchPreloadResponseController {
  public:
   SearchPrefetchBaseBrowserTest();
   ~SearchPrefetchBaseBrowserTest() override;
@@ -37,6 +40,7 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
 
   GURL GetSearchServerQueryURL(const std::string& path) const;
   GURL GetSearchServerQueryURLWithNoQuery(const std::string& path) const;
+  GURL GetCanonicalSearchURL(const GURL& prefetch_url);
 
   std::tuple<GURL, GURL> GetSearchPrefetchAndNonPrefetch(
       const std::string& search_terms);
@@ -46,8 +50,13 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
 
   GURL GetSuggestServerURL(const std::string& path) const;
 
-  void WaitUntilStatusChangesTo(std::u16string search_terms,
-                                absl::optional<SearchPrefetchStatus> status);
+  void WaitUntilStatusChangesTo(const GURL& canonical_search_url,
+                                std::optional<SearchPrefetchStatus> status);
+  // Given the canonical_search_url, returns the corresponding url that is sent
+  // to the network.
+  // TODO(crbug.com/345275145): Prerender should not rely on this to get the
+  // real url. Refactor the test code and then remove this method.
+  GURL GetRealPrefetchUrlForTesting(const GURL& canonical_search_url);
 
   content::WebContents* GetWebContents() const;
 
@@ -55,7 +64,7 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
 
   void WaitForDuration(base::TimeDelta duration);
 
-  void ClearBrowsingCacheData(absl::optional<GURL> url_origin);
+  void ClearBrowsingCacheData(std::optional<GURL> url_origin);
 
   void SetDSEWithURL(const GURL& url, bool dse_allows_prefetch);
 
@@ -90,18 +99,6 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
   const std::vector<net::test_server::HttpRequest>& search_server_requests()
       const {
     return search_server_requests_;
-  }
-
-  void set_should_hang_requests(bool should_hang_requests) {
-    should_hang_requests_ = should_hang_requests;
-  }
-
-  void set_hang_requests_after_start(bool hang_requests_after_start) {
-    hang_requests_after_start_ = hang_requests_after_start;
-  }
-
-  void set_delayed_response(bool delayed_response) {
-    delayed_response_ = delayed_response;
   }
 
   // Create a search suggestion match with a prefetch signal when
@@ -163,6 +160,10 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
                             {"502_on_prefetch"},
                             /*prefetch_index=*/0,
                             /*prerender_index=*/-1)};
+  // TODO(https://crbug.com/423465927): Explore a better approach to make the
+  // existing tests run with the prewarm feature enabled.
+  test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
 
   content::ContentMockCertVerifier mock_cert_verifier_;
 
@@ -171,15 +172,8 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<net::EmbeddedTestServer> search_suggest_server_;
 
-  bool should_hang_requests_ = false;
-
-  bool delayed_response_ = false;
-
   size_t search_server_request_count_ = 0;
   size_t search_server_prefetch_request_count_ = 0;
-
-  // When set to true, serves a response that hangs after the start of the body.
-  bool hang_requests_after_start_ = false;
 
   // Test cases can add path, content, content type tuples to be served.
   std::map<std::string /* path */,
@@ -187,6 +181,8 @@ class SearchPrefetchBaseBrowserTest : public InProcessBrowserTest {
       static_files_;
 
   raw_ptr<DevToolsWindow> window_ = nullptr;
+  // Disable sampling for UKM preloading logs.
+  content::test::PreloadingConfigOverride preloading_config_override_;
 };
 
 #endif  // CHROME_BROWSER_PRELOADING_PREFETCH_SEARCH_PREFETCH_SEARCH_PREFETCH_BROWSER_TEST_BASE_H_

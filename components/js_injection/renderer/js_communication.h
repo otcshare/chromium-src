@@ -15,6 +15,7 @@
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "v8/include/cppgc/persistent.h"
 
 namespace content {
 class RenderFrame;
@@ -37,10 +38,12 @@ class JsCommunication
   ~JsCommunication() override;
 
   // mojom::JsCommunication implementation
-  void SetJsObjects(std::vector<mojom::JsObjectPtr> js_object_ptrs) override;
-  void AddDocumentStartScript(
-      mojom::DocumentStartJavaScriptPtr script_ptr) override;
-  void RemoveDocumentStartScript(int32_t script_id) override;
+  void SetJsObjects(
+      std::vector<mojom::JsObjectPtr> js_object_ptrs,
+      mojo::PendingAssociatedRemote<mojom::JsObjectsClient> client) override;
+  void AddPersistentJavaScript(
+      mojom::JavaScriptExecutablePtr script_ptr) override;
+  void RemovePersistentJavaScript(int32_t script_id) override;
 
   // RenderFrameObserver implementation
   void DidClearWindowObject() override;
@@ -54,8 +57,8 @@ class JsCommunication
       const std::u16string& js_object_name);
 
  private:
-  struct JsObjectInfo;
-  struct DocumentStartJavaScript;
+  class JsObjectInfo;
+  struct JavaScriptExecutable;
 
   void BindPendingReceiver(
       mojo::PendingAssociatedReceiver<mojom::JsCommunication> pending_receiver);
@@ -67,11 +70,12 @@ class JsCommunication
   // to prevent doing multiple injection in that case.
   bool inside_did_clear_window_object_ = false;
 
-  std::vector<std::unique_ptr<DocumentStartJavaScript>> scripts_;
-  std::vector<base::WeakPtr<JsBinding>> js_bindings_;
+  std::vector<std::unique_ptr<JavaScriptExecutable>> scripts_;
+  std::vector<cppgc::WeakPersistent<JsBinding>> js_bindings_;
 
   // Associated with legacy IPC channel.
   mojo::AssociatedReceiver<mojom::JsCommunication> receiver_{this};
+  mojo::AssociatedRemote<mojom::JsObjectsClient> client_remote_;
 
   base::WeakPtrFactory<JsCommunication> weak_ptr_factory_for_bindings_{this};
 };

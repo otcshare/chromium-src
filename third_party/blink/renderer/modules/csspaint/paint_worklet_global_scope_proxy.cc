@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/csspaint/paint_worklet_global_scope_proxy.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -34,20 +35,13 @@ PaintWorkletGlobalScopeProxy::PaintWorkletGlobalScopeProxy(
   reporting_proxy_ = std::make_unique<MainThreadWorkletReportingProxy>(window);
 
   String global_scope_name =
-      StringView("PaintWorklet #") + String::Number(global_scope_number);
+      StrCat({"PaintWorklet #", String::Number(global_scope_number)});
 
   LocalFrameClient* frame_client = frame->Client();
-  const String user_agent =
-      RuntimeEnabledFeatures::SendFullUserAgentAfterReductionEnabled(window)
-          ? frame_client->FullUserAgent()
-      : RuntimeEnabledFeatures::UserAgentReductionEnabled(window)
-          ? frame_client->ReducedUserAgent()
-          : frame_client->UserAgent();
-
   auto creation_params = std::make_unique<GlobalScopeCreationParams>(
       window->Url(), mojom::blink::ScriptType::kModule, global_scope_name,
-      user_agent, frame_client->UserAgentMetadata(),
-      frame_client->CreateWorkerFetchContext(),
+      frame_client->UserAgent(), frame_client->UserAgentMetadata(),
+      frame_client->CreateWorkletFetchContext(),
       mojo::Clone(window->GetContentSecurityPolicy()->GetParsedPolicies()),
       Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
       window->GetReferrerPolicy(), window->GetSecurityOrigin(),

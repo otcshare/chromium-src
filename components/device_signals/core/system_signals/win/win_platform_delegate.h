@@ -17,8 +17,7 @@ class WinPlatformDelegate : public BasePlatformDelegate {
   // PlatformDelegate:
   bool ResolveFilePath(const base::FilePath& file_path,
                        base::FilePath* resolved_file_path) override;
-  absl::optional<std::vector<std::string>>
-  GetSigningCertificatesPublicKeyHashes(
+  std::optional<SigningCertificatesPublicKeys> GetSigningCertificatesPublicKeys(
       const base::FilePath& file_path) override;
 };
 

@@ -4,9 +4,7 @@
 
 #include "chromeos/ash/services/cros_healthd/private/cpp/data_collector.h"
 
-#include "base/functional/callback_forward.h"
-#include "base/notreached.h"
-#include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -30,6 +28,8 @@ class FakeDataCollectorDelegate : public DataCollector::Delegate {
   bool IsPrivacyScreenSupported() override { return privacy_screen_supported_; }
 
   bool IsPrivacyScreenManaged() override { return privacy_screen_managed_; }
+
+  void SetPrivacyScreenState(bool state) override {}  // Do nothing.
 
   void SetPrivacyScreenAttributes(bool supported,
                                   bool managed,
@@ -77,83 +77,93 @@ TEST_F(DataCollectorTest, GetTouchscreenDevices) {
   touchscreen_device.has_stylus_garage_switch = true;
   ui::DeviceDataManagerTestApi().SetTouchscreenDevices({touchscreen_device});
 
-  base::RunLoop run_loop;
-  remote_->GetTouchscreenDevices(base::BindLambdaForTesting(
-      [&](std::vector<mojom::TouchscreenDevicePtr> devices) {
-        std::vector<mojom::TouchscreenDevicePtr> expected;
-        expected.push_back(mojom::TouchscreenDevice::New(
-            mojom::InputDevice::New(
-                "DeviceName", mojom::InputDevice::ConnectionType::kBluetooth,
-                "phys", true, "sys_path"),
-            42, true, true));
-        EXPECT_EQ(devices, expected);
-        run_loop.Quit();
-      }));
-  run_loop.Run();
+  base::test::TestFuture<std::vector<mojom::TouchscreenDevicePtr>> future;
+  remote_->GetTouchscreenDevices(future.GetCallback());
+  std::vector<mojom::TouchscreenDevicePtr> expected;
+  expected.push_back(mojom::TouchscreenDevice::New(
+      mojom::InputDevice::New("DeviceName",
+                              mojom::InputDevice::ConnectionType::kBluetooth,
+                              "phys", true, "sys_path"),
+      42, true, true));
+  EXPECT_EQ(future.Take(), expected);
 }
 
 TEST_F(DataCollectorTest, GetTouchpadLibraryName) {
-  base::RunLoop run_loop;
-  remote_->GetTouchpadLibraryName(
-      base::BindLambdaForTesting([&](const std::string& library_name) {
-        EXPECT_EQ(library_name, kFakeTouchpadLibraryName);
-        run_loop.Quit();
-      }));
-  run_loop.Run();
+  base::test::TestFuture<const std::string&> future;
+  remote_->GetTouchpadLibraryName(future.GetCallback());
+  EXPECT_EQ(future.Get(), kFakeTouchpadLibraryName);
 }
 
 // Test that privacy screen set request will be rejected when privacy screen is
 // unsupported.
 TEST_F(DataCollectorTest, RejectPrivacyScreenSetRequestOnUnsupported) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/false, /*managed=*/false,
                                        /*enabled=*/false);
-  remote_->SetPrivacyScreenState(
-      true, base::BindOnce([](bool success) { EXPECT_FALSE(success); }));
+  remote_->SetPrivacyScreenState(true, future.GetCallback());
+  EXPECT_FALSE(future.Get());
 }
 
 // Test that privacy screen set request will be rejected when privacy screen is
 // in managed mode.
 TEST_F(DataCollectorTest, RejectPrivacyScreenSetRequestOnManagedMode) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/true, /*managed=*/true,
                                        /*enabled=*/false);
-  remote_->SetPrivacyScreenState(
-      true, base::BindOnce([](bool success) { EXPECT_FALSE(success); }));
+  remote_->SetPrivacyScreenState(true, future.GetCallback());
+  EXPECT_FALSE(future.Get());
 }
 
 // Test that privacy screen set request will be accepted when privacy screen is
 // on and is to be turned on.
 TEST_F(DataCollectorTest, AcceptPrivacyScreenSetRequestFromOnToOn) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/true, /*managed=*/false,
                                        /*enabled=*/true);
-  remote_->SetPrivacyScreenState(
-      true, base::BindOnce([](bool success) { EXPECT_TRUE(success); }));
+  remote_->SetPrivacyScreenState(true, future.GetCallback());
+  EXPECT_TRUE(future.Get());
 }
 
 // Test that privacy screen set request will be accepted when privacy screen is
 // on and is to be turned off.
 TEST_F(DataCollectorTest, AcceptPrivacyScreenSetRequestFromOnToOff) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/true,
                                        /*managed=*/false, /*enabled=*/true);
-  remote_->SetPrivacyScreenState(
-      false, base::BindOnce([](bool success) { EXPECT_TRUE(success); }));
+  remote_->SetPrivacyScreenState(false, future.GetCallback());
+  EXPECT_TRUE(future.Get());
 }
 
 // Test that privacy screen set request will be accepted when privacy screen is
 // off and is to be turned on.
 TEST_F(DataCollectorTest, AcceptPrivacyScreenSetRequestFromOffToOn) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/true,
                                        /*managed=*/false, /*enabled=*/false);
-  remote_->SetPrivacyScreenState(
-      true, base::BindOnce([](bool success) { EXPECT_TRUE(success); }));
+  remote_->SetPrivacyScreenState(true, future.GetCallback());
+  EXPECT_TRUE(future.Get());
 }
 
 // Test that privacy screen set request will be accepted when privacy screen is
-// off and is to be turned ff.
+// off and is to be turned off.
 TEST_F(DataCollectorTest, AcceptPrivacyScreenSetRequestFromOffToff) {
+  base::test::TestFuture<bool> future;
   delegate_.SetPrivacyScreenAttributes(/*supported=*/true,
                                        /*managed=*/false, /*enabled=*/false);
-  remote_->SetPrivacyScreenState(
-      false, base::BindOnce([](bool success) { EXPECT_TRUE(success); }));
+  remote_->SetPrivacyScreenState(false, future.GetCallback());
+  EXPECT_TRUE(future.Get());
+}
+
+// Test that setting audio output mute always fails.
+TEST_F(DataCollectorTest, SetAudioOutputMuteAlwaysFail) {
+  base::test::TestFuture<bool> future;
+  remote_->DEPRECATED_SetAudioOutputMute(/*mute_on=*/true,
+                                         future.GetCallback());
+  EXPECT_FALSE(future.Get());
+
+  remote_->DEPRECATED_SetAudioOutputMute(/*mute_on=*/false,
+                                         future.GetCallback());
+  EXPECT_FALSE(future.Get());
 }
 
 }  // namespace

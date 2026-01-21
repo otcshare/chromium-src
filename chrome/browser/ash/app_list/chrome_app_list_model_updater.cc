@@ -14,9 +14,11 @@
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/app_list_controller.h"
 #include "ash/public/cpp/app_list/app_list_metrics.h"
-#include "ash/public/cpp/tablet_mode.h"
-#include "base/bind.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ash/app_list/app_list_sync_model_sanitizer.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
@@ -24,8 +26,14 @@
 #include "chrome/browser/ash/app_list/reorder/app_list_reorder_core.h"
 #include "chrome/browser/ash/app_list/reorder/app_list_reorder_delegate.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
+#include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ash/app_icon_color_cache/app_icon_color_cache.h"
+#include "components/feature_engagement/public/feature_constants.h"
+#include "components/feature_engagement/public/tracker.h"
 #include "extensions/common/constants.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/display/screen.h"
 
 namespace {
 
@@ -53,8 +61,6 @@ class ChromeAppListModelUpdater::TemporarySortManager {
       const std::map<std::string, std::unique_ptr<ChromeAppListItem>>&
           permanent_items)
       : temporary_order_(temporary_order) {
-    DCHECK(ash::features::IsLauncherAppSortEnabled());
-
     // Fill permanent position storage.
     for (const auto& id_item_pair : permanent_items)
       AddPermanentPosition(id_item_pair.first, id_item_pair.second->position());
@@ -137,8 +143,7 @@ ChromeAppListModelUpdater::ChromeAppListModelUpdater(
       sync_model_sanitizer_(sync_model_sanitizer),
       item_manager_(std::make_unique<ChromeAppListItemManager>()),
       model_(this) {
-  DCHECK_EQ(ash::features::IsLauncherAppSortEnabled(),
-            static_cast<bool>(order_delegate_));
+  DCHECK(order_delegate_);
   model_.AddObserver(this);
 }
 
@@ -147,11 +152,12 @@ ChromeAppListModelUpdater::~ChromeAppListModelUpdater() {
 }
 
 void ChromeAppListModelUpdater::SetActive(bool active) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetActive");
   is_active_ = active;
 
   if (active) {
-    ash::AppListController::Get()->SetActiveModel(model_id(), &model_,
-                                                  &search_model_);
+    ash::AppListController::Get()->SetActiveModel(
+        model_id(), &model_, &search_model_, &quick_app_access_model_);
   } else if (is_under_temporary_sort()) {
     // Commit the temporary order when the model updater is deactivated.
     EndTemporarySortAndTakeAction(EndAction::kCommit);
@@ -160,6 +166,7 @@ void ChromeAppListModelUpdater::SetActive(bool active) {
 
 void ChromeAppListModelUpdater::AddItem(
     std::unique_ptr<ChromeAppListItem> app_item) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::AddItem");
   std::unique_ptr<ash::AppListItemMetadata> item_data =
       app_item->CloneMetadata();
 
@@ -179,6 +186,7 @@ void ChromeAppListModelUpdater::AddAppItemToFolder(
     std::unique_ptr<ChromeAppListItem> app_item,
     const std::string& folder_id,
     bool add_from_local) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::AddAppItemToFolder");
   DCHECK(!app_item->is_folder());
 
   if (is_under_temporary_sort()) {
@@ -220,14 +228,15 @@ void ChromeAppListModelUpdater::AddAppItemToFolder(
   app_item->SetChromeFolderId(folder_id);
   ChromeAppListItem* item_added =
       item_manager_->AddChromeItem(std::move(app_item));
-
   item_data->folder_id.clear();
   model_.AddItemToFolder(CreateAppListItem(std::move(item_data), this),
                          folder_id);
   // Set the item's default icon if it has one.
   if (!item_added->icon().isNull()) {
+    const bool is_placeholder_icon = item_added->is_placeholder_icon();
     ash::AppListItem* item = model_.FindItem(item_added->id());
-    item->SetDefaultIconAndColor(item_added->icon(), item_added->icon_color());
+    item->SetDefaultIconAndColor(item_added->icon(), item_added->icon_color(),
+                                 is_placeholder_icon);
   }
 
   if (add_from_local) {
@@ -243,32 +252,28 @@ void ChromeAppListModelUpdater::AddAppItemToFolder(
       // page breaks get sanitized when the sorted order is set.
       // Adding an item to a folder is not expected for new items, but also does
       // not impact the top level grid pagination structure.
-      sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-          GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+      sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                                /*reset_page_breaks=*/false);
     }
   }
 }
 
 void ChromeAppListModelUpdater::RemoveItem(const std::string& id,
                                            bool is_uninstall) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RemoveItem");
+  // The item matched by `id` may be unavailable on the local device.
+  if (!model_.FindItem(id)) {
+    return;
+  }
+
+  ash::AppIconColorCache::GetInstance(profile_).RemoveColorDataForApp(id);
+
   // Copy the ID to the stack since it may to be destroyed in
   // RemoveChromeItem(). See crbug.com/1190347.
   std::string id_copy = id;
 
-  // The item matched by `id` may be unavailable on the local device.
-  ash::AppListItem* item = model_.FindItem(id_copy);
-  if (!item)
-    return;
-  const std::string parent_id = item->folder_id();
-
   item_manager_->RemoveChromeItem(id_copy);
-
   model_.DeleteItem(id_copy);
-
-  if (!parent_id.empty() && is_uninstall &&
-      !ash::features::IsProductivityLauncherEnabled()) {
-    ClearFolderIfItHasSingleChild(parent_id);
-  }
 
   if (is_uninstall) {
     // When item deletion is triggered by local app uninstallation instead of
@@ -278,8 +283,8 @@ void ChromeAppListModelUpdater::RemoveItem(const std::string& id,
     } else {
       // NOTE: Committing temporary sort will also reset page breaks, so they
       // don't have to be sanitized again in that case.
-      sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-          GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+      sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                                /*reset_page_breaks=*/false);
     }
   }
 }
@@ -293,17 +298,62 @@ void ChromeAppListModelUpdater::SetSearchEngineIsGoogle(bool is_google) {
   search_model_.SetSearchEngineIsGoogle(is_google);
 }
 
+void ChromeAppListModelUpdater::RecalculateWouldTriggerLauncherSearchIph() {
+  TRACE_EVENT0(
+      "ui",
+      "ChromeAppListModelUpdater::RecalculateWouldTriggerLauncherSearchIph");
+  raw_ptr<feature_engagement::Tracker> tracker =
+      feature_engagement::TrackerFactory::GetForBrowserContext(profile_);
+  if (!tracker) {
+    // Set false as a fail-safe behavior.
+    search_model_.SetWouldTriggerLauncherSearchIph(false);
+    return;
+  }
+
+  // `AddOnInitializedCallback` will call the callback immediately if it's
+  // already initialized.
+  tracker->AddOnInitializedCallback(base::BindOnce(
+      &ChromeAppListModelUpdater::OnFeatureEngagementTrackerInitialized,
+      weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ChromeAppListModelUpdater::OnFeatureEngagementTrackerInitialized(
+    bool success) {
+  TRACE_EVENT0(
+      "ui", "ChromeAppListModelUpdater::OnFeatureEngagementTrackerInitialized");
+  if (!success) {
+    // Set false as a fail-safe behavior.
+    search_model_.SetWouldTriggerLauncherSearchIph(false);
+    return;
+  }
+
+  // To be on a safer side, query tracker instance again to minimize the
+  // duration of holding a tracker object.
+  raw_ptr<feature_engagement::Tracker> tracker =
+      feature_engagement::TrackerFactory::GetForBrowserContext(profile_);
+  if (!tracker) {
+    // Set false as a fail-safe behavior.
+    search_model_.SetWouldTriggerLauncherSearchIph(false);
+    return;
+  }
+
+  search_model_.SetWouldTriggerLauncherSearchIph(tracker->WouldTriggerHelpUI(
+      feature_engagement::kIPHLauncherSearchHelpUiFeature));
+}
+
 void ChromeAppListModelUpdater::PublishSearchResults(
-    const std::vector<ChromeSearchResult*>& results,
+    const std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>& results,
     const std::vector<ash::AppListSearchResultCategory>& categories) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::PublishSearchResults");
   published_results_ = results;
 
-  for (auto* const result : results)
+  for (ChromeSearchResult* const result : results) {
     result->set_model_updater(this);
+  }
 
   std::vector<std::unique_ptr<ash::SearchResult>> ash_results;
   std::vector<std::unique_ptr<ash::SearchResultMetadata>> result_data;
-  for (auto* result : results) {
+  for (ChromeSearchResult* result : results) {
     auto ash_result = std::make_unique<ash::SearchResult>();
     ash_result->SetMetadata(result->CloneMetadata());
     ash_results.push_back(std::move(ash_result));
@@ -316,7 +366,7 @@ void ChromeAppListModelUpdater::ClearSearchResults() {
   search_model_.DeleteAllResults();
 }
 
-std::vector<ChromeSearchResult*>
+std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>
 ChromeAppListModelUpdater::GetPublishedSearchResultsForTest() {
   return published_results_;
 }
@@ -331,10 +381,39 @@ void ChromeAppListModelUpdater::ActivateChromeItem(const std::string& id,
 }
 
 void ChromeAppListModelUpdater::LoadAppIcon(const std::string& id) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::LoadAppIcon");
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
   item->LoadIcon();
+}
+
+void ChromeAppListModelUpdater::UpdateProgress(const std::string& id,
+                                               float progress) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::UpdateProgress");
+  ChromeAppListItem* item = FindItem(id);
+  if (!item) {
+    return;
+  }
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
+  data->progress = progress;
+  model_.SetItemMetadata(id, std::move(data));
+}
+
+void ChromeAppListModelUpdater::SetAccessibleName(const std::string& id,
+                                                  const std::string& name) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::UpdateAccessibleName");
+  ChromeAppListItem* item = FindItem(id);
+  if (!item) {
+    return;
+  }
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
+  data->accessible_name = name;
+  model_.SetItemMetadata(id, std::move(data));
+}
+
+bool ChromeAppListModelUpdater::ModelHasBeenReorderedInThisSession() {
+  return has_requested_move_item_position_;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -350,7 +429,9 @@ void ChromeAppListModelUpdater::SetItemIconVersion(const std::string& id,
 void ChromeAppListModelUpdater::SetItemIconAndColor(
     const std::string& id,
     const gfx::ImageSkia& icon,
-    const ash::IconColor& icon_color) {
+    const ash::IconColor& icon_color,
+    bool is_placeholder_icon) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetItemIconAndColor");
   if (icon.isNull())
     return;
 
@@ -370,7 +451,7 @@ void ChromeAppListModelUpdater::SetItemIconAndColor(
 
   // Two similar icons may generate the same extracted icon color value.
   // Therefore, always update the app list item icon.
-  item->SetDefaultIconAndColor(icon, icon_color);
+  item->SetDefaultIconAndColor(icon, icon_color, is_placeholder_icon);
 
   std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   MaybeUpdatePositionWhenIconColorChange(data.get());
@@ -387,8 +468,23 @@ void ChromeAppListModelUpdater::SetItemIconAndColor(
     OnAppListItemUpdated(item);
 }
 
+void ChromeAppListModelUpdater::SetItemBadgeIcon(
+    const std::string& id,
+    const gfx::ImageSkia& badge_icon) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetItemBadgeIcon");
+  if (badge_icon.isNull()) {
+    return;
+  }
+  ash::AppListItem* item = model_.FindItem(id);
+  if (!item) {
+    return;
+  }
+  item->SetHostBadgeIcon(badge_icon);
+}
+
 void ChromeAppListModelUpdater::SetItemName(const std::string& id,
                                             const std::string& name) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetItemName");
   ash::AppListItem* item = model_.FindItem(id);
   if (!item)
     return;
@@ -399,6 +495,7 @@ void ChromeAppListModelUpdater::SetItemName(const std::string& id,
 
 void ChromeAppListModelUpdater::SetAppStatus(const std::string& id,
                                              ash::AppStatus app_status) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetAppStatus");
   ash::AppListItem* item = model_.FindItem(id);
   if (!item)
     return;
@@ -410,6 +507,7 @@ void ChromeAppListModelUpdater::SetAppStatus(const std::string& id,
 void ChromeAppListModelUpdater::SetItemPosition(
     const std::string& id,
     const syncer::StringOrdinal& new_position) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::SetItemPosition");
   ash::AppListItem* item = model_.FindItem(id);
   if (!item)
     return;
@@ -533,15 +631,6 @@ bool ChromeAppListModelUpdater::SearchEngineIsGoogle() {
   return search_engine_is_google_;
 }
 
-void ChromeAppListModelUpdater::GetIdToAppListIndexMap(
-    GetIdToAppListIndexMapCallback callback) {
-  base::flat_map<std::string, uint16_t> id_to_app_list_index;
-  for (size_t i = 0; i < model_.top_level_item_list()->item_count(); ++i) {
-    id_to_app_list_index[model_.top_level_item_list()->item_at(i)->id()] = i;
-  }
-  std::move(callback).Run(id_to_app_list_index);
-}
-
 size_t ChromeAppListModelUpdater::BadgedItemCount() {
   return item_manager_->BadgedItemCount();
 }
@@ -572,6 +661,7 @@ void ChromeAppListModelUpdater::UpdateAppItemFromSyncItem(
     app_list::AppListSyncableService::SyncItem* sync_item,
     bool update_name,
     bool update_folder) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::UpdateAppItemFromSyncItem");
   // In chrome & ash:
   ChromeAppListItem* chrome_item = FindItem(sync_item->item_id);
   if (!chrome_item)
@@ -628,7 +718,7 @@ void ChromeAppListModelUpdater::UpdateAppItemFromSyncItem(
   if (!is_temporary_sort_active || (!position_change && !folder_change))
     return;
 
-  // TODO(https://crbug.com/1260447): the features of temporary sort are
+  // TODO(crbug.com/40201875): the features of temporary sort are
   // partially implemented. The cases of app installation/removal are not
   // handled right now. As a result, `temporary_sort_manager_` may not cover all
   // items. Therefore manually check the existence of `id` here. When all the
@@ -668,6 +758,7 @@ ash::AppListSortOrder ChromeAppListModelUpdater::GetTemporarySortOrderForTest()
 // Methods called from Ash:
 
 void ChromeAppListModelUpdater::OnAppListItemAdded(ash::AppListItem* item) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::OnAppListItemAdded");
   ChromeAppListItem* chrome_item = FindItem(item->id());
   // If the item already exists, we should have set its information properly.
   if (!chrome_item) {
@@ -688,6 +779,7 @@ void ChromeAppListModelUpdater::OnAppListItemAdded(ash::AppListItem* item) {
 }
 
 void ChromeAppListModelUpdater::OnAppListItemUpdated(ash::AppListItem* item) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::OnAppListItemUpdated");
   ChromeAppListItem* chrome_item = FindItem(item->id());
 
   // Ignore the item if it does not exist. This happens when a race occurs
@@ -699,8 +791,8 @@ void ChromeAppListModelUpdater::OnAppListItemUpdated(ash::AppListItem* item) {
   // Do not update the icon or the color of `chrome_item` if `item` is not
   // in icon update process.
   if (!item_with_icon_update_ || *item_with_icon_update_ != item->id()) {
-    item->SetDefaultIconAndColor(chrome_item->icon(),
-                                 chrome_item->icon_color());
+    item->SetDefaultIconAndColor(chrome_item->icon(), chrome_item->icon_color(),
+                                 item->GetMetadata()->is_placeholder_icon);
   }
 
   const std::string copy_id = item->id();
@@ -710,6 +802,7 @@ void ChromeAppListModelUpdater::OnAppListItemUpdated(ash::AppListItem* item) {
 
 void ChromeAppListModelUpdater::OnAppListItemWillBeDeleted(
     ash::AppListItem* item) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::OnAppListItemWillBeDeleted");
   if (is_under_temporary_sort()) {
     DCHECK(temporary_sort_manager_->HasId(item->id()));
     temporary_sort_manager_->DeletePermanentPosition(item->id());
@@ -732,6 +825,7 @@ void ChromeAppListModelUpdater::OnAppListItemWillBeDeleted(
 void ChromeAppListModelUpdater::RequestMoveItemToFolder(
     std::string id,
     const std::string& folder_id) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestMoveItemToFolder");
   DCHECK(!folder_id.empty());
 
   ash::AppListItem* item = model_.FindItem(id);
@@ -744,11 +838,9 @@ void ChromeAppListModelUpdater::RequestMoveItemToFolder(
     const syncer::StringOrdinal old_position =
         item_manager_->FindItem(id)->position();
 
-    const bool is_sorted = ash::features::IsLauncherAppSortEnabled()
-                               ? (is_under_temporary_sort() ||
-                                  order_delegate_->GetPermanentSortingOrder() !=
-                                      ash::AppListSortOrder::kCustom)
-                               : false;
+    const bool is_sorted = is_under_temporary_sort() ||
+                           order_delegate_->GetPermanentSortingOrder() !=
+                               ash::AppListSortOrder::kCustom;
 
     // Verify that when the app list is under sorting, `old_position` should be
     // valid. But the case that `old_position` is invalid is handled for safety.
@@ -768,16 +860,11 @@ void ChromeAppListModelUpdater::RequestMoveItemToFolder(
                             : syncer::StringOrdinal::CreateInitialOrdinal();
     }
 
-    const std::string old_folder_id = item->folder_id();
     std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
     data->folder_id = folder_id;
     data->position = target_position;
     model_.SetItemMetadata(id, std::move(data));
-
-    if (!old_folder_id.empty() &&
-        !ash::features::IsProductivityLauncherEnabled()) {
-      ClearFolderIfItHasSingleChild(old_folder_id);
-    }
+    has_requested_move_item_position_ = true;
   }
 
   // When user moves a local item to a folder, the user is believed to accept
@@ -788,41 +875,40 @@ void ChromeAppListModelUpdater::RequestMoveItemToFolder(
   } else {
     // NOTE: Committing temporary sort will also reset page breaks, so they
     // don't have to be sanitized again in that case.
-    sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-        GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+    sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                              /*reset_page_breaks=*/false);
   }
 }
 
 void ChromeAppListModelUpdater::RequestMoveItemToRoot(
     std::string id,
     syncer::StringOrdinal target_position) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestMoveItemToRoot");
   ash::AppListItem* item = model_.FindItem(id);
   if (!item)
     return;
 
-  const std::string old_parent = item->folder_id();
-  DCHECK(!old_parent.empty());
+  DCHECK(!item->folder_id().empty());
 
   std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->folder_id = "";
   data->position = target_position;
   model_.SetItemMetadata(id, std::move(data));
-
-  if (!ash::features::IsProductivityLauncherEnabled())
-    ClearFolderIfItHasSingleChild(old_parent);
+  has_requested_move_item_position_ = true;
 
   if (is_under_temporary_sort()) {
     EndTemporarySortAndTakeAction(EndAction::kCommitAndClearSort);
   } else {
     ResetPrefSortOrderInNonTemporaryMode(
         ash::AppListOrderUpdateEvent::kItemMovedToRoot);
-    sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-        GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+    sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                              /*reset_page_breaks=*/false);
   }
 }
 
 void ChromeAppListModelUpdater::RequestAppListSort(
     ash::AppListSortOrder order) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestAppListSort");
   CHECK_NE(ash::AppListSortOrder::kCustom, order);
 
   // Ignore sort requests if sorting makes no visual difference.
@@ -867,10 +953,19 @@ void ChromeAppListModelUpdater::RequestAppListSort(
 }
 
 void ChromeAppListModelUpdater::RequestAppListSortRevert() {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestAppListSortRevert");
   if (!is_under_temporary_sort())
     return;
 
   EndTemporarySortAndTakeAction(EndAction::kRevert);
+}
+
+void ChromeAppListModelUpdater::RequestCommitTemporarySortOrder() {
+  if (!is_under_temporary_sort()) {
+    return;
+  }
+
+  EndTemporarySortAndTakeAction(EndAction::kCommit);
 }
 
 void ChromeAppListModelUpdater::RequestPositionUpdate(
@@ -882,6 +977,7 @@ void ChromeAppListModelUpdater::RequestPositionUpdate(
 
   // Commit positions and clear the sort order if a local item is moved.
   if (reason == ash::RequestPositionUpdateReason::kMoveItem) {
+    has_requested_move_item_position_ = true;
     if (is_under_temporary_sort()) {
       EndTemporarySortAndTakeAction(EndAction::kCommitAndClearSort);
     } else {
@@ -890,26 +986,36 @@ void ChromeAppListModelUpdater::RequestPositionUpdate(
 
       // NOTE: Committing temporary sort will also reset page breaks, so they
       // don't have to be sanitized again in that case.
-      sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-          GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+      sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                                /*reset_page_breaks=*/false);
     }
+  }
+}
+
+void ChromeAppListModelUpdater::RequestDefaultPositionForModifiedOrder() {
+  const std::map<std::string, std::unique_ptr<ChromeAppListItem>>& items =
+      item_manager_->items();
+  for (const auto& id_item_pair : items) {
+    ChromeAppListItem* item = id_item_pair.second.get();
+    RequestPositionUpdate(id_item_pair.first,
+                          item->CalculateDefaultPositionForModifiedOrder(),
+                          ash::RequestPositionUpdateReason::kMoveItem);
   }
 }
 
 std::string ChromeAppListModelUpdater::RequestFolderCreation(
     std::string merge_target_id,
     std::string item_to_merge_id) {
-  bool sort_order_invalidated =
-      !ash::features::IsLauncherFolderRenameKeepsSortOrderEnabled();
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestFolderCreation");
   // Folder creation is a user action, so temporary sort state should end.
   // If feature to position the folder to correct sorted position is disabled,
   // clear the sort.
   const bool under_temporary_sort = is_under_temporary_sort();
   if (under_temporary_sort) {
-    EndTemporarySortAndTakeAction(sort_order_invalidated
-                                      ? EndAction::kCommitAndClearSort
-                                      : EndAction::kCommit);
+    EndTemporarySortAndTakeAction(EndAction::kCommit);
   }
+
+  has_requested_move_item_position_ = true;
 
   ash::AppListItem* target_item = model_.FindItem(merge_target_id);
   DCHECK(target_item);
@@ -920,15 +1026,8 @@ std::string ChromeAppListModelUpdater::RequestFolderCreation(
   DCHECK(item_to_merge);
   DCHECK(!item_to_merge->is_folder());
 
-  ash::AppListSortOrder current_sort_order = ash::AppListSortOrder::kCustom;
-  if (ash::features::IsLauncherAppSortEnabled()) {
-    if (sort_order_invalidated && !under_temporary_sort) {
-      ResetPrefSortOrderInNonTemporaryMode(
-          ash::AppListOrderUpdateEvent::kFolderCreated);
-    } else {
-      current_sort_order = order_delegate_->GetPermanentSortingOrder();
-    }
-  }
+  const ash::AppListSortOrder current_sort_order =
+      order_delegate_->GetPermanentSortingOrder();
 
   // Create a new folder.
   const std::string new_folder_id = ash::AppListFolderItem::GenerateId();
@@ -954,7 +1053,6 @@ std::string ChromeAppListModelUpdater::RequestFolderCreation(
   model_.AddItem(CreateAppListItem(chrome_item->CloneMetadata(), this));
 
   // Adjust parent and position of the item getting mergrd into the target item.
-  const std::string old_folder_id = item_to_merge->folder_id();
   std::unique_ptr<ash::AppListItemMetadata> item_to_merge_data =
       item_to_merge->CloneMetadata();
   item_to_merge_data->folder_id = new_folder_id;
@@ -965,56 +1063,37 @@ std::string ChromeAppListModelUpdater::RequestFolderCreation(
     item_to_merge_data->position = target_item->position().CreateAfter();
   model_.SetItemMetadata(item_to_merge_id, std::move(item_to_merge_data));
 
-  // If the item was removed from a folder, remove the folder as needed.
-  // Note that empty folder will get removed by the app list model itself.
-  if (!old_folder_id.empty() &&
-      !ash::features::IsProductivityLauncherEnabled()) {
-    DCHECK_EQ(ash::AppListSortOrder::kCustom, current_sort_order);
-    ClearFolderIfItHasSingleChild(old_folder_id);
-  }
-
   // Set the target item new folder ID.
   std::unique_ptr<ash::AppListItemMetadata> target_data =
       target_item->CloneMetadata();
   target_data->folder_id = new_folder_id;
   model_.SetItemMetadata(merge_target_id, std::move(target_data));
 
-  sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-      GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+  sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                            /*reset_page_breaks=*/false);
   return new_folder_id;
 }
 
 void ChromeAppListModelUpdater::RequestFolderRename(
     std::string folder_id,
     const std::string& new_name) {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::RequestFolderRename");
   ChromeAppListItem* folder_item = FindItem(folder_id);
   if (!folder_item)
     return;
 
   ash::AppListSortOrder current_sort_order = ash::AppListSortOrder::kCustom;
   const bool under_temporary_sort = is_under_temporary_sort();
-  if (ash::features::IsLauncherAppSortEnabled()) {
-    if (under_temporary_sort) {
-      current_sort_order = temporary_sort_manager_->temporary_order();
-    } else {
-      current_sort_order = order_delegate_->GetPermanentSortingOrder();
-    }
+  if (under_temporary_sort) {
+    current_sort_order = temporary_sort_manager_->temporary_order();
+  } else {
+    current_sort_order = order_delegate_->GetPermanentSortingOrder();
   }
-
-  const bool is_name_sort =
-      current_sort_order == ash::AppListSortOrder::kNameAlphabetical ||
-      current_sort_order == ash::AppListSortOrder::kNameReverseAlphabetical;
-  const bool sort_order_invalidated =
-      is_name_sort &&
-      !ash::features::IsLauncherFolderRenameKeepsSortOrderEnabled();
 
   // If user tries to take an action, and rename a folder - commit temporary
   // sort.
-
   if (under_temporary_sort) {
-    EndTemporarySortAndTakeAction(sort_order_invalidated
-                                      ? EndAction::kCommitAndClearSort
-                                      : EndAction::kCommit);
+    EndTemporarySortAndTakeAction(EndAction::kCommit);
   }
 
   folder_item->SetChromeName(new_name);
@@ -1022,7 +1101,12 @@ void ChromeAppListModelUpdater::RequestFolderRename(
   bool position_changed = false;
   // If app list is sorted alphabetically, the folder name change impacts the
   // folder position within the sorted list.
-  if (is_name_sort && !sort_order_invalidated) {
+  const bool is_name_sort =
+      current_sort_order == ash::AppListSortOrder::kNameAlphabetical ||
+      current_sort_order == ash::AppListSortOrder::kNameReverseAlphabetical ||
+      current_sort_order ==
+          ash::AppListSortOrder::kAlphabeticalEphemeralAppFirst;
+  if (is_name_sort) {
     syncer::StringOrdinal sorted_position;
     position_changed =
         order_delegate_->CalculateItemPositionInPermanentSortOrder(
@@ -1033,18 +1117,14 @@ void ChromeAppListModelUpdater::RequestFolderRename(
 
   model_.SetItemMetadata(folder_id, folder_item->CloneMetadata());
 
-  if (sort_order_invalidated && !under_temporary_sort) {
-    ResetPrefSortOrderInNonTemporaryMode(
-        ash::AppListOrderUpdateEvent::kFolderRenamed);
-  }
-
   if (position_changed) {
-    sync_model_sanitizer_->SanitizePageBreaksForProductivityLauncher(
-        GetTopLevelItemIds(), /*reset_page_breaks=*/false);
+    sync_model_sanitizer_->SanitizePageBreaks(GetTopLevelItemIds(),
+                                              /*reset_page_breaks=*/false);
   }
 }
 
 void ChromeAppListModelUpdater::OnAppListHidden() {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::OnAppListHidden");
   if (!is_under_temporary_sort())
     return;
 
@@ -1054,15 +1134,13 @@ void ChromeAppListModelUpdater::OnAppListHidden() {
   EndTemporarySortAndTakeAction(EndAction::kCommit);
 }
 
-void ChromeAppListModelUpdater::CommitTemporarySortOrder() {
-  EndTemporarySortAndTakeAction(EndAction::kCommit);
-}
-
 // Private methods -------------------------------------------------------------
 
 void ChromeAppListModelUpdater::MaybeNotifyObserversOfItemChange(
     ChromeAppListItem* chrome_item,
     ItemChangeType type) {
+  TRACE_EVENT0("ui",
+               "ChromeAppListModelUpdater::MaybeNotifyObserversOfItemChange");
   // If `temporary_sort_manager_` is active, item changes are not propagated
   // to observers.
   if (is_under_temporary_sort() && temporary_sort_manager_->is_active())
@@ -1086,7 +1164,9 @@ void ChromeAppListModelUpdater::MaybeNotifyObserversOfItemChange(
 
 void ChromeAppListModelUpdater::EndTemporarySortAndTakeAction(
     EndAction action) {
-  DCHECK(is_under_temporary_sort() && temporary_sort_manager_->is_active());
+  TRACE_EVENT0("ui",
+               "ChromeAppListModelUpdater::EndTemporarySortAndTakeAction");
+  CHECK(is_under_temporary_sort() && temporary_sort_manager_->is_active());
 
   // Allow item updates to be propagated to observers.
   temporary_sort_manager_->Deactivate();
@@ -1114,10 +1194,11 @@ void ChromeAppListModelUpdater::EndTemporarySortAndTakeAction(
 
   const bool animate = !update_position_closure.is_null();
   ash::AppListController::Get()->UpdateAppListWithNewTemporarySortOrder(
-      /*new_order=*/absl::nullopt, animate, std::move(update_position_closure));
+      /*new_order=*/std::nullopt, animate, std::move(update_position_closure));
 }
 
 void ChromeAppListModelUpdater::CommitTemporaryPositions() {
+  TRACE_EVENT0("ui", "ChromeAppListModelUpdater::CommitTemporaryPositions");
   const std::map<std::string, std::unique_ptr<ChromeAppListItem>>& items =
       item_manager_->items();
   for (const auto& id_item_pair : items) {
@@ -1126,12 +1207,12 @@ void ChromeAppListModelUpdater::CommitTemporaryPositions() {
 
     if (!temporary_position.IsValid()) {
       // Not sure whether this branch can be executed. Handle this case for
-      // safety. TODO(https://crbug.com/1263795): check whether the positions
+      // safety. TODO(crbug.com/40203095): check whether the positions
       // stored in `item_manager_` are always valid. If so, remove this code.
       continue;
     }
 
-    // TODO(https://crbug.com/1260447): the features of temporary sort are
+    // TODO(crbug.com/40201875): the features of temporary sort are
     // partially implemented. The cases of app installation/removal are not
     // handled right now. As a result, the ids in `temporary_sort_manager_`
     // can be inconsistent with those in `item_manager_`. Therefore manually
@@ -1158,6 +1239,8 @@ void ChromeAppListModelUpdater::CommitTemporaryPositions() {
 
 std::vector<app_list::reorder::ReorderParam>
 ChromeAppListModelUpdater::CalculateReorderParamsForRevertOrder() const {
+  TRACE_EVENT0(
+      "ui", "ChromeAppListModelUpdater::CalculateReorderParamsForRevertOrder");
   std::vector<app_list::reorder::ReorderParam> reorder_params;
 
   const std::map<std::string, std::unique_ptr<ChromeAppListItem>>& items =
@@ -1165,7 +1248,7 @@ ChromeAppListModelUpdater::CalculateReorderParamsForRevertOrder() const {
   for (const auto& id_item_pair : items) {
     const std::string& id = id_item_pair.first;
 
-    // TODO(https://crbug.com/1260447): the features of temporary sort are
+    // TODO(crbug.com/40201875): the features of temporary sort are
     // partially implemented. The cases of app installation/removal are not
     // handled right now. As a result, the ids in `temporary_sort_manager_`
     // can be inconsistent with those in `item_manager_`. Therefore manually
@@ -1191,28 +1274,19 @@ ChromeAppListModelUpdater::CalculateReorderParamsForRevertOrder() const {
   return reorder_params;
 }
 
-void ChromeAppListModelUpdater::ClearFolderIfItHasSingleChild(
-    const std::string& folder_id) {
-  ash::AppListFolderItem* folder = model_.FindFolderItem(folder_id);
-  if (folder && folder->ShouldAutoRemove() && folder->ChildItemCount() == 1) {
-    ash::AppListItem* single_child = folder->GetChildItemAt(0);
-    const std::string item_id = single_child->id();
-    std::unique_ptr<ash::AppListItemMetadata> metadata =
-        single_child->CloneMetadata();
-    metadata->folder_id = "";
-    metadata->position = folder->position();
-    model_.SetItemMetadata(item_id, std::move(metadata));
-  }
-}
-
 void ChromeAppListModelUpdater::UpdateItemPositionWithReorderParam(
     const std::vector<app_list::reorder::ReorderParam>& reorder_params) {
+  TRACE_EVENT0("ui",
+               "ChromeAppListModelUpdater::UpdateItemPositionWithReorderParam");
   for (const auto& reorder_param : reorder_params)
     SetItemPosition(reorder_param.sync_item_id, reorder_param.ordinal);
+  has_requested_move_item_position_ = true;
 }
 
 void ChromeAppListModelUpdater::ResetPrefSortOrderInNonTemporaryMode(
     ash::AppListOrderUpdateEvent event) {
+  TRACE_EVENT0(
+      "ui", "ChromeAppListModelUpdater::ResetPrefSortOrderInNonTemporaryMode");
   if (!order_delegate_ || order_delegate_->GetPermanentSortingOrder() ==
                               ash::AppListSortOrder::kCustom) {
     return;
@@ -1220,13 +1294,14 @@ void ChromeAppListModelUpdater::ResetPrefSortOrderInNonTemporaryMode(
 
   order_delegate_->SetAppListPreferredOrder(ash::AppListSortOrder::kCustom);
 
-  // The tablet mode controller may not exist in tests.
-  if (ash::TabletMode::Get())
-    ReportPrefOrderClearAction(event, ash::TabletMode::Get()->IsInTabletMode());
+  ReportPrefOrderClearAction(event, display::Screen::Get()->InTabletMode());
 }
 
 void ChromeAppListModelUpdater::MaybeUpdatePositionWhenIconColorChange(
     ash::AppListItemMetadata* data) {
+  TRACE_EVENT0(
+      "ui",
+      "ChromeAppListModelUpdater::MaybeUpdatePositionWhenIconColorChange");
   // No op if the color info is invalid.
   if (!data->icon_color.IsValid())
     return;

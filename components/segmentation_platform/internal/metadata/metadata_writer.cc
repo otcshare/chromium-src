@@ -4,6 +4,12 @@
 
 #include "components/segmentation_platform/internal/metadata/metadata_writer.h"
 
+#include <cstddef>
+#include <optional>
+#include <vector>
+
+#include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/strings/strcat.h"
 #include "components/segmentation_platform/public/constants.h"
@@ -11,16 +17,78 @@
 
 namespace segmentation_platform {
 
+namespace {
+
+void FillDefaultValues(const features::DefaultValue& default_value,
+                       google::protobuf::RepeatedField<float>* proto_values) {
+  using DefaultValue = features::DefaultValue;
+  switch (default_value.type) {
+    case DefaultValue::Type::kSingle:
+      proto_values->Add(default_value.value.single_value);
+      break;
+    case DefaultValue::Type::kSpan:
+      for (float v : default_value.value.span_value) {
+        proto_values->Add(v);
+      }
+      break;
+    case DefaultValue::Type::kArray:
+      for (size_t i = 0; i < default_value.value.array_value.size; ++i) {
+        proto_values->Add(UNSAFE_TODO(default_value.value.array_value.ptr[i]));
+      }
+      break;
+    case DefaultValue::Type::kNotSet:
+      break;
+  }
+}
+
+void FillCustomInput(const MetadataWriter::CustomInput feature,
+                     proto::CustomInput& input) {
+  input.set_tensor_length(feature.tensor_length);
+  input.set_fill_policy(feature.fill_policy);
+  FillDefaultValues(feature.default_value, input.mutable_default_value());
+  if (feature.name) {
+    input.set_name(feature.name);
+  }
+
+  for (size_t i = 0; i < feature.arg_size; ++i) {
+    (*input.mutable_additional_args())[UNSAFE_TODO(feature.arg[i]).first] =
+        std::string(UNSAFE_TODO(feature.arg[i]).second);
+  }
+}
+
+template <typename StringVector>
+void PopulateMultiClassClassifier(
+    proto::Predictor::MultiClassClassifier* multi_class_classifier,
+    const StringVector& class_labels,
+    int top_k_outputs) {
+  multi_class_classifier->set_top_k_outputs(top_k_outputs);
+  for (const auto& class_label : class_labels) {
+    multi_class_classifier->mutable_class_labels()->Add(
+        std::string(class_label));
+  }
+}
+
+}  // namespace
+
 MetadataWriter::MetadataWriter(proto::SegmentationModelMetadata* metadata)
     : metadata_(metadata) {}
 MetadataWriter::~MetadataWriter() = default;
 
 void MetadataWriter::AddUmaFeatures(const UMAFeature features[],
-                                    size_t features_size) {
+                                    size_t features_size,
+                                    bool is_output) {
   for (size_t i = 0; i < features_size; i++) {
-    const auto& feature = features[i];
-    auto* input_feature = metadata_->add_input_features();
-    proto::UMAFeature* uma_feature = input_feature->mutable_uma_feature();
+    const auto& feature = UNSAFE_TODO(features[i]);
+    proto::UMAFeature* uma_feature;
+    if (is_output) {
+      auto* training_output =
+          metadata_->mutable_training_outputs()->add_outputs();
+      uma_feature =
+          training_output->mutable_uma_output()->mutable_uma_feature();
+    } else {
+      auto* input_feature = metadata_->add_input_features();
+      uma_feature = input_feature->mutable_uma_feature();
+    }
     uma_feature->set_type(feature.signal_type);
     uma_feature->set_name(feature.name);
     uma_feature->set_name_hash(base::HashMetricName(feature.name));
@@ -29,42 +97,65 @@ void MetadataWriter::AddUmaFeatures(const UMAFeature features[],
     uma_feature->set_aggregation(feature.aggregation);
 
     for (size_t j = 0; j < feature.enum_ids_size; j++) {
-      uma_feature->add_enum_ids(feature.accepted_enum_ids[j]);
+      uma_feature->add_enum_ids(UNSAFE_TODO(feature.accepted_enum_ids[j]));
     }
 
-    for (size_t j = 0; j < feature.default_values_size; j++) {
-      uma_feature->add_default_values(feature.default_values[j]);
+    FillDefaultValues(feature.default_value,
+                      uma_feature->mutable_default_values());
+  }
+}
+
+void MetadataWriter::AddFeatures(const base::span<const Feature> features) {
+  for (const auto& feature : features) {
+    if (feature.uma_feature) {
+      AddUmaFeatures(&feature.uma_feature.value(), 1);
+    } else if (feature.sql_feature) {
+      AddSqlFeature(feature.sql_feature.value());
+    } else if (feature.custom_input) {
+      AddCustomInput(feature.custom_input.value());
     }
   }
 }
 
-void MetadataWriter::AddSqlFeatures(const SqlFeature features[],
-                                    size_t features_size) {
-  proto::SqlFeature* feature =
+proto::SqlFeature* MetadataWriter::AddSqlFeature(const SqlFeature& feature) {
+  proto::SqlFeature* proto =
       metadata_->add_input_features()->mutable_sql_feature();
-  for (size_t i = 0; i < features_size; ++i) {
-    const auto& f = features[i];
-    feature->set_sql(f.sql);
-    for (size_t ev = 0; ev < f.events_size; ++ev) {
-      const auto& event = f.events[ev];
-      auto* ukm_event = feature->mutable_signal_filter()->add_ukm_events();
-      ukm_event->set_event_hash(event.event_hash.GetUnsafeValue());
-      for (size_t m = 0; m < event.metrics_size; ++m) {
-        ukm_event->mutable_metric_hash_filter()->Add(
-            event.metrics[m].GetUnsafeValue());
-      }
+  proto->set_sql(feature.sql);
+  for (size_t ev = 0; ev < feature.events_size; ++ev) {
+    const auto& event = UNSAFE_TODO(feature.events[ev]);
+    auto* ukm_event = proto->mutable_signal_filter()->add_ukm_events();
+    ukm_event->set_event_hash(event.event_hash.GetUnsafeValue());
+    for (size_t m = 0; m < event.metrics_size; ++m) {
+      ukm_event->mutable_metric_hash_filter()->Add(
+          UNSAFE_TODO(event.metrics[m]).GetUnsafeValue());
     }
   }
+  return proto;
+}
+
+proto::SqlFeature* MetadataWriter::AddSqlFeature(
+    const SqlFeature& feature,
+    const BindValues& bind_values) {
+  auto* proto = AddSqlFeature(feature);
+
+  unsigned index = 0;
+  for (const auto& it : bind_values) {
+    auto* value = proto->add_bind_values();
+    for (unsigned i = index; i < index + it.second.tensor_length; ++i) {
+      value->add_bind_field_index(i);
+    }
+    index += it.second.tensor_length;
+    value->set_param_type(it.first);
+    FillCustomInput(it.second, *value->mutable_value());
+  }
+  return proto;
 }
 
 proto::CustomInput* MetadataWriter::AddCustomInput(const CustomInput& feature) {
-  proto::CustomInput* custom_input_feature =
+  proto::CustomInput* proto =
       metadata_->add_input_features()->mutable_custom_input();
-  custom_input_feature->set_tensor_length(feature.tensor_length);
-  custom_input_feature->set_fill_policy(feature.fill_policy);
-  custom_input_feature->add_default_value(feature.default_value);
-  custom_input_feature->set_name(feature.name);
-  return custom_input_feature;
+  FillCustomInput(feature, *proto);
+  return proto;
 }
 
 void MetadataWriter::AddDiscreteMappingEntries(
@@ -74,8 +165,8 @@ void MetadataWriter::AddDiscreteMappingEntries(
   auto* discrete_mappings = metadata_->mutable_discrete_mappings();
   for (size_t i = 0; i < mappings_size; i++) {
     auto* discrete_mapping_entry = (*discrete_mappings)[key].add_entries();
-    discrete_mapping_entry->set_min_result(mappings[i].first);
-    discrete_mapping_entry->set_rank(mappings[i].second);
+    discrete_mapping_entry->set_min_result(UNSAFE_TODO(mappings[i]).first);
+    discrete_mapping_entry->set_rank(UNSAFE_TODO(mappings[i]).second);
   }
 }
 
@@ -132,7 +223,7 @@ void MetadataWriter::AddOutputConfigForBinaryClassifier(
     float threshold,
     const std::string& positive_label,
     const std::string& negative_label) {
-  proto::Predictor_BinaryClassifier* binary_classifier =
+  proto::Predictor::BinaryClassifier* binary_classifier =
       metadata_->mutable_output_config()
           ->mutable_predictor()
           ->mutable_binary_classifier();
@@ -142,27 +233,64 @@ void MetadataWriter::AddOutputConfigForBinaryClassifier(
   binary_classifier->set_negative_label(negative_label);
 }
 
+void MetadataWriter::SetIgnorePreviousModelTTLInOutputConfig() {
+  metadata_->mutable_output_config()->set_ignore_previous_model_ttl(true);
+}
+
 void MetadataWriter::AddOutputConfigForMultiClassClassifier(
-    const std::vector<std::string>& class_labels,
+    base::span<const char* const> class_labels,
     int top_k_outputs,
-    absl::optional<float> threshold) {
-  proto::Predictor_MultiClassClassifier* multi_class_classifier =
+    std::optional<float> threshold) {
+  proto::Predictor::MultiClassClassifier* multi_class_classifier =
       metadata_->mutable_output_config()
           ->mutable_predictor()
           ->mutable_multi_class_classifier();
 
-  multi_class_classifier->set_top_k_outputs(top_k_outputs);
-  multi_class_classifier->mutable_class_labels()->Assign(class_labels.begin(),
-                                                         class_labels.end());
+  PopulateMultiClassClassifier(multi_class_classifier, class_labels,
+                               top_k_outputs);
   if (threshold.has_value()) {
     multi_class_classifier->set_threshold(threshold.value());
+  }
+}
+
+void MetadataWriter::AddOutputConfigForMultiClassClassifier(
+    const std::vector<std::string>& class_labels,
+    int top_k_outputs,
+    std::optional<float> threshold) {
+  proto::Predictor::MultiClassClassifier* multi_class_classifier =
+      metadata_->mutable_output_config()
+          ->mutable_predictor()
+          ->mutable_multi_class_classifier();
+
+  PopulateMultiClassClassifier(multi_class_classifier, class_labels,
+                               top_k_outputs);
+  if (threshold.has_value()) {
+    multi_class_classifier->set_threshold(threshold.value());
+  }
+}
+
+void MetadataWriter::AddOutputConfigForMultiClassClassifier(
+    base::span<const char* const> class_labels,
+    int top_k_outputs,
+    const base::span<float> per_class_thresholds) {
+  CHECK_EQ(class_labels.size(), per_class_thresholds.size());
+  proto::Predictor::MultiClassClassifier* multi_class_classifier =
+      metadata_->mutable_output_config()
+          ->mutable_predictor()
+          ->mutable_multi_class_classifier();
+
+  PopulateMultiClassClassifier(multi_class_classifier, class_labels,
+                               top_k_outputs);
+
+  for (float per_class_threshold : per_class_thresholds) {
+    multi_class_classifier->add_class_thresholds(per_class_threshold);
   }
 }
 
 void MetadataWriter::AddOutputConfigForBinnedClassifier(
     const std::vector<std::pair<float, std::string>>& bins,
     std::string underflow_label) {
-  proto::Predictor_BinnedClassifier* binned_classifier =
+  proto::Predictor::BinnedClassifier* binned_classifier =
       metadata_->mutable_output_config()
           ->mutable_predictor()
           ->mutable_binned_classifier();
@@ -176,12 +304,47 @@ void MetadataWriter::AddOutputConfigForBinnedClassifier(
   }
 }
 
+void MetadataWriter::AddOutputConfigForGenericPredictor(
+    const std::vector<std::string>& labels) {
+  proto::Predictor::GenericPredictor* generic_predictor =
+      metadata_->mutable_output_config()
+          ->mutable_predictor()
+          ->mutable_generic_predictor();
+  generic_predictor->mutable_output_labels()->Assign(labels.begin(),
+                                                     labels.end());
+}
+
+void MetadataWriter::AddPredictedResultTTLInOutputConfig(
+    std::vector<std::pair<std::string, std::int64_t>> top_label_to_ttl_list,
+    int64_t default_ttl,
+    proto::TimeUnit time_unit) {
+  proto::PredictedResultTTL* predicted_result_ttl =
+      metadata_->mutable_output_config()->mutable_predicted_result_ttl();
+  predicted_result_ttl->set_time_unit(time_unit);
+  predicted_result_ttl->set_default_ttl(default_ttl);
+  auto* top_label_to_ttl_map =
+      predicted_result_ttl->mutable_top_label_to_ttl_map();
+  for (const std::pair<std::string, int64_t>& label_to_ttl :
+       top_label_to_ttl_list) {
+    (*top_label_to_ttl_map)[label_to_ttl.first] = label_to_ttl.second;
+  }
+}
+
 void MetadataWriter::AddDelayTrigger(uint64_t delay_sec) {
   auto* config =
       metadata_->mutable_training_outputs()->mutable_trigger_config();
   auto* trigger = config->add_observation_trigger();
   trigger->set_delay_sec(delay_sec);
   config->set_decision_type(proto::TrainingOutputs::TriggerConfig::ONDEMAND);
+}
+
+void MetadataWriter::AddFromInputContext(const char* custom_input_name,
+                                         const char* additional_args_name) {
+  proto::CustomInput* custom_input = AddCustomInput(MetadataWriter::CustomInput{
+      .tensor_length = 1,
+      .fill_policy = proto::CustomInput::FILL_FROM_INPUT_CONTEXT,
+      .name = custom_input_name});
+  (*custom_input->mutable_additional_args())["name"] = additional_args_name;
 }
 
 }  // namespace segmentation_platform

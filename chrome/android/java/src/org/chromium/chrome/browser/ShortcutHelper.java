@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -11,10 +13,15 @@ import android.util.Base64;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+
 import org.chromium.base.ContextUtils;
-import org.chromium.base.annotations.CalledByNative;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.blink.mojom.DisplayMode;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.intents.BitmapHelper;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
@@ -24,6 +31,7 @@ import org.chromium.chrome.browser.webapps.WebappDataStorage;
 import org.chromium.chrome.browser.webapps.WebappIntentDataProviderFactory;
 import org.chromium.chrome.browser.webapps.WebappLauncherActivity;
 import org.chromium.chrome.browser.webapps.WebappRegistry;
+import org.chromium.components.webapps.ShortcutSource;
 import org.chromium.components.webapps.WebappsUtils;
 
 import java.util.HashMap;
@@ -32,18 +40,15 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * This class contains functions related to adding shortcuts to the Android Home
- * screen.  These shortcuts are used to either open a page in the main browser
- * or open a web app.
+ * This class contains functions related to adding shortcuts to the Android Home screen. These
+ * shortcuts are used to either open a page in the main browser or open a web app.
  */
+@NullMarked
 public class ShortcutHelper {
-    private static final String TAG = "ShortcutHelper";
-
     // Holds splash images for web apps that are currently being installed. After installation is
     // complete, the image associated with the web app will be moved to the appropriate {@link
     // WebappDataStorage}.
-    @VisibleForTesting
-    public static Map<String, Bitmap> sSplashImageMap = new HashMap<>();
+    @VisibleForTesting public static Map<String, Bitmap> sSplashImageMap = new HashMap<>();
 
     /** Helper for generating home screen shortcuts. */
     public static class Delegate {
@@ -55,14 +60,16 @@ public class ShortcutHelper {
          * @param isIconAdaptive Whether to create an Android Adaptive icon.
          * @param shortcutIntent Intent to fire when the shortcut is activated.
          */
-        public void addShortcutToHomescreen(String id, String title, Bitmap icon,
-                boolean isIconAdaptive, Intent shortcutIntent) {
+        public void addShortcutToHomescreen(
+                String id,
+                String title,
+                Bitmap icon,
+                boolean isIconAdaptive,
+                Intent shortcutIntent) {
             WebappsUtils.addShortcutToHomescreen(id, title, icon, isIconAdaptive, shortcutIntent);
         }
 
-        /**
-         * Returns the name of the fullscreen Activity to use when launching shortcuts.
-         */
+        /** Returns the name of the fullscreen Activity to use when launching shortcuts. */
         public String getFullscreenAction() {
             return WebappLauncherActivity.ACTION_START_WEBAPP;
         }
@@ -70,24 +77,32 @@ public class ShortcutHelper {
 
     private static Delegate sDelegate = new Delegate();
 
-    /**
-     * Sets the delegate to use.
-     */
-    @VisibleForTesting
+    /** Sets the delegate to use. */
     public static void setDelegateForTests(Delegate delegate) {
+        var oldValue = sDelegate;
         sDelegate = delegate;
+        ResettersForTesting.register(() -> sDelegate = oldValue);
     }
 
     /**
-     * Adds home screen shortcut which opens in a {@link WebappActivity}. Creates web app
-     * home screen shortcut and registers web app asynchronously.
+     * Adds home screen shortcut which opens in a {@link WebappActivity}. Creates web app home
+     * screen shortcut and registers web app asynchronously.
      */
     @SuppressWarnings("unused")
     @CalledByNative
-    private static void addWebapp(final String id, final String url, final String scopeUrl,
-            final String userTitle, final String name, final String shortName, final String iconUrl,
-            final Bitmap icon, boolean isIconAdaptive, @DisplayMode.EnumType final int displayMode,
-            final int orientation, final int source, final long themeColor,
+    private static void addWebapp(
+            final @JniType("std::string") String id,
+            final @JniType("std::string") String url,
+            final @JniType("std::string") String scopeUrl,
+            final @JniType("std::u16string") String userTitle,
+            final @JniType("std::u16string") String name,
+            final @JniType("std::u16string") String shortName,
+            final @JniType("std::string") String iconUrl,
+            final Bitmap icon,
+            boolean isIconAdaptive,
+            @DisplayMode.EnumType final int displayMode,
+            final int orientation,
+            final long themeColor,
             final long backgroundColor) {
         new AsyncTask<Intent>() {
             @Override
@@ -99,58 +114,81 @@ public class ShortcutHelper {
 
                 // TODO(http://crbug.com/1000046): Use action which does not require mac on O+
                 Intent shortcutIntent =
-                        createWebappShortcutIntent(id, url, scopeUrl, name, shortName, encodedIcon,
-                                WebappConstants.WEBAPP_SHORTCUT_VERSION, displayMode, orientation,
-                                themeColor, backgroundColor, iconUrl.isEmpty(), isIconAdaptive);
+                        createWebappShortcutIntent(
+                                id,
+                                url,
+                                scopeUrl,
+                                name,
+                                shortName,
+                                encodedIcon,
+                                WebappConstants.WEBAPP_SHORTCUT_VERSION,
+                                displayMode,
+                                orientation,
+                                themeColor,
+                                backgroundColor,
+                                iconUrl.isEmpty(),
+                                isIconAdaptive);
                 shortcutIntent.putExtra(WebappConstants.EXTRA_MAC, getEncodedMac(url));
-                shortcutIntent.putExtra(WebappConstants.EXTRA_SOURCE, source);
+                shortcutIntent.putExtra(
+                        WebappConstants.EXTRA_SOURCE, ShortcutSource.ADD_TO_HOMESCREEN_STANDALONE);
                 return shortcutIntent;
             }
+
             @Override
             protected void onPostExecute(final Intent resultIntent) {
                 sDelegate.addShortcutToHomescreen(
                         id, userTitle, icon, isIconAdaptive, resultIntent);
 
                 // Store the webapp data so that it is accessible without the intent.
-                WebappRegistry.getInstance().register(id, storage -> {
-                    BrowserServicesIntentDataProvider intentDataProvider =
-                            WebappIntentDataProviderFactory.create(resultIntent);
-                    assert intentDataProvider != null;
-                    if (intentDataProvider != null) {
-                        storage.updateFromWebappIntentDataProvider(intentDataProvider);
-                    }
+                WebappRegistry.getInstance()
+                        .register(
+                                id,
+                                storage -> {
+                                    BrowserServicesIntentDataProvider intentDataProvider =
+                                            WebappIntentDataProviderFactory.create(resultIntent);
+                                    assert intentDataProvider != null;
+                                    if (intentDataProvider != null) {
+                                        storage.updateFromWebappIntentDataProvider(
+                                                intentDataProvider);
+                                    }
 
-                    // If the image is not yet downloaded (i.e. |splashImage| is null), it will be
-                    // stored later when native calls storeWebappSplashImage().
-                    Bitmap splashImage = sSplashImageMap.remove(id);
-                    if (splashImage != null) {
-                        storeWebappSplashImage(id, splashImage);
-                    }
-                });
+                                    // If the image is not yet downloaded (i.e. |splashImage| is
+                                    // null), it will be stored later when native calls
+                                    // storeWebappSplashImage().
+                                    Bitmap splashImage = sSplashImageMap.remove(id);
+                                    if (splashImage != null) {
+                                        storeWebappSplashImage(id, splashImage);
+                                    }
+                                });
             }
-        }
-                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
-    /**
-     * Adds home screen shortcut which opens in the browser Activity.
-     */
+    /** Adds home screen shortcut which opens in the browser Activity. */
     @CalledByNative
-    public static void addShortcut(String id, String url, String userTitle, Bitmap icon,
-            boolean isIconAdaptive, int source, String iconUrl) {
-        Intent shortcutIntent = createShortcutIntent(url, id, source);
+    public static void addShortcut(
+            @JniType("std::string") String id,
+            @JniType("std::string") String url,
+            @JniType("std::u16string") String userTitle,
+            Bitmap icon,
+            boolean isIconAdaptive,
+            @JniType("std::string") String iconUrl) {
+        Intent shortcutIntent =
+                createShortcutIntent(url, id, ShortcutSource.ADD_TO_HOMESCREEN_SHORTCUT);
         sDelegate.addShortcutToHomescreen(id, userTitle, icon, isIconAdaptive, shortcutIntent);
     }
 
     /**
      * Stores the specified bitmap as the splash screen for a web app.
-     * @param id          ID of the web app which is storing data.
-     * @param splashImage Image which should be displayed on the splash screen of
-     *                    the web app. This can be null of there is no image to show.
+     *
+     * @param id ID of the web app which is storing data.
+     * @param splashImage Image which should be displayed on the splash screen of the web app. This
+     *     can be null of there is no image to show.
      */
     @SuppressWarnings("unused")
     @CalledByNative
-    private static void storeWebappSplashImage(final String id, final Bitmap splashImage) {
+    private static void storeWebappSplashImage(
+            final @JniType("std::string") String id, final Bitmap splashImage) {
         final WebappDataStorage storage = WebappRegistry.getInstance().getWebappDataStorage(id);
         if (storage == null) {
             // The app is not installed yet; put it in this map for now.
@@ -166,36 +204,47 @@ public class ShortcutHelper {
                 protected void onPostExecute(String encodedImage) {
                     storage.updateSplashScreenImage(encodedImage);
                 }
-            }
-                    .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         }
     }
 
     /**
      * Creates a shortcut to launch a web app on the home screen.
-     * @param id              Id of the web app.
-     * @param url             Url of the web app.
-     * @param scope           Url scope of the web app.
-     * @param name            Name of the web app.
-     * @param shortName       Short name of the web app.
-     * @param encodedIcon     Base64 encoded icon of the web app.
-     * @param version         Version number of the shortcut.
-     * @param displayMode     Display mode of the web app.
-     * @param orientation     Orientation of the web app.
-     * @param themeColor      Theme color of the web app.
+     *
+     * @param id Id of the web app.
+     * @param url Url of the web app.
+     * @param scope Url scope of the web app.
+     * @param name Name of the web app.
+     * @param shortName Short name of the web app.
+     * @param encodedIcon Base64 encoded icon of the web app.
+     * @param version Version number of the shortcut.
+     * @param displayMode Display mode of the web app.
+     * @param orientation Orientation of the web app.
+     * @param themeColor Theme color of the web app.
      * @param backgroundColor Background color of the web app.
      * @param isIconGenerated True if the icon is generated by Chromium.
-     * @param isIconAdaptive  Whether the shortcut icon is Adaptive.
-     * @return Intent for onclick action of the shortcut.
-     * This method must not be called on the UI thread.
+     * @param isIconAdaptive Whether the shortcut icon is Adaptive.
+     * @return Intent for onclick action of the shortcut. This method must not be called on the UI
+     *     thread.
      */
-    public static Intent createWebappShortcutIntent(String id, String url, String scope,
-            String name, String shortName, String encodedIcon, int version,
-            @DisplayMode.EnumType int displayMode, int orientation, long themeColor,
-            long backgroundColor, boolean isIconGenerated, boolean isIconAdaptive) {
+    public static Intent createWebappShortcutIntent(
+            String id,
+            @Nullable String url,
+            @Nullable String scope,
+            @Nullable String name,
+            @Nullable String shortName,
+            @Nullable String encodedIcon,
+            int version,
+            @DisplayMode.EnumType int displayMode,
+            int orientation,
+            long themeColor,
+            long backgroundColor,
+            boolean isIconGenerated,
+            boolean isIconAdaptive) {
         // Create an intent as a launcher icon for a full-screen Activity.
         Intent shortcutIntent = new Intent();
-        shortcutIntent.setPackage(ContextUtils.getApplicationContext().getPackageName())
+        shortcutIntent
+                .setPackage(ContextUtils.getApplicationContext().getPackageName())
                 .setAction(sDelegate.getFullscreenAction())
                 .putExtra(WebappConstants.EXTRA_ID, id)
                 .putExtra(WebappConstants.EXTRA_URL, url)
@@ -221,8 +270,19 @@ public class ShortcutHelper {
      * This method must not be called on the UI thread.
      */
     public static Intent createWebappShortcutIntentForTesting(String id, String url) {
-        return createWebappShortcutIntent(id, url, getScopeFromUrl(url), null, null, null,
-                WebappConstants.WEBAPP_SHORTCUT_VERSION, DisplayMode.STANDALONE, 0, 0, 0, false,
+        return createWebappShortcutIntent(
+                id,
+                url,
+                getScopeFromUrl(url),
+                null,
+                null,
+                null,
+                WebappConstants.WEBAPP_SHORTCUT_VERSION,
+                DisplayMode.STANDALONE,
+                0,
+                0,
+                0,
+                false,
                 false);
     }
 
@@ -246,17 +306,19 @@ public class ShortcutHelper {
      */
     @CalledByNative
     @VisibleForTesting
-    public static boolean doesOriginContainAnyInstalledWebApk(String origin) {
-        return WebappRegistry.getInstance().hasAtLeastOneWebApkForOrigin(
-                origin.toLowerCase(Locale.getDefault()));
+    public static boolean doesOriginContainAnyInstalledWebApk(
+            @JniType("std::string") String origin) {
+        return WebappRegistry.getInstance()
+                .hasAtLeastOneWebApkForOrigin(origin.toLowerCase(Locale.getDefault()));
     }
+
     /**
      * Returns true if there is a TWA installed that sits within {@link origin}, and false
      * otherwise.
      */
     @CalledByNative
     @VisibleForTesting
-    public static boolean doesOriginContainAnyInstalledTwa(String origin) {
+    public static boolean doesOriginContainAnyInstalledTwa(@JniType("std::string") String origin) {
         return WebappRegistry.getInstance().isTwaInstalled(origin.toLowerCase(Locale.getDefault()));
     }
 
@@ -298,7 +360,7 @@ public class ShortcutHelper {
         int lastSlashIndex = (path == null) ? -1 : path.lastIndexOf("/");
         if (lastSlashIndex < 0) {
             path = "/";
-        } else if (lastSlashIndex < path.length() - 1) {
+        } else if (lastSlashIndex < assumeNonNull(path).length() - 1) {
             path = path.substring(0, lastSlashIndex + 1);
         }
 
@@ -310,7 +372,7 @@ public class ShortcutHelper {
     }
 
     @CalledByNative
-    public static void setForceWebApkUpdate(String id) {
+    public static void setForceWebApkUpdate(@JniType("std::string") String id) {
         WebappDataStorage storage = WebappRegistry.getInstance().getWebappDataStorage(id);
         if (storage != null) {
             storage.setShouldForceUpdate(true);

@@ -12,7 +12,10 @@
 #include <memory>
 #include <set>
 
+#include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/byte_queue.h"
@@ -35,8 +38,9 @@ class PidState;
 
 class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
  public:
-  explicit Mp2tStreamParser(base::span<const std::string> allowed_codecs,
-                            bool sbr_in_mimetype);
+  explicit Mp2tStreamParser(
+      std::optional<base::span<const std::string>> allowed_codecs,
+      bool sbr_in_mimetype);
 
   Mp2tStreamParser(const Mp2tStreamParser&) = delete;
   Mp2tStreamParser& operator=(const Mp2tStreamParser&) = delete;
@@ -47,15 +51,14 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   void Init(InitCB init_cb,
             NewConfigCB config_cb,
             NewBuffersCB new_buffers_cb,
-            bool ignore_text_tracks,
             EncryptedMediaInitDataCB encrypted_media_init_data_cb,
             NewMediaSegmentCB new_segment_cb,
             EndMediaSegmentCB end_of_segment_cb,
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* buf,
-                                         size_t size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
   [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_inspect) override;
 
  private:
@@ -115,7 +118,6 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   std::unique_ptr<EsParser> CreateAacParser(int pes_pid);
   std::unique_ptr<EsParser> CreateMpeg1AudioParser(int pes_pid);
 
-#if BUILDFLAG(ENABLE_HLS_SAMPLE_AES)
   bool ShouldForceEncryptedParser();
   std::unique_ptr<EsParser> CreateEncryptedH264Parser(int pes_pid,
                                                       bool emit_clear_buffers);
@@ -141,7 +143,6 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   void RegisterPsshBoxes(const std::vector<uint8_t>& init_data);
 
   const DecryptConfig* GetDecryptConfig() { return decrypt_config_.get(); }
-#endif
 
   // List of callbacks.
   InitCB init_cb_;
@@ -150,10 +151,12 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   EncryptedMediaInitDataCB encrypted_media_init_data_cb_;
   NewMediaSegmentCB new_segment_cb_;
   EndMediaSegmentCB end_of_segment_cb_;
-  MediaLog* media_log_;
+  raw_ptr<MediaLog> media_log_;
 
-  // List of allowed stream types for this parser.
-  std::set<int> allowed_stream_types_;
+  // List of allowed stream types for this parser. If this set is `nullopt`,
+  // allowed stream type checking is disabled. An empty set implies no codecs
+  // are allowed.
+  std::optional<base::flat_set<int>> allowed_stream_types_;
 
   // True when AAC SBR extension is signalled in the mimetype
   // (mp4a.40.5 in the codecs parameter).
@@ -168,7 +171,7 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   // able to pop it from the queue. So this value may be lower than the actual
   // amount of bytes in `ts_byte_queue_`, since more data is needed to complete
   // the parse.
-  int uninspected_pending_bytes_ = 0;
+  size_t uninspected_pending_bytes_ = 0;
   ByteQueue ts_byte_queue_;
 
   // List of PIDs and their state.
@@ -192,13 +195,11 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   // So the unroller is global between PES pids.
   TimestampUnroller timestamp_unroller_;
 
-#if BUILDFLAG(ENABLE_HLS_SAMPLE_AES)
   EncryptionScheme initial_encryption_scheme_ = EncryptionScheme::kUnencrypted;
 
   // TODO(jrummell): Rather than store the key_id and iv in a DecryptConfig,
   // provide a better way to access the last values seen in a ECM packet.
   std::unique_ptr<DecryptConfig> decrypt_config_;
-#endif
 };
 
 }  // namespace mp2t

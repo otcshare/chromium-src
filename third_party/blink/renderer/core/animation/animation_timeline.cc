@@ -6,13 +6,18 @@
 
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_cssnumericvalue_double.h"
+#include "third_party/blink/renderer/core/animation/css/css_animation.h"
 #include "third_party/blink/renderer/core/animation/document_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
+#include "third_party/blink/renderer/core/animation/timeline_trigger.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/named_animation_trigger_map.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
+#include "third_party/blink/renderer/core/style/style_trigger_attachment.h"
 
 namespace blink {
 
@@ -23,14 +28,18 @@ AnimationTimeline::AnimationTimeline(Document* document)
 
 void AnimationTimeline::AnimationAttached(Animation* animation) {
   DCHECK(!animations_.Contains(animation));
+  DCHECK(!in_trigger_attachments_update_);
   animations_.insert(animation);
+  animation->ResolveTimelineOffsets(GetTimelineRange());
 }
 
 void AnimationTimeline::AnimationDetached(Animation* animation) {
+  DCHECK(!in_trigger_attachments_update_);
   animations_.erase(animation);
   animations_needing_update_.erase(animation);
   if (animation->Outdated())
     outdated_animation_count_--;
+  animation->ResolveTimelineOffsets(GetTimelineRange());
 }
 
 bool CompareAnimations(const Member<Animation>& left,
@@ -43,27 +52,26 @@ bool CompareAnimations(const Member<Animation>& left,
 }
 
 V8CSSNumberish* AnimationTimeline::currentTime() {
-  const absl::optional<base::TimeDelta>& result = CurrentPhaseAndTime().time;
+  const std::optional<base::TimeDelta>& result = CurrentPhaseAndTime().time;
   if (result)
     return MakeGarbageCollected<V8CSSNumberish>(result->InMillisecondsF());
   return nullptr;
 }
 
-absl::optional<AnimationTimeDelta> AnimationTimeline::CurrentTime() {
-  absl::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
-  return result ? absl::make_optional(AnimationTimeDelta(result.value()))
-                : absl::nullopt;
+std::optional<AnimationTimeDelta> AnimationTimeline::CurrentTime() {
+  std::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
+  return result ? std::make_optional(AnimationTimeDelta(result.value()))
+                : std::nullopt;
 }
 
-absl::optional<double> AnimationTimeline::CurrentTimeMilliseconds() {
-  absl::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
-  return result ? absl::make_optional(result->InMillisecondsF())
-                : absl::nullopt;
+std::optional<double> AnimationTimeline::CurrentTimeMilliseconds() {
+  std::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
+  return result ? std::make_optional(result->InMillisecondsF()) : std::nullopt;
 }
 
-absl::optional<double> AnimationTimeline::CurrentTimeSeconds() {
-  absl::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
-  return result ? absl::make_optional(result->InSecondsF()) : absl::nullopt;
+std::optional<double> AnimationTimeline::CurrentTimeSeconds() {
+  std::optional<base::TimeDelta> result = CurrentPhaseAndTime().time;
+  return result ? std::make_optional(result->InSecondsF()) : std::nullopt;
 }
 
 V8CSSNumberish* AnimationTimeline::duration() {
@@ -80,7 +88,7 @@ wtf_size_t AnimationTimeline::AnimationsNeedingUpdateCount() const {
   for (const auto& animation : animations_needing_update_) {
     // Exclude animations which are not actively generating frames.
     if ((!animation->CompositorPending() && !animation->Playing() &&
-         !IsScrollTimeline()) ||
+         !IsProgressBased()) ||
         animation->AnimationHasNoEffect()) {
       continue;
     }
@@ -97,8 +105,11 @@ bool AnimationTimeline::NeedsAnimationTimingUpdate() {
   // We allow |last_current_phase_and_time_| to advance here when there
   // are no animations to allow animations spawned during style
   // recalc to not invalidate this flag.
-  if (animations_needing_update_.empty())
+  if (animations_needing_update_.empty()) {
     last_current_phase_and_time_ = current_phase_and_time;
+    // Make sure triggers get the chance to respond to the updated PhaseAndTime.
+    update_triggers_ = true;
+  }
 
   return !animations_needing_update_.empty();
 }
@@ -108,9 +119,10 @@ void AnimationTimeline::ServiceAnimations(TimingUpdateReason reason) {
 
   auto current_phase_and_time = CurrentPhaseAndTime();
 
-  if (IsScrollTimeline() &&
-      last_current_phase_and_time_ != current_phase_and_time) {
-    UpdateCompositorTimeline();
+  if (IsProgressBased()) {
+    if (last_current_phase_and_time_ != current_phase_and_time) {
+      UpdateCompositorTimeline();
+    }
   }
 
   last_current_phase_and_time_ = current_phase_and_time;
@@ -150,7 +162,7 @@ void AnimationTimeline::getReplaceableAnimations(
     if (!animation->IsReplaceable())
       continue;
     DCHECK(animation->effect());
-    Element* target = To<KeyframeEffect>(animation->effect())->target();
+    Element* target = To<KeyframeEffect>(animation->effect())->EffectTarget();
     DCHECK(target);
     if (target->GetDocument() != animation->GetDocument())
       continue;
@@ -158,7 +170,7 @@ void AnimationTimeline::getReplaceableAnimations(
     auto inserted = replaceable_animations_map->insert(target, nullptr);
     if (inserted.is_new_entry) {
       inserted.stored_value->value =
-          MakeGarbageCollected<HeapVector<Member<Animation>>>();
+          MakeGarbageCollected<GCedHeapVector<Member<Animation>>>();
     }
     inserted.stored_value->value->push_back(animation);
   }
@@ -192,8 +204,11 @@ Animation* AnimationTimeline::Play(AnimationEffect* child,
 }
 
 void AnimationTimeline::MarkAnimationsCompositorPending(bool source_changed) {
+  Animation::CompositorPendingReason reason =
+      source_changed ? Animation::CompositorPendingReason::kPendingEffectChange
+                     : Animation::CompositorPendingReason::kPendingUpdate;
   for (const auto& animation : animations_) {
-    animation->SetCompositorPending(source_changed);
+    animation->SetCompositorPending(reason);
   }
 }
 
@@ -205,10 +220,21 @@ void AnimationTimeline::MarkPendingIfCompositorPropertyAnimationChanges(
   }
 }
 
+void AnimationTimeline::AddTrigger(TimelineTrigger* trigger) {
+  triggers_.insert(trigger);
+  update_triggers_ = true;
+}
+
+void AnimationTimeline::RemoveTrigger(TimelineTrigger* trigger) {
+  DCHECK(trigger && trigger->GetTimelineInternal() == this);
+  triggers_.erase(trigger);
+}
+
 void AnimationTimeline::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
   visitor->Trace(animations_needing_update_);
   visitor->Trace(animations_);
+  visitor->Trace(triggers_);
   ScriptWrappable::Trace(visitor);
 }
 

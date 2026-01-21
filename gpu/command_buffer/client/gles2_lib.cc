@@ -3,7 +3,10 @@
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/client/gles2_lib.h"
+
 #include <string.h>
+
+#include "base/compiler_specific.h"
 #include "gpu/command_buffer/common/thread_local.h"
 
 namespace gles2 {
@@ -39,9 +42,8 @@ void SetGLContext(gpu::gles2::GLES2Interface* context) {
 
 GLES2FunctionPointer GetGLFunctionPointer(const char* name) {
   for (const NameToFunc* named_function = g_gles2_function_table;
-       named_function->name;
-       ++named_function) {
-    if (!strcmp(name, named_function->name)) {
+       named_function->name; UNSAFE_TODO(++named_function)) {
+    if (!UNSAFE_TODO(strcmp(name, named_function->name))) {
       return named_function->func;
     }
   }

@@ -4,7 +4,12 @@
 
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 
+#include <sstream>
+
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
@@ -12,15 +17,38 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
-ScopedProfileKeepAlive::ScopedProfileKeepAlive(const Profile* profile,
+namespace {
+
+std::string GetOriginName(ProfileKeepAliveOrigin origin) {
+  std::ostringstream oss;
+  oss << origin;
+  return oss.str();
+}
+
+}  // namespace
+
+// static
+std::unique_ptr<ScopedProfileKeepAlive> ScopedProfileKeepAlive::TryAcquire(
+    Profile* profile,
+    ProfileKeepAliveOrigin origin) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK(profile);
+  if (AddKeepAlive(profile, origin)) {
+    auto keep_alive = base::WrapUnique(new ScopedProfileKeepAlive());
+    keep_alive->profile_ = profile->GetWeakPtr();
+    keep_alive->origin_ = origin;
+    return keep_alive;
+  } else {
+    return nullptr;
+  }
+}
+
+ScopedProfileKeepAlive::ScopedProfileKeepAlive(Profile* profile,
                                                ProfileKeepAliveOrigin origin)
-    : profile_(profile), origin_(origin) {
+    : profile_(profile->GetWeakPtr()), origin_(origin) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile_);
-  // |profile_manager| can be nullptr in tests.
-  auto* profile_manager = g_browser_process->profile_manager();
-  if (profile_manager)
-    profile_manager->AddKeepAlive(profile_, origin_);
+  AddKeepAlive(profile, origin);
 }
 
 ScopedProfileKeepAlive::~ScopedProfileKeepAlive() {
@@ -40,23 +68,55 @@ ScopedProfileKeepAlive::~ScopedProfileKeepAlive() {
   }
 }
 
+ScopedProfileKeepAlive::ScopedProfileKeepAlive() = default;
+
 // static
 void ScopedProfileKeepAlive::RemoveKeepAliveOnUIThread(
-    const Profile* profile,
+    base::WeakPtr<Profile> profile,
     ProfileKeepAliveOrigin origin) {
+  SCOPED_CRASH_KEY_STRING32("ProfileKeepAlive", "origin",
+                            GetOriginName(origin));
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // |g_browser_process| could be nullptr if this is called during shutdown,
   // e.g. in tests.
-  if (!g_browser_process)
+  if (!g_browser_process) {
     return;
+  }
   // If the BrowserProcess is shutting down, then |profile| may be deleted
   // already. Doing anything here would be dangerous, and |profile| will be
   // deleted very soon in any case.
-  if (g_browser_process->IsShuttingDown())
+  if (g_browser_process->IsShuttingDown()) {
     return;
+  }
   // |profile_manager| can also be null in tests.
   auto* profile_manager = g_browser_process->profile_manager();
-  if (!profile_manager)
+  if (!profile_manager) {
     return;
-  profile_manager->RemoveKeepAlive(profile, origin);
+  }
+  // TODO(crbug.com/41484323): |profile| was unexpectedly destroyed
+  // early. Convert this to CHECK(profile) once the root cause is fixed.
+  if (!profile) {
+    DUMP_WILL_BE_NOTREACHED();
+    return;
+  }
+  profile_manager->RemoveKeepAlive(profile.get(), origin);
+}
+
+// static
+bool ScopedProfileKeepAlive::AddKeepAlive(Profile* profile,
+                                          ProfileKeepAliveOrigin origin) {
+  // |profile_manager| can be nullptr in tests.
+  auto* profile_manager = g_browser_process->profile_manager();
+  if (profile_manager) {
+    return profile_manager->AddKeepAlive(profile, origin);
+  } else {
+    // TODO(nicolaso): Not incrementing the refcount will cause
+    // `profile` to get destroyed too early. Remove or convert to a CHECK()
+    // once the root cause is fixed.
+    SCOPED_CRASH_KEY_STRING32("ProfileKeepAlive", "origin",
+                              GetOriginName(origin));
+    base::debug::DumpWithoutCrashing();
+    // Return success for unit tests.
+    return true;
+  }
 }

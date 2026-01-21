@@ -16,7 +16,6 @@
 namespace ash {
 
 class NetworkPortalNotificationControllerTest;
-class NetworkPortalSigninController;
 
 // Shows a message center notification when the networking stack detects a
 // captive portal.
@@ -47,8 +46,6 @@ class NetworkPortalNotificationController
   // Ignores "No network" errors in browser tests.
   void SetIgnoreNoNetworkForTesting();
 
-  bool IsDialogShownForTesting() const;
-
  private:
   friend NetworkPortalNotificationControllerTest;
 
@@ -70,10 +67,6 @@ class NetworkPortalNotificationController
 
   // Last network guid for which notification was displayed.
   std::string last_network_guid_;
-
-  // The signin controller is responsible for displaying the captive portal
-  // signin UI.
-  std::unique_ptr<NetworkPortalSigninController> signin_controller_;
 
   // Last portal state for which notification was displayed.
   NetworkState::PortalState last_portal_state_ =

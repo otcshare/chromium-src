@@ -6,14 +6,11 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "chrome/browser/nearby_sharing/logging/logging.h"
+#include "components/cross_device/logging/logging.h"
 #include "third_party/nearby/src/internal/platform/exception.h"
 #include "third_party/nearby/src/internal/platform/input_stream.h"
 
-namespace location {
-namespace nearby {
-namespace connections {
+namespace nearby::connections {
 
 NearbyConnectionsStreamBufferManager::PayloadWithBuffer::PayloadWithBuffer(
     Payload payload)
@@ -28,7 +25,8 @@ NearbyConnectionsStreamBufferManager::~NearbyConnectionsStreamBufferManager() =
 void NearbyConnectionsStreamBufferManager::StartTrackingPayload(
     Payload payload) {
   int64_t payload_id = payload.GetId();
-  NS_LOG(VERBOSE) << "Starting to track stream payload with ID " << payload_id;
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+      << "Starting to track stream payload with ID " << payload_id;
 
   id_to_payload_with_buffer_map_[payload_id] =
       std::make_unique<PayloadWithBuffer>(std::move(payload));
@@ -36,14 +34,15 @@ void NearbyConnectionsStreamBufferManager::StartTrackingPayload(
 
 bool NearbyConnectionsStreamBufferManager::IsTrackingPayload(
     int64_t payload_id) const {
-  return base::Contains(id_to_payload_with_buffer_map_, payload_id);
+  return id_to_payload_with_buffer_map_.contains(payload_id);
 }
 
 void NearbyConnectionsStreamBufferManager::StopTrackingFailedPayload(
     int64_t payload_id) {
   id_to_payload_with_buffer_map_.erase(payload_id);
-  NS_LOG(VERBOSE) << "Stopped tracking payload with ID " << payload_id << " "
-                  << "and cleared internal memory.";
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+      << "Stopped tracking payload with ID " << payload_id << " "
+      << "and cleared internal memory.";
 }
 
 void NearbyConnectionsStreamBufferManager::HandleBytesTransferred(
@@ -51,8 +50,9 @@ void NearbyConnectionsStreamBufferManager::HandleBytesTransferred(
     int64_t cumulative_bytes_transferred_so_far) {
   auto it = id_to_payload_with_buffer_map_.find(payload_id);
   if (it == id_to_payload_with_buffer_map_.end()) {
-    NS_LOG(ERROR) << "Attempted to handle stream bytes for payload with ID "
-                  << payload_id << ", but this payload was not being tracked.";
+    CD_LOG(ERROR, Feature::NEARBY_INFRA)
+        << "Attempted to handle stream bytes for payload with ID " << payload_id
+        << ", but this payload was not being tracked.";
     return;
   }
 
@@ -65,16 +65,18 @@ void NearbyConnectionsStreamBufferManager::HandleBytesTransferred(
 
   InputStream* stream = payload_with_buffer->payload.AsStream();
   if (!stream) {
-    NS_LOG(ERROR) << "Payload with ID " << payload_id << " is not a stream "
-                  << "payload; transfer has failed.";
+    CD_LOG(ERROR, Feature::NEARBY_INFRA)
+        << "Payload with ID " << payload_id << " is not a stream "
+        << "payload; transfer has failed.";
     StopTrackingFailedPayload(payload_id);
     return;
   }
 
   ExceptionOr<ByteArray> bytes = stream->Read(bytes_to_read);
   if (!bytes.ok()) {
-    NS_LOG(ERROR) << "Payload with ID " << payload_id << " encountered "
-                  << "exception while reading; transfer has failed.";
+    CD_LOG(ERROR, Feature::NEARBY_INFRA)
+        << "Payload with ID " << payload_id << " encountered "
+        << "exception while reading; transfer has failed.";
     StopTrackingFailedPayload(payload_id);
     return;
   }
@@ -87,8 +89,9 @@ NearbyConnectionsStreamBufferManager::GetCompletePayloadAndStopTracking(
     int64_t payload_id) {
   auto it = id_to_payload_with_buffer_map_.find(payload_id);
   if (it == id_to_payload_with_buffer_map_.end()) {
-    NS_LOG(ERROR) << "Attempted to get complete payload with ID " << payload_id
-                  << ", but this payload was not being tracked.";
+    CD_LOG(ERROR, Feature::NEARBY_INFRA)
+        << "Attempted to get complete payload with ID " << payload_id
+        << ", but this payload was not being tracked.";
     return ByteArray();
   }
 
@@ -101,6 +104,4 @@ NearbyConnectionsStreamBufferManager::GetCompletePayloadAndStopTracking(
   return complete_payload;
 }
 
-}  // namespace connections
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::connections

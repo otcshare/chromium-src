@@ -11,8 +11,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/platform_shared_memory_region.h"
 #include "base/memory/ptr_util.h"
@@ -23,7 +23,6 @@
 #include "base/trace_event/trace_event.h"
 #include "components/chromeos_camera/common/dmabuf.mojom.h"
 #include "components/chromeos_camera/dmabuf_utils.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/video_frame.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/system/platform_handle.h"
@@ -263,16 +262,13 @@ void MojoJpegEncodeAcceleratorService::EncodeWithFD(
     return;
   }
 
-  const uint8_t* input_shm_memory =
-      input_mapping.GetMemoryAsSpan<uint8_t>().data();
   scoped_refptr<media::VideoFrame> frame = media::VideoFrame::WrapExternalData(
-      media::PIXEL_FORMAT_I420,                // format
-      coded_size,                              // coded_size
-      gfx::Rect(coded_size),                   // visible_rect
-      coded_size,                              // natural_size
-      const_cast<uint8_t*>(input_shm_memory),  // data
-      input_buffer_size,                       // data_size
-      base::TimeDelta());                      // timestamp
+      media::PIXEL_FORMAT_I420,  // format
+      coded_size,                // coded_size
+      gfx::Rect(coded_size),     // visible_rect
+      coded_size,                // natural_size
+      input_mapping,             // data
+      base::TimeDelta());        // timestamp
   if (!frame.get()) {
     LOG(ERROR) << "Could not create VideoFrame for buffer id " << task_id;
     NotifyEncodeStatus(
@@ -298,6 +294,8 @@ void MojoJpegEncodeAcceleratorService::EncodeWithDmaBuf(
     int32_t coded_size_width,
     int32_t coded_size_height,
     int32_t quality,
+    bool has_input_modifier,
+    uint64_t input_modifier,
     EncodeWithDmaBufCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -327,7 +325,9 @@ void MojoJpegEncodeAcceleratorService::EncodeWithDmaBuf(
   }
 
   auto input_video_frame = ConstructVideoFrame(
-      std::move(input_planes), ToVideoPixelFormat(input_format), coded_size);
+      std::move(input_planes), ToVideoPixelFormat(input_format), coded_size,
+      has_input_modifier ? input_modifier
+                         : gfx::NativePixmapHandle::kNoModifier);
   if (!input_video_frame) {
     std::move(callback).Run(
         0, ::chromeos_camera::JpegEncodeAccelerator::Status::PLATFORM_FAILURE);
@@ -367,7 +367,7 @@ void MojoJpegEncodeAcceleratorService::NotifyEncodeStatus(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto iter = encode_cb_map_.find(task_id);
-  DCHECK(iter != encode_cb_map_.end());
+  CHECK(iter != encode_cb_map_.end());
   EncodeWithDmaBufCallback encode_cb = std::move(iter->second);
   encode_cb_map_.erase(iter);
   std::move(encode_cb).Run(encoded_picture_size, error);

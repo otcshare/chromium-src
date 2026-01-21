@@ -10,6 +10,8 @@
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+#include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
@@ -22,7 +24,8 @@ static constexpr int kDeviceHeight = 800;
 static constexpr float kMinimumZoom = 0.25f;
 static constexpr float kMaximumZoom = 5;
 
-class MobileFriendlinessCheckerTest : public testing::Test {
+class MobileFriendlinessCheckerTest : public testing::Test,
+                                      private CullRectTestConfig {
   static void ConfigureAndroidSettings(WebSettings* settings) {
     settings->SetViewportEnabled(true);
     settings->SetViewportMetaEnabled(true);
@@ -51,17 +54,7 @@ class MobileFriendlinessCheckerTest : public testing::Test {
 
     load(*helper);
 
-    std::unique_ptr<ukm::UkmRecorder> old_ukm_recorder =
-        std::move(helper->GetWebView()
-                      ->MainFrameImpl()
-                      ->GetFrame()
-                      ->GetDocument()
-                      ->ukm_recorder_);
-    helper->GetWebView()
-        ->MainFrameImpl()
-        ->GetFrame()
-        ->GetDocument()
-        ->ukm_recorder_ = std::make_unique<ukm::TestUkmRecorder>();
+    ukm::TestAutoSetUkmRecorder result;
 
     DCHECK(helper->GetWebView()->MainFrameImpl()->GetFrame()->IsLocalRoot());
     helper->GetWebView()
@@ -74,23 +67,10 @@ class MobileFriendlinessCheckerTest : public testing::Test {
         ->GetMobileFriendlinessChecker()
         ->ComputeNowForTesting();
 
-    std::unique_ptr<ukm::UkmRecorder> result_ukm =
-        std::move(helper->GetWebView()
-                      ->MainFrameImpl()
-                      ->GetFrame()
-                      ->GetDocument()
-                      ->ukm_recorder_);
-    ukm::TestUkmRecorder* result =
-        reinterpret_cast<ukm::TestUkmRecorder*>(result_ukm.get());
-    auto entries = result->GetEntriesByName("MobileFriendliness");
+    auto entries = result.GetEntriesByName("MobileFriendliness");
     EXPECT_EQ(entries.size(), 1u);
     EXPECT_EQ(entries[0]->event_hash,
               ukm::builders::MobileFriendliness::kEntryNameHash);
-    helper->GetWebView()
-        ->MainFrameImpl()
-        ->GetFrame()
-        ->GetDocument()
-        ->ukm_recorder_ = std::move(old_ukm_recorder);
     return *entries[0];
   }
 
@@ -146,6 +126,7 @@ class MobileFriendlinessCheckerTest : public testing::Test {
     EXPECT_NE(it, ukm.metrics.end());
     EXPECT_GT(it->second, expected);
   }
+  test::TaskEnvironment task_environment_;
 };
 
 TEST_F(MobileFriendlinessCheckerTest, NoViewportSetting) {
@@ -703,8 +684,8 @@ TEST_F(MobileFriendlinessCheckerTest,
               100);
 }
 
-// This test shows that text will grow with text-size-adjust: auto in a
-// fixed-width table.
+// This test shows that text will no longer, as of late 2025, grow with
+// text-size-adjust: auto in a fixed-width table.
 TEST_F(MobileFriendlinessCheckerTest, FixedWidthTableTextSizeAdjustAuto) {
   ukm::mojom::UkmEntry ukm = CalculateMetricsForHTMLString(R"HTML(
 <html>
@@ -720,7 +701,8 @@ TEST_F(MobileFriendlinessCheckerTest, FixedWidthTableTextSizeAdjustAuto) {
   </body>
 </html>
 )HTML");
-  ExpectUkm(ukm, ukm::builders::MobileFriendliness::kSmallTextRatioNameHash, 0);
+  ExpectUkm(ukm, ukm::builders::MobileFriendliness::kSmallTextRatioNameHash,
+            100);
 }
 
 // This test shows that text remains small with text-size-adjust: none in a
@@ -1084,7 +1066,7 @@ TEST_F(MobileFriendlinessCheckerTest, ScaleTextOutsideViewport) {
   ExpectUkmGT(ukm,
               ukm::builders::MobileFriendliness::
                   kTextContentOutsideViewportPercentageNameHash,
-              90);
+              55);
 }
 
 TEST_F(MobileFriendlinessCheckerTest, ScrollerOutsideViewport) {

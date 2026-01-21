@@ -13,6 +13,7 @@
 #include "ui/gfx/animation/animation_test_api.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/animation/test_animation_delegate.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace gfx {
 
@@ -59,7 +60,7 @@ class TestAnimation : public LinearAnimation {
 
   void AnimateToState(double state) override {}
 
-  using LinearAnimation::duration;
+  using LinearAnimation::GetDuration;
 };
 
 }  // namespace
@@ -92,8 +93,12 @@ TEST_F(AnimationContainerTest, Ownership) {
 
 // Makes sure multiple animations are managed correctly.
 TEST_F(AnimationContainerTest, Multi) {
+  base::RunLoop loop1;
   TestAnimationDelegate delegate1;
   TestAnimationDelegate delegate2;
+
+  delegate1.set_quit_closure(loop1.QuitWhenIdleClosure());
+  delegate2.set_quit_closure(loop1.QuitWhenIdleClosure());
 
   scoped_refptr<AnimationContainer> container(new AnimationContainer());
   TestAnimation animation1(&delegate1);
@@ -108,7 +113,7 @@ TEST_F(AnimationContainerTest, Multi) {
   EXPECT_TRUE(container->is_running());
 
   // Run the message loop the delegate quits the message loop when notified.
-  base::RunLoop().Run();
+  loop1.Run();
 
   // Both timers should have finished.
   EXPECT_TRUE(delegate1.finished());
@@ -120,9 +125,10 @@ TEST_F(AnimationContainerTest, Multi) {
 
 // Makes sure observer is notified appropriately.
 TEST_F(AnimationContainerTest, Observer) {
+  base::RunLoop loop;
   FakeAnimationContainerObserver observer;
   TestAnimationDelegate delegate1;
-
+  delegate1.set_quit_closure(loop.QuitWhenIdleClosure());
   scoped_refptr<AnimationContainer> container(new AnimationContainer());
   container->set_observer(&observer);
   TestAnimation animation1(&delegate1);
@@ -133,7 +139,7 @@ TEST_F(AnimationContainerTest, Observer) {
   EXPECT_TRUE(container->is_running());
 
   // Run the message loop. The delegate quits the message loop when notified.
-  base::RunLoop().Run();
+  loop.Run();
 
   EXPECT_EQ(1, observer.progressed_count());
 
@@ -158,7 +164,7 @@ TEST_F(AnimationContainerTest, AnimationsRunAcrossRunnerChange) {
   animation.SetContainer(container.get());
 
   animation.Start();
-  test_api.IncrementTime(animation.duration() / 2);
+  test_api.IncrementTime(animation.GetDuration() / 2);
   EXPECT_FALSE(delegate.finished());
 
   container->SetAnimationRunner(nullptr);
@@ -167,8 +173,27 @@ TEST_F(AnimationContainerTest, AnimationsRunAcrossRunnerChange) {
   ASSERT_FALSE(runner->step_is_null_for_testing());
   EXPECT_FALSE(delegate.finished());
 
-  test_api.IncrementTime(animation.duration() / 2);
+  test_api.IncrementTime(animation.GetDuration() / 2);
   EXPECT_TRUE(delegate.finished());
+}
+
+TEST_F(AnimationContainerTest, ZeroDuration) {
+  gfx::ScopedAnimationDurationScaleMode disable(
+      gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  TestAnimationDelegate delegate;
+  auto container = base::MakeRefCounted<AnimationContainer>();
+  AnimationContainerTestApi test_api(container.get());
+  TestAnimation animation(&delegate);
+  animation.SetContainer(container.get());
+
+  animation.Start();
+  EXPECT_TRUE(animation.is_animating());
+  EXPECT_EQ(0.0, animation.GetCurrentValue());
+
+  test_api.IncrementTime(base::TimeDelta());
+  EXPECT_EQ(1.0, animation.GetCurrentValue());
+  EXPECT_FALSE(animation.is_animating());
 }
 
 }  // namespace gfx

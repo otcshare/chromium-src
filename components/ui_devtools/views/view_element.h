@@ -5,11 +5,12 @@
 #ifndef COMPONENTS_UI_DEVTOOLS_VIEWS_VIEW_ELEMENT_H_
 #define COMPONENTS_UI_DEVTOOLS_VIEWS_VIEW_ELEMENT_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/ui_devtools/ui_element.h"
 #include "components/ui_devtools/views/ui_element_with_metadata.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 
@@ -39,6 +40,7 @@ class ViewElement : public views::ViewObserver, public UIElementWithMetaData {
   std::vector<std::string> GetAttributes() const override;
   std::pair<gfx::NativeWindow, gfx::Rect> GetNodeWindowAndScreenBounds()
       const override;
+  gfx::Rect GetNodeBoundsInScreen() const override;
   static views::View* From(const UIElement* element);
   void PaintRect() const override;
   bool FindMatchByElementID(const ui::ElementIdentifier& identifier) override;
@@ -55,7 +57,7 @@ class ViewElement : public views::ViewObserver, public UIElementWithMetaData {
   // inconsistency is detected between the current tree and the tree of the
   // backing view.
   void RebuildTree();
-  views::View* view_;
+  raw_ptr<views::View> view_;
   base::ScopedObservation<views::View, views::ViewObserver> observer_{this};
 };
 

@@ -9,7 +9,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "remoting/host/security_key/security_key_message.h"
@@ -127,7 +128,7 @@ void SecurityKeyMessageReaderImplTest::WriteMessage(
 }
 
 void SecurityKeyMessageReaderImplTest::WriteData(const char* data, int length) {
-  int written = write_file_.WriteAtCurrentPos(data, length);
+  int written = UNSAFE_TODO(write_file_.WriteAtCurrentPos(data, length));
   ASSERT_EQ(length, written);
 }
 

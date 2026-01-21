@@ -26,8 +26,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_UNIT_TEST_HELPERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_UNIT_TEST_HELPERS_H_
 
-#include "base/memory/scoped_refptr.h"
-#include "third_party/blink/renderer/platform/timer.h"
+#include <optional>
+
+#include "base/time/time.h"
+#include "third_party/blink/renderer/platform/testing/geometry_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -40,14 +42,11 @@ namespace blink {
 namespace test {
 
 // Note: You may want to use TestingPlatformSupportWithMockScheduler to
-// provides runUntilIdle() method that can work with WebURLLoaderMockFactory.
+// provides runUntilIdle() method that can work with URLLoaderMockFactory.
 void RunPendingTasks();
 
 // Waits for delayed task to complete or timers to fire for |delay|.
 void RunDelayedTasks(base::TimeDelta delay);
-
-void EnterRunLoop();
-void ExitRunLoop();
 
 void YieldCurrentThread();
 
@@ -85,6 +84,12 @@ String AccessibilityTestDataPath(const String& relative_path = String());
 // specified.
 String BlinkWebTestsFontsTestDataPath(const String& relative_path = String());
 
+// Returns Blink web_tests images as an absolute path, i.e.
+// <blinkRootDir>/web_tests/images/resources/<relative_path>.
+// It returns the top Blink web_tests image resources directory if
+// |relative_path| was not specified.
+String BlinkWebTestsImagesTestDataPath(const String& relative_path = String());
+
 // Returns Blink style perftest data as an absolute path, i.e.
 // <blinkRootDir>/renderer/core/css/perftest_data/<relative_path>.
 // It returns the top perftest data directory if |relative_path| was not
@@ -94,7 +99,9 @@ String StylePerfTestDataPath(const String& relative_path = String());
 // Returns the directory of hyphenation dictionaries for testing.
 base::FilePath HyphenationDictionaryDir();
 
-scoped_refptr<SharedBuffer> ReadFromFile(const String& path);
+// Reads the file at the given path and returns its data.
+// Returns nullopt if the file does not exist or couldn't be read.
+std::optional<Vector<char>> ReadFromFile(const String& path);
 
 class LineReader {
   DISALLOW_NEW();

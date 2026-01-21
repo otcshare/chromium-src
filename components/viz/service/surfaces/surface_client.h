@@ -10,6 +10,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/threading/platform_thread.h"
+#include "components/viz/common/performance_hint_utils.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/service/surfaces/pending_copy_output_request.h"
 #include "components/viz/service/viz_service_export.h"
@@ -47,7 +48,7 @@ class VIZ_SERVICE_EXPORT SurfaceClient {
   // Called when |surface| has a new CompositorFrame available for display.
   virtual void OnSurfaceActivated(Surface* surface) = 0;
 
-  // Called when |surface| is about to be destroyed.
+  // Called when |surface| has completed destruction.
   virtual void OnSurfaceDestroyed(Surface* surface) = 0;
 
   // Called when a |surface| is about to be drawn.
@@ -58,7 +59,7 @@ class VIZ_SERVICE_EXPORT SurfaceClient {
       const std::vector<TransferableResource>& resources) = 0;
 
   // Decrements the reference count on resources specified by |resources|.
-  virtual void UnrefResources(std::vector<ReturnedResource> resources) = 0;
+  virtual void UnrefResources(std::vector<ReturnedResourceViz> resources) = 0;
 
   // ReturnResources gets called when the display compositor is done using the
   // resources so that the client can use them.
@@ -71,8 +72,8 @@ class VIZ_SERVICE_EXPORT SurfaceClient {
 
   // Takes all the CopyOutputRequests made at the client level that happened for
   // a LocalSurfaceId preceeding the given one.
-  virtual std::vector<PendingCopyOutputRequest> TakeCopyOutputRequests(
-      const LocalSurfaceId& latest_surface_id) = 0;
+  virtual std::vector<std::unique_ptr<PendingCopyOutputRequest>>
+  TakeCopyOutputRequests(const LocalSurfaceId& latest_surface_id) = 0;
 
   // Notifies the client that a frame with |token| has been activated.
   virtual void OnFrameTokenChanged(uint32_t frame_token) = 0;
@@ -99,7 +100,7 @@ class VIZ_SERVICE_EXPORT SurfaceClient {
 
   virtual bool IsVideoCaptureStarted() = 0;
 
-  virtual base::flat_set<base::PlatformThreadId> GetThreadIds() = 0;
+  virtual std::vector<Thread> GetThreads() = 0;
 };
 
 }  // namespace viz

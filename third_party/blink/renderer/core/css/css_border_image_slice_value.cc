@@ -25,6 +25,7 @@
 
 #include "third_party/blink/renderer/core/css/css_border_image_slice_value.h"
 
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -41,8 +42,9 @@ String CSSBorderImageSliceValue::CustomCSSText() const {
   String text = slices_->CssText();
 
   // Now the fill keywords if it is present.
-  if (fill_)
-    return text + " fill";
+  if (fill_) {
+    return StrCat({text, " fill"});
+  }
   return text;
 }
 

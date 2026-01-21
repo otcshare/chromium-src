@@ -41,11 +41,14 @@
 
 namespace blink {
 
-InsertTextCommand::InsertTextCommand(Document& document,
-                                     const String& text,
-                                     RebalanceType rebalance_type)
+InsertTextCommand::InsertTextCommand(
+    Document& document,
+    const String& text,
+    PasswordEchoBehavior password_echo_behavior,
+    RebalanceType rebalance_type)
     : CompositeEditCommand(document),
       text_(text),
+      password_echo_behavior_(password_echo_behavior),
       rebalance_type_(rebalance_type) {}
 
 String InsertTextCommand::TextDataForInputEvent() const {
@@ -122,12 +125,14 @@ bool InsertTextCommand::PerformTrivialReplace(const String& text) {
       return false;
   }
 
-  RelocatablePosition relocatable_start(start);
-  Position end_position = ReplaceSelectedTextInNode(text);
+  RelocatablePosition* relocatable_start =
+      MakeGarbageCollected<RelocatablePosition>(start);
+  Position end_position =
+      ReplaceSelectedTextInNode(text, password_echo_behavior_);
   if (end_position.IsNull())
     return false;
 
-  SetEndingSelectionWithoutValidation(relocatable_start.GetPosition(),
+  SetEndingSelectionWithoutValidation(relocatable_start->GetPosition(),
                                       end_position);
   SetEndingSelection(SelectionForUndoStep::From(
       SelectionInDOMTree::Builder()
@@ -176,30 +181,18 @@ void InsertTextCommand::DoApply(EditingState* editing_state) {
 
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
 
-  // Reached by InsertTextCommandTest.NoVisibleSelectionAfterDeletingSelection
-  ABORT_EDITING_COMMAND_IF(EndingVisibleSelection().IsNone());
+  // When the flag is turned on, `CanonicalPosition` directly returns the
+  // visually equivalent position, no need for this check.
+  // See https://issues.chromium.org/issues/40547104 for more details.
+  if (!RuntimeEnabledFeatures::
+          UsePositionIfIsVisuallyEquivalentCandidateEnabled()) {
+    // Reached by InsertTextCommandTest.NoVisibleSelectionAfterDeletingSelection
+    ABORT_EDITING_COMMAND_IF(EndingVisibleSelection().IsNone());
+  }
 
   Position start_position(EndingVisibleSelection().Start());
 
-  Position placeholder;
-  // We want to remove preserved newlines and brs that will collapse (and thus
-  // become unnecessary) when content is inserted just before them.
-  // FIXME: We shouldn't really have to do this, but removing placeholders is a
-  // workaround for 9661.
-  // If the caret is just before a placeholder, downstream will normalize the
-  // caret to it.
-  Position downstream(MostForwardCaretPosition(start_position));
-  if (LineBreakExistsAtPosition(downstream)) {
-    // FIXME: This doesn't handle placeholders at the end of anonymous blocks.
-    VisiblePosition caret = CreateVisiblePosition(start_position);
-    if (IsEndOfBlock(caret) && IsStartOfParagraph(caret))
-      placeholder = downstream;
-    // Don't remove the placeholder yet, otherwise the block we're inserting
-    // into would collapse before we get a chance to insert into it.  We check
-    // for a placeholder now, though, because doing so requires the creation of
-    // a VisiblePosition, and if we did that post-insertion it would force a
-    // layout.
-  }
+  Position placeholder = ComputePlaceholderToCollapseAt(start_position);
 
   // Insert the character at the leftmost candidate.
   start_position = MostBackwardCaretPosition(start_position);
@@ -251,7 +244,7 @@ void InsertTextCommand::DoApply(EditingState* editing_state) {
     auto* text_node = To<Text>(start_position.ComputeContainerNode());
     const unsigned offset = start_position.OffsetInContainerNode();
 
-    InsertTextIntoNode(text_node, offset, text_);
+    InsertTextIntoNode(text_node, offset, text_, password_echo_behavior_);
     end_position = Position(text_node, offset + text_.length());
 
     if (rebalance_type_ == kRebalanceLeadingAndTrailingWhitespaces) {
@@ -287,7 +280,12 @@ void InsertTextCommand::DoApply(EditingState* editing_state) {
 
   SelectionInDOMTree::Builder builder;
   const VisibleSelection& selection = EndingVisibleSelection();
-  builder.SetAffinity(selection.Affinity());
+  if (RuntimeEnabledFeatures::CaretWithTextAffinityUpstreamEnabled() &&
+      text_ == " " && !IsRichlyEditablePosition(start_position)) {
+    builder.SetAffinity(TextAffinity::kUpstreamIfPossible);
+  } else {
+    builder.SetAffinity(selection.Affinity());
+  }
   if (selection.End().IsNotNull())
     builder.Collapse(selection.End());
   SetEndingSelection(SelectionForUndoStep::From(builder.Build()));
@@ -307,7 +305,8 @@ Position InsertTextCommand::InsertTab(const Position& pos,
 
   // keep tabs coalesced in tab span
   if (IsTabHTMLSpanElementTextNode(node)) {
-    InsertTextIntoNode(text_node, offset, "\t");
+    InsertTextIntoNode(text_node, offset, "\t",
+                       PasswordEchoBehavior::kDoNotEcho);
     return Position(text_node, offset + 1);
   }
 

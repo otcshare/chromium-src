@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/public/overlay_plane.h"
 #include "ui/ozone/public/overlay_surface.h"
 
@@ -20,7 +20,7 @@ struct DrmOverlayPlane;
 
 class GbmOverlaySurface : public OverlaySurface {
  public:
-  GbmOverlaySurface(std::unique_ptr<DrmWindowProxy> window);
+  explicit GbmOverlaySurface(std::unique_ptr<DrmWindowProxy> window);
 
   GbmOverlaySurface(const GbmOverlaySurface&) = delete;
   GbmOverlaySurface& operator=(const GbmOverlaySurface&) = delete;

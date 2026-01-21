@@ -23,6 +23,7 @@ DictationBubbleController::DictationBubbleController() {
 }
 
 DictationBubbleController::~DictationBubbleController() {
+  input_method_observer_.Reset();
   if (widget_ && !widget_->IsClosed())
     widget_->CloseNow();
 }
@@ -30,11 +31,15 @@ DictationBubbleController::~DictationBubbleController() {
 void DictationBubbleController::UpdateBubble(
     bool visible,
     DictationBubbleIconType icon,
-    const absl::optional<std::u16string>& text,
-    const absl::optional<std::vector<DictationBubbleHintType>>& hints) {
+    const std::optional<std::u16string>& text,
+    const std::optional<std::vector<DictationBubbleHintType>>& hints) {
   MaybeInitialize();
   Update(icon, text, hints);
   visible ? widget_->Show() : widget_->Hide();
+
+  for (Observer& observer : observers_) {
+    observer.OnBubbleUpdated();
+  }
 }
 
 void DictationBubbleController::OnCaretBoundsChanged(
@@ -78,8 +83,8 @@ void DictationBubbleController::MaybeInitialize() {
 
 void DictationBubbleController::Update(
     DictationBubbleIconType icon,
-    const absl::optional<std::u16string>& text,
-    const absl::optional<std::vector<DictationBubbleHintType>>& hints) {
+    const std::optional<std::u16string>& text,
+    const std::optional<std::vector<DictationBubbleHintType>>& hints) {
   DCHECK(dictation_bubble_view_);
   DCHECK(widget_);
 
@@ -89,15 +94,23 @@ void DictationBubbleController::Update(
   // Update the bounds to fit entirely within the screen.
   gfx::Rect new_bounds = widget_->GetWindowBoundsInScreen();
   gfx::Rect display_bounds =
-      display::Screen::GetScreen()->GetDisplayMatching(new_bounds).bounds();
+      display::Screen::Get()->GetDisplayMatching(new_bounds).bounds();
   new_bounds.AdjustToFit(display_bounds);
 
   // Update the preferred bounds based on other system windows.
   gfx::Rect resting_bounds = CollisionDetectionUtils::AvoidObstacles(
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
+      display::Screen::Get()->GetDisplayNearestWindow(
           widget_->GetNativeWindow()),
       new_bounds, CollisionDetectionUtils::RelativePriority::kDictationBubble);
   widget_->SetBounds(resting_bounds);
+}
+
+void DictationBubbleController::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void DictationBubbleController::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 }  // namespace ash

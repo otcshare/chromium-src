@@ -4,17 +4,23 @@
 
 package org.chromium.chrome.browser;
 
-import androidx.annotation.VisibleForTesting;
+import static org.chromium.build.NullUtil.assumeNonNull;
 
+import org.chromium.base.CallbackController;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabCreationState;
+import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
+import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -24,28 +30,37 @@ import java.util.Set;
  * number of tabs used, to the total number of tabs available between ChromeTabbedActivity onResume
  * and onStop.
  */
+@NullMarked
 public class TabUsageTracker
         implements StartStopWithNativeObserver, DestroyObserver, PauseResumeWithNativeObserver {
     private static final String PERCENTAGE_OF_TABS_USED_HISTOGRAM =
             "Android.ActivityStop.PercentageOfTabsUsed";
     private static final String NUMBER_OF_TABS_USED_HISTOGRAM =
             "Android.ActivityStop.NumberOfTabsUsed";
+    private static final String PERCENTAGE_OF_PINNED_TABS_USED_HISTOGRAM =
+            "Android.ActivityStop.PercentageOfPinnedTabsUsed";
+    private static final String NUMBER_OF_PINNED_TABS_USED_HISTOGRAM =
+            "Android.ActivityStop.NumberOfPinnedTabsUsed";
 
     private final Set<Integer> mTabsUsed = new HashSet<>();
+    private final Set<Integer> mPinnedTabsUsed = new HashSet<>();
 
     private int mInitialTabCount;
     private int mNewlyAddedTabCount;
+    private int mInitialPinnedTabCount;
+    private int mNewlyAddedPinnedTabCount;
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final TabModelSelector mModelSelector;
-    private TabModelSelectorObserver mTabModelSelectorObserver;
-    private TabModelSelectorTabModelObserver mTabModelSelectorTabModelObserver;
+    private @Nullable TabModelSelectorTabModelObserver mTabModelSelectorTabModelObserver;
     private boolean mApplicationResumed;
+    private final CallbackController mCallbackController = new CallbackController();
 
     /**
      * This method is used to initialize the TabUsageTracker.
+     *
      * @param lifecycleDispatcher LifecycleDispatcher used to subscribe class to lifecycle events.
      * @param modelSelector TabModelSelector used to subscribe to TabModelSelectorTabModelObserver
-     *         to capture when tabs are selected or new tabs are added.
+     *     to capture when tabs are selected or new tabs are added.
      */
     public static void initialize(
             ActivityLifecycleDispatcher lifecycleDispatcher, TabModelSelector modelSelector) {
@@ -56,6 +71,8 @@ public class TabUsageTracker
             ActivityLifecycleDispatcher lifecycleDispatcher, TabModelSelector modelSelector) {
         mInitialTabCount = 0;
         mNewlyAddedTabCount = 0;
+        mInitialPinnedTabCount = 0;
+        mNewlyAddedPinnedTabCount = 0;
         mModelSelector = modelSelector;
         mApplicationResumed = false;
 
@@ -65,17 +82,19 @@ public class TabUsageTracker
 
     @Override
     public void onDestroy() {
+        mCallbackController.destroy();
         mLifecycleDispatcher.unregister(this);
-        mModelSelector.removeObserver(mTabModelSelectorObserver);
     }
 
     @Override
     public void onStartWithNative() {}
 
     /**
-     * Records 2 histograms.
+     * Records 4 histograms.
      * 1. Percentage of tabs used.
      * 2. Number of tabs used.
+     * 3. Percentage of pinned tabs used.
+     * 4. Number of pinned tabs used.
      */
     @Override
     public void onStopWithNative() {
@@ -89,9 +108,22 @@ public class TabUsageTracker
                 PERCENTAGE_OF_TABS_USED_HISTOGRAM, Math.round(totalTabsUsedPercentage));
         RecordHistogram.recordCount100Histogram(NUMBER_OF_TABS_USED_HISTOGRAM, mTabsUsed.size());
 
+        int totalPinnedTabCount = mInitialPinnedTabCount + mNewlyAddedPinnedTabCount;
+        float totalPinnedTabsUsedPercentage =
+                (float) mPinnedTabsUsed.size() / (float) totalPinnedTabCount * 100;
+        RecordHistogram.recordPercentageHistogram(
+                PERCENTAGE_OF_PINNED_TABS_USED_HISTOGRAM,
+                Math.round(totalPinnedTabsUsedPercentage));
+        RecordHistogram.recordCount100Histogram(
+                NUMBER_OF_PINNED_TABS_USED_HISTOGRAM, mPinnedTabsUsed.size());
+
         mTabsUsed.clear();
+        mPinnedTabsUsed.clear();
         mNewlyAddedTabCount = 0;
         mInitialTabCount = 0;
+        mNewlyAddedPinnedTabCount = 0;
+        mInitialPinnedTabCount = 0;
+        assumeNonNull(mTabModelSelectorTabModelObserver);
         mTabModelSelectorTabModelObserver.destroy();
         mApplicationResumed = false;
     }
@@ -102,41 +134,52 @@ public class TabUsageTracker
      */
     @Override
     public void onResumeWithNative() {
-        if (mModelSelector.isTabStateInitialized()) {
-            mInitialTabCount = mModelSelector.getTotalTabCount();
-        } else {
-            mTabModelSelectorObserver = new TabModelSelectorObserver() {
-                @Override
-                public void onTabStateInitialized() {
-                    mInitialTabCount = mModelSelector.getTotalTabCount();
-                }
-            };
-            mModelSelector.addObserver(mTabModelSelectorObserver);
+        TabModelUtils.runOnTabStateInitialized(
+                mModelSelector,
+                mCallbackController.makeCancelable(
+                        (tabModelSelector) -> {
+                            mInitialTabCount = tabModelSelector.getTotalTabCount();
+                            mInitialPinnedTabCount = tabModelSelector.getTotalPinnedTabCount();
+                        }));
+
+        Tab currentlySelectedTab = mModelSelector.getCurrentTab();
+        if (currentlySelectedTab != null) {
+            mTabsUsed.add(currentlySelectedTab.getId());
+            if (currentlySelectedTab.getIsPinned()) {
+                mPinnedTabsUsed.add(currentlySelectedTab.getId());
+            }
         }
 
-        Tab currentlySelectedTab =
-                mModelSelector.getCurrentModel().getTabAt(mModelSelector.getCurrentModelIndex());
-        if (currentlySelectedTab != null) mTabsUsed.add(currentlySelectedTab.getId());
+        mTabModelSelectorTabModelObserver =
+                new TabModelSelectorTabModelObserver(mModelSelector) {
+                    @Override
+                    public void didAddTab(
+                            Tab tab,
+                            @TabLaunchType int type,
+                            @TabCreationState int creationState,
+                            boolean markedForSelection) {
+                        mNewlyAddedTabCount++;
+                        if (tab.getIsPinned()) {
+                            mNewlyAddedPinnedTabCount++;
+                        }
+                    }
 
-        mTabModelSelectorTabModelObserver = new TabModelSelectorTabModelObserver(mModelSelector) {
-            @Override
-            public void didAddTab(Tab tab, int type, int creationState) {
-                mNewlyAddedTabCount++;
-            }
-
-            @Override
-            public void didSelectTab(Tab tab, int type, int lastId) {
-                mTabsUsed.add(tab.getId());
-            }
-        };
+                    @Override
+                    public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
+                        mTabsUsed.add(tab.getId());
+                        if (tab.getIsPinned()) {
+                            mPinnedTabsUsed.add(tab.getId());
+                        }
+                    }
+                };
         mApplicationResumed = true;
     }
 
     @Override
     public void onPauseWithNative() {}
 
-    @VisibleForTesting
-    public TabModelSelectorTabModelObserver getTabModelSelectorTabModelObserverForTests() {
+    public @Nullable
+            TabModelSelectorTabModelObserver getTabModelSelectorTabModelObserverForTests() {
         return mTabModelSelectorTabModelObserver;
     }
 }

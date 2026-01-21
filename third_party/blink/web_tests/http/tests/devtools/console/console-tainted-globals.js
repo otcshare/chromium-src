@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
 (async function() {
   TestRunner.addResult(
       `Tests that overriding global methods (like Array.prototype.push, Math.max) will not break the inspector.\n`);
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
   await TestRunner.evaluateInPagePromise(`
       var originalError = window.Error;
@@ -154,12 +156,13 @@
     },
 
     async function testRuntimeAgentCallFunctionOn(next) {
-      var result = await TestRunner.RuntimeAgent.evaluate('({ a : 1, b : 2 })');
+      var {result} = await TestRunner.RuntimeAgent.invoke_evaluate({expression: '({ a : 1, b : 2 })'});
 
       function sum() {
         return this.a + this.b;
       }
-      result = await TestRunner.RuntimeAgent.callFunctionOn(sum.toString(), result.objectId);
+      ({result} = await TestRunner.RuntimeAgent.invoke_callFunctionOn(
+           {functionDeclaration: sum.toString(), objectId: result.objectId}));
 
       TestRunner.assertEquals(3, result.value);
       next();

@@ -4,9 +4,7 @@
 
 #import "ios/chrome/test/fakes/fake_ui_view_controller.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/task/sequenced_task_runner.h"
 
 @implementation FakeUIViewController
 @synthesize presentedViewController = _presentedViewController;
@@ -22,6 +20,11 @@
 - (void)dismissViewControllerAnimated:(BOOL)flag
                            completion:(void (^)())completion {
   self.presentedViewController = nil;
+  if (completion) {
+    base::OnceClosure callback = base::BindOnce(completion);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
+  }
 }
 
 @end

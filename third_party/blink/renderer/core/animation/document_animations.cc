@@ -37,18 +37,20 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/animation/animation_clock.h"
 #include "third_party/blink/renderer/core/animation/animation_timeline.h"
-#include "third_party/blink/renderer/core/animation/css/css_scroll_timeline.h"
+#include "third_party/blink/renderer/core/animation/animation_trigger.h"
+#include "third_party/blink/renderer/core/animation/css/css_animation.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/animation/pending_animations.h"
 #include "third_party/blink/renderer/core/animation/worklet_animation_controller.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/layout/layout_box.h"
+#include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
@@ -68,14 +70,103 @@ void UpdateAnimationTiming(
     timeline->ServiceAnimations(reason);
   document.GetWorkletAnimationController().UpdateAnimationTimings(reason);
 }
-
-bool CompareAnimations(const Member<Animation>& left,
-                       const Member<Animation>& right) {
-  return Animation::HasLowerCompositeOrdering(
-      left.Get(), right.Get(),
-      Animation::CompareAnimationsOrdering::kTreeOrder);
-}
 }  // namespace
+
+// static
+void DocumentAnimations::FindRelevantTriggerAttachments(
+    CSSAnimation& animation,
+    TriggerAttachmentMap& relevant_attachments_out) {
+  const Member<const StyleTriggerAttachmentVector>&
+      animation_trigger_attachments = animation.GetTriggerAttachments();
+  if (!animation_trigger_attachments) {
+    return;
+  }
+
+  const Element* owning_element = animation.OwningElement();
+  if (!owning_element) {
+    return;
+  }
+
+  // Map to accumulate all scoped triggers known to ancestors (who might be
+  // aware of triggers that are outside the owning_element's ancestry but in the
+  // same trigger-scope - such a trigger might come later in tree-order and
+  // therefore be the correct candidate).
+  TriggerScopedNameMap* ancestors_named_triggers =
+      MakeGarbageCollected<TriggerScopedNameMap>();
+
+  const Element* element = owning_element;
+  while (element) {
+    const LayoutBox* element_box = element->GetLayoutBox();
+    if (!element_box) {
+      element = element->parentElement();
+      continue;
+    }
+
+    for (const auto& fragment : element_box->PhysicalFragments()) {
+      const TriggerScopedNameMap* named_triggers = fragment.NamedTriggers();
+      if (!named_triggers) {
+        continue;
+      }
+
+      for (const auto& entry : *named_triggers) {
+        ancestors_named_triggers->Set(entry.key, entry.value);
+      }
+    }
+
+    element = element->parentElement();
+  }
+
+  for (const auto& attachment : *animation_trigger_attachments) {
+    TriggerScopedName* trigger_scoped_name =
+        ToTriggerScopedName(*attachment->TriggerName(), *owning_element);
+
+    auto it = ancestors_named_triggers->find(trigger_scoped_name);
+    if (it != ancestors_named_triggers->end()) {
+      AnimationTrigger* trigger =
+          it->value->NamedTrigger(trigger_scoped_name->GetScopedName());
+      DCHECK(trigger);
+      relevant_attachments_out.Set(trigger_scoped_name,
+                                   std::make_pair<>(trigger, attachment));
+    }
+  }
+}
+
+// static
+void DocumentAnimations::UpdateTriggerAttachments(
+    CSSAnimation& animation,
+    const TriggerAttachmentMap& relevant_attachments) {
+  HeapHashMap<Member<const TriggerScopedName>, Member<AnimationTrigger>>
+      named_trigger_attachments_copy;
+  // Clear old trigger associations. Associations that are still relevant will
+  // get added below.
+  animation.NamedTriggerAttachments().swap(named_trigger_attachments_copy);
+
+  const auto& relevant_attachment_values = relevant_attachments.Values();
+  // Remove obsolete triggers.
+  for (const auto& [scope, trigger] : named_trigger_attachments_copy) {
+    // As only a single trigger is allowed per animation, we need to first
+    // remove obsolete triggers before relevant triggers can be attached.
+    if (std::any_of(
+            relevant_attachment_values.begin(),
+            relevant_attachment_values.end(),
+            [&](const std::pair<Member<AnimationTrigger>,
+                                Member<const StyleTriggerAttachment>>& pair) {
+              return pair.first == trigger;
+            })) {
+      continue;
+    }
+
+    trigger->removeAnimation(&animation);
+  }
+
+  for (const auto& [scope, trigger_attachment] : relevant_attachments) {
+    AnimationTrigger* trigger = trigger_attachment.first;
+    const StyleTriggerAttachment* attachment = trigger_attachment.second;
+
+    animation.SetNamedTriggerAttachment(scope, trigger);
+    attachment->Attach(*trigger, *scope, animation);
+  }
+}
 
 DocumentAnimations::DocumentAnimations(Document* document)
     : document_(document) {}
@@ -132,12 +223,16 @@ void DocumentAnimations::UpdateAnimations(
     document_->View()->ScheduleAnimation();
   }
 
+  UpdateCompositorAnimationTriggers();
+
   document_->GetWorkletAnimationController().UpdateAnimationStates();
-  document_->GetFrame()->ScheduleNextServiceForScrollSnapshotClients();
+  document_->GetFrame()->ScheduleNextServiceForPostLayoutSnapshotClients();
   for (auto& timeline : timelines_) {
-    // ScrollTimelines are already handled as ScrollSnapshotClients above.
-    if (!timeline->IsScrollTimeline())
+    // ScrollSnapshotTimelines are already handled as PostLayoutSnapshotClients
+    // above.
+    if (!timeline->IsScrollSnapshotTimeline()) {
       timeline->ScheduleNextService();
+    }
   }
 }
 
@@ -152,8 +247,7 @@ void DocumentAnimations::MarkPendingIfCompositorPropertyAnimationChanges(
 size_t DocumentAnimations::GetAnimationsCount() {
   wtf_size_t total_animations_count = 0;
   if (document_->View()) {
-    if (cc::AnimationHost* host =
-            document_->View()->GetCompositorAnimationHost()) {
+    if (document_->View()->GetCompositorAnimationHost()) {
       for (auto& timeline : timelines_) {
         if (timeline->HasAnimations())
           total_animations_count += timeline->AnimationsNeedingUpdateCount();
@@ -180,7 +274,7 @@ HeapVector<Member<Animation>> DocumentAnimations::getAnimations(
   else
     GetAnimationsTargetingTreeScope(animations, tree_scope);
 
-  std::sort(animations.begin(), animations.end(), CompareAnimations);
+  std::sort(animations.begin(), animations.end(), Animation::CompareAnimations);
   return animations;
 }
 
@@ -198,7 +292,28 @@ void DocumentAnimations::DetachCompositorTimelines() {
     if (cc::AnimationHost* host =
             document_->GetPage()->GetChromeClient().GetCompositorAnimationHost(
                 *document_->GetFrame())) {
-      host->RemoveAnimationTimeline(compositor_timeline);
+      host->DetachAnimationTimeline(compositor_timeline);
+    }
+  }
+}
+
+void DocumentAnimations::DetachCompositorTriggers() {
+  if (!Platform::Current()->IsThreadedAnimationEnabled() ||
+      !document_->GetSettings()->GetAcceleratedCompositingEnabled() ||
+      !document_->GetPage()) {
+    return;
+  }
+
+  for (auto& trigger : triggers_) {
+    cc::AnimationTrigger* compositor_trigger = trigger->CompositorTrigger();
+    if (!compositor_trigger) {
+      continue;
+    }
+
+    if (cc::AnimationHost* host =
+            document_->GetPage()->GetChromeClient().GetCompositorAnimationHost(
+                *document_->GetFrame())) {
+      host->DetachTrigger(compositor_trigger);
     }
   }
 }
@@ -206,6 +321,8 @@ void DocumentAnimations::DetachCompositorTimelines() {
 void DocumentAnimations::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
   visitor->Trace(timelines_);
+  visitor->Trace(triggers_);
+  visitor->Trace(triggered_animations_);
 }
 
 void DocumentAnimations::GetAnimationsTargetingTreeScope(
@@ -236,7 +353,7 @@ void DocumentAnimations::RemoveReplacedAnimations(
     DocumentAnimations::ReplaceableAnimationsMap* replaceable_animations_map) {
   HeapVector<Member<Animation>> animations_to_remove;
   for (auto& elem_it : *replaceable_animations_map) {
-    HeapVector<Member<Animation>>* animations = elem_it.value;
+    GCedHeapVector<Member<Animation>>* animations = elem_it.value;
 
     // Only elements with multiple animations in the replaceable state need to
     // be checked.
@@ -245,7 +362,8 @@ void DocumentAnimations::RemoveReplacedAnimations(
 
     // By processing in decreasing order by priority, we can perform a single
     // pass for discovery of replaced properties.
-    std::sort(animations->begin(), animations->end(), CompareAnimations);
+    std::sort(animations->begin(), animations->end(),
+              Animation::CompareAnimations);
     PropertyHandleSet replaced_properties;
     for (auto anim_it = animations->rbegin(); anim_it != animations->rend();
          anim_it++) {
@@ -260,9 +378,8 @@ void DocumentAnimations::RemoveReplacedAnimations(
       // the process of iterating over properties if not removable to update
       // the set of properties being replaced.
       bool replace = (*anim_it)->ReplaceStateActive();
-      PropertyHandleSet animation_properties =
-          To<KeyframeEffect>((*anim_it)->effect())->Model()->Properties();
-      for (const auto& property : animation_properties) {
+      for (const auto& property :
+           To<KeyframeEffect>((*anim_it)->effect())->Model()->Properties()) {
         auto inserted = replaced_properties.insert(property);
         if (inserted.is_new_entry) {
           // Top-most compositor order animation affecting this property.
@@ -283,9 +400,49 @@ void DocumentAnimations::RemoveReplacedAnimations(
   for (auto it = animations_to_remove.rbegin();
        it != animations_to_remove.rend(); it++) {
     Animation* animation = *it;
-    event_loop->EnqueueMicrotask(WTF::BindOnce(
-        &Animation::RemoveReplacedAnimation, WrapWeakPersistent(animation)));
+    event_loop->EnqueueMicrotask(BindOnce(&Animation::RemoveReplacedAnimation,
+                                          WrapWeakPersistent(animation)));
   }
+}
+
+void DocumentAnimations::UpdateAnimationTriggerAttachments() {
+  ExecuteTriggerAttachmentUpdates();
+}
+
+void DocumentAnimations::AddAnimationTrigger(AnimationTrigger& trigger) {
+  triggers_.insert(&trigger);
+}
+
+void DocumentAnimations::UpdateCompositorAnimationTriggers() {
+  if (!RuntimeEnabledFeatures::AnimationTriggerEnabled() ||
+      !Platform::Current()->IsThreadedAnimationEnabled()) {
+    return;
+  }
+
+  for (AnimationTrigger* trigger : triggers_) {
+    trigger->UpdateCompositorTrigger();
+  }
+}
+
+void DocumentAnimations::ExecuteTriggerAttachmentUpdates() {
+  HeapHashSet<WeakMember<CSSAnimation>> triggered_animations;
+  triggered_animations.swap(triggered_animations_);
+
+  for (CSSAnimation* animation : triggered_animations) {
+    const Member<const StyleTriggerAttachmentVector>&
+        animation_trigger_attachments = animation->GetTriggerAttachments();
+    TriggerAttachmentMap relevant_attachments;
+    if (animation_trigger_attachments) {
+      AddTriggeredAnimation(animation);
+      FindRelevantTriggerAttachments(*animation, relevant_attachments);
+    }
+    // Add new triggers, remove obsolete ones.
+    UpdateTriggerAttachments(*animation, relevant_attachments);
+  }
+}
+
+void DocumentAnimations::AddTriggeredAnimation(CSSAnimation* animation) {
+  triggered_animations_.insert(animation);
 }
 
 }  // namespace blink

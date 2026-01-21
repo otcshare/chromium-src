@@ -4,12 +4,15 @@
 
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/metrics/puma_histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
-#include "components/variations/variations_associated_data.h"
+#include "chrome/browser/browser_process.h"
+#include "components/activity_reporter/activity_reporter.h"
 
 namespace metrics {
 
@@ -78,6 +81,13 @@ void DesktopSessionDurationTracker::OnUserEvent() {
   }
 }
 
+void DesktopSessionDurationTracker::EndSessionForTesting() {
+  if (!in_session_) {
+    StartSession();
+  }
+  EndSession(base::TimeDelta());
+}
+
 // static
 void DesktopSessionDurationTracker::CleanupForTesting() {
   DCHECK(g_desktop_session_duration_tracker_instance);
@@ -112,7 +122,7 @@ DesktopSessionDurationTracker::DesktopSessionDurationTracker()
   InitInactivityTimeout();
 }
 
-DesktopSessionDurationTracker::~DesktopSessionDurationTracker() {}
+DesktopSessionDurationTracker::~DesktopSessionDurationTracker() = default;
 
 void DesktopSessionDurationTracker::OnTimerFired() {
   base::TimeDelta remaining =
@@ -166,15 +176,23 @@ void DesktopSessionDurationTracker::EndSession(
   // UmaSessionStats::UmaEndSession.
   UMA_HISTOGRAM_LONG_TIMES("Session.TotalDuration", delta);
 
+  // Records true each time Session.TotalDuration is supposed to be recorded
+  // in a PUMA histogram. Allowing for the count to be collected.
+  base::PumaHistogramBoolean(
+      base::PumaType::kRc,
+      "PUMA.RegionalCapabilities.Session.TotalDuration.Recorded", true);
+
   UMA_HISTOGRAM_CUSTOM_TIMES("Session.TotalDurationMax1Day", delta,
                              base::Milliseconds(1), base::Hours(24), 50);
+
+  g_browser_process->activity_reporter()->ReportActive();
 }
 
 void DesktopSessionDurationTracker::InitInactivityTimeout() {
   const int kDefaultInactivityTimeoutMinutes = 5;
 
   int timeout_minutes = kDefaultInactivityTimeoutMinutes;
-  std::string param_value = variations::GetVariationParamValue(
+  std::string param_value = base::GetFieldTrialParamValue(
       "DesktopSessionDuration", "inactivity_timeout");
   if (!param_value.empty())
     base::StringToInt(param_value, &timeout_minutes);

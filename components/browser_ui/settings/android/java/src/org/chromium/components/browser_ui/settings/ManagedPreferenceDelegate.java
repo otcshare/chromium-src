@@ -4,7 +4,11 @@
 
 package org.chromium.components.browser_ui.settings;
 
+import androidx.annotation.LayoutRes;
 import androidx.preference.Preference;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * A delegate that determines whether a Preference is managed by enterprise policy. This is used
@@ -27,6 +31,7 @@ import androidx.preference.Preference;
  *   ChromeSwitchPreference enableRocketsPref = ...;
  *   enableRocketsPref.setManagedPreferenceDelegate(new RocketManagedPreferenceDelegate());
  */
+@NullMarked
 public interface ManagedPreferenceDelegate {
     /**
      * Returns whether the given Preference is controlled by an enterprise policy.
@@ -45,18 +50,44 @@ public interface ManagedPreferenceDelegate {
     /**
      * Returns whether the current Profile is managed by multiple custodians.
      *
-     * This is used to control messaging when a Preference is managed by a custodian(s).
+     * <p>This is used to control messaging when a Preference is managed by a custodian(s).
      */
     boolean doesProfileHaveMultipleCustodians();
 
     /**
-     * Returns whether clicking on the given Preference is disabled due to a policy. The default
+     * Indicates whether a given Preference exists and is followed.
+     *
+     * @param preference the {@link Preference} under consideration.
+     * @return true if the given Preference has the same value as the recommendation set by
+     *     enterprise policy, false if recommendation is not followed, null if there is no
+     *     recommendation.
+     */
+    @Nullable
+    default Boolean isPreferenceRecommendation(Preference preference) {
+        // TODO(crbug.com/428544701) Remove default after adding to existing child classes.
+        // This is almost a feature flag insofar as it prevents behavior from changing.
+        return null;
+    }
+
+    /**
+     * Returns the layout resource to be used by default for preferences that can be managed, when a
+     * custom layout is not defined. Return value 0 can be used to indicate that Android's default
+     * preference layout should be used.
+     *
+     * <p>Embedders should define the default behavior that should apply to all preferences that can
+     * be managed. This way, only embedders that do require custom layouts to pay the price in
+     * binary size increase due to dependencies.
+     */
+    @LayoutRes
+    int defaultPreferenceLayoutResource();
+
+    /**
+     * Returns whether clicking on the given Preference is disabled. The default
      * implementation just returns whether the preference is not modifiable by the user.
      * However, some preferences that are controlled by policy may still be clicked to show an
      * informational subscreen, in which case this method needs a custom implementation.
      */
-    // TODO(bauerb): Rename to isPreferenceClickDisabled.
-    default boolean isPreferenceClickDisabledByPolicy(Preference preference) {
+    default boolean isPreferenceClickDisabled(Preference preference) {
         return isPreferenceControlledByPolicy(preference)
                 || isPreferenceControlledByCustodian(preference);
     }

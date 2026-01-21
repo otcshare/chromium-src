@@ -10,7 +10,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
@@ -48,10 +49,11 @@ void WriteToState(int32_t* buffer, CommandBufferSharedState* shared_state) {
     state.token = i - 1;
     state.get_offset = i + 1;
     state.generation = i + 2;
-    state.error = static_cast<gpu::error::Error>(i + 3);
+    state.error =
+        static_cast<gpu::error::Error>((i + 3) % (gpu::error::kErrorLast + 1));
     // Ensure that the producer doesn't update the buffer until after the
     // consumer reads from it.
-    EXPECT_EQ(buffer[i], 0);
+    UNSAFE_TODO(EXPECT_EQ(buffer[i], 0));
 
     shared_state->Write(state);
   }
@@ -62,7 +64,7 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
   buffer.reset(new int32_t[kSize]);
   base::Thread consumer("Reader Thread");
 
-  memset(buffer.get(), 0, kSize * sizeof(int32_t));
+  UNSAFE_TODO(memset(buffer.get(), 0, kSize * sizeof(int32_t)));
 
   consumer.Start();
   consumer.task_runner()->PostTask(
@@ -79,7 +81,7 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
       continue;
 
     if (state.get_offset >= 1) {
-      buffer[state.get_offset - 1] = 1;
+      UNSAFE_TODO(buffer[state.get_offset - 1]) = 1;
       // Check that the state is consistent
       EXPECT_LE(last_state.token, state.token);
       EXPECT_LE(last_state.generation, state.generation);
@@ -87,7 +89,8 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
       EXPECT_EQ(state.token, state.get_offset - 2);
       EXPECT_EQ(state.generation,
                 static_cast<unsigned int>(state.get_offset) + 1);
-      EXPECT_EQ(state.error, state.get_offset + 2);
+      EXPECT_EQ(state.error,
+                (state.get_offset + 2) % (gpu::error::kErrorLast + 1));
 
       if (state.get_offset == kSize)
         break;
@@ -96,4 +99,3 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
 }
 
 }  // namespace gpu
-

@@ -8,11 +8,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/offline_pages/task/task.h"
@@ -41,7 +41,7 @@ class TaskQueue {
  public:
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     // Invoked once when TaskQueue reached 0 tasks.
     virtual void OnTaskQueueIsIdle() = 0;

@@ -4,9 +4,9 @@
 
 #include "chrome/common/chrome_content_client.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -17,7 +17,6 @@
 #include "content/public/common/origin_util.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/buildflags/buildflags.h"
-#include "ppapi/buildflags/buildflags.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -32,9 +31,7 @@ namespace chrome_common {
 
 TEST(ChromeContentClientTest, AdditionalSchemes) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  EXPECT_TRUE(url::IsStandard(
-      extensions::kExtensionScheme,
-      url::Component(0, strlen(extensions::kExtensionScheme))));
+  EXPECT_TRUE(url::IsStandard(extensions::kExtensionScheme));
 
   GURL extension_url(
       "chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/foo.html");
@@ -45,25 +42,30 @@ TEST(ChromeContentClientTest, AdditionalSchemes) {
 
   // IsUrlPotentiallyTrustworthy assertions test for https://crbug.com/734581.
   constexpr const char* kChromeLayerUrlsRegisteredAsSecure[] = {
-    // The schemes below are registered both as secure and no-access.  Product
-    // code needs to treat such URLs as trustworthy, even though no-access
-    // schemes translate into an opaque origin (which is untrustworthy).
-    "chrome-native://newtab/",
-    "chrome-error://foo/",
-    // The schemes below are registered as secure (but not as no-access).
-    "chrome://foo/",
-    "chrome-untrusted://foo/",
-    "chrome-search://foo/",
-    "isolated-app://foo/",
+      // The schemes below are registered both as secure and no-access.  Product
+      // code needs to treat such URLs as trustworthy, even though no-access
+      // schemes translate into an opaque origin (which is untrustworthy).
+      "chrome-native://newtab/",
+      "chrome-error://foo/",
+      // The schemes below are registered as secure (but not as no-access).
+      "chrome://foo/",
+      "chrome-untrusted://foo/",
+      "chrome-search://foo/",
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+      "isolated-app://foo/",
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-    "chrome-extension://foo/",
+      "chrome-extension://foo/",
 #endif
-    "devtools://foo/",
+      "devtools://foo/",
   };
   for (const std::string& str : kChromeLayerUrlsRegisteredAsSecure) {
     SCOPED_TRACE(str);
     GURL url(str);
-    EXPECT_TRUE(base::Contains(url::GetSecureSchemes(), url.scheme()));
+    EXPECT_TRUE(
+        std::ranges::contains(url::GetSecureSchemes(), url.GetScheme()));
     EXPECT_TRUE(network::IsUrlPotentiallyTrustworthy(url));
   }
 
@@ -91,7 +93,8 @@ class OriginTrialInitializationTestThread
   // Static helper which can also be called from the main thread.
   static void AccessPolicy(
       ChromeContentClient* content_client,
-      std::vector<blink::OriginTrialPolicy*>* policy_objects) {
+      std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>*
+          policy_objects) {
     // Repeatedly access the lazily-created origin trial policy
     for (int i = 0; i < 20; i++) {
       blink::OriginTrialPolicy* policy = content_client->GetOriginTrialPolicy();
@@ -100,13 +103,15 @@ class OriginTrialInitializationTestThread
     }
   }
 
-  const std::vector<blink::OriginTrialPolicy*>* policy_objects() const {
+  const std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>*
+  policy_objects() const {
     return &policy_objects_;
   }
 
  private:
   raw_ptr<ChromeContentClient> chrome_client_;
-  std::vector<blink::OriginTrialPolicy*> policy_objects_;
+  std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>
+      policy_objects_;
 };
 
 // Test that the lazy initialization of Origin Trial policy is resistant to
@@ -114,7 +119,8 @@ class OriginTrialInitializationTestThread
 // race prevention is no longer sufficient.
 TEST(ChromeContentClientTest, OriginTrialPolicyConcurrentInitialization) {
   ChromeContentClient content_client;
-  std::vector<blink::OriginTrialPolicy*> policy_objects;
+  std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>
+      policy_objects;
   OriginTrialInitializationTestThread thread(&content_client);
   base::PlatformThreadHandle handle;
 
@@ -130,12 +136,14 @@ TEST(ChromeContentClientTest, OriginTrialPolicyConcurrentInitialization) {
 
   blink::OriginTrialPolicy* first_policy = policy_objects[0];
 
-  const std::vector<blink::OriginTrialPolicy*>* all_policy_objects[] = {
-      &policy_objects, thread.policy_objects(),
-  };
+  const std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>*
+      all_policy_objects[] = {
+          &policy_objects,
+          thread.policy_objects(),
+      };
 
-  for (const std::vector<blink::OriginTrialPolicy*>* thread_policy_objects :
-       all_policy_objects) {
+  for (const std::vector<raw_ptr<blink::OriginTrialPolicy, VectorExperimental>>*
+           thread_policy_objects : all_policy_objects) {
     EXPECT_GE(20UL, thread_policy_objects->size());
     for (blink::OriginTrialPolicy* policy : *(thread_policy_objects)) {
       EXPECT_EQ(first_policy, policy);

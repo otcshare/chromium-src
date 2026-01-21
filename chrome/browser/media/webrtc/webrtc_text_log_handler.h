@@ -5,17 +5,16 @@
 #ifndef CHROME_BROWSER_MEDIA_WEBRTC_WEBRTC_TEXT_LOG_HANDLER_H_
 #define CHROME_BROWSER_MEDIA_WEBRTC_WEBRTC_TEXT_LOG_HANDLER_H_
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "net/base/network_interfaces.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chrome {
 namespace mojom {
@@ -71,8 +70,7 @@ class WebRtcTextLogHandler {
 
   // Opens a log and starts logging if allowed by the LogUploader.
   // Returns false if logging could not be started.
-  bool StartLogging(WebRtcLogUploader* log_uploader,
-                    GenericDoneCallback callback);
+  bool StartLogging(GenericDoneCallback callback);
 
   // Stops logging. Log will remain open until UploadLog or DiscardLog is
   // called.
@@ -94,6 +92,8 @@ class WebRtcTextLogHandler {
   // Releases a stopped log to the caller.
   void ReleaseLog(std::unique_ptr<WebRtcLogBuffer>* log_buffer,
                   std::unique_ptr<WebRtcLogMetaDataMap>* meta_data);
+
+  base::RepeatingCallback<void(const std::string&)> GetLogMessageCallback();
 
   // Adds a message to the log.
   void LogMessage(const std::string& message);
@@ -119,10 +119,10 @@ class WebRtcTextLogHandler {
 
   void OnGetNetworkInterfaceList(
       GenericDoneCallback callback,
-      const absl::optional<net::NetworkInterfaceList>& networks);
+      const std::optional<net::NetworkInterfaceList>& networks);
   void OnGetNetworkInterfaceListFinish(
       GenericDoneCallback callback,
-      const absl::optional<net::NetworkInterfaceList>& networks,
+      const std::optional<net::NetworkInterfaceList>& networks,
       const std::string& linux_distro);
 
   SEQUENCE_CHECKER(sequence_checker_);

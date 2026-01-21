@@ -14,6 +14,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/renderer/platform/peerconnection/stats_collector.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 using ::testing::_;
 
@@ -45,14 +46,15 @@ class WebrtcVideoPerfReporterTest : public ::testing::Test {
  public:
   WebrtcVideoPerfReporterTest() {
     mock_recorder_ = std::make_unique<MockWebrtcVideoPerfRecorder>();
-    reporter_.Initialize(
+    reporter_ = MakeGarbageCollected<WebrtcVideoPerfReporter>(
         blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
-        mock_recorder_->CreatePendingRemote());
+        /* notifier */ nullptr, mock_recorder_->CreatePendingRemote());
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<MockWebrtcVideoPerfRecorder> mock_recorder_;
-  WebrtcVideoPerfReporter reporter_;
+  Persistent<WebrtcVideoPerfReporter> reporter_;
 };
 
 TEST_F(WebrtcVideoPerfReporterTest, StoreWebrtcVideoStats) {
@@ -60,8 +62,7 @@ TEST_F(WebrtcVideoPerfReporterTest, StoreWebrtcVideoStats) {
                                                kCodecProfile, 1920 * 1080,
                                                /*hw_accelerated=*/false};
   const auto kExpectedFeaturesA = media::mojom::blink::WebrtcPredictionFeatures(
-      /*is_decode_stats=*/true,
-      static_cast<media::mojom::blink::VideoCodecProfile>(kCodecProfile),
+      /*is_decode_stats=*/true, kCodecProfile,
       /*video_pixels=*/1920 * 1080, /*hardware_accelerated=*/false);
 
   const StatsCollector::VideoStats kVideoStats = {123, 4, 5.6};
@@ -76,7 +77,7 @@ TEST_F(WebrtcVideoPerfReporterTest, StoreWebrtcVideoStats) {
         EXPECT_EQ(kExpectedFeaturesA, *features);
         EXPECT_EQ(kExpectedVideoStats, *video_stats);
       });
-  reporter_.StoreWebrtcVideoStats(kStatsKeyA, kVideoStats);
+  reporter_->StoreWebrtcVideoStats(kStatsKeyA, kVideoStats);
   base::RunLoop().RunUntilIdle();
 
   // Toggle the booleans.
@@ -84,8 +85,7 @@ TEST_F(WebrtcVideoPerfReporterTest, StoreWebrtcVideoStats) {
                                                kCodecProfile, 1920 * 1080,
                                                /*hw_accelerated=*/true};
   const auto kExpectedFeaturesB = media::mojom::blink::WebrtcPredictionFeatures(
-      /*is_decode_stats=*/false,
-      static_cast<media::mojom::blink::VideoCodecProfile>(kCodecProfile),
+      /*is_decode_stats=*/false, kCodecProfile,
       /*video_pixels=*/1920 * 1080, /*hardware_accelerated=*/true);
 
   EXPECT_CALL(*mock_recorder_, UpdateRecord)
@@ -95,7 +95,7 @@ TEST_F(WebrtcVideoPerfReporterTest, StoreWebrtcVideoStats) {
         EXPECT_EQ(kExpectedFeaturesB, *features);
         EXPECT_EQ(kExpectedVideoStats, *video_stats);
       });
-  reporter_.StoreWebrtcVideoStats(kStatsKeyB, kVideoStats);
+  reporter_->StoreWebrtcVideoStats(kStatsKeyB, kVideoStats);
   base::RunLoop().RunUntilIdle();
 }
 

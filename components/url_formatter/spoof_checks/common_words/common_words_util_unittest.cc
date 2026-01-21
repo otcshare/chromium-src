@@ -4,17 +4,14 @@
 
 #include "components/url_formatter/spoof_checks/common_words/common_words_util.h"
 
-#include "testing/gtest/include/gtest/gtest.h"
-
-namespace test {
 #include "components/url_formatter/spoof_checks/common_words/common_words_test-inc.cc"
-}
+#include "testing/gtest/include/gtest/gtest.h"
 
 using url_formatter::common_words::IsCommonWord;
 using url_formatter::common_words::SetCommonWordDAFSAForTesting;
 
 TEST(CommonWordsUtilTest, CommonWordsListContainsWhatsExpected) {
-  SetCommonWordDAFSAForTesting(test::kDafsa, sizeof(test::kDafsa));
+  SetCommonWordDAFSAForTesting(test::kDafsa);
 
   EXPECT_TRUE(IsCommonWord("alphabet"));
   EXPECT_FALSE(IsCommonWord("bravo"));

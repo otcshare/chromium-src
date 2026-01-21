@@ -7,26 +7,46 @@
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
+#include "components/file_access/scoped_file_access.h"
+#include "components/file_access/scoped_file_access_delegate.h"
+#include "components/file_access/test/mock_scoped_file_access_delegate.h"
+#include "content/public/browser/file_url_loader.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/test/simple_url_loader_test_helper.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "net/base/filename_util.h"
+#include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
+#include "services/network/test/mock_url_loader_client.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace content {
+
+using testing::_;
 
 namespace {
 
@@ -110,6 +130,22 @@ class FileURLLoaderFactoryTest : public testing::Test {
     return loader->NetError();
   }
 
+  ::network::URLLoaderCompletionStatus CreateLoaderBypassingSecurityAndRun(
+      std::unique_ptr<network::ResourceRequest> request) {
+    mojo::Receiver<network::mojom::URLLoaderClient> client_receiver{&client_};
+    base::test::TestFuture<::network::URLLoaderCompletionStatus> future;
+    content::CreateFileURLLoaderBypassingSecurityChecks(
+        *request, loader_.BindNewPipeAndPassReceiver(),
+        client_receiver.BindNewPipeAndPassRemote(),
+        /*observer*/ nullptr,
+        /*allow_directory_listing*/ true);
+    EXPECT_CALL(client_, OnComplete)
+        .WillOnce([&future](::network::URLLoaderCompletionStatus st) {
+          future.SetValue(st);
+        });
+    return future.Get();
+  }
+
   std::unique_ptr<network::ResourceRequest> CreateRequestWithMode(
       network::mojom::RequestMode request_mode) {
     auto request = std::make_unique<network::ResourceRequest>();
@@ -141,6 +177,8 @@ class FileURLLoaderFactoryTest : public testing::Test {
   scoped_refptr<SharedCorsOriginAccessListForTesting> access_list_;
   mojo::Remote<network::mojom::URLLoaderFactory> factory_;
   network::mojom::URLResponseHeadPtr response_info_;
+  testing::NiceMock<network::MockURLLoaderClient> client_;
+  mojo::Remote<network::mojom::URLLoader> loader_;
 };
 
 TEST_F(FileURLLoaderFactoryTest, LastModified) {
@@ -182,6 +220,30 @@ TEST_F(FileURLLoaderFactoryTest, Status) {
   ASSERT_EQ(200, ResponseInfo()->headers->response_code());
   ASSERT_EQ("OK", ResponseInfo()->headers->GetStatusText());
 }
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(FileURLLoaderFactoryTest, LoadingFileLargerThan4GB) {
+  // Prepare big file (ie bigger than 4GB).
+  base::File file;
+  base::FilePath file_path;
+  const int64_t kSize = 5'000'000'000;
+  {
+    const base::ScopedAllowBlockingForTesting allow_io;
+    ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
+
+    file.Initialize(file_path, (base::File::Flags::FLAG_CREATE_ALWAYS |
+                                base::File::Flags::FLAG_WRITE |
+                                base::File::Flags::FLAG_READ));
+    ASSERT_TRUE(file.IsValid());
+    ASSERT_TRUE(file.SetLength(kSize));
+  }
+
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = net::FilePathToFileURL(file_path);
+  // Any result is OK, as long as it doesn't crash.
+  CreateLoaderAndRun(std::move(request));
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 TEST_F(FileURLLoaderFactoryTest, MissedRequestInitiator) {
   // CORS-disabled requests can omit |request.request_initiator| though it is
@@ -228,6 +290,235 @@ TEST_F(FileURLLoaderFactoryTest, Allowlist) {
   EXPECT_EQ(net::ERR_FAILED, CreateLoaderAndRun(std::move(request)));
 }
 
+// Test that response type is set correctly for directory listings. Regression
+// test for https://crbug.com/41492103.
+TEST_F(FileURLLoaderFactoryTest, ResponseTypeForDirectoryListings) {
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url =
+      net::FilePathToFileURL(dir.GetPath().StripTrailingSeparators());
+  request->mode = network::mojom::RequestMode::kNoCors;
+  ASSERT_EQ(net::OK, CreateLoaderAndRun(std::move(request)));
+
+  ASSERT_NE(ResponseInfo(), nullptr);
+  EXPECT_EQ(network::mojom::FetchResponseType::kOpaque,
+            ResponseInfo()->response_type);
+}
+
+// Observer that blocks the read operation to keep the file handle open.
+// This is used to test that files can be deleted while open.
+//
+// Thread safety:
+// - On* methods: Called on the background loader thread.
+// - did_start_read() is intended to be called from the main test thread.
+//
+// Lifetime:
+// - Synchronization primitives must outlive this observer.
+class BlockingFileURLLoaderObserver : public FileURLLoaderObserver {
+ public:
+  BlockingFileURLLoaderObserver(base::WaitableEvent* read_started,
+                                base::WaitableEvent* unblock_read)
+      : read_started_(read_started), unblock_read_(unblock_read) {}
+  ~BlockingFileURLLoaderObserver() override = default;
+
+  bool did_start_read() const { return did_start_read_.load(); }
+
+ private:
+  void OnStart() override {}
+  void OnRead(
+      base::span<char> data,
+      mojo::DataPipeProducer::DataSource::ReadResult* read_result) override {
+    // Flag that we successfully entered the read phase.
+    did_start_read_.store(true);
+    // Signal that the read has started and the file handle is open.
+    read_started_->Signal();
+
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+    // Block the read operation until the test allows it to proceed.
+    unblock_read_->Wait();
+  }
+  void OnSeekComplete(int64_t) override {}
+  void OnDone() override {
+    // Safety Fallback:
+    // If OnDone is called before OnRead (e.g., due to file open failure),
+    // we must signal 'read_started' to prevent the test body from
+    // waiting indefinitely (timeout).
+    if (!did_start_read_.load()) {
+      read_started_->Signal();
+    }
+  }
+
+  // Written on background thread, read on main thread.
+  std::atomic<bool> did_start_read_{false};
+  raw_ptr<base::WaitableEvent> read_started_;
+  raw_ptr<base::WaitableEvent> unblock_read_;
+};
+
+// Tests that files opened via file:// URLs can be deleted while being read.
+// This is important for user experience on Windows, where file locks prevent
+// deletion/renaming of open files. Regression test for bug 464436705.
+TEST_F(FileURLLoaderFactoryTest, FileShareDelete) {
+  static constexpr char kTestContent[] = "test content for file share delete";
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath file = temp_dir.GetPath().AppendASCII("test_file.txt");
+  ASSERT_TRUE(base::WriteFile(file, kTestContent));
+
+  network::ResourceRequest request;
+  request.url = net::FilePathToFileURL(file);
+
+  mojo::Remote<network::mojom::URLLoader> loader_remote;
+  network::TestURLLoaderClient client;
+
+  // Events to synchronize the test thread with the background reading thread.
+  base::WaitableEvent read_started(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+  base::WaitableEvent unblock_read(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+  auto observer = std::make_unique<BlockingFileURLLoaderObserver>(
+      &read_started, &unblock_read);
+  // Keep a raw pointer to verify state later
+  BlockingFileURLLoaderObserver* observer_ptr = observer.get();
+  CreateFileURLLoaderBypassingSecurityChecks(
+      request, loader_remote.BindNewPipeAndPassReceiver(),
+      client.CreateRemote(), std::move(observer),
+      /*allow_directory_listing=*/false, /*extra_response_headers=*/nullptr);
+  {
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+    // Wait until the file is being read (or the loader fails).
+    read_started.Wait();
+  }
+
+  // CRITICAL CHECK: Ensure we actually paused inside OnRead.
+  // If did_start_read() is false, it means OnDone was called due to an error
+  // (e.g., file not found/access denied). If we proceeded without this check,
+  // DeleteFile below would succeed (because the handle is closed), giving a
+  // false positive test result.
+  ASSERT_TRUE(observer_ptr->did_start_read())
+      << "Loader finished without starting read. Test setup failed.";
+
+  // Verify that the file can be deleted even while it is being read.
+  // This requires base::File::FLAG_WIN_SHARE_DELETE to be set on Windows.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  EXPECT_TRUE(base::DeleteFile(file));
+
+  // Unblock the read operation to let the loader complete.
+  unblock_read.Signal();
+  client.RunUntilComplete();
+
+  // Verify the loader completed successfully despite the file being deleted.
+  // The content should have been read successfully before deletion.
+  EXPECT_EQ(net::OK, client.completion_status().error_code);
+  EXPECT_TRUE(client.has_received_response());
+}
+
 }  // namespace
+
+TEST_F(FileURLLoaderFactoryTest, DlpInitiatorAllow) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+  auto origin = url::Origin::Create(GURL("https://example.com"));
+
+  EXPECT_CALL(file_access_delegate, RequestFilesAccess)
+      .WillOnce(base::test::RunOnceCallback<2>(
+          file_access::ScopedFileAccess::Allowed()));
+
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file));
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = net::FilePathToFileURL(file);
+  request->request_initiator = origin;
+  ASSERT_EQ(net::OK, CreateLoaderAndRun(std::move(request)));
+
+  ASSERT_NE(ResponseInfo(), nullptr);
+  ASSERT_NE(ResponseInfo()->headers, nullptr);
+  ASSERT_EQ(200, ResponseInfo()->headers->response_code());
+  ASSERT_EQ("OK", ResponseInfo()->headers->GetStatusText());
+}
+
+TEST_F(FileURLLoaderFactoryTest, DlpNoInitiatorAllow) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+
+  EXPECT_CALL(file_access_delegate, RequestFilesAccessForSystem)
+      .WillOnce(base::test::RunOnceCallback<1>(
+          file_access::ScopedFileAccess::Allowed()));
+
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file));
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = net::FilePathToFileURL(file);
+  ASSERT_EQ(net::OK, CreateLoaderAndRun(std::move(request)));
+
+  ASSERT_NE(ResponseInfo(), nullptr);
+  ASSERT_NE(ResponseInfo()->headers, nullptr);
+  ASSERT_EQ(200, ResponseInfo()->headers->response_code());
+  ASSERT_EQ("OK", ResponseInfo()->headers->GetStatusText());
+}
+
+TEST_F(FileURLLoaderFactoryTest, DlpInitiatorDeny) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+  auto origin = url::Origin::Create(GURL("https://example.com"));
+
+  EXPECT_CALL(file_access_delegate, RequestFilesAccess)
+      .WillOnce(base::test::RunOnceCallback<2>(
+          file_access::ScopedFileAccess::Denied()));
+
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file));
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = net::FilePathToFileURL(file);
+  request->request_initiator = origin;
+  ASSERT_EQ(net::ERR_FAILED, CreateLoaderAndRun(std::move(request)));
+}
+
+TEST_F(FileURLLoaderFactoryTest, DlpNoInitiatorDeny) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+
+  EXPECT_CALL(file_access_delegate, RequestFilesAccessForSystem)
+      .WillOnce(base::test::RunOnceCallback<1>(
+          file_access::ScopedFileAccess::Denied()));
+
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file));
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = net::FilePathToFileURL(file);
+  ASSERT_EQ(net::ERR_FAILED, CreateLoaderAndRun(std::move(request)));
+}
+
+TEST_F(FileURLLoaderFactoryTest, DlpRemoteValidFileUrl) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+  base::MockCallback<base::RepeatingCallback<void(
+      const std::vector<base::FilePath>&,
+      base::OnceCallback<void(file_access::ScopedFileAccess)>)>>
+      cb;
+  EXPECT_CALL(cb, Run).WillOnce(
+      base::test::RunOnceCallback<1>(file_access::ScopedFileAccess::Denied()));
+  file_access::ScopedFileAccessDelegate::
+      ScopedRequestFilesAccessCallbackForTesting scoped_callback(cb.Get());
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = GURL("file:///test");
+
+  EXPECT_EQ(net::ERR_FAILED,
+            CreateLoaderBypassingSecurityAndRun(std::move(request)).error_code);
+}
+
+TEST_F(FileURLLoaderFactoryTest, DlpRemoteInvalidFileUrl) {
+  file_access::MockScopedFileAccessDelegate file_access_delegate;
+  base::MockCallback<base::RepeatingCallback<void(
+      const std::vector<base::FilePath>&,
+      base::OnceCallback<void(file_access::ScopedFileAccess)>)>>
+      cb;
+  EXPECT_CALL(cb, Run).Times(0);
+  file_access::ScopedFileAccessDelegate::
+      ScopedRequestFilesAccessCallbackForTesting scoped_callback(cb.Get());
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = GURL("file:///%00");
+
+  EXPECT_EQ(net::ERR_INVALID_URL,
+            CreateLoaderBypassingSecurityAndRun(std::move(request)).error_code);
+}
 
 }  // namespace content

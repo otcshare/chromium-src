@@ -5,16 +5,19 @@
 #ifndef NET_TOOLS_TRANSPORT_SECURITY_STATE_GENERATOR_SPKI_HASH_H_
 #define NET_TOOLS_TRANSPORT_SECURITY_STATE_GENERATOR_SPKI_HASH_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
-#include "base/strings/string_piece.h"
+#include <array>
+#include <string_view>
+
+#include "base/containers/span.h"
+#include "third_party/boringssl/src/include/openssl/sha2.h"
 
 namespace net::transport_security_state {
 
 class SPKIHash {
  public:
-  enum : size_t { kLength = 32 };
-
   SPKIHash();
   ~SPKIHash();
 
@@ -22,22 +25,20 @@ class SPKIHash {
   // SPKI hashes are SHA256. Other algorithms are not supported. Returns true
   // on success and copies the decoded bytes to |data_|. Returns false on
   // failure.
-  bool FromString(base::StringPiece hash_string);
+  bool FromString(std::string_view hash_string);
 
   // Calculates the SHA256 digest over |*input| and copies the result to
   // |data_|.
-  void CalculateFromBytes(const uint8_t* input, size_t input_length);
+  void CalculateFromBytes(base::span<const uint8_t> bytes);
 
-  // Returns the size of the hash in bytes. Harcoded to 32 which is the length
-  // of a SHA256 hash.
-  size_t size() const { return kLength; }
+  // Returns the size of the hash in bytes.
+  size_t size() const { return data_.size(); }
 
-  uint8_t* data() { return data_; }
-  const uint8_t* data() const { return data_; }
+  base::span<uint8_t> span() { return data_; }
+  base::span<const uint8_t> span() const { return data_; }
 
  private:
-  // The bytes of the hash. Current hashes are SHA256 and thus 32 bytes long.
-  uint8_t data_[kLength];
+  std::array<uint8_t, SHA256_DIGEST_LENGTH> data_;
 };
 
 }  // namespace net::transport_security_state

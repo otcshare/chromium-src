@@ -4,79 +4,67 @@
 
 #include "ui/gl/presenter.h"
 
+#include "base/notimplemented.h"
+#include "ui/gfx/gpu_fence.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "ui/gl/dc_layer_overlay_params.h"
+#else
+namespace gl {
+struct DCLayerOverlayParams {};
+}  // namespace gl
+#endif
+
 namespace gl {
 
-Presenter::Presenter(GLDisplayEGL* display, const gfx::Size& size)
-    : SurfacelessEGL(display, size) {}
+Presenter::Presenter() = default;
 Presenter::~Presenter() = default;
 
-bool Presenter::SupportsAsyncSwap() {
-  return true;
-}
-
-bool Presenter::SupportsPostSubBuffer() {
-  return true;
-}
-
-bool Presenter::SupportsCommitOverlayPlanes() {
+bool Presenter::SupportsOverridePlatformSize() const {
   return false;
 }
 
-bool Presenter::IsOffscreen() {
+bool Presenter::SupportsViewporter() const {
   return false;
 }
 
-gfx::SurfaceOrigin Presenter::GetOrigin() const {
-  return gfx::SurfaceOrigin::kTopLeft;
+bool Presenter::SupportsPlaneGpuFences() const {
+  return false;
 }
 
-void Presenter::SwapBuffersAsync(SwapCompletionCallback completion_callback,
-                                 PresentationCallback presentation_callback,
-                                 gfx::FrameData data) {
-  Present(std::move(completion_callback), std::move(presentation_callback),
-          data);
+bool Presenter::ScheduleOverlayPlane(
+    OverlayImage image,
+    std::unique_ptr<gfx::GpuFence> gpu_fence,
+    const gfx::OverlayPlaneData& overlay_plane_data) {
+  NOTIMPLEMENTED();
+  return false;
 }
 
-void Presenter::PostSubBufferAsync(int x,
-                                   int y,
-                                   int width,
-                                   int height,
-                                   SwapCompletionCallback completion_callback,
-                                   PresentationCallback presentation_callback,
-                                   gfx::FrameData data) {
-  Present(std::move(completion_callback), std::move(presentation_callback),
-          data);
+#if BUILDFLAG(IS_APPLE)
+bool Presenter::ScheduleCALayer(
+    const ui::CARendererLayerParams& params,
+    std::vector<gfx::MTLSharedEventFence> backpressure_fences) {
+  NOTIMPLEMENTED();
+  return false;
+}
+#endif
+
+#if BUILDFLAG(IS_WIN)
+void Presenter::ScheduleDCLayers(std::vector<DCLayerOverlayParams> overlays) {
+  NOTIMPLEMENTED();
 }
 
-gfx::SwapResult Presenter::SwapBuffers(PresentationCallback callback,
-                                       gfx::FrameData data) {
-  NOTREACHED();
-  return gfx::SwapResult::SWAP_FAILED;
+bool Presenter::DestroyDCLayerTree() {
+  NOTIMPLEMENTED();
+  return false;
 }
+#endif
 
-gfx::SwapResult Presenter::PostSubBuffer(
-    int x,
-    int y,
-    int width,
-    int height,
-    PresentationCallback presentation_callback,
-    gfx::FrameData data) {
-  NOTREACHED();
-  return gfx::SwapResult::SWAP_FAILED;
-}
-
-gfx::SwapResult Presenter::CommitOverlayPlanes(PresentationCallback callback,
-                                               gfx::FrameData data) {
-  NOTREACHED();
-  return gfx::SwapResult::SWAP_FAILED;
-}
-
-void Presenter::CommitOverlayPlanesAsync(
-    SwapCompletionCallback completion_callback,
-    PresentationCallback presentation_callback,
-    gfx::FrameData data) {
-  Present(std::move(completion_callback), std::move(presentation_callback),
-          data);
+bool Presenter::Resize(const gfx::Size& size,
+                       float scale_factor,
+                       const gfx::ColorSpace& color_space,
+                       bool has_alpha) {
+  return true;
 }
 
 }  // namespace gl

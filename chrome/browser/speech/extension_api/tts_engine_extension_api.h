@@ -10,6 +10,9 @@
 #include "base/values.h"
 #include "content/public/browser/tts_controller.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -21,7 +24,16 @@ extern const char kOnSpeakWithAudioStream[];
 extern const char kOnStop[];
 extern const char kOnPause[];
 extern const char kOnResume[];
-}
+extern const char kOnInstallLanguageRequest[];
+extern const char kOnLanguageStatusRequest[];
+extern const char kOnUninstallLanguageRequest[];
+
+// Specifying where events sent to the TTS Engine originated
+enum class TtsClientSource {
+  CHROMEFEATURE,  // The event originated from a feature within Chrome
+  EXTENSION       // The event originated from an extension
+};
+}  // namespace tts_engine_events
 
 // TtsEngineDelegate implementation used by TtsController.
 class TtsExtensionEngine : public content::TtsEngineDelegate {
@@ -45,13 +57,34 @@ class TtsExtensionEngine : public content::TtsEngineDelegate {
   void Speak(content::TtsUtterance* utterance,
              const content::VoiceData& voice) override;
   void Stop(content::TtsUtterance* utterance) override;
-  void Stop(content::BrowserContext* browser_context,
-            const std::string& engine_id) override;
   void Pause(content::TtsUtterance* utterance) override;
   void Resume(content::TtsUtterance* utterance) override;
+  void UninstallLanguageRequest(content::BrowserContext* browser_context,
+                                const std::string& lang,
+                                const std::string& client_id,
+                                int source,
+                                bool uninstall_immediately) override;
+  void InstallLanguageRequest(content::BrowserContext* browser_context,
+                              const std::string& lang,
+                              const std::string& client_id,
+                              int source) override;
+  void LanguageStatusRequest(content::BrowserContext* browser_context,
+                             const std::string& lang,
+                             const std::string& client_id,
+                             int source) override;
   void LoadBuiltInTtsEngine(content::BrowserContext* browser_context) override;
   bool IsBuiltInTtsEngineInitialized(
       content::BrowserContext* browser_context) override;
+
+  // Stops the given speech engine loaded in |browser_context|.
+  void Stop(content::BrowserContext* browser_context,
+            const std::string& engine_id);
+  // Pauses the given speech engine loaded in |browser_context|.
+  void Pause(content::BrowserContext* browser_context,
+             const std::string& engine_id);
+  // Resumes the given speech engine loaded in |browser_context|.
+  void Resume(content::BrowserContext* browser_context,
+              const std::string& engine_id);
 
   void DisableBuiltInTTSEngineForTesting() {
     disable_built_in_tts_engine_for_testing_ = true;
@@ -60,6 +93,10 @@ class TtsExtensionEngine : public content::TtsEngineDelegate {
  protected:
   base::Value::List BuildSpeakArgs(content::TtsUtterance* utterance,
                                    const content::VoiceData& voice);
+  base::Value::List BuildLanguagePackArgs(
+      const std::string& lang,
+      const std::string& client_id,
+      tts_engine_events::TtsClientSource source);
 
   bool disable_built_in_tts_engine_for_testing_ = false;
 };
@@ -68,7 +105,7 @@ class TtsExtensionEngine : public content::TtsEngineDelegate {
 // runtime.
 class ExtensionTtsEngineUpdateVoicesFunction : public ExtensionFunction {
  private:
-  ~ExtensionTtsEngineUpdateVoicesFunction() override {}
+  ~ExtensionTtsEngineUpdateVoicesFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("ttsEngine.updateVoices", TTSENGINE_UPDATEVOICES)
 };
@@ -77,7 +114,7 @@ class ExtensionTtsEngineUpdateVoicesFunction : public ExtensionFunction {
 // to send events back to the client that's calling tts.speak().
 class ExtensionTtsEngineSendTtsEventFunction : public ExtensionFunction {
  private:
-  ~ExtensionTtsEngineSendTtsEventFunction() override {}
+  ~ExtensionTtsEngineSendTtsEventFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("ttsEngine.sendTtsEvent", TTSENGINE_SENDTTSEVENT)
 };
@@ -89,6 +126,15 @@ class ExtensionTtsEngineSendTtsAudioFunction : public ExtensionFunction {
   ~ExtensionTtsEngineSendTtsAudioFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("ttsEngine.sendTtsAudio", TTSENGINE_SENDTTSAUDIO)
+};
+
+// Function that allows tts engines to update the status of voice for a language
+class ExtensionTtsEngineUpdateLanguageFunction : public ExtensionFunction {
+ private:
+  ~ExtensionTtsEngineUpdateLanguageFunction() override = default;
+  ResponseAction Run() override;
+  DECLARE_EXTENSION_FUNCTION("ttsEngine.updateLanguage",
+                             TTSENGINE_UPDATELANGUAGE)
 };
 
 #endif  // CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_API_H_

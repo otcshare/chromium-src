@@ -4,8 +4,9 @@
 
 #include "ui/ozone/platform/drm/host/drm_window_host.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/display/display.h"
 #include "ui/events/devices/device_data_manager.h"
@@ -73,7 +74,6 @@ void DrmWindowHost::Close() {}
 
 bool DrmWindowHost::IsVisible() const {
   NOTREACHED();
-  return true;
 }
 
 void DrmWindowHost::PrepareForShutdown() {}
@@ -90,14 +90,13 @@ gfx::Rect DrmWindowHost::GetBoundsInPixels() const {
 }
 
 void DrmWindowHost::SetBoundsInDIP(const gfx::Rect& bounds) {
-  NOTREACHED();
   // No scaling at DRM level and should always use pixel bounds.
+  NOTREACHED();
 }
 
 gfx::Rect DrmWindowHost::GetBoundsInDIP() const {
   // No scaling at DRM level and should always use pixel bounds.
   NOTREACHED();
-  return bounds_;
 }
 
 void DrmWindowHost::SetTitle(const std::u16string& title) {}
@@ -148,6 +147,11 @@ void DrmWindowHost::MoveCursorTo(const gfx::Point& location) {
   event_factory_->WarpCursorTo(widget_, gfx::PointF(location));
 }
 
+void DrmWindowHost::SynthesizeMouseMove(const gfx::PointF& location) {
+  window_manager_->ForceCursorUpdateOnNextMouseMove();
+  event_factory_->SynthesizeMouseMove(location);
+}
+
 void DrmWindowHost::ConfineCursorToBounds(const gfx::Rect& bounds) {
   if (cursor_confined_bounds_ == bounds)
     return;
@@ -162,7 +166,6 @@ void DrmWindowHost::SetRestoredBoundsInDIP(const gfx::Rect& bounds) {
 
 gfx::Rect DrmWindowHost::GetRestoredBoundsInDIP() const {
   NOTREACHED();
-  return gfx::Rect();
 }
 
 void DrmWindowHost::SetWindowIcons(const gfx::ImageSkia& window_icon,
@@ -174,8 +177,8 @@ void DrmWindowHost::SizeConstraintsChanged() {
   NOTREACHED();
 }
 
-void DrmWindowHost::OnMouseEnter() {
-  delegate_->OnMouseEnter();
+void DrmWindowHost::OnCursorUpdate() {
+  delegate_->OnCursorUpdate();
 }
 
 bool DrmWindowHost::CanDispatchEvent(const PlatformEvent& event) {

@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/to_string.h"
 #include "components/payments/core/error_strings.h"
 #include "components/payments/core/native_error_strings.h"
 #include "components/payments/core/payment_address.h"
@@ -63,7 +64,7 @@ PaymentHandlerHost::PaymentHandlerHost(content::WebContents* web_contents,
   web_contents_ = web_contents->GetWeakPtr();
 }
 
-PaymentHandlerHost::~PaymentHandlerHost() {}
+PaymentHandlerHost::~PaymentHandlerHost() = default;
 
 mojo::PendingRemote<mojom::PaymentHandlerHost> PaymentHandlerHost::Bind() {
   receiver_.reset();
@@ -148,12 +149,13 @@ void PaymentHandlerHost::UpdateWith(
         data.emplace(prefix + " Label", option->label);
         data.emplace(prefix + " Amount Currency", option->amount->currency);
         data.emplace(prefix + " Amount Value", option->amount->value);
-        data.emplace(prefix + " Selected", option->selected ? "true" : "false");
+        data.emplace(prefix + " Selected", base::ToString(option->selected));
       }
     }
 
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, blink::StorageKey(sw_origin_for_logs_),
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler, "Update with",
         /*instance_id=*/payment_request_id_for_logs_, data);
   }
@@ -203,7 +205,8 @@ void PaymentHandlerHost::ChangePaymentMethod(
   auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, blink::StorageKey(sw_origin_for_logs_),
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change payment method",
         /*instance_id=*/payment_request_id_for_logs_,
@@ -233,7 +236,8 @@ void PaymentHandlerHost::ChangeShippingOption(
   auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, blink::StorageKey(sw_origin_for_logs_),
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change shipping option",
         /*instance_id=*/payment_request_id_for_logs_,
@@ -284,7 +288,8 @@ void PaymentHandlerHost::ChangeShippingAddress(
     shipping_address_map.emplace("Phone", shipping_address->phone);
 
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, blink::StorageKey(sw_origin_for_logs_),
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change shipping address",
         /*instance_id=*/payment_request_id_for_logs_, shipping_address_map);

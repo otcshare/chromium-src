@@ -13,10 +13,9 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "chrome/android/chrome_jni_headers/OfflinePageEvaluationBridge_jni.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/offline_pages/android/background_scheduler_bridge.h"
 #include "chrome/browser/offline_pages/android/evaluation/evaluation_test_scheduler.h"
@@ -24,7 +23,6 @@
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
 #include "chrome/browser/offline_pages/request_coordinator_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/common/chrome_constants.h"
 #include "components/offline_pages/core/background/offliner.h"
 #include "components/offline_pages/core/background/offliner_policy.h"
@@ -38,10 +36,12 @@
 #include "components/offline_pages/core/offline_page_model.h"
 #include "content/public/browser/browser_context.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/OfflinePageEvaluationBridge_jni.h"
+
 using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF16ToJavaString;
 using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
@@ -58,37 +58,34 @@ const char kNativeTag[] = "OPNative";
 const base::FilePath::CharType kTestRequestQueueDirname[] =
     FILE_PATH_LITERAL("Offline Pages/test_request_queue");
 
-void JNI_OfflinePageEvaluationBridge_ToJavaOfflinePageList(
+static void JNI_OfflinePageEvaluationBridge_ToJavaOfflinePageList(
     JNIEnv* env,
     const JavaRef<jobject>& j_result_obj,
     const std::vector<OfflinePageItem>& offline_pages) {
   for (const OfflinePageItem& offline_page : offline_pages) {
     Java_OfflinePageEvaluationBridge_createOfflinePageAndAddToList(
-        env, j_result_obj,
-        ConvertUTF8ToJavaString(env, offline_page.url.spec()),
-        offline_page.offline_id,
-        ConvertUTF8ToJavaString(env, offline_page.client_id.name_space),
-        ConvertUTF8ToJavaString(env, offline_page.client_id.id),
+        env, j_result_obj, offline_page.url.spec(), offline_page.offline_id,
+        offline_page.client_id.name_space, offline_page.client_id.id,
         ConvertUTF16ToJavaString(env, offline_page.title),
-        ConvertUTF8ToJavaString(env, offline_page.file_path.value()),
-        offline_page.file_size, offline_page.creation_time.ToJavaTime(),
-        offline_page.access_count, offline_page.last_access_time.ToJavaTime(),
-        ConvertUTF8ToJavaString(env, offline_page.request_origin));
+        offline_page.file_path.value(), offline_page.file_size,
+        offline_page.creation_time.InMillisecondsSinceUnixEpoch(),
+        offline_page.access_count,
+        offline_page.last_access_time.InMillisecondsSinceUnixEpoch(),
+        offline_page.request_origin);
   }
 }
 
-ScopedJavaLocalRef<jobject>
+static ScopedJavaLocalRef<jobject>
 JNI_OfflinePageEvaluationBridge_ToJavaSavePageRequest(
     JNIEnv* env,
     const SavePageRequest& request) {
   return Java_OfflinePageEvaluationBridge_createSavePageRequest(
       env, static_cast<int>(request.request_state()), request.request_id(),
-      ConvertUTF8ToJavaString(env, request.url().spec()),
-      ConvertUTF8ToJavaString(env, request.client_id().name_space),
-      ConvertUTF8ToJavaString(env, request.client_id().id));
+      request.url().spec(), request.client_id().name_space,
+      request.client_id().id);
 }
 
-ScopedJavaLocalRef<jobjectArray>
+static ScopedJavaLocalRef<jobjectArray>
 JNI_OfflinePageEvaluationBridge_CreateJavaSavePageRequests(
     JNIEnv* env,
     std::vector<std::unique_ptr<SavePageRequest>> requests) {
@@ -188,18 +185,15 @@ RequestCoordinator* GetRequestCoordinator(Profile* profile,
 
 }  // namespace
 
-static jlong JNI_OfflinePageEvaluationBridge_CreateBridgeForProfile(
+static int64_t JNI_OfflinePageEvaluationBridge_CreateBridgeForProfile(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_profile,
-    const jboolean j_use_evaluation_scheduler) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile);
-
+    Profile* profile,
+    const bool j_use_evaluation_scheduler) {
   OfflinePageModel* offline_page_model =
       OfflinePageModelFactory::GetForBrowserContext(profile);
 
-  RequestCoordinator* request_coordinator = GetRequestCoordinator(
-      profile, static_cast<bool>(j_use_evaluation_scheduler));
+  RequestCoordinator* request_coordinator =
+      GetRequestCoordinator(profile, j_use_evaluation_scheduler);
 
   if (offline_page_model == nullptr || request_coordinator == nullptr)
     return 0;
@@ -207,12 +201,11 @@ static jlong JNI_OfflinePageEvaluationBridge_CreateBridgeForProfile(
   OfflinePageEvaluationBridge* bridge = new OfflinePageEvaluationBridge(
       env, obj, profile, offline_page_model, request_coordinator);
 
-  return reinterpret_cast<jlong>(bridge);
+  return reinterpret_cast<int64_t>(bridge);
 }
 
 OfflinePageEvaluationBridge::OfflinePageEvaluationBridge(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
     content::BrowserContext* browser_context,
     OfflinePageModel* offline_page_model,
     RequestCoordinator* request_coordinator)
@@ -229,10 +222,10 @@ OfflinePageEvaluationBridge::OfflinePageEvaluationBridge(
   request_coordinator_->GetLogger()->SetClient(this);
 }
 
-OfflinePageEvaluationBridge::~OfflinePageEvaluationBridge() {}
+OfflinePageEvaluationBridge::~OfflinePageEvaluationBridge() = default;
 
 void OfflinePageEvaluationBridge::Destroy(JNIEnv* env,
-                                          const JavaParamRef<jobject>&) {
+                                          const JavaRef<jobject>&) {
   offline_page_model_->RemoveObserver(this);
   request_coordinator_->RemoveObserver(this);
   delete this;
@@ -295,16 +288,13 @@ void OfflinePageEvaluationBridge::CustomLog(const std::string& message) {
   ScopedJavaLocalRef<jobject> obj = weak_java_ref_.get(env);
   if (obj.is_null())
     return;
-  Java_OfflinePageEvaluationBridge_log(env, obj,
-                                       ConvertUTF8ToJavaString(env, kNativeTag),
-                                       ConvertUTF8ToJavaString(env, message));
+  Java_OfflinePageEvaluationBridge_log(env, obj, kNativeTag, message);
 }
 
 void OfflinePageEvaluationBridge::GetAllPages(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_result_obj,
-    const JavaParamRef<jobject>& j_callback_obj) {
+    const JavaRef<jobject>& j_result_obj,
+    const JavaRef<jobject>& j_callback_obj) {
   DCHECK(j_result_obj);
   DCHECK(j_callback_obj);
 
@@ -317,8 +307,7 @@ void OfflinePageEvaluationBridge::GetAllPages(
 
 bool OfflinePageEvaluationBridge::PushRequestProcessing(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_callback_obj) {
+    const JavaRef<jobject>& j_callback_obj) {
   ScopedJavaGlobalRef<jobject> j_callback_ref(j_callback_obj);
   DCHECK(request_coordinator_);
   base::android::RunBooleanCallbackAndroid(j_callback_obj, false);
@@ -327,28 +316,25 @@ bool OfflinePageEvaluationBridge::PushRequestProcessing(
       &base::android::RunBooleanCallbackAndroid, j_callback_ref));
 }
 
-void OfflinePageEvaluationBridge::SavePageLater(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& j_url,
-    const JavaParamRef<jstring>& j_namespace,
-    const JavaParamRef<jstring>& j_client_id,
-    jboolean user_requested) {
+void OfflinePageEvaluationBridge::SavePageLater(JNIEnv* env,
+                                                std::string& url,
+                                                std::string& name_space,
+                                                std::string& client_id,
+                                                bool user_requested) {
   offline_pages::ClientId client_id;
-  client_id.name_space = ConvertJavaStringToUTF8(env, j_namespace);
-  client_id.id = ConvertJavaStringToUTF8(env, j_client_id);
+  client_id.name_space = name_space;
+  client_id.id = client_id;
 
   RequestCoordinator::SavePageLaterParams params;
-  params.url = GURL(ConvertJavaStringToUTF8(env, j_url));
+  params.url = GURL(url);
   params.client_id = client_id;
-  params.user_requested = static_cast<bool>(user_requested);
+  params.user_requested = user_requested;
   request_coordinator_->SavePageLater(params);
 }
 
 void OfflinePageEvaluationBridge::GetRequestsInQueue(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_callback_obj) {
+    const JavaRef<jobject>& j_callback_obj) {
   ScopedJavaGlobalRef<jobject> j_callback_ref(j_callback_obj);
   request_coordinator_->GetAllRequests(
       base::BindOnce(&OnGetAllRequestsDone, j_callback_ref));
@@ -356,9 +342,8 @@ void OfflinePageEvaluationBridge::GetRequestsInQueue(
 
 void OfflinePageEvaluationBridge::RemoveRequestsFromQueue(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jlongArray>& j_request_ids,
-    const JavaParamRef<jobject>& j_callback_obj) {
+    const JavaRef<jlongArray>& j_request_ids,
+    const JavaRef<jobject>& j_callback_obj) {
   std::vector<int64_t> request_ids;
   base::android::JavaLongArrayToInt64Vector(env, j_request_ids, &request_ids);
   ScopedJavaGlobalRef<jobject> j_callback_ref(j_callback_obj);
@@ -376,3 +361,5 @@ void OfflinePageEvaluationBridge::NotifyIfDoneLoading() const {
 
 }  // namespace android
 }  // namespace offline_pages
+
+DEFINE_JNI(OfflinePageEvaluationBridge)

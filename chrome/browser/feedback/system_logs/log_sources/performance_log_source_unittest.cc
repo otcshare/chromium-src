@@ -2,25 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/feedback/system_logs/log_sources/performance_log_source.h"
+
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/power_monitor_test_utils.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/feedback/system_logs/log_sources/performance_log_source.h"
+#include "build/build_config.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/performance_manager/test_support/fake_power_monitor_source.h"
 #include "chrome/browser/performance_manager/test_support/test_user_performance_tuning_manager_environment.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
+#include "components/prefs/pref_service.h"
 
 class QuitRunLoopOnPowerStateChangeObserver
-    : public performance_manager::user_tuning::UserPerformanceTuningManager::
+    : public performance_manager::user_tuning::BatterySaverModeManager::
           Observer {
  public:
   explicit QuitRunLoopOnPowerStateChangeObserver(
@@ -37,7 +38,9 @@ class QuitRunLoopOnPowerStateChangeObserver
 
 namespace {
 
-constexpr char kHighEfficiencyModeActiveKey[] = "high_efficiency_mode_active";
+constexpr char kMemorySaverModeActiveKey[] = "high_efficiency_mode_active";
+
+#if !BUILDFLAG(IS_CHROMEOS)
 constexpr char kBatterySaverModeStateKey[] = "battery_saver_state";
 constexpr char kBatterySaverModeActiveKey[] = "battery_saver_mode_active";
 constexpr char kBatterySaverModeDisabledForSessionKey[] =
@@ -45,13 +48,11 @@ constexpr char kBatterySaverModeDisabledForSessionKey[] =
 constexpr char kHasBatteryKey[] = "device_has_battery";
 constexpr char kUsingBatteryPowerKey[] = "device_using_battery_power";
 constexpr char kBatteryPercentage[] = "device_battery_percentage";
+#endif
 
 class PerformanceLogSourceTest : public BrowserWithTestWindowTest {
  public:
-  PerformanceLogSourceTest()
-      : testing_local_state_(TestingBrowserProcess::GetGlobal()) {
-    local_state_ = testing_local_state_.Get();
-  }
+  PerformanceLogSourceTest() = default;
 
   PerformanceLogSourceTest(const PerformanceLogSourceTest&) = delete;
   PerformanceLogSourceTest& operator=(const PerformanceLogSourceTest&) = delete;
@@ -59,19 +60,10 @@ class PerformanceLogSourceTest : public BrowserWithTestWindowTest {
   ~PerformanceLogSourceTest() override = default;
 
   void SetUp() override {
-    feature_list_.InitWithFeaturesAndParameters(
-        {
-            {performance_manager::features::kBatterySaverModeAvailable, {}},
-            {performance_manager::features::kHighEfficiencyModeAvailable, {}},
-        },
-        {});
-    environment_.SetUp(local_state_);
-    tuning_manager_ = performance_manager::user_tuning::
-        UserPerformanceTuningManager::GetInstance();
+    environment_.SetUp(TestingBrowserProcess::GetGlobal()->local_state());
   }
 
   void TearDown() override {
-    base::PowerMonitor::ShutdownForTesting();
     environment_.TearDown();
   }
 
@@ -93,15 +85,15 @@ class PerformanceLogSourceTest : public BrowserWithTestWindowTest {
                               BatterySaverModeState::kEnabled
                         : performance_manager::user_tuning::prefs::
                               BatterySaverModeState::kDisabled;
-    local_state_->SetInteger(
+    TestingBrowserProcess::GetGlobal()->local_state()->SetInteger(
         performance_manager::user_tuning::prefs::kBatterySaverModeState,
         static_cast<int>(mode));
   }
 
-  void SetHighEfficiencyModeEnabled(bool enabled) {
-    local_state_->SetBoolean(
-        performance_manager::user_tuning::prefs::kHighEfficiencyModeEnabled,
-        enabled);
+  void SetMemorySaverModeEnabled(bool enabled) {
+    performance_manager::user_tuning::UserPerformanceTuningManager::
+        GetInstance()
+            ->SetMemorySaverModeEnabled(enabled);
   }
 
   void SetOnBatteryPower(bool on_battery_power) {
@@ -109,31 +101,33 @@ class PerformanceLogSourceTest : public BrowserWithTestWindowTest {
     std::unique_ptr<QuitRunLoopOnPowerStateChangeObserver> observer =
         std::make_unique<QuitRunLoopOnPowerStateChangeObserver>(
             run_loop.QuitClosure());
-    tuning_manager_->AddObserver(observer.get());
-    environment_.power_monitor_source()->SetOnBatteryPower(on_battery_power);
+    performance_manager::user_tuning::BatterySaverModeManager::GetInstance()
+        ->AddObserver(observer.get());
+    environment_.power_monitor_source()->SetBatteryPowerStatus(
+        on_battery_power
+            ? base::PowerStateObserver::BatteryPowerStatus::kBatteryPower
+            : base::PowerStateObserver::BatteryPowerStatus::kExternalPower);
     run_loop.Run();
-    tuning_manager_->RemoveObserver(observer.get());
+    performance_manager::user_tuning::BatterySaverModeManager::GetInstance()
+        ->RemoveObserver(observer.get());
   }
 
-  base::test::ScopedFeatureList feature_list_;
-  ScopedTestingLocalState testing_local_state_;
   performance_manager::user_tuning::TestUserPerformanceTuningManagerEnvironment
       environment_;
-  raw_ptr<TestingPrefServiceSimple> local_state_ = nullptr;
-  raw_ptr<performance_manager::user_tuning::UserPerformanceTuningManager>
-      tuning_manager_ = nullptr;
 };
 
-TEST_F(PerformanceLogSourceTest, CheckHighEfficiencyModeLogs) {
-  SetHighEfficiencyModeEnabled(true);
+TEST_F(PerformanceLogSourceTest, CheckMemorySaverModeLogs) {
+  SetMemorySaverModeEnabled(true);
   auto response = GetPerformanceLogs();
-  EXPECT_EQ("true", response->at(kHighEfficiencyModeActiveKey));
+  EXPECT_EQ("true", response->at(kMemorySaverModeActiveKey));
 
-  SetHighEfficiencyModeEnabled(false);
+  SetMemorySaverModeEnabled(false);
   response = GetPerformanceLogs();
-  EXPECT_EQ("false", response->at(kHighEfficiencyModeActiveKey));
+  EXPECT_EQ("false", response->at(kMemorySaverModeActiveKey));
 }
 
+#if !BUILDFLAG(IS_CHROMEOS)
+// Battery and battery saver logs are not used on ChromeOS.
 TEST_F(PerformanceLogSourceTest, CheckBatterySaverModeLogs) {
   SetBatterySaverModeEnabled(true);
   auto response = GetPerformanceLogs();
@@ -174,5 +168,6 @@ TEST_F(PerformanceLogSourceTest, CheckBatteryDetailLogs) {
   EXPECT_EQ("false", response->at(kUsingBatteryPowerKey));
   EXPECT_EQ("100", response->at(kBatteryPercentage));
 }
+#endif
 
 }  // namespace

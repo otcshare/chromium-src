@@ -5,33 +5,27 @@
 #ifndef CHROME_BROWSER_SYNC_FILE_SYSTEM_SYNC_FILE_SYSTEM_SERVICE_H_
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_SYNC_FILE_SYSTEM_SERVICE_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "chrome/browser/sync_file_system/conflict_resolution_policy.h"
-#include "chrome/browser/sync_file_system/file_status_observer.h"
 #include "chrome/browser/sync_file_system/remote_file_sync_service.h"
 #include "chrome/browser/sync_file_system/sync_callbacks.h"
 #include "chrome/browser/sync_file_system/sync_process_runner.h"
 #include "chrome/browser/sync_file_system/sync_service_state.h"
 #include "chrome/browser/sync_file_system/task_logger.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/sync/driver/sync_service_observer.h"
+#include "components/sync/service/sync_service_observer.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "url/gurl.h"
 
 class Profile;
-
-namespace content {
-class StoragePartition;
-}
 
 namespace storage {
 class FileSystemContext;
@@ -46,20 +40,19 @@ namespace sync_file_system {
 class LocalFileSyncService;
 class LocalSyncRunner;
 class RemoteSyncRunner;
-class SyncEventObserver;
 
-class SyncFileSystemService
+// Service implementing the chrome.syncFileSystem() API for the deprecated
+// Chrome Apps platform.
+// https://developer.chrome.com/docs/extensions/reference/syncFileSystem/
+class SyncFileSystemService final
     : public KeyedService,
       public SyncProcessRunner::Client,
       public syncer::SyncServiceObserver,
-      public FileStatusObserver,
-      public extensions::ExtensionRegistryObserver,
-      public base::SupportsWeakPtr<SyncFileSystemService> {
+      public extensions::ExtensionRegistryObserver {
  public:
-  using DumpFilesCallback = base::OnceCallback<void(base::Value::List)>;
-  using ExtensionStatusMapCallback =
-      base::OnceCallback<void(const RemoteFileSyncService::OriginStatusMap&)>;
-
+  // Uses SyncFileSystemServiceFactory instead.
+  explicit SyncFileSystemService(Profile* profile);
+  ~SyncFileSystemService() override;
   SyncFileSystemService(const SyncFileSystemService&) = delete;
   SyncFileSystemService& operator=(const SyncFileSystemService&) = delete;
 
@@ -70,18 +63,9 @@ class SyncFileSystemService
                         const GURL& app_origin,
                         SyncStatusCallback callback);
 
-  void GetExtensionStatusMap(ExtensionStatusMapCallback callback);
-  void DumpFiles(content::StoragePartition* storage_partition,
-                 const GURL& origin,
-                 DumpFilesCallback callback);
-  void DumpDatabase(DumpFilesCallback callback);
-
   // Returns the file |url|'s sync status.
   void GetFileSyncStatus(const storage::FileSystemURL& url,
                          SyncFileStatusCallback callback);
-
-  void AddSyncEventObserver(SyncEventObserver* observer);
-  void RemoveSyncEventObserver(SyncEventObserver* observer);
 
   LocalChangeProcessor* GetLocalChangeProcessor(const GURL& origin);
 
@@ -105,9 +89,6 @@ class SyncFileSystemService
   friend class LocalSyncRunner;
   friend class RemoteSyncRunner;
 
-  explicit SyncFileSystemService(Profile* profile);
-  ~SyncFileSystemService() override;
-
   void Initialize(std::unique_ptr<LocalFileSyncService> local_file_service,
                   std::unique_ptr<RemoteFileSyncService> remote_file_service);
 
@@ -118,19 +99,6 @@ class SyncFileSystemService
   void DidRegisterOrigin(const GURL& app_origin,
                          SyncStatusCallback callback,
                          SyncStatusCode status);
-
-  void DidInitializeFileSystemForDump(const GURL& app_origin,
-                                      DumpFilesCallback callback,
-                                      SyncStatusCode status);
-  void DidDumpFiles(const GURL& app_origin,
-                    DumpFilesCallback callback,
-                    base::Value::List files);
-
-  void DidDumpDatabase(DumpFilesCallback callback, base::Value::List list);
-
-  void DidGetExtensionStatusMap(
-      ExtensionStatusMapCallback callback,
-      std::unique_ptr<RemoteFileSyncService::OriginStatusMap> status_map);
 
   // Overrides sync_enabled_ setting. This should be called only by tests.
   void SetSyncEnabledForTesting(bool enabled);
@@ -157,13 +125,7 @@ class SyncFileSystemService
 
   // syncer::SyncServiceObserver implementation.
   void OnStateChanged(syncer::SyncService* sync) override;
-
-  // SyncFileStatusObserver implementation.
-  void OnFileStatusChanged(const storage::FileSystemURL& url,
-                           SyncFileType file_type,
-                           SyncFileStatus sync_status,
-                           SyncAction action_taken,
-                           SyncDirection direction) override;
+  void OnSyncShutdown(syncer::SyncService* sync) override;
 
   // Check the profile's sync preference settings and call
   // remote_file_service_->SetSyncEnabled() to update the status.
@@ -187,10 +149,10 @@ class SyncFileSystemService
   bool sync_enabled_;
 
   TaskLogger task_logger_;
-  base::ObserverList<SyncEventObserver>::Unchecked observers_;
 
   bool promoting_demoted_changes_;
   base::OnceClosure idle_callback_;
+  base::WeakPtrFactory<SyncFileSystemService> weak_ptr_factory_{this};
 };
 
 }  // namespace sync_file_system

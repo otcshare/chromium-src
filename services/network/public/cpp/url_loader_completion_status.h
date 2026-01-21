@@ -7,16 +7,16 @@
 
 #include <stdint.h>
 
+#include <optional>
+
 #include "base/component_export.h"
 #include "base/time/time.h"
-#include "net/base/proxy_server.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/ssl/ssl_info.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/mojom/blocked_by_response_reason.mojom-shared.h"
 #include "services/network/public/mojom/cors.mojom-shared.h"
 #include "services/network/public/mojom/trust_tokens.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 
 namespace network {
@@ -57,9 +57,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) URLLoaderCompletionStatus {
   // cache.
   bool exists_in_cache = false;
 
-  // A copy of the data requested exists in the in-memory cache.
-  bool exists_in_memory_cache = false;
-
   // Time the request completed.
   base::TimeTicks completion_time;
 
@@ -73,7 +70,7 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) URLLoaderCompletionStatus {
   int64_t decoded_body_length = 0;
 
   // Optional CORS error details.
-  absl::optional<CorsErrorStatus> cors_error_status;
+  std::optional<CorsErrorStatus> cors_error_status;
 
   // Optional Trust Tokens (https://github.com/wicg/trust-token-api) error
   // details.
@@ -89,27 +86,21 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) URLLoaderCompletionStatus {
       mojom::TrustTokenOperationStatus::kOk;
 
   // Optional SSL certificate info.
-  absl::optional<net::SSLInfo> ssl_info;
+  std::optional<net::SSLInfo> ssl_info;
 
   // More detailed reason for failing the response with
   // net::ERR_BLOCKED_BY_RESPONSE |error_code|.
-  absl::optional<mojom::BlockedByResponseReason> blocked_by_response_reason;
+  std::optional<mojom::BlockedByResponseReason> blocked_by_response_reason;
 
-  // Set when response blocked by CORB needs to be reported to the DevTools
+  // Set when response blocked by ORB needs to be reported to the DevTools
   // console.
-  bool should_report_corb_blocking = false;
-
-  // The proxy server used for this request, if any.
-  net::ProxyServer proxy_server;
+  bool should_report_orb_blocking = false;
 
   // Host resolution error info for this request.
   net::ResolveErrorInfo resolve_error_info;
 
   // Whether the initiator of this request should be collapsed.
   bool should_collapse_initiator = false;
-
-  // Whether a pervasive payload is requested.
-  bool pervasive_payload_requested = false;
 
   // Write a representation of this struct into a trace.
   void WriteIntoTrace(perfetto::TracedValue context) const;

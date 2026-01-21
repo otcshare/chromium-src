@@ -6,10 +6,10 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "cc/layers/layer.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_as_json.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_recorder.h"
@@ -32,10 +32,8 @@ bool RasterInvalidationTracking::ShouldAlwaysTrack() {
 }
 
 bool RasterInvalidationTracking::IsTracingRasterInvalidations() {
-  bool tracing_enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(
-      TRACE_DISABLED_BY_DEFAULT("blink.invalidation"), &tracing_enabled);
-  return tracing_enabled;
+  return TRACE_EVENT_CATEGORY_ENABLED(
+      TRACE_DISABLED_BY_DEFAULT("blink.invalidation"));
 }
 
 void RasterInvalidationTracking::AddInvalidation(
@@ -89,7 +87,7 @@ void RasterInvalidationTracking::AsJSON(JSONObject* json, bool detailed) const {
     std::sort(sorted.begin(), sorted.end(), &CompareRasterInvalidationInfo);
     auto invalidations_json = std::make_unique<JSONArray>();
     gfx::Rect last_rect;
-    for (auto* it = sorted.begin(); it != sorted.end(); it++) {
+    for (auto it = sorted.begin(); it != sorted.end(); UNSAFE_TODO(++it)) {
       const auto& info = *it;
       if (detailed) {
         auto info_json = std::make_unique<JSONObject>();
@@ -163,7 +161,7 @@ void RasterInvalidationTracking::CheckUnderInvalidations(
   cc::Region invalidation_region;
   if (!g_simulate_raster_under_invalidations)
     invalidation_region = invalidation_region_since_last_paint_;
-  absl::optional<PaintRecord> old_record = std::move(last_painted_record_);
+  std::optional<PaintRecord> old_record = std::move(last_painted_record_);
 
   last_painted_record_ = new_record;
   last_interest_rect_ = new_interest_rect;
@@ -204,9 +202,9 @@ void RasterInvalidationTracking::CheckUnderInvalidations(
     // In the common case of no under-invalidation, memcmp/memset is much faster
     // than the pixel-by-pixel comparison below.
     void* new_row_addr = new_bitmap.pixmap().writable_addr(0, bitmap_y);
-    if (memcmp(old_bitmap.pixmap().addr(0, bitmap_y), new_row_addr,
-               new_bitmap.rowBytes()) == 0) {
-      memset(new_row_addr, 0, new_bitmap.rowBytes());
+    if (UNSAFE_TODO(memcmp(old_bitmap.pixmap().addr(0, bitmap_y), new_row_addr,
+                           new_bitmap.rowBytes())) == 0) {
+      UNSAFE_TODO(memset(new_row_addr, 0, new_bitmap.rowBytes()));
       continue;
     }
 

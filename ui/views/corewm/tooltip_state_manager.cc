@@ -5,17 +5,16 @@
 #include "ui/views/corewm/tooltip_state_manager.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/text_elider.h"
-#include "ui/ozone/public/ozone_platform.h"
 #include "ui/wm/public/tooltip_client.h"
 #include "ui/wm/public/tooltip_observer.h"
 
@@ -50,6 +49,19 @@ int TooltipStateManager::GetMaxWidth(const gfx::Point& location) const {
   return tooltip_->GetMaxWidth(location);
 }
 
+void TooltipStateManager::SetTooltipParentWindow(aura::Window* window) {
+  if (tooltip_parent_window_ == window) {
+    return;
+  }
+
+  window_observation_.Reset();
+  tooltip_parent_window_ = window;
+
+  if (window) {
+    window_observation_.Observe(window);
+  }
+}
+
 void TooltipStateManager::HideAndReset() {
   // Hide any open tooltips.
   will_hide_tooltip_timer_.Stop();
@@ -57,8 +69,8 @@ void TooltipStateManager::HideAndReset() {
 
   // Cancel pending tooltips and reset states.
   will_show_tooltip_timer_.Stop();
-  tooltip_id_ = nullptr;
-  tooltip_parent_window_ = nullptr;
+  tooltip_id_ = 0;
+  SetTooltipParentWindow(nullptr);
 }
 
 void TooltipStateManager::Show(aura::Window* window,
@@ -70,9 +82,9 @@ void TooltipStateManager::Show(aura::Window* window,
   HideAndReset();
 
   position_ = position;
-  tooltip_id_ = wm::GetTooltipId(window);
+  tooltip_id_ = reinterpret_cast<std::uintptr_t>(wm::GetTooltipId(window));
   tooltip_text_ = tooltip_text;
-  tooltip_parent_window_ = window;
+  SetTooltipParentWindow(window);
   tooltip_trigger_ = trigger;
 
   std::u16string truncated_text =
@@ -82,8 +94,9 @@ void TooltipStateManager::Show(aura::Window* window,
 
   // If the string consists entirely of whitespace, then don't both showing it
   // (an empty tooltip is useless).
-  if (trimmed_text.empty())
+  if (trimmed_text.empty()) {
     return;
+  }
 
   // Initialize the one-shot timer to show the tooltip after a delay. Any
   // running timers have already been canceled by calling HideAndReset above.
@@ -101,29 +114,23 @@ void TooltipStateManager::UpdatePositionIfNeeded(const gfx::Point& position,
   // the first place. Otherwise, for example, the position of a keyboard
   // triggered tooltip could be updated by an unrelated mouse exited event. The
   // tooltip would then show up at the wrong location.
-  if (!will_show_tooltip_timer_.IsRunning() || trigger != tooltip_trigger_)
+  if (!will_show_tooltip_timer_.IsRunning() || trigger != tooltip_trigger_) {
     return;
+  }
 
   position_ = position;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void TooltipStateManager::OnTooltipShownOnServer(const std::u16string& text,
-                                                 const gfx::Rect& bounds) {
-  tooltip_->OnTooltipShownOnServer(text, bounds);
-}
-
-void TooltipStateManager::OnTooltipHiddenOnServer() {
-  tooltip_id_ = nullptr;
-  tooltip_parent_window_ = nullptr;
-  tooltip_->OnTooltipHiddenOnServer();
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 void TooltipStateManager::ShowNow(const std::u16string& trimmed_text,
                                   const base::TimeDelta hide_delay) {
-  if (!tooltip_parent_window_)
+  if (!tooltip_parent_window_) {
     return;
+  }
+
+  if (!tooltip_parent_window_->GetRootWindow()) {
+    // This can happen if the window is in the process of closing.
+    return;
+  }
 
   tooltip_->Update(tooltip_parent_window_, trimmed_text, position_,
                    tooltip_trigger_);
@@ -138,22 +145,6 @@ void TooltipStateManager::StartWillShowTooltipTimer(
     const std::u16string& trimmed_text,
     const base::TimeDelta show_delay,
     const base::TimeDelta hide_delay) {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // TODO(crbug.com/1338597): Remove support check and always use this step when
-  // Ash-chrome supporting server side tooltip is spread enough.
-  if (ui::OzonePlatform::GetInstance()
-          ->GetPlatformRuntimeProperties()
-          .supports_tooltip) {
-    // Send `show_delay` and `hide_delay` together and delegate the timer
-    // handling on Ash side.
-    tooltip_->Update(tooltip_parent_window_, tooltip_text_, position_,
-                     tooltip_trigger_);
-    tooltip_->SetDelay(show_delay, hide_delay);
-    tooltip_->Show();
-    return;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
   if (!show_delay.is_zero()) {
     // Start will show tooltip timer is show_delay is non-zero.
     will_show_tooltip_timer_.Start(
@@ -165,8 +156,14 @@ void TooltipStateManager::StartWillShowTooltipTimer(
     // This other path is needed for the unit tests to pass because Show is not
     // immediately called when we have a `show_delay` of zero.
     // TODO(bebeaudr): Fix this by ensuring that the unit tests wait for the
-    // timer to fire before continuing for non-Lacros platforms.
+    // timer to fire before continuing.
     ShowNow(trimmed_text, hide_delay);
+  }
+}
+
+void TooltipStateManager::OnWindowDestroying(aura::Window* window) {
+  if (tooltip_parent_window_ == window) {
+    HideAndReset();
   }
 }
 

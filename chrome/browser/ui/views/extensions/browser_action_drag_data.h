@@ -9,6 +9,7 @@
 
 #include <string>
 
+#include "base/memory/stack_allocated.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 
 class Profile;
@@ -18,6 +19,8 @@ class Pickle;
 }
 
 class BrowserActionDragData {
+  STACK_ALLOCATED();
+
  public:
   BrowserActionDragData();
   BrowserActionDragData(const std::string& id, int index);

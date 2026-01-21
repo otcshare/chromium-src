@@ -16,27 +16,29 @@
 
 namespace net {
 
-base::Value NetLogURLRequestConstructorParams(
+base::Value::Dict NetLogURLRequestConstructorParams(
     const GURL& url,
     RequestPriority priority,
-    NetworkTrafficAnnotationTag traffic_annotation) {
+    NetworkTrafficAnnotationTag traffic_annotation,
+    NetLogCaptureMode capture_mode) {
   base::Value::Dict dict;
-  dict.Set("url", url.possibly_invalid_spec());
+  dict.Set("url", SanitizeUrlForNetLog(url, capture_mode));
   dict.Set("priority", RequestPriorityToString(priority));
   dict.Set("traffic_annotation", traffic_annotation.unique_id_hash_code);
-  return base::Value(std::move(dict));
+  return dict;
 }
 
-base::Value NetLogURLRequestStartParams(
+base::Value::Dict NetLogURLRequestStartParams(
     const GURL& url,
     const std::string& method,
     int load_flags,
     const IsolationInfo& isolation_info,
     const SiteForCookies& site_for_cookies,
-    const absl::optional<url::Origin>& initiator,
-    int64_t upload_id) {
+    const std::optional<url::Origin>& initiator,
+    int64_t upload_id,
+    NetLogCaptureMode capture_mode) {
   base::Value::Dict dict;
-  dict.Set("url", url.possibly_invalid_spec());
+  dict.Set("url", SanitizeUrlForNetLog(url, capture_mode));
   dict.Set("method", method);
   dict.Set("load_flags", load_flags);
   dict.Set("network_isolation_key",
@@ -59,7 +61,7 @@ base::Value NetLogURLRequestStartParams(
            initiator.has_value() ? initiator->Serialize() : "not an origin");
   if (upload_id > -1)
     dict.Set("upload_id", base::NumberToString(upload_id));
-  return base::Value(std::move(dict));
+  return dict;
 }
 
 }  // namespace net

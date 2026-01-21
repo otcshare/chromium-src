@@ -5,38 +5,23 @@
 #ifndef CHROME_BROWSER_HID_HID_CONNECTION_TRACKER_H_
 #define CHROME_BROWSER_HID_HID_CONNECTION_TRACKER_H_
 
-#include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/core/keyed_service.h"
-#include "url/origin.h"
+#include "chrome/browser/device_notifications/device_connection_tracker.h"
 
 // Manages the opened device connection count by the profile.
-class HidConnectionTracker : public KeyedService {
+class HidConnectionTracker : public DeviceConnectionTracker {
  public:
   explicit HidConnectionTracker(Profile* profile);
   HidConnectionTracker(HidConnectionTracker&&) = delete;
   HidConnectionTracker& operator=(HidConnectionTracker&) = delete;
   ~HidConnectionTracker() override;
 
-  virtual void IncrementConnectionCount();
-  virtual void DecrementConnectionCount();
+  void ShowContentSettingsExceptions() override;
 
-  // Generate a notification about a connection created for |origin|.
-  virtual void NotifyDeviceConnected(const url::Origin& origin);
-
-  virtual void ShowHidContentSettingsExceptions();
-  virtual void ShowSiteSettings(const url::Origin& origin);
-
-  // This is used by either the destructor or
-  // HidConnectionTrackerFactory::BrowserContextShutdown to remove its profile
-  // from HidSystemTrayIcon.
-  void CleanUp();
-
-  int connection_count() { return connection_count_; }
-  Profile* profile() { return profile_; }
+  // KeyedService:
+  void Shutdown() override;
 
  private:
-  int connection_count_ = 0;
-  raw_ptr<Profile> profile_;
+  DeviceSystemTrayIcon* GetSystemTrayIcon() override;
 };
 
 #endif  // CHROME_BROWSER_HID_HID_CONNECTION_TRACKER_H_

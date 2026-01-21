@@ -1,4 +1,4 @@
-// Copyright 2021 TF.Text Authors.
+// Copyright 2025 TF.Text Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -120,8 +120,7 @@ class DartsCloneTrieWrapper {
       : trie_array_(trie_array) {}
 
   // The actual implementation of TryTraverseSeveralSteps.
-  bool TryTraverseSeveralSteps(TraversalCursor& cursor,
-                               const char* ptr,
+  bool TryTraverseSeveralSteps(TraversalCursor& cursor, const char* ptr,
                                int size) const {
     uint32_t cur_id = cursor.node_id;
     uint32_t cur_unit = cursor.unit;

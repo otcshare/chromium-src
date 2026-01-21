@@ -10,32 +10,31 @@
 @namespace "http://www.w3.org/1999/xhtml";
 
 html::view-transition {
-  position: fixed;
-  top: 0;
-  left: 0;
-
-  /* Size will be set dynamically to correctly account for UI such as
-     virtual-keyboards */
-
-  pointer-events: none;
+  position: absolute;
+  inset: 0;
 }
 
 html::view-transition-group(*) {
   position: absolute;
   top: 0;
   left: 0;
-  will-change: transform;
-
-  /* The transform applied to the container includes any translation necessary
-     for the original element's transform-origin. */
-  transform-origin: top left;
-
-  pointer-events: auto;
 }
 
-::view-transition-image-pair(*) {
+::view-transition-image-pair(*),
+::view-transition-group-children(*) {
   position: absolute;
   inset: 0;
+
+  animation-delay: inherit;
+  animation-timing-function: inherit;
+  animation-iteration-count: inherit;
+  animation-direction: inherit;
+  animation-play-state: inherit;
+}
+
+::view-transition-group-children(*) {
+  border-style: solid;
+  border-color: transparent;
 }
 
 ::view-transition-new(*),
@@ -44,5 +43,10 @@ html::view-transition-group(*) {
   inset-block-start: 0;
   inline-size: 100%;
   block-size: auto;
-  will-change: opacity;
+
+  animation-delay: inherit;
+  animation-timing-function: inherit;
+  animation-iteration-count: inherit;
+  animation-direction: inherit;
+  animation-play-state: inherit;
 }

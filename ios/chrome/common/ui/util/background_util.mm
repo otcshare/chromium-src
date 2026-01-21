@@ -6,14 +6,8 @@
 
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 UIView* PrimaryBackgroundBlurView() {
-  UIView* view;
   UIVisualEffect* blurEffect =
       [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial];
-  view = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
-  return view;
+  return [[UIVisualEffectView alloc] initWithEffect:blurEffect];
 }

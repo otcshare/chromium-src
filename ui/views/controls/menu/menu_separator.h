@@ -13,24 +13,21 @@
 namespace views {
 
 class VIEWS_EXPORT MenuSeparator : public View {
+  METADATA_HEADER(MenuSeparator, View)
+
  public:
-  METADATA_HEADER(MenuSeparator);
-
   explicit MenuSeparator(
-      ui::MenuSeparatorType type = ui::MenuSeparatorType::NORMAL_SEPARATOR)
-      : type_(type) {}
-
+      ui::MenuSeparatorType type = ui::MenuSeparatorType::NORMAL_SEPARATOR);
   MenuSeparator(const MenuSeparator&) = delete;
   MenuSeparator& operator=(const MenuSeparator&) = delete;
 
   // View overrides.
   void OnPaint(gfx::Canvas* canvas) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
 
   ui::MenuSeparatorType GetType() const;
   void SetType(ui::MenuSeparatorType type);
-
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
  private:
   // The type of the separator.

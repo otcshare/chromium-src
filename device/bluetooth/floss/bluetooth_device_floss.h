@@ -8,6 +8,8 @@
 #include <string>
 
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/bluetooth_device.h"
@@ -17,7 +19,7 @@
 #include "device/bluetooth/floss/bluetooth_pairing_floss.h"
 #include "device/bluetooth/floss/bluetooth_socket_floss.h"
 #include "device/bluetooth/floss/floss_adapter_client.h"
-#include "device/bluetooth/floss/floss_gatt_client.h"
+#include "device/bluetooth/floss/floss_gatt_manager_client.h"
 
 namespace floss {
 
@@ -30,6 +32,26 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
     : public device::BluetoothDevice,
       public FlossGattClientObserver {
  public:
+  enum class ConnectingState {
+    kIdle = 0,
+    kACLConnecting,
+    kProfilesConnecting,
+    kProfilesConnected,
+  };
+  enum class GattConnectingState {
+    kGattDisconnected = 0,
+    kGattConnecting,
+    kGattConnected,
+    // Initial state, no prior connection built. Use direct connection.
+    kGattConnectionInit,
+  };
+  enum PropertiesState : uint32_t {
+    kNotRead = 0,
+    kTriggeredByScan = 1 << 1,
+    kTriggeredByInquiry = 1 << 2,
+    kTriggeredbyBoth = (kTriggeredByScan | kTriggeredByInquiry)
+  };
+
   BluetoothDeviceFloss(const BluetoothDeviceFloss&) = delete;
   BluetoothDeviceFloss& operator=(const BluetoothDeviceFloss&) = delete;
 
@@ -50,7 +72,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   uint16_t GetProductID() const override;
   uint16_t GetDeviceID() const override;
   uint16_t GetAppearance() const override;
-  absl::optional<std::string> GetName() const override;
+  std::optional<std::string> GetName() const override;
   bool IsPaired() const override;
 #if BUILDFLAG(IS_CHROMEOS)
   bool IsBonded() const override;
@@ -60,7 +82,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   bool IsConnectable() const override;
   bool IsConnecting() const override;
   UUIDSet GetUUIDs() const override;
-  absl::optional<int8_t> GetInquiryTxPower() const override;
+  std::optional<int8_t> GetInquiryTxPower() const override;
   bool ExpectingPinCode() const override;
   bool ExpectingPasskey() const override;
   bool ExpectingConfirmation() const override;
@@ -97,7 +119,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   bool IsGattServicesDiscoveryComplete() const override;
   void Pair(device::BluetoothDevice::PairingDelegate* pairing_delegate,
             ConnectCallback callback) override;
+  BluetoothPairingFloss* BeginPairing(
+      BluetoothDevice::PairingDelegate* pairing_delegate);
 #if BUILDFLAG(IS_CHROMEOS)
+  bool UsingReliableWrite() const { return using_reliable_write_; }
+  void BeginReliableWrite();
   void ExecuteWrite(base::OnceClosure callback,
                     ExecuteWriteErrorCallback error_callback) override;
   void AbortWrite(base::OnceClosure callback,
@@ -110,19 +136,26 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   bool IsBondedImpl() const;
   void SetName(const std::string& name);
   FlossAdapterClient::BondState GetBondState() { return bond_state_; }
-  void SetBondState(FlossAdapterClient::BondState bond_state);
+  void SetBondState(
+      FlossAdapterClient::BondState bond_state,
+      std::optional<BluetoothDevice::ConnectErrorCode> error_code);
   void SetIsConnected(bool is_connected);
   void SetConnectionState(uint32_t state);
-  void ConnectAllEnabledProfiles();
   void ResetPairing();
-  // Triggers the pending callback of Connect() method.
-  void TriggerConnectCallback(
-      absl::optional<BluetoothDevice::ConnectErrorCode> error_code);
 
   BluetoothPairingFloss* pairing() const { return pairing_.get(); }
 
-  void InitializeDeviceProperties(base::OnceClosure callback);
-  bool HasReadProperties() const { return property_reads_triggered_; }
+  void InitializeDeviceProperties(PropertiesState state,
+                                  base::OnceClosure callback);
+  bool IsReadingProperties() const {
+    return property_reads_triggered_ != PropertiesState::kNotRead;
+  }
+  bool HasReadProperties() const {
+    return property_reads_completed_ != PropertiesState::kNotRead;
+  }
+  PropertiesState GetPropertiesState() const {
+    return property_reads_completed_;
+  }
 
   // FlossGattClientObserver overrides
   void GattClientConnectionState(GattStatus status,
@@ -140,25 +173,73 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   void GattConfigureMtu(std::string address,
                         int32_t mtu,
                         GattStatus status) override;
+#if BUILDFLAG(IS_CHROMEOS)
+  void GattServiceChanged(std::string address) override;
+  void GattExecuteWrite(std::string address, GattStatus status) override;
+#endif
 
   // Returns the adapter which owns this device instance.
   BluetoothAdapterFloss* adapter() const {
     return static_cast<BluetoothAdapterFloss*>(adapter_);
   }
 
+  // Methods for fetching device properties.
+  void FetchRemoteType(base::OnceClosure callback);
+  void FetchRemoteClass(base::OnceClosure callback);
+  void FetchRemoteAppearance(base::OnceClosure callback);
+  void FetchRemoteUuids(base::OnceClosure callback);
+  void FetchRemoteVendorProductInfo(base::OnceClosure callback);
+  void FetchRemoteAddressType(base::OnceClosure callback);
+  void FetchRemoteBondState(base::OnceClosure callback);
+  void FetchRemoteConnectionState(base::OnceClosure callback);
+
+  void OnDeviceConnectionFailed(FlossDBusClient::BtifStatus status);
+
  protected:
   // BluetoothDevice override
   void CreateGattConnectionImpl(
-      absl::optional<device::BluetoothUUID> service_uuid) override;
+      std::optional<device::BluetoothUUID> service_uuid) override;
   void UpgradeToFullDiscovery() override;
   void DisconnectGatt() override;
 
  private:
-  void OnGetRemoteType(DBusResult<FlossAdapterClient::BluetoothDeviceType> ret);
-  void OnGetRemoteClass(DBusResult<uint32_t> ret);
-  void OnGetRemoteAppearance(DBusResult<uint16_t> ret);
-  void OnGetRemoteUuids(DBusResult<UUIDList> ret);
+  // Invoked when no connection established during connecting.
+  void ConnectionIncomplete();
+  // Connects with specified transport
+  void ConnectWithTransport(
+      device::BluetoothDevice::PairingDelegate* pairing_delegate,
+      ConnectCallback callback,
+      FlossAdapterClient::BluetoothTransport transport);
+  // Method to connect profiles.
+  void ConnectAllEnabledProfiles();
+  // Updates the state of connecting and calls callbacks accordingly.
+  void UpdateConnectingState(
+      ConnectingState state,
+      std::optional<BluetoothDevice::ConnectErrorCode> error);
+  // Updates the state of gatt connecting.
+  void UpdateGattConnectingState(GattConnectingState state);
+  // Triggers the pending callback of Connect() method.
+  void TriggerConnectCallback(
+      std::optional<BluetoothDevice::ConnectErrorCode> error_code);
+
+  void OnGetRemoteType(base::OnceClosure callback,
+                       DBusResult<FlossAdapterClient::BluetoothDeviceType> ret);
+  void OnGetRemoteClass(base::OnceClosure callback, DBusResult<uint32_t> ret);
+  void OnGetRemoteAppearance(base::OnceClosure callback,
+                             DBusResult<uint16_t> ret);
+  void OnGetRemoteVendorProductInfo(
+      base::OnceClosure callback,
+      DBusResult<FlossAdapterClient::VendorProductInfo> ret);
+  void OnGetRemoteUuids(base::OnceClosure callback, DBusResult<UUIDList> ret);
+  void OnGetRemoteAddressType(
+      base::OnceClosure callback,
+      DBusResult<FlossAdapterClient::BtAddressType> ret);
+  void OnGetRemoteBondState(base::OnceClosure callback,
+                            DBusResult<uint32_t> ret);
+  void OnGetRemoteConnectionState(base::OnceClosure callback,
+                                  DBusResult<uint32_t> ret);
   void OnConnectAllEnabledProfiles(DBusResult<Void> ret);
+  void OnConnectAllEnabledProfiles(DBusResult<FlossDBusClient::BtifStatus> ret);
   void OnDisconnectAllEnabledProfiles(base::OnceClosure callback,
                                       ErrorCallback error_callback,
                                       DBusResult<Void> ret);
@@ -175,16 +256,36 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   void OnSetConnectionLatency(base::OnceClosure callback,
                               ErrorCallback error_callback,
                               DBusResult<Void> ret);
+  void OnCreateBond(DBusResult<bool> ret);
+  void OnCreateBond(DBusResult<FlossDBusClient::BtifStatus> ret);
 
-  absl::optional<ConnectCallback> pending_callback_on_connect_profiles_ =
-      absl::nullopt;
+#if BUILDFLAG(IS_CHROMEOS)
+  void OnExecuteWrite(base::OnceClosure callback,
+                      ExecuteWriteErrorCallback error_callback,
+                      DBusResult<Void> ret);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  absl::optional<base::OnceClosure> pending_callback_on_init_props_ =
-      absl::nullopt;
+  std::optional<ConnectCallback> pending_callback_on_connect_profiles_ =
+      std::nullopt;
+
+  // Timer to stop waiting for a successful connect complete.
+  base::OneShotTimer connection_incomplete_timer_;
+
+  std::optional<base::OnceClosure> pending_callback_on_init_props_ =
+      std::nullopt;
 
   // Callbacks for a pending |SetConnectionLatency|.
-  absl::optional<std::pair<base::OnceClosure, ErrorCallback>>
-      pending_set_connection_latency_ = absl::nullopt;
+  std::optional<std::pair<base::OnceClosure, ErrorCallback>>
+      pending_set_connection_latency_ = std::nullopt;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Callbacks for a pending |ExecuteWrite| or |AbortWrite|.
+  std::optional<std::pair<base::OnceClosure, ExecuteWriteErrorCallback>>
+      pending_execute_write_ = std::nullopt;
+
+  // Writes are using reliable writes.
+  bool using_reliable_write_ = false;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Number of pending device properties to initialize
   int num_pending_properties_ = 0;
@@ -197,16 +298,20 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   std::string name_;
 
   // Transport type of device.
-  // TODO(b/204708206): Update with property framework when available
-  device::BluetoothTransport transport_;
+  device::BluetoothTransport transport_ =
+      device::BluetoothTransport::BLUETOOTH_TRANSPORT_CLASSIC;
 
   // Class of device.
-  // TODO(b/204708206): Update with property framework when available
   uint32_t cod_ = 0;
 
   // Appearance of device.
-  // TODO(b/204708206): Update with property framework when available
   uint16_t appearance_ = 0;
+
+  // Vendor and product info of device.
+  FlossAdapterClient::VendorProductInfo vpi_;
+
+  // Address type of device.
+  AddressType address_type_ = AddressType::ADDR_TYPE_UNKNOWN;
 
   // Whether the device is bonded/paired.
   FlossAdapterClient::BondState bond_state_ =
@@ -216,19 +321,19 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   // Updated via |SetIsConnected| only.
   bool is_acl_connected_ = false;
 
-  // Is GATT connected for this device.
-  bool is_gatt_connected_ = false;
-
   // Are all services resolved? Only true if full discovery is completed. See
   // |IsGattServicesDiscoveryComplete| for more info.
   bool svc_resolved_ = false;
 
   // Have we triggered initial property reads?
-  bool property_reads_triggered_ = false;
+  PropertiesState property_reads_triggered_ = PropertiesState::kNotRead;
+
+  // Have we completed reading properties?
+  PropertiesState property_reads_completed_ = PropertiesState::kNotRead;
 
   // Specific uuid to search for after gatt connection is established. If this
   // is not set, then we do full discovery.
-  absl::optional<device::BluetoothUUID> search_uuid;
+  std::optional<device::BluetoothUUID> search_uuid;
 
   // Similar to is_acl_connected_ but contains the full connection state
   // (including encryption). This is updated when |SetConnectionState| is called
@@ -237,10 +342,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceFloss
   // This is used for determining if the device is paired.
   uint32_t connection_state_ = 0;
 
-  // Number of ongoing calls to Connect(). Incremented with a call to Connect()
-  // and decremented when either profiles are connected or pairing was
-  // cancelled.
-  int num_connecting_calls_ = 0;
+  // The status of profile connecting.
+  ConnectingState connecting_state_ = ConnectingState::kIdle;
+
+  // The status of GATT connecting.
+  GattConnectingState gatt_connecting_state_ =
+      GattConnectingState::kGattConnectionInit;
 
   // UI thread task runner and socket thread used to create sockets.
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;

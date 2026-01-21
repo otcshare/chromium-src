@@ -4,7 +4,7 @@
  *
  *   User-selectable configuration macros (specification only).
  *
- * Copyright (C) 1996-2022 by
+ * Copyright (C) 1996-2025 by
  * David Turner, Robert Wilhelm, and Werner Lemberg.
  *
  * This file is part of the FreeType project, and may only be used,
@@ -158,12 +158,12 @@ FT_BEGIN_HEADER
 
   /**************************************************************************
    *
-   * If this macro is defined, try to use an inlined assembler version of the
-   * @FT_MulFix function, which is a 'hotspot' when loading and hinting
-   * glyphs, and which should be executed as fast as possible.
+   * If this macro is defined, try to use an inlined 64-bit or assembler
+   * version of the @FT_MulFix function, which is a 'hotspot' when loading
+   * and hinting glyphs, and which should be executed as fast as possible.
    *
-   * Note that if your compiler or CPU is not supported, this will default to
-   * the standard and portable implementation found in `ftcalc.c`.
+   * If your compiler is not C99-compliant or CPU assembly is not supported,
+   * you can disable this option.
    */
 #define FT_CONFIG_OPTION_INLINE_MULFIX
 
@@ -273,7 +273,8 @@ FT_BEGIN_HEADER
    *   options set by those programs have precedence, overwriting the value
    *   here with the configured one.
    */
-#define FT_CONFIG_OPTION_USE_PNG
+/* Not needed since PDFs do not support fonts with PNGs. */
+/* #define FT_CONFIG_OPTION_USE_PNG */
 
 
   /**************************************************************************
@@ -293,6 +294,31 @@ FT_BEGIN_HEADER
 #if !defined(WITHOUT_HARFBUZZ)
 #define FT_CONFIG_OPTION_USE_HARFBUZZ
 #endif
+
+
+  /**************************************************************************
+   *
+   * HarfBuzz dynamic support.
+   *
+   *   Define this macro if you want the HarfBuzz library to be loaded at
+   *   runtime instead of being linked to FreeType.
+   *
+   *   This option has no effect if `FT_CONFIG_OPTION_USE_HARFBUZZ` is not
+   *   defined.
+   *
+   *   When this option is enabled, FreeType will try to load the HarfBuzz
+   *   library at runtime, using `dlopen` or `LoadLibrary`, depending on the
+   *   platform.  On Microsoft platforms, the library name looked up is
+   *   `libharfbuzz-0.dll`.  On Apple platforms, the library name looked up
+   *   is `libharfbuzz.0.dylib`.  On all other platforms, the library name
+   *   looked up is `libharfbuzz.so.0`.  This name can be overridden by
+   *   defining the macro `FT_LIBHARFBUZZ` at FreeType compilation time.
+   *
+   *   If you use a build system like cmake or the `configure` script,
+   *   options set by those programs have precedence, overwriting the value
+   *   here with the configured one.
+   */
+/* #define FT_CONFIG_OPTION_USE_HARFBUZZ_DYNAMIC */
 
 
   /**************************************************************************
@@ -463,9 +489,9 @@ FT_BEGIN_HEADER
    *   while compiling in 'release' mode):
    *
    *   ```
-   *     _af_debug_disable_horz_hints
-   *     _af_debug_disable_vert_hints
-   *     _af_debug_disable_blue_hints
+   *     af_debug_disable_horz_hints_
+   *     af_debug_disable_vert_hints_
+   *     af_debug_disable_blue_hints_
    *   ```
    *
    *   Additionally, the following functions provide dumps of various
@@ -482,7 +508,7 @@ FT_BEGIN_HEADER
    *   As an argument, they use another global variable:
    *
    *   ```
-   *     _af_debug_hints
+   *     af_debug_hints_
    *   ```
    *
    *   Please have a look at the `ftgrid` demo program to see how those
@@ -580,7 +606,8 @@ FT_BEGIN_HEADER
    * outlines (from the 'COLR'/'CPAL' tables) in all formats using the 'sfnt'
    * module (namely TrueType~& OpenType).
    */
-#define TT_CONFIG_OPTION_COLOR_LAYERS
+/* Not needed since PDFs do not support any of the color font formats. */
+/* #define TT_CONFIG_OPTION_COLOR_LAYERS */
 
 
   /**************************************************************************
@@ -663,36 +690,12 @@ FT_BEGIN_HEADER
    * not) instructions in a certain way so that all TrueType fonts look like
    * they do in a Windows ClearType (DirectWrite) environment.  See [1] for a
    * technical overview on what this means.  See `ttinterp.h` for more
-   * details on the LEAN option.
+   * details on this option.
    *
-   * There are three possible values.
-   *
-   * Value 1:
-   *   This value is associated with the 'Infinality' moniker, contributed by
-   *   an individual nicknamed Infinality with the goal of making TrueType
-   *   fonts render better than on Windows.  A high amount of configurability
-   *   and flexibility, down to rules for single glyphs in fonts, but also
-   *   very slow.  Its experimental and slow nature and the original
-   *   developer losing interest meant that this option was never enabled in
-   *   default builds.
-   *
-   *   The corresponding interpreter version is v38.
-   *
-   * Value 2:
-   *   The new default mode for the TrueType driver.  The Infinality code
-   *   base was stripped to the bare minimum and all configurability removed
-   *   in the name of speed and simplicity.  The configurability was mainly
-   *   aimed at legacy fonts like 'Arial', 'Times New Roman', or 'Courier'.
-   *   Legacy fonts are fonts that modify vertical stems to achieve clean
-   *   black-and-white bitmaps.  The new mode focuses on applying a minimal
-   *   set of rules to all fonts indiscriminately so that modern and web
-   *   fonts render well while legacy fonts render okay.
-   *
-   *   The corresponding interpreter version is v40.
-   *
-   * Value 3:
-   *   Compile both, making both v38 and v40 available (the latter is the
-   *   default).
+   * The new default mode focuses on applying a minimal set of rules to all
+   * fonts indiscriminately so that modern and web fonts render well while
+   * legacy fonts render okay.  The corresponding interpreter version is v40.
+   * The so-called Infinality mode (v38) is no longer available in FreeType.
    *
    * By undefining these, you get rendering behavior like on Windows without
    * ClearType, i.e., Windows XP without ClearType enabled and Win9x
@@ -705,11 +708,9 @@ FT_BEGIN_HEADER
    * defined.
    *
    * [1]
-   * https://www.microsoft.com/typography/cleartype/truetypecleartype.aspx
+   * https://learn.microsoft.com/typography/cleartype/truetypecleartype
    */
-/* #define TT_CONFIG_OPTION_SUBPIXEL_HINTING  1         */
-#define TT_CONFIG_OPTION_SUBPIXEL_HINTING  2
-/* #define TT_CONFIG_OPTION_SUBPIXEL_HINTING  ( 1 | 2 ) */
+#define TT_CONFIG_OPTION_SUBPIXEL_HINTING
 
 
   /**************************************************************************
@@ -725,7 +726,7 @@ FT_BEGIN_HEADER
    * flags array which can be used to disambiguate, but old fonts will not
    * have them.
    *
-   *   https://www.microsoft.com/typography/otspec/glyf.htm
+   *   https://learn.microsoft.com/typography/opentype/spec/glyf
    *   https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6glyf.html
    */
 #undef TT_CONFIG_OPTION_COMPONENT_OFFSET_SCALED
@@ -762,7 +763,13 @@ FT_BEGIN_HEADER
   /**************************************************************************
    *
    * Define `TT_CONFIG_OPTION_BDF` if you want to include support for an
-   * embedded 'BDF~' table within SFNT-based bitmap formats.
+   * embedded 'BDF~' table within an SFNT-based `.otb` font file.  This table
+   * is an extension used by X11 to preserve BDF properties after conversion
+   * to SFNT containers.  See
+   *
+   *   https://fontforge.org/docs/techref/non-standard.html#non-standard-bdf
+   *
+   * for more details.
    */
 /* #define TT_CONFIG_OPTION_BDF */
 
@@ -783,6 +790,22 @@ FT_BEGIN_HEADER
 #ifndef TT_CONFIG_OPTION_MAX_RUNNABLE_OPCODES
 #define TT_CONFIG_OPTION_MAX_RUNNABLE_OPCODES  1000000L
 #endif
+
+
+  /**************************************************************************
+   *
+   * Option `TT_CONFIG_OPTION_GPOS_KERNING` enables a basic GPOS kerning
+   * implementation (for TrueType and OpenType fonts only).  With this
+   * defined, FreeType is able to get kerning pair data from the GPOS 'kern'
+   * feature as well as legacy 'kern' tables; without this defined, FreeType
+   * will only be able to use legacy 'kern' tables.
+   *
+   * Note that FreeType does not support more advanced GPOS layout features;
+   * even the 'kern' feature implemented here doesn't handle more
+   * sophisticated kerning variants.  Use a higher-level library like
+   * HarfBuzz instead for that.
+   */
+/* #define TT_CONFIG_OPTION_GPOS_KERNING */
 
 
   /*************************************************************************/
@@ -979,20 +1002,13 @@ FT_BEGIN_HEADER
 
 
   /*
-   * The next three macros are defined if native TrueType hinting is
+   * The next two macros are defined if native TrueType hinting is
    * requested by the definitions above.  Don't change this.
    */
 #ifdef TT_CONFIG_OPTION_BYTECODE_INTERPRETER
 #define  TT_USE_BYTECODE_INTERPRETER
-
 #ifdef TT_CONFIG_OPTION_SUBPIXEL_HINTING
-#if TT_CONFIG_OPTION_SUBPIXEL_HINTING & 1
-#define  TT_SUPPORT_SUBPIXEL_HINTING_INFINALITY
-#endif
-
-#if TT_CONFIG_OPTION_SUBPIXEL_HINTING & 2
 #define  TT_SUPPORT_SUBPIXEL_HINTING_MINIMAL
-#endif
 #endif
 #endif
 

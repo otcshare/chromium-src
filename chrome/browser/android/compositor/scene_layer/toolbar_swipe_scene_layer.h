@@ -8,7 +8,7 @@
 #include <jni.h>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/ui/android/layouts/scene_layer.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -25,18 +25,16 @@ class ToolbarSwipeSceneLayer : public SceneLayer {
   ~ToolbarSwipeSceneLayer() override;
 
   void UpdateLayer(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   jint id,
-                   jboolean left_tab,
-                   jboolean can_use_live_layer,
-                   jint default_background_color,
+                   int32_t id,
+                   bool left_tab,
+                   bool can_use_live_layer,
+                   int32_t default_background_color,
                    jfloat x,
                    jfloat y);
 
   void SetTabContentManager(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& jtab_content_manager);
+      const base::android::JavaRef<jobject>& jtab_content_manager);
 
   bool ShouldShowBackground() override;
 

@@ -17,50 +17,43 @@ java_group("jacoco_all_java") {
   ]
 }
 
-# Needed to suppress stack traces being logged in every test like:
-# java.io.FileNotFoundException: /jacoco.exec: open failed: EROFS (Read-only file system).
-# https://crbug.com/1334374
-# https://github.com/jacoco/jacoco/issues/968
-java_prebuilt("jacocoagent_properties_java") {
-  include_java_resources = true
-  supports_android = true
-  jar_path = "jacoco-agent.properties.jar"
-}
-
 java_prebuilt("jacocoagent_java") {
   include_java_resources = true
   supports_android = true
-  jar_path = "lib/jacocoagent.jar"
+  jar_path = "cipd/lib/jacocoagent.jar"
   proguard_configs = [ "jacoco_instrument.flags" ]
-  deps = [ ":jacocoagent_properties_java" ]
+
+  # Complains about java/util/jar/Pack200, and this isn't a library which gets
+  # used clientside anyways, so can just ignore this.
+  enable_bytecode_checks = false
 }
 
 java_prebuilt("jacocoant_java") {
   testonly = true
-  jar_path = "lib/jacocoant.jar"
+  jar_path = "cipd/lib/jacocoant.jar"
 }
 
 java_prebuilt("jacococli_java") {
   testonly = true
-  jar_path = "lib/jacococli.jar"
+  jar_path = "cipd/lib/jacococli.jar"
 }
 
 java_prebuilt("org_jacocoagent_java") {
   testonly = true
-  jar_path = "lib/org.jacoco.agent-0.8.3.201901230119.jar"
+  jar_path = "cipd/lib/org.jacoco.agent-0.8.8.202306091247.jar"
 }
 
 java_prebuilt("org_jacocoant_java") {
   testonly = true
-  jar_path = "lib/org.jacoco.ant-0.8.3.201901230119.jar"
+  jar_path = "cipd/lib/org.jacoco.ant-0.8.8.202306091247.jar"
 }
 
 java_prebuilt("org_jacococore_java") {
   testonly = true
-  jar_path = "lib/org.jacoco.core-0.8.3.201901230119.jar"
+  jar_path = "cipd/lib/org.jacoco.core-0.8.8.202306091247.jar"
 }
 
 java_prebuilt("org_jacocoreport_java") {
   testonly = true
-  jar_path = "lib/org.jacoco.report-0.8.3.201901230119.jar"
+  jar_path = "cipd/lib/org.jacoco.report-0.8.8.202306091247.jar"
 }

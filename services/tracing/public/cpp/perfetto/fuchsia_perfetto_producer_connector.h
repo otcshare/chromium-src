@@ -1,23 +1,22 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_TRACING_PUBLIC_CPP_PERFETTO_FUCHSIA_PERFETTO_PRODUCER_CONNECTOR_H_
 #define SERVICES_TRACING_PUBLIC_CPP_PERFETTO_FUCHSIA_PERFETTO_PRODUCER_CONNECTOR_H_
 
-#include <fuchsia/tracing/perfetto/cpp/fidl.h>
-#include <lib/fidl/cpp/binding.h>
+#include <fidl/fuchsia.tracing.perfetto/cpp/fidl.h>
 #include <perfetto/ext/ipc/client.h>
 #include <perfetto/ext/tracing/core/shared_memory.h>
 
+#include <optional>
+
 #include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/memory/weak_ptr.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/sequence_bound.h"
 #include "base/threading/thread.h"
 #include "base/tracing/perfetto_task_runner.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace tracing {
 
@@ -30,12 +29,11 @@ class COMPONENT_EXPORT(TRACING_CPP) FuchsiaPerfettoProducerConnector {
 
   // Returns a ConnArgs object with a socket connected to the system tracing
   // service if system tracing is provided by the platform.
-  absl::optional<perfetto::ipc::Client::ConnArgs> Connect();
+  std::optional<perfetto::ipc::Client::ConnArgs> Connect();
 
   // Injects a ProducerConnector handle.
   void SetProducerServiceForTest(
-      fidl::InterfaceHandle<fuchsia::tracing::perfetto::ProducerConnector>
-          producer);
+      fidl::ClientEnd<fuchsia_tracing_perfetto::ProducerConnector> client_end);
 
  private:
   class BufferReceiverImpl;
@@ -56,8 +54,8 @@ class COMPONENT_EXPORT(TRACING_CPP) FuchsiaPerfettoProducerConnector {
   // the system tracing service.
   void OnSharedMemoryFdReceived(base::ScopedFD fd);
 
-  fidl::InterfaceHandle<fuchsia::tracing::perfetto::ProducerConnector>
-      producer_service_for_test_;
+  fidl::ClientEnd<fuchsia_tracing_perfetto::ProducerConnector>
+      producer_connector_client_end_for_test_;
 
   // Event used to synchronously wait until a file descriptor is received
   // from the system tracing service.

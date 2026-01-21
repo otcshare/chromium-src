@@ -4,7 +4,9 @@
 
 #include "third_party/blink/renderer/platform/media/new_session_cdm_result_promise.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+#include <utility>
+
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -28,7 +30,6 @@ CdmResultForUMA ConvertStatusToUMAResult(SessionInitStatus status) {
       return SESSION_ALREADY_EXISTS;
   }
   NOTREACHED();
-  return INVALID_STATE_ERROR;
 }
 
 }  // namespace
@@ -46,7 +47,6 @@ static WebContentDecryptionModuleResult::SessionStatus ConvertStatus(
       return WebContentDecryptionModuleResult::kSessionAlreadyExists;
   }
   NOTREACHED();
-  return WebContentDecryptionModuleResult::kSessionNotFound;
 }
 
 NewSessionCdmResultPromise::NewSessionCdmResultPromise(
@@ -54,12 +54,12 @@ NewSessionCdmResultPromise::NewSessionCdmResultPromise(
     const std::string& key_system_uma_prefix,
     const std::string& uma_name,
     SessionInitializedCB new_session_created_cb,
-    const std::vector<SessionInitStatus>& expected_statuses)
+    Vector<SessionInitStatus> expected_statuses)
     : web_cdm_result_(result),
       key_system_uma_prefix_(key_system_uma_prefix),
       uma_name_(uma_name),
       new_session_created_cb_(std::move(new_session_created_cb)),
-      expected_statuses_(expected_statuses),
+      expected_statuses_(std::move(expected_statuses)),
       creation_time_(base::TimeTicks::Now()) {}
 
 NewSessionCdmResultPromise::~NewSessionCdmResultPromise() {
@@ -75,7 +75,7 @@ void NewSessionCdmResultPromise::resolve(const std::string& session_id) {
   SessionInitStatus status = SessionInitStatus::UNKNOWN_STATUS;
   std::move(new_session_created_cb_).Run(session_id, &status);
 
-  if (!base::Contains(expected_statuses_, status)) {
+  if (!std::ranges::contains(expected_statuses_, status)) {
     reject(Exception::INVALID_STATE_ERROR, 0,
            "Cannot finish session initialization");
     return;

@@ -9,17 +9,15 @@
 import argparse
 import logging
 import os
+import posixpath
 import shutil
 import sys
-import tempfile
 import zipfile
-import zlib
-
-import finalize_apk
 
 from util import build_utils
 from util import diff_utils
-from util import zipalign
+import action_helpers  # build_utils adds //build to sys.path.
+import zip_helpers
 
 
 # Taken from aapt's Package.cpp:
@@ -32,11 +30,11 @@ _NO_COMPRESS_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.wav', '.mp2',
 
 def _ParseArgs(args):
   parser = argparse.ArgumentParser()
-  build_utils.AddDepfileOption(parser)
-  parser.add_argument(
-      '--assets',
-      help='GYP-list of files to add as assets in the form '
-      '"srcPath:zipPath", where ":zipPath" is optional.')
+  action_helpers.add_depfile_arg(parser)
+  parser.add_argument('--assets',
+                      action='append',
+                      help='GYP-list of files to add as assets in the form '
+                      '"srcPath:zipPath", where ":zipPath" is optional.')
   parser.add_argument(
       '--java-resources', help='GYP-list of java_resources JARs to include.')
   parser.add_argument('--write-asset-list',
@@ -91,16 +89,13 @@ def _ParseArgs(args):
            'a boolean value.')
   parser.add_argument(
       '--apksigner-jar', help='Path to the apksigner executable.')
-  parser.add_argument('--zipalign-path',
-                      help='Path to the zipalign executable.')
   parser.add_argument('--key-path',
                       help='Path to keystore for signing.')
   parser.add_argument('--key-passwd',
                       help='Keystore password')
   parser.add_argument('--key-name',
                       help='Keystore name')
-  parser.add_argument(
-      '--min-sdk-version', required=True, help='Value of APK\'s minSdkVersion')
+  parser.add_argument('--min-sdk-version', type=int, required=True)
   parser.add_argument(
       '--best-compression',
       action='store_true',
@@ -114,18 +109,18 @@ def _ParseArgs(args):
                       help='Treat all warnings as errors.')
   diff_utils.AddCommandLineFlags(parser)
   options = parser.parse_args(args)
-  options.assets = build_utils.ParseGnList(options.assets)
-  options.uncompressed_assets = build_utils.ParseGnList(
+  options.assets = action_helpers.parse_gn_list(options.assets)
+  options.uncompressed_assets = action_helpers.parse_gn_list(
       options.uncompressed_assets)
-  options.native_lib_placeholders = build_utils.ParseGnList(
+  options.native_lib_placeholders = action_helpers.parse_gn_list(
       options.native_lib_placeholders)
-  options.secondary_native_lib_placeholders = build_utils.ParseGnList(
+  options.secondary_native_lib_placeholders = action_helpers.parse_gn_list(
       options.secondary_native_lib_placeholders)
-  options.java_resources = build_utils.ParseGnList(options.java_resources)
-  options.native_libs = build_utils.ParseGnList(options.native_libs)
-  options.secondary_native_libs = build_utils.ParseGnList(
+  options.java_resources = action_helpers.parse_gn_list(options.java_resources)
+  options.native_libs = action_helpers.parse_gn_list(options.native_libs)
+  options.secondary_native_libs = action_helpers.parse_gn_list(
       options.secondary_native_libs)
-  options.library_always_compress = build_utils.ParseGnList(
+  options.library_always_compress = action_helpers.parse_gn_list(
       options.library_always_compress)
 
   if not options.android_abi and (options.native_libs or
@@ -140,6 +135,54 @@ def _ParseArgs(args):
     raise Exception('Must specify --is-multi-abi with both --android-abi '
                     'and --secondary-android-abi.')
   return options
+
+
+def _AlignAndSign(apksigner_path,
+                  android_abi,
+                  apk_path,
+                  key_path,
+                  key_passwd,
+                  key_name,
+                  min_sdk_version,
+                  warnings_as_errors=False):
+  sign_cmd = build_utils.JavaCmd() + [
+      '-jar',
+      apksigner_path,
+      'sign',
+      '--in',
+      apk_path,
+      '--out',
+      apk_path,
+      '--ks',
+      key_path,
+      '--ks-key-alias',
+      key_name,
+      '--ks-pass',
+      'pass:' + key_passwd,
+  ]
+  # V3 signing adds security niceties, which are irrelevant for local builds.
+  sign_cmd += ['--v3-signing-enabled', 'false']
+
+  if min_sdk_version >= 24:
+    # Disable v1 signatures when v2 signing can be used (it's much faster).
+    sign_cmd += ['--v1-signing-enabled', 'false']
+    # Passing minSdkVersion avoids ApkSigner having to parse it from the APK.
+    sign_cmd += ['--min-sdk-version', str(min_sdk_version)]
+  else:
+    # Force SHA-1 (makes signing faster; insecure is fine for local builds).
+    # Leave v2 signing enabled since it verifies faster on device when
+    # supported.
+    sign_cmd += ['--min-sdk-version', '1']
+
+  # v4 signatures (.idsig files) require a v2 or v3 signature at the same time.
+  # These are enabled by default.
+
+  if android_abi and '64' in android_abi:
+    sign_cmd += ['--lib-page-alignment', str(0x4000)]
+
+  build_utils.CheckOutput(sign_cmd,
+                          print_stdout=True,
+                          fail_on_output=warnings_as_errors)
 
 
 def _SplitAssetPath(path):
@@ -176,20 +219,15 @@ def _ExpandPaths(paths):
 
 
 def _GetAssetsToAdd(path_tuples,
-                    fast_align,
                     disable_compression=False,
-                    allow_reads=True):
+                    apk_root_dir=''):
   """Returns the list of file_detail tuples for assets in the apk.
 
   Args:
     path_tuples: List of src_path, dest_path tuples to add.
-    fast_align: Whether to perform alignment in python zipfile (alternatively
-                alignment can be done using the zipalign utility out of band).
     disable_compression: Whether to disable compression.
-    allow_reads: If false, we do not try to read the files from disk (to find
-                 their size for example).
 
-  Returns: A list of (src_path, apk_path, compress, alignment) tuple
+  Returns: A list of (src_path, apk_path, compress) tuple
   representing what and how assets are added.
   """
   assets_to_add = []
@@ -202,26 +240,17 @@ def _GetAssetsToAdd(path_tuples,
           os.path.splitext(src_path)[1] not in _NO_COMPRESS_EXTENSIONS)
 
       if target_compress == compress:
-        # AddToZipHermetic() uses this logic to avoid growing small files.
-        # We need it here in order to set alignment correctly.
-        if allow_reads and compress and os.path.getsize(src_path) < 16:
-          compress = False
-
-        apk_path = 'assets/' + dest_path
-        alignment = 0 if compress and not fast_align else 4
-        assets_to_add.append((apk_path, src_path, compress, alignment))
+        if dest_path.startswith('../'):
+          # posixpath.join('', 'foo') == 'foo'
+          apk_path = posixpath.join(apk_root_dir, dest_path[3:])
+        else:
+          apk_path = 'assets/' + dest_path
+        assets_to_add.append((apk_path, src_path, compress))
   return assets_to_add
 
 
-def _AddFiles(apk, details):
-  """Adds files to the apk.
-
-  Args:
-    apk: path to APK to add to.
-    details: A list of file detail tuples (src_path, apk_path, compress,
-    alignment) representing what and how files are added to the APK.
-  """
-  for apk_path, src_path, compress, alignment in details:
+def _AddFiles(apk, details, compress_level):
+  for apk_path, src_path, compress in details:
     # This check is only relevant for assets, but it should not matter if it is
     # checked for the whole list of files.
     try:
@@ -230,20 +259,18 @@ def _AddFiles(apk, details):
       raise Exception(
           'Multiple targets specified the asset path: %s' % apk_path)
     except KeyError:
-      zipalign.AddToZipHermetic(
-          apk,
-          apk_path,
-          src_path=src_path,
-          compress=compress,
-          alignment=alignment)
+      zip_helpers.add_to_zip_hermetic(apk,
+                                      apk_path,
+                                      src_path=src_path,
+                                      compress=compress,
+                                      compress_level=compress_level)
 
 
-def _GetNativeLibrariesToAdd(native_libs, android_abi, fast_align,
-                             lib_always_compress):
+def _GetNativeLibrariesToAdd(native_libs, android_abi, lib_always_compress):
   """Returns the list of file_detail tuples for native libraries in the apk.
 
-  Returns: A list of (src_path, apk_path, compress, alignment) tuple
-  representing what and how native libraries are added.
+  Returns: A list of (src_path, apk_path, compress) tuple representing what and
+      how native libraries are added.
   """
   libraries_to_add = []
 
@@ -256,8 +283,7 @@ def _GetNativeLibrariesToAdd(native_libs, android_abi, fast_align,
       lib_android_abi = 'arm64-v8a-hwasan'
 
     apk_path = 'lib/%s/%s' % (lib_android_abi, basename)
-    alignment = 0 if compress and not fast_align else 0x1000
-    libraries_to_add.append((apk_path, path, compress, alignment))
+    libraries_to_add.append((apk_path, path, compress))
 
   return libraries_to_add
 
@@ -268,9 +294,8 @@ def _CreateExpectationsData(native_libs, assets):
   assets = sorted(assets)
 
   ret = []
-  for apk_path, _, compress, alignment in native_libs + assets:
-    ret.append('apk_path=%s, compress=%s, alignment=%s\n' %
-               (apk_path, compress, alignment))
+  for apk_path, _, compress in native_libs + assets:
+    ret.append(f'apk_path={apk_path}, compress={compress}\n')
   return ''.join(ret)
 
 
@@ -278,23 +303,10 @@ def main(args):
   build_utils.InitLogging('APKBUILDER_DEBUG')
   args = build_utils.ExpandFileArgs(args)
   options = _ParseArgs(args)
-
-  # Until Python 3.7, there's no better way to set compression level.
-  # The default is 6.
-  if options.best_compression:
-    # Compresses about twice as slow as the default.
-    zlib.Z_DEFAULT_COMPRESSION = 9
-  else:
-    # Compresses about twice as fast as the default.
-    zlib.Z_DEFAULT_COMPRESSION = 1
-
-  # Python's zip implementation duplicates file comments in the central
-  # directory, whereas zipalign does not, so use zipalign for official builds.
-  requires_alignment = options.format == 'apk'
-  run_zipalign = requires_alignment and options.best_compression
-  fast_align = bool(requires_alignment and not run_zipalign)
-
   native_libs = sorted(options.native_libs)
+
+  # Optimize either for size or speed.
+  compress_level = 9 if options.best_compression else 1
 
   # Include native libs in the depfile_deps since GN doesn't know about the
   # dependencies when is_component_build=true.
@@ -343,65 +355,58 @@ def main(args):
     apk_root_dir = ''
     apk_dex_dir = ''
 
-  def _GetAssetDetails(assets, uncompressed_assets, fast_align, allow_reads):
+  def _GetAssetDetails(assets, uncompressed_assets):
     ret = _GetAssetsToAdd(assets,
-                          fast_align,
                           disable_compression=False,
-                          allow_reads=allow_reads)
+                          apk_root_dir=apk_root_dir)
     ret.extend(
         _GetAssetsToAdd(uncompressed_assets,
-                        fast_align,
                         disable_compression=True,
-                        allow_reads=allow_reads))
+                        apk_root_dir=apk_root_dir))
     return ret
 
   libs_to_add = _GetNativeLibrariesToAdd(native_libs, options.android_abi,
-                                         fast_align,
                                          options.library_always_compress)
   if options.secondary_android_abi:
     libs_to_add.extend(
         _GetNativeLibrariesToAdd(secondary_native_libs,
                                  options.secondary_android_abi,
-                                 fast_align, options.library_always_compress))
+                                 options.library_always_compress))
 
   if options.expected_file:
     # We compute expectations without reading the files. This allows us to check
     # expectations for different targets by just generating their build_configs
     # and not have to first generate all the actual files and all their
     # dependencies (for example by just passing --only-verify-expectations).
-    asset_details = _GetAssetDetails(assets,
-                                     uncompressed_assets,
-                                     fast_align,
-                                     allow_reads=False)
+    asset_details = _GetAssetDetails(assets, uncompressed_assets)
 
     actual_data = _CreateExpectationsData(libs_to_add, asset_details)
     diff_utils.CheckExpectations(actual_data, options)
 
     if options.only_verify_expectations:
       if options.depfile:
-        build_utils.WriteDepfile(options.depfile,
-                                 options.actual_file,
-                                 inputs=depfile_deps)
+        action_helpers.write_depfile(options.depfile,
+                                     options.actual_file,
+                                     inputs=depfile_deps)
       return
 
   # If we are past this point, we are going to actually create the final apk so
   # we should recompute asset details again but maybe perform some optimizations
   # based on the size of the files on disk.
-  assets_to_add = _GetAssetDetails(
-      assets, uncompressed_assets, fast_align, allow_reads=True)
+  assets_to_add = _GetAssetDetails(assets, uncompressed_assets)
 
   # Targets generally do not depend on apks, so no need for only_if_changed.
-  with build_utils.AtomicOutput(options.output_apk, only_if_changed=False) as f:
+  with action_helpers.atomic_output(options.output_apk,
+                                    only_if_changed=False) as f:
     with zipfile.ZipFile(options.resource_apk) as resource_apk, \
          zipfile.ZipFile(f, 'w') as out_apk:
 
-      def add_to_zip(zip_path, data, compress=True, alignment=4):
-        zipalign.AddToZipHermetic(
-            out_apk,
-            zip_path,
-            data=data,
-            compress=compress,
-            alignment=0 if compress and not fast_align else alignment)
+      def add_to_zip(zip_path, data, compress=True):
+        zip_helpers.add_to_zip_hermetic(out_apk,
+                                        zip_path,
+                                        data=data,
+                                        compress=compress,
+                                        compress_level=compress_level)
 
       def copy_resource(zipinfo, out_dir=''):
         add_to_zip(
@@ -420,32 +425,42 @@ def main(args):
 
       # 2. Assets
       logging.debug('Adding assets/')
-      _AddFiles(out_apk, assets_to_add)
+      _AddFiles(out_apk, assets_to_add, compress_level)
 
-      # 3. Dex files
+      # 3. DEX and META-INF/services/
       logging.debug('Adding classes.dex')
       if options.dex_file:
         with open(options.dex_file, 'rb') as dex_file_obj:
           if options.dex_file.endswith('.dex'):
-            max_dex_number = 1
             # This is the case for incremental_install=true.
             add_to_zip(
                 apk_dex_dir + 'classes.dex',
                 dex_file_obj.read(),
                 compress=not options.uncompress_dex)
           else:
-            max_dex_number = 0
             with zipfile.ZipFile(dex_file_obj) as dex_zip:
-              for dex in (d for d in dex_zip.namelist() if d.endswith('.dex')):
-                max_dex_number += 1
-                add_to_zip(
-                    apk_dex_dir + dex,
-                    dex_zip.read(dex),
-                    compress=not options.uncompress_dex)
+              # Add META-INF/services.
+              for name in sorted(dex_zip.namelist()):
+                if name.startswith('META-INF/services/'):
+                  # proguard.py does not bundle these files (dex.py does)
+                  # because R8 optimizes all ServiceLoader calls.
+                  if options.dex_file.endswith('.r8dex.jar'):
+                    raise Exception(
+                        f'Expected no META-INF/services, but found: {name}' +
+                        f'in {options.dex_file}')
+                  add_to_zip(apk_root_dir + name,
+                             dex_zip.read(name),
+                             compress=False)
+              # Add classes.dex.
+              for name in dex_zip.namelist():
+                if name.endswith('.dex'):
+                  add_to_zip(apk_dex_dir + name,
+                             dex_zip.read(name),
+                             compress=not options.uncompress_dex)
 
       # 4. Native libraries.
       logging.debug('Adding lib/')
-      _AddFiles(out_apk, libs_to_add)
+      _AddFiles(out_apk, libs_to_add, compress_level)
 
       # Add a placeholder lib if the APK should be multi ABI but is missing libs
       # for one of the ABIs.
@@ -467,14 +482,14 @@ def main(args):
         # with stale builds when the only change is adding/removing
         # placeholders).
         apk_path = 'lib/%s/%s' % (options.android_abi, name)
-        add_to_zip(apk_path, '', alignment=0x1000)
+        add_to_zip(apk_path, '')
 
       for name in sorted(secondary_native_lib_placeholders):
         # Note: Empty libs files are ignored by md5check (can cause issues
         # with stale builds when the only change is adding/removing
         # placeholders).
         apk_path = 'lib/%s/%s' % (options.secondary_android_abi, name)
-        add_to_zip(apk_path, '', alignment=0x1000)
+        add_to_zip(apk_path, '')
 
       # 5. Resources
       logging.debug('Adding res/')
@@ -502,22 +517,21 @@ def main(args):
                        java_resource_jar.read(apk_path))
 
     if options.format == 'apk' and options.key_path:
-      zipalign_path = None if fast_align else options.zipalign_path
-      finalize_apk.FinalizeApk(options.apksigner_jar,
-                               zipalign_path,
-                               f.name,
-                               f.name,
-                               options.key_path,
-                               options.key_passwd,
-                               options.key_name,
-                               int(options.min_sdk_version),
-                               warnings_as_errors=options.warnings_as_errors)
+      _AlignAndSign(options.apksigner_jar,
+                    options.android_abi,
+                    f.name,
+                    options.key_path,
+                    options.key_passwd,
+                    options.key_name,
+                    options.min_sdk_version,
+                    warnings_as_errors=options.warnings_as_errors)
+      shutil.move(f'{f.name}.idsig', f'{options.output_apk}.idsig')
     logging.debug('Moving file into place')
 
     if options.depfile:
-      build_utils.WriteDepfile(options.depfile,
-                               options.output_apk,
-                               inputs=depfile_deps)
+      action_helpers.write_depfile(options.depfile,
+                                   options.output_apk,
+                                   inputs=depfile_deps)
 
 
 if __name__ == '__main__':

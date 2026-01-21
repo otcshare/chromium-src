@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sync_file_system {
@@ -33,7 +34,7 @@ template <size_t INPUT_SIZE>
 void CreateList(FileChangeList* list, const FileChange (&inputs)[INPUT_SIZE]) {
   list->clear();
   for (size_t i = 0; i < INPUT_SIZE; ++i)
-    list->Update(inputs[i]);
+    list->Update(UNSAFE_TODO(inputs[i]));
 }
 
 template <size_t EXPECTED_SIZE>
@@ -42,10 +43,11 @@ void VerifyList(const FileChangeList& list,
   SCOPED_TRACE(testing::Message() << "actual:" << list.DebugString());
   ASSERT_EQ(EXPECTED_SIZE, list.size());
   for (size_t i = 0; i < list.size(); ++i) {
-    SCOPED_TRACE(testing::Message() << i << ": "
-                 << " expected:" << expected[i].DebugString()
-                 << " actual:" << list.list().at(i).DebugString());
-    EXPECT_EQ(expected[i], list.list().at(i));
+    UNSAFE_TODO(SCOPED_TRACE(testing::Message()
+                             << i << ": "
+                             << " expected:" << expected[i].DebugString()
+                             << " actual:" << list.list().at(i).DebugString()));
+    UNSAFE_TODO(EXPECT_EQ(expected[i], list.list().at(i)));
   }
 }
 

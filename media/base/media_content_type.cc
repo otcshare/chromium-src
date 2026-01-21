@@ -4,6 +4,8 @@
 
 #include "media/base/media_content_type.h"
 
+#include "base/time/time.h"
+
 namespace media {
 
 namespace {
@@ -15,8 +17,8 @@ MediaContentType DurationToMediaContentType(base::TimeDelta duration) {
   // should be used in this case.
   return (duration.is_zero() ||
           duration > base::Seconds(kMinimumContentDurationSecs))
-             ? MediaContentType::Persistent
-             : MediaContentType::Transient;
+             ? MediaContentType::kPersistent
+             : MediaContentType::kTransient;
 }
 
 }  // namespace media

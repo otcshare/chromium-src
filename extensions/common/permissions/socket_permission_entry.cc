@@ -9,12 +9,11 @@
 #include <cstdlib>
 #include <memory>
 #include <sstream>
-#include <tuple>
+#include <string_view>
 #include <vector>
 
 #include "base/check.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "extensions/common/permissions/api_permission.h"
@@ -44,21 +43,7 @@ SocketPermissionEntry::SocketPermissionEntry()
     : pattern_(SocketPermissionRequest::NONE, std::string(), kInvalidPort),
       match_subdomains_(false) {}
 
-SocketPermissionEntry::~SocketPermissionEntry() {}
-
-bool SocketPermissionEntry::operator<(const SocketPermissionEntry& rhs) const {
-  return std::tie(pattern_.type, pattern_.host, match_subdomains_,
-                  pattern_.port) <
-         std::tie(rhs.pattern_.type, rhs.pattern_.host, rhs.match_subdomains_,
-                  rhs.pattern_.port);
-}
-
-bool SocketPermissionEntry::operator==(const SocketPermissionEntry& rhs) const {
-  return (pattern_.type == rhs.pattern_.type) &&
-         (pattern_.host == rhs.pattern_.host) &&
-         (match_subdomains_ == rhs.match_subdomains_) &&
-         (pattern_.port == rhs.pattern_.port);
-}
+SocketPermissionEntry::~SocketPermissionEntry() = default;
 
 bool SocketPermissionEntry::Check(
     const content::SocketPermissionRequest& request) const {
@@ -72,11 +57,9 @@ bool SocketPermissionEntry::Check(
 
     if (!pattern_.host.empty()) {
       // Do not wildcard part of IP address.
-      url::Component component(0, lhost.length());
       url::RawCanonOutputT<char, 128> ignored_output;
       url::CanonHostInfo host_info;
-      url::CanonicalizeIPAddress(
-          lhost.c_str(), component, &ignored_output, &host_info);
+      url::CanonicalizeIPAddress(lhost, &ignored_output, &host_info);
       if (host_info.IsIPAddress())
         return false;
 
@@ -159,7 +142,7 @@ bool SocketPermissionEntry::ParseHostPattern(
     result.pattern_.host = base::ToLowerASCII(result.pattern_.host);
 
     // The first component can optionally be '*' to match all subdomains.
-    std::vector<base::StringPiece> host_components =
+    std::vector<std::string_view> host_components =
         base::SplitStringPiece(result.pattern_.host, std::string{kDot},
                                base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     DCHECK(!host_components.empty());

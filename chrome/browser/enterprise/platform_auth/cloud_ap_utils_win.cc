@@ -7,10 +7,10 @@
 #include <winerror.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/win/registry.h"
 #include "url/gurl.h"
@@ -47,9 +47,7 @@ void AppendRegistryOrigins(HKEY root,
   for (const auto& value : multi_string_values) {
     GURL url(base::AsStringPiece16(value));
     if (url.is_valid() && url.SchemeIs(url::kHttpsScheme) && url.has_host() &&
-        url.EffectiveIntPort() ==
-            url::DefaultPortForScheme(url.scheme_piece().data(),
-                                      url.scheme_piece().length())) {
+        url.EffectiveIntPort() == url::DefaultPortForScheme(url.scheme())) {
       DVLOG(1) << __func__ << " Discovered MS Auth LoginUrl: \"" << url << "\"";
       origins.push_back(url::Origin::Create(url));
     } else {

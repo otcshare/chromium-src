@@ -5,10 +5,9 @@
 import("//components/signin/features.gni")
 import("//ui/webui/resources/tools/generate_grd.gni")
 
-assert(enable_dice_support || is_chromeos_ash)
+assert(enable_dice_support || is_chromeos)
 
-# Creates the necessary GRDP file with local test files and the core
-# files from c/b/r/gaia_auth_host.
+# Creates the necessary GRDP file with local test files.
 generate_grd("build_grdp") {
   grd_prefix = "gaia_auth_host"
   out_grd = "$target_gen_dir/resources.grdp"
@@ -23,9 +22,6 @@ generate_grd("build_grdp") {
     "saml_username_autofill_test.js",
     "saml_timestamps_test.js",
     "saml_password_attributes_test.js",
-    "../../chromeos/login/saml_with_password_attributes.xml",
+    "saml_with_password_attributes.xml",
   ]
-
-  # Rewrite the resource path for saml_with_password_attributes.xml
-  resource_path_rewrites = [ "../../chromeos/login/saml_with_password_attributes.xml|saml_with_password_attributes.xml" ]
 }

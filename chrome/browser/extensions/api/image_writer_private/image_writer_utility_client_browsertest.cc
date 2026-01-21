@@ -4,14 +4,15 @@
 
 #include "chrome/browser/extensions/api/image_writer_private/image_writer_utility_client.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/image_writer_private/operation.h"
 #include "chrome/services/removable_storage_writer/public/mojom/removable_storage_writer.mojom.h"
@@ -128,8 +129,9 @@ class ImageWriterUtilityClientTest : public InProcessBrowserTest {
     DCHECK(IsRunningInCorrectSequence());
 
     progress_ = progress;
-    if (!cancel_)
+    if (!cancel_) {
       return;
+    }
 
     image_writer_utility_client_->Cancel(base::BindOnce(
         &ImageWriterUtilityClientTest::Cancelled, base::Unretained(this)));
@@ -216,8 +218,8 @@ class ImageWriterUtilityClientTest : public InProcessBrowserTest {
   }
 
   static void FillFile(const base::FilePath& path, char pattern) {
-    const std::vector<char> fill(kTestFileSize, pattern);
-    EXPECT_TRUE(base::WriteFile(path, fill.data(), kTestFileSize));
+    const std::string fill(kTestFileSize, pattern);
+    EXPECT_TRUE(base::WriteFile(path, fill));
   }
 
   base::SequencedTaskRunner* CreateTaskRunner() {

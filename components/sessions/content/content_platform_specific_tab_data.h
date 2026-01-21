@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_SESSIONS_CONTENT_CONTENT_PLATFORM_SPECIFIC_TAB_DATA_H_
 #define COMPONENTS_SESSIONS_CONTENT_CONTENT_PLATFORM_SPECIFIC_TAB_DATA_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/sessions/core/live_tab.h"
 #include "components/sessions/core/sessions_export.h"
 #include "content/public/browser/session_storage_namespace.h"
@@ -17,11 +17,11 @@ class WebContents;
 namespace sessions {
 
 // A //content-specific subclass of PlatformSpecificTabData that is used to
-// associate TabRestoreService::Tab instances with the
+// associate tab_restore::Tab instances with the
 // content::SessionStorageNamespace of the WebContents from which they were
 // created.
 class SESSIONS_EXPORT ContentPlatformSpecificTabData
-    : public PlatformSpecificTabData {
+    : public tab_restore::PlatformSpecificTabData {
  public:
   explicit ContentPlatformSpecificTabData(content::WebContents* web_contents);
   ContentPlatformSpecificTabData();

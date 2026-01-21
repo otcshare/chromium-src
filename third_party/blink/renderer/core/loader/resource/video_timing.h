@@ -42,11 +42,6 @@ class VideoTiming final : public GarbageCollected<VideoTiming>,
     return first_frame_time_;
   }
 
-  void SetTimingAllowPassed(bool timing_allow_passed) {
-    timing_allow_passed_ = timing_allow_passed;
-  }
-  bool TimingAllowPassed() const override { return timing_allow_passed_; }
-
   uint64_t ContentSizeForEntropy() const override {
     // We don't do anything clever here to try to isolate the encoded size of
     // just the first frame; if we're calling this, then at least enough data
@@ -57,18 +52,29 @@ class VideoTiming final : public GarbageCollected<VideoTiming>,
 
   void SetContentSizeForEntropy(size_t length) { content_size_ = length; }
 
-  absl::optional<WebURLRequest::Priority> RequestPriority() const override {
+  std::optional<WebURLRequest::Priority> RequestPriority() const override {
     // No priority data are reported for LCP videos as initially we focus on LCP
     // images (crbug.com/1378698).
     // TODO(crbug.com/1379728): Revisit priority reporting also for videos.
-    return absl::nullopt;
+    return std::nullopt;
   }
+
+  bool IsBroken() const override { return false; }
+  // Video timing does not have information about load start/end time. The
+  // functions return 0 Timeticks as placeholders which would not be reported to
+  // UKM.
+  // TODO(crbug.com/1414077): We should determine what the load start and end
+  // time should be for videos.
+  base::TimeTicks LoadStart() const override { return base::TimeTicks(); }
+
+  base::TimeTicks LoadEnd() const override { return base::TimeTicks(); }
+
+  base::TimeTicks DiscoveryTime() const override { return base::TimeTicks(); }
 
  private:
   KURL url_;
   bool is_loaded_ = false;
   base::TimeTicks first_frame_time_;
-  bool timing_allow_passed_ = false;
   size_t content_size_ = 0;
 };
 

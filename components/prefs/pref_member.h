@@ -27,10 +27,10 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/sequenced_task_runner.h"
@@ -47,6 +47,8 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
   // Type of callback you can register if you need to know the name of
   // the pref that is changing.
   using NamedChangeCallback = base::RepeatingCallback<void(const std::string&)>;
+  using NamedChangeAsViewCallback =
+      base::RepeatingCallback<void(std::string_view)>;
 
   PrefService* prefs() { return prefs_; }
   const PrefService* prefs() const { return prefs_; }
@@ -96,13 +98,16 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
   };
 
   PrefMemberBase();
-  virtual ~PrefMemberBase();
+  ~PrefMemberBase() override;
 
   // See PrefMember<> for description.
-  void Init(const std::string& pref_name,
+  void Init(std::string pref_name,
             PrefService* prefs,
-            const NamedChangeCallback& observer);
-  void Init(const std::string& pref_name, PrefService* prefs);
+            NamedChangeCallback observer);
+  void Init(std::string pref_name,
+            PrefService* prefs,
+            NamedChangeAsViewCallback observer);
+  void Init(std::string pref_name, PrefService* prefs);
 
   virtual void CreateInternal() const = 0;
 
@@ -111,9 +116,10 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
 
   void MoveToSequence(scoped_refptr<base::SequencedTaskRunner> task_runner);
 
-  // PrefObserver
+  // PrefObserver:
+  void OnServiceDestroyed(PrefService* service) override;
   void OnPreferenceChanged(PrefService* service,
-                           const std::string& pref_name) override;
+                           std::string_view pref_name) override;
 
   void VerifyValuePrefName() const {
     DCHECK(!pref_name_.empty());
@@ -139,7 +145,7 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
  private:
   // Ordered the members to compact the class instance.
   std::string pref_name_;
-  NamedChangeCallback observer_;
+  NamedChangeAsViewCallback observer_;
   raw_ptr<PrefService> prefs_;
 
  protected:
@@ -159,12 +165,12 @@ class PrefMember : public subtle::PrefMemberBase {
  public:
   // Defer initialization to an Init method so it's easy to make this class be
   // a member variable.
-  PrefMember() {}
+  PrefMember() = default;
 
   PrefMember(const PrefMember&) = delete;
   PrefMember& operator=(const PrefMember&) = delete;
 
-  virtual ~PrefMember() {}
+  ~PrefMember() override = default;
 
   // Do the actual initialization of the class.  Use the two-parameter
   // version if you don't want any notifications of changes.  This
@@ -274,7 +280,7 @@ class PrefMember : public subtle::PrefMemberBase {
     }
 
    protected:
-    ~Internal() override {}
+    ~Internal() override = default;
 
     COMPONENTS_PREFS_EXPORT bool UpdateValueInternal(
         const base::Value& value) const override;
@@ -302,7 +308,7 @@ class PrefMember : public subtle::PrefMemberBase {
 //
 // FEATURES="noclean nostrip" USE="-chrome_debug -chrome_remoting
 // -chrome_internal -chrome_pdf component_build"
-// ~/trunk/goma/goma-wrapper cros_chrome_make --board=${BOARD}
+// cros_chrome_make --board=${BOARD}
 // --install --runhooks
 
 template <>

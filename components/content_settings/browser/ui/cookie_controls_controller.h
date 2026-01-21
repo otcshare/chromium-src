@@ -5,16 +5,21 @@
 #ifndef COMPONENTS_CONTENT_SETTINGS_BROWSER_UI_COOKIE_CONTROLS_CONTROLLER_H_
 #define COMPONENTS_CONTENT_SETTINGS_BROWSER_UI_COOKIE_CONTROLS_CONTROLLER_H_
 
+#include <set>
+
+#include "base/containers/lru_cache.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/cookie_controls_enforcement.h"
-#include "components/content_settings/core/common/cookie_controls_status.h"
+#include "components/content_settings/core/common/cookie_controls_state.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 
 namespace content {
 class WebContents;
@@ -23,16 +28,17 @@ class WebContents;
 namespace content_settings {
 
 class CookieSettings;
-class CookieControlsView;
+class CookieControlsObserver;
 
 // Handles the tab specific state for cookie controls.
-class CookieControlsController
-    : content_settings::CookieSettings::Observer,
-      public base::SupportsWeakPtr<CookieControlsController> {
+class CookieControlsController final
+    : content_settings::CookieSettings::Observer {
  public:
   CookieControlsController(
       scoped_refptr<content_settings::CookieSettings> cookie_settings,
-      scoped_refptr<content_settings::CookieSettings> original_cookie_settings);
+      scoped_refptr<content_settings::CookieSettings> original_cookie_settings,
+      HostContentSettingsMap* settings_map,
+      bool is_incognito_profile);
   CookieControlsController(const CookieControlsController& other) = delete;
   CookieControlsController& operator=(const CookieControlsController& other) =
       delete;
@@ -41,59 +47,128 @@ class CookieControlsController
   // Called when the web_contents has changed.
   void Update(content::WebContents* web_contents);
 
-  // Called when CookieControlsView is closing.
+  // Updates user bypass visibility and/or highlighting.
+  void UpdateUserBypass();
+
+  // Called when the UI is closing.
   void OnUiClosing();
 
-  // Called when the user clicks on the button to enable/disable cookie
+  // Called when the bubble should be closed.
+  void OnBubbleCloseTriggered();
+
+  // Called when the user clicks on the toggle to enable/disable cookie
   // blocking.
   void OnCookieBlockingEnabledForSite(bool block_third_party_cookies);
 
-  // Returns whether first-party cookies are blocked.
-  bool FirstPartyCookiesBlocked();
+  // Called when the entry point for cookie controls was animated.
+  void OnEntryPointAnimated();
 
-  void AddObserver(CookieControlsView* obs);
-  void RemoveObserver(CookieControlsView* obs);
+  // Returns whether the user has changed their protections state via user
+  // bypass.
+  bool StateChangedViaBypass();
+  void SetStateChangedViaBypass(bool changed);
+
+  void AddObserver(CookieControlsObserver* obs);
+  void RemoveObserver(CookieControlsObserver* obs);
+
+  base::WeakPtr<CookieControlsController> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
  private:
+  struct Status {
+    Status(CookieControlsState controls_state,
+           CookieControlsEnforcement enforcement,
+           base::Time expiration);
+    ~Status();
+    CookieControlsState controls_state;
+    CookieControlsEnforcement enforcement;
+    base::Time expiration;
+  };
+
   // The observed WebContents changes during the lifetime of the
   // CookieControlsController. SiteDataObserver can't change the observed
   // object, so we need an inner class that can be recreated when necessary.
   // TODO(dullweber): Make it possible to change the observed class and maybe
   // convert SiteDataObserver to a pure virtual interface.
   class TabObserver
-      : public content_settings::PageSpecificContentSettings::SiteDataObserver {
+      : public content_settings::PageSpecificContentSettings::SiteDataObserver,
+        public content::WebContentsObserver {
    public:
     TabObserver(CookieControlsController* cookie_controls,
                 content::WebContents* web_contents);
 
     TabObserver(const TabObserver&) = delete;
     TabObserver& operator=(const TabObserver&) = delete;
+    ~TabObserver() override;
 
     // PageSpecificContentSettings::SiteDataObserver:
-    void OnSiteDataAccessed() override;
+    void OnSiteDataAccessed(const AccessDetails& access_details) override;
+    void OnStatefulBounceDetected() override;
+
+    // content::WebContentsObserver:
+    void PrimaryPageChanged(content::Page& page) override;
+    void DidStopLoading() override;
+    void BeforeFormRepostWarningShow() override;
 
    private:
     raw_ptr<CookieControlsController> cookie_controls_;
+    base::RepeatingTimer timer_;
+
+    // The last URL observed in `PrimaryPageChanged()`.
+    GURL last_visited_url_;
+
+    // The number of detected page reloads for |last_visited_url_| in the last
+    // 30 seconds.
+    int reload_count_ = 0;
+
+    // Cache of cookie access details that have been already reported for the
+    // current page load.
+    base::LRUCacheSet<AccessDetails> cookie_accessed_set_;
+
+    void ResetReloadCounter();
   };
 
   void OnThirdPartyCookieBlockingChanged(
       bool block_third_party_cookies) override;
   void OnCookieSettingChanged() override;
 
-  // Determine the CookieControlsStatus based on |web_contents|.
-  std::pair<CookieControlsStatus, CookieControlsEnforcement> GetStatus(
-      content::WebContents* web_contents);
+  Status GetStatus(content::WebContents* web_contents);
 
-  // Updates the blocked cookie count of |icon_|.
-  void PresentBlockedCookieCounter();
+  CookieControlsEnforcement GetEnforcementForThirdPartyCookieBlocking(
+      const GURL url,
+      const SettingInfo& info,
+      bool cookies_allowed);
 
-  // Returns the number of allowed cookies.
-  int GetAllowedCookieCount();
+  bool HasOriginSandboxedTopLevelDocument() const;
 
-  // Returns the number of blocked cookies.
-  int GetBlockedCookieCount();
+  void UpdateLastVisitedSitesMap();
 
-  content::WebContents* GetWebContents();
+  void UpdatePageReloadStatus(int recent_reloads_count);
+
+  void OnPageFinishedLoading();
+
+  // Returns the number of stateful bounces leading to this page.
+  int GetStatefulBounceCount() const;
+
+  // Returns the number of allowed third-party sites with cookies.
+  int GetAllowedThirdPartyCookiesSitesCount() const;
+
+  // Returns the number of blocked third-party sites with cookies.
+  int GetBlockedThirdPartyCookiesSitesCount() const;
+
+  double GetSiteEngagementScore();
+
+  // Record metrics when third-party cookies are allowed.
+  void RecordActivationMetrics();
+
+  bool SiteDataAccessed(int third_party_allowed_sites,
+                        int third_party_blocked_sites);
+
+  bool ShouldHighlightUserBypass(CookieControlsState controls_state);
+  bool ShouldUserBypassIconBeVisible(CookieControlsState controls_state);
+  bool SiteDataAccessAttempted();
+  content::WebContents* GetWebContents() const;
 
   std::unique_ptr<TabObserver> tab_observer_;
   scoped_refptr<content_settings::CookieSettings> cookie_settings_;
@@ -102,14 +177,29 @@ class CookieControlsController
   // corresponds to the regular profile when |cookie_settings_| is incognito.
   // This may be null.
   scoped_refptr<content_settings::CookieSettings> original_cookie_settings_;
+  raw_ptr<HostContentSettingsMap> settings_map_;
 
   base::ScopedObservation<content_settings::CookieSettings,
                           content_settings::CookieSettings::Observer>
       cookie_observation_{this};
 
   bool should_reload_ = false;
+  bool user_changed_ub_state_ = false;
 
-  base::ObserverList<CookieControlsView> observers_;
+  // The number of page reloads in last 30 seconds.
+  int recent_reloads_count_ = 0;
+
+  bool has_exception_expired_since_last_visit_ = false;
+
+  bool waiting_for_page_load_finish_ = false;
+
+  // If we should show the UB icon as confirmation of a change in the user's
+  // protection state on the current site.
+  bool show_icon_as_confirmation_ = false;
+
+  base::ObserverList<CookieControlsObserver> observers_;
+
+  base::WeakPtrFactory<CookieControlsController> weak_ptr_factory_{this};
 };
 
 }  // namespace content_settings

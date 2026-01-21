@@ -10,15 +10,19 @@
 #include <utility>
 #include <vector>
 
-#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
 #include "printing/backend/cups_connection.h"
 #include "printing/backend/cups_ipp_helper.h"
 #include "printing/backend/print_backend_consts.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/units.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "printing/backend/cups_weak_functions.h"
+#endif
 
 namespace printing {
 
@@ -35,14 +39,12 @@ mojom::ResultCode PrintBackendCupsIpp::EnumeratePrinters(
   std::vector<std::unique_ptr<CupsPrinter>> printers;
   if (!cups_connection_->GetDests(printers)) {
     LOG(WARNING) << "CUPS: Error getting printers from CUPS server"
-                 << ", server: " << cups_connection_->server_name()
                  << ", error: " << cups_connection_->last_error() << " - "
                  << cups_connection_->last_error_message();
     return mojom::ResultCode::kFailed;
   }
 
-  VLOG(1) << "CUPS: found " << printers.size()
-          << " printers from CUPS server: " << cups_connection_->server_name();
+  VLOG(1) << "CUPS: found " << printers.size() << " printers from CUPS server.";
   for (const auto& printer : printers) {
     PrinterBasicInfo basic_info;
     if (printer->ToPrinterInfo(&basic_info)) {
@@ -87,13 +89,6 @@ mojom::ResultCode PrintBackendCupsIpp::GetPrinterBasicInfo(
                                               : mojom::ResultCode::kFailed;
 }
 
-mojom::ResultCode PrintBackendCupsIpp::GetPrinterCapsAndDefaults(
-    const std::string& printer_name,
-    PrinterCapsAndDefaults* printer_info) {
-  NOTREACHED();
-  return mojom::ResultCode::kFailed;
-}
-
 mojom::ResultCode PrintBackendCupsIpp::GetPrinterSemanticCapsAndDefaults(
     const std::string& printer_name,
     PrinterSemanticCapsAndDefaults* printer_info) {
@@ -107,19 +102,31 @@ mojom::ResultCode PrintBackendCupsIpp::GetPrinterSemanticCapsAndDefaults(
   return mojom::ResultCode::kSuccess;
 }
 
-std::string PrintBackendCupsIpp::GetPrinterDriverInfo(
+std::vector<std::string> PrintBackendCupsIpp::GetPrinterDriverInfo(
     const std::string& printer_name) {
+  std::vector<std::string> result;
   std::unique_ptr<CupsPrinter> printer(
       cups_connection_->GetPrinter(printer_name));
   if (!printer)
-    return std::string();
+    return result;
 
   DCHECK_EQ(printer_name, printer->GetName());
-  return printer->GetMakeAndModel();
+  result.emplace_back(printer->GetInfo());
+  result.emplace_back(printer->GetMakeAndModel());
+  result.emplace_back(cupsUserAgent());
+  return result;
 }
 
 bool PrintBackendCupsIpp::IsValidPrinter(const std::string& printer_name) {
   return !!cups_connection_->GetPrinter(printer_name);
 }
+
+#if BUILDFLAG(IS_MAC)
+// static
+scoped_refptr<PrintBackend> PrintBackend::CreateInstanceImpl(
+    const std::string& locale) {
+  return base::MakeRefCounted<PrintBackendCupsIpp>(CupsConnection::Create());
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace printing

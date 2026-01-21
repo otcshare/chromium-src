@@ -49,6 +49,9 @@ Here are the exception types:
   CreateMutableNetworkTrafficAnnotationTag() function.
 * `test_annotation`: Files and paths in this category can use the
   TRAFFIC_ANNOTATION_FOR_TESTS tag.
+* `missing_new_fields`: If none of internal::contacts::email, user_data::type
+  and last_reviewed fields are populated then file and paths in this category
+  are exempted getting validated.
 
 ## hashes.py
 
@@ -61,4 +64,10 @@ along with their hash codes. This makes it easier to look up the annotation.
 
 ```
 vpython3 ./tools/traffic_annotation/scripts/auditor/hashes.py
+```
+
+## Testing Changes to auditor.py
+Unit tests need to be run manually:
+```
+vpython3 tools/traffic_annotation/scripts/auditor/auditor_test.py
 ```

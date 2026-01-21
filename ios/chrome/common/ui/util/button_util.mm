@@ -4,38 +4,30 @@
 
 #import "ios/chrome/common/ui/util/button_util.h"
 
-#import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/util/pointer_interaction_util.h"
+namespace {
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+}  // namespace
 
 const CGFloat kButtonVerticalInsets = 14.5;
 const CGFloat kPrimaryButtonCornerRadius = 15;
 
-UIButton* PrimaryActionButton(BOOL pointer_interaction_enabled) {
-  UIButton* primary_blue_button = [UIButton buttonWithType:UIButtonTypeSystem];
-  primary_blue_button.contentEdgeInsets =
-      UIEdgeInsetsMake(kButtonVerticalInsets, 0, kButtonVerticalInsets, 0);
-  [primary_blue_button setBackgroundColor:[UIColor colorNamed:kBlueColor]];
-  UIColor* titleColor = [UIColor colorNamed:kSolidButtonTextColor];
-  [primary_blue_button setTitleColor:titleColor forState:UIControlStateNormal];
-  primary_blue_button.titleLabel.font =
-      [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
-  primary_blue_button.layer.cornerRadius = kPrimaryButtonCornerRadius;
-  primary_blue_button.titleLabel.adjustsFontForContentSizeCategory = NO;
-  primary_blue_button.translatesAutoresizingMaskIntoConstraints = NO;
+void SetConfigurationTitle(UIButton* button, NSString* newString) {
+  UIButtonConfiguration* button_configuration = button.configuration;
+  button_configuration.title = newString;
+  button.configuration = button_configuration;
+}
 
-  // TODO(crbug.com/1129483): Remove once minimum supported version for
-  // extensions is at least 14
-  if (@available(iOS 13.4, *)) {
-    if (pointer_interaction_enabled) {
-      primary_blue_button.pointerInteractionEnabled = YES;
-      primary_blue_button.pointerStyleProvider =
-          CreateOpaqueButtonPointerStyleProvider();
-    }
-  }
+void SetConfigurationFont(UIButton* button, UIFont* font) {
+  UIButtonConfiguration* button_configuration = button.configuration;
 
-  return primary_blue_button;
+  button_configuration.titleTextAttributesTransformer =
+      ^NSDictionary<NSAttributedStringKey, id>*(
+          NSDictionary<NSAttributedStringKey, id>* incoming) {
+    NSMutableDictionary<NSAttributedStringKey, id>* outgoing =
+        [incoming mutableCopy];
+    outgoing[NSFontAttributeName] = font;
+    return outgoing;
+  };
+
+  button.configuration = button_configuration;
 }

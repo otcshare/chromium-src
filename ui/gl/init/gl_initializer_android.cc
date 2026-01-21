@@ -9,11 +9,13 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/native_library.h"
+#include "base/trace_event/trace_event.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_display.h"
 #include "ui/gl/gl_egl_api_implementation.h"
 #include "ui/gl/gl_gl_api_implementation.h"
 #include "ui/gl/gl_utils.h"
+#include "ui/gl/init/gl_display_initializer.h"
 
 namespace gl {
 namespace init {
@@ -21,10 +23,18 @@ namespace init {
 namespace {
 
 bool InitializeStaticNativeEGLInternal() {
-  base::NativeLibrary gles_library = LoadLibraryAndPrintError("libGLESv2.so");
+  base::NativeLibrary gles_library;
+  {
+    TRACE_EVENT("gpu,startup", "Load gles_library");
+    gles_library = LoadLibraryAndPrintError("libGLESv2.so");
+  }
   if (!gles_library)
     return false;
-  base::NativeLibrary egl_library = LoadLibraryAndPrintError("libEGL.so");
+  base::NativeLibrary egl_library;
+  {
+    TRACE_EVENT("gpu,startup", "Load egl_library");
+    egl_library = LoadLibraryAndPrintError("libEGL.so");
+  }
   if (!egl_library) {
     base::UnloadNativeLibrary(gles_library);
     return false;
@@ -76,12 +86,13 @@ bool InitializeStaticEGLInternal(GLImplementationParts implementation) {
 
 }  // namespace
 
-GLDisplay* InitializeGLOneOffPlatform(uint64_t system_device_id) {
-  GLDisplayEGL* display = GetDisplayEGL(system_device_id);
+GLDisplay* InitializeGLOneOffPlatform(gl::GpuPreference gpu_preference) {
+  GLDisplayEGL* display = GetDisplayEGL(gpu_preference);
   switch (GetGLImplementation()) {
     case kGLImplementationEGLGLES2:
     case kGLImplementationEGLANGLE:
-      if (!display->Initialize(EGLDisplayPlatform(EGL_DEFAULT_DISPLAY))) {
+      if (!InitializeDisplay(display,
+                             EGLDisplayPlatform(EGL_DEFAULT_DISPLAY))) {
         LOG(ERROR) << "GLDisplayEGL::Initialize failed.";
         return nullptr;
       }
@@ -110,8 +121,6 @@ bool InitializeStaticGLBindings(GLImplementationParts implementation) {
     default:
       NOTREACHED();
   }
-
-  return false;
 }
 
 void ShutdownGLPlatform(GLDisplay* display) {

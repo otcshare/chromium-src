@@ -18,25 +18,25 @@ TEST_F(BluetoothDeviceChooserControllerTest, CalculateSignalStrengthLevel) {
   EXPECT_EQ(
       0, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-128));
   EXPECT_EQ(
-      0, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-80));
+      0, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-84));
 
   EXPECT_EQ(
-      1, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-79));
+      1, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-83));
   EXPECT_EQ(
-      1, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-70));
+      1, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-77));
 
+  EXPECT_EQ(
+      2, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-76));
   EXPECT_EQ(
       2, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-69));
-  EXPECT_EQ(
-      2, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-62));
 
   EXPECT_EQ(
-      3, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-61));
+      3, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-68));
   EXPECT_EQ(
-      3, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-53));
+      3, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-58));
 
   EXPECT_EQ(
-      4, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-52));
+      4, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(-57));
   EXPECT_EQ(
       4, BluetoothDeviceChooserController::CalculateSignalStrengthLevel(127));
 }

@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 
@@ -19,7 +19,7 @@ namespace google {
 namespace protobuf {
 class MessageLite;
 }  // namespace protobuf
-}  // namepsace google
+}  // namespace google
 
 namespace mcs_proto {
 class LoginRequest;

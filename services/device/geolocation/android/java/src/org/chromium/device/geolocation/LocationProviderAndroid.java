@@ -4,6 +4,8 @@
 
 package org.chromium.device.geolocation;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -13,11 +15,16 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.build.annotations.RequiresNonNull;
+import org.chromium.components.permissions.PermissionsAndroidFeatureList;
+import org.chromium.components.permissions.PermissionsAndroidFeatureMap;
 
 import java.util.List;
 
@@ -28,19 +35,41 @@ import java.util.List;
  *
  * [1] https://developer.android.com/reference/android/location/package-summary.html
  */
+@NullMarked
 public class LocationProviderAndroid implements LocationListener, LocationProvider {
     private static final String TAG = "LocationProvider";
 
-    private LocationManager mLocationManager;
+    private @Nullable LocationManager mLocationManager;
     private boolean mIsRunning;
+    private boolean mEffectiveHighAccuracy;
+    private boolean mRequestedHighAccuracy;
 
-    LocationProviderAndroid() {}
+    private final Context mContext;
+
+    public LocationProviderAndroid(Context context) {
+        mContext = context;
+    }
+
+    LocationProviderAndroid() {
+        this(ContextUtils.getApplicationContext());
+    }
 
     @Override
     public void start(boolean enableHighAccuracy) {
         ThreadUtils.assertOnUiThread();
+        mRequestedHighAccuracy = enableHighAccuracy;
+        mEffectiveHighAccuracy = mRequestedHighAccuracy;
+
+        // Checking app-level permission here and override the `mEffectiveHighAccuracy`
+        // so we can make sure `Geolocation.AndroidLocationProvider.` is logged with
+        // correct name suffix.
+        if (mContext.checkCallingOrSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            mEffectiveHighAccuracy = false;
+        }
+
         unregisterFromLocationUpdates();
-        registerForLocationUpdates(enableHighAccuracy);
+        registerForLocationUpdates();
     }
 
     @Override
@@ -59,9 +88,21 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
     public void onLocationChanged(Location location) {
         // Callbacks from the system location service are queued to this thread, so it's
         // possible that we receive callbacks after unregistering. At this point, the
-        // native object will no longer exist.
+        // native object will no longer exist. Using `mRequestedHighAccuracy` for
+        // location update because `mEffectiveHighAccuracy` can be overridden by app-level
+        // permission check.
         if (mIsRunning) {
-            LocationProviderAdapter.onNewLocationAvailable(location);
+            if (location.hasAccuracy()) {
+                final String histogramName =
+                        "Geolocation.AndroidLocationProvider"
+                                + (mEffectiveHighAccuracy
+                                        ? ".HighAccuracyHint"
+                                        : ".LowAccuracyHint")
+                                + ".Accuracy";
+                RecordHistogram.recordCount100000Histogram(
+                        histogramName, (int) location.getAccuracy());
+            }
+            LocationProviderAdapter.onNewLocationAvailable(location, mRequestedHighAccuracy);
         }
     }
 
@@ -74,25 +115,27 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
     @Override
     public void onProviderDisabled(String provider) {}
 
-    @VisibleForTesting
     public void setLocationManagerForTesting(LocationManager manager) {
+        var oldValue = mLocationManager;
         mLocationManager = manager;
+        ResettersForTesting.register(() -> mLocationManager = oldValue);
     }
 
     private void createLocationManagerIfNeeded() {
         if (mLocationManager != null) return;
-        mLocationManager = (LocationManager) ContextUtils.getApplicationContext().getSystemService(
-                Context.LOCATION_SERVICE);
-        if (mLocationManager == null) {
-            Log.e(TAG, "Could not get location manager.");
-        }
+        mLocationManager =
+                (LocationManager)
+                        ContextUtils.getApplicationContext()
+                                .getSystemService(Context.LOCATION_SERVICE);
     }
 
-    /**
-     * Registers this object with the location service.
-     */
-    private void registerForLocationUpdates(boolean enableHighAccuracy) {
+    /** Registers this object with the location service. */
+    private void registerForLocationUpdates() {
         createLocationManagerIfNeeded();
+        if (mLocationManager == null) {
+            Log.e(TAG, "Could not get location manager.");
+            return;
+        }
         if (usePassiveOneShotLocation()) return;
 
         assert !mIsRunning;
@@ -102,17 +145,27 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
         // bounce notifications to the Geolocation thread as they arrive in the mainLooper.
         try {
             Criteria criteria = new Criteria();
-            Context context = ContextUtils.getApplicationContext();
-            if (enableHighAccuracy
-                    && context.checkCallingOrSelfPermission(
-                               Manifest.permission.ACCESS_FINE_LOCATION)
-                            == PackageManager.PERMISSION_GRANTED) {
-                criteria.setAccuracy(Criteria.ACCURACY_FINE);
+
+            // When the `APPROXIMATE_GEOLOCATION_PERMISSION` feature is enabled,
+            // `mEffectiveHighAccuracy` explicitly controls the location accuracy. Otherwise, it
+            // only acts as a hint for the location provider.
+            if (PermissionsAndroidFeatureMap.isEnabled(
+                    PermissionsAndroidFeatureList.APPROXIMATE_GEOLOCATION_PERMISSION)) {
+                if (mEffectiveHighAccuracy) {
+                    criteria.setAccuracy(Criteria.ACCURACY_FINE);
+                } else {
+                    criteria.setAccuracy(Criteria.ACCURACY_COARSE);
+                }
+            } else {
+                if (mEffectiveHighAccuracy) {
+                    criteria.setAccuracy(Criteria.ACCURACY_FINE);
+                }
             }
             mLocationManager.requestLocationUpdates(
                     0, 0, criteria, this, ThreadUtils.getUiThreadLooper());
         } catch (SecurityException e) {
-            Log.e(TAG,
+            Log.e(
+                    TAG,
                     "Caught security exception while registering for location updates "
                             + "from the system. The application does not have sufficient "
                             + "geolocation permissions.");
@@ -128,15 +181,15 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
         }
     }
 
-    /**
-     * Unregisters this object from the location service.
-     */
+    /** Unregisters this object from the location service. */
     private void unregisterFromLocationUpdates() {
         if (!mIsRunning) return;
         mIsRunning = false;
+        assumeNonNull(mLocationManager);
         mLocationManager.removeUpdates(this);
     }
 
+    @RequiresNonNull("mLocationManager")
     private boolean usePassiveOneShotLocation() {
         if (!isOnlyPassiveLocationProviderEnabled()) {
             return false;
@@ -149,7 +202,7 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
                 mLocationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
         if (location != null) {
             ThreadUtils.assertOnUiThread();
-            LocationProviderAdapter.onNewLocationAvailable(location);
+            LocationProviderAdapter.onNewLocationAvailable(location, true);
         }
         return true;
     }
@@ -158,9 +211,11 @@ public class LocationProviderAndroid implements LocationListener, LocationProvid
      * Checks if the passive location provider is the only provider available
      * in the system.
      */
+    @RequiresNonNull("mLocationManager")
     private boolean isOnlyPassiveLocationProviderEnabled() {
         final List<String> providers = mLocationManager.getProviders(true);
-        return providers != null && providers.size() == 1
+        return providers != null
+                && providers.size() == 1
                 && providers.get(0).equals(LocationManager.PASSIVE_PROVIDER);
     }
 }

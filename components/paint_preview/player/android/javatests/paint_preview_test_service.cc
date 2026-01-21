@@ -11,6 +11,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/strings/strcat.h"
@@ -21,7 +22,6 @@
 #include "components/paint_preview/common/file_utils.h"
 #include "components/paint_preview/common/proto/paint_preview.pb.h"
 #include "components/paint_preview/common/version.h"
-#include "components/paint_preview/player/android/javatests_jni_headers/PaintPreviewTestService_jni.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkMatrix.h"
@@ -30,7 +30,10 @@
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/paint_preview/player/android/javatests_jni_headers/PaintPreviewTestService_jni.h"
+
+using base::android::JavaRef;
 
 namespace paint_preview {
 
@@ -100,9 +103,9 @@ bool WriteSkp(sk_sp<SkPicture> skp,
 
 }  // namespace
 
-jlong JNI_PaintPreviewTestService_GetInstance(
+static int64_t JNI_PaintPreviewTestService_GetInstance(
     JNIEnv* env,
-    const JavaParamRef<jstring>& j_path) {
+    const JavaRef<jstring>& j_path) {
   base::FilePath file_path(base::android::ConvertJavaStringToUTF8(env, j_path));
   PaintPreviewTestService* service = new PaintPreviewTestService(file_path);
   return reinterpret_cast<intptr_t>(service);
@@ -118,7 +121,7 @@ PaintPreviewTestService::PaintPreviewTestService(const base::FilePath& path)
 
 PaintPreviewTestService::~PaintPreviewTestService() = default;
 
-jlong PaintPreviewTestService::GetBaseService(JNIEnv* env) {
+int64_t PaintPreviewTestService::GetBaseService(JNIEnv* env) {
   return reinterpret_cast<intptr_t>(
       static_cast<PaintPreviewBaseService*>(this));
 }
@@ -126,12 +129,12 @@ jlong PaintPreviewTestService::GetBaseService(JNIEnv* env) {
 base::android::ScopedJavaLocalRef<jintArray>
 PaintPreviewTestService::CreateSingleSkp(
     JNIEnv* env,
-    jint j_id,
-    jint j_width,
-    jint j_height,
-    const JavaParamRef<jintArray>& j_link_rects,
-    const JavaParamRef<jobjectArray>& j_link_urls,
-    const JavaParamRef<jintArray>& j_child_rects) {
+    int32_t j_id,
+    int32_t j_width,
+    int32_t j_height,
+    const JavaRef<jintArray>& j_link_rects,
+    const JavaRef<jobjectArray>& j_link_urls,
+    const JavaRef<jintArray>& j_child_rects) {
   const int id = static_cast<int>(j_id);
   uint32_t width = static_cast<uint32_t>(j_width);
   uint32_t height = static_cast<uint32_t>(j_height);
@@ -155,7 +158,7 @@ PaintPreviewTestService::CreateSingleSkp(
   } else {
     constexpr SkColor colors[4] = {SK_ColorRED, SK_ColorBLUE, SK_ColorGREEN,
                                    SK_ColorMAGENTA};
-    color = colors[id % 4];
+    color = UNSAFE_TODO(colors[id % 4]);
   }
   CreateBackground(canvas, color, width, height);
 
@@ -217,10 +220,10 @@ PaintPreviewTestService::CreateSingleSkp(
   return base::android::ToJavaIntArray(env, out);
 }
 
-jboolean PaintPreviewTestService::SerializeFrames(
+bool PaintPreviewTestService::SerializeFrames(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& j_key,
-    const base::android::JavaParamRef<jstring>& j_url) {
+    const base::android::JavaRef<jstring>& j_key,
+    const base::android::JavaRef<jstring>& j_url) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   if (!base::PathExists(test_data_dir_)) {
     base::File::Error error;
@@ -284,3 +287,5 @@ PaintPreviewTestService::Frame& PaintPreviewTestService::Frame::operator=(
     Frame&& rhs) noexcept = default;
 
 }  // namespace paint_preview
+
+DEFINE_JNI(PaintPreviewTestService)

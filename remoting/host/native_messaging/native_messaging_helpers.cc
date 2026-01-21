@@ -14,20 +14,21 @@ namespace remoting {
 bool ParseNativeMessageJson(const std::string& message,
                             std::string& message_type,
                             base::Value::Dict& parsed_message) {
-  auto opt_message = base::JSONReader::Read(message);
+  auto opt_message =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!opt_message.has_value()) {
     LOG(ERROR) << "Received a message that's not valid JSON.";
     return false;
   }
 
-  auto message_value = std::move(opt_message.value());
+  auto message_value = std::move(*opt_message);
   if (!message_value.is_dict()) {
     LOG(ERROR) << "Received a message that's not a dictionary.";
     return false;
   }
 
   const std::string* message_type_value =
-      message_value.FindStringKey(kMessageType);
+      message_value.GetDict().FindString(kMessageType);
   if (message_type_value) {
     message_type = *message_type_value;
   }
@@ -37,12 +38,12 @@ bool ParseNativeMessageJson(const std::string& message,
   return true;
 }
 
-absl::optional<base::Value::Dict> CreateNativeMessageResponse(
+std::optional<base::Value::Dict> CreateNativeMessageResponse(
     const base::Value::Dict& request) {
   const std::string* type = request.FindString(kMessageType);
   if (!type) {
     LOG(ERROR) << "'" << kMessageType << "' not found in request.";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   base::Value::Dict response;

@@ -18,18 +18,18 @@
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
+
 namespace {
 
 using testing::_;
 
-const base::Time kTimeA = base::Time::FromDoubleT(1);
-const base::Time kTimeB = base::Time::FromDoubleT(2);
-const base::Time kTimeC = base::Time::FromDoubleT(3);
-const base::Time kTimeD = base::Time::FromDoubleT(4);
-const base::Time kTimeE = base::Time::FromDoubleT(5);
-const base::Time kTimeF = base::Time::FromDoubleT(6);
+const base::Time kTimeA = base::Time::FromSecondsSinceUnixEpoch(1);
+const base::Time kTimeB = base::Time::FromSecondsSinceUnixEpoch(2);
+const base::Time kTimeC = base::Time::FromSecondsSinceUnixEpoch(3);
+const base::Time kTimeD = base::Time::FromSecondsSinceUnixEpoch(4);
+const base::Time kTimeE = base::Time::FromSecondsSinceUnixEpoch(5);
+const base::Time kTimeF = base::Time::FromSecondsSinceUnixEpoch(6);
 
 class MockHistoryUiFaviconRequestHandler
     : public favicon::HistoryUiFaviconRequestHandler {
@@ -37,18 +37,15 @@ class MockHistoryUiFaviconRequestHandler
   MockHistoryUiFaviconRequestHandler() = default;
   ~MockHistoryUiFaviconRequestHandler() override = default;
 
-  MOCK_METHOD4(
-      GetRawFaviconForPageURL,
-      void(const GURL& page_url,
-           int desired_size_in_pixel,
-           favicon_base::FaviconRawBitmapCallback callback,
-           favicon::HistoryUiFaviconRequestOrigin request_origin_for_uma));
+  MOCK_METHOD4(GetRawFaviconForPageURL,
+               void(const GURL& page_url,
+                    int desired_size_in_pixel,
+                    bool fallback_to_host,
+                    favicon_base::FaviconRawBitmapCallback callback));
 
-  MOCK_METHOD3(
-      GetFaviconImageForPageURL,
-      void(const GURL& page_url,
-           favicon_base::FaviconImageCallback callback,
-           favicon::HistoryUiFaviconRequestOrigin request_origin_for_uma));
+  MOCK_METHOD2(GetFaviconImageForPageURL,
+               void(const GURL& page_url,
+                    favicon_base::FaviconImageCallback callback));
 };
 
 gfx::Image GetDummyImage() {
@@ -81,7 +78,7 @@ class BrowserTabsMetadataFetcherImplTest : public testing::Test {
   using BrowserTabMetadata = BrowserTabsModel::BrowserTabMetadata;
 
   void OnBrowserTabMetadataFetched(
-      absl::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>
+      std::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>
           browser_tab_metadatas) {
     actual_browser_tabs_metadata_ = browser_tab_metadatas;
   }
@@ -118,17 +115,17 @@ class BrowserTabsMetadataFetcherImplTest : public testing::Test {
 
   void ExpectFaviconUrlFetchAttempt(const GURL& url) {
     EXPECT_CALL(favicon_request_handler_,
-                GetFaviconImageForPageURL(url, /*callback=*/_,
-                                          /*request_origin_for_uma=*/_))
+                GetFaviconImageForPageURL(url, /*callback=*/_))
         .WillRepeatedly(
-            [&](auto, favicon_base::FaviconImageCallback callback, auto) {
+            [&](auto, favicon_base::FaviconImageCallback callback) {
               // Randomize the order in which callbacks may return.
-              if (std::rand() % 2)
+              if (std::rand() % 2) {
                 favicon_request_handler_responses_.emplace_front(
                     std::move(callback));
-              else
+              } else {
                 favicon_request_handler_responses_.emplace_back(
                     std::move(callback));
+              }
             });
   }
 
@@ -160,7 +157,7 @@ class BrowserTabsMetadataFetcherImplTest : public testing::Test {
     }
   }
 
-  const absl::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>&
+  const std::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>&
   actual_browser_tabs_metadata() const {
     return actual_browser_tabs_metadata_;
   }
@@ -169,7 +166,7 @@ class BrowserTabsMetadataFetcherImplTest : public testing::Test {
   testing::NiceMock<MockHistoryUiFaviconRequestHandler>
       favicon_request_handler_;
   BrowserTabsMetadataFetcherImpl browser_tabs_metadata_job_;
-  absl::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>
+  std::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>
       actual_browser_tabs_metadata_;
 
   std::map<SessionID, std::unique_ptr<sync_sessions::SyncedSessionWindow>>
@@ -348,5 +345,4 @@ TEST_F(BrowserTabsMetadataFetcherImplTest, MultipleWindows) {
   }));
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

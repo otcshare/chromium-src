@@ -11,7 +11,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
@@ -24,6 +23,7 @@
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_level_calculator.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
 #include "third_party/webrtc/api/media_stream_track.h"
 #include "third_party/webrtc/rtc_base/time_utils.h"
@@ -124,7 +124,7 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
     void AddSink(webrtc::AudioTrackSinkInterface* sink) override;
     void RemoveSink(webrtc::AudioTrackSinkInterface* sink) override;
     bool GetSignalLevel(int* level) override;
-    rtc::scoped_refptr<webrtc::AudioProcessorInterface> GetAudioProcessor()
+    webrtc::scoped_refptr<webrtc::AudioProcessorInterface> GetAudioProcessor()
         override;
     webrtc::AudioSourceInterface* GetSource() const override;
 
@@ -161,16 +161,13 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
 
     // A vector of pointers to unowned WebRTC-internal objects which each
     // receive the audio data.
-    std::vector<webrtc::AudioTrackSinkInterface*> sinks_;
+    Vector<webrtc::AudioTrackSinkInterface*> sinks_;
 
-    // Used for getting capture timestamps referenced on the rtc::TimeMicros()
-    // clock. See the comment at the implementation of UpdateTimestampAligner()
-    // for more details.
-    rtc::TimestampAligner timestamp_aligner_;
+    // Used for getting capture timestamps referenced on the
+    // webrtc::TimeMicros() clock. See the comment at the implementation of
+    // UpdateTimestampAligner() for more details.
+    webrtc::TimestampAligner timestamp_aligner_;
   };
-
-  template <typename>
-  friend struct WTF::CrossThreadCopier;
 
   // WebMediaStreamAudioSink implementation.
   void OnData(const media::AudioBus& audio_bus,

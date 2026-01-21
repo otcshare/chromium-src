@@ -19,13 +19,19 @@ import android.os.Build;
 import android.provider.Browser;
 import android.text.TextUtils;
 
+import androidx.annotation.IntDef;
+import androidx.annotation.OptIn;
 import androidx.browser.customtabs.CustomTabsIntent;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.SysUtils;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
@@ -34,9 +40,8 @@ import org.chromium.ui.util.ColorUtils;
 
 import java.util.Locale;
 
-/**
- * A class containing some utility static methods.
- */
+/** A class containing some utility static methods. */
+@NullMarked
 public class MediaViewerUtils {
     private static final String DEFAULT_MIME_TYPE = "*/*";
     private static final String MIMETYPE_AUDIO = "audio";
@@ -47,54 +52,80 @@ public class MediaViewerUtils {
 
     /**
      * Creates an Intent that allows viewing the given file in an internal media viewer.
-     * @param displayUri               URI to display to the user, ideally in file:// form.
-     * @param contentUri               content:// URI pointing at the file.
-     * @param mimeType                 MIME type of the file.
+     *
+     * @param displayUri URI to display to the user, ideally in file:// form.
+     * @param contentUri content:// URI pointing at the file.
+     * @param mimeType MIME type of the file.
      * @param allowExternalAppHandlers Whether the viewer should allow the user to open with another
-     *                                 app.
+     *     app.
+     * @param allowShareAction Whether the view should allow the share action.
      * @return Intent that can be fired to open the file.
      */
-    public static Intent getMediaViewerIntent(Uri displayUri, Uri contentUri, String mimeType,
-            boolean allowExternalAppHandlers, Context context) {
-        Bitmap closeIcon = BitmapFactory.decodeResource(
-                context.getResources(), R.drawable.ic_arrow_back_white_24dp);
-        Bitmap shareIcon = BitmapFactory.decodeResource(
-                context.getResources(), R.drawable.ic_share_white_24dp);
+    public static Intent getMediaViewerIntent(
+            @Nullable Uri displayUri,
+            @Nullable Uri contentUri,
+            @Nullable String mimeType,
+            boolean allowExternalAppHandlers,
+            boolean allowShareAction,
+            Context context) {
+        Bitmap closeIcon =
+                BitmapFactory.decodeResource(
+                        context.getResources(), R.drawable.ic_arrow_back_white_24dp);
 
         CustomTabsIntent.Builder builder = new CustomTabsIntent.Builder();
         builder.setToolbarColor(Color.BLACK);
         builder.setCloseButtonIcon(closeIcon);
         builder.setShowTitle(true);
-        builder.setColorScheme(ColorUtils.inNightMode(context)
+        builder.setColorScheme(
+                ColorUtils.inNightMode(context)
                         ? CustomTabsIntent.COLOR_SCHEME_DARK
                         : CustomTabsIntent.COLOR_SCHEME_LIGHT);
 
         if (allowExternalAppHandlers && !willExposeFileUri(contentUri)) {
             // Create a PendingIntent that can be used to view the file externally.
-            // TODO(https://crbug.com/795968): Check if this is problematic in multi-window mode,
-            //                                 where two different viewers could be visible at the
-            //                                 same time.
             Intent viewIntent = createViewIntentForUri(contentUri, mimeType, null, null);
             Intent chooserIntent = Intent.createChooser(viewIntent, null);
             chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             String openWithStr = context.getString(R.string.download_manager_open_with);
-            PendingIntent pendingViewIntent = PendingIntent.getActivity(context, 0, chooserIntent,
-                    PendingIntent.FLAG_CANCEL_CURRENT
-                            | IntentUtils.getPendingIntentMutabilityFlag(true));
+
+            // TODO(crbug.com/40262179): PendingIntents are no longer allowed to be both
+            // mutable and implicit. Since this must be mutable, we need to set a component and then
+            // remove the FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT flag.
+            PendingIntent pendingViewIntent =
+                    PendingIntent.getActivity(
+                            context,
+                            0,
+                            chooserIntent,
+                            PendingIntent.FLAG_CANCEL_CURRENT
+                                    | IntentUtils.getPendingIntentMutabilityFlag(true)
+                                    | getAllowUnsafeImplicitIntentFlag());
             builder.addMenuItem(openWithStr, pendingViewIntent);
         }
 
         // Create a PendingIntent that shares the file with external apps.
         // If the URI is a file URI and the Android version is N or later, this will throw a
         // FileUriExposedException. In this case, we just don't add the share button.
-        if (!willExposeFileUri(contentUri)) {
+        if (allowShareAction && !willExposeFileUri(contentUri)) {
+            Bitmap shareIcon =
+                    BitmapFactory.decodeResource(
+                            context.getResources(), R.drawable.ic_share_white_24dp);
+
+            // TODO(crbug.com/40262179): PendingIntents are no longer allowed to be both
+            // mutable and implicit. Since this must be mutable, we need to set a component and then
+            // remove the FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT flag.
             PendingIntent pendingShareIntent =
-                    PendingIntent.getActivity(context, 0, createShareIntent(contentUri, mimeType),
+                    PendingIntent.getActivity(
+                            context,
+                            0,
+                            createShareIntent(contentUri, mimeType),
                             PendingIntent.FLAG_CANCEL_CURRENT
-                                    | IntentUtils.getPendingIntentMutabilityFlag(true));
+                                    | IntentUtils.getPendingIntentMutabilityFlag(true)
+                                    | getAllowUnsafeImplicitIntentFlag());
             builder.setActionButton(
                     shareIcon, context.getString(R.string.share), pendingShareIntent, true);
         }
+        // Disables Chrome share action as share is added as a custom action button.
+        builder.setShareState(CustomTabsIntent.SHARE_STATE_OFF);
 
         // The color of the media viewer is dependent on the file type.
         int backgroundRes;
@@ -110,7 +141,8 @@ public class MediaViewerUtils {
         intent.setPackage(context.getPackageName());
         intent.setData(contentUri);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.MEDIA_VIEWER);
-        intent.putExtra(CustomTabIntentDataProvider.EXTRA_MEDIA_VIEWER_URL, displayUri.toString());
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_MEDIA_VIEWER_URL, String.valueOf(displayUri));
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_ENABLE_EMBEDDED_MEDIA_EXPERIENCE, true);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_INITIAL_BACKGROUND_COLOR, mediaColor);
         intent.putExtra(CustomTabsIntent.EXTRA_TOOLBAR_COLOR, mediaColor);
@@ -124,14 +156,18 @@ public class MediaViewerUtils {
 
     /**
      * Creates an Intent to open the file in another app by firing an Intent to Android.
-     * @param fileUri  Uri pointing to the file.
+     *
+     * @param fileUri Uri pointing to the file.
      * @param mimeType MIME type for the file.
      * @param originalUrl The original url of the downloaded file.
      * @param referrer Referrer of the downloaded file.
      * @return Intent that can be used to start an Activity for the file.
      */
     public static Intent createViewIntentForUri(
-            Uri fileUri, String mimeType, String originalUrl, String referrer) {
+            @Nullable Uri fileUri,
+            @Nullable String mimeType,
+            @Nullable String originalUrl,
+            @Nullable String referrer) {
         Intent fileIntent = new Intent(Intent.ACTION_VIEW);
         String normalizedMimeType = Intent.normalizeMimeType(mimeType);
         if (TextUtils.isEmpty(normalizedMimeType)) {
@@ -148,12 +184,13 @@ public class MediaViewerUtils {
 
     /**
      * Adds the originating Uri and referrer extras to an intent if they are not null.
-     * @param intent      Intent for adding extras.
+     *
+     * @param intent Intent for adding extras.
      * @param originalUrl The original url of the downloaded file.
-     * @param referrer    Referrer of the downloaded file.
+     * @param referrer Referrer of the downloaded file.
      */
     public static void setOriginalUrlAndReferralExtraToIntent(
-            Intent intent, String originalUrl, String referrer) {
+            Intent intent, @Nullable String originalUrl, @Nullable String referrer) {
         if (originalUrl != null) {
             intent.putExtra(Intent.EXTRA_ORIGINATING_URI, Uri.parse(originalUrl));
         }
@@ -162,48 +199,51 @@ public class MediaViewerUtils {
 
     /**
      * Determines the media type from the given MIME type.
+     *
      * @param mimeType The MIME type to check.
      * @return MediaLauncherActivity.MediaType enum value for determined media type.
      */
-    static int getMediaTypeFromMIMEType(String mimeType) {
-        if (TextUtils.isEmpty(mimeType)) return MediaLauncherActivity.MediaType.UNKNOWN;
+    static boolean isMediaMIMEType(@Nullable String mimeType) {
+        if (TextUtils.isEmpty(mimeType)) return false;
 
         String[] pieces = mimeType.toLowerCase(Locale.getDefault()).split("/");
-        if (pieces.length != 2) return MediaLauncherActivity.MediaType.UNKNOWN;
+        if (pieces.length != 2) return false;
 
         switch (pieces[0]) {
             case MIMETYPE_AUDIO:
-                return MediaLauncherActivity.MediaType.AUDIO;
             case MIMETYPE_IMAGE:
-                return MediaLauncherActivity.MediaType.IMAGE;
             case MIMETYPE_VIDEO:
-                return MediaLauncherActivity.MediaType.VIDEO;
+                return true;
             default:
-                return MediaLauncherActivity.MediaType.UNKNOWN;
+                return false;
         }
     }
 
-    /**
-     * Selectively enables or disables the MediaLauncherActivity.
-     */
+    /** Selectively enables or disables the MediaLauncherActivity. */
     public static void updateMediaLauncherActivityEnabled() {
-        PostTask.postTask(TaskTraits.BEST_EFFORT_MAY_BLOCK,
-                () -> { synchronousUpdateMediaLauncherActivityEnabled(); });
+        PostTask.postTask(
+                TaskTraits.BEST_EFFORT_MAY_BLOCK,
+                () -> {
+                    synchronousUpdateMediaLauncherActivityEnabled();
+                });
     }
 
     static void synchronousUpdateMediaLauncherActivityEnabled() {
         Context context = ContextUtils.getApplicationContext();
         PackageManager packageManager = context.getPackageManager();
         ComponentName mediaComponentName = new ComponentName(context, MediaLauncherActivity.class);
-        ComponentName audioComponentName = new ComponentName(
-                context, "org.chromium.chrome.browser.media.AudioLauncherActivity");
+        ComponentName audioComponentName =
+                new ComponentName(
+                        context, "org.chromium.chrome.browser.media.AudioLauncherActivity");
 
-        int newMediaState = shouldEnableMediaLauncherActivity()
-                ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-        int newAudioState = shouldEnableAudioLauncherActivity()
-                ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+        int newMediaState =
+                shouldEnableMediaLauncherActivity()
+                        ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+        int newAudioState =
+                shouldEnableAudioLauncherActivity()
+                        ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
         // This indicates that we don't want to kill Chrome when changing component enabled
         // state.
         int flags = PackageManager.DONT_KILL_APP;
@@ -216,43 +256,70 @@ public class MediaViewerUtils {
         }
     }
 
-    /**
-     * Force MediaLauncherActivity to be enabled for testing.
-     */
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        MediaLauncherActivityEnabledReason.LOW_END_DEVICE,
+                MediaLauncherActivityEnabledReason.ENTERPRISE,
+        MediaLauncherActivityEnabledReason.BOTH, MediaLauncherActivityEnabledReason.NEITHER
+    })
+    private @interface MediaLauncherActivityEnabledReason {
+        int LOW_END_DEVICE = 0;
+        int ENTERPRISE = 1;
+        int BOTH = 2;
+        int NEITHER = 3;
+        int COUNT = 4;
+    }
+
+    /** Records a histogram for MediaLauncherActivity metrics. */
+    public static void recordMediaLauncherActivityStarted() {
+        @MediaLauncherActivityEnabledReason int reason;
+        if (SysUtils.isLowEndDevice() && isEnterpriseManaged()) {
+            reason = MediaLauncherActivityEnabledReason.BOTH;
+        } else if (SysUtils.isLowEndDevice()) {
+            reason = MediaLauncherActivityEnabledReason.LOW_END_DEVICE;
+        } else if (isEnterpriseManaged()) {
+            reason = MediaLauncherActivityEnabledReason.ENTERPRISE;
+        } else {
+            reason = MediaLauncherActivityEnabledReason.NEITHER;
+        }
+        RecordHistogram.recordEnumeratedHistogram(
+                "MediaLauncherActivityStarted", reason, MediaLauncherActivityEnabledReason.COUNT);
+    }
+
+    /** Force MediaLauncherActivity to be enabled for testing. */
     public static void forceEnableMediaLauncherActivityForTest() {
         sIsMediaLauncherActivityForceEnabledForTest = true;
         // Synchronously update to avoid race conditions in tests.
         synchronousUpdateMediaLauncherActivityEnabled();
-    }
-
-    /**
-     * Stops forcing MediaLauncherActivity to be enabled for testing.
-     */
-    public static void stopForcingEnableMediaLauncherActivityForTest() {
-        sIsMediaLauncherActivityForceEnabledForTest = false;
-        // Synchronously update to avoid race conditions in tests.
-        synchronousUpdateMediaLauncherActivityEnabled();
+        ResettersForTesting.register(
+                () -> {
+                    sIsMediaLauncherActivityForceEnabledForTest = false;
+                    synchronousUpdateMediaLauncherActivityEnabled();
+                });
     }
 
     private static boolean shouldEnableMediaLauncherActivity() {
-        return sIsMediaLauncherActivityForceEnabledForTest || SysUtils.isAndroidGo()
+        return sIsMediaLauncherActivityForceEnabledForTest
+                || SysUtils.isLowEndDevice()
                 || isEnterpriseManaged();
     }
 
     private static boolean shouldEnableAudioLauncherActivity() {
-        return shouldEnableMediaLauncherActivity() && !SysUtils.isAndroidGo();
+        return shouldEnableMediaLauncherActivity() && !SysUtils.isLowEndDevice();
     }
 
     private static boolean isEnterpriseManaged() {
 
         RestrictionsManager restrictionsManager =
-                (RestrictionsManager) ContextUtils.getApplicationContext().getSystemService(
-                        Context.RESTRICTIONS_SERVICE);
+                (RestrictionsManager)
+                        ContextUtils.getApplicationContext()
+                                .getSystemService(Context.RESTRICTIONS_SERVICE);
         return restrictionsManager.hasRestrictionsProvider()
                 || !restrictionsManager.getApplicationRestrictions().isEmpty();
     }
 
-    private static Intent createShareIntent(Uri fileUri, String mimeType) {
+    private static Intent createShareIntent(@Nullable Uri fileUri, @Nullable String mimeType) {
         if (TextUtils.isEmpty(mimeType)) mimeType = DEFAULT_MIME_TYPE;
 
         Intent intent = new Intent(Intent.ACTION_SEND);
@@ -263,7 +330,7 @@ public class MediaViewerUtils {
         return intent;
     }
 
-    private static boolean isImageType(String mimeType) {
+    private static boolean isImageType(@Nullable String mimeType) {
         if (TextUtils.isEmpty(mimeType)) return false;
 
         String[] pieces = mimeType.toLowerCase(Locale.getDefault()).split("/");
@@ -272,11 +339,22 @@ public class MediaViewerUtils {
         return MIMETYPE_IMAGE.equals(pieces[0]);
     }
 
-    private static boolean willExposeFileUri(Uri uri) {
+    private static boolean willExposeFileUri(@Nullable Uri uri) {
         assert uri != null && !uri.equals(Uri.EMPTY) : "URI is not successfully generated.";
+        return ContentResolver.SCHEME_FILE.equals(uri.getScheme());
+    }
 
-        // On Android N and later, an Exception is thrown if we try to expose a file:// URI.
-        return uri.getScheme().equals(ContentResolver.SCHEME_FILE)
-                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N;
+    @OptIn(markerClass = androidx.core.os.BuildCompat.PrereleaseSdkCheck.class)
+    private static int getAllowUnsafeImplicitIntentFlag() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try {
+                return PendingIntent.class
+                        .getDeclaredField("FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT")
+                        .getInt(null);
+            } catch (IllegalAccessException | NoSuchFieldException e) {
+                assert false : "Unsafe implicit PendingIntent may fail to run.";
+            }
+        }
+        return 0;
     }
 }

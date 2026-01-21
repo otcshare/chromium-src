@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/services/secure_channel/fake_authenticated_channel.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chromeos/ash/services/secure_channel/file_transfer_update_callback.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "chromeos/ash/services/secure_channel/register_payload_file_request.h"
@@ -54,6 +54,13 @@ void FakeAuthenticatedChannelObserver::OnMessageReceived(
     const std::string& feature,
     const std::string& payload) {
   received_messages_.push_back(std::make_pair(feature, payload));
+}
+
+void FakeAuthenticatedChannelObserver::OnNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  nearby_connection_step_ = step;
+  nearby_connection_step_result_ = result;
 }
 
 }  // namespace ash::secure_channel

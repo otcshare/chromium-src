@@ -1,4 +1,1 @@
-monorail: {
-  component: "UI>Browser>Mobile>UserEducation"
-}
-os: ANDROID
+mixins: "//components/user_education/COMMON_METADATA"

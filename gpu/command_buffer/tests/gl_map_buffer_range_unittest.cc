@@ -8,6 +8,9 @@
 #include <GLES3/gl3.h>
 #include <stdint.h>
 
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
@@ -317,7 +320,7 @@ TEST_F(ES3MapBufferRangeTest, ReadPixels) {
   GLTestHelper::CheckGLError("no errors", __LINE__);
 
 #if BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/1230038): This step causes a crash on mac intel-uhd bot.
+  // TODO(crbug.com/40778773): This step causes a crash on mac intel-uhd bot.
   if (GPUTestBotConfig::CurrentConfigMatches("Mac Intel 0x3e9b"))
     return;
 #endif
@@ -370,7 +373,13 @@ TEST_F(ES3MapBufferRangeTest, TexImageAndSubImage2D) {
   GLTestHelper::CheckGLError("no errors", __LINE__);
 }
 
-TEST_F(ES3MapBufferRangeTest, TexImageAndSubImage3D) {
+// TODO(crbug.com/40904610): Fix flakiness and re-enable the test.
+#if BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER) && defined(LEAK_SANITIZER)
+#define MAYBE_TexImageAndSubImage3D DISABLED_TexImageAndSubImage3D
+#else
+#define MAYBE_TexImageAndSubImage3D TexImageAndSubImage3D
+#endif
+TEST_F(ES3MapBufferRangeTest, MAYBE_TexImageAndSubImage3D) {
   if (ShouldSkipTest())
     return;
 
@@ -537,8 +546,9 @@ TEST_F(ES3MapBufferRangeTest, CopyBufferSubData) {
       glMapBufferRange(GL_ARRAY_BUFFER, 0, kSize, GL_MAP_READ_BIT));
   ASSERT_NE(nullptr, map_ptr);
 
-  EXPECT_EQ(0, memcmp(map_ptr, data0.data(), kHalfSize));
-  EXPECT_EQ(0, memcmp(map_ptr + kHalfSize, data1.data(), kHalfSize));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(map_ptr, data0.data(), kHalfSize)));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(map_ptr + kHalfSize, data1.data(), kHalfSize)));
 
   glUnmapBuffer(GL_ARRAY_BUFFER);
 
@@ -552,13 +562,13 @@ TEST_F(ES3MapBufferRangeTest, CopyBufferSubData) {
   ASSERT_NE(nullptr, map_ptr);
 
   for (GLsizeiptr ii = 0; ii < kHalfSize; ++ii) {
-    EXPECT_EQ(kValue0, map_ptr[ii]);
+    UNSAFE_TODO(EXPECT_EQ(kValue0, map_ptr[ii]));
   }
   for (GLsizeiptr ii = kHalfSize; ii < kSize; ++ii) {
     if (ii >= kWriteOffset && ii < kWriteOffset + kCopySize) {
-      EXPECT_EQ(kValue0, map_ptr[ii]);
+      UNSAFE_TODO(EXPECT_EQ(kValue0, map_ptr[ii]));
     } else {
-      EXPECT_EQ(kValue1, map_ptr[ii]);
+      UNSAFE_TODO(EXPECT_EQ(kValue1, map_ptr[ii]));
     }
   }
 }
@@ -571,8 +581,8 @@ TEST_F(ES3MapBufferRangeTest, Delete) {
   const int kNumBuffers = 3;
   const int kSize = sizeof(GLuint);
 
-  GLuint buffers[kNumBuffers];
-  glGenBuffers(kNumBuffers, buffers);
+  std::array<GLuint, kNumBuffers> buffers;
+  glGenBuffers(kNumBuffers, buffers.data());
   // Set each buffer to contain its name.
   for (int i = 0; i < kNumBuffers; ++i) {
     EXPECT_NE(0u, buffers[i]);

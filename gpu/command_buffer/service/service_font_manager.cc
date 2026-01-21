@@ -6,11 +6,15 @@
 
 #include <inttypes.h>
 
+#include <bit>
 #include <type_traits>
 
 #include "base/bits.h"
+#include "base/compiler_specific.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
 #include "base/rand_util.h"
@@ -24,66 +28,64 @@ namespace gpu {
 namespace {
 class Deserializer {
  public:
-  Deserializer(const volatile char* memory, uint32_t memory_size)
-      : memory_(memory), memory_size_(memory_size) {}
+  explicit Deserializer(base::span<const volatile uint8_t> memory)
+      : memory_(memory) {}
   ~Deserializer() = default;
 
   template <typename T>
-  bool Read(T* val) {
+  bool Read(T& val) {
     static_assert(std::is_trivially_copyable_v<T>);
-    if (!AlignMemory(sizeof(T), alignof(T)))
+    if (!AlignMemory(alignof(T))) {
       return false;
+    }
 
-    *val = *reinterpret_cast<const T*>(const_cast<const char*>(memory_));
+    if (sizeof(T) > memory_.size()) {
+      return false;
+    }
 
-    memory_ += sizeof(T);
-    bytes_read_ += sizeof(T);
+    base::span<const volatile uint8_t> span = memory_.take_first(sizeof(T));
+    base::byte_span_from_ref(val).copy_from(span);
     return true;
   }
 
   bool ReadStrikeData(SkStrikeClient* strike_client, uint32_t size) {
-    if (size == 0u)
+    if (size == 0u) {
       return true;
+    }
 
-    if (!AlignMemory(size, 16))
+    if (!AlignMemory(16)) {
       return false;
+    }
 
-    if (size > memory_size_ - bytes_read_)
+    if (size > memory_.size()) {
       return false;
+    }
 
-    if (!strike_client->readStrikeData(memory_, size))
+    auto strike_data = memory_.take_first(size);
+    if (!strike_client->readStrikeData(strike_data.data(),
+                                       strike_data.size())) {
       return false;
-
-    bytes_read_ += size;
-    memory_ += size;
+    }
     return true;
   }
 
  private:
-  bool AlignMemory(uint32_t size, size_t alignment) {
+  bool AlignMemory(size_t alignment) {
     // Due to the math below, alignment must be a power of two.
-    DCHECK(base::bits::IsPowerOfTwo(alignment));
+    DCHECK(std::has_single_bit(alignment));
 
-    size_t memory = reinterpret_cast<size_t>(memory_);
-    size_t padding = base::bits::AlignUp(memory, alignment) - memory;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(memory_.data());
+    size_t padding = base::bits::AlignUp(addr, alignment) - addr;
 
-    base::CheckedNumeric<uint32_t> checked_padded_size = bytes_read_;
-    checked_padded_size += padding;
-    checked_padded_size += size;
-    uint32_t padded_size = 0;
-    if (!checked_padded_size.AssignIfValid(&padded_size) ||
-        padded_size > memory_size_) {
+    if (padding > memory_.size()) {
       return false;
     }
 
-    memory_ += padding;
-    bytes_read_ += padding;
+    memory_ = memory_.subspan(padding);
     return true;
   }
 
-  const volatile char* memory_;
-  uint32_t memory_size_;
-  uint32_t bytes_read_ = 0u;
+  base::raw_span<const volatile uint8_t> memory_;
 };
 }  // namespace
 
@@ -103,29 +105,26 @@ class ServiceFontManager::SkiaDiscardableManager
     return font_manager_->DeleteHandle(handle_id);
   }
 
-  void assertHandleValid(SkDiscardableHandleId handle_id) override {
-    CHECK(font_manager_);
-    font_manager_->AssertHandle(handle_id);
-  }
-
   void notifyCacheMiss(SkStrikeClient::CacheMissType type,
                        int fontSize) override {
-    UMA_HISTOGRAM_ENUMERATION("GPU.OopRaster.GlyphCacheMiss", type,
-                              SkStrikeClient::CacheMissType::kLast + 1);
     // In general, Skia analysis of glyphs should find all cases.
     // If this is not happening, please file a bug with a repro so
     // it can be fixed.
+    static crash_reporter::CrashKeyString<64> crash_key("oop_cache_miss");
+    static constexpr char kFormatString[] = "type: %" PRIu32 ", fontSize: %d";
+#if DCHECK_IS_ON()
+    crash_reporter::ScopedCrashKeyString auto_clear(
+        &crash_key, base::StringPrintf(kFormatString, type, fontSize));
     NOTREACHED();
-
+#else
     if (dump_count_ < kMaxDumps && base::RandInt(1, 100) == 1 &&
         !font_manager_->disable_oopr_debug_crash_dump()) {
-      static crash_reporter::CrashKeyString<64> crash_key("oop_cache_miss");
       crash_reporter::ScopedCrashKeyString auto_clear(
-          &crash_key, base::StringPrintf("type: %" PRIu32 ", fontSize: %d",
-                                         type, fontSize));
+          &crash_key, base::StringPrintf(kFormatString, type, fontSize));
       base::debug::DumpWithoutCrashing();
       ++dump_count_;
     }
+#endif
   }
 
   void notifyReadFailure(
@@ -173,8 +172,7 @@ void ServiceFontManager::Destroy() {
 }
 
 bool ServiceFontManager::Deserialize(
-    const volatile char* memory,
-    uint32_t memory_size,
+    base::span<const volatile uint8_t> memory,
     std::vector<SkDiscardableHandleId>* locked_handles) {
   base::ReleasableAutoLock hold(&lock_);
   DCHECK_EQ(client_thread_id_, base::PlatformThread::CurrentId());
@@ -183,15 +181,17 @@ bool ServiceFontManager::Deserialize(
   DCHECK(!destroyed_);
 
   // All new handles.
-  Deserializer deserializer(memory, memory_size);
+  Deserializer deserializer(memory);
   uint32_t new_handles_created;
-  if (!deserializer.Read<uint32_t>(&new_handles_created))
+  if (!deserializer.Read<uint32_t>(new_handles_created)) {
     return false;
+  }
 
   for (uint32_t i = 0; i < new_handles_created; ++i) {
     SerializableSkiaHandle handle;
-    if (!deserializer.Read<SerializableSkiaHandle>(&handle))
+    if (!deserializer.Read<SerializableSkiaHandle>(handle)) {
       return false;
+    }
 
     scoped_refptr<gpu::Buffer> buffer = client_->GetShmBuffer(handle.shm_id);
     if (!DiscardableHandleBase::ValidateParameters(buffer.get(),
@@ -208,17 +208,20 @@ bool ServiceFontManager::Deserialize(
 
   // All locked handles
   uint32_t num_locked_handles;
-  if (!deserializer.Read<uint32_t>(&num_locked_handles))
+  if (!deserializer.Read<uint32_t>(num_locked_handles)) {
     return false;
+  }
 
   // Loosely avoid extremely large (but fake) numbers of locked handles.
-  if (memory_size / sizeof(SkDiscardableHandleId) < num_locked_handles)
+  if (memory.size() / sizeof(SkDiscardableHandleId) < num_locked_handles) {
     return false;
+  }
 
   locked_handles->resize(num_locked_handles);
   for (auto& locked_handle : *locked_handles) {
-    if (!deserializer.Read<SkDiscardableHandleId>(&locked_handle))
+    if (!deserializer.Read<SkDiscardableHandleId>(locked_handle)) {
       return false;
+    }
     auto it = discardable_handle_map_.find(locked_handle);
     if (it == discardable_handle_map_.end()) {
       DLOG(ERROR) << "Got an invalid SkDiscardableHandleId:" << locked_handle;
@@ -229,8 +232,9 @@ bool ServiceFontManager::Deserialize(
 
   // Skia font data.
   uint32_t skia_data_size = 0u;
-  if (!deserializer.Read<uint32_t>(&skia_data_size))
+  if (!deserializer.Read<uint32_t>(skia_data_size)) {
     return false;
+  }
 
   hold.Release();
   if (!deserializer.ReadStrikeData(strike_client_.get(), skia_data_size))
@@ -241,7 +245,6 @@ bool ServiceFontManager::Deserialize(
 
 bool ServiceFontManager::AddHandle(SkDiscardableHandleId handle_id,
                                    ServiceDiscardableHandle handle) {
-  lock_.AssertAcquired();
   bool inserted;
   std::tie(std::ignore, inserted) =
       discardable_handle_map_.try_emplace(handle_id, std::move(handle));
@@ -258,26 +261,6 @@ bool ServiceFontManager::Unlock(
     it->second.Unlock();
   }
   return true;
-}
-
-void ServiceFontManager::AssertHandle(SkDiscardableHandleId handle_id) {
-  base::AutoLock hold(lock_);
-  auto it = discardable_handle_map_.find(handle_id);
-  CHECK(it != discardable_handle_map_.end());
-
-  static crash_reporter::CrashKeyString<2> crash_key_destroyed(
-      "font_manager::destroyed");
-  crash_reporter::ScopedCrashKeyString auto_clear_destroyed(
-      &crash_key_destroyed, destroyed_ ? "1" : "0");
-  static crash_reporter::CrashKeyString<8> crash_key_ref_count(
-      "font_manager::Handle::ref_count");
-  crash_reporter::ScopedCrashKeyString auto_clear_ref_count(
-      &crash_key_ref_count, base::StringPrintf("%d", it->second.ref_count()));
-  if (destroyed_) {
-    CHECK(it->second.ref_count() > 0);
-  } else {
-    CHECK(it->second.IsLocked());
-  }
 }
 
 bool ServiceFontManager::DeleteHandle(SkDiscardableHandleId handle_id) {

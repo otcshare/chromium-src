@@ -5,7 +5,7 @@
 import("//build/buildflag_header.gni")
 import("//build/config/android/config.gni")
 import("//build/config/arm.gni")
-import("//build/config/chromecast_build.gni")
+import("//build/config/cast.gni")
 import("//build/config/features.gni")
 import("//build/config/linux/pkg_config.gni")
 import("//build/config/ui.gni")
@@ -18,6 +18,10 @@ if (enable_library_cdms) {
   import("//media/cdm/library_cdm/cdm_paths.gni")
 }
 
+if (is_ios) {
+  import("//build/config/ios/bundle_data_from_filelist.gni")
+}
+
 buildflag_header("media_buildflags") {
   header = "media_buildflags.h"
 
@@ -25,9 +29,13 @@ buildflag_header("media_buildflags") {
       enable_platform_dts_audio && (is_win || is_linux)
 
   flags = [
+    "ALLOW_OOP_VIDEO_DECODER=$allow_oop_video_decoder",
+    "ALLOW_HOSTING_OOP_VIDEO_DECODER=$allow_hosting_oop_video_decoder",
     "ALTERNATE_CDM_STORAGE_ID_KEY=\"$alternate_cdm_storage_id_key\"",
     "CHROME_WIDE_ECHO_CANCELLATION=$chrome_wide_echo_cancellation_supported",
+    "SYSTEM_LOOPBACK_AS_AEC_REFERENCE=$system_loopback_as_aec_reference_supported",
     "ENABLE_PLATFORM_AC3_EAC3_AUDIO=$enable_platform_ac3_eac3_audio",
+    "ENABLE_PLATFORM_AC4_AUDIO=$enable_platform_ac4_audio",
     "ENABLE_CAST_AUDIO_RENDERER=$enable_cast_audio_renderer",
     "ENABLE_DAV1D_DECODER=$enable_dav1d_decoder",
     "ENABLE_AV1_DECODER=$enable_av1_decoder",
@@ -37,7 +45,6 @@ buildflag_header("media_buildflags") {
     "ENABLE_FFMPEG_VIDEO_DECODERS=$enable_ffmpeg_video_decoders",
     "ENABLE_PLATFORM_HEVC=$enable_platform_hevc",
     "ENABLE_HEVC_PARSER_AND_HW_DECODER=$enable_hevc_parser_and_hw_decoder",
-    "ENABLE_HLS_SAMPLE_AES=$enable_hls_sample_aes",
     "ENABLE_HLS_DEMUXER=$enable_hls_demuxer",
     "ENABLE_LIBAOM=$enable_libaom",
     "ENABLE_LIBRARY_CDMS=$enable_library_cdms",
@@ -49,14 +56,26 @@ buildflag_header("media_buildflags") {
     "ENABLE_OPENH264=$media_use_openh264",
     "ENABLE_PASSTHROUGH_AUDIO_CODECS=$enable_passthrough_audio_codecs",
     "ENABLE_PLATFORM_DTS_AUDIO=$enable_platform_dts_audio",
+    "ENABLE_PLATFORM_IAMF_AUDIO=$enable_platform_iamf_audio",
     "ENABLE_PLATFORM_MPEG_H_AUDIO=$enable_platform_mpeg_h_audio",
     "ENABLE_MSE_MPEG2TS_STREAM_PARSER=$enable_mse_mpeg2ts_stream_parser",
+    "ENABLE_SYMPHONIA=$media_use_symphonia",
+    "PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT=$platform_has_optional_hevc_decode_support",
+    "PLATFORM_HAS_OPTIONAL_HEVC_ENCODE_SUPPORT=$platform_has_optional_hevc_encode_support",
     "USE_ARC_PROTECTED_MEDIA=$use_arc_protected_media",
-    "USE_CHROMEOS_MEDIA_ACCELERATION=$use_vaapi||$use_v4l2_codec",
     "USE_CHROMEOS_PROTECTED_AV1=$use_chromeos_protected_av1",
     "USE_CHROMEOS_PROTECTED_MEDIA=$use_chromeos_protected_media",
+    "USE_CRAS=$use_cras",
     "USE_PROPRIETARY_CODECS=$proprietary_codecs",
+    "ENABLE_GPU_CHANNEL_MEDIA_CAPTURE=$enable_gpu_channel_media_capture",
+    "USE_OPENSLES=$media_use_opensles",
   ]
+
+  if (use_linux_video_acceleration) {
+    flags += [ "USE_LINUX_VIDEO_ACCELERATION=true" ]
+  } else {
+    flags += [ "USE_LINUX_VIDEO_ACCELERATION=false" ]
+  }
 
   if (enable_library_cdms) {
     flags += [
@@ -74,11 +93,11 @@ if (proprietary_codecs && media_use_ffmpeg) {
 }
 
 # Common configuration for targets in the media directory; these must not be
-# exported since things like USE_NEON and USE_CRAS have different meanings
-# elsewhere in the code base.
+# exported since things like USE_NEON have different meanings elsewhere in the
+# code base.
 config("media_config") {
   defines = []
-  if (current_cpu == "arm64" || (current_cpu == "arm" && arm_use_neon)) {
+  if (current_cpu == "arm64" || current_cpu == "arm") {
     defines += [ "USE_NEON" ]
   }
   if (use_pulseaudio) {
@@ -86,9 +105,6 @@ config("media_config") {
     if (!link_pulseaudio) {
       defines += [ "DLOPEN_PULSEAUDIO" ]
     }
-  }
-  if (use_cras) {
-    defines += [ "USE_CRAS" ]
   }
 }
 
@@ -103,7 +119,7 @@ config("media_config") {
 #
 config("subcomponent_config") {
   visibility = media_subcomponent_deps
-  if (is_mac) {
+  if (is_apple) {
     visibility += [ "//media/base/mac" ]
   }
   defines = [ "IS_MEDIA_IMPL" ]
@@ -119,7 +135,6 @@ component("media") {
   deps = [
     "//base",
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
     "//cc/paint",
     "//gpu/command_buffer/client:gles2_interface",
     "//gpu/command_buffer/common",
@@ -127,7 +142,7 @@ component("media") {
     "//ui/events:events_base",
     "//ui/gfx",
     "//ui/gfx/geometry",
-    "//ui/gl:gl",
+    "//ui/gl",
     "//url",
   ]
 
@@ -135,12 +150,11 @@ component("media") {
   public_deps = media_subcomponent_deps
   public_deps += [
     ":media_buildflags",
-    ":shared_memory_support",
     "//ui/gfx:color_space",
   ]
 
   # This must be included here since it actually depends on //media/base.
-  if (is_mac) {
+  if (is_mac || (use_blink && is_ios)) {
     public_deps += [ "//media/base/mac" ]
   }
 
@@ -159,9 +173,18 @@ source_set("test_support") {
     "//media/base/android:test_support",
     "//media/filters:test_support",
     "//media/formats:test_support",
+    "//media/mojo/services:test_support",
+    "//media/parsers:test_support",
     "//media/renderers:test_support",
     "//media/video:test_support",
   ]
+}
+
+if (is_ios) {
+  bundle_data_from_filelist("unit_tests_bundle_data") {
+    testonly = true
+    filelist_name = "unit_tests_bundle_data.filelist"
+  }
 }
 
 # Contains tests for all targets in the "media" folder.
@@ -178,7 +201,6 @@ test("media_unittests") {
     "//media/filters:unit_tests",
     "//media/formats:unit_tests",
     "//media/gpu:unit_tests",
-    "//media/learning:unit_tests",
     "//media/mojo:unit_tests",
     "//media/muxers:unit_tests",
     "//media/parsers:unit_tests",
@@ -218,10 +240,7 @@ test("media_unittests") {
   }
 
   if (is_fuchsia) {
-    deps += [
-      "//media/fuchsia/cdm/service:unittests",
-      "//media/fuchsia/video:unittests",
-    ]
+    deps += [ "//media/fuchsia/video:unittests" ]
 
     # PaintCanvasVideoRendererWithGLTest.* uses SwiftShader, which generates
     # machine code.
@@ -245,6 +264,12 @@ test("media_unittests") {
 
   # The test needs OPUS_FIXED_POINT conditional define.
   configs += [ "//third_party/opus:opus_config" ]
+
+  if (is_ios) {
+    deps += [ ":unit_tests_bundle_data" ]
+    bundle_deps =
+        [ "//testing/buildbot/filters:media_unittests_filters_bundle_data" ]
+  }
 }
 
 test("media_perftests") {
@@ -275,82 +300,11 @@ test("media_perftests") {
     # Needed for isolate script to execute.
     "//testing:run_perf_test",
   ]
-}
 
-# The audio subset of media_unittests. This target exists for running only the
-# audio tests on the GPU bots (which have audio hardware).
-test("audio_unittests") {
-  deps = [
-    ":test_support",
-    "//base/test:test_support",
-    "//media/audio:unit_tests",
-    "//media/test:run_all_unittests",
-  ]
-  if (is_android) {
-    deps += [
-      # The test needs the java dependencies to add the java classes for their
-      # native counterparts to the test apk.
-      "//media/base/android:media_java",
-      "//ui/android:ui_java",
-    ]
+  if (enable_av1_decoder &&
+      ((is_chromeos && use_linux_video_acceleration) || is_win || is_android)) {
+    data_deps += [ "//media/gpu/test/:video_encode_accelerator_tests" ]
   }
-
-  if (is_fuchsia) {
-    additional_manifest_fragments =
-        [ "//build/config/fuchsia/test/audio_output.shard.test-cml" ]
-  }
-}
-
-# Note: Most external components should just depend on //media unless they
-# specifically need this pared own target (NaCl, PPAPI, etc). Internal targets
-# should just depend on //media/base which will propagate this target to them.
-component("shared_memory_support") {
-  sources = [
-    "base/audio_bus.cc",
-    "base/audio_bus.h",
-    "base/audio_codecs.h",
-    "base/audio_latency.cc",
-    "base/audio_latency.h",
-    "base/audio_parameters.cc",
-    "base/audio_parameters.h",
-    "base/audio_point.cc",
-    "base/audio_point.h",
-    "base/audio_sample_types.h",
-    "base/channel_layout.cc",
-    "base/channel_layout.h",
-    "base/limits.h",
-    "base/media_export.h",
-    "base/media_shmem_export.h",
-    "base/sample_format.cc",
-    "base/sample_format.h",
-    "base/vector_math.cc",
-    "base/vector_math.h",
-    "base/vector_math_testing.h",
-    "base/video_types.cc",
-    "base/video_types.h",
-  ]
-  if (is_mac) {
-    # These need to be included here because audio_latency.cc depends on them.
-    sources += [
-      "base/mac/audio_latency_mac.cc",
-      "base/mac/audio_latency_mac.h",
-    ]
-  }
-
-  # Do not use "subcomponent_config" here since these files are in their own
-  # component target and thus can't share the standard export macros.
-  configs += [ ":media_config" ]
-  defines = [ "MEDIA_SHMEM_IMPLEMENTATION" ]
-
-  if (!is_debug) {
-    configs -= [ "//build/config/compiler:default_optimization" ]
-    configs += [ "//build/config/compiler:optimize_max" ]
-  }
-  deps = [
-    "//base",
-    "//build:chromeos_buildflags",
-    "//ui/gfx/geometry",
-  ]
 }
 
 # TODO(watk): Refactor tests that could be made to run on Android. See
@@ -378,25 +332,6 @@ if (proprietary_codecs) {
     sources = [ "cdm/cenc_utils_fuzzertest.cc" ]
     deps = [ ":media" ]
   }
-}
-
-fuzzer_test("media_vp9_parser_fuzzer") {
-  sources = [ "filters/vp9_parser_fuzzertest.cc" ]
-  deps = [
-    ":test_support",
-    "//base",
-  ]
-  libfuzzer_options = [ "max_len = 400000" ]
-}
-
-fuzzer_test("media_vp9_parser_encrypted_fuzzer") {
-  sources = [ "filters/vp9_parser_encrypted_fuzzertest.cc" ]
-  deps = [
-    ":test_support",
-    "//base",
-    "//base/test:test_support",
-  ]
-  seed_corpus = "//media/test/data"
 }
 
 fuzzer_test("media_vpx_video_decoder_fuzzer") {

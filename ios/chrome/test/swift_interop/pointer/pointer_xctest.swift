@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import Pointer
-import UIKit
 import XCTest
 
 class PointerTest: XCTestCase {
@@ -18,9 +17,13 @@ class PointerTest: XCTestCase {
   func testReturnedObjectPointer() throws {
     var returner = PointerReturner()
     let ptr = returner.ObjectPointer()!
-    XCTAssertEqual(ptr.pointee.Valid(), true, "Object returned by pointer not valid?")
+    XCTAssertEqual(
+      ptr.pointee.Valid(), true,
+      "Object returned by pointer not valid?")
     let intPtr = ptr.pointee.IntegerPointer()!
-    XCTAssertEqual(intPtr.pointee, 17, "Pointer-to-integer returned from pointer-to-object broken")
+    XCTAssertEqual(
+      intPtr.pointee, 17,
+      "Pointer-to-integer returned from pointer-to-object broken")
   }
 
 }

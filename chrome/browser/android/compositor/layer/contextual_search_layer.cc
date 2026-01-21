@@ -4,11 +4,11 @@
 
 #include "chrome/browser/android/compositor/layer/contextual_search_layer.h"
 
-#include "cc/layers/layer.h"
-#include "cc/layers/nine_patch_layer.h"
-#include "cc/layers/solid_color_layer.h"
-#include "cc/layers/ui_resource_layer.h"
 #include "cc/resources/scoped_ui_resource.h"
+#include "cc/slim/layer.h"
+#include "cc/slim/nine_patch_layer.h"
+#include "cc/slim/solid_color_layer.h"
+#include "cc/slim/ui_resource_layer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/android/resources/nine_patch_resource.h"
 #include "ui/android/resources/resource_manager.h"
@@ -48,7 +48,7 @@ void ContextualSearchLayer::SetProperties(
     int progress_bar_tint,
     int search_promo_resource_id,
     float dp_to_px,
-    const scoped_refptr<cc::Layer>& content_layer,
+    const scoped_refptr<cc::slim::Layer>& content_layer,
     bool search_promo_visible,
     float search_promo_height,
     float search_promo_opacity,
@@ -65,6 +65,7 @@ void ContextualSearchLayer::SetProperties(
     float search_panel_height,
     float search_bar_margin_side,
     float search_bar_margin_top,
+    float search_bar_margin_bottom,
     float search_bar_height,
     float search_context_opacity,
     float search_text_layer_min_height,
@@ -89,7 +90,9 @@ void ContextualSearchLayer::SetProperties(
     float touch_highlight_x_offset,
     float touch_highlight_width,
     int rounded_bar_top_resource_id,
-    int separator_line_color) {
+    int separator_line_color,
+    int callout_resource_id,
+    float callout_opacity) {
   // Round values to avoid pixel gap between layers.
   search_bar_height = floor(search_bar_height);
 
@@ -115,16 +118,18 @@ void ContextualSearchLayer::SetProperties(
   OverlayPanelLayer::SetProperties(
       dp_to_px, content_layer, content_view_top, search_panel_x, search_panel_y,
       search_panel_width, search_panel_height, search_bar_background_color,
-      search_bar_margin_side, search_bar_margin_top, search_bar_height,
-      search_bar_top, search_term_opacity, should_render_bar_border,
-      search_bar_border_height, icon_color, drag_handlebar_color,
-      close_icon_opacity, separator_line_color, related_searches_in_bar_height);
+      search_bar_margin_side, search_bar_margin_top, search_bar_margin_bottom,
+      search_bar_height, search_bar_top, search_term_opacity,
+      should_render_bar_border, search_bar_border_height, icon_color,
+      drag_handlebar_color, close_icon_opacity, separator_line_color,
+      related_searches_in_bar_height);
 
   // -----------------------------------------------------------------
   // Content setup, to center in space below drag handle.
   // -----------------------------------------------------------------
   int content_height = search_bar_height - search_bar_margin_top -
-                       related_searches_in_bar_height;
+                       related_searches_in_bar_height -
+                       search_bar_margin_bottom;
   int content_top = search_bar_top + search_bar_margin_top;
 
   // ---------------------------------------------------------------------------
@@ -139,6 +144,28 @@ void ContextualSearchLayer::SetProperties(
 
   // Tracks the top of the next section to draw.
   int next_section_top = search_bar_bottom;
+
+  // ---------------------------------------------------------------------------
+  // Callout Control
+  // ---------------------------------------------------------------------------
+  if (callout_opacity > 0) {
+    ui::Resource* callout_resource = resource_manager_->GetResource(
+        ui::ANDROID_RESOURCE_TYPE_DYNAMIC, callout_resource_id);
+    if (callout_resource) {
+      if (callout_layer_->parent() != layer_) {
+        layer_->AddChild(callout_layer_);
+      }
+
+      float callout_position_top = content_top + content_height / 2 -
+                                   callout_resource->size().height() / 2;
+      callout_layer_->SetUIResourceId(callout_resource->ui_resource()->id());
+      callout_layer_->SetBounds(callout_resource->size());
+      callout_layer_->SetPosition(gfx::PointF(0.f, callout_position_top));
+      callout_layer_->SetOpacity(callout_opacity);
+    }
+  } else if (callout_layer_->parent()) {
+    callout_layer_->RemoveFromParent();
+  }
 
   // ---------------------------------------------------------------------------
   // Related Searches In-Bar Control
@@ -157,9 +184,11 @@ void ContextualSearchLayer::SetProperties(
       related_searches_in_bar_->SetUIResourceId(
           related_searches_resource->ui_resource()->id());
       related_searches_in_bar_->SetBounds(related_searches_size);
+      int related_searches_top =
+          search_bar_bottom - related_searches_in_bar_height -
+          related_searches_in_bar_redundant_padding - search_bar_margin_bottom;
       related_searches_in_bar_->SetPosition(
-          gfx::PointF(0.f, search_bar_bottom - related_searches_in_bar_height -
-                               related_searches_in_bar_redundant_padding));
+          gfx::PointF(0.f, related_searches_top));
     }
   } else if (related_searches_in_bar_.get() &&
              related_searches_in_bar_->parent()) {
@@ -188,7 +217,7 @@ void ContextualSearchLayer::SetProperties(
       search_promo_container_->SetBounds(search_promo_size);
       search_promo_container_->SetPosition(gfx::PointF(0.f, next_section_top));
       search_promo_container_->SetMasksToBounds(true);
-      // TODO(crbug/1308932): Remove FromColor and make all SkColor4f.
+      // TODO(crbug.com/40219248): Remove FromColor and make all SkColor4f.
       search_promo_container_->SetBackgroundColor(
           SkColor4f::FromColor(search_promo_background_color));
 
@@ -249,7 +278,7 @@ void ContextualSearchLayer::SetProperties(
                  custom_image_visibility_percentage);
 }
 
-scoped_refptr<cc::Layer> ContextualSearchLayer::GetIconLayer() {
+scoped_refptr<cc::slim::Layer> ContextualSearchLayer::GetIconLayer() {
   return icon_layer_;
 }
 
@@ -261,8 +290,6 @@ void ContextualSearchLayer::SetupIconLayer(
     float custom_image_visibility_percentage) {
   icon_layer_->SetBounds(gfx::Size(bar_image_size_, bar_image_size_));
   icon_layer_->SetMasksToBounds(true);
-
-  scoped_refptr<cc::UIResourceLayer> custom_image_layer;
 
   if (quick_action_icon_visible) {
     if (quick_action_icon_layer_->parent() != icon_layer_)
@@ -323,7 +350,7 @@ void ContextualSearchLayer::SetupIconLayer(
 }
 
 void ContextualSearchLayer::SetCustomImageProperties(
-    scoped_refptr<cc::UIResourceLayer> custom_image_layer,
+    scoped_refptr<cc::slim::UIResourceLayer> custom_image_layer,
     float top_margin,
     float side_margin,
     float visibility_percentage) {
@@ -401,7 +428,7 @@ int ContextualSearchLayer::SetupTextLayer(float content_top,
 
   // The Term might not be visible or initialized yet, so set up main_text with
   // whichever main bar text seems appropriate.
-  scoped_refptr<cc::UIResourceLayer> main_text =
+  scoped_refptr<cc::slim::UIResourceLayer> main_text =
       (bar_text_visible ? bar_text_ : search_context_);
 
   // The search_caption_ may not have had it's resource set by this point, if so
@@ -560,17 +587,18 @@ void ContextualSearchLayer::SetThumbnail(const SkBitmap* thumbnail) {
 ContextualSearchLayer::ContextualSearchLayer(
     ui::ResourceManager* resource_manager)
     : OverlayPanelLayer(resource_manager),
-      search_context_(cc::UIResourceLayer::Create()),
-      icon_layer_(cc::Layer::Create()),
-      search_provider_icon_layer_(cc::UIResourceLayer::Create()),
-      thumbnail_layer_(cc::UIResourceLayer::Create()),
-      quick_action_icon_layer_(cc::UIResourceLayer::Create()),
-      search_promo_(cc::UIResourceLayer::Create()),
-      search_promo_container_(cc::SolidColorLayer::Create()),
-      related_searches_in_bar_(cc::UIResourceLayer::Create()),
-      search_caption_(cc::UIResourceLayer::Create()),
-      text_layer_(cc::UIResourceLayer::Create()),
-      touch_highlight_layer_(cc::SolidColorLayer::Create()) {
+      search_context_(cc::slim::UIResourceLayer::Create()),
+      icon_layer_(cc::slim::Layer::Create()),
+      search_provider_icon_layer_(cc::slim::UIResourceLayer::Create()),
+      thumbnail_layer_(cc::slim::UIResourceLayer::Create()),
+      quick_action_icon_layer_(cc::slim::UIResourceLayer::Create()),
+      search_promo_(cc::slim::UIResourceLayer::Create()),
+      search_promo_container_(cc::slim::SolidColorLayer::Create()),
+      related_searches_in_bar_(cc::slim::UIResourceLayer::Create()),
+      search_caption_(cc::slim::UIResourceLayer::Create()),
+      text_layer_(cc::slim::UIResourceLayer::Create()),
+      touch_highlight_layer_(cc::slim::SolidColorLayer::Create()),
+      callout_layer_(cc::slim::UIResourceLayer::Create()) {
   // Search Bar Text
   search_context_->SetIsDrawable(true);
 
@@ -609,9 +637,11 @@ ContextualSearchLayer::ContextualSearchLayer(
   touch_highlight_layer_->SetIsDrawable(true);
   touch_highlight_layer_->SetBackgroundColor(
       SkColor4f::FromColor(kTouchHighlightColor));
+
+  // Callout Layer
+  callout_layer_->SetIsDrawable(true);
 }
 
-ContextualSearchLayer::~ContextualSearchLayer() {
-}
+ContextualSearchLayer::~ContextualSearchLayer() = default;
 
 }  //  namespace android

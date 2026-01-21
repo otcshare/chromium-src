@@ -6,8 +6,8 @@ import Foundation
 import SwiftUI
 import WidgetKit
 
-#if IOS_ENABLE_LOCKSCREEN_EXTENSION
-  #if IOS_AVAILABLE_LOCKSCREEN_EXTENSION
+#if IOS_ENABLE_LOCKSCREEN_WIDGET
+  #if IOS_AVAILABLE_LOCKSCREEN_WIDGET
 
     enum LockscreenLauncherWidgetType {
       case search, incognito, voiceSearch, dinoGame
@@ -18,10 +18,7 @@ import WidgetKit
           widgetURL: URL
 
         var supportedFamilies: [WidgetFamily] {
-          if #available(iOS 16, *) {
-            return [.accessoryCircular]
-          }
-          return []
+          return [.accessoryCircular]
         }
       }
 
@@ -63,6 +60,11 @@ import WidgetKit
       }
     }
 
+    @MainActor
+    func lockScreenWidgetBackground() -> some View {
+      return AccessoryWidgetBackground()
+    }
+
     struct LockscreenLauncherWidgetEntryView: View {
       let entry: Provider.Entry
       let configuration: LockscreenLauncherWidgetType.Configuration
@@ -70,9 +72,6 @@ import WidgetKit
       var body: some View {
         let configuration = self.configuration
         ZStack {
-          if #available(iOS 16, *) {
-            AccessoryWidgetBackground()
-          }
           Image(configuration.imageName)
             .renderingMode(.template)
             .foregroundColor(.white)
@@ -80,9 +79,13 @@ import WidgetKit
         .widgetURL(configuration.widgetURL)
         .accessibilityElement()
         .accessibilityLabel(configuration.accessibilityLabel)
+        .containerBackground(for: .widget) {
+          lockScreenWidgetBackground()
+        }
       }
     }
 
+    @MainActor
     func lockscreenLauncherWidgetConfiguration(
       ofKind kind: String, forType type: LockscreenLauncherWidgetType
     ) -> some WidgetConfiguration {
@@ -95,6 +98,8 @@ import WidgetKit
       )
       .description(Text(configuration.description))
       .supportedFamilies(configuration.supportedFamilies)
+      .crDisfavoredLocations()
+      .containerBackgroundRemovable(false)
     }
 
     struct LockscreenLauncherSearchWidget: Widget {
@@ -137,5 +142,5 @@ import WidgetKit
       }
     }
 
-  #endif  // IOS_AVAILABLE_LOCKSCREEN_EXTENSION
-#endif  // IOS_ENABLE_LOCKSCREEN_EXTENSION
+  #endif  // IOS_AVAILABLE_LOCKSCREEN_WIDGET
+#endif  // IOS_ENABLE_LOCKSCREEN_WIDGET

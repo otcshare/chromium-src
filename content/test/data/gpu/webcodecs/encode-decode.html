@@ -34,10 +34,16 @@ several frames and accelerated VideoDecoder needs to successfully decode them.
       };
       if (arg.codec.startsWith('avc1')) {
         encoder_config.avc = { format: 'annexb' };
+      } else if (arg.codec.startsWith('hvc1')) {
+        encoder_config.hevc = { format: 'annexb' };
       }
 
-      let support = await VideoEncoder.isConfigSupported(encoder_config);
-      if (!support.supported) {
+      TEST.log('Starting test with arguments: ' + JSON.stringify(arg));
+      let supported = false;
+      try {
+        supported = (await VideoEncoder.isConfigSupported(encoder_config)).supported;
+      } catch (e) {}
+      if (!supported) {
         TEST.skip('Unsupported codec: ' + arg.codec);
         return;
       }
@@ -47,11 +53,14 @@ several frames and accelerated VideoDecoder needs to successfully decode them.
           let dots = frames_decoded;
           // Check that we have intended number of dots and no more.
           // Completely black frame shouldn't pass the test.
-          if(!validateBlackDots(frame, dots) ||
-            validateBlackDots(frame, dots + 1)) {
-            showFrameForDebug(frame);
-            TEST.reportFailure(
-                `Unexpected dot count ts:${frame.timestamp} dots:${dots}`);
+          // Only count dots for sources that can actually pain them.
+          if (['offscreen', 'arraybuffer'].includes(arg.source_type)) {
+            if(!validateBlackDots(frame, dots) ||
+              validateBlackDots(frame, dots + 1)) {
+              showFrameForDebug(frame);
+              TEST.reportFailure(
+                  `Unexpected dot count ts:${frame.timestamp} dots:${dots}`);
+            }
           }
           frames_decoded++;
           frame.close();
@@ -117,7 +126,33 @@ several frames and accelerated VideoDecoder needs to successfully decode them.
         'frames_decoded mismatch: ' + frames_decoded);
       TEST.assert(
         errors == 0, 'Decoding or encoding errors occurred during the test');
+      TEST.log('Test completed');
     }
+    addManualTestButton([{
+      'source_type': 'offscreen',
+      'codec': 'avc1.42001E',
+      'acceleration':'prefer-software'
+    },
+    {
+      'source_type': 'camera',
+      'codec': 'avc1.42001E',
+      'acceleration':'prefer-software'
+    },
+    {
+      'source_type': 'offscreen',
+      'codec': 'avc1.42001E',
+      'acceleration':'prefer-hardware'
+    },
+    {
+      'source_type': 'offscreen',
+      'codec': 'hvc1.1.6.L123.00',
+      'acceleration':'prefer-software'
+    },
+    {
+      'source_type': 'offscreen',
+      'codec': 'hvc1.1.6.L123.00',
+      'acceleration':'prefer-hardware'
+    }]);
   </script>
 </head>
 

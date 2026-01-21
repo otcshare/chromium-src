@@ -25,15 +25,15 @@ class TwoClientOsPreferencesSyncTest : public SyncTest {
   TwoClientOsPreferencesSyncTest() : SyncTest(TWO_CLIENT) {}
   ~TwoClientOsPreferencesSyncTest() override = default;
 
-  // Needed for AwaitQuiescence().
-  bool TestUsesSelfNotifications() override { return true; }
+  // This test suite is ChromeOS specific, where there's only Sync-the-feature.
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTheFeature;
+  }
 };
 
-IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, E2E_ENABLED(Sanity)) {
-  ResetSyncForPrimaryAccount();
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  // Wait until sync settles before we override the prefs below.
-  ASSERT_TRUE(AwaitQuiescence());
+IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, Sanity) {
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
+  ASSERT_TRUE(SetupSync());
 
   // Shelf alignment is a Chrome OS only preference.
   ASSERT_TRUE(StringPrefMatchChecker(ash::prefs::kShelfAlignment).Wait());
@@ -47,13 +47,13 @@ IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, E2E_ENABLED(Sanity)) {
   }
 
   EXPECT_EQ(0, histogram_tester.GetBucketCount(
-                   "Sync.ModelTypeEntityChange3.OS_PREFERENCE",
-                   syncer::ModelTypeEntityChange::kRemoteInitialUpdate));
+                   "Sync.DataTypeEntityChange.OS_PREFERENCE",
+                   syncer::DataTypeEntityChange::kRemoteInitialUpdate));
   // Client 0 may or may not see its own reflection during the test, but at
   // least client 1 should have received one update.
   EXPECT_NE(0, histogram_tester.GetBucketCount(
-                   "Sync.ModelTypeEntityChange3.OS_PREFERENCE",
-                   syncer::ModelTypeEntityChange::kRemoteNonInitialUpdate));
+                   "Sync.DataTypeEntityChange.OS_PREFERENCE",
+                   syncer::DataTypeEntityChange::kRemoteNonInitialUpdate));
   EXPECT_NE(
       0U,
       histogram_tester
@@ -66,9 +66,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, E2E_ENABLED(Sanity)) {
               .size());
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest,
-                       E2E_ENABLED(Bidirectional)) {
-  ResetSyncForPrimaryAccount();
+IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, Bidirectional) {
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
 
   ASSERT_TRUE(StringPrefMatchChecker(ash::prefs::kShelfAlignment).Wait());
@@ -84,8 +83,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest,
             GetPrefs(0)->GetString(ash::prefs::kShelfAlignment));
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, E2E_ENABLED(ClearPref)) {
-  ResetSyncForPrimaryAccount();
+IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, ClearPref) {
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
   ASSERT_TRUE(SetupSync());
   ChangeStringPref(0, ash::prefs::kShelfAlignment, ash::kShelfAlignmentRight);
   ASSERT_TRUE(StringPrefMatchChecker(ash::prefs::kShelfAlignment).Wait());
@@ -97,13 +96,13 @@ IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, E2E_ENABLED(ClearPref)) {
 
 // OS Settings syncing even when browser sync is disabled.
 IN_PROC_BROWSER_TEST_F(TwoClientOsPreferencesSyncTest, BrowserSyncDisabled) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   for (int i = 0; i < num_clients(); ++i) {
     // Disable all browser types.
     GetSyncService(i)->GetUserSettings()->SetSelectedTypes(
         false, syncer::UserSelectableTypeSet());
-    GetClient(i)->AwaitSyncSetupCompletion();
+    ASSERT_TRUE(GetClient(i)->AwaitSyncTransportActive());
   }
 
   ChangeStringPref(0, ash::prefs::kShelfAlignment, ash::kShelfAlignmentRight);

@@ -31,8 +31,10 @@
 #include "third_party/blink/renderer/core/loader/navigation_policy.h"
 
 #include "base/auto_reset.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/web/web_window_features.h"
@@ -40,12 +42,16 @@
 #include "third_party/blink/renderer/core/events/current_input_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/page/create_window.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
 
 class NavigationPolicyTest : public testing::Test {
  protected:
+  void SetUp() override {
+    // Default
+    scoped_feature_list_.InitAndDisableFeature(features::kLinkPreview);
+  }
+
   NavigationPolicy GetPolicyForCreateWindow(int modifiers,
                                             WebMouseEvent::Button button,
                                             bool as_popup) {
@@ -92,6 +98,15 @@ class NavigationPolicyTest : public testing::Test {
   }
 
   WebWindowFeatures features;
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+class NavigationPolicyWithLinkPreviewEnabledTest : public NavigationPolicyTest {
+ protected:
+  void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        features::kLinkPreview, {{"trigger_type", "alt_click"}});
+  }
 };
 
 TEST_F(NavigationPolicyTest, LeftClick) {
@@ -224,7 +239,7 @@ TEST_F(NavigationPolicyTest, ForcePopup) {
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, /*dom_window=*/nullptr, KURL())))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -255,7 +270,7 @@ TEST_F(NavigationPolicyTest, NoOpener) {
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, /*dom_window=*/nullptr, KURL())))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -281,7 +296,7 @@ TEST_F(NavigationPolicyTest, NoOpenerAndNoReferrer) {
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, /*dom_window=*/nullptr, KURL())))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -306,7 +321,7 @@ TEST_F(NavigationPolicyTest, NoReferrer) {
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, /*dom_window=*/nullptr, KURL())))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -420,6 +435,20 @@ TEST_F(NavigationPolicyTest, EventAltClickWithDifferentUserEvent) {
   WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
   EXPECT_EQ(kNavigationPolicyCurrentTab,
             GetPolicyFromEvent(modifiers, button, 0, button));
+}
+
+TEST_F(NavigationPolicyWithLinkPreviewEnabledTest, EventAltClick) {
+  int modifiers = WebInputEvent::kAltKey;
+  WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
+  EXPECT_EQ(kNavigationPolicyCurrentTab,
+            NavigationPolicyFromEvent(GetEvent(modifiers, button)));
+}
+
+TEST_F(NavigationPolicyWithLinkPreviewEnabledTest, EventAltClickWithUserEvent) {
+  int modifiers = WebInputEvent::kAltKey;
+  WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
+  EXPECT_EQ(kNavigationPolicyLinkPreview,
+            GetPolicyFromEvent(modifiers, button, modifiers, button));
 }
 
 }  // namespace blink

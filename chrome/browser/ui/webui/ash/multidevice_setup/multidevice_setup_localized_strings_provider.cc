@@ -11,14 +11,12 @@
 #include "base/system/sys_info.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/multidevice_setup/multidevice_setup_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/multidevice_setup_resources.h"
 #include "chrome/grit/multidevice_setup_resources_map.h"
-#include "chrome/grit/oobe_conditional_resources.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/url_provider.h"
 #include "components/login/localized_values_builder.h"
 #include "components/strings/grit/components_strings.h"
@@ -28,6 +26,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/chromeos/devicetype_utils.h"
+#include "ui/webui/webui_util.h"
 
 namespace ash::multidevice_setup {
 
@@ -44,18 +43,35 @@ constexpr webui::LocalizedString kLocalizedStringsWithoutPlaceholders[] = {
     {"passwordPageHeader", IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_HEADER},
     {"enterPassword", IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_ENTER_PASSWORD_LABEL},
     {"wrongPassword", IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_WRONG_PASSWORD_LABEL},
+    {"passwordPageHeaderForPIN",
+     IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_HEADER_FOR_PIN},
+    {"enterPIN", IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_ENTER_PIN_LABEL},
+    {"wrongPIN", IDS_MULTIDEVICE_SETUP_PASSWORD_PAGE_WRONG_PIN_LABEL},
     {"startSetupPageMultipleDeviceHeader",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_MULTIPLE_DEVICE_HEADER},
     {"startSetupPageSingleDeviceHeader",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_SINGLE_DEVICE_HEADER},
     {"startSetupPageOfflineDeviceOption",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_OFFLINE_DEVICE_OPTION},
+    {"startSetupPageFootnote", IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FOOTNOTE},
     {"startSetupPageFeatureMirrorPhoneNotifications",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_MIRROR_PHONE_NOTIFICATIONS},
-    {"startSetupPageFeatureWifiSync",
-     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_WIFI_SYNC},
+    {"startSetupPageFeatureWifiSyncTitle",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_WIFI_SYNC_TITLE},
+    {"startSetupPageFeatureWifiSyncDescription",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_WIFI_SYNC_DESCRIPTION},
     {"startSetupPageFeatureCameraRoll",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_CAMERA_ROLL},
+    {"startSetupPageFeaturePhoneHubTitle",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_PHONE_HUB_TITLE},
+    {"startSetupPageFeaturePhoneHubDescription",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_PHONE_HUB_DESCRIPTION},
+    {"startSetupPageFeatureInstantTetheringTitle",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_INSTANT_TETHERING_TITLE},
+    {"startSetupPageFeatureInstantTetheringDescription",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_INSTANT_TETHERING_DESCRIPTION},
+    {"startSetupPageFeatureSmartLockTitle",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_SMART_LOCK_TITLE},
     {"startSetupPageFeatureListInstallApps",
      IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_INSTALL_APPS_DESCRIPTION},
     {"startSetupPageFeatureListAddFeatures",
@@ -65,9 +81,15 @@ constexpr webui::LocalizedString kLocalizedStringsWithoutPlaceholders[] = {
     {"setupSucceededPageMessage",
      IDS_MULTIDEVICE_SETUP_SETUP_SUCCEEDED_PAGE_MESSAGE},
     {"startSetupPageHeader", IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_HEADER},
+    {"startSetupPageAfterQuickStartHeader",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_AFTER_QUICK_START_HEADER},
     {"tryAgain", IDS_MULTIDEVICE_SETUP_TRY_AGAIN_LABEL},
     {"dialogAccessibilityTitle",
      IDS_MULTIDEVICE_SETUP_DIALOG_ACCESSIBILITY_TITLE},
+    {"startSetupPageFeatureListHeader",
+     IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FEATURE_LIST_HEADER},
+    {"pauseAnimationAriaLabel", IDS_OOBE_PAUSE_ANIMATION_MESSAGE},
+    {"playAnimationAriaLabel", IDS_OOBE_PLAY_ANIMATION_MESSAGE},
 };
 
 struct LocalizedStringWithName {
@@ -97,23 +119,17 @@ GetLocalizedStringsWithPlaceholders() {
                     GetBoardSpecificBetterTogetherSuiteLearnMoreUrl().spec())));
 
         localized_strings.emplace_back(
-            "startSetupPageFootnote",
-            l10n_util::GetStringFUTF16(
-                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FOOTNOTE,
-                kFootnoteMarker));
-
-        localized_strings.emplace_back(
-            "startSetupPageFeatureListHeader",
-            l10n_util::GetStringFUTF16(
-                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FEATURE_LIST_HEADER,
-                ui::GetChromeOSDeviceName()));
-
-        localized_strings.emplace_back(
             "startSetupPageFeatureListAwm",
             l10n_util::GetStringFUTF16(
                 IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_AWM_DESCRIPTION,
                 base::UTF8ToUTF16(
                     GetBoardSpecificMessagesLearnMoreUrl().spec())));
+
+        localized_strings.emplace_back(
+            "startSetupPageFeatureSmartLockDescription",
+            l10n_util::GetStringFUTF16(
+                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_SMART_LOCK_DESCRIPTION,
+                ui::GetChromeOSDeviceName()));
 
         return localized_strings;
       }());
@@ -129,29 +145,22 @@ void AddLocalizedStrings(content::WebUIDataSource* html_source) {
   html_source->AddBoolean("phoneHubEnabled",
                           base::FeatureList::IsEnabled(features::kPhoneHub));
 
-  html_source->AddBoolean(
-      "phoneHubCameraRollEnabled",
-      base::FeatureList::IsEnabled(features::kPhoneHub) &&
-          base::FeatureList::IsEnabled(features::kPhoneHubCameraRoll));
-
   html_source->AddBoolean("wifiSyncEnabled", base::FeatureList::IsEnabled(
                                                  features::kWifiSyncAndroid));
 
-  for (const auto& entry : GetLocalizedStringsWithPlaceholders())
+  for (const auto& entry : GetLocalizedStringsWithPlaceholders()) {
     html_source->AddString(entry.name, entry.localized_string);
+  }
 
-  html_source->AddResourcePath("multidevice_setup_dark.json",
-                               IDR_MULTIDEVICE_SETUP_ANIMATION_DARK);
-  html_source->AddResourcePath("multidevice_setup_light.json",
-                               IDR_MULTIDEVICE_SETUP_ANIMATION_LIGHT);
   html_source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::WorkerSrc,
       "worker-src blob: chrome://resources 'self';");
 }
 
 void AddLocalizedValuesToBuilder(::login::LocalizedValuesBuilder* builder) {
-  for (const auto& entry : kLocalizedStringsWithoutPlaceholders)
+  for (const auto& entry : kLocalizedStringsWithoutPlaceholders) {
     builder->Add(entry.name, entry.id);
+  }
 
   // TODO(crbug.com/964547): Refactor so that any change to these strings will
   // surface in both the OOBE and post-OOBE UIs without having to adjust both
@@ -162,18 +171,14 @@ void AddLocalizedValuesToBuilder(::login::LocalizedValuesBuilder* builder) {
                 base::UTF8ToUTF16(
                     GetBoardSpecificBetterTogetherSuiteLearnMoreUrl().spec()));
 
-  builder->AddF("startSetupPageFeatureListHeader",
-                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FEATURE_LIST_HEADER,
-                ui::GetChromeOSDeviceName());
-
-  builder->AddF("startSetupPageFootnote",
-                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_FOOTNOTE,
-                kFootnoteMarker);
-
   builder->AddF(
       "startSetupPageFeatureListAwm",
       IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_AWM_DESCRIPTION,
       base::UTF8ToUTF16(GetBoardSpecificMessagesLearnMoreUrl().spec()));
+
+  builder->AddF("startSetupPageFeatureSmartLockDescription",
+                IDS_MULTIDEVICE_SETUP_START_SETUP_PAGE_SMART_LOCK_DESCRIPTION,
+                ui::GetChromeOSDeviceName());
 }
 
 }  // namespace ash::multidevice_setup

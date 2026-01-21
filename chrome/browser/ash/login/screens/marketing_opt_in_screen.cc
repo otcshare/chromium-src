@@ -12,9 +12,9 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen.h"
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -84,12 +84,14 @@ void RecordGeolocationResolve(MarketingOptInScreen::GeolocationEvent event) {
 
 // static
 std::string MarketingOptInScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::NEXT:
       return "Next";
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 MarketingOptInScreen::MarketingOptInScreen(
@@ -115,7 +117,7 @@ bool MarketingOptInScreen::MaybeSkip(WizardContext& context) {
   }
   Initialize();
 
-  if (chrome_user_manager_util::IsPublicSessionOrEphemeralLogin() ||
+  if (chrome_user_manager_util::IsManagedGuestSessionOrEphemeralLogin() ||
       IsCurrentUserManaged() || !context.is_branded_build) {
     exit_callback_.Run(Result::NOT_APPLICABLE);
     return true;
@@ -265,14 +267,9 @@ void MarketingOptInScreen::SetCountryFromTimezoneIfAvailable(
   // Set the country
   country_.clear();
   const bool is_default_country = default_countries_.count(region.value());
-  const bool is_extended_country =
-      additional_countries_.count(region.value()) &&
-      base::FeatureList::IsEnabled(
-          ::features::kOobeMarketingAdditionalCountriesSupported);
+  const bool is_extended_country = additional_countries_.count(region.value());
   const bool is_double_optin_country =
-      double_opt_in_countries_.count(region.value()) &&
-      base::FeatureList::IsEnabled(
-          ::features::kOobeMarketingDoubleOptInCountriesSupported);
+      double_opt_in_countries_.count(region.value());
 
   if (is_default_country || is_extended_country || is_double_optin_country) {
     country_ = region.value();

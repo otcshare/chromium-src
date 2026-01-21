@@ -7,8 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -29,10 +29,10 @@ void ReadFileRunCallback(CastAudioJsonProvider::TuningChangedCallback callback,
 
   std::string contents;
   base::ReadFileToString(path, &contents);
-  std::unique_ptr<base::Value> value =
-      base::JSONReader::ReadDeprecated(contents);
+  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+      contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (value) {
-    callback.Run(std::move(value));
+    callback.Run(std::move(*value));
     return;
   }
   LOG(ERROR) << "Unable to parse JSON in " << path;
@@ -77,10 +77,17 @@ CastAudioJsonProviderImpl::CastAudioJsonProviderImpl() {
 
 CastAudioJsonProviderImpl::~CastAudioJsonProviderImpl() = default;
 
-std::unique_ptr<base::Value> CastAudioJsonProviderImpl::GetCastAudioConfig() {
+std::optional<base::Value::Dict>
+CastAudioJsonProviderImpl::GetCastAudioConfig() {
   std::string contents;
   base::ReadFileToString(CastAudioJson::GetFilePath(), &contents);
-  return base::JSONReader::ReadDeprecated(contents);
+  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+      contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
+    return std::nullopt;
+  }
+
+  return std::move(*value);
 }
 
 void CastAudioJsonProviderImpl::SetTuningChangedCallback(

@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_PASSWORD_STORE_ANDROID_BACKEND_RECEIVER_BRIDGE_IMPL_H_
 
 #include "base/android/scoped_java_ref.h"
+#include "base/sequence_checker.h"
 #include "chrome/browser/password_manager/android/password_store_android_backend_receiver_bridge.h"
 
 namespace password_manager {
@@ -17,7 +18,8 @@ namespace password_manager {
 class PasswordStoreAndroidBackendReceiverBridgeImpl
     : public password_manager::PasswordStoreAndroidBackendReceiverBridge {
  public:
-  PasswordStoreAndroidBackendReceiverBridgeImpl();
+  PasswordStoreAndroidBackendReceiverBridgeImpl(
+      password_manager::IsAccountStore is_account_store);
   PasswordStoreAndroidBackendReceiverBridgeImpl(
       PasswordStoreAndroidBackendReceiverBridgeImpl&&) = delete;
   PasswordStoreAndroidBackendReceiverBridgeImpl(
@@ -35,21 +37,37 @@ class PasswordStoreAndroidBackendReceiverBridgeImpl
   // provides the resulting `passwords`.
   void OnCompleteWithLogins(
       JNIEnv* env,
-      jint job_id,
-      const base::android::JavaParamRef<jbyteArray>& passwords);
+      int32_t job_id,
+      const base::android::JavaRef<jbyteArray>& passwords);
+
+  // Implements consumer interface
+  // Called via JNI. Called when the api call with `job_id` finished and
+  // provides the resulting affiliated `passwords`.
+  virtual void OnCompleteWithBrandedLogins(
+      JNIEnv* env,
+      int32_t job_id,
+      const base::android::JavaRef<jbyteArray>& passwords);
+
+  // Implements consumer interface
+  // Called via JNI. Called when the api call with `job_id` finished and
+  // provides the resulting affiliated `passwords`.
+  void OnCompleteWithAffiliatedLogins(
+      JNIEnv* env,
+      int32_t job_id,
+      const base::android::JavaRef<jbyteArray>& passwords);
 
   // Called via JNI. Called when the api call with `job_id` finished that could
   // have added, modified or deleted a login.
-  void OnLoginChanged(JNIEnv* env, jint job_id);
+  void OnLoginChanged(JNIEnv* env, int32_t job_id);
 
   // Called via JNI. Called when the api call with `job_id` finished with
   // an exception.
   void OnError(JNIEnv* env,
-               jint job_id,
-               jint error_type,
-               jint api_error_code,
-               jboolean has_connection_result,
-               jint connection_result_code);
+               int32_t job_id,
+               int32_t error_type,
+               int32_t api_error_code,
+               bool has_connection_result,
+               int32_t connection_result_code);
 
  private:
   // Implements PasswordStoreAndroidBackendReceiverBridge interface.
@@ -63,6 +81,11 @@ class PasswordStoreAndroidBackendReceiverBridgeImpl
   // `PasswordStoreAndroidBackendReceiverBridgeImpl`, i.e. the Java counterpart
   // to this class.
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
+
+  // Differentiates between a receiver bridge backing an AccountStore vs a
+  // ProfileStore. Use to mark the received passwords as Profile or Account
+  // passwords.
+  password_manager::IsAccountStore is_account_store_;
 
   // All callbacks should be called on the same background thread.
   SEQUENCE_CHECKER(main_sequence_checker_);

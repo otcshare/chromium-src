@@ -27,12 +27,9 @@ class ChromeDoNotTrackTest : public InProcessBrowserTest {
   }
 
   void ExpectPageTextEq(const std::string& expected_content) {
-    std::string text;
-    ASSERT_TRUE(ExecuteScriptAndExtractString(
-        browser()->tab_strip_model()->GetActiveWebContents(),
-        "window.domAutomationController.send(document.body.innerText);",
-        &text));
-    EXPECT_EQ(expected_content, text);
+    EXPECT_EQ(expected_content,
+              EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                     "document.body.innerText;"));
   }
 
   content::WebContents* GetWebContents() {
@@ -70,8 +67,7 @@ IN_PROC_BROWSER_TEST_F(ChromeDoNotTrackTest, FetchFromWorker) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
-      embedded_test_server()->GetURL(
-          "/workers/fetch_from_worker.html?script=fetch_from_worker.js")));
+      embedded_test_server()->GetURL("/workers/fetch_from_worker.html")));
   EXPECT_EQ("1",
             EvalJs(GetWebContents(), "fetch_from_worker('/echoheader?DNT');"));
 

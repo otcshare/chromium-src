@@ -4,7 +4,9 @@
 
 #include "ios/web/public/thread/web_thread.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ios/web/public/test/web_task_environment.h"
 #include "ios/web/public/thread/web_task_traits.h"
 #include "ios/web/public/thread/web_thread.h"
@@ -25,7 +27,8 @@ class WebThreadTest : public PlatformTest {
     std::move(continuation).Run();
   }
 
-  web::WebTaskEnvironment task_environment_{WebTaskEnvironment::REAL_IO_THREAD};
+  web::WebTaskEnvironment task_environment_{
+      web::WebTaskEnvironment::IOThreadType::REAL_THREAD};
 };
 
 TEST_F(WebThreadTest, BasePostTask) {

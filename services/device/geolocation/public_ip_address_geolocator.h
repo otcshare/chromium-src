@@ -7,12 +7,13 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/device/geolocation/public_ip_address_location_notifier.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
 
 namespace device {
@@ -32,6 +33,7 @@ class PublicIpAddressGeolocator : public mojom::Geolocation {
   // bad Mojo message *only while processing that message*.
   PublicIpAddressGeolocator(const net::PartialNetworkTrafficAnnotationTag tag,
                             PublicIpAddressLocationNotifier* notifier,
+                            mojom::GeolocationClientId client_id,
                             BadMessageCallback callback);
 
   PublicIpAddressGeolocator(const PublicIpAddressGeolocator&) = delete;
@@ -43,10 +45,10 @@ class PublicIpAddressGeolocator : public mojom::Geolocation {
  private:
   // mojom::Geolocation:
   void QueryNextPosition(QueryNextPositionCallback callback) override;
-  void SetHighAccuracy(bool high_accuracy) override;
+  void SetHighAccuracyHint(bool high_accuracy) override;
 
   // Callback to register with PublicIpAddressLocationNotifier.
-  void OnPositionUpdate(const mojom::Geoposition& position);
+  void OnPositionUpdate(mojom::GeopositionResultPtr result);
 
   // The callback passed to QueryNextPosition.
   QueryNextPositionCallback query_next_position_callback_;
@@ -54,8 +56,14 @@ class PublicIpAddressGeolocator : public mojom::Geolocation {
   // Timestamp of latest Geoposition this client received.
   base::Time last_updated_timestamp_;
 
-  // Notifier to ask for IP-geolocation updates.
+  // `notifier_` is a non-owning raw_ptr. The
+  // `PublicIpAddressGeolocationProvider` owns both `this` instance (via a
+  // `UniqueReceiverSet`) and the `notifier_` pointee. Due to declaration order
+  // in `PublicIpAddressGeolocationProvider`, the `notifier_` pointee is
+  // guaranteed to outlive `this` instance.
   const raw_ptr<PublicIpAddressLocationNotifier> notifier_;
+
+  const mojom::GeolocationClientId client_id_;
 
   // The most recent PartialNetworkTrafficAnnotationTag provided by a client.
   std::unique_ptr<const net::PartialNetworkTrafficAnnotationTag>

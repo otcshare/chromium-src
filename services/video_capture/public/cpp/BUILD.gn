@@ -4,6 +4,8 @@
 
 source_set("cpp") {
   sources = [
+    "features.cc",
+    "features.h",
     "receiver_media_to_mojo_adapter.cc",
     "receiver_media_to_mojo_adapter.h",
     "receiver_mojo_to_media_adapter.cc",
@@ -17,19 +19,17 @@ source_set("cpp") {
   public_deps = [
     "//base",
     "//media",
-    "//media/capture:capture",
+    "//media/capture",
     "//services/video_capture/public/mojom",
   ]
 
-  deps = [ "//mojo/public/cpp/bindings:bindings" ]
+  deps = [ "//mojo/public/cpp/bindings" ]
 }
 
 source_set("mocks") {
   testonly = true
 
   sources = [
-    "mock_device_factory.cc",
-    "mock_device_factory.h",
     "mock_producer.cc",
     "mock_producer.h",
     "mock_push_subscription.cc",
@@ -48,6 +48,4 @@ source_set("mocks") {
     "//services/video_capture/public/mojom",
     "//testing/gmock",
   ]
-
-  deps = [ "//build:chromeos_buildflags" ]
 }

@@ -10,6 +10,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -128,7 +129,7 @@ class FakeCapabilitiesObserver : public DeviceCapabilities::Observer {
   }
 
  private:
-  DeviceCapabilities* const capabilities_;
+  const raw_ptr<DeviceCapabilities> capabilities_;
   bool removed_as_observer;
 };
 
@@ -183,10 +184,8 @@ base::Value GetSampleDynamicCapabilityNewValue() {
 bool JsonStringEquals(const std::string& json,
                       const std::string& key,
                       const base::Value& value) {
-  base::Value dict_value(base::Value::Type::DICTIONARY);
-  dict_value.SetKey(key, value.Clone());
-  std::string dict_json;
-  return base::JSONWriter::Write(dict_value, &dict_json) && dict_json == json;
+  return base::WriteJson(base::Value::Dict().Set(key, value.Clone()))
+             .value_or("") == json;
 }
 
 // The function runs through the set of basic operations of DeviceCapabilities.
@@ -268,9 +267,8 @@ class DeviceCapabilitiesImplTest : public ::testing::Test {
 
 // Tests that class is in correct state after Create().
 TEST_F(DeviceCapabilitiesImplTest, Create) {
-  std::string empty_dict_string;
-  base::JSONWriter::Write(base::Value(base::Value::Type::DICTIONARY),
-                          &empty_dict_string);
+  std::string empty_dict_string =
+      base::WriteJson(base::Value(base::Value::Type::DICT)).value_or("");
   EXPECT_EQ(capabilities()->GetAllData()->json_string(), empty_dict_string);
   EXPECT_TRUE(capabilities()->GetAllData()->dictionary().empty());
 }
@@ -285,10 +283,8 @@ TEST_F(DeviceCapabilitiesImplTest, Register) {
   FakeCapabilityManagerSimple manager(capabilities(), key, base::Value(), true,
                                       false);
 
-  EXPECT_EQ(capabilities()->GetValidator(key), &manager);
-  std::string empty_dict_string;
-  base::JSONWriter::Write(base::Value(base::Value::Type::DICTIONARY),
-                          &empty_dict_string);
+  std::string empty_dict_string =
+      base::WriteJson(base::Value(base::Value::Type::DICT)).value_or("");
   EXPECT_EQ(capabilities()->GetAllData()->json_string(), empty_dict_string);
   EXPECT_TRUE(capabilities()->GetCapability(key).is_none());
 }
@@ -306,9 +302,8 @@ TEST_F(DeviceCapabilitiesImplTest, Unregister) {
   delete manager;
 
   EXPECT_FALSE(capabilities()->GetValidator(key));
-  std::string empty_dict_string;
-  base::JSONWriter::Write(base::Value(base::Value::Type::DICTIONARY),
-                          &empty_dict_string);
+  std::string empty_dict_string =
+      base::WriteJson(base::Value::Dict()).value_or("");
   EXPECT_EQ(capabilities()->GetAllData()->json_string(), empty_dict_string);
   EXPECT_TRUE(capabilities()->GetCapability(key).is_none());
 }
@@ -537,7 +532,8 @@ TEST_F(DeviceCapabilitiesImplTest, SetCapabilityDynamic) {
 // capability of type DictionaryValue.
 TEST_F(DeviceCapabilitiesImplTest, SetCapabilityDictionary) {
   std::string key("dummy_dictionary_key");
-  auto init_value = base::JSONReader::Read(kSampleDictionaryCapability);
+  auto init_value = base::JSONReader::Read(
+      kSampleDictionaryCapability, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(init_value);
   FakeCapabilityManagerSimple manager(capabilities(), key,
                                       std::move(*init_value), true, false);
@@ -562,7 +558,8 @@ TEST_F(DeviceCapabilitiesImplTest, SetCapabilityDictionary) {
 // capability of type DictionaryValue and invalid changes are proposed.
 TEST_F(DeviceCapabilitiesImplTest, SetCapabilityDictionaryInvalid) {
   std::string key("dummy_dictionary_key");
-  auto init_value = base::JSONReader::Read(kSampleDictionaryCapability);
+  auto init_value = base::JSONReader::Read(
+      kSampleDictionaryCapability, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(init_value);
   FakeCapabilityManagerSimple manager(capabilities(), key,
                                       std::move(*init_value), false, false);
@@ -583,11 +580,12 @@ TEST_F(DeviceCapabilitiesImplTest, SetCapabilityDictionaryInvalid) {
   EXPECT_EQ(value.GetInt(), 99);
 }
 
-// Test  MergeDictionary.
+// Test MergeDictionary.
 TEST_F(DeviceCapabilitiesImplTest, MergeDictionary) {
-  auto deserialized_value = base::JSONReader::Read(kSampleDictionaryCapability);
+  std::optional<base::Value::Dict> deserialized_value =
+      base::JSONReader::ReadDict(kSampleDictionaryCapability,
+                                 base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(deserialized_value);
-  ASSERT_TRUE(deserialized_value->is_dict());
 
   capabilities()->MergeDictionary(*deserialized_value);
   base::RunLoop().RunUntilIdle();
@@ -603,8 +601,8 @@ TEST_F(DeviceCapabilitiesImplTest, MergeDictionary) {
 
   // Now just update one of the fields. Make sure the updated value is changed
   // in DeviceCapabilities and the other field remains untouched.
-  deserialized_value->SetIntKey("dummy_field_int", 100);
-  ASSERT_TRUE(deserialized_value->RemoveKey("dummy_field_bool"));
+  deserialized_value->Set("dummy_field_int", 100);
+  ASSERT_TRUE(deserialized_value->Remove("dummy_field_bool"));
 
   capabilities()->MergeDictionary(*deserialized_value);
   base::RunLoop().RunUntilIdle();

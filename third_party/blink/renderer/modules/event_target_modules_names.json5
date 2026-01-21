@@ -4,16 +4,19 @@
     suffix: "Modules",
   },
 
-  # You don't need to specify ImplementedAs even though an interface name and
-  # its C++ class name don't match.  You need to specify ImplementedAs only if
-  # you'd like to change recorded names in ActivityLogger.
+  // You don't need to specify ImplementedAs even though an interface name and
+  // its C++ class name don't match.  You need to specify ImplementedAs only if
+  // you'd like to change recorded names in ActivityLogger.
   data: [
+    "AILanguageModel",
     "BackgroundFetchRegistration",
     "BatteryManager",
     "Bluetooth",
     "BluetoothDevice",
     "BluetoothRemoteGATTCharacteristic",
+    "CaptureController",
     "CookieStore",
+    "CreateMonitor",
     "DelegatedInkTrail",
     "DocumentPictureInPicture",
     "EyeDropper",
@@ -41,6 +44,7 @@
     "RTCDataChannel",
     "RTCDtlsTransport",
     "RTCPeerConnection",
+    "RTCTransport",
     "RTCSctpTransport",
     "NDEFReader",
     "NetworkInformation",

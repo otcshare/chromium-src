@@ -6,8 +6,10 @@
 #define COMPONENTS_FEED_CORE_V2_TEST_TEST_UTIL_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/test/protobuf_matchers.h"
 #include "base/time/time.h"
 #include "components/feed/core/v2/test/proto_printer.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,6 +17,8 @@
 
 // Some functionality shared among feed tests.
 namespace feed {
+
+using base::test::EqualsProto;
 
 // Although time is mocked through TaskEnvironment, it does drift by small
 // amounts.
@@ -37,11 +41,19 @@ const base::TimeDelta kEpsilon = base::Milliseconds(5);
                                << got___;                   \
   }
 
-MATCHER_P(EqualsProto, message, ToTextProto(message)) {
-  std::string expected_serialized, actual_serialized;
-  message.SerializeToString(&expected_serialized);
-  arg.SerializeToString(&actual_serialized);
-  return expected_serialized == actual_serialized;
+// Trims whitespace from begin and end of all lines of text.
+std::string TrimLines(std::string_view text);
+
+// Does the protobuf argument's ToTextProto() output match message? Allows some
+// whitespace differences.
+MATCHER_P(EqualsTextProto, message, message) {
+  std::string actual_string = ToTextProto(arg);
+  if (TrimLines(actual_string) != TrimLines(message)) {
+    return testing::ExplainMatchResult(testing::Eq(message), ToTextProto(arg),
+                                       result_listener);
+  } else {
+    return true;
+  }
 }
 
 // Execute a runloop until `criteria` is true. If the criteria are not true

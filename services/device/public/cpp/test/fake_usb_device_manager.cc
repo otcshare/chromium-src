@@ -8,8 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "services/device/public/cpp/test/fake_usb_device.h"
@@ -22,7 +20,9 @@ namespace device {
 
 FakeUsbDeviceManager::FakeUsbDeviceManager() {}
 
-FakeUsbDeviceManager::~FakeUsbDeviceManager() {}
+FakeUsbDeviceManager::~FakeUsbDeviceManager() {
+  RemoveAllDevices();
+}
 
 void FakeUsbDeviceManager::EnumerateDevicesAndSetClient(
     mojo::PendingAssociatedRemote<mojom::UsbDeviceManagerClient> client,
@@ -101,10 +101,17 @@ void FakeUsbDeviceManager::OpenFileDescriptor(
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+void FakeUsbDeviceManager::SetOnClientSetClosure(base::OnceClosure closure) {
+  on_client_set_ = std::move(closure);
+}
+
 void FakeUsbDeviceManager::SetClient(
     mojo::PendingAssociatedRemote<mojom::UsbDeviceManagerClient> client) {
   DCHECK(client);
   clients_.Add(std::move(client));
+  if (on_client_set_) {
+    std::move(on_client_set_).Run();
+  }
 }
 
 void FakeUsbDeviceManager::AddReceiver(
@@ -115,7 +122,7 @@ void FakeUsbDeviceManager::AddReceiver(
 mojom::UsbDeviceInfoPtr FakeUsbDeviceManager::AddDevice(
     scoped_refptr<FakeUsbDeviceInfo> device) {
   DCHECK(device);
-  DCHECK(!base::Contains(devices_, device->guid()));
+  DCHECK(!devices_.contains(device->guid()));
   devices_[device->guid()] = device;
   auto device_info = device->GetDeviceInfo().Clone();
 
@@ -128,7 +135,7 @@ mojom::UsbDeviceInfoPtr FakeUsbDeviceManager::AddDevice(
 void FakeUsbDeviceManager::RemoveDevice(
     scoped_refptr<FakeUsbDeviceInfo> device) {
   DCHECK(device);
-  DCHECK(base::Contains(devices_, device->guid()));
+  DCHECK(devices_.contains(device->guid()));
 
   auto device_info = device->GetDeviceInfo().Clone();
   devices_.erase(device->guid());
@@ -141,7 +148,7 @@ void FakeUsbDeviceManager::RemoveDevice(
 }
 
 void FakeUsbDeviceManager::RemoveDevice(const std::string& guid) {
-  DCHECK(base::Contains(devices_, guid));
+  DCHECK(devices_.contains(guid));
 
   RemoveDevice(devices_[guid]);
 }
@@ -158,7 +165,7 @@ void FakeUsbDeviceManager::RemoveAllDevices() {
 
 const device::mojom::UsbDeviceInfo* FakeUsbDeviceManager::GetDeviceInfo(
     const std::string& guid) {
-  if (!base::Contains(devices_, guid))
+  if (!devices_.contains(guid))
     return nullptr;
 
   return &devices_[guid]->GetDeviceInfo();
@@ -166,7 +173,7 @@ const device::mojom::UsbDeviceInfo* FakeUsbDeviceManager::GetDeviceInfo(
 
 bool FakeUsbDeviceManager::SetMockForDevice(const std::string& guid,
                                             MockUsbMojoDevice* mock_device) {
-  if (!base::Contains(devices_, guid))
+  if (!devices_.contains(guid))
     return false;
 
   devices_[guid]->SetMockDevice(mock_device);

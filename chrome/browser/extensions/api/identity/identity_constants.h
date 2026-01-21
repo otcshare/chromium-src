@@ -5,6 +5,10 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_IDENTITY_IDENTITY_CONSTANTS_H_
 #define CHROME_BROWSER_EXTENSIONS_API_IDENTITY_IDENTITY_CONSTANTS_H_
 
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
 namespace identity_constants {
@@ -17,12 +21,16 @@ extern const char kUserNotSignedIn[];
 extern const char kUserNonPrimary[];
 extern const char kBrowserSigninNotAllowed[];
 extern const char kInteractionRequired[];
+extern const char kGetAuthTokenInteractivityDeniedError[];
 extern const char kInvalidRedirect[];
 extern const char kOffTheRecord[];
 extern const char kPageLoadFailure[];
-extern const char kSetAccountsInCookieFailure[];
+extern const char kPageLoadTimedOut[];
 extern const char kInvalidConsentResult[];
-extern const char kCanceled[];
+extern const char kCannotSetRemoteConsentResolutionCookies[];
+extern const char kCannotCreateWindow[];
+extern const char kInvalidURLScheme[];
+extern const char kBrowserContextShutDown[];
 
 extern const int kCachedRemoteConsentTTLSeconds;
 }  // namespace identity_constants

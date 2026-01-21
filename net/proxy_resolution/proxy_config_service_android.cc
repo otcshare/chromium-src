@@ -8,10 +8,10 @@
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
@@ -23,16 +23,18 @@
 #include "net/base/host_port_pair.h"
 #include "net/base/proxy_server.h"
 #include "net/base/proxy_string_util.h"
-#include "net/net_jni_headers/ProxyChangeListener_jni.h"
 #include "net/proxy_resolution/proxy_config_with_annotation.h"
 #include "url/third_party/mozilla/url_parse.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "net/net_jni_headers/ProxyChangeListener_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::ConvertUTF8ToJavaString;
-using base::android::ConvertJavaStringToUTF8;
 using base::android::CheckException;
 using base::android::ClearException;
-using base::android::JavaParamRef;
+using base::android::ConvertJavaStringToUTF8;
+using base::android::ConvertUTF8ToJavaString;
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -96,7 +98,7 @@ ProxyServer LookupSocksProxy(const GetPropertyCallback& get_property) {
 
 void AddBypassRules(const std::string& scheme,
                     const GetPropertyCallback& get_property,
-                    ProxyBypassRules* bypass_rules) {
+                    ProxyHostMatchingRules* bypass_rules) {
   // The format of a hostname pattern is a list of hostnames that are separated
   // by | and that use * as a wildcard. For example, setting the
   // http.nonProxyHosts property to *.android.com|*.kernel.org will cause
@@ -216,21 +218,23 @@ std::string ParseOverrideRules(
 
   for (const auto& rule : override_rules) {
     // Parse the proxy URL.
-    ProxyServer proxy_server =
-        ProxyUriToProxyServer(rule.proxy_url, ProxyServer::Scheme::SCHEME_HTTP);
-    if (!proxy_server.is_valid()) {
+    ProxyChain proxy_chain =
+        ProxyUriToProxyChain(rule.proxy_url, ProxyServer::Scheme::SCHEME_HTTP);
+    if (!proxy_chain.IsValid()) {
       return "Invalid Proxy URL: " + rule.proxy_url;
-    } else if (proxy_server.is_quic()) {
+    } else if (proxy_chain.is_multi_proxy()) {
+      return "Unsupported multi proxy chain: " + rule.proxy_url;
+    } else if (proxy_chain.is_single_proxy() && proxy_chain.First().is_quic()) {
       return "Unsupported proxy scheme: " + rule.proxy_url;
     }
 
     // Parse the URL scheme.
     if (base::EqualsCaseInsensitiveASCII(rule.url_scheme, "http")) {
-      proxy_rules->proxies_for_http.AddProxyServer(proxy_server);
+      proxy_rules->proxies_for_http.AddProxyChain(proxy_chain);
     } else if (base::EqualsCaseInsensitiveASCII(rule.url_scheme, "https")) {
-      proxy_rules->proxies_for_https.AddProxyServer(proxy_server);
+      proxy_rules->proxies_for_https.AddProxyChain(proxy_chain);
     } else if (rule.url_scheme == "*") {
-      proxy_rules->fallback_proxies.AddProxyServer(proxy_server);
+      proxy_rules->fallback_proxies.AddProxyChain(proxy_chain);
     } else {
       return "Unsupported URL scheme: " + rule.url_scheme;
     }
@@ -427,23 +431,21 @@ class ProxyConfigServiceAndroid::Delegate
     // ProxyConfigServiceAndroid::JNIDelegate overrides.
     void ProxySettingsChangedTo(
         JNIEnv* env,
-        const JavaParamRef<jobject>& jself,
-        const JavaParamRef<jstring>& jhost,
-        jint jport,
-        const JavaParamRef<jstring>& jpac_url,
-        const JavaParamRef<jobjectArray>& jexclusion_list) override {
+        const JavaRef<jstring>& jhost,
+        int32_t jport,
+        const JavaRef<jstring>& jpac_url,
+        const JavaRef<jobjectArray>& jexclusion_list) override {
       std::string host = ConvertJavaStringToUTF8(env, jhost);
       std::string pac_url;
       if (jpac_url)
-        ConvertJavaStringToUTF8(env, jpac_url, &pac_url);
+        pac_url = ConvertJavaStringToUTF8(env, jpac_url);
       std::vector<std::string> exclusion_list;
       base::android::AppendJavaStringArrayToStringVector(
           env, jexclusion_list, &exclusion_list);
       delegate_->ProxySettingsChangedTo(host, jport, pac_url, exclusion_list);
     }
 
-    void ProxySettingsChanged(JNIEnv* env,
-                              const JavaParamRef<jobject>& self) override {
+    void ProxySettingsChanged(JNIEnv* env) override {
       delegate_->ProxySettingsChanged();
     }
 
@@ -562,3 +564,5 @@ void ProxyConfigServiceAndroid::ClearProxyOverride(base::OnceClosure callback) {
 }
 
 } // namespace net
+
+DEFINE_JNI(ProxyChangeListener)

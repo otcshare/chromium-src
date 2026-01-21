@@ -4,6 +4,8 @@
 
 #include "extensions/browser/events/lazy_event_dispatch_util.h"
 
+#include <optional>
+
 #include "base/observer_list.h"
 #include "base/version.h"
 #include "content/public/browser/browser_context.h"
@@ -32,7 +34,7 @@ LazyEventDispatchUtil::LazyEventDispatchUtil(
       ExtensionRegistry::Get(browser_context_));
 }
 
-LazyEventDispatchUtil::~LazyEventDispatchUtil() {}
+LazyEventDispatchUtil::~LazyEventDispatchUtil() = default;
 
 void LazyEventDispatchUtil::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
@@ -95,8 +97,8 @@ void LazyEventDispatchUtil::RemovePendingOnInstallInfoFromPref(
   ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context_);
   DCHECK(prefs);
 
-  prefs->UpdateExtensionPref(extension_id,
-                             kPrefPendingOnInstalledEventDispatchInfo, nullptr);
+  prefs->UpdateExtensionPref(
+      extension_id, kPrefPendingOnInstalledEventDispatchInfo, std::nullopt);
 }
 
 void LazyEventDispatchUtil::StorePendingOnInstallInfoToPref(
@@ -114,9 +116,9 @@ void LazyEventDispatchUtil::StorePendingOnInstallInfoToPref(
                               previous_version.IsValid()
                                   ? previous_version.GetString()
                                   : std::string());
-  prefs->UpdateExtensionPref(
-      extension->id(), kPrefPendingOnInstalledEventDispatchInfo,
-      std::make_unique<base::Value>(std::move(pending_on_install_info)));
+  prefs->UpdateExtensionPref(extension->id(),
+                             kPrefPendingOnInstalledEventDispatchInfo,
+                             base::Value(std::move(pending_on_install_info)));
 }
 
 }  // namespace extensions

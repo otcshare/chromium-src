@@ -21,7 +21,7 @@ Timestamp TimeToTimestamp(base::Time time) {
   return timestamp;
 }
 
-base::StringPiece TrustTokenOperationTypeToString(
+std::string_view TrustTokenOperationTypeToString(
     mojom::TrustTokenOperationType type) {
   // WARNING: These values are used to construct histogram names. When making
   // changes, please make sure that the Trust Tokens-related histograms
@@ -40,9 +40,13 @@ std::string ProtocolVersionToString(
     mojom::TrustTokenProtocolVersion my_version) {
   switch (my_version) {
     case mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb:
-      return "TrustTokenV3PMB";
+      return "PrivateStateTokenV3PMB";
     case mojom::TrustTokenProtocolVersion::kTrustTokenV3Voprf:
-      return "TrustTokenV3VOPRF";
+      return "PrivateStateTokenV3VOPRF";
+    case mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Pmb:
+      return "PrivateStateTokenV1PMB";
+    case mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf:
+      return "PrivateStateTokenV1VOPRF";
   }
 }
 

@@ -4,14 +4,13 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_page_popup_controller_binding.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_window.h"
-#include "third_party/blink/renderer/core/dom/context_features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/page/page_popup_controller.h"
+#include "third_party/blink/renderer/platform/bindings/v8_set_return_value.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 
 namespace blink {
@@ -20,16 +19,17 @@ namespace {
 
 void PagePopupControllerAttributeGetter(
     const v8::PropertyCallbackInfo<v8::Value>& info) {
-  v8::Local<v8::Object> holder = info.Holder();
-  DOMWindow* impl = V8Window::ToImpl(holder);
-  PagePopupController* cpp_value = nullptr;
-  if (LocalFrame* frame = To<LocalDOMWindow>(impl)->GetFrame())
-    cpp_value = PagePopupController::From(*frame->GetPage());
-  V8SetReturnValue(
-      info,
-      ToV8Traits<PagePopupController>::ToV8(
-          ScriptState::From(info.GetIsolate()->GetCurrentContext()), cpp_value)
-          .ToLocalChecked());
+  v8::Local<v8::Object> holder = info.HolderV2();
+  LocalFrame* frame =
+      To<LocalDOMWindow>(V8Window::ToWrappableUnsafe(info.GetIsolate(), holder))
+          ->GetFrame();
+  if (!frame) {
+    bindings::V8SetReturnValue(info, nullptr);
+    return;
+  }
+  bindings::V8SetReturnValue(
+      info, PagePopupController::From(*frame->GetPage())
+                ->ToV8(ScriptState::ForCurrentRealm(info.GetIsolate())));
 }
 
 void PagePopupControllerAttributeGetterCallback(
@@ -45,13 +45,16 @@ void V8PagePopupControllerBinding::InstallPagePopupController(
     v8::Local<v8::Object> window_wrapper) {
   Document* document =
       ToLocalDOMWindow(window_wrapper->GetCreationContextChecked())->document();
-  if (!document || !ContextFeatures::PagePopupEnabled(document))
+  if (!document) {
     return;
+  }
 
   window_wrapper
-      ->SetAccessor(
-          context, V8AtomicString(context->GetIsolate(), "pagePopupController"),
-          PagePopupControllerAttributeGetterCallback)
+      ->SetNativeDataProperty(
+          context,
+          V8AtomicString(v8::Isolate::GetCurrent(), "pagePopupController"),
+          PagePopupControllerAttributeGetterCallback, nullptr,
+          v8::Local<v8::Value>(), v8::ReadOnly)
       .ToChecked();
 }
 

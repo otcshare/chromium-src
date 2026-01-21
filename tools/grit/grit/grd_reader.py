@@ -6,14 +6,11 @@
 '''Class for reading GRD files into memory, without processing them.
 '''
 
-from __future__ import print_function
 
 import os.path
 import sys
 import xml.sax
 import xml.sax.handler
-
-import six
 
 from grit import exception
 from grit import util
@@ -28,7 +25,8 @@ class StopParsingException(Exception):
 
 class GrdContentHandler(xml.sax.handler.ContentHandler):
   def __init__(self, stop_after, debug, dir, defines, tags_to_ignore,
-               target_platform, source, skip_validation_checks):
+               target_platform, source, skip_validation_checks,
+               translate_genders):
     # Invariant of data:
     # 'root' is the root of the parse tree being created, or None if we haven't
     # parsed out any elements.
@@ -46,6 +44,7 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
     self.target_platform = target_platform
     self.source = source
     self.skip_validation_checks = skip_validation_checks
+    self.translate_genders = translate_genders
 
   def startElement(self, name, attrs):
     if self.ignore_depth or name in self.tags_to_ignore:
@@ -62,6 +61,7 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
     typeattr = attrs.get('type')
     node = mapping.ElementToClass(name, typeattr)()
     node.source = self.source
+    node.SetTranslateGenders(self.translate_genders)
 
     if self.stack:
       self.stack[-1].AddChild(node)
@@ -157,7 +157,8 @@ def Parse(filename_or_stream,
           tags_to_ignore=None,
           target_platform=None,
           predetermined_ids_file=None,
-          skip_validation_checks=False):
+          skip_validation_checks=False,
+          translate_genders=False):
   '''Parses a GRD file into a tree of nodes (from grit.node).
 
   If filename_or_stream is a stream, 'dir' should point to the directory
@@ -190,8 +191,10 @@ def Parse(filename_or_stream,
         mapping from resource names to resource ids which will be used to assign
         resource ids to those resources.
     skip_validation_checks: Whether to skip any validation after successfull
-        parsing, for example uniqueness of IDs, or that all variables encountered
-        in <if expr> statements are defined.
+        parsing, for example uniqueness of IDs, or that all variables
+        encountered in <if expr> statements are defined.
+    translate_genders: Whether to translate each language into up to 4 gendered
+        files.
 
   Return:
     Subclass of grit.node.base.Node
@@ -200,7 +203,7 @@ def Parse(filename_or_stream,
     grit.exception.Parsing
   '''
 
-  if isinstance(filename_or_stream, six.string_types):
+  if isinstance(filename_or_stream, str):
     source = filename_or_stream
     if dir is None:
       dir = util.dirname(filename_or_stream)
@@ -214,7 +217,8 @@ def Parse(filename_or_stream,
                               tags_to_ignore=tags_to_ignore,
                               target_platform=target_platform,
                               source=source,
-                              skip_validation_checks=skip_validation_checks)
+                              skip_validation_checks=skip_validation_checks,
+                              translate_genders=translate_genders)
   try:
     xml.sax.parse(filename_or_stream, handler)
   except StopParsingException:
@@ -252,4 +256,4 @@ def Parse(filename_or_stream,
 
 if __name__ == '__main__':
   util.ChangeStdoutEncoding()
-  print(six.text_type(Parse(sys.argv[1])))
+  print(str(Parse(sys.argv[1])))

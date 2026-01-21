@@ -7,8 +7,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "chromecast/media/api/cast_audio_resampler.h"
 #include "media/base/sinc_resampler.h"
 
@@ -51,8 +51,9 @@ class CastAudioResamplerImpl : public CastAudioResampler {
     int output_frames = resamplers_[0]->ChunkSize();
     for (int c = 0; c < channel_count_; ++c) {
       output_channels[c].resize(output_frame_offset + output_frames);
-      resamplers_[c]->Resample(output_frames,
-                               output_channels[c].data() + output_frame_offset);
+      resamplers_[c]->Resample(
+          base::span(output_channels[c])
+              .subspan(output_frames_offset, output_frames));
     }
   }
 

@@ -4,12 +4,11 @@
 
 #include "ui/display/manager/test/action_logger.h"
 
-namespace display {
-namespace test {
+namespace display::test {
 
-ActionLogger::ActionLogger() {}
+ActionLogger::ActionLogger() = default;
 
-ActionLogger::~ActionLogger() {}
+ActionLogger::~ActionLogger() = default;
 
 void ActionLogger::AppendAction(const std::string& action) {
   if (!actions_.empty())
@@ -23,5 +22,4 @@ std::string ActionLogger::GetActionsAndClear() {
   return actions;
 }
 
-}  // namespace test
-}  // namespace display
+}  // namespace display::test

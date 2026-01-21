@@ -15,6 +15,8 @@ mojom("video_capture") {
     "//ui/gfx/geometry/mojom",
   ]
 
+  deps = [ "//media/mojo/mojom:media_types" ]
+
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
   export_header_blink = "third_party/blink/public/platform/web_common.h"
@@ -27,7 +29,7 @@ mojom("video_capture_buffer") {
   public_deps = [
     ":video_capture_types",
     "//gpu/ipc/common:interfaces",
-    "//media//mojo/mojom:mojom",
+    "//media/mojo/mojom:media_types",
     "//mojo/public/mojom/base",
     "//ui/gfx/geometry/mojom",
     "//ui/gfx/mojom",
@@ -46,6 +48,8 @@ mojom("video_capture_types") {
     "//mojo/public/mojom/base",
     "//ui/gfx/geometry/mojom",
   ]
+
+  deps = [ "//media/mojo/mojom" ]
 
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
@@ -125,6 +129,7 @@ component("video_capture_mojom_support") {
   ]
   deps = [
     "//media/base:video_facing",
+    "//media/mojo/mojom",
     "//ui/gfx/geometry/mojom",
   ]
   defines = [ "IS_MEDIA_CAPTURE_MOJOM_TRAITS_IMPL" ]
@@ -138,6 +143,10 @@ mojom("image_capture") {
   # scramble these messages.
   scramble_message_ids = false
   webui_module_path = "/media/capture/mojom"
+
+  # Since these are exposed to layout tests, they need legacy bindings as
+  # well.
+  generate_legacy_js_bindings = true
 }
 
 source_set("image_capture_types") {

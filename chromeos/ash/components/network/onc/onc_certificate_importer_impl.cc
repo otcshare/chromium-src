@@ -10,16 +10,13 @@
 #include <stddef.h>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "base/values.h"
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "chromeos/ash/components/network/onc/network_onc_utils.h"
 #include "chromeos/components/onc/onc_parsed_certificates.h"
@@ -38,23 +35,6 @@ CertificateImporterImpl::CertificateImporterImpl(
 }
 
 CertificateImporterImpl::~CertificateImporterImpl() = default;
-
-void CertificateImporterImpl::ImportAllCertificatesUserInitiated(
-    const std::vector<
-        chromeos::onc::OncParsedCertificates::ServerOrAuthorityCertificate>&
-        server_or_authority_certificates,
-    const std::vector<chromeos::onc::OncParsedCertificates::ClientCertificate>&
-        client_certificates,
-    DoneCallback done_callback) {
-  VLOG(2) << "Importing " << server_or_authority_certificates.size()
-          << " server/authority certificates and " << client_certificates.size()
-          << " client certificates";
-  RunTaskOnIOTaskRunnerAndCallDoneCallback(
-      base::BindOnce(&StoreAllCertificatesUserInitiated,
-                     server_or_authority_certificates, client_certificates,
-                     target_nssdb_),
-      std::move(done_callback));
-}
 
 void CertificateImporterImpl::ImportClientCertificates(
     const std::vector<chromeos::onc::OncParsedCertificates::ClientCertificate>&
@@ -106,105 +86,6 @@ bool CertificateImporterImpl::StoreClientCertificates(
     }
   }
   return success;
-}
-
-// static
-bool CertificateImporterImpl::StoreAllCertificatesUserInitiated(
-    const std::vector<
-        chromeos::onc::OncParsedCertificates::ServerOrAuthorityCertificate>&
-        server_or_authority_certificates,
-    const std::vector<chromeos::onc::OncParsedCertificates::ClientCertificate>&
-        client_certificates,
-    net::NSSCertDatabase* nssdb) {
-  bool success = true;
-
-  for (const chromeos::onc::OncParsedCertificates::ServerOrAuthorityCertificate&
-           server_or_authority_cert : server_or_authority_certificates) {
-    if (!StoreServerOrCaCertificateUserInitiated(server_or_authority_cert,
-                                                 nssdb)) {
-      success = false;
-    } else {
-      VLOG(2) << "Successfully imported certificate with GUID "
-              << server_or_authority_cert.guid();
-    }
-  }
-  if (!StoreClientCertificates(client_certificates, nssdb))
-    success = false;
-
-  return success;
-}
-
-// static
-bool CertificateImporterImpl::StoreServerOrCaCertificateUserInitiated(
-    const chromeos::onc::OncParsedCertificates::ServerOrAuthorityCertificate&
-        certificate,
-    net::NSSCertDatabase* nssdb) {
-  PRBool is_perm;
-  net::ScopedCERTCertificate x509_cert =
-      net::x509_util::CreateCERTCertificateFromX509Certificate(
-          certificate.certificate().get());
-  if (!x509_cert ||
-      net::x509_util::GetCertIsPerm(x509_cert.get(), &is_perm) != SECSuccess) {
-    NET_LOG(ERROR) << "Unable to create certificate: " << certificate.guid();
-    return false;
-  }
-
-  // Permanent web trust is granted to certificates imported by the user - and
-  // StoreServerOrCaCertificateUserInitiated is only used if the user initiated
-  // the import.
-  net::NSSCertDatabase::TrustBits trust =
-      (certificate.web_trust_requested() ? net::NSSCertDatabase::TRUSTED_SSL
-                                         : net::NSSCertDatabase::TRUST_DEFAULT);
-
-  if (is_perm) {
-    net::CertType net_cert_type =
-        certificate.type() == chromeos::onc::OncParsedCertificates::
-                                  ServerOrAuthorityCertificate::Type::kServer
-            ? net::SERVER_CERT
-            : net::CA_CERT;
-    VLOG(1) << "Certificate is already installed.";
-    net::NSSCertDatabase::TrustBits missing_trust_bits =
-        trust & ~nssdb->GetCertTrust(x509_cert.get(), net_cert_type);
-    if (missing_trust_bits) {
-      std::string error_reason;
-      bool success = false;
-      if (nssdb->IsReadOnly(x509_cert.get())) {
-        error_reason = " Certificate is stored read-only.";
-      } else {
-        success = nssdb->SetCertTrust(x509_cert.get(), net_cert_type, trust);
-      }
-      if (!success) {
-        NET_LOG(ERROR) << "Certificate id: " << certificate.guid()
-                       << " was already present, but trust couldn't be set: "
-                       << error_reason;
-      }
-    }
-  } else {
-    net::ScopedCERTCertificateList cert_list;
-    cert_list.push_back(net::x509_util::DupCERTCertificate(x509_cert.get()));
-    net::NSSCertDatabase::ImportCertFailureList failures;
-    bool success = false;
-    if (certificate.type() == chromeos::onc::OncParsedCertificates::
-                                  ServerOrAuthorityCertificate::Type::kServer)
-      success = nssdb->ImportServerCert(cert_list, trust, &failures);
-    else  // Authority cert
-      success = nssdb->ImportCACerts(cert_list, trust, &failures);
-
-    if (!failures.empty()) {
-      std::string error_string = net::ErrorToString(failures[0].net_error);
-      NET_LOG(ERROR) << "Error ( " << error_string
-                     << " ) importing certificate: " << certificate.guid();
-      return false;
-    }
-
-    if (!success) {
-      NET_LOG(ERROR) << "Unknown error importing certificate: "
-                     << certificate.guid();
-      return false;
-    }
-  }
-
-  return true;
 }
 
 // static

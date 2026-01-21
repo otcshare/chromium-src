@@ -7,19 +7,19 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
-#include "ui/views/animation/ink_drop_host_view.h"
+#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -32,8 +32,9 @@
 namespace views::examples {
 
 class InkDropView : public View {
+  METADATA_HEADER(InkDropView, View)
+
  public:
-  METADATA_HEADER(InkDropView);
   InkDropView() = default;
   InkDropView(const InkDropView&) = delete;
   InkDropView& operator=(const InkDropView&) = delete;
@@ -47,7 +48,7 @@ class InkDropView : public View {
   }
 };
 
-BEGIN_METADATA(InkDropView, View)
+BEGIN_METADATA(InkDropView)
 END_METADATA
 
 BEGIN_VIEW_BUILDER(, InkDropView, View)
@@ -81,7 +82,7 @@ void InkDropExample::CreateExampleView(View* container) {
               .AddChildren(
                   Builder<InkDropView>()
                       .CopyAddressTo(&ink_drop_view_)
-                      .SetBorder(CreateThemedRoundedRectBorder(
+                      .SetBorder(CreateRoundedRectBorder(
                           1, 4, ExamplesColorIds::kColorInkDropExampleBorder))
                       .SetProperty(kMarginsKey, gfx::Insets(10)),
                   Builder<BoxLayoutView>()
@@ -145,11 +146,11 @@ void InkDropExample::CreateInkDrop() {
 
 void InkDropExample::SetInkDropState(InkDropState state) {
   ui::MouseEvent event(
-      ui::ET_MOUSE_PRESSED,
+      ui::EventType::kMousePressed,
       gfx::PointF(ink_drop_view_->GetLocalBounds().CenterPoint()),
       gfx::PointF(ink_drop_view_->origin()), base::TimeTicks(), 0, 0);
-  ui::ScopedAnimationDurationScaleMode scale(
-      ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scale(
+      gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   InkDrop::Get(ink_drop_view_)->AnimateToState(state, &event);
 }
 

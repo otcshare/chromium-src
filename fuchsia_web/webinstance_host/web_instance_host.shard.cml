@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 {
   collections: [
+    // The collection in which child instances are dynamically created.
     {
       name: "web_instances",
       durability: "transient",
@@ -11,9 +12,11 @@
     },
   ],
   capabilities: [
+    // The root of a directory tree through which directory capabilities are
+    // dynamically routed to child instances.
     {
       directory: "web_instances",
-      rights: [ "r*" ],
+      rights: [ "rw*" ],
       path: "/web_instances",
     },
   ],
@@ -28,21 +31,34 @@
         "fuchsia.feedback.CrashReportingProductRegister",
       ],
     },
-    {
-      // Protocols needed when running in CFv1 mode.
-      protocol: "fuchsia.sys.Environment",
-    },
   ],
   offer: [
     {
-      directory: "config-data",
+      directory: "config-data-for-web-instance",
+      from: "parent",
+      as: "config-data",
+      to: "#web_instances",
+      availability: "optional",
+    },
+    {
+      directory: "tzdata-icu",
       from: "parent",
       to: "#web_instances",
     },
     {
+      dictionary: "diagnostics",
+      from: "parent",
+      to: "#web_instances",
+    },
+    {
+      // Statically offered to all web_instances regardless of whether they were
+      // created with `ContextFeatureFlags.NETWORK`.
       directory: "root-ssl-certificates",
       from: "parent",
       to: "#web_instances",
+      // Required if the WebInstanceHost may create Contexts with
+      // `ContextFeatureFlags.NETWORK`.
+      availability: "optional",
     },
     {
       protocol: [
@@ -51,39 +67,36 @@
         "fuchsia.fonts.Provider",
         "fuchsia.hwinfo.Product",
         "fuchsia.intl.PropertyProvider",
-        "fuchsia.kernel.VmexResource",
-        "fuchsia.logger.LogSink",
         "fuchsia.memorypressure.Provider",
         "fuchsia.process.Launcher",
         "fuchsia.sysmem.Allocator",
-        "fuchsia.tracing.provider.Registry",
+        "fuchsia.sysmem2.Allocator",
       ],
       from: "parent",
       to: "#web_instances",
     },
     {
       protocol: [
-        // Required by video capture.
+        // Required for video capture.
+        // TODO(crbug.com/42050280): Move to AppendDynamicServices() to provide
+        // it conditionally when a ContextFeatureFlags is defined.
         "fuchsia.camera3.DeviceWatcher",
 
         // Required to schedule display-critical and realtime audio threads.
+        // TODO(crbug.com/42050308): Migrate to `fuchsia.scheduler`.
         "fuchsia.media.ProfileProvider",
+        "fuchsia.scheduler.RoleManager",
 
         // Required by Frame.SetPreferredTheme(DEFAULT).
         "fuchsia.settings.Display",
 
         // Optionally used by the tracing service.
+        // crbug.com/1364196 tracks providing it conditionally when enabled.
         "fuchsia.tracing.perfetto.ProducerConnector",
       ],
       from: "parent",
       to: "#web_instances",
       availability: "optional",
-      source_availability: "unknown",
-    },
-    {
-      storage: "cache",
-      from: "parent",
-      to: "#web_instances",
     },
   ],
 }

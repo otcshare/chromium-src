@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/files/file.h"
+#include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/file_manager/io_task_util.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -30,7 +30,7 @@ DeleteIOTask::DeleteIOTask(
   progress_.total_bytes = file_urls.size();
 
   for (const auto& url : file_urls) {
-    progress_.sources.emplace_back(url, absl::nullopt);
+    progress_.sources.emplace_back(url, std::nullopt);
   }
 }
 

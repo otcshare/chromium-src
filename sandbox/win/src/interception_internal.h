@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "sandbox/win/src/interceptors.h"
 #include "sandbox/win/src/sandbox_types.h"
 
@@ -31,9 +32,9 @@ struct FunctionInfo {
   size_t record_bytes;  // rounded to sizeof(size_t) bytes
   InterceptionType type;
   InterceptorId id;
-  const void* interceptor_address;
+  // Not a raw_ptr<> as this represents an address in another process.
+  RAW_PTR_EXCLUSION const void* interceptor_address;
   char function[1];  // placeholder for null terminated name
-  // char interceptor[]           // followed by the interceptor function
 };
 
 // A single dll:
@@ -49,7 +50,6 @@ struct DllPatchInfo {
 // All interceptions:
 struct SharedMemory {
   size_t num_intercepted_dlls;
-  void* interceptor_base;
   DllPatchInfo dll_list[1];  // placeholder for the list of dlls
 };
 
@@ -62,12 +62,24 @@ struct ThunkData {
 struct DllInterceptionData {
   size_t data_bytes;
   size_t used_bytes;
-  void* base;
+  // Not a raw_ptr as this represents a DLL base address not PA allocated memory.
+  RAW_PTR_EXCLUSION void* base;
   int num_thunks;
 #if defined(_WIN64)
   int dummy;  // Improve alignment.
 #endif
   ThunkData thunks[1];
+};
+
+// Used for setting up interception thunks for the child process.
+struct PatchClientResultData {
+  // A table of the original unpatched functions that were intercepted. This
+  // data is copied to `g_originals` in the child process.
+  OriginalFunctions originals;
+
+  // A local buffer used for building DllInterceptionData before it is copied
+  // to the child process.
+  DllInterceptionData dll_data;
 };
 
 #pragma pack(pop)

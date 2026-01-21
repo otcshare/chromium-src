@@ -5,11 +5,12 @@
 #ifndef CONTENT_TEST_TEST_OVERSCROLL_DELEGATE_H_
 #define CONTENT_TEST_TEST_OVERSCROLL_DELEGATE_H_
 
+#include <optional>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "content/browser/renderer_host/overscroll_controller.h"
 #include "content/browser/renderer_host/overscroll_controller_delegate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace content {
@@ -24,6 +25,14 @@ class TestOverscrollDelegate : public OverscrollControllerDelegate {
   ~TestOverscrollDelegate() override;
 
   void set_delta_cap(float delta_cap) { delta_cap_ = delta_cap; }
+
+  void set_delete_controller_on_complete(bool delete_controller) {
+    delete_controller_on_complete_ = delete_controller;
+  }
+
+  void set_on_complete_callback(base::OnceClosure callback) {
+    on_complete_callback_ = std::move(callback);
+  }
 
   OverscrollMode current_mode() const { return current_mode_; }
   OverscrollMode completed_mode() const { return completed_mode_; }
@@ -44,17 +53,20 @@ class TestOverscrollDelegate : public OverscrollControllerDelegate {
                               OverscrollMode new_mode,
                               OverscrollSource source,
                               cc::OverscrollBehavior behavior) override;
-  absl::optional<float> GetMaxOverscrollDelta() const override;
+  std::optional<float> GetMaxOverscrollDelta() const override;
 
   gfx::Size display_size_;
 
-  absl::optional<float> delta_cap_;
+  std::optional<float> delta_cap_;
   OverscrollMode current_mode_;
   OverscrollMode completed_mode_;
   std::vector<OverscrollMode> historical_modes_;
 
   float delta_x_;
   float delta_y_;
+
+  bool delete_controller_on_complete_ = false;
+  base::OnceClosure on_complete_callback_;
 };
 
 }  // namespace content

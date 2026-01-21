@@ -5,8 +5,8 @@
 #ifndef SERVICES_RESOURCE_COORDINATOR_PUBLIC_CPP_MEMORY_INSTRUMENTATION_MEMORY_INSTRUMENTATION_H_
 #define SERVICES_RESOURCE_COORDINATOR_PUBLIC_CPP_MEMORY_INSTRUMENTATION_MEMORY_INSTRUMENTATION_H_
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
+#include "base/functional/callback_forward.h"
 #include "base/trace_event/memory_dump_request_args.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/global_memory_dump.h"
@@ -26,10 +26,10 @@ class COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MEMORY_INSTRUMENTATION)
   using MemoryDumpLevelOfDetail = base::trace_event::MemoryDumpLevelOfDetail;
   using MemoryDumpDeterminism = base::trace_event::MemoryDumpDeterminism;
   using RequestGlobalDumpCallback =
-      base::OnceCallback<void(bool success,
+      base::OnceCallback<void(mojom::RequestOutcome outcome,
                               std::unique_ptr<GlobalMemoryDump> dump)>;
   using RequestGlobalMemoryDumpAndAppendToTraceCallback =
-      base::OnceCallback<void(bool success, uint64_t dump_id)>;
+      base::OnceCallback<void(mojom::RequestOutcome outcome, uint64_t dump_id)>;
 
   static void CreateInstance(
       mojo::PendingRemote<memory_instrumentation::mojom::Coordinator>

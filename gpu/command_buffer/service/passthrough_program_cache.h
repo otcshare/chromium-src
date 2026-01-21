@@ -6,7 +6,11 @@
 #define GPU_COMMAND_BUFFER_SERVICE_PASSTHROUGH_PROGRAM_CACHE_H_
 
 #include <mutex>
+
 #include "base/containers/lru_cache.h"
+#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/command_buffer/service/program_cache.h"
 #include "ui/gl/gl_bindings.h"
@@ -18,8 +22,13 @@ namespace gles2 {
 // Program cache that stores binaries in memory, with the ability to serialize
 // them for disk storage.  It also acts as generic blob cache for the underlying
 // implementation via the blob cache extension.
-class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache {
+class GPU_GLES2_EXPORT PassthroughProgramCache
+    : public ProgramCache,
+      public base::MemoryPressureListener {
  public:
+  using Key = std::vector<uint8_t>;
+  using Value = std::vector<uint8_t>;
+
   PassthroughProgramCache(size_t max_cache_size_bytes,
                           bool disable_gpu_shader_disk_cache);
 
@@ -49,6 +58,10 @@ class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache {
 
   size_t Trim(size_t limit) override;
 
+  // base::MemoryPressureListener:
+  void OnMemoryPressure(
+      base::MemoryPressureLevel memory_pressure_level) override;
+
   static void BlobCacheSet(const void* key,
                            EGLsizeiANDROID key_size,
                            const void* value,
@@ -59,10 +72,10 @@ class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache {
                                       void* value,
                                       EGLsizeiANDROID value_size);
 
- private:
-  typedef std::vector<uint8_t> Key;
-  typedef std::vector<uint8_t> Value;
+  size_t Get(const Key& key, void* out_value, size_t value_size);
+  void Set(Key&& key, Value&& value, CacheProgramCallback callback);
 
+ private:
   class ProgramCacheValue {
    public:
     ProgramCacheValue(Value&& program_blob,
@@ -81,16 +94,26 @@ class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache {
    private:
     Value program_blob_;
 
-    // TODO(bartekn): Change this into raw_ptr<...>, after investigating an
-    // earlier crash report most likely caused by a use-after-move.
-    PassthroughProgramCache* program_cache_;
+    // RAW_PTR_EXCLUSION: Performance (motionmark_ramp_composite_ganesh
+    // regression).
+    RAW_PTR_EXCLUSION PassthroughProgramCache* program_cache_;
   };
 
   void ClearBackend() override;
   bool CacheEnabled() const;
 
-  void Set(Key&& key, Value&& value);
-  const ProgramCacheValue* Get(const Key& key);
+  EGLsizeiANDROID BlobCacheGetImpl(const void* key,
+                                   EGLsizeiANDROID key_size,
+                                   void* value,
+                                   EGLsizeiANDROID value_size);
+  void BlobCacheSetImpl(const void* key,
+                        EGLsizeiANDROID key_size,
+                        const void* value,
+                        EGLsizeiANDROID value_size);
+
+  // Return the current max_size_bytes(), which changes depending on the memory
+  // pressure level.
+  size_t GetCurrentMaxSizeBytes() const;
 
   friend class ProgramCacheValue;
 
@@ -98,7 +121,10 @@ class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache {
 
   const bool disable_gpu_shader_disk_cache_;
   size_t curr_size_bytes_;
-  ProgramLRUCache store_;
+  ProgramLRUCache store_ GUARDED_BY(lock_);
+
+  base::AsyncMemoryPressureListenerRegistration
+      memory_pressure_listener_registration_;
 
   // TODO(syoussefi): take compression from memory_program_cache, see
   // compress_program_binaries_

@@ -230,7 +230,9 @@ arguments:
 # DCHECKS are really useful when getting your fuzzer up and running correctly,
 # but will often get in the way when running actual fuzzing, so we will disable
 # this later.
-dcheck_always_on = true
+# TODO(crbug.com/476159166): currently broken; fix the ability to run mojolpm
+# fuzzers with DCHECK and re-enable this recommendation.
+# dcheck_always_on = true
 
 # Without this flag, our fuzzer target won't exist.
 enable_mojom_fuzzer = true
@@ -241,7 +243,7 @@ is_asan = true
 is_component_build = true
 is_debug = false
 optimize_for_fuzzing = true
-use_goma = true
+use_remoteexec = true
 use_libfuzzer = true
 ```
 
@@ -274,7 +276,7 @@ context in which the interface to be fuzzed will actually run. Most fuzzers in
 content will be fine using either the existing `FuzzerEnvironment` or
 `FuzzerEnvironmentWithTaskEnvironment`, depending on whether there's some
 per-testcase state that causes issues with reusing the task environment. There
-are existing examples of both in //content/test/fuzzer.
+are existing examples of both in [`//content/test/fuzzer`].
 
 
 ## Handle per-testcase setup
@@ -350,7 +352,7 @@ just need to implement code to run at the start and end of each testcase, and
 to run each individual action.
 
 All three of these functions will be called on the Fuzzer thread; they should
-ensure that after they've completed the `done_closure/run_closure` argument is
+ensure that after they've completed the `done_closure`/`run_closure` argument is
 invoked on the Fuzzer thread.
 
 ```c++
@@ -409,8 +411,8 @@ void CodeCacheHostTestcase::RunAction(const ProtoAction& action,
 ```
 
 The key line here in integration with MojoLPM is the last case,
-`kCodeCacheHostCall`, where we're asking MojoLPM to treat this incoming proto
-entry as a call to a method on the `CodeCacheHost` interface.
+`kCodeCacheHostRemoteAction`, where we're asking MojoLPM to treat this incoming
+proto entry as a call to a method on the `CodeCacheHost` interface.
 
 There's just a little bit more boilerplate in the bottom of the file to tidy up
 concurrency loose ends, making sure that the fuzzer components are all running
@@ -437,7 +439,7 @@ the rough structure of the presentation service fuzzer")
 Make a corpus directory and fire up your shiny new fuzzer!
 
 ```
- ~/chromium/src% set ASAN_OPTIONS=detect_odr_violation=0,handle_abort=1,handle_sigtrap=1,handle_sigill=1
+ ~/chromium/src% export ASAN_OPTIONS=detect_odr_violation=0,handle_abort=1,handle_sigtrap=1,handle_sigill=1
  ~/chromium/src% out/Default/code_cache_host_mojolpm_fuzzer /dev/shm/corpus
 INFO: Seed: 3273881842
 INFO: Loaded 1 modules   (1121912 inline 8-bit counters): 1121912 [0x559151a1aea8, 0x559151b2cd20),
@@ -514,15 +516,15 @@ We can see that this interface references multiple other interfaces; there are
 several different kinds of reference that we need to worry about:
 
 **Additional fuzzable interfaces** - if an interface method can return a
-pending_remote<> or take a pending_receiver<> to an interface Foo, then we
+`pending_remote<>` or take a `pending_receiver<>` to an interface Foo, then we
 want our fuzzer to fuzz those interfaces too.
 
 Here we would want to add `blink.mojom.Blob.RemoteAction` and
 `blink.mojom.BlobURLStore.AssociatedRemoteAction` to the possible actions
 that our fuzzer protobufs can take.
 
-**Renderer-hosted interfaces** - if an interface method takes a pending_remote<>
-(or returns a pending_receiver<>), then we'll also want to add response handling
+**Renderer-hosted interfaces** - if an interface method takes a `pending_remote<>`
+(or returns a `pending_receiver<>`), then we'll also want to add response handling
 to our fuzzer. This lets the fuzzer send fuzzer-side implementations of mojo
 interfaces, and handle fuzzing the values returned if those methods are called.
 
@@ -553,7 +555,7 @@ is_asan = true
 is_component_build = true
 is_debug = false
 optimize_for_fuzzing = true
-use_goma = true
+use_remoteexec = true
 use_libfuzzer = true
 ```
 
@@ -585,7 +587,7 @@ enable_mojom_fuzzer = true
 is_component_build = false
 is_debug = false
 use_clang_coverage = true
-use_goma = true
+use_remoteexec = true
 use_libfuzzer = true
 ```
 
@@ -593,7 +595,7 @@ use_libfuzzer = true
 python tools/code_coverage/coverage.py code_cache_host_mojolpm_fuzzer -b out/Coverage -o ManualReport -c "out/Coverage/code_cache_host_mojolpm_fuzzer -ignore_timeouts=1 -timeout=4 -runs=0 /dev/shm/corpus" -f content
 ```
 
-With the CodeCacheHost, looking at the coverage after a few hours we could see
+With the `CodeCacheHost`, looking at the coverage after a few hours we could see
 that there's definitely some room for improvement:
 
 ```c++
@@ -766,10 +768,55 @@ Thread T5 (fuzzer_thread) created by T0 here:
 ==2940792==ABORTING
 ```
 
+## Debugging tips
+
+`LOG()` statements don't print while running the fuzzer, but [`SYSLOG()`] works.
+
+> NOTE(caraitto): This is likely due to the lack of
+`--enable-logging=stderr`, but `LOG()` only worked in certain contexts when
+adding that to the command line during `FuzzerEnvironment` setup.
+
+`CHECK()` should work as well.
+
+[`google::protobuf::TextFormat::PrintToString()`] can be used to dump the
+contents of the current testcase proto. This can be useful to help inspect the
+contents of individual crash testcase files, as you can invoke the fuzzer with a
+crash testcase instead of a corpus directory, and then `PrintToString()` can
+print out a string representation of the crash testcase file. This can be easier
+than trying to use command-line protobuf printing tools as these may require
+listing all .proto schema files used, including the many transitive includes.
+
+The [`mojolpm::Context`] global singleton stores objects like Mojo remotes and
+return values of Mojo methods. It can help connect custom action implementations
+with the generated code. Objects are keyed by the type of object and a numeric
+ID that starts at 1 -- for instance, this is how the
+`code_cache_host_remote_action` above knows to use the specific remote created
+by the `new_code_cache_host` -- they both use the `id` of 1.
+
+By changing the [`MOJOLPM_DBG`] `#define` to 1, a number of `mojolpm::Context`
+debug logging sites will be enabled. It's also possible to add logging to the
+generated code by altering the [generated code templates].
+
+Code coverage, as mentioned above, can also be a good tool to determine how far
+into the code the fuzzer is exploring. It's possible to run coverage on the seed
+corpus to see how much code gets covered initially, or run the fuzzer normally
+(non-coverage run) for a few minutes / hours, starting with the seed corpus,
+then run coverage using the resultant corpus directory to see how much
+additional coverage the fuzzer was able to gain through exploration. (Coverage
+runs don't produce new testcases). You may want to periodically monitor code
+coverage to ensure that product code changes don't result in loss of fuzzer
+coverage. However, if you just want to see if a particular line gets covered, it
+might be faster to add a print or `CHECK()` at that line and run the fuzzer.
+
 [markbrand@google.com]:mailto:markbrand@google.com?subject=[MojoLPM%20Help]:%20&cc=fuzzing@chromium.org
 [libfuzzer]: https://source.chromium.org/chromium/chromium/src/+/main:testing/libfuzzer/getting_started.md
 [Protocol Buffers]: https://developers.google.com/protocol-buffers/docs/cpptutorial
 [libprotobuf-mutator]: https://source.chromium.org/chromium/chromium/src/+/main:testing/libfuzzer/libprotobuf-mutator.md
 [testing in Chromium]: https://source.chromium.org/chromium/chromium/src/+/main:docs/testing/testing_in_chromium.md
 [interfaces]: https://source.chromium.org/search?q=interface%5Cs%2B%5Cw%2B%5Cs%2B%7B%20f:%5C.mojom$%20-f:test
-
+[`//content/test/fuzzer`]: https://source.chromium.org/chromium/chromium/src/+/main:content/test/fuzzer/
+[`SYSLOG()`]: https://source.chromium.org/chromium/chromium/src/+/main:base/syslog_logging.h
+[`google::protobuf::TextFormat::PrintToString()`]: https://source.chromium.org/chromium/chromium/src/+/main:third_party/protobuf/src/google/protobuf/text_format.h;l=92;drc=b8644e8bc11097152e648510ca97dad0a20c1aae
+[`mojolpm::Context`]: https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/tools/fuzzers/mojolpm.cc;l=85;drc=6f3f85b321146cfc0f9eb81a74c7c2257821461e
+[`MOJOLPM_DBG`]: https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/tools/fuzzers/mojolpm.h;l=25;drc=6f3f85b321146cfc0f9eb81a74c7c2257821461e
+[generated code templates]: https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/tools/bindings/generators/mojolpm_templates/;drc=af0878e4870444f6347f915a5f24f438085913f6

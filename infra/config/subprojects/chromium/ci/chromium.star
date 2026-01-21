@@ -3,33 +3,51 @@
 # found in the LICENSE file.
 """Definitions of builders in the chromium builder group."""
 
-load("//lib/args.star", "args")
-load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "os", "reclient", "sheriff_rotations")
-load("//lib/branches.star", "branches")
-load("//lib/ci.star", "ci")
-load("//lib/consoles.star", "consoles")
+load("@chromium-luci//args.star", "args")
+load("@chromium-luci//branches.star", "branches")
+load("@chromium-luci//builder_config.star", "builder_config")
+load("@chromium-luci//builder_health_indicators.star", "health_spec")
+load("@chromium-luci//builders.star", "cpu", "os")
+load("@chromium-luci//ci.star", "ci")
+load("@chromium-luci//consoles.star", "consoles")
+load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//targets.star", "targets")
+load("//lib/ci_constants.star", "ci_constants")
+load("//lib/gardener_rotations.star", "gardener_rotations")
+load("//lib/siso.star", "siso")
+
+# Take care when changing the GN args of any of these builders to ensure that
+# you do not include a configuration with 'chrome_with_codecs' since these
+# builders generate publicly advertised non-Official builds which are not
+# allowed to have proprietary codecs enabled.
 
 ci.defaults.set(
+    executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_group = "chromium",
-    executable = ci.DEFAULT_EXECUTABLE,
+    pool = ci_constants.DEFAULT_POOL,
     os = os.LINUX_DEFAULT,
-    pool = ci.DEFAULT_POOL,
-    sheriff_rotations = sheriff_rotations.CHROMIUM,
+    gardener_rotations = gardener_rotations.CHROMIUM,
+    tree_closing = True,
+    tree_closing_notifiers = ci_constants.DEFAULT_TREE_CLOSING_NOTIFIERS,
     main_console_view = "main",
-    service_account = ci.DEFAULT_SERVICE_ACCOUNT,
-    execution_timeout = ci.DEFAULT_EXECUTION_TIMEOUT,
-    reclient_instance = reclient.instance.DEFAULT_TRUSTED,
-    reclient_jobs = reclient.jobs.DEFAULT,
+    execution_timeout = ci_constants.DEFAULT_EXECUTION_TIMEOUT,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
+    health_spec = health_spec.default(),
+    service_account = ci_constants.DEFAULT_SERVICE_ACCOUNT,
+    shadow_service_account = ci_constants.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
 )
 
 consoles.console_view(
     name = "chromium",
     branch_selector = [
-        branches.DESKTOP_EXTENDED_STABLE_MILESTONE,
-        branches.FUCHSIA_LTS_MILESTONE,
+        branches.selector.ANDROID_BRANCHES,
+        branches.selector.DESKTOP_BRANCHES,
+        branches.selector.FUCHSIA_BRANCHES,
     ],
-    include_experimental_builds = True,
     ordering = {
         "*type*": consoles.ordering(short_names = ["dbg", "rel", "off"]),
         "android": "*type*",
@@ -38,40 +56,7 @@ consoles.console_view(
         "mac": "*type*",
         "win": "*type*",
     },
-)
-
-ci.builder(
-    name = "android-archive-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "android",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "android",
-            apply_configs = [
-                "clobber",
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_arch = builder_config.target_arch.ARM,
-            target_platform = builder_config.target_platform.ANDROID,
-        ),
-        android_config = builder_config.android_config(
-            config = "main_builder",
-        ),
-    ),
-    cores = 8,
-    tree_closing = True,
-    # Bump to 32 if needed.
-    console_view_entry = consoles.console_view_entry(
-        category = "android",
-        short_name = "dbg",
-    ),
-    execution_timeout = 4 * time.hour,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    include_experimental_builds = True,
 )
 
 ci.builder(
@@ -84,25 +69,41 @@ ci.builder(
             ],
         ),
         chromium_config = builder_config.chromium_config(
-            config = "android",
+            config = "main_builder",
             apply_configs = [
                 "clobber",
                 "mb",
             ],
             build_config = builder_config.build_config.RELEASE,
             target_arch = builder_config.target_arch.ARM,
+            target_bits = 32,
             target_platform = builder_config.target_platform.ANDROID,
         ),
         android_config = builder_config.android_config(
-            config = "main_builder",
+            config = "base_config",
         ),
     ),
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder_without_codecs",
+            "android_with_static_analysis",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "strip_debug_info",
+            "arm",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
     cores = 32,
-    tree_closing = True,
+    gardener_rotations = args.ignore_default(gardener_rotations.ANDROID),
     console_view_entry = consoles.console_view_entry(
         category = "android",
         short_name = "rel",
     ),
+    contact_team_email = "clank-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -114,7 +115,7 @@ ci.builder(
             ],
         },
     },
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
 ci.builder(
@@ -127,7 +128,7 @@ ci.builder(
             ],
         ),
         chromium_config = builder_config.chromium_config(
-            config = "android",
+            config = "main_builder",
             apply_configs = [
                 "clobber",
                 "mb",
@@ -138,11 +139,26 @@ ci.builder(
             target_platform = builder_config.target_platform.ANDROID,
         ),
         android_config = builder_config.android_config(
-            config = "main_builder",
+            config = "base_config",
         ),
     ),
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder_without_codecs",
+            "android_with_static_analysis",
+            "enable_android_secondary_abi",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "strip_debug_info",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
     cores = 32,
-    tree_closing = True,
+    gardener_rotations = args.ignore_default(gardener_rotations.ANDROID),
     console_view_entry = consoles.console_view_entry(
         category = "android|arm",
         short_name = "arm64",
@@ -158,12 +174,12 @@ ci.builder(
             ],
         },
     },
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
 ci.builder(
-    name = "android-official",
-    branch_selector = branches.STANDARD_MILESTONE,
+    name = "android-desktop-x64-archive-rel",
+    description_html = "Archive builder for Android desktop x64.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -172,100 +188,43 @@ ci.builder(
             ],
         ),
         chromium_config = builder_config.chromium_config(
-            config = "android",
-            apply_configs = [
-                "mb",
-            ],
-            target_arch = builder_config.target_arch.ARM,
-            target_platform = builder_config.target_platform.ANDROID,
-        ),
-        android_config = builder_config.android_config(
             config = "main_builder",
-        ),
-    ),
-    builderless = False,
-    cores = 32,
-    sheriff_rotations = args.ignore_default(None),
-    console_view_entry = consoles.console_view_entry(
-        category = "android",
-        short_name = "off",
-    ),
-    # See https://crbug.com/1153349#c22, as we update symbol_level=2, build
-    # needs longer time to complete.
-    execution_timeout = 7 * time.hour,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
-    name = "fuchsia-official",
-    branch_selector = branches.FUCHSIA_LTS_MILESTONE,
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
             apply_configs = [
-                "fuchsia_x64",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            target_bits = 64,
-            target_platform = builder_config.target_platform.FUCHSIA,
-        ),
-    ),
-    builderless = False,
-    cores = 32,
-    sheriff_rotations = args.ignore_default(None),
-    console_view_entry = [
-        consoles.console_view_entry(
-            category = "fuchsia",
-            short_name = "off",
-        ),
-        consoles.console_view_entry(
-            branch_selector = branches.MAIN,
-            console_view = "sheriff.fuchsia",
-            category = "gardener|ci|x64",
-            short_name = "off",
-        ),
-    ],
-    # TODO: Change this back down to something reasonable once these builders
-    # have populated their cached by getting through the compile step
-    execution_timeout = 10 * time.hour,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
-    name = "lacros64-archive-rel",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "chromeos",
-                "checkout_lacros_sdk",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
+                "clobber",
                 "mb",
             ],
             build_config = builder_config.build_config.RELEASE,
             target_arch = builder_config.target_arch.INTEL,
             target_bits = 64,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "amd64-generic",
-            ],
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
         ),
     ),
-    cores = 32,
-    tree_closing = True,
-    console_view_entry = consoles.console_view_entry(
-        category = "lacros",
-        short_name = "rel",
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder_without_codecs",
+            "android_with_static_analysis",
+            "android_desktop",
+            "enable_android_secondary_abi",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "strip_debug_info",
+            "x64",
+        ],
     ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    cores = 32,
+    gardener_rotations = args.ignore_default(gardener_rotations.ANDROID),
+    console_view_entry = consoles.console_view_entry(
+        category = "android|desktop",
+        short_name = "x64",
+    ),
+    contact_team_email = "clank-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -273,89 +232,61 @@ ci.builder(
                 "src",
                 "infra",
                 "archive_config",
-                "lacros64-archive-rel.json",
+                "android-desktop-x64-archive-rel.json",
             ],
         },
     },
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
 ci.builder(
-    name = "lacros-arm-archive-rel",
+    name = "android-desktop-arm64-archive-rel",
+    description_html = "Archive builder for Android desktop arm64.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
             apply_configs = [
-                "chromeos",
-                "checkout_lacros_sdk",
+                "android",
             ],
         ),
         chromium_config = builder_config.chromium_config(
-            config = "chromium",
+            config = "main_builder",
             apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.RELEASE,
-            target_arch = builder_config.target_arch.ARM,
-            target_bits = 32,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "arm-generic",
-            ],
-        ),
-    ),
-    cores = 32,
-    tree_closing = True,
-    console_view_entry = consoles.console_view_entry(
-        category = "lacros",
-        short_name = "arm",
-    ),
-    properties = {
-        # The format of these properties is defined at archive/properties.proto
-        "$build/archive": {
-            "source_side_spec_path": [
-                "src",
-                "infra",
-                "archive_config",
-                "lacros-arm-archive-rel.json",
-            ],
-        },
-    },
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
-    name = "lacros-arm64-archive-rel",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "chromeos",
-                "checkout_lacros_sdk",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
+                "clobber",
                 "mb",
             ],
             build_config = builder_config.build_config.RELEASE,
             target_arch = builder_config.target_arch.ARM,
             target_bits = 64,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "arm64-generic",
-            ],
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
         ),
     ),
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder_without_codecs",
+            "android_with_static_analysis",
+            "android_desktop",
+            "enable_android_secondary_abi",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "strip_debug_info",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
     cores = 32,
-    sheriff_rotations = args.ignore_default(None),
-    # TODO(crbug.com/1363272): Enable tree_closing/sheriff when stable.
-    tree_closing = False,
+    gardener_rotations = args.ignore_default(gardener_rotations.ANDROID),
     console_view_entry = consoles.console_view_entry(
-        category = "lacros",
+        category = "android|desktop",
         short_name = "arm64",
     ),
+    contact_team_email = "clank-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -363,19 +294,175 @@ ci.builder(
                 "src",
                 "infra",
                 "archive_config",
-                "lacros-arm64-archive-rel.json",
+                "android-desktop-arm64-archive-rel.json",
             ],
         },
     },
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
 ci.builder(
-    name = "linux-archive-dbg",
+    name = "android-official",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
             apply_configs = [
+                "android",
+                "checkout_pgo_profiles",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "main_builder",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.DEBUG,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 32,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "android_builder_without_codecs",
+            "full_symbols",
+            "arm",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 32,
+    gardener_rotations = args.ignore_default(gardener_rotations.ANDROID),
+    console_view_entry = consoles.console_view_entry(
+        category = "android",
+        short_name = "off",
+    ),
+    contact_team_email = "clank-engprod@google.com",
+    # See https://crbug.com/1153349#c22, as we update symbol_level=2, build
+    # needs longer time to complete.
+    execution_timeout = 7 * time.hour,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
+)
+
+ci.builder(
+    name = "android-desktop-arm64-official",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    description_html = "Official builder for Android desktop arm64.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "android",
+                "checkout_pgo_profiles",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "main_builder",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.DEBUG,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "android_builder_without_codecs",
+            "android_desktop",
+            "full_symbols",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 32,
+    console_view_entry = consoles.console_view_entry(
+        category = "android|desktop",
+        short_name = "arm64-off",
+    ),
+    contact_team_email = "clank-engprod@google.com",
+    # See https://crbug.com/1153349#c22, as we update symbol_level=2, build
+    # needs longer time to complete.
+    execution_timeout = 7 * time.hour,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
+)
+
+ci.builder(
+    name = "android-desktop-x64-official",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    description_html = "Official builder for Android desktop x64.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "android",
+                "checkout_pgo_profiles",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "main_builder",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.DEBUG,
+            target_arch = builder_config.target_arch.INTEL,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "android_builder_without_codecs",
+            "android_desktop",
+            "full_symbols",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 32,
+    console_view_entry = consoles.console_view_entry(
+        category = "android|desktop",
+        short_name = "x64-off",
+    ),
+    contact_team_email = "clank-engprod@google.com",
+    # See https://crbug.com/1153349#c22, as we update symbol_level=2, build
+    # needs longer time to complete.
+    execution_timeout = 7 * time.hour,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
+)
+
+ci.builder(
+    name = "linux-chromeos-archive-rel",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "chromeos",
             ],
         ),
         chromium_config = builder_config.chromium_config(
@@ -384,18 +471,76 @@ ci.builder(
                 "clobber",
                 "mb",
             ],
-            build_config = builder_config.build_config.DEBUG,
+            build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.CHROMEOS,
         ),
     ),
-    # Bump to 32 if needed.
-    cores = 8,
-    tree_closing = True,
-    console_view_entry = consoles.console_view_entry(
-        category = "linux",
-        short_name = "dbg",
+    gn_args = gn_args.config(
+        configs = [
+            "chromeos",
+            "release_builder",
+            "remoteexec",
+            "use_cups",
+            "x64",
+        ],
     ),
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    targets = targets.bundle(
+        additional_compile_targets = [
+            "base_unittests",
+            "browser_tests",
+            "chrome",
+            "chromeos_unittests",
+            "components_unittests",
+            "compositor_unittests",
+            "content_browsertests",
+            "content_unittests",
+            "crypto_unittests",
+            "dbus_unittests",
+            "device_unittests",
+            "gcm_unit_tests",
+            "google_apis_unittests",
+            "gpu_unittests",
+            "interactive_ui_tests",
+            "ipc_tests",
+            "media_unittests",
+            "message_center_unittests",
+            "net_unittests",
+            "printing_unittests",
+            "remoting_unittests",
+            "sandbox_linux_unittests",
+            "sql_unittests",
+            "ui_base_unittests",
+            "unit_tests",
+            "url_unittests",
+            "views_unittests",
+        ],
+    ),
+    cores = 8,
+    tree_closing = False,
+    console_view_entry = consoles.console_view_entry(
+        category = "cros",
+        short_name = "lnx",
+    ),
+    properties = {
+        # The format of these properties is defined at archive/properties.proto
+        "$build/archive": {
+            "source_side_spec_path": [
+                "src",
+                "infra",
+                "archive_config",
+                "linux-chromiumos-full.json",
+            ],
+        },
+    },
+    # crbug.com/426228073: deadline exceeded in clang++ causes OOM.
+    siso_configs = [
+        "builder",
+        "no-remote-timeout",
+    ],
+    siso_output_local_strategy = "greedy",
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_linking = True,
 )
 
 ci.builder(
@@ -414,14 +559,27 @@ ci.builder(
             ],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.LINUX,
         ),
     ),
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "updater",
+            "linux",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
     cores = 32,
-    tree_closing = True,
     console_view_entry = consoles.console_view_entry(
         category = "linux",
         short_name = "rel",
     ),
+    contact_team_email = "chrome-browser-infra-team@google.com",
     notifies = ["linux-archive-rel"],
     properties = {
         # The format of these properties is defined at archive/properties.proto
@@ -438,7 +596,7 @@ ci.builder(
 
 ci.builder(
     name = "linux-official",
-    branch_selector = branches.STANDARD_MILESTONE,
+    branch_selector = branches.selector.LINUX_BRANCHES,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -452,42 +610,38 @@ ci.builder(
                 "mb",
             ],
             target_bits = 64,
+            target_platform = builder_config.target_platform.LINUX,
         ),
+    ),
+    gn_args = gn_args.config(
+        configs = ["official_optimize", "remoteexec", "linux", "x64"],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
     ),
     builderless = False,
     cores = 32,
-    sheriff_rotations = args.ignore_default(None),
+    gardener_rotations = args.ignore_default(None),
     console_view_entry = consoles.console_view_entry(
         category = "linux",
         short_name = "off",
     ),
     execution_timeout = 7 * time.hour,
-)
-
-ci.builder(
-    name = "mac-archive-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
+    health_spec = health_spec.modified_default({
+        "Unhealthy": health_spec.unhealthy_thresholds(
+            build_time = struct(
+                p50_mins = 240,
+            ),
         ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "clobber",
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-        ),
-    ),
-    # Bump to 8 cores if needed.
-    cores = 4,
-    os = os.MAC_DEFAULT,
-    tree_closing = True,
-    console_view_entry = consoles.console_view_entry(
-        category = "mac",
-        short_name = "dbg",
-    ),
+    }),
+    # crbug.com/427503493: It produces large amount of dwo files (>700GB).
+    # Enabling remote linking without bytes avoids downloading them to the bot.
+    # It also sets no-remote-timeout for long remote linking steps.
+    siso_configs = [
+        "builder",
+        "no-remote-timeout",
+    ],
+    siso_remote_linking = True,
 )
 
 ci.builder(
@@ -501,19 +655,32 @@ ci.builder(
             apply_configs = [
                 "clobber",
                 "mb",
-                "goma_use_local",  # to mitigate compile step timeout (crbug.com/1056935).
             ],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
         ),
     ),
-    cores = 12,
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "mac_strip",
+            "minimal_symbols",
+            "mac",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
     os = os.MAC_DEFAULT,
-    tree_closing = True,
+    cpu = cpu.ARM64,
     console_view_entry = consoles.console_view_entry(
         category = "mac",
         short_name = "rel",
     ),
+    contact_team_email = "bling-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -528,31 +695,6 @@ ci.builder(
 )
 
 ci.builder(
-    name = "mac-arm64-archive-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "clobber",
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-        ),
-    ),
-    cores = 12,
-    os = os.MAC_DEFAULT,
-    tree_closing = True,
-    console_view_entry = consoles.console_view_entry(
-        category = "mac|arm",
-        short_name = "dbg",
-    ),
-)
-
-ci.builder(
     name = "mac-arm64-archive-rel",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -563,19 +705,34 @@ ci.builder(
             apply_configs = [
                 "clobber",
                 "mb",
-                "goma_use_local",  # to mitigate compile step timeout (crbug.com/1056935).
             ],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
         ),
     ),
-    cores = 12,
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "mac_strip",
+            "minimal_symbols",
+            "mac",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = True,
+    cores = None,
     os = os.MAC_DEFAULT,
-    tree_closing = True,
+    cpu = cpu.ARM64,
     console_view_entry = consoles.console_view_entry(
         category = "mac|arm",
         short_name = "rel",
     ),
+    contact_team_email = "bling-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -591,7 +748,7 @@ ci.builder(
 
 ci.builder(
     name = "mac-official",
-    branch_selector = branches.DESKTOP_EXTENDED_STABLE_MILESTONE,
+    branch_selector = branches.selector.MAC_BRANCHES,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -605,39 +762,32 @@ ci.builder(
                 "mb",
             ],
             target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
         ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "mac",
+            "arm64",
+            "save_lld_reproducers",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
     ),
     builderless = False,
     os = os.MAC_ANY,
+    cpu = cpu.ARM64,
     console_view_entry = consoles.console_view_entry(
         category = "mac",
         short_name = "off",
     ),
-    # TODO(crbug.com/1279290) builds with PGO change take long time.
+    contact_team_email = "bling-engprod@google.com",
+    # TODO(crbug.com/40208487) builds with PGO change take long time.
     # Keep in sync with mac-official in try/chromium.star.
-    execution_timeout = 9 * time.hour,
-)
-
-ci.builder(
-    name = "win-archive-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(config = "chromium"),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "clobber",
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-        ),
-    ),
-    cores = 32,
-    os = os.WINDOWS_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "win|dbg",
-        short_name = "64",
-    ),
+    execution_timeout = 15 * time.hour,
 )
 
 ci.builder(
@@ -654,15 +804,31 @@ ci.builder(
             ],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.WIN,
         ),
     ),
-    cores = 32,
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = "public_build_scripts",
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 16,
     os = os.WINDOWS_DEFAULT,
-    tree_closing = True,
+    ssd = True,
     console_view_entry = consoles.console_view_entry(
         category = "win|rel",
         short_name = "64",
     ),
+    contact_team_email = "chrome-desktop-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -677,8 +843,66 @@ ci.builder(
 )
 
 ci.builder(
+    name = "win-arm64-archive-rel",
+    description_html = "Chromium snapshot archive builder for win-arm64",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = [
+                "clobber",
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = "public_build_scripts",
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 16,
+    os = os.WINDOWS_DEFAULT,
+    ssd = True,
+    # TODO(crbug.com/335863313): Enable when verified.
+    gardener_rotations = args.ignore_default(None),
+    # TODO(crbug.com/335863313): Enable when verified.
+    tree_closing = False,
+    console_view_entry = consoles.console_view_entry(
+        category = "win|rel",
+        short_name = "arm64",
+    ),
+    contact_team_email = "chrome-desktop-engprod@google.com",
+    properties = {
+        # The format of these properties is defined at archive/properties.proto
+        "$build/archive": {
+            "source_side_spec_path": [
+                "src",
+                "infra",
+                "archive_config",
+                "win-arm64-archive-rel.json",
+            ],
+        },
+    },
+)
+
+ci.builder(
     name = "win-official",
-    branch_selector = branches.DESKTOP_EXTENDED_STABLE_MILESTONE,
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -692,41 +916,36 @@ ci.builder(
                 "mb",
             ],
             target_bits = 64,
+            target_platform = builder_config.target_platform.WIN,
         ),
     ),
-    cores = 32,
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 16,
     os = os.WINDOWS_DEFAULT,
+    ssd = True,
+    # TODO(crbug.com/346263463): Enable tree-closing when the builder no
+    # longer flakily fails compile.
+    tree_closing = False,
     console_view_entry = consoles.console_view_entry(
         category = "win|off",
         short_name = "64",
     ),
-    # TODO(crbug.com/1155416) builds with PGO change take long time.
+    contact_team_email = "chrome-desktop-engprod@google.com",
+    # TODO(crbug.com/40735404) builds with PGO change take long time.
     execution_timeout = 7 * time.hour,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
-    name = "win32-archive-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "clobber",
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 32,
-        ),
-    ),
-    cores = 32,
-    os = os.WINDOWS_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "win|dbg",
-        short_name = "32",
-    ),
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
 ci.builder(
@@ -743,15 +962,30 @@ ci.builder(
             ],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 32,
+            target_platform = builder_config.target_platform.WIN,
         ),
     ),
-    cores = 32,
+    gn_args = gn_args.config(
+        configs = [
+            "release_builder",
+            "remoteexec",
+            "x86",
+            "minimal_symbols",
+            "win",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = "public_build_scripts",
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 16,
     os = os.WINDOWS_DEFAULT,
-    tree_closing = True,
     console_view_entry = consoles.console_view_entry(
         category = "win|rel",
         short_name = "32",
     ),
+    contact_team_email = "chrome-desktop-engprod@google.com",
     properties = {
         # The format of these properties is defined at archive/properties.proto
         "$build/archive": {
@@ -767,7 +1001,7 @@ ci.builder(
 
 ci.builder(
     name = "win32-official",
-    branch_selector = branches.DESKTOP_EXTENDED_STABLE_MILESTONE,
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -778,18 +1012,36 @@ ci.builder(
         chromium_config = builder_config.chromium_config(
             config = "chromium",
             apply_configs = [
+                # TODO(https://crbug.com/440203328): cache is causing build
+                # failures.
+                "clobber",
                 "mb",
             ],
             target_bits = 32,
+            target_platform = builder_config.target_platform.WIN,
         ),
     ),
-    cores = 32,
+    gn_args = gn_args.config(
+        configs = [
+            "official_optimize",
+            "remoteexec",
+            "win",
+            "x86",
+        ],
+    ),
+    targets = targets.bundle(
+        additional_compile_targets = "all",
+    ),
+    builderless = False,
+    cores = 16,
     os = os.WINDOWS_DEFAULT,
+    ssd = True,
     console_view_entry = consoles.console_view_entry(
         category = "win|off",
         short_name = "32",
     ),
-    # TODO(crbug.com/1155416) builds with PGO change take long time.
+    contact_team_email = "chrome-desktop-engprod@google.com",
+    # TODO(crbug.com/40735404) builds with PGO change take long time.
     execution_timeout = 7 * time.hour,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )

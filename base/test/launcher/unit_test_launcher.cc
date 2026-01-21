@@ -6,16 +6,19 @@
 
 #include <map>
 #include <memory>
+#include <string_view>
 #include <utility>
 
+#include "base/base_paths.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug/debugger.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/icu_util.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
@@ -23,20 +26,26 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/launcher/test_launcher.h"
+#include "base/test/scoped_block_tests_writing_to_special_dirs.h"
 #include "base/test/test_switches.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_checker.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/libfuzzer/fuzztest_init_helper.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include "base/files/file_descriptor_watcher_posix.h"
+#endif
+
+#if BUILDFLAG(IS_IOS)
+#include "base/test/test_support_ios.h"
 #endif
 
 namespace base {
@@ -44,7 +53,12 @@ namespace base {
 namespace {
 
 // This constant controls how many tests are run in a single batch by default.
-const size_t kDefaultTestBatchLimit = 10;
+const size_t kDefaultTestBatchLimit =
+#if BUILDFLAG(IS_IOS)
+    100;
+#else
+    10;
+#endif
 
 #if !BUILDFLAG(IS_ANDROID)
 void PrintUsage() {
@@ -125,8 +139,9 @@ void PrintUsage() {
 }
 
 bool GetSwitchValueAsInt(const std::string& switch_name, int* result) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(switch_name))
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(switch_name)) {
     return true;
+  }
 
   std::string switch_value =
       CommandLine::ForCurrentProcess()->GetSwitchValueASCII(switch_name);
@@ -137,21 +152,14 @@ bool GetSwitchValueAsInt(const std::string& switch_name, int* result) {
 
   return true;
 }
-#endif
 
-int LaunchUnitTestsInternal(RunTestSuiteCallback run_test_suite,
-                            size_t parallel_jobs,
-                            int default_batch_limit,
-                            size_t retry_limit,
-                            bool use_job_objects,
-                            RepeatingClosure timeout_callback,
-                            OnceClosure gtest_init) {
-  base::test::AllowCheckIsTestForTesting();
-
-#if BUILDFLAG(IS_ANDROID)
-  // We can't easily fork on Android, just run the test suite directly.
-  return std::move(run_test_suite).Run();
-#else
+int RunTestSuite(RunTestSuiteCallback run_test_suite,
+                 size_t parallel_jobs,
+                 int default_batch_limit,
+                 size_t retry_limit,
+                 bool use_job_objects,
+                 RepeatingClosure timeout_callback,
+                 OnceClosure gtest_init) {
   bool force_single_process = false;
   if (CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kTestLauncherDebugLauncher)) {
@@ -174,9 +182,15 @@ int LaunchUnitTestsInternal(RunTestSuiteCallback run_test_suite,
           switches::kSingleProcessTests) ||
       CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kTestChildProcess) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(switches::kFuzz) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(switches::kFuzzFor) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(switches::kListFuzzTests) ||
       force_single_process) {
     return std::move(run_test_suite).Run();
   }
+
+  // ICU must be initialized before any attempts to format times, e.g. for logs.
+  CHECK(base::i18n::InitializeICU());
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kHelpFlag)) {
     PrintUsage();
@@ -189,8 +203,9 @@ int LaunchUnitTestsInternal(RunTestSuiteCallback run_test_suite,
   TestTimeouts::Initialize();
 
   int batch_limit = default_batch_limit;
-  if (!GetSwitchValueAsInt(switches::kTestLauncherBatchLimit, &batch_limit))
+  if (!GetSwitchValueAsInt(switches::kTestLauncherBatchLimit, &batch_limit)) {
     return 1;
+  }
 
   fprintf(stdout,
           "IMPORTANT DEBUGGING NOTE: batches of tests are run inside their\n"
@@ -214,16 +229,76 @@ int LaunchUnitTestsInternal(RunTestSuiteCallback run_test_suite,
   fflush(stdout);
 
   return (success ? 0 : 1);
+}
+#endif
+
+int LaunchUnitTestsInternal(RunTestSuiteCallback run_test_suite,
+                            size_t parallel_jobs,
+                            int default_batch_limit,
+                            size_t retry_limit,
+                            bool use_job_objects,
+                            RepeatingClosure timeout_callback,
+                            OnceClosure gtest_init) {
+  base::test::AllowCheckIsTestForTesting();
+
+#if BUILDFLAG(IS_ANDROID)
+  // We can't easily fork on Android, just run the test suite directly.
+  return std::move(run_test_suite).Run();
+#elif BUILDFLAG(IS_IOS)
+  InitIOSRunHook(base::BindOnce(&RunTestSuite, std::move(run_test_suite),
+                                parallel_jobs, default_batch_limit, retry_limit,
+                                use_job_objects, timeout_callback,
+                                std::move(gtest_init)));
+  return RunTestsFromIOSApp();
+#else
+  ScopedBlockTestsWritingToSpecialDirs scoped_blocker(
+      {
+          // Please keep these in alphabetic order within each platform type.
+          base::DIR_SRC_TEST_DATA_ROOT,
+          base::DIR_USER_DESKTOP,
+#if BUILDFLAG(IS_WIN)
+          base::DIR_COMMON_DESKTOP,
+          base::DIR_START_MENU,
+          base::DIR_USER_STARTUP,
+
+#endif  // BUILDFLAG(IS_WIN)
+      },
+      ([](const base::FilePath& path) {
+        ADD_FAILURE()
+            << "Attempting to write file in dir " << path
+            << " Use ScopedPathOverride or other mechanism to not write to this"
+               " directory.";
+      }));
+  return RunTestSuite(std::move(run_test_suite), parallel_jobs,
+                      default_batch_limit, retry_limit, use_job_objects,
+                      timeout_callback, std::move(gtest_init));
 #endif
 }
 
 void InitGoogleTestChar(int* argc, char** argv) {
   testing::InitGoogleTest(argc, argv);
+  MaybeInitFuzztest(*argc, argv);
 }
 
 #if BUILDFLAG(IS_WIN)
-void InitGoogleTestWChar(int* argc, wchar_t** argv) {
+
+// PRECONDITIONS: As is normal in command lines, argc and argv must correspond
+// to one another. Otherwise there will be out-of-bounds accesses.
+UNSAFE_BUFFER_USAGE void InitGoogleTestWChar(int* argc, wchar_t** argv) {
   testing::InitGoogleTest(argc, argv);
+  // Fuzztest requires a narrow command-line.
+  CHECK(*argc >= 0);
+  const auto argc_s = static_cast<size_t>(*argc);
+  span<wchar_t*> wide_command_line = UNSAFE_BUFFERS(span(argv, argc_s));
+  std::vector<std::string> narrow_command_line;
+  std::vector<char*> narrow_command_line_pointers;
+  narrow_command_line.reserve(argc_s);
+  narrow_command_line_pointers.reserve(argc_s);
+  for (size_t i = 0; i < argc_s; ++i) {
+    narrow_command_line.push_back(WideToUTF8(wide_command_line[i]));
+    narrow_command_line_pointers.push_back(narrow_command_line[i].data());
+  }
+  MaybeInitFuzztest(*argc, narrow_command_line_pointers.data());
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -231,8 +306,8 @@ void InitGoogleTestWChar(int* argc, wchar_t** argv) {
 
 MergeTestFilterSwitchHandler::~MergeTestFilterSwitchHandler() = default;
 void MergeTestFilterSwitchHandler::ResolveDuplicate(
-    base::StringPiece key,
-    CommandLine::StringPieceType new_value,
+    std::string_view key,
+    CommandLine::StringViewType new_value,
     CommandLine::StringType& out_value) {
   if (key != switches::kTestLauncherFilterFile) {
     out_value = CommandLine::StringType(new_value);
@@ -317,8 +392,9 @@ bool DefaultUnitTestPlatformDelegate::GetTests(
 bool DefaultUnitTestPlatformDelegate::CreateResultsFile(
     const base::FilePath& temp_dir,
     base::FilePath* path) {
-  if (!CreateTemporaryDirInDir(temp_dir, FilePath::StringType(), path))
+  if (!CreateTemporaryDirInDir(temp_dir, FilePath::StringType(), path)) {
     return false;
+  }
   *path = path->AppendASCII("test_results.xml");
   return true;
 }
@@ -326,8 +402,9 @@ bool DefaultUnitTestPlatformDelegate::CreateResultsFile(
 bool DefaultUnitTestPlatformDelegate::CreateTemporaryFile(
     const base::FilePath& temp_dir,
     base::FilePath* path) {
-  if (temp_dir.empty())
+  if (temp_dir.empty()) {
     return false;
+  }
   return CreateTemporaryFileInDir(temp_dir, path);
 }
 
@@ -338,6 +415,15 @@ CommandLine DefaultUnitTestPlatformDelegate::GetCommandLineForChildGTestProcess(
   CommandLine new_cmd_line(*CommandLine::ForCurrentProcess());
 
   CHECK(base::PathExists(flag_file));
+
+  // Any `--gtest_filter` flag specified on the original command line is
+  // no longer needed; the test launcher has already determined the list
+  // of actual tests to run in each child process. Since the test launcher
+  // internally uses `--gtest_filter` via a flagfile to pass this info to
+  // the child process, remove any original `--gtest_filter` flags on the
+  // command line, as GoogleTest provides no guarantee about whether the
+  // command line or the flagfile takes precedence.
+  new_cmd_line.RemoveSwitch(kGTestFilterFlag);
 
   std::string long_flags(
       StrCat({"--", kGTestFilterFlag, "=", JoinString(test_names, ":")}));

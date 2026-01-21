@@ -10,16 +10,21 @@
 #include <string>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/process/kill.h"
+#include "base/process/process_handle.h"
 #include "content/browser/devtools/devtools_io_context.h"
 #include "content/browser/devtools/devtools_renderer_channel.h"
 #include "content/browser/devtools/devtools_session.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/devtools_manager_delegate.h"
 #include "net/cookies/site_for_cookies.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/cpp/cross_origin_opener_policy.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 
 namespace content {
 
@@ -40,7 +45,6 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
 
   // DevToolsAgentHost implementation.
   bool AttachClient(DevToolsAgentHostClient* client) override;
-  bool AttachClientWithoutWakeLock(DevToolsAgentHostClient* client) override;
   bool DetachClient(DevToolsAgentHostClient* client) override;
   void DispatchProtocolMessage(DevToolsAgentHostClient* client,
                                base::span<const uint8_t> message) override;
@@ -52,6 +56,7 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
   std::string GetParentId() override;
   std::string GetOpenerId() override;
   std::string GetOpenerFrameId() override;
+  std::string GetParentFrameId() override;
   bool CanAccessOpener() override;
   std::string GetDescription() override;
   GURL GetFaviconURL() override;
@@ -62,7 +67,6 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
   void DisconnectWebContents() override;
   void ConnectWebContents(WebContents* wc) override;
   RenderProcessHost* GetProcessHost() override;
-  void ForceDetachAllSessions() override;
 
   struct NetworkLoaderFactoryParamsAndInfo {
     NetworkLoaderFactoryParamsAndInfo();
@@ -85,6 +89,12 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
 
   bool Inspect();
 
+  scoped_refptr<DevToolsAgentHost> OpenDevTools(
+      const content::DevToolsManagerDelegate::DevToolsOptions&
+          devtools_options);
+
+  scoped_refptr<DevToolsAgentHost> GetDevToolsAgentHost();
+
   template <typename Handler>
   std::vector<Handler*> HandlersByName(const std::string& name) {
     std::vector<Handler*> result;
@@ -98,13 +108,18 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
     return result;
   }
 
-  virtual absl::optional<network::CrossOriginEmbedderPolicy>
+  virtual std::optional<network::CrossOriginEmbedderPolicy>
   cross_origin_embedder_policy(const std::string& id);
-  virtual absl::optional<network::CrossOriginOpenerPolicy>
+  virtual std::optional<network::CrossOriginOpenerPolicy>
   cross_origin_opener_policy(const std::string& id);
+  virtual std::optional<
+      std::vector<network::mojom::ContentSecurityPolicyHeader>>
+  content_security_policy(const std::string& id);
 
   virtual protocol::TargetAutoAttacher* auto_attacher();
   virtual std::string GetSubtype();
+
+  base::ProcessId GetProcessId() const { return process_id_; }
 
  protected:
   explicit DevToolsAgentHostImpl(const std::string& id);
@@ -113,28 +128,50 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
   static bool ShouldForceCreation();
 
   // Returning |false| will block the attach.
-  virtual bool AttachSession(DevToolsSession* session, bool acquire_wake_lock);
+  virtual bool AttachSession(DevToolsSession* session);
   virtual void DetachSession(DevToolsSession* session);
   virtual void UpdateRendererChannel(bool force);
 
   void NotifyCreated();
   void NotifyNavigated();
   void NotifyCrashed(base::TerminationStatus status);
+
+  void SetProcessId(base::ProcessId process_id);
+  void ProcessHostChanged();
+
   void ForceDetachRestrictedSessions(
       const std::vector<DevToolsSession*>& restricted_sessions);
   DevToolsIOContext* GetIOContext() { return &io_context_; }
   DevToolsRendererChannel* GetRendererChannel() { return &renderer_channel_; }
 
-  const std::vector<DevToolsSession*>& sessions() const { return sessions_; }
+  const std::vector<raw_ptr<DevToolsSession, VectorExperimental>>& sessions()
+      const {
+    return sessions_;
+  }
+  // Returns refptr retaining `this`. All other references may be removed
+  // at this point, so `this` will become invalid as soon as returned refptr
+  // gets destroyed.
+  [[nodiscard]] scoped_refptr<DevToolsAgentHost> ForceDetachAllSessionsImpl();
+
+  // Called when the corresponding renderer process notifies that the main
+  // thread debugger is paused or resumed.
+  // TODO(crbug.com/40269649): Remove this method when we collect enough
+  // data to understand how likely that situation could happen.
+  virtual void MainThreadDebuggerPaused();
+  virtual void MainThreadDebuggerResumed();
 
  private:
+  // Note that calling this may result in the instance being deleted,
+  // as instance may be owned by client sessions. This should not be
+  // used by methods of derived classes, use `ForceDetachAllSessionsImpl()`
+  // above instead.
+  void ForceDetachAllSessions() override;
+
   friend class DevToolsAgentHost;  // for static methods
   friend class DevToolsSession;
   friend class DevToolsRendererChannel;
 
   bool AttachInternal(std::unique_ptr<DevToolsSession> session);
-  bool AttachInternal(std::unique_ptr<DevToolsSession> session,
-                      bool acquire_wake_lock);
   void DetachInternal(DevToolsSession* session);
   void NotifyAttached();
   void NotifyDetached();
@@ -142,11 +179,13 @@ class CONTENT_EXPORT DevToolsAgentHostImpl : public DevToolsAgentHost {
   DevToolsSession* SessionByClient(DevToolsAgentHostClient* client);
 
   const std::string id_;
-  std::vector<DevToolsSession*> sessions_;
+  std::vector<raw_ptr<DevToolsSession, VectorExperimental>> sessions_;
   base::flat_map<DevToolsAgentHostClient*, std::unique_ptr<DevToolsSession>>
       session_by_client_;
   DevToolsIOContext io_context_;
   DevToolsRendererChannel renderer_channel_;
+  base::ProcessId process_id_ = base::kNullProcessId;
+
   static int s_force_creation_count_;
 };
 

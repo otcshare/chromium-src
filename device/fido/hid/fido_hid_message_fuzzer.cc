@@ -2,20 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "device/fido/hid/fido_hid_message.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <algorithm>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "device/fido/hid/fido_hid_message.h"
 
 namespace device {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   constexpr size_t kHidPacketSize = 64;
-  auto span = base::make_span(data, size);
+  auto span = UNSAFE_TODO(base::span(data, size));
 
   auto packet = span.first(std::min(kHidPacketSize, span.size()));
   auto msg = FidoHidMessage::CreateFromSerializedData(

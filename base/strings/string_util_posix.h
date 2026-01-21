@@ -12,25 +12,34 @@
 #include <wchar.h>
 
 #include "base/check.h"
-#include "base/strings/string_piece.h"
+#include "base/compiler_specific.h"
 
 namespace base {
 
 // Chromium code style is to not use malloc'd strings; this is only for use
 // for interaction with APIs that require it.
 inline char* strdup(const char* str) {
-  return ::strdup(str);
+  return UNSAFE_TODO(::strdup(str));
 }
 
-inline int vsnprintf(char* buffer, size_t size,
-                     const char* format, va_list arguments) {
-  return ::vsnprintf(buffer, size, format, arguments);
+inline int vsnprintf(char* buffer,
+                     size_t size,
+                     const char* format,
+                     va_list arguments) {
+  return UNSAFE_TODO(::vsnprintf(buffer, size, format, arguments));
 }
 
-inline int vswprintf(wchar_t* buffer, size_t size,
-                     const wchar_t* format, va_list arguments) {
+// TODO(crbug.com/40284755): implement spanified version, or just remove
+// this entirely as it has ~no non-test uses.
+// inline int vswprintf(base::span<wchar_t> buffer,
+//                      const wchar_t* format,
+//                      va_list arguments);
+inline int vswprintf(wchar_t* buffer,
+                     size_t size,
+                     const wchar_t* format,
+                     va_list arguments) {
   DCHECK(IsWprintfFormatPortable(format));
-  return ::vswprintf(buffer, size, format, arguments);
+  return UNSAFE_TODO(::vswprintf(buffer, size, format, arguments));
 }
 
 }  // namespace base

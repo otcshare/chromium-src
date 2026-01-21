@@ -27,24 +27,24 @@
 <translation id="2329392777730037872">Ni bilo mogoče odpreti <ph name="URL" /> v tem odjemalcu.</translation>
 <translation id="2359808026110333948">Naprej</translation>
 <translation id="2366718077645204424">Ni mogoče vzpostaviti povezave z gostiteljem; verjetno zaradi konfiguracije omrežja, ki ga uporabljate.</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />  Zadnji odziv z vzpostavljeno povezavo: <ph name="RELATIVE_TIMESTAMP" />.</translation>
 <translation id="2504109125669302160">Odobritev dovoljenja »Dostopnost« izdelku <ph name="PRODUCT_NAME" /></translation>
 <translation id="2540992418118313681">Ali želite ta računalnik deliti z drugimi, tako da bo imel drug uporabnik do njega dostop in ga bo lahko nadziral?</translation>
 <translation id="2579271889603567289">Gostitelj se je zrušil ali ga ni bilo mogoče zagnati.</translation>
 <translation id="2599300881200251572">Ta storitev omogoča dohodne povezave iz odjemalcev za Oddaljeno namizje za Chrome.</translation>
 <translation id="2647232381348739934">Storitev Oddaljeno povezovanje s Chromom</translation>
 <translation id="2676780859508944670">Obdelava …</translation>
-<translation id="2692522824157224199">Copyright 2022 Google LLC. Vse pravice pridržane.</translation>
 <translation id="2699970397166997657">Oddaljeno povezovanje s Chromom</translation>
 <translation id="2758123043070977469">Pri preverjanju pristnosti je prišlo do napake. Prijavite se znova.</translation>
 <translation id="2803375539583399270">Vnesite kodo PIN</translation>
 <translation id="2919669478609886916">Trenutno imate to napravo v skupni rabi z drugim uporabnikom. Ali želite nadaljevati skupno rabo?</translation>
+<translation id="2929683002824598593">Deljenje naprave</translation>
 <translation id="2939145106548231838">Preverjanje pristnosti pri gostitelju</translation>
 <translation id="3027681561976217984">Način z dotikanjem</translation>
 <translation id="3106379468611574572">Oddaljeni računalnik se ne odziva na zahteve za povezavo. Preverite, ali ima vzpostavljeno povezavo, in poskusite znova.</translation>
 <translation id="3150823315463303127">Gostitelj ni mogel prebrati pravilnika.</translation>
 <translation id="3171922709365450819">Te naprave ne podpira odjemalec, ker zahteva preverjanje pristnosti tretje osebe.</translation>
 <translation id="3197730452537982411">Oddaljeno namizje</translation>
+<translation id="3236334139428307578">Copyright 2026 Ustvarjalci Chromiuma. Vse pravice pridržane.</translation>
 <translation id="324272851072175193">Pošlji ta navodila po e-pošti</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> želi narediti spremembe.</translation>
 <translation id="3339299787263251426">Varen dostop do računalnika prek interneta</translation>
@@ -52,7 +52,6 @@
 <translation id="3423542133075182604">Postopek oddaljenega delovanja varnostnega ključa</translation>
 <translation id="3581045510967524389">Povezana z omrežjem ni uspela. Preverite, ali je naprava povezana v omrežje.</translation>
 <translation id="3596628256176442606">Ta storitev omogoča dohodne povezave iz odjemalcev za Oddaljeno povezovanje s Chromom.</translation>
-<translation id="369442766917958684">Brez povezave.</translation>
 <translation id="3695446226812920698">Oglejte si navodila</translation>
 <translation id="3776024066357219166">Seja Oddaljenega namizja za Chrome je končana.</translation>
 <translation id="3858860766373142691">Ime</translation>
@@ -63,7 +62,7 @@
 <translation id="405887016757208221">Oddaljeni računalnik ni inicializiral seje. Če se težava ponovi, poskusite znova konfigurirati gostitelja.</translation>
 <translation id="4060747889721220580">Prenos datoteke</translation>
 <translation id="4126409073460786861">Po končani nastavitvi osvežite to stran in lahko boste dostopali do računalnika tako, da boste izbrali napravo in vnesli kodo PIN</translation>
-<translation id="4145029455188493639">Prijavljen kot <ph name="EMAIL_ADDRESS" />.</translation>
+<translation id="4145029455188493639">Prijavljeni ste kot <ph name="EMAIL_ADDRESS" />.</translation>
 <translation id="4155497795971509630">Ni nekaterih zahtevanih delov. Preverite, ali imate najnovejšo različico programske opreme in poskusite znova.</translation>
 <translation id="4176825807642096119">Koda za dostop</translation>
 <translation id="4227991223508142681">Orodje za pripravljanje gostitelja</translation>
@@ -71,7 +70,6 @@
 <translation id="4257751272692708833">Aplikacija za posredovanje URL-jev storitve <ph name="PRODUCT_NAME" /></translation>
 <translation id="4277736576214464567">Koda za dostop je neveljavna. Poskusite znova.</translation>
 <translation id="4281844954008187215">Pogoji storitve</translation>
-<translation id="4372650392690220936">Copyright 2022 Ustvarjalci Chromiuma. Vse pravice pridržane.</translation>
 <translation id="4405930547258349619">Knjižnica jedra</translation>
 <translation id="443560535555262820">Odpri nastavitve dostopnosti</translation>
 <translation id="4450893287417543264">Tega ne prikaži več</translation>
@@ -89,6 +87,7 @@
 <translation id="4987330545941822761">Oddaljeno namizje za Chrome ne more določiti brskalnika za lokalno odpiranje URL-jev. Izberite ga na spodnjem seznamu.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (brez povezave)</translation>
 <translation id="507204348399810022">Ali ste prepričani, da želite onemogočiti oddaljene povezave z gostiteljem <ph name="HOSTNAME" />?</translation>
+<translation id="5095424396646120601">Poročanje o zrušitvah</translation>
 <translation id="5170982930780719864">Neveljaven ID gostitelja.</translation>
 <translation id="5222676887888702881">Odjava</translation>
 <translation id="5234764350956374838">Opusti</translation>
@@ -99,20 +98,22 @@
 <translation id="5601503069213153581">PIN</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">Vaše namizje je trenutno v skupni rabi z uporabnikom <ph name="USER" />.</translation>
-<translation id="5750083143895808682">Prijavljen kot <ph name="EMAIL_ADDRESS" />.</translation>
 <translation id="579702532610384533">Znova poveži</translation>
 <translation id="5810269635982033450">Zaslon deluje kot sledilna ploščica</translation>
 <translation id="5823554426827907568">Oseba <ph name="CLIENT_USERNAME" /> je zahtevala dostop za ogled vašega zaslona in nadziranje tipkovnice ter miške. Pritisnite »<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />«, če te zahteve ne pričakujete. Sicer izberite »<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />«, če želite dovoliti povezavo, ko bo pripravljena.</translation>
 <translation id="5823658491130719298">V računalniku, do katerega želite dostopati na daljavo, odprite Chrome in obiščite <ph name="INSTALLATION_LINK" /></translation>
+<translation id="5965133372831030509">Copyright 2026 Google LLC. Vse pravice pridržane.</translation>
 <translation id="6040143037577758943">Zapri</translation>
 <translation id="6062854958530969723">Inicializacija gostitelja ni uspela.</translation>
 <translation id="6099500228377758828">Storitev Oddaljeno namizje za Chrome</translation>
 <translation id="6122191549521593678">Dosegljiv</translation>
 <translation id="6178645564515549384">Izvorni gostitelj za sporočanje za pomoč na daljavo</translation>
 <translation id="6223301979382383752">Odpri nastavitve snemanja zaslona</translation>
+<translation id="6252344563748670011">Oseba <ph name="CLIENT_USERNAME" /> je zahtevala dostop za ogled vašega zaslona in nadziranje tipkovnice ter miške. Ali želite deliti napravo?</translation>
 <translation id="6284412385303060032">Gostitelj, ki se je izvajal na zaslonu za prijavo v konzolo, se je zaustavil zaradi podpore načinu zavese, tako da je preklopil na gostitelja, ki se izvaja v seji uporabnika.</translation>
 <translation id="6542902059648396432">Prijava težave …</translation>
 <translation id="6612717000975622067">Pošlji Ctrl + Alt + Del</translation>
+<translation id="6625262630437221505">{0,plural, =1{Če ne boste ukrepali, bo naprava samodejno začela deliti čez # sekundo.}one{Če ne boste ukrepali, bo naprava samodejno začela deliti čez # sekundo.}two{Če ne boste ukrepali, bo naprava samodejno začela deliti čez # sekundi.}few{Če ne boste ukrepali, bo naprava samodejno začela deliti čez # sekunde.}other{Če ne boste ukrepali, bo naprava samodejno začela deliti čez # sekund.}}</translation>
 <translation id="6654753848497929428">Skupna raba</translation>
 <translation id="677755392401385740">Gostitelj zagnan za uporabnika: <ph name="HOST_USERNAME" />.</translation>
 <translation id="6902524959760471898">Pomožna aplikacija za odpiranje URL-ja v odjemalcu <ph name="PRODUCT_NAME" />.</translation>

@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/app_list/app_list_metrics.h"
+
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/app_list/app_list_bubble_presenter.h"
 #include "ash/app_list/app_list_controller_impl.h"
-#include "ash/app_list/app_list_metrics.h"
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/app_list_presenter_impl.h"
-#include "ash/app_list/model/app_list_test_model.h"
-#include "ash/app_list/model/search/search_model.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/app_list/views/app_list_item_view.h"
 #include "ash/app_list/views/app_list_main_view.h"
@@ -39,7 +38,10 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "ui/display/display_observer.h"
 #include "ui/display/screen.h"
+#include "ui/display/tablet_state.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 
@@ -48,17 +50,36 @@ namespace {
 constexpr int kBrowserAppIndexOnShelf = 0;
 
 // A test shelf item delegate that simulates an activated window when a shelf
-// item is selected.
-class TestShelfItemDelegate : public ShelfItemDelegate {
+// item is selected. When |wait_for_tablet_mode_| is set, the delegate will wait
+// for tablet mode animation start to run the callback that activates the
+// window.
+class TestShelfItemDelegate : public ShelfItemDelegate,
+                              display::DisplayObserver {
  public:
   explicit TestShelfItemDelegate(const ShelfID& shelf_id)
       : ShelfItemDelegate(shelf_id) {}
+
+  TestShelfItemDelegate(const ShelfID& shelf_id, bool wait_for_tablet_mode)
+      : ShelfItemDelegate(shelf_id),
+        wait_for_tablet_mode_(wait_for_tablet_mode) {
+    if (wait_for_tablet_mode_) {
+      display::Screen::Get()->AddObserver(this);
+    }
+  }
+
+  ~TestShelfItemDelegate() override {
+    display::Screen::Get()->RemoveObserver(this);
+  }
 
   void ItemSelected(std::unique_ptr<ui::Event> event,
                     int64_t display_id,
                     ash::ShelfLaunchSource source,
                     ItemSelectedCallback callback,
                     const ItemFilterPredicate& filter_predicate) override {
+    if (wait_for_tablet_mode_) {
+      callback_ = std::move(callback);
+      return;
+    }
     std::move(callback).Run(SHELF_ACTION_WINDOW_ACTIVATED, {});
   }
   void ExecuteCommand(bool from_context_menu,
@@ -66,12 +87,23 @@ class TestShelfItemDelegate : public ShelfItemDelegate {
                       int32_t event_flags,
                       int64_t display_id) override {}
   void Close() override {}
+
+  void OnDisplayTabletStateChanged(display::TabletState state) override {
+    if (!callback_ || state != display::TabletState::kEnteringTabletMode) {
+      return;
+    }
+    std::move(callback_).Run(SHELF_ACTION_WINDOW_ACTIVATED, {});
+  }
+
+ private:
+  bool wait_for_tablet_mode_ = false;
+  ItemSelectedCallback callback_;
 };
 
 }  // namespace
 
 int64_t GetPrimaryDisplayId() {
-  return display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  return display::Screen::Get()->GetPrimaryDisplay().id();
 }
 
 // Used to test that app launched metrics are properly recorded.
@@ -86,24 +118,30 @@ class AppListMetricsTest : public AshTestBase {
 
   void SetUp() override {
     AshTestBase::SetUp();
-
-    search_model_ = AppListModelProvider::Get()->search_model();
-
     shelf_test_api_ = std::make_unique<ShelfViewTestAPI>(
         GetPrimaryShelf()->GetShelfViewForTesting());
   }
 
+  void TearDown() override {
+    shelf_test_api_.reset();
+    AshTestBase::TearDown();
+  }
+
  protected:
-  void CreateAndClickShelfItem() {
+  void CreateShelfItem(bool wait_for_tablet_mode = false) {
     // Add shelf item to be launched. Waits for the shelf view's bounds
     // animations to end.
     ShelfItem shelf_item;
     shelf_item.id = ShelfID("app_id");
     shelf_item.type = TYPE_BROWSER_SHORTCUT;
-    ShelfModel::Get()->Add(
-        shelf_item, std::make_unique<TestShelfItemDelegate>(shelf_item.id));
+    ShelfModel::Get()->Add(shelf_item,
+                           std::make_unique<TestShelfItemDelegate>(
+                               shelf_item.id, wait_for_tablet_mode));
     shelf_test_api_->RunMessageLoopUntilAnimationsDone();
+  }
 
+  void CreateAndClickShelfItem() {
+    CreateShelfItem();
     ClickShelfItem();
   }
 
@@ -136,7 +174,6 @@ class AppListMetricsTest : public AshTestBase {
   }
 
  private:
-  SearchModel* search_model_ = nullptr;
   std::unique_ptr<ShelfViewTestAPI> shelf_test_api_;
 };
 
@@ -161,6 +198,30 @@ TEST_F(AppListMetricsTabletTest, HomecherAllAppsLaunchFromShelf) {
 
   histogram_tester.ExpectBucketCount(
       "Apps.AppListAppLaunchedV2.HomecherAllApps",
+      AppListLaunchedFrom::kLaunchedFromShelf,
+      1 /* Number of times launched from shelf */);
+}
+
+// Test that the histogram records an app launch from the shelf while the
+// the tablet animation is running.
+TEST_F(AppListMetricsTest, TapOnItemDuringTabletModeAnimation) {
+  base::HistogramTester histogram_tester;
+  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+
+  CreateShelfItem(/*wait_for_tablet_mode=*/true);
+
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  ClickShelfItem();
+
+  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  GetPrimaryShelf()->shelf_widget()->LayoutRootViewIfNecessary();
+  GetAppListTestHelper()->CheckVisibility(false);
+
+  histogram_tester.ExpectBucketCount(
+      "Apps.AppListAppLaunchedV2.Closed",
       AppListLaunchedFrom::kLaunchedFromShelf,
       1 /* Number of times launched from shelf */);
 }
@@ -335,7 +396,8 @@ TEST_F(AppListShowSourceMetricTest, TabletInAppToHome) {
       ->accessibility_controller()
       ->SetTabletModeShelfNavigationButtonsEnabled(true);
 
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
 
   ClickHomeButton();
@@ -362,7 +424,8 @@ TEST_F(AppListShowSourceMetricTest, TabletInAppToHome) {
 TEST_F(AppListShowSourceMetricTest, TabletModeWithWindowOpen) {
   base::HistogramTester histogram_tester;
 
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
   GetAppListTestHelper()->CheckVisibility(false);
 
@@ -426,7 +489,8 @@ TEST_F(AppListShowSourceMetricTest, TabletModeDoesNotRecordAppListBubbleShow) {
 
   // Go to tablet mode, the tablet mode (non bubble) launcher will show. Create
   // a test widget so the launcher will show in the background.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
   auto* app_list_bubble_presenter =
       Shell::Get()->app_list_controller()->bubble_presenter_for_test();

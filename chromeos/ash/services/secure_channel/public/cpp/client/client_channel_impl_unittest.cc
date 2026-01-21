@@ -4,15 +4,15 @@
 
 #include "chromeos/ash/services/secure_channel/public/cpp/client/client_channel_impl.h"
 
+#include <optional>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -27,11 +27,11 @@
 #include "chromeos/ash/services/secure_channel/public/cpp/client/connection_attempt_impl.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/fake_client_channel_observer.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/fake_connection_attempt.h"
+#include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "chromeos/ash/services/secure_channel/secure_channel_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash::secure_channel {
 
@@ -51,7 +51,8 @@ class SecureChannelClientChannelImplTest : public testing::Test {
 
     client_channel_ = ClientChannelImpl::Factory::Create(
         fake_channel_->GenerateRemote(),
-        message_receiver_remote_.BindNewPipeAndPassReceiver());
+        message_receiver_remote_.BindNewPipeAndPassReceiver(),
+        nearby_connection_state_listener_remote_.BindNewPipeAndPassReceiver());
 
     fake_observer_ = std::make_unique<FakeClientChannelObserver>();
     client_channel_->AddObserver(fake_observer_.get());
@@ -131,6 +132,8 @@ class SecureChannelClientChannelImplTest : public testing::Test {
 
   std::unique_ptr<FakeChannel> fake_channel_;
   mojo::Remote<mojom::MessageReceiver> message_receiver_remote_;
+  mojo::Remote<mojom::NearbyConnectionStateListener>
+      nearby_connection_state_listener_remote_;
   std::unique_ptr<FakeClientChannelObserver> fake_observer_;
 
   mojom::ConnectionMetadataPtr connection_metadata_;
@@ -183,8 +186,8 @@ TEST_F(SecureChannelClientChannelImplTest, TestSendMessage) {
   CallSendMessageCallback(std::move(sent_messages[0].second));
   CallSendMessageCallback(std::move(sent_messages[1].second));
 
-  EXPECT_TRUE(base::Contains(message_counters_received_, message_1_counter));
-  EXPECT_TRUE(base::Contains(message_counters_received_, message_2_counter));
+  EXPECT_TRUE(message_counters_received_.contains(message_1_counter));
+  EXPECT_TRUE(message_counters_received_.contains(message_2_counter));
 }
 
 TEST_F(SecureChannelClientChannelImplTest, TestReceiveMessage) {
@@ -201,6 +204,18 @@ TEST_F(SecureChannelClientChannelImplTest, TestDisconnectRemotely) {
   SendPendingMojoMessages();
 
   VerifyChannelDisconnected();
+}
+
+TEST_F(SecureChannelClientChannelImplTest, TestNearbyConnectionStateChanged) {
+  nearby_connection_state_listener_remote_->OnNearbyConnectionStateChanged(
+      mojom::NearbyConnectionStep::kRequestingConnectionStarted,
+      mojom::NearbyConnectionStepResult::kSuccess);
+  nearby_connection_state_listener_remote_.FlushForTesting();
+
+  EXPECT_EQ(mojom::NearbyConnectionStep::kRequestingConnectionStarted,
+            fake_observer_->nearby_connection_step());
+  EXPECT_EQ(mojom::NearbyConnectionStepResult::kSuccess,
+            fake_observer_->nearby_connection_step_result());
 }
 
 TEST_F(SecureChannelClientChannelImplTest, ReceiveMultipleFileTransferUpdates) {

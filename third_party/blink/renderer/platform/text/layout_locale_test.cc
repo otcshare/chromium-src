@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
 
+#include <optional>
+
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace blink {
@@ -15,17 +17,19 @@ TEST(LayoutLocaleTest, Get) {
 
   EXPECT_EQ(g_empty_atom, LayoutLocale::Get(g_empty_atom)->LocaleString());
 
-  EXPECT_STRCASEEQ("en-us",
-                   LayoutLocale::Get("en-us")->LocaleString().Ascii().c_str());
-  EXPECT_STRCASEEQ("ja-jp",
-                   LayoutLocale::Get("ja-jp")->LocaleString().Ascii().c_str());
+  EXPECT_STRCASEEQ(
+      "en-us",
+      LayoutLocale::Get(AtomicString("en-us"))->LocaleString().Ascii().c_str());
+  EXPECT_STRCASEEQ(
+      "ja-jp",
+      LayoutLocale::Get(AtomicString("ja-jp"))->LocaleString().Ascii().c_str());
 
   LayoutLocale::ClearForTesting();
 }
 
 TEST(LayoutLocaleTest, GetCaseInsensitive) {
-  const LayoutLocale* en_us = LayoutLocale::Get("en-us");
-  EXPECT_EQ(en_us, LayoutLocale::Get("en-US"));
+  const LayoutLocale* en_us = LayoutLocale::Get(AtomicString("en-us"));
+  EXPECT_EQ(en_us, LayoutLocale::Get(AtomicString("en-US")));
 }
 
 // Test combinations of BCP 47 locales.
@@ -34,7 +38,8 @@ struct LocaleTestData {
   const char* locale;
   UScriptCode script;
   const char* sk_font_mgr = nullptr;
-  absl::optional<UScriptCode> script_for_han;
+  std::optional<UScriptCode> script_for_han;
+  bool is_macrolanguage_chinese = false;
 } locale_test_data[] = {
     // Country is not relevant to |SkFontMgr|.
     {"en-US", USCRIPT_LATIN, "en"},
@@ -61,31 +66,31 @@ struct LocaleTestData {
   USCRIPT_TRADITIONAL_HAN, "zh-Hant", USCRIPT_TRADITIONAL_HAN
     {"ja-JP", EXPECT_JAPANESE},
     {"ko-KR", EXPECT_KOREAN},
-    {"zh", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-CN", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-HK", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-MO", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-SG", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-TW", EXPECT_TRADITIONAL_CHINESE},
+    {"zh", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-CN", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-HK", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-MO", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-SG", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-TW", EXPECT_TRADITIONAL_CHINESE, true},
 
     // Encompassed languages within the Chinese macrolanguage.
     // Both "lang" and "lang-extlang" should work.
-    {"nan", EXPECT_TRADITIONAL_CHINESE},
-    {"wuu", EXPECT_SIMPLIFIED_CHINESE},
-    {"yue", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-nan", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-wuu", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-yue", EXPECT_TRADITIONAL_CHINESE},
+    {"nan", EXPECT_TRADITIONAL_CHINESE, true},
+    {"wuu", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"yue", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-nan", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-wuu", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-yue", EXPECT_TRADITIONAL_CHINESE, true},
 
     // Specified scripts is honored.
-    {"zh-Hans", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-Hant", EXPECT_TRADITIONAL_CHINESE},
+    {"zh-Hans", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-Hant", EXPECT_TRADITIONAL_CHINESE, true},
 
     // Lowercase scripts should be capitalized.
     // |SkFontMgr_Android| uses case-sensitive match, and `fonts.xml` has
     // capitalized script names.
-    {"zh-hans", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-hant", EXPECT_TRADITIONAL_CHINESE},
+    {"zh-hans", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-hant", EXPECT_TRADITIONAL_CHINESE, true},
 
     // Script has priority over other subtags.
     {"en-Hans", EXPECT_SIMPLIFIED_CHINESE},
@@ -94,10 +99,10 @@ struct LocaleTestData {
     {"en-Hant-CN", EXPECT_TRADITIONAL_CHINESE},
     {"en-TW-Hans", EXPECT_SIMPLIFIED_CHINESE},
     {"en-CN-Hant", EXPECT_TRADITIONAL_CHINESE},
-    {"wuu-Hant", EXPECT_TRADITIONAL_CHINESE},
-    {"yue-Hans", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-wuu-Hant", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-yue-Hans", EXPECT_SIMPLIFIED_CHINESE},
+    {"wuu-Hant", EXPECT_TRADITIONAL_CHINESE, true},
+    {"yue-Hans", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-wuu-Hant", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-yue-Hans", EXPECT_SIMPLIFIED_CHINESE, true},
 
     // Lang has priority over region.
     // icu::Locale::getDefault() returns other combinations if, for instance,
@@ -106,10 +111,10 @@ struct LocaleTestData {
     {"ja-US", EXPECT_JAPANESE},
     {"ko", EXPECT_KOREAN},
     {"ko-US", EXPECT_KOREAN},
-    {"wuu-TW", EXPECT_SIMPLIFIED_CHINESE},
-    {"yue-CN", EXPECT_TRADITIONAL_CHINESE},
-    {"zh-wuu-TW", EXPECT_SIMPLIFIED_CHINESE},
-    {"zh-yue-CN", EXPECT_TRADITIONAL_CHINESE},
+    {"wuu-TW", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"yue-CN", EXPECT_TRADITIONAL_CHINESE, true},
+    {"zh-wuu-TW", EXPECT_SIMPLIFIED_CHINESE, true},
+    {"zh-yue-CN", EXPECT_TRADITIONAL_CHINESE, true},
 
     // Region should not affect script, but it can influence scriptForHan.
     {"en-CN", USCRIPT_LATIN, "en"},
@@ -141,7 +146,7 @@ INSTANTIATE_TEST_SUITE_P(LayoutLocaleTest,
 TEST_P(LocaleTestDataFixture, Script) {
   const auto& test = GetParam();
   scoped_refptr<LayoutLocale> locale =
-      LayoutLocale::CreateForTesting(test.locale);
+      LayoutLocale::CreateForTesting(AtomicString(test.locale));
   EXPECT_EQ(test.script, locale->GetScript()) << test.locale;
   EXPECT_EQ(test.script_for_han.has_value(), locale->HasScriptForHan())
       << test.locale;
@@ -150,6 +155,7 @@ TEST_P(LocaleTestDataFixture, Script) {
   } else {
     EXPECT_EQ(USCRIPT_SIMPLIFIED_HAN, locale->GetScriptForHan()) << test.locale;
   }
+  EXPECT_EQ(test.is_macrolanguage_chinese, locale->IsMacrolanguageChinese());
   if (test.sk_font_mgr)
     EXPECT_STREQ(test.sk_font_mgr, locale->LocaleForSkFontMgr()) << test.locale;
 }
@@ -158,23 +164,31 @@ TEST(LayoutLocaleTest, BreakKeyword) {
   struct {
     const char* expected;
     const char* locale;
-    LineBreakIteratorMode mode;
+    LineBreakStrictness strictness;
+    bool use_phrase = false;
   } tests[] = {
-      {nullptr, nullptr, LineBreakIteratorMode::kDefault},
-      {"", "", LineBreakIteratorMode::kDefault},
-      {nullptr, nullptr, LineBreakIteratorMode::kStrict},
-      {"", "", LineBreakIteratorMode::kStrict},
-      {"ja", "ja", LineBreakIteratorMode::kDefault},
-      {"ja@lb=normal", "ja", LineBreakIteratorMode::kNormal},
-      {"ja@lb=strict", "ja", LineBreakIteratorMode::kStrict},
-      {"ja@lb=loose", "ja", LineBreakIteratorMode::kLoose},
+      {nullptr, nullptr, LineBreakStrictness::kDefault},
+      {"", "", LineBreakStrictness::kDefault},
+      {nullptr, nullptr, LineBreakStrictness::kStrict},
+      {"", "", LineBreakStrictness::kStrict},
+      {"ja", "ja", LineBreakStrictness::kDefault},
+      {"ja@lb=normal", "ja", LineBreakStrictness::kNormal},
+      {"ja@lb=strict", "ja", LineBreakStrictness::kStrict},
+      {"ja@lb=loose", "ja", LineBreakStrictness::kLoose},
+      {"ja@lw=phrase", "ja", LineBreakStrictness::kDefault, true},
+      {"ja@lb=normal;lw=phrase", "ja", LineBreakStrictness::kNormal, true},
+      {"ja@lb=strict;lw=phrase", "ja", LineBreakStrictness::kStrict, true},
+      {"ja@lb=loose;lw=phrase", "ja", LineBreakStrictness::kLoose, true},
   };
   for (const auto& test : tests) {
     scoped_refptr<LayoutLocale> locale =
-        LayoutLocale::CreateForTesting(test.locale);
-    EXPECT_EQ(test.expected, locale->LocaleWithBreakKeyword(test.mode))
-        << String::Format("'%s' with line-break %d should be '%s'", test.locale,
-                          static_cast<int>(test.mode), test.expected);
+        LayoutLocale::CreateForTesting(AtomicString(test.locale));
+    EXPECT_EQ(test.expected,
+              locale->LocaleWithBreakKeyword(test.strictness, test.use_phrase))
+        << UNSAFE_TODO(String::Format(
+               "'%s' with line-break %d, phrase=%d should be '%s'", test.locale,
+               static_cast<int>(test.strictness),
+               static_cast<int>(test.use_phrase), test.expected));
   }
 }
 
@@ -193,7 +207,7 @@ TEST(LayoutLocaleTest, GetQuotesData) {
   };
   for (const auto& test : tests) {
     scoped_refptr<LayoutLocale> locale =
-        LayoutLocale::CreateForTesting(test.locale);
+        LayoutLocale::CreateForTesting(AtomicString(test.locale));
     scoped_refptr<QuotesData> quotes = locale->GetQuotesData();
     if (test.expected) {
       EXPECT_EQ(test.expected->GetOpenQuote(0), quotes->GetOpenQuote(0));
@@ -211,9 +225,10 @@ TEST(LayoutLocaleTest, ExistingKeywordName) {
       "en@x=", "en@lb=xyz", "en@ =",
   };
   for (auto* const test : tests) {
-    scoped_refptr<LayoutLocale> locale = LayoutLocale::CreateForTesting(test);
+    scoped_refptr<LayoutLocale> locale =
+        LayoutLocale::CreateForTesting(AtomicString(test));
     EXPECT_EQ(test,
-              locale->LocaleWithBreakKeyword(LineBreakIteratorMode::kNormal));
+              locale->LocaleWithBreakKeyword(LineBreakStrictness::kNormal));
   }
 }
 

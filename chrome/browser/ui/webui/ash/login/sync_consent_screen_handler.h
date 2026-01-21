@@ -16,8 +16,7 @@ namespace ash {
 
 // Interface for dependency injection between SyncConsentScreen and its
 // WebUI representation.
-class SyncConsentScreenView
-    : public base::SupportsWeakPtr<SyncConsentScreenView> {
+class SyncConsentScreenView {
  public:
   inline constexpr static StaticOobeScreenId kScreenId{"sync-consent",
                                                        "SyncConsentScreen"};
@@ -25,7 +24,7 @@ class SyncConsentScreenView
   virtual ~SyncConsentScreenView() = default;
 
   // Shows the contents of the screen.
-  virtual void Show(bool is_arc_restricted) = 0;
+  virtual void Show() = 0;
 
   // The screen is initially shown in a loading state.
   // When SyncScreenBehavior becomes Shown, this method should be called to
@@ -40,11 +39,14 @@ class SyncConsentScreenView
                                   const std::string& consent_confirmation,
                                   std::vector<int>& consent_description_ids,
                                   int& consent_confirmation_id) = 0;
+
+  // Gets a WeakPtr to the instance.
+  virtual base::WeakPtr<SyncConsentScreenView> AsWeakPtr() = 0;
 };
 
 // The sole implementation of the SyncConsentScreenView, using WebUI.
-class SyncConsentScreenHandler : public BaseScreenHandler,
-                                 public SyncConsentScreenView {
+class SyncConsentScreenHandler final : public BaseScreenHandler,
+                                       public SyncConsentScreenView {
  public:
   using TView = SyncConsentScreenView;
 
@@ -64,7 +66,7 @@ class SyncConsentScreenHandler : public BaseScreenHandler,
       ::login::LocalizedValuesBuilder* builder) override;
 
   // SyncConsentScreenView:
-  void Show(bool is_arc_restricted) override;
+  void Show() override;
   void ShowLoadedStep() override;
   void SetIsMinorMode(bool value) override;
 
@@ -72,6 +74,7 @@ class SyncConsentScreenHandler : public BaseScreenHandler,
                           const std::string& consent_confirmation,
                           std::vector<int>& consent_description_ids,
                           int& consent_confirmation_id) override;
+  base::WeakPtr<SyncConsentScreenView> AsWeakPtr() override;
 
  private:
   // Adds resource `resource_id` both to `builder` and to `known_string_ids_`.
@@ -85,6 +88,8 @@ class SyncConsentScreenHandler : public BaseScreenHandler,
 
   // Resource IDs of the displayed strings.
   std::unordered_map<std::string, int> known_strings_;
+
+  base::WeakPtrFactory<SyncConsentScreenView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

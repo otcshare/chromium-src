@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/base/l10n/l10n_util.h"
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 
@@ -22,7 +25,7 @@
 #include "base/test/icu_test_util.h"
 #include "base/test/scoped_path_override.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 #include "third_party/icu/source/common/unicode/locid.h"
@@ -34,10 +37,11 @@
 #include <cstdlib>
 #endif
 
-using base::ASCIIToUTF16;
-using base::UTF8ToUTF16;
-
 namespace {
+
+using ::base::ASCIIToUTF16;
+using ::base::UTF8ToUTF16;
+using ::testing::ElementsAre;
 
 class StringWrapper {
  public:
@@ -81,7 +85,7 @@ TEST_F(L10nUtilTest, GetString) {
 // On Android, we are disabling this test since GetApplicationLocale() just
 // returns the system's locale, which, similarly, is not easily unit tested.
 
-#if BUILDFLAG(IS_POSIX) && defined(USE_GLIB) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_POSIX) && defined(USE_GLIB) && !BUILDFLAG(IS_CHROMEOS)
 const bool kPlatformHasDefaultLocale = true;
 const bool kUseLocaleFromEnvironment = true;
 const bool kSupportsLocalePreference = false;
@@ -110,10 +114,23 @@ TEST_F(L10nUtilTest, GetAppLocale) {
   base::FilePath new_locale_dir;
   ASSERT_TRUE(base::PathService::Get(ui::DIR_LOCALES, &new_locale_dir));
   // Make fake locale files.
-  std::string filenames[] = {
-      "am", "ca", "ca@valencia", "en-GB", "en-US", "es",    "es-419", "fil",
-      "fr", "he", "nb",          "pt-BR", "pt-PT", "zh-CN", "zh-TW",
-  };
+  auto filenames = std::to_array<std::string>({
+      "am",
+      "ca",
+      "ca@valencia",
+      "en-GB",
+      "en-US",
+      "es",
+      "es-419",
+      "fil",
+      "fr",
+      "he",
+      "nb",
+      "pt-BR",
+      "pt-PT",
+      "zh-CN",
+      "zh-TW",
+  });
 
   for (size_t i = 0; i < std::size(filenames); ++i) {
     base::FilePath filename = new_locale_dir.AppendASCII(
@@ -431,6 +448,23 @@ void CheckUiDisplayNameForLocale(const std::string& locale,
   }
 }
 
+TEST_F(L10nUtilTest, GetDisplayNameForLocaleWithoutCountry) {
+  ASSERT_EQ(u"English", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "en-US", "en", false));
+  ASSERT_EQ(u"English", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "en-GB", "en", false));
+  ASSERT_EQ(u"English", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "en-AU", "en", false));
+  ASSERT_EQ(u"English", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "en", "en", false));
+  EXPECT_EQ(u"Spanish", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "es-419", "en", false));
+  EXPECT_EQ(u"Chinese", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "zh-CH", "en", false));
+  EXPECT_EQ(u"Chinese", l10n_util::GetDisplayNameForLocaleWithoutCountry(
+                            "zh-TW", "en", false));
+}
+
 TEST_F(L10nUtilTest, GetDisplayNameForLocale) {
   // TODO(jungshik): Make this test more extensive.
   // Test zh-CN and zh-TW are treated as zh-Hans and zh-Hant.
@@ -502,7 +536,17 @@ TEST_F(L10nUtilTest, GetDisplayNameForLocale) {
               lower_with_null[2] == 0 && lower_with_null[3] == 'b');
 }
 
-TEST_F(L10nUtilTest, GetDisplayNameForCountry) {
+// TODO:(crbug.com/1456465) Re-enable test for iOS
+// In iOS17, NSLocale's internal implementation was modified resulting in
+// redefined behavior for existing functions. As a result,
+// `l10n_util::GetDisplayNameForCountry` no longer produces the same output in
+// iOS17 as previous versions.
+#if BUILDFLAG(IS_IOS)
+#define MAYBE_GetDisplayNameForCountry DISABLED_GetDisplayNameForCountry
+#else
+#define MAYBE_GetDisplayNameForCountry GetDisplayNameForCountry
+#endif
+TEST_F(L10nUtilTest, MAYBE_GetDisplayNameForCountry) {
   std::u16string result = l10n_util::GetDisplayNameForCountry("BR", "en");
   EXPECT_EQ(u"Brazil", result);
 
@@ -514,14 +558,8 @@ TEST_F(L10nUtilTest, GetDisplayNameForCountry) {
 }
 
 TEST_F(L10nUtilTest, GetParentLocales) {
-  std::vector<std::string> locales;
-  const std::string top_locale("sr_Cyrl_RS");
-  l10n_util::GetParentLocales(top_locale, &locales);
-
-  ASSERT_EQ(3U, locales.size());
-  EXPECT_EQ("sr_Cyrl_RS", locales[0]);
-  EXPECT_EQ("sr_Cyrl", locales[1]);
-  EXPECT_EQ("sr", locales[2]);
+  EXPECT_THAT(l10n_util::GetParentLocales("sr_Cyrl_RS"),
+              ElementsAre("sr_Cyrl_RS", "sr_Cyrl", "sr"));
 }
 
 TEST_F(L10nUtilTest, IsValidLocaleSyntax) {
@@ -632,23 +670,71 @@ TEST_F(L10nUtilTest, GetUserFacingUILocaleList) {
 }
 
 TEST_F(L10nUtilTest, PlatformLocalesIsSorted) {
-  const char* const* locales = l10n_util::GetPlatformLocalesForTesting();
-  const size_t locales_size = l10n_util::GetPlatformLocalesSizeForTesting();
+  const base::span<const std::string_view> locales =
+      l10n_util::GetPlatformLocalesForTesting();
 
-  // Check adjacent pairs and ensure they are in sorted order without
-  // duplicates.
+  // Check adjacent pairs and ensure they are in sorted order ...
+  EXPECT_TRUE(std::ranges::is_sorted(locales));
+  // ... and without duplicates.
+  EXPECT_EQ(std::ranges::adjacent_find(locales), locales.end());
+}
 
-  // All 0-length and 1-length lists are sorted.
-  if (locales_size <= 1) {
-    return;
-  }
+TEST_F(L10nUtilTest, IsPossibleAcceptLanguage) {
+  EXPECT_TRUE(l10n_util::IsPossibleAcceptLanguage("en"));
+  EXPECT_TRUE(l10n_util::IsPossibleAcceptLanguage("en-CA"));
+  EXPECT_TRUE(l10n_util::IsPossibleAcceptLanguage("fil"));
+  EXPECT_TRUE(l10n_util::IsPossibleAcceptLanguage("zu"));
 
-  const char* last_locale = locales[0];
-  for (size_t i = 1; i < locales_size; i++) {
-    const char* cur_locale = locales[i];
-    EXPECT_LT(strcmp(last_locale, cur_locale), 0)
-        << "Incorrect ordering in kPlatformLocales: " << last_locale
-        << " >= " << cur_locale;
-    last_locale = cur_locale;
-  }
+  EXPECT_FALSE(l10n_util::IsPossibleAcceptLanguage("tl"));
+  EXPECT_FALSE(l10n_util::IsPossibleAcceptLanguage("fr-CO"));
+  EXPECT_FALSE(l10n_util::IsPossibleAcceptLanguage("iw"));
+
+  EXPECT_FALSE(l10n_util::IsPossibleAcceptLanguage("dne"));
+}
+
+TEST_F(L10nUtilTest, IsAcceptLanguageDisplayable) {
+  EXPECT_TRUE(l10n_util::IsAcceptLanguageDisplayable("en", "es-419"));
+  EXPECT_TRUE(l10n_util::IsAcceptLanguageDisplayable("en", "en-GB"));
+  EXPECT_TRUE(l10n_util::IsAcceptLanguageDisplayable("es", "fil"));
+  EXPECT_TRUE(l10n_util::IsAcceptLanguageDisplayable("de", "zu"));
+
+  // The old code for "he" is not supported.
+  EXPECT_FALSE(l10n_util::IsAcceptLanguageDisplayable("es", "iw"));
+}
+
+TEST_F(L10nUtilTest, KeepAcceptedLanguages) {
+  // All valid languages.
+  EXPECT_EQ(l10n_util::KeepAcceptedLanguages({"en", "es", "fr"}),
+            std::vector<std::string>({"en", "es", "fr"}));
+  // Some invalid languages.
+  EXPECT_EQ(l10n_util::KeepAcceptedLanguages({"en", "es", "iw"}),
+            std::vector<std::string>({"en", "es"}));
+  // All invalid languages.
+  EXPECT_EQ(l10n_util::KeepAcceptedLanguages({"iw", "ch_ZN"}),
+            std::vector<std::string>{});
+  // Empty input.
+  EXPECT_EQ(l10n_util::KeepAcceptedLanguages({}), std::vector<std::string>{});
+  // Maintain languages order.
+  EXPECT_EQ(
+      l10n_util::KeepAcceptedLanguages({"en", "aa", "es", "iw", "fr", "xx"}),
+      std::vector<std::string>({"en", "es", "fr"}));
+}
+
+TEST_F(L10nUtilTest, FormatStringComputeCorrectOffsetInRTL) {
+  base::i18n::SetICUDefaultLocale("ar");
+  ASSERT_EQ(true, base::i18n::IsRTL());
+  // Use a format string that contains Strong RTL Chars.
+  const std::u16string kFormatString(u"كلمة مرور $1");
+  std::vector<size_t> offsets;
+  std::u16string formatted_string =
+      l10n_util::FormatString(kFormatString, {u"Replacement"}, &offsets);
+  ASSERT_FALSE(offsets.empty());
+  // On Linux, an extra base::i18n::kRightToLeftMark character is appended for
+  // the text rendering engine to render the string correctly. This should be
+  // considered when computing the offsets.
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(offsets[0], 11u);
+#else
+  EXPECT_EQ(offsets[0], 10u);
+#endif
 }

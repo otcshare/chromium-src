@@ -2,10 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-import("//testing/test.gni")
-
-assert(is_chromeos_ash, "Phone Hub is Ash only")
+assert(is_chromeos, "Phone Hub is ChromeOS only")
 
 static_library("phonehub") {
   sources = [
@@ -100,6 +97,10 @@ static_library("phonehub") {
     "phone_hub_manager_impl.h",
     "phone_hub_metrics_recorder.cc",
     "phone_hub_metrics_recorder.h",
+    "phone_hub_structured_metrics_logger.cc",
+    "phone_hub_structured_metrics_logger.h",
+    "phone_hub_ui_readiness_recorder.cc",
+    "phone_hub_ui_readiness_recorder.h",
     "phone_model.cc",
     "phone_model.h",
     "phone_status_model.cc",
@@ -111,6 +112,8 @@ static_library("phonehub") {
     "ping_manager_impl.h",
     "pref_names.cc",
     "pref_names.h",
+    "public/cpp/attestation_certificate_generator.cc",
+    "public/cpp/attestation_certificate_generator.h",
     "recent_app_click_observer.h",
     "recent_apps_interaction_handler.cc",
     "recent_apps_interaction_handler.h",
@@ -135,9 +138,12 @@ static_library("phonehub") {
 
   deps = [
     "//ash/constants",
+    "//ash/public/cpp",
     "//ash/resources/vector_icons",
     "//ash/webui/eche_app_ui:eche_app_ui_pref",
-    "//ash/webui/eche_app_ui/mojom:mojom",
+    "//ash/webui/eche_app_ui:eche_connection_status",
+    "//ash/webui/eche_app_ui:system_info_provider",
+    "//ash/webui/eche_app_ui/mojom",
     "//base",
     "//chromeos/ash/components/multidevice",
     "//chromeos/ash/components/multidevice/logging",
@@ -145,13 +151,14 @@ static_library("phonehub") {
     "//chromeos/ash/services/device_sync/public/cpp",
     "//chromeos/ash/services/multidevice_setup/public/cpp",
     "//chromeos/ash/services/multidevice_setup/public/cpp:prefs",
+    "//chromeos/ash/services/network_config:in_process_instance",
     "//chromeos/ash/services/secure_channel/public/cpp/client",
     "//chromeos/ash/services/secure_channel/public/mojom",
     "//chromeos/dbus/power",
-    "//chromeos/services/network_config",
-    "//chromeos/services/network_config:in_process_instance",
     "//chromeos/services/network_config/public/cpp",
     "//components/keyed_service/core",
+    "//components/metrics/structured:structured_events",
+    "//components/metrics/structured:structured_metrics_features",
     "//components/prefs",
     "//components/session_manager/core",
     "//device/bluetooth",
@@ -161,6 +168,10 @@ static_library("phonehub") {
     "//ui/gfx",
     "//url",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 # Sources only include files used in the debug UI.
@@ -206,17 +217,25 @@ static_library("debug") {
 
   deps = [
     "//ash/constants",
+    "//ash/webui/eche_app_ui:eche_connection_status",
+    "//ash/webui/eche_app_ui:system_info_provider",
     "//base",
     "//chromeos/ash/components/multidevice/logging",
     "//chromeos/ash/components/phonehub/proto",
     "//chromeos/ash/services/multidevice_setup/public/mojom",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 static_library("test_support") {
   testonly = true
 
   sources = [
+    "fake_attestation_certificate_generator.cc",
+    "fake_attestation_certificate_generator.h",
     "fake_browser_tabs_metadata_fetcher.cc",
     "fake_browser_tabs_metadata_fetcher.h",
     "fake_browser_tabs_model_provider.cc",
@@ -243,6 +262,10 @@ static_library("test_support") {
     "//chromeos/ash/services/secure_channel/public/mojom",
     "//skia",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("unit_tests") {
@@ -272,6 +295,8 @@ source_set("unit_tests") {
     "notification_manager_impl_unittest.cc",
     "notification_processor_unittest.cc",
     "onboarding_ui_tracker_impl_unittest.cc",
+    "phone_hub_structured_metrics_logger_unittest.cc",
+    "phone_hub_ui_readiness_recorder_unittest.cc",
     "phone_status_model_unittest.cc",
     "phone_status_processor_unittest.cc",
     "ping_manager_impl_unittest.cc",
@@ -287,6 +312,8 @@ source_set("unit_tests") {
     ":test_support",
     "//ash/constants",
     "//ash/webui/eche_app_ui:eche_app_ui_pref",
+    "//ash/webui/eche_app_ui:eche_connection_status",
+    "//ash/webui/eche_app_ui:system_info_provider",
     "//base",
     "//base/test:test_support",
     "//chromeos/ash/components/multidevice",
@@ -299,13 +326,15 @@ source_set("unit_tests") {
     "//chromeos/ash/services/multidevice_setup/public/cpp",
     "//chromeos/ash/services/multidevice_setup/public/cpp:prefs",
     "//chromeos/ash/services/multidevice_setup/public/cpp:test_support",
+    "//chromeos/ash/services/network_config:in_process_instance",
+    "//chromeos/ash/services/network_config/public/cpp:test_support",
     "//chromeos/ash/services/secure_channel/public/cpp/client:test_support",
     "//chromeos/ash/services/secure_channel/public/mojom",
     "//chromeos/dbus/power",
-    "//chromeos/services/network_config:in_process_instance",
-    "//chromeos/services/network_config/public/cpp:test_support",
+    "//components/metrics/structured:structured_metrics_features",
     "//components/prefs:test_support",
     "//components/session_manager/core",
+    "//components/session_manager/core:test_support",
     "//device/bluetooth:mocks",
     "//skia",
     "//testing/gtest",

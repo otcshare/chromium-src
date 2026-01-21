@@ -6,16 +6,18 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/bind.h"
 #include "components/update_client/update_client.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
@@ -25,13 +27,11 @@
 #include "extensions/browser/test_extensions_browser_client.h"
 #include "extensions/browser/updater/extension_installer.h"
 #include "extensions/common/extension_builder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "extensions/common/extension_id.h"
 
 using extensions::mojom::ManifestLocation;
 
 namespace extensions {
-
-namespace {
 
 class UpdateDataProviderExtensionsBrowserClient
     : public TestExtensionsBrowserClient {
@@ -49,7 +49,7 @@ class UpdateDataProviderExtensionsBrowserClient
 
   bool IsExtensionEnabled(const std::string& id,
                           content::BrowserContext* context) const override {
-    return enabled_ids_.find(id) != enabled_ids_.end();
+    return enabled_ids_.contains(id);
   }
 
   void AddEnabledExtension(const std::string& id) { enabled_ids_.insert(id); }
@@ -87,25 +87,23 @@ class UpdateDataProviderTest : public ExtensionsTest {
                           const base::FilePath& relative_path,
                           const std::string& content) const {
     const base::FilePath full_path = directory.Append(relative_path);
-    if (!base::CreateDirectory(full_path.DirName()))
-      return false;
-    int result = base::WriteFile(full_path, content.data(), content.size());
-    return (static_cast<size_t>(result) == content.size());
+    return base::CreateDirectory(full_path.DirName()) &&
+           base::WriteFile(full_path, content);
   }
 
-  void AddExtension(const std::string& extension_id,
+  void AddExtension(const ExtensionId& extension_id,
                     const std::string& version,
                     bool enabled,
-                    int disable_reasons,
+                    const base::flat_set<int>& disable_reasons,
                     ManifestLocation location) {
     AddExtension(extension_id, version, "", enabled, disable_reasons, location);
   }
 
-  void AddExtension(const std::string& extension_id,
+  void AddExtension(const ExtensionId& extension_id,
                     const std::string& version,
                     const std::string& fingerprint,
                     bool enabled,
-                    int disable_reasons,
+                    const base::flat_set<int>& disable_reasons,
                     ManifestLocation location) {
     base::ScopedTempDir temp_dir;
     ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -119,13 +117,14 @@ class UpdateDataProviderTest : public ExtensionsTest {
     ASSERT_TRUE(AddFileToDirectory(temp_dir.GetPath(), bar_html, "world"));
 
     ExtensionBuilder builder;
-    DictionaryBuilder manifest_builder;
-    manifest_builder.Set("name", "My First Extension")
-        .Set("version", version)
-        .Set("manifest_version", 2);
-    if (!fingerprint.empty())
+    auto manifest_builder = base::Value::Dict()
+                                .Set("name", "My First Extension")
+                                .Set("version", version)
+                                .Set("manifest_version", 2);
+    if (!fingerprint.empty()) {
       manifest_builder.Set("differential_fingerprint", fingerprint);
-    builder.SetManifest(manifest_builder.Build());
+    }
+    builder.SetManifest(std::move(manifest_builder));
     builder.SetID(extension_id);
     builder.SetPath(temp_dir.GetPath());
     builder.SetLocation(location);
@@ -138,8 +137,20 @@ class UpdateDataProviderTest : public ExtensionsTest {
       test_browser_client->AddEnabledExtension(extension_id);
     } else {
       extension_registry()->AddDisabled(builder.Build());
-      ExtensionPrefs::Get(browser_context())
-          ->AddDisableReasons(extension_id, disable_reasons);
+
+      if (!disable_reasons.empty()) {
+        // Some tests (e.g. GetData_DisabledExtension_WithNoReason) disable an
+        // extension with no disable reasons. In this case we shouldn't call
+        // `AddDisableReasons` because it expects at least one disable reason.
+        // TODO(crbug.com/40554334): We can clean this up after
+        // `Extension::State` is removed.
+        //
+        // Use raw manipulation passkey to add disable reasons because some
+        // tests pass unknown reasons in the `disable_reasons` set.
+        ExtensionPrefs::DisableReasonRawManipulationPasskey passkey;
+        ExtensionPrefs::Get(browser_context())
+            ->AddRawDisableReasons(passkey, extension_id, disable_reasons);
+      }
     }
 
     const Extension* extension =
@@ -156,9 +167,14 @@ TEST_F(UpdateDataProviderTest, GetData_NoDataAdded) {
   scoped_refptr<UpdateDataProvider> data_provider =
       base::MakeRefCounted<UpdateDataProvider>(nullptr);
 
-  const auto data = data_provider->GetData(
-      false /*install_immediately*/, ExtensionUpdateDataMap(), {kExtensionId1});
-  EXPECT_EQ(0UL, data.size());
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, ExtensionUpdateDataMap(), {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
+  ASSERT_EQ(1UL, data.size());
+  EXPECT_EQ(data[0], std::nullopt);
 }
 
 TEST_F(UpdateDataProviderTest, GetData_Fingerprint) {
@@ -168,19 +184,21 @@ TEST_F(UpdateDataProviderTest, GetData_Fingerprint) {
   const std::string version = "0.1.2.3";
   const std::string fingerprint = "1.0123456789abcdef";
   AddExtension(kExtensionId1, version, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kInternal);
+               /*disable_reasons=*/{}, ManifestLocation::kInternal);
   AddExtension(kExtensionId2, version, fingerprint, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kInternal);
+               /*disable_reasons=*/{}, ManifestLocation::kInternal);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
   update_data[kExtensionId2] = {};
 
-  const auto data =
-      data_provider->GetData(false /*install_immediately*/, update_data,
-                             {kExtensionId1, kExtensionId2});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data,
+      {kExtensionId1, kExtensionId2},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(2UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -195,14 +213,17 @@ TEST_F(UpdateDataProviderTest, GetData_EnabledExtension) {
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kInternal);
+               /*disable_reasons=*/{}, ManifestLocation::kInternal);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data = data_provider->GetData(false /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -217,16 +238,19 @@ TEST_F(UpdateDataProviderTest, GetData_EnabledExtensionWithData) {
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalPref);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalPref);
 
   ExtensionUpdateDataMap update_data;
   auto& info = update_data[kExtensionId1];
   info.is_corrupt_reinstall = true;
   info.install_source = "webstore";
 
-  const auto data = data_provider->GetData(true /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ("0.0.0.0", data[0]->version.GetString());
@@ -242,14 +266,17 @@ TEST_F(UpdateDataProviderTest, GetData_DisabledExtension_WithNoReason) {
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, false,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalRegistry);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalRegistry);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data = data_provider->GetData(false /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -266,14 +293,18 @@ TEST_F(UpdateDataProviderTest, GetData_DisabledExtension_UnknownReason) {
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, false,
-               disable_reason::DisableReason::DISABLE_REASON_LAST,
+               {disable_reason::DisableReason::DISABLE_REASON_LAST},
                ManifestLocation::kCommandLine);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data = data_provider->GetData(true /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -290,15 +321,19 @@ TEST_F(UpdateDataProviderTest, GetData_DisabledExtension_WithReasons) {
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, false,
-               disable_reason::DisableReason::DISABLE_USER_ACTION |
-                   disable_reason::DisableReason::DISABLE_CORRUPTED,
+               {disable_reason::DisableReason::DISABLE_USER_ACTION,
+                disable_reason::DisableReason::DISABLE_CORRUPTED},
                ManifestLocation::kExternalPolicyDownload);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data = data_provider->GetData(false /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -318,16 +353,20 @@ TEST_F(UpdateDataProviderTest,
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, false,
-               disable_reason::DisableReason::DISABLE_USER_ACTION |
-                   disable_reason::DisableReason::DISABLE_CORRUPTED |
-                   disable_reason::DisableReason::DISABLE_REASON_LAST,
+               {disable_reason::DisableReason::DISABLE_USER_ACTION,
+                disable_reason::DisableReason::DISABLE_CORRUPTED,
+                disable_reason::DisableReason::DISABLE_REASON_LAST},
                ManifestLocation::kExternalPrefDownload);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data = data_provider->GetData(true /*install_immediately*/,
-                                           update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(1UL, data.size());
   EXPECT_EQ(version, data[0]->version.GetString());
@@ -350,19 +389,21 @@ TEST_F(UpdateDataProviderTest, GetData_MultipleExtensions) {
   const std::string version1 = "0.1.2.3";
   const std::string version2 = "9.8.7.6";
   AddExtension(kExtensionId1, version1, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalRegistry);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalRegistry);
   AddExtension(kExtensionId2, version2, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kUnpacked);
+               /*disable_reasons=*/{}, ManifestLocation::kUnpacked);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
   update_data[kExtensionId2] = {};
 
-  const auto data =
-      data_provider->GetData(false /*install_immediately*/, update_data,
-                             {kExtensionId1, kExtensionId2});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data,
+      {kExtensionId1, kExtensionId2},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(2UL, data.size());
   EXPECT_EQ(version1, data[0]->version.GetString());
@@ -383,19 +424,21 @@ TEST_F(UpdateDataProviderTest, GetData_MultipleExtensions_DisabledExtension) {
   const std::string version1 = "0.1.2.3";
   const std::string version2 = "9.8.7.6";
   AddExtension(kExtensionId1, version1, false,
-               disable_reason::DisableReason::DISABLE_CORRUPTED,
+               {disable_reason::DisableReason::DISABLE_CORRUPTED},
                ManifestLocation::kInternal);
   AddExtension(kExtensionId2, version2, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalPrefDownload);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalPrefDownload);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
   update_data[kExtensionId2] = {};
 
-  const auto data =
-      data_provider->GetData(true /*install_immediately*/, update_data,
-                             {kExtensionId1, kExtensionId2});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1, kExtensionId2},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(2UL, data.size());
   EXPECT_EQ(version1, data[0]->version.GetString());
@@ -419,25 +462,28 @@ TEST_F(UpdateDataProviderTest,
 
   const std::string version = "0.1.2.3";
   AddExtension(kExtensionId1, version, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kComponent);
+               /*disable_reasons=*/{}, ManifestLocation::kComponent);
 
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
   update_data[kExtensionId2] = {};
 
-  const auto data =
-      data_provider->GetData(false /*install_immediately*/, update_data,
-                             {kExtensionId1, kExtensionId2});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data,
+      {kExtensionId1, kExtensionId2},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(2UL, data.size());
-  ASSERT_NE(absl::nullopt, data[0]);
+  ASSERT_NE(std::nullopt, data[0]);
   EXPECT_EQ(version, data[0]->version.GetString());
   EXPECT_NE(nullptr, data[0]->installer.get());
   EXPECT_EQ(0UL, data[0]->disabled_reasons.size());
   EXPECT_EQ("other", data[0]->install_location);
 
-  EXPECT_EQ(absl::nullopt, data[1]);
+  EXPECT_EQ(std::nullopt, data[1]);
 }
 
 TEST_F(UpdateDataProviderTest, GetData_MultipleExtensions_CorruptExtension) {
@@ -450,11 +496,9 @@ TEST_F(UpdateDataProviderTest, GetData_MultipleExtensions_CorruptExtension) {
   const std::string version2 = "9.8.7.6";
   const std::string initial_version = "0.0.0.0";
   AddExtension(kExtensionId1, version1, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalComponent);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalComponent);
   AddExtension(kExtensionId2, version2, true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kExternalPolicy);
+               /*disable_reasons=*/{}, ManifestLocation::kExternalPolicy);
 
   ExtensionUpdateDataMap update_data;
   auto& info1 = update_data[kExtensionId1];
@@ -464,9 +508,12 @@ TEST_F(UpdateDataProviderTest, GetData_MultipleExtensions_CorruptExtension) {
   info2.is_corrupt_reinstall = true;
   info2.install_source = "sideload";
 
-  const auto data =
-      data_provider->GetData(true /*install_immediately*/, update_data,
-                             {kExtensionId1, kExtensionId2});
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1, kExtensionId2},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
 
   ASSERT_EQ(2UL, data.size());
   EXPECT_EQ(version1, data[0]->version.GetString());
@@ -485,8 +532,7 @@ TEST_F(UpdateDataProviderTest, GetData_InstallImmediately) {
   // Verify that GetData propagtes install_immediately correctly to the crx
   // installer.
   AddExtension(kExtensionId1, "0.1.1.3", true,
-               disable_reason::DisableReason::DISABLE_NONE,
-               ManifestLocation::kInternal);
+               /*disable_reasons=*/{}, ManifestLocation::kInternal);
 
   scoped_refptr<UpdateDataProvider> data_provider =
       base::MakeRefCounted<UpdateDataProvider>(browser_context());
@@ -494,16 +540,24 @@ TEST_F(UpdateDataProviderTest, GetData_InstallImmediately) {
   ExtensionUpdateDataMap update_data;
   update_data[kExtensionId1] = {};
 
-  const auto data1 = data_provider->GetData(false /*install_immediately*/,
-                                            update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data1;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data1 = output; }));
   ASSERT_EQ(1UL, data1.size());
   ASSERT_NE(nullptr, data1[0]->installer.get());
   const ExtensionInstaller* installer1 =
       static_cast<ExtensionInstaller*>(data1[0]->installer.get());
   EXPECT_FALSE(installer1->install_immediately());
 
-  const auto data2 = data_provider->GetData(true /*install_immediately*/,
-                                            update_data, {kExtensionId1});
+  std::vector<std::optional<update_client::CrxComponent>> data2;
+  data_provider->GetData(
+      true /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data2 = output; }));
   ASSERT_EQ(1UL, data2.size());
   ASSERT_NE(nullptr, data2[0]->installer.get());
   const ExtensionInstaller* installer2 =
@@ -511,6 +565,32 @@ TEST_F(UpdateDataProviderTest, GetData_InstallImmediately) {
   EXPECT_TRUE(installer2->install_immediately());
 }
 
-}  // namespace
+TEST_F(UpdateDataProviderTest, GetData_Pending_Version) {
+  scoped_refptr<UpdateDataProvider> data_provider =
+      base::MakeRefCounted<UpdateDataProvider>(browser_context());
+
+  const std::string version = "0.1.2.3";
+  const std::string pending_version = "0.1.2.4";
+  const std::string pending_fingerprint = "fingerprint";
+
+  AddExtension(kExtensionId1, version, true,
+               /*disable_reasons=*/{}, ManifestLocation::kInternal);
+
+  ExtensionUpdateDataMap update_data;
+  update_data[kExtensionId1] = {};
+  update_data[kExtensionId1].pending_version = pending_version;
+  update_data[kExtensionId1].pending_fingerprint = pending_fingerprint;
+
+  std::vector<std::optional<update_client::CrxComponent>> data;
+  data_provider->GetData(
+      false /*install_immediately*/, update_data, {kExtensionId1},
+      base::BindLambdaForTesting(
+          [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                  output) { data = output; }));
+
+  ASSERT_EQ(1UL, data.size());
+  EXPECT_EQ(pending_version, data[0]->version.GetString());
+  EXPECT_EQ(pending_fingerprint, data[0]->fingerprint);
+}
 
 }  // namespace extensions

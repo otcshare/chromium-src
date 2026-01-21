@@ -1,2 +1,4 @@
-cfroussios@chromium.org
 thestig@chromium.org
+
+per-file ..._linux*=thomasanderson@chromium.org
+per-file ..._win*=wfh@chromium.org

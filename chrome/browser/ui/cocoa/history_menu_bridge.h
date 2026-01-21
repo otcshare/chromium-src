@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_UI_COCOA_HISTORY_MENU_BRIDGE_H_
 
 #import <Cocoa/Cocoa.h>
+
 #include <map>
 #include <memory>
 #include <vector>
 
-#include "base/mac/scoped_nsobject.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -21,6 +21,7 @@
 #import "components/favicon/core/favicon_service.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_observer.h"
@@ -32,7 +33,7 @@ class ScopedProfileKeepAlive;
 namespace {
 class HistoryMenuBridgeTest;
 class HistoryMenuBridgeLifetimeTest;
-}
+}  // namespace
 
 namespace favicon_base {
 struct FaviconImageResult;
@@ -79,22 +80,25 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
     // The URL that will be navigated to if the user selects this item.
     GURL url;
     // Favicon for the URL.
-    base::scoped_nsobject<NSImage> icon;
+    NSImage* __strong icon;
+
+    std::optional<tab_groups::TabGroupColorId> tab_group_color_id;
 
     // If the icon is being requested from the FaviconService, |icon_requested|
     // will be true and |icon_task_id| will be valid. If this is false, then
     // |icon_task_id| will be
     // base::CancelableTaskTracker::kBadTaskId.
-    bool icon_requested;
+    bool icon_requested = false;
     // The Handle given to us by the FaviconService for the icon fetch request.
-    base::CancelableTaskTracker::TaskId icon_task_id;
+    base::CancelableTaskTracker::TaskId icon_task_id =
+        base::CancelableTaskTracker::kBadTaskId;
 
     // The pointer to the item after it has been created. Strong; NSMenu also
     // retains this. During a rebuild flood (if the user closes a lot of tabs
     // quickly), the NSMenu can release the item before the HistoryItem has
     // been fully deleted. If this were a weak pointer, it would result in a
     // zombie.
-    base::scoped_nsobject<NSMenuItem> menu_item;
+    NSMenuItem* __strong menu_item;
 
     // This ID is unique for a browser session and can be passed to the
     // TabRestoreService to re-open the closed window or tab that this
@@ -139,6 +143,7 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   void TabRestoreServiceChanged(sessions::TabRestoreService* service) override;
   void TabRestoreServiceDestroyed(
       sessions::TabRestoreService* service) override;
+  void TabRestoreServiceLoaded(sessions::TabRestoreService* service) override;
 
   // MainMenuItem:
   void ResetMenu() override;
@@ -189,14 +194,14 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
 
   // Adds an item for the window entry with a submenu containing its tabs.
   // Returns whether the item was successfully added.
-  bool AddWindowEntryToMenu(sessions::TabRestoreService::Window* window,
+  bool AddWindowEntryToMenu(sessions::tab_restore::Window* window,
                             NSMenu* menu,
                             NSInteger tag,
                             NSInteger index);
 
   // Adds an item for the group entry with a submenu containing its tabs.
   // Returns whether the item was successfully added.
-  bool AddGroupEntryToMenu(sessions::TabRestoreService::Group* group,
+  bool AddGroupEntryToMenu(sessions::tab_restore::Group* group,
                            NSMenu* menu,
                            NSInteger tag,
                            NSInteger index);
@@ -207,8 +212,7 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   int AddTabsToSubmenu(
       NSMenu* submenu,
       HistoryItem* item,
-      const std::vector<std::unique_ptr<sessions::TabRestoreService::Tab>>&
-          tabs);
+      const std::vector<std::unique_ptr<sessions::tab_restore::Tab>>& tabs);
 
   // Called by the ctor if |service_| is ready at the time, or by a
   // notification receiver. Finishes initialization tasks by subscribing for
@@ -227,7 +231,8 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
 
   // Creates a HistoryItem* for the given tab entry.
   std::unique_ptr<HistoryItem> HistoryItemForTab(
-      const sessions::TabRestoreService::Tab& entry);
+      const sessions::tab_restore::Tab& entry,
+      bool attach_group_icon);
 
   // Helper function that sends an async request to the FaviconService to get
   // an icon. The callback will update the NSMenuItem directly.
@@ -249,14 +254,15 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   friend class ::HistoryMenuBridgeLifetimeTest;
   friend class HistoryMenuCocoaControllerTest;
 
+  void FinishCreateMenu();
+
   // history::HistoryServiceObserver:
   void OnURLVisited(history::HistoryService* history_service,
-                    const history::URLRow& url_row,
-                    const history::VisitRow& new_visit) override;
+                    const history::VisitedURLInfo& visited_url_info) override;
   void OnURLsModified(history::HistoryService* history_service,
                       const history::URLRows& changed_urls) override;
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void OnHistoryServiceLoaded(history::HistoryService* service) override;
   void HistoryServiceBeingDeleted(history::HistoryService* service) override;
 
@@ -267,7 +273,7 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   // Returns if the given menu item should be visible for the current profile.
   bool ShouldMenuItemBeVisible(NSMenuItem* item);
 
-  base::scoped_nsobject<HistoryMenuCocoaController> controller_;  // strong
+  HistoryMenuCocoaController* __strong controller_;
 
   raw_ptr<Profile> profile_;                                            // weak
   raw_ptr<history::HistoryService> history_service_ = nullptr;          // weak
@@ -280,6 +286,9 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   std::unique_ptr<ScopedProfileKeepAlive> tab_restore_service_keep_alive_;
 
   base::CancelableTaskTracker cancelable_task_tracker_;
+
+  // A timer used to coalesce repeated calls to CreateMenu().
+  base::OneShotTimer finish_create_menu_timer_;
 
   // Mapping of NSMenuItems to HistoryItems.
   std::map<NSMenuItem*, std::unique_ptr<HistoryItem>> menu_item_map_;
@@ -296,7 +305,7 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
   bool is_menu_open_ = false;
 
   // The default favicon if a HistoryItem does not have one.
-  base::scoped_nsobject<NSImage> default_favicon_;
+  NSImage* __strong default_favicon_;
 
   base::ScopedObservation<history::HistoryService,
                           history::HistoryServiceObserver>

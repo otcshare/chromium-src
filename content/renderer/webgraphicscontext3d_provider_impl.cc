@@ -11,17 +11,17 @@
 #include "cc/tiles/gpu_image_decode_cache.h"
 #include "content/public/common/content_switches.h"
 #include "gpu/command_buffer/client/context_support.h"
-#include "gpu/command_buffer/client/gl_helper.h"
 #include "gpu/config/gpu_feature_info.h"
-#include "media/renderers/paint_canvas_video_renderer.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 
 namespace content {
 
 WebGraphicsContext3DProviderImpl::WebGraphicsContext3DProviderImpl(
-    scoped_refptr<viz::ContextProviderCommandBuffer> provider)
-    : provider_(std::move(provider)) {}
+    scoped_refptr<viz::ContextProviderCommandBuffer> provider,
+    scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner)
+    : provider_(std::move(provider)),
+      reply_task_runner_(std::move(reply_task_runner)) {}
 
 WebGraphicsContext3DProviderImpl::~WebGraphicsContext3DProviderImpl() {
   provider_->RemoveObserver(this);
@@ -33,6 +33,9 @@ bool WebGraphicsContext3DProviderImpl::BindToCurrentSequence() {
   // Call AddObserver here instead of in constructor so that it's called on the
   // correct thread.
   provider_->AddObserver(this);
+  if (reply_task_runner_) {
+    provider_->SetReplyTaskRunner(reply_task_runner_);
+  }
   return provider_->BindToCurrentSequence() == gpu::ContextResult::kSuccess;
 }
 
@@ -67,10 +70,6 @@ gpu::ContextSupport* WebGraphicsContext3DProviderImpl::ContextSupport() {
 bool WebGraphicsContext3DProviderImpl::IsContextLost() {
   return RasterInterface() &&
          RasterInterface()->GetGraphicsResetStatusKHR() != GL_NO_ERROR;
-}
-
-GrDirectContext* WebGraphicsContext3DProviderImpl::GetGrContext() {
-  return provider_->GrContext();
 }
 
 const gpu::Capabilities& WebGraphicsContext3DProviderImpl::GetCapabilities()
@@ -143,14 +142,6 @@ WebGraphicsContext3DProviderImpl::GetWebglPreferences() const {
   return prefs;
 }
 
-gpu::GLHelper* WebGraphicsContext3DProviderImpl::GetGLHelper() {
-  if (!gl_helper_) {
-    gl_helper_ = std::make_unique<gpu::GLHelper>(provider_->ContextGL(),
-                                                 provider_->ContextSupport());
-  }
-  return gl_helper_.get();
-}
-
 void WebGraphicsContext3DProviderImpl::SetLostContextCallback(
     base::RepeatingClosure c) {
   context_lost_callback_ = std::move(c);
@@ -168,8 +159,6 @@ void WebGraphicsContext3DProviderImpl::OnContextLost() {
 
 cc::ImageDecodeCache* WebGraphicsContext3DProviderImpl::ImageDecodeCache(
     SkColorType color_type) {
-  DCHECK(GetCapabilities().supports_oop_raster ||
-         GetGrContext()->colorTypeSupportedAsImage(color_type));
   auto cache_iterator = image_decode_cache_map_.find(color_type);
   if (cache_iterator != image_decode_cache_map_.end())
     return cache_iterator->second.get();
@@ -179,13 +168,10 @@ cc::ImageDecodeCache* WebGraphicsContext3DProviderImpl::ImageDecodeCache(
   // budget in cc::DecodedDrawImage.
   static const size_t kMaxWorkingSetBytes = 64 * 1024 * 1024;
 
-  // TransferCache is used only with OOP raster.
-  const bool use_transfer_cache = GetCapabilities().supports_oop_raster;
-
   auto insertion_result = image_decode_cache_map_.emplace(
       color_type,
       std::make_unique<cc::GpuImageDecodeCache>(
-          provider_.get(), use_transfer_cache, color_type, kMaxWorkingSetBytes,
+          provider_.get(), color_type, kMaxWorkingSetBytes,
           provider_->ContextCapabilities().max_texture_size, nullptr));
   DCHECK(insertion_result.second);
   cache_iterator = insertion_result.first;
@@ -195,13 +181,6 @@ cc::ImageDecodeCache* WebGraphicsContext3DProviderImpl::ImageDecodeCache(
 gpu::SharedImageInterface*
 WebGraphicsContext3DProviderImpl::SharedImageInterface() {
   return provider_->SharedImageInterface();
-}
-
-void WebGraphicsContext3DProviderImpl::CopyVideoFrame(
-    media::PaintCanvasVideoRenderer* video_renderer,
-    media::VideoFrame* video_frame,
-    cc::PaintCanvas* canvas) {
-  video_renderer->Copy(video_frame, canvas, provider_.get());
 }
 
 viz::RasterContextProvider*

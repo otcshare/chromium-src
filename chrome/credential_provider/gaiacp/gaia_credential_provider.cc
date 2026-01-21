@@ -4,12 +4,16 @@
 
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
 
+#include <credentialprovider.h>
+#include <shlguid.h>
+
+#include <algorithm>
 #include <iomanip>
 #include <map>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
@@ -25,6 +29,7 @@
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider_i.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
+#include "chrome/credential_provider/gaiacp/os_gaia_user_manager.h"
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 #include "chrome/credential_provider/gaiacp/reauth_credential.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
@@ -155,7 +160,7 @@ BackgroundTokenHandleUpdater::BackgroundTokenHandleUpdater(
 }
 
 BackgroundTokenHandleUpdater::~BackgroundTokenHandleUpdater() {
-  if (token_update_thread_.IsValid()) {
+  if (token_update_thread_.is_valid()) {
     // Tell the background thread to quit and then make sure it does.  This
     // prevents it from accessing data members that have been freed.
     token_update_quit_event_.Signal();
@@ -175,8 +180,9 @@ bool BackgroundTokenHandleUpdater::IsAuthEnforcedOnAssociatedUsers() {
     const std::wstring& sid = sid_to_association.first;
     // Checks if the login UI was already refreshed due to
     // auth enforcements on this sid.
-    if (reauth_sids_ != nullptr && base::Contains(*reauth_sids_, sid))
+    if (reauth_sids_ != nullptr && std::ranges::contains(*reauth_sids_, sid)) {
       continue;
+    }
 
     // Return true if the associated user sid has auth enforced.
     if (AssociatedUserValidator::Get()->IsAuthEnforcedForUser(sid)) {
@@ -310,9 +316,9 @@ void CGaiaCredentialProvider::ProviderConcurrentState::InternalReset() {
   auto_logon_credential_.Reset();
 }
 
-CGaiaCredentialProvider::CGaiaCredentialProvider() {}
+CGaiaCredentialProvider::CGaiaCredentialProvider() = default;
 
-CGaiaCredentialProvider::~CGaiaCredentialProvider() {}
+CGaiaCredentialProvider::~CGaiaCredentialProvider() = default;
 
 HRESULT CGaiaCredentialProvider::FinalConstruct() {
   LOGFN(VERBOSE);
@@ -694,7 +700,16 @@ HRESULT CGaiaCredentialProvider::SetUsageScenario(
   cpus_flags_ = flags;
 
   LOGFN(VERBOSE) << " cpu=" << cpus << " flags=" << std::setbase(16) << flags;
-  return IsUsageScenarioSupported(cpus_) ? S_OK : E_NOTIMPL;
+  if (IsUsageScenarioSupported(cpus_)) {
+    HRESULT hr = credential_provider::OSGaiaUserManager::Get()
+                     ->ChangeGaiaUserPasswordIfNeeded();
+    if (FAILED(hr)) {
+      LOGFN(ERROR) << "ChangeGaiaUserPasswordIfNeeded failed. hr=" << putHR(hr);
+    }
+    return S_OK;
+  }
+
+  return E_NOTIMPL;
 }
 
 HRESULT CGaiaCredentialProvider::SetSerialization(
@@ -788,7 +803,7 @@ HRESULT CGaiaCredentialProvider::GetFieldDescriptorAt(
     *ppcpfd = reinterpret_cast<CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR*>(
         ::CoTaskMemAlloc(sizeof(**ppcpfd)));
     if (*ppcpfd) {
-      **ppcpfd = g_field_desc[index];
+      **ppcpfd = UNSAFE_TODO(g_field_desc[index]);
       // The password field has special greyed out text that is not set through
       // calls to ICredentialProviderCredential::GetStringValue so we need to
       // localize it manually here.

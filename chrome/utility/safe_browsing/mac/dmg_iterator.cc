@@ -20,29 +20,22 @@ DMGIterator::DMGIterator(ReadStream* stream)
       hfs_() {
 }
 
-DMGIterator::~DMGIterator() {}
+DMGIterator::~DMGIterator() = default;
 
 bool DMGIterator::Open() {
-  bool udif_success = udif_.Parse();
-  base::UmaHistogramBoolean("SBClientDownload.DmgParsedUdif", udif_success);
-  if (!udif_success)
+  if (!udif_.Parse()) {
     return false;
+  }
 
   // Collect all the HFS partitions up-front. The data are accessed lazily, so
   // this is relatively inexpensive.
-  bool has_apfs = false;
   for (size_t i = 0; i < udif_.GetNumberOfPartitions(); ++i) {
     std::unique_ptr<ReadStream> partition = udif_.GetPartitionReadStream(i);
     HFSIterator hfs(partition.get());
     if (hfs.Open()) {
       partitions_.push_back(std::move(partition));
     }
-
-    if (udif_.GetPartitionType(i) == "Apple_APFS") {
-      has_apfs = true;
-    }
   }
-  base::UmaHistogramBoolean("SBClientDownload.DmgHasAPFS", has_apfs);
 
   return true;
 }

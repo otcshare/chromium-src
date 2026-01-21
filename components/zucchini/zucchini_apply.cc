@@ -9,9 +9,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "components/zucchini/disassembler.h"
 #include "components/zucchini/element_detection.h"
 #include "components/zucchini/equivalence_map.h"
@@ -29,30 +29,31 @@ bool ApplyEquivalenceAndExtraData(ConstBufferView old_image,
   for (auto equivalence = equiv_source.GetNext(); equivalence.has_value();
        equivalence = equiv_source.GetNext()) {
     MutableBufferView::iterator next_dst_it =
-        new_image.begin() + equivalence->dst_offset;
+        UNSAFE_TODO(new_image.begin() + equivalence->dst_offset);
     CHECK(next_dst_it >= dst_it);
 
     offset_t gap = static_cast<offset_t>(next_dst_it - dst_it);
-    absl::optional<ConstBufferView> extra_data = extra_data_source.GetNext(gap);
+    std::optional<ConstBufferView> extra_data = extra_data_source.GetNext(gap);
     if (!extra_data) {
       LOG(ERROR) << "Error reading extra_data";
       return false;
     }
     // |extra_data| length is based on what was parsed from the patch so this
     // copy should be valid.
-    dst_it = base::ranges::copy(*extra_data, dst_it);
+    dst_it = std::ranges::copy(*extra_data, dst_it).out;
     CHECK_EQ(dst_it, next_dst_it);
-    dst_it = std::copy_n(old_image.begin() + equivalence->src_offset,
-                         equivalence->length, dst_it);
-    CHECK_EQ(dst_it, next_dst_it + equivalence->length);
+    dst_it =
+        std::copy_n(UNSAFE_TODO(old_image.begin() + equivalence->src_offset),
+                    equivalence->length, dst_it);
+    UNSAFE_TODO(CHECK_EQ(dst_it, next_dst_it + equivalence->length));
   }
   offset_t gap = static_cast<offset_t>(new_image.end() - dst_it);
-  absl::optional<ConstBufferView> extra_data = extra_data_source.GetNext(gap);
+  std::optional<ConstBufferView> extra_data = extra_data_source.GetNext(gap);
   if (!extra_data) {
     LOG(ERROR) << "Error reading extra_data";
     return false;
   }
-  base::ranges::copy(*extra_data, dst_it);
+  std::ranges::copy(*extra_data, dst_it);
   if (!equiv_source.Done() || !extra_data_source.Done()) {
     LOG(ERROR) << "Found trailing equivalence and extra_data";
     return false;

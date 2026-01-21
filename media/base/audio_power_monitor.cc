@@ -8,7 +8,6 @@
 #include <cmath>
 
 #include "base/check_op.h"
-#include "base/cxx17_backports.h"
 #include "base/time/time.h"
 #include "media/base/audio_bus.h"
 #include "media/base/vector_math.h"
@@ -41,16 +40,18 @@ void AudioPowerMonitor::Reset() {
 void AudioPowerMonitor::Scan(const AudioBus& buffer, int num_frames) {
   DCHECK_LE(num_frames, buffer.frames());
   const int num_channels = buffer.channels();
-  if (num_frames <= 0 || num_channels <= 0)
+  if (num_frames <= 0 || num_channels <= 0) {
     return;
+  }
 
   // Calculate a new average power by applying a first-order low-pass filter
   // (a.k.a. an exponentially-weighted moving average) over the audio samples in
   // each channel in |buffer|.
   float sum_power = 0.0f;
-  for (int i = 0; i < num_channels; ++i) {
+  for (auto channel : buffer.AllChannels()) {
     const std::pair<float, float> ewma_and_max = vector_math::EWMAAndMaxPower(
-        average_power_, buffer.channel(i), num_frames, sample_weight_);
+        average_power_, channel.first(static_cast<size_t>(num_frames)),
+        sample_weight_);
     // If data in audio buffer is garbage, ignore its effect on the result.
     if (!std::isfinite(ewma_and_max.first)) {
       sum_power += average_power_;
@@ -61,7 +62,7 @@ void AudioPowerMonitor::Scan(const AudioBus& buffer, int num_frames) {
   }
 
   // Update accumulated results, with clamping for sanity.
-  average_power_ = base::clamp(sum_power / num_channels, 0.0f, 1.0f);
+  average_power_ = std::clamp(sum_power / num_channels, 0.0f, 1.0f);
 
   // Push results for reading by other threads, non-blocking.
   if (reading_lock_.Try()) {

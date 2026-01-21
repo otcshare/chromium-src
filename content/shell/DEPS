@@ -30,15 +30,17 @@ include_rules = [
   # Content Shell can depend on more components than content/, since:
   #   1) it's an example browser
   #   2) it's not linked into the content library
-  "+components/embedder_support",
+  "+components/cached_flags",
   "+components/custom_handlers",
   "+components/crash",
   "+components/download",
+  "+components/embedder_support",
   "+components/keyed_service/core",
+  "+components/network_session_configurator/browser",
   "+components/performance_manager",
   "+components/permissions",
+  "+components/strings/grit",
   "+components/url_formatter",
-  "+components/network_session_configurator/browser",
   "+components/viz/common/resources",
   "+components/viz/common/switches.h",
   "+services/test/echo",
@@ -53,5 +55,10 @@ include_rules = [
 specific_include_rules = {
   "shell_views\.cc": [
     "+ui/wm/test"
+  ],
+
+  # Content shell for this platform has UI for starting traces.
+  "shell_platform_delegate_ios.mm": [
+    "+services/tracing/public",
   ],
 }

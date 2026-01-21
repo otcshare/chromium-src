@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors
+// Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -61,6 +61,13 @@ chrome.test.notifyPass = function(message) {};
  * @see https://developer.chrome.com/extensions/test#method-log
  */
 chrome.test.log = function(message) {};
+
+/**
+ * Open file: URLs for tests.
+ * @param {string} url
+ * @see https://developer.chrome.com/extensions/test#method-openFileUrl
+ */
+chrome.test.openFileUrl = function(url) {};
 
 /**
  * Sends a string message to the browser process, generating a Notification that
@@ -129,10 +136,20 @@ chrome.test.checkDeepEq = function(expected, actual) {};
 /**
  * @param {*=} expected
  * @param {*=} actual
- * @param {string=} message
+ * @param {string=} message A custom error message to print out with the test
+ *     failure, if any.
  * @see https://developer.chrome.com/extensions/test#method-assertEq
  */
 chrome.test.assertEq = function(expected, actual, message) {};
+
+/**
+ * @param {*=} expected
+ * @param {*=} actual
+ * @param {string=} message A custom error message to print out with the test
+ *     failure, if any.
+ * @see https://developer.chrome.com/extensions/test#method-assertNe
+ */
+chrome.test.assertNe = function(expected, actual, message) {};
 
 /**
  * @see https://developer.chrome.com/extensions/test#method-assertNoLastError
@@ -254,15 +271,6 @@ chrome.test.loadScript = function(scriptUrl) {};
  * @see https://developer.chrome.com/extensions/test#method-setExceptionHandler
  */
 chrome.test.setExceptionHandler = function(handler) {};
-
-/**
- * Returns the wake-event-page API function, which can be called to wake up the
- * extension's event page.
- * @return {function(): void} The API function which wakes the extension's event
- *     page
- * @see https://developer.chrome.com/extensions/test#method-getWakeEventPage
- */
-chrome.test.getWakeEventPage = function() {};
 
 /**
  * Used to test sending messages to extensions.

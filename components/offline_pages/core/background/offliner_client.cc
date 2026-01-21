@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/offline_pages/core/background/save_page_request.h"
 
 namespace offline_pages {
@@ -38,8 +38,9 @@ bool OfflinerClient::LoadAndSave(const SavePageRequest& request,
 }
 
 void OfflinerClient::Stop(Offliner::RequestStatus status) {
-  if (!active_request_ || stopping_)
+  if (!active_request_ || stopping_) {
     return;
+  }
   if (offliner_->Cancel(base::BindOnce(&OfflinerClient::CancelComplete,
                                        base::Unretained(this), status))) {
     stopping_ = true;

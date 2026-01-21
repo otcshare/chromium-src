@@ -2,8 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-USE_PYTHON3 = True
-
+import os
 
 def _GenerateTestCommand(input_api, output_api, file_name, affected_list):
     if not input_api.AffectedFiles(
@@ -20,12 +19,13 @@ def _GenerateTestCommand(input_api, output_api, file_name, affected_list):
                                        file_name)
     cmd = [input_api.python3_executable, test_path]
 
-    # Adds "//third_party" to the path, so that the jinja2 module can be found
-    # during import.
+    # Adds paths for jinja2 and pyjson5
     env = input_api.environ.copy()
     import_path = [
         input_api.os_path.join(input_api.change.RepositoryRoot(),
-                               'third_party')
+                               'third_party'),
+        input_api.os_path.join(input_api.change.RepositoryRoot(),
+                               'third_party', 'pyjson5', 'src')
     ]
     if env.get('PYTHONPATH'):
         import_path.append(env.get('PYTHONPATH'))
@@ -37,6 +37,13 @@ def _GenerateTestCommand(input_api, output_api, file_name, affected_list):
 
 
 def _RunTests(input_api, output_api):
+    # The presubmit tests are all run together with the module scheme set to
+    # "flat" at the recipe level. But these presubmit tests run through
+    # a test runner that parses the test as a "pyunit" test. The environment
+    # variable forces the test runner to parse the tests as a flat test,
+    # otherwise resultdb will give an error saying a field in the "flat" type
+    # is unexpectedly not empty.
+    os.environ['RESULTDB_MODULE_SCHEME'] = 'flat'
     tests = [{
         'file_name': 'json5_generator_unittest.py',
         'affected_list': [r'.*json5_generator.*', r'.*\btests[\\\/].*']
@@ -49,9 +56,6 @@ def _RunTests(input_api, output_api):
     }, {
         'file_name': 'make_document_policy_features_tests.py',
         'affected_list': [r'.*make_document_policy_features.*']
-    }, {
-        'file_name': 'make_permissions_policy_features_tests.py',
-        'affected_list': [r'.*make_permissions_policy_features.*']
     }]
     test_commands = []
     for test in tests:

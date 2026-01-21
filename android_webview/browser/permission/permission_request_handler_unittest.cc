@@ -10,8 +10,8 @@
 #include "android_webview/browser/permission/aw_permission_request.h"
 #include "android_webview/browser/permission/aw_permission_request_delegate.h"
 #include "android_webview/browser/permission/permission_request_handler_client.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -75,13 +75,13 @@ class TestPermissionRequestHandlerClient
   const Permission& canceled_permission() { return canceled_permission_; }
 
   void Grant() {
-    request_->OnAccept(nullptr, nullptr, true);
+    request_->OnAccept(nullptr, true);
     request_->DeleteThis();
     request_ = nullptr;
   }
 
   void Deny() {
-    request_->OnAccept(nullptr, nullptr, false);
+    request_->OnAccept(nullptr, false);
     request_->DeleteThis();
     request_ = nullptr;
   }

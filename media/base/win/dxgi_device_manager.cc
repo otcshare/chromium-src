@@ -8,10 +8,12 @@
 #include <mferror.h>
 #include <mfreadwrite.h>
 
+#include <utility>
+
 #include "base/check.h"
 #include "base/logging.h"
-#include "base/win/windows_version.h"
 #include "media/base/win/mf_helpers.h"
+#include "media/base/win/mf_initializer.h"
 
 namespace media {
 
@@ -59,12 +61,8 @@ Microsoft::WRL::ComPtr<ID3D11Device> DXGIDeviceScopedHandle::GetDevice() {
 }
 
 scoped_refptr<DXGIDeviceManager> DXGIDeviceManager::Create(CHROME_LUID luid) {
-  if (base::win::GetVersion() < base::win::Version::WIN8 ||
-      (!::GetModuleHandle(L"mfplat.dll") && !::LoadLibrary(L"mfplat.dll"))) {
-    // The MF DXGI Device manager is only supported on Win8 or later
-    // Additionally, it is not supported when mfplat.dll isn't available
-    DLOG(ERROR)
-        << "MF DXGI Device Manager not supported on current version of Windows";
+  if (!InitializeMediaFoundation()) {
+    DLOG(ERROR) << "MF DXGI Device Manager is not available";
     return nullptr;
   }
   Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager;
@@ -72,8 +70,9 @@ scoped_refptr<DXGIDeviceManager> DXGIDeviceManager::Create(CHROME_LUID luid) {
   HRESULT hr = MFCreateDXGIDeviceManager(&d3d_device_reset_token,
                                          &mf_dxgi_device_manager);
   RETURN_ON_HR_FAILURE(hr, "Failed to create MF DXGI device manager", nullptr);
-  auto dxgi_device_manager = base::WrapRefCounted(new DXGIDeviceManager(
-      std::move(mf_dxgi_device_manager), d3d_device_reset_token, luid));
+  auto dxgi_device_manager = base::MakeRefCounted<DXGIDeviceManager>(
+      base::PassKey<DXGIDeviceManager>(), std::move(mf_dxgi_device_manager),
+      d3d_device_reset_token, luid);
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d_device;
   if (dxgi_device_manager &&
@@ -85,7 +84,31 @@ scoped_refptr<DXGIDeviceManager> DXGIDeviceManager::Create(CHROME_LUID luid) {
   return dxgi_device_manager;
 }
 
+scoped_refptr<DXGIDeviceManager> DXGIDeviceManager::Create(
+    CHROME_LUID luid,
+    ID3D11Device* shared_device) {
+  if (!InitializeMediaFoundation()) {
+    DLOG(ERROR) << "MF DXGI Device Manager is not available";
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager;
+  UINT d3d_device_reset_token = 0;
+  HRESULT hr = MFCreateDXGIDeviceManager(&d3d_device_reset_token,
+                                         &mf_dxgi_device_manager);
+  RETURN_ON_HR_FAILURE(hr, "Failed to create MF DXGI device manager", nullptr);
+  auto dxgi_device_manager = base::MakeRefCounted<DXGIDeviceManager>(
+      base::PassKey<DXGIDeviceManager>(), std::move(mf_dxgi_device_manager),
+      d3d_device_reset_token, luid);
+  if (dxgi_device_manager &&
+      FAILED(dxgi_device_manager->ResetDeviceWithSharedDevice(shared_device))) {
+    return nullptr;
+  }
+  return dxgi_device_manager;
+}
+
 DXGIDeviceManager::DXGIDeviceManager(
+    base::PassKey<DXGIDeviceManager>,
     Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager,
     UINT d3d_device_reset_token,
     CHROME_LUID luid)
@@ -94,6 +117,15 @@ DXGIDeviceManager::DXGIDeviceManager(
       luid_(luid) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
+
+DXGIDeviceManager::DXGIDeviceManager(
+    Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager,
+    UINT d3d_device_reset_token,
+    CHROME_LUID luid)
+    : DXGIDeviceManager(base::PassKey<DXGIDeviceManager>(),
+                        std::move(mf_dxgi_device_manager),
+                        d3d_device_reset_token,
+                        luid) {}
 
 DXGIDeviceManager::~DXGIDeviceManager() = default;
 
@@ -145,6 +177,15 @@ HRESULT DXGIDeviceManager::ResetDevice(
   RETURN_IF_FAILED(d3d_device_multithread->SetMultithreadProtected(TRUE));
   hr = mf_dxgi_device_manager_->ResetDevice(d3d_device.Get(),
                                             d3d_device_reset_token_);
+  RETURN_ON_HR_FAILURE(hr, "Failed to reset device on MF DXGI device manager",
+                       hr);
+  return S_OK;
+}
+
+HRESULT DXGIDeviceManager::ResetDeviceWithSharedDevice(
+    ID3D11Device* shared_device) {
+  HRESULT hr = mf_dxgi_device_manager_->ResetDevice(shared_device,
+                                                    d3d_device_reset_token_);
   RETURN_ON_HR_FAILURE(hr, "Failed to reset device on MF DXGI device manager",
                        hr);
   return S_OK;

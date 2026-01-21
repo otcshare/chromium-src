@@ -36,8 +36,7 @@ const char kDriveV2UploadExistingFileUrlPrefix[] = "upload/drive/v2/files/";
 const char kDriveV2BatchUploadUrl[] = "upload/drive";
 const char kDriveV2PermissionsUrlFormat[] = "drive/v2/files/%s/permissions";
 const char kDriveV2DownloadUrlFormat[] = "drive/v2/files/%s?alt=media";
-const char kDriveV2ThumbnailUrlFormat[] = "d/%s=w%d-h%d";
-const char kDriveV2ThumbnailUrlWithCropFormat[] = "d/%s=w%d-h%d-c";
+const char kDriveV2ThumbnailUrlFormat[] = "d/%s=w%d-h%d%s";
 const char kDriveV2TeamDrivesUrl[] = "drive/v2/teamdrives";
 
 const char kIncludeTeamDriveItems[] = "includeTeamDriveItems";
@@ -66,7 +65,6 @@ const char* GetCorporaString(FilesListCorpora corpora) {
       return kCorporaAllTeamDrives;
   }
   NOTREACHED();
-  return kCorporaDefault;
 }
 
 }  // namespace
@@ -103,9 +101,9 @@ GURL DriveApiUrlGenerator::GetFilesGetUrl(const std::string& file_id,
     // GURL::spec() always adds the trailing slash. Moreover, ports are
     // currently not supported.
     DCHECK(!embed_origin.has_port());
-    DCHECK(!embed_origin.has_path() || embed_origin.path() == "/");
+    DCHECK(!embed_origin.has_path() || embed_origin.GetPath() == "/");
     const std::string serialized_embed_origin =
-        embed_origin.scheme() + "://" + embed_origin.host();
+        embed_origin.GetScheme() + "://" + embed_origin.GetHost();
     url = net::AppendOrReplaceQueryParameter(
         url, "embedOrigin", serialized_embed_origin);
   }
@@ -272,8 +270,8 @@ GURL DriveApiUrlGenerator::GetInitiateUploadExistingFileUrl(
   return url;
 }
 
-GURL DriveApiUrlGenerator::GetMultipartUploadNewFileUrl(
-    bool set_modified_date) const {
+GURL DriveApiUrlGenerator::GetMultipartUploadNewFileUrl(bool set_modified_date,
+                                                        bool convert) const {
   GURL url = AddMultipartUploadParam(
       base_url_.Resolve(kDriveV2UploadNewFileUrl));
 
@@ -281,6 +279,9 @@ GURL DriveApiUrlGenerator::GetMultipartUploadNewFileUrl(
   // setModifiedDate is "false" by default.
   if (set_modified_date)
     url = net::AppendOrReplaceQueryParameter(url, "setModifiedDate", "true");
+  if (convert) {
+    url = net::AppendOrReplaceQueryParameter(url, "convert", "true");
+  }
 
   return url;
 }
@@ -321,8 +322,8 @@ GURL DriveApiUrlGenerator::GetThumbnailUrl(const std::string& resource_id,
                                            int height,
                                            bool crop) const {
   return base_thumbnail_url_.Resolve(base::StringPrintf(
-      crop ? kDriveV2ThumbnailUrlWithCropFormat : kDriveV2ThumbnailUrlFormat,
-      base::EscapePath(resource_id).c_str(), width, height));
+      kDriveV2ThumbnailUrlFormat, base::EscapePath(resource_id).c_str(), width,
+      height, crop ? "-c" : ""));
 }
 
 GURL DriveApiUrlGenerator::GetBatchUploadUrl() const {

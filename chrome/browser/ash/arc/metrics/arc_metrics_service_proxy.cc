@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/arc/metrics/arc_metrics_service_proxy.h"
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs_factory.h"
@@ -14,6 +13,7 @@
 #include "chrome/browser/memory/memory_kills_monitor.h"
 #include "chrome/browser/memory/oom_kills_monitor.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 
 // Enable VLOG level 1.
 #undef ENABLED_VLOG_LEVEL
@@ -58,10 +58,14 @@ ArcMetricsServiceProxy::ArcMetricsServiceProxy(
     ArcBridgeService* arc_bridge_service)
     : arc_app_list_prefs_(ArcAppListPrefs::Get(context)),
       arc_metrics_service_(ArcMetricsService::GetForBrowserContext(context)) {
+  // Exceptionally allow `g_browser_process` here since this class is created by
+  // `ArcMetricsServiceProxyFactory`, which lives in a base::Singleton.
+  PrefService* local_state = g_browser_process->local_state();
+
   arc_app_list_prefs_->AddObserver(this);
   arc::ArcSessionManager::Get()->AddObserver(this);
   arc_metrics_service_->AddAppKillObserver(this);
-  arc_metrics_service_->SetPrefService(g_browser_process->local_state());
+  arc_metrics_service_->SetPrefService(local_state);
 }
 
 void ArcMetricsServiceProxy::Shutdown() {
@@ -115,6 +119,11 @@ void ArcMetricsServiceProxy::OnArcMemoryPressureKill(int count,
   for (int i = 0; i < count; i++) {
     memory::MemoryKillsMonitor::LogLowMemoryKill("APP_PRESSURE", 0);
   }
+}
+
+// static
+void ArcMetricsServiceProxy::EnsureFactoryBuilt() {
+  ArcMetricsServiceProxyFactory::GetInstance();
 }
 
 }  // namespace arc

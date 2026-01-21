@@ -57,8 +57,9 @@ ExecutableMetadataServiceImpl::GetAllExecutableMetadata(
   for (const auto& file_path : file_paths) {
     ExecutableMetadata executable_metadata;
 
-    if (files_are_running_map.contains(file_path)) {
-      executable_metadata.is_running = files_are_running_map[file_path];
+    if (auto it = files_are_running_map.find(file_path);
+        it != files_are_running_map.end()) {
+      executable_metadata.is_running = it->second;
     }
 
     auto product_metadata = platform_delegate_->GetProductMetadata(file_path);
@@ -67,8 +68,13 @@ ExecutableMetadataServiceImpl::GetAllExecutableMetadata(
       executable_metadata.version = product_metadata->version;
     }
 
-    executable_metadata.public_keys_hashes =
-        platform_delegate_->GetSigningCertificatesPublicKeyHashes(file_path);
+    auto public_keys =
+        platform_delegate_->GetSigningCertificatesPublicKeys(file_path);
+    if (public_keys) {
+      executable_metadata.public_keys_hashes = public_keys->hashes;
+      executable_metadata.is_os_verified = public_keys->is_os_verified;
+      executable_metadata.subject_name = public_keys->subject_name;
+    }
 
     file_paths_to_metadata_map[file_path] = executable_metadata;
   }

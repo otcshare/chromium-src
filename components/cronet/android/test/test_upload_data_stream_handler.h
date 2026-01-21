@@ -9,8 +9,9 @@
 
 #include <memory>
 
+#include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/upload_data_stream.h"
@@ -26,8 +27,8 @@ class TestUploadDataStreamHandler {
   TestUploadDataStreamHandler(
       std::unique_ptr<net::UploadDataStream> upload_data_stream,
       JNIEnv* env,
-      jobject jtest_upload_data_stream_handler,
-      jlong jcontext_adapter);
+      const base::android::JavaRef<jobject>& jtest_upload_data_stream_handler,
+      int64_t jcontext_adapter);
 
   TestUploadDataStreamHandler(const TestUploadDataStreamHandler&) = delete;
   TestUploadDataStreamHandler& operator=(const TestUploadDataStreamHandler&) =
@@ -36,28 +37,23 @@ class TestUploadDataStreamHandler {
   ~TestUploadDataStreamHandler();
 
   // Destroys |network_thread_| created by this class.
-  void Destroy(JNIEnv* env,
-               const base::android::JavaParamRef<jobject>& jcaller);
+  void Destroy(JNIEnv* env);
 
   // Posts a task to |network_thread_| to call the corresponding method of
   // net::UploadDataStream on |upload_data_stream_|.
 
-  void Init(JNIEnv* env, const base::android::JavaParamRef<jobject>& jcaller);
-  void Read(JNIEnv* env, const base::android::JavaParamRef<jobject>& jcaller);
-  void Reset(JNIEnv* env, const base::android::JavaParamRef<jobject>& jcaller);
+  void Init(JNIEnv* env);
+  void Read(JNIEnv* env);
+  void Reset(JNIEnv* env);
 
   // Posts a task to |network_thread_| to check whether init complete callback
   // has been invoked by net::UploadDataStream asynchronously, and notifies the
   // Java side of the result.
-  void CheckInitCallbackNotInvoked(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller);
+  void CheckInitCallbackNotInvoked(JNIEnv* env);
   // Posts a task to |network_thread_| to check whether read complete callback
   // has been invoked by net::UploadDataStream asynchronously, and notifies the
   // Java side of the result.
-  void CheckReadCallbackNotInvoked(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller);
+  void CheckReadCallbackNotInvoked(JNIEnv* env);
 
  private:
   // Complete callbacks that are passed to the |upload_data_stream_|.

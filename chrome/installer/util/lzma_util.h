@@ -5,10 +5,11 @@
 #ifndef CHROME_INSTALLER_UTIL_LZMA_UTIL_H_
 #define CHROME_INSTALLER_UTIL_LZMA_UTIL_H_
 
+#include <optional>
+
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/win/windows_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // The error status of LzmaUtil::Unpack which is used to publish metrics. Do not
 // change the order.
@@ -22,7 +23,7 @@ enum UnPackStatus {
   UNPACK_NO_FILENAME_ERROR = 6,
   UNPACK_CREATE_FILE_ERROR = 7,
   UNPACK_WRITE_FILE_ERROR = 8,
-  UNPACK_SET_FILE_TIME_ERROR = 9,
+  // UNPACK_SET_FILE_TIME_ERROR = 9, Deprecated.
   // UNPACK_CLOSE_FILE_ERROR = 10, Deprecated.
   UNPACK_ALLOCATE_ERROR = 11,
   UNPACK_CRC_ERROR = 12,
@@ -31,10 +32,11 @@ enum UnPackStatus {
   UNPACK_STATUS_COUNT,
 };
 
-// Unpacks the contents of |archive| into |output_dir|. |output_file|, if not
+// Unpacks the contents of `archive` into `output_dir`. `output_file`, if not
 // null, is populated with the name of the last (or only) member extracted from
 // the archive. Returns UNPACK_NO_ERROR on success. Otherwise, returns a status
-// value indicating the operation that failed.
+// value indicating the operation that failed. Existing files in `output_dir`
+// are not overwritten.
 UnPackStatus UnPackArchive(const base::FilePath& archive,
                            const base::FilePath& output_dir,
                            base::FilePath* output_file);
@@ -60,7 +62,7 @@ class LzmaUtilImpl {
   UnPackStatus UnPack(const base::FilePath& location,
                       base::FilePath* output_file);
 
-  absl::optional<DWORD> GetErrorCode() { return error_code_; }
+  std::optional<DWORD> GetErrorCode() { return error_code_; }
 
   void CloseArchive();
 
@@ -69,7 +71,7 @@ class LzmaUtilImpl {
 
  private:
   base::File archive_file_;
-  absl::optional<DWORD> error_code_;
+  std::optional<DWORD> error_code_;
 };
 
 #endif  // CHROME_INSTALLER_UTIL_LZMA_UTIL_H_

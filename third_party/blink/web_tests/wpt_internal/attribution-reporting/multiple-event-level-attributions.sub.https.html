@@ -5,28 +5,26 @@
 <script src="/resources/testdriver-vendor.js"></script>
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
-<script src="resources/helpers.js"></script>
+<script src="/attribution-reporting/resources/helpers.js"></script>
 <body>
 <script>
 attribution_reporting_promise_test(async t => {
-  await registerAttributionSrc(t, {
-    source: {
-      destination: `https://{{host}}`,
-    },
+  const source = {
+    source_event_id: generateSourceEventId(),
+    debug_reporting: true,
+    destination: 'https://{{host}}',
+  };
+  registerAttributionSrc({
+    source,
     method: 'a',
   });
+  await waitForSourceToBeRegistered(source.source_event_id);
 
-  await Promise.all([
-    registerAttributionSrc(t, {trigger: {
-      event_trigger_data: [{trigger_data: '3'}],
-    }}),
-    registerAttributionSrc(t, {trigger: {
-      event_trigger_data: [{trigger_data: '4'}],
-    }}),
-    registerAttributionSrc(t, {trigger: {
-      event_trigger_data: [{trigger_data: '5'}],
-    }}),
-  ]);
+  registerAttributionSrcByImg(createRedirectChain([
+    {trigger: {event_trigger_data: [{trigger_data: '3'}]}},
+    {trigger: {event_trigger_data: [{trigger_data: '4'}]}},
+    {trigger: {event_trigger_data: [{trigger_data: '5'}]}},
+  ]));
 
   const reports = [];
 
@@ -49,14 +47,13 @@ attribution_reporting_promise_test(async t => {
   assert_equals(reports[1].trigger_data, '4');
   assert_equals(reports[2].trigger_data, '5');
 
-  await registerAttributionSrc(t, {
+  registerAttributionSrc({
     trigger: {
       event_trigger_data: [{
         trigger_data: '7'
       }],
       debug_reporting: true,
     },
-    cookie: attributionDebugCookie,
   });
 
   const payload = await pollVerboseDebugReports();

@@ -17,10 +17,20 @@ using ::testing::ElementsAre;
 class RankingClusterFinalizerTest : public ::testing::Test {
  public:
   void SetUp() override {
-    cluster_finalizer_ = std::make_unique<RankingClusterFinalizer>();
+    // Reset config so tests are clean.
+    Config config;
+    SetConfigForTesting(config);
+
+    cluster_finalizer_ = std::make_unique<RankingClusterFinalizer>(
+        ClusteringRequestSource::kJourneysPage);
   }
 
   void TearDown() override { cluster_finalizer_.reset(); }
+
+  void ResetClusterFinalizer(
+      std::unique_ptr<RankingClusterFinalizer> cluster_finalizer) {
+    cluster_finalizer_ = std::move(cluster_finalizer);
+  }
 
   void FinalizeCluster(history::Cluster& cluster) {
     cluster_finalizer_->FinalizeCluster(cluster);
@@ -276,6 +286,55 @@ TEST_F(RankingClusterFinalizerTest, ScoreVisitsOnHasPageTitle) {
                   testing::VisitResult(/*visit_id=*/1, /*score=*/1.0,
                                        /*duplicate_visits=*/{}),
                   testing::VisitResult(/*visit_id=*/2, /*score=*/0.0,
+                                       /*duplicate_visits=*/{}),
+                  testing::VisitResult(/*visit_id=*/3, /*score=*/1.0,
+                                       /*duplicate_visits=*/{}))));
+}
+
+TEST_F(RankingClusterFinalizerTest, ScoreVisitsOnHasUrlKeyedImage) {
+  history::ClusterVisit visit1 = testing::CreateClusterVisit(
+      testing::CreateDefaultAnnotatedVisit(1, GURL("https://foo.com/")),
+      GURL("https://foo.com/"));
+  visit1.annotated_visit.url_row.set_title(u"chocolate");
+
+  history::ClusterVisit visit3 = testing::CreateClusterVisit(
+      testing::CreateDefaultAnnotatedVisit(3, GURL("https://baz.com/")),
+      GURL("https://baz.com/"));
+  visit3.annotated_visit.url_row.set_title(u"vanilla");
+  visit3.annotated_visit.content_annotations.has_url_keyed_image = true;
+  visit3.annotated_visit.visit_row.is_known_to_sync = true;
+
+  history::Cluster cluster;
+  cluster.visits = {visit1, visit3};
+  FinalizeCluster(cluster);
+  EXPECT_THAT(testing::ToVisitResults({cluster}),
+              ElementsAre(ElementsAre(
+                  testing::VisitResult(/*visit_id=*/1, /*score=*/0.4,
+                                       /*duplicate_visits=*/{}),
+                  testing::VisitResult(/*visit_id=*/3, /*score=*/1.0,
+                                       /*duplicate_visits=*/{}))));
+}
+
+TEST_F(RankingClusterFinalizerTest,
+       ScoreVisitsOnHasUrlKeyedImageNotKnownToSyncNotBoosted) {
+  history::ClusterVisit visit1 = testing::CreateClusterVisit(
+      testing::CreateDefaultAnnotatedVisit(1, GURL("https://foo.com/")),
+      GURL("https://foo.com/"));
+  visit1.annotated_visit.url_row.set_title(u"chocolate");
+
+  history::ClusterVisit visit3 = testing::CreateClusterVisit(
+      testing::CreateDefaultAnnotatedVisit(3, GURL("https://baz.com/")),
+      GURL("https://baz.com/"));
+  visit3.annotated_visit.url_row.set_title(u"vanilla");
+  visit3.annotated_visit.content_annotations.has_url_keyed_image = true;
+  visit3.annotated_visit.visit_row.is_known_to_sync = false;
+
+  history::Cluster cluster;
+  cluster.visits = {visit1, visit3};
+  FinalizeCluster(cluster);
+  EXPECT_THAT(testing::ToVisitResults({cluster}),
+              ElementsAre(ElementsAre(
+                  testing::VisitResult(/*visit_id=*/1, /*score=*/1.0,
                                        /*duplicate_visits=*/{}),
                   testing::VisitResult(/*visit_id=*/3, /*score=*/1.0,
                                        /*duplicate_visits=*/{}))));

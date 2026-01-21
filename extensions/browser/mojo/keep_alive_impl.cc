@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_context.h"
 
 namespace extensions {
@@ -40,8 +40,9 @@ void KeepAliveImpl::OnExtensionUnloaded(
     content::BrowserContext* browser_context,
     const Extension* extension,
     UnloadedExtensionReason reason) {
-  if (browser_context == context_ && extension == extension_)
+  if (browser_context == context_ && extension == extension_) {
     delete this;
+  }
 }
 
 void KeepAliveImpl::OnShutdown(ExtensionRegistry* registry) {

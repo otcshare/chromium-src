@@ -16,15 +16,19 @@ ImeTextSpan::ImeTextSpan(Type type,
                          UnderlineStyle underline_style,
                          SkColor background_color,
                          SkColor suggestion_highlight_color,
-                         const std::vector<std::string>& suggestions)
+                         const std::vector<std::string>& suggestions,
+                         SkColor text_color,
+                         bool should_hide_suggestion_menu)
     : type(type),
       start_offset(start_offset),
       end_offset(end_offset),
       thickness(thickness),
       underline_style(underline_style),
+      text_color(text_color),
       background_color(background_color),
       suggestion_highlight_color(suggestion_highlight_color),
-      suggestions(suggestions) {}
+      suggestions(suggestions),
+      should_hide_suggestion_menu(should_hide_suggestion_menu) {}
 
 ImeTextSpan::ImeTextSpan(const ImeTextSpan& rhs) = default;
 

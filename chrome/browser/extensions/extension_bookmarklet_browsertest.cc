@@ -10,7 +10,6 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -35,10 +34,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest,
 
   // Navigate to the extension's page.
   const GURL extension_file_url(extension->GetResourceURL("file.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), extension_file_url));
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), extension_file_url));
 
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* web_contents = GetActiveWebContents();
   const std::u16string expected_title = u"foo";
   ASSERT_EQ(expected_title, web_contents->GetTitle());
 
@@ -47,12 +45,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest,
   const GURL script_url("javascript:void(document.title='Bad Title')");
   NavigateToURLWithDisposition(browser(), script_url,
                                WindowOpenDisposition::CURRENT_TAB,
-                               ui_test_utils::BROWSER_TEST_NONE);
+                               ui_test_utils::BROWSER_TEST_NO_WAIT);
   // Force serialization with the renderer by executing a no-op script.
-  bool result = false;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      web_contents, "domAutomationController.send(true)", &result));
-  EXPECT_TRUE(result);
+  EXPECT_EQ(true, content::EvalJs(web_contents, "true"));
 
   // Expect the title hasn't changed since the javascript URL was blocked
   // from executing.

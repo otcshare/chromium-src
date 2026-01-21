@@ -16,7 +16,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/platform_event.h"
 #include "ui/events/types/event_type.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace gfx {
 class Point;
@@ -31,7 +31,7 @@ class TimeTicks;
 // Utility functions for Windows specific events code.
 namespace ui {
 
-enum class DomCode;
+enum class DomCode : uint32_t;
 
 // Get the EventType from a native event.
 EVENTS_EXPORT EventType EventTypeFromMSG(const CHROME_MSG& native_event);
@@ -92,13 +92,6 @@ GetMousePointerDetailsFromMSG(const CHROME_MSG& native_event);
 // Gets the mouse wheel offsets from a native event.
 EVENTS_EXPORT gfx::Vector2d GetMouseWheelOffsetFromMSG(
     const CHROME_MSG& native_event);
-
-// Returns a copy of |native_event|. Depending on the platform, this copy may
-// need to be deleted with ReleaseCopiedMSGEvent().
-EVENTS_EXPORT CHROME_MSG CopyMSGEvent(const CHROME_MSG& native_event);
-
-// Delete a |native_event| previously created by CopyMSGEvent().
-EVENTS_EXPORT void ReleaseCopiedMSGEvent(const CHROME_MSG& native_event);
 
 // Returns the detailed pointer information for touch events.
 EVENTS_EXPORT PointerDetails

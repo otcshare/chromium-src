@@ -5,11 +5,11 @@
 #ifndef CHROMEOS_SERVICES_TTS_GOOGLE_TTS_STREAM_H_
 #define CHROMEOS_SERVICES_TTS_GOOGLE_TTS_STREAM_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/services/tts/public/mojom/tts_service.mojom.h"
 #include "chromeos/services/tts/tts_player.h"
 #include "library_loaders/libchrometts.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace chromeos {
 namespace tts {
@@ -48,7 +48,7 @@ class GoogleTtsStream : public mojom::GoogleTtsStream {
   void ReadMoreFrames(bool is_first_buffer);
 
   // Owning service.
-  TtsService* owner_;
+  raw_ptr<TtsService> owner_;
 
   // Prebuilt.
   LibChromeTtsLoader libchrometts_;

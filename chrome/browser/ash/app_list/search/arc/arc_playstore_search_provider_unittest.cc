@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/app/arc_playstore_search_request_state.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -18,14 +18,14 @@
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/experiences/arc/app/arc_playstore_search_request_state.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/extension_builder.h"
 
 namespace app_list::test {
 
-// Parameterized by feature ProductivityLauncher.
 class ArcPlayStoreSearchProviderTest : public AppListTestBase {
  public:
   ArcPlayStoreSearchProviderTest() = default;
@@ -39,22 +39,26 @@ class ArcPlayStoreSearchProviderTest : public AppListTestBase {
 
   // AppListTestBase:
   void SetUp() override {
+    arc_app_test_.PreProfileSetUp();
     AppListTestBase::SetUp();
-    arc_test_.SetUp(profile());
+    arc_app_test_.PostProfileSetUp(profile());
     controller_ = std::make_unique<::test::TestAppListControllerDelegate>();
   }
 
   void TearDown() override {
+    provider_ = nullptr;
+    search_controller_.reset();
     controller_.reset();
-    arc_test_.TearDown();
+    arc_app_test_.PreProfileTearDown();
     AppListTestBase::TearDown();
+    arc_app_test_.PostProfileTearDown();
   }
 
  protected:
   void CreateSearch(int max_results) {
     search_controller_ = std::make_unique<TestSearchController>();
     auto provider = std::make_unique<ArcPlayStoreSearchProvider>(
-        max_results, profile_.get(), controller_.get());
+        max_results, profile(), controller_.get());
     provider_ = provider.get();
     search_controller_->AddProvider(std::move(provider));
   }
@@ -75,14 +79,14 @@ class ArcPlayStoreSearchProviderTest : public AppListTestBase {
   }
 
   void AddExtension(const extensions::Extension* extension) {
-    service()->AddExtension(extension);
+    registrar()->AddExtension(extension);
   }
 
  private:
+  ArcAppTest arc_app_test_;
   std::unique_ptr<::test::TestAppListControllerDelegate> controller_;
   std::unique_ptr<TestSearchController> search_controller_;
-  ArcPlayStoreSearchProvider* provider_ = nullptr;
-  ArcAppTest arc_test_;
+  raw_ptr<ArcPlayStoreSearchProvider> provider_ = nullptr;
 };
 
 TEST_F(ArcPlayStoreSearchProviderTest, Basic) {

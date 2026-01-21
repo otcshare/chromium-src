@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/address_list.h"
 #include "net/base/net_errors.h"
@@ -36,7 +36,7 @@ SystemDnsResolverMojoImpl::SystemDnsResolverMojoImpl() {
 
 // network::mojom::SystemDnsResolver impl:
 void SystemDnsResolverMojoImpl::Resolve(
-    const absl::optional<std::string>& hostname,
+    const std::optional<std::string>& hostname,
     net::AddressFamily addr_family,
     int32_t flags,
     uint64_t network,

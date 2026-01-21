@@ -13,8 +13,30 @@ struct Config;
 
 // Segmentation Chrome cross device user model provider. Provides a default
 // model and metadata for the cross device user optimization target.
-class CrossDeviceUserSegment : public ModelProvider {
+class CrossDeviceUserSegment : public DefaultModelProvider {
  public:
+  enum Label {
+    kLabelUnknown = 0,
+    kLabelNoCrossDeviceUsage = 1,
+    kLabelCrossDeviceMobile = 2,
+    kLabelCrossDeviceDesktop = 3,
+    kLabelCrossDeviceTablet = 4,
+    kLabelCrossDeviceMobileAndDesktop = 5,
+    kLabelCrossDeviceMobileAndTablet = 6,
+    kLabelCrossDeviceDesktopAndTablet = 7,
+    kLabelCrossDeviceAllDeviceTypes = 8,
+    kLabelCrossDeviceOther = 9,
+    kLabelCount
+  };
+
+  enum Feature {
+    kFeatureDeviceCount,
+    kFeatureDeviceCountPhone,
+    kFeatureDeviceCountDesktop,
+    kFeatureDeviceCountTablet,
+    kFeatureCount
+  };
+
   CrossDeviceUserSegment();
   ~CrossDeviceUserSegment() override = default;
 
@@ -23,17 +45,10 @@ class CrossDeviceUserSegment : public ModelProvider {
 
   static std::unique_ptr<Config> GetConfig();
 
-  // Returns the name of the subsegment for the given segment and the
-  // `subsegment_rank`. The `subsegment_rank` should be computed based on the
-  // subsegment discrete mapping in the model metadata.
-  static absl::optional<std::string> GetSubsegmentName(int subsegment_rank);
-
   // ModelProvider implementation.
-  void InitAndFetchModel(
-      const ModelUpdatedCallback& model_updated_callback) override;
+  std::unique_ptr<ModelConfig> GetModelConfig() override;
   void ExecuteModelWithInput(const ModelProvider::Request& inputs,
                              ExecutionCallback callback) override;
-  bool ModelAvailable() override;
 };
 
 }  // namespace segmentation_platform

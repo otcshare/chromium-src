@@ -4,50 +4,90 @@
 
 #include "base/synchronization/waitable_event.h"
 
-#include "base/debug/activity_tracker.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
+#include "base/tracing_buildflags.h"
 
 namespace base {
+
+WaitableEvent::~WaitableEvent() {
+  // As requested in the documentation of perfetto::Flow::FromPointer, we should
+  // emit a TerminatingFlow(this) from our destructor if we ever emitted a
+  // Flow(this) which may be unmatched since the ptr value of `this` may be
+  // reused after this destructor. This can happen if a signaled event is never
+  // waited upon (or isn't the one to satisfy a WaitMany condition).
+  if (!only_used_while_idle_) {
+    // Check the tracing state to avoid an unnecessary syscall on destruction
+    // (which can be performance sensitive, crbug.com/40275035).
+    static const uint8_t* flow_enabled =
+        TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED("wakeup.flow,toplevel.flow");
+    if (*flow_enabled && IsSignaled()) {
+      TRACE_EVENT_INSTANT("wakeup.flow,toplevel.flow",
+                          "~WaitableEvent while Signaled",
+                          perfetto::TerminatingFlow::FromPointer(this));
+    }
+  }
+}
 
 void WaitableEvent::Signal() {
   // Must be ordered before SignalImpl() to guarantee it's emitted before the
   // matching TerminatingFlow in TimedWait().
-  if (emit_wakeup_flow_) {
-    TRACE_EVENT_INSTANT("wakeup.flow", "WaitableEvent::Signal",
+  if (!only_used_while_idle_) {
+    TRACE_EVENT_INSTANT("wakeup.flow,toplevel.flow", "WaitableEvent::Signal",
                         perfetto::Flow::FromPointer(this));
   }
   SignalImpl();
 }
 
-void WaitableEvent::Wait() {
-  const bool result = TimedWait(TimeDelta::Max());
+void WaitableEvent::Wait(const Location& location) {
+  const bool result = TimedWait(TimeDelta::Max(), location);
   DCHECK(result) << "TimedWait() should never fail with infinite timeout";
 }
 
-bool WaitableEvent::TimedWait(TimeDelta wait_delta) {
-  if (wait_delta <= TimeDelta())
+bool WaitableEvent::TimedWait(TimeDelta wait_delta, const Location& location) {
+  if (wait_delta <= TimeDelta()) {
     return IsSignaled();
+  }
 
-  // Record the event that this thread is blocking upon (for hang diagnosis) and
-  // consider it blocked for scheduling purposes. Ignore this for non-blocking
-  // WaitableEvents.
-  absl::optional<debug::ScopedEventWaitActivity> event_activity;
-  absl::optional<internal::ScopedBlockingCallWithBaseSyncPrimitives>
+  // Consider this thread blocked for scheduling purposes. Ignore this for
+  // non-blocking WaitableEvents.
+  std::optional<internal::ScopedBlockingCallWithBaseSyncPrimitives>
       scoped_blocking_call;
-  if (waiting_is_blocking_) {
-    event_activity.emplace(this);
-    scoped_blocking_call.emplace(FROM_HERE, BlockingType::MAY_BLOCK);
+  if (!only_used_while_idle_) {
+    scoped_blocking_call.emplace(location, BlockingType::MAY_BLOCK);
   }
 
   const bool result = TimedWaitImpl(wait_delta);
 
-  if (result && emit_wakeup_flow_) {
-    TRACE_EVENT_INSTANT("wakeup.flow", "WaitableEvent::Wait Complete",
+  if (result && !only_used_while_idle_) {
+    TRACE_EVENT_INSTANT("wakeup.flow,toplevel.flow",
+                        "WaitableEvent::Wait Complete",
                         perfetto::TerminatingFlow::FromPointer(this));
   }
 
   return result;
+}
+
+size_t WaitableEvent::WaitMany(base::span<WaitableEvent*> events) {
+  DCHECK(!events.empty()) << "Cannot wait on no events";
+  internal::ScopedBlockingCallWithBaseSyncPrimitives scoped_blocking_call(
+      FROM_HERE, BlockingType::MAY_BLOCK);
+
+  const size_t signaled_id = WaitManyImpl(events);
+  WaitableEvent* const signaled_event = events[signaled_id];
+  if (!signaled_event->only_used_while_idle_) {
+    TRACE_EVENT_INSTANT("wakeup.flow,toplevel.flow",
+                        "WaitableEvent::WaitMany Complete",
+                        perfetto::TerminatingFlow::FromPointer(signaled_event));
+  }
+  return signaled_id;
+}
+
+OnceClosure WaitableEvent::GetWaitCallbackForTesting() {
+  return BindOnce(&WaitableEvent::Wait, Unretained(this), FROM_HERE);
 }
 
 }  // namespace base

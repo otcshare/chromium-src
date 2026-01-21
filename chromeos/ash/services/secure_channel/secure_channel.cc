@@ -6,12 +6,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/multidevice/secure_message_delegate_impl.h"
 #include "chromeos/ash/services/secure_channel/file_transfer_update_callback.h"
+#include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
+#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "chromeos/ash/services/secure_channel/wire_message.h"
 
@@ -64,6 +66,7 @@ SecureChannel::PendingMessage::~PendingMessage() {}
 SecureChannel::SecureChannel(std::unique_ptr<Connection> connection)
     : status_(Status::DISCONNECTED), connection_(std::move(connection)) {
   connection_->AddObserver(this);
+  connection_->AddNearbyConnectionObserver(this);
 }
 
 SecureChannel::~SecureChannel() {
@@ -124,20 +127,20 @@ void SecureChannel::RemoveObserver(Observer* observer) {
 }
 
 void SecureChannel::GetConnectionRssi(
-    base::OnceCallback<void(absl::optional<int32_t>)> callback) {
+    base::OnceCallback<void(std::optional<int32_t>)> callback) {
   if (!connection_) {
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
   connection_->GetConnectionRssi(std::move(callback));
 }
 
-absl::optional<std::string> SecureChannel::GetChannelBindingData() {
+std::optional<std::string> SecureChannel::GetChannelBindingData() {
   if (secure_context_)
     return secure_context_->GetChannelBindingData();
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void SecureChannel::OnConnectionStatusChanged(Connection* connection,
@@ -231,10 +234,26 @@ void SecureChannel::OnSendCompleted(const Connection& connection,
                 << "}";
   pending_message_.reset();
 
-  // The connection automatically retries failed messges, so if |success| is
+  // The connection automatically retries failed messages, so if |success| is
   // |false| here, a fatal error has occurred. Thus, there is no need to retry
   // the message; instead, disconnect.
   Disconnect();
+}
+
+void SecureChannel::OnNearbyConnectionStateChagned(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  for (auto& observer : observer_list_) {
+    observer.OnNearbyConnectionStateChanged(this, step, result);
+  }
+}
+
+void SecureChannel::OnAuthenticationStateChanged(
+    mojom::SecureChannelState secure_channel_state) {
+  for (auto& observer : observer_list_) {
+    observer.OnSecureChannelAuthenticationStateChanged(this,
+                                                       secure_channel_state);
+  }
 }
 
 void SecureChannel::TransitionToStatus(const Status& new_status) {
@@ -257,6 +276,7 @@ void SecureChannel::Authenticate() {
   authenticator_ = DeviceToDeviceAuthenticator::Factory::Create(
       connection_.get(),
       multidevice::SecureMessageDelegateImpl::Factory::Create());
+  authenticator_->AddObserver(this);
   authenticator_->Authenticate(base::BindOnce(
       &SecureChannel::OnAuthenticationResult, weak_ptr_factory_.GetWeakPtr()));
 
@@ -312,6 +332,7 @@ void SecureChannel::OnAuthenticationResult(
   DCHECK(status_ == Status::AUTHENTICATING);
 
   // The authenticator is no longer needed, so release it.
+  authenticator_->RemoveObserver(this);
   authenticator_.reset();
 
   if (result != Authenticator::Result::SUCCESS) {

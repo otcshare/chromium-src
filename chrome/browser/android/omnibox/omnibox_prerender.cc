@@ -12,70 +12,66 @@
 #include "chrome/browser/predictors/autocomplete_action_predictor_factory.h"
 #include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
+#include "chrome/browser/preloading/autocomplete_dictionary_preload_service.h"
+#include "chrome/browser/preloading/autocomplete_dictionary_preload_service_factory.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service_factory.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
+#include "chrome/browser/preloading/search_preload/search_preload_service.h"
+#include "chrome/browser/preloading/search_preload/search_preload_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
-#include "chrome/browser/ui/android/omnibox/jni_headers/OmniboxPrerender_jni.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/base_search_provider.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/ui/android/omnibox/jni_headers/OmniboxPrerender_jni.h"
+
+using base::android::JavaRef;
 using predictors::AutocompleteActionPredictor;
 using predictors::AutocompleteActionPredictorFactory;
 
-OmniboxPrerender::OmniboxPrerender(JNIEnv* env, jobject obj)
-    : weak_java_omnibox_(env, obj) {
-}
+OmniboxPrerender::OmniboxPrerender(JNIEnv* env,
+                                   const jni_zero::JavaRef<jobject>& obj)
+    : weak_java_omnibox_(env, obj) {}
 
-OmniboxPrerender::~OmniboxPrerender() {
-}
+OmniboxPrerender::~OmniboxPrerender() = default;
 
-static jlong JNI_OmniboxPrerender_Init(JNIEnv* env,
-                                       const JavaParamRef<jobject>& obj) {
+static int64_t JNI_OmniboxPrerender_Init(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& obj) {
   OmniboxPrerender* omnibox = new OmniboxPrerender(env, obj);
   return reinterpret_cast<intptr_t>(omnibox);
 }
 
 void OmniboxPrerender::Clear(JNIEnv* env,
-                             const JavaParamRef<jobject>& obj,
-                             const JavaParamRef<jobject>& j_profile_android) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile_android);
+                             Profile* profile) {
   DCHECK(profile);
   if (!profile)
     return;
   AutocompleteActionPredictor* action_predictor =
       AutocompleteActionPredictorFactory::GetForProfile(profile);
   action_predictor->UpdateDatabaseFromTransitionalMatches(GURL());
-  action_predictor->CancelPrerender();
 }
 
-void OmniboxPrerender::InitializeForProfile(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_profile_android) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile_android);
+void OmniboxPrerender::InitializeForProfile(JNIEnv* env,
+                                            Profile* profile) {
   // Initialize the AutocompleteActionPredictor for this profile.
   // It needs to register for notifications as part of its initialization.
   AutocompleteActionPredictorFactory::GetForProfile(profile);
 }
 
-void OmniboxPrerender::PrerenderMaybe(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& j_url,
-    const JavaParamRef<jstring>& j_current_url,
-    jlong jsource_match,
-    const JavaParamRef<jobject>& j_profile_android,
-    const JavaParamRef<jobject>& j_tab) {
+void OmniboxPrerender::PrerenderMaybe(JNIEnv* env,
+                                      const JavaRef<jstring>& j_url,
+                                      const JavaRef<jstring>& j_current_url,
+                                      int64_t jsource_match,
+                                      Profile* profile,
+                                      const JavaRef<jobject>& j_tab) {
   AutocompleteResult* autocomplete_result =
       reinterpret_cast<AutocompleteResult*>(jsource_match);
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile_android);
   std::u16string url_string =
       base::android::ConvertJavaStringToUTF16(env, j_url);
   std::u16string current_url_string =
@@ -90,11 +86,22 @@ void OmniboxPrerender::PrerenderMaybe(
   if (!profile)
     return;
 
-  // TODO(https://crbug.com/1310147): Consider how to co-work with preconnect.
+  if (auto* dictionary_preload_service =
+          AutocompleteDictionaryPreloadServiceFactory::GetForProfile(profile)) {
+    dictionary_preload_service->MaybePreload(*autocomplete_result);
+  }
+
+  // TODO(crbug.com/40830195): Consider how to co-work with preconnect.
   if (SearchPrefetchService* search_prefetch_service =
           SearchPrefetchServiceFactory::GetForProfile(profile)) {
     search_prefetch_service->OnResultChanged(web_contents,
                                              *autocomplete_result);
+  }
+
+  if (SearchPreloadService* search_preload_service =
+          SearchPreloadServiceFactory::GetForProfile(profile)) {
+    search_preload_service->OnAutocompleteResultChanged(web_contents,
+                                                        *autocomplete_result);
   }
 
   auto* default_match = autocomplete_result->default_match();
@@ -129,7 +136,6 @@ void OmniboxPrerender::PrerenderMaybe(
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -149,10 +155,8 @@ void OmniboxPrerender::DoPrerender(const AutocompleteMatch& match,
   // SearchPrefetchService is responsible for handling search
   // AutocompleteMatches and preloading search result pages when needed.
   DCHECK(!AutocompleteMatch::IsSearchType(match.type));
-  gfx::Rect container_bounds = web_contents->GetContainerBounds();
   predictors::AutocompleteActionPredictorFactory::GetForProfile(profile)
-      ->StartPrerendering(match.destination_url, *web_contents,
-                          container_bounds.size());
+      ->StartPrerendering(match.destination_url, *web_contents);
 }
 
 void OmniboxPrerender::DoPreconnect(const AutocompleteMatch& match,
@@ -161,7 +165,10 @@ void OmniboxPrerender::DoPreconnect(const AutocompleteMatch& match,
       predictors::LoadingPredictorFactory::GetForProfile(profile);
   if (loading_predictor) {
     loading_predictor->PrepareForPageLoad(
-        match.destination_url, predictors::HintOrigin::OMNIBOX,
+        /*initiator_origin=*/std::nullopt, match.destination_url,
+        predictors::HintOrigin::OMNIBOX,
         predictors::AutocompleteActionPredictor::IsPreconnectable(match));
   }
 }
+
+DEFINE_JNI(OmniboxPrerender)

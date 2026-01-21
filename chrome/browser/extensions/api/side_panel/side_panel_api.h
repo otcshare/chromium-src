@@ -48,6 +48,73 @@ class SidePanelSetOptionsFunction : public SidePanelApiFunction {
   ResponseAction RunFunction() override;
 };
 
+class SidePanelSetPanelBehaviorFunction : public SidePanelApiFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("sidePanel.setPanelBehavior",
+                             SIDEPANEL_SETPANELBEHAVIOR)
+  SidePanelSetPanelBehaviorFunction() = default;
+  SidePanelSetPanelBehaviorFunction(const SidePanelSetPanelBehaviorFunction&) =
+      delete;
+  SidePanelSetPanelBehaviorFunction& operator=(
+      const SidePanelSetPanelBehaviorFunction&) = delete;
+
+ private:
+  ~SidePanelSetPanelBehaviorFunction() override = default;
+  ResponseAction RunFunction() override;
+};
+
+class SidePanelGetPanelBehaviorFunction : public SidePanelApiFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("sidePanel.getPanelBehavior",
+                             SIDEPANEL_GETPANELBEHAVIOR)
+  SidePanelGetPanelBehaviorFunction() = default;
+  SidePanelGetPanelBehaviorFunction(const SidePanelGetPanelBehaviorFunction&) =
+      delete;
+  SidePanelGetPanelBehaviorFunction& operator=(
+      const SidePanelGetPanelBehaviorFunction&) = delete;
+
+ private:
+  ~SidePanelGetPanelBehaviorFunction() override = default;
+  ResponseAction RunFunction() override;
+};
+
+class SidePanelOpenFunction : public SidePanelApiFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("sidePanel.open", SIDEPANEL_OPEN)
+  SidePanelOpenFunction() = default;
+  SidePanelOpenFunction(const SidePanelOpenFunction&) = delete;
+  SidePanelOpenFunction& operator=(const SidePanelOpenFunction&) = delete;
+
+ private:
+  ~SidePanelOpenFunction() override = default;
+  ResponseAction RunFunction() override;
+};
+
+class SidePanelGetLayoutFunction : public SidePanelApiFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("sidePanel.getLayout", SIDEPANEL_GETLAYOUT)
+  SidePanelGetLayoutFunction() = default;
+  SidePanelGetLayoutFunction(const SidePanelGetLayoutFunction&) = delete;
+  SidePanelGetLayoutFunction& operator=(const SidePanelGetLayoutFunction&) =
+      delete;
+
+ private:
+  ~SidePanelGetLayoutFunction() override = default;
+  ResponseAction RunFunction() override;
+};
+
+class SidePanelCloseFunction : public SidePanelApiFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("sidePanel.close", SIDEPANEL_CLOSE)
+  SidePanelCloseFunction() = default;
+  SidePanelCloseFunction(const SidePanelCloseFunction&) = delete;
+  SidePanelCloseFunction& operator=(const SidePanelCloseFunction&) = delete;
+
+ private:
+  ~SidePanelCloseFunction() override = default;
+  ResponseAction RunFunction() override;
+};
+
 }  // namespace extensions
 
 #endif  // CHROME_BROWSER_EXTENSIONS_API_SIDE_PANEL_SIDE_PANEL_API_H_

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ash/login/oobe_configuration.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
@@ -94,7 +94,7 @@ void OobeConfiguration::UpdateConfigurationValues() {
     auto* imm = input_method::InputMethodManager::Get();
     configuration_.Set(
         configuration::kInputMethod,
-        imm->GetInputMethodUtil()->MigrateInputMethod(*ime_value));
+        imm->GetInputMethodUtil()->GetMigratedInputMethod(*ime_value));
   }
 }
 

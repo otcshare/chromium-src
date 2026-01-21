@@ -6,10 +6,18 @@
 #define CONTENT_SHELL_APP_SHELL_MAIN_DELEGATE_H_
 
 #include <memory>
+#include <optional>
+#include <variant>
 
 #include "build/build_config.h"
+#include "components/memory_system/memory_system.h"
 #include "content/public/app/content_main_delegate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+namespace ui {
+class OsSettingsProvider;
+}
+#endif
 
 namespace content {
 class ShellContentClient;
@@ -32,18 +40,18 @@ class ShellMainDelegate : public ContentMainDelegate {
   ~ShellMainDelegate() override;
 
   // ContentMainDelegate implementation:
-  absl::optional<int> BasicStartupComplete() override;
+  std::optional<int> BasicStartupComplete() override;
   bool ShouldCreateFeatureList(InvokedIn invoked_in) override;
   bool ShouldInitializeMojo(InvokedIn invoked_in) override;
   void PreSandboxStartup() override;
-  absl::variant<int, MainFunctionParams> RunProcess(
+  std::variant<int, MainFunctionParams> RunProcess(
       const std::string& process_type,
       MainFunctionParams main_function_params) override;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   void ZygoteForked() override;
 #endif
-  absl::optional<int> PreBrowserMain() override;
-  absl::optional<int> PostEarlyInitialization(InvokedIn invoked_in) override;
+  std::optional<int> PreBrowserMain() override;
+  std::optional<int> PostEarlyInitialization(InvokedIn invoked_in) override;
   ContentClient* CreateContentClient() override;
   ContentBrowserClient* CreateContentBrowserClient() override;
   ContentGpuClient* CreateContentGpuClient() override;
@@ -57,11 +65,16 @@ class ShellMainDelegate : public ContentMainDelegate {
   // Shell.
   //
   // content_browsertests should not set the kRunWebTests command line flag, so
-  // |is_content_browsertests_| and |web_test_runner_| are mututally exclusive.
+  // |is_content_browsertests_| and |web_test_runner_| are mutually exclusive.
   bool is_content_browsertests_;
+
 #if !BUILDFLAG(IS_ANDROID)
   // Only present when running web tests, which run inside Content Shell.
-  //
+
+  // Web tests should not use the current machine settings for theming, but
+  // should default to a consistent baseline.
+  std::unique_ptr<ui::OsSettingsProvider> os_settings_provider_;
+
   // Web tests are not browser tests, so |is_content_browsertests_| and
   // |web_test_runner_| are mututally exclusive.
   std::unique_ptr<WebTestBrowserMainRunner> web_test_runner_;
@@ -72,6 +85,8 @@ class ShellMainDelegate : public ContentMainDelegate {
   std::unique_ptr<ShellContentRendererClient> renderer_client_;
   std::unique_ptr<ShellContentUtilityClient> utility_client_;
   std::unique_ptr<ShellContentClient> content_client_;
+
+  memory_system::MemorySystem memory_system_;
 };
 
 }  // namespace content

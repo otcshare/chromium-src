@@ -6,37 +6,65 @@ package org.chromium.chrome.browser.privacy_sandbox;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
-import static androidx.test.espresso.matcher.ViewMatchers.hasSibling;
-import static androidx.test.espresso.matcher.ViewMatchers.withChild;
+import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
-import static androidx.test.espresso.matcher.ViewMatchers.withParent;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
-
-import static org.hamcrest.Matchers.allOf;
 
 import android.view.View;
 
 import androidx.annotation.StringRes;
+import androidx.test.espresso.UiController;
+import androidx.test.espresso.ViewAction;
+import androidx.test.espresso.contrib.RecyclerViewActions;
 
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.ui.test.util.RenderTestRule;
 
-/**
- * Test utilities for various privacy_sandbox tests.
- */
+/** Test utilities for various privacy_sandbox tests. */
 public final class PrivacySandboxTestUtils {
     /**
-     * Click an ImageButton located next to a View that contains the given text.
+     * Click an ImageButton located next to a View that contains the given text. This method is
+     * specifically designed to work with a RecyclerView.
      *
      * @param text The text contained in the View adjacent to the ImageButton.
      */
     public static void clickImageButtonNextToText(String text) {
-        onView(allOf(withId(R.id.image_button), withParent(hasSibling(withChild(withText(text))))))
-                .perform(click());
+        onView(withId(R.id.recycler_view))
+                .perform(
+                        RecyclerViewActions.actionOnItem(
+                                hasDescendant(withText(text)),
+                                new ViewAction() {
+                                    @Override
+                                    public Matcher<View> getConstraints() {
+                                        return null;
+                                    }
+
+                                    @Override
+                                    public String getDescription() {
+                                        return "Click on a descendant view with id"
+                                                + " R.id.image_button";
+                                    }
+
+                                    @Override
+                                    public void perform(UiController uiController, View view) {
+                                        View v = view.findViewById(R.id.image_button);
+                                        v.performClick();
+                                    }
+                                }));
+    }
+
+    /**
+     * Clicks on a RecyclerView item that contains the given text.
+     *
+     * @param text The text contained within the RecyclerView item to click.
+     */
+    public static void clickRecyclerViewItemWithText(String text) {
+        onView(withId(R.id.recycler_view))
+                .perform(RecyclerViewActions.actionOnItem(hasDescendant(withText(text)), click()));
     }
 
     /**
@@ -60,16 +88,15 @@ public final class PrivacySandboxTestUtils {
     }
 
     /**
-     * Get the root View, sanitized for render tests, whose children contain
-     * the given text.
+     * Get the root View, sanitized for render tests, whose children contain the given text.
      *
      * @param text The text contained in a child View of the root View.
      * @return The sanitized root View.
      */
     public static View getRootViewSanitized(@StringRes int text) {
         View[] view = {null};
-        onView(withText(text)).check(((v, e) -> view[0] = v.getRootView()));
-        TestThreadUtils.runOnUiThreadBlocking(() -> RenderTestRule.sanitize(view[0]));
+        onView(withText(text)).check((v, e) -> view[0] = v.getRootView());
+        ThreadUtils.runOnUiThreadBlocking(() -> RenderTestRule.sanitize(view[0]));
         return view[0];
     }
 }

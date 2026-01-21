@@ -19,23 +19,17 @@ using SeverityFromPrinter = printing::PrinterStatus::PrinterReason::Severity;
 CupsPrinterStatus PrinterStatusToCupsPrinterStatus(
     const std::string& printer_id,
     const printing::PrinterStatus& printer_status,
-    const chromeos::PrinterAuthenticationInfo& auth_info,
-    bool client_info_supported) {
+    const chromeos::PrinterAuthenticationInfo& auth_info) {
   CupsPrinterStatus cups_printer_status(printer_id);
 
   for (const auto& reason : printer_status.reasons) {
-    // TODO(crbug.com/1027400): Remove log once bug is confirmed fix.
-    PRINTER_LOG(DEBUG) << "Printer status received for printer " << printer_id
-                       << " reason: " << static_cast<int>(reason.reason)
-                       << " severity: " << static_cast<int>(reason.severity);
     cups_printer_status.AddStatusReason(
         PrinterReasonToCupsReason(reason.reason),
         PrinterSeverityToCupsSeverity(reason.severity));
   }
-
+  PRINTER_LOG(DEBUG) << printer_id << ": Printer status received: "
+                     << printer_status.AllReasonsAsString();
   cups_printer_status.SetAuthenticationInfo(auth_info);
-  cups_printer_status.SetClientInfoSupported(client_info_supported);
-
   return cups_printer_status;
 }
 
@@ -91,6 +85,8 @@ CupsReason PrinterReasonToCupsReason(const ReasonFromPrinter& reason) {
       return CupsReason::kTrayMissing;
     case ReasonFromPrinter::kUnknownReason:
       return CupsReason::kUnknownReason;
+    case ReasonFromPrinter::kCupsPkiExpired:
+      return CupsReason::kExpiredCertificate;
   }
 }
 

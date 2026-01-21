@@ -4,8 +4,8 @@
 
 #include "services/video_capture/push_video_stream_subscription_impl.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "services/video_capture/broadcasting_receiver.h"
 
 namespace video_capture {
@@ -37,7 +37,9 @@ void PushVideoStreamSubscriptionImpl::SetOnClosedHandler(
 }
 
 void PushVideoStreamSubscriptionImpl::OnDeviceStartSucceededWithSettings(
-    const media::VideoCaptureParams& settings) {
+    const media::VideoCaptureParams& settings,
+    Device* device) {
+  device_ = device;
   if (status_ != Status::kCreationCallbackNotYetRun) {
     // Creation callback has already been run from a previous device start.
     return;
@@ -78,9 +80,10 @@ void PushVideoStreamSubscriptionImpl::Activate() {
 }
 
 void PushVideoStreamSubscriptionImpl::Suspend(SuspendCallback callback) {
-  if (status_ != Status::kActive)
+  if (status_ != Status::kActive) {
+    std::move(callback).Run();
     return;
-
+  }
   broadcaster_->SuspendClient(broadcaster_client_id_);
   status_ = Status::kSuspended;
   std::move(callback).Run();

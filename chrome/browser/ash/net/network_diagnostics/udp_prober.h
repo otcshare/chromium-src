@@ -8,15 +8,14 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/callback.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "net/base/host_port_pair.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/cpp/network_context_getter.h"
 
-namespace ash {
-namespace network_diagnostics {
+namespace ash::network_diagnostics {
 
 // Uses a UDP socket to send data to a remote destination. After sending data,
 // the prober listens for received data. It confirms that data was received but
@@ -36,9 +35,6 @@ class UdpProber {
     kTimeout,
     kSuccess,
   };
-
-  using NetworkContextGetter =
-      base::RepeatingCallback<network::mojom::NetworkContext*()>;
   using UdpProbeCompleteCallback =
       base::OnceCallback<void(int result, ProbeExitEnum probe_exit_enum)>;
 
@@ -47,7 +43,7 @@ class UdpProber {
   // Creates a UdpProber instance which resolves |host_port_pair| and starts the
   // UDP probe.  See implementation for more details.
   static std::unique_ptr<UdpProber> Start(
-      NetworkContextGetter network_context_getter,
+      network::NetworkContextGetter network_context_getter,
       net::HostPortPair host_port_pair,
       base::span<const uint8_t> data,
       net::NetworkTrafficAnnotationTag tag,
@@ -55,7 +51,6 @@ class UdpProber {
       UdpProbeCompleteCallback callback);
 };
 
-}  // namespace network_diagnostics
-}  // namespace ash
+}  // namespace ash::network_diagnostics
 
 #endif  // CHROME_BROWSER_ASH_NET_NETWORK_DIAGNOSTICS_UDP_PROBER_H_

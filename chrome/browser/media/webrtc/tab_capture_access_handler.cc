@@ -7,7 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_registry.h"
 #include "chrome/browser/media/webrtc/capture_policy_utils.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
@@ -21,7 +22,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_media_capture_id.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -99,7 +99,7 @@ TabCaptureAccessHandler::TabCaptureAccessHandler() = default;
 TabCaptureAccessHandler::~TabCaptureAccessHandler() = default;
 
 bool TabCaptureAccessHandler::SupportsStreamType(
-    content::WebContents* web_contents,
+    content::RenderFrameHost* render_frame_host,
     const blink::mojom::MediaStreamType type,
     const extensions::Extension* extension) {
   return type == blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE ||
@@ -108,7 +108,7 @@ bool TabCaptureAccessHandler::SupportsStreamType(
 
 bool TabCaptureAccessHandler::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
-    const GURL& security_origin,
+    const url::Origin& security_origin,
     blink::mojom::MediaStreamType type,
     const extensions::Extension* extension) {
   return false;
@@ -127,10 +127,6 @@ void TabCaptureAccessHandler::HandleRequest(
       extensions::TabCaptureRegistry::Get(profile);
   if (!tab_capture_registry) {
     NOTREACHED();
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::INVALID_STATE, /*ui=*/nullptr);
-    return;
   }
 
   AllowedScreenCaptureLevel capture_level =
@@ -147,20 +143,21 @@ void TabCaptureAccessHandler::HandleRequest(
   if (!can_show_web_contents.Run(target_web_contents)) {
     std::move(callback).Run(
         blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED,
+        blink::mojom::MediaStreamRequestResult::CAPTURE_NOT_ALLOWED_BY_POLICY,
         /*ui=*/nullptr);
     return;
   }
 
   // |extension| may be null if the tabCapture starts with
   // tabCapture.getMediaStreamId().
-  // TODO(crbug.com/831722): Deprecate tabCaptureRegistry soon.
+  // TODO(crbug.com/40571241): Deprecate tabCaptureRegistry soon.
   const std::string extension_id = extension ? extension->id() : "";
   if (!tab_capture_registry->VerifyRequest(
           request.render_process_id, request.render_frame_id, extension_id)) {
     std::move(callback).Run(
         blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::INVALID_STATE, /*ui=*/nullptr);
+        blink::mojom::MediaStreamRequestResult::REGISTRY_REQUEST_UNVERIFIED,
+        /*ui=*/nullptr);
     return;
   }
 
@@ -254,7 +251,7 @@ void TabCaptureAccessHandler::OnDlpRestrictionChecked(
   } else {
     std::move(pending_request->callback)
         .Run(blink::mojom::StreamDevicesSet(),
-             blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED,
+             blink::mojom::MediaStreamRequestResult::DLP_PERMISSION_DENIED,
              /*ui=*/nullptr);
   }
 }

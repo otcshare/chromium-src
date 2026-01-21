@@ -5,11 +5,11 @@
 #ifndef COMPONENTS_PERMISSIONS_REQUEST_TYPE_H_
 #define COMPONENTS_PERMISSIONS_REQUEST_TYPE_H_
 
-#include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
 
-enum class ContentSettingsType;
+#include "build/build_config.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "printing/buildflags/buildflags.h"
 
 namespace gfx {
 struct VectorIcon;
@@ -20,44 +20,58 @@ namespace permissions {
 // The type of the request that will be seen by the user. Values are only
 // defined on the platforms where they are used and should be kept alphabetized.
 enum class RequestType {
-  kAccessibilityEvents,
   kArSession,
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   kCameraPanTiltZoom,
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   kCameraStream,
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  kCapturedSurfaceControl,
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   kClipboard,
+  kTopLevelStorageAccess,
   kDiskQuota,
-#if !BUILDFLAG(IS_ANDROID)
-  kLocalFonts,
-#endif
+  kFileSystemAccess,
   kGeolocation,
+  kHandTracking,
+  kIdentityProvider,
   kIdleDetection,
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  kLocalFonts,
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  kLocalNetwork,
+  kLocalNetworkAccess,
+  kLoopbackNetwork,
   kMicStream,
   kMidiSysex,
   kMultipleDownloads,
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   kNfcDevice,
-#endif
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   kNotifications,
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  kKeyboardLock,
+  kPointerLock,
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
   kProtectedMediaIdentifier,
 #endif
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   kRegisterProtocolHandler,
-  kSecurityAttestation,
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if BUILDFLAG(IS_CHROMEOS)
+  kSmartCard,
 #endif
   kStorageAccess,
-#if !BUILDFLAG(IS_ANDROID)
-  kU2fApiRequest,
-#endif
   kVrSession,
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  kWebAppInstallation,
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CUPS)
+  kWebPrinting,
+#endif
   kWindowManagement,
   kMaxValue = kWindowManagement
-#else
-  kMaxValue = kVrSession
-#endif
 };
 
 #if BUILDFLAG(IS_ANDROID)
@@ -70,22 +84,27 @@ typedef const gfx::VectorIcon& IconId;
 
 bool IsRequestablePermissionType(ContentSettingsType content_settings_type);
 
+std::optional<RequestType> ContentSettingsTypeToRequestTypeIfExists(
+    ContentSettingsType content_settings_type);
+
 RequestType ContentSettingsTypeToRequestType(
     ContentSettingsType content_settings_type);
 
-absl::optional<ContentSettingsType> RequestTypeToContentSettingsType(
+std::optional<ContentSettingsType> RequestTypeToContentSettingsType(
     RequestType request_type);
 
 // Returns whether confirmation chips can be displayed
 bool IsConfirmationChipSupported(RequestType for_request_type);
 
+#if !BUILDFLAG(IS_IOS)
 // Returns the icon to display.
 IconId GetIconId(RequestType type);
+#endif  // !BUILDFLAG(IS_IOS)
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 // Returns the blocked icon to display.
 IconId GetBlockedIconId(RequestType type);
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 // Returns a unique human-readable string that can be used in dictionaries that
 // are keyed by the RequestType.

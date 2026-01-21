@@ -25,9 +25,10 @@ namespace content {
 
 BrowserPluginGuest::BrowserPluginGuest(WebContentsImpl* web_contents,
                                        BrowserPluginGuestDelegate* delegate)
-    : WebContentsObserver(web_contents), delegate_(delegate) {
-  DCHECK(web_contents);
-  DCHECK(delegate);
+    : WebContentsObserver(web_contents),
+      delegate_(delegate->GetGuestDelegateWeakPtr()) {
+  CHECK(web_contents);
+  CHECK(delegate_);
   RecordAction(base::UserMetricsAction("BrowserPlugin.Guest.Create"));
 }
 
@@ -74,12 +75,8 @@ void BrowserPluginGuest::InitInternal(WebContentsImpl* owner_web_contents) {
   // navigations still continue to function inside the app.
   renderer_prefs->browser_handles_all_top_level_requests = false;
 
-  // TODO(chrishtr): this code is wrong. The navigate_on_drag_drop field will
-  // be reset again the next time preferences are updated.
-  blink::web_pref::WebPreferences prefs =
-      GetWebContents()->GetOrCreateWebPreferences();
-  prefs.navigate_on_drag_drop = false;
-  GetWebContents()->SetWebPreferences(prefs);
+  // Also disable drag/drop navigations.
+  renderer_prefs->can_accept_load_drops = false;
 }
 
 BrowserPluginGuest::~BrowserPluginGuest() = default;
@@ -96,12 +93,22 @@ WebContentsImpl* BrowserPluginGuest::GetWebContents() const {
   return static_cast<WebContentsImpl*>(web_contents());
 }
 
+RenderFrameHostImpl* BrowserPluginGuest::GetProspectiveOuterDocument() {
+  if (!delegate_) {
+    // The guest delegate may only be null during some destruction scenarios.
+    CHECK(!web_contents() || web_contents()->IsBeingDestroyed());
+    return nullptr;
+  }
+  return static_cast<RenderFrameHostImpl*>(
+      delegate_->GetProspectiveOuterDocument());
+}
+
 void BrowserPluginGuest::DidStartNavigation(
     NavigationHandle* navigation_handle) {
   // Originally added to suppress the error page when a navigation is blocked
   // using the webrequest API in a <webview> guest: https://crbug.com/284741.
   //
-  // TODO(https://crbug.com/1127132): net::ERR_BLOCKED_BY_CLIENT is used for
+  // TODO(crbug.com/40148437): net::ERR_BLOCKED_BY_CLIENT is used for
   // many other errors. Figure out what suppression policy is desirable here.
   //
   // TODO(mcnee): Investigate moving this out to WebViewGuest.

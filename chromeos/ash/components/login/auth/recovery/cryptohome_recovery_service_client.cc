@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,18 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/login/auth/recovery/service_constants.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -206,7 +209,7 @@ void CryptohomeRecoveryServiceClient::FetchRecoveryResponse(
 void CryptohomeRecoveryServiceClient::OnFetchEpochComplete(
     const GaiaAccessToken& access_token,
     OnEpochResponseCallback callback,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   int net_error = simple_url_loader_->NetError();
   int response_code = -1;
@@ -233,7 +236,7 @@ void CryptohomeRecoveryServiceClient::OnFetchEpochComplete(
     if (!shouldRetry(status_code) ||
         epoch_retry_backoff_.failure_count() >= kMaxRetries) {
       epoch_retry_backoff_.Reset();
-      std::move(callback).Run(absl::nullopt, status_code);
+      std::move(callback).Run(std::nullopt, status_code);
     } else {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,
@@ -249,7 +252,7 @@ void CryptohomeRecoveryServiceClient::OnFetchRecoveryResponseComplete(
     const std::string& request_data,
     const GaiaAccessToken& access_token,
     OnRecoveryResponseCallback callback,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   int net_error = simple_url_loader_->NetError();
   int response_code = -1;
@@ -275,7 +278,7 @@ void CryptohomeRecoveryServiceClient::OnFetchRecoveryResponseComplete(
     if (!shouldRetry(status_code) ||
         recovery_retry_backoff_.failure_count() >= kMaxRetries) {
       recovery_retry_backoff_.Reset();
-      std::move(callback).Run(absl::nullopt, status_code);
+      std::move(callback).Run(std::nullopt, status_code);
     } else {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,

@@ -7,8 +7,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "media/formats/webm/cluster_builder.h"
 #include "media/formats/webm/webm_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -227,7 +229,8 @@ TEST_F(WebMParserTest, ParseListElementWithSingleCall) {
   CreateClusterExpectations(kBlockCount, true, &client_);
 
   WebMListParser parser(kWebMIdCluster, &client_);
-  EXPECT_EQ(cluster->size(), parser.Parse(cluster->data(), cluster->size()));
+  EXPECT_EQ(cluster->bytes_used(),
+            parser.Parse(cluster->data(), cluster->bytes_used()));
   EXPECT_TRUE(parser.IsParsingComplete());
 }
 
@@ -236,7 +239,7 @@ TEST_F(WebMParserTest, ParseListElementWithMultipleCalls) {
   CreateClusterExpectations(kBlockCount, true, &client_);
 
   const uint8_t* data = cluster->data();
-  int size = cluster->size();
+  int size = cluster->bytes_used();
   int default_parse_size = 3;
   WebMListParser parser(kWebMIdCluster, &client_);
   int parse_size = std::min(default_parse_size, size);
@@ -256,7 +259,7 @@ TEST_F(WebMParserTest, ParseListElementWithMultipleCalls) {
 
     parse_size = default_parse_size;
 
-    data += result;
+    UNSAFE_TODO(data += result);
     size -= result;
 
     EXPECT_EQ((size == 0), parser.IsParsingComplete());
@@ -278,15 +281,16 @@ TEST_F(WebMParserTest, Reset) {
 
   // Send slightly less than the full cluster so all but the last block is
   // parsed.
-  int result = parser.Parse(cluster->data(), cluster->size() - 1);
+  int result = parser.Parse(cluster->data(), cluster->bytes_used() - 1);
   EXPECT_GT(result, 0);
-  EXPECT_LT(result, cluster->size());
+  EXPECT_LT(result, cluster->bytes_used());
   EXPECT_FALSE(parser.IsParsingComplete());
 
   parser.Reset();
 
   // Now parse a whole cluster to verify that all the blocks will get parsed.
-  EXPECT_EQ(cluster->size(), parser.Parse(cluster->data(), cluster->size()));
+  EXPECT_EQ(cluster->bytes_used(),
+            parser.Parse(cluster->data(), cluster->bytes_used()));
   EXPECT_TRUE(parser.IsParsingComplete());
 }
 
@@ -342,8 +346,12 @@ TEST_F(WebMParserTest, ReservedIds) {
   const uint8_t k2ByteReservedId[] = {0x7F, 0xFF, 0x81};
   const uint8_t k3ByteReservedId[] = {0x3F, 0xFF, 0xFF, 0x81};
   const uint8_t k4ByteReservedId[] = {0x1F, 0xFF, 0xFF, 0xFF, 0x81};
-  const uint8_t* kBuffers[] = {k1ByteReservedId, k2ByteReservedId,
-                               k3ByteReservedId, k4ByteReservedId};
+  auto kBuffers = std::to_array<const uint8_t*>({
+      k1ByteReservedId,
+      k2ByteReservedId,
+      k3ByteReservedId,
+      k4ByteReservedId,
+  });
 
   for (size_t i = 0; i < std::size(kBuffers); i++) {
     int id;
@@ -368,10 +376,16 @@ TEST_F(WebMParserTest, ReservedSizes) {
                                         0xFF, 0xFF, 0xFF, 0xFF};
   const uint8_t k8ByteReservedSize[] = {0xA3, 0x01, 0xFF, 0xFF, 0xFF,
                                         0xFF, 0xFF, 0xFF, 0xFF};
-  const uint8_t* kBuffers[] = {k1ByteReservedSize, k2ByteReservedSize,
-                               k3ByteReservedSize, k4ByteReservedSize,
-                               k5ByteReservedSize, k6ByteReservedSize,
-                               k7ByteReservedSize, k8ByteReservedSize};
+  auto kBuffers = std::to_array<const uint8_t*>({
+      k1ByteReservedSize,
+      k2ByteReservedSize,
+      k3ByteReservedSize,
+      k4ByteReservedSize,
+      k5ByteReservedSize,
+      k6ByteReservedSize,
+      k7ByteReservedSize,
+      k8ByteReservedSize,
+  });
 
   for (size_t i = 0; i < std::size(kBuffers); i++) {
     int id;

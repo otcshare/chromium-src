@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//media/gpu/args.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("common") {
@@ -15,12 +16,6 @@ mojom("common") {
     "//mojo/public/mojom/base",
     "//services/network/public/mojom:mojom_ip_address",
   ]
-}
-
-mojom("host") {
-  sources = [ "mirroring_service_host.mojom" ]
-
-  public_deps = [ ":common" ]
 }
 
 mojom("service") {
@@ -39,4 +34,7 @@ mojom("service") {
     "//services/viz/public/mojom",
     "//ui/gfx/geometry/mojom",
   ]
+  if (is_chromeos && use_linux_video_acceleration) {
+    enabled_features = [ "is_chromeos_with_video_accelerators" ]
+  }
 }

@@ -8,9 +8,9 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -121,7 +121,7 @@ BluetoothAdapterClient::Error ErrorResponseToError(
 void OnResponseAdapter(
     base::OnceClosure callback,
     BluetoothAdapterClient::ErrorCallback error_callback,
-    const absl::optional<BluetoothAdapterClient::Error>& error) {
+    const std::optional<BluetoothAdapterClient::Error>& error) {
   if (!error) {
     std::move(callback).Run();
     return;
@@ -187,6 +187,7 @@ BluetoothAdapterClient::Properties::Properties(
   RegisterProperty(bluetooth_adapter::kDiscoveringProperty, &discovering);
   RegisterProperty(bluetooth_adapter::kUUIDsProperty, &uuids);
   RegisterProperty(bluetooth_adapter::kModaliasProperty, &modalias);
+  RegisterProperty(bluetooth_adapter::kRolesProperty, &roles);
 }
 
 BluetoothAdapterClient::Properties::~Properties() = default;
@@ -301,12 +302,10 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdapterClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdapterClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAdapterClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -381,12 +380,10 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
 
     writer.CloseContainer(&dict_writer);
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdapterClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdapterClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAdapterClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -419,13 +416,12 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdapterClientImpl::OnCreateServiceRecord,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdapterClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
-                       std::move(error_callback)));
+        base::BindOnce(
+            &BluetoothAdapterClientImpl::OnCreateServiceRecordResponse,
+            weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+            std::move(error_callback)));
   }
 
   // BluetoothAdapterClient override.
@@ -445,19 +441,17 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdapterClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdapterClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAdapterClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
   // BluetoothAdapterClient override.
   void ConnectDevice(const dbus::ObjectPath& object_path,
                      const std::string& address,
-                     const absl::optional<AddressType>& address_type,
+                     const std::optional<AddressType>& address_type,
                      ConnectDeviceCallback callback,
                      ErrorCallback error_callback) override {
     dbus::MethodCall method_call(bluetooth_adapter::kBluetoothAdapterInterface,
@@ -477,7 +471,6 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
           break;
         default:
           NOTREACHED();
-          break;
       };
       dict.Set(bluetooth_device::kAddressTypeProperty, address_type_value);
     }
@@ -490,14 +483,11 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdapterClientImpl::OnConnectDevice,
+        base::BindOnce(&BluetoothAdapterClientImpl::OnConnectDeviceResponse,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback),
-                       /*start_time=*/base::Time::Now()),
-        base::BindOnce(&BluetoothAdapterClientImpl::OnConnectDeviceError,
-                       weak_ptr_factory_.GetWeakPtr(),
-                       std::move(error_callback)));
+                       std::move(error_callback), base::Time::Now()));
   }
 
  protected:
@@ -537,10 +527,15 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       observer.AdapterPropertyChanged(object_path, property_name);
   }
 
-  // Called when a response for successful method call is received.
-  void OnSuccess(base::OnceClosure callback, dbus::Response* response) {
-    DCHECK(response);
-    std::move(callback).Run();
+  void OnMethodResponse(base::OnceClosure callback,
+                        ErrorCallback error_callback,
+                        dbus::Response* response,
+                        dbus::ErrorResponse* error_response) {
+    if (response) {
+      std::move(callback).Run();
+    } else {
+      OnError(std::move(error_callback), error_response);
+    }
   }
 
   // Called when a response for a failed method call is received.
@@ -554,7 +549,6 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
       reader.PopString(&error_message);
     } else {
       error_name = kNoResponseError;
-      error_message = "";
     }
     std::move(error_callback).Run(error_name, error_message);
   }
@@ -563,42 +557,50 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
                   dbus::Response* response,
                   dbus::ErrorResponse* error_response) {
     if (response) {
-      std::move(callback).Run(absl::nullopt);
+      std::move(callback).Run(std::nullopt);
       return;
     }
 
     std::move(callback).Run(ErrorResponseToError(error_response));
   }
 
-  // Called when CreateServiceRecord() succeeds.
-  void OnCreateServiceRecord(ServiceRecordCallback callback,
-                             dbus::Response* response) {
-    DCHECK(response);
+  void OnCreateServiceRecordResponse(ServiceRecordCallback callback,
+                                     ErrorCallback error_callback,
+                                     dbus::Response* response,
+                                     dbus::ErrorResponse* error_response) {
+    if (!response) {
+      OnError(std::move(error_callback), error_response);
+      return;
+    }
+
     dbus::MessageReader reader(response);
     uint32_t handle = 0;
-    if (!reader.PopUint32(&handle))
+    if (!reader.PopUint32(&handle)) {
       LOG(ERROR) << "Invalid response from CreateServiceRecord.";
+    }
     std::move(callback).Run(handle);
   }
 
-  // Called when ConnectDevice() succeeds.
-  void OnConnectDevice(ConnectDeviceCallback callback,
-                       base::Time start_time,
-                       dbus::Response* response) {
+  void OnConnectDeviceResponse(ConnectDeviceCallback callback,
+                               ErrorCallback error_callback,
+                               base::Time start_time,
+                               dbus::Response* response,
+                               dbus::ErrorResponse* error_response) {
+    if (!response) {
+      RecordFailure(kConnectDeviceMethod, error_response);
+      OnError(std::move(error_callback), error_response);
+      return;
+    }
+
     DCHECK(response);
     dbus::MessageReader reader(response);
     dbus::ObjectPath device_path;
-    if (!reader.PopObjectPath(&device_path))
+    if (!reader.PopObjectPath(&device_path)) {
       LOG(ERROR) << "Invalid response from ConnectDevice.";
+    }
 
     RecordSuccess(kConnectDeviceMethod, start_time);
     std::move(callback).Run(device_path);
-  }
-
-  void OnConnectDeviceError(ErrorCallback error_callback,
-                            dbus::ErrorResponse* response) {
-    RecordFailure(kConnectDeviceMethod, response);
-    OnError(std::move(error_callback), response);
   }
 
   raw_ptr<dbus::ObjectManager> object_manager_ = nullptr;

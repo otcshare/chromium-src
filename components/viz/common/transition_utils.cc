@@ -63,8 +63,12 @@ std::unordered_set<uint64_t> ProcessStack(
   auto write_render_pass = [&str](const CompositorRenderPass* pass) {
     str << "(" << pass << ") render pass id=" << pass->id.GetUnsafeValue()
         << " output_rect=" << pass->output_rect.ToString();
-    if (pass->view_transition_element_resource_id.IsValid())
+    if (pass->view_transition_element_resource_id.IsValid()) {
       str << " " << pass->view_transition_element_resource_id.ToString();
+    }
+    if (!pass->backdrop_filters.IsEmpty()) {
+      str << " w/backdrop_filters";
+    }
     str << "\n";
   };
   auto write_sqs = [&str](const SharedQuadState* sqs) {
@@ -74,7 +78,7 @@ std::unordered_set<uint64_t> ProcessStack(
   };
   auto write_shared_element_quad = [&str](const SharedElementDrawQuad* quad) {
     str << "(" << quad << ") SharedElementDrawQuad "
-        << quad->resource_id.ToString() << "\n";
+        << quad->element_resource_id.ToString() << "\n";
   };
   auto write_solid_color_quad = [&str](const SolidColorDrawQuad* quad) {
     str << "(" << quad
@@ -105,7 +109,10 @@ std::unordered_set<uint64_t> ProcessStack(
         stack.pop_back();
         continue;
       }
-
+      if (!*frame.quad_iter) {
+        stack.pop_back();
+        continue;
+      }
       frame.indent += 2;
     } else {
       if (++frame.quad_iter == pass->quad_list.end()) {
@@ -170,12 +177,13 @@ std::unordered_set<uint64_t> ProcessStack(
 
 }  // namespace
 
-std::string TransitionUtils::RenderPassListToString(
-    const CompositorRenderPassList& list) {
+std::string TransitionUtils::CompositorFrameToString(
+    const CompositorFrame& frame) {
   std::ostringstream str;
+  const CompositorRenderPassList& list = frame.render_pass_list;
 
-  if (list.size() > kMaxListToProcess) {
-    str << "RenderPassList too large (" << list.size()
+  if (list.size() > kMaxListToProcess || list.empty()) {
+    str << "RenderPassList too large or too small (" << list.size()
         << "), max supported list length " << kMaxListToProcess;
     return str.str();
   }
@@ -211,40 +219,6 @@ std::string TransitionUtils::RenderPassListToString(
                                 new_seen_pass_ids.end());
   }
   return str.str();
-}
-
-// static
-float TransitionUtils::ComputeAccumulatedOpacity(
-    const CompositorRenderPassList& render_passes,
-    CompositorRenderPassId target_id) {
-  float opacity = 1.f;
-  bool found_render_pass = false;
-  for (auto& render_pass : render_passes) {
-    // If we haven't even reached the needed render pass, then we don't need to
-    // iterate the quads. Note that we also don't iterate the quads of the
-    // target render pass itself, since it can't draw itself.
-    if (!found_render_pass) {
-      found_render_pass = render_pass->id == target_id;
-      continue;
-    }
-
-    for (auto* quad : render_pass->quad_list) {
-      if (quad->material != DrawQuad::Material::kCompositorRenderPass)
-        continue;
-
-      const auto* pass_quad = CompositorRenderPassDrawQuad::MaterialCast(quad);
-      if (pass_quad->render_pass_id != target_id)
-        continue;
-
-      // TODO(vmpstr): We need to consider different blend modes as well,
-      // although it's difficult in general. For the simple case of common
-      // SrcOver blend modes however, we can just multiply the opacity.
-      opacity *= pass_quad->shared_quad_state->opacity;
-      target_id = render_pass->id;
-      break;
-    }
-  }
-  return opacity;
 }
 
 // static

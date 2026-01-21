@@ -4,11 +4,11 @@
 
 #include "media/capture/video/chromeos/camera_3a_controller.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/typed_macros.h"
 #include "media/capture/video/chromeos/camera_metadata_utils.h"
 #include "media/capture/video/chromeos/camera_trace_utils.h"
@@ -60,7 +60,7 @@ Camera3AController::Camera3AController(
   capture_metadata_dispatcher_->AddResultMetadataObserver(this);
 
   auto max_regions = GetMetadataEntryAsSpan<int32_t>(
-      static_metadata_,
+      *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_MAX_REGIONS);
   if (max_regions.empty()) {
     ae_region_supported_ = false;
@@ -72,7 +72,7 @@ Camera3AController::Camera3AController(
   }
 
   auto* af_modes = GetMetadataEntry(
-      static_metadata_,
+      *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AF_AVAILABLE_MODES);
   if (af_modes) {
     for (const auto& m : (*af_modes)->data) {
@@ -81,7 +81,7 @@ Camera3AController::Camera3AController(
     }
   }
   auto* ae_modes = GetMetadataEntry(
-      static_metadata_,
+      *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AE_AVAILABLE_MODES);
   if (ae_modes) {
     for (const auto& m : (*ae_modes)->data) {
@@ -90,7 +90,7 @@ Camera3AController::Camera3AController(
     }
   }
   auto* awb_modes = GetMetadataEntry(
-      static_metadata_,
+      *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AWB_AVAILABLE_MODES);
   if (awb_modes) {
     for (const auto& m : (*awb_modes)->data) {
@@ -103,12 +103,12 @@ Camera3AController::Camera3AController(
     // Because of line wrapping, multiple if-statements is more readable than a
     // super long boolean expression.
     auto available_modes = GetMetadataEntryAsSpan<uint8_t>(
-        static_metadata_,
+        *static_metadata_,
         cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AVAILABLE_MODES);
     if (available_modes.empty()) {
       return false;
     }
-    if (!base::Contains(
+    if (!std::ranges::contains(
             available_modes,
             base::checked_cast<uint8_t>(
                 cros::mojom::AndroidControlMode::ANDROID_CONTROL_MODE_AUTO))) {
@@ -126,7 +126,7 @@ Camera3AController::Camera3AController(
       return false;
     }
     auto ae_lock_available = GetMetadataEntryAsSpan<uint8_t>(
-        static_metadata_,
+        *static_metadata_,
         cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AE_LOCK_AVAILABLE);
     if (ae_lock_available.empty()) {
       return false;
@@ -167,17 +167,17 @@ Camera3AController::Camera3AController(
   // mode should be enough.
   const auto face_mode_simple = cros::mojom::AndroidStatisticsFaceDetectMode::
       ANDROID_STATISTICS_FACE_DETECT_MODE_SIMPLE;
-  if (base::Contains(face_modes,
-                     base::checked_cast<uint8_t>(face_mode_simple))) {
+  if (std::ranges::contains(face_modes,
+                            base::checked_cast<uint8_t>(face_mode_simple))) {
     SetRepeatingCaptureMetadata(
         cros::mojom::CameraMetadataTag::ANDROID_STATISTICS_FACE_DETECT_MODE,
         face_mode_simple);
   }
 
   auto request_keys = GetMetadataEntryAsSpan<int32_t>(
-      static_metadata_,
+      *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_REQUEST_AVAILABLE_REQUEST_KEYS);
-  zero_shutter_lag_supported_ = base::Contains(
+  zero_shutter_lag_supported_ = std::ranges::contains(
       request_keys,
       static_cast<int32_t>(
           cros::mojom::CameraMetadataTag::ANDROID_CONTROL_ENABLE_ZSL));
@@ -530,7 +530,7 @@ void Camera3AController::SetPointOfInterest(gfx::Point point) {
 
   auto active_array_size = [&]() {
     auto rect = GetMetadataEntryAsSpan<int32_t>(
-        static_metadata_,
+        *static_metadata_,
         cros::mojom::CameraMetadataTag::ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE);
     DCHECK(!rect.empty());
     // (xmin, ymin, width, height)
@@ -544,10 +544,10 @@ void Camera3AController::SetPointOfInterest(gfx::Point point) {
 
   // (xmin, ymin, xmax, ymax, weight)
   std::vector<int32_t> region = {
-      base::clamp(point.x() - roi_radius, 0, active_array_size.width() - 1),
-      base::clamp(point.y() - roi_radius, 0, active_array_size.height() - 1),
-      base::clamp(point.x() + roi_radius, 0, active_array_size.width() - 1),
-      base::clamp(point.y() + roi_radius, 0, active_array_size.height() - 1),
+      std::clamp(point.x() - roi_radius, 0, active_array_size.width() - 1),
+      std::clamp(point.y() - roi_radius, 0, active_array_size.height() - 1),
+      std::clamp(point.x() + roi_radius, 0, active_array_size.width() - 1),
+      std::clamp(point.y() + roi_radius, 0, active_array_size.height() - 1),
       1,
   };
 
@@ -699,7 +699,7 @@ void Camera3AController::SetCaptureMetadata(cros::mojom::CameraMetadataTag tag,
                                             const std::vector<T>& value) {
   capture_metadata_dispatcher_->SetCaptureMetadata(
       tag, entry_type_of<T>::value, value.size(),
-      SerializeMetadataValueFromSpan(base::make_span(value)));
+      SerializeMetadataValueFromSpan(base::span(value)));
 }
 
 template <typename T>
@@ -716,7 +716,7 @@ void Camera3AController::SetRepeatingCaptureMetadata(
   repeating_metadata_tags_.insert(tag);
   capture_metadata_dispatcher_->SetRepeatingCaptureMetadata(
       tag, entry_type_of<T>::value, value.size(),
-      SerializeMetadataValueFromSpan(base::make_span(value)));
+      SerializeMetadataValueFromSpan(base::span(value)));
 }
 
 void Camera3AController::ClearRepeatingCaptureMetadata() {

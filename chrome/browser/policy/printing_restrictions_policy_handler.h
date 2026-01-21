@@ -9,7 +9,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "printing/backend/printing_restrictions.h"
 #include "printing/buildflags/buildflags.h"
@@ -48,7 +48,7 @@ class PrintingEnumPolicyHandler : public TypeCheckingPolicyHandler {
   base::flat_map<std::string, Mode> policy_value_to_mode_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class PrintingAllowedColorModesPolicyHandler
     : public PrintingEnumPolicyHandler<printing::ColorModeRestriction> {
  public:
@@ -90,7 +90,7 @@ class PrintingPinDefaultPolicyHandler
   PrintingPinDefaultPolicyHandler();
   ~PrintingPinDefaultPolicyHandler() override;
 };
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 class PrintingAllowedBackgroundGraphicsModesPolicyHandler
@@ -121,7 +121,7 @@ class PrintingPaperSizeDefaultPolicyHandler : public TypeCheckingPolicyHandler {
                            PrefValueMap* prefs) override;
 
  private:
-  bool CheckIntSubkey(const base::Value* dict,
+  bool CheckIntSubkey(const base::Value::Dict& dict,
                       const std::string& key,
                       PolicyErrorMap* errors);
   bool GetValue(const PolicyMap& policies,

@@ -15,10 +15,12 @@
 #include <limits>
 #include <string>
 
+#include "base/apple/foundation_util.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/logging.h"
-#include "base/mac/foundation_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/gamepad_id_list.h"
 
 namespace device {
@@ -27,6 +29,8 @@ namespace {
 
 // XboxDataFetcher recognizes the following devices connected over USB.
 constexpr auto kSupportedDeviceIds = base::MakeFixedFlatSet<GamepadId>({
+    GamepadId::kAcerProduct1304,         // Acer GC501 (X-INPUT mode)
+    GamepadId::kAcerProduct1305,         // Acer Nitro (X-INPUT mode)
     GamepadId::kAmazonProduct041a,       // Amazon Luna Controller
     GamepadId::kMicrosoftProduct028e,    // Xbox 360
     GamepadId::kMicrosoftProduct02d1,    // Xbox One
@@ -128,12 +132,12 @@ void XboxDataFetcher::DeviceRemoved(void* context, io_iterator_t iterator) {
   io_service_t ref;
   while ((ref = IOIteratorNext(iterator))) {
     base::mac::ScopedIOObject<io_service_t> scoped_ref(ref);
-    base::ScopedCFTypeRef<CFNumberRef> number(
-        base::mac::CFCastStrict<CFNumberRef>(IORegistryEntryCreateCFProperty(
+    base::apple::ScopedCFTypeRef<CFNumberRef> number(
+        base::apple::CFCastStrict<CFNumberRef>(IORegistryEntryCreateCFProperty(
             ref, CFSTR(kUSBDevicePropertyLocationID), kCFAllocatorDefault,
             kNilOptions)));
     UInt32 location_id = 0;
-    CFNumberGetValue(number, kCFNumberSInt32Type, &location_id);
+    CFNumberGetValue(number.get(), kCFNumberSInt32Type, &location_id);
     fetcher->RemoveControllerByLocationID(location_id);
   }
 }
@@ -186,7 +190,7 @@ bool XboxDataFetcher::RegisterForNotifications() {
   if (listening_)
     return true;
   if (port_ == nullptr)
-    port_.reset(IONotificationPortCreate(kIOMasterPortDefault));
+    port_.reset(IONotificationPortCreate(kIOMainPortDefault));
   if (!port_.is_valid())
     return false;
   source_ = IONotificationPortGetRunLoopSource(port_.get());
@@ -207,25 +211,27 @@ bool XboxDataFetcher::RegisterForNotifications() {
 
 bool XboxDataFetcher::RegisterForDeviceNotifications(int vendor_id,
                                                      int product_id) {
-  base::ScopedCFTypeRef<CFNumberRef> vendor_cf(
+  base::apple::ScopedCFTypeRef<CFNumberRef> vendor_cf(
       CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &vendor_id));
-  base::ScopedCFTypeRef<CFNumberRef> product_cf(
+  base::apple::ScopedCFTypeRef<CFNumberRef> product_cf(
       CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &product_id));
-  base::ScopedCFTypeRef<CFMutableDictionaryRef> matching_dict(
+  base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> matching_dict(
       IOServiceMatching(kIOUSBDeviceClassName));
   if (!matching_dict)
     return false;
-  CFDictionarySetValue(matching_dict, CFSTR(kUSBVendorID), vendor_cf);
-  CFDictionarySetValue(matching_dict, CFSTR(kUSBProductID), product_cf);
+  CFDictionarySetValue(matching_dict.get(), CFSTR(kUSBVendorID),
+                       vendor_cf.get());
+  CFDictionarySetValue(matching_dict.get(), CFSTR(kUSBProductID),
+                       product_cf.get());
 
   // IOServiceAddMatchingNotification() releases the dictionary when it's done.
   // Retain it before each call to IOServiceAddMatchingNotification to keep
   // things balanced.
-  CFRetain(matching_dict);
+  CFRetain(matching_dict.get());
   IOReturn ret;
   base::mac::ScopedIOObject<io_iterator_t> added_iterator;
   ret = IOServiceAddMatchingNotification(port_.get(), kIOFirstMatchNotification,
-                                         matching_dict, DeviceAdded, this,
+                                         matching_dict.get(), DeviceAdded, this,
                                          added_iterator.InitializeInto());
   if (ret != kIOReturnSuccess) {
     LOG(ERROR) << "Error listening for Xbox controller add events: " << ret;
@@ -234,11 +240,11 @@ bool XboxDataFetcher::RegisterForDeviceNotifications(int vendor_id,
   DeviceAdded(this, added_iterator.get());
   device_event_iterators_.push_back(std::move(added_iterator));
 
-  CFRetain(matching_dict);
+  CFRetain(matching_dict.get());
   base::mac::ScopedIOObject<io_iterator_t> removed_iterator;
-  ret = IOServiceAddMatchingNotification(port_.get(), kIOTerminatedNotification,
-                                         matching_dict, DeviceRemoved, this,
-                                         removed_iterator.InitializeInto());
+  ret = IOServiceAddMatchingNotification(
+      port_.get(), kIOTerminatedNotification, matching_dict.get(),
+      DeviceRemoved, this, removed_iterator.InitializeInto());
   if (ret != kIOReturnSuccess) {
     LOG(ERROR) << "Error listening for Xbox controller remove events: " << ret;
     return false;
@@ -252,7 +258,7 @@ bool XboxDataFetcher::RegisterForInterestNotifications(
     io_service_t service,
     PendingController* pending) {
   if (port_ == nullptr)
-    port_.reset(IONotificationPortCreate(kIOMasterPortDefault));
+    port_.reset(IONotificationPortCreate(kIOMainPortDefault));
   if (!port_.is_valid())
     return false;
 
@@ -310,7 +316,13 @@ void XboxDataFetcher::AddController(XboxControllerMac* controller) {
   state->axis_mask = 0;
   state->button_mask = 0;
 
-  state->data.vibration_actuator.type = GamepadHapticActuatorType::kDualRumble;
+  if (GamepadIdList::Get().HasTriggerRumbleSupport(controller->gamepad_id())) {
+    state->data.vibration_actuator.type =
+        GamepadHapticActuatorType::kTriggerRumble;
+  } else {
+    state->data.vibration_actuator.type =
+        GamepadHapticActuatorType::kDualRumble;
+  }
   state->data.vibration_actuator.not_null = controller->SupportsVibration();
 }
 
@@ -344,8 +356,8 @@ void XboxDataFetcher::XboxControllerGotData(
   Gamepad& pad = state->data;
 
   for (size_t i = 0; i < 6; i++) {
-    pad.buttons[i].pressed = data.buttons[i];
-    pad.buttons[i].value = data.buttons[i] ? 1.0f : 0.0f;
+    pad.buttons[i].pressed = UNSAFE_TODO(data.buttons[i]);
+    pad.buttons[i].value = UNSAFE_TODO(data.buttons[i]) ? 1.0f : 0.0f;
   }
   pad.buttons[6].pressed =
       data.triggers[0] > GamepadButton::kDefaultButtonPressedThreshold;
@@ -354,8 +366,8 @@ void XboxDataFetcher::XboxControllerGotData(
       data.triggers[1] > GamepadButton::kDefaultButtonPressedThreshold;
   pad.buttons[7].value = data.triggers[1];
   for (size_t i = 8; i < 16; i++) {
-    pad.buttons[i].pressed = data.buttons[i - 2];
-    pad.buttons[i].value = data.buttons[i - 2] ? 1.0f : 0.0f;
+    pad.buttons[i].pressed = UNSAFE_TODO(data.buttons[i - 2]);
+    pad.buttons[i].value = UNSAFE_TODO(data.buttons[i - 2]) ? 1.0f : 0.0f;
   }
   if (controller->xinput_type() == kXInputTypeXbox360) {
     // Map the Xbox button on Xbox 360 to buttons[16].
@@ -369,7 +381,7 @@ void XboxDataFetcher::XboxControllerGotData(
     pad.buttons_length = 18;
   }
   for (size_t i = 0; i < std::size(data.axes); i++) {
-    pad.axes[i] = data.axes[i];
+    pad.axes[i] = UNSAFE_TODO(data.axes[i]);
   }
 
   pad.timestamp = CurrentTimeInMicroseconds();

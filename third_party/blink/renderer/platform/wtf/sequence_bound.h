@@ -5,12 +5,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_SEQUENCE_BOUND_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_SEQUENCE_BOUND_H_
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/sequence_bound.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
-namespace WTF {
+namespace blink {
 namespace internal {
 
 template <typename T>
@@ -26,7 +27,7 @@ using IsCrossThreadOnceFunction =
 
 struct SequenceBoundBindTraits {
   template <typename Signature>
-  using CrossThreadTask = WTF::CrossThreadOnceFunction<Signature>;
+  using CrossThreadTask = CrossThreadOnceFunction<Signature>;
 
   template <typename Functor, typename... Args>
   static inline auto BindOnce(Functor&& functor, Args&&... args) {
@@ -69,16 +70,15 @@ struct SequenceBoundBindTraits {
   }
 
   template <template <typename> class CallbackType>
-  using EnableIfIsCrossThreadTask =
-      std::enable_if_t<IsCrossThreadOnceFunction<CallbackType<void()>>::value>;
+  static constexpr bool IsCrossThreadTask =
+      IsCrossThreadOnceFunction<CallbackType<void()>>::value;
 };
 
 }  // namespace internal
 
 template <typename T>
-using SequenceBound =
-    base::SequenceBound<T, WTF::internal::SequenceBoundBindTraits>;
+using SequenceBound = base::SequenceBound<T, internal::SequenceBoundBindTraits>;
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_SEQUENCE_BOUND_H_

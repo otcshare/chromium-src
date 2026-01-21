@@ -7,9 +7,10 @@
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace supervised_users {
+namespace supervised_user {
 
 // Tests supervised user features configurations.
 class FeaturesTest : public testing::Test {
@@ -22,50 +23,31 @@ class FeaturesTest : public testing::Test {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Tests `kWebFilterInterstitialRefresh` and `kLocalWebApproval`features
-// configuration.
+// Tests `kLocalWebApproval` feature configuration.
 using LocalWebApprovalsFeatureTest = FeaturesTest;
 
-TEST_F(LocalWebApprovalsFeatureTest,
-       InterstitialRefreshDisabledAndLocalApprovalsDisabled) {
+TEST_F(LocalWebApprovalsFeatureTest, LocalApprovalsDisabled) {
   scoped_feature_list_.InitWithFeatures(
       /* enabled_features */ {},
-      /* disabled_features */ {kWebFilterInterstitialRefresh,
-                               kLocalWebApprovals});
-  EXPECT_FALSE(IsWebFilterInterstitialRefreshEnabled());
-  EXPECT_FALSE(IsLocalWebApprovalsEnabled());
-}
-
-TEST_F(LocalWebApprovalsFeatureTest,
-       InterstitialRefreshEnabledAndLocalApprovalsEnabled) {
-  scoped_feature_list_.InitWithFeatures(
-      /* enabled_features */ {kWebFilterInterstitialRefresh,
-                              kLocalWebApprovals},
-      /* disabled_features */ {});
-  EXPECT_TRUE(IsWebFilterInterstitialRefreshEnabled());
-  EXPECT_TRUE(IsLocalWebApprovalsEnabled());
-}
-
-TEST_F(LocalWebApprovalsFeatureTest,
-       InterstitialRefreshEnabledAndLocalApprovalsDisabled) {
-  scoped_feature_list_.InitWithFeatures(
-      /* enabled_features */ {kWebFilterInterstitialRefresh},
       /* disabled_features */ {kLocalWebApprovals});
-  EXPECT_TRUE(IsWebFilterInterstitialRefreshEnabled());
   EXPECT_FALSE(IsLocalWebApprovalsEnabled());
 }
 
-// Tests that DCHECK is triggered when local web approval feature is enabled
-// without the refreshed web filter interstitial layout feature.
-#if DCHECK_IS_ON()
-TEST_F(LocalWebApprovalsFeatureTest,
-       InterstitialRefreshDisableAndLocalApprovalsEnabled) {
+void CheckIsLocalWebApprovalsEnabled() {
+  bool is_local_web_approvals_enabled = true;
+// On android require a Google-branded build is required.
+#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  is_local_web_approvals_enabled = false;
+#endif  // BUILDFLAG(IS_ANDROID) && !(BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
+  EXPECT_EQ(IsLocalWebApprovalsEnabled(), is_local_web_approvals_enabled);
+}
+
+TEST_F(LocalWebApprovalsFeatureTest, LocalApprovalsEnabled) {
   scoped_feature_list_.InitWithFeatures(
       /* enabled_features */ {kLocalWebApprovals},
-      /* disabled_features */ {kWebFilterInterstitialRefresh});
-  EXPECT_DEATH_IF_SUPPORTED(IsWebFilterInterstitialRefreshEnabled(), "");
-  EXPECT_DEATH_IF_SUPPORTED(IsLocalWebApprovalsEnabled(), "");
+      /* disabled_features */ {});
+  CheckIsLocalWebApprovalsEnabled();
 }
-#endif
 
-}  // namespace supervised_users
+}  // namespace supervised_user

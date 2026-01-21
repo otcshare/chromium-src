@@ -13,19 +13,28 @@
 #include "extensions/browser/extension_pref_value_map_factory.h"
 #include "extensions/browser/extension_prefs_helper.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_set.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 namespace {
 
+enum class OverrideType {
+  kStartupPages,
+  kHomePage,
+  kSearchEngine,
+};
+
 // Returns which |extension| (if any) is overriding a particular |type| of
 // setting.
 const Extension* FindOverridingExtension(
     content::BrowserContext* browser_context,
-    SettingsApiOverrideType type) {
+    OverrideType type) {
   const ExtensionSet& extensions =
       ExtensionRegistry::Get(browser_context)->enabled_extensions();
   ExtensionPrefsHelper* prefs_helper =
@@ -36,22 +45,26 @@ const Extension* FindOverridingExtension(
        ++it) {
     const SettingsOverrides* settings = SettingsOverrides::Get(it->get());
     if (settings) {
-      if (type == BUBBLE_TYPE_HOME_PAGE && !settings->homepage)
+      if (type == OverrideType::kHomePage && !settings->homepage) {
         continue;
-      if (type == BUBBLE_TYPE_STARTUP_PAGES && settings->startup_pages.empty())
+      }
+      if (type == OverrideType::kStartupPages &&
+          settings->startup_pages.empty()) {
         continue;
-      if (type == BUBBLE_TYPE_SEARCH_ENGINE && !settings->search_engine)
+      }
+      if (type == OverrideType::kSearchEngine && !settings->search_engine) {
         continue;
+      }
 
       std::string key;
       switch (type) {
-        case BUBBLE_TYPE_HOME_PAGE:
+        case OverrideType::kHomePage:
           key = prefs::kHomePage;
           break;
-        case BUBBLE_TYPE_STARTUP_PAGES:
+        case OverrideType::kStartupPages:
           key = prefs::kRestoreOnStartup;
           break;
-        case BUBBLE_TYPE_SEARCH_ENGINE:
+        case OverrideType::kSearchEngine:
           key = prefs::kDefaultSearchProviderEnabled;
           break;
       }
@@ -74,7 +87,7 @@ const Extension* FindOverridingExtension(
 
 const Extension* GetExtensionOverridingHomepage(
     content::BrowserContext* browser_context) {
-  return FindOverridingExtension(browser_context, BUBBLE_TYPE_HOME_PAGE);
+  return FindOverridingExtension(browser_context, OverrideType::kHomePage);
 }
 
 const Extension* GetExtensionOverridingNewTabPage(
@@ -83,20 +96,21 @@ const Extension* GetExtensionOverridingNewTabPage(
   content::BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
       &ntp_url, browser_context);
   if (ntp_url.SchemeIs(kExtensionScheme)) {
-    return ExtensionRegistry::Get(browser_context)->GetExtensionById(
-        ntp_url.host(), ExtensionRegistry::ENABLED);
+    return ExtensionRegistry::Get(browser_context)
+        ->enabled_extensions()
+        .GetByID(ntp_url.GetHost());
   }
   return nullptr;
 }
 
 const Extension* GetExtensionOverridingStartupPages(
     content::BrowserContext* browser_context) {
-  return FindOverridingExtension(browser_context, BUBBLE_TYPE_STARTUP_PAGES);
+  return FindOverridingExtension(browser_context, OverrideType::kStartupPages);
 }
 
 const Extension* GetExtensionOverridingSearchEngine(
     content::BrowserContext* browser_context) {
-  return FindOverridingExtension(browser_context, BUBBLE_TYPE_SEARCH_ENGINE);
+  return FindOverridingExtension(browser_context, OverrideType::kSearchEngine);
 }
 
 const Extension* GetExtensionOverridingProxy(
@@ -110,8 +124,9 @@ const Extension* GetExtensionOverridingProxy(
           proxy_config::prefs::kProxy);
   if (extension_id.empty())
     return nullptr;
-  return ExtensionRegistry::Get(browser_context)->GetExtensionById(
-      extension_id, ExtensionRegistry::ENABLED);
+  return ExtensionRegistry::Get(browser_context)
+      ->enabled_extensions()
+      .GetByID(extension_id);
 }
 
 }  // namespace extensions

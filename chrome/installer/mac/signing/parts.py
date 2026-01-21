@@ -8,8 +8,8 @@ bundle that need to be signed, as well as providing utilities to sign them.
 
 import os.path
 
-from . import commands, signing
-from .model import CodeSignOptions, CodeSignedProduct, VerifyOptions
+from signing import commands, signing
+from signing.model import CodeSignOptions, CodeSignedProduct, VerifyOptions
 
 _PROVISIONPROFILE_EXT = '.provisionprofile'
 _PROVISIONPROFILE_DEST = 'embedded.provisionprofile'
@@ -44,13 +44,6 @@ def get_parts(config):
                 requirements=config.codesign_requirements_outer_app,
                 identifier_requirement=False,
                 entitlements='app-entitlements.plist',
-                verify_options=verify_options),
-        'privileged-helper':
-            CodeSignedProduct(
-                '{.app_product}.app/Contents/Library/LaunchServices/{}.UpdaterPrivilegedHelper'
-                .format(config, uncustomized_bundle_id),
-                '{}.UpdaterPrivilegedHelper'.format(uncustomized_bundle_id),
-                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
                 verify_options=verify_options),
         'framework':
             CodeSignedProduct(
@@ -122,7 +115,24 @@ def get_parts(config):
                 'app_mode_loader',
                 options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
                 verify_options=verify_options),
+        'web-app-shortcut-copier':
+            CodeSignedProduct(
+                '{.framework_dir}/Helpers/web_app_shortcut_copier'.format(
+                    config),
+                '{}.web_app_shortcut_copier'.format(uncustomized_bundle_id),
+                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+                sign_with_identifier=True,
+                verify_options=verify_options),
     }
+
+    if config.enable_updater:
+        parts['privileged-helper'] = CodeSignedProduct(
+            ('{.app_product}.app/Contents/Library/LaunchServices/' +
+             '{}.UpdaterPrivilegedHelper').format(config,
+                                                  uncustomized_bundle_id),
+            '{}.UpdaterPrivilegedHelper'.format(uncustomized_bundle_id),
+            options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+            verify_options=verify_options)
 
     dylibs = [
         'libEGL.dylib',
@@ -174,7 +184,7 @@ def get_installer_tools(config):
     return tools
 
 
-def sign_chrome(paths, config, sign_framework=False):
+async def sign_chrome(paths, config, sign_framework=False):
     """Code signs the Chrome application bundle and all of its internal nested
     code parts.
 
@@ -215,17 +225,17 @@ def sign_chrome(paths, config, sign_framework=False):
                          _PROVISIONPROFILE_DEST))
 
     # Sign the privileged helper.
-    signing.sign_part(paths, config, parts['privileged-helper'])
+    if 'privileged-helper' in parts:
+        signing.sign_part(paths, config, parts['privileged-helper'])
 
     # Sign the outer app bundle.
     signing.sign_part(paths, config, parts['app'])
 
-    # Verify all the parts.
-    for part in parts.values():
-        signing.verify_part(paths, part)
-
     # Display the code signature.
-    signing.validate_app(paths, config, parts['app'])
+    await signing.validate_app(paths, config, parts['app'])
+
+    # Validate the app's architecture geometry, if configured.
+    signing.validate_app_geometry(paths, config, parts['app'])
 
 
 def _sanity_check_version_keys(paths, parts):

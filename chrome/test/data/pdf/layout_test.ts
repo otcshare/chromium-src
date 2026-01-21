@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {PdfScriptingApi, PdfViewerElement} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import type {PdfViewerElement} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 
 // Tests common to all PDFs.
 const tests = [
@@ -48,11 +48,9 @@ const perLayoutTests: {[name: string]: Array<() => void>} = {
   ],
 };
 
-const scriptingAPI = new PdfScriptingApi(window, window);
-scriptingAPI.setLoadCompleteCallback((success) => {
-  if (success && document.title in perLayoutTests) {
-    chrome.test.runTests(tests.concat(perLayoutTests[document.title]!));
-  } else {
-    chrome.test.fail(document.title);
-  }
-});
+const viewer = document.body.querySelector<PdfViewerElement>('#viewer')!;
+if (viewer.pdfTitle in perLayoutTests) {
+  chrome.test.runTests(tests.concat(perLayoutTests[viewer.pdfTitle]!));
+} else {
+  chrome.test.fail(viewer.pdfTitle);
+}

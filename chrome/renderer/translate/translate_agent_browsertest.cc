@@ -2,23 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/translate/content/renderer/translate_agent.h"
+
 #include <tuple>
+#include <utility>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/test/base/chrome_render_view_test.h"
+#include "components/language_detection/core/constants.h"
 #include "components/translate/content/common/translate.mojom.h"
-#include "components/translate/content/renderer/translate_agent.h"
-#include "components/translate/core/common/translate_constants.h"
 #include "components/translate/core/common/translate_util.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
@@ -27,7 +28,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 
 using testing::_;
@@ -58,23 +59,21 @@ class FakeContentTranslateDriver
   void RegisterPage(
       mojo::PendingRemote<translate::mojom::TranslateAgent> translate_agent,
       const translate::LanguageDetectionDetails& details,
-      bool page_level_translation_critiera_met) override {
+      bool page_level_translation_criteria_met) override {
     called_new_page_ = true;
     details_ = details;
-    page_level_translation_critiera_met_ = page_level_translation_critiera_met;
+    page_level_translation_criteria_met_ = page_level_translation_criteria_met;
   }
-  void GetLanguageDetectionModel(
-      GetLanguageDetectionModelCallback callback) override {}
 
   void ResetNewPageValues() {
     called_new_page_ = false;
-    details_ = absl::nullopt;
-    page_level_translation_critiera_met_ = false;
+    details_ = std::nullopt;
+    page_level_translation_criteria_met_ = false;
   }
 
   bool called_new_page_ = false;
-  bool page_level_translation_critiera_met_ = false;
-  absl::optional<translate::LanguageDetectionDetails> details_;
+  bool page_level_translation_criteria_met_ = false;
+  std::optional<translate::LanguageDetectionDetails> details_;
 
  private:
   mojo::ReceiverSet<translate::mojom::ContentTranslateDriver> receivers_;
@@ -91,7 +90,7 @@ base::File LoadModelFile(const base::FilePath& model_file_path) {
 
 base::FilePath model_file_path() {
   base::FilePath source_root_dir;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root_dir);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_root_dir);
   return source_root_dir.AppendASCII("components")
       .AppendASCII("test")
       .AppendASCII("data")
@@ -121,8 +120,8 @@ class TestTranslateAgent : public translate::TranslateAgent {
     // Reset result values firstly.
     page_translated_ = false;
     trans_result_cancelled_ = false;
-    trans_result_source_lang_ = absl::nullopt;
-    trans_result_translated_lang_ = absl::nullopt;
+    trans_result_source_lang_ = std::nullopt;
+    trans_result_translated_lang_ = std::nullopt;
     trans_result_error_type_ = translate::TranslateErrors::NONE;
 
     // Will get new result values via OnPageTranslated.
@@ -173,8 +172,8 @@ class TestTranslateAgent : public translate::TranslateAgent {
 
   bool page_translated_;
   bool trans_result_cancelled_;
-  absl::optional<std::string> trans_result_source_lang_;
-  absl::optional<std::string> trans_result_translated_lang_;
+  std::optional<std::string> trans_result_source_lang_;
+  std::optional<std::string> trans_result_translated_lang_;
   translate::TranslateErrors trans_result_error_type_;
 };
 
@@ -189,11 +188,9 @@ class TranslateAgentBrowserTest : public ChromeRenderViewTest {
  protected:
   void SetUp() override {
     ChromeRenderViewTest::SetUp();
-    scoped_feature_list_.InitAndEnableFeature(
-        translate::kTFLiteLanguageDetectionEnabled);
     translate_agent_ = new TestTranslateAgent(GetMainRenderFrame());
 
-    GetMainRenderFrame()->GetBrowserInterfaceBroker()->SetBinderForTesting(
+    GetMainRenderFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
         translate::mojom::ContentTranslateDriver::Name_,
         base::BindRepeating(&FakeContentTranslateDriver::BindHandle,
                             base::Unretained(&fake_translate_driver_)));
@@ -203,16 +200,15 @@ class TranslateAgentBrowserTest : public ChromeRenderViewTest {
   }
 
   void TearDown() override {
-    GetMainRenderFrame()->GetBrowserInterfaceBroker()->SetBinderForTesting(
+    GetMainRenderFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
         translate::mojom::ContentTranslateDriver::Name_, {});
 
     delete translate_agent_;
     ChromeRenderViewTest::TearDown();
   }
 
-  TestTranslateAgent* translate_agent_;
+  raw_ptr<TestTranslateAgent, DanglingUntriaged> translate_agent_;
   FakeContentTranslateDriver fake_translate_driver_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Tests that the browser gets notified of the translation failure if the
@@ -232,7 +228,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateLibNeverReady) {
   EXPECT_CALL(*translate_agent_, GetErrorCode())
       .Times(AtLeast(5))
       .WillRepeatedly(
-          Return(base::to_underlying(translate::TranslateErrors::NONE)));
+          Return(std::to_underlying(translate::TranslateErrors::NONE)));
 
   translate_agent_->TranslatePage("en", "fr", std::string());
   base::RunLoop().RunUntilIdle();
@@ -257,7 +253,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateSuccess) {
       .WillOnce(Return(true));
 
   EXPECT_CALL(*translate_agent_, GetErrorCode())
-      .WillOnce(Return(base::to_underlying(translate::TranslateErrors::NONE)));
+      .WillOnce(Return(std::to_underlying(translate::TranslateErrors::NONE)));
 
   EXPECT_CALL(*translate_agent_, StartTranslation()).WillOnce(Return(true));
 
@@ -313,7 +309,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateFailure) {
 
   EXPECT_CALL(*translate_agent_, GetErrorCode())
       .WillOnce(Return(
-          base::to_underlying(translate::TranslateErrors::TRANSLATION_ERROR)));
+          std::to_underlying(translate::TranslateErrors::TRANSLATION_ERROR)));
 
   // V8 call for performance monitoring should be ignored.
   EXPECT_CALL(*translate_agent_, ExecuteScriptAndGetDoubleResult(_)).Times(2);
@@ -351,8 +347,8 @@ TEST_F(TranslateAgentBrowserTest, UndefinedSourceLang) {
   // V8 call for performance monitoring should be ignored.
   EXPECT_CALL(*translate_agent_, ExecuteScriptAndGetDoubleResult(_)).Times(3);
 
-  translate_agent_->TranslatePage(translate::kUnknownLanguageCode, "fr",
-                                  std::string());
+  translate_agent_->TranslatePage(language_detection::kUnknownLanguageCode,
+                                  "fr", std::string());
   base::RunLoop().RunUntilIdle();
 
   translate::TranslateErrors error;
@@ -446,7 +442,7 @@ TEST_F(TranslateAgentBrowserTest, TranslatablePage) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(fake_translate_driver_.called_new_page_);
-  EXPECT_TRUE(fake_translate_driver_.page_level_translation_critiera_met_)
+  EXPECT_TRUE(fake_translate_driver_.page_level_translation_criteria_met_)
       << "Page should be translatable.";
   fake_translate_driver_.ResetNewPageValues();
 
@@ -457,7 +453,7 @@ TEST_F(TranslateAgentBrowserTest, TranslatablePage) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(fake_translate_driver_.called_new_page_);
-  EXPECT_FALSE(fake_translate_driver_.page_level_translation_critiera_met_)
+  EXPECT_FALSE(fake_translate_driver_.page_level_translation_criteria_met_)
       << "Page should not be translatable.";
   fake_translate_driver_.ResetNewPageValues();
 
@@ -468,7 +464,7 @@ TEST_F(TranslateAgentBrowserTest, TranslatablePage) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(fake_translate_driver_.called_new_page_);
-  EXPECT_FALSE(fake_translate_driver_.page_level_translation_critiera_met_)
+  EXPECT_FALSE(fake_translate_driver_.page_level_translation_criteria_met_)
       << "Page should not be translatable.";
 }
 
@@ -575,7 +571,7 @@ TEST_F(TranslateAgentBrowserTest, UnsupportedTranslateSchemes) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(fake_translate_driver_.called_new_page_);
-  EXPECT_FALSE(fake_translate_driver_.page_level_translation_critiera_met_);
+  EXPECT_FALSE(fake_translate_driver_.page_level_translation_criteria_met_);
 
   LoadHTMLWithUrlOverride(
       "<html><body>A random page with random content.</body></html>",
@@ -583,7 +579,7 @@ TEST_F(TranslateAgentBrowserTest, UnsupportedTranslateSchemes) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(fake_translate_driver_.called_new_page_);
-  EXPECT_FALSE(fake_translate_driver_.page_level_translation_critiera_met_);
+  EXPECT_FALSE(fake_translate_driver_.page_level_translation_criteria_met_);
 
   LoadHTMLWithUrlOverride(
       "<html><body>A random page with random content.</body></html>",
@@ -591,5 +587,5 @@ TEST_F(TranslateAgentBrowserTest, UnsupportedTranslateSchemes) {
 
   base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(fake_translate_driver_.called_new_page_);
-  EXPECT_FALSE(fake_translate_driver_.page_level_translation_critiera_met_);
+  EXPECT_FALSE(fake_translate_driver_.page_level_translation_criteria_met_);
 }

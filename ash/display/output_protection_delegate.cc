@@ -6,7 +6,7 @@
 
 #include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/shell.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/content_protection_manager.h"
 #include "ui/display/manager/display_configurator.h"
@@ -45,7 +45,7 @@ struct OutputProtectionDelegate::ClientIdHolder {
 OutputProtectionDelegate::OutputProtectionDelegate(aura::Window* window)
     : window_(window),
       display_id_(
-          display::Screen::GetScreen()->GetDisplayNearestWindow(window).id()) {
+          display::Screen::Get()->GetDisplayNearestWindow(window).id()) {
   // TODO(domlaskowski): OutputProtectionImpl passes null if the RenderFrameHost
   // no longer exists. Investigate removing this check in crbug.com/997270.
   if (!window_)
@@ -133,7 +133,7 @@ void OutputProtectionDelegate::OnWindowMayHaveMovedToAnotherDisplayOrWindow() {
   CaptureModeController::Get()->RefreshContentProtection();
 
   const int64_t new_display_id =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window_).id();
+      display::Screen::Get()->GetDisplayNearestWindow(window_).id();
   if (display_id_ == new_display_id)
     return;
 

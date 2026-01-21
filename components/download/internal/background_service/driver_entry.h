@@ -5,17 +5,18 @@
 #ifndef COMPONENTS_DOWNLOAD_INTERNAL_BACKGROUND_SERVICE_DRIVER_ENTRY_H_
 #define COMPONENTS_DOWNLOAD_INTERNAL_BACKGROUND_SERVICE_DRIVER_ENTRY_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
+#include "build/blink_buildflags.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
-#if !BUILDFLAG(IS_IOS)
+#if BUILDFLAG(USE_BLINK)
 #include "storage/browser/blob/blob_data_handle.h"
 #endif
 
@@ -73,10 +74,10 @@ struct DriverEntry {
   // Will be empty file path in incognito mode.
   base::FilePath current_file_path;
 
-#if !BUILDFLAG(IS_IOS)
+#if BUILDFLAG(USE_BLINK)
   // The blob data handle that contains download data.
   // Will be available after the download is completed in incognito mode.
-  absl::optional<storage::BlobDataHandle> blob_handle;
+  std::optional<storage::BlobDataHandle> blob_handle;
 #endif
 
   // Time the download was marked as complete, base::Time() if the download is

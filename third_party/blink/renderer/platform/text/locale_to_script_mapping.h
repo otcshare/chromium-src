@@ -37,7 +37,6 @@
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
-
 namespace blink {
 
 PLATFORM_EXPORT UScriptCode LocaleToScriptCodeForFontSelection(const String&);

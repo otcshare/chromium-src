@@ -10,11 +10,13 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
@@ -36,7 +38,6 @@
 using testing::_;
 using testing::DoAll;
 using testing::InSequence;
-using testing::Invoke;
 using testing::NotNull;
 using testing::Return;
 using testing::WithArg;
@@ -49,7 +50,7 @@ const int kChannelId = 0;
 // Mockable placeholder for write completion events.
 class CompleteHandler {
  public:
-  CompleteHandler() {}
+  CompleteHandler() = default;
 
   CompleteHandler(const CompleteHandler&) = delete;
   CompleteHandler& operator=(const CompleteHandler&) = delete;
@@ -74,7 +75,7 @@ CastMessage CreateCastMessage() {
 // Pop() in the same order as Push().
 class CompletionQueue {
  public:
-  CompletionQueue() {}
+  CompletionQueue() = default;
 
   CompletionQueue(const CompletionQueue&) = delete;
   CompletionQueue& operator=(const CompletionQueue&) = delete;
@@ -115,7 +116,8 @@ ACTION_TEMPLATE(ReadBufferToString,
 ACTION_TEMPLATE(FillBufferFromString,
                 HAS_1_TEMPLATE_PARAMS(int, buf_idx),
                 AND_1_VALUE_PARAMS(str)) {
-  memcpy(testing::get<buf_idx>(args)->data(), str.data(), str.size());
+  UNSAFE_TODO(
+      memcpy(testing::get<buf_idx>(args)->data(), str.data(), str.size()));
 }
 
 // GMock action that enqueues a write completion callback in a queue.
@@ -163,7 +165,7 @@ class CastTransportTest : public testing::Test {
         &mock_socket_, kChannelId, CreateIPEndPointForTest(), logger_);
     transport_->SetReadDelegate(base::WrapUnique(delegate_.get()));
   }
-  ~CastTransportTest() override {}
+  ~CastTransportTest() override = default;
 
  protected:
   // Runs all pending tasks in the message loop.
@@ -173,9 +175,9 @@ class CastTransportTest : public testing::Test {
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
-  raw_ptr<MockCastTransportDelegate> delegate_;
+  raw_ptr<MockCastTransportDelegate, DanglingUntriaged> delegate_;
   MockSocket mock_socket_;
-  Logger* logger_;
+  scoped_refptr<Logger> logger_;
   std::unique_ptr<CastTransport> transport_;
 };
 
@@ -273,31 +275,30 @@ TEST_F(CastTransportTest, TestFullReadAsync) {
 
   // Read bytes [0, 3].
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _))
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message),
                       EnqueueCallback<2>(&socket_cbs)));
 
   // Read bytes [4, n].
-  EXPECT_CALL(mock_socket_,
-              Read_(NotNull(),
-                    serialized_message.size() -
-                        MessageFramer::MessageHeader::header_size(),
-                    _))
+  EXPECT_CALL(mock_socket_, Read_(NotNull(),
+                                  serialized_message.size() -
+                                      sizeof(MessageFramer::MessageHeader),
+                                  _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message.substr(
-                          MessageFramer::MessageHeader::header_size(),
+                          sizeof(MessageFramer::MessageHeader),
                           serialized_message.size() -
-                              MessageFramer::MessageHeader::header_size())),
+                              sizeof(MessageFramer::MessageHeader))),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
 
   EXPECT_CALL(*delegate_, OnMessage(EqualsProto(message)));
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _));
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _));
   transport_->Start();
   RunPendingTasks();
-  socket_cbs.Pop(MessageFramer::MessageHeader::header_size());
+  socket_cbs.Pop(sizeof(MessageFramer::MessageHeader));
   socket_cbs.Pop(serialized_message.size() -
-                 MessageFramer::MessageHeader::header_size());
+                 sizeof(MessageFramer::MessageHeader));
   RunPendingTasks();
 }
 
@@ -313,20 +314,19 @@ TEST_F(CastTransportTest, TestPartialReadAsync) {
 
   // Read bytes [0, 3].
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _))
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
   // Read bytes [4, n-1].
-  EXPECT_CALL(mock_socket_,
-              Read_(NotNull(),
-                    serialized_message.size() -
-                        MessageFramer::MessageHeader::header_size(),
-                    _))
+  EXPECT_CALL(mock_socket_, Read_(NotNull(),
+                                  serialized_message.size() -
+                                      sizeof(MessageFramer::MessageHeader),
+                                  _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message.substr(
-                          MessageFramer::MessageHeader::header_size(),
+                          sizeof(MessageFramer::MessageHeader),
                           serialized_message.size() -
-                              MessageFramer::MessageHeader::header_size() - 1)),
+                              sizeof(MessageFramer::MessageHeader) - 1)),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
   // Read final byte.
@@ -337,11 +337,11 @@ TEST_F(CastTransportTest, TestPartialReadAsync) {
       .RetiresOnSaturation();
   EXPECT_CALL(*delegate_, OnMessage(EqualsProto(message)));
   transport_->Start();
-  socket_cbs.Pop(MessageFramer::MessageHeader::header_size());
+  socket_cbs.Pop(sizeof(MessageFramer::MessageHeader));
   socket_cbs.Pop(serialized_message.size() -
-                 MessageFramer::MessageHeader::header_size() - 1);
+                 sizeof(MessageFramer::MessageHeader) - 1);
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _));
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _));
   socket_cbs.Pop(1);
 }
 
@@ -356,7 +356,7 @@ TEST_F(CastTransportTest, TestReadErrorInHeaderAsync) {
 
   // Read bytes [0, 3].
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _))
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
@@ -382,26 +382,25 @@ TEST_F(CastTransportTest, TestReadErrorInBodyAsync) {
 
   // Read bytes [0, 3].
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _))
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
   // Read bytes [4, n-1].
-  EXPECT_CALL(mock_socket_,
-              Read_(NotNull(),
-                    serialized_message.size() -
-                        MessageFramer::MessageHeader::header_size(),
-                    _))
+  EXPECT_CALL(mock_socket_, Read_(NotNull(),
+                                  serialized_message.size() -
+                                      sizeof(MessageFramer::MessageHeader),
+                                  _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message.substr(
-                          MessageFramer::MessageHeader::header_size(),
+                          sizeof(MessageFramer::MessageHeader),
                           serialized_message.size() -
-                              MessageFramer::MessageHeader::header_size() - 1)),
+                              sizeof(MessageFramer::MessageHeader) - 1)),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
   EXPECT_CALL(*delegate_, OnError(ChannelError::CAST_SOCKET_ERROR));
   transport_->Start();
   // Header read is OK.
-  socket_cbs.Pop(MessageFramer::MessageHeader::header_size());
+  socket_cbs.Pop(sizeof(MessageFramer::MessageHeader));
   // Body read fails.
   socket_cbs.Pop(net::ERR_CONNECTION_RESET);
   EXPECT_EQ(ChannelEvent::SOCKET_READ,
@@ -418,7 +417,7 @@ TEST_F(CastTransportTest, TestReadCorruptedMessageAsync) {
   EXPECT_TRUE(MessageFramer::Serialize(message, &serialized_message));
 
   // Corrupt the serialized message body(set it to X's).
-  for (size_t i = MessageFramer::MessageHeader::header_size();
+  for (size_t i = sizeof(MessageFramer::MessageHeader);
        i < serialized_message.size(); ++i) {
     serialized_message[i] = 'x';
   }
@@ -426,28 +425,27 @@ TEST_F(CastTransportTest, TestReadCorruptedMessageAsync) {
   EXPECT_CALL(*delegate_, Start());
   // Read bytes [0, 3].
   EXPECT_CALL(mock_socket_,
-              Read_(NotNull(), MessageFramer::MessageHeader::header_size(), _))
+              Read_(NotNull(), sizeof(MessageFramer::MessageHeader), _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
   // Read bytes [4, n].
-  EXPECT_CALL(mock_socket_,
-              Read_(NotNull(),
-                    serialized_message.size() -
-                        MessageFramer::MessageHeader::header_size(),
-                    _))
+  EXPECT_CALL(mock_socket_, Read_(NotNull(),
+                                  serialized_message.size() -
+                                      sizeof(MessageFramer::MessageHeader),
+                                  _))
       .WillOnce(DoAll(FillBufferFromString<0>(serialized_message.substr(
-                          MessageFramer::MessageHeader::header_size(),
+                          sizeof(MessageFramer::MessageHeader),
                           serialized_message.size() -
-                              MessageFramer::MessageHeader::header_size() - 1)),
+                              sizeof(MessageFramer::MessageHeader) - 1)),
                       EnqueueCallback<2>(&socket_cbs)))
       .RetiresOnSaturation();
 
   EXPECT_CALL(*delegate_, OnError(ChannelError::INVALID_MESSAGE));
   transport_->Start();
-  socket_cbs.Pop(MessageFramer::MessageHeader::header_size());
+  socket_cbs.Pop(sizeof(MessageFramer::MessageHeader));
   socket_cbs.Pop(serialized_message.size() -
-                 MessageFramer::MessageHeader::header_size());
+                 sizeof(MessageFramer::MessageHeader));
 }
 
 }  // namespace cast_channel

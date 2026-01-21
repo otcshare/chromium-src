@@ -6,25 +6,28 @@
 #define CHROME_BROWSER_ASH_POLICY_ENROLLMENT_PSM_RLWE_DMSERVER_CLIENT_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
-#include "chrome/browser/ash/policy/enrollment/psm/rlwe_client.h"
+#include "chrome/browser/ash/policy/enrollment/auto_enrollment_state.h"
 #include "chrome/browser/ash/policy/enrollment/psm/rlwe_dmserver_client.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
 #include "components/policy/core/common/cloud/enterprise_metrics.h"
-#include "components/prefs/pref_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/private_membership/src/private_membership_rlwe.pb.h"
 
 namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
+
+namespace private_membership::rlwe {
+class PrivateMembershipRlweClient;
+}  // namespace private_membership::rlwe
 
 namespace policy::psm {
 
@@ -33,13 +36,25 @@ class RlweDmserverClientImpl : public RlweDmserverClient {
   using PlaintextId = private_membership::rlwe::RlwePlaintextId;
   using OprfResponse =
       private_membership::rlwe::PrivateMembershipRlweOprfResponse;
-  // `device_management_service`, `url_loader_factory` and
-  // `psm_rlwe_client` must not be nullptr. Also,
+  using RlweClient = private_membership::rlwe::PrivateMembershipRlweClient;
+  using RlweClientFactory = base::RepeatingCallback<std::unique_ptr<RlweClient>(
+      private_membership::rlwe::RlweUseCase,
+      const private_membership::rlwe::RlwePlaintextId&)>;
+
+  // Creates PSM RLWE client that generates and holds a randomly generated
+  // key.
+  static std::unique_ptr<RlweClient> Create(
+      private_membership::rlwe::RlweUseCase use_case,
+      const PlaintextId& plaintext_id);
+
+  // `device_management_service`, `url_loader_factory`.
   // `device_management_service` must outlive RlweDmserverClientImpl.
+  // `rlwe_client_factory` must be callable and must not yield nullptr.
   RlweDmserverClientImpl(
       DeviceManagementService* device_management_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      std::unique_ptr<RlweClient> psm_rlwe_client);
+      const PlaintextId& plaintext_id,
+      RlweClientFactory rlwe_client_factory);
 
   // Disallow copy constructor and assignment operator.
   RlweDmserverClientImpl(const RlweDmserverClientImpl&) = delete;
@@ -58,7 +73,13 @@ class RlweDmserverClientImpl : public RlweDmserverClient {
 
  private:
   // Records PSM execution result, and stops the protocol.
-  void RecordErrorAndStop(RlweResult psm_result);
+  void RecordErrorAndStop(ResultHolder result);
+  void RecordErrorAndStop(RlweResult result) {
+    RecordErrorAndStop(ResultHolder(result));
+  }
+  void RecordErrorAndStop(AutoEnrollmentDMServerError error) {
+    RecordErrorAndStop(ResultHolder(error));
+  }
 
   // Constructs and sends the PSM RLWE OPRF request.
   void SendRlweOprfRequest();
@@ -84,6 +105,9 @@ class RlweDmserverClientImpl : public RlweDmserverClient {
   // Record UMA histogram for timing of successful PSM request.
   void RecordPsmSuccessTimeHistogram();
 
+  // PSM RLWE plaintext id for logging purposes.
+  PlaintextId plaintext_id_;
+
   // PSM RLWE client, used for preparing PSM requests and parsing PSM responses.
   std::unique_ptr<RlweClient> psm_rlwe_client_;
 
@@ -95,7 +119,8 @@ class RlweDmserverClientImpl : public RlweDmserverClient {
 
   // Unowned by RlweDmserverClientImpl. Its used to communicate with the
   // device management service.
-  DeviceManagementService* const device_management_service_;
+  const raw_ptr<DeviceManagementService, DanglingUntriaged>
+      device_management_service_;
 
   // Its being used for both PSM requests e.g. RLWE OPRF request and RLWE query
   // request.

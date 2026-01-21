@@ -22,8 +22,9 @@ CSSContentDistributionValue::CSSContentDistributionValue(
 String CSSContentDistributionValue::CustomCSSText() const {
   CSSValueList* list = CSSValueList::CreateSpaceSeparated();
 
-  if (IsValidCSSValueID(distribution_))
+  if (IsValidCSSValueID(distribution_)) {
     list->Append(*CSSIdentifierValue::Create(distribution_));
+  }
   if (IsValidCSSValueID(position_)) {
     if (position_ == CSSValueID::kFirstBaseline ||
         position_ == CSSValueID::kLastBaseline) {
@@ -33,8 +34,9 @@ String CSSContentDistributionValue::CustomCSSText() const {
       list->Append(*CSSIdentifierValue::Create(preference));
       list->Append(*CSSIdentifierValue::Create(CSSValueID::kBaseline));
     } else {
-      if (IsValidCSSValueID(overflow_))
+      if (IsValidCSSValueID(overflow_)) {
         list->Append(*CSSIdentifierValue::Create(overflow_));
+      }
       list->Append(*CSSIdentifierValue::Create(position_));
     }
   }
@@ -45,6 +47,12 @@ bool CSSContentDistributionValue::Equals(
     const CSSContentDistributionValue& other) const {
   return distribution_ == other.distribution_ && position_ == other.position_ &&
          overflow_ == other.overflow_;
+}
+
+unsigned CSSContentDistributionValue::CustomHash() const {
+  return HashInts(static_cast<unsigned>(distribution_),
+                  HashInts(static_cast<unsigned>(position_),
+                           static_cast<unsigned>(overflow_)));
 }
 
 }  // namespace cssvalue

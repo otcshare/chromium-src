@@ -6,19 +6,22 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
+#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
@@ -37,9 +40,10 @@
 views::Widget* RelaunchRequiredDialogView::Show(
     Browser* browser,
     base::Time deadline,
+    bool ap_style,
     base::RepeatingClosure on_accept) {
   views::Widget* widget = constrained_window::CreateBrowserModalDialogViews(
-      new RelaunchRequiredDialogView(deadline, std::move(on_accept)),
+      new RelaunchRequiredDialogView(deadline, ap_style, std::move(on_accept)),
       browser->window()->GetNativeWindow());
   widget->Show();
   return widget;
@@ -70,7 +74,7 @@ std::u16string RelaunchRequiredDialogView::GetWindowTitle() const {
   // "3..2..1.." countdown to change precisely on the per-second boundaries.
   const base::TimeDelta rounded_offset =
       relaunch_required_timer_.GetRoundedDeadlineDelta();
-
+  DCHECK_GE(rounded_offset, base::TimeDelta());
   int amount = rounded_offset.InSeconds();
   int message_id = IDS_RELAUNCH_REQUIRED_TITLE_SECONDS;
   if (rounded_offset.InDays() >= 2) {
@@ -89,25 +93,35 @@ std::u16string RelaunchRequiredDialogView::GetWindowTitle() const {
 
 ui::ImageModel RelaunchRequiredDialogView::GetWindowIcon() {
   return ui::ImageModel::FromVectorIcon(
-      vector_icons::kBusinessIcon, ui::kColorIcon,
+      ap_style_ ?
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+                vector_icons::kGshieldIcon
+#else
+                kSecurityIcon
+#endif
+                : vector_icons::kBusinessIcon,
+      ui::kColorIcon,
       ChromeLayoutProvider::Get()->GetDistanceMetric(
-          DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE));
+          views::DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE));
 }
 
 // |relaunch_required_timer_| automatically starts for the next time the title
 // needs to be updated (e.g., from "2 days" to "3 days").
 RelaunchRequiredDialogView::RelaunchRequiredDialogView(
     base::Time deadline,
+    bool ap_style,
     base::RepeatingClosure on_accept)
     : relaunch_required_timer_(
           deadline,
           base::BindRepeating(&RelaunchRequiredDialogView::UpdateWindowTitle,
-                              base::Unretained(this))) {
-  SetDefaultButton(ui::DIALOG_BUTTON_NONE);
-  SetButtonLabel(ui::DIALOG_BUTTON_OK,
+                              base::Unretained(this))),
+      ap_style_(ap_style) {
+  set_internal_name("RelaunchRequiredDialog");
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kNone));
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
                  l10n_util::GetStringUTF16(IDS_RELAUNCH_ACCEPT_BUTTON));
   SetButtonLabel(
-      ui::DIALOG_BUTTON_CANCEL,
+      ui::mojom::DialogButton::kCancel,
       l10n_util::GetStringUTF16(IDS_RELAUNCH_REQUIRED_CANCEL_BUTTON));
   SetShowIcon(true);
   SetAcceptCallback(base::BindOnce(
@@ -120,7 +134,7 @@ RelaunchRequiredDialogView::RelaunchRequiredDialogView(
       base::RecordAction, base::UserMetricsAction("RelaunchRequired_Close")));
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
-  SetModalType(ui::MODAL_TYPE_WINDOW);
+  SetModalType(ui::mojom::ModalType::kWindow);
   SetShowCloseButton(false);
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH));
@@ -130,8 +144,10 @@ RelaunchRequiredDialogView::RelaunchRequiredDialogView(
       views::DialogContentType::kText, views::DialogContentType::kText));
 
   auto label = std::make_unique<views::Label>(
-      l10n_util::GetPluralStringFUTF16(IDS_RELAUNCH_REQUIRED_BODY,
-                                       BrowserList::GetIncognitoBrowserCount()),
+      l10n_util::GetPluralStringFUTF16(
+          ap_style_ ? IDS_ADVANCED_PROTECTION_RELAUNCH_REQUIRED_BODY
+                    : IDS_RELAUNCH_REQUIRED_BODY,
+          chrome::GetIncognitoBrowserCount()),
       views::style::CONTEXT_DIALOG_BODY_TEXT);
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -140,7 +156,8 @@ RelaunchRequiredDialogView::RelaunchRequiredDialogView(
   // TODO(bsep): Remove this when fixing https://crbug.com/810970.
   const int title_offset =
       2 * provider->GetInsetsMetric(views::INSETS_DIALOG_TITLE).left() +
-      provider->GetDistanceMetric(DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE);
+      provider->GetDistanceMetric(
+          views::DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE);
   label->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(0, title_offset - margins().left(), 0, 0)));
 

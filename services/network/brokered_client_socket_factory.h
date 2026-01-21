@@ -24,6 +24,7 @@ namespace net {
 class AddressList;
 class DatagramClientSocket;
 class HostPortPair;
+class IPAddress;
 class NetLog;
 struct NetLogSource;
 class SSLClientContext;
@@ -69,10 +70,27 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) BrokeredClientSocketFactory
       net::AddressFamily address_family,
       mojom::SocketBroker::CreateTcpSocketCallback callback);
 
- private:
-  // Whether or not a socket for `addresses` should be brokered or not.
+  // Sends an IPC to the SocketBroker to create a new UDP socket.
+  void BrokerCreateUdpSocket(
+      net::AddressFamily address_family,
+      mojom::SocketBroker::CreateUdpSocketCallback callback);
+
+  // Returns whether or not `address` should be brokered.
+  bool ShouldBroker(const net::IPAddress& address) const;
+
+  // Whether or not any socket in `addresses` should be brokered or not.
+  // Convenience wrapper for calling above overload on all elements of
+  // `addresses`.
   bool ShouldBroker(const net::AddressList& addresses) const;
 
+#if BUILDFLAG(IS_WIN)
+  void SetBrokerHelperDelegateForTesting(
+      std::unique_ptr<BrokerHelperWin::Delegate> delegate) {
+    broker_helper_.SetDelegateForTesting(std::move(delegate));
+  }
+#endif
+
+ private:
   mojo::Remote<mojom::SocketBroker> socket_broker_;
 #if BUILDFLAG(IS_WIN)
   BrokerHelperWin broker_helper_;

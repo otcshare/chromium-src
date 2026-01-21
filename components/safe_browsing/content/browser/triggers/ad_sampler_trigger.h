@@ -5,9 +5,9 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_AD_SAMPLER_TRIGGER_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_AD_SAMPLER_TRIGGER_H_
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -70,11 +70,11 @@ class AdSamplerTrigger : public content::WebContentsObserver,
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
                      const GURL& validated_url) override;
 
+  static size_t GetSamplerFrequencyDenominatorForTest();
+
  private:
   friend class AdSamplerTriggerTest;
   friend class content::WebContentsUserData<AdSamplerTrigger>;
-  FRIEND_TEST_ALL_PREFIXES(AdSamplerTriggerTestFinch,
-                           FrequencyDenominatorFeature);
 
   AdSamplerTrigger(
       content::WebContents* web_contents,

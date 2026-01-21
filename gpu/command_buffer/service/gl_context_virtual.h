@@ -6,7 +6,8 @@
 #define GPU_COMMAND_BUFFER_SERVICE_GL_CONTEXT_VIRTUAL_H_
 
 #include <string>
-#include "base/memory/ref_counted.h"
+
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "gpu/gpu_gles2_export.h"
@@ -32,8 +33,8 @@ class GPU_GLES2_EXPORT GLContextVirtual : public gl::GLContext {
   GLContextVirtual& operator=(const GLContextVirtual&) = delete;
 
   // Implement GLContext.
-  bool Initialize(gl::GLSurface* compatible_surface,
-                  const gl::GLContextAttribs& attribs) override;
+  bool InitializeImpl(gl::GLSurface* compatible_surface,
+                      const gl::GLContextAttribs& attribs) override;
   bool MakeCurrentImpl(gl::GLSurface* surface) override;
   void ReleaseCurrent(gl::GLSurface* surface) override;
   bool IsCurrent(gl::GLSurface* surface) override;
@@ -47,14 +48,10 @@ class GPU_GLES2_EXPORT GLContextVirtual : public gl::GLContext {
   void SetUnbindFboOnMakeCurrent() override;
   void ForceReleaseVirtuallyCurrent() override;
 #if BUILDFLAG(IS_MAC)
-  uint64_t BackpressureFenceCreate() override;
-  void BackpressureFenceWait(uint64_t fence) override;
   void FlushForDriverCrashWorkaround() override;
 #endif
 
-#if defined(USE_EGL)
   gl::GLDisplayEGL* GetGLDisplayEGL() override;
-#endif
 
  protected:
   ~GLContextVirtual() override;

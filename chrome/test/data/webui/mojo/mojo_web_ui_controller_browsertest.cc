@@ -8,7 +8,6 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "chrome/browser/bad_message.h"
 #include "chrome/browser/chrome_browser_interface_binders.h"
 #include "chrome/browser/chrome_content_browser_client.h"
@@ -41,14 +40,13 @@ class FooUI : public ui::MojoWebUIController, public ::test::mojom::Foo {
   explicit FooUI(content::WebUI* web_ui)
       : ui::MojoWebUIController(web_ui), foo_receiver_(this) {
     content::WebUIDataSource* data_source =
-        content::WebUIDataSource::Create("foo");
-    data_source->SetDefaultResource(IDR_MOJO_WEB_UI_CONTROLLER_TEST_HTML);
-    data_source->DisableContentSecurityPolicy();
+        content::WebUIDataSource::CreateAndAdd(
+            web_ui->GetWebContents()->GetBrowserContext(), "foo");
+    data_source->SetDefaultResource(
+        IDR_WEBUI_MOJO_MOJO_WEB_UI_CONTROLLER_TEST_HTML);
     data_source->AddResourcePath("foobar.mojom-webui.js",
-                                 IDR_FOOBAR_MOJOM_WEBUI_JS);
-    data_source->AddResourcePath("main.js", IDR_MOJO_MAIN_JS);
-    content::WebUIDataSource::Add(web_ui->GetWebContents()->GetBrowserContext(),
-                                  data_source);
+                                 IDR_WEBUI_MOJO_FOOBAR_MOJOM_WEBUI_JS);
+    data_source->AddResourcePath("main.js", IDR_WEBUI_MOJO_MAIN_JS);
   }
 
   FooUI(const FooUI&) = delete;
@@ -81,14 +79,13 @@ class FooBarUI : public ui::MojoWebUIController,
         foo_receiver_(this),
         bar_receiver_(this) {
     content::WebUIDataSource* data_source =
-        content::WebUIDataSource::Create("foobar");
-    data_source->SetDefaultResource(IDR_MOJO_WEB_UI_CONTROLLER_TEST_HTML);
-    data_source->DisableContentSecurityPolicy();
+        content::WebUIDataSource::CreateAndAdd(
+            web_ui->GetWebContents()->GetBrowserContext(), "foobar");
+    data_source->SetDefaultResource(
+        IDR_WEBUI_MOJO_MOJO_WEB_UI_CONTROLLER_TEST_HTML);
     data_source->AddResourcePath("foobar.mojom-webui.js",
-                                 IDR_FOOBAR_MOJOM_WEBUI_JS);
-    data_source->AddResourcePath("main.js", IDR_MOJO_MAIN_JS);
-    content::WebUIDataSource::Add(web_ui->GetWebContents()->GetBrowserContext(),
-                                  data_source);
+                                 IDR_WEBUI_MOJO_FOOBAR_MOJOM_WEBUI_JS);
+    data_source->AddResourcePath("main.js", IDR_WEBUI_MOJO_MAIN_JS);
   }
 
   FooBarUI(const FooBarUI&) = delete;
@@ -133,10 +130,12 @@ class TestWebUIControllerFactory : public content::WebUIControllerFactory {
   std::unique_ptr<content::WebUIController> CreateWebUIControllerForURL(
       content::WebUI* web_ui,
       const GURL& url) override {
-    if (url.host_piece() == "foo")
+    if (url.host() == "foo") {
       return std::make_unique<FooUI>(web_ui);
-    if (url.host_piece() == "foobar")
+    }
+    if (url.host() == "foobar") {
       return std::make_unique<FooBarUI>(web_ui);
+    }
 
     return nullptr;
   }
@@ -251,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(MojoWebUIControllerBrowserTest,
                                "  let resp = await barRemote.getBar();"
                                "  return resp.value;"
                                "})()")
-                   .error.empty());
+                   .is_ok());
   watcher.Wait();
   EXPECT_FALSE(watcher.did_exit_normally());
   EXPECT_TRUE(web_contents->IsCrashed());
@@ -275,7 +274,7 @@ IN_PROC_BROWSER_TEST_F(MojoWebUIControllerBrowserTest, CrashForNoBinder) {
                                "  let resp = await bazRemote.getBaz();"
                                "  return resp.value;"
                                "})()")
-                   .error.empty());
+                   .is_ok());
 
   const char kExpectedMojoError[] =
       "Received bad user message: "

@@ -11,13 +11,14 @@ import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RotateDrawable;
 import android.graphics.drawable.ScaleDrawable;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
-import androidx.annotation.Nullable;
 import androidx.appcompat.graphics.drawable.DrawableWrapperCompat;
 import androidx.vectordrawable.graphics.drawable.Animatable2Compat;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link Animatable} {@link Drawable}s in the {@link Drawable} hierarchy when this {@link Drawable}
  * is shown or hidden.
  */
+@NullMarked
 public class AutoAnimatorDrawable extends DrawableWrapperCompat {
     // Since Drawables default visible to true by default, we might not get a change and start the
     // animation on the first visibility request.
@@ -39,7 +41,7 @@ public class AutoAnimatorDrawable extends DrawableWrapperCompat {
      * @return         A new {@link Drawable} that will automaticaly animate or {@code null} if
      *                 {@code drawable} is {@code null}.
      */
-    public static Drawable wrap(@Nullable Drawable drawable) {
+    public static @Nullable Drawable wrap(@Nullable Drawable drawable) {
         if (drawable == null || !shouldWrapDrawable(drawable)) return drawable;
         return new AutoAnimatorDrawable(drawable);
     }
@@ -80,15 +82,16 @@ public class AutoAnimatorDrawable extends DrawableWrapperCompat {
     }
 
     private static void attachRestartListeners(@Nullable Drawable drawable) {
-        AutoAnimatorDrawable.animatedDrawableHelper(drawable, animatable -> {
-            if (animatable instanceof Animatable2Compat) {
-                ((Animatable2Compat) animatable)
-                        .registerAnimationCallback(LazyHolderCompat.INSTANCE);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                    && animatable instanceof Animatable2) {
-                ((Animatable2) animatable).registerAnimationCallback(LazyHolder.INSTANCE);
-            }
-        });
+        AutoAnimatorDrawable.animatedDrawableHelper(
+                drawable,
+                animatable -> {
+                    if (animatable instanceof Animatable2Compat) {
+                        ((Animatable2Compat) animatable)
+                                .registerAnimationCallback(LazyHolderCompat.INSTANCE);
+                    } else if (animatable instanceof Animatable2) {
+                        ((Animatable2) animatable).registerAnimationCallback(LazyHolder.INSTANCE);
+                    }
+                });
     }
 
     private static void animatedDrawableHelper(
@@ -108,8 +111,7 @@ public class AutoAnimatorDrawable extends DrawableWrapperCompat {
             AutoAnimatorDrawable.animatedDrawableHelper(drawable.getCurrent(), consumer);
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && drawable instanceof android.graphics.drawable.DrawableWrapper) {
+        if (drawable instanceof android.graphics.drawable.DrawableWrapper) {
             // Support all modern versions of drawables that wrap other ones.  This won't cover old
             // versions of Android (see below for other if/else blocks).
             AutoAnimatorDrawable.animatedDrawableHelper(
@@ -154,9 +156,10 @@ public class AutoAnimatorDrawable extends DrawableWrapperCompat {
         @Override
         public void onAnimationEnd(Drawable drawable) {
             if (!(drawable instanceof Animatable)) return;
-            mHandler.post(() -> {
-                if (drawable.isVisible()) ((Animatable) drawable).start();
-            });
+            mHandler.post(
+                    () -> {
+                        if (drawable.isVisible()) ((Animatable) drawable).start();
+                    });
         }
     }
 

@@ -2,10 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {BindingsTestRunner} from 'bindings_test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as TextUtils from 'devtools/models/text_utils/text_utils.js';
+import * as Workspace from 'devtools/models/workspace/workspace.js';
+
 (async function() {
   TestRunner.addResult(`Verify that sourcemap sources are mapped with non-exact match.\n`);
-  await TestRunner.loadTestModule('bindings_test_runner');
-  await TestRunner.loadLegacyModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.addStylesheetTag('./resources/s.css');
 
@@ -25,7 +30,7 @@
   }
 
   function onFileSystemCreated() {
-    var automappingTest = new BindingsTestRunner.AutomappingTest(Workspace.workspace);
+    var automappingTest = new BindingsTestRunner.AutomappingTest(Workspace.Workspace.WorkspaceImpl.instance());
     automappingTest.waitUntilMappingIsStabilized().then(TestRunner.completeTest.bind(TestRunner));
   }
 
@@ -36,7 +41,7 @@
     return promise;
 
     function onSource(uiSourceCode) {
-      uiSourceCode.requestContent().then(({ content, error, isEncoded }) => fulfill(content));
+      uiSourceCode.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(({ content, error, isEncoded }) => fulfill(content));
     }
   }
 })();

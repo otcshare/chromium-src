@@ -6,16 +6,16 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_delegate.h"
@@ -55,7 +55,10 @@ class TestCompositorHostOzone::StubPlatformWindowDelegate
     widget_ = gfx::kNullAcceleratedWidget;
   }
   void OnActivationChanged(bool active) override {}
-  void OnMouseEnter() override {}
+  void OnCursorUpdate() override {}
+  int64_t OnStateUpdate(const State& old, const State& latest) override {
+    return -1;
+  }
 
  private:
   gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;

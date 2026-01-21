@@ -7,10 +7,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "base/time/time.h"
@@ -28,10 +28,6 @@ class SingleLogFileLogSourceTest : public ::testing::Test {
   SingleLogFileLogSourceTest(const SingleLogFileLogSourceTest&) = delete;
   SingleLogFileLogSourceTest& operator=(const SingleLogFileLogSourceTest&) =
       delete;
-
-  ~SingleLogFileLogSourceTest() override {
-    SingleLogFileLogSource::SetChromeStartTimeForTesting(nullptr);
-  }
 
  protected:
   // Sets up a dummy system log directory.

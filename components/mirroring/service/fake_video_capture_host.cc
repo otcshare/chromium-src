@@ -4,6 +4,7 @@
 
 #include "components/mirroring/service/fake_video_capture_host.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "media/base/video_frame.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
@@ -39,8 +40,9 @@ void FakeVideoCaptureHost::Start(
 }
 
 void FakeVideoCaptureHost::Stop(const base::UnguessableToken& device_id) {
-  if (!observer_)
+  if (!observer_) {
     return;
+  }
 
   observer_->OnStateChanged(media::mojom::VideoCaptureResult::NewState(
       media::mojom::VideoCaptureState::ENDED));
@@ -48,13 +50,29 @@ void FakeVideoCaptureHost::Stop(const base::UnguessableToken& device_id) {
   OnStopped();
 }
 
+void FakeVideoCaptureHost::Pause(const base::UnguessableToken& device_id) {
+  paused_ = true;
+  OnPaused();
+}
+
+void FakeVideoCaptureHost::Resume(const base::UnguessableToken& device_id,
+                                  const base::UnguessableToken& session_id,
+                                  const media::VideoCaptureParams& params) {
+  paused_ = false;
+  OnResumed();
+}
+
 void FakeVideoCaptureHost::SendOneFrame(const gfx::Size& size,
                                         base::TimeTicks capture_time) {
-  if (!observer_)
+  if (!observer_) {
     return;
+  }
 
   auto shmem = base::ReadOnlySharedMemoryRegion::Create(5000);
-  memset(shmem.mapping.memory(), 125, 5000);
+  if (!shmem.IsValid()) {
+    return;
+  }
+  UNSAFE_TODO(memset(shmem.mapping.memory(), 125, 5000));
   observer_->OnNewBuffer(
       0, media::mojom::VideoBufferHandle::NewReadOnlyShmemRegion(
              std::move(shmem.region)));
@@ -66,7 +84,7 @@ void FakeVideoCaptureHost::SendOneFrame(const gfx::Size& size,
              base::TimeDelta(), metadata, media::PIXEL_FORMAT_I420, size,
              gfx::Rect(size), kNotPremapped, gfx::ColorSpace::CreateREC709(),
              nullptr));
-  observer_->OnBufferReady(std::move(buffer), {});
+  observer_->OnBufferReady(std::move(buffer));
 }
 
 media::VideoCaptureParams FakeVideoCaptureHost::GetVideoCaptureParams() const {

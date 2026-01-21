@@ -7,13 +7,17 @@
 #include <memory>
 
 #include "base/time/time.h"
+#include "pdf/buildflags.h"
 #include "pdf/document_layout.h"
 #include "pdf/loader/url_loader.h"
+#include "pdf/pdfium/pdfium_engine.h"
+#include "pdf/test/test_helpers.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace chrome_pdf {
 
-TestClient::TestClient() = default;
+TestClient::TestClient(bool use_skia_renderer)
+    : use_skia_renderer_(use_skia_renderer) {}
 
 TestClient::~TestClient() = default;
 
@@ -23,6 +27,11 @@ void TestClient::ProposeDocumentLayout(const DocumentLayout& layout) {
   // complexity without much gain. Instead, we can override this behavior just
   // where it matters (like PDFiumEngineTest.ProposeDocumentLayoutWithOverlap).
   engine()->ApplyDocumentLayout(layout.options());
+}
+
+bool TestClient::UseSkiaPremultipliedAlpha() {
+  // In tests, always use premultiplied alpha in skia mode
+  return use_skia_renderer_;
 }
 
 bool TestClient::Confirm(const std::string& message) {
@@ -42,9 +51,13 @@ std::unique_ptr<UrlLoader> TestClient::CreateUrlLoader() {
   return nullptr;
 }
 
-std::vector<PDFEngine::Client::SearchStringResult> TestClient::SearchString(
-    const char16_t* string,
-    const char16_t* term,
+v8::Isolate* TestClient::GetIsolate() {
+  return GetBlinkIsolate();
+}
+
+std::vector<PDFiumEngineClient::SearchStringResult> TestClient::SearchString(
+    const std::u16string& needle,
+    const std::u16string& haystack,
     bool case_sensitive) {
   return std::vector<SearchStringResult>();
 }
@@ -64,5 +77,21 @@ void TestClient::SetLinkUnderCursor(const std::string& link_under_cursor) {}
 bool TestClient::IsValidLink(const std::string& url) {
   return !url.empty();
 }
+
+void TestClient::OnNewTextFragmentsSearchStarted() {}
+
+#if BUILDFLAG(ENABLE_PDF_INK2)
+bool TestClient::IsInAnnotationMode() const {
+  return false;
+}
+#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+void TestClient::OnSearchifyStateChange(bool busy) {}
+
+void TestClient::OnHasSearchifyText() {}
+
+void TestClient::MaybeShowSearchifyInProgress() {}
+#endif
 
 }  // namespace chrome_pdf

@@ -64,7 +64,6 @@ void BackgroundDownloadServiceImpl::Initialize(base::OnceClosure callback) {
 
 const ServiceConfig& BackgroundDownloadServiceImpl::GetConfig() {
   NOTREACHED() << " This function is not supported on iOS.";
-  return service_config_;
 }
 
 void BackgroundDownloadServiceImpl::OnStartScheduledTask(
@@ -76,7 +75,6 @@ void BackgroundDownloadServiceImpl::OnStartScheduledTask(
 bool BackgroundDownloadServiceImpl::OnStopScheduledTask(
     DownloadTaskType task_type) {
   NOTREACHED() << " This function is not supported on iOS.";
-  return true;
 }
 
 BackgroundDownloadService::ServiceStatus
@@ -113,6 +111,8 @@ void BackgroundDownloadServiceImpl::StartDownload(
   entry.target_file_path = download_dir_.AppendASCII(download_params.guid);
   entry.create_time = clock_->Now();
   entry.state = Entry::State::ACTIVE;
+  entry.custom_data = std::move(download_params.custom_data);
+
   model_->Add(entry);
 }
 
@@ -295,17 +295,18 @@ LogSource::EntryDetailsList
 BackgroundDownloadServiceImpl::GetServiceDownloads() {
   EntryDetailsList list;
   auto entries = model_->PeekEntries();
-  for (auto* entry : entries)
-    list.push_back(std::make_pair(entry, absl::nullopt));
+  for (download::Entry* entry : entries) {
+    list.push_back(std::make_pair(entry, std::nullopt));
+  }
   return list;
 }
 
-absl::optional<LogSource::EntryDetails>
+std::optional<LogSource::EntryDetails>
 BackgroundDownloadServiceImpl::GetServiceDownload(const std::string& guid) {
   auto* entry = model_->Get(guid);
 
-  return absl::optional<LogSource::EntryDetails>(
-      std::make_pair(entry, absl::nullopt));
+  return std::optional<LogSource::EntryDetails>(
+      std::make_pair(entry, std::nullopt));
 }
 
 void BackgroundDownloadServiceImpl::OnDownloadFinished(
@@ -353,6 +354,7 @@ void BackgroundDownloadServiceImpl::OnDownloadFinished(
 
   CompletionInfo completion_info;
   completion_info.path = file_path;
+  completion_info.custom_data = entry->custom_data;
   client->OnDownloadSucceeded(guid, completion_info);
 }
 

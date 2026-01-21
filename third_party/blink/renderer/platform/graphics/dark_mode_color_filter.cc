@@ -4,12 +4,13 @@
 
 #include "third_party/blink/renderer/platform/graphics/dark_mode_color_filter.h"
 
+#include <array>
+
 #include "base/check.h"
 #include "base/notreached.h"
+#include "cc/paint/color_filter.h"
 #include "third_party/blink/renderer/platform/graphics/dark_mode_lab_color_space.h"
-#include "third_party/skia/include/core/SkColorFilter.h"
 #include "third_party/skia/include/effects/SkHighContrastFilter.h"
-#include "third_party/skia/include/effects/SkTableColorFilter.h"
 #include "ui/gfx/color_utils.h"
 
 namespace blink {
@@ -20,41 +21,21 @@ bool IsWithinEpsilon(float a, float b) {
   return std::abs(a - b) < std::numeric_limits<float>::epsilon();
 }
 
-// SkColorFilterWrapper implementation.
-class SkColorFilterWrapper : public DarkModeColorFilter {
+class ColorFilterWrapper : public DarkModeColorFilter {
  public:
-  static std::unique_ptr<SkColorFilterWrapper> Create(
-      sk_sp<SkColorFilter> color_filter) {
-    return std::unique_ptr<SkColorFilterWrapper>(
-        new SkColorFilterWrapper(color_filter));
-  }
-
-  static std::unique_ptr<SkColorFilterWrapper> Create(
-      SkHighContrastConfig::InvertStyle invert_style,
-      const DarkModeSettings& settings) {
-    SkHighContrastConfig config;
-    config.fInvertStyle = invert_style;
-    config.fGrayscale = false;
-    config.fContrast = settings.contrast;
-
-    return std::unique_ptr<SkColorFilterWrapper>(
-        new SkColorFilterWrapper(SkHighContrastFilter::Make(config)));
-  }
+  explicit ColorFilterWrapper(sk_sp<cc::ColorFilter> filter)
+      : filter_(std::move(filter)) {}
 
   SkColor4f InvertColor(const SkColor4f& color) const override {
-    return filter_->filterColor4f(color, nullptr, nullptr);
+    return filter_->FilterColor(color);
   }
 
-  sk_sp<SkColorFilter> ToSkColorFilter() const override { return filter_; }
+  sk_sp<cc::ColorFilter> ToColorFilter() const override { return filter_; }
 
  private:
-  explicit SkColorFilterWrapper(sk_sp<SkColorFilter> filter)
-      : filter_(filter) {}
-
-  sk_sp<SkColorFilter> filter_;
+  sk_sp<cc::ColorFilter> filter_;
 };
 
-// LABColorFilter implementation.
 class LABColorFilter : public DarkModeColorFilter {
  public:
   LABColorFilter() : transformer_(lab::DarkModeSRGBLABTransformer()) {
@@ -62,7 +43,7 @@ class LABColorFilter : public DarkModeColorFilter {
     config.fInvertStyle = SkHighContrastConfig::InvertStyle::kInvertLightness;
     config.fGrayscale = false;
     config.fContrast = 0.0;
-    filter_ = SkHighContrastFilter::Make(config);
+    filter_ = cc::ColorFilter::MakeHighContrast(config);
   }
 
   SkColor4f InvertColor(const SkColor4f& color) const override {
@@ -100,7 +81,7 @@ class LABColorFilter : public DarkModeColorFilter {
     return best_color;
   }
 
-  sk_sp<SkColorFilter> ToSkColorFilter() const override { return filter_; }
+  sk_sp<cc::ColorFilter> ToColorFilter() const override { return filter_; }
 
  private:
   // Further darken dark grays to match the primary surface color recommended by
@@ -155,37 +136,16 @@ class LABColorFilter : public DarkModeColorFilter {
   }
 
   const lab::DarkModeSRGBLABTransformer transformer_;
-  sk_sp<SkColorFilter> filter_;
+  sk_sp<cc::ColorFilter> filter_;
 };
 
 }  // namespace
 
 std::unique_ptr<DarkModeColorFilter> DarkModeColorFilter::FromSettings(
     const DarkModeSettings& settings) {
-  switch (settings.mode) {
-    case DarkModeInversionAlgorithm::kSimpleInvertForTesting:
-      uint8_t identity[256], invert[256];
-      for (int i = 0; i < 256; ++i) {
-        identity[i] = i;
-        invert[i] = 255 - i;
-      }
-      return SkColorFilterWrapper::Create(
-          SkTableColorFilter::MakeARGB(identity, invert, invert, invert));
-
-    case DarkModeInversionAlgorithm::kInvertBrightness:
-      return SkColorFilterWrapper::Create(
-          SkHighContrastConfig::InvertStyle::kInvertBrightness, settings);
-
-    case DarkModeInversionAlgorithm::kInvertLightness:
-      return SkColorFilterWrapper::Create(
-          SkHighContrastConfig::InvertStyle::kInvertLightness, settings);
-
-    case DarkModeInversionAlgorithm::kInvertLightnessLAB:
-      return std::make_unique<LABColorFilter>();
-  }
-  NOTREACHED();
+  return std::make_unique<LABColorFilter>();
 }
 
-DarkModeColorFilter::~DarkModeColorFilter() {}
+DarkModeColorFilter::~DarkModeColorFilter() = default;
 
 }  // namespace blink

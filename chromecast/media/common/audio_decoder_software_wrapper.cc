@@ -4,10 +4,10 @@
 
 #include "chromecast/media/common/audio_decoder_software_wrapper.h"
 
+#include <algorithm>
 #include <ostream>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
@@ -89,7 +89,7 @@ bool AudioDecoderSoftwareWrapper::SetConfig(const AudioConfig& config) {
     return true;
   }
 
-  if (base::Contains(kPassthroughCodecs, config.codec)) {
+  if (std::ranges::contains(kPassthroughCodecs, config.codec)) {
     LOG(INFO) << "Cannot use software decoder for " << config.codec;
     return false;
   }

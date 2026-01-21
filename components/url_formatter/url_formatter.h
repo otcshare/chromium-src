@@ -19,28 +19,28 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_offset_string_conversions.h"
-#include "components/url_formatter/spoof_checks/idn_spoof_checker.h"
+#include "components/url_formatter/spoof_checks/idn_spoof_checker_types.h"
 
 class GURL;
 
 namespace url {
 struct Component;
 struct Parsed;
-}
+}  // namespace url
 
 namespace url_formatter {
 
 using Skeletons = base::flat_set<std::string>;
 
 // Used by FormatUrl to specify handling of certain parts of the url.
-typedef uint32_t FormatUrlType;
-typedef uint32_t FormatUrlTypes;
+using FormatUrlType = uint32_t;
+using FormatUrlTypes = uint32_t;
 
 // The result of an IDN to Unicode conversion.
 struct IDNConversionResult {
@@ -61,7 +61,7 @@ struct IDNConversionResult {
   // for the domain component (i.e. label) that failed the spoof checks. If
   // multiple labels fail the checks, this will be the result of the first
   // component that failed, counting from the left in the punycode form.
-  IDNSpoofChecker::Result spoof_check_result = IDNSpoofChecker::Result::kNone;
+  IDNSpoofCheckerResult spoof_check_result = IDNSpoofCheckerResult::kNone;
 };
 
 // Nothing is omitted.
@@ -182,13 +182,13 @@ void AppendFormattedHost(const GURL& url, std::u16string* output);
 //
 // The input should be the canonicalized ASCII host name from GURL. This
 // function does NOT accept UTF-8!
-std::u16string IDNToUnicode(base::StringPiece host);
+std::u16string IDNToUnicode(std::string_view host);
 
 // Same as IDNToUnicode, but disables spoof checks and returns more details.
 // In particular, it doesn't fall back to punycode if |host| fails spoof checks
 // in IDN spoof checker or is a lookalike of a top domain.
 // DO NOT use this for displaying URLs.
-IDNConversionResult UnsafeIDNToUnicodeWithDetails(base::StringPiece host);
+IDNConversionResult UnsafeIDNToUnicodeWithDetails(std::string_view host);
 
 // Strips a "www." prefix from |host| if present and if |host| is eligible.
 // |host| is only eligible for www-stripping if it is not a private or intranet
@@ -206,12 +206,22 @@ void StripWWWFromHostComponent(const std::string& url, url::Component* host);
 // Returns skeleton strings computed from |host| for spoof checking.
 Skeletons GetSkeletons(const std::u16string& host);
 
-// Returns a domain from the top 10K list matching the given skeleton. Used for
-// spoof checking. Different types of skeletons are saved in the skeleton trie.
-// Providing |type| makes sure the right type of skeletons are looked up. For
-// example if |skeleton|="googlecorn", |type|="kFull", no match would be found
-// even though the skeleton is saved in the trie, because the type of this
-// skeleton in the trie is "kSeparatorsRemoved".
+// Returns true if the domain given by |url|is one of the top domains listed in
+// the hardcoded top domains list or a subdomain.
+bool IsTopDomain(const GURL& url);
+
+// Checks if the given |domain_and_registry| is one of the top domains listed
+// in hardcoded top domains list or is a subdomain of one of the top domains.
+// This functions calculates the skeleton of |domain_and_registry| and looks it
+// up in the pre-calculated skeleton list of top domains.
+bool IsDomainAndRegistryATopDomain(const std::string& domain_and_registry);
+
+// Returns a domain from the hardcoded top domains list matching the given
+// skeleton. Used for spoof checking. Different types of skeletons are saved in
+// the skeleton trie. Providing |type| makes sure the right type of skeletons
+// are looked up. For example if |skeleton|="googlecorn", |type|="kFull", no
+// match would be found even though the skeleton is saved in the trie, because
+// the type of this skeleton in the trie is "kSeparatorsRemoved".
 TopDomainEntry LookupSkeletonInTopDomains(
     const std::string& skeleton,
     const SkeletonType type = SkeletonType::kFull);
@@ -220,10 +230,6 @@ TopDomainEntry LookupSkeletonInTopDomains(
 // only contains Latin-Greek-Cyrillic characters. Otherwise, returns the
 // input string.
 std::u16string MaybeRemoveDiacritics(const std::u16string& host);
-
-// Returns the first IDNA 2008 deviation character in the `hostname`, if any.
-// See idn_spoof_checker.h for details about deviation characters.
-IDNA2008DeviationCharacter GetDeviationCharacter(base::StringPiece16 hostname);
 
 }  // namespace url_formatter
 

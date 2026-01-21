@@ -7,13 +7,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/devtools/device/usb/android_rsa.h"
 #include "chrome/browser/devtools/device/usb/android_usb_device.h"
-#include "crypto/rsa_private_key.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -62,8 +61,7 @@ void OpenedForCommand(UsbDeviceProvider::CommandCallback callback,
     std::move(callback).Run(result, std::string());
     return;
   }
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
   auto split_callback = base::SplitOnceCallback(base::BindOnce(
       &OnRead, socket, buffer, std::string(), std::move(callback)));
   result =
@@ -91,14 +89,13 @@ void RunCommand(scoped_refptr<AndroidUsbDevice> device,
 
 }  // namespace
 
-UsbDeviceProvider::UsbDeviceProvider(Profile* profile) {
-  rsa_key_ = AndroidRSAPrivateKey(profile);
-}
+UsbDeviceProvider::UsbDeviceProvider(Profile* profile)
+    : rsa_key_(AndroidRSAPrivateKey(profile)) {}
 
 void UsbDeviceProvider::QueryDevices(SerialsCallback callback) {
   AndroidUsbDevice::Enumerate(
-      rsa_key_.get(), base::BindOnce(&UsbDeviceProvider::EnumeratedDevices,
-                                     this, std::move(callback)));
+      rsa_key_, base::BindOnce(&UsbDeviceProvider::EnumeratedDevices, this,
+                               std::move(callback)));
 }
 
 void UsbDeviceProvider::QueryDeviceInfo(const std::string& serial,
@@ -141,15 +138,15 @@ void UsbDeviceProvider::ReleaseDevice(const std::string& serial) {
   device_map_.erase(serial);
 }
 
-UsbDeviceProvider::~UsbDeviceProvider() {
-}
+UsbDeviceProvider::~UsbDeviceProvider() = default;
 
 void UsbDeviceProvider::EnumeratedDevices(SerialsCallback callback,
                                           const AndroidUsbDevices& devices) {
-  std::vector<std::string> result;
+  std::vector<std::pair<std::string, AndroidDeviceManager::DeviceInfo::ConnectedState>> result;
   device_map_.clear();
   for (auto it = devices.begin(); it != devices.end(); ++it) {
-    result.push_back((*it)->serial());
+    result.emplace_back((*it)->serial(),
+                        AndroidDeviceManager::DeviceInfo::kUnknown);
     device_map_[(*it)->serial()] = *it;
     (*it)->InitOnCallerThread();
   }

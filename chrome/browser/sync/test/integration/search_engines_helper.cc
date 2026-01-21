@@ -8,20 +8,22 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/guid.h"
-#include "base/hash/sha1.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/search_engines/template_url.h"
+#include "components/sync/base/data_type.h"
+#include "crypto/hash.h"
+#include "testing/gmock/include/gmock/gmock.h"
 
 namespace {
 
@@ -171,18 +173,18 @@ TemplateURLBuilder::TemplateURLBuilder(const std::string& keyword) {
   data_.SetKeyword(base::UTF8ToUTF16(keyword));
   data_.SetURL(base::StringPrintf("http://www.test-%s.com/", keyword.c_str()));
   data_.favicon_url = GURL("http://favicon.url");
-  data_.safe_for_autoreplace = true;
+  data_.safe_for_autoreplace = false;
+  data_.is_active = TemplateURLData::ActiveStatus::kTrue;
   data_.date_created = base::Time::FromTimeT(100);
   data_.last_modified = base::Time::FromTimeT(100);
   data_.prepopulate_id = 999999;
 
   // Produce a GUID deterministically from |keyword|.
-  std::string hex_encoded_hash = base::HexEncode(
-      base::SHA1HashSpan(base::as_bytes(base::make_span(keyword))));
+  std::string hex_encoded_hash = base::HexEncode(crypto::hash::Sha256(keyword));
   hex_encoded_hash.resize(12);
   data_.sync_guid =
       base::StrCat({"12345678-0000-4000-8000-", hex_encoded_hash});
-  DCHECK(base::IsValidGUID(data_.sync_guid));
+  DCHECK(base::Uuid::ParseCaseInsensitive(data_.sync_guid).is_valid());
 }
 
 TemplateURLBuilder::~TemplateURLBuilder() = default;
@@ -265,6 +267,24 @@ std::string GetDefaultSearchEngineKeyword(int profile_index) {
   return base::UTF16ToUTF8(service->GetDefaultSearchProvider()->keyword());
 }
 
+bool HasSearchEngineInFakeServer(const std::string& keyword,
+                                 fake_server::FakeServer* fake_server) {
+  return GetSearchEngineInFakeServerWithKeyword(keyword, fake_server)
+      .has_value();
+}
+
+std::optional<sync_pb::SearchEngineSpecifics>
+GetSearchEngineInFakeServerWithKeyword(const std::string& keyword,
+                                       fake_server::FakeServer* fake_server) {
+  for (const sync_pb::SyncEntity& entity :
+       fake_server->GetSyncEntitiesByDataType(syncer::SEARCH_ENGINES)) {
+    if (entity.specifics().search_engine().keyword() == keyword) {
+      return entity.specifics().search_engine();
+    }
+  }
+  return std::nullopt;
+}
+
 SearchEnginesMatchChecker::SearchEnginesMatchChecker() {
   if (test()->UseVerifier()) {
     observations_.AddObservation(GetVerifierService());
@@ -300,6 +320,15 @@ bool HasSearchEngineChecker::IsExitConditionSatisfied(std::ostream* os) {
 
 void HasSearchEngineChecker::OnTemplateURLServiceChanged() {
   CheckExitCondition();
+}
+
+FakeServerHasSearchEngineChecker::FakeServerHasSearchEngineChecker(
+    const std::string& keyword)
+    : keyword_(keyword) {}
+
+bool FakeServerHasSearchEngineChecker::IsExitConditionSatisfied(
+    std::ostream* os) {
+  return HasSearchEngineInFakeServer(keyword_, fake_server());
 }
 
 }  // namespace search_engines_helper

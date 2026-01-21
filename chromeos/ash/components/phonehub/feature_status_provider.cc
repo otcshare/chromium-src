@@ -4,8 +4,7 @@
 
 #include "chromeos/ash/components/phonehub/feature_status_provider.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 FeatureStatusProvider::FeatureStatusProvider() = default;
 
@@ -24,5 +23,11 @@ void FeatureStatusProvider::NotifyStatusChanged() {
     observer.OnFeatureStatusChanged();
 }
 
-}  // namespace phonehub
-}  // namespace ash
+void FeatureStatusProvider::NotifyEligibleDevicesFound(
+    const multidevice::RemoteDeviceRefList devices) {
+  for (auto& observer : observer_list_) {
+    observer.OnEligiblePhoneHubHostFound(devices);
+  }
+}
+
+}  // namespace ash::phonehub

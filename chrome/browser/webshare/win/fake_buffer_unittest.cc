@@ -6,6 +6,7 @@
 
 #include <wrl/implements.h>
 
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -43,7 +44,7 @@ TEST(FakeBufferTest, Bytes) {
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
 
   raw_buffer[0] = 'a';
-  raw_buffer[1] = 'b';
+  UNSAFE_TODO(raw_buffer[1]) = 'b';
 
   auto buffer2 = buffer;
   byte* raw_buffer_2;
@@ -51,7 +52,7 @@ TEST(FakeBufferTest, Bytes) {
 
   ASSERT_EQ(raw_buffer, raw_buffer_2);
   ASSERT_EQ(raw_buffer_2[0], 'a');
-  ASSERT_EQ(raw_buffer_2[1], 'b');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer_2[1]), 'b');
 }
 
 }  // namespace webshare

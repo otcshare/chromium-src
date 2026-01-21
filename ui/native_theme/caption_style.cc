@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ui/native_theme/caption_style.h"
+
 #include "base/json/json_reader.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -14,24 +15,32 @@ CaptionStyle::CaptionStyle(const CaptionStyle& other) = default;
 CaptionStyle::~CaptionStyle() = default;
 
 // static
-absl::optional<CaptionStyle> CaptionStyle::FromSpec(const std::string& spec) {
+std::optional<CaptionStyle> CaptionStyle::FromSpec(const std::string& spec) {
   CaptionStyle style;
-  absl::optional<base::Value> dict = base::JSONReader::Read(spec);
+  std::optional<base::Value> dict =
+      base::JSONReader::Read(spec, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!dict.has_value()) {
+    return std::nullopt;
+  }
 
-  if (!dict.has_value() || !dict->is_dict())
-    return absl::nullopt;
+  base::Value::Dict* value_dict = dict->GetIfDict();
+  if (!value_dict) {
+    return std::nullopt;
+  }
 
-  if (const std::string* value = dict->FindStringKey("text-color"))
+  if (const std::string* value = value_dict->FindString("text-color")) {
     style.text_color = *value;
-  if (const std::string* value = dict->FindStringKey("background-color"))
+  }
+  if (const std::string* value = value_dict->FindString("background-color")) {
     style.background_color = *value;
+  }
 
   return style;
 }
 
-#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_APPLE)
-absl::optional<CaptionStyle> CaptionStyle::FromSystemSettings() {
-  return absl::nullopt;
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_MAC)
+std::optional<CaptionStyle> CaptionStyle::FromSystemSettings() {
+  return std::nullopt;
 }
 #endif
 

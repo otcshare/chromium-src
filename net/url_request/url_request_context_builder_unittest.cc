@@ -4,11 +4,13 @@
 
 #include "net/url_request/url_request_context_builder.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "net/base/cronet_buildflags.h"
 #include "net/base/mock_network_change_notifier.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/request_priority.h"
@@ -34,19 +36,27 @@
 #include "url/gurl.h"
 #include "url/scheme_host_port.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"
+#endif
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_config_service_fixed.h"
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_REPORTING)
 #include "base/files/scoped_temp_dir.h"
-#include "net/extras/sqlite/sqlite_persistent_reporting_and_nel_store.h"
+
+#if !BUILDFLAG(CRONET_BUILD)
+// gn check does not account for BUILDFLAG(). So, for Cronet builds, it will
+// complain about a missing dependency on the target exposing this header. Add a
+// nogncheck to stop it from yelling.
+#include "net/extras/sqlite/sqlite_persistent_reporting_and_nel_store.h"  // nogncheck
+#endif  // !BUILDFLAG(CRONET_BUILD)
+
 #include "net/reporting/reporting_context.h"
 #include "net/reporting/reporting_policy.h"
 #include "net/reporting/reporting_service.h"
@@ -92,8 +102,12 @@ class URLRequestContextBuilderTest : public PlatformTest,
   URLRequestContextBuilderTest() {
     test_server_.AddDefaultHandlers(
         base::FilePath(FILE_PATH_LITERAL("net/data/url_request_unittest")));
+    SetUpURLRequestContextBuilder(builder_);
+  }
+
+  void SetUpURLRequestContextBuilder(URLRequestContextBuilder& builder) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
-    builder_.set_proxy_config_service(std::make_unique<ProxyConfigServiceFixed>(
+    builder.set_proxy_config_service(std::make_unique<ProxyConfigServiceFixed>(
         ProxyConfigWithAnnotation::CreateDirect()));
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_ANDROID)
@@ -116,7 +130,7 @@ TEST_F(URLRequestContextBuilderTest, DefaultSettings) {
   request->set_method("GET");
   request->SetExtraRequestHeaderByName("Foo", "Bar", false);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_EQ("Bar", delegate.data_received());
 }
 
@@ -131,7 +145,7 @@ TEST_F(URLRequestContextBuilderTest, UserAgent) {
       &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
   request->set_method("GET");
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_EQ("Bar", delegate.data_received());
 }
 
@@ -194,6 +208,44 @@ TEST_F(URLRequestContextBuilderTest, ShutDownNELAndReportingWithPendingUpload) {
       ConfiguredProxyResolutionService::CreateDirect());
   builder_.set_reporting_policy(std::make_unique<ReportingPolicy>());
   builder_.set_network_error_logging_enabled(true);
+
+  std::unique_ptr<URLRequestContext> context(builder_.Build());
+  ASSERT_TRUE(context->network_error_logging_service());
+  ASSERT_TRUE(context->reporting_service());
+
+  // Queue a pending upload.
+  GURL url("https://www.foo.test");
+  context->reporting_service()->GetContextForTesting()->uploader()->StartUpload(
+      url::Origin::Create(url), url,
+      IsolationInfo::CreateTransient(/*nonce=*/std::nullopt), "report body", 0,
+      /*eligible_for_credentials=*/false, base::DoNothing());
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(1, context->reporting_service()
+                   ->GetContextForTesting()
+                   ->uploader()
+                   ->GetPendingUploadCountForTesting());
+  ASSERT_TRUE(mock_host_resolver->has_pending_requests());
+
+  // This should shut down and destroy the NEL and Reporting services, including
+  // the PendingUpload, and should not cause a crash.
+  context.reset();
+}
+
+#if !BUILDFLAG(CRONET_BUILD)
+// See crbug.com/935209. This test ensures that shutdown occurs correctly and
+// does not crash while destoying the NEL and Reporting services in the process
+// of destroying the URLRequestContext whilst Reporting has a pending upload.
+TEST_F(URLRequestContextBuilderTest,
+       ShutDownNELAndReportingWithPendingUploadAndPersistentStorage) {
+  std::unique_ptr<MockHostResolver> host_resolver =
+      std::make_unique<MockHostResolver>();
+  host_resolver->set_ondemand_mode(true);
+  MockHostResolver* mock_host_resolver = host_resolver.get();
+  builder_.set_host_resolver(std::move(host_resolver));
+  builder_.set_proxy_resolution_service(
+      ConfiguredProxyResolutionService::CreateDirect());
+  builder_.set_reporting_policy(std::make_unique<ReportingPolicy>());
+  builder_.set_network_error_logging_enabled(true);
   base::ScopedTempDir scoped_temp_dir;
   ASSERT_TRUE(scoped_temp_dir.CreateUniqueTempDir());
   builder_.set_persistent_reporting_and_nel_store(
@@ -216,8 +268,8 @@ TEST_F(URLRequestContextBuilderTest, ShutDownNELAndReportingWithPendingUpload) {
   // Queue a pending upload.
   GURL url("https://www.foo.test");
   context->reporting_service()->GetContextForTesting()->uploader()->StartUpload(
-      url::Origin::Create(url), url, IsolationInfo::CreateTransient(),
-      "report body", 0,
+      url::Origin::Create(url), url,
+      IsolationInfo::CreateTransient(/*nonce=*/std::nullopt), "report body", 0,
       /*eligible_for_credentials=*/false, base::DoNothing());
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(1, context->reporting_service()
@@ -230,6 +282,7 @@ TEST_F(URLRequestContextBuilderTest, ShutDownNELAndReportingWithPendingUpload) {
   // the PendingUpload, and should not cause a crash.
   context.reset();
 }
+#endif  // !BUILDFLAG(CRONET_BUILD)
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 
 TEST_F(URLRequestContextBuilderTest, ShutdownHostResolverWithPendingRequest) {
@@ -241,9 +294,9 @@ TEST_F(URLRequestContextBuilderTest, ShutdownHostResolverWithPendingRequest) {
   std::unique_ptr<URLRequestContext> context(builder_.Build());
 
   std::unique_ptr<HostResolver::ResolveHostRequest> request =
-      context->host_resolver()->CreateRequest(
-          HostPortPair("example.com", 1234), NetworkAnonymizationKey(),
-          NetLogWithSource(), absl::nullopt);
+      context->host_resolver()->CreateRequest(HostPortPair("example.com", 1234),
+                                              NetworkAnonymizationKey(),
+                                              NetLogWithSource(), std::nullopt);
   TestCompletionCallback callback;
   int rv = request->Start(callback.callback());
   ASSERT_TRUE(state->has_pending_requests());
@@ -263,8 +316,12 @@ TEST_F(URLRequestContextBuilderTest, DefaultHostResolver) {
       HostResolver::ManagerOptions(), nullptr /* system_dns_config_notifier */,
       nullptr /* net_log */);
 
-  builder_.set_host_resolver_manager(manager.get());
-  std::unique_ptr<URLRequestContext> context = builder_.Build();
+  // Use a stack allocated builder instead of `builder_` to avoid dangling
+  // pointer of `manager`.
+  URLRequestContextBuilder builder;
+  SetUpURLRequestContextBuilder(builder);
+  builder.set_host_resolver_manager(manager.get());
+  std::unique_ptr<URLRequestContext> context = builder.Build();
 
   EXPECT_EQ(context.get(), context->host_resolver()->GetContextForTesting());
   EXPECT_EQ(manager.get(), context->host_resolver()->GetManagerForTesting());
@@ -283,8 +340,8 @@ TEST_F(URLRequestContextBuilderTest, CustomHostResolver) {
 
 TEST_F(URLRequestContextBuilderTest, BindToNetworkFinalConfiguration) {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->sdk_int() <
-      base::android::SDK_VERSION_MARSHMALLOW) {
+  if (base::android::android_info::sdk_int() <
+      base::android::android_info::SDK_VERSION_MARSHMALLOW) {
     GTEST_SKIP()
         << "BindToNetwork is supported starting from Android Marshmallow";
   }
@@ -328,8 +385,8 @@ TEST_F(URLRequestContextBuilderTest, BindToNetworkFinalConfiguration) {
 
 TEST_F(URLRequestContextBuilderTest, BindToNetworkCustomManagerOptions) {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->sdk_int() <
-      base::android::SDK_VERSION_MARSHMALLOW) {
+  if (base::android::android_info::sdk_int() <
+      base::android::android_info::SDK_VERSION_MARSHMALLOW) {
     GTEST_SKIP()
         << "BindToNetwork is supported starting from Android Marshmallow";
   }
@@ -356,6 +413,27 @@ TEST_F(URLRequestContextBuilderTest, BindToNetworkCustomManagerOptions) {
 #else   // !BUILDFLAG(IS_ANDROID)
   GTEST_SKIP() << "BindToNetwork is supported only on Android";
 #endif  // BUILDFLAG(IS_ANDROID)
+}
+
+TEST_F(URLRequestContextBuilderTest, MigrateSessionsOnNetworkChangeV2Default) {
+  std::unique_ptr<URLRequestContext> context = builder_.Build();
+
+  const QuicParams* quic_params = context->quic_context()->params();
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_TRUE(quic_params->migrate_sessions_on_network_change_v2);
+#else   // !BUILDFLAG(IS_ANDROID)
+  EXPECT_FALSE(quic_params->migrate_sessions_on_network_change_v2);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+TEST_F(URLRequestContextBuilderTest, MigrateSessionsOnNetworkChangeV2Override) {
+  base::test::ScopedFeatureList scoped_list;
+  scoped_list.InitAndDisableFeature(
+      net::features::kMigrateSessionsOnNetworkChangeV2);
+  std::unique_ptr<URLRequestContext> context = builder_.Build();
+
+  const QuicParams* quic_params = context->quic_context()->params();
+  EXPECT_FALSE(quic_params->migrate_sessions_on_network_change_v2);
 }
 
 }  // namespace

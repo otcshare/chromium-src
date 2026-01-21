@@ -4,10 +4,11 @@
 
 #include "third_party/blink/renderer/core/web_test/web_test_web_frame_widget_impl.h"
 
+#include "base/functional/callback_helpers.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/web_test/renderer/event_sender.h"
 #include "content/web_test/renderer/test_runner.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_page_popup.h"
@@ -15,6 +16,7 @@
 #include "third_party/blink/public/web/web_widget.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 
@@ -91,14 +93,13 @@ void WebTestWebFrameWidgetImpl::WillBeginMainFrame() {
   // WillBeginMainFrame occurs before we run BeginMainFrame() in the base
   // class, which will change states. TestFinished() wants to grab the current
   // state.
-  GetTestRunner()->FinishTestIfReady();
+  GetTestRunner()->FinishTestIfReady(*LocalRootImpl());
 
   WebFrameWidgetImpl::WillBeginMainFrame();
 }
 
-void WebTestWebFrameWidgetImpl::ScheduleAnimation() {
-  if (GetTestRunner()->TestIsRunning())
-    ScheduleAnimationInternal(GetTestRunner()->animation_requires_raster());
+void WebTestWebFrameWidgetImpl::ScheduleAnimation(bool urgent) {
+  ScheduleAnimationInternal(GetTestRunner()->animation_requires_raster());
 }
 
 void WebTestWebFrameWidgetImpl::ScheduleAnimationForWebTests() {
@@ -108,26 +109,36 @@ void WebTestWebFrameWidgetImpl::ScheduleAnimationForWebTests() {
   // than just doing the main frame animate step. That way we know it will
   // submit a frame and later trigger the presentation callback in order to make
   // progress in the test.
-  if (GetTestRunner()->TestIsRunning())
-    ScheduleAnimationInternal(/*do_raster=*/true);
+  ScheduleAnimationInternal(/*do_raster=*/true);
+}
+
+void WebTestWebFrameWidgetImpl::WasShown(bool was_evicted) {
+  WebFrameWidgetImpl::WasShown(was_evicted);
+
+  if (animation_deferred_while_hidden_) {
+    animation_deferred_while_hidden_ = false;
+    ScheduleAnimationInternal(composite_requested_);
+  }
 }
 
 void WebTestWebFrameWidgetImpl::UpdateAllLifecyclePhasesAndComposite(
     base::OnceClosure callback) {
-  LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(WTF::BindOnce(
-      [](base::OnceClosure callback, base::TimeTicks presentation_timestamp) {
-        std::move(callback).Run();
-      },
-      std::move(callback)));
+  LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
+      base::IgnoreArgs<const viz::FrameTimingDetails&>(std::move(callback)));
   LayerTreeHost()->SetNeedsCommitWithForcedRedraw();
   ScheduleAnimationForWebTests();
 }
 
 void WebTestWebFrameWidgetImpl::ScheduleAnimationInternal(bool do_raster) {
+  CHECK(GetTestRunner());
+  if (!GetTestRunner()->TestIsRunning()) {
+    return;
+  }
+
   // When using threaded compositing, have the WeFrameWidgetImpl normally
   // schedule a request for a frame, as we use the compositor's scheduler.
   if (Thread::CompositorThread()) {
-    WebFrameWidgetImpl::ScheduleAnimation();
+    WebFrameWidgetImpl::ScheduleAnimation(/*urgent=*/false);
     return;
   }
 
@@ -138,27 +149,39 @@ void WebTestWebFrameWidgetImpl::ScheduleAnimationInternal(bool do_raster) {
   if (!animation_scheduled_) {
     animation_scheduled_ = true;
 
-    WebLocalFrame* frame = LocalRoot();
-
-    frame->GetTaskRunner(TaskType::kInternalTest)
-        ->PostDelayedTask(FROM_HERE,
-                          WTF::BindOnce(&WebTestWebFrameWidgetImpl::AnimateNow,
-                                        WrapWeakPersistent(this)),
-                          base::Milliseconds(1));
+    if (WebLocalFrame* frame = LocalRoot()) {
+      frame->GetTaskRunner(TaskType::kInternalTest)
+          ->PostDelayedTask(FROM_HERE,
+                            BindOnce(&WebTestWebFrameWidgetImpl::AnimateNow,
+                                     WrapWeakPersistent(this)),
+                            base::Milliseconds(1));
+    }
   }
 }
 
+bool WebTestWebFrameWidgetImpl::RequestedMainFramePending() {
+  if (Thread::CompositorThread()) {
+    return WebFrameWidgetImpl::RequestedMainFramePending();
+  }
+  return animation_scheduled_;
+}
+
 void WebTestWebFrameWidgetImpl::StartDragging(
+    LocalFrame* source_frame,
     const WebDragData& data,
     DragOperationsMask mask,
     const SkBitmap& drag_image,
     const gfx::Vector2d& cursor_offset,
     const gfx::Rect& drag_obj_rect) {
-  doing_drag_and_drop_ = true;
-  GetTestRunner()->SetDragImage(drag_image);
+  if (!GetTestRunner()->AutomaticDragDropEnabled()) {
+    return WebFrameWidgetImpl::StartDragging(
+        source_frame, data, mask, drag_image, cursor_offset, drag_obj_rect);
+  }
 
   // When running a test, we need to fake a drag drop operation otherwise
   // Windows waits for real mouse events to know when the drag is over.
+  doing_drag_and_drop_ = true;
+  GetTestRunner()->SetDragImage(drag_image);
   event_sender_->DoDragDrop(data, mask);
 }
 
@@ -169,6 +192,7 @@ WebTestWebFrameWidgetImpl::GetFrameWidgetTestHelperForTesting() {
 
 void WebTestWebFrameWidgetImpl::Reset() {
   event_sender_->Reset();
+
   // Ends any synthetic gestures started in |event_sender_|.
   FlushInputProcessedCallback();
 
@@ -184,6 +208,10 @@ void WebTestWebFrameWidgetImpl::Reset() {
 
     SetMainFrameOverlayColor(SK_ColorTRANSPARENT);
     SetTextZoomFactor(1);
+    LocalRootImpl()
+        ->GetFrame()
+        ->GetEventHandler()
+        .ResetLastMousePositionForWebTest();
   }
 }
 
@@ -191,14 +219,15 @@ content::EventSender* WebTestWebFrameWidgetImpl::GetEventSender() {
   return event_sender_.get();
 }
 
-void WebTestWebFrameWidgetImpl::SynchronouslyCompositeAfterTest() {
+void WebTestWebFrameWidgetImpl::SynchronouslyCompositeAfterTest(
+    base::OnceClosure callback) {
   // We could DCHECK(!GetTestRunner()->TestIsRunning()) except that frames in
   // other processes than the main frame do not hear when the test ends.
 
   // This would be very weird and prevent us from producing pixels.
   DCHECK(!in_synchronous_composite_);
 
-  SynchronouslyComposite(/*do_raster=*/true);
+  SynchronouslyComposite(std::move(callback), /*do_raster=*/true);
 }
 
 content::TestRunner* WebTestWebFrameWidgetImpl::GetTestRunner() {
@@ -207,27 +236,42 @@ content::TestRunner* WebTestWebFrameWidgetImpl::GetTestRunner() {
 
 // static
 void WebTestWebFrameWidgetImpl::DoComposite(cc::LayerTreeHost* layer_tree_host,
-                                            bool do_raster) {
+                                            bool do_raster,
+                                            base::OnceClosure callback) {
   // Ensure that there is damage so that the compositor submits, and the display
   // compositor draws this frame.
   if (do_raster) {
     layer_tree_host->SetNeedsCommitWithForcedRedraw();
   }
 
-  layer_tree_host->CompositeForTest(base::TimeTicks::Now(), do_raster);
+  layer_tree_host->CompositeForTest(base::TimeTicks::Now(), do_raster,
+                                    std::move(callback));
 }
 
-void WebTestWebFrameWidgetImpl::SynchronouslyComposite(bool do_raster) {
-  if (!LocalRootImpl()->ViewImpl()->does_composite())
+void WebTestWebFrameWidgetImpl::SynchronouslyComposite(
+    base::OnceClosure callback,
+    bool do_raster) {
+  if (!LocalRootImpl()->ViewImpl()->does_composite()) {
+    if (callback) {
+      std::move(callback).Run();
+    }
     return;
+  }
   DCHECK(!LayerTreeHost()->GetSettings().single_thread_proxy_scheduler);
 
-  if (!LayerTreeHost()->IsVisible())
+  if (!LayerTreeHost()->IsVisible()) {
+    if (callback) {
+      std::move(callback).Run();
+    }
     return;
+  }
 
   if (base::FeatureList::IsEnabled(
           blink::features::kNoForcedFrameUpdatesForWebTests) &&
       LayerTreeHost()->MainFrameUpdatesAreDeferred()) {
+    if (callback) {
+      std::move(callback).Run();
+    }
     return;
   }
 
@@ -236,30 +280,46 @@ void WebTestWebFrameWidgetImpl::SynchronouslyComposite(bool do_raster) {
     // frame, but the compositor does not support this. In this case, we only
     // run blink's lifecycle updates.
     UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
+    if (callback) {
+      std::move(callback).Run();
+    }
     return;
   }
 
   in_synchronous_composite_ = true;
 
-  // DoComposite() can detach the frame.
-  DoComposite(LayerTreeHost(), do_raster);
-  if (!LocalRoot())
+  auto wrapped_callback = blink::BindOnce(
+      [](base::OnceClosure cb, bool* in_synchronous_composite) {
+        *in_synchronous_composite = false;
+        if (cb) {
+          std::move(cb).Run();
+        }
+      },
+      // base::Unretained is safe by construction, because WebFrameWidgetImpl
+      // must always outlive the compositing machinery.
+      std::move(callback), base::Unretained(&in_synchronous_composite_));
+
+  // If there's a visible popup, then we will update its compositing after
+  // updating the host frame.
+  WebPagePopupImpl* popup = LocalRootImpl()->ViewImpl()->GetPagePopup();
+
+  if (!popup) {
+    DoComposite(LayerTreeHost(), do_raster, std::move(wrapped_callback));
     return;
-
-  in_synchronous_composite_ = false;
-
-  // If this widget is for the main frame, we also composite the current
-  // PagePopup afterward.
-  //
-  // TODO(danakj): This means that an OOPIF's popup, which is attached to a
-  // WebView without a main frame, would have no opportunity to execute this
-  // method call.
-  if (ForMainFrame()) {
-    WebViewImpl* view = LocalRootImpl()->ViewImpl();
-    if (WebPagePopupImpl* popup = view->GetPagePopup()) {
-      DoComposite(popup->LayerTreeHostForTesting(), do_raster);
-    }
   }
+
+  DoComposite(LayerTreeHost(), do_raster, base::OnceClosure());
+
+  // DoComposite() can detach the frame, in which case we don't update the
+  // popup. Because DoComposite was called with a no-op callback, we need to run
+  // the actual callback here.
+  if (!LocalRoot()) {
+    std::move(wrapped_callback).Run();
+    return;
+  }
+
+  DoComposite(popup->LayerTreeHostForTesting(), do_raster,
+              std::move(wrapped_callback));
 }
 
 void WebTestWebFrameWidgetImpl::AnimateNow() {
@@ -267,17 +327,30 @@ void WebTestWebFrameWidgetImpl::AnimateNow() {
   if (!LocalRootImpl()) {
     return;
   }
-  bool do_raster = composite_requested_;
+
   animation_scheduled_ = false;
+
+  if (LocalRootImpl()->ViewImpl()->does_composite() &&
+      !LayerTreeHost()->IsVisible()) {
+    // If the widget is hidden, SynchronouslyComposite will early-out which may
+    // leave a test waiting (e.g. waiting on a requestAnimationFrame). Setting
+    // this bit will reschedule the animation request when the widget becomes
+    // visible.
+    animation_deferred_while_hidden_ = true;
+    return;
+  }
+
+  bool do_raster = composite_requested_;
   composite_requested_ = false;
   // Composite may destroy |this|, so don't use it afterward.
-  SynchronouslyComposite(do_raster);
+  SynchronouslyComposite(base::OnceClosure(), do_raster);
 }
 
 void WebTestWebFrameWidgetImpl::RequestDecode(
-    const PaintImage& image,
-    base::OnceCallback<void(bool)> callback) {
-  WebFrameWidgetImpl::RequestDecode(image, std::move(callback));
+    const cc::DrawImage& image,
+    base::OnceCallback<void(bool)> callback,
+    bool speculative) {
+  WebFrameWidgetImpl::RequestDecode(image, std::move(callback), speculative);
 
   // In web tests the request does not actually cause a commit, because the
   // compositor is scheduled by the test runner to avoid flakiness. So for this

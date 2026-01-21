@@ -8,6 +8,7 @@
 #include <map>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/active_url_message_filter.h"
@@ -15,7 +16,6 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
 
 namespace content {
 
@@ -78,13 +78,53 @@ class CONTENT_EXPORT RenderFrameHostReceiverSet : public WebContentsObserver {
     frame_to_receivers_map_[render_frame_host].push_back(id);
   }
 
+  // Determines if `render_frame_host` is already bound.
+  bool IsBound(RenderFrameHost* render_frame_host) {
+    return frame_to_receivers_map_.contains(render_frame_host);
+  }
+
   // Implementations of `Interface` can call `GetCurrentTargetFrame()` to
   // determine which frame sent the message. `GetCurrentTargetFrame()` will
   // never return `nullptr`.
-  RenderFrameHost* GetCurrentTargetFrame() ABSL_ATTRIBUTE_RETURNS_NONNULL {
+  //
+  // Important: this method must only be called while the incoming message is
+  // being dispatched on the stack.
+  RETURNS_NONNULL RenderFrameHost* GetCurrentTargetFrame() {
     if (current_target_frame_for_testing_)
       return current_target_frame_for_testing_;
     return receivers_.current_context();
+  }
+
+  // Reports the currently dispatching Message as bad and closes+removes the
+  // receiver which received the message. Prefer this over the global
+  // `mojo::ReportBadMessage()` function, since calling this method promptly
+  // disconnects the receiver, preventing further (potentially bad) messages
+  // from being processed.
+  //
+  // Important: this method must only be called while the incoming message is
+  // being dispatched on the stack. To report a bad message after asynchronous
+  // processing (e.g. posting a task that then reports a the bad message), use
+  // `GetMessageCallback()` and pass the returned callback to the async task
+  // that needs to report the message as bad.
+  NOT_TAIL_CALLED void ReportBadMessage(const std::string& message) {
+    receivers_.ReportBadMessage(message);
+  }
+
+  // Creates a callback which, when run, reports the currently dispatching
+  // Message as bad and closes+removes the receiver which received the message.
+  // Prefer this over the global `mojo::GetBadMessageCallback()` function,
+  // since running the callback promptly disconnects the receiver, preventing
+  // further (potentially bad) messages from being processed.
+  //
+  // Important: like `ReportBadMessage()`, this method must only be called while
+  // the incoming message is being dispatched on the stack. However, unlike
+  // `ReportBadMessage()`, the returned callback may be called even if the
+  // original message is no longer being dispatched on the stack.
+  //
+  // Sequence safety: the returned callback must be called on the sequence that
+  // owns `this` (i.e. the UI thread).
+  mojo::ReportBadMessageCallback GetBadMessageCallback() {
+    return receivers_.GetBadMessageCallback();
   }
 
   void SetCurrentTargetFrameForTesting(RenderFrameHost* render_frame_host) {

@@ -20,6 +20,7 @@ class AudioChunk : public base::RefCountedThreadSafe<AudioChunk> {
   // Creates a chunk of |length| bytes, initialized to zeros.
   AudioChunk(size_t length, int bytes_per_sample);
   AudioChunk(const uint8_t* data, size_t length, int bytes_per_sample);
+  AudioChunk(base::span<const uint8_t> data_span, int bytes_per_sample);
 
   AudioChunk(const AudioChunk&) = delete;
   AudioChunk& operator=(const AudioChunk&) = delete;
@@ -29,14 +30,14 @@ class AudioChunk : public base::RefCountedThreadSafe<AudioChunk> {
   size_t NumSamples() const;
   const std::string& AsString() const;
   int16_t GetSample16(size_t index) const;
-  const int16_t* SamplesData16() const;
+  base::span<const int16_t> SamplesData16AsSpan() const;
   uint8_t* writable_data() {
     return reinterpret_cast<uint8_t*>(&data_string_[0]);
   }
 
  private:
   friend class base::RefCountedThreadSafe<AudioChunk>;
-  ~AudioChunk() {}
+  ~AudioChunk();
 
   std::string data_string_;
   const int bytes_per_sample_;

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
@@ -20,10 +21,6 @@
 #include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/test_navigation_observer.h"
-
-#if BUILDFLAG(IS_WIN)
-#include "base/win/windows_version.h"
-#endif
 
 class ExternalProtocolHandlerBrowserTest : public InProcessBrowserTest {
  public:
@@ -159,14 +156,6 @@ class TabAddedRemovedObserver : public TabStripModelObserver {
 #endif
 IN_PROC_BROWSER_TEST_F(ExternalProtocolHandlerBrowserTest,
                        MAYBE_AutoCloseTabOnNonWebProtocolNavigation) {
-#if BUILDFLAG(IS_WIN)
-  // On Win 7 the protocol is registered to be handled by Chrome and thus never
-  // reaches the ExternalProtocolHandler so we skip the test. For
-  // more info see installer/util/shell_util.cc:GetShellIntegrationEntries
-  if (base::win::GetVersion() < base::win::Version::WIN8)
-    return;
-#endif
-
   TabAddedRemovedObserver observer(browser()->tab_strip_model());
   ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
   ASSERT_TRUE(
@@ -184,14 +173,6 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolHandlerBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_F(ExternalProtocolHandlerBrowserTest,
                        MAYBE_ProtocolLaunchEmitsConsoleLog) {
-#if BUILDFLAG(IS_WIN)
-  // On Win 7 the protocol is registered to be handled by Chrome and thus never
-  // reaches the ExternalProtocolHandler so we skip the test. For
-  // more info see installer/util/shell_util.cc:GetShellIntegrationEntries
-  if (base::win::GetVersion() < base::win::Version::WIN8)
-    return;
-#endif
-
   content::WebContentsConsoleObserver observer(web_content());
   // Wait for either "Launched external handler..." or "Failed to launch..."; the former will pass
   // the test, while the latter will fail it more quickly than waiting for a timeout.
@@ -285,10 +266,9 @@ class AlwaysBlockedExternalProtocolHandlerDelegate
     ExternalProtocolHandler::SetDelegateForTesting(nullptr);
   }
 
-  scoped_refptr<shell_integration::DefaultProtocolClientWorker>
-  CreateShellWorker(const GURL& url) override {
+  scoped_refptr<shell_integration::DefaultSchemeClientWorker> CreateShellWorker(
+      const GURL& url) override {
     NOTREACHED();
-    return nullptr;
   }
   ExternalProtocolHandler::BlockState GetBlockState(const std::string& scheme,
                                                     Profile* profile) override {
@@ -300,7 +280,7 @@ class AlwaysBlockedExternalProtocolHandlerDelegate
       content::WebContents* web_contents,
       ui::PageTransition page_transition,
       bool has_user_gesture,
-      const absl::optional<url::Origin>& initiating_origin,
+      const std::optional<url::Origin>& initiating_origin,
       const std::u16string& program_name) override {
     NOTREACHED();
   }

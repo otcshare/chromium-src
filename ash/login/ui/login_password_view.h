@@ -6,15 +6,17 @@
 #define ASH_LOGIN_UI_LOGIN_PASSWORD_VIEW_H_
 
 #include <string>
+#include <string_view>
 
 #include "ash/ash_export.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/login/ui/animated_rounded_image_view.h"
 #include "ash/public/cpp/session/user_info.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/compositor/layer_animation_observer.h"
-#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
 
@@ -26,7 +28,7 @@ class ToggleImageButton;
 
 namespace ash {
 class ArrowButtonView;
-enum class EasyUnlockIconState;
+class LoginArrowNavigationDelegate;
 
 // Contains a textfield and a submit button. When the display password button
 // is visible, the textfield contains a button in the form of an eye icon that
@@ -53,12 +55,12 @@ enum class EasyUnlockIconState;
 //
 //  1 2 3 4 5 6    (o)  (=>)
 //  ------------------
-class ASH_EXPORT LoginPasswordView
-    : public views::View,
-      public views::TextfieldController,
-      public ImeControllerImpl::Observer,
-      public ui::ImplicitAnimationObserver,
-      public base::SupportsWeakPtr<LoginPasswordView> {
+class ASH_EXPORT LoginPasswordView : public views::View,
+                                     public views::TextfieldController,
+                                     public ImeController::Observer,
+                                     public ui::ImplicitAnimationObserver {
+  METADATA_HEADER(LoginPasswordView, views::View)
+
  public:
   // TestApi is used for tests to get internal implementation details.
   class ASH_EXPORT TestApi {
@@ -71,22 +73,14 @@ class ASH_EXPORT LoginPasswordView
     views::Textfield* textfield() const;
     views::View* submit_button() const;
     views::ToggleImageButton* display_password_button() const;
-    views::View* easy_unlock_icon() const;
-    views::View* capslock_icon() const;
-    void set_immediately_hover_easy_unlock_icon();
-
-    bool is_capslock_highlight_for_testing() {
-      return view_->is_capslock_higlight_;
-    }
 
    private:
-    LoginPasswordView* view_;
+    raw_ptr<LoginPasswordView> view_;
   };
 
   using OnPasswordSubmit =
-      base::RepeatingCallback<void(const std::u16string& password)>;
+      base::RepeatingCallback<void(std::u16string_view password)>;
   using OnPasswordTextChanged = base::RepeatingCallback<void(bool is_empty)>;
-  using OnEasyUnlockIconHovered = base::RepeatingClosure;
 
   // Must call |Init| after construction.
   LoginPasswordView();
@@ -101,19 +95,7 @@ class ASH_EXPORT LoginPasswordView
   // |on_password_text_changed| is called when the text in the password field
   // changes.
   void Init(const OnPasswordSubmit& on_submit,
-            const OnPasswordTextChanged& on_password_text_changed,
-            const OnEasyUnlockIconHovered& on_easy_unlock_icon_hovered,
-            views::Button::PressedCallback on_easy_unlock_icon_tapped);
-
-  // Whether or not the password field is enabled when there is no text.
-  void SetEnabledOnEmptyPassword(bool enabled);
-
-  // Change the active icon for easy unlock.
-  void SetEasyUnlockIcon(EasyUnlockIconState icon_state,
-                         const std::u16string& accessibility_label);
-
-  // Set the textfield name used for accessibility.
-  void SetAccessibleName(const std::u16string& name);
+            const OnPasswordTextChanged& on_password_text_changed);
 
   // Enable or disable focus on the child elements (i.e.: password field and
   // submit button, or display password button if it is shown).
@@ -141,8 +123,8 @@ class ASH_EXPORT LoginPasswordView
   bool IsReadOnly() const;
 
   // views::View:
-  const char* GetClassName() const override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void RequestFocus() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
 
@@ -161,7 +143,7 @@ class ASH_EXPORT LoginPasswordView
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
 
-  // ImeControllerImpl::Observer:
+  // ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override;
   void OnKeyboardLayoutNameChanged(const std::string&) override {}
 
@@ -174,12 +156,19 @@ class ASH_EXPORT LoginPasswordView
   // field.
   void SubmitPassword();
 
+  // Sets the delegate of the arrow keys navigation.
+  void SetLoginArrowNavigationDelegate(LoginArrowNavigationDelegate* delegate);
+
+  void SetAccessibleNameOnTextfield(const std::u16string& new_name);
+
+  base::WeakPtr<LoginPasswordView> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
-  class EasyUnlockIcon;
   class DisplayPasswordButton;
   class LoginPasswordRow;
   class LoginTextfield;
-  class AlternateIconsView;
   friend class TestApi;
 
   // Increases/decreases the contrast of the capslock icon.
@@ -196,8 +185,9 @@ class ASH_EXPORT LoginPasswordView
   OnPasswordSubmit on_submit_;
   OnPasswordTextChanged on_password_text_changed_;
 
-  // Is the password field enabled when there is no text?
-  bool enabled_on_empty_password_ = false;
+  // Arrow keystrokes delegate.
+  raw_ptr<LoginArrowNavigationDelegate, DanglingUntriaged>
+      arrow_navigation_delegate_ = nullptr;
 
   // Clears the password field after a time without action if the display
   // password button is visible.
@@ -208,18 +198,13 @@ class ASH_EXPORT LoginPasswordView
   // through the password and make the characters read out loud one by one).
   base::RetainingOneShotTimer hide_password_timer_;
 
-  LoginPasswordRow* password_row_ = nullptr;
-  LoginTextfield* textfield_ = nullptr;
-  ArrowButtonView* submit_button_ = nullptr;
-  DisplayPasswordButton* display_password_button_ = nullptr;
-  // Could show either the caps lock icon or the easy unlock icon.
-  AlternateIconsView* left_icon_ = nullptr;
-  views::ImageView* capslock_icon_ = nullptr;
-  bool should_show_capslock_ = false;
-  EasyUnlockIcon* easy_unlock_icon_ = nullptr;
-  bool should_show_easy_unlock_ = false;
+  raw_ptr<LoginPasswordRow> password_row_ = nullptr;
+  raw_ptr<LoginTextfield> textfield_ = nullptr;
+  raw_ptr<ArrowButtonView> submit_button_ = nullptr;
+  raw_ptr<DisplayPasswordButton> display_password_button_ = nullptr;
+  raw_ptr<views::ImageView> capslock_icon_ = nullptr;
 
-  bool is_capslock_higlight_ = false;
+  base::WeakPtrFactory<LoginPasswordView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

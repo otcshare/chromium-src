@@ -36,14 +36,16 @@ from copy import deepcopy
 from blinkpy.common.path_finder import PathFinder
 
 
-class PortFactory(object):
+class PortFactory:
     PORT_CLASSES = (
         'android.AndroidPort',
         'fuchsia.FuchsiaPort',
+        'ios.IOSPort',
         'linux.LinuxPort',
         'mac.MacPort',
         'mock_drt.MockDRTPort',
         'test.TestPort',
+        'webview.WebviewPort',
         'win.WinPort',
     )
 
@@ -76,8 +78,7 @@ class PortFactory(object):
             raise NotImplementedError('unsupported platform: "%s"' % port_name)
 
         full_port_name = port_class.determine_full_port_name(
-            self._host, port_options,
-            class_name if 'browser_test' in port_name else port_name)
+            self._host, port_options, port_name)
         return port_class(self._host,
                           full_port_name,
                           options=port_options,
@@ -86,31 +87,17 @@ class PortFactory(object):
     @classmethod
     def get_port_class(cls, port_name):
         """Returns a Port subclass and its name for the given port_name."""
-        if 'browser_test' in port_name:
-            module_name, class_name = port_name.rsplit('.', 1)
+        for port_class in cls.PORT_CLASSES:
+            module_name, class_name = port_class.rsplit('.', 1)
             try:
                 module = __import__(module_name, globals(), locals(), [], -1)
             except ValueError:
-                # Python3 doesn't allow the level param to be -1. Setting it to
-                # 1 searches for modules in 1 parent directory.
+                # Python3 doesn't allow the level param to be -1. Setting it
+                # to 1 searches for modules in 1 parent directory.
                 module = __import__(module_name, globals(), locals(), [], 1)
-            port_class_name = module.get_port_class_name(class_name)
-            if port_class_name is not None:
-                return module.__dict__[port_class_name], class_name
-        else:
-            for port_class in cls.PORT_CLASSES:
-                module_name, class_name = port_class.rsplit('.', 1)
-                try:
-                    module = __import__(module_name, globals(), locals(), [],
-                                        -1)
-                except ValueError:
-                    # Python3 doesn't allow the level param to be -1. Setting it
-                    # to 1 searches for modules in 1 parent directory.
-                    module = __import__(module_name, globals(), locals(), [],
-                                        1)
-                port_class = module.__dict__[class_name]
-                if port_name.startswith(port_class.port_name):
-                    return port_class, class_name
+            port_class = module.__dict__[class_name]
+            if port_name.startswith(port_class.port_name):
+                return port_class, class_name
         return None, None
 
     def all_port_names(self, platform=None):
@@ -131,78 +118,6 @@ class PortFactory(object):
             builder_name)
         assert port_name, 'unrecognized builder name: "%s"' % builder_name
         return self.get(port_name, options=_builder_options(builder_name))
-
-
-def platform_options(use_globs=False):
-    return [
-        optparse.make_option(
-            '--android',
-            action='store_const',
-            dest='platform',
-            const=('android*' if use_globs else 'android'),
-            help=('Alias for --platform=android*'
-                  if use_globs else 'Alias for --platform=android')),
-        optparse.make_option(
-            '--platform',
-            action='store',
-            help=('Glob-style list of platform/ports to use (e.g., "mac*")'
-                  if use_globs else 'Platform to use (e.g., "mac-lion")')),
-    ]
-
-
-def configuration_options():
-    return [
-        optparse.make_option(
-            '--debug',
-            action='store_const',
-            const='Debug',
-            dest='configuration',
-            help='Set the configuration to Debug'),
-        optparse.make_option(
-            '-t',
-            '--target',
-            dest='target',
-            help='Specify the target build subdirectory under src/out/'),
-        optparse.make_option(
-            '--release',
-            action='store_const',
-            const='Release',
-            dest='configuration',
-            help='Set the configuration to Release'),
-        optparse.make_option(
-            '--no-xvfb',
-            action='store_false',
-            dest='use_xvfb',
-            default=True,
-            help='Do not run tests with Xvfb'),
-    ]
-
-
-def wpt_options():
-    return [
-        optparse.make_option(
-            '--no-manifest-update',
-            dest='manifest_update',
-            action='store_false',
-            default=True,
-            help=('Do not update the web-platform-tests '
-                  'MANIFEST.json unless it does not exist.')),
-    ]
-
-
-def python_server_options():
-    # TODO(suzukikeita): Remove this once all the servers run on python3 everywhere.
-    return [
-        optparse.make_option(
-            '--python-executable',
-            default=sys.executable,
-            help=('The path to the python executable to run the server in. '
-                  'Use this to run servers on the speicifed python version. '
-                  'For example, use this to run the server on python 3 while '
-                  'other components (such as python scripts) run on python 2. '
-                  'Currently, only pywebsocket supports this option. '
-                  'Default is set to sys.executable')),
-    ]
 
 
 def _builder_options(builder_name):
@@ -231,6 +146,9 @@ def _update_configuration_and_target(host, options):
         options.configuration = gn_configuration
         return
 
+    if getattr(options, 'configuration', None):
+        return
+
     if options.target in ('Debug', 'Debug_x64'):
         options.configuration = 'Debug'
     elif options.target in ('Release', 'Release_x64'):
@@ -245,13 +163,14 @@ def _update_configuration_and_target(host, options):
 
 def _read_configuration_from_gn(fs, options):
     """Returns the configuration to used based on args.gn, if possible."""
-    build_directory = getattr(options, 'build_directory', 'out')
-    target = options.target
+    build_directory = getattr(options, 'build_directory', None)
     finder = PathFinder(fs)
-    path = fs.join(finder.chromium_base(), build_directory, target, 'args.gn')
+    if not build_directory:
+        build_directory = fs.join(finder.chromium_base(), 'out',
+                                  options.target)
+    path = fs.join(build_directory, 'args.gn')
     if not fs.exists(path):
-        path = fs.join(finder.chromium_base(), build_directory, target,
-                       'toolchain.ninja')
+        path = fs.join(build_directory, 'toolchain.ninja')
         if not fs.exists(path):
             # This does not appear to be a GN-based build directory, so we don't know
             # how to interpret it.
@@ -264,6 +183,12 @@ def _read_configuration_from_gn(fs, options):
     args = fs.read_text_file(path)
     for line in args.splitlines():
         if re.match(r'^\s*is_debug\s*=\s*false(\s*$|\s*#.*$)', line):
+            return 'Release'
+
+    # If is_debug is not set, the default is based on if is_official_build
+    # is set to true.
+    for line in args.splitlines():
+        if re.match(r'^\s*is_official_build\s*=\s*true(\s*$|\s*#.*$)', line):
             return 'Release'
 
     # If is_debug is set to anything other than false, or if it

@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/media_router/query_result_manager.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "components/media_router/browser/media_sinks_observer.h"
 #include "components/media_router/browser/test/mock_media_router.h"
@@ -33,16 +34,16 @@ const char kOrigin[] = "https://origin.com";
 
 class MockObserver : public MediaSinkWithCastModesObserver {
  public:
-  MOCK_METHOD1(OnSinksUpdated,
-               void(const std::vector<MediaSinkWithCastModes>& sinks));
+  MOCK_METHOD(void,
+              OnSinksUpdated,
+              (const std::vector<MediaSinkWithCastModes>& sinks));
 };
 
 }  // namespace
 
 class QueryResultManagerTest : public ::testing::Test {
  public:
-  QueryResultManagerTest()
-      : mock_router_(), query_result_manager_(&mock_router_) {}
+  QueryResultManagerTest() : query_result_manager_(&mock_router_) {}
 
   QueryResultManagerTest(const QueryResultManagerTest&) = delete;
   QueryResultManagerTest& operator=(const QueryResultManagerTest&) = delete;
@@ -81,12 +82,14 @@ class QueryResultManagerTest : public ::testing::Test {
 
 // Requires that the elements of |expected| are unique.
 MATCHER_P(VectorSetEquals, expected, "") {
-  if (expected.size() != arg.size())
+  if (expected.size() != arg.size()) {
     return false;
+  }
 
   for (size_t i = 0; i < expected.size(); ++i) {
-    if (!base::Contains(arg, expected[i]))
+    if (!std::ranges::contains(arg, expected[i])) {
       return false;
+    }
   }
   return true;
 }
@@ -125,7 +128,7 @@ TEST_F(QueryResultManagerTest, StartStopSinksQuery) {
 
   cast_modes = query_result_manager_.GetSupportedCastModes();
   EXPECT_EQ(1u, cast_modes.size());
-  EXPECT_TRUE(base::Contains(cast_modes, MediaCastMode::PRESENTATION));
+  EXPECT_TRUE(cast_modes.contains(MediaCastMode::PRESENTATION));
   actual_sources =
       query_result_manager_.GetSourcesForCastMode(MediaCastMode::PRESENTATION);
   EXPECT_EQ(1u, actual_sources.size());
@@ -143,7 +146,7 @@ TEST_F(QueryResultManagerTest, StartStopSinksQuery) {
 
   cast_modes = query_result_manager_.GetSupportedCastModes();
   EXPECT_EQ(1u, cast_modes.size());
-  EXPECT_TRUE(base::Contains(cast_modes, MediaCastMode::PRESENTATION));
+  EXPECT_TRUE(cast_modes.contains(MediaCastMode::PRESENTATION));
   actual_sources =
       query_result_manager_.GetSourcesForCastMode(MediaCastMode::PRESENTATION);
   EXPECT_EQ(1u, actual_sources.size());
@@ -180,7 +183,7 @@ TEST_F(QueryResultManagerTest, MultipleQueries) {
       {sink1, {}}, {sink2, {}}, {sink3, {}}, {sink4, {}}};
   const auto& sinks_observers = query_result_manager_.sinks_observers_;
   auto* any_sink_observer =
-      sinks_observers.find(absl::optional<MediaSource>())->second.get();
+      sinks_observers.find(std::optional<MediaSource>())->second.get();
   EXPECT_CALL(mock_observer_, OnSinksUpdated(VectorSetEquals(expected_sinks)));
   any_sink_observer->OnSinksUpdated(sinks_query_result, {});
 
@@ -381,10 +384,10 @@ TEST_F(QueryResultManagerTest, AddInvalidSource) {
   const auto& cast_mode_sources = query_result_manager_.cast_mode_sources_;
   const auto& presentation_sources =
       cast_mode_sources.at(MediaCastMode::PRESENTATION);
-  EXPECT_TRUE(base::Contains(cast_mode_sources, MediaCastMode::PRESENTATION));
+  EXPECT_TRUE(cast_mode_sources.contains(MediaCastMode::PRESENTATION));
   EXPECT_EQ(presentation_sources.size(), 1u);
   EXPECT_EQ(presentation_sources.at(0), source);
-  EXPECT_FALSE(base::Contains(cast_mode_sources, MediaCastMode::TAB_MIRROR));
+  EXPECT_FALSE(cast_mode_sources.contains(MediaCastMode::TAB_MIRROR));
 }
 
 }  // namespace media_router

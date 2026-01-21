@@ -6,6 +6,7 @@
 
 #include <mach/mach.h>
 #include <string.h>
+#include <sys/fileport.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -14,29 +15,36 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
+#include "base/apple/scoped_mach_vm.h"
+#include "base/compiler_specific.h"
 #include "base/containers/buffer_iterator.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/mac/mach_logging.h"
 #include "base/mac/scoped_mach_msg_destroy.h"
-#include "base/mac/scoped_mach_port.h"
-#include "base/mac/scoped_mach_vm.h"
 #include "base/message_loop/message_pump_for_io.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/thread_annotations.h"
 #include "base/trace_event/typed_macros.h"
+#include "mojo/core/ipcz_driver/envelope.h"
 
-extern "C" {
-kern_return_t fileport_makeport(int fd, mach_port_t*);
-int fileport_makefd(mach_port_t);
-}  // extern "C"
-
-namespace mojo {
-namespace core {
+namespace mojo::core {
 
 namespace {
+
+// Kill switch.
+BASE_FEATURE(kUseMachVouchers, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool ShouldUseVouchers() {
+  static bool enabled = base::FeatureList::IsEnabled(kUseMachVouchers);
+  return enabled;
+}
 
 constexpr mach_msg_id_t kChannelMacHandshakeMsgId = 'mjhs';
 constexpr mach_msg_id_t kChannelMacInlineMsgId = 'MOJO';
@@ -54,14 +62,8 @@ class ChannelMac : public Channel,
         self_(this),
         io_task_runner_(io_task_runner),
         watch_controller_(FROM_HERE) {
-    PlatformHandle channel_handle;
-    if (connection_params.server_endpoint().is_valid()) {
-      channel_handle =
-          connection_params.TakeServerEndpoint().TakePlatformHandle();
-    } else {
-      channel_handle = connection_params.TakeEndpoint().TakePlatformHandle();
-    }
-
+    PlatformHandle channel_handle =
+        connection_params.TakeEndpoint().TakePlatformHandle();
     if (channel_handle.is_mach_send()) {
       send_port_ = channel_handle.TakeMachSendRight();
     } else if (channel_handle.is_mach_receive()) {
@@ -85,8 +87,9 @@ class ChannelMac : public Channel,
   }
 
   void Write(MessagePtr message) override {
-    base::AutoLock lock(write_lock_);
+    RecordSentMessageMetrics(message->data_num_bytes());
 
+    base::AutoLock lock(write_lock_);
     if (reject_writes_) {
       return;
     }
@@ -118,8 +121,7 @@ class ChannelMac : public Channel,
                               size_t num_handles,
                               const void* extra_header,
                               size_t extra_header_size,
-                              std::vector<PlatformHandle>* handles,
-                              bool* deferred) override {
+                              std::vector<PlatformHandle>* handles) override {
     // Validate the incoming handles. If validation fails, ensure they are
     // destroyed.
     std::vector<PlatformHandle> incoming_handles;
@@ -138,8 +140,8 @@ class ChannelMac : public Channel,
     }
 
     for (uint16_t i = 0; i < mach_ports_header->num_ports; ++i) {
-      auto type =
-          static_cast<PlatformHandle::Type>(mach_ports_header->entries[i].type);
+      auto type = static_cast<PlatformHandle::Type>(
+          UNSAFE_TODO(mach_ports_header->entries[i]).type);
       if (type == PlatformHandle::Type::kNone) {
         return false;
       } else if (type == PlatformHandle::Type::kFd &&
@@ -158,6 +160,10 @@ class ChannelMac : public Channel,
     return true;
   }
 
+  // Unlike GetReadPlatformHandles(), this does not validate the underlying
+  // PlatformHandle type here. Instead, ipcz does this in
+  // ipcz::Message::DeserializeFromTransport(), which is called by
+  // the AcceptParcel message deserializer (OnAcceptParcel).
   bool GetReadPlatformHandlesForIpcz(
       size_t num_handles,
       std::vector<PlatformHandle>& handles) override {
@@ -202,8 +208,8 @@ class ChannelMac : public Channel,
     // establishes the bidirectional communication channel.
     if (send_port_ != MACH_PORT_NULL) {
       DCHECK(receive_port_ == MACH_PORT_NULL);
-      CHECK(base::mac::CreateMachPort(&receive_port_, nullptr,
-                                      MACH_PORT_QLIMIT_LARGE));
+      CHECK(base::apple::CreateMachPort(&receive_port_, nullptr,
+                                        MACH_PORT_QLIMIT_LARGE));
       if (!RequestSendDeadNameNotification()) {
         OnError(Error::kConnectionFailed);
         return;
@@ -214,6 +220,13 @@ class ChannelMac : public Channel,
       // Wait for the received message via the MessageLoop.
     } else {
       NOTREACHED();
+    }
+
+    if (ShouldUseVouchers()) {
+      kr = mach_port_set_attributes(mach_task_self(), receive_port_.get(),
+                                    MACH_PORT_IMPORTANCE_RECEIVER, nullptr, 0);
+      MACH_LOG_IF(ERROR, kr != KERN_SUCCESS, kr)
+          << "mach_port_set_attributes MACH_PORT_IMPORTANCE_RECEIVER";
     }
 
     base::CurrentThread::Get()->AddDestructionObserver(this);
@@ -250,11 +263,11 @@ class ChannelMac : public Channel,
   // connected to |send_port_| becomes a dead name. This should be called as
   // soon as the Channel establishes both the send and receive ports.
   bool RequestSendDeadNameNotification() {
-    base::mac::ScopedMachSendRight previous;
+    base::apple::ScopedMachSendRight previous;
     kern_return_t kr = mach_port_request_notification(
         mach_task_self(), send_port_.get(), MACH_NOTIFY_DEAD_NAME, 0,
         receive_port_.get(), MACH_MSG_TYPE_MAKE_SEND_ONCE,
-        base::mac::ScopedMachSendRight::Receiver(previous).get());
+        base::apple::ScopedMachSendRight::Receiver(previous).get());
     if (kr != KERN_SUCCESS) {
       // If port is already a dead name (i.e. the receiver is already gone),
       // then the channel should be shut down by the caller.
@@ -311,7 +324,7 @@ class ChannelMac : public Channel,
       return false;
     }
 
-    send_port_ = base::mac::ScopedMachSendRight(message->msgh_remote_port);
+    send_port_ = base::apple::ScopedMachSendRight(message->msgh_remote_port);
 
     if (!RequestSendDeadNameNotification()) {
       send_port_.reset();
@@ -323,19 +336,14 @@ class ChannelMac : public Channel,
     // channel must be from this same sender.
     auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
     peer_audit_token_ = std::make_unique<audit_token_t>();
-    memcpy(peer_audit_token_.get(), &trailer->msgh_audit,
-           sizeof(audit_token_t));
+    UNSAFE_TODO(memcpy(peer_audit_token_.get(), &trailer->msgh_audit,
+                       sizeof(audit_token_t)));
 
     base::AutoLock lock(write_lock_);
     handshake_done_ = true;
     SendPendingMessagesLocked();
 
     return true;
-  }
-
-  void SendPendingMessages() {
-    base::AutoLock lock(write_lock_);
-    SendPendingMessagesLocked();
   }
 
   void SendPendingMessagesLocked() EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
@@ -360,16 +368,17 @@ class ChannelMac : public Channel,
       // |send_buffer_contains_message_| will be set to true. The Mojo message
       // object can be destroyed at this point.
       pending_messages_.pop_front();
-      if (!did_send)
+      if (!did_send) {
         break;
+      }
     }
   }
 
   bool SendMessageLocked(MessagePtr message)
       EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
     DCHECK(!send_buffer_contains_message_);
-    base::BufferIterator<char> buffer(
-        reinterpret_cast<char*>(send_buffer_.address()), send_buffer_.size());
+    base::BufferIterator<char> UNSAFE_TODO(buffer(
+        reinterpret_cast<char*>(send_buffer_.address()), send_buffer_.size()));
 
     auto* header = buffer.MutableObject<mach_msg_header_t>();
     *header = mach_msg_header_t{};
@@ -436,7 +445,6 @@ class ChannelMac : public Channel,
         default:
           NOTREACHED() << "Unsupported handle type "
                        << static_cast<int>(handle.type());
-          OnWriteErrorLocked(Error::kDisconnected);
       }
     }
 
@@ -450,11 +458,15 @@ class ChannelMac : public Channel,
       descriptor->type = MACH_MSG_OOL_DESCRIPTOR;
       ++body->msgh_descriptor_count;
     } else {
-      auto* data_size = buffer.MutableObject<uint64_t>();
-      *data_size = message->data_num_bytes();
+      // Mach message structs are all 4-byte aligned, but `uint64_t` is 8-byte
+      // aligned on 64-bit architectures. To avoid alignment issues, write the
+      // size as bytes.
+      buffer.MutableSpan<uint8_t, 8>()->copy_from(
+          base::U64ToNativeEndian(message->data_num_bytes()));
 
       auto data = buffer.MutableSpan<char>(message->data_num_bytes());
-      memcpy(data.data(), message->data(), message->data_num_bytes());
+      UNSAFE_TODO(
+          memcpy(data.data(), message->data(), message->data_num_bytes()));
     }
 
     header->msgh_size = round_msg(buffer.position());
@@ -470,11 +482,18 @@ class ChannelMac : public Channel,
       if (kr == MACH_SEND_TIMED_OUT) {
         // The kernel message queue for the peer's receive port is full, so the
         // send timed out. Since the send buffer contains a fully serialized
-        // message, set a flag to indicate this condition and arrange to try
-        // sending it again.
+        // message, set a flag to indicate this condition.
         send_buffer_contains_message_ = true;
-        io_task_runner_->PostTask(
-            FROM_HERE, base::BindOnce(&ChannelMac::SendPendingMessages, this));
+        if (!is_retry_scheduled_) {
+          // Arrange to retry sending the message again. Set a flag to ensure
+          // that this does not build up a flood of tasks to retry it, which
+          // could happen if Write() is called (potentially from a different
+          // thread), and the receiver's queue is still blocked.
+          io_task_runner_->PostTask(
+              FROM_HERE,
+              base::BindOnce(&ChannelMac::RetrySendPendingMessages, this));
+          is_retry_scheduled_ = true;
+        }
       } else {
         // If the message failed to send for other reasons, destroy it.
         send_buffer_contains_message_ = false;
@@ -497,11 +516,18 @@ class ChannelMac : public Channel,
     return true;
   }
 
+  void RetrySendPendingMessages() {
+    base::AutoLock lock(write_lock_);
+    is_retry_scheduled_ = false;
+    SendPendingMessagesLocked();
+  }
+
   // base::CurrentThread::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override {
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-    if (self_)
+    if (self_) {
       ShutDownOnIOThread();
+    }
   }
 
   // base::MessagePumpKqueue::MachPortWatcher:
@@ -510,9 +536,9 @@ class ChannelMac : public Channel,
 
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
 
-    base::BufferIterator<char> buffer(
-        reinterpret_cast<char*>(receive_buffer_.address()),
-        receive_buffer_.size());
+    base::BufferIterator<char> UNSAFE_TODO(
+        buffer(reinterpret_cast<char*>(receive_buffer_.address()),
+               receive_buffer_.size()));
     auto* header = buffer.MutableObject<mach_msg_header_t>();
     *header = mach_msg_header_t{};
     header->msgh_size = buffer.total_size();
@@ -521,24 +547,35 @@ class ChannelMac : public Channel,
     const mach_msg_option_t rcv_options =
         MACH_RCV_MSG | MACH_RCV_TIMEOUT |
         MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-        MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT);
+        MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT) |
+        (ShouldUseVouchers() ? MACH_RCV_VOUCHER : 0);
     kern_return_t kr =
         mach_msg(header, rcv_options, 0, header->msgh_size, receive_port_.get(),
                  /*timeout=*/0, MACH_PORT_NULL);
     if (kr != KERN_SUCCESS) {
-      if (kr == MACH_RCV_TIMED_OUT)
+      if (kr == MACH_RCV_TIMED_OUT) {
         return;
+      }
       MACH_LOG(ERROR, kr) << "mach_msg receive";
       OnError(Error::kDisconnected);
       return;
+    }
+
+    scoped_refptr<ipcz_driver::Envelope> envelope;
+    if (ShouldUseVouchers()) {
+      envelope = base::MakeRefCounted<ipcz_driver::Envelope>(
+          base::apple::ScopedMachSendRight(header->msgh_voucher_port));
+      header->msgh_voucher_port = MACH_PORT_NULL;
+      header->msgh_bits &= ~MACH_MSGH_BITS_VOUCHER_MASK;
     }
 
     base::ScopedMachMsgDestroy scoped_message(header);
 
     if (header->msgh_id == kChannelMacHandshakeMsgId) {
       buffer.Seek(0);
-      if (ReceiveHandshake(buffer))
+      if (ReceiveHandshake(buffer)) {
         scoped_message.Disarm();
+      }
       return;
     }
 
@@ -552,11 +589,11 @@ class ChannelMac : public Channel,
       buffer.Seek(notification->not_header.msgh_size);
       auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
       static const audit_token_t kernel_audit_token = KERNEL_AUDIT_TOKEN_VALUE;
-      if (memcmp(&trailer->msgh_audit, &kernel_audit_token,
-                 sizeof(audit_token_t)) == 0) {
+      if (UNSAFE_TODO(memcmp(&trailer->msgh_audit, &kernel_audit_token,
+                             sizeof(audit_token_t))) == 0) {
         DCHECK(notification->not_port == send_port_);
         // Release the notification's send right using this scoper.
-        base::mac::ScopedMachSendRight notify_port(notification->not_port);
+        base::apple::ScopedMachSendRight notify_port(notification->not_port);
       }
       OnError(Error::kDisconnected);
       return;
@@ -576,8 +613,8 @@ class ChannelMac : public Channel,
     if (peer_audit_token_) {
       buffer.Seek(header->msgh_size);
       auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
-      if (memcmp(&trailer->msgh_audit, peer_audit_token_.get(),
-                 sizeof(audit_token_t)) != 0) {
+      if (UNSAFE_TODO(memcmp(&trailer->msgh_audit, peer_audit_token_.get(),
+                             sizeof(audit_token_t))) != 0) {
         // Do not shut down the channel because this endpoint could be
         // accessible via the bootstrap server, which means anyone could send
         // messages to it.
@@ -630,12 +667,12 @@ class ChannelMac : public Channel,
       switch (descriptor.disposition) {
         case MACH_MSG_TYPE_MOVE_SEND:
           incoming_handles_.emplace_back(
-              base::mac::ScopedMachSendRight(descriptor.name));
+              base::apple::ScopedMachSendRight(descriptor.name));
           descriptor.name = MACH_PORT_NULL;
           break;
         case MACH_MSG_TYPE_MOVE_RECEIVE:
           incoming_handles_.emplace_back(
-              base::mac::ScopedMachReceiveRight(descriptor.name));
+              base::apple::ScopedMachReceiveRight(descriptor.name));
           descriptor.name = MACH_PORT_NULL;
           break;
         default:
@@ -647,7 +684,7 @@ class ChannelMac : public Channel,
     }
 
     base::span<const char> payload;
-    base::mac::ScopedMachVM ool_memory;
+    base::apple::ScopedMachVM ool_memory;
     if (transfer_message_ool) {
       auto* descriptor = buffer.Object<mach_msg_ool_descriptor_t>();
       if (descriptor->type != MACH_MSG_OOL_DESCRIPTOR) {
@@ -656,16 +693,21 @@ class ChannelMac : public Channel,
         return;
       }
 
-      payload = base::span<const char>(
-          reinterpret_cast<const char*>(descriptor->address), descriptor->size);
+      payload = UNSAFE_TODO(base::span<const char>(
+          reinterpret_cast<const char*>(descriptor->address),
+          descriptor->size));
       // The kernel page-aligns the OOL memory when performing the mach_msg on
       // the send side, but it preserves the original size in the descriptor.
       ool_memory.reset_unaligned(
           reinterpret_cast<vm_address_t>(descriptor->address),
           descriptor->size);
     } else {
-      auto* data_size_ptr = buffer.Object<uint64_t>();
-      payload = buffer.Span<const char>(*data_size_ptr);
+      // Mach message structs are all 4-byte aligned, but `uint64_t` is 8-byte
+      // aligned on 64-bit architectures. To avoid alignment issues, write the
+      // size as bytes.
+      uint64_t data_size =
+          base::U64FromNativeEndian(*buffer.Span<uint8_t, 8>());
+      payload = buffer.Span<const char>(data_size);
     }
 
     if (payload.empty()) {
@@ -676,7 +718,9 @@ class ChannelMac : public Channel,
     scoped_message.Disarm();
 
     size_t ignored;
-    DispatchResult result = TryDispatchMessage(payload, &ignored);
+    // The envelope wrapping the voucher is attached to the message.
+    DispatchResult result = TryDispatchMessage(payload, std::nullopt,
+                                               std::move(envelope), &ignored);
     if (result != DispatchResult::kOK) {
       OnError(Error::kReceivedMalformedData);
       return;
@@ -695,8 +739,8 @@ class ChannelMac : public Channel,
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
-  base::mac::ScopedMachReceiveRight receive_port_;
-  base::mac::ScopedMachSendRight send_port_;
+  base::apple::ScopedMachReceiveRight receive_port_;
+  base::apple::ScopedMachSendRight send_port_;
 
   // Whether to leak the above Mach ports when the channel is shut down.
   bool leak_handles_ = false;
@@ -713,7 +757,7 @@ class ChannelMac : public Channel,
   std::unique_ptr<audit_token_t> peer_audit_token_;
 
   // IO buffer for receiving Mach messages. Only accessed on |io_task_runner_|.
-  base::mac::ScopedMachVM receive_buffer_;
+  base::apple::ScopedMachVM receive_buffer_;
 
   // Handles that were received with a message that are validated and returned
   // in GetReadPlatformHandles(). Only accessed on |io_task_runner_|.
@@ -729,12 +773,16 @@ class ChannelMac : public Channel,
   // shutdown.
   bool reject_writes_ GUARDED_BY(write_lock_) = false;
   // IO buffer for sending Mach messages.
-  base::mac::ScopedMachVM send_buffer_ GUARDED_BY(write_lock_);
+  base::apple::ScopedMachVM send_buffer_ GUARDED_BY(write_lock_);
   // If a message timed out during send in MachMessageSendLocked(), this will
   // be true to indicate that |send_buffer_| contains a message that must
   // be sent. If this is true, then other calls to Write() queue messages onto
   // |pending_messages_|.
   bool send_buffer_contains_message_ GUARDED_BY(write_lock_) = false;
+  // If |send_buffer_contains_message_| is true, this boolean tracks whether
+  // a task to RetrySendPendingMessages() has been posted. There should only be
+  // one retry task in-flight at once.
+  bool is_retry_scheduled_ GUARDED_BY(write_lock_) = false;
   // When |handshake_done_| is false or |send_buffer_contains_message_| is true,
   // calls to Write() will enqueue messages here.
   base::circular_deque<MessagePtr> pending_messages_ GUARDED_BY(write_lock_);
@@ -752,5 +800,4 @@ scoped_refptr<Channel> Channel::Create(
                         io_task_runner);
 }
 
-}  // namespace core
-}  // namespace mojo
+}  // namespace mojo::core

@@ -6,16 +6,15 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/address_family.h"
 #include "net/base/address_list.h"
 #include "net/base/host_port_pair.h"
@@ -37,16 +36,15 @@ using DelegationType = HttpAuth::DelegationType;
 
 namespace {
 
-base::Value NetLogParameterChannelBindings(
+base::Value::Dict NetLogParameterChannelBindings(
     const std::string& channel_binding_token,
     NetLogCaptureMode capture_mode) {
   base::Value::Dict dict;
   if (!NetLogCaptureIncludesSocketBytes(capture_mode))
-    return base::Value(std::move(dict));
+    return dict;
 
-  dict.Set("token", base::HexEncode(channel_binding_token.data(),
-                                    channel_binding_token.size()));
-  return base::Value(std::move(dict));
+  dict.Set("token", base::HexEncode(channel_binding_token));
+  return dict;
 }
 
 // Uses |negotiate_auth_system_factory| to create the auth system, otherwise
@@ -60,7 +58,7 @@ std::unique_ptr<HttpAuthMechanism> CreateAuthSystem(
   if (negotiate_auth_system_factory)
     return negotiate_auth_system_factory.Run(prefs);
 #if BUILDFLAG(IS_ANDROID)
-  return std::make_unique<net::android::HttpAuthNegotiateAndroid>(prefs);
+  return std::make_unique<android::HttpAuthNegotiateAndroid>(prefs);
 #elif BUILDFLAG(IS_WIN)
   return std::make_unique<HttpAuthSSPI>(auth_library,
                                         HttpAuth::AUTH_SCHEME_NEGOTIATE);
@@ -121,12 +119,14 @@ int HttpAuthHandlerNegotiate::Factory::CreateAuthHandler(
 #elif BUILDFLAG(IS_POSIX)
   if (is_unsupported_)
     return ERR_UNSUPPORTED_AUTH_SCHEME;
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
   // Note: Don't set is_unsupported_ = true here. AllowGssapiLibraryLoad()
   // might change to true during a session.
-  if (!http_auth_preferences()->AllowGssapiLibraryLoad())
+  if (!http_auth_preferences() ||
+      !http_auth_preferences()->AllowGssapiLibraryLoad()) {
     return ERR_UNSUPPORTED_AUTH_SCHEME;
-#endif  // BUILDFLAG(IS_CHROMEOS)
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
   if (!auth_library_->Init(net_log)) {
     is_unsupported_ = true;
     return ERR_UNSUPPORTED_AUTH_SCHEME;
@@ -187,12 +187,14 @@ bool HttpAuthHandlerNegotiate::Init(
     VLOG(1) << "can't initialize GSSAPI library";
     return false;
   }
-  // GSSAPI does not provide a way to enter username/password to
-  // obtain a TGT. If the default credentials are not allowed for
-  // a particular site (based on allowlist), fall back to a
-  // different scheme.
-  if (!AllowsDefaultCredentials())
+  // GSSAPI does not provide a way to enter username/password to obtain a TGT,
+  // however ChromesOS provides the user an opportunity to enter their
+  // credentials and generate a new TGT on OS level (see b/260522530). If the
+  // default credentials are not allowed for a particular site
+  // (based on allowlist), fall back to a different scheme.
+  if (!AllowsDefaultCredentials()) {
     return false;
+  }
 #endif
   auth_system_->SetDelegation(GetDelegationType());
   auth_scheme_ = HttpAuth::AUTH_SCHEME_NEGOTIATE;
@@ -333,8 +335,6 @@ int HttpAuthHandlerNegotiate::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_FAILED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
 
@@ -365,10 +365,9 @@ int HttpAuthHandlerNegotiate::DoResolveCanonicalNameComplete(int rv) {
       // Expect at most a single DNS alias representing the canonical name
       // because the `HostResolver` request was made with
       // `include_canonical_name`.
-      DCHECK(resolve_host_request_->GetDnsAliasResults());
-      DCHECK_LE(resolve_host_request_->GetDnsAliasResults()->size(), 1u);
-      if (!resolve_host_request_->GetDnsAliasResults()->empty()) {
-        server = *resolve_host_request_->GetDnsAliasResults()->begin();
+      DCHECK_LE(resolve_host_request_->GetDnsAliasResults().size(), 1u);
+      if (!resolve_host_request_->GetDnsAliasResults().empty()) {
+        server = *resolve_host_request_->GetDnsAliasResults().begin();
         DCHECK(!server.empty());
       }
     } else {

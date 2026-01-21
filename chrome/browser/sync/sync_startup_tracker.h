@@ -5,18 +5,21 @@
 #ifndef CHROME_BROWSER_SYNC_SYNC_STARTUP_TRACKER_H_
 #define CHROME_BROWSER_SYNC_SYNC_STARTUP_TRACKER_H_
 
-#include "base/callback_forward.h"
+#include <optional>
+
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_service_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_service_observer.h"
 
 // `SyncStartupTracker` provides an easier way to wait for `SyncService` to be
 // successfully started up, or to be notified when startup has failed due to
 // some kind of error.
+// TODO(crbug.com/40067025): Delete this class once
+// kReplaceSyncPromosWithSigninPromos is launched.
 class SyncStartupTracker : public syncer::SyncServiceObserver {
  public:
   enum class ServiceStartupState {
@@ -53,6 +56,7 @@ class SyncStartupTracker : public syncer::SyncServiceObserver {
 
   // syncer::SyncServiceObserver implementation.
   void OnStateChanged(syncer::SyncService* sync) override;
+  void OnSyncShutdown(syncer::SyncService* sync) override;
 
  private:
   // Checks the current service state and notifies the
@@ -62,9 +66,6 @@ class SyncStartupTracker : public syncer::SyncServiceObserver {
   void CheckServiceState();
 
   void OnStartupTimeout();
-
-  // The SyncService we should track.
-  raw_ptr<syncer::SyncService> sync_service_;
 
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
       sync_service_observation_{this};
@@ -84,11 +85,11 @@ namespace testing {
 class ScopedSyncStartupTimeoutOverride {
  public:
   explicit ScopedSyncStartupTimeoutOverride(
-      absl::optional<base::TimeDelta> wait_timeout);
+      std::optional<base::TimeDelta> wait_timeout);
   ~ScopedSyncStartupTimeoutOverride();
 
  private:
-  absl::optional<base::TimeDelta> old_wait_timeout_;
+  std::optional<base::TimeDelta> old_wait_timeout_;
 };
 }  // namespace testing
 

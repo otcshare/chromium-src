@@ -9,7 +9,8 @@
 
 #include "components/viz/service/display/delegated_ink_point_renderer_base.h"
 #include "components/viz/service/viz_service_export.h"
-#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
+#include "ui/gfx/geometry/transform.h"
 
 class SkCanvas;
 
@@ -20,7 +21,7 @@ namespace viz {
 // predicting another point or two, and drawing the points with bezier curves
 // between them with Skia commands onto the canvas provided by the Skia
 // renderer, the |current_canvas_|.
-// TODO(1052145): Specify exactly how many points are predicted.
+// TODO(crbug.com/40118757): Specify exactly how many points are predicted.
 //
 // When an ink trail is getting ready to be drawn, after points and metadata
 // have already arrived, the first thing that will be called is
@@ -68,7 +69,11 @@ class VIZ_SERVICE_EXPORT DelegatedInkPointRendererSkia
   // Returns the union of |old_trail_damage_rect_| and |new_trail_damage_rect_|.
   gfx::Rect GetDamageRect() override;
 
-  void DrawDelegatedInkTrail(SkCanvas* canvas);
+  // Draw the delegated ink trail to the provided canvas. Since the trail is
+  // stored in root (metadata) space, it needs to be transformed to render pass
+  // space.
+  void DrawDelegatedInkTrail(SkCanvas* canvas,
+                             const gfx::Transform& transform_to_render_pass);
 
  private:
   void SetDamageRect(gfx::RectF);
@@ -83,7 +88,7 @@ class VIZ_SERVICE_EXPORT DelegatedInkPointRendererSkia
   // The path that will be drawn in DrawDelegatedInkTrail(). See class comments
   // and FinalizePathForDraw() comment to understand when and why this is
   // updated.
-  SkPath path_;
+  SkPathBuilder path_;
 
   // The damage rects for the trail currently on the screen, and the next one
   // to be drawn, as of the DrawDelegatedInkTrail() call.

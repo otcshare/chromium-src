@@ -4,21 +4,17 @@
 
 #import "ios/chrome/credential_provider_extension/ui/tooltip_view.h"
 
-#import "base/mac/foundation_util.h"
+#import "base/apple/foundation_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace {
 
-CGFloat kTooltipTailHeight = 8;
-CGFloat kTooltipTailWidth = 16;
-CGFloat kTooltipHorizontalPadding = 16.0f;
-CGFloat kTooltipVerticalPadding = 10.0f;
-CGFloat kTooltipCornerRadius = 8.0f;
-CGFloat kTooltipFadeInTime = 0.2f;
+constexpr CGFloat kTooltipTailHeight = 8;
+constexpr CGFloat kTooltipTailWidth = 16;
+constexpr CGFloat kTooltipHorizontalPadding = 16.0f;
+constexpr CGFloat kTooltipVerticalPadding = 10.0f;
+constexpr CGFloat kTooltipCornerRadius = 8.0f;
+constexpr CGFloat kTooltipFadeInTime = 0.2f;
 
 }  // namespace
 
@@ -45,6 +41,20 @@ static __weak TooltipView* _active;
                                                 action:@selector(checkTap:)];
     [_tapBehindGesture setNumberOfTapsRequired:1];
     [_tapBehindGesture setCancelsTouchesInView:NO];
+
+    NSArray<UITrait>* traits = @[
+      UITraitUserInterfaceIdiom.class, UITraitUserInterfaceStyle.class,
+      UITraitDisplayGamut.class, UITraitAccessibilityContrast.class,
+      UITraitUserInterfaceLevel.class
+    ];
+    __weak TooltipView* weakSelf = self;
+    UITraitChangeHandler handler = ^(id<UITraitEnvironment> traitEnvironment,
+                                     UITraitCollection* previousCollection) {
+      weakSelf.backgroundLayer.fillColor =
+          [UIColor colorNamed:kTextPrimaryColor].CGColor;
+    };
+
+    [self registerForTraitChanges:traits withHandler:handler];
   }
   return self;
 }
@@ -135,16 +145,6 @@ static __weak TooltipView* _active;
 
 #pragma mark - Private
 
-- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
-  [super traitCollectionDidChange:previousTraitCollection];
-  if ([self.traitCollection
-          hasDifferentColorAppearanceComparedToTraitCollection:
-              previousTraitCollection]) {
-    self.backgroundLayer.fillColor =
-        [UIColor colorNamed:kTextPrimaryColor].CGColor;
-  }
-}
-
 - (void)checkTap:(UITapGestureRecognizer*)sender {
   if (sender.state == UIGestureRecognizerStateEnded) {
     CGPoint location = [sender locationInView:self];
@@ -166,7 +166,7 @@ static __weak TooltipView* _active;
 }
 
 - (CAShapeLayer*)backgroundLayer {
-  return base::mac::ObjCCastStrict<CAShapeLayer>(self.layer);
+  return base::apple::ObjCCastStrict<CAShapeLayer>(self.layer);
 }
 
 @end

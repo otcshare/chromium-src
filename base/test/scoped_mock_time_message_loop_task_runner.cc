@@ -4,8 +4,8 @@
 
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
@@ -21,6 +21,8 @@ ScopedMockTimeMessageLoopTaskRunner::ScopedMockTimeMessageLoopTaskRunner()
   // To ensure that we process any initialization tasks posted to the
   // MessageLoop by a test fixture before replacing its TaskRunner.
   RunLoop().RunUntilIdle();
+  SingleThreadTaskRunner::ScopedCanOverrideMainThreadDefaultHandle
+      scoped_override;
   CurrentThread::Get()->SetTaskRunner(task_runner_);
 }
 
@@ -32,6 +34,8 @@ ScopedMockTimeMessageLoopTaskRunner::~ScopedMockTimeMessageLoopTaskRunner() {
         pending_task.location, std::move(pending_task.task),
         pending_task.GetTimeToRun() - task_runner_->NowTicks());
   }
+  SingleThreadTaskRunner::ScopedCanOverrideMainThreadDefaultHandle
+      scoped_override;
   CurrentThread::Get()->SetTaskRunner(std::move(previous_task_runner_));
 }
 

@@ -8,25 +8,19 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/history/core/browser/download_database.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/sync/history_sync_metadata_database.h"
-#include "components/history/core/browser/sync/typed_url_sync_metadata_database.h"
 #include "components/history/core/browser/url_database.h"
 #include "components/history/core/browser/visit_annotations_database.h"
 #include "components/history/core/browser/visit_database.h"
+#include "components/history/core/browser/visited_link_database.h"
 #include "components/history/core/browser/visitsegment_database.h"
 #include "sql/database.h"
 #include "sql/init_status.h"
 #include "sql/meta_table.h"
-
-#if BUILDFLAG(IS_ANDROID)
-#include "components/history/core/browser/android/android_cache_database.h"
-#include "components/history/core/browser/android/android_urls_database.h"
-#endif
 
 namespace base {
 class FilePath;
@@ -48,15 +42,27 @@ namespace history {
 // as the storage interface. Logic for manipulating this storage layer should
 // be in HistoryBackend.cc.
 class HistoryDatabase : public DownloadDatabase,
-#if BUILDFLAG(IS_ANDROID)
-                        public AndroidURLsDatabase,
-                        public AndroidCacheDatabase,
-#endif
                         public URLDatabase,
                         public VisitDatabase,
                         public VisitAnnotationsDatabase,
+                        public VisitedLinkDatabase,
                         public VisitSegmentDatabase {
  public:
+  // Reasons for initialization to fail. These are logged to UMA. It corresponds
+  // to the HistoryInitStep enum in enums.xml.
+  //
+  // DO NOT CHANGE THE VALUES. Leave holes if anything is removed and add only
+  // to the end.
+  enum class InitStep {
+    OPEN = 0,
+    TRANSACTION_BEGIN = 1,
+    META_TABLE_INIT = 2,
+    CREATE_TABLES = 3,
+    VERSION = 4,
+    COMMIT = 5,
+    RAZE_OLD_DB = 6,
+  };
+
   // Must call Init() to complete construction. Although it can be created on
   // any thread, it must be destructed on the history thread for proper
   // database cleanup.
@@ -84,12 +90,25 @@ class HistoryDatabase : public DownloadDatabase,
   // called once and only upon successful Init.
   void ComputeDatabaseMetrics(const base::FilePath& filename);
 
-  // Counts the number of unique Hosts visited in the last month.
-  int CountUniqueHostsVisitedLastMonth();
+  // Gets unique domains (eTLD+1) visited within the time range
+  // [`begin_time`, `end_time`) for local and synced visits sorted in
+  // reverse-chronological order. Whether visits with an HTTP response code of
+  // 404 count is determined by `policy_for_404_visits`.
+  DomainsVisitedResult GetUniqueDomainsVisited(
+      base::Time begin_time,
+      base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits);
 
-  // Counts the number of unique domains (eLTD+1) visited within
-  // [`begin_time`, `end_time`).
-  int CountUniqueDomainsVisited(base::Time begin_time, base::Time end_time);
+  // Counts the number of unique domains (eTLD+1) visited within
+  // [`begin_time`, `end_time`). Whether visits with an HTTP response code of
+  // 404 count is determined by `policy_for_404_visits`.
+  // The return value is a pair of (local, all), where "local" only counts
+  // domains that were visited on this device, whereas "all" also counts
+  // foreign/synced visits.
+  std::pair<int, int> CountUniqueDomainsVisited(
+      base::Time begin_time,
+      base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits);
 
   // Call to set the mode on the database to exclusive. The default locking mode
   // is "normal" but we want to run in exclusive mode for slightly better
@@ -169,8 +188,6 @@ class HistoryDatabase : public DownloadDatabase,
   // foreign visits, i.e. visits coming from other syncing devices.
   // Note that this only counts visits *not* pending deletion (see below) - as
   // soon as a deletion operation is started, this will get set to false.
-  // TODO(crbug.com/1365291): After syncer::HISTORY has launched, consider
-  // whether this bit is still required.
   bool MayContainForeignVisits();
   void SetMayContainForeignVisits(bool may_contain_foreign_visits);
 
@@ -180,20 +197,19 @@ class HistoryDatabase : public DownloadDatabase,
   VisitID GetDeleteForeignVisitsUntilId();
   void SetDeleteForeignVisitsUntilId(VisitID visit_id);
 
-  // Sync metadata storage ----------------------------------------------------
+  // Retrieves/updates the bit that indicates whether the DB may contain any
+  // visits known to sync.
+  bool KnownToSyncVisitsExist();
+  void SetKnownToSyncVisitsExist(bool exist);
 
-  // Returns the sub-database used for storing Sync metadata for Typed URLs.
-  TypedURLSyncMetadataDatabase* GetTypedURLMetadataDB();
+  // Sync metadata storage ----------------------------------------------------
 
   // Returns the sub-database used for storing Sync metadata for History.
   HistorySyncMetadataDatabase* GetHistoryMetadataDB();
 
+  sql::Database& GetDBForTesting();
+
  private:
-#if BUILDFLAG(IS_ANDROID)
-  // AndroidProviderBackend uses the `db_`.
-  friend class AndroidProviderBackend;
-  FRIEND_TEST_ALL_PREFIXES(AndroidURLsMigrationTest, MigrateToVersion22);
-#endif
   friend class ::InMemoryURLIndexTest;
 
   // Overridden from URLDatabase, DownloadDatabase, VisitDatabase, and
@@ -201,6 +217,11 @@ class HistoryDatabase : public DownloadDatabase,
   sql::Database& GetDB() override;
 
   // Migration -----------------------------------------------------------------
+
+  // Razes the database if it's so old that we no longer have to code to migrate
+  // it to the current version. Returns `false` if the database was too old and
+  // could not be razed.
+  bool RazeDbIfTooOld();
 
   // Makes sure the version is up to date, updating if necessary. If the
   // database is too old to migrate, the user will be notified. Returns
@@ -216,6 +237,14 @@ class HistoryDatabase : public DownloadDatabase,
   void MigrateTimeEpoch();
 #endif
 
+  bool MigrateRemoveTypedUrlMetadata();
+
+#if BUILDFLAG(IS_ANDROID)
+  // The android_urls table ceased usage in 91.0.4438.0. This method drops the
+  // table if it exists.
+  bool DropAndroidUrlsTable();
+#endif
+
   // ---------------------------------------------------------------------------
 
   sql::Database db_;
@@ -224,8 +253,7 @@ class HistoryDatabase : public DownloadDatabase,
   // Most of the sub-DBs (URLDatabase etc.) are integrated into HistoryDatabase
   // via inheritance. However, that can lead to "diamond inheritance" issues
   // when multiple of these base classes define the same methods. Therefore the
-  // Sync metadata DBs are integrated via composition instead.
-  TypedURLSyncMetadataDatabase typed_url_metadata_db_;
+  // Sync metadata DB is integrated via composition instead.
   HistorySyncMetadataDatabase history_metadata_db_;
 
   base::Time cached_early_expiration_threshold_;

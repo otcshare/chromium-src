@@ -53,6 +53,13 @@ gfx::Rect PowerButtonControllerTestApi::GetMenuBoundsInScreen() const {
                         : gfx::Rect();
 }
 
+ui::Layer* PowerButtonControllerTestApi::GetPowerButtonMenuBackgroundLayer()
+    const {
+  return static_cast<PowerButtonMenuScreenView*>(
+             controller_->menu_widget_->GetContentsView())
+      ->GetPowerButtonScreenBackgroundShieldLayerForTest();
+}
+
 PowerButtonMenuView* PowerButtonControllerTestApi::GetPowerButtonMenuView()
     const {
   return IsMenuOpened() ? static_cast<PowerButtonMenuScreenView*>(
@@ -65,6 +72,10 @@ bool PowerButtonControllerTestApi::IsMenuOpened() const {
   return controller_->IsMenuOpened();
 }
 
+bool PowerButtonControllerTestApi::MenuHasPowerOffItem() const {
+  return IsMenuOpened() && GetPowerButtonMenuView()->power_off_item_for_test();
+}
+
 bool PowerButtonControllerTestApi::MenuHasSignOutItem() const {
   return IsMenuOpened() && GetPowerButtonMenuView()->sign_out_item_for_test();
 }
@@ -74,6 +85,11 @@ bool PowerButtonControllerTestApi::MenuHasLockScreenItem() const {
          GetPowerButtonMenuView()->lock_screen_item_for_test();
 }
 
+bool PowerButtonControllerTestApi::MenuHasCaptureModeItem() const {
+  return IsMenuOpened() &&
+         GetPowerButtonMenuView()->capture_mode_item_for_test();
+}
+
 bool PowerButtonControllerTestApi::MenuHasFeedbackItem() const {
   return IsMenuOpened() && GetPowerButtonMenuView()->feedback_item_for_test();
 }
@@ -81,11 +97,6 @@ bool PowerButtonControllerTestApi::MenuHasFeedbackItem() const {
 PowerButtonScreenshotController*
 PowerButtonControllerTestApi::GetScreenshotController() {
   return controller_->screenshot_controller_.get();
-}
-
-void PowerButtonControllerTestApi::SetPowerButtonType(
-    PowerButtonController::ButtonType button_type) {
-  controller_->button_type_ = button_type;
 }
 
 void PowerButtonControllerTestApi::SetTickClock(

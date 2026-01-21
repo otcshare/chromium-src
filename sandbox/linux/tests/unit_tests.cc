@@ -2,6 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
+#include "sandbox/linux/tests/unit_tests.h"
+
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -17,11 +24,11 @@
 
 #include <tuple>
 
+#include "base/check.h"
 #include "base/debug/leak_annotations.h"
-#include "base/files/file_util.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/strings/pattern.h"
 #include "build/build_config.h"
-#include "sandbox/linux/tests/unit_tests.h"
 
 // Specifically, PNaCl toolchain does not have this flag.
 #if !defined(POLLRDHUP)
@@ -55,6 +62,16 @@ int CountThreads() {
     return -1;
   const int num_threads = task_stat.st_nlink - 2;
   return num_threads;
+}
+
+// Helper for DeathSEGVMessage and DeathSEGVMessagePattern.
+// Checks that the process died with SIGSEGV.
+void CheckDeathBySEGV(int status, const std::string& details) {
+  const bool subprocess_got_sigsegv =
+      WIFSIGNALED(status) && (SIGSEGV == WTERMSIG(status));
+
+  ASSERT_TRUE(subprocess_got_sigsegv)
+      << "Exit status: " << status << " " << details;
 }
 
 }  // namespace
@@ -240,7 +257,8 @@ void UnitTests::DeathSuccess(int status, const std::string& msg, const void*) {
   ASSERT_TRUE(subprocess_terminated_normally) << details;
   int subprocess_exit_status = WEXITSTATUS(status);
   ASSERT_EQ(kExpectedValue, subprocess_exit_status) << details;
-#if !defined(LEAK_SANITIZER)
+// TODO(crbug.com/375489584): re-enable the test for UBSan.
+#if !defined(LEAK_SANITIZER) && !defined(UNDEFINED_SANITIZER)
   // LSan may print warnings to stdout, breaking this expectation.
   bool subprocess_exited_but_printed_messages = !msg.empty();
   EXPECT_FALSE(subprocess_exited_but_printed_messages) << details;
@@ -270,8 +288,7 @@ void UnitTests::DeathMessage(int status,
   int subprocess_exit_status = WEXITSTATUS(status);
   ASSERT_EQ(1, subprocess_exit_status) << details;
 
-  bool subprocess_exited_without_matching_message =
-      msg.find(expected_msg) == std::string::npos;
+  bool subprocess_exited_without_matching_message = !msg.contains(expected_msg);
 
 // In official builds CHECK messages are dropped, look for SIGABRT or SIGTRAP.
 // See https://crbug.com/437312 and https://crbug.com/612507.
@@ -280,8 +297,7 @@ void UnitTests::DeathMessage(int status,
     static const char kSigTrapMessage[] = "Received signal 5";
     static const char kSigAbortMessage[] = "Received signal 6";
     subprocess_exited_without_matching_message =
-        msg.find(kSigTrapMessage) == std::string::npos &&
-        msg.find(kSigAbortMessage) == std::string::npos;
+        !msg.contains(kSigTrapMessage) && !msg.contains(kSigAbortMessage);
   }
 #endif
   EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
@@ -292,22 +308,20 @@ void UnitTests::DeathSEGVMessage(int status,
                                  const void* aux) {
   std::string details(TestFailedMessage(msg));
   const char* expected_msg = static_cast<const char*>(aux);
+  CheckDeathBySEGV(status, details);
+  bool subprocess_exited_without_matching_message = !msg.contains(expected_msg);
+  EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
+}
 
-#if BUILDFLAG(IS_CHROMEOS)
-  // This hack is required for ChromeOS since its signal handler does not
-  // return indicating the handled signal, but with a simple _exit(1) only.
-  const bool subprocess_got_sigsegv =
-      WIFEXITED(status) && (WEXITSTATUS(status) == 1);
-#else
-  const bool subprocess_got_sigsegv =
-      WIFSIGNALED(status) && (SIGSEGV == WTERMSIG(status));
-#endif
-
-  ASSERT_TRUE(subprocess_got_sigsegv) << "Exit status: " << status
-                                      << " " << details;
-
+void UnitTests::DeathSEGVMessagePattern(int status,
+                                        const std::string& msg,
+                                        const void* aux) {
+  std::string details(TestFailedMessage(msg));
+  const char* expected_msg = static_cast<const char*>(aux);
+  CheckDeathBySEGV(status, details);
+  std::string pattern(expected_msg);
   bool subprocess_exited_without_matching_message =
-      msg.find(expected_msg) == std::string::npos;
+      !base::MatchPattern(msg, pattern);
   EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
 }
 

@@ -8,12 +8,13 @@
 #include <ostream>
 #include "base/component_export.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync with
-// the FastPairPairFailure enum in src/tools/metrics/histograms/enums.xml.
+// the FastPairPairFailure enum in //tools/metrics/histograms/enums.xml.
+//
+// LINT.IfChange(FastPairPairFailure)
 enum class PairFailure {
   // Failed to create a GATT connection to the device.
   kCreateGattConnection = 0,
@@ -73,13 +74,31 @@ enum class PairFailure {
   // Timed out while waiting for the Bluetooth adapter event to confirm the
   // passkey after pairing begins.
   kConfirmPasskeyTimeout = 26,
-  kMaxValue = kConfirmPasskeyTimeout,
+  // Failed to disconnect GATT connections from device between retries.
+  kFailureToDisconnectGattBetweenRetries = 27,
+  // Failed to create a GATT connection in the platform layer due to a Bluetooth
+  // device error.
+  kBluetoothDeviceFailureCreatingGattConnection = 28,
+  // Timed out while waiting for a response after attempt to disconnect.
+  kDisconnectResponseTimeout = 29,
+  // Failed to connect to discovered device after pairing when the device is
+  // known to the adapter.
+  kFailedToConnectAfterPairing = 30,
+  // Failed to write to Additional Data characteristic.
+  kAdditionalDataCharacteristicWrite = 31,
+  // Failed to discover Additional Data Characteristic.
+  // Currently this failure is not emitted anywhere.
+  // TODO(b/279654454) measure this pair failure in some metric.
+  kAdditionalDataCharacteristicDiscovery = 32,
+  // Timed out while writing to Additional Data characteristic.
+  kAdditionalDataCharacteristicWriteTimeout = 33,
+  kMaxValue = kAdditionalDataCharacteristicWriteTimeout,
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:FastPairPairFailure)
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 std::ostream& operator<<(std::ostream& stream, PairFailure protocol);
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_PAIR_FAILURE_H_

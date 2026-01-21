@@ -1,23 +1,29 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_COMMERCE_PRICE_TRACKING_ICON_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_COMMERCE_PRICE_TRACKING_ICON_VIEW_H_
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/views/commerce/price_tracking_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/vector_icon_types.h"
 
 class Browser;
 class Profile;
+class ScopedWindowCallToAction;
 
 // This icon appears in the location bar when the current page qualifies for
 // price tracking. Upon clicking, it shows a bubble where the user can choose to
 // track or untrack the current page.
 class PriceTrackingIconView : public PageActionIconView {
+  METADATA_HEADER(PriceTrackingIconView, PageActionIconView)
+
  public:
   PriceTrackingIconView(IconLabelBubbleView::Delegate* parent_delegate,
                         Delegate* delegate,
@@ -26,12 +32,11 @@ class PriceTrackingIconView : public PageActionIconView {
 
   // PageActionIconView:
   views::BubbleDialogDelegate* GetBubble() const override;
-  std::u16string GetTextForTooltipAndAccessibleName() const override;
   void OnExecuting(PageActionIconView::ExecuteSource execute_source) override;
   const gfx::VectorIcon& GetVectorIcon() const override;
 
   void ForceVisibleForTesting(bool is_tracking_price);
-  const std::u16string& GetIconLabelForTesting();
+  std::u16string_view GetIconLabelForTesting() const;
   void SetOneShotTimerForTesting(base::OneShotTimer* animate_out_timer);
 
  protected:
@@ -57,7 +62,6 @@ class PriceTrackingIconView : public PageActionIconView {
   PriceTrackingBubbleCoordinator bubble_coordinator_;
 
   raw_ptr<const gfx::VectorIcon> icon_;
-  std::u16string tooltip_text_and_accessibleName_;
 
   // Animates out the price tracking icon label after a fixed period of time.
   // This keeps the label visible for long enough to give users an opportunity
@@ -68,6 +72,8 @@ class PriceTrackingIconView : public PageActionIconView {
   // Boolean that tracks whether we should extend the duration for which the
   // label is shown when it animates in.
   bool should_extend_label_shown_duration_ = false;
+
+  std::unique_ptr<ScopedWindowCallToAction> scoped_window_call_to_action_ptr_;
 
   base::WeakPtrFactory<PriceTrackingIconView> weak_ptr_factory_{this};
 };

@@ -5,21 +5,19 @@
 #ifndef COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_CLIENT_H_
 #define COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_CLIENT_H_
 
+#include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-
-#include "components/metrics/structured/delegating_events_processor.h"
+#include "build/buildflag.h"
 #include "components/metrics/structured/event.h"
-#include "components/metrics/structured/events_processor_interface.h"
 
-namespace metrics {
-namespace structured {
+namespace metrics::structured {
 
 // Singleton to interact with StructuredMetrics.
 //
 // It allows a delegate to be set to control the recording logic as different
 // embedders have different requirements (ie ash vs lacros).
-class StructuredMetricsClient {
+class COMPONENT_EXPORT(METRICS_STRUCTURED) StructuredMetricsClient {
  public:
   class RecordingDelegate {
    public:
@@ -36,17 +34,23 @@ class StructuredMetricsClient {
   StructuredMetricsClient& operator=(const StructuredMetricsClient& client) =
       delete;
 
+// Windows errors out with dllexport class cannot be applied to member of
+// dllexport class.
+#if BUILDFLAG(IS_WIN)
   // Provides access to global StructuredMetricsClient instance to record
   // metrics. This is typically used in the codegen.
   static StructuredMetricsClient* Get();
 
-  // Forwards to |delegate_|. If no delegate has been set, then no-op.
-  void Record(Event&& event);
+  // Records |event| using singleton from Get().
+  static void Record(Event&& event);
+#else
+  // Provides access to global StructuredMetricsClient instance to record
+  // metrics. This is typically used in the codegen.
+  static COMPONENT_EXPORT(METRICS_STRUCTURED) StructuredMetricsClient* Get();
 
-  // Adds |events_processor| to further add metadata to recorded events or
-  // listen to recorded events.
-  void AddEventsProcessor(
-      std::unique_ptr<EventsProcessorInterface> events_processor);
+  // Records |event| using singleton from Get().
+  static COMPONENT_EXPORT(METRICS_STRUCTURED) void Record(Event&& event);
+#endif  // BUILDFLAG(IS_WIN)
 
   // Sets the delegate for the client's recording logic. Should be called before
   // anything else. |this| does not take ownership of |delegate| and assumes
@@ -58,16 +62,16 @@ class StructuredMetricsClient {
  private:
   friend class base::NoDestructor<StructuredMetricsClient>;
 
+  // Forwards to |delegate_|. If no delegate has been set, then no-op.
+  void RecordEvent(Event&& event);
+
   StructuredMetricsClient();
   ~StructuredMetricsClient();
-
-  DelegatingEventsProcessor delegating_events_processor_;
 
   // Not owned. Assumes that the delegate's lifetime will exceed |this|.
   raw_ptr<RecordingDelegate> delegate_ = nullptr;
 };
 
-}  // namespace structured
-}  // namespace metrics
+}  // namespace metrics::structured
 
 #endif  // COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_CLIENT_H_

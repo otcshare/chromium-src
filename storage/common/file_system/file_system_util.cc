@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_util.h"
@@ -121,7 +122,7 @@ base::FilePath::StringType VirtualPath::GetNormalizedFilePath(
       base::FilePath::StringType(base::FilePath::kSeparators).length();
   for (size_t i = 0; i < num_separators; ++i) {
     std::replace(normalized_path.begin(), normalized_path.end(),
-                 base::FilePath::kSeparators[i], kSeparator);
+                 UNSAFE_TODO(base::FilePath::kSeparators[i]), kSeparator);
   }
 
   return (IsAbsolute(normalized_path))
@@ -163,7 +164,7 @@ bool ParseFileSystemSchemeURL(const GURL& url,
 
   // A path of the inner_url contains only mount type part (e.g. "/temporary").
   DCHECK(url.inner_url());
-  std::string inner_path = url.inner_url()->path();
+  std::string inner_path = url.inner_url()->GetPath();
   for (const auto& valid_type : kValidTypes) {
     if (inner_path == valid_type.dir) {
       file_system_type = valid_type.type;
@@ -174,7 +175,7 @@ bool ParseFileSystemSchemeURL(const GURL& url,
   if (file_system_type == kFileSystemTypeUnknown)
     return false;
 
-  std::string path = base::UnescapeBinaryURLComponent(url.path_piece());
+  std::string path = base::UnescapeBinaryURLComponent(url.path());
 
   // Ensure the path is relative.
   while (!path.empty() && path[0] == '/')
@@ -205,26 +206,26 @@ GURL GetFileSystemRootURI(const GURL& origin_url, FileSystemType type) {
   std::string url = "filesystem:" + origin_url.GetWithEmptyPath().spec();
   switch (type) {
     case kFileSystemTypeTemporary:
-      url += (kTemporaryDir + 1);  // We don't want the leading slash.
+      url +=
+          UNSAFE_TODO(kTemporaryDir + 1);  // We don't want the leading slash.
       return GURL(url + "/");
     case kFileSystemTypePersistent:
-      url += (kPersistentDir + 1);  // We don't want the leading slash.
+      url +=
+          UNSAFE_TODO(kPersistentDir + 1);  // We don't want the leading slash.
       return GURL(url + "/");
     case kFileSystemTypeExternal:
-      url += (kExternalDir + 1);  // We don't want the leading slash.
+      url += UNSAFE_TODO(kExternalDir + 1);  // We don't want the leading slash.
       return GURL(url + "/");
     case kFileSystemTypeIsolated:
-      url += (kIsolatedDir + 1);  // We don't want the leading slash.
+      url += UNSAFE_TODO(kIsolatedDir + 1);  // We don't want the leading slash.
       return GURL(url + "/");
     case kFileSystemTypeTest:
-      url += (kTestDir + 1);  // We don't want the leading slash.
+      url += UNSAFE_TODO(kTestDir + 1);  // We don't want the leading slash.
       return GURL(url + "/");
       // Internal types are always pointed via isolated or external URLs.
     default:
       NOTREACHED();
   }
-  NOTREACHED();
-  return GURL();
 }
 
 std::string GetFileSystemName(const GURL& origin_url, FileSystemType type) {
@@ -248,8 +249,6 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "Test";
     case kFileSystemTypeLocal:
       return "Local";
-    case kFileSystemTypeRestrictedLocal:
-      return "RestrictedLocal";
     case kFileSystemTypeDragged:
       return "Dragged";
     case kFileSystemTypeLocalMedia:
@@ -280,12 +279,10 @@ std::string GetFileSystemTypeString(FileSystemType type) {
     case kFileSystemInternalTypeEnumStart:
     case kFileSystemInternalTypeEnumEnd:
       NOTREACHED();
-      [[fallthrough]];
     case kFileSystemTypeUnknown:
       return "Unknown";
   }
   NOTREACHED();
-  return std::string();
 }
 
 std::string FilePathToString(const base::FilePath& file_path) {
@@ -306,7 +303,7 @@ base::FilePath StringToFilePath(const std::string& file_path_string) {
 #endif
 }
 
-bool GetFileSystemPublicType(const std::string type_string,
+bool GetFileSystemPublicType(const std::string& type_string,
                              blink::WebFileSystemType* type) {
   DCHECK(type);
   if (type_string == "Temporary") {
@@ -326,7 +323,6 @@ bool GetFileSystemPublicType(const std::string type_string,
     return true;
   }
   NOTREACHED();
-  return false;
 }
 
 std::string GetIsolatedFileSystemName(const GURL& origin_url,
@@ -369,10 +365,8 @@ bool CrackIsolatedFileSystemName(const std::string& filesystem_name,
 
 bool ValidateIsolatedFileSystemId(const std::string& filesystem_id) {
   const size_t kExpectedFileSystemIdSize = 32;
-  if (filesystem_id.size() != kExpectedFileSystemIdSize)
-    return false;
-  const std::string kExpectedChars("ABCDEF0123456789");
-  return base::ContainsOnlyChars(filesystem_id, kExpectedChars);
+  return (filesystem_id.size() == kExpectedFileSystemIdSize) &&
+         base::ContainsOnlyChars(filesystem_id, "ABCDEF0123456789");
 }
 
 std::string GetIsolatedFileSystemRootURIString(
@@ -417,6 +411,8 @@ base::File::Error NetErrorToFileError(int error) {
       return base::File::FILE_ERROR_NOT_FOUND;
     case net::ERR_ACCESS_DENIED:
       return base::File::FILE_ERROR_ACCESS_DENIED;
+    case net::ERR_INSUFFICIENT_RESOURCES:
+      return base::File::FILE_ERROR_TOO_MANY_OPENED;
     case net::ERR_OUT_OF_MEMORY:
       return base::File::FILE_ERROR_NO_MEMORY;
     case net::ERR_FILE_NO_SPACE:

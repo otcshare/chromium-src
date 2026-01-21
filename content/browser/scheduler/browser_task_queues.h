@@ -7,10 +7,12 @@
 
 #include <array>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequence_manager/task_queue.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -24,7 +26,7 @@ namespace content {
 
 // Common task queues for browser threads. This class holds all the queues
 // needed by browser threads. This makes it easy for all browser threads to have
-// the same queues. Thic class also provides a Handler to act on the queues from
+// the same queues. This class also provides a Handler to act on the queues from
 // any thread.
 //
 // Instances must be created and destroyed on the same thread as the
@@ -47,11 +49,6 @@ class CONTENT_EXPORT BrowserTaskQueues {
     // do. Can theoretically be starved indefinitely although that's unlikely in
     // practice.
     kBestEffort,
-
-    // Those are tasks that affect the UI, but not urgent enough to run
-    // immediately, those tasks are either deferred or run based on the
-    // scheduling policy.
-    kDeferrableUserBlocking,
 
     // base::TaskPriority::kUserBlocking maps to this task queue. It's for tasks
     // that affect the UI immediately after a user interaction. Has the same
@@ -77,21 +74,18 @@ class CONTENT_EXPORT BrowserTaskQueues {
     // after startup.
     kServiceWorkerStorageControlResponse,
 
-    kMaxValue = kServiceWorkerStorageControlResponse
+    // For before unload navigation continuation tasks.
+    kBeforeUnloadBrowserResponse,
+
+    // Tasks that are critical for startup performance. Note that tasks in other
+    // queues may run during startup too.
+    kStartup,
+
+    kMaxValue = kStartup
   };
 
   static constexpr size_t kNumQueueTypes =
       static_cast<size_t>(QueueType::kMaxValue) + 1;
-
-  class CONTENT_EXPORT QueueData {
-   public:
-    QueueData();
-    ~QueueData();
-    QueueData(QueueData&& other);
-    scoped_refptr<base::sequence_manager::TaskQueue> task_queue_;
-    std::unique_ptr<base::sequence_manager::TaskQueue::QueueEnabledVoter>
-        voter_;
-  };
 
   // Handle to a BrowserTaskQueues instance that can be used from any thread
   // as all operations are thread safe.
@@ -104,7 +98,7 @@ class CONTENT_EXPORT BrowserTaskQueues {
     REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
 
     // Returns the task runner that should be returned by
-    // ThreadTaskRunnerHandle::Get().
+    // SingleThreadTaskRunner::GetCurrentDefault().
     const scoped_refptr<base::SingleThreadTaskRunner>& GetDefaultTaskRunner() {
       return default_task_runner_;
     }
@@ -120,11 +114,13 @@ class CONTENT_EXPORT BrowserTaskQueues {
 
     // Called quite early in startup after initialising the owning thread's
     // scheduler, before we call RunLoop::Run on the thread.
-    // Note: default_task_queue_ doesn't need to be enabled as it is not
-    // disabled during startup.
     // Enables all task queues except the effort ones. Can be called multiple
     // times.
     void EnableAllExceptBestEffortQueues();
+
+    // Enables the specified task queue. Called early in startup when
+    // BrowserTaskExecutor is created to enabled the default IO task queue.
+    void EnableTaskQueue(QueueType type);
 
     // Schedules |on_pending_task_ran| to run when all pending tasks (at the
     // time this method was invoked) have run. Only "runnable" tasks are taken
@@ -143,6 +139,9 @@ class CONTENT_EXPORT BrowserTaskQueues {
     void ScheduleRunAllPendingTasksForTesting(
         base::OnceClosure on_pending_task_ran);
 
+    // Drop back-pointer to resource about to be freed.
+    void OnTaskQueuesDestroyed() { outer_ = nullptr; }
+
    private:
     friend base::RefCountedThreadSafe<Handle>;
 
@@ -155,33 +154,39 @@ class CONTENT_EXPORT BrowserTaskQueues {
 
     // |outer_| can only be safely used from a task posted to one of the
     // runners.
-    //
-    // TODO(crbug.com/1298696): Breaks events_unittests.
-    raw_ptr<BrowserTaskQueues, DegradeToNoOpWhenMTE> outer_ = nullptr;
+    raw_ptr<BrowserTaskQueues> outer_ = nullptr;
     scoped_refptr<base::SingleThreadTaskRunner> control_task_runner_;
     scoped_refptr<base::SingleThreadTaskRunner> default_task_runner_;
     std::array<scoped_refptr<base::SingleThreadTaskRunner>, kNumQueueTypes>
         browser_task_runners_;
   };
 
-  // Creates queue voters for all task queues created within this
-  // BrowserTaskQueues object, then zips voters with the queues in
-  // a QueueData object..
-  // NOTE: You can only call this function from the thread that owns the
-  // task queues, and you can only use the voters on the same thread.
-  std::array<QueueData, kNumQueueTypes> GetQueueData() const;
-
   // |sequence_manager| must outlive this instance.
   explicit BrowserTaskQueues(
       BrowserThread::ID thread_id,
       base::sequence_manager::SequenceManager* sequence_manager);
+
+  void SetOnTaskCompletedHandler(
+      base::sequence_manager::TaskQueue::OnTaskCompletedHandler handler);
 
   // Destroys all queues.
   ~BrowserTaskQueues();
 
   scoped_refptr<Handle> GetHandle() { return handle_; }
 
+  void AddTaskObserver(base::TaskObserver* task_observer);
+
  private:
+  struct QueueData {
+   public:
+    QueueData();
+    ~QueueData();
+    QueueData(QueueData&& other);
+
+    base::sequence_manager::TaskQueue::Handle task_queue;
+    std::unique_ptr<base::sequence_manager::TaskQueue::QueueEnabledVoter> voter;
+  };
+
   // All these methods can only be called from the associated thread. To make
   // sure that is the case they will always be called from a task posted to the
   // |control_queue_|.
@@ -191,9 +196,14 @@ class CONTENT_EXPORT BrowserTaskQueues {
       base::ScopedClosureRunner on_pending_task_ran);
   void OnStartupComplete();
   void EnableAllExceptBestEffortQueues();
+  void EnableTaskQueue(QueueType type);
 
   base::sequence_manager::TaskQueue* GetBrowserTaskQueue(QueueType type) const {
-    return queue_data_[static_cast<size_t>(type)].task_queue_.get();
+    return queue_data_[static_cast<size_t>(type)].task_queue.get();
+  }
+
+  base::sequence_manager::TaskQueue* GetDefaultTaskQueue() const {
+    return GetBrowserTaskQueue(QueueType::kDefault);
   }
 
   std::array<scoped_refptr<base::SingleThreadTaskRunner>, kNumQueueTypes>
@@ -203,16 +213,10 @@ class CONTENT_EXPORT BrowserTaskQueues {
 
   // Helper queue to make sure private methods run on the associated thread. the
   // control queue has maximum priority and will never be disabled.
-  scoped_refptr<base::sequence_manager::TaskQueue> control_queue_;
-
-  // Queue that backs the default TaskRunner registered with SequenceManager.
-  // This will be the one returned by ThreadTaskRunnerHandle::Get(). Note this
-  // is different from QueueType:kDefault as this queue needs to be enabled from
-  // the beginning.
-  scoped_refptr<base::sequence_manager::TaskQueue> default_task_queue_;
+  base::sequence_manager::TaskQueue::Handle control_queue_;
 
   // Helper queue to run all pending tasks.
-  scoped_refptr<base::sequence_manager::TaskQueue> run_all_pending_tasks_queue_;
+  base::sequence_manager::TaskQueue::Handle run_all_pending_tasks_queue_;
   int run_all_pending_nesting_level_ = 0;
 
   scoped_refptr<Handle> handle_;

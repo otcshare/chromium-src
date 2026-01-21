@@ -8,20 +8,24 @@ import android.net.Uri;
 
 import androidx.annotation.IntDef;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
-/**
- * The callback used to indicate what action the user took in the picker.
- */
+/** The callback used to indicate what action the user took in the picker. */
+@NullMarked
 public interface PhotoPickerListener {
-    /**
-     * The action the user took in the picker.
-     */
-    @IntDef({PhotoPickerAction.CANCEL, PhotoPickerAction.PHOTOS_SELECTED,
-            PhotoPickerAction.LAUNCH_CAMERA, PhotoPickerAction.LAUNCH_GALLERY})
+    /** The action the user took in the picker. */
+    @IntDef({
+        PhotoPickerAction.CANCEL,
+        PhotoPickerAction.PHOTOS_SELECTED,
+        PhotoPickerAction.LAUNCH_CAMERA,
+        PhotoPickerAction.LAUNCH_GALLERY
+    })
     @Retention(RetentionPolicy.SOURCE)
-    public @interface PhotoPickerAction {
+    @interface PhotoPickerAction {
         int CANCEL = 0;
         int PHOTOS_SELECTED = 1;
         int LAUNCH_CAMERA = 2;
@@ -29,18 +33,17 @@ public interface PhotoPickerListener {
         int NUM_ENTRIES = 4;
     }
 
-    /**
-     * The types of requests supported.
-     */
-    static final int TAKE_PHOTO_REQUEST = 1;
-    static final int SHOW_GALLERY = 2;
+    /** The types of requests supported. */
+    int TAKE_PHOTO_REQUEST = 1;
+
+    int SHOW_GALLERY = 2;
 
     /**
      * Called when the user has selected an action. For possible actions see above.
      *
      * @param photos The photos that were selected.
      */
-    void onPhotoPickerUserAction(@PhotoPickerAction int action, Uri[] photos);
+    void onPhotoPickerUserAction(@PhotoPickerAction int action, Uri @Nullable [] photos);
 
     /** Called when the dialog has been dismissed. */
     void onPhotoPickerDismissed();

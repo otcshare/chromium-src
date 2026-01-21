@@ -4,15 +4,16 @@
 
 #include "chrome/browser/ash/policy/off_hours/off_hours_proto_parser.h"
 
+#include <optional>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/test/simple_test_clock.h"
 #include "base/values.h"
 #include "chromeos/ash/components/policy/weekly_time/weekly_time.h"
 #include "chromeos/ash/components/policy/weekly_time/weekly_time_interval.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace policy::off_hours {
 
@@ -42,11 +43,11 @@ const std::vector<int> kDefaultIgnoredPolicies = {kDeviceAllowNewUsersTag,
                                                   kDeviceGuestModeEnabledTag};
 
 struct OffHoursPolicy {
-  absl::optional<std::string> timezone;
+  std::optional<std::string> timezone;
   std::vector<WeeklyTimeInterval> intervals;
   std::vector<int> ignored_policy_proto_tags;
 
-  OffHoursPolicy(const absl::optional<std::string>& timezone,
+  OffHoursPolicy(const std::optional<std::string>& timezone,
                  const std::vector<WeeklyTimeInterval>& intervals,
                  const std::vector<int>& ignored_policy_proto_tags)
       : timezone(timezone),
@@ -59,9 +60,11 @@ em::WeeklyTimeIntervalProto ConvertWeeklyTimeIntervalToProto(
   em::WeeklyTimeIntervalProto interval_proto;
   em::WeeklyTimeProto* start = interval_proto.mutable_start();
   em::WeeklyTimeProto* end = interval_proto.mutable_end();
-  start->set_day_of_week(kWeekdays[weekly_time_interval.start().day_of_week()]);
+  start->set_day_of_week(
+      UNSAFE_TODO(kWeekdays[weekly_time_interval.start().day_of_week()]));
   start->set_time(weekly_time_interval.start().milliseconds());
-  end->set_day_of_week(kWeekdays[weekly_time_interval.end().day_of_week()]);
+  end->set_day_of_week(
+      UNSAFE_TODO(kWeekdays[weekly_time_interval.end().day_of_week()]));
   end->set_time(weekly_time_interval.end().milliseconds());
   return interval_proto;
 }
@@ -91,8 +94,8 @@ void SetOffHoursPolicyToProto(em::ChromeDeviceSettingsProto* proto,
 class OffHoursParserTest : public testing::Test {};
 
 TEST_F(OffHoursParserTest, ExtractWeeklyTimeIntervalsLosAngeles) {
-  WeeklyTime start = WeeklyTime(1, kHour.InMilliseconds(), absl::nullopt);
-  WeeklyTime end = WeeklyTime(3, kHour.InMilliseconds() * 2, absl::nullopt);
+  WeeklyTime start = WeeklyTime(1, kHour.InMilliseconds(), std::nullopt);
+  WeeklyTime end = WeeklyTime(3, kHour.InMilliseconds() * 2, std::nullopt);
   std::vector<WeeklyTimeInterval> proto_intervals = {
       WeeklyTimeInterval(start, end)};
 
@@ -124,7 +127,7 @@ TEST_F(OffHoursParserTest, ConvertOffHoursProtoToValue) {
   SetOffHoursPolicyToProto(
       &proto, OffHoursPolicy(kGmtTimezone, intervals, kDefaultIgnoredPolicies));
 
-  absl::optional<base::Value::Dict> off_hours_value =
+  std::optional<base::Value::Dict> off_hours_value =
       ConvertOffHoursProtoToValue(proto.device_off_hours());
 
   base::Value::Dict off_hours_expected;
@@ -143,16 +146,16 @@ TEST_F(OffHoursParserTest, ConvertOffHoursProtoToValue) {
 }
 
 using OffHoursParserTimezoneFromProtoTest = testing::TestWithParam<
-    std::tuple<bool,                         // has off hours
-               absl::optional<std::string>,  // off hours time zone
-               absl::optional<std::string>   // expected timezone
+    std::tuple<bool,                        // has off hours
+               std::optional<std::string>,  // off hours time zone
+               std::optional<std::string>   // expected timezone
                >>;
 
 TEST_P(OffHoursParserTimezoneFromProtoTest, Extract) {
   // Extract test parameters.
   bool has_off_hours = std::get<0>(GetParam());
-  absl::optional<std::string> off_hourse_timezone = std::get<1>(GetParam());
-  absl::optional<std::string> expected_timezone = std::get<2>(GetParam());
+  std::optional<std::string> off_hourse_timezone = std::get<1>(GetParam());
+  std::optional<std::string> expected_timezone = std::get<2>(GetParam());
 
   em::ChromeDeviceSettingsProto proto;
 
@@ -162,7 +165,7 @@ TEST_P(OffHoursParserTimezoneFromProtoTest, Extract) {
                                                     kDefaultIgnoredPolicies));
   }
 
-  const absl::optional<std::string> timezone =
+  const std::optional<std::string> timezone =
       ExtractTimezoneFromProto(proto.device_off_hours());
 
   EXPECT_EQ(timezone, expected_timezone);
@@ -172,29 +175,29 @@ INSTANTIATE_TEST_SUITE_P(
     ExtractNoTimezoneForNoOffHours,
     OffHoursParserTimezoneFromProtoTest,
     ::testing::Combine(testing::Values(false),  // has no off hours
-                       testing::Values<absl::optional<std::string>>(
-                           absl::nullopt),  // off hours time zone
-                       testing::Values<absl::optional<std::string>>(
-                           absl::nullopt)  // expected timezone
+                       testing::Values<std::optional<std::string>>(
+                           std::nullopt),  // off hours time zone
+                       testing::Values<std::optional<std::string>>(
+                           std::nullopt)  // expected timezone
                        ));
 
 INSTANTIATE_TEST_SUITE_P(
     ExtractNoTimezoneForUnsetTimezone,
     OffHoursParserTimezoneFromProtoTest,
     ::testing::Combine(testing::Values(true),  // has off hours
-                       testing::Values<absl::optional<std::string>>(
-                           absl::nullopt),  // off hours time zone
-                       testing::Values<absl::optional<std::string>>(
-                           absl::nullopt)  // expected timezone
+                       testing::Values<std::optional<std::string>>(
+                           std::nullopt),  // off hours time zone
+                       testing::Values<std::optional<std::string>>(
+                           std::nullopt)  // expected timezone
                        ));
 
 INSTANTIATE_TEST_SUITE_P(
     ExtractTimezone,
     OffHoursParserTimezoneFromProtoTest,
     ::testing::Combine(testing::Values(true),  // has off hours
-                       testing::Values<absl::optional<std::string>>(
+                       testing::Values<std::optional<std::string>>(
                            kLosAngelesTimezone),  // off hours time zone
-                       testing::Values<absl::optional<std::string>>(
+                       testing::Values<std::optional<std::string>>(
                            kLosAngelesTimezone)  // expected timezone
                        ));
 

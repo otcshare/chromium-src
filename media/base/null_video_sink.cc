@@ -4,8 +4,8 @@
 
 #include "media/base/null_video_sink.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 
@@ -51,6 +51,10 @@ void NullVideoSink::Stop() {
 void NullVideoSink::CallRender() {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(started_);
+
+  if (render_cb_) {
+    render_cb_.Run();
+  }
 
   const base::TimeTicks end_of_interval = current_render_time_ + interval_;
   scoped_refptr<VideoFrame> new_frame = callback_->Render(

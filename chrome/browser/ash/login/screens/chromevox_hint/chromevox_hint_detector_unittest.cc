@@ -5,9 +5,9 @@
 #include "chrome/browser/ash/login/screens/chromevox_hint/chromevox_hint_detector.h"
 
 #include "ash/constants/ash_switches.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/test_mock_time_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -46,7 +46,6 @@ class ChromeVoxHintDetectorTest : public testing::Test {
   std::unique_ptr<ChromeVoxHintDetector> detector_;
   std::unique_ptr<base::SingleThreadTaskRunner::CurrentDefaultHandle>
       runner_handle_;
-  ui::UserActivityDetector user_activity_detector_;
 };
 
 ChromeVoxHintDetectorTest::ChromeVoxHintDetectorTest() {
@@ -70,7 +69,7 @@ void ChromeVoxHintDetectorTest::StartDetection() {
 }
 
 void ChromeVoxHintDetectorTest::SimulateUserActivity() {
-  user_activity_detector_.HandleExternalUserActivity();
+  ui::UserActivityDetector::Get()->HandleExternalUserActivity();
 }
 
 // Tests that the ChromeVox hint is given after idling for the proper duration.

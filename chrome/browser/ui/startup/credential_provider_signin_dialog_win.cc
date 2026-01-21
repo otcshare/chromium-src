@@ -11,11 +11,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/syslog_logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/win/win_util.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser_dialogs.h"
@@ -28,8 +29,10 @@
 #include "components/signin/public/base/signin_metrics.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "net/base/url_util.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
@@ -166,8 +169,9 @@ class CredentialProviderWebUIMessageHandler
 
   void AbortIfPossible() {
     // If the callback was already called, ignore.
-    if (!signin_callback_)
+    if (!signin_callback_) {
       return;
+    }
 
     // Build a result for the credential provider that includes only the abort
     // exit code.
@@ -193,7 +197,7 @@ class CredentialProviderWebUIMessageHandler
       *out_exit_code = credential_provider::kUiecMissingSigninData;
       return base::Value::Dict();
     }
-    absl::optional<int> exit_code =
+    std::optional<int> exit_code =
         dict_result->FindInt(credential_provider::kKeyExitCode);
 
     if (exit_code && *exit_code != credential_provider::kUiecSuccess) {
@@ -228,8 +232,9 @@ class CredentialProviderWebUIMessageHandler
     // user presses Escape right after finishing the signin process, the
     // Escape is processed first by AbortIfPossible(), and the signin then
     // completes before WriteResultToHandleWithKeepAlive() executes.
-    if (!signin_callback_)
+    if (!signin_callback_) {
       return;
+    }
 
     int exit_code;
     base::Value::Dict signin_result = ParseArgs(args, &exit_code);
@@ -287,7 +292,7 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
 
   GURL GetDialogContentURL() const override {
     signin_metrics::AccessPoint access_point =
-        signin_metrics::AccessPoint::ACCESS_POINT_MACHINE_LOGON;
+        signin_metrics::AccessPoint::kMachineLogon;
     signin_metrics::Reason reason = signin_metrics::Reason::kFetchLstOnly;
 
     auto base_url =
@@ -312,16 +317,17 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
           base_url, credential_provider::kShowTosSwitch, show_tos_);
     }
 
-    if (email_domains_.empty())
+    if (email_domains_.empty()) {
       return base_url;
+    }
 
     return net::AppendQueryParameter(
         base_url, credential_provider::kEmailDomainsSigninPromoParameter,
         email_domains_);
   }
 
-  ui::ModalType GetDialogModalType() const override {
-    return ui::MODAL_TYPE_WINDOW;
+  ui::mojom::ModalType GetDialogModalType() const override {
+    return ui::mojom::ModalType::kWindow;
   }
 
   std::u16string GetDialogTitle() const override { return std::u16string(); }
@@ -337,7 +343,7 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
   }
 
   void GetWebUIMessageHandlers(
-      std::vector<content::WebUIMessageHandler*>* handlers) const override {
+      std::vector<content::WebUIMessageHandler*>* handlers) override {
     // The WebDialogUI will own and delete this message handler.
     DCHECK(!handler_);
     handler_ = new CredentialProviderWebUIMessageHandler(
@@ -346,7 +352,7 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
   }
 
   void GetDialogSize(gfx::Size* size) const override {
-    // TODO(crbug.com/901947): Figure out exactly what size the dialog should
+    // TODO(crbug.com/40601014): Figure out exactly what size the dialog should
     // be.
     size->SetSize(448, 610);
   }
@@ -407,7 +413,8 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
   // through the dialog.
   mutable HandleGcpwSigninCompleteResult signin_callback_;
 
-  mutable raw_ptr<CredentialProviderWebUIMessageHandler, DanglingUntriaged>
+  mutable raw_ptr<CredentialProviderWebUIMessageHandler,
+                  AcrossTasksDanglingUntriaged>
       handler_ = nullptr;
 };
 
@@ -426,8 +433,9 @@ void EnableGcpwSigninDialogForTesting(bool enable) {
 
 bool CanStartGCPWSignin() {
 #if BUILDFLAG(CAN_TEST_GCPW_SIGNIN_STARTUP)
-  if (g_enable_gcpw_signin_during_tests)
+  if (g_enable_gcpw_signin_during_tests) {
     return true;
+  }
 #endif  // BUILDFLAG(CAN_TEST_GCPW_SIGNIN_STARTUP)
   // Ensure that we are running under a "winlogon" desktop before starting the
   // gcpw sign in dialog.
@@ -478,10 +486,11 @@ class CredentialProviderWebDialogView : public views::WebDialogView {
   CredentialProviderWebDialogView& operator=(
       const CredentialProviderWebDialogView&) = delete;
 
-  ~CredentialProviderWebDialogView() override {}
+  ~CredentialProviderWebDialogView() override = default;
 
   // Indicates intent to interfere with window creations.
   bool IsWebContentsCreationOverridden(
+      content::RenderFrameHost* opener,
       content::SiteInstance* source_site_instance,
       content::mojom::WindowContainerType window_container_type,
       const GURL& opener_url,
@@ -500,8 +509,8 @@ class CredentialProviderWebDialogView : public views::WebDialogView {
       const GURL& target_url,
       const content::StoragePartitionConfig& partition_config,
       content::SessionStorageNamespace* session_storage_namespace) override {
-    VLOG(0) << "Suppressed window creation for  " << target_url.host()
-            << target_url.path();
+    VLOG(0) << "Suppressed window creation for  " << target_url.GetHost()
+            << target_url.GetPath();
     return nullptr;
   }
 };
@@ -541,6 +550,7 @@ views::WebDialogView* ShowCredentialProviderSigninDialog(
       context, delegate.release(),
       std::make_unique<ChromeWebContentsHandler>());
   views::Widget::InitParams init_params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   init_params.z_order = ui::ZOrderLevel::kFloatingWindow;
   views::WebDialogView* web_view = view.release();

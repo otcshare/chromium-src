@@ -12,9 +12,9 @@ namespace chromeos {
 
 // The base button for multitask menu to create Full Screen and Float buttons.
 class MultitaskButton : public views::Button {
- public:
-  METADATA_HEADER(MultitaskButton);
+  METADATA_HEADER(MultitaskButton, views::Button)
 
+ public:
   // The types of single operated multitask button.
   enum class Type {
     kFull,   // The button that turn the window to full screen mode.
@@ -24,6 +24,7 @@ class MultitaskButton : public views::Button {
   MultitaskButton(PressedCallback callback,
                   Type type,
                   bool is_portrait_mode,
+                  bool paint_as_active,
                   const std::u16string& name);
 
   MultitaskButton(const MultitaskButton&) = delete;
@@ -31,14 +32,15 @@ class MultitaskButton : public views::Button {
   ~MultitaskButton() override = default;
 
   // views::Button:
+  void StateChanged(views::Button::ButtonState old_state) override;
   void PaintButtonContents(gfx::Canvas* canvas) override;
-  void OnThemeChanged() override;
 
  private:
   const Type type_;
-  // The display orientation. This determines whether button is in
-  // landscape/portrait mode.
-  const bool is_portrait_mode_;
+
+  // Used to determine whether the button should be painted as active. If a
+  // window is in fullscreen or floated state, it should be painted as active.
+  const bool paint_as_active_;
 };
 
 }  // namespace chromeos

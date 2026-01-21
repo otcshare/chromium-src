@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/mobile_metrics/tap_friendliness_checker.h"
+
 #include "components/ukm/test_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
@@ -10,6 +11,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/googletest/src/googlemock/include/gmock/gmock-matchers.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -25,14 +27,11 @@ static constexpr float kMaximumZoom = 5;
 class TapFriendlinessCheckerTest : public testing::Test {
  protected:
   void TearDown() override {
-    helper_->GetWebView()
-        ->MainFrameImpl()
-        ->GetFrame()
-        ->GetDocument()
-        ->ukm_recorder_ = std::move(old_ukm_recorder_);
     ThreadState::Current()->CollectAllGarbageForTesting();
     url_test_helpers::UnregisterAllURLsAndClearMemoryCache();
+    recorder_ = nullptr;
   }
+
   void TapAt(int x, int y) {
     gfx::PointF pos(x, y);
     WebGestureEvent tap_event(WebInputEvent::Type::kGestureTap,
@@ -48,14 +47,7 @@ class TapFriendlinessCheckerTest : public testing::Test {
     settings->SetViewportEnabled(true);
     settings->SetViewportMetaEnabled(true);
   }
-  ukm::TestUkmRecorder* GetUkmRecorder() {
-    DCHECK(helper_);
-    return static_cast<ukm::TestUkmRecorder*>(helper_->GetWebView()
-                                                  ->MainFrameImpl()
-                                                  ->GetFrame()
-                                                  ->GetDocument()
-                                                  ->UkmRecorder());
-  }
+  ukm::TestUkmRecorder* GetUkmRecorder() { return recorder_.get(); }
 
   void LoadHTML(const std::string& html, float device_scale = 1.0) {
     helper_ = std::make_unique<frame_test_helpers::WebViewHelper>();
@@ -77,23 +69,13 @@ class TapFriendlinessCheckerTest : public testing::Test {
     frame_test_helpers::LoadHTMLString(helper_->GetWebView()->MainFrameImpl(),
                                        html,
                                        url_test_helpers::ToKURL(kBaseUrl));
-    // TODO(https://crbug.com/1380257): Find a better way than swapping the UKM
-    // recorder.
-    old_ukm_recorder_ = std::move(helper_->GetWebView()
-                                      ->MainFrameImpl()
-                                      ->GetFrame()
-                                      ->GetDocument()
-                                      ->ukm_recorder_);
-    helper_->GetWebView()
-        ->MainFrameImpl()
-        ->GetFrame()
-        ->GetDocument()
-        ->ukm_recorder_ = std::make_unique<ukm::TestUkmRecorder>();
+    recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<frame_test_helpers::WebViewHelper> helper_;
-  std::unique_ptr<ukm::UkmRecorder> old_ukm_recorder_;
+  std::unique_ptr<ukm::TestAutoSetUkmRecorder> recorder_;
 };
 
 TEST_F(TapFriendlinessCheckerTest, NoTapTarget) {

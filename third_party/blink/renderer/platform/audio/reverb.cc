@@ -35,6 +35,7 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -68,7 +69,7 @@ static float CalculateNormalizationScale(AudioBus* response) {
   power = sqrt(power / (number_of_channels * length));
 
   // Protect against accidental overload
-  if (std::isinf(power) || std::isnan(power) || power < kMinPower) {
+  if (!std::isfinite(power) || power < kMinPower) {
     power = kMinPower;
   }
 
@@ -267,7 +268,7 @@ void Reverb::Process(const AudioBus* source_bus,
 
     destination_bus->SumFrom(*temp_buffer_);
   } else {
-    NOTREACHED();
+    DUMP_WILL_BE_NOTREACHED();
     destination_bus->Zero();
   }
 }

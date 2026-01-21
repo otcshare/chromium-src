@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_COMPONENT_UPDATER_FILE_TYPE_POLICIES_COMPONENT_INSTALLER_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -31,12 +32,8 @@ class FileTypePoliciesComponentInstallerPolicy
       const FileTypePoliciesComponentInstallerPolicy&) = delete;
   FileTypePoliciesComponentInstallerPolicy& operator=(
       const FileTypePoliciesComponentInstallerPolicy&) = delete;
-  ~FileTypePoliciesComponentInstallerPolicy() override = default;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(FileTypePoliciesComponentInstallerTest,
-                           VerifyAttributes);
-
   // The following methods override ComponentInstallerPolicy.
   bool SupportsGroupPolicyEnabledComponentUpdates() const override;
   bool RequiresNetworkEncryption() const override;

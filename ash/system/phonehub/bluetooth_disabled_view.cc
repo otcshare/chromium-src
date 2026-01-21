@@ -17,7 +17,7 @@
 #include "ash/system/phonehub/phone_hub_view_ids.h"
 #include "ash/system/phonehub/ui_constants.h"
 #include "ash/system/status_area_widget.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chromeos/ash/components/phonehub/url_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -50,7 +50,7 @@ BluetoothDisabledView::BluetoothDisabledView() {
                           base::Unretained(this)),
       l10n_util::GetStringUTF16(
           IDS_ASH_PHONE_HUB_BLUETOOTH_DISABLED_DIALOG_LEARN_MORE_BUTTON),
-      PillButton::Type::kFloatingWithoutIcon, /*icon=*/nullptr);
+      PillButton::Type::kSecondaryWithoutIcon, /*icon=*/nullptr);
   learn_more->SetID(PhoneHubViewID::kBluetoothDisabledLearnMoreButton);
   content_view->AddButton(std::move(learn_more));
 
@@ -65,13 +65,13 @@ phone_hub_metrics::Screen BluetoothDisabledView::GetScreenForMetrics() const {
 
 void BluetoothDisabledView::LearnMoreButtonPressed() {
   LogInterstitialScreenEvent(InterstitialScreenEvent::kLearnMore);
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(phonehub::kPhoneHubLearnMoreLink),
       NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
 }
 
-BEGIN_METADATA(BluetoothDisabledView, views::View)
+BEGIN_METADATA(BluetoothDisabledView)
 END_METADATA
 
 }  // namespace ash

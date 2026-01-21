@@ -30,6 +30,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
+#include "third_party/blink/renderer/platform/graphics/apply_viewport_changes.h"
 
 namespace blink {
 
@@ -66,7 +67,8 @@ ScrollingCoordinator::ScrollableAreaWithElementIdInAllLocalFrames(
 void ScrollingCoordinator::DidCompositorScroll(
     CompositorElementId element_id,
     const gfx::PointF& offset,
-    const absl::optional<cc::TargetSnapAreaElementIds>& snap_target_ids) {
+    cc::ScrollSourceType source_type,
+    const std::optional<cc::TargetSnapAreaElementIds>& snap_target_ids) {
   // Find the associated scrollable area using the element id and notify it of
   // the compositor-side scroll. We explicitly do not check the VisualViewport
   // which handles scroll offset differently (see:
@@ -77,7 +79,8 @@ void ScrollingCoordinator::DidCompositorScroll(
   auto* scrollable = ScrollableAreaWithElementIdInAllLocalFrames(element_id);
   if (!scrollable)
     return;
-  scrollable->DidCompositorScroll(gfx::PointF(offset.x(), offset.y()));
+  scrollable->DidCompositorScroll(gfx::PointF(offset.x(), offset.y()),
+                                  source_type);
   if (snap_target_ids)
     scrollable->SetTargetSnapAreaElementIds(snap_target_ids.value());
 }
@@ -111,7 +114,7 @@ bool ScrollingCoordinator::UpdateCompositorScrollOffset(
 void ScrollingCoordinator::WillBeDestroyed() {
   DCHECK(page_);
   page_ = nullptr;
-  weak_ptr_factory_.InvalidateWeakPtrs();
+  callbacks_.reset();
 }
 
 }  // namespace blink

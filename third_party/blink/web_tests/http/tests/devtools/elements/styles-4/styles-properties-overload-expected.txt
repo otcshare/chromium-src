@@ -16,7 +16,14 @@ element.style { ()
         font-variant-numeric: normal;
         font-variant-east-asian: normal;
         font-variant-alternates: normal;
+        font-size-adjust: none;
+        font-language-override: normal;
+        font-kerning: auto;
+        font-optical-sizing: auto;
+        font-feature-settings: normal;
+        font-variation-settings: normal;
         font-variant-position: normal;
+        font-variant-emoji: normal;
         font-weight: normal;
         font-stretch: normal;
         font-size: 10px;
@@ -52,6 +59,7 @@ div { (<style>)
 [expanded] 
 div { (user agent stylesheet)
     display: block;
+    unicode-bidi: isolate;
 
 ======== Inherited from div.container ========
 [expanded] 

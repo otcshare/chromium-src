@@ -4,8 +4,14 @@
 
 #include "ui/android/overscroll_refresh_handler.h"
 
+#include <utility>
+
 #include "base/android/jni_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "ui/android/overscroll_refresh.h"
 #include "ui/android/ui_android_jni_headers/OverscrollRefreshHandler_jni.h"
+#include "ui/events/back_gesture_event.h"
 
 using base::android::AttachCurrentThread;
 
@@ -14,18 +20,21 @@ namespace ui {
 OverscrollRefreshHandler::OverscrollRefreshHandler(
     const base::android::JavaRef<jobject>& j_overscroll_refresh_handler) {
   j_overscroll_refresh_handler_.Reset(AttachCurrentThread(),
-                                      j_overscroll_refresh_handler.obj());
+                                      j_overscroll_refresh_handler);
 }
 
 OverscrollRefreshHandler::~OverscrollRefreshHandler() {}
 
-bool OverscrollRefreshHandler::PullStart(OverscrollAction type,
-                                         float startx,
-                                         float starty,
-                                         bool navigate_forward) {
+bool OverscrollRefreshHandler::PullStart(
+    OverscrollAction type,
+    std::optional<BackGestureEventSwipeEdge> initiating_edge) {
+  CHECK_EQ(type == OverscrollAction::kHistoryNavigation,
+           initiating_edge.has_value());
   return Java_OverscrollRefreshHandler_start(
-      AttachCurrentThread(), j_overscroll_refresh_handler_, type, startx,
-      starty, navigate_forward);
+      AttachCurrentThread(), j_overscroll_refresh_handler_,
+      std::to_underlying(type),
+      static_cast<int>(initiating_edge ? initiating_edge.value()
+                                       : BackGestureEventSwipeEdge::RIGHT));
 }
 
 void OverscrollRefreshHandler::PullUpdate(float x_delta, float y_delta) {
@@ -44,3 +53,5 @@ void OverscrollRefreshHandler::PullReset() {
 }
 
 }  // namespace ui
+
+DEFINE_JNI(OverscrollRefreshHandler)

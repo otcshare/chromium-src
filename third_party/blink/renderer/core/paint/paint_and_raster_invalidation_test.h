@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_AND_RASTER_INVALIDATION_TEST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_AND_RASTER_INVALIDATION_TEST_H_
 
+#include "base/test/trace_test_utils.h"
 #include "third_party/blink/renderer/core/paint/paint_controller_paint_test.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h"
@@ -14,7 +15,14 @@ namespace blink {
 
 const RasterInvalidationTracking* GetRasterInvalidationTracking(
     const LocalFrameView& root_frame_view,
-    wtf_size_t index = 0);
+    wtf_size_t index,
+    const String& name_regex);
+
+inline const RasterInvalidationTracking* GetRasterInvalidationTracking(
+    const LocalFrameView& root_frame_view) {
+  return GetRasterInvalidationTracking(root_frame_view, 0,
+                                       "Scrolling background of LayoutView");
+}
 
 class PaintAndRasterInvalidationTest : public PaintControllerPaintTest {
  public:
@@ -24,8 +32,14 @@ class PaintAndRasterInvalidationTest : public PaintControllerPaintTest {
 
  protected:
   const RasterInvalidationTracking* GetRasterInvalidationTracking(
-      wtf_size_t index = 0) const {
-    return blink::GetRasterInvalidationTracking(*GetDocument().View(), index);
+      wtf_size_t index,
+      const String& name_regex) const {
+    return blink::GetRasterInvalidationTracking(*GetDocument().View(), index,
+                                                name_regex);
+  }
+
+  const RasterInvalidationTracking* GetRasterInvalidationTracking() const {
+    return blink::GetRasterInvalidationTracking(*GetDocument().View());
   }
 
   void SetUp() override {
@@ -36,14 +50,8 @@ class PaintAndRasterInvalidationTest : public PaintControllerPaintTest {
         GetDocument().View()->GetPaintArtifactCompositor()->RootLayer());
   }
 
-  void SetPreferCompositingToLCDText(bool enable) {
-    GetDocument()
-        .GetFrame()
-        ->GetSettings()
-        ->SetPreferCompositingToLCDTextEnabled(enable);
-  }
-
  private:
+  base::test::TracingEnvironment tracing_environment_;
   std::unique_ptr<LayerTreeHostEmbedder> layer_tree_;
 };
 

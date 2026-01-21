@@ -9,10 +9,13 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_icon_loader.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "ui/gfx/image/image_skia.h"
+
+class PrefService;
 
 namespace base {
 class Value;
@@ -20,8 +23,17 @@ class Value;
 
 namespace ash {
 
-class KioskAppDataBase : public KioskAppIconLoader::Delegate {
+class KioskAppDataBase {
  public:
+  // `local_state` must be non-null, and must outlive `this`.
+  KioskAppDataBase(PrefService* local_state,
+                   const std::string& dictionary_name,
+                   const std::string& app_id,
+                   const AccountId& account_id);
+  KioskAppDataBase(const KioskAppDataBase&) = delete;
+  KioskAppDataBase& operator=(const KioskAppDataBase&) = delete;
+  virtual ~KioskAppDataBase();
+
   // Dictionary key for apps.
   static const char kKeyApps[];
 
@@ -31,20 +43,12 @@ class KioskAppDataBase : public KioskAppIconLoader::Delegate {
   const std::string& name() const { return name_; }
   const gfx::ImageSkia& icon() const { return icon_; }
 
-  // Callbacks for KioskAppIconLoader.
-  void OnIconLoadSuccess(const gfx::ImageSkia& icon) override = 0;
-  void OnIconLoadFailure() override = 0;
-
   // Clears locally cached data.
-  void ClearCache();
+  void ClearCache() const;
 
  protected:
-  KioskAppDataBase(const std::string& dictionary_name,
-                   const std::string& app_id,
-                   const AccountId& account_id);
-  KioskAppDataBase(const KioskAppDataBase&) = delete;
-  KioskAppDataBase& operator=(const KioskAppDataBase&) = delete;
-  ~KioskAppDataBase() override;
+  using DecodeIconCallback =
+      base::OnceCallback<void(std::optional<gfx::ImageSkia>)>;
 
   // Helper to save name and icon to provided dictionary.
   void SaveToDictionary(ScopedDictPrefUpdate& dict_update);
@@ -52,26 +56,27 @@ class KioskAppDataBase : public KioskAppIconLoader::Delegate {
   // Helper to save icon to provided dictionary.
   void SaveIconToDictionary(ScopedDictPrefUpdate& dict_update);
 
-  // Helper to load name and icon from provided dictionary.
-  // if |lazy_icon_load| is set to true, the icon will not be updated, only
-  // icon_path_.
-  bool LoadFromDictionary(const base::Value::Dict& dict,
-                          bool lazy_icon_load = false);
+  // Helper to load name and icon_path from provided dictionary.
+  // This method does not load the icon from disk.
+  bool LoadFromDictionary(const base::Value::Dict& dict);
 
-  // Starts loading the icon from |icon_path_|;
-  void DecodeIcon();
+  // Starts loading the icon from `icon_path_`. Calling this cancels previous
+  // request if any.
+  void DecodeIcon(DecodeIconCallback callback);
 
-  // Helper to cache |icon| to |cache_dir|.
+  // Helper to cache `icon` to `cache_dir`.
   void SaveIcon(const SkBitmap& icon, const base::FilePath& cache_dir);
+
+  const raw_ref<PrefService> local_state_;
 
   // In protected section to allow derived classes to modify.
   std::string name_;
   gfx::ImageSkia icon_;
 
-  // Should be released when callbacks are called.
-  std::unique_ptr<KioskAppIconLoader> kiosk_app_icon_loader_;
-
  private:
+  void OnIconDecoded(DecodeIconCallback callback,
+                     std::optional<gfx::ImageSkia> result);
+
   // Name of a dictionary that holds kiosk app info in Local State.
   const std::string dictionary_name_;
 
@@ -79,6 +84,9 @@ class KioskAppDataBase : public KioskAppIconLoader::Delegate {
   const AccountId account_id_;
 
   base::FilePath icon_path_;
+
+  // Only valid while DecodeIcon() request is processing.
+  std::unique_ptr<KioskAppIconLoader> kiosk_app_icon_loader_;
 };
 
 }  // namespace ash

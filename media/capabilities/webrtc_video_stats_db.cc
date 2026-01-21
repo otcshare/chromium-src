@@ -5,6 +5,7 @@
 #include "media/capabilities/webrtc_video_stats_db.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
@@ -93,7 +94,7 @@ std::string WebrtcVideoStatsDB::VideoDescKey::ToLogStringForDebug() const {
 }
 
 // static
-absl::optional<int> WebrtcVideoStatsDB::VideoDescKey::ParsePixelsFromKey(
+std::optional<int> WebrtcVideoStatsDB::VideoDescKey::ParsePixelsFromKey(
     std::string key) {
   constexpr size_t kMinimumIndexOfLastSeparator = 5;
   size_t last_separator_index = key.rfind("|");
@@ -101,11 +102,12 @@ absl::optional<int> WebrtcVideoStatsDB::VideoDescKey::ParsePixelsFromKey(
       last_separator_index >= kMinimumIndexOfLastSeparator &&
       (last_separator_index + 1) < key.size()) {
     int parsed_pixels;
-    if (base::StringToInt(&key.c_str()[last_separator_index + 1],
-                          &parsed_pixels))
+    if (base::StringToInt(&UNSAFE_TODO(key.c_str()[last_separator_index + 1]),
+                          &parsed_pixels)) {
       return parsed_pixels;
+    }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 WebrtcVideoStatsDB::VideoStats::VideoStats(double timestamp,

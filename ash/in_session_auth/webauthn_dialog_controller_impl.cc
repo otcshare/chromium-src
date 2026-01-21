@@ -4,17 +4,27 @@
 
 #include "ash/in_session_auth/webauthn_dialog_controller_impl.h"
 
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "ash/in_session_auth/auth_dialog_contents_view.h"
+#include "ash/in_session_auth/in_session_auth_dialog.h"
 #include "ash/in_session_auth/webauthn_request_registrar_impl.h"
 #include "ash/public/cpp/in_session_auth_dialog_client.h"
+#include "ash/public/cpp/login_types.h"
+#include "ash/public/cpp/session/session_types.h"
+#include "ash/public/cpp/session/user_info.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "components/user_manager/known_user.h"
 #include "ui/aura/window.h"
-#include "ui/views/widget/widget.h"
 
 namespace ash {
 
@@ -50,23 +60,19 @@ void WebAuthNDialogControllerImpl::ShowAuthenticationDialog(
                      weak_factory_.GetWeakPtr(), account_id, origin_name,
                      auth_methods, source_window);
 
-  if (ash::features::IsUseAuthsessionForWebAuthNEnabled()) {
-    auto on_auth_session_started = [](base::OnceClosure continuation,
-                                      bool is_auth_session_started) {
-      if (!is_auth_session_started) {
-        LOG(ERROR)
-            << "Failed to start cryptohome auth session, exiting dialog early";
-        return;
-      }
-      std::move(continuation).Run();
-    };
+  auto on_auth_session_started = [](base::OnceClosure continuation,
+                                    bool is_auth_session_started) {
+    if (!is_auth_session_started) {
+      LOG(ERROR)
+          << "Failed to start cryptohome auth session, exiting dialog early";
+      return;
+    }
+    std::move(continuation).Run();
+  };
 
-    client_->StartAuthSession(
-        base::BindOnce(on_auth_session_started, std::move(continuation)));
-    return;
-  }
-
-  std::move(continuation).Run();
+  client_->StartAuthSession(
+      base::BindOnce(on_auth_session_started, std::move(continuation)));
+  return;
 }
 
 void WebAuthNDialogControllerImpl::CheckAuthFactorAvailability(
@@ -165,9 +171,7 @@ void WebAuthNDialogControllerImpl::DestroyAuthenticationDialog() {
 }
 
 void WebAuthNDialogControllerImpl::ProcessFinalCleanups() {
-  if (ash::features::IsUseAuthsessionForWebAuthNEnabled())
-    client_->InvalidateAuthSession();
-
+  client_->InvalidateAuthSession();
   dialog_.reset();
   source_window_tracker_.RemoveAll();
 }

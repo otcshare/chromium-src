@@ -11,8 +11,8 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,7 +21,6 @@
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/rlz/rlz_tracker_delegate.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -29,7 +28,7 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/syslog_logging.h"
 #endif
 
@@ -38,7 +37,7 @@ namespace {
 
 // Maximum and minimum delay for financial ping we would allow to be set through
 // master preferences. Somewhat arbitrary, may need to be adjusted in future.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 const base::TimeDelta kMinInitDelay = base::Seconds(60);
 const base::TimeDelta kMaxInitDelay = base::Hours(24);
 #else
@@ -115,7 +114,7 @@ void RecordProductEvents(bool first_run,
   }
 
   // Record first user interaction with the omnibox. We call this all the
-  // time but the rlz lib should ingore all but the first one.
+  // time but the rlz lib should ignore all but the first one.
   if (omnibox_used) {
     rlz_lib::RecordProductEvent(rlz_lib::CHROME,
                                 RLZTracker::ChromeOmnibox(),
@@ -124,7 +123,7 @@ void RecordProductEvents(bool first_run,
 
 #if !BUILDFLAG(IS_IOS)
   // Record first user interaction with the home page. We call this all the
-  // time but the rlz lib should ingore all but the first one.
+  // time but the rlz lib should ignore all but the first one.
   if (homepage_used || is_google_in_startpages) {
     rlz_lib::RecordProductEvent(rlz_lib::CHROME,
                                 RLZTracker::ChromeHomePage(),
@@ -132,7 +131,7 @@ void RecordProductEvents(bool first_run,
   }
 
   // Record first user interaction with the app list. We call this all the
-  // time but the rlz lib should ingore all but the first one.
+  // time but the rlz lib should ignore all but the first one.
   if (app_list_used) {
     rlz_lib::RecordProductEvent(rlz_lib::CHROME,
                                 RLZTracker::ChromeAppList(),
@@ -155,7 +154,7 @@ bool SendFinancialPing(const std::string& brand,
   std::string lang_ascii(base::UTF16ToASCII(lang));
   std::string referral_ascii(base::UTF16ToASCII(referral));
   std::string product_signature;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   product_signature = "chromeos";
 #else
   product_signature = "chrome";
@@ -219,7 +218,8 @@ class RLZTracker::WrapperURLLoaderFactory
 
 // static
 RLZTracker* RLZTracker::GetInstance() {
-  return tracker_ ? tracker_ : base::Singleton<RLZTracker>::get();
+  static base::NoDestructor<RLZTracker> instance;
+  return tracker_ ? tracker_ : instance.get();
 }
 
 RLZTracker::RLZTracker()
@@ -232,6 +232,10 @@ RLZTracker::RLZTracker()
       omnibox_used_(false),
       homepage_used_(false),
       app_list_used_(false),
+      enterprise_enrollment_recorded_(false),
+      enterprise_unenrollment_recorded_(false),
+      enterprise_enrolled_activate_recorded_(false),
+      enterprise_enrolled_first_search_recorded_(false),
       min_init_delay_(kMinInitDelay),
       background_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN, base::MayBlock(),
@@ -257,6 +261,15 @@ void RLZTracker::SetDelegate(std::unique_ptr<RLZTrackerDelegate> delegate) {
   DCHECK(delegate);
   DCHECK(!delegate_);
   delegate_ = std::move(delegate);
+}
+
+// static
+void RLZTracker::ClearRlzDelegateForTesting() {
+  GetInstance()->ClearDelegateForTesting();  // IN-TEST
+}
+
+void RLZTracker::ClearDelegateForTesting() {
+  delegate_.reset();
 }
 
 // static
@@ -288,7 +301,7 @@ bool RLZTracker::Init(bool first_run,
   if (delegate_->ShouldEnableZeroDelayForTesting())
     EnableZeroDelayForTesting();
 
-  delay = base::clamp(delay, min_init_delay_, kMaxInitDelay);
+  delay = std::clamp(delay, min_init_delay_, kMaxInitDelay);
 
   if (delegate_->GetBrand(&brand_) && !delegate_->IsBrandOrganic(brand_)) {
     // Register for notifications from the omnibox so that we can record when
@@ -307,7 +320,7 @@ bool RLZTracker::Init(bool first_run,
   }
   delegate_->GetReactivationBrand(&reactivation_brand_);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // If the brand is organic, RLZ is essentially disabled.  Write a log to the
   // console for administrators and QA.
   if (delegate_->IsBrandOrganic(brand_) &&
@@ -496,6 +509,12 @@ void RLZTracker::RecordFirstSearch(rlz_lib::AccessPoint point) {
 
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+#if !BUILDFLAG(IS_IOS)
+  if (point == ChromeHomePage()) {
+    chrome_homepage_search_recorded_ = true;
+  }
+#endif  // !BUILDFLAG(IS_IOS)
+
   bool* record_used = GetAccessPointRecord(point);
 
   // Try to record event now, else set the flag to try later when we
@@ -527,7 +546,80 @@ bool* RLZTracker::GetAccessPointRecord(rlz_lib::AccessPoint point) {
     return &app_list_used_;
 #endif  // !BUILDFLAG(IS_IOS)
   NOTREACHED();
-  return nullptr;
+}
+
+void RLZTracker::ScheduleRecordEnterpriseEvent(rlz_lib::Event event_id) {
+  if (!delegate_->IsOnUIThread()) {
+    return;
+  }
+
+  background_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&RLZTracker::RecordEnterpriseEvent,
+                     weak_ptr_factory_.GetWeakPtr(), event_id));
+}
+
+void RLZTracker::RecordEnterpriseEvent(rlz_lib::Event event_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  bool* recorded_flag = nullptr;
+  switch (event_id) {
+    case rlz_lib::ENTERPRISE_ENROLLMENT:
+      recorded_flag = &enterprise_enrollment_recorded_;
+      break;
+    case rlz_lib::ENTERPRISE_UNENROLLMENT:
+      recorded_flag = &enterprise_unenrollment_recorded_;
+      break;
+    case rlz_lib::ENTERPRISE_ENROLLED_ACTIVATE:
+      recorded_flag = &enterprise_enrolled_activate_recorded_;
+      break;
+    case rlz_lib::ENTERPRISE_ENROLLED_FIRST_SEARCH:
+      recorded_flag = &enterprise_enrolled_first_search_recorded_;
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  if (*recorded_flag) {
+    return;
+  }
+
+  if (RecordProductEvent(rlz_lib::CHROME, ChromeOmnibox(), event_id)) {
+    *recorded_flag = true;
+  }
+}
+
+// static
+void RLZTracker::RecordEnterpriseEnrollment() {
+  RLZTracker* tracker = GetInstance();
+  if (tracker->delegate_) {
+    tracker->ScheduleRecordEnterpriseEvent(rlz_lib::ENTERPRISE_ENROLLMENT);
+  }
+}
+
+// static
+void RLZTracker::RecordEnterpriseUnenrollment() {
+  RLZTracker* tracker = GetInstance();
+  if (tracker->delegate_) {
+    tracker->ScheduleRecordEnterpriseEvent(rlz_lib::ENTERPRISE_UNENROLLMENT);
+  }
+}
+
+// static
+void RLZTracker::RecordEnterpriseEnrolledActivate() {
+  RLZTracker* tracker = GetInstance();
+  if (tracker->delegate_) {
+    tracker->ScheduleRecordEnterpriseEvent(rlz_lib::ENTERPRISE_ENROLLED_ACTIVATE);
+  }
+}
+
+// static
+void RLZTracker::RecordEnterpriseEnrolledFirstSearch() {
+  RLZTracker* tracker = GetInstance();
+  if (tracker->delegate_) {
+    tracker->ScheduleRecordEnterpriseEvent(
+        rlz_lib::ENTERPRISE_ENROLLED_FIRST_SEARCH);
+  }
 }
 
 // static
@@ -607,7 +699,7 @@ bool RLZTracker::ScheduleGetAccessPointRlz(rlz_lib::AccessPoint point) {
   return true;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // static
 void RLZTracker::ClearRlzState() {
   RLZTracker* tracker = GetInstance();
@@ -657,6 +749,32 @@ void RLZTracker::RecordAppListSearch() {
   if (tracker->delegate_)
     tracker->RecordFirstSearch(RLZTracker::ChromeAppList());
 }
-#endif
+
+// static
+bool RLZTracker::ShouldRecordChromeHomePageSearch() {
+  RLZTracker* tracker = GetInstance();
+  return tracker->delegate_ && tracker->delegate_->GetBrand(&tracker->brand_) &&
+         !tracker->delegate_->IsBrandOrganic(tracker->brand_) &&
+         !tracker->chrome_homepage_search_recorded_;
+}
+
+// static
+void RLZTracker::RecordChromeHomePageSearch() {
+  RLZTracker* tracker = GetInstance();
+  if (tracker->delegate_ && tracker->ShouldRecordChromeHomePageSearch()) {
+    tracker->delegate_->RunHomepageSearchCallback();
+  }
+}
+
+// static
+void RLZTracker::SetRlzChromeHomePageSearchRecordedForTesting(bool recorded) {
+  GetInstance()->SetChromeHomePageSearchRecordedForTesting(  // IN-TEST
+      recorded);
+}
+
+void RLZTracker::SetChromeHomePageSearchRecordedForTesting(bool recorded) {
+  chrome_homepage_search_recorded_ = recorded;
+}
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace rlz

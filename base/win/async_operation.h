@@ -6,6 +6,7 @@
 #define BASE_WIN_ASYNC_OPERATION_H_
 
 #include <unknwn.h>
+
 #include <windows.foundation.h>
 #include <wrl/async.h>
 #include <wrl/client.h>
@@ -13,8 +14,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/win/winrt_foundation_helpers.h"

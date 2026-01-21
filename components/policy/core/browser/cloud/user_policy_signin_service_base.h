@@ -7,12 +7,15 @@
 
 #include <memory>
 #include <string>
+#include <variant>
 
-#include "base/callback.h"
 #include "base/callback_list.h"
+#include "base/cancelable_callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
@@ -28,14 +31,30 @@ namespace policy {
 
 class DeviceManagementService;
 class UserCloudPolicyManager;
+class CloudPolicyManager;
 class CloudPolicyClientRegistrationHelper;
 class CloudPolicyClient;
+class ProfileCloudPolicyManager;
+
+// Used to record the type of re-registration that happens when the browser is
+// restarted while the user is signed in but no cached DM token exists.
+// This is different than the re-registrations that happen on CrOS that are
+// triggered with the device not found error.
+extern const char POLICY_EXPORT kRegisterCloudPolicyServiceHistogramName[];
+// This enum is used for metrics. Entries should not be
+// renumbered and numeric values should never be reused.
+enum class RegisterCloudPolicyServiceEvent {
+  kNoRegistration = 0,
+  kRegistrationWithGaia,
+  kRegistrationWithoutGaia,
+  kMaxValue = kRegistrationWithoutGaia,
+};
 
 // The UserPolicySigninService is responsible for interacting with the policy
-// infrastructure (mainly UserCloudPolicyManager) to load policy for the signed
+// infrastructure (mainly CloudPolicyManager) to load policy for the signed
 // in user. This is the base class that contains shared behavior.
 //
-// At signin time, this class initializes the UserCloudPolicyManager and loads
+// At signin time, this class initializes the CloudPolicyManager and loads
 // policy before any other signed in services are initialized. After each
 // restart, this class ensures that the CloudPolicyClient is registered (in case
 // the policy server was offline during the initial policy fetch) and if not it
@@ -51,8 +70,10 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   // The callback invoked once policy registration is complete. Passed
   // |dm_token| and |client_id| parameters are empty if policy registration
   // failed.
-  typedef base::OnceCallback<void(const std::string& dm_token,
-                                  const std::string& client_id)>
+  typedef base::OnceCallback<void(
+      const std::string& dm_token,
+      const std::string& client_id,
+      const std::vector<std::string>& user_affiliation_ids)>
       PolicyRegistrationCallback;
 
   // The callback invoked once policy fetch is complete. Passed boolean
@@ -63,7 +84,8 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   UserPolicySigninServiceBase(
       PrefService* local_state,
       DeviceManagementService* device_management_service,
-      UserCloudPolicyManager* policy_manager,
+      std::variant<UserCloudPolicyManager*, ProfileCloudPolicyManager*>
+          policy_manager,
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory);
   UserPolicySigninServiceBase(const UserPolicySigninServiceBase&) = delete;
@@ -80,6 +102,7 @@ class POLICY_EXPORT UserPolicySigninServiceBase
       const AccountId& account_id,
       const std::string& dm_token,
       const std::string& client_id,
+      const std::vector<std::string>& user_affiliation_ids,
       scoped_refptr<network::SharedURLLoaderFactory> profile_url_loader_factory,
       PolicyFetchCallback callback);
 
@@ -88,8 +111,6 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   void OnPolicyRefreshed(bool success) override;
 
   // CloudPolicyClient::Observer implementation:
-  void OnPolicyFetched(CloudPolicyClient* client) override;
-  void OnRegistrationStateChanged(CloudPolicyClient* client) override;
   void OnClientError(CloudPolicyClient* client) override;
 
   // KeyedService implementation:
@@ -110,7 +131,14 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   virtual void RegisterForPolicyWithAccountId(
       const std::string& username,
       const CoreAccountId& account_id,
+      bool is_registration_for_management_consistency_check,
       PolicyRegistrationCallback callback);
+
+  // Set CloudPolicyClient::DeviceDMTokenCallback for policy fetch request.
+  // Function is for testing purpose only to avoid setup affiliated id and
+  // dm token for both user and device.
+  void SetDeviceDMTokenCallbackForTesting(
+      CloudPolicyClient::DeviceDMTokenCallback callback);
 
  protected:
   // Invoked to initialize the cloud policy service for |account_id|, which is
@@ -126,31 +154,24 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   // called from InitializeForSignedInUser() when the Profile already has a
   // signed in account at startup, and from FetchPolicyForSignedInUser() during
   // the initial policy fetch after signing in.
-  virtual void InitializeUserCloudPolicyManager(
+  virtual void InitializeCloudPolicyManager(
       const AccountId& account_id,
       std::unique_ptr<CloudPolicyClient> client);
 
-  // Prepares for the UserCloudPolicyManager to be shutdown due to
+  // Prepares for the CloudPolicyManager to be shutdown due to
   // user signout or profile destruction.
-  virtual void PrepareForUserCloudPolicyManagerShutdown();
+  virtual void PrepareForCloudPolicyManagerShutdown();
 
-  // Shuts down the UserCloudPolicyManager (for example, after the user signs
+  // Shuts down the CloudPolicyManager (for example, after the user signs
   // out) and deletes any cached policy.
-  virtual void ShutdownUserCloudPolicyManager();
+  virtual void ShutdownCloudPolicyManager();
 
   // Updates the timestamp of the last policy check. Implemented on mobile
   // platforms for network efficiency.
   virtual void UpdateLastPolicyCheckTime();
 
-  // Gets the sign-in consent level required to perform registration.
-  virtual signin::ConsentLevel GetConsentLevelForRegistration();
-
   // Gets the delay before the next registration.
   virtual base::TimeDelta GetTryRegistrationDelay();
-
-  // Prohibits signout if needed when the account is registered for cloud policy
-  // . Might be no-op for some platforms (eg., iOS and Android).
-  virtual void ProhibitSignoutIfNeeded();
 
   // Returns true when policies can be applied for the profile. The profile has
   // to be at least tied to an account.
@@ -160,16 +181,36 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   // |weak_factory_for_registration_| weak pointers used for registration.
   void CancelPendingRegistration();
 
-  // Convenience helpers to get the associated UserCloudPolicyManager and
+  // Fetches an OAuth token to allow the cloud policy service to register with
+  // the cloud policy server. |oauth_login_token| should contain an OAuth login
+  // refresh token that can be downscoped to get an access token for the
+  // device_management service.
+  virtual void RegisterCloudPolicyService();
+
+  // Returns a callback that can be used to retrieve device dm token when user
+  // is affiliated.
+  virtual CloudPolicyClient::DeviceDMTokenCallback
+  GetDeviceDMTokenIfAffiliatedCallback();
+
+  virtual std::string GetProfileId() = 0;
+
+  // Convenience helpers to get the associated CloudPolicyManager and
   // IdentityManager.
-  UserCloudPolicyManager* policy_manager() { return policy_manager_; }
+  CloudPolicyManager* policy_manager() { return policy_manager_; }
   signin::IdentityManager* identity_manager() { return identity_manager_; }
+  PrefService* local_state() { return local_state_; }
+  DeviceManagementService* device_management_service() {
+    return device_management_service_;
+  }
 
   signin::ConsentLevel consent_level() const { return consent_level_; }
 
   scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory() {
     return system_url_loader_factory_;
   }
+
+  CloudPolicyClient::DeviceDMTokenCallback
+      device_dm_token_callback_for_testing_;
 
  private:
   // A getter for `policy_fetch_callbacks_` that constructs a new instance if
@@ -181,9 +222,15 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   std::unique_ptr<CloudPolicyClient> CreateClientForRegistrationOnly(
       const std::string& username);
 
+  // Returns a CloudPolicyClient for policy fetch, reporting and many other
+  // purposes. It attaches a callback to the client to retrieve device DM token
+  // which is uploaded for policy fetch request.
+  std::unique_ptr<CloudPolicyClient> CreateClientForNonRegistration(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
   // Returns false if cloud policy is disabled or if the passed |email_address|
   // is definitely not from a hosted domain (according to the list in
-  // BrowserPolicyConnector::IsNonEnterpriseUser()).
+  // signin::AccountManagedStatusFinder::IsEnterpriseUserBasedOnEmail()).
   bool ShouldLoadPolicyForUser(const std::string& email_address);
 
   // Handler to call the policy registration callback that provides the DM
@@ -192,18 +239,13 @@ class POLICY_EXPORT UserPolicySigninServiceBase
       std::unique_ptr<CloudPolicyClient> client,
       PolicyRegistrationCallback callback);
 
-  // Fetches an OAuth token to allow the cloud policy service to register with
-  // the cloud policy server. |oauth_login_token| should contain an OAuth login
-  // refresh token that can be downscoped to get an access token for the
-  // device_management service.
-  void RegisterCloudPolicyService();
-
   // Callback invoked when policy registration has finished.
   void OnRegistrationComplete();
 
-  // Weak pointer to the UserCloudPolicyManager and IdentityManager this service
+  // Weak pointer to the CloudPolicyManager and IdentityManager this service
   // is associated with.
-  raw_ptr<UserCloudPolicyManager> policy_manager_;
+  raw_ptr<UserCloudPolicyManager> user_policy_manager_;
+  raw_ptr<CloudPolicyManager> policy_manager_;
   raw_ptr<signin::IdentityManager> identity_manager_;
 
   raw_ptr<PrefService> local_state_;
@@ -223,6 +265,21 @@ class POLICY_EXPORT UserPolicySigninServiceBase
   // `RegisterForPolicyWithAccountId()`.
   std::unique_ptr<CloudPolicyClientRegistrationHelper>
       registration_helper_for_temporary_client_;
+  // Used to track if we have tried registerd the profile before and publish
+  // metrics.
+  // It prevent logging re-register event for normal signin flow.
+  // It prevent logging re-register event multiple times.
+  bool should_record_re_register_event = true;
+
+  // Callback to start the delayed registration. Cancelled when the service is
+  // shut down.
+  base::CancelableOnceCallback<void()> registration_callback_;
+
+  base::ScopedObservation<CloudPolicyClient, CloudPolicyClient::Observer>
+      cloud_policy_client_observation_{this};
+
+  base::ScopedObservation<CloudPolicyService, CloudPolicyService::Observer>
+      cloud_policy_service_observation_{this};
 
   base::WeakPtrFactory<UserPolicySigninServiceBase> weak_factory_{this};
 

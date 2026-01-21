@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_request_match_params.h"
@@ -47,14 +47,12 @@ class MatchRequestsTask : public DatabaseTask {
   void DidOpenCache(int64_t trace_id, blink::mojom::CacheStorageError error);
   void DidGetAllMatchedEntries(
       int64_t trace_id,
-      blink::mojom::GetAllMatchedEntriesResultPtr result);
+      blink::mojom::CacheStorageCache::GetAllMatchedEntriesResult result);
 
   // Checks whether |request| shuld be matched given the provided query params.
   bool ShouldMatchRequest(const blink::mojom::FetchAPIRequestPtr& request);
 
   void FinishWithError(blink::mojom::BackgroundFetchError error) override;
-
-  std::string HistogramName() const override;
 
   BackgroundFetchRegistrationId registration_id_;
   std::unique_ptr<BackgroundFetchRequestMatchParams> match_params_;

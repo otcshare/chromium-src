@@ -4,17 +4,29 @@
 
 #include "base/allocator/partition_alloc_features.h"
 
-#include "base/allocator/partition_allocator/partition_alloc_buildflags.h"
 #include "base/base_export.h"
 #include "base/feature_list.h"
+#include "base/features.h"
 #include "build/build_config.h"
+#include "build/chromecast_buildflags.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/partition_alloc_constants.h"
+#include "partition_alloc/partition_root.h"
+#include "partition_alloc/shim/allocator_shim_dispatch_to_noop_on_free.h"
 
-namespace base {
-namespace features {
+namespace base::features {
 
-BASE_FEATURE(kPartitionAllocUnretainedDanglingPtr,
-             "PartitionAllocUnretainedDanglingPtr",
-             FEATURE_DISABLED_BY_DEFAULT);
+namespace {
+
+static constexpr char kPAFeatureEnabledProcessesStr[] = "enabled-processes";
+static constexpr char kBrowserOnlyStr[] = "browser-only";
+static constexpr char kBrowserAndRendererStr[] = "browser-and-renderer";
+static constexpr char kNonRendererStr[] = "non-renderer";
+static constexpr char kAllProcessesStr[] = "all-processes";
+
+}  // namespace
+
+BASE_FEATURE(kPartitionAllocUnretainedDanglingPtr, FEATURE_ENABLED_BY_DEFAULT);
 
 constexpr FeatureParam<UnretainedDanglingPtrMode>::Option
     kUnretainedDanglingPtrModeOption[] = {
@@ -22,74 +34,128 @@ constexpr FeatureParam<UnretainedDanglingPtrMode>::Option
         {UnretainedDanglingPtrMode::kDumpWithoutCrashing,
          "dump_without_crashing"},
 };
-const base::FeatureParam<UnretainedDanglingPtrMode>
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<UnretainedDanglingPtrMode>
     kUnretainedDanglingPtrModeParam = {
         &kPartitionAllocUnretainedDanglingPtr,
         "mode",
-        UnretainedDanglingPtrMode::kDumpWithoutCrashing,
+        UnretainedDanglingPtrMode::kCrash,
         &kUnretainedDanglingPtrModeOption,
 };
 
+// Note: DPD conflicts with no-op `free()` (see
+// `base::allocator::MakeFreeNoOp()`). No-op `free()` stands down in the
+// presence of DPD, but hypothetically fully launching DPD should prompt
+// a rethink of no-op `free()`.
 BASE_FEATURE(kPartitionAllocDanglingPtr,
-             "PartitionAllocDanglingPtr",
-             FEATURE_DISABLED_BY_DEFAULT);
+#if PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_FEATURE_FLAG)
+             FEATURE_ENABLED_BY_DEFAULT
+#else
+             FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
 constexpr FeatureParam<DanglingPtrMode>::Option kDanglingPtrModeOption[] = {
     {DanglingPtrMode::kCrash, "crash"},
-    {DanglingPtrMode::kLogSignature, "log_signature"},
+    {DanglingPtrMode::kLogOnly, "log_only"},
 };
-const base::FeatureParam<DanglingPtrMode> kDanglingPtrModeParam{
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<DanglingPtrMode> kDanglingPtrModeParam{
     &kPartitionAllocDanglingPtr,
     "mode",
     DanglingPtrMode::kCrash,
     &kDanglingPtrModeOption,
 };
+constexpr FeatureParam<DanglingPtrType>::Option kDanglingPtrTypeOption[] = {
+    {DanglingPtrType::kAll, "all"},
+    {DanglingPtrType::kCrossTask, "cross_task"},
+};
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<DanglingPtrType> kDanglingPtrTypeParam{
+    &kPartitionAllocDanglingPtr,
+    "type",
+    DanglingPtrType::kAll,
+    &kDanglingPtrTypeOption,
+};
 
-#if defined(PA_ALLOW_PCSCAN)
-// If enabled, PCScan is turned on by default for all partitions that don't
-// disable it explicitly.
-BASE_FEATURE(kPartitionAllocPCScan,
-             "PartitionAllocPCScan",
-             FEATURE_DISABLED_BY_DEFAULT);
-#endif  // defined(PA_ALLOW_PCSCAN)
-
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-// If enabled, PCScan is turned on only for the browser's malloc partition.
-BASE_FEATURE(kPartitionAllocPCScanBrowserOnly,
-             "PartitionAllocPCScanBrowserOnly",
-             FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, PCScan is turned on only for the renderer's malloc partition.
-BASE_FEATURE(kPartitionAllocPCScanRendererOnly,
-             "PartitionAllocPCScanRendererOnly",
-             FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, this instance belongs to the Control group of the BackupRefPtr
-// binary experiment.
-BASE_FEATURE(kPartitionAllocBackupRefPtrControl,
-             "PartitionAllocBackupRefPtrControl",
-             FEATURE_DISABLED_BY_DEFAULT);
-
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // Use a larger maximum thread cache cacheable bucket size.
-BASE_FEATURE(kPartitionAllocLargeThreadCacheSize,
-             "PartitionAllocLargeThreadCacheSize",
-#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS)
-             // Not unconditionally enabled on 32 bit Android, since it is a
-             // more memory-constrained platform.
-             FEATURE_DISABLED_BY_DEFAULT
-#else
-             FEATURE_ENABLED_BY_DEFAULT
-#endif
-);
+BASE_FEATURE(kPartitionAllocLargeThreadCacheSize, FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPartitionAllocLargeEmptySlotSpanRing,
-             "PartitionAllocLargeEmptySlotSpanRing",
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+             FEATURE_ENABLED_BY_DEFAULT);
+#else
              FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocLargeEmptySlotSpanRingSize,
+                   &kPartitionAllocLargeEmptySlotSpanRing,
+                   "ring-size",
+                   partition_alloc::internal::SlotSpanRingMaxSize::kMedium);
+
+BASE_FEATURE(kPartitionAllocWithAdvancedChecks, FEATURE_DISABLED_BY_DEFAULT);
+constexpr FeatureParam<PartitionAllocWithAdvancedChecksEnabledProcesses>::Option
+    kPartitionAllocWithAdvancedChecksEnabledProcessesOptions[] = {
+        {PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserOnly,
+         kBrowserOnlyStr},
+        {PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserAndRenderer,
+         kBrowserAndRendererStr},
+        {PartitionAllocWithAdvancedChecksEnabledProcesses::kNonRenderer,
+         kNonRendererStr},
+        {PartitionAllocWithAdvancedChecksEnabledProcesses::kAllProcesses,
+         kAllProcessesStr}};
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<PartitionAllocWithAdvancedChecksEnabledProcesses>
+    kPartitionAllocWithAdvancedChecksEnabledProcessesParam{
+        &kPartitionAllocWithAdvancedChecks, kPAFeatureEnabledProcessesStr,
+        PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserOnly,
+        &kPartitionAllocWithAdvancedChecksEnabledProcessesOptions};
+
+BASE_FEATURE(kPartitionAllocSchedulerLoopQuarantine,
+             FEATURE_DISABLED_BY_DEFAULT);
+// Scheduler Loop Quarantine's config.
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<std::string>
+    kPartitionAllocSchedulerLoopQuarantineConfig{
+        &kPartitionAllocSchedulerLoopQuarantine,
+        "PartitionAllocSchedulerLoopQuarantineConfig", "{}"};
+
+BASE_FEATURE(kPartitionAllocSchedulerLoopQuarantineTaskControlledPurge,
+             FEATURE_DISABLED_BY_DEFAULT);
+constexpr FeatureParam<
+    PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses>::Option
+    kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesOptions[] =
+        {{PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
+              kBrowserOnly,
+          kBrowserOnlyStr},
+         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
+              kBrowserAndRenderer,
+          kBrowserAndRendererStr},
+         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
+              kNonRenderer,
+          kNonRendererStr},
+         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
+              kAllProcesses,
+          kAllProcessesStr}};
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<
+    PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses>
+    kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesParam{
+        &kPartitionAllocSchedulerLoopQuarantineTaskControlledPurge,
+        "PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcess"
+        "es",
+        PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
+            kBrowserOnly,
+        &kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesOptions};
+
+BASE_FEATURE(kPartitionAllocEventuallyZeroFreedMemory,
+             FEATURE_DISABLED_BY_DEFAULT);
+
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 BASE_FEATURE(kPartitionAllocBackupRefPtr,
-             "PartitionAllocBackupRefPtr",
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN) || \
-    (BUILDFLAG(USE_ASAN_BACKUP_REF_PTR) && BUILDFLAG(IS_LINUX))
+#if PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_FEATURE_FLAG)
              FEATURE_ENABLED_BY_DEFAULT
 #else
              FEATURE_DISABLED_BY_DEFAULT
@@ -98,113 +164,256 @@ BASE_FEATURE(kPartitionAllocBackupRefPtr,
 
 constexpr FeatureParam<BackupRefPtrEnabledProcesses>::Option
     kBackupRefPtrEnabledProcessesOptions[] = {
-        {BackupRefPtrEnabledProcesses::kBrowserOnly, "browser-only"},
+        {BackupRefPtrEnabledProcesses::kBrowserOnly, kBrowserOnlyStr},
         {BackupRefPtrEnabledProcesses::kBrowserAndRenderer,
-         "browser-and-renderer"},
-        {BackupRefPtrEnabledProcesses::kNonRenderer, "non-renderer"},
-        {BackupRefPtrEnabledProcesses::kAllProcesses, "all-processes"}};
+         kBrowserAndRendererStr},
+        {BackupRefPtrEnabledProcesses::kNonRenderer, kNonRendererStr},
+        {BackupRefPtrEnabledProcesses::kAllProcesses, kAllProcessesStr}};
 
-const base::FeatureParam<BackupRefPtrEnabledProcesses>
-    kBackupRefPtrEnabledProcessesParam {
-  &kPartitionAllocBackupRefPtr, "enabled-processes",
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN) || \
-    (BUILDFLAG(USE_ASAN_BACKUP_REF_PTR) && BUILDFLAG(IS_LINUX))
-      BackupRefPtrEnabledProcesses::kNonRenderer,
+BASE_FEATURE_ENUM_PARAM(BackupRefPtrEnabledProcesses,
+                        kBackupRefPtrEnabledProcessesParam,
+                        &kPartitionAllocBackupRefPtr,
+                        kPAFeatureEnabledProcessesStr,
+#if PA_BUILDFLAG(IS_ANDROID)
+                        BackupRefPtrEnabledProcesses::kNonRenderer,
 #else
-      BackupRefPtrEnabledProcesses::kBrowserOnly,
+                        BackupRefPtrEnabledProcesses::kAllProcesses,
 #endif
-      &kBackupRefPtrEnabledProcessesOptions
-};
+                        &kBackupRefPtrEnabledProcessesOptions);
 
 constexpr FeatureParam<BackupRefPtrMode>::Option kBackupRefPtrModeOptions[] = {
     {BackupRefPtrMode::kDisabled, "disabled"},
     {BackupRefPtrMode::kEnabled, "enabled"},
-    {BackupRefPtrMode::kEnabledWithoutZapping, "enabled-without-zapping"},
-    {BackupRefPtrMode::kDisabledButSplitPartitions2Way,
-     "disabled-but-2-way-split"},
-    {BackupRefPtrMode::kDisabledButSplitPartitions3Way,
-     "disabled-but-3-way-split"},
-    {BackupRefPtrMode::kDisabledButAddDummyRefCount,
-     "disabled-but-add-dummy-ref-count"},
 };
 
-const base::FeatureParam<BackupRefPtrMode> kBackupRefPtrModeParam{
-    &kPartitionAllocBackupRefPtr, "brp-mode", BackupRefPtrMode::kEnabled,
-    &kBackupRefPtrModeOptions};
+BASE_FEATURE_ENUM_PARAM(BackupRefPtrMode,
+                        kBackupRefPtrModeParam,
+                        &kPartitionAllocBackupRefPtr,
+                        "brp-mode",
+                        BackupRefPtrMode::kEnabled,
+                        &kBackupRefPtrModeOptions);
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<int> kBackupRefPtrExtraExtrasSizeParam{
+    &kPartitionAllocBackupRefPtr, "brp-extra-extras-size", 0};
+constinit const FeatureParam<bool> kBackupRefPtrSuppressDoubleFreeDetectedCrash{
+    &kPartitionAllocBackupRefPtr, "brp-suppress-double-free-detected-crash",
+    false};
+constinit const FeatureParam<bool> kBackupRefPtrSuppressCorruptionDetectedCrash{
+    &kPartitionAllocBackupRefPtr, "brp-suppress-corruption-detected-crash",
+#if PA_BUILDFLAG(IS_IOS)
+    // TODO(crbug.com/41497028): Continue investigation and remove once
+    // addressed.
+    true};
+#else
+    false};
+#endif
 
-const base::FeatureParam<bool> kBackupRefPtrAsanEnableDereferenceCheckParam{
-    &kPartitionAllocBackupRefPtr, "asan-enable-dereference-check", true};
-const base::FeatureParam<bool> kBackupRefPtrAsanEnableExtractionCheckParam{
-    &kPartitionAllocBackupRefPtr, "asan-enable-extraction-check",
-    false};  // Not much noise at the moment to enable by default.
-const base::FeatureParam<bool> kBackupRefPtrAsanEnableInstantiationCheckParam{
-    &kPartitionAllocBackupRefPtr, "asan-enable-instantiation-check", true};
+BASE_FEATURE(kPartitionAllocMemoryTagging,
+#if PA_BUILDFLAG(USE_FULL_MTE) || BUILDFLAG(IS_ANDROID)
+             FEATURE_ENABLED_BY_DEFAULT
+#else
+             FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
-// If enabled, switches the bucket distribution to an alternate one. Only one of
-// these features may b e enabled at a time.
-BASE_FEATURE(kPartitionAllocUseAlternateDistribution,
-             "PartitionAllocUseAlternateDistribution",
-             FEATURE_DISABLED_BY_DEFAULT);
-const base::FeatureParam<AlternateBucketDistributionMode>::Option
-    kPartitionAllocAlternateDistributionOption[] = {
-        {AlternateBucketDistributionMode::kDefault, "default"},
-        {AlternateBucketDistributionMode::kCoarser, "coarser"},
-        {AlternateBucketDistributionMode::kDenser, "denser"},
+constexpr FeatureParam<MemtagMode>::Option kMemtagModeOptions[] = {
+    {MemtagMode::kSync, "sync"},
+    {MemtagMode::kAsync, "async"}};
+
+// Note: Do not use the prepared muacro as of no need for a local cache.
+constinit const FeatureParam<MemtagMode> kMemtagModeParam{
+    &kPartitionAllocMemoryTagging, "memtag-mode",
+#if PA_BUILDFLAG(USE_FULL_MTE)
+    MemtagMode::kSync,
+#else
+    MemtagMode::kAsync,
+#endif
+    &kMemtagModeOptions};
+
+constexpr FeatureParam<RetagMode>::Option kRetagModeOptions[] = {
+    {RetagMode::kIncrement, "increment"},
+    {RetagMode::kRandom, "random"},
 };
-const base::FeatureParam<AlternateBucketDistributionMode>
-    kPartitionAllocAlternateBucketDistributionParam{
-        &kPartitionAllocUseAlternateDistribution, "mode",
-        AlternateBucketDistributionMode::kDefault,
-        &kPartitionAllocAlternateDistributionOption};
+
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<RetagMode> kRetagModeParam{
+    &kPartitionAllocMemoryTagging, "retag-mode", RetagMode::kIncrement,
+    &kRetagModeOptions};
+
+constexpr FeatureParam<MemoryTaggingEnabledProcesses>::Option
+    kMemoryTaggingEnabledProcessesOptions[] = {
+        {MemoryTaggingEnabledProcesses::kBrowserOnly, kBrowserOnlyStr},
+        {MemoryTaggingEnabledProcesses::kNonRenderer, kNonRendererStr},
+        {MemoryTaggingEnabledProcesses::kAllProcesses, kAllProcessesStr}};
+
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<MemoryTaggingEnabledProcesses>
+    kMemoryTaggingEnabledProcessesParam{
+        &kPartitionAllocMemoryTagging, kPAFeatureEnabledProcessesStr,
+#if PA_BUILDFLAG(USE_FULL_MTE)
+        MemoryTaggingEnabledProcesses::kAllProcesses,
+#else
+        MemoryTaggingEnabledProcesses::kNonRenderer,
+#endif
+        &kMemoryTaggingEnabledProcessesOptions};
+
+BASE_FEATURE(kKillPartitionAllocMemoryTagging, FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocPermissiveMte);
+BASE_FEATURE(kPartitionAllocPermissiveMte,
+#if PA_BUILDFLAG(USE_FULL_MTE)
+             // We want to actually crash if USE_FULL_MTE is enabled.
+             FEATURE_DISABLED_BY_DEFAULT
+#else
+             FEATURE_ENABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kAsanBrpDereferenceCheck, FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kAsanBrpExtractionCheck,       // Not much noise at the moment to
+             FEATURE_DISABLED_BY_DEFAULT);  // enable by default.
+BASE_FEATURE(kAsanBrpInstantiationCheck, FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, switches the bucket distribution to a denser one.
+//
+// We enable this by default everywhere except for 32-bit Android, since we saw
+// regressions there.
+BASE_FEATURE(kPartitionAllocUseDenserDistribution,
+#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS)
+             FEATURE_DISABLED_BY_DEFAULT
+#else
+             FEATURE_ENABLED_BY_DEFAULT
+#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS)
+);
+const FeatureParam<BucketDistributionMode>::Option
+    kPartitionAllocBucketDistributionOption[] = {
+        {BucketDistributionMode::kDefault, "default"},
+        {BucketDistributionMode::kDenser, "denser"},
+};
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<BucketDistributionMode>
+    kPartitionAllocBucketDistributionParam{
+        &kPartitionAllocUseDenserDistribution, "mode",
+#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS)
+        BucketDistributionMode::kDefault,
+#else
+        BucketDistributionMode::kDenser,
+#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS)
+        &kPartitionAllocBucketDistributionOption};
+
+BASE_FEATURE(kPartitionAllocMemoryReclaimer, FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(TimeDelta,
+                   kPartitionAllocMemoryReclaimerInterval,
+                   &kPartitionAllocMemoryReclaimer,
+                   "interval",
+                   TimeDelta()  // Defaults to zero.
+);
 
 // Configures whether we set a lower limit for renderers that do not have a main
 // frame, similar to the limit that is already done for backgrounded renderers.
 BASE_FEATURE(kLowerPAMemoryLimitForNonMainRenderers,
-             "LowerPAMemoryLimitForNonMainRenderers",
              FEATURE_DISABLED_BY_DEFAULT);
 
-// If enabled, switches PCScan scheduling to a mutator-aware scheduler. Does not
-// affect whether PCScan is enabled itself.
-BASE_FEATURE(kPartitionAllocPCScanMUAwareScheduler,
-             "PartitionAllocPCScanMUAwareScheduler",
+// Whether to straighten free lists for larger slot spans in PurgeMemory() ->
+// ... -> PartitionPurgeSlotSpan().
+BASE_FEATURE(kPartitionAllocStraightenLargerSlotSpanFreeLists,
+             FEATURE_ENABLED_BY_DEFAULT);
+const FeatureParam<partition_alloc::StraightenLargerSlotSpanFreeListsMode>::
+    Option kPartitionAllocStraightenLargerSlotSpanFreeListsModeOption[] = {
+        {partition_alloc::StraightenLargerSlotSpanFreeListsMode::
+             kOnlyWhenUnprovisioning,
+         "only-when-unprovisioning"},
+        {partition_alloc::StraightenLargerSlotSpanFreeListsMode::kAlways,
+         "always"},
+};
+// Note: Do not use the prepared macro as of no need for a local cache.
+constinit const FeatureParam<
+    partition_alloc::StraightenLargerSlotSpanFreeListsMode>
+    kPartitionAllocStraightenLargerSlotSpanFreeListsMode = {
+        &kPartitionAllocStraightenLargerSlotSpanFreeLists,
+        "mode",
+        partition_alloc::StraightenLargerSlotSpanFreeListsMode::
+            kOnlyWhenUnprovisioning,
+        &kPartitionAllocStraightenLargerSlotSpanFreeListsModeOption,
+};
+
+// Whether to sort free lists for smaller slot spans in PurgeMemory().
+BASE_FEATURE(kPartitionAllocSortSmallerSlotSpanFreeLists,
              FEATURE_ENABLED_BY_DEFAULT);
 
-// If enabled, PCScan frees unconditionally all quarantined objects.
-// This is a performance testing feature.
-BASE_FEATURE(kPartitionAllocPCScanImmediateFreeing,
-             "PartitionAllocPCScanImmediateFreeing",
-             FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, PCScan clears eagerly (synchronously) on free().
-BASE_FEATURE(kPartitionAllocPCScanEagerClearing,
-             "PartitionAllocPCScanEagerClearing",
-             FEATURE_DISABLED_BY_DEFAULT);
-
-// In addition to heap, scan also the stack of the current mutator.
-BASE_FEATURE(kPartitionAllocPCScanStackScanning,
-             "PartitionAllocPCScanStackScanning",
-#if defined(PA_PCSCAN_STACK_SUPPORTED)
-             FEATURE_ENABLED_BY_DEFAULT
-#else
-             FEATURE_DISABLED_BY_DEFAULT
-#endif  // defined(PA_PCSCAN_STACK_SUPPORTED)
-);
-
-BASE_FEATURE(kPartitionAllocDCScan,
-             "PartitionAllocDCScan",
-             FEATURE_DISABLED_BY_DEFAULT);
-
 // Whether to sort the active slot spans in PurgeMemory().
-BASE_FEATURE(kPartitionAllocSortActiveSlotSpans,
-             "PartitionAllocSortActiveSlotSpans",
-             FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPartitionAllocSortActiveSlotSpans, FEATURE_DISABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_WIN)
 // Whether to retry allocations when commit fails.
-BASE_FEATURE(kPageAllocatorRetryOnCommitFailure,
-             "PageAllocatorRetryOnCommitFailure",
-             FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPageAllocatorRetryOnCommitFailure, FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-}  // namespace features
-}  // namespace base
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+// A parameter to exclude or not exclude PartitionAllocSupport from
+// PartialLowModeOnMidRangeDevices. This is used to see how it affects
+// renderer performances, e.g. blink_perf.parser benchmark.
+// The feature: kPartialLowEndModeOnMidRangeDevices is defined in
+// //base/features.cc. Since the following feature param is related to
+// PartitionAlloc, define the param here.
+BASE_FEATURE_PARAM(bool,
+                   kPartialLowEndModeExcludePartitionAllocSupport,
+                   &kPartialLowEndModeOnMidRangeDevices,
+                   "exclude-partition-alloc-support",
+                   false);
+#endif
+
+constexpr partition_alloc::internal::base::TimeDelta ToPartitionAllocTimeDelta(
+    TimeDelta time_delta) {
+  return partition_alloc::internal::base::Microseconds(
+      time_delta.InMicroseconds());
+}
+
+constexpr TimeDelta FromPartitionAllocTimeDelta(
+    partition_alloc::internal::base::TimeDelta time_delta) {
+  return Microseconds(time_delta.InMicroseconds());
+}
+
+BASE_FEATURE(kPartitionAllocAdjustSizeWhenInForeground,
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+             FEATURE_ENABLED_BY_DEFAULT);
+#else
+             FEATURE_DISABLED_BY_DEFAULT);
+#endif
+BASE_FEATURE_PARAM(
+    int,
+    kPartitionAllocForegroundEmptySlotSpanRingSize,
+    &kPartitionAllocAdjustSizeWhenInForeground,
+    "foreground-ring-size",
+    static_cast<int>(partition_alloc::internal::kMaxEmptySlotSpanRingSize));
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocBackgroundEmptySlotSpanRingSize,
+                   &kPartitionAllocAdjustSizeWhenInForeground,
+                   "background-ring-size",
+                   partition_alloc::internal::SlotSpanRingMaxSize::kMedium);
+
+#if PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
+BASE_FEATURE(kPartitionAllocUsePriorityInheritanceLocks,
+             FEATURE_DISABLED_BY_DEFAULT);
+#endif  // PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
+
+BASE_FEATURE(kPartitionAllocFreeWithSize, FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(bool,
+                   kPartitionAllocStrictFreeSizeCheck,
+                   &kPartitionAllocFreeWithSize,
+                   "strict-free-size-check",
+                   true);
+
+#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
+BASE_FEATURE(kPartitionAllocLockTuneSpin, FEATURE_DISABLED_BY_DEFAULT);
+
+// On ARM64, 2048 cycles results in spinning for 500-1500 nanoseconds on most
+// Android devices which overlaps with the time spent on a futex syscall.
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocLockSpinCount,
+                   &kPartitionAllocLockTuneSpin,
+                   "spin_count",
+                   2048);
+#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
+
+}  // namespace base::features

@@ -7,10 +7,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/system/system_monitor.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/deferred_sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
@@ -18,16 +19,19 @@
 #include "build/build_config.h"
 #include "media/audio/aecdump_recording_manager.h"
 #include "media/audio/audio_manager.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/media_buildflags.h"
 #include "services/audio/debug_recording.h"
 #include "services/audio/device_notifier.h"
 #include "services/audio/log_factory_manager.h"
 #include "services/audio/system_info.h"
 
-#if BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_MAC)
 #include "media/audio/mac/audio_device_listener_mac.h"
 #endif
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/win_util.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace audio {
 
@@ -63,6 +67,12 @@ Service::Service(std::unique_ptr<AudioManagerAccessor> audio_manager_accessor,
   audio_manager_accessor_->GetAudioManager()->SetAecDumpRecordingManager(
       aecdump_recording_manager_->AsWeakPtr());
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  // Disable high resolution timer throttling to prevent degraded audio quality.
+  base::win::SetProcessTimerThrottleState(
+      base::GetCurrentProcessHandle(), base::win::ProcessPowerState::kDisabled);
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 Service::~Service() {
@@ -131,9 +141,17 @@ void Service::BindStreamFactory(
     mojo::PendingReceiver<media::mojom::AudioStreamFactory> receiver) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  if (!stream_factory_)
+  if (!stream_factory_) {
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
     stream_factory_.emplace(audio_manager_accessor_->GetAudioManager(),
-                            aecdump_recording_manager_.get());
+                            aecdump_recording_manager_.get(),
+                            &ml_model_manager_);
+#else
+    stream_factory_.emplace(audio_manager_accessor_->GetAudioManager(),
+                            aecdump_recording_manager_.get(),
+                            /*ml_model_manager=*/nullptr);
+#endif
+  }
   stream_factory_->Bind(std::move(receiver));
 }
 
@@ -163,16 +181,24 @@ void Service::BindTestingApi(
     binder.Run(std::move(receiver));
 }
 
+void Service::BindMlModelManager(
+    mojo::PendingReceiver<mojom::MlModelManager> receiver) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  ml_model_manager_.BindReceiver(std::move(receiver));
+#endif
+}
+
 void Service::InitializeDeviceMonitor() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-#if BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_MAC)
   if (audio_device_listener_mac_)
     return;
 
   TRACE_EVENT0("audio", "audio::Service::InitializeDeviceMonitor");
 
   audio_device_listener_mac_ = media::AudioDeviceListenerMac::Create(
-      media::BindToCurrentLoop(base::BindRepeating([] {
+      base::BindPostTaskToCurrentDefault(base::BindRepeating([] {
         if (auto* monitor = base::SystemMonitor::Get())
           monitor->ProcessDevicesChanged(base::SystemMonitor::DEVTYPE_AUDIO);
       })),

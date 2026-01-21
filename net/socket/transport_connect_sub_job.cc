@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
@@ -93,9 +93,6 @@ class WebSocketStreamSocket final : public StreamSocket {
     return wrapped_socket_->NetLog();
   }
   bool WasEverUsed() const override { return wrapped_socket_->WasEverUsed(); }
-  bool WasAlpnNegotiated() const override {
-    return wrapped_socket_->WasAlpnNegotiated();
-  }
   NextProto GetNegotiatedProtocol() const override {
     return wrapped_socket_->GetNegotiatedProtocol();
   }
@@ -150,7 +147,6 @@ LoadState TransportConnectSubJob::GetLoadState() const {
       return LOAD_STATE_IDLE;
   }
   NOTREACHED();
-  return LOAD_STATE_IDLE;
 }
 
 const IPEndPoint& TransportConnectSubJob::CurrentAddress() const {
@@ -185,8 +181,6 @@ int TransportConnectSubJob::DoLoop(int result) {
         break;
       default:
         NOTREACHED();
-        rv = ERR_FAILED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE &&
            next_state_ != STATE_DONE);
@@ -212,7 +206,8 @@ int TransportConnectSubJob::DoEndpointLockComplete() {
   if (auto* factory = parent_job_->socket_performance_watcher_factory();
       factory != nullptr) {
     socket_performance_watcher = factory->CreateSocketPerformanceWatcher(
-        SocketPerformanceWatcherFactory::PROTOCOL_TCP, one_address);
+        SocketPerformanceWatcherFactory::PROTOCOL_TCP,
+        CurrentAddress().address());
   }
 
   const NetLogWithSource& net_log = parent_job_->net_log();
@@ -223,10 +218,9 @@ int TransportConnectSubJob::DoEndpointLockComplete() {
           net_log.source());
 
   net_log.AddEvent(NetLogEventType::TRANSPORT_CONNECT_JOB_CONNECT_ATTEMPT, [&] {
-    base::Value::Dict dict;
-    dict.Set("address", CurrentAddress().ToString());
+    auto dict = base::Value::Dict().Set("address", CurrentAddress().ToString());
     transport_socket_->NetLog().source().AddToEventParameters(dict);
-    return base::Value(std::move(dict));
+    return dict;
   });
 
   // If `websocket_endpoint_lock_manager_` is non-null, this class now owns an
@@ -253,8 +247,7 @@ int TransportConnectSubJob::DoTransportConnectComplete(int result) {
     // Drop the socket to release the endpoint lock, if any.
     transport_socket_.reset();
 
-    parent_job_->connection_attempts_.push_back(
-        ConnectionAttempt(CurrentAddress(), result));
+    parent_job_->connection_attempts_.emplace_back(CurrentAddress(), result);
 
     // Don't try the next address if entering suspend mode.
     if (result != ERR_NETWORK_IO_SUSPENDED &&

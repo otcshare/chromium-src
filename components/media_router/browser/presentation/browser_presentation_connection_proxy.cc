@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/media_router/browser/media_router.h"
 #include "components/media_router/browser/route_message_util.h"
 
@@ -35,7 +35,8 @@ BrowserPresentationConnectionProxy::BrowserPresentationConnectionProxy(
       blink::mojom::PresentationConnectionState::CONNECTED);
 }
 
-BrowserPresentationConnectionProxy::~BrowserPresentationConnectionProxy() {}
+BrowserPresentationConnectionProxy::~BrowserPresentationConnectionProxy() =
+    default;
 
 void BrowserPresentationConnectionProxy::OnMessage(
     blink::mojom::PresentationConnectionMessagePtr message) {

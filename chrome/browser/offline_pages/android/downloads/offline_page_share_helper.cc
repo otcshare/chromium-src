@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/download/android/download_controller_base.h"
 #include "chrome/browser/download/android/download_utils.h"
@@ -23,10 +23,6 @@ using OfflineItemShareInfo = offline_items_collection::OfflineItemShareInfo;
 
 namespace offline_pages {
 namespace {
-
-content::WebContents* EmptyWebContentGetter() {
-  return nullptr;
-}
 
 // Create share info with a content URI or file URI. We try best effort to get
 // content URI if |file_path| is in Android public directory. Then try to
@@ -67,40 +63,23 @@ void OfflinePageShareHelper::OnPageGetForShare(
     return;
   }
   const OfflinePageItem& page = pages[0];
-  const bool is_suggested = GetPolicy(page.client_id.name_space).is_suggested;
   const bool in_private_dir = model_->IsArchiveInInternalDir(page.file_path);
 
   // Need to publish internal page to public directory to share the file with
   // content URI instead of the web page URL.
-  if (!is_suggested && in_private_dir) {
-    AcquireFileAccessPermission();
+  if (in_private_dir) {
+    // Retrieve the offline page again in case it's deleted.
+    PageCriteria criteria;
+    criteria.guid = content_id_.id;
+    criteria.maximum_matches = 1;
+    model_->GetPagesWithCriteria(
+        criteria, base::BindOnce(&OfflinePageShareHelper::OnPageGetForPublish,
+                                 weak_ptr_factory_.GetWeakPtr()));
     return;
   }
 
   // Try to share the mhtml file if the page is in public directory.
   NotifyCompletion(ShareResult::kSuccess, CreateShareInfo(page.file_path));
-}
-
-void OfflinePageShareHelper::AcquireFileAccessPermission() {
-  DownloadControllerBase::Get()->AcquireFileAccessPermission(
-      base::BindRepeating(&EmptyWebContentGetter),
-      base::BindOnce(&OfflinePageShareHelper::OnFileAccessPermissionDone,
-                     weak_ptr_factory_.GetWeakPtr()));
-}
-
-void OfflinePageShareHelper::OnFileAccessPermissionDone(bool granted) {
-  if (!granted) {
-    NotifyCompletion(ShareResult::kFileAccessPermissionDenied, nullptr);
-    return;
-  }
-
-  // Retrieve the offline page again in case it's deleted.
-  PageCriteria criteria;
-  criteria.guid = content_id_.id;
-  criteria.maximum_matches = 1;
-  model_->GetPagesWithCriteria(
-      criteria, base::BindOnce(&OfflinePageShareHelper::OnPageGetForPublish,
-                               weak_ptr_factory_.GetWeakPtr()));
 }
 
 void OfflinePageShareHelper::OnPageGetForPublish(

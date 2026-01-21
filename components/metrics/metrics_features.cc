@@ -5,14 +5,16 @@
 #include "components/metrics/metrics_features.h"
 
 namespace metrics::features {
-BASE_FEATURE(kEmitHistogramsEarlier,
-             "EmitHistogramsEarlier",
+
+BASE_FEATURE(kStructuredMetrics,
+             "EnableStructuredMetrics",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kFlushPersistentSystemProfileOnWrite,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-const base::FeatureParam<bool> kEmitHistogramsForIndependentLogs{
-    &kEmitHistogramsEarlier, "emit_for_independent_logs", false};
+BASE_FEATURE(kReportingServiceAlwaysFlush, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kMetricsServiceAsyncCollection,
-             "MetricsServiceAsyncCollection",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kMetricsLogTrimming, base::FEATURE_ENABLED_BY_DEFAULT);
+
 }  // namespace metrics::features

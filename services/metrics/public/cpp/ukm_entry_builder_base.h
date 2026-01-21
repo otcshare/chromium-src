@@ -5,21 +5,25 @@
 #ifndef SERVICES_METRICS_PUBLIC_CPP_UKM_ENTRY_BUILDER_BASE_H_
 #define SERVICES_METRICS_PUBLIC_CPP_UKM_ENTRY_BUILDER_BASE_H_
 
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "services/metrics/public/cpp/metrics_export.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom.h"
 
-namespace ukm {
-
-namespace internal {
+namespace ukm::internal {
 
 // A base class for generated UkmEntry builder objects.
 // This class should not be used directly.
 class METRICS_EXPORT UkmEntryBuilderBase {
+  // TODO(crbug.com/433395880): Remove this macro once it gets fixed.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   UkmEntryBuilderBase(const UkmEntryBuilderBase&) = delete;
+  UkmEntryBuilderBase(UkmEntryBuilderBase&&);
   UkmEntryBuilderBase& operator=(const UkmEntryBuilderBase&) = delete;
+  UkmEntryBuilderBase& operator=(UkmEntryBuilderBase&&);
 
   virtual ~UkmEntryBuilderBase();
 
@@ -28,12 +32,15 @@ class METRICS_EXPORT UkmEntryBuilderBase {
   // further calls to this or TakeEntry() will do nothing.
   void Record(UkmRecorder* recorder);
 
-  // Extracts the created UkmEntryPtr. Record() cannot be called after this.
-  mojom::UkmEntryPtr TakeEntry();
+  // Return a copy of created UkmEntryPtr for testing.
+  mojom::UkmEntryPtr GetEntryForTesting();
+
+  // Transfers ownership of |entry_| externally.
+  mojom::UkmEntryPtr TakeEntry() { return std::move(entry_); }
 
  protected:
   UkmEntryBuilderBase(ukm::SourceIdObj source_id, uint64_t event_hash);
-  // TODO(crbug/873866): Remove this version once callers are migrated.
+  // TODO(crbug.com/40589246): Remove this version once callers are migrated.
   UkmEntryBuilderBase(SourceId source_id, uint64_t event_hash);
 
   // Add metric to the entry. A metric contains a metric hash and value.
@@ -43,8 +50,6 @@ class METRICS_EXPORT UkmEntryBuilderBase {
   mojom::UkmEntryPtr entry_;
 };
 
-}  // namespace internal
-
-}  // namespace ukm
+}  // namespace ukm::internal
 
 #endif  // SERVICES_METRICS_PUBLIC_CPP_UKM_ENTRY_BUILDER_BASE_H_

@@ -11,13 +11,13 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/debug/leak_annotations.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 
 namespace {
 
@@ -34,8 +34,7 @@ int g_shutdown_pipe_read_fd = -1;
 // Common code between SIG{HUP, INT, TERM}Handler.
 void GracefulShutdownHandler(int signal) {
   // Reinstall the default handler.  We had one shot at graceful shutdown.
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
+  struct sigaction action = {};
   action.sa_handler = SIG_DFL;
   RAW_CHECK(sigaction(signal, &action, nullptr) == 0);
 
@@ -45,10 +44,10 @@ void GracefulShutdownHandler(int signal) {
   RAW_CHECK(g_pipe_pid == getpid());
   size_t bytes_written = 0;
   do {
-    int rv = HANDLE_EINTR(
+    int rv = UNSAFE_TODO(HANDLE_EINTR(
         write(g_shutdown_pipe_write_fd,
               reinterpret_cast<const char*>(&signal) + bytes_written,
-              sizeof(signal) - bytes_written));
+              sizeof(signal) - bytes_written)));
     RAW_CHECK(rv >= 0);
     bytes_written += rv;
   } while (bytes_written < sizeof(signal));
@@ -104,21 +103,7 @@ ShutdownDetector::ShutdownDetector(
   CHECK(task_runner_);
 }
 
-ShutdownDetector::~ShutdownDetector() {}
-
-// These functions are used to help us diagnose crash dumps that happen
-// during the shutdown process.
-NOINLINE void ShutdownFDReadError() {
-  // Ensure function isn't optimized away.
-  asm("");
-  sleep(UINT_MAX);
-}
-
-NOINLINE void ShutdownFDClosedError() {
-  // Ensure function isn't optimized away.
-  asm("");
-  sleep(UINT_MAX);
-}
+ShutdownDetector::~ShutdownDetector() = default;
 
 NOINLINE void ExitPosted() {
   // Ensure function isn't optimized away.
@@ -133,17 +118,13 @@ void ShutdownDetector::ThreadMain() {
   size_t bytes_read = 0;
   ssize_t ret;
   do {
-    ret = HANDLE_EINTR(read(shutdown_fd_,
-                            reinterpret_cast<char*>(&signal) + bytes_read,
-                            sizeof(signal) - bytes_read));
+    ret = UNSAFE_TODO(HANDLE_EINTR(
+        read(shutdown_fd_, reinterpret_cast<char*>(&signal) + bytes_read,
+             sizeof(signal) - bytes_read)));
     if (ret < 0) {
       NOTREACHED() << "Unexpected error: " << strerror(errno);
-      ShutdownFDReadError();
-      break;
     } else if (ret == 0) {
       NOTREACHED() << "Unexpected closure of shutdown pipe.";
-      ShutdownFDClosedError();
-      break;
     }
     bytes_read += ret;
   } while (bytes_read < sizeof(signal));
@@ -204,8 +185,7 @@ void InstallShutdownSignalHandlers(
 
   // We need to handle SIGTERM, because that is how many POSIX-based distros
   // ask processes to quit gracefully at shutdown time.
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
+  struct sigaction action = {};
   action.sa_handler = SIGTERMHandler;
   CHECK_EQ(0, sigaction(SIGTERM, &action, nullptr));
 

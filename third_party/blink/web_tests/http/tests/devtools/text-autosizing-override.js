@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`This text should be autosized to 40px computed font-size (16 * 800/320).\n`);
   await TestRunner.loadHTML(`
@@ -35,12 +37,12 @@
 
   TestRunner.runTestSuite([
     function checkNotAutosizedWithoutPageAgent(next) {
-      TestRunner.PageAgent.disable();
+      TestRunner.PageAgent.invoke_disable();
       assertAutosizingResult(false, next);
     },
 
     function checkNotAutosizedWithPageAgent(next) {
-      TestRunner.PageAgent.enable();
+      TestRunner.PageAgent.invoke_enable({});
       assertAutosizingResult(false, next);
     },
 
@@ -57,7 +59,7 @@
     },
 
     function checkCleanupOverrides(next) {
-      TestRunner.PageAgent.clearDeviceMetricsOverride();
+      TestRunner.PageAgent.invoke_clearDeviceMetricsOverride();
       assertAutosizingResult(false);
       TestRunner.evaluateInPage('document.getElementById(\'measure\').remove();', next);
     }

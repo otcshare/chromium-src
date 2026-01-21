@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-chrome.browserAction.onClicked.addListener(() => {
+chrome.action.onClicked.addListener(() => {
   // We should be running with a user gesture.
   chrome.test.assertTrue(chrome.test.isProcessingUserGesture());
 
@@ -11,8 +11,8 @@ chrome.browserAction.onClicked.addListener(() => {
     var extension = items.find(item => {
       return item.name == 'ExtensionB';
     });
-    chrome.test.assertTrue(extension != undefined);
-    chrome.test.assertTrue(extension.id != undefined);
+    chrome.test.assertNe(undefined, extension);
+    chrome.test.assertNe(undefined, extension.id);
     chrome.management.uninstall(extension.id, chrome.test.callbackPass(() => {
       chrome.test.notifyPass();
     }));

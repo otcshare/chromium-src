@@ -4,9 +4,10 @@
 
 #include "chrome/browser/metrics/perf/profile_provider_chromeos.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/power_monitor/power_monitor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/perf/metric_provider.h"
 #include "chrome/browser/metrics/perf/perf_events_collector.h"
@@ -54,8 +55,7 @@ ProfileProvider::ProfileProvider()
 }
 
 ProfileProvider::~ProfileProvider() {
-  ash::LoginState::Get()->RemoveObserver(this);
-  chromeos::PowerManagerClient::Get()->RemoveObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerThermalObserver(this);
   if (jank_monitor_) {
     jank_monitor_->RemoveObserver(this);
     jank_monitor_->Destroy();
@@ -68,15 +68,21 @@ void ProfileProvider::Init() {
   }
 
   // Register as an observer of login state changes.
-  ash::LoginState::Get()->AddObserver(this);
+  login_state_observer_.Observe(ash::LoginState::Get());
 
   // Register as an observer of power manager events.
-  chromeos::PowerManagerClient::Get()->AddObserver(this);
+  power_manager_client_observer_.Observe(chromeos::PowerManagerClient::Get());
 
   // Register as an observer of session restore.
   on_session_restored_callback_subscription_ =
       SessionRestore::RegisterOnSessionRestoredCallback(base::BindRepeating(
           &ProfileProvider::OnSessionRestoreDone, weak_factory_.GetWeakPtr()));
+
+  // Register as an observer of thermal state changes.
+  base::PowerThermalObserver::DeviceThermalState thermal_state =
+      base::PowerMonitor::GetInstance()
+          ->AddPowerStateObserverAndReturnPowerThermalState(this);
+  OnThermalStateChange(thermal_state);
 
   // Check the login state. At the time of writing, this class is instantiated
   // before login. A subsequent login would activate the profiling. However,
@@ -187,6 +193,21 @@ void ProfileProvider::OnJankStopped() {
   // Inform each collector that a jank has stopped.
   for (auto& collector : collectors_) {
     collector->OnJankStopped();
+  }
+}
+
+void ProfileProvider::OnThermalStateChange(
+    base::PowerThermalObserver::DeviceThermalState new_state) {
+  // Pass the new thermal state to each collector.
+  for (auto& collector : collectors_) {
+    collector->SetThermalState(new_state);
+  }
+}
+
+void ProfileProvider::OnSpeedLimitChange(int new_limit) {
+  // Pass the new speed limit to each collector.
+  for (auto& collector : collectors_) {
+    collector->SetSpeedLimit(new_limit);
   }
 }
 

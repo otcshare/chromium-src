@@ -5,7 +5,7 @@
 package org.chromium.chrome.test.pagecontroller.utils;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Matchers.argThat;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.test.pagecontroller.utils.TestUtils.assertLocatorResults;
@@ -20,11 +20,13 @@ import androidx.test.uiautomator.UiObject2;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.FixMethodOrder;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -34,18 +36,15 @@ import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 
-/**
- * Tests for Ui2Locators.
- */
+/** Tests for Ui2Locators. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class Ui2LocatorsTest {
-    @Mock
-    UiDevice mDevice;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock UiDevice mDevice;
 
-    @Mock
-    Resources mResources;
+    @Mock Resources mResources;
 
     List<UiObject2> mRootAsList;
     List<UiObject2> mChild0And1;
@@ -53,21 +52,14 @@ public class Ui2LocatorsTest {
     List<UiObject2> mGrandchildren;
     List<UiObject2> mGrandchild1AsList;
 
-    @Mock
-    UiObject2 mRoot;
-    @Mock
-    UiObject2 mChild0;
-    @Mock
-    UiObject2 mChild1;
-    @Mock
-    UiObject2 mGrandchild0;
-    @Mock
-    UiObject2 mGrandchild1;
+    @Mock UiObject2 mRoot;
+    @Mock UiObject2 mChild0;
+    @Mock UiObject2 mChild1;
+    @Mock UiObject2 mGrandchild0;
+    @Mock UiObject2 mGrandchild1;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
         mRootAsList = Collections.singletonList(mRoot);
 
         mChild0And1 = new ArrayList<>();

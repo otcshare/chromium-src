@@ -4,23 +4,24 @@
 
 #include "ash/webui/diagnostics_ui/backend/system/system_data_provider.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "ash/system/diagnostics/diagnostics_log_controller.h"
 #include "ash/system/diagnostics/telemetry_log.h"
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
 #include "ash/webui/diagnostics_ui/backend/system/cros_healthd_helpers.h"
 #include "ash/webui/diagnostics_ui/backend/system/power_manager_client_conversions.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/i18n/time_formatting.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash::diagnostics {
 
@@ -44,7 +45,7 @@ void PopulateBoardName(const healthd::SystemInfo& system_info,
 
 void PopulateMarketingName(const healthd::SystemInfo& system_info,
                            mojom::SystemInfo& out_system_info) {
-  const absl::optional<std::string>& marketing_name =
+  const std::optional<std::string>& marketing_name =
       system_info.os_info->marketing_name;
 
   if (!marketing_name.has_value()) {
@@ -62,29 +63,32 @@ void PopulateCpuInfo(const healthd::CpuInfo& cpu_info,
 
   if (physical_cpus.empty()) {
     EmitSystemDataError(metrics::DataError::kExpectationNotMet);
-    LOG(ERROR) << "No physical cpus in SystemInfo response.";
+    LOG(ERROR) << "No physical CPUs in SystemInfo response.";
     return;
   }
 
-  // If there is more than one physical cpu on the device, use the name of the
+  // If there is more than one physical CPU on the device, use the name of the
   // first CPU.
   out_system_info.cpu_model_name = physical_cpus[0]->model_name.value_or("");
 
-  if (physical_cpus[0]->logical_cpus.empty()) {
-    EmitSystemDataError(metrics::DataError::kExpectationNotMet);
-    LOG(ERROR) << "Device reported having 0 logical CPUs.";
-    return;
+  for (const auto& physical_cpu_ptr : physical_cpus) {
+    if (physical_cpu_ptr->logical_cpus.empty()) {
+      EmitSystemDataError(metrics::DataError::kExpectationNotMet);
+      LOG(ERROR) << "Device reported having a physical CPU with 0 logical CPUs.";
+      return;
+    }
   }
-  // Calculate `max_clock_speed_khz` as the average of all logical core clock
-  // speeds until we decide the best way to consume the information in the UI.
-  uint32_t total_max_ghz = 0;
-  for (const auto& logical_cpu_ptr : physical_cpus[0]->logical_cpus) {
-    total_max_ghz += logical_cpu_ptr->max_clock_speed_khz;
+  // Iterate through physical cores and find the max CPU frequency among
+  // logical CPUs.
+  uint32_t max_clock_speed_khz = 0;
+  for (const auto& physical_cpu_ptr : physical_cpus) {
+    for (const auto& logical_cpu_ptr : physical_cpu_ptr->logical_cpus) {
+      max_clock_speed_khz =
+          std::max(logical_cpu_ptr->max_clock_speed_khz, max_clock_speed_khz);
+    }
   }
 
-  // Integer division.
-  out_system_info.cpu_max_clock_speed_khz =
-      total_max_ghz / physical_cpus[0]->logical_cpus.size();
+  out_system_info.cpu_max_clock_speed_khz = max_clock_speed_khz;
 }
 
 void PopulateVersionInfo(const healthd::SystemInfo& system_info,
@@ -243,29 +247,35 @@ void PopulateAverageCpuTemperature(const healthd::CpuInfo& cpu_info,
 
 void PopulateAverageScaledClockSpeed(const healthd::CpuInfo& cpu_info,
                                      mojom::CpuUsage& out_cpu_usage) {
-  if (cpu_info.physical_cpus.empty() ||
-      cpu_info.physical_cpus[0]->logical_cpus.empty()) {
-    LOG(ERROR) << "Device reported having 0 logical CPUs.";
-    return;
+  for (const auto& physical_cpu_ptr : cpu_info.physical_cpus) {
+    if (physical_cpu_ptr->logical_cpus.empty()) {
+      LOG(ERROR) << "Device reported having a physical CPU with 0 logical CPUs.";
+      return;
+    }
   }
 
-  uint32_t total_scaled_ghz = 0;
-  for (const auto& logical_cpu_ptr : cpu_info.physical_cpus[0]->logical_cpus) {
-    total_scaled_ghz += logical_cpu_ptr->scaling_current_frequency_khz;
+  // Trying to find among physical/logical CPUs for the maximum
+  // frequency.
+
+  uint32_t scaling_current_frequency_khz = 0;
+  for (const auto& physical_cpu_ptr : cpu_info.physical_cpus) {
+    for (const auto& logical_cpu_ptr : physical_cpu_ptr->logical_cpus) {
+      scaling_current_frequency_khz =
+          std::max(logical_cpu_ptr->scaling_current_frequency_khz,
+                   scaling_current_frequency_khz);
+    }
   }
 
-  // Integer division.
-  out_cpu_usage.scaling_current_frequency_khz =
-      total_scaled_ghz / cpu_info.physical_cpus[0]->logical_cpus.size();
+  out_cpu_usage.scaling_current_frequency_khz = scaling_current_frequency_khz;
+}
+
+bool IsLoggingEnabled() {
+  return diagnostics::DiagnosticsLogController::IsInitialized();
 }
 
 }  // namespace
 
-SystemDataProvider::SystemDataProvider()
-    : SystemDataProvider(/*telemetry_log_ptr=*/nullptr) {}
-
-SystemDataProvider::SystemDataProvider(TelemetryLog* telemetry_log_ptr)
-    : telemetry_log_ptr_(telemetry_log_ptr) {
+SystemDataProvider::SystemDataProvider() {
   battery_charge_status_timer_ = std::make_unique<base::RepeatingTimer>();
   battery_health_timer_ = std::make_unique<base::RepeatingTimer>();
   cpu_usage_timer_ = std::make_unique<base::RepeatingTimer>();
@@ -434,7 +444,8 @@ void SystemDataProvider::OnSystemInfoProbeResponse(
   PopulateDeviceCapabilities(*info_ptr, *system_info.get());
 
   if (IsLoggingEnabled()) {
-    telemetry_log_ptr_->UpdateSystemInfo(system_info.Clone());
+    DiagnosticsLogController::Get()->GetTelemetryLog().UpdateSystemInfo(
+        system_info.Clone());
   }
 
   std::move(callback).Run(std::move(system_info));
@@ -466,7 +477,7 @@ void SystemDataProvider::OnBatteryInfoProbeResponse(
 
 void SystemDataProvider::UpdateBatteryChargeStatus() {
   // Fetch updated data from PowerManagerClient
-  absl::optional<PowerSupplyProperties> properties =
+  std::optional<PowerSupplyProperties> properties =
       chromeos::PowerManagerClient::Get()->GetLastStatus();
 
   // Fetch updated data from CrosHealthd
@@ -506,7 +517,7 @@ void SystemDataProvider::UpdateCpuUsage() {
 }
 
 void SystemDataProvider::OnBatteryChargeStatusUpdated(
-    const absl::optional<PowerSupplyProperties>& power_supply_properties,
+    const std::optional<PowerSupplyProperties>& power_supply_properties,
     healthd::TelemetryInfoPtr info_ptr) {
   mojom::BatteryChargeStatusPtr battery_charge_status =
       mojom::BatteryChargeStatus::New();
@@ -651,8 +662,9 @@ void SystemDataProvider::NotifyBatteryChargeStatusObservers(
     observer->OnBatteryChargeStatusUpdated(battery_charge_status.Clone());
   }
   if (IsLoggingEnabled()) {
-    telemetry_log_ptr_->UpdateBatteryChargeStatus(
-        battery_charge_status.Clone());
+    DiagnosticsLogController::Get()
+        ->GetTelemetryLog()
+        .UpdateBatteryChargeStatus(battery_charge_status.Clone());
   }
 }
 
@@ -662,7 +674,8 @@ void SystemDataProvider::NotifyBatteryHealthObservers(
     observer->OnBatteryHealthUpdated(battery_health.Clone());
   }
   if (IsLoggingEnabled()) {
-    telemetry_log_ptr_->UpdateBatteryHealth(battery_health.Clone());
+    DiagnosticsLogController::Get()->GetTelemetryLog().UpdateBatteryHealth(
+        battery_health.Clone());
   }
 }
 
@@ -672,7 +685,8 @@ void SystemDataProvider::NotifyMemoryUsageObservers(
     observer->OnMemoryUsageUpdated(memory_usage.Clone());
   }
   if (IsLoggingEnabled()) {
-    telemetry_log_ptr_->UpdateMemoryUsage(memory_usage.Clone());
+    DiagnosticsLogController::Get()->GetTelemetryLog().UpdateMemoryUsage(
+        memory_usage.Clone());
   }
 }
 
@@ -682,7 +696,8 @@ void SystemDataProvider::NotifyCpuUsageObservers(
     observer->OnCpuUsageUpdated(cpu_usage.Clone());
   }
   if (IsLoggingEnabled()) {
-    telemetry_log_ptr_->UpdateCpuUsage(cpu_usage.Clone());
+    DiagnosticsLogController::Get()->GetTelemetryLog().UpdateCpuUsage(
+        cpu_usage.Clone());
   }
 }
 
@@ -698,10 +713,6 @@ void SystemDataProvider::BindCrosHealthdProbeServiceIfNeccessary() {
 
 void SystemDataProvider::OnProbeServiceDisconnect() {
   probe_service_.reset();
-}
-
-bool SystemDataProvider::IsLoggingEnabled() const {
-  return telemetry_log_ptr_ != nullptr;
 }
 
 }  // namespace ash::diagnostics

@@ -11,13 +11,15 @@
 #include <utility>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/memory/writable_shared_memory_region.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
@@ -25,10 +27,9 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
-#include "mojo/core/core.h"
+#include "mojo/buildflags.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/ipcz_driver/shared_buffer.h"
-#include "mojo/core/shared_buffer_dispatcher.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/c/system/core.h"
 #include "mojo/public/cpp/system/handle.h"
@@ -37,8 +38,12 @@
 #include "mojo/public/cpp/system/wait.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace mojo {
-namespace core {
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
+#include "mojo/core/core.h"
+#include "mojo/core/shared_buffer_dispatcher.h"
+#endif
+
+namespace mojo::core {
 namespace {
 
 template <typename T>
@@ -49,15 +54,20 @@ MojoResult CreateSharedBufferFromRegion(T&& region, MojoHandle* handle) {
     return MOJO_RESULT_OK;
   }
 
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
   scoped_refptr<SharedBufferDispatcher> buffer;
   MojoResult result =
       SharedBufferDispatcher::CreateFromPlatformSharedMemoryRegion(
           T::TakeHandleForSerialization(std::forward<T>(region)), &buffer);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return result;
+  }
 
   *handle = Core::Get()->AddDispatcher(std::move(buffer));
   return MOJO_RESULT_OK;
+#else
+  NOTREACHED();
+#endif
 }
 
 template <typename T>
@@ -67,13 +77,19 @@ MojoResult ExtractRegionFromSharedBuffer(MojoHandle handle, T* region) {
     platform_region =
         std::move(ipcz_driver::SharedBuffer::Unbox(handle)->region());
   } else {
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
     scoped_refptr<Dispatcher> dispatcher =
         Core::Get()->GetAndRemoveDispatcher(handle);
-    if (!dispatcher || dispatcher->GetType() != Dispatcher::Type::SHARED_BUFFER)
+    if (!dispatcher ||
+        dispatcher->GetType() != Dispatcher::Type::SHARED_BUFFER) {
       return MOJO_RESULT_INVALID_ARGUMENT;
+    }
 
     auto* buffer = static_cast<SharedBufferDispatcher*>(dispatcher.get());
     platform_region = buffer->PassPlatformSharedMemoryRegion();
+#else
+    NOTREACHED();
+#endif
   }
 
   *region = T::Deserialize(std::move(platform_region));
@@ -112,8 +128,9 @@ TEST_F(EmbedderTest, SendMessagePipeWithWriteQueue) {
   CreateMessagePipe(&server_mp2, &client_mp2);
 
   static const size_t kNumMessages = 1001;
-  for (size_t i = 1; i <= kNumMessages; i++)
+  for (size_t i = 1; i <= kNumMessages; i++) {
     WriteMessage(client_mp2, std::string(i, 'A' + (i % 26)));
+  }
 
   // Now send client2.
   WriteMessageWithHandles(server_mp, "hey", &client_mp2, 1);
@@ -124,8 +141,9 @@ TEST_F(EmbedderTest, SendMessagePipeWithWriteQueue) {
   EXPECT_NE(MOJO_HANDLE_INVALID, client_mp2);
 
   // Now verify that all the messages that were written were sent correctly.
-  for (size_t i = 1; i <= kNumMessages; i++)
+  for (size_t i = 1; i <= kNumMessages; i++) {
     ASSERT_EQ(std::string(i, 'A' + (i % 26)), ReadMessage(server_mp2));
+  }
 
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(server_mp2));
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(client_mp2));
@@ -296,7 +314,7 @@ TEST_F(EmbedderTest, MultiprocessBaseSharedMemory) {
     ASSERT_EQ(MOJO_RESULT_OK, MojoMapBuffer(sb1, 0, 123, nullptr,
                                             reinterpret_cast<void**>(&buffer)));
     ASSERT_TRUE(buffer);
-    memcpy(buffer, kHelloWorld, sizeof(kHelloWorld));
+    UNSAFE_TODO(memcpy(buffer, kHelloWorld, sizeof(kHelloWorld)));
 
     // 3. Duplicate |sb1| into |sb2| and pass to |server_mp|.
     MojoHandle sb2 = MOJO_HANDLE_INVALID;
@@ -341,7 +359,7 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessSharedMemoryClient,
   EXPECT_EQ(kHelloWorld, std::string(buffer));
 
   // 4. Write into |buffer| and send a message back.
-  memcpy(buffer, kByeWorld, sizeof(kByeWorld));
+  UNSAFE_TODO(memcpy(buffer, kByeWorld, sizeof(kByeWorld)));
   WriteMessage(client_mp, "hey");
 
   // 5. Extract the shared memory handle and ensure we can map it and read the
@@ -366,7 +384,10 @@ enum class HandleType {
 };
 
 const HandleType kTestHandleTypes[] = {
-    HandleType::MACH, HandleType::POSIX, HandleType::POSIX, HandleType::MACH,
+    HandleType::MACH,
+    HandleType::POSIX,
+    HandleType::POSIX,
+    HandleType::MACH,
 };
 
 // Test that we can mix file descriptors and mach port handles.
@@ -376,7 +397,7 @@ TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
     // 1. Create fds or Mach objects and mojo handles from them.
     MojoHandle platform_handles[std::size(kTestHandleTypes)];
     for (size_t i = 0; i < std::size(kTestHandleTypes); i++) {
-      const auto type = kTestHandleTypes[i];
+      const auto type = UNSAFE_TODO(kTestHandleTypes[i]);
       PlatformHandle scoped_handle;
       if (type == HandleType::POSIX) {
         // The easiest source of fds is opening /dev/null.
@@ -395,7 +416,7 @@ TEST_F(EmbedderTest, MultiprocessMixMachAndFds) {
         scoped_handle = PlatformHandle(std::move(shm_handle));
         ASSERT_TRUE(scoped_handle.is_valid_mach_port());
       }
-      platform_handles[i] =
+      UNSAFE_TODO(platform_handles[i]) =
           WrapPlatformHandle(std::move(scoped_handle)).release().value();
     }
 
@@ -421,9 +442,9 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessMixMachAndFdsClient,
 
   // 2. Extract each handle, and verify the type.
   for (int i = 0; i < kNumHandles; i++) {
-    const auto type = kTestHandleTypes[i];
-    PlatformHandle scoped_handle =
-        UnwrapPlatformHandle(ScopedHandle(Handle(platform_handles[i])));
+    const auto type = UNSAFE_TODO(kTestHandleTypes[i]);
+    PlatformHandle scoped_handle = UnwrapPlatformHandle(
+        ScopedHandle(Handle(UNSAFE_TODO(platform_handles[i]))));
     if (type == HandleType::POSIX) {
       EXPECT_TRUE(scoped_handle.is_valid_fd());
     } else {
@@ -441,5 +462,4 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessMixMachAndFdsClient,
 #endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace
-}  // namespace core
-}  // namespace mojo
+}  // namespace mojo::core

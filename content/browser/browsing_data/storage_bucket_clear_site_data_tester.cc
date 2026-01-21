@@ -8,15 +8,14 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/cpp/buckets/bucket_info.h"
 #include "components/services/storage/public/cpp/quota_error_or.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/storage_partition.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 
 namespace content {
 
@@ -32,8 +31,8 @@ void StorageBucketClearSiteDataTester::CreateBucketForTesting(
         callback) {
   storage_partition_impl_->GetQuotaManagerProxy()
       ->CreateBucketForTesting(  // IN-TEST
-          storage_key, bucket_name, blink::mojom::StorageType::kTemporary,
-          base::SequencedTaskRunnerHandle::Get(), std::move(callback));
+          storage_key, bucket_name,
+          base::SequencedTaskRunner::GetCurrentDefault(), std::move(callback));
 }
 
 void StorageBucketClearSiteDataTester::GetBucketsForStorageKey(
@@ -41,8 +40,8 @@ void StorageBucketClearSiteDataTester::GetBucketsForStorageKey(
     base::OnceCallback<
         void(storage::QuotaErrorOr<std::set<storage::BucketInfo>>)> callback) {
   storage_partition_impl_->GetQuotaManagerProxy()->GetBucketsForStorageKey(
-      storage_key, blink::mojom::StorageType::kTemporary,
-      /*delete_expired=*/false, base::SequencedTaskRunnerHandle::Get(),
+      storage_key,
+      /*delete_expired=*/false, base::SequencedTaskRunner::GetCurrentDefault(),
       std::move(callback));
 }
 

@@ -5,9 +5,11 @@
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/task/sequenced_task_runner.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
 
 namespace ash::system {
 
@@ -26,17 +28,17 @@ void FakeStatisticsProvider::ScheduleOnMachineStatisticsLoaded(
                                                            std::move(callback));
 }
 
-absl::optional<base::StringPiece> FakeStatisticsProvider::GetMachineStatistic(
-    base::StringPiece name) {
+std::optional<std::string_view> FakeStatisticsProvider::GetMachineStatistic(
+    std::string_view name) {
   const auto match = machine_statistics_.find(name);
   if (match == machine_statistics_.end())
-    return absl::nullopt;
+    return std::nullopt;
 
-  return base::StringPiece(match->second);
+  return std::string_view(match->second);
 }
 
 FakeStatisticsProvider::FlagValue FakeStatisticsProvider::GetMachineFlag(
-    base::StringPiece name) {
+    std::string_view name) {
   const auto match = machine_flags_.find(name);
   if (match == machine_flags_.end())
     return FlagValue::kUnset;
@@ -51,8 +53,22 @@ bool FakeStatisticsProvider::IsRunningOnVm() {
   return GetMachineStatistic(kIsVmKey) == kIsVmValueTrue;
 }
 
+bool FakeStatisticsProvider::IsCrosDebugMode() {
+  return GetMachineStatistic(kIsCrosDebugKey) == kIsCrosDebugValueTrue;
+}
+
 StatisticsProvider::VpdStatus FakeStatisticsProvider::GetVpdStatus() const {
   return vpd_status_;
+}
+
+StatisticsProvider::LoadingState FakeStatisticsProvider::GetLoadingState()
+    const {
+  return loading_state_;
+}
+
+std::optional<std::string> FakeStatisticsProvider::GetUpdatedHardwareClass()
+    const {
+  return updated_hardware_class_;
 }
 
 void FakeStatisticsProvider::SetMachineStatistic(const std::string& key,
@@ -60,8 +76,12 @@ void FakeStatisticsProvider::SetMachineStatistic(const std::string& key,
   machine_statistics_[key] = value;
 }
 
-void FakeStatisticsProvider::ClearMachineStatistic(base::StringPiece key) {
+void FakeStatisticsProvider::ClearMachineStatistic(std::string_view key) {
   machine_statistics_.erase(key);
+}
+
+void FakeStatisticsProvider::ClearAllMachineStatistics() {
+  machine_statistics_.clear();
 }
 
 void FakeStatisticsProvider::SetMachineFlag(const std::string& key,
@@ -69,12 +89,21 @@ void FakeStatisticsProvider::SetMachineFlag(const std::string& key,
   machine_flags_[key] = value;
 }
 
-void FakeStatisticsProvider::ClearMachineFlag(base::StringPiece key) {
+void FakeStatisticsProvider::ClearMachineFlag(std::string_view key) {
   machine_flags_.erase(key);
 }
 
 void FakeStatisticsProvider::SetVpdStatus(VpdStatus new_status) {
   vpd_status_ = new_status;
+}
+
+void FakeStatisticsProvider::SetLoadingState(LoadingState new_state) {
+  loading_state_ = new_state;
+}
+
+void FakeStatisticsProvider::SetUpdatedHardwareClass(
+    const std::optional<std::string> new_hw_class) {
+  updated_hardware_class_ = new_hw_class;
 }
 
 ScopedFakeStatisticsProvider::ScopedFakeStatisticsProvider() {

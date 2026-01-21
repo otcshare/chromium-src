@@ -7,17 +7,17 @@
 
 #include <map>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "media/base/scoped_async_trace.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "services/video_capture/broadcasting_receiver.h"
-#include "services/video_capture/device_factory_media_to_mojo_adapter.h"
+#include "services/video_capture/device_factory_impl.h"
 #include "services/video_capture/public/mojom/device.mojom.h"
 #include "services/video_capture/public/mojom/video_frame_handler.mojom.h"
 #include "services/video_capture/public/mojom/video_source.mojom.h"
@@ -55,7 +55,7 @@ class VideoSourceImpl : public mojom::VideoSource {
     kStarted,
     kStoppingAsynchronously
   };
-  using DeviceInProcessInfo = DeviceFactory::DeviceInProcessInfo;
+  using DeviceInfo = DeviceFactory::DeviceInfo;
 
   using ScopedCaptureTrace =
       media::TypedScopedAsyncTrace<media::TraceCategory::kVideoAndImageCapture>;
@@ -64,14 +64,14 @@ class VideoSourceImpl : public mojom::VideoSource {
   void StartDeviceWithSettings(
       const media::VideoCaptureParams& requested_settings);
   void OnCreateDeviceResponse(std::unique_ptr<ScopedCaptureTrace> scoped_trace,
-                              DeviceInProcessInfo info);
+                              DeviceInfo info);
   void OnPushSubscriptionClosedOrDisconnectedOrDiscarded(
       PushVideoStreamSubscriptionImpl* subscription,
       base::OnceClosure done_cb);
   void StopDeviceAsynchronously();
   void OnStopDeviceComplete();
 
-  const raw_ptr<DeviceFactory> device_factory_;
+  const raw_ptr<DeviceFactory, DanglingUntriaged> device_factory_;
   const std::string device_id_;
   mojo::ReceiverSet<mojom::VideoSource> receivers_;
   base::RepeatingClosure on_last_binding_closed_cb_;
@@ -82,8 +82,11 @@ class VideoSourceImpl : public mojom::VideoSource {
       push_subscriptions_;
   BroadcastingReceiver broadcaster_;
   DeviceStatus device_status_;
+  raw_ptr<Device, AcrossTasksDanglingUntriaged> device_{nullptr};
   media::VideoCaptureParams device_start_settings_;
-  bool restart_device_once_when_stop_complete_;
+  bool restart_device_once_when_stop_complete_ = false;
+
+  base::TimeTicks device_startup_start_time_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

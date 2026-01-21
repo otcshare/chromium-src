@@ -7,8 +7,10 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/view.h"
@@ -25,8 +27,9 @@ namespace ash {
 // traffic at OS level (outside the browser).
 class RequestSystemProxyCredentialsView final
     : public views::DialogDelegateView {
+  METADATA_HEADER(RequestSystemProxyCredentialsView, views::DialogDelegateView)
+
  public:
-  METADATA_HEADER(RequestSystemProxyCredentialsView);
   RequestSystemProxyCredentialsView(
       const std::string& proxy_server,
       bool show_error_label,
@@ -46,8 +49,8 @@ class RequestSystemProxyCredentialsView final
   // in the format scheme://host:port.
   const std::string& GetProxyServer() const;
 
-  std::u16string GetUsername() const;
-  std::u16string GetPassword() const;
+  std::u16string_view GetUsername() const;
+  std::u16string_view GetPassword() const;
 
   views::Textfield* username_textfield_for_testing() {
     return username_textfield_;
@@ -62,9 +65,9 @@ class RequestSystemProxyCredentialsView final
 
   const std::u16string window_title_;
 
-  views::Textfield* username_textfield_ = nullptr;
-  views::Textfield* password_textfield_ = nullptr;
-  views::Label* error_label_ = nullptr;
+  raw_ptr<views::Textfield> username_textfield_ = nullptr;
+  raw_ptr<views::Textfield> password_textfield_ = nullptr;
+  raw_ptr<views::Label> error_label_ = nullptr;
 
   const std::string proxy_server_;
   const bool show_error_label_;

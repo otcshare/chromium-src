@@ -2,28 +2,40 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './emoji_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_icon_button/cr_icon_button.js';
+import 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
 import './emoji_variants.js';
 
-import {assertInstanceof} from 'chrome://resources/js/assert_ts.js';
-import {PaperTooltipElement} from 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
+import {assertInstanceof} from 'chrome://resources/js/assert.js';
+import type {PaperTooltipElement} from 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
 import {beforeNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {VISUAL_CONTENT_WIDTH} from './constants.js';
 import {getTemplate} from './emoji_group.html.js';
-import {createCustomEvent, EMOJI_BUTTON_CLICK, EMOJI_CLEAR_RECENTS_CLICK, EMOJI_VARIANTS_SHOWN, EmojiClearRecentClickEvent} from './events.js';
-import {CategoryEnum, EmojiVariants} from './types.js';
+import {EmojiImageComponent} from './emoji_image.js';
+import {EmojiPickerApiProxy} from './emoji_picker_api_proxy.js';
+import type {EmojiClearRecentClickEvent, EmojiTextButtonClickEvent} from './events.js';
+import {createCustomEvent, EMOJI_CLEAR_RECENTS_CLICK, EMOJI_IMG_BUTTON_CLICK, EMOJI_TEXT_BUTTON_CLICK, EMOJI_VARIANTS_SHOWN} from './events.js';
+import type {EmojiVariants, PreferenceMapping} from './types.js';
+import {CategoryEnum, Gender, Tone} from './types.js';
 
-// Note - these names are used directly in CSS.
+// Note - grid-layout and flex-layout names are used directly in CSS.
 export enum EmojiGroupLayoutType {
   GRID_LAYOUT = 'grid-layout',
   FLEX_LAYOUT = 'flex-layout',
+  TWO_COLUMN_LAYOUT = 'two-column-layout',
+}
+
+enum SideEnum {
+  LEFT = 'left',
+  RIGHT = 'right',
 }
 
 const DEFAULT_CATEGORY_LAYOUTS = {
   [CategoryEnum.EMOJI]: EmojiGroupLayoutType.GRID_LAYOUT,
   [CategoryEnum.EMOTICON]: EmojiGroupLayoutType.FLEX_LAYOUT,
   [CategoryEnum.SYMBOL]: EmojiGroupLayoutType.GRID_LAYOUT,
-  [CategoryEnum.GIF]: EmojiGroupLayoutType.FLEX_LAYOUT,
+  [CategoryEnum.GIF]: EmojiGroupLayoutType.TWO_COLUMN_LAYOUT,
 };
 
 export interface EmojiGroupComponent {
@@ -45,8 +57,11 @@ export class EmojiGroupComponent extends PolymerElement {
     return {
       data: {type: Array, readonly: true},
       group: {type: String, value: null, readonly: true},
+      globalTone: {type: Number, value: null, readonly: true},
+      globalGender: {type: Number, value: null, readonly: true},
       preferred: {type: Object, value: () => ({})},
       clearable: {type: Boolean, value: false},
+      useGroupedPreference: {type: Boolean, value: false},
       category: {
         type: String,
         value: CategoryEnum.EMOJI,
@@ -60,18 +75,23 @@ export class EmojiGroupComponent extends PolymerElement {
       focusedEmoji: {type: Object, value: null},
       shownEmojiVariantIndex: {type: Number, value: null},
       isLangEnglish: {type: Boolean, value: false},
+      gifSupport: {type: Boolean, value: false},
     };
   }
   data: EmojiVariants[];
   group: string|null;
-  preferred: {[index: string]: string};
+  private globalTone: Tone|null = null;
+  private globalGender: Gender|null = null;
+  preferred: PreferenceMapping;
   clearable: boolean;
+  useGroupedPreference: boolean;
   category: CategoryEnum;
   layoutType: string|null;
   showClearRecents: boolean;
   private focusedEmoji: EmojiVariants|null;
   private shownEmojiVariantIndex: number|null;
   private isLangEnglish: boolean;
+  private gifSupport: boolean;
 
   constructor() {
     super();
@@ -79,6 +99,11 @@ export class EmojiGroupComponent extends PolymerElement {
     // TODO(crbug/1227852): Remove after setting arial label to emoji.
     this.isLangEnglish =
         navigator.languages.some(lang => lang.startsWith('en'));
+
+    // Some methods will be passed down to child elements and thus we need
+    // `bind(this)`.
+    this.onEmojiClick = this.onEmojiClick.bind(this);
+    this.showTooltip = this.showTooltip.bind(this);
   }
 
   /**
@@ -146,16 +171,34 @@ export class EmojiGroupComponent extends PolymerElement {
       return;
     }
 
-    const text = this.getDisplayEmojiForEmoji(emoji.base.string);
+    // Text-based emoji clicked
+    if (emoji.base.string) {
+      const text = this.getDisplayEmojiForEmoji(emoji.base.string, emoji);
 
-    this.dispatchEvent(createCustomEvent(EMOJI_BUTTON_CLICK, {
-      text: text,
-      isVariant: text !== emoji.base.string,
-      baseEmoji: emoji.base.string,
-      allVariants: emoji.alternates,
-      name: emoji.base.name,
-      category: this.category,
-    }));
+      this.dispatchEvent(createCustomEvent(EMOJI_TEXT_BUTTON_CLICK, {
+        name: emoji.base.name,
+        category: this.category,
+        text,
+        baseEmoji: emoji.base.string,
+        isVariant: text !== emoji.base.string,
+        groupedTone: false,
+        groupedGender: false,
+        alternates: emoji.alternates ?? [],
+      }));
+    } else {
+      if (emoji.base.visualContent) {
+        // Visual-based emoji clicked
+        this.dispatchEvent(createCustomEvent(EMOJI_IMG_BUTTON_CLICK, {
+          name: emoji.base.name,
+          visualContent: emoji.base.visualContent,
+          category: this.category,
+        }));
+      }
+    }
+  }
+
+  private onHelpClick(): void {
+    EmojiPickerApiProxy.getInstance().openHelpCentreArticle();
   }
 
   /**
@@ -194,8 +237,9 @@ export class EmojiGroupComponent extends PolymerElement {
     // Polymer.
     beforeNextRender(this, () => {
       const variants = this.shownEmojiVariantIndex ?
-          this.shadowRoot!.getElementById(`emoji-variant-${dataIndex}`) :
-          null;
+          this.shadowRoot!.getElementById(`emoji-variant-${dataIndex}`) ??
+              undefined :
+          undefined;
 
       this.dispatchEvent(createCustomEvent(EMOJI_VARIANTS_SHOWN, {
         owner: this,
@@ -206,11 +250,14 @@ export class EmojiGroupComponent extends PolymerElement {
   }
 
   /**
-   * Returns HTML class attribute of an emoji button.
+   * Returns whether the emoji has variants or not.
+   * Does not use `this`.
    */
-  private getEmojiButtonClassName(emoji: EmojiVariants): string {
-    return emoji.alternates && emoji.alternates.length > 0 ? 'has-variants' :
-                                                             '';
+  private hasVariants(emoji: EmojiVariants): boolean {
+    // TODO: b/322909764 - The type of `EmojiVariants.alternates` cannot be
+    // null/undefined, so the `!== undefined` check should be redundant. Either
+    // add undefined to the type, or remove the below check.
+    return emoji.alternates !== undefined && emoji.alternates.length > 0;
   }
 
   /**
@@ -235,21 +282,41 @@ export class EmojiGroupComponent extends PolymerElement {
   private getEmojiAriaLabel(emoji: EmojiVariants): string {
     // TODO(crbug/1227852): Just use emoji as the tooltip once ChromeVox can
     // announce them properly.
-    const emojiLabel = this.isLangEnglish ?
-        emoji.base.name :
-        this.getDisplayEmojiForEmoji(emoji.base.string);
-    if (emoji.alternates && emoji.alternates.length > 0) {
-      return emojiLabel + ' with variants.';
-    } else {
-      return emojiLabel;
+    if (emoji.base.string) {
+      const emojiLabel = this.isLangEnglish ?
+          emoji.base.name :
+          (this.getDisplayEmojiForEmoji(emoji.base.string, emoji));
+      if (emoji.alternates && emoji.alternates.length > 0) {
+        return emojiLabel + ' with variants.';
+      } else {
+        return emojiLabel ?? '';
+      }
     }
+    return '';
   }
 
   /**
    * Returns the character to be shown for the emoji.
    */
-  private getDisplayEmojiForEmoji(baseEmoji: string): string {
-    return this.preferred[baseEmoji] || baseEmoji;
+  private getDisplayEmojiForEmoji(text: string, emoji: EmojiVariants): string {
+    const {alternates, groupedTone, groupedGender} = emoji;
+    const individualPreference = this.preferred[text];
+
+    if (!this.useGroupedPreference || !(groupedTone || groupedGender)) {
+      return individualPreference ?? text;
+    }
+
+    const preference =
+        alternates.find(variant => variant.string === individualPreference);
+    const tone = this.globalTone ?? preference?.tone ?? Tone.DEFAULT;
+    const gender = this.globalGender ?? preference?.gender ?? Gender.DEFAULT;
+
+    const variant = alternates.find(variant => {
+      return (variant.tone ?? tone) === tone &&
+          (variant.gender ?? gender) === gender;
+    });
+
+    return variant?.string ?? text;
   }
 
   /**
@@ -277,7 +344,8 @@ export class EmojiGroupComponent extends PolymerElement {
       |undefined {
     const dataIndex = target?.getAttribute('data-index');
 
-    if (target?.nodeName !== 'BUTTON' || !dataIndex) {
+    if (!(target?.nodeName === 'BUTTON' || target?.nodeName === 'IMG') ||
+        !dataIndex) {
       return undefined;
     }
     return this.data[Number(dataIndex)];
@@ -288,7 +356,77 @@ export class EmojiGroupComponent extends PolymerElement {
    */
   firstEmojiButton(): HTMLElement|null {
     // !. is safe for shadowRoot as it always exists
-    return this.shadowRoot!.querySelector<HTMLElement>('.emoji-button');
+    const elem: HTMLElement|null = this.shadowRoot!.querySelector<HTMLElement>('.emoji-button, emoji-image');
+    if (elem instanceof EmojiImageComponent) {
+      return elem.shadowRoot!.querySelector('img');
+    }
+    return elem;
+  }
+
+  /**
+   * Returns whether the given element group is visual or not.
+   */
+  isVisual(category: CategoryEnum): boolean {
+    return category === CategoryEnum.GIF;
+  }
+
+  /**
+   * Returns whether any emoji in the array has variants or not.
+   */
+  private hasAnyVariants(data: EmojiVariants[]): boolean {
+    // `hasVariants` does not use `this`, so there is no need to bind `this`
+    // here.
+    return data.some(this.hasVariants);
+  }
+
+  /**
+   * Filters visual content to be displayed in the given column based on '
+   * the height of the given column.
+   */
+  filterColumn(
+      data: EmojiVariants[], columnSide: SideEnum,
+      _dataLength: number): EmojiVariants[] {
+    let leftColHeight = 0;
+    let rightColHeight = 0;
+
+    const colData = data.filter((item) => {
+      if (item.base.visualContent) {
+        const contentHeight = item.base.visualContent.previewSize.height *
+            VISUAL_CONTENT_WIDTH / item.base.visualContent.previewSize.width;
+
+        // Filter visual content to be displayed in the given column if it's
+        // currently the shortest
+        if (leftColHeight <= rightColHeight) {
+          leftColHeight += contentHeight;
+          return columnSide === SideEnum.LEFT;
+        } else {
+          rightColHeight += contentHeight;
+          return columnSide === SideEnum.RIGHT;
+        }
+      }
+
+      return false;
+    });
+
+    return colData;
+  }
+
+  /**
+   * Returns the index of a visual based EmojiVariant.
+   */
+  getIndex(item: EmojiVariants): number {
+    return this.data.indexOf(item);
+  }
+
+  formatCategory(category: CategoryEnum): string {
+    return category === CategoryEnum.GIF ? 'GIF' : category;
+  }
+
+  getMoreOptionsAriaLabel(gifSupport: boolean): string|undefined {
+    // TODO(b/281609806): Remove this condition once GIF support is fully
+    // launched; make sure related node finder in tast test is updated before
+    // removing this condition.
+    return gifSupport ? 'More options' : undefined;
   }
 }
 
@@ -298,6 +436,7 @@ declare global {
   }
   interface HTMLElementEventMap {
     [EMOJI_CLEAR_RECENTS_CLICK]: EmojiClearRecentClickEvent;
+    [EMOJI_TEXT_BUTTON_CLICK]: EmojiTextButtonClickEvent;
   }
 }
 

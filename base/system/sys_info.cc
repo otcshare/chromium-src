@@ -7,27 +7,25 @@
 #include <algorithm>
 
 #include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
+#include "base/features.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info_internal.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/sys_utils.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace base {
 namespace {
-#if BUILDFLAG(IS_IOS)
-// For M99, 45% of devices have 2GB of RAM, and 55% have more.
-constexpr uint64_t kLowMemoryDeviceThresholdMB = 1024;
-#else
-// Updated Desktop default threshold to match the Android 2021 definition.
-constexpr uint64_t kLowMemoryDeviceThresholdMB = 2048;
-#endif
+std::optional<ByteSize> g_amount_of_physical_memory_for_testing;
 }  // namespace
 
 // static
@@ -37,32 +35,39 @@ int SysInfo::NumberOfEfficientProcessors() {
 }
 
 // static
-uint64_t SysInfo::AmountOfPhysicalMemory() {
+ByteSize SysInfo::AmountOfTotalPhysicalMemory() {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableLowEndDeviceMode)) {
     // Keep using 512MB as the simulated RAM amount for when users or tests have
     // manually enabled low-end device mode. Note this value is different from
     // the threshold used for low end devices.
-    constexpr uint64_t kSimulatedMemoryForEnableLowEndDeviceMode =
-        512 * 1024 * 1024;
+    constexpr ByteSize kSimulatedMemoryForEnableLowEndDeviceMode = MiBU(512);
     return std::min(kSimulatedMemoryForEnableLowEndDeviceMode,
-                    AmountOfPhysicalMemoryImpl());
+                    AmountOfTotalPhysicalMemoryImpl());
   }
 
-  return AmountOfPhysicalMemoryImpl();
+  if (g_amount_of_physical_memory_for_testing) {
+    return *g_amount_of_physical_memory_for_testing;
+  }
+
+  return AmountOfTotalPhysicalMemoryImpl();
 }
 
 // static
-uint64_t SysInfo::AmountOfAvailablePhysicalMemory() {
+ByteSize SysInfo::AmountOfAvailablePhysicalMemory() {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableLowEndDeviceMode)) {
     // Estimate the available memory by subtracting our memory used estimate
     // from the fake |kLowMemoryDeviceThresholdMB| limit.
-    uint64_t memory_used =
-        AmountOfPhysicalMemoryImpl() - AmountOfAvailablePhysicalMemoryImpl();
-    uint64_t memory_limit = kLowMemoryDeviceThresholdMB * 1024 * 1024;
-    // std::min ensures no underflow, as |memory_used| can be > |memory_limit|.
-    return memory_limit - std::min(memory_used, memory_limit);
+    const ByteSize memory_used =
+        ByteSize::FromByteSizeDelta(AmountOfTotalPhysicalMemoryImpl() -
+                                    AmountOfAvailablePhysicalMemoryImpl());
+    const ByteSize memory_limit = MiBU(
+        checked_cast<unsigned>(features::kLowMemoryDeviceThresholdMB.Get()));
+    // |memory_used| can be > |memory_limit|.
+    const ByteSizeDelta memory_available = memory_limit - memory_used;
+    return memory_available.is_positive() ? memory_available.AsByteSize()
+                                          : ByteSize(0);
   }
 
   return AmountOfAvailablePhysicalMemoryImpl();
@@ -77,19 +82,143 @@ bool SysInfo::IsLowEndDevice() {
   return IsLowEndDeviceImpl();
 }
 
-#if !BUILDFLAG(IS_ANDROID)
-// The Android equivalent of this lives in `detectLowEndDevice()` at:
-// base/android/java/src/org/chromium/base/SysUtils.java
-bool DetectLowEndDevice() {
-  CommandLine* command_line = CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kEnableLowEndDeviceMode))
-    return true;
-  if (command_line->HasSwitch(switches::kDisableLowEndDeviceMode))
-    return false;
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 
-  int ram_size_mb = SysInfo::AmountOfPhysicalMemoryMB();
-  return ram_size_mb > 0 &&
-         static_cast<uint64_t>(ram_size_mb) <= kLowMemoryDeviceThresholdMB;
+namespace {
+
+enum class BucketizedSize {
+  k2GbOrLess,
+  k3Gb,
+  k4Gb,
+  k6Gb,
+  k8GbOrHigher,
+};
+
+BucketizedSize GetSystemRamBucketizedSize() {
+  const ByteSize physical_memory = SysInfo::AmountOfTotalPhysicalMemory();
+
+  // Because of Android carveouts, AmountOfTotalPhysicalMemory() returns smaller
+  // than the actual memory size, So we will use a small lowerbound than "X"GB
+  // to discriminate real "X"GB devices from lower memory ones.
+  // Addendum: This logic should also work for ChromeOS.
+
+  constexpr ByteSize kUpperBound2GB = GiBU(2);  // inclusive
+  if (physical_memory <= kUpperBound2GB) {
+    return BucketizedSize::k2GbOrLess;
+  }
+
+  constexpr ByteSize kLowerBound3GB = kUpperBound2GB;  // exclusive
+  constexpr ByteSize kUpperBound3GB = GiBU(3.2);       // inclusive
+  if (kLowerBound3GB < physical_memory && physical_memory <= kUpperBound3GB) {
+    return BucketizedSize::k3Gb;
+  }
+
+  constexpr ByteSize kLowerBound4GB = kUpperBound3GB;  // exclusive
+  constexpr ByteSize kUpperBound4GB = GiBU(4);         // inclusive
+  if (kLowerBound4GB < physical_memory && physical_memory <= kUpperBound4GB) {
+    return BucketizedSize::k4Gb;
+  }
+
+  constexpr ByteSize kLowerBound6GB = kUpperBound4GB;  // exclusive
+  constexpr ByteSize kUpperBound6GB =
+      ByteSize::FromByteSizeDelta(GiBU(6.5) - MiBU(1));  // inclusive
+  if (kLowerBound6GB < physical_memory && physical_memory <= kUpperBound6GB) {
+    return BucketizedSize::k6Gb;
+  }
+
+  return BucketizedSize::k8GbOrHigher;
+}
+
+BucketizedSize GetCachedSystemRamBucketizedSize() {
+  static BucketizedSize s_size = GetSystemRamBucketizedSize();
+  return s_size;
+}
+
+bool IsPartialLowEndModeOnMidRangeDevicesEnabled() {
+  // TODO(crbug.com/40264947): make the feature not enable on 32-bit devices
+  // before launching or going to high Stable %.
+  return SysInfo::Is4GbOr6GbDevice() &&
+         base::FeatureList::IsEnabled(
+             features::kPartialLowEndModeOnMidRangeDevices);
+}
+
+bool IsPartialLowEndModeOn3GbDevicesEnabled() {
+  return SysInfo::Is3GbDevice() &&
+         base::FeatureList::IsEnabled(features::kPartialLowEndModeOn3GbDevices);
+}
+
+}  // namespace
+
+bool SysInfo::Is3GbDevice() {
+  return GetCachedSystemRamBucketizedSize() == BucketizedSize::k3Gb;
+}
+
+bool SysInfo::Is4GbDevice() {
+  return GetCachedSystemRamBucketizedSize() == BucketizedSize::k4Gb;
+}
+
+bool SysInfo::Is4GbOr6GbDevice() {
+  return GetCachedSystemRamBucketizedSize() == BucketizedSize::k4Gb ||
+         GetCachedSystemRamBucketizedSize() == BucketizedSize::k6Gb;
+}
+
+bool SysInfo::Is6GbDevice() {
+  return GetCachedSystemRamBucketizedSize() == BucketizedSize::k6Gb;
+}
+
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+
+// TODO(crbug.com/40264947): This method is for chromium native code.
+// We need to update the java-side code, i.e.
+// base/android/java/src/org/chromium/base/SysUtils.java,
+// and to make the selected components in java to see this feature.
+bool SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled() {
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+  return base::SysInfo::IsLowEndDevice() ||
+         IsPartialLowEndModeOnMidRangeDevicesEnabled() ||
+         IsPartialLowEndModeOn3GbDevicesEnabled();
+#else
+  return base::SysInfo::IsLowEndDevice();
+#endif
+}
+
+bool SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled(
+    const FeatureParam<bool>& param_for_exclusion) {
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+  return base::SysInfo::IsLowEndDevice() ||
+         ((IsPartialLowEndModeOnMidRangeDevicesEnabled() ||
+           IsPartialLowEndModeOn3GbDevicesEnabled()) &&
+          !param_for_exclusion.Get());
+#else
+  return base::SysInfo::IsLowEndDevice();
+#endif
+}
+
+bool DetectLowEndDevice() {
+  // Keep in sync with the Android implementation of this function.
+  // LINT.IfChange
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableLowEndDeviceMode)) {
+    return true;
+  }
+  if (command_line->HasSwitch(switches::kDisableLowEndDeviceMode)) {
+    return false;
+  }
+
+  ByteSize ram_size = SysInfo::AmountOfTotalPhysicalMemory();
+#if BUILDFLAG(IS_ANDROID)
+  if (FeatureList::GetInstance() == nullptr) {
+    ByteSize threshold = MiBU(checked_cast<unsigned>(
+        base::android::GetCachedLowMemoryDeviceThresholdMb()));
+    if (threshold > ByteSize(0)) {
+      return ram_size > ByteSize(0) && ram_size <= threshold;
+    }
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+  return ram_size > ByteSize(0) &&
+         ram_size <= MiBU(checked_cast<unsigned>(
+                         features::kLowMemoryDeviceThresholdMB.Get()));
+  // LINT.ThenChange(//base/android/java/src/org/chromium/base/SysUtils.java)
 }
 
 // static
@@ -97,11 +226,16 @@ bool SysInfo::IsLowEndDeviceImpl() {
   static internal::LazySysInfoValue<bool, DetectLowEndDevice> instance;
   return instance.value();
 }
-#endif
 
 #if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_WIN) && \
     !BUILDFLAG(IS_CHROMEOS)
 std::string SysInfo::HardwareModelName() {
+  return std::string();
+}
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+std::string SysInfo::SocManufacturer() {
   return std::string();
 }
 #endif
@@ -137,9 +271,24 @@ std::string SysInfo::ProcessCPUArchitecture() {
   return "ARM";
 #elif defined(ARCH_CPU_ARM64)
   return "ARM_64";
+#elif defined(ARCH_CPU_RISCV64)
+  return "RISCV_64";
 #else
   return std::string();
 #endif
+}
+
+// static
+std::optional<ByteSize> SysInfo::SetAmountOfPhysicalMemoryForTesting(
+    ByteSize amount_of_memory) {
+  std::optional<ByteSize> current = g_amount_of_physical_memory_for_testing;
+  g_amount_of_physical_memory_for_testing.emplace(amount_of_memory);
+  return current;
+}
+
+// static
+void SysInfo::ClearAmountOfPhysicalMemoryForTesting() {
+  g_amount_of_physical_memory_for_testing.reset();
 }
 
 }  // namespace base

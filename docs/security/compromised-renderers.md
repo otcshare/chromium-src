@@ -61,8 +61,6 @@ from each other and from other sites.
 **Known gaps in protection**:
 - No form of Site Isolation is active in Android WebView.
   See also https://crbug.com/769449.
-- No form of Site Isolation is active in content hosted within
-  `<webview>` HTML tags.  See also https://crbug.com/614463.
 - Frames with `<iframe sandbox>` attribute are not isolated
   from their non-opaque precursor origin.
   See also https://crbug.com/510122.
@@ -87,7 +85,7 @@ Protection techniques:
   `network::mojom::URLLoaderFactory` objects that handle HTTP requests.
   This lets the browser process carefully control security-sensitive
   `network::mojom::URLLoaderFactoryParams` of such factories (such as
-  `request_initiator_origin_lock`, `is_corb_enabled`, `disable_web_security` or
+  `request_initiator_origin_lock`, `is_orb_enabled`, `disable_web_security` or
   `isolation_info`).
 
 **Known gaps in protection**:
@@ -236,9 +234,6 @@ Compromised renderers shouldn't be able to poison the JavaScript code cache
 used by scripts executed in cross-site execution contexts.
 
 Protection techniques:
-- Validating origins sent in IPCs from a renderer process by using
-  `CanAccessDataForOrigin` in
-  `CodeCacheHostImpl::DidGenerateCacheableMetadataInCacheStorage`.
 - Using trustworthy, browser-side origin lock while writing to and fetching from
   the code cache by using `ChildProcessSecurityPolicyImpl::GetOriginLock` in
   `GetSecondaryKeyForCodeCache` in

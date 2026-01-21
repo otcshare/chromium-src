@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-{%- set header_guard = "%s_SHARED_INTERNAL_H_"|format(
-        module.path|upper|replace("/","_")|replace(".","_")|
-            replace("-", "_")) %}
+{%- from 'cpp_macros.tmpl' import
+  include_guard, namespace_begin, namespace_end %}
+
+{%- set header_guard = include_guard("SHARED_INTERNAL", module.path) %}
 
 #ifndef {{header_guard}}
 #define {{header_guard}}
@@ -13,7 +14,18 @@
 #include "mojo/public/cpp/bindings/lib/array_internal.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
 #include "mojo/public/cpp/bindings/lib/map_data_internal.h"
-#include "mojo/public/cpp/bindings/lib/buffer.h"
+{%- endif %}
+
+{%- if all_enums|length %}
+#include "mojo/public/cpp/bindings/lib/validation_errors.h"
+{%- endif %}
+
+{%- if structs|length %}
+#include "mojo/public/cpp/bindings/lib/message_fragment.h"
+{%- endif %}
+
+{%- if unions|length %}
+#include "mojo/public/c/system/macros.h"
 {%- endif %}
 
 {%- for import in imports %}
@@ -41,9 +53,7 @@ class ValidationContext;
 }
 }
 
-{%- for namespace in namespaces_as_array %}
-namespace {{namespace}} {
-{%- endfor %}
+{{namespace_begin(namespaces_as_array)}}
 namespace internal {
 
 {#--- Internal forward declarations #}
@@ -89,8 +99,6 @@ using {{enum|get_name_for_kind(flatten_nested_kind=True)}}_Data =
 #pragma pack(pop)
 
 }  // namespace internal
-{%- for namespace in namespaces_as_array|reverse %}
-}  // namespace {{namespace}}
-{%- endfor %}
+{{namespace_end(namespaces_as_array)}}
 
 #endif  // {{header_guard}}

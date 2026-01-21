@@ -17,7 +17,6 @@
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/client/cmd_buffer_helper.h"
@@ -38,7 +37,7 @@ MemoryChunk::MemoryChunk(int32_t shm_id,
                          CommandBufferHelper* helper)
     : shm_id_(shm_id),
       shm_(shm),
-      allocator_(shm->size(), helper, shm->memory()) {}
+      allocator_(shm->size(), helper, shm->as_byte_span()) {}
 
 MemoryChunk::~MemoryChunk() = default;
 
@@ -60,10 +59,11 @@ MappedMemoryManager::~MappedMemoryManager() {
   }
 }
 
-void* MappedMemoryManager::Alloc(unsigned int size,
-                                 int32_t* shm_id,
-                                 unsigned int* shm_offset,
-                                 TransferBufferAllocationOption option) {
+base::span<uint8_t> MappedMemoryManager::Alloc(
+    unsigned int size,
+    int32_t* shm_id,
+    unsigned int* shm_offset,
+    TransferBufferAllocationOption option) {
   DCHECK(shm_id);
   DCHECK(shm_offset);
   if (size <= allocated_memory_) {
@@ -73,11 +73,11 @@ void* MappedMemoryManager::Alloc(unsigned int size,
       chunk->FreeUnused();
       total_bytes_in_use += chunk->bytes_in_use();
       if (chunk->GetLargestFreeSizeWithoutWaiting() >= size) {
-        void* mem = chunk->Alloc(size);
-        DCHECK(mem);
+        auto span = chunk->Alloc(size);
+        DCHECK(!span.empty());
         *shm_id = chunk->shm_id();
-        *shm_offset = chunk->GetOffset(mem);
-        return mem;
+        *shm_offset = chunk->GetOffset(span.data());
+        return span;
       }
     }
 
@@ -89,11 +89,11 @@ void* MappedMemoryManager::Alloc(unsigned int size,
       TRACE_EVENT0("gpu", "MappedMemoryManager::Alloc::wait");
       for (auto& chunk : chunks_) {
         if (chunk->GetLargestFreeSizeWithWaiting() >= size) {
-          void* mem = chunk->Alloc(size);
-          DCHECK(mem);
+          auto span = chunk->Alloc(size);
+          DCHECK(!span.empty());
           *shm_id = chunk->shm_id();
-          *shm_offset = chunk->GetOffset(mem);
-          return mem;
+          *shm_offset = chunk->GetOffset(span.data());
+          return span;
         }
       }
     }
@@ -101,7 +101,7 @@ void* MappedMemoryManager::Alloc(unsigned int size,
 
   if (max_allocated_bytes_ != SharedMemoryLimits::kNoLimit &&
       (allocated_memory_ + size) > max_allocated_bytes_) {
-    return nullptr;
+    return {};
   }
 
   // Make a new chunk to satisfy the request.
@@ -109,23 +109,25 @@ void* MappedMemoryManager::Alloc(unsigned int size,
   base::CheckedNumeric<uint32_t> chunk_size = size;
   chunk_size = (size + chunk_size_multiple_ - 1) & ~(chunk_size_multiple_ - 1);
   uint32_t safe_chunk_size = 0;
-  if (!chunk_size.AssignIfValid(&safe_chunk_size))
-    return nullptr;
+  if (!chunk_size.AssignIfValid(&safe_chunk_size)) {
+    return {};
+  }
 
   int32_t id = -1;
-  scoped_refptr<gpu::Buffer> shm =
-      cmd_buf->CreateTransferBuffer(safe_chunk_size, &id, option);
-  if (id  < 0)
-    return nullptr;
+  scoped_refptr<gpu::Buffer> shm = cmd_buf->CreateTransferBuffer(
+      safe_chunk_size, &id, /* alignment */ 0, option);
+  if (id < 0) {
+    return {};
+  }
   DCHECK(shm.get());
   MemoryChunk* mc = new MemoryChunk(id, shm, helper_);
   allocated_memory_ += mc->GetSize();
   chunks_.push_back(base::WrapUnique(mc));
-  void* mem = mc->Alloc(size);
-  DCHECK(mem);
+  auto span = mc->Alloc(size);
+  DCHECK(!span.empty());
   *shm_id = mc->shm_id();
-  *shm_offset = mc->GetOffset(mem);
-  return mem;
+  *shm_offset = mc->GetOffset(span.data());
+  return span;
 }
 
 void MappedMemoryManager::Free(void* pointer) {
@@ -172,9 +174,9 @@ bool MappedMemoryManager::OnMemoryDump(
   using base::trace_event::MemoryAllocatorDump;
   using base::trace_event::MemoryDumpLevelOfDetail;
 
-  if (args.level_of_detail == MemoryDumpLevelOfDetail::BACKGROUND) {
+  if (args.level_of_detail == MemoryDumpLevelOfDetail::kBackground) {
     std::string dump_name =
-        base::StringPrintf("gpu/mapped_memory/manager_%d", tracing_id_);
+        base::StringPrintf("gpu/mapped_memory/manager_0x%x", tracing_id_);
     MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
     dump->AddScalar(MemoryAllocatorDump::kNameSize,
                     MemoryAllocatorDump::kUnitsBytes, allocated_memory_);
@@ -187,8 +189,9 @@ bool MappedMemoryManager::OnMemoryDump(
       base::trace_event::MemoryDumpManager::GetInstance()
           ->GetTracingProcessId();
   for (const auto& chunk : chunks_) {
-    std::string dump_name = base::StringPrintf(
-        "gpu/mapped_memory/manager_%d/chunk_%d", tracing_id_, chunk->shm_id());
+    std::string dump_name =
+        base::StringPrintf("gpu/mapped_memory/manager_0x%x/chunk_0x%x",
+                           tracing_id_, chunk->shm_id());
     MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
 
     dump->AddScalar(MemoryAllocatorDump::kNameSize,
@@ -223,15 +226,16 @@ FencedAllocator::State MappedMemoryManager::GetPointerStatusForTest(
 }
 
 void ScopedMappedMemoryPtr::Release() {
-  if (buffer_) {
-    mapped_memory_manager_->FreePendingToken(buffer_, helper_->InsertToken());
-    buffer_ = nullptr;
-    size_ = 0;
+  if (valid()) {
+    mapped_memory_manager_->FreePendingToken(buffer_.data(),
+                                             helper_->InsertToken());
+    buffer_ = {};
     shm_id_ = 0;
     shm_offset_ = 0;
 
-    if (flush_after_release_)
+    if (flush_after_release_) {
       helper_->CommandBufferHelper::Flush();
+    }
   }
 }
 
@@ -240,7 +244,6 @@ void ScopedMappedMemoryPtr::Reset(uint32_t new_size) {
 
   if (new_size) {
     buffer_ = mapped_memory_manager_->Alloc(new_size, &shm_id_, &shm_offset_);
-    size_ = buffer_ ? new_size : 0;
   }
 }
 

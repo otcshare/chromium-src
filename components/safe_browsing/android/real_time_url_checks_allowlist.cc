@@ -4,14 +4,13 @@
 
 #include "components/safe_browsing/android/real_time_url_checks_allowlist.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/grit/components_resources.h"
-#include "components/safe_browsing/android/proto/realtimeallowlist.pb.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/proto/realtimeallowlist.pb.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace safe_browsing {
@@ -41,8 +40,6 @@ struct RealTimeUrlChecksAllowlistSingletonTrait
     : public base::DefaultSingletonTraits<RealTimeUrlChecksAllowlist> {
   static RealTimeUrlChecksAllowlist* New() {
     RealTimeUrlChecksAllowlist* instance = new RealTimeUrlChecksAllowlist();
-    DCHECK(
-        base::FeatureList::IsEnabled(kComponentUpdaterAndroidProtegoAllowlist));
     instance->PopulateFromResourceBundle();
     return instance;
   }
@@ -157,7 +154,7 @@ RealTimeUrlChecksAllowlist::IsInAllowlistInternal(const GURL& url) {
     return IsInAllowlistResult::kAllowlistUnavailable;
   }
 
-  std::vector<FullHash> full_hashes;
+  std::vector<FullHashStr> full_hashes;
   V4ProtocolManagerUtil::UrlToFullHashes(url, &full_hashes);
   for (auto fh : full_hashes) {
     auto truncated_hash = fh.substr(0, kHashSizeInBytes);

@@ -10,11 +10,14 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/device_event_log/device_event_log.h"
+#include "services/device/public/cpp/device_features.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <asm-generic/ioctls.h>
@@ -337,7 +340,7 @@ void SerialIoHandlerPosix::AttemptRead() {
     } else {
       bool break_detected = false;
       bool parity_error_detected = false;
-      int new_bytes_read =
+      size_t new_bytes_read =
           CheckReceiveError(pending_read_buffer(), bytes_read, break_detected,
                             parity_error_detected);
 
@@ -464,34 +467,67 @@ mojom::SerialPortControlSignalsPtr SerialIoHandlerPosix::GetControlSignals()
 
 bool SerialIoHandlerPosix::SetControlSignals(
     const mojom::SerialHostControlSignals& signals) {
-  // Collect signals that need to be set or cleared on the port.
-  int set = 0;
-  int clear = 0;
-
-  if (signals.has_dtr) {
-    if (signals.dtr) {
-      set |= TIOCM_DTR;
-    } else {
-      clear |= TIOCM_DTR;
+  if (base::FeatureList::IsEnabled(features::kSerialSplitDtrAndRts)) {
+    // The order these signals are set is defined by
+    // https://wicg.github.io/serial/#dom-serialport-setsignals.
+    if (signals.has_dtr) {
+      const int dtr = TIOCM_DTR;
+      if (signals.dtr) {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIS, &dtr) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to set dataTerminalReady";
+          return false;
+        }
+      } else {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIC, &dtr) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to clear dataTerminalReady";
+          return false;
+        }
+      }
     }
-  }
-
-  if (signals.has_rts) {
-    if (signals.rts) {
-      set |= TIOCM_RTS;
-    } else {
-      clear |= TIOCM_RTS;
+    if (signals.has_rts) {
+      const int rts = TIOCM_RTS;
+      if (signals.rts) {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIS, &rts) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to set requestToSend";
+          return false;
+        }
+      } else {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIC, &rts) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to clear requestToSend";
+          return false;
+        }
+      }
     }
-  }
+  } else {
+    // Collect signals that need to be set or cleared on the port.
+    int set = 0;
+    int clear = 0;
 
-  if (set && ioctl(file().GetPlatformFile(), TIOCMBIS, &set) != 0) {
-    SERIAL_PLOG(DEBUG) << "Failed to set port control signals";
-    return false;
-  }
+    if (signals.has_dtr) {
+      if (signals.dtr) {
+        set |= TIOCM_DTR;
+      } else {
+        clear |= TIOCM_DTR;
+      }
+    }
 
-  if (clear && ioctl(file().GetPlatformFile(), TIOCMBIC, &clear) != 0) {
-    SERIAL_PLOG(DEBUG) << "Failed to clear port control signals";
-    return false;
+    if (signals.has_rts) {
+      if (signals.rts) {
+        set |= TIOCM_RTS;
+      } else {
+        clear |= TIOCM_RTS;
+      }
+    }
+
+    if (set && ioctl(file().GetPlatformFile(), TIOCMBIS, &set) != 0) {
+      SERIAL_PLOG(DEBUG) << "Failed to set port control signals";
+      return false;
+    }
+
+    if (clear && ioctl(file().GetPlatformFile(), TIOCMBIC, &clear) != 0) {
+      SERIAL_PLOG(DEBUG) << "Failed to clear port control signals";
+      return false;
+    }
   }
 
   if (signals.has_brk) {
@@ -571,14 +607,14 @@ mojom::SerialConnectionInfoPtr SerialIoHandlerPosix::GetPortInfo() const {
 //
 // break/parity error sequences are removed from the byte stream
 // '\377' '\377' sequence is replaced with '\377'
-int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
-                                            int bytes_read,
-                                            bool& break_detected,
-                                            bool& parity_error_detected) {
-  int new_bytes_read = num_chars_stashed_;
-  DCHECK_LE(new_bytes_read, 2);
+size_t SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
+                                               size_t bytes_read,
+                                               bool& break_detected,
+                                               bool& parity_error_detected) {
+  size_t new_bytes_read = num_chars_stashed_;
+  DCHECK_LE(new_bytes_read, 2u);
 
-  for (int i = 0; i < bytes_read; ++i) {
+  for (size_t i = 0; i < bytes_read; ++i) {
     uint8_t ch = buffer[i];
     if (new_bytes_read == 0) {
       chars_stashed_[0] = ch;
@@ -595,7 +631,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
         }
         break;
       case ErrorDetectState::MARK_377_SEEN:
-        DCHECK_GE(new_bytes_read, 2);
+        DCHECK_GE(new_bytes_read, 2u);
         if (ch == 0) {
           error_detect_state_ = ErrorDetectState::MARK_0_SEEN;
         } else {
@@ -611,7 +647,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
         }
         break;
       case ErrorDetectState::MARK_0_SEEN:
-        DCHECK_GE(new_bytes_read, 3);
+        DCHECK_GE(new_bytes_read, 3u);
         if (ch == 0) {
           break_detected = true;
           new_bytes_read -= 3;
@@ -643,7 +679,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
       new_bytes_read - buffer.size() == 2) {
     // need to stash the last two characters
     if (new_bytes_read == 2) {
-      memcpy(tmp, chars_stashed_, new_bytes_read);
+      UNSAFE_TODO(memcpy(tmp, chars_stashed_.data(), new_bytes_read));
     } else {
       if (new_bytes_read == 3) {
         tmp[0] = chars_stashed_[1];
@@ -667,10 +703,11 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
   new_bytes_read -= num_chars_stashed_;
   if (new_bytes_read > 2) {
     // right shift two bytes to store bytes from chars_stashed_[]
-    memmove(&buffer[2], &buffer[0], new_bytes_read - 2);
+    UNSAFE_TODO(memmove(&buffer[2], &buffer[0], new_bytes_read - 2));
   }
-  memcpy(&buffer[0], chars_stashed_, std::min(new_bytes_read, 2));
-  memcpy(chars_stashed_, tmp, num_chars_stashed_);
+  UNSAFE_TODO(memcpy(&buffer[0], chars_stashed_.data(),
+                     std::min<size_t>(new_bytes_read, 2)));
+  UNSAFE_TODO(memcpy(chars_stashed_.data(), tmp, num_chars_stashed_));
   return new_bytes_read;
 }
 

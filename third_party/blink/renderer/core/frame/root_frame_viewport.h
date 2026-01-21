@@ -7,6 +7,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "cc/input/scroll_snap_data.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
@@ -51,17 +52,13 @@ class CORE_EXPORT RootFrameViewport final
 
   void RestoreToAnchor(const ScrollOffset&);
 
-  // Callback whenever the visual viewport changes scroll position or scale.
-  void DidUpdateVisualViewport();
-
   // ScrollableArea Implementation
+  void DidUpdateVisualViewport() override;
+  PhysicalOffset LocalToScrollOriginOffset() const final;
   bool IsRootFrameViewport() const override { return true; }
-  void SetScrollOffset(const ScrollOffset&,
-                       mojom::blink::ScrollType,
-                       mojom::blink::ScrollBehavior,
-                       ScrollCallback on_finish) override;
   PhysicalRect ScrollIntoView(
       const PhysicalRect&,
+      const PhysicalBoxStrut& scroll_margin,
       const mojom::blink::ScrollIntoViewParamsPtr&) override;
   gfx::Rect VisibleContentRect(
       IncludeScrollbarsInRect = kExcludeScrollbars) const override;
@@ -78,7 +75,8 @@ class CORE_EXPORT RootFrameViewport final
   bool IsScrollCornerVisible() const override;
   gfx::Rect ScrollCornerRect() const override;
   void UpdateScrollOffset(const ScrollOffset&,
-                          mojom::blink::ScrollType) override;
+                          mojom::blink::ScrollType,
+                          cc::ScrollSourceType) override;
   gfx::PointF ScrollOffsetToPosition(const ScrollOffset& offset) const override;
   ScrollOffset ScrollPositionToOffset(
       const gfx::PointF& position) const override;
@@ -103,18 +101,18 @@ class CORE_EXPORT RootFrameViewport final
                                  kIgnoreOverlayScrollbarSize) const override;
   ScrollResult UserScroll(ui::ScrollGranularity,
                           const ScrollOffset&,
+                          cc::ScrollSourceType,
                           ScrollableArea::ScrollCallback on_finish) override;
   CompositorElementId GetScrollElementId() const override;
   CompositorElementId GetScrollbarElementId(
       ScrollbarOrientation orientation) override;
   bool ScrollAnimatorEnabled() const override;
   ChromeClient* GetChromeClient() const override;
-  SmoothScrollSequencer* GetSmoothScrollSequencer() const override;
   void ServiceScrollAnimations(double) override;
   void UpdateCompositorScrollAnimations() override;
   void CancelProgrammaticScrollAnimation() override;
   mojom::blink::ScrollBehavior ScrollBehaviorStyle() const override;
-  mojom::blink::ColorScheme UsedColorScheme() const override;
+  mojom::blink::ColorScheme UsedColorSchemeScrollbars() const override;
   void ClearScrollableArea() override;
   LayoutBox* GetLayoutBox() const override;
   gfx::QuadF LocalToVisibleContentQuad(const gfx::QuadF&,
@@ -126,18 +124,34 @@ class CORE_EXPORT RootFrameViewport final
   // RootFrameViewport delegates these scroll-snap methods to its layout
   // viewport.
   const cc::SnapContainerData* GetSnapContainerData() const override;
-  void SetSnapContainerData(absl::optional<cc::SnapContainerData>) override;
+  void SetSnapContainerData(std::optional<cc::SnapContainerData>) override;
   bool SetTargetSnapAreaElementIds(cc::TargetSnapAreaElementIds) override;
   bool SnapContainerDataNeedsUpdate() const override;
   void SetSnapContainerDataNeedsUpdate(bool) override;
-  bool NeedsResnap() const override;
-  void SetNeedsResnap(bool) override;
-  absl::optional<gfx::PointF> GetSnapPositionAndSetTarget(
+  std::optional<cc::SnapPositionData> GetSnapPosition(
+      const cc::SnapSelectionStrategy& strategy) const override;
+  std::optional<gfx::PointF> GetSnapPositionAndSetTarget(
       const cc::SnapSelectionStrategy& strategy) override;
+  void UpdateSnappedTargetsAndEnqueueScrollSnapChange() override;
+  std::optional<cc::TargetSnapAreaElementIds> GetScrollsnapchangingTargetIds()
+      const override;
+  void SetScrollsnapchangeTargetIds(
+      std::optional<cc::TargetSnapAreaElementIds>) override;
+  void SetScrollsnapchangingTargetIds(
+      std::optional<cc::TargetSnapAreaElementIds>) override;
+  const cc::SnapSelectionStrategy* GetImplSnapStrategy() const override;
+  void SetImplSnapStrategy(
+      std::unique_ptr<cc::SnapSelectionStrategy> strategy) override;
+  void EnqueueScrollSnapChangingEventFromImplIfNeeded() override;
+  void UpdateScrollSnapChangingTargetsAndEnqueueScrollSnapChanging(
+      const cc::TargetSnapAreaElementIds& new_target_ids) override;
+  void SetSnappedQueryTargetIds(
+      std::optional<cc::TargetSnapAreaElementIds> new_target_ids) override;
 
   void SetPendingHistoryRestoreScrollOffset(
       const HistoryItem::ViewState& view_state,
-      bool should_restore_scroll) override {
+      bool should_restore_scroll,
+      mojom::blink::ScrollBehavior scroll_behavior) override {
     pending_view_state_ = view_state;
     should_restore_scroll_ = should_restore_scroll;
   }
@@ -148,6 +162,27 @@ class CORE_EXPORT RootFrameViewport final
     return !!pending_view_state_;
   }
 
+  // A sequence of UserScrolls may occur close enough to each other (e.g.
+  // repeated keypresses) to produce a single scroll.
+  // This function returns true if any UserScroll in a sequence of
+  // UserScrolls applies a non-zero scroll delta to the LayoutViewport.
+  bool ScrollAffectsLayoutViewport() {
+    return user_scroll_sequence_affects_layout_viewport_;
+  }
+
+  std::optional<cc::ElementId> GetTargetedSnapAreaId() override;
+  void SetTargetedSnapAreaId(const std::optional<cc::ElementId>&) override;
+
+  void DropCompositorScrollDeltaNextCommit() override;
+
+ protected:
+  // ScrollableArea implementation
+  bool SetScrollOffsetInternal(const ScrollOffset&,
+                               mojom::blink::ScrollType,
+                               cc::ScrollSourceType,
+                               mojom::blink::ScrollBehavior,
+                               bool targeted_scroll) override;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(RootFrameViewportTest, DistributeScrollOrder);
 
@@ -155,12 +190,11 @@ class CORE_EXPORT RootFrameViewport final
 
   ScrollOffset ScrollOffsetFromScrollAnimators() const;
 
-  void DistributeScrollBetweenViewports(
-      const ScrollOffset&,
-      mojom::blink::ScrollType,
-      mojom::blink::ScrollBehavior,
-      ViewportToScrollFirst,
-      ScrollCallback on_finish = ScrollCallback());
+  bool DistributeScrollBetweenViewports(const ScrollOffset&,
+                                        mojom::blink::ScrollType,
+                                        cc::ScrollSourceType,
+                                        mojom::blink::ScrollBehavior,
+                                        ViewportToScrollFirst);
 
   // If either of the layout or visual viewports are scrolled explicitly (i.e.
   // not through this class), their updated offset will not be reflected in this
@@ -176,8 +210,9 @@ class CORE_EXPORT RootFrameViewport final
 
   Member<ScrollableArea> visual_viewport_;
   Member<ScrollableArea> layout_viewport_;
-  absl::optional<HistoryItem::ViewState> pending_view_state_;
+  std::optional<HistoryItem::ViewState> pending_view_state_;
   bool should_restore_scroll_;
+  bool user_scroll_sequence_affects_layout_viewport_ = false;
 };
 
 template <>

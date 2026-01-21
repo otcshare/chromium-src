@@ -8,9 +8,9 @@
 #include <stddef.h>
 
 #include "base/time/time.h"
-#include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/service_worker_context.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "ui/base/page_transition_types.h"
 
@@ -82,8 +82,12 @@ class ServiceWorkerMetrics {
     PUSH_SUBSCRIPTION_CHANGE = 35,
     FETCH_FENCED_FRAME = 36,
     BYPASS_MAIN_RESOURCE = 37,
+    SKIP_EMPTY_FETCH_HANDLER = 38,
+    BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED = 39,
+    WARM_UP = 40,
+    STATIC_ROUTER = 41,
     // Add new events to record here.
-    kMaxValue = BYPASS_MAIN_RESOURCE,
+    kMaxValue = STATIC_ROUTER,
   };
 
   // Not used for UMA.
@@ -111,6 +115,18 @@ class ServiceWorkerMetrics {
     // Add new types here.
     kMaxValue = INACCURATE_CLOCK,
   };
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(SyntheticResponseEligibility)
+  enum class SyntheticResponseEligibility {
+    kEligible = 0,
+    kNotEligibleByReload = 1,
+    kNotEligibleByNoHeaderStored = 2,
+    kMaxValue = kNotEligibleByNoHeaderStored,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:SyntheticResponseEligibility)
 
   // These are prefixed with "local" or "remote" to indicate whether the browser
   // process or renderer process recorded the timing (browser is local).
@@ -157,13 +173,13 @@ class ServiceWorkerMetrics {
   // Records the running status of the worker to receive a task.
   // Usually recorded for the fetch handler.
   static void RecordRunAfterStartWorkerStatus(
-      EmbeddedWorkerStatus running_status,
+      blink::EmbeddedWorkerStatus running_status,
       EventType purpose);
 
   // Records the time taken to successfully start a worker. |is_installed|
   // indicates whether the version has been installed.
   //
-  // TODO(crbug.com/855952): Replace this with RecordStartWorkerTiming().
+  // TODO(crbug.com/40582160): Replace this with RecordStartWorkerTiming().
   static void RecordStartWorkerTime(base::TimeDelta time,
                                     bool is_installed,
                                     StartSituation start_situation,

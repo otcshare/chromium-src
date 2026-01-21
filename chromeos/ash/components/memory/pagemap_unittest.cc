@@ -9,9 +9,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 #include <chrono>
 #include <random>
 
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/memory/page_size.h"
 #include "base/posix/eintr_wrapper.h"
@@ -48,8 +50,8 @@ class PagemapTest : public testing::Test {
         ftruncate(pagemap_.fd_.get(), pages * sizeof(Pagemap::PagemapEntry)),
         -1);
     *start_address = 0x0;
-    *end_address =
-        reinterpret_cast<char*>(*start_address) + base::GetPageSize() * pages;
+    *end_address = UNSAFE_TODO(reinterpret_cast<char*>(*start_address) +
+                               base::GetPageSize() * pages);
   }
 
   void PutEntries(void* address, uint64_t* entries, size_t size) {

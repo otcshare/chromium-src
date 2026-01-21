@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_tree_data.h"
 
 #include <algorithm>
@@ -47,10 +48,9 @@ unsigned int GetFullFrameDepth(content::RenderFrameHost* rfh) {
 
 }  // namespace
 
-FrameTreeData::FrameTreeData(FrameTreeNodeId root_frame_tree_node_id,
-                             int heavy_ad_network_threshold_noise)
+FrameTreeData::FrameTreeData(content::FrameTreeNodeId root_frame_tree_node_id,
+                             base::ByteCount heavy_ad_network_threshold_noise)
     : root_frame_tree_node_id_(root_frame_tree_node_id),
-      frame_size_(gfx::Size()),
       heavy_ad_network_threshold_noise_(heavy_ad_network_threshold_noise) {}
 
 FrameTreeData::~FrameTreeData() = default;
@@ -59,20 +59,13 @@ void FrameTreeData::MaybeUpdateFrameDepth(
     content::RenderFrameHost* render_frame_host) {
   if (!render_frame_host)
     return;
-  // TODO(https://crbug.com/1317527): Current logic may not work with Portals'
-  // activation. Revisit later to make sure that the logic below works.
   DCHECK_GE(GetFullFrameDepth(render_frame_host), root_frame_depth_);
   if (GetFullFrameDepth(render_frame_host) - root_frame_depth_ > frame_depth_)
     frame_depth_ = GetFullFrameDepth(render_frame_host) - root_frame_depth_;
 }
 
-void FrameTreeData::UpdateMemoryUsage(int64_t delta_bytes) {
-  memory_usage_.UpdateUsage(delta_bytes);
-}
-
 bool FrameTreeData::ShouldRecordFrameForMetrics() const {
-  return resource_data().bytes() != 0 || !GetTotalCpuUsage().is_zero() ||
-         memory_usage_.max_bytes_used() > 0;
+  return !resource_data().bytes().is_zero() || !GetTotalCpuUsage().is_zero();
 }
 
 void FrameTreeData::RecordAdFrameLoadUkmEvent(ukm::SourceId source_id) const {
@@ -82,17 +75,23 @@ void FrameTreeData::RecordAdFrameLoadUkmEvent(ukm::SourceId source_id) const {
   auto* ukm_recorder = ukm::UkmRecorder::Get();
   ukm::builders::AdFrameLoad builder(source_id);
   builder
-      .SetLoading_NetworkBytes(
-          ukm::GetExponentialBucketMinForBytes(resource_data().network_bytes()))
+      .SetLoading_NetworkBytes(ukm::GetExponentialBucketMinForBytes(
+          resource_data().network_bytes().InBytes()))
       .SetLoading_CacheBytes2(ukm::GetExponentialBucketMinForBytes(
-          (resource_data().bytes() - resource_data().network_bytes())))
+          (resource_data().bytes() - resource_data().network_bytes())
+              .InBytes()))
       .SetLoading_VideoBytes(ukm::GetExponentialBucketMinForBytes(
-          resource_data().GetAdNetworkBytesForMime(ResourceMimeType::kVideo)))
+          resource_data()
+              .GetAdNetworkBytesForMime(ResourceMimeType::kVideo)
+              .InBytes()))
       .SetLoading_JavascriptBytes(ukm::GetExponentialBucketMinForBytes(
-          resource_data().GetAdNetworkBytesForMime(
-              ResourceMimeType::kJavascript)))
+          resource_data()
+              .GetAdNetworkBytesForMime(ResourceMimeType::kJavascript)
+              .InBytes()))
       .SetLoading_ImageBytes(ukm::GetExponentialBucketMinForBytes(
-          resource_data().GetAdNetworkBytesForMime(ResourceMimeType::kImage)))
+          resource_data()
+              .GetAdNetworkBytesForMime(ResourceMimeType::kImage)
+              .InBytes()))
       .SetLoading_NumResources(num_resources_);
 
   builder.SetCpuTime_Total(GetTotalCpuUsage().InMilliseconds());
@@ -140,12 +139,11 @@ FrameTreeData::GetCreativeOriginStatusWithThrottling() const {
     // We expect the above values to cover all cases.
     default:
       NOTREACHED();
-      return OriginStatusWithThrottling::kUnknownAndUnthrottled;
   }
 }
 
 void FrameTreeData::SetFirstEligibleToPaint(
-    absl::optional<base::TimeDelta> time_stamp) {
+    std::optional<base::TimeDelta> time_stamp) {
   if (time_stamp.has_value()) {
     // If the ad frame tree hasn't already received an earlier paint
     // eligibility stamp, mark it as eligible to paint. Since multiple frames
@@ -158,14 +156,14 @@ void FrameTreeData::SetFirstEligibleToPaint(
     // If a frame in this ad frame tree has already painted, there is no
     // further need to update paint eligibility. But if nothing has
     // painted and a null value is passed into the setter, that means the
-    // frame is now render-throttled and we should reset the paint-eligiblity
+    // frame is now render-throttled and we should reset the paint-eligibility
     // value.
     first_eligible_to_paint_.reset();
   }
 }
 
 bool FrameTreeData::SetEarliestFirstContentfulPaint(
-    absl::optional<base::TimeDelta> time_stamp) {
+    std::optional<base::TimeDelta> time_stamp) {
   if (!time_stamp.has_value() || time_stamp.value().is_zero())
     return false;
 
@@ -175,6 +173,14 @@ bool FrameTreeData::SetEarliestFirstContentfulPaint(
 
   earliest_first_contentful_paint_ = time_stamp;
   return true;
+}
+
+void FrameTreeData::SetEarliestFirstContentfulPaintSinceTopNavStart(
+    base::TimeDelta time_since_top_nav_start) {
+  if (!earliest_fcp_since_top_nav_start_ ||
+      earliest_fcp_since_top_nav_start_ > time_since_top_nav_start) {
+    earliest_fcp_since_top_nav_start_ = time_since_top_nav_start;
+  }
 }
 
 void FrameTreeData::UpdateFrameVisibility() {
@@ -204,9 +210,10 @@ HeavyAdStatus FrameTreeData::ComputeHeavyAdStatus(
 
   if (policy == HeavyAdUnloadPolicy::kNetworkOnly ||
       policy == HeavyAdUnloadPolicy::kAll) {
-    size_t network_threshold =
+    base::ByteCount network_threshold =
         heavy_ad_thresholds::kMaxNetworkBytes +
-        (use_network_threshold_noise ? heavy_ad_network_threshold_noise_ : 0);
+        (use_network_threshold_noise ? heavy_ad_network_threshold_noise_
+                                     : base::ByteCount(0));
 
     // Check if the frame meets the network threshold, possible including noise.
     if (resource_data().network_bytes() >= network_threshold)
@@ -264,7 +271,7 @@ void FrameTreeData::ProcessResourceLoadInFrame(
   resource_data_.ProcessResourceLoad(resource);
 }
 
-void FrameTreeData::AdjustAdBytes(int64_t unaccounted_ad_bytes,
+void FrameTreeData::AdjustAdBytes(base::ByteCount unaccounted_ad_bytes,
                                   ResourceMimeType mime_type) {
   resource_data_.AdjustAdBytes(unaccounted_ad_bytes, mime_type);
 }

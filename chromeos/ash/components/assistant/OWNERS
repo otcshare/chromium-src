@@ -1,4 +1,5 @@
-updowndota@chromium.org
-wutao@chromium.org
-xiaohuic@chromium.org
-yawano@google.com
+# Please use this reviewer queue instead of specifying an individual reviewer
+# unless there is a specific reason for it.
+assistive-code-review@google.com
+
+xiaohuic@chromium.org #{LAST_RESORT_SUGGESTION}

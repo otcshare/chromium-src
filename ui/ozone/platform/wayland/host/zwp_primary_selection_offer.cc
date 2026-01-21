@@ -10,7 +10,6 @@
 #include <algorithm>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 
@@ -19,9 +18,10 @@ namespace ui {
 ZwpPrimarySelectionOffer::ZwpPrimarySelectionOffer(
     zwp_primary_selection_offer_v1* data_offer)
     : data_offer_(data_offer) {
-  static constexpr zwp_primary_selection_offer_v1_listener kListener = {
-      &OnOffer};
-  zwp_primary_selection_offer_v1_add_listener(data_offer, &kListener, this);
+  static constexpr zwp_primary_selection_offer_v1_listener
+      kPrimarySelectionOfferListener = {.offer = &OnOffer};
+  zwp_primary_selection_offer_v1_add_listener(
+      data_offer, &kPrimarySelectionOfferListener, this);
 }
 
 ZwpPrimarySelectionOffer::~ZwpPrimarySelectionOffer() {
@@ -29,8 +29,9 @@ ZwpPrimarySelectionOffer::~ZwpPrimarySelectionOffer() {
 }
 
 base::ScopedFD ZwpPrimarySelectionOffer::Receive(const std::string& mime_type) {
-  if (!base::Contains(mime_types(), mime_type))
+  if (!std::ranges::contains(mime_types(), mime_type)) {
     return base::ScopedFD();
+  }
 
   base::ScopedFD read_fd;
   base::ScopedFD write_fd;
@@ -40,8 +41,9 @@ base::ScopedFD ZwpPrimarySelectionOffer::Receive(const std::string& mime_type) {
   // mimetype, then it is safer to "read" the clipboard data with
   // a mimetype mime_type known to be available.
   std::string effective_mime_type = mime_type;
-  if (mime_type == kMimeTypeText && text_plain_mime_type_inserted())
-    effective_mime_type = kMimeTypeTextUtf8;
+  if (mime_type == kMimeTypePlainText && text_plain_mime_type_inserted()) {
+    effective_mime_type = kMimeTypeUtf8PlainText;
+  }
 
   zwp_primary_selection_offer_v1_receive(
       data_offer_.get(), effective_mime_type.data(), write_fd.get());
@@ -49,9 +51,10 @@ base::ScopedFD ZwpPrimarySelectionOffer::Receive(const std::string& mime_type) {
 }
 
 // static
-void ZwpPrimarySelectionOffer::OnOffer(void* data,
-                                    zwp_primary_selection_offer_v1* data_offer,
-                                    const char* mime_type) {
+void ZwpPrimarySelectionOffer::OnOffer(
+    void* data,
+    zwp_primary_selection_offer_v1* data_offer,
+    const char* mime_type) {
   auto* self = static_cast<ZwpPrimarySelectionOffer*>(data);
   self->AddMimeType(mime_type);
 }

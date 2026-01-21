@@ -132,6 +132,12 @@ TextIteratorBehavior::Builder::SetEmitsPunctuationForReplacedElements(
   return *this;
 }
 
+TextIteratorBehavior::Builder&
+TextIteratorBehavior::Builder::SetIgnoresCSSTextTransforms(bool value) {
+  behavior_.values_.bits.ignores_css_text_transforms = value;
+  return *this;
+}
+
 // -
 TextIteratorBehavior::TextIteratorBehavior(const TextIteratorBehavior& other) =
     default;
@@ -142,10 +148,6 @@ TextIteratorBehavior::TextIteratorBehavior() {
 
 bool TextIteratorBehavior::operator==(const TextIteratorBehavior& other) const {
   return values_.all == other.values_.all;
-}
-
-bool TextIteratorBehavior::operator!=(const TextIteratorBehavior& other) const {
-  return !operator==(other);
 }
 
 // static
@@ -176,6 +178,16 @@ TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior() {
   return TextIteratorBehavior::Builder()
       .SetEmitsObjectReplacementCharacter(true)
       .SetEmitsCharactersBetweenAllVisiblePositions(true)
+      .Build();
+}
+
+// static
+TextIteratorBehavior TextIteratorBehavior::
+    AllVisiblePositionsIncludingShadowRootRangeLengthBehavior() {
+  return TextIteratorBehavior::Builder()
+      .SetEmitsObjectReplacementCharacter(true)
+      .SetEmitsCharactersBetweenAllVisiblePositions(true)
+      .SetEntersOpenShadowRoots(true)
       .Build();
 }
 

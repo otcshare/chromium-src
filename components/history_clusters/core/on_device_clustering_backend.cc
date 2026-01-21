@@ -14,15 +14,17 @@
 #include "base/strings/string_util.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/history/core/browser/history_types.h"
-#include "components/history_clusters/core/category_cluster_finalizer.h"
+#include "components/history_clusters/core/cluster_finalizer.h"
+#include "components/history_clusters/core/cluster_interaction_state_processor.h"
+#include "components/history_clusters/core/cluster_processor.h"
+#include "components/history_clusters/core/cluster_similarity_heuristics_processor.h"
+#include "components/history_clusters/core/clusterer.h"
 #include "components/history_clusters/core/config.h"
-#include "components/history_clusters/core/content_annotations_cluster_processor.h"
 #include "components/history_clusters/core/content_visibility_cluster_finalizer.h"
 #include "components/history_clusters/core/features.h"
-#include "components/history_clusters/core/full_membership_cluster_processor.h"
+#include "components/history_clusters/core/filter_cluster_processor.h"
 #include "components/history_clusters/core/history_clusters_util.h"
 #include "components/history_clusters/core/keyword_cluster_finalizer.h"
 #include "components/history_clusters/core/label_cluster_finalizer.h"
@@ -32,15 +34,15 @@
 #include "components/history_clusters/core/ranking_cluster_finalizer.h"
 #include "components/history_clusters/core/similar_visit_deduper_cluster_finalizer.h"
 #include "components/history_clusters/core/single_visit_cluster_finalizer.h"
-#include "components/optimization_guide/core/batch_entity_metadata_task.h"
-#include "components/optimization_guide/core/entity_metadata_provider.h"
-#include "components/optimization_guide/core/new_optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/optimization_guide_decider.h"
 #include "components/site_engagement/core/site_engagement_score_provider.h"
 #include "components/url_formatter/url_formatter.h"
 
 namespace history_clusters {
 
 namespace {
+
+constexpr int kEngagementScoreCacheSize = 100;
 
 void RecordBatchUpdateProcessingTime(base::TimeDelta time_delta) {
   base::UmaHistogramTimes(
@@ -50,35 +52,23 @@ void RecordBatchUpdateProcessingTime(base::TimeDelta time_delta) {
 }  // namespace
 
 OnDeviceClusteringBackend::OnDeviceClusteringBackend(
-    optimization_guide::EntityMetadataProvider* entity_metadata_provider,
     site_engagement::SiteEngagementScoreProvider* engagement_score_provider,
-    optimization_guide::NewOptimizationGuideDecider* optimization_guide_decider,
-    base::flat_set<std::string> mid_blocklist)
-    : entity_metadata_provider_(entity_metadata_provider),
-      engagement_score_provider_(engagement_score_provider),
-      user_visible_task_traits_(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE}),
+    optimization_guide::OptimizationGuideDecider* optimization_guide_decider)
+    : engagement_score_provider_(engagement_score_provider),
       continue_on_shutdown_user_visible_task_traits_(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}),
       user_visible_priority_background_task_runner_(
           base::ThreadPool::CreateSequencedTaskRunner(
-              GetConfig().use_continue_on_shutdown
-                  ? continue_on_shutdown_user_visible_task_traits_
-                  : user_visible_task_traits_)),
-      best_effort_task_traits_(
-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
+              continue_on_shutdown_user_visible_task_traits_)),
       continue_on_shutdown_best_effort_task_traits_(
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}),
       best_effort_priority_background_task_runner_(
           base::ThreadPool::CreateSequencedTaskRunner(
-              GetConfig().use_continue_on_shutdown
-                  ? continue_on_shutdown_best_effort_task_traits_
-                  : best_effort_task_traits_)),
+              continue_on_shutdown_best_effort_task_traits_)),
       engagement_score_cache_last_refresh_timestamp_(base::TimeTicks::Now()),
-      engagement_score_cache_(GetConfig().engagement_score_cache_size),
-      mid_blocklist_(mid_blocklist) {
+      engagement_score_cache_(kEngagementScoreCacheSize) {
   if (GetConfig().should_check_hosts_to_skip_clustering_for &&
       optimization_guide_decider) {
     optimization_guide_decider_ = optimization_guide_decider;
@@ -94,7 +84,8 @@ OnDeviceClusteringBackend::~OnDeviceClusteringBackend() {
 void OnDeviceClusteringBackend::GetClusters(
     ClusteringRequestSource clustering_request_source,
     ClustersCallback callback,
-    std::vector<history::AnnotatedVisit> visits) {
+    std::vector<history::AnnotatedVisit> visits,
+    bool requires_ui_and_triggerability) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (visits.empty()) {
@@ -102,110 +93,51 @@ void OnDeviceClusteringBackend::GetClusters(
     return;
   }
 
-  // Just start clustering without getting entity metadata if we don't have a
-  // provider to translate the entities.
-  if (!entity_metadata_provider_) {
-    OnBatchEntityMetadataRetrieved(
-        clustering_request_source, /*completed_task=*/nullptr, visits,
-        /*entity_metadata_start=*/absl::nullopt, std::move(callback),
-        /*entity_metadata_map=*/{});
-    return;
-  }
-
-  base::ElapsedThreadTimer entity_id_gathering_timer;
-
-  // Figure out what entity IDs we need to fetch metadata for.
-  base::flat_set<std::string> entity_ids;
-  for (const auto& visit : visits) {
-    for (const auto& entity :
-         visit.content_annotations.model_annotations.entities) {
-      // Remove entities that are on the keyword blocklist.
-      if (mid_blocklist_.find(entity.id) != mid_blocklist_.end()) {
-        continue;
-      }
-      // Only put the entity IDs in if they exceed a certain threshold.
-      if (entity.weight < GetConfig().entity_relevance_threshold) {
-        continue;
-      }
-      entity_ids.insert(entity.id);
-    }
-  }
-
-  base::UmaHistogramTimes(
-      "History.Clusters.Backend.EntityIdGathering.ThreadTime",
-      entity_id_gathering_timer.Elapsed());
-
-  // Don't bother with getting entity metadata if there's nothing to get
-  // metadata for.
-  if (entity_ids.empty()) {
-    OnBatchEntityMetadataRetrieved(
-        clustering_request_source, /*completed_task=*/nullptr,
-        std::move(visits),
-        /*entity_metadata_start=*/absl::nullopt, std::move(callback),
-        /*entity_metadata_map=*/{});
-    return;
-  }
-
-  base::UmaHistogramCounts1000("History.Clusters.Backend.BatchEntityLookupSize",
-                               entity_ids.size());
-
-  // Fetch the metadata for the entity ID present in |visits|.
-  auto batch_entity_metadata_task =
-      std::make_unique<optimization_guide::BatchEntityMetadataTask>(
-          entity_metadata_provider_, entity_ids);
-  auto* batch_entity_metadata_task_ptr = batch_entity_metadata_task.get();
-  in_flight_batch_entity_metadata_tasks_.insert(
-      std::move(batch_entity_metadata_task));
-  batch_entity_metadata_task_ptr->Execute(
-      base::BindOnce(&OnDeviceClusteringBackend::OnBatchEntityMetadataRetrieved,
-                     weak_ptr_factory_.GetWeakPtr(), clustering_request_source,
-                     batch_entity_metadata_task_ptr, std::move(visits),
-                     base::TimeTicks::Now(), std::move(callback)));
+  ProcessVisits(clustering_request_source, std::move(visits),
+                requires_ui_and_triggerability, std::move(callback));
 }
 
-void OnDeviceClusteringBackend::OnBatchEntityMetadataRetrieved(
+void OnDeviceClusteringBackend::GetClustersForUI(
     ClusteringRequestSource clustering_request_source,
-    optimization_guide::BatchEntityMetadataTask* completed_task,
-    std::vector<history::AnnotatedVisit> annotated_visits,
-    absl::optional<base::TimeTicks> entity_metadata_start,
+    QueryClustersFilterParams filter_params,
     ClustersCallback callback,
-    const base::flat_map<std::string, optimization_guide::EntityMetadata>&
-        entity_metadata_map) {
+    std::vector<history::Cluster> clusters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (entity_metadata_start) {
-    base::UmaHistogramTimes(
-        "History.Clusters.Backend.BatchEntityLookupLatency2",
-        base::TimeTicks::Now() - *entity_metadata_start);
+  if (clusters.empty()) {
+    std::move(callback).Run({});
+    return;
   }
 
-  if (base::TimeTicks::Now() >
-      (engagement_score_cache_last_refresh_timestamp_ +
-       GetConfig().engagement_score_cache_refresh_duration)) {
-    engagement_score_cache_.Clear();
-    engagement_score_cache_last_refresh_timestamp_ = base::TimeTicks::Now();
+  DispatchGetClustersForUIToBackgroundThread(
+      clustering_request_source, std::move(filter_params), std::move(callback),
+      std::move(clusters));
+}
+
+void OnDeviceClusteringBackend::GetClusterTriggerability(
+    ClustersCallback callback,
+    std::vector<history::Cluster> clusters) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (clusters.empty()) {
+    std::move(callback).Run({});
+    return;
   }
 
-  ProcessVisits(clustering_request_source, completed_task,
-                std::move(annotated_visits), entity_metadata_start,
-                std::move(callback), entity_metadata_map);
+  DispatchGetClusterTriggerabilityToBackgroundThread(std::move(callback),
+                                                     std::move(clusters));
 }
 
 void OnDeviceClusteringBackend::ProcessVisits(
     ClusteringRequestSource clustering_request_source,
-    optimization_guide::BatchEntityMetadataTask* completed_task,
     std::vector<history::AnnotatedVisit> annotated_visits,
-    absl::optional<base::TimeTicks> entity_metadata_start,
-    ClustersCallback callback,
-    const base::flat_map<std::string, optimization_guide::EntityMetadata>&
-        entity_metadata_map) {
+    bool requires_ui_and_triggerability,
+    ClustersCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   base::ElapsedThreadTimer process_batch_timer;
 
   std::vector<history::ClusterVisit> cluster_visits;
-  base::flat_map<std::string, optimization_guide::EntityMetadata>
-      entity_id_to_metadata_map;
   for (auto& visit : annotated_visits) {
     // Skip visits that should not be clustered.
     if (optimization_guide_decider_) {
@@ -233,37 +165,20 @@ void OnDeviceClusteringBackend::ProcessVisits(
     cluster_visit.url_for_display =
         ComputeURLForDisplay(cluster_visit.normalized_url);
 
-    const std::string& visit_host = cluster_visit.normalized_url.host();
-    if (engagement_score_provider_) {
-      auto it = engagement_score_cache_.Peek(visit_host);
-      if (it != engagement_score_cache_.end()) {
-        cluster_visit.engagement_score = it->second;
-      } else {
-        float score =
-            engagement_score_provider_->GetScore(cluster_visit.normalized_url);
-        engagement_score_cache_.Put(visit_host, score);
-        cluster_visit.engagement_score = score;
-      }
-    }
-
-    // Rewrite the entities for the visit, but only if it is possible that we
-    // had additional metadata for it.
-    if (entity_metadata_provider_) {
-      auto entity_it =
-          visit.content_annotations.model_annotations.entities.begin();
-      while (entity_it !=
-             visit.content_annotations.model_annotations.entities.end()) {
-        auto entity_metadata_it = entity_metadata_map.find(entity_it->id);
-        if (entity_metadata_it == entity_metadata_map.end() ||
-            entity_it->weight < GetConfig().entity_relevance_threshold) {
-          entity_it =
-              visit.content_annotations.model_annotations.entities.erase(
-                  entity_it);
-          continue;
+    // The engagement score is only required for computing clusters for UI and
+    // triggerability.
+    if (requires_ui_and_triggerability) {
+      const std::string& visit_host = cluster_visit.normalized_url.GetHost();
+      if (engagement_score_provider_) {
+        auto it = engagement_score_cache_.Peek(visit_host);
+        if (it != engagement_score_cache_.end()) {
+          cluster_visit.engagement_score = it->second;
+        } else {
+          float score = engagement_score_provider_->GetScore(
+              cluster_visit.normalized_url);
+          engagement_score_cache_.Put(visit_host, score);
+          cluster_visit.engagement_score = score;
         }
-
-        entity_id_to_metadata_map[entity_it->id] = entity_metadata_it->second;
-        entity_it++;
       }
     }
 
@@ -273,27 +188,16 @@ void OnDeviceClusteringBackend::ProcessVisits(
 
   RecordBatchUpdateProcessingTime(process_batch_timer.Elapsed());
   OnAllVisitsFinishedProcessing(
-      clustering_request_source, completed_task, std::move(cluster_visits),
-      std::move(entity_id_to_metadata_map), std::move(callback));
+      clustering_request_source, std::move(cluster_visits),
+      requires_ui_and_triggerability, std::move(callback));
 }
 
 void OnDeviceClusteringBackend::OnAllVisitsFinishedProcessing(
     ClusteringRequestSource clustering_request_source,
-    optimization_guide::BatchEntityMetadataTask* completed_task,
     std::vector<history::ClusterVisit> cluster_visits,
-    base::flat_map<std::string, optimization_guide::EntityMetadata>
-        entity_id_to_metadata_map,
+    bool requires_ui_and_triggerability,
     ClustersCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  // Mark the task as completed, as we are done with it and have moved
-  // everything adequately at this point.
-  if (completed_task) {
-    auto it = in_flight_batch_entity_metadata_tasks_.find(completed_task);
-    if (it != in_flight_batch_entity_metadata_tasks_.end()) {
-      in_flight_batch_entity_metadata_tasks_.erase(it);
-    }
-  }
 
   // Post the actual clustering work onto the thread pool, then reply on the
   // calling sequence. This is to prevent UI jank.
@@ -301,28 +205,60 @@ void OnDeviceClusteringBackend::OnAllVisitsFinishedProcessing(
   base::OnceCallback<std::vector<history::Cluster>()> clustering_callback =
       base::BindOnce(
           &OnDeviceClusteringBackend::ClusterVisitsOnBackgroundThread,
-          engagement_score_provider_ != nullptr, std::move(cluster_visits),
-          base::OwnedRef(std::move(entity_id_to_metadata_map)));
+          clustering_request_source, engagement_score_provider_ != nullptr,
+          std::move(cluster_visits), requires_ui_and_triggerability);
 
-  switch (clustering_request_source) {
-    case ClusteringRequestSource::kJourneysPage:
-      user_visible_priority_background_task_runner_->PostTaskAndReplyWithResult(
-          FROM_HERE, std::move(clustering_callback), std::move(callback));
-      break;
-    case ClusteringRequestSource::kKeywordCacheGeneration:
-      best_effort_priority_background_task_runner_->PostTaskAndReplyWithResult(
-          FROM_HERE, std::move(clustering_callback), std::move(callback));
-      break;
+  if (IsUIRequestSource(clustering_request_source)) {
+    user_visible_priority_background_task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE, std::move(clustering_callback), std::move(callback));
+  } else {
+    best_effort_priority_background_task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE, std::move(clustering_callback), std::move(callback));
   }
+}
+
+void OnDeviceClusteringBackend::DispatchGetClustersForUIToBackgroundThread(
+    ClusteringRequestSource clustering_request_source,
+    QueryClustersFilterParams filter_params,
+    ClustersCallback callback,
+    std::vector<history::Cluster> clusters) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  user_visible_priority_background_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(
+          &OnDeviceClusteringBackend::GetClustersForUIOnBackgroundThread,
+          clustering_request_source, base::OwnedRef(std::move(filter_params)),
+          engagement_score_provider_ != nullptr, std::move(clusters),
+          // Only Journeys has both non-prominent and prominent UI surfaces and
+          // requires searchability.
+          /*calculate_triggerability=*/clustering_request_source ==
+              ClusteringRequestSource::kJourneysPage),
+      std::move(callback));
+}
+
+void OnDeviceClusteringBackend::
+    DispatchGetClusterTriggerabilityToBackgroundThread(
+        ClustersCallback callback,
+        std::vector<history::Cluster> clusters) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  best_effort_priority_background_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&OnDeviceClusteringBackend::
+                         GetClusterTriggerabilityOnBackgroundThread,
+                     engagement_score_provider_ != nullptr, std::move(clusters),
+                     /*from_ui=*/false),
+      std::move(callback));
 }
 
 // static
 std::vector<history::Cluster>
 OnDeviceClusteringBackend::ClusterVisitsOnBackgroundThread(
+    ClusteringRequestSource clustering_request_source,
     bool engagement_score_provider_is_valid,
     std::vector<history::ClusterVisit> visits,
-    base::flat_map<std::string, optimization_guide::EntityMetadata>&
-        entity_id_to_entity_metadata_map) {
+    bool requires_ui_and_triggerability) {
   base::ElapsedThreadTimer compute_clusters_timer;
 
   // 1. Group visits into clusters.
@@ -334,27 +270,30 @@ OnDeviceClusteringBackend::ClusterVisitsOnBackgroundThread(
       "History.Clusters.Backend.ContextClusterer.ThreadTime",
       context_clusterer_timer.Elapsed());
 
-  // 2. Determine how the clusters should be displayed.
-  base::ElapsedThreadTimer compute_clusters_for_ui_timer;
-  clusters = GetClustersForUIOnBackgroundThread(
-      std::move(clusters), entity_id_to_entity_metadata_map);
-  base::UmaHistogramTimes(
-      "History.Clusters.Backend.ComputeClustersForUI.ThreadTime",
-      compute_clusters_for_ui_timer.Elapsed());
-
-  // 3. Determine the triggerability for the clusters.
-  for (auto& cluster : clusters) {
-    base::ElapsedThreadTimer cluster_triggerability_timer;
-    cluster = GetClusterTriggerabilityOnBackgroundThread(
-        engagement_score_provider_is_valid, std::move(cluster),
-        entity_id_to_entity_metadata_map);
+  if (requires_ui_and_triggerability) {
+    // 2. Determine how the clusters should be displayed.
+    base::ElapsedThreadTimer compute_clusters_for_ui_timer;
+    clusters = GetClustersForUIOnBackgroundThread(
+        clustering_request_source, QueryClustersFilterParams(),
+        engagement_score_provider_is_valid, std::move(clusters),
+        /*calculate_triggerability=*/false);
     base::UmaHistogramTimes(
-        "History.Clusters.Backend.ComputeClusterTriggerability.ThreadTime",
-        cluster_triggerability_timer.Elapsed());
-  }
+        "History.Clusters.Backend.ComputeClustersForUI.ThreadTime",
+        compute_clusters_for_ui_timer.Elapsed());
 
-  base::UmaHistogramTimes("History.Clusters.Backend.ComputeClusters.ThreadTime",
-                          compute_clusters_timer.Elapsed());
+    // 3. Determine the triggerability for the clusters.
+    base::ElapsedThreadTimer cluster_triggerability_timer;
+    clusters = GetClusterTriggerabilityOnBackgroundThread(
+        engagement_score_provider_is_valid, std::move(clusters),
+        /*from_ui=*/true);
+    base::UmaHistogramTimes(
+        "History.Clusters.Backend.ComputeClusterTriggerability2.ThreadTime",
+        cluster_triggerability_timer.Elapsed());
+
+    base::UmaHistogramTimes(
+        "History.Clusters.Backend.ComputeClusters.ThreadTime",
+        compute_clusters_timer.Elapsed());
+  }
 
   return clusters;
 }
@@ -362,27 +301,26 @@ OnDeviceClusteringBackend::ClusterVisitsOnBackgroundThread(
 // static
 std::vector<history::Cluster>
 OnDeviceClusteringBackend::GetClustersForUIOnBackgroundThread(
+    ClusteringRequestSource clustering_request_source,
+    QueryClustersFilterParams filter_params,
+    bool engagement_score_provider_is_valid,
     std::vector<history::Cluster> clusters,
-    base::flat_map<std::string, optimization_guide::EntityMetadata>&
-        entity_id_to_entity_metadata_map) {
+    bool calculate_triggerability) {
   // The cluster processors to be run.
   std::vector<std::unique_ptr<ClusterProcessor>> cluster_processors;
   cluster_processors.push_back(
-      std::make_unique<FullMembershipClusterProcessor>());
-  if (GetConfig().content_clustering_enabled) {
-    cluster_processors.push_back(
-        std::make_unique<ContentAnnotationsClusterProcessor>(
-            &entity_id_to_entity_metadata_map));
-  }
+      std::make_unique<ClusterInteractionStateProcessor>(filter_params));
+  cluster_processors.push_back(
+      std::make_unique<ClusterSimilarityHeuristicsProcessor>());
 
   // The cluster finalizers to run that affect the appearance of a cluster on a
   // UI surface.
   std::vector<std::unique_ptr<ClusterFinalizer>> cluster_finalizers;
   cluster_finalizers.push_back(
       std::make_unique<SimilarVisitDeduperClusterFinalizer>());
-  cluster_finalizers.push_back(std::make_unique<RankingClusterFinalizer>());
-  cluster_finalizers.push_back(std::make_unique<LabelClusterFinalizer>(
-      &entity_id_to_entity_metadata_map));
+  cluster_finalizers.push_back(
+      std::make_unique<RankingClusterFinalizer>(clustering_request_source));
+  cluster_finalizers.push_back(std::make_unique<LabelClusterFinalizer>());
 
   // Process clusters.
   for (const auto& processor : cluster_processors) {
@@ -397,22 +335,44 @@ OnDeviceClusteringBackend::GetClustersForUIOnBackgroundThread(
     }
   }
 
-  return clusters;
+  // Apply any filtering after we've decided how to score clusters.
+  std::unique_ptr<FilterClusterProcessor> filterer =
+      std::make_unique<FilterClusterProcessor>(
+          clustering_request_source, filter_params,
+          engagement_score_provider_is_valid);
+  filterer->ProcessClusters(&clusters);
+
+  return calculate_triggerability
+             ? GetClusterTriggerabilityOnBackgroundThread(
+                   engagement_score_provider_is_valid, std::move(clusters),
+                   /*from_ui=*/true)
+             : clusters;
 }
 
 // static
-history::Cluster
+std::vector<history::Cluster>
 OnDeviceClusteringBackend::GetClusterTriggerabilityOnBackgroundThread(
     bool engagement_score_provider_is_valid,
-    history::Cluster cluster,
-    base::flat_map<std::string, optimization_guide::EntityMetadata>&
-        entity_id_to_entity_metadata_map) {
+    std::vector<history::Cluster> clusters,
+    bool from_ui) {
   // The cluster finalizers to be run.
   std::vector<std::unique_ptr<ClusterFinalizer>> cluster_finalizers;
 
+  if (!from_ui) {
+    // Cluster finalizers to run that affect the appearance of a cluster on a UI
+    // surface and are run here in case a user goes in and out of the new
+    // context clustering path so that the user will have presentable clusters
+    // when they swap back.
+    // TODO(b/259466296): Remove this block once that path is fully launched.
+    cluster_finalizers.push_back(
+        std::make_unique<SimilarVisitDeduperClusterFinalizer>());
+    cluster_finalizers.push_back(std::make_unique<RankingClusterFinalizer>(
+        ClusteringRequestSource::kJourneysPage));
+    cluster_finalizers.push_back(std::make_unique<LabelClusterFinalizer>());
+  }
+
   // Cluster finalizers that affect the keywords for a cluster.
-  cluster_finalizers.push_back(std::make_unique<KeywordClusterFinalizer>(
-      &entity_id_to_entity_metadata_map));
+  cluster_finalizers.push_back(std::make_unique<KeywordClusterFinalizer>());
 
   // Cluster finalizers that affect the visibility of a cluster.
   cluster_finalizers.push_back(
@@ -421,15 +381,18 @@ OnDeviceClusteringBackend::GetClusterTriggerabilityOnBackgroundThread(
   if (engagement_score_provider_is_valid) {
     cluster_finalizers.push_back(std::make_unique<NoisyClusterFinalizer>());
   }
-  if (GetConfig().should_use_categories_to_filter_on_prominent_ui_surfaces) {
-    cluster_finalizers.push_back(std::make_unique<CategoryClusterFinalizer>());
+
+  for (auto& cluster : clusters) {
+    // Initially set this default to true since the finalizers will only set the
+    // visibility to false.
+    cluster.should_show_on_prominent_ui_surfaces = true;
+    for (const auto& finalizer : cluster_finalizers) {
+      finalizer->FinalizeCluster(cluster);
+    }
+    cluster.triggerability_calculated = true;
   }
 
-  for (const auto& finalizer : cluster_finalizers) {
-    finalizer->FinalizeCluster(cluster);
-  }
-
-  return cluster;
+  return clusters;
 }
 
 }  // namespace history_clusters

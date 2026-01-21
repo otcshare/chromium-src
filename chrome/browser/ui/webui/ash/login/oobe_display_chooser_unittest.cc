@@ -68,7 +68,7 @@ class TestCrosDisplayConfig
   void SetUnifiedDesktopEnabled(bool enabled) override {}
   void OverscanCalibration(const std::string& display_id,
                            crosapi::mojom::DisplayConfigOperation op,
-                           const absl::optional<gfx::Insets>& delta,
+                           const std::optional<gfx::Insets>& delta,
                            OverscanCalibrationCallback callback) override {}
   void TouchCalibration(const std::string& display_id,
                         crosapi::mojom::DisplayConfigOperation op,
@@ -91,7 +91,7 @@ class OobeDisplayChooserTest : public ChromeAshTestBase {
   OobeDisplayChooserTest& operator=(const OobeDisplayChooserTest&) = delete;
 
   int64_t GetPrimaryDisplay() {
-    return display::Screen::GetScreen()->GetPrimaryDisplay().id();
+    return display::Screen::Get()->GetPrimaryDisplay().id();
   }
 
   // ChromeAshTestBase:

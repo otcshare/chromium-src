@@ -23,6 +23,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_COPY_LCHARS_FROM_UCHAR_SOURCE_H_
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
@@ -36,32 +37,16 @@
 #endif
 #endif
 
-namespace WTF {
+namespace blink {
 
-#if !BUILDFLAG(IS_MAC) && defined(ARCH_CPU_X86_FAMILY)
-// Controls whether CopyLCharsFromUCharSource() uses intrinsics. This is backed
-// by a feature, but a variable is used as this code is performance sensitive.
-WTF_EXPORT extern bool g_enable_sse_path_for_copy_lchars;
-#endif
+inline void CopyLCharsFromUCharSource(base::span<LChar> destination,
+                                      base::span<const UChar> source) {
+  size_t length = source.size();
 
-inline void CopyLCharsFromUCharSource(LChar* destination,
-                                      const UChar* source,
-                                      size_t length) {
 #if defined(ARCH_CPU_X86_FAMILY)
-#if !BUILDFLAG(IS_MAC)
-  if (!g_enable_sse_path_for_copy_lchars) {
-    for (size_t i = 0; i < length; ++i) {
-      DCHECK(!(source[i] & 0xff00));
-      destination[i] = static_cast<LChar>(source[i]);
-    }
-    return;
-  }
-#endif
-
   const uintptr_t kMemoryAccessSize =
       16;  // Memory accesses on 16 byte (128 bit) alignment
   const uintptr_t kMemoryAccessMask = kMemoryAccessSize - 1;
-
   size_t i = 0;
   for (; i < length &&
          reinterpret_cast<uintptr_t>(&source[i]) & kMemoryAccessMask;
@@ -95,39 +80,19 @@ inline void CopyLCharsFromUCharSource(LChar* destination,
     DCHECK(!(source[i] & 0xff00));
     destination[i] = static_cast<LChar>(source[i]);
   }
-#elif defined(COMPILER_GCC) && defined(CPU_ARM_NEON) && \
-    !defined(ARCH_CPU_BIG_ENDIAN) && defined(NDEBUG)
-  const LChar* const end = destination + length;
-  const uintptr_t kMemoryAccessSize = 8;
-
-  if (length >= (2 * kMemoryAccessSize) - 1) {
-    // Prefix: align dst on 64 bits.
-    const uintptr_t kMemoryAccessMask = kMemoryAccessSize - 1;
-    while (reinterpret_cast<uintptr_t>(destination) & kMemoryAccessMask)
-      *destination++ = static_cast<LChar>(*source++);
-
-    // Vector interleaved unpack, we only store the lower 8 bits.
-    const uintptr_t length_left = end - destination;
-    const LChar* const simd_end = end - (length_left % kMemoryAccessSize);
-    do {
-      asm("vld2.8   { d0-d1 }, [%[SOURCE]] !\n\t"
-          "vst1.8   { d0 }, [%[DESTINATION],:64] !\n\t"
-          : [SOURCE] "+r"(source), [DESTINATION] "+r"(destination)
-          :
-          : "memory", "d0", "d1");
-    } while (destination != simd_end);
-  }
-
-  while (destination != end)
-    *destination++ = static_cast<LChar>(*source++);
 #else
+  // In practice, the compiler does vectorize this loop at "-O2".
   for (size_t i = 0; i < length; ++i) {
+    // Moving the DCHECK() path out of the way in case it disables
+    // auto-vectorization.
+#if DCHECK_IS_ON()
     DCHECK(!(source[i] & 0xff00));
+#endif
     destination[i] = static_cast<LChar>(source[i]);
   }
 #endif
 }
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_COPY_LCHARS_FROM_UCHAR_SOURCE_H_

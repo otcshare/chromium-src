@@ -8,16 +8,16 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/gcm_driver/gcm_buildflags.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/version_info/version_info.h"
+#include "components/version_info/channel.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/proxy_resolving_socket.mojom.h"
 
@@ -36,8 +36,13 @@ class NetworkConnectionTracker;
 class SharedURLLoaderFactory;
 }
 
+namespace os_crypt_async {
+class OSCryptAsync;
+}
+
 namespace gcm {
 
+class GCMAccountTracker;
 class GCMClientFactory;
 class GCMDriver;
 
@@ -67,7 +72,8 @@ class GCMProfileService : public KeyedService {
       std::unique_ptr<GCMClientFactory> gcm_client_factory,
       const scoped_refptr<base::SequencedTaskRunner>& ui_task_runner,
       const scoped_refptr<base::SequencedTaskRunner>& io_task_runner,
-      scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner);
+      scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
+      os_crypt_async::OSCryptAsync* os_crypt_async);
 #endif
 
   GCMProfileService(const GCMProfileService&) = delete;
@@ -78,14 +84,11 @@ class GCMProfileService : public KeyedService {
   // KeyedService:
   void Shutdown() override;
 
-  // For testing purposes.
-  void SetDriverForTesting(std::unique_ptr<GCMDriver> driver);
-
   GCMDriver* driver() const { return driver_.get(); }
 
  protected:
   // Used for constructing fake GCMProfileService for testing purpose.
-  GCMProfileService();
+  explicit GCMProfileService(std::unique_ptr<GCMDriver> driver);
 
  private:
   std::unique_ptr<GCMDriver> driver_;
@@ -95,9 +98,7 @@ class GCMProfileService : public KeyedService {
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  // Used for both account tracker and GCM.UserSignedIn UMA.
-  class IdentityObserver;
-  std::unique_ptr<IdentityObserver> identity_observer_;
+  std::unique_ptr<GCMAccountTracker> gcm_account_tracker_;
 #endif
 
   GetProxyResolvingFactoryCallback get_socket_factory_callback_;

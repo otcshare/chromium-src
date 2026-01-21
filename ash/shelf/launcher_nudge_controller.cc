@@ -25,7 +25,8 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/display/tablet_state.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 namespace {
@@ -51,7 +52,7 @@ PrefService* GetPrefs() {
 base::Time GetLastShownTime(PrefService* prefs) {
   const base::Value::Dict& dictionary =
       prefs->GetDict(prefs::kShelfLauncherNudge);
-  absl::optional<base::Time> last_shown_time =
+  std::optional<base::Time> last_shown_time =
       base::ValueToTime(dictionary.Find(kLastShownTime));
   return last_shown_time.value_or(base::Time());
 }
@@ -62,7 +63,7 @@ base::Time GetLastShownTime(PrefService* prefs) {
 base::Time GetFirstLoginTime(PrefService* prefs) {
   const base::Value::Dict& dictionary =
       prefs->GetDict(prefs::kShelfLauncherNudge);
-  absl::optional<base::Time> first_login_time =
+  std::optional<base::Time> first_login_time =
       base::ValueToTime(dictionary.Find(kFirstLoginTime));
   return first_login_time.value_or(base::Time());
 }
@@ -83,13 +84,11 @@ constexpr base::TimeDelta
 LauncherNudgeController::LauncherNudgeController()
     : show_nudge_timer_(std::make_unique<base::WallClockTimer>()) {
   Shell::Get()->app_list_controller()->AddObserver(this);
-  tablet_mode_observation_.Observe(Shell::Get()->tablet_mode_controller());
 }
 
 LauncherNudgeController::~LauncherNudgeController() {
   if (Shell::Get()->app_list_controller())
     Shell::Get()->app_list_controller()->RemoveObserver(this);
-  tablet_mode_observation_.Reset();
 }
 
 // static
@@ -153,8 +152,9 @@ bool LauncherNudgeController::ShouldShowNudge(base::Time& recheck_time) const {
   }
 
   // Only show the launcher nudge in clamshell mode.
-  if (Shell::Get()->IsInTabletMode())
+  if (display::Screen::Get()->InTabletMode()) {
     return false;
+  }
 
   // If the shown count meets the limit or the launcher has been opened before,
   // don't show the nudge.
@@ -221,7 +221,7 @@ void LauncherNudgeController::MaybeShowNudge() {
 
   // Don't run the nudge animation if the duration multiplier is 0 to prevent
   // crashes that caused by showing the animation that immediately gets deleted.
-  if (ui::ScopedAnimationDurationScaleMode::duration_multiplier() != 0) {
+  if (gfx::ScopedAnimationDurationScaleMode::duration_multiplier() != 0) {
     // Only show the nudge on the home button which is on the same display with
     // the cursor.
     int64_t display_id_for_nudge =
@@ -288,8 +288,9 @@ void LauncherNudgeController::OnAppListVisibilityChanged(bool shown,
   // require explicit user action. As a result, don't track app list visibility
   // changes in tablet mode as actions affecting nudge availability in clamshell
   // mode.
-  if (Shell::Get()->IsInTabletMode())
+  if (display::Screen::Get()->InTabletMode()) {
     return;
+  }
 
   if (!WasLauncherShownPreviously(prefs) && shown) {
     ScopedDictPrefUpdate update(prefs, prefs::kShelfLauncherNudge);
@@ -297,7 +298,12 @@ void LauncherNudgeController::OnAppListVisibilityChanged(bool shown,
   }
 }
 
-void LauncherNudgeController::OnTabletModeEnded() {
+void LauncherNudgeController::OnDisplayTabletStateChanged(
+    display::TabletState state) {
+  if (state != display::TabletState::kInClamshellMode) {
+    return;
+  }
+
   // If a nudge event became available while the device was in tablet mode, it
   // would have been ignored. Recheck whether the nudge can be shown again. Note
   // that the nudge is designed to be shown after
@@ -305,10 +311,6 @@ void LauncherNudgeController::OnTabletModeEnded() {
   // clamshell mode where home button exists.
   earliest_available_time_ = GetNow() + kMinIntervalAfterHomeButtonAppears;
   MaybeShowNudge();
-}
-
-void LauncherNudgeController::OnTabletControllerDestroyed() {
-  tablet_mode_observation_.Reset();
 }
 
 base::Time LauncherNudgeController::GetNow() const {

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fuzzer/sequence_manager_fuzzer_processor.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fuzzer/simple_thread_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fuzzer/thread_manager.h"
@@ -160,7 +160,7 @@ ThreadManager* ThreadPoolManager::GetThreadManagerFor(uint64_t thread_id) {
   return thread_managers_[id];
 }
 
-Vector<ThreadManager*> ThreadPoolManager::GetAllThreadManagers() {
+blink::Vector<ThreadManager*> ThreadPoolManager::GetAllThreadManagers() {
   AutoLock lock(lock_);
   return thread_managers_;
 }

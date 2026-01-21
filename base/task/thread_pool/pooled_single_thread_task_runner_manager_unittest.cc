@@ -4,8 +4,8 @@
 
 #include "base/task/thread_pool/pooled_single_thread_task_runner_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/synchronization/atomic_flag.h"
@@ -35,8 +35,7 @@
 #include "base/win/current_module.h"
 #endif  // BUILDFLAG(IS_WIN)
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -60,8 +59,9 @@ class PooledSingleThreadTaskRunnerManagerTest : public testing::Test {
   }
 
   void TearDown() override {
-    if (single_thread_task_runner_manager_)
+    if (single_thread_task_runner_manager_) {
       TearDownSingleThreadTaskRunnerManager();
+    }
     delayed_task_manager_.Shutdown();
     service_thread_.Stop();
   }
@@ -179,7 +179,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerTest, RunsTasksInCurrentSequence) {
 
 TEST_F(PooledSingleThreadTaskRunnerManagerTest,
        SharedWithBaseSyncPrimitivesDCHECKs) {
-  testing::GTEST_FLAG(death_test_style) = "threadsafe";
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_DCHECK_DEATH({
     single_thread_task_runner_manager_->CreateSingleThreadTaskRunner(
         {WithBaseSyncPrimitives()}, SingleThreadTaskRunnerThreadMode::SHARED);
@@ -198,7 +198,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerTest,
       ->CreateSingleThreadTaskRunner(
           {TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
           SingleThreadTaskRunnerThreadMode::SHARED)
-      ->PostTask(FROM_HERE, base::BindLambdaForTesting([&]() {
+      ->PostTask(FROM_HERE, base::BindLambdaForTesting([&] {
                    task_has_started.Signal();
                    task_can_continue.Wait();
                  }));
@@ -291,7 +291,7 @@ TEST_P(PooledSingleThreadTaskRunnerManagerCommonTest, ThreadTypeSetCorrectly) {
   for (auto& test_case : test_cases) {
     TestWaitableEvent event;
     CreateTaskRunner(test_case.traits)
-        ->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+        ->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                      EXPECT_EQ(test_case.expected_thread_type,
                                PlatformThread::GetCurrentThreadType());
                      event.Signal();
@@ -378,7 +378,7 @@ TEST_P(PooledSingleThreadTaskRunnerManagerCommonTest, ThreadNamesSet) {
   for (auto& test_case : test_cases) {
     TestWaitableEvent event;
     CreateTaskRunner(test_case.traits)
-        ->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+        ->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                      EXPECT_THAT(PlatformThread::GetName(),
                                  ::testing::MatchesRegex(
                                      test_case.expected_thread_name));
@@ -405,7 +405,6 @@ TEST_P(PooledSingleThreadTaskRunnerManagerCommonTest, PostDelayedTask) {
       FROM_HERE, BindOnce(&TestWaitableEvent::Signal, Unretained(&task_ran)));
   task_ran.Wait();
   ASSERT_TRUE(!task_ran.IsSignaled());
-
 
   // Post a task with a short delay.
   const TimeTicks start_time = TimeTicks::Now();
@@ -469,7 +468,7 @@ namespace {
 
 class CallJoinFromDifferentThread : public SimpleThread {
  public:
-  CallJoinFromDifferentThread(
+  explicit CallJoinFromDifferentThread(
       PooledSingleThreadTaskRunnerManager* manager_to_join)
       : SimpleThread("PooledSingleThreadTaskRunnerManagerJoinThread"),
         manager_to_join_(manager_to_join) {}
@@ -525,8 +524,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerJoinTest, ConcurrentJoin) {
         FROM_HERE,
         BindOnce(&TestWaitableEvent::Signal, Unretained(&task_running))));
     EXPECT_TRUE(task_runner->PostTask(
-        FROM_HERE,
-        BindOnce(&TestWaitableEvent::Wait, Unretained(&task_blocking))));
+        FROM_HERE, task_blocking.GetWaitCallbackForTesting()));
   }
 
   task_running.Wait();
@@ -554,8 +552,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerJoinTest,
         FROM_HERE,
         BindOnce(&TestWaitableEvent::Signal, Unretained(&task_running))));
     EXPECT_TRUE(task_runner->PostTask(
-        FROM_HERE,
-        BindOnce(&TestWaitableEvent::Wait, Unretained(&task_blocking))));
+        FROM_HERE, task_blocking.GetWaitCallbackForTesting()));
     EXPECT_TRUE(task_runner->PostTask(FROM_HERE, DoNothing()));
   }
 
@@ -627,8 +624,9 @@ class PooledSingleThreadTaskRunnerManagerTestWin
   }
 
   void TearDown() override {
-    if (register_class_succeeded_)
+    if (register_class_succeeded_) {
       ::UnregisterClass(kTestWindowClassName, CURRENT_MODULE());
+    }
 
     PooledSingleThreadTaskRunnerManagerTest::TearDown();
   }
@@ -731,5 +729,4 @@ TEST_F(PooledSingleThreadTaskRunnerManagerStartTest, PostTaskBeforeStart) {
   task_finished.Wait();
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

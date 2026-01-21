@@ -6,17 +6,8 @@
 #define UI_GFX_MOJOM_GPU_EXTRA_INFO_MOJOM_TRAITS_H_
 
 #include "base/component_export.h"
-#include "build/build_config.h"
 #include "ui/gfx/gpu_extra_info.h"
-#include "ui/gfx/mojom/buffer_types_mojom_traits.h"
 #include "ui/gfx/mojom/gpu_extra_info.mojom-shared.h"
-
-#if BUILDFLAG(IS_OZONE)
-#include "ui/ozone/buildflags.h"
-#if BUILDFLAG(OZONE_PLATFORM_X11)
-#define USE_OZONE_PLATFORM_X11
-#endif
-#endif
 
 namespace mojo {
 
@@ -34,20 +25,8 @@ struct COMPONENT_EXPORT(GFX_SHARED_MOJOM_TRAITS)
     return input.category;
   }
 
-  static const std::string& description(const gfx::ANGLEFeature& input) {
-    return input.description;
-  }
-
-  static const std::string& bug(const gfx::ANGLEFeature& input) {
-    return input.bug;
-  }
-
   static const std::string& status(const gfx::ANGLEFeature& input) {
     return input.status;
-  }
-
-  static const std::string& condition(const gfx::ANGLEFeature& input) {
-    return input.condition;
   }
 };
 
@@ -61,13 +40,6 @@ struct COMPONENT_EXPORT(GFX_SHARED_MOJOM_TRAITS)
       const gfx::GpuExtraInfo& input) {
     return input.angle_features;
   }
-
-#if defined(USE_OZONE_PLATFORM_X11)
-  static const std::vector<gfx::BufferUsageAndFormat>&
-  gpu_memory_buffer_support_x11(const gfx::GpuExtraInfo& input) {
-    return input.gpu_memory_buffer_support_x11;
-  }
-#endif
 };
 
 }  // namespace mojo

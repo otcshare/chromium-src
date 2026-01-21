@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ash/input_method/native_input_method_engine.h"
-
 #include "base/values.h"
+#include "chrome/browser/ash/input_method/native_input_method_engine.h"
 #include "chrome/browser/ash/input_method/stub_input_method_engine_observer.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -18,6 +18,7 @@
 
 namespace ash {
 namespace input_method {
+
 namespace {
 
 class TestObserver : public StubInputMethodEngineObserver {
@@ -29,14 +30,14 @@ class TestObserver : public StubInputMethodEngineObserver {
 
   void OnKeyEvent(const std::string& engine_id,
                   const ui::KeyEvent& event,
-                  ui::TextInputMethod::KeyEventDoneCallback callback) override {
+                  TextInputMethod::KeyEventDoneCallback callback) override {
     std::move(callback).Run(ui::ime::KeyEventHandledState::kNotHandled);
   }
 };
 
 class KeyProcessingWaiter {
  public:
-  ui::TextInputMethod::KeyEventDoneCallback CreateCallback() {
+  TextInputMethod::KeyEventDoneCallback CreateCallback() {
     return base::BindOnce(&KeyProcessingWaiter::OnKeyEventDone,
                           base::Unretained(this));
   }
@@ -78,14 +79,13 @@ class NativeInputMethodEngineWithImeServiceTest
     // TODO(crbug/1197005): Migrate to Tast to avoid reliance on delicate luck.
     engine_ =
         NativeInputMethodEngine::CreateForTesting(/*use_ime_service=*/true);
-    ui::IMEBridge::Get()->SetInputContextHandler(&input_method_);
-    ui::IMEBridge::Get()->SetCurrentEngineHandler(engine_.get());
+    IMEBridge::Get()->SetInputContextHandler(&input_method_);
+    IMEBridge::Get()->SetCurrentEngineHandler(engine_.get());
 
     auto observer = std::make_unique<TestObserver>();
     Profile* profile = browser()->profile();
     PrefService* prefs = profile->GetPrefs();
-    prefs->Set(::prefs::kLanguageInputMethodSpecificSettings,
-               base::DictionaryValue());
+    prefs->Set(::prefs::kLanguageInputMethodSpecificSettings, base::Value());
     engine_->Initialize(std::move(observer), /*extension_id=*/"", profile);
 
     InProcessBrowserTest::SetUpOnMainThread();
@@ -96,8 +96,8 @@ class NativeInputMethodEngineWithImeServiceTest
     // observes ChromeKeyboardControllerClient, which is tied to the browser
     // lifetime.
     engine_.reset();
-    ui::IMEBridge::Get()->SetInputContextHandler(nullptr);
-    ui::IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
+    IMEBridge::Get()->SetInputContextHandler(nullptr);
+    IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
@@ -112,12 +112,13 @@ class NativeInputMethodEngineWithImeServiceTest
                         int flags = ui::EF_NONE) {
     KeyProcessingWaiter waiterPressed;
     KeyProcessingWaiter waiterReleased;
-    engine_->ProcessKeyEvent({ui::ET_KEY_PRESSED, code, flags},
+    engine_->ProcessKeyEvent({ui::EventType::kKeyPressed, code, flags},
                              waiterPressed.CreateCallback());
-    engine_->ProcessKeyEvent({ui::ET_KEY_RELEASED, code, flags},
+    engine_->ProcessKeyEvent({ui::EventType::kKeyReleased, code, flags},
                              waiterReleased.CreateCallback());
-    if (need_flush)
+    if (need_flush) {
       engine_->FlushForTesting();
+    }
 
     waiterPressed.Wait();
     waiterReleased.Wait();
@@ -130,7 +131,7 @@ class NativeInputMethodEngineWithImeServiceTest
   std::unique_ptr<NativeInputMethodEngine> engine_;
 
  private:
-  ui::InputMethodAsh input_method_;
+  InputMethodAsh input_method_;
 };
 
 // ID is specified in google_xkb_manifest.json.

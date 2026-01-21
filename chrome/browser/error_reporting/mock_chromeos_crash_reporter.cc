@@ -18,11 +18,11 @@
 #include <string>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
@@ -114,7 +114,7 @@ bool UploadViaHttp(const std::string& base_url,
   // Upload using httplib. The normal Chromium way (SimpleURLLoader) needs a lot
   // of browser stuff to be set up before it can be used, so we use the
   // standalone httplib in this test binary.
-  std::string host = upload_url.host();
+  std::string host = upload_url.GetHost();
   httplib::Client cli(host.c_str(), upload_url.EffectiveIntPort());
   if (!cli.is_valid()) {
     LOG(ERROR) << "httplib::Client setup error";

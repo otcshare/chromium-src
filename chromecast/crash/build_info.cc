@@ -43,8 +43,8 @@ const std::string GetVersionString(const std::string& cast_release_number,
 }
 
 const std::string VersionToVariant(const std::string& cast_build_revision) {
-  for (std::string variant : {kEngVariant, kUserVariant}) {
-    if (cast_build_revision.find(variant) != std::string::npos) {
+  for (const std::string& variant : {kEngVariant, kUserVariant}) {
+    if (cast_build_revision.contains(variant)) {
       return variant;
     }
   }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/performance_manager/policies/userspace_swap_policy_chromeos.h"
 
+#include "base/byte_count.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "chrome/browser/performance_manager/mechanisms/userspace_swap_chromeos.h"
@@ -17,15 +18,14 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 
-namespace performance_manager {
-namespace policies {
+namespace performance_manager::policies {
 
 namespace {
 using ::ash::memory::userspace_swap::SwapFile;
 using ::ash::memory::userspace_swap::UserspaceSwapConfig;
 
 class UserspaceSwapPolicyData
-    : public ExternalNodeAttachedDataImpl<UserspaceSwapPolicyData> {
+    : public NodeAttachedDataImpl<UserspaceSwapPolicyData> {
  public:
   explicit UserspaceSwapPolicyData(const ProcessNode* node) {}
   ~UserspaceSwapPolicyData() override = default;
@@ -66,31 +66,24 @@ UserspaceSwapPolicy::UserspaceSwapPolicy()
 UserspaceSwapPolicy::~UserspaceSwapPolicy() = default;
 
 void UserspaceSwapPolicy::OnPassedToGraph(Graph* graph) {
-  DCHECK_EQ(graph_, nullptr);
-  graph_ = graph;
   graph->AddProcessNodeObserver(this);
 
   // Only handle the memory pressure notifications if the feature to swap on
   // moderate pressure is enabled.
-  if (config_.swap_on_moderate_pressure) {
-    graph_->AddSystemNodeObserver(this);
+  if (config_->swap_on_moderate_pressure) {
+    memory_pressure_listener_registration_.emplace(
+        FROM_HERE, base::MemoryPressureListenerTag::kUserspaceSwapPolicy, this);
   }
 }
 
 void UserspaceSwapPolicy::OnTakenFromGraph(Graph* graph) {
-  DCHECK_EQ(graph_, graph);
-
-  if (config_.swap_on_moderate_pressure) {
-    graph_->RemoveSystemNodeObserver(this);
-  }
-
   graph->RemoveProcessNodeObserver(this);
-  graph_ = nullptr;
+  memory_pressure_listener_registration_.reset();
 }
 
 void UserspaceSwapPolicy::OnAllFramesInProcessFrozen(
     const ProcessNode* process_node) {
-  if (config_.swap_on_freeze) {
+  if (config_->swap_on_freeze) {
     // We don't provide a page node because the visibility requirements don't
     // matter on freeze.
     if (IsEligibleToSwap(process_node, nullptr)) {
@@ -144,15 +137,15 @@ base::TimeTicks UserspaceSwapPolicy::GetLastSwapTime(
 }
 
 void UserspaceSwapPolicy::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel new_level) {
-  if (new_level == base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE) {
+    base::MemoryPressureLevel new_level) {
+  if (new_level == base::MEMORY_PRESSURE_LEVEL_NONE) {
     return;
   }
 
   auto now_ticks = base::TimeTicks::Now();
   // Try not to walk the graph too frequently because we can receive moderate
   // memory pressure notifications every 10s.
-  if (now_ticks - last_graph_walk_ < config_.graph_walk_frequency) {
+  if (now_ticks - last_graph_walk_ < config_->graph_walk_frequency) {
     return;
   }
 
@@ -161,7 +154,7 @@ void UserspaceSwapPolicy::OnMemoryPressure(
 }
 
 void UserspaceSwapPolicy::SwapNodesOnGraph() {
-  for (const PageNode* page_node : graph_->GetAllPageNodes()) {
+  for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
     // Check that we have a main frame.
     const FrameNode* main_frame_node = page_node->GetMainFrameNode();
     if (!main_frame_node)
@@ -180,13 +173,14 @@ void UserspaceSwapPolicy::SwapNodesOnGraph() {
 }
 
 void UserspaceSwapPolicy::PrintAllSwapMetrics() {
-  uint64_t total_reclaimed = 0;
-  uint64_t total_on_disk = 0;
+  base::ByteCount total_reclaimed;
+  base::ByteCount total_on_disk;
   uint64_t total_renderers = 0;
-  for (const PageNode* page_node : graph_->GetAllPageNodes()) {
+  for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
     const FrameNode* main_frame_node = page_node->GetMainFrameNode();
-    if (!main_frame_node)
+    if (!main_frame_node) {
       continue;
+    }
 
     const ProcessNode* process_node = main_frame_node->GetProcessNode();
 
@@ -194,54 +188,55 @@ void UserspaceSwapPolicy::PrintAllSwapMetrics() {
     if (process_node && process_node->GetProcess().IsValid()) {
       bool is_visible = page_node->IsVisible();
       auto last_visibility_change =
-          page_node->GetTimeSinceLastVisibilityChange();
+          now_ticks - page_node->GetLastVisibilityChangeTime();
       auto url = main_frame_node->GetURL();
 
-      uint64_t memory_reclaimed = GetProcessNodeReclaimedBytes(process_node);
-      uint64_t disk_space_used = GetProcessNodeSwapFileUsageBytes(process_node);
+      base::ByteCount memory_reclaimed =
+          GetProcessNodeReclaimedSpace(process_node);
+      base::ByteCount disk_space_used =
+          GetProcessNodeSwapFileUsage(process_node);
       total_on_disk += disk_space_used;
       total_reclaimed += memory_reclaimed;
       total_renderers++;
 
-      VLOG(1) << "Frame " << url << " visibile: " << is_visible
+      VLOG(1) << "Frame " << url << " visible: " << is_visible
               << " last_chg: " << last_visibility_change
               << " last_swap: " << (now_ticks - GetLastSwapTime(process_node))
-              << " reclaimed: " << (memory_reclaimed >> 10) << "Kb"
-              << " on disk: " << (disk_space_used >> 10) << "Kb";
+              << " reclaimed: " << memory_reclaimed
+              << " on disk: " << disk_space_used;
     }
   }
 
   VLOG(1) << "Swap Summary, Renderers: " << total_renderers
-          << " reclaimed: " << (total_reclaimed >> 10)
-          << "Kb, total on disk: " << (total_on_disk >> 10) << "Kb"
-          << " Backing Store free space: "
-          << (GetSwapDeviceFreeSpaceBytes() >> 10) << "Kb";
+          << " reclaimed: " << total_reclaimed
+          << ", total on disk: " << total_on_disk
+          << " Backing Store free space: " << GetSwapDeviceFreeSpace();
 }
 
 void UserspaceSwapPolicy::SwapProcessNode(const ProcessNode* process_node) {
   performance_manager::mechanism::userspace_swap::SwapProcessNode(process_node);
 }
 
-uint64_t UserspaceSwapPolicy::GetProcessNodeSwapFileUsageBytes(
+base::ByteCount UserspaceSwapPolicy::GetProcessNodeSwapFileUsage(
     const ProcessNode* process_node) {
   return performance_manager::mechanism::userspace_swap::
-      GetProcessNodeSwapFileUsageBytes(process_node);
+      GetProcessNodeSwapFileUsage(process_node);
 }
 
-uint64_t UserspaceSwapPolicy::GetProcessNodeReclaimedBytes(
+base::ByteCount UserspaceSwapPolicy::GetProcessNodeReclaimedSpace(
     const ProcessNode* process_node) {
   return performance_manager::mechanism::userspace_swap::
-      GetProcessNodeReclaimedBytes(process_node);
+      GetProcessNodeReclaimedSpace(process_node);
 }
 
-uint64_t UserspaceSwapPolicy::GetTotalSwapFileUsageBytes() {
+base::ByteCount UserspaceSwapPolicy::GetTotalSwapFileUsage() {
   return performance_manager::mechanism::userspace_swap::
-      GetTotalSwapFileUsageBytes();
+      GetTotalSwapFileUsage();
 }
 
-uint64_t UserspaceSwapPolicy::GetSwapDeviceFreeSpaceBytes() {
+base::ByteCount UserspaceSwapPolicy::GetSwapDeviceFreeSpace() {
   return performance_manager::mechanism::userspace_swap::
-      GetSwapDeviceFreeSpaceBytes();
+      GetSwapDeviceFreeSpace();
 }
 
 bool UserspaceSwapPolicy::IsPageNodeLoadingOrBusy(const PageNode* page_node) {
@@ -258,9 +253,9 @@ bool UserspaceSwapPolicy::IsPageNodeVisible(const PageNode* page_node) {
   return page_node->IsVisible();
 }
 
-base::TimeDelta UserspaceSwapPolicy::GetTimeSinceLastVisibilityChange(
+base::TimeTicks UserspaceSwapPolicy::GetLastVisibilityChangeTime(
     const PageNode* page_node) {
-  return page_node->GetTimeSinceLastVisibilityChange();
+  return page_node->GetLastVisibilityChangeTime();
 }
 
 bool UserspaceSwapPolicy::IsEligibleToSwap(const ProcessNode* process_node,
@@ -285,7 +280,7 @@ bool UserspaceSwapPolicy::IsEligibleToSwap(const ProcessNode* process_node,
   auto now_ticks = base::TimeTicks::Now();
   // Don't swap a renderer too frequently.
   auto time_since_last_swap = now_ticks - GetLastSwapTime(process_node);
-  if (time_since_last_swap < config_.process_swap_frequency) {
+  if (time_since_last_swap < config_->process_swap_frequency) {
     return false;
   }
 
@@ -300,8 +295,8 @@ bool UserspaceSwapPolicy::IsEligibleToSwap(const ProcessNode* process_node,
 
     // Next the page node must have been invisible for longer than the
     // configured time.
-    if (GetTimeSinceLastVisibilityChange(page_node) <
-        config_.invisible_time_before_swap) {
+    if ((now_ticks - GetLastVisibilityChangeTime(page_node)) <
+        config_->invisible_time_before_swap) {
       return false;
     }
   }
@@ -309,26 +304,27 @@ bool UserspaceSwapPolicy::IsEligibleToSwap(const ProcessNode* process_node,
   // To avoid hammering the system with fstat(2) system calls we will cache the
   // available disk space for 30 seconds. But we only check if it's been
   // configured to enforce a swap device minimum.
-  if (config_.minimum_swap_disk_space_available > 0) {
+  if (config_->minimum_swap_disk_space_available > 0) {
     // Check if we can't swap because the device is running low on space.
-    if (GetSwapDeviceFreeSpaceBytes() <
-        config_.minimum_swap_disk_space_available) {
+    if (GetSwapDeviceFreeSpace().InBytesUnsigned() <
+        config_->minimum_swap_disk_space_available) {
       return false;
     }
   }
 
   // Make sure we're not exceeding the total swap file usage across all
   // renderers.
-  if (config_.maximum_swap_disk_space_bytes > 0) {
-    if (GetTotalSwapFileUsageBytes() >= config_.maximum_swap_disk_space_bytes) {
+  if (config_->maximum_swap_disk_space_bytes > 0) {
+    if (GetTotalSwapFileUsage().InBytesUnsigned() >=
+        config_->maximum_swap_disk_space_bytes) {
       return false;
     }
   }
 
   // And make sure we're not exceeding the per-renderer swap file limit.
-  if (config_.renderer_maximum_disk_swap_file_size_bytes > 0) {
-    if (GetProcessNodeSwapFileUsageBytes(process_node) >=
-        config_.renderer_maximum_disk_swap_file_size_bytes) {
+  if (config_->renderer_maximum_disk_swap_file_size_bytes > 0) {
+    if (GetProcessNodeSwapFileUsage(process_node).InBytesUnsigned() >=
+        config_->renderer_maximum_disk_swap_file_size_bytes) {
       return false;
     }
   }
@@ -341,5 +337,4 @@ bool UserspaceSwapPolicy::UserspaceSwapSupportedAndEnabled() {
   return ash::memory::userspace_swap::UserspaceSwapSupportedAndEnabled();
 }
 
-}  // namespace policies
-}  // namespace performance_manager
+}  // namespace performance_manager::policies

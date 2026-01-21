@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
 (async function() {
   TestRunner.addResult(
       `Tests that capturing asynchronous call stacks in debugger works if started after some time since the page loads.\n`);
-  await TestRunner.loadLegacyModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPagePromise(`
       function testFunction()
@@ -38,7 +40,7 @@
   SourcesTestRunner.startDebuggerTest(step1);
 
   async function step1() {
-    await TestRunner.DebuggerAgent.setAsyncCallStackDepth(0);
+    await TestRunner.DebuggerAgent.invoke_setAsyncCallStackDepth({maxDepth: 0});
     SourcesTestRunner.runTestFunctionAndWaitUntilPaused(didPause);
   }
 
@@ -51,7 +53,7 @@
   async function didPause(callFrames, reason, breakpointIds, asyncStackTrace) {
     ++step;
     if (step === 1) {
-      TestRunner.DebuggerAgent.setAsyncCallStackDepth(maxAsyncCallStackDepth).then(resumeExecution);
+      TestRunner.DebuggerAgent.invoke_setAsyncCallStackDepth({maxDepth: maxAsyncCallStackDepth}).then(resumeExecution);
       return;
     }
 

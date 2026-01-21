@@ -29,7 +29,6 @@ int EvaluateTest() {
 // This function is for test purpose only. It triggers an assertion failure.
 int EvaluateCrash() {
   NOTREACHED();
-  return 0;
 }
 
 // This function is for test purpose only. It writes "Success" to stdout, and
@@ -59,10 +58,10 @@ int main(int argc, char** argv) {
   base::CommandLine::Init(argc, argv);
 
   const base::CommandLine* command_line =
-    base::CommandLine::ForCurrentProcess();
+      base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(kEvaluateCapabilitySwitchName)) {
-    return EvaluateCapabilityLocally(command_line->GetSwitchValueASCII(
-        kEvaluateCapabilitySwitchName));
+    return EvaluateCapabilityLocally(
+        command_line->GetSwitchValueASCII(kEvaluateCapabilitySwitchName));
   }
 
   return kInvalidCommandLineExitCode;

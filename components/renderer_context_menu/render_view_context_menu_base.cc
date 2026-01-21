@@ -12,16 +12,18 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
-#include "ppapi/buildflags/buildflags.h"
+#include "content/public/common/buildflags.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/models/image_model.h"
 #include "url/origin.h"
 
@@ -75,7 +77,9 @@ bool IsCustomItemCheckedInternal(
 const size_t kMaxCustomMenuDepth = 5;
 const size_t kMaxCustomMenuTotalItems = 1000;
 
-void AddCustomItemsToMenu(
+}  // namespace
+
+void RenderViewContextMenuBase::AddCustomItemsToMenu(
     const std::vector<blink::mojom::CustomContextMenuItemPtr>& items,
     size_t depth,
     size_t* total_items,
@@ -104,17 +108,43 @@ void AddCustomItemsToMenu(
             RenderViewContextMenuBase::ConvertToContentCustomCommandId(
                 item->action),
             item->label);
+        if (item->is_experimental_feature) {
+          menu_model->SetMinorIcon(
+              menu_model->GetItemCount() - 1,
+              ui::ImageModel::FromVectorIcon(vector_icons::kScienceIcon));
+        }
+        if (!item->feature_name.empty()) {
+          menu_model->SetIsNewFeatureAt(
+              menu_model->GetItemCount() - 1,
+              GetIsNewFeatureAtValue(base::UTF16ToUTF8(item->feature_name)));
+        }
+        if (item->accelerator) {
+          menu_model->SetAcceleratorAt(
+              menu_model->GetItemCount() - 1,
+              ui::Accelerator(
+                  static_cast<ui::KeyboardCode>(item->accelerator->key_code),
+                  item->accelerator->modifiers));
+          if (item->force_show_accelerator_for_item) {
+            menu_model->SetForceShowAcceleratorForItemAt(
+                menu_model->GetItemCount() - 1, true);
+          }
+        }
         break;
-      case blink::mojom::CustomContextMenuItemType::kCheckableOption:
+      case blink::mojom::CustomContextMenuItemType::kCheckableOption: {
         menu_model->AddCheckItem(
             RenderViewContextMenuBase::ConvertToContentCustomCommandId(
                 item->action),
             item->label);
+        if (item->is_experimental_feature) {
+          menu_model->SetMinorIcon(
+              menu_model->GetItemCount() - 1,
+              ui::ImageModel::FromVectorIcon(vector_icons::kScienceIcon));
+        }
         break;
+      }
       case blink::mojom::CustomContextMenuItemType::kGroup:
         // TODO(viettrungluu): I don't know what this is supposed to do.
         NOTREACHED();
-        break;
       case blink::mojom::CustomContextMenuItemType::kSeparator:
         menu_model->AddSeparator(ui::NORMAL_SEPARATOR);
         break;
@@ -127,16 +157,18 @@ void AddCustomItemsToMenu(
             RenderViewContextMenuBase::ConvertToContentCustomCommandId(
                 item->action),
             item->label, submenu);
+        if (!item->feature_name.empty()) {
+          menu_model->SetIsNewFeatureAt(
+              menu_model->GetItemCount() - 1,
+              GetIsNewFeatureAtValue(base::UTF16ToUTF8(item->feature_name)));
+        }
         break;
       }
       default:
         NOTREACHED();
-        break;
     }
   }
 }
-
-}  // namespace
 
 // static
 void RenderViewContextMenuBase::SetContentCustomCommandIdRange(
@@ -170,7 +202,7 @@ RenderViewContextMenuBase::RenderViewContextMenuBase(
       menu_model_(this),
       render_frame_id_(render_frame_host.GetRoutingID()),
       render_frame_token_(render_frame_host.GetFrameToken()),
-      render_process_id_(render_frame_host.GetProcess()->GetID()),
+      render_process_id_(render_frame_host.GetProcess()->GetDeprecatedID()),
       site_instance_(render_frame_host.GetSiteInstance()),
       command_executed_(false) {}
 
@@ -243,11 +275,16 @@ void RenderViewContextMenuBase::AddSubMenuWithStringIdAndIcon(
                                             icon);
 }
 
+ui::IsNewFeatureAtValue RenderViewContextMenuBase::GetIsNewFeatureAtValue(
+    const std::string& feature_name) const {
+  return ui::IsNewFeatureAtValue();
+}
+
 void RenderViewContextMenuBase::UpdateMenuItem(int command_id,
                                                bool enabled,
                                                bool hidden,
                                                const std::u16string& label) {
-  absl::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
+  std::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
   if (!index.has_value())
     return;
 
@@ -265,19 +302,19 @@ void RenderViewContextMenuBase::UpdateMenuItem(int command_id,
 
 void RenderViewContextMenuBase::UpdateMenuIcon(int command_id,
                                                const ui::ImageModel& icon) {
-  absl::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
+  std::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
   if (!index.has_value())
     return;
 
   menu_model_.SetIcon(index.value(), icon);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (toolkit_delegate_)
     toolkit_delegate_->RebuildMenu();
 #endif
 }
 
 void RenderViewContextMenuBase::RemoveMenuItem(int command_id) {
-  absl::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
+  std::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
   if (!index.has_value())
     return;
 
@@ -306,7 +343,7 @@ void RenderViewContextMenuBase::RemoveAdjacentSeparators() {
 }
 
 void RenderViewContextMenuBase::RemoveSeparatorBeforeMenuItem(int command_id) {
-  absl::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
+  std::optional<size_t> index = menu_model_.GetIndexOfCommandId(command_id);
   // Ignore if command not found or if it's the first menu item.
   if (!index.has_value() || index == size_t{0})
     return;
@@ -319,14 +356,6 @@ void RenderViewContextMenuBase::RemoveSeparatorBeforeMenuItem(int command_id) {
 
   if (toolkit_delegate_)
     toolkit_delegate_->RebuildMenu();
-}
-
-// TODO(crbug.com/1393234): This method returns the RenderViewHost associated
-// with the primary main frame. Using this in the presence of out of process
-// iframes is generally incorrect, and the use of RenderViewHost itself is
-// deprecated. Callers should use GetRenderFrameHost() instead.
-RenderViewHost* RenderViewContextMenuBase::GetRenderViewHost() const {
-  return source_web_contents_->GetPrimaryMainFrame()->GetRenderViewHost();
 }
 
 WebContents* RenderViewContextMenuBase::GetWebContents() const {
@@ -435,7 +464,8 @@ void RenderViewContextMenuBase::MenuClosed(ui::SimpleMenuModel* source) {
     return;
 
   source_web_contents_->SetShowingContextMenu(false);
-  source_web_contents_->NotifyContextMenuClosed(params_.link_followed);
+  source_web_contents_->NotifyContextMenuClosed(params_.link_followed,
+                                                params_.impression);
   for (auto& observer : observers_) {
     observer.OnMenuClosed();
   }
@@ -449,16 +479,35 @@ RenderFrameHost* RenderViewContextMenuBase::GetRenderFrameHost() const {
 
 void RenderViewContextMenuBase::OpenURL(const GURL& url,
                                         const GURL& referring_url,
+                                        const url::Origin& initiator,
                                         WindowOpenDisposition disposition,
                                         ui::PageTransition transition) {
-  OpenURLWithExtraHeaders(url, referring_url, disposition, transition,
-                          "" /* extra_headers */,
-                          false /* started_from_context_menu */);
+  OpenURLWithExtraHeaders(url, referring_url, initiator, disposition,
+                          transition, "" /* extra_headers */,
+                          true /* started_from_context_menu */);
 }
 
 void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
     const GURL& url,
     const GURL& referring_url,
+    const url::Origin& initiator,
+    WindowOpenDisposition disposition,
+    ui::PageTransition transition,
+    const std::string& extra_headers,
+    bool started_from_context_menu) {
+  content::OpenURLParams open_url_params = GetOpenURLParamsWithExtraHeaders(
+      url, referring_url, initiator, disposition, transition, extra_headers,
+      started_from_context_menu);
+
+  source_web_contents_->OpenURL(open_url_params,
+                                /*navigation_handle_callback=*/{});
+}
+
+content::OpenURLParams
+RenderViewContextMenuBase::GetOpenURLParamsWithExtraHeaders(
+    const GURL& url,
+    const GURL& referring_url,
+    const url::Origin& initiator,
     WindowOpenDisposition disposition,
     ui::PageTransition transition,
     const std::string& extra_headers,
@@ -466,15 +515,17 @@ void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
   // Do not send the referrer url to OTR windows. We still need the
   // |referring_url| to populate the |initiator_origin| below for browser UI.
   GURL referrer_url;
-  if (disposition != WindowOpenDisposition::OFF_THE_RECORD)
+  if (disposition != WindowOpenDisposition::OFF_THE_RECORD) {
     referrer_url = referring_url.GetAsReferrer();
+  }
 
   content::Referrer referrer = content::Referrer::SanitizeForRequest(
       url, content::Referrer(referrer_url, params_.referrer_policy));
 
   if (params_.link_url == url &&
-      disposition != WindowOpenDisposition::OFF_THE_RECORD)
+      disposition != WindowOpenDisposition::OFF_THE_RECORD) {
     params_.link_followed = url;
+  }
 
   OpenURLParams open_url_params(url, referrer, disposition, transition, false,
                                 started_from_context_menu);
@@ -486,14 +537,14 @@ void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
 
   open_url_params.initiator_frame_token = render_frame_token_;
   open_url_params.initiator_process_id = render_process_id_;
-  open_url_params.initiator_origin = url::Origin::Create(referring_url);
+  open_url_params.initiator_origin = initiator;
 
   open_url_params.source_site_instance = site_instance_;
 
   if (disposition != WindowOpenDisposition::OFF_THE_RECORD)
     open_url_params.impression = params_.impression;
 
-  source_web_contents_->OpenURL(open_url_params);
+  return open_url_params;
 }
 
 bool RenderViewContextMenuBase::IsCustomItemChecked(int id) const {

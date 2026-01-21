@@ -4,10 +4,13 @@
 
 #include "chrome/browser/feedback/system_logs/log_sources/chrome_root_store_log_source.h"
 
+#include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/common/net/x509_certificate_model.h"
 #include "components/feedback/system_logs/system_logs_source.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
+#include "net/cert/x509_util.h"
 #include "services/cert_verifier/cert_verifier_service_factory.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 
@@ -17,6 +20,10 @@ namespace {
 
 constexpr char kChromeRootStoreKey[] = "chrome_root_store";
 
+// Process returned Chrome Root Store certs. Certs that are processed here are
+// (a) compiled into the Chrome binary or (b) from Component Updater, which
+// makes parsing these bytes not a Rule of 2 violation
+// (https://chromium.googlesource.com/chromium/src/+/HEAD/docs/security/rule-of-2.md).
 void PopulateChromeRootStoreLogsAsync(
     system_logs::SysLogsSourceCallback callback,
     cert_verifier::mojom::ChromeRootStoreInfoPtr info) {
@@ -25,8 +32,20 @@ void PopulateChromeRootStoreLogsAsync(
   std::string entry;
   entry += "version: " + base::NumberToString(info->version) + "\n\n";
   for (auto const& cert_info : info->root_cert_info) {
+    x509_certificate_model::X509CertificateModel model(
+        net::x509_util::CreateCryptoBuffer(cert_info->cert));
     entry += "hash: " + cert_info->sha256hash_hex +
-             "  name: " + cert_info->name + "\n";
+             "  name: " + model.GetTitle() + "\n";
+  }
+  if (info->mtc_metadata_update_time) {
+    entry += "\n\nMTC metadata update_time: " +
+             base::TimeFormatAsIso8601(*info->mtc_metadata_update_time) +
+             "\n\n";
+  }
+  for (auto const& mtc_info : info->root_mtc_info) {
+    entry += "log_id: " + mtc_info->log_id_text +
+             " landmarks: " + mtc_info->min_landmark_id_text + " .. " +
+             mtc_info->last_landmark_id_text + "\n";
   }
   response->emplace(kChromeRootStoreKey, std::move(entry));
   std::move(callback).Run(std::move(response));
@@ -37,7 +56,7 @@ void PopulateChromeRootStoreLogsAsync(
 ChromeRootStoreLogSource::ChromeRootStoreLogSource()
     : SystemLogsSource("ChromeRootStore") {}
 
-ChromeRootStoreLogSource::~ChromeRootStoreLogSource() {}
+ChromeRootStoreLogSource::~ChromeRootStoreLogSource() = default;
 
 void ChromeRootStoreLogSource::Fetch(
     system_logs::SysLogsSourceCallback callback) {

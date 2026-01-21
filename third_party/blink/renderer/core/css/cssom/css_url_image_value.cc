@@ -14,9 +14,10 @@ const String& CSSURLImageValue::url() const {
   return value_->RelativeUrl();
 }
 
-absl::optional<gfx::Size> CSSURLImageValue::IntrinsicSize() const {
-  if (Status() != ResourceStatus::kCached)
-    return absl::nullopt;
+std::optional<gfx::Size> CSSURLImageValue::IntrinsicSize() const {
+  if (Status() != ResourceStatus::kCached) {
+    return std::nullopt;
+  }
 
   DCHECK(!value_->IsCachePending());
   ImageResourceContent* resource_content = value_->CachedImage()->CachedImage();
@@ -27,23 +28,22 @@ absl::optional<gfx::Size> CSSURLImageValue::IntrinsicSize() const {
 }
 
 ResourceStatus CSSURLImageValue::Status() const {
-  if (value_->IsCachePending())
+  if (value_->IsCachePending()) {
     return ResourceStatus::kNotStarted;
+  }
   return value_->CachedImage()->CachedImage()->GetContentStatus();
 }
 
 scoped_refptr<Image> CSSURLImageValue::GetSourceImageForCanvas(
     SourceImageStatus*,
-    const gfx::SizeF&,
-    const AlphaDisposition alpha_disposition) {
-  // UnpremultiplyAlpha is not implemented yet.
-  DCHECK_EQ(alpha_disposition, kPremultiplyAlpha);
+    const gfx::SizeF&) {
   return GetImage();
 }
 
 scoped_refptr<Image> CSSURLImageValue::GetImage() const {
-  if (value_->IsCachePending())
+  if (value_->IsCachePending()) {
     return nullptr;
+  }
   // cachedImage can be null if image is StyleInvalidImage
   ImageResourceContent* cached_image = value_->CachedImage()->CachedImage();
   if (cached_image) {
@@ -58,7 +58,7 @@ bool CSSURLImageValue::IsAccelerated() const {
 }
 
 const CSSValue* CSSURLImageValue::ToCSSValue() const {
-  return value_;
+  return value_.Get();
 }
 
 void CSSURLImageValue::Trace(Visitor* visitor) const {

@@ -9,29 +9,38 @@
 
 #include <list>
 #include <memory>
+#include <optional>
 
+#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
-#include "base/memory/writable_shared_memory_region.h"
 #include "base/process/process.h"
 #include "base/synchronization/waitable_event_watcher.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
+#include "components/metrics/histogram_child_process.h"
+#include "content/browser/child_process_host_impl.h"
 #include "content/browser/child_process_launcher.h"
 #include "content/browser/tracing/tracing_service_controller.h"
+#include "content/common/buildflags.h"
 #include "content/common/child_process.mojom.h"
-#include "content/common/child_process_host_impl.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/child_process_data.h"
-#include "content/public/common/child_process_host.h"
-#include "content/public/common/child_process_host_delegate.h"
+#include "content/public/browser/child_process_host.h"
+#include "content/public/browser/child_process_host_delegate.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/object_watcher.h"
 #endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include "content/browser/child_thread_type_switcher_linux.h"
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 namespace base {
 class CommandLine;
@@ -45,7 +54,6 @@ namespace content {
 
 class BrowserChildProcessHostIterator;
 class BrowserChildProcessObserver;
-class BrowserMessageFilter;
 
 // Plugins/workers and other child processes that live on the IO thread use this
 // class. RenderProcessHostImpl is the main exception that doesn't use this
@@ -53,16 +61,17 @@ class BrowserMessageFilter;
 class BrowserChildProcessHostImpl
     : public BrowserChildProcessHost,
       public ChildProcessHostDelegate,
+      public metrics::HistogramChildProcess,
 #if BUILDFLAG(IS_WIN)
       public base::win::ObjectWatcher::Delegate,
 #endif
       public ChildProcessLauncher::Client,
-      public memory_instrumentation::mojom::CoordinatorConnector {
+      public memory_instrumentation::mojom::CoordinatorConnector,
+      public base::MemoryPressureListener {
  public:
   // Constructs a process host with |ipc_mode| determining how IPC is done.
   BrowserChildProcessHostImpl(content::ProcessType process_type,
-                              BrowserChildProcessHostDelegate* delegate,
-                              ChildProcessHost::IpcMode ipc_mode);
+                              BrowserChildProcessHostDelegate* delegate);
 
   ~BrowserChildProcessHostImpl() override;
 
@@ -70,15 +79,9 @@ class BrowserChildProcessHostImpl
   // instance.
   static void TerminateAll();
 
-  // Appends kTraceStartup and kTraceRecordMode flags to the command line, if
-  // needed.
-  static void CopyTraceStartupFlags(base::CommandLine* cmd_line);
-
   // BrowserChildProcessHost implementation:
-  bool Send(IPC::Message* message) override;
   void Launch(std::unique_ptr<SandboxedProcessLauncherDelegate> delegate,
-              std::unique_ptr<base::CommandLine> cmd_line,
-              bool terminate_on_shutdown) override;
+              std::unique_ptr<base::CommandLine> cmd_line) override;
   const ChildProcessData& GetData() override;
   ChildProcessHost* GetHost() override;
   ChildProcessTerminationInfo GetTerminationInfo(bool known_dead) override;
@@ -86,17 +89,19 @@ class BrowserChildProcessHostImpl
       override;
   void SetName(const std::u16string& name) override;
   void SetMetricsName(const std::string& metrics_name) override;
-  void SetProcess(base::Process process) override;
 
   // ChildProcessHostDelegate implementation:
   void OnChannelInitialized(IPC::Channel* channel) override;
   void OnChildDisconnected() override;
   const base::Process& GetProcess() override;
   void BindHostReceiver(mojo::GenericPendingReceiver receiver) override;
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnChannelConnected(int32_t peer_pid) override;
-  void OnChannelError() override;
-  void OnBadMessageReceived(const IPC::Message& message) override;
+  void OnBadMessageReceived() override;
+
+  // HistogramChildProcess implementation:
+  void BindChildHistogramFetcherFactory(
+      mojo::PendingReceiver<metrics::mojom::ChildHistogramFetcherFactory>
+          factory) override;
 
   // Terminates the process and logs a stack trace after a bad message was
   // received from the child process.
@@ -105,16 +110,12 @@ class BrowserChildProcessHostImpl
   // Removes this host from the host list. Calls ChildProcessHost::ForceShutdown
   void ForceShutdown();
 
-  // Adds an IPC message filter.
-  void AddFilter(BrowserMessageFilter* filter);
-
   // Same as Launch(), but the process is launched with preloaded files and file
   // descriptors containing in `file_data`.
   void LaunchWithFileData(
       std::unique_ptr<SandboxedProcessLauncherDelegate> delegate,
       std::unique_ptr<base::CommandLine> cmd_line,
-      std::unique_ptr<ChildProcessLauncherFileData> file_data,
-      bool terminate_on_shutdown);
+      std::unique_ptr<ChildProcessLauncherFileData> file_data);
 
   // Unlike Launch(), AppendExtraCommandLineSwitches will not be called
   // in this function. If AppendExtraCommandLineSwitches has been called before
@@ -123,10 +124,11 @@ class BrowserChildProcessHostImpl
   void LaunchWithoutExtraCommandLineSwitches(
       std::unique_ptr<SandboxedProcessLauncherDelegate> delegate,
       std::unique_ptr<base::CommandLine> cmd_line,
-      std::unique_ptr<ChildProcessLauncherFileData> file_data,
-      bool terminate_on_shutdown);
+      std::unique_ptr<ChildProcessLauncherFileData> file_data);
 
-  static void HistogramBadMessageTerminated(ProcessType process_type);
+#if !BUILDFLAG(IS_ANDROID)
+  void SetProcessPriority(base::Process::Priority priority);
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
   void EnableWarmUpConnection();
@@ -145,7 +147,9 @@ class BrowserChildProcessHostImpl
         ->child_process();
   }
 
-  typedef std::list<BrowserChildProcessHostImpl*> BrowserChildProcessList;
+  typedef std::list<raw_ptr<BrowserChildProcessHostImpl, CtnExperimental>>
+      BrowserChildProcessList;
+
  private:
   friend class BrowserChildProcessHostIterator;
   friend class BrowserChildProcessObserver;
@@ -179,6 +183,9 @@ class BrowserChildProcessHostImpl
       mojo::PendingRemote<memory_instrumentation::mojom::ClientProcess>
           client_process) override;
 
+  void OnMemoryPressure(
+      base::MemoryPressureLevel memory_pressure_level) override;
+
   // Returns true if the process has successfully launched. Must only be called
   // on the IO thread.
   bool IsProcessLaunched() const;
@@ -202,8 +209,8 @@ class BrowserChildProcessHostImpl
   std::unique_ptr<ChildProcessHost> child_process_host_;
   mojo::Receiver<memory_instrumentation::mojom::CoordinatorConnector>
       coordinator_connector_receiver_{this};
-
-  std::unique_ptr<ChildProcessLauncher> child_process_;
+  mojo::BinderMapWithContext<BrowserChildProcessHost*> binder_map_;
+  std::unique_ptr<ChildProcessLauncher> child_process_launcher_;
 
 #if BUILDFLAG(IS_WIN)
   // Watches to see if the child process exits before the IPC channel has
@@ -215,9 +222,26 @@ class BrowserChildProcessHostImpl
   // The memory allocator, if any, in which the process will write its metrics.
   std::unique_ptr<base::PersistentMemoryAllocator> metrics_allocator_;
 
-  // The shared memory region used by |metrics_allocator_| that should be
-  // transferred to the child process.
-  base::WritableSharedMemoryRegion metrics_shared_region_;
+  // The histogram shared memory region used to transmit metrics. The memory
+  // region is allocated by the process host (this object) but ownership is
+  // shared with the child process launcher/helper which runs, and is destroyed,
+  // asynchronously. Depending on the feature configuration, either the host or
+  // the launcher is responsible for passing the memory region to the child.
+  // The destruction order of the host, launcher and child are indeterminate.
+  scoped_refptr<base::RefCountedData<base::UnsafeSharedMemoryRegion>>
+      metrics_shared_region_;
+
+  // The tracing config memory region. Ownership of the memory region object is
+  // shared with the child process launcher/helper which runs, and is destroyed,
+  // asynchronously.
+  scoped_refptr<base::RefCountedData<base::ReadOnlySharedMemoryRegion>>
+      tracing_config_memory_region_;
+
+  // The tracing output memory region to transmit traces. Ownership of the
+  // memory region object is shared with the child process launcher/helper which
+  // runs, and is destroyed, asynchronously.
+  scoped_refptr<base::RefCountedData<base::UnsafeSharedMemoryRegion>>
+      tracing_output_memory_region_;
 
   // Indicates if the main browser process is used instead of a dedicated child
   // process.
@@ -254,6 +278,13 @@ class BrowserChildProcessHostImpl
   // For child process to connect to the system tracing service.
   std::unique_ptr<tracing::SystemTracingService> system_tracing_service_;
 #endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  ChildThreadTypeSwitcher child_thread_type_switcher_;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
+  std::optional<base::MemoryPressureListenerRegistration>
+      memory_pressure_listener_registration_;
 
   base::WeakPtrFactory<BrowserChildProcessHostImpl> weak_factory_{this};
 };

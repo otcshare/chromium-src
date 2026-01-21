@@ -10,12 +10,13 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/media_router/browser/mirroring_media_controller_host.h"
 #include "components/media_router/browser/presentation_connection_message_observer.h"
 #include "components/media_router/common/media_route.h"
 #include "components/media_router/common/media_route_provider_helper.h"
@@ -24,15 +25,17 @@
 #include "components/media_router/common/mojom/media_router.mojom.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/browser/presentation_service_delegate.h"
+#include "extensions/buildflags/buildflags.h"
 #include "media/base/flinging_controller.h"
 #include "third_party/blink/public/mojom/presentation/presentation.mojom.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 #include "components/media_router/browser/logger_impl.h"
+#include "components/media_router/browser/media_router_debugger.h"
 #include "components/media_router/common/mojom/media_controller.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif
 
 namespace content {
 class WebContents;
@@ -87,14 +90,12 @@ class MediaRouter : public KeyedService {
   // success or failure, in the order they are listed.
   // If |timeout| is positive, then any un-invoked |callbacks| will be invoked
   // with a timeout error after the timeout expires.
-  // If |incognito| is true, the request was made by an incognito profile.
   virtual void CreateRoute(const MediaSource::Id& source_id,
                            const MediaSink::Id& sink_id,
                            const url::Origin& origin,
                            content::WebContents* web_contents,
                            MediaRouteResponseCallback callback,
-                           base::TimeDelta timeout,
-                           bool incognito) = 0;
+                           base::TimeDelta timeout) = 0;
 
   // Joins an existing route identified by |presentation_id|.
   // |source|: The source to route to the existing route.
@@ -106,14 +107,12 @@ class MediaRouter : public KeyedService {
   // success or failure, in the order they are listed.
   // If |timeout| is positive, then any un-invoked |callbacks| will be invoked
   // with a timeout error after the timeout expires.
-  // If |incognito| is true, the request was made by an incognito profile.
   virtual void JoinRoute(const MediaSource::Id& source,
                          const std::string& presentation_id,
                          const url::Origin& origin,
                          content::WebContents* web_contents,
                          MediaRouteResponseCallback callback,
-                         base::TimeDelta timeout,
-                         bool incognito) = 0;
+                         base::TimeDelta timeout) = 0;
 
   // Terminates the media route specified by |route_id|.
   virtual void TerminateRoute(const MediaRoute::Id& route_id) = 0;
@@ -156,7 +155,12 @@ class MediaRouter : public KeyedService {
   virtual std::unique_ptr<media::FlingingController> GetFlingingController(
       const MediaRoute::Id& route_id) = 0;
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  // Returns a pointer to a controller host that sends media commands related to
+  // mirroring within a route.
+  virtual MirroringMediaControllerHost* GetMirroringMediaControllerHost(
+      const MediaRoute::Id& route_id) = 0;
+
   // Returns the IssueManager owned by the MediaRouter. Guaranteed to be
   // non-null.
   virtual IssueManager* GetIssueManager() = 0;
@@ -187,10 +191,13 @@ class MediaRouter : public KeyedService {
 
   // Returns a pointer to LoggerImpl that can be used to add logging messages.
   virtual LoggerImpl* GetLogger() = 0;
-#endif  // !BUILDFLAG(IS_ANDROID)
+
+  // Returns the instance of the debugger for this MediaRouter instance.
+  virtual MediaRouterDebugger& GetDebugger() = 0;
+#endif
 
  private:
-  // TODO(https://crbug.com/1198580): remove message observer classes and API.
+  // TODO(crbug.com/40177419): remove message observer classes and API.
   friend class IssuesObserver;
   friend class MediaSinksObserver;
   friend class MediaRoutesObserver;

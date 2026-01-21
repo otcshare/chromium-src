@@ -4,40 +4,86 @@
 
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader.h"
 
-#include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/time/time.h"
-#include "content/browser/preloading/prefetch/prefetch_container.h"
+#include "base/check_is_test.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/trace_event.h"
+#include "content/browser/loader/navigation_url_loader.h"
+#include "content/browser/preloading/prefetch/prefetch_features.h"
+#include "content/browser/preloading/prefetch/prefetch_response_reader.h"
+#include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/service_worker/service_worker_main_resource_handle.h"
+#include "content/browser/service_worker/service_worker_main_resource_loader_interceptor.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace content {
 
 PrefetchStreamingURLLoader::PrefetchStreamingURLLoader(
-    network::mojom::URLLoaderFactory* url_loader_factory,
-    std::unique_ptr<network::ResourceRequest> request,
-    const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
-    base::TimeDelta timeout_duration,
     OnPrefetchResponseStartedCallback on_prefetch_response_started_callback,
-    OnPrefetchResponseCompletedCallback on_prefetch_response_completed_callback,
-    OnPrefetchRedirectCallback on_prefetch_redirect_callback)
+    OnPrefetchRedirectCallback on_prefetch_redirect_callback,
+    OnServiceWorkerStateDeterminedCallback
+        on_service_worker_state_determined_callback,
+    perfetto::Flow flow)
     : on_prefetch_response_started_callback_(
           std::move(on_prefetch_response_started_callback)),
-      on_prefetch_response_completed_callback_(
-          std::move(on_prefetch_response_completed_callback)),
-      on_prefetch_redirect_callback_(std::move(on_prefetch_redirect_callback)) {
+      on_prefetch_redirect_callback_(std::move(on_prefetch_redirect_callback)),
+      on_service_worker_state_determined_callback_(
+          std::move(on_service_worker_state_determined_callback)),
+      flow_(std::move(flow)) {}
+
+void PrefetchStreamingURLLoader::Start(
+    PrefetchServiceWorkerState final_service_worker_state,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const network::ResourceRequest& request,
+    const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
+    base::TimeDelta timeout_duration) {
+  std::move(on_service_worker_state_determined_callback_)
+      .Run(final_service_worker_state);
+
+  // Copying the ResourceRequest is currently necessary because the Mojo traits
+  // for TrustedParams currently const_cast and then move the underlying
+  // devtools_observer, rather than cloning it. The copy constructor for
+  // TrustedParams, on the other hand, clones it correctly.
+  //
+  // This is a violation of const correctness which lead to a confusing bug
+  // here.
+  network::ResourceRequest new_request(request);
+  if (!new_request.trusted_params) {
+    new_request.trusted_params.emplace();
+  }
+
+  // Request cookies will be included with the response.
+  // They must be removed before forwarding to any untrusted client.
+  // This happens in `PrefetchResponseReader::HandleRedirect` and
+  // `PrefetchResponseReader::OnReceiveResponse`.
+  new_request.trusted_params->include_request_cookies_with_response = true;
+
+  // `is_outermost_main_frame` is true here because the prefetched result is
+  // served only for outermost main frames.
   url_loader_factory->CreateLoaderAndStart(
       prefetch_url_loader_.BindNewPipeAndPassReceiver(), /*request_id=*/0,
-      network::mojom::kURLLoadOptionSendSSLInfoWithResponse |
-          network::mojom::kURLLoadOptionSniffMimeType |
-          network::mojom::kURLLoadOptionSendSSLInfoForCertificateError,
-      *request,
+      NavigationURLLoader::GetURLLoaderOptions(
+          /*is_outermost_main_frame=*/true),
+      new_request,
       prefetch_url_loader_client_receiver_.BindNewPipeAndPassRemote(
-          base::ThreadTaskRunnerHandle::Get()),
+          base::SingleThreadTaskRunner::GetCurrentDefault()),
       net::MutableNetworkTrafficAnnotationTag(network_traffic_annotation));
-  prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
-      &PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo,
-      weak_ptr_factory_.GetWeakPtr()));
+  if (base::FeatureList::IsEnabled(features::kPrefetchGracefulNotification)) {
+    // We call `DisconnectPrefetchURLLoaderMojo()` in `OnComplete()`, so
+    // disconnection reaching this handler is always unexpected disconnection
+    // before `OnComplete()` and should be considered as a failure.
+    prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
+        &PrefetchStreamingURLLoader::OnComplete, weak_ptr_factory_.GetWeakPtr(),
+        network::URLLoaderCompletionStatus(net::ERR_ABORTED)));
+  } else {
+    prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
+        &PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo,
+        weak_ptr_factory_.GetWeakPtr()));
+  }
 
   if (!timeout_duration.is_zero()) {
     timeout_timer_.Start(
@@ -48,127 +94,204 @@ PrefetchStreamingURLLoader::PrefetchStreamingURLLoader(
   }
 }
 
-PrefetchStreamingURLLoader::~PrefetchStreamingURLLoader() {
-  base::UmaHistogramEnumeration(
-      "PrefetchProxy.Prefetch.StreamingURLLoaderFinalStatus", status_);
+PrefetchStreamingURLLoader::~PrefetchStreamingURLLoader() = default;
+
+// static
+base::WeakPtr<PrefetchStreamingURLLoader>
+PrefetchStreamingURLLoader::CreateAndStart(
+    scoped_refptr<network::SharedURLLoaderFactory> network_url_loader_factory,
+    const network::ResourceRequest& request,
+    const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
+    base::TimeDelta timeout_duration,
+    OnPrefetchResponseStartedCallback on_prefetch_response_started_callback,
+    OnPrefetchRedirectCallback on_prefetch_redirect_callback,
+    base::WeakPtr<PrefetchResponseReader> response_reader,
+    PrefetchServiceWorkerState initial_service_worker_state,
+    BrowserContext* browser_context_for_service_worker,
+    OnServiceWorkerStateDeterminedCallback
+        on_service_worker_state_determined_callback,
+    perfetto::Flow flow) {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::CreateAndStart", flow);
+
+  std::unique_ptr<PrefetchStreamingURLLoader> streaming_loader =
+      std::make_unique<PrefetchStreamingURLLoader>(
+          std::move(on_prefetch_response_started_callback),
+          std::move(on_prefetch_redirect_callback),
+          std::move(on_service_worker_state_determined_callback),
+          std::move(flow));
+
+  streaming_loader->SetResponseReader(std::move(response_reader));
+
+  base::WeakPtr<PrefetchStreamingURLLoader> weak_streaming_loader =
+      streaming_loader->GetWeakPtr();
+  weak_streaming_loader->self_pointer_ = std::move(streaming_loader);
+
+  switch (initial_service_worker_state) {
+    case PrefetchServiceWorkerState::kAllowed:
+      weak_streaming_loader->StartServiceWorkerInterceptor(
+          browser_context_for_service_worker,
+          std::move(network_url_loader_factory), request,
+          network_traffic_annotation, std::move(timeout_duration));
+      break;
+    case PrefetchServiceWorkerState::kDisallowed:
+      weak_streaming_loader->Start(PrefetchServiceWorkerState::kDisallowed,
+                                   std::move(network_url_loader_factory),
+                                   request, network_traffic_annotation,
+                                   std::move(timeout_duration));
+      break;
+    case PrefetchServiceWorkerState::kControlled:
+      NOTREACHED();
+  }
+
+  return weak_streaming_loader;
 }
 
-bool PrefetchStreamingURLLoader::Servable(
-    base::TimeDelta cacheable_duration) const {
-  // If the response hasn't been received yet (meaning response_complete_time_
-  // is absl::nullopt), we can still serve the prefetch (depending on |head_|).
-  return servable_ &&
-         (!response_complete_time_.has_value() ||
-          base::TimeTicks::Now() <
-              response_complete_time_.value() + cacheable_duration);
+void PrefetchStreamingURLLoader::SetResponseReader(
+    base::WeakPtr<PrefetchResponseReader> response_reader) {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::SetResponseReader",
+              flow_);
+
+  response_reader_ = std::move(response_reader);
+  if (response_reader_) {
+    response_reader_->SetStreamingURLLoader(GetWeakPtr());
+  }
+}
+
+void PrefetchStreamingURLLoader::CancelIfNotServing() {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::CancelIfNotServing",
+              flow_);
+
+  if (used_for_serving_) {
+    return;
+  }
+  DisconnectPrefetchURLLoaderMojo();
 }
 
 void PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo() {
+  TRACE_EVENT("loading",
+              "PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo",
+              flow_);
+
+  // If this is going to be deleted while waiting for redirect handling from
+  // `PrefetchService`, treat it as a redirect failure.
+  if (is_waiting_handle_redirect_from_prefetch_service_) {
+    is_waiting_handle_redirect_from_prefetch_service_ = false;
+    if (response_reader_) {
+      response_reader_->HandleRedirect(PrefetchRedirectStatus::kFail, {}, {});
+    }
+  }
   prefetch_url_loader_.reset();
   prefetch_url_loader_client_receiver_.reset();
-  prefetch_url_loader_disconnected_ = true;
+  timeout_timer_.Stop();
 
-  if (serving_url_loader_disconnected_) {
-    PostTaskToDeleteSelf();
-  }
-}
-
-void PrefetchStreamingURLLoader::OnServingURLLoaderMojoDisconnect() {
-  serving_url_loader_receiver_.reset();
-  serving_url_loader_client_.reset();
-  serving_url_loader_disconnected_ = true;
-
-  if (prefetch_url_loader_disconnected_) {
-    PostTaskToDeleteSelf();
-  }
-}
-
-void PrefetchStreamingURLLoader::MakeSelfOwnedAndDeleteSoon(
-    std::unique_ptr<PrefetchStreamingURLLoader> self) {
-  self_pointer_ = std::move(self);
-  PostTaskToDeleteSelf();
-}
-
-void PrefetchStreamingURLLoader::PostTaskToDeleteSelf() {
   if (!self_pointer_) {
     return;
   }
 
-  // To avoid UAF bugs, post a separate task to delete this object.
-  base::SequencedTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE,
-                                                     std::move(self_pointer_));
+  if (on_deletion_scheduled_for_tests_) {
+    std::move(on_deletion_scheduled_for_tests_).Run();
+  }
+
+  // To avoid UAF bugs, post a separate task to delete this object, because this
+  // can be called in one of PrefetchStreamingURLLoader callbacks.
+  base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, std::move(self_pointer_));
+}
+
+bool PrefetchStreamingURLLoader::IsDeletionScheduledForCHECK() const {
+  return !self_pointer_;
+}
+
+void PrefetchStreamingURLLoader::SetOnDeletionScheduledForTests(
+    base::OnceClosure on_deletion_scheduled_for_tests) {
+  on_deletion_scheduled_for_tests_ = std::move(on_deletion_scheduled_for_tests);
 }
 
 void PrefetchStreamingURLLoader::OnReceiveEarlyHints(
     network::mojom::EarlyHintsPtr early_hints) {
-  if (serving_url_loader_client_) {
-    serving_url_loader_client_->OnReceiveEarlyHints(std::move(early_hints));
-    return;
-  }
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::OnReceiveEarlyHints",
+              flow_);
 
-  event_queue_.push_back(
-      base::BindOnce(&PrefetchStreamingURLLoader::OnReceiveEarlyHints,
-                     base::Unretained(this), std::move(early_hints)));
+  if (response_reader_) {
+    response_reader_->OnReceiveEarlyHints(std::move(early_hints));
+  }
 }
 
 void PrefetchStreamingURLLoader::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr head,
     mojo::ScopedDataPipeConsumerHandle body,
-    absl::optional<mojo_base::BigBuffer> cached_metadata) {
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::OnReceiveResponse",
+              flow_);
+
   // Cached metadata is not supported for prefetch.
   cached_metadata.reset();
 
-  head_ = std::move(head);
-  head_->was_in_prefetch_cache = true;
+  head->was_in_prefetch_cache = true;
 
   // Checks head to determine if the prefetch can be served.
-  DCHECK(on_prefetch_response_started_callback_);
-  status_ = std::move(on_prefetch_response_started_callback_).Run(head_.get());
+  CHECK(on_prefetch_response_started_callback_);
+  std::optional<PrefetchErrorOnResponseReceived> error =
+      std::move(on_prefetch_response_started_callback_).Run(head.get());
 
-  // Update servable_ based on the returned status_
-  switch (status_) {
-    case PrefetchStreamingURLLoaderStatus::kHeadReceivedWaitingOnBody:
-      servable_ = true;
-      break;
-    case PrefetchStreamingURLLoaderStatus::kPrefetchWasDecoy:
-    case PrefetchStreamingURLLoaderStatus::kFailedInvalidHead:
-    case PrefetchStreamingURLLoaderStatus::kFailedInvalidHeaders:
-    case PrefetchStreamingURLLoaderStatus::kFailedNon2XX:
-    case PrefetchStreamingURLLoaderStatus::kFailedMIMENotSupported:
-      servable_ = false;
-      break;
-    case PrefetchStreamingURLLoaderStatus::kWaitingOnHead:
-    case PrefetchStreamingURLLoaderStatus::kRedirected:
-    case PrefetchStreamingURLLoaderStatus::kSuccessfulNotServed:
-    case PrefetchStreamingURLLoaderStatus::kSuccessfulServedAfterCompletion:
-    case PrefetchStreamingURLLoaderStatus::kSuccessfulServedBeforeCompletion:
-    case PrefetchStreamingURLLoaderStatus::kFailedNetError:
-    case PrefetchStreamingURLLoaderStatus::kFailedNetErrorButServed:
-      NOTREACHED();
-      break;
+  // `head` and `body` are discarded if `response_reader_` is `nullptr`, because
+  // it means the `PrefetchResponseReader` is deleted and thus we no longer
+  // serve the prefetched result.
+  if (response_reader_) {
+    response_reader_->OnReceiveResponse(std::move(error), std::move(head),
+                                        std::move(body),
+                                        std::move(service_worker_handle_));
   }
-
-  if (!servable_) {
-    return;
-  }
-
-  head_->navigation_delivery_type =
-      network::mojom::NavigationDeliveryType::kNavigationalPrefetch;
-  body_ = std::move(body);
 }
 
 void PrefetchStreamingURLLoader::OnReceiveRedirect(
     const net::RedirectInfo& redirect_info,
-    network::mojom::URLResponseHeadPtr head) {
-  servable_ = false;
-  status_ = PrefetchStreamingURLLoaderStatus::kRedirected;
+    network::mojom::URLResponseHeadPtr redirect_head) {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::OnReceiveRedirect",
+              flow_);
 
-  // Redirects are currently not supported by prefetch, so is just to inform
-  // the owner of the callback of the redirect.
-  std::vector<std::string> removed_headers;
-  DCHECK(on_prefetch_redirect_callback_);
-  on_prefetch_redirect_callback_.Run(redirect_info, *head.get(),
-                                     &removed_headers);
+  is_waiting_handle_redirect_from_prefetch_service_ = true;
+  CHECK(on_prefetch_redirect_callback_);
+  on_prefetch_redirect_callback_.Run(redirect_info, std::move(redirect_head));
+}
+
+void PrefetchStreamingURLLoader::HandleRedirect(
+    PrefetchRedirectStatus redirect_status,
+    const net::RedirectInfo& redirect_info,
+    network::mojom::URLResponseHeadPtr redirect_head,
+    PrefetchUpdateHeadersParams update_headers_params) {
+  TRACE_EVENT("loading", "PrefetchStreamingURLLoader::HandleRedirect", flow_);
+
+  if (!is_waiting_handle_redirect_from_prefetch_service_) {
+    // The redirect should have already been handled.
+    return;
+  }
+  is_waiting_handle_redirect_from_prefetch_service_ = false;
+  CHECK(redirect_head);
+  if (response_reader_) {
+    response_reader_->HandleRedirect(redirect_status, redirect_info,
+                                     std::move(redirect_head));
+  }
+
+  switch (redirect_status) {
+    case PrefetchRedirectStatus::kFollow:
+      CHECK(prefetch_url_loader_);
+      prefetch_url_loader_->FollowRedirect(
+          std::move(update_headers_params.removed_headers),
+          std::move(update_headers_params.modified_headers),
+          std::move(update_headers_params.modified_cors_exempt_headers),
+          /*new_url=*/std::nullopt);
+      break;
+    case PrefetchRedirectStatus::kSwitchNetworkContext:
+      // The redirect requires a switch in network context, so the redirect will
+      // be followed using a separate PrefetchStreamingURLLoader, and this url
+      // loader will stop its request.
+      DisconnectPrefetchURLLoaderMojo();
+      break;
+    case PrefetchRedirectStatus::kFail:
+      DisconnectPrefetchURLLoaderMojo();
+      break;
+  }
 }
 
 void PrefetchStreamingURLLoader::OnUploadProgress(
@@ -181,138 +304,127 @@ void PrefetchStreamingURLLoader::OnUploadProgress(
 
 void PrefetchStreamingURLLoader::OnTransferSizeUpdated(
     int32_t transfer_size_diff) {
-  if (serving_url_loader_client_) {
-    serving_url_loader_client_->OnTransferSizeUpdated(transfer_size_diff);
-    return;
+  if (response_reader_) {
+    response_reader_->OnTransferSizeUpdated(transfer_size_diff);
   }
-
-  event_queue_.push_back(
-      base::BindOnce(&PrefetchStreamingURLLoader::OnTransferSizeUpdated,
-                     base::Unretained(this), transfer_size_diff));
 }
 
 void PrefetchStreamingURLLoader::OnComplete(
     const network::URLLoaderCompletionStatus& completion_status) {
+  is_waiting_handle_redirect_from_prefetch_service_ = false;
+
+  if (response_reader_) {
+    response_reader_->OnComplete(completion_status);
+  }
+
   DisconnectPrefetchURLLoaderMojo();
-  timeout_timer_.AbandonAndStop();
+}
 
-  completion_status_ = completion_status;
-  response_complete_time_ = base::TimeTicks::Now();
+void PrefetchStreamingURLLoader::OnStartServing() {
+  // Once the prefetch is served, stop the timeout timer.
+  timeout_timer_.Stop();
 
-  if (status_ == PrefetchStreamingURLLoaderStatus::kWaitingOnHead ||
-      status_ == PrefetchStreamingURLLoaderStatus::kHeadReceivedWaitingOnBody) {
-    status_ = completion_status_->error_code == net::OK
-                  ? PrefetchStreamingURLLoaderStatus::kSuccessfulNotServed
-                  : PrefetchStreamingURLLoaderStatus::kFailedNetError;
-  } else if (status_ == PrefetchStreamingURLLoaderStatus::
-                            kSuccessfulServedBeforeCompletion &&
-             completion_status_->error_code != net::OK) {
-    status_ = PrefetchStreamingURLLoaderStatus::kFailedNetErrorButServed;
+  if (base::FeatureList::IsEnabled(
+          features::kPrefetchBumpNetworkPriorityAfterBeingServed)) {
+    SetPriority(net::RequestPriority::HIGHEST, /*intra_priority_value=*/0);
   }
 
-  if (completion_status_->error_code != net::OK) {
-    // Note that we may have already started serving the prefetch if it was
-    // marked as servable in |OnReceiveResponse|.
-    servable_ = false;
-  }
-
-  std::move(on_prefetch_response_completed_callback_)
-      .Run(completion_status_.value());
-
-  if (serving_url_loader_client_) {
-    ForwardCompletionStatus();
-    return;
-  }
-  event_queue_.push_back(
-      base::BindOnce(&PrefetchStreamingURLLoader::ForwardCompletionStatus,
-                     base::Unretained(this)));
-}
-
-void PrefetchStreamingURLLoader::ForwardCompletionStatus() {
-  DCHECK(serving_url_loader_client_);
-  DCHECK(completion_status_);
-  serving_url_loader_client_->OnComplete(completion_status_.value());
-}
-
-PrefetchStreamingURLLoader::RequestHandler
-PrefetchStreamingURLLoader::ServingResponseHandler(
-    std::unique_ptr<PrefetchStreamingURLLoader> self) {
-  return base::BindOnce(&PrefetchStreamingURLLoader::BindAndStart,
-                        weak_ptr_factory_.GetWeakPtr(), std::move(self));
-}
-
-void PrefetchStreamingURLLoader::BindAndStart(
-    std::unique_ptr<PrefetchStreamingURLLoader> self,
-    const network::ResourceRequest& request,
-    mojo::PendingReceiver<network::mojom::URLLoader> receiver,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
-  DCHECK(servable_);
-  DCHECK(!serving_url_loader_receiver_.is_bound());
-  DCHECK(self.get() == this);
-
-  status_ =
-      completion_status_.has_value()
-          ? PrefetchStreamingURLLoaderStatus::kSuccessfulServedAfterCompletion
-          : PrefetchStreamingURLLoaderStatus::kSuccessfulServedBeforeCompletion;
-
-  // Make this self owned. This will delete itself once prefetching and serving
-  // are both complete.
-  self_pointer_ = std::move(self);
-
-  serving_url_loader_receiver_.Bind(std::move(receiver));
-  serving_url_loader_receiver_.set_disconnect_handler(base::BindOnce(
-      &PrefetchStreamingURLLoader::OnServingURLLoaderMojoDisconnect,
-      weak_ptr_factory_.GetWeakPtr()));
-  serving_url_loader_client_.Bind(std::move(client));
-
-  // Serve the prefetched response by directly passing the |body_| mojo pipe.
-  // All data that has already been received will be buffered in the pipe, and
-  // all other data will be streamed as it is received.
-  DCHECK(head_);
-  DCHECK(body_);
-  serving_url_loader_client_->OnReceiveResponse(
-      head_->Clone(), std::move(body_), absl::nullopt);
-
-  RunEventQueue();
-}
-
-void PrefetchStreamingURLLoader::RunEventQueue() {
-  DCHECK(serving_url_loader_client_);
-  for (auto& event : event_queue_) {
-    std::move(event).Run();
-  }
-  event_queue_.clear();
-}
-
-void PrefetchStreamingURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    const absl::optional<GURL>& new_url) {
-  // Redirects aren't supported by prefetch, and therefore are never served.
-  NOTREACHED();
+  used_for_serving_ = true;
 }
 
 void PrefetchStreamingURLLoader::SetPriority(net::RequestPriority priority,
                                              int32_t intra_priority_value) {
-  // Forward calls from the serving URL loader to the prefetch URL loader.
   if (prefetch_url_loader_) {
     prefetch_url_loader_->SetPriority(priority, intra_priority_value);
   }
 }
 
-void PrefetchStreamingURLLoader::PauseReadingBodyFromNet() {
-  // Forward calls from the serving URL loader to the prefetch URL loader.
-  if (prefetch_url_loader_) {
-    prefetch_url_loader_->PauseReadingBodyFromNet();
+void PrefetchStreamingURLLoader::StartServiceWorkerInterceptor(
+    BrowserContext* browser_context,
+    scoped_refptr<network::SharedURLLoaderFactory> network_url_loader_factory,
+    const network::ResourceRequest& request,
+    const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
+    base::TimeDelta timeout_duration) {
+  auto callback = base::BindOnce(
+      &PrefetchStreamingURLLoader::ServiceWorkerInterceptorLoaderCallback,
+      GetWeakPtr(), network_url_loader_factory, request,
+      network_traffic_annotation, std::move(timeout_duration));
+
+  if (!browser_context) {
+    // In tests, `browser_context` can be null. Emulate as if there are no
+    // service workers without going through the interceptor.
+    CHECK_IS_TEST();
+    std::move(callback).Run(std::nullopt);
+    return;
   }
+
+  // TODO(https://crbug.com/40947546): Set this FetchEvent's Client ID.
+  std::string fetch_event_client_id;
+
+  // For navigations, FrameTreeNode's `pending_frame_policy().sandbox_flags` is
+  // checked, to prevent using ServiceWorker for sandboxed iframes. We can't
+  // check it here (because prefetches don't have FrameTreeNode), and probably
+  // don't have to (because prefetches are always top-level and doesn't support
+  // iframes in the first place).
+
+  ServiceWorkerContextWrapper* service_worker_context =
+      static_cast<ServiceWorkerContextWrapper*>(
+          browser_context->GetDefaultStoragePartition()
+              ->GetServiceWorkerContext());
+  service_worker_handle_ = std::make_unique<ServiceWorkerMainResourceHandle>(
+      service_worker_context, base::DoNothing(),
+      std::move(fetch_event_client_id));
+
+  interceptor_ = ServiceWorkerMainResourceLoaderInterceptor::CreateForPrefetch(
+      request, service_worker_handle_->AsWeakPtr(), network_url_loader_factory);
+  if (!interceptor_) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  interceptor_->MaybeCreateLoader(
+      request, browser_context, std::move(callback),
+      base::BindOnce(
+          [](scoped_refptr<network::SharedURLLoaderFactory>
+                 network_url_loader_factory,
+             ResponseHeadUpdateParams) {
+            // TODO(https://crbug.com/40947546): Handle
+            // `ResponseHeadUpdateParams` if needed.
+            return static_cast<network::mojom::URLLoaderFactory*>(
+                network_url_loader_factory.get());
+          },
+          network_url_loader_factory));
 }
 
-void PrefetchStreamingURLLoader::ResumeReadingBodyFromNet() {
-  // Forward calls from the serving URL loader to the prefetch URL loader.
-  if (prefetch_url_loader_) {
-    prefetch_url_loader_->ResumeReadingBodyFromNet();
+void PrefetchStreamingURLLoader::ServiceWorkerInterceptorLoaderCallback(
+    scoped_refptr<network::SharedURLLoaderFactory> network_url_loader_factory,
+    const network::ResourceRequest& request,
+    const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
+    base::TimeDelta timeout_duration,
+    std::optional<NavigationLoaderInterceptor::Result> interceptor_result) {
+  if (!interceptor_result) {
+    // Controlling ServiceWorker is not found.
+
+    // Discard the `ServiceWorkerClient`, and fallback to non-SW-controlled
+    // prefetching.
+    service_worker_handle_.reset();
+    interceptor_.reset();
+
+    Start(PrefetchServiceWorkerState::kDisallowed,
+          std::move(network_url_loader_factory), request,
+          network_traffic_annotation, std::move(timeout_duration));
+    return;
   }
+
+  // `interceptor_result->single_request_factory` can be still null here, e.g.
+  // when there is a ServiceWorker controller with no fetch handler. In such
+  // cases, `network_url_loader_factory` is used for prefetching, while still
+  // being considered as ServiceWorker-controlled.
+  Start(PrefetchServiceWorkerState::kControlled,
+        interceptor_result->single_request_factory
+            ? std::move(interceptor_result->single_request_factory)
+            : std::move(network_url_loader_factory),
+        request, network_traffic_annotation, std::move(timeout_duration));
 }
 
 }  // namespace content

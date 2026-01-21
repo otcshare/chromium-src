@@ -8,9 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/time/time.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
+#include "components/dom_distiller/core/dom_distiller_constants.h"
 #include "third_party/dom_distiller_js/dom_distiller.pb.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
@@ -49,6 +49,13 @@ class DistillerPage {
   virtual void OnDistillationDone(const GURL& page_url,
                                   const base::Value* value);
 
+  // Returns true if the distiller page should fetch distillation data for
+  // offline consumption.
+  virtual bool ShouldFetchOfflineData() = 0;
+
+  // Returns the distillation type to use to retrieve simplified page content.
+  virtual DistillerType GetDistillerType() = 0;
+
   DistillerPage(const DistillerPage&) = delete;
   DistillerPage& operator=(const DistillerPage&) = delete;
 
@@ -58,14 +65,9 @@ class DistillerPage {
   // should be the same regardless of the DistillerPage implementation.
   virtual void DistillPageImpl(const GURL& url, const std::string& script) = 0;
 
-  // The value returned between the JavaScript and the DistillerPage can be
-  // either a dictionary with all the content, or a stringified version.
-  virtual bool StringifyOutput() = 0;
-
  private:
   bool ready_;
   DistillerPageCallback distiller_page_callback_;
-  base::TimeTicks distillation_start_;
 };
 
 // Factory for generating a |DistillerPage|.

@@ -6,13 +6,16 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
-#include "cc/layers/solid_color_layer.h"
+#include "cc/input/android/offset_tag_android.h"
+#include "cc/slim/solid_color_layer.h"
 #include "chrome/browser/android/compositor/layer/toolbar_layer.h"
-#include "chrome/browser/ui/android/toolbar/jni_headers/TopToolbarSceneLayer_jni.h"
+#include "components/viz/common/quads/offset_tag.h"
 #include "ui/android/resources/resource_manager_impl.h"
 #include "ui/gfx/android/java_bitmap.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/ui/android/toolbar/jni_headers/TopToolbarSceneLayer_jni.h"
+
 using base::android::JavaRef;
 
 namespace android {
@@ -22,7 +25,7 @@ TopToolbarSceneLayer::TopToolbarSceneLayer(JNIEnv* env,
     : SceneLayer(env, jobj),
       should_show_background_(false),
       background_color_(SK_ColorWHITE),
-      content_container_(cc::Layer::Create()) {
+      content_container_(cc::slim::Layer::Create()) {
   layer()->AddChild(content_container_);
   layer()->SetIsDrawable(true);
 }
@@ -31,17 +34,18 @@ TopToolbarSceneLayer::~TopToolbarSceneLayer() = default;
 
 void TopToolbarSceneLayer::UpdateToolbarLayer(
     JNIEnv* env,
-    const JavaParamRef<jobject>& object,
-    const JavaParamRef<jobject>& jresource_manager,
-    jint toolbar_resource_id,
-    jint toolbar_background_color,
-    jint url_bar_resource_id,
-    jint url_bar_color,
+    const JavaRef<jobject>& jresource_manager,
+    int32_t toolbar_resource_id,
+    int32_t toolbar_background_color,
+    int32_t url_bar_resource_id,
+    int32_t url_bar_color,
     jfloat x_offset,
-    jfloat content_offset,
+    jfloat y_offset,
+    jfloat legacy_content_offset,
     bool show_shadow,
     bool visible,
-    bool anonymize) {
+    bool anonymize,
+    const base::android::JavaRef<jobject>& joffset_tag) {
   // If the toolbar layer has not been created yet, create it.
   if (!toolbar_layer_) {
     ui::ResourceManager* resource_manager =
@@ -52,40 +56,51 @@ void TopToolbarSceneLayer::UpdateToolbarLayer(
   }
 
   toolbar_layer_->layer()->SetHideLayerAndSubtree(!visible);
-  if (!visible)
+  if (!visible) {
     return;
+  }
 
+  viz::OffsetTag offset_tag = cc::android::FromJavaOffsetTag(env, joffset_tag);
   toolbar_layer_->PushResource(toolbar_resource_id, toolbar_background_color,
                                anonymize, url_bar_color, url_bar_resource_id,
-                               x_offset, content_offset, false, !show_shadow);
+                               x_offset, y_offset, legacy_content_offset, false,
+                               !show_shadow, offset_tag);
 }
 
 void TopToolbarSceneLayer::UpdateProgressBar(
     JNIEnv* env,
-    const JavaParamRef<jobject>& object,
-    jint progress_bar_x,
-    jint progress_bar_y,
-    jint progress_bar_width,
-    jint progress_bar_height,
-    jint progress_bar_color,
-    jint progress_bar_background_x,
-    jint progress_bar_background_y,
-    jint progress_bar_background_width,
-    jint progress_bar_background_height,
-    jint progress_bar_background_color) {
+    int32_t progress_bar_x,
+    int32_t progress_bar_y,
+    int32_t progress_bar_width,
+    int32_t progress_bar_height,
+    int32_t progress_bar_color,
+    int32_t progress_bar_background_x,
+    int32_t progress_bar_background_y,
+    int32_t progress_bar_background_width,
+    int32_t progress_bar_background_height,
+    int32_t progress_bar_background_color,
+    int32_t progress_bar_static_background_x,
+    int32_t progress_bar_static_background_width,
+    int32_t progress_bar_static_background_color,
+    jfloat corner_radius,
+    bool progress_bar_visual_update_available,
+    bool visible) {
   if (!toolbar_layer_)
     return;
+
   toolbar_layer_->UpdateProgressBar(
       progress_bar_x, progress_bar_y, progress_bar_width, progress_bar_height,
       progress_bar_color, progress_bar_background_x, progress_bar_background_y,
       progress_bar_background_width, progress_bar_background_height,
-      progress_bar_background_color);
+      progress_bar_background_color, progress_bar_static_background_x,
+      progress_bar_static_background_width,
+      progress_bar_static_background_color, corner_radius,
+      progress_bar_visual_update_available, visible);
 }
 
 void TopToolbarSceneLayer::SetContentTree(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jobj,
-    const JavaParamRef<jobject>& jcontent_tree) {
+    const JavaRef<jobject>& jcontent_tree) {
   SceneLayer* content_tree = FromJavaObject(env, jcontent_tree);
   if (!content_tree || !content_tree->layer())
     return;
@@ -111,8 +126,8 @@ bool TopToolbarSceneLayer::ShouldShowBackground() {
   return should_show_background_;
 }
 
-static jlong JNI_TopToolbarSceneLayer_Init(JNIEnv* env,
-                                           const JavaParamRef<jobject>& jobj) {
+static int64_t JNI_TopToolbarSceneLayer_Init(JNIEnv* env,
+                                             const JavaRef<jobject>& jobj) {
   // This will automatically bind to the Java object and pass ownership there.
   TopToolbarSceneLayer* toolbar_scene_layer =
       new TopToolbarSceneLayer(env, jobj);
@@ -120,3 +135,5 @@ static jlong JNI_TopToolbarSceneLayer_Init(JNIEnv* env,
 }
 
 }  // namespace android
+
+DEFINE_JNI(TopToolbarSceneLayer)

@@ -6,13 +6,13 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
-#include "content/browser/generic_sensor/sensor_provider_proxy_impl.h"
+#include "content/browser/generic_sensor/web_contents_sensor_provider_proxy.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -44,19 +44,14 @@ using device::FakeSensorProvider;
 class DeviceSensorBrowserTest : public ContentBrowserTest {
  public:
   DeviceSensorBrowserTest() {
-    SensorProviderProxyImpl::OverrideSensorProviderBinderForTesting(
+    WebContentsSensorProviderProxy::OverrideSensorProviderBinderForTesting(
         base::BindRepeating(&DeviceSensorBrowserTest::BindSensorProvider,
                             base::Unretained(this)));
   }
 
   ~DeviceSensorBrowserTest() override {
-    SensorProviderProxyImpl::OverrideSensorProviderBinderForTesting(
+    WebContentsSensorProviderProxy::OverrideSensorProviderBinderForTesting(
         base::NullCallback());
-  }
-
-  void DelayAndQuit(base::TimeDelta delay) {
-    base::PlatformThread::Sleep(delay);
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
   }
 
   void WaitForAlertDialogAndQuitAfterDelay(base::TimeDelta delay) {
@@ -64,10 +59,14 @@ class DeviceSensorBrowserTest : public ContentBrowserTest {
         static_cast<ShellJavaScriptDialogManager*>(
             shell()->GetJavaScriptDialogManager(shell()->web_contents()));
 
-    scoped_refptr<MessageLoopRunner> runner = new MessageLoopRunner();
+    base::RunLoop run_loop;
     dialog_manager->set_dialog_request_callback(base::BindOnce(
-        &DeviceSensorBrowserTest::DelayAndQuit, base::Unretained(this), delay));
-    runner->Run();
+        [](base::TimeDelta delay, base::OnceClosure quit_closure) {
+          base::PlatformThread::Sleep(delay);
+          std::move(quit_closure).Run();
+        },
+        delay, run_loop.QuitWhenIdleClosure()));
+    run_loop.Run();
   }
 
   std::unique_ptr<FakeSensorProvider> sensor_provider_;
@@ -97,7 +96,6 @@ class DeviceSensorBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     mock_cert_verifier_.SetUpCommandLine(command_line);
   }
 
@@ -126,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationTest) {
   GURL test_url = GetTestUrl("device_sensors", "device_orientation_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
@@ -144,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
       "device_sensors", "device_orientation_fallback_to_absolute_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationAbsoluteTest) {
@@ -155,7 +153,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationAbsoluteTest) {
       GetTestUrl("device_sensors", "device_orientation_absolute_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, MotionTest) {
@@ -165,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, MotionTest) {
   GURL test_url = GetTestUrl("device_sensors", "device_motion_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationNullTest) {
@@ -182,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationNullTest) {
       GetTestUrl("device_sensors", "device_orientation_null_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationAbsoluteNullTest) {
@@ -194,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, OrientationAbsoluteNullTest) {
                              "device_orientation_absolute_null_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, MotionNullTest) {
@@ -207,10 +205,9 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, MotionNullTest) {
   GURL test_url = GetTestUrl("device_sensors", "device_motion_null_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
-// Disabled due to flakiness: https://crbug.com/783891
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
                        MotionOnlySomeSensorsAreAvailableTest) {
   // The test page registers an event handler for motion events and
@@ -222,7 +219,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
                  "device_motion_only_some_sensors_are_available_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
 
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, NullTestWithAlert) {
@@ -247,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest, NullTestWithAlert) {
   WaitForAlertDialogAndQuitAfterDelay(base::Milliseconds(500));
 
   same_tab_observer.Wait();
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
@@ -270,7 +267,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("fail", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("fail", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
@@ -297,7 +294,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("pass", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
@@ -320,7 +317,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("fail", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("fail", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
@@ -347,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("pass", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceSensorBrowserTest,

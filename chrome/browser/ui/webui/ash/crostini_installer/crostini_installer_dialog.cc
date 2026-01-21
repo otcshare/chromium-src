@@ -6,7 +6,7 @@
 
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/window_properties.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
@@ -81,9 +81,9 @@ bool CrostiniInstallerDialog::ShouldShowDialogTitle() const {
   return true;
 }
 
-// TODO(crbug.com/1053376): We should add a browser test for the dialog to check
-// that <esc> or X button in overview mode cannot close the dialog immediately
-// without the web page noticing it.
+// TODO(crbug.com/40675072): We should add a browser test for the dialog to
+// check that <esc> or X button in overview mode cannot close the dialog
+// immediately without the web page noticing it.
 bool CrostiniInstallerDialog::ShouldCloseDialogOnEscape() const {
   return false;
 }

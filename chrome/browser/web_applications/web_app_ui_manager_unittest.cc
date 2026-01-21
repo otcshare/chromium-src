@@ -4,13 +4,14 @@
 
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
-#include "chrome/browser/web_applications/user_display_mode.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
@@ -18,7 +19,6 @@
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -31,7 +31,7 @@ const base::FilePath::CharType kCurrentDirectory[] =
 const base::FilePath::CharType kCurrentDirectory[] = FILE_PATH_LITERAL("/path");
 #endif  // BUILDFLAG(IS_WIN)
 
-const char kTestAppId[] = "test_app_id";
+const char kTestAppId[] = "https://example.com/";
 
 class WebAppUiManagerTest : public testing::Test {
  public:
@@ -40,12 +40,14 @@ class WebAppUiManagerTest : public testing::Test {
 
  protected:
   void InitAppWithDisplayMode(DisplayMode display_mode) {
-    auto web_app = std::make_unique<WebApp>(kTestAppId);
+    GURL test_app_url = GURL(kTestAppId);
+    auto web_app =
+        std::make_unique<WebApp>(test_app_url, test_app_url, test_app_url);
     web_app->SetDisplayMode(display_mode);
     if (display_mode == DisplayMode::kBrowser) {
-      web_app->SetUserDisplayMode(UserDisplayMode::kBrowser);
+      web_app->SetUserDisplayMode(mojom::UserDisplayMode::kBrowser);
     } else {
-      web_app->SetUserDisplayMode(UserDisplayMode::kStandalone);
+      web_app->SetUserDisplayMode(mojom::UserDisplayMode::kStandalone);
     }
     Registry map;
     map[kTestAppId] = std::move(web_app);
@@ -55,8 +57,7 @@ class WebAppUiManagerTest : public testing::Test {
   apps::AppLaunchParams CreateLaunchParams(
       const base::CommandLine& command_line,
       const std::vector<base::FilePath>& launch_files,
-      const absl::optional<GURL>& url_handler_launch_url,
-      const absl::optional<GURL>& protocol_handler_launch_url) {
+      const std::optional<GURL>& protocol_handler_launch_url) {
     apps::AppLaunchParams params(
         kTestAppId, apps::LaunchContainer::kLaunchContainerNone,
         WindowOpenDisposition::UNKNOWN, apps::LaunchSource::kFromCommandLine);
@@ -64,7 +65,6 @@ class WebAppUiManagerTest : public testing::Test {
     params.current_directory = base::FilePath(kCurrentDirectory);
     params.command_line = command_line;
     params.launch_files = launch_files;
-    params.url_handler_launch_url = url_handler_launch_url;
     params.protocol_handler_launch_url = protocol_handler_launch_url;
 
     return params;
@@ -76,8 +76,8 @@ class WebAppUiManagerTest : public testing::Test {
     return command_line;
   }
 
-  void ValidateOptionalGURL(const absl::optional<GURL>& actual,
-                            const absl::optional<GURL>& expected) {
+  void ValidateOptionalGURL(const std::optional<GURL>& actual,
+                            const std::optional<GURL>& expected) {
     ASSERT_EQ(actual.has_value(), expected.has_value());
     if (actual.has_value()) {
       EXPECT_EQ(actual.value(), expected.value());
@@ -93,10 +93,6 @@ class WebAppUiManagerTest : public testing::Test {
               expected_results.current_directory);
     EXPECT_EQ(actual_results.launch_source, expected_results.launch_source);
     EXPECT_EQ(actual_results.launch_files, expected_results.launch_files);
-    EXPECT_EQ(actual_results.url_handler_launch_url,
-              expected_results.url_handler_launch_url);
-    ValidateOptionalGURL(actual_results.url_handler_launch_url,
-                         expected_results.url_handler_launch_url);
     ValidateOptionalGURL(actual_results.protocol_handler_launch_url,
                          expected_results.protocol_handler_launch_url);
 
@@ -114,15 +110,13 @@ TEST_F(WebAppUiManagerTest, DefaultParamsTab) {
 
   apps::AppLaunchParams expected_results =
       CreateLaunchParams(command_line, std::vector<base::FilePath>(),
-                         /*url_handler_launch_url=*/absl::nullopt,
-                         /*protocol_handler_launch_url=*/absl::nullopt);
+                         /*protocol_handler_launch_url=*/std::nullopt);
 
   ValidateLaunchParams(
       WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
           kTestAppId, command_line, base::FilePath(kCurrentDirectory),
-          /*url_handler_launch_url=*/absl::nullopt,
-          /*protocol_handler_launch_url=*/absl::nullopt,
-          /*file_launch_url=*/absl::nullopt, /*launch_files=*/{}),
+          /*protocol_handler_launch_url=*/std::nullopt,
+          /*file_launch_url=*/std::nullopt, /*launch_files=*/{}),
       expected_results);
 }
 
@@ -132,55 +126,51 @@ TEST_F(WebAppUiManagerTest, DefaultParamsStandalone) {
 
   apps::AppLaunchParams expected_results =
       CreateLaunchParams(command_line, std::vector<base::FilePath>(),
-                         /*url_handler_launch_url=*/absl::nullopt,
-                         /*protocol_handler_launch_url=*/absl::nullopt);
+                         /*protocol_handler_launch_url=*/std::nullopt);
 
   ValidateLaunchParams(
       WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
           kTestAppId, command_line, base::FilePath(kCurrentDirectory),
-          /*url_handler_launch_url=*/absl::nullopt,
-          /*protocol_handler_launch_url=*/absl::nullopt,
-          /*file_launch_url=*/absl::nullopt, /*launch_files=*/{}),
+          /*protocol_handler_launch_url=*/std::nullopt,
+          /*file_launch_url=*/std::nullopt, /*launch_files=*/{}),
       expected_results);
 }
 
 TEST_F(WebAppUiManagerTest, ProtocolHandlerUrl) {
   InitAppWithDisplayMode(DisplayMode::kStandalone);
-  const absl::optional<GURL> protocol_handler_launch_url(
+  const std::optional<GURL> protocol_handler_launch_url(
       GURL("web+test://test"));
   base::CommandLine command_line = CreateCommandLine();
   command_line.AppendArg(protocol_handler_launch_url.value().spec());
 
-  apps::AppLaunchParams expected_results =
-      CreateLaunchParams(command_line, std::vector<base::FilePath>(),
-                         absl::nullopt, protocol_handler_launch_url);
+  apps::AppLaunchParams expected_results = CreateLaunchParams(
+      command_line, std::vector<base::FilePath>(), protocol_handler_launch_url);
   expected_results.launch_source = apps::LaunchSource::kFromProtocolHandler;
 
   ValidateLaunchParams(
       WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
           kTestAppId, command_line, base::FilePath(kCurrentDirectory),
-          /*url_handler_launch_url=*/absl::nullopt, protocol_handler_launch_url,
-          /*file_launch_url=*/absl::nullopt, /*launch_files=*/{}),
+          protocol_handler_launch_url,
+          /*file_launch_url=*/std::nullopt, /*launch_files=*/{}),
       expected_results);
 }
 
 TEST_F(WebAppUiManagerTest, LaunchApplication_ProtocolMailTo) {
   InitAppWithDisplayMode(DisplayMode::kStandalone);
-  const absl::optional<GURL> protocol_handler_launch_url(
+  const std::optional<GURL> protocol_handler_launch_url(
       GURL("mailto://test@test.com"));
   base::CommandLine command_line = CreateCommandLine();
 
   command_line.AppendArg(protocol_handler_launch_url.value().spec());
 
-  apps::AppLaunchParams expected_results =
-      CreateLaunchParams(command_line, std::vector<base::FilePath>(),
-                         absl::nullopt, protocol_handler_launch_url);
+  apps::AppLaunchParams expected_results = CreateLaunchParams(
+      command_line, std::vector<base::FilePath>(), protocol_handler_launch_url);
   expected_results.launch_source = apps::LaunchSource::kFromProtocolHandler;
 
   ValidateLaunchParams(
       WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
           kTestAppId, command_line, base::FilePath(kCurrentDirectory),
-          absl::nullopt, protocol_handler_launch_url, absl::nullopt, {}),
+          protocol_handler_launch_url, std::nullopt, {}),
       expected_results);
 }
 
@@ -192,12 +182,12 @@ TEST_F(WebAppUiManagerTest, LaunchApplication_ProtocolDisallowed) {
   command_line.AppendArg("https://www.test.com/");
 
   apps::AppLaunchParams expected_results =
-      CreateLaunchParams(command_line, {}, absl::nullopt, absl::nullopt);
+      CreateLaunchParams(command_line, {}, std::nullopt);
 
   ValidateLaunchParams(
       WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
           kTestAppId, command_line, base::FilePath(kCurrentDirectory),
-          absl::nullopt, absl::nullopt, absl::nullopt, {}),
+          std::nullopt, std::nullopt, {}),
       expected_results);
 }
 

@@ -142,6 +142,14 @@ double CSSLengthResolver::ContainerMaxPercent() const {
   return std::max(ContainerWidthPercent(), ContainerHeightPercent());
 }
 
+const StylePositionAnchor& CSSLengthResolver::GetPositionAnchor() const {
+  using Holder = DisallowNewWrapper<StylePositionAnchor>;
+  DEFINE_STATIC_LOCAL(Persistent<Holder>, empty,
+                      (MakeGarbageCollected<Holder>(StylePositionAnchor(
+                          StylePositionAnchor::Initial()))));
+  return empty->Value();
+}
+
 double CSSLengthResolver::ZoomedComputedPixels(
     double value,
     CSSPrimitiveValue::UnitType type) const {
@@ -267,21 +275,38 @@ double CSSLengthResolver::ZoomedComputedPixels(
     case CSSPrimitiveValue::UnitType::kExs:
       return value * ExFontSize(Zoom());
 
+    case CSSPrimitiveValue::UnitType::kRexs:
+      return value * RexFontSize(Zoom());
+
     case CSSPrimitiveValue::UnitType::kRems:
       return value * RemFontSize(Zoom());
 
     case CSSPrimitiveValue::UnitType::kChs:
       return value * ChFontSize(Zoom());
 
+    case CSSPrimitiveValue::UnitType::kRchs:
+      return value * RchFontSize(Zoom());
+
     case CSSPrimitiveValue::UnitType::kIcs:
       return value * IcFontSize(Zoom());
+
+    case CSSPrimitiveValue::UnitType::kRics:
+      return value * RicFontSize(Zoom());
 
     case CSSPrimitiveValue::UnitType::kLhs:
       return value * LineHeight(Zoom());
 
+    case CSSPrimitiveValue::UnitType::kRlhs:
+      return value * RootLineHeight(Zoom());
+
+    case CSSPrimitiveValue::UnitType::kCaps:
+      return value * CapFontSize(Zoom());
+
+    case CSSPrimitiveValue::UnitType::kRcaps:
+      return value * RcapFontSize(Zoom());
+
     default:
       NOTREACHED();
-      return 0;
   }
 }
 

@@ -4,30 +4,65 @@
 
 package org.chromium.chrome.test.util.browser;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.components.location.LocationUtils;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
-/**
- * Methods for testing location-related features.
- */
+/** Methods for testing location-related features. */
 public class LocationSettingsTestUtil {
 
     /**
      * Mocks the system location setting as either enabled or disabled. Can be called on any thread.
      */
     public static void setSystemLocationSettingEnabled(final boolean enabled) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            LocationUtils.setFactory(new LocationUtils.Factory() {
-                @Override
-                public LocationUtils create() {
-                    return new LocationUtils() {
-                        @Override
-                        public boolean isSystemLocationSettingEnabled() {
-                            return enabled;
-                        }
-                    };
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    LocationUtils.setFactory(
+                            new LocationUtils.Factory() {
+                                @Override
+                                public LocationUtils create() {
+                                    return new LocationUtils() {
+                                        @Override
+                                        public boolean isSystemLocationSettingEnabled() {
+                                            return enabled;
+                                        }
+                                    };
+                                }
+                            });
+                });
+    }
+
+    /**
+     * Mocks the system location setting and android location permission as either enabled or
+     * disabled. Can be called on any thread.
+     */
+    public static void setSystemAndAndroidLocationSettings(
+            final boolean systemEnabled,
+            final boolean androidEnabled,
+            final boolean androidFineEnabled) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    LocationUtils.setFactory(
+                            new LocationUtils.Factory() {
+                                @Override
+                                public LocationUtils create() {
+                                    return new LocationUtils() {
+                                        @Override
+                                        public boolean isSystemLocationSettingEnabled() {
+                                            return systemEnabled;
+                                        }
+
+                                        @Override
+                                        public boolean hasAndroidLocationPermission() {
+                                            return androidEnabled;
+                                        }
+
+                                        @Override
+                                        public boolean hasAndroidFineLocationPermission() {
+                                            return androidFineEnabled;
+                                        }
+                                    };
+                                }
+                            });
+                });
     }
 }

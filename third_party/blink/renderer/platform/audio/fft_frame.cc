@@ -30,6 +30,8 @@
 
 #include <complex>
 #include <memory>
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/fdlibm/ieee754.h"
@@ -119,8 +121,10 @@ void FFTFrame::InterpolateFrequencyComponents(const FFTFrame& frame1,
   DCHECK_GE(imag2.size(), static_cast<uint32_t>(n));
 
   for (int i = 1; i < n; ++i) {
-    std::complex<double> c1(real_p1_data[i], imag_p1_data[i]);
-    std::complex<double> c2(real_p2_data[i], imag_p2_data[i]);
+    std::complex<double> c1(UNSAFE_TODO(real_p1_data[i]),
+                            UNSAFE_TODO(imag_p1_data[i]));
+    std::complex<double> c2(UNSAFE_TODO(real_p2_data[i]),
+                            UNSAFE_TODO(imag_p2_data[i]));
 
     double mag1 = abs(c1);
     double mag2 = abs(c2);

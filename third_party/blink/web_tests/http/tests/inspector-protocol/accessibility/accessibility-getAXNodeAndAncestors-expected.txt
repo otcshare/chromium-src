@@ -17,13 +17,9 @@ Tests Accessibility.getAXNodeAndAncestors
                 attribute : aria-label
                 type : attribute
             }
-            [2] : {
-                attribute : title
-                type : attribute
-            }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
     parentId : <string>
@@ -58,7 +54,7 @@ Tests Accessibility.getAXNodeAndAncestors
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
     parentId : <string>
@@ -93,7 +89,7 @@ Tests Accessibility.getAXNodeAndAncestors
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
     parentId : <string>
@@ -137,6 +133,13 @@ Tests Accessibility.getAXNodeAndAncestors
     }
     ignored : true
     ignoredReasons : [
+        [0] : {
+            name : uninteresting
+            value : {
+                type : boolean
+                value : true
+            }
+        }
     ]
     nodeId : <string>
     parentId : <string>
@@ -173,14 +176,9 @@ Tests Accessibility.getAXNodeAndAncestors
                 nativeSource : title
                 type : relatedElement
             }
-            [4] : {
-                attribute : title
-                superseded : true
-                type : attribute
-            }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
     properties : [
@@ -189,6 +187,13 @@ Tests Accessibility.getAXNodeAndAncestors
             value : {
                 type : booleanOrUndefined
                 value : true
+            }
+        }
+        [1] : {
+            name : url
+            value : {
+                type : string
+                value : http://127.0.0.1:8000/inspector-protocol/resources/inspector-protocol-page.html
             }
         }
     ]

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/services/bluetooth_config/bluetooth_power_controller_impl.h"
@@ -17,6 +18,7 @@
 #include "chromeos/ash/services/bluetooth_config/fake_system_properties_observer.h"
 #include "chromeos/ash/services/bluetooth_config/initializer_impl.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/fake_user_manager.h"
@@ -83,9 +85,10 @@ class CrosBluetoothConfigTest : public testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
-  user_manager::FakeUserManager* fake_user_manager_;
+  raw_ptr<user_manager::FakeUserManager, DanglingUntriaged> fake_user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   scoped_refptr<testing::NiceMock<device::MockBluetoothAdapter>> mock_adapter_;
   std::unique_ptr<FakeFastPairDelegate> fake_fast_pair_delegate_;
   sync_preferences::TestingPrefServiceSyncable test_pref_service_;
@@ -111,7 +114,7 @@ TEST_F(CrosBluetoothConfigTest, CallPowerFunctions) {
   remote->SetBluetoothEnabledState(true);
   base::RunLoop().RunUntilIdle();
 
-  remote->SetBluetoothHidDetectionActive();
+  remote->SetBluetoothEnabledWithoutPersistence();
   base::RunLoop().RunUntilIdle();
 
   remote->SetBluetoothHidDetectionInactive(/*is_using_bluetooth=*/false);
@@ -128,7 +131,7 @@ TEST_F(CrosBluetoothConfigTest, CallPairingFunction) {
 TEST_F(CrosBluetoothConfigTest, CallDeviceManagementFunctions) {
   mojo::Remote<mojom::CrosBluetoothConfig> remote = BindToInterface();
   const std::string device_id = "device_id";
-  absl::optional<bool> result;
+  std::optional<bool> result;
 
   remote->Connect(device_id,
                   base::BindLambdaForTesting(

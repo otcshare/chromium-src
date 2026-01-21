@@ -11,6 +11,8 @@
 #include "content/child/child_process_sandbox_support_impl_mac.h"
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "content/child/child_process_sandbox_support_impl_linux.h"
+#elif BUILDFLAG(IS_WIN)
+#include "content/child/child_process_sandbox_support_impl_win.h"
 #endif
 
 namespace content {
@@ -21,11 +23,14 @@ UtilityBlinkPlatformWithSandboxSupportImpl::
   mojo::PendingRemote<font_service::mojom::FontService> font_service;
   UtilityThread::Get()->BindHostReceiver(
       font_service.InitWithNewPipeAndPassReceiver());
-  font_loader_ = sk_make_sp<font_service::FontLoader>(std::move(font_service));
-  SkFontConfigInterface::SetGlobal(font_loader_);
-  sandbox_support_ = std::make_unique<WebSandboxSupportLinux>(font_loader_);
+  sk_sp<font_service::FontLoader> font_loader =
+      sk_make_sp<font_service::FontLoader>(std::move(font_service));
+  SkFontConfigInterface::SetGlobal(font_loader);
+  sandbox_support_ = std::make_unique<WebSandboxSupportLinux>(font_loader);
 #elif BUILDFLAG(IS_MAC)
   sandbox_support_ = std::make_unique<WebSandboxSupportMac>();
+#elif BUILDFLAG(IS_WIN)
+  sandbox_support_ = std::make_unique<WebSandboxSupportWin>();
 #endif
 }
 
@@ -34,7 +39,8 @@ UtilityBlinkPlatformWithSandboxSupportImpl::
 
 blink::WebSandboxSupport*
 UtilityBlinkPlatformWithSandboxSupportImpl::GetSandboxSupport() {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
   return sandbox_support_.get();
 #else
   return nullptr;

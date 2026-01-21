@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#import "base/mac/scoped_nsobject.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #include "content/common/content_export.h"
 #include "content/common/web_contents_ns_view_bridge.mojom.h"
@@ -48,29 +48,31 @@ class CONTENT_EXPORT WebContentsNSViewBridge : public mojom::WebContentsNSView {
   void Bind(mojo::PendingAssociatedReceiver<mojom::WebContentsNSView> receiver,
             scoped_refptr<base::SequencedTaskRunner> task_runner);
 
-  WebContentsViewCocoa* GetNSView() const { return ns_view_.get(); }
+  WebContentsViewCocoa* GetNSView() const { return ns_view_; }
 
   // mojom::WebContentsNSViewBridge:
   void SetParentNSView(uint64_t parent_ns_view_id) override;
   void ResetParentNSView() override;
-  void SetBounds(const gfx::Rect& bounds_in_window) override;
+  void SetBounds(const gfx::Rect& bounds_in_superview) override;
   void SetVisible(bool visible) override;
   void MakeFirstResponder() override;
   void TakeFocus(bool reverse) override;
   void StartDrag(const content::DropData& drop_data,
+                 const url::Origin& source_origin,
                  uint32_t operation_mask,
                  const gfx::ImageSkia& image,
-                 const gfx::Vector2d& image_offset) override;
+                 const gfx::Vector2d& image_offset,
+                 bool is_privileged) override;
   void Destroy() override;
 
  private:
-  base::scoped_nsobject<WebContentsViewCocoa> ns_view_;
+  WebContentsViewCocoa* __strong ns_view_;
   mojo::AssociatedReceiver<mojom::WebContentsNSView> receiver_{this};
   mojo::AssociatedRemote<mojom::WebContentsNSViewHost> host_;
 
   std::unique_ptr<ScopedNSViewIdMapping> view_id_;
 };
 
-}  // namespace content
+}  // namespace remote_cocoa
 
 #endif  // CONTENT_APP_SHIM_REMOTE_COCOA_WEB_CONTENTS_NS_VIEW_BRIDGE_H_

@@ -18,7 +18,7 @@ namespace bookmarks {
 // static
 const ui::ClipboardFormatType& BookmarkNodeData::GetBookmarkFormatType() {
   static const base::NoDestructor<ui::ClipboardFormatType> format(
-      ui::ClipboardFormatType::GetType(
+      ui::ClipboardFormatType::CustomPlatformType(
           BookmarkNodeData::kClipboardFormatString));
 
   return *format;
@@ -28,9 +28,9 @@ void BookmarkNodeData::Write(const base::FilePath& profile_path,
                              ui::OSExchangeData* data) const {
   DCHECK(data);
 
-  // If there is only one element and it is a URL, write the URL to the
-  // clipboard.
-  if (has_single_url()) {
+  // Dragging a folder can populate elements with both bookmark and
+  // folder entries; only the first entry is a URL.
+  if (elements.size() > 0 && elements[0].is_url) {
     if (elements[0].url.SchemeIs(url::kJavaScriptScheme)) {
       data->SetString(base::UTF8ToUTF16(elements[0].url.spec()));
     } else {
@@ -50,18 +50,17 @@ bool BookmarkNodeData::Read(const ui::OSExchangeData& data) {
   profile_path_.clear();
 
   if (data.HasCustomFormat(GetBookmarkFormatType())) {
-    base::Pickle drag_data_pickle;
-    if (data.GetPickledData(GetBookmarkFormatType(), &drag_data_pickle)) {
-      if (!ReadFromPickle(&drag_data_pickle))
+    if (std::optional<base::Pickle> drag_data_pickle =
+            data.GetPickledData(GetBookmarkFormatType());
+        drag_data_pickle.has_value()) {
+      if (!ReadFromPickle(&drag_data_pickle.value())) {
         return false;
+      }
     }
-  } else {
-    // See if there is a URL on the clipboard.
-    GURL url;
-    std::u16string title;
-    if (data.GetURLAndTitle(ui::FilenameToURLPolicy::CONVERT_FILENAMES, &url,
-                            &title))
-      ReadFromTuple(url, title);
+  } else if (std::vector<ui::ClipboardUrlInfo> result = data.GetURLsAndTitles(
+                 ui::FilenameToURLPolicy::CONVERT_FILENAMES);
+             !result.empty()) {
+    ReadFromTuple(result.front().url, result.front().title);
   }
 
   return is_valid();

@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/functional/callback_forward.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/paint_preview/public/paint_preview_compositor_client.h"
 
@@ -38,11 +37,6 @@ class PaintPreviewCompositorService {
 
   // Sets the disconnect handler for this service.
   virtual void SetDisconnectHandler(base::OnceClosure disconnect_handler) = 0;
-
-  // Called when system is under memory pressure.
-  virtual void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel
-          memory_pressure_level) = 0;
 
   PaintPreviewCompositorService(const PaintPreviewCompositorService&) = delete;
   PaintPreviewCompositorService& operator=(

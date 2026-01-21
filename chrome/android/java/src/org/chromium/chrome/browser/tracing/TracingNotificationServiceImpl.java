@@ -10,15 +10,17 @@ import android.content.Intent;
 
 import org.chromium.base.IntentUtils;
 import org.chromium.base.task.PostTask;
-import org.chromium.chrome.browser.settings.SettingsLauncherImpl;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.base.SplitCompatIntentService;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.tracing.settings.TracingSettings;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 
-/**
- * Service that handles the actions on tracing notifications.
- */
-public class TracingNotificationServiceImpl extends TracingNotificationService.Impl {
+/** Service that handles the actions on tracing notifications. */
+@NullMarked
+public class TracingNotificationServiceImpl extends SplitCompatIntentService.Impl {
     private static final String ACTION_STOP_RECORDING =
             "org.chromium.chrome.browser.tracing.STOP_RECORDING";
 
@@ -34,7 +36,10 @@ public class TracingNotificationServiceImpl extends TracingNotificationService.I
     public static PendingIntent getStopRecordingIntent(Context context) {
         Intent intent = new Intent(context, TracingNotificationService.class);
         intent.setAction(ACTION_STOP_RECORDING);
-        return PendingIntent.getService(context, 0, intent,
+        return PendingIntent.getService(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
@@ -48,7 +53,10 @@ public class TracingNotificationServiceImpl extends TracingNotificationService.I
     public static PendingIntent getDiscardTraceIntent(Context context) {
         Intent intent = new Intent(context, TracingNotificationService.class);
         intent.setAction(ACTION_DISCARD_TRACE);
-        return PendingIntent.getService(context, 0, intent,
+        return PendingIntent.getService(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
@@ -60,28 +68,35 @@ public class TracingNotificationServiceImpl extends TracingNotificationService.I
      * @return the intent.
      */
     public static PendingIntent getOpenSettingsIntent(Context context) {
-        SettingsLauncher settingsLauncher = new SettingsLauncherImpl();
-        Intent intent = settingsLauncher.createSettingsActivityIntent(
-                context, TracingSettings.class.getName());
-        return PendingIntent.getActivity(context, 0, intent,
+        SettingsNavigation settingsNavigation =
+                SettingsNavigationFactory.createSettingsNavigation();
+        Intent intent = settingsNavigation.createSettingsIntent(context, TracingSettings.class);
+        return PendingIntent.getActivity(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
 
     @Override
-    protected void onHandleIntent(Intent intent) {
-        PostTask.runSynchronously(UiThreadTaskTraits.DEFAULT, () -> {
-            // Clear the notification but don't do anything else if the TracingController went away.
-            if (!TracingController.isInitialized()) {
-                TracingNotificationManager.dismissNotification();
-                return;
-            }
+    protected void onHandleIntent(@Nullable Intent intent) {
+        PostTask.runSynchronously(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    // Clear the notification but don't do anything else if the TracingController
+                    // went away.
+                    if (!TracingController.isInitialized()) {
+                        TracingNotificationManager.dismissNotification();
+                        return;
+                    }
 
-            if (ACTION_STOP_RECORDING.equals(intent.getAction())) {
-                TracingController.getInstance().stopRecording();
-            } else if (ACTION_DISCARD_TRACE.equals(intent.getAction())) {
-                TracingController.getInstance().discardTrace();
-            }
-        });
+                    if (intent == null) return;
+                    if (ACTION_STOP_RECORDING.equals(intent.getAction())) {
+                        TracingController.getInstance().stopRecording();
+                    } else if (ACTION_DISCARD_TRACE.equals(intent.getAction())) {
+                        TracingController.getInstance().discardTrace();
+                    }
+                });
     }
 }

@@ -26,7 +26,7 @@ namespace {
 class MockChrome : public StubChrome {
  public:
   MockChrome() : web_view_("1") {}
-  ~MockChrome() override {}
+  ~MockChrome() override = default;
 
   Status GetWebViewById(const std::string& id, WebView** web_view) override {
     if (id == web_view_.GetId()) {
@@ -149,8 +149,8 @@ TEST(WindowCommandsTest, ProcessInputActionSequencePointerMouse) {
   ASSERT_EQ("pointer1", base::OptionalFromPtr(action1.FindString("id")));
   ASSERT_EQ("pointerMove",
             base::OptionalFromPtr(action1.FindString("subtype")));
-  ASSERT_EQ(30, action1.FindInt("x"));
-  ASSERT_EQ(60, action1.FindInt("y"));
+  ASSERT_EQ(30, action1.FindDouble("x"));
+  ASSERT_EQ(60, action1.FindDouble("y"));
 
   const base::Value::Dict& action2 = action_list[1];
   ASSERT_EQ("pointer", base::OptionalFromPtr(action2.FindString("type")));
@@ -210,8 +210,8 @@ TEST(WindowCommandsTest, ProcessInputActionSequencePointerTouch) {
   ASSERT_EQ("pointer1", base::OptionalFromPtr(action1.FindString("id")));
   ASSERT_EQ("pointerMove",
             base::OptionalFromPtr(action1.FindString("subtype")));
-  ASSERT_EQ(30, action1.FindInt("x"));
-  ASSERT_EQ(60, action1.FindInt("y"));
+  ASSERT_EQ(30, action1.FindDouble("x"));
+  ASSERT_EQ(60, action1.FindDouble("y"));
 
   const base::Value::Dict& action2 = action_list[1];
   ASSERT_EQ("pointer", base::OptionalFromPtr(action2.FindString("type")));
@@ -225,6 +225,21 @@ TEST(WindowCommandsTest, ProcessInputActionSequencePointerTouch) {
   ASSERT_EQ("touch", base::OptionalFromPtr(action3.FindString("pointerType")));
   ASSERT_EQ("pointer1", base::OptionalFromPtr(action3.FindString("id")));
   ASSERT_EQ("pointerUp", base::OptionalFromPtr(action3.FindString("subtype")));
+}
+
+TEST(WindowCommandsTest, ExecuteSetRPHRegistrationMode_NoParams) {
+  base::Value::Dict params;
+  Status status = CallWindowCommand(ExecuteSetRPHRegistrationMode, params);
+  ASSERT_EQ(kInvalidArgument, status.code());
+  ASSERT_NE(status.message().find("missing parameter 'mode'"),
+            std::string::npos);
+}
+
+TEST(WindowCommandsTest, ExecuteSetRPHRegistrationMode) {
+  base::Value::Dict params;
+  params.Set("mode", "autoaccept");
+  Status status = CallWindowCommand(ExecuteSetRPHRegistrationMode, params);
+  ASSERT_EQ(kOk, status.code());
 }
 
 namespace {
@@ -951,9 +966,11 @@ constexpr double device_scale_factor = 0.3;
 
 class StoreScreenshotParamsWebView : public StubWebView {
  public:
-  explicit StoreScreenshotParamsWebView(DevToolsClient* dtc = nullptr,
-                                        DeviceMetrics* dm = nullptr)
-      : StubWebView("1"), meom_(new MobileEmulationOverrideManager(dtc, dm)) {}
+  explicit StoreScreenshotParamsWebView(
+      DevToolsClient* dtc = nullptr,
+      std::optional<MobileDevice> md = std::nullopt)
+      : StubWebView("1"),
+        meom_(new MobileEmulationOverrideManager(dtc, md, 0)) {}
   ~StoreScreenshotParamsWebView() override = default;
 
   Status SendCommandAndGetResult(const std::string& cmd,
@@ -1031,8 +1048,10 @@ TEST(WindowCommandsTest, ExecuteFullPageScreenCapture) {
 
 TEST(WindowCommandsTest, ExecuteMobileFullPageScreenCapture) {
   StubDevToolsClient sdtc;
-  DeviceMetrics dm(0, 0, device_scale_factor, false, mobile);
-  StoreScreenshotParamsWebView webview(&sdtc, &dm);
+  MobileDevice mobile_device;
+  mobile_device.device_metrics =
+      DeviceMetrics(0, 0, device_scale_factor, false, mobile);
+  StoreScreenshotParamsWebView webview(&sdtc, std::move(mobile_device));
   ASSERT_EQ(webview.GetMobileEmulationOverrideManager()->HasOverrideMetrics(),
             true);
   base::Value::Dict params;
@@ -1041,4 +1060,151 @@ TEST(WindowCommandsTest, ExecuteMobileFullPageScreenCapture) {
                                     &result_value);
   ASSERT_EQ(kOk, status.code()) << status.message();
   ASSERT_EQ(GetExpectedCaptureParams(), webview.GetParams());
+}
+
+TEST(WindowCommandsTest, ExecuteScript_NoScript) {
+  base::Value::Dict params;
+  params.Set("args", base::Value::List());
+  Status status = CallWindowCommand(ExecuteExecuteScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'script' must be a string"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteScript_ScriptNotAString) {
+  base::Value::Dict params;
+  params.Set("script", base::Value::Dict());
+  params.Set("args", base::Value::List());
+  Status status = CallWindowCommand(ExecuteExecuteScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'script' must be a string"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteScript_NoArgs) {
+  base::Value::Dict params;
+  params.Set("script", "irrelevant");
+  Status status = CallWindowCommand(ExecuteExecuteScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'args' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteScript_ArgsNotAList) {
+  base::Value::Dict params;
+  params.Set("script", "irrelevant");
+  params.Set("args", "not-a-list");
+  Status status = CallWindowCommand(ExecuteExecuteScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'args' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteAsyncScript_NoScript) {
+  base::Value::Dict params;
+  params.Set("args", base::Value::List());
+  Status status = CallWindowCommand(ExecuteExecuteAsyncScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'script' must be a string"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteAsyncScript_ScriptNotAString) {
+  base::Value::Dict params;
+  params.Set("script", base::Value::Dict());
+  params.Set("args", base::Value::List());
+  Status status = CallWindowCommand(ExecuteExecuteAsyncScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'script' must be a string"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteAsyncScript_NoArgs) {
+  base::Value::Dict params;
+  params.Set("script", "irrelevant");
+  Status status = CallWindowCommand(ExecuteExecuteAsyncScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'args' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecuteAsyncScript_ArgsNotAList) {
+  base::Value::Dict params;
+  params.Set("script", "irrelevant");
+  params.Set("args", "not-a-list");
+  Status status = CallWindowCommand(ExecuteExecuteAsyncScript, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'args' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, SendKeysToActiveElement_NoValue) {
+  base::Value::Dict params;
+  Status status = CallWindowCommand(ExecuteSendKeysToActiveElement, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'value' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, SendKeysToActiveElement_ValueNotAList) {
+  base::Value::Dict params;
+  params.Set("value", base::Value::Dict());
+  Status status = CallWindowCommand(ExecuteSendKeysToActiveElement, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'value' must be a list"), std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecutePerformActions_NoActions) {
+  base::Value::Dict params;
+  Status status = CallWindowCommand(ExecutePerformActions, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'actions' must be a list"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecutePerformActions_ActionsNotAList) {
+  base::Value::Dict params;
+  params.Set("actions", 7);
+  Status status = CallWindowCommand(ExecutePerformActions, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'actions' must be a list"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecutePerformActions_NoActionsInSequence) {
+  base::Value::Dict sequence;
+  sequence.Set("id", "irrelevant");
+  sequence.Set("type", "none");
+  base::Value::List actions;
+  actions.Append(sequence.Clone());
+  base::Value::Dict params;
+  params.Set("actions", actions.Clone());
+  Status status = CallWindowCommand(ExecutePerformActions, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'actions' in the sequence must be a list"),
+            std::string::npos)
+      << status.message();
+}
+
+TEST(WindowCommandsTest, ExecutePerformActions_ActionsInSequenceNotAList) {
+  base::Value::Dict sequence;
+  sequence.Set("id", "irrelevant");
+  sequence.Set("type", "none");
+  sequence.Set("actions", base::Value::Dict());
+  base::Value::List actions;
+  actions.Append(sequence.Clone());
+  base::Value::Dict params;
+  params.Set("actions", actions.Clone());
+  Status status = CallWindowCommand(ExecutePerformActions, params);
+  ASSERT_EQ(kInvalidArgument, status.code()) << status.message();
+  ASSERT_NE(status.message().find("'actions' in the sequence must be a list"),
+            std::string::npos)
+      << status.message();
 }

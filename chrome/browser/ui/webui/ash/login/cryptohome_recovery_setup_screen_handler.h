@@ -14,8 +14,7 @@ class CryptohomeRecoverySetupScreen;
 
 // Interface for dependency injection between CryptohomeRecoverySetupScreen and
 // its WebUI representation.
-class CryptohomeRecoverySetupScreenView
-    : public base::SupportsWeakPtr<CryptohomeRecoverySetupScreenView> {
+class CryptohomeRecoverySetupScreenView {
  public:
   inline constexpr static StaticOobeScreenId kScreenId{
       "cryptohome-recovery-setup", "CryptohomeRecoverySetupScreen"};
@@ -24,9 +23,18 @@ class CryptohomeRecoverySetupScreenView
 
   // Shows the contents of the screen.
   virtual void Show() = 0;
+
+  // Shows the recovery setup failed message.
+  virtual void OnSetupFailed() = 0;
+
+  // Shows the spinner in the UI.
+  virtual void SetLoadingState() = 0;
+
+  // Gets a WeakPtr to the instance.
+  virtual base::WeakPtr<CryptohomeRecoverySetupScreenView> AsWeakPtr() = 0;
 };
 
-class CryptohomeRecoverySetupScreenHandler
+class CryptohomeRecoverySetupScreenHandler final
     : public CryptohomeRecoverySetupScreenView,
       public BaseScreenHandler {
  public:
@@ -44,10 +52,16 @@ class CryptohomeRecoverySetupScreenHandler
  private:
   // CryptohomeRecoverySetupScreenView
   void Show() override;
+  void OnSetupFailed() override;
+  void SetLoadingState() override;
+  base::WeakPtr<CryptohomeRecoverySetupScreenView> AsWeakPtr() override;
 
   // BaseScreenHandler:
   void DeclareLocalizedValues(
       ::login::LocalizedValuesBuilder* builder) override;
+
+  base::WeakPtrFactory<CryptohomeRecoverySetupScreenView> weak_ptr_factory_{
+      this};
 };
 
 }  // namespace ash

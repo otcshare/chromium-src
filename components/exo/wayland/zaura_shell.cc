@@ -4,61 +4,68 @@
 
 #include "components/exo/wayland/zaura_shell.h"
 
-#include <aura-shell-server-protocol.h>
 #include <wayland-server-core.h>
 #include <wayland-server-protocol-core.h>
 #include <xdg-shell-server-protocol.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ash/display/display_util.h"
 #include "ash/display/screen_orientation_controller.h"
-#include "ash/public/cpp/tablet_mode_observer.h"
+#include "ash/focus/focus_cycler.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desks_controller.h"
+#include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/overview/overview_observer.h"
 #include "ash/wm/window_state.h"
+#include "base/bit_cast.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/base/window_state_type.h"
+#include "chromeos/ui/frame/frame_utils.h"
+#include "chromeos/ui/frame/multitask_menu/float_controller_base.h"
 #include "components/exo/display.h"
 #include "components/exo/seat.h"
 #include "components/exo/seat_observer.h"
 #include "components/exo/shell_surface.h"
 #include "components/exo/shell_surface_base.h"
+#include "components/exo/wayland/output_metrics.h"
 #include "components/exo/wayland/serial_tracker.h"
 #include "components/exo/wayland/server_util.h"
 #include "components/exo/wayland/wayland_display_observer.h"
-#include "components/exo/wayland/wayland_display_util.h"
 #include "components/exo/wayland/wl_output.h"
 #include "components/exo/wayland/xdg_shell.h"
-#include "components/exo/wm_helper.h"
-#include "components/exo/wm_helper_chromeos.h"
+#include "components/exo/wayland/zaura_output_manager.h"
+#include "components/version_info/version_info.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window_occlusion_tracker.h"
 #include "ui/base/wayland/wayland_display_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display_observer.h"
-#include "ui/display/manager/display_manager.h"
-#include "ui/display/manager/display_manager_util.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/corewm/tooltip_controller.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/public/activation_client.h"
 #include "ui/wm/public/tooltip_client.h"
 
-namespace exo {
-namespace wayland {
+namespace exo::wayland {
 
 namespace {
 
@@ -290,12 +297,19 @@ void aura_surface_show_tooltip(wl_client* client,
                                uint32_t show_delay,
                                uint32_t hide_delay) {
   GetUserDataAs<AuraSurface>(resource)->ShowTooltip(
-      text, gfx::Point(x, y), trigger, base::Milliseconds((uint64_t)show_delay),
+      base::UTF8ToUTF16(text), gfx::Point(x, y), trigger,
+      base::Milliseconds((uint64_t)show_delay),
       base::Milliseconds((uint64_t)hide_delay));
 }
 
 void aura_surface_hide_tooltip(wl_client* client, wl_resource* resource) {
   GetUserDataAs<AuraSurface>(resource)->HideTooltip();
+}
+
+void aura_surface_set_accessibility_id(wl_client* client,
+                                       wl_resource* resource,
+                                       int32_t id) {
+  GetUserDataAs<AuraSurface>(resource)->SetAccessibilityId(id);
 }
 
 const struct zaura_surface_interface aura_surface_implementation = {
@@ -329,6 +343,7 @@ const struct zaura_surface_interface aura_surface_implementation = {
     aura_surface_release,
     aura_surface_show_tooltip,
     aura_surface_hide_tooltip,
+    aura_surface_set_accessibility_id,
 };
 
 }  // namespace
@@ -348,6 +363,7 @@ AuraSurface::~AuraSurface() {
   if (surface_) {
     surface_->RemoveSurfaceObserver(this);
     surface_->SetProperty(kSurfaceHasAuraSurfaceKey, false);
+    wm::SetTooltipText(surface_->window(), nullptr);
   }
 }
 
@@ -369,7 +385,7 @@ void AuraSurface::SetFrameColors(SkColor active_frame_color,
 
 void AuraSurface::SetParent(AuraSurface* parent, const gfx::Point& position) {
   if (surface_)
-    surface_->SetParent(parent ? parent->surface_ : nullptr, position);
+    surface_->SetParent(parent ? parent->surface_.get() : nullptr, position);
 }
 
 void AuraSurface::SetStartupId(const char* startup_id) {
@@ -576,15 +592,10 @@ void AuraSurface::ComputeAndSendOcclusion(
   switch (occlusion_state) {
     case aura::Window::OcclusionState::VISIBLE: {
       const gfx::Rect display_bounds_in_screen =
-          display::Screen::GetScreen()
-              ->GetDisplayNearestWindow(window)
-              .bounds();
+          display::Screen::Get()->GetDisplayNearestWindow(window).bounds();
       const gfx::Rect bounds_in_screen = GetTransformedBoundsInScreen(window);
       const int tracked_area =
           bounds_in_screen.width() * bounds_in_screen.height();
-      SkRegion tracked_and_occluded_region = occluded_region;
-      tracked_and_occluded_region.op(gfx::RectToSkIRect(bounds_in_screen),
-                                     SkRegion::Op::kIntersect_Op);
 
       // Clip the area outside of the display.
       gfx::Rect area_inside_display = bounds_in_screen;
@@ -592,6 +603,12 @@ void AuraSurface::ComputeAndSendOcclusion(
       int occluded_area = tracked_area - area_inside_display.width() *
                                              area_inside_display.height();
 
+      // We already marked the area outside the display as occluded, so
+      // intersect the occluded region with the region of the window which is
+      // inside the display.
+      SkRegion tracked_and_occluded_region = occluded_region;
+      tracked_and_occluded_region.op(gfx::RectToSkIRect(area_inside_display),
+                                     SkRegion::Op::kIntersect_Op);
       for (SkRegion::Iterator i(tracked_and_occluded_region); !i.done();
            i.next()) {
         occluded_area += i.rect().width() * i.rect().height();
@@ -635,7 +652,7 @@ void AuraSurface::ThrottleFrameRate(bool on) {
 }
 
 void AuraSurface::OnTooltipShown(Surface* surface,
-                                 const std::u16string& text,
+                                 std::u16string_view text,
                                  const gfx::Rect& bounds) {
   if (wl_resource_get_version(resource_) <
       ZAURA_SURFACE_TOOLTIP_SHOWN_SINCE_VERSION) {
@@ -675,22 +692,42 @@ void AuraSurface::Unpin() {
   surface_->Unpin();
 }
 
-void AuraSurface::ShowTooltip(const char* text,
+void AuraSurface::ShowTooltip(std::u16string text,
                               const gfx::Point& position,
                               uint32_t trigger,
                               const base::TimeDelta& show_delay,
                               const base::TimeDelta& hide_delay) {
-  tooltip_text_ = base::UTF8ToUTF16(text);
+  tooltip_text_ = std::move(text);
   auto* window = surface_->window();
   wm::SetTooltipText(window, &tooltip_text_);
   wm::SetTooltipId(window, surface_);
-  ash::Shell::Get()->tooltip_controller()->UpdateTooltip(window);
+
+  auto* tooltip_controller = ash::Shell::Get()->tooltip_controller();
+  tooltip_controller->SetShowTooltipDelay(window, show_delay);
+  tooltip_controller->SetHideTooltipTimeout(window, hide_delay);
+
+  switch (trigger) {
+    case ZAURA_SURFACE_TOOLTIP_TRIGGER_CURSOR:
+      tooltip_controller->UpdateTooltip(window);
+      break;
+    case ZAURA_SURFACE_TOOLTIP_TRIGGER_KEYBOARD:
+      tooltip_controller->UpdateTooltipFromKeyboardWithAnchorPoint(position,
+                                                                   window);
+      break;
+    default:
+      VLOG(2) << "Unknown aura-shell tooltip trigger type: " << trigger;
+      tooltip_controller->UpdateTooltip(window);
+  }
 }
 
 void AuraSurface::HideTooltip() {
   tooltip_text_ = std::u16string();
   auto* window = surface_->window();
   ash::Shell::Get()->tooltip_controller()->UpdateTooltip(window);
+}
+
+void AuraSurface::SetAccessibilityId(int id) {
+  surface_->SetClientAccessibilityId(id);
 }
 
 chromeos::OrientationType OrientationLock(uint32_t orientation_lock) {
@@ -716,11 +753,14 @@ chromeos::OrientationType OrientationLock(uint32_t orientation_lock) {
   return chromeos::OrientationType::kAny;
 }
 
-using AuraSurfaceConfigureCallback =
-    base::RepeatingCallback<void(const gfx::Rect& bounds,
-                                 chromeos::WindowStateType state_type,
-                                 bool resizing,
-                                 bool activated)>;
+using AuraSurfaceConfigureCallback = base::RepeatingCallback<void(
+    const gfx::Rect& bounds,
+    chromeos::WindowStateType state_type,
+    bool resizing,
+    bool activated,
+    float raster_scale,
+    aura::Window::OcclusionState occlusion_state,
+    std::optional<chromeos::WindowStateType> restore_state_type)>;
 
 uint32_t HandleAuraSurfaceConfigureCallback(
     wl_resource* resource,
@@ -730,21 +770,41 @@ uint32_t HandleAuraSurfaceConfigureCallback(
     chromeos::WindowStateType state_type,
     bool resizing,
     bool activated,
-    const gfx::Vector2d& origin_offset) {
+    const gfx::Vector2d& origin_offset,
+    float raster_scale,
+    aura::Window::OcclusionState occlusion_state,
+    std::optional<chromeos::WindowStateType> restore_state_type) {
   uint32_t serial =
       serial_tracker->GetNextSerial(SerialTracker::EventType::OTHER_EVENT);
-  callback.Run(bounds, state_type, resizing, activated);
+  callback.Run(bounds, state_type, resizing, activated, raster_scale,
+               occlusion_state, restore_state_type);
   xdg_surface_send_configure(resource, serial);
   wl_client_flush(wl_resource_get_client(resource));
   return serial;
 }
 
+using AuraSurfaceRotateFocusCallback = base::RepeatingCallback<
+    void(uint32_t serial, ash::FocusCycler::Direction direction, bool restart)>;
+
+uint32_t HandleAuraSurfaceRotateFocusCallback(
+    SerialTracker* serial_tracker,
+    AuraSurfaceRotateFocusCallback callback,
+    ash::FocusCycler::Direction direction,
+    bool restart) {
+  auto serial =
+      serial_tracker->GetNextSerial(SerialTracker::EventType::OTHER_EVENT);
+  callback.Run(serial, direction, restart);
+  return serial;
+}
+
 AuraToplevel::AuraToplevel(ShellSurface* shell_surface,
                            SerialTracker* const serial_tracker,
+                           SerialTracker* const rotation_serial_tracker,
                            wl_resource* xdg_toplevel_resource,
                            wl_resource* aura_toplevel_resource)
     : shell_surface_(shell_surface),
       serial_tracker_(serial_tracker),
+      rotation_serial_tracker_(rotation_serial_tracker),
       xdg_toplevel_resource_(xdg_toplevel_resource),
       aura_toplevel_resource_(aura_toplevel_resource) {
   DCHECK(shell_surface);
@@ -752,8 +812,25 @@ AuraToplevel::AuraToplevel(ShellSurface* shell_surface,
 
 AuraToplevel::~AuraToplevel() = default;
 
+void AuraToplevel::OnRotatePaneFocus(uint32_t serial,
+                                     ash::FocusCycler::Direction direction,
+                                     bool restart) {
+  auto zaura_direction = direction == ash::FocusCycler::Direction::FORWARD
+                             ? ZAURA_TOPLEVEL_ROTATE_DIRECTION_FORWARD
+                             : ZAURA_TOPLEVEL_ROTATE_DIRECTION_BACKWARD;
+  zaura_toplevel_send_rotate_focus(
+      aura_toplevel_resource_, serial, zaura_direction,
+      restart ? ZAURA_TOPLEVEL_ROTATE_RESTART_STATE_RESTART
+              : ZAURA_TOPLEVEL_ROTATE_RESTART_STATE_NO_RESTART);
+  wl_client_flush(wl_resource_get_client(aura_toplevel_resource_));
+}
+
 void AuraToplevel::SetOrientationLock(uint32_t lock_type) {
   shell_surface_->SetOrientationLock(OrientationLock(lock_type));
+}
+
+void AuraToplevel::SetWindowCornersRadii(const gfx::RoundedCornersF& radii) {
+  shell_surface_->SetWindowCornersRadii(radii);
 }
 
 void AuraToplevel::SetClientSubmitsSurfacesInPixelCoordinates(bool enable) {
@@ -763,9 +840,14 @@ void AuraToplevel::SetClientSubmitsSurfacesInPixelCoordinates(bool enable) {
 void AuraToplevel::SetWindowBounds(int32_t x,
                                    int32_t y,
                                    int32_t width,
-                                   int32_t height) {
-  if (!shell_surface_->IsDragged())
+                                   int32_t height,
+                                   int64_t display_id) {
+  if (!shell_surface_->IsDragged()) {
+    if (display_id != display::kInvalidDisplayId) {
+      shell_surface_->SetDisplay(display_id);
+    }
     shell_surface_->SetWindowBounds(gfx::Rect(x, y, width, height));
+  }
 }
 
 void AuraToplevel::SetRestoreInfo(int32_t restore_session_id,
@@ -783,6 +865,14 @@ void AuraToplevel::SetRestoreInfoWithWindowIdSource(
 void AuraToplevel::OnOriginChange(const gfx::Point& origin) {
   zaura_toplevel_send_origin_change(aura_toplevel_resource_, origin.x(),
                                     origin.y());
+  wl_client_flush(wl_resource_get_client(aura_toplevel_resource_));
+}
+
+void AuraToplevel::OnOverviewChange(bool in_overview) {
+  zaura_toplevel_send_overview_change(
+      aura_toplevel_resource_,
+      in_overview ? ZAURA_TOPLEVEL_IN_OVERVIEW_IN_OVERVIEW
+                  : ZAURA_TOPLEVEL_IN_OVERVIEW_NOT_IN_OVERVIEW);
   wl_client_flush(wl_resource_get_client(aura_toplevel_resource_));
 }
 
@@ -832,14 +922,41 @@ void AuraToplevel::SetClientUsesScreenCoordinates() {
                                               weak_ptr_factory_.GetWeakPtr())));
   shell_surface_->set_origin_change_callback(base::BindRepeating(
       &AuraToplevel::OnOriginChange, weak_ptr_factory_.GetWeakPtr()));
+  if (wl_resource_get_version(aura_toplevel_resource_) >=
+      ZAURA_TOPLEVEL_ROTATE_FOCUS_SINCE_VERSION) {
+    shell_surface_->set_rotate_focus_callback(base::BindRepeating(
+        HandleAuraSurfaceRotateFocusCallback, rotation_serial_tracker_,
+        base::BindRepeating(&AuraToplevel::OnRotatePaneFocus,
+                            weak_ptr_factory_.GetWeakPtr())));
+  }
+  if (wl_resource_get_version(aura_toplevel_resource_) >=
+      ZAURA_TOPLEVEL_OVERVIEW_CHANGE_SINCE_VERSION) {
+    shell_surface_->set_overview_change_callback(
+        base::BindRepeating(base::BindRepeating(
+            &AuraToplevel::OnOverviewChange, weak_ptr_factory_.GetWeakPtr())));
+  }
 }
 
 void AuraToplevel::SetSystemModal(bool modal) {
   shell_surface_->SetSystemModal(modal);
 }
 
-void AuraToplevel::SetFloat() {
-  shell_surface_->SetFloat();
+void AuraToplevel::SetFloatToLocation(uint32_t location) {
+  switch (location) {
+    case ZAURA_TOPLEVEL_FLOAT_START_LOCATION_BOTTOM_RIGHT:
+      shell_surface_->SetFloatToLocation(
+          chromeos::FloatStartLocation::kBottomRight);
+      break;
+    case ZAURA_TOPLEVEL_FLOAT_START_LOCATION_BOTTOM_LEFT:
+      shell_surface_->SetFloatToLocation(
+          chromeos::FloatStartLocation::kBottomLeft);
+      break;
+    default:
+      VLOG(2) << "aura_toplevel_set_float_to_location(): unknown "
+                 "float_start_location: "
+              << location;
+      break;
+  }
 }
 
 void AuraToplevel::UnsetFloat() {
@@ -852,6 +969,31 @@ void AuraToplevel::SetSnapPrimary(float snap_ratio) {
 
 void AuraToplevel::SetSnapSecondary(float snap_ratio) {
   shell_surface_->SetSnapSecondary(snap_ratio);
+}
+
+void AuraToplevel::SetPersistable(bool persistable) {
+  shell_surface_->SetPersistable(persistable);
+}
+
+void AuraToplevel::SetShape(std::optional<cc::Region> shape) {
+  shell_surface_->SetShape(std::move(shape));
+}
+
+void AuraToplevel::AckRotateFocus(uint32_t serial, uint32_t h) {
+  auto handled = h == ZAURA_TOPLEVEL_ROTATE_HANDLED_STATE_HANDLED;
+  shell_surface_->AckRotateFocus(serial, handled);
+}
+
+void AuraToplevel::SetCanMaximize(bool can_maximize) {
+  shell_surface_->SetCanMaximize(can_maximize);
+}
+
+void AuraToplevel::SetCanFullscreen(bool can_fullscreen) {
+  shell_surface_->SetCanFullscreen(can_fullscreen);
+}
+
+void AuraToplevel::SetShadowCornersRadii(const gfx::RoundedCornersF& radii) {
+  shell_surface_->SetShadowCornersRadii(radii);
 }
 
 void AuraToplevel::IntentToSnap(uint32_t snap_direction) {
@@ -872,6 +1014,10 @@ void AuraToplevel::UnsetSnap() {
   shell_surface_->UnsetSnap();
 }
 
+void AuraToplevel::SetTopInset(int top_inset) {
+  shell_surface_->SetTopInset(top_inset);
+}
+
 template <class T>
 void AddState(wl_array* states, T state) {
   T* value = static_cast<T*>(wl_array_add(states, sizeof(T)));
@@ -879,21 +1025,53 @@ void AddState(wl_array* states, T state) {
   *value = state;
 }
 
-void AuraToplevel::OnConfigure(const gfx::Rect& bounds,
-                               chromeos::WindowStateType state_type,
-                               bool resizing,
-                               bool activated) {
+void AuraToplevel::OnConfigure(
+    const gfx::Rect& bounds,
+    chromeos::WindowStateType state_type,
+    bool resizing,
+    bool activated,
+    float raster_scale,
+    aura::Window::OcclusionState occlusion_state,
+    std::optional<chromeos::WindowStateType> restore_state_type) {
   wl_array states;
   wl_array_init(&states);
   if (state_type == chromeos::WindowStateType::kMaximized)
     AddState(&states, XDG_TOPLEVEL_STATE_MAXIMIZED);
-  // TODO(crbug/1250129): Pinned states need to be handled properly.
-  // TODO(crbug/1250129): Support snapped state.
+  // TODO(crbug.com/40197882): Support snapped state.
   if (IsFullscreenOrPinnedWindowStateType(state_type)) {
-    AddState(&states, XDG_TOPLEVEL_STATE_FULLSCREEN);
-    if (shell_surface_->GetWidget()->GetNativeWindow()->GetProperty(
-            chromeos::kImmersiveImpliedByFullscreen))
+    // If pinned state is not yet supported, always set fullscreen.
+    if (wl_resource_get_version(aura_toplevel_resource_) <
+        ZAURA_TOPLEVEL_STATE_TRUSTED_PINNED_SINCE_VERSION) {
+      AddState(&states, XDG_TOPLEVEL_STATE_FULLSCREEN);
+    } else if (state_type == chromeos::WindowStateType::kFullscreen) {
+      AddState(&states, XDG_TOPLEVEL_STATE_FULLSCREEN);
+    } else if (state_type == chromeos::WindowStateType::kPinned) {
+      AddState(&states, ZAURA_TOPLEVEL_STATE_PINNED);
+    } else if (state_type == chromeos::WindowStateType::kLockedFullscreen) {
+      AddState(&states, ZAURA_TOPLEVEL_STATE_TRUSTED_PINNED);
+    }
+
+    if (shell_surface_->GetWidget() &&
+        shell_surface_->GetWidget()->GetNativeWindow()->GetProperty(
+            chromeos::kImmersiveImpliedByFullscreen)) {
+      // Imemrsive state should NOT be set for pinned state.
+      // TODO(crbug.com/41483774): Lacros randomly enters/exits immersive state
+      // when transitioning to pinned/unpinned state. Add CHECK to guarantee
+      // `state_type` is as same as chrome::WindowStateType::kFullscreen here
+      // after resolving this bug.
+
+      // TODO(oshima): Immersive should probably be default.
+      // Investigate and fix.
       AddState(&states, ZAURA_TOPLEVEL_STATE_IMMERSIVE);
+    }
+    // If the window was maxmized before it is fullscreened, we should
+    // keep this state while it is fullscreened. This is what X11 apps, and
+    // thus standard wayland apps expect, and they may rely on this behavior
+    // even though this is not explicitly specified in the protocol spec.
+    if (restore_state_type.has_value() &&
+        restore_state_type.value() == chromeos::WindowStateType::kMaximized) {
+      AddState(&states, XDG_TOPLEVEL_STATE_MAXIMIZED);
+    }
   }
   if (resizing)
     AddState(&states, XDG_TOPLEVEL_STATE_RESIZING);
@@ -911,9 +1089,25 @@ void AuraToplevel::OnConfigure(const gfx::Rect& bounds,
   if (state_type == chromeos::WindowStateType::kMinimized)
     AddState(&states, ZAURA_TOPLEVEL_STATE_MINIMIZED);
 
+  if (state_type == chromeos::WindowStateType::kPip) {
+    AddState(&states, ZAURA_TOPLEVEL_STATE_PIP);
+  }
+
   zaura_toplevel_send_configure(aura_toplevel_resource_, bounds.x(), bounds.y(),
                                 bounds.width(), bounds.height(), &states);
   wl_array_release(&states);
+
+  if (wl_resource_get_version(aura_toplevel_resource_) >=
+      ZAURA_TOPLEVEL_CONFIGURE_RASTER_SCALE_SINCE_VERSION) {
+    uint32_t value = base::bit_cast<uint32_t>(raster_scale);
+    zaura_toplevel_send_configure_raster_scale(aura_toplevel_resource_, value);
+  }
+
+  if (wl_resource_get_version(aura_toplevel_resource_) >=
+      ZAURA_TOPLEVEL_CONFIGURE_OCCLUSION_STATE_SINCE_VERSION) {
+    zaura_toplevel_send_configure_occlusion_state(
+        aura_toplevel_resource_, WaylandOcclusionState(occlusion_state));
+  }
 }
 
 AuraPopup::AuraPopup(ShellSurfaceBase* shell_surface)
@@ -975,69 +1169,39 @@ bool AuraOutput::SendDisplayMetrics(const display::Display& display,
     return false;
   }
 
-  const WMHelper* wm_helper = WMHelper::GetInstance();
-  const display::ManagedDisplayInfo& display_info =
-      wm_helper->GetDisplayInfo(display.id());
+  const OutputMetrics output_metrics(display);
 
   if (wl_resource_get_version(resource_) >=
       ZAURA_OUTPUT_DISPLAY_ID_SINCE_VERSION) {
-    auto display_id = ui::wayland::ToWaylandDisplayIdPair(display.id());
-    zaura_output_send_display_id(resource_, display_id.high, display_id.low);
+    zaura_output_send_display_id(resource_, output_metrics.display_id.high,
+                                 output_metrics.display_id.low);
   }
 
   if (wl_resource_get_version(resource_) >= ZAURA_OUTPUT_SCALE_SINCE_VERSION) {
-    display::ManagedDisplayMode active_mode;
-    bool rv = wm_helper->GetActiveModeForDisplayId(display.id(), &active_mode);
-    DCHECK(rv);
-    const int32_t current_output_scale =
-        std::round(display_info.zoom_factor() * 1000.f);
-    std::vector<float> zoom_factors =
-        display::GetDisplayZoomFactors(active_mode);
-
-    // Ensure that the current zoom factor is a part of the list.
-    if (base::ranges::none_of(zoom_factors, [&display_info](float zoom_factor) {
-          return std::abs(display_info.zoom_factor() - zoom_factor) <=
-                 std::numeric_limits<float>::epsilon();
-        })) {
-      zoom_factors.push_back(display_info.zoom_factor());
-    }
-
-    for (float zoom_factor : zoom_factors) {
-      int32_t output_scale = std::round(zoom_factor * 1000.f);
-      uint32_t flags = 0;
-      if (output_scale == 1000)
-        flags |= ZAURA_OUTPUT_SCALE_PROPERTY_PREFERRED;
-      if (current_output_scale == output_scale)
-        flags |= ZAURA_OUTPUT_SCALE_PROPERTY_CURRENT;
-
-      // TODO(malaykeshav): This can be removed in the future when client
-      // has been updated.
-      if (wl_resource_get_version(resource_) < 6)
-        output_scale = std::round(1000.f / zoom_factor);
-
-      zaura_output_send_scale(resource_, flags, output_scale);
+    for (const auto& output_scale : output_metrics.output_scales) {
+      zaura_output_send_scale(resource_, output_scale.scale_property,
+                              output_scale.scale_factor);
     }
   }
 
   if (wl_resource_get_version(resource_) >=
       ZAURA_OUTPUT_CONNECTION_SINCE_VERSION) {
-    zaura_output_send_connection(
-        resource_, display.IsInternal() ? ZAURA_OUTPUT_CONNECTION_TYPE_INTERNAL
-                                        : ZAURA_OUTPUT_CONNECTION_TYPE_UNKNOWN);
+    zaura_output_send_connection(resource_, output_metrics.connection_type);
   }
 
   if (wl_resource_get_version(resource_) >=
       ZAURA_OUTPUT_DEVICE_SCALE_FACTOR_SINCE_VERSION) {
     zaura_output_send_device_scale_factor(
-        resource_, display_info.device_scale_factor() * 1000);
+        resource_, output_metrics.device_scale_factor_deprecated);
   }
 
-  if (wl_resource_get_version(resource_) >= ZAURA_OUTPUT_INSETS_SINCE_VERSION)
-    SendInsets(display.bounds().InsetsFrom(display.work_area()));
+  if (wl_resource_get_version(resource_) >= ZAURA_OUTPUT_INSETS_SINCE_VERSION) {
+    SendInsets(output_metrics.logical_insets);
+  }
 
   if (wl_resource_get_version(resource_) >=
       ZAURA_OUTPUT_LOGICAL_TRANSFORM_SINCE_VERSION) {
-    SendLogicalTransform(OutputTransform(display.rotation()));
+    SendLogicalTransform(output_metrics.logical_transform);
   }
 
   return true;
@@ -1082,71 +1246,91 @@ const uint32_t kFixedBugIds[] = {
     1352584,
     1358908,
     1400226,
+    1405471,
 };
 
 // Implements aura shell interface and monitors workspace state needed
 // for the aura shell interface.
 class WaylandAuraShell : public ash::DesksController::Observer,
-                         public ash::TabletModeObserver,
+                         public ash::OverviewObserver,
+                         public display::DisplayObserver,
                          public SeatObserver {
  public:
   WaylandAuraShell(wl_resource* aura_shell_resource, Display* display)
       : aura_shell_resource_(aura_shell_resource), seat_(display->seat()) {
-    WMHelperChromeOS* helper = WMHelperChromeOS::GetInstance();
-    helper->AddTabletModeObserver(this);
     ash::DesksController::Get()->AddObserver(this);
+    ash::Shell::Get()->overview_controller()->AddObserver(this);
+    display::Screen::Get()->AddObserver(this);
     if (wl_resource_get_version(aura_shell_resource_) >=
         ZAURA_SHELL_LAYOUT_MODE_SINCE_VERSION) {
-      auto layout_mode = helper->InTabletMode()
+      auto layout_mode = display::Screen::Get()->InTabletMode()
                              ? ZAURA_SHELL_LAYOUT_MODE_TABLET
                              : ZAURA_SHELL_LAYOUT_MODE_WINDOWED;
       zaura_shell_send_layout_mode(aura_shell_resource_, layout_mode);
+    }
+    if (wl_resource_get_version(aura_shell_resource_) >=
+        ZAURA_SHELL_COMPOSITOR_VERSION_SINCE_VERSION) {
+      const std::string_view ash_version = version_info::GetVersionNumber();
+      zaura_shell_send_compositor_version(aura_shell_resource_,
+                                          ash_version.data());
     }
     if (wl_resource_get_version(aura_shell_resource_) >=
         ZAURA_SHELL_BUG_FIX_SINCE_VERSION) {
       for (uint32_t bug_id : kFixedBugIds) {
         zaura_shell_send_bug_fix(aura_shell_resource_, bug_id);
       }
+      if (wl_resource_get_version(aura_shell_resource_) >=
+          ZAURA_SHELL_ALL_BUG_FIXES_SENT_SINCE_VERSION) {
+        zaura_shell_send_all_bug_fixes_sent(aura_shell_resource_);
+      }
+      wl_client_flush(wl_resource_get_client(aura_shell_resource_));
     }
+
+    if (wl_resource_get_version(aura_shell_resource_) >=
+        ZAURA_SHELL_WINDOW_CORNERS_RADII_SINCE_VERSION) {
+      const auto window_radii = chromeos::GetWindowRoundedCorners();
+      zaura_shell_send_window_corners_radii(
+          aura_shell_resource_, window_radii.upper_left(),
+          window_radii.upper_right(), window_radii.lower_right(),
+          window_radii.lower_left());
+    }
+
     display->seat()->AddObserver(this, kAuraShellSeatObserverPriority);
 
     OnDesksChanged();
     OnDeskActivationChanged();
+    OnOverviewModeChanged();
   }
   WaylandAuraShell(const WaylandAuraShell&) = delete;
   WaylandAuraShell& operator=(const WaylandAuraShell&) = delete;
   ~WaylandAuraShell() override {
-    WMHelperChromeOS* helper = WMHelperChromeOS::GetInstance();
-    helper->RemoveTabletModeObserver(this);
+    display::Screen::Get()->RemoveObserver(this);
+    ash::Shell::Get()->overview_controller()->RemoveObserver(this);
     ash::DesksController::Get()->RemoveObserver(this);
     if (seat_)
       seat_->RemoveObserver(this);
   }
 
-  // Overridden from ash::TabletModeObserver:
-  void OnTabletModeStarted() override {
+  // display::DisplayObserver:
+  void OnDisplayTabletStateChanged(display::TabletState state) override {
     if (wl_resource_get_version(aura_shell_resource_) >=
-        ZAURA_SHELL_LAYOUT_MODE_SINCE_VERSION)
-      zaura_shell_send_layout_mode(aura_shell_resource_,
-                                   ZAURA_SHELL_LAYOUT_MODE_TABLET);
-  }
-  void OnTabletModeEnding() override {
-    if (wl_resource_get_version(aura_shell_resource_) >=
-        ZAURA_SHELL_LAYOUT_MODE_SINCE_VERSION)
-      zaura_shell_send_layout_mode(aura_shell_resource_,
-                                   ZAURA_SHELL_LAYOUT_MODE_WINDOWED);
-  }
-  void OnTabletModeEnded() override {}
-
-  // Overridden from SeatObserver:
-  void OnSurfaceFocused(Surface* gained_focus,
-                        Surface* lost_focus,
-                        bool has_focused_surface) override {
-    FocusedSurfaceChanged(gained_focus, lost_focus, has_focused_surface);
+        ZAURA_SHELL_LAYOUT_MODE_SINCE_VERSION) {
+      if (state == display::TabletState::kInTabletMode) {
+        zaura_shell_send_layout_mode(aura_shell_resource_,
+                                     ZAURA_SHELL_LAYOUT_MODE_TABLET);
+        wl_client_flush(wl_resource_get_client(aura_shell_resource_));
+      } else if (state == display::TabletState::kExitingTabletMode) {
+        zaura_shell_send_layout_mode(aura_shell_resource_,
+                                     ZAURA_SHELL_LAYOUT_MODE_WINDOWED);
+        wl_client_flush(wl_resource_get_client(aura_shell_resource_));
+      }
+    }
   }
 
   // ash::DesksController::Observer:
-  void OnDeskAdded(const ash::Desk* desk) override { OnDesksChanged(); }
+  void OnDeskAdded(const ash::Desk* desk, bool from_undo) override {
+    OnDesksChanged();
+  }
   void OnDeskRemoved(const ash::Desk* desk) override { OnDesksChanged(); }
   void OnDeskReordered(int old_index, int new_index) override {
     OnDesksChanged();
@@ -1160,6 +1344,25 @@ class WaylandAuraShell : public ash::DesksController::Observer,
   void OnDeskNameChanged(const ash::Desk* desk,
                          const std::u16string& new_name) override {
     OnDesksChanged();
+  }
+
+  // ash::OverviewObserver:
+  void OnOverviewModeStartingAnimationComplete(bool canceled) override {
+    if (!canceled) {
+      OnOverviewModeChanged();
+    }
+  }
+  void OnOverviewModeEndingAnimationComplete(bool canceled) override {
+    if (!canceled) {
+      OnOverviewModeChanged();
+    }
+  }
+
+  // SeatObserver:
+  void OnSurfaceFocused(Surface* gained_focus,
+                        Surface* lost_focus,
+                        bool has_focused_surface) override {
+    FocusedSurfaceChanged(gained_focus, lost_focus, has_focused_surface);
   }
 
  private:
@@ -1176,7 +1379,7 @@ class WaylandAuraShell : public ash::DesksController::Observer,
       std::string name = base::UTF16ToUTF8(desk->name());
       char* desk_name =
           static_cast<char*>(wl_array_add(&desk_names, name.size() + 1));
-      strcpy(desk_name, name.c_str());
+      UNSAFE_TODO(strcpy(desk_name, name.c_str()));
     }
 
     zaura_shell_send_desks_changed(aura_shell_resource_, &desk_names);
@@ -1194,16 +1397,27 @@ class WaylandAuraShell : public ash::DesksController::Observer,
         ash::DesksController::Get()->GetActiveDeskIndex());
   }
 
+  void OnOverviewModeChanged() {
+    if (wl_resource_get_version(aura_shell_resource_) <
+        ZAURA_SHELL_SET_OVERVIEW_MODE_SINCE_VERSION) {
+      return;
+    }
+
+    const bool in_overview =
+        ash::Shell::Get()->overview_controller()->InOverviewSession();
+    if (in_overview) {
+      zaura_shell_send_set_overview_mode(aura_shell_resource_);
+    } else {
+      zaura_shell_send_unset_overview_mode(aura_shell_resource_);
+    }
+  }
+
   void FocusedSurfaceChanged(Surface* gained_active_surface,
                              Surface* lost_active_surface,
                              bool has_focused_client) {
     if (wl_resource_get_version(aura_shell_resource_) <
         ZAURA_SHELL_ACTIVATED_SINCE_VERSION)
       return;
-    if (gained_active_surface == lost_active_surface &&
-        last_has_focused_client_ == has_focused_client)
-      return;
-    last_has_focused_client_ = has_focused_client;
 
     wl_resource* gained_active_surface_resource =
         gained_active_surface ? GetSurfaceResource(gained_active_surface)
@@ -1227,6 +1441,12 @@ class WaylandAuraShell : public ash::DesksController::Observer,
       lost_active_surface_resource = nullptr;
     }
 
+    if (gained_active_surface_resource == lost_active_surface_resource &&
+        last_has_focused_client_ == has_focused_client) {
+      return;
+    }
+    last_has_focused_client_ = has_focused_client;
+
     zaura_shell_send_activated(aura_shell_resource_,
                                gained_active_surface_resource,
                                lost_active_surface_resource);
@@ -1235,8 +1455,8 @@ class WaylandAuraShell : public ash::DesksController::Observer,
   }
 
   // The aura shell resource associated with observer.
-  wl_resource* const aura_shell_resource_;
-  Seat* const seat_;
+  const raw_ptr<wl_resource, DanglingUntriaged> aura_shell_resource_;
+  const raw_ptr<Seat> seat_;
 
   bool last_has_focused_client_ = false;
 
@@ -1250,6 +1470,28 @@ void aura_toplevel_set_orientation_lock(wl_client* client,
                                         wl_resource* resource,
                                         uint32_t orientation_lock) {
   GetUserDataAs<AuraToplevel>(resource)->SetOrientationLock(orientation_lock);
+}
+
+void aura_toplevel_set_window_corner_radii(wl_client* client,
+                                           wl_resource* resource,
+                                           uint32_t upper_left_radius,
+                                           uint32_t upper_right_radius,
+                                           uint32_t lower_right_radius,
+                                           uint32_t lower_left_radius) {
+  GetUserDataAs<AuraToplevel>(resource)->SetWindowCornersRadii(
+      gfx::RoundedCornersF(upper_left_radius, upper_right_radius,
+                           lower_right_radius, lower_left_radius));
+}
+
+void aura_toplevel_set_shadow_corners_radii(wl_client* client,
+                                            wl_resource* resource,
+                                            uint32_t upper_left_radius,
+                                            uint32_t upper_right_radius,
+                                            uint32_t lower_right_radius,
+                                            uint32_t lower_left_radius) {
+  GetUserDataAs<AuraToplevel>(resource)->SetShadowCornersRadii(
+      gfx::RoundedCornersF(upper_left_radius, upper_right_radius,
+                           lower_right_radius, lower_left_radius));
 }
 
 void aura_toplevel_set_client_supports_window_bounds(wl_client* client,
@@ -1271,8 +1513,9 @@ void aura_toplevel_set_window_bounds(wl_client* client,
                                      int32_t width,
                                      int32_t height,
                                      wl_resource* output) {
-  // TODO(crbug.com/1261321): Use output hint.
-  GetUserDataAs<AuraToplevel>(resource)->SetWindowBounds(x, y, width, height);
+  auto display_id = AuraOutputManager::GetDisplayIdForOutput(output);
+  GetUserDataAs<AuraToplevel>(resource)->SetWindowBounds(x, y, width, height,
+                                                         display_id);
 }
 
 void aura_toplevel_set_origin(wl_client* client,
@@ -1302,7 +1545,14 @@ void aura_toplevel_unset_system_modal(wl_client* client,
 }
 
 void aura_toplevel_set_float(wl_client* client, wl_resource* resource) {
-  GetUserDataAs<AuraToplevel>(resource)->SetFloat();
+  GetUserDataAs<AuraToplevel>(resource)->SetFloatToLocation(
+      ZAURA_TOPLEVEL_FLOAT_START_LOCATION_BOTTOM_RIGHT);
+}
+
+void aura_toplevel_set_float_to_location(wl_client* client,
+                                         wl_resource* resource,
+                                         uint32_t location) {
+  GetUserDataAs<AuraToplevel>(resource)->SetFloatToLocation(location);
 }
 
 void aura_toplevel_unset_float(wl_client* client, wl_resource* resource) {
@@ -1312,14 +1562,14 @@ void aura_toplevel_unset_float(wl_client* client, wl_resource* resource) {
 void aura_toplevel_set_snap_primary(wl_client* client,
                                     wl_resource* resource,
                                     uint32_t snap_ratio_as_uint) {
-  float snap_ratio = *reinterpret_cast<float*>(&snap_ratio_as_uint);
+  float snap_ratio = base::bit_cast<float>(snap_ratio_as_uint);
   GetUserDataAs<AuraToplevel>(resource)->SetSnapPrimary(snap_ratio);
 }
 
 void aura_toplevel_set_snap_secondary(wl_client* client,
                                       wl_resource* resource,
                                       uint32_t snap_ratio_as_uint) {
-  float snap_ratio = *reinterpret_cast<float*>(&snap_ratio_as_uint);
+  float snap_ratio = base::bit_cast<float>(snap_ratio_as_uint);
   GetUserDataAs<AuraToplevel>(resource)->SetSnapSecondary(snap_ratio);
 }
 
@@ -1380,7 +1630,6 @@ ui::ZOrderLevel AuraTopLevelZOrderLevel(uint32_t z_order_level) {
   }
 
   NOTREACHED();
-  return ui::ZOrderLevel::kNormal;
 }
 
 void aura_toplevel_set_z_order(wl_client* client,
@@ -1409,8 +1658,56 @@ void aura_toplevel_set_scale_factor(wl_client* client,
                                     uint32_t scale_factor_as_uint) {
   static_assert(sizeof(uint32_t) == sizeof(float),
                 "Sizes much match for reinterpret cast to be meaningful");
-  float scale_factor = *reinterpret_cast<float*>(&scale_factor_as_uint);
+  float scale_factor = base::bit_cast<float>(scale_factor_as_uint);
   GetUserDataAs<AuraToplevel>(resource)->SetScaleFactor(scale_factor);
+}
+
+void aura_toplevel_set_persistable(wl_client* client,
+                                   wl_resource* resource,
+                                   uint32_t persistable) {
+  GetUserDataAs<AuraToplevel>(resource)->SetPersistable(
+      persistable == ZAURA_TOPLEVEL_PERSISTABLE_PERSISTABLE);
+}
+
+void aura_toplevel_set_shape(wl_client* client,
+                             wl_resource* resource,
+                             wl_resource* region_resource) {
+  GetUserDataAs<AuraToplevel>(resource)->SetShape(
+      region_resource
+          ? std::optional<cc::Region>(*GetUserDataAs<SkRegion>(region_resource))
+          : std::nullopt);
+}
+
+void aura_toplevel_set_top_inset(wl_client* client,
+                                 wl_resource* resource,
+                                 int32_t top_inset) {
+  GetUserDataAs<AuraToplevel>(resource)->SetTopInset(top_inset);
+}
+
+void aura_toplevel_ack_rotate_focus(wl_client* client,
+                                    wl_resource* resource,
+                                    uint32_t serial,
+                                    uint32_t handled) {
+  GetUserDataAs<AuraToplevel>(resource)->AckRotateFocus(serial, handled);
+}
+
+void aura_toplevel_set_can_maximize(wl_client* client, wl_resource* resource) {
+  GetUserDataAs<AuraToplevel>(resource)->SetCanMaximize(true);
+}
+
+void aura_toplevel_unset_can_maximize(wl_client* client,
+                                      wl_resource* resource) {
+  GetUserDataAs<AuraToplevel>(resource)->SetCanMaximize(false);
+}
+
+void aura_toplevel_set_can_fullscreen(wl_client* client,
+                                      wl_resource* resource) {
+  GetUserDataAs<AuraToplevel>(resource)->SetCanFullscreen(true);
+}
+
+void aura_toplevel_unset_can_fullscreen(wl_client* client,
+                                        wl_resource* resource) {
+  GetUserDataAs<AuraToplevel>(resource)->SetCanFullscreen(false);
 }
 
 const struct zaura_toplevel_interface aura_toplevel_implementation = {
@@ -1436,7 +1733,17 @@ const struct zaura_toplevel_interface aura_toplevel_implementation = {
     aura_toplevel_set_snap_secondary,
     aura_toplevel_intent_to_snap,
     aura_toplevel_unset_snap,
-};
+    aura_toplevel_set_persistable,
+    aura_toplevel_set_shape,
+    aura_toplevel_set_top_inset,
+    aura_toplevel_ack_rotate_focus,
+    aura_toplevel_set_can_maximize,
+    aura_toplevel_unset_can_maximize,
+    aura_toplevel_set_can_fullscreen,
+    aura_toplevel_unset_can_fullscreen,
+    aura_toplevel_set_float_to_location,
+    aura_toplevel_set_window_corner_radii,
+    aura_toplevel_set_shadow_corners_radii};
 
 void aura_popup_surface_submission_in_pixel_coordinates(wl_client* client,
                                                         wl_resource* resource) {
@@ -1476,7 +1783,7 @@ void aura_popup_release(wl_client* client, wl_resource* resource) {
 void aura_popup_set_scale_factor(wl_client* client,
                                  wl_resource* resource,
                                  uint32_t scale_factor_as_uint) {
-  float scale_factor = *reinterpret_cast<float*>(&scale_factor_as_uint);
+  float scale_factor = base::bit_cast<float>(scale_factor_as_uint);
   GetUserDataAs<AuraPopup>(resource)->SetScaleFactor(scale_factor);
 }
 
@@ -1501,6 +1808,7 @@ void aura_shell_get_aura_toplevel(wl_client* client,
       aura_toplevel_resource, &aura_toplevel_implementation,
       std::make_unique<AuraToplevel>(
           shell_surface_data.shell_surface, shell_surface_data.serial_tracker,
+          shell_surface_data.rotation_serial_tracker,
           shell_surface_data.surface_resource, aura_toplevel_resource));
 }
 
@@ -1587,5 +1895,4 @@ void bind_aura_shell(wl_client* client,
                     std::make_unique<WaylandAuraShell>(resource, display));
 }
 
-}  // namespace wayland
-}  // namespace exo
+}  // namespace exo::wayland

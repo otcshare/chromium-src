@@ -6,6 +6,7 @@
 #define GIN_ARGUMENTS_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "gin/converter.h"
 #include "gin/gin_export.h"
 
@@ -27,8 +28,8 @@ class GIN_EXPORT Arguments {
   template <typename T>
   bool GetHolder(T* out) const {
     v8::Local<v8::Object> holder = is_for_property_
-                                       ? info_for_property_->Holder()
-                                       : info_for_function_->Holder();
+                                       ? info_for_property_->HolderV2()
+                                       : info_for_function_->This();
     return ConvertFromV8(isolate_, holder, out);
   }
 
@@ -78,11 +79,12 @@ class GIN_EXPORT Arguments {
     return is_for_property_ ? 0 : info_for_function_->Length();
   }
 
-  template<typename T>
-  void Return(T val) {
+  template <typename T>
+  void Return(const T& val) {
     v8::Local<v8::Value> v8_value;
-    if (!TryConvertToV8(isolate_, val, &v8_value))
+    if (!TryConvertToV8(isolate_, val, &v8_value)) {
       return;
+    }
     (is_for_property_ ? info_for_property_->GetReturnValue()
                       : info_for_function_->GetReturnValue())
         .Set(v8_value);
@@ -98,7 +100,7 @@ class GIN_EXPORT Arguments {
   // Returns all arguments. Since this doesn't require any conversion, it
   // cannot fail. This does not rely on or modify the current position in the
   // array used by Get/PeekNext().
-  std::vector<v8::Local<v8::Value>> GetAll() const;
+  v8::LocalVector<v8::Value> GetAll() const;
 
   // Returns the original v8::FunctionCallbackInfo used to construct this
   // Arguments if it exists, or nullptr otherwise.
@@ -118,8 +120,14 @@ class GIN_EXPORT Arguments {
  private:
   raw_ptr<v8::Isolate> isolate_;
   union {
-    const v8::FunctionCallbackInfo<v8::Value>* info_for_function_;
-    const v8::PropertyCallbackInfo<v8::Value>* info_for_property_;
+    // This field is not a raw_ptr<> because it was filtered by the rewriter
+    // for: #union
+    RAW_PTR_EXCLUSION const v8::FunctionCallbackInfo<v8::Value>*
+        info_for_function_;
+    // This field is not a raw_ptr<> because it was filtered by the rewriter
+    // for: #union
+    RAW_PTR_EXCLUSION const v8::PropertyCallbackInfo<v8::Value>*
+        info_for_property_;
   };
   int next_ = 0;
   bool insufficient_arguments_ = false;

@@ -6,6 +6,7 @@
 #define CHROMEOS_ASH_SERVICES_MULTIDEVICE_SETUP_FEATURE_STATE_MANAGER_IMPL_H_
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/public/cpp/device_sync_client.h"
 #include "chromeos/ash/services/multidevice_setup/feature_state_manager.h"
@@ -38,7 +39,9 @@ class FeatureStateManagerImpl : public FeatureStateManager,
         HostStatusProvider* host_status_provider,
         device_sync::DeviceSyncClient* device_sync_client,
         AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-        const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>&
+        const base::flat_map<
+            mojom::Feature,
+            raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
             global_state_feature_managers,
         bool is_secondary_user);
     static void SetFactoryForTesting(Factory* test_factory);
@@ -50,7 +53,9 @@ class FeatureStateManagerImpl : public FeatureStateManager,
         HostStatusProvider* host_status_provider,
         device_sync::DeviceSyncClient* device_sync_client,
         AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-        const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>&
+        const base::flat_map<
+            mojom::Feature,
+            raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
             global_state_feature_managers,
         bool is_secondary_user) = 0;
 
@@ -69,7 +74,8 @@ class FeatureStateManagerImpl : public FeatureStateManager,
       HostStatusProvider* host_status_provider,
       device_sync::DeviceSyncClient* device_sync_client,
       AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-      const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>&
+      const base::flat_map<mojom::Feature,
+                           raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
           global_state_feature_managers,
       bool is_secondary_user);
 
@@ -106,11 +112,12 @@ class FeatureStateManagerImpl : public FeatureStateManager,
   // than UMA aggregation periods and don't change feature state.
   void LogFeatureStates() const;
 
-  PrefService* pref_service_;
-  HostStatusProvider* host_status_provider_;
-  device_sync::DeviceSyncClient* device_sync_client_;
-  AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker_;
-  const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>
+  raw_ptr<PrefService> pref_service_;
+  raw_ptr<HostStatusProvider> host_status_provider_;
+  raw_ptr<device_sync::DeviceSyncClient> device_sync_client_;
+  raw_ptr<AndroidSmsPairingStateTracker> android_sms_pairing_state_tracker_;
+  const base::flat_map<mojom::Feature,
+                       raw_ptr<GlobalStateFeatureManager, CtnExperimental>>
       global_state_feature_managers_;
 
   // Certain features may be unavailable to secondary users logged into a

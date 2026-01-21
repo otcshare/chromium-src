@@ -4,20 +4,14 @@
 
 #include "chrome/browser/apps/platform_apps/api/browser_context_keyed_service_factories.h"
 
-#include "build/chromeos_buildflags.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/apps/platform_apps/api/media_galleries/media_galleries_api.h"
 #include "chrome/browser/apps/platform_apps/api/arc_apps_private/arc_apps_private_api.h"
-#endif
 
-namespace chrome_apps {
-namespace api {
+namespace chrome_apps::api {
 
 void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   ArcAppsPrivateAPI::GetFactoryInstance();
-#endif
+  MediaGalleriesEventRouter::GetFactoryInstance();
 }
 
-}  // namespace api
-}  // namespace chrome_apps
+}  // namespace chrome_apps::api

@@ -13,15 +13,17 @@
 namespace blink {
 
 CSSHWB::CSSHWB(const Color& input_color) {
-  double h, w, b;
-  input_color.GetHWB(h, w, b);
-  h_ = CSSUnitValue::Create(h * 360, CSSPrimitiveValue::UnitType::kDegrees);
-  w_ = CSSUnitValue::Create(w * 100, CSSPrimitiveValue::UnitType::kPercentage);
-  b_ = CSSUnitValue::Create(b * 100, CSSPrimitiveValue::UnitType::kPercentage);
+  Color hwb_color = input_color;
+  hwb_color.ConvertToColorSpace(Color::ColorSpace::kHWB);
 
-  double a = double(input_color.Alpha()) / 255;
-  alpha_ =
-      CSSUnitValue::Create(a * 100, CSSPrimitiveValue::UnitType::kPercentage);
+  h_ = CSSUnitValue::Create(hwb_color.Param0(),
+                            CSSPrimitiveValue::UnitType::kDegrees);
+  w_ = CSSUnitValue::Create(hwb_color.Param1() * 100.0,
+                            CSSPrimitiveValue::UnitType::kPercentage);
+  b_ = CSSUnitValue::Create(hwb_color.Param2() * 100.0,
+                            CSSPrimitiveValue::UnitType::kPercentage);
+  alpha_ = CSSUnitValue::Create(input_color.Alpha() * 100.0,
+                                CSSPrimitiveValue::UnitType::kPercentage);
 }
 
 CSSHWB::CSSHWB(CSSNumericValue* h,
@@ -67,10 +69,11 @@ V8CSSNumberish* CSSHWB::alpha() const {
 }
 
 void CSSHWB::setH(CSSNumericValue* hue, ExceptionState& exception_state) {
-  if (CSSOMTypes::IsCSSStyleValueAngle(*hue))
+  if (CSSOMTypes::IsCSSStyleValueAngle(*hue)) {
     h_ = hue;
-  else
+  } else {
     exception_state.ThrowTypeError("Hue must be a CSS angle type.");
+  }
 }
 
 void CSSHWB::setW(const V8CSSNumberish* white,
@@ -104,11 +107,9 @@ void CSSHWB::setAlpha(const V8CSSNumberish* alpha,
 }
 
 Color CSSHWB::ToColor() const {
-  // FromHSLA expects hue in the range [0, 6)
-  return Color::FromHWBA(
-      h_->to(CSSPrimitiveValue::UnitType::kDegrees)->value() / 60.f,
-      ComponentToColorInput(w_), ComponentToColorInput(b_),
-      ComponentToColorInput(alpha_));
+  return Color::FromHWBA(h_->to(CSSPrimitiveValue::UnitType::kDegrees)->value(),
+                         ComponentToColorInput(w_), ComponentToColorInput(b_),
+                         ComponentToColorInput(alpha_));
 }
 
 }  // namespace blink

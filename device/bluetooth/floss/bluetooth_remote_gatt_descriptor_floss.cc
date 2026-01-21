@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -14,7 +15,7 @@
 #include "device/bluetooth/floss/bluetooth_remote_gatt_characteristic_floss.h"
 #include "device/bluetooth/floss/bluetooth_remote_gatt_service_floss.h"
 #include "device/bluetooth/floss/floss_dbus_manager.h"
-#include "device/bluetooth/floss/floss_gatt_client.h"
+#include "device/bluetooth/floss/floss_gatt_manager_client.h"
 
 namespace floss {
 
@@ -49,7 +50,7 @@ BluetoothRemoteGattDescriptorFloss::~BluetoothRemoteGattDescriptorFloss() {
 }
 
 std::string BluetoothRemoteGattDescriptorFloss::GetIdentifier() const {
-  return base::StringPrintf("%s/%d", characteristic_->GetIdentifier().c_str(),
+  return base::StringPrintf("%s/%04x", characteristic_->GetIdentifier().c_str(),
                             descriptor_->instance_id);
 }
 
@@ -70,7 +71,10 @@ BluetoothRemoteGattDescriptorFloss::GetCharacteristic() const {
 
 device::BluetoothRemoteGattCharacteristic::Permissions
 BluetoothRemoteGattDescriptorFloss::GetPermissions() const {
-  return descriptor_->permissions;
+  const auto& [props, perms] =
+      BluetoothGattCharacteristicFloss::ConvertPropsAndPermsFromFloss(
+          /*properties=*/0, descriptor_->permissions);
+  return perms;
 }
 
 void BluetoothRemoteGattDescriptorFloss::ReadRemoteDescriptor(
@@ -80,22 +84,22 @@ void BluetoothRemoteGattDescriptorFloss::ReadRemoteDescriptor(
 
   AuthRequired auth = characteristic_->GetAuthForRead();
 
-  FlossDBusManager::Get()->GetGattClient()->ReadDescriptor(
+  FlossDBusManager::Get()->GetGattManagerClient()->ReadDescriptor(
       base::BindOnce(&BluetoothRemoteGattDescriptorFloss::OnReadDescriptor,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
       service_->GetDevice()->GetAddress(), descriptor_->instance_id, auth);
 }
 
 void BluetoothRemoteGattDescriptorFloss::WriteRemoteDescriptor(
-    const std::vector<uint8_t>& new_value,
+    base::span<const uint8_t> new_value,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
   AuthRequired auth = characteristic_->GetAuthForWrite();
 
-  FlossDBusManager::Get()->GetGattClient()->WriteDescriptor(
+  FlossDBusManager::Get()->GetGattManagerClient()->WriteDescriptor(
       base::BindOnce(&BluetoothRemoteGattDescriptorFloss::OnWriteDescriptor,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback),
-                     std::move(error_callback), new_value),
+                     std::move(error_callback), base::ToVector(new_value)),
       service_->GetDevice()->GetAddress(), descriptor_->instance_id, auth,
       new_value);
 }
@@ -117,8 +121,7 @@ void BluetoothRemoteGattDescriptorFloss::GattDescriptorRead(
     cached_data_ = data;
 
     std::move(pending_read_callback_)
-        .Run(/*error_code=*/absl::nullopt, cached_data_);
-    NotifyValueChanged();
+        .Run(/*error_code=*/std::nullopt, cached_data_);
   } else {
     std::move(pending_read_callback_)
         .Run(BluetoothGattServiceFloss::GattStatusToServiceError(status), {});
@@ -134,15 +137,16 @@ void BluetoothRemoteGattDescriptorFloss::GattDescriptorWrite(
     return;
   }
 
+  // Only handle if there is a write callback pending.
   auto [callback, error_callback, data] = std::move(pending_write_callbacks_);
-  DCHECK(callback);
-  DCHECK(error_callback);
+  if (!callback) {
+    return;
+  }
 
   if (status == GattStatus::kSuccess) {
     cached_data_ = data;
 
     std::move(callback).Run();
-    NotifyValueChanged();
   } else {
     std::move(error_callback)
         .Run(BluetoothGattServiceFloss::GattStatusToServiceError(status));

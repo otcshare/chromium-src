@@ -5,13 +5,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_AUTO_ADVANCING_VIRTUAL_TIME_DOMAIN_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_AUTO_ADVANCING_VIRTUAL_TIME_DOMAIN_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequence_manager/time_domain.h"
 #include "base/task/task_observer.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/scheduler/common/scoped_time_source_override.h"
+#include "third_party/blink/renderer/platform/scheduler/common/process_time_override_coordinator.h"
 
 namespace blink {
 namespace scheduler {
@@ -33,8 +34,7 @@ class SchedulerHelper;
 // |-----------------------------> time
 class PLATFORM_EXPORT AutoAdvancingVirtualTimeDomain
     : public base::sequence_manager::TimeDomain,
-      public base::TaskObserver,
-      public ScopedTimeSourceOverride::TimeSource {
+      public base::TaskObserver {
  public:
   AutoAdvancingVirtualTimeDomain(base::Time initial_time,
                                  base::TimeTicks initial_time_ticks,
@@ -62,9 +62,6 @@ class PLATFORM_EXPORT AutoAdvancingVirtualTimeDomain
   // the current virtual time.  Returns true if time was advanced.
   bool MaybeAdvanceVirtualTime(base::TimeTicks new_virtual_time);
 
-  void SetTimeSourceOverride(
-      std::unique_ptr<ScopedTimeSourceOverride> time_source_override);
-
   // base::PendingTask implementation:
   void WillProcessTask(const base::PendingTask& pending_task,
                        bool was_blocked_or_low_priority) override;
@@ -73,20 +70,16 @@ class PLATFORM_EXPORT AutoAdvancingVirtualTimeDomain
   int task_starvation_count() const { return task_starvation_count_; }
 
   base::TimeTicks InitialTicks() const { return initial_time_ticks_; }
+
+ private:
   // TickClock implementation:
   base::TimeTicks NowTicks() const override;
 
   // TimeDomain implementation:
   bool MaybeFastForwardToWakeUp(
-      absl::optional<base::sequence_manager::WakeUp> wakeup,
+      std::optional<base::sequence_manager::WakeUp> wakeup,
       bool quit_when_idle_requested) override;
-
- protected:
   const char* GetName() const override;
-
- private:
-  // Can be called on any thread.
-  base::Time Date() const override;
 
   // The number of tasks that have been run since the last time VirtualTime
   // advanced. Used to detect excessive starvation of delayed tasks.
@@ -97,7 +90,7 @@ class PLATFORM_EXPORT AutoAdvancingVirtualTimeDomain
   int max_task_starvation_count_;
 
   bool can_advance_virtual_time_;
-  SchedulerHelper* helper_;  // NOT OWNED
+  raw_ptr<SchedulerHelper> helper_;  // NOT OWNED
 
   // VirtualTime is usually doled out in 100ms intervals using fences and this
   // variable let us honor a request to MaybeAdvanceVirtualTime that straddles
@@ -107,13 +100,9 @@ class PLATFORM_EXPORT AutoAdvancingVirtualTimeDomain
   // Upper limit on how far virtual time is allowed to advance.
   base::TimeTicks virtual_time_fence_;
 
-  mutable base::Lock now_ticks_lock_;
-  base::TimeTicks now_ticks_;
-
+  std::unique_ptr<ProcessTimeOverrideCoordinator::ScopedOverride>
+      time_override_;
   const base::TimeTicks initial_time_ticks_;
-  const base::Time initial_time_;
-  base::Time previous_time_;
-  std::unique_ptr<ScopedTimeSourceOverride> time_source_override_;
 };
 
 }  // namespace scheduler

@@ -4,6 +4,8 @@
 
 'use strict';
 
+let testUtil;
+
 /**
  * @type {string}
  * @const
@@ -41,14 +43,14 @@ var TESTING_WITHOUT_MIME_FILE = Object.freeze({
  */
 function setUp(callback) {
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
-      test_util.onGetMetadataRequestedDefault);
+      testUtil.onGetMetadataRequestedDefault);
 
-  test_util.defaultMetadata['/' + TESTING_WITH_MIME_FILE.name] =
+  testUtil.defaultMetadata['/' + TESTING_WITH_MIME_FILE.name] =
       TESTING_WITH_MIME_FILE;
-  test_util.defaultMetadata['/' + TESTING_WITHOUT_MIME_FILE.name] =
+  testUtil.defaultMetadata['/' + TESTING_WITHOUT_MIME_FILE.name] =
       TESTING_WITHOUT_MIME_FILE;
 
-  test_util.mountFileSystem(callback);
+  testUtil.mountFileSystem(callback);
 }
 
 /**
@@ -59,14 +61,14 @@ function runTests() {
     // Test if the file with a mime type handled by this testing extension
     // appears on a task list.
     function withMimeIsTask() {
-      test_util.fileSystem.root.getFile(
+      testUtil.fileSystem.root.getFile(
           TESTING_WITH_MIME_FILE.name,
           {},
           chrome.test.callbackPass(function(entry) {
-            test_util.toExternalEntry(entry).then(function(externalEntry) {
+            testUtil.toExternalEntry(entry).then(function(externalEntry) {
               chrome.test.assertTrue(!!externalEntry);
               chrome.fileManagerPrivate.getFileTasks(
-                  [externalEntry],
+                  [externalEntry], [''],
                   chrome.test.callbackPass(function(resultingTasks) {
                     const tasks = resultingTasks.tasks;
                     chrome.test.assertEq(1, tasks.length);
@@ -89,15 +91,15 @@ function runTests() {
     // Confirm, that executing that task, will actually run an OnLaunched event.
     // This is another code path, than collecting tasks (tested above).
     function withMimeExecute() {
-      test_util.fileSystem.root.getFile(
+      testUtil.fileSystem.root.getFile(
           TESTING_WITH_MIME_FILE.name,
           {},
           chrome.test.callbackPass(function(entry) {
-            test_util.toExternalEntry(entry).then(
+            testUtil.toExternalEntry(entry).then(
                 chrome.test.callbackPass(function(externalEntry) {
                   chrome.test.assertTrue(!!externalEntry);
                   chrome.fileManagerPrivate.getFileTasks(
-                      [externalEntry],
+                      [externalEntry], [''],
                       chrome.test.callbackPass(function(resultingTasks) {
                         const tasks = resultingTasks.tasks;
                         chrome.test.assertEq(1, tasks.length);
@@ -139,15 +141,15 @@ function runTests() {
     // The file without a mime set must not appear on the task list for this
     // testing extension.
     function withoutMime() {
-      test_util.fileSystem.root.getFile(
+      testUtil.fileSystem.root.getFile(
           TESTING_WITHOUT_MIME_FILE.name,
           {},
           chrome.test.callbackPass(function(entry) {
-            test_util.toExternalEntry(entry).then(
+            testUtil.toExternalEntry(entry).then(
                 chrome.test.callbackPass(function(externalEntry) {
                   chrome.test.assertTrue(!!externalEntry);
                   chrome.fileManagerPrivate.getFileTasks(
-                      [externalEntry],
+                      [externalEntry], [''],
                       chrome.test.callbackPass(function(resultingTasks) {
                         const tasks = resultingTasks.tasks;
                         chrome.test.assertEq(0, tasks.length);
@@ -160,5 +162,12 @@ function runTests() {
   ]);
 }
 
-// Setup and run all of the test cases.
-setUp(runTests);
+// This works-around that background scripts can't import because they aren't
+// considered modules.
+(async () => {
+  testUtil = await import(
+    '/_test_resources/api_test/file_system_provider/test_util.js');
+
+  // Setup and run all of the test cases.
+  setUp(runTests);
+})();

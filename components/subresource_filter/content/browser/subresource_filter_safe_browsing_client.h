@@ -10,8 +10,7 @@
 #include <memory>
 
 #include "base/containers/flat_map.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "components/safe_browsing/core/browser/db/util.h"
 
@@ -30,11 +29,10 @@ class SafeBrowsingDatabaseManager;
 
 namespace subresource_filter {
 
-class SubresourceFilterSafeBrowsingActivationThrottle;
+class SafeBrowsingPageActivationThrottle;
 class SubresourceFilterSafeBrowsingClientRequest;
 
-// Created on the UI thread but used on the IO thread to communicate with the
-// safe browsing service.
+// This is used to communicate with the safe browsing service.
 //
 // The class is expected to accompany a single navigation, and can maintain many
 // database requests. It will cancel any outgoing requests when it is destroyed.
@@ -58,8 +56,7 @@ class SubresourceFilterSafeBrowsingClient {
   SubresourceFilterSafeBrowsingClient(
       scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager>
           database_manager,
-      base::WeakPtr<SubresourceFilterSafeBrowsingActivationThrottle> throttle,
-      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+      SafeBrowsingPageActivationThrottle* throttle,
       scoped_refptr<base::SingleThreadTaskRunner> throttle_task_runner);
 
   SubresourceFilterSafeBrowsingClient(
@@ -69,9 +66,7 @@ class SubresourceFilterSafeBrowsingClient {
 
   ~SubresourceFilterSafeBrowsingClient();
 
-  void CheckUrlOnIO(const GURL& url,
-                    size_t request_id,
-                    base::TimeTicks start_time);
+  void CheckUrl(const GURL& url, size_t request_id, base::TimeTicks start_time);
 
   void OnCheckBrowseUrlResult(
       SubresourceFilterSafeBrowsingClientRequest* request,
@@ -84,9 +79,8 @@ class SubresourceFilterSafeBrowsingClient {
       requests_;
 
   scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> database_manager_;
-
-  base::WeakPtr<SubresourceFilterSafeBrowsingActivationThrottle> throttle_;
-  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
+  // A raw_ptr is safe because `throttle_` owns `this`.
+  raw_ptr<SafeBrowsingPageActivationThrottle> throttle_;
   scoped_refptr<base::SingleThreadTaskRunner> throttle_task_runner_;
 };
 

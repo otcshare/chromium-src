@@ -9,10 +9,9 @@
 #include <memory>
 #include <sstream>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
@@ -120,8 +119,9 @@ void ShillPropertyHandler::Init() {
 
 void ShillPropertyHandler::UpdateManagerProperties() {
   NET_LOG(EVENT) << "UpdateManagerProperties";
-  shill_manager_->GetProperties(base::BindOnce(
-      &ShillPropertyHandler::ManagerPropertiesCallback, AsWeakPtr()));
+  shill_manager_->GetProperties(
+      base::BindOnce(&ShillPropertyHandler::ManagerPropertiesCallback,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 bool ShillPropertyHandler::IsTechnologyAvailable(
@@ -157,10 +157,10 @@ bool ShillPropertyHandler::IsTechnologyUninitialized(
 void ShillPropertyHandler::SetTechnologyEnabled(
     const std::string& technology,
     bool enabled,
-    network_handler::ErrorCallback error_callback) {
+    network_handler::ErrorCallback error_callback,
+    base::OnceClosure success_callback) {
   if (enabled) {
-    if (prohibited_technologies_.find(technology) !=
-        prohibited_technologies_.end()) {
+    if (prohibited_technologies_.contains(technology)) {
       NET_LOG(ERROR) << "Attempt to enable prohibited network technology: "
                      << technology;
       network_handler::RunErrorCallback(std::move(error_callback),
@@ -173,20 +173,24 @@ void ShillPropertyHandler::SetTechnologyEnabled(
     disabling_technologies_.erase(technology);
     shill_manager_->EnableTechnology(
         technology,
-        base::BindOnce(&NetworkMetricsHelper::LogEnableTechnologyResult,
-                       technology, /*success=*/true, absl::nullopt),
+        base::BindOnce(&ShillPropertyHandler::EnableTechnologySuccess,
+                       weak_ptr_factory_.GetWeakPtr(), technology,
+                       std::move(success_callback)),
         base::BindOnce(&ShillPropertyHandler::EnableTechnologyFailed,
-                       AsWeakPtr(), technology, std::move(error_callback)));
+                       weak_ptr_factory_.GetWeakPtr(), technology,
+                       std::move(error_callback)));
   } else {
     // Clear locally from enabling lists and add to the disabling list.
     enabling_technologies_.erase(technology);
     disabling_technologies_.insert(technology);
     shill_manager_->DisableTechnology(
         technology,
-        base::BindOnce(&NetworkMetricsHelper::LogDisableTechnologyResult,
-                       technology, /*success=*/true, absl::nullopt),
+        base::BindOnce(&ShillPropertyHandler::DisableTechnologySuccess,
+                       weak_ptr_factory_.GetWeakPtr(), technology,
+                       std::move(success_callback)),
         base::BindOnce(&ShillPropertyHandler::DisableTechnologyFailed,
-                       AsWeakPtr(), technology, std::move(error_callback)));
+                       weak_ptr_factory_.GetWeakPtr(), technology,
+                       std::move(error_callback)));
   }
 }
 
@@ -216,16 +220,6 @@ void ShillPropertyHandler::SetProhibitedTechnologies(
       "ProhibitedTechnologies", value, base::DoNothing(),
       base::BindOnce(&network_handler::ShillErrorCallbackFunction,
                      "SetTechnologiesProhibited Failed", prohibited_list,
-                     network_handler::ErrorCallback()));
-}
-
-void ShillPropertyHandler::SetCheckPortalList(
-    const std::string& check_portal_list) {
-  base::Value value(check_portal_list);
-  shill_manager_->SetProperty(
-      shill::kCheckPortalListProperty, value, base::DoNothing(),
-      base::BindOnce(&network_handler::ShillErrorCallbackFunction,
-                     "SetCheckPortalList Failed", "Manager",
                      network_handler::ErrorCallback()));
 }
 
@@ -282,8 +276,9 @@ void ShillPropertyHandler::RequestScanByType(const std::string& type) const {
 
 void ShillPropertyHandler::RequestProperties(ManagedState::ManagedType type,
                                              const std::string& path) {
-  if (pending_updates_[type].find(path) != pending_updates_[type].end())
+  if (pending_updates_[type].contains(path)) {
     return;  // Update already requested.
+  }
 
   NET_LOG(DEBUG) << "Request Properties for: " << NetworkPathId(path);
   pending_updates_[type].insert(path);
@@ -292,13 +287,13 @@ void ShillPropertyHandler::RequestProperties(ManagedState::ManagedType type,
       ShillServiceClient::Get()->GetProperties(
           dbus::ObjectPath(path),
           base::BindOnce(&ShillPropertyHandler::GetPropertiesCallback,
-                         AsWeakPtr(), type, path));
+                         weak_ptr_factory_.GetWeakPtr(), type, path));
       return;
     case ManagedState::MANAGED_TYPE_DEVICE:
       ShillDeviceClient::Get()->GetProperties(
           dbus::ObjectPath(path),
           base::BindOnce(&ShillPropertyHandler::GetPropertiesCallback,
-                         AsWeakPtr(), type, path));
+                         weak_ptr_factory_.GetWeakPtr(), type, path));
       return;
   }
   NOTREACHED();
@@ -326,7 +321,7 @@ void ShillPropertyHandler::RequestTrafficCounters(
       base::BindOnce(
           [](const std::string& service_path,
              chromeos::DBusMethodCallback<base::Value> callback,
-             absl::optional<base::Value> traffic_counters) {
+             std::optional<base::Value> traffic_counters) {
             if (!traffic_counters) {
               NET_LOG(ERROR) << "Error requesting traffic counters for: "
                              << NetworkPathId(service_path);
@@ -360,13 +355,13 @@ void ShillPropertyHandler::OnPropertyChanged(const std::string& key,
 // Private methods
 
 void ShillPropertyHandler::ManagerPropertiesCallback(
-    absl::optional<base::Value> properties) {
+    std::optional<base::Value::Dict> properties) {
   if (!properties) {
     NET_LOG(ERROR) << "ManagerPropertiesCallback Failed";
     return;
   }
   NET_LOG(EVENT) << "ManagerPropertiesCallback: Success";
-  for (const auto item : properties->DictItems()) {
+  for (const auto item : *properties) {
     ManagerPropertyChanged(item.first, item.second);
   }
 
@@ -391,8 +386,9 @@ void ShillPropertyHandler::ManagerPropertyChanged(const std::string& key,
                                                   const base::Value& value) {
   if (key == shill::kDefaultServiceProperty) {
     std::string service_path;
-    if (value.is_string())
+    if (value.is_string()) {
       service_path = value.GetString();
+    }
     NET_LOG(EVENT) << "Manager.DefaultService = "
                    << NetworkPathId(service_path);
     listener_->DefaultNetworkServiceChanged(service_path);
@@ -401,34 +397,46 @@ void ShillPropertyHandler::ManagerPropertyChanged(const std::string& key,
   NET_LOG(DEBUG) << "ManagerPropertyChanged: " << key << " = " << value;
   if (key == shill::kServiceCompleteListProperty) {
     if (CheckListValue(key, value)) {
-      listener_->UpdateManagedList(ManagedState::MANAGED_TYPE_NETWORK, value);
+      listener_->UpdateManagedList(ManagedState::MANAGED_TYPE_NETWORK,
+                                   value.GetList());
       UpdateProperties(ManagedState::MANAGED_TYPE_NETWORK, value);
       UpdateObserved(ManagedState::MANAGED_TYPE_NETWORK, value);
     }
   } else if (key == shill::kDevicesProperty) {
     if (CheckListValue(key, value)) {
-      listener_->UpdateManagedList(ManagedState::MANAGED_TYPE_DEVICE, value);
+      listener_->UpdateManagedList(ManagedState::MANAGED_TYPE_DEVICE,
+                                   value.GetList());
       UpdateProperties(ManagedState::MANAGED_TYPE_DEVICE, value);
       UpdateObserved(ManagedState::MANAGED_TYPE_DEVICE, value);
     }
   } else if (key == shill::kAvailableTechnologiesProperty) {
-    if (CheckListValue(key, value))
+    if (CheckListValue(key, value)) {
       UpdateAvailableTechnologies(value);
+    }
   } else if (key == shill::kEnabledTechnologiesProperty) {
-    if (CheckListValue(key, value))
+    if (CheckListValue(key, value)) {
       UpdateEnabledTechnologies(value);
+    }
   } else if (key == shill::kUninitializedTechnologiesProperty) {
-    if (CheckListValue(key, value))
+    if (CheckListValue(key, value)) {
       UpdateUninitializedTechnologies(value);
-  } else if (key == shill::kProhibitedTechnologiesProperty &&
-             value.is_string()) {
-    UpdateProhibitedTechnologies(value.GetString());
+    }
+  } else if (key == shill::kProhibitedTechnologiesProperty) {
+    if (value.is_string()) {
+      UpdateProhibitedTechnologies(value.GetString());
+    }
   } else if (key == shill::kProfilesProperty) {
-    listener_->ProfileListChanged(value);
-  } else if (key == shill::kCheckPortalListProperty && value.is_string()) {
-    listener_->CheckPortalListChanged(value.GetString());
-  } else if (key == shill::kDhcpPropertyHostnameProperty && value.is_string()) {
-    listener_->HostnameChanged(value.GetString());
+    if (value.is_list()) {
+      listener_->ProfileListChanged(value.GetList());
+    }
+  } else if (key == shill::kCheckPortalListProperty) {
+    if (value.is_string()) {
+      listener_->CheckPortalListChanged(value.GetString());
+    }
+  } else if (key == shill::kDhcpPropertyHostnameProperty) {
+    if (value.is_string()) {
+      listener_->HostnameChanged(value.GetString());
+    }
   } else {
     VLOG(2) << "Ignored Manager Property: " << key;
   }
@@ -449,7 +457,7 @@ void ShillPropertyHandler::UpdateProperties(ManagedState::ManagedType type,
     // that prevents it from sending property changed signals for cellular
     // devices (see crbug.com/321854).
     if (type == ManagedState::MANAGED_TYPE_DEVICE ||
-        requested_updates.find(*path) == requested_updates.end()) {
+        !requested_updates.contains(*path)) {
       RequestProperties(type, *path);
     }
     new_requested_updates.insert(*path);
@@ -476,7 +484,7 @@ void ShillPropertyHandler::UpdateObserved(ManagedState::ManagedType type,
       observer = std::make_unique<ShillPropertyObserver>(
           type, *path,
           base::BindRepeating(&ShillPropertyHandler::PropertyChangedCallback,
-                              AsWeakPtr()));
+                              weak_ptr_factory_.GetWeakPtr()));
     }
     auto result =
         new_observed.insert(std::make_pair(*path, std::move(observer)));
@@ -526,8 +534,7 @@ void ShillPropertyHandler::UpdateEnabledTechnologies(
   // from the disabling list.
   for (auto it = disabling_technologies_.begin();
        it != disabling_technologies_.end();) {
-    base::Value technology_value(*it);
-    if (!base::Contains(technologies.GetList(), technology_value))
+    if (!technologies.GetList().contains(*it))
       it = disabling_technologies_.erase(it);
     else
       ++it;
@@ -569,6 +576,13 @@ void ShillPropertyHandler::UpdateProhibitedTechnologies(
   listener_->TechnologyListChanged();
 }
 
+void ShillPropertyHandler::EnableTechnologySuccess(
+    const std::string& technology,
+    base::OnceClosure success_callback) {
+  NetworkMetricsHelper::LogEnableTechnologyResult(technology, /*success=*/true);
+  std::move(success_callback).Run();
+}
+
 void ShillPropertyHandler::EnableTechnologyFailed(
     const std::string& technology,
     network_handler::ErrorCallback error_callback,
@@ -582,6 +596,14 @@ void ShillPropertyHandler::EnableTechnologyFailed(
       "EnableTechnology Failed", technology, std::move(error_callback),
       dbus_error_name, dbus_error_message);
   listener_->TechnologyListChanged();
+}
+
+void ShillPropertyHandler::DisableTechnologySuccess(
+    const std::string& technology,
+    base::OnceClosure success_callback) {
+  NetworkMetricsHelper::LogDisableTechnologyResult(technology,
+                                                   /*success=*/true);
+  std::move(success_callback).Run();
 }
 
 void ShillPropertyHandler::DisableTechnologyFailed(
@@ -602,7 +624,7 @@ void ShillPropertyHandler::DisableTechnologyFailed(
 void ShillPropertyHandler::GetPropertiesCallback(
     ManagedState::ManagedType type,
     const std::string& path,
-    absl::optional<base::Value> properties) {
+    std::optional<base::Value::Dict> properties) {
   pending_updates_[type].erase(path);
   if (!properties) {
     // The shill service no longer exists.  This can happen when a network
@@ -614,12 +636,12 @@ void ShillPropertyHandler::GetPropertiesCallback(
 
   if (type == ManagedState::MANAGED_TYPE_NETWORK) {
     // Request IPConfig properties.
-    const base::Value* value = properties->FindKey(shill::kIPConfigProperty);
+    const base::Value* value = properties->Find(shill::kIPConfigProperty);
     if (value)
       RequestIPConfig(type, path, *value);
   } else if (type == ManagedState::MANAGED_TYPE_DEVICE) {
     // Clear and request IPConfig properties for each entry in IPConfigs.
-    const base::Value* value = properties->FindKey(shill::kIPConfigsProperty);
+    const base::Value* value = properties->Find(shill::kIPConfigsProperty);
     if (value)
       RequestIPConfigsList(type, path, *value);
   }
@@ -664,8 +686,9 @@ void ShillPropertyHandler::RequestIPConfig(
   }
   ShillIPConfigClient::Get()->GetProperties(
       dbus::ObjectPath(*ip_config_path),
-      base::BindOnce(&ShillPropertyHandler::GetIPConfigCallback, AsWeakPtr(),
-                     type, path, *ip_config_path));
+      base::BindOnce(&ShillPropertyHandler::GetIPConfigCallback,
+                     weak_ptr_factory_.GetWeakPtr(), type, path,
+                     *ip_config_path));
 }
 
 void ShillPropertyHandler::RequestIPConfigsList(
@@ -683,7 +706,7 @@ void ShillPropertyHandler::GetIPConfigCallback(
     ManagedState::ManagedType type,
     const std::string& path,
     const std::string& ip_config_path,
-    absl::optional<base::Value> properties) {
+    std::optional<base::Value::Dict> properties) {
   if (!properties) {
     // IP Config properties not available. Shill will emit a property change
     // when they are.

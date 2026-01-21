@@ -2,9 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/cpu.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/base/sinc_resampler.h"
@@ -20,17 +25,22 @@ static const double kSampleRateRatio = 192000.0 / 44100.0;
 static const double kKernelInterpolationFactor = 0.5;
 
 static void RunConvolveBenchmark(
-    float (*convolve_fn)(const float*, const float*, const float*, double),
+    float (*convolve_fn)(const base::span<const float>&,
+                         const base::span<const float>&,
+                         const base::span<const float>&,
+                         double),
     bool aligned,
     const std::string& trace_name) {
   SincResampler resampler(kSampleRateRatio, SincResampler::kDefaultRequestSize,
                           base::DoNothing());
 
+  size_t kernel_size = resampler.KernelSize();
+  auto kernel = resampler.get_kernel_for_testing().first(kernel_size);
+  auto kernel_aligned = resampler.get_kernel_for_testing().subspan(
+      aligned ? 0u : 1u, kernel_size);
   base::TimeTicks start = base::TimeTicks::Now();
   for (int i = 0; i < kBenchmarkIterations; ++i) {
-    convolve_fn(resampler.get_kernel_for_testing() + (aligned ? 0 : 1),
-                resampler.get_kernel_for_testing(),
-                resampler.get_kernel_for_testing(), kKernelInterpolationFactor);
+    convolve_fn(kernel_aligned, kernel, kernel, kKernelInterpolationFactor);
   }
   double total_time_seconds = (base::TimeTicks::Now() - start).InSecondsF();
 

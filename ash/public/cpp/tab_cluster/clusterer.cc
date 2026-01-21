@@ -83,8 +83,9 @@ std::vector<TabClusterUIItem*> Clusterer::GetUpdatedClusterInfo(
     const std::string& source = tab_item.get()->current_info().source;
     // Tab item source might not be present in result map yet when users have
     // yet to navigate between two tabs that are not ignored.
-    if (result_map.find(source) == result_map.end())
+    if (!result_map.contains(source)) {
       continue;
+    }
 
     ClusterResult result = result_map.at(source);
     bool item_updated = false;
@@ -136,7 +137,7 @@ void Clusterer::AddEdge(const std::string& from_source,
 }
 
 size_t Clusterer::GetNodeForSource(const std::string& source) {
-  if (source_to_node_.find(source) != source_to_node_.end()) {
+  if (source_to_node_.contains(source)) {
     return source_to_node_.at(source);
   }
   size_t curr_size = source_to_node_.size();

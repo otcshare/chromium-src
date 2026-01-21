@@ -6,29 +6,32 @@ found in the LICENSE file.
 -->
 <!-- Layout for each item in the menu popup -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     style="@style/AppMenuItem"
     android:layout_width="match_parent"
-    android:layout_height="?android:attr/listPreferredItemHeightSmall"
+    android:layout_height="wrap_content"
     android:gravity="center_vertical"
-    android:orientation="horizontal" >
+    android:orientation="horizontal"
+    tools:ignore="UseCompoundDrawables">
 
     <org.chromium.ui.widget.ChromeImageView
         android:id="@+id/menu_item_icon"
-        android:layout_width="24dp"
-        android:layout_height="24dp"
+        android:layout_width="?attr/listItemIconSize"
+        android:layout_height="?attr/listItemIconSize"
         android:gravity="center_vertical"
         android:tint="@color/default_icon_color_secondary_tint_list"
         android:tintMode="src_in"
-        android:duplicateParentState="true" />
+        android:duplicateParentState="true"
+        android:importantForAccessibility="no" />
 
     <TextView
         android:id="@+id/menu_item_text"
-        android:textAppearance="@style/TextAppearance.TextLarge.Primary"
+        android:textAppearance="@style/TextAppearance.DensityAdaptive.TextLarge.Primary"
         android:layout_width="wrap_content"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:singleLine="true"
-        android:paddingStart="12dp"
+        android:paddingStart="@dimen/menu_item_text_padding_start"
+        android:minHeight="?attr/listItemHeight"
         android:duplicateParentState="true" />
-
 </LinearLayout>

@@ -7,8 +7,9 @@
 #include <ios>
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/fake_shill_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_property_changed_observer.h"
@@ -18,9 +19,42 @@
 #include "dbus/object_proxy.h"
 #include "dbus/values_util.h"
 #include "net/base/ip_endpoint.h"
-#include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace ash {
+
+ShillManagerClient::CreateP2PGroupParameter::CreateP2PGroupParameter(
+    std::optional<std::string> ssid,
+    std::optional<std::string> passphrase,
+    const std::optional<uint32_t> frequency,
+    const std::optional<shill::WiFiInterfacePriority> priority)
+    : ssid(std::move(ssid)),
+      passphrase(std::move(passphrase)),
+      frequency(frequency),
+      priority(priority) {}
+
+ShillManagerClient::CreateP2PGroupParameter::CreateP2PGroupParameter(
+    std::optional<std::string> ssid,
+    std::optional<std::string> passphrase)
+    : ssid(std::move(ssid)),
+      passphrase(std::move(passphrase)),
+      frequency(std::nullopt),
+      priority(std::nullopt) {}
+
+ShillManagerClient::CreateP2PGroupParameter::~CreateP2PGroupParameter() =
+    default;
+
+ShillManagerClient::ConnectP2PGroupParameter::ConnectP2PGroupParameter(
+    std::string ssid,
+    std::string passphrase,
+    const std::optional<uint32_t> frequency,
+    const std::optional<shill::WiFiInterfacePriority> priority)
+    : ssid(std::move(ssid)),
+      passphrase(std::move(passphrase)),
+      frequency(frequency),
+      priority(priority) {}
+
+ShillManagerClient::ConnectP2PGroupParameter::~ConnectP2PGroupParameter() =
+    default;
 
 namespace {
 
@@ -49,21 +83,17 @@ class ShillManagerClientImpl : public ShillManagerClient {
   }
 
   void GetProperties(
-      chromeos::DBusMethodCallback<base::Value> callback) override {
+      chromeos::DBusMethodCallback<base::Value::Dict> callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
                                  shill::kGetPropertiesFunction);
-    helper_->CallValueMethod(
-        &method_call,
-        base::BindOnce(&ShillClientHelper::OnGetProperties,
-                       dbus::ObjectPath(shill::kFlimflamServicePath),
-                       std::move(callback)));
+    helper_->CallDictValueMethod(&method_call, std::move(callback));
   }
 
   void GetNetworksForGeolocation(
-      chromeos::DBusMethodCallback<base::Value> callback) override {
+      chromeos::DBusMethodCallback<base::Value::Dict> callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
                                  shill::kGetNetworksForGeolocation);
-    helper_->CallValueMethod(&method_call, std::move(callback));
+    helper_->CallDictValueMethod(&method_call, std::move(callback));
   }
 
   void SetProperty(const std::string& name,
@@ -73,7 +103,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
     // This property is read-only and can only be mutated by the specialized
     // method exposed in DBus API.
     if (name == shill::kDNSProxyDOHProvidersProperty) {
-      SetDNSProxyDOHProviders(value, std::move(callback),
+      SetDNSProxyDOHProviders(value.GetDict(), std::move(callback),
                               std::move(error_callback));
       return;
     }
@@ -82,7 +112,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
                                  shill::kSetPropertyFunction);
     dbus::MessageWriter writer(&method_call);
     writer.AppendString(name);
-    ShillClientHelper::AppendValueDataAsVariant(&writer, value);
+    ShillClientHelper::AppendValueDataAsVariant(&writer, name, value);
     helper_->CallVoidMethodWithErrorCallback(&method_call, std::move(callback),
                                              std::move(error_callback));
   }
@@ -133,7 +163,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
                                              std::move(error_callback));
   }
 
-  void ConfigureService(const base::Value& properties,
+  void ConfigureService(const base::Value::Dict& properties,
                         chromeos::ObjectPathCallback callback,
                         ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -145,7 +175,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
   }
 
   void ConfigureServiceForProfile(const dbus::ObjectPath& profile_path,
-                                  const base::Value& properties,
+                                  const base::Value::Dict& properties,
                                   chromeos::ObjectPathCallback callback,
                                   ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -157,7 +187,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
         &method_call, std::move(callback), std::move(error_callback));
   }
 
-  void GetService(const base::Value& properties,
+  void GetService(const base::Value::Dict& properties,
                   chromeos::ObjectPathCallback callback,
                   ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -177,7 +207,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
   }
 
   void AddPasspointCredentials(const dbus::ObjectPath& profile_path,
-                               const base::Value& properties,
+                               const base::Value::Dict& properties,
                                base::OnceClosure callback,
                                ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -190,7 +220,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
   }
 
   void RemovePasspointCredentials(const dbus::ObjectPath& profile_path,
-                                  const base::Value& properties,
+                                  const base::Value::Dict& properties,
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -203,14 +233,33 @@ class ShillManagerClientImpl : public ShillManagerClient {
   }
 
   void SetTetheringEnabled(bool enabled,
-                           base::OnceClosure callback,
+                           StringCallback callback,
                            ErrorCallback error_callback) override {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
                                  shill::kSetTetheringEnabledFunction);
     dbus::MessageWriter writer(&method_call);
     writer.AppendBool(enabled);
-    helper_->CallVoidMethodWithErrorCallback(&method_call, std::move(callback),
-                                             std::move(error_callback));
+    helper_->CallStringMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void EnableTethering(const shill::WiFiInterfacePriority& priority,
+                       StringCallback callback,
+                       ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kEnableTetheringFunction);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendUint32(static_cast<uint32_t>(priority));
+    helper_->CallStringMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void DisableTethering(StringCallback callback,
+                        ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kDisableTetheringFunction);
+    helper_->CallStringMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
   }
 
   void CheckTetheringReadiness(StringCallback callback,
@@ -218,6 +267,102 @@ class ShillManagerClientImpl : public ShillManagerClient {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
                                  shill::kCheckTetheringReadinessFunction);
     helper_->CallStringMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void SetLOHSEnabled(bool enabled,
+                      base::OnceClosure callback,
+                      ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kSetLOHSEnabledFunction);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendBool(enabled);
+    helper_->CallVoidMethodWithErrorCallback(&method_call, std::move(callback),
+                                             std::move(error_callback));
+  }
+
+  void CreateP2PGroup(
+      const CreateP2PGroupParameter& create_group_argument,
+      base::OnceCallback<void(base::Value::Dict result)> callback,
+      ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kCreateP2PGroupFunction);
+    dbus::MessageWriter writer(&method_call);
+
+    base::Value::Dict properties;
+    const shill::WiFiInterfacePriority priority =
+        create_group_argument.priority.has_value()
+            ? create_group_argument.priority.value()
+            : shill::WiFiInterfacePriority::FOREGROUND_WITH_FALLBACK;
+    properties.Set(shill::kP2PDevicePriority, static_cast<int>(priority));
+    if (create_group_argument.ssid.has_value()) {
+      properties.Set(shill::kP2PDeviceSSID, create_group_argument.ssid.value());
+    }
+
+    if (create_group_argument.passphrase.has_value()) {
+      properties.Set(shill::kP2PDevicePassphrase,
+                     create_group_argument.passphrase.value());
+    }
+
+    if (create_group_argument.frequency.has_value()) {
+      properties.Set(shill::kP2PDeviceFrequency,
+                     static_cast<int>(create_group_argument.frequency.value()));
+    }
+
+    ShillClientHelper::AppendServiceProperties(&writer, properties);
+    helper_->CallDictValueMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void ConnectToP2PGroup(
+      const ConnectP2PGroupParameter& connect_group_argument,
+      base::OnceCallback<void(base::Value::Dict result)> callback,
+      ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kConnectToP2PGroupFunction);
+    dbus::MessageWriter writer(&method_call);
+
+    base::Value::Dict properties;
+    properties.Set(shill::kP2PDeviceSSID, connect_group_argument.ssid);
+    properties.Set(shill::kP2PDevicePassphrase,
+                   connect_group_argument.passphrase);
+    const shill::WiFiInterfacePriority priority =
+        connect_group_argument.priority.has_value()
+            ? connect_group_argument.priority.value()
+            : shill::WiFiInterfacePriority::FOREGROUND_WITH_FALLBACK;
+    properties.Set(shill::kP2PDevicePriority, static_cast<int>(priority));
+    if (connect_group_argument.frequency.has_value()) {
+      properties.Set(
+          shill::kP2PGroupInfoFrequencyProperty,
+          static_cast<int>(connect_group_argument.frequency.value()));
+    }
+
+    ShillClientHelper::AppendServiceProperties(&writer, properties);
+    helper_->CallDictValueMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void DestroyP2PGroup(
+      const int shill_id,
+      base::OnceCallback<void(base::Value::Dict result)> callback,
+      ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kDestroyP2PGroupFunction);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendInt32(shill_id);
+    helper_->CallDictValueMethodWithErrorCallback(
+        &method_call, std::move(callback), std::move(error_callback));
+  }
+
+  void DisconnectFromP2PGroup(
+      const int shill_id,
+      base::OnceCallback<void(base::Value::Dict result)> callback,
+      ErrorCallback error_callback) override {
+    dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
+                                 shill::kDisconnectFromP2PGroupFunction);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendInt32(shill_id);
+    helper_->CallDictValueMethodWithErrorCallback(
         &method_call, std::move(callback), std::move(error_callback));
   }
 
@@ -233,7 +378,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
  private:
   // Used by SetProperty call to reroute kDNSProxyDOHProviders to the underlying
   // specialized method in the DBus API.
-  void SetDNSProxyDOHProviders(const base::Value& providers,
+  void SetDNSProxyDOHProviders(const base::Value::Dict& providers,
                                base::OnceClosure callback,
                                ErrorCallback error_callback) {
     dbus::MethodCall method_call(shill::kFlimflamManagerInterface,
@@ -244,7 +389,7 @@ class ShillManagerClientImpl : public ShillManagerClient {
                                              std::move(error_callback));
   }
 
-  dbus::ObjectProxy* proxy_ = nullptr;
+  raw_ptr<dbus::ObjectProxy> proxy_ = nullptr;
   std::unique_ptr<ShillClientHelper> helper_;
 };
 

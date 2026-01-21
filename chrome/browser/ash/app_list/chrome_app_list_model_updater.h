@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_ASH_APP_LIST_CHROME_APP_LIST_MODEL_UPDATER_H_
 #define CHROME_BROWSER_ASH_APP_LIST_CHROME_APP_LIST_MODEL_UPDATER_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,7 +12,9 @@
 #include "ash/app_list/model/app_list_model.h"
 #include "ash/app_list/model/app_list_model_observer.h"
 #include "ash/app_list/model/search/search_model.h"
+#include "ash/app_list/quick_app_access_model.h"
 #include "ash/public/cpp/app_list/app_list_model_delegate.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
@@ -53,17 +54,26 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
   void RemoveItem(const std::string& id, bool is_uninstall) override;
   void SetStatus(ash::AppListModelStatus status) override;
   void SetSearchEngineIsGoogle(bool is_google) override;
+  void RecalculateWouldTriggerLauncherSearchIph() override;
   void PublishSearchResults(
-      const std::vector<ChromeSearchResult*>& results,
+      const std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>&
+          results,
       const std::vector<ash::AppListSearchResultCategory>& categories) override;
   void ClearSearchResults() override;
-  std::vector<ChromeSearchResult*> GetPublishedSearchResultsForTest() override;
+  std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>
+  GetPublishedSearchResultsForTest() override;
+  void SetAccessibleName(const std::string& id,
+                         const std::string& name) override;
+  bool ModelHasBeenReorderedInThisSession() override;
 
   // Methods only used by ChromeAppListItem that talk to ash directly.
   void SetItemIconVersion(const std::string& id, int icon_version) override;
   void SetItemIconAndColor(const std::string& id,
                            const gfx::ImageSkia& icon,
-                           const ash::IconColor& icon_color) override;
+                           const ash::IconColor& icon_color,
+                           bool is_placeholder_icon) override;
+  void SetItemBadgeIcon(const std::string& id,
+                        const gfx::ImageSkia& badge_icon) override;
   void SetItemName(const std::string& id, const std::string& name) override;
   void SetAppStatus(const std::string& id, ash::AppStatus app_status) override;
   void SetItemPosition(const std::string& id,
@@ -75,6 +85,7 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
                        const std::string& folder_id) override;
   void SetNotificationBadgeColor(const std::string& id,
                                  const SkColor color) override;
+  void RequestDefaultPositionForModifiedOrder() override;
 
   // Methods only used by ChromeSearchResult that talk to ash directly.
   void SetSearchResultMetadata(
@@ -83,6 +94,7 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
 
   void ActivateChromeItem(const std::string& id, int event_flags) override;
   void LoadAppIcon(const std::string& id) override;
+  void UpdateProgress(const std::string& id, float progress) override;
 
   // Methods for item querying.
   ChromeAppListItem* FindItem(const std::string& id) override;
@@ -94,7 +106,6 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
   ChromeAppListItem* FindFolderItem(const std::string& folder_id) override;
   bool FindItemIndexForTest(const std::string& id, size_t* index) override;
   bool SearchEngineIsGoogle() override;
-  void GetIdToAppListIndexMap(GetIdToAppListIndexMapCallback callback) override;
   size_t BadgedItemCount() override;
   void GetContextMenuModel(const std::string& id,
                            ash::AppListItemContext item_context,
@@ -108,7 +119,6 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
       bool update_folder) override;
 
   void OnAppListHidden() override;
-  void CommitTemporarySortOrder() override;
 
   void AddObserver(AppListModelUpdaterObserver* observer) override;
   void RemoveObserver(AppListModelUpdaterObserver* observer) override;
@@ -135,6 +145,7 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
                            const std::string& new_name) override;
   void RequestAppListSort(ash::AppListSortOrder order) override;
   void RequestAppListSortRevert() override;
+  void RequestCommitTemporarySortOrder() override;
 
   // Returns the temporary sort order.
   ash::AppListSortOrder GetTemporarySortOrderForTest() const;
@@ -189,10 +200,6 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
   std::vector<app_list::reorder::ReorderParam>
   CalculateReorderParamsForRevertOrder() const;
 
-  // If folder with the provided ID has a single child, it reparents the child
-  // to the root app list.
-  void ClearFolderIfItHasSingleChild(const std::string& folder_id);
-
   // Updates the item positions in the ash side. `reorder_params` specifies
   // target positions.
   void UpdateItemPositionWithReorderParam(
@@ -206,28 +213,36 @@ class ChromeAppListModelUpdater : public AppListModelUpdater,
   // list is sorted by color.
   void MaybeUpdatePositionWhenIconColorChange(ash::AppListItemMetadata* data);
 
+  void OnFeatureEngagementTrackerInitialized(bool success);
+
   // Indicates the profile that the model updater is associated with.
-  Profile* const profile_ = nullptr;
+  const raw_ptr<Profile> profile_ = nullptr;
 
   // Provides the access to the methods for ordering app list items.
-  app_list::reorder::AppListReorderDelegate* const order_delegate_;
-  app_list::AppListSyncModelSanitizer* const sync_model_sanitizer_;
+  const raw_ptr<app_list::reorder::AppListReorderDelegate> order_delegate_;
+  const raw_ptr<app_list::AppListSyncModelSanitizer> sync_model_sanitizer_;
 
   // A helper class to manage app list items. It never talks to ash.
   std::unique_ptr<ChromeAppListItemManager> item_manager_;
 
   ash::AppListModel model_;
   ash::SearchModel search_model_;
+  ash::QuickAppAccessModel quick_app_access_model_;
 
   bool is_active_ = false;
 
   // The most recently list of search results.
-  std::vector<ChromeSearchResult*> published_results_;
+  std::vector<raw_ptr<ChromeSearchResult, VectorExperimental>>
+      published_results_;
   base::ObserverList<AppListModelUpdaterObserver> observers_;
   bool search_engine_is_google_ = false;
 
+  // Whether the model has reordered the position of an item in the current
+  // session.
+  bool has_requested_move_item_position_ = false;
+
   // The id of the item whose icon update is in progress.
-  absl::optional<std::string> item_with_icon_update_;
+  std::optional<std::string> item_with_icon_update_;
 
   // Set when sort is triggered and reset when exiting the temporary sort
   // status.

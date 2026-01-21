@@ -5,22 +5,17 @@
 #ifndef SANDBOX_WIN_SRC_CROSSCALL_PARAMS_H_
 #define SANDBOX_WIN_SRC_CROSSCALL_PARAMS_H_
 
-#if !defined(SANDBOX_FUZZ_TARGET)
 #include <windows.h>
 
 #include <lmaccess.h>
-#else
-#include "sandbox/win/fuzzer/fuzzer_types.h"
-#endif
-
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "sandbox/win/src/internal_types.h"
-#if !defined(SANDBOX_FUZZ_TARGET)
-#include "sandbox/win/src/sandbox_nt_types.h"
-#endif
 #include "sandbox/win/src/ipc_tags.h"
+#include "sandbox/win/src/sandbox_nt_types.h"
 #include "sandbox/win/src/sandbox_types.h"
 
 // This header is part of CrossCall: the sandbox inter-process communication.
@@ -56,9 +51,10 @@ inline uint32_t Align(uint32_t value) {
 }
 
 inline void* memcpy_wrapper(void* dest, const void* src, size_t count) {
-  if (g_nt.memcpy)
-    return g_nt.memcpy(dest, src, count);
-  return memcpy(dest, src, count);
+  if (UNSAFE_TODO(g_nt.memcpy)) {
+    return UNSAFE_TODO(g_nt.memcpy)(dest, src, count);
+  }
+  return UNSAFE_TODO(memcpy(dest, src, count));
 }
 
 }  // namespace
@@ -70,7 +66,9 @@ const size_t kExtendedReturnCount = 8;
 // in the CrossCallReturn.
 union MultiType {
   uint32_t unsigned_int;
-  void* pointer;
+  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
+  // #union
+  RAW_PTR_EXCLUSION void* pointer;
   HANDLE handle;
   ULONG_PTR ulong_ptr;
 };
@@ -251,12 +249,13 @@ class ActualCallParams : public CrossCallParams {
     }
 
     if ((size > sizeof(*this)) ||
-        (param_info_[index].offset_ > (sizeof(*this) - size))) {
+        (UNSAFE_TODO(param_info_[index]).offset_ > (sizeof(*this) - size))) {
       // It does not fit, abort copy.
       return false;
     }
 
-    char* dest = reinterpret_cast<char*>(this) + param_info_[index].offset_;
+    char* dest =
+        UNSAFE_TODO(reinterpret_cast<char*>(this) + param_info_[index].offset_);
 
     // We might be touching user memory, this has to be done from inside a try
     // except.
@@ -271,15 +270,17 @@ class ActualCallParams : public CrossCallParams {
     if (is_in_out)
       SetIsInOut(true);
 
-    param_info_[index + 1].offset_ = Align(param_info_[index].offset_ + size);
-    param_info_[index].size_ = size;
-    param_info_[index].type_ = type;
+    UNSAFE_TODO(param_info_[index + 1]).offset_ =
+        Align(UNSAFE_TODO(param_info_[index]).offset_ + size);
+    UNSAFE_TODO(param_info_[index]).size_ = size;
+    UNSAFE_TODO(param_info_[index]).type_ = type;
     return true;
   }
 
   // Returns a pointer to a parameter in the memory section.
   void* GetParamPtr(size_t index) {
-    return reinterpret_cast<char*>(this) + param_info_[index].offset_;
+    return UNSAFE_TODO(reinterpret_cast<char*>(this) +
+                       param_info_[index].offset_);
   }
 
   // Returns the total size of the buffer. Only valid once all the paramters

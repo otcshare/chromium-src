@@ -4,158 +4,150 @@
 
 package org.chromium.chrome.browser.compositor.overlays.strip;
 
+import static org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutUtils.TAB_OVERLAP_WIDTH_DP;
+
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.base.MathUtils;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.compositor.layouts.Layout;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
 import org.chromium.ui.base.LocalizationUtils;
 
 /**
- * An interface that defines how to stack tabs and how they should look visually.  This lets
- * certain components customize how the {@link StripLayoutHelper} functions and how other
- * {@link Layout}s visually order tabs.
+ * An interface that defines how to stack views and how they should look visually. This lets certain
+ * components customize how the {@link StripLayoutHelper} functions and how other {@link Layout}s
+ * visually order tabs.
  */
+@NullMarked
 public abstract class StripStacker {
-    /**
-     * @return Whether or not the close button can be shown.  Note that even if it can be shown,
-     *         it might not be due to how much of the tab is actually visible to preserve proper hit
-     *         target sizes.
-     */
-    public boolean canShowCloseButton() {
-        return true;
-    }
+    // On tablets (48dp button touch target), we can't fully shift the NTB left without affecting
+    // touch target, so we apply a small actual offset(4dp) and also rely on a visual shift(6dp) in
+    // the CC layer instead. On desktop (32dp touch target), we have more room to apply a real
+    // offset(10dp) directly. No more visual offset needed for desktop.
+    private static final float NEW_TAB_BUTTON_X_OFFSET_TOWARDS_TABS =
+            StripLayoutUtils.shouldApplyMoreDensity() ? 10.f : 4.f;
 
     /**
-     * This gives the implementing class a chance to determine how the tabs should be ordered
-     * visually. The positioning logic is the same regardless, this just has to do with visual
-     * stacking.
+     * Sets the draw properties for the new tab button.
      *
-     * @param selectedIndex The selected index of the tabs.
+     * @param newTabButton The {@link StripLayoutView} for the new tab button.
      * @param indexOrderedTabs A list of tabs ordered by index.
-     * @param outVisualOrderedTabs The new list of tabs, ordered from back (low z-index) to front
-     *                             (high z-index) visually.
-     */
-    public void createVisualOrdering(int selectedIndex, StripLayoutTab[] indexOrderedTabs,
-            StripLayoutTab[] outVisualOrderedTabs) {
-        assert indexOrderedTabs.length == outVisualOrderedTabs.length;
-
-        selectedIndex = MathUtils.clamp(selectedIndex, 0, indexOrderedTabs.length);
-
-        int outIndex = 0;
-        for (int i = 0; i < selectedIndex; i++) {
-            outVisualOrderedTabs[outIndex++] = indexOrderedTabs[i];
-        }
-
-        for (int i = indexOrderedTabs.length - 1; i >= selectedIndex; --i) {
-            outVisualOrderedTabs[outIndex++] = indexOrderedTabs[i];
-        }
-    }
-
-    /**
-     * Computes and sets the draw X, draw Y, visibility and content offset for each tab.
-     *
-     * @param selectedIndex The selected index of the tabs.
-     * @param indexOrderedTabs A list of tabs ordered by index.
-     * @param tabStackWidth The width of a tab when it's stacked behind another tab.
-     * @param maxTabsToStack The maximum number of tabs to stack.
-     * @param tabOverlapWidth The amount tabs overlap.
-     * @param stripLeftMargin The left margin of the tab strip.
-     * @param stripRightMargin The right margin of the tab strip.
-     * @param stripWidth The width of the tab strip.
-     * @param inReorderMode Whether the strip is in reorder mode.
-     * @param tabClosing Whether a tab is being closed.
-     */
-    public abstract void setTabOffsets(int selectedIndex, StripLayoutTab[] indexOrderedTabs,
-            float tabStackWidth, int maxTabsToStack, float tabOverlapWidth, float stripLeftMargin,
-            float stripRightMargin, float stripWidth, boolean inReorderMode, boolean tabClosing,
-            float cachedTabWidth);
-
-    /**
-     * Computes the X offset for the new tab button.
-     *
-     * @param indexOrderedTabs A list of tabs ordered by index.
-     * @param tabOverlapWidth The amount tabs overlap.
      * @param stripLeftMargin The left margin of the tab strip.
      * @param stripRightMargin The right margin of the tab strip.
      * @param stripWidth The width of the tab strip.
      * @param buttonWidth The width of the new tab button.
-     * @param touchTargetOffset Touch target offset applied to the button position.
-     * @return The x offset for the new tab button.
+     * @param tabStripFull {@code True} if the views take up the entire width of the strip.
      */
-    public float computeNewTabButtonOffset(StripLayoutTab[] indexOrderedTabs, float tabOverlapWidth,
-            float stripLeftMargin, float stripRightMargin, float stripWidth, float buttonWidth,
-            float touchTargetOffset, float cachedTabWidth, boolean animate) {
-        return LocalizationUtils.isLayoutRtl()
-                ? computeNewTabButtonOffsetRtl(indexOrderedTabs, stripLeftMargin, stripRightMargin,
-                        stripWidth, buttonWidth, touchTargetOffset, cachedTabWidth, animate)
-                : computeNewTabButtonOffsetLtr(indexOrderedTabs, tabOverlapWidth, stripLeftMargin,
-                        stripRightMargin, stripWidth, touchTargetOffset, cachedTabWidth, animate);
+    public void pushDrawPropertiesToButtons(
+            CompositorButton newTabButton,
+            StripLayoutTab[] indexOrderedTabs,
+            float stripLeftMargin,
+            float stripRightMargin,
+            float stripWidth,
+            float buttonWidth,
+            boolean tabStripFull) {
+        // 1. The NTB is faded out upon entering reorder mode and hidden when the model is empty.
+        boolean isEmpty = indexOrderedTabs.length == 0;
+        newTabButton.setVisible(!isEmpty);
+        if (isEmpty) return;
+
+        // 2. Get idealX.
+        // Note: This method anchors the NTB to either a static position at the end of the strip OR
+        // right next to the final tab in the strip. This only WAI if the final view in the strip is
+        // guaranteed to be a tab. If this changes (e.g. we allow empty tab groups), then this will
+        // need to be updated.
+        float idealX =
+                computeNewTabButtonIdealX(
+                        indexOrderedTabs,
+                        TAB_OVERLAP_WIDTH_DP,
+                        stripLeftMargin,
+                        stripRightMargin,
+                        stripWidth,
+                        buttonWidth,
+                        tabStripFull);
+
+        // 3. Position the new tab button.
+        newTabButton.setDrawX(idealX + newTabButton.getOffsetX());
     }
 
-    private float computeNewTabButtonOffsetLtr(StripLayoutTab[] indexOrderedTabs,
-            float tabOverlapWidth, float stripLeftMargin, float stripRightMargin, float stripWidth,
-            float touchTargetOffset, float cachedTabWidth, boolean animate) {
+    /** See {@link #pushDrawPropertiesToButtons}. */
+    @VisibleForTesting
+    float computeNewTabButtonIdealX(
+            StripLayoutTab[] indexOrderedTabs,
+            float tabOverlapWidth,
+            float stripLeftMargin,
+            float stripRightMargin,
+            float stripWidth,
+            float buttonWidth,
+            boolean tabStripFull) {
+        // TODO(crbug.com/376525967): Pull overlap width from utils constant instead of passing in.
+        float idealX =
+                LocalizationUtils.isLayoutRtl()
+                        ? computeNewTabButtonIdealXRtl(
+                                indexOrderedTabs,
+                                stripLeftMargin,
+                                stripRightMargin,
+                                stripWidth,
+                                buttonWidth)
+                        : computeNewTabButtonIdealXLtr(
+                                indexOrderedTabs,
+                                tabOverlapWidth,
+                                stripLeftMargin,
+                                stripRightMargin,
+                                stripWidth);
+        return adjustNewTabButtonIdealXIfFull(idealX, tabStripFull);
+    }
+
+    private float computeNewTabButtonIdealXLtr(
+            StripLayoutTab[] indexOrderedTabs,
+            float tabOverlapWidth,
+            float stripLeftMargin,
+            float stripRightMargin,
+            float stripWidth) {
         float rightEdge = stripLeftMargin;
-        boolean tabStripImpEnabled = ChromeFeatureList.sTabStripImprovements.isEnabled();
-
         for (StripLayoutTab tab : indexOrderedTabs) {
-            float tabWidth;
-            float tabDrawX;
-            float tabWidthWeight;
-            if (tabStripImpEnabled && animate) {
-                // This value is set to 1.f to avoid the new tab button jitter for the improved tab
-                // strip design. The tab.width and tab.drawX may not reflect the final values before
-                // the tab closing animations are completed.
-                tabWidthWeight = 1.f;
-                tabWidth = cachedTabWidth;
-                tabDrawX = tab.getIdealX();
-            } else {
-                tabWidthWeight = tab.getWidthWeight();
-                tabWidth = tab.getWidth();
-                tabDrawX = tab.getDrawX();
-            }
-            float layoutWidth = (tabWidth - tabOverlapWidth) * tabWidthWeight;
-            rightEdge = Math.max(tabDrawX + layoutWidth, rightEdge); // use idealX here
+            if (tab.isDraggedOffStrip()) continue;
+            float layoutWidth = (tab.getWidth() - tabOverlapWidth) * tab.getWidthWeight();
+            rightEdge = Math.max(tab.getDrawX() + layoutWidth, rightEdge);
         }
-
-        rightEdge = Math.min(rightEdge + tabOverlapWidth, stripWidth - stripRightMargin);
-
-        // Adjust the new tab button to be away from the tabs to account for the touch target skew.
-        rightEdge += touchTargetOffset;
 
         // The draw X position for the new tab button is the rightEdge of the tab strip.
-        return rightEdge;
+        return Math.min(rightEdge + tabOverlapWidth, stripWidth - stripRightMargin);
     }
 
-    private float computeNewTabButtonOffsetRtl(StripLayoutTab[] indexOrderedTabs,
-            float stripLeftMargin, float stripRightMargin, float stripWidth,
-            float newTabButtonWidth, float touchTargetOffset, float cachedTabWidth,
-            boolean animate) {
-        boolean tabStripImpEnabled = ChromeFeatureList.sTabStripImprovements.isEnabled();
-
+    private float computeNewTabButtonIdealXRtl(
+            StripLayoutTab[] indexOrderedTabs,
+            float stripLeftMargin,
+            float stripRightMargin,
+            float stripWidth,
+            float newTabButtonWidth) {
         float leftEdge = stripWidth - stripRightMargin;
-
         for (StripLayoutTab tab : indexOrderedTabs) {
-            float drawX = (tabStripImpEnabled && animate) ? tab.getIdealX() : tab.getDrawX();
-            leftEdge = Math.min(drawX, leftEdge);
+            if (tab.isDraggedOffStrip()) continue;
+            leftEdge = Math.min(tab.getDrawX(), leftEdge);
         }
-
-        leftEdge = Math.max(leftEdge, stripLeftMargin);
-
-        // Adjust the new tab button to be away from the tabs to account for the touch target skew.
-        leftEdge -= touchTargetOffset;
 
         // The draw X position for the new tab button is the left edge of the tab strip minus
         // the new tab button width.
-        return leftEdge - newTabButtonWidth;
+        return Math.max(leftEdge, stripLeftMargin) - newTabButtonWidth;
+    }
+
+    private float adjustNewTabButtonIdealXIfFull(float idealX, boolean tabStripFull) {
+        if (tabStripFull) return idealX;
+        // Move NTB close to tabs by 4 dp when tab strip is not full.
+        boolean isLtr = !LocalizationUtils.isLayoutRtl();
+        return idealX + MathUtils.flipSignIf(NEW_TAB_BUTTON_X_OFFSET_TOWARDS_TABS, isLtr);
     }
 
     /**
      * Performs an occlusion pass, setting the visibility on tabs. This is relegated to this
      * interface because the implementing class knows the proper visual order to optimize this pass.
-     * @param selectedIndex The selected index of the tabs.
-     * @param indexOrderedTabs A list of tabs ordered by index.
-     * @param stripWidth The width of the tab strip.
+     *
+     * @param indexOrderedViews A list of views ordered by index.
+     * @param xOffset The xOffset for the start of the strip.
+     * @param visibleWidth The width of the visible space on the tab strip.
      */
-    public abstract void performOcclusionPass(int selectedIndex, StripLayoutTab[] indexOrderedTabs,
-            float stripWidth);
+    public abstract void pushDrawPropertiesToViews(
+            StripLayoutView[] indexOrderedViews, float xOffset, float visibleWidth);
 }

@@ -1,6 +1,6 @@
 Verifies that making cross origin requests with SameSite=Lax cookies sends us Network.RequestWillBeSentExtraInfo events with corresponding blocked cookies.
 
-Browser initiated navigation blocked cookies:[
+Browser initiated navigation blocked cookies: [
     [0] : {
         blockedReasons : [
         ]
@@ -11,7 +11,6 @@ Browser initiated navigation blocked cookies:[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             sameSite : Lax
             secure : false
             session : true
@@ -20,9 +19,10 @@ Browser initiated navigation blocked cookies:[
             sourceScheme : Secure
             value : value
         }
+        exemptionReason : None
     }
 ]
-Javascript initiated navigation blocked cookies:[
+Javascript initiated navigation blocked cookies: [
     [0] : {
         blockedReasons : [
         ]
@@ -33,7 +33,6 @@ Javascript initiated navigation blocked cookies:[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             sameSite : Lax
             secure : false
             session : true
@@ -42,9 +41,10 @@ Javascript initiated navigation blocked cookies:[
             sourceScheme : Secure
             value : value
         }
+        exemptionReason : None
     }
 ]
-Javascript initiated subresource blocked cookies:[
+Javascript initiated subresource blocked cookies: [
     [0] : {
         blockedReasons : [
             [0] : SameSiteLax
@@ -56,7 +56,6 @@ Javascript initiated subresource blocked cookies:[
             name : name
             path : /inspector-protocol/network/resources
             priority : Medium
-            sameParty : false
             sameSite : Lax
             secure : false
             session : true
@@ -65,6 +64,7 @@ Javascript initiated subresource blocked cookies:[
             sourceScheme : Secure
             value : value
         }
+        exemptionReason : None
     }
 ]
 

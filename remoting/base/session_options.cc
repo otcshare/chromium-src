@@ -20,8 +20,7 @@ static constexpr char kKeyValueSeparator = ':';
 
 // Whether |value| is good to be added to SessionOptions as a value.
 bool ValueIsValid(const std::string& value) {
-  return value.find(kSeparator) == std::string::npos &&
-         value.find(kKeyValueSeparator) == std::string::npos &&
+  return !value.contains(kSeparator) && !value.contains(kKeyValueSeparator) &&
          base::IsStringASCII(value);
 }
 
@@ -42,34 +41,32 @@ SessionOptions::SessionOptions(const std::string& parameter) {
 
 SessionOptions::~SessionOptions() = default;
 
-SessionOptions& SessionOptions::operator=(
-    const SessionOptions& other) = default;
+SessionOptions& SessionOptions::operator=(const SessionOptions& other) =
+    default;
 SessionOptions& SessionOptions::operator=(SessionOptions&& other) = default;
 
-void SessionOptions::Append(const std::string& key,
-                                const std::string& value) {
+void SessionOptions::Append(const std::string& key, const std::string& value) {
   DCHECK(KeyIsValid(key));
   DCHECK(ValueIsValid(value));
   options_[key] = value;
 }
 
-absl::optional<std::string> SessionOptions::Get(const std::string& key) const {
+std::optional<std::string> SessionOptions::Get(const std::string& key) const {
   auto it = options_.find(key);
   if (it == options_.end()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return it->second;
 }
 
-absl::optional<bool> SessionOptions::GetBool(const std::string& key) const {
-  absl::optional<std::string> value = Get(key);
+std::optional<bool> SessionOptions::GetBool(const std::string& key) const {
+  std::optional<std::string> value = Get(key);
   if (!value) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   const std::string lowercase_value = base::ToLowerASCII(*value);
-  if (lowercase_value.empty() ||
-      lowercase_value == "true" ||
+  if (lowercase_value.empty() || lowercase_value == "true" ||
       lowercase_value == "1") {
     return true;
   }
@@ -78,17 +75,17 @@ absl::optional<bool> SessionOptions::GetBool(const std::string& key) const {
   }
   LOG(WARNING) << "Unexpected option received " << *value
                << " which cannot be converted to bool.";
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool SessionOptions::GetBoolValue(const std::string& key) const {
   return GetBool(key).value_or(false);
 }
 
-absl::optional<int> SessionOptions::GetInt(const std::string& key) const {
-  absl::optional<std::string> value = Get(key);
+std::optional<int> SessionOptions::GetInt(const std::string& key) const {
+  std::optional<std::string> value = Get(key);
   if (!value) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   int result;
@@ -97,7 +94,7 @@ absl::optional<int> SessionOptions::GetInt(const std::string& key) const {
   }
   LOG(WARNING) << "Unexpected option received " << *value
                << " which cannot be converted to integer.";
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::string SessionOptions::Export() const {
@@ -118,9 +115,7 @@ std::string SessionOptions::Export() const {
 void SessionOptions::Import(const std::string& parameter) {
   options_.clear();
   std::vector<std::pair<std::string, std::string>> result;
-  base::SplitStringIntoKeyValuePairs(parameter,
-                                     kKeyValueSeparator,
-                                     kSeparator,
+  base::SplitStringIntoKeyValuePairs(parameter, kKeyValueSeparator, kSeparator,
                                      &result);
   for (const auto& pair : result) {
     if (KeyIsValid(pair.first) && ValueIsValid(pair.second)) {

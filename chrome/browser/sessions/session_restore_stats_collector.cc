@@ -5,17 +5,40 @@
 #include "chrome/browser/sessions/session_restore_stats_collector.h"
 
 #include <string>
+#include <utility>
 
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/stringprintf.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
+#include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
+#include "base/task/bind_post_task.h"
+#include "components/performance_manager/public/decorators/site_data_recorder.h"
+#include "components/performance_manager/public/features.h"
+#include "components/performance_manager/public/graph/page_node.h"
+#include "components/performance_manager/public/performance_manager.h"
+#include "components/performance_manager/public/persistence/site_data/feature_usage.h"
+#include "components/performance_manager/public/persistence/site_data/site_data_reader.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace {
 
 using content::RenderWidgetHost;
 using content::RenderWidgetHostView;
 using content::WebContents;
+using performance_manager::PerformanceManager;
+using performance_manager::SiteDataReader;
+using performance_manager::SiteFeatureUsage;
 
 SessionRestoreStatsCollector* g_instance = nullptr;
 
@@ -26,6 +49,24 @@ RenderWidgetHost* GetRenderWidgetHost(WebContents* web_contents) {
   if (render_widget_host_view)
     return render_widget_host_view->GetRenderWidgetHost();
   return nullptr;
+}
+
+bool HasNotificationPermission(content::WebContents* contents) {
+  return contents->GetBrowserContext()
+             ->GetPermissionController()
+             ->GetPermissionResultForOriginWithoutContext(
+                 content::PermissionDescriptorUtil::
+                     CreatePermissionDescriptorForPermissionType(
+                         blink::PermissionType::NOTIFICATIONS),
+                 url::Origin::Create(contents->GetLastCommittedURL()))
+             .status == blink::mojom::PermissionStatus::GRANTED;
+}
+
+void LogFirstPaintHistogram(base::TimeDelta paint_time,
+                            std::string_view suffix = "") {
+  base::UmaHistogramCustomTimes(
+      base::StrCat({"SessionRestore.ForegroundTabFirstPaint4", suffix}),
+      paint_time, base::Milliseconds(100), base::Minutes(16), 50);
 }
 
 }  // namespace
@@ -62,17 +103,45 @@ SessionRestoreStatsCollector* SessionRestoreStatsCollector::GetOrCreateInstance(
 
 void SessionRestoreStatsCollector::TrackTabs(
     const std::vector<SessionRestoreDelegate::RestoredTab>& tabs) {
-  const base::TimeTicks now = base::TimeTicks::Now();
   tab_loader_stats_.tab_count += tabs.size();
   for (const auto& tab : tabs) {
-    // Report the time since the tab was active. If the tab is visible the
-    // last active time is right now, so report zero.
-    base::TimeDelta time_since_active;
-    if (tab.contents()->GetVisibility() != content::Visibility::VISIBLE)
-      time_since_active = now - tab.contents()->GetLastActiveTime();
-    reporting_delegate_->ReportTabTimeSinceActive(time_since_active);
-
     RegisterObserverForTab(tab.contents());
+    if (tab.is_active()) {
+      tab_loader_stats_.active_tab_count++;
+    }
+    if (tab.is_app()) {
+      tab_loader_stats_.app_tab_count++;
+    }
+    if (tab.is_internal_page()) {
+      tab_loader_stats_.internal_page_tab_count++;
+    }
+    if (tab.is_pinned()) {
+      tab_loader_stats_.pinned_tab_count++;
+    }
+    if (tab.group().has_value()) {
+      tab_loader_stats_.grouped_tab_count++;
+    }
+
+    // Look up background feature use in `site_data_reader` on the PM sequence,
+    // and post the result to OnTabUpdatesInBackground() on the current
+    // sequence, along with permissions info.
+    base::OnceCallback<bool(const SiteDataReader&)> on_site_data_ready =
+        base::BindOnce([](const SiteDataReader& site_data_reader) {
+          return site_data_reader.UpdatesFaviconInBackground() ==
+                     SiteFeatureUsage::kSiteFeatureInUse ||
+                 site_data_reader.UpdatesTitleInBackground() ==
+                     SiteFeatureUsage::kSiteFeatureInUse;
+        });
+
+    base::OnceCallback<void(bool)> on_tab_updates_in_background =
+        base::BindOnce(&SessionRestoreStatsCollector::OnTabUpdatesInBackground,
+                       weak_factory_.GetWeakPtr(),
+                       HasNotificationPermission(tab.contents()));
+
+    performance_manager::WaitForSiteDataReader(
+        PerformanceManager::GetPrimaryPageNodeForWebContents(tab.contents()),
+        std::move(on_site_data_ready)
+            .Then(std::move(on_tab_updates_in_background)));
   }
 
   // If we were not able to register observers for any tab, report stats.
@@ -165,31 +234,62 @@ void SessionRestoreStatsCollector::ReportStatsAndSelfDestroy() {
   delete this;
 }
 
+void SessionRestoreStatsCollector::OnTabUpdatesInBackground(
+    bool background_notification_permission,
+    bool updates_in_background) {
+  if (background_notification_permission) {
+    tab_loader_stats_.notification_permission_tab_count++;
+  }
+  if (updates_in_background) {
+    tab_loader_stats_.updates_in_background_tab_count++;
+  }
+}
+
 SessionRestoreStatsCollector::UmaStatsReportingDelegate::
     UmaStatsReportingDelegate() = default;
 
 void SessionRestoreStatsCollector::UmaStatsReportingDelegate::
     ReportTabLoaderStats(const TabLoaderStats& tab_loader_stats) {
   if (!tab_loader_stats.foreground_tab_first_paint.is_zero()) {
-    UMA_HISTOGRAM_CUSTOM_TIMES("SessionRestore.ForegroundTabFirstPaint4",
-                               tab_loader_stats.foreground_tab_first_paint,
-                               base::Milliseconds(100), base::Minutes(16), 50);
-
-    std::string time_for_count = base::StringPrintf(
-        "SessionRestore.ForegroundTabFirstPaint4_%u",
-        static_cast<unsigned int>(tab_loader_stats.tab_count));
-    base::HistogramBase* counter_for_count = base::Histogram::FactoryTimeGet(
-        time_for_count, base::Milliseconds(100), base::Minutes(16), 50,
-        base::Histogram::kUmaTargetedHistogramFlag);
-    counter_for_count->AddTime(tab_loader_stats.foreground_tab_first_paint);
+    LogFirstPaintHistogram(tab_loader_stats.foreground_tab_first_paint);
+    std::string_view count_suffix;
+    CHECK_GT(tab_loader_stats.tab_count, 0u);
+    if (tab_loader_stats.tab_count < 2) {
+      count_suffix = ".1Tab";
+    } else if (tab_loader_stats.tab_count < 4) {
+      count_suffix = ".2to3Tabs";
+    } else if (tab_loader_stats.tab_count < 8) {
+      count_suffix = ".4to7Tabs";
+    } else if (tab_loader_stats.tab_count < 16) {
+      count_suffix = ".8to15Tabs";
+    } else if (tab_loader_stats.tab_count < 32) {
+      count_suffix = ".16to31Tabs";
+    } else {
+      count_suffix = ".32PlusTabs";
+    }
+    LogFirstPaintHistogram(tab_loader_stats.foreground_tab_first_paint,
+                           count_suffix);
   }
-  UMA_HISTOGRAM_ENUMERATION(
+  base::UmaHistogramEnumeration(
       "SessionRestore.ForegroundTabFirstPaint4.FinishReason",
       tab_loader_stats.tab_first_paint_reason, PAINT_FINISHED_UMA_MAX);
-}
 
-void SessionRestoreStatsCollector::UmaStatsReportingDelegate::
-    ReportTabTimeSinceActive(base::TimeDelta elapsed) {
-  UMA_HISTOGRAM_CUSTOM_TIMES("SessionRestore.RestoredTab.TimeSinceActive",
-                             elapsed, base::Seconds(10), base::Days(7), 100);
+  base::UmaHistogramCounts100("SessionRestore.TabCount",
+                              tab_loader_stats.tab_count);
+  base::UmaHistogramCounts100("SessionRestore.TabCount.Active",
+                              tab_loader_stats.active_tab_count);
+  base::UmaHistogramCounts100("SessionRestore.TabCount.App",
+                              tab_loader_stats.app_tab_count);
+  base::UmaHistogramCounts100("SessionRestore.TabCount.InternalPage",
+                              tab_loader_stats.internal_page_tab_count);
+  base::UmaHistogramCounts100("SessionRestore.TabCount.Pinned",
+                              tab_loader_stats.pinned_tab_count);
+  base::UmaHistogramCounts100("SessionRestore.TabCount.Grouped",
+                              tab_loader_stats.grouped_tab_count);
+  base::UmaHistogramCounts100(
+      "SessionRestore.TabCount.BackgroundNotificationPermission",
+      tab_loader_stats.notification_permission_tab_count);
+  base::UmaHistogramCounts100(
+      "SessionRestore.TabCount.UpdatesTitleOrFaviconInBackground",
+      tab_loader_stats.updates_in_background_tab_count);
 }

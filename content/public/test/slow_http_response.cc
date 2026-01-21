@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_split.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
@@ -44,11 +44,6 @@ SlowHttpResponse::SlowHttpResponse(GotRequestCallback got_request)
       got_request_(std::move(got_request)) {}
 
 SlowHttpResponse::~SlowHttpResponse() = default;
-
-bool SlowHttpResponse::IsHandledUrl() {
-  //  return url_ == kSlowResponseUrl || url_ == kFinishSlowResponseUrl;
-  return false;
-}
 
 base::StringPairs SlowHttpResponse::ResponseHeaders() {
   return {{"Content-type", "text/html"}};

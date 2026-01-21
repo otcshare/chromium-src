@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_HUNSPELL_DICTIONARY_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
@@ -28,9 +29,7 @@ class BrowserContext;
 }  // namespace content
 
 // Defines the browser-side hunspell dictionary and provides access to it.
-class SpellcheckHunspellDictionary
-    : public SpellcheckDictionary,
-      public base::SupportsWeakPtr<SpellcheckHunspellDictionary> {
+class SpellcheckHunspellDictionary : public SpellcheckDictionary {
  public:
   // Interface to implement for observers of the Hunspell dictionary.
   class Observer {
@@ -90,6 +89,11 @@ class SpellcheckHunspellDictionary
   // Whether dictionary download failed.
   bool IsDownloadFailure();
 
+  // Get a WeakPtr to the instance.
+  base::WeakPtr<SpellcheckHunspellDictionary> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   // Tests use this method to set a custom URL for downloading dictionaries.
   static void SetDownloadURLForTesting(const GURL url);
 
@@ -126,7 +130,7 @@ class SpellcheckHunspellDictionary
     scoped_refptr<base::TaskRunner> task_runner_;
   };
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   // Determine the correct url to download the dictionary.
   GURL GetDictionaryURL();

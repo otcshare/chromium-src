@@ -5,8 +5,10 @@
 #include "services/tracing/public/cpp/perfetto/java_heap_profiler/hprof_buffer_android.h"
 
 #include <stddef.h>
+
 #include <cstdint>
 
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace tracing {
@@ -64,7 +66,7 @@ TEST(HprofBufferTest, VerifySizeOfTypeMethod) {
   HprofBuffer hprof(file_data, length);
   unsigned correct_sizes[] = {4, 4, 4, 4, 1, 2, 4, 8, 1, 2, 4, 8};
   for (uint32_t i = 0; i < 12; i++) {
-    EXPECT_EQ(hprof.SizeOfType(i), correct_sizes[i]);
+    EXPECT_EQ(hprof.SizeOfType(i), UNSAFE_TODO(correct_sizes[i]));
   }
 
   DataType data_types[9]{DataType::OBJECT, DataType::BOOLEAN, DataType::CHAR,
@@ -73,8 +75,8 @@ TEST(HprofBufferTest, VerifySizeOfTypeMethod) {
 
   size_t correct_offsets[] = {4, 5, 7, 11, 19, 20, 22, 26, 34};
   for (uint32_t i = 0; i < 9; i++) {
-    hprof.SkipBytesByType(data_types[i]);
-    EXPECT_EQ(hprof.offset(), correct_offsets[i]);
+    hprof.SkipBytesByType(UNSAFE_TODO(data_types[i]));
+    EXPECT_EQ(hprof.offset(), UNSAFE_TODO(correct_offsets[i]));
   }
 
   EXPECT_EQ(hprof.HasRemaining(), false);

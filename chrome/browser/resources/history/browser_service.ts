@@ -2,19 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {PageHandlerRemote} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
+import {PageCallbackRouter, PageHandler} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
-import {RESULTS_PER_PAGE} from './constants.js';
-import {ForeignSession, HistoryEntry, HistoryQuery} from './externs.js';
+
+import type {ForeignSession} from './externs.js';
+import type {HistoryIdentityState} from './externs.js';
 
 export type RemoveVisitsRequest = Array<{
   url: string,
   timestamps: number[],
 }>;
-
-export interface QueryResult {
-  info: HistoryQuery;
-  value: HistoryEntry[];
-}
 
 /**
  * @fileoverview Defines a singleton object, history.BrowserService, which
@@ -22,51 +20,59 @@ export interface QueryResult {
  */
 
 export interface BrowserService {
+  handler: PageHandlerRemote;
+  callbackRouter: PageCallbackRouter;
   getForeignSessions(): Promise<ForeignSession[]>;
-  removeBookmark(url: string): void;
-  removeVisits(removalList: RemoveVisitsRequest): Promise<void>;
   openForeignSessionAllTabs(sessionTag: string): void;
-  openForeignSessionTab(
-      sessionTag: string, windowId: number, tabId: number, e: MouseEvent): void;
+  openForeignSessionTab(sessionTag: string, tabId: number, e: MouseEvent): void;
   deleteForeignSession(sessionTag: string): void;
-  openClearBrowsingData(): void;
   recordHistogram(histogram: string, value: number, max: number): void;
+  recordBooleanHistogram(histogram: string, value: boolean): void;
   recordAction(action: string): void;
   recordTime(histogram: string, time: number): void;
   recordLongTime(histogram: string, time: number): void;
+  recordSigninPendingOffered(): void;
   navigateToUrl(url: string, target: string, e: MouseEvent): void;
   otherDevicesInitialized(): void;
-  queryHistoryContinuation(): Promise<QueryResult>;
-  queryHistory(searchTerm: string): Promise<QueryResult>;
+  getInitialIdentityState(): Promise<HistoryIdentityState>;
   startTurnOnSyncFlow(): void;
 }
 
 export class BrowserServiceImpl implements BrowserService {
+  handler: PageHandlerRemote;
+  callbackRouter: PageCallbackRouter;
+
+  constructor(handler: PageHandlerRemote, callbackRouter: PageCallbackRouter) {
+    this.handler = handler;
+    this.callbackRouter = callbackRouter;
+  }
+
+  static getInstance(): BrowserService {
+    if (instance) {
+      return instance;
+    }
+
+    const handler = PageHandler.getRemote();
+    const callbackRouter = new PageCallbackRouter();
+    handler.setPage(callbackRouter.$.bindNewPipeAndPassRemote());
+    return instance = new BrowserServiceImpl(handler, callbackRouter);
+  }
+
+  static setInstance(obj: BrowserService) {
+    instance = obj;
+  }
+
   getForeignSessions() {
     return sendWithPromise('getForeignSessions');
   }
 
-  removeBookmark(url: string) {
-    chrome.send('removeBookmark', [url]);
-  }
-
-  /**
-   * @return Promise that is resolved when items are deleted
-   *     successfully or rejected when deletion fails.
-   */
-  removeVisits(removalList: RemoveVisitsRequest) {
-    return sendWithPromise('removeVisits', removalList);
-  }
-
   openForeignSessionAllTabs(sessionTag: string) {
-    chrome.send('openForeignSession', [sessionTag]);
+    chrome.send('openForeignSessionAllTabs', [sessionTag]);
   }
 
-  openForeignSessionTab(
-      sessionTag: string, windowId: number, tabId: number, e: MouseEvent) {
-    chrome.send('openForeignSession', [
+  openForeignSessionTab(sessionTag: string, tabId: number, e: MouseEvent) {
+    chrome.send('openForeignSessionTab', [
       sessionTag,
-      String(windowId),
       String(tabId),
       e.button || 0,
       e.altKey,
@@ -80,12 +86,12 @@ export class BrowserServiceImpl implements BrowserService {
     chrome.send('deleteForeignSession', [sessionTag]);
   }
 
-  openClearBrowsingData() {
-    chrome.send('clearBrowsingData');
-  }
-
   recordHistogram(histogram: string, value: number, max: number) {
     chrome.send('metricsHandler:recordInHistogram', [histogram, value, max]);
+  }
+
+  recordBooleanHistogram(histogram: string, value: boolean): void {
+    chrome.metricsPrivate.recordBoolean(histogram, value);
   }
 
   /**
@@ -110,6 +116,10 @@ export class BrowserServiceImpl implements BrowserService {
     chrome.metricsPrivate.recordLongTime(histogram, time);
   }
 
+  recordSigninPendingOffered() {
+    chrome.send('recordSigninPendingOffered');
+  }
+
   navigateToUrl(url: string, target: string, e: MouseEvent) {
     chrome.send(
         'navigateToUrl',
@@ -120,24 +130,12 @@ export class BrowserServiceImpl implements BrowserService {
     chrome.send('otherDevicesInitialized');
   }
 
-  queryHistoryContinuation() {
-    return sendWithPromise('queryHistoryContinuation');
-  }
-
-  queryHistory(searchTerm: string) {
-    return sendWithPromise('queryHistory', searchTerm, RESULTS_PER_PAGE);
+  getInitialIdentityState(): Promise<HistoryIdentityState> {
+    return sendWithPromise('getInitialIdentityState');
   }
 
   startTurnOnSyncFlow() {
     chrome.send('startTurnOnSyncFlow');
-  }
-
-  static getInstance(): BrowserService {
-    return instance || (instance = new BrowserServiceImpl());
-  }
-
-  static setInstance(obj: BrowserService) {
-    instance = obj;
   }
 }
 

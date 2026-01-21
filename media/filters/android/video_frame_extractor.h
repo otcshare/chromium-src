@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/media_export.h"
@@ -58,7 +58,7 @@ class MEDIA_EXPORT VideoFrameExtractor {
   void ConvertPacket(AVPacket* packet);
 
   // Called when video frame is successfully extracted.
-  void NotifyComplete(std::vector<uint8_t> encoded_frame,
+  void NotifyComplete(base::span<uint8_t> encoded_frame,
                       const VideoDecoderConfig& config);
 
   // Called when error happens.

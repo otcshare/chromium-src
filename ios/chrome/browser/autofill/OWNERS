@@ -1,5 +1,4 @@
-olivierrobin@chromium.org
-sebsg@chromium.org
+# For refactoring, large-scale/mechanical changes, etc. For most changes,
+# please prefer subdirectory OWNERS files.
 
-# For easy changes like adding an experiment flag.
-per-file form_structure_browsertest.mm=file://components/autofill/OWNERS
+tmartino@chromium.org

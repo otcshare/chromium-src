@@ -2,5 +2,7 @@
     "project": "chromium",
     "project_title": "Chromium",
     "ref": "refs/heads/main",
-    "chrome_project": "chrome"
+    "chrome_project": "chrome",
+    "dawn_ref": "refs/heads/main",
+    "is_main": true
 }

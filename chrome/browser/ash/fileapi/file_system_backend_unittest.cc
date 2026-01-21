@@ -8,12 +8,14 @@
 
 #include <set>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "chrome/browser/ash/fileapi/file_system_backend_delegate.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "storage/browser/file_system/external_mount_points.h"
+#include "storage/browser/file_system/file_system_operation.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -56,13 +58,12 @@ TEST(ChromeOSFileSystemBackendTest, DefaultMountPoints) {
   std::set<base::FilePath> root_dirs_set(root_dirs.begin(), root_dirs.end());
 
   // By default there should be 3 mount points (in system mount points):
-  EXPECT_EQ(3u, root_dirs.size());
+  EXPECT_EQ(2u, root_dirs.size());
 
   EXPECT_TRUE(
       root_dirs_set.count(ash::CrosDisksClient::GetRemovableDiskMountPoint()));
   EXPECT_TRUE(
       root_dirs_set.count(ash::CrosDisksClient::GetArchiveMountPoint()));
-  EXPECT_TRUE(root_dirs_set.count(base::FilePath(FPL("/usr/share/oem"))));
 }
 
 TEST(ChromeOSFileSystemBackendTest, GetRootDirectories) {
@@ -134,30 +135,39 @@ TEST(ChromeOSFileSystemBackendTest, AccessPermissions) {
       "removable", storage::kFileSystemTypeLocal,
       storage::FileSystemMountOption(),
       base::FilePath(FPL("/media/removable"))));
-  ASSERT_TRUE(mount_points->RegisterFileSystem(
-      "oem", storage::kFileSystemTypeRestrictedLocal,
-      storage::FileSystemMountOption(), base::FilePath(FPL("/usr/share/oem"))));
 
   // Backend specific mount point access.
   EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "removable/foo", mount_points.get())));
 
   backend.GrantFileAccessToOrigin(origin, base::FilePath(FPL("removable/foo")));
   EXPECT_TRUE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "removable/foo", mount_points.get())));
   EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "removable/foo1", mount_points.get())));
 
   // System mount point access.
   EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "system/foo", system_mount_points.get())));
 
   backend.GrantFileAccessToOrigin(origin, base::FilePath(FPL("system/foo")));
   EXPECT_TRUE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "system/foo", system_mount_points.get())));
-  EXPECT_FALSE(backend.IsAccessAllowed(
-      CreateFileSystemURL(extension, "system/foo1",
-                          system_mount_points.get())));
+  EXPECT_FALSE(
+      backend.IsAccessAllowed(ash::BackendFunction::kCreateFileSystemOperation,
+                              storage::OperationType::kCopy,
+                              CreateFileSystemURL(extension, "system/foo1",
+                                                  system_mount_points.get())));
 
   // The extension cannot access new mount points.
   // TODO(tbarzic): This should probably be changed.
@@ -165,11 +175,34 @@ TEST(ChromeOSFileSystemBackendTest, AccessPermissions) {
       "test", storage::kFileSystemTypeLocal, storage::FileSystemMountOption(),
       base::FilePath(FPL("/foo/test"))));
   EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "test_/foo", mount_points.get())));
 
   backend.RevokeAccessForOrigin(origin);
   EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
       CreateFileSystemURL(extension, "removable/foo", mount_points.get())));
+
+  // ImageLoader has access to all files GetMetadata(), GetFileStreamReader().
+  std::string image_loader("pmfjbimdmchhbnneeidfognadeopoehp");
+  EXPECT_TRUE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kGetMetadata,
+      CreateFileSystemURL(image_loader, "removable/foo", mount_points.get())));
+  EXPECT_TRUE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileStreamReader,
+      storage::OperationType::kNone,
+      CreateFileSystemURL(image_loader, "removable/foo", mount_points.get())));
+  EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileSystemOperation,
+      storage::OperationType::kCopy,
+      CreateFileSystemURL(image_loader, "removable/foo", mount_points.get())));
+  EXPECT_FALSE(backend.IsAccessAllowed(
+      ash::BackendFunction::kCreateFileStreamWriter,
+      storage::OperationType::kNone,
+      CreateFileSystemURL(image_loader, "removable/foo", mount_points.get())));
 }
 
 TEST(ChromeOSFileSystemBackendTest, GetVirtualPathConflictWithSystemPoints) {
@@ -229,19 +262,21 @@ TEST(ChromeOSFileSystemBackendTest, GetVirtualPathConflictWithSystemPoints) {
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
     // Initialize virtual path with a value.
     base::FilePath virtual_path(FPL("/mount"));
-    base::FilePath local_path(kTestCases[i].local_path);
-    EXPECT_EQ(kTestCases[i].success,
-              backend.GetVirtualPath(local_path, &virtual_path))
-        << "Resolving " << kTestCases[i].local_path;
+    base::FilePath local_path(UNSAFE_TODO(kTestCases[i]).local_path);
+    UNSAFE_TODO(EXPECT_EQ(kTestCases[i].success,
+                          backend.GetVirtualPath(local_path, &virtual_path)))
+        << "Resolving " << UNSAFE_TODO(kTestCases[i]).local_path;
 
     // There are no guarantees for |virtual_path| value if |GetVirtualPath|
     // fails.
-    if (!kTestCases[i].success)
+    if (!UNSAFE_TODO(kTestCases[i]).success) {
       continue;
+    }
 
-    base::FilePath expected_virtual_path(kTestCases[i].virtual_path);
+    base::FilePath expected_virtual_path(
+        UNSAFE_TODO(kTestCases[i]).virtual_path);
     EXPECT_EQ(expected_virtual_path, virtual_path)
-        << "Resolving " << kTestCases[i].local_path;
+        << "Resolving " << UNSAFE_TODO(kTestCases[i]).local_path;
   }
 }
 

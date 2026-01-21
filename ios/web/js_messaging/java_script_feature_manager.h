@@ -8,10 +8,10 @@
 #include <memory>
 #include <vector>
 
+#import "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
 #import "ios/web/js_messaging/java_script_content_world.h"
-
-//@class WKUserContentController;
+#import "ios/web/public/js_messaging/content_world.h"
 
 namespace web {
 
@@ -19,12 +19,14 @@ class BrowserState;
 class JavaScriptFeature;
 
 // Configures JavaScriptFeatures for `browser_state`. The features will be
-// added to either `page_content_world_` or `isolated_world_`  based on
-// JavaScriptFeature::GetSupportedContentWorld() and the operating system of the
-// user's device (which determines if isolated worlds are supported).
+// added to either `page_content_world_` or `isolated_world_` based on
+// JavaScriptFeature::GetSupportedContentWorld().
 class JavaScriptFeatureManager : public base::SupportsUserData::Data {
  public:
   ~JavaScriptFeatureManager() override;
+
+  JavaScriptFeatureManager(const JavaScriptFeatureManager&) = delete;
+  JavaScriptFeatureManager& operator=(const JavaScriptFeatureManager&) = delete;
 
   // Returns the JavaScriptFeatureManager associated with `browser_state`.
   // If a JavaScriptFeatureManager does not already exist, one will be created
@@ -32,11 +34,12 @@ class JavaScriptFeatureManager : public base::SupportsUserData::Data {
   static JavaScriptFeatureManager* FromBrowserState(
       BrowserState* browser_state);
 
-  // Returns the JavaScriptContentWorld for the page content world associated
+  // Returns the JavaScriptContentWorld for `content_world` associated
   // with `browser_state`. If a JavaScriptFeatureManager does not already exist,
   // one will be created and associated with `browser_state`. `browser_state`
   // must not be null.
-  static JavaScriptContentWorld* GetPageContentWorldForBrowserState(
+  static JavaScriptContentWorld* GetContentWorldForBrowserState(
+      ContentWorld content_world,
       BrowserState* browser_state);
 
   // Configures `features` on `user_content_controller_` by adding user scripts
@@ -48,13 +51,16 @@ class JavaScriptFeatureManager : public base::SupportsUserData::Data {
   // has not be added to the associated `browser_state_`.
   JavaScriptContentWorld* GetContentWorldForFeature(JavaScriptFeature* feature);
 
-  JavaScriptFeatureManager(const JavaScriptFeatureManager&) = delete;
-  JavaScriptFeatureManager& operator=(const JavaScriptFeatureManager&) = delete;
+  // Returns a list of all the content worlds used by features.
+  std::vector<JavaScriptContentWorld*> GetAllContentWorlds();
+
+  // Returns a list of all the content worlds enum values used by features.
+  std::vector<ContentWorld> GetAllContentWorldEnums();
 
  private:
   JavaScriptFeatureManager(BrowserState* browser_state);
 
-  BrowserState* browser_state_;
+  raw_ptr<BrowserState> browser_state_;
 
   // The content world shared with the page content JavaScript.
   std::unique_ptr<JavaScriptContentWorld> page_content_world_;

@@ -51,6 +51,10 @@ mojom("mojom") {
         cpp = "::gfx::InsetsF"
       },
       {
+        mojom = "gfx.mojom.QuadF"
+        cpp = "::gfx::QuadF"
+      },
+      {
         mojom = "gfx.mojom.Quaternion"
         cpp = "::gfx::Quaternion"
       },
@@ -66,6 +70,10 @@ mojom("mojom") {
         mojom = "gfx.mojom.Vector3dF"
         cpp = "::gfx::Vector3dF"
       },
+      {
+        mojom = "gfx.mojom.AxisTransform2d"
+        cpp = "::gfx::AxisTransform2d"
+      },
     ]
 
     traits_headers = [ "geometry_mojom_traits.h" ]
@@ -74,12 +82,7 @@ mojom("mojom") {
   cpp_typemaps = [ shared_cpp_typemap ]
   blink_cpp_typemaps = [ shared_cpp_typemap ]
   webui_module_path = "chrome://resources/mojo/ui/gfx/geometry/mojom"
-}
-
-mojom("test_interfaces") {
-  sources = [ "geometry_traits_test_service.mojom" ]
-
-  public_deps = [ ":mojom" ]
+  generate_legacy_js_bindings = true
 }
 
 source_set("unit_test") {
@@ -88,10 +91,11 @@ source_set("unit_test") {
   sources = [ "geometry_mojom_traits_unittest.cc" ]
 
   deps = [
-    ":test_interfaces",
+    ":mojom",
     "//base",
     "//base/test:test_support",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/test_support:test_utils",
     "//testing/gtest",
     "//ui/gfx/geometry",
   ]

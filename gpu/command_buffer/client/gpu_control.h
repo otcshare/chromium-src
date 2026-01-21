@@ -10,12 +10,12 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/mailbox.h"
-#include "gpu/gpu_export.h"
 #include "ui/gfx/overlay_transform.h"
 
 extern "C" typedef struct _ClientBuffer* ClientBuffer;
@@ -34,7 +34,7 @@ class GpuControlClient;
 struct SyncToken;
 
 // Common interface for GpuControl implementations.
-class GPU_EXPORT GpuControl {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT GpuControl {
  public:
   GpuControl() = default;
 
@@ -47,9 +47,13 @@ class GPU_EXPORT GpuControl {
 
   virtual const Capabilities& GetCapabilities() const = 0;
 
+  virtual const GLCapabilities& GetGLCapabilities() const = 0;
+
   // Runs |callback| when a query created via glCreateQueryEXT() has cleared
   // passed the glEndQueryEXT() point.
   virtual void SignalQuery(uint32_t query, base::OnceClosure callback) = 0;
+  // Cancels all quieries that havent been run via signalQuery.
+  virtual void CancelAllQueries() = 0;
 
   virtual void CreateGpuFence(uint32_t gpu_fence_id, ClientGpuFence source) = 0;
   virtual void GetGpuFence(

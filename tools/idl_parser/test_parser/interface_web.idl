@@ -454,6 +454,8 @@ interface MyIfacePromise {
  *      ExtAttributes()
  *        ExtAttribute(Clamp)
  *        ExtAttribute(XAttr)
+ *    ExtAttributes()
+ *      ExtAttribute(Exposed) = "Window"
  *  Iterable()
  *    Type()
  *      PrimitiveType(long)
@@ -469,12 +471,12 @@ interface MyIfaceIterable {
   iterable<double, DOMString>;
   iterable<[Clamp] long>;
   iterable<[TreatNullAs=EmptyString] DOMString>;
-  iterable<[Clamp, XAttr] long>;
+  [Exposed=Window] iterable<[Clamp, XAttr] long>;
   iterable<[Clamp] long, [EnforceRange] long long>;
 };
 
 /** TREE
- *Interface(MyIfaceAsyncIterable)
+ *Interface(MyIfaceAsyncIterableOldSyntax)
  *  AsyncIterable()
  *    Type()
  *      PrimitiveType(long)
@@ -489,6 +491,8 @@ interface MyIfaceIterable {
  *      ExtAttributes()
  *        ExtAttribute(Clamp)
  *    Arguments()
+ *    ExtAttributes()
+ *      ExtAttribute(Exposed) = "Window"
  *  AsyncIterable()
  *    Type()
  *      PrimitiveType(double)
@@ -504,11 +508,51 @@ interface MyIfaceIterable {
  *        Type()
  *          StringType(DOMString)
  */
-interface MyIfaceAsyncIterable {
+interface MyIfaceAsyncIterableOldSyntax {
   async iterable<long>;
   async iterable<double, DOMString>;
-  async iterable<[Clamp] long>();
+  [Exposed=Window] async iterable<[Clamp] long>();
   async iterable<double, DOMString>(optional long arg1, optional DOMString arg2);
+};
+
+/** TREE
+ *Interface(MyIfaceAsyncIterableNewSyntax)
+ *  AsyncIterable()
+ *    Type()
+ *      PrimitiveType(long)
+ *  AsyncIterable()
+ *    Type()
+ *      PrimitiveType(double)
+ *    Type()
+ *      StringType(DOMString)
+ *  AsyncIterable()
+ *    Type()
+ *      PrimitiveType(long)
+ *      ExtAttributes()
+ *        ExtAttribute(Clamp)
+ *    Arguments()
+ *    ExtAttributes()
+ *      ExtAttribute(Exposed) = "Window"
+ *  AsyncIterable()
+ *    Type()
+ *      PrimitiveType(double)
+ *    Type()
+ *      StringType(DOMString)
+ *    Arguments()
+ *      Argument(arg1)
+ *        OPTIONAL: True
+ *        Type()
+ *          PrimitiveType(long)
+ *      Argument(arg2)
+ *        OPTIONAL: True
+ *        Type()
+ *          StringType(DOMString)
+ */
+interface MyIfaceAsyncIterableNewSyntax {
+  async_iterable<long>;
+  async_iterable<double, DOMString>;
+  [Exposed=Window] async_iterable<[Clamp] long>();
+  async_iterable<double, DOMString>(optional long arg1, optional DOMString arg2);
 };
 
 /** TREE

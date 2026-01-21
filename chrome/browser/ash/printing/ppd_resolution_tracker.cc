@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/printing/ppd_resolution_tracker.h"
 
-#include "base/containers/contains.h"
 #include "chrome/browser/ash/printing/ppd_resolution_state.h"
 
 namespace ash {
@@ -87,17 +86,7 @@ const chromeos::Printer::PpdReference& PpdResolutionTracker::GetPpdReference(
 
 bool PpdResolutionTracker::PrinterStateExists(
     const std::string& printer_id) const {
-  return base::Contains(printer_state_, printer_id);
-}
-
-void PpdResolutionTracker::MarkPrinterAsNotAutoconfigurable(
-    const std::string& printer_id) {
-  printer_state_.at(printer_id).MarkPrinterAsNotAutoconfigurable();
-}
-
-bool PpdResolutionTracker::IsMarkedAsNotAutoconfigurable(
-    const std::string& printer_id) const {
-  return printer_state_.at(printer_id).IsMarkedAsNotAutoconfigurable();
+  return printer_state_.contains(printer_id);
 }
 
 }  // namespace ash

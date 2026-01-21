@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 
@@ -53,6 +53,9 @@ class ShellJavaScriptDialogManager : public JavaScriptDialogManager {
     should_proceed_on_beforeunload_ = proceed;
     beforeunload_success_ = success;
   }
+
+  [[nodiscard]] bool RunBeforeUnloadCallback(bool success,
+                                             const std::u16string& title);
 
  private:
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)

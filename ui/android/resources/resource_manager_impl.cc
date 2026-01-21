@@ -12,6 +12,8 @@
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -21,17 +23,19 @@
 #include "base/trace_event/trace_event.h"
 #include "cc/resources/scoped_ui_resource.h"
 #include "cc/resources/ui_resource_manager.h"
+#include "components/viz/common/features.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
 #include "ui/android/resources/ui_resource_provider.h"
-#include "ui/android/ui_android_jni_headers/ResourceManager_jni.h"
 #include "ui/android/window_android.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/geometry/rect.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "ui/android/ui_android_jni_headers/ResourceManager_jni.h"
+
 using base::android::JavaArrayOfIntArrayToIntVector;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 
 namespace {
@@ -70,8 +74,7 @@ ResourceManagerImpl::ResourceManagerImpl(gfx::NativeWindow native_window)
   JNIEnv* env = base::android::AttachCurrentThread();
   java_obj_.Reset(
       env, Java_ResourceManager_create(env, native_window->GetJavaObject(),
-                                       reinterpret_cast<intptr_t>(this))
-               .obj());
+                                       reinterpret_cast<intptr_t>(this)));
   DCHECK(!java_obj_.is_null());
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       this, "android::ResourceManagerImpl",
@@ -118,6 +121,10 @@ Resource* ResourceManagerImpl::GetResource(AndroidResourceType res_type,
 }
 
 void ResourceManagerImpl::RemoveUnusedTints() {
+  for (auto& it : tinted_resources_to_keep_) {
+    used_tints_.insert(it.second);
+  }
+
   // Iterate over the currently cached tints and remove ones that were not
   // used as defined in |used_tints|.
   for (auto it = tinted_resources_.cbegin(); it != tinted_resources_.cend();) {
@@ -199,8 +206,19 @@ Resource* ResourceManagerImpl::GetStaticResourceWithTint(
   return (*resource_map)[res_id].get();
 }
 
-void ResourceManagerImpl::ClearTintedResourceCache(JNIEnv* env,
-    const JavaRef<jobject>& jobj) {
+Resource* ResourceManagerImpl::GetAndRetainStaticResourceWithTint(
+    int res_id,
+    SkColor tint_color) {
+  tinted_resources_to_keep_[res_id] = tint_color;
+  return GetStaticResourceWithTint(res_id, tint_color);
+}
+
+void ResourceManagerImpl::ReleaseStaticResource(int res_id) {
+  tinted_resources_to_keep_.erase(res_id);
+}
+
+void ResourceManagerImpl::ClearTintedResourceCache(JNIEnv* env) {
+  tinted_resources_to_keep_.clear();
   tinted_resources_.clear();
 }
 
@@ -217,13 +235,12 @@ void ResourceManagerImpl::PreloadResource(AndroidResourceType res_type,
 }
 
 void ResourceManagerImpl::OnResourceReady(JNIEnv* env,
-                                          const JavaRef<jobject>& jobj,
-                                          jint res_type,
-                                          jint res_id,
+                                          int32_t res_type,
+                                          int32_t res_id,
                                           const JavaRef<jobject>& bitmap,
-                                          jint width,
-                                          jint height,
-                                          jlong native_resource) {
+                                          int32_t width,
+                                          int32_t height,
+                                          int64_t native_resource) {
   DCHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST);
   DCHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST);
   TRACE_EVENT2("ui", "ResourceManagerImpl::OnResourceReady",
@@ -243,12 +260,21 @@ void ResourceManagerImpl::OnResourceReady(JNIEnv* env,
       gfx::Size(width, height));
 }
 
-void ResourceManagerImpl::RemoveResource(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    jint res_type,
-    jint res_id) {
+void ResourceManagerImpl::RemoveResource(JNIEnv* env,
+                                         int32_t res_type,
+                                         int32_t res_id) {
   resources_[res_type].erase(res_id);
+}
+
+void ResourceManagerImpl::AssertResourceExists(JNIEnv* env,
+                                               int32_t res_type,
+                                               int32_t res_id) {
+  if (resources_[res_type].find(res_id) == resources_[res_type].end()) {
+    if (base::FeatureList::IsEnabled(
+            features::kAndroidDumpForBadCompositedUiState)) {
+      base::debug::DumpWithoutCrashing();
+    }
+  }
 }
 
 bool ResourceManagerImpl::OnMemoryDump(
@@ -272,6 +298,10 @@ bool ResourceManagerImpl::OnMemoryDump(
   return true;
 }
 
+base::WeakPtr<ResourceManager> ResourceManagerImpl::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void ResourceManagerImpl::PreloadResourceFromJava(AndroidResourceType res_type,
                                                   int res_id) {
   TRACE_EVENT2("ui", "ResourceManagerImpl::PreloadResourceFromJava",
@@ -291,3 +321,5 @@ void ResourceManagerImpl::RequestResourceFromJava(AndroidResourceType res_type,
 }
 
 }  // namespace ui
+
+DEFINE_JNI(ResourceManager)

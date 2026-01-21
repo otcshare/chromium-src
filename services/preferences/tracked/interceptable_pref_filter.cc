@@ -6,10 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/deferred_sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 
 InterceptablePrefFilter::InterceptablePrefFilter() {}
-InterceptablePrefFilter::~InterceptablePrefFilter() {}
+InterceptablePrefFilter::~InterceptablePrefFilter() = default;
 
 void InterceptablePrefFilter::FilterOnLoad(
     PostFilterOnLoadCallback post_filter_on_load_callback,

@@ -9,21 +9,31 @@
 #include <string>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/mojom/choosers/color_chooser.mojom-forward.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom-forward.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "content/public/browser/native_web_keyboard_event.h"
+#include "components/input/native_web_keyboard_event.h"
+#endif
+
+#if BUILDFLAG(IS_APPLE)
 #include "ui/display/screen.h"
 #endif
 
 class GURL;
 
 namespace content {
+class ColorChooser;
+class FileSelectListener;
 class JavaScriptDialogManager;
 class Shell;
 class ShellPlatformDataAura;
+class RenderFrameHost;
 class WebContents;
 
 class ShellPlatformDelegate {
@@ -76,16 +86,20 @@ class ShellPlatformDelegate {
   // Called when the main frame is created in the renderer process; forwarded
   // from WebContentsObserver. If navigation creates a new main frame, this may
   // occur more than once.
-  virtual void MainFrameCreated(Shell* shell);
+  // |main_frame| points to the new frame that was created. This is different
+  // than |shell|'s primary main frame, because |main_frame|'s document hasn't
+  // committed at this point and hasn't been swapped with the old |shell|'s
+  // primary main frame.
+  virtual void MainFrameCreated(Shell* shell, RenderFrameHost* main_frame);
 
   // Allows platforms to override the JavascriptDialogManager. By default
   // returns null, which signals that the Shell should use its own instance.
   virtual std::unique_ptr<JavaScriptDialogManager>
   CreateJavaScriptDialogManager(Shell* shell);
 
-  // Requests handling of locking the mouse. This returns true if the request
-  // has been handled, otherwise false.
-  virtual bool HandleRequestToLockMouse(Shell* shell,
+  // Requests handling of locking the mouse pointer. This returns true if the
+  // request has been handled, otherwise false.
+  virtual bool HandlePointerLockRequest(Shell* shell,
                                         WebContents* web_contents,
                                         bool user_gesture,
                                         bool last_unlocked_by_target);
@@ -97,6 +111,21 @@ class ShellPlatformDelegate {
   // Destroy the Shell. Returns true if the ShellPlatformDelegate did the
   // destruction. Returns false if the Shell should destroy itself.
   virtual bool DestroyShell(Shell* shell);
+
+  // Called when color chooser should open. Returns the opened color chooser.
+  // Returns nullptr if we failed to open the color chooser. The color chooser
+  // is supported/required for Android or iOS.
+  virtual std::unique_ptr<ColorChooser> OpenColorChooser(
+      WebContents* web_contents,
+      SkColor color,
+      const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions);
+
+  // Called when a file selection is to be done.
+  // This function is responsible for calling listener->FileSelected() or
+  // listener->FileSelectionCanceled().
+  virtual void RunFileChooser(RenderFrameHost* render_frame_host,
+                              scoped_refptr<FileSelectListener> listener,
+                              const blink::mojom::FileChooserParams& params);
 
 #if !BUILDFLAG(IS_ANDROID)
   // Returns the native window. Valid after calling CreatePlatformWindow().
@@ -112,17 +141,19 @@ class ShellPlatformDelegate {
 
   virtual bool HandleKeyboardEvent(Shell* shell,
                                    WebContents* source,
-                                   const NativeWebKeyboardEvent& event);
+                                   const input::NativeWebKeyboardEvent& event);
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   void ToggleFullscreenModeForTab(Shell* shell,
                                   WebContents* web_contents,
                                   bool enter_fullscreen);
 
   bool IsFullscreenForTabOrPending(Shell* shell,
                                    const WebContents* web_contents) const;
+#endif
 
+#if BUILDFLAG(IS_ANDROID)
   // Forwarded from WebContentsDelegate.
   void SetOverlayMode(Shell* shell, bool use_overlay_mode);
 
@@ -140,7 +171,7 @@ class ShellPlatformDelegate {
 #endif
 
  private:
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_APPLE)
   std::unique_ptr<display::ScopedNativeScreen> screen_;
 #endif
   // Data held for each Shell instance, since there is one ShellPlatformDelegate

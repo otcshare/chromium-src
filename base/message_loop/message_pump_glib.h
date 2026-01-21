@@ -6,6 +6,7 @@
 #define BASE_MESSAGE_LOOP_MESSAGE_PUMP_GLIB_H_
 
 #include <glib.h>
+
 #include <memory>
 
 #include "base/base_export.h"
@@ -16,6 +17,8 @@
 #include "base/time/time.h"
 
 namespace base {
+
+class IOWatcher;
 
 // This class implements a base MessagePump needed for TYPE_UI MessageLoops on
 // platforms using GLib.
@@ -45,7 +48,7 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
     // WatchFileDescriptor() and sets up a GSource for the input parameters.
     // The source is not attached here, so the events will not be fired until
     // Attach() is called.
-    bool InitOrUpdate(int fd, int mode, FdWatcher* watcher);
+    bool InitOrUpdate(int fd, bool persistent, int mode, FdWatcher* watcher);
     // Returns the current initialization status.
     bool IsInitialized() const;
 
@@ -66,6 +69,7 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
     // If this pointer is non-null, the pointee is set to true in the
     // destructor.
     raw_ptr<bool> was_destroyed_ = nullptr;
+    bool is_persistent_ = false;  // false if this event is one-shot.
   };
 
   MessagePumpGlib();
@@ -93,18 +97,25 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
   bool HandleCheck();
   void HandleDispatch();
 
+  // Very similar to the above, with the key difference that these functions are
+  // only used to track work items and never indicate work is available, and
+  // poll indefinitely.
+  void HandleObserverPrepare();
+  bool HandleObserverCheck();
+
   // Overridden from MessagePump:
   void Run(Delegate* delegate) override;
   void Quit() override;
   void ScheduleWork() override;
   void ScheduleDelayedWork(
       const Delegate::NextWorkInfo& next_work_info) override;
+  IOWatcher* GetIOWatcher() override;
 
   // Internal methods used for processing the FdWatchSource callbacks. As for
   // main pump callbacks, they are public for simplicity but should not be used
   // directly.
   bool HandleFdWatchCheck(FdWatchController* controller);
-  void HandleFdWatchDispatch(FdWatchController* controller);
+  bool HandleFdWatchDispatch(FdWatchController* controller);
 
  private:
   struct GMainContextDeleter {
@@ -131,6 +142,38 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
 
   raw_ptr<RunState> state_;
 
+  // Starts tracking a new work item and stores a `ScopedDoWorkItem` in
+  // `state_`.
+  void SetScopedWorkItem();
+  // Gets rid of the current scoped work item.
+  void ClearScopedWorkItem();
+  // Ensures there's a ScopedDoWorkItem at the current run-level. This can be
+  // useful for contexts where the caller can't tell whether they just woke up
+  // or are continuing from native work.
+  void EnsureSetScopedWorkItem();
+  // Ensures there's no ScopedDoWorkItem at the current run-level. This can be
+  // useful in contexts where the caller knows that a sleep is imminent but
+  // doesn't know if the current context captures ongoing work (back from
+  // native).
+  void EnsureClearedScopedWorkItem();
+
+  // Called before entrance to g_main_context_iteration to record context
+  // related to nesting depth to track native nested loops which would otherwise
+  // be invisible.
+  void OnEntryToGlib();
+  // Cleans up state set in OnEntryToGlib.
+  void OnExitFromGlib();
+  // Forces the pump into a nested state by creating two work items back to
+  // back.
+  void RegisterNested();
+  // Removes all of the pump's ScopedDoWorkItems to remove the state of nesting
+  // which was forced onto the pump.
+  void UnregisterNested();
+  // Nest if pump is not already marked as nested.
+  void NestIfRequired();
+  // Remove the nesting if the pump is nested.
+  void UnnestIfRequired();
+
   std::unique_ptr<GMainContext, GMainContextDeleter> owned_context_;
   // This is a GLib structure that we can add event sources to.  On the main
   // thread, we use the default GLib context, which is the one to which all GTK
@@ -141,6 +184,10 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
   // the message pump is destroyed.
   std::unique_ptr<GSource, GSourceDeleter> work_source_;
 
+  // The observer source.  It is shared by all calls to Run and destroyed when
+  // the message pump is destroyed.
+  std::unique_ptr<GSource, GSourceDeleter> observer_source_;
+
   // We use a wakeup pipe to make sure we'll get out of the glib polling phase
   // when another thread has scheduled us to do some work.  There is a glib
   // mechanism g_main_context_wakeup, but this won't guarantee that our event's
@@ -149,6 +196,9 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
   int wakeup_pipe_write_;
   // Use a unique_ptr to avoid needing the definition of GPollFD in the header.
   std::unique_ptr<GPollFD> wakeup_gpollfd_;
+
+  // The IOWatcher for this thread, lazily initialized as needed.
+  std::unique_ptr<IOWatcher> io_watcher_;
 
   THREAD_CHECKER(watch_fd_caller_checker_);
 };

@@ -25,7 +25,7 @@ namespace views {
 class View;
 }  // namespace views
 
-namespace fast_ink {
+namespace ash {
 
 // Base class for a fast ink based pointer controller. Enables/disables
 // the pointer, receives points and passes them off to be rendered.
@@ -48,6 +48,20 @@ class FastInkPointerController : public ui::EventHandler {
   void AddExcludedWindow(aura::Window* window);
 
  protected:
+  // Returns the pointer view.
+  virtual views::View* GetPointerView() const = 0;
+
+  // Creates the pointer view.
+  virtual void CreatePointerView(base::TimeDelta presentation_delay,
+                                 aura::Window* root_window) = 0;
+
+  // Updates the pointer view.
+  virtual void UpdatePointerView(ui::TouchEvent* event) = 0;
+  virtual void UpdatePointerView(ui::MouseEvent* event) = 0;
+
+  // Destroys the pointer view if it exists.
+  virtual void DestroyPointerView();
+
   // Whether the controller is ready to start handling a new gesture.
   virtual bool CanStartNewGesture(ui::LocatedEvent* event);
   // Whether the event should be processed and stop propagation.
@@ -75,27 +89,14 @@ class FastInkPointerController : public ui::EventHandler {
   void OnMouseEvent(ui::MouseEvent* event) override;
 
   void OnHasSeenStylusPrefChanged();
-  void UpdateEnabledForMouseEvent();
-
-  // Returns the pointer view.
-  virtual views::View* GetPointerView() const = 0;
-
-  // Creates the pointer view.
-  virtual void CreatePointerView(base::TimeDelta presentation_delay,
-                                 aura::Window* root_window) = 0;
-
-  // Updates the pointer view.
-  virtual void UpdatePointerView(ui::TouchEvent* event) = 0;
-  virtual void UpdatePointerView(ui::MouseEvent* event) {}
-
-  // Destroys the pointer view if it exists.
-  virtual void DestroyPointerView() = 0;
 
   // The presentation delay used for pointer location prediction.
   const base::TimeDelta presentation_delay_;
 
   bool enabled_ = false;
   bool has_seen_stylus_ = false;
+
+  std::optional<bool> pointer_view_created_by_touch_;
 
   // Set of touch ids.
   std::set<int> touch_ids_;
@@ -107,6 +108,6 @@ class FastInkPointerController : public ui::EventHandler {
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_local_;
 };
 
-}  // namespace fast_ink
+}  // namespace ash
 
 #endif  // ASH_FAST_INK_FAST_INK_POINTER_CONTROLLER_H_

@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -34,7 +34,7 @@ TaskQueue::TaskQueue(Delegate* delegate)
   DCHECK(delegate_);
 }
 
-TaskQueue::~TaskQueue() {}
+TaskQueue::~TaskQueue() = default;
 
 void TaskQueue::AddTask(std::unique_ptr<Task> task) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

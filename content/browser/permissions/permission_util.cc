@@ -5,11 +5,14 @@
 #include "content/browser/permissions/permission_util.h"
 
 #include "base/check.h"
+#include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -17,15 +20,35 @@ using blink::mojom::PermissionDescriptorPtr;
 
 namespace content {
 
+#if BUILDFLAG(IS_ANDROID)
+namespace {
+constexpr const char* kIsFileURLHistogram =
+    "Permissions.GetLastCommittedOriginAsURL.IsFileURL";
+}
+#endif
+
+PermissionOption PermissionUtil::ToPermissionOption(
+    blink::mojom::PermissionStatus permission_status) {
+  switch (permission_status) {
+    case blink::mojom::PermissionStatus::GRANTED:
+      return PermissionOption::kAllowed;
+    case blink::mojom::PermissionStatus::DENIED:
+      return PermissionOption::kDenied;
+    case blink::mojom::PermissionStatus::ASK:
+      return PermissionOption::kAsk;
+  }
+  NOTREACHED();
+}
+
 // Due to dependency issues, this method is duplicated from
 // components/permissions/permission_util.cc.
 GURL PermissionUtil::GetLastCommittedOriginAsURL(
     content::RenderFrameHost* render_frame_host) {
   DCHECK(render_frame_host);
 
-#if BUILDFLAG(IS_ANDROID)
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
+#if BUILDFLAG(IS_ANDROID)
   // If `allow_universal_access_from_file_urls` flag is enabled, a file:/// can
   // change its url via history.pushState/replaceState to any other url,
   // including about:blank. To avoid user confusion we should always use a
@@ -33,32 +56,39 @@ GURL PermissionUtil::GetLastCommittedOriginAsURL(
   if (web_contents->GetOrCreateWebPreferences()
           .allow_universal_access_from_file_urls &&
       render_frame_host->GetLastCommittedOrigin().GetURL().SchemeIsFile()) {
+    base::UmaHistogramBoolean(kIsFileURLHistogram, true);
     return render_frame_host->GetLastCommittedURL().DeprecatedGetOriginAsURL();
+  } else {
+    base::UmaHistogramBoolean(kIsFileURLHistogram, false);
   }
 #endif
 
+  if (render_frame_host->GetLastCommittedOrigin().GetURL().is_empty()) {
+    if (!web_contents->GetVisibleURL().is_empty()) {
+      return web_contents->GetVisibleURL();
+    }
+  }
   return render_frame_host->GetLastCommittedOrigin().GetURL();
 }
 
 bool PermissionUtil::IsDomainOverride(
     const PermissionDescriptorPtr& descriptor) {
-  return descriptor->extension && descriptor->extension->is_storage_access();
+  return descriptor->extension &&
+         descriptor->extension->is_top_level_storage_access();
 }
 
-url::Origin PermissionUtil::ExtractDomainOverride(
+const url::Origin& PermissionUtil::ExtractDomainOverride(
     const PermissionDescriptorPtr& descriptor) {
-  const blink::mojom::StorageAccessPermissionDescriptorPtr&
-      override_descriptor = descriptor->extension->get_storage_access();
-  return override_descriptor->siteOverride;
+  const blink::mojom::TopLevelStorageAccessPermissionDescriptorPtr&
+      override_descriptor =
+          descriptor->extension->get_top_level_storage_access();
+  return override_descriptor->requestedOrigin;
 }
 
 bool PermissionUtil::ValidateDomainOverride(
-    const std::vector<blink::PermissionType>& types,
-    RenderFrameHost* rfh) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kStorageAccessAPIForOriginExtension)) {
-    return false;
-  }
+    const std::vector<blink::mojom::PermissionDescriptorPtr>& types,
+    RenderFrameHost* rfh,
+    const blink::mojom::PermissionDescriptorPtr& descriptor) {
   if (types.size() > 1) {
     // Requests with domain overrides must be requested individually.
     return false;
@@ -68,7 +98,33 @@ bool PermissionUtil::ValidateDomainOverride(
     // browsing context.
     return false;
   }
+
+  const url::Origin& overridden_origin =
+      PermissionUtil::ExtractDomainOverride(descriptor);
+
+  if (rfh->GetLastCommittedOrigin().IsSameOriginWith(overridden_origin)) {
+    // In case `overridden_origin` equals
+    // `render_frame_host->GetLastCommittedOrigin()` then you should use
+    // `GetPermissionStatusForCurrentDocument`.
+    return false;
+  }
+
   return true;
+}
+
+bool PermissionUtil::IsDevicePermission(
+    const blink::mojom::PermissionDescriptorPtr& descriptor) {
+  return descriptor->name == blink::mojom::PermissionName::VIDEO_CAPTURE ||
+         descriptor->name == blink::mojom::PermissionName::AUDIO_CAPTURE ||
+         descriptor->name == blink::mojom::PermissionName::GEOLOCATION;
+}
+
+bool PermissionUtil::IsEmbeddablePermission(
+    const blink::mojom::PermissionDescriptorPtr& descriptor) {
+  return descriptor->name == blink::mojom::PermissionName::VIDEO_CAPTURE ||
+         descriptor->name == blink::mojom::PermissionName::AUDIO_CAPTURE ||
+         descriptor->name == blink::mojom::PermissionName::GEOLOCATION ||
+         descriptor->name == blink::mojom::PermissionName::WEB_APP_INSTALLATION;
 }
 
 }  // namespace content

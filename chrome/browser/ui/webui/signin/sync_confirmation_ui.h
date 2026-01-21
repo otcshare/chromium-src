@@ -11,7 +11,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/webui/signin/signin_web_dialog_ui.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/common/webui_url_constants.h"
+#include "components/sync/base/user_selectable_type.h"
+#include "content/public/browser/webui_config.h"
+#include "content/public/common/url_constants.h"
 
 class Browser;
 class Profile;
@@ -20,18 +23,43 @@ namespace content {
 class WebUIDataSource;
 }
 
-namespace ui {
-class WebUI;
+namespace syncer {
+class SyncService;
 }
 
+namespace content {
+class WebUI;
+}  // namespace content
+
 enum class SyncConfirmationStyle;
+
+class SyncConfirmationUI;
+
+class SyncConfirmationUIConfig
+    : public content::DefaultWebUIConfig<SyncConfirmationUI> {
+ public:
+  SyncConfirmationUIConfig()
+      : DefaultWebUIConfig(content::kChromeUIScheme,
+                           chrome::kChromeUISyncConfirmationHost) {}
+
+  // content::WebUIConfig:
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+};
 
 // WebUI controller for the sync confirmation dialog.
 //
 // Note: This controller does not set the WebUI message handler. It is
-// the responsability of the caller to pass the correct message handler.
+// the responsibility of the caller to pass the correct message handler.
 class SyncConfirmationUI : public SigninWebDialogUI {
  public:
+  // Exposed for testing
+  // Returns JSON data representing sync benefits that should be presented to
+  // the user, based on which `syncer::UserSelectableType`s are available.
+  // The data format is:
+  // `[{"iconName": "${iron_icon_id}", "title": "${grit_string_id}"}, ...]`
+  static std::string GetSyncBenefitsListJSON(
+      const syncer::SyncService* sync_service);
+
   explicit SyncConfirmationUI(content::WebUI* web_ui);
 
   SyncConfirmationUI(const SyncConfirmationUI&) = delete;
@@ -45,7 +73,8 @@ class SyncConfirmationUI : public SigninWebDialogUI {
 
  private:
   void InitializeForSyncConfirmation(content::WebUIDataSource* source,
-                                     SyncConfirmationStyle style);
+                                     SyncConfirmationStyle style,
+                                     bool is_sync_promo);
   void InitializeForSyncDisabled(content::WebUIDataSource* source);
 
   // Adds a string resource with the given GRD |ids| to the WebUI data |source|

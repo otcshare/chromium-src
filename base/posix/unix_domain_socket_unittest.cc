@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
+#include "base/posix/unix_domain_socket.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,16 +10,18 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/files/file_util.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/pickle.h"
-#include "base/posix/unix_domain_socket.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -36,15 +38,6 @@ void CreateSocketPair(int fds[2]) {
   int flags = SOCK_SEQPACKET;
 #endif
   ASSERT_EQ(0, socketpair(AF_UNIX, flags, 0, fds));
-#if BUILDFLAG(IS_APPLE)
-  // On OSX an attempt to read or write to a closed socket may generate a
-  // SIGPIPE rather than returning -1, corrected with SO_NOSIGPIPE option.
-  int nosigpipe = 1;
-  ASSERT_EQ(0, setsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe,
-                          sizeof(nosigpipe)));
-  ASSERT_EQ(0, setsockopt(fds[1], SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe,
-                          sizeof(nosigpipe)));
-#endif
 }
 
 TEST(UnixDomainSocketTest, SendRecvMsgAbortOnReplyFDClose) {
@@ -121,7 +114,7 @@ TEST(UnixDomainSocketTest, RecvPid) {
   const ssize_t nread = UnixDomainSocket::RecvMsgWithPid(
       recv_sock.get(), buf, sizeof(buf), &fd_vec, &sender_pid);
   ASSERT_EQ(sizeof(kHello), static_cast<size_t>(nread));
-  ASSERT_EQ(0, memcmp(buf, kHello, sizeof(kHello)));
+  ASSERT_EQ(0, UNSAFE_TODO(memcmp(buf, kHello, sizeof(kHello))));
   ASSERT_EQ(0U, fd_vec.size());
 
   ASSERT_EQ(getpid(), sender_pid);
@@ -150,7 +143,7 @@ TEST(UnixDomainSocketTest, RecvPidWithMaxDescriptors) {
   const ssize_t nread = UnixDomainSocket::RecvMsgWithPid(
       recv_sock.get(), buf, sizeof(buf), &recv_fds, &sender_pid);
   ASSERT_EQ(sizeof(kHello), static_cast<size_t>(nread));
-  ASSERT_EQ(0, memcmp(buf, kHello, sizeof(kHello)));
+  ASSERT_EQ(0, UNSAFE_TODO(memcmp(buf, kHello, sizeof(kHello))));
   ASSERT_EQ(UnixDomainSocket::kMaxFileDescriptors, recv_fds.size());
 
   ASSERT_EQ(getpid(), sender_pid);

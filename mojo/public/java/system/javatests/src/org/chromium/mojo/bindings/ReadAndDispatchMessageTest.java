@@ -15,7 +15,6 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.mojo.MojoTestRule;
-import org.chromium.mojo.bindings.BindingsTestUtils.RecordingMessageReceiver;
 import org.chromium.mojo.system.Core;
 import org.chromium.mojo.system.DataPipe;
 import org.chromium.mojo.system.Handle;
@@ -30,21 +29,31 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Testing {@link Connector#readAndDispatchMessage}.
- */
+/** Testing {@link Connector#readAndDispatchMessage}. */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class ReadAndDispatchMessageTest {
-    @Rule
-    public MojoTestRule mTestRule = new MojoTestRule();
+    @Rule public MojoTestRule mTestRule = new MojoTestRule();
 
     private static final int DATA_SIZE = 1024;
 
     private ByteBuffer mData;
     private Pair<MessagePipeHandle, MessagePipeHandle> mHandles;
-    private List<Handle> mHandlesToSend = new ArrayList<Handle>();
-    private List<Handle> mHandlesToClose = new ArrayList<Handle>();
-    private RecordingMessageReceiver mMessageReceiver;
+    private final List<Handle> mHandlesToSend = new ArrayList<Handle>();
+    private final List<Handle> mHandlesToClose = new ArrayList<Handle>();
+    private TestReceiver mMessageReceiver;
+
+    static class TestReceiver implements MessageReceiver {
+        public final List<Message> messages = new ArrayList();
+
+        @Override
+        public boolean accept(Message message) {
+            messages.add(message);
+            return true;
+        }
+
+        @Override
+        public void close() {}
+    }
 
     /**
      * @see org.chromium.mojo.MojoTestCase#setUp()
@@ -53,7 +62,7 @@ public class ReadAndDispatchMessageTest {
     public void setUp() {
         Core core = CoreImpl.getInstance();
         mData = BindingsTestUtils.newRandomMessage(DATA_SIZE).getData();
-        mMessageReceiver = new RecordingMessageReceiver();
+        mMessageReceiver = new TestReceiver();
         mHandles = core.createMessagePipe(new MessagePipeHandle.CreateOptions());
         Pair<DataPipe.ProducerHandle, DataPipe.ConsumerHandle> datapipe = core.createDataPipe(null);
         mHandlesToSend.addAll(Arrays.asList(datapipe.first, datapipe.second));
@@ -71,14 +80,13 @@ public class ReadAndDispatchMessageTest {
         }
     }
 
-    /**
-     * Testing {@link Connector#readAndDispatchMessage(MessagePipeHandle, MessageReceiver)}
-     */
+    /** Testing {@link Connector#readAndDispatchMessage(MessagePipeHandle, MessageReceiver)} */
     @Test
     @SmallTest
     public void testReadAndDispatchMessage() {
         mHandles.first.writeMessage(mData, mHandlesToSend, MessagePipeHandle.WriteFlags.NONE);
-        Assert.assertEquals(MojoResult.OK,
+        Assert.assertEquals(
+                MojoResult.OK,
                 Connector.readAndDispatchMessage(mHandles.second, mMessageReceiver)
                         .getMojoResult());
         Assert.assertEquals(1, mMessageReceiver.messages.size());
@@ -98,7 +106,8 @@ public class ReadAndDispatchMessageTest {
     @Test
     @SmallTest
     public void testReadAndDispatchMessageOnEmptyHandle() {
-        Assert.assertEquals(MojoResult.SHOULD_WAIT,
+        Assert.assertEquals(
+                MojoResult.SHOULD_WAIT,
                 Connector.readAndDispatchMessage(mHandles.second, mMessageReceiver)
                         .getMojoResult());
         Assert.assertEquals(0, mMessageReceiver.messages.size());

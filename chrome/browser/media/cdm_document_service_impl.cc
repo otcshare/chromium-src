@@ -6,13 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "media/cdm/media_foundation_cdm_data.h"
 #include "media/media_buildflags.h"
 
 #if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
@@ -26,18 +24,10 @@
 #include "content/public/browser/render_frame_host.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chromeos/ash/components/settings/cros_settings_names.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/crosapi/mojom/content_protection.mojom.h"
-#include "chromeos/lacros/lacros_service.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/media/platform_verification_chromeos.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -45,6 +35,7 @@
 
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/system/sys_info.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -52,6 +43,8 @@
 #include "base/win/sid.h"
 #include "chrome/browser/media/cdm_pref_service_helper.h"
 #include "chrome/browser/media/media_foundation_service_monitor.h"
+#include "content/public/browser/site_instance.h"
+#include "media/cdm/media_foundation_cdm_data.h"
 #include "media/cdm/win/media_foundation_cdm.h"
 #include "sandbox/policy/win/lpac_capability.h"
 #endif  // BUILDFLAG(IS_WIN)
@@ -161,7 +154,7 @@ void CdmDocumentServiceImpl::ChallengePlatform(
   DVLOG(2) << __func__;
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  // TODO(crbug.com/676224). This should be commented out at the mojom
+  // TODO(crbug.com/40499115). This should be commented out at the mojom
   // level so that it's only available for ChromeOS.
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -171,26 +164,7 @@ void CdmDocumentServiceImpl::ChallengePlatform(
     std::move(callback).Run(false, std::string(), std::string(), std::string());
     return;
   }
-#endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  auto* lacros_service = chromeos::LacrosService::Get();
-  if (lacros_service &&
-      lacros_service->IsAvailable<crosapi::mojom::ContentProtection>() &&
-      lacros_service->GetInterfaceVersion(
-          crosapi::mojom::ContentProtection::Uuid_) >=
-          static_cast<int>(crosapi::mojom::ContentProtection::
-                               kChallengePlatformMinVersion)) {
-    lacros_service->GetRemote<crosapi::mojom::ContentProtection>()
-        ->ChallengePlatform(
-            service_id, challenge,
-            base::BindOnce(&CdmDocumentServiceImpl::OnPlatformChallenged,
-                           weak_factory_.GetWeakPtr(), std::move(callback)));
-    return;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   if (!platform_verification_flow_)
     platform_verification_flow_ =
         base::MakeRefCounted<ash::attestation::PlatformVerificationFlow>();
@@ -203,10 +177,10 @@ void CdmDocumentServiceImpl::ChallengePlatform(
 #else
   // Not supported, so return failure.
   std::move(callback).Run(false, std::string(), std::string(), std::string());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void CdmDocumentServiceImpl::OnPlatformChallenged(
     ChallengePlatformCallback callback,
     PlatformVerificationResult result,
@@ -231,29 +205,14 @@ void CdmDocumentServiceImpl::OnPlatformChallenged(
   std::move(callback).Run(true, signed_data, signature,
                           platform_key_certificate);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void CdmDocumentServiceImpl::OnPlatformChallenged(
-    ChallengePlatformCallback callback,
-    crosapi::mojom::ChallengePlatformResultPtr result) {
-  if (!result) {
-    LOG(ERROR) << "Platform verification failed.";
-    std::move(callback).Run(false, "", "", "");
-    return;
-  }
-  std::move(callback).Run(true, std::move(result->signed_data),
-                          std::move(result->signed_data_signature),
-                          std::move(result->platform_key_certificate));
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void CdmDocumentServiceImpl::GetStorageId(uint32_t version,
                                           GetStorageIdCallback callback) {
   DVLOG(2) << __func__ << " version: " << version;
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  // TODO(crbug.com/676224). This should be commented out at the mojom
+  // TODO(crbug.com/40499115). This should be commented out at the mojom
   // level so that it's only available if Storage Id is available.
 
 #if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
@@ -296,25 +255,10 @@ void CdmDocumentServiceImpl::IsVerifiedAccessEnabled(
     return;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  auto* lacros_service = chromeos::LacrosService::Get();
-  if (lacros_service &&
-      lacros_service->IsAvailable<crosapi::mojom::ContentProtection>() &&
-      lacros_service->GetInterfaceVersion(
-          crosapi::mojom::ContentProtection::Uuid_) >=
-          static_cast<int>(crosapi::mojom::ContentProtection::
-                               kIsVerifiedAccessEnabledMinVersion)) {
-    lacros_service->GetRemote<crosapi::mojom::ContentProtection>()
-        ->IsVerifiedAccessEnabled(std::move(callback));
-  } else {
-    std::move(callback).Run(false);
-  }
-#else   // BUILDFLAG(IS_CHROMEOS_LACROS)
   bool enabled_for_device = false;
   ash::CrosSettings::Get()->GetBoolean(
       ash::kAttestationForContentProtectionEnabled, &enabled_for_device);
   std::move(callback).Run(enabled_for_device);
-#endif  // else BUILDFLAG(IS_CHROMEOS_LACROS)
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -365,34 +309,50 @@ void CdmDocumentServiceImpl::OnCdmEvent(media::CdmEvent event,
                                         uint32_t hresult) {
   DVLOG(1) << __func__ << ": event=" << static_cast<int>(event);
 
+  auto* monitor = MediaFoundationServiceMonitor::GetInstance();
+
+  // Hardware context reset after power or display change is expected.
+  if (event == media::CdmEvent::kHardwareContextReset) {
+    bool has_change = monitor->HasRecentPowerOrDisplayChange();
+    base::UmaHistogramBoolean(
+        "Media.EME.MediaFoundationService.HardwareContextReset", has_change);
+    if (has_change) {
+      DVLOG(2) << __func__
+               << ": HardwareContextReset ignored after power/display change";
+      return;
+    }
+  }
+
   // CdmDocumentServiceImpl is shared by all CDMs in the same RenderFrame.
   //
-  // We choose to only report a significant playback at most once and an error
-  // at most once because:
+  // We choose to only handle each event type at most once because:
   // 1. A site could create many CDM instances, e.g. to prefetch licenses. This
   //    could cause multiple errors to be reported.
   // 2. The media::Renderer could be destroyed and then recreated as part of the
-  //    suspend/resume process (e.g. paused for long time).This could cause
-  //    multiple significant playback to be reported.
-  // In both cases, our data could be skewed if we don't throttle them.
+  //    suspend/resume process (e.g. paused for long time). This could cause
+  //    multiple significant playback or hardware context reset without playback
+  //    to be reported.
+  // In all cases, our data could be skewed if we don't throttle them.
   //
-  // If an error happens after a significant playback both will be reported.
-  // This is fine since MediaFoundationServiceMonitor calculates a score.
+  // A different event will still be reported. For example, if an error happens
+  // after a significant playback both will be reported. This is fine since
+  // MediaFoundationServiceMonitor calculates a score.
+  if (auto [ignored, inserted] = reported_cdm_event_.insert(event); !inserted) {
+    DVLOG(2) << __func__ << ": Repeated CdmEvent ignored";
+    return;
+  }
+
+  auto site = render_frame_host().GetSiteInstance()->GetSiteURL();
   switch (event) {
     case media::CdmEvent::kSignificantPlayback:
-      if (!has_reported_significant_playback_) {
-        has_reported_significant_playback_ = true;
-        MediaFoundationServiceMonitor::GetInstance()->OnSignificantPlayback();
-      }
+      monitor->OnSignificantPlayback(site);
       break;
     case media::CdmEvent::kPlaybackError:
-      [[fallthrough]];
     case media::CdmEvent::kCdmError:
-      if (!has_reported_cdm_error_) {
-        has_reported_cdm_error_ = true;
-        MediaFoundationServiceMonitor::GetInstance()->OnPlaybackOrCdmError(
-            static_cast<HRESULT>(hresult));
-      }
+      monitor->OnPlaybackOrCdmError(site, static_cast<HRESULT>(hresult));
+      break;
+    case media::CdmEvent::kHardwareContextReset:
+      monitor->OnUnexpectedHardwareContextReset(site);
       break;
   }
 }
@@ -429,7 +389,7 @@ void DeleteMediaFoundationCdmData(
       continue;
 
     DVLOG(2) << __func__ << ": Processing: " << file_path;
-    absl::optional<url::Origin> origin = absl::nullopt;
+    std::optional<url::Origin> origin = std::nullopt;
     if (origin_id_mapping.count(origin_id_string) != 0)
       origin = origin_id_mapping.at(origin_id_string);
 

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
@@ -117,14 +118,14 @@ unpadBlock(SECItem *data, int blockSize, SECItem *result)
     goto loser;
   }
 
-  padLength = data->data[data->len-1];
+  padLength = UNSAFE_TODO(data->data[data->len - 1]);
   if (padLength > blockSize) { rv = SECFailure; goto loser; }
 
   /* verify padding */
   for (i = data->len - padLength; static_cast<uint32_t>(i) < data->len; i++) {
-    if (data->data[i] != padLength) {
-        rv = SECFailure;
-        goto loser;
+    if (UNSAFE_TODO(data->data[i]) != padLength) {
+      rv = SECFailure;
+      goto loser;
     }
   }
 
@@ -132,7 +133,7 @@ unpadBlock(SECItem *data, int blockSize, SECItem *result)
   result->data = (unsigned char *)PORT_Alloc(result->len);
   if (!result->data) { rv = SECFailure; goto loser; }
 
-  PORT_Memcpy(result->data, data->data, result->len);
+  UNSAFE_TODO(PORT_Memcpy(result->data, data->data, result->len));
 
   if (padLength < 2) {
     return SECWouldBlock;
@@ -183,7 +184,7 @@ SECStatus NSSDecryptor::PK11SDR_DecryptWithSlot(
   SECStatus rv = SECSuccess;
   PK11SymKey* key = nullptr;
   CK_MECHANISM_TYPE type;
-  SDRResult sdrResult;
+  SDRResult sdrResult = {};
   SECItem* params = nullptr;
   SECItem possibleResult = {siBuffer, nullptr, 0};
   PLArenaPool* arena = nullptr;
@@ -192,7 +193,6 @@ SECStatus NSSDecryptor::PK11SDR_DecryptWithSlot(
   if (!arena) { rv = SECFailure; goto loser; }
 
   /* Decode the incoming data */
-  memset(&sdrResult, 0, sizeof sdrResult);
   rv = SEC_QuickDERDecodeItem(arena, &sdrResult, g_template, data);
   if (rv != SECSuccess) goto loser;  /* Invalid format */
 

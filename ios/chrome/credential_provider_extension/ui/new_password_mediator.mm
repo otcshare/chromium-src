@@ -14,18 +14,16 @@
 #import "ios/chrome/common/credential_provider/archivable_credential.h"
 #import "ios/chrome/common/credential_provider/archivable_credential_util.h"
 #import "ios/chrome/common/credential_provider/constants.h"
+#import "ios/chrome/common/credential_provider/credential_provider_creation_notifier.h"
 #import "ios/chrome/common/credential_provider/credential_store.h"
 #import "ios/chrome/common/credential_provider/user_defaults_credential_store.h"
 #import "ios/chrome/credential_provider_extension/metrics_util.h"
 #import "ios/chrome/credential_provider_extension/password_spec_fetcher_buildflags.h"
 #import "ios/chrome/credential_provider_extension/password_util.h"
+#import "ios/chrome/credential_provider_extension/ui/credential_response_handler.h"
 #import "ios/chrome/credential_provider_extension/ui/new_password_ui_handler.h"
 #import "ios/chrome/credential_provider_extension/ui/ui_util.h"
 #import "ios/components/credential_provider_extension/password_spec_fetcher.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using autofill::GeneratePassword;
 using autofill::PasswordRequirementsSpec;
@@ -78,6 +76,8 @@ using base::SysUTF16ToNSString;
 
 - (void)saveCredentialWithUsername:(NSString*)username
                           password:(NSString*)password
+                              note:(NSString*)note
+                              gaia:(NSString*)gaia
                      shouldReplace:(BOOL)shouldReplace {
   if (!shouldReplace && [self credentialExistsForUsername:username]) {
     [self.uiHandler alertUserCredentialExists];
@@ -85,7 +85,10 @@ using base::SysUTF16ToNSString;
   }
 
   ArchivableCredential* credential =
-      [self createNewCredentialWithUsername:username password:password];
+      [self createNewCredentialWithUsername:username
+                                   password:password
+                                       note:note
+                                       gaia:gaia];
 
   if (!credential) {
     [self.uiHandler alertSavePasswordFailed];
@@ -103,7 +106,12 @@ using base::SysUTF16ToNSString;
                }
                [self.uiHandler credentialSaved:credential];
                [self userSelectedCredential:credential];
+               [CredentialProviderCreationNotifier notifyCredentialCreated];
              }];
+}
+
+- (NSString*)gaia {
+  return [self.credentialResponseHandler gaia];
 }
 
 #pragma mark - Private
@@ -119,28 +127,27 @@ using base::SysUTF16ToNSString;
 
 // Creates a new credential but doesn't add it to any stores.
 - (ArchivableCredential*)createNewCredentialWithUsername:(NSString*)username
-                                                password:(NSString*)password {
+                                                password:(NSString*)password
+                                                    note:(NSString*)note
+                                                    gaia:(NSString*)gaia {
   NSString* identifier = [self currentIdentifier];
   NSURL* url = [NSURL URLWithString:identifier];
   NSString* recordIdentifier = RecordIdentifierForData(url, username);
 
-  NSString* uuid = [[NSUUID UUID] UUIDString];
-  if (!StorePasswordInKeychain(password, uuid)) {
-    return nil;
-  }
-  NSString* validationIdentifierKey =
-      AppGroupUserDefaultsCredentialProviderUserID();
-  NSString* validationIdentifier =
-      [app_group::GetGroupUserDefaults() stringForKey:validationIdentifierKey];
+  // CPE does not have required //net deps to fetch eTLD+1. Leave it empty here,
+  // the value will be overriden whenever the browser is foregrounded.
+  NSString* registryControlledDomain = nil;
 
   return [[ArchivableCredential alloc] initWithFavicon:nil
-                                    keychainIdentifier:uuid
+                                                  gaia:gaia
+                                              password:password
                                                   rank:1
                                       recordIdentifier:recordIdentifier
                                      serviceIdentifier:identifier
                                            serviceName:url.host ?: identifier
-                                                  user:username
-                                  validationIdentifier:validationIdentifier];
+                              registryControlledDomain:registryControlledDomain
+                                              username:username
+                                                  note:note];
 }
 
 // Saves the given credential to disk and calls `completion` once the operation
@@ -163,13 +170,11 @@ using base::SysUTF16ToNSString;
 
 // Alerts the host app that the user selected a credential.
 - (void)userSelectedCredential:(id<Credential>)credential {
-  NSString* password =
-      PasswordWithKeychainIdentifier(credential.keychainIdentifier);
-  ASPasswordCredential* ASCredential =
-      [ASPasswordCredential credentialWithUser:credential.user
+  NSString* password = credential.password;
+  ASPasswordCredential* passwordCredential =
+      [ASPasswordCredential credentialWithUser:credential.username
                                       password:password];
-  [self.context completeRequestWithSelectedCredential:ASCredential
-                                    completionHandler:nil];
+  [self.credentialResponseHandler userSelectedPassword:passwordCredential];
 }
 
 - (NSString*)currentIdentifier {

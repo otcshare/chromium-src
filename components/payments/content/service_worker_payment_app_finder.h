@@ -10,7 +10,7 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/payments/content/web_app_manifest.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/global_routing_id.h"
@@ -35,7 +35,7 @@ namespace payments {
 
 class CSPChecker;
 class PaymentManifestDownloader;
-class PaymentManifestWebDataService;
+class WebPaymentsWebDataService;
 
 // Retrieves service worker payment apps.
 class ServiceWorkerPaymentAppFinder
@@ -73,7 +73,7 @@ class ServiceWorkerPaymentAppFinder
   // The method should be called on the UI thread.
   void GetAllPaymentApps(
       const url::Origin& merchant_origin,
-      scoped_refptr<PaymentManifestWebDataService> cache,
+      scoped_refptr<WebPaymentsWebDataService> cache,
       std::vector<mojom::PaymentMethodDataPtr> requested_method_data,
       base::WeakPtr<CSPChecker> csp_checker,
       GetAllPaymentAppsCallback callback,
@@ -97,7 +97,7 @@ class ServiceWorkerPaymentAppFinder
   friend class ServiceWorkerPaymentAppFinderBrowserTest;
   friend class PaymentRequestPlatformBrowserTestBase;
   friend class PaymentMethodViewControllerTest;
-  friend class PaymentHandlerIconRefetchTest;
+  friend class PaymentHandlerMissingIconTest;
   friend class EmptyParametersTest;
 
   explicit ServiceWorkerPaymentAppFinder(content::RenderFrameHost* rfh);

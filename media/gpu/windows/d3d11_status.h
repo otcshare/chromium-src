@@ -7,6 +7,8 @@
 
 #include <wrl/client.h>
 
+#include <sstream>
+
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "media/base/status.h"
@@ -61,6 +63,14 @@ enum class D3D11StatusCode : StatusCodeType {
   kAcquireKeyedMutexFailed = 43,
   kReleaseKeyedMutexFailed = 44,
   kCreateSharedHandleFailed = 45,
+  kProduceVideoDecodeImageRepresentationFailed = 46,
+  kVideoDecodeImageRepresentationBeginScopedWriteAccessFailed = 47,
+  kGetCommandBufferHelperFailed = 48,
+  kDecoderGetCreationParametersFailed = 49,
+  kGetDeviceFailed = 50,
+  kCreateFenceFailed = 51,
+  kFenceSignalFailed = 52,
+  kWaitForFenceFailed = 53,
 };
 
 struct D3D11StatusTraits {

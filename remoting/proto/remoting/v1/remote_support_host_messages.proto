@@ -3,8 +3,27 @@ syntax = "proto2";
 package remoting.apis.v1;
 
 import "host_info.proto";
+import "chrome_os_enterprise_options.proto";
 
 option optimize_for = LITE_RUNTIME;
+
+// Request info for a host instance running on a managed Chrome OS device.
+message GetManagedChromeOsHostRequest {
+  // The unique identifier for the host being requested.
+  optional string support_id = 1;
+
+  // The Chrome OS version this request was made from.
+  optional string client_os_version = 2;
+}
+
+// The response to a GetManagedChromeOsHostRequest.
+message GetManagedChromeOsHostResponse {
+  // The connection info for the host associated with the given support_id.
+  optional HostInfo chrome_os_host = 1;
+
+  // The set of options for this Chrome OS session.
+  optional ChromeOsEnterpriseOptions chrome_os_enterprise_options = 2;
+}
 
 // Request host info for a specific support host instance.
 message GetSupportHostRequest {
@@ -37,6 +56,15 @@ message RegisterSupportHostRequest {
 
   // Operating system version of the host.
   optional string host_os_version = 6;
+
+  // The email address of the account which is authorized to connect to this
+  // host. Only authorized accounts can make a successful GetSupportHostRequest.
+  // If this field isn't set, then anyone can call GetSupportHost for this host.
+  optional string authorized_helper = 7;
+
+  // The set of options for a Chrome OS enterprise session. This field must not
+  // be set for any other session type or the request will fail.
+  optional ChromeOsEnterpriseOptions chrome_os_enterprise_options = 8;
 }
 
 // The response to a RegisterSupportHostRequest.

@@ -23,24 +23,15 @@ PermissionRequestID::PermissionRequestID(content::GlobalRenderFrameHostId id,
                                          RequestLocalId request_local_id)
     : global_render_frame_host_id_(id), request_local_id_(request_local_id) {}
 
-PermissionRequestID::~PermissionRequestID() {}
+PermissionRequestID::~PermissionRequestID() = default;
 
 PermissionRequestID::PermissionRequestID(const PermissionRequestID&) = default;
 PermissionRequestID& PermissionRequestID::operator=(
     const PermissionRequestID&) = default;
 
-bool PermissionRequestID::operator==(const PermissionRequestID& other) const {
-  return global_render_frame_host_id_ == other.global_render_frame_host_id_ &&
-         request_local_id_ == other.request_local_id_;
-}
-
-bool PermissionRequestID::operator!=(const PermissionRequestID& other) const {
-  return !operator==(other);
-}
-
 std::string PermissionRequestID::ToString() const {
   return base::StringPrintf(
-      "%d,%d,%" PRId64, global_render_frame_host_id_.child_id,
+      "%d,%d,%" PRId64, global_render_frame_host_id_.child_id.value(),
       global_render_frame_host_id_.frame_routing_id, request_local_id_.value());
 }
 

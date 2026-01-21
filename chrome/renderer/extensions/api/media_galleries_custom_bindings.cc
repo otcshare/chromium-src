@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "extensions/renderer/script_context.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "third_party/blink/public/platform/url_conversion.h"
@@ -51,11 +51,10 @@ void MediaGalleriesCustomBindings::GetMediaFileSystemObject(
   fs_name.append(fs_mount);
   const GURL root_url(
       storage::GetExternalFileSystemRootURIString(origin, fs_mount));
-  args.GetReturnValue().Set(
-      blink::WebDOMFileSystem::Create(
-          webframe, blink::kWebFileSystemTypeExternal,
-          blink::WebString::FromUTF8(fs_name), root_url)
-          .ToV8Value(context()->v8_context()->Global(), args.GetIsolate()));
+  args.GetReturnValue().Set(blink::WebDOMFileSystem::Create(
+                                webframe, blink::kWebFileSystemTypeExternal,
+                                blink::WebString::FromUTF8(fs_name), root_url)
+                                .ToV8Value(args.GetIsolate()));
 }
 
 }  // namespace extensions

@@ -10,18 +10,19 @@ import android.util.AttributeSet;
 import android.view.View;
 
 import androidx.appcompat.content.res.AppCompatResources;
+import androidx.core.widget.ImageViewCompat;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 
-/**
- * A phone specific version of the {@link FindToolbar}.
- */
+/** A phone specific version of the {@link FindToolbar}. */
+@NullMarked
 public class FindToolbarPhone extends FindToolbar {
     /**
      * Creates an instance of a {@link FindToolbarPhone}.
+     *
      * @param context The Context to create the {@link FindToolbarPhone} under.
      * @param attrs The AttributeSet used to create the {@link FindToolbarPhone}.
      */
@@ -46,9 +47,9 @@ public class FindToolbarPhone extends FindToolbar {
     protected void updateVisualsForTabModel(boolean isIncognito) {
         setBackgroundColor(ChromeColors.getDefaultThemeColor(getContext(), isIncognito));
         final ColorStateList color = ChromeColors.getPrimaryIconTint(getContext(), isIncognito);
-        ApiCompatibilityUtils.setImageTintList(mFindNextButton, color);
-        ApiCompatibilityUtils.setImageTintList(mFindPrevButton, color);
-        ApiCompatibilityUtils.setImageTintList(mCloseFindButton, color);
+        ImageViewCompat.setImageTintList(mFindNextButton, color);
+        ImageViewCompat.setImageTintList(mFindPrevButton, color);
+        ImageViewCompat.setImageTintList(mCloseFindButton, color);
 
         int queryTextColorId;
         int queryHintTextColorId;
@@ -59,7 +60,7 @@ public class FindToolbarPhone extends FindToolbar {
         } else {
             queryTextColorId = R.color.default_text_color_list;
             queryHintTextColorId = R.color.find_in_page_query_default_hint_color;
-            mDivider.setBackgroundColor(SemanticColorUtils.getDividerLineBgColor(getContext()));
+            mDivider.setBackgroundColor(SemanticColorUtils.getDividerColor(getContext()));
         }
         mFindQuery.setTextColor(
                 AppCompatResources.getColorStateList(getContext(), queryTextColorId));

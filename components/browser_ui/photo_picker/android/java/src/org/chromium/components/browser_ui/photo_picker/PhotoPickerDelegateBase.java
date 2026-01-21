@@ -4,23 +4,35 @@
 
 package org.chromium.components.browser_ui.photo_picker;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.PhotoPickerDelegate;
 
 /**
  * A shared base implementation of {@link PhotoPickerDelegate}.
  *
- * Routes video support queries to the feature flag.
+ * <p>Routes queries, of which flavor of the Media Picker to run, to the feature flag params.
  */
+@NullMarked
 public abstract class PhotoPickerDelegateBase implements PhotoPickerDelegate {
     protected PhotoPickerDelegateBase() {}
 
     @Override
-    public boolean supportsVideos() {
-        return PhotoPickerFeatures.PHOTO_PICKER_VIDEO_SUPPORT.isEnabled();
+    public boolean launchViaActionGetContent() {
+        return PhotoPickerFeatures.launchViaActionGetContent();
     }
 
     @Override
-    public boolean preferAndroidMediaPicker() {
-        return PhotoPickerFeatures.ANDROID_MEDIA_PICKER_SUPPORT.isEnabled();
+    public boolean launchViaActionPickImages() {
+        return PhotoPickerFeatures.launchViaActionPickImages();
+    }
+
+    @Override
+    public boolean launchViaActionPickImagesPlus() {
+        return PhotoPickerFeatures.launchViaActionPickImagesPlus();
+    }
+
+    @Override
+    public boolean launchRegularWithoutBrowse() {
+        return PhotoPickerFeatures.launchRegularWithoutBrowse();
     }
 }

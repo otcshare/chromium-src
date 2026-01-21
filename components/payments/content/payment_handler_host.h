@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -32,7 +32,7 @@ class PaymentHandlerHost : public mojom::PaymentHandlerHost {
   // merchant's renderer process.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     // Notifies the merchant that the payment method has changed. Returns
     // "false" if the state is invalid.

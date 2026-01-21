@@ -4,11 +4,14 @@
 
 #include "ash/system/unified/quick_settings_slider.h"
 
-#include "ash/constants/ash_features.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/style/color_util.h"
 #include "base/notreached.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "cc/paint/paint_flags.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
@@ -16,17 +19,14 @@
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/slider.h"
 
 namespace ash {
 
+using Style = QuickSettingsSlider::Style;
+
 namespace {
-
-// The thickness of the empty slider.
-constexpr int kEmptySliderThickness = 4;
-
-// The thickness of the full slider.
-constexpr int kFullSliderThickness = 32;
 
 // The radius used to draw the rounded empty slider ends.
 constexpr float kEmptySliderRoundedRadius = 2.f;
@@ -38,24 +38,42 @@ constexpr float kFullSliderWidth = 2 * kFullSliderRoundedRadius;
 
 // The radius used to draw the rounded corner for active/inactive slider on the
 // audio subpage.
-constexpr float kActiveRadioSliderRoundedRadius = 16.f;
-// TODO(b/256705775): Replace the actual radius value once the spec is updated.
+constexpr float kActiveRadioSliderRoundedRadius = 18.f;
 constexpr float kInactiveRadioSliderRoundedRadius = 8.f;
+constexpr float kRadioSliderWidth = 2 * kActiveRadioSliderRoundedRadius;
 
-// TODO(b/256705775): Replace the value once the spec is updated.
 // The thickness of the focus ring border.
 constexpr int kLineThickness = 2;
 // The gap between the focus ring and the slider.
 constexpr int kFocusOffset = 2;
 
-float GetSliderRoundedCornerRadius(QuickSettingsSlider::Style slider_style) {
+// The offset for the slider top padding.
+constexpr int kTopPaddingOffset = 4;
+
+float GetSliderRoundedCornerRadius(Style slider_style) {
   switch (slider_style) {
-    case QuickSettingsSlider::Style::kDefault:
+    case Style::kDefault:
+    case Style::kDefaultMuted:
       return kFullSliderRoundedRadius;
-    case QuickSettingsSlider::Style::kRadioActive:
+    case Style::kRadioActive:
+    case Style::kRadioActiveMuted:
       return kActiveRadioSliderRoundedRadius;
-    case QuickSettingsSlider::Style::kRadioInactive:
+    case Style::kRadioInactive:
       return kInactiveRadioSliderRoundedRadius;
+    default:
+      NOTREACHED();
+  }
+}
+
+float GetSliderWidth(Style slider_style) {
+  switch (slider_style) {
+    case Style::kDefault:
+    case Style::kDefaultMuted:
+      return kFullSliderWidth;
+    case Style::kRadioActive:
+    case Style::kRadioActiveMuted:
+    case Style::kRadioInactive:
+      return kRadioSliderWidth;
     default:
       NOTREACHED();
   }
@@ -66,13 +84,22 @@ float GetSliderRoundedCornerRadius(QuickSettingsSlider::Style slider_style) {
 QuickSettingsSlider::QuickSettingsSlider(views::SliderListener* listener,
                                          Style slider_style)
     : views::Slider(listener), slider_style_(slider_style) {
-  if (!features::IsQsRevampEnabled())
-    return;
   SetValueIndicatorRadius(kFullSliderRoundedRadius);
   SetFocusBehavior(FocusBehavior::ALWAYS);
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kSlider);
+  GetViewAccessibility().AddAction(ax::mojom::Action::kIncrement);
+  GetViewAccessibility().AddAction(ax::mojom::Action::kDecrement);
 }
 
 QuickSettingsSlider::~QuickSettingsSlider() = default;
+
+// By not calling the superclass's AddedToWidget, the QuickSettingsSlider
+// ensures that only its own custom behavior is executed, avoiding any
+// redundant accessibility events getting triggered.
+void QuickSettingsSlider::AddedToWidget() {
+  UpdateAccessibleValue();
+}
 
 void QuickSettingsSlider::SetSliderStyle(Style style) {
   if (slider_style_ == style)
@@ -83,38 +110,66 @@ void QuickSettingsSlider::SetSliderStyle(Style style) {
   if (slider_style_ == Style::kRadioInactive)
     SetFocusBehavior(FocusBehavior::NEVER);
 
+  UpdateAccessibleValue();
   SchedulePaint();
 }
 
-SkColor QuickSettingsSlider::GetThumbColor() const {
-  // TODO(b/256705775): Updates the color when QsRevamp is disabled but Jelly is
-  // enabled.
-  if (!features::IsQsRevampEnabled()) {
-    using Type = AshColorProvider::ContentLayerType;
-    return AshColorProvider::Get()->GetContentLayerColor(
-        (style() == RenderingStyle::kMinimalStyle) ? Type::kSliderColorInactive
-                                                   : Type::kSliderColorActive);
-  }
+gfx::Rect QuickSettingsSlider::GetInactiveRadioSliderRect() {
+  const gfx::Rect content = GetContentsBounds();
+  return gfx::Rect(content.x() - kFocusOffset,
+                   content.height() / 2 - kRadioSliderWidth / 2 - kFocusOffset +
+                       kTopPaddingOffset,
+                   content.width() + 2 * kFocusOffset,
+                   kRadioSliderWidth + 2 * kFocusOffset);
+}
 
+int QuickSettingsSlider::GetInactiveRadioSliderRoundedCornerRadius() {
+  return kInactiveRadioSliderRoundedRadius + kFocusOffset;
+}
+
+void QuickSettingsSlider::UpdateAccessibleValue() {
+  std::u16string volume_level = base::UTF8ToUTF16(
+      base::StringPrintf("%d%%", static_cast<int>(GetValue() * 100 + 0.5)));
+  views::ScopedAccessibilityEventBlocker scoped_event_blocker(
+      GetViewAccessibility());
+  if (is_toggleable_volume_slider_) {
+    std::u16string message = l10n_util::GetStringFUTF16(
+        slider_style_ == Style::kDefaultMuted
+            ? IDS_ASH_STATUS_TRAY_VOLUME_SLIDER_MUTED_ACCESSIBILITY_ANNOUNCEMENT
+            : IDS_ASH_STATUS_TRAY_VOLUME_SLIDER_ACCESSIBILITY_ANNOUNCEMENT,
+        volume_level);
+
+    GetViewAccessibility().SetValue(message);
+  } else {
+    GetViewAccessibility().SetValue(volume_level);
+  }
+}
+
+void QuickSettingsSlider::SetIsToggleableVolumeSlider(
+    bool is_toggleable_volume_slider) {
+  is_toggleable_volume_slider_ = is_toggleable_volume_slider;
+  UpdateAccessibleValue();
+}
+
+SkColor QuickSettingsSlider::GetThumbColor() const {
   switch (slider_style_) {
     case Style::kDefault:
     case Style::kRadioActive:
       return GetColorProvider()->GetColor(static_cast<ui::ColorId>(
           cros_tokens::kCrosSysSystemPrimaryContainer));
+    case Style::kDefaultMuted:
+      return GetColorProvider()->GetColor(
+          static_cast<ui::ColorId>(cros_tokens::kCrosSysDisabledOpaque));
+    case Style::kRadioActiveMuted:
     case Style::kRadioInactive:
       return GetColorProvider()->GetColor(
-          static_cast<ui::ColorId>(cros_tokens::kCrosSysDisabled));
+          static_cast<ui::ColorId>(cros_tokens::kCrosSysDisabledContainer));
     default:
       NOTREACHED();
   }
 }
 
 SkColor QuickSettingsSlider::GetTroughColor() const {
-  // TODO(b/256705775): Updates the color when QsRevamp is disabled but Jelly is
-  // enabled.
-  if (!features::IsQsRevampEnabled())
-    return ColorUtil::GetSecondToneColor(GetThumbColor());
-
   switch (slider_style_) {
     case Style::kDefault:
       return GetColorProvider()->GetColor(
@@ -122,47 +177,46 @@ SkColor QuickSettingsSlider::GetTroughColor() const {
     case Style::kRadioActive:
       return GetColorProvider()->GetColor(
           static_cast<ui::ColorId>(cros_tokens::kCrosSysHighlightShape));
+    case Style::kDefaultMuted:
+    case Style::kRadioActiveMuted:
     case Style::kRadioInactive:
       return GetColorProvider()->GetColor(
-          static_cast<ui::ColorId>(cros_tokens::kCrosSysDisabled));
+          static_cast<ui::ColorId>(cros_tokens::kCrosSysDisabledContainer));
     default:
       NOTREACHED();
   }
 }
 
 void QuickSettingsSlider::OnPaint(gfx::Canvas* canvas) {
-  // Paints the `QuickSettingsSlider`. If the feature is not enabled, use
-  // `Slider::OnPaint()`.
-  if (!ash::features::IsQsRevampEnabled()) {
-    views::Slider::OnPaint(canvas);
-    return;
-  }
-
   const gfx::Rect content = GetContentsBounds();
-  const int width = content.width() - kFullSliderWidth;
-  const int full_width = GetAnimatingValue() * width + kFullSliderWidth;
+  const float slider_width = GetSliderWidth(slider_style_);
+  const float slider_radius = GetSliderRoundedCornerRadius(slider_style_);
+  const int width = content.width() - slider_width;
+  const int full_width = GetAnimatingValue() * width + slider_width;
   const int x = content.x();
-  const int y = content.height() / 2 - kFullSliderThickness / 2;
+  const int y = content.height() / 2 - slider_width / 2 + kTopPaddingOffset;
 
   gfx::Rect empty_slider_rect;
   float empty_slider_radius;
   switch (slider_style_) {
-    case Style::kDefault: {
+    case Style::kDefault:
+    case Style::kDefaultMuted: {
       const int empty_width =
           width + kFullSliderRoundedRadius - full_width + kEmptySliderWidth;
       const int x_empty = x + full_width - kEmptySliderRoundedRadius;
-      const int y_empty = content.height() / 2 - kEmptySliderThickness / 2;
+      const int y_empty =
+          content.height() / 2 - kEmptySliderWidth / 2 + kTopPaddingOffset;
 
       empty_slider_rect =
-          gfx::Rect(x_empty, y_empty, empty_width, kEmptySliderThickness);
+          gfx::Rect(x_empty, y_empty, empty_width, kEmptySliderWidth);
       empty_slider_radius = kEmptySliderRoundedRadius;
       break;
     }
     case Style::kRadioActive:
+    case Style::kRadioActiveMuted:
     case Style::kRadioInactive: {
-      empty_slider_rect =
-          gfx::Rect(x, y, content.width(), kFullSliderThickness);
-      empty_slider_radius = GetSliderRoundedCornerRadius(slider_style_);
+      empty_slider_rect = gfx::Rect(x, y, content.width(), kRadioSliderWidth);
+      empty_slider_radius = slider_radius;
       break;
     }
     default:
@@ -176,9 +230,8 @@ void QuickSettingsSlider::OnPaint(gfx::Canvas* canvas) {
   canvas->DrawRoundRect(empty_slider_rect, empty_slider_radius, slider_flags);
 
   slider_flags.setColor(GetThumbColor());
-  canvas->DrawRoundRect(gfx::Rect(x, y, full_width, kFullSliderThickness),
-                        GetSliderRoundedCornerRadius(slider_style_),
-                        slider_flags);
+  canvas->DrawRoundRect(gfx::Rect(x, y, full_width, slider_width),
+                        slider_radius, slider_flags);
 
   // Paints the focusing ring for the slider. It should be painted last to be
   // on the top.
@@ -191,10 +244,17 @@ void QuickSettingsSlider::OnPaint(gfx::Canvas* canvas) {
     highlight_border.setStrokeWidth(kLineThickness);
     canvas->DrawRoundRect(gfx::Rect(x - kFocusOffset, y - kFocusOffset,
                                     full_width + 2 * kFocusOffset,
-                                    kFullSliderThickness + 2 * kFocusOffset),
-                          kFullSliderRoundedRadius + kFocusOffset,
-                          highlight_border);
+                                    slider_width + 2 * kFocusOffset),
+                          slider_radius + kFocusOffset, highlight_border);
   }
+}
+
+void QuickSettingsSlider::OnThemeChanged() {
+  views::View::OnThemeChanged();
+
+  // Signals that this view needs to be repainted since `GetColorProvider()` is
+  // called in `OnPaint()` and the views system won't know about it.
+  SchedulePaint();
 }
 
 ReadOnlySlider::ReadOnlySlider(Style slider_style)
@@ -206,10 +266,10 @@ bool ReadOnlySlider::CanAcceptEvent(const ui::Event& event) {
   return false;
 }
 
-BEGIN_METADATA(QuickSettingsSlider, views::View)
+BEGIN_METADATA(QuickSettingsSlider)
 END_METADATA
 
-BEGIN_METADATA(ReadOnlySlider, views::View)
+BEGIN_METADATA(ReadOnlySlider)
 END_METADATA
 
 }  // namespace ash

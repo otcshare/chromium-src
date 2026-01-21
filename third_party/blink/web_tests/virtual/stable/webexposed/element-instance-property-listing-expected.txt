@@ -29,6 +29,7 @@ namespace http://www.w3.org/1999/xhtml
     property animate
     property append
     property appendChild
+    property ariaActiveDescendantElement
     property ariaAtomic
     property ariaAutoComplete
     property ariaBrailleLabel
@@ -37,21 +38,29 @@ namespace http://www.w3.org/1999/xhtml
     property ariaChecked
     property ariaColCount
     property ariaColIndex
+    property ariaColIndexText
     property ariaColSpan
+    property ariaControlsElements
     property ariaCurrent
+    property ariaDescribedByElements
     property ariaDescription
+    property ariaDetailsElements
     property ariaDisabled
+    property ariaErrorMessageElements
     property ariaExpanded
+    property ariaFlowToElements
     property ariaHasPopup
     property ariaHidden
     property ariaInvalid
     property ariaKeyShortcuts
     property ariaLabel
+    property ariaLabelledByElements
     property ariaLevel
     property ariaLive
     property ariaModal
     property ariaMultiLine
     property ariaMultiSelectable
+    property ariaNotify
     property ariaOrientation
     property ariaPlaceholder
     property ariaPosInSet
@@ -62,6 +71,7 @@ namespace http://www.w3.org/1999/xhtml
     property ariaRoleDescription
     property ariaRowCount
     property ariaRowIndex
+    property ariaRowIndexText
     property ariaRowSpan
     property ariaSelected
     property ariaSetSize
@@ -97,10 +107,12 @@ namespace http://www.w3.org/1999/xhtml
     property computedStyleMap
     property contains
     property contentEditable
+    property currentCSSZoom
     property dataset
     property dir
     property dispatchEvent
     property draggable
+    property editContext
     property elementTiming
     property enterKeyHint
     property firstChild
@@ -117,7 +129,7 @@ namespace http://www.w3.org/1999/xhtml
     property getElementsByClassName
     property getElementsByTagName
     property getElementsByTagNameNS
-    property getInnerHTML
+    property getHTML
     property getRootNode
     property hasAttribute
     property hasAttributeNS
@@ -125,6 +137,7 @@ namespace http://www.w3.org/1999/xhtml
     property hasChildNodes
     property hasPointerCapture
     property hidden
+    property hidePopover
     property id
     property inert
     property innerHTML
@@ -146,6 +159,7 @@ namespace http://www.w3.org/1999/xhtml
     property lookupNamespaceURI
     property lookupPrefix
     property matches
+    property moveBefore
     property namespaceURI
     property nextElementSibling
     property nextSibling
@@ -160,6 +174,7 @@ namespace http://www.w3.org/1999/xhtml
     property offsetTop
     property offsetWidth
     property onabort
+    property onanimationcancel
     property onanimationend
     property onanimationiteration
     property onanimationstart
@@ -169,6 +184,7 @@ namespace http://www.w3.org/1999/xhtml
     property onbeforeinput
     property onbeforematch
     property onbeforepaste
+    property onbeforetoggle
     property onbeforexrselect
     property onblur
     property oncancel
@@ -177,6 +193,7 @@ namespace http://www.w3.org/1999/xhtml
     property onchange
     property onclick
     property onclose
+    property oncommand
     property oncontentvisibilityautostatechange
     property oncontextlost
     property oncontextmenu
@@ -237,6 +254,9 @@ namespace http://www.w3.org/1999/xhtml
     property onreset
     property onresize
     property onscroll
+    property onscrollend
+    property onscrollsnapchange
+    property onscrollsnapchanging
     property onsearch
     property onsecuritypolicyviolation
     property onseeked
@@ -273,6 +293,7 @@ namespace http://www.w3.org/1999/xhtml
     property parentElement
     property parentNode
     property part
+    property popover
     property prefix
     property prepend
     property previousElementSibling
@@ -306,8 +327,10 @@ namespace http://www.w3.org/1999/xhtml
     property setAttributeNode
     property setAttributeNodeNS
     property setHTML
+    property setHTMLUnsafe
     property setPointerCapture
     property shadowRoot
+    property showPopover
     property slot
     property spellcheck
     property style
@@ -317,12 +340,16 @@ namespace http://www.w3.org/1999/xhtml
     property title
     property toString
     property toggleAttribute
+    property togglePopover
     property translate
     property virtualKeyboardPolicy
     property webkitMatchesSelector
     property webkitRequestFullScreen
     property webkitRequestFullscreen
+    property when
+    property writingSuggestions
 html element a
+    property attributionSrc
     property charset
     property coords
     property download
@@ -332,6 +359,7 @@ html element a
     property href
     property hrefTranslate
     property hreflang
+    property interestForElement
     property name
     property origin
     property password
@@ -354,12 +382,14 @@ html element acronym
 html element address
 html element area
     property alt
+    property attributionSrc
     property coords
     property download
     property hash
     property host
     property hostname
     property href
+    property interestForElement
     property noHref
     property origin
     property password
@@ -447,6 +477,8 @@ html element body
     property onafterprint
     property onbeforeprint
     property onbeforeunload
+    property ongamepadconnected
+    property ongamepaddisconnected
     property onhashchange
     property onlanguagechange
     property onmessage
@@ -466,6 +498,8 @@ html element br
     property clear
 html element button
     property checkValidity
+    property command
+    property commandForElement
     property disabled
     property form
     property formAction
@@ -473,8 +507,11 @@ html element button
     property formMethod
     property formNoValidate
     property formTarget
+    property interestForElement
     property labels
     property name
+    property popoverTargetAction
+    property popoverTargetElement
     property reportValidity
     property setCustomValidity
     property type
@@ -518,11 +555,14 @@ html element del
     property cite
     property dateTime
 html element details
+    property name
     property open
 html element dfn
 html element dialog
     property close
+    property closedBy
     property open
+    property requestClose
     property returnValue
     property show
     property showModal
@@ -541,6 +581,12 @@ html element embed
     property name
     property src
     property type
+    property width
+html element fencedframe
+    property allow
+    property config
+    property height
+    property sandbox
     property width
 html element fieldset
     property checkValidity
@@ -596,6 +642,8 @@ html element frameset
     property onafterprint
     property onbeforeprint
     property onbeforeunload
+    property ongamepadconnected
+    property ongamepaddisconnected
     property onhashchange
     property onlanguagechange
     property onmessage
@@ -610,6 +658,20 @@ html element frameset
     property onunhandledrejection
     property onunload
     property rows
+html element geolocation
+    property accuracymode
+    property autolocate
+    property error
+    property initialPermissionStatus
+    property invalidReason
+    property isValid
+    property onlocation
+    property onpromptaction
+    property onpromptdismiss
+    property onvalidationstatuschange
+    property permissionStatus
+    property position
+    property watch
 html element h1
     property align
 html element h2
@@ -635,10 +697,12 @@ html element html
     property version
 html element i
 html element iframe
+    property adAuctionHeaders
     property align
     property allow
     property allowFullscreen
     property allowPaymentRequest
+    property browsingTopics
     property contentDocument
     property contentWindow
     property credentialless
@@ -652,16 +716,20 @@ html element iframe
     property marginHeight
     property marginWidth
     property name
+    property privateToken
     property referrerPolicy
     property sandbox
     property scrolling
+    property sharedStorageWritable
     property src
     property srcdoc
     property width
 html element img
     property align
     property alt
+    property attributionSrc
     property border
+    property browsingTopics
     property complete
     property crossOrigin
     property currentSrc
@@ -678,6 +746,7 @@ html element img
     property naturalHeight
     property naturalWidth
     property referrerPolicy
+    property sharedStorageWritable
     property sizes
     property src
     property srcset
@@ -717,6 +786,8 @@ html element input
     property name
     property pattern
     property placeholder
+    property popoverTargetAction
+    property popoverTargetElement
     property readOnly
     property reportValidity
     property required
@@ -908,6 +979,7 @@ html element s
 html element samp
 html element script
     property async
+    property attributionSrc
     property blocking
     property charset
     property crossOrigin
@@ -921,6 +993,7 @@ html element script
     property src
     property text
     property type
+html element search
 html element section
 html element select
     property add
@@ -940,12 +1013,14 @@ html element select
     property selectedIndex
     property selectedOptions
     property setCustomValidity
+    property showPicker
     property size
     property type
     property validationMessage
     property validity
     property value
     property willValidate
+html element selectedcontent
 html element slot
     property assign
     property assignedElements
@@ -1022,6 +1097,10 @@ html element td
     property width
 html element template
     property content
+    property shadowRootClonable
+    property shadowRootDelegatesFocus
+    property shadowRootMode
+    property shadowRootSerializable
 html element textarea
     property autocomplete
     property checkValidity
@@ -1183,13 +1262,7 @@ html element video
     property volume
     property webkitAudioDecodedByteCount
     property webkitDecodedFrameCount
-    property webkitDisplayingFullscreen
     property webkitDroppedFrameCount
-    property webkitEnterFullScreen
-    property webkitEnterFullscreen
-    property webkitExitFullScreen
-    property webkitExitFullscreen
-    property webkitSupportsFullscreen
     property webkitVideoDecodedByteCount
     property width
 html element wbr
@@ -1221,6 +1294,7 @@ namespace http://www.w3.org/2000/svg
     property animate
     property append
     property appendChild
+    property ariaActiveDescendantElement
     property ariaAtomic
     property ariaAutoComplete
     property ariaBrailleLabel
@@ -1229,21 +1303,29 @@ namespace http://www.w3.org/2000/svg
     property ariaChecked
     property ariaColCount
     property ariaColIndex
+    property ariaColIndexText
     property ariaColSpan
+    property ariaControlsElements
     property ariaCurrent
+    property ariaDescribedByElements
     property ariaDescription
+    property ariaDetailsElements
     property ariaDisabled
+    property ariaErrorMessageElements
     property ariaExpanded
+    property ariaFlowToElements
     property ariaHasPopup
     property ariaHidden
     property ariaInvalid
     property ariaKeyShortcuts
     property ariaLabel
+    property ariaLabelledByElements
     property ariaLevel
     property ariaLive
     property ariaModal
     property ariaMultiLine
     property ariaMultiSelectable
+    property ariaNotify
     property ariaOrientation
     property ariaPlaceholder
     property ariaPosInSet
@@ -1254,6 +1336,7 @@ namespace http://www.w3.org/2000/svg
     property ariaRoleDescription
     property ariaRowCount
     property ariaRowIndex
+    property ariaRowIndexText
     property ariaRowSpan
     property ariaSelected
     property ariaSetSize
@@ -1285,6 +1368,7 @@ namespace http://www.w3.org/2000/svg
     property compareDocumentPosition
     property computedStyleMap
     property contains
+    property currentCSSZoom
     property dataset
     property dispatchEvent
     property elementTiming
@@ -1302,7 +1386,7 @@ namespace http://www.w3.org/2000/svg
     property getElementsByClassName
     property getElementsByTagName
     property getElementsByTagNameNS
-    property getInnerHTML
+    property getHTML
     property getRootNode
     property hasAttribute
     property hasAttributeNS
@@ -1325,6 +1409,7 @@ namespace http://www.w3.org/2000/svg
     property lookupNamespaceURI
     property lookupPrefix
     property matches
+    property moveBefore
     property namespaceURI
     property nextElementSibling
     property nextSibling
@@ -1334,6 +1419,7 @@ namespace http://www.w3.org/2000/svg
     property nonce
     property normalize
     property onabort
+    property onanimationcancel
     property onanimationend
     property onanimationiteration
     property onanimationstart
@@ -1343,6 +1429,7 @@ namespace http://www.w3.org/2000/svg
     property onbeforeinput
     property onbeforematch
     property onbeforepaste
+    property onbeforetoggle
     property onbeforexrselect
     property onblur
     property oncancel
@@ -1351,6 +1438,7 @@ namespace http://www.w3.org/2000/svg
     property onchange
     property onclick
     property onclose
+    property oncommand
     property oncontentvisibilityautostatechange
     property oncontextlost
     property oncontextmenu
@@ -1411,6 +1499,9 @@ namespace http://www.w3.org/2000/svg
     property onreset
     property onresize
     property onscroll
+    property onscrollend
+    property onscrollsnapchange
+    property onscrollsnapchanging
     property onsearch
     property onsecuritypolicyviolation
     property onseeked
@@ -1480,6 +1571,7 @@ namespace http://www.w3.org/2000/svg
     property setAttributeNode
     property setAttributeNodeNS
     property setHTML
+    property setHTMLUnsafe
     property setPointerCapture
     property shadowRoot
     property slot
@@ -1492,17 +1584,26 @@ namespace http://www.w3.org/2000/svg
     property webkitMatchesSelector
     property webkitRequestFullScreen
     property webkitRequestFullscreen
+    property when
 svg element a
+    property download
     property farthestViewportElement
     property getBBox
     property getCTM
     property getScreenCTM
     property href
+    property hreflang
+    property interestForElement
     property nearestViewportElement
+    property ping
+    property referrerPolicy
+    property rel
+    property relList
     property requiredExtensions
     property systemLanguage
     property target
     property transform
+    property type
 svg element animate
     property beginElement
     property beginElementAt
@@ -1565,13 +1666,6 @@ svg element circle
     property transform
 svg element clipPath
     property clipPathUnits
-    property farthestViewportElement
-    property getBBox
-    property getCTM
-    property getScreenCTM
-    property nearestViewportElement
-    property requiredExtensions
-    property systemLanguage
     property transform
 svg element defs
     property farthestViewportElement
@@ -1923,6 +2017,7 @@ svg element g
     property systemLanguage
     property transform
 svg element image
+    property crossOrigin
     property decode
     property decoding
     property farthestViewportElement
@@ -2095,6 +2190,7 @@ svg element rect
     property x
     property y
 svg element script
+    property async
     property href
     property type
 svg element set
@@ -2173,7 +2269,15 @@ svg element switch
     property systemLanguage
     property transform
 svg element symbol
+    property farthestViewportElement
+    property getBBox
+    property getCTM
+    property getScreenCTM
+    property nearestViewportElement
     property preserveAspectRatio
+    property requiredExtensions
+    property systemLanguage
+    property transform
     property viewBox
 svg element text
     property LENGTHADJUST_SPACING

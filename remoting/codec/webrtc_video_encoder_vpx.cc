@@ -7,14 +7,13 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "remoting/base/cpu_utils.h"
 #include "remoting/base/util.h"
 #include "remoting/codec/utils.h"
@@ -57,7 +56,7 @@ void SetCommonCodecParameters(vpx_codec_enc_cfg_t* config,
                               const webrtc::DesktopSize& size) {
   // Use millisecond granularity time base.
   config->g_timebase.num = 1;
-  config->g_timebase.den = base::Time::kMicrosecondsPerSecond;
+  config->g_timebase.den = base::Time::kMillisecondsPerSecond;
 
   config->g_w = size.width();
   config->g_h = size.height();
@@ -89,7 +88,7 @@ void SetVp8CodecParameters(vpx_codec_enc_cfg_t* config,
                            const webrtc::DesktopSize& size) {
   SetCommonCodecParameters(config, size);
 
-#if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
   // On Linux, using too many threads for VP8 encoding has been linked to high
   // CPU usage on machines that are under stress. See http://crbug.com/1151148.
   // 5/3/2022 update: Perf testing has shown that doubling the number of threads
@@ -100,7 +99,7 @@ void SetVp8CodecParameters(vpx_codec_enc_cfg_t* config,
   // and leave plenty of cores for the non-remoting workload.
   uint threshold = config->g_threads >= 16 ? 4U : 2U;
   config->g_threads = std::min(config->g_threads, threshold);
-#endif  // BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_LINUX)
 
   // Value of 2 means using the real time profile. This is basically a
   // redundant option since we explicitly select real time mode when doing
@@ -186,8 +185,9 @@ void WebrtcVideoEncoderVpx::SetTickClockForTests(
 }
 
 void WebrtcVideoEncoderVpx::SetLosslessColor(bool want_lossless) {
-  if (!use_vp9_)
+  if (!use_vp9_) {
     return;
+  }
 
   if (want_lossless != lossless_color_) {
     lossless_color_ = want_lossless;
@@ -201,11 +201,17 @@ void WebrtcVideoEncoderVpx::SetLosslessColor(bool want_lossless) {
 }
 
 void WebrtcVideoEncoderVpx::SetEncoderSpeed(int encoder_speed) {
-  if (!use_vp9_)
+  if (!use_vp9_) {
     return;
+  }
 
-  vp9_encoder_speed_ = base::clamp<int>(encoder_speed, kVp9LosslessEncodeSpeed,
-                                        kVp9MaxEncoderSpeed);
+  int clamped_speed = std::clamp<int>(encoder_speed, kVp9LosslessEncodeSpeed,
+                                      kVp9MaxEncoderSpeed);
+  if (vp9_encoder_speed_ != clamped_speed) {
+    VLOG(0) << "Setting VP9 encoder speed to " << clamped_speed;
+    vp9_encoder_speed_ = clamped_speed;
+    codec_.reset();
+  }
 }
 
 void WebrtcVideoEncoderVpx::Encode(std::unique_ptr<webrtc::DesktopFrame> frame,
@@ -242,21 +248,17 @@ void WebrtcVideoEncoderVpx::Encode(std::unique_ptr<webrtc::DesktopFrame> frame,
   // Convert the updated capture data ready for encode.
   PrepareImage(frame.get(), &updated_region);
 
-  vpx_active_map_t act_map;
   if (use_active_map_) {
-    if (params.clear_active_map)
-      active_map_.Clear();
+    if (params.clear_active_map || params.key_frame) {
+      active_map_data_.Clear();
+    }
 
-    if (params.key_frame)
-      updated_region.SetRect(webrtc::DesktopRect::MakeSize(frame_size));
-
-    active_map_.Update(updated_region);
-
-    act_map.rows = active_map_.height();
-    act_map.cols = active_map_.width();
-    act_map.active_map = active_map_.data();
-    if (vpx_codec_control(codec_.get(), VP8E_SET_ACTIVEMAP, &act_map)) {
-      LOG(ERROR) << "Unable to apply active map";
+    // VPX codecs do not use an active map for keyframes so skip in that case.
+    if (!params.key_frame) {
+      active_map_data_.Update(updated_region);
+      if (vpx_codec_control(codec_.get(), VP8E_SET_ACTIVEMAP, &active_map_)) {
+        LOG(ERROR) << "Unable to apply active map";
+      }
     }
   }
 
@@ -271,16 +273,6 @@ void WebrtcVideoEncoderVpx::Encode(std::unique_ptr<webrtc::DesktopFrame> frame,
     // TODO(zijiehe): A more exact error type is preferred.
     std::move(done).Run(EncodeResult::UNKNOWN_ERROR, nullptr);
     return;
-  }
-
-  if (use_active_map_) {
-    // VP8 doesn't return an active map so we assume it hasn't changed.
-    if (use_vp9_) {
-      ret = vpx_codec_control(codec_.get(), VP9E_GET_ACTIVEMAP, &act_map);
-      DCHECK_EQ(ret, VPX_CODEC_OK)
-          << "Failed to fetch active map: " << vpx_codec_err_to_string(ret)
-          << "\n";
-    }
   }
 
   // Read the encoded data.
@@ -308,8 +300,9 @@ void WebrtcVideoEncoderVpx::Encode(std::unique_ptr<webrtc::DesktopFrame> frame,
   while (!got_data) {
     const vpx_codec_cx_pkt_t* vpx_packet =
         vpx_codec_get_cx_data(codec_.get(), &iter);
-    if (!vpx_packet)
+    if (!vpx_packet) {
       continue;
+    }
 
     switch (vpx_packet->kind) {
       case VPX_CODEC_CX_FRAME_PKT: {
@@ -366,7 +359,12 @@ void WebrtcVideoEncoderVpx::Configure(const webrtc::DesktopSize& size) {
   }
 
   if (use_active_map_) {
-    active_map_.Initialize(size);
+    active_map_data_.Initialize(size);
+    active_map_ = {
+        .active_map = active_map_data_.data(),
+        .rows = active_map_data_.height(),
+        .cols = active_map_data_.width(),
+    };
   }
 
   // Fetch a default configuration for the desired codec.
@@ -404,8 +402,9 @@ void WebrtcVideoEncoderVpx::Configure(const webrtc::DesktopSize& size) {
 
 void WebrtcVideoEncoderVpx::UpdateConfig(const FrameParams& params) {
   // Configuration not initialized.
-  if (config_.g_timebase.den == 0)
+  if (config_.g_timebase.den == 0) {
     return;
+  }
 
   bool changed = false;
 
@@ -432,13 +431,14 @@ void WebrtcVideoEncoderVpx::UpdateConfig(const FrameParams& params) {
     changed = true;
   }
 
-  if (!changed)
+  if (!changed) {
     return;
+  }
 
   // Update encoder context.
-  if (vpx_codec_enc_config_set(codec_.get(), &config_))
+  if (vpx_codec_enc_config_set(codec_.get(), &config_)) {
     NOTREACHED() << "Unable to set encoder config";
-
+  }
 }
 
 void WebrtcVideoEncoderVpx::PrepareImage(
@@ -474,7 +474,7 @@ void WebrtcVideoEncoderVpx::PrepareImage(
     updated_region->IntersectWith(
         webrtc::DesktopRect::MakeWH(image_->d_w, image_->d_h));
   } else {
-    vpx_img_fmt_t fmt = lossless_color_ ? VPX_IMG_FMT_I444 : VPX_IMG_FMT_YV12;
+    vpx_img_fmt_t fmt = lossless_color_ ? VPX_IMG_FMT_I444 : VPX_IMG_FMT_I420;
     image_.reset(vpx_img_alloc(nullptr, fmt, frame->size().width(),
                                frame->size().height(),
                                GetSimdMemoryAlignment()));
@@ -484,6 +484,7 @@ void WebrtcVideoEncoderVpx::PrepareImage(
 
   // Convert the updated region to YUV ready for encoding.
   const uint8_t* rgb_data = frame->data();
+  CHECK_EQ(frame->pixel_format(), webrtc::FOURCC_ARGB);
   const int rgb_stride = frame->stride();
   const int y_stride = image_->stride[0];
   DCHECK_EQ(image_->stride[1], image_->stride[2]);
@@ -500,13 +501,14 @@ void WebrtcVideoEncoderVpx::PrepareImage(
         int rgb_offset =
             rgb_stride * rect.top() + rect.left() * kBytesPerRgbPixel;
         int yuv_offset = uv_stride * rect.top() + rect.left();
-        libyuv::ARGBToI444(rgb_data + rgb_offset, rgb_stride,
-                           y_data + yuv_offset, y_stride, u_data + yuv_offset,
-                           uv_stride, v_data + yuv_offset, uv_stride,
+        libyuv::ARGBToI444(UNSAFE_TODO(rgb_data + rgb_offset), rgb_stride,
+                           UNSAFE_TODO(y_data + yuv_offset), y_stride,
+                           UNSAFE_TODO(u_data + yuv_offset), uv_stride,
+                           UNSAFE_TODO(v_data + yuv_offset), uv_stride,
                            rect.width(), rect.height());
       }
       break;
-    case VPX_IMG_FMT_YV12:
+    case VPX_IMG_FMT_I420:
       for (webrtc::DesktopRegion::Iterator r(*updated_region); !r.IsAtEnd();
            r.Advance()) {
         webrtc::DesktopRect rect = GetRowAlignedRect(r.rect(), image_->d_w);
@@ -514,15 +516,15 @@ void WebrtcVideoEncoderVpx::PrepareImage(
             rgb_stride * rect.top() + rect.left() * kBytesPerRgbPixel;
         int y_offset = y_stride * rect.top() + rect.left();
         int uv_offset = uv_stride * rect.top() / 2 + rect.left() / 2;
-        libyuv::ARGBToI420(rgb_data + rgb_offset, rgb_stride, y_data + y_offset,
-                           y_stride, u_data + uv_offset, uv_stride,
-                           v_data + uv_offset, uv_stride, rect.width(),
-                           rect.height());
+        libyuv::ARGBToI420(UNSAFE_TODO(rgb_data + rgb_offset), rgb_stride,
+                           UNSAFE_TODO(y_data + y_offset), y_stride,
+                           UNSAFE_TODO(u_data + uv_offset), uv_stride,
+                           UNSAFE_TODO(v_data + uv_offset), uv_stride,
+                           rect.width(), rect.height());
       }
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 

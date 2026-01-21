@@ -13,11 +13,13 @@ import androidx.test.uiautomator.UiObject2;
 
 import org.junit.Before;
 import org.junit.FixMethodOrder;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -26,54 +28,39 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Tests for PathUi2Locator
- */
+/** Tests for PathUi2Locator */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class PathUi2LocatorTest {
-    @Mock
-    private IUi2Locator mLocator0;
+    @Mock private IUi2Locator mLocator0;
 
-    @Mock
-    private IUi2Locator mLocator1;
+    @Mock private IUi2Locator mLocator1;
 
-    @Mock
-    private IUi2Locator mLocator3;
+    @Mock private IUi2Locator mLocator3;
 
-    @Mock
-    private IUi2Locator mLocator4;
+    @Mock private IUi2Locator mLocator4;
 
-    @Mock
-    private UiObject2 mRoot;
+    @Mock private UiObject2 mRoot;
 
-    @Mock
-    private UiObject2 mLocator0Result;
+    @Mock private UiObject2 mLocator0Result;
 
-    @Mock
-    private UiObject2 mLocator1Result;
+    @Mock private UiObject2 mLocator1Result;
 
-    @Mock
-    private UiObject2 mResult30;
+    @Mock private UiObject2 mResult30;
 
-    @Mock
-    private UiObject2 mResult31;
+    @Mock private UiObject2 mResult31;
 
-    @Mock
-    private UiObject2 mResult400;
+    @Mock private UiObject2 mResult400;
 
-    @Mock
-    private UiObject2 mResult401;
+    @Mock private UiObject2 mResult401;
 
-    @Mock
-    private UiObject2 mResult410;
+    @Mock private UiObject2 mResult410;
 
-    @Mock
-    private UiObject2 mResult411;
+    @Mock private UiObject2 mResult411;
 
-    @Mock
-    private UiDevice mDevice;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private UiDevice mDevice;
 
     private List<UiObject2> mLocator0Results;
     private List<UiObject2> mLocator1Results;
@@ -84,8 +71,6 @@ public class PathUi2LocatorTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
         mLocator0Results = Collections.singletonList(mLocator0Result);
         mLocator1Results = Collections.singletonList(mLocator1Result);
 

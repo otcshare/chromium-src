@@ -5,27 +5,23 @@
 #ifndef CHROME_TEST_MEDIA_ROUTER_MEDIA_ROUTER_CAST_UI_FOR_TEST_H_
 #define CHROME_TEST_MEDIA_ROUTER_MEDIA_ROUTER_CAST_UI_FOR_TEST_H_
 
-#include "base/callback_forward.h"
+#include <optional>
+
+#include "base/functional/callback_forward.h"
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
 #include "chrome/test/media_router/media_router_ui_for_test_base.h"
 #include "components/media_router/common/media_sink.h"
 #include "components/media_router/common/media_source.h"
-#include "content/public/browser/web_contents_user_data.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media_router {
 
-class MediaRouterCastUiForTest
-    : public MediaRouterUiForTestBase,
-      public content::WebContentsUserData<MediaRouterCastUiForTest>,
-      public CastDialogView::Observer {
+class MediaRouterCastUiForTest : public MediaRouterUiForTestBase,
+                                 public CastDialogView::Observer {
  public:
-  static MediaRouterCastUiForTest* GetOrCreateForWebContents(
-      content::WebContents* web_contents);
-
   MediaRouterCastUiForTest(const MediaRouterCastUiForTest&) = delete;
   MediaRouterCastUiForTest& operator=(const MediaRouterCastUiForTest&) = delete;
 
+  explicit MediaRouterCastUiForTest(content::WebContents* web_contents);
   ~MediaRouterCastUiForTest() override;
 
   // MediaRouterUiForTestBase:
@@ -35,6 +31,11 @@ class MediaRouterCastUiForTest
   void HideDialog() override;
   void ChooseSourceType(CastDialogView::SourceType source_type) override;
   CastDialogView::SourceType GetChosenSourceType() const override;
+  void StartCasting(const std::string& sink_name) override;
+  void StopCasting(const std::string& sink_name) override;
+  std::string GetRouteIdForSink(const std::string& sink_name) const override;
+  std::string GetStatusTextForSink(const std::string& sink_name) const override;
+  std::string GetIssueTextForSink(const std::string& sink_name) const override;
   void WaitForSink(const std::string& sink_name) override;
   void WaitForSinkAvailable(const std::string& sink_name) override;
   void WaitForAnyIssue() override;
@@ -44,10 +45,6 @@ class MediaRouterCastUiForTest
   void OnDialogCreated() override;
 
  private:
-  friend class content::WebContentsUserData<MediaRouterCastUiForTest>;
-
-  explicit MediaRouterCastUiForTest(content::WebContents* web_contents);
-
   // CastDialogView::Observer:
   void OnDialogModelUpdated(CastDialogView* dialog_view) override;
   void OnDialogWillClose(CastDialogView* dialog_view) override;
@@ -61,12 +58,12 @@ class MediaRouterCastUiForTest
   // for a sink.
   void ObserveDialog(
       WatchType watch_type,
-      absl::optional<std::string> sink_name = absl::nullopt) override;
+      std::optional<std::string> sink_name = std::nullopt) override;
 
   const CastDialogView* GetDialogView() const;
   CastDialogView* GetDialogView();
 
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  CastDialogSinkView* GetSinkView(const std::string& sink_name) const;
 };
 
 }  // namespace media_router

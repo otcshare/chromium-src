@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
-
 #include <memory>
 #include <tuple>
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/passwords/manage_passwords_test.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/passwords/password_auto_sign_in_view.h"
+#include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "content/public/test/browser_test.h"
 #include "ui/views/test/ax_event_counter.h"
 
@@ -24,9 +26,12 @@ using base::StartsWith;
 //  - bool : when true, the test is setup for RTL interfaces.
 class PasswordBubbleBrowserTest
     : public SupportsTestDialog<ManagePasswordsTest>,
-      public testing::WithParamInterface<std::tuple<bool, bool>> {
+      public testing::WithParamInterface<std::tuple<SyncConfiguration, bool>> {
  public:
-  PasswordBubbleBrowserTest() = default;
+  PasswordBubbleBrowserTest() {
+    scoped_feature_list_.InitWithFeatureState(
+        features::kThreeButtonPasswordSaveDialog, false);
+  }
   ~PasswordBubbleBrowserTest() override = default;
 
   void ShowUi(const std::string& name) override {
@@ -69,10 +74,14 @@ class PasswordBubbleBrowserTest
       return;
     }
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(PasswordBubbleBrowserTest,
                        InvokeUi_PendingPasswordBubble) {
+  set_baseline("7267604");
   ShowAndVerifyUi();
 }
 
@@ -100,22 +109,53 @@ IN_PROC_BROWSER_TEST_P(PasswordBubbleBrowserTest, InvokeUi_MoreToFixState) {
 
 IN_PROC_BROWSER_TEST_P(PasswordBubbleBrowserTest,
                        InvokeUi_MoveToAccountStoreBubble) {
-  // This test isn't relevant for sync'ing users.
-  if (std::get<0>(GetParam()))
+  // This test is only relevant for account storage users.
+  if (std::get<0>(GetParam()) != SyncConfiguration::kAccountStorageOnly) {
     return;
+  }
+  set_baseline("5855019");
   ShowAndVerifyUi();
 }
 
 IN_PROC_BROWSER_TEST_P(PasswordBubbleBrowserTest, AlertAccessibleEvent) {
-  views::test::AXEventCounter counter(views::AXEventManager::Get());
+  views::test::AXEventCounter counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, counter.GetCount(ax::mojom::Event::kAlert));
   // This needs to show a password bubble that does not trigger as a user
   // gesture in order to fire an alert event. See
-  // LocationBarBubbleDelegateView's calls to SetAccessibleRole().
+  // LocationBarBubbleDelegateView's calls to SetAccessibleWindowRole().
   ShowUi("AutomaticPasswordBubble");
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kAlert));
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         PasswordBubbleBrowserTest,
-                         testing::Combine(testing::Bool(), testing::Bool()));
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    PasswordBubbleBrowserTest,
+    testing::Combine(testing::Values(SyncConfiguration::kNotSyncing,
+                                     SyncConfiguration::kAccountStorageOnly,
+                                     SyncConfiguration::kSyncing),
+                     testing::Bool()));
+
+// This subclass exists to exercise the 3-button save password dialog via its
+// feature flag. When that feature launches, remove this and update the original
+// case to be 3-button.
+class ThreeButtonPasswordBubbleBrowserTest : public PasswordBubbleBrowserTest {
+ public:
+  ThreeButtonPasswordBubbleBrowserTest() {
+    scoped_feature_list_.InitWithFeatureState(
+        features::kThreeButtonPasswordSaveDialog, true);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(ThreeButtonPasswordBubbleBrowserTest,
+                       InvokeUi_PendingPasswordBubble) {
+  ShowAndVerifyUi();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    ThreeButtonPasswordBubbleBrowserTest,
+    testing::Combine(testing::Values(SyncConfiguration::kNotSyncing),
+                     testing::Bool()));

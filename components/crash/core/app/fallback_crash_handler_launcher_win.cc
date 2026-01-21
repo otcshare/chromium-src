@@ -5,9 +5,10 @@
 #include "components/crash/core/app/fallback_crash_handler_launcher_win.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/win/win_util.h"
+#include "base/win/windows_handle_util.h"
 
 namespace crash_reporter {
 
@@ -20,10 +21,9 @@ const size_t kCommandLineTailSize = 32;
 }  // namespace
 
 FallbackCrashHandlerLauncher::FallbackCrashHandlerLauncher() {
-  memset(&exception_pointers_, 0, sizeof(exception_pointers_));
 }
 
-FallbackCrashHandlerLauncher::~FallbackCrashHandlerLauncher() {}
+FallbackCrashHandlerLauncher::~FallbackCrashHandlerLauncher() = default;
 
 bool FallbackCrashHandlerLauncher::Initialize(
     const base::CommandLine& program,
@@ -33,8 +33,9 @@ bool FallbackCrashHandlerLauncher::Initialize(
                             PROCESS_DUP_HANDLE | PROCESS_TERMINATE;
   self_process_handle_.Set(
       OpenProcess(kAccessMask, TRUE, ::GetCurrentProcessId()));
-  if (!self_process_handle_.IsValid())
+  if (!self_process_handle_.is_valid()) {
     return false;
+  }
 
   // Setup the startup info for inheriting the self process handle into the
   // fallback crash handler.
@@ -74,13 +75,18 @@ bool FallbackCrashHandlerLauncher::Initialize(
 DWORD FallbackCrashHandlerLauncher::LaunchAndWaitForHandler(
     EXCEPTION_POINTERS* exception_pointers) {
   DCHECK(!cmd_line_.empty());
-  DCHECK_EQ('=', cmd_line_[cmd_line_.size() - kCommandLineTailSize - 1]);
+  size_t tail_offset = cmd_line_.size() - kCommandLineTailSize;
+  DCHECK_EQ('=', cmd_line_[tail_offset - 1]);
   // This program has crashed. Try and not use anything but the stack.
 
   // Append the current thread's ID to the command line in-place.
-  int chars_appended = wsprintf(&cmd_line_.back() - kCommandLineTailSize + 1,
-                                L"%d", GetCurrentThreadId());
-  DCHECK_GT(static_cast<int>(kCommandLineTailSize), chars_appended);
+
+  base::span<wchar_t> tail_span = base::span(cmd_line_).subspan(tail_offset);
+  // SAFETY: `tail_span` size is correct. TODO(crbug.com/40284755): Use
+  // spanified vswprintf when it exists.
+  int result = UNSAFE_BUFFERS(swprintf_s(tail_span.data(), tail_span.size(),
+                                         L"%u", GetCurrentThreadId()));
+  DCHECK_GE(result, 0);
 
   // Copy the exception pointers to our member variable, whose address is
   // already baked into the command line.
@@ -111,14 +117,12 @@ DWORD FallbackCrashHandlerLauncher::LaunchAndWaitForHandler(
     // This should never happen, barring handle abuse.
     // TODO(siggi): Record an UMA metric here.
     NOTREACHED();
-    error = GetLastError();
   } else {
     // On successful wait, return the exit code of the fallback crash handler
     // process.
     if (!GetExitCodeProcess(process_info.hProcess, &error)) {
       // This should never happen, barring handle abuse.
       NOTREACHED();
-      error = GetLastError();
     }
   }
 

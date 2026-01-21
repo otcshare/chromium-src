@@ -21,11 +21,17 @@
     <message name="IDS_BOOKMARK_GROUP" desc="The group name of bookmarks imported from a file">
       Imported
     </message>
+    <message name="IDS_UNNAMED_BOOKMARK_BUTTON_ACCESSIBLE_NAME" desc="Accessible name for unnamed bookmark buttons. Provides something to screen readers.">
+      Unnamed bookmark for <ph name="url">$1<ex>https://example.com</ex></ph>
+    </message>
   </if>
 
   <if expr="not use_titlecase">
     <message name="IDS_BOOKMARK_BAR_SHOW_APPS_SHORTCUT" desc="Name shown in the context menu to hide/show the apps shortcut in the bookmark bar">
       Show apps shortcut
+    </message>
+    <message name="IDS_BOOKMARK_BAR_SHOW_TAB_GROUPS" desc="Name shown in the context menu to hide/show the tab groups in the bookmark bar">
+      Show tab groups
     </message>
     <message name="IDS_BOOKMARK_BAR_SHOW_READING_LIST" desc="Name shown in the context menu to hide/show the reading list in the bookmark bar">
       Show reading list
@@ -40,6 +46,9 @@
   <if expr="use_titlecase">
     <message name="IDS_BOOKMARK_BAR_SHOW_APPS_SHORTCUT" desc="In Title Case: Name shown in the context menu to hide/show the apps shortcut in the bookmark bar">
       Show Apps Shortcut
+    </message>
+    <message name="IDS_BOOKMARK_BAR_SHOW_TAB_GROUPS" desc="Name shown in the context menu to hide/show the tab groups in the bookmark bar">
+      Show Tab Groups
     </message>
     <message name="IDS_BOOKMARK_BAR_SHOW_READING_LIST" desc="In Title Case: Name shown in the context menu to hide/show the reading list in the bookmark bar">
       Show Reading List
@@ -100,6 +109,9 @@
     <message name="IDS_BOOKMARK_BAR_OPEN_INCOGNITO" desc="Menu description for opening bookmark in Incognito window">
       Open in &amp;Incognito window
     </message>
+    <message name="IDS_BOOKMARK_BAR_OPEN_IN_SPLIT_VIEW" desc="Menu description for opening bookmark in a split view">
+      Open in &amp;split view
+    </message>
     <message name="IDS_BOOKMARK_BAR_EDIT" desc="Title of the bookmark context menu item that brings up the bookmark editor">
       &amp;Edit...
     </message>
@@ -118,6 +130,9 @@
     <if expr="not is_android">
       <message name="IDS_SHOW_BOOKMARK_BAR" desc="The toggle to show the bookmark bar">
         &amp;Show bookmarks bar
+      </message>
+      <message name="IDS_HIDE_BOOKMARK_BAR" desc="The toggle to hide the bookmark bar">
+        &amp;Hide bookmarks bar
       </message>
     </if>
   </if>
@@ -158,6 +173,9 @@
     <message name="IDS_BOOKMARK_BAR_OPEN_INCOGNITO" desc="In Title Case: Menu description for opening bookmark in Incognito window">
       Open in &amp;Incognito Window
     </message>
+    <message name="IDS_BOOKMARK_BAR_OPEN_IN_SPLIT_VIEW" desc="In Title Case: Menu description for opening bookmark in a split view">
+      Open in &amp;Split View
+    </message>
     <message name="IDS_BOOKMARK_BAR_EDIT" desc="In Title Case: Title of the bookmark context menu item that brings up the bookmark editor">
       &amp;Edit...
     </message>
@@ -177,11 +195,41 @@
       <message name="IDS_SHOW_BOOKMARK_BAR" desc="In Title Case: The toggle to show the bookmark bar">
         &amp;Show Bookmarks Bar
       </message>
+      <message name="IDS_HIDE_BOOKMARK_BAR" desc="The toggle to hide the bookmark bar">
+        &amp;Hide Bookmarks Bar
+      </message>
     </if>
   </if>
   <message name="IDS_BOOKMARK_BAR_SHOULD_OPEN_ALL" desc="Message in the message box shown if user asks to open a lot of bookmarks in a folder. The number will always be 15 or more.">
     Are you sure you want to open <ph name="TAB_COUNT">$1<ex>20</ex></ph> tabs?
   </message>
+  <if expr="not is_android">
+    <message name="IDS_BOOKMARK_BAR_ALREADY_CREATED_GROUP" desc="Message in the message box shown when user opens a bookmark folder as tab group if user already did that before">
+      A tab group was already created with this bookmark folder. Do you want to create a new tab group or replace the existing one?
+    </message>
+    <if expr="not use_titlecase">
+      <message name="IDS_BOOKMARK_BAR_REPLACE_OR_CREATE_NEW_GROUP_TITLE" desc="Title of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Replace or create new group?
+      </message>
+      <message name="IDS_BOOKMARK_BAR_CREATE_NEW_GROUP_BUTTON" desc="Create new group button of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Create new tab group
+      </message>
+      <message name="IDS_BOOKMARK_BAR_REPLACE_OLD_GROUP_BUTTON" desc="Replace old group button of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Replace existing tab group
+      </message>
+    </if>
+    <if expr="use_titlecase">
+      <message name="IDS_BOOKMARK_BAR_REPLACE_OR_CREATE_NEW_GROUP_TITLE" desc="In title case: Title of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Replace or Create New Group?
+      </message>
+      <message name="IDS_BOOKMARK_BAR_CREATE_NEW_GROUP_BUTTON" desc="In title case: Create new group button of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Create New Tab Group
+      </message>
+      <message name="IDS_BOOKMARK_BAR_REPLACE_OLD_GROUP_BUTTON" desc="In title case: Replace old group button of the message box shown when user opens a bookmark folder as tab group if user already did that before">
+        Replace Existing Tab Group
+      </message>
+    </if>
+  </if>
   <!-- End of Bookmarks Bar Context Menu strings. -->
 
   <!-- Begin of Bookmarks Bubble strings. -->
@@ -191,8 +239,14 @@
   <message name="IDS_BOOKMARK_BUBBLE_PAGE_BOOKMARK" desc="Title of the bubble when re-clicking on a bookmark">
     Edit bookmark
   </message>
+  <message name="IDS_BOOKMARK_BUBBLE_EDIT_BOOKMARK" desc="Title of the button for editing the bookmark">
+    Edit
+  </message>
   <message name="IDS_BOOKMARK_BUBBLE_NAME_LABEL" desc="Text preceding the title of the page that was bookmarked" meaning="Name of an inanimate object">
     Name
+  </message>
+  <message name="IDS_BOOKMARK_BUBBLE_SAVED_TO" desc="Text notifying a user which folder their bookmark was saved to.">
+    This page is saved to <ph name="BOOKMARK_FOLDER">$1<ex>All Bookmarks</ex></ph>
   </message>
   <message name="IDS_BOOKMARK_AX_BUBBLE_NAME_LABEL" desc="Text preceding the title of the page that was bookmarked, read by spoken feedback">
     Bookmark name
@@ -221,11 +275,14 @@
   </if>
   <!-- End of Bookmarks Bubble strings. -->
 
-  <!-- Begin of Bookmarks Sync Promo strings for Desktop Identity Consistency. -->
+  <!-- Begin of Bookmarks Promo strings for Desktop Identity Consistency. -->
   <message name="IDS_BOOKMARK_DICE_PROMO_SYNC_MESSAGE" desc="Text of the sync promo displayed at the bottom of the bookmark bubble asking the user to enable sync.">
     To get your bookmarks on all your devices, turn on sync.
   </message>
-  <!-- End of Bookmarks Sync Promo strings for Desktop Identity Consistency. -->
+  <message name="IDS_BOOKMARK_VERIFY_PROMO_SUBTITLE" desc="This is the body text of a confirmation message and means that the bookmark is in an account-pending storage. In other words, it's waiting to be uploaded to the user's Google Account. It appears when the user was signed in to Chrome with account storage for bookmarks enabled but their sign-in credentials have expired; now, they need to sign back in to Chrome. The string is after the 'Bookmark added' string. If the user wants to save this data to their Google Account, they can click the 'Verify it's you' button at the bottom of this message. The tone should be motivating.">
+    To get this bookmark on all your devices, verify it's you
+  </message>
+  <!-- End of Bookmarks Promo strings for Desktop Identity Consistency. -->
 
   <!-- Begin of Desktop to iOS Promo strings. -->
   <if expr="is_win">
@@ -243,6 +300,12 @@
     </message>
   </if>
   <!-- End of Desktop to iOS Promo strings. -->
+
+  <!-- UNO Promo strings for bookmarks -->
+  <message name="IDS_BOOKMARK_PROMO_TITLE" desc="This is the body text of a confirmation message and means that the bookmark was either saved locally, or to the user's pending account storage if their sign-in credentials have expired. It appears after a bookmark save if the user is not signed in to Chrome or their sign-in credentials have expired. If the user wants to save this data to their Google Account, they can click the button at the bottom of this message. The tone should be motivating.">
+    Use bookmarks across devices
+  </message>
+  <!-- End of UNO Promo strings for bookmarks -->
 
   <!-- Begin of Bookmark Editor strings. -->
   <message name="IDS_BOOKMARK_EDITOR_NAME_LABEL" desc="Label shown before the title/name of the URL." meaning="Name of an inanimate object">
@@ -267,6 +330,9 @@
      =1 {This folder contains a bookmark. Are you sure you want to delete it?}
      other {This folder contains # bookmarks. Are you sure you want to delete it?}}
   </message>
+  <message name="IDS_TAB_GROUP_TO_BOOKMARK_FOLDER_SUBTITLE" desc="The subtitle of the tab group convert to bookmark folder dialog.">
+    When you click save, this tab group will become a bookmark folder and will be removed from your groups on all devices
+  </message>
   <if expr="not use_titlecase">
     <message name="IDS_BOOKMARK_EDITOR_NEW_FOLDER_BUTTON" desc="Text on the new folder button.">
       New folder
@@ -285,6 +351,9 @@
     </message>
     <message name="IDS_BOOKMARK_ALL_TABS_DIALOG_TITLE" desc="The title of the Bookmark All Tabs dialog.">
       Bookmark all tabs
+    </message>
+    <message name="IDS_TAB_GROUP_TO_BOOKMARK_FOLDER_TITLE" desc="The subtitle of the tab group convert to bookmark folder dialog.">
+      Convert tab group into bookmark folder
     </message>
   </if>
   <if expr="use_titlecase">
@@ -305,6 +374,9 @@
     </message>
     <message name="IDS_BOOKMARK_ALL_TABS_DIALOG_TITLE" desc="In Title Case: The title of the Bookmark All Tabs dialog.">
       Bookmark All Tabs
+    </message>
+    <message name="IDS_TAB_GROUP_TO_BOOKMARK_FOLDER_TITLE" desc="The title of the tab group convert to bookmark folder dialog.">
+      Convert Tab Group into Bookmark Folder
     </message>
   </if>
   <!-- End of Bookmarks Editor strings. -->
@@ -418,6 +490,12 @@
   <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_INCOGNITO_WITH_COUNT" desc="Menu description for opening all urls in a bookmark folder in an Incognito window, which includes a count of urls">
     Open all (<ph name="URL_COUNT">$1<ex>5</ex></ph>) in Incognito window
   </message>
+  <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_NEW_TAB_GROUP" desc="Menu description for opening all urls in a bookmark folder in a new tab group">
+    Open all in new tab group
+  </message>
+  <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_NEW_TAB_GROUP_WITH_COUNT" desc="Menu description for opening all urls in a bookmark folder in a new tab group, which includes a count of urls">
+    Open all (<ph name="URL_COUNT">$1<ex>5</ex></ph>) in new tab group
+  </message>
   <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_NEW_TAB" desc="Menu description for opening a bookmark in a new tab">
     Open in new tab
   </message>
@@ -426,6 +504,12 @@
   </message>
   <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_INCOGNITO" desc="Menu description for opening a bookmark in Incognito window">
     Open in Incognito window
+  </message>
+  <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_NEW_TAB_GROUP" desc="Menu description for opening a bookmark in a new tab group">
+    Open in new tab group
+  </message>
+  <message name="IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_SPLIT_VIEW" desc="Menu description for opening a bookmark in a split view">
+    Open in split view
   </message>
   <message name="IDS_BOOKMARK_MANAGER_MENU_RENAME" desc="Title of the bookmark list dropdown menu item that renames folders.">
     Rename
@@ -486,6 +570,26 @@
     &amp;Bookmarks
   </message>
   <if expr="not use_titlecase">
+    <message name="IDS_BOOKMARKS_AND_LISTS_MENU" desc="The title of the 'Bookmarks and lists' menu in the App Menu.">
+      &amp;Bookmarks and lists
+    </message>
+  </if>
+  <if expr="use_titlecase">
+    <message name="IDS_BOOKMARKS_AND_LISTS_MENU" desc="The title of the 'Bookmarks and lists' menu in the App Menu.">
+      &amp;Bookmarks and Lists
+    </message>
+  </if>
+  <if expr="not use_titlecase">
+    <message name="IDS_SHOW_BOOKMARK_SIDE_PANEL" desc="Title of the menu item that opens the bookmark side panel.">
+      Show all bookmarks
+    </message>
+  </if>
+  <if expr="use_titlecase">
+    <message name="IDS_SHOW_BOOKMARK_SIDE_PANEL" desc="Title of the menu item that opens the bookmark side panel.">
+      Show All Bookmarks
+    </message>
+  </if>
+  <if expr="not use_titlecase">
     <message name="IDS_BOOKMARK_THIS_TAB" desc="Title of the menu item that bookmarks the current tab.">
       Bookmark this tab...
     </message>
@@ -505,6 +609,9 @@
       Bookmark All Tabs...
     </message>
   </if>
+  <message name="IDS_BOOKMARKS_LIST_TITLE" desc="Title of the bookmarks list in App Menu's Bookmark submenu">
+    Bookmarks
+  </message>
   <!-- End of Bookmarks Menu (in the Main Menu) strings. -->
 
   <!-- Begin of Bookmark Star button strings. -->
@@ -514,8 +621,11 @@
   <!-- End of Bookmark Star button strings. -->
 
   <!-- Begin of screen reader message strings. -->
-  <message name="IDS_BOOKMARK_SCREEN_READER_CREATED" desc="Screen reader message that is read when a bookmark is created.">
-    '<ph name="BOOKMARK_TITLE">$1<ex>Google</ex></ph>' created.
+  <message name="IDS_BOOKMARK_SCREEN_READER_CREATED" is_accessibility_with_no_ui="true" desc="Screen reader message that is read when a bookmark is created.">
+    '<ph name="BOOKMARK_TITLE">$1<ex>Google</ex></ph>' bookmark created.
+  </message>
+  <message name="IDS_BOOKMARK_SCREEN_READER_FOLDER_CREATED" is_accessibility_with_no_ui="true" desc="Screen reader message that is read when a bookmark folder is created.">
+    '<ph name="BOOKMARK_TITLE">$1<ex>Google</ex></ph>' bookmark folder created.
   </message>
   <message name="IDS_BOOKMARK_SCREEN_READER_REORDERED" desc="Screen reader message that is read when a bookmark is reordered.">
     '<ph name="BOOKMARK_TITLE">$1<ex>Google</ex></ph>' moved.

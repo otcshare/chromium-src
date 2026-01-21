@@ -21,16 +21,42 @@ export function makePasswordCheckStatus(params: PasswordCheckParams):
   };
 }
 
+export function makeFamilyFetchResults(
+    status?: chrome.passwordsPrivate.FamilyFetchStatus,
+    members?: chrome.passwordsPrivate.RecipientInfo[]):
+    chrome.passwordsPrivate.FamilyFetchResults {
+  return {
+    status: status || chrome.passwordsPrivate.FamilyFetchStatus.SUCCESS,
+    familyMembers: members || [],
+  };
+}
+
+export function makeRecipientInfo(isEligible: boolean = true):
+    chrome.passwordsPrivate.RecipientInfo {
+  return {
+    userId: 'user-id',
+    email: 'user@example.com',
+    displayName: 'New User',
+    profileImageUrl: 'data://image/url',
+    isEligible: isEligible,
+  };
+}
+
 export interface PasswordEntryParams {
+  isPasskey?: boolean;
   url?: string;
   username?: string;
+  displayName?: string;
   password?: string;
+  backupPassword?: chrome.passwordsPrivate.BackupPasswordInfo;
   federationText?: string;
   id?: number;
   inAccountStore?: boolean;
   inProfileStore?: boolean;
-  isAndroidCredential?: boolean;
   note?: string;
+  changePasswordUrl?: string;
+  affiliatedDomains?: chrome.passwordsPrivate.DomainInfo[];
+  hidden?: boolean;
 }
 
 /**
@@ -44,7 +70,12 @@ export function createPasswordEntry(params?: PasswordEntryParams):
     chrome.passwordsPrivate.PasswordUiEntry {
   // Generate fake data if param is undefined.
   params = params || {};
-  const url = params.url !== undefined ? params.url : 'www.foo.com';
+  const url = params.url || 'www.foo.com';
+  const domain = {
+    name: url,
+    url: `https://${url}/login`,
+    signonRealm: `https://${url}/login`,
+  };
   const username = params.username !== undefined ? params.username : 'user';
   const id = params.id !== undefined ? params.id : 42;
   // Fallback to device store if no parameter provided.
@@ -61,18 +92,19 @@ export function createPasswordEntry(params?: PasswordEntryParams):
   const note = params.note || '';
 
   return {
-    urls: {
-      signonRealm: 'https://' + url + '/login',
-      shown: url,
-      link: 'https://' + url + '/login',
-    },
+    isPasskey: params.isPasskey || false,
     username: username,
+    displayName: params.displayName,
     federationText: params.federationText,
     id: id,
     storedIn: storeType,
-    isAndroidCredential: params.isAndroidCredential || false,
     note: note,
+    changePasswordUrl: params.changePasswordUrl,
+    backupPassword: params.backupPassword,
     password: params.password || '',
+    affiliatedDomains: params.affiliatedDomains || [domain],
+    creationTime: params.isPasskey ? 1000000000 : undefined,
+    hidden: params.hidden || false,
   };
 }
 
@@ -111,30 +143,51 @@ export function createBlockedSiteEntry(
   };
 }
 
-export function makePasswordManagerPrefs():
-    chrome.settingsPrivate.PrefObject[] {
-  return [
-    {
+export function makePasswordManagerPrefs() {
+  return {
+    credentials_enable_service: {
       key: 'credentials_enable_service',
       type: chrome.settingsPrivate.PrefType.BOOLEAN,
       value: true,
     },
-    {
+    credentials_enable_autosignin: {
       key: 'credentials_enable_autosignin',
       type: chrome.settingsPrivate.PrefType.BOOLEAN,
       value: true,
     },
-    {
-      key: 'profile.password_dismiss_compromised_alert',
+    credentials_enable_automatic_passkey_upgrades: {
+      key: 'credentials_enable_automatic_passkey_upgrades',
       type: chrome.settingsPrivate.PrefType.BOOLEAN,
       value: true,
     },
-  ];
+    profile: {
+      password_dismiss_compromised_alert: {
+        key: 'profile.password_dismiss_compromised_alert',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+    },
+    password_manager: {
+      // <if expr="is_win or is_macosx or is_chromeos">
+      biometric_authentication_filling: {
+        key: 'password_manager.biometric_authentication_filling',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      // </if>
+      password_sharing_enabled: {
+        key: 'password_manager.password_sharing_enabled',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+    },
+  };
 }
 
 export interface InsecureCredentialsParams {
   url?: string;
   username?: string;
+  password?: string;
   types?: chrome.passwordsPrivate.CompromiseType[];
   id?: number;
   elapsedMinSinceCompromise?: number;
@@ -160,17 +213,29 @@ export function makeInsecureCredential(params: InsecureCredentialsParams):
     isMuted: params.isMuted ?? false,
   };
   return {
+    affiliatedDomains: [{
+      name: url,
+      url: `https://${url}/login`,
+      signonRealm: `https://${url}/login`,
+    }],
+    isPasskey: false,
     id: id || 0,
     storedIn: chrome.passwordsPrivate.PasswordStoreSet.DEVICE,
-    changePasswordUrl: `http://${url}/`,
-    urls: {
-      signonRealm: `http://${url}/`,
-      shown: url,
-      link: `http://${url}/`,
-    },
+    changePasswordUrl: `https://${url}/`,
     username: username,
+    password: params.password,
     note: '',
-    isAndroidCredential: false,
     compromisedInfo: types.length ? compromisedInfo : undefined,
+    creationTime: undefined,
+    hidden: false,
+  };
+}
+
+export function createAffiliatedDomain(domain: string):
+    chrome.passwordsPrivate.DomainInfo {
+  return {
+    name: domain,
+    url: `https://${domain}/login`,
+    signonRealm: `https://${domain}/login`,
   };
 }

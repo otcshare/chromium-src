@@ -5,10 +5,12 @@
 #ifndef CHROME_UPDATER_UPDATE_SERVICE_INTERNAL_H_
 #define CHROME_UPDATER_UPDATE_SERVICE_INTERNAL_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 
 namespace updater {
+
+using RpcError = int;
 
 enum class UpdaterScope;
 

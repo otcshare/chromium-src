@@ -6,8 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
 #include "chromeos/ash/components/tether/fake_disconnect_tethering_request_sender.h"
@@ -21,7 +22,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
 
@@ -39,7 +39,6 @@ class FakeRemoteDeviceProviderFactory
 
   // device_sync::RemoteDeviceProviderImpl::Factory:
   std::unique_ptr<device_sync::RemoteDeviceProvider> CreateInstance(
-      device_sync::CryptAuthDeviceManager* device_manager,
       device_sync::CryptAuthV2DeviceManager* v2_device_manager,
       const std::string& user_email,
       const std::string& user_private_key) override {
@@ -72,7 +71,8 @@ class AsynchronousShutdownObjectContainerImplTest : public testing::Test {
         std::make_unique<device_sync::FakeDeviceSyncClient>();
     fake_secure_channel_client_ =
         std::make_unique<secure_channel::FakeSecureChannelClient>();
-    fake_tether_host_fetcher_ = std::make_unique<FakeTetherHostFetcher>();
+    fake_tether_host_fetcher_ =
+        std::make_unique<FakeTetherHostFetcher>(/*tether_host=*/std::nullopt);
 
     test_pref_service_ =
         std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
@@ -93,7 +93,7 @@ class AsynchronousShutdownObjectContainerImplTest : public testing::Test {
         new FakeDisconnectTetheringRequestSender();
 
     container_->SetTestDoubles(
-        base::WrapUnique(fake_disconnect_tethering_request_sender_));
+        base::WrapUnique(fake_disconnect_tethering_request_sender_.get()));
   }
 
   void CallShutdown() {
@@ -115,7 +115,7 @@ class AsynchronousShutdownObjectContainerImplTest : public testing::Test {
       test_pref_service_;
   std::unique_ptr<FakeRemoteDeviceProviderFactory>
       fake_remote_device_provider_factory_;
-  FakeDisconnectTetheringRequestSender*
+  raw_ptr<FakeDisconnectTetheringRequestSender, DanglingUntriaged>
       fake_disconnect_tethering_request_sender_;
 
   bool was_shutdown_callback_invoked_;

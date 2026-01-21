@@ -5,31 +5,35 @@
 #include "chrome/browser/ash/policy/core/device_cloud_policy_store_ash.h"
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/values.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
-#include "chromeos/ash/components/dbus/userdataauth/fake_install_attributes_client.h"
-#include "chromeos/ash/components/dbus/userdataauth/install_attributes_util.h"
+#include "chromeos/ash/components/dbus/device_management/fake_install_attributes_client.h"
+#include "chromeos/ash/components/dbus/device_management/install_attributes_util.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/components/onc/onc_test_utils.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/policy_switches.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/test/test_utils.h"
-#include "crypto/rsa_private_key.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace em = enterprise_management;
@@ -54,13 +58,20 @@ class DeviceCloudPolicyStoreAshTest : public ash::DeviceSettingsTestBase {
       const DeviceCloudPolicyStoreAshTest&) = delete;
 
  protected:
-  DeviceCloudPolicyStoreAshTest()
-      : local_state_(TestingBrowserProcess::GetGlobal()) {}
+  DeviceCloudPolicyStoreAshTest() = default;
 
   ~DeviceCloudPolicyStoreAshTest() override = default;
 
   void SetUp() override {
     DeviceSettingsTestBase::SetUp();
+
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    command_line->AppendSwitchASCII(
+        switches::kPolicyVerificationKey,
+        PolicyBuilder::GetEncodedPolicyVerificationKey());
 
     ash::InstallAttributesClient::InitializeFake();
     install_attributes_ = std::make_unique<ash::InstallAttributes>(
@@ -142,7 +153,6 @@ class DeviceCloudPolicyStoreAshTest : public ash::DeviceSettingsTestBase {
     store_->AddObserver(&observer_);
   }
 
-  ScopedTestingLocalState local_state_;
   std::unique_ptr<ash::InstallAttributes> install_attributes_;
 
   std::unique_ptr<DeviceCloudPolicyStoreAsh> store_;
@@ -231,6 +241,8 @@ TEST_F(DeviceCloudPolicyStoreAshTest, StoreKeyRotationVerificationFailure) {
   device_policy_->Build();
   *device_policy_->policy()
        .mutable_new_public_key_verification_signature_deprecated() = "garbage";
+  *device_policy_->policy()
+       .mutable_new_public_key_verification_data_signature() = "garbage";
   store_->Store(device_policy_->policy());
   FlushDeviceSettings();
   EXPECT_EQ(CloudPolicyStore::STATUS_VALIDATION_ERROR, store_->status());
@@ -246,6 +258,7 @@ TEST_F(DeviceCloudPolicyStoreAshTest, StoreKeyRotationMissingSignatureFailure) {
   device_policy_->Build();
   device_policy_->policy()
       .clear_new_public_key_verification_signature_deprecated();
+  device_policy_->policy().clear_new_public_key_verification_data_signature();
   store_->Store(device_policy_->policy());
   FlushDeviceSettings();
   EXPECT_EQ(CloudPolicyStore::STATUS_VALIDATION_ERROR, store_->status());
@@ -280,6 +293,57 @@ TEST_F(DeviceCloudPolicyStoreAshTest, StoreValueValidationError) {
             validation_result->policy_data_signature);
 }
 
+TEST_F(DeviceCloudPolicyStoreAshTest, StorePolicyBadDomain) {
+  PrepareExistingPolicy();
+
+  device_policy_->policy_data().mutable_username()->assign(
+      "user@bad_domain.com");
+  device_policy_->Build();
+
+  store_->Store(device_policy_->policy());
+  FlushDeviceSettings();
+  const CloudPolicyValidatorBase::ValidationResult* validation_result =
+      store_->validation_result();
+  EXPECT_EQ(CloudPolicyStore::STATUS_VALIDATION_ERROR, store_->status());
+  EXPECT_EQ(CloudPolicyValidatorBase::VALIDATION_BAD_USER,
+            validation_result->status);
+}
+
+TEST_F(DeviceCloudPolicyStoreAshTest, StoreDeviceIdValidationEnabled) {
+  TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+      prefs::kEnrollmentVersionOS, base::Value("128"));
+  PrepareExistingPolicy();
+
+  // Set the device_id created by the policy generator. Expected to be valid.
+  device_policy_->policy_data().mutable_device_id()->assign(
+      PolicyBuilder::kFakeDeviceId);
+  device_policy_->Build();
+
+  store_->Store(device_policy_->policy());
+  FlushDeviceSettings();
+  const CloudPolicyValidatorBase::ValidationResult* validation_result =
+      store_->validation_result();
+  EXPECT_EQ(CloudPolicyStore::STATUS_OK, store_->status());
+  EXPECT_EQ(CloudPolicyValidatorBase::VALIDATION_OK, validation_result->status);
+}
+
+TEST_F(DeviceCloudPolicyStoreAshTest, StoreDeviceIdValidationEnabledError) {
+  TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+      prefs::kEnrollmentVersionOS, base::Value("128"));
+  PrepareExistingPolicy();
+
+  device_policy_->policy_data().mutable_device_id()->assign("bad-device-id");
+  device_policy_->Build();
+
+  store_->Store(device_policy_->policy());
+  FlushDeviceSettings();
+  const CloudPolicyValidatorBase::ValidationResult* validation_result =
+      store_->validation_result();
+  EXPECT_EQ(CloudPolicyStore::STATUS_VALIDATION_ERROR, store_->status());
+  EXPECT_EQ(CloudPolicyValidatorBase::VALIDATION_BAD_DEVICE_ID,
+            validation_result->status);
+}
+
 TEST_F(DeviceCloudPolicyStoreAshTest, InstallInitialPolicySuccess) {
   PrepareNewSigningKey();
   store_->InstallInitialPolicy(device_policy_->policy());
@@ -304,6 +368,8 @@ TEST_F(DeviceCloudPolicyStoreAshTest, InstallInitialPolicyVerificationFailure) {
   PrepareNewSigningKey();
   *device_policy_->policy()
        .mutable_new_public_key_verification_signature_deprecated() = "garbage";
+  *device_policy_->policy()
+       .mutable_new_public_key_verification_data_signature() = "garbage";
   store_->InstallInitialPolicy(device_policy_->policy());
   FlushDeviceSettings();
   ExpectFailure(CloudPolicyStore::STATUS_VALIDATION_ERROR);
@@ -317,6 +383,7 @@ TEST_F(DeviceCloudPolicyStoreAshTest,
   PrepareNewSigningKey();
   device_policy_->policy()
       .clear_new_public_key_verification_signature_deprecated();
+  device_policy_->policy().clear_new_public_key_verification_data_signature();
   store_->InstallInitialPolicy(device_policy_->policy());
   FlushDeviceSettings();
   ExpectFailure(CloudPolicyStore::STATUS_VALIDATION_ERROR);
@@ -343,6 +410,24 @@ TEST_F(DeviceCloudPolicyStoreAshTest, InstallInitialPolicyNotEnterprise) {
   FlushDeviceSettings();
   ExpectFailure(CloudPolicyStore::STATUS_BAD_STATE);
   EXPECT_EQ(std::string(), store_->policy_signature_public_key());
+}
+
+TEST_F(DeviceCloudPolicyStoreAshTest, InstallInitialPolicyBadDomain) {
+  PrepareNewSigningKey();
+  device_policy_->policy_data().set_username("bad_owner@bad_domain.com");
+  device_policy_->Build();
+  store_->InstallInitialPolicy(device_policy_->policy());
+  FlushDeviceSettings();
+  ExpectFailure(CloudPolicyStore::STATUS_VALIDATION_ERROR);
+}
+
+TEST_F(DeviceCloudPolicyStoreAshTest, InstallInitialPolicyBadDeviceId) {
+  PrepareNewSigningKey();
+  device_policy_->policy_data().set_device_id("bad_device_id");
+  device_policy_->Build();
+  store_->InstallInitialPolicy(device_policy_->policy());
+  FlushDeviceSettings();
+  ExpectFailure(CloudPolicyStore::STATUS_VALIDATION_ERROR);
 }
 
 TEST_F(DeviceCloudPolicyStoreAshTest, StoreDeviceBlockDevmodeAllowed) {

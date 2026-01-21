@@ -7,8 +7,7 @@
 
 #include <windows.h>
 
-namespace updater {
-namespace ui {
+namespace updater::ui {
 
 inline constexpr COLORREF kBkColor = RGB(0XFB, 0XFB, 0XFB);
 inline constexpr COLORREF kTextColor = RGB(0x29, 0x29, 0x29);
@@ -34,11 +33,11 @@ inline constexpr int kMsPerSec = 1000;
 inline constexpr int kSecPerMin = 60;
 inline constexpr int kSecondsPerHour = 60 * 60;
 
-extern const wchar_t kLegacyUiDisplayedEventEnvironmentVariableName[];
+inline constexpr wchar_t kLegacyUiDisplayedEventEnvironmentVariableName[] =
+    L"GOOGLE_UPDATE_UI_DISPLAYED_EVENT_NAME";
 
-extern const wchar_t kDialogFont[];
+inline constexpr wchar_t kDialogFont[] = L"Segoe UI";
 
-}  // namespace ui
-}  // namespace updater
+}  // namespace updater::ui
 
 #endif  // CHROME_UPDATER_WIN_UI_UI_CONSTANTS_H_

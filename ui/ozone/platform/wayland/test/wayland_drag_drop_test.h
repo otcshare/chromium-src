@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_factory_ozone.h"
@@ -45,7 +45,8 @@ class WaylandDragDropTest : public WaylandTest {
   void SendDndEnter(WaylandWindow* window, const gfx::Point& location);
   void SendDndLeave();
   void SendDndMotion(const gfx::Point& location);
-  void SendDndDrop();
+  void SendDndDropPerformed();
+  void SendDndFinished();
   void SendDndCancelled();
   void SendDndAction(uint32_t action);
   void ReadAndCheckData(const std::string& mime_type,

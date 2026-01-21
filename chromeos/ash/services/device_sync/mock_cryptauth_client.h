@@ -5,7 +5,7 @@
 #ifndef CHROMEOS_ASH_SERVICES_DEVICE_SYNC_MOCK_CRYPTAUTH_CLIENT_H_
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_MOCK_CRYPTAUTH_CLIENT_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/observer_list.h"
 #include "chromeos/ash/services/device_sync/cryptauth_client.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_api.pb.h"
@@ -26,7 +26,7 @@ class MockCryptAuthClient : public CryptAuthClient {
 
   ~MockCryptAuthClient() override;
 
-  // TODO(https://crbug.com/997268): Update these to use MOCK_METHOD.
+  // TODO(crbug.com/41477954): Update these to use MOCK_METHOD.
   // CryptAuthClient:
   void GetMyDevices(const cryptauth::GetMyDevicesRequest& request,
                     GetMyDevicesCallback callback,

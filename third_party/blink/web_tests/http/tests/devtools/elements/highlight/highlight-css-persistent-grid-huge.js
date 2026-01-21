@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(`This test verifies that huge CSS grids can be highlighted with the grid Highlight Tool.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <style>
@@ -36,7 +38,7 @@
   // Now check that the highlight data for a 10000x10000 grid can be generated.
   // But don't dump it since that would make the test time out.
   const node = await ElementsTestRunner.nodeWithIdPromise('huge-grid');
-  await TestRunner.OverlayAgent.getGridHighlightObjectsForTest([node.id]);
+  await TestRunner.OverlayAgent.invoke_getGridHighlightObjectsForTest({nodeIds: [node.id]});
 
   TestRunner.completeTest();
 })();

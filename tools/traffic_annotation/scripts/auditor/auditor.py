@@ -4,6 +4,7 @@
 # found in the LICENSE file.
 
 import argparse
+import concurrent.futures
 import copy
 import datetime
 import difflib
@@ -14,11 +15,13 @@ import platform
 import re
 import subprocess
 import sys
+import textwrap
 import traceback
 import xml.etree.ElementTree as ElementTree
 
 from dataclasses import dataclass
 from xml.dom import minidom
+from functools import partial
 from enum import Enum, auto
 from google.protobuf import text_format
 from pathlib import Path
@@ -29,11 +32,17 @@ from error import AuditorError, ErrorType
 import util
 from util import UniqueId, HashCode
 
+from datetime import datetime
+
 # Path to the directory where this script is.
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Absolute path to chrome/src.
 SRC_DIR = SCRIPT_DIR.parents[3]
+
+# Relative path to traffic_annotation.proto within source.
+TRAFFIC_ANNOTATION_PROTO_RELATIVE_PATH = Path(
+    "chrome/browser/privacy/traffic_annotation.proto")
 
 logger = logging.getLogger(__name__)
 
@@ -189,10 +198,22 @@ class Annotation:
     if annotation.needs_two_ids():
       annotation.second_id = archived.second_id
 
-    util.fill_proto_with_bogus(annotation.proto.semantics,
+    util.fill_proto_with_bogus(annotation.unique_id, annotation.proto.semantics,
                                archived.semantics_fields)
+    fields_by_name = \
+      traffic_annotation.TrafficSemantics.DESCRIPTOR.fields_by_name
+    if fields_by_name["internal"].number in archived.semantics_fields:
+      fake_contact = traffic_annotation.TrafficSemantics.Internal.Contact()
+      fake_contact.email = "[Archived]"
+      annotation.proto.semantics.internal.contacts.append(fake_contact)
+    if fields_by_name["user_data"].number in archived.semantics_fields:
+      annotation.proto.semantics.user_data.type.append(
+          traffic_annotation.TrafficSemantics.UserData.UserDataType.OTHER)
+    if fields_by_name["last_reviewed"].number in archived.semantics_fields:
+      annotation.proto.semantics.last_reviewed = "1970-01-01"
 
-    util.fill_proto_with_bogus(annotation.proto.policy, archived.policy_fields)
+    util.fill_proto_with_bogus(annotation.unique_id, annotation.proto.policy,
+                               archived.policy_fields)
 
     # cookies_allowed is a special field: negative values indicate NO, and
     # positive values indicate YES.
@@ -270,6 +291,26 @@ class Annotation:
               None, 0, self.unique_id, completing_annotation.unique_id)
       ]
 
+    # Merge 'internal::contacts' and 'user_data' fields.
+    combination.proto.semantics.internal.contacts.extend(
+        other.proto.semantics.internal.contacts)
+
+    combination.proto.semantics.user_data.type.extend(
+        other.proto.semantics.user_data.type)
+
+    # Merge 'last_reviewed' field.
+    if (self.proto.semantics.last_reviewed
+        and other.proto.semantics.last_reviewed):
+      return combination, [
+          AuditorError(
+              ErrorType.MERGE_FAILED,
+              "Both annotations contain semantics::last_reviewed values", None,
+              0, self.unique_id, completing_annotation.unique_id)
+      ]
+    elif other.proto.semantics.last_reviewed:
+      combination.proto.semantics.last_reviewed = (
+          other.proto.semantics.last_reviewed)
+
     # Copy TrafficPolicy.
     policy_string_fields = [
         "cookies_store", "setting", "policy_exception_justification"
@@ -283,6 +324,9 @@ class Annotation:
 
     combination.proto.policy.chrome_policy.extend(
         other.proto.policy.chrome_policy)
+
+    combination.proto.policy.chrome_device_policy.extend(
+        other.proto.policy.chrome_device_policy)
 
     return combination, []
 
@@ -307,12 +351,22 @@ class Annotation:
       return self.second_id == other.second_id
     return False
 
+  def is_field_populated(self, field_name: str) -> bool:
+    """Checks if a field has a value. If field is internal or user_data
+        then checks that the list of fields is not empty."""
+    attr = getattr(self.proto.semantics, field_name)
+    if not attr:
+      return False
+    if field_name in ['internal', 'user_data']:
+      return bool(attr.ListFields())
+    return True
+
   def get_semantics_field_numbers(self) -> List[int]:
     """Returns the proto field numbers of TrafficSemantics fields that are
     included in this annotation."""
     return [
         f.number for f in traffic_annotation.TrafficSemantics.DESCRIPTOR.fields
-        if getattr(self.proto.semantics, f.name)
+        if self.is_field_populated(f.name)
     ]
 
   def get_policy_field_numbers(self) -> List[int]:
@@ -412,10 +466,11 @@ class Annotation:
         and policy.cookies_allowed == CookiesAllowed.YES):
       unspecifieds.append("cookies_store")
 
-    # If either of 'chrome_policy' or 'policy_exception_justification' are
+    # If either a policy or a 'policy_exception_justification' are
     # available, ignore not having the other one.
-    if not policy.chrome_policy and not policy.policy_exception_justification:
+    if (not self.has_policy() and not policy.policy_exception_justification):
       unspecifieds.append("chrome_policy")
+      unspecifieds.append("chrome_device_policy")
       unspecifieds.append("policy_exception_justification")
 
     if unspecifieds:
@@ -440,7 +495,7 @@ class Annotation:
               self.file, self.line)
       ]
 
-    if policy.chrome_policy and policy.policy_exception_justification:
+    if self.has_policy() and policy.policy_exception_justification:
       return [
           AuditorError(
               ErrorType.INCONSISTENT_ANNOTATION,
@@ -448,6 +503,104 @@ class Annotation:
               "present.", self.file, self.line)
       ]
 
+    return []
+
+  def check_new_fields(self, is_safe_listed: bool) -> List[AuditorError]:
+    """Checks empty or invalid value in internal::contacts::email,
+    user_data::type and last_reviewed fields in annotation."""
+    errors = []
+    missing_fields = []
+    semantics = self.proto.semantics
+
+    missing_last_reviewed_field = not semantics.last_reviewed
+    if missing_last_reviewed_field:
+      missing_fields.append("last_reviewed")
+
+    missing_contacts = self._check_contacts()
+    if missing_contacts:
+      missing_fields.append(missing_contacts)
+
+    missing_user_data = not semantics.user_data.type
+    if missing_user_data:
+      missing_fields.append("user_data::type")
+    else:
+      errors.extend(self._validate_user_data_type_values())
+
+    if missing_fields:
+      error_txt = ', '.join(missing_fields)
+      errors.append(
+          AuditorError(ErrorType.MISSING_NEW_FIELDS,
+                       "missing fields: {}".format(error_txt), self.file,
+                       self.line))
+
+    # If file is not in safe list then return all errors encountered for
+    # last_reviewed, contacts and user_data.
+    if not is_safe_listed:
+      return errors
+
+    # Any files should be removed from safe_list list if no error encountered.
+    if not errors:
+      return [
+          AuditorError(ErrorType.REMOVE_FROM_SAFE_LIST,
+                       "Annotation tagged with MISSING_NEW_FIELDS is complete",
+                       self.file, self.line)
+      ]
+
+    # File can only be in safe_list if all 3 fields are missing. Partially
+    # populating fields is not allowed.
+    if missing_contacts and missing_user_data and missing_last_reviewed_field:
+      return []
+
+    # Return error for file in safe_list with partially populated fields.
+    errors.append(
+        AuditorError(
+            ErrorType.MISSING_NEW_FIELDS,
+            "Cannot partially populate fields and add file in safe_list.txt",
+            self.file, self.line))
+
+    return errors
+
+  def check_last_reviewed_date_format(self) -> List[AuditorError]:
+    """If last_reviewed date field format does not match YYYY-mm-dd, then
+    return INVALID_DATE_FORMAT error."""
+    date_str = self.proto.semantics.last_reviewed
+    try:
+      if date_str:
+        datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+      return [
+          AuditorError(ErrorType.INVALID_DATE_FORMAT, "Should be YYYY-mm-dd",
+                       self.file, self.line)
+      ]
+    return []
+
+  def has_policy(self) -> bool:
+    """Return true if any policy field is set"""
+    return (self.proto.policy.chrome_policy
+            or self.proto.policy.chrome_device_policy)
+
+  def _check_contacts(self) -> Optional[str]:
+    """Checks presence of contacts fields in the annotation. All available
+    contacts fields should contain email"""
+    all_contacts = self.proto.semantics.internal.contacts
+
+    if not all_contacts:
+      return "internal::contacts"
+
+    if any(not contact.email and not contact.owners
+           for contact in all_contacts):
+      return "internal::contacts::email or internal::contacts::owners"
+
+    return None
+
+  def _validate_user_data_type_values(self) -> List[AuditorError]:
+    """Checks if any of semantics::user_data:type has an UNSPECIFIED value."""
+    semantics = self.proto.semantics
+    if semantics.UserData.UserDataType.UNSPECIFIED in semantics.user_data.type:
+      return [
+          AuditorError(ErrorType.INVALID_USER_DATA_TYPE, "UNSPECIFIED",
+                       self.file, self.line)
+      ]
     return []
 
 
@@ -461,6 +614,9 @@ class ExceptionType(Enum):
   TEST_ANNOTATION = "test_annotation"
   # Ignore CreateMutableNetworkTrafficAnnotationTag().
   MUTABLE_TAG = "mutable_tag"
+  # Ignore usage of newly added fields (contacts, user_data, last_reviewed)
+  # in annotation.
+  MISSING_NEW_FIELDS = "missing_new_fields"
 
   @classmethod
   def from_error_type(cls, error_type: ErrorType):
@@ -923,6 +1079,9 @@ class Exporter:
           archived.os_list.append(self._current_platform)
         # content_hash_code includes the proto, so this detects most changes.
         archived.content_hash_code = annotation.get_content_hash_code()
+        if annotation.type != Annotation.Type.COMPLETE:
+          archived.semantics_fields = annotation.get_semantics_field_numbers()
+          archived.policy_fields = annotation.get_policy_field_numbers()
       else:
         # If annotation is new, add it and assume it is on all platforms. Tests
         # running on other platforms will request updating this if required.
@@ -1207,11 +1366,7 @@ class Exporter:
 class Auditor:
   """Extracts and validates annotations from the codebase."""
 
-  SAFE_LIST_PATH = (SRC_DIR / "tools" / "traffic_annotation" / "auditor" /
-                    "safe_list.txt")
-  # TODO(b/203773498): Remove ChromeOS safelist after cleanup.
-  CHROME_OS_SAFE_LIST_PATH = (SRC_DIR / "tools" / "traffic_annotation" /
-                              "auditor" / "chromeos" / "safe_list.txt")
+  SAFE_LIST_PATH = SRC_DIR / "tools" / "traffic_annotation" / "safe_list.txt"
 
   def __init__(self, current_platform: str, no_filtering: bool = False):
     if current_platform not in SUPPORTED_PLATFORMS:
@@ -1249,9 +1404,6 @@ class Auditor:
         Auditor.SAFE_LIST_PATH.relative_to(SRC_DIR)))
 
     lines = Auditor.SAFE_LIST_PATH.read_text(encoding="utf-8").splitlines()
-    if self.exporter._current_platform == "chromeos":
-      lines += Auditor.CHROME_OS_SAFE_LIST_PATH.read_text(
-          encoding="utf-8").splitlines()
 
     for line in lines:
       # Ignore comments and empty lines.
@@ -1287,6 +1439,28 @@ class Auditor:
       return True
     return any(r.match(posix_path) for r in safe_list[exception_type])
 
+  def process_file(self, relative_path: Path, compdb_files: Set[str],
+                   path_filters: List[str]) -> List[Annotation]:
+    absolute_path = SRC_DIR / relative_path
+
+    # Skip files based on compdb and path_filters. Java files aren't in
+    # compile_commands.json, so don't check those.
+    if (absolute_path.suffix != ".java" and compdb_files is not None
+        and str(absolute_path) not in compdb_files):
+      return None
+    if (path_filters
+        and not self._path_filters_match(path_filters, relative_path)):
+      return None
+
+    # Pre-filter files based on their content, using a fast regex. When files
+    # are already in memory from the disk cache, this saves ~10 seconds.
+    file_contents = absolute_path.read_text(encoding="utf-8")
+    if (not self.no_filtering
+        and not extractor.may_contain_annotations(file_contents)):
+      return None
+
+    return extractor.extract_annotations(absolute_path, file_contents)
+
   def run_extractor(self, build_path: Path, path_filters: List[str],
                     skip_compdb: bool) -> List[extractor.Annotation]:
     """Run the extractor on the codebase.
@@ -1306,24 +1480,25 @@ class Auditor:
     """
     safe_list = self._get_safe_list()
 
-    logger.info("Getting list of files from git.")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+      # TODO(nicolaso): Move FileFilter and `git ls-files` logic to
+      # extractor.py, or maybe a separate file?
+      logger.info("Getting list of files from git.")
+      files_future = executor.submit(self.file_filter.get_source_files,
+                                     safe_list, "")
 
-    # TODO(nicolaso): Both get_source_files() and GetCompDBFiles() take a
-    # couple seconds. They have no dependency on each other, so doing them both
-    # in parallel may save up to ~2-3 seconds (or not, depending on how much
-    # the two would fight for disk IO).
+      # Skip compdb generation while testing to speed up tests.
+      if self.file_filter.git_file_for_testing is not None:
+        compdb_files_future = None
+      else:
+        logger.info("Generating compile_commands.json")
+        tools = NetworkTrafficAnnotationTools(str(build_path))
+        compdb_files_future = executor.submit(tools.GetCompDBFiles,
+                                              not skip_compdb)
 
-    # TODO(nicolaso): Move FileFilter and `git ls-files` logic to extractor.py,
-    # or maybe a separate file?
-    files = self.file_filter.get_source_files(safe_list, "")
-
-    # Skip compdb generation while testing to speed up tests.
-    if self.file_filter.git_file_for_testing is not None:
-      compdb_files = None
-    else:
-      logger.info("Generating compile_commands.json")
-      tools = NetworkTrafficAnnotationTools(str(build_path))
-      compdb_files = tools.GetCompDBFiles(not skip_compdb)
+      files = files_future.result()
+      compdb_files = compdb_files_future.result(
+      ) if compdb_files_future else None
 
     suffixes = '/'.join(self.file_filter.accepted_suffixes)
     if path_filters:
@@ -1335,30 +1510,19 @@ class Auditor:
                   "repository.".format(suffixes))
 
     all_annotations = []
+    num_workers = 5
+    chunksize = len(files) // num_workers if len(files) > num_workers else 1
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=num_workers) as executor:
+      process_files_with_args = partial(self.process_file,
+                                        compdb_files=compdb_files,
+                                        path_filters=path_filters)
 
-    for relative_path in files:
-      absolute_path = SRC_DIR / relative_path
-
-      # Skip files based on compdb and path_filters. Java files aren't in
-      # compile_commands.json, so don't check those.
-      if (absolute_path.suffix != ".java" and compdb_files is not None
-          and str(absolute_path) not in compdb_files):
-        continue
-      if (path_filters
-          and not self._path_filters_match(path_filters, relative_path)):
-        continue
-
-      # Pre-filter files based on their content, using a fast regex. When files
-      # are already in memory from the disk cache, this saves ~10 seconds.
-      if (not self.no_filtering
-          and not extractor.may_contain_annotations(absolute_path)):
-        continue
-
-      # Extract annotations from the .cc/.mm/.java file. This will throw a
-      # SourceCodeParsingError if the format is invalid.
-      annotations = extractor.extract_annotations(absolute_path)
-      if annotations:
-        all_annotations.extend(annotations)
+      for annotations in executor.map(process_files_with_args,
+                                      files,
+                                      chunksize=chunksize):
+        if annotations:
+          all_annotations.extend(annotations)
 
     return all_annotations
 
@@ -1401,10 +1565,17 @@ class Auditor:
     """Validate the contents of a COMPLETE annotation."""
     assert annotation.type == Annotation.Type.COMPLETE
 
+    is_safe_listed = self._is_safe_listed(annotation.file,
+                                          ExceptionType.MISSING_NEW_FIELDS)
     errors = annotation.check_complete()
+
+    errors.extend(annotation.check_new_fields(is_safe_listed))
 
     if not errors:
       errors = annotation.check_consistent()
+
+    if not errors:
+      errors = annotation.check_last_reviewed_date_format()
 
     return errors
 
@@ -1574,7 +1745,8 @@ class Auditor:
       errors.extend(
           self.exporter.update_grouping(self.extracted_annotations,
                                         RESERVED_IDS))
-      errors.extend(self.check_grouping_xml())
+      if report_xml_updates:
+        errors.extend(self.check_grouping_xml())
 
     # If report_xml_updates is true, look at the contents of annotations.xml
     # and grouping.xml. If it needs an update,
@@ -1605,7 +1777,8 @@ class AuditorUI:
                error_limit: int = 0,
                annotations_file: Optional[Path] = None,
                errors_file: Optional[Path] = None,
-               skip_compdb: bool = False):
+               skip_compdb: bool = False,
+               skip_stale_build_check: bool = False):
     self.build_path = build_path
     # Convert backslashes to slashes on Windows.
     self.path_filters = [Path(f).as_posix() for f in path_filters]
@@ -1615,6 +1788,7 @@ class AuditorUI:
     self.annotations_file = annotations_file
     self.errors_file = errors_file
     self.skip_compdb = skip_compdb
+    self.skip_stale_build_check = skip_stale_build_check
 
     # Exposed for testing.
     global traffic_annotation_pb2
@@ -1626,6 +1800,17 @@ class AuditorUI:
                            self.no_filtering)
 
   def main(self) -> int:
+    if not self.skip_stale_build_check and self.is_stale_build(self.build_path):
+      logger.error(
+          textwrap.dedent("""
+                   {} is newer than the build dir {}.
+                   Please rebuild the traffic_annotation_proto target, or pass
+                   --skip-stale-build-check.
+                   \tautoninja -C out/Default traffic_annotation_proto
+                                   """).format(
+              TRAFFIC_ANNOTATION_PROTO_RELATIVE_PATH, build_path))
+      return 1
+
     if self.no_filtering and self.path_filters:
       logger.warning("The path_filters input is being ignored.")
       self.path_filters = []
@@ -1634,7 +1819,6 @@ class AuditorUI:
                                                  self.path_filters,
                                                  self.skip_compdb)
     errors = []
-
     errors.extend(self.auditor.parse_extractor_output(all_annotations))
 
     # If we already have errors from parsing annotations, report them. Otherwise
@@ -1678,6 +1862,21 @@ class AuditorUI:
     sys.stdout.write("Traffic annotations are all OK.\n")
     return 0
 
+  def is_stale_build(self, path: Path) -> bool:
+    """Returns true if the traffic_annotation.proto has been modified more
+    recently than the Python proto generated from it in the supplied build
+    directory.
+    """
+    src_proto_mtime = os.path.getmtime(
+        SRC_DIR.joinpath(TRAFFIC_ANNOTATION_PROTO_RELATIVE_PATH))
+    build_proto_mtime = os.path.getmtime(
+        path.joinpath(
+            'pyproto/chrome/browser/privacy/traffic_annotation_pb2.py'))
+    return src_proto_mtime > build_proto_mtime
+
+def is_cog() -> bool:
+  """Returns true if the script is running inside a Cog workspace."""
+  return SRC_DIR.as_posix().startswith('/google/cog/cloud')
 
 if __name__ == "__main__":
   args_parser = argparse.ArgumentParser(
@@ -1726,6 +1925,12 @@ if __name__ == "__main__":
       " up-to-date. This speeds up the auditor.",
       action="store_true")
   args_parser.add_argument(
+      "--skip-stale-build-check",
+      help="Run the auditor even when the generated proto files in the"
+      " --build-path supplied are older than the traffic_annotation.proto."
+      "This is useful if you're actively working on the protobuf.",
+      action="store_true")
+  args_parser.add_argument(
       "path_filters",
       nargs="*",
       help="Optional paths to filter which files the"
@@ -1737,13 +1942,19 @@ if __name__ == "__main__":
   args = args_parser.parse_args()
   build_path = Path(args.build_path)
 
+  # Check if in cog - if so, fail early.
+  if is_cog():
+    print("This script must not be run from cog workspaces.")
+    print("Note that running this script from Cider-G is not supported.")
+    sys.exit(1)
+
   print("Starting traffic annotation auditor. This may take a few minutes.")
   print("If you find a bug in this script, file bugs against the 'Enterprise>"
         "TrafficAnnotations' component and CC nicolaso@chromium.org.")
   auditor_ui = AuditorUI(build_path, args.path_filters, args.no_filtering,
                          args.test_only, args.limit, args.annotations_file,
-                         args.errors_file, args.skip_compdb)
-
+                         args.errors_file, args.skip_compdb,
+                         args.skip_stale_build_check)
   try:
     sys.exit(auditor_ui.main())
   except extractor.SourceCodeParsingError:

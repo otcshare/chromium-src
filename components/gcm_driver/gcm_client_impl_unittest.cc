@@ -9,13 +9,15 @@
 #include <initializer_list>
 #include <memory>
 
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -114,16 +116,6 @@ GCMClient::AccountTokenInfo MakeAccountToken(const std::string& email,
   account_token.email = email;
   account_token.access_token = token;
   return account_token;
-}
-
-std::map<std::string, std::string> MakeEmailToTokenMap(
-    const std::vector<GCMClient::AccountTokenInfo>& account_tokens) {
-  std::map<std::string, std::string> email_token_map;
-  for (auto iter = account_tokens.begin(); iter != account_tokens.end();
-       ++iter) {
-    email_token_map[iter->email] = iter->access_token;
-  }
-  return email_token_map;
 }
 
 class FakeMCSClient : public MCSClient {
@@ -251,7 +243,7 @@ class FakeGCMInternalsBuilder : public GCMInternalsBuilder {
 FakeGCMInternalsBuilder::FakeGCMInternalsBuilder(base::TimeDelta clock_step)
     : clock_(clock_step) {}
 
-FakeGCMInternalsBuilder::~FakeGCMInternalsBuilder() {}
+FakeGCMInternalsBuilder::~FakeGCMInternalsBuilder() = default;
 
 base::Clock* FakeGCMInternalsBuilder::GetClock() {
   return &clock_;
@@ -461,7 +453,7 @@ class GCMClientImplTest : public testing::Test,
 GCMClientImplTest::GCMClientImplTest()
     : last_event_(NONE), last_result_(GCMClient::UNKNOWN_ERROR) {}
 
-GCMClientImplTest::~GCMClientImplTest() {}
+GCMClientImplTest::~GCMClientImplTest() = default;
 
 void GCMClientImplTest::SetUp() {
   testing::Test::SetUp();
@@ -494,7 +486,7 @@ void GCMClientImplTest::SetFeatureParams(const base::Feature& feature,
 void GCMClientImplTest::InitializeInvalidationFieldTrial() {
   std::map<std::string, std::string> params;
   params[features::kParamNameTokenInvalidationPeriodDays] =
-      std::to_string(kTestTokenInvalidationPeriod);
+      base::NumberToString(kTestTokenInvalidationPeriod);
   ASSERT_NO_FATAL_FAILURE(
       SetFeatureParams(features::kInvalidateTokenFeature, std::move(params)));
 }
@@ -610,7 +602,6 @@ void GCMClientImplTest::InitializeGCMClient() {
   chrome_build_info.product_category_for_subtypes = kProductCategoryForSubtypes;
   gcm_client_->Initialize(
       chrome_build_info, gcm_store_path(),
-      /*remove_account_mappings_with_email_key=*/true,
       task_environment_.GetMainThreadTaskRunner(),
       base::SingleThreadTaskRunner::GetCurrentDefault(), base::DoNothing(),
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
@@ -718,9 +709,7 @@ TEST_F(GCMClientImplTest, LoadingCompleted) {
   // Checking freshly loaded CheckinInfo.
   EXPECT_EQ(kDeviceAndroidId, device_checkin_info().android_id);
   EXPECT_EQ(kDeviceSecurityToken, device_checkin_info().secret);
-  EXPECT_TRUE(device_checkin_info().last_checkin_accounts.empty());
   EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_TRUE(device_checkin_info().account_tokens.empty());
 }
 
 TEST_F(GCMClientImplTest, LoadingBusted) {
@@ -763,8 +752,6 @@ TEST_F(GCMClientImplTest, LoadingWithEmptyDirectory) {
   InitializeGCMClient();
   gcm_client()->Start(GCMClient::DELAYED_START);
   PumpLoopUntilIdle();
-  histogram_tester.ExpectUniqueSample("GCM.LoadStatus",
-                                      13 /* STORE_DOES_NOT_EXIST */, 1);
   // Since the store does not exist, the database should not have been opened.
   histogram_tester.ExpectTotalCount("GCM.Database.Open", 0);
   // Without a store, DELAYED_START loading should only reach INITIALIZED state.
@@ -949,7 +936,7 @@ TEST_F(GCMClientImplTest, RegisterPreviousSenderAgain) {
   EXPECT_TRUE(ExistsRegistration(kExtensionAppId));
 }
 
-TEST_F(GCMClientImplTest, DISABLED_RegisterAgainWhenTokenIsFresh) {
+TEST_F(GCMClientImplTest, RegisterAgainWhenTokenIsFresh) {
   // Register a sender.
   std::vector<std::string> senders;
   senders.push_back("sender");
@@ -1101,7 +1088,7 @@ TEST_F(GCMClientImplTest, DispatchDownstreamMessageRawData) {
   EXPECT_EQ(kRawData, last_message().raw_data);
 }
 
-TEST_F(GCMClientImplTest, DISABLED_DispatchDownstreamMessageSendError) {
+TEST_F(GCMClientImplTest, DispatchDownstreamMessageSendError) {
   std::map<std::string, std::string> expected_data = {
       {"message_type", "send_error"}, {"error_details", "some details"}};
 
@@ -1256,7 +1243,7 @@ TEST_F(GCMClientImplCheckinTest, LoadGSettingsFromStore) {
 }
 
 // This test only checks that periodic checkin happens.
-TEST_F(GCMClientImplCheckinTest, CheckinWithAccounts) {
+TEST_F(GCMClientImplCheckinTest, CheckinWithAccountsEmpty) {
   std::map<std::string, std::string> settings;
   settings["checkin_interval"] = base::NumberToString(kSettingsCheckinInterval);
   settings["checkin_url"] = "http://alternative.url/checkin";
@@ -1272,154 +1259,14 @@ TEST_F(GCMClientImplCheckinTest, CheckinWithAccounts) {
   account_tokens.push_back(MakeAccountToken("test_user2@gmail.com", "token2"));
   gcm_client()->SetAccountTokens(account_tokens);
 
-  EXPECT_TRUE(device_checkin_info().last_checkin_accounts.empty());
   EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
 
   PumpLoopUntilIdle();
   ASSERT_NO_FATAL_FAILURE(
       CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
                       GServicesSettings::CalculateDigest(settings), settings));
 
-  std::set<std::string> accounts;
-  accounts.insert("test_user1@gmail.com");
-  accounts.insert("test_user2@gmail.com");
-  EXPECT_EQ(accounts, device_checkin_info().last_checkin_accounts);
   EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
-
-  // Make sure the checkin request has the account info.
-  EXPECT_EQ(checkin_request().request_info_.account_tokens.size(), 2u);
-}
-
-// This test only checks that periodic checkin happens.
-TEST_F(GCMClientImplCheckinTest, CheckinWithAccountsEmptyWithFeature) {
-  scoped_feature_list().InitAndDisableFeature(
-      features::kGCMIncludeAccountTokensInCheckinRequest);
-
-  std::map<std::string, std::string> settings;
-  settings["checkin_interval"] = base::NumberToString(kSettingsCheckinInterval);
-  settings["checkin_url"] = "http://alternative.url/checkin";
-  settings["gcm_hostname"] = "alternative.gcm.host";
-  settings["gcm_secure_port"] = "7777";
-  settings["gcm_registration_url"] = "http://alternative.url/registration";
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::vector<GCMClient::AccountTokenInfo> account_tokens;
-  account_tokens.push_back(MakeAccountToken("test_user1@gmail.com", "token1"));
-  account_tokens.push_back(MakeAccountToken("test_user2@gmail.com", "token2"));
-  gcm_client()->SetAccountTokens(account_tokens);
-
-  EXPECT_TRUE(device_checkin_info().last_checkin_accounts.empty());
-  EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
-
-  PumpLoopUntilIdle();
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::set<std::string> accounts;
-  accounts.insert("test_user1@gmail.com");
-  accounts.insert("test_user2@gmail.com");
-  EXPECT_EQ(accounts, device_checkin_info().last_checkin_accounts);
-  EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
-
-  // Make sure the checkin request does not have the account info.
-  EXPECT_TRUE(checkin_request().request_info_.account_tokens.empty());
-}
-
-// This test only checks that periodic checkin happens.
-TEST_F(GCMClientImplCheckinTest, CheckinWhenAccountRemoved) {
-  std::map<std::string, std::string> settings;
-  settings["checkin_interval"] = base::NumberToString(kSettingsCheckinInterval);
-  settings["checkin_url"] = "http://alternative.url/checkin";
-  settings["gcm_hostname"] = "alternative.gcm.host";
-  settings["gcm_secure_port"] = "7777";
-  settings["gcm_registration_url"] = "http://alternative.url/registration";
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::vector<GCMClient::AccountTokenInfo> account_tokens;
-  account_tokens.push_back(MakeAccountToken("test_user1@gmail.com", "token1"));
-  account_tokens.push_back(MakeAccountToken("test_user2@gmail.com", "token2"));
-  gcm_client()->SetAccountTokens(account_tokens);
-  PumpLoopUntilIdle();
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  EXPECT_EQ(2UL, device_checkin_info().last_checkin_accounts.size());
-  EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
-
-  account_tokens.erase(account_tokens.begin() + 1);
-  gcm_client()->SetAccountTokens(account_tokens);
-
-  PumpLoopUntilIdle();
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::set<std::string> accounts;
-  accounts.insert("test_user1@gmail.com");
-  EXPECT_EQ(accounts, device_checkin_info().last_checkin_accounts);
-  EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
-}
-
-// This test only checks that periodic checkin happens.
-TEST_F(GCMClientImplCheckinTest, CheckinWhenAccountReplaced) {
-  std::map<std::string, std::string> settings;
-  settings["checkin_interval"] = base::NumberToString(kSettingsCheckinInterval);
-  settings["checkin_url"] = "http://alternative.url/checkin";
-  settings["gcm_hostname"] = "alternative.gcm.host";
-  settings["gcm_secure_port"] = "7777";
-  settings["gcm_registration_url"] = "http://alternative.url/registration";
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::vector<GCMClient::AccountTokenInfo> account_tokens;
-  account_tokens.push_back(MakeAccountToken("test_user1@gmail.com", "token1"));
-  gcm_client()->SetAccountTokens(account_tokens);
-
-  PumpLoopUntilIdle();
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  std::set<std::string> accounts;
-  accounts.insert("test_user1@gmail.com");
-  EXPECT_EQ(accounts, device_checkin_info().last_checkin_accounts);
-
-  // This should trigger another checkin, because the list of accounts is
-  // different.
-  account_tokens.clear();
-  account_tokens.push_back(MakeAccountToken("test_user2@gmail.com", "token2"));
-  gcm_client()->SetAccountTokens(account_tokens);
-
-  PumpLoopUntilIdle();
-  ASSERT_NO_FATAL_FAILURE(
-      CompleteCheckin(kDeviceAndroidId, kDeviceSecurityToken,
-                      GServicesSettings::CalculateDigest(settings), settings));
-
-  accounts.clear();
-  accounts.insert("test_user2@gmail.com");
-  EXPECT_EQ(accounts, device_checkin_info().last_checkin_accounts);
-  EXPECT_TRUE(device_checkin_info().accounts_set);
-  EXPECT_EQ(MakeEmailToTokenMap(account_tokens),
-            device_checkin_info().account_tokens);
 }
 
 TEST_F(GCMClientImplCheckinTest, ResetStoreWhenCheckinRejected) {
@@ -1472,7 +1319,7 @@ void GCMClientImplStartAndStopTest::DefaultCompleteCheckin() {
   PumpLoopUntilIdle();
 }
 
-TEST_F(GCMClientImplStartAndStopTest, DISABLED_StartStopAndRestart) {
+TEST_F(GCMClientImplStartAndStopTest, StartStopAndRestart) {
   // GCMClientImpl should be in INITIALIZED state at first.
   EXPECT_EQ(GCMClientImpl::INITIALIZED, gcm_client_state());
 
@@ -1586,7 +1433,7 @@ TEST_F(GCMClientImplStartAndStopTest, ImmediateStartAndThenDelayStart) {
   EXPECT_EQ(GCMClientImpl::LOADED, gcm_client_state());
 }
 
-TEST_F(GCMClientImplStartAndStopTest, DISABLED_DelayedStartRace) {
+TEST_F(GCMClientImplStartAndStopTest, DelayedStartRace) {
   // GCMClientImpl should be in INITIALIZED state at first.
   EXPECT_EQ(GCMClientImpl::INITIALIZED, gcm_client_state());
 
@@ -1648,7 +1495,7 @@ TEST_F(GCMClientImplStartAndStopTest, OnGCMReadyAccountsAndTokenFetchingTime) {
   base::Time expected_time = base::Time::Now();
   gcm_client()->SetLastTokenFetchTime(expected_time);
   AccountMapping expected_mapping;
-  expected_mapping.account_id = CoreAccountId("accId");
+  expected_mapping.account_id = CoreAccountId::FromGaiaId(GaiaId("accId"));
   expected_mapping.email = "email@gmail.com";
   expected_mapping.status = AccountMapping::MAPPED;
   expected_mapping.status_change_timestamp = expected_time;
@@ -1892,7 +1739,7 @@ TEST_F(GCMClientInstanceIDTest, DeleteSingleToken) {
   EXPECT_EQ(GCMClient::INVALID_PARAMETER, last_result());
 }
 
-TEST_F(GCMClientInstanceIDTest, DISABLED_DeleteAllTokens) {
+TEST_F(GCMClientInstanceIDTest, DeleteAllTokens) {
   AddInstanceID(kExtensionAppId, kInstanceID);
 
   // Get a token.

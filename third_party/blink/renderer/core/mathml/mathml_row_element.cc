@@ -6,9 +6,8 @@
 
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
-#include "third_party/blink/renderer/core/layout/ng/mathml/layout_ng_mathml_block.h"
+#include "third_party/blink/renderer/core/layout/mathml/layout_mathml_block.h"
 #include "third_party/blink/renderer/core/mathml/mathml_operator_element.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -20,12 +19,11 @@ MathMLRowElement::MathMLRowElement(const QualifiedName& tagName,
   }
 }
 
-LayoutObject* MathMLRowElement::CreateLayoutObject(const ComputedStyle& style,
-                                                   LegacyLayout legacy) {
-  if (!RuntimeEnabledFeatures::MathMLCoreEnabled() ||
-      !style.IsDisplayMathType() || legacy == LegacyLayout::kForce)
-    return MathMLElement::CreateLayoutObject(style, legacy);
-  return MakeGarbageCollected<LayoutNGMathMLBlock>(this);
+LayoutObject* MathMLRowElement::CreateLayoutObject(const ComputedStyle& style) {
+  if (!style.IsDisplayMathType()) {
+    return MathMLElement::CreateLayoutObject(style);
+  }
+  return MakeGarbageCollected<LayoutMathMLBlock>(this);
 }
 
 void MathMLRowElement::ChildrenChanged(const ChildrenChange& change) {

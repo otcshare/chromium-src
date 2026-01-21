@@ -4,9 +4,9 @@
 
 #include "extensions/common/permissions/api_permission_set.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
@@ -40,17 +40,19 @@ bool CreateAPIPermission(const std::string& permission_str,
   const APIPermissionInfo* permission_info =
       PermissionsInfo::GetInstance()->GetByName(permission_str);
   if (permission_info) {
-    std::unique_ptr<APIPermission> permission(
-        permission_info->CreateAPIPermission());
     if (source != APIPermissionSet::kAllowInternalPermissions &&
         permission_info->is_internal()) {
-      // An internal permission specified in permissions list is an error.
-      if (error) {
-        *error = ErrorUtils::FormatErrorMessageUTF16(
-            errors::kPermissionNotAllowedInManifest, permission_str);
+      // Treat internal permissions as unhandled if we don't allow them. This
+      // prevents us from hard erroring in the case that we ever change a
+      // permission from internal to not or vice versa.
+      if (unhandled_permissions) {
+        unhandled_permissions->push_back(permission_str);
       }
-      return false;
+      return true;
     }
+
+    std::unique_ptr<APIPermission> permission(
+        permission_info->CreateAPIPermission());
 
     std::string error_details;
     if (!permission->FromValue(permission_value, &error_details,
@@ -58,12 +60,10 @@ bool CreateAPIPermission(const std::string& permission_str,
       if (error) {
         if (error_details.empty()) {
           *error = ErrorUtils::FormatErrorMessageUTF16(
-              errors::kInvalidPermission,
-              permission_info->name());
+              errors::kInvalidPermission, permission_info->name());
         } else {
           *error = ErrorUtils::FormatErrorMessageUTF16(
-              errors::kInvalidPermissionWithDetail,
-              permission_info->name(),
+              errors::kInvalidPermissionWithDetail, permission_info->name(),
               error_details);
         }
         return false;
@@ -75,10 +75,11 @@ bool CreateAPIPermission(const std::string& permission_str,
     return true;
   }
 
-  if (unhandled_permissions)
+  if (unhandled_permissions) {
     unhandled_permissions->push_back(permission_str);
-  else
+  } else {
     VLOG(1) << "Unknown permission[" << permission_str << "].";
+  }
 
   return true;
 }
@@ -92,8 +93,8 @@ bool ParseChildPermissions(const std::string& base_name,
   if (permission_value) {
     if (!permission_value->is_list()) {
       if (error) {
-        *error = ErrorUtils::FormatErrorMessageUTF16(
-            errors::kInvalidPermission, base_name);
+        *error = ErrorUtils::FormatErrorMessageUTF16(errors::kInvalidPermission,
+                                                     base_name);
         return false;
       }
       VLOG(1) << "Permission value is not a list.";
@@ -119,8 +120,9 @@ bool ParseChildPermissions(const std::string& base_name,
 
       if (!CreateAPIPermission(base_name + '.' + list[i].GetString(), nullptr,
                                source, api_permissions, error,
-                               unhandled_permissions))
+                               unhandled_permissions)) {
         return false;
+      }
     }
   }
 
@@ -133,7 +135,7 @@ bool ParseChildPermissions(const std::string& base_name,
 void APIPermissionSet::insert(APIPermissionID id) {
   const APIPermissionInfo* permission_info =
       PermissionsInfo::GetInstance()->GetByID(id);
-  DCHECK(permission_info);
+  DCHECK(permission_info) << id;
   insert(permission_info->CreateAPIPermission());
 }
 
@@ -154,8 +156,9 @@ bool APIPermissionSet::ParseFromJSON(
     // permission should be a string or a single key dict.
     if (permissions[i].is_string()) {
       permission_str = permissions[i].GetString();
-    } else if (permissions[i].is_dict() && permissions[i].DictSize() == 1) {
-      auto dict_iter = permissions[i].DictItems().begin();
+    } else if (permissions[i].is_dict() &&
+               permissions[i].GetDict().size() == 1) {
+      auto dict_iter = permissions[i].GetDict().begin();
       permission_str = dict_iter->first;
       permission_value = &dict_iter->second;
     } else {
@@ -172,14 +175,17 @@ bool APIPermissionSet::ParseFromJSON(
     // be treated as a list of child permissions.
     if (PermissionsInfo::GetInstance()->HasChildPermissions(permission_str)) {
       if (!ParseChildPermissions(permission_str, permission_value, source,
-                                 api_permissions, error, unhandled_permissions))
+                                 api_permissions, error,
+                                 unhandled_permissions)) {
         return false;
+      }
       continue;
     }
 
     if (!CreateAPIPermission(permission_str, permission_value, source,
-                             api_permissions, error, unhandled_permissions))
+                             api_permissions, error, unhandled_permissions)) {
       return false;
+    }
   }
   return true;
 }
@@ -190,11 +196,9 @@ PermissionID::PermissionID(APIPermissionID id)
 PermissionID::PermissionID(APIPermissionID id, const std::u16string& parameter)
     : std::pair<APIPermissionID, std::u16string>(id, parameter) {}
 
-PermissionID::~PermissionID() {
-}
+PermissionID::~PermissionID() = default;
 
-PermissionIDSet::PermissionIDSet() {
-}
+PermissionIDSet::PermissionIDSet() = default;
 
 PermissionIDSet::PermissionIDSet(
     std::initializer_list<APIPermissionID> permissions) {
@@ -205,8 +209,7 @@ PermissionIDSet::PermissionIDSet(
 
 PermissionIDSet::PermissionIDSet(const PermissionIDSet& other) = default;
 
-PermissionIDSet::~PermissionIDSet() {
-}
+PermissionIDSet::~PermissionIDSet() = default;
 
 void PermissionIDSet::insert(APIPermissionID permission_id) {
   insert(permission_id, std::u16string());
@@ -253,27 +256,28 @@ bool PermissionIDSet::ContainsID(APIPermissionID permission_id) const {
 
 bool PermissionIDSet::ContainsAllIDs(
     const std::set<APIPermissionID>& permission_ids) const {
-  return std::includes(permissions_.begin(), permissions_.end(),
-                       permission_ids.begin(), permission_ids.end(),
-                       [] (const PermissionIDCompareHelper& lhs,
-                           const PermissionIDCompareHelper& rhs) {
-                         return lhs.id < rhs.id;
-                       });
+  return std::includes(
+      permissions_.begin(), permissions_.end(), permission_ids.begin(),
+      permission_ids.end(),
+      [](const PermissionIDCompareHelper& lhs,
+         const PermissionIDCompareHelper& rhs) { return lhs.id < rhs.id; });
 }
 
 bool PermissionIDSet::ContainsAnyID(
     const std::set<APIPermissionID>& permission_ids) const {
   for (APIPermissionID id : permission_ids) {
-    if (ContainsID(id))
+    if (ContainsID(id)) {
       return true;
+    }
   }
   return false;
 }
 
 bool PermissionIDSet::ContainsAnyID(const PermissionIDSet& other) const {
   for (const auto& id : other) {
-    if (ContainsID(id))
+    if (ContainsID(id)) {
       return true;
+    }
   }
   return false;
 }
@@ -293,7 +297,7 @@ PermissionIDSet PermissionIDSet::GetAllPermissionsWithIDs(
     const std::set<APIPermissionID>& permission_ids) const {
   PermissionIDSet subset;
   for (const auto& permission : permissions_) {
-    if (base::Contains(permission_ids, permission.id())) {
+    if (permission_ids.contains(permission.id())) {
       subset.permissions_.insert(permission);
     }
   }
@@ -301,7 +305,7 @@ PermissionIDSet PermissionIDSet::GetAllPermissionsWithIDs(
 }
 
 bool PermissionIDSet::Includes(const PermissionIDSet& subset) const {
-  return base::ranges::includes(permissions_, subset.permissions_);
+  return std::ranges::includes(permissions_, subset.permissions_);
 }
 
 bool PermissionIDSet::Equals(const PermissionIDSet& set) const {
@@ -324,7 +328,6 @@ bool PermissionIDSet::empty() const {
 }
 
 PermissionIDSet::PermissionIDSet(const std::set<PermissionID>& permissions)
-    : permissions_(permissions) {
-}
+    : permissions_(permissions) {}
 
 }  // namespace extensions

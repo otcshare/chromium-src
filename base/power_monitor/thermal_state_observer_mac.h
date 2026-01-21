@@ -5,12 +5,13 @@
 #ifndef BASE_POWER_MONITOR_THERMAL_STATE_OBSERVER_MAC_H_
 #define BASE_POWER_MONITOR_THERMAL_STATE_OBSERVER_MAC_H_
 
-#include <dispatch/dispatch.h>
-#include <objc/objc.h>
-
 #include <IOKit/pwr_mgt/IOPMLib.h>
+#include <dispatch/dispatch.h>
+
+#include <memory>
+
 #include "base/base_export.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/power_monitor/power_observer.h"
 
@@ -36,7 +37,7 @@ class BASE_EXPORT ThermalStateObserverMac {
   ~ThermalStateObserverMac();
 
   PowerThermalObserver::DeviceThermalState GetCurrentThermalState();
-  int GetCurrentSpeedLimit();
+  int GetCurrentSpeedLimit() const;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(ThermalStateObserverMacTest, StateChange);
@@ -44,8 +45,10 @@ class BASE_EXPORT ThermalStateObserverMac {
       PowerThermalObserver::DeviceThermalState::kUnknown;
 
   const char* const power_notification_key_;
-  id thermal_state_update_observer_;
   int speed_limit_notification_token_ = 0;
+
+  struct ObjCStorage;
+  std::unique_ptr<ObjCStorage> objc_storage_;
 };
 
 }  // namespace base

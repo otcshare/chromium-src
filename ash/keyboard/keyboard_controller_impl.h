@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <set>
+#include <string_view>
 #include <vector>
 
 #include "ash/ash_export.h"
@@ -16,6 +17,7 @@
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/public/cpp/session/session_observer.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 
 class PrefChangeRegistrar;
 class PrefRegistrySimple;
@@ -53,7 +55,8 @@ class ASH_EXPORT KeyboardControllerImpl
 
   ~KeyboardControllerImpl() override;
 
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry,
+                                   std::string_view country);
 
   // Create or destroy the virtual keyboard. Called from Shell. TODO(stevenjb):
   // Fix dependencies so that the virtual keyboard can be created with the
@@ -92,8 +95,9 @@ class ASH_EXPORT KeyboardControllerImpl
   bool ShouldOverscroll() override;
   void AddObserver(KeyboardControllerObserver* observer) override;
   void RemoveObserver(KeyboardControllerObserver* observer) override;
-  absl::optional<KeyRepeatSettings> GetKeyRepeatSettings() override;
+  std::optional<KeyRepeatSettings> GetKeyRepeatSettings() override;
   bool AreTopRowKeysFunctionKeys() override;
+  void SetSmartVisibilityEnabled(bool enabled) override;
 
   // keyboard::KeyboardLayoutDelegate:
   aura::Window* GetContainerForDefaultDisplay() override;
@@ -138,7 +142,7 @@ class ASH_EXPORT KeyboardControllerImpl
   void SetEnableFlagFromCommandLine();
 
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
-  SessionControllerImpl* session_controller_;  // unowned
+  raw_ptr<SessionControllerImpl> session_controller_;  // unowned
   std::unique_ptr<keyboard::KeyboardUIController> keyboard_ui_controller_;
   std::unique_ptr<VirtualKeyboardController> virtual_keyboard_controller_;
   base::ObserverList<KeyboardControllerObserver>::Unchecked observers_;

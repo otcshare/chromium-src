@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
 // This file contains unit tests for gles2 commmands
 
 #include <stddef.h>
@@ -9,7 +11,7 @@
 
 #include <limits>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
@@ -24,7 +26,11 @@ class GLES2FormatTest : public testing::Test {
  protected:
   static const unsigned char kInitialValue = 0xBD;
 
-  void SetUp() override { memset(buffer_, kInitialValue, sizeof(buffer_)); }
+  void SetUp() override {
+    UNSAFE_TODO(
+        memset(buffer_.data(), kInitialValue,
+               (buffer_.size() * sizeof(decltype(buffer_)::value_type))));
+  }
 
   void TearDown() override {}
 
@@ -37,7 +43,8 @@ class GLES2FormatTest : public testing::Test {
       const void* end, size_t expected_size, size_t written_size) {
     size_t actual_size = static_cast<const unsigned char*>(end) -
         GetBufferAs<const unsigned char>();
-    EXPECT_LT(actual_size, sizeof(buffer_));
+    EXPECT_LT(actual_size,
+              (buffer_.size() * sizeof(decltype(buffer_)::value_type)));
     EXPECT_GT(actual_size, 0u);
     EXPECT_EQ(expected_size, actual_size);
     EXPECT_EQ(kInitialValue, buffer_[written_size]);
@@ -50,7 +57,7 @@ class GLES2FormatTest : public testing::Test {
   }
 
  private:
-  unsigned char buffer_[1024];
+  std::array<unsigned char, 1024> buffer_;
 };
 
 const unsigned char GLES2FormatTest::kInitialValue;

@@ -4,38 +4,45 @@
 
 package org.chromium.chrome.browser.privacy_guide;
 
+import static org.chromium.chrome.browser.privacy_guide.PrivacyGuideUtils.canUpdateHistorySyncValue;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxBridge;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
-import org.chromium.chrome.browser.sync.SyncService;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.content_settings.CookieControlsMode;
-import org.chromium.components.content_settings.PrefNames;
-import org.chromium.components.user_prefs.UserPrefs;
 
-/**
- * Computes for each privacy guide step whether it should be displayed or not.
- */
+/** Computes for each privacy guide step whether it should be displayed or not. */
+@NullMarked
 class StepDisplayHandlerImpl implements StepDisplayHandler {
+    private final Profile mProfile;
+    private final PrivacySandboxBridge mPrivacySandboxBridge;
+
+    StepDisplayHandlerImpl(Profile profile) {
+        mProfile = profile;
+        mPrivacySandboxBridge = new PrivacySandboxBridge(mProfile);
+    }
+
     @Override
     public boolean shouldDisplayHistorySync() {
-        SyncService syncService = SyncService.get();
-        return syncService != null && syncService.isSyncFeatureEnabled();
+        return canUpdateHistorySyncValue(mProfile);
     }
 
     @Override
     public boolean shouldDisplaySafeBrowsing() {
-        return SafeBrowsingBridge.getSafeBrowsingState() != SafeBrowsingState.NO_SAFE_BROWSING;
+        return PrivacyGuideUtils.getSafeBrowsingState(mProfile)
+                != SafeBrowsingState.NO_SAFE_BROWSING;
     }
 
     @Override
     public boolean shouldDisplayCookies() {
-        boolean allowCookies = WebsitePreferenceBridge.isCategoryEnabled(
-                Profile.getLastUsedRegularProfile(), ContentSettingsType.COOKIES);
-        @CookieControlsMode
-        int cookieControlsMode = UserPrefs.get(Profile.getLastUsedRegularProfile())
-                                         .getInteger(PrefNames.COOKIE_CONTROLS_MODE);
-        return allowCookies && cookieControlsMode != CookieControlsMode.OFF;
+        // Only show third-party cookies step if first-party cookies are allowed.
+        return WebsitePreferenceBridge.isCategoryEnabled(mProfile, ContentSettingsType.COOKIES);
+    }
+
+    @Override
+    public boolean shouldDisplayAdTopics() {
+        return mPrivacySandboxBridge.privacySandboxPrivacyGuideShouldShowAdTopicsCard();
     }
 }

@@ -50,9 +50,8 @@ class CONTENT_EXPORT ServiceWorkerJobCoordinator {
   void Unregister(const GURL& scope,
                   const blink::StorageKey& key,
                   bool is_immediate,
+                  ServiceWorkerRegistration::DeleteInitiator initiator,
                   ServiceWorkerUnregisterJob::UnregistrationCallback callback);
-
-  void Update(ServiceWorkerRegistration* registration, bool force_bypass_cache);
 
   void Update(ServiceWorkerRegistration* registration,
               bool force_bypass_cache,

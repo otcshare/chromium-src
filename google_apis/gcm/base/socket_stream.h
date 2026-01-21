@@ -10,10 +10,10 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "google/protobuf/io/zero_copy_stream.h"
 #include "google_apis/gcm/base/gcm_export.h"
@@ -115,7 +115,7 @@ class GCM_EXPORT SocketInputStream
   // Internal net components.
   mojo::ScopedDataPipeConsumerHandle stream_;
   mojo::SimpleWatcher stream_watcher_;
-  uint32_t read_size_;
+  size_t read_size_;
   const scoped_refptr<net::IOBuffer> io_buffer_;
   base::OnceClosure read_callback_;
   // IOBuffer implementation that wraps the data within |io_buffer_| that hasn't

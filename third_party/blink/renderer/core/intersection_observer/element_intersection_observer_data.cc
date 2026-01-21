@@ -19,7 +19,7 @@ IntersectionObservation* ElementIntersectionObserverData::GetObservationFor(
   auto i = observations_.find(&observer);
   if (i == observations_.end())
     return nullptr;
-  return i->value;
+  return i->value.Get();
 }
 
 void ElementIntersectionObserverData::AddObservation(
@@ -51,38 +51,12 @@ void ElementIntersectionObserverData::TrackWithController(
     controller.AddTrackedObserver(*observer);
 }
 
-void ElementIntersectionObserverData::StopTrackingWithController(
-    IntersectionObserverController& controller) {
-  for (auto& entry : observations_)
-    controller.RemoveTrackedObservation(*entry.value);
-  for (auto& observer : observers_)
-    controller.RemoveTrackedObserver(*observer);
-}
-
-bool ElementIntersectionObserverData::ComputeIntersectionsForTarget(
-    unsigned flags) {
-  bool needs_occlusion_tracking = false;
-  absl::optional<base::TimeTicks> monotonic_time;
-  for (auto& entry : observations_) {
-    needs_occlusion_tracking |= entry.key->NeedsOcclusionTracking();
-    entry.value->ComputeIntersection(flags, monotonic_time);
-  }
-  return needs_occlusion_tracking;
-}
-
 bool ElementIntersectionObserverData::NeedsOcclusionTracking() const {
   for (auto& entry : observations_) {
     if (entry.key->trackVisibility())
       return true;
   }
   return false;
-}
-
-void ElementIntersectionObserverData::InvalidateCachedRects() {
-  for (auto& observer : observers_)
-    observer->InvalidateCachedRects();
-  for (auto& entry : observations_)
-    entry.value->InvalidateCachedRects();
 }
 
 void ElementIntersectionObserverData::Trace(Visitor* visitor) const {

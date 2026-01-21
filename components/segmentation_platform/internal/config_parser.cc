@@ -24,20 +24,23 @@ constexpr char kUnknownSegmentSelectionTTL[] =
 }  // namespace
 
 std::unique_ptr<Config> ParseConfigFromString(const std::string& config_str) {
-  auto value_with_error =
-      base::JSONReader::ReadAndReturnValueWithError(config_str);
+  auto value_with_error = base::JSONReader::ReadAndReturnValueWithError(
+      config_str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value_with_error.has_value()) {
     VLOG(1) << "Config failed to parse: " << config_str
             << ". with error: " << value_with_error.error().message;
+    return nullptr;
+  }
+  if (!value_with_error.value().is_dict()) {
     return nullptr;
   }
   const base::Value::Dict& config_dict = value_with_error.value().GetDict();
   const std::string* key = config_dict.FindString(kSegmentationKey);
   const std::string* uma_name = config_dict.FindString(kSegmentationUmaName);
   const base::Value::Dict* segments = config_dict.FindDict(kSegmentIds);
-  const absl::optional<int> selection_ttl_days =
+  const std::optional<int> selection_ttl_days =
       config_dict.FindInt(kSegmentSelectionTTL);
-  const absl::optional<int> unknown_selection_ttl_days =
+  const std::optional<int> unknown_selection_ttl_days =
       config_dict.FindInt(kUnknownSegmentSelectionTTL);
 
   if (!key || !uma_name || !segments || !selection_ttl_days) {
@@ -70,4 +73,16 @@ std::unique_ptr<Config> ParseConfigFromString(const std::string& config_str) {
 
   return config;
 }
+
+base::flat_set<proto::SegmentId> GetAllSegmentIdsFromConfigs(
+    const std::vector<std::unique_ptr<Config>>& configs) {
+  base::flat_set<proto::SegmentId> all_segment_ids;
+  for (const auto& config : configs) {
+    for (const auto& segment_id : config->segments) {
+      all_segment_ids.insert(segment_id.first);
+    }
+  }
+  return all_segment_ids;
+}
+
 }  // namespace segmentation_platform

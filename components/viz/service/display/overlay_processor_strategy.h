@@ -23,35 +23,20 @@ namespace viz {
 class VIZ_SERVICE_EXPORT OverlayProcessorStrategy {
  public:
   virtual ~OverlayProcessorStrategy() = default;
-  using PrimaryPlane = OverlayProcessorInterface::OutputSurfaceOverlayPlane;
-
-  // Returns false if the strategy cannot be made to work with the
-  // current set of render passes. Returns true if the strategy was successful
-  // and adds any additional passes necessary to represent overlays to
-  // |render_pass_list|. Most strategies should look at the primary
-  // RenderPass, the last element.
-  virtual bool Attempt(const SkM44& output_color_matrix,
-                       const OverlayProcessorInterface::FilterOperationsMap&
-                           render_pass_backdrop_filters,
-                       DisplayResourceProvider* resource_provider,
-                       AggregatedRenderPassList* render_pass_list,
-                       SurfaceDamageRectList* surface_damage_rect_list,
-                       const PrimaryPlane* primary_plane,
-                       OverlayCandidateList* candidates,
-                       std::vector<gfx::Rect>* content_bounds) = 0;
 
   // Appends all legitimate overlay candidates to the list |candidates|
   // for this strategy.  It is very important to note that this function
   // should not attempt a specific candidate it should merely identify them
   // and save the necessary data required to for a later attempt.
-  virtual void ProposePrioritized(
+  virtual void Propose(
       const SkM44& output_color_matrix,
+      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       std::vector<OverlayProposedCandidate>* candidates,
       std::vector<gfx::Rect>* content_bounds) = 0;
 
@@ -60,14 +45,15 @@ class VIZ_SERVICE_EXPORT OverlayProcessorStrategy {
   // the strategy was successful and adds any additional passes necessary to
   // represent overlays to |render_pass_list|. Most strategies should look at
   // the primary RenderPass, the last element.
-  virtual bool AttemptPrioritized(
+  virtual bool Attempt(
       const SkM44& output_color_matrix,
+      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates,
       std::vector<gfx::Rect>* content_bounds,
       const OverlayProposedCandidate& proposed_candidate) = 0;
@@ -82,8 +68,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorStrategy {
   // strategy needs to enable blending for the primary plane in order to show
   // content underneath.
   virtual void AdjustOutputSurfaceOverlay(
-      OverlayProcessorInterface::OutputSurfaceOverlayPlane*
-          output_surface_plane) {}
+      std::optional<OverlayCandidate>& output_surface_plane) {}
 
   // Currently this is only overridden by the Fullscreen strategy: the
   // fullscreen strategy covers the entire screen and there is no need to use
@@ -94,7 +79,8 @@ class VIZ_SERVICE_EXPORT OverlayProcessorStrategy {
 
   // Does a null-check on |primary_plane| and returns it's |display_rect|
   // member if non-null and an empty gfx::RectF otherwise.
-  gfx::RectF GetPrimaryPlaneDisplayRect(const PrimaryPlane* primary_plane);
+  gfx::RectF GetPrimaryPlaneDisplayRect(
+      const std::optional<OverlayCandidate>& primary_plane);
 };
 
 }  // namespace viz

@@ -15,8 +15,10 @@ void MathMLSpaceElement::AddMathBaselineIfNeeded(
     ComputedStyleBuilder& builder,
     const CSSToLengthConversionData& conversion_data) {
   if (auto length_or_percentage_value = AddMathLengthToComputedStyle(
-          conversion_data, mathml_names::kHeightAttr))
+          conversion_data, mathml_names::kHeightAttr, AllowPercentages::kNo,
+          CSSPrimitiveValue::ValueRange::kNonNegative)) {
     builder.SetMathBaseline(std::move(*length_or_percentage_value));
+  }
 }
 
 bool MathMLSpaceElement::IsPresentationAttribute(
@@ -30,23 +32,34 @@ bool MathMLSpaceElement::IsPresentationAttribute(
 void MathMLSpaceElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == mathml_names::kWidthAttr) {
-    AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWidth,
-                                            value);
+    if (const CSSPrimitiveValue* width_value =
+            ParseMathLength(name, AllowPercentages::kNo,
+                            CSSPrimitiveValue::ValueRange::kNonNegative)) {
+      AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWidth,
+                                              *width_value);
+    }
   } else if (name == mathml_names::kHeightAttr ||
              name == mathml_names::kDepthAttr) {
     // TODO(rbuis): this can be simplified once attr() is supported for
     // width/height.
-    String height = FastGetAttribute(mathml_names::kHeightAttr);
-    String depth = FastGetAttribute(mathml_names::kDepthAttr);
-    if (!height.empty() && !depth.empty()) {
+    const CSSPrimitiveValue* height_value =
+        ParseMathLength(mathml_names::kHeightAttr, AllowPercentages::kNo,
+                        CSSPrimitiveValue::ValueRange::kNonNegative);
+    const CSSPrimitiveValue* depth_value =
+        ParseMathLength(mathml_names::kDepthAttr, AllowPercentages::kNo,
+                        CSSPrimitiveValue::ValueRange::kNonNegative);
+    const CSSPrimitiveValue* attribute_value =
+        (name == mathml_names::kHeightAttr ? height_value : depth_value);
+    if (height_value && depth_value) {
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kHeight,
-          "calc(" + height + " + " + depth + ")");
-    } else {
+          StrCat({"calc(", FastGetAttribute(mathml_names::kHeightAttr), " + ",
+                  FastGetAttribute(mathml_names::kDepthAttr), ")"}));
+    } else if (attribute_value) {
       AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kHeight,
-                                              value);
+                                              *attribute_value);
     }
   } else {
     MathMLElement::CollectStyleForPresentationAttribute(name, value, style);

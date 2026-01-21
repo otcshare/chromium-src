@@ -44,10 +44,6 @@ from mojom.generate import template_expander
 from mojom.generate import translate
 from mojom.generate.generator import WriteFile
 
-sys.path.append(
-    os.path.join(_GetDirAbove("mojo"), "tools", "diagnosis"))
-import crbug_1001171
-
 
 _BUILTIN_GENERATORS = {
     "c++": "mojom_cpp_generator",
@@ -55,11 +51,14 @@ _BUILTIN_GENERATORS = {
     "java": "mojom_java_generator",
     "mojolpm": "mojom_mojolpm_generator",
     "typescript": "mojom_ts_generator",
+    "rust": "mojom_rust_generator",
 }
 
 _BUILTIN_CHECKS = {
     "attributes": "mojom_attributes_check",
     "definitions": "mojom_definitions_check",
+    "direct_receiver": "mojom_interface_direct_receiver_check",
+    "features": "mojom_interface_feature_check",
     "restrictions": "mojom_restrictions_check",
 }
 
@@ -163,39 +162,67 @@ def ReadFileContents(filename):
     return f.read()
 
 
+def LoadTypemaps(typemaps, langs):
+  """Loads the typemaps. This function will return two dictionaries, one which
+  contains the typemaps for the requested languages. The second dictionary
+  contains the typemaps declared for this particular module (for the requested
+  languages)."""
+  loaded_typemap = {}
+  declared = {}
+
+  # Support some very simple single-line comments in typemap JSON.
+  comment_expr = r"^\s*//.*$"
+
+  def no_comments(line):
+    return not re.match(comment_expr, line)
+
+  for filename in typemaps:
+    with open(filename) as f:
+      typemaps = json.loads("".join(filter(no_comments, f.readlines())))
+      for language, typemap in typemaps.items():
+        # The _metadata field is additional information about the typemap
+        # configuration for a module and should not be treaded as a language.
+        if language == '_metadata':
+          continue
+        language_map = loaded_typemap.get(language, {})
+        language_map.update(typemap)
+        loaded_typemap[language] = language_map
+
+      # Read the declared modules from the _metadata.
+      if '_metadata' in typemaps:
+        for lang, names in typemaps['_metadata']['module_typemaps'].items():
+          if lang in langs:
+            if not lang in declared:
+              declared[lang] = []
+            declared[lang] += names
+
+  if 'c++' in loaded_typemap:
+    # The fuzzer also uses C++ typemappings.
+    loaded_typemap['mojolpm'] = loaded_typemap['c++']
+
+  return loaded_typemap, declared
+
+
+class GenerationResult:
+  """Contains information for MojomProcessor's _Generate. Use this object to
+  pass on information back to the caller."""
+
+  def __init__(self, module, languages):
+    # The module that was generated.
+    self.module = module
+    # The language bindings that were generated.
+    self.languages = languages
+
 class MojomProcessor:
   """Takes parsed mojom modules and generates language bindings from them.
-
-  Attributes:
-    _processed_files: {Dict[str, mojom.generate.module.Module]} Mapping from
-        relative mojom filename paths to the module AST for that mojom file.
   """
-  def __init__(self, should_generate):
-    self._should_generate = should_generate
-    self._processed_files = {}
-    self._typemap = {}
 
-  def LoadTypemaps(self, typemaps):
-    # Support some very simple single-line comments in typemap JSON.
-    comment_expr = r"^\s*//.*$"
-    def no_comments(line):
-      return not re.match(comment_expr, line)
-    for filename in typemaps:
-      with open(filename) as f:
-        typemaps = json.loads("".join(filter(no_comments, f.readlines())))
-        for language, typemap in typemaps.items():
-          language_map = self._typemap.get(language, {})
-          language_map.update(typemap)
-          self._typemap[language] = language_map
-    if 'c++' in self._typemap:
-      self._typemap['mojolpm'] = self._typemap['c++']
+  def __init__(self, files_in_module):
+    self._files_to_generate = files_in_module
 
   def _GenerateModule(self, args, remaining_args, check_modules,
-                      generator_modules, rel_filename, imported_filename_stack):
-    # Return the already-generated module.
-    if rel_filename.path in self._processed_files:
-      return self._processed_files[rel_filename.path]
-
+                      generator_modules, typemap, rel_filename,
+                      imported_filename_stack):
     if rel_filename.path in imported_filename_stack:
       print("%s: Error: Circular dependency" % rel_filename.path + \
           MakeImportStackMessage(imported_filename_stack + [rel_filename.path]))
@@ -210,7 +237,8 @@ class MojomProcessor:
           map(ReadFileContents, args.scrambled_message_id_salt_paths))
       ScrambleMethodOrdinals(module.interfaces, salt)
 
-    if self._should_generate(rel_filename.path):
+    generated_languages = []
+    if rel_filename.path in self._files_to_generate:
       # Run checks on module first.
       for check_module in check_modules.values():
         checker = check_module.Check(module)
@@ -218,7 +246,7 @@ class MojomProcessor:
       # Then run generation.
       for language, generator_module in generator_modules.items():
         generator = generator_module.Generator(
-            module, args.output_dir, typemap=self._typemap.get(language, {}),
+            module, args.output_dir, typemap=typemap.get(language, {}),
             variant=args.variant, bytecode_path=args.bytecode_path,
             for_blink=args.for_blink,
             js_generate_struct_deserializers=\
@@ -226,7 +254,6 @@ class MojomProcessor:
             export_attribute=args.export_attribute,
             export_header=args.export_header,
             generate_non_variant_code=args.generate_non_variant_code,
-            support_lazy_serialization=args.support_lazy_serialization,
             disallow_native_types=args.disallow_native_types,
             disallow_interfaces=args.disallow_interfaces,
             generate_message_ids=args.generate_message_ids,
@@ -240,11 +267,59 @@ class MojomProcessor:
           filtered_args = [arg for arg in remaining_args
                            if arg.startswith(prefix)]
         generator.GenerateFiles(filtered_args)
+        generated_languages += [language]
 
-    # Save result.
-    self._processed_files[rel_filename.path] = module
-    return module
+    return GenerationResult(module, generated_languages)
 
+
+class TypemapUsageVerifier:
+  """Verifier used to ensure that all typemaps are consumed after all the
+  all the bindings have been generated. This is useful for determining if a
+  typemap is not used, which indicates misconfiguration.
+
+  This object is initialized with a list  of typemaps. Callers should call
+  RemoveUsedTypemaps with result of every code generation. After all the code
+  generation is complete, the user needs to call VerifyAllTypemapsUsed to
+  verify that there are no unused typemaps. If there is are any unused
+  typemaps, an exception will be thrown."""
+
+  def __init__(self, declared):
+    self.unused_typemaps = declared
+    self.types_seen = []
+
+  def RemoveUsedTypemaps(self, generation_result):
+    for lang in generation_result.languages:
+      self._RemoveUsedTypemapsForLanguage(generation_result.module, lang)
+
+  def _RemoveUsedTypemapsForLanguage(self, module, language):
+
+    def RemoveUsedKind(kind, enclosing_kind=None):
+      namespace = module.mojom_namespace
+      if enclosing_kind:
+        namespace += f".{enclosing_kind.name}"
+      name = f"{namespace}.{kind.mojom_name}"
+      self.types_seen += [name]
+      if name in self.unused_typemaps.get(language, []):
+        self.unused_typemaps[language].remove(name)
+
+    for kind in module.unions + module.enums:
+      RemoveUsedKind(kind)
+
+    for struct_kind in module.structs:
+      RemoveUsedKind(struct_kind)
+      for enum in struct_kind.enums:
+        RemoveUsedKind(enum, struct_kind)
+
+    for iface_kind in module.interfaces:
+      for enum in iface_kind.enums:
+        RemoveUsedKind(enum, iface_kind)
+
+  def VerifyAllTypemapsUsed(self):
+    for (lang, typemaps) in self.unused_typemaps.items():
+      if len(typemaps) > 0:
+        raise Exception(
+            f"Unused typemaps found for {lang}:\n{sorted(typemaps)},\n\n"
+            f"types declared: {sorted(self.types_seen)}")
 
 def _Generate(args, remaining_args):
   if args.variant == "none":
@@ -263,17 +338,26 @@ def _Generate(args, remaining_args):
 
   fileutil.EnsureDirectoryExists(args.output_dir)
 
-  processor = MojomProcessor(lambda filename: filename in args.filename)
-  processor.LoadTypemaps(set(args.typemaps))
+  processor = MojomProcessor(args.filename)
+  typemap, declared = LoadTypemaps(set(args.typemaps), generator_modules.keys())
+  typemap_verifier = TypemapUsageVerifier(declared)
 
   if args.filelist:
     with open(args.filelist) as f:
       args.filename.extend(f.read().split())
 
+  paths_processed = []
   for filename in args.filename:
-    processor._GenerateModule(
-        args, remaining_args, check_modules, generator_modules,
-        RelativePath(filename, args.depth, args.output_dir), [])
+    path = RelativePath(filename, args.depth, args.output_dir)
+    if path in paths_processed:
+      continue
+
+    result = processor._GenerateModule(args, remaining_args, check_modules,
+                                       generator_modules, typemap, path, [])
+    typemap_verifier.RemoveUsedTypemaps(result)
+    paths_processed += [path]
+
+  typemap_verifier.VerifyAllTypemapsUsed()
 
   return 0
 
@@ -316,7 +400,7 @@ def main():
                                "--checks",
                                dest="checks_string",
                                metavar="CHECKS",
-                               default="attributes,definitions,restrictions",
+                               default=",".join(_BUILTIN_CHECKS.keys()),
                                help="comma-separated list of checks")
   generate_parser.add_argument(
       "--gen_dir", dest="gen_directories", action="append", metavar="directory",
@@ -362,10 +446,6 @@ def main():
       "a salt for generating scrambled message IDs. If this switch is specified"
       "more than once, the contents of all salt files are concatenated to form"
       "the salt value.", default=[], action="append")
-  generate_parser.add_argument(
-      "--support_lazy_serialization",
-      help="If set, generated bindings will serialize lazily when possible.",
-      action="store_true")
   generate_parser.add_argument(
       "--extra_cpp_template_paths",
       dest="extra_cpp_template_paths",
@@ -413,11 +493,10 @@ def main():
 
 
 if __name__ == "__main__":
-  with crbug_1001171.DumpStateOnLookupError():
-    ret = main()
-    # Exit without running GC, which can save multiple seconds due to the large
-    # number of object created. But flush is necessary as os._exit doesn't do
-    # that.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(ret)
+  ret = main()
+  # Exit without running GC, which can save multiple seconds due to the large
+  # number of object created. But flush is necessary as os._exit doesn't do
+  # that.
+  sys.stdout.flush()
+  sys.stderr.flush()
+  os._exit(ret)

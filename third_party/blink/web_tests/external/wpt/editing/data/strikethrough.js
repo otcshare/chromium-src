@@ -181,7 +181,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"strikethrough":[false,false,"",false,true,""]}],
 ["foo<u>[bar]</u>baz",
     [["stylewithcss","false"],["strikethrough",""]],
-    "foo<strike><u>[bar]</u></strike>baz",
+    "foo<u><strike>[bar]</strike></u>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"strikethrough":[false,false,"",false,true,""]}],
 // The <span> which is a  container of the range has text-decoration style.
@@ -388,7 +388,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"strikethrough":[false,false,"",false,true,""]}],
 ["foo<ins>[bar]</ins>baz",
     [["stylewithcss","false"],["strikethrough",""]],
-    "foo<strike><ins>[bar]</ins></strike>baz",
+    "foo<ins><strike>[bar]</strike></ins>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"strikethrough":[false,false,"",false,true,""]}],
 ["<ins>foo[bar]baz</ins>",
@@ -598,7 +598,7 @@ var browserTests = [
     {"stylewithcss":[false,false,"",false,true,""],"strikethrough":[false,false,"",false,true,""]}],
 ["foo<span class=\"underline\">[bar]</span>baz",
     [["stylewithcss","false"],["strikethrough",""]],
-    "foo<strike><span class=\"underline\">[bar]</span></strike>baz",
+    "foo<span class=\"underline\"><strike>[bar]</strike></span>baz",
     [true,true],
     {"stylewithcss":[false,true,"",false,false,""],"strikethrough":[false,false,"",false,true,""]}],
 ["foo<span class=\"underline\">b[a]r</span>baz",
@@ -766,6 +766,14 @@ var browserTests = [
     [["stylewithcss","true"],["strikethrough",""]],
     ["abc<span style=\"text-decoration:underline\">[def]</span>ghi",
      "abc<span style=\"text-decoration-line:underline\">[def]</span>ghi"],
+    [true,true],
+    {}],
+
+// Should not change the style of the non-editable nodes so that only the
+// visible and editable nodes are wrapped into the <strike> elements.
+['{ <span contenteditable="false">A</span> ; <span contenteditable="false">B</span> ; <span contenteditable="false">C</span> }',
+    [["stylewithcss","false"],["strikethrough",""]],
+    ' <span contenteditable="false">A</span><strike> ; </strike><span contenteditable="false">B</span><strike> ; </strike><span contenteditable="false">C</span> ',
     [true,true],
     {}],
 ]

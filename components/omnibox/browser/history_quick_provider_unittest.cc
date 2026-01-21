@@ -7,15 +7,17 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -30,10 +32,13 @@
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "components/omnibox/browser/history_test_util.h"
 #include "components/omnibox/browser/history_url_provider.h"
+#include "components/omnibox/browser/omnibox_triggered_feature_service.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search_engines/template_url_starter_pack_data.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
+#include "third_party/omnibox_proto/groups.pb.h"
 
 using base::ASCIIToUTF16;
 
@@ -50,8 +55,8 @@ class WaitForURLsDeletedObserver : public history::HistoryServiceObserver {
 
  private:
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // Weak. Owned by our owner.
   raw_ptr<base::RunLoop> runner_;
@@ -62,7 +67,7 @@ WaitForURLsDeletedObserver::WaitForURLsDeletedObserver(base::RunLoop* runner)
 
 WaitForURLsDeletedObserver::~WaitForURLsDeletedObserver() = default;
 
-void WaitForURLsDeletedObserver::OnURLsDeleted(
+void WaitForURLsDeletedObserver::OnHistoryDeletions(
     history::HistoryService* service,
     const history::DeletionInfo& deletion_info) {
   runner_->Quit();
@@ -82,8 +87,12 @@ void WaitForURLsDeletedNotification(history::HistoryService* history_service) {
 // thread's message loop when done.
 class GetURLTask : public history::HistoryDBTask {
  public:
-  GetURLTask(const GURL& url, bool* result_storage)
-      : result_storage_(result_storage), url_(url) {}
+  GetURLTask(const GURL& url,
+             bool* result_storage,
+             base::OnceClosure quit_closure)
+      : result_storage_(result_storage),
+        url_(url),
+        quit_closure_(std::move(quit_closure)) {}
   GetURLTask(const GetURLTask&) = delete;
   GetURLTask& operator=(const GetURLTask&) = delete;
 
@@ -93,15 +102,14 @@ class GetURLTask : public history::HistoryDBTask {
     return true;
   }
 
-  void DoneRunOnMainThread() override {
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
-  }
+  void DoneRunOnMainThread() override { std::move(quit_closure_).Run(); }
 
  private:
   ~GetURLTask() override = default;
 
   raw_ptr<bool> result_storage_;
   const GURL url_;
+  base::OnceClosure quit_closure_;
 };
 
 }  // namespace
@@ -184,8 +192,6 @@ class HistoryQuickProviderTest : public testing::Test {
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_{omnibox::kDomainSuggestions};
-
   base::test::TaskEnvironment task_environment_;
   base::ScopedTempDir history_dir_;
   std::unique_ptr<FakeAutocompleteProviderClient> client_;
@@ -206,9 +212,6 @@ void HistoryQuickProviderTest::SetUp() {
   ASSERT_NO_FATAL_FAILURE(FillData());
 
   client_->set_bookmark_model(bookmarks::TestBookmarkClient::CreateModel());
-  client_->set_template_url_service(
-      std::make_unique<TemplateURLService>(nullptr, 0));
-
   client_->set_in_memory_url_index(std::make_unique<InMemoryURLIndex>(
       client_->GetBookmarkModel(), client_->GetHistoryService(), nullptr,
       history_dir_.GetPath(), SchemeSet()));
@@ -223,6 +226,7 @@ void HistoryQuickProviderTest::SetUp() {
 }
 
 void HistoryQuickProviderTest::TearDown() {
+  ac_matches_.clear();
   provider_ = nullptr;
   client_.reset();
   task_environment_.RunUntilIdle();
@@ -415,13 +419,15 @@ void HistoryQuickProviderTest::RunTestWithCursor(
 bool HistoryQuickProviderTest::GetURLProxy(const GURL& url) {
   base::CancelableTaskTracker task_tracker;
   bool result = false;
+  base::RunLoop loop;
   client_->GetHistoryService()->ScheduleDBTask(
       FROM_HERE,
-      std::unique_ptr<history::HistoryDBTask>(new GetURLTask(url, &result)),
+      std::unique_ptr<history::HistoryDBTask>(
+          new GetURLTask(url, &result, loop.QuitWhenIdleClosure())),
       &task_tracker);
   // Run the message loop until GetURLTask::DoneRunOnMainThread stops it.  If
   // the test hangs, DoneRunOnMainThread isn't being invoked correctly.
-  base::RunLoop().Run();
+  loop.Run();
   return result;
 }
 
@@ -492,19 +498,17 @@ TEST_F(HistoryQuickProviderTest,
   RunTestWithCursor(u"prefixsuffix", std::string::npos, false, expected_urls,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
-  std::vector<int> unbroken_scores(3);
-  std::transform(ac_matches().begin(), ac_matches().end(),
-                 unbroken_scores.begin(),
-                 [](const auto& match) { return match.relevance; });
+  std::vector<int> unbroken_scores =
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+  EXPECT_EQ(unbroken_scores.size(), 3U);
 
   // Get scores for 'prefix suffix'
   RunTestWithCursor(u"prefix suffix", std::string::npos, false, expected_urls,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
-  std::vector<int> broken_scores(3);
-  std::transform(ac_matches().begin(), ac_matches().end(),
-                 broken_scores.begin(),
-                 [](const auto& match) { return match.relevance; });
+  std::vector<int> broken_scores =
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+  EXPECT_EQ(broken_scores.size(), 3U);
   // Ensure the latter scores are higher than the former.
   for (size_t i = 0; i < 3; ++i)
     EXPECT_GT(broken_scores[i], unbroken_scores[i]);
@@ -584,8 +588,9 @@ TEST_F(HistoryQuickProviderTest, ContentsClass) {
   // Verify that contents_class divides the string in the right places.
   // [22, 24) is the "第二".  All the other pairs are the "e3".
   ACMatchClassifications contents_class(ac_matches()[0].contents_class);
-  size_t expected_offsets[] = {0,  22, 24, 31, 33, 40, 42, 49,
-                               51, 58, 60, 67, 69, 76, 78};
+  auto expected_offsets = std::to_array<size_t>({
+      0, 22, 24, 31, 33, 40, 42, 49, 51, 58, 60, 67, 69, 76, 78, 85, 86, 94, 95,
+  });
   // ScoredHistoryMatch may not highlight all the occurrences of these terms
   // because it only highlights terms at word breaks, and it only stores word
   // breaks up to some specified number of characters (50 at the time of this
@@ -831,7 +836,7 @@ ScoredHistoryMatch BuildScoredHistoryMatch(const std::string& url_text,
                                            const std::u16string& input_term) {
   return ScoredHistoryMatch(history::URLRow(GURL(url_text)), VisitInfoVector(),
                             input_term, String16Vector(1, input_term),
-                            WordStarts(1, 0), RowWordStarts(), false, 0, false,
+                            WordStarts(1, 0), RowWordStarts(), false, 0,
                             base::Time());
 }
 
@@ -907,7 +912,7 @@ TEST_F(HistoryQuickProviderTest, CorrectAutocompleteWithTrailingSlash) {
   word_starts.url_word_starts_ = {0};
   ScoredHistoryMatch sh_match(history::URLRow(GURL("http://cr/")),
                               VisitInfoVector(), u"cr/", {u"cr"}, {0},
-                              word_starts, false, 0, false, base::Time());
+                              word_starts, false, 0, base::Time());
   AutocompleteMatch ac_match(QuickMatchToACMatch(sh_match, 0));
   EXPECT_EQ(u"cr/", ac_match.fill_into_edit);
   EXPECT_EQ(u"", ac_match.inline_autocompletion);
@@ -915,12 +920,9 @@ TEST_F(HistoryQuickProviderTest, CorrectAutocompleteWithTrailingSlash) {
 }
 
 TEST_F(HistoryQuickProviderTest, KeywordModeExtractUserInput) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(omnibox::kSiteSearchStarterPack);
-
   // Populate template URL with starter pack entries
   std::vector<std::unique_ptr<TemplateURLData>> turls =
-      TemplateURLStarterPackData::GetStarterPackEngines();
+      template_url_starter_pack_data::GetStarterPackEngines();
   for (auto& turl : turls) {
     client().GetTemplateURLService()->Add(
         std::make_unique<TemplateURL>(std::move(*turl)));
@@ -1000,6 +1002,65 @@ TEST_F(HistoryQuickProviderTest, MaxMatches) {
 
   matches = provider().matches();
   EXPECT_EQ(matches.size(), provider().provider_max_matches_in_keyword_mode());
+
+  // The provider should not limit the number of suggestions when ML scoring
+  // w/increased candidates is enabled. Any matches beyond the limit should be
+  // marked as culled_by_provider and have a relevance of 0.
+  input.set_keyword_mode_entry_method(
+      metrics::OmniboxEventProto_KeywordModeEntryMethod_INVALID);
+  input.set_prefer_keyword(false);
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/
+      {{omnibox::kUrlScoringModel, {}},
+       {omnibox::kMlUrlScoring,
+        {{"MlUrlScoringUnlimitedNumCandidates", "true"}}}},
+      /*disabled_features=*/{});
+  OmniboxFieldTrial::ScopedMLConfigForTesting scoped_ml_config;
+
+  provider().Start(input, false);
+  matches = provider().matches();
+  EXPECT_EQ(matches.size(), 8u);
+  // Matches below the `max_matches` limit.
+  for (size_t i = 0; i < provider().provider_max_matches(); i++) {
+    EXPECT_FALSE(matches[i].culled_by_provider);
+    EXPECT_GT(matches[i].relevance, 0);
+  }
+  // "Extra" matches above the `max_matches` limit. Should have 0 relevance and
+  // be marked as `culled_by_provider`.
+  for (size_t i = provider().provider_max_matches(); i < matches.size(); i++) {
+    EXPECT_TRUE(matches[i].culled_by_provider);
+    EXPECT_EQ(matches[i].relevance, 0);
+  }
+
+  // Unlimited matches should ignore the provider max matches, even if the
+  // `kMlUrlScoringMaxMatchesByProvider` param is set.
+  scoped_ml_config.GetMLConfig().ml_url_scoring_max_matches_by_provider = "*:6";
+
+  provider().Start(input, false);
+  matches = provider().matches();
+  EXPECT_EQ(matches.size(), 8u);
+}
+
+TEST_F(HistoryQuickProviderTest, GroupForAndroidHub) {
+  // Keyword mode is off. We should only get provider_max_matches_ matches.
+  AutocompleteInput input(u"somedomain.com",
+                          metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider().Start(input, false);
+  EXPECT_EQ(omnibox::GROUP_MOBILE_HISTORY,
+            provider().matches()[0].suggestion_group_id);
+}
+
+TEST_F(HistoryQuickProviderTest, BiggerMaxMatchesForAndroidHub) {
+  AutocompleteInput input(u"daysagoest",
+                          metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider().Start(input, false);
+  EXPECT_EQ(3u, provider().provider_max_matches());
+  EXPECT_FALSE(provider().matches().empty());
+  EXPECT_EQ(provider().matches().size(), 5u);
 }
 
 class HQPDomainSuggestionsTest : public HistoryQuickProviderTest {
@@ -1044,69 +1105,6 @@ class HQPDomainSuggestionsTest : public HistoryQuickProviderTest {
     };
   }
 };
-
-TEST_F(HQPDomainSuggestionsTest, DomainSuggestions) {
-  const auto test = [&](const std::u16string& input_text, bool input_keyword,
-                        std::vector<std::u16string> expected_matches) {
-    AutocompleteInput input(input_text, metrics::OmniboxEventProto::OTHER,
-                            TestSchemeClassifier());
-    input.set_keyword_mode_entry_method(
-        input_keyword
-            ? metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB
-            : metrics::OmniboxEventProto_KeywordModeEntryMethod_INVALID);
-    input.set_prefer_keyword(input_keyword);
-
-    provider().Start(input, false);
-    auto matches = provider().matches();
-    std::vector<std::u16string> match_titles;
-    base::ranges::transform(
-        matches, std::back_inserter(match_titles),
-        [](const auto& match) { return match.description; });
-    EXPECT_THAT(match_titles, testing::ElementsAreArray(expected_matches))
-        << "input_text: " << input_text << ", input_keyword: " << input_keyword;
-  };
-
-  // When matching a popular domain, its top 3 suggestions should be suggested
-  // twice: 1st from the overall pass, 2nd from domain pass. They should each be
-  // limited to individually, 3 matches for the 1st, 2 matches for the latter.
-  // Duplicates aren't necessary behavior, just a harmless side effect. The
-  // domain algorithm may change in the future to not add duplicates.
-  test(u"Dilijan", false,
-       {u"Dilijan 1", u"Dilijan 2", u"Dilijan 3", u"Dilijan 1", u"Dilijan 2"});
-
-  // Like above, but when only some of its suggestions match, only those should
-  // be suggested by both the overall and domain passes.
-  test(u"Dilijan 1", false, {u"Dilijan 1", u"Dilijan 1"});
-
-  // Domains with more than 4 typed visits should be considered popular.
-  test(u"Geghard", false,
-       {u"Geghard 1", u"Geghard 2", u"Geghard 3", u"Geghard 1", u"Geghard 2"});
-
-  // Domains with more than 4 typed visits but less than 4 capped typed visits
-  // should not be considered popular.
-  test(u"Tatev", false, {u"Tatev 1", u"Tatev 2", u"Tatev 3"});
-
-  // Domains with more than 7 visits, but less than 7 1-typed visits should not
-  // be considered popular.
-  test(u"Gyumri", false, {u"Gyumri 1", u"Gyumri 2", u"Gyumri 3"});
-
-  // When matching multiple domains, the overall pass should suggest the top
-  // suggestion, even if some of them aren't from a popular domain, then each
-  // domain's suggestions should be appended, each individually limited to 2.
-  test(u"www.", false,
-       {u"Gyumri 1", u"Tatev 1", u"Gyumri 2", u"Geghard 1", u"Geghard 2",
-        u"Dilijan 1", u"Dilijan 2"});
-
-  // Short inputs should not have domain suggestions.
-  test(u"Dil", false, {u"Dilijan 1", u"Dilijan 2", u"Dilijan 3"});
-
-  // Keyword inputs should not have domain suggestions, so we shouldn't see
-  // duplicates. But keyword inputs have a higher provider limit, so we should
-  // see all 7 matching suggestions.
-  test(u"Dilijan", true,
-       {u"Dilijan 1", u"Dilijan 2", u"Dilijan 3", u"Dilijan 4", u"Dilijan 5",
-        u"Dilijan 6", u"Dilijan 7"});
-}
 
 // HQPOrderingTest -------------------------------------------------------------
 
@@ -1165,10 +1163,11 @@ HQPOrderingTest::GetTestData() {
 
 TEST_F(HQPOrderingTest, TEMatch) {
   std::vector<std::string> expected_urls;
-  expected_urls.push_back("http://techmeme.com/");
   expected_urls.push_back("http://www.teamliquid.net/");
+  expected_urls.push_back("http://techmeme.com/");
   expected_urls.push_back("http://www.teamliquid.net/tlpd");
-  RunTest(u"te", false, expected_urls, true, u"techmeme.com", u"chmeme.com");
+  RunTest(u"te", false, expected_urls, true, u"www.teamliquid.net",
+          u"amliquid.net");
 }
 
 TEST_F(HQPOrderingTest, TEAMatch) {

@@ -17,7 +17,7 @@ base::FilePath RankerTestBase::GetPath() {
 }
 
 Results RankerTestBase::MakeScoredResults(const std::vector<std::string>& ids,
-                                          const std::vector<double> scores,
+                                          const std::vector<double>& scores,
                                           ResultType result_type,
                                           Category category) {
   Results res;
@@ -44,6 +44,19 @@ LaunchData RankerTestBase::MakeLaunchData(const std::string& id,
   launch.id = id;
   launch.category = category;
   return launch;
+}
+
+void RankerTestBase::SetFtrlScore(const ResultsMap& results,
+                                  ProviderType provider,
+                                  const std::vector<double>& ftrl_scores) {
+  const auto it = results.find(provider);
+  ASSERT_NE(it, results.end());
+
+  ASSERT_EQ(it->second.size(), ftrl_scores.size());
+
+  for (size_t i = 0; i < ftrl_scores.size(); i++) {
+    (it->second)[i]->scoring().set_ftrl_result_score(ftrl_scores[i]);
+  }
 }
 
 void RankerTestBase::Wait() {

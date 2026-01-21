@@ -4,7 +4,6 @@
 
 '''GRIT tool that runs the unit test suite for GRIT.'''
 
-from __future__ import print_function
 
 import getopt
 import sys
@@ -39,5 +38,8 @@ This happens in the environment that is set up by the basic GRIT runner.'''
       print('This tool takes no arguments.')
       return 2
 
-    return unittest.TextTestRunner(verbosity=2).run(
-      grit.test_suite_all.TestSuiteAll())
+    # This calls into typ, which uses argparse, which reads from sys.args. So if
+    # we don't clear this here, it will try to interpret grit.py args as unit
+    # test modules to run.
+    sys.argv = []
+    return grit.test_suite_all.main([])

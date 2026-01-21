@@ -13,6 +13,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
+
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 
@@ -21,20 +24,17 @@
 namespace base {
 
 struct linux_dirent {
-  uint64_t        d_ino;
-  int64_t         d_off;
-  unsigned short  d_reclen;
-  unsigned char   d_type;
-  char            d_name[0];
+  uint64_t d_ino;
+  int64_t d_off;
+  unsigned short d_reclen;
+  unsigned char d_type;
+  char d_name[0];
 };
 
 class DirReaderLinux {
  public:
   explicit DirReaderLinux(const char* directory_path)
-      : fd_(open(directory_path, O_RDONLY | O_DIRECTORY)),
-        offset_(0),
-        size_(0) {
-    memset(buf_, 0, sizeof(buf_));
+      : fd_(open(directory_path, O_RDONLY | O_DIRECTORY)) {
   }
 
   DirReaderLinux(const DirReaderLinux&) = delete;
@@ -42,14 +42,13 @@ class DirReaderLinux {
 
   ~DirReaderLinux() {
     if (fd_ >= 0) {
-      if (IGNORE_EINTR(close(fd_)))
+      if (IGNORE_EINTR(close(fd_))) {
         RAW_LOG(ERROR, "Failed to close directory handle");
+      }
     }
   }
 
-  bool IsValid() const {
-    return fd_ >= 0;
-  }
+  bool IsValid() const { return fd_ >= 0; }
 
   // Move to the next entry returning false if the iteration is complete.
   bool Next() {
@@ -58,14 +57,18 @@ class DirReaderLinux {
       offset_ += dirent->d_reclen;
     }
 
-    if (offset_ != size_)
+    if (offset_ != size_) {
       return true;
+    }
 
-    const long r = syscall(__NR_getdents64, fd_, buf_, sizeof(buf_));
-    if (r == 0)
+    const long r = syscall(__NR_getdents64, fd_, buf_.data(), buf_.size());
+    if (r == 0) {
       return false;
+    }
     if (r < 0) {
-      DPLOG(FATAL) << "getdents64 failed";
+      if (errno != ENOENT) {
+        DPLOG(FATAL) << "getdents64 failed";
+      }
       return false;
     }
     size_ = static_cast<size_t>(r);
@@ -74,27 +77,24 @@ class DirReaderLinux {
   }
 
   const char* name() const {
-    if (!size_)
+    if (!size_) {
       return nullptr;
+    }
 
     const linux_dirent* dirent =
         reinterpret_cast<const linux_dirent*>(&buf_[offset_]);
     return dirent->d_name;
   }
 
-  int fd() const {
-    return fd_;
-  }
+  int fd() const { return fd_; }
 
-  static bool IsFallback() {
-    return false;
-  }
+  static bool IsFallback() { return false; }
 
  private:
   const int fd_;
-  alignas(linux_dirent) unsigned char buf_[512];
-  size_t offset_;
-  size_t size_;
+  alignas(linux_dirent) std::array<unsigned char, 512> buf_ = {};
+  size_t offset_ = 0;
+  size_t size_ = 0;
 };
 
 }  // namespace base

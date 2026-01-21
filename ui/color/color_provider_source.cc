@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ui/color/color_provider_source.h"
+
 #include "base/observer_list.h"
 #include "ui/color/color_provider_source_observer.h"
 
@@ -11,8 +12,8 @@ namespace ui {
 ColorProviderSource::ColorProviderSource() = default;
 
 ColorProviderSource::~ColorProviderSource() {
-  for (auto& observer : observers_)
-    observer.OnColorProviderSourceDestroying();
+  observers_.Notify(
+      &ColorProviderSourceObserver::OnColorProviderSourceDestroying);
 }
 
 void ColorProviderSource::AddObserver(ColorProviderSourceObserver* observer) {
@@ -25,8 +26,16 @@ void ColorProviderSource::RemoveObserver(
 }
 
 void ColorProviderSource::NotifyColorProviderChanged() {
-  for (auto& observer : observers_)
-    observer.OnColorProviderChanged();
+  observers_.Notify(&ColorProviderSourceObserver::OnColorProviderChanged);
+}
+
+ui::ColorProviderKey::ColorMode ColorProviderSource::GetColorMode() const {
+  return GetColorProviderKey().color_mode;
+}
+
+ui::ColorProviderKey::ForcedColors ColorProviderSource::GetForcedColors()
+    const {
+  return GetColorProviderKey().forced_colors;
 }
 
 }  // namespace ui

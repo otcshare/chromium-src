@@ -26,13 +26,12 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import enum
 import functools
 import logging
 import json
-from typing import Literal, NamedTuple, Optional
+from typing import List, Literal, NamedTuple, Optional
 from urllib.parse import urlunsplit
-
-import six
 
 from blinkpy.common.memoized import memoized
 from blinkpy.common.net.luci_auth import LuciAuth
@@ -57,6 +56,40 @@ class Build(NamedTuple):
     build_number: Optional[int] = None
     build_id: Optional[str] = None
     bucket: Literal['ci', 'try'] = 'try'
+
+    def __str__(self) -> str:
+        builder = f'"{self.builder_name}"'
+        if self.build_number:
+            return f'{builder} build {self.build_number}'
+        return builder
+
+
+class BuildStatus(enum.Flag):
+    """Buildbucket statuses [0]. The names should match where applicable.
+
+    [0]: https://chromium.googlesource.com/infra/luci/luci-go/+/main/buildbucket/proto/common.proto
+    """
+    SCHEDULED = enum.auto()
+    STARTED = enum.auto()
+    SUCCESS = enum.auto()
+    # `*_FAILURE` are Chromium-specific reasons why a build appears red:
+    # https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:recipes/recipe_modules/tryserver/api.py;l=295-309;drc=6ba67afd6fb7718743af91b847ddf1907f3ee9a6;bpv=0;bpt=0
+    #
+    # These reasons are opaque to Buildbucket, which treats all of them as just
+    # `FAILURE`.
+    TEST_FAILURE = enum.auto()
+    COMPILE_FAILURE = enum.auto()
+    PATCH_FAILURE = enum.auto()
+    OTHER_FAILURE = enum.auto()
+    FAILURE = TEST_FAILURE | COMPILE_FAILURE | PATCH_FAILURE | OTHER_FAILURE
+    INFRA_FAILURE = enum.auto()
+    CANCELED = enum.auto()
+    COMPLETED = SUCCESS | FAILURE | INFRA_FAILURE | CANCELED
+    # Pseudo-status more specific than `SCHEDULED` to indicate a build that was
+    # triggered by this run.
+    TRIGGERED = enum.auto()
+    # Pseudo-status to indicate a missing try build.
+    MISSING = enum.auto()
 
 
 class RPCError(Exception):
@@ -121,7 +154,7 @@ class BaseRPC:
             'Content-Type': 'application/json',
         }
         url = self._make_url(method)
-        body = six.ensure_binary(json.dumps(data, separators=(',', ':')))
+        body = json.dumps(data, separators=(',', ':')).encode()
         make_request = functools.partial(self._web.request_and_read,
                                          'POST',
                                          url,
@@ -172,9 +205,7 @@ class BaseRPC:
             https://source.chromium.org/chromium/infra/infra/+/master:go/src/go.chromium.org/luci/resultdb/proto/v1/resultdb.proto
         """
         entities = []
-        # Using 1e5 instead of 1000 max to reduce the rpc number
-        # Check https://source.chromium.org/chromium/infra/infra/+/master:go/src/go.chromium.org/luci/resultdb/internal/pagination/pagination.go
-        data['pageSize'] = count if count > 0 else 1e5
+        data['pageSize'] = count if count > 0 else 1000
         while data.get('pageToken', True) and (count == 0
                                                or count - len(entities) > 0):
             response = self._luci_rpc(method, data)
@@ -198,14 +229,16 @@ class BuildbucketClient(BaseRPC):
         request = {}
         if build.build_id:
             request['id'] = str(build.build_id)
-        if build.builder_name:
+        elif build.builder_name and build.build_number:
             request['builder'] = {
                 'project': 'chromium',
                 'bucket': build.bucket,
                 'builder': build.builder_name
             }
-        if build.build_number:
             request['buildNumber'] = build.build_number
+        else:
+            raise ValueError('bad GetBuild request: must provide either '
+                             'build ID or (builder and build number)')
         if build_fields:
             # The `builds.*` prefix is not needed for retrieving an individual
             # build.
@@ -294,11 +327,17 @@ class ResultDBClient(BaseRPC):
     def _get_invocations(self, build_ids):
         return ['invocations/build-%s' % build_id for build_id in build_ids]
 
-    def query_test_results(self, build_ids, predicate, count=0):
+    def query_test_results(self,
+                           build_ids,
+                           predicate,
+                           read_mask: Optional[List[str]] = None,
+                           count=0):
         request = {
             'invocations': self._get_invocations(build_ids),
             'predicate': predicate,
         }
+        if read_mask:
+            request['readMask'] = ','.join(read_mask)
         return self._luci_rpc_paginated('QueryTestResults',
                                         request,
                                         'testResults',

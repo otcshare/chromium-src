@@ -6,21 +6,27 @@
 
 #include <fcntl.h>
 #include <linux/input.h>
+
+#include <string_view>
 #include <vector>
 
 #include "ash/constants/ash_switches.h"
 #include "ash/display/privacy_screen_controller.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/shell.h"
+#include "ash/system/diagnostics/mojom/input.mojom-shared.h"
 #include "ash/webui/diagnostics_ui/backend/input/input_data_provider.h"
 #include "ash/webui/diagnostics_ui/mojom/input_data_provider.mojom-shared.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "ui/events/ash/keyboard_capability.h"
+#include "ui/events/ash/top_row_action_keys.h"
 #include "ui/events/devices/input_device.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/ozone/evdev/event_device_info.h"
@@ -67,74 +73,8 @@ constexpr auto kFKeyOrder =
                                                     {KEY_F14, kFKey14},
                                                     {KEY_F15, kFKey15}});
 
-// `kCustomMaxFKey` represents the max FKey defined in `EventRewriterChromeOS`.
-// This is the highest FKey allowed on vivaldi keyboard devices.
-constexpr ui::KeyboardCode kCustomMaxFKey = ui::VKEY_F15;
-constexpr size_t kCustomMaxNumberOfFKeys = (kCustomMaxFKey - ui::VKEY_F1) + 1;
-
-// Represents scancode value seen in scan code mapping received from
-// `EventRewriterChromeOS` which denotes that the FKey is missing on the
-// physical device.
-constexpr uint32_t kCustomScanCodeFKeyMissing = 0x00;
-
-// Mapping from keyboard scancodes to TopRowKeys (must be in scancode-sorted
-// order) for keyboards with custom top row layouts (vivaldi). This replicates
-// and should be identical to the mapping behaviour of ChromeOS: changes will
-// be needed if new AT scancodes or HID mappings are used in a top-row key,
-// likely added in ui/events/keycodes/dom/dom_code_data.inc.
-//
-// Note that there are currently no dedicated scancodes for kScreenMirror.
-constexpr auto kCustomScancodeMapping =
-    base::MakeFixedFlatMap<uint32_t, mojom::TopRowKey>({
-        // Scan code is only `kCustomScanCodeFKeyMissing` when the FKey is
-        // absent on the keyboard.
-        {kCustomScanCodeFKeyMissing, mojom::TopRowKey::kNone},
-
-        // Vivaldi-specific extended Set-1 AT-style scancodes.
-        {0x90, mojom::TopRowKey::kPreviousTrack},
-        {0x91, mojom::TopRowKey::kFullscreen},
-        {0x92, mojom::TopRowKey::kOverview},
-        {0x93, mojom::TopRowKey::kScreenshot},
-        {0x94, mojom::TopRowKey::kScreenBrightnessDown},
-        {0x95, mojom::TopRowKey::kScreenBrightnessUp},
-        {0x96, mojom::TopRowKey::kPrivacyScreenToggle},
-        {0x97, mojom::TopRowKey::kKeyboardBacklightDown},
-        {0x98, mojom::TopRowKey::kKeyboardBacklightUp},
-        {0x99, mojom::TopRowKey::kNextTrack},
-        {0x9A, mojom::TopRowKey::kPlayPause},
-        {0x9B, mojom::TopRowKey::kMicrophoneMute},
-        {0x9E, mojom::TopRowKey::kKeyboardBacklightToggle},
-        {0xA0, mojom::TopRowKey::kVolumeMute},
-        {0xAE, mojom::TopRowKey::kVolumeDown},
-        {0xB0, mojom::TopRowKey::kVolumeUp},
-        {0xE9, mojom::TopRowKey::kForward},
-        {0xEA, mojom::TopRowKey::kBack},
-        {0xE7, mojom::TopRowKey::kRefresh},
-
-        // HID 32-bit usage codes
-        {0x070046, mojom::TopRowKey::kScreenshot},
-        {0x0B002F, mojom::TopRowKey::kMicrophoneMute},
-        {0x0C00E2, mojom::TopRowKey::kVolumeMute},
-        {0x0C00E9, mojom::TopRowKey::kVolumeUp},
-        {0x0C00EA, mojom::TopRowKey::kVolumeDown},
-        {0x0C006F, mojom::TopRowKey::kScreenBrightnessUp},
-        {0x0C0070, mojom::TopRowKey::kScreenBrightnessDown},
-        {0x0C0079, mojom::TopRowKey::kKeyboardBacklightUp},
-        {0x0C007A, mojom::TopRowKey::kKeyboardBacklightDown},
-        {0x0C007C, mojom::TopRowKey::kKeyboardBacklightToggle},
-        {0x0C00B5, mojom::TopRowKey::kNextTrack},
-        {0x0C00B6, mojom::TopRowKey::kPreviousTrack},
-        {0x0C00CD, mojom::TopRowKey::kPlayPause},
-        {0x0C0224, mojom::TopRowKey::kBack},
-        {0x0C0225, mojom::TopRowKey::kForward},
-        {0x0C0227, mojom::TopRowKey::kRefresh},
-        {0x0C0232, mojom::TopRowKey::kFullscreen},
-        {0x0C029F, mojom::TopRowKey::kOverview},
-        {0x0C02D0, mojom::TopRowKey::kPrivacyScreenToggle},
-    });
-
 // Hard-coded top-row key mappings. These are intended to match the behaviour of
-// EventRewriterChromeOS::RewriteFunctionKeys for historical keyboards. No
+// EventRewriterAsh::RewriteFunctionKeys for historical keyboards. No
 // updates should be needed, as all new keyboards are expected to be using
 // customizable top row keys (vivaldi).
 
@@ -208,20 +148,25 @@ constexpr uint32_t kScancodesDrallion[] = {
     0xAE, 0xB0, 0x44, 0x57, 0xd7, 0x8B, 0xD3,
 };
 
+// For Vivaldi keyboard, some are having delete key on the top row.
+constexpr uint32_t kScancodeDelete = 0xD3;
+constexpr auto kModelsWithTopRowDelete =
+    base::MakeFixedFlatSet<std::string_view>({"rull", "teltic"});
+
 // Turkish F-Type xkb keyboard layout id which is used to differentiate between
 // a device from 'tr' region with Q-Type vs F-Type.
-constexpr base::StringPiece kTurkishFLayoutId = "xkb:tr:f:tur";
+constexpr std::string_view kTurkishFLayoutId = "xkb:tr:f:tur";
 
 // |kTurkeyRegionCode| is the real turkey region code.
 // |kTurkeyFLayoutRegionCode| is used purely in the diagnostics app to
 // accurately display F-Type keyboard layouts.
-constexpr base::StringPiece kTurkeyRegionCode = "tr";
-constexpr base::StringPiece kTurkeyFLayoutRegionCode = "tr.f";
+constexpr std::string_view kTurkeyRegionCode = "tr";
+constexpr std::string_view kTurkeyFLayoutRegionCode = "tr.f";
 
 mojom::MechanicalLayout GetSystemMechanicalLayout() {
   system::StatisticsProvider* stats_provider =
       system::StatisticsProvider::GetInstance();
-  const absl::optional<base::StringPiece> layout_string =
+  const std::optional<std::string_view> layout_string =
       stats_provider->GetMachineStatistic(system::kKeyboardMechanicalLayoutKey);
   if (!layout_string) {
     LOG(ERROR) << "Couldn't determine mechanical layout";
@@ -239,14 +184,14 @@ mojom::MechanicalLayout GetSystemMechanicalLayout() {
   }
 }
 
-absl::optional<std::string> GetRegionCode() {
+std::optional<std::string> GetRegionCode() {
   system::StatisticsProvider* stats_provider =
       system::StatisticsProvider::GetInstance();
-  const absl::optional<base::StringPiece> layout_string =
+  const std::optional<std::string_view> layout_string =
       stats_provider->GetMachineStatistic(system::kRegionKey);
   if (!layout_string) {
     LOG(ERROR) << "Couldn't determine region";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   // In Turkey, two different layouts are shipped (Q-Type and F-Type) under the
@@ -264,9 +209,68 @@ absl::optional<std::string> GetRegionCode() {
   return std::string(layout_string.value());
 }
 
+constexpr mojom::TopRowKey ConvertTopRowActionKeyToDiagnosticsTopRowKey(
+    ui::TopRowActionKey action_key) {
+  switch (action_key) {
+    case ui::TopRowActionKey::kBack:
+      return mojom::TopRowKey::kBack;
+    case ui::TopRowActionKey::kForward:
+      return mojom::TopRowKey::kForward;
+    case ui::TopRowActionKey::kRefresh:
+      return mojom::TopRowKey::kRefresh;
+    case ui::TopRowActionKey::kFullscreen:
+      return mojom::TopRowKey::kFullscreen;
+    case ui::TopRowActionKey::kOverview:
+      return mojom::TopRowKey::kOverview;
+    case ui::TopRowActionKey::kScreenshot:
+      return mojom::TopRowKey::kScreenshot;
+    case ui::TopRowActionKey::kScreenBrightnessDown:
+      return mojom::TopRowKey::kScreenBrightnessDown;
+    case ui::TopRowActionKey::kScreenBrightnessUp:
+      return mojom::TopRowKey::kScreenBrightnessUp;
+    case ui::TopRowActionKey::kMicrophoneMute:
+      return mojom::TopRowKey::kMicrophoneMute;
+    case ui::TopRowActionKey::kVolumeMute:
+      return mojom::TopRowKey::kVolumeMute;
+    case ui::TopRowActionKey::kVolumeDown:
+      return mojom::TopRowKey::kVolumeDown;
+    case ui::TopRowActionKey::kVolumeUp:
+      return mojom::TopRowKey::kVolumeUp;
+    case ui::TopRowActionKey::kKeyboardBacklightToggle:
+      return mojom::TopRowKey::kKeyboardBacklightToggle;
+    case ui::TopRowActionKey::kKeyboardBacklightDown:
+      return mojom::TopRowKey::kKeyboardBacklightDown;
+    case ui::TopRowActionKey::kKeyboardBacklightUp:
+      return mojom::TopRowKey::kKeyboardBacklightUp;
+    case ui::TopRowActionKey::kNextTrack:
+      return mojom::TopRowKey::kNextTrack;
+    case ui::TopRowActionKey::kPreviousTrack:
+      return mojom::TopRowKey::kPreviousTrack;
+    case ui::TopRowActionKey::kPlayPause:
+      return mojom::TopRowKey::kPlayPause;
+    case ui::TopRowActionKey::kPrivacyScreenToggle:
+      return mojom::TopRowKey::kPrivacyScreenToggle;
+    case ui::TopRowActionKey::kDictation:
+      return mojom::TopRowKey::kDictation;
+    case ui::TopRowActionKey::kAccessibility:
+      return mojom::TopRowKey::kAccessibility;
+    case ui::TopRowActionKey::kAllApplications:
+    case ui::TopRowActionKey::kEmojiPicker:
+    case ui::TopRowActionKey::kDoNotDisturb:
+    case ui::TopRowActionKey::kUnknown:
+      return mojom::TopRowKey::kUnknown;
+    case ui::TopRowActionKey::kNone:
+      return mojom::TopRowKey::kNone;
+  }
+}
+
 }  // namespace
 
-InputDataProviderKeyboard::InputDataProviderKeyboard() {}
+InputDataProviderKeyboard::InputDataProviderKeyboard() {
+  base::SysInfo::GetHardwareInfo(
+      base::BindOnce(&InputDataProviderKeyboard::OnGetHardwareInfo,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
 InputDataProviderKeyboard::~InputDataProviderKeyboard() {}
 
 InputDataProviderKeyboard::AuxData::AuxData() = default;
@@ -275,8 +279,7 @@ InputDataProviderKeyboard::AuxData::~AuxData() = default;
 void InputDataProviderKeyboard::ProcessKeyboardTopRowLayout(
     const InputDeviceInformation* device_info,
     ui::KeyboardCapability::KeyboardTopRowLayout top_row_layout,
-    const base::flat_map<uint32_t, ui::EventRewriterChromeOS::MutableKeyState>&
-        scan_code_map,
+    const std::vector<uint32_t>& top_row_scan_codes,
     std::vector<mojom::TopRowKey>* out_top_row_keys,
     AuxData* out_aux_data) {
   // Simple array in physical order from left to right
@@ -292,7 +295,7 @@ void InputDataProviderKeyboard::ProcessKeyboardTopRowLayout(
                           std::end(kSystemKeysWilco));
 
       for (size_t i = 0; i < top_row_keys.size(); i++)
-        top_row_key_scancode_indexes[kScancodesWilco[i]] = i;
+        top_row_key_scancode_indexes[UNSAFE_TODO(kScancodesWilco[i])] = i;
       break;
 
     case ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutDrallion:
@@ -300,7 +303,7 @@ void InputDataProviderKeyboard::ProcessKeyboardTopRowLayout(
                           std::end(kSystemKeysDrallion));
 
       for (size_t i = 0; i < top_row_keys.size(); i++)
-        top_row_key_scancode_indexes[kScancodesDrallion[i]] = i;
+        top_row_key_scancode_indexes[UNSAFE_TODO(kScancodesDrallion[i])] = i;
 
       // On some Drallion devices, the F12 key is used for the Privacy Screen.
 
@@ -319,52 +322,39 @@ void InputDataProviderKeyboard::ProcessKeyboardTopRowLayout(
       break;
 
     case ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutCustom: {
-      // Process scan-code map generated from custom top-row key layout: it maps
-      // from physical scan codes to several things, including VKEY key-codes,
-      // which we will use to derive a linear index.
+      top_row_keys.reserve(top_row_scan_codes.size());
 
-      size_t scan_code_array_size = 0;
-      for (const auto& [_, fkey] : scan_code_map) {
-        // `EventRewriterChromeOS::ParseCustomTopRowLayoutMap` should have
-        // already prevented out of bounds keycodes.
-        DCHECK_LE(ui::VKEY_F1, fkey.key_code);
-        DCHECK_GE(kCustomMaxFKey, fkey.key_code);
-
-        // Calculate new size needed based on distance from the given key_code
-        // to `ui::VKEY_F1`.
-        const size_t new_size = (fkey.key_code - ui::VKEY_F1) + 1u;
-        scan_code_array_size = std::max(scan_code_array_size, new_size);
-      }
-      DCHECK_GE(kCustomMaxNumberOfFKeys, scan_code_array_size);
-
-      // Create array where index is the FKey value and the value is the
-      // expected scan code.
-      std::vector<uint32_t> scan_code_array(scan_code_array_size,
-                                            kCustomScanCodeFKeyMissing);
-      for (const auto& [scancode, fkey] : scan_code_map) {
-        const size_t index = fkey.key_code - ui::VKEY_F1;
-        scan_code_array[index] = scancode;
+      // If action keys cannot be found or if it has a different size than the
+      // top row scan codes, do not fill out the arrays.
+      // This will only happen if there is an error in `KeyboardCapability`.
+      const auto* action_keys =
+          Shell::Get()->keyboard_capability()->GetTopRowActionKeys(
+              ui::KeyboardDevice(device_info->input_device));
+      if (!action_keys || action_keys->size() != top_row_scan_codes.size()) {
+        break;
       }
 
-      top_row_keys.reserve(scan_code_array.size());
+      // Exclude all top row keys which are considered `kNone`.
       size_t index = 0;
-      for (const auto& scancode : scan_code_array) {
-        // Skip all scancodes which map to kNone keys. This is most likely a
-        // result of an absent FKey (ex: Skipped FKeys on top row).
-        if (kCustomScancodeMapping.contains(scancode)) {
-          const auto& top_row_key = kCustomScancodeMapping.at(scancode);
-          if (top_row_key == mojom::TopRowKey::kNone) {
-            continue;
-          }
-          top_row_keys.push_back(top_row_key);
-        } else {
-          top_row_keys.push_back(mojom::TopRowKey::kUnknown);
+      for (size_t i = 0; i < top_row_scan_codes.size(); i++) {
+        auto top_row_key =
+            ConvertTopRowActionKeyToDiagnosticsTopRowKey((*action_keys)[i]);
+        if (top_row_key == mojom::TopRowKey::kNone) {
+          continue;
         }
+        top_row_keys.push_back(top_row_key);
+        top_row_key_scancode_indexes[top_row_scan_codes[i]] = index++;
+      }
 
-        top_row_key_scancode_indexes[scancode] = index++;
+      // If the model contains a delete key in the top row, append it to the
+      // last.
+      if (kModelsWithTopRowDelete.contains(hardware_info_.model)) {
+        top_row_keys.push_back(mojom::TopRowKey::kDelete);
+        top_row_key_scancode_indexes[kScancodeDelete] = index++;
       }
       break;
     }
+
     case ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayout2:
       top_row_keys.assign(std::begin(kSystemKeys2), std::end(kSystemKeys2));
       // No specific top_row_key_scancode_indexes are needed
@@ -403,7 +393,7 @@ mojom::KeyboardInfoPtr InputDataProviderKeyboard::ConstructKeyboard(
   // keyboards, and Dell KM713 Chrome keyboard.
 
   ProcessKeyboardTopRowLayout(device_info, device_info->keyboard_top_row_layout,
-                              device_info->keyboard_scan_code_map,
+                              device_info->keyboard_scan_codes,
                               &result->top_row_keys, out_aux_data);
 
   // Work out the physical layout.
@@ -411,7 +401,7 @@ mojom::KeyboardInfoPtr InputDataProviderKeyboard::ConstructKeyboard(
       ui::KeyboardCapability::DeviceType::kDeviceInternalKeyboard) {
     // Reven boards have unknown keyboard layouts and should not be considered
     // internal keyboards for the purposes of diagnostics.
-    if (chromeos::switches::IsRevenBranding()) {
+    if (switches::IsRevenBranding()) {
       result->physical_layout = mojom::PhysicalLayout::kUnknown;
       result->connection_type = mojom::ConnectionType::kUnknown;
     } else if (device_info->keyboard_top_row_layout ==
@@ -437,7 +427,7 @@ mojom::KeyboardInfoPtr InputDataProviderKeyboard::ConstructKeyboard(
     result->region_code = GetRegionCode();
   } else {
     result->mechanical_layout = mojom::MechanicalLayout::kUnknown;
-    result->region_code = absl::nullopt;
+    result->region_code = std::nullopt;
   }
 
   // Determine number pad presence.
@@ -493,6 +483,10 @@ mojom::KeyboardInfoPtr InputDataProviderKeyboard::ConstructKeyboard(
   result->has_assistant_key =
       device_info->event_device_info.HasKeyEvent(KEY_ASSISTANT);
 
+  result->bottom_left_layout = device_info->bottom_left_layout;
+  result->bottom_right_layout = device_info->bottom_right_layout;
+  result->numpad_layout = device_info->numpad_layout;
+
   return result;
 }
 
@@ -518,12 +512,17 @@ mojom::KeyEventPtr InputDataProviderKeyboard::ConstructInputKeyEvent(
   }
 
   // Do the same if F1-F15 was pressed.
-  const auto* jter = kFKeyOrder.find(event->key_code);
+  const auto jter = kFKeyOrder.find(event->key_code);
   if (event->top_row_position == -1 && jter != kFKeyOrder.end()) {
     event->top_row_position = jter->second;
   }
 
   return event;
+}
+
+void InputDataProviderKeyboard::OnGetHardwareInfo(
+    base::SysInfo::HardwareInfo info) {
+  hardware_info_ = info;
 }
 
 }  // namespace diagnostics

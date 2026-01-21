@@ -7,44 +7,63 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
-
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #include "device/vr/openxr/openxr_controller.h"
 #include "device/vr/openxr/openxr_interaction_profiles.h"
-#include "device/vr/openxr/openxr_util.h"
+#include "device/vr/public/mojom/vr_service.mojom-forward.h"
+#include "third_party/openxr/src/include/openxr/openxr.h"
 
 namespace device {
+
+class OpenXrExtensionHelper;
+struct XrLocation;
 
 class OpenXRInputHelper {
  public:
   static XrResult CreateOpenXRInputHelper(
       XrInstance instance,
-      XrSystemId system,
+      const std::string& system_name,
       const OpenXrExtensionHelper& extension_helper,
       XrSession session,
       XrSpace local_space,
+      bool hand_input_enabled,
       std::unique_ptr<OpenXRInputHelper>* helper);
 
-  OpenXRInputHelper(XrSession session, XrSpace local_space);
+  OpenXRInputHelper(XrSession session,
+                    XrSpace local_space,
+                    bool hand_input_enabled);
 
   OpenXRInputHelper(const OpenXRInputHelper&) = delete;
   OpenXRInputHelper& operator=(const OpenXRInputHelper&) = delete;
 
   ~OpenXRInputHelper();
 
+  bool IsHandTrackingEnabled() const;
+
   std::vector<mojom::XRInputSourceStatePtr> GetInputState(
-      bool hand_input_enabled,
       XrTime predicted_display_time);
 
   XrResult OnInteractionProfileChanged();
 
- private:
-  absl::optional<Gamepad> GetWebXRGamepad(const OpenXrController& controller);
+  bool ReceivedExitGesture() { return received_exit_gesture_; }
 
+  // Called when the device is going to hide input sources from the page.
+  void OnHideInputSources();
+
+  std::optional<XrLocation> GetXrLocationFromHandJoint(
+      XrSpace mojo_space,
+      const mojom::XRHandJointSpaceInfo& hand_joint_space_info,
+      const gfx::Transform& joint_from_object) const;
+
+  std::optional<XrLocation> GetXrLocationFromInputSource(
+      const mojom::XRInputSourceSpaceInfo& input_source_space_info,
+      const gfx::Transform& input_space_from_object) const;
+
+ private:
   XrResult Initialize(XrInstance instance,
-                      XrSystemId system,
+                      const std::string& system_name,
                       const OpenXrExtensionHelper& extension_helper);
 
   XrResult SyncActions(XrTime predicted_display_time);
@@ -52,6 +71,10 @@ class OpenXRInputHelper {
   XrSpace GetMojomSpace() const {
     return local_space_;  // Mojom space is currently defined as local space
   }
+
+  void OnExitGesture() { received_exit_gesture_ = true; }
+
+  void ResetControllerButtonState();
 
   XrSession session_;
   XrSpace local_space_;
@@ -66,6 +89,8 @@ class OpenXRInputHelper {
       controller_states_;
 
   std::unique_ptr<OpenXRPathHelper> path_helper_;
+  bool received_exit_gesture_ = false;
+  bool hand_input_enabled_ = false;
 };
 
 }  // namespace device

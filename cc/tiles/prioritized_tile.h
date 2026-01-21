@@ -5,6 +5,7 @@
 #ifndef CC_TILES_PRIORITIZED_TILE_H_
 #define CC_TILES_PRIORITIZED_TILE_H_
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "cc/cc_export.h"
 #include "cc/paint/paint_worklet_input.h"
 #include "cc/raster/raster_source.h"
@@ -36,6 +37,9 @@ class CC_EXPORT PrioritizedTile {
   const PaintWorkletRecordMap& GetPaintWorkletRecords() const {
     return source_tiling_->GetPaintWorkletRecords();
   }
+  ScrollOffsetMap GetRasterInducingScrollOffsets() const {
+    return source_tiling_->GetRasterInducingScrollOffsets();
+  }
   const TilePriority& priority() const { return priority_; }
   bool is_occluded() const { return is_occluded_; }
   bool is_process_for_images_only() const {
@@ -50,8 +54,10 @@ class CC_EXPORT PrioritizedTile {
   const PictureLayerTiling* source_tiling() const { return source_tiling_; }
 
  private:
-  Tile* tile_ = nullptr;
-  const PictureLayerTiling* source_tiling_ = nullptr;
+  // RAW_PTR_EXCLUSION: Renderer performance: visible in sampling profiler
+  // stacks.
+  RAW_PTR_EXCLUSION Tile* tile_ = nullptr;
+  RAW_PTR_EXCLUSION const PictureLayerTiling* source_tiling_ = nullptr;
   TilePriority priority_;
   bool is_occluded_ = false;
   bool is_process_for_images_only_ = false;

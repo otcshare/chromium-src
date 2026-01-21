@@ -22,7 +22,6 @@
 
 namespace net {
 
-class CTPolicyEnforcer;
 class CertVerifier;
 class SCTAuditingDelegate;
 class TransportSecurityState;
@@ -41,17 +40,16 @@ class NET_EXPORT_PRIVATE ProofVerifyDetailsChromium
 
   CertVerifyResult cert_verify_result;
 
-  // pinning_failure_log contains a message produced by
-  // TransportSecurityState::PKPState::CheckPublicKeyPins in the event of a
-  // pinning failure. It is a (somewhat) human-readable string.
-  std::string pinning_failure_log;
-
   // True if PKP was bypassed due to a local trust anchor.
   bool pkp_bypassed = false;
 
   // True if there was a certificate error which should be treated as fatal,
   // and false otherwise.
   bool is_fatal_cert_error = false;
+
+  // The net error code from performing cert verification. Used only for
+  // metrics.
+  int cert_verify_net_error_for_metrics_only = 0;
 };
 
 // ProofVerifyContextChromium is the implementation-specific information that a
@@ -72,7 +70,6 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public quic::ProofVerifier {
  public:
   ProofVerifierChromium(
       CertVerifier* cert_verifier,
-      CTPolicyEnforcer* ct_policy_enforcer,
       TransportSecurityState* transport_security_state,
       SCTAuditingDelegate* sct_auditing_delegate,
       std::set<std::string> hostnames_to_allow_unknown_roots,
@@ -89,7 +86,7 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public quic::ProofVerifier {
       const uint16_t port,
       const std::string& server_config,
       quic::QuicTransportVersion quic_version,
-      absl::string_view chlo_hash,
+      std::string_view chlo_hash,
       const std::vector<std::string>& certs,
       const std::string& cert_sct,
       const std::string& signature,
@@ -120,7 +117,6 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public quic::ProofVerifier {
 
   // Underlying verifier used to verify certificates.
   const raw_ptr<CertVerifier> cert_verifier_;
-  const raw_ptr<CTPolicyEnforcer> ct_policy_enforcer_;
 
   const raw_ptr<TransportSecurityState> transport_security_state_;
 

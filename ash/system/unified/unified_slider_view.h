@@ -7,30 +7,29 @@
 
 #include "ash/constants/quick_settings_catalogs.h"
 #include "ash/style/icon_button.h"
-#include "quick_settings_slider.h"
+#include "ash/system/unified/quick_settings_slider.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/controls/image_view.h"
+#include "ui/gfx/vector_icon_types.h"
 
 namespace gfx {
 struct VectorIcon;
 }  // namespace gfx
 
 namespace views {
-class Label;
 class Slider;
 class View;
 }  // namespace views
 
 namespace ash {
+class UnifiedSliderView;
 
 class UnifiedSliderListener : public views::SliderListener {
  public:
   ~UnifiedSliderListener() override = default;
 
-  // Instantiates `UnifiedSliderView`. The view will be owned by views
-  // hierarchy. The view should be always deleted after the controller is
-  // destructed.
-  virtual views::View* CreateView() = 0;
+  // Instantiates `UnifiedSliderView`.
+  virtual std::unique_ptr<UnifiedSliderView> CreateView() = 0;
 
   // Returns the slider catalog name which is used for UMA tracking. Please
   // remember to call the corresponding tracking method (`TrackToggleUMA` and
@@ -47,13 +46,13 @@ class UnifiedSliderListener : public views::SliderListener {
   void TrackValueChangeUMA(bool going_up);
 };
 
-// Base view class of a slider row in `UnifiedSystemTray`. It has a button on
-// the left side and a slider on the right side.
-// For QsRevamp: the slider has an `ImageView` icon on top of the slider.
+// Base view class of a slider row in `UnifiedSystemTray`. The slider has an
+// `ImageView` icon on top of the slider.
 class UnifiedSliderView : public views::View {
- public:
-  METADATA_HEADER(UnifiedSliderView);
+  METADATA_HEADER(UnifiedSliderView, views::View)
 
+ public:
+  // `is_togglable` determines whether `slider_button_` is togglable or not.
   // If `read_only` is set, the slider will not accept any user events.
   // `slider_style` is `kDefaultSliderStyle` by default. `kRadioSliderStyle`
   // should be set explicitly.
@@ -61,6 +60,7 @@ class UnifiedSliderView : public views::View {
                     UnifiedSliderListener* listener,
                     const gfx::VectorIcon& icon,
                     int accessible_name_id,
+                    bool is_togglable = true,
                     bool read_only = false,
                     QuickSettingsSlider::Style slider_style =
                         QuickSettingsSlider::Style::kDefault);
@@ -72,25 +72,24 @@ class UnifiedSliderView : public views::View {
 
   IconButton* button() { return button_; }
   views::Slider* slider() { return slider_; }
-  views::Label* toast_label() { return toast_label_; }
-  views::ImageView* slider_icon() { return slider_icon_; }
+  IconButton* slider_button() { return slider_button_; }
 
   // Sets a slider value. If `by_user` is false, accessibility events will not
   // be triggered.
   void SetSliderValue(float value, bool by_user);
 
   // views::View:
-  void OnThemeChanged() override;
-
- protected:
-  void CreateToastLabel();
+  void OnEvent(ui::Event* event) override;
 
  private:
+  raw_ptr<const gfx::VectorIcon> icon_;
+  const bool is_togglable_;
+
   // Unowned. Owned by views hierarchy.
-  IconButton* button_ = nullptr;
-  views::Slider* slider_ = nullptr;
-  views::Label* toast_label_ = nullptr;
-  views::ImageView* slider_icon_ = nullptr;
+  raw_ptr<IconButton> button_ = nullptr;
+  raw_ptr<views::Slider> slider_ = nullptr;
+  raw_ptr<IconButton> slider_button_ = nullptr;
+  raw_ptr<views::View> container_ = nullptr;
 };
 
 }  // namespace ash

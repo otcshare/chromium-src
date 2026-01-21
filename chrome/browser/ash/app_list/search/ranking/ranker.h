@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_ASH_APP_LIST_SEARCH_RANKING_RANKER_H_
 
 #include "chrome/browser/ash/app_list/search/ranking/launch_data.h"
-#include "chrome/browser/ash/app_list/search/search_controller.h"
 #include "chrome/browser/ash/app_list/search/types.h"
 
 #include <string>
@@ -26,8 +25,7 @@ class Ranker {
   // Called each time a new search 'session' begins, eg. when the user opens the
   // launcher or changes the query.
   virtual void Start(const std::u16string& query,
-                     ResultsMap& results,
-                     CategoriesList& categories);
+                     const CategoriesList& categories);
 
   // Ranks search results. Should return a vector of scores that is the same
   // length as |results|.

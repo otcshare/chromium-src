@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/services/multidevice_setup/feature_state_manager.h"
 #include "chromeos/ash/services/multidevice_setup/global_state_feature_manager.h"
 #include "chromeos/ash/services/multidevice_setup/host_status_provider.h"
@@ -16,7 +17,6 @@
 #include "chromeos/ash/services/multidevice_setup/wifi_sync_notification_controller.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
-#include "url/gurl.h"
 
 class PrefService;
 
@@ -24,7 +24,6 @@ namespace ash {
 
 namespace device_sync {
 class DeviceSyncClient;
-class GcmDeviceInfoProvider;
 }  // namespace device_sync
 
 namespace multidevice_setup {
@@ -56,7 +55,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
         OobeCompletionTracker* oobe_completion_tracker,
         AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
         AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-        const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
         bool is_secondary_user);
     static void SetFactoryForTesting(Factory* test_factory);
 
@@ -69,7 +67,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
         OobeCompletionTracker* oobe_completion_tracker,
         AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
         AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-        const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
         bool is_secondary_user) = 0;
 
    private:
@@ -91,7 +88,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
       OobeCompletionTracker* oobe_completion_tracker,
       AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
       AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-      const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
       bool is_secondary_user);
 
   // mojom::MultiDeviceSetup:
@@ -112,13 +108,17 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
   void GetHostStatus(GetHostStatusCallback callback) override;
   void SetFeatureEnabledState(mojom::Feature feature,
                               bool enabled,
-                              const absl::optional<std::string>& auth_token,
+                              const std::optional<std::string>& auth_token,
                               SetFeatureEnabledStateCallback callback) override;
   void GetFeatureStates(GetFeatureStatesCallback callback) override;
   void RetrySetHostNow(RetrySetHostNowCallback callback) override;
   void TriggerEventForDebugging(
       mojom::EventTypeForDebugging type,
       TriggerEventForDebuggingCallback callback) override;
+  void SetQuickStartPhoneInstanceID(
+      const std::string& qs_phone_instance_id) override;
+  void GetQuickStartPhoneInstanceID(
+      GetQuickStartPhoneInstanceIDCallback callback) override;
 
   // MultiDeviceSetupBase:
   void SetHostDeviceWithoutAuthToken(
@@ -156,7 +156,8 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
   std::unique_ptr<FeatureStateManager> feature_state_manager_;
   std::unique_ptr<AndroidSmsAppInstallingStatusObserver>
       android_sms_app_installing_host_observer_;
-  AuthTokenValidator* auth_token_validator_;
+  raw_ptr<AuthTokenValidator> auth_token_validator_;
+  std::string qs_phone_instance_id_;
 
   mojo::RemoteSet<mojom::HostStatusObserver> host_status_observers_;
   mojo::RemoteSet<mojom::FeatureStateObserver> feature_state_observers_;

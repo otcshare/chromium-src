@@ -22,19 +22,20 @@ using proto::SegmentId;
 
 // Default parameters for the model.
 constexpr SegmentId kSegmentId = SegmentId::RESUME_HEAVY_USER_SEGMENT;
-constexpr int kResumeHeavyUserSegmentSelectionTTLDays = 14;
-constexpr int kResumeHeavyUserSegmentUnknownSelectionTTLDays = 14;
+constexpr int64_t kModelVersion = 2;
 
 // InputFeatures.
-constexpr std::array<MetadataWriter::UMAFeature, 5> kUMAFeatures = {
-    MetadataWriter::UMAFeature::FromUserAction("MobileBookmarkManagerOpen", 7),
-    MetadataWriter::UMAFeature::FromUserAction("NewTabPage.MostVisited.Clicked",
-                                               7),
-    MetadataWriter::UMAFeature::FromUserAction("TabGroup.Created.OpenInNewTab",
-                                               7),
-    MetadataWriter::UMAFeature::FromUserAction("Android.HistoryPage.OpenItem",
-                                               7),
-    MetadataWriter::UMAFeature::FromUserAction("MobileMenuRecentTabs", 7),
+constexpr FeaturePair<ResumeHeavyUserModel::Feature> kFeatures[] = {
+    {ResumeHeavyUserModel::kFeatureMobileBookmarkManagerOpen,
+     features::UserAction("MobileBookmarkManagerOpen", 7)},
+    {ResumeHeavyUserModel::kFeatureNewTabPageMostVisitedClicked,
+     features::UserAction("NewTabPage.MostVisited.Clicked", 7)},
+    {ResumeHeavyUserModel::kFeatureTabGroupCreatedOpenInNewTab,
+     features::UserAction("TabGroup.Created.OpenInNewTab", 7)},
+    {ResumeHeavyUserModel::kFeatureAndroidHistoryPageOpenItem,
+     features::UserAction("Android.HistoryPage.OpenItem", 7)},
+    {ResumeHeavyUserModel::kFeatureMobileMenuRecentTabs,
+     features::UserAction("MobileMenuRecentTabs", 7)},
 };
 
 }  // namespace
@@ -49,73 +50,62 @@ std::unique_ptr<Config> ResumeHeavyUserModel::GetConfig() {
   config->segmentation_uma_name = kResumeHeavyUserUmaName;
   config->AddSegmentId(SegmentId::RESUME_HEAVY_USER_SEGMENT,
                        std::make_unique<ResumeHeavyUserModel>());
-  config->segment_selection_ttl =
-      base::Days(base::GetFieldTrialParamByFeatureAsInt(
-          features::kResumeHeavyUserSegmentFeature,
-          kVariationsParamNameSegmentSelectionTTLDays,
-          kResumeHeavyUserSegmentSelectionTTLDays));
-  config->unknown_selection_ttl =
-      base::Days(base::GetFieldTrialParamByFeatureAsInt(
-          features::kResumeHeavyUserSegmentFeature,
-          kVariationsParamNameUnknownSelectionTTLDays,
-          kResumeHeavyUserSegmentUnknownSelectionTTLDays));
+  config->auto_execute_and_cache = true;
   config->is_boolean_segment = true;
 
   return config;
 }
 
-ResumeHeavyUserModel::ResumeHeavyUserModel() : ModelProvider(kSegmentId) {}
+ResumeHeavyUserModel::ResumeHeavyUserModel()
+    : DefaultModelProvider(kSegmentId) {}
 
-void ResumeHeavyUserModel::InitAndFetchModel(
-    const ModelUpdatedCallback& model_updated_callback) {
+std::unique_ptr<DefaultModelProvider::ModelConfig>
+ResumeHeavyUserModel::GetModelConfig() {
   proto::SegmentationModelMetadata metadata;
   MetadataWriter writer(&metadata);
   writer.SetDefaultSegmentationMetadataConfig(
       /*min_signal_collection_length_days=*/7,
       /*signal_storage_length_days=*/14);
 
-  // Set discrete mapping.
-  writer.AddBooleanSegmentDiscreteMapping(kResumeHeavyUserKey);
+  // Set OutputConfig.
+  writer.AddOutputConfigForBinaryClassifier(
+      /*threshold=*/0.5f,
+      /*positive_label=*/SegmentIdToHistogramVariant(kSegmentId),
+      /*negative_label=*/kLegacyNegativeLabel);
+
+  writer.AddPredictedResultTTLInOutputConfig(
+      /*top_label_to_ttl_list=*/{}, /*default_ttl=*/14,
+      /*time_unit=*/proto::TimeUnit::DAY);
 
   // Set features.
-  writer.AddUmaFeatures(kUMAFeatures.data(), kUMAFeatures.size());
-
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindRepeating(model_updated_callback, kSegmentId,
-                                     std::move(metadata), /*model_version=*/1));
+  writer.AddFeatures<Feature>(kFeatures);
+  return std::make_unique<ModelConfig>(std::move(metadata), kModelVersion);
 }
 
 void ResumeHeavyUserModel::ExecuteModelWithInput(
     const ModelProvider::Request& inputs,
     ExecutionCallback callback) {
   // Invalid inputs.
-  if (inputs.size() != kUMAFeatures.size()) {
+  if (inputs.size() != kFeatureCount) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
 
-  const int bookmarks_opened = inputs[0];
-  const int mv_tiles_clicked = inputs[1];
-  const int opened_ntp_from_tab_groups = inputs[2];
-  const int opened_item_from_history = inputs[3];
-  const int opened_recent_tabs = inputs[4];
   float result = 0;
 
   // Determine if the user has used chrome features to resume workflow.
-  if (bookmarks_opened >= 2 || mv_tiles_clicked >= 2 ||
-      opened_ntp_from_tab_groups >= 2 || opened_item_from_history >= 2 ||
-      opened_recent_tabs >= 2) {
+  if (inputs[kFeatureMobileBookmarkManagerOpen] >= 2 ||
+      inputs[kFeatureNewTabPageMostVisitedClicked] >= 2 ||
+      inputs[kFeatureTabGroupCreatedOpenInNewTab] >= 2 ||
+      inputs[kFeatureAndroidHistoryPageOpenItem] >= 2 ||
+      inputs[kFeatureMobileMenuRecentTabs] >= 2) {
     result = 1;
   }
 
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(std::move(callback), ModelProvider::Response(1, result)));
-}
-
-bool ResumeHeavyUserModel::ModelAvailable() {
-  return true;
 }
 
 }  // namespace segmentation_platform

@@ -6,9 +6,11 @@
 #define COMPONENTS_CAPTIVE_PORTAL_CORE_CAPTIVE_PORTAL_DETECTOR_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
@@ -33,6 +35,9 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
     int response_code = 0;
     base::TimeDelta retry_after_delta;
     GURL landing_url;
+    // The content_length is the size of the response body. If there is no
+    // response body, this will be std::nullopt.
+    std::optional<size_t> content_length;
   };
 
   typedef base::OnceCallback<void(const Results& results)> DetectionCallback;
@@ -42,7 +47,7 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // requests for this URL should get an HTTP redirect or a login
   // page.  When neither is true, no server should respond to requests
   // for this URL.
-  static const char kDefaultURL[];
+  static const std::string_view GetDefaultUrl();
 
   explicit CaptivePortalDetector(
       network::mojom::URLLoaderFactory* loader_factory);
@@ -56,7 +61,7 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // |callback|. Only one detection attempt is expected to be in progress.
   // If called again before |callback| is invoked, Cancel() should be called
   // first, otherwise the first request and callback will be implicitly
-  // cancelled. and an ERROR will be logged
+  // cancelled and an ERROR will be logged.
   void DetectCaptivePortal(
       const GURL& url,
       DetectionCallback callback,
@@ -68,10 +73,11 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
  private:
   friend class CaptivePortalDetectorTestBase;
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   void OnSimpleLoaderCompleteInternal(int net_error,
                                       int response_code,
+                                      std::optional<size_t> content_length,
                                       const GURL& url,
                                       net::HttpResponseHeaders* headers);
 
@@ -81,6 +87,7 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // base::TimeDelta().
   void GetCaptivePortalResultFromResponse(int net_error,
                                           int response_code,
+                                          std::optional<size_t> content_length,
                                           const GURL& url,
                                           net::HttpResponseHeaders* headers,
                                           Results* results) const;

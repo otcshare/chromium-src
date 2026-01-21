@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "content/browser/background_fetch/background_fetch_job_controller.h"
@@ -15,10 +15,11 @@
 #include "content/public/browser/background_fetch_description.h"
 #include "content/public/browser/background_fetch_response.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/download_manager_delegate.h"
 #include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom.h"
@@ -77,8 +78,9 @@ void BackgroundFetchDelegateProxy::GetPermissionForOrigin(
         ->GetDelegate()
         ->CheckDownloadAllowed(
             std::move(web_contents_getter), origin.GetURL(), "GET",
-            absl::nullopt, false /* from_download_cross_origin_redirect */,
-            true /* content_initiated */,
+            std::nullopt, /* from_download_cross_origin_redirect= */ false,
+            /* content_initiated= */ true, /* mime_type= */ std::string(),
+            /* page_transition= */ std::nullopt,
             base::BindOnce(&BackgroundFetchDelegateProxy::
                                DidGetPermissionFromDownloadRequestLimiter,
                            weak_ptr_factory_.GetWeakPtr(),
@@ -91,13 +93,16 @@ void BackgroundFetchDelegateProxy::GetPermissionForOrigin(
   if (auto* controller = GetPermissionController()) {
     blink::mojom::PermissionStatus permission_status =
         blink::mojom::PermissionStatus::DENIED;
+    const auto descriptor = content::PermissionDescriptorUtil::
+        CreatePermissionDescriptorForPermissionType(
+            blink::PermissionType::BACKGROUND_FETCH);
     if (rfh) {
       DCHECK(origin == rfh->GetLastCommittedOrigin());
-      permission_status = controller->GetPermissionStatusForCurrentDocument(
-          blink::PermissionType::BACKGROUND_FETCH, rfh);
+      permission_status =
+          controller->GetPermissionStatusForCurrentDocument(descriptor, rfh);
     } else if (rph) {
-      permission_status = controller->GetPermissionStatusForWorker(
-          blink::PermissionType::BACKGROUND_FETCH, rph, origin);
+      permission_status =
+          controller->GetPermissionStatusForWorker(descriptor, rph, origin);
     }
     switch (permission_status) {
       case blink::mojom::PermissionStatus::GRANTED:
@@ -201,8 +206,8 @@ void BackgroundFetchDelegateProxy::StartRequest(
 
 void BackgroundFetchDelegateProxy::UpdateUI(
     const std::string& job_unique_id,
-    const absl::optional<std::string>& title,
-    const absl::optional<SkBitmap>& icon,
+    const std::optional<std::string>& title,
+    const std::optional<SkBitmap>& icon,
     blink::mojom::BackgroundFetchRegistrationService::UpdateUICallback
         update_ui_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

@@ -6,19 +6,20 @@
 
 #include <utility>
 
-#include "components/viz/common/resources/resource_format_utils.h"
+#include "base/metrics/histogram_macros.h"
 #include "components/viz/service/display/skia_output_surface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/command_buffer/common/sync_token.h"
 
 namespace viz {
 
 BufferQueue::BufferQueue(SkiaOutputSurface* skia_output_surface,
                          gpu::SurfaceHandle surface_handle,
-                         size_t number_of_buffers)
+                         size_t number_of_buffers,
+                         bool is_protected)
     : skia_output_surface_(skia_output_surface),
       surface_handle_(surface_handle),
-      number_of_buffers_(number_of_buffers) {}
+      number_of_buffers_(number_of_buffers),
+      is_protected_(is_protected) {}
 
 BufferQueue::~BufferQueue() {
   FreeAllBuffers();
@@ -74,17 +75,36 @@ void BufferQueue::SwapBuffers(const gfx::Rect& damage) {
   in_flight_buffers_.push_back(std::move(current_buffer_));
 }
 
-void BufferQueue::SwapBuffersComplete() {
-  DCHECK(!in_flight_buffers_.empty());
+void BufferQueue::SwapBuffersComplete(bool did_present) {
+  CHECK(!in_flight_buffers_.empty());
+  auto in_flight_buffer = std::move(in_flight_buffers_.front());
+  in_flight_buffers_.pop_front();
 
-  if (in_flight_buffers_.front()) {
+  if (did_present) {
     if (displayed_buffer_) {
       available_buffers_.push_back(std::move(displayed_buffer_));
     }
-    displayed_buffer_ = std::move(in_flight_buffers_.front());
+    displayed_buffer_ = std::move(in_flight_buffer);
+  } else {
+    // The GPU thread decided to skip swap. The last in flight buffer was not
+    // presented so don't switch out `displayed_buffer_`.
+    if (in_flight_buffer) {
+      available_buffers_.push_back(std::move(in_flight_buffer));
+    }
+    // Since skipped swap can sometimes be due to failure to draw to the primary
+    // plane, add full damage to ensure that primary plane buffers are fully
+    // redrawn.
+    UpdateBufferDamage(gfx::Rect(size_));
   }
 
-  in_flight_buffers_.pop_front();
+  if (buffers_can_be_purged_) {
+    for (auto& buffer : available_buffers_) {
+      if (SetBufferPurgeable(*buffer, true)) {
+        // Set a single available buffer to purgeable each swap.
+        break;
+      }
+    }
+  }
 }
 
 void BufferQueue::SwapBuffersSkipped(const gfx::Rect& damage) {
@@ -93,13 +113,27 @@ void BufferQueue::SwapBuffersSkipped(const gfx::Rect& damage) {
 
 bool BufferQueue::Reshape(const gfx::Size& size,
                           const gfx::ColorSpace& color_space,
-                          gfx::BufferFormat format) {
-  if (size == size_ && color_space == color_space_ && format == format_)
+                          RenderPassAlphaType alpha_type,
+                          SharedImageFormat format) {
+  if (size == size_ && color_space == color_space_ &&
+      alpha_type == alpha_type_ && format == format_) {
     return false;
+  }
 
   size_ = size;
   color_space_ = color_space;
+  alpha_type_ = alpha_type;
   format_ = format;
+
+  if (buffers_destroyed_) {
+    return true;
+  }
+
+  if (buffers_can_be_purged_) {
+    // If buffers are purgeable wait to recreate until they will be used again.
+    DestroyBuffers();
+    return true;
+  }
 
   FreeAllBuffers();
   AllocateBuffers(number_of_buffers_);
@@ -108,6 +142,16 @@ bool BufferQueue::Reshape(const gfx::Size& size,
 }
 
 void BufferQueue::RecreateBuffers() {
+  if (buffers_destroyed_) {
+    return;
+  }
+
+  if (buffers_can_be_purged_) {
+    // If buffers are purgeable wait to recreate until they will be used again.
+    DestroyBuffers();
+    return;
+  }
+
   FreeAllBuffers();
   AllocateBuffers(number_of_buffers_);
 }
@@ -136,18 +180,30 @@ void BufferQueue::FreeBuffer(std::unique_ptr<AllocatedBuffer> buffer) {
   skia_output_surface_->DestroySharedImage(buffer->mailbox);
 }
 
+bool BufferQueue::SetBufferPurgeable(AllocatedBuffer& buffer, bool purgeable) {
+  if (buffer.purgeable == purgeable) {
+    return false;
+  }
+
+  skia_output_surface_->SetSharedImagePurgeable(buffer.mailbox, purgeable);
+  buffer.purgeable = purgeable;
+  return true;
+}
+
 void BufferQueue::AllocateBuffers(size_t n) {
   DCHECK(format_);
-  const ResourceFormat format = GetResourceFormat(format_.value());
 
-  constexpr uint32_t usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                             gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE |
-                             gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  const gpu::SharedImageUsageSet usage =
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE | gpu::SHARED_IMAGE_USAGE_SCANOUT |
+      (is_protected_ ? gpu::SHARED_IMAGE_USAGE_PROTECTED_VIDEO
+                     : gpu::SharedImageUsageSet());
 
   available_buffers_.reserve(available_buffers_.size() + n);
   for (size_t i = 0; i < n; ++i) {
     const gpu::Mailbox mailbox = skia_output_surface_->CreateSharedImage(
-        format, size_, color_space_, usage, surface_handle_);
+        format_.value(), size_, color_space_, alpha_type_, usage,
+        "VizBufferQueue", surface_handle_);
     DCHECK(!mailbox.IsZero());
 
     available_buffers_.push_back(
@@ -156,6 +212,8 @@ void BufferQueue::AllocateBuffers(size_t n) {
 }
 
 std::unique_ptr<BufferQueue::AllocatedBuffer> BufferQueue::GetNextBuffer() {
+  RecreateBuffersIfDestroyed();
+
   DCHECK(!available_buffers_.empty());
 
   std::unique_ptr<AllocatedBuffer> buffer =
@@ -165,9 +223,15 @@ std::unique_ptr<BufferQueue::AllocatedBuffer> BufferQueue::GetNextBuffer() {
 }
 
 gpu::Mailbox BufferQueue::GetLastSwappedBuffer() {
-  // The last swapped buffer will generally be in displayed_buffer_, as long as
-  // SwapBuffersComplete() has been called at least once for a non-empty swap
-  // since the last Reshape().
+  if (buffers_destroyed_) {
+    // Buffers will not be destroyed on platforms where we need to use a buffer
+    // for overlay testing (Ash).
+    return gpu::Mailbox();
+  }
+
+  // The last swapped buffer will generally be in `displayed_buffer_`, unless
+  // the last completed swap was empty or there haven't been any completed swaps
+  // since Reshape() was last called.
   if (displayed_buffer_) {
     return displayed_buffer_->mailbox;
   }
@@ -193,10 +257,46 @@ void BufferQueue::EnsureMinNumberOfBuffers(size_t n) {
   }
 
   // If Reshape hasn't been called yet we can't allocate the buffers.
-  if (!size_.IsEmpty()) {
+  if (!size_.IsEmpty() && !buffers_destroyed_) {
     AllocateBuffers(n - number_of_buffers_);
   }
   number_of_buffers_ = n;
+}
+
+void BufferQueue::DestroyBuffers() {
+  if (buffers_destroyed_) {
+    return;
+  }
+  buffers_destroyed_ = true;
+  destroyed_timer_ = base::ElapsedTimer();
+  FreeAllBuffers();
+}
+
+void BufferQueue::SetBuffersPurgeable() {
+  if (buffers_can_be_purged_) {
+    return;
+  }
+  buffers_can_be_purged_ = true;
+}
+
+void BufferQueue::RecreateBuffersIfDestroyed() {
+  if (buffers_can_be_purged_) {
+    // Mark buffers as not purgeable. It's possible they were destroyed and
+    // `available_buffers_` is empty.
+    buffers_can_be_purged_ = false;
+    for (auto& buffer : available_buffers_) {
+      SetBufferPurgeable(*buffer, false);
+    }
+  }
+
+  if (buffers_destroyed_) {
+    buffers_destroyed_ = false;
+    AllocateBuffers(number_of_buffers_);
+    base::TimeDelta elapsed = destroyed_timer_->Elapsed();
+    UMA_HISTOGRAM_TIMES("Compositing.BufferQueue.TimeUntilBuffersRecreatedMs",
+                        elapsed);
+    destroyed_timer_.reset();
+  }
 }
 
 BufferQueue::AllocatedBuffer::AllocatedBuffer(const gpu::Mailbox& mailbox,

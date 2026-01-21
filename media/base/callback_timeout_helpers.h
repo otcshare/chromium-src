@@ -8,8 +8,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -46,6 +46,16 @@
 //           base::BindOnce(&Foo::LogError, this, TIMEOUT)));
 
 namespace media {
+
+// Enum class for reporting callback timeout status to UMA.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class CallbackTimeoutStatus {
+  kCreate = 0,
+  kTimeout = 1,
+  kDestructedBeforeTimeout = 2,
+  kMaxValue = kDestructedBeforeTimeout,
+};
 
 // Callback time for the timeout handler in `WrapCallbackWithTimeoutHandler`.
 // If `called_on_destruction` is true, the timeout callback was called because

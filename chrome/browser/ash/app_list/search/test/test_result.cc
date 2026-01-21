@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ash/app_list/search/test/test_result.h"
 
+#include "base/strings/utf_string_conversions.h"
+
 namespace app_list {
 
 TestResult::TestResult(const std::string& id,
@@ -16,7 +18,7 @@ TestResult::TestResult(const std::string& id,
   SetResultType(result_type);
   SetCategory(category);
   SetDisplayScore(display_score);
-  scoring().normalized_relevance = normalized_relevance;
+  scoring().set_normalized_relevance(normalized_relevance);
 }
 
 TestResult::TestResult(const std::string& id,
@@ -27,7 +29,7 @@ TestResult::TestResult(const std::string& id,
   set_id(id);
   SetTitle(base::UTF8ToUTF16(id));
   set_relevance(relevance);
-  scoring().normalized_relevance = normalized_relevance;
+  scoring().set_normalized_relevance(normalized_relevance);
   SetDisplayType(display_type);
   SetBestMatch(best_match);
 }
@@ -42,9 +44,9 @@ TestResult::TestResult(const std::string& id,
   SetTitle(base::UTF8ToUTF16(id));
   SetDisplayType(display_type);
   SetCategory(category);
-  scoring().best_match_rank = best_match_rank;
+  scoring().set_best_match_rank(best_match_rank);
   set_relevance(relevance);
-  scoring().ftrl_result_score = ftrl_result_score;
+  scoring().set_ftrl_result_score(ftrl_result_score);
 }
 
 TestResult::TestResult(const std::string& id,
@@ -56,6 +58,35 @@ TestResult::TestResult(const std::string& id,
   SetResultType(result_type);
   set_answer_type(answer_type);
   SetDisplayType(display_type);
+}
+
+TestResult::TestResult(const std::string& id,
+                       double relevance,
+                       double normalized_relevance,
+                       MetricsType metrics_type) {
+  set_id(id);
+  SetTitle(base::UTF8ToUTF16(id));
+  set_relevance(relevance);
+  scoring().set_normalized_relevance(normalized_relevance);
+  SetMetricsType(metrics_type);
+}
+
+TestResult::TestResult(const std::string& id,
+                       DisplayType display_type,
+                       Category category,
+                       const std::string& fileName,
+                       const std::string& path,
+                       int best_match_rank,
+                       double relevance,
+                       double ftrl_result_score) {
+  set_id(id);
+  SetTitle(base::UTF8ToUTF16(fileName));
+  SetDisplayType(display_type);
+  SetCategory(category);
+  SetFilePath(base::FilePath(path));
+  scoring().set_best_match_rank(best_match_rank);
+  set_relevance(relevance);
+  scoring().set_ftrl_result_score(ftrl_result_score);
 }
 
 TestResult::~TestResult() = default;

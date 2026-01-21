@@ -6,12 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/unsafe_shared_memory_region.h"
+#include "base/notimplemented.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_types.h"
 
@@ -52,7 +54,7 @@ void FakeMjpegDecodeAccelerator::InitializeAsync(
       FROM_HERE,
       base::BindOnce(&FakeMjpegDecodeAccelerator::InitializeOnTaskRunner,
                      weak_factory_.GetWeakPtr(), client,
-                     media::BindToCurrentLoop(std::move(init_cb))));
+                     base::BindPostTaskToCurrentDefault(std::move(init_cb))));
 }
 
 void FakeMjpegDecodeAccelerator::Decode(
@@ -97,7 +99,7 @@ void FakeMjpegDecodeAccelerator::DecodeOnDecoderThread(
   // Instead, just fill the output buffer with zeros.
   size_t allocation_size = media::VideoFrame::AllocationSize(
       media::PIXEL_FORMAT_I420, video_frame->coded_size());
-  memset(video_frame->writable_data(0), 0, allocation_size);
+  UNSAFE_TODO(memset(video_frame->writable_data(0), 0, allocation_size));
 
   client_task_runner_->PostTask(
       FROM_HERE,

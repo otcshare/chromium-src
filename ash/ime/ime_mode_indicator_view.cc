@@ -9,6 +9,7 @@
 #include "ash/wm/window_util.h"
 #include "base/logging.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -28,9 +29,9 @@ const int kMinSize = 31;
 const int kShowingDuration = 500;
 
 class ModeIndicatorFrameView : public views::BubbleFrameView {
- public:
-  METADATA_HEADER(ModeIndicatorFrameView);
+  METADATA_HEADER(ModeIndicatorFrameView, views::BubbleFrameView)
 
+ public:
   explicit ModeIndicatorFrameView()
       : views::BubbleFrameView(gfx::Insets(), gfx::Insets()) {}
   ModeIndicatorFrameView(const ModeIndicatorFrameView&) = delete;
@@ -40,13 +41,13 @@ class ModeIndicatorFrameView : public views::BubbleFrameView {
  private:
   // views::BubbleFrameView overrides:
   gfx::Rect GetAvailableScreenBounds(const gfx::Rect& rect) const override {
-    return display::Screen::GetScreen()
+    return display::Screen::Get()
         ->GetDisplayNearestPoint(rect.CenterPoint())
         .bounds();
   }
 };
 
-BEGIN_METADATA(ModeIndicatorFrameView, views::BubbleFrameView)
+BEGIN_METADATA(ModeIndicatorFrameView)
 END_METADATA
 
 }  // namespace
@@ -54,13 +55,13 @@ END_METADATA
 ImeModeIndicatorView::ImeModeIndicatorView(const gfx::Rect& cursor_bounds,
                                            const std::u16string& label)
     : cursor_bounds_(cursor_bounds), label_view_(new views::Label(label)) {
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetCanActivate(false);
   set_accept_events(false);
   set_shadow(views::BubbleBorder::STANDARD_SHADOW);
   SetArrow(views::BubbleBorder::TOP_CENTER);
   // Ignore this view for accessibility purposes.
-  SetAccessibleRole(ax::mojom::Role::kNone);
+  SetAccessibleWindowRole(ax::mojom::Role::kNone);
 }
 
 ImeModeIndicatorView::~ImeModeIndicatorView() = default;
@@ -85,31 +86,32 @@ void ImeModeIndicatorView::OnBeforeBubbleWidgetInit(
   }
 }
 
-gfx::Size ImeModeIndicatorView::CalculatePreferredSize() const {
-  gfx::Size size = label_view_->GetPreferredSize();
+gfx::Size ImeModeIndicatorView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size size = label_view_->GetPreferredSize({});
   size.SetToMax(gfx::Size(kMinSize, kMinSize));
   return size;
 }
 
 void ImeModeIndicatorView::Init() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
-  AddChildView(label_view_);
+  AddChildViewRaw(label_view_.get());
 
   SetAnchorRect(cursor_bounds_);
 }
 
-std::unique_ptr<views::NonClientFrameView>
-ImeModeIndicatorView::CreateNonClientFrameView(views::Widget* widget) {
+std::unique_ptr<views::FrameView> ImeModeIndicatorView::CreateFrameView(
+    views::Widget* widget) {
   auto frame = std::make_unique<ModeIndicatorFrameView>();
   // arrow adjustment in BubbleDialogDelegateView is unnecessary because arrow
   // of this bubble is always center.
   auto border = std::make_unique<views::BubbleBorder>(arrow(), GetShadow());
-  border->SetColor(color());
+  border->SetColor(background_color());
   frame->SetBubbleBorder(std::move(border));
   return frame;
 }
 
-BEGIN_METADATA(ImeModeIndicatorView, views::BubbleDialogDelegateView)
+BEGIN_METADATA(ImeModeIndicatorView)
 END_METADATA
 
 }  // namespace ash

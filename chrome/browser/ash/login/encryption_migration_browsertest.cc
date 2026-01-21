@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
 #include <string>
 
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "base/command_line.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_util.h"
 #include "chrome/browser/ash/login/login_wizard.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
@@ -18,12 +18,14 @@
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/ash/components/dbus/cryptohome/account_identifier_operators.h"
 #include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
@@ -33,7 +35,7 @@
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
 #include "content/public/test/browser_test.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "third_party/cros_system_api/dbus/cryptohome/dbus-constants.h"
 
 namespace ash {
@@ -57,6 +59,8 @@ const test::UIPath kInsufficientSpaceSkipButton = {
     kEncryptionMigrationId, "insufficient-space-skip-button"};
 const test::UIPath kInsufficientSpaceRestartButton = {
     kEncryptionMigrationId, "insufficient-space-restart-button"};
+
+using AuthOp = FakeUserDataAuthClient::Operation;
 
 }  // namespace
 
@@ -144,10 +148,11 @@ class EncryptionMigrationTestBase
     test::OobeJS().ExpectHiddenPath(kErrorDialog);
     test::OobeJS().ExpectHiddenPath(kInsufficientSpaceDialog);
 
-    EXPECT_EQ(
-        GetTestCryptohomeId(),
-        FakeUserDataAuthClient::Get()->get_id_for_disk_migrated_to_dircrypto());
-    EXPECT_FALSE(FakeUserDataAuthClient::Get()->minimal_migration());
+    auto migrate_request =
+        FakeUserDataAuthClient::Get()
+            ->GetLastRequest<AuthOp::kStartMigrateToDircrypto>();
+    EXPECT_EQ(GetTestCryptohomeId(), migrate_request.account_id());
+    EXPECT_FALSE(migrate_request.minimal_migration());
 
     EXPECT_EQ(
         0,
@@ -189,7 +194,7 @@ class EncryptionMigrationTestBase
 
   // Updates the battery percent info reported by the power manager client.
   void SetBatteryPercent(int battery_percent) {
-    absl::optional<power_manager::PowerSupplyProperties> properties =
+    std::optional<power_manager::PowerSupplyProperties> properties =
         chromeos::FakePowerManagerClient::Get()->GetLastStatus();
     ASSERT_TRUE(properties.has_value());
     properties->set_battery_percent(battery_percent);
@@ -201,7 +206,7 @@ class EncryptionMigrationTestBase
 
  private:
   // EncryptionMigrationScreen::EncryptionMigrationScreenTestDelegate
-  int64_t GetFreeSpace() const override { return free_space_; }
+  std::optional<int64_t> GetFreeSpace() const override { return free_space_; }
 
   // Encryption migration requires at least 50 MB - set the default reported
   // free space to an arbitrary amount above that limit.
@@ -221,7 +226,8 @@ class EncryptionMigrationTest : public EncryptionMigrationTestBase {
  public:
   EncryptionMigrationTest()
       : EncryptionMigrationTestBase(LoginManagerMixin::TestUserInfo{
-            AccountId::FromUserEmailGaiaId("user@gmail.com", "user")}) {}
+            AccountId::FromUserEmailGaiaId("user@gmail.com", GaiaId("user"))}) {
+  }
   ~EncryptionMigrationTest() override = default;
 
   EncryptionMigrationTest(const EncryptionMigrationTest& other) = delete;
@@ -234,8 +240,9 @@ class EncryptionMigrationChildUserTest : public EncryptionMigrationTestBase {
  public:
   EncryptionMigrationChildUserTest()
       : EncryptionMigrationTestBase(LoginManagerMixin::TestUserInfo{
-            AccountId::FromUserEmailGaiaId("userchild@gmail.com", "userchild"),
-            user_manager::USER_TYPE_CHILD}) {}
+            AccountId::FromUserEmailGaiaId("userchild@gmail.com",
+                                           GaiaId("userchild")),
+            test::kDefaultAuthSetup, user_manager::UserType::kChild}) {}
   ~EncryptionMigrationChildUserTest() override = default;
 
   EncryptionMigrationChildUserTest(
@@ -269,8 +276,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, SkipWithNoPolicySet) {
   WaitForActiveSession();
 
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrateWithNoUserPolicySet) {
@@ -289,8 +295,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrateWithNoUserPolicySet) {
   test::OobeJS().ExpectVisiblePath(kUpgradeButton);
 
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 
   test::OobeJS().TapOnPath(kUpgradeButton);
 
@@ -363,8 +368,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest,
 
   WaitForActiveSession();
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrateWithInsuficientSpace) {
@@ -390,8 +394,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrateWithInsuficientSpace) {
   EXPECT_EQ(
       1, chromeos::FakePowerManagerClient::Get()->num_request_restart_calls());
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, InsufficientSpaceOnResume) {
@@ -417,8 +420,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, InsufficientSpaceOnResume) {
   EXPECT_EQ(
       1, chromeos::FakePowerManagerClient::Get()->num_request_restart_calls());
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrationFailure) {
@@ -433,9 +435,10 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, MigrationFailure) {
       .CreateWaiter(test::GetOobeElementPath(kMigratingDialog))
       ->Wait();
 
-  EXPECT_EQ(
-      GetTestCryptohomeId(),
-      FakeUserDataAuthClient::Get()->get_id_for_disk_migrated_to_dircrypto());
+  EXPECT_EQ(GetTestCryptohomeId(),
+            FakeUserDataAuthClient::Get()
+                ->GetLastRequest<AuthOp::kStartMigrateToDircrypto>()
+                .account_id());
   FakeUserDataAuthClient::Get()->NotifyDircryptoMigrationProgress(
       ::user_data_auth::DircryptoMigrationStatus::DIRCRYPTO_MIGRATION_FAILED,
       5 /*current*/, 5 /*total*/);
@@ -481,8 +484,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest, LowBattery) {
 
   WaitForActiveSession();
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest,
@@ -505,8 +507,7 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest,
   test::OobeJS().ExpectPathDisplayed(false, kUpgradeButton);
 
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest,
@@ -526,12 +527,14 @@ IN_PROC_BROWSER_TEST_F(EncryptionMigrationTest,
   test::OobeJS().ExpectHiddenPath(kErrorDialog);
 
   EXPECT_FALSE(FakeUserDataAuthClient::Get()
-                   ->get_id_for_disk_migrated_to_dircrypto()
-                   .has_account_id());
+                   ->WasCalled<AuthOp::kStartMigrateToDircrypto>());
 
   SetBatteryPercent(60);
 
   RunFullMigrationFlowTest();
 }
+
+// TODO(b/271142350): Add test coverage for EncryptionMigrationScreen obtaining
+// the wake lock.
 
 }  // namespace ash

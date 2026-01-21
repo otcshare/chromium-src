@@ -4,15 +4,14 @@
 
 package org.chromium.chrome.browser.ntp;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 
 import java.util.List;
 
-/**
- * Manages a list of recently closed tabs.
- */
+/** Manages a list of recently closed tabs. */
+@NullMarked
 public interface RecentlyClosedTabManager {
     /**
      * Sets the {@link Runnable} to be called whenever the list of recently closed entries changes.
@@ -24,7 +23,7 @@ public interface RecentlyClosedTabManager {
      * @param maxEntryCount The maximum number of recently closed entries to return.
      * @return A snapshot of the list of recently closed entries, with up to maxEntryCount elements.
      */
-    List<RecentlyClosedEntry> getRecentlyClosedEntries(int maxEntryCount);
+    @Nullable List<RecentlyClosedEntry> getRecentlyClosedEntries(int maxEntryCount);
 
     /**
      * Opens a recently closed tab in the current tab or a new tab. If opened in the current tab,
@@ -55,10 +54,15 @@ public interface RecentlyClosedTabManager {
      */
     void openMostRecentlyClosedEntry(TabModel tabModel);
 
-    /**
-     * Clears all recently closed tabs.
-     */
+    /** Clears all recently closed tabs. */
     void clearRecentlyClosedEntries();
+
+    /**
+     * Clears least recently used closed entries.
+     *
+     * @param numToRemove Number of entries to remove.
+     */
+    void clearLeastRecentlyUsedClosedEntries(int numToRemove);
 
     /**
      * To be called before this instance is abandoned to the garbage collector so it can do any

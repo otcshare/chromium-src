@@ -18,7 +18,7 @@ class OriginTrialsControllerDelegate;
 // by providing an observable effect of setting a persistent origin trial.
 class WebTestOriginTrialThrottle : public NavigationThrottle {
  public:
-  WebTestOriginTrialThrottle(NavigationHandle* navigation_handle,
+  WebTestOriginTrialThrottle(NavigationThrottleRegistry& registry,
                              OriginTrialsControllerDelegate* delegate);
   ~WebTestOriginTrialThrottle() override = default;
 
@@ -31,8 +31,7 @@ class WebTestOriginTrialThrottle : public NavigationThrottle {
   // Helper function that set the X-Web-Test-Enabled-Origin-Trials header
   void SetHeaderForRequest();
 
-  base::raw_ptr<OriginTrialsControllerDelegate>
-      origin_trials_controller_delegate_;
+  raw_ptr<OriginTrialsControllerDelegate> origin_trials_controller_delegate_;
 };
 
 }  // namespace content

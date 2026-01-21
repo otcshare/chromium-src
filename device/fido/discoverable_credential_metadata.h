@@ -5,10 +5,13 @@
 #ifndef DEVICE_FIDO_DISCOVERABLE_CREDENTIAL_METADATA_H_
 #define DEVICE_FIDO_DISCOVERABLE_CREDENTIAL_METADATA_H_
 
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
-#include "device/fido/public_key_credential_user_entity.h"
+#include "base/time/time.h"
+#include "device/fido/public/fido_types.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
 
 namespace device {
 
@@ -17,9 +20,12 @@ namespace device {
 // information.
 class COMPONENT_EXPORT(DEVICE_FIDO) DiscoverableCredentialMetadata {
  public:
-  DiscoverableCredentialMetadata(std::string rp_id,
+  DiscoverableCredentialMetadata(AuthenticatorType source,
+                                 std::string rp_id,
                                  std::vector<uint8_t> cred_id,
-                                 PublicKeyCredentialUserEntity user);
+                                 PublicKeyCredentialUserEntity user,
+                                 std::optional<std::string> provider_name,
+                                 std::optional<base::Time> last_used_time = base::Time());
 
   DiscoverableCredentialMetadata();
   DiscoverableCredentialMetadata(const DiscoverableCredentialMetadata& other);
@@ -31,6 +37,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) DiscoverableCredentialMetadata {
   ~DiscoverableCredentialMetadata();
   bool operator==(const DiscoverableCredentialMetadata& other) const;
 
+  AuthenticatorType source = AuthenticatorType::kOther;
   std::string rp_id;
   std::vector<uint8_t> cred_id;
   PublicKeyCredentialUserEntity user;
@@ -38,6 +45,14 @@ class COMPONENT_EXPORT(DEVICE_FIDO) DiscoverableCredentialMetadata {
   // automatically by the system. This can happen on Windows where (at least) a
   // credential for login.microsoft.com can be auto-created for users.
   bool system_created = false;
+
+  // The name of the third-party provider the passkey is stored in. This is
+  // populated for credentials coming from the MacOS API.
+  std::optional<std::string> provider_name;
+
+  // Time when this passkey was last successfully asserted. Can be nullopt for
+  // platform provided credentials.
+  std::optional<base::Time> last_used_time;
 };
 
 }  // namespace device

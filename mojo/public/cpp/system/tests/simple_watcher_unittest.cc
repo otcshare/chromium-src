@@ -5,9 +5,11 @@
 #include "mojo/public/cpp/system/simple_watcher.h"
 
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -93,28 +95,29 @@ TEST_F(SimpleWatcherTest, WatchFailedPreconditionNoSpam) {
   bool had_failed_precondition = false;
 
   SimpleWatcher watcher(FROM_HERE, SimpleWatcher::ArmingPolicy::AUTOMATIC);
-  MojoResult rc =
-      watcher.Watch(consumer_handle.get(), MOJO_HANDLE_SIGNAL_READABLE,
-                    OnReady([&](MojoResult result) {
-                      EXPECT_FALSE(had_failed_precondition);
-                      switch (result) {
-                        case MOJO_RESULT_OK:
-                          const void* begin;
-                          uint32_t num_bytes;
-                          consumer_handle->BeginReadData(
-                              &begin, &num_bytes, MOJO_READ_DATA_FLAG_NONE);
-                          consumer_handle->EndReadData(num_bytes);
-                          break;
-                        case MOJO_RESULT_FAILED_PRECONDITION:
-                          had_failed_precondition = true;
-                          break;
-                      }
-                    }));
+  MojoResult rc = watcher.Watch(
+      consumer_handle.get(), MOJO_HANDLE_SIGNAL_READABLE,
+      OnReady([&](MojoResult result) {
+        EXPECT_FALSE(had_failed_precondition);
+        switch (result) {
+          case MOJO_RESULT_OK: {
+            base::span<const uint8_t> buffer;
+            consumer_handle->BeginReadData(MOJO_READ_DATA_FLAG_NONE, buffer);
+            consumer_handle->EndReadData(buffer.size());
+            break;
+          }
+          case MOJO_RESULT_FAILED_PRECONDITION:
+            had_failed_precondition = true;
+            break;
+        }
+      }));
   EXPECT_EQ(MOJO_RESULT_OK, rc);
 
-  uint32_t size = 5;
+  size_t bytes_written = 0;
   EXPECT_EQ(MOJO_RESULT_OK, producer_handle->WriteData(
-                                "hello", &size, MOJO_WRITE_DATA_FLAG_NONE));
+                                base::byte_span_from_cstring("hello"),
+                                MOJO_WRITE_DATA_FLAG_NONE, bytes_written));
+  EXPECT_EQ(bytes_written, 5u);
   base::RunLoop().RunUntilIdle();
   producer_handle.reset();
   base::RunLoop().RunUntilIdle();

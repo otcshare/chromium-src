@@ -4,39 +4,43 @@
 
 package org.chromium.components.external_intents;
 
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Features;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Java accessor for base/feature_list.h state.
  *
- * This class provides methods to access values of feature flags registered in
+ * <p>This class provides methods to access values of feature flags registered in
  * |kFeaturesExposedToJava| in components/external_intents/android/external_intents_features.cc.
- *
  */
 @JNINamespace("external_intents")
-public class ExternalIntentsFeatures extends Features {
-    public static final String BLOCK_EXTERNAL_FORM_SUBMIT_WITHOUT_GESTURE_NAME =
-            "BlockExternalFormSubmitWithoutGesture";
+@NullMarked
+public class ExternalIntentsFeatures {
     public static final String EXTERNAL_NAVIGATION_DEBUG_LOGS_NAME = "ExternalNavigationDebugLogs";
+    public static final String NAVIGATION_CAPTURE_REFACTOR_ANDROID_NAME =
+            "NavigationCaptureRefactorAndroid";
 
-    public static final ExternalIntentsFeatures BLOCK_EXTERNAL_FORM_SUBMIT_WITHOUT_GESTURE =
-            new ExternalIntentsFeatures(0, BLOCK_EXTERNAL_FORM_SUBMIT_WITHOUT_GESTURE_NAME);
+    public static final ExternalIntentsFeature EXTERNAL_NAVIGATION_DEBUG_LOGS =
+            new ExternalIntentsFeature(0, EXTERNAL_NAVIGATION_DEBUG_LOGS_NAME);
 
-    public static final ExternalIntentsFeatures EXTERNAL_NAVIGATION_DEBUG_LOGS =
-            new ExternalIntentsFeatures(1, EXTERNAL_NAVIGATION_DEBUG_LOGS_NAME);
+    public static final ExternalIntentsFeature NAVIGATION_CAPTURE_REFACTOR_ANDROID =
+            new ExternalIntentsFeature(1, NAVIGATION_CAPTURE_REFACTOR_ANDROID_NAME);
 
-    private final int mOrdinal;
+    public static class ExternalIntentsFeature extends Features {
+        private final int mOrdinal;
 
-    private ExternalIntentsFeatures(int ordinal, String name) {
-        super(name);
-        mOrdinal = ordinal;
-    }
+        private ExternalIntentsFeature(int ordinal, String name) {
+            super(name);
+            mOrdinal = ordinal;
+        }
 
-    @Override
-    protected long getFeaturePointer() {
-        return ExternalIntentsFeaturesJni.get().getFeature(mOrdinal);
+        @Override
+        protected long getFeaturePointer() {
+            return ExternalIntentsFeaturesJni.get().getFeature(mOrdinal);
+        }
     }
 
     @NativeMethods

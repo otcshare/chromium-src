@@ -10,11 +10,12 @@
 #include "ash/login/ui/lock_screen.h"
 #include "ash/login/ui/login_test_utils.h"
 #include "ash/public/cpp/shell_window_ids.h"
-#include "ash/public/mojom/tray_action.mojom.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "chromeos/ash/components/login/auth/auth_events_recorder.h"
 #include "components/user_manager/known_user.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -23,7 +24,9 @@ namespace ash {
 
 LoginTestBase::LoginTestBase()
     : NoSessionAshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-  user_manager::KnownUser::RegisterPrefs(local_state()->registry());
+  auth_events_recorder_ = ash::AuthEventsRecorder::CreateForTesting();
+  AuthEventsRecorder::Get()->OnAuthenticationSurfaceChange(
+      AuthEventsRecorder::AuthenticationSurface::kLogin);
 }
 
 LoginTestBase::~LoginTestBase() = default;
@@ -42,8 +45,9 @@ void LoginTestBase::ShowLoginScreen(bool set_wallpaper) {
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::LOGIN_PRIMARY);
   // The login screen can't be shown without a wallpaper.
-  if (set_wallpaper)
+  if (set_wallpaper) {
     Shell::Get()->wallpaper_controller()->ShowDefaultWallpaperForTesting();
+  }
 
   Shell::Get()->login_screen_controller()->ShowLoginScreen();
   // Allow focus to reach the appropriate View.
@@ -58,13 +62,14 @@ void LoginTestBase::SetWidget(std::unique_ptr<views::Widget> widget) {
 std::unique_ptr<views::Widget> LoginTestBase::CreateWidgetWithContent(
     views::View* content) {
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.bounds = gfx::Rect(0, 0, 800, 800);
 
   params.delegate = new views::WidgetDelegate();
   params.delegate->SetInitiallyFocusedView(content);
-  params.delegate->SetOwnedByWidget(true);
+  params.delegate->SetOwnedByWidget(
+      views::WidgetDelegate::OwnedByWidgetPassKey());
 
   // Set the widget to the lock screen container, since a test may change the
   // session state to locked, which will hide all widgets not associated with
@@ -92,8 +97,8 @@ void LoginTestBase::SetUserCount(size_t count) {
 
 void LoginTestBase::AddUsers(size_t num_users) {
   for (size_t i = 0; i < num_users; i++) {
-    std::string email =
-        base::StrCat({"user", std::to_string(users_.size()), "@domain.com"});
+    std::string email = base::StrCat(
+        {"user", base::NumberToString(users_.size()), "@domain.com"});
     users_.push_back(CreateUser(email));
   }
 
@@ -108,8 +113,8 @@ void LoginTestBase::AddUserByEmail(const std::string& email) {
 
 void LoginTestBase::AddPublicAccountUsers(size_t num_public_accounts) {
   for (size_t i = 0; i < num_public_accounts; i++) {
-    std::string email =
-        base::StrCat({"user", std::to_string(users_.size()), "@domain.com"});
+    std::string email = base::StrCat(
+        {"user", base::NumberToString(users_.size()), "@domain.com"});
     users_.push_back(CreatePublicAccountUser(email));
   }
 
@@ -119,8 +124,8 @@ void LoginTestBase::AddPublicAccountUsers(size_t num_public_accounts) {
 
 void LoginTestBase::AddChildUsers(size_t num_users) {
   for (size_t i = 0; i < num_users; i++) {
-    std::string email =
-        base::StrCat({"user", std::to_string(users_.size()), "@domain.com"});
+    std::string email = base::StrCat(
+        {"user", base::NumberToString(users_.size()), "@domain.com"});
     users_.push_back(CreateChildUser(email));
   }
 
@@ -129,12 +134,13 @@ void LoginTestBase::AddChildUsers(size_t num_users) {
 }
 
 void LoginTestBase::RemoveUser(const AccountId& account_id) {
-  for (auto it = users().cbegin(); it != users().cend(); ++it)
+  for (auto it = users().cbegin(); it != users().cend(); ++it) {
     if (it->basic_user_info.account_id == account_id) {
       users().erase(it);
       DataDispatcher()->SetUserList(users());
       return;
     }
+  }
   ADD_FAILURE() << "User not found: " << account_id.Serialize();
 }
 
@@ -143,10 +149,11 @@ LoginDataDispatcher* LoginTestBase::DataDispatcher() {
 }
 
 void LoginTestBase::TearDown() {
-  widget_.reset();
-
-  if (LockScreen::HasInstance())
+  if (LockScreen::HasInstance()) {
     LockScreen::Get()->Destroy();
+  }
+
+  widget_.reset();
 
   AshTestBase::TearDown();
 }

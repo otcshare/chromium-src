@@ -11,7 +11,7 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/task_traits.h"
 #include "content/common/content_export.h"
@@ -76,6 +76,10 @@ class TracingController {
   typedef base::OnceCallback<void(const std::set<std::string>&)>
       GetCategoriesDoneCallback;
   virtual bool GetCategories(GetCategoriesDoneCallback callback) = 0;
+
+  // Return a descriptor for all available tracing categories as serialized
+  // perfetto.protos.TrackEventDescriptor.
+  virtual std::vector<uint8_t> GetTrackEventDescriptor() = 0;
 
   // Start tracing (recording traces) on all processes.
   //

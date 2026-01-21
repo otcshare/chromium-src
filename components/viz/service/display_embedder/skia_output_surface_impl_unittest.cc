@@ -7,9 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "cc/test/fake_output_surface_client.h"
 #include "cc/test/pixel_test_utils.h"
@@ -24,6 +23,7 @@
 #include "gpu/command_buffer/service/service_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gl/gl_implementation.h"
 
@@ -90,15 +90,15 @@ void SkiaOutputSurfaceImplTest::SetUpSkiaOutputSurfaceImpl() {
 }
 
 gpu::SyncToken SkiaOutputSurfaceImplTest::PaintRootRenderPass(
-    const gfx::Rect& rect,
+    const gfx::Rect& output_rect,
     base::OnceClosure closure,
     base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence) {
   SkPaint paint;
   paint.setColor(kOutputColor);
   SkCanvas* root_canvas = output_surface_->BeginPaintCurrentFrame();
-  root_canvas->drawRect(
-      SkRect::MakeXYWH(rect.x(), rect.y(), rect.height(), rect.width()), paint);
+  root_canvas->drawRect(gfx::RectToSkRect(output_rect), paint);
   output_surface_->EndPaint(std::move(closure), std::move(return_release_fence),
+                            output_rect,
                             /*is_overlay=*/false);
   return output_surface_->Flush();
 }
@@ -131,15 +131,21 @@ void SkiaOutputSurfaceImplTest::CopyRequestCallbackOnGpuThread(
   SkBitmap expected;
   expected.allocPixels(SkImageInfo::MakeN32Premul(
       output_rect.width(), output_rect.height(), color_space.ToSkColorSpace()));
-  expected.eraseColor(kOutputColor, /*colorSpace=*/nullptr);
+  expected.eraseColor(kOutputColor);
 
-  EXPECT_TRUE(cc::MatchesBitmap(result_bitmap, expected,
-                                cc::ExactPixelComparator(false)));
+  EXPECT_TRUE(
+      cc::MatchesBitmap(result_bitmap, expected, cc::ExactPixelComparator()));
 
   UnblockMainThread();
 }
 
-TEST_F(SkiaOutputSurfaceImplTest, EndPaint) {
+// TODO(crbug.com/40922049): Re-enable this test
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_EndPaint DISABLED_EndPaint
+#else
+#define MAYBE_EndPaint EndPaint
+#endif
+TEST_F(SkiaOutputSurfaceImplTest, MAYBE_EndPaint) {
   OutputSurface::ReshapeParams reshape_params;
   reshape_params.size = kSurfaceRect.size();
   output_surface_->Reshape(reshape_params);
@@ -148,11 +154,76 @@ TEST_F(SkiaOutputSurfaceImplTest, EndPaint) {
   bool on_finished_called = false;
   base::OnceClosure on_finished =
       base::BindOnce([](bool* result) { *result = true; }, &on_finished_called);
+  base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb;
+
+  gpu::SyncToken sync_token = PaintRootRenderPass(
+      output_rect, std::move(on_finished), std::move(return_release_fence_cb));
+  EXPECT_TRUE(sync_token.HasData());
+
+  // Copy the output
+  const gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
+  auto request = std::make_unique<CopyOutputRequest>(
+      CopyOutputRequest::ResultFormat::RGBA,
+      CopyOutputRequest::ResultDestination::kSystemMemory,
+      base::BindOnce(&SkiaOutputSurfaceImplTest::CopyRequestCallbackOnGpuThread,
+                     base::Unretained(this), output_rect, color_space));
+  request->set_result_task_runner(
+      TestGpuServiceHolder::GetInstance()->gpu_main_thread_task_runner());
+  copy_output::RenderPassGeometry geometry;
+  geometry.result_bounds = output_rect;
+  geometry.result_selection = output_rect;
+  geometry.sampling_bounds = output_rect;
+  geometry.readback_offset = gfx::Vector2d(0, 0);
+
+  output_surface_->CopyOutput(geometry, color_space, std::move(request),
+                              gpu::Mailbox());
+  output_surface_->SwapBuffersSkipped(kSurfaceRect);
+  output_surface_->Flush();
+  BlockMainThread();
+
+  // EndPaint draw is deferred until CopyOutput.
+  base::OnceClosure closure =
+      base::BindOnce(&SkiaOutputSurfaceImplTest::CheckSyncTokenOnGpuThread,
+                     base::Unretained(this), sync_token);
+
+  output_surface_->ScheduleGpuTaskForTesting(std::move(closure), {sync_token});
+  BlockMainThread();
+
+  // Let the cb to come back.
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(on_finished_called);
+}
+
+// TODO(crbug.com/40922049): Re-enable this test
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_EndPaintReleaseFence DISABLED_EndPaintReleaseFence
+#else
+#define MAYBE_EndPaintReleaseFence EndPaintReleaseFence
+#endif
+TEST_F(SkiaOutputSurfaceImplTest, MAYBE_EndPaintReleaseFence) {
+  // Skip test for Skia Graphite
+  gpu::GrContextType gr_context_type =
+      GetGpuService()->gpu_preferences().gr_context_type;
+  if (gr_context_type == gpu::GrContextType::kGraphiteDawn ||
+      gr_context_type == gpu::GrContextType::kGraphiteMetal) {
+    GTEST_SKIP();
+  }
+  OutputSurface::ReshapeParams reshape_params;
+  reshape_params.size = kSurfaceRect.size();
+  output_surface_->Reshape(reshape_params);
+  constexpr gfx::Rect output_rect(0, 0, 10, 10);
+
+  bool on_finished_called = false;
+  base::OnceClosure on_finished =
+      base::BindOnce([](bool* result) { *result = true; }, &on_finished_called);
+  base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb;
+
   bool on_return_release_fence_called = false;
-  base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb =
-      base::BindOnce(
-          [](bool* result, gfx::GpuFenceHandle handle) { *result = true; },
-          &on_return_release_fence_called);
+  // This callback is unsupported when using Metal.
+  return_release_fence_cb = base::BindOnce(
+      [](bool* result, gfx::GpuFenceHandle handle) { *result = true; },
+      &on_return_release_fence_called);
 
   gpu::SyncToken sync_token = PaintRootRenderPass(
       output_rect, std::move(on_finished), std::move(return_release_fence_cb));
@@ -205,21 +276,34 @@ TEST_F(SkiaOutputSurfaceImplTest, SupportsColorSpaceChange) {
 
     // Draw something, it's not important what.
     base::RunLoop run_loop;
+    base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb;
     PaintRootRenderPass(kSurfaceRect, run_loop.QuitClosure(),
-                        base::DoNothing());
+                        std::move(return_release_fence_cb));
 
     OutputSurfaceFrame frame;
     frame.size = kSurfaceRect.size();
     output_surface_->SwapBuffers(std::move(frame));
     output_surface_->Flush();
 
-    run_loop.Run();
+    // TODO(crbug.com/40279197): We should not need to poll in this test.
+    while (!run_loop.AnyQuitCalled()) {
+      run_loop.RunUntilIdle();
+      output_surface_->CheckAsyncWorkCompletionForTesting();
+    }
   }
 }
 
+// TODO(crbug.com/40922049): Re-enable this test
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_CopyOutputBitmapSupportedColorSpace \
+  DISABLED_CopyOutputBitmapSupportedColorSpace
+#else
+#define MAYBE_CopyOutputBitmapSupportedColorSpace \
+  CopyOutputBitmapSupportedColorSpace
+#endif
 // Tests that the destination color space is preserved across a CopyOutput for
 // ColorSpaces supported by SkColorSpace.
-TEST_F(SkiaOutputSurfaceImplTest, CopyOutputBitmapSupportedColorSpace) {
+TEST_F(SkiaOutputSurfaceImplTest, MAYBE_CopyOutputBitmapSupportedColorSpace) {
   OutputSurface::ReshapeParams reshape_params;
   reshape_params.size = kSurfaceRect.size();
   output_surface_->Reshape(reshape_params);
@@ -248,7 +332,9 @@ TEST_F(SkiaOutputSurfaceImplTest, CopyOutputBitmapSupportedColorSpace) {
   geometry.sampling_bounds = output_rect;
   geometry.readback_offset = gfx::Vector2d(0, 0);
 
-  PaintRootRenderPass(kSurfaceRect, base::DoNothing(), base::DoNothing());
+  base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb;
+  PaintRootRenderPass(kSurfaceRect, base::DoNothing(),
+                      std::move(return_release_fence_cb));
   output_surface_->CopyOutput(geometry, color_space, std::move(request),
                               gpu::Mailbox());
   output_surface_->SwapBuffersSkipped(kSurfaceRect);
@@ -266,8 +352,9 @@ TEST_F(SkiaOutputSurfaceImplTest, CopyOutputBitmapUnsupportedColorSpace) {
   output_surface_->Reshape(reshape_params);
 
   constexpr gfx::Rect output_rect(0, 0, 10, 10);
-  const gfx::ColorSpace color_space = gfx::ColorSpace::CreatePiecewiseHDR(
-      gfx::ColorSpace::PrimaryID::BT2020, 0.5, 1.5);
+  const gfx::ColorSpace color_space =
+      gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT2020,
+                      gfx::ColorSpace::TransferID::LOG_SQRT);
   base::RunLoop run_loop;
   std::unique_ptr<CopyOutputResult> result;
   auto request = std::make_unique<CopyOutputRequest>(
@@ -289,7 +376,9 @@ TEST_F(SkiaOutputSurfaceImplTest, CopyOutputBitmapUnsupportedColorSpace) {
   geometry.sampling_bounds = output_rect;
   geometry.readback_offset = gfx::Vector2d(0, 0);
 
-  PaintRootRenderPass(kSurfaceRect, base::DoNothing(), base::DoNothing());
+  base::OnceCallback<void(gfx::GpuFenceHandle)> return_release_fence_cb;
+  PaintRootRenderPass(kSurfaceRect, base::DoNothing(),
+                      std::move(return_release_fence_cb));
   output_surface_->CopyOutput(geometry, color_space, std::move(request),
                               gpu::Mailbox());
   output_surface_->SwapBuffersSkipped(kSurfaceRect);

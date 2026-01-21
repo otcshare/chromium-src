@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "components/subresource_filter/content/browser/async_document_subresource_filter.h"
-#include "components/subresource_filter/content/browser/async_document_subresource_filter_test_utils.h"
 #include "components/subresource_filter/content/browser/ruleset_service.h"
+#include "components/subresource_filter/core/browser/async_document_subresource_filter.h"
+#include "components/subresource_filter/core/browser/async_document_subresource_filter_test_utils.h"
 #include "components/subresource_filter/core/common/common_features.h"
+#include "components/subresource_filter/core/common/constants.h"
 #include "components/subresource_filter/core/common/indexed_ruleset.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -65,7 +66,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
 
   testing::TestActivationStateCallbackReceiver receiver;
   AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
+                                        receiver.GetCallback(),
+                                        kSafeBrowsingRulesetConfig.uma_tag);
   receiver.WaitForActivationDecision();
   mojom::ActivationState expected_state;
   expected_state.activation_level = mojom::ActivationLevel::kEnabled;
@@ -90,7 +92,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, NoRuleset_NoActivation) {
 
   testing::TestActivationStateCallbackReceiver receiver;
   AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
+                                        receiver.GetCallback(),
+                                        kSafeBrowsingRulesetConfig.uma_tag);
   receiver.WaitForActivationDecision();
   receiver.ExpectReceivedOnce(kDisabled);
   histogram_tester.ExpectTotalCount(kIndexedRulesetVerifyHistogram, 0);
@@ -128,7 +131,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, InvalidRuleset_Checksum) {
 
   testing::TestActivationStateCallbackReceiver receiver;
   AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
+                                        receiver.GetCallback(),
+                                        kSafeBrowsingRulesetConfig.uma_tag);
   receiver.WaitForActivationDecision();
   receiver.ExpectReceivedOnce(kDisabled);
   RulesetVerificationStatus dealer_status = GetRulesetVerification();
@@ -177,7 +181,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
 
   testing::TestActivationStateCallbackReceiver receiver;
   AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
+                                        receiver.GetCallback(),
+                                        kSafeBrowsingRulesetConfig.uma_tag);
   receiver.WaitForActivationDecision();
   receiver.ExpectReceivedOnce(kDisabled);
   RulesetVerificationStatus dealer_status = GetRulesetVerification();

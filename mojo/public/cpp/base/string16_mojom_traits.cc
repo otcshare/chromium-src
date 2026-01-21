@@ -4,6 +4,7 @@
 
 #include "mojo/public/cpp/base/string16_mojom_traits.h"
 
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
 
 namespace mojo {
@@ -24,7 +25,7 @@ StructTraits<mojo_base::mojom::BigString16DataView, std::u16string>::data(
     const std::u16string& str) {
   const auto* bytes = reinterpret_cast<const uint8_t*>(str.data());
   return mojo_base::BigBuffer(
-      base::make_span(bytes, str.size() * sizeof(char16_t)));
+      UNSAFE_TODO(base::span(bytes, str.size() * sizeof(char16_t))));
 }
 
 // static
@@ -32,10 +33,12 @@ bool StructTraits<mojo_base::mojom::BigString16DataView, std::u16string>::Read(
     mojo_base::mojom::BigString16DataView data,
     std::u16string* out) {
   mojo_base::BigBuffer buffer;
-  if (!data.ReadData(&buffer))
+  if (!data.ReadData(&buffer)) {
     return false;
-  if (buffer.size() % sizeof(char16_t))
+  }
+  if (buffer.size() % sizeof(char16_t)) {
     return false;
+  }
   *out = std::u16string(reinterpret_cast<const char16_t*>(buffer.data()),
                         buffer.size() / sizeof(char16_t));
   return true;

@@ -5,7 +5,7 @@
 #ifndef CONTENT_PUBLIC_BROWSER_BACKGROUND_SYNC_CONTEXT_H_
 #define CONTENT_PUBLIC_BROWSER_BACKGROUND_SYNC_CONTEXT_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom.h"
@@ -34,7 +34,7 @@ class CONTENT_EXPORT BackgroundSyncContext {
   static void FireBackgroundSyncEventsAcrossPartitions(
       BrowserContext* browser_context,
       blink::mojom::BackgroundSyncType sync_type,
-      const base::android::JavaParamRef<jobject>& j_runnable);
+      const base::android::JavaRef<jobject>& j_runnable);
 #endif
 
   BackgroundSyncContext() = default;

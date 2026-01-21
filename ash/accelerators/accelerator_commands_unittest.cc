@@ -9,6 +9,7 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
+#include "base/strings/stringprintf.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/audio/audio_node.h"
 #include "chromeos/ash/components/dbus/audio/fake_cras_audio_client.h"
@@ -24,9 +25,9 @@ using AcceleratorCommandsTest = AshTestBase;
 
 TEST_F(AcceleratorCommandsTest, ToggleMinimized) {
   std::unique_ptr<aura::Window> window1(
-      CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
+      CreateTestWindowInShell({.bounds = {5, 5, 20, 20}, .window_id = 0}));
   std::unique_ptr<aura::Window> window2(
-      CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
+      CreateTestWindowInShell({.bounds = {5, 5, 20, 20}, .window_id = 0}));
   WindowState* window_state1 = WindowState::Get(window1.get());
   WindowState* window_state2 = WindowState::Get(window2.get());
   window_state1->Activate();
@@ -52,7 +53,7 @@ TEST_F(AcceleratorCommandsTest, ToggleMinimized) {
 
 TEST_F(AcceleratorCommandsTest, ToggleMaximized) {
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
+      CreateTestWindowInShell({.bounds = {5, 5, 20, 20}, .window_id = 0}));
   WindowState* window_state = WindowState::Get(window.get());
   window_state->Activate();
 
@@ -77,7 +78,7 @@ TEST_F(AcceleratorCommandsTest, ToggleMaximized) {
 
 TEST_F(AcceleratorCommandsTest, Unpin) {
   std::unique_ptr<aura::Window> window1(
-      CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
+      CreateTestWindowInShell({.bounds = {5, 5, 20, 20}, .window_id = 0}));
   WindowState* window_state1 = WindowState::Get(window1.get());
   window_state1->Activate();
 
@@ -97,15 +98,15 @@ TEST_F(AcceleratorCommandsTest, CycleSwapPrimaryDisplay) {
       display_manager()->GetConnectedDisplayIdList();
 
   ShiftPrimaryDisplay();
-  int64_t primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[1], primary_id);
 
   ShiftPrimaryDisplay();
-  primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[2], primary_id);
 
   ShiftPrimaryDisplay();
-  primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[0], primary_id);
 }
 
@@ -118,8 +119,8 @@ TEST_F(AcceleratorCommandsTest, CycleMixedMirrorModeSwapPrimaryDisplay) {
   // display)
   display::DisplayIdList dst_ids;
   dst_ids.emplace_back(id_list[1]);
-  absl::optional<display::MixedMirrorModeParams> mixed_params(
-      absl::in_place, id_list[0], dst_ids);
+  std::optional<display::MixedMirrorModeParams> mixed_params(
+      std::in_place, id_list[0], dst_ids);
 
   display_manager()->SetMirrorMode(display::MirrorMode::kMixed, mixed_params);
 
@@ -129,15 +130,15 @@ TEST_F(AcceleratorCommandsTest, CycleMixedMirrorModeSwapPrimaryDisplay) {
   EXPECT_EQ(2U, display_manager()->GetNumDisplays());
 
   ShiftPrimaryDisplay();
-  int64_t primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[2], primary_id);
 
   ShiftPrimaryDisplay();
-  primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[0], primary_id);
 
   ShiftPrimaryDisplay();
-  primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   EXPECT_EQ(id_list[2], primary_id);
 }
 
@@ -179,7 +180,36 @@ TEST_F(AcceleratorCommandsAudioTest, VolumeSetToZeroAndThenMute) {
   // Volume down again, should decrease to zero and mute.
   PressAndReleaseKey(ui::VKEY_VOLUME_DOWN, ui::EF_NONE);
   EXPECT_EQ(audio_handler->GetOutputVolumePercent(), 0);
+  // Output node mute state will not change.
+  EXPECT_FALSE(audio_handler->IsOutputMuted());
+}
+
+TEST_F(AcceleratorCommandsAudioTest, ChangeVolumeAfterMuted) {
+  SetUpAudioNode();
+  auto* audio_handler = CrasAudioHandler::Get();
+  // Make sure that output node is in mute state.
+  audio_handler->SetOutputVolumePercent(80);
+  audio_handler->SetOutputMute(true);
   EXPECT_TRUE(audio_handler->IsOutputMuted());
+  EXPECT_EQ(audio_handler->GetOutputVolumePercent(), 80);
+  // Press the volume down key will decrease the volume but won't change the
+  // muted state.
+  PressAndReleaseKey(ui::VKEY_VOLUME_DOWN, ui::EF_NONE);
+  EXPECT_TRUE(audio_handler->IsOutputMuted());
+  EXPECT_LE(audio_handler->GetOutputVolumePercent(), 80);
+  // Volume up, should bring back the volume to its original level and unmute.
+  PressAndReleaseKey(ui::VKEY_VOLUME_UP, ui::EF_NONE);
+  EXPECT_EQ(audio_handler->GetOutputVolumePercent(), 80);
+  EXPECT_FALSE(audio_handler->IsOutputMuted());
+}
+
+TEST_F(AcceleratorCommandsAudioTest, VolumeMuteToggle) {
+  auto* audio_handler = CrasAudioHandler::Get();
+  EXPECT_FALSE(audio_handler->IsOutputMuted());
+  VolumeMuteToggle();
+  EXPECT_TRUE(audio_handler->IsOutputMuted());
+  VolumeMuteToggle();
+  EXPECT_FALSE(audio_handler->IsOutputMuted());
 }
 
 }  // namespace accelerators

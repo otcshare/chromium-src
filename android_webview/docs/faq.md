@@ -10,7 +10,7 @@ show content from the web. Most apps you use every day use WebView in some way.
 ## How can I give feedback or report a bug?
 
 Let us know what you think and help improve WebView for everyone on Android.
-Please file bugs and feedback at https://goo.gl/9qkbdn.
+Please see [Reporting bugs in WebView](/android_webview/docs/bugreport.md).
 
 ## How can I contact the WebView development team?
 

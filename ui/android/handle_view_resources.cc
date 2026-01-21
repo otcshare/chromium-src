@@ -4,7 +4,10 @@
 
 #include "ui/android/handle_view_resources.h"
 
+#include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/android/ui_android_jni_headers/HandleViewResources_jni.h"
 
 namespace {
@@ -20,7 +23,7 @@ static SkBitmap CreateSkBitmapFromJavaBitmap(
 
 namespace ui {
 
-HandleViewResources::HandleViewResources() {}
+HandleViewResources::HandleViewResources() = default;
 
 void HandleViewResources::LoadIfNecessary(const JavaRef<jobject>& context) {
   if (loaded_)
@@ -59,7 +62,6 @@ const SkBitmap& HandleViewResources::GetBitmap(
     case ui::TouchHandleOrientation::UNDEFINED:
       NOTREACHED() << "Invalid touch handle orientation.";
   };
-  return center_bitmap_;
 }
 
 float HandleViewResources::GetDrawableHorizontalPaddingRatio() const {
@@ -68,3 +70,5 @@ float HandleViewResources::GetDrawableHorizontalPaddingRatio() const {
 }
 
 }  // namespace ui
+
+DEFINE_JNI(HandleViewResources)

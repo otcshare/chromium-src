@@ -7,22 +7,32 @@
  * operating system (i.e. network, background processes, hardware).
  */
 
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import 'chrome://resources/cr_elements/policy/cr_policy_pref_indicator.js';
-import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
-import '../controls/extension_controlled_indicator.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
+import '/shared/settings/controls/extension_controlled_indicator.js';
 import '../controls/settings_toggle_button.js';
-import '../prefs/prefs.js';
 import '../relaunch_confirmation_dialog.js';
+import '../settings_page/settings_section.js';
 import '../settings_shared.css.js';
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import {loadTimeData} from '../i18n_setup.js';
+// <if expr="_google_chrome and is_win">
+import {MetricsBrowserProxyImpl} from '../metrics_browser_proxy.js';
+// </if>
 import {RelaunchMixin, RestartType} from '../relaunch_mixin.js';
+import {getSearchManager} from '../search_settings.js';
+import type {SettingsPlugin} from '../settings_main/settings_plugin.js';
 
+// <if expr="_google_chrome">
+import type {OnDeviceAiBrowserProxy, OnDeviceAiEnabled} from './on_device_ai_browser_proxy.js';
+import {OnDeviceAiBrowserProxyImpl} from './on_device_ai_browser_proxy.js';
+// </if>
 import {getTemplate} from './system_page.html.js';
 import {SystemPageBrowserProxyImpl} from './system_page_browser_proxy.js';
 
@@ -30,13 +40,17 @@ import {SystemPageBrowserProxyImpl} from './system_page_browser_proxy.js';
 export interface SettingsSystemPageElement {
   $: {
     proxy: HTMLElement,
+    proxyMultipleSources: HTMLElement,
     hardwareAcceleration: SettingsToggleButtonElement,
+    onDeviceAiToggle: SettingsToggleButtonElement,
   };
 }
 
-const SettingsSystemPageElementBase = RelaunchMixin(PolymerElement);
+const SettingsSystemPageElementBase =
+    WebUiListenerMixin(RelaunchMixin(PolymerElement));
 
-export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
+export class SettingsSystemPageElement extends SettingsSystemPageElementBase
+    implements SettingsPlugin {
   static get is() {
     return 'settings-system-page';
   }
@@ -52,10 +66,36 @@ export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
         notify: true,
       },
 
+      // <if expr="_google_chrome">
+      showOnDeviceAiSettings_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('showOnDeviceAiSettings'),
+      },
+
+      onDeviceAiPref_: {
+        type: Object,
+        value() {
+          return {
+            key: 'settings.on_device_ai_enabled',
+            type: chrome.settingsPrivate.PrefType.BOOLEAN,
+            value: true,
+          };
+        },
+      },
+      // </if>
+
       isProxyEnforcedByPolicy_: Boolean,
       isProxyDefault_: Boolean,
-      // <if expr="chromeos_lacros">
-      isSecondaryUser_: Boolean,
+      isProxyEnforcedByMultipleSources_: Boolean,
+
+      // <if expr="_google_chrome and is_win">
+      showFeatureNotificationsSetting_: {
+        readOnly: true,
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('showFeatureNotificationsSetting');
+        },
+      },
       // </if>
     };
   }
@@ -63,21 +103,35 @@ export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
   static get observers() {
     return [
       'observeProxyPrefChanged_(prefs.proxy.*)',
+      'observeProxyPrefChanged_(prefs.proxy_override_rules.*)',
     ];
   }
 
-  constructor() {
-    super();
-    // <if expr="chromeos_lacros">
-    this.isSecondaryUser_ = loadTimeData.getBoolean('isSecondaryUser');
-    // </if>
-  }
+  declare prefs: {
+    proxy: chrome.settingsPrivate.PrefObject,
+    proxy_override_rules: chrome.settingsPrivate.PrefObject,
+  };
+  // <if expr="_google_chrome">
+  declare private showOnDeviceAiSettings_: boolean;
+  declare private onDeviceAiPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  private onDeviceAiBrowserProxy_: OnDeviceAiBrowserProxy =
+      OnDeviceAiBrowserProxyImpl.getInstance();
+  // </if>
+  declare private isProxyEnforcedByPolicy_: boolean;
+  declare private isProxyDefault_: boolean;
+  declare private isProxyEnforcedByMultipleSources_: boolean;
+  // <if expr="_google_chrome and is_win">
+  declare private showFeatureNotificationsSetting_: boolean;
+  // </if>
 
-  prefs: {proxy: chrome.settingsPrivate.PrefObject};
-  private isProxyEnforcedByPolicy_: boolean;
-  private isProxyDefault_: boolean;
-  // <if expr="chromeos_lacros">
-  private isSecondaryUser_: boolean;
+  // <if expr="_google_chrome">
+  override ready() {
+    super.ready();
+    const setOnDeviceAiPref = (onDeviceAiEnabled: OnDeviceAiEnabled) =>
+        this.setOnDeviceAiPref_(onDeviceAiEnabled.enabled);
+    this.addWebUiListener('on-device-ai-enabled-changed', setOnDeviceAiPref);
+    this.onDeviceAiBrowserProxy_.getOnDeviceAiEnabled().then(setOnDeviceAiPref);
+  }
   // </if>
 
   private observeProxyPrefChanged_() {
@@ -87,6 +141,14 @@ export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
         pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED &&
         pref.controlledBy === chrome.settingsPrivate.ControlledBy.USER_POLICY;
     this.isProxyDefault_ = !this.isProxyEnforcedByPolicy_ && !pref.extensionId;
+
+    // The only case where the multiple sources UI must NOT be shown while
+    // `proxy_override_rules` is set is when the other source controlling
+    // proxies is also a proxy policy.
+    this.isProxyEnforcedByMultipleSources_ = this.prefs.proxy_override_rules &&
+        this.prefs.proxy_override_rules.value &&
+        this.prefs.proxy_override_rules.value.length !== 0 &&
+        !this.isProxyEnforcedByPolicy_;
   }
 
   private onExtensionDisable_() {
@@ -99,17 +161,31 @@ export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
         'refresh-pref', {bubbles: true, composed: true, detail: 'proxy'}));
   }
 
-  private onProxyTap_() {
+  private onProxyClick_() {
     if (this.isProxyDefault_) {
       SystemPageBrowserProxyImpl.getInstance().showProxySettings();
     }
   }
 
-  private onRestartTap_(e: Event) {
+  private onRestartClick_(e: Event) {
     // Prevent event from bubbling up to the toggle button.
     e.stopPropagation();
     this.performRestart(RestartType.RESTART);
   }
+
+  // <if expr="_google_chrome">
+  private onOnDeviceAiToggleChange_(e: Event) {
+    const enabled = (e.target as SettingsToggleButtonElement).checked;
+    this.onDeviceAiBrowserProxy_.setOnDeviceAiEnabled(enabled);
+  }
+
+  private setOnDeviceAiPref_(enabled: boolean) {
+    this.onDeviceAiPref_ = {
+      ...this.onDeviceAiPref_,
+      value: enabled,
+    };
+  }
+  // </if>
 
   /**
    * @param enabled Whether hardware acceleration is currently enabled.
@@ -117,6 +193,20 @@ export class SettingsSystemPageElement extends SettingsSystemPageElementBase {
   private shouldShowRestart_(enabled: boolean): boolean {
     const proxy = SystemPageBrowserProxyImpl.getInstance();
     return enabled !== proxy.wasHardwareAccelerationEnabledAtStartup();
+  }
+
+  // <if expr="_google_chrome and is_win">
+  private onFeatureNotificationsChange_(e: Event) {
+    const enabled = (e.target as SettingsToggleButtonElement).checked;
+    MetricsBrowserProxyImpl.getInstance().recordFeatureNotificationsChange(
+        enabled);
+  }
+  // </if>
+
+  // SettingsPlugin implementation
+  async searchContents(query: string) {
+    const searchRequest = await getSearchManager().search(query, this);
+    return searchRequest.getSearchResult();
   }
 }
 

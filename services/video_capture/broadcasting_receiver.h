@@ -7,7 +7,6 @@
 
 #include <map>
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "build/build_config.h"
@@ -76,15 +75,14 @@ class BroadcastingReceiver : public media::VideoFrameReceiver {
   mojo::Remote<mojom::VideoFrameHandler> RemoveClient(int32_t client_id);
 
   // media::VideoFrameReceiver:
+  void OnCaptureConfigurationChanged() override;
   void OnNewBuffer(int32_t buffer_id,
                    media::mojom::VideoBufferHandlePtr buffer_handle) override;
-  void OnFrameReadyInBuffer(
-      media::ReadyFrameInBuffer frame,
-      std::vector<media::ReadyFrameInBuffer> scaled_frames) override;
+  void OnFrameReadyInBuffer(media::ReadyFrameInBuffer frame) override;
   void OnBufferRetired(int32_t buffer_id) override;
   void OnError(media::VideoCaptureError error) override;
   void OnFrameDropped(media::VideoCaptureFrameDropReason reason) override;
-  void OnNewCropVersion(uint32_t crop_version) override;
+  void OnNewCaptureVersion(media::CaptureVersion capture_version) override;
   void OnFrameWithEmptyRegionCapture() override;
   void OnLog(const std::string& message) override;
   void OnStarted() override;

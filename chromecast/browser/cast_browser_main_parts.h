@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -61,9 +60,9 @@ class ExternalService;
 }  // namespace external_service_support
 
 namespace media {
+struct CodecProfileLevel;
 class MediaCapsImpl;
 class MediaPipelineBackendManager;
-class VideoPlaneController;
 }  // namespace media
 
 namespace metrics {
@@ -112,11 +111,13 @@ class CastBrowserMainParts : public content::BrowserMainParts {
   void PostDestroyThreads() override;
 
  private:
+  void AddSupportedCodecProfileLevels(
+      base::span<const media::CodecProfileLevel> codec_profile_levels);
+
   std::unique_ptr<CastBrowserProcess> cast_browser_process_;
   // Caches a pointer of the CastContentBrowserClient.
   CastContentBrowserClient* const cast_content_browser_client_ = nullptr;
   std::unique_ptr<ServiceManagerContext> service_manager_context_;
-  std::unique_ptr<media::VideoPlaneController> video_plane_controller_;
   std::unique_ptr<media::MediaCapsImpl> media_caps_;
   std::unique_ptr<metrics::MetricsHelperImpl> metrics_helper_;
   std::unique_ptr<ServiceConnector> service_connector_;

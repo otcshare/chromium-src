@@ -4,58 +4,41 @@
 
 package org.chromium.chrome.browser.compositor.bottombar.contextualsearch;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import androidx.annotation.Px;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelAnimation;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelTextViewInflater;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimator;
-import org.chromium.components.browser_ui.widget.animation.Interpolators;
+import org.chromium.ui.interpolators.Interpolators;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 
 /**
  * Controls the Caption View that is shown at the bottom of the {@link ContextualSearchBarControl}
  * and used as a dynamic resource.
  */
+@NullMarked
 public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater {
     private static final float ANIMATION_PERCENTAGE_ZERO = 0.f;
     private static final float ANIMATION_PERCENTAGE_COMPLETE = 1.f;
 
-    /**
-     * The caption View.
-     */
-    private TextView mCaption;
+    /** The caption View. */
+    private @Nullable TextView mCaption;
 
-    /**
-     * The text for the caption when the Bar is peeking.
-     */
-    private String mPeekingCaptionText;
-
-    /**
-     * Whether there is a caption when the Bar is peeking.
-     */
+    /** Whether there is a caption when the Bar is peeking. */
     private boolean mHasPeekingCaption;
 
-    /**
-     * Whether the caption for the expanded Bar is showing.
-     */
-    private boolean mShowingExpandedCaption;
-
-    /**
-     * Whether the expanded caption should be shown.
-     */
-    private final boolean mShouldShowExpandedCaption;
-
-    /** The {@link ContextualSearchPanel} that this class belongs to. */
-    private final ContextualSearchPanel mPanel;
-
-    /**
-     * The caption visibility.
-     */
+    /** The caption visibility. */
     private boolean mIsVisible;
 
     /**
@@ -66,7 +49,7 @@ public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater
     private float mAnimationPercentage = ANIMATION_PERCENTAGE_ZERO;
 
     /** The animator responsible for transitioning the caption. */
-    private CompositorAnimator mTransitionAnimator;
+    private @Nullable CompositorAnimator mTransitionAnimator;
 
     /**
      * Whether a new snapshot has been captured by the system yet - this is false when we have
@@ -75,39 +58,41 @@ public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater
     private boolean mDidCapture;
 
     /**
-     * @param panel                     The panel.
-     * @param context                   The Android Context used to inflate the View.
-     * @param container                 The container View used to inflate the View.
-     * @param resourceLoader            The resource loader that will handle the snapshot capturing.
-     * @param shouldShowExpandedCaption Whether the "Open in new tab" caption should be shown
-     *                                  when the panel is expanded.
+     * @param panel The panel.
+     * @param context The Android Context used to inflate the View.
+     * @param container The container View used to inflate the View.
+     * @param resourceLoader The resource loader that will handle the snapshot capturing.
      */
-    public ContextualSearchCaptionControl(ContextualSearchPanel panel, Context context,
-            ViewGroup container, DynamicResourceLoader resourceLoader,
-            boolean shouldShowExpandedCaption) {
-        super(panel, R.layout.contextual_search_caption_view, R.id.contextual_search_caption_view,
-                context, container, resourceLoader, R.dimen.contextual_search_end_padding,
+    public ContextualSearchCaptionControl(
+            ContextualSearchPanel panel,
+            Context context,
+            @Nullable ViewGroup container,
+            @Nullable DynamicResourceLoader resourceLoader) {
+        super(
+                panel,
+                R.layout.contextual_search_caption_view,
+                R.id.contextual_search_caption_view,
+                context,
+                container,
+                resourceLoader,
+                R.dimen.contextual_search_end_padding,
                 R.dimen.contextual_search_padded_button_width);
-        mShouldShowExpandedCaption = shouldShowExpandedCaption;
-        mPanel = panel;
     }
 
     /**
      * Sets the caption to display in the bottom of the control.
-     * @param caption The string displayed as a caption to help explain results,
-     *        e.g. a Quick Answer.
+     *
+     * @param caption The string displayed as a caption to help explain results, e.g. a Quick
+     *     Answer.
      */
-    public void setCaption(String caption) {
-        mPeekingCaptionText = sanitizeText(caption);
+    public void setCaption(@Nullable String caption) {
         mHasPeekingCaption = true;
-
-        if (mShowingExpandedCaption) return;
 
         mDidCapture = false;
 
         inflate();
 
-        mCaption.setText(sanitizeText(caption));
+        assumeNonNull(mCaption).setText(sanitizeText(caption));
 
         invalidate();
         show();
@@ -119,40 +104,21 @@ public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater
      */
     @Override
     public void onUpdateFromPeekToExpand(float percentage) {
-        if (!mPanel.isDelayedIntelligenceActive()) {
-            super.onUpdateFromPeekToExpand(percentage);
-            if (mHasPeekingCaption) {
-                if (mTransitionAnimator != null) mTransitionAnimator.cancel();
-                mAnimationPercentage = 1.f - percentage;
-            }
+        super.onUpdateFromPeekToExpand(percentage);
+        if (mHasPeekingCaption) {
+            if (mTransitionAnimator != null) mTransitionAnimator.cancel();
+            mAnimationPercentage = 1.f - percentage;
         }
     }
 
-    /**
-     * Updates the caption when in transition between expanded and maximized states.
-     * @param percentage The percentage to the more opened state.
-     */
-    public void onUpdateFromExpandToMaximize(float percentage) {
-        if (mPanel.isDelayedIntelligenceActive()) {
-            if (mHasPeekingCaption) {
-                if (mTransitionAnimator != null) mTransitionAnimator.cancel();
-                mAnimationPercentage = 1.f - percentage;
-            }
-        }
-    }
-
-    /**
-     * Hides the caption.
-     */
+    /** Hides the caption. */
     public void hide() {
         mIsVisible = false;
         mAnimationPercentage = ANIMATION_PERCENTAGE_ZERO;
         mHasPeekingCaption = false;
     }
 
-    /**
-     * Shows the caption.
-     */
+    /** Shows the caption. */
     private void show() {
         mIsVisible = true;
     }
@@ -184,33 +150,41 @@ public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater
      * @return The text currently showing in the caption view.
      */
     public CharSequence getCaptionText() {
-        return mCaption.getText();
+        return assumeNonNull(mCaption).getText();
     }
 
-    /** Returns whether there's already a visible caption. */
+    /** @return whether there's already a visible caption. */
     boolean hasCaption() {
         return getIsVisible() && !TextUtils.isEmpty(getCaptionText());
     }
 
-    //========================================================================================
+    /**
+     * @return the caption's TextView height if it is visible.
+     */
+    @Px
+    int getTextViewHeight() {
+        return getIsVisible() ? assumeNonNull(mCaption).getHeight() : 0;
+    }
+
+    // ========================================================================================
     // OverlayPanelTextViewInflater overrides
-    //========================================================================================
+    // ========================================================================================
 
     @Override
-    protected TextView getTextView() {
+    protected @Nullable TextView getTextView() {
         return mCaption;
     }
 
-    //========================================================================================
+    // ========================================================================================
     // OverlayPanelInflater overrides
-    //========================================================================================
+    // ========================================================================================
 
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
 
-        View view = getView();
-        mCaption = (TextView) view.findViewById(R.id.contextual_search_caption);
+        View view = assumeNonNull(getView());
+        mCaption = view.findViewById(R.id.contextual_search_caption);
     }
 
     @Override
@@ -227,9 +201,13 @@ public class ContextualSearchCaptionControl extends OverlayPanelTextViewInflater
     // ============================================================================================
 
     private void animateTransitionIn() {
-        mTransitionAnimator = CompositorAnimator.ofFloat(mOverlayPanel.getAnimationHandler(),
-                ANIMATION_PERCENTAGE_ZERO, ANIMATION_PERCENTAGE_COMPLETE,
-                OverlayPanelAnimation.BASE_ANIMATION_DURATION_MS, null);
+        mTransitionAnimator =
+                CompositorAnimator.ofFloat(
+                        mOverlayPanel.getAnimationHandler(),
+                        ANIMATION_PERCENTAGE_ZERO,
+                        ANIMATION_PERCENTAGE_COMPLETE,
+                        OverlayPanelAnimation.BASE_ANIMATION_DURATION_MS,
+                        null);
         mTransitionAnimator.addUpdateListener(
                 animator -> mAnimationPercentage = animator.getAnimatedValue());
         mTransitionAnimator.setInterpolator(Interpolators.FAST_OUT_SLOW_IN_INTERPOLATOR);

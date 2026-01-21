@@ -18,8 +18,17 @@ URLSchemesSet& GetMutableExtensionSchemes() {
   return *extension_schemes;
 }
 
+URLSchemesSet& GetMutableIsolatedAppSchemes() {
+  static base::NoDestructor<URLSchemesSet> iwa_schemes;
+  return *iwa_schemes;
+}
+
 const URLSchemesSet& GetExtensionSchemes() {
   return GetMutableExtensionSchemes();
+}
+
+const URLSchemesSet& GetIsolatedAppSchemes() {
+  return GetMutableIsolatedAppSchemes();
 }
 
 void CommonSchemeRegistry::RegisterURLSchemeAsExtension(
@@ -28,16 +37,31 @@ void CommonSchemeRegistry::RegisterURLSchemeAsExtension(
   GetMutableExtensionSchemes().insert(scheme);
 }
 
+void CommonSchemeRegistry::RegisterURLSchemeAsIsolatedApp(
+    const std::string& scheme) {
+  DCHECK_EQ(scheme, base::ToLowerASCII(scheme));
+  GetMutableIsolatedAppSchemes().insert(scheme);
+}
+
 void CommonSchemeRegistry::RemoveURLSchemeAsExtensionForTest(
     const std::string& scheme) {
   GetMutableExtensionSchemes().erase(scheme);
 }
 
 bool CommonSchemeRegistry::IsExtensionScheme(const std::string& scheme) {
-  if (scheme.empty())
+  if (scheme.empty()) {
     return false;
+  }
   DCHECK_EQ(scheme, base::ToLowerASCII(scheme));
-  return GetExtensionSchemes().find(scheme) != GetExtensionSchemes().end();
+  return GetExtensionSchemes().contains(scheme);
+}
+
+bool CommonSchemeRegistry::IsIsolatedAppScheme(const std::string& scheme) {
+  if (scheme.empty()) {
+    return false;
+  }
+  DCHECK_EQ(scheme, base::ToLowerASCII(scheme));
+  return GetIsolatedAppSchemes().contains(scheme);
 }
 
 }  // namespace blink

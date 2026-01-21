@@ -8,6 +8,7 @@
 #include "third_party/blink/public/mojom/content_index/content_index.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_content_description.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_content_icon_definition.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -16,8 +17,9 @@ namespace blink {
 
 namespace {
 
-const blink::ContentDescription* CreateDescription(const WTF::String& category,
-                                                   const WTF::String& url) {
+const blink::ContentDescription* CreateDescription(
+    V8ContentCategory::Enum category,
+    const blink::String& url) {
   auto* description = blink::MakeGarbageCollected<blink::ContentDescription>();
   description->setId("id");
   description->setTitle("title");
@@ -33,16 +35,16 @@ const blink::ContentDescription* CreateDescription(const WTF::String& category,
 }
 
 // Migration adapters for operator==(ContentIconDefinition).
-absl::optional<String> GetSizesOrNone(const ContentIconDefinition* cid) {
+String GetSizesOrNone(const ContentIconDefinition* cid) {
   if (cid->hasSizes())
     return cid->sizes();
-  return absl::nullopt;
+  return String();
 }
 
-absl::optional<String> GetTypeOrNone(const ContentIconDefinition* cid) {
+String GetTypeOrNone(const ContentIconDefinition* cid) {
   if (cid->hasType())
     return cid->type();
-  return absl::nullopt;
+  return String();
 }
 
 }  // anonymous namespace
@@ -63,7 +65,9 @@ bool operator==(const ContentDescription& cd1, const ContentDescription& cd2) {
 }
 
 TEST(ContentDescriptionConversionTest, RoundTrip) {
-  auto* description = CreateDescription("homepage", "https://example.com/");
+  test::TaskEnvironment task_environment;
+  auto* description = CreateDescription(V8ContentCategory::Enum::kHomepage,
+                                        "https://example.com/");
   auto mojo_description = mojom::blink::ContentDescription::From(description);
   ASSERT_TRUE(mojo_description);
   auto* round_trip_description =
@@ -72,8 +76,13 @@ TEST(ContentDescriptionConversionTest, RoundTrip) {
 }
 
 TEST(ContentDescriptionConversionTest, EnumRoundTrip) {
-  WTF::Vector<WTF::String> categories = {"homepage", "article", "video",
-                                         "audio"};
+  test::TaskEnvironment task_environment;
+  blink::Vector<V8ContentCategory::Enum> categories = {
+      V8ContentCategory::Enum::kHomepage,
+      V8ContentCategory::Enum::kArticle,
+      V8ContentCategory::Enum::kVideo,
+      V8ContentCategory::Enum::kAudio,
+  };
   for (const auto& category : categories) {
     auto* description = CreateDescription(category, "https://example.com/");
     auto* round_trip_description =

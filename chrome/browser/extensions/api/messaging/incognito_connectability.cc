@@ -6,9 +6,8 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/api/messaging/incognito_connectability_infobar_delegate.h"
@@ -17,8 +16,12 @@
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "ui/base/l10n/l10n_util.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -53,8 +56,7 @@ IncognitoConnectability::IncognitoConnectability(
   CHECK(context->IsOffTheRecord());
 }
 
-IncognitoConnectability::~IncognitoConnectability() {
-}
+IncognitoConnectability::~IncognitoConnectability() = default;
 
 // static
 IncognitoConnectability* IncognitoConnectability::Get(
@@ -129,7 +131,7 @@ IncognitoConnectability::TabContext::TabContext() : infobar(nullptr) {
 IncognitoConnectability::TabContext::~TabContext() = default;
 
 void IncognitoConnectability::OnInteractiveResponse(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     const GURL& origin,
     infobars::ContentInfoBarManager* infobar_manager,
     ScopedAlertTracker::Mode response) {
@@ -148,9 +150,9 @@ void IncognitoConnectability::OnInteractiveResponse(
 
   PendingOriginMap::iterator origin_it =
       pending_origins_.find(make_pair(extension_id, origin));
-  DCHECK(origin_it != pending_origins_.end());
+  CHECK(origin_it != pending_origins_.end());
   PendingOrigin& pending_origin = origin_it->second;
-  DCHECK(base::Contains(pending_origin, infobar_manager));
+  DCHECK(pending_origin.contains(infobar_manager));
 
   std::vector<base::OnceCallback<void(bool)>> callbacks;
   if (response == ScopedAlertTracker::INTERACTIVE) {
@@ -204,6 +206,11 @@ static base::LazyInstance<
 BrowserContextKeyedAPIFactory<IncognitoConnectability>*
 IncognitoConnectability::GetFactoryInstance() {
   return g_incognito_connectability_factory.Pointer();
+}
+
+// static
+void IncognitoConnectability::EnsureFactoryBuilt() {
+  GetFactoryInstance();
 }
 
 }  // namespace extensions

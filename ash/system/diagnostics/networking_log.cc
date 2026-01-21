@@ -4,11 +4,12 @@
 
 #include "ash/system/diagnostics/networking_log.h"
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/check_is_test.h"
 #include "base/i18n/time_formatting.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
@@ -161,6 +162,8 @@ std::string GetCellularLockType(mojom::LockType lock_type) {
       return "sim-pin";
     case mojom::LockType::kSimPuk:
       return "sim-puk";
+    case mojom::LockType::kNetworkPin:
+      return "network-pin";
   }
 }
 
@@ -215,7 +218,6 @@ void AddTypePropertiesToLog(const mojom::NetworkTypeProperties& type_props,
       break;
     case mojom::NetworkType::kUnsupported:
       NOTREACHED();
-      break;
   }
 }
 
@@ -264,7 +266,6 @@ std::string GetNetworkType(mojom::NetworkType type) {
       return "Ethernet";
     case mojom::NetworkType::kUnsupported:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -313,7 +314,7 @@ void NetworkingLog::UpdateNetworkList(
   // If a network is no longer valid, remove it from the map.
   for (auto iter = latest_network_states_.begin();
        iter != latest_network_states_.end();) {
-    if (!base::Contains(observer_guids, iter->first)) {
+    if (!std::ranges::contains(observer_guids, iter->first)) {
       LogNetworkRemoved(iter->second);
       iter = latest_network_states_.erase(iter);
       continue;
@@ -323,6 +324,7 @@ void NetworkingLog::UpdateNetworkList(
   }
 
   active_guid_ = active_guid;
+  ++update_network_list_call_count_for_testing_;
 }
 
 void NetworkingLog::UpdateNetworkState(mojom::NetworkPtr network) {
@@ -331,7 +333,7 @@ void NetworkingLog::UpdateNetworkState(mojom::NetworkPtr network) {
     return;
   }
 
-  if (!base::Contains(latest_network_states_, network->observer_guid)) {
+  if (!latest_network_states_.contains(network->observer_guid)) {
     LogNetworkAdded(network);
     latest_network_states_.emplace(network->observer_guid, std::move(network));
     return;
@@ -368,7 +370,7 @@ void NetworkingLog::LogNetworkRemoved(const mojom::NetworkPtr& network) {
 }
 
 void NetworkingLog::LogNetworkChanges(const mojom::NetworkPtr& new_state) {
-  DCHECK(base::Contains(latest_network_states_, new_state->observer_guid));
+  DCHECK(latest_network_states_.contains(new_state->observer_guid));
   const mojom::NetworkPtr& old_state =
       latest_network_states_.at(new_state->observer_guid);
 
@@ -421,6 +423,11 @@ void NetworkingLog::LogWiFiRoamedAccessPoint(const mojom::NetworkPtr& network,
       network->mac_address.value_or("").c_str(), GetSsid(network).c_str(),
       old_bssid.c_str(), GetBssid(network).c_str());
   LogEvent(line);
+}
+
+size_t NetworkingLog::update_network_list_call_count_for_testing() const {
+  CHECK_IS_TEST();
+  return update_network_list_call_count_for_testing_;
 }
 
 }  // namespace diagnostics

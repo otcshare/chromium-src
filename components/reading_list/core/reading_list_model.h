@@ -6,20 +6,27 @@
 #define COMPONENTS_READING_LIST_CORE_READING_LIST_MODEL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/reading_list/core/reading_list_entry.h"
+#include "google_apis/gaia/gaia_id.h"
 
 class GURL;
 class ReadingListModelObserver;
 
+namespace base {
+class Location;
+}  // namespace base
+
 namespace syncer {
-class ModelTypeSyncBridge;
-}
+class DataTypeControllerDelegate;
+}  // namespace syncer
 
 // The reading list model contains two list of entries: one of unread urls, the
 // other of read ones. This object should only be accessed from one thread
@@ -39,11 +46,19 @@ class ReadingListModel : public KeyedService {
   // reading list is not ready for use.
   virtual bool loaded() const = 0;
 
+  // Returns the delegate responsible for integrating with sync. This
+  // corresponds to the regular sync mode, rather than transport-only sync (i.e.
+  // the user opted into sync-the-feature).
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
+  GetSyncControllerDelegate() = 0;
+
+  // Same as above, but specifically for sync-the-transport (i.e. the user is
+  // signed in but didn't opt into sync-the-feature).
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
+  GetSyncControllerDelegateForTransportMode() = 0;
+
   // Returns true if the model is performing batch updates right now.
   virtual bool IsPerformingBatchUpdates() const = 0;
-
-  // Returns the ModelTypeSyncBridge responsible for handling sync message.
-  virtual syncer::ModelTypeSyncBridge* GetModelTypeSyncBridge() = 0;
 
   // Tells model to prepare for batch updates.
   // This method is reentrant, i.e. several batch updates may take place at the
@@ -70,29 +85,56 @@ class ReadingListModel : public KeyedService {
   virtual void MarkAllSeen() = 0;
 
   // Delete all the Reading List entries. Return true if entries where indeed
-  // deleted.
-  virtual bool DeleteAllEntries() = 0;
+  // deleted. |location| is used for logging purposes and investigations.
+  virtual bool DeleteAllEntries(const base::Location& location) = 0;
 
   // Returns a specific entry. Returns null if the entry does not exist.
-  virtual const ReadingListEntry* GetEntryByURL(const GURL& gurl) const = 0;
+  // Please note that the value saved to the account may not be identical to the
+  // value returned by GetEntryByURL(). This may happen if DualReadingListModel
+  // is dealing with two entries with the same URL, one local and one from the
+  // account. In this case, GetEntryByURL() will return the merged view of the
+  // two entries.
+  virtual scoped_refptr<const ReadingListEntry> GetEntryByURL(
+      const GURL& gurl) const = 0;
 
   // Returns true if |url| can be added to the reading list.
   virtual bool IsUrlSupported(const GURL& url) = 0;
+
+  // If an account exists that syncs the entry which has the given `url`, that
+  // account will be returned. Otherwise, the entry may be saved locally on the
+  // device or may not exist, in that case an empty account will be returned.
+  virtual GaiaId GetAccountWhereEntryIsSavedTo(const GURL& url) = 0;
+
+  // Returns true if the entry with `url` requires explicit user action to
+  // upload to sync servers.
+  virtual bool NeedsExplicitUploadToSyncServer(const GURL& url) const = 0;
+
+  // Uploads all entries (if any) that required explicit upload to sync servers.
+  // The upload itself may take long to complete (depending on network
+  // connectivity any many other factors).
+  virtual void MarkAllForUploadToSyncServerIfNeeded() = 0;
 
   // Adds |url| at the top of the unread entries, and removes entries with the
   // same |url| from everywhere else if they exist. The entry title will be a
   // trimmed copy of |title|. |time_to_read_minutes| is the estimated time to
   // read the page. The addition may be asynchronous, and the data will be
-  // available only once the observers are notified.
+  // available only once the observers are notified. Callers may use
+  // GetAccountWhereEntryIsSavedTo() to determine whether the result of this
+  // operation lead to data being saved to a particular account.
+  // Note: `creation_time` is for advanced cases, like importing data from
+  // another browser. Most callers should specify `nullopt` which maps to the
+  // current time.
   virtual const ReadingListEntry& AddOrReplaceEntry(
       const GURL& url,
       const std::string& title,
       reading_list::EntrySource source,
-      base::TimeDelta estimated_read_time) = 0;
+      std::optional<base::TimeDelta> estimated_read_time,
+      std::optional<base::Time> creation_time) = 0;
 
   // Removes an entry. The removal may be asynchronous, and not happen
-  // immediately.
-  virtual void RemoveEntryByURL(const GURL& url) = 0;
+  // immediately. |location| is used for logging purposes and investigations.
+  virtual void RemoveEntryByURL(const GURL& url,
+                                const base::Location& location) = 0;
 
   // If the |url| is in the reading list and entry(|url|).read != |read|, sets
   // the read state of the URL to read. This will also update the update time of
@@ -127,6 +169,8 @@ class ReadingListModel : public KeyedService {
   // destruction automatically.
   virtual void AddObserver(ReadingListModelObserver* observer) = 0;
   virtual void RemoveObserver(ReadingListModelObserver* observer) = 0;
+
+  virtual void RecordCountMetricsOnUMAUpload() const = 0;
 
   // Helper class that is used to scope batch updates.
   class ScopedReadingListBatchUpdate {

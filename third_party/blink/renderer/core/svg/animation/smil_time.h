@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <ostream>
 
+#include "base/containers/enum_set.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -69,16 +70,16 @@ class SMILTime {
   static constexpr SMILTime Earliest() { return base::TimeDelta::Min(); }
   static constexpr SMILTime Epsilon() { return base::Microseconds(1); }
   static constexpr SMILTime FromSecondsD(double seconds) {
-    return std::min(SMILTime(base::Seconds(seconds)), Latest());
+    return FromTimeDelta(base::Seconds(seconds));
   }
-  static constexpr SMILTime FromMicroseconds(int64_t us) {
-    return std::min(SMILTime(base::Microseconds(us)), Latest());
+  static constexpr SMILTime FromTimeDelta(base::TimeDelta delta) {
+    return std::min(SMILTime(delta), Latest());
   }
+  base::TimeDelta ToTimeDelta() const { return time_; }
 
   // Used for computing progress. Don't use for anything else.
   double InternalValueAsDouble() const { return time_.InMicrosecondsF(); }
   double InSecondsF() const { return time_.InSecondsF(); }
-  int64_t InMicroseconds() const { return time_.InMicroseconds(); }
 
   bool IsFinite() const { return *this < Indefinite(); }
   bool IsIndefinite() const { return *this == Indefinite(); }
@@ -105,11 +106,6 @@ class SMILTime {
   SMILTime operator-() const { return -time_; }
   // Division and /modulo are used primarily for computing interval
   // progress/repeats.
-  double operator/(SMILTime other) const {
-    DCHECK(IsFinite());
-    DCHECK(other.IsFinite());
-    return time_ / other.time_;
-  }
   int64_t IntDiv(SMILTime other) const {
     DCHECK(IsFinite());
     DCHECK(other.IsFinite());
@@ -125,9 +121,6 @@ class SMILTime {
     return time_ == other.time_;
   }
   explicit operator bool() const { return IsFinite() && !time_.is_zero(); }
-  constexpr bool operator!=(SMILTime other) const {
-    return time_ != other.time_;
-  }
 
   // Ordering of SMILTimes has to follow: finite < indefinite < unresolved. We
   // set this up by assigning consecutive sentinel values for the two latter
@@ -159,6 +152,10 @@ enum class SMILTimeOrigin {
   kLinkActivation,  // Link activation (Click on link referring to timed
                     // element.)
 };
+
+using SMILTimeOriginSet = base::EnumSet<SMILTimeOrigin,
+                                        SMILTimeOrigin::kAttribute,
+                                        SMILTimeOrigin::kLinkActivation>;
 
 class SMILTimeWithOrigin {
   DISALLOW_NEW();
@@ -213,20 +210,11 @@ inline bool operator==(const SMILInterval& a, const SMILInterval& b) {
   return a.begin == b.begin && a.end == b.end;
 }
 
-inline bool operator!=(const SMILInterval& a, const SMILInterval& b) {
-  return !(a == b);
-}
+template <>
+struct HashTraits<SMILInterval> : GenericHashTraits<SMILInterval> {
+  static SMILInterval EmptyValue() { return SMILInterval::Unresolved(); }
+};
 
 }  // namespace blink
-
-namespace WTF {
-template <>
-struct HashTraits<blink::SMILInterval>
-    : GenericHashTraits<blink::SMILInterval> {
-  static blink::SMILInterval EmptyValue() {
-    return blink::SMILInterval::Unresolved();
-  }
-};
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_SVG_ANIMATION_SMIL_TIME_H_

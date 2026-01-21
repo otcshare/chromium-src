@@ -7,10 +7,11 @@
 
 #include "base/component_export.h"
 #include "base/memory/raw_ref.h"
-#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/events/event.h"
 
 namespace ui {
+
+class OSExchangeData;
 
 // Note: This object must not outlive the OSExchangeData used to construct it,
 // as it stores that by reference.
@@ -30,7 +31,7 @@ class COMPONENT_EXPORT(UI_BASE) DropTargetEvent : public LocatedEvent {
 
  private:
   // Data associated with the drag/drop session.
-  const raw_ref<const OSExchangeData, DanglingUntriaged> data_;
+  const raw_ref<const OSExchangeData, AcrossTasksDanglingUntriaged> data_;
 
   // Bitmask of supported DragDropTypes::DragOperation by the source.
   int source_operations_;

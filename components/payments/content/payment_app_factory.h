@@ -6,8 +6,10 @@
 #define COMPONENTS_PAYMENTS_CONTENT_PAYMENT_APP_FACTORY_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app.h"
 #include "components/payments/content/service_worker_payment_app_finder.h"
@@ -42,7 +44,7 @@ enum class AppCreationFailureReason {
 
 class ContentPaymentRequestDelegate;
 class CSPChecker;
-class PaymentManifestWebDataService;
+class WebPaymentsWebDataService;
 class PaymentRequestSpec;
 
 // Base class for a factory that can create instances of payment apps.
@@ -50,6 +52,9 @@ class PaymentAppFactory {
  public:
   class Delegate {
    public:
+    using GetTwaPackageNameCallback =
+        base::OnceCallback<void(const std::string& twa_package_name)>;
+
     virtual ~Delegate() = default;
 
     // Returns the WebContents that initiated the PaymentRequest API, or null if
@@ -73,17 +78,18 @@ class PaymentAppFactory {
         const = 0;
     virtual std::unique_ptr<webauthn::InternalAuthenticator>
     CreateInternalAuthenticator() const = 0;
-    virtual scoped_refptr<PaymentManifestWebDataService>
-    GetPaymentManifestWebDataService() const = 0;
+    virtual scoped_refptr<WebPaymentsWebDataService>
+    GetWebPaymentsWebDataService() const = 0;
     virtual bool IsOffTheRecord() const = 0;
+    virtual bool PrefsCanMakePayment() const = 0;
 
     // Returns the merchant provided information, or null if the payment is
     // being aborted.
     virtual base::WeakPtr<PaymentRequestSpec> GetSpec() const = 0;
 
-    // Returns the Android package name of the Trusted Web Activity that invoked
-    // this browser, if any. Otherwise, an empty string.
-    virtual std::string GetTwaPackageName() const = 0;
+    // Obtains the Android package name of the Trusted Web Activity that invoked
+    // this browser, if any. Otherwise, calls `callback` with an empty string.
+    virtual void GetTwaPackageName(GetTwaPackageNameCallback callback) = 0;
 
     // Tells the UI to show the processing spinner. Only desktop UI needs this
     // notification.
@@ -120,6 +126,17 @@ class PaymentAppFactory {
     // Records that an Opt Out experience will be offered to the user in the
     // current UI flow.
     virtual void SetOptOutOffered() = 0;
+
+    // Return the app instance id for the TWA that invokes the payment request.
+    // The instance id is used to find the TWA window in the ash so that we can
+    // attach the payment dialog to it. This interface should only be used
+    // in ChromeOS.
+    // At the moment, this interface is only implemented in Lacros and for all
+    // other platforms this will return std::nullopt. In addition to that, if
+    // for any reason, we failed to find the app instance, this method will
+    // also return std::nullopt.
+    virtual std::optional<base::UnguessableToken> GetChromeOSTWAInstanceId()
+        const = 0;
   };
 
   explicit PaymentAppFactory(PaymentApp::Type type);

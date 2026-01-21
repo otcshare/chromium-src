@@ -26,7 +26,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_XML_DOCUMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_XML_DOCUMENT_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
@@ -38,16 +37,17 @@ class XMLDocument final : public Document {
  public:
   static XMLDocument* CreateXHTML(const DocumentInit& initializer) {
     return MakeGarbageCollected<XMLDocument>(
-        initializer, kXMLDocumentClass | kXHTMLDocumentClass);
+        initializer, DocumentClassFlags({DocumentClass::kXHTML}));
   }
 
   static XMLDocument* CreateSVG(const DocumentInit& initializer) {
     return MakeGarbageCollected<XMLDocument>(
-        initializer, kXMLDocumentClass | kSVGDocumentClass);
+        initializer, DocumentClassFlags({DocumentClass::kSVG}));
   }
 
-  XMLDocument(const DocumentInit&,
-              DocumentClassFlags document_classes = kXMLDocumentClass);
+  explicit XMLDocument(
+      const DocumentInit&,
+      DocumentClassFlags extended_document_classes = DocumentClassFlags());
 };
 
 template <>

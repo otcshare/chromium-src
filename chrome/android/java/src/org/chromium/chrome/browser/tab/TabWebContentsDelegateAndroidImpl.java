@@ -4,37 +4,69 @@
 
 package org.chromium.chrome.browser.tab;
 
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Handler;
 import android.view.KeyEvent;
 
-import androidx.annotation.VisibleForTesting;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.BuildInfo;
+import org.chromium.base.AndroidInfo;
+import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList.RewindableIterator;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.chrome.browser.AppHooks;
+import org.chromium.base.PackageManagerUtils;
+import org.chromium.base.lifetime.Destroyable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
+import org.chromium.chrome.browser.ZoomController;
 import org.chromium.chrome.browser.app.bluetooth.BluetoothNotificationService;
+import org.chromium.chrome.browser.app.serial.SerialNotificationService;
 import org.chromium.chrome.browser.app.usb.UsbNotificationService;
 import org.chromium.chrome.browser.bluetooth.BluetoothNotificationManager;
+import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+import org.chromium.chrome.browser.gesturenav.NativePageBitmapCapturer;
 import org.chromium.chrome.browser.media.MediaCaptureNotificationServiceImpl;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.policy.PolicyAuditor;
 import org.chromium.chrome.browser.policy.PolicyAuditorJni;
+import org.chromium.chrome.browser.serial.SerialNotificationManager;
 import org.chromium.chrome.browser.usb.UsbNotificationManager;
+import org.chromium.chrome.browser.util.PictureInPictureWindowOptions;
+import org.chromium.chrome.browser.util.WindowFeatures;
+import org.chromium.components.browser_ui.styles.ChromeColors;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
 import org.chromium.content_public.browser.InvalidateTypes;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.navigation_controller.UserAgentOverrideOption;
 import org.chromium.content_public.common.ResourceRequestBody;
+import org.chromium.ui.resources.dynamics.CaptureResult;
 import org.chromium.url.GURL;
 
-/**
- * Implementation class of {@link TabWebContentsDelegateAndroid}.
- */
-final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndroid {
+import java.util.ArrayList;
+import java.util.List;
+
+/** Implementation class of {@link TabWebContentsDelegateAndroid}. */
+@NullMarked
+final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndroid
+        implements Destroyable {
     private final TabImpl mTab;
     private final TabWebContentsDelegateAndroid mDelegate;
     private final Handler mHandler;
@@ -44,10 +76,11 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         mTab = tab;
         mDelegate = delegate;
         mHandler = new Handler();
-        mCloseContentsRunnable = () -> {
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-            while (observers.hasNext()) observers.next().onCloseContents(mTab);
-        };
+        mCloseContentsRunnable =
+                () -> {
+                    RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+                    while (observers.hasNext()) observers.next().onCloseContents(mTab);
+                };
     }
 
     @CalledByNative
@@ -62,33 +95,60 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         while (observers.hasNext()) observers.next().onFindMatchRectsAvailable(result);
     }
 
-    // Helper functions used to create types that are part of the public interface
     @CalledByNative
-    private static Rect createRect(int x, int y, int right, int bottom) {
-        return new Rect(x, y, right, bottom);
+    public List<Rect> createRectList() {
+        return new ArrayList<Rect>();
     }
 
     @CalledByNative
-    private static RectF createRectF(float x, float y, float right, float bottom) {
-        return new RectF(x, y, right, bottom);
+    public void createRectAndAddToList(List<Rect> list, int x, int y, int right, int bottom) {
+        list.add(new Rect(x, y, right, bottom));
     }
 
     @CalledByNative
-    private static FindNotificationDetails createFindNotificationDetails(int numberOfMatches,
-            Rect rendererSelectionRect, int activeMatchOrdinal, boolean finalUpdate) {
+    private static WindowFeatures createWindowFeatures(
+            int left,
+            int top,
+            int width,
+            int height,
+            boolean hasLeft,
+            boolean hasTop,
+            boolean hasWidth,
+            boolean hasHeight) {
+        Integer nullableLeft = hasLeft ? left : null;
+        Integer nullableTop = hasTop ? top : null;
+        Integer nullableWidth = hasWidth ? width : null;
+        Integer nullableHeight = hasHeight ? height : null;
+        return new WindowFeatures(nullableLeft, nullableTop, nullableWidth, nullableHeight);
+    }
+
+    @CalledByNative
+    private static PictureInPictureWindowOptions createPictureInPictureWindowOptions(
+            @JniType("gfx::Rect") Rect windowBounds, boolean disallowReturnToOpener) {
+        return new PictureInPictureWindowOptions(windowBounds, disallowReturnToOpener);
+    }
+
+    @CalledByNative
+    private static FindNotificationDetails createFindNotificationDetails(
+            int numberOfMatches,
+            @JniType("gfx::Rect") Rect rendererSelectionRect,
+            int activeMatchOrdinal,
+            boolean finalUpdate) {
         return new FindNotificationDetails(
                 numberOfMatches, rendererSelectionRect, activeMatchOrdinal, finalUpdate);
     }
 
     @CalledByNative
     private static FindMatchRectsDetails createFindMatchRectsDetails(
-            int version, int numRects, RectF activeRect) {
+            int version, int numRects, @JniType("gfx::RectF") RectF activeRect) {
         return new FindMatchRectsDetails(version, numRects, activeRect);
     }
 
     @CalledByNative
     private static void setMatchRectByIndex(
-            FindMatchRectsDetails findMatchRectsDetails, int index, RectF rect) {
+            FindMatchRectsDetails findMatchRectsDetails,
+            int index,
+            @JniType("gfx::RectF") RectF rect) {
         findMatchRectsDetails.rects[index] = rect;
     }
 
@@ -105,17 +165,87 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     @CalledByNative
     @Override
-    protected boolean addNewContents(WebContents sourceWebContents, WebContents webContents,
-            int disposition, Rect initialPosition, boolean userGesture) {
+    protected boolean addNewContents(
+            WebContents sourceWebContents,
+            WebContents webContents,
+            GURL targetUrl,
+            int disposition,
+            WindowFeatures windowFeatures,
+            boolean userGesture,
+            @Nullable PictureInPictureWindowOptions pictureInPictureWindowOptions) {
         return mDelegate.addNewContents(
-                sourceWebContents, webContents, disposition, initialPosition, userGesture);
+                sourceWebContents,
+                webContents,
+                targetUrl,
+                disposition,
+                windowFeatures,
+                userGesture,
+                pictureInPictureWindowOptions);
+    }
+
+    @Override
+    public void setContentsBounds(WebContents source, Rect bounds) {
+        mDelegate.setContentsBounds(source, bounds);
+    }
+
+    @CalledByNative
+    @Override
+    protected boolean openInAppOrChromeFromCct(GURL gurl) {
+        Intent intent =
+                new Intent(Intent.ACTION_VIEW, Uri.parse(gurl.getSpec()))
+                        .addCategory(Intent.CATEGORY_BROWSABLE);
+
+        ResolveInfo defaultActivity =
+                PackageManagerUtils.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
+
+        if (defaultActivity != null) {
+            // Check if the default activity is a chooser
+            List<ResolveInfo> handlers =
+                    PackageManagerUtils.queryIntentActivities(
+                            intent, PackageManager.GET_RESOLVED_FILTER);
+            for (ResolveInfo handler : handlers) {
+                String packageName = handler.activityInfo.packageName;
+                String activityName = handler.activityInfo.name;
+                if (packageName.equals(defaultActivity.activityInfo.packageName)
+                        && activityName.equals(defaultActivity.activityInfo.name)) {
+                    intent.setClassName(packageName, activityName);
+                    break;
+                }
+            }
+        }
+
+        // Fallback to Chrome if no supporting app was found
+        if (intent.getComponent() == null) {
+            intent.setClass(ContextUtils.getApplicationContext(), ChromeLauncherActivity.class);
+        }
+
+        Context context = mTab.getContext();
+
+        int flags = Intent.FLAG_ACTIVITY_NEW_TASK;
+        // If we're in in multi window it's fine to open multiple instances
+        if (context instanceof Activity
+                && MultiWindowUtils.getInstance().isInMultiWindowMode((Activity) context)) {
+            flags |= Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
+        }
+
+        intent.setFlags(flags);
+        try {
+            context.startActivity(intent);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     // WebContentsDelegateAndroid
 
     @Override
-    public void openNewTab(GURL url, String extraHeaders, ResourceRequestBody postData,
-            int disposition, boolean isRendererInitiated) {
+    public void openNewTab(
+            GURL url,
+            String extraHeaders,
+            ResourceRequestBody postData,
+            int disposition,
+            boolean isRendererInitiated) {
         mDelegate.openNewTab(url, extraHeaders, postData, disposition, isRendererInitiated);
     }
 
@@ -127,30 +257,41 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public boolean addMessageToConsole(int level, String message, int lineNumber, String sourceId) {
         // Only output console.log messages on debug variants of Android OS. crbug/869804
-        return !BuildInfo.isDebugAndroid();
+        return !AndroidInfo.isDebugAndroid();
     }
 
     @Override
-    public void loadingStateChanged(boolean shouldShowLoadingUI) {
+    public void loadingStateChanged(boolean shouldShowLoadingUi) {
+        // Destroying a tab destroys the WebContents, which can call this function. Due to
+        // circular dependencies and this function observing the WebContents, not the Tab, there's
+        // no correct destruction ordering, so check if the Tab is being destroyed, and if so, don't
+        // try to use it.
+        if (mTab.isDestroyed()) return;
         boolean isLoading = mTab.getWebContents() != null && mTab.getWebContents().isLoading();
         if (isLoading) {
-            mTab.onLoadStarted(shouldShowLoadingUI);
+            mTab.onLoadStarted(shouldShowLoadingUi);
         } else {
             mTab.onLoadStopped();
         }
-        mDelegate.loadingStateChanged(shouldShowLoadingUI);
+        mDelegate.loadingStateChanged(shouldShowLoadingUi);
     }
 
     @Override
-    public void onUpdateUrl(GURL url) {
+    public void onUpdateTargetUrl(GURL url) {
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-        while (observers.hasNext()) observers.next().onUpdateUrl(mTab, url);
-        mDelegate.onUpdateUrl(url);
+        while (observers.hasNext()) observers.next().onUpdateTargetUrl(mTab, url);
+        mDelegate.onUpdateTargetUrl(url);
     }
 
     @Override
     public boolean takeFocus(boolean reverse) {
         return mDelegate.takeFocus(reverse);
+    }
+
+    @CalledByNative
+    @Override
+    protected boolean preHandleKeyboardEvent(long nativeKeyEvent) {
+        return mDelegate.preHandleKeyboardEvent(nativeKeyEvent);
     }
 
     @Override
@@ -159,14 +300,23 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     }
 
     @Override
-    public void enterFullscreenModeForTab(boolean prefersNavigationBar, boolean prefersStatusBar) {
-        mDelegate.enterFullscreenModeForTab(prefersNavigationBar, prefersStatusBar);
+    public void enterFullscreenModeForTab(
+            RenderFrameHost renderFrameHost,
+            boolean prefersNavigationBar,
+            boolean prefersStatusBar,
+            long displayId) {
+        mDelegate.enterFullscreenModeForTab(
+                renderFrameHost, prefersNavigationBar, prefersStatusBar, displayId);
     }
 
     @Override
     public void fullscreenStateChangedForTab(
-            boolean prefersNavigationBar, boolean prefersStatusBar) {
-        mDelegate.fullscreenStateChangedForTab(prefersNavigationBar, prefersStatusBar);
+            RenderFrameHost renderFrameHost,
+            boolean prefersNavigationBar,
+            boolean prefersStatusBar,
+            long displayId) {
+        mDelegate.fullscreenStateChangedForTab(
+                renderFrameHost, prefersNavigationBar, prefersStatusBar, displayId);
     }
 
     @Override
@@ -180,24 +330,59 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     }
 
     @Override
+    public long getFullscreenTargetDisplay() {
+        return mDelegate.getFullscreenTargetDisplay();
+    }
+
+    @Override
+    public void requestKeyboardLock(boolean escKeyLocked) {
+        mDelegate.requestKeyboardLock(escKeyLocked);
+    }
+
+    @Override
+    public void cancelKeyboardLockRequest() {
+        mDelegate.cancelKeyboardLockRequest();
+    }
+
+    @Override
     public void navigationStateChanged(int flags) {
+        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+        while (observers.hasNext()) observers.next().onNavigationStateChanged();
+
         if ((flags & InvalidateTypes.TAB) != 0) {
             MediaCaptureNotificationServiceImpl.updateMediaNotificationForTab(
-                    ContextUtils.getApplicationContext(), mTab.getId(), mTab.getWebContents(),
+                    ContextUtils.getApplicationContext(),
+                    mTab.getId(),
+                    mTab.getWebContents(),
                     mTab.getUrl());
             BluetoothNotificationManager.updateBluetoothNotificationForTab(
-                    ContextUtils.getApplicationContext(), BluetoothNotificationService.class,
-                    mTab.getId(), mTab.getWebContents(), mTab.getUrl(), mTab.isIncognito());
-            UsbNotificationManager.updateUsbNotificationForTab(ContextUtils.getApplicationContext(),
-                    UsbNotificationService.class, mTab.getId(), mTab.getWebContents(),
-                    mTab.getUrl(), mTab.isIncognito());
+                    ContextUtils.getApplicationContext(),
+                    BluetoothNotificationService.class,
+                    mTab.getId(),
+                    mTab.getWebContents(),
+                    mTab.getUrl(),
+                    mTab.isIncognito());
+            UsbNotificationManager.updateUsbNotificationForTab(
+                    ContextUtils.getApplicationContext(),
+                    UsbNotificationService.class,
+                    mTab.getId(),
+                    mTab.getWebContents(),
+                    mTab.getUrl(),
+                    mTab.isIncognito());
+            SerialNotificationManager.updateSerialNotificationForTab(
+                    ContextUtils.getApplicationContext(),
+                    SerialNotificationService.class,
+                    mTab.getId(),
+                    mTab.getWebContents(),
+                    mTab.getUrl(),
+                    mTab.isIncognito());
         }
         if ((flags & InvalidateTypes.TITLE) != 0) {
             // Update cached title then notify observers.
             mTab.updateTitle();
         }
         if ((flags & InvalidateTypes.URL) != 0) {
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+            observers = mTab.getTabObservers();
             while (observers.hasNext()) observers.next().onUrlUpdated(mTab);
         }
         mDelegate.navigationStateChanged(flags);
@@ -205,11 +390,15 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     @Override
     public void visibleSSLStateChanged() {
-        PolicyAuditor auditor = AppHooks.get().getPolicyAuditor();
+        PolicyAuditor auditor = PolicyAuditor.maybeCreate();
         if (auditor != null) {
-            auditor.notifyCertificateFailure(
-                    PolicyAuditorJni.get().getCertificateFailure(mTab.getWebContents()),
-                    ContextUtils.getApplicationContext());
+            WebContents webContents = mTab.getWebContents();
+            // Speculative fix for crbug.com/384566650
+            if (webContents != null && !webContents.isDestroyed()) {
+                auditor.notifyCertificateFailure(
+                        PolicyAuditorJni.get().getCertificateFailure(webContents),
+                        ContextUtils.getApplicationContext());
+            }
         }
         RewindableIterator<TabObserver> observers = mTab.getTabObservers();
         while (observers.hasNext()) observers.next().onSSLStateUpdated(mTab);
@@ -219,14 +408,6 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public boolean shouldCreateWebContents(GURL targetUrl) {
         return mDelegate.shouldCreateWebContents(targetUrl);
-    }
-
-    @Override
-    public void webContentsCreated(WebContents sourceWebContents, long openerRenderProcessId,
-            long openerRenderFrameId, String frameName, GURL targetUrl,
-            WebContents newWebContents) {
-        mDelegate.webContentsCreated(sourceWebContents, openerRenderProcessId, openerRenderFrameId,
-                frameName, targetUrl, newWebContents);
     }
 
     @Override
@@ -242,8 +423,8 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public void rendererUnresponsive() {
         if (mTab.getWebContents() != null) {
-            TabWebContentsDelegateAndroidImplJni.get().onRendererUnresponsive(
-                    mTab.getWebContents());
+            TabWebContentsDelegateAndroidImplJni.get()
+                    .onRendererUnresponsive(mTab.getWebContents());
         }
         mTab.handleRendererResponsiveStateChanged(false);
         mDelegate.rendererUnresponsive();
@@ -286,8 +467,8 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     }
 
     /**
-     * @return Night mode enabled/disabled for this Tab. To be used to propagate
-     *         the preferred color scheme to the renderer.
+     * @return Night mode enabled/disabled for this Tab. To be used to propagate the preferred color
+     *     scheme to the renderer.
      */
     @CalledByNative
     @Override
@@ -306,6 +487,7 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     /**
      * Return true if app banners are to be permitted in this tab. May need to be overridden.
+     *
      * @return true if app banners are permitted, and false otherwise.
      */
     @CalledByNative
@@ -316,16 +498,17 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     /**
      * @return the WebAPK manifest scope. This gives frames within the scope increased privileges
-     * such as autoplaying media unmuted.
+     *     such as autoplaying media unmuted.
      */
     @CalledByNative
     @Override
-    protected String getManifestScope() {
+    protected @Nullable String getManifestScope() {
         return mDelegate.getManifestScope();
     }
 
     /**
      * Checks if the associated tab is currently presented in the context of custom tabs.
+     *
      * @return true if this is currently a custom tab.
      */
     @CalledByNative
@@ -337,6 +520,7 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     /**
      * Checks if the associated tab is running an activity for installed webapp (TWA only for now),
      * and whether the geolocation request should be delegated to the client app.
+     *
      * @return true if this is TWA and should delegate geolocation request.
      */
     @CalledByNative
@@ -347,12 +531,38 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     /**
      * Checks if the associated tab uses modal context menu.
+     *
      * @return true if the current tab uses modal context menu.
      */
     @CalledByNative
     @Override
     protected boolean isModalContextMenu() {
         return mDelegate.isModalContextMenu();
+    }
+
+    @CalledByNative
+    @Override
+    protected boolean isDynamicSafeAreaInsetsEnabled() {
+        return mDelegate.isDynamicSafeAreaInsetsEnabled();
+    }
+
+    @CalledByNative
+    @Override
+    public void requestPointerLock(
+            WebContents webContents, boolean userGesture, boolean lastUnlockedByTarget) {
+        mDelegate.requestPointerLock(webContents, userGesture, lastUnlockedByTarget);
+    }
+
+    @CalledByNative
+    @Override
+    public void lostPointerLock() {
+        mDelegate.lostPointerLock();
+    }
+
+    @CalledByNative
+    @Override
+    public void nonDraggableRegionsChanged(List<Rect> regions) {
+        mDelegate.nonDraggableRegionsChanged(regions);
     }
 
     @Override
@@ -390,15 +600,88 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         return mDelegate.getVirtualKeyboardHeight();
     }
 
-    @VisibleForTesting
-    void showFramebustBlockInfobarForTesting(String url) {
-        TabWebContentsDelegateAndroidImplJni.get().showFramebustBlockInfoBar(
-                mTab.getWebContents(), url);
+    @Override
+    public boolean maybeCopyContentArea(
+            Callback<@Nullable CaptureResult> callback,
+            @CaptureResult.Destination int destination) {
+        return NativePageBitmapCapturer.maybeCaptureNativeView(mTab, callback, destination);
+    }
+
+    @Override
+    public @Nullable Bitmap maybeCopyContentAreaAsBitmapSync() {
+        return NativePageBitmapCapturer.maybeCaptureNativeViewSync(mTab, getTopControlsHeight());
+    }
+
+    @Override
+    public Bitmap getBackForwardTransitionFallbackUXInternalPageIcon() {
+        Drawable drawable =
+                ApiCompatibilityUtils.getDrawable(
+                        mTab.getContext().getResources(), R.drawable.chromelogo16);
+
+        drawable.setColorFilter(
+                SemanticColorUtils.getDefaultIconColor(mTab.getContext()), PorterDuff.Mode.SRC_IN);
+
+        int idealNativeFaviconSize =
+                mTab.getContext()
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.navigation_transitions_favicon_size);
+
+        Bitmap bitmap =
+                Bitmap.createBitmap(
+                        idealNativeFaviconSize, idealNativeFaviconSize, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+        drawable.draw(canvas);
+        return bitmap;
+    }
+
+    @Override
+    public void didBackForwardTransitionAnimationChange() {
+        mTab.handleBackForwardTransitionUiChanged();
+    }
+
+    @Override
+    public int getBackForwardTransitionFallbackUXFaviconBackgroundColor() {
+        return ChromeColors.getPrimaryBackgroundColor(mTab.getContext(), mTab.isIncognitoBranded());
+    }
+
+    @Override
+    public int getBackForwardTransitionFallbackUXPageBackgroundColor() {
+        return SemanticColorUtils.getColorSurfaceContainerHigh(mTab.getContext());
+    }
+
+    @Override
+    public void contentsZoomChange(boolean zoomIn) {
+        WebContents wc = mTab.getWebContents();
+        if (zoomIn) {
+            ZoomController.zoomIn(wc);
+        } else {
+            ZoomController.zoomOut(wc);
+        }
+    }
+
+    @Override
+    public @UserAgentOverrideOption int shouldOverrideUserAgentForPreloading(GURL url) {
+        return mTab.calculateUserAgentOverrideOption(url);
+    }
+
+    @Override
+    public void didChangeCloseSignalInterceptStatus() {
+        mTab.didChangeCloseSignalInterceptStatus();
+    }
+
+    @Override
+    public boolean isTrustedWebActivity(WebContents webContents) {
+        return mDelegate.isTrustedWebActivity(webContents);
+    }
+
+    @Override
+    public void destroy() {
+        mDelegate.destroy();
     }
 
     @NativeMethods
     interface Natives {
         void onRendererUnresponsive(WebContents webContents);
-        void showFramebustBlockInfoBar(WebContents webContents, String url);
     }
 }

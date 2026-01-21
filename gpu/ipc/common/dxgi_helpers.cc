@@ -5,7 +5,11 @@
 #include "gpu/ipc/common/dxgi_helpers.h"
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "third_party/libyuv/include/libyuv/planar_functions.h"
 
@@ -73,15 +77,9 @@ bool CopyDXGIBufferToShMem(
     Microsoft::WRL::ComPtr<ID3D11Texture2D>* staging_texture) {
   DCHECK(d3d11_device);
 
-  uint8_t* dest_buffer = shared_memory.data();
-  size_t dst_buffer_size = shared_memory.size_bytes();
-
   Microsoft::WRL::ComPtr<ID3D11Device1> device1;
   HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&device1));
-  if (FAILED(hr)) {
-    DLOG(ERROR) << "Failed to open D3D11_1 device. hr=" << std::hex << hr;
-    return false;
-  }
+  CHECK_EQ(hr, S_OK);
 
   Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
 
@@ -92,19 +90,18 @@ bool CopyDXGIBufferToShMem(
     return false;
   }
 
-  return CopyD3D11TexToMem(texture.Get(), dest_buffer, dst_buffer_size,
-                           d3d11_device, staging_texture) > 0;
+  return CopyD3D11TexToMem(texture.Get(), shared_memory, d3d11_device,
+                           staging_texture);
 }
 
 bool CopyD3D11TexToMem(
     ID3D11Texture2D* src_texture,
-    uint8_t* dst_buffer,
-    size_t buffer_size,
+    base::span<uint8_t> dst_buffer,
     ID3D11Device* d3d11_device,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>* staging_texture) {
   DCHECK(d3d11_device);
   DCHECK(staging_texture);
-  DCHECK(dst_buffer);
+  DCHECK(!dst_buffer.empty());
   DCHECK(src_texture);
 
   D3D11_TEXTURE2D_DESC texture_desc = {};
@@ -116,7 +113,7 @@ bool CopyD3D11TexToMem(
     return false;
   }
   size_t copy_size = texture_desc.Height * texture_desc.Width * 3 / 2;
-  if (buffer_size < copy_size) {
+  if (dst_buffer.size() < copy_size) {
     DLOG(ERROR) << "Invalid buffer size for copy.";
     return false;
   }
@@ -154,8 +151,16 @@ bool CopyD3D11TexToMem(
 
     // Key equal to 0 is also used by the producer. Therefore, this keyed
     // mutex acts purely as a regular mutex.
-    hr = keyed_mutex->AcquireSync(0, INFINITE);
-    if (FAILED(hr)) {
+    // 300ms is long enough to get the mutex in 99.999% of cases. Yet we
+    // don't want to stall the callee indefinitely if the mutex is held by
+    // e.g. GpuMain thread while it's blocked on driver waiting for shader
+    // compilation.
+    // It's better to drop a frame in this case.
+    hr = keyed_mutex->AcquireSync(0, 300);
+
+    // Can't check FAILED(hr), because AcquireSync may return e.g. WAIT_TIMEOUT
+    // value.
+    if (hr != S_OK) {
       DLOG(ERROR) << "Failed to acquire keyed mutex. Error msg: "
                   << logging::SystemErrorCodeToString(hr);
       return false;
@@ -183,12 +188,96 @@ bool CopyD3D11TexToMem(
   const uint32_t source_stride = mapped_resource.RowPitch;
   const uint32_t dest_stride = texture_desc.Width;
 
-  return libyuv::NV12Copy(source_buffer, source_stride,
-                          source_buffer + texture_desc.Height * source_stride,
-                          source_stride, dst_buffer, dest_stride,
-                          dst_buffer + texture_desc.Height * dest_stride,
-                          dest_stride, texture_desc.Width,
-                          texture_desc.Height) == 0;
+  return libyuv::NV12Copy(
+             source_buffer, source_stride,
+             UNSAFE_TODO(source_buffer + texture_desc.Height * source_stride),
+             source_stride, dst_buffer.data(), dest_stride,
+             dst_buffer.subspan(texture_desc.Height * dest_stride).data(),
+             dest_stride, texture_desc.Width, texture_desc.Height) == 0;
+}
+
+bool CopyShMemToDXGIBuffer(base::span<uint8_t> shared_memory,
+                           HANDLE dxgi_handle,
+                           ID3D11Device* d3d11_device) {
+  CHECK(d3d11_device);
+
+  uint8_t* src_buffer = shared_memory.data();
+  size_t src_buffer_size = shared_memory.size_bytes();
+
+  Microsoft::WRL::ComPtr<ID3D11Device1> device1;
+  HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&device1));
+  CHECK_EQ(hr, S_OK);
+
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+
+  // Open texture on device using shared handle
+  hr = device1->OpenSharedResource1(dxgi_handle, IID_PPV_ARGS(&texture));
+  if (FAILED(hr)) {
+    DLOG(ERROR) << "Failed to open shared texture. hr=" << std::hex << hr;
+    return false;
+  }
+
+  return CopyMemToD3D11Tex(src_buffer, src_buffer_size, texture.Get(),
+                           d3d11_device);
+}
+
+bool CopyMemToD3D11Tex(uint8_t* src_buffer,
+                       size_t buffer_size,
+                       ID3D11Texture2D* output_texture,
+                       ID3D11Device* d3d11_device) {
+  CHECK(d3d11_device);
+  CHECK(src_buffer);
+  CHECK(output_texture);
+
+  D3D11_TEXTURE2D_DESC texture_desc = {};
+  output_texture->GetDesc(&texture_desc);
+
+  if (texture_desc.Format != DXGI_FORMAT_NV12) {
+    DLOG(ERROR) << "Can't copy non-NV12 texture. format="
+                << static_cast<int>(texture_desc.Format);
+    return false;
+  }
+  size_t copy_size = texture_desc.Height * texture_desc.Width * 3 / 2;
+  if (buffer_size < copy_size) {
+    DLOG(ERROR) << "Invalid buffer size for copy.";
+    return false;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> device_context;
+  d3d11_device->GetImmediateContext(&device_context);
+  HRESULT hr = S_OK;
+
+  if (texture_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) {
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyed_mutex;
+
+    hr = output_texture->QueryInterface(IID_PPV_ARGS(&keyed_mutex));
+
+    if (FAILED(hr)) {
+      DLOG(ERROR) << "Failed to get keyed mutex. Error msg: "
+                  << logging::SystemErrorCodeToString(hr);
+      return false;
+    }
+
+    // Key equal to 0 is also used by the producer. Therefore, this keyed
+    // mutex acts purely as a regular mutex.
+    hr = keyed_mutex->AcquireSync(0, INFINITE);
+    // Can't check FAILED(hr), because AcquireSync may return e.g. WAIT_TIMEOUT
+    // value.
+    if (hr != S_OK) {
+      DLOG(ERROR) << "Failed to acquire keyed mutex. Error msg: "
+                  << logging::SystemErrorCodeToString(hr);
+      return false;
+    }
+    DXGIScopedReleaseKeyedMutex release_keyed_mutex(keyed_mutex, 0);
+
+    device_context->UpdateSubresource(output_texture, 0, nullptr, src_buffer,
+                                      texture_desc.Width, copy_size);
+  } else {
+    device_context->UpdateSubresource(output_texture, 0, nullptr, src_buffer,
+                                      texture_desc.Width, copy_size);
+  }
+
+  return true;
 }
 
 }  // namespace gpu

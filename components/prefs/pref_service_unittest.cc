@@ -7,7 +7,8 @@
 
 #include <string>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/test/gtest_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/prefs/json_pref_store.h"
@@ -28,7 +29,6 @@ using testing::Mock;
 namespace {
 
 const char kPrefName[] = "pref.name";
-const char kStandaloneBrowserPref[] = "standalone_browser_pref";
 
 }  // namespace
 
@@ -288,25 +288,25 @@ TEST(PrefServiceTest, SetTimeDeltaValue_ZeroTimeDelta) {
 // values to it.
 class WriteFlagChecker : public TestingPrefStore {
  public:
-  WriteFlagChecker() {}
+  WriteFlagChecker() = default;
 
-  void ReportValueChanged(const std::string& key, uint32_t flags) override {
+  void ReportValueChanged(std::string_view key, uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void SetValue(const std::string& key,
+  void SetValue(std::string_view key,
                 base::Value value,
                 uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void SetValueSilently(const std::string& key,
+  void SetValueSilently(std::string_view key,
                         base::Value value,
                         uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void RemoveValue(const std::string& key, uint32_t flags) override {
+  void RemoveValue(std::string_view key, uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
@@ -321,7 +321,7 @@ class WriteFlagChecker : public TestingPrefStore {
   bool last_write_flags_set() { return last_write_flags_set_; }
 
  private:
-  ~WriteFlagChecker() override {}
+  ~WriteFlagChecker() override = default;
 
   void SetLastWriteFlags(uint32_t flags) {
     CHECK(!last_write_flags_set_);
@@ -365,15 +365,14 @@ TEST(PrefServiceTest, WriteablePrefStoreFlags) {
        PrefRegistry::LOSSY_PREF | kCustomRegistrationFlag,
        WriteablePrefStore::LOSSY_PREF_WRITE_FLAG}};
 
-  for (size_t i = 0; i < std::size(kRegistrationToWriteFlags); ++i) {
-    RegistrationToWriteFlags entry = kRegistrationToWriteFlags[i];
+  for (const RegistrationToWriteFlags& entry : kRegistrationToWriteFlags) {
     registry->RegisterDictionaryPref(entry.pref_name,
                                      entry.registration_flags);
 
     SCOPED_TRACE("Currently testing pref with name: " +
                  std::string(entry.pref_name));
 
-    prefs->GetMutableUserPref(entry.pref_name, base::Value::Type::DICTIONARY);
+    prefs->GetMutableUserPref(entry.pref_name, base::Value::Type::DICT);
     EXPECT_TRUE(flag_checker->last_write_flags_set());
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
 
@@ -386,7 +385,7 @@ TEST(PrefServiceTest, WriteablePrefStoreFlags) {
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
 
     prefs->SetUserPrefValue(entry.pref_name,
-                            base::Value(base::Value::Type::DICTIONARY));
+                            base::Value(base::Value::Type::DICT));
     EXPECT_TRUE(flag_checker->last_write_flags_set());
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
   }
@@ -440,8 +439,9 @@ TEST_F(PrefServiceSetValueTest, SetDictionaryValue) {
   prefs_.RemoveUserPref(kName);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::DictionaryValue new_value;
-  new_value.SetString(kName, kValue);
+  base::Value::Dict new_value_dict;
+  new_value_dict.Set(kName, kValue);
+  base::Value new_value(std::move(new_value_dict));
   observer_.Expect(kName, &new_value);
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -450,7 +450,7 @@ TEST_F(PrefServiceSetValueTest, SetDictionaryValue) {
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::DictionaryValue empty;
+  base::Value empty((base::Value::Dict()));
   observer_.Expect(kName, &empty);
   prefs_.Set(kName, empty);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -466,8 +466,9 @@ TEST_F(PrefServiceSetValueTest, SetListValue) {
   prefs_.RemoveUserPref(kName);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::ListValue new_value;
-  new_value.Append(kValue);
+  base::Value::List new_value_list;
+  new_value_list.Append(kValue);
+  base::Value new_value(std::move(new_value_list));
   observer_.Expect(kName, &new_value);
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -476,62 +477,34 @@ TEST_F(PrefServiceSetValueTest, SetListValue) {
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::ListValue empty;
+  base::Value empty((base::Value::List()));
   observer_.Expect(kName, &empty);
   prefs_.Set(kName, empty);
   Mock::VerifyAndClearExpectations(&observer_);
 }
 
-class PrefStandaloneBrowserPrefsTest : public testing::Test {
- protected:
-  PrefStandaloneBrowserPrefsTest()
-      : user_pref_store_(base::MakeRefCounted<TestingPrefStore>()),
-        standalone_browser_pref_store_(
-            base::MakeRefCounted<TestingPrefStore>()),
-        pref_registry_(base::MakeRefCounted<PrefRegistrySimple>()) {}
+// TODO(crbug.com/441781730): Failing on CrOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_GetValueWithTypeConversion DISABLED_GetValueWithTypeConversion
+#else
+#define MAYBE_GetValueWithTypeConversion GetValueWithTypeConversion
+#endif
+TEST(PrefServiceTest, MAYBE_GetValueWithTypeConversion) {
+  TestingPrefServiceSimple prefs;
+  const char kTimePref[] = "time_pref";
+  const char kInt64Pref[] = "int64_pref";
+  prefs.registry()->RegisterTimePref(kTimePref, base::Time());
+  prefs.registry()->RegisterInt64Pref(kInt64Pref, 0);
 
-  ~PrefStandaloneBrowserPrefsTest() override = default;
+  // Good cases:
+  prefs.SetTime(kTimePref, base::Time::Now());
+  base::IgnoreResult(prefs.GetTime(kTimePref));
+  prefs.SetInt64(kInt64Pref, 123);
+  base::IgnoreResult(prefs.GetInt64(kInt64Pref));
 
-  void SetUp() override {
-    auto pref_notifier = std::make_unique<PrefNotifierImpl>();
-    auto pref_value_store = std::make_unique<PrefValueStore>(
-        nullptr /* managed_prefs */, nullptr /* supervised_user_prefs */,
-        nullptr /* extension_prefs */, standalone_browser_pref_store_.get(),
-        new TestingPrefStore(), user_pref_store_.get(),
-        nullptr /* recommended_prefs */, pref_registry_->defaults().get(),
-        pref_notifier.get());
-    pref_service_ = std::make_unique<PrefService>(
-        std::move(pref_notifier), std::move(pref_value_store), user_pref_store_,
-        standalone_browser_pref_store_, pref_registry_, base::DoNothing(),
-        false);
-    pref_registry_->RegisterIntegerPref(kStandaloneBrowserPref, 4);
-  }
-
-  std::unique_ptr<PrefService> pref_service_;
-  scoped_refptr<TestingPrefStore> user_pref_store_;
-  scoped_refptr<TestingPrefStore> standalone_browser_pref_store_;
-  scoped_refptr<PrefRegistrySimple> pref_registry_;
-};
-
-// Check that the standalone browser pref store is correctly initialized,
-// written to, read, and has correct precedence.
-TEST_F(PrefStandaloneBrowserPrefsTest, CheckStandaloneBrowserPref) {
-  const PrefService::Preference* preference =
-      pref_service_->FindPreference(kStandaloneBrowserPref);
-  EXPECT_TRUE(preference->IsDefaultValue());
-  EXPECT_EQ(base::Value(4), *(preference->GetValue()));
-  user_pref_store_->SetInteger(kStandaloneBrowserPref, 11);
-  EXPECT_EQ(base::Value(11), *(preference->GetValue()));
-  // The standalone_browser_pref_store has higher precedence.
-  standalone_browser_pref_store_->SetInteger(kStandaloneBrowserPref, 10);
-  ASSERT_EQ(base::Value(10), *(preference->GetValue()));
-  // Removing user_pref_store value shouldn't change the pref value.
-  user_pref_store_->RemoveValue(kStandaloneBrowserPref,
-                                WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
-  ASSERT_EQ(base::Value(10), *(preference->GetValue()));
-  // Now removing the standalone_browser_pref_store value should revert the
-  // value to default.
-  standalone_browser_pref_store_->RemoveValue(
-      kStandaloneBrowserPref, WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
-  EXPECT_EQ(base::Value(4), *(preference->GetValue()));
+  // Bad cases:
+  EXPECT_CHECK_DEATH(prefs.SetInt64(kTimePref, 123));
+  EXPECT_CHECK_DEATH(prefs.GetInt64(kTimePref));
+  EXPECT_CHECK_DEATH(prefs.SetTime(kInt64Pref, base::Time::Now()));
+  EXPECT_CHECK_DEATH(prefs.GetTime(kInt64Pref));
 }

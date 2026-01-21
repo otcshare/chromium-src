@@ -4,10 +4,10 @@
 
 #include "chrome/browser/sync/sessions/browser_list_router_helper.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/sync/sessions/sync_sessions_web_contents_router.h"
@@ -31,6 +31,8 @@ class MockLocalSessionEventHandler : public LocalSessionEventHandler {
     seen_ids_.push_back(modified_tab->GetSessionId());
   }
 
+  void OnLocalTabClosed() override {}
+
   std::vector<GURL>* seen_urls() { return &seen_urls_; }
   std::vector<SessionID>* seen_ids() { return &seen_ids_; }
 
@@ -52,9 +54,8 @@ TEST_F(BrowserListRouterHelperTest, ObservationScopedToSingleProfile) {
   TestingProfile* profile_2 =
       profile_manager()->CreateTestingProfile("testing_profile2");
 
-  std::unique_ptr<BrowserWindow> window_2(CreateBrowserWindow());
   std::unique_ptr<Browser> browser_2(
-      CreateBrowser(profile_2, browser()->type(), false, window_2.get()));
+      CreateBrowser(profile_2, browser()->type(), false));
 
   SyncSessionsWebContentsRouterFactory::GetInstance()
       ->GetForProfile(profile_1)
@@ -69,21 +70,18 @@ TEST_F(BrowserListRouterHelperTest, ObservationScopedToSingleProfile) {
   AddTab(browser_2.get(), gurl_2);
 
   std::vector<GURL>* handler_1_urls = handler_1.seen_urls();
-  EXPECT_TRUE(base::Contains(*handler_1_urls, gurl_1));
-  EXPECT_FALSE(base::Contains(*handler_1_urls, gurl_2));
+  EXPECT_TRUE(std::ranges::contains(*handler_1_urls, gurl_1));
+  EXPECT_FALSE(std::ranges::contains(*handler_1_urls, gurl_2));
 
   std::vector<GURL>* handler_2_urls = handler_2.seen_urls();
-  EXPECT_TRUE(base::Contains(*handler_2_urls, gurl_2));
-  EXPECT_FALSE(base::Contains(*handler_2_urls, gurl_1));
+  EXPECT_TRUE(std::ranges::contains(*handler_2_urls, gurl_2));
+  EXPECT_FALSE(std::ranges::contains(*handler_2_urls, gurl_1));
 
   // Add a browser for each profile.
-  std::unique_ptr<BrowserWindow> window_3(CreateBrowserWindow());
-  std::unique_ptr<BrowserWindow> window_4(CreateBrowserWindow());
-
   std::unique_ptr<Browser> new_browser_in_first_profile(
-      CreateBrowser(profile_1, browser()->type(), false, window_3.get()));
+      CreateBrowser(profile_1, browser()->type(), false));
   std::unique_ptr<Browser> new_browser_in_second_profile(
-      CreateBrowser(profile_2, browser()->type(), false, window_4.get()));
+      CreateBrowser(profile_2, browser()->type(), false));
 
   GURL gurl_3("http://foo3.com");
   GURL gurl_4("http://foo4.com");
@@ -91,12 +89,12 @@ TEST_F(BrowserListRouterHelperTest, ObservationScopedToSingleProfile) {
   AddTab(new_browser_in_second_profile.get(), gurl_4);
 
   handler_1_urls = handler_1.seen_urls();
-  EXPECT_TRUE(base::Contains(*handler_1_urls, gurl_3));
-  EXPECT_FALSE(base::Contains(*handler_1_urls, gurl_4));
+  EXPECT_TRUE(std::ranges::contains(*handler_1_urls, gurl_3));
+  EXPECT_FALSE(std::ranges::contains(*handler_1_urls, gurl_4));
 
   handler_2_urls = handler_2.seen_urls();
-  EXPECT_TRUE(base::Contains(*handler_2_urls, gurl_4));
-  EXPECT_FALSE(base::Contains(*handler_2_urls, gurl_3));
+  EXPECT_TRUE(std::ranges::contains(*handler_2_urls, gurl_4));
+  EXPECT_FALSE(std::ranges::contains(*handler_2_urls, gurl_3));
 
   // Cleanup needed for manually created browsers so they don't complain about
   // having open tabs when destructing.
@@ -111,9 +109,8 @@ TEST_F(BrowserListRouterHelperTest, NotifyOnDiscardTab) {
   TestingProfile* profile_2 =
       profile_manager()->CreateTestingProfile("testing_profile2");
 
-  std::unique_ptr<BrowserWindow> window_2(CreateBrowserWindow());
   std::unique_ptr<Browser> browser_2(
-      CreateBrowser(profile_2, browser()->type(), false, window_2.get()));
+      CreateBrowser(profile_2, browser()->type(), false));
 
   SyncSessionsWebContentsRouterFactory::GetInstance()
       ->GetForProfile(profile_1)

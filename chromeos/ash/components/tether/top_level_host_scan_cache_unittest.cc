@@ -8,16 +8,17 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/mock_timer.h"
 #include "chromeos/ash/components/tether/device_id_tether_network_guid_map.h"
 #include "chromeos/ash/components/tether/fake_active_host.h"
 #include "chromeos/ash/components/tether/fake_host_scan_cache.h"
 #include "chromeos/ash/components/tether/host_scan_test_util.h"
 #include "chromeos/ash/components/tether/persistent_host_scan_cache.h"
-#include "chromeos/ash/components/tether/timer_factory.h"
+#include "chromeos/ash/components/timer_factory/timer_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -52,12 +53,12 @@ class ExtendedMockTimer : public base::MockOneShotTimer {
   base::OnceClosure destructor_callback_;
 };
 
-class TestTimerFactory : public TimerFactory {
+class TestTimerFactory : public ash::timer_factory::TimerFactory {
  public:
   TestTimerFactory() = default;
   ~TestTimerFactory() override = default;
 
-  std::unordered_map<std::string, ExtendedMockTimer*>&
+  std::unordered_map<std::string, raw_ptr<ExtendedMockTimer, CtnExperimental>>&
   tether_network_guid_to_timer_map() {
     return tether_network_guid_to_timer_map_;
   }
@@ -94,7 +95,7 @@ class TestTimerFactory : public TimerFactory {
   }
 
   std::vector<std::string> tether_network_guids_for_upcoming_timers_;
-  std::unordered_map<std::string, ExtendedMockTimer*>
+  std::unordered_map<std::string, raw_ptr<ExtendedMockTimer, CtnExperimental>>
       tether_network_guid_to_timer_map_;
 };
 
@@ -122,7 +123,7 @@ class TopLevelHostScanCacheTest : public testing::Test {
         base::WrapUnique(new FakePersistentHostScanCache());
 
     host_scan_cache_ = std::make_unique<TopLevelHostScanCache>(
-        base::WrapUnique(test_timer_factory_), fake_active_host_.get(),
+        base::WrapUnique(test_timer_factory_.get()), fake_active_host_.get(),
         fake_network_host_scan_cache_.get(),
         fake_persistent_host_scan_cache_.get());
 
@@ -221,7 +222,7 @@ class TopLevelHostScanCacheTest : public testing::Test {
 
   const std::unordered_map<std::string, HostScanCacheEntry> test_entries_;
 
-  TestTimerFactory* test_timer_factory_;
+  raw_ptr<TestTimerFactory, DanglingUntriaged> test_timer_factory_;
   std::unique_ptr<FakeActiveHost> fake_active_host_;
   std::unique_ptr<FakeHostScanCache> fake_network_host_scan_cache_;
   std::unique_ptr<FakePersistentHostScanCache> fake_persistent_host_scan_cache_;
@@ -339,7 +340,7 @@ TEST_F(TopLevelHostScanCacheTest, TestRecoversFromCrashAndCleansUpWhenDeleted) {
   // Create the top-level cache. It should have automatically picked up the
   // persisted scan results, even though they were not explicitly added.
   host_scan_cache_ = std::make_unique<TopLevelHostScanCache>(
-      base::WrapUnique(test_timer_factory_), fake_active_host_.get(),
+      base::WrapUnique(test_timer_factory_.get()), fake_active_host_.get(),
       fake_network_host_scan_cache_.get(),
       fake_persistent_host_scan_cache_.get());
   VerifyCacheContainsExpectedContents(2u /* expected_size */);

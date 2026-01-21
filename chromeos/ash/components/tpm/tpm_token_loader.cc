@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -142,7 +142,6 @@ void TPMTokenLoader::ContinueTokenInitialization() {
     }
     case TPM_INITIALIZATION_STARTED: {
       NOTREACHED();
-      return;
     }
     case TPM_TOKEN_INFO_RECEIVED: {
       crypto_task_runner_->PostTask(
@@ -165,7 +164,7 @@ void TPMTokenLoader::ContinueTokenInitialization() {
 }
 
 void TPMTokenLoader::OnGotTpmTokenInfo(
-    absl::optional<user_data_auth::TpmTokenInfo> token_info) {
+    std::optional<user_data_auth::TpmTokenInfo> token_info) {
   if (!token_info.has_value()) {
     tpm_token_state_ = TPM_DISABLED;
     ContinueTokenInitialization();

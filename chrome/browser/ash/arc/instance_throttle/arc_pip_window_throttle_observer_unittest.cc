@@ -6,13 +6,14 @@
 
 #include <map>
 
-#include "ash/constants/app_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/exo/wm_helper.h"
-#include "components/exo/wm_helper_chromeos.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
@@ -23,7 +24,7 @@ namespace arc {
 
 namespace {
 
-class FakeWMHelper : public exo::WMHelperChromeOS {
+class FakeWMHelper : public exo::WMHelper {
  public:
   FakeWMHelper() = default;
   ~FakeWMHelper() override = default;
@@ -39,7 +40,7 @@ class FakeWMHelper : public exo::WMHelperChromeOS {
   }
 
  private:
-  std::map<int, aura::Window*> map_;
+  std::map<int, raw_ptr<aura::Window, CtnExperimental>> map_;
 };
 
 }  // namespace
@@ -55,21 +56,20 @@ class ArcPipWindowThrottleObserverTest : public testing::Test {
 
   void SetUp() override {
     // Set up PipContainer
-    pip_container_.reset(aura::test::CreateTestWindowWithDelegate(
-        &dummy_delegate_, ash::kShellWindowId_PipContainer, gfx::Rect(),
-        nullptr));
+    pip_container_ = aura::test::CreateTestWindow(
+        {.delegate = &dummy_delegate_,
+         .window_id = ash::kShellWindowId_PipContainer});
     wm_helper_ = std::make_unique<FakeWMHelper>();
     wm_helper()->SetPrimaryDisplayContainer(ash::kShellWindowId_PipContainer,
                                             pip_container_.get());
     // Set up PIP windows
-    arc_window_.reset(aura::test::CreateTestWindowWithDelegate(
-        &dummy_delegate_, 1, gfx::Rect(), nullptr));
-    chrome_window_.reset(aura::test::CreateTestWindowWithDelegate(
-        &dummy_delegate_, 2, gfx::Rect(), nullptr));
-    arc_window_->SetProperty(aura::client::kAppType,
-                             static_cast<int>(ash::AppType::ARC_APP));
-    chrome_window_->SetProperty(aura::client::kAppType,
-                                static_cast<int>(ash::AppType::BROWSER));
+    arc_window_ = aura::test::CreateTestWindow(
+        {.delegate = &dummy_delegate_, .window_id = 1});
+    chrome_window_ = aura::test::CreateTestWindow(
+        {.delegate = &dummy_delegate_, .window_id = 2});
+    arc_window_->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+    chrome_window_->SetProperty(chromeos::kAppTypeKey,
+                                chromeos::AppType::BROWSER);
   }
 
   void TearDown() override { wm_helper_.reset(); }

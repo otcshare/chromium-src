@@ -55,11 +55,14 @@ enum EntityMask {
   kEntityMaskInCDATA = 0,
   kEntityMaskInPCDATA = kEntityAmp | kEntityLt | kEntityGt,
   kEntityMaskInHTMLPCDATA = kEntityMaskInPCDATA | kEntityNbsp,
-  kEntityMaskInAttributeValue =
-      kEntityAmp | kEntityQuot | kEntityLt | kEntityGt | kEntityTab |
-      kEntityLineFeed |
-      kEntityCarriageReturn,
-  kEntityMaskInHTMLAttributeValue = kEntityAmp | kEntityQuot | kEntityNbsp,
+  kEntityMaskInAttributeValue = kEntityAmp | kEntityQuot | kEntityLt |
+                                kEntityGt | kEntityTab | kEntityLineFeed |
+                                kEntityCarriageReturn,
+  // Note: historically, "<" and ">" were not escaped in HTML attribute values.
+  // This was changed in the HTML spec on May 20, 2025, see:
+  // https://github.com/whatwg/html/pull/6362.
+  kEntityMaskInHTMLAttributeValue =
+      kEntityAmp | kEntityQuot | kEntityLt | kEntityGt | kEntityNbsp,
 };
 
 enum class SerializationType { kHTML, kXML };

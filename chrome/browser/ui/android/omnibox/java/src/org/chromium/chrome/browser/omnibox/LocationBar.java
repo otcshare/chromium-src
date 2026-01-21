@@ -7,14 +7,16 @@ package org.chromium.chrome.browser.omnibox;
 import android.view.View;
 import android.view.ViewGroup;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownScrollListener;
+import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsVisualState;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
 
-/**
- * Container that holds the {@link UrlBar} and SSL state related with the current {@link Tab}.
- */
+/** Container that holds the {@link UrlBar} and SSL state related with the current {@link Tab}. */
+@NullMarked
 public interface LocationBar {
     /** Handle all necessary tasks that can be delayed until initialization completes. */
     default void onDeferredStartup() {}
@@ -46,6 +48,14 @@ public interface LocationBar {
      */
     void showUrlBarCursorWithoutFocusAnimations();
 
+    /**
+     * Notifies the LocationBar to take necessary action after exiting from the NTP, while a
+     * hardware keyboard is connected. If the URL bar was previously focused on the NTP due to a
+     * connected keyboard, a navigation away from the NTP should clear this focus before filling the
+     * current tab's URL.
+     */
+    void clearUrlBarCursorWithoutFocusAnimations();
+
     /** Selects all of the editable text in the {@link UrlBar}. */
     void selectAll();
 
@@ -60,25 +70,82 @@ public interface LocationBar {
 
     /**
      * TODO(twellington): Try to remove this method. It's only used to return an in-product help
-     *                    bubble anchor view... which should be moved out of tab and perhaps into
-     *                    the status bar icon component.
+     * bubble anchor view... which should be moved out of tab and perhaps into the status bar icon
+     * component.
+     *
      * @return The view containing the security icon.
      */
     View getSecurityIconView();
 
-
     /** Returns the {@link VoiceRecognitionHandler} associated with this LocationBar. */
-    @Nullable
-    default VoiceRecognitionHandler getVoiceRecognitionHandler() {
+    default @Nullable VoiceRecognitionHandler getVoiceRecognitionHandler() {
         return null;
     }
+
     /**
      * Returns a (@link OmniboxStub}.
      *
-     * <p>TODO(crbug.com/1140287): Inject OmniboxStub where needed and remove this method.
+     * <p>TODO(crbug.com/40153747): Inject OmniboxStub where needed and remove this method.
      */
-    @Nullable
-    OmniboxStub getOmniboxStub();
+    @Nullable OmniboxStub getOmniboxStub();
+
+    /** Returns the UrlBarData currently in use by the URL bar inside this location bar. */
+    UrlBarData getUrlBarData();
+
+    /** Adds an observer for suggestions scroll events. */
+    default void addOmniboxSuggestionsDropdownScrollListener(
+            OmniboxSuggestionsDropdownScrollListener listener) {}
+
+    /** Removes an observer for suggestions scroll events. */
+    default void removeOmniboxSuggestionsDropdownScrollListener(
+            OmniboxSuggestionsDropdownScrollListener listener) {}
+
+    @Nullable OmniboxSuggestionsVisualState getOmniboxSuggestionsVisualState();
+
+    /**
+     * Toggle showing only the origin portion of the URL (as opposed to the default behavior of
+     * showing the max amount of the url, prioritizing the origin)
+     */
+    default void setShowOriginOnly(boolean showOriginOnly) {}
+
+    /** Toggle the url bar's text size to be small or normal sized. */
+    default void setUrlBarUsesSmallText(boolean useSmallText) {}
+
+    /**
+     * Toggle whether the status icon should be shown/hidden for secure origins in steady state.
+     *
+     * <p>This method should be used to control whether the Status Icon should be shown in the
+     * steady Omnibox state, allowing the alternative presentations (such as the MiniOriginBar) to
+     * reduce the clutter.
+     */
+    default void setShowStatusIconForSecureOrigins(boolean showStatusIconForSecureOrigins) {}
+
+    /** Gets the height of the url bar view contained by the location bar. */
+    default float getUrlBarHeight() {
+        return 0;
+    }
+
+    /**
+     * Called whenever the NTP could have been entered or exited (e.g. tab content changed, tab
+     * navigated to from the tab strip/tab switcher, etc.). If the user is on a tablet and indeed
+     * entered or exited from the NTP, we will check the following cases: 1. If a11y is enabled, we
+     * will request a11y focus on the omnibox (e.g. for TalkBack) on the NTP. 2. If a keyboard is
+     * plugged in, we will show the URL bar cursor (without focus animations) on entering the NTP.
+     * 3. If a keyboard is plugged in, we will clear focus established in #2 above on exiting from
+     * the NTP.
+     */
+    default void maybeShowOrClearCursorInLocationBar() {}
+
+    /**
+     * Called when the zoom level of the page has changed. Note: The zoom level value is not
+     * represented as a percentage (e.g., 100.0) or a fraction (e.g., 1.0). Instead, it uses an
+     * internal table where a value of `0.0` corresponds to 100% zoom. The default zoom level can
+     * differ if the user has set a preference. For the complete mapping of values to zoom
+     * percentages, see the zoom table variable. Read more at {@link PageZoomUtils}
+     *
+     * @param zoomLevel The new zoom level.
+     */
+    default void onZoomLevelChanged(double zoomLevel) {}
 
     /** Destroys the LocationBar. */
     void destroy();

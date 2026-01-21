@@ -5,10 +5,13 @@
 #ifndef UI_GFX_GEOMETRY_MATRIX44_H_
 #define UI_GFX_GEOMETRY_MATRIX44_H_
 
+#include <optional>
+
 #include "base/check_op.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/compiler_specific.h"
+#include "base/component_export.h"
+#include "base/containers/span.h"
 #include "ui/gfx/geometry/double4.h"
-#include "ui/gfx/geometry/geometry_skia_export.h"
 
 namespace gfx {
 
@@ -33,7 +36,7 @@ struct DecomposedTransform;
 // The components correspond to the DOMMatrix mij (i,j = 1..4) components:
 //   i = col + 1
 //   j = row + 1
-class GEOMETRY_SKIA_EXPORT Matrix44 {
+class COMPONENT_EXPORT(GEOMETRY_SKIA) Matrix44 {
  public:
   enum UninitializedTag { kUninitialized };
 
@@ -59,8 +62,6 @@ class GEOMETRY_SKIA_EXPORT Matrix44 {
     return AllTrue(Col(0) == other.Col(0)) && AllTrue(Col(1) == other.Col(1)) &&
            AllTrue(Col(2) == other.Col(2)) && AllTrue(Col(3) == other.Col(3));
   }
-  bool operator!=(const Matrix44& other) const { return !(other == *this); }
-
   // Returns true if the matrix is identity.
   bool IsIdentity() const { return *this == Matrix44(); }
 
@@ -102,18 +103,18 @@ class GEOMETRY_SKIA_EXPORT Matrix44 {
   constexpr double rc(int row, int col) const {
     DCHECK_LE(static_cast<unsigned>(row), 3u);
     DCHECK_LE(static_cast<unsigned>(col), 3u);
-    return matrix_[col][row];
+    return UNSAFE_TODO(matrix_[col][row]);
   }
 
   // Set a value in the matrix at |row|, |col|.
   void set_rc(int row, int col, double value) {
     DCHECK_LE(static_cast<unsigned>(row), 3u);
     DCHECK_LE(static_cast<unsigned>(col), 3u);
-    matrix_[col][row] = value;
+    UNSAFE_TODO(matrix_[col][row]) = value;
   }
 
-  void GetColMajor(double[16]) const;
-  void GetColMajorF(float[16]) const;
+  void GetColMajor(base::span<double, 16>) const;
+  void GetColMajorF(base::span<float, 16>) const;
 
   // this = this * translation.
   void PreTranslate(double dx, double dy);
@@ -151,7 +152,7 @@ class GEOMETRY_SKIA_EXPORT Matrix44 {
   // this = this * |0    1    skew[2] 0|
   //               |0    0      1     0|
   //               |0    0      0     1|
-  void ApplyDecomposedSkews(const double skews[3]);
+  void ApplyDecomposedSkews(base::span<const double, 3> skews);
 
   // this = this * perspective.
   void ApplyPerspectiveDepth(double perspective);
@@ -182,17 +183,21 @@ class GEOMETRY_SKIA_EXPORT Matrix44 {
 
   // Same as above, but assumes the vec[2] is 0 and vec[3] is 1, discards
   // vec[2], and returns vec[3].
-  double MapVector2(double vec[2]) const;
+  double MapVector2(base::span<double, 2> vec) const;
 
   void Flatten();
 
-  absl::optional<DecomposedTransform> Decompose() const;
+  std::optional<DecomposedTransform> Decompose() const;
 
  private:
-  absl::optional<DecomposedTransform> Decompose2d() const;
+  std::optional<DecomposedTransform> Decompose2d() const;
 
-  ALWAYS_INLINE Double4 Col(int i) const { return LoadDouble4(matrix_[i]); }
-  ALWAYS_INLINE void SetCol(int i, Double4 v) { StoreDouble4(v, matrix_[i]); }
+  ALWAYS_INLINE Double4 Col(int i) const {
+    return LoadDouble4(UNSAFE_TODO(matrix_[i]));
+  }
+  ALWAYS_INLINE void SetCol(int i, Double4 v) {
+    StoreDouble4(v, UNSAFE_TODO(matrix_[i]));
+  }
 
   // This is indexed by [col][row].
   double matrix_[4][4];

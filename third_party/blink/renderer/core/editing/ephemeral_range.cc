@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 
-#include <ostream>  // NOLINT
+#include <ostream>
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/abstract_range.h"
@@ -103,12 +103,6 @@ bool EphemeralRangeTemplate<Strategy>::operator==(
     const EphemeralRangeTemplate<Strategy>& other) const {
   return StartPosition() == other.StartPosition() &&
          EndPosition() == other.EndPosition();
-}
-
-template <typename Strategy>
-bool EphemeralRangeTemplate<Strategy>::operator!=(
-    const EphemeralRangeTemplate<Strategy>& other) const {
-  return !operator==(other);
 }
 
 template <typename Strategy>

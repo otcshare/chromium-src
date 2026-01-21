@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/ci/win-swangle-chromium-x86/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -10,7 +13,6 @@
               "project": "chromium"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-swangle-archive",
               "builder_group": "chromium.swangle",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -19,7 +21,8 @@
                 ],
                 "build_config": "Release",
                 "config": "chromium",
-                "target_bits": 32
+                "target_bits": 32,
+                "target_platform": "win"
               },
               "legacy_gclient_config": {
                 "apply_configs": [
@@ -45,13 +48,20 @@
           "builder": "win-swangle-chromium-try-x86",
           "group": "tryserver.chromium.swangle"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/ci/win-swangle-chromium-x86/targets"
     }
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-trusted",
-    "jobs": 80,
-    "metrics_project": "chromium-reclient-metrics"
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-trusted",
+    "remote_jobs": 80
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -61,6 +71,9 @@
     ]
   },
   "builder_group": "chromium.swangle",
+  "gardener_rotations": [
+    "chromium.gpu"
+  ],
   "recipe": "chromium",
   "sheriff_rotations": [
     "chromium.gpu"

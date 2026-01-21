@@ -14,6 +14,7 @@
 #include "ash/wm/wm_event.h"
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/aura_constants.h"
@@ -72,6 +73,8 @@ class VideoDetectorTest : public AshTestBase {
 
   void TearDown() override {
     detector_->RemoveObserver(observer_.get());
+    detector_ = nullptr;
+    observer_.reset();
     AshTestBase::TearDown();
   }
 
@@ -85,7 +88,7 @@ class VideoDetectorTest : public AshTestBase {
         .Build();
   }
 
-  VideoDetector* detector_;  // not owned
+  raw_ptr<VideoDetector> detector_;  // not owned
   std::unique_ptr<TestObserver> observer_;
 };
 

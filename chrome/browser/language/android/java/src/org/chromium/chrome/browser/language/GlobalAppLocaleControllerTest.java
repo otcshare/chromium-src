@@ -13,71 +13,86 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.language.AndroidLanguageMetricsBridge;
 
-/**
- * Tests for the GlobalAppLocaleController class.
- */
+/** Tests for the GlobalAppLocaleController class. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class GlobalAppLocaleControllerTest {
     private static final int EMPTY_STRING_HASH = -1895779836;
 
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
+            ChromeTransitTestRules.blankPageStartReusedActivityRule();
 
     @Before
     public void setUp() throws Exception {
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.start();
     }
 
     @Test
     @SmallTest
     public void testStartupHistograms() {
-        CriteriaHelper.pollUiThread(() -> {
-            // The initial app language is the default system language recorded as the empty string.
-            Assert.assertEquals(1,
-                    RecordHistogram.getHistogramValueCountForTesting(
-                            AndroidLanguageMetricsBridge.OVERRIDE_LANGUAGE_HISTOGRAM,
-                            EMPTY_STRING_HASH));
-            Assert.assertEquals(1,
-                    RecordHistogram.getHistogramValueCountForTesting(
-                            GlobalAppLocaleController.IS_SYSTEM_LANGUAGE_HISTOGRAM,
-                            GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    // The initial app language is the default system language recorded as the empty
+                    // string.
+                    Assert.assertEquals(
+                            1,
+                            RecordHistogram.getHistogramValueCountForTesting(
+                                    AndroidLanguageMetricsBridge.OVERRIDE_LANGUAGE_HISTOGRAM,
+                                    EMPTY_STRING_HASH));
+                    Assert.assertEquals(
+                            1,
+                            RecordHistogram.getHistogramValueCountForTesting(
+                                    GlobalAppLocaleController.IS_SYSTEM_LANGUAGE_HISTOGRAM,
+                                    GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE));
+                });
     }
 
     @Test
     @SmallTest
     public void testGetOverrideVsSystemLanguageStatus() {
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus(null, "en-US"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.NO_OVERRIDE,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus(
                         AppLocaleUtils.APP_LOCALE_USE_SYSTEM_LANGUAGE, "en-US"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.EXACT_MATCH,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.EXACT_MATCH,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("en-US", "en-US"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.EXACT_MATCH,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.EXACT_MATCH,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("af", "af"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.SAME_BASE,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.SAME_BASE,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("en-US", "en"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.SAME_BASE,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.SAME_BASE,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("en-US", "en-GB"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.DIFFERENT,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.DIFFERENT,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("af", "en-US"));
 
-        Assert.assertEquals(GlobalAppLocaleController.OverrideLanguageStatus.DIFFERENT,
+        Assert.assertEquals(
+                GlobalAppLocaleController.OverrideLanguageStatus.DIFFERENT,
                 GlobalAppLocaleController.getOverrideVsSystemLanguageStatus("af-ZA", "zu-ZA"));
     }
 

@@ -2,24 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/web_view/internal/cwv_lookalike_url_handler_internal.h"
-
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "components/lookalikes/core/lookalike_url_util.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback.h"
+#import "base/functional/callback_helpers.h"
+#import "components/lookalikes/core/lookalike_url_util.h"
 #import "ios/components/security_interstitials/lookalikes/lookalike_url_container.h"
 #import "ios/components/security_interstitials/lookalikes/lookalike_url_tab_allow_list.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
-#import "net/base/mac/url_conversions.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "testing/gtest_mac.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web_view/internal/cwv_lookalike_url_handler_internal.h"
+#import "net/base/apple/url_conversions.h"
+#import "testing/gtest/include/gtest/gtest.h"
+#import "testing/gtest_mac.h"
+#import "testing/platform_test.h"
 
 namespace ios_web_view {
 
@@ -43,7 +38,7 @@ class CWVLookalikeURLHandlerTest : public PlatformTest {
       base::OnceCallback<void(NSString*)> callback) {
     auto url_info = std::make_unique<LookalikeUrlContainer::LookalikeUrlInfo>(
         safe_url, request_url,
-        LookalikeUrlMatchType::kSkeletonMatchSiteEngagement);
+        lookalikes::LookalikeUrlMatchType::kSkeletonMatchSiteEngagement);
     return
         [[CWVLookalikeURLHandler alloc] initWithWebState:&web_state_
                                         lookalikeURLInfo:std::move(url_info)
@@ -107,7 +102,7 @@ TEST_F(CWVLookalikeURLHandlerTest, ProceedToRequestURL) {
   EXPECT_TRUE(GetNavigationManager()->ReloadWasCalled());
   LookalikeUrlTabAllowList* allow_list =
       LookalikeUrlTabAllowList::FromWebState(&web_state_);
-  EXPECT_TRUE(allow_list->IsDomainAllowed(request_url.host()));
+  EXPECT_TRUE(allow_list->IsDomainAllowed(request_url.GetHost()));
 }
 
 TEST_F(CWVLookalikeURLHandlerTest, ProceedToInvalidSafeURL) {
@@ -160,4 +155,4 @@ TEST_F(CWVLookalikeURLHandlerTest, Close) {
   EXPECT_TRUE(web_state_.IsClosed());
 }
 
-}  // ios_web_view
+}  // namespace ios_web_view

@@ -4,7 +4,10 @@
 
 #include "services/device/hid/hid_connection_impl.h"
 
-#include "base/bind.h"
+#include <algorithm>
+
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 
 namespace device {
@@ -54,11 +57,13 @@ void HidConnectionImpl::OnInputReport(
     scoped_refptr<base::RefCountedBytes> buffer,
     size_t size) {
   DCHECK(client_);
-  uint8_t report_id = buffer->data()[0];
-  uint8_t* begin = &buffer->data()[1];
-  uint8_t* end = buffer->data().data() + size;
-  std::vector<uint8_t> data(begin, end);
-  client_->OnInputReport(report_id, data);
+  DCHECK_GE(size, 1u);
+  std::vector<uint8_t> data;
+  if (size > 1) {
+    data = std::vector<uint8_t>(UNSAFE_TODO(buffer->data() + 1),
+                                UNSAFE_TODO(buffer->data() + size));
+  }
+  client_->OnInputReport(/*report_id=*/buffer->data()[0], data);
 }
 
 void HidConnectionImpl::Read(ReadCallback callback) {
@@ -73,12 +78,13 @@ void HidConnectionImpl::OnRead(ReadCallback callback,
                                scoped_refptr<base::RefCountedBytes> buffer,
                                size_t size) {
   if (!success) {
-    std::move(callback).Run(false, 0, absl::nullopt);
+    std::move(callback).Run(false, 0, std::nullopt);
     return;
   }
   DCHECK(buffer);
 
-  std::vector<uint8_t> data(buffer->front() + 1, buffer->front() + size);
+  std::vector<uint8_t> data(UNSAFE_TODO(buffer->data() + 1),
+                            UNSAFE_TODO(buffer->data() + size));
   std::move(callback).Run(true, buffer->data()[0], data);
 }
 
@@ -88,10 +94,9 @@ void HidConnectionImpl::Write(uint8_t report_id,
   DCHECK(hid_connection_);
 
   auto io_buffer =
-      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1);
-  io_buffer->data()[0] = report_id;
-
-  memcpy(io_buffer->front() + 1, buffer.data(), buffer.size());
+      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1u);
+  io_buffer->as_vector().data()[0u] = report_id;
+  base::span(io_buffer->as_vector()).subspan(1u).copy_from(buffer);
 
   hid_connection_->Write(io_buffer, base::BindOnce(&HidConnectionImpl::OnWrite,
                                                    weak_factory_.GetWeakPtr(),
@@ -117,12 +122,12 @@ void HidConnectionImpl::OnGetFeatureReport(
     scoped_refptr<base::RefCountedBytes> buffer,
     size_t size) {
   if (!success) {
-    std::move(callback).Run(false, absl::nullopt);
+    std::move(callback).Run(false, std::nullopt);
     return;
   }
   DCHECK(buffer);
 
-  std::vector<uint8_t> data(buffer->front(), buffer->front() + size);
+  std::vector<uint8_t> data(buffer->data(), UNSAFE_TODO(buffer->data() + size));
   std::move(callback).Run(true, data);
 }
 
@@ -132,10 +137,9 @@ void HidConnectionImpl::SendFeatureReport(uint8_t report_id,
   DCHECK(hid_connection_);
 
   auto io_buffer =
-      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1);
-  io_buffer->data()[0] = report_id;
-
-  memcpy(io_buffer->front() + 1, buffer.data(), buffer.size());
+      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1u);
+  io_buffer->as_vector()[0u] = report_id;
+  base::span(io_buffer->as_vector()).subspan(1u).copy_from(buffer);
 
   hid_connection_->SendFeatureReport(
       io_buffer,

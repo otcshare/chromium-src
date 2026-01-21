@@ -8,6 +8,11 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <string.h>
 
 #include "base/notreached.h"
@@ -23,6 +28,13 @@ void MakeEglMockFunctionUnique(const char* func_name) {
 }  // namespace
 
 namespace gl {
+
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglAcquireExternalContextANGLE(EGLDisplay dpy,
+                                                      EGLSurface readAndDraw) {
+  MakeEglMockFunctionUnique("eglAcquireExternalContextANGLE");
+  interface_->AcquireExternalContextANGLE(dpy, readAndDraw);
+}
 
 EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglBindAPI(EGLenum api) {
   MakeEglMockFunctionUnique("eglBindAPI");
@@ -473,6 +485,12 @@ MockEGLInterface::Mock_eglLabelObjectKHR(EGLDisplay display,
   return interface_->LabelObjectKHR(display, objectType, object, label);
 }
 
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglLockVulkanQueueANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglLockVulkanQueueANGLE");
+  interface_->LockVulkanQueueANGLE(dpy);
+}
+
 EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglMakeCurrent(EGLDisplay dpy,
                                       EGLSurface draw,
@@ -491,6 +509,14 @@ MockEGLInterface::Mock_eglPostSubBufferNV(EGLDisplay dpy,
                                           EGLint height) {
   MakeEglMockFunctionUnique("eglPostSubBufferNV");
   return interface_->PostSubBufferNV(dpy, surface, x, y, width, height);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglPresentationTimeANDROID(EGLDisplay dpy,
+                                                  EGLSurface surface,
+                                                  EGLnsecsANDROID time) {
+  MakeEglMockFunctionUnique("eglPresentationTimeANDROID");
+  return interface_->PresentationTimeANDROID(dpy, surface, time);
 }
 
 EGLenum GL_BINDING_CALL MockEGLInterface::Mock_eglQueryAPI(void) {
@@ -632,6 +658,12 @@ MockEGLInterface::Mock_eglReacquireHighPowerGPUANGLE(EGLDisplay dpy,
 }
 
 void GL_BINDING_CALL
+MockEGLInterface::Mock_eglReleaseExternalContextANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglReleaseExternalContextANGLE");
+  interface_->ReleaseExternalContextANGLE(dpy);
+}
+
+void GL_BINDING_CALL
 MockEGLInterface::Mock_eglReleaseHighPowerGPUANGLE(EGLDisplay dpy,
                                                    EGLContext ctx) {
   MakeEglMockFunctionUnique("eglReleaseHighPowerGPUANGLE");
@@ -657,6 +689,12 @@ MockEGLInterface::Mock_eglSetBlobCacheFuncsANDROID(EGLDisplay dpy,
                                                    EGLGetBlobFuncANDROID get) {
   MakeEglMockFunctionUnique("eglSetBlobCacheFuncsANDROID");
   interface_->SetBlobCacheFuncsANDROID(dpy, set, get);
+}
+
+void GL_BINDING_CALL MockEGLInterface::Mock_eglSetValidationEnabledANGLE(
+    EGLBoolean validationState) {
+  MakeEglMockFunctionUnique("eglSetValidationEnabledANGLE");
+  interface_->SetValidationEnabledANGLE(validationState);
 }
 
 EGLBoolean GL_BINDING_CALL
@@ -745,6 +783,12 @@ EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglTerminate(EGLDisplay dpy) {
   return interface_->Terminate(dpy);
 }
 
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglUnlockVulkanQueueANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglUnlockVulkanQueueANGLE");
+  interface_->UnlockVulkanQueueANGLE(dpy);
+}
+
 EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglWaitClient(void) {
   MakeEglMockFunctionUnique("eglWaitClient");
   return interface_->WaitClient();
@@ -774,12 +818,21 @@ EGLint GL_BINDING_CALL MockEGLInterface::Mock_eglWaitSyncKHR(EGLDisplay dpy,
   return interface_->WaitSyncKHR(dpy, sync, flags);
 }
 
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglWaitUntilWorkScheduledANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglWaitUntilWorkScheduledANGLE");
+  interface_->WaitUntilWorkScheduledANGLE(dpy);
+}
+
 static void MockEglInvalidFunction() {
   NOTREACHED();
 }
 
 GLFunctionPointerType GL_BINDING_CALL
 MockEGLInterface::GetGLProcAddress(const char* name) {
+  if (strcmp(name, "eglAcquireExternalContextANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglAcquireExternalContextANGLE);
   if (strcmp(name, "eglBindAPI") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglBindAPI);
   if (strcmp(name, "eglBindTexImage") == 0)
@@ -909,10 +962,16 @@ MockEGLInterface::GetGLProcAddress(const char* name) {
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglInitialize);
   if (strcmp(name, "eglLabelObjectKHR") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglLabelObjectKHR);
+  if (strcmp(name, "eglLockVulkanQueueANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglLockVulkanQueueANGLE);
   if (strcmp(name, "eglMakeCurrent") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglMakeCurrent);
   if (strcmp(name, "eglPostSubBufferNV") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglPostSubBufferNV);
+  if (strcmp(name, "eglPresentationTimeANDROID") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglPresentationTimeANDROID);
   if (strcmp(name, "eglQueryAPI") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryAPI);
   if (strcmp(name, "eglQueryContext") == 0)
@@ -955,6 +1014,9 @@ MockEGLInterface::GetGLProcAddress(const char* name) {
   if (strcmp(name, "eglReacquireHighPowerGPUANGLE") == 0)
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglReacquireHighPowerGPUANGLE);
+  if (strcmp(name, "eglReleaseExternalContextANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglReleaseExternalContextANGLE);
   if (strcmp(name, "eglReleaseHighPowerGPUANGLE") == 0)
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglReleaseHighPowerGPUANGLE);
@@ -965,6 +1027,9 @@ MockEGLInterface::GetGLProcAddress(const char* name) {
   if (strcmp(name, "eglSetBlobCacheFuncsANDROID") == 0)
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglSetBlobCacheFuncsANDROID);
+  if (strcmp(name, "eglSetValidationEnabledANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglSetValidationEnabledANGLE);
   if (strcmp(name, "eglStreamAttribKHR") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglStreamAttribKHR);
   if (strcmp(name, "eglStreamConsumerAcquireKHR") == 0)
@@ -993,6 +1058,9 @@ MockEGLInterface::GetGLProcAddress(const char* name) {
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglSwapInterval);
   if (strcmp(name, "eglTerminate") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglTerminate);
+  if (strcmp(name, "eglUnlockVulkanQueueANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglUnlockVulkanQueueANGLE);
   if (strcmp(name, "eglWaitClient") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitClient);
   if (strcmp(name, "eglWaitGL") == 0)
@@ -1003,6 +1071,9 @@ MockEGLInterface::GetGLProcAddress(const char* name) {
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitSync);
   if (strcmp(name, "eglWaitSyncKHR") == 0)
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitSyncKHR);
+  if (strcmp(name, "eglWaitUntilWorkScheduledANGLE") == 0)
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglWaitUntilWorkScheduledANGLE);
   return reinterpret_cast<GLFunctionPointerType>(&MockEglInvalidFunction);
 }
 

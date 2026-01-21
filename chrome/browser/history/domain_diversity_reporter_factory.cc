@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/time/default_clock.h"
 #include "build/build_config.h"
@@ -67,9 +67,10 @@ DomainDiversityReporterFactory::DomainDiversityReporterFactory()
 
 DomainDiversityReporterFactory::~DomainDiversityReporterFactory() = default;
 
-KeyedService* DomainDiversityReporterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+DomainDiversityReporterFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* profile) const {
-  return BuildInstanceFor(static_cast<Profile*>(profile)).release();
+  return BuildInstanceFor(static_cast<Profile*>(profile));
 }
 
 void DomainDiversityReporterFactory::RegisterProfilePrefs(

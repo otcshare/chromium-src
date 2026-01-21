@@ -26,7 +26,7 @@ class SettingsPrivateGuestModeTest : public MixinBasedInProcessBrowserTest {
 
 // Regression test for https://crbug.com/887383.
 IN_PROC_BROWSER_TEST_F(SettingsPrivateGuestModeTest, GuestMode) {
-  Profile* guest_profile = browser()->profile();
+  Profile* guest_profile = GetProfile();
   EXPECT_TRUE(guest_profile->IsOffTheRecord());
 
   // SettingsPrivate uses the incognito profile, not the recording profile,
@@ -49,7 +49,7 @@ IN_PROC_BROWSER_TEST_F(SettingsPrivateGuestModeTest, GuestMode) {
   // default value.
   EXPECT_EQ(settings_private::SetPrefResult::PREF_NOT_MODIFIABLE,
             delegate->SetDefaultZoom(0.5));
-  EXPECT_EQ(delegate->GetDefaultZoom()->GetDouble(), 0.0);
+  EXPECT_EQ(delegate->GetDefaultZoom().GetDouble(), 0.0);
 }
 
 }  // namespace

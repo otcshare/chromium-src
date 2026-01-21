@@ -7,13 +7,15 @@
 
 #include <stddef.h>
 
+#include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/guid.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "base/values.h"
 
 namespace ash {
@@ -79,13 +81,15 @@ class DeskModel {
 
   // Stores GetAllEntries result.
   struct GetAllEntriesResult {
-    GetAllEntriesResult(GetAllEntriesStatus status,
-                        std::vector<const ash::DeskTemplate*> entries);
-    GetAllEntriesResult(GetAllEntriesResult& other);
+    GetAllEntriesResult(
+        GetAllEntriesStatus status,
+        std::vector<raw_ptr<const ash::DeskTemplate, VectorExperimental>>
+            entries);
+    GetAllEntriesResult(const GetAllEntriesResult& other);
     ~GetAllEntriesResult();
 
     GetAllEntriesStatus status;
-    std::vector<const ash::DeskTemplate*> entries;
+    std::vector<raw_ptr<const ash::DeskTemplate, VectorExperimental>> entries;
   };
 
   // Stores GetEntryByUuid result.
@@ -117,7 +121,7 @@ class DeskModel {
   // but could not be loaded/parsed, `callback` will be called with `kFailure`
   // and a nullptr. An asynchronous `callback` is used here to accommodate
   // storage backend that need to perform asynchronous I/O.
-  virtual GetEntryByUuidResult GetEntryByUUID(const base::GUID& uuid) = 0;
+  virtual GetEntryByUuidResult GetEntryByUUID(const base::Uuid& uuid) = 0;
 
   using AddOrUpdateEntryCallback =
       base::OnceCallback<void(AddOrUpdateEntryStatus status,
@@ -137,7 +141,7 @@ class DeskModel {
                               const base::Value& json_representation)>;
   // Retrieves a template based on its `uuid`, if found returns a std::string
   // containing the json representation of the template queried.
-  virtual void GetTemplateJson(const base::GUID& uuid,
+  virtual void GetTemplateJson(const base::Uuid& uuid,
                                apps::AppRegistryCache* app_cache,
                                GetTemplateJsonCallback callback);
 
@@ -145,7 +149,7 @@ class DeskModel {
       base::OnceCallback<void(DeleteEntryStatus status)>;
   // Remove entry with `uuid` from entries. If the entry with `uuid` does not
   // exist, then the deletion is considered a success.
-  virtual void DeleteEntry(const base::GUID& uuid,
+  virtual void DeleteEntry(const base::Uuid& uuid,
                            DeleteEntryCallback callback) = 0;
 
   // Delete all entries.
@@ -156,16 +160,14 @@ class DeskModel {
   // count synchronously.
   virtual size_t GetEntryCount() const = 0;
 
-  // Gets the maximum number of templates this storage backend could hold.
-  // Adding more templates beyond this limit will result in `kHitMaximumLimit`
-  // error.
-  virtual size_t GetMaxEntryCount() const = 0;
-
   // Gets the number of save and recall desks currently saved.
   virtual size_t GetSaveAndRecallDeskEntryCount() const = 0;
 
   // Gets the number of desk templates currently saved.
   virtual size_t GetDeskTemplateEntryCount() const = 0;
+
+  // Gets the number of coral saved groups currently saved.
+  virtual size_t GetCoralEntryCount() const = 0;
 
   // Gets the maximum number of save and recall desks entry this storage backend
   // could hold.
@@ -175,10 +177,14 @@ class DeskModel {
   // could hold.
   virtual size_t GetMaxDeskTemplateEntryCount() const = 0;
 
+  // Gets the maximum number of coral saved groups this storage backend could
+  // hold.
+  virtual size_t GetMaxCoralEntryCount() const = 0;
+
   // Returns a vector of desk template UUIDs.
   // This method assumes each implementation has a cache and can return the
   // UUIDs synchronously.
-  virtual std::vector<base::GUID> GetAllEntryUuids() const = 0;
+  virtual std::set<base::Uuid> GetAllEntryUuids() const = 0;
 
   // Whether this model is ready for saving and reading desk templates.
   virtual bool IsReady() const = 0;
@@ -192,7 +198,9 @@ class DeskModel {
   virtual ash::DeskTemplate* FindOtherEntryWithName(
       const std::u16string& name,
       ash::DeskTemplateType type,
-      const base::GUID& uuid) const = 0;
+      const base::Uuid& uuid) const = 0;
+
+  virtual std::string GetCacheGuid() = 0;
 
   // Observer registration methods. The model will remove all observers upon
   // destruction automatically.
@@ -209,7 +217,7 @@ class DeskModel {
   // Finds the admin desk template with the given `uuid`. Returns `nullptr`
   // if none is found.
   std::unique_ptr<ash::DeskTemplate> GetAdminDeskTemplateByUUID(
-      const base::GUID& uuid) const;
+      const base::Uuid& uuid) const;
 
   // The observers.
   base::ObserverList<DeskModelObserver>::Unchecked observers_;

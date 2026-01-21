@@ -7,11 +7,10 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list_threadsafe.h"
@@ -23,7 +22,10 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/script_executor.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/dom_action_types.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -54,6 +56,8 @@ class ActivityLog : public BrowserContextKeyedAPI,
     virtual void OnExtensionActivity(scoped_refptr<Action> activity) = 0;
   };
 
+  explicit ActivityLog(content::BrowserContext* context);
+  ~ActivityLog() override;
   ActivityLog(const ActivityLog&) = delete;
   ActivityLog& operator=(const ActivityLog&) = delete;
 
@@ -68,7 +72,7 @@ class ActivityLog : public BrowserContextKeyedAPI,
                          const ExecutingScriptsMap& extension_ids,
                          const GURL& on_url);
 
-  // Observe tabs.executeScript on the given |executor|.
+  // Observe tabs.executeScript on the given `executor`.
   void ObserveScripts(ScriptExecutor* executor);
 
   // Add/remove observer: the activityLogPrivate API only listens when the
@@ -144,9 +148,6 @@ class ActivityLog : public BrowserContextKeyedAPI,
   friend class ActivityLogTest;
   friend class BrowserContextKeyedAPIFactory<ActivityLog>;
 
-  explicit ActivityLog(content::BrowserContext* context);
-  ~ActivityLog() override;
-
   // Specifies if the Watchdog app is active (installed & enabled).
   // If so, we need to log to the database and stream to the API.
   // TODO(kelvinjiang): eliminate this check if possible to simplify logic and
@@ -169,8 +170,8 @@ class ActivityLog : public BrowserContextKeyedAPI,
   void ChooseDatabasePolicy();
   void SetDatabasePolicy(ActivityLogPolicy::PolicyType policy_type);
 
-  // Checks the current |is_active_| state and modifies it if appropriate.
-  // If |use_cached| is true, then this checks the cached_consumer_count_ for
+  // Checks the current `is_active_` state and modifies it if appropriate.
+  // If `use_cached` is true, then this checks the cached_consumer_count_ for
   // whether or not a consumer is active. Otherwise, checks active_consumers_.
   void CheckActive(bool use_cached);
 
@@ -193,7 +194,7 @@ class ActivityLog : public BrowserContextKeyedAPI,
   // The database policy object takes care of recording & looking up data:
   // data summarization, compression, and logging. There should only be a
   // database_policy_ if the Watchdog app is installed or flag is set.
-  raw_ptr<ActivityLogDatabasePolicy> database_policy_;
+  raw_ptr<ActivityLogDatabasePolicy, DanglingUntriaged> database_policy_;
   ActivityLogPolicy::PolicyType database_policy_type_;
 
   raw_ptr<Profile> profile_;

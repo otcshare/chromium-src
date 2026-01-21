@@ -8,10 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/lazy_instance.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/media/router/discovery/discovery_network_info.h"
 #include "net/base/ip_address.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
@@ -74,7 +75,7 @@ class DiscoveryNetworkMonitor
   friend class DiscoveryNetworkMonitorTest;
   friend class AccessCodeCastSinkServiceTest;
   friend struct std::default_delete<DiscoveryNetworkMonitor>;
-  friend struct base::LazyInstanceTraitsBase<DiscoveryNetworkMonitor>;
+  friend class base::NoDestructor<DiscoveryNetworkMonitor>;
 
   DiscoveryNetworkMonitor();
   explicit DiscoveryNetworkMonitor(NetworkInfoFunction strategy);

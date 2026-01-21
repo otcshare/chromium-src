@@ -4,6 +4,8 @@
 
 #include "net/dns/mdns_cache.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <tuple>
 #include <utility>
@@ -25,9 +27,9 @@ constexpr size_t kDefaultEntryLimit = 100'000;
 // The effective TTL given to records with a nominal zero TTL.
 // Allows time for hosts to send updated records, as detailed in RFC 6762
 // Section 10.1.
-static const unsigned kZeroTTLSeconds = 1;
+static constexpr uint32_t kZeroTTLSeconds = 1;
 
-MDnsCache::Key::Key(unsigned type,
+MDnsCache::Key::Key(uint32_t type,
                     const std::string& name,
                     const std::string& optional)
     : type_(type),
@@ -75,15 +77,16 @@ MDnsCache::UpdateType MDnsCache::UpdateDnsRecord(
   Key cache_key = Key::CreateFor(record.get());
 
   // Ignore "goodbye" packets for records not in cache.
-  if (record->ttl() == 0 && mdns_cache_.find(cache_key) == mdns_cache_.end())
+  if (record->ttl() == 0 && !mdns_cache_.contains(cache_key)) {
     return NoChange;
+  }
 
   base::Time new_expiration = GetEffectiveExpiration(record.get());
   if (next_expiration_ != base::Time())
     new_expiration = std::min(new_expiration, next_expiration_);
 
   std::pair<RecordMap::iterator, bool> insert_result =
-      mdns_cache_.insert(std::make_pair(cache_key, nullptr));
+      mdns_cache_.emplace(cache_key, nullptr);
   UpdateType type = NoChange;
   if (insert_result.second) {
     type = RecordAdded;
@@ -104,8 +107,8 @@ void MDnsCache::CleanupRecords(
     const RecordRemovedCallback& record_removed_callback) {
   base::Time next_expiration;
 
-  // TODO(crbug.com/946688): Make overfill pruning more intelligent than a bulk
-  // clearing of everything.
+  // TODO(crbug.com/41449550): Make overfill pruning more intelligent than a
+  // bulk clearing of everything.
   bool clear_cache = IsCacheOverfilled();
 
   // We are guaranteed that |next_expiration_| will be at or before the next
@@ -130,7 +133,7 @@ void MDnsCache::CleanupRecords(
   next_expiration_ = next_expiration;
 }
 
-void MDnsCache::FindDnsRecords(unsigned type,
+void MDnsCache::FindDnsRecords(uint32_t type,
                                const std::string& name,
                                std::vector<const RecordParsed*>* results,
                                base::Time now) const {

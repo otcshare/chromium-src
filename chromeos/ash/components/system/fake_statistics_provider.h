@@ -6,11 +6,11 @@
 #define CHROMEOS_ASH_COMPONENTS_SYSTEM_FAKE_STATISTICS_PROVIDER_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
-#include "base/strings/string_piece.h"
+#include "base/functional/callback.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 
 namespace ash::system {
@@ -29,24 +29,32 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SYSTEM) FakeStatisticsProvider
   // StatisticsProvider implementation:
   void ScheduleOnMachineStatisticsLoaded(base::OnceClosure callback) override;
   void StartLoadingMachineStatistics(bool load_oem_manifest) override;
-  absl::optional<base::StringPiece> GetMachineStatistic(
-      base::StringPiece name) override;
-  FlagValue GetMachineFlag(base::StringPiece name) override;
+  std::optional<std::string_view> GetMachineStatistic(
+      std::string_view name) override;
+  FlagValue GetMachineFlag(std::string_view name) override;
   void Shutdown() override;
   bool IsRunningOnVm() override;
+  bool IsCrosDebugMode() override;
   VpdStatus GetVpdStatus() const override;
+  LoadingState GetLoadingState() const override;
+  std::optional<std::string> GetUpdatedHardwareClass() const override;
 
   void SetMachineStatistic(const std::string& key, const std::string& value);
-  void ClearMachineStatistic(base::StringPiece key);
+  void ClearMachineStatistic(std::string_view key);
+  void ClearAllMachineStatistics();
   void SetMachineFlag(const std::string& key, bool value);
-  void ClearMachineFlag(base::StringPiece key);
+  void ClearMachineFlag(std::string_view key);
   void SetVpdStatus(VpdStatus new_status);
+  void SetLoadingState(LoadingState new_state);
+  void SetUpdatedHardwareClass(const std::optional<std::string> new_hw_class);
 
  private:
   base::flat_map<std::string, std::string> machine_statistics_;
   base::flat_map<std::string, bool> machine_flags_;
 
   VpdStatus vpd_status_{VpdStatus::kUnknown};
+  LoadingState loading_state_{LoadingState::kNotStarted};
+  std::optional<std::string> updated_hardware_class_;
 };
 
 // A convenience subclass that automatically registers itself as the test

@@ -9,6 +9,7 @@
 #include "components/performance_manager/graph/graph_impl_util.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
+#include "components/performance_manager/graph/worker_node_impl.h"
 
 namespace performance_manager {
 
@@ -36,23 +37,23 @@ std::vector<const FrameNode*> GraphOperations::GetFrameNodes(
 
 // static
 bool GraphOperations::VisitFrameTreePreOrder(const PageNode* page,
-                                             const FrameNodeVisitor& visitor) {
+                                             FrameNodeVisitor visitor) {
   return GraphImplOperations::VisitFrameTreePreOrder(
       PageNodeImpl::FromNode(page),
       [&visitor](FrameNodeImpl* frame_impl) -> bool {
         const FrameNode* frame = frame_impl;
-        return visitor.Run(frame);
+        return visitor(frame);
       });
 }
 
 // static
 bool GraphOperations::VisitFrameTreePostOrder(const PageNode* page,
-                                              const FrameNodeVisitor& visitor) {
+                                              FrameNodeVisitor visitor) {
   return GraphImplOperations::VisitFrameTreePostOrder(
       PageNodeImpl::FromNode(page),
       [&visitor](FrameNodeImpl* frame_impl) -> bool {
         const FrameNode* frame = frame_impl;
-        return visitor.Run(frame);
+        return visitor(frame);
       });
 }
 
@@ -60,6 +61,22 @@ bool GraphOperations::VisitFrameTreePostOrder(const PageNode* page,
 bool GraphOperations::HasFrame(const PageNode* page, const FrameNode* frame) {
   return GraphImplOperations::HasFrame(PageNodeImpl::FromNode(page),
                                        FrameNodeImpl::FromNode(frame));
+}
+
+// static
+bool GraphOperations::VisitAllWorkerClients(const WorkerNode* worker,
+                                            FrameNodeVisitor frame_visitor,
+                                            WorkerNodeVisitor worker_visitor) {
+  return GraphImplOperations::VisitAllWorkerClients(
+      WorkerNodeImpl::FromNode(worker),
+      [&frame_visitor](FrameNodeImpl* frame_impl) -> bool {
+        const FrameNode* frame = frame_impl;
+        return frame_visitor(frame);
+      },
+      [&worker_visitor](WorkerNodeImpl* worker_impl) -> bool {
+        const WorkerNode* worker = worker_impl;
+        return worker_visitor(worker);
+      });
 }
 
 }  // namespace performance_manager

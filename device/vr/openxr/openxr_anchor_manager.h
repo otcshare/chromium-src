@@ -5,95 +5,80 @@
 #ifndef DEVICE_VR_OPENXR_OPENXR_ANCHOR_MANAGER_H_
 #define DEVICE_VR_OPENXR_OPENXR_ANCHOR_MANAGER_H_
 
-#include <map>
+#include <optional>
+#include <vector>
 
-#include "base/memory/raw_ref.h"
-#include "base/numerics/checked_math.h"
-#include "base/numerics/math_constants.h"
-#include "device/vr/openxr/openxr_anchor_request.h"
-#include "device/vr/openxr/openxr_util.h"
+#include "base/types/expected.h"
+#include "device/vr/create_anchor_request.h"
+#include "device/vr/public/mojom/anchor_id.h"
+#include "device/vr/public/mojom/plane_id.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/openxr/src/include/openxr/openxr.h"
+
+namespace gfx {
+class Transform;
+}
 
 namespace device {
 
 class OpenXrApiWrapper;
+struct XrLocation;
 
 class OpenXrAnchorManager {
  public:
-  OpenXrAnchorManager(const OpenXrExtensionHelper& extension_helper,
-                      XrSession session,
-                      XrSpace mojo_space);
+  OpenXrAnchorManager();
+  virtual ~OpenXrAnchorManager();
 
   OpenXrAnchorManager(const OpenXrAnchorManager&) = delete;
   OpenXrAnchorManager& operator=(const OpenXrAnchorManager&) = delete;
 
-  ~OpenXrAnchorManager();
-
   void AddCreateAnchorRequest(
       const mojom::XRNativeOriginInformation& native_origin_information,
       const device::Pose& native_origin_from_anchor,
+      const std::optional<PlaneId>& plane_id,
       CreateAnchorCallback callback);
 
   device::mojom::XRAnchorsDataPtr ProcessAnchorsForFrame(
       OpenXrApiWrapper* openxr,
-      const mojom::VRStageParametersPtr& current_stage_parameters,
-      const std::vector<mojom::XRInputSourceStatePtr>& input_state,
       XrTime predicted_display_time);
 
-  void DetachAnchor(AnchorId anchor_id);
+  virtual void DetachAnchor(AnchorId anchor_id) = 0;
+
+  // Used to get the space and pose of the object (like a new anchor or layer)
+  // given it's intended offset from the provided anchor_id. On some platforms
+  // this is just an XrLocation of the XrSpace representing the Anchor and the
+  // provided pose; but on others Anchors don't have their own XrSpace so the
+  // pose needs to be translated to a common XrSpace. This will then be passed
+  // in to create the anchor.
+  virtual std::optional<XrLocation> GetXrLocationFromAnchor(
+      AnchorId anchor_id,
+      const gfx::Transform& anchor_id_from_object) const = 0;
+
+ protected:
+  enum class AnchorTrackingErrorType {
+    kTemporary = 0,
+    kPermanent = 1,
+  };
+
+
+  // Create a new Anchor at |pose| in |space| at |predicted_display_time|. Can
+  // return an Invalid AnchorId on failure.
+  // If present, will attempt to parent the anchor to the specified |plane_id|.
+  virtual AnchorId CreateAnchor(XrPosef pose,
+                                XrSpace space,
+                                XrTime predicted_display_time,
+                                std::optional<PlaneId> plane_id) = 0;
+
+  virtual mojom::XRAnchorsDataPtr GetCurrentAnchorsData(
+      XrTime predicted_display_time) = 0;
 
  private:
   void DisposeActiveAnchorCallbacks();
-  AnchorId CreateAnchor(XrPosef pose,
-                        XrSpace space,
-                        XrTime predicted_display_time);
-  XrSpace GetAnchorSpace(AnchorId anchor_id) const;
-  void ProcessCreateAnchorRequests(
-      OpenXrApiWrapper* openxr,
-      const mojom::VRStageParametersPtr& current_stage_parameters,
-      const std::vector<mojom::XRInputSourceStatePtr>& input_state);
-  device::mojom::XRAnchorsDataPtr GetCurrentAnchorsData(
-      XrTime predicted_display_time) const;
-
-  // An XrPosef with the space it is relative to
-  struct XrLocation {
-    XrPosef pose;
-    XrSpace space;
-  };
-  absl::optional<XrLocation> GetXrLocationFromNativeOriginInformation(
-      OpenXrApiWrapper* openxr,
-      const mojom::VRStageParametersPtr& current_stage_parametersm,
-      const mojom::XRNativeOriginInformation& native_origin_information,
-      const gfx::Transform& native_origin_from_anchor,
-      const std::vector<mojom::XRInputSourceStatePtr>& input_state) const;
-
-  absl::optional<XrLocation> GetXrLocationFromReferenceSpace(
-      OpenXrApiWrapper* openxr,
-      const mojom::VRStageParametersPtr& current_stage_parameters,
-      const mojom::XRNativeOriginInformation& native_origin_information,
-      const gfx::Transform& native_origin_from_anchor) const;
-
-  const raw_ref<const OpenXrExtensionHelper> extension_helper_;
-  XrSession session_;
-  XrSpace mojo_space_;  // The intermediate space that mojom poses are
-                        // represented in (currently defined as local space)
-
-  // Each OpenXR anchor produces a space handle which tracks the location of the
-  // anchor. We create and cache this space here in order to avoid complex
-  // resource tracking.
-  struct AnchorData {
-    XrSpatialAnchorMSFT anchor;
-    XrSpace
-        space;  // The XrSpace tracking this anchor relative to other XrSpaces
-  };
-
-  void DestroyAnchorData(const AnchorData& anchor_data) const;
+  void ProcessCreateAnchorRequests(OpenXrApiWrapper* openxr);
+  bool IsSupportedOrigin(
+      const mojom::XRNativeOriginInformation& native_origin_info) const;
 
   std::vector<CreateAnchorRequest> create_anchor_requests_;
-
-  AnchorId::Generator anchor_id_generator_;  // 0 is not a valid anchor ID
-  std::map<AnchorId, AnchorData> openxr_anchors_;
 };
 
 }  // namespace device

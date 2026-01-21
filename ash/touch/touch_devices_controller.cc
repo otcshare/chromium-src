@@ -12,8 +12,8 @@
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -116,10 +116,12 @@ void TouchDevicesController::SetTouchscreenEnabled(
 }
 
 void TouchDevicesController::OnUserSessionAdded(const AccountId& account_id) {
-  uma_record_callback_ = base::BindOnce([](PrefService* prefs) {
-    UMA_HISTOGRAM_BOOLEAN("Touchpad.TapDragging.Started",
-                          prefs->GetBoolean(prefs::kTapDraggingEnabled));
-  });
+  PrefService* pref_service =
+      ash::Shell::Get()->session_controller()->GetUserPrefServiceForUser(
+          account_id);
+  CHECK(pref_service);
+  UMA_HISTOGRAM_BOOLEAN("Touchpad.TapDragging.Started",
+                        pref_service->GetBoolean(prefs::kTapDraggingEnabled));
 }
 
 void TouchDevicesController::OnSigninScreenPrefServiceInitialized(
@@ -128,10 +130,8 @@ void TouchDevicesController::OnSigninScreenPrefServiceInitialized(
 }
 
 void TouchDevicesController::OnActiveUserPrefServiceChanged(
-    PrefService* prefs) {
-  if (uma_record_callback_)
-    std::move(uma_record_callback_).Run(prefs);
-  ObservePrefs(prefs);
+    PrefService* pref_service) {
+  ObservePrefs(pref_service);
 }
 
 void TouchDevicesController::ObservePrefs(PrefService* prefs) {
@@ -168,7 +168,7 @@ void TouchDevicesController::UpdateTapDraggingEnabled() {
   UMA_HISTOGRAM_BOOLEAN("Touchpad.TapDragging.Changed", enabled);
 
   ui::OzonePlatform::GetInstance()->GetInputController()->SetTapDragging(
-      enabled);
+      std::nullopt, enabled);
 }
 
 void TouchDevicesController::UpdateTouchpadEnabled() {

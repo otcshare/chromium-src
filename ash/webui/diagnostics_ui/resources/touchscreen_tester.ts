@@ -2,16 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
+import 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 
-import {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
-import {assert} from 'chrome://resources/js/assert_ts.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
+import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {CanvasDrawingProvider} from './drawing_provider.js';
-import {InputDataProviderInterface, TabletModeObserverReceiver} from './input_data_provider.mojom-webui.js';
+import type {InputDataProviderInterface} from './input_data_provider.mojom-webui.js';
+import {TabletModeObserverReceiver} from './input_data_provider.mojom-webui.js';
 import {getInputDataProvider} from './mojo_interface_provider.js';
 import {getTemplate} from './touchscreen_tester.html.js';
 
@@ -44,15 +46,15 @@ interface Point {
 const TouchscreenTesterElementBase = I18nMixin(PolymerElement);
 
 export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
-  static get is() {
+  static get is(): string {
     return 'touchscreen-tester';
   }
 
-  static get template() {
+  static get template(): HTMLTemplateElement {
     return getTemplate();
   }
 
-  static get properties() {
+  static get properties(): PolymerElementProperties {
     return {
       touchscreenIdUnderTesting: {
         type: Number,
@@ -78,7 +80,7 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
   // Manages all event listeners.
   private eventTracker: EventTracker = new EventTracker();
 
-  private receiver_: TabletModeObserverReceiver|null = null;
+  private receiver: TabletModeObserverReceiver|null = null;
 
   private inputDataProvider: InputDataProviderInterface =
       getInputDataProvider();
@@ -123,9 +125,9 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
   async showTester(evdevId: number): Promise<void> {
     this.inputDataProvider.moveAppToTestingScreen(evdevId);
 
-    this.receiver_ = new TabletModeObserverReceiver(this);
+    this.receiver = new TabletModeObserverReceiver(this);
     const {isTabletMode} = await this.inputDataProvider.observeTabletMode(
-        this.receiver_.$.bindNewPipeAndPassRemote());
+        this.receiver.$.bindNewPipeAndPassRemote());
     this.isTabletMode = isTabletMode;
 
     const introDialog = this.getDialog(DialogType.INTRO);
@@ -178,8 +180,8 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
     if (document.fullscreenElement) {
       document.exitFullscreen();
     }
-    if (this.receiver_) {
-      this.receiver_.$.close();
+    if (this.receiver) {
+      this.receiver.$.close();
     }
   }
 
@@ -198,8 +200,7 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
    * Set up canvas width, height and drawing context.
    */
   private setupCanvas(): void {
-    const canvas =
-        this.shadowRoot!.querySelector('canvas') as HTMLCanvasElement;
+    const canvas = this.shadowRoot!.querySelector('canvas');
     assert(canvas);
 
     canvas.width = SCREEN_MAX_LENGTH;
@@ -208,8 +209,8 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
     // CSS in .html file does not have access to this element,
     // therefore adjust it here to make the canvas cover the whole screen.
     const topContainer =
-        this.getDialog(DialogType.CANVAS)!.shadowRoot!.querySelector(
-            '.top-container') as HTMLElement;
+        this.getDialog(DialogType.CANVAS)
+            .shadowRoot!.querySelector<HTMLElement>('.top-container');
     topContainer!.style.display = 'none';
 
     const ctx = canvas.getContext('2d');
@@ -299,7 +300,7 @@ export class TouchscreenTesterElement extends TouchscreenTesterElementBase {
    * Implements TabletModeObserver.OnTabletModeChanged.
    * @param isTabletMode Is current display on tablet mode.
    */
-  onTabletModeChanged(isTabletMode: boolean) {
+  onTabletModeChanged(isTabletMode: boolean): void {
     this.isTabletMode = isTabletMode;
     // TODO(wenyu): Show exit instruction toaster.
   }

@@ -5,8 +5,7 @@
 #ifndef COMPONENTS_METRICS_METRICS_UPLOAD_SCHEDULER_H_
 #define COMPONENTS_METRICS_METRICS_UPLOAD_SCHEDULER_H_
 
-#include "base/callback.h"
-#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "components/metrics/metrics_scheduler.h"
 
@@ -19,7 +18,7 @@ class MetricsUploadScheduler : public MetricsScheduler {
   // callback to call when uploading should happen.  The callback must
   // arrange to call either UploadFinished or UploadCancelled on completion.
   MetricsUploadScheduler(const base::RepeatingClosure& upload_callback,
-                         bool fast_startup_for_testing);
+                         bool fast_startup);
 
   MetricsUploadScheduler(const MetricsUploadScheduler&) = delete;
   MetricsUploadScheduler& operator=(const MetricsUploadScheduler&) = delete;
@@ -33,9 +32,25 @@ class MetricsUploadScheduler : public MetricsScheduler {
   // Also stops the scheduler.
   void StopAndUploadCancelled();
 
+  // Re-schedules the next upload with the successful unsent logs interval (see
+  // GetUnsentLogsInterval() below). This is useful for resetting the scheduler
+  // when it is using backoff logic (see GetInitialBackoffInterval() below).
+  // This should only be called while the scheduler is running, but not while
+  // a callback is pending. This is currently only used for the feature
+  // kResetMetricsUploadBackoffOnForeground.
+  void RestartWithUnsentLogsInterval();
+
   // Callback from MetricsService when an upload is cancelled because it would
   // be over the allowed data usage cap.
   void UploadOverDataUsageCap();
+
+  // Time delay after a log is uploaded successfully before attempting another.
+  // On mobile, keeping the radio on is very expensive, so prefer to keep this
+  // short and send in bursts.
+  static base::TimeDelta GetUnsentLogsInterval();
+
+  // Initial time delay after a log uploaded fails before retrying it.
+  static base::TimeDelta GetInitialBackoffInterval();
 
  private:
   // Time to wait between uploads on success.

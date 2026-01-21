@@ -36,9 +36,12 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_hr_element.h"
+#include "third_party/blink/renderer/core/html/html_table_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
@@ -60,8 +63,11 @@ bool InsertLineBreakCommand::ShouldUseBreakElement(
   // the input element, and in that case we need to check the input element's
   // parent's layoutObject.
   Position p(insertion_pos.ParentAnchoredEquivalent());
+  if (auto* text_control = EnclosingTextControl(p)) {
+    return IsA<HTMLTextAreaElement>(text_control);
+  }
   return IsRichlyEditablePosition(p) && p.AnchorNode()->GetLayoutObject() &&
-         !p.AnchorNode()->GetLayoutObject()->Style()->PreserveNewline();
+         p.AnchorNode()->GetLayoutObject()->Style()->ShouldCollapseBreaks();
 }
 
 void InsertLineBreakCommand::DoApply(EditingState* editing_state) {
@@ -181,7 +187,8 @@ void InsertLineBreakCommand::DoApply(EditingState* editing_state) {
       // Deleting insignificant whitespace will remove textNode if it contains
       // nothing but insignificant whitespace.
       if (text_node->isConnected()) {
-        InsertTextIntoNode(text_node, 0, NonBreakingSpaceString());
+        InsertTextIntoNode(text_node, 0, NonBreakingSpaceString(),
+                           PasswordEchoBehavior::kDoNotEcho);
       } else {
         Text* nbsp_node =
             GetDocument().createTextNode(NonBreakingSpaceString());

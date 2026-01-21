@@ -4,13 +4,14 @@
 
 // clang-format off
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {ContentSetting, ContentSettingsTypes, SettingsRecentSitePermissionsElement, SiteSettingSource, SiteSettingsPrefsBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
+import type {SettingsRecentSitePermissionsElement} from 'chrome://settings/lazy_load.js';
+import {ContentSetting, ContentSettingsTypes, SiteSettingSource, SiteSettingsBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
 import {Router, routes} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isChildVisible, isVisible} from 'chrome://webui-test/test_util.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 
-import {TestSiteSettingsPrefsBrowserProxy} from './test_site_settings_prefs_browser_proxy.js';
+import {TestSiteSettingsBrowserProxy} from './test_site_settings_browser_proxy.js';
 import {createRawSiteException} from './test_util.js';
 
 // clang-format on
@@ -19,13 +20,13 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
   /**
    * The mock proxy object to use during test.
    */
-  let browserProxy: TestSiteSettingsPrefsBrowserProxy;
+  let browserProxy: TestSiteSettingsBrowserProxy;
 
   let testElement: SettingsRecentSitePermissionsElement;
 
   setup(function() {
-    browserProxy = new TestSiteSettingsPrefsBrowserProxy();
-    SiteSettingsPrefsBrowserProxyImpl.setInstance(browserProxy);
+    browserProxy = new TestSiteSettingsBrowserProxy();
+    SiteSettingsBrowserProxyImpl.setInstance(browserProxy);
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     testElement = document.createElement('settings-recent-site-permissions');
@@ -52,10 +53,19 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
     // explicit assertions are included.
     const origin = 'https://bar.com';
     for (const contentSettingType of Object.values(ContentSettingsTypes)) {
+      if (contentSettingType === ContentSettingsTypes.STORAGE_ACCESS ||
+          contentSettingType ===
+              ContentSettingsTypes.TOP_LEVEL_STORAGE_ACCESS) {
+        // Skip permission types that are not single origin; in the actual
+        // implementation, getRecentSitePermissions only lists single origin
+        // permissions.
+        continue;
+      }
       Router.getInstance().navigateTo(routes.BASIC);
       await flushTasks();
       const mockData = [{
         origin,
+        displayName: 'bar.com',
         incognito: false,
         recentPermissions: [createRawSiteException(origin, {
           setting: ContentSetting.BLOCK,
@@ -78,6 +88,7 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
     const mockData = [
       {
         origin: origin1,
+        displayName: host1,
         incognito: true,
         recentPermissions: [
           createRawSiteException(origin1, {
@@ -108,19 +119,8 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
         ],
       },
       {
-        // When isolatedWebAppName is defined, it will override the origin.
-        origin: origin1,
-        isolatedWebAppName: 'Isolated Web App',
-        incognito: false,
-        recentPermissions: [
-          createRawSiteException(origin1, {
-            setting: ContentSetting.ALLOW,
-            type: ContentSettingsTypes.PROTOCOL_HANDLERS,
-          }),
-        ],
-      },
-      {
         origin: origin2,
+        displayName: host2,
         incognito: false,
         recentPermissions: [
           createRawSiteException(origin2, {
@@ -145,27 +145,22 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
 
     const siteEntries =
         testElement.shadowRoot!.querySelectorAll('.link-button');
-    assertEquals(3, siteEntries.length);
+    assertEquals(2, siteEntries.length);
 
     assertEquals(
         host1,
         siteEntries[0]!.querySelector(
-                           '.url-directionality')!.textContent!.trim());
-    assertEquals(
-        mockData[1]!.isolatedWebAppName,
-        siteEntries[1]!.querySelector(
-                           '.url-directionality')!.textContent!.trim());
+                           '.url-directionality')!.textContent.trim());
     assertEquals(
         host2,
-        siteEntries[2]!.querySelector(
-                           '.url-directionality')!.textContent!.trim());
+        siteEntries[1]!.querySelector(
+                           '.url-directionality')!.textContent.trim());
 
     const incognitoIcons =
         testElement.shadowRoot!.querySelectorAll<HTMLElement>(
             '.incognito-icon');
     assertTrue(isVisible(incognitoIcons[0]!));
     assertFalse(isVisible(incognitoIcons[1]!));
-    assertFalse(isVisible(incognitoIcons[2]!));
 
     // Check that the text describing the changed permissions is correct.
     const i18n = testElement.i18n.bind(testElement);
@@ -184,10 +179,6 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
     const expectedPermissionString1 = `${allowed}${i18n('sentenceEnd')} ${
         autoBlocked}${i18n('sentenceEnd')} ${blocked}${i18n('sentenceEnd')}`;
 
-    const expectedPermissionString2 = i18n(
-        'recentPermissionAllowedOneItem',
-        i18n('siteSettingsHandlersMidSentence'));
-
     allowed = i18n(
         'recentPermissionAutoBlockedOneItem',
         i18n('siteSettingsClipboardMidSentence'));
@@ -200,12 +191,9 @@ suite('CrSettingsRecentSitePermissionsTest', function() {
 
     assertEquals(
         expectedPermissionString1,
-        siteEntries[0]!.querySelector('.second-line')!.textContent!.trim());
-    assertEquals(
-        expectedPermissionString2,
-        siteEntries[1]!.querySelector('.second-line')!.textContent!.trim());
+        siteEntries[0]!.querySelector('.second-line')!.textContent.trim());
     assertEquals(
         expectedPermissionString3,
-        siteEntries[2]!.querySelector('.second-line')!.textContent!.trim());
+        siteEntries[1]!.querySelector('.second-line')!.textContent.trim());
   });
 });

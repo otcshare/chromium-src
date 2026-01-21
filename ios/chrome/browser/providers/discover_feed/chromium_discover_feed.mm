@@ -4,10 +4,6 @@
 
 #import "ios/public/provider/chrome/browser/discover_feed/discover_feed_api.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace ios {
 namespace provider {
 namespace {
@@ -16,30 +12,25 @@ namespace {
 class ChromiumDiscoverFeedService final : public DiscoverFeedService {
  public:
   // DiscoverFeedService implementation:
-  void CreateFeedModels() final {}
-  void CreateFeedModel(FeedModelConfiguration* feed_model_config) final {}
-  void ClearFeedModels() final {}
-  void SetFollowingFeedSortType(FollowingFeedSortType sort_type) final {}
+  void CreateFeedModel() final {}
+  void SetIsShownOnStartSurface(bool shown_on_start_surface) final {}
   FeedMetricsRecorder* GetFeedMetricsRecorder() final { return nil; }
   UIViewController* NewDiscoverFeedViewControllerWithConfiguration(
       DiscoverFeedViewControllerConfiguration* configuration) final {
     return nil;
   }
-  UIViewController* NewFollowingFeedViewControllerWithConfiguration(
-      DiscoverFeedViewControllerConfiguration* configuration) final {
-    return nil;
-  }
   void RemoveFeedViewController(UIViewController* feed_view_controller) final {}
   void UpdateTheme() final {}
-  void RefreshFeedIfNeeded() final {}
-  void RefreshFeed() final {}
+  void UpdateFeedViewVisibilityState(
+      UICollectionView* collection_view,
+      BrowserViewVisibilityState current_state,
+      BrowserViewVisibilityState previous_state) final {}
 
+  // DiscoverFeedRefresher implementation:
+  void RefreshFeed(FeedRefreshTrigger trigger) final {}
   void PerformBackgroundRefreshes(void (^completion)(BOOL)) final {}
   void HandleBackgroundRefreshTaskExpiration() final {}
   NSDate* GetEarliestBackgroundRefreshBeginDate() final { return nil; }
-
-  BOOL GetFollowingFeedHasUnseenContent() final { return NO; }
-  void SetFollowingFeedContentSeen() final {}
 };
 
 }  // anonymous namespace
@@ -47,6 +38,11 @@ class ChromiumDiscoverFeedService final : public DiscoverFeedService {
 std::unique_ptr<DiscoverFeedService> CreateDiscoverFeedService(
     DiscoverFeedConfiguration* configuration) {
   return std::make_unique<ChromiumDiscoverFeedService>();
+}
+
+id<DiscoverFeedVisibilityProvider> CreateDiscoverFeedVisibilityProvider(
+    DiscoverFeedVisibilityProviderConfiguration* configuration) {
+  return nil;
 }
 
 }  // namespace provider

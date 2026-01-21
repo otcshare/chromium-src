@@ -17,16 +17,17 @@ source_set("serial") {
     "serial_port_manager.h",
   ]
 
-  deps = [
-    "//content/public/common",
-    "//extensions/common/api",
-    "//mojo/public/cpp/bindings",
-    "//services/device/public/mojom",
-    "//services/service_manager/public/cpp",
-  ]
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [
+    "//base",
     "//content/public/browser",
     "//extensions/browser:browser_sources",
+    "//extensions/common",
+    "//extensions/common/api",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/system",
+    "//net",
+    "//services/device/public/mojom",
   ]
 }

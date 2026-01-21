@@ -3,28 +3,20 @@
 // found in the LICENSE file.
 
 #include "base/json/json_reader.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/net/profile_network_context_service.h"
-#include "chrome/browser/net/profile_network_context_service_factory.h"
-#include "components/network_session_configurator/common/network_switches.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/extension_host.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
-#include "net/ssl/client_cert_store.h"
-#include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
 
 namespace extensions {
-
-namespace {
-
-std::unique_ptr<net::ClientCertStore> CreateNullCertStore() {
-  return nullptr;
-}
-
-}  // namespace
 
 class BackgroundHeaderTest : public ExtensionBrowserTest {
  public:
@@ -34,14 +26,10 @@ class BackgroundHeaderTest : public ExtensionBrowserTest {
   BackgroundHeaderTest(const BackgroundHeaderTest& other) = delete;
   BackgroundHeaderTest& operator=(const BackgroundHeaderTest& other) = delete;
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
-  }
-
   GURL GetSecFetchUrl(const std::string& hostname) {
-    if (hostname.empty())
+    if (hostname.empty()) {
       return https_test_server_.GetURL("/echoheader?sec-fetch-site");
+    }
     return https_test_server_.GetURL(hostname, "/echoheader?sec-fetch-site");
   }
 
@@ -53,13 +41,9 @@ class BackgroundHeaderTest : public ExtensionBrowserTest {
     ExtensionBrowserTest::SetUpOnMainThread();
 
     host_resolver()->AddRule("*", "127.0.0.1");
-    https_test_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
+    https_test_server_.SetCertHostnames({"example.com", "example2.com"});
     https_test_server_.AddDefaultHandlers(GetTestDataFilePath());
     ASSERT_TRUE(https_test_server_.Start());
-
-    ProfileNetworkContextServiceFactory::GetForContext(browser()->profile())
-        ->set_client_cert_store_factory_for_testing(
-            base::BindRepeating(&CreateNullCertStore));
   }
 
   std::string ExecuteFetch(const Extension* extension, const GURL& url) {
@@ -72,12 +56,11 @@ class BackgroundHeaderTest : public ExtensionBrowserTest {
     }
     content::DOMMessageQueue message_queue(host->host_contents());
 
-    browsertest_util::ExecuteScriptInBackgroundPageNoWait(
-        profile(), extension->id(),
-        content::JsReplace("executeFetch($1);", url));
+    ExecuteScriptInBackgroundPageNoWait(
+        extension->id(), content::JsReplace("executeFetch($1);", url));
     std::string json;
     EXPECT_TRUE(message_queue.WaitForMessage(&json));
-    absl::optional<base::Value> value =
+    std::optional<base::Value> value =
         base::JSONReader::Read(json, base::JSON_ALLOW_TRAILING_COMMAS);
     if (!value) {
       ADD_FAILURE() << "Received invalid response: " << json;
@@ -121,7 +104,6 @@ class BackgroundHeaderTest : public ExtensionBrowserTest {
 
  private:
   net::EmbeddedTestServer https_test_server_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 // Test the response headers of fetch a HTTPS request in extension background

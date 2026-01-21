@@ -2,20 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/location_bar/star_view.h"
-
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
+#include "chrome/browser/ui/views/location_bar/star_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -29,10 +32,19 @@
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_utils.h"
 #include "ui/views/animation/ink_drop.h"
-#include "ui/views/animation/test/ink_drop_host_view_test_api.h"
+#include "ui/views/animation/test/ink_drop_host_test_api.h"
 #include "ui/views/test/button_test_api.h"
 
 namespace {
+
+bool IsActive(IconLabelBubbleView& icon) {
+  // The star is considered active if the icon's color matches the accent color.
+  // Sample the bit at the middle of the image (the icon is a single color).
+  auto* bitmap = icon.GetImage(views::Button::STATE_NORMAL).bitmap();
+  CHECK(bitmap);
+  return *bitmap->getAddr32(bitmap->height() / 2, bitmap->width() / 2) ==
+         views::GetCascadingAccentColor(&icon);
+}
 
 class StarViewTest : public InProcessBrowserTest {
  public:
@@ -43,10 +55,10 @@ class StarViewTest : public InProcessBrowserTest {
 
   ~StarViewTest() override = default;
 
-  PageActionIconView* GetStarIcon() {
+  IconLabelBubbleView* GetStarIcon() {
     return BrowserView::GetBrowserViewForBrowser(browser())
         ->toolbar_button_provider()
-        ->GetPageActionIconView(PageActionIconType::kBookmarkStar);
+        ->GetPageActionView(kActionBookmarkThisTab);
   }
 };
 
@@ -56,26 +68,28 @@ IN_PROC_BROWSER_TEST_F(StarViewTest, BookmarksUrlOnPress) {
       BookmarkModelFactory::GetForBrowserContext(browser()->profile());
   bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
 
-  PageActionIconView* star_icon = GetStarIcon();
+  auto* star_icon = GetStarIcon();
   const GURL current_url =
       browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL();
 
   // The page should not initiall be bookmarked.
   EXPECT_FALSE(bookmark_model->IsBookmarked(current_url));
-  EXPECT_FALSE(star_icon->GetActive());
+  EXPECT_FALSE(IsActive(*star_icon));
 
-  ui::MouseEvent pressed_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                               ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+  ui::MouseEvent pressed_event(ui::EventType::kMousePressed, gfx::Point(),
+                               gfx::Point(), ui::EventTimeForNow(),
+                               ui::EF_LEFT_MOUSE_BUTTON,
                                ui::EF_LEFT_MOUSE_BUTTON);
-  ui::MouseEvent released_event(
-      ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(), ui::EventTimeForNow(),
-      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent released_event(ui::EventType::kMouseReleased, gfx::Point(),
+                                gfx::Point(), ui::EventTimeForNow(),
+                                ui::EF_LEFT_MOUSE_BUTTON,
+                                ui::EF_LEFT_MOUSE_BUTTON);
 
   static_cast<views::View*>(star_icon)->OnMousePressed(pressed_event);
   static_cast<views::View*>(star_icon)->OnMouseReleased(released_event);
 
   EXPECT_TRUE(bookmark_model->IsBookmarked(current_url));
-  EXPECT_TRUE(star_icon->GetActive());
+  EXPECT_TRUE(IsActive(*star_icon));
 }
 
 // Verify that clicking the bookmark star a second time hides the bookmark
@@ -83,12 +97,14 @@ IN_PROC_BROWSER_TEST_F(StarViewTest, BookmarksUrlOnPress) {
 IN_PROC_BROWSER_TEST_F(StarViewTest, HideOnSecondClick) {
   views::View* star_icon = GetStarIcon();
 
-  ui::MouseEvent pressed_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                               ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+  ui::MouseEvent pressed_event(ui::EventType::kMousePressed, gfx::Point(),
+                               gfx::Point(), ui::EventTimeForNow(),
+                               ui::EF_LEFT_MOUSE_BUTTON,
                                ui::EF_LEFT_MOUSE_BUTTON);
-  ui::MouseEvent released_event(
-      ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(), ui::EventTimeForNow(),
-      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent released_event(ui::EventType::kMouseReleased, gfx::Point(),
+                                gfx::Point(), ui::EventTimeForNow(),
+                                ui::EF_LEFT_MOUSE_BUTTON,
+                                ui::EF_LEFT_MOUSE_BUTTON);
 
   // Verify that clicking once shows the bookmark bubble.
   EXPECT_FALSE(BookmarkBubbleView::bookmark_bubble());
@@ -109,7 +125,7 @@ IN_PROC_BROWSER_TEST_F(StarViewTest, HideOnSecondClick) {
 }
 
 IN_PROC_BROWSER_TEST_F(StarViewTest, InkDropHighlighted) {
-  PageActionIconView* star_icon = GetStarIcon();
+  auto* star_icon = GetStarIcon();
   views::test::InkDropHostTestApi ink_drop_test_api(
       views::InkDrop::Get(star_icon));
 
@@ -122,6 +138,28 @@ IN_PROC_BROWSER_TEST_F(StarViewTest, InkDropHighlighted) {
     EXPECT_EQ(ink_drop_test_api.GetInkDrop()->GetTargetInkDropState(),
               views::InkDropState::ACTIVATED);
   }
+}
+
+IN_PROC_BROWSER_TEST_F(StarViewTest, HiddenOnNTP) {
+  // Shown on non-NTP page context.
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), GURL("https://www.example.com")));
+  EXPECT_TRUE(GetStarIcon()->GetVisible());
+
+  // Hidden on NTP page context ("chrome://newtab/").
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                           GURL(chrome::kChromeUINewTabURL)));
+  EXPECT_FALSE(GetStarIcon()->GetVisible());
+
+  // Shown on non-NTP page context.
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), GURL("https://www.example.com")));
+  EXPECT_TRUE(GetStarIcon()->GetVisible());
+
+  // Hidden on NTP page context ("chrome://new-tab-page/").
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL(chrome::kChromeUINewTabPageURL)));
+  EXPECT_FALSE(GetStarIcon()->GetVisible());
 }
 
 }  // namespace

@@ -6,26 +6,26 @@
 
 #include <utility>
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "base/memory/singleton.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
-#include "chrome/browser/ash/login/demo_mode/demo_session.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/account_id/account_id.h"
 #include "components/session_manager/core/session_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/gfx/image/image.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -53,9 +53,7 @@ class ArcProvisionNotificationServiceFactory
 
  private:
   friend base::DefaultSingletonTraits<ArcProvisionNotificationServiceFactory>;
-  ArcProvisionNotificationServiceFactory() {
-    DependsOn(NotificationDisplayServiceFactory::GetInstance());
-  }
+  ArcProvisionNotificationServiceFactory() = default;
   ~ArcProvisionNotificationServiceFactory() override = default;
 };
 
@@ -80,6 +78,7 @@ ArcProvisionNotificationService::~ArcProvisionNotificationService() {
 }
 
 void ArcProvisionNotificationService::OnSessionStateChanged() {
+  TRACE_EVENT0("ui", "ArcProvisionNotificationService::OnSessionStateChanged");
   if (session_manager::SessionManager::Get()->session_state() !=
           session_manager::SessionState::ACTIVE ||
       !show_on_session_starts_) {
@@ -112,7 +111,7 @@ void ArcProvisionNotificationService::ShowNotification() {
   message_center::RichNotificationData optional_fields;
   optional_fields.never_timeout = true;
 
-  message_center::Notification notification(
+  auto notification = std::make_unique<message_center::Notification>(
       message_center::NOTIFICATION_TYPE_SIMPLE, kManagedProvisionNotificationId,
       l10n_util::GetStringUTF16(IDS_ARC_MANAGED_PROVISION_NOTIFICATION_TITLE),
       l10n_util::GetStringFUTF16(IDS_ARC_MANAGED_PROVISION_NOTIFICATION_MESSAGE,
@@ -121,10 +120,11 @@ void ArcProvisionNotificationService::ShowNotification() {
           ui::ResourceBundle::GetSharedInstance().GetImageNamed(
               IDR_ARC_PLAY_STORE_OPTIN_IN_PROGRESS_NOTIFICATION)),
       l10n_util::GetStringUTF16(IDS_ARC_NOTIFICATION_DISPLAY_SOURCE), GURL(),
-      notifier_id, optional_fields, new message_center::NotificationDelegate());
+      notifier_id, optional_fields,
+      base::MakeRefCounted<message_center::NotificationDelegate>());
 
-  NotificationDisplayService::GetForProfile(profile)->Display(
-      NotificationHandler::Type::TRANSIENT, notification, /*metadata=*/nullptr);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void ArcProvisionNotificationService::HideNotification() {
@@ -132,10 +132,8 @@ void ArcProvisionNotificationService::HideNotification() {
     show_on_session_starts_ = false;
     session_observation_.Reset();
   } else {
-    NotificationDisplayService::GetForProfile(
-        Profile::FromBrowserContext(context_))
-        ->Close(NotificationHandler::Type::TRANSIENT,
-                kManagedProvisionNotificationId);
+    message_center::MessageCenter::Get()->RemoveNotification(
+        kManagedProvisionNotificationId, /*by_user=*/false);
   }
 }
 
@@ -147,9 +145,10 @@ void ArcProvisionNotificationService::OnArcPlayStoreEnabledChanged(
 }
 
 void ArcProvisionNotificationService::OnArcStarted() {
-  // Show notification only for Public Session (except for Demo Session) when
-  // ARC is going to start.
-  if (profiles::IsPublicSession() && !ash::DemoSession::IsDeviceInDemoMode()) {
+  // Show notification only for managed guest sessions (except for Demo Session)
+  // when ARC is going to start.
+  if (chromeos::IsManagedGuestSession() &&
+      !ash::demo_mode::IsDeviceInDemoMode()) {
     MaybeShowNotification();
   }
 }
@@ -185,6 +184,11 @@ void ArcProvisionNotificationService::OnArcErrorShowRequested(
   // unconditionally as there should be no notification displayed otherwise
   // anyway.
   HideNotification();
+}
+
+// static
+void ArcProvisionNotificationService::EnsureFactoryBuilt() {
+  ArcProvisionNotificationServiceFactory::GetInstance();
 }
 
 }  // namespace arc

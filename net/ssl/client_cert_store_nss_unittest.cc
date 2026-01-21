@@ -11,14 +11,13 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "crypto/nss_util.h"
 #include "crypto/scoped_test_nss_db.h"
-#include "net/cert/pem.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util_nss.h"
 #include "net/ssl/client_cert_identity_test_util.h"
@@ -29,6 +28,7 @@
 #include "net/test/cert_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "third_party/boringssl/src/pki/pem.h"
 
 namespace net {
 
@@ -52,8 +52,6 @@ void SavePrivateKeyAndQuitCallback(scoped_refptr<net::SSLPrivateKey>* out_key,
 
 class ClientCertStoreNSSTestDelegate {
  public:
-  ClientCertStoreNSSTestDelegate() = default;
-
   bool SelectClientCerts(const CertificateList& input_certs,
                          const SSLCertRequestInfo& cert_request_info,
                          ClientCertIdentityList* selected_identities) {
@@ -69,7 +67,7 @@ class ClientCertStoreNSSTestDelegate {
   }
 };
 
-INSTANTIATE_TYPED_TEST_SUITE_P(NSS,
+INSTANTIATE_TYPED_TEST_SUITE_P(NSSNew,
                                ClientCertStoreTest,
                                ClientCertStoreNSSTestDelegate);
 
@@ -107,9 +105,8 @@ TEST(ClientCertStoreNSSTest, BuildsCertificateChain) {
     ClientCertIdentityList selected_identities;
     base::RunLoop loop;
     store->GetClientCerts(
-        *request.get(),
-        base::BindOnce(SaveIdentitiesAndQuitCallback, &selected_identities,
-                       loop.QuitClosure()));
+        request, base::BindOnce(SaveIdentitiesAndQuitCallback,
+                                &selected_identities, loop.QuitClosure()));
     loop.Run();
 
     // The result be |client_1| with no intermediates.
@@ -142,9 +139,8 @@ TEST(ClientCertStoreNSSTest, BuildsCertificateChain) {
     ClientCertIdentityList selected_identities;
     base::RunLoop loop;
     store->GetClientCerts(
-        *request.get(),
-        base::BindOnce(SaveIdentitiesAndQuitCallback, &selected_identities,
-                       loop.QuitClosure()));
+        request, base::BindOnce(SaveIdentitiesAndQuitCallback,
+                                &selected_identities, loop.QuitClosure()));
     loop.Run();
 
     // The result be |client_1| with |client_1_ca| as an intermediate.
@@ -189,13 +185,13 @@ TEST(ClientCertStoreNSSTest, SubjectPrintableStringContainingUTF8) {
           "subject_printable_string_containing_utf8_client_cert.pem"),
       &file_data));
 
-  net::PEMTokenizer pem_tokenizer(file_data, {"CERTIFICATE"});
+  bssl::PEMTokenizer pem_tokenizer(file_data, {"CERTIFICATE"});
   ASSERT_TRUE(pem_tokenizer.GetNext());
   std::string cert_der(pem_tokenizer.data());
   ASSERT_FALSE(pem_tokenizer.GetNext());
 
-  ScopedCERTCertificate cert(x509_util::CreateCERTCertificateFromBytes(
-      reinterpret_cast<const uint8_t*>(cert_der.data()), cert_der.size()));
+  ScopedCERTCertificate cert(
+      x509_util::CreateCERTCertificateFromBytes(base::as_byte_span(cert_der)));
   ASSERT_TRUE(cert);
 
   ASSERT_TRUE(ImportClientCertToSlot(cert.get(), test_db.slot()));
@@ -221,8 +217,8 @@ TEST(ClientCertStoreNSSTest, SubjectPrintableStringContainingUTF8) {
   ClientCertIdentityList selected_identities;
   base::RunLoop loop;
   store->GetClientCerts(
-      *request.get(), base::BindOnce(SaveIdentitiesAndQuitCallback,
-                                     &selected_identities, loop.QuitClosure()));
+      request, base::BindOnce(SaveIdentitiesAndQuitCallback,
+                              &selected_identities, loop.QuitClosure()));
   loop.Run();
 
   // The result be |cert| with no intermediates.

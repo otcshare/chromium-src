@@ -18,25 +18,26 @@ namespace chrome {
 std::unique_ptr<Browser> CreateBrowserWithAuraTestWindowForParams(
     std::unique_ptr<aura::Window> window,
     Browser::CreateParams* params) {
-  if (window.get() == nullptr) {
+  if (!window) {
     window = std::make_unique<aura::Window>(nullptr);
     window->SetId(0);
     window->SetType(aura::client::WINDOW_TYPE_NORMAL);
     window->Init(ui::LAYER_TEXTURED);
     window->Show();
   }
-  TestBrowserWindowAura* browser_window =
-      new TestBrowserWindowAura(std::move(window));
-  new TestBrowserWindowOwner(browser_window);
-  return browser_window->CreateBrowser(params);
+  auto browser_window =
+      std::make_unique<TestBrowserWindowAura>(std::move(window));
+
+  // Returned Browser takes ownership of `browser_window`.
+  return browser_window.release()->CreateBrowser(params);
 }
 
 std::unique_ptr<Browser> CreateBrowserWithViewsTestWindowForParams(
     const Browser::CreateParams& params,
     aura::Window* parent) {
-  TestBrowserWindowViews* browser_window = new TestBrowserWindowViews(parent);
-  new TestBrowserWindowOwner(browser_window);
-  return browser_window->CreateBrowser(params);
+  auto browser_window = std::make_unique<TestBrowserWindowViews>(parent);
+  // Returned Browser takes ownership of `browser_window`.
+  return browser_window.release()->CreateBrowser(params);
 }
 
 }  // namespace chrome
@@ -45,7 +46,7 @@ TestBrowserWindowAura::TestBrowserWindowAura(
     std::unique_ptr<aura::Window> native_window)
     : native_window_(std::move(native_window)) {}
 
-TestBrowserWindowAura::~TestBrowserWindowAura() {}
+TestBrowserWindowAura::~TestBrowserWindowAura() = default;
 
 gfx::NativeWindow TestBrowserWindowAura::GetNativeWindow() const {
   return native_window_.get();
@@ -84,21 +85,24 @@ gfx::Rect TestBrowserWindowAura::GetBounds() const {
 
 std::unique_ptr<Browser> TestBrowserWindowAura::CreateBrowser(
     Browser::CreateParams* params) {
+  // Resulting Browser owns `this`.
   params->window = this;
-  browser_ = Browser::Create(*params);
-  return base::WrapUnique(browser_.get());
+  auto browser = Browser::DeprecatedCreateOwnedForTesting(*params);
+  browser_ = browser.get();
+  return browser;
 }
 
 TestBrowserWindowViews::TestBrowserWindowViews(aura::Window* parent)
     : widget_(std::make_unique<views::Widget>()) {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(5, 5, 20, 20);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.parent = parent;
   widget_->Init(std::move(params));
 }
 
-TestBrowserWindowViews::~TestBrowserWindowViews() {}
+TestBrowserWindowViews::~TestBrowserWindowViews() = default;
 
 gfx::NativeWindow TestBrowserWindowViews::GetNativeWindow() const {
   return widget_->GetNativeWindow();
@@ -131,8 +135,9 @@ gfx::Rect TestBrowserWindowViews::GetBounds() const {
 std::unique_ptr<Browser> TestBrowserWindowViews::CreateBrowser(
     const Browser::CreateParams& params) {
   Browser::CreateParams params_copy = params;
+  // Resulting Browser owns `this`.
   params_copy.window = this;
-  std::unique_ptr<Browser> browser(Browser::Create(params_copy));
+  auto browser = Browser::DeprecatedCreateOwnedForTesting(params_copy);
   browser_ = browser.get();
   return browser;
 }

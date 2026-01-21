@@ -6,14 +6,14 @@
 
 #include <vector>
 
-#include "device/fido/authenticator_selection_criteria.h"
-#include "device/fido/cable/cable_discovery_data.h"
-#include "device/fido/fido_constants.h"
-#include "device/fido/fido_transport_protocol.h"
-#include "device/fido/public_key_credential_descriptor.h"
-#include "device/fido/public_key_credential_params.h"
-#include "device/fido/public_key_credential_rp_entity.h"
-#include "device/fido/public_key_credential_user_entity.h"
+#include "device/fido/public/authenticator_selection_criteria.h"
+#include "device/fido/public/cable_discovery_data.h"
+#include "device/fido/public/fido_constants.h"
+#include "device/fido/public/fido_transport_protocol.h"
+#include "device/fido/public/public_key_credential_descriptor.h"
+#include "device/fido/public/public_key_credential_params.h"
+#include "device/fido/public/public_key_credential_rp_entity.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
@@ -123,9 +123,9 @@ TEST(AuthenticatorMojomTraitsTest, SerializePublicKeyCredentialRpEntity) {
       PublicKeyCredentialRpEntity(std::string(kRpId)),
       PublicKeyCredentialRpEntity(std::string(kRpId))};
   // TODO(kenrb): There is a mismatch between the types, where
-  // device::PublicKeyCredentialRpEntity can have absl::nullopt for
+  // device::PublicKeyCredentialRpEntity can have std::nullopt for
   // the name but the mapped mojom type is not optional. This should
-  // be corrected at some point. We can't currently test absl::nullopt
+  // be corrected at some point. We can't currently test std::nullopt
   // because it won't serialize.
   success_cases[0].name = std::string(kRpName);
   success_cases[1].name = std::string(kRpName);

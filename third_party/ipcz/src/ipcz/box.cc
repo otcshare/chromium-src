@@ -5,9 +5,11 @@
 #include "ipcz/box.h"
 
 #include <utility>
+#include <variant>
 
 #include "ipcz/ipcz.h"
 #include "third_party/abseil-cpp/absl/base/macros.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace ipcz {
 
@@ -32,9 +34,9 @@ IpczResult Box::Close() {
   return IPCZ_RESULT_OK;
 }
 
-bool Box::CanSendFrom(Portal& sender) {
-  return absl::visit(
-      Overloaded{
+bool Box::CanSendFrom(Router& sender) {
+  return std::visit(
+      absl::Overload{
           [](const Empty&) { return false; },
           [](const DriverObject& object) {
             return object.is_valid() && object.IsSerializable();
@@ -54,8 +56,8 @@ bool Box::CanSendFrom(Portal& sender) {
 
 IpczResult Box::ExtractContents(ExtractMode mode, IpczBoxContents& contents) {
   const bool peek = (mode == kPeek);
-  const IpczResult result = absl::visit(
-      Overloaded{
+  const IpczResult result = std::visit(
+      absl::Overload{
           [](const Empty& empty) { return IPCZ_RESULT_INVALID_ARGUMENT; },
           [&contents, peek](DriverObject& object) {
             contents.type = IPCZ_BOX_TYPE_DRIVER_OBJECT;

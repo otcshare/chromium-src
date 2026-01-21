@@ -5,10 +5,12 @@
 #ifndef FUCHSIA_WEB_RUNNERS_CAST_CAST_RESOLVER_H_
 #define FUCHSIA_WEB_RUNNERS_CAST_CAST_RESOLVER_H_
 
-#include <fuchsia/component/resolution/cpp/fidl.h>
+#include <fidl/fuchsia.component.resolution/cpp/fidl.h>
+#include <lib/fidl/cpp/wire/unknown_interaction_handler.h>
 
 // fuchsia.component.resolution.Resolver implementation for Cast applications.
-class CastResolver final : public fuchsia::component::resolution::Resolver {
+class CastResolver final
+    : public fidl::Server<fuchsia_component_resolution::Resolver> {
  public:
   CastResolver();
   ~CastResolver() override;
@@ -16,11 +18,16 @@ class CastResolver final : public fuchsia::component::resolution::Resolver {
   CastResolver(const CastResolver&) = delete;
   CastResolver& operator=(const CastResolver&) = delete;
 
-  // fuchsia::component::resolution::Resolver implementation.
-  void Resolve(std::string component_url, ResolveCallback callback) override;
-  void ResolveWithContext(std::string component_url,
-                          fuchsia::component::resolution::Context context,
-                          ResolveWithContextCallback callback) override;
+  // fuchsia_component_resolution::Resolver implementation.
+  void Resolve(ResolveRequest& request,
+               ResolveCompleter::Sync& completer) override;
+  void ResolveWithContext(
+      ResolveWithContextRequest& request,
+      ResolveWithContextCompleter::Sync& completer) override;
+  void handle_unknown_method(
+      fidl::UnknownMethodMetadata<fuchsia_component_resolution::Resolver>
+          metadata,
+      fidl::UnknownMethodCompleter::Sync& completer) override;
 };
 
 #endif  // FUCHSIA_WEB_RUNNERS_CAST_CAST_RESOLVER_H_

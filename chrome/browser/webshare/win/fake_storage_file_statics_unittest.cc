@@ -7,6 +7,7 @@
 #include <wrl/event.h>
 #include <wrl/implements.h>
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/win/scoped_hstring.h"
@@ -36,9 +37,6 @@ namespace webshare {
 
 TEST(FakeStorageFileStaticsTest, CreateStreamedFileAsync) {
   base::test::SingleThreadTaskEnvironment task_environment;
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload())
-    GTEST_SKIP();
-
   auto file_statics = Make<FakeStorageFileStatics>();
 
   // Create a streamed file, populated on-demand by the provided callback.
@@ -56,9 +54,9 @@ TEST(FakeStorageFileStaticsTest, CreateStreamedFileAsync) {
           byte* raw_buffer;
           EXPECT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
           raw_buffer[0] = 'f';
-          raw_buffer[1] = 'i';
-          raw_buffer[2] = 's';
-          raw_buffer[3] = 'h';
+          UNSAFE_TODO(raw_buffer[1]) = 'i';
+          UNSAFE_TODO(raw_buffer[2]) = 's';
+          UNSAFE_TODO(raw_buffer[3]) = 'h';
 
           // Write the bytes to the stream
           ComPtr<IAsyncOperationWithProgress<UINT32, UINT32>> write_operation;
@@ -194,9 +192,9 @@ TEST(FakeStorageFileStaticsTest, CreateStreamedFileAsync) {
   byte* raw_buffer;
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
   ASSERT_EQ(raw_buffer[0], 'f');
-  ASSERT_EQ(raw_buffer[1], 'i');
-  ASSERT_EQ(raw_buffer[2], 's');
-  ASSERT_EQ(raw_buffer[3], 'h');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[1]), 'i');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[2]), 's');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[3]), 'h');
 
   // Cleanup
   ComPtr<IClosable> closable_input_stream;

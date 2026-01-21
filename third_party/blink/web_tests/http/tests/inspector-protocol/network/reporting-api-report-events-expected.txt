@@ -9,16 +9,16 @@ Report added:
         effectiveDirective : script-src-elem
         lineNumber : 9
         originalPolicy : script-src 'none'; object-src 'none'; report-to csp
-        referrer : 
-        sample : 
-        sourceFile : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+        referrer :
+        sample :
+        sourceFile : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
         statusCode : 200
     }
     completedAttempts : 0
     depth : 0
     destination : csp
     id : <string>
-    initiatorUrl : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+    initiatorUrl : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
     status : Queued
     timestamp : <number>
     type : csp-violation
@@ -32,16 +32,16 @@ Report updated:
         effectiveDirective : script-src-elem
         lineNumber : 9
         originalPolicy : script-src 'none'; object-src 'none'; report-to csp
-        referrer : 
-        sample : 
-        sourceFile : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+        referrer :
+        sample :
+        sourceFile : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
         statusCode : 200
     }
     completedAttempts : 0
     depth : 0
     destination : csp
     id : <string>
-    initiatorUrl : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+    initiatorUrl : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
     status : Pending
     timestamp : <number>
     type : csp-violation
@@ -55,16 +55,16 @@ Report updated:
         effectiveDirective : script-src-elem
         lineNumber : 9
         originalPolicy : script-src 'none'; object-src 'none'; report-to csp
-        referrer : 
-        sample : 
-        sourceFile : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+        referrer :
+        sample :
+        sourceFile : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
         statusCode : 200
     }
     completedAttempts : 0
     depth : 0
     destination : csp
     id : <string>
-    initiatorUrl : http://127.0.0.1:8000/inspector-protocol/network/resources/generate-report.php
+    initiatorUrl : http://localhost:8080/inspector-protocol/network/resources/generate-report.php
     status : Queued
     timestamp : <number>
     type : csp-violation

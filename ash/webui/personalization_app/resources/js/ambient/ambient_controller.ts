@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {AmbientModeAlbum, AmbientProviderInterface, AnimationTheme, TemperatureUnit, TopicSource} from '../personalization_app.mojom-webui.js';
-import {PersonalizationStore} from '../personalization_store.js';
+import {assert} from 'chrome://resources/js/assert.js';
 
-import {setAlbumSelectedAction, setAmbientModeEnabledAction, setAnimationThemeAction, setTemperatureUnitAction, setTopicSourceAction} from './ambient_actions.js';
+import type {AmbientModeAlbum, AmbientProviderInterface, AmbientTheme, TemperatureUnit, TopicSource} from '../../personalization_app.mojom-webui.js';
+import type {PersonalizationStore} from '../personalization_store.js';
+
+import {setAlbumSelectedAction, setAmbientModeEnabledAction, setAmbientThemeAction, setGeolocationIsUserModifiableAction, setGeolocationPermissionEnabledAction, setScreenSaverDurationAction, setShouldShowTimeOfDayBannerAction, setTemperatureUnitAction, setTopicSourceAction} from './ambient_actions.js';
+import {getAmbientProvider} from './ambient_interface_provider.js';
+import {isValidTopicSourceAndTheme} from './utils.js';
+
+
 
 /**
  * @fileoverview contains all of the functions to interact with ambient mode
@@ -13,10 +19,25 @@ import {setAlbumSelectedAction, setAmbientModeEnabledAction, setAnimationThemeAc
  * state in response to mojom data.
  */
 
-// Enable or disable ambient mode.
-export async function setAmbientModeEnabled(
-    ambientModeEnabled: boolean, provider: AmbientProviderInterface,
+export async function initializeData(
+    provider: AmbientProviderInterface,
     store: PersonalizationStore): Promise<void> {
+  const [{geolocationEnabled}, {geolocationIsUserModifiable}] =
+      await Promise.all([
+        provider.isGeolocationEnabledForSystemServices(),
+        provider.isGeolocationUserModifiable(),
+      ]);
+  store.beginBatchUpdate();
+  store.dispatch(setGeolocationPermissionEnabledAction(geolocationEnabled));
+  store.dispatch(
+      setGeolocationIsUserModifiableAction(geolocationIsUserModifiable));
+  store.endBatchUpdate();
+}
+
+// Enable or disable ambient mode.
+export function setAmbientModeEnabled(
+    ambientModeEnabled: boolean, provider: AmbientProviderInterface,
+    store: PersonalizationStore): void {
   provider.setAmbientModeEnabled(ambientModeEnabled);
 
   // Dispatch action to toggle the button to indicate if the ambient mode is
@@ -24,19 +45,30 @@ export async function setAmbientModeEnabled(
   store.dispatch(setAmbientModeEnabledAction(ambientModeEnabled));
 }
 
-// Set the animation theme.
-export function setAnimationTheme(
-    animationTheme: AnimationTheme, provider: AmbientProviderInterface,
+// Set the ambient theme.
+export function setAmbientTheme(
+    ambientTheme: AmbientTheme, provider: AmbientProviderInterface,
     store: PersonalizationStore): void {
-  provider.setAnimationTheme(animationTheme);
+  provider.setAmbientTheme(ambientTheme);
 
-  store.dispatch(setAnimationThemeAction(animationTheme));
+  store.dispatch(setAmbientThemeAction(ambientTheme));
+}
+
+// Set ambient mode screen saver running duration in minutes.
+export function setScreenSaverDuration(
+    minutes: number, provider: AmbientProviderInterface,
+    store: PersonalizationStore): void {
+  provider.setScreenSaverDuration(minutes);
+  store.dispatch(setScreenSaverDurationAction(minutes));
 }
 
 // Set ambient mode topic source.
 export function setTopicSource(
     topicSource: TopicSource, provider: AmbientProviderInterface,
     store: PersonalizationStore): void {
+  assert(
+      isValidTopicSourceAndTheme(topicSource, store.data.ambient.ambientTheme),
+      'invalid topic source and ambient theme combination');
   provider.setTopicSource(topicSource);
 
   // Dispatch action to select topic source.
@@ -67,4 +99,31 @@ export function setAlbumSelected(
 export function startScreenSaverPreview(provider: AmbientProviderInterface):
     void {
   provider.startScreenSaverPreview();
+}
+
+export async function getShouldShowTimeOfDayBanner(
+    store: PersonalizationStore) {
+  const {shouldShowBanner} =
+      await getAmbientProvider().shouldShowTimeOfDayBanner();
+
+  // Dispatch action to set the should show banner boolean.
+  store.dispatch(setShouldShowTimeOfDayBannerAction(shouldShowBanner));
+}
+
+
+// Sets shouldShowTimeOfDayBanner to false.
+export function dismissTimeOfDayBanner(store: PersonalizationStore): void {
+  if (!store.data.ambient.shouldShowTimeOfDayBanner) {
+    // Do nothing if the banner is already dismissed;
+    return;
+  }
+  getAmbientProvider().handleTimeOfDayBannerDismissed();
+
+  store.dispatch(setShouldShowTimeOfDayBannerAction(false));
+}
+
+export function enableGeolocationForSystemServices(
+    store: PersonalizationStore) {
+  getAmbientProvider().enableGeolocationForSystemServices();
+  store.dispatch(setGeolocationPermissionEnabledAction(true));
 }

@@ -5,27 +5,19 @@
 #ifndef MEDIA_GPU_V4L2_TEST_AV1_DECODER_H_
 #define MEDIA_GPU_V4L2_TEST_AV1_DECODER_H_
 
-#include "media/gpu/v4l2/test/video_decoder.h"
-
+#include <array>
 #include <set>
 
 #include "base/files/memory_mapped_file.h"
-#include "media/filters/ivf_parser.h"
 #include "media/gpu/v4l2/test/v4l2_ioctl_shim.h"
-// For libgav1::ObuSequenceHeader. absl::optional demands ObuSequenceHeader to
+#include "media/gpu/v4l2/test/video_decoder.h"
+#include "media/parsers/ivf_parser.h"
+// For libgav1::ObuSequenceHeader. std::optional demands ObuSequenceHeader to
 // fulfill std::is_trivially_constructible if it is forward-declared. But
 // ObuSequenceHeader doesn't.
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/libgav1/src/src/obu_parser.h"
+#include <optional>
 
-// TODO(stevecho): RESTORATION_TILESIZE_MAX in the spec is not available in the
-// AV1 uAPI. It was recommended to be added in the userspace code. If the uAPI
-// stays as it is for upstreaming, then #ifndef can be removed. If the uAPI ends
-// up adding this constant, then we can remove this define at that time.
-// https://patchwork.linuxtv.org/project/linux-media/patch/20210810220552.298140-2-daniel.almeida@collabora.com/
-#ifndef V4L2_AV1_RESTORATION_TILESIZE_MAX
-#define V4L2_AV1_RESTORATION_TILESIZE_MAX 256
-#endif
+#include "third_party/libgav1/src/src/obu_parser.h"
 
 struct v4l2_ctrl_av1_frame;
 
@@ -46,15 +38,15 @@ class Av1Decoder : public VideoDecoder {
   static std::unique_ptr<Av1Decoder> Create(
       const base::MemoryMappedFile& stream);
 
-  // TODO(stevecho): implement DecodeNextFrame() function
   // Parses next frame from IVF stream and decodes the frame. This method will
   // place the Y, U, and V values into the respective vectors and update the
   // size with the display area size of the decoded frame.
-  VideoDecoder::Result DecodeNextFrame(std::vector<char>& y_plane,
-                                       std::vector<char>& u_plane,
-                                       std::vector<char>& v_plane,
+  VideoDecoder::Result DecodeNextFrame(const int frame_number,
+                                       std::vector<uint8_t>& y_plane,
+                                       std::vector<uint8_t>& u_plane,
+                                       std::vector<uint8_t>& v_plane,
                                        gfx::Size& size,
-                                       const int frame_number) override;
+                                       BitDepth& bit_depth) override;
 
  private:
   enum class ParsingResult {
@@ -65,8 +57,7 @@ class Av1Decoder : public VideoDecoder {
 
   Av1Decoder(std::unique_ptr<IvfParser> ivf_parser,
              std::unique_ptr<V4L2IoctlShim> v4l2_ioctl,
-             std::unique_ptr<V4L2Queue> OUTPUT_queue,
-             std::unique_ptr<V4L2Queue> CAPTURE_queue);
+             gfx::Size display_resolution);
 
   // Reads an OBU frame, if there is one available. If an |obu_parser_|
   // didn't exist and there is data to be read, |obu_parser_| will be
@@ -85,7 +76,7 @@ class Av1Decoder : public VideoDecoder {
   // with VIDIOC_S_EXT_CTRLS ioctl call.
   void SetupFrameParams(
       struct v4l2_ctrl_av1_frame* v4l2_frame_params,
-      const absl::optional<libgav1::ObuSequenceHeader>& seq_header,
+      const std::optional<libgav1::ObuSequenceHeader>& seq_header,
       const libgav1::ObuFrameHeader& frm_header);
 
   // Refreshes |ref_frames_| slots with the current |buffer| and refreshes
@@ -96,8 +87,8 @@ class Av1Decoder : public VideoDecoder {
   std::set<int> RefreshReferenceSlots(
       const libgav1::ObuFrameHeader& frame_hdr,
       const libgav1::RefCountedBufferPtr current_frame,
-      const scoped_refptr<MmapedBuffer> buffer,
-      const uint32_t last_queued_buffer_index);
+      const scoped_refptr<MmappedBuffer> buffer,
+      const uint32_t last_queued_buffer_id);
 
   // Queues reusable buffers in CAPTURE queue, indicated by
   // |reusable_buffer_ids|. Saves buffer ids for inter frames to prevent
@@ -107,7 +98,7 @@ class Av1Decoder : public VideoDecoder {
       const bool is_inter_frame);
 
   // Reference frames currently in use.
-  std::array<scoped_refptr<MmapedBuffer>, kAv1NumRefFrames> ref_frames_;
+  std::array<scoped_refptr<MmappedBuffer>, kAv1NumRefFrames> ref_frames_;
 
   // Represents the least significant bits of the expected output order of the
   // frames. Corresponds to |RefOrderHint| in the AV1 spec.
@@ -124,7 +115,7 @@ class Av1Decoder : public VideoDecoder {
   std::unique_ptr<libgav1::ObuParser> obu_parser_;
   std::unique_ptr<libgav1::BufferPool> buffer_pool_;
   std::unique_ptr<libgav1::DecoderState> state_;
-  absl::optional<libgav1::ObuSequenceHeader> current_sequence_header_;
+  std::optional<libgav1::ObuSequenceHeader> current_sequence_header_;
 };
 
 }  // namespace v4l2_test

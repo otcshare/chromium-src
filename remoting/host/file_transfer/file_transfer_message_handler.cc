@@ -7,8 +7,8 @@
 #include <cstddef>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "net/base/filename_util.h"
@@ -283,7 +283,6 @@ void FileTransferMessageHandler::SetState(State state) {
     case kConnected:
       // This is the initial state, but should never be reached again.
       NOTREACHED();
-      break;
     case kReading:
       DCHECK_EQ(kConnected, state_);
       break;

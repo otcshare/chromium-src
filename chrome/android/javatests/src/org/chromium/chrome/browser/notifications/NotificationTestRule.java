@@ -4,22 +4,26 @@
 
 package org.chromium.chrome.browser.notifications;
 
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
+
 import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.components.browser_ui.modaldialog.ModalDialogView;
+import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxyFactory;
 import org.chromium.components.browser_ui.notifications.MockNotificationManagerProxy;
 import org.chromium.components.browser_ui.notifications.MockNotificationManagerProxy.NotificationEntry;
 import org.chromium.components.browser_ui.site_settings.PermissionInfo;
-import org.chromium.components.content_settings.ContentSettingValues;
+import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.components.content_settings.SessionModel;
 
 import java.util.List;
 import java.util.concurrent.TimeoutException;
@@ -27,7 +31,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * Base class for instrumentation tests using Web Notifications on Android.
  *
- * Web Notifications are only supported on Android JellyBean and beyond.
+ * <p>Web Notifications are only supported on Android JellyBean and beyond.
  */
 public class NotificationTestRule extends ChromeTabbedActivityTestRule {
     /** The maximum time to wait for a criteria to become valid. */
@@ -41,30 +45,34 @@ public class NotificationTestRule extends ChromeTabbedActivityTestRule {
     private void setUp() {
         // The NotificationPlatformBridge must be overriden prior to the browser process starting.
         mMockNotificationManager = new MockNotificationManagerProxy();
-        NotificationPlatformBridge.overrideNotificationManagerForTesting(mMockNotificationManager);
-        startMainActivityWithURL(UrlConstants.NTP_URL);
-    }
-
-    private void tearDown() {
-        NotificationPlatformBridge.overrideNotificationManagerForTesting(null);
+        BaseNotificationManagerProxyFactory.setInstanceForTesting(mMockNotificationManager);
+        startMainActivityWithURL(getOriginalNativeNtpUrl());
+        ModalDialogView.disableButtonTapProtectionForTesting();
     }
 
     /**
      * Sets the permission to use Web Notifications for the test HTTP server's origin to |setting|.
      */
     public void setNotificationContentSettingForOrigin(
-            final @ContentSettingValues int setting, String origin) throws TimeoutException {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            // The notification content setting does not consider the embedder origin.
-            PermissionInfo notificationInfo =
-                    new PermissionInfo(ContentSettingsType.NOTIFICATIONS, origin, "", false);
-            notificationInfo.setContentSetting(Profile.getLastUsedRegularProfile(), setting);
-        });
+            final @ContentSetting int setting, String origin) throws TimeoutException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // The notification content setting does not consider the embedder origin.
+                    PermissionInfo notificationInfo =
+                            new PermissionInfo(
+                                    ContentSettingsType.NOTIFICATIONS,
+                                    origin,
+                                    "",
+                                    /* isEmbargoed= */ false,
+                                    SessionModel.DURABLE);
+                    notificationInfo.setContentSetting(
+                            ProfileManager.getLastUsedRegularProfile(), setting);
+                });
 
         String permission = runJavaScriptCodeInCurrentTab("Notification.permission");
-        if (setting == ContentSettingValues.ALLOW) {
+        if (setting == ContentSetting.ALLOW) {
             Assert.assertEquals("\"granted\"", permission);
-        } else if (setting == ContentSettingValues.BLOCK) {
+        } else if (setting == ContentSetting.BLOCK) {
             Assert.assertEquals("\"denied\"", permission);
         } else {
             Assert.assertEquals("\"default\"", permission);
@@ -93,21 +101,46 @@ public class NotificationTestRule extends ChromeTabbedActivityTestRule {
      * called into Android to notify or cancel a notification.
      */
     public void waitForNotificationManagerMutation() {
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(mMockNotificationManager.getMutationCountAndDecrement(),
-                    Matchers.greaterThan(0));
-        }, MAX_TIME_TO_POLL_MS, POLLING_INTERVAL_MS);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            mMockNotificationManager.getMutationCountAndDecrement(),
+                            Matchers.greaterThan(0));
+                },
+                MAX_TIME_TO_POLL_MS,
+                POLLING_INTERVAL_MS);
+    }
+
+    public void flushNotificationManagerMutations() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    while (mMockNotificationManager.getMutationCountAndDecrement() > 0) {}
+                });
+    }
+
+    /**
+     * Waits until the specified number of notifications are active in the mocked
+     * NotificationManager.
+     */
+    public void waitForNotificationCount(int count) {
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(getNotificationEntries().size(), Matchers.equalTo(count));
+                },
+                MAX_TIME_TO_POLL_MS,
+                POLLING_INTERVAL_MS);
     }
 
     @Override
     public Statement apply(final Statement base, Description description) {
-        return super.apply(new Statement() {
-            @Override
-            public void evaluate() throws Throwable {
-                setUp();
-                base.evaluate();
-                tearDown();
-            }
-        }, description);
+        return super.apply(
+                new Statement() {
+                    @Override
+                    public void evaluate() throws Throwable {
+                        setUp();
+                        base.evaluate();
+                    }
+                },
+                description);
     }
 }

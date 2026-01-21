@@ -22,8 +22,8 @@
 #elif BUILDFLAG(IS_APPLE)
 #include <mach/vm_map.h>
 
-#include "base/mac/mach_logging.h"
-#include "base/mac/scoped_mach_port.h"
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
 #endif
 
 #if BUILDFLAG(IS_POSIX)
@@ -38,26 +38,24 @@ namespace {
 
 #if BUILDFLAG(IS_WIN)
 base::win::ScopedHandle CloneHandle(const base::win::ScopedHandle& handle) {
-  DCHECK(handle.IsValid());
+  DCHECK(handle.is_valid());
 
-  HANDLE dupe;
-  BOOL result = FALSE;
-
-  // INVALID_HANDLE_VALUE and the process pseudo-handle are both represented as
-  // the value -1. This means that if a caller does not correctly check the
-  // handle returned by file and pipe creation APIs, then it would pass an
-  // INVALID_HANDLE_VALUE to the code below, which would result in the
-  // destination process getting full control over the calling process (see
-  // http://crbug.com/243339 for an example of this vulnerability). So, we just
-  // explicitly check for INVALID_HANDLE_VALUE, since there's no valid scenario
-  // in which it would be passed as the source handle here.
-  if (handle.Get() != INVALID_HANDLE_VALUE) {
-    result = ::DuplicateHandle(::GetCurrentProcess(), handle.Get(),
-                               ::GetCurrentProcess(), &dupe, 0, FALSE,
-                               DUPLICATE_SAME_ACCESS);
-  }
-  if (!result)
+  // If a caller does not correctly check the handle returned by file and pipe
+  // creation APIs, or directly provides a pseudo handle value like
+  // ::GetCurrentThread(), then it would result in the destination process
+  // getting full control over the calling process (see http://crbug.com/243339
+  // for an example of this vulnerability). HandleTraits for Windows rejects
+  // pseudo handle values, but check again here for defense-in-depth.
+  if (!handle.is_valid()) {
     return base::win::ScopedHandle();
+  }
+
+  HANDLE dupe = nullptr;
+  if (!::DuplicateHandle(::GetCurrentProcess(), handle.Get(),
+                         ::GetCurrentProcess(), &dupe, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+    return base::win::ScopedHandle();
+  }
   DCHECK_NE(dupe, INVALID_HANDLE_VALUE);
   return base::win::ScopedHandle(dupe);
 }
@@ -67,22 +65,23 @@ zx::handle CloneHandle(const zx::handle& handle) {
 
   zx::handle dupe;
   zx_status_t result = handle.duplicate(ZX_RIGHT_SAME_RIGHTS, &dupe);
-  if (result != ZX_OK)
+  if (result != ZX_OK) {
     ZX_DLOG(ERROR, result) << "zx_duplicate_handle";
+  }
   return std::move(dupe);
 }
 #elif BUILDFLAG(IS_APPLE)
-base::mac::ScopedMachSendRight CloneMachPort(
-    const base::mac::ScopedMachSendRight& mach_port) {
+base::apple::ScopedMachSendRight CloneMachPort(
+    const base::apple::ScopedMachSendRight& mach_port) {
   DCHECK(mach_port.is_valid());
 
   kern_return_t kr = mach_port_mod_refs(mach_task_self(), mach_port.get(),
                                         MACH_PORT_RIGHT_SEND, 1);
   if (kr != KERN_SUCCESS) {
     MACH_DLOG(ERROR, kr) << "mach_port_mod_refs";
-    return base::mac::ScopedMachSendRight();
+    return base::apple::ScopedMachSendRight();
   }
-  return base::mac::ScopedMachSendRight(mach_port.get());
+  return base::apple::ScopedMachSendRight(mach_port.get());
 }
 #endif
 
@@ -108,9 +107,9 @@ PlatformHandle::PlatformHandle(base::win::ScopedHandle handle)
 PlatformHandle::PlatformHandle(zx::handle handle)
     : type_(Type::kHandle), handle_(std::move(handle)) {}
 #elif BUILDFLAG(IS_APPLE)
-PlatformHandle::PlatformHandle(base::mac::ScopedMachSendRight mach_port)
+PlatformHandle::PlatformHandle(base::apple::ScopedMachSendRight mach_port)
     : type_(Type::kMachSend), mach_send_(std::move(mach_port)) {}
-PlatformHandle::PlatformHandle(base::mac::ScopedMachReceiveRight mach_port)
+PlatformHandle::PlatformHandle(base::apple::ScopedMachReceiveRight mach_port)
     : type_(Type::kMachReceive), mach_receive_(std::move(mach_port)) {}
 #endif
 
@@ -201,26 +200,29 @@ PlatformHandle PlatformHandle::FromMojoPlatformHandle(
   }
 
 #if BUILDFLAG(IS_WIN)
-  if (handle->type != MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE)
+  if (handle->type != MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE) {
     return PlatformHandle();
+  }
   return PlatformHandle(
       base::win::ScopedHandle(LongToHandle(static_cast<long>(handle->value))));
 #elif BUILDFLAG(IS_FUCHSIA)
-  if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE)
+  if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE) {
     return PlatformHandle(zx::handle(handle->value));
+  }
 #elif BUILDFLAG(IS_APPLE)
   if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_MACH_SEND_RIGHT) {
-    return PlatformHandle(base::mac::ScopedMachSendRight(
+    return PlatformHandle(base::apple::ScopedMachSendRight(
         static_cast<mach_port_t>(handle->value)));
   } else if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_MACH_RECEIVE_RIGHT) {
-    return PlatformHandle(base::mac::ScopedMachReceiveRight(
+    return PlatformHandle(base::apple::ScopedMachReceiveRight(
         static_cast<mach_port_t>(handle->value)));
   }
 #endif
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
-  if (handle->type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
+  if (handle->type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR) {
     return PlatformHandle();
+  }
   return PlatformHandle(base::ScopedFD(static_cast<int>(handle->value)));
 #endif
 }
@@ -263,12 +265,14 @@ PlatformHandle PlatformHandle::Clone() const {
 #if BUILDFLAG(IS_WIN)
   return PlatformHandle(CloneHandle(handle_));
 #elif BUILDFLAG(IS_FUCHSIA)
-  if (is_valid_handle())
+  if (is_valid_handle()) {
     return PlatformHandle(CloneHandle(handle_));
+  }
   return PlatformHandle(CloneFD(fd_));
 #elif BUILDFLAG(IS_APPLE)
-  if (is_valid_mach_send())
+  if (is_valid_mach_send()) {
     return PlatformHandle(CloneMachPort(mach_send_));
+  }
   CHECK(!is_valid_mach_receive()) << "Cannot clone Mach receive rights";
   return PlatformHandle(CloneFD(fd_));
 #elif BUILDFLAG(IS_POSIX)

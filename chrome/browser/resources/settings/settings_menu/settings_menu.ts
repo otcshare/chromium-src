@@ -8,21 +8,30 @@
  */
 import 'chrome://resources/cr_elements/cr_icons.css.js';
 import 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
+import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
 import 'chrome://resources/cr_elements/cr_nav_menu_item_style.css.js';
+import 'chrome://resources/cr_elements/cr_ripple/cr_ripple.js';
+import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/cr_elements/icons.html.js';
-import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
-import 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import '../settings_vars.css.js';
 import '../icons.html.js';
-import '../settings_shared.css.js';
+// <if expr="_google_chrome">
+import '../internal/icons.html.js';
 
-import {CrMenuSelector} from 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
-import {assert} from 'chrome://resources/js/assert_ts.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {DomIf, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+// </if>
 
-import {PageVisibility} from '../page_visibility.js';
-import {routes} from '../route.js';
-import {Route, RouteObserverMixin, RouteObserverMixinInterface, Router} from '../router.js';
+import type {CrMenuSelector} from 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {loadTimeData} from '../i18n_setup.js';
+import type {MetricsBrowserProxy} from '../metrics_browser_proxy.js';
+import {AutofillSettingsReferrer, MetricsBrowserProxyImpl} from '../metrics_browser_proxy.js';
+import {pageVisibility} from '../page_visibility.js';
+import type {PageVisibility} from '../page_visibility.js';
+import type {Route} from '../router.js';
+import {RouteObserverMixin, Router} from '../router.js';
 
 import {getTemplate} from './settings_menu.html.js';
 
@@ -31,11 +40,11 @@ export interface SettingsMenuElement {
     autofill: HTMLLinkElement,
     menu: CrMenuSelector,
     people: HTMLLinkElement,
+    yourSavedInfo: HTMLLinkElement,
   };
 }
 
-const SettingsMenuElementBase = RouteObserverMixin(PolymerElement) as
-    {new (): PolymerElement & RouteObserverMixinInterface};
+const SettingsMenuElementBase = RouteObserverMixin(PolymerElement);
 
 export class SettingsMenuElement extends SettingsMenuElementBase {
   static get is() {
@@ -51,49 +60,73 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       /**
        * Dictionary defining page visibility.
        */
-      pageVisibility: Object,
+      pageVisibility_: {
+        type: Object,
+        value: () => pageVisibility,
+      },
 
-      performanceFeaturesAvailable_: {
+      showAiPage_: {
         type: Boolean,
-        value: function() {
-          return loadTimeData.getBoolean('highEfficiencyModeAvailable') ||
-              loadTimeData.getBoolean('batterySaverModeAvailable');
+        value: () => loadTimeData.getBoolean('showAiPage'),
+      },
+
+      enableYourSavedInfoSettingsPage_: {
+        type: Boolean,
+        value: () => {
+          return loadTimeData.getBoolean('enableYourSavedInfoSettingsPage');
         },
+      },
+
+      /**
+       * Icon name to be used for the autofill section.
+       */
+      autofillIcon_: {
+        type: String,
+        value: () => loadTimeData.getBoolean('enableYourSavedInfoBranding') ?
+            'settings20:person-text' :
+            'settings:assignment',
       },
     };
   }
 
-  pageVisibility: PageVisibility;
-  private performanceFeaturesAvailable_: boolean;
+  declare private pageVisibility_?: PageVisibility;
+  declare private showAiPage_: boolean;
+  declare private enableYourSavedInfoSettingsPage_: boolean;
+  declare private autofillIcon_: string;
+  private metricsBrowserProxy_: MetricsBrowserProxy =
+      MetricsBrowserProxyImpl.getInstance();
+
+  private showAiPageMenuItem_(): boolean {
+    return this.showAiPage_ &&
+        (!this.pageVisibility_ || this.pageVisibility_.ai !== false);
+  }
+
+  private showYourSavedInfoPageMenuItem_(): boolean {
+    return this.enableYourSavedInfoSettingsPage_ &&
+        (!this.pageVisibility_ ||
+          this.pageVisibility_.yourSavedInfo !== false);
+  }
+
+  private showAutofillPageMenuItem_(): boolean {
+    return !this.enableYourSavedInfoSettingsPage_ &&
+        (!this.pageVisibility_ ||
+          this.pageVisibility_.autofill !== false);
+  }
 
   override currentRouteChanged(newRoute: Route) {
-    if (this.performanceFeaturesAvailable_ && newRoute === routes.PERFORMANCE) {
-      // Add special handling for the Performance section, since the
-      // corresponding menu entry resides in a dom-if and is normally not
-      // present in the DOM during initial load. Force-render the dom-if
-      // instead.
-      const anchor = this.shadowRoot!.querySelector('#performance');
-      if (anchor === null) {
-        const domIf =
-            this.shadowRoot!.querySelector<DomIf>('#performanceDomIf');
-        assert(domIf);
-        assert(domIf.if);
-        domIf.render();
-      }
-    }
-
     // Focus the initially selected path.
     const anchors = this.shadowRoot!.querySelectorAll('a');
     for (let i = 0; i < anchors.length; ++i) {
-      const anchorRoute = Router.getInstance().getRouteForPath(
-          anchors[i].getAttribute('href')!);
+      // Purposefully grabbing the 'href' attribute and not the property.
+      const pathname = anchors[i].getAttribute('href')!;
+      const anchorRoute = Router.getInstance().getRouteForPath(pathname);
       if (anchorRoute && anchorRoute.contains(newRoute)) {
-        this.setSelectedUrl_(anchors[i].href);
+        this.setSelectedPath_(pathname);
         return;
       }
     }
 
-    this.setSelectedUrl_('');  // Nothing is selected.
+    this.setSelectedPath_('');  // Nothing is selected.
   }
 
   focusFirstItem() {
@@ -106,7 +139,7 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
 
   /**
    * Prevent clicks on sidebar items from navigating. These are only links for
-   * accessibility purposes, taps are handled separately by <iron-selector>.
+   * accessibility purposes, taps are handled separately.
    */
   private onLinkClick_(event: Event) {
     if ((event.target as HTMLElement).matches('a:not(#extensionsLink)')) {
@@ -115,26 +148,61 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   }
 
   /**
-   * Keeps both menus in sync. |url| needs to come from |element.href| because
-   * |iron-list| uses the entire url. Using |getAttribute| will not work.
+   * Keeps both menus in sync. `path` needs to come from
+   * `element.getAttribute('href')`. Using `element.href` will not work as it
+   * would pass the entire URL instead of just the path.
    */
-  private setSelectedUrl_(url: string) {
-    this.$.menu.selected = url;
+  private setSelectedPath_(path: string) {
+    this.$.menu.selected = path;
   }
 
   private onSelectorActivate_(event: CustomEvent<{selected: string}>) {
-    this.setSelectedUrl_(event.detail.selected);
+    const path = event.detail.selected;
+    this.setSelectedPath_(path);
 
-    const path = new URL(event.detail.selected).pathname;
     const route = Router.getInstance().getRouteForPath(path);
     assert(route, 'settings-menu has an entry with an invalid route.');
     Router.getInstance().navigateTo(
-        route!, /* dynamicParams */ undefined, /* removeSearch */ true);
+        route, /* dynamicParams */ undefined, /* removeSearch */ true);
   }
 
   private onExtensionsLinkClick_() {
     chrome.metricsPrivate.recordUserAction(
         'SettingsMenu_ExtensionsLinkClicked');
+  }
+
+  private onAutofillClick_() {
+    this.metricsBrowserProxy_.recordAutofillSettingsReferrer(
+        'Autofill.AutofillAndPasswordsSettingsPage.VisitReferrer',
+        AutofillSettingsReferrer.SETTINGS_MENU);
+  }
+
+  private onYourSavedInfoClick_() {
+    this.metricsBrowserProxy_.recordAutofillSettingsReferrer(
+        'Autofill.YourSavedInfoSettingsPage.VisitReferrer',
+        AutofillSettingsReferrer.SETTINGS_MENU);
+  }
+
+  private onAiPageClick_() {
+    this.metricsBrowserProxy_.recordAction(
+        'SettingsMenu_AiPageEntryPointClicked');
+  }
+
+  private hideBottomMenuSeparator_(): boolean {
+    if (!this.pageVisibility_) {
+      return false;
+    }
+
+    const visibilities = [
+      this.pageVisibility_.languages,
+      this.pageVisibility_.downloads,
+      this.pageVisibility_.a11y,
+      // <if expr="not is_chromeos">
+      this.pageVisibility_.system,
+      // </if>
+      this.pageVisibility_.reset,
+    ];
+    return visibilities.every(visibility => visibility === false);
   }
 }
 

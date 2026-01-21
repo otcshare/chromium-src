@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/base/address_list.h"
@@ -38,8 +39,8 @@ void FakeStreamSocket::AppendInputData(const std::string& data) {
     int result = std::min(read_buffer_size_,
                           static_cast<int>(input_data_.size() - input_pos_));
     EXPECT_GT(result, 0);
-    memcpy(read_buffer_->data(),
-           &(*input_data_.begin()) + input_pos_, result);
+    UNSAFE_TODO(memcpy(read_buffer_->data(),
+                       &(*input_data_.begin()) + input_pos_, result));
     input_pos_ += result;
     read_buffer_ = nullptr;
 
@@ -73,13 +74,14 @@ int FakeStreamSocket::Read(const scoped_refptr<net::IOBuffer>& buf,
   EXPECT_TRUE(task_runner_->BelongsToCurrentThread());
 
   if (input_pos_ < static_cast<int>(input_data_.size())) {
-    int result = std::min(buf_len,
-                          static_cast<int>(input_data_.size()) - input_pos_);
-    memcpy(buf->data(), &(*input_data_.begin()) + input_pos_, result);
+    int result =
+        std::min(buf_len, static_cast<int>(input_data_.size()) - input_pos_);
+    UNSAFE_TODO(
+        memcpy(buf->data(), &(*input_data_.begin()) + input_pos_, result));
     input_pos_ += result;
     return result;
   } else if (next_read_error_.has_value()) {
-    int r = next_read_error_.value();
+    int r = *next_read_error_;
     next_read_error_.reset();
     return r;
   } else {
@@ -98,8 +100,9 @@ int FakeStreamSocket::Write(
   EXPECT_TRUE(task_runner_->BelongsToCurrentThread());
   EXPECT_FALSE(write_pending_);
 
-  if (write_limit_ > 0)
+  if (write_limit_ > 0) {
     buf_len = std::min(write_limit_, buf_len);
+  }
 
   if (async_write_) {
     task_runner_->PostTask(
@@ -139,14 +142,15 @@ void FakeStreamSocket::DoAsyncWrite(const scoped_refptr<net::IOBuffer>& buf,
 
 void FakeStreamSocket::DoWrite(const scoped_refptr<net::IOBuffer>& buf,
                                int buf_len) {
-  written_data_.insert(written_data_.end(),
-                       buf->data(), buf->data() + buf_len);
+  written_data_.insert(written_data_.end(), buf->data(),
+                       UNSAFE_TODO(buf->data() + buf_len));
 
   if (peer_socket_) {
     task_runner_->PostTask(
         FROM_HERE,
-        base::BindOnce(&FakeStreamSocket::AppendInputData, peer_socket_,
-                       std::string(buf->data(), buf->data() + buf_len)));
+        base::BindOnce(
+            &FakeStreamSocket::AppendInputData, peer_socket_,
+            std::string(buf->data(), UNSAFE_TODO(buf->data() + buf_len))));
   }
 }
 
@@ -174,12 +178,14 @@ void FakeStreamChannelFactory::CreateChannel(const std::string& name,
 
   if (peer_factory_) {
     FakeStreamSocket* peer_channel = peer_factory_->GetFakeChannel(name);
-    if (peer_channel)
+    if (peer_channel) {
       channel->PairWith(peer_channel);
+    }
   }
 
-  if (fail_create_)
+  if (fail_create_) {
     channel.reset();
+  }
 
   if (asynchronous_create_) {
     task_runner_->PostTask(
@@ -196,8 +202,9 @@ void FakeStreamChannelFactory::NotifyChannelCreated(
     std::unique_ptr<FakeStreamSocket> owned_channel,
     const std::string& name,
     ChannelCreatedCallback callback) {
-  if (channels_.find(name) != channels_.end())
+  if (channels_.contains(name)) {
     std::move(callback).Run(std::move(owned_channel));
+  }
 }
 
 void FakeStreamChannelFactory::CancelChannelCreation(const std::string& name) {

@@ -7,6 +7,7 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/arc/input_overlay/db/proto/app_data.pb.h"
 #include "content/public/browser/browser_context.h"
 
@@ -19,10 +20,10 @@ class DataController {
   ~DataController();
 
   // Read Proto object from file and return the Proto object for app
-  // |file_path|.
+  // `file_path`.
   static std::unique_ptr<AppDataProto> ReadProtoFromFile(
       base::FilePath file_path);
-  // Write the Proto object |proto| to file for app |file_path|.
+  // Write the Proto object `proto` to file for app `file_path`.
   static bool WriteProtoToFile(std::unique_ptr<AppDataProto> proto,
                                base::FilePath file_path);
 

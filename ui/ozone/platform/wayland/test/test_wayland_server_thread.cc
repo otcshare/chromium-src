@@ -11,11 +11,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
-#include "base/functional/callback_forward.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
@@ -28,8 +27,14 @@ namespace {
 
 void handle_client_destroyed(struct wl_listener* listener, void* data) {
   TestServerListener* destroy_listener =
-      wl_container_of(listener, /*sample=*/destroy_listener,
-                      /*member=*/listener);
+      // SAFETY: wl_container_of is used to calculate the address of the
+      // containing TestServerListener struct, which uses unsafe pointer
+      // arithmetic. This is valid because `listener` is guaranteed to be
+      // contained inside a TestServerListener, which is true because of
+      // how handle_client_destroyed is registered, down in
+      // TestWaylandServerThread::Start
+      UNSAFE_BUFFERS(wl_container_of(listener, /*sample=*/destroy_listener,
+                                     /*member=*/listener));
   DCHECK(destroy_listener);
   destroy_listener->test_server->OnClientDestroyed(
       static_cast<struct wl_client*>(data));
@@ -42,10 +47,13 @@ void DisplayDeleter::operator()(wl_display* display) {
 }
 
 TestWaylandServerThread::TestWaylandServerThread()
+    : TestWaylandServerThread(ServerConfig{}) {}
+
+TestWaylandServerThread::TestWaylandServerThread(const ServerConfig& config)
     : Thread("test_wayland_server"),
       client_destroy_listener_(this),
-      compositor_v4_(4),
-      compositor_v3_(3),
+      config_(config),
+      compositor_(config.compositor_version),
       controller_(FROM_HERE) {
   DETACH_FROM_THREAD(thread_checker_);
 }
@@ -63,8 +71,12 @@ TestWaylandServerThread::~TestWaylandServerThread() {
 
   Stop();
 
-  if (protocol_logger_)
-    wl_protocol_logger_destroy(protocol_logger_);
+  if (protocol_logger_) {
+    auto* temp = protocol_logger_.get();
+    protocol_logger_ = nullptr;
+    wl_protocol_logger_destroy(temp);
+    temp = nullptr;
+  }
   protocol_logger_ = nullptr;
 
   // Check if the client has been destroyed after the thread is stopped. This
@@ -77,7 +89,7 @@ TestWaylandServerThread::~TestWaylandServerThread() {
   client_ = nullptr;
 }
 
-bool TestWaylandServerThread::Start(const ServerConfig& config) {
+bool TestWaylandServerThread::Start() {
   display_.reset(wl_display_create());
   if (!display_)
     return false;
@@ -91,12 +103,8 @@ bool TestWaylandServerThread::Start(const ServerConfig& config) {
 
   if (wl_display_init_shm(display_.get()) < 0)
     return false;
-  if (config.compositor_version == CompositorVersion::kV3) {
-    if (!compositor_v3_.Initialize(display_.get()))
-      return false;
-  } else {
-    if (!compositor_v4_.Initialize(display_.get()))
-      return false;
+  if (!compositor_.Initialize(display_.get())) {
+    return false;
   }
   if (!sub_compositor_.Initialize(display_.get()))
     return false;
@@ -105,14 +113,20 @@ bool TestWaylandServerThread::Start(const ServerConfig& config) {
   if (!alpha_compositing_.Initialize(display_.get()))
     return false;
 
+  if (config_.supports_viewporter_surface_scaling) {
+    if (!fractional_scale_manager_.Initialize(display_.get())) {
+      return false;
+    }
+  }
+
   if (!output_.Initialize(display_.get()))
     return false;
-  SetupOutputs();
 
   if (!data_device_manager_.Initialize(display_.get()))
     return false;
-  if (!SetupPrimarySelectionManager(config.primary_selection_protocol))
+  if (!SetupPrimarySelectionManager(config_.primary_selection_protocol)) {
     return false;
+  }
 
   if (!seat_.Initialize(display_.get()))
     return false;
@@ -120,30 +134,30 @@ bool TestWaylandServerThread::Start(const ServerConfig& config) {
   if (!xdg_shell_.Initialize(display_.get()))
     return false;
 
-  if (config.enable_aura_shell == EnableAuraShellProtocol::kEnabled) {
-    if (!zxdg_output_manager_.Initialize(display_.get()))
+  if (config_.text_input_type == ZwpTextInputType::kV3) {
+    if (!zwp_text_input_manager_v3_.Initialize(display_.get())) {
       return false;
-
-    output_.set_aura_shell_enabled();
-    if (!zaura_shell_.Initialize(display_.get()))
+    }
+  } else {
+    if (!zwp_text_input_manager_v1_.Initialize(display_.get())) {
       return false;
+    }
   }
-
-  if (!zcr_stylus_.Initialize(display_.get()))
+  if (!SetupLinuxDrmSyncobjProtocol(config_.use_linux_drm_syncobj)) {
     return false;
-  if (!zcr_text_input_extension_v1_.Initialize(display_.get()))
-    return false;
-  if (!zwp_text_input_manager_v1_.Initialize(display_.get()))
-    return false;
-  if (!SetupExplicitSynchronizationProtocol(
-          config.use_explicit_synchronization))
-    return false;
+  }
   if (!zwp_linux_dmabuf_v1_.Initialize(display_.get()))
     return false;
   if (!overlay_prioritizer_.Initialize(display_.get()))
     return false;
   if (!wp_pointer_gestures_.Initialize(display_.get()))
     return false;
+  if (!xdg_activation_v1_.Initialize(display_.get())) {
+    return false;
+  }
+  if (!xdg_toplevel_icon_manager_v1_.Initialize(display_.get())) {
+    return false;
+  }
 
   client_ = wl_client_create(display_.get(), server_fd.release());
   if (!client_)
@@ -155,11 +169,19 @@ bool TestWaylandServerThread::Start(const ServerConfig& config) {
   protocol_logger_ = wl_display_add_protocol_logger(
       display_.get(), TestWaylandServerThread::ProtocolLogger, this);
 
+  // Setup a runloop that will be stopped when the message pump is finally
+  // created. This is required as getenv that a libevent calls internally is
+  // not thread-safe and may result in very rare crashes.
+  base::RunLoop run_loop;
+
   base::Thread::Options options;
-  options.message_pump_factory = base::BindRepeating(
-      &TestWaylandServerThread::CreateMessagePump, base::Unretained(this));
+  options.message_pump_factory =
+      base::BindRepeating(&TestWaylandServerThread::CreateMessagePump,
+                          base::Unretained(this), run_loop.QuitClosure());
   if (!base::Thread::StartWithOptions(std::move(options)))
     return false;
+
+  run_loop.Run();
 
   setenv("WAYLAND_SOCKET", base::NumberToString(client_fd.release()).c_str(),
          1);
@@ -185,19 +207,26 @@ void TestWaylandServerThread::RunAndWait(base::OnceClosure closure) {
   run_loop.Run();
 }
 
+void TestWaylandServerThread::Post(
+    base::OnceCallback<void(TestWaylandServerThread*)> callback) {
+  base::OnceClosure closure =
+      base::BindOnce(std::move(callback), base::Unretained(this));
+  Post(std::move(closure));
+}
+
+void TestWaylandServerThread::Post(base::OnceClosure closure) {
+  task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&TestWaylandServerThread::DoRun,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(closure)));
+}
+
 MockWpPresentation* TestWaylandServerThread::EnsureAndGetWpPresentation() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (wp_presentation_.resource())
     return &wp_presentation_;
   if (wp_presentation_.Initialize(display_.get()))
     return &wp_presentation_;
-  return nullptr;
-}
-
-TestSurfaceAugmenter* TestWaylandServerThread::EnsureSurfaceAugmenter() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (surface_augmenter_.Initialize(display_.get()))
-    return &surface_augmenter_;
   return nullptr;
 }
 
@@ -220,52 +249,40 @@ uint32_t TestWaylandServerThread::GetNextTime() {
   return ++timestamp;
 }
 
-// By default, just make sure primary screen has bounds set. Otherwise delegates
-// it, making it possible to emulate different scenarios, such as, multi-screen,
-// lazy configuration, arbitrary ordering of the outputs metadata sending, etc.
-void TestWaylandServerThread::SetupOutputs() {
-  if (output_delegate_) {
-    output_delegate_->SetupOutputs(&output_);
-    return;
-  }
-  if (output_.GetRect().IsEmpty())
-    output_.SetRect(gfx::Rect{0, 0, 800, 600});
-}
-
 bool TestWaylandServerThread::SetupPrimarySelectionManager(
     PrimarySelectionProtocol protocol) {
   switch (protocol) {
     case PrimarySelectionProtocol::kNone:
       return true;
     case PrimarySelectionProtocol::kZwp:
-      primary_selection_device_manager_.reset(CreateTestSelectionManagerZwp());
+      primary_selection_device_manager_ = CreateTestSelectionManagerZwp();
       break;
     case PrimarySelectionProtocol::kGtk:
-      primary_selection_device_manager_.reset(CreateTestSelectionManagerGtk());
+      primary_selection_device_manager_ = CreateTestSelectionManagerGtk();
       break;
   }
   return primary_selection_device_manager_->Initialize(display_.get());
 }
 
-bool TestWaylandServerThread::SetupExplicitSynchronizationProtocol(
-    ShouldUseExplicitSynchronizationProtocol usage) {
+bool TestWaylandServerThread::SetupLinuxDrmSyncobjProtocol(
+    ShouldUseLinuxDrmSyncobjProtocol usage) {
   switch (usage) {
-    case ShouldUseExplicitSynchronizationProtocol::kNone:
+    case wl::ShouldUseLinuxDrmSyncobjProtocol::kNone:
       return true;
-    case ShouldUseExplicitSynchronizationProtocol::kUse:
-      return zwp_linux_explicit_synchronization_v1_.Initialize(display_.get());
+    case wl::ShouldUseLinuxDrmSyncobjProtocol::kUse:
+      return wp_linux_drm_syncobj_manager_v1_.Initialize(display_.get());
   }
   NOTREACHED();
-  return false;
 }
 
-std::unique_ptr<base::MessagePump>
-TestWaylandServerThread::CreateMessagePump() {
+std::unique_ptr<base::MessagePump> TestWaylandServerThread::CreateMessagePump(
+    base::OnceClosure closure) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  auto pump = std::make_unique<base::MessagePumpLibevent>();
+  auto pump = std::make_unique<base::MessagePumpEpoll>();
   pump->WatchFileDescriptor(wl_event_loop_get_fd(event_loop_), true,
-                            base::MessagePumpLibevent::WATCH_READ, &controller_,
+                            base::MessagePumpEpoll::WATCH_READ, &controller_,
                             this);
+  std::move(closure).Run();
   return std::move(pump);
 }
 

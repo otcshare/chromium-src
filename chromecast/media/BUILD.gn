@@ -7,9 +7,12 @@ import("//media/media_options.gni")
 import("//testing/test.gni")
 
 declare_args() {
-  if (is_cast_desktop_build) {
-    # Desktop builds should set cast_static_media_lib_target explicitly if
-    # desired.
+  if (enable_starboard_media) {
+    cast_static_media_lib_target =
+        "//chromecast/starboard/media/media:starboard"
+  } else if (is_cast_desktop_build) {
+    # Non-starboard desktop builds should set cast_static_media_lib_target
+    # explicitly if desired.
     cast_static_media_lib_target = ""
   } else if (is_cast_audio_only) {
     cast_static_media_lib_target =
@@ -92,8 +95,10 @@ test("cast_media_unittests") {
     "//chromecast/media/cma:unittests",
     "//chromecast/media/common:media_pipeline_backend_manager",
     "//chromecast/media/common:test_media_resource_tracker",
+    "//chromecast/media/service:unittests",
     "//chromecast/public",
     "//content/test:test_support",
+    "//media:media_buildflags",
     "//media:test_support",
     "//media/mojo:test_support",
     "//mojo/core/embedder",
@@ -116,4 +121,8 @@ test("cast_media_unittests") {
     ]
     shard_timeout = 300
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

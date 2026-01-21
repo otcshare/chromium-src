@@ -8,7 +8,10 @@
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/shell_observer.h"
+#include "ash/system/tray/system_tray_observer.h"
 #include "ash/system/tray/tray_bubble_view.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/box_layout_view.h"
@@ -20,9 +23,9 @@ class FloatingMenuButton;
 class TrayBackgroundView;
 
 class FloatingAccessibilityBubbleView : public TrayBubbleView {
- public:
-  METADATA_HEADER(FloatingAccessibilityBubbleView);
+  METADATA_HEADER(FloatingAccessibilityBubbleView, TrayBubbleView)
 
+ public:
   explicit FloatingAccessibilityBubbleView(
       const TrayBubbleView::InitParams& init_params);
   FloatingAccessibilityBubbleView(const FloatingAccessibilityBubbleView&) =
@@ -34,6 +37,10 @@ class FloatingAccessibilityBubbleView : public TrayBubbleView {
   // TrayBubbleView:
   bool IsAnchoredToStatusArea() const override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+
+  // views::View:
+  void AdjustAccessibleName(std::u16string& new_name,
+                            ax::mojom::NameFrom& name_from) override;
 };
 
 BEGIN_VIEW_BUILDER(/* no export */,
@@ -49,10 +56,11 @@ END_VIEW_BUILDER
 // ----  | [Change menu location]
 class FloatingAccessibilityView : public views::BoxLayoutView,
                                   public views::ViewObserver,
-                                  public KeyboardControllerObserver {
- public:
-  METADATA_HEADER(FloatingAccessibilityView);
+                                  public KeyboardControllerObserver,
+                                  public SystemTrayObserver {
+  METADATA_HEADER(FloatingAccessibilityView, views::BoxLayoutView)
 
+ public:
   // Used for testing. Starts 1 because views IDs should not be 0.
   enum ButtonId {
     kPosition = 1,
@@ -69,6 +77,8 @@ class FloatingAccessibilityView : public views::BoxLayoutView,
     // When the layout of the view changes and we may need to reposition
     // ourselves.
     virtual void OnLayoutChanged() {}
+    virtual void OnFocused() {}
+    virtual void OnBlurred() {}
     virtual ~Delegate() = default;
   };
 
@@ -95,24 +105,49 @@ class FloatingAccessibilityView : public views::BoxLayoutView,
 
   // views::ViewObserver:
   void OnViewVisibilityChanged(views::View* observed_view,
-                               views::View* starting_view) override;
+                               views::View* starting_view,
+                               bool visible) override;
+  void OnViewFocused(views::View* view) override;
+  void OnViewBlurred(views::View* view) override;
 
   // KeyboardControllerObserver:
   void OnKeyboardVisibilityChanged(bool visible) override;
 
+  // SystemTrayObserver:
+  void OnFocusLeavingSystemTray(bool reverse) override;
+  void OnImeMenuTrayBubbleShown() override;
+
+  TrayBackgroundView* dictation_button() {
+    return dictation_button_observation_.GetSource();
+  }
+
+  TrayBackgroundView* select_to_speak_button() {
+    return select_to_speak_button_observation_.GetSource();
+  }
+
+  TrayBackgroundView* virtual_keyboard_button() {
+    return virtual_keyboard_button_observation_.GetSource();
+  }
+
+  ImeMenuTray* ime_button() { return ime_button_observation_.GetSource(); }
+
   // Feature buttons:
-  TrayBackgroundView* dictation_button_ = nullptr;
-  TrayBackgroundView* select_to_speak_button_ = nullptr;
-  TrayBackgroundView* virtual_keyboard_button_ = nullptr;
+  base::ScopedObservation<TrayBackgroundView, ViewObserver>
+      dictation_button_observation_{this};
+  base::ScopedObservation<TrayBackgroundView, ViewObserver>
+      select_to_speak_button_observation_{this};
+  base::ScopedObservation<TrayBackgroundView, ViewObserver>
+      virtual_keyboard_button_observation_{this};
 
   // Button to list all available features.
-  FloatingMenuButton* a11y_tray_button_ = nullptr;
+  raw_ptr<FloatingMenuButton> a11y_tray_button_ = nullptr;
   // Button to move the view around corners.
-  FloatingMenuButton* position_button_ = nullptr;
+  raw_ptr<FloatingMenuButton> position_button_ = nullptr;
   // Button to list all available keyboard languages.
-  ImeMenuTray* ime_button_ = nullptr;
+  base::ScopedObservation<ImeMenuTray, ViewObserver> ime_button_observation_{
+      this};
 
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 };
 
 BEGIN_VIEW_BUILDER(/* no export */,

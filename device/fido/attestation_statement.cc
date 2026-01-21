@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-#include "device/fido/fido_constants.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
 
@@ -34,9 +34,9 @@ bool NoneAttestationStatement::IsSelfAttestation() const {
   return false;
 }
 
-absl::optional<base::span<const uint8_t>>
+std::optional<base::span<const uint8_t>>
 NoneAttestationStatement::GetLeafCertificate() const {
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 cbor::Value NoneAttestationStatement::AsCBOR() const {

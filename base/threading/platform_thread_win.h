@@ -5,23 +5,18 @@
 #ifndef BASE_THREADING_PLATFORM_THREAD_WIN_H_
 #define BASE_THREADING_PLATFORM_THREAD_WIN_H_
 
-#include "base/win/windows_types.h"
-
-#include "base/threading/platform_thread.h"
-
 #include "base/base_export.h"
+#include "base/threading/platform_thread.h"
+#include "base/win/windows_types.h"
 
 namespace base {
 namespace internal {
 
-// Assert that the memory priority of |thread| is |memory_priority|. No-op on
-// Windows 7 because ::GetThreadInformation() is not available. Exposed for unit
-// tests.
+// Assert that the memory priority of `thread` is `memory_priority`. Exposed
+// for unit tests.
 BASE_EXPORT void AssertMemoryPriority(HANDLE thread, int memory_priority);
 
 }  // namespace internal
-
-BASE_EXPORT void InitializePlatformThreadFeatures();
 
 }  // namespace base
 

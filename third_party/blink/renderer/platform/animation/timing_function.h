@@ -25,6 +25,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_ANIMATION_TIMING_FUNCTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_ANIMATION_TIMING_FUNCTION_H_
 
+#include <algorithm>
+#include <vector>
+
 #include "base/check_op.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
@@ -53,12 +56,7 @@ class PLATFORM_EXPORT TimingFunction
   // applies when evaluating a function at a discontinuous boundary and
   // indicates if the left or right limit should be applied.
   virtual double Evaluate(double fraction,
-                          LimitDirection limit_direction) const {
-    return Evaluate(fraction);
-  }
-
-  // Evaluates the timing function at the given fraction.
-  virtual double Evaluate(double fraction) const = 0;
+                          LimitDirection limit_direction) const = 0;
 
   // This function returns the minimum and maximum values obtainable when
   // calling evaluate();
@@ -82,16 +80,45 @@ class PLATFORM_EXPORT LinearTimingFunction final : public TimingFunction {
     return linear;
   }
 
+  static scoped_refptr<LinearTimingFunction> Create(
+      std::vector<gfx::LinearEasingPoint> points) {
+    return base::AdoptRef(new LinearTimingFunction(std::move(points)));
+  }
+
+  static scoped_refptr<LinearTimingFunction> Create(
+      Vector<gfx::LinearEasingPoint> points) {
+    std::vector<gfx::LinearEasingPoint> temp_points(points.begin(),
+                                                    points.end());
+    return base::AdoptRef(new LinearTimingFunction(std::move(temp_points)));
+  }
+
   ~LinearTimingFunction() override = default;
 
   // TimingFunction implementation.
   String ToString() const override;
-  double Evaluate(double fraction) const override;
+  double Evaluate(
+      double fraction,
+      LimitDirection limit_direction = LimitDirection::RIGHT) const override;
   void Range(double* min_value, double* max_value) const override;
   std::unique_ptr<gfx::TimingFunction> CloneToCC() const override;
 
+  const std::vector<gfx::LinearEasingPoint>& Points() const {
+    return linear_->Points();
+  }
+  bool IsTrivial() const { return linear_->IsTrivial(); }
+
+  bool operator==(const LinearTimingFunction& other) const {
+    return std::ranges::equal(Points(), other.Points());
+  }
+
  private:
-  LinearTimingFunction() : TimingFunction(Type::LINEAR) {}
+  LinearTimingFunction()
+      : TimingFunction(Type::LINEAR),
+        linear_(gfx::LinearTimingFunction::Create()) {}
+  explicit LinearTimingFunction(std::vector<gfx::LinearEasingPoint> points)
+      : TimingFunction(Type::LINEAR),
+        linear_(gfx::LinearTimingFunction::Create(std::move(points))) {}
+  std::unique_ptr<gfx::LinearTimingFunction> linear_;
 };
 
 class PLATFORM_EXPORT CubicBezierTimingFunction final : public TimingFunction {
@@ -111,7 +138,9 @@ class PLATFORM_EXPORT CubicBezierTimingFunction final : public TimingFunction {
 
   // TimingFunction implementation.
   String ToString() const override;
-  double Evaluate(double fraction) const override;
+  double Evaluate(
+      double fraction,
+      LimitDirection limit_direction = LimitDirection::RIGHT) const override;
   void Range(double* min_value, double* max_value) const override;
   std::unique_ptr<gfx::TimingFunction> CloneToCC() const override;
 
@@ -179,7 +208,6 @@ class PLATFORM_EXPORT StepsTimingFunction final : public TimingFunction {
         return end;
       default:
         NOTREACHED();
-        return end;
     }
   }
 
@@ -189,7 +217,6 @@ class PLATFORM_EXPORT StepsTimingFunction final : public TimingFunction {
   String ToString() const override;
   double Evaluate(double fraction,
                   LimitDirection limit_direction) const override;
-  double Evaluate(double fraction) const override;
 
   void Range(double* min_value, double* max_value) const override;
   std::unique_ptr<gfx::TimingFunction> CloneToCC() const override;
@@ -216,7 +243,6 @@ PLATFORM_EXPORT bool operator==(const StepsTimingFunction&,
                                 const TimingFunction&);
 
 PLATFORM_EXPORT bool operator==(const TimingFunction&, const TimingFunction&);
-PLATFORM_EXPORT bool operator!=(const TimingFunction&, const TimingFunction&);
 
 template <>
 struct DowncastTraits<LinearTimingFunction> {

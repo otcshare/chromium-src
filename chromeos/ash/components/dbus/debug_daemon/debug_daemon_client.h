@@ -13,16 +13,18 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
 #include "base/files/file.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/observer_list_types.h"
 #include "base/task/task_runner.h"
 #include "base/trace_event/tracing_agent.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "chromeos/dbus/common/dbus_client.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
 #include "dbus/message.h"
+#include "third_party/cros_system_api/dbus/debugd/dbus-constants.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace cryptohome {
@@ -30,13 +32,6 @@ class AccountIdentifier;
 }
 
 namespace ash {
-
-// A DbusLibraryError represents an error response received from D-Bus.
-enum DbusLibraryError {
-  kGenericError = -1,  // Catch-all generic error
-  kNoReply = -2,       // debugd did not respond before timeout
-  kTimeout = -3        // Unspecified D-Bus timeout (e.g. socket error)
-};
 
 // DebugDaemonClient is used to communicate with the debug daemon.
 class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
@@ -144,10 +139,20 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
   // logs for.
   // |requested_logs|: The list of requested logs. All available logs will be
   // requested if left empty.
-  virtual void GetFeedbackLogsV2(
+  virtual void GetFeedbackLogs(
       const cryptohome::AccountIdentifier& id,
       const std::vector<debugd::FeedbackLogType>& requested_logs,
       GetLogsCallback callback) = 0;
+
+  // Gets feedback binary logs from debugd.
+  // |id|: Cryptohome Account identifier for the user to get logs for.
+  // |log_type_fds|: The map of FeedbackBinaryLogType and its FD pair.
+  // |callback|: The callback to be invoked once the debugd method is completed.
+  virtual void GetFeedbackBinaryLogs(
+      const cryptohome::AccountIdentifier& id,
+      const std::map<debugd::FeedbackBinaryLogType, base::ScopedFD>&
+          log_type_fds,
+      chromeos::VoidDBusMethodCallback callback) = 0;
 
   // Retrieves the ARC bug report for user identified by |userhash|
   // and saves it in debugd daemon store.
@@ -194,6 +199,21 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
       const std::string& ip_address,
       const std::map<std::string, std::string>& options,
       TestICMPCallback callback) = 0;
+
+  // A callback to handle the result of TestHostsConnectivity. Contains result
+  // encapsulated as protobuf.
+  using TestHostsConnectivityCallback =
+      base::OnceCallback<void(const std::vector<uint8_t>& connectivity_result)>;
+
+  // Tests connectivity to multiple hosts. The `hosts` parameter contains
+  // hostnames or URLs to test. The `options` parameter contains optional
+  // configuration passed to debugd's TestConnectivity method; see
+  // platform2/debugd for supported keys. On error, callback receives an empty
+  // vector.
+  virtual void TestHostsConnectivity(
+      const std::vector<std::string>& hosts,
+      const base::flat_map<std::string, std::string>& options,
+      TestHostsConnectivityCallback callback) = 0;
 
   // Called once EnableDebuggingFeatures() is complete. |succeeded| will be true
   // if debugging features have been successfully enabled.
@@ -243,56 +263,6 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
       const std::map<pid_t, int32_t>& pid_to_oom_score_adj,
       SetOomScoreAdjCallback callback) = 0;
 
-  // A callback to handle the result of CupsAdd[Auto|Manually]ConfiguredPrinter.
-  // A negative value denotes a D-Bus library error while non-negative values
-  // denote a response from debugd.
-  using CupsAddPrinterCallback = base::OnceCallback<void(int32_t)>;
-
-  // Calls CupsAddManuallyConfiguredPrinter.  |name| is the printer
-  // name. |uri| is the device.  |ppd_contents| is the contents of the
-  // PPD file used to drive the device.  |callback| is called with
-  // true if adding the printer to CUPS was successful and false if
-  // there was an error.  |error_callback| will be called if there was
-  // an error in communicating with debugd.
-  virtual void CupsAddManuallyConfiguredPrinter(
-      const std::string& name,
-      const std::string& uri,
-      const std::string& ppd_contents,
-      CupsAddPrinterCallback callback) = 0;
-
-  // Calls CupsAddAutoConfiguredPrinter.  |name| is the printer
-  // name. |uri| is the device.  |callback| is called with true if
-  // adding the printer to CUPS was successful and false if there was
-  // an error.  |error_callback| will be called if there was an error
-  // in communicating with debugd.
-  virtual void CupsAddAutoConfiguredPrinter(
-      const std::string& name,
-      const std::string& uri,
-      CupsAddPrinterCallback callback) = 0;
-
-  // A callback to handle the result of CupsRemovePrinter.
-  using CupsRemovePrinterCallback = base::OnceCallback<void(bool success)>;
-
-  // Calls CupsRemovePrinter.  |name| is the printer name as registered in
-  // CUPS.  |callback| is called with true if removing the printer from CUPS was
-  // successful and false if there was an error.  |error_callback| will be
-  // called if there was an error in communicating with debugd.
-  virtual void CupsRemovePrinter(const std::string& name,
-                                 CupsRemovePrinterCallback callback,
-                                 base::OnceClosure error_callback) = 0;
-
-  // A callback to handle the result of CupsRetrievePrinterPpd.
-  using CupsRetrievePrinterPpdCallback =
-      base::OnceCallback<void(const std::vector<uint8_t>& ppd)>;
-
-  // Calls the debugd method to retrieve a PPD.  |name| is the printer name as
-  // registered in CUPS. |callback| is called with a string containing the PPD
-  // data. |error_callback| will be called if there was an error retrieving the
-  // PPD.
-  virtual void CupsRetrievePrinterPpd(const std::string& name,
-                                      CupsRetrievePrinterPpdCallback callback,
-                                      base::OnceClosure error_callback) = 0;
-
   // A callback to handle the result of
   // StartPluginVmDispatcher/StopPluginVmDispatcher.
   using PluginVmDispatcherCallback = base::OnceCallback<void(bool success)>;
@@ -332,29 +302,6 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
   virtual void GetU2fFlags(
       chromeos::DBusMethodCallback<std::set<std::string>> callback) = 0;
 
-  // Set Swap Parameter
-  virtual void SetSwapParameter(
-      const std::string& parameter,
-      int32_t value,
-      chromeos::DBusMethodCallback<std::string> callback) = 0;
-
-  // Zram Writeback Dbus Messages
-  virtual void SwapZramEnableWriteback(
-      uint32_t size_mb,
-      chromeos::DBusMethodCallback<std::string> callback) = 0;
-
-  virtual void SwapZramSetWritebackLimit(
-      uint32_t limit_pages,
-      chromeos::DBusMethodCallback<std::string> callback) = 0;
-
-  virtual void SwapZramMarkIdle(
-      uint32_t age_seconds,
-      chromeos::DBusMethodCallback<std::string> callback) = 0;
-
-  virtual void InitiateSwapZramWriteback(
-      debugd::ZramWritebackMode mode,
-      chromeos::DBusMethodCallback<std::string> callback) = 0;
-
   // Stops the packet capture process identified with |handle|. |handle| is a
   // unique process identifier that is returned from debugd's PacketCaptureStart
   // D-Bus method when the packet capture process is started. Stops all on-going
@@ -363,6 +310,15 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) DebugDaemonClient
 
   virtual void PacketCaptureStartSignalReceived(dbus::Signal* signal) = 0;
   virtual void PacketCaptureStopSignalReceived(dbus::Signal* signal) = 0;
+
+  // A callback to handle the result of
+  // BluetoothStartBtsnoop/BluetoothStopBtsnoop.
+  using BluetoothBtsnoopCallback = base::OnceCallback<void(bool success)>;
+  // Starts capturing btsnoop logs, which is kept inside daemon-store
+  virtual void BluetoothStartBtsnoop(BluetoothBtsnoopCallback callback) = 0;
+  // Stops capturing btsnoop logs and copy it to the Downloads directory.
+  virtual void BluetoothStopBtsnoop(int fd,
+                                    BluetoothBtsnoopCallback callback) = 0;
 
  protected:
   // For creating a second instance of DebugDaemonClient on another thread for

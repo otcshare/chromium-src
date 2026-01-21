@@ -13,6 +13,10 @@
 #include "content/public/common/url_constants.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/extension_web_ui.h"
+#endif
+
 namespace {
 const char kBookmarkFolderPath[] = "folder/";
 }
@@ -22,24 +26,27 @@ namespace android {
 
 bool HandleAndroidNativePageURL(GURL* url,
                                 content::BrowserContext* browser_context) {
-  if (url->SchemeIs(content::kChromeUIScheme)) {
-    if (url->host() == chrome::kChromeUINewTabHost) {
-      *url = GURL(chrome::kChromeUINativeNewTabURL);
-      return true;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (base::FeatureList::IsEnabled(
+          chrome::android::kChromeNativeUrlOverriding)) {
+    // If an extension is overriding this URL, do not redirect it.
+    if (ExtensionWebUI::GetNumberOfExtensionsOverridingURL(
+            *url, browser_context) > 0) {
+      return false;
     }
+  }
+#endif
 
-    // TODO(twellington): stop redirecting chrome://history to
-    // chrome-native://history when M57 is a distant memory.
-    // See http://crbug.com/654071.
-    if (url->host() == kChromeUIHistoryHost) {
-      *url = GURL(kChromeUINativeHistoryURL);
+  if (url->SchemeIs(content::kChromeUIScheme)) {
+    if (url->GetHost() == chrome::kChromeUINewTabHost) {
+      *url = GURL(chrome::kChromeUINativeNewTabURL);
       return true;
     }
   }
 
   if (url->SchemeIs(chrome::kChromeNativeScheme) &&
-      url->host() == kChromeUIBookmarksHost) {
-    std::string ref = url->ref();
+      url->GetHost() == kChromeUIBookmarksHost) {
+    std::string ref = url->GetRef();
     if (!ref.empty()) {
       *url = GURL(std::string(kChromeUINativeBookmarksURL)
                       .append(kBookmarkFolderPath)

@@ -5,19 +5,23 @@
 #ifndef COMPONENTS_PERMISSIONS_PERMISSIONS_CLIENT_H_
 #define COMPONENTS_PERMISSIONS_PERMISSIONS_CLIENT_H_
 
-#include "base/callback_forward.h"
+#include <optional>
+
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/favicon/core/favicon_service.h"
+#include "components/permissions/features.h"
 #include "components/permissions/origin_keyed_permission_action_service.h"
 #include "components/permissions/permission_prompt.h"
-#include "components/permissions/permission_ui_selector.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
+#include "components/permissions/prediction_service/permission_ui_selector.h"
 #include "components/permissions/request_type.h"
+#include "components/permissions/resolvers/permission_prompt_options.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -35,11 +39,6 @@ class WebContents;
 namespace content_settings {
 class CookieSettings;
 }
-
-namespace infobars {
-class InfoBar;
-class InfoBarManager;
-}  // namespace infobars
 
 namespace permissions {
 class ObjectPermissionContextBase;
@@ -114,24 +113,23 @@ class PermissionsClient {
       content::BrowserContext* browser_context,
       std::vector<std::pair<url::Origin, bool>>* origins);
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
   // Returns whether cookie deletion is allowed for |browser_context| and
   // |origin|.
-  // TODO(crbug.com/1081944): Remove this method and all code depending on it
+  // TODO(crbug.com/40130734): Remove this method and all code depending on it
   // when a proper fix is landed.
   virtual bool IsCookieDeletionDisabled(
       content::BrowserContext* browser_context,
       const GURL& origin);
-#endif
 
-  // Retrieves the ukm::SourceId (if any) associated with this |browser_context|
-  // and |web_contents|. |web_contents| may be null. |callback| will be called
-  // with the result, and may be run synchronously if the result is available
-  // immediately.
+  // Retrieves the ukm::SourceId (if any) associated with this
+  // |permission_type|, |browser_context|, and |render_frame_host|.
+  // |render_frame_host| may be null. |callback| will be called with the result,
+  // and may be run synchronously if the result is available immediately.
   using GetUkmSourceIdCallback =
-      base::OnceCallback<void(absl::optional<ukm::SourceId>)>;
-  virtual void GetUkmSourceId(content::BrowserContext* browser_context,
-                              content::WebContents* web_contents,
+      base::OnceCallback<void(std::optional<ukm::SourceId>)>;
+  virtual void GetUkmSourceId(ContentSettingsType permission_type,
+                              content::BrowserContext* browser_context,
+                              content::RenderFrameHost* render_frame_host,
                               const GURL& requesting_origin,
                               GetUkmSourceIdCallback callback);
 
@@ -150,28 +148,50 @@ class PermissionsClient {
   CreatePermissionUiSelectors(content::BrowserContext* browser_context);
 
   using QuietUiReason = PermissionUiSelector::QuietUiReason;
+
+  virtual void TriggerPromptHatsSurveyIfEnabled(
+      content::WebContents* web_contents,
+      permissions::RequestType request_type,
+      std::optional<permissions::PermissionAction> action,
+      permissions::PermissionPromptDisposition prompt_disposition,
+      permissions::PermissionPromptDispositionReason prompt_disposition_reason,
+      permissions::PermissionRequestGestureType gesture_type,
+      std::optional<base::TimeDelta> prompt_display_duration,
+      bool is_post_prompt,
+      const GURL& gurl,
+      std::optional<
+          permissions::feature_params::PermissionElementPromptPosition>
+          pepc_prompt_position,
+      ContentSetting initial_permission_status,
+      base::OnceCallback<void()> hats_shown_callback_,
+      PromptOptions prompt_options);
+
   // Called for each request type when a permission prompt is resolved.
   virtual void OnPromptResolved(
-      content::BrowserContext* browser_context,
-      RequestType request_type,
+      const PermissionRequest* request,
       PermissionAction action,
-      const GURL& origin,
+      const PromptOptions& prompt_options,
       PermissionPromptDisposition prompt_disposition,
       PermissionPromptDispositionReason prompt_disposition_reason,
-      PermissionRequestGestureType gesture_type,
-      absl::optional<QuietUiReason> quiet_ui_reason);
+      std::optional<QuietUiReason> quiet_ui_reason,
+      base::TimeDelta prompt_display_duration,
+      std::optional<
+          permissions::feature_params::PermissionElementPromptPosition>
+          pepc_prompt_position,
+      ContentSetting initial_permission_status,
+      content::WebContents* web_contents);
 
   // Returns true if user has 3 consecutive notifications permission denies,
   // returns false otherwise.
-  // Returns absl::nullopt if the user is not in the adoptive activation quiet
+  // Returns std::nullopt if the user is not in the adoptive activation quiet
   // ui dry run experiment group.
-  virtual absl::optional<bool> HadThreeConsecutiveNotificationPermissionDenies(
+  virtual std::optional<bool> HadThreeConsecutiveNotificationPermissionDenies(
       content::BrowserContext* browser_context);
 
   // Returns whether the |permission| has already been auto-revoked due to abuse
   // at least once for the given |origin|. Returns `nullopt` if permission
   // auto-revocation is not supported for a given permission type.
-  virtual absl::optional<bool> HasPreviouslyAutoRevokedPermission(
+  virtual std::optional<bool> HasPreviouslyAutoRevokedPermission(
       content::BrowserContext* browser_context,
       const GURL& origin,
       ContentSettingsType permission);
@@ -179,7 +199,14 @@ class PermissionsClient {
   // If the embedder returns an origin here, any requests matching that origin
   // will be approved. Requests that do not match the returned origin will
   // immediately be finished without granting/denying the permission.
-  virtual absl::optional<url::Origin> GetAutoApprovalOrigin();
+  virtual std::optional<url::Origin> GetAutoApprovalOrigin(
+      content::BrowserContext* browser_context);
+
+  // If the embedder returns whether the requesting origin should be able to
+  // access browser permissions. The browser permissions would be auto approved.
+  virtual std::optional<PermissionAction> GetAutoApprovalStatus(
+      content::BrowserContext* browser_context,
+      const GURL& origin);
 
   // Allows the embedder to bypass checking the embedding origin when performing
   // permission availability checks. This is used for example when a permission
@@ -191,7 +218,7 @@ class PermissionsClient {
   // Allows embedder to override the canonical origin for a permission request.
   // This is the origin that will be used for requesting/storing/displaying
   // permissions.
-  virtual absl::optional<GURL> OverrideCanonicalOrigin(
+  virtual std::optional<GURL> OverrideCanonicalOrigin(
       const GURL& requesting_origin,
       const GURL& embedding_origin);
 
@@ -200,30 +227,20 @@ class PermissionsClient {
   virtual bool DoURLsMatchNewTabPage(const GURL& requesting_origin,
                                      const GURL& embedding_origin);
 
+  // Determines the reason why a prompt was ignored.
+  virtual permissions::PermissionIgnoredReason DetermineIgnoreReason(
+      content::WebContents* web_contents);
+
 #if BUILDFLAG(IS_ANDROID)
-  // Returns whether the given origin matches the default search engine (DSE)
-  // origin.
+  // Returns whether the given origin matches the default search
+  // engine (DSE) origin.
   virtual bool IsDseOrigin(content::BrowserContext* browser_context,
                            const url::Origin& origin);
 
-  // Retrieves the InfoBarManager for the web contents. The returned
-  // pointer has the same lifetime as |web_contents|.
-  virtual infobars::InfoBarManager* GetInfoBarManager(
-      content::WebContents* web_contents);
-
-  // Allows the embedder to create an info bar to use as the permission prompt.
-  // Might return null based on internal logic (e.g. |type| does not support
-  // infobar permission prompts). The returned infobar is owned by the info bar
-  // manager.
-  virtual infobars::InfoBar* MaybeCreateInfoBar(
-      content::WebContents* web_contents,
-      ContentSettingsType type,
-      base::WeakPtr<PermissionPromptAndroid> prompt);
-
-  // Allows the embedder to create a message UI to use as the permission prompt.
-  // Returns the pointer to the message UI if the message UI is successfully
-  // created, nullptr otherwise, e.g. if the messages-prompt is not
-  // supported for `type`.
+  // Allows the embedder to create a message UI to use as the
+  // permission prompt. Returns the pointer to the message UI if the
+  // message UI is successfully created, nullptr otherwise, e.g. if
+  // the messages-prompt is not supported for `type`.
   virtual std::unique_ptr<PermissionMessageDelegate> MaybeCreateMessageUI(
       content::WebContents* web_contents,
       ContentSettingsType type,
@@ -231,9 +248,10 @@ class PermissionsClient {
 
   using PermissionsUpdatedCallback = base::OnceCallback<void(bool)>;
 
-  // Prompts the user to accept system permissions for |content_settings_types|,
-  // after they've already been denied. In Chrome, this shows an infobar.
-  // |callback| will be run with |true| for success and |false| otherwise.
+  // Prompts the user to accept system permissions for
+  // |content_settings_types|, after they've already been denied. In
+  // Chrome, this shows an infobar. |callback| will be run with
+  // |true| for success and |false| otherwise.
   virtual void RepromptForAndroidPermissions(
       content::WebContents* web_contents,
       const std::vector<ContentSettingsType>& content_settings_types,
@@ -242,17 +260,63 @@ class PermissionsClient {
       const std::vector<std::string>& optional_permissions,
       PermissionsUpdatedCallback callback);
 
-  // Converts the given chromium |resource_id| (e.g. IDR_INFOBAR_TRANSLATE) to
-  // an Android drawable resource ID. Returns 0 if a mapping wasn't found.
+  // Converts the given chromium |resource_id| (e.g.
+  // IDR_INFOBAR_TRANSLATE) to an Android drawable resource ID.
+  // Returns 0 if a mapping wasn't found.
   virtual int MapToJavaDrawableId(int resource_id);
+
+  // Gets the name of the embedder.
+  virtual const std::u16string GetClientApplicationName() const = 0;
 #else
   // Creates a permission prompt.
-  // TODO(crbug.com/1025609): Move the desktop permission prompt implementation
-  // into //components/permissions and remove this.
+  // TODO(crbug.com/40107932): Move the desktop permission prompt
+  // implementation into //components/permissions and remove this.
   virtual std::unique_ptr<PermissionPrompt> CreatePrompt(
       content::WebContents* web_contents,
       PermissionPrompt::Delegate* delegate);
 #endif
+
+  // Returns true if the browser has the necessary permission(s) from the
+  // platform to provide a particular permission-gated capability to sites. This
+  // can include both app-specific permissions relevant to the browser and
+  // device-wide permissions.
+  virtual bool HasDevicePermission(ContentSettingsType type) const;
+
+  // Returns true if the browser is able to request from the platform the
+  // necessary permission(s) needed to provide a particular permission-gated
+  // capability to sites.
+  virtual bool CanRequestDevicePermission(ContentSettingsType type) const;
+
+  // Returns true if the |type| can be blocked by device policy, for example, by
+  // the custodian of a supervised user.
+  virtual bool IsPermissionBlockedByDevicePolicy(
+      content::WebContents* web_contents,
+      PermissionSetting setting,
+      const content_settings::SettingInfo& info,
+      ContentSettingsType type) const;
+
+  // Returns true if the |type| can be allowed by device policy, for example
+  // admins can use the whitelist to allow device access without prompt.
+  virtual bool IsPermissionAllowedByDevicePolicy(
+      content::WebContents* web_contents,
+      PermissionSetting setting,
+      const content_settings::SettingInfo& info,
+      ContentSettingsType type) const;
+
+  // Returns true if the system blocks the access to the specified content type
+  // permission.
+  virtual bool IsSystemDenied(ContentSettingsType type) const;
+
+  // Returns `true` if Chrome can request system-level permission. Returns
+  // `false` otherwise.
+  virtual bool CanPromptSystemPermission(ContentSettingsType type) const;
+
+  // Returns true if an actor is currently operating on a tab.
+  virtual bool IsActorOperatingOnWebContents(
+      content::WebContents* web_contents) const;
+
+  virtual favicon::FaviconService* GetFaviconService(
+      content::BrowserContext* browser_context);
 };
 
 }  // namespace permissions

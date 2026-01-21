@@ -4,9 +4,10 @@
 
 #include "ash/webui/projector_app/projector_oauth_token_fetcher.h"
 
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/projector/projector_controller.h"
 #include "ash/webui/projector_app/projector_app_client.h"
-#include "base/containers/contains.h"
+#include "base/containers/flat_tree.h"
 #include "base/time/time.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
@@ -44,12 +45,14 @@ ProjectorOAuthTokenFetcher::ProjectorOAuthTokenFetcher() = default;
 
 ProjectorOAuthTokenFetcher::~ProjectorOAuthTokenFetcher() = default;
 
-std::vector<AccountInfo> ProjectorOAuthTokenFetcher::GetAccounts() const {
+// static
+std::vector<AccountInfo> ProjectorOAuthTokenFetcher::GetAccounts() {
   return GetIdentityManager()
       ->GetExtendedAccountInfoForAccountsWithRefreshToken();
 }
 
-CoreAccountInfo ProjectorOAuthTokenFetcher::GetPrimaryAccountInfo() const {
+// static
+CoreAccountInfo ProjectorOAuthTokenFetcher::GetPrimaryAccountInfo() {
   return GetIdentityManager()->GetPrimaryAccountInfo(
       signin::ConsentLevel::kSignin);
 }
@@ -57,7 +60,7 @@ CoreAccountInfo ProjectorOAuthTokenFetcher::GetPrimaryAccountInfo() const {
 void ProjectorOAuthTokenFetcher::GetAccessTokenFor(
     const std::string& email,
     AccessTokenRequestCallback callback) {
-  if (base::Contains(fetched_access_tokens_, email)) {
+  if (fetched_access_tokens_.contains(email)) {
     const auto& access_token_info = fetched_access_tokens_[email];
     if (base::Time::Now() + kBufferTime < access_token_info.expiration_time) {
       std::move(callback).Run(
@@ -72,7 +75,7 @@ void ProjectorOAuthTokenFetcher::GetAccessTokenFor(
 
   // If there is a pending fetch for the email, then append the callback to
   // the pending callbacks.
-  if (base::Contains(pending_oauth_token_fetch_, email)) {
+  if (pending_oauth_token_fetch_.contains(email)) {
     pending_oauth_token_fetch_[email].callbacks.push_back(std::move(callback));
     return;
   }
@@ -80,26 +83,35 @@ void ProjectorOAuthTokenFetcher::GetAccessTokenFor(
   InitiateAccessTokenFetchFor(email, std::move(callback));
 }
 
+// Removed by token instead of email because the token value stored in
+//`fetched_access_tokens_` might be updated to the valid value before this
+// function get called.
+void ProjectorOAuthTokenFetcher::InvalidateToken(const std::string& token) {
+  base::EraseIf(fetched_access_tokens_, [&token](const auto& pair) -> bool {
+    return pair.second.token == token;
+  });
+  GetIdentityManager()->RemoveAccessTokenFromCache(
+      GetIdentityManager()->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
+      signin::OAuthConsumerId::kProjectorTokenFetcher, token);
+}
+
 bool ProjectorOAuthTokenFetcher::HasCachedTokenForTest(
     const std::string& email) {
-  return base::Contains(fetched_access_tokens_, email);
+  return fetched_access_tokens_.contains(email);
 }
 
 bool ProjectorOAuthTokenFetcher::HasPendingRequestForTest(
     const std::string& email) {
-  return base::Contains(pending_oauth_token_fetch_, email);
+  return pending_oauth_token_fetch_.contains(email);
 }
 
 void ProjectorOAuthTokenFetcher::InitiateAccessTokenFetchFor(
     const std::string& email,
     AccessTokenRequestCallback callback) {
-  DCHECK(!base::Contains(pending_oauth_token_fetch_, email));
+  DCHECK(!pending_oauth_token_fetch_.contains(email));
 
   // There is no pending fetch for the email. Let's create a new fetch.
   // Let's start creating the oauth2 access token request.
-  OAuth2AccessTokenManager::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kDriveOAuth2Scope);
-  scopes.insert(GaiaConstants::kCloudTranslationOAuth2Scope);
 
   // kImmediate makes a one-shot immediate request.
   const auto mode = signin::AccessTokenFetcher::Mode::kImmediate;
@@ -110,7 +122,7 @@ void ProjectorOAuthTokenFetcher::InitiateAccessTokenFetchFor(
       identity_manager->CreateAccessTokenFetcherForAccount(
           identity_manager->FindExtendedAccountInfoByEmailAddress(email)
               .account_id,
-          /*oauth_consumer_name=*/"ProjectorOAuthTokenFetcher", scopes,
+          signin::OAuthConsumerId::kProjectorTokenFetcher,
           base::BindOnce(
               &ProjectorOAuthTokenFetcher::OnAccessTokenRequestCompleted,
               // It is safe to use base::Unretained as |this| owns
@@ -126,7 +138,7 @@ void ProjectorOAuthTokenFetcher::OnAccessTokenRequestCompleted(
     const std::string& email,
     GoogleServiceAuthError error,
     signin::AccessTokenInfo info) {
-  if (!base::Contains(pending_oauth_token_fetch_, email))
+  if (!pending_oauth_token_fetch_.contains(email))
     return;
 
   for (auto& callback : pending_oauth_token_fetch_[email].callbacks)

@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+#include "build/build_config.h"
+#include "content/public/browser/frame_type.h"
 #include "services/network/public/mojom/referrer_policy.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
@@ -26,12 +28,11 @@ class Origin;
 namespace content {
 
 class CrossOriginEmbedderPolicyReporter;
+class DocumentIsolationPolicyReporter;
 class NavigationRequest;
 class Navigator;
 class RenderFrameHostManager;
 class RenderFrameHostImpl;
-class SubresourceWebBundleNavigationInfo;
-class WebBundleNavigationInfo;
 
 // An interface for RenderFrameHostImpl to communicate with FrameTreeNode owning
 // it (e.g. to initiate or cancel a navigation in the frame).
@@ -50,20 +51,9 @@ class RenderFrameHostOwner {
   RenderFrameHostOwner() = default;
   virtual ~RenderFrameHostOwner() = default;
 
-  // A RenderFrameHost started loading:
-  //
-  // - `should_show_loading_ui` indicates whether the loading indicator UI
-  //   should be shown or not. It must be true for:
-  //   * cross-document navigations
-  //   * navigations intercepted by the navigation API's intercept().
-  //
-  // - `was_previously_loading` is false if the FrameTree was not loading
-  //   before. The caller is required to provide this boolean as the delegate
-  //   should only be notified if the FrameTree went from non-loading to loading
-  //   state. However, when it is called, the FrameTree should be in a loading
-  //   state.
-  virtual void DidStartLoading(bool should_show_loading_ui,
-                               bool was_previously_loading) = 0;
+  // A RenderFrameHost started loading.
+  virtual void DidStartLoading(
+      LoadingState previous_frame_tree_loading_state) = 0;
 
   // A RenderFrameHost in this owner stopped loading.
   virtual void DidStopLoading() = 0;
@@ -79,6 +69,8 @@ class RenderFrameHostOwner {
 
   virtual RenderFrameHostManager& GetRenderFrameHostManager() = 0;
 
+  virtual FrameTreeNode* GetOpener() const = 0;
+
   virtual void SetFocusedFrame(SiteInstanceGroup* source) = 0;
 
   // Called when the referrer policy changes.
@@ -88,6 +80,14 @@ class RenderFrameHostOwner {
   virtual bool UpdateUserActivationState(
       blink::mojom::UserActivationUpdateType update_type,
       blink::mojom::UserActivationNotificationType notification_type) = 0;
+
+  // Called to notify all frames of a page that the history user activation
+  // has been consumed, in response to an event in the renderer process.
+  virtual void DidConsumeHistoryUserActivation() = 0;
+
+  // Called when document.open occurs, which causes the frame to no longer be in
+  // an initial empty document state.
+  virtual void DidOpenDocumentInputStream() = 0;
 
   // Creates a NavigationRequest  for a synchronous navigation that has
   // committed in the renderer process. Those are:
@@ -99,6 +99,7 @@ class RenderFrameHostOwner {
       bool is_same_document,
       const GURL& url,
       const url::Origin& origin,
+      const std::optional<GURL>& initiator_base_url,
       const net::IsolationInfo& isolation_info_for_subresources,
       blink::mojom::ReferrerPtr referrer,
       const ui::PageTransition& transition,
@@ -109,13 +110,27 @@ class RenderFrameHostOwner {
       const std::vector<GURL>& redirects,
       const GURL& original_url,
       std::unique_ptr<CrossOriginEmbedderPolicyReporter> coep_reporter,
-      std::unique_ptr<WebBundleNavigationInfo> web_bundle_navigation_info,
-      std::unique_ptr<SubresourceWebBundleNavigationInfo>
-          subresource_web_bundle_navigation_info,
-      int http_response_code) = 0;
+      std::unique_ptr<DocumentIsolationPolicyReporter> dip_reporter,
+      int http_response_code,
+      base::TimeTicks actual_navigation_start) = 0;
 
-  // Cancel ongoing navigation in this frame, if any.
-  virtual void CancelNavigation() = 0;
+  // Cancels the navigation owned by the FrameTreeNode.
+  // Note: this does not cancel navigations that are owned by the current or
+  // speculative RenderFrameHosts.
+  virtual void CancelNavigation(NavigationDiscardReason reason) = 0;
+
+  // Reset every non-speculative navigation in this frame, and its descendants.
+  // This is called after outermost main frame has been discarded.
+  //
+  // This takes into account:
+  // - Non-pending commit NavigationRequest owned by the FrameTreeNode
+  // - Pending commit NavigationRequest owned by the current RenderFrameHost
+  virtual void ResetNavigationsForDiscard() = 0;
+
+  // Return the iframe.credentialless attribute value.
+  virtual bool Credentialless() const = 0;
+
+  virtual FrameType GetCurrentFrameType() const = 0;
 };
 
 }  // namespace content

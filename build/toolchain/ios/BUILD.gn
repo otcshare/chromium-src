@@ -5,9 +5,9 @@
 import("//build/config/ios/ios_sdk.gni")
 import("//build/toolchain/apple/toolchain.gni")
 
-# Specialisation of the apple_toolchain template to declare the toolchain
+# Specialisation of the apple_toolchain template to declare a single toolchain
 # and its tools to build target for iOS platform.
-template("ios_toolchain") {
+template("ios_single_toolchain") {
   assert(defined(invoker.toolchain_args),
          "Toolchains must declare toolchain_args")
 
@@ -18,83 +18,64 @@ template("ios_toolchain") {
     deployment_target = ios_deployment_target
     target_environment = target_environment
     bin_path = ios_bin_path
-    strip_with_lipo = true
 
     toolchain_args = {
       forward_variables_from(invoker.toolchain_args, "*")
       xcode_build = xcode_build
       current_os = "ios"
+
+      # TODO(crbug.com/408032145): Add ptrauth support to lld, remove this.
+      if (current_cpu == "arm64e") {
+        use_lld = false
+      }
+
+      # Disable partition alloc for app extensions except for blink.
+      if (ios_is_app_extension && !use_blink) {
+        # As use_partition_alloc is defined outside of //build, check that
+        # the build is part of chromium before overriding the variable.
+        if (build_with_chromium) {
+          use_partition_alloc = false
+        }
+      }
     }
   }
 }
 
-ios_toolchain("ios_clang_arm64") {
+# Template to declare all the toolchains for a given architecture for iOS.
+template("ios_all_toolchains") {
+  assert(defined(invoker.toolchain_args),
+         "Toolchains must declare toolchain_args")
+
+  ios_single_toolchain(target_name) {
+    forward_variables_from(invoker, "*", [ "toolchain_args" ])
+    toolchain_args = {
+      forward_variables_from(invoker.toolchain_args, "*")
+    }
+  }
+
+  ios_single_toolchain(target_name + "_app_ext") {
+    forward_variables_from(invoker, "*", [ "toolchain_args" ])
+    toolchain_args = {
+      forward_variables_from(invoker.toolchain_args, "*")
+      ios_is_app_extension = true
+    }
+  }
+}
+
+ios_all_toolchains("ios_clang_arm64") {
   toolchain_args = {
     current_cpu = "arm64"
   }
 }
 
-ios_toolchain("ios_clang_arm64_13_4") {
+ios_all_toolchains("ios_clang_arm64e") {
   toolchain_args = {
-    current_cpu = "arm64"
-    ios_deployment_target = "13.4"
+    current_cpu = "arm64e"
   }
 }
 
-ios_toolchain("ios_clang_arm64_fat_arm") {
-  toolchain_args = {
-    current_cpu = "arm"
-    is_fat_secondary_toolchain = true
-    primary_fat_toolchain_name = "//build/toolchain/ios:ios_clang_arm64"
-  }
-}
-
-ios_toolchain("ios_clang_arm") {
-  toolchain_args = {
-    current_cpu = "arm"
-  }
-}
-
-ios_toolchain("ios_clang_x64") {
+ios_all_toolchains("ios_clang_x64") {
   toolchain_args = {
     current_cpu = "x64"
-  }
-}
-
-ios_toolchain("ios_clang_x64_fat_arm64") {
-  toolchain_args = {
-    current_cpu = "arm64"
-    is_fat_secondary_toolchain = true
-    primary_fat_toolchain_name = "//build/toolchain/ios:ios_clang_x64"
-  }
-}
-
-ios_toolchain("ios_clang_x64_13_4") {
-  toolchain_args = {
-    current_cpu = "x64"
-    ios_deployment_target = "13.4"
-  }
-}
-
-ios_toolchain("ios_clang_x64_13_4_fat_arm64") {
-  toolchain_args = {
-    current_cpu = "arm64"
-    is_fat_secondary_toolchain = true
-    primary_fat_toolchain_name = "//build/toolchain/ios:ios_clang_x64_13_4"
-    ios_deployment_target = "13.4"
-  }
-}
-
-ios_toolchain("ios_clang_x64_fat_x86") {
-  toolchain_args = {
-    current_cpu = "x86"
-    is_fat_secondary_toolchain = true
-    primary_fat_toolchain_name = "//build/toolchain/ios:ios_clang_x64"
-  }
-}
-
-ios_toolchain("ios_clang_x86") {
-  toolchain_args = {
-    current_cpu = "x86"
   }
 }

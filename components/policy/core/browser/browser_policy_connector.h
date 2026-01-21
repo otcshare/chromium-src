@@ -9,8 +9,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/policy/core/browser/browser_policy_connector_base.h"
 #include "components/policy/policy_export.h"
 
@@ -58,6 +59,14 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
     return device_management_service_.get();
   }
 
+  DeviceManagementService* GetTestDeviceManagementService();
+
+  // Allows setting a mock DeviceManagementService for tests. Does not take
+  // ownership, and should be reset to nullptr at the end of the test.
+  // Set this before an instance is built for a Profile.
+  static void SetDeviceManagementServiceForTesting(
+      DeviceManagementService* device_management_service);
+
   // Returns the URL for the device management service endpoint.
   std::string GetDeviceManagementUrl() const;
 
@@ -67,19 +76,8 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   // Returns the URL for the encrypted reporting service endpoint.
   std::string GetEncryptedReportingUrl() const;
 
-  // Check whether a user is known to be non-enterprise. Domains such as
-  // gmail.com and googlemail.com are known to not be managed. Also returns
-  // true if the username is empty or not a valid email address.
-  // TODO(crbug.com/1378553): Migrate callers to
-  // signin::AccountManagedStatusFinder::IsNonEnterpriseUser().
-  static bool IsNonEnterpriseUser(const std::string& username);
-
-  // Allows to register domain for tests that is recognized as non-enterprise.
-  // Note that |domain| basically needs to live until this method is invoked
-  // with a nullptr.
-  // TODO(crbug.com/1378553): Migrate callers to
-  // signin::AccountManagedStatusFinder::SetNonEnterpriseDomainForTesting().
-  static void SetNonEnterpriseDomainForTesting(const char* domain);
+  // Returns the URL for the File Storage Server endpoint for uploads.
+  std::string GetFileStorageServerUploadUrl() const;
 
   // Registers refresh rate prefs.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -105,7 +103,8 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   // Helper function to read URL overriding flags. If `flag` isn't set or if the
   // Chrome channel doesn't allowing overriding, `default_value` is returned
   // instead.
-  std::string GetUrlOverride(const char* flag, const char* default_value) const;
+  std::string GetUrlOverride(const char* flag,
+                             std::string_view default_value) const;
 
   std::unique_ptr<PolicyStatisticsCollector> policy_statistics_collector_;
 

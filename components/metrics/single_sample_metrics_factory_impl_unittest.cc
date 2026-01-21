@@ -4,7 +4,7 @@
 
 #include "components/metrics/single_sample_metrics_factory_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/dummy_histogram.h"
 #include "base/run_loop.h"
@@ -20,8 +20,8 @@ namespace metrics {
 
 namespace {
 
-const base::HistogramBase::Sample kMin = 1;
-const base::HistogramBase::Sample kMax = 10;
+const base::HistogramBase::Sample32 kMin = 1;
+const base::HistogramBase::Sample32 kMax = 10;
 const uint32_t kBucketCount = 10;
 const char kMetricName[] = "Single.Sample.Metric";
 
@@ -42,6 +42,7 @@ class SingleSampleMetricsFactoryImplTest : public testing::Test {
 
   ~SingleSampleMetricsFactoryImplTest() override {
     factory_->DestroyProviderForTesting();
+    factory_ = nullptr;
     if (thread_.IsRunning())
       ShutdownThread();
     base::SingleSampleMetricsFactory::DeleteFactoryForTesting();
@@ -120,7 +121,7 @@ TEST_F(SingleSampleMetricsFactoryImplTest, DefaultSingleSampleMetricWithValue) {
   std::unique_ptr<base::SingleSampleMetric> metric =
       factory_->CreateCustomCountsMetric(kMetricName, kMin, kMax, kBucketCount);
 
-  const base::HistogramBase::Sample kLastSample = 9;
+  const base::HistogramBase::Sample32 kLastSample = 9;
   metric->SetSample(1);
   metric->SetSample(3);
   metric->SetSample(5);
@@ -146,7 +147,7 @@ TEST_F(SingleSampleMetricsFactoryImplTest, DefaultSingleSampleMetricWithValue) {
 TEST_F(SingleSampleMetricsFactoryImplTest, MultithreadedMetrics) {
   // Allow EXPECT_DCHECK_DEATH for multiple threads.
   // https://github.com/google/googletest/blob/main/docs/advanced.md#death-tests-and-threads
-  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
 
   base::HistogramTester tester;
   std::unique_ptr<base::SingleSampleMetric> metric =
@@ -167,7 +168,7 @@ TEST_F(SingleSampleMetricsFactoryImplTest, MultithreadedMetrics) {
   EXPECT_DCHECK_DEATH(threaded_metric.reset());
 
   // Test that samples are set on each thread correctly.
-  const base::HistogramBase::Sample kSample = 7;
+  const base::HistogramBase::Sample32 kSample = 7;
 
   {
     metric->SetSample(kSample);

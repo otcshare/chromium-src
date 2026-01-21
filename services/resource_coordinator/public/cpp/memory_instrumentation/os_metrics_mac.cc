@@ -4,58 +4,40 @@
 
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics.h"
 
-#include <libproc.h>
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#include <mach/shared_region.h>
-#include <sys/param.h>
-
 #include <mach-o/dyld_images.h>
 #include <mach-o/loader.h>
 #include <mach/mach.h>
+#include <sys/param.h>
 
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_math.h"
 #include "base/process/process_metrics.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 
+#if BUILDFLAG(IS_IOS)
+#include "base/ios/sim_header_shims.h"
+#else
+#include <libproc.h>
+#include <mach/mach_vm.h>
+#include <mach/shared_region.h>
+#endif
+
 namespace memory_instrumentation {
 
 namespace {
 
-// Don't simply use sizeof(task_vm_info) / sizeof(natural_t):
-// In the 10.15 SDK, this structure is 87 32-bit words long, and in
-// mach_types.defs:
-//
-//   type task_info_t    = array[*:87] of integer_t;
-//
-// However in the 10.14 SDK, this structure is 42 32-bit words, and in
-// mach_types.defs:
-//
-//   type task_info_t    = array[*:52] of integer_t;
-//
-// As a result, the 10.15 SDK's task_vm_info won't fit inside the 10.14 SDK's
-// task_info_t, so the *rest of the system* (on 10.14 and earlier) can't handle
-// calls that request the full 10.15 structure. We have to request a prefix of
-// it that 10.14 and earlier can handle by limiting the length we request. The
-// rest of the fields just get ignored, but we don't use them anyway.
-
-constexpr mach_msg_type_number_t ChromeTaskVMInfoCount =
-    TASK_VM_INFO_REV2_COUNT;
-
-// The count field is in units of natural_t, which is the machine's word size
-// (64 bits on all modern machines), but the task_info_t array is in units of
-// integer_t, which is 32 bits.
-constexpr mach_msg_type_number_t MAX_MIG_SIZE_FOR_1014 =
-    52 / (sizeof(natural_t) / sizeof(integer_t));
-static_assert(ChromeTaskVMInfoCount <= MAX_MIG_SIZE_FOR_1014,
-              "task_vm_info must be small enough for 10.14 MIG interfaces");
-
 using VMRegion = mojom::VmRegion;
 
 bool IsAddressInSharedRegion(uint64_t address) {
+#if BUILDFLAG(IS_IOS)
+  return address >= SHARED_REGION_BASE_ARM64 &&
+         address < (SHARED_REGION_BASE_ARM64 + SHARED_REGION_SIZE_ARM64);
+#else
+  // TODO: Need to fix this for ARM64 Mac.
   return address >= SHARED_REGION_BASE_X86_64 &&
          address < (SHARED_REGION_BASE_X86_64 + SHARED_REGION_SIZE_X86_64);
+#endif
 }
 
 bool IsRegionContainedInRegion(const VMRegion& containee,
@@ -91,16 +73,17 @@ bool GetDyldRegions(std::vector<VMRegion>* regions) {
 
   bool emitted_linkedit_from_dyld_shared_cache = false;
   for (size_t i = 0; i < all_image_infos->infoArrayCount; i++) {
-    const char* image_name = all_image_infos->infoArray[i].imageFilePath;
+    const char* image_name =
+        UNSAFE_TODO(all_image_infos->infoArray[i]).imageFilePath;
 
     // The public definition for dyld_all_image_infos/dyld_image_info is wrong
     // for 64-bit platforms. We explicitly cast to struct mach_header_64 even
     // though the public definition claims that this is a struct mach_header.
     const struct mach_header_64* const header =
         reinterpret_cast<const struct mach_header_64* const>(
-            all_image_infos->infoArray[i].imageLoadAddress);
+            UNSAFE_TODO(all_image_infos->infoArray[i]).imageLoadAddress);
 
-    uint64_t next_command = reinterpret_cast<uint64_t>(header + 1);
+    uint64_t next_command = reinterpret_cast<uint64_t>(UNSAFE_TODO(header + 1));
     uint64_t command_end = next_command + header->sizeofcmds;
     uint64_t slide = 0;
 
@@ -119,16 +102,17 @@ bool GetDyldRegions(std::vector<VMRegion>* regions) {
           return false;
         const segment_command_64* seg =
             reinterpret_cast<const segment_command_64*>(load_cmd);
-        if (strcmp(seg->segname, SEG_PAGEZERO) == 0)
+        if (UNSAFE_TODO(strcmp(seg->segname, SEG_PAGEZERO)) == 0) {
           continue;
-        if (strcmp(seg->segname, SEG_TEXT) == 0) {
+        }
+        if (UNSAFE_TODO(strcmp(seg->segname, SEG_TEXT)) == 0) {
           slide = reinterpret_cast<uint64_t>(header) - seg->vmaddr;
         }
 
         // Avoid emitting LINKEDIT regions in the dyld shared cache, since they
         // all overlap.
         if (IsAddressInSharedRegion(seg->vmaddr) &&
-            strcmp(seg->segname, SEG_LINKEDIT) == 0) {
+            UNSAFE_TODO(strcmp(seg->segname, SEG_LINKEDIT)) == 0) {
           if (emitted_linkedit_from_dyld_shared_cache) {
             continue;
           } else {
@@ -160,8 +144,7 @@ bool GetDyldRegions(std::vector<VMRegion>* regions) {
             reinterpret_cast<const uuid_command*>(load_cmd);
         // The ID is comprised of the UUID concatenated with the module's "age"
         // value which is always 0.
-        debug_id =
-            base::HexEncode(&uuid_cmd->uuid, sizeof(uuid_cmd->uuid)) + "0";
+        debug_id = base::HexEncode(uuid_cmd->uuid) + "0";
       }
     }
 
@@ -239,33 +222,44 @@ void AddRegionByteStats(VMRegion* dest, const VMRegion& source) {
 }  // namespace
 
 // static
-bool OSMetrics::FillOSMemoryDump(base::ProcessId pid,
+bool OSMetrics::FillOSMemoryDump(base::ProcessHandle handle,
+                                 const MemDumpFlagSet& flags,
                                  mojom::RawOSMemDump* dump) {
-  task_vm_info info;
-  mach_msg_type_number_t count = ChromeTaskVMInfoCount;
-  kern_return_t result =
-      task_info(mach_task_self(), TASK_VM_INFO,
-                reinterpret_cast<task_info_t>(&info), &count);
-  if (result != KERN_SUCCESS)
+  auto current_handle = base::GetCurrentProcessHandle();
+  if (handle != base::kNullProcessId && handle != current_handle) {
     return false;
+  }
+  return FillOSMemoryDump(current_handle, flags, nullptr, dump);
+}
 
-  dump->platform_private_footprint->internal_bytes = info.internal;
-  dump->platform_private_footprint->compressed_bytes = info.compressed;
-  dump->resident_set_kb = info.resident_size / 1024;
-  dump->peak_resident_set_kb = info.resident_size_peak / 1024;
-
-  // The |phys_footprint| field was introduced in 10.11.
-  if (count == ChromeTaskVMInfoCount) {
-    dump->platform_private_footprint->phys_footprint_bytes =
-        info.phys_footprint;
+// static
+bool OSMetrics::FillOSMemoryDump(base::ProcessHandle handle,
+                                 const MemDumpFlagSet& flags,
+                                 base::PortProvider* port_provider,
+                                 mojom::RawOSMemDump* dump) {
+  auto process_metrics =
+#if BUILDFLAG(IS_IOS)
+      base::ProcessMetrics::CreateProcessMetrics(handle);
+#else
+      base::ProcessMetrics::CreateProcessMetrics(handle, port_provider);
+#endif
+  auto info = process_metrics->GetMemoryInfo();
+  if (!info.has_value()) {
+    return false;
   }
 
+  dump->platform_private_footprint->phys_footprint_bytes =
+      info->physical_footprint_bytes;
+  dump->platform_private_footprint->internal_bytes = info->internal_bytes;
+  dump->platform_private_footprint->compressed_bytes = info->compressed_bytes;
+  dump->resident_set_kb =
+      base::saturated_cast<uint32_t>(info->resident_set_bytes / 1024);
   return true;
 }
 
 // static
 std::vector<mojom::VmRegionPtr> OSMetrics::GetProcessMemoryMaps(
-    base::ProcessId pid) {
+    base::ProcessHandle handle) {
   std::vector<mojom::VmRegionPtr> maps;
 
   std::vector<VMRegion> dyld_regions;
@@ -315,8 +309,9 @@ std::vector<mojom::VmRegionPtr> OSMetrics::GetProcessMemoryMaps(
   return maps;
 }
 
+#if !BUILDFLAG(IS_IOS)
 std::vector<mojom::VmRegionPtr> OSMetrics::GetProcessModules(
-    base::ProcessId pid) {
+    base::ProcessHandle handle) {
   std::vector<mojom::VmRegionPtr> maps;
 
   std::vector<VMRegion> dyld_regions;
@@ -329,5 +324,6 @@ std::vector<mojom::VmRegionPtr> OSMetrics::GetProcessModules(
 
   return maps;
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace memory_instrumentation

@@ -4,14 +4,16 @@
 
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -26,20 +28,26 @@ const base::FilePath::CharType kComponentPolicyCache[] =
 
 MachineLevelUserCloudPolicyManager::MachineLevelUserCloudPolicyManager(
     std::unique_ptr<MachineLevelUserCloudPolicyStore> store,
+    std::unique_ptr<MachineLevelUserCloudPolicyStore> extension_install_store,
     std::unique_ptr<CloudExternalDataManager> external_data_manager,
     const base::FilePath& policy_dir,
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     network::NetworkConnectionTrackerGetter network_connection_tracker_getter)
-    : CloudPolicyManager(GetMachineLevelUserCloudPolicyTypeForCurrentOS(),
+    : CloudPolicyManager(dm_protocol::kChromeMachineLevelUserCloudPolicyType,
                          std::string(),
-                         store.get(),
+                         std::move(store),
+                         std::move(extension_install_store),
                          task_runner,
                          std::move(network_connection_tracker_getter)),
-      store_(std::move(store)),
+      user_store_(static_cast<MachineLevelUserCloudPolicyStore*>(
+          CloudPolicyManager::store())),
+      extension_install_store_(static_cast<MachineLevelUserCloudPolicyStore*>(
+          CloudPolicyManager::extension_install_store())),
       external_data_manager_(std::move(external_data_manager)),
       policy_dir_(policy_dir) {}
 
-MachineLevelUserCloudPolicyManager::~MachineLevelUserCloudPolicyManager() {}
+MachineLevelUserCloudPolicyManager::~MachineLevelUserCloudPolicyManager() =
+    default;
 
 void MachineLevelUserCloudPolicyManager::Connect(
     PrefService* local_state,
@@ -84,23 +92,33 @@ void MachineLevelUserCloudPolicyManager::DisconnectAndRemovePolicy() {
   // component policies are also empty at CheckAndPublishPolicy().
   ClearAndDestroyComponentCloudPolicyService();
 
-  // When the |store_| is cleared, it informs the |external_data_manager_| that
-  // all external data references have been removed, causing the
+  // When the |user_store_| is cleared, it informs the |external_data_manager_|
+  // that all external data references have been removed, causing the
   // |external_data_manager_| to clear its cache as well.
-  store_->Clear();
+  user_store_->Clear();
+  if (extension_install_store_) {
+    extension_install_store_->Clear();
+  }
 }
 
 void MachineLevelUserCloudPolicyManager::Init(SchemaRegistry* registry) {
-  DVLOG(1) << "Machine level cloud policy manager initialized";
+  DVLOG_POLICY(1, POLICY_FETCHING)
+      << "Machine level cloud policy manager initialized";
   // Call to grand-parent's Init() instead of parent's is intentional.
   // NOLINTNEXTLINE(bugprone-parent-virtual-call)
   ConfigurationPolicyProvider::Init(registry);
 
   store()->AddObserver(this);
+  if (extension_install_store()) {
+    extension_install_store()->AddObserver(this);
+  }
 
   // Load the policy from disk synchronously once the manager is initalized
   // during Chrome launch if the cache and the global dm token exist.
   store()->LoadImmediately();
+  if (extension_install_store()) {
+    extension_install_store()->LoadImmediately();
+  }
 }
 
 void MachineLevelUserCloudPolicyManager::Shutdown() {
@@ -111,7 +129,8 @@ void MachineLevelUserCloudPolicyManager::Shutdown() {
 
 void MachineLevelUserCloudPolicyManager::OnStoreLoaded(
     CloudPolicyStore* cloud_policy_store) {
-  DCHECK_EQ(store(), cloud_policy_store);
+  CHECK(store() == cloud_policy_store ||
+        extension_install_store() == cloud_policy_store);
   CloudPolicyManager::OnStoreLoaded(cloud_policy_store);
 
   // It's possible for |client()| to be null during startup if the store is

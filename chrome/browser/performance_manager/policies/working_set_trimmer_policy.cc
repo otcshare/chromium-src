@@ -4,13 +4,12 @@
 
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy.h"
 
-#include "base/time/time.h"
-#include "build/build_config.h"
-
 #include "base/metrics/histogram_macros.h"
+#include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "build/chromeos_buildflags.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/performance_manager/mechanisms/working_set_trimmer.h"
 #include "components/performance_manager/graph/graph_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
@@ -18,9 +17,8 @@
 #include "components/performance_manager/public/graph/node_attached_data.h"
 #include "components/performance_manager/public/graph/node_data_describer_registry.h"
 #include "components/performance_manager/public/graph/process_node.h"
-#if BUILDFLAG(IS_WIN)
-#include "chrome/browser/performance_manager/policies/working_set_trimmer_policy_win.h"
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy_chromeos.h"
 #endif
 
@@ -29,8 +27,7 @@ namespace policies {
 
 namespace {
 
-class WorkingSetTrimData
-    : public ExternalNodeAttachedDataImpl<WorkingSetTrimData> {
+class WorkingSetTrimData : public NodeAttachedDataImpl<WorkingSetTrimData> {
  public:
   explicit WorkingSetTrimData(const ProcessNode* node) {}
   ~WorkingSetTrimData() override = default;
@@ -86,31 +83,26 @@ void WorkingSetTrimmerPolicy::SetLastTrimTime(const ProcessNode* process_node,
   data->last_trim_ = time;
 }
 
-bool WorkingSetTrimmerPolicy::TrimWorkingSet(const ProcessNode* process_node) {
+void WorkingSetTrimmerPolicy::TrimWorkingSet(const ProcessNode* process_node) {
   auto* trimmer = mechanism::WorkingSetTrimmer::GetInstance();
   DCHECK(trimmer);
 
-  static int renderers_trimmed = 0;
   if (process_node->GetProcess().IsValid()) {
-    UMA_HISTOGRAM_COUNTS_10000("Memory.WorkingSetTrim.RendererTrimCount",
-                               ++renderers_trimmed);
     SetLastTrimTimeNow(process_node);
-    return trimmer->TrimWorkingSet(process_node);
+    trimmer->TrimWorkingSet(process_node);
   }
-
-  return false;
 }
 
-base::Value WorkingSetTrimmerPolicy::DescribeProcessNodeData(
+base::Value::Dict WorkingSetTrimmerPolicy::DescribeProcessNodeData(
     const ProcessNode* node) const {
   auto* data = WorkingSetTrimData::Get(ProcessNodeImpl::FromNode(node));
   if (data == nullptr)
-    return base::Value();
+    return base::Value::Dict();
 
-  base::Value ret(base::Value::Type::DICTIONARY);
+  base::Value::Dict ret;
   auto last_trim_age = base::TimeTicks::Now() - data->last_trim_;
 
-  ret.SetKey(
+  ret.Set(
       "last_trim",
       base::Value(base::StrCat(
           {base::NumberToString(last_trim_age.InSeconds()), " seconds ago"})));
@@ -120,9 +112,7 @@ base::Value WorkingSetTrimmerPolicy::DescribeProcessNodeData(
 
 // static
 bool WorkingSetTrimmerPolicy::PlatformSupportsWorkingSetTrim() {
-#if BUILDFLAG(IS_WIN)
-  return WorkingSetTrimmerPolicyWin::PlatformSupportsWorkingSetTrim();
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return WorkingSetTrimmerPolicyChromeOS::PlatformSupportsWorkingSetTrim();
 #else
   return false;
@@ -132,9 +122,7 @@ bool WorkingSetTrimmerPolicy::PlatformSupportsWorkingSetTrim() {
 // static
 std::unique_ptr<WorkingSetTrimmerPolicy>
 WorkingSetTrimmerPolicy::CreatePolicyForPlatform() {
-#if BUILDFLAG(IS_WIN)
-  return std::make_unique<WorkingSetTrimmerPolicyWin>();
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return std::make_unique<WorkingSetTrimmerPolicyChromeOS>();
 #else
   NOTIMPLEMENTED() << "Platform does not support WorkingSetTrim.";

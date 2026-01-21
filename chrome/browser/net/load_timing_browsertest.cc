@@ -5,13 +5,12 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/net/profile_network_context_service.h"
@@ -28,7 +27,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
 
@@ -130,7 +128,7 @@ IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, HTTP) {
   EXPECT_EQ(navigation_deltas.ssl_start, -1);
 }
 
-// TODO(crbug.com/1128033): Flaky on all platforms
+// TODO(crbug.com/40719387): Flaky on all platforms
 IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, DISABLED_HTTPS) {
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
   https_server.AddDefaultHandlers();

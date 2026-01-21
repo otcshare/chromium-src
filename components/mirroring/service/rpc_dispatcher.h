@@ -6,11 +6,12 @@
 #define COMPONENTS_MIRRORING_SERVICE_RPC_DISPATCHER_H_
 
 #include <stdint.h>
+
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
 
 namespace mirroring {
 

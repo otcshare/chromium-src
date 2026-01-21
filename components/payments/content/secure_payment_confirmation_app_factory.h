@@ -5,22 +5,19 @@
 #ifndef COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_APP_FACTORY_H_
 #define COMPONENTS_PAYMENTS_CONTENT_SECURE_PAYMENT_CONFIRMATION_APP_FACTORY_H_
 
-#include <map>
 #include <memory>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app_factory.h"
-#include "components/webdata/common/web_data_service_consumer.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "components/payments/content/secure_payment_confirmation_credential_finder.h"
 
 namespace payments {
 
+class BrowserBoundKeyStore;
 struct SecurePaymentConfirmationCredential;
 
-class SecurePaymentConfirmationAppFactory
-    : public PaymentAppFactory,
-      public WebDataServiceConsumer,
-      public content::WebContentsObserver {
+class SecurePaymentConfirmationAppFactory : public PaymentAppFactory {
  public:
   SecurePaymentConfirmationAppFactory();
   ~SecurePaymentConfirmationAppFactory() override;
@@ -33,54 +30,38 @@ class SecurePaymentConfirmationAppFactory
   // PaymentAppFactory:
   void Create(base::WeakPtr<Delegate> delegate) override;
 
+  void SetBrowserBoundKeyStoreForTesting(
+      scoped_refptr<BrowserBoundKeyStore> key_store);
+
+  void SetCredentialFinderForTesting(
+      std::unique_ptr<SecurePaymentConfirmationCredentialFinder>
+          credential_finder);
+
  private:
   struct Request;
-
-  // WebDataServiceConsumer:
-  void OnWebDataServiceRequestDone(
-      WebDataServiceBase::Handle handle,
-      std::unique_ptr<WDTypedResult> result) override;
-
-  // WebContentsObserver:
-  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
 
   void OnIsUserVerifyingPlatformAuthenticatorAvailable(
       std::unique_ptr<Request> request,
       bool is_available);
 
-  // On platforms where we have credential-store level support for retrieving
-  // credentials (i.e., rather than using the user profile database), this
-  // callback will be called with the retrieved and matching credential ids.
-  //
-  // |relying_party_id| and |matching_credentials| are always std::move'd in,
-  // and so are not const-ref.
-  void OnGetMatchingCredentialIdsFromStore(
-      std::unique_ptr<Request> request,
-      std::string relying_party_id,
-      std::vector<std::vector<uint8_t>> matching_credentials);
-
   void OnRetrievedCredentials(
       std::unique_ptr<Request> request,
-      std::vector<std::unique_ptr<SecurePaymentConfirmationCredential>>
+      std::optional<
+          std::vector<std::unique_ptr<SecurePaymentConfirmationCredential>>>
           credentials);
 
-  void OnAppIcon(
-      std::unique_ptr<SecurePaymentConfirmationCredential> credential,
+  void OnRetrievedBrowserBoundKeyId(
       std::unique_ptr<Request> request,
-      const SkBitmap& icon);
+      std::optional<std::vector<uint8_t>> maybe_browser_bound_key_id);
 
-  // Called after downloading the icon whose URL was passed into PaymentRequest
-  // API.
-  void DidDownloadIcon(
-      std::unique_ptr<SecurePaymentConfirmationCredential> credential,
-      std::unique_ptr<Request> request,
-      int request_id,
-      int unused_http_status_code,
-      const GURL& unused_image_url,
-      const std::vector<SkBitmap>& bitmaps,
-      const std::vector<gfx::Size>& unused_sizes);
+  // Called once all icons are downloaded and their respective SkBitmaps have
+  // been set into the Request.
+  void DidDownloadAllIcons(std::unique_ptr<Request> request);
 
-  std::map<WebDataServiceBase::Handle, std::unique_ptr<Request>> requests_;
+  scoped_refptr<BrowserBoundKeyStore> browser_bound_key_store_for_testing_;
+
+  std::unique_ptr<SecurePaymentConfirmationCredentialFinder> credential_finder_;
+
   base::WeakPtrFactory<SecurePaymentConfirmationAppFactory> weak_ptr_factory_{
       this};
 };

@@ -4,22 +4,24 @@
 
 #include "third_party/leveldatabase/leveldb_chrome.h"
 
+#include <cstddef>
 #include <memory>
 #include <set>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/byte_size.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "base/trace_event/process_memory_dump.h"
@@ -28,7 +30,6 @@
 #include "third_party/leveldatabase/src/helpers/memenv/memenv.h"
 #include "util/mutexlock.h"
 
-using MemoryPressureLevel = base::MemoryPressureListener::MemoryPressureLevel;
 using base::trace_event::MemoryAllocatorDump;
 using base::trace_event::MemoryDumpArgs;
 using base::trace_event::MemoryDumpProvider;
@@ -40,11 +41,30 @@ namespace leveldb_chrome {
 
 namespace {
 
+// Feature to override the size of LevelDB block caches.
+//
+// The SuppressMemoryListeners experiment shows that not purging LevelDB caches
+// on memory pressure causes a statistically significant memory regression
+// (which makes sense) with no obvious speed regression. Building on this, this
+// feature will allow measuring the speed/memory impact of always keeping the
+// caches smaller.
+BASE_FEATURE(kLevelDBCacheSize, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(size_t,
+                   kLevelDBCacheSize_SizeBytes,
+                   &kLevelDBCacheSize,
+                   "leveldb_cache_size_bytes",
+                   base::KiBU(256).InBytes());
+
 size_t DefaultBlockCacheSize() {
-  if (base::SysInfo::IsLowEndDevice())
+  if (base::FeatureList::IsEnabled(kLevelDBCacheSize)) {
+    return kLevelDBCacheSize_SizeBytes.Get();
+  }
+
+  if (base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled()) {
     return 1 << 20;  // 1MB
-  else
+  } else {
     return 8 << 20;  // 8MB
+  }
 }
 
 std::string GetDumpNameForMemEnv(const leveldb::Env* memenv) {
@@ -53,7 +73,7 @@ std::string GetDumpNameForMemEnv(const leveldb::Env* memenv) {
 }
 
 // Singleton owning resources shared by Chrome's leveldb databases.
-class Globals {
+class Globals : public base::MemoryPressureListener {
  public:
   static Globals* GetInstance() {
     static base::NoDestructor<Globals> singleton;
@@ -61,21 +81,23 @@ class Globals {
   }
 
   Globals()
-      : web_block_cache_(base::SysInfo::IsLowEndDevice()
-                             ? nullptr
-                             : NewLRUCache(DefaultBlockCacheSize())),
+      : web_block_cache_(
+            base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled()
+                ? nullptr
+                : NewLRUCache(DefaultBlockCacheSize())),
         browser_block_cache_(NewLRUCache(DefaultBlockCacheSize())),
         // Using |this| here (when Globals is only partially constructed) is
-        // safe because base::MemoryPressureListener calls our callback
-        // asynchronously, so this instance will be fully constructed by the
-        // time it is called.
-        memory_pressure_listener_(
+        // safe because the memory pressure notification is sent asynchronously,
+        // so this instance will be fully constructed by the time it is called.
+        memory_pressure_listener_registration_(
             FROM_HERE,
-            base::BindRepeating(&Globals::OnMemoryPressure,
-                                base::Unretained(this))) {}
+            base::MemoryPressureListenerTag::kLevelDb,
+            this) {}
 
   Globals(const Globals&) = delete;
   Globals& operator=(const Globals&) = delete;
+
+  ~Globals() override = default;
 
   Cache* web_block_cache() const {
     if (web_block_cache_)
@@ -86,9 +108,8 @@ class Globals {
   Cache* browser_block_cache() const { return browser_block_cache_.get(); }
 
   // Called when the system is under memory pressure.
-  void OnMemoryPressure(MemoryPressureLevel memory_pressure_level) {
-    if (memory_pressure_level ==
-        MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_NONE)
+  void OnMemoryPressure(base::MemoryPressureLevel memory_pressure_level) override {
+    if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_NONE)
       return;
     browser_block_cache()->Prune();
     if (browser_block_cache() == web_block_cache())
@@ -117,17 +138,13 @@ class Globals {
                           base::trace_event::ProcessMemoryDump* pmd);
 
  private:
-  // Instances are never destroyed.
-  // If this destructor needs to exist in the future, the callback given to
-  // base::MemoryPressureListener() must use a WeakPtr.
-  ~Globals() = delete;
-
   std::unique_ptr<Cache> web_block_cache_;      // null on low end devices.
   std::unique_ptr<Cache> browser_block_cache_;  // Never null.
   mutable leveldb::port::Mutex env_mutex_;
   base::flat_set<leveldb::Env*> in_memory_envs_;
   // Listens for the system being under memory pressure.
-  const base::MemoryPressureListener memory_pressure_listener_;
+  const base::AsyncMemoryPressureListenerRegistration
+      memory_pressure_listener_registration_;
 };
 
 class ChromeMemEnv : public leveldb::EnvWrapper {
@@ -170,7 +187,7 @@ class ChromeMemEnv : public leveldb::EnvWrapper {
     leveldb::Status s = leveldb::EnvWrapper::RemoveFile(fname);
     if (s.ok()) {
       base::AutoLock lock(files_lock_);
-      DCHECK(base::Contains(file_names_, fname));
+      DCHECK(file_names_.contains(fname));
       file_names_.erase(fname);
     }
     return s;
@@ -226,7 +243,7 @@ class ChromeMemEnv : public leveldb::EnvWrapper {
                         size());
 
     if (dump_args.level_of_detail !=
-        base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND) {
+        base::trace_event::MemoryDumpLevelOfDetail::kBackground) {
       env_dump->AddString("name", "", name());
     }
 
@@ -285,6 +302,32 @@ leveldb::Status RemoveEnvDirectory(const std::string& directory,
   return result;
 }
 
+// This is an empty `Cache`, suitable for use as a block cache for in-memory
+// databases. It will not function in contexts where `Cache` is expected to
+// behave consistently, i.e. where `Insert()` is expected to return a non-null
+// value that can be handled by `Lookup()` or `Value()`. The block cache in
+// particular does not have this requirement.
+class NoOpBlockCache : public Cache {
+ public:
+  NoOpBlockCache() = default;
+  ~NoOpBlockCache() override = default;
+
+  Handle* Insert(const leveldb::Slice& key,
+                 void* value,
+                 size_t charge,
+                 void (*deleter)(const leveldb::Slice& key,
+                                 void* value)) override {
+    return nullptr;
+  }
+  Handle* Lookup(const leveldb::Slice& key) override { return nullptr; }
+  void Release(Handle* handle) override {}
+  void* Value(Handle* handle) override { return nullptr; }
+  void Erase(const leveldb::Slice& key) override {}
+  uint64_t NewId() override { return 0; }
+  void Prune() override {}
+  size_t TotalCharge() const override { return 0u; }
+};
+
 }  // namespace
 
 // Returns a separate (from the default) block cache for use by web APIs.
@@ -301,9 +344,8 @@ Cache* GetSharedBrowserBlockCache() {
 }
 
 Cache* GetSharedInMemoryBlockCache() {
-  // Zero size cache to prevent cache hits.
-  static leveldb::Cache* s_empty_cache = leveldb::NewLRUCache(0);
-  return s_empty_cache;
+  static base::NoDestructor<NoOpBlockCache> s_empty_cache;
+  return s_empty_cache.get();
 }
 
 bool IsMemEnv(const leveldb::Env* env) {
@@ -330,11 +372,8 @@ bool CorruptClosedDBForTesting(const base::FilePath& db_path) {
   if (!current.IsValid()) {
     return false;
   }
-  const char kString[] = "StringWithoutEOL";
-  if (current.Write(0, kString, sizeof(kString)) != sizeof(kString))
-    return false;
-  current.Close();
-  return true;
+  return current.WriteAndCheck(
+      0, base::byte_span_with_nul_from_cstring("StringWithoutEOL"));
 }
 
 bool PossiblyValidDB(const base::FilePath& db_path, leveldb::Env* env) {

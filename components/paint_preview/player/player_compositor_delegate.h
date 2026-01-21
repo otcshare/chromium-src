@@ -5,11 +5,12 @@
 #ifndef COMPONENTS_PAINT_PREVIEW_PLAYER_PLAYER_COMPOSITOR_DELEGATE_H_
 #define COMPONENTS_PAINT_PREVIEW_PLAYER_PLAYER_COMPOSITOR_DELEGATE_H_
 
-#include "base/callback.h"
+#include <optional>
+
 #include "base/cancelable_callback.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/queue.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
@@ -20,12 +21,6 @@
 #include "components/paint_preview/public/paint_preview_compositor_client.h"
 #include "components/paint_preview/public/paint_preview_compositor_service.h"
 #include "components/services/paint_preview_compositor/public/mojom/paint_preview_compositor.mojom.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-class MemoryPressureMonitor;
-}  // namespace base
 
 namespace gfx {
 class Rect;
@@ -41,10 +36,6 @@ class DirectoryKey;
 // PaintPreviewCompositor.
 class PlayerCompositorDelegate {
  public:
-  enum PressureLevelCount : size_t {
-    kLevels = base::MemoryPressureListener::kMaxValue + 1,
-  };
-
   PlayerCompositorDelegate();
   virtual ~PlayerCompositorDelegate();
 
@@ -55,14 +46,13 @@ class PlayerCompositorDelegate {
   using CompositorErrorCallback = base::OnceCallback<void(int32_t)>;
 
   // Initializes the compositor.
-  void Initialize(
-      PaintPreviewBaseService* paint_preview_service,
-      const GURL& url,
-      const DirectoryKey& key,
-      bool main_frame_mode,
-      CompositorErrorCallback compositor_error,
-      base::TimeDelta timeout_duration,
-      std::array<size_t, PressureLevelCount::kLevels> max_requests_map);
+  void Initialize(PaintPreviewBaseService* paint_preview_service,
+                  const GURL& url,
+                  const DirectoryKey& key,
+                  bool main_frame_mode,
+                  CompositorErrorCallback compositor_error,
+                  base::TimeDelta timeout_duration,
+                  int max_requests);
 
   // Returns whether initialization has happened.
   bool IsInitialized() const { return paint_preview_service_; }
@@ -86,7 +76,7 @@ class PlayerCompositorDelegate {
   // Pass this ID to `CancelBitmapRequest(int32_t)` to cancel the request if it
   // hasn't already been sent.
   int32_t RequestBitmap(
-      const absl::optional<base::UnguessableToken>& frame_guid,
+      const std::optional<base::UnguessableToken>& frame_guid,
       const gfx::Rect& clip_rect,
       float scale_factor,
       base::OnceCallback<void(mojom::PaintPreviewCompositor::BitmapStatus,
@@ -104,10 +94,9 @@ class PlayerCompositorDelegate {
   std::vector<const GURL*> OnClick(const base::UnguessableToken& frame_guid,
                                    const gfx::Rect& rect);
 
-  // Called when under memory pressure. The default implementation kills the
-  // compositor service and client under critical pressure.
-  virtual void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
+  // Called by PlayerCompositorDelegateAndroid when failing to allocated a
+  // bitmap.
+  void OnAllocationFailure();
 
   gfx::Point GetRootFrameOffsets() const { return root_frame_offsets_; }
 
@@ -121,7 +110,7 @@ class PlayerCompositorDelegate {
       bool main_frame_mode,
       CompositorErrorCallback compositor_error,
       base::TimeDelta timeout_duration,
-      std::array<size_t, PressureLevelCount::kLevels> max_requests_map,
+      int max_requests,
       std::unique_ptr<PaintPreviewCompositorService, base::OnTaskRunnerDeleter>
           fake_compositor_service);
 
@@ -136,17 +125,14 @@ class PlayerCompositorDelegate {
  protected:
   CompositorErrorCallback compositor_error_;
 
-  virtual base::MemoryPressureMonitor* memory_pressure_monitor();
-
  private:
-  void InitializeInternal(
-      PaintPreviewBaseService* paint_preview_service,
-      const GURL& expected_url,
-      const DirectoryKey& key,
-      bool main_frame_mode,
-      CompositorErrorCallback compositor_error,
-      base::TimeDelta timeout_duration,
-      std::array<size_t, PressureLevelCount::kLevels> max_requests_map);
+  void InitializeInternal(PaintPreviewBaseService* paint_preview_service,
+                          const GURL& expected_url,
+                          const DirectoryKey& key,
+                          bool main_frame_mode,
+                          CompositorErrorCallback compositor_error,
+                          base::TimeDelta timeout_duration,
+                          int max_requests);
 
   void ValidateProtoAndLoadAXTree(const GURL& expected_url);
 
@@ -182,7 +168,6 @@ class PlayerCompositorDelegate {
   raw_ptr<PaintPreviewBaseService> paint_preview_service_{nullptr};
   DirectoryKey key_;
   bool compress_on_close_{true};
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_;
 
   std::unique_ptr<PaintPreviewCompositorService, base::OnTaskRunnerDeleter>
       paint_preview_compositor_service_;
@@ -191,7 +176,6 @@ class PlayerCompositorDelegate {
 
   base::CancelableOnceClosure timeout_;
   int max_requests_{1};
-  std::array<size_t, PressureLevelCount::kLevels> max_requests_map_{1, 1, 1};
   bool main_frame_mode_{false};
 
   std::unique_ptr<

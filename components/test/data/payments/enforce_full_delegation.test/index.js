@@ -9,69 +9,7 @@ const METHOD_NAME = CURRENT_URL.substring(0, CURRENT_URL.lastIndexOf('/')) +
     '/method_manifest.json';
 const SW_SRC_URL = 'app.js';
 let request;
-let supportedInstruments = [];
-
-/**
- * Installs the given payment handler with the given payment method.
- * @param {string} method - The payment method that this service worker
- *    supports.
- * @return {Promise<string>} - 'success' or error message on failure.
- */
-async function install(method = METHOD_NAME) {
-  info('installing');
-  try {
-    const registration = await navigator.serviceWorker.register(SW_SRC_URL);
-    await activation(registration);
-    await registration.paymentManager.instruments.set(
-        'instrument-for-' + method, {name: 'Instrument Name', method});
-    return 'success';
-  } catch (e) {
-    return e.message;
-  }
-}
-
-/**
- * Returns a promise that resolves when the service worker of the given
- * registration has activated.
- * @param {ServiceWorkerRegistration} registration - A service worker
- * registration.
- * @return {Promise<void>} - A promise that resolves when the service worker
- * has activated.
- */
-async function activation(registration) {
-  return new Promise((resolve) => {
-    if (registration.active) {
-      resolve();
-      return;
-    }
-    registration.addEventListener('updatefound', () => {
-      const newWorker = registration.installing;
-      if (newWorker.state == 'activated') {
-        resolve();
-        return;
-      }
-      newWorker.addEventListener('statechange', () => {
-        if (newWorker.state == 'activated') {
-          resolve();
-        }
-      });
-    });
-  });
-}
-
-/**
- * Uninstall the payment handler.
- * @return {string} - the message about the uninstallation result.
- */
-async function uninstall() {
-  info('uninstall');
-  let registration = await navigator.serviceWorker.getRegistration(SW_SRC_URL);
-  if (!registration) {
-    return 'The Payment handler has not been installed yet.';
-  }
-  await registration.unregister();
-  return 'success';
-}
+const supportedInstruments = [];
 
 /**
  * Delegates handling of the provided options to the payment handler.
@@ -82,7 +20,7 @@ async function enableDelegations(delegations) {
   info('enableDelegations: ' + JSON.stringify(delegations));
   try {
     await navigator.serviceWorker.ready;
-    let registration =
+    const registration =
         await navigator.serviceWorker.getRegistration(SW_SRC_URL);
     if (!registration) {
       return 'The payment handler is not installed.';

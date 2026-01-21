@@ -4,15 +4,17 @@
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "components/crash/android/java_handler_jni_headers/CrashpadMain_jni.h"
 #include "third_party/crashpad/crashpad/client/client_argv_handling.h"
 #include "third_party/crashpad/crashpad/handler/handler_main.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/crash/android/java_handler_jni_headers/CrashpadMain_jni.h"
 
 namespace crashpad {
 
 static void JNI_CrashpadMain_CrashpadMain(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobjectArray>& j_argv) {
+    const base::android::JavaRef<jobjectArray>& j_argv) {
   std::vector<std::string> argv_strings;
   base::android::AppendJavaStringArrayToStringVector(env, j_argv,
                                                      &argv_strings);
@@ -23,3 +25,5 @@ static void JNI_CrashpadMain_CrashpadMain(
 }
 
 }  // namespace crashpad
+
+DEFINE_JNI(CrashpadMain)

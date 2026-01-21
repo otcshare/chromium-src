@@ -2,49 +2,56 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <inttypes.h>
+
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/at_exit.h"
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "crypto/openssl_util.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "net/cert/root_store_proto_full/root_store.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/boringssl/src/include/openssl/bio.h"
 #include "third_party/boringssl/src/include/openssl/err.h"
 #include "third_party/boringssl/src/include/openssl/pem.h"
 #include "third_party/protobuf/src/google/protobuf/text_format.h"
 
 using chrome_root_store::RootStore;
+using chrome_root_store::TrustAnchor;
 
 namespace {
 
 // Returns a map from hex-encoded SHA-256 hash to DER certificate, or
-// `absl::nullopt` if not found.
-absl::optional<std::map<std::string, std::string>> DecodeCerts(
-    base::StringPiece in) {
-  // TODO(https://crbug.com/1216547): net/cert/pem.h has a much nicer API, but
+// `std::nullopt` if not found.
+std::optional<std::map<std::string, std::string>> DecodeCerts(
+    std::string_view in) {
+  // TODO(crbug.com/40770548): net/cert/pem.h has a much nicer API, but
   // it would require some build refactoring to avoid a circular dependency.
   // This is assuming that the chrome trust store code goes in
   // net/cert/internal, which it may not.
   bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(in.data(), in.size()));
   if (!bio) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   std::map<std::string, std::string> certs;
   for (;;) {
@@ -60,58 +67,49 @@ absl::optional<std::map<std::string, std::string>> DecodeCerts(
         break;
       }
       LOG(ERROR) << "Error reading PEM.";
-      return absl::nullopt;
+      return std::nullopt;
     }
     bssl::UniquePtr<char> scoped_name(name);
     bssl::UniquePtr<char> scoped_header(header);
     bssl::UniquePtr<unsigned char> scoped_data(data);
-    if (strcmp(name, "CERTIFICATE") != 0) {
+    if (std::string_view(name) != "CERTIFICATE") {
       LOG(ERROR) << "Found PEM block of type " << name
                  << " instead of CERTIFICATE";
-      return absl::nullopt;
+      return std::nullopt;
     }
-    std::string sha256_hex = base::ToLowerASCII(
-        base::HexEncode(crypto::SHA256Hash(base::make_span(data, len))));
-    certs[sha256_hex] = std::string(data, data + len);
+    std::string_view cert_view(reinterpret_cast<const char*>(data),
+                               base::checked_cast<size_t>(len));
+    const std::string sha256_hex =
+        base::HexEncodeLower(crypto::hash::Sha256(cert_view));
+    certs[sha256_hex] = std::string(cert_view);
   }
   return std::move(certs);
 }
 
-absl::optional<RootStore> ReadTextRootStore(
-    const base::FilePath& root_store_path,
-    const base::FilePath& certs_path) {
-  std::string root_store_text;
-  if (!base::ReadFileToString(base::MakeAbsoluteFilePath(root_store_path),
-                              &root_store_text)) {
-    LOG(ERROR) << "Could not read " << root_store_path;
-    return absl::nullopt;
-  }
-
-  RootStore root_store;
-  if (!google::protobuf::TextFormat::ParseFromString(root_store_text,
-                                                     &root_store)) {
-    LOG(ERROR) << "Could not parse " << root_store_path;
-    return absl::nullopt;
-  }
-
+// ReplaceTrustAnchors takes a repeated trust_anchors field from a proto and
+// replaces certs identified by a SHA-256 hash with the full cert bytes, using
+// the file found at certs_file_path to provide the full cert bytes.
+bool ReplaceTrustAnchors(
+    google::protobuf::RepeatedPtrField<TrustAnchor>* trust_anchors,
+    const base::FilePath& certs_file_path) {
   std::map<std::string, std::string> certs;
-  if (!certs_path.empty()) {
+  if (!certs_file_path.empty()) {
     std::string certs_data;
-    if (!base::ReadFileToString(base::MakeAbsoluteFilePath(certs_path),
+    if (!base::ReadFileToString(base::MakeAbsoluteFilePath(certs_file_path),
                                 &certs_data)) {
-      LOG(ERROR) << "Could not read " << certs_path;
-      return absl::nullopt;
+      LOG(ERROR) << "Could not read " << certs_file_path;
+      return false;
     }
     auto certs_opt = DecodeCerts(certs_data);
     if (!certs_opt) {
-      LOG(ERROR) << "Could not decode " << certs_path;
-      return absl::nullopt;
+      LOG(ERROR) << "Could not decode " << certs_file_path;
+      return false;
     }
     certs = std::move(*certs_opt);
   }
 
   // Replace the filenames with the actual certificate contents.
-  for (auto& anchor : *root_store.mutable_trust_anchors()) {
+  for (auto& anchor : *trust_anchors) {
     if (anchor.certificate_case() !=
         chrome_root_store::TrustAnchor::kSha256Hex) {
       continue;
@@ -120,7 +118,7 @@ absl::optional<RootStore> ReadTextRootStore(
     auto iter = certs.find(anchor.sha256_hex());
     if (iter == certs.end()) {
       LOG(ERROR) << "Could not find certificate " << anchor.sha256_hex();
-      return absl::nullopt;
+      return false;
     }
 
     // Remove the certificate from `certs`. This both checks for duplicate
@@ -131,48 +129,287 @@ absl::optional<RootStore> ReadTextRootStore(
 
   if (!certs.empty()) {
     LOG(ERROR) << "Unused certificate (SHA-256 hash " << certs.begin()->first
-               << ") in " << certs_path;
-    return absl::nullopt;
+               << ") in " << certs_file_path;
+    return false;
+  }
+  return true;
+}
+
+std::optional<RootStore> ReadTextRootStore(
+    const base::FilePath& root_store_path,
+    const base::FilePath& certs_path,
+    const base::FilePath& additional_certs_path) {
+  std::string root_store_text;
+  if (!base::ReadFileToString(base::MakeAbsoluteFilePath(root_store_path),
+                              &root_store_text)) {
+    LOG(ERROR) << "Could not read " << root_store_path;
+    return std::nullopt;
   }
 
+  RootStore root_store;
+  if (!google::protobuf::TextFormat::ParseFromString(root_store_text,
+                                                     &root_store)) {
+    LOG(ERROR) << "Could not parse " << root_store_path;
+    return std::nullopt;
+  }
+
+  if (!ReplaceTrustAnchors(root_store.mutable_trust_anchors(), certs_path)) {
+    LOG(ERROR) << "Failed to process " << certs_path;
+    return std::nullopt;
+  }
+  if (!ReplaceTrustAnchors(root_store.mutable_additional_certs(),
+                           additional_certs_path)) {
+    LOG(ERROR) << "Failed to process " << additional_certs_path;
+    return std::nullopt;
+  }
   return std::move(root_store);
+}
+
+std::string SecondsFromEpochToBaseTime(int64_t t) {
+  return base::StrCat({"base::Time::UnixEpoch() + base::Seconds(",
+                       base::NumberToString(t), ")"});
+}
+
+std::string VersionFromString(std::string_view version_str) {
+  return base::StrCat({"\"", version_str, "\""});
+}
+
+void WriteByteArrayConstant(std::string_view name,
+                            std::string_view data,
+                            std::string* string_to_write) {
+  base::StringAppendF(string_to_write, "constexpr uint8_t %s[] = {", name);
+
+  // Convert each character to hex representation, escaped.
+  for (auto c : data) {
+    base::StringAppendF(string_to_write, "0x%02xu,", static_cast<uint8_t>(c));
+  }
+
+  *string_to_write += "};\n";
+}
+
+void MaybeWriteConstraintsConstant(
+    std::string_view name,
+    const ::google::protobuf::RepeatedPtrField<
+        ::chrome_root_store::ConstraintSet>& constraints,
+    std::string* string_to_write) {
+  const std::string kNulloptString = "std::nullopt";
+
+  if (constraints.size() <= 0) {
+    return;
+  }
+
+  int constraint_num = 0;
+  for (const auto& constraint : constraints) {
+    if (constraint.permitted_dns_names_size() > 0) {
+      base::StringAppendF(string_to_write,
+                          "constexpr std::string_view "
+                          "%sNames%d[] = {",
+                          name, constraint_num);
+      for (const auto& dns_name : constraint.permitted_dns_names()) {
+        base::StringAppendF(string_to_write, "\"%s\",", dns_name);
+      }
+      *string_to_write += "};\n";
+    }
+    constraint_num++;
+  }
+
+  base::StringAppendF(string_to_write,
+                      "constexpr StaticChromeRootCertConstraints "
+                      "%s[] = {",
+                      name);
+
+  std::vector<std::string> constraint_strings;
+  constraint_num = 0;
+  for (const auto& constraint : constraints) {
+    std::vector<std::string> constraint_params;
+
+    constraint_params.push_back(
+        constraint.has_sct_not_after_sec()
+            ? SecondsFromEpochToBaseTime(constraint.sct_not_after_sec())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_sct_all_after_sec()
+            ? SecondsFromEpochToBaseTime(constraint.sct_all_after_sec())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_min_version()
+            ? VersionFromString(constraint.min_version())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_max_version_exclusive()
+            ? VersionFromString(constraint.max_version_exclusive())
+            : kNulloptString);
+
+    if (constraint.permitted_dns_names_size() > 0) {
+      constraint_params.push_back(
+          base::StringPrintf("%sNames%d", name, constraint_num));
+    } else {
+      constraint_params.push_back("{}");
+    }
+
+    constraint_strings.push_back(
+        base::StrCat({"{", base::JoinString(constraint_params, ","), "}"}));
+
+    constraint_num++;
+  }
+
+  *string_to_write += base::JoinString(constraint_strings, ",");
+  *string_to_write += "};\n";
+}
+
+void WriteTrustAnchors(
+    const google::protobuf::RepeatedPtrField<TrustAnchor>& trust_anchors,
+    const std::string& cert_name_prefix,
+    std::string* string_to_write) {
+  for (int i = 0; i < trust_anchors.size(); i++) {
+    const auto& anchor = trust_anchors.Get(i);
+    // Every trust anchor at this point should have a DER.
+    CHECK(!anchor.der().empty());
+    std::string der = anchor.der();
+
+    WriteByteArrayConstant(base::StringPrintf("k%sCert%d", cert_name_prefix, i),
+                           der, string_to_write);
+
+    if (!anchor.trust_anchor_id().empty()) {
+      WriteByteArrayConstant(
+          base::StringPrintf("k%sTrustAnchorID%d", cert_name_prefix, i),
+          anchor.trust_anchor_id(), string_to_write);
+    }
+
+    MaybeWriteConstraintsConstant(
+        base::StringPrintf("k%sConstraints%d", cert_name_prefix, i),
+        anchor.constraints(), string_to_write);
+  }
 }
 
 // Returns true if file was correctly written, false otherwise.
 bool WriteRootCppFile(const RootStore& root_store,
                       const base::FilePath cpp_path) {
-  // Root store should have at least one trust anchors.
+  // Root store should have at least one trust anchor.
   CHECK_GT(root_store.trust_anchors_size(), 0);
 
   std::string string_to_write =
-      "// This file is auto-generated, DO NOT EDIT.\n\n"
-      "const ChromeRootCertInfo kChromeRootCertList[] = {\n";
+      "// This file is auto-generated, DO NOT EDIT.\n\n";
 
-  for (auto& anchor : root_store.trust_anchors()) {
-    // Every trust anchor at this point should have a DER.
-    CHECK(!anchor.der().empty());
-    std::string der = anchor.der();
+  WriteTrustAnchors(root_store.trust_anchors(), "ChromeRoot", &string_to_write);
+  WriteTrustAnchors(root_store.additional_certs(), "Additional",
+                    &string_to_write);
 
-    // Begin struct. Assumed type of ChromeRootCertInfo:
-    //
-    // struct {
-    //   base::span<const uint8_t> der;
-    // };
-    string_to_write += "    {{{";
-
-    // Convert each character to hex representation, escaped.
-    for (auto c : der) {
-      base::StringAppendF(&string_to_write, "0x%02xu,",
-                          static_cast<uint8_t>(c));
+  // Assemble list of trust anchors.
+  string_to_write += "constexpr ChromeRootCertInfo kChromeRootCertList[] = {\n";
+  for (int i = 0; i < root_store.trust_anchors_size(); i++) {
+    const auto& anchor = root_store.trust_anchors(i);
+    if (anchor.has_tls_trust_anchor()) {
+      // Anchors in |trust_anchors| are not supposed to have |tls_trust_anchor|
+      // set, because they are definitionally TLS trust anchors.
+      return false;
+    }
+    base::StringAppendF(&string_to_write, "    {kChromeRootCert%d, ", i);
+    if (anchor.constraints_size() > 0) {
+      base::StringAppendF(&string_to_write, "kChromeRootConstraints%d", i);
+    } else {
+      string_to_write += "{}";
     }
 
-    // End struct
-    string_to_write += "}}},\n";
-  }
-  string_to_write += "};";
+    base::StringAppendF(
+        &string_to_write,
+        ", /*enforce_anchor_expiry=*/%s, /*enforce_anchor_constraints=*/%s",
+        anchor.enforce_anchor_expiry() ? "true" : "false",
+        anchor.enforce_anchor_constraints() ? "true" : "false");
 
-  string_to_write += "\n\n\nstatic const int64_t kRootStoreVersion = " +
-                     base::NumberToString(root_store.version_major()) + ";\n";
+    if (anchor.trust_anchor_id().empty()) {
+      string_to_write += ", {}";
+    } else {
+      base::StringAppendF(&string_to_write, ", kChromeRootTrustAnchorID%d", i);
+    }
+    string_to_write += "},\n";
+  }
+  // Append additional_certs as TLS trust anchors, if they are marked as such.
+  for (int i = 0; i < root_store.additional_certs_size(); i++) {
+    const auto& anchor = root_store.additional_certs(i);
+    if (!anchor.tls_trust_anchor()) {
+      continue;
+    }
+    base::StringAppendF(&string_to_write, "    {kAdditionalCert%d, ", i);
+    if (anchor.constraints_size() > 0) {
+      base::StringAppendF(&string_to_write, "kAdditionalConstraints%d", i);
+    } else {
+      string_to_write += "{}";
+    }
+
+    base::StringAppendF(
+        &string_to_write,
+        ", /*enforce_anchor_expiry=*/%s, /*enforce_anchor_constraints=*/%s",
+        anchor.enforce_anchor_expiry() ? "true" : "false",
+        anchor.enforce_anchor_constraints() ? "true" : "false");
+
+    if (anchor.trust_anchor_id().empty()) {
+      string_to_write += ", {}";
+    } else {
+      base::StringAppendF(&string_to_write, ", kAdditionalTrustAnchorID%d", i);
+    }
+    string_to_write += "},\n";
+  }
+  string_to_write += "};\n\n";
+
+  // Assemble list of QWAC issuers, which can come from both trust_anchors and
+  // additional_certs.
+  string_to_write +=
+      "constexpr base::span<const uint8_t> kEutlRootCertList[] = {\n";
+  for (int i = 0; i < root_store.trust_anchors_size(); i++) {
+    const auto& anchor = root_store.trust_anchors(i);
+    if (!anchor.eutl()) {
+      continue;
+    }
+    base::StringAppendF(&string_to_write, "    kChromeRootCert%d,\n", i);
+  }
+  for (int i = 0; i < root_store.additional_certs_size(); i++) {
+    const auto& anchor = root_store.additional_certs(i);
+    if (!anchor.eutl()) {
+      continue;
+    }
+    base::StringAppendF(&string_to_write, "    kAdditionalCert%d,\n", i);
+  }
+  string_to_write += "};\n\n";
+
+  // Write constants used by MTC anchors.
+  for (int i = 0; i < root_store.mtc_anchors_size(); i++) {
+    const auto& anchor = root_store.mtc_anchors(i);
+    if (!anchor.tls_trust_anchor()) {
+      continue;
+    }
+    WriteByteArrayConstant(base::StringPrintf("kMtcAnchorLogId%d", i),
+                           anchor.log_id(), &string_to_write);
+    MaybeWriteConstraintsConstant(
+        base::StringPrintf("kMtcAnchorConstraints%d", i), anchor.constraints(),
+        &string_to_write);
+  }
+
+  // Assemble list of trusted MTC anchors.
+  string_to_write +=
+      "constexpr ChromeMtcAnchorInfo kChromeTrustedMtcAnchorList[] = {\n";
+  for (int i = 0; i < root_store.mtc_anchors_size(); i++) {
+    const auto& anchor = root_store.mtc_anchors(i);
+    if (!anchor.tls_trust_anchor()) {
+      continue;
+    }
+    base::StringAppendF(&string_to_write, "  {kMtcAnchorLogId%d", i);
+    if (anchor.constraints().size() > 0) {
+      base::StringAppendF(&string_to_write, ", kMtcAnchorConstraints%d", i);
+    } else {
+      string_to_write += ", {}";
+    }
+    string_to_write += "},\n";
+  }
+  string_to_write += "};\n\n";
+
+  base::StringAppendF(&string_to_write,
+                      "\nstatic const int64_t kRootStoreVersion = %" PRId64
+                      ";\n",
+                      root_store.version_major());
   if (!base::WriteFile(cpp_path, string_to_write)) {
     return false;
   }
@@ -199,14 +436,15 @@ bool WriteEvCppFile(const RootStore& root_store,
       continue;
     }
 
-    std::string sha256_hash = crypto::SHA256HashString(anchor.der());
+    std::string sha256_hash =
+        std::string(base::as_string_view(crypto::hash::Sha256(anchor.der())));
 
     // Begin struct. Assumed type of EVMetadata:
     //
     // struct EVMetadata {
     //  static const size_t kMaxOIDsPerCA = 2;
     //  SHA256HashValue fingerprint;
-    //  const base::StringPiece policy_oids[kMaxOIDsPerCA];
+    //  const std::string_view policy_oids[kMaxOIDsPerCA];
     // };
     string_to_write += "    {\n";
     string_to_write += "        {{";
@@ -232,8 +470,7 @@ bool WriteEvCppFile(const RootStore& root_store,
     // Chrome Root Store textprotos.
     const int kMaxPolicyOids = 2;
     int oids_size = anchor.ev_policy_oids_size();
-    std::string hexencode_hash =
-        base::HexEncode(sha256_hash.data(), sha256_hash.size());
+    std::string hexencode_hash = base::HexEncode(sha256_hash);
     if (oids_size > kMaxPolicyOids) {
       PLOG(ERROR) << hexencode_hash << " has too many OIDs!";
       return false;
@@ -269,8 +506,6 @@ int main(int argc, char** argv) {
       logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
   logging::InitLogging(settings);
 
-  crypto::EnsureOpenSSLInit();
-
   base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
   base::FilePath proto_path = command_line.GetSwitchValuePath("write-proto");
   base::FilePath root_store_cpp_path =
@@ -280,6 +515,8 @@ int main(int argc, char** argv) {
   base::FilePath root_store_path =
       command_line.GetSwitchValuePath("root-store");
   base::FilePath certs_path = command_line.GetSwitchValuePath("certs");
+  base::FilePath additional_certs_path =
+      command_line.GetSwitchValuePath("additional-certs");
 
   if ((proto_path.empty() && root_store_cpp_path.empty() &&
        ev_roots_cpp_path.empty()) ||
@@ -287,19 +524,20 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: root_store_tool "
               << "--root-store=TEXTPROTO_FILE "
               << "[--certs=CERTS_FILE] "
+              << "[--additional-certs=ADDITIONAL_CERTS_FILE] "
               << "[--write-proto=PROTO_FILE] "
               << "[--write-cpp-root-store=CPP_FILE] "
               << "[--write-cpp-ev-roots=CPP_FILE] " << std::endl;
     return 1;
   }
 
-  absl::optional<RootStore> root_store =
-      ReadTextRootStore(root_store_path, certs_path);
+  std::optional<RootStore> root_store =
+      ReadTextRootStore(root_store_path, certs_path, additional_certs_path);
   if (!root_store) {
     return 1;
   }
 
-  // TODO(https://crbug.com/1216547): Figure out how to use the serialized
+  // TODO(crbug.com/40770548): Figure out how to use the serialized
   // proto to support component update.
   // components/resources/ssl/ssl_error_assistant/push_proto.py
   // does it through a GCS bucket (I think) so that might be an option.

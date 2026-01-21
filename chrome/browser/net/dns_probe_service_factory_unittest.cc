@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_tick_clock.h"
@@ -21,13 +21,14 @@
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/error_page/common/net_error_info.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/dns/public/secure_dns_mode.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -43,14 +44,11 @@ class DnsProbeServiceTest : public testing::Test {
  public:
   DnsProbeServiceTest()
       : callback_called_(false), callback_result_(error_page::DNS_PROBE_MAX) {
-    local_state_ = std::make_unique<ScopedTestingLocalState>(
-        TestingBrowserProcess::GetGlobal());
-
     // SystemNetworkContextManager cannot be instantiated here, which normally
     // owns the StubResolverConfigReader instance, so inject a
     // StubResolverConfigReader instance here.
-    stub_resolver_config_reader_ =
-        std::make_unique<StubResolverConfigReader>(local_state_->Get());
+    stub_resolver_config_reader_ = std::make_unique<StubResolverConfigReader>(
+        TestingBrowserProcess::GetGlobal()->local_state());
     SystemNetworkContextManager::set_stub_resolver_config_reader_for_testing(
         stub_resolver_config_reader_.get());
   }
@@ -116,7 +114,9 @@ class DnsProbeServiceTest : public testing::Test {
 
   DnsProbeService* probe_service() const { return service_.get(); }
 
-  TestingPrefServiceSimple* local_state() { return local_state_->Get(); }
+  TestingPrefServiceSimple* local_state() {
+    return TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  }
 
   const std::string kDohTemplateGet = "https://bar.test/dns-query{?dns}";
   const std::string kDohTemplatePost = "https://bar.test/dns-query";
@@ -133,7 +133,6 @@ class DnsProbeServiceTest : public testing::Test {
   std::unique_ptr<FakeHostResolverNetworkContext> network_context_;
   std::unique_ptr<FakeDnsConfigChangeManager> dns_config_change_manager_;
   std::unique_ptr<DnsProbeService> service_;
-  std::unique_ptr<ScopedTestingLocalState> local_state_;
   std::unique_ptr<StubResolverConfigReader> stub_resolver_config_reader_;
   bool callback_called_;
   DnsProbeStatus callback_result_;
@@ -332,6 +331,14 @@ TEST_F(DnsProbeServiceTest, CurrentConfig_Secure) {
   local_state()->SetManagedPref(
       prefs::kDnsOverHttpsTemplates,
       std::make_unique<base::Value>(kDohTemplateGet + " " + kDohTemplatePost));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // In a real user session, the pref
+  // prefs::kDnsOverHttpsEffectiveTemplatesChromeOS is set by
+  // ash::SecureDnsManager.
+  local_state()->SetString(prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
+                           kDohTemplateGet + " " + kDohTemplatePost);
+#endif
   ConfigureTest({}, {});
   net::DnsConfigOverrides overrides =
       probe_service()->GetCurrentConfigOverridesForTesting();

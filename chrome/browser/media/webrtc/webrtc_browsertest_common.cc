@@ -4,15 +4,14 @@
 
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
 
-#include "base/callback_forward.h"
 #include "base/files/file_util.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/common/chrome_paths.h"
@@ -45,17 +44,17 @@ const char kAdviseOnGclientSolution[] =
 
 #if defined(THREAD_SANITIZER) || defined(MEMORY_SANITIZER) || \
     defined(ADDRESS_SANITIZER)
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 const int kDefaultPollIntervalMsec = 2000;
 #else
 const int kDefaultPollIntervalMsec = 1000;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #else
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 const int kDefaultPollIntervalMsec = 500;
 #else
 const int kDefaultPollIntervalMsec = 250;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif
 
 bool IsErrorResult(const std::string& result) {
@@ -83,8 +82,7 @@ base::FilePath GetToolForPlatform(const std::string& tool_name) {
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   return tools_dir.Append(FILE_PATH_LITERAL("linux")).AppendASCII(tool_name);
 #else
-  CHECK(false) << "Can't retrieve tool " << tool_name << " on this platform.";
-  return base::FilePath();
+  NOTREACHED() << "Can't retrieve tool " << tool_name << " on this platform.";
 #endif
 }
 
@@ -125,14 +123,15 @@ bool HasYuvAndY4mFile(const base::FilePath::CharType* reference_file) {
 
 bool SleepInJavascript(content::WebContents* tab_contents, int timeout_msec) {
   const std::string javascript = base::StringPrintf(
-      "setTimeout(function() {"
-      "  window.domAutomationController.send('sleep-ok');"
-      "}, %d)", timeout_msec);
+      "new Promise(resolve => {"
+      "  setTimeout(function() {"
+      "    resolve('sleep-ok');"
+      "  }, %d);"
+      "});",
+      timeout_msec);
 
-  std::string result;
-  bool ok = content::ExecuteScriptAndExtractString(
-      tab_contents, javascript, &result);
-  return ok && result == "sleep-ok";
+  return content::EvalJs(tab_contents, javascript).ExtractString() ==
+         "sleep-ok";
 }
 
 bool PollingWaitUntil(const std::string& javascript,
@@ -151,11 +150,7 @@ bool PollingWaitUntil(const std::string& javascript,
   std::string result;
 
   while (base::Time::Now() - start_time < timeout) {
-    if (!content::ExecuteScriptAndExtractString(tab_contents, javascript,
-                                                &result)) {
-      LOG(ERROR) << "Failed to execute javascript " << javascript;
-      return false;
-    }
+    result = content::EvalJs(tab_contents, javascript).ExtractString();
 
     if (evaluates_to == result) {
       return true;

@@ -30,11 +30,10 @@ class Delegate : public seven_zip::Delegate {
                base::span<uint8_t>& output) override {
     if (entry.file_size < 4096) {
       buffer_.resize(entry.file_size);
-      output = base::make_span(buffer_);
+      output = base::span(buffer_);
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   bool OnDirectory(const seven_zip::EntryInfo& entry) override { return true; }
   bool EntryDone(seven_zip::Result result,
@@ -99,7 +98,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   archive_file->Write(0, reinterpret_cast<const char*>(data), size);
 
   Delegate delegate;
-  seven_zip::Extract(archive_file->Duplicate(), delegate);
+
+  std::unique_ptr<seven_zip::SevenZipReader> reader =
+      seven_zip::SevenZipReader::Create(archive_file->Duplicate(), delegate);
+  if (reader) {
+    reader->Extract();
+  }
 
   return 0;
 }

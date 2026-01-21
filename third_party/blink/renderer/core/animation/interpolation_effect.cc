@@ -7,41 +7,72 @@
 namespace blink {
 
 void InterpolationEffect::GetActiveInterpolations(
+    int iteration,
     double fraction,
+    EffectModel::IterationCompositeOperation iteration_composite,
+    TimingFunction::LimitDirection limit_direction,
     HeapVector<Member<Interpolation>>& result) const {
   wtf_size_t existing_size = result.size();
   wtf_size_t result_index = 0;
 
   for (const auto& record : interpolations_) {
-    if (fraction >= record->apply_from_ && fraction < record->apply_to_) {
-      Interpolation* interpolation = record->interpolation_;
-      double record_length = record->end_ - record->start_;
-      double local_fraction =
-          record_length ? (fraction - record->start_) / record_length : 0.0;
-      if (record->easing_) {
-        local_fraction = record->easing_->Evaluate(
-            local_fraction, TimingFunction::LimitDirection::RIGHT);
+    Interpolation* interpolation = nullptr;
+    if (record->is_static_) {
+      // The local fraction is irrelevant since the result is constant valued.
+      // The first sample will cache a value, which will be reused in
+      // subsequent calls as long as the cache is not invalidated.
+      interpolation = record->interpolation_;
+      interpolation->Interpolate(iteration, 0, iteration_composite);
+    } else {
+      if (fraction >= record->apply_from_ && fraction < record->apply_to_) {
+        // TODO(kevers): There is room to expand the optimization to allow a
+        // non-static property to have static records in the event of keyframe
+        // pairs with identical values. We could then skip the local fraction
+        // calculation and simply sample at 0. For this, we would still need
+        // records for each keyframe pair.
+        interpolation = record->interpolation_;
+        double record_length = record->end_ - record->start_;
+        double local_fraction =
+            record_length ? (fraction - record->start_) / record_length : 0.0;
+        if (record->easing_) {
+          local_fraction =
+              record->easing_->Evaluate(local_fraction, limit_direction);
+        }
+        interpolation->Interpolate(iteration, local_fraction,
+                                   iteration_composite);
       }
-      interpolation->Interpolate(0, local_fraction);
-      if (result_index < existing_size)
+    }
+    if (interpolation) {
+      if (result_index < existing_size) {
         result[result_index++] = interpolation;
-      else
+      } else {
         result.push_back(interpolation);
+      }
     }
   }
-  if (result_index < existing_size)
+  if (result_index < existing_size) {
     result.Shrink(result_index);
+  }
 }
 
 void InterpolationEffect::AddInterpolationsFromKeyframes(
     const PropertyHandle& property,
     const Keyframe::PropertySpecificKeyframe& keyframe_a,
     const Keyframe::PropertySpecificKeyframe& keyframe_b,
+    const Keyframe::PropertySpecificKeyframe* final_keyframe,
     double apply_from,
     double apply_to) {
-  AddInterpolation(keyframe_a.CreateInterpolation(property, keyframe_b),
-                   &keyframe_a.Easing(), keyframe_a.Offset(),
-                   keyframe_b.Offset(), apply_from, apply_to);
+  AddInterpolation(
+      keyframe_a.CreateInterpolation(property, keyframe_b, final_keyframe),
+      &keyframe_a.Easing(), keyframe_a.Offset(), keyframe_b.Offset(),
+      apply_from, apply_to);
+}
+
+void InterpolationEffect::AddStaticValuedInterpolation(
+    const PropertyHandle& property,
+    const Keyframe::PropertySpecificKeyframe& keyframe) {
+  interpolations_.push_back(MakeGarbageCollected<InterpolationRecord>(
+      keyframe.CreateInterpolation(property, keyframe, nullptr)));
 }
 
 void InterpolationEffect::Trace(Visitor* visitor) const {

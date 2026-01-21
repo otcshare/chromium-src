@@ -10,10 +10,9 @@
 #include <vector>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/storage_monitor/storage_monitor.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/mtp_manager.mojom.h"
 #endif
@@ -43,22 +42,13 @@ class TestStorageMonitor : public StorageMonitor {
   // Synchronously initialize the current storage monitor.
   static void SyncInitialize();
 
+  // StorageMonitor:
   bool GetStorageInfoForPath(const base::FilePath& path,
                              StorageInfo* device_info) const override;
-
-#if BUILDFLAG(IS_WIN)
-  bool GetMTPStorageInfoFromDeviceId(
-      const std::string& storage_device_id,
-      std::wstring* device_location,
-      std::wstring* storage_object_id) const override;
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   device::mojom::MtpManager* media_transfer_protocol_manager() override;
 #endif
-
   Receiver* receiver() const override;
-
   void EjectDevice(
       const std::string& device_id,
       base::OnceCallback<void(StorageMonitor::EjectStatus)> callback) override;
@@ -79,7 +69,7 @@ class TestStorageMonitor : public StorageMonitor {
   // Paths considered for testing purposes to be on removable storage.
   std::vector<base::FilePath> removable_paths_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   mojo::Remote<device::mojom::MtpManager> media_transfer_protocol_manager_;
 #endif
 };

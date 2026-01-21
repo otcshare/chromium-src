@@ -2,26 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/cronet/cronet_context.h"
-
 #include <latch>
 
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "base/types/expected.h"
+#include "components/cronet/cronet_context.h"
 #include "components/cronet/cronet_global_state.h"
 #include "components/cronet/url_request_context_config.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/mock_network_change_notifier.h"
+#include "net/base/proxy_delegate.h"
 #include "net/base/request_priority.h"
 #include "net/cert/cert_verifier.h"
+#include "net/http/http_request_headers.h"
 #include "net/proxy_resolution/proxy_config_service_fixed.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace cronet {
 
@@ -59,14 +60,24 @@ class NoOpCronetContextCallback : public CronetContext::Callback {
   void OnStopNetLogCompleted() override {}
 
   ~NoOpCronetContextCallback() override = default;
+
+  void OnBeforeTunnelRequest(
+      int chain_id,
+      net::ProxyDelegate::OnBeforeTunnelRequestCallback callback) override {
+    NOTREACHED();
+  }
+
+  void OnTunnelHeadersReceived(int chain_id,
+                               const net::HttpResponseHeaders& response_headers,
+                               net::CompletionOnceCallback callback) override {
+    NOTREACHED();
+  }
 };
 
 std::unique_ptr<URLRequestContextConfig> CreateSimpleURLRequestContextConfig() {
   return URLRequestContextConfig::CreateURLRequestContextConfig(
       // Enable QUIC.
       true,
-      // QUIC User Agent ID.
-      "Default QUIC User Agent ID",
       // Enable SPDY.
       true,
       // Enable Brotli.
@@ -93,7 +104,9 @@ std::unique_ptr<URLRequestContextConfig> CreateSimpleURLRequestContextConfig() {
       // Enable Public Key Pinning bypass for local trust anchors.
       true,
       // Optional network thread priority.
-      absl::nullopt);
+      std::nullopt,
+      // Optional proxy options.
+      std::optional<cronet::proto::ProxyOptions>());
 }
 
 class NetworkTasksTest : public testing::Test {
@@ -120,21 +133,23 @@ class NetworkTasksTest : public testing::Test {
   }
 
   ~NetworkTasksTest() override {
-    PostToNetworkThreadSync(
-        base::BindLambdaForTesting([&]() { delete network_tasks_; }));
+    PostToNetworkThreadSync(base::BindOnce(
+        // Deletion ocurrs as a result of the argument going out of scope.
+        [](std::unique_ptr<CronetContext::NetworkTasks> tasks_to_be_deleted) {},
+        std::move(network_tasks_)));
   }
 
   void Initialize() {
     PostToNetworkThreadSync(
         base::BindOnce(&CronetContext::NetworkTasks::Initialize,
-                       base::Unretained(network_tasks_), network_task_runner_,
-                       file_task_runner_,
+                       base::Unretained(network_tasks_.get()),
+                       network_task_runner_, file_task_runner_,
                        std::make_unique<net::ProxyConfigServiceFixed>(
                            net::ProxyConfigWithAnnotation::CreateDirect())));
   }
 
   void SpawnNetworkBoundURLRequestContext(net::handles::NetworkHandle network) {
-    PostToNetworkThreadSync(base::BindLambdaForTesting([=]() {
+    PostToNetworkThreadSync(base::BindLambdaForTesting([=, this]() {
       network_tasks_->SpawnNetworkBoundURLRequestContextForTesting(network);
     }));
   }
@@ -187,17 +202,12 @@ class NetworkTasksTest : public testing::Test {
   std::unique_ptr<base::Thread> file_thread_;
   scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> file_task_runner_;
-  raw_ptr<CronetContext::NetworkTasks> network_tasks_;
+  std::unique_ptr<CronetContext::NetworkTasks> network_tasks_;
   std::unique_ptr<net::URLRequest> url_request_;
 };
 
 TEST_F(NetworkTasksTest, NetworkBoundContextLifetime) {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->sdk_int() <
-      base::android::SDK_VERSION_MARSHMALLOW) {
-    GTEST_SKIP() << "Network binding on Android requires an API level >= 23";
-  }
-
   constexpr net::handles::NetworkHandle kNetwork = 1;
 
   CheckURLRequestContextExistence(kNetwork, false);
@@ -215,11 +225,6 @@ TEST_F(NetworkTasksTest, NetworkBoundContextLifetime) {
 
 TEST_F(NetworkTasksTest, NetworkBoundContextWithPendingRequest) {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->sdk_int() <
-      base::android::SDK_VERSION_MARSHMALLOW) {
-    GTEST_SKIP() << "Network binding on Android requires an API level >= 23";
-  }
-
   constexpr net::handles::NetworkHandle kNetwork = 1;
 
   CheckURLRequestContextExistence(kNetwork, false);

@@ -5,17 +5,16 @@
 #include "third_party/blink/renderer/platform/scheduler/common/auto_advancing_virtual_time_domain.h"
 
 #include <memory>
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/message_loop/message_pump.h"
 #include "base/run_loop.h"
 #include "base/task/sequence_manager/sequence_manager.h"
-#include "base/task/sequence_manager/test/test_task_queue.h"
 #include "base/task/sequence_manager/test/test_task_time_observer.h"
 #include "base/time/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/scheduler/common/scoped_time_source_override.h"
+#include "third_party/blink/renderer/platform/scheduler/common/task_priority.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/non_main_thread_scheduler_helper.h"
 
 namespace blink {
@@ -34,6 +33,7 @@ class AutoAdvancingVirtualTimeDomainTest : public testing::Test {
             base::MessagePump::Create(base::MessagePumpType::DEFAULT),
             base::sequence_manager::SequenceManager::Settings::Builder()
                 .SetMessagePumpType(base::MessagePumpType::DEFAULT)
+                .SetPrioritySettings(CreatePrioritySettings())
                 .Build());
     scheduler_helper_ = std::make_unique<NonMainThreadSchedulerHelper>(
         sequence_manager_.get(), nullptr, TaskType::kInternalTest);
@@ -41,19 +41,17 @@ class AutoAdvancingVirtualTimeDomainTest : public testing::Test {
 
     scheduler_helper_->AddTaskTimeObserver(&test_task_time_observer_);
     task_queue_ = scheduler_helper_->DefaultNonMainThreadTaskQueue();
-    initial_time_ = base::Time::FromJsTime(100000.0);
+    initial_time_ = base::Time::FromSecondsSinceUnixEpoch(100);
     initial_time_ticks_ = base::TimeTicks() + base::Milliseconds(5);
     auto_advancing_time_domain_ =
         std::make_unique<AutoAdvancingVirtualTimeDomain>(
             initial_time_, initial_time_ticks_, scheduler_helper_.get());
-    auto_advancing_time_domain_->SetTimeSourceOverride(
-        ScopedTimeSourceOverride::CreateForCurrentThread(
-            *auto_advancing_time_domain_));
-
     scheduler_helper_->SetTimeDomain(auto_advancing_time_domain_.get());
   }
 
   void TearDown() override {
+    scheduler_helper_->RemoveTaskTimeObserver(&test_task_time_observer_);
+    task_queue_ = scheduler_helper_->DefaultNonMainThreadTaskQueue();
     task_queue_->ShutdownTaskQueue();
     scheduler_helper_->ResetTimeDomain();
   }
@@ -157,7 +155,7 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest, TaskStarvationCountResets) {
 }
 
 TEST_F(AutoAdvancingVirtualTimeDomainTest, BaseTimeOverriden) {
-  base::Time initial_time = base::Time::FromJsTime(100000.0);
+  base::Time initial_time = base::Time::FromSecondsSinceUnixEpoch(100);
   EXPECT_EQ(base::Time::Now(), initial_time);
 
   // Make time advance.

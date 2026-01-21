@@ -5,6 +5,8 @@
 #ifndef ANDROID_WEBVIEW_BROWSER_JS_JAVA_INTERACTION_AW_WEB_MESSAGE_HOST_FACTORY_H_
 #define ANDROID_WEBVIEW_BROWSER_JS_JAVA_INTERACTION_AW_WEB_MESSAGE_HOST_FACTORY_H_
 
+#include <vector>
+
 #include "base/android/scoped_java_ref.h"
 #include "components/js_injection/browser/web_message_host_factory.h"
 
@@ -20,20 +22,20 @@ namespace android_webview {
 class AwWebMessageHostFactory : public js_injection::WebMessageHostFactory {
  public:
   explicit AwWebMessageHostFactory(
-      const base::android::JavaParamRef<jobject>& listener);
+      const base::android::JavaRef<jobject>& listener);
   AwWebMessageHostFactory(const AwWebMessageHostFactory&) = delete;
   AwWebMessageHostFactory& operator=(const AwWebMessageHostFactory&) = delete;
   ~AwWebMessageHostFactory() override;
 
   // Returns an array of WebMessageListenerInfos based on the registered
   // factories.
-  static base::android::ScopedJavaLocalRef<jobjectArray>
+  static std::vector<jni_zero::ScopedJavaLocalRef<jobject>>
   GetWebMessageListenerInfo(js_injection::JsCommunicationHost* host,
-                            JNIEnv* env,
-                            const base::android::JavaParamRef<jclass>& clazz);
+                            JNIEnv* env);
 
   // js_injection::WebMessageConnection:
   std::unique_ptr<js_injection::WebMessageHost> CreateHost(
+      const std::string& top_level_origin_string,
       const std::string& origin_string,
       bool is_main_frame,
       js_injection::WebMessageReplyProxy* proxy) override;

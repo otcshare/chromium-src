@@ -4,10 +4,66 @@
 
 package org.chromium.chrome.browser.browser_controls;
 
-/**
- * Static utilities related to browser controls interfaces.
- */
+import android.content.Context;
+
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.ui.base.DeviceFormFactor;
+
+/** Static utilities related to browser controls interfaces. */
+@NullMarked
 public class BrowserControlsUtils {
+
+    private static @Nullable Boolean sSyncMinHeightWithTotalHeightForTesting;
+
+    // Disallow top browser controls from scrolling off on large tablets by setting min height
+    // equal to overall height.
+    // TODO(https://crbug.com/450970998): Replace with doSyncMinHeightWithTotalHeightV2.
+    public static boolean doSyncMinHeightWithTotalHeight(Context context) {
+        return ChromeFeatureList.sLockTopControlsOnLargeTablets.isEnabled()
+                && DeviceFormFactor.isNonMultiDisplayContextOnLargeTablet(context);
+    }
+
+    /**
+     * Disallow top browser controls from scrolling off by setting min height equal to overall
+     * height. This method checks the form factors internally.
+     */
+    // TODO(https://crbug.com/450970998): Move to TopControlsLockCoordinator after removing
+    //  reference from BrowserControlsManager.
+    public static boolean doSyncMinHeightWithTotalHeightV2(Context context) {
+        if (sSyncMinHeightWithTotalHeightForTesting != null) {
+            return sSyncMinHeightWithTotalHeightForTesting;
+        }
+
+        if (!ChromeFeatureList.sLockTopControlsOnLargeTabletsV2.isEnabled()
+                || !ChromeFeatureList.sTopControlsRefactor.isEnabled()) {
+            return false;
+        }
+
+        return DeviceInfo.isDesktop()
+                || DeviceFormFactor.isNonMultiDisplayContextOnLargeTablet(context);
+    }
+
+    /** Whether use TopControlsStacker to drive the y offset for top control layers. */
+    public static boolean isTopControlsRefactorOffsetEnabled() {
+        return ChromeFeatureList.sTopControlsRefactor.isEnabled()
+                && ChromeFeatureList.sTopControlsRefactorV2.isEnabled();
+    }
+
+    /** Whether force adjusting top chrome height is allowed based on feature flags. */
+    public static boolean isForceTopChromeHeightAdjustmentOnStartupEnabled(Context context) {
+        // Note: the check for feature doSyncMinHeightWithTotalHeightV2 is not necessary once the
+        // feature flag is launched. Once we are ready to cleanup the param
+        // sLockTopControlsForceAdjustHeightOnStartup it's safe to assume this method to return
+        // true always.
+        return isTopControlsRefactorOffsetEnabled()
+                && doSyncMinHeightWithTotalHeightV2(context)
+                && ChromeFeatureList.sLockTopControlsForceAdjustHeightOnStartup.getValue();
+    }
+
     /**
      * @return True if the browser controls are completely off screen.
      */
@@ -39,7 +95,7 @@ public class BrowserControlsUtils {
     public static boolean controlsResizeView(BrowserControlsStateProvider stateProvider) {
         return stateProvider.getContentOffset() > stateProvider.getTopControlsMinHeight()
                 || getBottomContentOffset(stateProvider)
-                > stateProvider.getBottomControlsMinHeight();
+                        > stateProvider.getBottomControlsMinHeight();
     }
 
     /**
@@ -55,10 +111,15 @@ public class BrowserControlsUtils {
      */
     public static boolean areBrowserControlsIdle(BrowserControlsStateProvider provider) {
         return (provider.getContentOffset() == provider.getTopControlsMinHeight()
-                       || provider.getContentOffset() == provider.getTopControlsHeight())
+                        || provider.getContentOffset() == provider.getTopControlsHeight())
                 && (BrowserControlsUtils.getBottomContentOffset(provider)
                                 == provider.getBottomControlsMinHeight()
                         || BrowserControlsUtils.getBottomContentOffset(provider)
                                 == provider.getBottomControlsHeight());
+    }
+
+    public static void setsSyncMinHeightWithTotalHeightForTesting(boolean override) {
+        sSyncMinHeightWithTotalHeightForTesting = override;
+        ResettersForTesting.register(() -> sSyncMinHeightWithTotalHeightForTesting = null);
     }
 }

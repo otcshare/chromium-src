@@ -7,9 +7,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/containers/flat_set.h"
-#include "base/debug/stack_trace.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
@@ -17,9 +16,11 @@
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
 #include "content/public/browser/devtools_external_agent_proxy_delegate.h"
 #include "content/public/browser/devtools_manager_delegate.h"
+#include "content/public/browser/network_service_instance.h"
 #include "third_party/inspector_protocol/crdtp/cbor.h"
 #include "third_party/inspector_protocol/crdtp/dispatch.h"
 #include "third_party/inspector_protocol/crdtp/json.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace {
@@ -152,7 +153,7 @@ void DevToolsSession::Dispose() {
 }
 
 DevToolsSession* DevToolsSession::GetRootSession() {
-  return root_session_ ? root_session_ : this;
+  return root_session_ ? root_session_.get() : this;
 }
 
 void DevToolsSession::AddHandler(
@@ -183,7 +184,7 @@ void DevToolsSession::AttachToAgent(blink::mojom::DevToolsAgent* agent,
     return;
   }
 
-  // TODO(https://crbug.com/978694): Consider a reset flow since new mojo types
+  // TODO(crbug.com/41467868): Consider a reset flow since new mojo types
   // checks is_bound strictly.
   if (receiver_.is_bound()) {
     receiver_.reset();
@@ -196,14 +197,17 @@ void DevToolsSession::AttachToAgent(blink::mojom::DevToolsAgent* agent,
       receiver_.BindNewEndpointAndPassRemote(),
       session_.BindNewEndpointAndPassReceiver(),
       io_session_.BindNewPipeAndPassReceiver(), session_state_cookie_.Clone(),
-      client_->UsesBinaryProtocol(), client_->IsTrusted(), session_id_,
-      IsWaitingForDebuggerOnStart());
+      script_to_evaluate_on_load_, client_->UsesBinaryProtocol(),
+      client_->IsTrusted(), session_id_, IsWaitingForDebuggerOnStart());
   session_.set_disconnect_handler(base::BindOnce(
       &DevToolsSession::MojoConnectionDestroyed, base::Unretained(this)));
 
   // Set cookie to an empty struct to reattach next time instead of attaching.
   if (!session_state_cookie_)
     session_state_cookie_ = blink::mojom::DevToolsSessionState::New();
+
+  // Only use script_to_evaluate_on_load_ once.
+  script_to_evaluate_on_load_.clear();
 
   // We're attaching to a new agent while suspended; therefore, messages that
   // have been sent previously either need to be terminated or re-sent once we
@@ -336,9 +340,18 @@ void DevToolsSession::DispatchProtocolMessage(
 void DevToolsSession::DispatchProtocolMessageInternal(
     crdtp::Dispatchable dispatchable,
     base::span<const uint8_t> message) {
-  if (!runtime_resume_.is_null() &&
-      crdtp::SpanEquals(crdtp::SpanFrom(kResumeMethod), dispatchable.Method()))
-    std::move(runtime_resume_).Run();
+  if ((browser_only_ || runtime_resume_) &&
+      crdtp::SpanEquals(crdtp::SpanFrom(kResumeMethod),
+                        dispatchable.Method())) {
+    if (runtime_resume_) {
+      std::move(runtime_resume_).Run();
+    }
+    if (browser_only_) {
+      DispatchProtocolMessageToClient(
+          crdtp::CreateResponse(dispatchable.CallId(), nullptr)->Serialize());
+      return;
+    }
+  }
 
   DevToolsManagerDelegate* delegate =
       DevToolsManager::GetInstance()->delegate();
@@ -361,9 +374,9 @@ void DevToolsSession::HandleCommandInternal(crdtp::Dispatchable dispatchable,
   crdtp::UberDispatcher::DispatchResult dispatched =
       dispatcher_->Dispatch(dispatchable);
   if (browser_only_ || dispatched.MethodFound()) {
-    TRACE_EVENT_WITH_FLOW2(
+    TRACE_EVENT(
         "devtools", "DevToolsSession::HandleCommand in Browser",
-        dispatchable.CallId(), TRACE_EVENT_FLAG_FLOW_OUT, "method",
+        perfetto::Flow::ProcessScoped(dispatchable.CallId()), "method",
         std::string(dispatchable.Method().begin(), dispatchable.Method().end()),
         "call_id", dispatchable.CallId());
     dispatched.Run();
@@ -379,7 +392,7 @@ void DevToolsSession::FallThrough(int call_id,
   // In browser-only mode, we should've handled everything in dispatcher.
   DCHECK(!browser_only_);
 
-  if (waiting_for_response_.find(call_id) != waiting_for_response_.end()) {
+  if (waiting_for_response_.contains(call_id)) {
     DispatchProtocolMessageToClient(
         crdtp::CreateErrorResponse(call_id,
                                    crdtp::DispatchResponse::InvalidRequest(
@@ -432,19 +445,17 @@ void DevToolsSession::DispatchToAgent(const PendingMessage& message) {
   // Debugger.pause don't get stuck behind other blocking messages.
   if (ShouldSendOnIO(crdtp::SpanFrom(message.method)) || use_io_session_) {
     if (io_session_) {
-      TRACE_EVENT_WITH_FLOW2(
-          "devtools", "DevToolsSession::DispatchToAgent on IO", message.call_id,
-          TRACE_EVENT_FLAG_FLOW_OUT, "method", message.method, "call_id",
-          message.call_id);
+      TRACE_EVENT("devtools", "DevToolsSession::DispatchToAgent on IO",
+                  perfetto::Flow::ProcessScoped(message.call_id), "method",
+                  message.method, "call_id", message.call_id);
       io_session_->DispatchProtocolCommand(message.call_id, message.method,
                                            message.payload);
     }
   } else {
     if (session_) {
-      TRACE_EVENT_WITH_FLOW2("devtools", "DevToolsSession::DispatchToAgent",
-                             message.call_id, TRACE_EVENT_FLAG_FLOW_OUT,
-                             "method", message.method, "call_id",
-                             message.call_id);
+      TRACE_EVENT("devtools", "DevToolsSession::DispatchToAgent",
+                  perfetto::Flow::ProcessScoped(message.call_id), "method",
+                  message.method, "call_id", message.call_id);
       session_->DispatchProtocolCommand(message.call_id, message.method,
                                         message.payload);
     }
@@ -472,8 +483,8 @@ void DevToolsSession::ResumeSendingMessagesToAgent() {
 void DevToolsSession::ClearPendingMessages(bool did_crash) {
   for (auto it = pending_messages_.begin(); it != pending_messages_.end();) {
     const PendingMessage& message = *it;
-    if (SpanEquals(crdtp::SpanFrom("Page.reload"),
-                   crdtp::SpanFrom(message.method))) {
+    // TODO(caseq): remove when non-RenderDocument code paths are gone.
+    if (message.method == "Page.reload") {
       ++it;
       continue;
     }
@@ -523,9 +534,9 @@ void DevToolsSession::DispatchProtocolResponse(
     blink::mojom::DevToolsMessagePtr message,
     int call_id,
     blink::mojom::DevToolsSessionStatePtr updates) {
-  TRACE_EVENT_WITH_FLOW1("devtools",
-                         "DevToolsSession::DispatchProtocolResponse", call_id,
-                         TRACE_EVENT_FLAG_FLOW_IN, "call_id", call_id);
+  TRACE_EVENT("devtools", "DevToolsSession::DispatchProtocolResponse",
+              perfetto::TerminatingFlow::ProcessScoped(call_id), "call_id",
+              call_id);
   ApplySessionStateUpdates(std::move(updates));
   auto it = waiting_for_response_.find(call_id);
   // TODO(johannes): Consider shutting down renderer instead of just
@@ -606,6 +617,9 @@ DevToolsSession* DevToolsSession::AttachChildSession(
   if (!agent_host->AttachInternal(std::move(session)))
     return nullptr;
   child_sessions_[session_id] = session_ptr;
+  for (auto& observer : child_observers_) {
+    observer.SessionAttached(*session_ptr);
+  }
   return session_ptr;
 }
 
@@ -614,7 +628,56 @@ void DevToolsSession::DetachChildSession(const std::string& session_id) {
 }
 
 bool DevToolsSession::HasChildSession(const std::string& session_id) {
-  return child_sessions_.find(session_id) != child_sessions_.end();
+  return child_sessions_.contains(session_id);
+}
+
+void DevToolsSession::AddObserver(ChildObserver* obs) {
+  child_observers_.AddObserver(obs);
+  for (auto& entry : child_sessions_) {
+    obs->SessionAttached(*entry.second);
+  }
+}
+
+void DevToolsSession::RemoveObserver(ChildObserver* obs) {
+  child_observers_.RemoveObserver(obs);
+}
+
+void DevToolsSession::PrepareForReload(std::string script_to_evaluate_on_load) {
+  script_to_evaluate_on_load_ = std::move(script_to_evaluate_on_load);
+  io_session_->UnpauseAndTerminate();
+}
+
+void DevToolsSession::EnableDurableMessageCollector(
+    const base::UnguessableToken& devtools_token,
+    network::mojom::NetworkDurableMessageConfigPtr config,
+    base::OnceClosure callback) {
+  CHECK(!root_session_);
+  if (!durable_message_collector_.is_bound()) {
+    content::GetNetworkService()->AddDurableMessageCollector(
+        durable_message_collector_.BindNewPipeAndPassReceiver());
+  }
+  durable_message_collector_->Configure(std::move(config), base::DoNothing());
+  durable_message_collector_->EnableForProfile(devtools_token,
+                                               std::move(callback));
+}
+
+void DevToolsSession::DisableDurableMessageCollectorForProfile(
+    const base::UnguessableToken& devtools_token,
+    base::OnceClosure callback) {
+  CHECK(!root_session_);
+  if (!durable_message_collector_.is_bound()) {
+    std::move(callback).Run();
+    return;
+  }
+  durable_message_collector_->DisableForProfile(devtools_token,
+                                                std::move(callback));
+}
+
+network::mojom::DurableMessageCollector*
+DevToolsSession::MaybeGetDurableMessageCollector() {
+  return durable_message_collector_.is_bound()
+             ? durable_message_collector_.get()
+             : nullptr;
 }
 
 }  // namespace content

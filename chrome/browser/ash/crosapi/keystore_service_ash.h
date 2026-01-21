@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/platform_keys/platform_keys.h"
-#include "chromeos/crosapi/mojom/keystore_service.mojom-shared.h"
+#include "chromeos/ash/components/platform_keys/platform_keys.h"
 #include "chromeos/crosapi/mojom/keystore_service.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -43,6 +43,7 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
  public:
   using KeystoreType = mojom::KeystoreType;
   using SigningScheme = mojom::KeystoreSigningScheme;
+  using KeystoreKeyAttributeType = mojom::KeystoreKeyAttributeType;
 
   explicit KeystoreServiceAsh(content::BrowserContext* fixed_context);
   // Allows to create the service early. It will use the current primary profile
@@ -63,7 +64,7 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
       mojom::KeystoreType type,
       const std::vector<uint8_t>& challenge,
       bool migrate,
-      mojom::KeystoreSigningAlgorithmName algorithm,
+      mojom::KeystoreAlgorithmName algorithm,
       ChallengeAttestationOnlyKeystoreCallback callback) override;
   void GetKeyStores(GetKeyStoresCallback callback) override;
   void SelectClientCertificates(
@@ -78,10 +79,10 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
                          const std::vector<uint8_t>& certificate,
                          RemoveCertificateCallback callback) override;
   void GetPublicKey(const std::vector<uint8_t>& certificate,
-                    mojom::KeystoreSigningAlgorithmName algorithm_name,
+                    mojom::KeystoreAlgorithmName algorithm_name,
                     GetPublicKeyCallback callback) override;
   void GenerateKey(mojom::KeystoreType keystore,
-                   mojom::KeystoreSigningAlgorithmPtr algorithm,
+                   mojom::KeystoreAlgorithmPtr algorithm,
                    GenerateKeyCallback callback) override;
   void RemoveKey(KeystoreType keystore,
                  const std::vector<uint8_t>& public_key,
@@ -100,12 +101,17 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
   void CanUserGrantPermissionForKey(
       const std::vector<uint8_t>& public_key,
       CanUserGrantPermissionForKeyCallback callback) override;
+  void SetAttributeForKey(KeystoreType keystore,
+                          const std::vector<uint8_t>& public_key,
+                          KeystoreKeyAttributeType attribute_type,
+                          const std::vector<uint8_t>& attribute_value,
+                          SetAttributeForKeyCallback callback) override;
 
   // DEPRECATED, use `GenerateKey` instead.
   void DEPRECATED_ExtensionGenerateKey(
       mojom::KeystoreType keystore,
-      mojom::KeystoreSigningAlgorithmPtr algorithm,
-      const absl::optional<std::string>& extension_id,
+      mojom::KeystoreAlgorithmPtr algorithm,
+      const std::optional<std::string>& extension_id,
       DEPRECATED_ExtensionGenerateKeyCallback callback) override;
   // DEPRECATED, use `Sign` instead.
   void DEPRECATED_ExtensionSign(
@@ -118,7 +124,7 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
   // DEPRECATED, use `GetPublicKey` instead.
   void DEPRECATED_GetPublicKey(
       const std::vector<uint8_t>& certificate,
-      mojom::KeystoreSigningAlgorithmName algorithm_name,
+      mojom::KeystoreAlgorithmName algorithm_name,
       DEPRECATED_GetPublicKeyCallback callback) override;
   // DEPRECATED, use `GetKeyStores` instead.
   void DEPRECATED_GetKeyStores(
@@ -165,7 +171,7 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
       const ash::attestation::TpmChallengeKeyResult& result);
   static void DidGetKeyStores(
       GetKeyStoresCallback callback,
-      std::unique_ptr<std::vector<chromeos::platform_keys::TokenId>>
+      const std::vector<chromeos::platform_keys::TokenId>
           platform_keys_token_ids,
       chromeos::platform_keys::Status status);
   static void DidSelectClientCertificates(
@@ -180,28 +186,30 @@ class KeystoreServiceAsh : public mojom::KeystoreService, public KeyedService {
   static void DidRemoveCertificate(RemoveCertificateCallback callback,
                                    chromeos::platform_keys::Status status);
   static void DidGenerateKey(GenerateKeyCallback callback,
-                             const std::string& public_key,
+                             std::vector<uint8_t> public_key,
                              chromeos::platform_keys::Status status);
   static void DidRemoveKey(RemoveKeyCallback callback,
                            chromeos::platform_keys::Status status);
   static void DidSign(SignCallback callback,
-                      const std::string& signature,
+                      std::vector<uint8_t> signature,
                       chromeos::platform_keys::Status status);
   static void DidGetKeyTags(GetKeyTagsCallback callback,
-                            absl::optional<bool> corporate,
+                            std::optional<bool> corporate,
                             chromeos::platform_keys::Status status);
   static void DidAddKeyTags(AddKeyTagsCallback callback,
                             chromeos::platform_keys::Status status);
+  static void DidSetAttributeForKey(SetAttributeForKeyCallback callback,
+                                    chromeos::platform_keys::Status status);
 
   // Can be nullptr, should not be used directly, use GetPlatformKeys() instead.
   // Stores a pointer to a specific PlatformKeysService if it was specified in
   // constructor.
-  ash::platform_keys::PlatformKeysService* const fixed_platform_keys_service_ =
-      nullptr;
+  const raw_ptr<ash::platform_keys::PlatformKeysService>
+      fixed_platform_keys_service_ = nullptr;
   // Can be nullptr, should not be used directly, use GetKeyPermissions()
   // instead. Stores a pointer to a specific KeyPermissionsService if it was
   // specified in constructor.
-  ash::platform_keys::KeyPermissionsService* const
+  const raw_ptr<ash::platform_keys::KeyPermissionsService>
       fixed_key_permissions_service_ = nullptr;
 
   // Container to keep outstanding challenges alive. The challenges should be

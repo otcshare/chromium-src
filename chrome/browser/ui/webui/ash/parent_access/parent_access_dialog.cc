@@ -5,21 +5,23 @@
 #include "chrome/browser/ui/webui/ash/parent_access/parent_access_dialog.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/wm/window_dimmer.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/ash/parent_access/parent_access_metrics_utils.h"
 #include "chrome/browser/ui/webui/ash/parent_access/parent_access_ui.mojom.h"
-#include "chrome/browser/ui/webui/ash/system_web_dialog_delegate.h"
+#include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 
 namespace ash {
 
@@ -28,50 +30,24 @@ namespace {
 constexpr int kDialogHeightDp = 526;
 constexpr int kDialogWidthDp = 600;
 constexpr float kDimmerOpacity = 0.7f;
-
-constexpr char kParentAccessWidgetShowDialogErrorHistogramBase[] =
-    "ChromeOS.FamilyLinkUser.ParentAccessWidgetShowDialogError";
-// TODO(b/262555804) use shared constants for flow type variant suffixes.
-constexpr char kParentAccessWidgetShowDialogErrorSuffixAll[] = "All";
-constexpr char kParentAccessWidgetShowDialogErrorSuffixWebApprovals[] =
-    "WebApprovals";
+}  // namespace
 
 void RecordParentAccessWidgetShowDialogError(
     ParentAccessDialogProvider::ShowErrorType error_type,
-    absl::optional<parent_access_ui::mojom::ParentAccessParams::FlowType>
+    std::optional<parent_access_ui::mojom::ParentAccessParams::FlowType>
         flow_type) {
   base::UmaHistogramEnumeration(
-      ParentAccessDialogProvider::
-          GetParentAccessWidgetShowDialogErrorHistogramForFlowType(flow_type),
+      parent_access::GetHistogramTitleForFlowType(
+          parent_access::kParentAccessWidgetShowDialogErrorHistogramBase,
+          flow_type),
       error_type);
 
   // Always record metric for "all" flow type.
   base::UmaHistogramEnumeration(
-      ParentAccessDialogProvider::
-          GetParentAccessWidgetShowDialogErrorHistogramForFlowType(
-              absl::nullopt),
+      parent_access::GetHistogramTitleForFlowType(
+          parent_access::kParentAccessWidgetShowDialogErrorHistogramBase,
+          std::nullopt),
       error_type);
-}
-}  // namespace
-
-// static
-const std::string ParentAccessDialogProvider::
-    GetParentAccessWidgetShowDialogErrorHistogramForFlowType(
-        absl::optional<parent_access_ui::mojom::ParentAccessParams::FlowType>
-            flow_type) {
-  const std::string separator = ".";
-  if (!flow_type.has_value()) {
-    return base::JoinString({kParentAccessWidgetShowDialogErrorHistogramBase,
-                             kParentAccessWidgetShowDialogErrorSuffixAll},
-                            separator);
-  }
-  switch (flow_type.value()) {
-    case parent_access_ui::mojom::ParentAccessParams::FlowType::kWebsiteAccess:
-      return base::JoinString(
-          {kParentAccessWidgetShowDialogErrorHistogramBase,
-           kParentAccessWidgetShowDialogErrorSuffixWebApprovals},
-          separator);
-  }
 }
 
 ParentAccessDialogProvider::ShowError ParentAccessDialogProvider::Show(
@@ -111,8 +87,8 @@ ParentAccessDialog* ParentAccessDialog::GetInstance() {
       SystemWebDialogDelegate::FindInstance(chrome::kChromeUIParentAccessURL));
 }
 
-ui::ModalType ParentAccessDialog::GetDialogModalType() const {
-  return ui::ModalType::MODAL_TYPE_SYSTEM;
+ui::mojom::ModalType ParentAccessDialog::GetDialogModalType() const {
+  return ui::mojom::ModalType::kSystem;
 }
 
 void ParentAccessDialog::GetDialogSize(gfx::Size* size) const {
@@ -121,6 +97,14 @@ void ParentAccessDialog::GetDialogSize(gfx::Size* size) const {
 
 bool ParentAccessDialog::ShouldCloseDialogOnEscape() const {
   return true;
+}
+
+bool ParentAccessDialog::ShouldShowDialogTitle() const {
+  return false;
+}
+// The close button is implemented in the WebUI itself.
+bool ParentAccessDialog::ShouldShowCloseButton() const {
+  return false;
 }
 
 parent_access_ui::mojom::ParentAccessParamsPtr
@@ -146,6 +130,12 @@ void ParentAccessDialog::SetDeclined() {
 void ParentAccessDialog::SetCanceled() {
   auto result = std::make_unique<ParentAccessDialog::Result>();
   result->status = ParentAccessDialog::Result::Status::kCanceled;
+  CloseWithResult(std::move(result));
+}
+
+void ParentAccessDialog::SetDisabled() {
+  auto result = std::make_unique<ParentAccessDialog::Result>();
+  result->status = ParentAccessDialog::Result::Status::kDisabled;
   CloseWithResult(std::move(result));
 }
 

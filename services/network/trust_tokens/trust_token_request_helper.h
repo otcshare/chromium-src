@@ -5,7 +5,7 @@
 #ifndef SERVICES_NETWORK_TRUST_TOKENS_TRUST_TOKEN_REQUEST_HELPER_H_
 #define SERVICES_NETWORK_TRUST_TOKENS_TRUST_TOKEN_REQUEST_HELPER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 
 namespace net {
@@ -35,7 +35,7 @@ class TrustTokenRequestHelper {
   // Tokens issuance and redemption, this involves executing a network request).
   virtual void Begin(
       const GURL& url,
-      base::OnceCallback<void(absl::optional<net::HttpRequestHeaders>,
+      base::OnceCallback<void(std::optional<net::HttpRequestHeaders>,
                               mojom::TrustTokenOperationStatus)> done) = 0;
 
   // Checks |response_headers| for issuance response headers; if these are

@@ -4,7 +4,6 @@
 
 #include "chromeos/components/quick_answers/understanding/intent_generator.h"
 
-#include <cctype>
 #include <map>
 
 #include "base/i18n/break_iterator.h"
@@ -17,9 +16,12 @@
 #include "chromeos/components/quick_answers/utils/quick_answers_metrics.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
 #include "chromeos/components/quick_answers/utils/spell_checker.h"
+#include "chromeos/components/quick_answers/utils/translation_v2_utils.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 #include "chromeos/services/machine_learning/public/mojom/machine_learning_service.mojom.h"
+#include "components/translate/core/browser/translate_download_manager.h"
+#include "third_party/abseil-cpp/absl/strings/ascii.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace quick_answers {
@@ -34,6 +36,7 @@ using ::chromeos::machine_learning::mojom::TextClassifier;
 // TODO(llin): Finalize on the threshold based on user feedback.
 constexpr int kUnitConversionIntentAndSelectionLengthDiffThreshold = 5;
 constexpr int kTranslationTextLengthThreshold = 100;
+constexpr int kRichAnswersTranslationTextLengthThreshold = 250;
 constexpr int kDefinitionIntentAndSelectionLengthDiffThreshold = 2;
 
 // TODO(b/169370175): Remove the temporary invalid set after we ramp up to v2
@@ -95,7 +98,7 @@ IntentType RewriteIntent(const std::string& selected_text,
   return intent;
 }
 
-bool IsPreferredLanguage(const std::string& detected_language) {
+bool IsPreferredLanguage(std::string_view detected_language) {
   auto preferred_languages_list =
       base::SplitString(QuickAnswersState::Get()->preferred_languages(), ",",
                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
@@ -138,10 +141,19 @@ bool ShouldSkipDefinition(const std::string& text) {
   return false;
 }
 
+// Check that both the source and target languages are supported by the
+// translation v2 API.
+bool AreTranslationLanguagesSupported(std::string_view source_language,
+                                      std::string_view target_language) {
+  return TranslationV2Utils::IsSupported(source_language) &&
+         TranslationV2Utils::IsSupported(target_language);
+}
+
 bool HasDigits(const std::string& word) {
-  for (const auto& character : word) {
-    if (std::isdigit(character))
+  for (char c : word) {
+    if (absl::ascii_isdigit(static_cast<unsigned char>(c))) {
       return true;
+    }
   }
   return false;
 }
@@ -165,10 +177,6 @@ void IntentGenerator::GenerateIntent(const QuickAnswersRequest& request) {
                                  base::i18n::BreakIterator::BREAK_WORD);
   if (!iter.Init() || !iter.Advance()) {
     NOTREACHED() << "Failed to load BreakIterator.";
-
-    std::move(complete_callback_)
-        .Run(IntentInfo(request.selected_text, IntentType::kUnknown));
-    return;
   }
 
   DCHECK(spell_checker_.get()) << "spell_checker_ should exist when the "
@@ -272,13 +280,13 @@ void IntentGenerator::AnnotationCallback(
     auto intent_type_map = GetIntentTypeMap();
     auto it = intent_type_map.find(type);
     if (it != intent_type_map.end()) {
-      // Skip the entity if the corresponding intent type is disabled.
-      bool definition_disabled =
-          !QuickAnswersState::Get()->definition_enabled();
-      bool unit_conversion_disabled =
-          !QuickAnswersState::Get()->unit_conversion_enabled();
-      if ((it->second == IntentType::kDictionary && definition_disabled) ||
-          (it->second == IntentType::kUnit && unit_conversion_disabled)) {
+      // Skip the entity if the corresponding intent type is ineligible.
+      bool definition_ineligible =
+          !QuickAnswersState::IsIntentEligible(Intent::kDefinition);
+      bool unit_conversion_ineligible =
+          !QuickAnswersState::IsIntentEligible(Intent::kUnitConversion);
+      if ((it->second == IntentType::kDictionary && definition_ineligible) ||
+          (it->second == IntentType::kUnit && unit_conversion_ineligible)) {
         // Fallback to language detection for generating translation intent.
         MaybeGenerateTranslationIntent(request);
         return;
@@ -314,18 +322,22 @@ void IntentGenerator::MaybeGenerateTranslationIntent(
     const QuickAnswersRequest& request) {
   DCHECK(complete_callback_);
 
-  if (!QuickAnswersState::Get()->translation_enabled() ||
+  if (!QuickAnswersState::IsIntentEligible(Intent::kTranslation) ||
       chromeos::features::IsQuickAnswersV2TranslationDisabled()) {
     std::move(complete_callback_)
         .Run(IntentInfo(request.selected_text, IntentType::kUnknown));
     return;
   }
 
+  size_t translation_text_length_threshold =
+      chromeos::features::IsQuickAnswersRichCardEnabled()
+          ? kRichAnswersTranslationTextLengthThreshold
+          : kTranslationTextLengthThreshold;
   // Don't generate translation intent if no device language is provided or the
   // length of selected text is above the threshold. Returns unknown intent
   // type.
   if (QuickAnswersState::Get()->application_locale().empty() ||
-      request.selected_text.length() > kTranslationTextLengthThreshold) {
+      request.selected_text.length() > translation_text_length_threshold) {
     std::move(complete_callback_)
         .Run(IntentInfo(request.selected_text, IntentType::kUnknown));
     return;
@@ -341,19 +353,21 @@ void IntentGenerator::MaybeGenerateTranslationIntent(
 
 void IntentGenerator::LanguageDetectorCallback(
     const QuickAnswersRequest& request,
-    absl::optional<std::string> detected_locale) {
+    std::optional<std::string> detected_locale) {
   language_detector_.reset();
 
   auto device_language =
       l10n_util::GetLanguage(QuickAnswersState::Get()->application_locale());
   auto detected_language = detected_locale.has_value()
                                ? l10n_util::GetLanguage(detected_locale.value())
-                               : std::string();
+                               : std::string_view();
 
   // Generate translation intent if the detected language is different to the
   // system language and is not one of the preferred languages.
+  // Skip translation if the source or target languages are not supported.
   if (!detected_language.empty() && detected_language != device_language &&
-      !IsPreferredLanguage(detected_language)) {
+      !IsPreferredLanguage(detected_language) &&
+      AreTranslationLanguagesSupported(detected_language, device_language)) {
     std::move(complete_callback_)
         .Run(IntentInfo(request.selected_text, IntentType::kTranslation,
                         device_language, detected_language));

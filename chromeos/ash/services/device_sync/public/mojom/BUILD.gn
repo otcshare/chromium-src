@@ -2,10 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
-assert(is_chromeos_ash, "Non-ChromeOS builds cannot depend on //ash")
+assert(is_chromeos, "Non-ChromeOS builds cannot depend on //chromeos/ash")
 
 mojom("mojom") {
   sources = [ "device_sync.mojom" ]
@@ -23,23 +22,23 @@ mojom("mojom") {
       types = [
         {
           mojom = "ash.device_sync.mojom.ConnectivityStatus"
-          cpp = "cryptauthv2::ConnectivityStatus"
+          cpp = "::cryptauthv2::ConnectivityStatus"
         },
         {
           mojom = "ash.device_sync.mojom.FeatureStatusChange"
-          cpp = "ash::device_sync::FeatureStatusChange"
+          cpp = "::ash::device_sync::FeatureStatusChange"
         },
         {
           mojom = "ash.device_sync.mojom.CryptAuthService"
-          cpp = "cryptauthv2::TargetService"
+          cpp = "::cryptauthv2::TargetService"
         },
         {
           mojom = "ash.device_sync.mojom.GroupPrivateKeyStatus"
-          cpp = "ash::device_sync::GroupPrivateKeyStatus"
+          cpp = "::ash::device_sync::GroupPrivateKeyStatus"
         },
         {
           mojom = "ash.device_sync.mojom.BetterTogetherMetadataStatus"
-          cpp = "ash::device_sync::BetterTogetherMetadataStatus"
+          cpp = "::ash::device_sync::BetterTogetherMetadataStatus"
         },
       ]
       traits_headers = [ "device_sync_mojom_traits.h" ]

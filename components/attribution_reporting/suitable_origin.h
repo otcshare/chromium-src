@@ -5,22 +5,32 @@
 #ifndef COMPONENTS_ATTRIBUTION_REPORTING_SUITABLE_ORIGIN_H_
 #define COMPONENTS_ATTRIBUTION_REPORTING_SUITABLE_ORIGIN_H_
 
+#include <compare>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
 #include "base/component_export.h"
-#include "base/strings/string_piece_forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/public/cpp/bindings/default_construct_tag.h"
 #include "url/origin.h"
 
 class GURL;
 
-namespace mojo {
-struct DefaultConstructTraits;
-}  // namespace mojo
+namespace net {
+class SchemefulSite;
+}  // namespace net
 
 namespace attribution_reporting {
+
+// Returns true if the given site is potentially suitable as a destination site,
+// that is, it `net::SchemefulSite::has_registrable_domain_or_host()` and its
+// scheme is HTTP or HTTPS.
+//
+// Other requirements may be enforced in the future.
+COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
+bool IsSitePotentiallySuitable(const net::SchemefulSite&);
 
 // A thin wrapper around `url::Origin` that enforces invariants required for an
 // origin to be used as a source origin, a destination origin, or a reporting
@@ -35,16 +45,20 @@ class COMPONENT_EXPORT(ATTRIBUTION_REPORTING) SuitableOrigin {
  public:
   static bool IsSuitable(const url::Origin&);
 
-  static absl::optional<SuitableOrigin> Create(url::Origin);
+  static std::optional<SuitableOrigin> Create(url::Origin);
 
-  static absl::optional<SuitableOrigin> Create(const GURL&);
+  static std::optional<SuitableOrigin> Create(const GURL&);
 
   // Creates a `SuitableOrigin` from the given string, which is first converted
   // to a `GURL`, then to a `url::Origin`, and then subject to this class's
   // invariants.
   //
   // All parts of the URL other than the origin are ignored.
-  static absl::optional<SuitableOrigin> Deserialize(base::StringPiece);
+  static std::optional<SuitableOrigin> Deserialize(std::string_view);
+
+  // Creates an invalid instance for use with Mojo deserialization, which
+  // requires types to be default-constructible.
+  explicit SuitableOrigin(mojo::DefaultConstruct::Tag);
 
   ~SuitableOrigin();
 
@@ -55,17 +69,17 @@ class COMPONENT_EXPORT(ATTRIBUTION_REPORTING) SuitableOrigin {
   SuitableOrigin& operator=(SuitableOrigin&&);
 
   const url::Origin& operator*() const& {
-    DCHECK(IsValid());
+    CHECK(IsValid());
     return origin_;
   }
 
   url::Origin&& operator*() && {
-    DCHECK(IsValid());
+    CHECK(IsValid());
     return std::move(origin_);
   }
 
   const url::Origin* operator->() const& {
-    DCHECK(IsValid());
+    CHECK(IsValid());
     return &origin_;
   }
 
@@ -73,26 +87,19 @@ class COMPONENT_EXPORT(ATTRIBUTION_REPORTING) SuitableOrigin {
   // this type in places currently requiring `url::Origin`s with
   // guaranteed preconditions.
   operator const url::Origin&() const {  // NOLINT
-    DCHECK(IsValid());
+    CHECK(IsValid());
     return origin_;
   }
 
   // Allows this type to be used as a key in a set or map.
-  bool operator<(const SuitableOrigin&) const;
+  friend std::weak_ordering operator<=>(const SuitableOrigin&,
+                                        const SuitableOrigin&) = default;
 
   std::string Serialize() const;
 
   bool IsValid() const;
 
  private:
-  friend struct SourceRegistration;
-  friend struct TriggerRegistration;
-  friend mojo::DefaultConstructTraits;
-
-  // Creates an invalid instance for use with Mojo deserialization, which
-  // requires types to be default-constructible.
-  SuitableOrigin();
-
   explicit SuitableOrigin(url::Origin);
 
   url::Origin origin_;

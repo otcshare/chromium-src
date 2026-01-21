@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_PLUGINS_PLUGIN_PREFS_H_
 #define CHROME_BROWSER_PLUGINS_PLUGIN_PREFS_H_
 
+#include <memory>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
@@ -12,7 +13,7 @@
 #include "components/keyed_service/core/refcounted_keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
-#include "ppapi/buildflags/buildflags.h"
+#include "content/public/common/buildflags.h"
 
 #if !BUILDFLAG(ENABLE_PLUGINS)
 #error "Plugins should be enabled"
@@ -78,7 +79,7 @@ class PluginPrefs : public RefcountedKeyedService {
   // Weak pointer, owned by the profile.
   raw_ptr<PrefService> prefs_ = nullptr;
 
-  PrefChangeRegistrar registrar_;
+  std::unique_ptr<PrefChangeRegistrar> registrar_;
 };
 
 #endif  // CHROME_BROWSER_PLUGINS_PLUGIN_PREFS_H_

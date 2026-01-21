@@ -5,7 +5,7 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_INPUT_STREAM_HANDLE_H_
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_INPUT_STREAM_HANDLE_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/sequence_checker.h"
 #include "content/common/content_export.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom.h"
@@ -44,7 +44,7 @@ class CONTENT_EXPORT AudioInputStreamHandle {
   void SetOutputDeviceForAec(const std::string& raw_output_device_id);
 
  private:
-  void OnCreated(media::mojom::ReadOnlyAudioDataPipePtr, bool initially_muted);
+  void OnCreated(media::mojom::ReadWriteAudioDataPipePtr, bool initially_muted);
 
   void CallDeleter();
 

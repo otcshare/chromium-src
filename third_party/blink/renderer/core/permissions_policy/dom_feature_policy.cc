@@ -4,8 +4,7 @@
 
 #include "third_party/blink/renderer/core/permissions_policy/dom_feature_policy.h"
 
-#include "third_party/blink/public/common/permissions_policy/origin_with_possible_wildcards.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -19,9 +18,11 @@
 namespace blink {
 
 bool FeatureAvailable(const String& feature, ExecutionContext* ec) {
-  return GetDefaultFeatureNameMap().Contains(feature) &&
+  bool is_isolated_context = ec && ec->IsIsolatedContext();
+  return GetDefaultFeatureNameMap(is_isolated_context).Contains(feature) &&
          (!DisabledByOriginTrial(feature, ec)) &&
-         (!IsFeatureForMeasurementOnly(GetDefaultFeatureNameMap().at(feature)));
+         (!IsFeatureForMeasurementOnly(
+             GetDefaultFeatureNameMap(is_isolated_context).at(feature)));
 }
 
 DOMFeaturePolicy::DOMFeaturePolicy(ExecutionContext* context)
@@ -36,7 +37,10 @@ bool DOMFeaturePolicy::allowsFeature(ScriptState* script_state,
                         ? WebFeature::kFeaturePolicyJSAPIAllowsFeatureIFrame
                         : WebFeature::kFeaturePolicyJSAPIAllowsFeatureDocument);
   if (FeatureAvailable(feature, execution_context)) {
-    auto feature_name = GetDefaultFeatureNameMap().at(feature);
+    bool is_isolated_context =
+        execution_context && execution_context->IsIsolatedContext();
+    auto feature_name =
+        GetDefaultFeatureNameMap(is_isolated_context).at(feature);
     return GetPolicy()->IsFeatureEnabled(feature_name);
   }
 
@@ -60,7 +64,8 @@ bool DOMFeaturePolicy::allowsFeature(ScriptState* script_state,
     context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kOther,
         mojom::blink::ConsoleMessageLevel::kWarning,
-        "Invalid origin url for feature '" + feature + "': " + url + "."));
+        StrCat(
+            {"Invalid origin url for feature '", feature, "': ", url, "."})));
     return false;
   }
 
@@ -69,7 +74,9 @@ bool DOMFeaturePolicy::allowsFeature(ScriptState* script_state,
     return false;
   }
 
-  auto feature_name = GetDefaultFeatureNameMap().at(feature);
+  bool is_isolated_context =
+      execution_context && execution_context->IsIsolatedContext();
+  auto feature_name = GetDefaultFeatureNameMap(is_isolated_context).at(feature);
   return GetPolicy()->IsFeatureEnabledForOrigin(feature_name,
                                                 origin->ToUrlOrigin());
 }
@@ -94,8 +101,11 @@ Vector<String> DOMFeaturePolicy::allowedFeatures(
           ? WebFeature::kFeaturePolicyJSAPIAllowedFeaturesIFrame
           : WebFeature::kFeaturePolicyJSAPIAllowedFeaturesDocument);
   Vector<String> allowed_features;
+  bool is_isolated_context =
+      execution_context && execution_context->IsIsolatedContext();
   for (const String& feature : GetAvailableFeatures(execution_context)) {
-    auto feature_name = GetDefaultFeatureNameMap().at(feature);
+    auto feature_name =
+        GetDefaultFeatureNameMap(is_isolated_context).at(feature);
     if (GetPolicy()->IsFeatureEnabled(feature_name))
       allowed_features.push_back(feature);
   }
@@ -111,10 +121,13 @@ Vector<String> DOMFeaturePolicy::getAllowlistForFeature(
                     IsIFramePolicy()
                         ? WebFeature::kFeaturePolicyJSAPIGetAllowlistIFrame
                         : WebFeature::kFeaturePolicyJSAPIGetAllowlistDocument);
+  bool is_isolated_context =
+      execution_context && execution_context->IsIsolatedContext();
   if (FeatureAvailable(feature, execution_context)) {
-    auto feature_name = GetDefaultFeatureNameMap().at(feature);
+    auto feature_name =
+        GetDefaultFeatureNameMap(is_isolated_context).at(feature);
 
-    const PermissionsPolicy::Allowlist allowlist =
+    const network::PermissionsPolicy::Allowlist allowlist =
         GetPolicy()->GetAllowlistForFeature(feature_name);
     const auto& allowed_origins = allowlist.AllowedOrigins();
     if (allowed_origins.empty()) {
@@ -122,9 +135,16 @@ Vector<String> DOMFeaturePolicy::getAllowlistForFeature(
         return Vector<String>({"*"});
     }
     Vector<String> result;
+    result.reserve(
+        static_cast<wtf_size_t>(allowed_origins.size()) +
+        static_cast<wtf_size_t>(allowlist.SelfIfMatches().has_value()));
+    if (allowlist.SelfIfMatches()) {
+      result.push_back(
+          String::FromUTF8(allowlist.SelfIfMatches()->Serialize()));
+    }
     for (const auto& origin_with_possible_wildcards : allowed_origins) {
       result.push_back(
-          WTF::String::FromUTF8(origin_with_possible_wildcards.Serialize()));
+          String::FromUTF8(origin_with_possible_wildcards.Serialize()));
     }
     return result;
   }
@@ -138,7 +158,7 @@ void DOMFeaturePolicy::AddWarningForUnrecognizedFeature(
   context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
       mojom::blink::ConsoleMessageSource::kOther,
       mojom::blink::ConsoleMessageLevel::kWarning,
-      "Unrecognized feature: '" + feature + "'."));
+      StrCat({"Unrecognized feature: '", feature, "'."})));
 }
 
 void DOMFeaturePolicy::Trace(Visitor* visitor) const {

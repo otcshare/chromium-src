@@ -6,69 +6,24 @@ package org.chromium.chrome.browser.optimization_guide;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.components.optimization_guide.proto.HintsProto;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-/**
- * OptimizationGuideBridge cached by profile.
- */
+/** Provides access to {@link Profile} specific {@link OptimizationGuideBridge} instances. */
+@NullMarked
 public class OptimizationGuideBridgeFactory {
+    /** Return the {@link OptimizationGuideBridge} associated with the given {@link Profile}. */
+    public static @Nullable OptimizationGuideBridge getForProfile(Profile profile) {
+        return OptimizationGuideBridgeFactoryJni.get().getForProfile(profile);
+    }
+
     @VisibleForTesting
-    protected final Map<Profile, OptimizationGuideBridge> mProfileToOptimizationGuideBridgeMap =
-            new HashMap<>();
-    private final List<HintsProto.OptimizationType> mOptimizationTypes;
-    private ProfileManager.Observer mProfileManagerObserver;
-
-    /**
-     * Creates an instance of this class with no observed optimization types.
-     */
-    public OptimizationGuideBridgeFactory() {
-        this(new ArrayList<HintsProto.OptimizationType>());
-    }
-
-    /**
-     * @param optimizationTypes list of {@link HintsProto.OptimizationType} the {@link
-     * OptimizationGuideBridge} is initialized with.
-     */
-    public OptimizationGuideBridgeFactory(List<HintsProto.OptimizationType> optimizationTypes) {
-        mOptimizationTypes = optimizationTypes;
-        if (mProfileManagerObserver == null) {
-            mProfileManagerObserver = new ProfileManager.Observer() {
-                @Override
-                public void onProfileAdded(Profile profile) {}
-
-                @Override
-                public void onProfileDestroyed(Profile destroyedProfile) {
-                    if (mProfileToOptimizationGuideBridgeMap.containsKey(destroyedProfile)) {
-                        mProfileToOptimizationGuideBridgeMap.get(destroyedProfile).destroy();
-                        mProfileToOptimizationGuideBridgeMap.remove(destroyedProfile);
-                    }
-                }
-            };
-            ProfileManager.addObserver(mProfileManagerObserver);
-        }
-    }
-
-    /**
-     * @return {@link OptimizationGuideBridge} for the current last used regular profile
-     */
-    public OptimizationGuideBridge create() {
-        Profile profile = Profile.getLastUsedRegularProfile();
-        OptimizationGuideBridge optimizationGuideBridge =
-                mProfileToOptimizationGuideBridgeMap.get(profile);
-        if (optimizationGuideBridge == null) {
-            optimizationGuideBridge = new OptimizationGuideBridge();
-            if (mOptimizationTypes.size() > 0) {
-                optimizationGuideBridge.registerOptimizationTypes(mOptimizationTypes);
-            }
-            mProfileToOptimizationGuideBridgeMap.put(profile, optimizationGuideBridge);
-        }
-        return optimizationGuideBridge;
+    @NativeMethods
+    public interface Natives {
+        OptimizationGuideBridge getForProfile(@JniType("Profile*") Profile profile);
     }
 }

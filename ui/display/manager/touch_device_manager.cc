@@ -4,15 +4,13 @@
 
 #include "ui/display/manager/touch_device_manager.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <tuple>
 
-#include "base/containers/contains.h"
-#include "base/files/file_util.h"
 #include "base/hash/hash.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "ui/display/manager/managed_display_info.h"
@@ -22,6 +20,7 @@
 #include "ui/events/devices/touchscreen_device.h"
 
 namespace display {
+
 namespace {
 
 using ManagedDisplayInfoList = std::vector<ManagedDisplayInfo*>;
@@ -42,8 +41,9 @@ bool IsDeviceConnectedViaUsb(const base::FilePath& path) {
     // in the kernel, this would no longer be needed. All evdi displays are USB
     // right now. This might change in the future however.
     // See https://crbug.com/923165 for more info.
-    if (base::StartsWith(component, "evdi", base::CompareCase::SENSITIVE))
+    if (component.starts_with("evdi")) {
       return true;
+    }
   }
   return false;
 }
@@ -105,7 +105,7 @@ bool IsInternalDevice(const ui::TouchscreenDevice& device) {
 // Returns a pointer to the internal display from the list of |displays|. Will
 // return null if there is no internal display in the list.
 ManagedDisplayInfo* GetInternalDisplay(ManagedDisplayInfoList* displays) {
-  auto it = base::ranges::find_if(*displays, &IsInternalDisplay);
+  auto it = std::ranges::find_if(*displays, &IsInternalDisplay);
   return it == displays->end() ? nullptr : *it;
 }
 
@@ -130,7 +130,7 @@ ManagedDisplayInfo* GetBestMatchForDevice(
 
   // If we have no historical information for the touch device identified by
   // |identifier|, do an early return.
-  if (!base::Contains(touch_associations, identifier))
+  if (!touch_associations.contains(identifier))
     return display_info;
 
   const TouchDeviceManager::AssociationInfoMap& info_map =
@@ -141,7 +141,7 @@ ManagedDisplayInfo* GetBestMatchForDevice(
     // We do not want to match anything to the internal display.
     if (IsInternalDisplayId(display->id()))
       continue;
-    if (!base::Contains(info_map, display->id()))
+    if (!info_map.contains(display->id()))
       continue;
     const TouchDeviceManager::TouchAssociationInfo& info =
         info_map.at(display->id());
@@ -222,18 +222,6 @@ TouchDeviceIdentifier& TouchDeviceIdentifier::operator=(
   return *this;
 }
 
-bool TouchDeviceIdentifier::operator<(const TouchDeviceIdentifier& rhs) const {
-  return std::tie(id_, secondary_id_) < std::tie(rhs.id_, rhs.secondary_id_);
-}
-
-bool TouchDeviceIdentifier::operator==(const TouchDeviceIdentifier& rhs) const {
-  return id_ == rhs.id_ && secondary_id_ == rhs.secondary_id_;
-}
-
-bool TouchDeviceIdentifier::operator!=(const TouchDeviceIdentifier& rhs) const {
-  return !(*this == rhs);
-}
-
 std::string TouchDeviceIdentifier::ToString() const {
   return base::NumberToString(id_);
 }
@@ -284,9 +272,9 @@ bool TouchCalibrationData::IsEmpty() const {
 
 ////////////////////////////////////////////////////////////////////////////////
 // TouchDeviceManager
-TouchDeviceManager::TouchDeviceManager() {}
+TouchDeviceManager::TouchDeviceManager() = default;
 
-TouchDeviceManager::~TouchDeviceManager() {}
+TouchDeviceManager::~TouchDeviceManager() = default;
 
 ////////////////////////////////////////////////////////////////////////////////
 // TouchDeviceManager
@@ -343,7 +331,7 @@ void TouchDeviceManager::AssociateInternalDevices(
   VLOG(2) << "Trying to match internal devices (" << displays->size()
           << " displays and " << devices->size() << " devices to match)";
 
-  // Internal device assocation has a couple of gotchas:
+  // Internal device association has a couple of gotchas:
   // - There can be internal devices but no internal display, or visa-versa.
   // - There can be multiple internal devices matching one internal display. We
   //   assume there is at most one internal display.
@@ -404,8 +392,8 @@ void TouchDeviceManager::AssociateDevicesWithCollision(
     // If this device is not the one that has a collision or if this device is
     // the one that has collision but we have no past port mapping information
     // associated with it, then we skip.
-    if (!base::Contains(collision_set, identifier) ||
-        !base::Contains(port_associations_, identifier)) {
+    if (!collision_set.contains(identifier) ||
+        !port_associations_.contains(identifier)) {
       device_it++;
       continue;
     }
@@ -414,7 +402,7 @@ void TouchDeviceManager::AssociateDevicesWithCollision(
 
     // Find the display associated with |display_id| from |displays|.
     ManagedDisplayInfoList::iterator display_it =
-        base::ranges::find(*displays, display_id, &ManagedDisplayInfo::id);
+        std::ranges::find(*displays, display_id, &ManagedDisplayInfo::id);
 
     if (display_it != displays->end()) {
       VLOG(2) << "=> Matched device " << (*device_it).name << " to display "
@@ -490,7 +478,7 @@ void TouchDeviceManager::AssociateSameSizeDevices(
     const gfx::Size native_size = display->GetNativeModeSize();
 
     // Try to find an input device with roughly the same size as the display.
-    DeviceList::iterator device_it = base::ranges::find_if(
+    DeviceList::iterator device_it = std::ranges::find_if(
         *devices, [&native_size](const ui::TouchscreenDevice& device) {
           // Allow 1 pixel difference between screen and touchscreen
           // resolutions. Because in some cases for monitor resolution
@@ -594,29 +582,45 @@ void TouchDeviceManager::AddTouchCalibrationData(
     const ui::TouchscreenDevice& device,
     int64_t display_id,
     const TouchCalibrationData& data) {
+  AddTouchCalibrationDataImpl(device, display_id, &data);
+}
+
+void TouchDeviceManager::AddTouchAssociation(
+    const ui::TouchscreenDevice& device,
+    int64_t display_id) {
+  AddTouchCalibrationDataImpl(device, display_id, /*data=*/nullptr);
+}
+
+void TouchDeviceManager::AddTouchCalibrationDataImpl(
+    const ui::TouchscreenDevice& device,
+    int64_t display_id,
+    const TouchCalibrationData* data) {
   const TouchDeviceIdentifier identifier =
       TouchDeviceIdentifier::FromDevice(device);
-  if (!base::Contains(touch_associations_, identifier))
-    touch_associations_.emplace(identifier, AssociationInfoMap());
 
   // Update the current touch association and associate the display identified
   // by |display_id| to the touch device identified by |identifier|.
   active_touch_associations_[identifier] = display_id;
 
-  auto it = touch_associations_.at(identifier).find(display_id);
-  if (it != touch_associations_.at(identifier).end()) {
-    // Update the timestamp and calibration data if information about the
-    // display identified by |display_id| already exists for the touch device
-    // identified by |identifier|.
-    it->second.calibration_data = data;
-    it->second.timestamp = base::Time::Now();
+  auto& association_info_map = touch_associations_[identifier];
+  auto it = association_info_map.find(display_id);
+  if (it != association_info_map.end()) {
+    if (data) {
+      // Update the timestamp and calibration data if information about the
+      // display identified by |display_id| already exists for the touch device
+      // identified by |identifier|.
+      it->second.calibration_data = *data;
+      it->second.timestamp = base::Time::Now();
+    }
   } else {
     // Add a new entry for the display identified by |display_id| in the map
     // of associations for the touch device identified by |identifier|.
     TouchAssociationInfo info;
     info.timestamp = base::Time::Now();
-    info.calibration_data = data;
-    touch_associations_.at(identifier).emplace(display_id, info);
+    if (data) {
+      info.calibration_data = *data;
+    }
+    association_info_map.emplace(display_id, info);
   }
 
   // Store the port association information, i.e. the touch device identified by
@@ -630,7 +634,7 @@ void TouchDeviceManager::ClearTouchCalibrationData(
     int64_t display_id) {
   const TouchDeviceIdentifier identifier =
       TouchDeviceIdentifier::FromDevice(device);
-  if (base::Contains(touch_associations_, identifier)) {
+  if (touch_associations_.contains(identifier)) {
     ClearCalibrationDataInMap(touch_associations_.at(identifier), display_id);
   }
 }
@@ -651,7 +655,7 @@ TouchCalibrationData TouchDeviceManager::GetCalibrationData(
   if (display_id == kInvalidDisplayId) {
     // If the touch device is currently not associated with any display and the
     // |display_id| was not provided, then this is an invalid query.
-    if (!base::Contains(active_touch_associations_, identifier))
+    if (!active_touch_associations_.contains(identifier))
       return TouchCalibrationData();
 
     // If the display id is not provided, we return the calibration information
@@ -660,7 +664,7 @@ TouchCalibrationData TouchDeviceManager::GetCalibrationData(
     display_id = active_touch_associations_.at(identifier);
   }
 
-  if (base::Contains(touch_associations_, identifier)) {
+  if (touch_associations_.contains(identifier)) {
     const AssociationInfoMap& info_map = touch_associations_.at(identifier);
     if (info_map.find(display_id) != info_map.end())
       return info_map.at(display_id).calibration_data;
@@ -669,7 +673,7 @@ TouchCalibrationData TouchDeviceManager::GetCalibrationData(
   // Check for legacy calibration data.
   TouchDeviceIdentifier fallback_identifier(
       TouchDeviceIdentifier::GetFallbackTouchDeviceIdentifier());
-  if (base::Contains(touch_associations_, fallback_identifier)) {
+  if (touch_associations_.contains(fallback_identifier)) {
     const AssociationInfoMap& info_map =
         touch_associations_.at(fallback_identifier);
     if (info_map.find(display_id) != info_map.end())
@@ -685,7 +689,7 @@ bool TouchDeviceManager::DisplayHasTouchDevice(
     const ui::TouchscreenDevice& device) const {
   const TouchDeviceIdentifier identifier =
       TouchDeviceIdentifier::FromDevice(device);
-  return base::Contains(active_touch_associations_, identifier) &&
+  return active_touch_associations_.contains(identifier) &&
          active_touch_associations_.at(identifier) == display_id;
 }
 
@@ -693,7 +697,7 @@ int64_t TouchDeviceManager::GetAssociatedDisplay(
     const ui::TouchscreenDevice& device) const {
   const TouchDeviceIdentifier identifier =
       TouchDeviceIdentifier::FromDevice(device);
-  if (base::Contains(active_touch_associations_, identifier))
+  if (active_touch_associations_.contains(identifier))
     return active_touch_associations_.at(identifier);
   return kInvalidDisplayId;
 }

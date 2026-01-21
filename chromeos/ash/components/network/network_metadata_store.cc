@@ -4,15 +4,24 @@
 
 #include "chromeos/ash/components/network/network_metadata_store.h"
 
+#include <utility>
+
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "ash/constants/ash_switches.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/command_line.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
+#include "base/values.h"
+#include "chromeos/ash/components/network/cellular_utils.h"
+#include "chromeos/ash/components/network/metrics/cellular_network_metrics_logger.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_connection_handler.h"
 #include "chromeos/ash/components/network/network_event_log.h"
@@ -41,13 +50,14 @@ const char kCustomApnList[] = "custom_apn_list";
 const char kCustomApnListV2[] = "custom_apn_list_v2";
 const char kHasFixedHiddenNetworks[] =
     "metadata_store.has_fixed_hidden_networks";
-const char kEnableTrafficCountersAutoReset[] =
-    "enable_traffic_counters_auto_reset";
 const char kDayOfTrafficCountersAutoReset[] =
     "day_of_traffic_counters_auto_reset";
+const char kUserTextMessageSuppressionState[] =
+    "user_text_message_suppression_state";
 
+constexpr base::TimeDelta kDefaultOverrideAge = base::Days(1);
 // Wait two weeks before overwriting the creation timestamp for a given
-// network
+// network.
 constexpr base::TimeDelta kTwoWeeks = base::Days(14);
 
 std::string GetPath(const std::string& guid, const std::string& subkey) {
@@ -73,6 +83,24 @@ bool IsApnListValid(const base::Value::List& list) {
   return true;
 }
 
+base::TimeDelta ComputeMigrationMinimumAge() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+
+  if (!command_line->HasSwitch(switches::kHiddenNetworkMigrationAge)) {
+    return kTwoWeeks;
+  }
+
+  int age_in_days = -1;
+  const std::string ascii =
+      command_line->GetSwitchValueASCII(switches::kHiddenNetworkMigrationAge);
+
+  if (ascii.empty() || !base::StringToInt(ascii, &age_in_days) ||
+      age_in_days < 0) {
+    return kDefaultOverrideAge;
+  }
+  return base::Days(age_in_days);
+}
+
 }  // namespace
 
 // static
@@ -86,12 +114,15 @@ NetworkMetadataStore::NetworkMetadataStore(
     NetworkConfigurationHandler* network_configuration_handler,
     NetworkConnectionHandler* network_connection_handler,
     NetworkStateHandler* network_state_handler,
+    ManagedNetworkConfigurationHandler* managed_network_configuration_handler,
     PrefService* profile_pref_service,
     PrefService* device_pref_service,
     bool is_enterprise_managed)
     : network_configuration_handler_(network_configuration_handler),
       network_connection_handler_(network_connection_handler),
       network_state_handler_(network_state_handler),
+      managed_network_configuration_handler_(
+          managed_network_configuration_handler),
       profile_pref_service_(profile_pref_service),
       device_pref_service_(device_pref_service),
       is_enterprise_managed_(is_enterprise_managed) {
@@ -102,7 +133,7 @@ NetworkMetadataStore::NetworkMetadataStore(
     network_configuration_handler_->AddObserver(this);
   }
   if (network_state_handler_) {
-    network_state_handler_observer_.Observe(network_state_handler_);
+    network_state_handler_observer_.Observe(network_state_handler_.get());
   }
   if (LoginState::IsInitialized()) {
     LoginState::Get()->AddObserver(this);
@@ -190,10 +221,9 @@ void NetworkMetadataStore::FixSyncedHiddenNetworks() {
     }
 
     total_count++;
-    base::Value::Dict dict;
-    dict.Set(shill::kWifiHiddenSsid, false);
+    auto dict = base::Value::Dict().Set(shill::kWifiHiddenSsid, false);
     network_configuration_handler_->SetShillProperties(
-        network->path(), base::Value(std::move(dict)), base::DoNothing(),
+        network->path(), std::move(dict), base::DoNothing(),
         base::BindOnce(&NetworkMetadataStore::OnDisableHiddenError,
                        weak_ptr_factory_.GetWeakPtr()));
   }
@@ -305,7 +335,7 @@ void NetworkMetadataStore::UpdateExternalModifications(
     const std::string& field) {
   const base::Value::List* fields =
       GetListPref(network_guid, kExternalModifications);
-  const bool contains_field = fields && base::Contains(*fields, field);
+  const bool contains_field = fields && fields->contains(field);
   if (GetIsCreatedByUser(network_guid)) {
     if (contains_field) {
       base::Value::List writeable_fields = CreateOrCloneListValue(fields);
@@ -324,24 +354,23 @@ void NetworkMetadataStore::UpdateExternalModifications(
 void NetworkMetadataStore::OnConfigurationModified(
     const std::string& service_path,
     const std::string& guid,
-    const base::Value* set_properties) {
+    const base::Value::Dict* set_properties) {
   if (!set_properties) {
     return;
   }
 
   SetPref(guid, kIsFromSync, base::Value(false));
 
-  const base::Value::Dict& set_properties_dict = set_properties->GetDict();
-  if (set_properties_dict.Find(shill::kProxyConfigProperty)) {
+  if (set_properties->Find(shill::kProxyConfigProperty)) {
     UpdateExternalModifications(guid, shill::kProxyConfigProperty);
   }
-  if (set_properties_dict.FindByDottedPath(
+  if (set_properties->FindByDottedPath(
           base::StringPrintf("%s.%s", shill::kStaticIPConfigProperty,
                              shill::kNameServersProperty))) {
     UpdateExternalModifications(guid, shill::kNameServersProperty);
   }
 
-  if (set_properties_dict.Find(shill::kPassphraseProperty)) {
+  if (set_properties->Find(shill::kPassphraseProperty)) {
     // Only clear last connected if the passphrase changes.  Other settings
     // (autoconnect, dns, etc.) won't affect the ability to connect to a
     // network.
@@ -408,8 +437,6 @@ void NetworkMetadataStore::SetLastConnectedTimestamp(
 
 base::Time NetworkMetadataStore::UpdateAndRetrieveWiFiTimestamp(
     const std::string& network_guid) {
-  DCHECK(base::FeatureList::IsEnabled(features::kHiddenNetworkMigration));
-
   const NetworkState* network =
       network_state_handler_->GetNetworkStateFromGuid(network_guid);
 
@@ -418,23 +445,25 @@ base::Time NetworkMetadataStore::UpdateAndRetrieveWiFiTimestamp(
     return base::Time::Now().UTCMidnight();
   }
 
-  const base::Value* creation_timestamp =
+  const base::Value* creation_timestamp_pref =
       GetPref(network_guid, kCreationTimestamp);
   const base::Time current_timestamp = base::Time::Now().UTCMidnight();
 
-  if (creation_timestamp &&
-      base::Time::FromDoubleT(creation_timestamp->GetDouble()) + kTwoWeeks <=
-          current_timestamp) {
+  if (!creation_timestamp_pref) {
     SetPref(network_guid, kCreationTimestamp,
-            base::Value(base::Time::UnixEpoch().ToDoubleT()));
-    return base::Time::UnixEpoch();
-  }
-  if (!creation_timestamp) {
-    SetPref(network_guid, kCreationTimestamp,
-            base::Value(current_timestamp.ToDoubleT()));
+            base::Value(current_timestamp.InSecondsFSinceUnixEpoch()));
+    return current_timestamp;
   }
 
-  return current_timestamp;
+  const base::Time creation_timestamp = base::Time::FromSecondsSinceUnixEpoch(
+      creation_timestamp_pref->GetDouble());
+  const base::TimeDelta minimum_age = ComputeMigrationMinimumAge();
+
+  if (creation_timestamp + minimum_age <= current_timestamp) {
+    SetPref(network_guid, kCreationTimestamp, base::Value(0.0));
+    return base::Time::UnixEpoch();
+  }
+  return creation_timestamp;
 }
 
 bool NetworkMetadataStore::GetIsConfiguredBySync(
@@ -472,7 +501,7 @@ bool NetworkMetadataStore::GetIsFieldExternallyModified(
     const std::string& field) {
   const base::Value::List* fields =
       GetListPref(network_guid, kExternalModifications);
-  return fields && base::Contains(*fields, field);
+  return fields && fields->contains(field);
 }
 
 bool NetworkMetadataStore::GetHasBadPassword(const std::string& network_guid) {
@@ -517,27 +546,74 @@ const base::Value::List* NetworkMetadataStore::GetCustomApnList(
   return nullptr;
 }
 
-void NetworkMetadataStore::SetEnableTrafficCountersAutoReset(
-    const std::string& network_guid,
-    bool enable) {
-  SetPref(network_guid, kEnableTrafficCountersAutoReset, base::Value(enable));
+const base::Value::List* NetworkMetadataStore::GetPreRevampCustomApnList(
+    const std::string& network_guid) {
+  DCHECK(ash::features::IsApnRevampEnabled());
+  if (const base::Value* pref = GetPref(network_guid, kCustomApnList)) {
+    return pref->GetIfList();
+  }
+  return nullptr;
 }
 
 void NetworkMetadataStore::SetDayOfTrafficCountersAutoReset(
     const std::string& network_guid,
-    const absl::optional<int>& day) {
+    const std::optional<int>& day) {
   auto value = day.has_value() ? base::Value(day.value()) : base::Value();
   SetPref(network_guid, kDayOfTrafficCountersAutoReset, std::move(value));
-}
-
-const base::Value* NetworkMetadataStore::GetEnableTrafficCountersAutoReset(
-    const std::string& network_guid) {
-  return GetPref(network_guid, kEnableTrafficCountersAutoReset);
 }
 
 const base::Value* NetworkMetadataStore::GetDayOfTrafficCountersAutoReset(
     const std::string& network_guid) {
   return GetPref(network_guid, kDayOfTrafficCountersAutoReset);
+}
+
+void NetworkMetadataStore::SetSecureDnsTemplatesWithIdentifiersActive(
+    bool active) {
+  if (secure_dns_templates_with_identifiers_active_ == active) {
+    return;
+  }
+
+  secure_dns_templates_with_identifiers_active_ = active;
+  managed_network_configuration_handler_
+      ->OnEnterpriseMonitoredWebPoliciesApplied();
+}
+
+void NetworkMetadataStore::SetReportXdrEventsEnabled(bool enabled) {
+  if (report_xdr_events_enabled_ == enabled) {
+    return;
+  }
+
+  report_xdr_events_enabled_ = enabled;
+  managed_network_configuration_handler_
+      ->OnEnterpriseMonitoredWebPoliciesApplied();
+}
+
+void NetworkMetadataStore::SetUserTextMessageSuppressionState(
+    const std::string& network_guid,
+    const UserTextMessageSuppressionState& state) {
+  SetPref(network_guid, kUserTextMessageSuppressionState,
+          base::Value(std::to_underlying(state)));
+  CellularNetworkMetricsLogger::LogUserTextMessageSuppressionState(state);
+}
+
+UserTextMessageSuppressionState
+NetworkMetadataStore::GetUserTextMessageSuppressionState(
+    const std::string& network_guid) {
+
+  const base::Value* state_value =
+      GetPref(network_guid, kUserTextMessageSuppressionState);
+  if (!state_value || !state_value->is_int()) {
+    return UserTextMessageSuppressionState::kAllow;
+  }
+
+  if (std::to_underlying(UserTextMessageSuppressionState::kAllow) ==
+      state_value->GetInt()) {
+    return UserTextMessageSuppressionState::kAllow;
+  } else if (std::to_underlying(UserTextMessageSuppressionState::kSuppress) ==
+             state_value->GetInt()) {
+    return UserTextMessageSuppressionState::kSuppress;
+  }
+  NOTREACHED();
 }
 
 void NetworkMetadataStore::SetPref(const std::string& network_guid,

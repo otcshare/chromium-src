@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_METRICS_METRICS_ROTATION_SCHEDULER_H_
 #define COMPONENTS_METRICS_METRICS_ROTATION_SCHEDULER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "components/metrics/metrics_scheduler.h"
 
@@ -21,7 +21,7 @@ class MetricsRotationScheduler : public MetricsScheduler {
   MetricsRotationScheduler(
       const base::RepeatingClosure& rotation_callback,
       const base::RepeatingCallback<base::TimeDelta(void)>& interval_callback,
-      bool fast_startup_for_testing);
+      bool fast_startup);
 
   MetricsRotationScheduler(const MetricsRotationScheduler&) = delete;
   MetricsRotationScheduler& operator=(const MetricsRotationScheduler&) = delete;

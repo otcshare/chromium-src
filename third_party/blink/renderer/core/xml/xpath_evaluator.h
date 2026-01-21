@@ -29,11 +29,12 @@
 
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
 class ExceptionState;
-class NativeXPathNSResolver;
+class ExecutionContext;
 class Node;
 class ScriptValue;
 class V8XPathNSResolver;
@@ -50,11 +51,13 @@ class XPathEvaluator final : public ScriptWrappable {
 
   XPathEvaluator() = default;
 
-  XPathExpression* createExpression(const String& expression,
+  XPathExpression* createExpression(ExecutionContext* execution_context,
+                                    const String& expression,
                                     V8XPathNSResolver*,
                                     ExceptionState&);
-  NativeXPathNSResolver* createNSResolver(Node* node_resolver);
-  XPathResult* evaluate(const String& expression,
+  Node* createNSResolver(Node* node_resolver);
+  XPathResult* evaluate(ExecutionContext* execustin_context,
+                        const String& expression,
                         Node* context_node,
                         V8XPathNSResolver*,
                         uint16_t type,

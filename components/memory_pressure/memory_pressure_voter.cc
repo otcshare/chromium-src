@@ -5,10 +5,11 @@
 #include "components/memory_pressure/memory_pressure_voter.h"
 
 #include <numeric>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
-#include "base/trace_event/base_tracing.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/trace_event/trace_event.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace memory_pressure {
 
@@ -18,21 +19,23 @@ class MemoryPressureVoterImpl : public MemoryPressureVoter {
       : aggregator_(aggregator) {}
   ~MemoryPressureVoterImpl() override {
     // Remove this voter's vote.
-    if (vote_)
-      aggregator_->OnVote(vote_, absl::nullopt);
+    if (vote_) {
+      aggregator_->OnVote(vote_, std::nullopt);
+    }
   }
 
   MemoryPressureVoterImpl(MemoryPressureVoterImpl&&) = delete;
   MemoryPressureVoterImpl& operator=(MemoryPressureVoterImpl&&) = delete;
 
-  void SetVote(base::MemoryPressureListener::MemoryPressureLevel level,
+  void SetVote(base::MemoryPressureLevel level,
                bool notify_listeners) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     auto old_vote = vote_;
     vote_ = level;
     aggregator_->OnVote(old_vote, vote_);
-    if (notify_listeners)
+    if (notify_listeners) {
       aggregator_->NotifyListeners();
+    }
   }
 
  private:
@@ -41,7 +44,7 @@ class MemoryPressureVoterImpl : public MemoryPressureVoter {
 
   // optional<> is used here as the vote will be null until the voter's
   // first vote calculation.
-  absl::optional<base::MemoryPressureListener::MemoryPressureLevel> vote_;
+  std::optional<base::MemoryPressureLevel> vote_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };
@@ -59,8 +62,8 @@ MemoryPressureVoteAggregator::CreateVoter() {
 }
 
 void MemoryPressureVoteAggregator::OnVoteForTesting(
-    absl::optional<MemoryPressureLevel> old_vote,
-    absl::optional<MemoryPressureLevel> new_vote) {
+    std::optional<base::MemoryPressureLevel> old_vote,
+    std::optional<base::MemoryPressureLevel> new_vote) {
   OnVote(old_vote, new_vote);
 }
 
@@ -68,70 +71,68 @@ void MemoryPressureVoteAggregator::NotifyListenersForTesting() {
   NotifyListeners();
 }
 
-base::MemoryPressureListener::MemoryPressureLevel
+base::MemoryPressureLevel
 MemoryPressureVoteAggregator::EvaluateVotesForTesting() {
   return EvaluateVotes();
 }
 
 void MemoryPressureVoteAggregator::OnVote(
-    absl::optional<MemoryPressureLevel> old_vote,
-    absl::optional<MemoryPressureLevel> new_vote) {
+    std::optional<base::MemoryPressureLevel> old_vote,
+    std::optional<base::MemoryPressureLevel> new_vote) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(old_vote || new_vote);
   if (old_vote) {
     DCHECK_LT(0u, votes_[old_vote.value()]);
     votes_[old_vote.value()]--;
   }
-  if (new_vote)
+  if (new_vote) {
     votes_[new_vote.value()]++;
+  }
   auto old_pressure_level = current_pressure_level_;
 
   // If the pressure level is not None then an asynchronous event will have been
   // started below, it needs to be ended.
   // Note that we record this event every time we receive a new vote to ensure
   // that the begin event doesn't get dropped during long pressure sessions.
-  if (old_pressure_level ==
-      MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-    TRACE_EVENT_NESTABLE_ASYNC_END0("base", "MemoryPressure::CriticalPressure",
-                                    this);
-  } else if (old_pressure_level ==
-             MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_MODERATE) {
-    TRACE_EVENT_NESTABLE_ASYNC_END0("base", "MemoryPressure::ModeratePressure",
-                                    this);
+  if (old_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL ||
+      old_pressure_level == base::MEMORY_PRESSURE_LEVEL_MODERATE) {
+    // End MemoryPressure::CriticalPressure/MemoryPressure::ModeratePressure
+    // event.
+    TRACE_EVENT_END("base", perfetto::Track::FromPointer(this));
   }
 
   current_pressure_level_ = EvaluateVotes();
 
   // Start an asynchronous tracing event to record this pressure session.
-  if (current_pressure_level_ ==
-      MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("base",
-                                      "MemoryPressure::CriticalPressure", this);
-  } else if (current_pressure_level_ ==
-             MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_MODERATE) {
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("base",
-                                      "MemoryPressure::ModeratePressure", this);
+  if (current_pressure_level_ == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
+    TRACE_EVENT_BEGIN("base", "MemoryPressure::CriticalPressure",
+                      perfetto::Track::FromPointer(this));
+  } else if (current_pressure_level_ == base::MEMORY_PRESSURE_LEVEL_MODERATE) {
+    TRACE_EVENT_BEGIN("base", "MemoryPressure::ModeratePressure",
+                      perfetto::Track::FromPointer(this));
   }
 
-  if (old_pressure_level != current_pressure_level_)
+  if (old_pressure_level != current_pressure_level_) {
     delegate_->OnMemoryPressureLevelChanged(current_pressure_level_);
+  }
 }
 
 void MemoryPressureVoteAggregator::NotifyListeners() {
   delegate_->OnNotifyListenersRequested();
 }
 
-base::MemoryPressureListener::MemoryPressureLevel
-MemoryPressureVoteAggregator::EvaluateVotes() const {
+base::MemoryPressureLevel MemoryPressureVoteAggregator::EvaluateVotes() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   static_assert(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL == 2,
+      base::MEMORY_PRESSURE_LEVEL_CRITICAL == 2,
       "Ensure that each memory pressure level is handled by this method.");
-  if (votes_[2])
-    return base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL;
-  if (votes_[1])
-    return base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE;
-  return base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
+  if (votes_[2]) {
+    return base::MEMORY_PRESSURE_LEVEL_CRITICAL;
+  }
+  if (votes_[1]) {
+    return base::MEMORY_PRESSURE_LEVEL_MODERATE;
+  }
+  return base::MEMORY_PRESSURE_LEVEL_NONE;
 }
 
 void MemoryPressureVoteAggregator::SetVotesForTesting(size_t none_votes,

@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "extensions/common/extensions_client.h"
 #include "url/gurl.h"
 
@@ -53,13 +54,14 @@ class TestExtensionsClient : public ExtensionsClient {
   std::set<base::FilePath> GetBrowserImagePaths(
       const Extension* extension) override;
 
-  // A allowlist of extensions that can script anywhere. Do not add to this
+  // An allowlist of extensions that can script anywhere. Do not add to this
   // list (except in tests) without consulting the Extensions team first.
   // Note: Component extensions have this right implicitly and do not need to be
   // added to this list.
   ScriptingAllowlist scripting_allowlist_;
 
-  std::set<BrowserImagePathsFilter*> browser_image_filters_;
+  std::set<raw_ptr<BrowserImagePathsFilter, SetExperimental>>
+      browser_image_filters_;
 
   const GURL webstore_base_url_;
   const GURL new_webstore_base_url_;

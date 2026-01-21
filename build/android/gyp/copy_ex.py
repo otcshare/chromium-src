@@ -6,16 +6,16 @@
 
 """Copies files to a directory."""
 
-from __future__ import print_function
 
+import argparse
 import filecmp
 import itertools
-import optparse
 import os
 import shutil
 import sys
 
 from util import build_utils
+import action_helpers  # build_utils adds //build to sys.path.
 
 
 def _get_all_files(base):
@@ -50,8 +50,9 @@ def CopyFile(f, dest, deps):
 
 def DoCopy(options, deps):
   """Copy files or directories given in options.files and update deps."""
-  files = list(itertools.chain.from_iterable(build_utils.ParseGnList(f)
-                                             for f in options.files))
+  files = list(
+      itertools.chain.from_iterable(
+          action_helpers.parse_gn_list(f) for f in options.files))
 
   for f in files:
     if os.path.isdir(f) and not options.clear:
@@ -62,15 +63,16 @@ def DoCopy(options, deps):
 
 def DoRenaming(options, deps):
   """Copy and rename files given in options.renaming_sources and update deps."""
-  src_files = list(itertools.chain.from_iterable(
-                   build_utils.ParseGnList(f)
-                   for f in options.renaming_sources))
+  src_files = list(
+      itertools.chain.from_iterable(
+          action_helpers.parse_gn_list(f) for f in options.renaming_sources))
 
-  dest_files = list(itertools.chain.from_iterable(
-                    build_utils.ParseGnList(f)
-                    for f in options.renaming_destinations))
+  dest_files = list(
+      itertools.chain.from_iterable(
+          action_helpers.parse_gn_list(f)
+          for f in options.renaming_destinations))
 
-  if (len(src_files) != len(dest_files)):
+  if len(src_files) != len(dest_files):
     print('Renaming source and destination files not match.')
     sys.exit(-1)
 
@@ -84,27 +86,28 @@ def DoRenaming(options, deps):
 def main(args):
   args = build_utils.ExpandFileArgs(args)
 
-  parser = optparse.OptionParser()
-  build_utils.AddDepfileOption(parser)
+  parser = argparse.ArgumentParser()
+  action_helpers.add_depfile_arg(parser)
 
-  parser.add_option('--dest', help='Directory to copy files to.')
-  parser.add_option('--files', action='append',
-                    help='List of files to copy.')
-  parser.add_option('--clear', action='store_true',
-                    help='If set, the destination directory will be deleted '
-                    'before copying files to it. This is highly recommended to '
-                    'ensure that no stale files are left in the directory.')
-  parser.add_option('--stamp', help='Path to touch on success.')
-  parser.add_option('--renaming-sources',
-                    action='append',
-                    help='List of files need to be renamed while being '
-                         'copied to dest directory')
-  parser.add_option('--renaming-destinations',
-                    action='append',
-                    help='List of destination file name without path, the '
-                         'number of elements must match rename-sources.')
+  parser.add_argument('--dest', help='Directory to copy files to.')
+  parser.add_argument('--files', action='append', help='List of files to copy.')
+  parser.add_argument(
+      '--clear',
+      action='store_true',
+      help='If set, the destination directory will be deleted '
+      'before copying files to it. This is highly recommended to '
+      'ensure that no stale files are left in the directory.')
+  parser.add_argument('--stamp', help='Path to touch on success.')
+  parser.add_argument('--renaming-sources',
+                      action='append',
+                      help='List of files need to be renamed while being '
+                      'copied to dest directory')
+  parser.add_argument('--renaming-destinations',
+                      action='append',
+                      help='List of destination file name without path, the '
+                      'number of elements must match rename-sources.')
 
-  options, _ = parser.parse_args(args)
+  options = parser.parse_args(args)
 
   if options.clear:
     build_utils.DeleteDirectory(options.dest)
@@ -119,7 +122,7 @@ def main(args):
     DoRenaming(options, deps)
 
   if options.depfile:
-    build_utils.WriteDepfile(options.depfile, options.stamp, deps)
+    action_helpers.write_depfile(options.depfile, options.stamp, deps)
 
   if options.stamp:
     build_utils.Touch(options.stamp)

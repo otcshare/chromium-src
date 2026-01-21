@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/spellcheck/browser/spellcheck_platform.h"
+#include "components/spellcheck/browser/windows_spell_checker.h"
 
 #include <stddef.h>
+
+#include <algorithm>
 #include <ostream>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -20,7 +20,7 @@
 #include "base/test/task_environment.h"
 #include "base/win/windows_version.h"
 #include "build/build_config.h"
-#include "components/spellcheck/browser/windows_spell_checker.h"
+#include "components/spellcheck/browser/spellcheck_platform.h"
 #include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/common/spellcheck_result.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
@@ -105,13 +105,6 @@ class WindowsSpellCheckerTest : public testing::Test {
   }
 
  protected:
-  void SetUp() override {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{spellcheck::kWinUseBrowserSpellChecker,
-                              spellcheck::kWinRetrieveSuggestionsOnlyOnDemand},
-        /*disabled_features=*/{});
-  }
-
   void RunRequestTextCheckTest(const RequestTextCheckTestCase& test_case);
 
   std::unique_ptr<WindowsSpellChecker> win_spell_checker_;
@@ -131,8 +124,7 @@ class WindowsSpellCheckerTest : public testing::Test {
 
 void WindowsSpellCheckerTest::RunRequestTextCheckTest(
     const RequestTextCheckTestCase& test_case) {
-  ASSERT_EQ(set_language_result_,
-            spellcheck::WindowsVersionSupportsSpellchecker());
+  ASSERT_TRUE(set_language_result_);
 
   const std::u16string word(base::ASCIIToUTF16(test_case.text_to_check));
 
@@ -143,31 +135,14 @@ void WindowsSpellCheckerTest::RunRequestTextCheckTest(
                      base::Unretained(this)));
   RunUntilResultReceived();
 
-  if (!spellcheck::WindowsVersionSupportsSpellchecker()) {
-    // On Windows versions that don't support platform spellchecking, the
-    // returned vector of results should be empty.
-    ASSERT_TRUE(spell_check_results_.empty());
-    return;
-  }
-
   ASSERT_EQ(1u, spell_check_results_.size())
       << "RequestTextCheck: Wrong number of results";
 
   const std::vector<std::u16string>& suggestions =
       spell_check_results_.front().replacements;
-  if (base::FeatureList::IsEnabled(
-          spellcheck::kWinRetrieveSuggestionsOnlyOnDemand)) {
-    // RequestTextCheck should return no suggestions.
-    ASSERT_TRUE(suggestions.empty())
-        << "RequestTextCheck: No suggestions are expected";
-  } else {
-    const std::u16string suggested_word(
-        base::ASCIIToUTF16(test_case.expected_suggestion));
-    ASSERT_TRUE(base::ranges::any_of(suggestions, [&](const std::u16string&
-                                                          suggestion) {
-      return suggestion.compare(suggested_word) == 0;
-    })) << "RequestTextCheck: Expected suggestion not found";
-  }
+  // RequestTextCheck should return no suggestions.
+  ASSERT_TRUE(suggestions.empty())
+      << "RequestTextCheck: No suggestions are expected";
 }
 
 static const RequestTextCheckTestCase kRequestTextCheckTestCases[] = {
@@ -193,28 +168,6 @@ TEST_P(WindowsSpellCheckerRequestTextCheckTest, RequestTextCheck) {
   RunRequestTextCheckTest(GetParam());
 }
 
-class WindowsSpellCheckerRequestTextCheckWithSuggestionsTest
-    : public WindowsSpellCheckerRequestTextCheckTest {
- protected:
-  void SetUp() override {
-    // Want to maintain test coverage for requesting suggestions on call to
-    // RequestTextCheck.
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{spellcheck::kWinUseBrowserSpellChecker},
-        /*disabled_features=*/{
-            spellcheck::kWinRetrieveSuggestionsOnlyOnDemand});
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(TestCases,
-                         WindowsSpellCheckerRequestTextCheckWithSuggestionsTest,
-                         testing::ValuesIn(kRequestTextCheckTestCases));
-
-TEST_P(WindowsSpellCheckerRequestTextCheckWithSuggestionsTest,
-       RequestTextCheck) {
-  RunRequestTextCheckTest(GetParam());
-}
-
 TEST_F(WindowsSpellCheckerTest, RetrieveSpellcheckLanguages) {
   // Test retrieval of real dictionary on system (useful for debug logging
   // other registered dictionaries).
@@ -224,15 +177,8 @@ TEST_F(WindowsSpellCheckerTest, RetrieveSpellcheckLanguages) {
 
   RunUntilResultReceived();
 
-  if (!spellcheck::WindowsVersionSupportsSpellchecker()) {
-    // On Windows versions that don't support platform spellchecking, the
-    // returned vector of results should be empty.
-    ASSERT_TRUE(spellcheck_languages_.empty());
-    return;
-  }
-
   ASSERT_LE(1u, spellcheck_languages_.size());
-  ASSERT_TRUE(base::Contains(spellcheck_languages_, "en-US"));
+  ASSERT_TRUE(std::ranges::contains(spellcheck_languages_, "en-US"));
 }
 
 TEST_F(WindowsSpellCheckerTest, RetrieveSpellcheckLanguagesFakeDictionaries) {
@@ -258,8 +204,7 @@ TEST_F(WindowsSpellCheckerTest, RetrieveSpellcheckLanguagesFakeDictionaries) {
 }
 
 TEST_F(WindowsSpellCheckerTest, GetPerLanguageSuggestions) {
-  ASSERT_EQ(set_language_result_,
-            spellcheck::WindowsVersionSupportsSpellchecker());
+  ASSERT_TRUE(set_language_result_);
 
   win_spell_checker_->GetPerLanguageSuggestions(
       u"tihs",
@@ -267,13 +212,6 @@ TEST_F(WindowsSpellCheckerTest, GetPerLanguageSuggestions) {
           &WindowsSpellCheckerTest::PerLanguageSuggestionsCompletionCallback,
           base::Unretained(this)));
   RunUntilResultReceived();
-
-  if (!spellcheck::WindowsVersionSupportsSpellchecker()) {
-    // On Windows versions that don't support platform spellchecking, the
-    // returned vector of results should be empty.
-    ASSERT_TRUE(per_language_suggestions_.empty());
-    return;
-  }
 
   ASSERT_EQ(per_language_suggestions_.size(), 1u);
   ASSERT_GT(per_language_suggestions_[0].size(), 0u);

@@ -22,14 +22,16 @@ namespace ui {
 
 // Tracked element representing a native Mac visual element (typically a menu or
 // menu item, since we use Views for everything else).
-class COMPONENT_EXPORT(UI_BASE) TrackedElementMac : public TrackedElement {
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) TrackedElementMac
+    : public TrackedElement {
  public:
   TrackedElementMac(ElementIdentifier identifier,
                     ElementContext context,
                     const gfx::Rect& screen_bounds);
   ~TrackedElementMac() override;
 
-  gfx::Rect screen_bounds() const { return screen_bounds_; }
+  // TrackedElement:
+  gfx::Rect GetScreenBounds() const override;
 
   DECLARE_FRAMEWORK_SPECIFIC_METADATA()
 
@@ -40,7 +42,7 @@ class COMPONENT_EXPORT(UI_BASE) TrackedElementMac : public TrackedElement {
 // Helper class for translating between Mac visual elements and TrackedElements.
 // Largely used to track native menus and menu items, as almost all other
 // surfaces are rendered using Views.
-class COMPONENT_EXPORT(UI_BASE) ElementTrackerMac {
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) ElementTrackerMac {
  public:
   ElementTrackerMac(const ElementTrackerMac& other) = delete;
   void operator=(const ElementTrackerMac& other) = delete;
@@ -79,16 +81,13 @@ class COMPONENT_EXPORT(UI_BASE) ElementTrackerMac {
   virtual NSMenu* GetRootMenu(NSMenu* menu) const;
 
   // Used in testing to determine if all data has been properly cleared out.
-  bool is_tracking_any_menus() const { return !root_menu_to_context_.empty(); }
+  bool is_tracking_any_menus() const { return !root_menu_to_data_.empty(); }
 
  private:
   friend class base::NoDestructor<ElementTrackerMac>;
-  class ContextData;
+  class MenuData;
 
-  ElementContext GetContextForMenu(NSMenu* menu) const;
-
-  std::map<NSMenu*, ElementContext> root_menu_to_context_;
-  std::map<ElementContext, std::unique_ptr<ContextData>> context_to_data_;
+  std::map<NSMenu*, MenuData> root_menu_to_data_;
 };
 
 }  // namespace ui

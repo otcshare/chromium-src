@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "content/browser/picture_in_picture/picture_in_picture_service_impl.h"
 #include "content/browser/picture_in_picture/video_picture_in_picture_window_controller_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -54,6 +54,11 @@ void PictureInPictureSession::Update(
 
   GetController().EmbedSurface(surface_id, natural_size);
   GetController().SetShowPlayPauseButton(show_play_pause_button);
+}
+
+void PictureInPictureSession::UpdateMediaPosition(
+    const media_session::MediaPosition& media_position) {
+  GetController().SetMediaPosition(media_position);
 }
 
 void PictureInPictureSession::OnPlayerGone() {

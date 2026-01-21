@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
+#include "base/functional/callback.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 
 namespace dbus {
 class Bus;
@@ -43,7 +43,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ModemMessagingClient {
     virtual void CompletePendingDeleteRequest(bool success) = 0;
 
    protected:
-    virtual ~TestInterface() {}
+    virtual ~TestInterface() = default;
   };
 
   // Creates and initializes the global instance. |bus| must not be null.

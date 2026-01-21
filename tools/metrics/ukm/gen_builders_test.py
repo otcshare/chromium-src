@@ -13,11 +13,13 @@ from decode_template import HEADER as DECODE_HEADER_TEMPLATE
 from decode_template import IMPL as DECODE_IMPL_TEMPLATE
 import ukm_model
 import gen_builders
+import os
 
+_FILE_DIR = os.path.dirname(__file__)
 
 class GenBuildersTest(unittest.TestCase):
   def testFilterObsoleteMetrics(self):
-    data = gen_builders.ReadFilteredData('../../tools/metrics/ukm/ukm.xml')
+    data = gen_builders.ReadFilteredData(_FILE_DIR + '/ukm.xml')
     for event in data[ukm_model._EVENT_TYPE.tag]:
       self.assertTrue(ukm_model.IsNotObsolete(event))
       for metric in event[ukm_model._METRIC_TYPE.tag]:
@@ -25,7 +27,7 @@ class GenBuildersTest(unittest.TestCase):
 
   def testGenerateCode(self):
     relpath = '.'
-    with open('../../tools/metrics/ukm/ukm.xml') as f:
+    with open(_FILE_DIR + '/ukm.xml') as f:
       data = ukm_model.UKM_XML_TYPE.Parse(f.read())
     event = data[ukm_model._EVENT_TYPE.tag][0]
     metric = event[ukm_model._METRIC_TYPE.tag][0]
@@ -48,6 +50,8 @@ class {name} final : public ::ukm::internal::UkmEntryBuilderBase {{
  public:
   explicit {name}(ukm::SourceId source_id);
   explicit {name}(ukm::SourceIdObj source_id);
+  {name}({name}&&);
+  {name}& operator=({name}&&);
   ~{name}() override;
 
   static const char kEntryName[];
@@ -101,13 +105,13 @@ const uint64_t {eventName}::k{metricName}NameHash;
                   decode_header_output)
     self.assertIn("namespace builders", decode_header_output)
     self.assertIn(
-        """typedef std::map<uint64_t, const char*> MetricDecodeMap;
+        """typedef base::flat_map<uint64_t, const char*> MetricDecodeMap;
 struct EntryDecoder {
   const char* name;
-  const MetricDecodeMap metric_map;
+  MetricDecodeMap metric_map;
 };
-typedef std::map<uint64_t, EntryDecoder> DecodeMap;
-DecodeMap CreateDecodeMap();""", decode_header_output)
+typedef base::flat_map<uint64_t, EntryDecoder> DecodeMap;
+const DecodeMap& GetDecodeMap();""", decode_header_output)
 
     decode_impl_output = DECODE_IMPL_TEMPLATE._StampFileCode(relpath, data)
     self.assertIsNotNone(decode_impl_output)

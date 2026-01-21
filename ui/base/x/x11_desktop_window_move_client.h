@@ -5,7 +5,6 @@
 #ifndef UI_BASE_X_X11_DESKTOP_WINDOW_MOVE_CLIENT_H_
 #define UI_BASE_X_X11_DESKTOP_WINDOW_MOVE_CLIENT_H_
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/base/x/x11_move_loop_delegate.h"

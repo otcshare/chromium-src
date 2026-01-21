@@ -2,21 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/base/idle/idle.h"
+
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
-#include "ui/base/idle/idle.h"
+#include "build/config/linux/dbus/buildflags.h"
 #include "ui/base/idle/idle_internal.h"
 #include "ui/display/screen.h"
 
-#if defined(USE_DBUS)
-#include "base/bind.h"
+#if BUILDFLAG(USE_DBUS)
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/task/task_runner.h"
-#include "base/task/task_traits.h"
-#include "base/task/thread_pool.h"
+#include "components/dbus/thread_linux/dbus_thread_linux.h"
+#include "components/dbus/utils/name_has_owner.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
@@ -25,7 +27,7 @@
 
 namespace ui {
 
-#if defined(USE_DBUS)
+#if BUILDFLAG(USE_DBUS)
 
 namespace {
 
@@ -34,11 +36,12 @@ const char kSignalName[] = "ActiveChanged";
 
 // Various names under which the service may be found in different Linux desktop
 // environments.
-struct {
+struct Services {
   const char* service_name;
   const char* object_path;
   const char* interface;
-} constexpr kServices[] = {
+};
+constexpr auto kServices = std::to_array<Services>({
     // ksmserver, light-locker, etc.
     {"org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
      "org.freedesktop.ScreenSaver"},
@@ -52,7 +55,7 @@ struct {
     {"org.mate.ScreenSaver", "/org/mate/ScreenSaver", "org.mate.ScreenSaver"},
     // xfce4-screensaver
     {"org.xfce.ScreenSaver", "/org/xfce/ScreenSaver", "org.xfce.ScreenSaver"},
-};
+});
 
 constexpr size_t kServiceCount = sizeof(kServices) / sizeof(kServices[0]);
 
@@ -67,35 +70,39 @@ class DBusScreenSaverWatcher {
     kUnlocked,
   };
 
-  DBusScreenSaverWatcher()
-      : task_runner_(
-            base::ThreadPool::CreateSequencedTaskRunner(base::TaskTraits(
-                base::MayBlock(),
-                base::TaskPriority::USER_VISIBLE,
-                base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN))) {
-    dbus::Bus::Options options;
-    options.bus_type = dbus::Bus::SESSION;
-    options.connection_type = dbus::Bus::PRIVATE;
-    options.dbus_task_runner = task_runner_;
-    bus_ = base::MakeRefCounted<dbus::Bus>(options);
-
-    TryCurrentService();
+  static DBusScreenSaverWatcher* GetInstance() {
+    static base::NoDestructor<DBusScreenSaverWatcher> instance;
+    return instance.get();
   }
+
+  DBusScreenSaverWatcher(const DBusScreenSaverWatcher&) = delete;
+  DBusScreenSaverWatcher& operator=(const DBusScreenSaverWatcher&) = delete;
 
   LockState lock_state() const { return lock_state_; }
 
+  base::CallbackListSubscription AddCallback(
+      base::RepeatingCallback<void(bool)> callback) {
+    return callbacks_.Add(std::move(callback));
+  }
+
  private:
+  friend class base::NoDestructor<DBusScreenSaverWatcher>;
+
+  DBusScreenSaverWatcher() : bus_(dbus_thread_linux::GetSharedSessionBus()) {
+    TryCurrentService();
+  }
+
   ~DBusScreenSaverWatcher() = default;
 
   // Starts the initialisation sequence for the current service.  Failure at any
   // step will increment the service counter and re-start the process.
   void TryCurrentService() {
     // Detach the proxy, if we have one from the previous attempt.
-    if (proxy_) {
-      task_runner_->PostTask(
-          FROM_HERE,
-          base::BindOnce(&dbus::ObjectProxy::Detach, base::Unretained(proxy_)));
-      proxy_ = nullptr;
+    if (current_service_ > 0) {
+      bus_->RemoveObjectProxy(
+          kServices[current_service_ - 1].service_name,
+          dbus::ObjectPath(kServices[current_service_ - 1].object_path),
+          base::DoNothing());
     }
 
     if (current_service_ >= kServiceCount) {
@@ -110,23 +117,16 @@ class DBusScreenSaverWatcher {
 
     // Calling methods on a non-existent service will lead to a timeout rather
     // than an immediate error, so check for service existence first.
-    dbus::ObjectProxy* dbus_proxy = bus_->GetObjectProxy(
-        DBUS_SERVICE_DBUS, dbus::ObjectPath(DBUS_PATH_DBUS));
-    dbus::MethodCall name_has_owner_call(DBUS_INTERFACE_DBUS, "NameHasOwner");
-    dbus::MessageWriter writer(&name_has_owner_call);
-    writer.AppendString(kServices[current_service_].service_name);
-    dbus_proxy->CallMethod(
-        &name_has_owner_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+    dbus_utils::NameHasOwner(
+        bus_.get(), kServices[current_service_].service_name,
         base::BindOnce(&DBusScreenSaverWatcher::OnServiceHasOwner,
                        weak_factory_.GetWeakPtr()));
   }
 
-  void OnServiceHasOwner(dbus::Response* response) {
+  void OnServiceHasOwner(std::optional<bool> name_has_owner) {
     DCHECK_LT(current_service_, kServiceCount);
 
-    dbus::MessageReader reader(response);
-    bool owned = false;
-    if (!response || !reader.PopBool(&owned) || !owned) {
+    if (!name_has_owner.value_or(false)) {
       VLOG(1) << kServices[current_service_].service_name
               << " D-Bus service does not exist";
       ++current_service_;
@@ -134,10 +134,10 @@ class DBusScreenSaverWatcher {
     }
 
     // Now connect the ActiveChanged signal.
-    proxy_ = bus_->GetObjectProxy(
+    dbus::ObjectProxy* proxy = bus_->GetObjectProxy(
         kServices[current_service_].service_name,
         dbus::ObjectPath(kServices[current_service_].object_path));
-    proxy_->ConnectToSignal(
+    proxy->ConnectToSignal(
         kServices[current_service_].interface, kSignalName,
         base::BindRepeating(&DBusScreenSaverWatcher::OnActiveChanged,
                             weak_factory_.GetWeakPtr()),
@@ -166,12 +166,16 @@ class DBusScreenSaverWatcher {
     // make an explicit method call and check that no error is returned.
     dbus::MethodCall method_call(kServices[current_service_].interface,
                                  kMethodName);
-    proxy_->CallMethod(&method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-                       base::BindOnce(&DBusScreenSaverWatcher::OnGetActive,
-                                      weak_factory_.GetWeakPtr()));
+    dbus::ObjectProxy* proxy = bus_->GetObjectProxy(
+        kServices[current_service_].service_name,
+        dbus::ObjectPath(kServices[current_service_].object_path));
+    proxy->CallMethodWithErrorResponse(
+        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::BindOnce(&DBusScreenSaverWatcher::OnGetActive,
+                       weak_factory_.GetWeakPtr()));
   }
 
-  void OnGetActive(dbus::Response* response) {
+  void OnGetActive(dbus::Response* response, dbus::ErrorResponse*) {
     DCHECK_LT(current_service_, kServiceCount);
 
     if (!response || !UpdateLockState(response)) {
@@ -188,9 +192,18 @@ class DBusScreenSaverWatcher {
   bool UpdateLockState(dbus::Message* message) {
     dbus::MessageReader reader(message);
     bool active;
-    if (!reader.PopBool(&active) || reader.HasMoreData())
+    if (!reader.PopBool(&active) || reader.HasMoreData()) {
       return false;
-    lock_state_ = active ? LockState::kLocked : LockState::kUnlocked;
+    }
+    LockState new_lock_state =
+        active ? LockState::kLocked : LockState::kUnlocked;
+    if (lock_state_ == new_lock_state) {
+      return true;
+    }
+
+    lock_state_ = new_lock_state;
+    callbacks_.Notify(lock_state_ == LockState::kLocked);
+
     return true;
   }
 
@@ -202,43 +215,51 @@ class DBusScreenSaverWatcher {
   size_t current_service_ = 0;
 
   scoped_refptr<dbus::Bus> bus_;
-  scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  raw_ptr<dbus::ObjectProxy> proxy_ = nullptr;
+  base::RepeatingCallbackList<void(bool)> callbacks_;
 
   base::WeakPtrFactory<DBusScreenSaverWatcher> weak_factory_{this};
 };
 
-DBusScreenSaverWatcher* GetDBusScreenSaverWatcher() {
-  static base::NoDestructor<DBusScreenSaverWatcher> impl;
-  return impl.get();
-}
-
 }  // namespace
 
-#endif  // defined(USE_DBUS)
+#endif  // BUILDFLAG(USE_DBUS)
+
+base::CallbackListSubscription AddScreenLockCallback(
+    base::RepeatingCallback<void(bool)> callback) {
+#if BUILDFLAG(USE_DBUS)
+  return DBusScreenSaverWatcher::GetInstance()->AddCallback(
+      std::move(callback));
+#else
+  return {};
+#endif
+}
 
 int CalculateIdleTime() {
-  auto* const screen = display::Screen::GetScreen();
+  auto* const screen = display::Screen::Get();
   // The screen can be nullptr in tests.
-  if (!screen)
+  if (!screen) {
     return 0;
+  }
   return screen->CalculateIdleTime().InSeconds();
 }
 
 bool CheckIdleStateIsLocked() {
-  if (IdleStateForTesting().has_value())
+  if (IdleStateForTesting().has_value()) {
     return IdleStateForTesting().value() == IDLE_STATE_LOCKED;
+  }
 
-#if defined(USE_DBUS)
-  auto lock_state = GetDBusScreenSaverWatcher()->lock_state();
-  if (lock_state != DBusScreenSaverWatcher::LockState::kUnknown)
+#if BUILDFLAG(USE_DBUS)
+  auto lock_state = DBusScreenSaverWatcher::GetInstance()->lock_state();
+  if (lock_state != DBusScreenSaverWatcher::LockState::kUnknown) {
     return lock_state == DBusScreenSaverWatcher::LockState::kLocked;
+  }
 #endif
 
-  auto* const screen = display::Screen::GetScreen();
+  auto* const screen = display::Screen::Get();
   // The screen can be nullptr in tests.
-  if (!screen)
+  if (!screen) {
     return false;
+  }
   return screen->IsScreenSaverActive();
 }
 

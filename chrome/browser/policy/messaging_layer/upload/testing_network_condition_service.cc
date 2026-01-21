@@ -6,7 +6,8 @@
 
 #include <cstddef>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/messaging_layer/upload/network_condition_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"

@@ -4,60 +4,40 @@
 
 package org.chromium.chrome.browser.homepage;
 
-import androidx.test.filters.SmallTest;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Matchers;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.new_tab_url.DseNewTabUrlManager;
 import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.url_constants.ExtensionsUrlOverrideRegistry;
+import org.chromium.chrome.browser.url_constants.UrlConstantResolverFactory;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
-import org.chromium.url.ShadowGURL;
 
 /** Unit tests for {@link HomepageManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {HomepageManagerTest.ShadowHomepagePolicyManager.class,
-                HomepageManagerTest.ShadowUrlUtilities.class,
-                HomepageManagerTest.ShadowPartnerBrowserCustomizations.class, ShadowGURL.class})
+@Config(shadows = {HomepageManagerTest.ShadowPartnerBrowserCustomizations.class})
+@EnableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
 public class HomepageManagerTest {
-    /** Shadow for {@link HomepagePolicyManager}. */
-    @Implements(HomepagePolicyManager.class)
-    public static class ShadowHomepagePolicyManager {
-        static GURL sHomepageUrl;
-
-        @Implementation
-        public static boolean isHomepageManagedByPolicy() {
-            return true;
-        }
-
-        @Implementation
-        public static GURL getHomepageUrl() {
-            return sHomepageUrl;
-        }
-    }
-
-    @Implements(UrlUtilities.class)
-    static class ShadowUrlUtilities {
-        @Implementation
-        public static boolean isNTPUrl(String url) {
-            return JUnitTestGURLs.NTP_URL.equals(url);
-        }
-    }
-
     @Implements(PartnerBrowserCustomizations.class)
     static class ShadowPartnerBrowserCustomizations {
         private static PartnerBrowserCustomizations sPartnerBrowserCustomizations;
@@ -73,70 +53,445 @@ public class HomepageManagerTest {
         }
     }
 
-    @Mock
-    private PartnerBrowserCustomizations mPartnerBrowserCustomizations;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private PartnerBrowserCustomizations mPartnerBrowserCustomizations;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         ShadowPartnerBrowserCustomizations.setPartnerBrowserCustomizations(
                 mPartnerBrowserCustomizations);
+        DseNewTabUrlManager.resetIsEeaChoiceCountryForTesting();
+        ExtensionsUrlOverrideRegistry.resetRegistry();
+        UrlConstantResolverFactory.resetResolvers();
     }
 
     @Test
-    @SmallTest
     public void testIsHomepageNonNtp() {
-        ShadowHomepagePolicyManager.sHomepageUrl = GURL.emptyGURL();
+        HomepageManager homepageManager = HomepageManager.getInstance();
+
+        HomepagePolicyManager.setHomepageForTesting(true, GURL.emptyGURL(), false);
         Assert.assertFalse(
-                "Empty string should fall back to NTP", HomepageManager.isHomepageNonNtp());
+                "Empty string should fall back to NTP.", homepageManager.isHomepageNonNtp());
 
-        ShadowHomepagePolicyManager.sHomepageUrl =
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.EXAMPLE_URL);
-        Assert.assertTrue("Random web page is not the NTP", HomepageManager.isHomepageNonNtp());
+        HomepagePolicyManager.setHomepageForTesting(true, JUnitTestGURLs.EXAMPLE_URL, false);
+        Assert.assertTrue("Random web page is not the NTP.", homepageManager.isHomepageNonNtp());
 
-        ShadowHomepagePolicyManager.sHomepageUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.NTP_URL);
-        Assert.assertFalse("NTP should be considered the NTP", HomepageManager.isHomepageNonNtp());
+        HomepagePolicyManager.setHomepageForTesting(true, JUnitTestGURLs.NTP_NATIVE_URL, false);
+        Assert.assertFalse("NTP should be considered the NTP.", homepageManager.isHomepageNonNtp());
+
+        HomepagePolicyManager.setHomepageForTesting(true, JUnitTestGURLs.EXAMPLE_URL, true);
+        Assert.assertFalse("NTP policy forces NTP.", homepageManager.isHomepageNonNtp());
     }
 
     @Test
-    @SmallTest
-    public void testGetDefaultHomepageUri() {
+    public void testGetDefaultHomepageGurlPreferenceKeysMigration() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+
         Mockito.doNothing()
                 .when(mPartnerBrowserCustomizations)
-                .setPartnerHomepageListener(Matchers.anyObject());
+                .setPartnerHomepageListener(ArgumentMatchers.any());
         Mockito.doReturn(false)
                 .when(mPartnerBrowserCustomizations)
                 .isHomepageProviderAvailableAndEnabled();
 
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI, null);
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, null);
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI,
+                        null);
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, null);
         Assert.assertEquals(
-                UrlConstants.NTP_NON_NATIVE_URL, HomepageManager.getDefaultHomepageUri());
+                UrlConstantResolverFactory.getOriginalResolver().getNtpGurl(),
+                homepageManager.getDefaultHomepageGurl(/* isIncognito= */ false));
 
-        final String blueUrl = JUnitTestGURLs.BLUE_1;
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI, blueUrl);
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, null);
-        Assert.assertEquals(blueUrl, HomepageManager.getDefaultHomepageUri());
+        final GURL blueUrl = JUnitTestGURLs.BLUE_1;
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI,
+                        blueUrl.getSpec());
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, null);
+        Assert.assertEquals(
+                blueUrl, homepageManager.getDefaultHomepageGurl(/* isIncognito= */ false));
 
-        final String redUrl = JUnitTestGURLs.RED_1;
-        final String serializedRedGurl = JUnitTestGURLs.getGURL(redUrl).serialize();
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI, null);
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, serializedRedGurl);
-        Assert.assertEquals(redUrl, HomepageManager.getDefaultHomepageUri());
+        // getDefaultHomepageGurl() should have forced the usage of the new pref key.
+        String deprecatedKeyValue =
+                ChromeSharedPreferences.getInstance()
+                        .readString(
+                                ChromePreferenceKeys
+                                        .DEPRECATED_HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI,
+                                "");
+        String expectedKeyValue =
+                ChromeSharedPreferences.getInstance()
+                        .readString(
+                                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, "");
+        Assert.assertEquals(blueUrl, GURL.deserialize(expectedKeyValue));
+        Assert.assertEquals("", deprecatedKeyValue);
 
-        final String url1 = JUnitTestGURLs.URL_1;
-        final String url2 = JUnitTestGURLs.URL_2;
-        final String serializedGurl2 = JUnitTestGURLs.getGURL(url2).serialize();
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI, url1);
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL, serializedGurl2);
-        Assert.assertEquals(url2, HomepageManager.getDefaultHomepageUri());
+        final GURL redUrl = JUnitTestGURLs.RED_1;
+        final String serializedRedGurl = redUrl.serialize();
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI,
+                        null);
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL,
+                        serializedRedGurl);
+        Assert.assertEquals(
+                redUrl, homepageManager.getDefaultHomepageGurl(/* isIncognito= */ false));
+
+        final GURL url1 = JUnitTestGURLs.URL_1;
+        final GURL url2 = JUnitTestGURLs.URL_2;
+        final String serializedGurl2 = url2.serialize();
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_URI,
+                        url1.getSpec());
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.HOMEPAGE_PARTNER_CUSTOMIZED_DEFAULT_GURL,
+                        serializedGurl2);
+        Assert.assertEquals(url2, homepageManager.getDefaultHomepageGurl(/* isIncognito= */ false));
+    }
+
+    @Test
+    public void testGetPrefHomepageCustomGurlPreferenceKeysMigration() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.DEPRECATED_HOMEPAGE_CUSTOM_URI, null);
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_CUSTOM_GURL, null);
+        Assert.assertTrue(homepageManager.getPrefHomepageCustomGurl().isEmpty());
+
+        final GURL blueUrl = JUnitTestGURLs.BLUE_1;
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_CUSTOM_URI, blueUrl.getSpec());
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_CUSTOM_GURL, null);
+        Assert.assertEquals(blueUrl, homepageManager.getPrefHomepageCustomGurl());
+
+        // getPrefHomepageCustomGurl() should have forced the usage of the new pref key.
+        String deprecatedKeyValue =
+                ChromeSharedPreferences.getInstance()
+                        .readString(ChromePreferenceKeys.DEPRECATED_HOMEPAGE_CUSTOM_URI, "");
+        String expectedKeyValue =
+                ChromeSharedPreferences.getInstance()
+                        .readString(ChromePreferenceKeys.HOMEPAGE_CUSTOM_GURL, "");
+        Assert.assertEquals(blueUrl, GURL.deserialize(expectedKeyValue));
+        Assert.assertEquals("", deprecatedKeyValue);
+
+        final GURL redUrl = JUnitTestGURLs.RED_1;
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.DEPRECATED_HOMEPAGE_CUSTOM_URI, null);
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_CUSTOM_GURL, redUrl.serialize());
+        Assert.assertEquals(redUrl, homepageManager.getPrefHomepageCustomGurl());
+
+        final GURL url1 = JUnitTestGURLs.URL_1;
+        ChromeSharedPreferences.getInstance()
+                .writeString(
+                        ChromePreferenceKeys.DEPRECATED_HOMEPAGE_CUSTOM_URI, redUrl.serialize());
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.HOMEPAGE_CUSTOM_GURL, url1.serialize());
+        Assert.assertEquals(url1, homepageManager.getPrefHomepageCustomGurl());
+    }
+
+    @Test
+    public void testGetHomepageGurl_NoOverride() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        GURL originalNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        GURL incognitoNtp = UrlConstantResolverFactory.getIncognitoResolver().getNtpGurl();
+
+        Assert.assertEquals(
+                "Regular homepage should be the native NTP URL.",
+                originalNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the native NTP URL for incognito.",
+                incognitoNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    public void testGetHomepageGurl_RegularNtpOverridden() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nonNativeNtp = new GURL(getOriginalNonNativeNtpUrl());
+        GURL incognitoNtp = UrlConstantResolverFactory.getIncognitoResolver().getNtpGurl();
+
+        Assert.assertEquals(
+                "Regular homepage should be the non-native NTP URL.",
+                nonNativeNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the native NTP URL for incognito.",
+                incognitoNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    public void testGetHomepageGurl_IncognitoNtpOverridden() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setIncognitoNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL originalNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        GURL nonNativeNtp = new GURL(getOriginalNonNativeNtpUrl());
+
+        Assert.assertEquals(
+                "Regular homepage should be the native NTP URL.",
+                originalNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the non-native NTP URL.",
+                nonNativeNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    public void testGetHomepageGurl_BothNtpOverridden() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        ExtensionsUrlOverrideRegistry.setIncognitoNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nonNativeNtp = new GURL(getOriginalNonNativeNtpUrl());
+
+        Assert.assertEquals(
+                "Regular homepage should be the non-native NTP URL.",
+                nonNativeNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the non-native NTP URL.",
+                nonNativeNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    public void testGetNtpUrl_ExtensionOverride() {
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nonNativeNtp = new GURL(getOriginalNonNativeNtpUrl());
+        Assert.assertEquals(
+                "getNtpUrl should return non-native NTP when overridden.",
+                nonNativeNtp,
+                UrlConstantResolverFactory.getOriginalResolver().getNtpGurl());
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(false);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nativeNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        Assert.assertNotEquals(
+                "getNtpUrl should return native NTP when not overridden.", nonNativeNtp, nativeNtp);
+    }
+
+    @Test
+    public void testShouldCloseAppWithZeroTabs_NtpOverridden() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        Assert.assertFalse(
+                "Should not close with zero tabs if homepage is NTP.",
+                homepageManager.shouldCloseAppWithZeroTabs());
+
+        // Override NTP and check that the behavior is unchanged.
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        Assert.assertFalse(
+                "Should not close with zero tabs if homepage is overridden NTP.",
+                homepageManager.shouldCloseAppWithZeroTabs());
+    }
+
+    @Test
+    public void testIsHomepageNonNtp_NtpOverridden() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        Assert.assertFalse(
+                "Homepage should be considered NTP.", homepageManager.isHomepageNonNtp());
+
+        // Override NTP and check that the behavior is unchanged.
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        Assert.assertFalse(
+                "Overridden NTP should still be considered NTP.",
+                homepageManager.isHomepageNonNtp());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testGetHomepageGurl_RegularNtpOverridden_OverridingDisabled() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL originalNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        GURL incognitoNtp = UrlConstantResolverFactory.getIncognitoResolver().getNtpGurl();
+
+        Assert.assertEquals(
+                "Regular homepage should be the native NTP URL.",
+                originalNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the native NTP URL for incognito.",
+                incognitoNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testGetHomepageGurl_IncognitoNtpOverridden_OverridingDisabled() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setIncognitoNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL originalNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        GURL incognitoNtp = UrlConstantResolverFactory.getIncognitoResolver().getNtpGurl();
+
+        Assert.assertEquals(
+                "Regular homepage should be the native NTP URL.",
+                originalNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the native NTP URL for incognito.",
+                incognitoNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testGetHomepageGurl_BothNtpOverridden_OverridingDisabled() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        ExtensionsUrlOverrideRegistry.setIncognitoNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL originalNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        GURL incognitoNtp = UrlConstantResolverFactory.getIncognitoResolver().getNtpGurl();
+
+        Assert.assertEquals(
+                "Regular homepage should be the native NTP URL.",
+                originalNtp,
+                homepageManager.getHomepageGurl(false));
+        Assert.assertEquals(
+                "Incognito homepage should be the native NTP URL for incognito.",
+                incognitoNtp,
+                homepageManager.getHomepageGurl(true));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testGetNtpUrl_ExtensionOverride_OverridingDisabled() {
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nonNativeNtp = new GURL(getOriginalNonNativeNtpUrl());
+        GURL nativeNtp = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        Assert.assertNotEquals(
+                "getNtpUrl should return native NTP when override is disabled by feature.",
+                nonNativeNtp,
+                nativeNtp);
+
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(false);
+        UrlConstantResolverFactory.resetResolvers();
+
+        GURL nativeNtpAfterReset = UrlConstantResolverFactory.getOriginalResolver().getNtpGurl();
+        Assert.assertEquals(
+                "getNtpUrl should still return native NTP when not overridden.",
+                nativeNtp,
+                nativeNtpAfterReset);
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testShouldCloseAppWithZeroTabs_NtpOverridden_OverridingDisabled() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        Assert.assertFalse(
+                "Should not close with zero tabs if homepage is NTP.",
+                homepageManager.shouldCloseAppWithZeroTabs());
+
+        // Override NTP and check that the behavior is unchanged.
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        Assert.assertFalse(
+                "Should not close with zero tabs if homepage is NTP, even with override"
+                        + " attempt.",
+                homepageManager.shouldCloseAppWithZeroTabs());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testIsHomepageNonNtp_NtpOverridden_OverridingDisabled() {
+        HomepageManager homepageManager = HomepageManager.getInstance();
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.HOMEPAGE_USE_CHROME_NTP, true);
+
+        Assert.assertFalse(
+                "Homepage should be considered NTP.", homepageManager.isHomepageNonNtp());
+
+        // Override NTP and check that the behavior is unchanged.
+        ExtensionsUrlOverrideRegistry.setNtpOverrideEnabled(true);
+        UrlConstantResolverFactory.resetResolvers();
+
+        Assert.assertFalse(
+                "Homepage should still be considered NTP when override is disabled.",
+                homepageManager.isHomepageNonNtp());
     }
 }

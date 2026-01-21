@@ -5,8 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_MESSAGING_BLINK_TRANSFERABLE_MESSAGE_MOJOM_TRAITS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_MESSAGING_BLINK_TRANSFERABLE_MESSAGE_MOJOM_TRAITS_H_
 
-#include "mojo/public/cpp/bindings/array_traits_wtf_vector.h"
 #include "skia/public/mojom/bitmap_skbitmap_mojom_traits.h"
+#include "third_party/blink/public/common/messaging/accelerated_static_bitmap_image_mojom_traits.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 #include "third_party/blink/public/common/messaging/message_port_descriptor_mojom_traits.h"
@@ -29,18 +29,18 @@ struct CORE_EXPORT StructTraits<blink::mojom::TransferableMessageDataView,
     return input;
   }
 
-  static Vector<blink::MessagePortDescriptor> ports(
+  static blink::Vector<blink::MessagePortDescriptor> ports(
       blink::BlinkTransferableMessage& input) {
-    Vector<blink::MessagePortDescriptor> result;
+    blink::Vector<blink::MessagePortDescriptor> result;
     result.ReserveInitialCapacity(input.ports.size());
     for (const auto& port : input.ports)
       result.push_back(port.ReleaseHandle());
     return result;
   }
 
-  static Vector<blink::MessagePortDescriptor> stream_channels(
+  static blink::Vector<blink::MessagePortDescriptor> stream_channels(
       blink::BlinkTransferableMessage& input) {
-    Vector<blink::MessagePortDescriptor> result;
+    blink::Vector<blink::MessagePortDescriptor> result;
     auto& streams = input.message->GetStreams();
     result.ReserveInitialCapacity(streams.size());
     for (const auto& stream : streams)
@@ -53,8 +53,8 @@ struct CORE_EXPORT StructTraits<blink::mojom::TransferableMessageDataView,
     return input.message->GetArrayBufferContentsArray();
   }
 
-  static Vector<SkBitmap> image_bitmap_contents_array(
-      const blink::BlinkCloneableMessage& input);
+  static blink::Vector<blink::mojom::blink::SerializedStaticBitmapImagePtr>
+  image_bitmap_contents_array(const blink::BlinkCloneableMessage& input);
 
   static const blink::mojom::blink::UserActivationSnapshotPtr& user_activation(
       const blink::BlinkTransferableMessage& input) {
@@ -66,12 +66,12 @@ struct CORE_EXPORT StructTraits<blink::mojom::TransferableMessageDataView,
     return input.delegated_capability;
   }
 
-  static absl::optional<blink::scheduler::TaskAttributionId> parent_task_id(
+  static std::optional<blink::scheduler::TaskAttributionId> task_state_id(
       blink::BlinkTransferableMessage& input) {
-    return input.parent_task_id
-               ? absl::make_optional(blink::scheduler::TaskAttributionId(
-                     input.parent_task_id.value()))
-               : absl::nullopt;
+    return input.task_state_id
+               ? std::make_optional(blink::scheduler::TaskAttributionId(
+                     input.task_state_id.value()))
+               : std::nullopt;
   }
 
   static bool Read(blink::mojom::TransferableMessageDataView,
@@ -85,11 +85,17 @@ class CORE_EXPORT
  public:
   static mojo_base::BigBuffer contents(
       const blink::ArrayBufferContents& array_buffer_contents) {
-    uint8_t* allocation_start =
-        static_cast<uint8_t*>(array_buffer_contents.Data());
-    return mojo_base::BigBuffer(
-        base::make_span(allocation_start, array_buffer_contents.DataLength()));
+    return mojo_base::BigBuffer(array_buffer_contents.ByteSpan());
   }
+  static bool is_resizable_by_user_javascript(
+      const blink::ArrayBufferContents& array_buffer_contents) {
+    return array_buffer_contents.IsResizableByUserJavaScript();
+  }
+  static size_t max_byte_length(
+      const blink::ArrayBufferContents& array_buffer_contents) {
+    return array_buffer_contents.MaxDataLength();
+  }
+
   static bool Read(blink::mojom::SerializedArrayBufferContentsDataView,
                    blink::ArrayBufferContents* out);
 };

@@ -4,6 +4,7 @@
 
 #include "skia/ext/skcolorspace_primaries.h"
 
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace skia {
@@ -33,7 +34,7 @@ TEST(SkiaUtils, PrimariesD65) {
 
 TEST(SkiaUtils, PrimariesD50) {
   // ProPhoto (which has a D50 white point)
-  const auto pro_photo = SkNamedPrimariesExt::kProPhotoRGB;
+  const auto pro_photo = SkNamedPrimaries::kProPhotoRGB;
 
   // Convert primaries to a matrix.
   skcms_Matrix3x3 pro_photo_matrix;
@@ -50,7 +51,8 @@ TEST(SkiaUtils, PrimariesD50) {
   EXPECT_FALSE(pro_photo == d65);
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = 0; j < 3; ++j) {
-      EXPECT_NEAR(pro_photo_matrix.vals[i][j], d65_matrix.vals[i][j], kEpsilon);
+      UNSAFE_TODO(EXPECT_NEAR(pro_photo_matrix.vals[i][j],
+                              d65_matrix.vals[i][j], kEpsilon));
     }
   }
 }

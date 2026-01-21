@@ -5,10 +5,15 @@
 #include "components/reporting/util/file.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/strcat.h"
 #include "base/test/test_file_util.h"
+#include "components/reporting/util/status_macros.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -17,10 +22,10 @@ using ::testing::StrEq;
 namespace reporting {
 namespace {
 
-constexpr char kNewFile[] = "to_create.txt";
-constexpr char kWriteDataOne[] = "hello world!";
-constexpr char kWriteDataTwo[] = "bye world!";
-constexpr char kMultiLineData[] = "12\n34\n56\n78\n";
+constexpr std::string_view kNewFile = "to_create.txt";
+constexpr std::string_view kWriteDataOne = "hello world!";
+constexpr std::string_view kWriteDataTwo = "bye world!";
+constexpr std::string_view kMultiLineData = "12\n34\n56\n78\n";
 constexpr size_t kMultiLineDataLineLength = 3;
 constexpr size_t kMultiLineDataLines = 4;
 constexpr size_t kOverFlowPos = 256;
@@ -29,13 +34,12 @@ void RemoveAndTruncateTest(const base::FilePath& file_path,
                            uint32_t pos,
                            int expected_lines_removed) {
   const auto remove_status = RemoveAndTruncateLine(file_path, 0);
-  ASSERT_OK(remove_status) << remove_status.status();
+  ASSERT_TRUE(remove_status.has_value()) << remove_status.error();
   const auto read_status = MaybeReadFile(file_path, 0);
-  ASSERT_OK(read_status) << read_status.status();
-  ASSERT_THAT(
-      read_status.ValueOrDie(),
-      StrEq(
-          &kMultiLineData[expected_lines_removed * kMultiLineDataLineLength]));
+  ASSERT_TRUE(read_status.has_value()) << read_status.error();
+  ASSERT_THAT(read_status.value(),
+              StrEq(kMultiLineData.substr(expected_lines_removed *
+                                          kMultiLineDataLineLength)));
 }
 
 TEST(FileTest, DeleteFileWarnIfFailed) {
@@ -99,14 +103,34 @@ TEST(FileTest, DeleteFilesWarnIfFailed) {
   ASSERT_TRUE(base::CreateTemporaryFileInDir(dir_path, &file_path));
 
   // empty the directory
-  base::FileEnumerator dir_enum(dir_path, /*recursive=*/false,
-                                base::FileEnumerator::FILES,
-                                FILE_PATH_LITERAL("*"));
-  ASSERT_TRUE(DeleteFilesWarnIfFailed(dir_enum))
+  ASSERT_TRUE(DeleteFilesWarnIfFailed(base::FileEnumerator(
+      dir_path, /*recursive=*/false, base::FileEnumerator::FILES,
+      FILE_PATH_LITERAL("*"))))
       << "Failed to delete " << file_path.MaybeAsASCII();
   ASSERT_FALSE(base::PathExists(file_path))
       << "Deletion succeeds but " << file_path.MaybeAsASCII()
       << " still exists.";
+}
+
+TEST(FileTest, DeleteFilesWarnIfFailedSubSubDir) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const auto dir_path = temp_dir.GetPath();
+  ASSERT_TRUE(base::DirectoryExists(dir_path));
+
+  ASSERT_TRUE(
+      base::CreateDirectory(dir_path.Append(FILE_PATH_LITERAL("subdir0"))));
+  ASSERT_TRUE(base::CreateDirectory(
+      dir_path.Append(FILE_PATH_LITERAL("subdir0/subdir1"))));
+  ASSERT_TRUE(base::CreateDirectory(
+      dir_path.Append(FILE_PATH_LITERAL("subdir0/subdir1/subdir2"))));
+
+  // empty the directory
+  ASSERT_TRUE(DeleteFilesWarnIfFailed(base::FileEnumerator(
+      dir_path, /*recursive=*/true,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES)));
+  ASSERT_FALSE(base::PathExists(dir_path.Append(FILE_PATH_LITERAL("subdir0"))))
+      << dir_path << " is not empty.";
 }
 
 TEST(FileTest, ReadWriteFile) {
@@ -122,21 +146,21 @@ TEST(FileTest, ReadWriteFile) {
   ASSERT_OK(write_status) << write_status;
 
   auto read_status = MaybeReadFile(file_path, /*offset=*/0);
-  ASSERT_OK(read_status) << read_status.status();
-  EXPECT_EQ(read_status.ValueOrDie(), kWriteDataOne);
+  ASSERT_TRUE(read_status.has_value()) << read_status.error();
+  EXPECT_EQ(read_status.value(), kWriteDataOne);
 
   // Overwrite file.
   write_status = MaybeWriteFile(file_path, kWriteDataTwo);
   ASSERT_OK(write_status) << write_status;
 
   read_status = MaybeReadFile(file_path, /*offset=*/0);
-  ASSERT_OK(read_status) << read_status.status();
-  EXPECT_EQ(read_status.ValueOrDie(), kWriteDataTwo);
+  ASSERT_TRUE(read_status.has_value()) << read_status.error();
+  EXPECT_EQ(read_status.value(), kWriteDataTwo);
 
   // Read file at an out of bounds index
   read_status = MaybeReadFile(file_path, kOverFlowPos);
-  ASSERT_FALSE(read_status.ok());
-  EXPECT_EQ(read_status.status().error_code(), error::DATA_LOSS);
+  ASSERT_FALSE(read_status.has_value());
+  EXPECT_EQ(read_status.error().error_code(), error::DATA_LOSS);
 }
 
 TEST(FileTest, AppendLine) {
@@ -154,13 +178,13 @@ TEST(FileTest, AppendLine) {
 
   status = AppendLine(file_path, kWriteDataOne);
   auto read_status = MaybeReadFile(file_path, /*offset=*/0);
-  ASSERT_OK(read_status) << read_status.status();
-  ASSERT_EQ(read_status.ValueOrDie(), base::StrCat({kWriteDataOne, "\n"}));
+  ASSERT_TRUE(read_status.has_value()) << read_status.error();
+  ASSERT_EQ(read_status.value(), base::StrCat({kWriteDataOne, "\n"}));
 
   status = AppendLine(file_path, kWriteDataTwo);
   read_status = MaybeReadFile(file_path, /*offset=*/0);
-  ASSERT_OK(read_status) << read_status.status();
-  ASSERT_EQ(read_status.ValueOrDie(),
+  ASSERT_TRUE(read_status.has_value()) << read_status.error();
+  ASSERT_EQ(read_status.value(),
             base::StrCat({kWriteDataOne, "\n", kWriteDataTwo, "\n"}));
 }
 

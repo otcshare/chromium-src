@@ -28,7 +28,6 @@ class TimeTicks;
 
 namespace blink {
 
-class ExecutionContext;
 class FetchParameters;
 class ImageResourceInfo;
 class KURL;
@@ -36,7 +35,7 @@ class ResourceError;
 class ResourceFetcher;
 class ResourceResponse;
 class UseCounter;
-enum RespectImageOrientationEnum;
+enum RespectImageOrientationEnum : uint8_t;
 struct ResourcePriority;
 
 // ImageResourceContent is a container that holds fetch result of
@@ -60,6 +59,10 @@ class CORE_EXPORT ImageResourceContent final
 
   // Creates ImageResourceContent from an already loaded image.
   static ImageResourceContent* CreateLoaded(scoped_refptr<blink::Image>);
+
+  // Creates a partially loaded `ImageResourceContent` from an existing image.
+  static ImageResourceContent* CreatePendingForTest(
+      scoped_refptr<blink::Image>);
 
   static ImageResourceContent* Fetch(FetchParameters&, ResourceFetcher*);
 
@@ -120,9 +123,10 @@ class CORE_EXPORT ImageResourceContent final
   bool IsLoading() const;
   bool ErrorOccurred() const;
   bool LoadFailedOrCanceled() const;
+  void SetIsBroken();
+  bool IsBroken() const override;
   bool IsAnimatedImage() const override;
   bool IsPaintedFirstFrame() const override;
-  bool TimingAllowPassed() const override;
   base::TimeTicks GetFirstVideoFrameTime() const override {
     // This returns a null time, which is currently used to signal that this is
     // an animated image, rather than a video, and we should use the
@@ -136,25 +140,18 @@ class CORE_EXPORT ImageResourceContent final
   // Redirecting methods to Resource.
   const KURL& Url() const override;
   bool IsDataUrl() const override;
-  AtomicString MediaType() const override;
   base::TimeTicks LoadResponseEnd() const;
+  base::TimeTicks DiscoveryTime() const override;
+  base::TimeTicks LoadStart() const override;
+  base::TimeTicks LoadEnd() const override;
+  AtomicString MediaType() const override;
   bool IsAccessAllowed() const;
   const ResourceResponse& GetResponse() const;
-  absl::optional<ResourceError> GetResourceError() const;
-  // DEPRECATED: ImageResourceContents consumers shouldn't need to worry about
-  // whether the underlying Resource is being revalidated.
-  bool IsCacheValidator() const;
+  std::optional<ResourceError> GetResourceError() const;
 
   // For FrameSerializer.
-  bool HasCacheControlNoStoreHeader() const;
-
   void EmulateLoadStartedForInspector(ResourceFetcher*,
-                                      const KURL&,
                                       const AtomicString& initiator_name);
-
-  void SetNotRefetchableDataFromDiskCache() {
-    is_refetchable_data_from_disk_cache_ = false;
-  }
 
   // The following public methods should be called from ImageResource only.
 
@@ -194,20 +191,27 @@ class CORE_EXPORT ImageResourceContent final
 
   void SetImageResourceInfo(ImageResourceInfo*);
 
+  void UpdateResourceInfoFromObservers();
+  gfx::Size MaxSize() const { return cached_info_.max_size_; }
+  InterpolationQuality MaxInterpolationQuality() const {
+    return cached_info_.max_interpolation_quality_;
+  }
+
   // Returns priority information to be used for setting the Resource's
   // priority. This is NOT the current Resource's priority.
-  std::pair<ResourcePriority, ResourcePriority> PriorityFromObservers() const;
-  // Returns the current Resource's priroity used by MediaTiming.
-  absl::optional<WebURLRequest::Priority> RequestPriority() const override;
+  std::pair<std::optional<ResourcePriority>, std::optional<ResourcePriority>>
+  PriorityFromObservers() const;
+  // Returns the current Resource's priority used by MediaTiming.
+  std::optional<WebURLRequest::Priority> RequestPriority() const override;
   scoped_refptr<const SharedBuffer> ResourceBuffer() const;
   bool ShouldUpdateImageImmediately() const;
   bool HasObservers() const {
     return !observers_.empty() || !finished_observers_.empty();
   }
-  bool IsRefetchableDataFromDiskCache() const {
-    return is_refetchable_data_from_disk_cache_;
+  wtf_size_t NumberOfObservers() const {
+    return observers_.size() + finished_observers_.size();
   }
-
+  bool CanBeSpeculativelyDecoded() const;
   ImageDecoder::CompressionFormat GetCompressionFormat() const;
 
   // Returns the number of bytes of image data which should be used for entropy
@@ -217,12 +221,6 @@ class CORE_EXPORT ImageResourceContent final
   // rather than bytes.
   uint64_t ContentSizeForEntropy() const override;
 
-  // Returns true if the image content is well-compressed (and not full of
-  // extraneous metadata). "well-compressed" is determined by comparing the
-  // image's compression ratio against a specific value that is defined by an
-  // unoptimized image policy on |context|.
-  bool IsAcceptableCompressionRatio(ExecutionContext& context);
-
   void LoadDeferredImage(ResourceFetcher* fetcher);
 
   // Returns whether the resource request has been tagged as an ad.
@@ -231,6 +229,10 @@ class CORE_EXPORT ImageResourceContent final
   // Records the decoded image type in a UseCounter if the image is a
   // BitmapImage. |use_counter| may be a null pointer.
   void RecordDecodedImageType(UseCounter* use_counter);
+
+  // Records the presence of a C2PManifest if the image is a BitmapImage.
+  // |use_counter| may be a null pointer.
+  void RecordDecodedImageC2PA(UseCounter* use_counter);
 
  private:
   using CanDeferInvalidation = ImageResourceObserver::CanDeferInvalidation;
@@ -250,6 +252,10 @@ class CORE_EXPORT ImageResourceContent final
   void HandleObserverFinished(ImageResourceObserver*);
   void UpdateToLoadedContentStatus(ResourceStatus);
   void UpdateImageAnimationPolicy();
+  void ApplyPriorityAndSpeculativeDecodeParams(
+      const ResourcePriority& new_priority,
+      const gfx::Size& new_size,
+      InterpolationQuality new_quality);
 
   class ProhibitAddRemoveObserverInScope : public base::AutoReset<bool> {
    public:
@@ -257,25 +263,37 @@ class CORE_EXPORT ImageResourceContent final
         : AutoReset(&content->is_add_remove_observer_prohibited_, true) {}
   };
 
-  ResourceStatus content_status_ = ResourceStatus::kNotStarted;
+  Member<ImageResourceInfo> info_;
 
-  // Indicates if this resource's encoded image data can be purged and refetched
-  // from disk cache to save memory usage. See crbug/664437.
-  bool is_refetchable_data_from_disk_cache_;
+  float device_pixel_ratio_header_value_ = 1.0;
+
+  scoped_refptr<blink::Image> image_;
+
+  base::TimeTicks discovery_time_;
+
+  HeapHashCountedSet<WeakMember<ImageResourceObserver>> observers_;
+  HeapHashCountedSet<WeakMember<ImageResourceObserver>> finished_observers_;
+
+  // This is updated during ResourceFetcher::UpdateResourceInfoFromObservers
+  // when layout is clean and cached for use when layout may not be clean.
+  struct {
+    std::optional<ResourcePriority> priority_;
+    std::optional<ResourcePriority> priority_excluding_image_loader_;
+    gfx::Size max_size_;
+    InterpolationQuality max_interpolation_quality_;
+  } cached_info_;
+
+  // Keep one-byte members together to avoid wasting space on padding.
+
+  ResourceStatus content_status_ = ResourceStatus::kNotStarted;
 
   mutable bool is_add_remove_observer_prohibited_ = false;
 
   Image::SizeAvailability size_available_ = Image::kSizeUnavailable;
 
-  Member<ImageResourceInfo> info_;
+  bool has_device_pixel_ratio_header_value_ = false;
 
-  float device_pixel_ratio_header_value_;
-  bool has_device_pixel_ratio_header_value_;
-
-  scoped_refptr<blink::Image> image_;
-
-  HeapHashCountedSet<WeakMember<ImageResourceObserver>> observers_;
-  HeapHashCountedSet<WeakMember<ImageResourceObserver>> finished_observers_;
+  bool is_broken_ = false;
 
 #if DCHECK_IS_ON()
   bool is_update_image_being_called_ = false;

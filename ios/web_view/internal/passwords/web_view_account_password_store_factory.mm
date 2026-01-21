@@ -4,24 +4,25 @@
 
 #import "ios/web_view/internal/passwords/web_view_account_password_store_factory.h"
 
-#include <memory>
-#include <utility>
+#import <memory>
+#import <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/no_destructor.h"
-#include "components/keyed_service/ios/browser_state_dependency_manager.h"
-#include "components/password_manager/core/browser/login_database.h"
-#include "components/password_manager/core/browser/password_manager_constants.h"
-#include "components/password_manager/core/browser/password_manager_util.h"
-#include "components/password_manager/core/browser/password_store_built_in_backend.h"
-#include "components/password_manager/core/browser/password_store_factory_util.h"
-#include "components/password_manager/core/common/password_manager_features.h"
-#include "components/prefs/pref_service.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/functional/callback_helpers.h"
+#import "base/no_destructor.h"
+#import "components/affiliations/core/browser/affiliation_service.h"
+#import "components/keyed_service/core/service_access_type.h"
+#import "components/keyed_service/ios/browser_state_dependency_manager.h"
+#import "components/password_manager/core/browser/affiliation/affiliated_match_helper.h"
+#import "components/password_manager/core/browser/affiliation/password_affiliation_source_adapter.h"
+#import "components/password_manager/core/browser/password_store/login_database.h"
+#import "components/password_manager/core/browser/password_store/password_store.h"
+#import "components/password_manager/core/browser/password_store/password_store_built_in_backend.h"
+#import "components/password_manager/core/browser/password_store/password_store_interface.h"
+#import "components/password_manager/core/browser/password_store_factory_util.h"
+#import "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
+#import "ios/web_view/internal/affiliations/web_view_affiliation_service_factory.h"
+#import "ios/web_view/internal/app/application_context.h"
+#import "ios/web_view/internal/web_view_browser_state.h"
 
 namespace ios_web_view {
 
@@ -30,11 +31,6 @@ scoped_refptr<password_manager::PasswordStoreInterface>
 WebViewAccountPasswordStoreFactory::GetForBrowserState(
     WebViewBrowserState* browser_state,
     ServiceAccessType access_type) {
-  if (!base::FeatureList::IsEnabled(
-          password_manager::features::kEnablePasswordsAccountStorage)) {
-    return nullptr;
-  }
-
   // |browser_state| always gets redirected to a the recording version in
   // |GetBrowserStateToUse|.
   if (access_type == ServiceAccessType::IMPLICIT_ACCESS &&
@@ -57,29 +53,36 @@ WebViewAccountPasswordStoreFactory::GetInstance() {
 WebViewAccountPasswordStoreFactory::WebViewAccountPasswordStoreFactory()
     : RefcountedBrowserStateKeyedServiceFactory(
           "AccountPasswordStore",
-          BrowserStateDependencyManager::GetInstance()) {}
+          BrowserStateDependencyManager::GetInstance()) {
+  DependsOn(WebViewAffiliationServiceFactory::GetInstance());
+}
 
 WebViewAccountPasswordStoreFactory::~WebViewAccountPasswordStoreFactory() {}
 
 scoped_refptr<RefcountedKeyedService>
 WebViewAccountPasswordStoreFactory::BuildServiceInstanceFor(
     web::BrowserState* context) const {
-  DCHECK(base::FeatureList::IsEnabled(
-      password_manager::features::kEnablePasswordsAccountStorage));
-
   WebViewBrowserState* browser_state =
       WebViewBrowserState::FromBrowserState(context);
-
+  PrefService* prefs = browser_state->GetPrefs();
   std::unique_ptr<password_manager::LoginDatabase> login_db(
-      password_manager::CreateLoginDatabaseForAccountStorage(
-          browser_state->GetStatePath()));
-
+      password_manager::CreateLoginDatabase(password_manager::kAccountStore,
+                                            browser_state->GetStatePath(),
+                                            prefs));
   scoped_refptr<password_manager::PasswordStore> ps =
       new password_manager::PasswordStore(
           std::make_unique<password_manager::PasswordStoreBuiltInBackend>(
-              std::move(login_db)));
-  ps->Init(browser_state->GetPrefs(), /*affiliated_match_helper=*/nullptr);
-
+              std::move(login_db),
+              syncer::WipeModelUponSyncDisabledBehavior::kAlways, prefs,
+              ApplicationContext::GetInstance()->GetOSCryptAsync()));
+  affiliations::AffiliationService* affiliation_service =
+      WebViewAffiliationServiceFactory::GetForBrowserState(browser_state);
+  ps->Init(std::make_unique<password_manager::AffiliatedMatchHelper>(
+      affiliation_service));
+  auto password_affiliation_adapter =
+      std::make_unique<password_manager::PasswordAffiliationSourceAdapter>();
+  password_affiliation_adapter->RegisterPasswordStore(ps.get());
+  affiliation_service->RegisterSource(std::move(password_affiliation_adapter));
   return ps;
 }
 

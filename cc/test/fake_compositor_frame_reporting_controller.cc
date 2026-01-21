@@ -15,12 +15,16 @@ base::TimeDelta INTERVAL = base::Milliseconds(16);
 FakeCompositorFrameReportingController::FakeCompositorFrameReportingController()
     : CompositorFrameReportingController(/*should_report_histograms=*/false,
                                          /*should_report_ukm=*/false,
-                                         /*layer_tree_host_id=*/1) {}
+                                         /*layer_tree_host_id=*/1,
+                                         /*is_trees_in_viz_client=*/false) {}
 
 void FakeCompositorFrameReportingController::WillBeginMainFrame(
     const viz::BeginFrameArgs& args) {
-  if (!HasReporterAt(PipelineStage::kBeginImplFrame))
-    CompositorFrameReportingController::WillBeginImplFrame(args);
+  if (!HasReporterAt(PipelineStage::kBeginImplFrame)) {
+    CompositorFrameReportingController::WillBeginImplFrame(
+        args,
+        /*will_throttle_main=*/false);
+  }
   CompositorFrameReportingController::WillBeginMainFrame(args);
 }
 
@@ -76,20 +80,16 @@ void FakeCompositorFrameReportingController::DidActivate() {
 }
 
 void FakeCompositorFrameReportingController::DidSubmitCompositorFrame(
-    uint32_t frame_token,
-    base::TimeTicks submit_time,
+    SubmitInfo& submit_info,
     const viz::BeginFrameId& current_frame_id,
-    const viz::BeginFrameId& last_activated_frame_id,
-    EventMetricsSet events_metrics,
-    bool has_missing_content) {
+    const viz::BeginFrameId& last_activated_frame_id) {
   CompositorFrameReportingController::DidSubmitCompositorFrame(
-      frame_token, submit_time, current_frame_id, last_activated_frame_id,
-      std::move(events_metrics), has_missing_content);
+      submit_info, current_frame_id, last_activated_frame_id);
 
   viz::FrameTimingDetails details;
   details.presentation_feedback.timestamp = base::TimeTicks::Now();
-  CompositorFrameReportingController::DidPresentCompositorFrame(frame_token,
-                                                                details);
+  CompositorFrameReportingController::DidPresentCompositorFrame(
+      submit_info.frame_token, details);
 }
 
 void FakeCompositorFrameReportingController::DidPresentCompositorFrame(

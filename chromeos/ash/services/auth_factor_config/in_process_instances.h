@@ -5,8 +5,8 @@
 #ifndef CHROMEOS_ASH_SERVICES_AUTH_FACTOR_CONFIG_IN_PROCESS_INSTANCES_H_
 #define CHROMEOS_ASH_SERVICES_AUTH_FACTOR_CONFIG_IN_PROCESS_INSTANCES_H_
 
+#include "chromeos/ash/services/auth_factor_config/chrome_browser_delegates.h"
 #include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-forward.h"
-#include "chromeos/ash/services/auth_factor_config/quick_unlock_storage_delegate.h"
 #include "chromeos/ash/services/auth_factor_config/recovery_factor_editor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 
@@ -23,14 +23,35 @@ namespace ash::auth {
 
 void BindToAuthFactorConfig(
     mojo::PendingReceiver<mojom::AuthFactorConfig> receiver,
-    QuickUnlockStorageDelegate&);
-mojom::AuthFactorConfig& GetAuthFactorConfig(QuickUnlockStorageDelegate&);
+    QuickUnlockStorageDelegate&,
+    PrefService* local_state);
+mojom::AuthFactorConfig& GetAuthFactorConfig(QuickUnlockStorageDelegate&,
+                                             PrefService* local_state);
+AuthFactorConfig& GetAuthFactorConfigForTesting(QuickUnlockStorageDelegate&,
+                                                PrefService* local_state);
 
 void BindToRecoveryFactorEditor(
     mojo::PendingReceiver<mojom::RecoveryFactorEditor> receiver,
-    QuickUnlockStorageDelegate&);
+    QuickUnlockStorageDelegate&,
+    PrefService* local_state);
 mojom::RecoveryFactorEditor& GetRecoveryFactorEditor(
-    QuickUnlockStorageDelegate&);
+    QuickUnlockStorageDelegate&,
+    PrefService* local_state);
+
+void BindToPinFactorEditor(
+    mojo::PendingReceiver<mojom::PinFactorEditor> receiver,
+    QuickUnlockStorageDelegate&,
+    PrefService* local_state,
+    PinBackendDelegate&);
+
+void BindToPasswordFactorEditor(
+    mojo::PendingReceiver<mojom::PasswordFactorEditor> receiver,
+    QuickUnlockStorageDelegate&,
+    PrefService* local_state);
+
+mojom::PasswordFactorEditor& GetPasswordFactorEditor(
+    QuickUnlockStorageDelegate& delegate,
+    PrefService* local_state);
 
 }  // namespace ash::auth
 

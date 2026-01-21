@@ -25,6 +25,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/check_op.h"
 #include "base/logging.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/utf_string_conversions.h"
@@ -545,8 +546,7 @@ void Metadata::Write() {
   for (const auto& report : reports_) {
     const base::FilePath& path = report.file_path;
     if (path.DirName() != report_dir_) {
-      LOG(ERROR) << path.value().c_str() << " expected to start with "
-                 << base::WideToUTF8(report_dir_.value());
+      LOG(ERROR) << path << " expected to start with " << report_dir_;
       return;
     }
     records.push_back(MetadataFileReportRecord(report, &string_table));
@@ -590,12 +590,11 @@ OperationStatus Metadata::VerifyReport(const ReportDisk& report_disk,
 bool EnsureDirectory(const base::FilePath& path) {
   DWORD fileattr = GetFileAttributes(path.value().c_str());
   if (fileattr == INVALID_FILE_ATTRIBUTES) {
-    PLOG(ERROR) << "GetFileAttributes " << base::WideToUTF8(path.value());
+    PLOG(ERROR) << "GetFileAttributes " << path;
     return false;
   }
   if ((fileattr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    LOG(ERROR) << "GetFileAttributes " << base::WideToUTF8(path.value())
-               << ": not a directory";
+    LOG(ERROR) << "GetFileAttributes " << path << ": not a directory";
     return false;
   }
   return true;
@@ -664,13 +663,11 @@ class CrashReportDatabaseWin : public CrashReportDatabase {
   std::unique_ptr<Metadata> AcquireMetadata();
 
   Settings& SettingsInternal() {
-    std::call_once(settings_init_, [this]() {
-      settings_.Initialize(base_dir_.Append(kSettings));
-    });
+    std::call_once(settings_init_, [this]() { settings_.Initialize(); });
     return settings_;
   }
 
-  base::FilePath base_dir_;
+  const base::FilePath base_dir_;
   Settings settings_;
   std::once_flag settings_init_;
   InitializationStateDcheck initialized_;
@@ -679,7 +676,7 @@ class CrashReportDatabaseWin : public CrashReportDatabase {
 CrashReportDatabaseWin::CrashReportDatabaseWin(const base::FilePath& path)
     : CrashReportDatabase(),
       base_dir_(path),
-      settings_(),
+      settings_(path.Append(kSettings)),
       settings_init_(),
       initialized_() {}
 
@@ -877,7 +874,7 @@ OperationStatus CrashReportDatabaseWin::DeleteReport(const UUID& uuid) {
     return os;
 
   if (!DeleteFile(report_path.value().c_str())) {
-    PLOG(ERROR) << "DeleteFile " << base::WideToUTF8(report_path.value());
+    PLOG(ERROR) << "DeleteFile " << report_path;
     return kFileSystemError;
   }
 
@@ -911,16 +908,6 @@ std::unique_ptr<Metadata> CrashReportDatabaseWin::AcquireMetadata() {
   return Metadata::Create(metadata_file,
                           base_dir_.Append(kReportsDirectory),
                           AttachmentsRootPath());
-}
-
-std::unique_ptr<CrashReportDatabase> InitializeInternal(
-    const base::FilePath& path,
-    bool may_create) {
-  std::unique_ptr<CrashReportDatabaseWin> database_win(
-      new CrashReportDatabaseWin(path));
-  return database_win->Initialize(may_create)
-             ? std::move(database_win)
-             : std::unique_ptr<CrashReportDatabaseWin>();
 }
 
 OperationStatus CrashReportDatabaseWin::RequestUpload(const UUID& uuid) {
@@ -969,6 +956,9 @@ int CrashReportDatabaseWin::CleanDatabase(time_t lockfile_ttl) {
   time_t now = time(nullptr);
 
   std::unique_ptr<Metadata> metadata(AcquireMetadata());
+  if (!metadata) {
+    return removed;
+  }
 
   // Remove old reports without metadata.
   while ((result = reader.NextFile(&filename)) ==
@@ -1021,20 +1011,33 @@ void CrashReportDatabaseWin::CleanOrphanedAttachments() {
     if (IsDirectory(path, false)) {
       UUID uuid;
       if (!uuid.InitializeFromString(filename.value())) {
-        LOG(ERROR) << "unexpected attachment dir name "
-                   << filename.value().c_str();
+        LOG(ERROR) << "unexpected attachment dir name " << filename;
         continue;
       }
 
-      // Remove attachments if corresponding report doen't exist.
-      base::FilePath report_path =
-          reports_dir.Append(uuid.ToWString() + kCrashReportFileExtension);
+      // Remove attachments if corresponding report doesn't exist.
+      base::FilePath report_path = reports_dir.Append(
+          uuid.ToWString() + L"." + kCrashReportFileExtension);
       if (!IsRegularFile(report_path)) {
         RemoveAttachmentsByUUID(uuid);
       }
     }
   }
 }
+
+namespace {
+
+std::unique_ptr<CrashReportDatabase> InitializeInternal(
+    const base::FilePath& path,
+    bool may_create) {
+  std::unique_ptr<CrashReportDatabaseWin> database_win(
+      new CrashReportDatabaseWin(path));
+  return database_win->Initialize(may_create)
+             ? std::move(database_win)
+             : std::unique_ptr<CrashReportDatabaseWin>();
+}
+
+}  // namespace
 
 // static
 std::unique_ptr<CrashReportDatabase> CrashReportDatabase::Initialize(
@@ -1046,6 +1049,13 @@ std::unique_ptr<CrashReportDatabase> CrashReportDatabase::Initialize(
 std::unique_ptr<CrashReportDatabase>
 CrashReportDatabase::InitializeWithoutCreating(const base::FilePath& path) {
   return InitializeInternal(path, false);
+}
+
+// static
+std::unique_ptr<SettingsReader>
+CrashReportDatabase::GetSettingsReaderForDatabasePath(
+    const base::FilePath& path) {
+  return std::make_unique<SettingsReader>(path.Append(kSettings));
 }
 
 }  // namespace crashpad

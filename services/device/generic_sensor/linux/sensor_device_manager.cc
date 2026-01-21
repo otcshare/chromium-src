@@ -4,8 +4,7 @@
 
 #include "services/device/generic_sensor/linux/sensor_device_manager.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -32,22 +31,21 @@ SensorDeviceManager::~SensorDeviceManager() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void SensorDeviceManager::Start() {
+void SensorDeviceManager::MaybeStartEnumeration() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!udev_watcher_);
+
+  if (udev_watcher_) {
+    return;
+  }
 
   udev_watcher_ = UdevWatcher::StartWatching(this);
-  if (!udev_watcher_)
+  if (!udev_watcher_) {
     return;
+  }
 
-  // OnDeviceAdded() will be called synchronously for every device found in the
-  // enumeration.
+  // OnDeviceAdded() will be called synchronously for every device found in
+  // the enumeration.
   udev_watcher_->EnumerateExistingDevices();
-
-  delegate_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&SensorDeviceManager::Delegate::OnSensorNodesEnumerated,
-                     delegate_));
 }
 
 std::string SensorDeviceManager::GetUdevDeviceGetSubsystem(udev_device* dev) {
@@ -137,7 +135,7 @@ void SensorDeviceManager::OnDeviceAdded(ScopedUdevDevicePtr dev) {
     }
 
     // Update own cache of known sensor devices.
-    if (!base::Contains(sensors_by_node_, device_node))
+    if (!sensors_by_node_.contains(device_node))
       sensors_by_node_[device_node] = data.type;
 
     std::unique_ptr<SensorInfoLinux> device(new SensorInfoLinux(

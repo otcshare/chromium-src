@@ -15,13 +15,11 @@ struct Session;
 class Status;
 class WebView;
 
-std::string GetElementKey();
+std::string GetElementKey(bool w3c_compliant);
 
-base::Value CreateElement(const std::string& element_id);
+base::Value CreateElement(const std::string& element_id, bool w3c_compliant);
 
 base::Value::Dict CreateValueFrom(const WebPoint& point);
-
-Status CheckElement(const std::string& element_id);
 
 // |root_element_id| could be null when no root element is given.
 Status FindElement(int interval_ms,

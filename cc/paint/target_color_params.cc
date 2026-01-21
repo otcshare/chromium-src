@@ -4,6 +4,7 @@
 
 #include "cc/paint/target_color_params.h"
 
+#include <cmath>
 #include <sstream>
 
 #include "base/hash/hash.h"
@@ -11,23 +12,24 @@
 namespace cc {
 
 size_t TargetColorParams::GetHash() const {
-  const uint32_t* hdr_max_luminance_relative_int =
-      reinterpret_cast<const uint32_t*>(&hdr_max_luminance_relative);
-  const uint32_t* sdr_max_luminance_nits_int =
-      reinterpret_cast<const uint32_t*>(&sdr_max_luminance_nits);
   size_t hash = color_space.GetHash();
-  hash = base::HashInts(hash, *hdr_max_luminance_relative_int);
-  hash = base::HashInts(hash, *sdr_max_luminance_nits_int);
-  hash = base::HashInts(hash, enable_tone_mapping);
+  if (hdr_headroom.has_value()) {
+    const float f = hdr_headroom.value();
+    const uint32_t* i = reinterpret_cast<const uint32_t*>(&f);
+    hash = base::HashInts(hash, *i);
+  }
   return hash;
 }
 
 std::string TargetColorParams::ToString() const {
   std::ostringstream str;
-  str << "color_space: " << color_space.ToString()
-      << "sdr_max_luminance_nits: " << sdr_max_luminance_nits
-      << "hdr_max_luminance_relative: " << hdr_max_luminance_relative
-      << "enable_tone_mapping: " << enable_tone_mapping;
+  str << "color_space: " << color_space.ToString();
+  str << "hdr_headroom: ";
+  if (hdr_headroom.has_value()) {
+    str << hdr_headroom.value();
+  } else {
+    str << "(deferred)";
+  }
   return str.str();
 }
 

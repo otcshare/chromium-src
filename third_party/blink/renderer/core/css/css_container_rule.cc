@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/core/css/css_markup.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/css/media_query_exp.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -20,12 +21,6 @@ CSSContainerRule::~CSSContainerRule() = default;
 String CSSContainerRule::cssText() const {
   StringBuilder result;
   result.Append("@container");
-
-  String name = ContainerQuery().Selector().Name();
-  if (!name.empty()) {
-    result.Append(' ');
-    SerializeIdentifier(name, result);
-  }
   result.Append(' ');
   result.Append(ContainerQuery().ToString());
   AppendCSSTextForItems(result);
@@ -43,9 +38,27 @@ const ContainerSelector& CSSContainerRule::Selector() const {
 void CSSContainerRule::SetConditionText(
     const ExecutionContext* execution_context,
     String value) {
+  StyleSheetContents* parent_contents =
+      parentStyleSheet() ? parentStyleSheet()->Contents() : nullptr;
   CSSStyleSheet::RuleMutationScope mutation_scope(this);
   To<StyleRuleContainer>(group_rule_.Get())
-      ->SetConditionText(execution_context, value);
+      ->SetConditionText(execution_context, parent_contents, value);
+}
+
+String CSSContainerRule::containerName() const {
+  StringBuilder result;
+  String name = ContainerQuery().Selector().Name();
+  if (!name.empty()) {
+    SerializeIdentifier(name, result);
+  }
+  return result.ReleaseString();
+}
+
+String CSSContainerRule::containerQuery() const {
+  if (const ConditionalExpNode* query = ContainerQuery().Query()) {
+    return query->Serialize();
+  }
+  return String();
 }
 
 const ContainerQuery& CSSContainerRule::ContainerQuery() const {

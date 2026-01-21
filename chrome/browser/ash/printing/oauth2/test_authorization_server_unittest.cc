@@ -5,12 +5,13 @@
 #include "chrome/browser/ash/printing/oauth2/test_authorization_server.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "net/http/http_status_code.h"
@@ -28,10 +29,10 @@ namespace {
 
 // Helper function that moves the content of `response_body` to `target`.
 void SavePayload(std::string* target,
-                 std::unique_ptr<std::string> response_body) {
+                 std::optional<std::string> response_body) {
   CHECK(target);
   if (response_body) {
-    *target = std::move(*response_body);
+    *target = std::move(response_body).value();
   } else {
     target->clear();
   }

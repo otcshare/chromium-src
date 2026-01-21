@@ -11,17 +11,20 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_validator.h"
@@ -32,7 +35,6 @@
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
-#include "crypto/rsa_private_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -46,23 +48,24 @@ namespace {
 
 class ObservableFakeSessionManagerClient : public FakeSessionManagerClient {
  public:
-  void SetOnRetrieveDevicePolicyCalled(const base::RepeatingClosure& closure) {
-    on_retrieve_device_policy_called_ = closure;
+  void SetOnRetrievePolicyCalled(const base::RepeatingClosure& closure) {
+    on_retrieve_policy_called_ = closure;
   }
 
   // SessionManagerClient override:
-  void RetrieveDevicePolicy(RetrievePolicyCallback callback) override {
-    FakeSessionManagerClient::RetrieveDevicePolicy(std::move(callback));
+  void RetrievePolicy(const login_manager::PolicyDescriptor& descriptor,
+                      RetrievePolicyCallback callback) override {
+    FakeSessionManagerClient::RetrievePolicy(descriptor, std::move(callback));
 
     // Run the task just after the |callback| is invoked.
-    if (!on_retrieve_device_policy_called_.is_null()) {
+    if (!on_retrieve_policy_called_.is_null()) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, on_retrieve_device_policy_called_);
+          FROM_HERE, on_retrieve_policy_called_);
     }
   }
 
  private:
-  base::RepeatingClosure on_retrieve_device_policy_called_;
+  base::RepeatingClosure on_retrieve_policy_called_;
 };
 
 }  // namespace
@@ -71,8 +74,6 @@ class SessionManagerOperationTest : public testing::Test {
  public:
   SessionManagerOperationTest()
       : owner_key_util_(new ownership::MockOwnerKeyUtil()),
-        user_manager_(new FakeChromeUserManager()),
-        user_manager_enabler_(base::WrapUnique(user_manager_)),
         validated_(false) {
     OwnerSettingsServiceAshFactory::GetInstance()->SetOwnerKeyUtilForTesting(
         owner_key_util_);
@@ -107,8 +108,8 @@ class SessionManagerOperationTest : public testing::Test {
   void CheckPublicKeyLoaded(SessionManagerOperation* op) {
     ASSERT_TRUE(op->public_key().get());
     ASSERT_FALSE(op->public_key()->is_empty());
-    std::vector<uint8_t> public_key;
-    ASSERT_TRUE(policy_.GetSigningKey()->ExportPublicKey(&public_key));
+    std::vector<uint8_t> public_key =
+        policy_.GetSigningKey()->ToSubjectPublicKeyInfo();
     EXPECT_EQ(public_key, op->public_key()->data());
   }
 
@@ -119,19 +120,18 @@ class SessionManagerOperationTest : public testing::Test {
   ObservableFakeSessionManagerClient session_manager_client_;
   scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util_;
 
-  FakeChromeUserManager* user_manager_;
-  user_manager::ScopedUserManager user_manager_enabler_;
+  user_manager::TypedScopedUserManager<FakeChromeUserManager> user_manager_{
+      std::make_unique<FakeChromeUserManager>()};
 
   std::unique_ptr<TestingProfile> profile_;
-  OwnerSettingsServiceAsh* service_;
+  raw_ptr<OwnerSettingsServiceAsh> service_;
 
   bool validated_;
 };
 
 TEST_F(SessionManagerOperationTest, LoadNoPolicyNoKey) {
   LoadSettingsOperation op(
-      false /* force_key_load */, true /* cloud_validations */,
-      false /* force_immediate_load */,
+      false /* force_key_load */, false /* force_immediate_load */,
       base::BindOnce(&SessionManagerOperationTest::OnOperationCompleted,
                      base::Unretained(this)));
 
@@ -150,8 +150,7 @@ TEST_F(SessionManagerOperationTest, LoadNoPolicyNoKey) {
 TEST_F(SessionManagerOperationTest, LoadOwnerKey) {
   owner_key_util_->SetPublicKeyFromPrivateKey(*policy_.GetSigningKey());
   LoadSettingsOperation op(
-      false /* force_key_load */, true /* cloud_validations */,
-      false /* force_immediate_load */,
+      false /* force_key_load */, false /* force_immediate_load */,
       base::BindOnce(&SessionManagerOperationTest::OnOperationCompleted,
                      base::Unretained(this)));
 
@@ -168,8 +167,7 @@ TEST_F(SessionManagerOperationTest, LoadPolicy) {
   owner_key_util_->SetPublicKeyFromPrivateKey(*policy_.GetSigningKey());
   session_manager_client_.set_device_policy(policy_.GetBlob());
   LoadSettingsOperation op(
-      false /* force_key_load */, true /* cloud_validations */,
-      false /* force_immediate_load */,
+      false /* force_key_load */, false /* force_immediate_load */,
       base::BindOnce(&SessionManagerOperationTest::OnOperationCompleted,
                      base::Unretained(this)));
 
@@ -191,8 +189,7 @@ TEST_F(SessionManagerOperationTest, LoadImmediately) {
   owner_key_util_->SetPublicKeyFromPrivateKey(*policy_.GetSigningKey());
   session_manager_client_.set_device_policy(policy_.GetBlob());
   LoadSettingsOperation op(
-      false /* force_key_load */, true /* cloud_validations */,
-      true /* force_immediate_load */,
+      false /* force_key_load */, true /* force_immediate_load */,
       base::BindOnce(&SessionManagerOperationTest::OnOperationCompleted,
                      base::Unretained(this)));
 
@@ -211,23 +208,22 @@ TEST_F(SessionManagerOperationTest, LoadImmediately) {
 }
 
 TEST_F(SessionManagerOperationTest, RestartLoad) {
-  owner_key_util_->ImportPrivateKeyAndSetPublicKey(policy_.GetSigningKey());
+  owner_key_util_->ImportPrivateKeyAndSetPublicKey(*policy_.GetSigningKey());
   session_manager_client_.set_device_policy(policy_.GetBlob());
   LoadSettingsOperation op(
-      false /* force_key_load */, true /* cloud_validations */,
-      false /* force_immediate_load */,
+      false /* force_key_load */, false /* force_immediate_load */,
       base::BindOnce(&SessionManagerOperationTest::OnOperationCompleted,
                      base::Unretained(this)));
 
-  // Just after the first RetrieveDevicePolicy() completion,
+  // Just after the first RetrievePolicy() completion,
   // verify the state, install a different key, then RestartLoad().
-  session_manager_client_.SetOnRetrieveDevicePolicyCalled(base::BindRepeating(
+  session_manager_client_.SetOnRetrievePolicyCalled(base::BindRepeating(
       [](SessionManagerOperationTest* test, policy::DevicePolicyBuilder* policy,
          ObservableFakeSessionManagerClient* session_manager_client,
          scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util,
          LoadSettingsOperation* op) {
         // Reset this callback to avoid infinite loop.
-        session_manager_client->SetOnRetrieveDevicePolicyCalled(
+        session_manager_client->SetOnRetrievePolicyCalled(
             base::RepeatingClosure());
 
         // Verify the public_key() is properly set, but the callback is
@@ -238,12 +234,12 @@ TEST_F(SessionManagerOperationTest, RestartLoad) {
 
         // Now install a different key and policy.
         policy->SetSigningKey(
-            *policy::PolicyBuilder::CreateTestOtherSigningKey());
+            policy::PolicyBuilder::CreateTestOtherSigningKey());
         policy->payload().mutable_metrics_enabled()->set_metrics_enabled(true);
         policy->Build();
         session_manager_client->set_device_policy(policy->GetBlob());
         owner_key_util->ImportPrivateKeyAndSetPublicKey(
-            policy->GetSigningKey());
+            *policy->GetSigningKey());
 
         // And restart the operation.
         EXPECT_CALL(*test, OnOperationCompleted(

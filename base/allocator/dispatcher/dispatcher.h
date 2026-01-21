@@ -5,15 +5,12 @@
 #ifndef BASE_ALLOCATOR_DISPATCHER_DISPATCHER_H_
 #define BASE_ALLOCATOR_DISPATCHER_DISPATCHER_H_
 
+#include <memory>
+
 #include "base/allocator/dispatcher/internal/dispatcher_internal.h"
 #include "base/base_export.h"
 
-#include <memory>
-
 namespace base::allocator::dispatcher {
-
-void BASE_EXPORT InstallStandardAllocatorHooks();
-void BASE_EXPORT RemoveStandardAllocatorHooksForTesting();
 
 namespace internal {
 struct DispatchData;

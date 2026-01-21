@@ -5,46 +5,54 @@
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_PAGE_AD_DENSITY_TRACKER_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_PAGE_AD_DENSITY_TRACKER_H_
 
+#include <base/containers/flat_map.h>
+
+#include <map>
+#include <optional>
 #include <set>
-#include <unordered_map>
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/page_ad_density_tracker.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/univariate_stats.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace page_load_metrics {
 
 // Tracks the ad density of a page through the page's lifecycle.
 // It has the following usage:
-//    1. Set subframe, mainframe, and viewport rects using operations (AddRect,
-//       RemoveRect, UpdateMainFrameRect, UpdateMainFrameViewportRect).
+//    1. Set subframe, mainframe, and viewport rects using operations
+//       (UpdateMainFrameAdRects, UpdateMainFrameRect,
+//       UpdateMainFrameViewportRect).
 //    2. When the main frame rect or a subframe rect is updated, get current
 //       page ad density using CalculatePageAdDensity.
 //    3. When the main frame viewport rect or a subframe rect is updated, get
 //       current viewport ad density using CalculateViewportAdDensity.
 class PageAdDensityTracker {
  public:
+  using RectId = int;
+
   struct AdDensityCalculationResult {
-    absl::optional<int> ad_density_by_height;
-    absl::optional<int> ad_density_by_area;
+    std::optional<int> ad_density_by_height;
+    std::optional<int> ad_density_by_area;
   };
 
-  explicit PageAdDensityTracker(base::TickClock* clock = nullptr);
+  PageAdDensityTracker(bool is_in_foreground,
+                       const base::TickClock* clock = nullptr);
   ~PageAdDensityTracker();
 
   PageAdDensityTracker(const PageAdDensityTracker&) = delete;
   PageAdDensityTracker& operator=(const PageAdDensityTracker&) = delete;
 
-  // Operations to track sub frame rects in the page density calcluation.
-  void AddRect(int rect_id, const gfx::Rect& rect);
+  // Accumulates the last-measured viewport ad density and pauses further
+  // tracking. Called when the page becomes hidden from view
+  // (e.g., tab is backgrounded).
+  void OnHidden();
 
-  // Removes a rect from the tracker if it is currently being tracked.
-  // Otherwise RemoveRect is a no op.
-  void RemoveRect(int rect_id);
+  // Starts or resumes ad density tracking. Called when the page becomes visible
+  // (e.g., tab is foregrounded).
+  void OnShown();
 
   // Operations to track the main frame dimensions. The main frame rect has to
   // be set to calculate the page ad density.
@@ -53,6 +61,10 @@ class PageAdDensityTracker {
   // Operations to track the main frame viewport position and dimensions. This
   // rect has to be set to calculate the viewport ad density.
   void UpdateMainFrameViewportRect(const gfx::Rect& rect);
+
+  // Operations to track the main frame ad rectangles' position and dimensions.
+  void UpdateMainFrameAdRects(
+      const base::flat_map<int, gfx::Rect>& main_frame_ad_rects);
 
   // Returns the density by height, as a value from 0-100. If the density
   // calculation fails (i.e. no main frame size), this returns -1. Percentage
@@ -83,12 +95,12 @@ class PageAdDensityTracker {
  private:
   // An event to process corresponding to the top or bottom of each rect.
   struct RectEvent {
-    RectEvent(int id, bool is_bottom, const gfx::Rect& rect);
+    RectEvent(RectId id, bool is_bottom, const gfx::Rect& rect);
     RectEvent(const RectEvent& other);
 
     // A unique identifier set when adding and removing rect events
     // corresponding to a single rect.
-    int rect_id;
+    RectId rect_id;
     bool is_bottom;
     gfx::Rect rect;
 
@@ -108,10 +120,21 @@ class PageAdDensityTracker {
     std::set<RectEvent>::const_iterator bottom_it;
   };
 
+  // Adds the rect to the internal bookkeeping.
+  void AddRect(RectId rect_id, const gfx::Rect& rect);
+
+  // Removes the rect from the internal bookkeeping. No-op if it isn't currently
+  // being tracked.
+  void RemoveRect(RectId rect_id);
+
   // Accumulate `last_viewport_ad_density_by_area_` and its weight (i.e. the
   // elapsed time since `last_viewport_density_accumulate_time_`) into
-  // `viewport_ad_density_by_area_stats_`. This can be invoked either when a
-  // new density is calculated, or during `Finalize()`.
+  // `viewport_ad_density_by_area_stats_`.
+  //
+  // This is only called when the page is in the foreground, immediately before:
+  // 1. Calculating a new density.
+  // 2. The page becomes hidden (`OnHidden`).
+  // 3. Finalizing tracking (`Finalize`).
   void AccumulateOutstandingViewportAdDensity();
 
   void CalculatePageAdDensity();
@@ -127,7 +150,7 @@ class PageAdDensityTracker {
 
   // Map from rect_id to iterators of rect events in rect_events_. This allows
   // efficient removal according to rect_id.
-  std::unordered_map<int, RectEventSetIterators> rect_events_iterators_;
+  std::map<RectId, RectEventSetIterators> rect_events_iterators_;
 
   // Percentage of page ad density as a value from 0-100. These only have
   // a value of -1 when ad density has not yet been calculated successfully.
@@ -154,6 +177,9 @@ class PageAdDensityTracker {
   UnivariateStats viewport_ad_density_by_area_stats_;
 
   bool finalize_called_ = false;
+
+  // Whether the page is in foreground.
+  bool is_in_foreground_ = false;
 
   // The tick clock used to get the current time. Can be replaced by tests.
   raw_ptr<const base::TickClock> clock_;

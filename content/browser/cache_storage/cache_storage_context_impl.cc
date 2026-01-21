@@ -4,11 +4,11 @@
 
 #include "content/browser/cache_storage/cache_storage_context_impl.h"
 
-#include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/services/storage/public/cpp/buckets/bucket_info.h"
 #include "components/services/storage/public/cpp/buckets/constants.h"
@@ -38,9 +38,10 @@ CacheStorageContextImpl::CacheStorageContextImpl(
 CacheStorageContextImpl::~CacheStorageContextImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  for (const auto& storage_key : storage_keys_to_purge_on_shutdown_) {
-    cache_manager_->DeleteStorageKeyData(
-        storage_key, storage::mojom::CacheStorageOwner::kCacheAPI,
+  if (!origins_to_purge_on_shutdown_.empty()) {
+    cache_manager_->DeleteOriginData(
+        origins_to_purge_on_shutdown_,
+        storage::mojom::CacheStorageOwner::kCacheAPI,
 
         // Retain a reference to the manager until the deletion is
         // complete, since it internally uses weak pointers for
@@ -56,7 +57,7 @@ CacheStorageContextImpl::~CacheStorageContextImpl() {
 scoped_refptr<base::SequencedTaskRunner>
 CacheStorageContextImpl::CreateSchedulerTaskRunner() {
   return base::ThreadPool::CreateSequencedTaskRunner(
-      {base::TaskPriority::USER_VISIBLE});
+      base::TaskPriority::USER_BLOCKING);
 }
 
 void CacheStorageContextImpl::Init(
@@ -75,7 +76,7 @@ void CacheStorageContextImpl::Init(
 
   scoped_refptr<base::SequencedTaskRunner> cache_task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
 
   DCHECK(!dispatcher_host_);
@@ -104,6 +105,9 @@ void CacheStorageContextImpl::AddReceiver(
     const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
     mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
         coep_reporter,
+    const network::DocumentIsolationPolicy& document_isolation_policy,
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        dip_reporter,
     const storage::BucketLocator& bucket_locator,
     storage::mojom::CacheStorageOwner owner,
     mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) {
@@ -112,8 +116,9 @@ void CacheStorageContextImpl::AddReceiver(
   auto add_receiver =
       base::BindOnce(&CacheStorageContextImpl::AddReceiverWithBucketInfo,
                      weak_factory_.GetWeakPtr(), cross_origin_embedder_policy,
-                     std::move(coep_reporter), bucket_locator.storage_key,
-                     owner, std::move(receiver));
+                     std::move(coep_reporter), document_isolation_policy,
+                     std::move(dip_reporter), bucket_locator.storage_key, owner,
+                     std::move(receiver));
 
   if (bucket_locator.is_default) {
     DCHECK_EQ(storage::BucketId(), bucket_locator.id);
@@ -126,23 +131,9 @@ void CacheStorageContextImpl::AddReceiver(
         bucket_locator.id, base::SequencedTaskRunner::GetCurrentDefault(),
         std::move(add_receiver));
   } else {
-    std::move(add_receiver).Run(storage::QuotaError::kNotFound);
+    std::move(add_receiver)
+        .Run(base::unexpected(storage::QuotaError::kNotFound));
   }
-}
-
-void CacheStorageContextImpl::GetAllStorageKeysInfo(
-    storage::mojom::CacheStorageControl::GetAllStorageKeysInfoCallback
-        callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  cache_manager_->GetAllStorageKeysUsage(
-      storage::mojom::CacheStorageOwner::kCacheAPI, std::move(callback));
-}
-
-void CacheStorageContextImpl::DeleteForStorageKey(
-    const blink::StorageKey& storage_key) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  cache_manager_->DeleteStorageKeyData(
-      storage_key, storage::mojom::CacheStorageOwner::kCacheAPI);
 }
 
 void CacheStorageContextImpl::AddObserver(
@@ -156,11 +147,9 @@ void CacheStorageContextImpl::ApplyPolicyUpdates(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (const auto& update : policy_updates) {
     if (!update->purge_on_shutdown)
-      storage_keys_to_purge_on_shutdown_.erase(
-          blink::StorageKey(update->origin));
+      origins_to_purge_on_shutdown_.erase(update->origin);
     else
-      storage_keys_to_purge_on_shutdown_.insert(
-          blink::StorageKey(std::move(update->origin)));
+      origins_to_purge_on_shutdown_.insert(std::move(update->origin));
   }
 }
 
@@ -168,19 +157,23 @@ void CacheStorageContextImpl::AddReceiverWithBucketInfo(
     const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
     mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
         coep_reporter,
+    const network::DocumentIsolationPolicy& document_isolation_policy,
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        dip_reporter,
     const blink::StorageKey& storage_key,
     storage::mojom::CacheStorageOwner owner,
     mojo::PendingReceiver<blink::mojom::CacheStorage> receiver,
     storage::QuotaErrorOr<storage::BucketInfo> result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const absl::optional<storage::BucketLocator> bucket =
-      result.ok() ? absl::make_optional(result->ToBucketLocator())
-                  : absl::nullopt;
+  const std::optional<storage::BucketLocator> bucket =
+      result.has_value() ? std::make_optional(result->ToBucketLocator())
+                         : std::nullopt;
 
-  dispatcher_host_->AddReceiver(cross_origin_embedder_policy,
-                                std::move(coep_reporter), storage_key, bucket,
-                                owner, std::move(receiver));
+  dispatcher_host_->AddReceiver(
+      cross_origin_embedder_policy, std::move(coep_reporter),
+      document_isolation_policy, std::move(dip_reporter), storage_key, bucket,
+      owner, std::move(receiver));
 }
 
 }  // namespace content

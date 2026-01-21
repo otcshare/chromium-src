@@ -13,16 +13,15 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window_state.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/gfx/geometry/rect.h"
@@ -30,20 +29,26 @@
 typedef InProcessBrowserTest PreservedWindowPlacement;
 using ::testing::Optional;
 
+namespace {
+
+const gfx::Rect window_frame = gfx::Rect(20, 40, 600, 600);
+
+}  // namespace
+
 IN_PROC_BROWSER_TEST_F(PreservedWindowPlacement, PRE_Test) {
-  browser()->window()->SetBounds(gfx::Rect(20, 30, 600, 600));
+  browser()->window()->SetBounds(window_frame);
 }
 
 // Fails on Chrome OS as the browser thinks it is restarting after a crash, see
 // http://crbug.com/168044
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_Test DISABLED_Test
 #else
 #define MAYBE_Test Test
 #endif
 IN_PROC_BROWSER_TEST_F(PreservedWindowPlacement, MAYBE_Test) {
   gfx::Rect bounds = browser()->window()->GetBounds();
-  gfx::Rect expected_bounds(gfx::Rect(20, 30, 600, 600));
+  gfx::Rect expected_bounds(window_frame);
   ASSERT_EQ(expected_bounds.ToString(), bounds.ToString());
 }
 
@@ -53,7 +58,7 @@ class PreferenceServiceTest : public InProcessBrowserTest {
     base::FilePath user_data_directory;
     base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
 
-    original_pref_file_ = ui_test_utils::GetTestFilePath(
+    original_pref_file_ = chrome_test_utils::GetTestFilePath(
         base::FilePath()
             .AppendASCII("profiles")
             .AppendASCII("window_placement")
@@ -100,30 +105,30 @@ IN_PROC_BROWSER_TEST_F(PreferenceServiceTest, Test) {
 
   ASSERT_TRUE(root.get());
   ASSERT_TRUE(root->is_dict());
-
-  base::DictionaryValue* root_dict =
-      static_cast<base::DictionaryValue*>(root.get());
+  base::Value::Dict& root_dict = root->GetDict();
 
   // Retrieve the screen rect for the launched window
   gfx::Rect bounds = browser()->window()->GetRestoredBounds();
 
   // Retrieve the expected rect values from "Preferences"
   std::string kBrowserWindowPlacement(prefs::kBrowserWindowPlacement);
-  EXPECT_THAT(root_dict->FindIntPath(kBrowserWindowPlacement + ".bottom"),
-              Optional(bounds.y() + bounds.height()));
+  EXPECT_THAT(
+      root_dict.FindIntByDottedPath(kBrowserWindowPlacement + ".bottom"),
+      Optional(bounds.y() + bounds.height()));
 
-  EXPECT_THAT(root_dict->FindIntPath(kBrowserWindowPlacement + ".top"),
+  EXPECT_THAT(root_dict.FindIntByDottedPath(kBrowserWindowPlacement + ".top"),
               Optional(bounds.y()));
 
-  EXPECT_THAT(root_dict->FindIntPath(kBrowserWindowPlacement + ".left"),
+  EXPECT_THAT(root_dict.FindIntByDottedPath(kBrowserWindowPlacement + ".left"),
               Optional(bounds.x()));
 
-  EXPECT_THAT(root_dict->FindIntPath(kBrowserWindowPlacement + ".right"),
+  EXPECT_THAT(root_dict.FindIntByDottedPath(kBrowserWindowPlacement + ".right"),
               Optional(bounds.x() + bounds.width()));
 
   // Find if launched window is maximized.
   bool is_window_maximized = browser()->window()->IsMaximized();
-  EXPECT_THAT(root_dict->FindBoolPath(kBrowserWindowPlacement + ".maximized"),
-              Optional(is_window_maximized));
+  EXPECT_THAT(
+      root_dict.FindBoolByDottedPath(kBrowserWindowPlacement + ".maximized"),
+      Optional(is_window_maximized));
 }
 #endif

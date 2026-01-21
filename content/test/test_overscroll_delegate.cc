@@ -37,6 +37,9 @@ void TestOverscrollDelegate::OnOverscrollComplete(
   DCHECK_EQ(current_mode_, overscroll_mode);
   completed_mode_ = overscroll_mode;
   current_mode_ = OVERSCROLL_NONE;
+  if (delete_controller_on_complete_ && on_complete_callback_) {
+    std::move(on_complete_callback_).Run();
+  }
 }
 
 void TestOverscrollDelegate::OnOverscrollModeChange(
@@ -50,7 +53,7 @@ void TestOverscrollDelegate::OnOverscrollModeChange(
   delta_x_ = delta_y_ = 0.f;
 }
 
-absl::optional<float> TestOverscrollDelegate::GetMaxOverscrollDelta() const {
+std::optional<float> TestOverscrollDelegate::GetMaxOverscrollDelta() const {
   return delta_cap_;
 }
 

@@ -13,14 +13,15 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppSpeed;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.TestPay;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.R;
+import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.payments.PaymentAppFactoryDelegate;
 import org.chromium.components.payments.PaymentAppFactoryInterface;
 import org.chromium.components.payments.PaymentAppService;
@@ -38,31 +39,45 @@ public class PaymentRequestPaymentAppsSortingTest {
     @Before
     public void setUp() throws TimeoutException {
         AutofillTestHelper helper = new AutofillTestHelper();
-        String billingAddressId = helper.setProfile(
-                new AutofillProfile("", "https://example.test", true, "" /* honorific prefix */,
-                        "Jon Doe", "Google", "340 Main St", "CA", "Los Angeles", "", "90291", "",
-                        "US", "310-310-6000", "jon.doe@gmail.com", "en-US"));
+        String billingAddressId =
+                helper.setProfile(
+                        AutofillProfile.builder()
+                                .setFullName("Jon Doe")
+                                .setCompanyName("Google")
+                                .setStreetAddress("340 Main St")
+                                .setRegion("CA")
+                                .setLocality("Los Angeles")
+                                .setPostalCode("90291")
+                                .setCountryCode("US")
+                                .setPhoneNumber("310-310-6000")
+                                .setEmailAddress("jon.doe@gmail.com")
+                                .setLanguageCode("en-US")
+                                .build());
     }
 
     @Test
     @MediumTest
     @Feature({"Payments"})
+    @DisabledTest(message = "Flaky test, see crbug.com/441324330")
     public void testPaymentAppsSortingByFrecency() throws TimeoutException {
         // Install a payment app with Bob Pay and Alice Pay, and another payment app with Charlie
         // Pay.
         TestPay appA = new TestPay("https://alicepay.test", AppSpeed.FAST_APP);
         TestPay appB = new TestPay("https://bobpay.test", AppSpeed.FAST_APP);
         TestPay appC = new TestPay("https://charliepay.test", AppSpeed.FAST_APP);
-        PaymentAppService.getInstance().addFactory(new PaymentAppFactoryInterface() {
-            @Override
-            public void create(PaymentAppFactoryDelegate delegate) {
-                delegate.onCanMakePaymentCalculated(true);
-                delegate.onPaymentAppCreated(appA);
-                delegate.onPaymentAppCreated(appB);
-                delegate.onPaymentAppCreated(appC);
-                delegate.onDoneCreatingPaymentApps(/*factory=*/this);
-            }
-        });
+        PaymentAppService.getInstance()
+                .addUniqueFactory(
+                        new PaymentAppFactoryInterface() {
+                            @Override
+                            public void create(PaymentAppFactoryDelegate delegate) {
+                                delegate.onCanMakePaymentCalculated(true);
+                                delegate.onPaymentAppCreated(appA);
+                                delegate.onPaymentAppCreated(appB);
+                                delegate.onPaymentAppCreated(appC);
+                                delegate.onDoneCreatingPaymentApps(/* factory= */ this);
+                            }
+                        },
+                        "testFactoryId");
         String alicePayId = appA.getIdentifier();
         String bobPayId = appB.getIdentifier();
         String charliePayId = appC.getIdentifier();
@@ -84,7 +99,7 @@ public class PaymentRequestPaymentAppsSortingTest {
         PaymentPreferencesUtil.setPaymentAppUseCountForTest(charliePayId, 15);
         PaymentPreferencesUtil.setPaymentAppLastUseDate(charliePayId, 15);
 
-        mPaymentRequestTestRule.triggerUIAndWait("buy", mPaymentRequestTestRule.getReadyToPay());
+        mPaymentRequestTestRule.triggerUiAndWait("buy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInPaymentMethodAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
 
@@ -111,7 +126,7 @@ public class PaymentRequestPaymentAppsSortingTest {
         PaymentPreferencesUtil.setPaymentAppUseCountForTest(alicePayId, 20);
         PaymentPreferencesUtil.setPaymentAppLastUseDate(alicePayId, 20);
 
-        mPaymentRequestTestRule.triggerUIAndWait("buy", mPaymentRequestTestRule.getReadyToPay());
+        mPaymentRequestTestRule.triggerUiAndWait("buy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInPaymentMethodAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
 

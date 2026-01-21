@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.BlockJUnit4ClassRunner;
 
-/**
- * Tests for Observable#and().
- */
+import org.chromium.base.test.util.Batch;
+
+/** Tests for Observable#and(). */
 @RunWith(BlockJUnit4ClassRunner.class)
+@Batch(Batch.UNIT_TESTS)
 public class ObservableAndTest {
     @Test
     public void testBothState_activateFirstDoesNotTrigger() {
@@ -38,7 +39,17 @@ public class ObservableAndTest {
         ReactiveRecorder recorder = ReactiveRecorder.record(a.and(b));
         a.set("A");
         b.set("B");
-        recorder.verify().opened(Both.both("A", "B")).end();
+        recorder.verify().opened(Both.of("A", "B")).end();
+    }
+
+    @Test
+    public void testBothState_activateSecondThenFirstTriggers() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.and(b));
+        b.set("B");
+        a.set("A");
+        recorder.verify().opened(Both.of("A", "B")).end();
     }
 
     @Test
@@ -49,7 +60,7 @@ public class ObservableAndTest {
         a.set("A");
         b.set("B");
         a.reset();
-        recorder.verify().opened(Both.both("A", "B")).closed(Both.both("A", "B")).end();
+        recorder.verify().opened(Both.of("A", "B")).closed(Both.of("A", "B")).end();
     }
 
     @Test
@@ -60,7 +71,7 @@ public class ObservableAndTest {
         a.set("A");
         b.set("B");
         b.reset();
-        recorder.verify().opened(Both.both("A", "B")).closed(Both.both("A", "B")).end();
+        recorder.verify().opened(Both.of("A", "B")).closed(Both.of("A", "B")).end();
     }
 
     @Test
@@ -95,11 +106,11 @@ public class ObservableAndTest {
         a.set("A2");
         b.set("B2");
         recorder.verify()
-                .opened(Both.both("A1", "B1"))
-                .closed(Both.both("A1", "B1"))
-                .opened(Both.both("A2", "B1"))
-                .closed(Both.both("A2", "B1"))
-                .opened(Both.both("A2", "B2"))
+                .opened(Both.of("A1", "B1"))
+                .closed(Both.of("A1", "B1"))
+                .opened(Both.of("A2", "B1"))
+                .closed(Both.of("A2", "B1"))
+                .opened(Both.of("A2", "B2"))
                 .end();
     }
 
@@ -116,43 +127,104 @@ public class ObservableAndTest {
         d.set("d");
         a.reset();
         recorder.verify()
-                .opened(Both.both(Both.both(Both.both("a", "b"), "c"), "d"))
-                .closed(Both.both(Both.both(Both.both("a", "b"), "c"), "d"))
+                .opened(Both.of(Both.of(Both.of("a", "b"), "c"), "d"))
+                .closed(Both.of(Both.of(Both.of("a", "b"), "c"), "d"))
                 .end();
     }
 
     @Test
     public void testAndCartesianProduct() {
-        ReactiveRecorder r = ReactiveRecorder.record(
-                Observable
-                        .make(observer
-                                -> Scopes.combine(
-                                        observer.open(1), observer.open(2), observer.open(3)))
-                        .and(Observable.make(observer
-                                -> Scopes.combine(observer.open("a"), observer.open("b"),
-                                        observer.open("c")))));
+        Observable<Integer> numbers =
+                observer -> observer.open(1).and(observer.open(2)).and(observer.open(3));
+        Observable<String> letters =
+                observer -> observer.open("a").and(observer.open("b")).and(observer.open("c"));
+        ReactiveRecorder r = ReactiveRecorder.record(numbers.and(letters));
         r.verify()
-                .opened(Both.both(1, "a"))
-                .opened(Both.both(1, "b"))
-                .opened(Both.both(1, "c"))
-                .opened(Both.both(2, "a"))
-                .opened(Both.both(2, "b"))
-                .opened(Both.both(2, "c"))
-                .opened(Both.both(3, "a"))
-                .opened(Both.both(3, "b"))
-                .opened(Both.both(3, "c"))
+                .opened(Both.of(1, "a"))
+                .opened(Both.of(1, "b"))
+                .opened(Both.of(1, "c"))
+                .opened(Both.of(2, "a"))
+                .opened(Both.of(2, "b"))
+                .opened(Both.of(2, "c"))
+                .opened(Both.of(3, "a"))
+                .opened(Both.of(3, "b"))
+                .opened(Both.of(3, "c"))
                 .end();
         r.unsubscribe();
         r.verify()
-                .closed(Both.both(3, "c"))
-                .closed(Both.both(3, "b"))
-                .closed(Both.both(3, "a"))
-                .closed(Both.both(2, "c"))
-                .closed(Both.both(2, "b"))
-                .closed(Both.both(2, "a"))
-                .closed(Both.both(1, "c"))
-                .closed(Both.both(1, "b"))
-                .closed(Both.both(1, "a"))
+                .closed(Both.of(3, "c"))
+                .closed(Both.of(3, "b"))
+                .closed(Both.of(3, "a"))
+                .closed(Both.of(2, "c"))
+                .closed(Both.of(2, "b"))
+                .closed(Both.of(2, "a"))
+                .closed(Both.of(1, "c"))
+                .closed(Both.of(1, "b"))
+                .closed(Both.of(1, "a"))
                 .end();
+    }
+
+    @Test
+    public void testAndIgnore_activateBothTriggers() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.andIgnore(b));
+        a.set("A");
+        b.set("B");
+        recorder.verify().opened("A").end();
+    }
+
+    @Test
+    public void testAndIgnore_deactivateFirstAfterTrigger() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.andIgnore(b));
+        a.set("A");
+        b.set("B");
+        a.reset();
+        recorder.verify().opened("A").closed("A").end();
+    }
+
+    @Test
+    public void testAndIgnore_deactivateSecondAfterTrigger() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.andIgnore(b));
+        a.set("A");
+        b.set("B");
+        b.reset();
+        recorder.verify().opened("A").closed("A").end();
+    }
+
+    @Test
+    public void testIgnoreAnd_activateBothTriggers() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.ignoreAnd(b));
+        a.set("A");
+        b.set("B");
+        recorder.verify().opened("B").end();
+    }
+
+    @Test
+    public void testIgnoreAnd_deactivateFirstAfterTrigger() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.ignoreAnd(b));
+        a.set("A");
+        b.set("B");
+        a.reset();
+        recorder.verify().opened("B").closed("B").end();
+    }
+
+    @Test
+    public void testIgnoreAnd_deactivateSecondAfterTrigger() {
+        Controller<String> a = new Controller<>();
+        Controller<String> b = new Controller<>();
+        ReactiveRecorder recorder = ReactiveRecorder.record(a.ignoreAnd(b));
+        a.set("A");
+        b.set("B");
+        b.reset();
+        recorder.verify().opened("B").closed("B").end();
     }
 }

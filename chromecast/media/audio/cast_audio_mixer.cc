@@ -4,11 +4,11 @@
 
 #include "chromecast/media/audio/cast_audio_mixer.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chromecast/media/audio/cast_audio_manager.h"
 #include "chromecast/media/audio/cast_audio_output_stream.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/channel_layout.h"
 
@@ -209,7 +209,7 @@ CastAudioMixer::~CastAudioMixer() {}
 
 bool CastAudioMixer::Register(MixerProxyStream* proxy_stream) {
   DCHECK_CALLED_ON_VALID_THREAD(audio_thread_checker_);
-  DCHECK(!base::Contains(proxy_streams_, proxy_stream));
+  DCHECK(!proxy_streams_.contains(proxy_stream));
 
   // Do not allow opening new streams while in error state.
   if (error_)
@@ -234,7 +234,7 @@ bool CastAudioMixer::Register(MixerProxyStream* proxy_stream) {
 
 void CastAudioMixer::Unregister(MixerProxyStream* proxy_stream) {
   DCHECK_CALLED_ON_VALID_THREAD(audio_thread_checker_);
-  DCHECK(base::Contains(proxy_streams_, proxy_stream));
+  DCHECK(proxy_streams_.contains(proxy_stream));
 
   proxy_streams_.erase(proxy_stream);
 

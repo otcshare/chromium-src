@@ -13,6 +13,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "components/media_router/browser/media_router.h"
+#include "components/media_router/browser/presentation/start_presentation_context.h"
 #include "components/media_router/common/media_sink.h"
 #include "components/media_router/common/media_source.h"
 #include "media/base/audio_codecs.h"
@@ -26,8 +27,6 @@ class ExtensionRegistry;
 class GURL;
 
 namespace media_router {
-
-class StartPresentationContext;
 
 // Returns the extension name for |url|, so that it can be displayed for
 // extension-initiated presentations.
@@ -116,9 +115,6 @@ struct RouteParameters {
   // A timeout value, after which the request should be considered to have
   // failed.
   base::TimeDelta timeout;
-
-  // Whether the route is for an off-the-record profile.
-  bool off_the_record;
 };
 
 }  // namespace media_router

@@ -2,17 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/profile_resetter/reset_report_uploader.h"
+
 #include <string>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/escape.h"
 #include "chrome/browser/profile_resetter/profile_reset_report.pb.h"
-#include "chrome/browser/profile_resetter/reset_report_uploader.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -37,7 +40,7 @@ ResetReportUploader::ResetReportUploader(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : url_loader_factory_(std::move(url_loader_factory)) {}
 
-ResetReportUploader::~ResetReportUploader() {}
+ResetReportUploader::~ResetReportUploader() = default;
 
 void ResetReportUploader::DispatchReport(
     const reset_report::ChromeResetReport& report) {
@@ -92,7 +95,7 @@ void ResetReportUploader::DispatchReportInternal(
                                            "application/octet-stream");
   auto it = simple_url_loaders_.insert(simple_url_loaders_.begin(),
                                        std::move(simple_url_loader));
-  simple_url_loader_ptr->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+  simple_url_loader_ptr->DownloadHeadersOnly(
       url_loader_factory_.get(),
       base::BindOnce(&ResetReportUploader::OnSimpleLoaderComplete,
                      base::Unretained(this), std::move(it)));
@@ -100,7 +103,7 @@ void ResetReportUploader::DispatchReportInternal(
 
 void ResetReportUploader::OnSimpleLoaderComplete(
     SimpleURLLoaderList::iterator it,
-    std::unique_ptr<std::string> response_body) {
+    scoped_refptr<net::HttpResponseHeaders> headers) {
   simple_url_loaders_.erase(it);
 }
 

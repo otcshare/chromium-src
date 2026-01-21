@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/threading/thread.h"
+#include "components/viz/service/gl/gpu_service_impl.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/viz/privileged/mojom/compositing/frame_sink_manager.mojom.h"
@@ -15,6 +16,14 @@
 namespace viz {
 class VizCompositorThreadRunnerImpl;
 }  // namespace viz
+
+namespace gpu {
+class GpuInit;
+}
+
+namespace base {
+class Thread;
+}
 
 namespace demo {
 
@@ -34,6 +43,11 @@ class DemoService {
 
  private:
   std::unique_ptr<viz::VizCompositorThreadRunnerImpl> runner_;
+
+  std::unique_ptr<base::Thread> io_thread_;
+
+  std::unique_ptr<gpu::GpuInit> gpu_init_;
+  std::unique_ptr<viz::GpuServiceImpl> gpu_service_;
 };
 
 }  // namespace demo

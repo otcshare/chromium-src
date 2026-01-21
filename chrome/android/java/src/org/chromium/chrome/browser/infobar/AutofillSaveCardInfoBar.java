@@ -15,12 +15,14 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.annotation.Nullable;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.autofill.LegalMessageLine;
+import org.chromium.components.autofill.payments.CardDetail;
+import org.chromium.components.autofill.payments.LegalMessageLine;
 import org.chromium.components.browser_ui.widget.RoundedCornerImageView;
 import org.chromium.components.infobars.ConfirmInfoBar;
 import org.chromium.components.infobars.InfoBarControlLayout;
@@ -28,12 +30,10 @@ import org.chromium.components.infobars.InfoBarLayout;
 import org.chromium.ui.UiUtils;
 
 import java.util.ArrayList;
-import java.util.LinkedList;
 import java.util.List;
 
-/**
- * An infobar for saving credit card information.
- */
+/** An infobar for saving credit card information. */
+@NullMarked
 public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
 
     private final @Nullable String mAccountFooterEmail;
@@ -41,11 +41,10 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
     private final long mNativeAutofillSaveCardInfoBar;
     private final List<CardDetail> mCardDetails = new ArrayList<>();
     private int mIconDrawableId = -1;
-    private String mTitleText;
-    private String mDescriptionText;
-    private boolean mIsGooglePayBrandingEnabled;
-    private final LinkedList<LegalMessageLine> mLegalMessageLines =
-            new LinkedList<LegalMessageLine>();
+    private final String mTitleText;
+    private @Nullable String mDescriptionText;
+    private final boolean mIsChromeBrandingEnabled;
+    private final List<LegalMessageLine> mLegalMessageLines = new ArrayList<>();
 
     /**
      * Creates a new instance of the infobar.
@@ -57,24 +56,37 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
      * @param linkText Link text to display in addition to the message.
      * @param buttonOk String to display on the OK button.
      * @param buttonCancel String to display on the Cancel button.
-     * @param accountFooterEmail The email to be shown on the footer, or null. The footer is
-     * only shown if both this and |accountFooterAvatar| are provided.
-     * @param accountFooterAvatar The avatar to be shown on the footer, or null. The footer is
-     * only shown if both this and |accountFooterEmail| are provided.
+     * @param isChromeBrandingEnabled Whether Google Chrome branding is enabled for the build.
+     * @param accountFooterEmail The email to be shown on the footer, or null. The footer is only
+     *     shown if both this and |accountFooterAvatar| are provided.
+     * @param accountFooterAvatar The avatar to be shown on the footer, or null. The footer is only
+     *     shown if both this and |accountFooterEmail| are provided.
      */
-    private AutofillSaveCardInfoBar(long nativeAutofillSaveCardInfoBar, int iconId,
-            Bitmap iconBitmap, String message, String linkText, String buttonOk,
-            String buttonCancel, boolean isGooglePayBrandingEnabled,
-            @Nullable String accountFooterEmail, @Nullable Bitmap accountFooterAvatar) {
-        // If Google Pay branding is enabled, no icon is specified here; it is rather added in
+    private AutofillSaveCardInfoBar(
+            long nativeAutofillSaveCardInfoBar,
+            int iconId,
+            Bitmap iconBitmap,
+            String message,
+            String linkText,
+            String buttonOk,
+            String buttonCancel,
+            boolean isChromeBrandingEnabled,
+            @Nullable String accountFooterEmail,
+            @Nullable Bitmap accountFooterAvatar) {
+        // If Google Chrome branding is enabled, no icon is specified here; it is rather added in
         // |createContent|. This hides the ImageView that normally shows the icon and gets rid of
         // the left padding of the infobar content.
-        super(isGooglePayBrandingEnabled ? 0 : iconId,
-                isGooglePayBrandingEnabled ? 0 : R.color.infobar_icon_drawable_color, iconBitmap,
-                message, linkText, buttonOk, buttonCancel);
+        super(
+                isChromeBrandingEnabled ? 0 : iconId,
+                isChromeBrandingEnabled ? 0 : R.color.infobar_icon_drawable_color,
+                iconBitmap,
+                message,
+                linkText,
+                buttonOk,
+                buttonCancel);
         mIconDrawableId = iconId;
         mTitleText = message;
-        mIsGooglePayBrandingEnabled = isGooglePayBrandingEnabled;
+        mIsChromeBrandingEnabled = isChromeBrandingEnabled;
         mNativeAutofillSaveCardInfoBar = nativeAutofillSaveCardInfoBar;
         mAccountFooterEmail = accountFooterEmail;
         mAccountFooterAvatar = accountFooterAvatar;
@@ -90,20 +102,36 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
      * @param linkText Link text to display in addition to the message.
      * @param buttonOk String to display on the OK button.
      * @param buttonCancel String to display on the Cancel button.
-     * @param accountFooterEmail The email to be shown on the footer, or null. The footer is
-     * only shown if both this and |accountFooterAvatar| are provided.
-     * @param accountFooterAvatar The avatar to be shown on the footer, or null. The footer is
-     * only shown if both this and |accountFooterEmail| are provided.
+     * @param isChromeBrandingEnabled Whether Google Chrome branding is enabled for the build.
+     * @param accountFooterEmail The email to be shown on the footer, or null. The footer is only
+     *     shown if both this and |accountFooterAvatar| are provided.
+     * @param accountFooterAvatar The avatar to be shown on the footer, or null. The footer is only
+     *     shown if both this and |accountFooterEmail| are provided.
      * @return A new instance of the infobar.
      */
     @CalledByNative
-    private static AutofillSaveCardInfoBar create(long nativeAutofillSaveCardInfoBar, int iconId,
-            Bitmap iconBitmap, String message, String linkText, String buttonOk,
-            String buttonCancel, boolean isGooglePayBrandingEnabled,
-            @Nullable String accountFooterEmail, @Nullable Bitmap accountFooterAvatar) {
-        return new AutofillSaveCardInfoBar(nativeAutofillSaveCardInfoBar, iconId, iconBitmap,
-                message, linkText, buttonOk, buttonCancel, isGooglePayBrandingEnabled,
-                accountFooterEmail, accountFooterAvatar);
+    private static AutofillSaveCardInfoBar create(
+            long nativeAutofillSaveCardInfoBar,
+            int iconId,
+            Bitmap iconBitmap,
+            String message,
+            String linkText,
+            String buttonOk,
+            String buttonCancel,
+            boolean isChromeBrandingEnabled,
+            @Nullable String accountFooterEmail,
+            @Nullable Bitmap accountFooterAvatar) {
+        return new AutofillSaveCardInfoBar(
+                nativeAutofillSaveCardInfoBar,
+                iconId,
+                iconBitmap,
+                message,
+                linkText,
+                buttonOk,
+                buttonCancel,
+                isChromeBrandingEnabled,
+                accountFooterEmail,
+                accountFooterAvatar);
     }
 
     /**
@@ -147,16 +175,19 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
      */
     @CalledByNative
     private void addLinkToLastLegalMessageLine(int start, int end, String url) {
-        mLegalMessageLines.getLast().links.add(new LegalMessageLine.Link(start, end, url));
+        mLegalMessageLines
+                .get(mLegalMessageLines.size() - 1)
+                .links
+                .add(new LegalMessageLine.Link(start, end, url));
     }
 
     @Override
     public void createContent(InfoBarLayout layout) {
         super.createContent(layout);
 
-        // If Google Pay branding is enabled, add both the icon and the title message to the message
-        // container, since no icon was added to the ImageView that normally shows the icon.
-        if (mIsGooglePayBrandingEnabled) {
+        // If Google Chrome branding is enabled, add both the icon and the title message to the
+        // message container, since no icon was added to the ImageView that normally shows the icon.
+        if (mIsChromeBrandingEnabled) {
             UiUtils.removeViewFromParent(layout.getMessageTextView());
             layout.getMessageLayout().addIconTitle(mIconDrawableId, mTitleText);
         }
@@ -168,21 +199,29 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
 
         for (int i = 0; i < mCardDetails.size(); i++) {
             CardDetail detail = mCardDetails.get(i);
-            control.addIcon(detail.issuerIconDrawableId, 0, detail.label, detail.subLabel,
+            control.addIcon(
+                    detail.issuerIconDrawableId,
+                    0,
+                    detail.label,
+                    detail.subLabel,
                     R.dimen.infobar_descriptive_text_size);
         }
 
         for (LegalMessageLine line : mLegalMessageLines) {
             SpannableString text = new SpannableString(line.text);
             for (final LegalMessageLine.Link link : line.links) {
-                text.setSpan(new ClickableSpan() {
-                    @Override
-                    public void onClick(View view) {
-                        AutofillSaveCardInfoBarJni.get().onLegalMessageLinkClicked(
-                                mNativeAutofillSaveCardInfoBar, AutofillSaveCardInfoBar.this,
-                                link.url);
-                    }
-                }, link.start, link.end, Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
+                text.setSpan(
+                        new ClickableSpan() {
+                            @Override
+                            public void onClick(View view) {
+                                AutofillSaveCardInfoBarJni.get()
+                                        .onLegalMessageLinkClicked(
+                                                mNativeAutofillSaveCardInfoBar, link.url);
+                            }
+                        },
+                        link.start,
+                        link.end,
+                        Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
             }
             control.addDescription(text);
         }
@@ -190,18 +229,20 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
         if (mAccountFooterEmail != null && mAccountFooterAvatar != null) {
             Resources res = layout.getResources();
             int smallIconSize = res.getDimensionPixelSize(R.dimen.infobar_small_icon_size);
-            int padding = res.getDimensionPixelOffset(R.dimen.infobar_padding);
 
-            LinearLayout footer = (LinearLayout) LayoutInflater.from(layout.getContext())
-                                          .inflate(R.layout.infobar_footer, null, false);
+            LinearLayout footer =
+                    (LinearLayout)
+                            LayoutInflater.from(layout.getContext())
+                                    .inflate(R.layout.infobar_footer, null, false);
 
-            TextView emailView = (TextView) footer.findViewById(R.id.infobar_footer_email);
+            TextView emailView = footer.findViewById(R.id.infobar_footer_email);
             emailView.setText(mAccountFooterEmail);
 
             RoundedCornerImageView profilePicView =
-                    (RoundedCornerImageView) footer.findViewById(R.id.infobar_footer_profile_pic);
-            Bitmap resizedProfilePic = Bitmap.createScaledBitmap(
-                    mAccountFooterAvatar, smallIconSize, smallIconSize, false);
+                    footer.findViewById(R.id.infobar_footer_profile_pic);
+            Bitmap resizedProfilePic =
+                    Bitmap.createScaledBitmap(
+                            mAccountFooterAvatar, smallIconSize, smallIconSize, false);
             profilePicView.setRoundedCorners(
                     smallIconSize / 2, smallIconSize / 2, smallIconSize / 2, smallIconSize / 2);
             profilePicView.setImageBitmap(resizedProfilePic);
@@ -212,7 +253,6 @@ public class AutofillSaveCardInfoBar extends ConfirmInfoBar {
 
     @NativeMethods
     interface Natives {
-        void onLegalMessageLinkClicked(
-                long nativeAutofillSaveCardInfoBar, AutofillSaveCardInfoBar caller, String url);
+        void onLegalMessageLinkClicked(long nativeAutofillSaveCardInfoBar, String url);
     }
 }

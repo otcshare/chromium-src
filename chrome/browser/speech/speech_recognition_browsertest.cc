@@ -24,36 +24,34 @@ namespace speech {
 
 class ChromeSpeechRecognitionTest : public InProcessBrowserTest {
  public:
-  ChromeSpeechRecognitionTest() {}
+  ChromeSpeechRecognitionTest() = default;
 
   ChromeSpeechRecognitionTest(const ChromeSpeechRecognitionTest&) = delete;
   ChromeSpeechRecognitionTest& operator=(const ChromeSpeechRecognitionTest&) =
       delete;
 
-  ~ChromeSpeechRecognitionTest() override {}
+  ~ChromeSpeechRecognitionTest() override = default;
 
   void SetUp() override {
     // SpeechRecognition test specific SetUp.
-    fake_speech_recognition_manager_ =
-        std::make_unique<content::FakeSpeechRecognitionManager>();
-    fake_speech_recognition_manager_->set_should_send_fake_response(true);
+    fake_speech_recognition_manager_.set_should_send_fake_response(true);
     // Inject the fake manager factory so that the test result is returned to
     // the web page.
     content::SpeechRecognitionManager::SetManagerForTesting(
-        fake_speech_recognition_manager_.get());
+        &fake_speech_recognition_manager_);
 
     InProcessBrowserTest::SetUp();
   }
 
   void TearDown() override {
     content::SpeechRecognitionManager::SetManagerForTesting(nullptr);
-    fake_speech_recognition_manager_->SetDelegate(nullptr);
+    fake_speech_recognition_manager_.SetDelegate(nullptr);
     InProcessBrowserTest::TearDown();
   }
 
  protected:
-  std::unique_ptr<content::FakeSpeechRecognitionManager>
-      fake_speech_recognition_manager_;
+  ChromeSpeechRecognitionManagerDelegate delegate_;
+  content::FakeSpeechRecognitionManager fake_speech_recognition_manager_;
 };
 
 class SpeechWebContentsObserver : public content::WebContentsObserver {
@@ -67,7 +65,7 @@ class SpeechWebContentsObserver : public content::WebContentsObserver {
   SpeechWebContentsObserver& operator=(const SpeechWebContentsObserver&) =
       delete;
 
-  ~SpeechWebContentsObserver() override {}
+  ~SpeechWebContentsObserver() override = default;
 
   // content::WebContentsObserver overrides.
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
@@ -97,10 +95,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest, BasicTearDown) {
       embedded_test_server()->GetURL("/speech/web_speech_test.html");
   GURL https_url(https_server.GetURL("/speech/web_speech_test.html"));
 
-  std::unique_ptr<ChromeSpeechRecognitionManagerDelegate> delegate(
-      new ChromeSpeechRecognitionManagerDelegate());
-  static_cast<content::FakeSpeechRecognitionManager*>(
-      fake_speech_recognition_manager_.get())->SetDelegate(delegate.get());
+  fake_speech_recognition_manager_.SetDelegate(&delegate_);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), http_url));
   WebContents* web_contents =
@@ -111,21 +106,17 @@ IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest, BasicTearDown) {
   std::u16string success_title(u"PASS");
   std::u16string failure_title(u"FAIL");
 
-  const char kRetriveTranscriptScript[] =
-      "window.domAutomationController.send(window.getFirstTranscript())";
+  const char kRetriveTranscriptScript[] = "window.getFirstTranscript()";
   const char kExpectedTranscript[] = "Pictures of the moon";
 
   {
     content::TitleWatcher title_watcher(web_contents, success_title);
     title_watcher.AlsoWaitForTitle(failure_title);
-    EXPECT_TRUE(
-        content::ExecuteScript(web_contents, "testSpeechRecognition()"));
+    EXPECT_TRUE(content::ExecJs(web_contents, "testSpeechRecognition()"));
     EXPECT_EQ(success_title, title_watcher.WaitAndGetTitle());
 
-    std::string output;
-    EXPECT_TRUE(content::ExecuteScriptAndExtractString(
-        web_contents, kRetriveTranscriptScript, &output));
-    EXPECT_EQ(kExpectedTranscript, output);
+    EXPECT_EQ(kExpectedTranscript,
+              content::EvalJs(web_contents, kRetriveTranscriptScript));
   }
 
   // Navigating to an https page will force RFH change within
@@ -137,14 +128,11 @@ IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest, BasicTearDown) {
   {
     content::TitleWatcher title_watcher(web_contents, success_title);
     title_watcher.AlsoWaitForTitle(failure_title);
-    EXPECT_TRUE(
-        content::ExecuteScript(web_contents, "testSpeechRecognition()"));
+    EXPECT_TRUE(content::ExecJs(web_contents, "testSpeechRecognition()"));
     EXPECT_EQ(success_title, title_watcher.WaitAndGetTitle());
 
-    std::string output;
-    EXPECT_TRUE(content::ExecuteScriptAndExtractString(
-        web_contents, kRetriveTranscriptScript, &output));
-    EXPECT_EQ(kExpectedTranscript, output);
+    EXPECT_EQ(kExpectedTranscript,
+              content::EvalJs(web_contents, kRetriveTranscriptScript));
   }
 
   // Close the tab to so that we see WCO::WebContentsDestroyed().

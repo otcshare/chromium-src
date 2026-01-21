@@ -15,10 +15,13 @@
 #include "absl/strings/substitute.h"
 
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 
 namespace {
 
@@ -265,7 +268,7 @@ TEST(SubstituteTest, AbslStringifyWithEnum) {
   EXPECT_EQ(absl::Substitute("$0", e), "Choices");
 }
 
-#ifdef GTEST_HAS_DEATH_TEST
+#if GTEST_HAS_DEATH_TEST
 
 TEST(SubstituteDeathTest, SubstituteDeath) {
   EXPECT_DEBUG_DEATH(

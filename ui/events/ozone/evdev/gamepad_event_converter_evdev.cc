@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/trace_event/trace_event.h"
@@ -62,8 +63,8 @@ GamepadEventConverterEvdev::GamepadEventConverterEvdev(
   const auto key_bits = devinfo.GetKeyBits();
   key_bits_.resize(EVDEV_BITS_TO_INT64(KEY_CNT));
   for (int i = 0; i < KEY_CNT; i++) {
-    if (EvdevBitIsSet(key_bits.data(), i)) {
-      EvdevSetUint64Bit(key_bits_.data(), i);
+    if (EvdevBitIsSet(key_bits, i)) {
+      EvdevSetUint64Bit(key_bits_, i);
     }
   }
 }
@@ -121,7 +122,7 @@ int GamepadEventConverterEvdev::StoreRumbleEffect(const base::ScopedFD& fd,
                                                   uint16_t strong_magnitude,
                                                   uint16_t weak_magnitude) {
   struct ff_effect effect;
-  memset(&effect, 0, sizeof(effect));
+  UNSAFE_TODO(memset(&effect, 0, sizeof(effect)));
   effect.type = FF_RUMBLE;
   effect.id = effect_id;
   effect.replay.length = duration;
@@ -136,7 +137,7 @@ void GamepadEventConverterEvdev::StartOrStopEffect(const base::ScopedFD& fd,
                                                    int effect_id,
                                                    bool do_start) {
   struct input_event start_stop;
-  memset(&start_stop, 0, sizeof(start_stop));
+  UNSAFE_TODO(memset(&start_stop, 0, sizeof(start_stop)));
   start_stop.type = EV_FF;
   start_stop.code = effect_id;
   start_stop.value = do_start ? 1 : 0;
@@ -296,4 +297,14 @@ void GamepadEventConverterEvdev::OnSync(const base::TimeTicks& timestamp) {
     will_send_frame_ = false;
   }
 }
+
+std::ostream& GamepadEventConverterEvdev::DescribeForLog(
+    std::ostream& os) const {
+  os << "class=ui::GamepadEventConverterEvdev id=" << input_device_.id
+     << std::endl
+     << " supports_rumble=" << supports_rumble_ << std::endl
+     << "base ";
+  return EventConverterEvdev::DescribeForLog(os);
+}
+
 }  //  namespace ui

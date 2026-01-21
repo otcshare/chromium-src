@@ -19,14 +19,18 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/system/keyboard_brightness/keyboard_backlight_color_controller.h"
+#include "ash/system/keyboard_brightness_control_delegate.h"
 #include "ash/system/unified/unified_system_tray_model.h"
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom-forward.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/views/border.h"
 
 namespace ash {
 
@@ -46,11 +50,12 @@ class UnifiedKeyboardBrightnessView : public UnifiedSliderView,
                           controller,
                           kUnifiedMenuKeyboardBrightnessIcon,
                           IDS_ASH_STATUS_TRAY_BRIGHTNESS,
-                          true /* readonly*/),
+                          /*is_togglable=*/false),
         model_(model) {
-    if (features::IsRgbKeyboardEnabled() &&
-        Shell::Get()->rgb_keyboard_manager()->IsRgbKeyboardSupported()) {
-      button()->SetBackgroundColor(keyboardBrightnessIconBackgroundColor);
+    if (Shell::Get()->rgb_keyboard_manager()->IsRgbKeyboardSupported()) {
+      if (button()) {
+        button()->SetBackgroundColor(keyboardBrightnessIconBackgroundColor);
+      }
       AddChildView(CreateKeyboardBacklightColorButton());
     }
     model_->AddObserver(this);
@@ -100,9 +105,7 @@ class UnifiedKeyboardBrightnessView : public UnifiedSliderView,
                                : gfx::kGoogleGrey900);
     }
     button->SetBorder(views::CreateRoundedRectBorder(
-        /*thickness=*/4, /*corner_radius=*/16,
-        AshColorProvider::Get()->GetContentLayerColor(
-            AshColorProvider::ContentLayerType::kSeparatorColor)));
+        /*thickness=*/4, /*corner_radius=*/16, cros_tokens::kSeparatorColor));
     return button;
   }
 
@@ -111,12 +114,12 @@ class UnifiedKeyboardBrightnessView : public UnifiedSliderView,
     base::UmaHistogramEnumeration(
         kPersonalizationEntryPointHistogramName,
         PersonalizationEntryPoint::kKeyboardBrightnessSlider);
-    NewWindowDelegate* primary_delegate = NewWindowDelegate::GetPrimary();
+    NewWindowDelegate* primary_delegate = NewWindowDelegate::GetInstance();
     primary_delegate->OpenPersonalizationHub();
     return;
   }
 
-  UnifiedSystemTrayModel* const model_;
+  const raw_ptr<UnifiedSystemTrayModel> model_;
 
   base::WeakPtrFactory<UnifiedKeyboardBrightnessView> weak_factory_{this};
 };
@@ -130,10 +133,13 @@ UnifiedKeyboardBrightnessSliderController::
 UnifiedKeyboardBrightnessSliderController::
     ~UnifiedKeyboardBrightnessSliderController() = default;
 
-views::View* UnifiedKeyboardBrightnessSliderController::CreateView() {
-  DCHECK(!slider_);
-  slider_ = new UnifiedKeyboardBrightnessView(this, model_);
-  return slider_;
+std::unique_ptr<UnifiedSliderView>
+UnifiedKeyboardBrightnessSliderController::CreateView() {
+#if DCHECK_IS_ON()
+  DCHECK(!created_view_);
+  created_view_ = true;
+#endif
+  return std::make_unique<UnifiedKeyboardBrightnessView>(this, model_);
 }
 
 QsSliderCatalogName
@@ -146,7 +152,19 @@ void UnifiedKeyboardBrightnessSliderController::SliderValueChanged(
     float value,
     float old_value,
     views::SliderChangeReason reason) {
-  // This slider is read-only.
+  if (reason != views::SliderChangeReason::kByUser) {
+    return;
+  }
+
+  KeyboardBrightnessControlDelegate* keyboard_brightness_control_delegate =
+      Shell::Get()->keyboard_brightness_control_delegate();
+  if (!keyboard_brightness_control_delegate) {
+    return;
+  }
+  const double percent = value * 100;
+  keyboard_brightness_control_delegate->HandleSetKeyboardBrightness(
+      percent, /*gradual=*/true,
+      /*source=*/KeyboardBrightnessChangeSource::kQuickSettings);
 }
 
 }  // namespace ash

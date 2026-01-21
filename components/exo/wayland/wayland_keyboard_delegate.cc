@@ -4,11 +4,13 @@
 
 #include "components/exo/wayland/wayland_keyboard_delegate.h"
 
-#include <cstring>
-
 #include <wayland-server-core.h>
 #include <wayland-server-protocol-core.h>
 
+#include <cstring>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/numerics/safe_conversions.h"
@@ -42,16 +44,19 @@ bool WaylandKeyboardDelegate::CanAcceptKeyboardEventsForSurface(
 
 void WaylandKeyboardDelegate::OnKeyboardEnter(
     Surface* surface,
-    const base::flat_map<ui::DomCode, KeyState>& pressed_keys) {
+    const base::flat_map<PhysicalCode, base::flat_set<KeyState>>&
+        pressed_keys) {
   wl_resource* surface_resource = GetSurfaceResource(surface);
   DCHECK(surface_resource);
   wl_array keys;
   wl_array_init(&keys);
   for (const auto& entry : pressed_keys) {
-    uint32_t* value =
-        static_cast<uint32_t*>(wl_array_add(&keys, sizeof(uint32_t)));
-    DCHECK(value);
-    *value = ui::KeycodeConverter::DomCodeToEvdevCode(entry.second.code);
+    for (const auto& key_state : entry.second) {
+      uint32_t* value =
+          static_cast<uint32_t*>(wl_array_add(&keys, sizeof(uint32_t)));
+      DCHECK(value);
+      *value = ui::KeycodeConverter::DomCodeToEvdevCode(key_state.code);
+    }
   }
   wl_keyboard_send_enter(
       keyboard_resource_,
@@ -100,8 +105,7 @@ void WaylandKeyboardDelegate::OnKeyboardModifiers(
   SendKeyboardModifiers();
 }
 
-void WaylandKeyboardDelegate::OnKeyboardLayoutUpdated(
-    base::StringPiece keymap) {
+void WaylandKeyboardDelegate::OnKeyboardLayoutUpdated(std::string_view keymap) {
   // Sent the content of |keymap| with trailing '\0' termination via shared
   // memory.
   base::UnsafeSharedMemoryRegion shared_keymap_region =
@@ -112,8 +116,10 @@ void WaylandKeyboardDelegate::OnKeyboardLayoutUpdated(
           std::move(shared_keymap_region));
   DCHECK(shared_keymap.IsValid());
 
-  std::memcpy(shared_keymap.memory(), keymap.data(), keymap.size());
-  static_cast<uint8_t*>(shared_keymap.memory())[keymap.size()] = '\0';
+  UNSAFE_TODO(
+      std::memcpy(shared_keymap.memory(), keymap.data(), keymap.size()));
+  UNSAFE_TODO(static_cast<uint8_t*>(shared_keymap.memory())[keymap.size()]) =
+      '\0';
   wl_keyboard_send_keymap(keyboard_resource_, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
                           platform_shared_keymap.GetPlatformHandle().fd,
                           keymap.size() + 1);
@@ -168,6 +174,7 @@ void WaylandKeyboardDelegate::OnKeyRepeatSettingsChanged(
     wl_keyboard_send_repeat_info(keyboard_resource_,
                                  GetWaylandRepeatRate(enabled, interval),
                                  static_cast<int32_t>(delay.InMilliseconds()));
+    wl_client_flush(client());
   }
 }
 

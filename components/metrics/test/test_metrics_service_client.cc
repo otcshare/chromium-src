@@ -5,11 +5,12 @@
 #include "components/metrics/test/test_metrics_service_client.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
 #include "components/metrics/metrics_log_uploader.h"
+#include "components/regional_capabilities/regional_capabilities_country_id.h"
 #include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
 namespace metrics {
@@ -22,7 +23,7 @@ TestMetricsServiceClient::~TestMetricsServiceClient() = default;
 
 variations::SyntheticTrialRegistry*
 TestMetricsServiceClient::GetSyntheticTrialRegistry() {
-  return nullptr;
+  return synthetic_trial_registry_;
 }
 
 metrics::MetricsService* TestMetricsServiceClient::GetMetricsService() {
@@ -35,7 +36,7 @@ void TestMetricsServiceClient::SetMetricsClientId(
 }
 
 bool TestMetricsServiceClient::ShouldUploadMetricsForUserId(uint64_t user_id) {
-  return base::Contains(allowed_user_ids_, user_id);
+  return allowed_user_ids_.contains(user_id);
 }
 
 int32_t TestMetricsServiceClient::GetProduct() {
@@ -76,11 +77,12 @@ void TestMetricsServiceClient::CollectFinalMetricsForLog(
 std::unique_ptr<MetricsLogUploader> TestMetricsServiceClient::CreateUploader(
     const GURL& server_url,
     const GURL& insecure_server_url,
-    base::StringPiece mime_type,
+    std::string_view mime_type,
     MetricsLogUploader::MetricServiceType service_type,
     const MetricsLogUploader::UploadCallback& on_upload_complete) {
-  uploader_ = new TestMetricsLogUploader(on_upload_complete);
-  return std::unique_ptr<MetricsLogUploader>(uploader_);
+  auto uploader = std::make_unique<TestMetricsLogUploader>(on_upload_complete);
+  uploader_ = uploader->AsWeakPtr();
+  return uploader;
 }
 
 base::TimeDelta TestMetricsServiceClient::GetStandardUploadInterval() {
@@ -107,6 +109,11 @@ bool TestMetricsServiceClient::ShouldResetClientIdsOnClonedInstall() {
 MetricsLogStore::StorageLimits TestMetricsServiceClient::GetStorageLimits()
     const {
   return storage_limits_;
+}
+
+std::optional<regional_capabilities::CountryIdHolder>
+TestMetricsServiceClient::GetProfileCountryIdForPrivateMetricsReporting() {
+  return country_id_holder_;
 }
 
 void TestMetricsServiceClient::AllowMetricUploadForUserId(uint64_t user_id) {

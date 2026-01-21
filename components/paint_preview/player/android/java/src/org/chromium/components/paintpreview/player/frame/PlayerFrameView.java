@@ -9,7 +9,6 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Rect;
-import android.os.Bundle;
 import android.util.Size;
 import android.view.MotionEvent;
 import android.view.View;
@@ -17,10 +16,10 @@ import android.view.ViewStructure;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.widget.FrameLayout;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContentsAccessibility;
+import org.chromium.ui.accessibility.AccessibilityState;
 
 import java.util.List;
 
@@ -30,15 +29,16 @@ import java.util.List;
  * with individual {@link View}s. {@link #mSubFrames} contains the list of all sub-frames and their
  * relative positions.
  */
+@NullMarked
 public class PlayerFrameView extends FrameLayout {
-    private PlayerFrameBitmapPainter mBitmapPainter;
-    private PlayerFrameGestureDetector mGestureDetector;
-    private PlayerFrameViewDelegate mDelegate;
-    private List<View> mSubFrameViews;
-    private List<Rect> mSubFrameRects;
-    private Matrix mScaleMatrix;
-    private Matrix mOffset = new Matrix();
-    protected WebContentsAccessibility mWebContentsAccessibility;
+    private final PlayerFrameBitmapPainter mBitmapPainter;
+    private final PlayerFrameGestureDetector mGestureDetector;
+    private final PlayerFrameViewDelegate mDelegate;
+    private @Nullable List<View> mSubFrameViews;
+    private @Nullable List<Rect> mSubFrameRects;
+    private @Nullable Matrix mScaleMatrix;
+    private final Matrix mOffset = new Matrix();
+    protected @Nullable WebContentsAccessibility mWebContentsAccessibility;
 
     /**
      * @param context                 Used for initialization.
@@ -46,7 +46,9 @@ public class PlayerFrameView extends FrameLayout {
      *                                gestures.
      * @param playerFrameViewDelegate The interface used for forwarding events.
      */
-    public PlayerFrameView(@NonNull Context context, boolean canDetectZoom,
+    public PlayerFrameView(
+            Context context,
+            boolean canDetectZoom,
             PlayerFrameViewDelegate playerFrameViewDelegate,
             PlayerFrameGestureDetectorDelegate gestureDetectorDelegate,
             @Nullable Runnable firstPaintListener) {
@@ -58,10 +60,9 @@ public class PlayerFrameView extends FrameLayout {
                 new PlayerFrameGestureDetector(context, canDetectZoom, gestureDetectorDelegate);
     }
 
-    /**
-     * Sets the {@link WebContentsAccessibility} for this View.
-     */
-    public void setWebContentsAccessibility(WebContentsAccessibility webContentsAccessibility) {
+    /** Sets the {@link WebContentsAccessibility} for this View. */
+    public void setWebContentsAccessibility(
+            @Nullable WebContentsAccessibility webContentsAccessibility) {
         mWebContentsAccessibility = webContentsAccessibility;
     }
 
@@ -134,8 +135,7 @@ public class PlayerFrameView extends FrameLayout {
 
     @Override
     public boolean onHoverEvent(MotionEvent event) {
-        if (mWebContentsAccessibility != null
-                && mWebContentsAccessibility.isTouchExplorationEnabled()) {
+        if (mWebContentsAccessibility != null && AccessibilityState.isTouchExplorationEnabled()) {
             return mWebContentsAccessibility.onHoverEventNoRenderer(event);
         }
         return super.onHoverEvent(event);
@@ -168,17 +168,11 @@ public class PlayerFrameView extends FrameLayout {
     }
 
     @Override
-    public boolean performAccessibilityAction(int action, Bundle arguments) {
-        return mWebContentsAccessibility != null && mWebContentsAccessibility.supportsAction(action)
-                ? mWebContentsAccessibility.performAction(action, arguments)
-                : super.performAccessibilityAction(action, arguments);
-    }
-
-    @Override
     public AccessibilityNodeProvider getAccessibilityNodeProvider() {
-        AccessibilityNodeProvider provider = (mWebContentsAccessibility != null)
-                ? mWebContentsAccessibility.getAccessibilityNodeProvider()
-                : null;
+        AccessibilityNodeProvider provider =
+                (mWebContentsAccessibility != null)
+                        ? mWebContentsAccessibility.getAccessibilityNodeProvider()
+                        : null;
         return (provider != null) ? provider : super.getAccessibilityNodeProvider();
     }
 

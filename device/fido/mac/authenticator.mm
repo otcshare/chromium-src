@@ -5,12 +5,14 @@
 #include "device/fido/mac/authenticator.h"
 
 #include <algorithm>
+#include <optional>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_piece.h"
+#include "base/no_destructor.h"
+#import "base/task/sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/device_event_log/device_event_log.h"
 #include "device/base/features.h"
@@ -18,17 +20,15 @@
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/discoverable_credential_metadata.h"
-#include "device/fido/fido_constants.h"
+#include "device/fido/fido_request_handler_base.h"
 #include "device/fido/mac/authenticator_config.h"
 #include "device/fido/mac/get_assertion_operation.h"
 #include "device/fido/mac/make_credential_operation.h"
 #include "device/fido/mac/util.h"
-#include "device/fido/public_key_credential_user_entity.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/fido/public/fido_constants.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
 
-namespace device {
-namespace fido {
-namespace mac {
+namespace device::fido::mac {
 
 // static
 void TouchIdAuthenticator::IsAvailable(
@@ -52,38 +52,40 @@ void TouchIdAuthenticator::InitializeAuthenticator(base::OnceClosure callback) {
                                                            std::move(callback));
 }
 
-void TouchIdAuthenticator::GetCredentialInformationForRequest(
+void TouchIdAuthenticator::GetPlatformCredentialInfoForRequest(
     const CtapGetAssertionRequest& request,
-    GetCredentialInformationForRequestCallback callback) {
-  if (!request.allow_list.empty()) {
-    // Non resident credentials request.
-    absl::optional<std::list<Credential>> credentials =
-        credential_store_.FindCredentialsFromCredentialDescriptorList(
-            request.rp_id, request.allow_list);
-    if (!credentials) {
-      FIDO_LOG(ERROR) << "FindCredentialsFromCredentialDescriptorList() failed";
-      std::move(callback).Run(/*credentials=*/{}, /*has_credentials=*/false);
-      return;
-    }
+    const CtapGetAssertionOptions& options,
+    GetPlatformCredentialInfoForRequestCallback callback) {
+  std::optional<std::list<Credential>> credentials =
+      request.allow_list.empty()
+          ? credential_store_.FindResidentCredentials(request.rp_id)
+          : credential_store_.FindCredentialsFromCredentialDescriptorList(
+                request.rp_id, request.allow_list);
+  if (!credentials) {
+    FIDO_LOG(ERROR) << "Failed to fetch credentials from CredentialStore";
     std::move(callback).Run(/*credentials=*/{},
-                            /*has_credentials=*/!credentials->empty());
-    return;
-  }
-
-  // Resident credentials request.
-  absl::optional<std::list<Credential>> resident_credentials =
-      credential_store_.FindResidentCredentials(request.rp_id);
-  if (!resident_credentials) {
-    FIDO_LOG(ERROR) << "GetResidentCredentialsForRequest() failed";
-    std::move(callback).Run(/*credentials=*/{}, /*has_credentials=*/false);
+                            device::FidoRequestHandlerBase::
+                                RecognizedCredential::kNoRecognizedCredential);
     return;
   }
   std::vector<DiscoverableCredentialMetadata> result;
-  for (const auto& credential : *resident_credentials) {
-    result.emplace_back(request.rp_id, credential.credential_id,
-                        credential.metadata.ToPublicKeyCredentialUserEntity());
+  // With `kWebAuthnMacPlatformAuthenticatorOptionalUv`, always report the
+  // list of credentials, because the UI will show a confirmation prompt for
+  // one randomly chosen credential and run through the same pre-select flow
+  // as for empty allow lists.
+  for (const auto& credential : *credentials) {
+    result.emplace_back(AuthenticatorType::kTouchID, request.rp_id,
+                        credential.credential_id,
+                        credential.metadata.ToPublicKeyCredentialUserEntity(),
+                        /*provider_name=*/std::nullopt);
   }
-  std::move(callback).Run(std::move(result), !resident_credentials->empty());
+  std::move(callback).Run(
+      std::move(result),
+      credentials->empty()
+          ? device::FidoRequestHandlerBase::RecognizedCredential::
+                kNoRecognizedCredential
+          : device::FidoRequestHandlerBase::RecognizedCredential::
+                kHasRecognizedCredential);
 }
 
 void TouchIdAuthenticator::MakeCredential(CtapMakeCredentialRequest request,
@@ -104,12 +106,6 @@ void TouchIdAuthenticator::GetAssertion(CtapGetAssertionRequest request,
   operation_->Run();
 }
 
-void TouchIdAuthenticator::GetNextAssertion(GetAssertionCallback callback) {
-  DCHECK(operation_);
-  reinterpret_cast<GetAssertionOperation*>(operation_.get())
-      ->GetNextAssertion(std::move(callback));
-}
-
 void TouchIdAuthenticator::Cancel() {
   // If there is an operation pending, delete it, which will clean up any
   // pending callbacks, e.g. if the operation is waiting for a response from
@@ -118,15 +114,15 @@ void TouchIdAuthenticator::Cancel() {
   operation_.reset();
 }
 
-FidoAuthenticator::Type TouchIdAuthenticator::GetType() const {
-  return Type::kTouchID;
+AuthenticatorType TouchIdAuthenticator::GetType() const {
+  return AuthenticatorType::kTouchID;
 }
 
 std::string TouchIdAuthenticator::GetId() const {
   return "TouchIdAuthenticator";
 }
 
-absl::optional<FidoTransportProtocol>
+std::optional<FidoTransportProtocol>
 TouchIdAuthenticator::AuthenticatorTransport() const {
   return FidoTransportProtocol::kInternal;
 }
@@ -135,7 +131,8 @@ namespace {
 
 AuthenticatorSupportedOptions TouchIdAuthenticatorOptions() {
   AuthenticatorSupportedOptions options;
-  options.is_platform_device = true;
+  options.is_platform_device =
+      AuthenticatorSupportedOptions::PlatformDevice::kYes;
   options.supports_resident_key = true;
   options.user_verification_availability = AuthenticatorSupportedOptions::
       UserVerificationAvailability::kSupportedAndConfigured;
@@ -145,27 +142,16 @@ AuthenticatorSupportedOptions TouchIdAuthenticatorOptions() {
 
 }  // namespace
 
-const absl::optional<AuthenticatorSupportedOptions>&
-TouchIdAuthenticator::Options() const {
-  static const absl::optional<AuthenticatorSupportedOptions> options =
-      TouchIdAuthenticatorOptions();
-  return options;
-}
-
-bool TouchIdAuthenticator::IsInPairingMode() const {
-  return false;
-}
-
-bool TouchIdAuthenticator::IsPaired() const {
-  return false;
-}
-
-bool TouchIdAuthenticator::RequiresBlePairingPin() const {
-  return false;
+const AuthenticatorSupportedOptions& TouchIdAuthenticator::Options() const {
+  static const base::NoDestructor<AuthenticatorSupportedOptions> options(
+      TouchIdAuthenticatorOptions());
+  return *options;
 }
 
 void TouchIdAuthenticator::GetTouch(base::OnceClosure callback) {
-  NOTREACHED();
+  // If at any point request processing wants to collect a "touch" from this
+  // authenticator, pretend that happens immediately because UI interaction
+  // already happened to trigger this authenticator.
   std::move(callback).Run();
 }
 
@@ -179,6 +165,4 @@ TouchIdAuthenticator::TouchIdAuthenticator(std::string keychain_access_group,
           {std::move(keychain_access_group), std::move(metadata_secret)}),
       weak_factory_(this) {}
 
-}  // namespace mac
-}  // namespace fido
-}  // namespace device
+}  // namespace device::fido::mac

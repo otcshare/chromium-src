@@ -4,8 +4,7 @@
 
 #include "chromeos/ash/components/phonehub/browser_tabs_model_provider.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 BrowserTabsModelProvider::BrowserTabsModelProvider() = default;
 
@@ -23,9 +22,9 @@ void BrowserTabsModelProvider::NotifyBrowserTabsUpdated(
     bool is_sync_enabled,
     const std::vector<BrowserTabsModel::BrowserTabMetadata>
         browser_tabs_metadata) {
-  for (auto& observer : observer_list_)
+  for (auto& observer : observer_list_) {
     observer.OnBrowserTabsUpdated(is_sync_enabled, browser_tabs_metadata);
+  }
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

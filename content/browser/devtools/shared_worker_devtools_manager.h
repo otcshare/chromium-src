@@ -8,8 +8,9 @@
 #include <map>
 
 #include "base/containers/flat_set.h"
-#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/observer_list.h"
 #include "base/unguessable_token.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom.h"
@@ -23,6 +24,13 @@ class SharedWorkerHost;
 // This class lives on UI thread.
 class SharedWorkerDevToolsManager {
  public:
+  class Observer : public base::CheckedObserver {
+   public:
+    virtual void SharedWorkerCreated(SharedWorkerDevToolsAgentHost* host,
+                                     bool* should_pause_on_start) = 0;
+    virtual void SharedWorkerDestroyed(SharedWorkerDevToolsAgentHost* host) = 0;
+  };
+
   // Returns the SharedWorkerDevToolsManager singleton.
   static SharedWorkerDevToolsManager* GetInstance();
 
@@ -46,18 +54,23 @@ class SharedWorkerDevToolsManager {
 
   SharedWorkerDevToolsAgentHost* GetDevToolsHost(SharedWorkerHost* host);
 
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
  private:
   friend struct base::DefaultSingletonTraits<SharedWorkerDevToolsManager>;
 
   SharedWorkerDevToolsManager();
   ~SharedWorkerDevToolsManager();
 
+  base::ObserverList<Observer> observer_list_;
+
   // We retatin agent hosts as long as the shared worker is alive.
   std::map<SharedWorkerHost*, scoped_refptr<SharedWorkerDevToolsAgentHost>>
       live_hosts_;
   // Clients may retain agent host for the terminated shared worker,
   // and we reconnect them when shared worker is restarted.
-  base::flat_set<SharedWorkerDevToolsAgentHost*> terminated_hosts_;
+  base::flat_set<raw_ptr<SharedWorkerDevToolsAgentHost>> terminated_hosts_;
 };
 
 }  // namespace content

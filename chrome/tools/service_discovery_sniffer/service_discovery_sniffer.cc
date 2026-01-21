@@ -2,13 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/tools/service_discovery_sniffer/service_discovery_sniffer.h"
 
 #include <memory>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
@@ -75,8 +80,7 @@ void ServiceTypePrinter::Start() {
   watcher_->DiscoverNewServices();
 }
 
-ServiceTypePrinter::~ServiceTypePrinter() {
-}
+ServiceTypePrinter::~ServiceTypePrinter() = default;
 
 void ServiceTypePrinter::OnServiceUpdated(ServiceWatcher::UpdateType update,
                                           const std::string& service_name) {

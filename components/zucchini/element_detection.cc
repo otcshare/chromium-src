@@ -4,11 +4,14 @@
 
 #include "components/zucchini/element_detection.h"
 
+#include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "components/zucchini/buildflags.h"
 #include "components/zucchini/disassembler.h"
 #include "components/zucchini/disassembler_no_op.h"
+#include "components/zucchini/image_utils.h"
 #include "components/zucchini/version_info.h"
 
 #if BUILDFLAG(ENABLE_DEX)
@@ -169,32 +172,36 @@ uint16_t DisassemblerVersionOfType(ExecutableType exe_type) {
   }
 }
 
-absl::optional<Element> DetectElementFromDisassembler(ConstBufferView image) {
+std::optional<Element> DetectElementFromDisassembler(ConstBufferView image) {
   std::unique_ptr<Disassembler> disasm = MakeDisassemblerWithoutFallback(image);
   if (disasm)
     return Element({0, disasm->size()}, disasm->GetExeType());
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-/******** ProgramScanner ********/
+/******** ElementFinder ********/
 
-ElementFinder::ElementFinder(ConstBufferView image, ElementDetector&& detector)
-    : image_(image), detector_(std::move(detector)) {}
+ElementFinder::ElementFinder(ConstBufferView image,
+                             ElementDetector&& detector,
+                             offset_t init_pos)
+    : image_(image),
+      detector_(std::move(detector)),
+      pos_(std::min(init_pos, static_cast<offset_t>(image.size()))) {}
 
 ElementFinder::~ElementFinder() = default;
 
-absl::optional<Element> ElementFinder::GetNext() {
+std::optional<Element> ElementFinder::GetNext() {
   for (; pos_ < image_.size(); ++pos_) {
-    ConstBufferView test_image =
-        ConstBufferView::FromRange(image_.begin() + pos_, image_.end());
-    absl::optional<Element> element = detector_.Run(test_image);
+    ConstBufferView test_image = ConstBufferView::FromRange(
+        UNSAFE_TODO(image_.begin() + pos_), image_.end());
+    std::optional<Element> element = detector_.Run(test_image);
     if (element) {
       element->offset += pos_;
       pos_ = element->EndOffset();
       return element;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace zucchini

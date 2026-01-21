@@ -5,16 +5,15 @@
 #ifndef CHROME_TEST_CHROMEDRIVER_CHROME_BIDI_TRACKER_H_
 #define CHROME_TEST_CHROMEDRIVER_CHROME_BIDI_TRACKER_H_
 
-#include <map>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_event_listener.h"
 
 class DevToolsClient;
 class Status;
-typedef base::RepeatingCallback<Status(base::Value::Dict)> SendBidiPayloadFunc;
+using SendBidiPayloadFunc = base::RepeatingCallback<Status(base::Value::Dict)>;
 
 // Tracks the state of the DOM and BiDi messages coming from the browser
 class BidiTracker : public DevToolsEventListener {

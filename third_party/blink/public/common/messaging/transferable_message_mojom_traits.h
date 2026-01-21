@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_MESSAGING_TRANSFERABLE_MESSAGE_MOJOM_TRAITS_H_
 
 #include "skia/public/mojom/bitmap_skbitmap_mojom_traits.h"
+#include "third_party/blink/public/common/messaging/accelerated_static_bitmap_image_mojom_traits.h"
 #include "third_party/blink/public/common/messaging/cloneable_message_mojom_traits.h"
 #include "third_party/blink/public/common/messaging/message_port_descriptor_mojom_traits.h"
 #include "third_party/blink/public/common/messaging/task_attribution_id_mojom_traits.h"
@@ -39,9 +40,9 @@ struct BLINK_COMMON_EXPORT
     return std::move(input.array_buffer_contents_array);
   }
 
-  static const std::vector<SkBitmap>& image_bitmap_contents_array(
-      blink::TransferableMessage& input) {
-    return input.image_bitmap_contents_array;
+  static std::vector<blink::mojom::SerializedStaticBitmapImagePtr>
+  image_bitmap_contents_array(blink::TransferableMessage& input) {
+    return std::move(input.image_bitmap_contents_array);
   }
 
   static const blink::mojom::UserActivationSnapshotPtr& user_activation(
@@ -54,12 +55,12 @@ struct BLINK_COMMON_EXPORT
     return input.delegated_capability;
   }
 
-  static absl::optional<blink::scheduler::TaskAttributionId> parent_task_id(
+  static std::optional<blink::scheduler::TaskAttributionId> task_state_id(
       blink::TransferableMessage& input) {
-    return input.parent_task_id
-               ? absl::make_optional(blink::scheduler::TaskAttributionId(
-                     input.parent_task_id.value()))
-               : absl::nullopt;
+    return input.task_state_id
+               ? std::make_optional(blink::scheduler::TaskAttributionId(
+                     input.task_state_id.value()))
+               : std::nullopt;
   }
 
   static bool Read(blink::mojom::TransferableMessage::DataView data,

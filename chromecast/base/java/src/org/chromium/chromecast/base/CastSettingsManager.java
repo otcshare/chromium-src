@@ -15,13 +15,9 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Log;
 
-/**
- * Manager for Cast settings.
- */
+/** Manager for Cast settings. */
 public final class CastSettingsManager {
     private static final String TAG = "CastSettingsManager";
-
-    private static final String PREFS_FILE_NAME = "CastSettings";
 
     /** The default device name, which is the model name. */
     private static final String DEFAULT_DEVICE_NAME = Build.MODEL;
@@ -31,21 +27,19 @@ public final class CastSettingsManager {
 
     private final ContentResolver mContentResolver;
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
-    ContentObserver mDeviceNameObserver;
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
-    ContentObserver mIsDeviceProvisionedObserver;
+    @VisibleForTesting ContentObserver mDeviceNameObserver;
+    @VisibleForTesting ContentObserver mIsDeviceProvisionedObserver;
 
     /**
-     * Can be implemented to receive notifications from a CastSettingsManager instance when
-     * settings have changed.
+     * Can be implemented to receive notifications from a CastSettingsManager instance when settings
+     * have changed.
      */
     public static class OnSettingChangedListener {
         public void onCastEnabledChanged(boolean enabled) {}
         public void onDeviceNameChanged(String deviceName) {}
     }
 
-    private OnSettingChangedListener mListener;
+    private final OnSettingChangedListener mListener;
 
     /**
      * Creates a fully-featured CastSettingsManager instance. Will fail if called from a
@@ -62,27 +56,30 @@ public final class CastSettingsManager {
         mContentResolver = contentResolver;
         mListener = listener;
 
-        mDeviceNameObserver = new ContentObserver(new Handler()) {
-            @Override
-            public void onChange(boolean selfChange) {
-                mListener.onDeviceNameChanged(getDeviceName());
-            }
-        };
-        // TODO(crbug.com/635567): Fix lint properly.
+        mDeviceNameObserver =
+                new ContentObserver(new Handler()) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        mListener.onDeviceNameChanged(getDeviceName());
+                    }
+                };
+        // TODO(crbug.com/40479664): Fix lint properly.
         mContentResolver.registerContentObserver(
                 Settings.Global.getUriFor(DEVICE_NAME_SETTING_KEY), true, mDeviceNameObserver);
 
         if (!isCastEnabled()) {
-            mIsDeviceProvisionedObserver = new ContentObserver(new Handler()) {
-                @Override
-                public void onChange(boolean selfChange) {
-                    Log.d(TAG, "Device provisioned");
-                    mListener.onCastEnabledChanged(isCastEnabled());
-                }
-            };
-            // TODO(crbug.com/635567): Fix lint properly.
+            mIsDeviceProvisionedObserver =
+                    new ContentObserver(new Handler()) {
+                        @Override
+                        public void onChange(boolean selfChange) {
+                            Log.d(TAG, "Device provisioned");
+                            mListener.onCastEnabledChanged(isCastEnabled());
+                        }
+                    };
+            // TODO(crbug.com/40479664): Fix lint properly.
             mContentResolver.registerContentObserver(
-                    Settings.Global.getUriFor(DEVICE_PROVISIONED_SETTING_KEY), true,
+                    Settings.Global.getUriFor(DEVICE_PROVISIONED_SETTING_KEY),
+                    true,
                     mIsDeviceProvisionedObserver);
         }
     }
@@ -99,15 +96,13 @@ public final class CastSettingsManager {
 
     public boolean isCastEnabled() {
         // However, Cast is disabled until the device is provisioned (see b/18950240).
-        // TODO(crbug.com/635567): Fix lint properly.
-        return Settings.Global.getInt(
-                mContentResolver, DEVICE_PROVISIONED_SETTING_KEY, 0) == 1;
+        // TODO(crbug.com/40479664): Fix lint properly.
+        return Settings.Global.getInt(mContentResolver, DEVICE_PROVISIONED_SETTING_KEY, 0) == 1;
     }
 
     public String getDeviceName() {
-        // TODO(crbug.com/635567): Fix lint properly.
+        // TODO(crbug.com/40479664): Fix lint properly.
         String deviceName = Settings.Global.getString(mContentResolver, DEVICE_NAME_SETTING_KEY);
         return (deviceName != null) ? deviceName : DEFAULT_DEVICE_NAME;
     }
-
 }

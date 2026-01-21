@@ -18,6 +18,7 @@
 #include "components/services/storage/shared_storage/shared_storage_database.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/schemeful_site.h"
 #include "url/origin.h"
 
 namespace base {
@@ -35,10 +36,10 @@ using StorageKeyPolicyMatcherFunction =
 using InitStatus = SharedStorageDatabase::InitStatus;
 using SetBehavior = SharedStorageDatabase::SetBehavior;
 using OperationResult = SharedStorageDatabase::OperationResult;
+using BatchUpdateResult = SharedStorageDatabase::BatchUpdateResult;
 using GetResult = SharedStorageDatabase::GetResult;
 using BudgetResult = SharedStorageDatabase::BudgetResult;
 using TimeResult = SharedStorageDatabase::TimeResult;
-using MemoryPressureLevel = base::MemoryPressureListener::MemoryPressureLevel;
 
 // For categorizing test databases.
 enum class SharedStorageTestDBType {
@@ -76,15 +77,28 @@ class TestDatabaseOperationReceiver {
       DB_GET_NUM_BUDGET = 20,
       DB_GET_TOTAL_NUM_BUDGET = 21,
       DB_GET_CREATION_TIME = 22,
+      DB_BATCH_UPDATE = 23,
     } type;
     url::Origin origin;
     std::vector<std::u16string> params;
+    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+        batch_update_methods;
+
     explicit DBOperation(Type type);
     DBOperation(Type type, url::Origin origin);
+    DBOperation(Type type, net::SchemefulSite site);
     DBOperation(Type type,
                 url::Origin origin,
                 std::vector<std::u16string> params);
+    DBOperation(Type type,
+                net::SchemefulSite site,
+                std::vector<std::u16string> params);
     DBOperation(Type type, std::vector<std::u16string> params);
+    DBOperation(
+        Type type,
+        url::Origin origin,
+        std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+            batch_update_methods);
     DBOperation(const DBOperation&);
     ~DBOperation();
     bool operator==(const DBOperation& operation) const;
@@ -102,7 +116,8 @@ class TestDatabaseOperationReceiver {
   static std::u16string SerializeTimeDelta(base::TimeDelta delta);
   static std::u16string SerializeBool(bool b);
   static std::u16string SerializeSetBehavior(SetBehavior behavior);
-  static std::u16string SerializeMemoryPressureLevel(MemoryPressureLevel level);
+  static std::u16string SerializeMemoryPressureLevel(
+      base::MemoryPressureLevel level);
 
   bool is_finished() const { return finished_; }
 
@@ -139,6 +154,13 @@ class TestDatabaseOperationReceiver {
   base::OnceCallback<void(OperationResult)> MakeOperationResultCallback(
       const DBOperation& current_operation,
       OperationResult* out_result);
+
+  void BatchUpdateResultCallbackBase(const DBOperation& current_operation,
+                                     BatchUpdateResult* out_result,
+                                     BatchUpdateResult result);
+  base::OnceCallback<void(BatchUpdateResult)> MakeBatchUpdateResultCallback(
+      const DBOperation& current_operation,
+      BatchUpdateResult* out_result);
 
   void IntCallbackBase(const DBOperation& current_operation,
                        int* out_length,
@@ -212,7 +234,7 @@ class StorageKeyPolicyMatcherFunctionUtility {
 };
 
 class TestSharedStorageEntriesListener
-    : public shared_storage_worklet::mojom::SharedStorageEntriesListener {
+    : public blink::mojom::SharedStorageEntriesListener {
  public:
   explicit TestSharedStorageEntriesListener(
       scoped_refptr<base::SequencedTaskRunner> task_runner);
@@ -221,13 +243,11 @@ class TestSharedStorageEntriesListener
   void DidReadEntries(
       bool success,
       const std::string& error_message,
-      std::vector<shared_storage_worklet::mojom::SharedStorageKeyAndOrValuePtr>
-          entries,
+      std::vector<blink::mojom::SharedStorageKeyAndOrValuePtr> entries,
       bool has_more_entries,
       int total_queued_to_send) override;
 
-  [[nodiscard]] mojo::PendingRemote<
-      shared_storage_worklet::mojom::SharedStorageEntriesListener>
+  [[nodiscard]] mojo::PendingRemote<blink::mojom::SharedStorageEntriesListener>
   BindNewPipeAndPassRemote();
 
   void Flush();
@@ -244,12 +264,10 @@ class TestSharedStorageEntriesListener
   TakeEntries();
 
  private:
-  mojo::Receiver<shared_storage_worklet::mojom::SharedStorageEntriesListener>
-      receiver_{this};
+  mojo::Receiver<blink::mojom::SharedStorageEntriesListener> receiver_{this};
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   std::string error_message_;
-  std::deque<shared_storage_worklet::mojom::SharedStorageKeyAndOrValuePtr>
-      entries_;
+  std::deque<blink::mojom::SharedStorageKeyAndOrValuePtr> entries_;
   std::vector<bool> has_more_;
 };
 
@@ -261,8 +279,7 @@ class TestSharedStorageEntriesListenerUtility {
 
   [[nodiscard]] size_t RegisterListener();
 
-  [[nodiscard]] mojo::PendingRemote<
-      shared_storage_worklet::mojom::SharedStorageEntriesListener>
+  [[nodiscard]] mojo::PendingRemote<blink::mojom::SharedStorageEntriesListener>
   BindNewPipeAndPassRemoteForId(size_t id);
 
   void FlushForId(size_t id);

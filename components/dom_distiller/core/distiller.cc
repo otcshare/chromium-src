@@ -4,22 +4,21 @@
 
 #include "components/dom_distiller/core/distiller.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/values.h"
 #include "build/build_config.h"
 #include "components/dom_distiller/core/distiller_page.h"
 #include "components/dom_distiller/core/distiller_url_fetcher.h"
@@ -39,19 +38,18 @@ DistillerFactoryImpl::DistillerFactoryImpl(
     : distiller_url_fetcher_factory_(std::move(distiller_url_fetcher_factory)),
       dom_distiller_options_(dom_distiller_options) {}
 
-DistillerFactoryImpl::~DistillerFactoryImpl() {}
+DistillerFactoryImpl::~DistillerFactoryImpl() = default;
 
-std::unique_ptr<Distiller> DistillerFactoryImpl::CreateDistillerForUrl(
-    const GURL& unused) {
+std::unique_ptr<Distiller> DistillerFactoryImpl::CreateDistiller() {
   // This default implementation has the same behavior for all URLs.
   std::unique_ptr<DistillerImpl> distiller(new DistillerImpl(
       *distiller_url_fetcher_factory_, dom_distiller_options_));
   return std::move(distiller);
 }
 
-DistillerImpl::DistilledPageData::DistilledPageData() {}
+DistillerImpl::DistilledPageData::DistilledPageData() = default;
 
-DistillerImpl::DistilledPageData::~DistilledPageData() {}
+DistillerImpl::DistilledPageData::~DistilledPageData() = default;
 
 DistillerImpl::DistillerImpl(
     const DistillerURLFetcherFactory& distiller_url_fetcher_factory,
@@ -63,15 +61,6 @@ DistillerImpl::DistillerImpl(
 
 DistillerImpl::~DistillerImpl() {
   DCHECK(destruction_allowed_);
-}
-
-bool DistillerImpl::DoesFetchImages() {
-// Only iOS makes use of the fetched image data.
-#if BUILDFLAG(IS_IOS)
-  return true;
-#else
-  return false;
-#endif
 }
 
 void DistillerImpl::SetMaxNumPagesInArticle(size_t max_num_pages) {
@@ -126,7 +115,7 @@ void DistillerImpl::DistillNextPage() {
   if (!waiting_pages_.empty()) {
     auto front = waiting_pages_.begin();
     int page_num = front->first;
-    const GURL url = front->second;
+    const GURL url = std::move(front->second);
 
     waiting_pages_.erase(front);
     DCHECK(url.is_valid());
@@ -157,14 +146,6 @@ void DistillerImpl::OnPageDistillationFinished(
     return;
   }
 
-  if (distiller_result->has_statistics_info() && page_num == 0) {
-    if (distiller_result->statistics_info().has_word_count()) {
-      UMA_HISTOGRAM_CUSTOM_COUNTS(
-          "DomDistiller.Statistics.FirstPageWordCount",
-          distiller_result->statistics_info().word_count(), 1, 4000, 50);
-    }
-  }
-
   DCHECK(distiller_result);
   CHECK_LT(started_pages_index_[page_num], pages_.size())
       << "started_pages_index_[" << page_num
@@ -188,47 +169,6 @@ void DistillerImpl::OnPageDistillationFinished(
         distiller_result->distilled_content().html());
     if (!distiller_result->distilled_content().html().empty()) {
       content_empty = false;
-    }
-  }
-
-  if (distiller_result->has_timing_info()) {
-    const proto::TimingInfo& distiller_timing_info =
-        distiller_result->timing_info();
-    DistilledPageProto::TimingInfo timing_info;
-    if (distiller_timing_info.has_markup_parsing_time()) {
-      timing_info.set_name("markup_parsing");
-      timing_info.set_time(distiller_timing_info.markup_parsing_time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
-    }
-
-    if (distiller_timing_info.has_document_construction_time()) {
-      timing_info.set_name("document_construction");
-      timing_info.set_time(distiller_timing_info.document_construction_time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
-    }
-
-    if (distiller_timing_info.has_article_processing_time()) {
-      timing_info.set_name("article_processing");
-      timing_info.set_time(distiller_timing_info.article_processing_time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
-    }
-
-    if (distiller_timing_info.has_formatting_time()) {
-      timing_info.set_name("formatting");
-      timing_info.set_time(distiller_timing_info.formatting_time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
-    }
-
-    if (distiller_timing_info.has_total_time()) {
-      timing_info.set_name("total");
-      timing_info.set_time(distiller_timing_info.total_time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
-    }
-
-    for (int i = 0; i < distiller_timing_info.other_times_size(); i++) {
-      timing_info.set_name(distiller_timing_info.other_times(i).name());
-      timing_info.set_time(distiller_timing_info.other_times(i).time());
-      *page_data->distilled_page_proto->data.add_timing_info() = timing_info;
     }
   }
 
@@ -291,6 +231,10 @@ void DistillerImpl::OnPageDistillationFinished(
                     distiller_result->content_images(img_num).url());
   }
 
+  base::UmaHistogramCounts100000(
+      "DomDistiller.WordCount",
+      distiller_result->statistics_info().word_count());
+
   AddPageIfDone(page_num);
   DistillNextPage();
 }
@@ -303,7 +247,7 @@ void DistillerImpl::MaybeFetchImage(int page_num,
   DCHECK(started_pages_index_.find(page_num) != started_pages_index_.end());
   DistilledPageData* page_data = GetPageAtIndex(started_pages_index_[page_num]);
 
-  if (!DoesFetchImages()) {
+  if (!distiller_page_->ShouldFetchOfflineData()) {
     DistilledPageProto_Image* image =
         page_data->distilled_page_proto->data.add_image();
     image->set_name(image_id);
@@ -334,16 +278,15 @@ void DistillerImpl::OnFetchImageDone(int page_num,
   DCHECK(page_data->distilled_page_proto);
   DCHECK(url_fetcher);
   auto fetcher_it =
-      base::ranges::find(page_data->image_fetchers_, url_fetcher,
-                         &std::unique_ptr<DistillerURLFetcher>::get);
+      std::ranges::find(page_data->image_fetchers_, url_fetcher,
+                        &std::unique_ptr<DistillerURLFetcher>::get);
 
   DCHECK(fetcher_it != page_data->image_fetchers_.end());
   // Delete the |url_fetcher| by DeleteSoon since the OnFetchImageDone
   // callback is invoked by the |url_fetcher|.
-  fetcher_it->release();
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, std::move(*fetcher_it));
   page_data->image_fetchers_.erase(fetcher_it);
-  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
-                                                                url_fetcher);
 
   DistilledPageProto_Image* image =
       page_data->distilled_page_proto->data.add_image();

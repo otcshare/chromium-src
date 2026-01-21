@@ -8,13 +8,10 @@
 #include <string>
 
 #include "ash/app_list/views/apps_grid_view.h"
+#include "base/memory/raw_ptr.h"
 
 namespace gfx {
 class Rect;
-}
-
-namespace ui {
-class Layer;
 }
 
 namespace views {
@@ -77,17 +74,7 @@ class AppsGridViewTestApi {
   // reordering animation to complete.
   void FireReorderTimerAndWaitForAnimationDone();
 
-  // Fires the timer for reparenting items from a folder apps grid.
-  void FireFolderItemReparentTimer();
-
   void Update() { view_->Update(); }
-
-  // Returns the drag icon proxy view's bounds in the apps grid coordinates.
-  // Returns empty bounds if the icon proxy has not been created.
-  gfx::Rect GetDragIconBoundsInAppsGridView();
-
-  // Returns the layer used by the app drag icon proxy.
-  ui::Layer* GetDragIconLayer();
 
   // Moves the app list item at `source_index` to `target_index` by drag and
   // drop. `source_index` and `target_index` are view indices in `view_`.
@@ -96,7 +83,7 @@ class AppsGridViewTestApi {
   AppListItemList* GetItemList() { return view_->item_list_; }
 
  private:
-  AppsGridView* view_;
+  raw_ptr<AppsGridView, DanglingUntriaged> view_;
 };
 
 }  // namespace test

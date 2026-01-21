@@ -5,20 +5,20 @@
 #ifndef COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_PREFERRED_APPS_IMPL_H_
 #define COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_PREFERRED_APPS_IMPL_H_
 
-#include <map>
-
-#include "base/callback.h"
 #include "base/containers/queue.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
 #include "components/services/app_service/public/cpp/preferred_app.h"
 #include "components/services/app_service/public/cpp/preferred_apps_list.h"
+#include "components/services/app_service/public/cpp/preferred_apps_list_handle.h"
 
 namespace apps {
 
@@ -35,26 +35,11 @@ class PreferredAppsImpl {
     Host& operator=(const Host&) = delete;
     ~Host() = default;
 
-    virtual void InitializePreferredAppsForAllSubscribers() = 0;
-
-    virtual void OnPreferredAppsChanged(PreferredAppChangesPtr changes) = 0;
-
-    virtual void OnPreferredAppSet(
-        const std::string& app_id,
-        IntentFilterPtr intent_filter,
-        IntentPtr intent,
-        ReplacedAppPreferences replaced_app_preferences) = 0;
-
+    // Notifies the host that the supported links preference for a particular
+    // `app_id` was enabled/disabled. Used by the host to notify the app
+    // publisher (if any) of the change.
     virtual void OnSupportedLinksPreferenceChanged(const std::string& app_id,
                                                    bool open_in_app) = 0;
-
-    virtual void OnSupportedLinksPreferenceChanged(AppType app_type,
-                                                   const std::string& app_id,
-                                                   bool open_in_app) = 0;
-
-    // Returns true if there is a publisher for `app_type`. Otherwise, returns
-    // false.
-    virtual bool HasPublisher(AppType app_type) = 0;
   };
 
   PreferredAppsImpl(
@@ -68,19 +53,18 @@ class PreferredAppsImpl {
 
   ~PreferredAppsImpl();
 
-  void AddPreferredApp(AppType app_type,
-                       const std::string& app_id,
-                       IntentFilterPtr intent_filter,
-                       IntentPtr intent,
-                       bool from_publisher);
   void RemovePreferredApp(const std::string& app_id);
-  void SetSupportedLinksPreference(AppType app_type,
-                                   const std::string& app_id,
+  void SetSupportedLinksPreference(const std::string& app_id,
                                    IntentFilters all_link_filters);
-  void RemoveSupportedLinksPreference(AppType app_type,
-                                      const std::string& app_id);
+#if BUILDFLAG(IS_CHROMEOS)
+  void SetProtocolLinkPreference(const std::string& app_id,
+                                 IntentFilterPtr protocol_link_filter);
+  void RemoveProtocolLinkFilters(const std::string& app_id,
+                                 IntentFilters protocol_link_filters);
+#endif
+  void RemoveSupportedLinksPreference(const std::string& app_id);
 
-  const PreferredAppsList& preferred_apps_list() const {
+  PreferredAppsListHandle& preferred_apps_list() {
     return preferred_apps_list_;
   }
 
@@ -105,17 +89,16 @@ class PreferredAppsImpl {
   // be run immediately if preferred apps are already initialized.
   void RunAfterPreferredAppsReady(base::OnceClosure task);
 
-  void AddPreferredAppImpl(AppType app_type,
-                           const std::string& app_id,
-                           IntentFilterPtr intent_filter,
-                           IntentPtr intent,
-                           bool from_publisher);
   void RemovePreferredAppImpl(const std::string& app_id);
-  void SetSupportedLinksPreferenceImpl(AppType app_type,
-                                       const std::string& app_id,
+  void SetSupportedLinksPreferenceImpl(const std::string& app_id,
                                        IntentFilters all_link_filters);
-  void RemoveSupportedLinksPreferenceImpl(AppType app_type,
-                                          const std::string& app_id);
+#if BUILDFLAG(IS_CHROMEOS)
+  void SetProtocolLinkPreferenceImpl(const std::string& app_id,
+                                     IntentFilterPtr protocol_link_filter);
+  void RemoveProtocolLinkFiltersImpl(const std::string& app_id,
+                                     IntentFilters protocol_link_filters);
+#endif
+  void RemoveSupportedLinksPreferenceImpl(const std::string& app_id);
 
   // `host_` owns `this`.
   raw_ptr<Host> host_;
@@ -140,6 +123,8 @@ class PreferredAppsImpl {
   base::OnceClosure write_completed_for_testing_;
 
   base::queue<base::OnceClosure> pending_preferred_apps_tasks_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<PreferredAppsImpl> weak_ptr_factory_{this};
 };

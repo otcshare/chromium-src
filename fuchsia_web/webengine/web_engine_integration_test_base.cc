@@ -5,6 +5,9 @@
 #include "fuchsia_web/webengine/web_engine_integration_test_base.h"
 
 #include <lib/fdio/directory.h>
+#include <zircon/status.h>
+
+#include <string_view>
 
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -12,7 +15,6 @@
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "net/test/embedded_test_server/default_handlers.h"
 
@@ -91,7 +93,8 @@ void WebEngineIntegrationTestBase::CreateContext(
   CHECK(!context_);
   GetContextProvider()->Create(std::move(context_params),
                                context_.NewRequest());
-  context_.set_error_handler([](zx_status_t status) { ADD_FAILURE(); });
+  context_.set_error_handler(
+      [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
 }
 
 void WebEngineIntegrationTestBase::CreateContextAndFrame(
@@ -101,7 +104,8 @@ void WebEngineIntegrationTestBase::CreateContextAndFrame(
   CreateContext(std::move(context_params));
 
   context_->CreateFrame(frame_.NewRequest());
-  frame_.set_error_handler([](zx_status_t status) { ADD_FAILURE(); });
+  frame_.set_error_handler(
+      [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
 
   CreateNavigationListener();
 }
@@ -112,7 +116,8 @@ void WebEngineIntegrationTestBase::CreateFrameWithParams(
   CHECK(context_);
 
   context_->CreateFrameWithParams(std::move(frame_params), frame_.NewRequest());
-  frame_.set_error_handler([](zx_status_t status) { ADD_FAILURE(); });
+  frame_.set_error_handler(
+      [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
 
   CreateNavigationListener();
 }
@@ -145,14 +150,14 @@ void WebEngineIntegrationTestBase::CreateContextAndFrameAndLoadUrl(
 }
 
 void WebEngineIntegrationTestBase::LoadUrlAndExpectResponse(
-    base::StringPiece url,
+    std::string_view url,
     fuchsia::web::LoadUrlParams load_url_params) {
   // Connect a new NavigationController to ensure that LoadUrl() is processed
   // after all other messages previously sent to the frame.
   fuchsia::web::NavigationControllerPtr navigation_controller;
   frame_->GetNavigationController(navigation_controller.NewRequest());
   navigation_controller.set_error_handler(
-      [](zx_status_t status) { ADD_FAILURE(); });
+      [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
   ASSERT_TRUE(::LoadUrlAndExpectResponse(navigation_controller.get(),
                                          std::move(load_url_params), url));
 }
@@ -167,20 +172,20 @@ void WebEngineIntegrationTestBase::GrantPermission(
 }
 
 std::string WebEngineIntegrationTestBase::ExecuteJavaScriptWithStringResult(
-    base::StringPiece script) {
-  absl::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
+    std::string_view script) {
+  std::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
   return value ? value->GetString() : std::string();
 }
 
 double WebEngineIntegrationTestBase::ExecuteJavaScriptWithDoubleResult(
-    base::StringPiece script) {
-  absl::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
+    std::string_view script) {
+  std::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
   return value ? value->GetDouble() : 0.0;
 }
 
 bool WebEngineIntegrationTestBase::ExecuteJavaScriptWithBoolResult(
-    base::StringPiece script) {
-  absl::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
+    std::string_view script) {
+  std::optional<base::Value> value = ExecuteJavaScript(frame_.get(), script);
   return value ? value->GetBool() : false;
 }
 

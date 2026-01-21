@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -61,13 +61,7 @@ class SearchEngineDelegateImpl
 
   url::Origin GetDSEOrigin() override {
     if (template_url_service_) {
-      const TemplateURL* template_url =
-          template_url_service_->GetDefaultSearchProvider();
-      if (template_url) {
-        GURL search_url = template_url->GenerateSearchURL(
-            template_url_service_->search_terms_data());
-        return url::Origin::Create(search_url);
-      }
+      return template_url_service_->GetDefaultSearchProviderOrigin();
     }
 
     return url::Origin();
@@ -104,21 +98,30 @@ SearchPermissionsService::Factory::GetInstance() {
 }
 
 SearchPermissionsService::Factory::Factory()
-    : ProfileKeyedServiceFactory("SearchPermissionsService") {
+    : ProfileKeyedServiceFactory(
+          "SearchPermissionsService",
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              .Build()) {
   DependsOn(HostContentSettingsMapFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
 }
 
-SearchPermissionsService::Factory::~Factory() {}
+SearchPermissionsService::Factory::~Factory() = default;
 
 bool SearchPermissionsService::Factory::ServiceIsCreatedWithBrowserContext()
     const {
   return true;
 }
 
-KeyedService* SearchPermissionsService::Factory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+SearchPermissionsService::Factory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new SearchPermissionsService(Profile::FromBrowserContext(context));
+  return std::make_unique<SearchPermissionsService>(
+      Profile::FromBrowserContext(context));
 }
 
 void SearchPermissionsService::Factory::RegisterProfilePrefs(
@@ -150,7 +153,7 @@ void SearchPermissionsService::Shutdown() {
   delegate_.reset();
 }
 
-SearchPermissionsService::~SearchPermissionsService() {}
+SearchPermissionsService::~SearchPermissionsService() = default;
 
 ContentSetting SearchPermissionsService::RestoreOldSettingAndReturnPrevious(
     const GURL& dse_origin,
@@ -230,9 +233,9 @@ SearchPermissionsService::PrefValue SearchPermissionsService::GetDSEPref() {
   PrefValue pref;
   const std::string* dse_name = dict.FindString(kDSENameKey);
   const std::string* dse_origin = dict.FindString(kDSEOriginKey);
-  absl::optional<int> geolocation_setting_to_restore =
+  std::optional<int> geolocation_setting_to_restore =
       dict.FindInt(kDSEGeolocationSettingKey);
-  absl::optional<int> notifications_setting_to_restore =
+  std::optional<int> notifications_setting_to_restore =
       dict.FindInt(kDSENotificationsSettingKey);
 
   if (dse_name && dse_origin && geolocation_setting_to_restore &&

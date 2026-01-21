@@ -7,27 +7,43 @@
 
 #include <deque>
 #include <memory>
+#include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
-#include "components/services/app_service/public/cpp/url_handler_info.h"
-#include "components/webapps/services/web_app_origin_association/public/mojom/web_app_origin_association_parser.mojom.h"
+#include "chrome/browser/web_applications/proto/web_app.pb.h"
+#include "chrome/browser/web_applications/scope_extension_info.h"
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
 #include "mojo/public/cpp/bindings/remote.h"
-
-class GURL;
+#include "third_party/blink/public/common/manifest/manifest.h"
+#include "url/origin.h"
 
 namespace web_app {
 
-// Callback type that sends back the valid |url_handlers|.
+// Result of fetching, parsing, and validating web app origin association files.
+struct OriginAssociations {
+  OriginAssociations();
+  OriginAssociations(const OriginAssociations&);
+  OriginAssociations(OriginAssociations&&);
+  OriginAssociations& operator=(const OriginAssociations&);
+  OriginAssociations& operator=(OriginAssociations&&);
+  ~OriginAssociations();
+
+  bool operator==(const OriginAssociations&) const;
+
+  ScopeExtensions scope_extensions;
+  std::vector<web_app::proto::WebAppMigrationSource> migration_sources;
+};
+
+// Callback type that sends back the valid |origin_associations|.
 using OnDidGetWebAppOriginAssociations =
-    base::OnceCallback<void(apps::UrlHandlers url_handlers)>;
+    base::OnceCallback<void(OriginAssociations origin_associations)>;
 
 // Fetch, parse, and validate web app origin association files.
 class WebAppOriginAssociationManager {
  public:
-  // Does the fetching, parsing, and validation work for a batch of url
-  // handlers.
+  // Does the fetching, parsing, and validation work for a batch of scope
+  // extensions.
   class Task;
 
   WebAppOriginAssociationManager();
@@ -38,17 +54,17 @@ class WebAppOriginAssociationManager {
   virtual ~WebAppOriginAssociationManager();
 
   virtual void GetWebAppOriginAssociations(
-      const GURL& manifest_url,
-      apps::UrlHandlers url_handlers,
+      const GURL& web_app_identity,
+      OriginAssociations origin_associations,
       OnDidGetWebAppOriginAssociations callback);
+
   void SetFetcherForTest(
       std::unique_ptr<webapps::WebAppOriginAssociationFetcher> fetcher);
+  webapps::WebAppOriginAssociationFetcher& GetFetcherForTest();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(WebAppOriginAssociationManagerTest, RunTasks);
 
-  const mojo::Remote<webapps::mojom::WebAppOriginAssociationParser>&
-  GetParser();
   webapps::WebAppOriginAssociationFetcher& GetFetcher();
   void MaybeStartNextTask();
   void OnTaskCompleted();
@@ -56,7 +72,6 @@ class WebAppOriginAssociationManager {
   std::deque<std::unique_ptr<Task>> pending_tasks_;
   bool task_in_progress_ = false;
 
-  mojo::Remote<webapps::mojom::WebAppOriginAssociationParser> parser_;
   std::unique_ptr<webapps::WebAppOriginAssociationFetcher> fetcher_;
   base::WeakPtrFactory<WebAppOriginAssociationManager> weak_ptr_factory_{this};
 };

@@ -4,13 +4,51 @@
 
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "media/media_buildflags.h"
 #include "net/base/mime_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/buildflags.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace blink {
+
+TEST(MimeUtilJsonMimeTypeTest, IsJSON) {
+  EXPECT_TRUE(IsJSONMimeType("application/json"));
+  EXPECT_TRUE(IsJSONMimeType("text/json"));
+  EXPECT_TRUE(IsJSONMimeType("application/blah+json"));
+  EXPECT_TRUE(IsJSONMimeType("Application/JSON"));
+  EXPECT_TRUE(IsJSONMimeType("Text/JSON"));
+  EXPECT_TRUE(IsJSONMimeType("application/json;x=1"));
+  EXPECT_TRUE(IsJSONMimeType("application/blah+json;x=1"));
+  EXPECT_TRUE(IsJSONMimeType("text/json;x=1"));
+
+  EXPECT_FALSE(IsJSONMimeType("json"));
+  EXPECT_FALSE(IsJSONMimeType("+json"));
+  EXPECT_FALSE(IsJSONMimeType("application/"));
+  EXPECT_FALSE(IsJSONMimeType("application/jsonabcd"));
+  EXPECT_FALSE(IsJSONMimeType("application/blahjson"));
+  EXPECT_FALSE(IsJSONMimeType("application/blah+jsonabcd"));
+  EXPECT_FALSE(IsJSONMimeType("application/foo+json bar"));
+  EXPECT_FALSE(IsJSONMimeType("application/foo+jsonbar;a=b"));
+  EXPECT_FALSE(IsJSONMimeType("application/json+blah"));
+  EXPECT_FALSE(IsJSONMimeType("application/problem+"));
+  EXPECT_FALSE(IsJSONMimeType("application/+"));
+  EXPECT_FALSE(IsJSONMimeType("text/html;+json"));
+  EXPECT_FALSE(IsJSONMimeType("text/html+json+xml"));
+  EXPECT_FALSE(IsJSONMimeType("text/json/json"));
+
+  EXPECT_TRUE(IsJSONMimeType("text/blah+json;x=1"));
+  EXPECT_TRUE(IsJSONMimeType("text/html+json"));
+  EXPECT_TRUE(IsJSONMimeType("image/svg+json"));
+
+  EXPECT_TRUE(IsJSONMimeType("text/hal+json"));
+  EXPECT_FALSE(IsJSONMimeType("te xt/hal+json"));
+  EXPECT_FALSE(IsJSONMimeType("text/ha l+json"));
+  EXPECT_FALSE(IsJSONMimeType("aplicación/hal+json"));
+  EXPECT_FALSE(IsJSONMimeType("text/halé+json"));
+}
 
 TEST(MimeUtilTest, LookupTypes) {
   EXPECT_FALSE(IsUnsupportedTextMimeType("text/banana"));
@@ -18,7 +56,6 @@ TEST(MimeUtilTest, LookupTypes) {
 
   EXPECT_TRUE(IsSupportedImageMimeType("image/jpeg"));
   EXPECT_TRUE(IsSupportedImageMimeType("Image/JPEG"));
-  EXPECT_FALSE(IsSupportedImageMimeType("image/jxl"));
   EXPECT_EQ(IsSupportedImageMimeType("image/avif"),
             BUILDFLAG(ENABLE_AV1_DECODER));
   EXPECT_FALSE(IsSupportedImageMimeType("image/lolcat"));
@@ -55,26 +92,22 @@ TEST(MimeUtilTest, LookupTypes) {
   EXPECT_FALSE(IsSupportedMimeType("Application/X-JSON"));
   EXPECT_FALSE(IsSupportedNonImageMimeType("application/vnd.doc;x=y+json"));
   EXPECT_FALSE(IsSupportedNonImageMimeType("Application/VND.DOC;X=Y+JSON"));
-
-  EXPECT_TRUE(IsJSONMimeType("application/json"));
-  EXPECT_TRUE(IsJSONMimeType("text/json"));
-  EXPECT_TRUE(IsJSONMimeType("application/blah+json"));
-  EXPECT_TRUE(IsJSONMimeType("Application/JSON"));
-  EXPECT_TRUE(IsJSONMimeType("Text/JSON"));
-  EXPECT_TRUE(IsJSONMimeType("application/json;x=1"));
-  EXPECT_TRUE(IsJSONMimeType("application/blah+json;x=1"));
-  EXPECT_TRUE(IsJSONMimeType("text/json;x=1"));
-  EXPECT_FALSE(IsJSONMimeType("text/blah+json;x=1"));
-  EXPECT_FALSE(IsJSONMimeType("json"));
-  EXPECT_FALSE(IsJSONMimeType("+json"));
-  EXPECT_FALSE(IsJSONMimeType("application/"));
-  EXPECT_FALSE(IsJSONMimeType("application/jsonabcd"));
-  EXPECT_FALSE(IsJSONMimeType("application/blahjson"));
-  EXPECT_FALSE(IsJSONMimeType("application/blah+jsonabcd"));
-  EXPECT_FALSE(IsJSONMimeType("application/foo+json bar"));
-  EXPECT_FALSE(IsJSONMimeType("application/foo+jsonbar;a=b"));
-  EXPECT_FALSE(IsJSONMimeType("application/json+blah"));
-  EXPECT_FALSE(IsJSONMimeType("image/svg+json"));
 }
+
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+class JxlFeatureFlagTest : public testing::TestWithParam<bool> {};
+
+TEST_P(JxlFeatureFlagTest, JxlSupportMatchesFeatureFlag) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatureState(blink::features::kJXLImageFormat, GetParam());
+  EXPECT_EQ(IsSupportedImageMimeType("image/jxl"), GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(MimeUtilTest, JxlFeatureFlagTest, testing::Bool());
+#else
+TEST(MimeUtilTest, JxlNotSupportedWhenDecoderDisabled) {
+  EXPECT_FALSE(IsSupportedImageMimeType("image/jxl"));
+}
+#endif
 
 }  // namespace blink

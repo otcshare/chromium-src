@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -32,9 +32,6 @@ std::unique_ptr<WebThreadScheduler> CreateWebMainThreadSchedulerForTests();
 // methods.
 std::unique_ptr<WebMockThreadScheduler>
 CreateMockWebMainThreadSchedulerForTests();
-
-void RunIdleTasksForTesting(WebThreadScheduler* scheduler,
-                            base::OnceClosure callback);
 
 // Returns a SequencedTaskRunner. This implementation is same as
 // base::SequencedTaskRunner::GetCurrentDefault(), but this is intended to be

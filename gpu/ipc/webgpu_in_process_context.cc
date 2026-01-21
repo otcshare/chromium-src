@@ -29,7 +29,7 @@ WebGPUInProcessContext::~WebGPUInProcessContext() {
   // Trigger any pending lost contexts. First do a full sync between client
   // and service threads. Then execute any pending tasks.
   if (webgpu_implementation_) {
-    // TODO(crbug.com/868192): do the equivalent of a glFinish here?
+    // TODO(crbug.com/40586882): do the equivalent of a glFinish here?
     client_task_runner_->RunUntilIdle();
     webgpu_implementation_.reset();
   }
@@ -39,30 +39,24 @@ WebGPUInProcessContext::~WebGPUInProcessContext() {
 }
 
 ContextResult WebGPUInProcessContext::Initialize(
-    CommandBufferTaskExecutor* task_executor,
-    const ContextCreationAttribs& attribs,
-    const SharedMemoryLimits& memory_limits) {
-  DCHECK(attribs.context_type == CONTEXT_TYPE_WEBGPU);
-
-  if (attribs.context_type != CONTEXT_TYPE_WEBGPU ||
-      attribs.enable_raster_interface || attribs.enable_gles2_interface) {
-    return ContextResult::kFatalFailure;
-  }
+    CommandBufferTaskExecutor* task_executor) {
+  auto attribs = mojom::ContextCreationAttribs::NewWebgpu(
+      mojom::WebGPUCreationAttribs::New());
 
   client_task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
   command_buffer_ =
       std::make_unique<InProcessCommandBuffer>(task_executor, GURL());
 
-  auto result = command_buffer_->Initialize(attribs, client_task_runner_,
-                                            /*gr_shader_cache=*/nullptr,
-                                            /*activity_flags=*/nullptr);
+  auto result =
+      command_buffer_->Initialize(std::move(attribs), client_task_runner_,
+                                  /*gr_shader_cache=*/nullptr,
+                                  /*use_shader_cache_shm_count=*/nullptr);
   if (result != ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize InProcessCommmandBuffer";
     return result;
   }
 
-  // Check for consistency.
-  DCHECK(!attribs.bind_generates_resource);
+  const auto memory_limits = SharedMemoryLimits::ForWebGPUContext();
 
   // Create the WebGPUCmdHelper, which writes the command buffer protocol.
   auto webgpu_helper =

@@ -36,16 +36,13 @@ class ShellContentRendererClient : public content::ContentRendererClient {
   bool OverrideCreatePlugin(content::RenderFrame* render_frame,
                             const blink::WebPluginParams& params,
                             blink::WebPlugin** plugin) override;
-  blink::WebPlugin* CreatePluginReplacement(
-      content::RenderFrame* render_frame,
-      const base::FilePath& plugin_path) override;
   void WillSendRequest(blink::WebLocalFrame* frame,
                        ui::PageTransition transition_type,
-                       const blink::WebURL& url,
+                       const blink::WebURL& upstream_url,
+                       const blink::WebURL& target_url,
                        const net::SiteForCookies& site_for_cookies,
                        const url::Origin* initiator_origin,
                        GURL* new_url) override;
-  bool IsExternalPepperPlugin(const std::string& module_name) override;
   void RunScriptsAtDocumentStart(content::RenderFrame* render_frame) override;
   void RunScriptsAtDocumentEnd(content::RenderFrame* render_frame) override;
 

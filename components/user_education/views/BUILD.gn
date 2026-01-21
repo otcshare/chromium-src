@@ -7,13 +7,22 @@ import("//build/config/ui.gni")
 
 source_set("views") {
   sources = [
+    "custom_help_bubble_view.h",
     "help_bubble_delegate.h",
+    "help_bubble_event_relay.cc",
+    "help_bubble_event_relay.h",
     "help_bubble_factory_views.cc",
     "help_bubble_factory_views.h",
     "help_bubble_view.cc",
     "help_bubble_view.h",
+    "help_bubble_views.cc",
+    "help_bubble_views.h",
     "new_badge_label.cc",
     "new_badge_label.h",
+    "toggle_tracked_element_attention_utils.cc",
+    "toggle_tracked_element_attention_utils.h",
+    "view_subregion_anchor.cc",
+    "view_subregion_anchor.h",
   ]
 
   if (is_mac) {
@@ -23,21 +32,35 @@ source_set("views") {
     ]
   }
 
-  public_deps = [ "//components/user_education/common" ]
+  public_deps = [
+    "//components/user_education/common",
+    "//ui/base/mojom:ui_base_types",
+  ]
 
   deps = [
     "//base",
     "//components/strings",
+    "//components/user_education/common:events",
     "//components/variations",
     "//components/vector_icons",
     "//skia",
     "//third_party/abseil-cpp:absl",
     "//ui/accessibility",
-    "//ui/base",
+    "//ui/base/interaction",
     "//ui/color",
     "//ui/gfx",
+    "//ui/menus",
+    "//ui/strings:ui_strings",
     "//ui/views",
   ]
+
+  if (use_aura) {
+    deps += [ "//ui/aura" ]
+  }
+
+  if (is_mac) {
+    deps += [ "//components/remote_cocoa/app_shim" ]
+  }
 }
 
 source_set("test_support") {
@@ -52,7 +75,7 @@ source_set("test_support") {
     ":views",
     "//base",
     "//components/user_education/common",
-    "//ui/base",
+    "//ui/base/interaction",
     "//ui/color",
     "//ui/gfx",
     "//ui/views",
@@ -65,6 +88,7 @@ source_set("unit_tests") {
   sources = [
     "help_bubble_factory_views_unittest.cc",
     "help_bubble_view_unittest.cc",
+    "help_bubble_views_unittest.cc",
     "new_badge_label_unittest.cc",
   ]
 
@@ -76,6 +100,7 @@ source_set("unit_tests") {
     "//components/feature_engagement/public",
     "//components/strings",
     "//components/user_education/common",
+    "//components/user_education/common:events",
     "//components/user_education/test",
     "//components/variations",
     "//skia",
@@ -83,8 +108,7 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//third_party/abseil-cpp:absl",
     "//ui/accessibility",
-    "//ui/base",
-    "//ui/base:test_support",
+    "//ui/base/interaction:test_support",
     "//ui/color",
     "//ui/gfx",
     "//ui/views",

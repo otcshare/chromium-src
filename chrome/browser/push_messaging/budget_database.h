@@ -9,7 +9,7 @@
 #include <map>
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -166,7 +166,7 @@ class BudgetDatabase {
   // score of zero when |profile_| is off the record.
   double GetSiteEngagementScoreForOrigin(const url::Origin& origin) const;
 
-  raw_ptr<Profile> profile_;
+  base::WeakPtr<Profile> profile_;
 
   // The database for storing budget information.
   std::unique_ptr<leveldb_proto::ProtoDatabase<budget_service::Budget>> db_;

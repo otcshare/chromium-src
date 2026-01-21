@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -15,6 +15,7 @@
 #include "remoting/codec/scoped_vpx_codec.h"
 #include "remoting/codec/video_encoder_active_map.h"
 #include "remoting/codec/webrtc_video_encoder.h"
+#include "third_party/libvpx/source/libvpx/vpx/vp8cx.h"
 #include "third_party/libvpx/source/libvpx/vpx/vpx_encoder.h"
 
 typedef struct vpx_image vpx_image_t;
@@ -97,8 +98,9 @@ class WebrtcVideoEncoderVpx : public WebrtcVideoEncoder {
   // VPX image descriptor and pixel buffer.
   scoped_vpx_image image_;
 
-  // Active map used to optimize out processing of unchanged macroblocks.
-  VideoEncoderActiveMap active_map_;
+  // An active map is used to skip processing of unchanged macroblocks.
+  VideoEncoderActiveMap active_map_data_;
+  vpx_active_map_t active_map_;
   // TODO(joedow): Remove this flag after we're done with performance tuning.
   const bool use_active_map_ = true;
 

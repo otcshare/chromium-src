@@ -7,11 +7,12 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "net/http/http_request_headers.h"
 #include "net/log/net_log_with_source.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/network_context_client.mojom-forward.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 #include "services/network/trust_tokens/pending_trust_token_store.h"
 #include "services/network/trust_tokens/suitable_trust_token_origin.h"

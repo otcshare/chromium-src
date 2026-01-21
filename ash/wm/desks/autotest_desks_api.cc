@@ -11,8 +11,9 @@
 #include "ash/wm/desks/desks_histogram_enums.h"
 #include "ash/wm/desks/root_window_desk_switch_animator.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animation_sequence.h"
@@ -118,7 +119,7 @@ class ChainedDeskAnimationObserver : public ui::LayerAnimationObserver,
   const bool going_left_;
   const int target_index_;
   base::OnceClosure on_desk_animation_complete_;
-  ui::Layer* animation_layer_ = nullptr;
+  raw_ptr<ui::Layer> animation_layer_ = nullptr;
 };
 
 }  // namespace

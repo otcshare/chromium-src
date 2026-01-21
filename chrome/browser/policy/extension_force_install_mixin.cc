@@ -8,16 +8,17 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
@@ -26,11 +27,12 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/crx_file/crx_verifier.h"
 #include "components/crx_file/id_util.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
@@ -57,14 +59,14 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/zlib/google/zip.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
-#include "chrome/browser/ash/login/test/embedded_policy_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
+#include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #endif
 
@@ -141,8 +143,8 @@ bool ForceInstallPrefObserver::IsForceInstallPrefSet() const {
     // protects against, and there might be tests that simulate this scenario.
     return false;
   }
-  DCHECK_EQ(pref->GetType(), base::Value::Type::DICTIONARY);
-  return pref->GetValue()->FindKey(extension_id_) != nullptr;
+  DCHECK_EQ(pref->GetType(), base::Value::Type::DICT);
+  return pref->GetValue()->GetDict().contains(extension_id_);
 }
 
 // Implements waiting for the mixin's specified event.
@@ -270,7 +272,7 @@ std::string GenerateUpdateManifest(const extensions::ExtensionId& extension_id,
 bool ParseExtensionManifestData(const base::FilePath& extension_dir_path,
                                 base::Version* extension_version) {
   std::string error_message;
-  absl::optional<base::Value::Dict> extension_manifest;
+  std::optional<base::Value::Dict> extension_manifest;
   {
     base::ScopedAllowBlockingForTesting scoped_allow_blocking;
     extension_manifest =
@@ -354,20 +356,23 @@ void UpdatePolicyViaMockPolicyProvider(
       policy_map.GetMutable(policy::key::kExtensionInstallForcelist);
   if (existing_entry && existing_entry->value(base::Value::Type::LIST)) {
     // Append to the existing policy.
-    existing_entry->value(base::Value::Type::LIST)->Append(policy_item_value);
+    existing_entry->value(base::Value::Type::LIST)
+        ->GetList()
+        .Append(policy_item_value);
   } else {
     // Set the new policy value.
-    base::Value policy_value(base::Value::Type::LIST);
+    base::Value::List policy_value;
     policy_value.Append(policy_item_value);
     policy_map.Set(policy::key::kExtensionInstallForcelist,
                    policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-                   policy::POLICY_SOURCE_CLOUD, std::move(policy_value),
+                   policy::POLICY_SOURCE_CLOUD,
+                   base::Value(std::move(policy_value)),
                    /*external_data_fetcher=*/nullptr);
   }
   mock_policy_provider->UpdateChromePolicy(policy_map);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 void UpdatePolicyViaDeviceStateMixin(
     const extensions::ExtensionId& extension_id,
@@ -412,7 +417,8 @@ void UpdatePolicyViaEmbeddedPolicyMixin(
       user_policy_builder->payload().SerializeAsString());
 
   base::RunLoop run_loop;
-  g_browser_process->policy_service()->RefreshPolicies(run_loop.QuitClosure());
+  g_browser_process->policy_service()->RefreshPolicies(
+      run_loop.QuitClosure(), policy::PolicyFetchReason::kTest);
   ASSERT_NO_FATAL_FAILURE(run_loop.Run());
 
   // Report the outcome via an output argument instead of the return value,
@@ -420,7 +426,7 @@ void UpdatePolicyViaEmbeddedPolicyMixin(
   *success = true;
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Simulates a server error according to the current error mode, or returns no
 // response when no error is configured. Note that this function is called on
@@ -463,7 +469,7 @@ void ExtensionForceInstallMixin::InitWithMockPolicyProvider(
   mock_policy_provider_ = mock_policy_provider;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 void ExtensionForceInstallMixin::InitWithDeviceStateMixin(
     Profile* profile,
@@ -513,7 +519,7 @@ void ExtensionForceInstallMixin::InitWithEmbeddedPolicyMixin(
   policy_type_ = policy_type;
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 bool ExtensionForceInstallMixin::ForceInstallFromCrx(
     const base::FilePath& crx_path,
@@ -541,7 +547,7 @@ bool ExtensionForceInstallMixin::ForceInstallFromCrx(
 
 bool ExtensionForceInstallMixin::ForceInstallFromSourceDir(
     const base::FilePath& extension_dir_path,
-    const absl::optional<base::FilePath>& pem_path,
+    const std::optional<base::FilePath>& pem_path,
     WaitMode wait_mode,
     extensions::ExtensionId* extension_id,
     base::Version* extension_version) {
@@ -732,7 +738,7 @@ bool ExtensionForceInstallMixin::ServeExistingCrx(
 
 bool ExtensionForceInstallMixin::CreateAndServeCrx(
     const base::FilePath& extension_dir_path,
-    const absl::optional<base::FilePath>& pem_path,
+    const std::optional<base::FilePath>& pem_path,
     const base::Version& extension_version,
     extensions::ExtensionId* extension_id) {
   base::ScopedAllowBlockingForTesting scoped_allow_blocking;
@@ -829,7 +835,7 @@ bool ExtensionForceInstallMixin::UpdatePolicy(
                                       mock_policy_provider_);
     return true;
   }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (device_state_mixin_) {
     UpdatePolicyViaDeviceStateMixin(extension_id, update_manifest_url,
                                     device_state_mixin_);
@@ -847,9 +853,8 @@ bool ExtensionForceInstallMixin::UpdatePolicy(
         user_policy_builder_, account_id_, policy_type_, &success);
     return success;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   NOTREACHED() << "Init not called";
-  return false;
 }
 
 bool ExtensionForceInstallMixin::WaitForExtensionUpdate(

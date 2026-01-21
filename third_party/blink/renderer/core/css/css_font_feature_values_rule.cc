@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,15 +23,15 @@ CSSFontFeatureValuesRule::~CSSFontFeatureValuesRule() = default;
 void CSSFontFeatureValuesRule::setFontFamily(const String& font_family) {
   CSSStyleSheet::RuleMutationScope mutation_scope(this);
 
-  Vector<String> families;
-  font_family.Split(",", families);
+  Vector<StringView> families = StringView(font_family).SplitSkippingEmpty(',');
 
   Vector<AtomicString> filtered_families;
-
-  for (auto family : families) {
-    String stripped = family.StripWhiteSpace();
-    if (!stripped.empty())
+  filtered_families.ReserveInitialCapacity(families.size());
+  for (const auto& family : families) {
+    StringView stripped = family.StripWhiteSpace();
+    if (!stripped.empty()) {
       filtered_families.push_back(AtomicString(stripped));
+    }
   }
 
   font_feature_values_rule_->SetFamilies(std::move(filtered_families));
@@ -89,10 +89,10 @@ String CSSFontFeatureValuesRule::cssText() const {
         // appended if numbers are specified. In CSSOM
         // (CSSFontFeatureValuesMap::set) an empty or type-incompatible
         // argument is coerced into a number 0 and appended.
-        DCHECK_GT(alias.value.size(), 0u);
+        DCHECK_GT(alias.value.indices.size(), 0u);
         SerializeIdentifier(alias.key, result);
         result.Append(":");
-        for (uint32_t value : alias.value) {
+        for (uint32_t value : alias.value.indices) {
           result.Append(' ');
           result.AppendNumber(value);
         }
@@ -120,6 +120,11 @@ void CSSFontFeatureValuesRule::Reattach(StyleRuleBase* rule) {
 void CSSFontFeatureValuesRule::Trace(blink::Visitor* visitor) const {
   visitor->Trace(font_feature_values_rule_);
   CSSRule::Trace(visitor);
+}
+
+const StyleRuleFontFeatureValues*
+CSSFontFeatureValuesRule::FontFeatureValues() {
+  return font_feature_values_rule_.Get();
 }
 
 }  // namespace blink

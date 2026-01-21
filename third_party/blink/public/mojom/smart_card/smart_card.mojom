@@ -4,8 +4,11 @@
 
 module blink.mojom;
 
+import "services/device/public/mojom/smart_card.mojom";
+
 // Interface for accessing smart card readers from the render process.
 // The implementation is responsible for checking access permissions.
 interface SmartCardService {
-  // TODO(crbug.com/1386175): Add methods
+  // Creates an Application Context to the PC/SC Resource Manager.
+  CreateContext() => (device.mojom.SmartCardCreateContextResult result);
 };

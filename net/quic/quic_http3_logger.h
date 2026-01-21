@@ -9,6 +9,7 @@
 
 #include "base/timer/timer.h"
 #include "net/log/net_log_with_source.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 #include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_session.h"
 
 namespace net {
@@ -44,7 +45,7 @@ class NET_EXPORT_PRIVATE QuicHttp3Logger : public quic::Http3DebugVisitor {
       quic::QuicStreamId stream_id,
       quic::QuicByteCount compressed_headers_length) override;
   void OnHeadersDecoded(quic::QuicStreamId stream_id,
-                        quic::QuicHeaderList headers) override;
+                        const quic::QuicHeaderList& headers) override;
 
   void OnUnknownFrameReceived(quic::QuicStreamId stream_id,
                               uint64_t frame_type,
@@ -58,7 +59,7 @@ class NET_EXPORT_PRIVATE QuicHttp3Logger : public quic::Http3DebugVisitor {
   void OnDataFrameSent(quic::QuicStreamId stream_id,
                        quic::QuicByteCount payload_length) override;
   void OnHeadersFrameSent(quic::QuicStreamId stream_id,
-                          const spdy::Http2HeaderBlock& header_block) override;
+                          const quiche::HttpHeaderBlock& header_block) override;
 
  private:
   NetLogWithSource net_log_;

@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/after_startup_task_utils.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/util/jni_headers/AfterStartupTaskUtils_jni.h"
 
-using base::android::JavaParamRef;
+using jni_zero::JavaRef;
 
 namespace android {
 
@@ -21,3 +23,5 @@ class AfterStartupTaskUtilsJNI {
 static void JNI_AfterStartupTaskUtils_SetStartupComplete(JNIEnv* env) {
   android::AfterStartupTaskUtilsJNI::SetBrowserStartupIsComplete();
 }
+
+DEFINE_JNI(AfterStartupTaskUtils)

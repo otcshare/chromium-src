@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -49,7 +50,7 @@ class TaskGraphRunnerPerfTest : public testing::Test {
 
   // Overridden from testing::Test:
   void SetUp() override {
-    task_graph_runner_ = base::WrapUnique(new SynchronousTaskGraphRunner);
+    task_graph_runner_ = std::make_unique<SynchronousTaskGraphRunner>();
     namespace_token_ = task_graph_runner_->GenerateNamespaceToken();
   }
   void TearDown() override { task_graph_runner_ = nullptr; }
@@ -125,9 +126,9 @@ class TaskGraphRunnerPerfTest : public testing::Test {
                                      int num_tasks,
                                      int num_leaf_tasks) {
     const size_t kNumVersions = 2;
-    PerfTaskImpl::Vector top_level_tasks[kNumVersions];
-    PerfTaskImpl::Vector tasks[kNumVersions];
-    PerfTaskImpl::Vector leaf_tasks[kNumVersions];
+    std::array<PerfTaskImpl::Vector, kNumVersions> top_level_tasks;
+    std::array<PerfTaskImpl::Vector, kNumVersions> tasks;
+    std::array<PerfTaskImpl::Vector, kNumVersions> leaf_tasks;
     for (size_t i = 0; i < kNumVersions; ++i) {
       CreateTasks(num_top_level_tasks, &top_level_tasks[i]);
       CreateTasks(num_tasks, &tasks[i]);

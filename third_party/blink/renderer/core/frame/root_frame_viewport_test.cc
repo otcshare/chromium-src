@@ -11,13 +11,14 @@
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
+#include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme_overlay_mock.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
@@ -58,7 +59,7 @@ class ScrollableAreaStub : public GarbageCollected<ScrollableAreaStub>,
   }
 
   gfx::Vector2d ScrollOffsetInt() const override {
-    return gfx::ToFlooredVector2d(scroll_offset_);
+    return SnapScrollOffsetToPhysicalPixels(scroll_offset_);
   }
   ScrollOffset GetScrollOffset() const override { return scroll_offset_; }
   gfx::Vector2d MinimumScrollOffsetInt() const override {
@@ -100,7 +101,8 @@ class ScrollableAreaStub : public GarbageCollected<ScrollableAreaStub>,
     return CompositorElementId();
   }
   void UpdateScrollOffset(const ScrollOffset& offset,
-                          mojom::blink::ScrollType) override {
+                          mojom::blink::ScrollType,
+                          cc::ScrollSourceType) override {
     scroll_offset_ = offset;
   }
   bool ShouldUseIntegerScrollOffset() const override { return true; }
@@ -111,12 +113,13 @@ class ScrollableAreaStub : public GarbageCollected<ScrollableAreaStub>,
   bool ScrollbarsCanBeActive() const override { return true; }
   bool ShouldPlaceVerticalScrollbarOnLeft() const override { return true; }
   void ScrollControlWasSetNeedsPaintInvalidation() override {}
+  bool UsesCompositedScrolling() const override { NOTREACHED(); }
   bool UserInputScrollable(ScrollbarOrientation orientation) const override {
     return orientation == kHorizontalScrollbar ? user_input_scrollable_x_
                                                : user_input_scrollable_y_;
   }
   bool ScheduleAnimation() override { return true; }
-  mojom::blink::ColorScheme UsedColorScheme() const override {
+  mojom::blink::ColorScheme UsedColorSchemeScrollbars() const override {
     return mojom::blink::ColorScheme::kLight;
   }
 
@@ -155,6 +158,8 @@ class RootLayoutViewportStub : public ScrollableAreaStub {
     return ret;
   }
 
+  PhysicalOffset LocalToScrollOriginOffset() const override { return {}; }
+
  private:
   int VisibleWidth() const override { return viewport_size_.width(); }
   int VisibleHeight() const override { return viewport_size_.height(); }
@@ -171,6 +176,8 @@ class VisualViewportStub : public ScrollableAreaStub {
         ContentsSize() - gfx::ScaleToFlooredSize(ViewportSize(), 1 / scale_);
     return ScrollOffset(diff.width(), diff.height());
   }
+
+  PhysicalOffset LocalToScrollOriginOffset() const override { return {}; }
 
   void SetScale(float scale) { scale_ = scale; }
 
@@ -194,6 +201,9 @@ class RootFrameViewportTest : public testing::Test {
 
  protected:
   void SetUp() override {}
+
+ private:
+  test::TaskEnvironment task_environment_;
 };
 
 // Tests that scrolling the viewport when the layout viewport is
@@ -221,17 +231,17 @@ TEST_F(RootFrameViewportTest, UserInputScrollable) {
 
   // Layout viewport shouldn't scroll since it's not horizontally scrollable,
   // but visual viewport should.
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(300, 0),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(300, 0),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 0), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 0), root_frame_viewport->GetScrollOffset());
 
   // Vertical scrolling should be unaffected.
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(0, 300),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(0, 300),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(0, 150), layout_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 75), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 225), root_frame_viewport->GetScrollOffset());
@@ -241,7 +251,7 @@ TEST_F(RootFrameViewportTest, UserInputScrollable) {
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
 
   // Disable just the layout viewport's vertical scrolling, the
   // RootFrameViewport should remain scrollable overall.
@@ -253,17 +263,17 @@ TEST_F(RootFrameViewportTest, UserInputScrollable) {
 
   // Layout viewport shouldn't scroll since it's not vertically scrollable,
   // but visual viewport should.
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(0, 300),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(0, 300),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 75), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 75), root_frame_viewport->GetScrollOffset());
 
   // Horizontal scrolling should be unaffected.
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(300, 0),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(300, 0),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(100, 0), layout_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 75), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(150, 75), root_frame_viewport->GetScrollOffset());
@@ -285,39 +295,42 @@ TEST_F(RootFrameViewportTest, TestScrollAnimatorUpdatedBeforeScroll) {
   visual_viewport->SetScale(2);
 
   visual_viewport->SetScrollOffset(ScrollOffset(50, 75),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_EQ(ScrollOffset(50, 75), root_frame_viewport->GetScrollOffset());
 
   // If the scroll animator doesn't update, it will still think it's at (0, 0)
   // and so it may early exit.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(0, 0), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(0, 0), root_frame_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 0), visual_viewport->GetScrollOffset());
 
   // Try again for userScroll()
   visual_viewport->SetScrollOffset(ScrollOffset(50, 75),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_EQ(ScrollOffset(50, 75), root_frame_viewport->GetScrollOffset());
 
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(-50, 0),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(-50, 0),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(0, 75), root_frame_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 75), visual_viewport->GetScrollOffset());
 
   // Make sure the layout viewport is also accounted for.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(0, 0), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   layout_viewport->SetScrollOffset(ScrollOffset(100, 150),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_EQ(ScrollOffset(100, 150), root_frame_viewport->GetScrollOffset());
 
-  root_frame_viewport->UserScroll(ui::ScrollGranularity::kScrollByPrecisePixel,
-                                  ScrollOffset(-100, 0),
-                                  ScrollableArea::ScrollCallback());
+  root_frame_viewport->UserScroll(
+      ui::ScrollGranularity::kScrollByPrecisePixel, ScrollOffset(-100, 0),
+      cc::ScrollSourceType::kNone, ScrollableArea::ScrollCallback());
   EXPECT_EQ(ScrollOffset(0, 150), root_frame_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 150), layout_viewport->GetScrollOffset());
 }
@@ -340,7 +353,8 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
   visual_viewport->SetViewportSize(gfx::Size(100, 100));
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(100, 250, 50, 50)),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::ToEdgeIfNeeded(), ScrollAlignment::ToEdgeIfNeeded(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -349,7 +363,8 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
 
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(25, 75, 50, 50)),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::ToEdgeIfNeeded(), ScrollAlignment::ToEdgeIfNeeded(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -361,11 +376,12 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
   visual_viewport->SetScale(2);
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
 
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(50, 75, 50, 75)),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::ToEdgeIfNeeded(), ScrollAlignment::ToEdgeIfNeeded(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -374,7 +390,8 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
 
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(190, 290, 10, 10)),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::ToEdgeIfNeeded(), ScrollAlignment::ToEdgeIfNeeded(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -385,18 +402,21 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
   visual_viewport->SetViewportSize(gfx::Size(100, 100));
   visual_viewport->SetScale(1.5f);
   visual_viewport->SetScrollOffset(ScrollOffset(0, 10),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   layout_viewport->SetScrollOffset(ScrollOffset(50, 50),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   root_frame_viewport->SetScrollOffset(root_frame_viewport->GetScrollOffset(),
                                        mojom::blink::ScrollType::kProgrammatic,
-                                       mojom::blink::ScrollBehavior::kInstant,
-                                       ScrollableArea::ScrollCallback());
+                                       cc::ScrollSourceType::kNone,
+                                       mojom::blink::ScrollBehavior::kInstant);
 
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(
           root_frame_viewport->VisibleContentRect(kExcludeScrollbars))),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::ToEdgeIfNeeded(), ScrollAlignment::ToEdgeIfNeeded(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -406,7 +426,8 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(
           root_frame_viewport->VisibleContentRect(kExcludeScrollbars))),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::CenterAlways(), ScrollAlignment::CenterAlways(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -416,7 +437,8 @@ TEST_F(RootFrameViewportTest, ScrollIntoView) {
   root_frame_viewport->ScrollIntoView(
       layout_viewport->DocumentToFrame(PhysicalRect(
           root_frame_viewport->VisibleContentRect(kExcludeScrollbars))),
-      ScrollAlignment::CreateScrollIntoViewParams(
+      PhysicalBoxStrut(),
+      scroll_into_view_util::CreateScrollIntoViewParams(
           ScrollAlignment::TopAlways(), ScrollAlignment::TopAlways(),
           mojom::blink::ScrollType::kProgrammatic, true,
           mojom::blink::ScrollBehavior::kInstant));
@@ -440,7 +462,7 @@ TEST_F(RootFrameViewportTest, SetScrollOffset) {
   // Ensure that the visual viewport scrolls first.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(100, 100), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(100, 100), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
 
@@ -448,7 +470,7 @@ TEST_F(RootFrameViewportTest, SetScrollOffset) {
   // the remainder.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(300, 400), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(250, 250), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 150), layout_viewport->GetScrollOffset());
 
@@ -456,14 +478,14 @@ TEST_F(RootFrameViewportTest, SetScrollOffset) {
   // out of bounds.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(780, 1780), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(250, 250), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(500, 1500), layout_viewport->GetScrollOffset());
 
   // Scroll all the way back.
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(0, 0), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(0, 0), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
 }
@@ -482,7 +504,7 @@ TEST_F(RootFrameViewportTest, VisibleContentRect) {
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(100, 75), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
 
   EXPECT_EQ(gfx::Point(100, 75),
             root_frame_viewport->VisibleContentRect().origin());
@@ -513,27 +535,13 @@ TEST_F(RootFrameViewportTest, ViewportScrollOrder) {
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(40, 40), mojom::blink::ScrollType::kUser,
-      mojom::blink::ScrollBehavior::kInstant,
-      ScrollableArea::ScrollCallback(WTF::BindOnce(
-          [](ScrollableArea* visual_viewport, ScrollableArea* layout_viewport) {
-            EXPECT_EQ(ScrollOffset(40, 40), visual_viewport->GetScrollOffset());
-            EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
-          },
-          WrapWeakPersistent(visual_viewport),
-          WrapWeakPersistent(layout_viewport))));
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(40, 40), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(0, 0), layout_viewport->GetScrollOffset());
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(60, 60), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kInstant,
-      ScrollableArea::ScrollCallback(WTF::BindOnce(
-          [](ScrollableArea* visual_viewport, ScrollableArea* layout_viewport) {
-            EXPECT_EQ(ScrollOffset(50, 50), visual_viewport->GetScrollOffset());
-            EXPECT_EQ(ScrollOffset(10, 10), layout_viewport->GetScrollOffset());
-          },
-          WrapWeakPersistent(visual_viewport),
-          WrapWeakPersistent(layout_viewport))));
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(50, 50), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(10, 10), layout_viewport->GetScrollOffset());
 }
@@ -557,7 +565,7 @@ TEST_F(RootFrameViewportTest, SetAlternateLayoutViewport) {
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(100, 100), mojom::blink::ScrollType::kUser,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(50, 50), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(50, 50), layout_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(100, 100), root_frame_viewport->GetScrollOffset());
@@ -569,7 +577,7 @@ TEST_F(RootFrameViewportTest, SetAlternateLayoutViewport) {
 
   root_frame_viewport->SetScrollOffset(
       ScrollOffset(200, 200), mojom::blink::ScrollType::kUser,
-      mojom::blink::ScrollBehavior::kInstant, ScrollableArea::ScrollCallback());
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   EXPECT_EQ(ScrollOffset(50, 50), visual_viewport->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(150, 150), alternate_scroller->GetScrollOffset());
   EXPECT_EQ(ScrollOffset(200, 200), root_frame_viewport->GetScrollOffset());
@@ -595,14 +603,8 @@ TEST_F(RootFrameViewportTest, DistributeScrollOrder) {
 
   root_frame_viewport->DistributeScrollBetweenViewports(
       ScrollOffset(60, 60), mojom::blink::ScrollType::kProgrammatic,
-      mojom::blink::ScrollBehavior::kSmooth, RootFrameViewport::kVisualViewport,
-      ScrollableArea::ScrollCallback(WTF::BindOnce(
-          [](ScrollableArea* visual_viewport, ScrollableArea* layout_viewport) {
-            EXPECT_EQ(ScrollOffset(50, 50), visual_viewport->GetScrollOffset());
-            EXPECT_EQ(ScrollOffset(10, 10), layout_viewport->GetScrollOffset());
-          },
-          WrapWeakPersistent(visual_viewport),
-          WrapWeakPersistent(layout_viewport))));
+      cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kSmooth,
+      RootFrameViewport::kVisualViewport);
   root_frame_viewport->UpdateCompositorScrollAnimations();
   root_frame_viewport->ServiceScrollAnimations(1);
   EXPECT_EQ(ScrollOffset(0, 0), visual_viewport->GetScrollOffset());
@@ -624,7 +626,8 @@ TEST_F(RootFrameViewportRenderTest,
   view_state.page_scale_factor_ = 1.5;
   RootFrameViewport* root_frame_viewport = static_cast<RootFrameViewport*>(
       GetDocument().View()->GetScrollableArea());
-  root_frame_viewport->SetPendingHistoryRestoreScrollOffset(view_state, false);
+  root_frame_viewport->SetPendingHistoryRestoreScrollOffset(
+      view_state, false, mojom::blink::ScrollBehavior::kAuto);
   root_frame_viewport->ApplyPendingHistoryRestoreScrollOffset();
 
   // Override the 1.5 scale with 1.0.

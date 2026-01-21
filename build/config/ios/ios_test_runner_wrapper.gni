@@ -13,6 +13,10 @@ import("//build/util/generate_wrapper.gni")
 #
 # Arguments:
 #
+# clones
+#   (optional) number of ios simulator clones to execute tests on
+#   in parallel
+#
 # data
 #   (optional, default [ "//ios/build/bots/scripts/" ]) list of files or
 #   directories required to run target
@@ -30,8 +34,9 @@ import("//build/util/generate_wrapper.gni")
 #   (optional, default 3) number of retry attempts
 #
 # shards
-#   (optional, default 1) number of shards to execute tests in parallel. not
-#   the same as swarming shards.
+#   (optional) number of ios simulator clones to execute tests in parallel. not
+#   the same as swarming shards. Only used if clones is not provided. Will be
+#   deprecated.
 #
 # wrapper_output_name
 #   (optional, default "run_${target_name}") name of the wrapper script
@@ -63,9 +68,9 @@ template("ios_test_runner_wrapper") {
     _rebased_xcode_path = rebase_path("//Xcode.app", root_build_dir)
     _rebased_ios_runtime_cache_prefix =
         rebase_path("//Runtime-ios-", root_build_dir)
+    _rebased_out_dir =
+        rebase_path("${root_build_dir}/ios-test-results", root_build_dir)
 
-    # --out-dir argument is specified in gn_isolate_map.pyl because
-    # ${ISOLATED_OUTDIR} doesn't get resolved through this wrapper.
     executable_args += [
       "--xcode-path",
       "@WrappedPath(${_rebased_xcode_path})",
@@ -73,6 +78,13 @@ template("ios_test_runner_wrapper") {
       "@WrappedPath(${_rebased_mac_toolchain})",
       "--runtime-cache-prefix",
       "@WrappedPath(${_rebased_ios_runtime_cache_prefix})",
+
+      # To make the generated script easier to run locally, tentatively set an
+      # `--out-dir` at build time. If the command line contains multiple
+      # `--out-dir`s, the last option wins, so the bots can override this at
+      # runtime when `${ISOLATED_OUTDIR}` is resolved.
+      "--out-dir",
+      "@WrappedPath(${_rebased_out_dir})",
     ]
 
     # Default retries to 3
@@ -84,14 +96,13 @@ template("ios_test_runner_wrapper") {
       "${retries}",
     ]
 
-    # Default shards to 1
-    if (!defined(shards)) {
-      shards = 1
+    # Clones is not required by test runner so only pass if defined.
+    if (defined(clones)) {
+      executable_args += [
+        "--clones",
+        "${clones}",
+      ]
     }
-    executable_args += [
-      "--shards",
-      "${shards}",
-    ]
 
     if (xcode_version_int >= 1400) {
       executable_args += [
@@ -131,11 +142,7 @@ template("ios_test_runner_wrapper") {
       _wrapper_output_name = wrapper_output_name
     }
 
-    # Test targets may attempt to generate multiple wrappers for a suite with
-    # multiple different toolchains when running with additional_target_cpus.
-    # Generate the wrapper script into root_out_dir rather than root_build_dir
-    # to ensure those wrappers are distinct.
-    wrapper_script = "${root_out_dir}/bin/${_wrapper_output_name}"
+    wrapper_script = "${root_build_dir}/bin/${_wrapper_output_name}"
 
     data = []
     if (defined(invoker.data)) {
@@ -147,6 +154,9 @@ template("ios_test_runner_wrapper") {
 
       # gRPC interface for iOS test plugin
       "//ios/testing/plugin",
+
+      # exception reporting protos
+      "//build/util/lib/proto",
 
       # Variations test utilities used by variations_runner script.
       "//testing/scripts/variations_seed_access_helper.py",

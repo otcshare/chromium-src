@@ -21,9 +21,9 @@
 // https://html.spec.whatwg.org/C/#htmlframeelement
 
 [
-    Exposed=Window,
-    HTMLConstructor
+    Exposed=Window
 ] interface HTMLFrameElement : HTMLElement {
+    [HTMLConstructor] constructor();
     [CEReactions, Reflect] attribute DOMString name;
     [CEReactions, Reflect] attribute DOMString scrolling;
     [CEReactions, Reflect, URL] attribute USVString src;
@@ -33,6 +33,6 @@
     [CheckSecurity=ReturnValue] readonly attribute Document? contentDocument;
     readonly attribute Window? contentWindow;
 
-    [CEReactions, Reflect] attribute [TreatNullAs=EmptyString] DOMString marginHeight;
-    [CEReactions, Reflect] attribute [TreatNullAs=EmptyString] DOMString marginWidth;
+    [CEReactions, Reflect] attribute [LegacyNullToEmptyString] DOMString marginHeight;
+    [CEReactions, Reflect] attribute [LegacyNullToEmptyString] DOMString marginWidth;
 };

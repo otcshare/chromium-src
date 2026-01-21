@@ -17,7 +17,7 @@ import androidx.annotation.IntDef;
 
 import org.chromium.base.Log;
 
-import java.util.LinkedList;
+import java.util.ArrayList;
 
 /**
  * An activity to measure the startup time of WebView in various scenarios.
@@ -55,7 +55,7 @@ public class StartupTimeActivity extends Activity {
 
     private static final String TARGET_KEY = "target";
 
-    private LinkedList<Long> mEventQueue = new LinkedList<>();
+    private final ArrayList<Long> mEventQueue = new ArrayList<>();
 
     private boolean mFinished;
     // Keep track of the time that the last task was run.
@@ -66,49 +66,59 @@ public class StartupTimeActivity extends Activity {
 
     private Handler mHandler;
 
-    @IntDef({Target.DO_NOTHING, Target.CREATE, Target.ADD_VIEW, Target.LOAD, Target.WORKAROUND})
+    @IntDef({
+        Target.DO_NOTHING,
+        Target.CREATE,
+        Target.ADD_VIEW,
+        Target.LOAD,
+        Target.WORKAROUND,
+        Target.GET_DEFAULT_USER_AGENT
+    })
     @interface Target {
         int DO_NOTHING = 0;
         int CREATE = 1;
         int ADD_VIEW = 2;
         int LOAD = 3;
         int WORKAROUND = 4;
+        int GET_DEFAULT_USER_AGENT = 5;
     }
 
-    private Runnable mUiBlockingTaskTracker = new Runnable() {
-        @Override
-        public void run() {
-            if (mFinished) return;
-            long now = System.currentTimeMillis();
-            if (mLastTaskTimeMs != -1) {
-                // The diff between current time and last task time is approximately
-                // the time other UI tasks were run.
-                long gap = now - mLastTaskTimeMs;
-                if (gap > MIN_TIME_TO_RECORD_MS) {
-                    mEventQueue.add(gap);
+    private final Runnable mUiBlockingTaskTracker =
+            new Runnable() {
+                @Override
+                public void run() {
+                    if (mFinished) return;
+                    long now = System.currentTimeMillis();
+                    if (mLastTaskTimeMs != -1) {
+                        // The diff between current time and last task time is approximately
+                        // the time other UI tasks were run.
+                        long gap = now - mLastTaskTimeMs;
+                        if (gap > MIN_TIME_TO_RECORD_MS) {
+                            mEventQueue.add(gap);
+                        }
+                    }
+                    mLastTaskTimeMs = now;
+                    // Self-posting the current task to track future UI blocking tasks.
+                    mHandler.post(mUiBlockingTaskTracker);
                 }
-            }
-            mLastTaskTimeMs = now;
-            // Self-posting the current task to track future UI blocking tasks.
-            mHandler.post(mUiBlockingTaskTracker);
-        }
-    };
+            };
 
-    private Runnable mFinishTask = new Runnable() {
-        @Override
-        public void run() {
-            mFinished = true;
-            String res = TextUtils.join(", ", mEventQueue);
-            Log.i(TAG, "UI blocking times in startup (ms): " + res);
-            if (mWebView != null) {
-                // Remove webview from view hierarchy while preventing NPE.
-                mLayout.removeAllViews();
-                mWebView.destroy();
-                mWebView = null;
-            }
-            finish();
-        }
-    };
+    private final Runnable mFinishTask =
+            new Runnable() {
+                @Override
+                public void run() {
+                    mFinished = true;
+                    String res = TextUtils.join(", ", mEventQueue);
+                    Log.i(TAG, "UI blocking times in startup (ms): " + res);
+                    if (mWebView != null) {
+                        // Remove webview from view hierarchy while preventing NPE.
+                        mLayout.removeAllViews();
+                        mWebView.destroy();
+                        mWebView = null;
+                    }
+                    finish();
+                }
+            };
 
     private @Target int getTarget() {
         final int defaultTarget = Target.CREATE;
@@ -126,49 +136,68 @@ public class StartupTimeActivity extends Activity {
         mLayout = new LinearLayout(this);
         setContentView(mLayout);
         mHandler = new Handler();
-        @Target
-        int target = getTarget();
+        @Target int target = getTarget();
         Log.i(TAG, "Target: " + target);
         // There are other posted tasks caused by the activity. Give it some delay to avoid
         // recording them.
-        mHandler.postDelayed(() -> { runScenario(target); }, TIME_TO_WAIT_BEFORE_START_MS);
+        mHandler.postDelayed(
+                () -> {
+                    runScenario(target);
+                },
+                TIME_TO_WAIT_BEFORE_START_MS);
     }
 
     private void runScenario(@Target int target) {
         mUiBlockingTaskTracker.run();
         switch (target) {
-            case Target.DO_NOTHING: {
-                // This is the baseline. It should output an empty result.
-                break;
-            }
-            case Target.CREATE: {
-                mWebView = new WebView(this);
-                break;
-            }
-            case Target.ADD_VIEW: {
-                mWebView = new WebView(this);
-                mLayout.addView(mWebView);
-                break;
-            }
-            case Target.LOAD: {
-                mWebView = new WebView(this);
-                mLayout.addView(mWebView);
-                mWebView.loadUrl("about:blank");
-                break;
-            }
-            case Target.WORKAROUND: {
-                // This is a useful hack to run some of the startup tasks in a background
-                // thread to reduce the UI thread blocking time.
-                Thread t = new Thread(() -> {
+            case Target.DO_NOTHING:
+                {
+                    // This is the baseline. It should output an empty result.
+                    break;
+                }
+            case Target.CREATE:
+                {
+                    mWebView = new WebView(this);
+                    break;
+                }
+            case Target.ADD_VIEW:
+                {
+                    mWebView = new WebView(this);
+                    mLayout.addView(mWebView);
+                    break;
+                }
+            case Target.LOAD:
+                {
+                    mWebView = new WebView(this);
+                    mLayout.addView(mWebView);
+                    mWebView.loadUrl("about:blank");
+                    break;
+                }
+            case Target.WORKAROUND:
+                {
+                    // This is a useful hack to run some of the startup tasks in a background
+                    // thread to reduce the UI thread blocking time.
+                    Thread t =
+                            new Thread(
+                                    () -> {
+                                        WebSettings.getDefaultUserAgent(this);
+                                        // Note that there are some UI tasks caused by
+                                        // getDefaultUserAgent().
+                                        // But this will ensure that new WebView() can be run after
+                                        // those UI tasks are run first.
+                                        mHandler.post(
+                                                () -> {
+                                                    mWebView = new WebView(this);
+                                                });
+                                    });
+                    t.start();
+                    break;
+                }
+            case Target.GET_DEFAULT_USER_AGENT:
+                {
                     WebSettings.getDefaultUserAgent(this);
-                    // Note that there are some UI tasks caused by getDefaultUserAgent().
-                    // But this will ensure that new WebView() can be run after those UI tasks
-                    // are run first.
-                    mHandler.post(() -> { mWebView = new WebView(this); });
-                });
-                t.start();
-                break;
-            }
+                    break;
+                }
         }
         mHandler.postDelayed(mFinishTask, TIME_TO_FINISH_APP_MS);
     }

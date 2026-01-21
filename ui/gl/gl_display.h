@@ -5,26 +5,21 @@
 #ifndef UI_GL_GL_DISPLAY_H_
 #define UI_GL_GL_DISPLAY_H_
 
+#include <EGL/egl.h>
 #include <stdint.h>
 
 #include <memory>
 #include <vector>
 
+#include "build/build_config.h"
 #include "ui/gl/gl_export.h"
+#include "ui/gl/gpu_switching_observer.h"
 
-#if defined(USE_EGL)
-#include <EGL/egl.h>
-
-#include "ui/gl/gpu_switching_manager.h"
-#endif  // defined(USE_EGL)
-
-#if BUILDFLAG(IS_MAC)
-#include "components/metal_util/types.h"
+#if BUILDFLAG(IS_APPLE)
+#if __OBJC__
+@protocol MTLSharedEvent;
+#endif  // __OBJC__
 #endif
-
-namespace base {
-class CommandLine;
-}  // namespace base
 
 namespace gl {
 struct DisplayExtensionsEGL;
@@ -51,7 +46,8 @@ class EGLDisplayPlatform {
 };
 
 // If adding a new type, also add it to EGLDisplayType in
-// tools/metrics/histograms/enums.xml. Don't remove or reorder entries.
+// tools/metrics/histograms/metadata/gpu/enums.xml. Don't remove or reorder
+// entries.
 enum DisplayType {
   DEFAULT = 0,
   SWIFT_SHADER = 1,
@@ -72,7 +68,8 @@ enum DisplayType {
   ANGLE_OPENGLES_EGL = 16,
   ANGLE_METAL = 17,
   ANGLE_METAL_NULL = 18,
-  DISPLAY_TYPE_MAX = 19,
+  ANGLE_D3D11_WARP = 19,
+  DISPLAY_TYPE_MAX = 20,
 };
 
 enum DisplayPlatform {
@@ -80,41 +77,36 @@ enum DisplayPlatform {
   EGL = 1,
 };
 
-GL_EXPORT void GetEGLInitDisplaysForTesting(
-    bool supports_angle_d3d,
-    bool supports_angle_opengl,
-    bool supports_angle_null,
-    bool supports_angle_vulkan,
-    bool supports_angle_swiftshader,
-    bool supports_angle_egl,
-    bool supports_angle_metal,
-    const base::CommandLine* command_line,
-    std::vector<DisplayType>* init_displays);
-
 class GL_EXPORT GLDisplay {
  public:
   GLDisplay(const GLDisplay&) = delete;
   GLDisplay& operator=(const GLDisplay&) = delete;
 
   uint64_t system_device_id() const { return system_device_id_; }
+  DisplayKey display_key() const { return display_key_; }
+  DisplayPlatform type() const { return type_; }
 
   virtual ~GLDisplay();
 
   virtual void* GetDisplay() const = 0;
   virtual void Shutdown() = 0;
   virtual bool IsInitialized() const = 0;
+  virtual bool Initialize(GLDisplay* display) = 0;
 
   template <typename GLDisplayPlatform>
   GLDisplayPlatform* GetAs();
 
  protected:
-  GLDisplay(uint64_t system_device_id, DisplayPlatform type);
+  GLDisplay(uint64_t system_device_id,
+            DisplayKey display_key,
+            DisplayPlatform type);
 
   uint64_t system_device_id_ = 0;
+  DisplayKey display_key_ = DisplayKey::kDefault;
   DisplayPlatform type_ = NONE;
 };
 
-#if defined(USE_EGL)
+// TODO(344606399): Consider merging GLDisplayEGL into GLDisplay.
 class GL_EXPORT GLDisplayEGL : public GLDisplay {
  public:
   GLDisplayEGL(const GLDisplayEGL&) = delete;
@@ -123,6 +115,8 @@ class GL_EXPORT GLDisplayEGL : public GLDisplay {
   ~GLDisplayEGL() override;
 
   static GLDisplayEGL* GetDisplayForCurrentContext();
+
+  static void EnableANGLEDebugLayer();
 
   EGLDisplay GetDisplay() const override;
   void Shutdown() override;
@@ -137,24 +131,30 @@ class GL_EXPORT GLDisplayEGL : public GLDisplay {
   bool IsAndroidNativeFenceSyncSupported();
   bool IsANGLEExternalContextAndSurfaceSupported();
 
-  bool Initialize(EGLDisplayPlatform native_display);
+  bool Initialize(bool supports_angle,
+                  std::vector<DisplayType> init_displays,
+                  EGLDisplayPlatform native_display);
+  bool Initialize(GLDisplay* other_display) override;
   void InitializeForTesting();
   bool InitializeExtensionSettings();
 
   std::unique_ptr<DisplayExtensionsEGL> ext;
 
-#if BUILDFLAG(IS_MAC)
-  bool IsANGLEMetalSharedEventSyncSupported();
-  bool CreateMetalSharedEvent(metal::MTLSharedEventPtr* shared_event_out,
+#if BUILDFLAG(IS_APPLE)
+#if __OBJC__
+  bool CreateMetalSharedEvent(id<MTLSharedEvent>* shared_event_out,
                               uint64_t* signal_value_out);
-  void WaitForMetalSharedEvent(metal::MTLSharedEventPtr shared_event,
+  void WaitForMetalSharedEvent(id<MTLSharedEvent> shared_event,
                                uint64_t signal_value);
+#endif  // __OBJC__
 
   // Call periodically to clean up resources.
   void CleanupTempEGLSyncObjects();
 
-  // Call once upon shutdown of the display.
-  void CleanupMetalSharedEvent();
+  // Call during Initialize/Shutdown to clean initialize/delete the objective C
+  // shared event storage
+  void InitMetalSharedEventStorage();
+  void CleanupMetalSharedEventStorage();
 #endif
 
  private:
@@ -165,16 +165,19 @@ class GL_EXPORT GLDisplayEGL : public GLDisplay {
    public:
     explicit EGLGpuSwitchingObserver(EGLDisplay display);
     ~EGLGpuSwitchingObserver() override = default;
-    void OnGpuSwitched(GpuPreference active_gpu_heuristic) override;
+    void OnGpuSwitched() override;
 
    private:
     EGLDisplay display_ = EGL_NO_DISPLAY;
   };
 
-  explicit GLDisplayEGL(uint64_t system_device_id);
+  GLDisplayEGL(uint64_t system_device_id, DisplayKey display_key);
 
-  bool InitializeDisplay(EGLDisplayPlatform native_display);
-  void InitializeCommon();
+  bool InitializeDisplay(bool supports_angle,
+                         std::vector<DisplayType> init_displays,
+                         EGLDisplayPlatform native_display,
+                         gl::GLDisplayEGL* existing_display);
+  void InitializeCommon(bool for_testing);
 
   EGLDisplay display_ = EGL_NO_DISPLAY;
   EGLDisplayPlatform native_display_ = EGLDisplayPlatform(EGL_DEFAULT_DISPLAY);
@@ -186,12 +189,11 @@ class GL_EXPORT GLDisplayEGL : public GLDisplay {
 
   std::unique_ptr<EGLGpuSwitchingObserver> gpu_switching_observer_;
 
-#if BUILDFLAG(IS_MAC)
-  metal::MTLSharedEventPtr metal_shared_event_ = nullptr;
-  uint64_t metal_signaled_value_ = 0;
+#if BUILDFLAG(IS_APPLE)
+  struct ObjCStorage;
+  std::unique_ptr<ObjCStorage> objc_storage_;
 #endif
 };
-#endif  // defined(USE_EGL)
 
 }  // namespace gl
 

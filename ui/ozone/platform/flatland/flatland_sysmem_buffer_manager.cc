@@ -6,10 +6,12 @@
 
 #include <zircon/rights.h>
 
-#include "base/bind.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/koid.h"
+#include "base/functional/bind.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "ui/ozone/platform/flatland/flatland_sysmem_buffer_collection.h"
+#include "ui/ozone/public/native_pixmap_usage_utils.h"
 
 namespace ui {
 
@@ -33,7 +35,7 @@ FlatlandSysmemBufferManager::~FlatlandSysmemBufferManager() {
 }
 
 void FlatlandSysmemBufferManager::Initialize(
-    fuchsia::sysmem::AllocatorHandle sysmem_allocator,
+    fuchsia::sysmem2::AllocatorHandle sysmem_allocator,
     fuchsia::ui::composition::AllocatorHandle flatland_allocator) {
   base::AutoLock auto_lock(collections_lock_);
   DCHECK(collections_.empty());
@@ -41,8 +43,9 @@ void FlatlandSysmemBufferManager::Initialize(
   DCHECK(!sysmem_allocator_);
   sysmem_allocator_.Bind(std::move(sysmem_allocator));
   sysmem_allocator_->SetDebugClientInfo(
-      GetProcessName() + "-FlatlandSysmemBufferManager",
-      base::GetCurrentProcId());
+      std::move(fuchsia::sysmem2::AllocatorSetDebugClientInfoRequest{}
+                    .set_name(GetProcessName() + "-FlatlandSysmemBufferManager")
+                    .set_id(base::GetCurrentProcId())));
 
   DCHECK(!flatland_allocator_);
   flatland_allocator_.Bind(std::move(flatland_allocator));
@@ -60,8 +63,8 @@ void FlatlandSysmemBufferManager::Shutdown() {
 scoped_refptr<gfx::NativePixmap>
 FlatlandSysmemBufferManager::CreateNativePixmap(VkDevice vk_device,
                                                 gfx::Size size,
-                                                gfx::BufferFormat format,
-                                                gfx::BufferUsage usage) {
+                                                viz::SharedImageFormat format,
+                                                NativePixmapUsageSet usage) {
   gfx::NativePixmapHandle pixmap_handle;
   zx::eventpair service_handle;
   auto status = zx::eventpair::create(
@@ -69,11 +72,13 @@ FlatlandSysmemBufferManager::CreateNativePixmap(VkDevice vk_device,
   ZX_DCHECK(status == ZX_OK, status);
 
   auto collection = base::MakeRefCounted<FlatlandSysmemBufferCollection>();
+  // Scanout images must be registered with flatland.
   if (!collection->Initialize(
           sysmem_allocator_.get(), flatland_allocator_.get(),
           flatland_surface_factory_, std::move(service_handle),
           /*token_channel=*/zx::channel(), size, format, usage, vk_device,
-          /*min_buffer_count=*/1, usage == gfx::BufferUsage::SCANOUT)) {
+          /*min_buffer_count=*/1, /*register_with_flatland_allocator=*/usage ==
+                                      NativePixmapBufferUsage::kScanout)) {
     return nullptr;
   }
 
@@ -91,15 +96,17 @@ FlatlandSysmemBufferManager::ImportSysmemBufferCollection(
     zx::eventpair service_handle,
     zx::channel sysmem_token,
     gfx::Size size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage,
     size_t min_buffer_count,
     bool register_with_flatland_allocator) {
+  NativePixmapUsageSet native_pixmap_usage =
+      BufferUsageToNativePixmapUsage(usage);
   auto result = base::MakeRefCounted<FlatlandSysmemBufferCollection>();
   if (!result->Initialize(sysmem_allocator_.get(), flatland_allocator_.get(),
                           flatland_surface_factory_, std::move(service_handle),
-                          std::move(sysmem_token), size, format, usage,
-                          vk_device, min_buffer_count,
+                          std::move(sysmem_token), size, format,
+                          native_pixmap_usage, vk_device, min_buffer_count,
                           register_with_flatland_allocator)) {
     return nullptr;
   }

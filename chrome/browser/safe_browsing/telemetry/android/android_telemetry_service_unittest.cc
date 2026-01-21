@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
@@ -17,6 +18,8 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
+#include "components/safe_browsing/android/safe_browsing_api_handler_util.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -56,7 +59,7 @@ class AndroidTelemetryServiceTest : public testing::Test {
 
     safe_browsing::SafeBrowsingServiceInterface::RegisterFactory(
         GetSafeBrowsingServiceFactory());
-    // TODO(crbug/925153): Port consumers of the |sb_service_| to use
+    // TODO(crbug.com/41437292): Port consumers of the |sb_service_| to use
     // the interface in components/safe_browsing, and remove this cast.
     sb_service_ = static_cast<SafeBrowsingService*>(
         safe_browsing::SafeBrowsingService::CreateSafeBrowsingService());
@@ -86,7 +89,10 @@ class AndroidTelemetryServiceTest : public testing::Test {
 
   std::unique_ptr<ClientSafeBrowsingReportRequest> GetReport(
       download::DownloadItem* item) {
-    return telemetry_service_->GetReport(item);
+    base::test::TestFuture<std::unique_ptr<ClientSafeBrowsingReportRequest>>
+        report_future;
+    telemetry_service_->GetReport(item, report_future.GetCallback());
+    return report_future.Take();
   }
 
   void SetOffTheRecordProfile() {
@@ -96,6 +102,11 @@ class AndroidTelemetryServiceTest : public testing::Test {
 
   void ResetProfile() { telemetry_service_->profile_ = profile(); }
 
+  void SetVerifyAppsResult(VerifyAppsEnabledResult result) {
+    SafeBrowsingApiHandlerBridge::GetInstance()
+        .SetVerifyAppsEnableResultForTesting(result);
+  }
+
  protected:
   content::BrowserTaskEnvironment task_environment_;
   raw_ptr<TestingBrowserProcess> browser_process_;
@@ -103,7 +114,6 @@ class AndroidTelemetryServiceTest : public testing::Test {
   base::HistogramTester histograms_;
   std::unique_ptr<TestingProfile> profile_;
   scoped_refptr<safe_browsing::SafeBrowsingService> sb_service_;
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<AndroidTelemetryService> telemetry_service_;
 };
 
@@ -170,6 +180,9 @@ TEST_F(AndroidTelemetryServiceTest, CantSendPing_IncognitoMode) {
 
 TEST_F(AndroidTelemetryServiceTest,
        CantSendPing_SBEREnhancedProtectionDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   // Disable Scout Reporting.
   profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingScoutReportingEnabled,
                                     false);
@@ -190,7 +203,34 @@ TEST_F(AndroidTelemetryServiceTest,
       ApkDownloadTelemetryOutcome::NOT_SENT_UNCONSENTED, 1);
 }
 
-TEST_F(AndroidTelemetryServiceTest, CanSendPing_AllConditionsMet) {
+TEST_F(AndroidTelemetryServiceTest, CantSendPing_EnhancedProtectionDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kExtendedReportingRemovePrefDependency,
+                                 kHashPrefixRealTimeLookupsSamplePing},
+                                {});
+  // Disable Enhanced Protection.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, false);
+
+  // Enable Safe Browsing.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+  // Simulate APK download.
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(
+          testing::Return(base::FilePath(FILE_PATH_LITERAL("file.apk"))));
+
+  EXPECT_FALSE(CanSendPing(download_item_.get()));
+
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 1);
+  get_histograms()->ExpectBucketCount(
+      kApkDownloadTelemetryOutcomeMetric,
+      ApkDownloadTelemetryOutcome::NOT_SENT_UNCONSENTED, 1);
+}
+
+TEST_F(AndroidTelemetryServiceTest,
+       CanSendPing_AllConditionsMet_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   // Enable Safe Browsing.
   profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
   // Enable Scout Reporting.
@@ -209,8 +249,32 @@ TEST_F(AndroidTelemetryServiceTest, CanSendPing_AllConditionsMet) {
   get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 0);
 }
 
+TEST_F(AndroidTelemetryServiceTest, CanSendPing_AllConditionsMet) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kExtendedReportingRemovePrefDependency,
+                                 kHashPrefixRealTimeLookupsSamplePing},
+                                {});
+  // Enable Safe Browsing and ESB.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
+  // Simulate APK download.
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(
+          testing::Return(base::FilePath(FILE_PATH_LITERAL("file.apk"))));
+
+  // The ping should be sent.
+  EXPECT_TRUE(CanSendPing(download_item_.get()));
+
+  // No metric is logged in this case, because SENT is logged in another
+  // function.
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 0);
+}
+
 TEST_F(AndroidTelemetryServiceTest,
-       CanSendPing_AllConditionsMetMimeTypeNotApk) {
+       CanSendPing_AllConditionsMetMimeTypeNotApk_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   // Enable Safe Browsing.
   profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
   // Enable Scout Reporting.
@@ -234,12 +298,68 @@ TEST_F(AndroidTelemetryServiceTest,
 }
 
 TEST_F(AndroidTelemetryServiceTest,
-       CanSendPing_AllConditionsMetFilePathNotApk) {
+       CanSendPing_AllConditionsMetMimeTypeNotApk) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kExtendedReportingRemovePrefDependency,
+                                 kHashPrefixRealTimeLookupsSamplePing},
+                                {});
+  // Enable Safe Browsing and ESB.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
+  // Simulate APK download. Set file type to APK.
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(
+          testing::Return(base::FilePath(FILE_PATH_LITERAL("file.apk"))));
+
+  // Set MIME type to non-APK.
+  ON_CALL(*download_item_, GetMimeType())
+      .WillByDefault(testing::Return("text/plain"));
+
+  // The ping should be sent even though the MIME type is not apk.
+  EXPECT_TRUE(CanSendPing(download_item_.get()));
+
+  // No metric is logged in this case, because SENT is logged in another
+  // function.
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 0);
+}
+
+TEST_F(AndroidTelemetryServiceTest,
+       CanSendPing_AllConditionsMetFilePathNotApk_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   // Enable Safe Browsing.
   profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
   // Enable Scout Reporting.
   profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingScoutReportingEnabled,
                                     true);
+  // Simulate APK download. Set file type to non-APK.
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(
+          testing::Return(base::FilePath(FILE_PATH_LITERAL("file.txt"))));
+
+  // Set MIME type to APK.
+  ON_CALL(*download_item_, GetMimeType())
+      .WillByDefault(
+          testing::Return("application/vnd.android.package-archive"));
+
+  // The ping should be sent even though the file type is not apk.
+  EXPECT_TRUE(CanSendPing(download_item_.get()));
+
+  // No metric is logged in this case, because SENT is logged in another
+  // function.
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 0);
+}
+
+TEST_F(AndroidTelemetryServiceTest,
+       CanSendPing_AllConditionsMetFilePathNotApk) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kExtendedReportingRemovePrefDependency,
+                                 kHashPrefixRealTimeLookupsSamplePing},
+                                {});
+  // Enable Safe Browsing and ESB.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
   // Simulate APK download. Set file type to non-APK.
   ON_CALL(*download_item_, GetFileNameToReportUser())
       .WillByDefault(
@@ -270,9 +390,10 @@ TEST_F(AndroidTelemetryServiceTest, GetReport_ValidateAllFields) {
       .WillByDefault(testing::ReturnRefOfCopy(std::string(kItemHash)));
   ON_CALL(*download_item_, GetReceivedBytes())
       .WillByDefault(testing::Return(kItemReceivedBytes));
-  ON_CALL(*download_item_, GetTargetFilePath())
-      .WillByDefault(testing::ReturnRefOfCopy(
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(testing::Return(
           base::FilePath(FILE_PATH_LITERAL(kItemTargetFilePath))));
+  g_browser_process->SetApplicationLocale("en_US");
   std::unique_ptr<ClientSafeBrowsingReportRequest> report =
       GetReport(download_item_.get());
   ASSERT_TRUE(report);
@@ -286,6 +407,8 @@ TEST_F(AndroidTelemetryServiceTest, GetReport_ValidateAllFields) {
   ASSERT_TRUE(report->has_page_url());
   EXPECT_EQ(kTabURL, report->page_url());
 
+  EXPECT_EQ(report->locale(), "en_US");
+
   ASSERT_TRUE(report->has_download_item_info());
   ASSERT_TRUE(report->download_item_info().has_url());
   EXPECT_EQ(kItemURL, report->download_item_info().url());
@@ -296,6 +419,38 @@ TEST_F(AndroidTelemetryServiceTest, GetReport_ValidateAllFields) {
   EXPECT_EQ(kItemReceivedBytes, report->download_item_info().length());
   ASSERT_TRUE(report->download_item_info().has_file_basename());
   EXPECT_EQ(kItemTargetFilePath, report->download_item_info().file_basename());
+}
+
+TEST_F(AndroidTelemetryServiceTest, AppVerification) {
+  ON_CALL(*download_item_, IsDone()).WillByDefault(testing::Return(true));
+  ON_CALL(*download_item_, GetOriginalUrl())
+      .WillByDefault(testing::ReturnRefOfCopy(GURL(kOriginalURL)));
+  ON_CALL(*download_item_, GetTabUrl())
+      .WillByDefault(testing::ReturnRefOfCopy(GURL(kTabURL)));
+  ON_CALL(*download_item_, GetURL())
+      .WillByDefault(testing::ReturnRefOfCopy(GURL(kItemURL)));
+  ON_CALL(*download_item_, GetHash())
+      .WillByDefault(testing::ReturnRefOfCopy(std::string(kItemHash)));
+  ON_CALL(*download_item_, GetReceivedBytes())
+      .WillByDefault(testing::Return(kItemReceivedBytes));
+  ON_CALL(*download_item_, GetTargetFilePath())
+      .WillByDefault(testing::ReturnRefOfCopy(
+          base::FilePath(FILE_PATH_LITERAL(kItemTargetFilePath))));
+
+  SetVerifyAppsResult(VerifyAppsEnabledResult::SUCCESS_ENABLED);
+  EXPECT_TRUE(GetReport(download_item_.get())
+                  ->client_properties()
+                  .app_verification_enabled());
+
+  SetVerifyAppsResult(VerifyAppsEnabledResult::SUCCESS_NOT_ENABLED);
+  EXPECT_FALSE(GetReport(download_item_.get())
+                   ->client_properties()
+                   .app_verification_enabled());
+
+  SetVerifyAppsResult(VerifyAppsEnabledResult::FAILED);
+  EXPECT_FALSE(GetReport(download_item_.get())
+                   ->client_properties()
+                   .has_app_verification_enabled());
 }
 
 // Regression test for https://crbug.com/1173145#c17.

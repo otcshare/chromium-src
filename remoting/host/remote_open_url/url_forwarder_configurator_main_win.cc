@@ -3,17 +3,18 @@
 // found in the LICENSE file.
 
 #include <objbase.h>
-#include <shlobj.h>
+
 #include <shobjidl.h>
+
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <cwchar>
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/notreached.h"
@@ -106,7 +107,7 @@ bool ShowSetUpUrlForwarderDialog() {
   }
   task_dialog.set_default_button(IDOK);
 
-  absl::optional<int> button_result = task_dialog.Show();
+  std::optional<int> button_result = task_dialog.Show();
   if (!button_result.has_value()) {
     LOG(ERROR) << "Failed to show the setup dialog.";
     return false;
@@ -118,7 +119,6 @@ bool ShowSetUpUrlForwarderDialog() {
       return false;
     default:
       NOTREACHED() << "Unknown button: " << *button_result;
-      return false;
   }
 }
 

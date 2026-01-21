@@ -6,27 +6,29 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "remoting/base/http_status.h"
 #include "remoting/base/protobuf_http_client.h"
 #include "remoting/base/protobuf_http_request.h"
 #include "remoting/base/protobuf_http_request_config.h"
-#include "remoting/base/protobuf_http_status.h"
 #include "remoting/base/protobuf_http_stream_request.h"
-#include "remoting/signaling/ftl_message_reception_channel.h"
+#include "remoting/signaling/ftl_message_channel_strategy.h"
 #include "remoting/signaling/ftl_services_context.h"
+#include "remoting/signaling/message_channel.h"
 #include "remoting/signaling/registration_manager.h"
+#include "remoting/signaling/signaling_address.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace remoting {
 
 namespace {
 
-constexpr char kBatchAckMessagesPath[] = "/v1/message:batchAckMessages";
+constexpr char kBatchAckMessagesPath[] = "/v1/messages:batchAckMessages";
 constexpr char kReceiveMessagesPath[] = "/v1/messages:receive";
 constexpr char kSendMessagePath[] = "/v1/message:send";
 
@@ -40,17 +42,37 @@ constexpr net::NetworkTrafficAnnotationTag kAckMessagesTrafficAnnotation =
         "Remote Desktop backend."
       trigger:
         "Initiating a Chrome Remote Desktop connection."
+      user_data {
+        type: CREDENTIALS
+      }
       data:
         "User's auth code and message ID for the message to be acknowledged."
       destination: GOOGLE_OWNED_SERVICE
+      internal {
+        contacts { email: "garykac@chromium.org" }
+        contacts { email: "jamiewalch@chromium.org" }
+        contacts { email: "joedow@chromium.org" }
+        contacts { email: "lambroslambrou@chromium.org" }
+        contacts { email: "rkjnsn@chromium.org" }
+        contacts { email: "yuweih@chromium.org" }
+      }
+      last_reviewed: "2023-07-07"
     }
     policy {
       cookies_allowed: NO
       setting:
         "This request cannot be stopped in settings, but will not be sent "
         "if the user does not use Chrome Remote Desktop."
-      policy_exception_justification:
-        "Not implemented."
+      chrome_policy {
+        RemoteAccessHostAllowRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowRemoteSupportConnections: false
+        }
+        RemoteAccessHostAllowEnterpriseRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowEnterpriseRemoteSupportConnections: false
+        }
+      }
     })");
 
 constexpr net::NetworkTrafficAnnotationTag kReceiveMessagesTrafficAnnotation =
@@ -64,17 +86,37 @@ constexpr net::NetworkTrafficAnnotationTag kReceiveMessagesTrafficAnnotation =
         "Desktop backend."
       trigger:
         "Initiating a Chrome Remote Desktop connection."
+      user_data {
+        type: CREDENTIALS
+      }
       data:
         "User's auth code and registration ID for retrieving messages."
       destination: GOOGLE_OWNED_SERVICE
+      internal {
+        contacts { email: "garykac@chromium.org" }
+        contacts { email: "jamiewalch@chromium.org" }
+        contacts { email: "joedow@chromium.org" }
+        contacts { email: "lambroslambrou@chromium.org" }
+        contacts { email: "rkjnsn@chromium.org" }
+        contacts { email: "yuweih@chromium.org" }
+      }
+      last_reviewed: "2023-07-07"
     }
     policy {
       cookies_allowed: NO
       setting:
         "This request cannot be stopped in settings, but will not be sent "
         "if the user does not use Chrome Remote Desktop."
-      policy_exception_justification:
-        "Not implemented."
+      chrome_policy {
+        RemoteAccessHostAllowRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowRemoteSupportConnections: false
+        }
+        RemoteAccessHostAllowEnterpriseRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowEnterpriseRemoteSupportConnections: false
+        }
+      }
     })");
 
 constexpr net::NetworkTrafficAnnotationTag kSendMessageTrafficAnnotation =
@@ -88,6 +130,9 @@ constexpr net::NetworkTrafficAnnotationTag kSendMessageTrafficAnnotation =
         "backend."
       trigger:
         "Initiating a Chrome Remote Desktop connection."
+      user_data {
+        type: CREDENTIALS
+      }
       data:
         "User's auth code and Chrome Remote Desktop P2P signaling messages. "
         "This includes session authentication data, SDP (Session Description "
@@ -96,14 +141,31 @@ constexpr net::NetworkTrafficAnnotationTag kSendMessageTrafficAnnotation =
         "https://tools.ietf.org/html/rfc4566 and "
         "https://tools.ietf.org/html/rfc5245."
       destination: GOOGLE_OWNED_SERVICE
+      internal {
+        contacts { email: "garykac@chromium.org" }
+        contacts { email: "jamiewalch@chromium.org" }
+        contacts { email: "joedow@chromium.org" }
+        contacts { email: "lambroslambrou@chromium.org" }
+        contacts { email: "rkjnsn@chromium.org" }
+        contacts { email: "yuweih@chromium.org" }
+      }
+      last_reviewed: "2023-07-07"
     }
     policy {
       cookies_allowed: NO
       setting:
         "This request cannot be stopped in settings, but will not be sent "
         "if the user does not use Chrome Remote Desktop."
-      policy_exception_justification:
-        "Not implemented."
+      chrome_policy {
+        RemoteAccessHostAllowRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowRemoteSupportConnections: false
+        }
+        RemoteAccessHostAllowEnterpriseRemoteSupportConnections {
+          policy_options {mode: MANDATORY}
+          RemoteAccessHostAllowEnterpriseRemoteSupportConnections: false
+        }
+      }
     })");
 
 constexpr base::TimeDelta kInboxMessageTtl = base::Minutes(1);
@@ -115,31 +177,28 @@ FtlMessagingClient::FtlMessagingClient(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     RegistrationManager* registration_manager,
     SignalingTracker* signaling_tracker)
-    : FtlMessagingClient(
-          std::make_unique<ProtobufHttpClient>(
-              FtlServicesContext::GetServerEndpoint(),
-              token_getter,
-              url_loader_factory),
-          registration_manager,
-          std::make_unique<FtlMessageReceptionChannel>(signaling_tracker)) {}
+    : FtlMessagingClient(std::make_unique<ProtobufHttpClient>(
+                             FtlServicesContext::GetServerEndpoint(),
+                             token_getter,
+                             url_loader_factory),
+                         registration_manager,
+                         signaling_tracker,
+                         std::make_unique<FtlMessageChannelStrategy>()) {}
 
 FtlMessagingClient::FtlMessagingClient(
     std::unique_ptr<ProtobufHttpClient> client,
     RegistrationManager* registration_manager,
-    std::unique_ptr<MessageReceptionChannel> channel) {
-  DCHECK(client);
-  DCHECK(registration_manager);
-  DCHECK(channel);
-  client_ = std::move(client);
-  registration_manager_ = registration_manager;
-  reception_channel_ = std::move(channel);
-  reception_channel_->Initialize(
+    SignalingTracker* signaling_tracker,
+    std::unique_ptr<FtlMessageChannelStrategy> channel_strategy)
+    : client_(std::move(client)), registration_manager_(registration_manager) {
+  channel_strategy->Initialize(
       base::BindRepeating(&FtlMessagingClient::OpenReceiveMessagesStream,
                           base::Unretained(this)),
       base::BindRepeating(&FtlMessagingClient::OnMessageReceived,
                           base::Unretained(this)));
+  message_channel_ = std::make_unique<MessageChannel>(
+      std::move(channel_strategy), signaling_tracker);
 }
-
 FtlMessagingClient::~FtlMessagingClient() = default;
 
 base::CallbackListSubscription FtlMessagingClient::RegisterMessageCallback(
@@ -148,60 +207,77 @@ base::CallbackListSubscription FtlMessagingClient::RegisterMessageCallback(
 }
 
 void FtlMessagingClient::SendMessage(
-    const std::string& destination,
-    const std::string& destination_registration_id,
-    const ftl::ChromotingMessage& message,
+    const SignalingAddress& destination_address,
+    SignalingMessage&& message,
     DoneCallback on_done) {
+  std::string user_email;
+  std::string registration_id;
+  if (!destination_address.GetFtlInfo(&user_email, &registration_id)) {
+    LOG(DFATAL) << "Can't get FTL info from signaling address: "
+                << destination_address.id();
+    return;
+  }
+  CHECK(std::holds_alternative<ftl::ChromotingMessage>(message));
+  auto chromoting_message = std::get<ftl::ChromotingMessage>(message);
+
   auto request = std::make_unique<ftl::InboxSendRequest>();
   *request->mutable_header() = FtlServicesContext::CreateRequestHeader(
       registration_manager_->GetFtlAuthToken());
   request->set_time_to_live(kInboxMessageTtl.InMicroseconds());
   *request->mutable_dest_id() =
-      FtlServicesContext::CreateIdFromString(destination);
+      FtlServicesContext::CreateIdFromString(user_email);
 
   std::string serialized_message;
-  bool succeeded = message.SerializeToString(&serialized_message);
+  bool succeeded = chromoting_message.SerializeToString(&serialized_message);
   DCHECK(succeeded);
 
   request->mutable_message()->set_message(serialized_message);
-  request->mutable_message()->set_message_id(base::GenerateGUID());
+  request->mutable_message()->set_message_id(
+      base::Uuid::GenerateRandomV4().AsLowercaseString());
   request->mutable_message()->set_message_type(
       ftl::InboxMessage_MessageType_CHROMOTING_MESSAGE);
   request->mutable_message()->set_message_class(
       ftl::InboxMessage_MessageClass_STATUS);
-  if (!destination_registration_id.empty()) {
-    request->add_dest_registration_ids(destination_registration_id);
+  if (!registration_id.empty()) {
+    request->add_dest_registration_ids(registration_id);
   }
 
+  // SendMessage is non-idempotent (potentially duplicate messages will be
+  // sent), so retries may not be safe.
   ExecuteRequest(kSendMessageTrafficAnnotation, kSendMessagePath,
-                 std::move(request), &FtlMessagingClient::OnSendMessageResponse,
+                 /*enable_retries=*/false, std::move(request),
+                 &FtlMessagingClient::OnSendMessageResponse,
                  std::move(on_done));
 }
 
 void FtlMessagingClient::StartReceivingMessages(base::OnceClosure on_ready,
                                                 DoneCallback on_closed) {
-  reception_channel_->StartReceivingMessages(std::move(on_ready),
-                                             std::move(on_closed));
+  message_channel_->StartReceivingMessages(std::move(on_ready),
+                                           std::move(on_closed));
 }
 
 void FtlMessagingClient::StopReceivingMessages() {
-  reception_channel_->StopReceivingMessages();
+  message_channel_->StopReceivingMessages();
 }
 
 bool FtlMessagingClient::IsReceivingMessages() const {
-  return reception_channel_->IsReceivingMessages();
+  return message_channel_->IsReceivingMessages();
 }
 
 template <typename CallbackFunctor>
 void FtlMessagingClient::ExecuteRequest(
     const net::NetworkTrafficAnnotationTag& tag,
     const std::string& path,
+    bool enable_retries,
     std::unique_ptr<google::protobuf::MessageLite> request,
     CallbackFunctor callback_functor,
     DoneCallback on_done) {
   auto config = std::make_unique<ProtobufHttpRequestConfig>(tag);
   config->request_message = std::move(request);
   config->path = path;
+  if (enable_retries) {
+    config->UseSimpleRetryPolicy();
+  }
   auto http_request = std::make_unique<ProtobufHttpRequest>(std::move(config));
   http_request->SetResponseCallback(base::BindOnce(
       callback_functor, base::Unretained(this), std::move(on_done)));
@@ -210,7 +286,7 @@ void FtlMessagingClient::ExecuteRequest(
 
 void FtlMessagingClient::OnSendMessageResponse(
     DoneCallback on_done,
-    const ProtobufHttpStatus& status,
+    const HttpStatus& status,
     std::unique_ptr<ftl::InboxSendResponse> response) {
   std::move(on_done).Run(status);
 }
@@ -224,6 +300,7 @@ void FtlMessagingClient::BatchAckMessages(
   VLOG(1) << "Acking " << request.message_ids_size() << " messages";
 
   ExecuteRequest(kAckMessagesTrafficAnnotation, kBatchAckMessagesPath,
+                 /*enable_retries=*/true,
                  std::make_unique<ftl::BatchAckMessagesRequest>(request),
                  &FtlMessagingClient::OnBatchAckMessagesResponse,
                  std::move(on_done));
@@ -231,9 +308,10 @@ void FtlMessagingClient::BatchAckMessages(
 
 void FtlMessagingClient::OnBatchAckMessagesResponse(
     DoneCallback on_done,
-    const ProtobufHttpStatus& status,
+    const HttpStatus& status,
     std::unique_ptr<ftl::BatchAckMessagesResponse> response) {
-  // TODO(yuweih): Handle failure.
+  LOG_IF(WARNING, !status.ok())
+      << "Failed to ACK signaling message: " << status.error_message();
   std::move(on_done).Run(status);
 }
 
@@ -242,7 +320,7 @@ FtlMessagingClient::OpenReceiveMessagesStream(
     base::OnceClosure on_channel_ready,
     const base::RepeatingCallback<
         void(std::unique_ptr<ftl::ReceiveMessagesResponse>)>& on_incoming_msg,
-    base::OnceCallback<void(const ProtobufHttpStatus&)> on_channel_closed) {
+    base::OnceCallback<void(const HttpStatus&)> on_channel_closed) {
   auto request = std::make_unique<ftl::ReceiveMessagesRequest>();
   *request->mutable_header() = FtlServicesContext::CreateRequestHeader(
       registration_manager_->GetFtlAuthToken());
@@ -270,24 +348,27 @@ void FtlMessagingClient::RunMessageCallbacks(const ftl::InboxMessage& message) {
   }
   message_tracker_.TrackId(message.message_id());
 
-  if (message.sender_id().type() != ftl::IdType_Type_SYSTEM &&
-      message.sender_registration_id().empty()) {
+  bool is_system = message.sender_id().type() == ftl::IdType_Type_SYSTEM;
+  if (message.sender_registration_id().empty() && !is_system) {
     LOG(WARNING) << "Ignored peer message with no sender registration ID.";
     return;
   }
 
-  if (message.message_type() !=
-      ftl::InboxMessage_MessageType_CHROMOTING_MESSAGE) {
-    LOG(WARNING) << "Received message with unknown type: "
-                 << message.message_type()
-                 << ", sender: " << message.sender_id().id();
+  auto message_type = message.message_type();
+  auto sender_id = message.sender_id().id();
+  if (message_type != ftl::InboxMessage_MessageType_CHROMOTING_MESSAGE) {
+    LOG(WARNING) << "Received message with unknown type: " << message_type
+                 << ", sender: " << sender_id;
     return;
   }
 
   ftl::ChromotingMessage chromoting_message;
   chromoting_message.ParseFromString(message.message());
-  callback_list_.Notify(message.sender_id(), message.sender_registration_id(),
-                        chromoting_message);
+  auto sender_address =
+      is_system ? SignalingAddress::CreateFtlSystemAddress(sender_id)
+                : SignalingAddress::CreateFtlSignalingAddress(
+                      sender_id, message.sender_registration_id());
+  callback_list_.Notify(sender_address, chromoting_message);
 }
 
 void FtlMessagingClient::OnMessageReceived(const ftl::InboxMessage& message) {

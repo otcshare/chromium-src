@@ -6,16 +6,16 @@ PRESUBMIT_VERSION = '2.0.0'
 
 # This line is 'magic' in that git-cl looks for it to decide whether to
 # use Python3 instead of Python2 when running the code in this file.
-USE_PYTHON3 = True
 
 
 def CheckPythonTests(input_api, output_api):
+  local_path = input_api.PresubmitLocalPath()
+  path = lambda *p: input_api.os_path.join(local_path, *p)
+  unit_tests = [
+      path('spdx_writer_test.py'),
+      path('tests', 'integration_test.py'),
+  ]
   return input_api.RunTests(
-      input_api.canned_checks.GetUnitTestsInDirectory(
-          input_api,
-          output_api,
-          input_api.PresubmitLocalPath(),
-          files_to_check=[r'.+_(?:unit)?test\.py$'],
-          run_on_python2=False,
-          run_on_python3=True,
-          skip_shebang_check=True))
+      input_api.canned_checks.GetUnitTests(input_api,
+                                           output_api,
+                                           unit_tests=unit_tests))

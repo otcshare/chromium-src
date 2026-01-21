@@ -9,6 +9,7 @@
 #include "chrome/test/base/android/android_browser_test.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "third_party/blink/public/common/features.h"
 
 // Browser tests that consider ReduceUserAgentAndroidVersionDeviceModel feature
@@ -50,7 +51,9 @@ IN_PROC_BROWSER_TEST_F(ReduceUserAgentAndroidPlatformBrowserTest,
 class DisableFeatureReduceUserAgentAndroidPlatformBrowserTest
     : public ReduceUserAgentAndroidPlatformBrowserTest {
  public:
-  // Copy the implementation of NavigatorID::platform().
+  // TODO(crbug.com/469458271): We shouldn't copy the implementation here once
+  // we remove "Phase 6", or we can just delete this test.
+  // Copy the implementation of NavigatorID::platform()
   std::string GetPlatform() {
     struct utsname osname;
     std::string platform_name;

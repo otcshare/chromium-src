@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/size.h"
@@ -24,9 +24,9 @@ namespace policy {
 
 // This inline bubble shown for restricted copy/paste.
 class ClipboardBubbleView : public views::View {
- public:
-  METADATA_HEADER(ClipboardBubbleView);
+  METADATA_HEADER(ClipboardBubbleView, views::View)
 
+ public:
   explicit ClipboardBubbleView(const std::u16string& text);
   ~ClipboardBubbleView() override;
 
@@ -43,34 +43,34 @@ class ClipboardBubbleView : public views::View {
 };
 
 class ClipboardBlockBubble : public ClipboardBubbleView {
- public:
-  METADATA_HEADER(ClipboardBlockBubble);
+  METADATA_HEADER(ClipboardBlockBubble, ClipboardBubbleView)
 
+ public:
   explicit ClipboardBlockBubble(const std::u16string& text);
   ~ClipboardBlockBubble() override;
 
   // ClipboardBubbleView::
   gfx::Size GetBubbleSize() const override;
 
-  void SetDismissCallback(base::RepeatingCallback<void()> cb);
+  void SetDismissCallback(base::OnceClosure cb);
 
  private:
   raw_ptr<views::LabelButton> button_ = nullptr;
 };
 
 class ClipboardWarnBubble : public ClipboardBubbleView {
- public:
-  METADATA_HEADER(ClipboardWarnBubble);
+  METADATA_HEADER(ClipboardWarnBubble, ClipboardBubbleView)
 
+ public:
   explicit ClipboardWarnBubble(const std::u16string& text);
   ~ClipboardWarnBubble() override;
 
   // ClipboardBubbleView::
   gfx::Size GetBubbleSize() const override;
 
-  void SetDismissCallback(base::RepeatingCallback<void()> cb);
+  void SetDismissCallback(base::OnceClosure cb);
 
-  void SetProceedCallback(base::RepeatingCallback<void()> cb);
+  void SetProceedCallback(base::OnceClosure cb);
 
   void set_paste_cb(base::OnceCallback<void(bool)> paste_cb) {
     paste_cb_ = std::move(paste_cb);

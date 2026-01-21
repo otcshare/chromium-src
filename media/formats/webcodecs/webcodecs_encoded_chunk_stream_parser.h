@@ -9,6 +9,7 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_export.h"
@@ -35,15 +36,14 @@ class MEDIA_EXPORT WebCodecsEncodedChunkStreamParser : public StreamParser {
   void Init(InitCB init_cb,
             NewConfigCB config_cb,
             NewBuffersCB new_buffers_cb,
-            bool ignore_text_tracks /* must be true */,
             EncryptedMediaInitDataCB encrypted_media_init_data_cb,
             NewMediaSegmentCB new_segment_cb,
             EndMediaSegmentCB end_of_segment_cb,
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* buf,
-                                         size_t size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
   [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_expect) override;
 
   // Processes and emits buffers from |buffer_queue|. If state is

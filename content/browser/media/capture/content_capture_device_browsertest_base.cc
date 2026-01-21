@@ -7,7 +7,7 @@
 #include <cmath>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "content/browser/media/capture/frame_sink_video_capture_device.h"
@@ -147,8 +147,10 @@ void ContentCaptureDeviceBrowserTestBase::
   device_->AllocateAndStartWithReceiver(SnapshotCaptureParams(),
                                         capture_stack()->CreateFrameReceiver());
   RunUntilIdle();
-  EXPECT_TRUE(capture_stack()->started());
-  EXPECT_FALSE(capture_stack()->error_occurred());
+  // AllocateAndStart will not trigger 'started' event. The started event will
+  // be triggered when the first frame is captured successfully.
+  EXPECT_FALSE(capture_stack()->Started());
+  EXPECT_FALSE(capture_stack()->ErrorOccurred());
   capture_stack()->ExpectNoLogMessages();
 
   WaitForFirstFrame();
@@ -198,11 +200,6 @@ bool ContentCaptureDeviceBrowserTestBase::IsCrossSiteCaptureTest() const {
 }
 
 void ContentCaptureDeviceBrowserTestBase::SetUp() {
-  // IMPORTANT: Do not add the switches::kUseGpuInTests command line flag: It
-  // causes the tests to take 12+ seconds just to spin up a render process on
-  // debug builds. It can also cause test failures in MSAN builds, or exacerbate
-  // OOM situations on highly-loaded machines.
-
   // Screen capture requires readback from compositor output.
   EnablePixelOutput();
 
@@ -217,8 +214,6 @@ void ContentCaptureDeviceBrowserTestBase::SetUp() {
 
 void ContentCaptureDeviceBrowserTestBase::SetUpCommandLine(
     base::CommandLine* command_line) {
-  ContentBrowserTest::SetUpCommandLine(command_line);
-
   IsolateAllSitesForTesting(command_line);
 
   // Use a small window size to reduce test running time (since screen captures
@@ -259,7 +254,7 @@ ContentCaptureDeviceBrowserTestBase::HandleRequest(const HttpRequest& request) {
   auto response = std::make_unique<BasicHttpResponse>();
   response->set_content_type("text/html");
   const GURL& url = request.GetURL();
-  if (url.path() == kOuterFramePath) {
+  if (url.GetPath() == kOuterFramePath) {
     // A page with a solid white fill color, but containing an iframe in its
     // upper-left quadrant.
     const GURL& inner_frame_url =
@@ -282,7 +277,7 @@ ContentCaptureDeviceBrowserTestBase::HandleRequest(const HttpRequest& request) {
   } else {
     // A page whose solid fill color is based on a query parameter, or
     // defaults to black.
-    const std::string& query = url.query();
+    const std::string& query = url.GetQuery();
     std::string color = "#000000";
     const auto pos = query.find("color=");
     if (pos != std::string::npos) {

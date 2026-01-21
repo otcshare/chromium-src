@@ -9,10 +9,11 @@
 #include <wrl/module.h>
 
 #include <memory>
+#include <string>
 #include <tuple>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/fake_iasync_operation_win.h"
@@ -73,14 +74,8 @@ class FakeStorageFile final
   }
 
   // ABI::Windows::Storage::IStorageFile
-  IFACEMETHODIMP get_FileType(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
-  IFACEMETHODIMP get_ContentType(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP get_FileType(HSTRING* value) final { NOTREACHED(); }
+  IFACEMETHODIMP get_ContentType(HSTRING* value) final { NOTREACHED(); }
   IFACEMETHODIMP OpenAsync(
       FileAccessMode access_mode,
       IAsyncOperation<IRandomAccessStream*>** operation) final {
@@ -113,45 +108,38 @@ class FakeStorageFile final
   IFACEMETHODIMP OpenTransactedWriteAsync(
       IAsyncOperation<StorageStreamTransaction*>** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP CopyOverloadDefaultNameAndOptions(
       IStorageFolder* destination_folder,
       IAsyncOperation<StorageFile*>** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP CopyOverloadDefaultOptions(
       IStorageFolder* destination_folder,
       HSTRING desired_new_name,
       IAsyncOperation<StorageFile*>** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP CopyOverload(IStorageFolder* destination_folder,
                               HSTRING desired_new_name,
                               NameCollisionOption option,
                               IAsyncOperation<StorageFile*>** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP
   CopyAndReplaceAsync(IStorageFile* file_to_replace,
                       IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP MoveOverloadDefaultNameAndOptions(
       IStorageFolder* destination_folder,
       IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP MoveOverloadDefaultOptions(IStorageFolder* destination_folder,
                                             HSTRING desired_new_name,
                                             IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP
   MoveOverload(IStorageFolder* destination_folder,
@@ -159,13 +147,11 @@ class FakeStorageFile final
                NameCollisionOption option,
                IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP
   MoveAndReplaceAsync(IStorageFile* file_to_replace,
                       IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
 
   // ABI::Windows::Storage::IStorageItem
@@ -173,54 +159,37 @@ class FakeStorageFile final
       HSTRING desired_name,
       IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP
   RenameAsync(HSTRING desired_name,
               NameCollisionOption option,
               IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP DeleteAsyncOverloadDefaultOptions(
       IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP
   DeleteAsync(StorageDeleteOption option, IAsyncAction** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP GetBasicPropertiesAsync(
       IAsyncOperation<BasicProperties*>** operation) final {
     NOTREACHED();
-    return E_NOTIMPL;
   }
   IFACEMETHODIMP get_Name(HSTRING* value) final {
     auto copy = base::win::ScopedHString::Create(display_name_with_extension_);
     *value = copy.release();
     return S_OK;
   }
-  IFACEMETHODIMP get_Path(HSTRING* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IFACEMETHODIMP get_Path(HSTRING* value) final { NOTREACHED(); }
   IFACEMETHODIMP
-  get_Attributes(FileAttributes* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  get_Attributes(FileAttributes* value) final { NOTREACHED(); }
   IFACEMETHODIMP
-  get_DateCreated(DateTime* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  get_DateCreated(DateTime* value) final { NOTREACHED(); }
   IFACEMETHODIMP
-  IsOfType(StorageItemTypes type, boolean* value) final {
-    NOTREACHED();
-    return E_NOTIMPL;
-  }
+  IsOfType(StorageItemTypes type, boolean* value) final { NOTREACHED(); }
 
  private:
   void OnOpenAsync(ComPtr<base::win::FakeIAsyncOperation<IRandomAccessStream*>>
@@ -263,14 +232,12 @@ IFACEMETHODIMP FakeStorageFileStatics::GetFileFromPathAsync(
     HSTRING path,
     IAsyncOperation<StorageFile*>** operation) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP FakeStorageFileStatics::GetFileFromApplicationUriAsync(
     IUriRuntimeClass* uri,
     IAsyncOperation<StorageFile*>** operation) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP FakeStorageFileStatics::CreateStreamedFileAsync(
@@ -278,12 +245,6 @@ IFACEMETHODIMP FakeStorageFileStatics::CreateStreamedFileAsync(
     IStreamedFileDataRequestedHandler* data_requested,
     IRandomAccessStreamReference* thumbnail,
     IAsyncOperation<StorageFile*>** operation) {
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload()) {
-    ADD_FAILURE() << "Attempted to use FakeStorageFileStatics in an "
-                     "environment that doesn't support ScopedHStrings.";
-    return E_UNEXPECTED;
-  }
-
   auto fake_iasync_operation =
       Make<base::win::FakeIAsyncOperation<StorageFile*>>();
   HRESULT hr = fake_iasync_operation->QueryInterface(IID_PPV_ARGS(operation));
@@ -313,7 +274,6 @@ IFACEMETHODIMP FakeStorageFileStatics::ReplaceWithStreamedFileAsync(
     IRandomAccessStreamReference* thumbnail,
     IAsyncOperation<StorageFile*>** operation) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP FakeStorageFileStatics::CreateStreamedFileFromUriAsync(
@@ -322,7 +282,6 @@ IFACEMETHODIMP FakeStorageFileStatics::CreateStreamedFileFromUriAsync(
     IRandomAccessStreamReference* thumbnail,
     IAsyncOperation<StorageFile*>** operation) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 IFACEMETHODIMP FakeStorageFileStatics::ReplaceWithStreamedFileFromUriAsync(
@@ -331,7 +290,6 @@ IFACEMETHODIMP FakeStorageFileStatics::ReplaceWithStreamedFileFromUriAsync(
     IRandomAccessStreamReference* thumbnail,
     IAsyncOperation<StorageFile*>** operation) {
   NOTREACHED();
-  return E_NOTIMPL;
 }
 
 }  // namespace webshare

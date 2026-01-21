@@ -4,10 +4,10 @@
 
 #include "chromeos/ash/services/secure_channel/nearby_connection.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -67,15 +67,18 @@ NearbyConnection::~NearbyConnection() {
 
 void NearbyConnection::Connect() {
   SetStatus(Status::IN_PROGRESS);
-  nearby_connector_->Connect(GetRemoteDeviceBluetoothAddressAsVector(), eid_,
-                             message_receiver_.BindNewPipeAndPassRemote(),
-                             base::BindOnce(&NearbyConnection::OnConnectResult,
-                                            weak_ptr_factory_.GetWeakPtr()));
+  nearby_connector_->Connect(
+      GetRemoteDeviceBluetoothAddressAsVector(), eid_,
+      message_receiver_.BindNewPipeAndPassRemote(),
+      nearby_connection_state_listener_.BindNewPipeAndPassRemote(),
+      base::BindOnce(&NearbyConnection::OnConnectResult,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void NearbyConnection::Disconnect() {
   message_sender_.reset();
   message_receiver_.reset();
+  nearby_connection_state_listener_.reset();
   file_payload_handler_.reset();
   CleanUpPendingFileTransfersOnDisconnect();
   SetStatus(Status::DISCONNECTED);
@@ -112,6 +115,12 @@ void NearbyConnection::RegisterPayloadFileImpl(
 
 void NearbyConnection::OnMessageReceived(const std::string& message) {
   OnBytesReceived(message);
+}
+
+void NearbyConnection::OnNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  SetNearbyConnectionSubStatus(step, result);
 }
 
 void NearbyConnection::OnFileTransferUpdate(

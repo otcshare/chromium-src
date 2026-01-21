@@ -5,12 +5,14 @@
 #ifndef DEVICE_GAMEPAD_GAMEPAD_DEVICE_LINUX_H_
 #define DEVICE_GAMEPAD_GAMEPAD_DEVICE_LINUX_H_
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/files/scoped_file.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/abstract_haptic_gamepad.h"
 #include "device/gamepad/gamepad_id_list.h"
 #include "device/gamepad/gamepad_standard_mappings.h"
@@ -129,7 +131,7 @@ class GamepadDeviceLinux final : public AbstractHapticGamepad {
 
   // Maps from indices in the Gamepad buttons array to a boolean value
   // indicating whether the button index is already mapped.
-  std::vector<bool> button_indices_used_;
+  std::array<bool, Gamepad::kButtonsLengthCap> button_indices_used_ = {};
 
   // An identifier for the gamepad device model.
   GamepadId gamepad_id_ = GamepadId::kUnknownGamepad;

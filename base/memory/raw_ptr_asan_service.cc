@@ -3,28 +3,32 @@
 // found in the LICENSE file.
 
 #include "base/memory/raw_ptr_asan_service.h"
-#include "base/allocator/partition_allocator/partition_alloc_buildflags.h"
 
-#if BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+#if PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+
 #include <sanitizer/allocator_interface.h>
 #include <sanitizer/asan_interface.h>
 #include <stdarg.h>
 #include <string.h>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/debug/asan_service.h"
+#include "base/immediate_crash.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_asan_bound_arg_tracker.h"
-#include "base/no_destructor.h"
+#include "base/memory/raw_ptr_asan_hooks.h"
+#include "base/process/process.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/thread_pool/thread_group.h"
-#include "base/threading/thread_local.h"
 
 namespace base {
 
 RawPtrAsanService RawPtrAsanService::instance_;
 
 namespace {
+
 // https://github.com/llvm/llvm-project/blob/b84673b3f424882c4c1961fb2c49b6302b68f344/compiler-rt/lib/asan/asan_mapping.h#L154
 constexpr size_t kShadowScale = 3;
 // https://github.com/llvm/llvm-project/blob/b84673b3f424882c4c1961fb2c49b6302b68f344/compiler-rt/lib/asan/asan_allocator.cpp#L143
@@ -33,6 +37,13 @@ constexpr size_t kChunkHeaderSize = 16;
 constexpr uint8_t kAsanHeapLeftRedzoneMagic = 0xfa;
 // https://github.com/llvm/llvm-project/blob/b84673b3f424882c4c1961fb2c49b6302b68f344/compiler-rt/lib/asan/asan_internal.h#L145
 constexpr uint8_t kAsanUserPoisonedMemoryMagic = 0xf7;
+
+// Intentionally use thread-local-storage here. Making this sequence-local
+// doesn't prevent sharing of PendingReport contents between unrelated tasks, so
+// we keep this at a lower-level and avoid introducing additional assumptions
+// about Chrome's sequence model.
+constinit thread_local RawPtrAsanService::PendingReport pending_report;
+
 }  // namespace
 
 // Mark the first eight bytes of every allocation's header as "user poisoned".
@@ -42,15 +53,16 @@ constexpr uint8_t kAsanUserPoisonedMemoryMagic = 0xf7;
 // static
 NO_SANITIZE("address")
 void RawPtrAsanService::MallocHook(const volatile void* ptr, size_t size) {
-  uint8_t* header =
-      static_cast<uint8_t*>(const_cast<void*>(ptr)) - kChunkHeaderSize;
+  uint8_t* header = UNSAFE_TODO(static_cast<uint8_t*>(const_cast<void*>(ptr)) -
+                                kChunkHeaderSize);
   *RawPtrAsanService::GetInstance().GetShadow(header) =
       kAsanUserPoisonedMemoryMagic;
 }
 
 NO_SANITIZE("address")
 bool RawPtrAsanService::IsSupportedAllocation(void* allocation_start) const {
-  uint8_t* header = static_cast<uint8_t*>(allocation_start) - kChunkHeaderSize;
+  uint8_t* header =
+      UNSAFE_TODO(static_cast<uint8_t*>(allocation_start) - kChunkHeaderSize);
   return *GetShadow(header) == kAsanUserPoisonedMemoryMagic;
 }
 
@@ -73,7 +85,7 @@ void RawPtrAsanService::Configure(
     CHECK_EQ(shadow_scale, kShadowScale);
 
     uint8_t* dummy_alloc = new uint8_t;
-    CHECK_EQ(*GetShadow(dummy_alloc - kChunkHeaderSize),
+    CHECK_EQ(*GetShadow(UNSAFE_TODO(dummy_alloc - kChunkHeaderSize)),
              kAsanHeapLeftRedzoneMagic);
 
     __asan_poison_memory_region(dummy_alloc, 1);
@@ -82,6 +94,7 @@ void RawPtrAsanService::Configure(
 
     __sanitizer_install_malloc_and_free_hooks(MallocHook, FreeHook);
     debug::AsanService::GetInstance()->AddErrorCallback(ErrorReportCallback);
+    internal::InstallRawPtrHooks(base::internal::GetRawPtrAsanHooks());
 
     is_dereference_check_enabled_ = !!enable_dereference_check;
     is_extraction_check_enabled_ = !!enable_extraction_check;
@@ -106,8 +119,8 @@ void RawPtrAsanService::SetPendingReport(ReportType type,
   __asan_locate_address(const_cast<void*>(ptr), nullptr, 0, &region_base,
                         &region_size);
 
-  GetPendingReport() = {type, reinterpret_cast<uintptr_t>(region_base),
-                        region_size};
+  pending_report = {type, reinterpret_cast<uintptr_t>(region_base),
+                    region_size};
 }
 
 namespace {
@@ -140,9 +153,13 @@ int GetCurrentThreadId() {
 }  // namespace
 
 // static
-void RawPtrAsanService::ErrorReportCallback(const char* report, bool*) {
-  if (strcmp(__asan_get_report_description(), "heap-use-after-free") != 0)
+void RawPtrAsanService::ErrorReportCallback(const char* reason,
+                                            bool* should_exit_cleanly,
+                                            bool* should_abort) {
+  if (UNSAFE_TODO(strcmp(__asan_get_report_description(),
+                         "heap-use-after-free")) != 0) {
     return;
+  }
 
   struct {
     ProtectionStatus protection_status;
@@ -150,7 +167,6 @@ void RawPtrAsanService::ErrorReportCallback(const char* report, bool*) {
     const char* protection_details;
   } crash_info;
 
-  auto& pending_report = GetPendingReport();
   uintptr_t ptr = reinterpret_cast<uintptr_t>(__asan_get_report_address());
   uintptr_t bound_arg_ptr = RawPtrAsanBoundArgTracker::GetProtectedArgPtr(ptr);
   if (pending_report.allocation_base <= ptr &&
@@ -271,21 +287,83 @@ void RawPtrAsanService::ErrorReportCallback(const char* report, bool*) {
       crash_info.crash_details, crash_info.protection_details);
 }
 
-// static
-RawPtrAsanService::PendingReport& RawPtrAsanService::GetPendingReport() {
-  // Intentionally use thread-local-storage here. Making this sequence-local
-  // doesn't prevent sharing of PendingReport contents between unrelated
-  // tasks, so we keep this at a lower-level and avoid introducing additional
-  // assumptions about Chrome's sequence model.
-  static NoDestructor<ThreadLocalOwnedPointer<PendingReport>> pending_report;
-  PendingReport* raw_pending_report = pending_report->Get();
-  if (UNLIKELY(!raw_pending_report)) {
-    auto new_pending_report = std::make_unique<PendingReport>();
-    raw_pending_report = new_pending_report.get();
-    pending_report->Set(std::move(new_pending_report));
+namespace {
+enum class MessageLevel {
+  kWarning,
+  kError,
+};
+
+const char* LevelToString(MessageLevel level) {
+  switch (level) {
+    case MessageLevel::kWarning:
+      return "WARNING";
+    case MessageLevel::kError:
+      return "ERROR";
   }
-  return *raw_pending_report;
+}
+
+// Prints AddressSanitizer-like custom error messages.
+void Log(MessageLevel level,
+         uintptr_t address,
+         const char* type,
+         const char* description) {
+#if __has_builtin(__builtin_extract_return_addr) && \
+    __has_builtin(__builtin_return_address)
+  void* pc = __builtin_extract_return_addr(__builtin_return_address(0));
+#else
+  void* pc = nullptr;
+#endif
+
+#if __has_builtin(__builtin_frame_address)
+  void* bp = __builtin_frame_address(0);
+#else
+  void* bp = nullptr;
+#endif
+
+  void* local_stack;
+  void* sp = &local_stack;
+
+  debug::AsanService::GetInstance()->Log(
+      "=================================================================\n"
+      "==%d==%s: MiraclePtr: %s on address %p at pc %p bp %p sp %p",
+      Process::Current().Pid(), LevelToString(level), type, address, pc, bp,
+      sp);
+  __sanitizer_print_stack_trace();
+  __asan_describe_address(reinterpret_cast<void*>(address));
+  debug::AsanService::GetInstance()->Log(
+      "%s\n"
+      "=================================================================",
+      description);
+}
+}  // namespace
+
+void RawPtrAsanService::WarnOnDanglingExtraction(
+    const volatile void* ptr) const {
+  Log(MessageLevel::kWarning, reinterpret_cast<uintptr_t>(ptr),
+      "dangling-pointer-extraction",
+      "A regular ASan report will follow if the extracted pointer is "
+      "dereferenced later.\n"
+      "Otherwise, it is still likely a bug to rely on the address of an "
+      "already freed allocation.\n"
+      "Refer to "
+      "https://chromium.googlesource.com/chromium/src/+/main/base/memory/"
+      "raw_ptr.md for details.");
+}
+
+void RawPtrAsanService::CrashOnDanglingInstantiation(
+    const volatile void* ptr) const {
+  Log(MessageLevel::kError, reinterpret_cast<uintptr_t>(ptr),
+      "dangling-pointer-instantiation",
+      "This crash occurred due to an attempt to assign a dangling pointer to a "
+      "raw_ptr<T> variable, which might lead to use-after-free.\n"
+      "Note that this report might be a false positive if at the moment of the "
+      "crash another raw_ptr<T> is guaranteed to keep the allocation alive.\n"
+      "Refer to "
+      "https://chromium.googlesource.com/chromium/src/+/main/base/memory/"
+      "raw_ptr.md for details.");
+  base::ImmediateCrash();
 }
 
 }  // namespace base
-#endif  // BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+
+#endif  // PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)

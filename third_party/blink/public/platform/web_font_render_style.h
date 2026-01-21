@@ -38,7 +38,6 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 
 class SkFont;
-class SkFontMgr;
 
 namespace blink {
 
@@ -59,7 +58,6 @@ struct BLINK_PLATFORM_EXPORT WebFontRenderStyle {
            use_subpixel_positioning == a.use_subpixel_positioning;
   }
 
-  static void SetSkiaFontManager(sk_sp<SkFontMgr>);
   static void SetHinting(SkFontHinting);
   static void SetAutoHint(bool);
   static void SetUseBitmaps(bool);
@@ -74,7 +72,7 @@ struct BLINK_PLATFORM_EXPORT WebFontRenderStyle {
   // kNoPreference in |other|.
   void OverrideWith(const WebFontRenderStyle& other);
 
-  void ApplyToSkFont(SkFont*, bool should_use_subpixel_positioning) const;
+  void ApplyToSkFont(SkFont*) const;
 
   // Each of the use* members below can take one of three values:
   //   0: off

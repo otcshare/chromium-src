@@ -15,10 +15,11 @@ namespace settings_utils {
 
 bool FixupAndValidateStartupPage(const std::string& url_string,
                                  GURL* fixed_url) {
-  GURL url = url_formatter::FixupURL(url_string, std::string());
+  GURL url = url_formatter::FixupURL(url_string);
   bool valid = url.is_valid() && !extensions::ExtensionTabUtil::IsKillURL(url);
-  if (valid && fixed_url)
+  if (valid && fixed_url) {
     fixed_url->Swap(&url);
+  }
   return valid;
 }
 
@@ -26,12 +27,6 @@ base::RefCountedMemory* GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_SETTINGS_FAVICON, scale_factor);
-}
-
-base::RefCountedMemory* GetPrivacySandboxFaviconResourceBytes(
-    ui::ResourceScaleFactor scale_factor) {
-  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
-      IDR_FLAGS_FAVICON, scale_factor);
 }
 
 }  // namespace settings_utils

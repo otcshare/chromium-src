@@ -5,9 +5,10 @@
 #ifndef DEVICE_FIDO_CBOR_EXTRACT_H_
 #define DEVICE_FIDO_CBOR_EXTRACT_H_
 
-#include "base/callback_forward.h"
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "components/cbor/values.h"
 
@@ -270,10 +271,10 @@ bool Extract(S* output,
                 "empty output structures are invalid, even if you just want to "
                 "check that maps exist, because the code unconditionally "
                 "indexes offset zero.");
-  base::span<const void*> outputs(reinterpret_cast<const void**>(output),
-                                  sizeof(S) / sizeof(void*));
-  base::span<const StepOrByte<void>> steps_void(
-      reinterpret_cast<const StepOrByte<void>*>(steps.data()), steps.size());
+  auto outputs = UNSAFE_TODO(base::span<const void*>(
+      reinterpret_cast<const void**>(output), sizeof(S) / sizeof(void*)));
+  auto steps_void = UNSAFE_TODO(base::span<const StepOrByte<void>>(
+      reinterpret_cast<const StepOrByte<void>*>(steps.data()), steps.size()));
   return internal::Extract(outputs, steps_void, map);
 }
 

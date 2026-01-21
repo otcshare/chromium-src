@@ -8,7 +8,9 @@
 #include "base/android/scoped_java_ref.h"
 #include "components/background_task_scheduler/background_task.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
+
+class Profile;
 
 // A task managing the background activity of the offline page prefetcher.
 class ProxyNativeTask {
@@ -24,22 +26,17 @@ class ProxyNativeTask {
   ~ProxyNativeTask();
 
   void StartBackgroundTaskInReducedMode(JNIEnv* env,
-                                        const JavaParamRef<jobject>& jcaller,
-                                        const JavaParamRef<jobject>& jkey);
+                                        const JavaRef<jobject>& jkey);
 
-  void StartBackgroundTaskWithFullBrowser(
-      JNIEnv* env,
-      const JavaParamRef<jobject>& jcaller,
-      const JavaParamRef<jobject>& jprofile);
+  void StartBackgroundTaskWithFullBrowser(JNIEnv* env,
+                                          Profile* profile);
 
   void OnFullBrowserLoaded(JNIEnv* env,
-                           const JavaParamRef<jobject>& jcaller,
-                           const JavaParamRef<jobject>& jprofile);
+                           Profile* profile);
 
-  jboolean StopBackgroundTask(JNIEnv* env,
-                              const JavaParamRef<jobject>& jcaller);
+  bool StopBackgroundTask(JNIEnv* env);
 
-  void Destroy(JNIEnv* env, const JavaParamRef<jobject>& jcaller);
+  void Destroy(JNIEnv* env);
 
  private:
   std::unique_ptr<background_task::BackgroundTask> background_task_;

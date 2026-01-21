@@ -7,19 +7,21 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ui/views/status_icons/concat_menu_model.h"
+#include "components/dbus/utils/call_method.h"
+#include "components/dbus/utils/export_method.h"
 #include "dbus/bus.h"
 #include "dbus/exported_object.h"
 #include "dbus/message.h"
 #include "dbus/object_proxy.h"
-#include "ui/base/models/simple_menu_model.h"
 #include "ui/linux/status_icon_linux.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 namespace gfx {
@@ -41,7 +43,8 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   StatusIconLinuxDbus& operator=(const StatusIconLinuxDbus&) = delete;
 
   // StatusIcon:
-  void SetIcon(const gfx::ImageSkia& image) override;
+  void SetImage(const gfx::ImageSkia& image) override;
+  void SetIcon(const gfx::VectorIcon& icon) override;
   void SetToolTip(const std::u16string& tool_tip) override;
   void UpdatePlatformContextMenu(ui::MenuModel* model) override;
   void RefreshPlatformContextMenu() override;
@@ -59,24 +62,27 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   void CheckStatusNotifierWatcherHasOwner();
 
   // Step 1: verify that the StatusNotifierWatcher service is owned.
-  void OnNameHasOwnerResponse(dbus::Response* response);
+  void OnNameHasOwnerResponse(dbus_utils::CallMethodResultSig<"b"> response);
 
   // Step 2: verify with the StatusNotifierWatcher that a StatusNotifierHost is
   // registered.
-  void OnHostRegisteredResponse(dbus::Response* response);
+  void OnHostRegisteredResponse(dbus_utils::CallMethodResultSig<"v"> response);
 
-  // Step 3: register a StatusNotifierItem service.
-  void OnOwnership(const std::string& service_name, bool success);
-
-  // Step 4: export methods for the StatusNotifierItem and the properties
+  // Step 3: export methods for the StatusNotifierItem and the properties
   // interface.
   void OnExported(const std::string& interface_name,
                   const std::string& method_name,
                   bool success);
   void OnInitialized(bool success);
+  void RegisterStatusNotifierItem();
 
   // Step 5: register the StatusNotifierItem with the StatusNotifierWatcher.
-  void OnRegistered(dbus::Response* response);
+  void OnRegistered(dbus_utils::CallMethodResultSig<""> response);
+
+  // Called when the name owner of StatusNotifierWatcher has changed, which
+  // can happen when lock/unlock screen.
+  void OnNameOwnerChangedReceived(const std::string& old_owner,
+                                  const std::string& new_owner);
 
   // DBus methods.
   // Action       -> KDE behavior:
@@ -84,18 +90,15 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   // Right-click  -> ContextMenu
   // Scroll       -> Scroll
   // Middle-click -> SecondaryActivate
-  void OnActivate(dbus::MethodCall* method_call,
-                  dbus::ExportedObject::ResponseSender sender);
-  void OnContextMenu(dbus::MethodCall* method_call,
-                     dbus::ExportedObject::ResponseSender sender);
-  void OnScroll(dbus::MethodCall* method_call,
-                dbus::ExportedObject::ResponseSender sender);
-  void OnSecondaryActivate(dbus::MethodCall* method_call,
-                           dbus::ExportedObject::ResponseSender sender);
+  dbus_utils::ExportMethodResult<> OnActivate(int32_t x, int32_t y);
+  dbus_utils::ExportMethodResult<> OnContextMenu(int32_t x, int32_t y);
+  dbus_utils::ExportMethodResult<> OnScroll(int32_t delta,
+                                            std::string orientation);
+  dbus_utils::ExportMethodResult<> OnSecondaryActivate(int32_t x, int32_t y);
 
   void UpdateMenuImpl(ui::MenuModel* model, bool send_signal);
 
-  void SetIconImpl(const gfx::ImageSkia& image, bool send_signals);
+  void SetImageImpl(const gfx::ImageSkia& image, bool send_signals);
 
   void OnIconFileWritten(const base::FilePath& icon_file);
 
@@ -104,8 +107,8 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   scoped_refptr<dbus::Bus> bus_;
 
   int service_id_ = 0;
-  raw_ptr<dbus::ObjectProxy> watcher_ = nullptr;
-  raw_ptr<dbus::ExportedObject> item_ = nullptr;
+  raw_ptr<dbus::ObjectProxy, DanglingUntriaged> watcher_ = nullptr;
+  raw_ptr<dbus::ExportedObject, DanglingUntriaged> item_ = nullptr;
 
   base::RepeatingCallback<void(bool)> barrier_;
 

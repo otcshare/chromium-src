@@ -6,9 +6,10 @@
 #define COMPONENTS_LANGUAGE_CONTENT_BROWSER_GEO_LANGUAGE_PROVIDER_H_
 
 #include <string>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/language/content/browser/language_code_locator.h"
@@ -97,7 +98,7 @@ class GeoLanguageProvider {
   void SetGeoLanguages(const std::vector<std::string>& languages);
 
   // Callback for updates from |ip_geolocation_service_|.
-  void OnIpGeolocationResponse(device::mojom::GeopositionPtr geoposition);
+  void OnIpGeolocationResponse(device::mojom::GeopositionResultPtr result);
 
   // List of BCP-47 language code inferred from public-IP geolocation.
   // May be empty. See comment on CurrentGeoLanguages() above.

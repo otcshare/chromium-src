@@ -5,17 +5,22 @@
 #ifndef BASE_FUCHSIA_SCOPED_SERVICE_BINDING_H_
 #define BASE_FUCHSIA_SCOPED_SERVICE_BINDING_H_
 
-#include <utility>
-
+// TODO(crbug.com/42050587): Remove this include once the explicit
+// async_get_default_dispatcher() is no longer needed.
+#include <lib/async/default.h>
 #include <lib/fidl/cpp/binding.h>
 #include <lib/fidl/cpp/binding_set.h>
 #include <lib/fidl/cpp/interface_request.h>
+#include <lib/fidl/cpp/wire/connect_service.h>
 #include <lib/zx/channel.h>
 
+#include <optional>
+#include <string_view>
+#include <utility>
+
 #include "base/base_export.h"
-#include "base/callback.h"
 #include "base/fuchsia/scoped_service_publisher.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback.h"
 
 namespace sys {
 class OutgoingDirectory;
@@ -30,17 +35,19 @@ namespace base {
 template <typename Interface>
 class BASE_EXPORT ScopedServiceBinding {
  public:
-  // Published a public service in the specified |outgoing_directory|.
-  // |outgoing_directory| and |impl| must outlive the binding.
+  // Publishes a public service in the specified |outgoing_directory|.
+  // |outgoing_directory| and |impl| must outlive the binding. The service is
+  // unpublished on destruction.
   ScopedServiceBinding(sys::OutgoingDirectory* outgoing_directory,
                        Interface* impl,
-                       base::StringPiece name = Interface::Name_)
+                       std::string_view name = Interface::Name_)
       : publisher_(outgoing_directory, bindings_.GetHandler(impl), name) {}
 
   // Publishes a service in the specified |pseudo_dir|. |pseudo_dir| and |impl|
-  // must outlive the binding.
-  ScopedServiceBinding(vfs::PseudoDir* pseudo_dir, Interface* impl,
-                       base::StringPiece name = Interface::Name_)
+  // must outlive the binding. The service is unpublished on destruction.
+  ScopedServiceBinding(vfs::PseudoDir* pseudo_dir,
+                       Interface* impl,
+                       std::string_view name = Interface::Name_)
       : publisher_(pseudo_dir, bindings_.GetHandler(impl), name) {}
 
   ScopedServiceBinding(const ScopedServiceBinding&) = delete;
@@ -62,6 +69,62 @@ class BASE_EXPORT ScopedServiceBinding {
   ScopedServicePublisher<Interface> publisher_;
 };
 
+template <typename Protocol>
+class BASE_EXPORT ScopedNaturalServiceBinding {
+ public:
+  // Publishes a public service in the specified |outgoing_directory|.
+  // |outgoing_directory| and |impl| must outlive the binding. The service is
+  // unpublished on destruction.
+  ScopedNaturalServiceBinding(
+      sys::OutgoingDirectory* outgoing_directory,
+      fidl::Server<Protocol>* impl,
+      std::string_view name = fidl::DiscoverableProtocolName<Protocol>)
+      : publisher_(
+            outgoing_directory,
+            bindings_.CreateHandler(
+                impl,
+                // TODO(crbug.com/42050587): Remove this param once there's an
+                // overload of `CreateHandler` that doesn't require it.
+                async_get_default_dispatcher(),
+                [](fidl::UnbindInfo info) {}),
+            name) {}
+
+  // Publishes a service in the specified |pseudo_dir|. |pseudo_dir| and |impl|
+  // must outlive the binding. The service is unpublished on destruction.
+  ScopedNaturalServiceBinding(
+      vfs::PseudoDir* pseudo_dir,
+      fidl::Server<Protocol>* impl,
+      std::string_view name = fidl::DiscoverableProtocolName<Protocol>)
+      : publisher_(
+            pseudo_dir,
+            bindings_.CreateHandler(
+                impl,
+                // TODO(crbug.com/42050587): Remove this param once there's an
+                // overload of `CreateHandler` that doesn't require it.
+                async_get_default_dispatcher(),
+                [](fidl::UnbindInfo info) {}),
+            name) {}
+
+  ScopedNaturalServiceBinding(const ScopedNaturalServiceBinding&) = delete;
+  ScopedNaturalServiceBinding& operator=(const ScopedNaturalServiceBinding&) =
+      delete;
+
+  ~ScopedNaturalServiceBinding() = default;
+
+  // Registers `on_last_client_callback` to be called every time the number of
+  // connected clients drops to 0.
+  void SetOnLastClientCallback(base::RepeatingClosure on_last_client_callback) {
+    bindings_.set_empty_set_handler(
+        [callback = std::move(on_last_client_callback)] { callback.Run(); });
+  }
+
+  bool has_clients() const { return bindings_.size() != 0; }
+
+ private:
+  fidl::ServerBindingGroup<Protocol> bindings_;
+  ScopedNaturalServicePublisher<Protocol> publisher_;
+};
+
 // Scoped service binding which allows only a single client to be connected
 // at any time. By default a new connection will disconnect an existing client.
 enum class ScopedServiceBindingPolicy {
@@ -78,7 +141,7 @@ class BASE_EXPORT ScopedSingleClientServiceBinding {
   // |outgoing_directory| and |impl| must outlive the binding.
   ScopedSingleClientServiceBinding(sys::OutgoingDirectory* outgoing_directory,
                                    Interface* impl,
-                                   base::StringPiece name = Interface::Name_)
+                                   std::string_view name = Interface::Name_)
       : binding_(impl) {
     publisher_.emplace(
         outgoing_directory,
@@ -90,7 +153,7 @@ class BASE_EXPORT ScopedSingleClientServiceBinding {
 
   ScopedSingleClientServiceBinding(vfs::PseudoDir* publish_to,
                                    Interface* impl,
-                                   base::StringPiece name = Interface::Name_)
+                                   std::string_view name = Interface::Name_)
       : binding_(impl) {
     publisher_.emplace(
         publish_to,
@@ -137,7 +200,7 @@ class BASE_EXPORT ScopedSingleClientServiceBinding {
   }
 
   fidl::Binding<Interface> binding_;
-  absl::optional<ScopedServicePublisher<Interface>> publisher_;
+  std::optional<ScopedServicePublisher<Interface>> publisher_;
   base::OnceClosure on_last_client_callback_;
 };
 

@@ -4,15 +4,17 @@
 
 #include "media/filters/mac/audio_toolbox_audio_encoder.h"
 
-#include "base/bind.h"
+#include "base/apple/osstatus_logging.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/mac/mac_logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/converting_audio_fifo.h"
 #include "media/base/encoder_status.h"
+#include "media/base/media_util.h"
 #include "media/base/timestamp_constants.h"
 #include "media/formats/mp4/es_descriptor.h"
 
@@ -44,13 +46,24 @@ OSStatus ProvideInputCallback(AudioConverterRef decoder,
 
   const AudioBus* bus = input_data->bus;
   buffer_list->mNumberBuffers = bus->channels();
+
+  // SAFETY: According to the answer in
+  // https://stackoverflow.com/questions/14263808/how-to-use-audioconverterfillcomplexbuffer-and-its-callback,
+  // `buffer_list` points to the 5th parameter (output_buffer_list) passed to
+  // `AudioConverterFillComplexBuffer`.
+  //
+  // In `CreateEncoder`, we have already obtained the maximum possible
+  // packet size based on the current parameters by calling
+  // `AudioConverterGetProperty`, and reserved enough space in `DoEncode`.
+  auto buffer_span = UNSAFE_BUFFERS(
+      base::span(buffer_list->mBuffers, buffer_list->mNumberBuffers));
   for (int i = 0; i < bus->channels(); ++i) {
-    buffer_list->mBuffers[i].mNumberChannels = 1;
-    buffer_list->mBuffers[i].mDataByteSize = bus->frames() * sizeof(float);
+    buffer_span[i].mNumberChannels = 1;
+    buffer_span[i].mDataByteSize = bus->frames() * sizeof(float);
 
     // A non-const version of channel(i) exists, but the compiler doesn't select
     // it for some reason.
-    buffer_list->mBuffers[i].mData = const_cast<float*>(bus->channel(i));
+    buffer_span[i].mData = const_cast<float*>(bus->channel(i).data());
   }
 
   // nFramesPerPacket is 1 for the input stream.
@@ -68,7 +81,7 @@ void GenerateOutputFormat(const AudioEncoder::Options& options,
 
   // Output is AAC-LC. Documentation:
   // https://developer.apple.com/documentation/coreaudiotypes/coreaudiotype_constants/mpeg-4_audio_object_type_constants
-  // TODO(crbug.com/1317402): Implement support for other AAC profiles.
+  // TODO(crbug.com/40834751): Implement support for other AAC profiles.
   output_format.mFormatID = kAudioFormatMPEG4AAC;
   output_format.mFormatFlags = kMPEG4Object_AAC_LC;
 }
@@ -114,6 +127,41 @@ bool GenerateCodecDescription(AudioCodec codec,
   return true;
 }
 
+std::optional<int> FindNearestSupportedBitrate(AudioConverterRef encoder,
+                                               UInt32 requested_bitrate) {
+  UInt32 size;
+  auto status = AudioConverterGetPropertyInfo(
+      encoder, kAudioConverterApplicableEncodeBitRates, &size, nullptr);
+  if (status != noErr || !size) {
+    return std::nullopt;
+  }
+
+  auto list_storage =
+      base::HeapArray<AudioValueRange>::Uninit(size / sizeof(AudioValueRange));
+  status = AudioConverterGetProperty(encoder,
+                                     kAudioConverterApplicableEncodeBitRates,
+                                     &size, list_storage.data());
+  if (status != noErr) {
+    return std::nullopt;
+  }
+
+  std::optional<int> closest_match;
+  for (const auto& rate : list_storage) {
+    // If we have an exact match, return it now; this way we only have to care
+    // about range maximums below.
+    if (rate.mMinimum <= requested_bitrate &&
+        rate.mMaximum >= requested_bitrate) {
+      return requested_bitrate;
+    }
+    if (rate.mMaximum <= requested_bitrate &&
+        rate.mMaximum > closest_match.value_or(0)) {
+      closest_match = rate.mMaximum;
+    }
+  }
+
+  return closest_match;
+}
+
 }  // namespace
 
 AudioToolboxAudioEncoder::AudioToolboxAudioEncoder() = default;
@@ -144,9 +192,10 @@ void AudioToolboxAudioEncoder::Initialize(const Options& options,
   AudioStreamBasicDescription output_format = {};
   sample_rate_ = output_format.mSampleRate = options.sample_rate;
   channel_count_ = output_format.mChannelsPerFrame = options.channels;
+  options_ = options;
   GenerateOutputFormat(options, output_format);
 
-  if (!CreateEncoder(options, output_format)) {
+  if (!CreateEncoder(output_format)) {
     std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializationError);
     return;
   }
@@ -164,10 +213,7 @@ void AudioToolboxAudioEncoder::Initialize(const Options& options,
 
   // `fifo_` will rebuffer frames to have kAacFramesPerBuffer, and remix to the
   // right number of channels if needed. `fifo_` should not resample any data.
-  fifo_ = std::make_unique<ConvertingAudioFifo>(
-      fifo_params, fifo_params,
-      base::BindRepeating(&AudioToolboxAudioEncoder::DoEncode,
-                          base::Unretained(this)));
+  fifo_ = std::make_unique<ConvertingAudioFifo>(fifo_params, fifo_params);
 
   timestamp_helper_ = std::make_unique<AudioTimestampHelper>(sample_rate_);
   output_cb_ = output_cb;
@@ -185,13 +231,15 @@ void AudioToolboxAudioEncoder::Encode(std::unique_ptr<AudioBus> input_bus,
 
   DCHECK(timestamp_helper_);
 
-  if (timestamp_helper_->base_timestamp() == kNoTimestamp)
+  if (!timestamp_helper_->base_timestamp()) {
     timestamp_helper_->SetBaseTimestamp(capture_time - base::TimeTicks());
+  }
 
   current_done_cb_ = std::move(done_cb);
 
   // This might synchronously call DoEncode().
   fifo_->Push(std::move(input_bus));
+  DrainFifoOutput();
 
   if (current_done_cb_) {
     // If |current_donc_cb_| is null, DoEncode() has already reported an error.
@@ -208,7 +256,7 @@ void AudioToolboxAudioEncoder::Flush(EncoderStatusCB flush_cb) {
     return;
   }
 
-  if (timestamp_helper_->base_timestamp() == kNoTimestamp) {
+  if (!timestamp_helper_->base_timestamp()) {
     // We never fed any data into the encoder. Skip the flush.
     std::move(flush_cb).Run(EncoderStatus::Codes::kOk);
     return;
@@ -218,6 +266,7 @@ void AudioToolboxAudioEncoder::Flush(EncoderStatusCB flush_cb) {
 
   // Feed remaining data to the encoder. This might call DoEncode().
   fifo_->Flush();
+  DrainFifoOutput();
 
   // Send an EOS to the encoder.
   DoEncode(nullptr);
@@ -230,7 +279,7 @@ void AudioToolboxAudioEncoder::Flush(EncoderStatusCB flush_cb) {
     status_code = EncoderStatus::Codes::kEncoderFailedFlush;
   }
 
-  timestamp_helper_->SetBaseTimestamp(kNoTimestamp);
+  timestamp_helper_->Reset();
 
   if (current_done_cb_) {
     // If |current_done_cb_| is null, DoEncode() has already reported an error.
@@ -239,7 +288,6 @@ void AudioToolboxAudioEncoder::Flush(EncoderStatusCB flush_cb) {
 }
 
 bool AudioToolboxAudioEncoder::CreateEncoder(
-    const Options& options,
     const AudioStreamBasicDescription& output_format) {
   // Input is always float planar.
   AudioStreamBasicDescription input_format = {};
@@ -248,8 +296,8 @@ bool AudioToolboxAudioEncoder::CreateEncoder(
       kLinearPCMFormatFlagIsFloat | kLinearPCMFormatFlagIsNonInterleaved;
   input_format.mFramesPerPacket = 1;
   input_format.mBitsPerChannel = 32;
-  input_format.mSampleRate = options.sample_rate;
-  input_format.mChannelsPerFrame = options.channels;
+  input_format.mSampleRate = options_.sample_rate;
+  input_format.mChannelsPerFrame = options_.channels;
 
   // Note: This is important to get right or AudioConverterNew will balk. For
   // interleaved data, this value should be multiplied by the channel count.
@@ -266,12 +314,41 @@ bool AudioToolboxAudioEncoder::CreateEncoder(
   // NOTE: We don't setup the AudioConverter channel layout here, though we may
   // need to in the future to support obscure multichannel layouts.
 
-  if (options.bitrate && options.bitrate > 0) {
-    UInt32 rate = options.bitrate.value();
+  if (options_.bitrate && options_.bitrate > 0) {
+    // Depending on the output channel count and sample rate, the maximum
+    // supported bitrate may be lower than requested. As such find a supported
+    // bitrate less than or equal to the requested one.
+    UInt32 rate = options_.bitrate.value();
+    options_.bitrate = FindNearestSupportedBitrate(encoder_, rate);
+    if (options_.bitrate && options_.bitrate != rate) {
+      DVLOG(1) << "Reducing bitrate from " << rate
+               << " to nearest supported by the encoder " << *options_.bitrate;
+      rate = *options_.bitrate;
+    } else {
+      // Try configuring with the requested rate and see if we fail.
+      options_.bitrate = rate;
+    }
+
     result = AudioConverterSetProperty(encoder_, kAudioConverterEncodeBitRate,
                                        sizeof(rate), &rate);
     if (result != noErr) {
       OSSTATUS_DLOG(ERROR, result) << "Failed to set encoder bitrate";
+      return false;
+    }
+  }
+
+  if (options_.bitrate_mode) {
+    const bool use_vbr =
+        options_.bitrate_mode == AudioEncoder::BitrateMode::kVariable;
+
+    UInt32 bitrate_mode = use_vbr ? kAudioCodecBitRateControlMode_Variable
+                                  : kAudioCodecBitRateControlMode_Constant;
+
+    result = AudioConverterSetProperty(encoder_,
+                                       kAudioCodecPropertyBitRateControlMode,
+                                       sizeof(bitrate_mode), &bitrate_mode);
+    if (result != noErr) {
+      OSSTATUS_DLOG(ERROR, result) << "Failed to set encoder bitrate mode";
       return false;
     }
   }
@@ -291,7 +368,14 @@ bool AudioToolboxAudioEncoder::CreateEncoder(
   return true;
 }
 
-void AudioToolboxAudioEncoder::DoEncode(AudioBus* input_bus) {
+void AudioToolboxAudioEncoder::DrainFifoOutput() {
+  while (fifo_->HasOutput()) {
+    DoEncode(fifo_->PeekOutput());
+    fifo_->PopOutput();
+  }
+}
+
+void AudioToolboxAudioEncoder::DoEncode(const AudioBus* input_bus) {
   bool is_flushing = !input_bus;
 
   InputData input_data;
@@ -299,15 +383,12 @@ void AudioToolboxAudioEncoder::DoEncode(AudioBus* input_bus) {
   input_data.flushing = is_flushing;
 
   do {
-    // Note: This doesn't zero initialize the buffer.
-    // FIXME: This greedily allocates, we should preserve the buffer for the
-    // next call if we don't fill it.
-    std::unique_ptr<uint8_t[]> packet_buffer(new uint8_t[max_packet_size_]);
+    temp_output_buf_.resize(max_packet_size_);
 
     AudioBufferList output_buffer_list = {};
     output_buffer_list.mNumberBuffers = 1;
     output_buffer_list.mBuffers[0].mNumberChannels = channel_count_;
-    output_buffer_list.mBuffers[0].mData = packet_buffer.get();
+    output_buffer_list.mBuffers[0].mData = temp_output_buf_.data();
     output_buffer_list.mBuffers[0].mDataByteSize = max_packet_size_;
 
     // Encodes |num_packets| into |packet_buffer| by calling the
@@ -335,23 +416,58 @@ void AudioToolboxAudioEncoder::DoEncode(AudioBus* input_bus) {
     }
 
     DCHECK_LE(packet_description.mDataByteSize, max_packet_size_);
+    temp_output_buf_.resize(packet_description.mDataByteSize);
 
     // All AAC-LC packets are 1024 frames in size. Note: If other AAC profiles
     // are added later, this value must be updated.
     auto num_frames = kAacFramesPerBuffer * num_packets;
     DVLOG(1) << __func__ << ": Output: num_frames=" << num_frames;
 
+    bool adts_conversion_ok = true;
+    auto format = options_.aac.value_or(AacOptions()).format;
+    std::optional<CodecDescription> desc;
+    if (timestamp_helper_->frame_count() == 0) {
+      if (format == AudioEncoder::AacOutputFormat::AAC) {
+        desc = codec_desc_;
+      } else {
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+        NullMediaLog log;
+        adts_conversion_ok = aac_config_parser_.Parse(codec_desc_, &log);
+#else
+        adts_conversion_ok = false;
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+      }
+    }
+
+    base::HeapArray<uint8_t> packet_buffer;
+
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+    if (format == AudioEncoder::AacOutputFormat::ADTS) {
+      size_t adts_header_size = 0;
+      packet_buffer = aac_config_parser_.CreateAdtsFromEsds(temp_output_buf_,
+                                                            &adts_header_size);
+      adts_conversion_ok = !packet_buffer.empty();
+    }
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+
+    if (!adts_conversion_ok) {
+      OSSTATUS_DLOG(ERROR, result) << "Conversion to ADTS failed";
+      std::move(current_done_cb_)
+          .Run(EncoderStatus::Codes::kEncoderFailedEncode);
+      return;
+    }
+
+    if (packet_buffer.empty()) {
+      packet_buffer = base::HeapArray<uint8_t>::CopiedFrom(temp_output_buf_);
+    }
+
     EncodedAudioBuffer encoded_buffer(
         AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
                         ChannelLayoutConfig::Guess(channel_count_),
                         sample_rate_, num_frames),
-        std::move(packet_buffer), packet_description.mDataByteSize,
+        std::move(packet_buffer),
         base::TimeTicks() + timestamp_helper_->GetTimestamp(),
         timestamp_helper_->GetFrameDuration(num_frames));
-
-    absl::optional<CodecDescription> desc;
-    if (timestamp_helper_->frame_count() == 0)
-      desc = codec_desc_;
 
     timestamp_helper_->AddFrames(num_frames);
     output_cb_.Run(std::move(encoded_buffer), desc);

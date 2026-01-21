@@ -2,51 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {$} from 'chrome://resources/js/util_ts.js';
+import {$} from 'chrome://resources/js/util.js';
 
-import {GetSsrcFromReport, SsrcInfoManager} from './ssrc_info_manager.js';
-import {generateStatsLabel, isDeprecatedStats} from './stats_helper.js';
+import {generateStatsLabel} from './stats_helper.js';
 
 /**
  * Maintains the stats table.
- * @param {SsrcInfoManager} ssrcInfoManager The source of the ssrc info.
  */
 export class StatsTable {
-  /**
-   * @param {SsrcInfoManager} ssrcInfoManager The source of the ssrc info.
-   */
-  constructor(ssrcInfoManager) {
-    /**
-     * @type {SsrcInfoManager}
-     * @private
-     */
-    this.ssrcInfoManager_ = ssrcInfoManager;
-  }
+  constructor() {}
 
   /**
    * Adds |report| to the stats table of |peerConnectionElement|.
    *
    * @param {!Element} peerConnectionElement The root element.
-   * @param {!Object} report The object containing stats, which is the object
-   *     containing timestamp and values, which is an array of strings, whose
-   *     even index entry is the name of the stat, and the odd index entry is
-   *     the value.
+   * @param {!Object} rtcStats The RTCStats object
    */
-  addStatsReport(peerConnectionElement, report) {
-    const statsTable = this.ensureStatsTable_(peerConnectionElement, report);
+  addRtcStats(peerConnectionElement, rtcStats) {
+    const statsTable = this.ensureStatsTable_(peerConnectionElement, rtcStats);
 
     // Update the label since information may have changed.
     statsTable.parentElement.firstElementChild.innerText =
-        generateStatsLabel(report);
+        generateStatsLabel(rtcStats);
 
-    if (isDeprecatedStats(report)) {
-      statsTable.parentElement.classList.add('stats-deprecation');
-    }
-
-    if (report.stats) {
-      this.addStatsToTable_(
-          statsTable, report.stats.timestamp, report.stats.values);
-    }
+    this.addStatsToTable_(
+        statsTable, rtcStats.timestamp, rtcStats);
   }
 
   clearStatsLists(peerConnectionElement) {
@@ -100,15 +80,13 @@ export class StatsTable {
    * |peerConnectionElement| is created.
    *
    * @param {!Element} peerConnectionElement The root element.
-   * @param {!Object} report The object containing stats, which is the object
-   *     containing timestamp and values, which is an array of strings, whose
-   *     even index entry is the name of the stat, and the odd index entry is
-   *     the value.
+   * @param {!Object} rtcStats The RTCStats object.
    * @return {!Element} The stats table element.
    * @private
    */
-  ensureStatsTable_(peerConnectionElement, report) {
-    const tableId = peerConnectionElement.id + '-table-' + report.id;
+  ensureStatsTable_(peerConnectionElement, rtcStats) {
+    const detailsId = peerConnectionElement.id + '-details-' + rtcStats.id;
+    const tableId = peerConnectionElement.id + '-table-' + rtcStats.id;
     // Disable getElementById restriction here, since |tableId| is not
     // always a valid selector.
     // eslint-disable-next-line no-restricted-properties
@@ -116,11 +94,12 @@ export class StatsTable {
     if (!table) {
       const container = this.ensureStatsTableContainer_(peerConnectionElement);
       const details = document.createElement('details');
-      details.attributes['data-statsType'] = report.type;
+      details.id = detailsId;
+      details.attributes['data-statsType'] = rtcStats.type;
       container.appendChild(details);
 
       const summary = document.createElement('summary');
-      summary.textContent = generateStatsLabel(report);
+      summary.textContent = generateStatsLabel(rtcStats);
       details.appendChild(summary);
 
       table = document.createElement('table');
@@ -129,21 +108,8 @@ export class StatsTable {
       table.border = 1;
 
       table.appendChild($('trth-template').content.cloneNode(true));
-      table.rows[0].cells[0].textContent = 'Statistics ' + report.id;
-
-      // Deprecated stats.
-      if (isDeprecatedStats(report)) {
-        details.appendChild($('stats-deprecation-warning')
-            .content.cloneNode(true));
-      }
-      // Only for legacy stats.
-      if (report.type === 'ssrc') {
-        table.insertRow(1);
-        table.rows[1].appendChild(
-            $('td-colspan-template').content.cloneNode(true));
-        this.ssrcInfoManager_.populateSsrcInfo(
-            table.rows[1].cells[0], GetSsrcFromReport(report));
-      }
+      table.rows[0].cells[0].textContent = 'Statistics ' + rtcStats.id;
+      table['data-peerconnection-id'] = peerConnectionElement.id;
     }
     return table;
   }
@@ -156,12 +122,35 @@ export class StatsTable {
    * @param {Array<string>} statsData An array of stats name and value pairs.
    * @private
    */
-  addStatsToTable_(statsTable, time, statsData) {
+  addStatsToTable_(statsTable, time, rtcStats) {
+    const definedMetrics = new Set(Object.keys(rtcStats));
+    // For any previously reported metric that is no longer defined, replace its
+    // now obsolete value with the magic string "(removed)".
+    const metricsContainer = statsTable.firstChild;
+    for (let i = 0; i < metricsContainer.children.length; ++i) {
+      const metricElement = metricsContainer.children[i];
+      // `metricElement` IDs have the format `bla-bla-bla-bla-${metricName}`.
+      let metricName =
+          metricElement.id.substring(metricElement.id.lastIndexOf('-') + 1);
+      if (metricName.endsWith(']')) {
+        // Computed metrics may contain the '-' character (e.g.
+        // `DifferenceCalculator` based metrics) in which case `metricName` will
+        // not have been parsed correctly. Instead look for starting '['.
+        metricName =
+            metricElement.id.substring(metricElement.id.indexOf('['));
+      }
+      if (metricName && metricName != 'timestamp' &&
+          !definedMetrics.has(metricName)) {
+        this.updateStatsTableRow_(statsTable, metricName, '(removed)');
+      }
+    }
+    // Add or update all "metric: value" that have a defined value.
     const date = new Date(time);
     this.updateStatsTableRow_(statsTable, 'timestamp', date.toLocaleString());
-    for (let i = 0; i < statsData.length - 1; i = i + 2) {
-      this.updateStatsTableRow_(statsTable, statsData[i], statsData[i + 1]);
-    }
+    Object.keys(rtcStats).forEach(property => {
+      if (['timestamp', 'id'].includes(property)) return;
+      this.updateStatsTableRow_(statsTable, property, rtcStats[property]);
+    });
   }
 
   /**
@@ -184,19 +173,20 @@ export class StatsTable {
       trElement = document.createElement('tr');
       trElement.id = trId;
       statsTable.firstChild.appendChild(trElement);
-      const item = $('td2-template').content.cloneNode(true);
+      const item = $('statsrow-template').content.cloneNode(true);
       item.querySelector('td').textContent = rowName;
       trElement.appendChild(item);
     }
-    trElement.cells[1].textContent = value;
-
-    // Highlights the table for the active connection.
-    if (rowName === 'googActiveConnection') {
-      if (value === true) {
-        statsTable.parentElement.classList.add(activeConnectionClass);
-      } else {
-        statsTable.parentElement.classList.remove(activeConnectionClass);
-      }
+    if (typeof value === 'object') {
+      trElement.cells[1].textContent = JSON.stringify(value, null, ' ');
+    } else {
+      trElement.cells[1].textContent = value;
+    }
+    if (rowName.endsWith('Id')) {
+      // unicode link symbol
+      trElement.cells[2].children[0].textContent = ' \u{1F517}';
+      trElement.cells[2].children[0].href =
+        '#' + statsTable['data-peerconnection-id'] + '-table-' + value;
     }
   }
 

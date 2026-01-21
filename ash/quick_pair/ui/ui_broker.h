@@ -11,7 +11,7 @@
 namespace ash {
 namespace quick_pair {
 
-struct Device;
+class Device;
 
 // The UIBroker is the entry point for the UI component in the Quick Pair
 // system. It is responsible for brokering the 'show UI' calls to the correct
@@ -38,7 +38,9 @@ class UIBroker {
   virtual void ShowPairing(scoped_refptr<Device> device) = 0;
   virtual void ShowPairingFailed(scoped_refptr<Device> device) = 0;
   virtual void ShowAssociateAccount(scoped_refptr<Device> device) = 0;
-  virtual void ShowCompanionApp(scoped_refptr<Device> device) = 0;
+  virtual void ShowInstallCompanionApp(scoped_refptr<Device> device) = 0;
+  virtual void ShowLaunchCompanionApp(scoped_refptr<Device> device) = 0;
+  virtual void ShowPasskey(std::u16string device_name, uint32_t passkey) = 0;
   virtual void RemoveNotifications() = 0;
   virtual void ExtendNotification() = 0;
 };

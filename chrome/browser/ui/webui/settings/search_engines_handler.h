@@ -49,10 +49,17 @@ class SearchEnginesHandler : public SettingsPageUIHandler,
   void OnJavascriptDisallowed() override;
 
  private:
+  friend class SearchEnginesHandlerTest;
+
   // Retrieves all search engines and returns them to WebUI.
   void HandleGetSearchEnginesList(const base::Value::List& args);
 
   base::Value::Dict GetSearchEnginesList();
+
+  // Returns whether the search engine choice should be saved in guest mode
+  // Returns null if the profile is not eligible for guest choice saving.
+  // Called from WebUI.
+  void HandleGetSaveGuestChoice(const base::Value::List& args);
 
   // Removes the search engine at the given index. Called from WebUI.
   void HandleRemoveSearchEngine(const base::Value::List& args);
@@ -85,6 +92,11 @@ class SearchEnginesHandler : public SettingsPageUIHandler,
   // Called when an edit is finished and should be saved.
   // Called from WebUI.
   void HandleSearchEngineEditCompleted(const base::Value::List& args);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Request the browser to open its search settings.
+  void HandleOpenBrowserSearchSettings(const base::Value::List& args);
+#endif
 
   // Returns a dictionary to pass to WebUI representing the given search engine.
   base::Value::Dict CreateDictionaryForEngine(size_t index, bool is_default);

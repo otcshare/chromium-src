@@ -5,11 +5,12 @@
 #include "third_party/blink/renderer/controller/memory_usage_monitor.h"
 
 #include "base/observer_list.h"
-#include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/heap/process_heap.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
+#include "v8/include/v8.h"
 
 namespace blink {
 
@@ -47,9 +48,9 @@ bool MemoryUsageMonitor::HasObserver(Observer* observer) {
 void MemoryUsageMonitor::StartMonitoringIfNeeded() {
   if (timer_.IsRunning())
     return;
-  timer_.Start(FROM_HERE, kPingInterval,
-               WTF::BindRepeating(&MemoryUsageMonitor::TimerFired,
-                                  WTF::Unretained(this)));
+  timer_.Start(
+      FROM_HERE, kPingInterval,
+      BindRepeating(&MemoryUsageMonitor::TimerFired, Unretained(this)));
 }
 
 void MemoryUsageMonitor::StopMonitoring() {
@@ -58,25 +59,8 @@ void MemoryUsageMonitor::StopMonitoring() {
 
 MemoryUsage MemoryUsageMonitor::GetCurrentMemoryUsage() {
   MemoryUsage usage;
-  GetV8MemoryUsage(usage);
-  GetBlinkMemoryUsage(usage);
   GetProcessMemoryUsage(usage);
   return usage;
-}
-
-void MemoryUsageMonitor::GetV8MemoryUsage(MemoryUsage& usage) {
-  v8::Isolate* isolate = V8PerIsolateData::MainThreadIsolate();
-  DCHECK(isolate);
-  v8::HeapStatistics heap_statistics;
-  isolate->GetHeapStatistics(&heap_statistics);
-  // TODO: Add memory usage for worker threads.
-  usage.v8_bytes =
-      heap_statistics.total_heap_size() + heap_statistics.malloced_memory();
-}
-
-void MemoryUsageMonitor::GetBlinkMemoryUsage(MemoryUsage& usage) {
-  usage.blink_gc_bytes = ProcessHeap::TotalAllocatedObjectSize();
-  usage.partition_alloc_bytes = WTF::Partitions::TotalSizeOfCommittedPages();
 }
 
 void MemoryUsageMonitor::TimerFired() {

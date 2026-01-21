@@ -27,6 +27,7 @@
 
 #include "base/atomic_sequence_num.h"
 #include "base/process/process_handle.h"
+#include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/weak_identifier_map.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -39,6 +40,8 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
+
+DEFINE_WEAK_IDENTIFIER_MAP(CSSStyleSheet)
 
 // static
 String IdentifiersFactory::CreateIdentifier() {
@@ -78,9 +81,9 @@ String IdentifiersFactory::SubresourceRequestId(uint64_t identifier) {
 }
 
 // static
-String IdentifiersFactory::FrameId(Frame* frame) {
-  // Note: this should be equal to ToTraceValue(frame).
-  return String(ToTraceValue(frame).data());
+const String& IdentifiersFactory::FrameId(Frame* frame) {
+  // Note: this should be equal to GetFrameIdForTracing(frame).
+  return GetFrameIdForTracing(frame);
 }
 
 // static
@@ -114,7 +117,7 @@ String IdentifiersFactory::IdFromToken(const base::UnguessableToken& token) {
 
 // static
 int IdentifiersFactory::IntIdForNode(Node* node) {
-  return static_cast<int>(DOMNodeIds::IdForNode(node));
+  return node->GetDomNodeId();
 }
 
 // static
@@ -125,6 +128,26 @@ String IdentifiersFactory::AddProcessIdPrefixTo(uint64_t id) {
 
   builder.AppendNumber(process_id);
   builder.Append('.');
+  builder.AppendNumber(id);
+
+  return builder.ToString();
+}
+
+// static
+String IdentifiersFactory::IdForCSSStyleSheet(
+    const CSSStyleSheet* style_sheet) {
+  if (style_sheet == nullptr) {
+    return "ua-style-sheet";
+  }
+  const int id = WeakIdentifierMap<CSSStyleSheet>::Identifier(
+      const_cast<CSSStyleSheet*>(style_sheet));
+  const auto process_id = base::GetUniqueIdForProcess().GetUnsafeValue();
+
+  StringBuilder builder;
+
+  builder.Append("style-sheet-");
+  builder.AppendNumber(process_id);
+  builder.Append('-');
   builder.AppendNumber(id);
 
   return builder.ToString();

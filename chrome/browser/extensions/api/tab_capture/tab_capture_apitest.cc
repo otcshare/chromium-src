@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -13,19 +13,13 @@
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tabs/tab_enums.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_features.h"
@@ -33,11 +27,21 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/permissions/active_tab_permission_granter.h"
 #include "extensions/common/switches.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/gl/gl_switches.h"
 #include "url/url_constants.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/alert/tab_alert.h"
+#include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#endif
 
 namespace extensions {
 
@@ -53,6 +57,12 @@ class TabCaptureApiTest : public ExtensionApiTest {
     // Specify smallish window size to make testing of tab capture less CPU
     // intensive.
     command_line->AppendSwitchASCII(::switches::kWindowSize, "300,300");
+    // MSan and GL do not get along so avoid using the GPU with MSan.
+    // TODO(crbug.com/40260482): Remove this after fixing feature
+    // detection in 0c tab capture path as it'll no longer be needed.
+#if !BUILDFLAG(IS_CHROMEOS) && !defined(MEMORY_SANITIZER)
+    command_line->AppendSwitch(::switches::kUseGpuInTests);
+#endif
   }
 
   void AddExtensionToCommandLineAllowlist() {
@@ -61,54 +71,48 @@ class TabCaptureApiTest : public ExtensionApiTest {
   }
 
  protected:
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  std::vector<tabs::TabAlert> GetTabAlertStatesForContents(
+      content::WebContents* web_contents) {
+    return tabs::TabAlertController::From(
+               tabs::TabInterface::GetFromContents(web_contents))
+        ->GetAllActiveAlerts();
+  }
+
   void SimulateMouseClickInCurrentTab() {
-    content::SimulateMouseClick(
-        browser()->tab_strip_model()->GetActiveWebContents(), 0,
-        blink::WebMouseEvent::Button::kLeft);
+    content::SimulateMouseClick(GetActiveWebContents(), 0,
+                                blink::WebMouseEvent::Button::kLeft);
   }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 };
 
-class TabCaptureApiPixelTest : public TabCaptureApiTest {
- public:
-  void SetUp() override {
-    // TODO(crbug/754872): Update this to match WCVCD content_browsertests.
-    if (!IsTooIntensiveForThisPlatform())
-      EnablePixelOutput();
-    TabCaptureApiTest::SetUp();
-  }
+// A very simple test to verify chrome.tabCapture.capture() returns a media
+// stream. Does not rely on chrome.tabs, so can be run on all platforms.
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, StartTabCapture) {
+  AddExtensionToCommandLineAllowlist();
+  ASSERT_TRUE(RunExtensionTest("tab_capture/start_tab_capture",
+                               {.extension_url = "start_tab_capture.html"}))
+      << message_;
+}
 
- protected:
-  bool IsTooIntensiveForThisPlatform() const {
-    // Timeouts on most bots. crbug.com/864250, crbug.com/1040894
-    return true;
-  }
-};
-
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests API behaviors, including info queries, and constraints violations.
-#if BUILDFLAG(IS_MAC)
-// TODO(crbug.com/): Flaky on Mac.
-#define MAYBE_ApiTests DISABLED_ApiTests
-#else
-#define MAYBE_ApiTests ApiTests
-#endif  // BUILDFLAG(IS_MAC)
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ApiTests) {
+// TODO(crbug.com/427298135): Port to desktop Android when chrome.tabs is more
+// fully supported.
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ApiTests) {
   AddExtensionToCommandLineAllowlist();
   ASSERT_TRUE(RunExtensionTest("tab_capture/api_tests",
                                {.extension_url = "api_tests.html"}))
       << message_;
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that tab capture video frames can be received in a VIDEO element.
-// Disabled due to flakes on multiple platforms; see https://crbug.com/1040894.
-// Disabled due to flakes on Windows GPU bots during teardown, and because
-// IsTooIntensiveForThisPlatform prevents this test from actually executing
-// anyways; see crbug.com/1241790.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiPixelTest,
-                       DISABLED_EndToEndWithoutRemoting) {
-  if (IsTooIntensiveForThisPlatform()) {
-    LOG(WARNING) << "Skipping this CPU-intensive test on this platform/build.";
-    return;
-  }
+// TODO(crbug.com/216820236): This test is flaky.
+// Possible culprit:
+// The script uses a complicated animation loop to create frames, when simpler
+// CSS animations would be fine.
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_EndToEndWithoutRemoting) {
   AddExtensionToCommandLineAllowlist();
   // Note: The range of acceptable colors is quite large because there's no way
   // to know whether software compositing is being used for screen capture; and,
@@ -118,25 +122,6 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiPixelTest,
   ASSERT_TRUE(RunExtensionTest(
       "tab_capture/end_to_end",
       {.extension_url = "end_to_end.html?method=local&colorDeviation=50"}))
-      << message_;
-}
-
-// Tests that video frames are captured, transported via WebRTC, and finally
-// received in a VIDEO element.  More allowance is provided for color deviation
-// because of the additional layers of video processing performed within
-// WebRTC.
-// Disabled due to flakes on multiple platforms; see https://crbug.com/1040894.
-IN_PROC_BROWSER_TEST_F(TabCaptureApiPixelTest, DISABLED_EndToEndThroughWebRTC) {
-  if (IsTooIntensiveForThisPlatform()) {
-    LOG(WARNING) << "Skipping this CPU-intensive test on this platform/build.";
-    return;
-  }
-  AddExtensionToCommandLineAllowlist();
-  // See note in EndToEndWithoutRemoting test about why |colorDeviation| is
-  // being set so high.
-  ASSERT_TRUE(RunExtensionTest(
-      "tab_capture/end_to_end",
-      {.extension_url = "end_to_end.html?method=webrtc&colorDeviation=50"}))
       << message_;
 }
 
@@ -150,27 +135,21 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, GetUserMediaTest) {
 
   EXPECT_TRUE(listener.WaitUntilSatisfied());
 
-  content::OpenURLParams params(GURL(url::kAboutBlankURL), content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK, false);
-  content::WebContents* web_contents = browser()->OpenURL(params);
-
   content::RenderFrameHost* const main_frame =
-      web_contents->GetPrimaryMainFrame();
+      NavigateToURLInNewTab(GURL(url::kAboutBlankURL));
   ASSERT_TRUE(main_frame);
   listener.Reply(base::StringPrintf("web-contents-media-stream://%i:%i",
-                                    main_frame->GetProcess()->GetID(),
+                                    main_frame->GetProcess()->GetDeprecatedID(),
                                     main_frame->GetRoutingID()));
 
   ResultCatcher catcher;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
 // Make sure tabCapture.capture only works if the tab has been granted
 // permission via an extension icon click or the extension is allowlisted.
-// TODO(crbug.com/1306351): Flaky on all platforms
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_ActiveTabPermission) {
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ActiveTabPermission) {
   ExtensionTestMessageListener before_open_tab("ready1",
                                                ReplyBehavior::kWillReply);
   ExtensionTestMessageListener before_grant_permission(
@@ -187,10 +166,11 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_ActiveTabPermission) {
 
   // Open a new tab and make sure capture is denied.
   EXPECT_TRUE(before_open_tab.WaitUntilSatisfied());
-  content::OpenURLParams params(GURL(url::kAboutBlankURL), content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK, false);
-  content::WebContents* web_contents = browser()->OpenURL(params);
+  content::RenderFrameHost* const main_frame =
+      NavigateToURLInNewTab(GURL(url::kAboutBlankURL));
+  ASSERT_TRUE(main_frame);
+  content::WebContents* const web_contents =
+      content::WebContents::FromRenderFrameHost(main_frame);
   ASSERT_TRUE(web_contents) << "Failed to open new tab";
   before_open_tab.Reply("");
 
@@ -199,13 +179,13 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_ActiveTabPermission) {
   const Extension* extension = ExtensionRegistry::Get(
       web_contents->GetBrowserContext())->enabled_extensions().GetByID(
           kExtensionId);
-  TabHelper::FromWebContents(web_contents)
-      ->active_tab_permission_granter()->GrantIfRequested(extension);
+  ActiveTabPermissionGranter::FromWebContents(web_contents)
+      ->GrantIfRequested(extension);
   before_grant_permission.Reply("");
 
   // Open a new tab and make sure capture is denied.
   EXPECT_TRUE(before_open_new_tab.WaitUntilSatisfied());
-  browser()->OpenURL(params);
+  NavigateToURLInNewTab(GURL(url::kAboutBlankURL));
   before_open_new_tab.Reply("");
 
   // Add extension to allowlist and make sure capture succeeds.
@@ -214,21 +194,18 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, DISABLED_ActiveTabPermission) {
   before_allowlist_extension.Reply("");
 
   ResultCatcher catcher;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that fullscreen transitions during a tab capture session dispatch
 // events to the onStatusChange listener.  The test loads a page that toggles
 // fullscreen mode, using the Fullscreen Javascript API, in response to mouse
-// clicks.
-#if BUILDFLAG(IS_MAC)
-// TODO(crbug.com/1392776): Flaky on Mac.
-#define MAYBE_FullscreenEvents DISABLED_FullscreenEvents
-#else
-#define MAYBE_FullscreenEvents FullscreenEvents
-#endif  // BUILDFLAG(IS_MAC)
-IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
+// clicks. The fullscreen API requires a user gesture.
+// TODO(crbug.com/427298135): Port to desktop Android. Currently times out
+// without useful stack or logs.
+IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, FullscreenEvents) {
   AddExtensionToCommandLineAllowlist();
 
   ExtensionTestMessageListener capture_started("tab_capture_started");
@@ -249,9 +226,10 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
 
   // Wait until the page examines its results and calls chrome.test.succeed().
   ResultCatcher catcher;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, GrantForChromePages) {
   ExtensionTestMessageListener before_open_tab("ready1",
@@ -263,25 +241,24 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, GrantForChromePages) {
   EXPECT_TRUE(before_open_tab.WaitUntilSatisfied());
 
   // Open a tab on a chrome:// page and make sure we can capture.
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(kValidChromeURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  NavigateToURLInNewTab(GURL(kValidChromeURL));
+  content::WebContents* web_contents = GetActiveWebContents();
   const Extension* extension = ExtensionRegistry::Get(
       web_contents->GetBrowserContext())->enabled_extensions().GetByID(
           kExtensionId);
-  TabHelper::FromWebContents(web_contents)
-      ->active_tab_permission_granter()->GrantIfRequested(extension);
+  ActiveTabPermissionGranter::FromWebContents(web_contents)
+      ->GrantIfRequested(extension);
   before_open_tab.Reply("");
 
   ResultCatcher catcher;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that a tab in incognito mode can be captured.
+// TODO(crbug.com/427298135): Port to desktop Android when incognito is better
+// supported in extensions tests.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, CaptureInSplitIncognitoMode) {
   AddExtensionToCommandLineAllowlist();
   ASSERT_TRUE(RunExtensionTest(
@@ -290,9 +267,8 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, CaptureInSplitIncognitoMode) {
       {.allow_in_incognito = true}))
       << message_;
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-// Tests that valid constraints allow tab capture to start, while invalid ones
-// do not.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, Constraints) {
   AddExtensionToCommandLineAllowlist();
   ASSERT_TRUE(RunExtensionTest("tab_capture/constraints",
@@ -300,12 +276,13 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, Constraints) {
       << message_;
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that the tab indicator (in the tab strip) is shown during tab capture.
+// TODO(crbug.com/427298135): Port this to BrowserWindowInterface after
+// TabListInterfaceObserver supports TabChangedAt().
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
-  content::WebContents* const contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_THAT(chrome::GetTabAlertStatesForContents(contents),
-              ::testing::IsEmpty());
+  content::WebContents* const contents = GetActiveWebContents();
+  ASSERT_THAT(GetTabAlertStatesForContents(contents), ::testing::IsEmpty());
 
   // A TabStripModelObserver that quits the MessageLoop whenever the
   // UI's model is sent an event that might change the indicator status.
@@ -315,9 +292,9 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
       browser_->tab_strip_model()->AddObserver(this);
     }
 
-    void TabChangedAt(content::WebContents* contents,
-                      int index,
-                      TabChangeType change_type) override {
+    void OnTabChangedAt(tabs::TabInterface* tab,
+                        int index,
+                        TabChangeType change_type) override {
       std::move(on_tab_changed_).Run();
     }
 
@@ -332,8 +309,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
     base::OnceClosure on_tab_changed_;
   };
 
-  ASSERT_THAT(chrome::GetTabAlertStatesForContents(contents),
-              ::testing::IsEmpty());
+  ASSERT_THAT(GetTabAlertStatesForContents(contents), ::testing::IsEmpty());
 
   // Run an extension test that just turns on tab capture, which should cause
   // the indicator to turn on.
@@ -345,17 +321,18 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
   // Run the browser until the indicator turns on.
   const base::TimeTicks start_time = base::TimeTicks::Now();
   IndicatorChangeObserver observer(browser());
-  while (!base::Contains(chrome::GetTabAlertStatesForContents(contents),
-                         TabAlertState::TAB_CAPTURING)) {
+  while (!std::ranges::contains(GetTabAlertStatesForContents(contents),
+                                tabs::TabAlert::kTabCapturing)) {
     if (base::TimeTicks::Now() - start_time >
             TestTimeouts::action_max_timeout()) {
-      EXPECT_THAT(chrome::GetTabAlertStatesForContents(contents),
-                  ::testing::Contains(TabAlertState::TAB_CAPTURING));
+      EXPECT_THAT(GetTabAlertStatesForContents(contents),
+                  ::testing::Contains(tabs::TabAlert::kTabCapturing));
       return;
     }
     observer.WaitForTabChange();
   }
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MultipleExtensions) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -379,14 +356,14 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MultipleExtensions) {
   ASSERT_TRUE(extension_b_ready.WaitUntilSatisfied());
 
   // Open a page and grant permissions.
-  content::OpenURLParams params(embedded_test_server()->GetURL("/simple.html"),
-                                content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK, false);
-  content::WebContents* web_contents = browser()->OpenURL(params);
+  content::RenderFrameHost* const main_frame =
+      NavigateToURLInNewTab(embedded_test_server()->GetURL("/simple.html"));
+  ASSERT_TRUE(main_frame);
+  content::WebContents* const web_contents =
+      content::WebContents::FromRenderFrameHost(main_frame);
   ASSERT_TRUE(web_contents) << "Failed to open new tab";
   auto* perm_granter =
-      TabHelper::FromWebContents(web_contents)->active_tab_permission_granter();
+      ActiveTabPermissionGranter::FromWebContents(web_contents);
   // It doesn't seem to work to grant permissions for both extensions at the
   // same time. We start with extension_a.
   perm_granter->GrantIfRequested(extension_a);
@@ -413,7 +390,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MultipleExtensions) {
     ASSERT_TRUE(extension_b_ready.WaitUntilSatisfied());
   }
   // Only one capture should succeed.
-  // TODO(https://crbug.com/1377780): Remove this restriction.
+  // TODO(crbug.com/40874553): Remove this restriction.
   ASSERT_TRUE(extension_a_success.was_satisfied() !=
               extension_b_success.was_satisfied());
   // Avoid CHECK for forgotten reply in ExtensionTestMessageListener destructor.

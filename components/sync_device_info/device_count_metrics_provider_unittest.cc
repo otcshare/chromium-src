@@ -7,7 +7,7 @@
 #include <map>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info.h"
@@ -23,7 +23,8 @@ class DeviceCountMetricsProviderTest : public testing::Test {
             base::BindRepeating(&DeviceCountMetricsProviderTest::GetTrackers,
                                 base::Unretained(this))) {}
 
-  void AddTracker(const std::map<DeviceInfo::FormFactor, int>& count) {
+  void AddTracker(
+      const absl::flat_hash_map<DeviceInfo::FormFactor, int>& count) {
     auto tracker = std::make_unique<FakeDeviceInfoTracker>();
     tracker->OverrideActiveDeviceCount(count);
     trackers_.emplace_back(std::move(tracker));

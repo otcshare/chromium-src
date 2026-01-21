@@ -5,27 +5,23 @@
 package org.chromium.android_webview.common;
 
 import android.content.Context;
-import android.os.Handler;
-import android.os.HandlerThread;
-
-import androidx.annotation.NonNull;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ServiceLoaderUtil;
+import org.chromium.base.StrictModeContext;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.TraceEvent;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
- * This class manages platform-specific services. (i.e. Google Services) The platform
- * should extend this class and use this base class to fetch their specialized version.
+ * This class manages platform-specific services. (i.e. Google Services) The platform should extend
+ * this class and use this base class to fetch their specialized version.
  */
+@NullMarked
 public abstract class PlatformServiceBridge {
-    private static final String TAG = "PlatformServiceBrid-";
-
-    private static PlatformServiceBridge sInstance;
+    private static @Nullable PlatformServiceBridge sInstance;
     private static final Object sInstanceLock = new Object();
-
-    private static HandlerThread sHandlerThread;
-    private static Handler sHandler;
-    private static final Object sHandlerLock = new Object();
 
     protected PlatformServiceBridge() {}
 
@@ -33,10 +29,14 @@ public abstract class PlatformServiceBridge {
     public static PlatformServiceBridge getInstance() {
         synchronized (sInstanceLock) {
             if (sInstance == null) {
-                // Load an instance of PlatformServiceBridgeImpl. Because this can change
-                // depending on the GN configuration, this may not be the PlatformServiceBridgeImpl
-                // defined upstream.
-                sInstance = new PlatformServiceBridgeImpl();
+                try (TraceEvent ignoredEvent =
+                                TraceEvent.scoped("PlatformServiceBridge.getInstance.maybeCreate");
+                        StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
+                    sInstance = ServiceLoaderUtil.maybeCreate(PlatformServiceBridge.class);
+                }
+                if (sInstance == null) {
+                    sInstance = new NoOpPlatformServiceBridge();
+                }
             }
             return sInstance;
         }
@@ -51,43 +51,40 @@ public abstract class PlatformServiceBridge {
         }
     }
 
-    // Return a handler appropriate for executing blocking Platform Service tasks.
-    public static Handler getHandler() {
-        synchronized (sHandlerLock) {
-            if (sHandler == null) {
-                sHandlerThread = new HandlerThread("PlatformServiceBridgeHandlerThread");
-                sHandlerThread.start();
-                sHandler = new Handler(sHandlerThread.getLooper());
-            }
-        }
-        return sHandler;
-    }
-
     // Can WebView use Google Play Services (a.k.a. GMS)?
     public boolean canUseGms() {
         return false;
     }
 
+    // Returns the versionCode of GMS that the user is currently running.
+    // Will always return 0 if GMS is not installed.
+    public int getGmsVersionCode() {
+        return 0;
+    }
+
     // Overriding implementations may call "callback" asynchronously, on any thread.
-    public void querySafeBrowsingUserConsent(@NonNull final Callback<Boolean> callback) {
+    public void querySafeBrowsingUserConsent(final Callback<Boolean> callback) {
         // User opt-in preference depends on a SafetyNet API. In purely upstream builds (which don't
         // communicate with GMS), assume the user has not opted in.
         callback.onResult(false);
     }
 
-    // Overriding implementations may call "callback" asynchronously. For simplicity (and not
-    // because of any technical limitation) we require that "queryMetricsSetting" and "callback"
-    // both get called on WebView's UI thread.
+    // Overriding implementations should not call "callback" synchronously, even if the result is
+    // already known. The callback should be posted to the UI thread to run at the next opportunity,
+    // to avoid blocking the critical path for startup.
     public void queryMetricsSetting(Callback<Boolean> callback) {
         ThreadUtils.assertOnUiThread();
-        callback.onResult(false);
+        ThreadUtils.postOnUiThread(
+                () -> {
+                    callback.onResult(false);
+                });
     }
 
     public void setSafeBrowsingHandler() {
         // We don't have this specialized service.
     }
 
-    public void warmUpSafeBrowsing(Context context, @NonNull final Callback<Boolean> callback) {
+    public void warmUpSafeBrowsing(Context context, final Callback<Boolean> callback) {
         callback.onResult(false);
     }
 
@@ -99,10 +96,17 @@ public abstract class PlatformServiceBridge {
      * but blocks until the operation finishes.
      *
      * @param data uncompressed, serialized UMA proto.
-     * @return Status code of the logging operation.
+     * @return Status code of the logging operation. The status codes are:
+     * - Success cache (went to the devices cache): -1
+     * - Success: 0
+     * - Internal error: 8
+     * - Interrupted: 14
+     * - Timeout: 15
+     * - Cancelled: 16
+     * - API not connected (probably means the API is not available on device): 17
      */
     public int logMetricsBlocking(byte[] data) {
-        // TODO(crbug.com/1248039): remove this once downstream implementation lands.
+        // TODO(crbug.com/40790308): remove this once downstream implementation lands.
         logMetrics(data);
         return 0;
     }
@@ -113,4 +117,26 @@ public abstract class PlatformServiceBridge {
      * query SafeModeController to receive mitigation steps.
      */
     public void checkForAppRecovery() {}
+
+    public @Nullable AwSupervisedUserUrlClassifierDelegate getUrlClassifierDelegate() {
+        return null;
+    }
+
+    /**
+     * Asynchronously obtain a MediaIntegrityProvider implementation.
+     *
+     * @param cloudProjectNumber cloud project number passed by caller
+     * @param apiStatus Enablement status of the api for given origin
+     * @param callback Callback to call with the result containing either a non-null
+     *     MediaIntegrityProvider implementation or an appropriate exception.
+     */
+    public void getMediaIntegrityProvider2(
+            long cloudProjectNumber,
+            @MediaIntegrityApiStatus int apiStatus,
+            ValueOrErrorCallback<MediaIntegrityProvider, MediaIntegrityErrorWrapper> callback) {
+        MediaIntegrityNonRecoverableErrorLogger.log(
+                MediaIntegrityNonRecoverableErrorLogger.AOSP_BUILD);
+        callback.onError(
+                new MediaIntegrityErrorWrapper(MediaIntegrityErrorCode.NON_RECOVERABLE_ERROR));
+    }
 }

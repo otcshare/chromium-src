@@ -9,10 +9,6 @@ namespace switches {
 // Specify ozone platform implementation to use.
 const char kOzonePlatform[] = "ozone-platform";
 
-// Suggests the ozone platform to use (desktop Linux only).  Can be set on
-// chrome://flags.  See https://crbug.com/1246928.
-const char kOzonePlatformHint[] = "ozone-platform-hint";
-
 // Specify location for image dumps.
 const char kOzoneDumpFile[] = "ozone-dump-file";
 
@@ -22,6 +18,11 @@ const char kEnableWaylandIme[] = "enable-wayland-ime";
 // Disable wayland input method editor.
 const char kDisableWaylandIme[] = "disable-wayland-ime";
 
+// Specify wayland text-input protocol version.
+// Defaults to "1" for text-input-v1. Can specify value "3" for experimental
+// text-input-v3 support.
+const char kWaylandTextInputVersion[] = "wayland-text-input-version";
+
 // Use explicit grab when opening popup windows.
 // See https://crbug.com/1220274
 const char kUseWaylandExplicitGrab[] = "use-wayland-explicit-grab";
@@ -29,14 +30,11 @@ const char kUseWaylandExplicitGrab[] = "use-wayland-explicit-grab";
 // Disable explicit DMA-fences
 const char kDisableExplicitDmaFences[] = "disable-explicit-dma-fences";
 
-// Disable running as system compositor.
-const char kDisableRunningAsSystemCompositor[] =
-    "disable-running-as-system-compositor";
-
-// Disable buffer bandwidth compression
-const char kDisableBufferBWCompression[] = "disable-buffer-bw-compression";
-
 // Specifies ozone screen size.
 const char kOzoneOverrideScreenSize[] = "ozone-override-screen-size";
+
+// Allows explicitly picking a DRM render node to create gbm_device for
+// rendering.
+const char kRenderNodeOverride[] = "render-node-override";
 
 }  // namespace switches

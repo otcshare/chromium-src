@@ -9,13 +9,17 @@
 #include <cstring>
 #include <limits>
 
-#include "base/big_endian.h"
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span_writer.h"
 #include "base/logging.h"
 #include "base/notreached.h"
+#include "base/numerics/byte_conversions.h"
 #include "chromecast/media/audio/capture_service/constants.h"
 #include "chromecast/media/audio/capture_service/packet_header.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/limits.h"
 
 namespace chromecast {
@@ -98,10 +102,11 @@ bool ConvertPlanarData(int channels,
   const typename Traits::ValueType* base_data =
       reinterpret_cast<const typename Traits::ValueType*>(data);
   for (int c = 0; c < channels; ++c) {
-    const typename Traits::ValueType* source = base_data + c * frames;
-    float* dest = audio->channel(c);
+    const typename Traits::ValueType* source =
+        UNSAFE_TODO(base_data + c * frames);
+    auto dest = audio->channel(c);
     for (int f = 0; f < frames; ++f) {
-      dest[f] = Traits::ToFloat(source[f]);
+      dest[f] = Traits::ToFloat(UNSAFE_TODO(source[f]));
     }
   }
   return true;
@@ -119,8 +124,8 @@ bool ConvertPlanarFloat(int channels,
   DCHECK_EQ(frames, audio->frames());
   const float* base_data = reinterpret_cast<const float*>(data);
   for (int c = 0; c < channels; ++c) {
-    const float* source = base_data + c * frames;
-    std::copy(source, source + frames, audio->channel(c));
+    const float* source = UNSAFE_TODO(base_data + c * frames);
+    std::copy(source, UNSAFE_TODO(source + frames), audio->channel(c).data());
   }
   return true;
 }
@@ -155,17 +160,17 @@ bool ConvertData(int channels,
 
 }  // namespace
 
-void FillBuffer(char* buf,
-                size_t buf_size,
-                const void* data,
-                size_t data_size) {
-  DCHECK_LE(data_size, buf_size - sizeof(uint16_t));
-  base::WriteBigEndian(  // Deduct the size of |size| itself.
-      buf, static_cast<uint16_t>(buf_size - sizeof(uint16_t)));
-  memcpy(buf + sizeof(uint16_t), data, data_size);
+base::span<uint8_t> FillBuffer(base::span<uint8_t> buf,
+                               base::span<const uint8_t> data) {
+  auto [write_size, rem] = buf.split_at(sizeof(uint16_t));
+  write_size.copy_from(base::U16ToBigEndian(
+      base::checked_cast<uint16_t>(buf.size()) - uint16_t{sizeof(uint16_t)}));
+  auto [write_data, uninit] = rem.split_at(data.size());
+  write_data.copy_from(data);
+  return uninit;
 }
 
-char* PopulatePcmAudioHeader(char* data,
+char* PopulatePcmAudioHeader(char* data_ptr,
                              size_t size,
                              StreamType stream_type,
                              int64_t timestamp_us) {
@@ -173,12 +178,19 @@ char* PopulatePcmAudioHeader(char* data,
   header.message_type = static_cast<uint8_t>(MessageType::kPcmAudio);
   header.stream_type = static_cast<uint8_t>(stream_type);
   header.timestamp_us = timestamp_us;
-  FillBuffer(data, size, &header.message_type,
-             sizeof(header) - sizeof(uint16_t));
-  return data + sizeof(header);
+
+  auto data = base::as_writable_bytes(
+      // TODO(crbug.com/328018028): PopulatePcmAudioHeader() should
+      // get a span, not a pointer and length.
+      UNSAFE_TODO(base::span(data_ptr, size)));
+  auto header_as_bytes =
+      base::byte_span_from_ref(header).subspan(sizeof(header.size));
+  auto after = FillBuffer(data, header_as_bytes);
+  // TODO(crbug.com/328018028): Return the span instead of just a pointer.
+  return base::as_writable_chars(after).data();
 }
 
-void PopulateHandshakeMessage(char* data,
+void PopulateHandshakeMessage(char* data_ptr,
                               size_t size,
                               const StreamInfo& stream_info) {
   HandshakePacket packet;
@@ -189,8 +201,14 @@ void PopulateHandshakeMessage(char* data,
   packet.num_channels = stream_info.num_channels;
   packet.num_frames = stream_info.frames_per_buffer;
   packet.sample_rate = stream_info.sample_rate;
-  FillBuffer(data, size, &packet.message_type,
-             sizeof(packet) - sizeof(uint16_t));
+
+  auto data = base::as_writable_bytes(
+      // TODO(crbug.com/328018028): PopulateHandshakeMessage() should
+      // get a span, not a pointer and length.
+      UNSAFE_TODO(base::span(data_ptr, size)));
+  auto packet_as_bytes =
+      base::byte_span_from_ref(packet).subspan(sizeof(packet.size));
+  FillBuffer(data, packet_as_bytes);
 }
 
 bool ReadPcmAudioHeader(const char* data,
@@ -204,7 +222,7 @@ bool ReadPcmAudioHeader(const char* data,
     return false;
   }
   PcmPacketHeader header;
-  memcpy(&header.message_type, data, kPcmAudioHeaderBytes);
+  UNSAFE_TODO(memcpy(&header.message_type, data, kPcmAudioHeaderBytes));
   if (static_cast<MessageType>(header.message_type) != MessageType::kPcmAudio) {
     LOG(ERROR) << "Message type mismatch.";
     return false;
@@ -231,7 +249,7 @@ scoped_refptr<net::IOBufferWithSize> MakePcmAudioMessage(StreamType stream_type,
   }
   if (data_size > 0) {
     DCHECK(data);
-    std::copy(data, data + data_size, ptr);
+    std::copy(data, UNSAFE_TODO(data + data_size), ptr);
   }
   return io_buffer;
 }
@@ -246,27 +264,23 @@ scoped_refptr<net::IOBufferWithSize> MakeHandshakeMessage(
 
 scoped_refptr<net::IOBufferWithSize> MakeSerializedMessage(
     MessageType message_type,
-    const char* data,
-    size_t data_size) {
-  if (data == nullptr || data_size == 0) {
-    LOG(ERROR) << "Invalid data pointer or size: " << data << ", " << data_size
-               << ".";
+    base::span<const uint8_t> data) {
+  if (data.empty()) {
+    LOG(ERROR) << "Invalid data size: " << data.size() << ".";
     return nullptr;
   }
 
-  const uint8_t message_type_uint8 = static_cast<uint8_t>(message_type);
-  const uint16_t message_size = sizeof(message_type_uint8) + data_size;
+  const auto message_type_uint8 = static_cast<uint8_t>(message_type);
+  const auto message_size =
+      static_cast<uint16_t>(sizeof(message_type_uint8) + data.size());
   DCHECK_LE(message_size, std::numeric_limits<uint16_t>::max());
   auto io_buffer = base::MakeRefCounted<net::IOBufferWithSize>(
       sizeof(message_size) + message_size);
 
-  char* ptr = io_buffer->data();
-  base::WriteBigEndian(ptr, message_size);
-  ptr += sizeof(message_size);
-  memcpy(ptr, &message_type_uint8, sizeof(message_type_uint8));
-  ptr += sizeof(message_type_uint8);
-
-  std::copy(data, data + data_size, ptr);
+  base::SpanWriter writer(base::as_writable_bytes(io_buffer->span()));
+  writer.WriteU16BigEndian(message_size);
+  writer.WriteU8BigEndian(message_type_uint8);
+  writer.Write(data);
   return io_buffer;
 }
 
@@ -277,8 +291,8 @@ bool ReadDataToAudioBus(const StreamInfo& stream_info,
   DCHECK(audio_bus);
   DCHECK_EQ(stream_info.num_channels, audio_bus->channels());
   return ConvertData(stream_info.num_channels, stream_info.sample_format,
-                     data + kPcmAudioHeaderBytes, size - kPcmAudioHeaderBytes,
-                     audio_bus);
+                     UNSAFE_TODO(data + kPcmAudioHeaderBytes),
+                     size - kPcmAudioHeaderBytes, audio_bus);
 }
 
 bool ReadPcmAudioMessage(const char* data,
@@ -302,7 +316,7 @@ bool ReadHandshakeMessage(const char* data,
     return false;
   }
   HandshakePacket packet;
-  memcpy(&packet.message_type, data, kHandshakeHeaderBytes);
+  UNSAFE_TODO(memcpy(&packet.message_type, data, kHandshakeHeaderBytes));
   MessageType message_type = static_cast<MessageType>(packet.message_type);
   if (message_type != MessageType::kHandshake ||
       packet.stream_type > static_cast<uint8_t>(StreamType::kLastType) ||

@@ -11,7 +11,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/system_tray.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/numerics/safe_conversions.h"
@@ -24,7 +24,7 @@
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler_delegate_impl.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/ui/ash/system_tray_client_impl.h"
+#include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/upgrade_detector/build_state.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
@@ -218,8 +218,7 @@ void MinimumVersionPolicyHandler::OnPolicyChanged() {
       cros_settings_->PrepareTrustedValues(
           base::BindOnce(&MinimumVersionPolicyHandler::OnPolicyChanged,
                          weak_factory_.GetWeakPtr()));
-  if (status != ash::CrosSettingsProvider::TRUSTED || !IsPolicyApplicable() ||
-      !ash::features::IsMinimumChromeVersionEnabled()) {
+  if (status != ash::CrosSettingsProvider::TRUSTED || !IsPolicyApplicable()) {
     VLOG(1) << "Ignore policy change - policy is not applicable or settings "
                "are not trusted.";
     return;
@@ -456,10 +455,10 @@ void MinimumVersionPolicyHandler::StartObservingUpdate() {
     build_state->AddObserver(this);
 }
 
-absl::optional<int> MinimumVersionPolicyHandler::GetTimeRemainingInDays() {
+std::optional<int> MinimumVersionPolicyHandler::GetTimeRemainingInDays() {
   const base::Time now = clock_->Now();
   if (!state_ || update_required_deadline_ <= now)
-    return absl::nullopt;
+    return std::nullopt;
   base::TimeDelta time_remaining = update_required_deadline_ - now;
   return GetDaysRounded(time_remaining);
 }
@@ -468,7 +467,7 @@ void MinimumVersionPolicyHandler::MaybeShowNotificationOnLogin() {
   // |days| could be null if |update_required_deadline_timer_| expired while
   // login was in progress, else we would have shown the update required screen
   // at startup.
-  absl::optional<int> days = GetTimeRemainingInDays();
+  std::optional<int> days = GetTimeRemainingInDays();
   if (days && days.value() <= 1)
     MaybeShowNotification(base::Days(days.value()));
 }
@@ -507,7 +506,6 @@ void MinimumVersionPolicyHandler::MaybeShowNotification(
     button_click_callback = base::BindOnce(&OpenNetworkSettings);
   } else {
     NOTREACHED();
-    return;
   }
   notification_handler_->Show(type, warning, manager, device_type,
                               std::move(button_click_callback),

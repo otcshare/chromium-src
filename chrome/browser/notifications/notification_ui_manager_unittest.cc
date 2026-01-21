@@ -15,8 +15,6 @@
 #include "chrome/browser/notifications/profile_notification.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
-#include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/message_center/message_center.h"
@@ -29,7 +27,7 @@ namespace message_center {
 
 class NotificationUIManagerTest : public BrowserWithTestWindowTest {
  public:
-  NotificationUIManagerTest() {}
+  NotificationUIManagerTest() = default;
 
  protected:
   void SetUp() override {
@@ -63,7 +61,7 @@ class NotificationUIManagerTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  raw_ptr<MessageCenter> message_center_;
+  raw_ptr<MessageCenter, DanglingUntriaged> message_center_;
 };
 
 TEST_F(NotificationUIManagerTest, SetupNotificationManager) {
@@ -102,6 +100,17 @@ TEST_F(NotificationUIManagerTest, GetAllIdsReturnsOriginalId) {
   notification_manager()->Add(GetANotification("test"), profile());
   std::set<std::string> ids = notification_manager()->GetAllIdsByProfile(
       ProfileNotification::GetProfileID(profile()));
+  ASSERT_EQ(1u, ids.size());
+  EXPECT_EQ(*ids.begin(), "test");
+}
+
+TEST_F(NotificationUIManagerTest, GetAllIdsByOriginReturnsOriginalId) {
+  EXPECT_TRUE(message_center()->NotificationCount() == 0);
+  notification_manager()->Add(GetANotification("test"), profile());
+  std::set<std::string> ids =
+      notification_manager()->GetAllIdsByProfileAndOrigin(
+          ProfileNotification::GetProfileID(profile()),
+          GURL("chrome-extension://adflkjsdflkdsfdsflkjdsflkdjfs"));
   ASSERT_EQ(1u, ids.size());
   EXPECT_EQ(*ids.begin(), "test");
 }

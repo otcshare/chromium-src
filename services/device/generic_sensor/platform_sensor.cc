@@ -4,28 +4,31 @@
 
 #include "services/device/generic_sensor/platform_sensor.h"
 
+#include <atomic>
+#include <list>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
 #include "services/device/generic_sensor/platform_sensor_provider.h"
 #include "services/device/generic_sensor/platform_sensor_util.h"
 #include "services/device/public/cpp/generic_sensor/platform_sensor_configuration.h"
+#include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer_reader.h"
 
 namespace device {
 
 PlatformSensor::PlatformSensor(mojom::SensorType type,
                                SensorReadingSharedBuffer* reading_buffer,
-                               PlatformSensorProvider* provider)
+                               base::WeakPtr<PlatformSensorProvider> provider)
     : main_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       reading_buffer_(reading_buffer),
       type_(type),
-      provider_(provider) {
+      provider_(std::move(provider)),
+      is_active_(false) {
   VLOG(1) << "Platform sensor created. Type " << type_ << ".";
 }
 
@@ -76,8 +79,9 @@ bool PlatformSensor::StopListening(Client* client,
     return false;
 
   auto& config_list = client_entry->second;
-  if (base::Erase(config_list, config) == 0)
+  if (std::erase(config_list, config) == 0) {
     return false;
+  }
 
   return UpdateSensorInternal(config_map_);
 }
@@ -121,54 +125,68 @@ bool PlatformSensor::GetLatestRawReading(SensorReading* result) const {
 
 void PlatformSensor::UpdateSharedBufferAndNotifyClients(
     const SensorReading& reading) {
-  if (UpdateSharedBuffer(reading, /*do_significance_check=*/true)) {
+  bool updated;
+  {
+    base::AutoLock auto_lock(lock_);
+    updated = UpdateSharedBuffer(reading);
+  }
+  if (updated) {
     main_task_runner()->PostTask(
         FROM_HERE, base::BindOnce(&PlatformSensor::NotifySensorReadingChanged,
                                   weak_factory_.GetWeakPtr()));
   }
 }
 
-bool PlatformSensor::UpdateSharedBuffer(const SensorReading& reading,
-                                        bool do_significance_check) {
-  if (!reading_buffer_)
+bool PlatformSensor::UpdateSharedBuffer(const SensorReading& reading) {
+  if (!reading_buffer_ || !is_active_) {
     return false;
-
-  {
-    base::AutoLock auto_lock(lock_);
-    // Bail out early if the new reading does not differ significantly from
-    // our current one, when the sensor is not reporting data continuously.
-    // Empty readings (i.e. with a zero timestamp) are always processed.
-    if (GetReportingMode() == mojom::ReportingMode::ON_CHANGE &&
-        do_significance_check && last_raw_reading_.has_value() &&
-        !IsSignificantlyDifferent(*last_raw_reading_, reading, type_)) {
-      return false;
-    }
-    // Save the raw (non-rounded) reading for fusion sensors.
-    last_raw_reading_ = reading;
   }
+
+  // Bail out early if the new reading does not differ significantly from
+  // our current one, when the sensor is not reporting data continuously.
+  // Empty readings (i.e. with a zero timestamp) are always processed.
+  if (GetReportingMode() == mojom::ReportingMode::ON_CHANGE &&
+      last_raw_reading_.has_value() &&
+      !IsSignificantlyDifferent(*last_raw_reading_, reading, type_)) {
+    return false;
+  }
+  // Save the raw (non-rounded) reading for fusion sensors.
+  last_raw_reading_ = reading;
 
   // Round the reading to guard user privacy. See https://crbug.com/1018180.
   SensorReading rounded_reading = reading;
   RoundSensorReading(&rounded_reading, type_);
 
-  {
-    base::AutoLock auto_lock(lock_);
-    // Report new values only if rounded value is different compared to
-    // previous value.
-    if (GetReportingMode() == mojom::ReportingMode::ON_CHANGE &&
-        do_significance_check && last_rounded_reading_.has_value() &&
-        base::ranges::equal(rounded_reading.raw.values,
-                            last_rounded_reading_->raw.values)) {
-      return false;
-    }
-    // Save rounded value for next comparison.
-    last_rounded_reading_ = rounded_reading;
+  // Report new values only if rounded value is different compared to
+  // previous value.
+  if (GetReportingMode() == mojom::ReportingMode::ON_CHANGE &&
+      last_rounded_reading_.has_value() &&
+      std::ranges::equal(rounded_reading.raw.values,
+                         last_rounded_reading_->raw.values)) {
+    return false;
   }
-  reading_buffer_->seqlock.value().WriteBegin();
-  device::OneWriterSeqLock::AtomicWriterMemcpy(
-      &reading_buffer_->reading, &rounded_reading, sizeof(SensorReading));
-  reading_buffer_->seqlock.value().WriteEnd();
+  // Save rounded value for next comparison.
+  last_rounded_reading_ = rounded_reading;
+
+  WriteToSharedBuffer(rounded_reading);
+
   return true;
+}
+
+void PlatformSensor::ResetSharedBuffer() {
+  last_raw_reading_.reset();
+  last_rounded_reading_.reset();
+  if (is_active_) {
+    WriteToSharedBuffer(SensorReading());
+  }
+}
+
+void PlatformSensor::WriteToSharedBuffer(const SensorReading& reading) {
+  CHECK(is_active_);
+  reading_buffer_->seqlock.value().WriteBegin();
+  std::atomic_ref(reading_buffer_->reading)
+      .store(reading, std::memory_order_relaxed);
+  reading_buffer_->seqlock.value().WriteEnd();
 }
 
 void PlatformSensor::NotifySensorReadingChanged() {
@@ -201,21 +219,37 @@ bool PlatformSensor::UpdateSensorInternal(const ConfigMap& configurations) {
   }
 
   if (!optimal_configuration) {
-    is_active_ = false;
     StopSensor();
-    // If we reached this condition, we want to set the current reading to zero
-    // regardless of the previous reading's value per
-    // https://w3c.github.io/sensors/#set-sensor-settings. That is the reason
-    // to skip significance check.
-    UpdateSharedBuffer(SensorReading(), /*do_significance_check=*/false);
+    {
+      base::AutoLock auto_lock(lock_);
+      // If we reached this condition, we want to set the current reading to
+      // zero regardless of the previous reading's value per
+      // https://w3c.github.io/sensors/#set-sensor-settings.
+      ResetSharedBuffer();
+      is_active_ = false;
+    }
     return true;
   }
 
-  is_active_ = StartSensor(*optimal_configuration);
-  return is_active_;
+  // TODO(crbug.com/40261729): `is_active_` needs to be set to true
+  // before before calling `StartSensor` because
+  // `FakePlatformSensor::StartSensor` calls
+  // `PlatformSensor::UpdateSharedBuffer` before returning, which without this
+  // will not update the reading buffer.
+  {
+    base::AutoLock auto_lock(lock_);
+    is_active_ = true;
+  }
+  bool started = StartSensor(*optimal_configuration);
+  {
+    base::AutoLock auto_lock(lock_);
+    is_active_ = started;
+    return is_active_;
+  }
 }
 
 bool PlatformSensor::IsActiveForTesting() const {
+  base::AutoLock auto_lock(lock_);
   return is_active_;
 }
 
@@ -245,12 +279,12 @@ bool PlatformSensor::IsSignificantlyDifferent(const SensorReading& lhs,
     case mojom::SensorType::ABSOLUTE_ORIENTATION_QUATERNION:
     case mojom::SensorType::RELATIVE_ORIENTATION_QUATERNION:
     case mojom::SensorType::MAGNETOMETER:
-    case mojom::SensorType::PRESSURE:
-    case mojom::SensorType::PROXIMITY:
-      return !base::ranges::equal(lhs.raw.values, rhs.raw.values);
+      return !std::ranges::equal(lhs.raw.values, rhs.raw.values);
   }
-  NOTREACHED();
-  return false;
+}
+
+base::WeakPtr<PlatformSensor> PlatformSensor::AsWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 }  // namespace device

@@ -13,7 +13,7 @@ EnhancedNetworkTtsErrorHandlingUnitTest =
   testGenPreamble() {
     super.testGenPreamble();
     super.testGenPreambleCommon(
-        'kSelectToSpeakExtensionId', false /* failOnConsoleError */);
+        'kEnhancedNetworkTtsExtensionId', false /* failOnConsoleError */);
   }
 };
 
@@ -66,7 +66,8 @@ SYNC_TEST_F(
     'EnhancedNetworkTtsErrorHandlingUnitTest', 'DecodeAudioDataFailed',
     async function() {
       sampleRate = 10000;
-      audioBuffer = await EnhancedNetworkTts.decodeAudioDataAtSampleRate(
-          new Uint8Array([]).buffer, sampleRate);
+      audioBuffer =
+          await enhancedNetworkTts.decodeAudioDataAtSampleRateForTesting(
+              [], sampleRate);
       assertEquals(audioBuffer, null);
     });

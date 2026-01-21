@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/timing/layout_shift.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -16,11 +18,9 @@ LayoutShift* LayoutShift::Create(double start_time,
                                  bool input_detected,
                                  double input_timestamp,
                                  AttributionList sources,
-                                 uint32_t navigation_id,
-                                 DOMWindow* source) {
+                                 DOMWindow* source, uint32_t navigation_id) {
   return MakeGarbageCollected<LayoutShift>(start_time, value, input_detected,
-                                           input_timestamp, sources,
-                                           navigation_id, source);
+                                           input_timestamp, sources, source, navigation_id);
 }
 
 LayoutShift::LayoutShift(double start_time,
@@ -28,13 +28,8 @@ LayoutShift::LayoutShift(double start_time,
                          bool input_detected,
                          double input_timestamp,
                          AttributionList sources,
-                         uint32_t navigation_id,
-                         DOMWindow* source)
-    : PerformanceEntry(g_empty_atom,
-                       start_time,
-                       start_time,
-                       navigation_id,
-                       source),
+                         DOMWindow* source, uint32_t navigation_id)
+    : PerformanceEntry(/*duration=*/0.0, g_empty_atom, start_time, source, navigation_id),
       value_(value),
       had_recent_input_(input_detected),
       most_recent_input_timestamp_(input_timestamp),
@@ -52,13 +47,12 @@ PerformanceEntryType LayoutShift::EntryTypeEnum() const {
 
 void LayoutShift::BuildJSONValue(V8ObjectBuilder& builder) const {
   PerformanceEntry::BuildJSONValue(builder);
-  builder.Add("value", value_);
-  builder.Add("hadRecentInput", had_recent_input_);
-  builder.Add("lastInputTime", most_recent_input_timestamp_);
-
-  ScriptState* script_state = builder.GetScriptState();
-  builder.Add("sources", FreezeV8Object(ToV8(sources_, script_state),
-                                        script_state->GetIsolate()));
+  builder.AddNumber("value", value_);
+  builder.AddBoolean("hadRecentInput", had_recent_input_);
+  builder.AddNumber("lastInputTime", most_recent_input_timestamp_);
+  builder.AddV8Value("sources",
+                     ToV8Traits<IDLArray<LayoutShiftAttribution>>::ToV8(
+                         builder.GetScriptState(), sources_));
 }
 
 void LayoutShift::Trace(Visitor* visitor) const {

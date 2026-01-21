@@ -17,9 +17,10 @@
 #include "ash/shell.h"
 #include "ash/system/human_presence/human_presence_metrics.h"
 #include "ash/test/ash_test_base.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
@@ -187,8 +188,9 @@ void DecodeJsonStringAndNormalize(const std::string& json_string,
 void SetQuickDimPreference(bool enabled) {
   PrefService* prefs =
       Shell::Get()->session_controller()->GetActivePrefService();
-  if (!prefs)
+  if (!prefs) {
     return;
+  }
 
   prefs->SetBoolean(prefs::kPowerQuickDimEnabled, enabled);
 }
@@ -196,11 +198,23 @@ void SetQuickDimPreference(bool enabled) {
 void SetAdaptiveChargingPreference(bool enabled) {
   PrefService* prefs =
       Shell::Get()->session_controller()->GetActivePrefService();
-  if (!prefs)
+  if (!prefs) {
     return;
+  }
 
   prefs->SetBoolean(prefs::kPowerAdaptiveChargingEnabled, enabled);
 }
+
+void SetChargeLimitPreference(bool enabled) {
+  PrefService* prefs =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  if (!prefs) {
+    return;
+  }
+
+  prefs->SetBoolean(prefs::kPowerChargeLimitEnabled, enabled);
+}
+
 
 }  // namespace
 
@@ -215,13 +229,17 @@ class PowerPrefsTest : public NoSessionAshTestBase {
 
   // NoSessionAshTestBase:
   void SetUp() override {
-    feature_list_.InitWithFeatures(
-        {features::kQuickDim, features::kAdaptiveCharging}, {});
+    feature_list_.InitWithFeatures({features::kQuickDim}, {});
     base::CommandLine::ForCurrentProcess()->AppendSwitch(switches::kHasHps);
     HumanPresenceDBusClient::InitializeFake();
     FakeHumanPresenceDBusClient::Get()->Reset();
     FakeHumanPresenceDBusClient::Get()->set_hps_service_is_available(true);
     NoSessionAshTestBase::SetUp();
+
+    // Initializes adaptive charging hardware support to false.
+    power_manager::PowerSupplyProperties power_props;
+    power_props.set_adaptive_charging_supported(false);
+    power_manager_client()->UpdatePowerProperties(power_props);
 
     power_policy_controller_ = chromeos::PowerPolicyController::Get();
     power_prefs_ = ShellTestApi().power_prefs();
@@ -238,7 +256,8 @@ class PowerPrefsTest : public NoSessionAshTestBase {
 
   void TearDown() override {
     power_prefs_->local_state_ = nullptr;
-
+    power_prefs_ = nullptr;
+    power_policy_controller_ = nullptr;
     NoSessionAshTestBase::TearDown();
   }
 
@@ -247,13 +266,12 @@ class PowerPrefsTest : public NoSessionAshTestBase {
     auto pref_value_store = std::make_unique<PrefValueStore>(
         managed_pref_store_.get() /* managed_prefs */,
         nullptr /* supervised_user_prefs */, nullptr /* extension_prefs */,
-        nullptr /* standalone_browser_prefs */,
         nullptr /* command_line_prefs */, user_pref_store_.get(),
         nullptr /* recommended_prefs */, pref_registry_->defaults().get(),
         pref_notifier.get());
     local_state_ = std::make_unique<PrefService>(
         std::move(pref_notifier), std::move(pref_value_store), user_pref_store_,
-        nullptr, pref_registry_, base::DoNothing(), false);
+        pref_registry_, base::DoNothing(), false);
 
     PowerPrefs::RegisterLocalStatePrefs(pref_registry_.get());
 
@@ -294,9 +312,9 @@ class PowerPrefsTest : public NoSessionAshTestBase {
   // Start counting histogram updates before we load our first pref service.
   base::HistogramTester histogram_tester_;
 
-  chromeos::PowerPolicyController* power_policy_controller_ =
-      nullptr;                         // Not owned.
-  PowerPrefs* power_prefs_ = nullptr;  // Not owned.
+  raw_ptr<chromeos::PowerPolicyController> power_policy_controller_ =
+      nullptr;                                 // Not owned.
+  raw_ptr<PowerPrefs> power_prefs_ = nullptr;  // Not owned.
   base::SimpleTestTickClock tick_clock_;
 
   scoped_refptr<TestingPrefStore> user_pref_store_ =
@@ -333,7 +351,7 @@ TEST_F(PowerPrefsTest, LoginScreen) {
 
 TEST_F(PowerPrefsTest, UserSession) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin({kUserEmail});
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
@@ -345,7 +363,7 @@ TEST_F(PowerPrefsTest, UserSession) {
 TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
   // Add a user with restrictive prefs.
   const char kFirstUserEmail[] = "user1@example.net";
-  SimulateUserLogin(kFirstUserEmail);
+  SimulateUserLogin({kFirstUserEmail});
   PrefService* first_prefs = GetUserPrefService(kFirstUserEmail);
   ASSERT_TRUE(first_prefs);
   first_prefs->SetBoolean(prefs::kPowerAllowScreenWakeLocks, false);
@@ -354,7 +372,7 @@ TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
 
   // Add a second user with lenient prefs.
   const char kSecondUserEmail[] = "user2@example.net";
-  SimulateUserLogin(kSecondUserEmail);
+  SimulateUserLogin({kSecondUserEmail});
   PrefService* second_prefs = GetUserPrefService(kSecondUserEmail);
   ASSERT_TRUE(second_prefs);
   second_prefs->SetBoolean(prefs::kPowerAllowScreenWakeLocks, true);
@@ -372,7 +390,7 @@ TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
 
 TEST_F(PowerPrefsTest, AvoidLockDelaysAfterInactivity) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin({kUserEmail});
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
@@ -401,7 +419,7 @@ TEST_F(PowerPrefsTest, AvoidLockDelaysAfterInactivity) {
 
 TEST_F(PowerPrefsTest, DisabledLockScreen) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin({kUserEmail});
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
 
@@ -620,7 +638,7 @@ TEST_F(PowerPrefsTest, QuickDimMetrics) {
             login_screen_buckets);
 
   // Loading a new pref service isn't a manual update, so shouldn't be logged.
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin({kUserEmail});
   EXPECT_EQ(histogram_tester_.GetAllSamples(qd_metrics::kEnabledHistogramName),
             login_screen_buckets);
 
@@ -647,17 +665,57 @@ TEST_F(PowerPrefsTest, QuickDimMetrics) {
             user_disable_buckets);
 }
 
-TEST_F(PowerPrefsTest, SetAdaptiveChargingParams) {
-  // Should be enabled by default.
+TEST_F(PowerPrefsTest, AdaptiveCharging_NoHardwareSupport_Disabled) {
+  // Adaptive charging should be disabled initially, even with the preference
+  // enabled, because there is no hardware support.
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+}
+
+TEST_F(PowerPrefsTest, AdaptiveCharging_HardwareSupported_EnabledByPref) {
+  // Enable adaptive charging hardware support.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // Adaptive charging should be enabled/disabled according to the preference.
+  SetAdaptiveChargingPreference(true);
   EXPECT_TRUE(power_manager_client()->policy().adaptive_charging_enabled());
 
-  // Should be disabled after changing the prefs to false.
+  SetAdaptiveChargingPreference(false);
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+}
+
+TEST_F(PowerPrefsTest, ChargeLimit_EnabledByPrefWhenAdaptiveChargingDisabled) {
+  // Enable the hardware support needed for both adaptive charging and
+  // charge limit. They share the same underlying hardware.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // Charge limit should be enabled/disabled according to the preference
+  // when adaptive charging is disabled, as these features are mutually
+  // exclusive.
   SetAdaptiveChargingPreference(false);
   EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
 
-  // Should be enabled after setting the prefs to true.
-  SetAdaptiveChargingPreference(true);
-  EXPECT_TRUE(power_manager_client()->policy().adaptive_charging_enabled());
+  SetChargeLimitPreference(true);
+  EXPECT_TRUE(power_manager_client()->policy().charge_limit_enabled());
+
+  SetChargeLimitPreference(false);
+  EXPECT_FALSE(power_manager_client()->policy().charge_limit_enabled());
 }
 
+TEST_F(PowerPrefsTest, AdaptiveChargingAndChargeLimit_MutuallyExclusive) {
+  // Enable adaptive charging hardware support.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // When both adaptive charging and charge limit enabled, adaptive charging
+  // should be disabled. This ensures that the two features do not conflict.
+  SetAdaptiveChargingPreference(true);
+  SetChargeLimitPreference(true);
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+  EXPECT_TRUE(power_manager_client()->policy().charge_limit_enabled());
+}
 }  // namespace ash

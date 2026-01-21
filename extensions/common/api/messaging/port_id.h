@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/unguessable_token.h"
-#include "extensions/common/api/messaging/serialization_format.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 
 namespace extensions {
 
@@ -21,15 +21,15 @@ using ChannelId = std::pair<base::UnguessableToken, int>;
 // A unique identifier for an extension port. The id is composed of three parts:
 // - context_id: An UnguessableToken that uniquely identifies the creation
 //               context of the port.
-// - port_number: A simple identifer that uniquely identifies the port *within
+// - port_number: A simple identifier that uniquely identifies the port *within
 //                the creation context*. That is, each creation context may
 //                have a port with number '1', but there should only be a single
 //                port with the number '1' in each.
 // - is_opener: Whether or not this port id is for the opener port (false
 //              indicating it is the receiver port).
 // Additionally, this also holds `serialization_format` which is the
-// preferred SerializationFormat to be used for messages sent by this port.
-// A few more notes:
+// preferred mojom::SerializationFormat to be used for messages sent by this
+// port. A few more notes:
 // - There should only be a single existent opener port. That is, in all the
 //   contexts, there should only be one with a given context_id, port_number,
 //   and is_opener set to true. However, each port can have multiple receivers,
@@ -52,13 +52,14 @@ struct PortId {
   base::UnguessableToken context_id;
   int port_number = 0;
   bool is_opener = false;
-  SerializationFormat serialization_format = SerializationFormat::kJson;
+  mojom::SerializationFormat serialization_format =
+      mojom::SerializationFormat::kJson;
 
   PortId();
   PortId(const base::UnguessableToken& context_id,
          int port_number,
          bool is_opener,
-         SerializationFormat format);
+         mojom::SerializationFormat format);
   ~PortId();
   PortId(PortId&& other);
   PortId(const PortId& other);
@@ -75,8 +76,7 @@ struct PortId {
     return PortId(context_id, port_number, !is_opener, serialization_format);
   }
 
-  bool operator==(const PortId& other) const;
-  bool operator<(const PortId& other) const;
+  auto operator<=>(const PortId& other) const = default;
 };
 
 }  // namespace extensions

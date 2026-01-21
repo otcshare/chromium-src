@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 namespace cssvalue {
@@ -15,9 +16,10 @@ namespace cssvalue {
 // https://drafts.csswg.org/scroll-animations-1/#view-notation
 class CORE_EXPORT CSSViewValue : public CSSValue {
  public:
-  CSSViewValue(const CSSValue* axis);
+  CSSViewValue(const CSSValue* axis, const CSSValue* inset);
 
-  const CSSValue* Axis() const { return axis_; }
+  const CSSValue* Axis() const { return axis_.Get(); }
+  const CSSValue* Inset() const { return inset_.Get(); }
 
   String CustomCSSText() const;
   bool Equals(const CSSViewValue&) const;
@@ -25,6 +27,7 @@ class CORE_EXPORT CSSViewValue : public CSSValue {
 
  private:
   Member<const CSSValue> axis_;
+  Member<const CSSValue> inset_;
 };
 
 }  // namespace cssvalue

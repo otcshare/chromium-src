@@ -6,7 +6,6 @@
 '''Unit tests for <structure> nodes.
 '''
 
-from __future__ import print_function
 
 import os
 import os.path
@@ -37,7 +36,9 @@ def checkIsGzipped(filename, compress_attr):
       base_dir=test_data_root)
   node, = root.GetChildrenOfType(structure.StructureNode)
   node.RunPreSubstitutionGatherer()
-  compressed = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+  compressed = node.GetDataPackValue(lang='en',
+                                     gender=constants.DEFAULT_GENDER,
+                                     encoding=util.BINARY)
 
   decompressed_data = zlib.decompress(compressed, 16 + zlib.MAX_WBITS)
   expected = util.ReadFile(os.path.join(test_data_root, filename), util.BINARY)
@@ -45,6 +46,10 @@ def checkIsGzipped(filename, compress_attr):
 
 
 class StructureUnittest(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls):
+    os.environ["root_gen_dir"] = "gen"
+
   def testSkeleton(self):
     grd = util.ParseGrdForUnittest('''
         <structures>
@@ -54,19 +59,19 @@ class StructureUnittest(unittest.TestCase):
         </structures>''', base_dir=util.PathFromRoot('grit/testdata'))
     grd.SetOutputLanguage('fr')
     grd.RunGatherers()
-    transl = ''.join(rc.Format(grd, 'fr', '.'))
-    self.failUnless(transl.count('040704') and transl.count('110978'))
-    self.failUnless(transl.count('2005",IDC_STATIC'))
+    transl = ''.join(rc.Format(grd, 'fr', None, '.'))
+    self.assertTrue(transl.count('040704') and transl.count('110978'))
+    self.assertTrue(transl.count('2005",IDC_STATIC'))
 
   def testRunCommandOnCurrentPlatform(self):
     node = structure.StructureNode()
     node.attrs = node.DefaultAttributes()
-    self.failUnless(node.RunCommandOnCurrentPlatform())
+    self.assertTrue(node.RunCommandOnCurrentPlatform())
     node.attrs['run_command_on_platforms'] = 'Nosuch'
-    self.failIf(node.RunCommandOnCurrentPlatform())
+    self.assertFalse(node.RunCommandOnCurrentPlatform())
     node.attrs['run_command_on_platforms'] = (
         'Nosuch,%s,Othernot' % platform.system())
-    self.failUnless(node.RunCommandOnCurrentPlatform())
+    self.assertTrue(node.RunCommandOnCurrentPlatform())
 
   def testVariables(self):
     grd = util.ParseGrdForUnittest('''
@@ -80,7 +85,7 @@ class StructureUnittest(unittest.TestCase):
     filepath = os.path.join(tempfile.gettempdir(), filename)
     with open(filepath) as f:
       result = f.read()
-      self.failUnlessEqual(('<h1>Hello!</h1>\n'
+      self.assertEqual(('<h1>Hello!</h1>\n'
                             'Some cool things are foo, bar, baz.\n'
                             'Did you know that 2+2==4?\n'
                             '<p>\n'
@@ -124,11 +129,13 @@ class StructureUnittest(unittest.TestCase):
     self.assertTrue(checkIsGzipped('test_js.js', ''))
     self.assertTrue(checkIsGzipped('test_css.css', ''))
     self.assertTrue(checkIsGzipped('test_svg.svg', ''))
+    self.assertTrue(checkIsGzipped('test_json.json', ''))
 
     self.assertTrue(checkIsGzipped('test_html.html', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_js.js', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_css.css', 'compress="default"'))
     self.assertTrue(checkIsGzipped('test_svg.svg', 'compress="default"'))
+    self.assertTrue(checkIsGzipped('test_json.json', 'compress="default"'))
 
   def testCompressBrotli(self):
     test_data_root = util.PathFromRoot('grit/testdata')
@@ -146,7 +153,9 @@ class StructureUnittest(unittest.TestCase):
     brotli_util.SetBrotliCommand([sys.executable,
                                  os.path.join(os.path.dirname(__file__),
                                  'mock_brotli.py')])
-    compressed = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+    compressed = node.GetDataPackValue(lang='en',
+                                       gender=constants.DEFAULT_GENDER,
+                                       encoding=util.BINARY)
     # Assert that the first two bytes in compressed format is BROTLI_CONST.
     self.assertEqual(constants.BROTLI_CONST, compressed[0:2])
 
@@ -168,7 +177,9 @@ class StructureUnittest(unittest.TestCase):
         </structures>''', base_dir=test_data_root)
     node, = root.GetChildrenOfType(structure.StructureNode)
     node.RunPreSubstitutionGatherer()
-    data = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+    data = node.GetDataPackValue(lang='en',
+                                 gender=constants.DEFAULT_GENDER,
+                                 encoding=util.BINARY)
 
     self.assertEqual(util.ReadFile(
         os.path.join(test_data_root, 'test_text.txt'), util.BINARY), data)
@@ -177,12 +188,14 @@ class StructureUnittest(unittest.TestCase):
     test_data_root = util.PathFromRoot('grit/testdata')
     root = util.ParseGrdForUnittest('''
         <structures>
-          <structure name="TEST_LOTTIE" file="test_json.json" type="lottie" />
+          <structure name="TEST_LOTTIE" file="test_json.json" type="lottie" compress="false" />
         </structures>''',
                                     base_dir=test_data_root)
     node, = root.GetChildrenOfType(structure.StructureNode)
     node.RunPreSubstitutionGatherer()
-    data = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+    data = node.GetDataPackValue(lang='en',
+                                 gender=constants.DEFAULT_GENDER,
+                                 encoding=util.BINARY)
 
     self.assertEqual(
         b'LOTTIE' + util.ReadFile(
@@ -197,9 +210,11 @@ class StructureUnittest(unittest.TestCase):
                                     base_dir=test_data_root)
     node, = root.GetChildrenOfType(structure.StructureNode)
     node.RunPreSubstitutionGatherer()
-    data = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+    data = node.GetDataPackValue(lang='en',
+                                 gender=constants.DEFAULT_GENDER,
+                                 encoding=util.BINARY)
 
-    self.assertEqual('LOTTIE'.encode('utf-8'), data[0:6])
+    self.assertEqual(b'LOTTIE', data[0:6])
     self.assertEqual(
         util.ReadFile(os.path.join(test_data_root, 'test_json.json'),
                       util.BINARY),
@@ -219,9 +234,11 @@ class StructureUnittest(unittest.TestCase):
         sys.executable,
         os.path.join(os.path.dirname(__file__), 'mock_brotli.py')
     ])
-    data = node.GetDataPackValue(lang='en', encoding=util.BINARY)
+    data = node.GetDataPackValue(lang='en',
+                                 gender=constants.DEFAULT_GENDER,
+                                 encoding=util.BINARY)
 
-    self.assertEqual('LOTTIE'.encode('utf-8'), data[0:6])
+    self.assertEqual(b'LOTTIE', data[0:6])
     self.assertEqual(constants.BROTLI_CONST, data[6:8])
     self.assertEqual(
         len(

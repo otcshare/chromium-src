@@ -7,14 +7,15 @@
  * `settings-checkbox` is a checkbox that controls a supplied preference.
  */
 import 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
-import 'chrome://resources/cr_elements/policy/cr_policy_pref_indicator.js';
-import '../settings_shared.css.js';
+import 'chrome://resources/cr_elements/cr_shared_style.css.js';
+import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
 
-import {CrCheckboxElement} from 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
+import {SettingsBooleanControlMixin} from '/shared/settings/controls/settings_boolean_control_mixin.js';
+import type {CrCheckboxElement} from 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {SettingsBooleanControlMixin} from './settings_boolean_control_mixin.js';
 import {getTemplate} from './settings_checkbox.html.js';
 
 export interface SettingsCheckboxElement {
@@ -44,10 +45,11 @@ export class SettingsCheckboxElement extends SettingsCheckboxElementBase {
       subLabelHtml: {
         type: String,
         value: '',
-        observer: 'onSubLabelHtmlChanged_',
       },
     };
   }
+
+  declare subLabelHtml: string;
 
   static get observers() {
     return [
@@ -55,18 +57,13 @@ export class SettingsCheckboxElement extends SettingsCheckboxElementBase {
     ];
   }
 
-  private onSubLabelChanged_() {
-    this.$.checkbox.ariaDescription = this.$.subLabel.textContent!;
+  /** Focus on the inner cr-checkbox. */
+  override focus() {
+    this.$.checkbox.focus();
   }
 
-  /**
-   * Don't let clicks on a link inside the secondary label reach the checkbox.
-   */
-  private onSubLabelHtmlChanged_() {
-    const links = this.shadowRoot!.querySelectorAll('.secondary.label a');
-    links.forEach((link) => {
-      link.addEventListener('click', this.stopPropagation_.bind(this));
-    });
+  private onSubLabelChanged_() {
+    this.$.checkbox.ariaDescription = this.$.subLabel.textContent!;
   }
 
   private stopPropagation_(event: Event) {
@@ -78,7 +75,25 @@ export class SettingsCheckboxElement extends SettingsCheckboxElementBase {
   }
 
   private sanitizeInnerHtml_(rawString: string): TrustedHTML {
-    return sanitizeInnerHtml(rawString);
+    return sanitizeInnerHtml(rawString, {
+      attrs: [
+        'id',
+        'aria-label',
+      ],
+    });
+  }
+
+  private onSubLabelClick_(e: Event) {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'A') {
+      this.dispatchEvent(new CustomEvent(
+          'sub-label-link-clicked',
+          {bubbles: true, composed: true, detail: {id: target.id}}));
+      e.preventDefault();
+
+      // Don't let link click events from the sub-label reach the checkbox.
+      e.stopPropagation();
+    }
   }
 }
 

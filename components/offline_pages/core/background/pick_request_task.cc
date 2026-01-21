@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "components/offline_pages/core/background/device_conditions.h"
 #include "components/offline_pages/core/background/offliner_policy.h"
@@ -28,8 +28,8 @@ int signum(T t) {
   return (T(0) < t) - (t < T(0));
 }
 
-bool kCleanupNeeded = true;
-bool kNonUserRequestsFound = true;
+constexpr bool kCleanupNeeded = true;
+constexpr bool kNonUserRequestsFound = true;
 
 #define CALL_MEMBER_FUNCTION(object, ptrToMember) ((object)->*(ptrToMember))
 }  // namespace
@@ -43,7 +43,6 @@ PickRequestTask::PickRequestTask(
     OfflinerPolicy* policy,
     RequestPickedCallback picked_callback,
     RequestNotPickedCallback not_picked_callback,
-    RequestCountCallback request_count_callback,
     DeviceConditions device_conditions,
     const std::set<int64_t>& disabled_requests,
     base::circular_deque<int64_t>* prioritized_requests)
@@ -51,12 +50,11 @@ PickRequestTask::PickRequestTask(
       policy_(policy),
       picked_callback_(std::move(picked_callback)),
       not_picked_callback_(std::move(not_picked_callback)),
-      request_count_callback_(std::move(request_count_callback)),
       device_conditions_(std::move(device_conditions)),
       disabled_requests_(disabled_requests),
       prioritized_requests_(prioritized_requests) {}
 
-PickRequestTask::~PickRequestTask() {}
+PickRequestTask::~PickRequestTask() = default;
 
 void PickRequestTask::Run() {
   GetRequests();
@@ -73,7 +71,6 @@ void PickRequestTask::Choose(
     std::vector<std::unique_ptr<SavePageRequest>> requests) {
   // If there is nothing to do, return right away.
   if (requests.empty()) {
-    std::move(request_count_callback_).Run(requests.size(), 0);
     std::move(not_picked_callback_)
         .Run(!kNonUserRequestsFound, !kCleanupNeeded, base::Time());
     TaskComplete();
@@ -90,15 +87,15 @@ void PickRequestTask::Choose(
   RequestCompareFunction comparator = nullptr;
 
   // Choose which comparison function to use based on policy.
-  if (policy_->RetryCountIsMoreImportantThanRecency())
+  if (policy_->RetryCountIsMoreImportantThanRecency()) {
     comparator = &PickRequestTask::RetryCountFirstCompareFunction;
-  else
+  } else {
     comparator = &PickRequestTask::RecencyFirstCompareFunction;
+  }
 
   bool non_user_requested_tasks_remaining = false;
   bool cleanup_needed = false;
 
-  size_t total_request_count = requests.size();
   // Request ids which are available for picking.
   std::unordered_set<int64_t> available_request_ids;
   // If there was a deferred task, this records the earliest time a task will
@@ -141,9 +138,6 @@ void PickRequestTask::Choose(
     }
     available_request_ids.insert(request->request_id());
   }
-  // Report the request queue counts.
-  std::move(request_count_callback_)
-      .Run(total_request_count, available_requests->size());
 
   // Search for and pick the prioritized request which is available for picking
   // from |available_request_ids|, the closer to the end means higher priority.

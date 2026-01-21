@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include "base/byte_count.h"
 #include "chrome/browser/task_manager/providers/task.h"
 
 namespace task_manager {
@@ -21,17 +22,17 @@ class BrowserProcessTask : public Task {
 
   // task_manager::Task:
   bool IsKillable() override;
-  void Kill() override;
+  bool Kill() override;
   void Refresh(const base::TimeDelta& update_interval,
                int64_t refresh_flags) override;
   Type GetType() const override;
   int GetChildProcessUniqueID() const override;
-  int64_t GetSqliteMemoryUsed() const override;
+  std::optional<base::ByteSize> GetSqliteMemoryUsed() const override;
 
  private:
   static gfx::ImageSkia* s_icon_;
 
-  int64_t used_sqlite_memory_;
+  std::optional<base::ByteSize> used_sqlite_memory_;
 };
 
 }  // namespace task_manager

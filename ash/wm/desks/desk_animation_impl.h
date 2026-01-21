@@ -10,6 +10,7 @@
 #include "ash/wm/desks/desk_animation_base.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_histogram_enums.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 
@@ -40,9 +41,13 @@ class ASH_EXPORT DeskActivationAnimation : public DeskAnimationBase {
   LatencyReportCallback GetLatencyReportCallback() const override;
   metrics_util::ReportCallback GetSmoothnessReportCallback() const override;
 
+  void AddOnAnimationFinishedCallbackForTesting(base::OnceClosure callback);
+
  private:
   FRIEND_TEST_ALL_PREFIXES(DeskActivationAnimationTest,
                            AnimatingAfterFastSwipe);
+  FRIEND_TEST_ALL_PREFIXES(OverviewDeskNavigationTest,
+                           ShortSwipeStaysInOverview);
 
   // Prepares the desk associated with |index| for taking a screenshot. Exits
   // overview and splitview if necessary and then activates the desk. Restores
@@ -66,6 +71,9 @@ class ASH_EXPORT DeskActivationAnimation : public DeskAnimationBase {
 
   // Used to measure the presentation time of a continuous gesture swipe.
   std::unique_ptr<ui::PresentationTimeRecorder> presentation_time_recorder_;
+
+  // Callback that is run after the animation is finished for testing purposes.
+  base::OnceClosure on_animation_finished_callback_for_testing_;
 
   base::WeakPtrFactory<DeskActivationAnimation> weak_ptr_factory_{this};
 };

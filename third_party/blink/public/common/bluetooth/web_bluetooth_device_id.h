@@ -5,7 +5,12 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_BLUETOOTH_WEB_BLUETOOTH_DEVICE_ID_H_
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_BLUETOOTH_WEB_BLUETOOTH_DEVICE_ID_H_
 
+#include <stdint.h>
+
 #include <array>
+#include <cstdint>
+#include <functional>
+#include <iosfwd>
 #include <string>
 
 #include "third_party/blink/public/common/common_export.h"
@@ -60,7 +65,6 @@ class BLINK_COMMON_EXPORT WebBluetoothDeviceId {
   bool IsValid() const;
 
   bool operator==(const WebBluetoothDeviceId& device_id) const;
-  bool operator!=(const WebBluetoothDeviceId& device_id) const;
   bool operator<(const WebBluetoothDeviceId& device_id) const;
 
  private:

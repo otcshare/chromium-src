@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_split.h"
 #include "base/task/sequenced_task_runner.h"
 #include "net/http/http_status_code.h"
@@ -49,8 +49,6 @@ class SlowHttpResponse : public net::test_server::HttpResponse {
 
   SlowHttpResponse(const SlowHttpResponse&) = delete;
   SlowHttpResponse& operator=(const SlowHttpResponse&) = delete;
-
-  virtual bool IsHandledUrl();
 
   // Subclasses can override this method to add custom HTTP response headers.
   // These headers are only applied to the slow response itself, not the

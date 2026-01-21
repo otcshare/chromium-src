@@ -43,6 +43,12 @@ class SpeechRecognitionClientBrowserInterface
   void BindSpeechRecognitionBrowserObserver(
       mojo::PendingRemote<media::mojom::SpeechRecognitionBrowserObserver>
           pending_remote) override;
+  void REMOVED_1() override;
+#if BUILDFLAG(IS_CHROMEOS)
+  void REMOVED_2(
+      mojo::PendingRemote<media::mojom::SpeechRecognitionBrowserObserver>
+          pending_remote) override;
+#endif
 
   // SodaInstaller::Observer:
   void OnSodaInstalled(speech::LanguageCode language_code) override;
@@ -53,12 +59,21 @@ class SpeechRecognitionClientBrowserInterface
       speech::SodaInstaller::ErrorCode error_code) override {}
 
  private:
-  void OnSpeechRecognitionAvailabilityChanged();
-  void OnSpeechRecognitionLanguageChanged();
-  void NotifyObservers(bool enabled);
+  void OnSpeechRecognitionMaskOffensiveWordsChanged();
+
+  // Live Caption Event handling
+  void OnLiveCaptionAvailabilityChanged();
+  void OnLiveCaptionLanguageChanged();
+
+  // Notify our observers whether recognition is enabled or not, if the correct
+  // language pack is installed.  If not, then defer until it is.
+  void NotifyLiveCaptionObserversIfNeeded();
 
   mojo::RemoteSet<media::mojom::SpeechRecognitionBrowserObserver>
-      speech_recognition_availibility_observers_;
+      live_caption_availibility_observers_;
+
+  mojo::RemoteSet<media::mojom::SpeechRecognitionBrowserObserver>
+      babel_orca_availability_observers_;
 
   mojo::ReceiverSet<media::mojom::SpeechRecognitionClientBrowserInterface>
       speech_recognition_client_browser_interface_;

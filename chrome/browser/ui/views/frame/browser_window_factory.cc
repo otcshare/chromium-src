@@ -4,12 +4,14 @@
 
 #include <memory>
 
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/views/frame/browser_frame.h"
+#include "build/build_config.h"
+#include "chrome/browser/ui/browser_window_deleter.h"
+#include "chrome/browser/ui/views/frame/browser_native_widget_factory.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/native_browser_frame_factory.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/browser/ui/views/frame/browser_widget.h"
+#include "chrome/browser/ui/webui_browser/webui_browser.h"
+#include "chrome/browser/ui/webui_browser/webui_browser_window.h"
+#include "chrome/grit/branded_strings.h"
 #include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/widget/widget.h"
@@ -20,12 +22,9 @@
 #include "ui/aura/window_occlusion_tracker.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ui/views/frame/custom_tab_browser_frame.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/ui/views/frame/browser_frame_lacros.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/views/frame/browser_view_ash.h"
+#include "chromeos/components/kiosk/kiosk_utils.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -33,10 +32,15 @@
 #endif
 
 // static
-BrowserWindow* BrowserWindow::CreateBrowserWindow(
-    std::unique_ptr<Browser> browser,
-    bool user_gesture,
-    bool in_tab_dragging) {
+std::unique_ptr<BrowserWindow, BrowserWindowDeleter>
+BrowserWindow::CreateBrowserWindow(Browser* browser,
+                                   bool user_gesture,
+                                   bool in_tab_dragging) {
+  if (webui_browser::IsWebUIBrowserEnabled() && browser->is_type_normal()) {
+    return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(
+        new WebUIBrowserWindow(browser));
+  }
+
 #if defined(USE_AURA)
   // Avoid generating too many occlusion tracking calculation events before this
   // function returns. The occlusion status will be computed only once once this
@@ -46,33 +50,26 @@ BrowserWindow* BrowserWindow::CreateBrowserWindow(
 #endif
   // Create the view and the frame. The frame will attach itself via the view
   // so we don't need to do anything with the pointer.
-  BrowserView* view = new BrowserView(std::move(browser));
-  BrowserFrame* browser_frame = nullptr;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (view->browser()->is_type_custom_tab())
-    browser_frame = new CustomTabBrowserFrame(view);
+  BrowserView* view = nullptr;
+#if BUILDFLAG(IS_CHROMEOS)
+  view = new BrowserViewAsh(browser);
+#else
+  view = new BrowserView(browser);
 #endif
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  browser_frame = new BrowserFrameLacros(view);
-#endif
-  if (!browser_frame)
-    browser_frame = new BrowserFrame(view);
-  if (in_tab_dragging)
-    browser_frame->SetTabDragKind(TabDragKind::kAllTabs);
-  browser_frame->InitBrowserFrame();
+  auto browser_widget = std::make_unique<BrowserWidget>(view);
+  view->set_browser_widget(std::move(browser_widget));
+  if (in_tab_dragging) {
+    view->browser_widget()->SetTabDragKind(TabDragKind::kAllTabs);
+  }
+  view->browser_widget()->InitBrowserWidget();
 
 #if BUILDFLAG(IS_MAC)
   if (view->UsesImmersiveFullscreenMode()) {
-    // This needs to happen after BrowserFrame has been initialized. It creates
-    // a new Widget that copies the theme from BrowserFrame.
+    // This needs to happen after BrowserWidget has been initialized. It creates
+    // a new Widget that copies the theme from BrowserWidget.
     view->CreateMacOverlayView();
   }
 #endif  // IS_MAC
-
-  if (view->GetIsPictureInPictureType() && view->GetLockAspectRatio()) {
-    gfx::SizeF aspect_ratio(view->GetInitialAspectRatio(), 1.0f);
-    view->GetWidget()->SetAspectRatio(aspect_ratio);
-  }
 
 #if defined(USE_AURA)
   // For now, all browser windows are true. This only works when USE_AURA
@@ -80,8 +77,11 @@ BrowserWindow* BrowserWindow::CreateBrowserWindow(
   view->GetWidget()->GetNativeWindow()->SetProperty(
       aura::client::kCreatedByUserGesture, user_gesture);
 #endif
-  if (profiles::IsKioskSession())
+#if BUILDFLAG(IS_CHROMEOS)
+  if (chromeos::IsKioskSession()) {
     view->SetForceFullscreen(true);
+  }
+#endif
 
-  return view;
+  return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(view);
 }

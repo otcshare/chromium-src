@@ -6,28 +6,36 @@
 
 #include <Audioclient.h>
 #include <mferror.h>
+#include <winuser.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/clamped_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process_handle.h"
+#include "base/profiler/frame.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_hdc.h"
 #include "base/win/scoped_propvariant.h"
-#include "base/win/windows_version.h"
 #include "base/win/wrapped_window_proc.h"
-#include "media/base/bind_to_current_loop.h"
+#include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_info_collector.h"
+#include "media/base/buffering_state.h"
 #include "media/base/cdm_context.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
+#include "media/base/pipeline_status.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/win/dxgi_device_manager.h"
 #include "media/base/win/hresults.h"
@@ -42,6 +50,66 @@ using Microsoft::WRL::MakeAndInitialize;
 namespace {
 
 ATOM g_video_window_class = 0;
+
+constexpr int kVirtualWindowDefaultWidth = 1;
+constexpr int kVirtualWindowDefaultHeight = 1;
+
+// GPU vendor IDs
+constexpr uint32_t kGpuVendorIdIntel = 0x8086;
+constexpr uint32_t kGpuVendorIdNvidia = 0x10de;
+constexpr uint32_t kGpuVendorIdAmd = 0x1002;
+constexpr uint32_t kGpuVendorIdNone = 0x0000;
+constexpr int kGpuVendorIdUnknown = -1;
+
+constexpr uint32_t kGpuBitmaskIntel = 0x001;
+constexpr uint32_t kGpuBitmaskNvidia = 0x001 << 1;
+constexpr uint32_t kGpuBitmaskAmd = 0x001 << 2;
+constexpr uint32_t kGpuBitmaskOther = 0x001 << 3;
+
+constexpr uint32_t kMakeGpuNonActive = 4;
+
+// Reported to UMA. Do NOT change or reuse existing values.
+enum class GpuOrDisplayCount {
+  kUnknown = 0,
+  kOne = 1,
+  kTwoOrMore = 2,  // We don't care if more than 2 gpus are present. So single
+                   // and two or more is enough.
+  kMaxValue = kTwoOrMore
+};
+
+// Reported to UMA. Do NOT change or reuse existing values.
+enum class ActiveGpuInfo : uint32_t {
+  kNone = 0,
+  kIntel = kGpuBitmaskIntel,
+  kNvidia = kGpuBitmaskNvidia,
+  kAmd = kGpuBitmaskAmd,
+  kOther = kGpuBitmaskOther,
+  kIntelIntel = kIntel | (kIntel << kMakeGpuNonActive),
+  kNvidiaIntel = kNvidia | (kIntel << kMakeGpuNonActive),
+  kAmdIntel = kAmd | (kIntel << kMakeGpuNonActive),
+  kOtherIntel = kOther | (kIntel << kMakeGpuNonActive),
+  kIntelNvidia = kIntel | (kNvidia << kMakeGpuNonActive),
+  kNvidiaNvidia = kNvidia | (kNvidia << kMakeGpuNonActive),
+  kAmdNvidia = kAmd | (kNvidia << kMakeGpuNonActive),
+  kOtherNvidia = kOther | (kNvidia << kMakeGpuNonActive),
+  kIntelAmd = kIntel | (kAmd << kMakeGpuNonActive),
+  kNvidiaAmd = kNvidia | (kAmd << kMakeGpuNonActive),
+  kAmdAmd = kAmd | (kAmd << kMakeGpuNonActive),
+  kOtherAmd = kOther | (kAmd << kMakeGpuNonActive),
+  kIntelOther = kIntel | (kOther << kMakeGpuNonActive),
+  kNvidiaOther = kNvidia | (kOther << kMakeGpuNonActive),
+  kAmdOther = kAmd | (kOther << kMakeGpuNonActive),
+  kOtherOther = kOther | (kOther << kMakeGpuNonActive),
+  kMaxValue = kOtherOther
+};
+
+// Reported to UMA. Do NOT change or reuse existing values.
+enum class ActiveGpuDisplayInfo {
+  kUnknown = 0,
+  kLikelyBuiltIn = 1,   // Likely built-in display
+  kLikelyExternal = 2,  // Likely external display
+  kMaxValue = kLikelyExternal
+};
 
 // The |g_video_window_class| atom obtained is used as the |lpClassName|
 // parameter in CreateWindowEx().
@@ -91,6 +159,14 @@ const std::string GetErrorReasonString(
     STRINGIFY(kFailedToCreateMediaEngine);
     STRINGIFY(kFailedToCreateDCompTextureWrapper);
     STRINGIFY(kFailedToInitDCompTextureWrapper);
+    STRINGIFY(kFailedToSetPlaybackRate);
+    STRINGIFY(kFailedToGetMediaEngineEx);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    // "This return value is no longer used, but may occur in older versions of
+    // windows."
+    STRINGIFY(kOnDCompSurfaceReceivedError);
+#pragma clang diagnostic pop
   }
 #undef STRINGIFY
 }
@@ -101,6 +177,374 @@ bool IsInvalidHandle(const HANDLE& handle) {
   return handle == INVALID_HANDLE_VALUE || handle == nullptr;
 }
 
+std::tuple<uint32_t, LUID> GetVendorIdAndLUIDFromD3D11Device(
+    IMFDXGIDeviceManager* dxgi_device_manager) {
+  DCHECK(dxgi_device_manager);
+
+  DXGIDeviceScopedHandle dxgi_device_handle(dxgi_device_manager);
+  ComPtr<ID3D11Device> d3d11_device = dxgi_device_handle.GetDevice();
+  if (!d3d11_device) {
+    return {kGpuVendorIdNone, {}};
+  }
+
+  ComPtr<IDXGIDevice> dxgi_device;
+  HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&dxgi_device));
+  CHECK_EQ(hr, S_OK);
+
+  ComPtr<IDXGIAdapter> adapter;
+  hr = dxgi_device->GetAdapter(&adapter);
+  if (FAILED(hr)) {
+    return {kGpuVendorIdNone, {}};
+  }
+
+  DXGI_ADAPTER_DESC desc = {};
+  hr = adapter->GetDesc(&desc);
+  if (FAILED(hr)) {
+    return {kGpuVendorIdNone, {}};
+  }
+
+  return {desc.VendorId, desc.AdapterLuid};
+}
+
+uint32_t GpuVendorIdToBitmask(const uint32_t vendor_id) {
+  if (vendor_id == kGpuVendorIdIntel) {
+    return kGpuBitmaskIntel;
+  }
+  if (vendor_id == kGpuVendorIdNvidia) {
+    return kGpuBitmaskNvidia;
+  }
+  if (vendor_id == kGpuVendorIdAmd) {
+    return kGpuBitmaskAmd;
+  }
+  if (vendor_id == kGpuVendorIdNone) {
+    return 0;
+  }
+  return kGpuBitmaskOther;
+}
+
+// Get non-active GPU vendor IDs.
+std::vector<uint32_t> GetNonActiveGpuVendorIds(const LUID& active_gpu_luid) {
+  std::vector<uint32_t> vendor_ids;
+  Microsoft::WRL::ComPtr<IDXGIFactory1> dxgi_factory;
+  if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgi_factory)))) {
+    return vendor_ids;
+  }
+
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+  for (UINT i = 0; SUCCEEDED(dxgi_factory->EnumAdapters(i, &adapter)); ++i) {
+    DXGI_ADAPTER_DESC adapter_desc;
+    if (SUCCEEDED(adapter->GetDesc(&adapter_desc))) {
+      if (adapter_desc.AdapterLuid.HighPart == active_gpu_luid.HighPart &&
+          adapter_desc.AdapterLuid.LowPart == active_gpu_luid.LowPart) {
+        continue;
+      }
+      // Ignore software renderer based GPUs. See gpu/config/gpu_info.cc
+      if (adapter_desc.VendorId == 0x0000 || adapter_desc.VendorId == 0xFFFF ||
+          adapter_desc.VendorId == 0x15ad ||
+          (adapter_desc.VendorId == 0x1414 &&
+           adapter_desc.DeviceId == 0x008c)) {
+        DVLOG(3) << __func__ << ": Adapter " << i << " Vendor ID: 0x"
+                 << std::hex << adapter_desc.VendorId << ", Device ID: 0x"
+                 << std::hex << adapter_desc.DeviceId
+                 << " is a software renderer!";
+        continue;
+      }
+      vendor_ids.push_back(adapter_desc.VendorId);
+      DVLOG(3) << __func__ << ": Adapter " << i << " Vendor ID: 0x" << std::hex
+               << adapter_desc.VendorId;
+    }
+    adapter.Reset();
+  }
+  return vendor_ids;
+}
+
+// Callback function that EnumDisplayMonitors calls for each monitor.
+BOOL CALLBACK MyMonitorEnumProc(
+    HMONITOR hMonitor,   // Handle to display monitor
+    HDC hdcMonitor,      // Handle to monitor DC
+    LPRECT lprcMonitor,  // Monitor intersection rectangle
+    LPARAM dwData        // Data passed from EnumDisplayMonitors
+) {
+  if (!dwData) {
+    return FALSE;
+  }
+  // Cast dwData back to the integer pointer we passed in.
+  int* monitorCount = reinterpret_cast<int*>(dwData);
+  // Increment the count for each monitor found.
+  (*monitorCount)++;
+  return TRUE;  // Return TRUE to continue the enumeration.
+}
+
+// Get the total number of attached displays.
+int GetTotalDisplayCount() {
+  int count = 0;
+  BOOL result = EnumDisplayMonitors(nullptr, nullptr, MyMonitorEnumProc,
+                                    reinterpret_cast<LPARAM>(&count));
+  if (!result) {
+    // This case is unlikely for standard usage but good to be aware of.
+    DVLOG(1) << "EnumDisplayMonitors failed: " << GetLastError();
+    return -1;  // Indicate an error
+  }
+  return count;
+}
+
+ActiveGpuDisplayInfo GetActiveGpuDisplayInfo(const LUID& active_gpu_luid) {
+  UINT32 num_paths = 0;
+  UINT32 num_modes = 0;
+
+  // Get required buffer sizes for active paths
+  LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_paths,
+                                            &num_modes);
+
+  if (status != ERROR_SUCCESS) {
+    DVLOG(1) << __func__ << ": GetDisplayConfigBufferSizes failed: " << status;
+    return ActiveGpuDisplayInfo::kUnknown;
+  }
+
+  std::vector<DISPLAYCONFIG_PATH_INFO> paths(num_paths);
+  std::vector<DISPLAYCONFIG_MODE_INFO> modes(num_modes);
+
+  // Query the display configuration
+  status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &num_paths, paths.data(),
+                              &num_modes, modes.data(), nullptr);
+
+  if (status != ERROR_SUCCESS) {
+    DVLOG(1) << __func__ << ": QueryDisplayConfig failed: " << status;
+    return ActiveGpuDisplayInfo::kUnknown;
+  }
+
+  // Iterate through paths and retrieve target device info
+  for (UINT32 i = 0; i < num_paths; ++i) {
+    DISPLAYCONFIG_PATH_INFO& current_path = paths[i];
+    DISPLAYCONFIG_TARGET_DEVICE_NAME target_name = {};
+    target_name.header.size = sizeof(target_name);
+    target_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    target_name.header.adapterId = current_path.targetInfo.adapterId;
+    target_name.header.id = current_path.targetInfo.id;
+
+    status = DisplayConfigGetDeviceInfo(&target_name.header);
+    if (status != ERROR_SUCCESS) {
+      continue;
+    }
+
+    if (active_gpu_luid.HighPart == target_name.header.adapterId.HighPart &&
+        active_gpu_luid.LowPart == target_name.header.adapterId.LowPart) {
+      // Check specifically for embedded types to infer "built-in"
+      if (target_name.outputTechnology ==
+              DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS ||
+          target_name.outputTechnology ==
+              DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED ||
+          target_name.outputTechnology ==
+              DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL) {
+        DVLOG(3) << __func__ << ": This is likely a BUILT-IN display.";
+        return ActiveGpuDisplayInfo::kLikelyBuiltIn;
+      } else {
+        DVLOG(3) << __func__ << ": This is likely an EXTERNAL display.";
+        return ActiveGpuDisplayInfo::kLikelyExternal;
+      }
+    }
+  }
+  return ActiveGpuDisplayInfo::kUnknown;
+}
+
+// Get GPU LUID from display device name.
+LUID GetDisplayGpuLuid(const std::wstring& display_device_name) {
+  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+  if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+    LOG(ERROR) << "Failed to create DXGIFactory1.";
+    return {};
+  }
+
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+  for (UINT i = 0; factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND;
+       ++i) {
+    DXGI_ADAPTER_DESC adapter_desc;
+    if (SUCCEEDED(adapter->GetDesc(&adapter_desc))) {
+      LUID adapter_luid = adapter_desc.AdapterLuid;
+
+      Microsoft::WRL::ComPtr<IDXGIOutput> output;
+      for (UINT j = 0; adapter->EnumOutputs(j, &output) != DXGI_ERROR_NOT_FOUND;
+           ++j) {
+        DXGI_OUTPUT_DESC output_desc;
+        if (SUCCEEDED(output->GetDesc(&output_desc))) {
+          if (display_device_name == output_desc.DeviceName) {
+            return adapter_luid;
+          }
+        }
+      }
+    }
+  }
+  return {};
+}
+
+// Get the display device name for the nearest display to the specified window.
+std::wstring GetNearestDisplayDeviceNameFromWindow(HWND virtual_video_window) {
+  DCHECK(virtual_video_window);
+
+  // Get the monitor handle for the window
+  HMONITOR monitor =
+      MonitorFromWindow(virtual_video_window, MONITOR_DEFAULTTONEAREST);
+  if (!monitor) {
+    LOG(ERROR) << "Could not get monitor from window.";
+    return std::wstring();
+  }
+
+  MONITORINFOEXW monitor_info;
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (!GetMonitorInfoW(monitor, &monitor_info)) {
+    LOG(ERROR) << "Could not get monitor info.";
+    return std::wstring();
+  }
+
+  // display_device_name is the display identifier, e.g., L"\\\\.\\DISPLAY1"
+  std::wstring display_device_name = monitor_info.szDevice;
+  DVLOG(3) << __func__ << ": Window is on display: " << display_device_name;
+  return display_device_name;
+}
+
+bool DoesGpuMatchWithDisplayOnMultiGpu(HWND virtual_video_window,
+                                       const LUID& active_gpu_luid) {
+  std::wstring display_device_name =
+      GetNearestDisplayDeviceNameFromWindow(virtual_video_window);
+  if (display_device_name.empty()) {
+    LOG(ERROR) << "Display device name is empty.";
+    return false;
+  }
+
+  LUID display_gpu_luid = GetDisplayGpuLuid(display_device_name);
+  DVLOG(3) << __func__
+           << ": display_gpu_luid.HigPart=" << display_gpu_luid.HighPart
+           << ", display_gpu_luid.LowPart=" << display_gpu_luid.LowPart
+           << ", active_gpu_luid.HighPart=" << active_gpu_luid.HighPart
+           << ", active_gpu_luid.LowPart=" << active_gpu_luid.LowPart;
+
+  return (active_gpu_luid.LowPart == display_gpu_luid.LowPart &&
+          active_gpu_luid.HighPart == display_gpu_luid.HighPart);
+}
+
+void ReportGpuInfoUma(const std::string& uma_prefix,
+                      IMFDXGIDeviceManager* dxgi_device_manager,
+                      HWND virtual_video_window) {
+  // For some tests, this can be nullptr.
+  if (!dxgi_device_manager) {
+    return;
+  }
+
+  const auto [active_gpu_vendor_id, active_gpu_luid] =
+      GetVendorIdAndLUIDFromD3D11Device(dxgi_device_manager);
+  if (active_gpu_vendor_id == kGpuVendorIdNone &&
+      active_gpu_luid.LowPart == 0 && active_gpu_luid.HighPart == 0) {
+    DVLOG(1) << __func__ << ": Failed to get active GPU info.";
+    base::UmaHistogramEnumeration(uma_prefix + ".GpuCount",
+                                  GpuOrDisplayCount::kUnknown);
+    base::UmaHistogramEnumeration(uma_prefix + ".ActiveGpuInfo",
+                                  ActiveGpuInfo::kNone);
+    base::UmaHistogramEnumeration(uma_prefix + ".ActiveGpuDisplayInfo",
+                                  ActiveGpuDisplayInfo::kUnknown);
+    base::UmaHistogramSparse(uma_prefix + ".ActiveGpuVendorId",
+                             kGpuVendorIdUnknown);
+    base::UmaHistogramSparse(uma_prefix + ".NonActiveGpuVendorId",
+                             kGpuVendorIdUnknown);
+  } else {
+    const auto all_nonactive_gpus = GetNonActiveGpuVendorIds(active_gpu_luid);
+    const auto nonactive_gpu_count = all_nonactive_gpus.size();
+    const bool is_multi_gpu = nonactive_gpu_count > 0;
+    const auto nonactive_gpu_id =
+        is_multi_gpu ? all_nonactive_gpus[0] : kGpuVendorIdNone;
+    const auto active_gpu_info = static_cast<ActiveGpuInfo>(
+        GpuVendorIdToBitmask(active_gpu_vendor_id) |
+        (GpuVendorIdToBitmask(nonactive_gpu_id) << kMakeGpuNonActive));
+    const auto active_gpu_display_info =
+        GetActiveGpuDisplayInfo(active_gpu_luid);
+
+    DVLOG(3) << __func__ << ": nonactive_gpu_count=" << nonactive_gpu_count
+             << ", is_multi_gpu=" << is_multi_gpu
+             << ", active_gpu_vendor_id=" << active_gpu_vendor_id
+             << ", nonactive_gpu_id=" << nonactive_gpu_id
+             << ", active_gpu_info=" << static_cast<uint32_t>(active_gpu_info)
+             << ", active_gpu_display_info="
+             << static_cast<uint32_t>(active_gpu_display_info);
+
+    base::UmaHistogramEnumeration(
+        uma_prefix + ".GpuCount",
+        is_multi_gpu ? GpuOrDisplayCount::kTwoOrMore : GpuOrDisplayCount::kOne);
+    base::UmaHistogramEnumeration(uma_prefix + ".ActiveGpuInfo",
+                                  active_gpu_info);
+    base::UmaHistogramEnumeration(uma_prefix + ".ActiveGpuDisplayInfo",
+                                  active_gpu_display_info);
+    base::UmaHistogramSparse(uma_prefix + ".ActiveGpuVendorId",
+                             active_gpu_vendor_id);
+    if (nonactive_gpu_id != kGpuVendorIdNone) {
+      base::UmaHistogramSparse(uma_prefix + ".NonActiveGpuVendorId",
+                               nonactive_gpu_id);
+    }
+
+    // On multi-gpu devices with NVIDIA active gpu associated with an external
+    // display
+    const auto multigpu_nvidia_active_with_external =
+        is_multi_gpu && active_gpu_vendor_id == kGpuVendorIdNvidia &&
+        active_gpu_display_info == ActiveGpuDisplayInfo::kLikelyExternal;
+    DVLOG(3) << __func__ << ": multigpu_nvidia_active_with_external="
+             << multigpu_nvidia_active_with_external;
+    base::UmaHistogramBoolean(
+        uma_prefix + ".MultiGpuNvidiaActiveWithExternalDisplay",
+        multigpu_nvidia_active_with_external);
+
+    // On multi-gpu devices where the active gpu associated with an external
+    // display
+    const auto multigpu_with_external =
+        is_multi_gpu &&
+        active_gpu_display_info == ActiveGpuDisplayInfo::kLikelyExternal;
+    DVLOG(3) << __func__
+             << ": multigpu_with_external=" << multigpu_with_external;
+    base::UmaHistogramBoolean(uma_prefix + ".MultiGpuWithExternalDisplay",
+                              multigpu_with_external);
+
+    // Check if the active gpu matches with the display gpu on multi-gpu. For
+    // example, with NVIDIA-Intel gpu setup, the browser picked Intel gpu as
+    // Active gpu but the browser window's nearest display is associated with
+    // NVIDIA gpu. In this case, the playback will fail all the time.
+    if (is_multi_gpu && virtual_video_window) {
+      const auto does_gpu_match_with_display_on_multigpu =
+          DoesGpuMatchWithDisplayOnMultiGpu(virtual_video_window,
+                                            active_gpu_luid);
+      DVLOG(3) << __func__ << ": does_gpu_match_with_display_on_multigpu="
+               << does_gpu_match_with_display_on_multigpu;
+      base::UmaHistogramBoolean(
+          uma_prefix + ".DoesGpuMatchWithDisplayOnMultiGpu",
+          does_gpu_match_with_display_on_multigpu);
+    }
+  }
+
+  const auto display_count = GetTotalDisplayCount();
+  DVLOG(3) << __func__ << ": display_count=" << display_count;
+  base::UmaHistogramEnumeration(
+      uma_prefix + ".DisplayCount",
+      display_count == -1 ? GpuOrDisplayCount::kUnknown
+                          : (display_count > 1 ? GpuOrDisplayCount::kTwoOrMore
+                                               : GpuOrDisplayCount::kOne));
+}
+
+std::string RenderedVideoFrameDetectionResultToString(
+    MediaFoundationRenderer::RenderedVideoFrameDetectionResult reasult) {
+  switch (reasult) {
+    case MediaFoundationRenderer::RenderedVideoFrameDetectionResult::kDetected:
+      return "Detected";
+    case MediaFoundationRenderer::RenderedVideoFrameDetectionResult::
+        kNotDetected:
+      return "NotDetected";
+    case MediaFoundationRenderer::RenderedVideoFrameDetectionResult::
+        kUnknownByPlaybackError:
+      return "UnknownByPlaybackError";
+    case MediaFoundationRenderer::RenderedVideoFrameDetectionResult::
+        kUnknownByPlaybackEnd:
+      return "UnknownByPlaybackEnd";
+    case MediaFoundationRenderer::RenderedVideoFrameDetectionResult::
+        kUnknownByShutdown:
+      return "UnknownByShutdown";
+  }
+}
+
 }  // namespace
 
 // static
@@ -109,20 +553,15 @@ void MediaFoundationRenderer::ReportErrorReason(ErrorReason reason) {
                                 reason);
 }
 
-// static
-bool MediaFoundationRenderer::IsSupported() {
-  return base::win::GetVersion() >= base::win::Version::WIN10;
-}
-
 MediaFoundationRenderer::MediaFoundationRenderer(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     std::unique_ptr<MediaLog> media_log,
     LUID gpu_process_adapter_luid,
-    bool force_dcomp_mode_for_testing)
+    bool is_testing)
     : task_runner_(std::move(task_runner)),
       media_log_(std::move(media_log)),
       gpu_process_adapter_luid_(gpu_process_adapter_luid),
-      force_dcomp_mode_for_testing_(force_dcomp_mode_for_testing) {
+      is_testing_(is_testing) {
   DVLOG_FUNC(1);
 }
 
@@ -133,24 +572,33 @@ MediaFoundationRenderer::~MediaFoundationRenderer() {
   // without depending on the order of destructors being invoked. We also need
   // to invoke MFShutdown() after shutdown/cleanup of MF related objects.
 
-  StopSendingStatistics();
+  StopSendingStatistics(StopSendingStatisticsReason::kShutdown);
 
-  if (mf_media_engine_extension_)
-    mf_media_engine_extension_->Shutdown();
-  if (mf_media_engine_notify_)
+  // 'mf_media_engine_notify_' should be shutdown first as errors are possible
+  // if source is being created while shutdown is called (causing
+  // ERROR_FILE_NOT_FOUND from Media Foundations). These errors should be
+  // ignored by 'mf_media_engine_notify_' instead of being propagated up.
+  if (mf_media_engine_notify_) {
     mf_media_engine_notify_->Shutdown();
-  if (mf_media_engine_)
+  }
+  if (mf_media_engine_extension_) {
+    mf_media_engine_extension_->Shutdown();
+  }
+  if (mf_media_engine_) {
     mf_media_engine_->Shutdown();
+  }
 
-  if (mf_source_)
+  if (mf_source_) {
     mf_source_->DetachResource();
+  }
 
   if (dxgi_device_manager_) {
     dxgi_device_manager_.Reset();
     MFUnlockDXGIDeviceManager();
   }
-  if (virtual_video_window_)
+  if (virtual_video_window_) {
     DestroyWindow(virtual_video_window_);
+  }
 }
 
 void MediaFoundationRenderer::Initialize(MediaResource* media_resource,
@@ -160,34 +608,9 @@ void MediaFoundationRenderer::Initialize(MediaResource* media_resource,
 
   renderer_client_ = client;
 
-  // Check the rendering strategy & whether we're operating on clear or
-  // protected content to determine the starting 'rendering_mode_'.
-  // If the Direct Composition strategy is specified or if we're operating on
-  // protected content then start in Direct Composition mode, else start in
-  // Frame Server mode. This behavior must match the logic in
-  // MediaFoundationRendererClient::Initialize.
-  auto rendering_strategy = kMediaFoundationClearRenderingStrategyParam.Get();
-  rendering_mode_ =
-      rendering_strategy ==
-              MediaFoundationClearRenderingStrategy::kDirectComposition
-          ? MediaFoundationRenderingMode::DirectComposition
-          : MediaFoundationRenderingMode::FrameServer;
-  for (DemuxerStream* stream : media_resource->GetAllStreams()) {
-    if (stream->type() == DemuxerStream::Type::VIDEO &&
-        stream->video_decoder_config().is_encrypted()) {
-      // This is protected content which only supports Direct Composition mode,
-      // update 'rendering_mode_' accordingly.
-      rendering_mode_ = MediaFoundationRenderingMode::DirectComposition;
-    }
-  }
-
-  // debug, force mode to dcomp
-  if (force_dcomp_mode_for_testing_) {
-    rendering_mode_ = MediaFoundationRenderingMode::DirectComposition;
-  }
-
+  // MediaFoundationRenderer now only support DirectComposition mode.
   MEDIA_LOG(INFO, media_log_)
-      << "Starting MediaFoundationRenderingMode: " << rendering_mode_;
+      << "Starting MediaFoundationRenderer: DirectComposition";
 
   HRESULT hr = CreateMediaEngine(media_resource);
   if (FAILED(hr)) {
@@ -220,32 +643,46 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
     }
   }
 
-  // TODO(frankli): Only call the followings when there is a video stream.
-  RETURN_IF_FAILED(InitializeDXGIDeviceManager());
-  RETURN_IF_FAILED(InitializeVirtualVideoWindow());
+  std::optional<media::VideoDecoderConfig> video_decoder_config = std::nullopt;
+  std::optional<media::AudioDecoderConfig> audio_decoder_config = std::nullopt;
+
+  // Only call the following when there is a video stream.
+  for (media::DemuxerStream* stream : media_resource->GetAllStreams()) {
+    if (stream->type() == media::DemuxerStream::VIDEO) {
+      video_decoder_config = stream->video_decoder_config();
+      RETURN_IF_FAILED(InitializeDXGIDeviceManager());
+      RETURN_IF_FAILED(InitializeVirtualVideoWindow());
+      break;
+    } else if (stream->type() == media::DemuxerStream::AUDIO) {
+      audio_decoder_config = stream->audio_decoder_config();
+    }
+  }
 
   // The OnXxx() callbacks are invoked by MF threadpool thread, we would like
-  // to bind the callbacks to |task_runner_| MessgaeLoop.
+  // to bind the callbacks to |task_runner_| MessageLoop.
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   auto weak_this = weak_factory_.GetWeakPtr();
   RETURN_IF_FAILED(MakeAndInitialize<MediaEngineNotifyImpl>(
       &mf_media_engine_notify_,
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnPlaybackError, weak_this)),
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnPlaybackEnded, weak_this)),
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnFormatChange, weak_this)),
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnLoadedData, weak_this)),
-      BindToCurrentLoop(base::BindRepeating(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnCanPlayThrough, weak_this)),
-      BindToCurrentLoop(
+      base::BindPostTaskToCurrentDefault(
           base::BindRepeating(&MediaFoundationRenderer::OnPlaying, weak_this)),
-      BindToCurrentLoop(
+      base::BindPostTaskToCurrentDefault(
           base::BindRepeating(&MediaFoundationRenderer::OnWaiting, weak_this)),
-      BindToCurrentLoop(base::BindRepeating(
-          &MediaFoundationRenderer::OnTimeUpdate, weak_this))));
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
+          &MediaFoundationRenderer::OnFrameStepCompleted, weak_this)),
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
+          &MediaFoundationRenderer::OnTimeUpdate, weak_this)),
+      video_decoder_config, audio_decoder_config));
 
   ComPtr<IMFAttributes> creation_attributes;
   RETURN_IF_FAILED(MFCreateAttributes(&creation_attributes, 6));
@@ -266,29 +703,6 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
     RETURN_IF_FAILED(creation_attributes->SetUnknown(
         MF_MEDIA_ENGINE_DXGI_MANAGER, dxgi_device_manager_.Get()));
 
-    // TODO(crbug.com/1276067): We'll investigate scenarios to see if we can use
-    // the on-screen video window size and not the native video size.
-    if (rendering_mode_ == MediaFoundationRenderingMode::FrameServer) {
-      gfx::Size max_video_size;
-      bool has_video = false;
-      for (auto* stream : media_resource->GetAllStreams()) {
-        if (stream->type() == media::DemuxerStream::VIDEO) {
-          has_video = true;
-          gfx::Size video_size = stream->video_decoder_config().natural_size();
-          if (video_size.height() > max_video_size.height()) {
-            max_video_size.set_height(video_size.height());
-          }
-
-          if (video_size.width() > max_video_size.width()) {
-            max_video_size.set_width(video_size.width());
-          }
-        }
-      }
-
-      if (has_video) {
-        RETURN_IF_FAILED(InitializeTexturePool(max_video_size));
-      }
-    }
   }
 
   RETURN_IF_FAILED(
@@ -300,22 +714,26 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
   RETURN_IF_FAILED(CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr,
                                     CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&class_factory)));
-  // TODO(frankli): Use MF_MEDIA_ENGINE_REAL_TIME_MODE for low latency hint
-  // instead of 0.
-  RETURN_IF_FAILED(class_factory->CreateInstance(0, creation_attributes.Get(),
-                                                 &mf_media_engine_));
 
-  auto media_resource_type_ = media_resource->GetType();
-  if (media_resource_type_ != MediaResource::Type::STREAM) {
-    DLOG(ERROR) << "MediaResource is not of STREAM";
-    return E_INVALIDARG;
+  DWORD creation_flags = 0;
+  // Enable low-latency mode if latency hint is low.
+  if (latency_hint_.has_value() && (*latency_hint_ <= base::Milliseconds(50))) {
+    creation_flags |= MF_MEDIA_ENGINE_REAL_TIME_MODE;
   }
+  RETURN_IF_FAILED(class_factory->CreateInstance(
+      creation_flags, creation_attributes.Get(), &mf_media_engine_));
+
+  // The Media Foundation Media Engine has an initial playback rate of 1.0, but
+  // chromium uses an initial playback rate of 0.0. The Media Engine's topology
+  // may not be completely loaded at this point - so we use
+  // SetDefaultPlaybackRate as using SetPlaybackRate may be overwritten while
+  // the topology is loading.
+  RETURN_IF_FAILED(mf_media_engine_->SetDefaultPlaybackRate(0.0));
 
   RETURN_IF_FAILED(MakeAndInitialize<MediaFoundationSourceWrapper>(
       &mf_source_, media_resource, media_log_.get(), task_runner_));
 
-  if (force_dcomp_mode_for_testing_)
-    std::ignore = SetDCompModeInternal();
+  std::ignore = SetDCompModeInternal();
 
   if (!mf_source_->HasEncryptedStream()) {
     // Supports clear stream for testing.
@@ -371,6 +789,18 @@ HRESULT MediaFoundationRenderer::InitializeDXGIDeviceManager() {
   UINT device_reset_token;
   RETURN_IF_FAILED(
       MFLockDXGIDeviceManager(&device_reset_token, &dxgi_device_manager_));
+  // `dxgi_device_manager_` returned is a singleton object, thus all
+  // MediaFoundationRenderer instances will all receive the
+  // `dxgi_device_manager_` pointing to the same object. Therefore we only need
+  // to and can only call `ResetDevice()` once, If it's called more than once,
+  // all open device handles become invalid, even when it is the same device as
+  // before. This will cause an existing instance attempting to use the invalid
+  // handle to error out.
+  // https://learn.microsoft.com/en-us/windows/win32/api/mfobjects/nf-mfobjects-imfdxgidevicemanager-resetdevice
+  DXGIDeviceScopedHandle dxgi_device_handle(dxgi_device_manager_.Get());
+  if (dxgi_device_handle.GetDevice()) {
+    return S_OK;
+  }
 
   ComPtr<ID3D11Device> d3d11_device;
   UINT creation_flags =
@@ -385,6 +815,9 @@ HRESULT MediaFoundationRenderer::InitializeDXGIDeviceManager() {
   RETURN_IF_FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
 
   Microsoft::WRL::ComPtr<IDXGIAdapter> adapter_to_use;
+  // TODO(crbug.com/40899242): Need to handle the case when Adapter LUID is
+  // specific per instance of the video playback. This will now allow all
+  // instances to use the default DXGI device manager.
   if (gpu_process_adapter_luid_.LowPart || gpu_process_adapter_luid_.HighPart) {
     Microsoft::WRL::ComPtr<IDXGIAdapter> temp_adapter;
     for (UINT i = 0; SUCCEEDED(factory->EnumAdapters(i, &temp_adapter)); i++) {
@@ -398,11 +831,33 @@ HRESULT MediaFoundationRenderer::InitializeDXGIDeviceManager() {
     }
   }
 
-  RETURN_IF_FAILED(D3D11CreateDevice(
+  HRESULT hr = D3D11CreateDevice(
       adapter_to_use.Get(),
       adapter_to_use ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, 0,
       creation_flags, feature_levels, std::size(feature_levels),
-      D3D11_SDK_VERSION, &d3d11_device, nullptr, nullptr));
+      D3D11_SDK_VERSION, &d3d11_device, nullptr, nullptr);
+  if (FAILED(hr)) {
+    base::UmaHistogramSparse(
+        "Media.MediaFoundationRenderer.D3D11CreateDeviceFailed", hr);
+    if (hr == DXGI_ERROR_UNSUPPORTED) {
+      // If hardware device creation fails, try creating a software device.
+      // HWDRM cases require hardware security, which is not applicable for a
+      // basic software GPU adapter without hardware-level security. Using 0 for
+      // creation_flags is acceptable for basic video rendering, as warp devices
+      // lack video support, and the warp adapter is a software GPU so
+      // D3D11_CREATE_DEVICE_BGRA_SUPPORT and
+      // D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS don't
+      // apply.
+      RETURN_IF_FAILED(D3D11CreateDevice(
+          adapter_to_use.Get(),
+          adapter_to_use ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE,
+          0,
+          /*creation_flags=*/0, feature_levels, std::size(feature_levels),
+          D3D11_SDK_VERSION, &d3d11_device, nullptr, nullptr));
+    } else {
+      RETURN_IF_FAILED(hr);
+    }
+  }
   RETURN_IF_FAILED(media::SetDebugName(d3d11_device.Get(), "Media_MFRenderer"));
 
   ComPtr<ID3D10Multithread> multithreaded_device;
@@ -421,7 +876,8 @@ HRESULT MediaFoundationRenderer::InitializeVirtualVideoWindow() {
       CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_LAYERED | WS_EX_TRANSPARENT |
                          WS_EX_NOREDIRECTIONBITMAP,
                      reinterpret_cast<wchar_t*>(g_video_window_class), L"",
-                     WS_POPUP | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, 1, 1,
+                     WS_POPUP | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0,
+                     kVirtualWindowDefaultWidth, kVirtualWindowDefaultHeight,
                      nullptr, nullptr, nullptr, nullptr);
   if (!virtual_video_window_) {
     HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
@@ -459,9 +915,15 @@ void MediaFoundationRenderer::SetCdm(CdmContext* cdm_context,
 }
 
 void MediaFoundationRenderer::SetLatencyHint(
-    absl::optional<base::TimeDelta> /*latency_hint*/) {
-  // TODO(frankli): Ensure MFMediaEngine rendering pipeine is in real time mode.
-  NOTIMPLEMENTED() << "We do not use the latency hint today";
+    std::optional<base::TimeDelta> latency_hint) {
+  DVLOG_FUNC(1);
+
+  if (latency_hint.has_value()) {
+    DLOG_IF(WARNING, mf_media_engine_)
+        << "Latency hint is not utilized after MF media engine creation.";
+    CHECK(*latency_hint >= base::Milliseconds(0));
+  }
+  latency_hint_ = latency_hint;
 }
 
 void MediaFoundationRenderer::OnCdmProxyReceived() {
@@ -500,47 +962,6 @@ void MediaFoundationRenderer::Flush(base::OnceClosure flush_cb) {
   std::move(flush_cb).Run();
 }
 
-void MediaFoundationRenderer::SetMediaFoundationRenderingMode(
-    MediaFoundationRenderingMode render_mode) {
-  ComPtr<IMFMediaEngineEx> mf_media_engine_ex;
-  HRESULT hr = mf_media_engine_.As(&mf_media_engine_ex);
-
-  if (mf_media_engine_->HasVideo()) {
-    if (render_mode == MediaFoundationRenderingMode::FrameServer) {
-      // cannot change to frameserver if force_dcomp_mode_for_testing_ is true
-      DCHECK(!force_dcomp_mode_for_testing_);
-
-      // Make sure we reinitialize the texture pool
-      hr = InitializeTexturePool(native_video_size_);
-    } else if (render_mode == MediaFoundationRenderingMode::DirectComposition) {
-      // If needed renegotiate the DComp visual and send it to the client for
-      // presentation
-    } else {
-      DVLOG(1) << "Rendering mode: " << static_cast<int>(render_mode)
-               << " is unsupported";
-      MEDIA_LOG(ERROR, media_log_)
-          << "MediaFoundationRenderer SetMediaFoundationRenderingMode: "
-          << (int)render_mode
-          << " is not defined. No change to the rendering mode.";
-      hr = E_NOT_SET;
-    }
-
-    if (SUCCEEDED(hr)) {
-      hr = mf_media_engine_ex->EnableWindowlessSwapchainMode(
-          render_mode == MediaFoundationRenderingMode::DirectComposition);
-      if (SUCCEEDED(hr)) {
-        rendering_mode_ = render_mode;
-        MEDIA_LOG(INFO, media_log_)
-            << "Set MediaFoundationRenderingMode: " << rendering_mode_;
-      }
-    }
-  }
-}
-
-bool MediaFoundationRenderer::InFrameServerMode() {
-  return rendering_mode_ == MediaFoundationRenderingMode::FrameServer;
-}
-
 void MediaFoundationRenderer::StartPlayingFrom(base::TimeDelta time) {
   double current_time = time.InSecondsF();
   DVLOG_FUNC(2) << "current_time=" << current_time;
@@ -571,9 +992,33 @@ void MediaFoundationRenderer::StartPlayingFrom(base::TimeDelta time) {
 void MediaFoundationRenderer::SetPlaybackRate(double playback_rate) {
   DVLOG_FUNC(2) << "playback_rate=" << playback_rate;
 
-  HRESULT hr = mf_media_engine_->SetPlaybackRate(playback_rate);
-  // Ignore error so that the media continues to play rather than stopped.
-  DVLOG_IF(1, FAILED(hr)) << "Failed to set playback rate: " << PrintHr(hr);
+  // If the Media Engine's topology has not finished loading then
+  // the call to SetPlaybackRate may be overwritten. To work around this
+  // we call SetDefaultPlaybackRate which would be picked up when transitioning
+  // to the Play state.
+  HRESULT hr = mf_media_engine_->SetDefaultPlaybackRate(playback_rate);
+  if (FAILED(hr)) {
+    DVLOG(1) << "Failed to set default playback rate: " << PrintHr(hr);
+    OnError(PIPELINE_ERROR_COULD_NOT_RENDER,
+            ErrorReason::kFailedToSetPlaybackRate, hr);
+    return;
+  }
+
+  hr = mf_media_engine_->SetPlaybackRate(playback_rate);
+
+  if (SUCCEEDED(hr)) {
+    // Set the start time for the rendered video frame detection if playback
+    // rate was set to 0 and changed to non-zero.
+    if (playback_rate_ == 0.0 && playback_rate > 0.0) {
+      RestartRenderedVideoFrameDetectionTimerInNotReported();
+    }
+
+    playback_rate_ = playback_rate;
+  } else {
+    DVLOG_IF(1, FAILED(hr)) << "Failed to set playback rate: " << PrintHr(hr);
+    OnError(PIPELINE_ERROR_COULD_NOT_RENDER,
+            ErrorReason::kFailedToSetPlaybackRate, hr);
+  }
 }
 
 void MediaFoundationRenderer::GetDCompSurface(GetDCompSurfaceCB callback) {
@@ -618,7 +1063,7 @@ void MediaFoundationRenderer::GetDCompSurface(GetDCompSurfaceCB callback) {
   std::move(callback).Run(base::win::ScopedHandle(duplicated_handle), "");
 }
 
-// TODO(crbug.com/1070030): Investigate if we need to add
+// TODO(crbug.com/40126181): Investigate if we need to add
 // OnSelectedVideoTracksChanged() to media renderer.mojom.
 void MediaFoundationRenderer::SetVideoStreamEnabled(bool enabled) {
   DVLOG_FUNC(1) << "enabled=" << enabled;
@@ -638,6 +1083,7 @@ void MediaFoundationRenderer::SetOutputRect(const gfx::Rect& output_rect,
                                             SetOutputRectCB callback) {
   DVLOG_FUNC(2);
 
+  // Call SetWindowPos to reposition the video from output_rect.
   if (virtual_video_window_ &&
       !::SetWindowPos(virtual_video_window_, HWND_BOTTOM, output_rect.x(),
                       output_rect.y(), output_rect.width(),
@@ -648,7 +1094,18 @@ void MediaFoundationRenderer::SetOutputRect(const gfx::Rect& output_rect,
     return;
   }
 
-  if (FAILED(UpdateVideoStream(output_rect))) {
+  // Report multi-gpu UMAs only once when the virtual video window size is the
+  // correct one (the output rect is larger than default size) since the window
+  // handle is required to determine where the video is displayed.
+  if (!has_reported_multi_gpu_histogram_ &&
+      output_rect.width() > kVirtualWindowDefaultWidth &&
+      output_rect.height() > kVirtualWindowDefaultHeight) {
+    has_reported_multi_gpu_histogram_ = true;
+    ReportGpuInfoUma("Media.MediaFoundationRenderer.MultiGpu",
+                     dxgi_device_manager_.Get(), virtual_video_window_);
+  }
+
+  if (FAILED(UpdateVideoStream(output_rect.size()))) {
     std::move(callback).Run(false);
     return;
   }
@@ -656,35 +1113,30 @@ void MediaFoundationRenderer::SetOutputRect(const gfx::Rect& output_rect,
   std::move(callback).Run(true);
 }
 
-HRESULT MediaFoundationRenderer::InitializeTexturePool(const gfx::Size& size) {
-  DXGIDeviceScopedHandle dxgi_device_handle(dxgi_device_manager_.Get());
-  ComPtr<ID3D11Device> d3d11_device = dxgi_device_handle.GetDevice();
-
-  if (d3d11_device.Get() == nullptr) {
-    return E_UNEXPECTED;
+HRESULT MediaFoundationRenderer::UpdateVideoStream(const gfx::Size rect_size) {
+  if (current_video_rect_size_ == rect_size) {
+    return S_OK;
   }
 
-  // TODO(crbug.com/1276067): change |size| to instead use the required
-  // size of the output (for example if the video is only 1280x720 instead
-  // of a source frame of 1920x1080 we'd use the 1280x720 texture size).
-  // However we also need to investigate the scenario of WebGL and 360 video
-  // where they need the original frame size instead of the window size due
-  // to later image processing.
-  RETURN_IF_FAILED(texture_pool_.Initialize(d3d11_device.Get(),
-                                            initialized_frame_pool_cb_, size));
+  current_video_rect_size_ = rect_size;
 
-  return S_OK;
-}
-
-HRESULT MediaFoundationRenderer::UpdateVideoStream(const gfx::Rect& rect) {
   ComPtr<IMFMediaEngineEx> mf_media_engine_ex;
   RETURN_IF_FAILED(mf_media_engine_.As(&mf_media_engine_ex));
-  RECT dest_rect = {0, 0, rect.width(), rect.height()};
+
+  RECT dest_rect = {0, 0, rect_size.width(), rect_size.height()};
+
+  // https://learn.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfmediaengineex-updatevideostream
+  // Updates the source rectangle, destination rectangle, and border color for
+  // the video. Source is set to Null so the entire frame is displayed.
+  // Position is not set because SetWindowPos sets the position already.
+  // Destination rectangle relative to the top-left corner of the window
+  // rect set in SetWindowPos.
   RETURN_IF_FAILED(mf_media_engine_ex->UpdateVideoStream(
       /*pSrc=*/nullptr, &dest_rect, /*pBorderClr=*/nullptr));
-  if (rendering_mode_ == MediaFoundationRenderingMode::FrameServer) {
-    RETURN_IF_FAILED(InitializeTexturePool(native_video_size_));
-  }
+
+  // Set the start time for the rendered video frame detection.
+  RestartRenderedVideoFrameDetectionTimerInNotReported();
+
   return S_OK;
 }
 
@@ -743,6 +1195,8 @@ void MediaFoundationRenderer::SendStatistics() {
     cdm_proxy_->OnSignificantPlayback();
   }
 
+  CheckRenderedVideoFrame(new_stats);
+
   if (statistics_ != new_stats) {
     // OnStatisticsUpdate() expects delta values.
     PipelineStatistics delta;
@@ -765,11 +1219,136 @@ void MediaFoundationRenderer::StartSendingStatistics() {
   const auto kPipelineStatsPollingPeriod = base::Milliseconds(500);
   statistics_timer_.Start(FROM_HERE, kPipelineStatsPollingPeriod, this,
                           &MediaFoundationRenderer::SendStatistics);
+
+  // Set the start time for the rendered video frame detection.
+  RestartRenderedVideoFrameDetectionTimerInNotReported();
 }
 
-void MediaFoundationRenderer::StopSendingStatistics() {
-  DVLOG_FUNC(2);
+void MediaFoundationRenderer::StopSendingStatistics(
+    StopSendingStatisticsReason reason) {
+  DVLOG_FUNC(2) << "reason=" << static_cast<int>(reason);
+
   statistics_timer_.Stop();
+
+  // Conclude the rendered video frame detection only when the reason is not by
+  // playback pause. Otherwise, just reset the start time.
+  if (reason != StopSendingStatisticsReason::kPlaybackPauseInternal &&
+      NeedRenderedVideoFrameDetection()) {
+    DVLOG_FUNC(1) << "First rendered video frame check has not done yet. But "
+                     "video is ended, failed or shutting down!";
+    switch (reason) {
+      case StopSendingStatisticsReason::kPlaybackEnded:
+        ReportRenderedVideoFrameDetectionResult(
+            RenderedVideoFrameDetectionResult::kUnknownByPlaybackEnd);
+        break;
+      case StopSendingStatisticsReason::kPlaybackError:
+        ReportRenderedVideoFrameDetectionResult(
+            RenderedVideoFrameDetectionResult::kUnknownByPlaybackError);
+        break;
+      case StopSendingStatisticsReason::kShutdown:
+        ReportRenderedVideoFrameDetectionResult(
+            RenderedVideoFrameDetectionResult::kUnknownByShutdown);
+        break;
+      case StopSendingStatisticsReason::kPlaybackPauseInternal:
+        break;
+    }
+  }
+
+  rendered_video_frame_detection_start_time_.reset();
+}
+
+bool MediaFoundationRenderer::NeedRenderedVideoFrameDetection() {
+  // We need to check rendered video frame only if the detection check has never
+  // done before and the start time is set.
+  return !has_reported_rendered_video_frame_detection_ &&
+         rendered_video_frame_detection_start_time_.has_value();
+}
+
+void MediaFoundationRenderer::CheckRenderedVideoFrame(
+    const PipelineStatistics& stats) {
+  if (!NeedRenderedVideoFrameDetection()) {
+    return;
+  }
+
+  // Minimally required number of rendered video frames. 1 means any frame.
+  const int kMinRenderedVideoFrames = 1;
+  // Minimum 10 seconds to be considered something is rendered on the screen
+  // regardless of the current playback rate.
+  const base::TimeDelta kMinPlaybackTimeout = base::Seconds(10);
+  DVLOG_FUNC(3) << "stats.video_frames_decoded=" << stats.video_frames_decoded
+                << ", stats.video_frames_dropped="
+                << stats.video_frames_dropped;
+
+  // Use the number of rendered frames instead since frames dropped would
+  // count towards "hanging". video_frames_decoded = rendered_frame +
+  // video_frames_dropped.
+  const uint32_t rendered_frame =
+      stats.video_frames_decoded - stats.video_frames_dropped;
+
+  if (rendered_frame >= kMinRenderedVideoFrames) {
+    DVLOG_FUNC(1) << "First rendered video frame detected!";
+    ReportRenderedVideoFrameDetectionResult(
+        RenderedVideoFrameDetectionResult::kDetected);
+
+    has_reported_rendered_video_frame_detection_ = true;
+    rendered_video_frame_detection_start_time_.reset();
+    return;
+  }
+
+  auto elapsed_time = base::TimeTicks::Now() -
+                      rendered_video_frame_detection_start_time_.value();
+  DVLOG_FUNC(3) << "elapsed_time=" << elapsed_time;
+
+  // If the elapsed time is greater than or equal to `kMinPlaybackTimeout`,
+  // consider it as no decode video frame detected.
+  if (elapsed_time >= kMinPlaybackTimeout) {
+    DVLOG_FUNC(1) << "Not enough rendered video frame detected (expected: "
+                  << kMinRenderedVideoFrames << " vs actual: " << rendered_frame
+                  << ") within the given time "
+                  << kMinPlaybackTimeout.InSeconds() << " seconds!";
+    ReportRenderedVideoFrameDetectionResult(
+        RenderedVideoFrameDetectionResult::kNotDetected);
+
+    has_reported_rendered_video_frame_detection_ = true;
+    rendered_video_frame_detection_start_time_.reset();
+  }
+}
+
+void MediaFoundationRenderer::
+    RestartRenderedVideoFrameDetectionTimerInNotReported() {
+  rendered_video_frame_detection_start_time_.reset();
+
+  // Don't set the start time if the current playback rate is 0.0. For example,
+  // format/size change can trigger this call while `playback_rate_` is still
+  // zero.
+  if (playback_rate_ == 0.0) {
+    return;
+  }
+
+  if (!has_reported_rendered_video_frame_detection_) {
+    rendered_video_frame_detection_start_time_ = base::TimeTicks::Now();
+  }
+}
+
+void MediaFoundationRenderer::ReportRenderedVideoFrameDetectionResult(
+    RenderedVideoFrameDetectionResult result) {
+  DVLOG_FUNC(2) << "result=" << static_cast<int>(result);
+
+  base::UmaHistogramSparse(
+      "Media.MediaFoundationRenderer.RenderedVideoFrameDetectionResult",
+      static_cast<int>(result));
+
+  if (rendered_video_frame_detection_start_time_.has_value()) {
+    const auto elapsed_time =
+        base::TimeTicks::Now() -
+        rendered_video_frame_detection_start_time_.value();
+    DVLOG_FUNC(2) << "elapsed_time=" << elapsed_time.InMilliseconds() << " ms";
+    base::UmaHistogramTimes(
+        "Media.MediaFoundationRenderer.RenderedVideoFrameDetectionResult."
+        "TimeTo." +
+            RenderedVideoFrameDetectionResultToString(result),
+        elapsed_time);
+  }
 }
 
 void MediaFoundationRenderer::SetVolume(float volume) {
@@ -780,13 +1359,6 @@ void MediaFoundationRenderer::SetVolume(float volume) {
 
   HRESULT hr = mf_media_engine_->SetVolume(volume_);
   DVLOG_IF(1, FAILED(hr)) << "Failed to set volume: " << PrintHr(hr);
-}
-
-void MediaFoundationRenderer::SetFrameReturnCallbacks(
-    FrameReturnCallback frame_available_cb,
-    FramePoolInitializedCallback initialized_frame_pool_cb) {
-  frame_available_cb_ = std::move(frame_available_cb);
-  initialized_frame_pool_cb_ = std::move(initialized_frame_pool_cb);
 }
 
 void MediaFoundationRenderer::SetGpuProcessAdapterLuid(
@@ -818,8 +1390,10 @@ void MediaFoundationRenderer::OnPlaybackError(PipelineStatus status,
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   base::UmaHistogramSparse("Media.MediaFoundationRenderer.PlaybackError", hr);
+  ReportGpuInfoUma("Media.MediaFoundationRenderer.PlaybackError",
+                   dxgi_device_manager_.Get(), virtual_video_window_);
 
-  StopSendingStatistics();
+  StopSendingStatistics(StopSendingStatisticsReason::kPlaybackError);
   OnError(status, ErrorReason::kOnPlaybackError, hr);
 }
 
@@ -827,13 +1401,16 @@ void MediaFoundationRenderer::OnPlaybackEnded() {
   DVLOG_FUNC(2);
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
-  StopSendingStatistics();
+  StopSendingStatistics(StopSendingStatisticsReason::kPlaybackEnded);
   renderer_client_->OnEnded();
 }
 
 void MediaFoundationRenderer::OnFormatChange() {
   DVLOG_FUNC(2);
   OnVideoNaturalSizeChange();
+
+  // Set the start time for the rendered video frame detection.
+  RestartRenderedVideoFrameDetectionTimerInNotReported();
 }
 
 void MediaFoundationRenderer::OnLoadedData() {
@@ -847,6 +1424,22 @@ void MediaFoundationRenderer::OnLoadedData() {
 
 void MediaFoundationRenderer::OnCanPlayThrough() {
   DVLOG_FUNC(2);
+
+  // If the playback rate in Media Foundations is 0, the video renderer would
+  // not pre-roll and request frames. Use Frame Step function to force
+  // pre-rolling
+  if (playback_rate_ == 0) {
+    ComPtr<IMFMediaEngineEx> mf_media_engine_ex;
+
+    HRESULT hr = mf_media_engine_.As(&mf_media_engine_ex);
+    if (SUCCEEDED(hr)) {
+      mf_media_engine_ex->FrameStep(/*Forward=*/true);
+    } else {
+      OnError(PIPELINE_ERROR_COULD_NOT_RENDER,
+              ErrorReason::kFailedToGetMediaEngineEx, hr);
+      return;
+    }
+  }
 
   // According to HTML5 <video> spec, on "canplaythrough", the video could be
   // rendered at the current playback rate all the way to its end, and it's
@@ -864,9 +1457,6 @@ void MediaFoundationRenderer::OnPlaying() {
   OnBufferingStateChange(
       BufferingState::BUFFERING_HAVE_ENOUGH,
       BufferingStateChangeReason::BUFFERING_CHANGE_REASON_UNKNOWN);
-
-  // Earliest time to request first frame to screen
-  RequestNextFrame();
 
   // The OnPlaying callback from MediaEngineNotifyImpl lets us know that an
   // MF_MEDIA_ENGINE_EVENT_PLAYING message has been received. At this point we
@@ -886,6 +1476,27 @@ void MediaFoundationRenderer::OnWaiting() {
 void MediaFoundationRenderer::OnTimeUpdate() {
   DVLOG_FUNC(3);
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+}
+
+void MediaFoundationRenderer::OnFrameStepCompleted() {
+  DVLOG_FUNC(2);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  // Frame-Stepping causes Media engine to be in a paused state after finishing.
+  // Thus play and set playback rate is needed to change the state to be
+  // playing.
+
+  // Set playback rate is call again because on start, if SetPlaybackRate of 0
+  // is called before pipeline topology is setup, the playback rate of Media
+  // Engine will be defaulted to 1 as setting playback rate is ignored until
+  // topology is set. Thus, when frame step is finished, setting the playback
+  // rate again ensures consistency.
+  HRESULT hr = mf_media_engine_->Play();
+  if (FAILED(hr)) {
+    OnError(PIPELINE_ERROR_COULD_NOT_RENDER, ErrorReason::kFailedToPlay, hr);
+    return;
+  }
+  SetPlaybackRate(playback_rate_);
 }
 
 void MediaFoundationRenderer::OnProtectionManagerWaiting(WaitingReason reason) {
@@ -920,7 +1531,9 @@ HRESULT MediaFoundationRenderer::PauseInternal() {
   // transition to the Pause state & then back to Play state. To try and
   // avoid cases where we may get Media Engine's reset statistics call
   // StopSendingStatistics before transitioning to Pause.
-  StopSendingStatistics();
+  // Note that we should not conclude the rendered video frame detection since
+  // PauseInternal() can be called by flush or restart.
+  StopSendingStatistics(StopSendingStatisticsReason::kPlaybackPauseInternal);
   return mf_media_engine_->Pause();
 }
 
@@ -951,16 +1564,12 @@ void MediaFoundationRenderer::OnVideoNaturalSizeChange() {
   }
 
   // TODO(frankli): Let test code to call `UpdateVideoStream()`.
-  if (force_dcomp_mode_for_testing_) {
-    const gfx::Rect test_rect(/*x=*/0, /*y=*/0, /*width=*/640, /*height=*/320);
+  if (is_testing_) {
+    const gfx::Size test_size(/*width=*/640, /*height=*/320);
     // This invokes IMFMediaEngineEx::UpdateVideoStream() for video frames to
     // be presented. Otherwise, the Media Foundation video renderer will not
     // request video samples from our source.
-    std::ignore = UpdateVideoStream(test_rect);
-  }
-
-  if (rendering_mode_ == MediaFoundationRenderingMode::FrameServer) {
-    InitializeTexturePool(native_video_size_);
+    std::ignore = UpdateVideoStream(test_size);
   }
 
   renderer_client_->OnVideoNaturalSizeChange(native_video_size_);
@@ -987,14 +1596,30 @@ void MediaFoundationRenderer::OnError(PipelineStatus status,
   // video to different graphics adapters. This is not an error, so special case
   // it here.
   PipelineStatus new_status = status;
+  // DRM_OEM_E_ASD_ACTIVE_DISPLAY_FAIL (0x8004DD2E) is an error code which
+  // comes from old AMD drivers. This error is produced when entering S3/S4
+  // sleep mode and during hotplug, but should be treated the same as
+  // DRM_E_TEE_INVALID_HWDRM_STATE.
+  if (hresult == DRM_OEM_E_ASD_ACTIVE_DISPLAY_FAIL) {
+    // Attempt to get the vendor_id using the dxgi device.
+    const auto [vendor_id, _] =
+        GetVendorIdAndLUIDFromD3D11Device(dxgi_device_manager_.Get());
+    if (vendor_id == kGpuVendorIdAmd) {
+      hresult = DRM_E_TEE_INVALID_HWDRM_STATE;
+    }
+  }
+
   if (hresult == DRM_E_TEE_INVALID_HWDRM_STATE) {
-    // TODO(crbug.com/1370844): Remove these after the investigation is done.
+    // TODO(crbug.com/40870069): Remove these after the investigation is done.
     base::UmaHistogramBoolean(
         "Media.MediaFoundationRenderer.InvalidHwdrmState.HasReportedPlaying",
         has_reported_playing_);
     base::UmaHistogramCounts10000(
         "Media.MediaFoundationRenderer.InvalidHwdrmState.VideoFrameDecoded",
         statistics_.video_frames_decoded);
+
+    ReportGpuInfoUma("Media.EME.MediaFoundationService.HardwareContextReset",
+                     dxgi_device_manager_.Get(), virtual_video_window_);
 
     new_status = PIPELINE_ERROR_HARDWARE_CONTEXT_RESET;
     if (cdm_proxy_)
@@ -1010,61 +1635,6 @@ void MediaFoundationRenderer::OnError(PipelineStatus status,
     std::move(status_cb).Run(new_status);
   else
     renderer_client_->OnError(new_status);
-}
-
-void MediaFoundationRenderer::RequestNextFrame() {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (rendering_mode_ != MediaFoundationRenderingMode::FrameServer) {
-    return;
-  }
-
-  LONGLONG presentation_timestamp_in_hns = 0;
-  // OnVideoStreamTick can return S_FALSE if there is no frame available.
-  if (dxgi_device_manager_ == nullptr ||
-      mf_media_engine_->OnVideoStreamTick(&presentation_timestamp_in_hns) !=
-          S_OK) {
-    return;
-  }
-
-  // TODO(crbug.com/1276067): Change the |native_video_size_| to get the correct
-  // output video size as determined by the output texture requirements.
-  gfx::Size video_size = native_video_size_;
-
-  base::UnguessableToken frame_token;
-  auto d3d11_video_frame = texture_pool_.AcquireTexture(&frame_token);
-  if (d3d11_video_frame.Get() == nullptr)
-    return;
-
-  RECT destination_frame_size = {0, 0, video_size.width(), video_size.height()};
-
-  ComPtr<IDXGIKeyedMutex> texture_mutex;
-  d3d11_video_frame.As(&texture_mutex);
-
-  if (texture_mutex->AcquireSync(0, INFINITE) != S_OK) {
-    texture_pool_.ReleaseTexture(frame_token);
-    return;
-  }
-
-  if (FAILED(mf_media_engine_->TransferVideoFrame(
-          d3d11_video_frame.Get(), nullptr, &destination_frame_size,
-          nullptr))) {
-    texture_mutex->ReleaseSync(0);
-    texture_pool_.ReleaseTexture(frame_token);
-    return;
-  }
-  texture_mutex->ReleaseSync(0);
-
-// Need access to GetCurrentTime on the Media Engine.
-#undef GetCurrentTime
-  auto frame_timestamp = base::Seconds(mf_media_engine_->GetCurrentTime());
-// Restore previous definition
-#define GetCurrentTime() GetTickCount()
-  frame_available_cb_.Run(frame_token, video_size, frame_timestamp);
-}
-
-void MediaFoundationRenderer::NotifyFrameReleased(
-    const base::UnguessableToken& frame_token) {
-  texture_pool_.ReleaseTexture(frame_token);
 }
 
 }  // namespace media

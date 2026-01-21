@@ -9,15 +9,16 @@
 #include <vector>
 
 #include "android_webview/browser/aw_print_manager.h"
-#include "android_webview/browser_jni_headers/AwPdfExporter_jni.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_thread.h"
 #include "printing/print_settings.h"
 #include "printing/units.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwPdfExporter_jni.h"
+
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -25,9 +26,10 @@ namespace android_webview {
 
 namespace {
 
-void JNI_AwPdfExporter_GetPageRanges(JNIEnv* env,
-                                     const JavaRef<jintArray>& int_arr,
-                                     printing::PageRanges* range_vector) {
+static void JNI_AwPdfExporter_GetPageRanges(
+    JNIEnv* env,
+    const JavaRef<jintArray>& int_arr,
+    printing::PageRanges* range_vector) {
   std::vector<int> pages;
   base::android::JavaIntArrayToIntVector(env, int_arr, &pages);
   for (int page : pages) {
@@ -59,10 +61,10 @@ AwPdfExporter::~AwPdfExporter() {
 }
 
 void AwPdfExporter::ExportToPdf(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
+                                const JavaRef<jobject>& obj,
                                 int fd,
-                                const JavaParamRef<jintArray>& pages,
-                                const JavaParamRef<jobject>& cancel_signal) {
+                                const JavaRef<jintArray>& pages,
+                                const JavaRef<jobject>& cancel_signal) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   printing::PageRanges page_ranges;
   JNI_AwPdfExporter_GetPageRanges(env, pages, &page_ranges);
@@ -84,10 +86,18 @@ void AwPdfExporter::ExportToPdf(JNIEnv* env,
 }
 
 namespace {
+
 // Converts from 1/1000 of inches to device units using DPI.
 int MilsToDots(int val, int dpi) {
-  return static_cast<int>(printing::ConvertUnitFloat(val, 1000, dpi));
+  return static_cast<int>(
+      printing::ConvertUnitFloat(val, printing::kMilsPerInch, dpi));
 }
+
+int MilsToDeviceMicrons(int val, int dpi) {
+  return printing::ConvertUnit(MilsToDots(val, dpi), printing::kPointsPerInch,
+                               printing::kMicronsPerInch);
+}
+
 }  // namespace
 
 std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
@@ -96,6 +106,17 @@ std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
     const printing::PageRanges& page_ranges) {
   auto settings = std::make_unique<printing::PrintSettings>();
   int dpi = Java_AwPdfExporter_getDpi(env, obj);
+  printing::PageMargins margins;
+  margins.left =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getLeftMargin(env, obj), dpi);
+  margins.right =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getRightMargin(env, obj), dpi);
+  margins.top =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getTopMargin(env, obj), dpi);
+  margins.bottom =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getBottomMargin(env, obj), dpi);
+  settings->SetCustomMargins(margins);
+
   int width = Java_AwPdfExporter_getPageWidth(env, obj);
   int height = Java_AwPdfExporter_getPageHeight(env, obj);
   gfx::Size physical_size_device_units;
@@ -116,13 +137,6 @@ std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
   settings->SetPrinterPrintableArea(physical_size_device_units,
                                     printable_area_device_units, true);
 
-  printing::PageMargins margins;
-  margins.left = MilsToDots(Java_AwPdfExporter_getLeftMargin(env, obj), dpi);
-  margins.right = MilsToDots(Java_AwPdfExporter_getRightMargin(env, obj), dpi);
-  margins.top = MilsToDots(Java_AwPdfExporter_getTopMargin(env, obj), dpi);
-  margins.bottom =
-      MilsToDots(Java_AwPdfExporter_getBottomMargin(env, obj), dpi);
-  settings->SetCustomMargins(margins);
   settings->set_should_print_backgrounds(true);
   return settings;
 }
@@ -136,3 +150,5 @@ void AwPdfExporter::DidExportPdf(int page_count) {
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwPdfExporter)

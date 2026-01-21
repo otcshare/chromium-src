@@ -6,23 +6,23 @@
 #define UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_BUFFER_MANAGER_CONNECTOR_H_
 
 #include "base/memory/raw_ptr.h"
-#include "ui/ozone/public/gpu_platform_support_host.h"
-
+#include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "ui/ozone/platform/wayland/mojom/wayland_buffer_manager.mojom.h"
+#include "ui/ozone/public/gpu_platform_support_host.h"
 
 namespace ui {
 
 class WaylandBufferManagerHost;
+class WaylandConnection;
 
 // A connector class which instantiates a connection between
 // WaylandBufferManagerGpu on the GPU side and the WaylandBufferManagerHost
 // object on the browser process side.
 class WaylandBufferManagerConnector : public GpuPlatformSupportHost {
  public:
-  explicit WaylandBufferManagerConnector(
-      WaylandBufferManagerHost* buffer_manager_host);
+  WaylandBufferManagerConnector(WaylandConnection* connection,
+                                WaylandBufferManagerHost* buffer_manager_host);
 
   WaylandBufferManagerConnector(const WaylandBufferManagerConnector&) = delete;
   WaylandBufferManagerConnector& operator=(
@@ -31,6 +31,7 @@ class WaylandBufferManagerConnector : public GpuPlatformSupportHost {
   ~WaylandBufferManagerConnector() override;
 
   // GpuPlatformSupportHost:
+  void OnHdrEnabledChanged(bool hdr_enabled) override;
   void OnChannelDestroyed(int host_id) override;
   void OnGpuServiceLaunched(
       int host_id,
@@ -39,6 +40,8 @@ class WaylandBufferManagerConnector : public GpuPlatformSupportHost {
 
  private:
   void OnTerminateGpuProcess(std::string message);
+
+  const raw_ptr<WaylandConnection> connection_;
 
   // Non-owned pointer, which is used to bind a mojo pointer to the
   // WaylandBufferManagerHost.
@@ -51,6 +54,8 @@ class WaylandBufferManagerConnector : public GpuPlatformSupportHost {
   int host_id_ = -1;
 
   THREAD_CHECKER(ui_thread_checker_);
+
+  base::WeakPtrFactory<WaylandBufferManagerConnector> weak_factory_{this};
 };
 
 }  // namespace ui

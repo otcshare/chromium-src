@@ -6,11 +6,13 @@
 
 #include <stddef.h>
 
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/rand_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -18,7 +20,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/omnibox/browser/intranet_redirector_state.h"
@@ -39,7 +40,6 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
-// TODO(crbug.com/181671): Write test to verify we handle the policy toggling.
 IntranetRedirectDetector::IntranetRedirectDetector()
     : redirect_origin_(g_browser_process->local_state()->GetString(
           prefs::kLastKnownIntranetRedirectOrigin)) {
@@ -180,10 +180,10 @@ void IntranetRedirectDetector::FinishSleep() {
 
 void IntranetRedirectDetector::OnSimpleLoaderComplete(
     network::SimpleURLLoader* source,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Delete the loader on this function's exit.
   auto it = simple_loaders_.find(source);
-  DCHECK(it != simple_loaders_.end());
+  CHECK(it != simple_loaders_.end());
   std::unique_ptr<network::SimpleURLLoader> simple_loader =
       std::move(it->second);
   simple_loaders_.erase(it);

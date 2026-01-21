@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
 #include "components/onc/onc_constants.h"
@@ -79,6 +80,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ProxyConfigServiceImpl
       const PrefService* local_state_prefs);
 
  private:
+  friend class ProxyConfigServiceImplTest;
+
   // Called when any proxy preference changes.
   void OnProxyPrefChanged();
 
@@ -97,10 +100,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ProxyConfigServiceImpl
 
   // Not owned. NULL if tracking only local state prefs (e.g. in the system
   // request context or sign-in screen).
-  PrefService* profile_prefs_;
+  raw_ptr<PrefService> profile_prefs_;
 
   // Not owned.
-  PrefService* local_state_prefs_;
+  raw_ptr<PrefService> local_state_prefs_;
 
   NetworkStateHandlerScopedObservation network_state_handler_observer_{this};
 

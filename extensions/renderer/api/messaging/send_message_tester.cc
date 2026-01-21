@@ -4,13 +4,15 @@
 
 #include "extensions/renderer/api/messaging/send_message_tester.h"
 
+#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "extensions/common/api/messaging/serialization_format.h"
+#include "base/test/gmock_callback_support.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/renderer/api/messaging/messaging_util.h"
+#include "extensions/renderer/api/messaging/mock_message_port_host.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
 #include "extensions/renderer/script_context.h"
-#include "ipc/ipc_message.h"
 #include "v8/include/v8.h"
 
 namespace extensions {
@@ -24,7 +26,7 @@ SendMessageTester::SendMessageTester(TestIPCMessageSender* ipc_sender,
       next_port_id_(next_port_id),
       api_namespace_(api_namespace) {}
 
-SendMessageTester::~SendMessageTester() {}
+SendMessageTester::~SendMessageTester() = default;
 
 v8::Local<v8::Value> SendMessageTester::TestSendMessage(
     const std::string& args,
@@ -35,7 +37,8 @@ v8::Local<v8::Value> SendMessageTester::TestSendMessage(
 
   v8::Local<v8::Value> output;
   TestSendMessageOrRequest(args, expected_message, expected_target,
-                           expected_port_status, SEND_MESSAGE, output);
+                           expected_port_status,
+                           SendMessageTester::Method::kSendMessage, output);
   return output;
 }
 
@@ -48,7 +51,8 @@ v8::Local<v8::Value> SendMessageTester::TestSendRequest(
 
   v8::Local<v8::Value> output;
   TestSendMessageOrRequest(args, expected_message, expected_target,
-                           expected_port_status, SEND_REQUEST, output);
+                           expected_port_status,
+                           SendMessageTester::Method::kSendRequest, output);
   return output;
 }
 
@@ -66,8 +70,9 @@ v8::Local<v8::Value> SendMessageTester::TestSendNativeMessage(
       MessageTarget::ForNativeApp(expected_application_name));
 
   v8::Local<v8::Value> output;
-  TestSendMessageOrRequest(args, expected_message, expected_target,
-                           expected_port_status, SEND_NATIVE_MESSAGE, output);
+  TestSendMessageOrRequest(
+      args, expected_message, expected_target, expected_port_status,
+      SendMessageTester::Method::kSendNativeMessage, output);
   return output;
 }
 
@@ -81,10 +86,20 @@ void SendMessageTester::TestConnect(const std::string& args,
   constexpr char kAddPortTemplate[] =
       "(function() { return chrome.%s.connect(%s); })";
   PortId expected_port_id(script_context_->context_id(), next_port_id_++, true,
-                          SerializationFormat::kJson);
-  EXPECT_CALL(*ipc_sender_,
-              SendOpenMessageChannel(script_context_, expected_port_id,
-                                     expected_target, expected_channel));
+                          mojom::SerializationFormat::kJson);
+  EXPECT_CALL(*ipc_sender_, SendOpenMessageChannel(
+                                script_context_.get(), expected_port_id,
+                                expected_target, mojom::ChannelType::kConnect,
+                                expected_channel, testing::_, testing::_))
+      .WillOnce([](ScriptContext* script_context, const PortId& port_id,
+                   const MessageTarget& target, mojom::ChannelType channel_type,
+                   const std::string& channel_name,
+                   mojo::PendingAssociatedRemote<mojom::MessagePort> port,
+                   mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+                       port_host) {
+        port.EnableUnassociatedUsage();
+        port_host.EnableUnassociatedUsage();
+      });
   v8::Local<v8::Function> add_port = FunctionFromString(
       v8_context, base::StringPrintf(kAddPortTemplate, api_namespace_.c_str(),
                                      args.c_str()));
@@ -108,35 +123,59 @@ void SendMessageTester::TestSendMessageOrRequest(
       "(function() { return chrome.%s.%s(%s); })";
 
   std::string expected_channel;
+  mojom::ChannelType channel_type = mojom::ChannelType::kSendMessage;
   const char* method_name = nullptr;
   switch (method) {
-    case SEND_MESSAGE:
+    case SendMessageTester::Method::kSendMessage:
       method_name = "sendMessage";
       expected_channel = messaging_util::kSendMessageChannel;
+      channel_type = mojom::ChannelType::kSendMessage;
       break;
-    case SEND_REQUEST:
+    case SendMessageTester::Method::kSendRequest:
       method_name = "sendRequest";
       expected_channel = messaging_util::kSendRequestChannel;
+      channel_type = mojom::ChannelType::kSendRequest;
       break;
-    case SEND_NATIVE_MESSAGE:
+    case SendMessageTester::Method::kSendNativeMessage:
       method_name = "sendNativeMessage";
+      channel_type = mojom::ChannelType::kNative;
       // sendNativeMessage doesn't have name channels so we don't need to change
       // expected_channel from an empty string.
       break;
   }
 
+  MockMessagePortHost mock_message_port_host;
   PortId expected_port_id(script_context_->context_id(), next_port_id_++, true,
-                          SerializationFormat::kJson);
+                          mojom::SerializationFormat::kJson);
 
+  base::RunLoop run_loop;
+  Message message(expected_message, mojom::SerializationFormat::kJson, false);
   EXPECT_CALL(*ipc_sender_,
-              SendOpenMessageChannel(script_context_, expected_port_id,
-                                     expected_target, expected_channel));
-  Message message(expected_message, SerializationFormat::kJson, false);
-  EXPECT_CALL(*ipc_sender_, SendPostMessageToPort(expected_port_id, message));
-
+              SendOpenMessageChannel(script_context_.get(), expected_port_id,
+                                     expected_target, channel_type,
+                                     expected_channel, testing::_, testing::_))
+      .WillOnce([&mock_message_port_host](
+                    ScriptContext* script_context, const PortId& port_id,
+                    const MessageTarget& target,
+                    mojom::ChannelType channel_type,
+                    const std::string& channel_name,
+                    mojo::PendingAssociatedRemote<mojom::MessagePort> port,
+                    mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+                        port_host) {
+        port.EnableUnassociatedUsage();
+        port_host.EnableUnassociatedUsage();
+        mock_message_port_host.BindReceiver(std::move(port_host));
+      });
   if (expected_port_status == CLOSED) {
-    EXPECT_CALL(*ipc_sender_,
-                SendCloseMessagePort(MSG_ROUTING_NONE, expected_port_id, true));
+    EXPECT_CALL(mock_message_port_host, PostMessage(message));
+    EXPECT_CALL(mock_message_port_host,
+                ClosePort(
+                    /*close_channel=*/true,
+                    /*error_message=*/testing::Eq(std::nullopt)))
+        .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  } else {
+    EXPECT_CALL(mock_message_port_host, PostMessage(message))
+        .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   }
 
   v8::Local<v8::Context> v8_context = script_context_->v8_context();
@@ -145,7 +184,9 @@ void SendMessageTester::TestSendMessageOrRequest(
       base::StringPrintf(kSendMessageTemplate, api_namespace_.c_str(),
                          method_name, args.c_str()));
   out_value = RunFunction(send_message, v8_context, 0, nullptr);
+  run_loop.Run();
   ::testing::Mock::VerifyAndClearExpectations(ipc_sender_);
+  ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
 }
 
 }  // namespace extensions

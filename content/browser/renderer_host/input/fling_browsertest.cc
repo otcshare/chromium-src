@@ -4,14 +4,14 @@
 
 #include <tuple>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "content/browser/renderer_host/input/synthetic_smooth_scroll_gesture.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/input/synthetic_smooth_scroll_gesture.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -99,6 +99,7 @@ class BrowserSideFlingBrowserTest : public ContentBrowserTest {
   void LoadURL(const std::string& page_data) {
     const GURL data_url("data:text/html," + page_data);
     EXPECT_TRUE(NavigateToURL(shell(), data_url));
+    SimulateEndOfPaintHoldingOnPrimaryMainFrame(shell()->web_contents());
 
     RenderWidgetHostImpl* host = GetWidgetHost();
     host->GetView()->SetSize(gfx::Size(400, 400));
@@ -138,7 +139,7 @@ class BrowserSideFlingBrowserTest : public ContentBrowserTest {
     // guaranteed to have run.
     ASSERT_TRUE(
         EvalJsAfterLifecycleUpdate(iframe_node->current_frame_host(), "", "")
-            .error.empty());
+            .is_ok());
 
     WaitForHitTestData(iframe_node->current_frame_host());
     ASSERT_EQ(
@@ -384,8 +385,10 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
       0, EvalJs(root->current_frame_host(), "window.scrollY").ExtractDouble());
 }
 
-// TODO(crbug.com/1352412): Re-enable on Linux MSAN once not flaky.
+// TODO(crbug.com/40857753): Re-enable on Linux MSAN once not flaky.
 #if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_TouchscreenFlingInOOPIF DISABLED_TouchscreenFlingInOOPIF
+#elif BUILDFLAG(IS_ANDROID)
 #define MAYBE_TouchscreenFlingInOOPIF DISABLED_TouchscreenFlingInOOPIF
 #else
 #define MAYBE_TouchscreenFlingInOOPIF TouchscreenFlingInOOPIF
@@ -396,14 +399,14 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
   SimulateTouchscreenFling(child_view_->host());
   WaitForFrameScroll(GetChildNode());
 }
-// TODO(crbug.com/1340285): flaky.
+// TODO(crbug.com/40230295): flaky.
 IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
                        DISABLED_TouchpadFlingInOOPIF) {
   LoadPageWithOOPIF();
   SimulateTouchpadFling(child_view_->host());
   WaitForFrameScroll(GetChildNode());
 }
-// TODO(crbug.com/1340285): flaky.
+// TODO(crbug.com/40230295): flaky.
 IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
                        DISABLED_TouchscreenInertialGSUsBubbleFromOOPIF) {
   LoadPageWithOOPIF();
@@ -424,7 +427,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
 }
 
 // Touchpad fling only happens on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
                        TouchpadInertialGSUsBubbleFromOOPIF) {
   LoadPageWithOOPIF();
@@ -442,9 +445,9 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
   SimulateTouchpadFling(child_view_->host(), GetWidgetHost(), fling_velocity);
   WaitForFrameScroll(GetRootNode(), 15, true /* upward */);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-// TODO(crbug.com/1340285): flaky.
+// TODO(crbug.com/40230295): flaky.
 IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
                        DISABLED_InertialGSEGetsBubbledFromOOPIF) {
   LoadPageWithOOPIF();
@@ -484,8 +487,10 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
 
 // Checks that the fling controller of the oopif stops the fling when the
 // bubbled inertial GSUs are not consumed by the parent's renderer.
-IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
-                       DISABLE_InertialGSUBubblingStopsWhenParentCannotScroll) {
+// Flaky test https://crbug.com/1344075
+IN_PROC_BROWSER_TEST_F(
+    BrowserSideFlingBrowserTest,
+    DISABLED_InertialGSUBubblingStopsWhenParentCannotScroll) {
   LoadPageWithOOPIF();
   // Scroll the parent down so that it is scrollable upward.
 
@@ -532,7 +537,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
 
   // Check that the router has forced the last fling start target to stop
   // flinging.
-  RenderWidgetHostInputEventRouter* router =
+  input::RenderWidgetHostInputEventRouter* router =
       static_cast<WebContentsImpl*>(shell()->web_contents())
           ->GetInputEventRouter();
   EXPECT_TRUE(
@@ -552,8 +557,9 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
   SimulateTouchscreenFling(GetWidgetHost());
 
   // As the view is destroyed, there shouldn't be any active fling.
-  EXPECT_FALSE(static_cast<InputRouterImpl*>(GetWidgetHost()->input_router())
-                   ->IsFlingActiveForTest());
+  EXPECT_FALSE(
+      static_cast<input::InputRouterImpl*>(GetWidgetHost()->input_router())
+          ->IsFlingActiveForTest());
 
   EXPECT_EQ(
       0, EvalJs(root->current_frame_host(), "window.scrollY").ExtractDouble());
@@ -581,8 +587,16 @@ class PhysicsBasedFlingCurveBrowserTest : public BrowserSideFlingBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+// TODO(crbug.com/40737075): Re-enable on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_TargetScrollOffsetForFlingAnimation \
+  DISABLED_TargetScrollOffsetForFlingAnimation
+#else
+#define MAYBE_TargetScrollOffsetForFlingAnimation \
+  TargetScrollOffsetForFlingAnimation
+#endif
 IN_PROC_BROWSER_TEST_F(PhysicsBasedFlingCurveBrowserTest,
-                       TargetScrollOffsetForFlingAnimation) {
+                       MAYBE_TargetScrollOffsetForFlingAnimation) {
   LoadPageWithOOPIF();
 
   // Higher value of fling velocity will make sure that the scroll distance

@@ -2,23 +2,59 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "gpu/command_buffer/client/program_info_manager.h"
+
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
-#include "gpu/command_buffer/client/program_info_manager.h"
+#include <string_view>
+
+#include "base/compiler_specific.h"
+#include "base/memory/raw_span.h"
 
 namespace {
 
+// Loads a value from type `T` from `data` at `offset`. The location need not be
+// aligned for `T`.
 template <typename T>
-static T LocalGetAs(base::span<const int8_t> data,
-                    uint32_t offset,
-                    size_t size) {
-  const int8_t* p = data.data() + offset;
-  DCHECK_LE(offset + size, data.size());
-  return static_cast<T>(static_cast<const void*>(p));
+T Load(base::span<const int8_t> data, size_t offset) {
+  auto subspan = data.subspan(offset, sizeof(T));
+  T ret;
+  UNSAFE_TODO(memcpy(&ret, subspan.data(), sizeof(T)));
+  return ret;
 }
 
-// Writes the strimg pointed by name and of maximum size buffsize. If length is
+std::string_view ToStringView(base::span<const int8_t> data) {
+  return std::string_view(reinterpret_cast<const char*>(data.data()),
+                          data.size());
+}
+
+// A convenience class to load a series of objects and spans.
+class DataIterator {
+ public:
+  explicit DataIterator(base::span<const int8_t> data) : data_(data) {}
+
+  bool empty() const { return data_.empty(); }
+
+  // Consumes `n` bytes and returns them.
+  base::span<const int8_t> GetBytes(size_t n) {
+    base::span<const int8_t> ret = data_.first(n);
+    data_ = data_.subspan(n);
+    return ret;
+  }
+
+  // Consumes `sizeof(T)` bytes and interprets the result as a `T`.
+  template <typename T>
+  T Get() {
+    return Load<T>(GetBytes(sizeof(T)), 0);
+  }
+
+ private:
+  base::raw_span<const int8_t> data_;
+};
+
+// Writes the string pointed by name and of maximum size buffsize. If length is
 // !null, it receives the number of characters written (excluding the final \0).
 // This is a helper function for GetActive*Helper functions that return names.
 void FillNameAndLength(GLsizei bufsize,
@@ -32,8 +68,8 @@ void FillNameAndLength(GLsizei bufsize,
     DCHECK_LE(string.size(), static_cast<size_t>(INT_MAX));
     // Note: bufsize counts the terminating \0, but not string.size().
     max_length = std::min(bufsize - 1, static_cast<GLsizei>(string.size()));
-    memcpy(name, string.data(), max_length);
-    name[max_length] = '\0';
+    UNSAFE_TODO(memcpy(name, string.data(), max_length));
+    UNSAFE_TODO(name[max_length]) = '\0';
   }
   if (length) {
     *length = max_length;
@@ -250,9 +286,7 @@ bool ProgramInfoManager::Program::GetProgramiv(
       return true;
     default:
       NOTREACHED();
-      break;
   }
-  return false;
 }
 
 GLuint ProgramInfoManager::Program::GetUniformBlockIndex(
@@ -294,7 +328,7 @@ bool ProgramInfoManager::Program::GetUniformsiv(
     return false;
   }
   for (GLsizei ii = 0; ii < count; ++ii) {
-    if (indices[ii] >= num_uniforms) {
+    if (UNSAFE_TODO(indices[ii]) >= num_uniforms) {
       return false;
     }
   }
@@ -305,20 +339,22 @@ bool ProgramInfoManager::Program::GetUniformsiv(
     case GL_UNIFORM_SIZE:
       DCHECK_EQ(num_uniforms, uniform_infos_.size());
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = static_cast<GLint>(uniform_infos_[indices[ii]].size);
+        UNSAFE_TODO(params[ii]) =
+            static_cast<GLint>(uniform_infos_[UNSAFE_TODO(indices[ii])].size);
       }
       return true;
     case GL_UNIFORM_TYPE:
       DCHECK_EQ(num_uniforms, uniform_infos_.size());
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = static_cast<GLint>(uniform_infos_[indices[ii]].type);
+        UNSAFE_TODO(params[ii]) =
+            static_cast<GLint>(uniform_infos_[UNSAFE_TODO(indices[ii])].type);
       }
       return true;
     case GL_UNIFORM_NAME_LENGTH:
       DCHECK_EQ(num_uniforms, uniform_infos_.size());
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = static_cast<GLint>(
-            uniform_infos_[indices[ii]].name.length() + 1);
+        UNSAFE_TODO(params[ii]) = static_cast<GLint>(
+            uniform_infos_[UNSAFE_TODO(indices[ii])].name.length() + 1);
       }
       return true;
   }
@@ -328,34 +364,37 @@ bool ProgramInfoManager::Program::GetUniformsiv(
   switch (pname) {
     case GL_UNIFORM_BLOCK_INDEX:
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = uniforms_es3_[indices[ii]].block_index;
+        UNSAFE_TODO(params[ii]) =
+            uniforms_es3_[UNSAFE_TODO(indices[ii])].block_index;
       }
       return true;
     case GL_UNIFORM_OFFSET:
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = uniforms_es3_[indices[ii]].offset;
+        UNSAFE_TODO(params[ii]) =
+            uniforms_es3_[UNSAFE_TODO(indices[ii])].offset;
       }
       return true;
     case GL_UNIFORM_ARRAY_STRIDE:
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = uniforms_es3_[indices[ii]].array_stride;
+        UNSAFE_TODO(params[ii]) =
+            uniforms_es3_[UNSAFE_TODO(indices[ii])].array_stride;
       }
       return true;
     case GL_UNIFORM_MATRIX_STRIDE:
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = uniforms_es3_[indices[ii]].matrix_stride;
+        UNSAFE_TODO(params[ii]) =
+            uniforms_es3_[UNSAFE_TODO(indices[ii])].matrix_stride;
       }
       return true;
     case GL_UNIFORM_IS_ROW_MAJOR:
       for (GLsizei ii = 0; ii < count; ++ii) {
-        params[ii] = uniforms_es3_[indices[ii]].is_row_major;
+        UNSAFE_TODO(params[ii]) =
+            uniforms_es3_[UNSAFE_TODO(indices[ii])].is_row_major;
       }
       return true;
     default:
       NOTREACHED();
-      break;
   }
-  return false;
 }
 
 void ProgramInfoManager::Program::UpdateES2(base::span<const int8_t> result) {
@@ -366,10 +405,8 @@ void ProgramInfoManager::Program::UpdateES2(base::span<const int8_t> result) {
     // This should only happen on a lost context.
     return;
   }
-  DCHECK_GE(result.size(), sizeof(ProgramInfoHeader));
-  const ProgramInfoHeader* header = LocalGetAs<const ProgramInfoHeader*>(
-      result, 0, sizeof(header));
-  link_status_ = header->link_status != 0;
+  auto header = Load<ProgramInfoHeader>(result, 0);
+  link_status_ = header.link_status != 0;
   if (!link_status_) {
     return;
   }
@@ -377,39 +414,34 @@ void ProgramInfoManager::Program::UpdateES2(base::span<const int8_t> result) {
   DCHECK_EQ(0u, uniform_infos_.size());
   DCHECK_EQ(0, max_attrib_name_length_);
   DCHECK_EQ(0, max_uniform_name_length_);
-  const ProgramInput* inputs = LocalGetAs<const ProgramInput*>(
-      result, sizeof(*header),
-      sizeof(ProgramInput) * (header->num_attribs + header->num_uniforms));
-  const ProgramInput* input = inputs;
-  for (uint32_t ii = 0; ii < header->num_attribs; ++ii) {
-    const int32_t* location = LocalGetAs<const int32_t*>(
-        result, input->location_offset, sizeof(int32_t));
-    const char* name_buf = LocalGetAs<const char*>(
-        result, input->name_offset, input->name_length);
-    std::string name(name_buf, input->name_length);
+  DataIterator inputs(result.subspan(
+      sizeof(header),
+      sizeof(ProgramInput) * (header.num_attribs + header.num_uniforms)));
+  for (uint32_t ii = 0; ii < header.num_attribs; ++ii) {
+    auto input = inputs.Get<ProgramInput>();
+    uint32_t location = Load<uint32_t>(result, input.location_offset);
+    std::string name(
+        ToStringView(result.subspan(input.name_offset, input.name_length)));
     attrib_infos_.push_back(
-        VertexAttrib(input->size, input->type, name, *location));
+        VertexAttrib(input.size, input.type, name, location));
     max_attrib_name_length_ = std::max(
         static_cast<GLsizei>(name.size() + 1), max_attrib_name_length_);
-    ++input;
   }
-  for (uint32_t ii = 0; ii < header->num_uniforms; ++ii) {
-    const int32_t* locations = LocalGetAs<const int32_t*>(
-        result, input->location_offset, sizeof(int32_t) * input->size);
-    const char* name_buf = LocalGetAs<const char*>(
-        result, input->name_offset, input->name_length);
-    std::string name(name_buf, input->name_length);
-    UniformInfo info(input->size, input->type, name);
+  for (uint32_t ii = 0; ii < header.num_uniforms; ++ii) {
+    auto input = inputs.Get<ProgramInput>();
+    DataIterator locations(
+        result.subspan(input.location_offset, sizeof(int32_t) * input.size));
+    std::string name(
+        ToStringView(result.subspan(input.name_offset, input.name_length)));
+    UniformInfo info(input.size, input.type, name);
     max_uniform_name_length_ = std::max(
         static_cast<GLsizei>(name.size() + 1), max_uniform_name_length_);
-    for (int32_t jj = 0; jj < input->size; ++jj) {
-      info.element_locations.push_back(locations[jj]);
+    for (int32_t jj = 0; jj < input.size; ++jj) {
+      info.element_locations.push_back(locations.Get<uint32_t>());
     }
     uniform_infos_.push_back(info);
-    ++input;
   }
-  DCHECK_EQ(header->num_attribs + header->num_uniforms,
-            static_cast<uint32_t>(input - inputs));
+  DCHECK(inputs.empty());
   cached_es2_ = true;
 }
 
@@ -429,58 +461,42 @@ void ProgramInfoManager::Program::UpdateES3UniformBlocks(
   // no need to check for overflows as the GPU side did the checks already.
   uint32_t header_size = sizeof(UniformBlocksHeader);
   DCHECK_GE(result.size(), header_size);
-  const UniformBlocksHeader* header = LocalGetAs<const UniformBlocksHeader*>(
-      result, 0, header_size);
-  DCHECK(header);
-  if (header->num_uniform_blocks == 0) {
+  UniformBlocksHeader header = Load<UniformBlocksHeader>(result, 0);
+  if (header.num_uniform_blocks == 0) {
     DCHECK_EQ(result.size(), header_size);
     // TODO(zmo): Here we can't tell if no uniform blocks are defined, or
     // the previous link failed.
     return;
   }
-  uniform_blocks_.resize(header->num_uniform_blocks);
+  uniform_blocks_.resize(header.num_uniform_blocks);
 
-  uint32_t entry_size = sizeof(UniformBlockInfo) * header->num_uniform_blocks;
+  uint32_t entry_size = sizeof(UniformBlockInfo) * header.num_uniform_blocks;
   DCHECK_GE(result.size(), header_size + entry_size);
-  uint32_t data_size = result.size() - header_size - entry_size;
-  DCHECK_LT(0u, data_size);
-  const UniformBlockInfo* entries = LocalGetAs<const UniformBlockInfo*>(
-      result, header_size, entry_size);
-  DCHECK(entries);
-  const char* data = LocalGetAs<const char*>(
-      result, header_size + entry_size, data_size);
-  DCHECK(data);
+  DataIterator entries(result.subspan(header_size, entry_size));
+  DataIterator data(result.subspan(header_size + entry_size));
 
-  uint32_t size = 0;
-  for (uint32_t ii = 0; ii < header->num_uniform_blocks; ++ii) {
-    uniform_blocks_[ii].binding = static_cast<GLuint>(entries[ii].binding);
-    uniform_blocks_[ii].data_size = static_cast<GLuint>(entries[ii].data_size);
-    uniform_blocks_[ii].active_uniform_indices.resize(
-        entries[ii].active_uniforms);
-    uniform_blocks_[ii].referenced_by_vertex_shader = static_cast<GLboolean>(
-        entries[ii].referenced_by_vertex_shader);
-    uniform_blocks_[ii].referenced_by_fragment_shader = static_cast<GLboolean>(
-        entries[ii].referenced_by_fragment_shader);
+  for (uint32_t ii = 0; ii < header.num_uniform_blocks; ++ii) {
+    auto entry = entries.Get<UniformBlockInfo>();
+    uniform_blocks_[ii].binding = static_cast<GLuint>(entry.binding);
+    uniform_blocks_[ii].data_size = static_cast<GLuint>(entry.data_size);
+    uniform_blocks_[ii].active_uniform_indices.resize(entry.active_uniforms);
+    uniform_blocks_[ii].referenced_by_vertex_shader =
+        static_cast<GLboolean>(entry.referenced_by_vertex_shader);
+    uniform_blocks_[ii].referenced_by_fragment_shader =
+        static_cast<GLboolean>(entry.referenced_by_fragment_shader);
     // Uniform block names can't be empty strings.
-    DCHECK_LT(1u, entries[ii].name_length);
-    if (entries[ii].name_length > active_uniform_block_max_name_length_) {
-      active_uniform_block_max_name_length_ = entries[ii].name_length;
+    DCHECK_LT(1u, entry.name_length);
+    if (entry.name_length > active_uniform_block_max_name_length_) {
+      active_uniform_block_max_name_length_ = entry.name_length;
     }
-    size += entries[ii].name_length;
-    DCHECK_GE(data_size, size);
-    uniform_blocks_[ii].name = std::string(data, entries[ii].name_length - 1);
-    data += entries[ii].name_length;
-    size += entries[ii].active_uniforms * sizeof(uint32_t);
-    DCHECK_GE(data_size, size);
-    const uint32_t* indices = reinterpret_cast<const uint32_t*>(data);
-    for (uint32_t uu = 0; uu < entries[ii].active_uniforms; ++uu) {
+    base::span<const int8_t> name = data.GetBytes(entry.name_length);
+    uniform_blocks_[ii].name = ToStringView(name.first(entry.name_length - 1));
+    for (uint32_t uu = 0; uu < entry.active_uniforms; ++uu) {
       uniform_blocks_[ii].active_uniform_indices[uu] =
-          static_cast<GLuint>(indices[uu]);
+          static_cast<GLuint>(data.Get<uint32_t>());
     }
-    indices += entries[ii].active_uniforms;
-    data = reinterpret_cast<const char*>(indices);
   }
-  DCHECK_EQ(data_size, size);
+  DCHECK(data.empty());
   cached_es3_uniform_blocks_ = true;
 }
 
@@ -499,30 +515,28 @@ void ProgramInfoManager::Program::UpdateES3Uniformsiv(
   // no need to check for overflows as the GPU side did the checks already.
   uint32_t header_size = sizeof(UniformsES3Header);
   DCHECK_GE(result.size(), header_size);
-  const UniformsES3Header* header = LocalGetAs<const UniformsES3Header*>(
-      result, 0, header_size);
-  DCHECK(header);
-  if (header->num_uniforms == 0) {
+  auto header = Load<UniformsES3Header>(result, 0);
+  if (header.num_uniforms == 0) {
     DCHECK_EQ(result.size(), header_size);
     // TODO(zmo): Here we can't tell if no uniforms are defined, or
     // the previous link failed.
     return;
   }
-  uniforms_es3_.resize(header->num_uniforms);
+  uniforms_es3_.resize(header.num_uniforms);
 
-  uint32_t entry_size = sizeof(UniformES3Info) * header->num_uniforms;
+  uint32_t entry_size = sizeof(UniformES3Info) * header.num_uniforms;
   DCHECK_EQ(result.size(), header_size + entry_size);
-  const UniformES3Info* entries = LocalGetAs<const UniformES3Info*>(
-      result, header_size, entry_size);
-  DCHECK(entries);
+  DataIterator entries(result.subspan(header_size, entry_size));
 
-  for (uint32_t ii = 0; ii < header->num_uniforms; ++ii) {
-    uniforms_es3_[ii].block_index = entries[ii].block_index;
-    uniforms_es3_[ii].offset = entries[ii].offset;
-    uniforms_es3_[ii].array_stride = entries[ii].array_stride;
-    uniforms_es3_[ii].matrix_stride = entries[ii].matrix_stride;
-    uniforms_es3_[ii].is_row_major = entries[ii].is_row_major;
+  for (uint32_t ii = 0; ii < header.num_uniforms; ++ii) {
+    auto entry = entries.Get<UniformES3Info>();
+    uniforms_es3_[ii].block_index = entry.block_index;
+    uniforms_es3_[ii].offset = entry.offset;
+    uniforms_es3_[ii].array_stride = entry.array_stride;
+    uniforms_es3_[ii].matrix_stride = entry.matrix_stride;
+    uniforms_es3_[ii].is_row_major = entry.is_row_major;
   }
+  DCHECK(entries.empty());
   cached_es3_uniformsiv_ = true;
 }
 
@@ -543,49 +557,34 @@ void ProgramInfoManager::Program::UpdateES3TransformFeedbackVaryings(
   // no need to check for overflows as the GPU side did the checks already.
   uint32_t header_size = sizeof(TransformFeedbackVaryingsHeader);
   DCHECK_GE(result.size(), header_size);
-  const TransformFeedbackVaryingsHeader* header =
-      LocalGetAs<const TransformFeedbackVaryingsHeader*>(
-          result, 0, header_size);
-  DCHECK(header);
-  if (header->num_transform_feedback_varyings == 0) {
+  auto header = Load<TransformFeedbackVaryingsHeader>(result, 0);
+  if (header.num_transform_feedback_varyings == 0) {
     DCHECK_EQ(result.size(), header_size);
     // TODO(zmo): Here we can't tell if no TransformFeedback varyings are
     // defined, or the previous link failed.
     return;
   }
-  transform_feedback_varyings_.resize(header->num_transform_feedback_varyings);
-  transform_feedback_buffer_mode_ = header->transform_feedback_buffer_mode;
+  transform_feedback_varyings_.resize(header.num_transform_feedback_varyings);
+  transform_feedback_buffer_mode_ = header.transform_feedback_buffer_mode;
 
   uint32_t entry_size = sizeof(TransformFeedbackVaryingInfo) *
-      header->num_transform_feedback_varyings;
-  DCHECK_GE(result.size(), header_size + entry_size);
-  uint32_t data_size = result.size() - header_size - entry_size;
-  DCHECK_LT(0u, data_size);
-  const TransformFeedbackVaryingInfo* entries =
-      LocalGetAs<const TransformFeedbackVaryingInfo*>(
-          result, header_size, entry_size);
-  DCHECK(entries);
-  const char* data = LocalGetAs<const char*>(
-      result, header_size + entry_size, data_size);
-  DCHECK(data);
+                        header.num_transform_feedback_varyings;
+  DataIterator entries(result.subspan(header_size, entry_size));
+  DataIterator data(result.subspan(header_size + entry_size));
 
-  uint32_t size = 0;
-  for (uint32_t ii = 0; ii < header->num_transform_feedback_varyings; ++ii) {
-    transform_feedback_varyings_[ii].size =
-        static_cast<GLsizei>(entries[ii].size);
-    transform_feedback_varyings_[ii].type =
-        static_cast<GLenum>(entries[ii].type);
-    DCHECK_LE(1u, entries[ii].name_length);
-    if (entries[ii].name_length > transform_feedback_varying_max_length_) {
-      transform_feedback_varying_max_length_ = entries[ii].name_length;
+  for (uint32_t ii = 0; ii < header.num_transform_feedback_varyings; ++ii) {
+    auto entry = entries.Get<TransformFeedbackVaryingInfo>();
+    transform_feedback_varyings_[ii].size = static_cast<GLsizei>(entry.size);
+    transform_feedback_varyings_[ii].type = static_cast<GLenum>(entry.type);
+    DCHECK_LE(1u, entry.name_length);
+    if (entry.name_length > transform_feedback_varying_max_length_) {
+      transform_feedback_varying_max_length_ = entry.name_length;
     }
-    size += entries[ii].name_length;
-    DCHECK_GE(data_size, size);
+    base::span<const int8_t> name = data.GetBytes(entry.name_length);
     transform_feedback_varyings_[ii].name =
-        std::string(data, entries[ii].name_length - 1);
-    data += entries[ii].name_length;
+        ToStringView(name.first(entry.name_length - 1));
   }
-  DCHECK_EQ(data_size, size);
+  DCHECK(data.empty());
   cached_es3_transform_feedback_varyings_ = true;
 }
 
@@ -603,7 +602,6 @@ bool ProgramInfoManager::Program::IsCached(ProgramInfoType type) const {
       return true;
     default:
       NOTREACHED();
-      return true;
   }
 }
 
@@ -612,8 +610,9 @@ ProgramInfoManager::ProgramInfoManager() = default;
 ProgramInfoManager::~ProgramInfoManager() = default;
 
 ProgramInfoManager::Program* ProgramInfoManager::GetProgramInfo(
-    GLES2Implementation* gl, GLuint program, ProgramInfoType type) {
-  lock_.AssertAcquired();
+    GLES2Implementation* gl,
+    GLuint program,
+    ProgramInfoType type) {
   ProgramInfoMap::iterator it = program_infos_.find(program);
   if (it == program_infos_.end()) {
     return nullptr;
@@ -662,7 +661,6 @@ ProgramInfoManager::Program* ProgramInfoManager::GetProgramInfo(
       break;
     default:
       NOTREACHED();
-      return nullptr;
   }
   return info;
 }
@@ -937,8 +935,8 @@ bool ProgramInfoManager::GetActiveUniformBlockiv(
           case GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES:
             for (size_t ii = 0;
                  ii < uniform_block->active_uniform_indices.size(); ++ii) {
-              params[ii] = static_cast<GLint>(
-                  uniform_block->active_uniform_indices[ii]);
+              UNSAFE_TODO(params[ii]) =
+                  static_cast<GLint>(uniform_block->active_uniform_indices[ii]);
             }
             break;
           case GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER:
@@ -962,7 +960,7 @@ bool ProgramInfoManager::GetActiveUniformBlockiv(
 void ProgramInfoManager::UniformBlockBinding(
     GLES2Implementation* gl, GLuint program, GLuint index, GLuint binding) {
   GLuint max_bindings =
-      static_cast<GLuint>(gl->capabilities().max_uniform_buffer_bindings);
+      static_cast<GLuint>(gl->gl_capabilities().max_uniform_buffer_bindings);
   if (binding < max_bindings) {
     base::AutoLock auto_lock(lock_);
     // If UniformBlock info haven't been cached yet, skip updating the binding.
@@ -1007,7 +1005,8 @@ bool ProgramInfoManager::GetUniformIndices(GLES2Implementation* gl,
       DCHECK_LT(0, count);
       DCHECK(names && indices);
       for (GLsizei ii = 0; ii < count; ++ii) {
-        indices[ii] = info->GetUniformIndex(names[ii]);
+        UNSAFE_TODO(indices[ii]) =
+            info->GetUniformIndex(UNSAFE_TODO(names[ii]));
       }
       return true;
     }

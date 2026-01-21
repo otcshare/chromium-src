@@ -16,7 +16,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "ui/ozone/platform/flatland/flatland_sysmem_buffer_manager.h"
-#include "ui/ozone/platform/scenic/mojom/scenic_gpu_host.mojom.h"
+#include "ui/ozone/platform/flatland/mojom/scenic_gpu_host.mojom.h"
 #include "ui/ozone/public/gl_ozone.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
 
@@ -50,25 +50,19 @@ class FlatlandSurfaceFactory : public SurfaceFactoryOzone {
       gfx::AcceleratedWidget widget,
       gpu::VulkanDeviceQueue* device_queue,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
-      absl::optional<gfx::Size> framebuffer_size = absl::nullopt) override;
-  void CreateNativePixmapAsync(gfx::AcceleratedWidget widget,
-                               gpu::VulkanDeviceQueue* device_queue,
-                               gfx::Size size,
-                               gfx::BufferFormat format,
-                               gfx::BufferUsage usage,
-                               NativePixmapCallback callback) override;
+      std::optional<gfx::Size> framebuffer_size = std::nullopt) override;
   scoped_refptr<gfx::NativePixmap> CreateNativePixmapFromHandle(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle) override;
   std::unique_ptr<gpu::VulkanImplementation> CreateVulkanImplementation(
       bool use_swiftshader,
       bool allow_protected_memory) override;
-  std::vector<gfx::BufferFormat> GetSupportedFormatsForTexturing()
-      const override;
+  bool IsFormatSupportedForTexturing(
+      viz::SharedImageFormat format) const override;
 
   // Registers a surface for a |widget|.
   //

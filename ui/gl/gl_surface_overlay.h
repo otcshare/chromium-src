@@ -8,7 +8,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gfx/native_pixmap.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/overlay_plane_data.h"
 #include "ui/gl/gl_export.h"
 
@@ -18,7 +18,7 @@ class GpuFence;
 
 namespace gl {
 
-// For saving the properties of a GLImage overlay plane and scheduling it later.
+// For saving the properties of an overlay plane and scheduling it later.
 class GL_EXPORT GLSurfaceOverlay {
  public:
   GLSurfaceOverlay(scoped_refptr<gfx::NativePixmap> pixmap,
@@ -35,6 +35,9 @@ class GL_EXPORT GLSurfaceOverlay {
 
   gfx::GpuFence* gpu_fence() const { return gpu_fence_.get(); }
   int z_order() const { return overlay_plane_data_.z_order; }
+  gfx::OverlayType overlay_type() const {
+    return overlay_plane_data_.overlay_type;
+  }
 
  private:
   scoped_refptr<gfx::NativePixmap> pixmap_;

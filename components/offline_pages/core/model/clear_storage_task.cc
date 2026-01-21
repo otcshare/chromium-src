@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ref.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
@@ -27,6 +27,7 @@
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace offline_pages {
 
@@ -64,8 +65,9 @@ class PageClearCriteria {
         kOfflinePageStorageClearThreshold;
 
     // If the page is expired, put it in the list to delete later.
-    if (start_time_ - page.last_access_time >= expiration_period)
+    if (start_time_ - page.last_access_time >= expiration_period) {
       return true;
+    }
 
     // If the namespace of the page already has more pages than limit, this page
     // needs to be deleted.
@@ -75,8 +77,9 @@ class PageClearCriteria {
     }
 
     // Pages with no file can be removed.
-    if (!base::PathExists(page.file_path))
+    if (!base::PathExists(page.file_path)) {
       return true;
+    }
 
     // If there's no quota, remove the pages.
     if (quota_based_clearing &&
@@ -131,11 +134,6 @@ std::pair<size_t, DeletePageResult> ClearPagesSync(
     if (!base::PathExists(page.file_path) || base::DeleteFile(page.file_path)) {
       if (DeletePageTask::DeletePageFromDbSync(page.offline_id, db)) {
         pages_cleared++;
-        // Reports the time since creation in minutes.
-        base::TimeDelta time_since_creation = start_time - page.creation_time;
-        UMA_HISTOGRAM_CUSTOM_COUNTS(
-            "OfflinePages.ClearTemporaryPages.TimeSinceCreation",
-            time_since_creation.InMinutes(), 1, base::Days(30).InMinutes(), 50);
       }
     }
   }
@@ -160,10 +158,11 @@ ClearStorageTask::ClearStorageTask(OfflinePageMetadataStore* store,
   DCHECK(!callback_.is_null());
 }
 
-ClearStorageTask::~ClearStorageTask() {}
+ClearStorageTask::~ClearStorageTask() = default;
 
 void ClearStorageTask::Run() {
-  TRACE_EVENT_ASYNC_BEGIN0("offline_pages", "ClearStorageTask running", this);
+  TRACE_EVENT_BEGIN("offline_pages", "ClearStorageTask running",
+                    perfetto::Track::FromPointer(this));
   archive_manager_->GetStorageStats(
       base::BindOnce(&ClearStorageTask::OnGetStorageStatsDone,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -185,8 +184,9 @@ void ClearStorageTask::OnClearPagesDone(
   }
 
   ClearStorageResult clear_result = ClearStorageResult::SUCCESS;
-  if (result.second != DeletePageResult::SUCCESS)
+  if (result.second != DeletePageResult::SUCCESS) {
     clear_result = ClearStorageResult::DELETE_FAILURE;
+  }
   InformClearStorageDone(result.first, clear_result);
 }
 
@@ -194,9 +194,10 @@ void ClearStorageTask::InformClearStorageDone(size_t pages_cleared,
                                               ClearStorageResult result) {
   std::move(callback_).Run(pages_cleared, result);
   TaskComplete();
-  TRACE_EVENT_ASYNC_END2("offline_pages", "ClearStorageTask running", this,
-                         "result", static_cast<int>(result), "pages_cleared",
-                         pages_cleared);
+  TRACE_EVENT_END(
+      "offline_pages",
+      /* ClearStorageTask running */ perfetto::Track::FromPointer(this),
+      "result", static_cast<int>(result), "pages_cleared", pages_cleared);
 }
 
 }  // namespace offline_pages

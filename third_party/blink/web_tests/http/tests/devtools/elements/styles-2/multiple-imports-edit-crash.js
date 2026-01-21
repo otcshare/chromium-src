@@ -2,16 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
+import * as SDK from 'devtools/core/sdk/sdk.js';
+
 (async function() {
   TestRunner.addResult(`Tests that modifying stylesheet text with multiple @import at-rules does not crash.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
     <head>
       <style>
-        @import url(../../styles/resources/multiple-imports-edit-crash-1.css);
-        @import url(../../styles/resources/multiple-imports-edit-crash-2.css);
-        @import url(../../styles/resources/multiple-imports-edit-crash-1.css);
+        @import url(../styles/resources/multiple-imports-edit-crash-1.css);
+        @import url(../styles/resources/multiple-imports-edit-crash-2.css);
+        @import url(../styles/resources/multiple-imports-edit-crash-1.css);
         #inspected {
             color: green;
         }
@@ -21,14 +25,14 @@
       <div id="inspected">Text</div>
     </body>
   `);
-  var initialAddsExpected = 3;
+  var initialAddsExpected = 4;
   var initialAdded = [];
   await new Promise(f => TestRunner.cssModel.addEventListener(SDK.CSSModel.Events.StyleSheetAdded, function styleSheetAdded(event) {
-    if (event.data.sourceURL === "") {
+    const name = resourceName(event.data.sourceURL);
+    if (name) {
       // Don't include the <style> element sheet.
-      return;
+      initialAdded.push(name);
     }
-    initialAdded.push(resourceName(event.data.sourceURL));
     if (!(--initialAddsExpected)) {
       initialAdded.sort();
       TestRunner.addResult('Initially added:');
@@ -50,9 +54,11 @@
   function matchedStylesCallback(matchedResult) {
     styleSheetId = matchedResult.nodeStyles()[1].styleSheetId;
     TestRunner.addResult('Setting stylesheet text...');
-    TestRunner.CSSAgent.setStyleSheetText(
-        styleSheetId,
-        '@import url(../styles/resources/multiple-imports-edit-crash-1.css);\n@import url(../styles/resources/multiple-imports-edit-crash-2.css);\n#inspected { color: black }\n');
+    TestRunner.CSSAgent.invoke_setStyleSheetText({
+      styleSheetId: styleSheetId,
+      text:
+          '@import url(../styles/resources/multiple-imports-edit-crash-1.css);\n@import url(../styles/resources/multiple-imports-edit-crash-2.css);\n#inspected { color: black }\n'
+    });
   }
 
   var addsExpected = 2;

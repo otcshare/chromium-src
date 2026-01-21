@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_DIRECT_SOCKETS_UDP_WRITABLE_STREAM_WRAPPER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_DIRECT_SOCKETS_UDP_WRITABLE_STREAM_WRAPPER_H_
 
+#include "services/network/public/mojom/restricted_udp_socket.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
@@ -27,27 +28,32 @@ class MODULES_EXPORT UDPWritableStreamWrapper final
  public:
   UDPWritableStreamWrapper(ScriptState*,
                            CloseOnceCallback,
-                           const Member<UDPSocketMojoRemote>);
+                           const Member<UDPSocketMojoRemote>,
+                           network::mojom::blink::RestrictedUDPSocketMode,
+                           uint64_t inspector_id);
 
   // WritableStreamWrapper:
   void CloseStream() override;
   void ErrorStream(int32_t error_code) override;
   bool HasPendingWrite() const override;
   void Trace(Visitor*) const override;
-
- protected:
-  // WritableStreamWrapper:
   void OnAbortSignal() override;
-  ScriptPromise Write(ScriptValue chunk, ExceptionState&) override;
+  ScriptPromise<IDLUndefined> Write(ScriptValue chunk,
+                                    ExceptionState&) override;
 
  private:
-  // Callback for DirectUDPSocket::Send().
+  // Callback for RestrictedUDPSocket::Send().
   void OnSend(int32_t result);
 
   CloseOnceCallback on_close_;
 
   const Member<UDPSocketMojoRemote> udp_socket_;
-  Member<ScriptPromiseResolver> write_promise_resolver_;
+  const network::mojom::blink::RestrictedUDPSocketMode mode_;
+
+  Member<ScriptPromiseResolver<IDLUndefined>> write_promise_resolver_;
+
+  // Unique id for devtools inspector_network_agent.
+  const uint64_t inspector_id_;
 };
 
 }  // namespace blink

@@ -5,10 +5,10 @@
 #ifndef UI_VIEWS_CONTROLS_WEBVIEW_UNHANDLED_KEYBOARD_EVENT_HANDLER_H_
 #define UI_VIEWS_CONTROLS_WEBVIEW_UNHANDLED_KEYBOARD_EVENT_HANDLER_H_
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/webview_export.h"
 
-namespace content {
+namespace input {
 struct NativeWebKeyboardEvent;
 }
 
@@ -27,13 +27,13 @@ class WEBVIEW_EXPORT UnhandledKeyboardEventHandler {
 
   ~UnhandledKeyboardEventHandler();
 
-  bool HandleKeyboardEvent(const content::NativeWebKeyboardEvent& event,
+  bool HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event,
                            FocusManager* focus_manager);
 
  private:
   // Platform specific handling for unhandled keyboard events.
   static bool HandleNativeKeyboardEvent(
-      const content::NativeWebKeyboardEvent& event,
+      const input::NativeWebKeyboardEvent& event,
       FocusManager* focus_manager);
 
   // Whether to ignore the next Char keyboard event.

@@ -48,7 +48,6 @@ CSSSkewX* CSSSkewX::FromCSSValue(const CSSFunctionValue& value) {
         CSSNumericValue::FromCSSValue(To<CSSPrimitiveValue>(value.Item(0))));
   }
   NOTREACHED();
-  return nullptr;
 }
 
 DOMMatrix* CSSSkewX::toMatrix(ExceptionState&) const {
@@ -61,8 +60,9 @@ DOMMatrix* CSSSkewX::toMatrix(ExceptionState&) const {
 
 const CSSFunctionValue* CSSSkewX::ToCSSValue() const {
   const CSSValue* ax = ax_->ToCSSValue();
-  if (!ax)
+  if (!ax) {
     return nullptr;
+  }
 
   CSSFunctionValue* result =
       MakeGarbageCollected<CSSFunctionValue>(CSSValueID::kSkewX);

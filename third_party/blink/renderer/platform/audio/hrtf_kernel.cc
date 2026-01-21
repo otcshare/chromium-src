@@ -32,6 +32,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/audio_channel.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
@@ -95,7 +96,7 @@ HRTFKernel::HRTFKernel(AudioChannel* channel,
     float x = 1.0f - static_cast<float>(i - (truncated_response_length -
                                              number_of_fade_out_frames)) /
                          number_of_fade_out_frames;
-    impulse_response[i] *= x;
+    UNSAFE_TODO(impulse_response[i]) *= x;
   }
 
   fft_frame_ = std::make_unique<FFTFrame>(fft_size);
@@ -113,8 +114,8 @@ std::unique_ptr<HRTFKernel> HRTFKernel::CreateInterpolatedKernel(
   DCHECK_LT(x, 1.0);
   x = ClampTo(x, 0.0f, 1.0f);
 
-  const float sample_rate1 = kernel1->SampleRate();
-  const float sample_rate2 = kernel2->SampleRate();
+  const float sample_rate1 = kernel1->sample_rate_;
+  const float sample_rate2 = kernel2->sample_rate_;
   DCHECK_EQ(sample_rate1, sample_rate2);
 
   const float frame_delay =

@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -61,17 +61,12 @@ class FakeListener : public IPC::Listener {
 
  private:
   // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnAssociatedInterfaceRequest(
       const std::string& interface_name,
       mojo::ScopedInterfaceEndpointHandle handle) override;
 
   const base::RepeatingClosure action_after_received_;
 };
-
-bool FakeListener::OnMessageReceived(const IPC::Message& message) {
-  return false;
-}
 
 void FakeListener::OnAssociatedInterfaceRequest(
     const std::string& interface_name,

@@ -5,6 +5,7 @@
 #include "ui/base/ui_base_paths.h"
 
 #include "base/command_line.h"
+#include "base/debug/crash_logging.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
@@ -23,11 +24,13 @@ bool PathProvider(int key, base::FilePath* result) {
 
   base::FilePath cur;
   switch (key) {
-    case DIR_LOCALES:
+#if !BUILDFLAG(IS_IOS)
+    // DIR_LOCALES is unsupported on iOS.
+    case DIR_LOCALES: {
 #if BUILDFLAG(IS_ANDROID)
       if (!base::PathService::Get(DIR_RESOURCE_PAKS_ANDROID, &cur))
         return false;
-#elif BUILDFLAG(IS_APPLE)
+#elif BUILDFLAG(IS_MAC)
       if (!base::PathService::Get(base::DIR_MODULE, &cur))
         return false;
       // On Mac, locale files are in Contents/Resources, a sibling of the
@@ -40,13 +43,21 @@ bool PathProvider(int key, base::FilePath* result) {
       cur = cur.Append(FILE_PATH_LITERAL("locales"));
 #endif
       create_dir = true;
+      // https://crbug.com/40688225: Chrome sometimes fails to find standard
+      // .pak files. Retain the locales dir in a crash key in case the problem
+      // is a failure to determine the correct directory.
+      SCOPED_CRASH_KEY_STRING256("UiPathProvider", "locales_dir",
+                                 cur.AsUTF8Unsafe());
       break;
+    }
+#endif  // !BUILDFLAG(IS_IOS)
     // The following are only valid in the development environment, and
     // will fail if executed from an installed executable (because the
     // generated path won't exist).
     case UI_DIR_TEST_DATA:
-      if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &cur))
+      if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &cur)) {
         return false;
+      }
       cur = cur.Append(FILE_PATH_LITERAL("ui"));
       cur = cur.Append(FILE_PATH_LITERAL("base"));
       cur = cur.Append(FILE_PATH_LITERAL("test"));

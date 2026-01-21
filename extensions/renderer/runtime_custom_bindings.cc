@@ -8,8 +8,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_util.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/common/view_type_util.h"
 #include "extensions/renderer/extension_frame_helper.h"
@@ -23,7 +25,7 @@ namespace extensions {
 RuntimeCustomBindings::RuntimeCustomBindings(ScriptContext* context)
     : ObjectBackedNativeHandler(context) {}
 
-RuntimeCustomBindings::~RuntimeCustomBindings() {}
+RuntimeCustomBindings::~RuntimeCustomBindings() = default;
 
 void RuntimeCustomBindings::AddRoutes() {
   RouteHandlerFunction(
@@ -53,7 +55,7 @@ void RuntimeCustomBindings::GetExtensionViews(
   if (!parsed_view_type)
     CHECK_EQ("ALL", view_type_string);
 
-  const std::string& extension_id = context()->GetExtensionID();
+  const ExtensionId& extension_id = context()->GetExtensionID();
   if (extension_id.empty())
     return;
 

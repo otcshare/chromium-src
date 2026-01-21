@@ -8,7 +8,6 @@
 #include <oleacc.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <uiautomation.h>
 #include <wrl/client.h>
 
 #include <iostream>
@@ -16,10 +15,10 @@
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,6 +32,8 @@
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_win.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
 #include "ui/gfx/win/hwnd_util.h"
+
+#include <uiautomation.h>
 
 namespace {
 
@@ -81,8 +82,9 @@ void GetUIARuntimeId(IUIAutomationElement* first_child,
     CHECK(fragment_id_array);
     // Grab out the last three ints from the internal runtime id. This should
     // correspond with the frame tree id and DOM id.
-    internal_id = {fragment_id_array[1], fragment_id_array[2],
-                   fragment_id_array[3]};
+    internal_id = {UNSAFE_TODO(fragment_id_array[1]),
+                   UNSAFE_TODO(fragment_id_array[2]),
+                   UNSAFE_TODO(fragment_id_array[3])};
 
     ::SafeArrayUnaccessData(start_fragment_runtime_id.Get());
   }
@@ -106,9 +108,9 @@ void GetUIARuntimeId(IUIAutomationElement* first_child,
 
     // Stuff the internal id values in the last three spots in the grabbed
     // UIA-based runtime id.
-    runtime_id_array[upper_bound - 2] = internal_id[0];
-    runtime_id_array[upper_bound - 1] = internal_id[1];
-    runtime_id_array[upper_bound] = internal_id[2];
+    UNSAFE_TODO(runtime_id_array[upper_bound - 2]) = internal_id[0];
+    UNSAFE_TODO(runtime_id_array[upper_bound - 1]) = internal_id[1];
+    UNSAFE_TODO(runtime_id_array[upper_bound]) = internal_id[2];
     ::SafeArrayUnaccessData(runtime_id.Get());
   }
 
@@ -118,8 +120,12 @@ void GetUIARuntimeId(IUIAutomationElement* first_child,
 void GetUIARoot(ui::AXPlatformNodeDelegate* start,
                 IUIAutomation* uia,
                 IUIAutomationElement** root) {
+  // If dumping when the page or iframe is reloading, the
+  // tree manager may have been removed.
   ui::AXTreeManager* tree_manager = start->GetTreeManager();
-  DCHECK(tree_manager);
+  if (!tree_manager) {
+    return;
+  }
 
   // Start by getting the root element for the HWND hosting the web content.
   HWND hwnd = static_cast<ui::AXPlatformTreeManager*>(tree_manager)
@@ -137,8 +143,12 @@ void GetUIAElementFromDelegate(ui::AXPlatformNodeDelegate* start,
   // To locate the client element we want, we'll construct a RuntimeId
   // corresponding to our provider element, then search for that.
   Microsoft::WRL::ComPtr<IUIAutomationElement> root;
+  // If dumping when the page or iframe is reloading, we may encounter
+  // a brief moment when the root cannot be found through the tree_manager.
   GetUIARoot(start, uia, &root);
-  CHECK(root.Get());
+  if (!root.Get()) {
+    return;
+  }
 
   // The root element is provided by AXFragmentRootWin, whose RuntimeId is not
   // in the same form as elements provided by BrowserAccessibility.
@@ -459,17 +469,21 @@ void AXTreeFormatterUia::AddDefaultFilters(
   AddPropertyFilter(
       property_filters,
       GetPropertyName(
-          ui::UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId()) +
+          UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId()) +
           "=*");
 }
 
 base::Value::Dict AXTreeFormatterUia::BuildTree(
-    ui::AXPlatformNodeDelegate* start) const {
+    AXPlatformNodeDelegate* start) const {
   Microsoft::WRL::ComPtr<IUIAutomationElement> start_element;
   GetUIAElementFromDelegate(start, uia_.Get(), &start_element);
 
-  RECT root_bounds = GetUIARootBounds(start, uia_.Get());
   base::Value::Dict tree;
+  if (!start_element) {
+    return tree;
+  }
+
+  RECT root_bounds = GetUIARootBounds(start, uia_.Get());
   if (start_element.Get()) {
     // Build an accessibility tree starting from that element.
     RecursiveBuildTree(start_element.Get(), root_bounds.left, root_bounds.top,
@@ -520,7 +534,7 @@ base::Value::Dict AXTreeFormatterUia::BuildTreeForSelector(
 }
 
 base::Value::Dict AXTreeFormatterUia::BuildNode(
-    ui::AXPlatformNodeDelegate* node) const {
+    AXPlatformNodeDelegate* node) const {
   Microsoft::WRL::ComPtr<IUIAutomationElement> uia_element;
   GetUIAElementFromDelegate(node, uia_.Get(), &uia_element);
   // Note that we have to go through external UIA APIs to get a reference to
@@ -1067,9 +1081,9 @@ void AXTreeFormatterUia::WriteRectangleProperty(long propertyId,
 
   base::Value::Dict rectangle;
   rectangle.Set("left", static_cast<int>(data[0] - root_x));
-  rectangle.Set("top", static_cast<int>(data[1] - root_y));
-  rectangle.Set("width", static_cast<int>(data[2]));
-  rectangle.Set("height", static_cast<int>(data[3]));
+  rectangle.Set("top", static_cast<int>(UNSAFE_TODO(data[1] - root_y)));
+  rectangle.Set("width", static_cast<int>(UNSAFE_TODO(data[2])));
+  rectangle.Set("height", static_cast<int>(UNSAFE_TODO(data[3])));
   dict->SetByDottedPath(GetPropertyName(propertyId), std::move(rectangle));
 
   SafeArrayUnaccessData(value.parray);
@@ -1157,7 +1171,7 @@ void AXTreeFormatterUia::BuildCacheRequests() {
 
 void AXTreeFormatterUia::BuildCustomPropertiesMap() {
   GetCustomPropertiesMap().insert(
-      {ui::UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
+      {UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
        "VirtualContent"});
 }
 
@@ -1272,7 +1286,6 @@ void AXTreeFormatterUia::ProcessValueForOutput(const std::string& name,
     }
     default:
       NOTREACHED();
-      break;
   }
 }
 

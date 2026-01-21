@@ -5,19 +5,23 @@
 #include "base/process/process_metrics.h"
 
 #include <windows.h>  // Must be in front of other Windows header files.
+#include <winternl.h>
 
 #include <psapi.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <winternl.h>
 
 #include <algorithm>
 
+#include "base/byte_size.h"
+#include "base/check.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/process/process_metrics_iocounters.h"
+#include "base/notreached.h"
 #include "base/system/sys_info.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "build/build_config.h"
 
@@ -119,9 +123,28 @@ struct SYSTEM_PERFORMANCE_INFORMATION {
   ULONG SystemCalls;
 };
 
-}  // namespace
+base::expected<TimeDelta, ProcessCPUUsageError> GetImpreciseCumulativeCPUUsage(
+    const win::ScopedHandle& process) {
+  FILETIME creation_time;
+  FILETIME exit_time;
+  FILETIME kernel_time;
+  FILETIME user_time;
 
-ProcessMetrics::~ProcessMetrics() { }
+  if (!process.is_valid()) {
+    return base::unexpected(ProcessCPUUsageError::kSystemError);
+  }
+
+  if (!GetProcessTimes(process.get(), &creation_time, &exit_time, &kernel_time,
+                       &user_time)) {
+    // This should never fail when the handle is valid.
+    NOTREACHED();
+  }
+
+  return base::ok(TimeDelta::FromFileTime(kernel_time) +
+                  TimeDelta::FromFileTime(user_time));
+}
+
+}  // namespace
 
 size_t GetMaxFds() {
   // Windows is only limited by the amount of physical memory.
@@ -140,108 +163,108 @@ std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
   return WrapUnique(new ProcessMetrics(process));
 }
 
-TimeDelta ProcessMetrics::GetCumulativeCPUUsage() {
-  FILETIME creation_time;
-  FILETIME exit_time;
-  FILETIME kernel_time;
-  FILETIME user_time;
-
-  if (!process_.is_valid())
-    return TimeDelta();
-
-  if (!GetProcessTimes(process_.get(), &creation_time, &exit_time, &kernel_time,
-                       &user_time)) {
-    // This should never fail because we duplicate the handle to guarantee it
-    // will remain valid.
-    DCHECK(false);
-    return TimeDelta();
+base::expected<ProcessMemoryInfo, ProcessUsageError>
+ProcessMetrics::GetMemoryInfo() const {
+  if (!process_.is_valid()) {
+    return base::unexpected(ProcessUsageError::kProcessNotFound);
   }
-
-  return TimeDelta::FromFileTime(kernel_time) +
-         TimeDelta::FromFileTime(user_time);
+  PROCESS_MEMORY_COUNTERS_EX pmc;
+  if (!::GetProcessMemoryInfo(process_.get(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+                              sizeof(pmc))) {
+    return base::unexpected(ProcessUsageError::kSystemError);
+  }
+  ProcessMemoryInfo counters;
+  counters.private_bytes = pmc.PrivateUsage;
+  counters.resident_set_bytes = pmc.WorkingSetSize;
+  return counters;
 }
 
-TimeDelta ProcessMetrics::GetPreciseCumulativeCPUUsage() {
+base::expected<TimeDelta, ProcessCPUUsageError>
+ProcessMetrics::GetCumulativeCPUUsage() {
+  TRACE_EVENT("base", "GetCumulativeCPUUsage");
 #if defined(ARCH_CPU_ARM64)
   // Precise CPU usage is not available on Arm CPUs because they don't support
   // constant rate TSC.
-  return GetCumulativeCPUUsage();
+  return GetImpreciseCumulativeCPUUsage(process_);
 #else   // !defined(ARCH_CPU_ARM64)
-  if (!time_internal::HasConstantRateTSC())
-    return GetCumulativeCPUUsage();
-
-  ULONG64 process_cycle_time = 0;
-  if (!QueryProcessCycleTime(process_.get(), &process_cycle_time)) {
-    NOTREACHED();
-    return TimeDelta();
+  if (!time_internal::HasConstantRateTSC()) {
+    return GetImpreciseCumulativeCPUUsage(process_);
   }
 
   const double tsc_ticks_per_second = time_internal::TSCTicksPerSecond();
   if (tsc_ticks_per_second == 0) {
-    return TimeDelta();
+    // TSC is only initialized once TSCTicksPerSecond() is called twice 50 ms
+    // apart on the same thread to get a baseline. In unit tests, it is frequent
+    // for the initialization not to be complete. In production, it can also
+    // theoretically happen.
+    return GetImpreciseCumulativeCPUUsage(process_);
+  }
+
+  if (!process_.is_valid()) {
+    return base::unexpected(ProcessCPUUsageError::kProcessNotFound);
+  }
+
+  ULONG64 process_cycle_time = 0;
+  if (!QueryProcessCycleTime(process_.get(), &process_cycle_time)) {
+    // This should never fail when the handle is valid.
+    NOTREACHED();
   }
 
   const double process_time_seconds = process_cycle_time / tsc_ticks_per_second;
-  return Seconds(process_time_seconds);
+  return base::ok(Seconds(process_time_seconds));
 #endif  // !defined(ARCH_CPU_ARM64)
 }
 
-bool ProcessMetrics::GetIOCounters(IoCounters* io_counters) const {
-  if (!process_.is_valid())
-    return false;
-
-  return GetProcessIoCounters(process_.get(), io_counters) != FALSE;
-}
-
-uint64_t ProcessMetrics::GetCumulativeDiskUsageInBytes() {
-  IoCounters counters;
-  if (!GetIOCounters(&counters))
-    return 0;
-
-  return counters.ReadTransferCount + counters.WriteTransferCount +
-         counters.OtherTransferCount;
-}
-
 ProcessMetrics::ProcessMetrics(ProcessHandle process) {
-  if (process) {
-    HANDLE duplicate_handle = INVALID_HANDLE_VALUE;
-    BOOL result = ::DuplicateHandle(::GetCurrentProcess(), process,
-                                    ::GetCurrentProcess(), &duplicate_handle,
-                                    PROCESS_QUERY_INFORMATION, FALSE, 0);
-    DPCHECK(result);
-    process_.Set(duplicate_handle);
+  if (process == kNullProcessHandle) {
+    // Don't try to duplicate an invalid handle. However, INVALID_HANDLE_VALUE
+    // is also the pseudo-handle returned by ::GetCurrentProcess(), so DO try
+    // to duplicate that.
+    return;
   }
+  HANDLE duplicate_handle = INVALID_HANDLE_VALUE;
+  BOOL result = ::DuplicateHandle(::GetCurrentProcess(), process,
+                                  ::GetCurrentProcess(), &duplicate_handle,
+                                  PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0);
+  if (!result) {
+    // Even with PROCESS_QUERY_LIMITED_INFORMATION, DuplicateHandle can fail
+    // with ERROR_ACCESS_DENIED. And it's always possible to run out of handles.
+    const DWORD last_error = ::GetLastError();
+    CHECK(last_error == ERROR_ACCESS_DENIED ||
+          last_error == ERROR_NO_SYSTEM_RESOURCES);
+    return;
+  }
+
+  process_.Set(duplicate_handle);
 }
 
 size_t GetSystemCommitCharge() {
-  // Get the System Page Size.
-  SYSTEM_INFO system_info;
-  GetSystemInfo(&system_info);
-
   PERFORMANCE_INFORMATION info;
-  if (!GetPerformanceInfo(&info, sizeof(info))) {
+  if (!::GetPerformanceInfo(&info, sizeof(info))) {
     DLOG(ERROR) << "Failed to fetch internal performance info.";
     return 0;
   }
-  return (info.CommitTotal * system_info.dwPageSize) / 1024;
+  return (info.CommitTotal * info.PageSize) / 1024;
 }
 
 // This function uses the following mapping between MEMORYSTATUSEX and
-// SystemMemoryInfoKB:
+// SystemMemoryInfo:
 //   ullTotalPhys ==> total
 //   ullAvailPhys ==> avail_phys
 //   ullTotalPageFile ==> swap_total
 //   ullAvailPageFile ==> swap_free
-bool GetSystemMemoryInfo(SystemMemoryInfoKB* meminfo) {
+bool GetSystemMemoryInfo(SystemMemoryInfo* meminfo) {
   MEMORYSTATUSEX mem_status;
   mem_status.dwLength = sizeof(mem_status);
-  if (!::GlobalMemoryStatusEx(&mem_status))
+  if (!::GlobalMemoryStatusEx(&mem_status)) {
     return false;
+  }
 
-  meminfo->total = saturated_cast<int>(mem_status.ullTotalPhys / 1024);
-  meminfo->avail_phys = saturated_cast<int>(mem_status.ullAvailPhys / 1024);
-  meminfo->swap_total = saturated_cast<int>(mem_status.ullTotalPageFile / 1024);
-  meminfo->swap_free = saturated_cast<int>(mem_status.ullAvailPageFile / 1024);
+  meminfo->total = ByteSize(mem_status.ullTotalPhys);
+  meminfo->avail_phys = ByteSize(mem_status.ullAvailPhys);
+  meminfo->swap_total = ByteSize(mem_status.ullTotalPageFile);
+  meminfo->swap_free = ByteSize(mem_status.ullAvailPageFile);
 
   return true;
 }
@@ -258,52 +281,17 @@ SystemPerformanceInfo::SystemPerformanceInfo(
 SystemPerformanceInfo& SystemPerformanceInfo::operator=(
     const SystemPerformanceInfo& other) = default;
 
-Value SystemPerformanceInfo::ToValue() const {
-  Value result(Value::Type::DICTIONARY);
-
-  // Write out uint64_t variables as doubles.
-  // Note: this may discard some precision, but for JS there's no other option.
-  result.SetDoubleKey("idle_time", strict_cast<double>(idle_time));
-  result.SetDoubleKey("read_transfer_count",
-                      strict_cast<double>(read_transfer_count));
-  result.SetDoubleKey("write_transfer_count",
-                      strict_cast<double>(write_transfer_count));
-  result.SetDoubleKey("other_transfer_count",
-                      strict_cast<double>(other_transfer_count));
-  result.SetDoubleKey("read_operation_count",
-                      strict_cast<double>(read_operation_count));
-  result.SetDoubleKey("write_operation_count",
-                      strict_cast<double>(write_operation_count));
-  result.SetDoubleKey("other_operation_count",
-                      strict_cast<double>(other_operation_count));
-  result.SetDoubleKey("pagefile_pages_written",
-                      strict_cast<double>(pagefile_pages_written));
-  result.SetDoubleKey("pagefile_pages_write_ios",
-                      strict_cast<double>(pagefile_pages_write_ios));
-  result.SetDoubleKey("available_pages", strict_cast<double>(available_pages));
-  result.SetDoubleKey("pages_read", strict_cast<double>(pages_read));
-  result.SetDoubleKey("page_read_ios", strict_cast<double>(page_read_ios));
-
-  return result;
-}
-
 // Retrieves performance counters from the operating system.
 // Fills in the provided |info| structure. Returns true on success.
 BASE_EXPORT bool GetSystemPerformanceInfo(SystemPerformanceInfo* info) {
-  static const auto query_system_information_ptr =
-      reinterpret_cast<decltype(&::NtQuerySystemInformation)>(GetProcAddress(
-          GetModuleHandle(L"ntdll.dll"), "NtQuerySystemInformation"));
-  if (!query_system_information_ptr)
-    return false;
-
   SYSTEM_PERFORMANCE_INFORMATION counters = {};
   {
     // The call to NtQuerySystemInformation might block on a lock.
     base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                   BlockingType::MAY_BLOCK);
-    if (query_system_information_ptr(::SystemPerformanceInformation, &counters,
-                                     sizeof(SYSTEM_PERFORMANCE_INFORMATION),
-                                     nullptr) != STATUS_SUCCESS) {
+    if (::NtQuerySystemInformation(::SystemPerformanceInformation, &counters,
+                                   sizeof(SYSTEM_PERFORMANCE_INFORMATION),
+                                   nullptr) != STATUS_SUCCESS) {
       return false;
     }
   }
@@ -325,6 +313,12 @@ BASE_EXPORT bool GetSystemPerformanceInfo(SystemPerformanceInfo* info) {
   info->page_read_ios = counters.PageReadIos;
 
   return true;
+}
+
+ByteSize SystemMemoryInfo::GetAvailablePhysicalMemory() const {
+  // Use ullAvailPhys from MEMORYSTATUSEX, which represents physical memory
+  // available without paging.
+  return avail_phys;
 }
 
 }  // namespace base

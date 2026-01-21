@@ -7,12 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/base64url.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/proximity_auth/messenger_observer.h"
 #include "chromeos/ash/components/proximity_auth/remote_status_update.h"
@@ -24,14 +22,10 @@ namespace {
 // The key names of JSON fields for messages sent between the devices.
 const char kTypeKey[] = "type";
 const char kNameKey[] = "name";
-const char kDataKey[] = "data";
-const char kEncryptedDataKey[] = "encrypted_data";
 
 // The types of messages that can be sent and received.
 const char kMessageTypeLocalEvent[] = "event";
 const char kMessageTypeRemoteStatusUpdate[] = "status_update";
-const char kMessageTypeDecryptRequest[] = "decrypt_request";
-const char kMessageTypeDecryptResponse[] = "decrypt_response";
 const char kMessageTypeUnlockRequest[] = "unlock_request";
 const char kMessageTypeUnlockResponse[] = "unlock_response";
 
@@ -40,9 +34,7 @@ const char kUnlockEventName[] = "easy_unlock";
 
 // Serializes the |value| to a JSON string and returns the result.
 std::string SerializeValueToJson(const base::Value::Dict& value) {
-  std::string json;
-  base::JSONWriter::Write(value, &json);
-  return json;
+  return base::WriteJson(value).value_or("");
 }
 
 // Returns the message type represented by the |message|. This is a convenience
@@ -78,20 +70,6 @@ void MessengerImpl::DispatchUnlockEvent() {
   base::Value::Dict message;
   message.Set(kTypeKey, kMessageTypeLocalEvent);
   message.Set(kNameKey, kUnlockEventName);
-  queued_messages_.push_back(PendingMessage(message));
-  ProcessMessageQueue();
-}
-
-void MessengerImpl::RequestDecryption(const std::string& challenge) {
-  const std::string encrypted_message_data = challenge;
-  std::string encrypted_message_data_base64;
-  base::Base64UrlEncode(encrypted_message_data,
-                        base::Base64UrlEncodePolicy::INCLUDE_PADDING,
-                        &encrypted_message_data_base64);
-
-  base::Value::Dict message;
-  message.Set(kTypeKey, kMessageTypeDecryptRequest);
-  message.Set(kEncryptedDataKey, encrypted_message_data_base64);
   queued_messages_.push_back(PendingMessage(message));
   ProcessMessageQueue();
 }
@@ -150,22 +128,6 @@ void MessengerImpl::HandleRemoteStatusUpdateMessage(
     observer.OnRemoteStatusUpdate(*status_update);
 }
 
-void MessengerImpl::HandleDecryptResponseMessage(
-    const base::Value::Dict& message) {
-  const std::string* base64_data = message.FindString(kDataKey);
-  std::string decrypted_data;
-  if (!base64_data || base64_data->empty()) {
-    PA_LOG(ERROR) << "Decrypt response missing '" << kDataKey << "' value.";
-  } else if (!base::Base64UrlDecode(
-                 *base64_data, base::Base64UrlDecodePolicy::REQUIRE_PADDING,
-                 &decrypted_data)) {
-    PA_LOG(ERROR) << "Unable to base64-decode decrypt response.";
-  }
-
-  for (auto& observer : observers_)
-    observer.OnDecryptResponse(decrypted_data);
-}
-
 void MessengerImpl::HandleUnlockResponseMessage(
     const base::Value::Dict& message) {
   for (auto& observer : observers_)
@@ -183,14 +145,14 @@ void MessengerImpl::OnMessageReceived(const std::string& payload) {
 
 void MessengerImpl::HandleMessage(const std::string& message) {
   // The decoded message should be a JSON string.
-  absl::optional<base::Value> message_value = base::JSONReader::Read(message);
-  if (!message_value || !message_value->is_dict()) {
+  std::optional<base::Value::Dict> message_value =
+      base::JSONReader::ReadDict(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!message_value) {
     PA_LOG(ERROR) << "Unable to parse message as JSON:\n" << message;
     return;
   }
 
-  const base::Value::Dict& message_dictionary = message_value->GetDict();
-  const std::string* type = message_dictionary.FindString(kTypeKey);
+  const std::string* type = message_value->FindString(kTypeKey);
   if (!type) {
     PA_LOG(ERROR) << "Missing '" << kTypeKey << "' key in message:\n "
                   << message;
@@ -199,7 +161,7 @@ void MessengerImpl::HandleMessage(const std::string& message) {
 
   // Remote status updates can be received out of the blue.
   if (*type == kMessageTypeRemoteStatusUpdate) {
-    HandleRemoteStatusUpdateMessage(message_dictionary);
+    HandleRemoteStatusUpdateMessage(*message_value);
     return;
   }
 
@@ -211,12 +173,15 @@ void MessengerImpl::HandleMessage(const std::string& message) {
   }
 
   std::string expected_type;
-  if (pending_message_->type == kMessageTypeDecryptRequest)
-    expected_type = kMessageTypeDecryptResponse;
-  else if (pending_message_->type == kMessageTypeUnlockRequest)
+  if (pending_message_->type == kMessageTypeUnlockRequest) {
     expected_type = kMessageTypeUnlockResponse;
-  else
-    NOTREACHED();  // There are no other message types that expect a response.
+  } else {
+    // (crbug.com/286944516): Unexpected path occurring.
+    PA_LOG(ERROR) << "Response received from unexpected message type: "
+                  << pending_message_->type;
+    DUMP_WILL_BE_NOTREACHED();  // There are no other message types
+                                // that expect a response.
+  }
 
   if (*type != expected_type) {
     PA_LOG(ERROR) << "Unexpected '" << kTypeKey << "' value in message. "
@@ -225,12 +190,11 @@ void MessengerImpl::HandleMessage(const std::string& message) {
     return;
   }
 
-  if (*type == kMessageTypeDecryptResponse)
-    HandleDecryptResponseMessage(message_dictionary);
-  else if (*type == kMessageTypeUnlockResponse)
-    HandleUnlockResponseMessage(message_dictionary);
-  else
+  if (*type == kMessageTypeUnlockResponse) {
+    HandleUnlockResponseMessage(*message_value);
+  } else {
     NOTREACHED();  // There are no other message types that expect a response.
+  }
 
   pending_message_.reset();
   ProcessMessageQueue();
@@ -246,16 +210,20 @@ void MessengerImpl::OnSendMessageResult(bool success) {
   // Don't wait if the message could not be sent, as there won't ever be a
   // response in that case. Likewise, don't wait for a response to local
   // event messages, as there is no response for such messages.
-  if (success && pending_message_->type != kMessageTypeLocalEvent)
+  if (success && pending_message_->type != kMessageTypeLocalEvent) {
     return;
+  }
+
+  // Be prepared in case that an observer deletes this object.
+  //
+  // Note that it's not clear whether it's allowed/supported by design or not
+  // that an observer deletes this object. See also crbug.com/392028938
+  base::WeakPtr<MessengerImpl> weak_this = weak_ptr_factory_.GetWeakPtr();
 
   // Notify observer of failure if sending the message fails.
   // For local events, we don't expect a response, so on success, we
   // notify observers right away.
-  if (pending_message_->type == kMessageTypeDecryptRequest) {
-    for (auto& observer : observers_)
-      observer.OnDecryptResponse(std::string());
-  } else if (pending_message_->type == kMessageTypeUnlockRequest) {
+  if (pending_message_->type == kMessageTypeUnlockRequest) {
     for (auto& observer : observers_)
       observer.OnUnlockResponse(false);
   } else if (pending_message_->type == kMessageTypeLocalEvent) {
@@ -264,6 +232,12 @@ void MessengerImpl::OnSendMessageResult(bool success) {
   } else {
     PA_LOG(ERROR) << "Message of unknown type '" << pending_message_->type
                   << "' sent.";
+  }
+
+  // Note that it's not clear whether it's allowed/supported by design or not
+  // that an observer deletes this object. See also crbug.com/392028938
+  if (!weak_this) {
+    return;  // An observer has deleted this object.
   }
 
   pending_message_.reset();

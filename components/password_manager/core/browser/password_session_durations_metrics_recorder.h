@@ -10,29 +10,25 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/elapsed_timer.h"
-#include "components/password_manager/core/browser/password_account_storage_settings_watcher.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_service_observer.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_service_observer.h"
 
 namespace syncer {
 class SyncService;
 }  // namespace syncer
 
-class PrefService;
-
 namespace password_manager {
 
-// Tracks the active browsing time that the user spends in each state related to
-// the account-scoped password storage, i.e. signed in or not, opted in or not.
+// Tracks the active browsing time that the user spends in each
+// features_util::PasswordAccountStorageUserState.
 class PasswordSessionDurationsMetricsRecorder
     : public syncer::SyncServiceObserver {
  public:
-  // |pref_service| must not be null and must outlive this object.
   // |sync_service| may be null (in incognito profiles or due to a commandline
   // flag), but if non-null must outlive this object.
-  PasswordSessionDurationsMetricsRecorder(PrefService* pref_service,
-                                          syncer::SyncService* sync_service);
+  explicit PasswordSessionDurationsMetricsRecorder(
+      syncer::SyncService* sync_service);
   ~PasswordSessionDurationsMetricsRecorder() override;
 
   PasswordSessionDurationsMetricsRecorder(
@@ -44,14 +40,12 @@ class PasswordSessionDurationsMetricsRecorder
 
   // syncer::SyncServiceObserver:
   void OnStateChanged(syncer::SyncService* sync) override;
+  void OnSyncShutdown(syncer::SyncService* sync) override;
 
  private:
   void CheckForUserStateChange();
 
-  const raw_ptr<PrefService> pref_service_;
   const raw_ptr<syncer::SyncService> sync_service_;
-
-  PasswordAccountStorageSettingsWatcher settings_watcher_;
 
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
       sync_observation_{this};
@@ -62,7 +56,7 @@ class PasswordSessionDurationsMetricsRecorder
 
   // The current state of the user. Whenever this changes, duration metrics are
   // recorded.
-  metrics_util::PasswordAccountStorageUserState user_state_;
+  features_util::PasswordAccountStorageUserState user_state_;
 
   // Tracks the elapsed active session time in the current state. The timer is
   // null if there's no active session.

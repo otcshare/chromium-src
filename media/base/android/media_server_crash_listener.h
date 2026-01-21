@@ -8,8 +8,8 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace media {
@@ -39,10 +39,7 @@ class MediaServerCrashListener {
   void EnsureListening();
 
   // Called from JNI whenever a MEDIA_ERROR_SERVER_DIED is received.
-  void OnMediaServerCrashDetected(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jboolean watchdog_needs_release);
+  void OnMediaServerCrashDetected(JNIEnv* env, bool watchdog_needs_release);
 
   void ReleaseWatchdog();
 

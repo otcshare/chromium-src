@@ -32,7 +32,10 @@ class KEYED_SERVICE_EXPORT SimpleDependencyManager : public DependencyManager {
   void RegisterProfilePrefsForServices(
       user_prefs::PrefRegistrySyncable* pref_registry);
 
-  // Create services for test BrowserContexts - these contexts will not create
+  // Create services for key.
+  void CreateServices(SimpleFactoryKey* key);
+
+  // Create services for test key - these contexts will not create
   // services for any SimpleKeyedBaseFactories that return true from
   // ServiceIsNULLWhileTesting().
   void CreateServicesForTest(SimpleFactoryKey* key);
@@ -44,11 +47,6 @@ class KEYED_SERVICE_EXPORT SimpleDependencyManager : public DependencyManager {
 
  private:
   ~SimpleDependencyManager() override;
-
-#ifndef NDEBUG
-  // DependencyManager:
-  void DumpContextDependencies(void* context) const final;
-#endif  // NDEBUG
 };
 
 #endif  // COMPONENTS_KEYED_SERVICE_CORE_SIMPLE_DEPENDENCY_MANAGER_H_

@@ -4,22 +4,16 @@
 
 package org.chromium.chrome.browser.download;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.UsedByReflection;
 
-/**
- * A DownloadForegroundServiceObservers.Observer implementation for DownloadNotificationService.
- */
+/** A DownloadForegroundServiceObservers.Observer implementation for DownloadNotificationService. */
 @UsedByReflection("DownloadForegroundServiceObservers")
+@NullMarked
 public class DownloadNotificationServiceObserver
         implements DownloadForegroundServiceObservers.Observer {
     @UsedByReflection("DownloadForegroundServiceObservers")
     public DownloadNotificationServiceObserver() {}
-
-    @Override
-    public void onForegroundServiceRestarted(int pinnedNotificationId) {
-        DownloadNotificationService.getInstance().onForegroundServiceRestarted(
-                pinnedNotificationId);
-    }
 
     @Override
     public void onForegroundServiceTaskRemoved() {

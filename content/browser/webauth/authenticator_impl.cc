@@ -26,7 +26,9 @@ void AuthenticatorImpl::Create(
   // navigates or is deleted. See DocumentService for details.
   new AuthenticatorImpl(
       *render_frame_host, std::move(receiver),
-      std::make_unique<AuthenticatorCommonImpl>(render_frame_host));
+      std::make_unique<AuthenticatorCommonImpl>(
+          render_frame_host,
+          AuthenticatorCommonImpl::ServingRequestsFor::kWebContents));
 }
 
 void AuthenticatorImpl::CreateForTesting(
@@ -35,6 +37,18 @@ void AuthenticatorImpl::CreateForTesting(
     std::unique_ptr<AuthenticatorCommonImpl> authenticator_common_impl) {
   new AuthenticatorImpl(render_frame_host, std::move(receiver),
                         std::move(authenticator_common_impl));
+}
+
+// static
+blink::mojom::GetCredentialResponsePtr AuthenticatorImpl::MakeGetAssertionResponse(
+    blink::mojom::AuthenticatorStatus status,
+    blink::mojom::GetAssertionAuthenticatorResponsePtr assertion,
+    blink::mojom::WebAuthnDOMExceptionDetailsPtr dom_exception_details) {
+  blink::mojom::GetAssertionResponsePtr assertion_response =
+      blink::mojom::GetAssertionResponse::New(
+          status, std::move(assertion), std::move(dom_exception_details));
+  return blink::mojom::GetCredentialResponse::NewGetAssertionResponse(
+      std::move(assertion_response));
 }
 
 AuthenticatorImpl::AuthenticatorImpl(
@@ -54,28 +68,44 @@ void AuthenticatorImpl::MakeCredential(
     blink::mojom::PublicKeyCredentialCreationOptionsPtr options,
     MakeCredentialCallback callback) {
   authenticator_common_impl_->MakeCredential(origin(), std::move(options),
+                                             /*payment_options=*/nullptr,
                                              std::move(callback));
 }
 
 // mojom::Authenticator
-void AuthenticatorImpl::GetAssertion(
-    blink::mojom::PublicKeyCredentialRequestOptionsPtr options,
-    GetAssertionCallback callback) {
-  authenticator_common_impl_->GetAssertion(origin(), std::move(options),
-                                           /*payment=*/nullptr,
-                                           std::move(callback));
+void AuthenticatorImpl::GetCredential(
+    blink::mojom::GetCredentialOptionsPtr options,
+    GetCredentialCallback callback) {
+  authenticator_common_impl_->GetCredential(origin(), std::move(options),
+                                            /*payment_options=*/nullptr,
+                                            std::move(callback));
+}
+
+// mojom::Authenticator
+void AuthenticatorImpl::Report(
+    blink::mojom::PublicKeyCredentialReportOptionsPtr options,
+    ReportCallback callback) {
+  authenticator_common_impl_->Report(origin(), std::move(options),
+                                     std::move(callback));
+}
+
+// mojom::Authenticator
+void AuthenticatorImpl::GetClientCapabilities(
+    GetClientCapabilitiesCallback callback) {
+  authenticator_common_impl_->GetClientCapabilities(origin(),
+                                                    std::move(callback));
 }
 
 void AuthenticatorImpl::IsUserVerifyingPlatformAuthenticatorAvailable(
     IsUserVerifyingPlatformAuthenticatorAvailableCallback callback) {
   authenticator_common_impl_->IsUserVerifyingPlatformAuthenticatorAvailable(
-      std::move(callback));
+      origin(), std::move(callback));
 }
 
 void AuthenticatorImpl::IsConditionalMediationAvailable(
     IsConditionalMediationAvailableCallback callback) {
   authenticator_common_impl_->IsConditionalMediationAvailable(
-      std::move(callback));
+      origin(), std::move(callback));
 }
 
 void AuthenticatorImpl::Cancel() {

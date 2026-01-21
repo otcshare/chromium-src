@@ -7,9 +7,13 @@
 #include <jni.h>
 
 #include "base/android/jni_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/android/chrome_jni_headers/ChromeInterfaceRegistrar_jni.h"
 
 void RegisterChromeJavaMojoInterfaces() {
   Java_ChromeInterfaceRegistrar_registerMojoInterfaces(
       base::android::AttachCurrentThread());
 }
+
+DEFINE_JNI(ChromeInterfaceRegistrar)

@@ -7,10 +7,6 @@
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/web_state.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 @implementation CRWFakeWebStateDelegate {
   // Backs up the property with the same name.
   std::unique_ptr<web::WebState::OpenURLParams> _openURLParams;
@@ -22,6 +18,11 @@
 @synthesize webStateCreationRequested = _webStateCreationRequested;
 @synthesize webStateClosingRequested = _webStateClosingRequested;
 @synthesize repostFormWarningRequested = _repostFormWarningRequested;
+@synthesize copyAllowedRequested = _copyAllowedRequested;
+@synthesize pasteAllowedRequested = _pasteAllowedRequested;
+@synthesize cutAllowedRequested = _cutAllowedRequested;
+@synthesize didFinishClipboardReadRequested = _didFinishClipboardReadRequested;
+@synthesize permissionsRequestHandled = _permissionsRequestHandled;
 @synthesize authenticationRequested = _authenticationRequested;
 @synthesize isAppLaunchingAllowedForWebStateReturnValue =
     _isAppLaunchingAllowedForWebStateReturnValue;
@@ -53,11 +54,45 @@
   _repostFormWarningRequested = YES;
 }
 
+- (void)webState:(web::WebState*)webState
+    shouldAllowCopyWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _copyAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webState:(web::WebState*)webState
+    shouldAllowPasteWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _pasteAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webState:(web::WebState*)webState
+    shouldAllowCutWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _cutAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webStateDidFinishClipboardRead:(web::WebState*)webState {
+  _webState = webState;
+  _didFinishClipboardReadRequested = YES;
+}
+
 - (web::JavaScriptDialogPresenter*)javaScriptDialogPresenterForWebState:
     (web::WebState*)webState {
   _webState = webState;
   _javaScriptDialogPresenterRequested = YES;
   return nil;
+}
+
+- (void)webState:(web::WebState*)webState
+    handlePermissions:(NSArray<NSNumber*>*)permissions
+      decisionHandler:(web::WebStatePermissionDecisionHandler)decisionHandler {
+  _webState = webState;
+  _permissionsRequestHandled = YES;
+  decisionHandler(web::PermissionDecisionGrant);
 }
 
 - (void)webState:(web::WebState*)webState

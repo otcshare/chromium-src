@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_required_dialog_view.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "content/public/test/browser_test.h"
@@ -22,10 +22,35 @@ class RelaunchRequiredDialogViewDialogTest : public DialogBrowserTest {
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     base::Time deadline = base::Time::Now() + base::Days(3);
-    RelaunchRequiredDialogView::Show(browser(), deadline, base::DoNothing());
+    RelaunchRequiredDialogView::Show(browser(), deadline, /*ap_style=*/false,
+                                     base::DoNothing());
   }
 };
 
 IN_PROC_BROWSER_TEST_F(RelaunchRequiredDialogViewDialogTest, InvokeUi_default) {
+  ShowAndVerifyUi();
+}
+
+class AdvancedProtectionRelaunchRequiredDialogViewDialogTest
+    : public DialogBrowserTest {
+ public:
+  AdvancedProtectionRelaunchRequiredDialogViewDialogTest(
+      const AdvancedProtectionRelaunchRequiredDialogViewDialogTest&) = delete;
+  AdvancedProtectionRelaunchRequiredDialogViewDialogTest& operator=(
+      const AdvancedProtectionRelaunchRequiredDialogViewDialogTest&) = delete;
+
+ protected:
+  AdvancedProtectionRelaunchRequiredDialogViewDialogTest() = default;
+
+  // DialogBrowserTest:
+  void ShowUi(const std::string& name) override {
+    base::Time deadline = base::Time::Now() + base::Days(3);
+    RelaunchRequiredDialogView::Show(browser(), deadline, /*ap_style=*/true,
+                                     base::DoNothing());
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AdvancedProtectionRelaunchRequiredDialogViewDialogTest,
+                       InvokeUi_default) {
   ShowAndVerifyUi();
 }

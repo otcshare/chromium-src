@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -13,6 +14,8 @@
 
 #include "base/base_paths.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
@@ -23,9 +26,17 @@
 #include "cc/paint/paint_image_builder.h"
 #include "cc/paint/skottie_wrapper.h"
 #include "cc/test/fake_paint_image_generator.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageGenerator.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkPixmap.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkYUVAPixmaps.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
@@ -76,20 +87,21 @@ bool AreDisplayListDrawingResultsSame(const gfx::Rect& layer_rect,
                                       const DisplayItemList* list_b) {
   const size_t pixel_size = 4 * layer_rect.size().GetArea();
 
-  std::unique_ptr<unsigned char[]> pixels_a(new unsigned char[pixel_size]);
-  std::unique_ptr<unsigned char[]> pixels_b(new unsigned char[pixel_size]);
-  memset(pixels_a.get(), 0, pixel_size);
-  memset(pixels_b.get(), 0, pixel_size);
-  DrawDisplayList(pixels_a.get(), layer_rect, list_a);
-  DrawDisplayList(pixels_b.get(), layer_rect, list_b);
+  auto pixels_a = base::HeapArray<unsigned char>::Uninit(pixel_size);
+  auto pixels_b = base::HeapArray<unsigned char>::Uninit(pixel_size);
+  std::ranges::fill(pixels_a, 0);
+  std::ranges::fill(pixels_b, 0);
+  DrawDisplayList(pixels_a.data(), layer_rect, list_a);
+  DrawDisplayList(pixels_b.data(), layer_rect, list_b);
 
-  return !memcmp(pixels_a.get(), pixels_b.get(), pixel_size);
+  return pixels_a.as_span() == pixels_b.as_span();
 }
 
 Region ImageRectsToRegion(const DiscardableImageMap::Rects& rects) {
   Region region;
-  for (const auto& r : rects.container())
+  for (const auto& r : rects) {
     region.Union(r);
+  }
   return region;
 }
 
@@ -102,7 +114,7 @@ PaintImage CreatePaintWorkletPaintImage(
     scoped_refptr<PaintWorkletInput> input) {
   auto paint_image = PaintImageBuilder::WithDefault()
                          .set_id(1)
-                         .set_paint_worklet_input(std::move(input))
+                         .set_deferred_paint_record(std::move(input))
                          .TakePaintImage();
   return paint_image;
 }
@@ -114,7 +126,6 @@ SkYUVAPixmapInfo GetYUVAPixmapInfo(const gfx::Size& image_size,
   // TODO(skbug.com/10632): Update this when we have planar configs with alpha.
   if (has_alpha) {
     NOTREACHED();
-    return SkYUVAPixmapInfo();
   }
   SkYUVAInfo::Subsampling subsampling;
   switch (format) {
@@ -138,7 +149,6 @@ SkYUVAPixmapInfo GetYUVAPixmapInfo(const gfx::Size& image_size,
       break;
     default:
       NOTREACHED();
-      return SkYUVAPixmapInfo();
   }
   SkYUVAInfo yuva_info({image_size.width(), image_size.height()},
                        SkYUVAInfo::PlaneConfig::kY_U_V, subsampling,
@@ -152,7 +162,7 @@ PaintImage CreateDiscardablePaintImage(
     bool allocate_encoded_data,
     PaintImage::Id id,
     SkColorType color_type,
-    absl::optional<YUVSubsampling> yuv_format,
+    std::optional<YUVSubsampling> yuv_format,
     SkYUVAPixmapInfo::DataType yuv_data_type) {
   if (!color_space)
     color_space = SkColorSpace::MakeSRGB();
@@ -206,7 +216,7 @@ PaintImage CreateAnimatedImage(const gfx::Size& size,
       .set_paint_image_generator(sk_make_sp<FakePaintImageGenerator>(
           SkImageInfo::MakeN32Premul(size.width(), size.height()),
           std::move(frames)))
-      .set_animation_type(PaintImage::AnimationType::ANIMATED)
+      .set_animation_type(PaintImage::AnimationType::kAnimated)
       .set_repetition_count(repetition_count)
       .TakePaintImage();
 }
@@ -219,7 +229,7 @@ PaintImage CreateBitmapImage(const gfx::Size& size, SkColorType color_type) {
   bitmap.eraseColor(SK_AlphaTRANSPARENT);
   return PaintImageBuilder::WithDefault()
       .set_id(PaintImage::GetNextId())
-      .set_image(SkImage::MakeFromBitmap(bitmap),
+      .set_image(SkImages::RasterFromBitmap(bitmap),
                  PaintImage::GetNextContentId())
       .TakePaintImage();
 }
@@ -249,14 +259,14 @@ scoped_refptr<SkottieWrapper> CreateSkottie(const gfx::Size& size,
   return CreateSkottieFromString(json);
 }
 
-scoped_refptr<SkottieWrapper> CreateSkottieFromString(base::StringPiece json) {
-  base::span<const uint8_t> json_span = base::as_bytes(base::make_span(json));
-  return SkottieWrapper::CreateSerializable(
+scoped_refptr<SkottieWrapper> CreateSkottieFromString(std::string_view json) {
+  base::span<const uint8_t> json_span = base::as_byte_span(json);
+  return SkottieWrapper::UnsafeCreateSerializable(
       std::vector<uint8_t>(json_span.begin(), json_span.end()));
 }
 
 std::string LoadSkottieFileFromTestData(
-    base::FilePath::StringPieceType animation_file_name) {
+    base::FilePath::StringViewType animation_file_name) {
   base::FilePath animation_path;
   CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &animation_path));
   animation_path = animation_path.AppendASCII("cc/test/data/lottie")
@@ -268,7 +278,7 @@ std::string LoadSkottieFileFromTestData(
 }
 
 scoped_refptr<SkottieWrapper> CreateSkottieFromTestDataDir(
-    base::FilePath::StringPieceType animation_file_name) {
+    base::FilePath::StringViewType animation_file_name) {
   return CreateSkottieFromString(
       LoadSkottieFileFromTestData(animation_file_name));
 }
@@ -282,9 +292,9 @@ PaintImage CreateNonDiscardablePaintImage(const gfx::Size& size) {
   bitmap.eraseColor(SK_AlphaTRANSPARENT);
   return PaintImageBuilder::WithDefault()
       .set_id(PaintImage::GetNextId())
-      .set_texture_image(
-          SkImage::MakeFromBitmap(bitmap)->makeTextureImage(context.get()),
-          PaintImage::GetNextContentId())
+      .set_texture_image(SkImages::TextureFromImage(
+                             context.get(), SkImages::RasterFromBitmap(bitmap)),
+                         PaintImage::GetNextContentId())
       .TakePaintImage();
 }
 

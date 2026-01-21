@@ -6,17 +6,14 @@
 """Unittest for chrome_messages_json.py.
 """
 
-from __future__ import print_function
-
+import io
 import json
 import os
 import sys
-if __name__ == '__main__':
-  sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-
 import unittest
 
-from six import StringIO
+if __name__ == '__main__':
+  sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 from grit import grd_reader
 from grit import util
@@ -29,7 +26,7 @@ class ChromeMessagesJsonFormatUnittest(unittest.TestCase):
   maxDiff = None
 
   def testMessages(self):
-    root = util.ParseGrdForUnittest(u"""
+    root = util.ParseGrdForUnittest("""
     <messages>
       <message name="IDS_SIMPLE_MESSAGE">
               Simple message.
@@ -61,11 +58,11 @@ class ChromeMessagesJsonFormatUnittest(unittest.TestCase):
     </messages>
     """)
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('chrome_messages_json', 'en'),
                                 buf)
     output = buf.getvalue()
-    test = u"""
+    test = """
 {
   "SIMPLE_MESSAGE": {
     "message": "Simple message."
@@ -115,17 +112,51 @@ class ChromeMessagesJsonFormatUnittest(unittest.TestCase):
       </messages>
     """)
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('chrome_messages_json', 'fr'),
                                 buf)
     output = buf.getvalue()
-    test = u"""
+    test = """
 {
   "ID_HELLO": {
     "message": "H\u00e9P\u00e9ll\u00f4P\u00f4!"
   },
   "ID_HELLO_USER": {
     "message": "H\u00e9P\u00e9ll\u00f4P\u00f4 %s"
+  }
+}
+"""
+    self.assertEqual(json.loads(test), json.loads(output))
+
+  # This test makes sure that we don't always get False back from:
+  #
+  #   translation_missing = not child.GetCliques()[0].HasTranslation(lang,
+  #     constants.DEFAULT_GENDER)
+  #
+  # If we got False back all the time (say, due to calling it with an argument
+  # of the wrong type), then we would assume it was completely normal to just
+  # skip every translation and let Chrome fall back to English all the time with
+  # no errors or warnings.
+  def testTranslationsWithFallbackToEnglish(self):
+    root = util.ParseGrdForUnittest("""
+    <messages fallback_to_english="true">
+        <message name="ID_HELLO">Hello!</message>
+        <message name="ID_HELLO_USER">Hello <ph name="USERNAME">%s<ex>
+          Joi</ex></ph></message>
+      </messages>
+    """)
+
+    buf = io.StringIO()
+    build.RcBuilder.ProcessNode(root, DummyOutput('chrome_messages_json', 'en'),
+                                buf)
+    output = buf.getvalue()
+    test = """
+{
+  "ID_HELLO": {
+    "message": "Hello!"
+  },
+  "ID_HELLO_USER": {
+    "message": "Hello %s"
   }
 }
 """
@@ -143,17 +174,17 @@ class ChromeMessagesJsonFormatUnittest(unittest.TestCase):
     </messages>
   </release>
 </grit>"""
-    root = grd_reader.Parse(StringIO(grd), dir=".")
+    root = grd_reader.Parse(io.StringIO(grd), dir=".")
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('chrome_messages_json', 'fr'),
                                 buf)
     output = buf.getvalue()
-    test = u'{}'
+    test = '{}'
     self.assertEqual(test, output)
 
   def testVerifyMinification(self):
-    root = util.ParseGrdForUnittest(u"""
+    root = util.ParseGrdForUnittest("""
     <messages>
       <message name="IDS">
         <ph name="BEGIN">$1<ex>a</ex></ph>test<ph name="END">$2<ex>b</ex></ph>
@@ -161,16 +192,16 @@ class ChromeMessagesJsonFormatUnittest(unittest.TestCase):
     </messages>
     """)
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('chrome_messages_json', 'en'),
                                 buf)
     output = buf.getvalue()
-    test = (u'{"IDS":{"message":"$1$test$2$","placeholders":'
-            u'{"1":{"content":"$1"},"2":{"content":"$2"}}}}')
+    test = ('{"IDS":{"message":"$1$test$2$","placeholders":'
+            '{"1":{"content":"$1"},"2":{"content":"$2"}}}}')
     self.assertEqual(test, output)
 
 
-class DummyOutput(object):
+class DummyOutput:
 
   def __init__(self, type, language):
     self.type = type
@@ -184,6 +215,9 @@ class DummyOutput(object):
 
   def GetOutputFilename(self):
     return 'hello.gif'
+
+  def GetGender(self):
+    return None
 
 
 if __name__ == '__main__':

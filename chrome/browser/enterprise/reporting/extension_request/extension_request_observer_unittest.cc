@@ -4,7 +4,8 @@
 
 #include "chrome/browser/enterprise/reporting/extension_request/extension_request_observer.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/json/json_reader.h"
 #include "base/json/values_util.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -91,19 +92,17 @@ class ExtensionRequestObserverTest : public BrowserWithTestWindowTest {
 
   // Creates fake pending request in pref.
   void SetPendingList(const std::vector<std::string>& ids) {
-    std::unique_ptr<base::Value> id_values =
-        std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
+    base::Value::Dict id_values;
     for (const auto& id : ids) {
-      base::Value request_data(base::Value::Type::DICTIONARY);
-      request_data.SetKey(extension_misc::kExtensionRequestTimestamp,
-                          ::base::TimeToValue(base::Time::Now()));
-      id_values->SetKey(id, std::move(request_data));
+      id_values.Set(id, base::Value::Dict().Set(
+                            extension_misc::kExtensionRequestTimestamp,
+                            ::base::TimeToValue(base::Time::Now())));
     }
     profile()->GetTestingPrefService()->SetUserPref(
         prefs::kCloudExtensionRequestIds, std::move(id_values));
   }
 
-  std::vector<absl::optional<message_center::Notification>>
+  std::vector<std::optional<message_center::Notification>>
   GetAllNotifications() {
     return {display_service_tester_->GetNotification(kApprovedNotificationId),
             display_service_tester_->GetNotification(kRejectedNotificationId),
@@ -119,12 +118,11 @@ class ExtensionRequestObserverTest : public BrowserWithTestWindowTest {
 
   //
   void SetExtensionSettings(const std::string& settings_string) {
-    absl::optional<base::Value> settings =
-        base::JSONReader::Read(settings_string);
+    std::optional<base::Value> settings = base::JSONReader::Read(
+        settings_string, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(settings.has_value());
     profile()->GetTestingPrefService()->SetManagedPref(
-        extensions::pref_names::kExtensionManagement,
-        base::Value::ToUniquePtrValue(std::move(*settings)));
+        extensions::pref_names::kExtensionManagement, std::move(*settings));
   }
 
   void CloseNotificationAndVerify(
@@ -140,7 +138,7 @@ class ExtensionRequestObserverTest : public BrowserWithTestWindowTest {
         close_run_loop.QuitClosure());
     display_service_tester_->SimulateClick(
         NotificationHandler::Type::TRANSIENT, notification_id,
-        absl::optional<int>(), absl::optional<std::u16string>());
+        std::optional<int>(), std::optional<std::u16string>());
     close_run_loop.Run();
 
     // Verify that only |expected_removed_requests| are removed from the pref.
@@ -149,7 +147,7 @@ class ExtensionRequestObserverTest : public BrowserWithTestWindowTest {
     EXPECT_EQ(number_of_existing_requests - expected_removed_requests.size(),
               actual_pending_requests.size());
     for (auto it : actual_pending_requests) {
-      EXPECT_FALSE(base::Contains(expected_removed_requests, it.first));
+      EXPECT_FALSE(std::ranges::contains(expected_removed_requests, it.first));
     }
     closed_notification_count_ += 1;
     histogram_tester()->ExpectBucketCount(kPendingListUpdateMetricsName,

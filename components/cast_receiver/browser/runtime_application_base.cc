@@ -4,8 +4,9 @@
 
 #include "components/cast_receiver/browser/runtime_application_base.h"
 
+#include <algorithm>
+
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/cast_receiver/browser/permissions_manager_impl.h"
 #include "components/media_control/browser/media_blocker.h"
@@ -58,7 +59,7 @@ void RuntimeApplicationBase::Load(StatusCallback callback) {
     SetUrlRewriteRules(std::move(cached_mojom_rules_));
   }
 
-  DVLOG(1) << "Loaded application: " << *this;
+  DLOG(INFO) << "Loaded application: " << *this;
   std::move(callback).Run(OkStatus());
 }
 
@@ -77,12 +78,16 @@ RuntimeApplicationBase::GetApplicationControls() {
       *embedder_application().GetWebContents());
 }
 
-void RuntimeApplicationBase::LoadPage(const GURL& url) {
+void RuntimeApplicationBase::NavigateToPage(const GURL& url) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  embedder_application().LoadPage(url);
+  auto* window_controls = embedder_application().GetContentWindowControls();
+  DCHECK(window_controls);
+  window_controls->AddVisibilityChangeObserver(*this);
 
-  SetWebVisibilityAndPaint(false);
+  embedder_application().NavigateToPage(url);
+
+  SetWebVisibilityAndPaint(is_visible_);
 }
 
 void RuntimeApplicationBase::SetContentPermissions(
@@ -104,29 +109,15 @@ void RuntimeApplicationBase::SetContentPermissions(
   }
 }
 
-void RuntimeApplicationBase::OnPageLoaded() {
+void RuntimeApplicationBase::OnPageNavigationComplete() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DVLOG(1) << "Page loaded: " << *this;
-
-  auto* window_controls = embedder_application().GetContentWindowControls();
-  DCHECK(window_controls);
-  window_controls->AddVisibilityChangeObserver(*this);
-  if (is_touch_input_enabled_) {
-    window_controls->EnableTouchInput();
-  } else {
-    window_controls->DisableTouchInput();
-  }
-
-  // Create the window and show the web view.
-  if (is_visible_) {
-    DVLOG(1) << "Loading page in full screen: " << *this;
-    window_controls->ShowWindow();
-  } else {
-    DVLOG(1) << "Loading page in background: " << *this;
-    window_controls->HideWindow();
-  }
+  DLOG(INFO) << "Page loaded: " << *this;
 
   embedder_application().NotifyApplicationStarted();
+
+  SetWebVisibilityAndPaint(is_visible_);
+  SetTouchInputEnabled(is_touch_input_enabled_);
+  SetMediaBlocking(is_media_load_blocked_, is_media_start_blocked_);
 }
 
 void RuntimeApplicationBase::SetUrlRewriteRules(
@@ -139,7 +130,12 @@ void RuntimeApplicationBase::SetUrlRewriteRules(
   url_rewrite::UrlRequestRewriteRulesManager&
       url_request_rewrite_rules_manager =
           GetApplicationControls().GetUrlRequestRewriteRulesManager();
-  url_request_rewrite_rules_manager.OnRulesUpdated(std::move(mojom_rules));
+  if (!url_request_rewrite_rules_manager.OnRulesUpdated(
+          std::move(mojom_rules))) {
+    LOG(ERROR) << "URL rewrite rules update failed.";
+    StopApplication(EmbedderApplication::ApplicationStopReason::kRuntimeError,
+                    net::Error::ERR_UNEXPECTED);
+  }
 }
 
 void RuntimeApplicationBase::SetMediaBlocking(bool load_blocked,
@@ -148,8 +144,8 @@ void RuntimeApplicationBase::SetMediaBlocking(bool load_blocked,
 
   is_media_load_blocked_ = load_blocked;
   is_media_start_blocked_ = start_blocked;
-  DVLOG(1) << "Media state updated: is_load_blocked=" << load_blocked
-           << ", is_start_blocked=" << start_blocked << ", " << *this;
+  DLOG(INFO) << "Media state updated: is_load_blocked=" << load_blocked
+             << ", is_start_blocked=" << start_blocked << ", " << *this;
 
   if (!embedder_application().GetWebContents()) {
     return;
@@ -167,8 +163,8 @@ void RuntimeApplicationBase::SetVisibility(bool is_visible) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   is_visible_ = is_visible;
-  DVLOG(1) << "Visibility updated: is_visible_=" << is_visible_ << ", "
-           << *this;
+  DLOG(INFO) << "Visibility updated: is_visible_=" << is_visible_ << ", "
+             << *this;
 
   auto* window_controls = embedder_application().GetContentWindowControls();
   if (!window_controls) {
@@ -186,8 +182,8 @@ void RuntimeApplicationBase::SetTouchInputEnabled(bool enabled) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   is_touch_input_enabled_ = enabled;
-  DVLOG(1) << "Touch input updated: is_touch_input_enabled_= "
-           << is_touch_input_enabled_ << ", " << *this;
+  DLOG(INFO) << "Touch input updated: is_touch_input_enabled_= "
+             << is_touch_input_enabled_ << ", " << *this;
 
   auto* window_controls = embedder_application().GetContentWindowControls();
   if (!window_controls) {
@@ -229,8 +225,8 @@ void RuntimeApplicationBase::StopApplication(
 
   embedder_application().NotifyApplicationStopped(stop_reason, net_error_code);
 
-  DVLOG(1) << "Application is stopped: stop_reason=" << stop_reason << ", "
-           << *this;
+  DLOG(INFO) << "Application is stopped: stop_reason=" << stop_reason << ", "
+             << *this;
 }
 
 void RuntimeApplicationBase::SetWebVisibilityAndPaint(bool is_visible) {
@@ -242,6 +238,15 @@ void RuntimeApplicationBase::SetWebVisibilityAndPaint(bool is_visible) {
   if (is_visible) {
     web_contents->WasShown();
   } else {
+    // NOTE: Calling WasHidden() and later WasShown() does not behave properly
+    // on some platforms (e.g. Linux devices using X11 platform for Ozone). In
+    // such cases, the WasShown() call will execute, and the browser-side code
+    // associated with this call will run, but it will never reach the Renderer
+    // process, so the LayerTreeHost will never draw the surface assocaited with
+    // this WebContents.
+    DLOG(WARNING)
+        << "WebContents hidden. NOTE: Changing from hidden to visible does not "
+           "work in all cases, and such calls may not be respected.";
     web_contents->WasHidden();
   }
 

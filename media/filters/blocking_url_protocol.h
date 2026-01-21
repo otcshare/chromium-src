@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
@@ -41,7 +41,7 @@ class MEDIA_EXPORT BlockingUrlProtocol : public FFmpegURLProtocol {
   void Abort();
 
   // FFmpegURLProtocol implementation.
-  int Read(int size, uint8_t* data) override;
+  int Read(base::span<uint8_t> data) override;
   bool GetPosition(int64_t* position_out) override;
   bool SetPosition(int64_t position) override;
   bool GetSize(int64_t* size_out) override;

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -5,7 +6,6 @@
 # Helper script to run dump_syms on Chrome Linux executables and strip
 # them if needed.
 
-from __future__ import print_function
 
 import os
 import subprocess

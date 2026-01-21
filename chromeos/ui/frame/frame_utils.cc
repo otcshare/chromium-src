@@ -4,31 +4,53 @@
 
 #include "chromeos/ui/frame/frame_utils.h"
 
+#include <algorithm>
+
+#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/ui/base/chromeos_ui_constants.h"
 #include "chromeos/ui/base/display_util.h"
-#include "chromeos/ui/base/tablet_state.h"
 #include "chromeos/ui/base/window_properties.h"
+#include "chromeos/ui/base/window_state_type.h"
+#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/base/hit_test.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/window/frame_view.h"
 #include "ui/views/window/hit_test_utils.h"
-#include "ui/views/window/non_client_view.h"
 
 namespace chromeos {
 
 using WindowOpacity = views::Widget::InitParams::WindowOpacity;
 
-int FrameBorderNonClientHitTest(views::NonClientFrameView* view,
+namespace {
+
+gfx::Insets GetResizeBorderInsets(aura::Window* frame_window,
+                                  bool is_touch_down) {
+  if (auto* insets = frame_window->GetProperty(chromeos::kResizeBorderInsets);
+      insets) {
+    return is_touch_down ? insets->for_touch : insets->for_mouse;
+  }
+
+  return gfx::Insets();
+}
+
+}  // namespace
+
+int FrameBorderNonClientHitTest(views::FrameView* view,
                                 const gfx::Point& point_in_widget) {
   gfx::Rect expanded_bounds = view->bounds();
   int outside_bounds = chromeos::kResizeOutsideBoundsSize;
 
-  if (aura::Env::GetInstance()->is_touch_down())
+  const bool is_touch_down = aura::Env::GetInstance()->is_touch_down();
+  if (is_touch_down) {
     outside_bounds *= chromeos::kResizeOutsideBoundsScaleForTouch;
+  }
   expanded_bounds.Inset(-outside_bounds);
 
   if (!expanded_bounds.Contains(point_in_widget))
@@ -37,18 +59,15 @@ int FrameBorderNonClientHitTest(views::NonClientFrameView* view,
   // Check the frame first, as we allow a small area overlapping the contents
   // to be used for resize handles.
   views::Widget* widget = view->GetWidget();
-  bool in_tablet_mode = chromeos::TabletState::Get()->InTabletMode();
-  // Ignore the resize border when maximized or full screen or in (split view)
-  // tablet mode.
-  const bool has_resize_border =
-      !widget->IsMaximized() && !widget->IsFullscreen() && !in_tablet_mode;
-  const int resize_border_size =
-      has_resize_border ? chromeos::kResizeInsideBoundsSize : 0;
+  aura::Window* frame_window = widget->GetNativeWindow();
+  const bool has_resize_border = ShouldShowResizeBorder(frame_window);
+  const gfx::Insets resize_border_insets =
+      has_resize_border ? GetResizeBorderInsets(frame_window, is_touch_down)
+                        : gfx::Insets();
 
   int frame_component = view->GetHTComponentForFrame(
-      point_in_widget, gfx::Insets(resize_border_size),
-      chromeos::kResizeAreaCornerSize, chromeos::kResizeAreaCornerSize,
-      has_resize_border);
+      point_in_widget, resize_border_insets, chromeos::kResizeAreaCornerSize,
+      chromeos::kResizeAreaCornerSize, has_resize_border);
   if (frame_component != HTNOWHERE)
     return frame_component;
 
@@ -97,9 +116,34 @@ bool ShouldUseRestoreFrame(const views::Widget* widget) {
   return true;
 }
 
+bool ShouldShowResizeBorder(const aura::Window* window) {
+  static std::array<chromeos::WindowStateType, 3> blocklist_clamshell_states{
+      chromeos::WindowStateType::kFullscreen,
+      chromeos::WindowStateType::kMaximized,
+      chromeos::WindowStateType::kMinimized};
+  static std::array<chromeos::WindowStateType, 2>
+      additional_blocklist_tablet_states{
+          chromeos::WindowStateType::kPrimarySnapped,
+          chromeos::WindowStateType::kSecondarySnapped};
+
+  const bool in_tablet_mode = display::Screen::Get()->InTabletMode();
+  const auto window_state_type =
+      window->GetProperty(chromeos::kWindowStateTypeKey);
+  if (in_tablet_mode) {
+    return !std::ranges::contains(blocklist_clamshell_states,
+                                  window_state_type) &&
+           !std::ranges::contains(additional_blocklist_tablet_states,
+                                  window_state_type);
+
+  } else {
+    return !std::ranges::contains(blocklist_clamshell_states,
+                                  window_state_type);
+  }
+}
+
 SnapDirection GetSnapDirectionForWindow(aura::Window* window, bool left_top) {
   const bool is_primary_display_layout = chromeos::IsDisplayLayoutPrimary(
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window));
+      display::Screen::Get()->GetDisplayNearestWindow(window));
   if (left_top) {
     return is_primary_display_layout ? SnapDirection::kPrimary
                                      : SnapDirection::kSecondary;
@@ -107,6 +151,22 @@ SnapDirection GetSnapDirectionForWindow(aura::Window* window, bool left_top) {
     return is_primary_display_layout ? SnapDirection::kSecondary
                                      : SnapDirection::kPrimary;
   }
+}
+
+gfx::RoundedCornersF GetWindowRoundedCorners() {
+  const int corner_radius = features::IsRoundedWindowsEnabled()
+                                ? kRoundedWindowCornerRadius
+                                : kRoundedWindowSmallCornerRadius;
+
+  const bool rounded_bottom_corners = features::IsRoundedWindowsEnabled();
+  return gfx::RoundedCornersF(corner_radius, corner_radius,
+                              rounded_bottom_corners ? corner_radius : 0,
+                              rounded_bottom_corners ? corner_radius : 0);
+}
+
+bool CanPropertyEffectWindowRoundedCorners(const void* class_property_key) {
+  return class_property_key == kWindowHasRoundedCornersKey ||
+         class_property_key == aura::client::kWindowRoundedCornersKey;
 }
 
 }  // namespace chromeos

@@ -31,6 +31,8 @@ See [Web Apps - Concepts][4].
 
 Use [chrome://web-app-internals][5] to inspect internal web app state. For Chromium versions prior to M93 use [chrome://internals/web-app][6].
 
+To test the behavior of the web app itself, Chrome DevTools Protocol can be used. See [Instruction of using PWA via CDP][59].
+
 ### Documentation Guidelines
 
 - Markdown documentation (files like this):
@@ -87,12 +89,15 @@ This public interface should (and will) be improved, however this is the basic s
 - `WebAppCommandScheduler`. Internally this schedules `WebAppCommand`s to do safe operations on the system.
   - This already includes a variety of operations like installation, launching, etc.
 - Observers like the `AppRegistrarObserver` or `WebAppInstallManagerObserver`. However, users of these MUST NOT modify the web app system in the observation call - this can cause race conditions and weird re-entry bugs.
+- To query for apps with specific capabilities (like being installable, opening
+  in a window, etc.), use a [`WebAppFilter`][web-app-filter]. This is the
+  preferred way to find apps that match a given criteria.
 - Items exposed from the locks given to commands or callbacks:
   - `WebAppRegistrar`
   - Writing to the database using `ScopedRegistryUpdate` and the `WebAppSyncBridge`.
   - Pref reading & writing
+  - `WebAppIconManager` supports icon fetch for a given web app.
   - etc - see the documentation on the lock for more guidance.
-- `WebAppIconManager` supports icon fetch for a given web app. This isn't yet normally protected in a command / lock, and due to performance needs with things like right-click menus this integration might happen last.
 
 Some parts of the system that are used within commands:
 
@@ -103,21 +108,27 @@ Some parts of the system that are used within commands:
 
 The goal is to have all of these behind an abstraction that has a fake to allow easy unit testing of our system. Some of these dependencies are behind a nice fake-able interface, and some are not (yet).
 
-- **Extensions** - Some of our code still talks to the extensions system, specifically the `PreinstalledWebAppManager`.
-- **`content::WebContents`**
-  - **`WebAppUrlLoader`** - load a given url in a `WebContents`. Faked by `FakeWebAppUrlLoader`.
-  - **`WebAppDataRetriever`** - retrieve installability information, the manifest, or icons from a **`WebContents`**. Faked by `FakeWebAppDataRetriever`.
-  - Misc:
-    - Navigation completion in WebAppTabHelper, used to kick off update commands.
-    - Listening to destruction.
-    - IsPrimaryMainFrame() and other filtering.
-    - etc
-- **OS Integration**: Each OS integration has fairly custom code on each OS to do the operation. This is difficult to coordinate and test. Currently the `OsIntegrationManger` manages this, which has a fake version.
-- **Sync system**
-  - There is a tight coupling between our system and the sync system through the WebAppSyncBridge.
-  - Faking this is easy and is handled by the `FakeWebAppProvider`.
-- **UI**: There are parts of the system that are coupled to UI, like showing dialogs, determining information about app windows, etc. These are put behind the `WebAppUiManager`, and faked by the `FakeWebAppUiManager`.
-- **Policy**: Our code depends on the policy system setting it's policies in appropriate prefs for us to read. Because we just look at prefs, we don't need a "fake" here.
+- **Extensions** - Some of our code still talks to the extensions system,
+  specifically the `PreinstalledWebAppManager`.
+- **`content::WebContents`**: The WebAppProvider system interacts with
+  `content::WebContents` for various tasks like loading URLs (via
+  `WebAppUrlLoader`), retrieving web app manifest data and icons (via
+  `WebAppDataRetriever` and `WebAppIconDownloader` respectively), and observing
+  navigations and destruction. The `WebContentsManager` serves as a centralized
+  point of dependency for these interactions and acts as a factory for these
+  components, allowing for easier management and faking in tests.
+- **OS Integration**: Each OS integration has fairly custom code on each OS to
+  do the operation. This is difficult to coordinate and test. Currently the
+  `OsIntegrationManger` manages this, which has a fake version.
+- **Sync system**: There is a tight coupling between our system and the sync
+  system through the WebAppSyncBridge. Faking this is easy and is handled by
+  the `FakeWebAppProvider`.
+- **UI**: There are parts of the system that are coupled to UI, like showing
+  dialogs, determining information about app windows, etc. These are put behind
+  the `WebAppUiManager`, and faked by the `FakeWebAppUiManager`.
+- **Policy**: Our code depends on the policy system setting its policies in
+  appropriate prefs for us to read. Because we just look at prefs, we don't
+  need a "fake" here.
 
 ### Databases / sources of truth
 
@@ -135,20 +146,39 @@ None of this information should be accessed without an applicable 'lock' on the 
 
 ### Managers
 
-These are used to encapsulate common responsibilities or in-memory state that needs to be stored.
+These are used to encapsulate common responsibilities or in-memory state that
+needs to be stored.
+
+#### `WebContentsManager`
+
+*   **Purpose**: Manages dependencies on `content::WebContents` for the
+    WebAppProvider system. It acts as a factory for `WebAppUrlLoader`,
+    `WebAppDataRetriever`, and `WebAppIconDownloader`.
+*   **Key Responsibilities**:
+    *   Provides concrete implementations of URL loading and data retrieval
+        abstractions.
+    *   Enables the use of fakes for these components in unit tests, reducing
+        the need for a full browser environment.
+*   **Location**:
+    `chrome/browser/web_applications/web_contents/web_contents_manager.h`
 
 ### Commands
 
-Commands are used to encapsulate operations in the system, and use Locks to ensure that your operation has isolation from other operations.
-
+Commands are used to encapsulate operations in the system, and use Locks to
+ensure that your operation has isolation from other operations.
 - If you need to change something in the WebAppProvider system, you should probably use a command.
 - Commands talk to the system using locks they are granted. The locks should offer access to "managers" that the commands can use.
+- Commands expose a `ToDebugValue()` method that is logged on completion and exposed in the chrome://web-app-internals. This can be very helpful for debugging and bug reports.
+
+Note: There are DVLOGs in the `WebAppCommandManager` that can be helpful.
 
 ### Locks / `WebAppLockManager`
 
-Locks allow operations to receive appropriate protections for what they are doing. For example, an `AppLock` will guarantee that no one is modifying (or uninstalling) an app while it is granted.
+Locks allow operations to receive appropriate protections for what they are doing. For example, an `AppLock` will guarantee that no one is modifying, installing, or uninstalling that AppId while it is granted.
 
 Locks contain assessors that allow the user to access parts of the web app system. This is the safest way to read from the system.
+
+Note: There are DVLOGs in the `WebAppLockManager` that can be helpful.
 
 ### OS Integration
 
@@ -162,14 +192,15 @@ Anything that involves talking to the operating system. Usually has to do with a
 - [/docs/webapps/os_integration.md][50]
 - [/docs/webapps/manifest_update_process.md][51]
 - [/docs/webapps/isolated_web_apps.md][52]
+- [/docs/webapps/webui_web_app.md][54]
 
 ## How To Use
 
 See the [public interface][48] section about which areas are generally "publicly available".
 
-The system is generally unit-test-compabible through the `FakeWebAppProvider`, which is created by default in the `TestingProfile`. Sometimes tests require using the [`AwaitStartWebAppProviderAndSubsystems`][41] function in the setup function of the test to actually start the web app system & wait for it to complete startup.
+The system is generally unit-test-compabible through the [`FakeWebAppProvider`][40], which is created by default in the `TestingProfile`. Sometimes tests require using the [`AwaitStartWebAppProviderAndSubsystems`][41] function in the setup function of the test to actually start the web app system & wait for it to complete startup. See [testing.md][58] for more information.
 
-There is a long-term goal of having the system be easily fake-able for customers using it. The best current 'public interface' distinction of the system is the `WebAppCommandScheduler`, but this hopefully will get more clear in the future.
+There is a long-term goal of having the system be easily fake-able for customers using it. The best current 'public interface' distinction of the system is the `WebAppCommandScheduler`.
 
 To access or change information about a web app:
 
@@ -186,77 +217,25 @@ Other guides:
 - [/docs/webapps/why-is-this-test-failing.md][36]
 - [/docs/webapps/how-to-create-webapp-integration-tests.md][37]
 
+## Debugging
+
+### chrome://web-app-internals
+
+This page allows you to see all of the internal information about the WebAppProvider system, including a truncated log of the debug information of the last run commands.
+
+It is often very useful to ask users to attach a copy of this page in bug reports.
+
+The integration tests will print out the [contents of this page][57] if a test fails, which can help debug that failure as well.
+
+### DVLOGs
+
+The codebase has a number of useful DVLOGs:
+- web_app_command_manager.cc: These will log various state changes of commands and the debug values on completion.
+- web_app_lock_manager.cc: This will log lock requests and any 'held or pending' lock holders for the requested lock at the time of the request. This does not necessarily mean those locks are blocking (as they may be shared locks) so you will have to look at the request locations to determine the status.
+
 ## Testing
 
-Please read [Testing In Chromium][42] for general guidance on writing tests in chromium.
-
-The following tests are expected for writing code in this system:
-
-* Unit tests
-* Browser tests
-* Integration tests
-
-### Unit tests
-
-Unit tests have the following benefits:
-
-* They are very efficient.
-* They run on all relevant CQ trybots.
-* They will always be supported by the [code coverage][43] framework.
-
-Unit tests are the fastest tests to execute and are expected to be used to test most cases, especially error cases. They are usually built on the `WebAppTest` base class, and use the `FakeWebAppProvider` to customize (or not) the [dependencies][49] of the `WebAppProvider` system.
-
-Notes
-
-- WebContents and other UI elements do not work in unit tests, and the appropriate fakes must be used (see [External Dependencies][49]).
-- If one of the external dependencies of the system cannot be faked out yet or the feature is tightly coupled to this, then it might make sense to use a browser test instead (or make that dependency fake-able).
-
-### Browser tests
-
-With improved web app test support, most of the components should using unittests to cover the detailed test cases.
-
-Creating an integration test (using the integration framework) should satisfy the need for end-to-end tests for major use-cases of your feature. However, you may need to create one due to:
-
-- The unittest framework doesn’t support certain needs.
-- You need end-to-end test, but using integration test framework has too much overhead in current state.
-
-Browser tests are much more expensive to run, as they basically run a fully functional browser with it's own profile directory. These tests are usually only created to test functionality that requires multiple parts of the system to be running or dependencies like the Sync service to be fully running and functional. It is good practice to have browsertests be as true-to-user-action as possible, to make sure that as much of our stack is exercised.
-
-An example set of browser tests are in [`web_app_browsertest.cc`][38]
-
-### Integration tests
-
-We have a custom integration testing framework that we use due to the complexity of our use-cases. See [integration-testing-framework.md][11] for more information.
-
-**It is a good idea to think about your integration tests early & figure out your CUJs with the team. Having your CUJs and integration tests working early greatly speeds up development & launch time.**
-
-### `Fake*` or `Test*` classes
-
-A class that starts with `Fake` or `Test` is meant to completely replace a component of the system. They should be inheriting from a base class (often pure virtual) and then implement a version of that component that will seem to be working correctly to other system components, but not actually do anything.
-
-An example is [fake_os_integration_manager.h][39], which pretends to successfully do install, update, and uninstall operations, but actually just does nothing.
-
-### `Mock*` classes
-
-A class that start with `Mock` is a [gmock][46] version of the class. This allows the user to have complete control of exactly what that class does, verify it is called exactly as expected, etc. These tend to be much more powerful to use than a `Fake`, as you can easily specify every possible case you might want to check, like which arguments are called and the exact calling order of multiple functions, even across multiple mocks. The downsides are
-* They end up being very verbose to use, often at the expense of test readiability
-* They require creating a mock class & learning how to use gmock.
-
-These are generally not preferred to a "Fake".
-
-### Tool: `FakeWebAppProvider`
-
-The [`FakeWebAppProvider`][40] is basically a fake version of the WebAppProvider system, that uses the  [`WebAppProvider`][12] root class to set up subsystems and can be used to selectively set fake subsystems or shut them
-down on a per-demand basis to test system shutdown use-cases.
-
-### Common issue: External Dependency that isn't faked
-Sometimes classes use a dependency that either doesn't work or isn't fake-able in our system.
-
-1. Can you just not depend on that? The best way is to remove the dependency entirely if possible.
-1. If there is a way to easily fake the dependency that is already supported, then do that next.
-    - e.g. if it's a `KeyedService`, and the authors have a fake version you can use, then use that. See how it is used elsewhere.
-1. Create a new interface for this new external dependency, put it on the `WebAppProvider`, and create a fake for it so that you can test with it faked.
-1. If all else fails, use a browser test.
+Please see [testing.md][58].
 
 ## Relevant Classes
 
@@ -294,8 +273,6 @@ These all specify a set of [install URLs][23] which the `ExternallyManagedAppMan
 
 This is the tail end of the installation process where we write all our web app metadata to [disk][25] and deploy OS integrations (like [desktop shortcuts][26] and [file handlers][27] using the [`OsIntegrationManager`][28].
 
-This also manages the uninstallation process.
-
 #### [`WebAppUiManager`][29]
 
 Sometimes we need to query window state from chrome/browser/ui land even though our BUILD.gn targets disallow this as it would be a circular dependency. This [abstract class][30] + [impl][31] injects the dependency at link time (see [`WebAppUiManager::Create()`'s`][32] `declaration and definition locations`).
@@ -331,8 +308,8 @@ This information is used when launching a web app (to determine what profile or 
 [23]: /chrome/browser/web_applications/external_install_options.h
 [24]: /chrome/browser/web_applications/web_app_install_finalizer.h
 [25]: /chrome/browser/web_applications/web_app_database.h
-[26]: /chrome/browser/web_applications/web_app_shortcut.h
-[27]: /chrome/browser/web_applications/web_app_file_handler_manager.h
+[26]: /chrome/browser/web_applications/os_integration/web_app_shortcut.h
+[27]: /chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h
 [28]: /chrome/browser/web_applications/os_integration/os_integration_manager.h
 [29]: /chrome/browser/ui/web_applications/web_app_ui_manager_impl.h
 [30]: /chrome/browser/web_applications/web_app_ui_manager.h
@@ -344,17 +321,18 @@ This information is used when launching a web app (to determine what profile or 
 [36]: why-is-this-test-failing.md
 [37]: how-to-create-webapp-integration-tests.md
 [38]: /chrome/browser/ui/web_applications/web_app_browsertest.cc
-[39]: /chrome/browser/web_applications/test/fake_os_integration_manager.h
 [40]: /chrome/browser/web_applications/test/fake_web_app_provider.h
 [41]: https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/web_applications/test/web_app_install_test_utils.cc;l=40?q=AwaitStartWebAppProviderAndSubsystems&ss=chromium
-[42]: ../testing/testing_in_chromium.md
-[43]: ../testing/code_coverage.md
 [44]: https://www.youtube.com/watch?v=EZ05e7EMOLM
 [45]: /styleguide/styleguide.md
-[46]: https://github.com/google/googletest/tree/HEAD/googlemock
 [47]: /styleguide/c++/c++-dos-and-donts.md
 [48]: #public-interface
 [49]: #external-dependencies
-[50]: os-integration.md
+[50]: os_integration.md
 [51]: manifest_update_process.md
 [52]: isolated_web_apps.md
+[54]: webui_web_app.md
+[57]: https://source.chromium.org/search?q=WebAppInternalsHandler::BuildDebugInfo
+[58]: testing.md
+[59]: cdp-integration.md
+[web-app-filter]: /chrome/browser/web_applications/web_app_filter.h

@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -21,7 +21,6 @@
 #include "chromecast/media/cma/pipeline/decrypt_util.h"
 #include "chromecast/public/media/cast_decrypt_config.h"
 #include "media/base/audio_decoder_config.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/timestamp_constants.h"
 
@@ -219,8 +218,7 @@ void AvPipelineImpl::ProcessPendingBuffer() {
             key_id, GetEncryptionScheme(pending_buffer_->stream_id()));
     if (!decrypt_context) {
       LOG(INFO) << "frame(pts=" << pending_buffer_->timestamp()
-                << "): waiting for key id "
-                << base::HexEncode(&key_id[0], key_id.size());
+                << "): waiting for key id " << base::HexEncode(key_id);
       if (!client_.waiting_cb.is_null())
         client_.waiting_cb.Run(::media::WaitingReason::kNoDecryptionKey);
       return;

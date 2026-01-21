@@ -3,67 +3,57 @@
 // found in the LICENSE file.
 package org.chromium.chrome.browser.password_manager;
 
-import android.app.Activity;
-import android.content.Intent;
-import android.net.Uri;
+import org.jni_zero.CalledByNative;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
-import org.chromium.chrome.browser.AppHooks;
-import org.chromium.chrome.browser.password_check.PasswordCheckFactory;
-import org.chromium.chrome.browser.settings.SettingsLauncherImpl;
-import org.chromium.chrome.browser.sync.SyncService;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
+import org.chromium.chrome.browser.settings.SettingsCustomTabLauncherImpl;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.components.browser_ui.settings.SettingsNavigation.SettingsFragment;
 import org.chromium.ui.base.WindowAndroid;
-import org.chromium.ui.modaldialog.ModalDialogManager;
 
-/**
- * A utitily class for launching the password leak check.
- */
+/** A utility class for launching the password leak check. */
+@NullMarked
 public class PasswordCheckupLauncher {
     @CalledByNative
-    private static void launchCheckupInAccountWithWindowAndroid(
-            String checkupUrl, WindowAndroid windowAndroid) {
+    static void launchCheckupOnDevice(
+            Profile profile,
+            WindowAndroid windowAndroid,
+            @PasswordCheckReferrer int passwordCheckReferrer,
+            @Nullable String accountEmail) {
+        assert accountEmail == null || !accountEmail.isEmpty();
         if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
-        launchCheckupInAccountWithActivity(checkupUrl, windowAndroid.getActivity().get());
+        assert profile != null;
+
+        PasswordManagerHelper passwordManagerHelper = PasswordManagerHelper.getForProfile(profile);
+        // This is invoked from the leak dialog if the compromised password is saved for other
+        // sites. After the login DB deprecation, this code path is guaranteed to only be
+        // executed for users with access to UPM, since they are the only ones with saved
+        // passwords.
+        passwordManagerHelper.showPasswordCheckup(
+                windowAndroid.getContext().get(),
+                passwordCheckReferrer,
+                () -> windowAndroid.getModalDialogManager(),
+                accountEmail,
+                new SettingsCustomTabLauncherImpl());
     }
 
     @CalledByNative
-    private static void launchLocalCheckup(
-            WindowAndroid windowAndroid, @PasswordCheckReferrer int passwordCheckReferrer) {
+    static void launchSafetyCheck(WindowAndroid windowAndroid) {
         if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
-
-        if (PasswordManagerHelper.canUseUpm()) {
-            PasswordManagerHelper.showPasswordCheckup(windowAndroid.getContext().get(),
-                    passwordCheckReferrer, SyncService.get(),
-                    getModalDialogManagerSupplier(windowAndroid));
-            return;
-        }
-
-        PasswordCheckFactory.getOrCreate(new SettingsLauncherImpl())
-                .showUi(windowAndroid.getContext().get(), passwordCheckReferrer);
+        SettingsNavigationFactory.createSettingsNavigation()
+                .startSettings(
+                        windowAndroid.getContext().get(),
+                        SafetyCheckSettingsFragment.class,
+                        SafetyCheckSettingsFragment.createBundle(true));
     }
 
     @CalledByNative
-    private static void launchCheckupInAccountWithActivity(String checkupUrl, Activity activity) {
-        if (tryLaunchingNativePasswordCheckup(activity)) return;
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(checkupUrl));
-        intent.setPackage(activity.getPackageName());
-        activity.startActivity(intent);
-    }
-
-    private static boolean tryLaunchingNativePasswordCheckup(Activity activity) {
-        GooglePasswordManagerUIProvider googlePasswordManagerUIProvider =
-                AppHooks.get().createGooglePasswordManagerUIProvider();
-        if (googlePasswordManagerUIProvider == null) return false;
-        return googlePasswordManagerUIProvider.launchPasswordCheckup(activity);
-    }
-
-    private static ObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier(
-            WindowAndroid windowAndroid) {
-        ObservableSupplierImpl<ModalDialogManager> modalDialogManagerSupplier =
-                new ObservableSupplierImpl<>();
-        modalDialogManagerSupplier.set(windowAndroid.getModalDialogManager());
-        return modalDialogManagerSupplier;
+    static void launchSafetyHub(WindowAndroid windowAndroid) {
+        if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
+        SettingsNavigationFactory.createSettingsNavigation()
+                .startSettings(windowAndroid.getContext().get(), SettingsFragment.SAFETY_CHECK);
     }
 }

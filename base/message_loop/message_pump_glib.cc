@@ -10,11 +10,17 @@
 
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/message_loop/io_watcher.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/synchronization/lock.h"
+#include "base/task/current_thread.h"
 #include "base/threading/platform_thread.h"
+
+#if !BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_FUCHSIA)
+#include "base/notimplemented.h"
+#endif  // !BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_FUCHSIA)
 
 namespace base {
 
@@ -39,10 +45,11 @@ static_assert(G_PRIORITY_DEFAULT < kPriorityFdWatch &&
 // to block forever, 0 to return right away, or a timeout in milliseconds from
 // now.
 int GetTimeIntervalMilliseconds(TimeTicks next_task_time) {
-  if (next_task_time.is_null())
+  if (next_task_time.is_null()) {
     return 0;
-  else if (next_task_time.is_max())
+  } else if (next_task_time.is_max()) {
     return -1;
+  }
 
   auto timeout_ms =
       (next_task_time - TimeTicks::Now()).InMillisecondsRoundedUp();
@@ -52,7 +59,7 @@ int GetTimeIntervalMilliseconds(TimeTicks next_task_time) {
 
 bool RunningOnMainThread() {
   auto pid = getpid();
-  auto tid = PlatformThread::CurrentId();
+  auto tid = PlatformThread::CurrentId().raw();
   return pid > 0 && tid > 0 && pid == tid;
 }
 
@@ -103,6 +110,227 @@ bool RunningOnMainThread() {
 // we run DoWork. That part will also run in the other event pumps.
 // - We also run DoWork, and possibly DoIdleWork, in the main loop,
 // around event handling.
+//
+// ---------------------------------------------------------------------------
+//
+// An overview on the way that we track work items:
+//
+//     ScopedDoWorkItems are used by this pump to track native work. They are
+// stored by value in |state_| and are set/cleared as the pump runs. Their
+// setting and clearing is done in the functions
+// {Set,Clear,EnsureSet,EnsureCleared}ScopedWorkItem. Control flow in GLib is
+// quite non-obvious because chrome is not notified when a nested loop is
+// entered/exited. To detect nested loops, MessagePumpGlib uses
+// |state_->do_work_depth| which is incremented when DoWork is entered, and a
+// GLib library function, g_main_depth(), which indicates the current number of
+// Dispatch() calls on the stack. To react to them, two separate
+// ScopedDoWorkItems are used (a standard one used for all native work, and a
+// second one used exclusively for forcing nesting when there is a native loop
+// spinning).  Note that `ThreadController` flags all nesting as
+// `Phase::kNested` so separating native and application work while nested isn't
+// supported nor a goal.
+//
+//     It should also be noted that a second GSource has been added to GLib,
+// referred to as the "observer" source. It is used because in the case where
+// native work occurs on wakeup that is higher priority than Chrome (all of
+// GTK), chrome won't even get notified that the pump is awake.
+//
+//     There are several cases to consider wrt. nesting level and order. In
+// order, we have:
+// A. [root] -> MessagePump::Run() -> native event -> g_main_context_iteration
+// B. [root] -> MessagePump::Run() -> DoWork -> g_main_context_iteration
+// C. [root] -> native -> DoWork -> MessagePump -> [...]
+// The second two cases are identical for our purposes, and the last one turns
+// out to be handled without any extra headache.
+//
+//     Consider nesting case A, where native work is called from
+// |g_main_context_iteration()| from the pump, and that native work spins up a
+// loop. For our purposes, this is a nested loop, because control is not
+// returned to the pump once one iteration of the pump is complete. In this
+// case, the pump needs to enter nesting without DoWork being involved at
+// all. This is accomplished using |MessagePumpGlib::NestIfRequired()|, which is
+// called during the Prepare() phase of GLib. As the pump records state on entry
+// and exit from GLib using |OnEntryToGlib| and |OnExitFromGlib|, we can compare
+// |g_main_depth| at |HandlePrepare| with the one before we entered
+// |g_main_context_iteration|. If it is higher, there is a native loop being
+// spun, and |RegisterNesting| is called, forcing nesting by initializing two
+// work items at once. These are destroyed after the exit from
+// |g_main_context_iteration| using |OnExitFromGlib|.
+//
+//     Then, considering nesting case B, |state_->do_work_depth| is incremented
+// during any Chrome work, to allow the pump to detect re-entrancy during a
+// chrome work item. This is required because `g_main_depth` is not incremented
+// in any `DoWork` call not occuring during `Dispatch()` (i.e. during
+// `MessagePumpGlib::Run()`). In this case, a nested loop is recorded, and the
+// pump sets-and-clears scoped work items during Prepare, Check, and Dispatch. A
+// work item can never be active when control flow returns to GLib (i.e. on
+// return) during a nested loop, because the nested loop could exit at any
+// point. This is fine because TimeKeeper is only concerned with the fact that a
+// nested loop is in progress, as opposed to the various phases of the nested
+// loop.
+//
+//     Finally, consider nesting case C, where a native loop is spinning
+// entirely outside of Chrome, such as inside a signal handler, the pump might
+// create and destroy DoWorkItems during Prepare() and Check(), but these work
+// items will always get cleared during Dispatch(), before the pump enters a
+// DoWork(), leading to the pump showing non-nested native work without the
+// thread controller being active, the correct situation (which won't occur
+// outside of startup or shutdown).  Once Dispatch() is called, the pump's
+// nesting tracking works correctly, as state_->do_work_depth is increased, and
+// upon re-entrancy we detect the nested loop, which is correct, as this is the
+// only point at which the loop actually becomes "nested".
+//
+// -----------------------------------------------------------------------------
+//
+// As an overview of the steps taken by MessagePumpGLib to ensure that nested
+// loops are detected adequately during each phase of the GLib loop:
+//
+// 0: Before entering GLib:
+// 0.1: Record state about current state of GLib (g_main_depth()) for
+// case 1.1.2.
+//
+// 1: Prepare.
+// 1.1: Detection of nested loops
+
+// 1.1.1: If |state_->do_work_depth| > 0, we are in nesting case B detailed
+//        above. A work item must be newly created during this function to
+//        trigger nesting, and is destroyed to ensure proper destruction order
+//        in the case where GLib quits after Prepare().
+//
+// 1.1.2: Otherwise, check if we are in nesting case A above. If yes, trigger
+//        nesting using ScopedDoWorkItems. The nesting will be cleared at exit
+//        from GLib.
+//
+//        This check occurs only in |HandleObserverPrepare|, not in
+//        |HandlePrepare|.
+//
+//        A third party is running a glib message loop. Since Chrome work is
+//        registered with GLib at |G_PRIORITY_DEFAULT_IDLE|, a relatively low
+//        priority, sources of default-or-higher priority will be Dispatch()ed
+//        first. Since only one source is Dispatched per loop iteration,
+//        |HandlePrepare| can get called several times in a row in the case that
+//        there are any other events in the queue. A ScopedDoWorkItem is created
+//        and destroyed to record this. That work item triggers nesting.
+//
+// 1.2: Other considerations
+// 1.2.1: Sleep occurs between Prepare() and Check(). If Chrome will pass a
+//        nonzero poll time to GLib, the inner ScopedDoWorkItem is cleared and
+//        BeforeWait() is called. In nesting case A, the nesting work item will
+//        not be cleared. A nested loop will typically not block.
+//
+//        Since Prepare() is called before Check() in all cases, the bulk of
+//        nesting detection is done in Prepare().
+//
+// 2: Check.
+// 2.1: Detection of nested loops:
+// 2.1.1: In nesting case B, |ClearScopedWorkItem()| on exit.  A third party is
+//        running a glib message loop. It is possible that at any point the
+//        nested message loop will quit. In this case, we don't want to leave a
+//        nested DoWorkItem on the stack.
+//
+// 2.2: Other considerations
+// 2.2.1: A ScopedDoWorkItem may be created (if it was not already present) at
+//        the entry to Check() to record a wakeup in the case that the pump
+//        slept. It is important to note that this occurs both in
+//        |HandleObserverCheck| and |HandleCheck| to ensure that at every point
+//        as the pump enters the Dispatch phase it is awake. In the case it is
+//        already awake, this is a very cheap operation.
+//
+// 3: Dispatch
+// 3.1 Detection of nested loops
+// 3.1.1: |state_->do_work_depth| is incremented on entry and decremented on
+//        exit. This is used to detect nesting case B.
+//
+// 3.1.2: Nested loops can be quit at any point, and so ScopedDoWorkItems can't
+//        be left on the stack for the same reasons as in 1.1.1/2.1.1.
+//
+// 3.2 Other considerations
+// 3.2.1: Since DoWork creates its own work items, ScopedDoWorkItems are not
+//        used as this would trigger nesting in all cases.
+//
+// 4: Post GLib
+// 4.1: Detection of nested loops
+// 4.1.1: |state_->do_work_depth| is also increased during the DoWork in Run()
+//        as nesting in that case [calling glib from third party code] needs to
+//        clear all work items after return to avoid improper destruction order.
+//
+// 4.2: Other considerations:
+// 4.2.1: DoWork uses its own work item, so no ScopedDoWorkItems are active in
+//        this case.
+
+class FdWatchImpl : public IOWatcher::FdWatch,
+                    public MessagePumpForIO::FdWatcher {
+ public:
+  FdWatchImpl(IOWatcher::FdWatcher* fd_watcher, const Location& location)
+      : fd_watcher_(fd_watcher), controller_(location) {}
+
+  ~FdWatchImpl() override { controller_.StopWatchingFileDescriptor(); }
+
+  MessagePumpGlib::FdWatchController& controller() { return controller_; }
+
+ private:
+  // MessagePumpForIO::FdWatcher:
+  void OnFileCanReadWithoutBlocking(int fd) override {
+    fd_watcher_->OnFdReadable(fd);
+  }
+
+  void OnFileCanWriteWithoutBlocking(int fd) override {
+    fd_watcher_->OnFdWritable(fd);
+  }
+
+  const raw_ptr<IOWatcher::FdWatcher> fd_watcher_;
+  MessagePumpGlib::FdWatchController controller_;
+};
+
+// Implements IOWatcher to allow any UI thread using a glib message pump to
+// watch arbitrary file descriptors for I/O events.
+class IOWatcherImpl : public IOWatcher {
+ public:
+  explicit IOWatcherImpl() : thread_(CurrentUIThread::Get()) {}
+
+  // IOWatcher:
+  std::unique_ptr<IOWatcher::FdWatch> WatchFileDescriptorImpl(
+      int fd,
+      FdWatchDuration duration,
+      FdWatchMode mode,
+      IOWatcher::FdWatcher& watcher,
+      const Location& location) override {
+    // CurrentThreadForUI::WatchFileDescriptor is an Ozone-only feature.
+    // On ChromeOS, the libchrome package is built with use_glib=true, which
+    // includes this file. However, its configuration does not have
+    // BUILDFLAG(IS_OZONE) enabled, so WatchFileDescriptor is not declared. This
+    // guard prevents a compile error. Please note that while libchrome is
+    // ChromeOS specific and is used extensively by various components within
+    // ChromeOS, libchrome is not part of Ash-chrome.
+#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA)
+    MessagePumpForIO::Mode io_mode;
+    switch (mode) {
+      case FdWatchMode::kRead:
+        io_mode = MessagePumpForIO::WATCH_READ;
+        break;
+      case FdWatchMode::kWrite:
+        io_mode = MessagePumpForIO::WATCH_WRITE;
+        break;
+      case FdWatchMode::kReadWrite:
+        io_mode = MessagePumpForIO::WATCH_READ_WRITE;
+        break;
+    }
+    const bool is_persistent = duration == FdWatchDuration::kPersistent;
+    auto watch = std::make_unique<FdWatchImpl>(&watcher, location);
+    if (!thread_->WatchFileDescriptor(fd, is_persistent, io_mode,
+                                      &watch->controller(), watch.get())) {
+      return nullptr;
+    }
+    return watch;
+#else
+    NOTIMPLEMENTED();
+    return nullptr;
+#endif  // BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA)
+  }
+
+ private:
+  CurrentUIThread thread_;
+};
 
 struct WorkSource : public GSource {
   raw_ptr<MessagePumpGlib> pump;
@@ -129,9 +357,42 @@ gboolean WorkSourceDispatch(GSource* source,
   return TRUE;
 }
 
+void WorkSourceFinalize(GSource* source) {
+  // Since the WorkSource object memory is managed by glib, WorkSource implicit
+  // destructor is never called, and thus WorkSource's raw_ptr never release
+  // its internal reference on the pump pointer. This leads to adding pressure
+  // to the BRP quarantine.
+  static_cast<WorkSource*>(source)->pump = nullptr;
+}
+
 // I wish these could be const, but g_source_new wants non-const.
-GSourceFuncs WorkSourceFuncs = {WorkSourcePrepare, WorkSourceCheck,
-                                WorkSourceDispatch, nullptr};
+GSourceFuncs g_work_source_funcs = {WorkSourcePrepare, WorkSourceCheck,
+                                    WorkSourceDispatch, WorkSourceFinalize};
+
+struct ObserverSource : public GSource {
+  raw_ptr<MessagePumpGlib> pump;
+};
+
+gboolean ObserverPrepare(GSource* gsource, gint* timeout_ms) {
+  auto* source = static_cast<ObserverSource*>(gsource);
+  source->pump->HandleObserverPrepare();
+  *timeout_ms = -1;
+  // We always want to poll.
+  return FALSE;
+}
+
+gboolean ObserverCheck(GSource* gsource) {
+  auto* source = static_cast<ObserverSource*>(gsource);
+  return source->pump->HandleObserverCheck();
+}
+
+void ObserverFinalize(GSource* source) {
+  // Read the comment in `WorkSourceFinalize`, the issue is exactly the same.
+  static_cast<ObserverSource*>(source)->pump = nullptr;
+}
+
+GSourceFuncs g_observer_funcs = {ObserverPrepare, ObserverCheck, nullptr,
+                                 ObserverFinalize};
 
 struct FdWatchSource : public GSource {
   raw_ptr<MessagePumpGlib> pump;
@@ -152,23 +413,50 @@ gboolean FdWatchSourceDispatch(GSource* gsource,
                                GSourceFunc unused_func,
                                gpointer unused_data) {
   auto* source = static_cast<FdWatchSource*>(gsource);
-  source->pump->HandleFdWatchDispatch(source->controller);
-  return TRUE;
+  return source->pump->HandleFdWatchDispatch(source->controller) ? TRUE : FALSE;
+}
+
+void FdWatchSourceFinalize(GSource* gsource) {
+  // Read the comment in `WorkSourceFinalize`, the issue is exactly the same.
+  auto* source = static_cast<FdWatchSource*>(gsource);
+  source->pump = nullptr;
+  source->controller = nullptr;
 }
 
 GSourceFuncs g_fd_watch_source_funcs = {
-    FdWatchSourcePrepare, FdWatchSourceCheck, FdWatchSourceDispatch, nullptr};
+    FdWatchSourcePrepare, FdWatchSourceCheck, FdWatchSourceDispatch,
+    FdWatchSourceFinalize};
 
 }  // namespace
 
 struct MessagePumpGlib::RunState {
-  raw_ptr<Delegate> delegate;
+  explicit RunState(Delegate* delegate) : delegate(delegate) {
+    CHECK(delegate);
+  }
+
+  const raw_ptr<Delegate> delegate;
 
   // Used to flag that the current Run() invocation should return ASAP.
-  bool should_quit;
+  bool should_quit = false;
 
-  // Used to count how many Run() invocations are on the stack.
-  int run_depth;
+  // Keeps track of the number of calls to DoWork() on the stack for the current
+  // Run() invocation. Used to detect reentrancy from DoWork in order to make
+  // decisions about tracking nested work.
+  int do_work_depth = 0;
+
+  // Value of g_main_depth() captured before the call to
+  // g_main_context_iteration() in Run(). nullopt if Run() is not calling
+  // g_main_context_iteration(). Used to track whether the pump has forced a
+  // nested state due to a native pump.
+  std::optional<int> g_depth_on_iteration;
+
+  // Used to keep track of the native event work items processed by the message
+  // pump.
+  Delegate::ScopedDoWorkItem scoped_do_work_item;
+
+  // Used to force the pump into a nested state when a native runloop was
+  // dispatched from main.
+  Delegate::ScopedDoWorkItem native_loop_do_work_item;
 
   // The information of the next task available at this run-level. Stored in
   // RunState because different set of tasks can be accessible at various
@@ -190,7 +478,7 @@ MessagePumpGlib::MessagePumpGlib()
 
   // Create our wakeup pipe, which is used to flag when work was scheduled.
   int fds[2];
-  [[maybe_unused]] int ret = pipe(fds);
+  [[maybe_unused]] int ret = pipe2(fds, O_CLOEXEC);
   DCHECK_EQ(ret, 0);
 
   wakeup_pipe_read_ = fds[0];
@@ -198,8 +486,13 @@ MessagePumpGlib::MessagePumpGlib()
   wakeup_gpollfd_->fd = wakeup_pipe_read_;
   wakeup_gpollfd_->events = G_IO_IN;
 
+  observer_source_ = std::unique_ptr<GSource, GSourceDeleter>(
+      g_source_new(&g_observer_funcs, sizeof(ObserverSource)));
+  static_cast<ObserverSource*>(observer_source_.get())->pump = this;
+  g_source_attach(observer_source_.get(), context_);
+
   work_source_ = std::unique_ptr<GSource, GSourceDeleter>(
-      g_source_new(&WorkSourceFuncs, sizeof(WorkSource)));
+      g_source_new(&g_work_source_funcs, sizeof(WorkSource)));
   static_cast<WorkSource*>(work_source_.get())->pump = this;
   g_source_add_poll(work_source_.get(), wakeup_gpollfd_.get());
   g_source_set_priority(work_source_.get(), kPriorityWork);
@@ -210,6 +503,7 @@ MessagePumpGlib::MessagePumpGlib()
 
 MessagePumpGlib::~MessagePumpGlib() {
   work_source_.reset();
+  io_watcher_.reset();
   close(wakeup_pipe_read_);
   close(wakeup_pipe_write_);
   context_ = nullptr;
@@ -230,12 +524,13 @@ MessagePumpGlib::FdWatchController::~FdWatchController() {
 }
 
 bool MessagePumpGlib::FdWatchController::StopWatchingFileDescriptor() {
-  if (!IsInitialized())
+  if (!IsInitialized()) {
     return false;
+  }
 
+  static_cast<FdWatchSource*>(source_)->controller = nullptr;
   g_source_destroy(source_);
-  g_source_unref(source_);
-  source_ = nullptr;
+  g_source_unref(source_.ExtractAsDangling());
   watcher_ = nullptr;
   return true;
 }
@@ -245,6 +540,7 @@ bool MessagePumpGlib::FdWatchController::IsInitialized() const {
 }
 
 bool MessagePumpGlib::FdWatchController::InitOrUpdate(int fd,
+                                                      bool persistent,
                                                       int mode,
                                                       FdWatcher* watcher) {
   gushort event_flags = 0;
@@ -259,8 +555,9 @@ bool MessagePumpGlib::FdWatchController::InitOrUpdate(int fd,
     poll_fd_ = std::make_unique<GPollFD>();
     poll_fd_->fd = fd;
   } else {
-    if (poll_fd_->fd != fd)
+    if (poll_fd_->fd != fd) {
       return false;
+    }
     // Combine old/new event masks.
     event_flags |= poll_fd_->events;
     // Destroy previous source
@@ -278,6 +575,7 @@ bool MessagePumpGlib::FdWatchController::InitOrUpdate(int fd,
   g_source_set_priority(source_, kPriorityFdWatch);
 
   watcher_ = watcher;
+  is_persistent_ = persistent;
   return true;
 }
 
@@ -294,15 +592,17 @@ bool MessagePumpGlib::FdWatchController::Attach(MessagePumpGlib* pump) {
 }
 
 void MessagePumpGlib::FdWatchController::NotifyCanRead() {
-  if (!watcher_)
+  if (!watcher_) {
     return;
+  }
   DCHECK(poll_fd_);
   watcher_->OnFileCanReadWithoutBlocking(poll_fd_->fd);
 }
 
 void MessagePumpGlib::FdWatchController::NotifyCanWrite() {
-  if (!watcher_)
+  if (!watcher_) {
     return;
+  }
   DCHECK(poll_fd_);
   watcher_->OnFileCanWriteWithoutBlocking(poll_fd_->fd);
 }
@@ -320,25 +620,82 @@ bool MessagePumpGlib::WatchFileDescriptor(int fd,
   // threadsafe, so the watcher may never be registered.
   DCHECK_CALLED_ON_VALID_THREAD(watch_fd_caller_checker_);
 
-  if (!controller->InitOrUpdate(fd, mode, watcher)) {
+  if (!controller->InitOrUpdate(fd, persistent, mode, watcher)) {
     DPLOG(ERROR) << "FdWatchController init failed (fd=" << fd << ")";
     return false;
   }
   return controller->Attach(this);
 }
 
+void MessagePumpGlib::HandleObserverPrepare() {
+  // |state_| may be null during tests.
+  if (!state_) {
+    return;
+  }
+
+  if (state_->do_work_depth > 0) {
+    // Contingency 1.1.1 detailed above
+    SetScopedWorkItem();
+    ClearScopedWorkItem();
+  } else {
+    // Contingency 1.1.2 detailed above
+    NestIfRequired();
+  }
+
+  return;
+}
+
+bool MessagePumpGlib::HandleObserverCheck() {
+  // |state_| may be null in tests.
+  if (!state_) {
+    return FALSE;
+  }
+
+  // Make sure we record the fact that we're awake. Chrome won't get Check()ed
+  // if a higher priority work item returns TRUE from Check().
+  EnsureSetScopedWorkItem();
+  if (state_->do_work_depth > 0) {
+    // Contingency 2.1.1
+    ClearScopedWorkItem();
+  }
+
+  // The observer never needs to run anything.
+  return FALSE;
+}
+
 // Return the timeout we want passed to poll.
 int MessagePumpGlib::HandlePrepare() {
   // |state_| may be null during tests.
-  if (!state_)
+  if (!state_) {
     return 0;
+  }
 
-  return GetTimeIntervalMilliseconds(state_->next_work_info.delayed_run_time);
+  const int next_wakeup_millis =
+      GetTimeIntervalMilliseconds(state_->next_work_info.delayed_run_time);
+  if (next_wakeup_millis != 0) {
+    // When this is called, it is not possible to know for sure if a
+    // ScopedWorkItem is on the stack, because HandleObserverCheck may have set
+    // it during an iteration of the pump where a high priority native work item
+    // executed.
+    EnsureClearedScopedWorkItem();
+    state_->delegate->BeforeWait();
+  }
+
+  return next_wakeup_millis;
 }
 
 bool MessagePumpGlib::HandleCheck() {
-  if (!state_)  // state_ may be null during tests.
+  if (!state_) {  // state_ may be null during tests.
     return false;
+  }
+
+  // Ensure pump is awake.
+  EnsureSetScopedWorkItem();
+
+  if (state_->do_work_depth > 0) {
+    // Contingency 2.1.1
+    ClearScopedWorkItem();
+  }
 
   // We usually have a single message on the wakeup pipe, since we are only
   // signaled when the queue went from empty to non-empty, but there can be
@@ -371,14 +728,22 @@ bool MessagePumpGlib::HandleCheck() {
 }
 
 void MessagePumpGlib::HandleDispatch() {
+  // Contingency 3.2.1
+  EnsureClearedScopedWorkItem();
+
+  // Contingency 3.1.1
+  ++state_->do_work_depth;
   state_->next_work_info = state_->delegate->DoWork();
+  --state_->do_work_depth;
+
+  if (state_ && state_->do_work_depth > 0) {
+    // Contingency 3.1.2
+    EnsureClearedScopedWorkItem();
+  }
 }
 
 void MessagePumpGlib::Run(Delegate* delegate) {
-  RunState state;
-  state.delegate = delegate;
-  state.should_quit = false;
-  state.run_depth = state_ ? state_->run_depth + 1 : 1;
+  RunState state(delegate);
 
   RunState* previous_state = state_;
   state_ = &state;
@@ -394,24 +759,42 @@ void MessagePumpGlib::Run(Delegate* delegate) {
   // callbacks.  This is so we only quit our own loops, and we don't quit
   // nested loops run by others.  TODO(deanm): Is this what we want?
   for (;;) {
+    // ScopedWorkItem to account for any native work until the runloop starts
+    // running chrome work.
+    SetScopedWorkItem();
+
     // Don't block if we think we have more work to do.
     bool block = !more_work_is_plausible;
 
+    OnEntryToGlib();
     more_work_is_plausible = g_main_context_iteration(context_, block);
-    if (state_->should_quit)
-      break;
+    OnExitFromGlib();
 
+    if (state_->should_quit) {
+      break;
+    }
+
+    // Contingency 4.2.1
+    EnsureClearedScopedWorkItem();
+
+    // Contingency 4.1.1
+    ++state_->do_work_depth;
     state_->next_work_info = state_->delegate->DoWork();
+    --state_->do_work_depth;
+
     more_work_is_plausible |= state_->next_work_info.is_immediate();
-    if (state_->should_quit)
+    if (state_->should_quit) {
       break;
+    }
 
-    if (more_work_is_plausible)
+    if (more_work_is_plausible) {
       continue;
+    }
 
-    more_work_is_plausible = state_->delegate->DoIdleWork();
-    if (state_->should_quit)
+    state_->delegate->DoIdleWork();
+    if (state_->should_quit) {
       break;
+    }
   }
 
   state_ = previous_state;
@@ -442,36 +825,178 @@ void MessagePumpGlib::ScheduleDelayedWork(
   ScheduleWork();
 }
 
+IOWatcher* MessagePumpGlib::GetIOWatcher() {
+  if (!io_watcher_) {
+    io_watcher_ = std::make_unique<IOWatcherImpl>();
+  }
+  return io_watcher_.get();
+}
+
 bool MessagePumpGlib::HandleFdWatchCheck(FdWatchController* controller) {
   DCHECK(controller);
   gushort flags = controller->poll_fd_->revents;
   return (flags & G_IO_IN) || (flags & G_IO_OUT);
 }
 
-void MessagePumpGlib::HandleFdWatchDispatch(FdWatchController* controller) {
+bool MessagePumpGlib::HandleFdWatchDispatch(FdWatchController* controller) {
   DCHECK(controller);
   DCHECK(controller->poll_fd_);
   gushort flags = controller->poll_fd_->revents;
-  if ((flags & G_IO_IN) && (flags & G_IO_OUT)) {
-    // Both callbacks will be called. It is necessary to check that
+
+  // The contract for a one-shot (i.e. is_persistent is false) watch is exactly
+  // one event fires, doesn't matter if it's read or write. This implementation
+  // reports writes before reads.
+  const bool is_persistent = controller->is_persistent_;
+  const bool can_write = flags & G_IO_OUT;
+  const bool can_read = flags & G_IO_IN && (is_persistent || !can_write);
+
+  if (can_read && can_write) {
+    // In case both callbacks can be called, it's necessary to check that
     // |controller| is not destroyed.
     bool controller_was_destroyed = false;
     controller->was_destroyed_ = &controller_was_destroyed;
     controller->NotifyCanWrite();
-    if (!controller_was_destroyed)
+    if (!controller_was_destroyed) {
       controller->NotifyCanRead();
-    if (!controller_was_destroyed)
+    }
+    if (!controller_was_destroyed) {
       controller->was_destroyed_ = nullptr;
-  } else if (flags & G_IO_IN) {
-    controller->NotifyCanRead();
-  } else if (flags & G_IO_OUT) {
+    }
+  } else if (can_write) {
     controller->NotifyCanWrite();
+  } else if (can_read) {
+    controller->NotifyCanRead();
   }
+  return is_persistent;
 }
 
 bool MessagePumpGlib::ShouldQuit() const {
   CHECK(state_);
   return state_->should_quit;
+}
+
+void MessagePumpGlib::SetScopedWorkItem() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  // If there exists a ScopedDoWorkItem in the current RunState, it cannot be
+  // overwritten.
+  CHECK(state_->scoped_do_work_item.IsNull());
+
+  // In the case that we're more than two work items deep, don't bother tracking
+  // individual native events anymore. Note that this won't cause out-of-order
+  // end work items, because the work item is cleared before entering the second
+  // DoWork().
+  if (state_->do_work_depth < 2) {
+    state_->scoped_do_work_item = state_->delegate->BeginWorkItem();
+  }
+}
+
+void MessagePumpGlib::ClearScopedWorkItem() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+
+  CHECK(!state_->scoped_do_work_item.IsNull());
+  // See identical check in SetScopedWorkItem
+  if (state_->do_work_depth < 2) {
+    state_->scoped_do_work_item = Delegate::ScopedDoWorkItem();
+  }
+}
+
+void MessagePumpGlib::EnsureSetScopedWorkItem() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  if (state_->scoped_do_work_item.IsNull()) {
+    SetScopedWorkItem();
+  }
+}
+
+void MessagePumpGlib::EnsureClearedScopedWorkItem() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  if (!state_->scoped_do_work_item.IsNull()) {
+    ClearScopedWorkItem();
+  }
+}
+
+void MessagePumpGlib::RegisterNested() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  CHECK(state_->native_loop_do_work_item.IsNull());
+
+  // Transfer `scoped_do_work_item` to `native_do_work_item`, and so the
+  // ephemeral `scoped_do_work_item` will be coming in and out of existence on
+  // top of `native_do_work_item`, whose state hasn't been deleted.
+
+  if (state_->scoped_do_work_item.IsNull()) {
+    state_->native_loop_do_work_item = state_->delegate->BeginWorkItem();
+  } else {
+    // This clears state_->scoped_do_work_item.
+    state_->native_loop_do_work_item = std::move(state_->scoped_do_work_item);
+  }
+  SetScopedWorkItem();
+  ClearScopedWorkItem();
+}
+
+void MessagePumpGlib::UnregisterNested() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  CHECK(!state_->native_loop_do_work_item.IsNull());
+
+  EnsureClearedScopedWorkItem();
+  // Nesting exits here.
+  state_->native_loop_do_work_item = Delegate::ScopedDoWorkItem();
+}
+
+void MessagePumpGlib::NestIfRequired() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  if (state_->native_loop_do_work_item.IsNull() &&
+      state_->g_depth_on_iteration.has_value() &&
+      g_main_depth() != state_->g_depth_on_iteration.value()) {
+    RegisterNested();
+  }
+}
+
+void MessagePumpGlib::UnnestIfRequired() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  if (!state_->native_loop_do_work_item.IsNull()) {
+    UnregisterNested();
+  }
+}
+
+void MessagePumpGlib::OnEntryToGlib() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  CHECK(!state_->g_depth_on_iteration.has_value());
+  state_->g_depth_on_iteration.emplace(g_main_depth());
+}
+
+void MessagePumpGlib::OnExitFromGlib() {
+  // |state_| can be null during tests
+  if (!state_) {
+    return;
+  }
+  state_->g_depth_on_iteration.reset();
+  UnnestIfRequired();
 }
 
 }  // namespace base

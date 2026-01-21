@@ -24,7 +24,7 @@ namespace extensions {
 const extern net::BackoffEntry::Policy kZeroBackoffPolicy;
 
 class MockExtensionDownloaderDelegate
-    : public testing::NiceMock<ExtensionDownloaderDelegate> {
+    : public ::testing::NiceMock<ExtensionDownloaderDelegate> {
  public:
   MockExtensionDownloaderDelegate();
 
@@ -38,6 +38,10 @@ class MockExtensionDownloaderDelegate
                     const FailureData&));
   MOCK_METHOD2(OnExtensionDownloadStageChanged,
                void(const ExtensionId&, Stage));
+  MOCK_METHOD(void,
+              OnExtensionUpdateFound,
+              (const ExtensionId&, const std::set<int>&, const base::Version&),
+              (override));
   MOCK_METHOD2(OnExtensionDownloadCacheStatusRetrieved,
                void(const ExtensionId&, CacheStatus));
   // Gmock doesn't have good support for move-only types like
@@ -106,12 +110,8 @@ class MockExtensionCache : public ExtensionCache {
 // TestURLLoaderFactory as a URL factory.
 class ExtensionDownloaderTestHelper {
  public:
-  static constexpr DownloadPingData kNeverPingedData =
-      DownloadPingData(ManifestFetchData::kNeverPinged,
-                       ManifestFetchData::kNeverPinged,
-                       true,
-                       0);
   static constexpr char kEmptyUpdateUrlData[] = "";
+  static const DownloadPingData* GetTestPingData();
 
   ExtensionDownloaderTestHelper();
 
@@ -165,7 +165,7 @@ void AddExtensionToFetchDataForTesting(ManifestFetchData* fetch_data,
                                        const ExtensionId& id,
                                        const std::string& version,
                                        const GURL& update_url,
-                                       DownloadPingData ping_data);
+                                       const DownloadPingData& ping_data);
 
 // Simplified version with fewer arguments.
 void AddExtensionToFetchDataForTesting(ManifestFetchData* fetch_data,

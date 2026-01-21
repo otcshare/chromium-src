@@ -5,11 +5,14 @@
 #include "android_webview/browser/aw_browser_terminator.h"
 
 #include <unistd.h>
+
 #include <memory>
 
 #include "android_webview/browser/aw_browser_process.h"
+#include "android_webview/browser/aw_render_process.h"
 #include "android_webview/browser/aw_render_process_gone_delegate.h"
 #include "android_webview/common/aw_descriptors.h"
+#include "android_webview/common/aw_features.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -20,8 +23,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/child_process_launcher_utils.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -36,18 +37,22 @@ namespace android_webview {
 namespace {
 
 constexpr char kRenderProcessGoneHistogramName[] =
-    "Android.WebView.OnRenderProcessGoneResult";
+    "Android.WebView.OnRenderProcessGoneResult2";
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 enum class RenderProcessGoneResult {
   kJavaException = 0,
-  kCrashNotHandled = 1,
-  kKillNotHandled = 2,
+  // kCrashNotHandled = 1,  // Deprecated
+  // kKillNotHandled = 2,   // Deprecated
   // kAllWebViewsHandled = 3, // Deprecated: use kCrashHandled/kKillHandled
   kCrashHandled = 4,
   kKillHandled = 5,
-  kMaxValue = kKillHandled,
+  kCrashNotHandledVisible = 6,
+  kCrashNotHandledBackground = 7,
+  kKillNotHandledVisible = 8,
+  kKillNotHandledBackground = 9,
+  kMaxValue = kKillNotHandledBackground,
 };
 
 void GetJavaWebContentsForRenderProcess(
@@ -91,12 +96,15 @@ void OnRenderProcessGone(
         // Let the exception propagate back to the message loop.
         base::CurrentUIThread::Get()->Abort();
         return;
-      case AwRenderProcessGoneDelegate::RenderProcessGoneResult::kUnhandled:
+      case AwRenderProcessGoneDelegate::RenderProcessGoneResult::kUnhandled: {
+        const bool is_app_visible_to_user =
+            AwBrowserProcess::IsAppVisibleToUser();
         if (crashed) {
           base::UmaHistogramEnumeration(
               kRenderProcessGoneHistogramName,
-              RenderProcessGoneResult::kCrashNotHandled);
-          // Keeps this log unchanged, CTS test uses it to detect crash.
+              is_app_visible_to_user
+                  ? RenderProcessGoneResult::kCrashNotHandledVisible
+                  : RenderProcessGoneResult::kCrashNotHandledBackground);
           std::string message = base::StringPrintf(
               "Render process (%d)'s crash wasn't handled by all associated  "
               "webviews, triggering application crash.",
@@ -105,7 +113,9 @@ void OnRenderProcessGone(
         } else {
           base::UmaHistogramEnumeration(
               kRenderProcessGoneHistogramName,
-              RenderProcessGoneResult::kKillNotHandled);
+              is_app_visible_to_user
+                  ? RenderProcessGoneResult::kKillNotHandledVisible
+                  : RenderProcessGoneResult::kKillNotHandledBackground);
           // The render process was most likely killed for OOM or switching
           // WebView provider, to make WebView backward compatible, kills the
           // browser process instead of triggering crash.
@@ -115,7 +125,7 @@ void OnRenderProcessGone(
           kill(getpid(), SIGKILL);
         }
         NOTREACHED();
-        break;
+      }
       case AwRenderProcessGoneDelegate::RenderProcessGoneResult::kHandled:
         // Don't log UMA yet. This WebView may be handled, but we need to wait
         // until we're out of the loop to know if all WebViews were handled.
@@ -148,6 +158,15 @@ void AwBrowserTerminator::OnChildExit(
       content::RenderProcessHost::FromID(info.process_host_id);
 
   crash_reporter::CrashMetricsReporter::GetInstance()->ChildProcessExited(info);
+
+  // If the process has never been used, this is the spare render process.
+  // Treat this as if it never existed since it's an internal performance
+  // optimization.
+  if (base::FeatureList::IsEnabled(
+          features::kCreateSpareRendererOnBrowserContextCreation) &&
+      rph && AwRenderProcess::IsUnused(rph)) {
+    return;
+  }
 
   if (info.normal_termination) {
     return;

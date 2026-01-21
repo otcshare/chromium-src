@@ -166,7 +166,7 @@ function setAttributes(el, attrs) {
   attrs = attrs || {}
   for (var attr in attrs) {
     if (attr !== 'src')
-      el.setAttribute(attr, attrs[attr]);
+      el.setAttribute(attr.toLowerCase(), attrs[attr]);
   }
   // Workaround for Chromium: set <img>'s src attribute after all other
   // attributes to ensure the policy is applied.
@@ -485,9 +485,13 @@ function dedicatedWorkerUrlThatFetches(url) {
       .catch((e) => postMessage(e.message));`;
 }
 
-function workerUrlThatImports(url) {
+function workerUrlThatImports(url, additionalAttributes) {
+  let csp = "";
+  if (additionalAttributes && additionalAttributes.contentSecurityPolicy) {
+    csp=`&contentSecurityPolicy=${additionalAttributes.contentSecurityPolicy}`;
+  }
   return `/common/security-features/subresource/static-import.py` +
-      `?import_url=${encodeURIComponent(url)}`;
+      `?import_url=${encodeURIComponent(url)}${csp}`;
 }
 
 function workerDataUrlThatImports(url) {
@@ -823,6 +827,54 @@ function requestViaWebSocket(url) {
 }
 
 /**
+ * Creates a svg anchor element and the corresponding svg setup, appends the
+ * setup to {@code document.body} and performs the navigation.
+ * @param {string} url The URL to navigate to.
+ * @return {Promise} The promise for success/error events.
+ */
+function requestViaSVGAnchor(url, additionalAttributes) {
+  const name = guid();
+
+  const iframe =
+    createElement("iframe", { "name": name, "id": name }, document.body, false);
+
+  // Create SVG container
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+
+  // Create SVG anchor element
+  const svgAnchor = document.createElementNS("http://www.w3.org/2000/svg", "a");
+  const link_attributes = Object.assign({ "href": url, "target": name }, additionalAttributes);
+  setAttributes(svgAnchor, link_attributes);
+
+  // Add some text content for the anchor
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("y", "50");
+  text.textContent = "SVG Link to resource";
+
+  svgAnchor.appendChild(text);
+  svg.appendChild(svgAnchor);
+  document.body.appendChild(svg);
+
+  const promise =
+    bindEvents2(window, "message", iframe, "error", window, "error")
+      .then(event => {
+        if (event.source !== iframe.contentWindow)
+          return Promise.reject(new Error('Unexpected event.source'));
+        return event.data;
+      });
+
+  // Simulate a click event on the SVG anchor
+  const event = new MouseEvent('click', {
+    view: window,
+    bubbles: true,
+    cancelable: true
+  });
+  svgAnchor.dispatchEvent(event);
+
+  return promise;
+}
+
+/**
   @typedef SubresourceType
   @type {string}
 
@@ -888,6 +940,10 @@ const subresourceMap = {
     path: "/common/security-features/subresource/script.py",
     invoker: requestViaDynamicImport,
   },
+  "svg-a-tag": {
+    path: "/common/security-features/subresource/document.py",
+    invoker: requestViaSVGAnchor,
+  },
   "video-tag": {
     path: "/common/security-features/subresource/video.py",
     invoker: requestViaVideo,
@@ -907,8 +963,8 @@ const subresourceMap = {
   },
   "worker-import": {
     path: "/common/security-features/subresource/worker.py",
-    invoker: url =>
-        requestViaDedicatedWorker(workerUrlThatImports(url), {type: "module"}),
+    invoker: (url, additionalAttributes) =>
+        requestViaDedicatedWorker(workerUrlThatImports(url, additionalAttributes), {type: "module"}),
   },
   "worker-import-data": {
     path: "/common/security-features/subresource/worker.py",
@@ -925,8 +981,8 @@ const subresourceMap = {
   },
   "sharedworker-import": {
     path: "/common/security-features/subresource/shared-worker.py",
-    invoker: url =>
-        requestViaSharedWorker(workerUrlThatImports(url), {type: "module"}),
+    invoker: (url, additionalAttributes) =>
+        requestViaSharedWorker(workerUrlThatImports(url, additionalAttributes), {type: "module"}),
   },
   "sharedworker-import-data": {
     path: "/common/security-features/subresource/shared-worker.py",
@@ -1109,6 +1165,10 @@ function invokeRequest(subresource, sourceContextList) {
         additionalAttributes[policyDelivery.key] = policyDelivery.value;
       } else if (policyDelivery.deliveryType === "rel-noref") {
         additionalAttributes["rel"] = "noreferrer";
+      } else if (policyDelivery.deliveryType === "http-rp") {
+        additionalAttributes[policyDelivery.key] = policyDelivery.value;
+      } else if (policyDelivery.deliveryType === "meta") {
+        additionalAttributes[policyDelivery.key] = policyDelivery.value;
       }
     }
 

@@ -43,9 +43,29 @@ void TestElementBase::Hide() {
   ElementTracker::GetFrameworkDelegate()->NotifyElementHidden(this);
 }
 
+bool TestElementBase::IsVisible() const {
+  return visible_;
+}
+
 void TestElementBase::SendCustomEvent(CustomElementEventType event_type) {
   DCHECK(visible_);
   ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(this, event_type);
+}
+
+void TestElementBase::SetScreenBounds(const gfx::Rect& screen_bounds) {
+  screen_bounds_ = screen_bounds;
+}
+
+gfx::Rect TestElementBase::GetScreenBounds() const {
+  return screen_bounds_;
+}
+
+void TestElementBase::SetNativeView(gfx::NativeView native_view) {
+  native_view_ = native_view;
+}
+
+gfx::NativeView TestElementBase::GetNativeView() const {
+  return native_view_;
 }
 
 DEFINE_FRAMEWORK_SPECIFIC_METADATA(TestElement)

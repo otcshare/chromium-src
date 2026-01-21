@@ -4,8 +4,9 @@
 
 #include "device/bluetooth/dbus/bluetooth_le_advertising_manager_client.h"
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "dbus/bus.h"
@@ -15,6 +16,17 @@
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace bluez {
+
+BluetoothLEAdvertisingManagerClient::Properties::Properties(
+    dbus::ObjectProxy* object_proxy,
+    const std::string& interface_name,
+    const PropertyChangedCallback& callback)
+    : dbus::PropertySet(object_proxy, interface_name, callback) {
+  RegisterProperty(bluetooth_advertising_manager::kSupportedFeatures,
+                   &supported_features);
+}
+
+BluetoothLEAdvertisingManagerClient::Properties::~Properties() = default;
 
 const char BluetoothLEAdvertisingManagerClient::kNoResponseError[] =
     "org.chromium.Error.NoResponse";
@@ -57,8 +69,14 @@ class BluetoothAdvertisementManagerClientImpl
       dbus::ObjectProxy* object_proxy,
       const dbus::ObjectPath& object_path,
       const std::string& interface_name) override {
-    return new dbus::PropertySet(object_proxy, interface_name,
-                                 dbus::PropertySet::PropertyChangedCallback());
+    return new Properties(object_proxy, interface_name, base::DoNothing());
+  }
+
+  // BluetoothAdvertisementManagerClient override.
+  Properties* GetProperties(const dbus::ObjectPath& object_path) override {
+    return static_cast<Properties*>(object_manager_->GetProperties(
+        object_path,
+        bluetooth_advertising_manager::kBluetoothAdvertisingManagerInterface));
   }
 
   // BluetoothAdvertisementManagerClient override.
@@ -157,13 +175,12 @@ class BluetoothAdvertisementManagerClientImpl
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdvertisementManagerClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdvertisementManagerClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
-                       std::move(error_callback)));
+        base::BindOnce(
+            &BluetoothAdvertisementManagerClientImpl::OnMethodResponse,
+            weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+            std::move(error_callback)));
   }
 
   // Called by dbus::ObjectManager when an object with the advertising manager
@@ -182,26 +199,25 @@ class BluetoothAdvertisementManagerClientImpl
       observer.AdvertisingManagerRemoved(object_path);
   }
 
-  // Called when a response for successful method call is received.
-  void OnSuccess(base::OnceClosure callback, dbus::Response* response) {
-    DCHECK(response);
-    std::move(callback).Run();
-  }
-
-  // Called when a response for a failed method call is received.
-  void OnError(ErrorCallback error_callback, dbus::ErrorResponse* response) {
-    // Error response has optional error message argument.
-    std::string error_name;
-    std::string error_message;
-    if (response) {
-      dbus::MessageReader reader(response);
-      error_name = response->GetErrorName();
-      reader.PopString(&error_message);
-    } else {
-      error_name = kNoResponseError;
-      error_message = "";
+  void OnMethodResponse(base::OnceClosure callback,
+                        ErrorCallback error_callback,
+                        dbus::Response* response,
+                        dbus::ErrorResponse* error_response) {
+    if (!response) {
+      std::string error_name;
+      std::string error_message;
+      if (error_response) {
+        dbus::MessageReader reader(error_response);
+        error_name = error_response->GetErrorName();
+        reader.PopString(&error_message);
+      } else {
+        error_name = kNoResponseError;
+      }
+      std::move(error_callback).Run(error_name, error_message);
+      return;
     }
-    std::move(error_callback).Run(error_name, error_message);
+
+    std::move(callback).Run();
   }
 
   raw_ptr<dbus::ObjectManager> object_manager_;

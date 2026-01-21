@@ -6,20 +6,9 @@ standalone repository for PartitionAlloc is hosted
 
 ## GN Args
 
-External clients mainly need to set these six GN args:
-
-``` none
-# These are blocked on PA-E and `raw_ptr.h` and can never be true until
-# we make them part of the standalone PA distribution.
-use_partition_alloc_as_malloc_default = false
-enable_mte_checked_ptr_support_default = false
-enable_backup_ref_ptr_support_default = false
-put_ref_count_in_previous_slot_default = false
-enable_backup_ref_ptr_slow_checks_default = false
-enable_dangling_raw_ptr_checks_default = false
-```
-
-PartitionAlloc's build will expect them at
+External clients should examine the args described in
+`build_overrides/partition_alloc.gni` and add them in their own source
+tree. PartitionAlloc's build will expect them at
 `//build_overrides/partition_alloc.gni`.
 
 In addition, something must provide `build_with_chromium = false` to
@@ -47,9 +36,9 @@ implementation of `raw_ptr<T>`.
 
 PartitionAlloc provides APIs to
 
-* reclaim memory (see [memory\_reclaimer.h](./memory_reclaimer.h)) and
+* reclaim memory (see `memory_reclaimer.h`) and
 
-* purge thread caches (see [thread\_cache.h](./thread_cache.h)).
+* purge thread caches (see `thread_cache.h`).
 
 Both of these must be called by the embedder external to PartitionAlloc.
 PA provides neither an event loop nor timers of its own, delegating this
@@ -59,16 +48,12 @@ to its clients.
 
 External clients create constraints on PartitionAlloc's implementation.
 
-### C++17
+### C++20
 
-PartitionAlloc targets C++17. This is aligned with our first external
-client, PDFium, and may be further constrained by other clients. These
-impositions prevent us from moving in lockstep with Chrome's target
-C++ version.
-
-We do not even have guarantees of backported future features, e.g.
-C++20's designated initializers. Therefore, these cannot ship with
-PartitionAlloc.
+PartitionAlloc targets C++20. This is the lowest common denominator in between
+chrome, pdfium, dawn, angle, v8, skia.
+These impositions prevent us from moving in lockstep with Chrome's target C++
+version.
 
 ### MSVC Support
 

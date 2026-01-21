@@ -36,6 +36,7 @@
 #include "CheckLayoutObjectMethodsVisitor.h"
 #include "ChromeClassTester.h"
 #include "Options.h"
+#include "StackAllocatedChecker.h"
 #include "SuppressibleDiagnosticBuilder.h"
 
 namespace chrome_checker {
@@ -52,6 +53,8 @@ class FindBadConstructsConsumer
 
   // RecursiveASTVisitor:
   bool TraverseDecl(clang::Decl* decl);
+  bool VisitCXXConstructExpr(clang::CXXConstructExpr* expr);
+  bool VisitCXXRecordDecl(clang::CXXRecordDecl* cxx_record_decl);
   bool VisitEnumDecl(clang::EnumDecl* enum_decl);
   bool VisitTagDecl(clang::TagDecl* tag_decl);
   bool VisitVarDecl(clang::VarDecl* var_decl);
@@ -110,7 +113,11 @@ class FindBadConstructsConsumer
   void CheckWeakPtrFactoryMembers(clang::SourceLocation record_location,
                                   clang::CXXRecordDecl* record);
   void CheckEnumMaxValue(clang::EnumDecl* decl);
-  void CheckVarDecl(clang::VarDecl* decl);
+  void CheckDeducedAutoPointer(clang::VarDecl* decl);
+  void CheckConstructingSpanFromStringLiteral(
+      clang::CXXConstructorDecl* ctor_decl,
+      llvm::ArrayRef<const clang::Expr*> args,
+      clang::SourceLocation loc);
 
   void ParseFunctionTemplates(clang::TranslationUnitDecl* decl);
 
@@ -135,10 +142,13 @@ class FindBadConstructsConsumer
   unsigned diag_note_implicit_dtor_;
   unsigned diag_note_public_dtor_;
   unsigned diag_note_protected_non_virtual_dtor_;
+  unsigned diag_span_from_string_literal_;
+  unsigned diag_note_span_from_string_literal1_;
 
   std::unique_ptr<BlinkDataMemberTypeChecker> blink_data_member_type_checker_;
   std::unique_ptr<CheckIPCVisitor> ipc_visitor_;
   std::unique_ptr<CheckLayoutObjectMethodsVisitor> layout_visitor_;
+  std::unique_ptr<StackAllocatedChecker> stack_allocated_checker_;
 };
 
 }  // namespace chrome_checker

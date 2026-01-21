@@ -12,9 +12,8 @@ blink_platform_sources("android_webview") {
   ]
 
   deps = [
-    "//components/power_scheduler",
-
     # TODO(crbug.com/805739): This should not be depended on from the renderer.
     "//components/viz/service",
+    "//gpu/ipc/client",
   ]
 }

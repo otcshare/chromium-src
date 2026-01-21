@@ -5,11 +5,10 @@
 /** @fileoverview Suite of tests for site-permissions-site-group. */
 import 'chrome://extensions/extensions.js';
 
-import {SitePermissionsSiteGroupElement} from 'chrome://extensions/extensions.js';
+import type {SitePermissionsSiteGroupElement} from 'chrome://extensions/extensions.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {isVisible} from 'chrome://webui-test/test_util.js';
+import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 suite('SitePermissionsSiteGroupElement', function() {
   const PERMITTED_TEXT = loadTimeData.getString('permittedSites');
@@ -38,25 +37,42 @@ suite('SitePermissionsSiteGroupElement', function() {
           numExtensions: 0,
           site: 'google.ca',
         },
+        {
+          siteSet: chrome.developerPrivate.SiteSet.USER_PERMITTED,
+          numExtensions: 0,
+          site: '*.google.ca',
+        },
       ],
     };
-    flush();
+    await microtasksFinished();
 
     assertEquals('google.ca', element.$.etldOrSite.innerText);
     assertEquals(PERMITTED_TEXT, element.$.etldOrSiteSubtext.innerText);
 
     const sitesList =
-        element.shadowRoot!.querySelector<HTMLElement>('#sites-list');
+        element.shadowRoot.querySelector<HTMLElement>('#sites-list');
     assertFalse(isVisible(sitesList));
-    element.shadowRoot!.querySelector<HTMLElement>('cr-expand-button')!.click();
-    flush();
+    const expandButton = element.shadowRoot.querySelector('cr-expand-button');
+    assertTrue(!!expandButton);
+    expandButton.click();
+    await expandButton.updateComplete;
 
     assertTrue(isVisible(sitesList));
     const expandedSites =
-        element.shadowRoot!.querySelectorAll<HTMLElement>('.site');
+        element.shadowRoot.querySelectorAll<HTMLElement>('#sites-list .site');
+    const expandedIncludesSubdomains =
+        element.shadowRoot.querySelectorAll<HTMLElement>(
+            '#sites-list .includes-subdomains');
 
     assertEquals('images.google.ca', expandedSites[0]!.innerText);
+    assertFalse(isVisible(expandedIncludesSubdomains[0]!));
     assertEquals('google.ca', expandedSites[1]!.innerText);
+    assertFalse(isVisible(expandedIncludesSubdomains[1]!));
+
+    // The site shown should not have the subdomain specifier '*.'.
+    assertEquals('google.ca', expandedSites[2]!.innerText);
+    // But there should be text indicating that it includes subdomains.
+    assertTrue(isVisible(expandedIncludesSubdomains[2]!));
   });
 
   test('no subtext shown for sites from different sets', async function() {
@@ -76,18 +92,20 @@ suite('SitePermissionsSiteGroupElement', function() {
         },
       ],
     };
-    flush();
+    await microtasksFinished();
 
     assertEquals('google.ca', element.$.etldOrSite.innerText);
     assertEquals('', element.$.etldOrSiteSubtext.innerText);
 
-    element.shadowRoot!.querySelector<HTMLElement>('cr-expand-button')!.click();
-    flush();
+    const expandButton = element.shadowRoot.querySelector('cr-expand-button');
+    assertTrue(!!expandButton);
+    expandButton.click();
+    await expandButton.updateComplete;
 
     assertTrue(isVisible(
-        element.shadowRoot!.querySelector<HTMLElement>('#sites-list')));
-    const expandedSites =
-        element.shadowRoot!.querySelectorAll<HTMLElement>('.site-subtext');
+        element.shadowRoot.querySelector<HTMLElement>('#sites-list')));
+    const expandedSites = element.shadowRoot.querySelectorAll<HTMLElement>(
+        '#sites-list .site-subtext');
 
     // The subtext for each expanded site should show which set it's from.
     assertEquals(PERMITTED_TEXT, expandedSites[0]!.innerText);
@@ -104,13 +122,32 @@ suite('SitePermissionsSiteGroupElement', function() {
         site: 'a.example.com',
       }],
     };
-    flush();
+    await microtasksFinished();
 
     assertEquals('a.example.com', element.$.etldOrSite.innerText);
+    assertFalse(isVisible(element.$.etldOrSiteIncludesSubdomains));
     assertEquals(PERMITTED_TEXT, element.$.etldOrSiteSubtext.innerText);
 
     assertFalse(isVisible(
-        element.shadowRoot!.querySelector<HTMLElement>('cr-expand-button')));
+        element.shadowRoot.querySelector<HTMLElement>('cr-expand-button')));
+
+    // Now set the element's one site in the group to match subdomains.
+    element.data = {
+      etldPlusOne: 'example.com',
+      numExtensions: 1,
+      sites: [{
+        siteSet: chrome.developerPrivate.SiteSet.EXTENSION_SPECIFIED,
+        numExtensions: 1,
+        site: '*.example.com',
+      }],
+    };
+    await microtasksFinished();
+
+    assertEquals('example.com', element.$.etldOrSite.innerText);
+    assertTrue(isVisible(element.$.etldOrSiteIncludesSubdomains));
+    assertEquals(
+        loadTimeData.getString('sitePermissionsAllSitesOneExtension'),
+        element.$.etldOrSiteSubtext.innerText);
   });
 
   test(
@@ -125,16 +162,16 @@ suite('SitePermissionsSiteGroupElement', function() {
             site: 'a.example.com',
           }],
         };
-        flush();
+        await microtasksFinished();
 
-        const editSiteButton = element.shadowRoot!.querySelector<HTMLElement>(
+        const editSiteButton = element.shadowRoot.querySelector<HTMLElement>(
             '#edit-one-site-button');
         assertTrue(isVisible(editSiteButton));
 
         editSiteButton!.click();
-        flush();
+        await microtasksFinished();
 
-        const dialog = element.shadowRoot!.querySelector(
+        const dialog = element.shadowRoot.querySelector(
             'site-permissions-edit-permissions-dialog');
         assertTrue(!!dialog);
         assertTrue(dialog.$.dialog.open);
@@ -163,20 +200,20 @@ suite('SitePermissionsSiteGroupElement', function() {
             },
           ],
         };
-        flush();
+        await microtasksFinished();
 
-        element.shadowRoot!.querySelector<HTMLElement>(
-                               'cr-expand-button')!.click();
-        flush();
+        element.shadowRoot.querySelector<HTMLElement>(
+                              'cr-expand-button')!.click();
+        await microtasksFinished();
 
         const editSiteButtons =
-            element.shadowRoot!.querySelectorAll<HTMLElement>('cr-icon-button');
+            element.shadowRoot.querySelectorAll<HTMLElement>('cr-icon-button');
         assertEquals(2, editSiteButtons.length);
 
         editSiteButtons[1]!.click();
-        flush();
+        await microtasksFinished();
 
-        const dialog = element.shadowRoot!.querySelector(
+        const dialog = element.shadowRoot.querySelector(
             'site-permissions-edit-permissions-dialog');
         assertTrue(!!dialog);
         assertTrue(dialog.$.dialog.open);

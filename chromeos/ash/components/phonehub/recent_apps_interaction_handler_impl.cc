@@ -5,11 +5,12 @@
 #include "chromeos/ash/components/phonehub/recent_apps_interaction_handler_impl.h"
 
 #include <memory>
+#include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/resources/vector_icons/vector_icons.h"
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -22,8 +23,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 using multidevice_setup::mojom::Feature;
 using multidevice_setup::mojom::FeatureState;
@@ -33,7 +33,7 @@ using HostStatusWithDevice =
 using FeatureStatesMap =
     multidevice_setup::MultiDeviceSetupClient::FeatureStatesMap;
 
-const size_t kMaxMostRecentApps = 6;
+const size_t kMaxMostRecentApps = 5;
 const size_t kMaxSavedRecentApps = 10;
 
 // static
@@ -54,6 +54,10 @@ RecentAppsInteractionHandlerImpl::RecentAppsInteractionHandlerImpl(
 }
 
 RecentAppsInteractionHandlerImpl::~RecentAppsInteractionHandlerImpl() {
+  if (eche_connection_status_handler_) {
+    eche_connection_status_handler_->RemoveObserver(this);
+  }
+
   multidevice_setup_client_->RemoveObserver(this);
   multidevice_feature_access_manager_->RemoveObserver(this);
 }
@@ -102,6 +106,19 @@ void RecentAppsInteractionHandlerImpl::NotifyRecentAppAddedOrUpdated(
   ComputeAndUpdateUiState();
 }
 
+void RecentAppsInteractionHandlerImpl::SetConnectionStatusHandler(
+    eche_app::EcheConnectionStatusHandler* eche_connection_status_handler) {
+  if (eche_connection_status_handler_) {
+    eche_connection_status_handler_->RemoveObserver(this);
+  }
+
+  eche_connection_status_handler_ = eche_connection_status_handler;
+
+  if (eche_connection_status_handler_) {
+    eche_connection_status_handler_->AddObserver(this);
+  }
+}
+
 base::flat_set<int64_t>
 RecentAppsInteractionHandlerImpl::GetUserIdsWithDisplayRecentApps() {
   base::flat_set<int64_t> user_ids;
@@ -148,8 +165,8 @@ void RecentAppsInteractionHandlerImpl::
     for (const auto& value : recent_apps_history_pref) {
       DCHECK(value.is_dict());
       recent_app_metadata_list_.emplace_back(
-          Notification::AppMetadata::FromValue(value),
-          base::Time::FromDoubleT(0));
+          Notification::AppMetadata::FromValue(value.GetDict()),
+          base::Time::FromSecondsSinceUnixEpoch(0));
     }
     has_loaded_prefs_ = true;
   }
@@ -190,6 +207,14 @@ void RecentAppsInteractionHandlerImpl::OnAppsAccessChanged() {
   ComputeAndUpdateUiState();
 }
 
+void RecentAppsInteractionHandlerImpl::OnConnectionStatusForUiChanged(
+    eche_app::mojom::ConnectionStatus connection_status) {
+  if (connection_status_ != connection_status) {
+    connection_status_ = connection_status;
+    ComputeAndUpdateUiState();
+  }
+}
+
 void RecentAppsInteractionHandlerImpl::SetStreamableApps(
     const std::vector<Notification::AppMetadata>& streamable_apps) {
   PA_LOG(INFO) << "ClearRecentAppMetadataListAndPref to update the list of "
@@ -198,8 +223,22 @@ void RecentAppsInteractionHandlerImpl::SetStreamableApps(
 
   // TODO(b/260015890): Save at most 6 apps.
   for (const auto& app : streamable_apps) {
-    recent_app_metadata_list_.emplace_back(app, base::Time::FromDoubleT(0));
+    recent_app_metadata_list_.emplace_back(
+        app, base::Time::FromSecondsSinceUnixEpoch(0));
   }
+
+  SaveRecentAppMetadataListToPref();
+  ComputeAndUpdateUiState();
+}
+
+void RecentAppsInteractionHandlerImpl::RemoveStreamableApp(
+    const proto::App app_to_remove) {
+  std::erase_if(
+      recent_app_metadata_list_,
+      [&app_to_remove](
+          const std::pair<Notification::AppMetadata, base::Time>& app) {
+        return app.first.package_name == app_to_remove.package_name();
+      });
 
   SaveRecentAppMetadataListToPref();
   ComputeAndUpdateUiState();
@@ -210,12 +249,16 @@ void RecentAppsInteractionHandlerImpl::ComputeAndUpdateUiState() {
 
   LoadRecentAppMetadataListFromPrefIfNeed();
 
-  // There are three cases we need to handle:
+  // There are five cases we need to handle:
   // 1. If no recent app in list and necessary permission be granted, the
   // placeholder view will be shown.
-  // 2. If some recent apps in list and streaming is allowed, the recent apps
-  // view will be shown.
-  // 3. Otherwise, no recent apps view will be shown.
+  // 2. If some recent apps in list and streaming is allowed, the loading view
+  // will show when determining if the connection can be bootstrapped.
+  // 3. If some recent apps in list and streaming is allowed, the connection
+  // error view will be shown.
+  // 4. If some recent apps in list, streaming is allowed and the booststrap
+  // connection was successful, then recent apps view will be shown.
+  // 5. Otherwise, no recent apps view will be shown.
   bool allow_streaming = multidevice_setup_client_->GetFeatureState(
                              Feature::kEche) == FeatureState::kEnabledByUser;
 
@@ -229,18 +272,8 @@ void RecentAppsInteractionHandlerImpl::ComputeAndUpdateUiState() {
     NotifyRecentAppsViewUiStateUpdated();
     return;
   }
-  if (recent_app_metadata_list_.empty()) {
-    bool notifications_enabled =
-        multidevice_setup_client_->GetFeatureState(
-            Feature::kPhoneHubNotifications) == FeatureState::kEnabledByUser;
-    bool grant_notification_access_on_host =
-        multidevice_feature_access_manager_->GetNotificationAccessStatus() ==
-        phonehub::MultideviceFeatureAccessManager::AccessStatus::kAccessGranted;
-    if (notifications_enabled && grant_notification_access_on_host)
-      ui_state_ = RecentAppsUiState::PLACEHOLDER_VIEW;
-  } else {
-    ui_state_ = RecentAppsUiState::ITEMS_VISIBLE;
-  }
+
+  ui_state_ = GetUiStateFromConnectionStatus();
   NotifyRecentAppsViewUiStateUpdated();
 }
 
@@ -250,5 +283,23 @@ void RecentAppsInteractionHandlerImpl::ClearRecentAppMetadataListAndPref() {
   has_loaded_prefs_ = false;
 }
 
-}  // namespace phonehub
-}  // namespace ash
+RecentAppsInteractionHandler::RecentAppsUiState
+RecentAppsInteractionHandlerImpl::GetUiStateFromConnectionStatus() {
+  RecentAppsUiState ui_state = RecentAppsUiState::HIDDEN;
+  switch (connection_status_) {
+    case eche_app::mojom::ConnectionStatus::kConnectionStatusDisconnected:
+      [[fallthrough]];
+    case eche_app::mojom::ConnectionStatus::kConnectionStatusConnecting:
+      ui_state = RecentAppsUiState::LOADING;
+      break;
+    case eche_app::mojom::ConnectionStatus::kConnectionStatusConnected:
+      ui_state = RecentAppsUiState::ITEMS_VISIBLE;
+      break;
+    case eche_app::mojom::ConnectionStatus::kConnectionStatusFailed:
+      ui_state = RecentAppsUiState::CONNECTION_FAILED;
+      break;
+  }
+  return ui_state;
+}
+
+}  // namespace ash::phonehub

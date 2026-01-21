@@ -5,7 +5,9 @@
 #ifndef CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_PASSWORD_STORE_ANDROID_BACKEND_BRIDGE_HELPER_IMPL_H_
 #define CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_PASSWORD_STORE_ANDROID_BACKEND_BRIDGE_HELPER_IMPL_H_
 
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/password_manager/android/password_store_android_backend_bridge_helper.h"
 
 namespace password_manager {
@@ -18,7 +20,8 @@ namespace password_manager {
 class PasswordStoreAndroidBackendBridgeHelperImpl
     : public PasswordStoreAndroidBackendBridgeHelper {
  public:
-  PasswordStoreAndroidBackendBridgeHelperImpl();
+  explicit PasswordStoreAndroidBackendBridgeHelperImpl(
+      password_manager::IsAccountStore is_account_store);
   PasswordStoreAndroidBackendBridgeHelperImpl(
       base::PassKey<class PasswordStoreAndroidBackendBridgeHelperImplTest>,
       std::unique_ptr<PasswordStoreAndroidBackendReceiverBridge>
@@ -37,19 +40,24 @@ class PasswordStoreAndroidBackendBridgeHelperImpl
   ~PasswordStoreAndroidBackendBridgeHelperImpl() override;
 
   // PasswordStoreAndroidBackendBridgeHelper implementation
+  bool CanUseGetAffiliatedPasswordsAPI() override;
+  bool CanUseGetAllLoginsWithBrandingInfoAPI() override;
   void SetConsumer(base::WeakPtr<Consumer> consumer) override;
-  [[nodiscard]] JobId GetAllLogins(Account account) override;
-  [[nodiscard]] JobId GetAutofillableLogins(Account account) override;
+  [[nodiscard]] JobId GetAllLogins(std::string account) override;
+  [[nodiscard]] JobId GetAllLoginsWithBrandingInfo(
+      std::string account) override;
+  [[nodiscard]] JobId GetAutofillableLogins(std::string account) override;
   [[nodiscard]] JobId GetLoginsForSignonRealm(const std::string& signon_realm,
-                                              Account account) override;
+                                              std::string account) override;
+  [[nodiscard]] JobId GetAffiliatedLoginsForSignonRealm(
+      const std::string& signon_realm,
+      std::string account) override;
   [[nodiscard]] JobId AddLogin(const password_manager::PasswordForm& form,
-                               Account account) override;
+                               std::string account) override;
   [[nodiscard]] JobId UpdateLogin(const password_manager::PasswordForm& form,
-                                  Account account) override;
+                                  std::string account) override;
   [[nodiscard]] JobId RemoveLogin(const password_manager::PasswordForm& form,
-                                  Account account) override;
-
-  void ShowErrorNotification() override;
+                                  std::string account) override;
 
  private:
   JobId GetNextJobId();

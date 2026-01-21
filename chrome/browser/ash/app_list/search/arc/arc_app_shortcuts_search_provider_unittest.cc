@@ -18,7 +18,7 @@
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace app_list::test {
@@ -42,15 +42,17 @@ class ArcAppShortcutsSearchProviderTest
 
   // AppListTestBase:
   void SetUp() override {
+    arc_app_test_.PreProfileSetUp();
     AppListTestBase::SetUp();
-    arc_test_.SetUp(profile());
+    arc_app_test_.PostProfileSetUp(profile());
     controller_ = std::make_unique<::test::TestAppListControllerDelegate>();
   }
 
   void TearDown() override {
     controller_.reset();
-    arc_test_.TearDown();
+    arc_app_test_.PreProfileTearDown();
     AppListTestBase::TearDown();
+    arc_app_test_.PostProfileTearDown();
   }
 
   arc::mojom::AppInfoPtr CreateAppInfo(const std::string& name,
@@ -65,10 +67,10 @@ class ArcAppShortcutsSearchProviderTest
 
   std::string AddArcAppAndShortcut(const arc::mojom::AppInfo& app_info,
                                    bool launchable) {
-    ArcAppListPrefs* const prefs = arc_test_.arc_app_list_prefs();
+    ArcAppListPrefs* const prefs = arc_app_test_.arc_app_list_prefs();
 
-    absl::optional<uint64_t> app_size_in_bytes;
-    absl::optional<uint64_t> data_size_in_bytes;
+    std::optional<uint64_t> app_size_in_bytes;
+    std::optional<uint64_t> data_size_in_bytes;
 
     if (!app_info.app_storage.is_null()) {
       app_size_in_bytes = app_info.app_storage->app_size_in_bytes;
@@ -83,7 +85,7 @@ class ArcAppShortcutsSearchProviderTest
         true /* notifications_enabled */, true /* app_ready */,
         false /* suspended */, false /* shortcut */, launchable,
         app_info.need_fixup, ArcAppListPrefs::WindowLayout(), app_size_in_bytes,
-        data_size_in_bytes);
+        data_size_in_bytes, app_info.app_category);
     const std::string app_id =
         ArcAppListPrefs::GetAppId(app_info.package_name, app_info.activity);
     EXPECT_TRUE(prefs->GetApp(app_id));
@@ -93,7 +95,7 @@ class ArcAppShortcutsSearchProviderTest
   base::ScopedTempDir temp_dir_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<::test::TestAppListControllerDelegate> controller_;
-  ArcAppTest arc_test_;
+  ArcAppTest arc_app_test_;
 };
 
 TEST_P(ArcAppShortcutsSearchProviderTest, Basic) {

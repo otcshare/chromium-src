@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/offline_pages/core/background/save_page_request.h"
 
@@ -19,7 +19,7 @@ OfflinerStub::OfflinerStub()
       cancel_called_(false),
       snapshot_on_last_retry_(false) {}
 
-OfflinerStub::~OfflinerStub() {}
+OfflinerStub::~OfflinerStub() = default;
 
 bool OfflinerStub::LoadAndSave(const SavePageRequest& request,
                                CompletionCallback completion_callback,

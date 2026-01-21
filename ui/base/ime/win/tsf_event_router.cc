@@ -5,10 +5,11 @@
 #include "ui/base/ime/win/tsf_event_router.h"
 
 #include <msctf.h>
+
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/win/atl.h"
 #include "ui/base/win/atl_module.h"

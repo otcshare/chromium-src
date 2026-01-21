@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_util.h"
@@ -60,6 +61,7 @@ const char kDarkShareButtonOpacity[] = "dark_share_button_opacity";
 const char kDarkShareButtonIcon[] = "dark_share_button_icon";
 const char kDarkShareButtonBg[] = "dark_share_button_bg";
 
+const char kLogoType[] = "LOGO";
 const char kSimpleType[] = "SIMPLE";
 const char kAnimatedType[] = "ANIMATED";
 const char kInteractiveType[] = "INTERACTIVE";
@@ -83,7 +85,10 @@ void SetTimeValue(base::Value::Dict& dict,
   dict.Set(key, base::NumberToString(internal_time_value));
 }
 
-LogoType LogoTypeFromString(base::StringPiece type) {
+LogoType LogoTypeFromString(std::string_view type) {
+  if (type == kLogoType) {
+    return LogoType::LOGO;
+  }
   if (type == kSimpleType) {
     return LogoType::SIMPLE;
   }
@@ -94,11 +99,13 @@ LogoType LogoTypeFromString(base::StringPiece type) {
     return LogoType::INTERACTIVE;
   }
   LOG(WARNING) << "invalid type " << type;
-  return LogoType::SIMPLE;
+  return LogoType::LOGO;
 }
 
 std::string LogoTypeToString(LogoType type) {
   switch (type) {
+    case LogoType::LOGO:
+      return kLogoType;
     case LogoType::SIMPLE:
       return kSimpleType;
     case LogoType::ANIMATED:
@@ -107,7 +114,6 @@ std::string LogoTypeToString(LogoType type) {
       return kInteractiveType;
   }
   NOTREACHED();
-  return "";
 }
 
 }  // namespace
@@ -170,7 +176,7 @@ std::unique_ptr<EncodedLogo> LogoCache::GetCachedLogo() {
   if (logo_num_bytes_ != 0) {
     encoded_image = new base::RefCountedString();
 
-    if (!base::ReadFileToString(logo_path, &encoded_image->data())) {
+    if (!base::ReadFileToString(logo_path, &encoded_image->as_string())) {
       UpdateMetadata(nullptr);
       return nullptr;
     }
@@ -187,7 +193,8 @@ std::unique_ptr<EncodedLogo> LogoCache::GetCachedLogo() {
   if (dark_logo_num_bytes_ != 0) {
     dark_encoded_image = new base::RefCountedString();
 
-    if (!base::ReadFileToString(dark_logo_path, &dark_encoded_image->data())) {
+    if (!base::ReadFileToString(dark_logo_path,
+                                &dark_encoded_image->as_string())) {
       UpdateMetadata(nullptr);
       return nullptr;
     }
@@ -213,12 +220,15 @@ std::unique_ptr<LogoMetadata> LogoCache::LogoMetadataFromString(
     const std::string& str,
     int* logo_num_bytes,
     int* dark_logo_num_bytes) {
-  std::unique_ptr<base::Value> value = base::JSONReader::ReadDeprecated(str);
-  if (!value)
+  std::optional<base::Value> value =
+      base::JSONReader::Read(str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
     return nullptr;
+  }
   const base::Value::Dict* dict = value->GetIfDict();
-  if (!dict)
+  if (!dict) {
     return nullptr;
+  }
 
   // These helpers replace the deprecated analogous methods on
   // base::DictionaryValue, so as to maintain the early exit behavior in the if
@@ -230,19 +240,19 @@ std::unique_ptr<LogoMetadata> LogoCache::LogoMetadataFromString(
     return v != nullptr;
   };
   auto get_boolean = [dict](const char* key, bool* ret) -> bool {
-    absl::optional<bool> v = dict->FindBool(key);
+    std::optional<bool> v = dict->FindBool(key);
     if (v.has_value())
       *ret = v.value();
     return v.has_value();
   };
   auto get_integer = [dict](const char* key, int* ret) -> bool {
-    absl::optional<int> v = dict->FindInt(key);
+    std::optional<int> v = dict->FindInt(key);
     if (v.has_value())
       *ret = v.value();
     return v.has_value();
   };
   auto get_double = [dict](const char* key, double* ret) -> bool {
-    absl::optional<double> v = dict->FindDouble(key);
+    std::optional<double> v = dict->FindDouble(key);
     if (v.has_value())
       *ret = v.value();
     return v.has_value();
@@ -357,7 +367,7 @@ void LogoCache::LogoMetadataToString(const LogoMetadata& metadata,
   dict.Set(kIframeHeightPx, metadata.iframe_height_px);
   dict.Set(kDarkBackgroundColorKey, metadata.dark_background_color);
   SetTimeValue(dict, kExpirationTimeKey, metadata.expiration_time);
-  base::JSONWriter::Write(dict, str);
+  *str = base::WriteJson(dict).value_or("");
 }
 
 base::FilePath LogoCache::GetLogoPath() {
@@ -402,7 +412,7 @@ void LogoCache::WriteMetadata() {
 
   std::string str;
   LogoMetadataToString(*metadata_, logo_num_bytes_, dark_logo_num_bytes_, &str);
-  base::WriteFile(GetMetadataPath(), str.data(), static_cast<int>(str.size()));
+  base::WriteFile(GetMetadataPath(), str);
 }
 
 void LogoCache::WriteLogo(
@@ -426,15 +436,12 @@ void LogoCache::WriteLogo(
   if (!base::DeleteFile(metadata_path))
     return;
 
-  if (encoded_image &&
-      base::WriteFile(logo_path, encoded_image->front_as<char>(),
-                      static_cast<int>(encoded_image->size())) == -1) {
+  if (encoded_image && !base::WriteFile(logo_path, *encoded_image)) {
     base::DeleteFile(logo_path);
     return;
   }
   if (dark_encoded_image &&
-      base::WriteFile(dark_logo_path, dark_encoded_image->front_as<char>(),
-                      static_cast<int>(dark_encoded_image->size())) == -1) {
+      !base::WriteFile(dark_logo_path, *dark_encoded_image)) {
     base::DeleteFile(logo_path);
     base::DeleteFile(dark_logo_path);
     return;

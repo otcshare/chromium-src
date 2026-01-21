@@ -1,7 +1,7 @@
-# For the ZipFileCreator service
-fdegros@chromium.org
-noel@chromium.org
-
-# For the archive and document analyzers
+# For the safe archive analyzers and document analyzer
 drubery@chromium.org
 xinghuilu@chromium.org
+
+# For files that were obfuscated during download
+per-file obfuscated_archive_analysis_delegate.cc=file://components/enterprise/CEP_OWNERS
+per-file obfuscated_archive_analysis_delegate.h=file://components/enterprise/CEP_OWNERS

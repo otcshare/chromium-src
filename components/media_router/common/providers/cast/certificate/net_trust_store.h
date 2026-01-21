@@ -8,9 +8,11 @@
 #include <vector>
 
 #include "base/check.h"
-#include "net/cert/pki/cert_errors.h"
-#include "net/cert/pki/trust_store_in_memory.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "net/cert/x509_util.h"
+#include "third_party/boringssl/src/pki/cert_errors.h"
+#include "third_party/boringssl/src/pki/trust_store_in_memory.h"
 #include "third_party/openscreen/src/cast/common/public/trust_store.h"
 
 namespace cast_certificate {
@@ -25,7 +27,7 @@ class NetTrustStore final : public openscreen::cast::TrustStore {
   // Adds a trust anchor given a DER-encoded certificate from static storage.
   template <size_t N>
   void AddAnchor(const uint8_t (&data)[N]) {
-    AddAnchor(base::span<const uint8_t>(data, N));
+    AddAnchor(UNSAFE_TODO(base::span<const uint8_t>(data, N)));
   }
 
   void AddAnchor(base::span<const uint8_t> data);
@@ -35,7 +37,7 @@ class NetTrustStore final : public openscreen::cast::TrustStore {
       const openscreen::cast::DateTime& time) override;
 
  private:
-  net::TrustStoreInMemory store_;
+  bssl::TrustStoreInMemory store_;
 };
 
 }  // namespace cast_certificate

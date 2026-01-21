@@ -5,9 +5,10 @@
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -15,6 +16,10 @@
 #include "extensions/test/test_extension_dir.h"
 #include "media/base/media_switches.h"
 
+// TODO(crbug.com/467442812): Port these tests to desktop Android. This isn't
+// straightforward, as some of the tests rely on manifest V2 behavior, but
+// Android only supports manifest V3. Likewise, Android does not support hosted
+// apps.
 class AutoplayExtensionBrowserTest : public extensions::ExtensionApiTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -29,15 +34,13 @@ IN_PROC_BROWSER_TEST_F(AutoplayExtensionBrowserTest, AutoplayAllowed) {
   ASSERT_TRUE(RunExtensionTest("autoplay")) << message_;
 }
 
-// TODO(crbug.com/1166927): AutoplayAllowedInIframe sporadically (~10%?) times
+// TODO(crbug.com/40742402): AutoplayAllowedInIframe sporadically (~10%?) times
 // out on Linux.
-// TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
-// complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #define MAYBE_AutoplayAllowedInIframe DISABLED_AutoplayAllowedInIframe
 #else
 #define MAYBE_AutoplayAllowedInIframe AutoplayAllowedInIframe
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_LINUX)
 IN_PROC_BROWSER_TEST_F(AutoplayExtensionBrowserTest,
                        MAYBE_AutoplayAllowedInIframe) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -77,13 +80,12 @@ IN_PROC_BROWSER_TEST_F(AutoplayExtensionBrowserTest,
       LoadExtension(test_app_dir.UnpackedPath());
   ASSERT_TRUE(extension) << message_;
 
-  Browser* app_browser = LaunchAppBrowser(extension);
+  Browser* app_browser =
+      extensions::browsertest_util::LaunchAppBrowser(profile(), extension);
   content::WebContents* web_contents =
       app_browser->tab_strip_model()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
-  bool result = false;
-  EXPECT_TRUE(content::ExecuteScriptWithoutUserGestureAndExtractBool(
-      web_contents, "runTest();", &result));
-  EXPECT_TRUE(result);
+  EXPECT_EQ(true, content::EvalJs(web_contents, "runTest();",
+                                  content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 }

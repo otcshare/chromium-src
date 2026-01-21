@@ -5,54 +5,57 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_BORDER_EDGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_BORDER_EDGE_H_
 
+#include <array>
+
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
-struct BorderEdge {
+class BorderEdge {
   STACK_ALLOCATED();
 
  public:
-  BorderEdge(float edge_width,
+  BorderEdge(int edge_width,
              const Color& edge_color,
              EBorderStyle edge_style,
              bool edge_is_present = true);
   BorderEdge();
+
+  static EBorderStyle EffectiveStyle(EBorderStyle style, int width);
 
   bool HasVisibleColorAndStyle() const;
   bool ShouldRender() const;
   bool PresentButInvisible() const;
   bool ObscuresBackgroundEdge() const;
   bool ObscuresBackground() const;
-  float UsedWidth() const;
+  int UsedWidth() const;
 
   bool SharesColorWith(const BorderEdge& other) const;
 
-  EBorderStyle BorderStyle() const { return static_cast<EBorderStyle>(style); }
+  EBorderStyle BorderStyle() const { return style_; }
 
   enum DoubleBorderStripe {
     kDoubleBorderStripeOuter,
     kDoubleBorderStripeInner
   };
 
-  float GetDoubleBorderStripeWidth(DoubleBorderStripe) const;
+  int GetDoubleBorderStripeWidth(DoubleBorderStripe) const;
 
-  float Width() const { return width_; }
+  int Width() const { return width_; }
+  const Color& GetColor() const { return color_; }
 
-  void ClampWidth(float width) {
-    if (width_ > width)
-      width_ = width;
-  }
-
-  Color color;
-  bool is_present;
+  void ClampWidth(int max_width);
 
  private:
-  unsigned style : 4;  // EBorderStyle
-  float width_;
+  Color color_;
+  bool is_present_;
+  EBorderStyle style_;
+  int width_;
 };
+
+using BorderEdgeArray = std::array<BorderEdge, 4>;
 
 }  // namespace blink
 

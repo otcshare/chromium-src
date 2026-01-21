@@ -8,13 +8,14 @@
 
 #include "base/base_paths.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
+#include "base/notimplemented.h"
 #include "base/path_service.h"
 #include "base/process/kill.h"
 #include "base/process/launch.h"
@@ -26,7 +27,6 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
@@ -36,14 +36,18 @@
 #include "services/service_manager/public/mojom/service.mojom.h"
 #include "services/service_manager/switches.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/mach_port_rendezvous.h"
+#endif
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "sandbox/linux/services/namespace_sandbox.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
-#include "base/win/windows_version.h"
-
 #include <windows.h>
+
+#include "base/win/windows_version.h"
 #endif
 
 namespace service_manager {
@@ -259,7 +263,7 @@ base::ProcessId ServiceProcessLauncher::ProcessState::LaunchInBackground(
     return base::kNullProcessId;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Always log instead of DVLOG because knowing which pid maps to which
   // service is vital for interpreting crashes after-the-fact and Chrome OS
   // devices generally run release builds, even in development.

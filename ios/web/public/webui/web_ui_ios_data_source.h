@@ -6,15 +6,16 @@
 #define IOS_WEB_PUBLIC_WEBUI_WEB_UI_IOS_DATA_SOURCE_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/containers/span.h"
 #include "base/supports_user_data.h"
 #include "base/values.h"
 
 namespace webui {
 struct LocalizedString;
-}
+struct ResourcePath;
+}  // namespace webui
 
 namespace web {
 class BrowserState;
@@ -25,7 +26,7 @@ class WebUIIOSDataSource : public base::SupportsUserData {
  public:
   ~WebUIIOSDataSource() override {}
 
-  static WebUIIOSDataSource* Create(const std::string& source_name);
+  static WebUIIOSDataSource* Create(std::string_view source_name);
 
   // Adds a WebUIIOS data source to `browser_state`.
   static void Add(BrowserState* browser_state, WebUIIOSDataSource* source);
@@ -60,6 +61,11 @@ class WebUIIOSDataSource : public base::SupportsUserData {
 
   // Adds a mapping between a path name and a resource to return.
   virtual void AddResourcePath(const std::string& path, int resource_id) = 0;
+
+  // Calls AddResourcePath() in a for-loop for `paths`. Reduces code size vs.
+  // reimplementing the same for-loop.
+  virtual void AddResourcePaths(
+      base::span<const webui::ResourcePath> paths) = 0;
 
   // Sets the resource to returned when no other paths match.
   virtual void SetDefaultResource(int resource_id) = 0;

@@ -4,14 +4,17 @@
 
 #include "content/renderer/navigation_client.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <utility>
+
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/uuid.h"
+#include "content/common/features.h"
 #include "content/common/frame.mojom.h"
 #include "content/renderer/render_frame_impl.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "third_party/blink/public/common/loader/resource_type_util.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container.mojom.h"
@@ -19,8 +22,30 @@
 
 namespace content {
 
-NavigationClient::NavigationClient(RenderFrameImpl* render_frame)
-    : render_frame_(render_frame) {}
+NavigationClient::NavigationClient(
+    RenderFrameImpl* render_frame,
+    NavigationClient* initiator_navigation_client)
+    : render_frame_(render_frame) {
+  if (initiator_navigation_client) {
+    // When a navigation is initiated in this frame, but commits in a new
+    // RenderFrame object, the `was_initiated_in_this_frame_` value should be
+    // carried over from the old RenderFrame's NavigationClient. This is because
+    // the new RenderFrame uses a new NavigationClient to commit, and
+    // was_initiated_in_this_frame is only set on the previous RenderFrame's
+    // NavigationClient when starting the navigation. Copy that value to the new
+    // NavigationClient.
+    was_initiated_in_this_frame_ =
+        initiator_navigation_client->was_initiated_in_this_frame();
+  }
+}
+
+NavigationClient::NavigationClient(
+    RenderFrameImpl* render_frame,
+    blink::mojom::BeginNavigationParamsPtr begin_params,
+    blink::mojom::CommonNavigationParamsPtr common_params)
+    : render_frame_(render_frame),
+      begin_params_(std::move(begin_params)),
+      common_params_(std::move(common_params)) {}
 
 NavigationClient::~NavigationClient() {}
 
@@ -31,26 +56,34 @@ void NavigationClient::CommitNavigation(
     mojo::ScopedDataPipeConsumerHandle response_body,
     network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
     std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_loaders,
-    absl::optional<std::vector<blink::mojom::TransferrableURLLoaderPtr>>
+    std::optional<std::vector<blink::mojom::TransferrableURLLoaderPtr>>
         subresource_overrides,
     blink::mojom::ControllerServiceWorkerInfoPtr controller_service_worker_info,
     blink::mojom::ServiceWorkerContainerInfoForClientPtr container_info,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>
-        prefetch_loader_factory,
+        subresource_proxying_loader_factory,
+    mojo::PendingRemote<network::mojom::URLLoaderFactory>
+        keep_alive_loader_factory,
+    mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
+        fetch_later_loader_factory,
     const blink::DocumentToken& document_token,
     const base::UnguessableToken& devtools_navigation_token,
-    const absl::optional<blink::ParsedPermissionsPolicy>& permissions_policy,
+    const base::Uuid& base_auction_nonce,
+    const std::optional<network::ParsedPermissionsPolicy>& permissions_policy,
     blink::mojom::PolicyContainerPtr policy_container,
     mojo::PendingRemote<blink::mojom::CodeCacheHost> code_cache_host,
+    mojo::PendingRemote<blink::mojom::CodeCacheHost>
+        code_cache_host_for_background,
     mojom::CookieManagerInfoPtr cookie_manager_info,
     mojom::StorageInfoPtr storage_info,
     CommitNavigationCallback callback) {
   DCHECK(blink::IsRequestDestinationFrame(common_params->request_destination));
-
-  // TODO(ahemery): The reset should be done when the navigation did commit
-  // (meaning at a later stage). This is not currently possible because of
-  // race conditions leading to the early deletion of NavigationRequest would
-  // unexpectedly abort the ongoing navigation. Remove when the races are fixed.
+  MoveOwnershipToCommitTargetIfNeeded(commit_params->commit_target_frame_token);
+  // TODO(crbug.com/40276805): The reset should be done when the
+  // navigation did commit (meaning at a later stage). This is not currently
+  // possible because of race conditions leading to the early deletion of
+  // NavigationRequest would unexpectedly abort the ongoing navigation. Remove
+  // when the races are fixed.
   ResetDisconnectionHandler();
   render_frame_->CommitNavigation(
       std::move(common_params), std::move(commit_params),
@@ -58,11 +91,13 @@ void NavigationClient::CommitNavigation(
       std::move(url_loader_client_endpoints), std::move(subresource_loaders),
       std::move(subresource_overrides),
       std::move(controller_service_worker_info), std::move(container_info),
-      std::move(prefetch_loader_factory), document_token,
-      devtools_navigation_token, permissions_policy,
+      std::move(subresource_proxying_loader_factory),
+      std::move(keep_alive_loader_factory),
+      std::move(fetch_later_loader_factory), document_token,
+      devtools_navigation_token, base_auction_nonce, permissions_policy,
       std::move(policy_container), std::move(code_cache_host),
-      std::move(cookie_manager_info), std::move(storage_info),
-      std::move(callback));
+      std::move(code_cache_host_for_background), std::move(cookie_manager_info),
+      std::move(storage_info), std::move(callback));
 }
 
 void NavigationClient::CommitFailedNavigation(
@@ -72,18 +107,20 @@ void NavigationClient::CommitFailedNavigation(
     int error_code,
     int extended_error_code,
     const net::ResolveErrorInfo& resolve_error_info,
-    const absl::optional<std::string>& error_page_content,
+    const std::optional<std::string>& error_page_content,
     std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_loaders,
     const blink::DocumentToken& document_token,
+    const base::UnguessableToken& devtools_navigation_token,
     blink::mojom::PolicyContainerPtr policy_container,
     mojom::AlternativeErrorPageOverrideInfoPtr alternative_error_page_info,
     CommitFailedNavigationCallback callback) {
+  MoveOwnershipToCommitTargetIfNeeded(commit_params->commit_target_frame_token);
   ResetDisconnectionHandler();
   render_frame_->CommitFailedNavigation(
       std::move(common_params), std::move(commit_params),
       has_stale_copy_in_cache, error_code, extended_error_code,
       resolve_error_info, error_page_content, std::move(subresource_loaders),
-      document_token, std::move(policy_container),
+      document_token, devtools_navigation_token, std::move(policy_container),
       std::move(alternative_error_page_info), std::move(callback));
 }
 
@@ -93,6 +130,33 @@ void NavigationClient::Bind(
       std::move(receiver), render_frame_->GetTaskRunner(
                                blink::TaskType::kInternalNavigationAssociated));
   SetDisconnectionHandler();
+}
+
+void NavigationClient::MoveOwnershipToCommitTargetIfNeeded(
+    std::optional<blink::LocalFrameToken> commit_target_frame_token) {
+  if (!commit_target_frame_token.has_value()) {
+    return;
+  }
+  CHECK(base::FeatureList::IsEnabled(
+      features::kSkipRendererCancellationThrottle));
+  auto* commit_target_web_frame =
+      blink::WebLocalFrame::FromFrameToken(commit_target_frame_token.value());
+  CHECK(commit_target_web_frame);
+  auto* commit_target_render_frame =
+      RenderFrameImpl::FromWebFrame(commit_target_web_frame);
+  CHECK(commit_target_render_frame);
+  CHECK_NE(render_frame_, commit_target_render_frame);
+  CHECK_EQ(
+      render_frame_->GetWebFrame(),
+      commit_target_render_frame->GetWebFrame()->GetProvisionalOwnerFrame());
+  // This is a commit that will do a local RenderFrame swap. Currently it reuses
+  // the old RenderFrame's NavigationClient, to preserve navigation cancellation
+  // guarantees. Now that we know the navigation is not cancelled, continue
+  // the commit to the new RenderFrame, and move the ownership of this
+  // NavigationClient to the new RenderFrame.
+  commit_target_render_frame->set_navigation_client_impl(
+      render_frame_->TakeNavigationClient());
+  render_frame_ = commit_target_render_frame;
 }
 
 void NavigationClient::SetUpRendererInitiatedNavigation(
@@ -115,6 +179,30 @@ void NavigationClient::SetUpRendererInitiatedNavigation(
                  base::BindOnce(
                      &NavigationClient::NotifyNavigationCancellationWindowEnded,
                      weak_ptr_factory_.GetWeakPtr()));
+}
+
+void NavigationClient::ResetWithoutCancelling() {
+  navigation_client_receiver_.ResetWithReason(
+      std::to_underlying(
+          mojom::NavigationClientDisconnectReason::kResetForSwap),
+      "");
+}
+
+void NavigationClient::ResetForNewNavigation(bool is_duplicate_navigation) {
+  navigation_client_receiver_.ResetWithReason(
+      std::to_underlying(is_duplicate_navigation
+                             ? mojom::NavigationClientDisconnectReason::
+                                   kResetForDuplicateNavigation
+                             : mojom::NavigationClientDisconnectReason::
+                                   kResetForNewNavigation),
+      "");
+}
+
+void NavigationClient::ResetForAbort() {
+  navigation_client_receiver_.ResetWithReason(
+      std::to_underlying(
+          mojom::NavigationClientDisconnectReason::kResetForAbort),
+      "");
 }
 
 void NavigationClient::NotifyNavigationCancellationWindowEnded() {

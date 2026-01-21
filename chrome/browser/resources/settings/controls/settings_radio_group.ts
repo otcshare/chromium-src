@@ -14,13 +14,11 @@
  */
 import '//resources/cr_elements/cr_radio_button/cr_radio_button.js';
 import '//resources/cr_elements/cr_radio_group/cr_radio_group.js';
-import '../settings_shared.css.js';
 
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {PrefControlMixin} from '/shared/settings/controls/pref_control_mixin.js';
+import {prefToString, stringToPrefValue} from '/shared/settings/prefs/pref_util.js';
 
-import {prefToString, stringToPrefValue} from '../prefs/pref_util.js';
-
-import {PrefControlMixin} from './pref_control_mixin.js';
 import {getTemplate} from './settings_radio_group.html.js';
 
 const SettingsRadioGroupElementBase = PrefControlMixin(PolymerElement);
@@ -54,6 +52,11 @@ export class SettingsRadioGroupElement extends SettingsRadioGroupElementBase {
         type: String,
         value: ['cr-radio-button', 'controlled-radio-button'].join(', '),
       },
+
+      nestedSelectable: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
@@ -63,10 +66,11 @@ export class SettingsRadioGroupElement extends SettingsRadioGroupElementBase {
     ];
   }
 
-  groupAriaLabel: string;
-  noSetPref: boolean;
-  selected: string;
-  selectableElements: string;
+  declare groupAriaLabel: string;
+  declare noSetPref: boolean;
+  declare selected?: string;
+  declare selectableElements: string;
+  declare nestedSelectable: boolean;
 
   override ready() {
     super.ready();
@@ -88,11 +92,15 @@ export class SettingsRadioGroupElement extends SettingsRadioGroupElementBase {
     if (!this.pref) {
       return;
     }
-    this.set('pref.value', stringToPrefValue(this.selected, this.pref));
+    this.set('pref.value', stringToPrefValue(this.selected || '', this.pref));
   }
 
   private onSelectedChanged_() {
+    const previous = this.selected;
     this.selected = this.shadowRoot!.querySelector('cr-radio-group')!.selected;
+    if (previous === this.selected) {
+      return;
+    }
     if (!this.noSetPref) {
       this.sendPrefChange();
     }

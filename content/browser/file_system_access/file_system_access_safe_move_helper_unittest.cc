@@ -14,11 +14,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/file_system_access/features.h"
 #include "content/browser/file_system_access/file_system_access_safe_move_helper.h"
-#include "content/browser/file_system_access/file_system_access_write_lock_manager.h"
 #include "content/browser/file_system_access/fixed_file_system_access_permission_grant.h"
 #include "content/browser/file_system_access/mock_file_system_access_permission_context.h"
 #include "content/public/test/browser_task_environment.h"
@@ -53,6 +55,7 @@ class MockQuarantine : public quarantine::mojom::Quarantine {
   void QuarantineFile(const base::FilePath& full_path,
                       const GURL& source_url,
                       const GURL& referrer_url,
+                      const std::optional<url::Origin>& request_initiator,
                       const std::string& client_guid,
                       QuarantineFileCallback callback) override {
     paths.push_back(full_path);
@@ -78,13 +81,15 @@ class TestFileSystemBackend : public storage::TestFileSystemBackend {
       : storage::TestFileSystemBackend(task_runner, base_path) {}
 
   std::unique_ptr<storage::FileSystemOperation> CreateFileSystemOperation(
+      storage::OperationType type,
       const storage::FileSystemURL& url,
       storage::FileSystemContext* context,
       base::File::Error* error_code) const override {
-    if (operation_created_callback_)
+    if (operation_created_callback_) {
       std::move(operation_created_callback_).Run(url);
+    }
     return storage::TestFileSystemBackend::CreateFileSystemOperation(
-        url, context, error_code);
+        type, url, context, error_code);
   }
 
   void SetOperationCreatedCallback(
@@ -100,7 +105,7 @@ class TestFileSystemBackend : public storage::TestFileSystemBackend {
 }  // namespace
 
 std::string GetHexEncodedString(const std::string& input) {
-  return base::HexEncode(base::as_bytes(base::make_span(input)));
+  return base::HexEncode(base::as_byte_span(input));
 }
 
 class FileSystemAccessSafeMoveHelperTest : public testing::Test {
@@ -156,10 +161,6 @@ class FileSystemAccessSafeMoveHelperTest : public testing::Test {
           quarantine_receivers_.Add(&quarantine_, std::move(receiver));
         });
 
-    ASSERT_TRUE(manager_->TakeWriteLock(
-        test_dest_url_,
-        FileSystemAccessWriteLockManager::WriteLockType::kShared));
-
     InitializeHelperWithUrls(test_source_url_, test_dest_url_);
   }
 
@@ -178,8 +179,8 @@ class FileSystemAccessSafeMoveHelperTest : public testing::Test {
                                                     kFrameId),
         source_url, dest_url,
         storage::FileSystemOperation::CopyOrMoveOptionSet(
-            storage::FileSystemOperation::CopyOrMoveOption::
-                kPreserveDestinationPermissions),
+            {storage::FileSystemOperation::CopyOrMoveOption::
+                 kPreserveDestinationPermissions}),
         quarantine_callback_,
         /*has_transient_user_activation=*/false);
   }
@@ -195,9 +196,9 @@ class FileSystemAccessSafeMoveHelperTest : public testing::Test {
 
   base::ScopedTempDir dir_;
   scoped_refptr<storage::FileSystemContext> file_system_context_;
-  raw_ptr<TestFileSystemBackend> test_file_system_backend_;
+  raw_ptr<TestFileSystemBackend> test_file_system_backend_ = nullptr;
   scoped_refptr<ChromeBlobStorageContext> chrome_blob_context_;
-  raw_ptr<storage::BlobStorageContext> blob_context_;
+  raw_ptr<storage::BlobStorageContext> blob_context_ = nullptr;
   scoped_refptr<FileSystemAccessManagerImpl> manager_;
 
   FileSystemURL test_dest_url_;
@@ -210,7 +211,7 @@ class FileSystemAccessSafeMoveHelperTest : public testing::Test {
   scoped_refptr<FixedFileSystemAccessPermissionGrant> permission_grant_ =
       base::MakeRefCounted<FixedFileSystemAccessPermissionGrant>(
           FixedFileSystemAccessPermissionGrant::PermissionStatus::GRANTED,
-          base::FilePath());
+          PathInfo());
 
   std::unique_ptr<FileSystemAccessSafeMoveHelper> helper_;
 };
@@ -396,11 +397,7 @@ TEST_F(FileSystemAccessSafeMoveHelperTest, LocalToLocalSameExtension) {
 
   InitializeHelperWithUrls(source_url, dest_url);
 
-  EXPECT_NE(
-      helper_->RequireAfterWriteChecksForTesting(),
-      base::FeatureList::IsEnabled(
-          features::
-              kFileSystemAccessSkipAfterWriteChecksIfUnchangingExtension));
+  EXPECT_FALSE(helper_->RequireAfterWriteChecksForTesting());
   EXPECT_TRUE(helper_->RequireQuarantineForTesting());
 }
 
@@ -574,12 +571,6 @@ TEST_F(FileSystemAccessSafeMoveHelperAfterWriteChecksTest, Block) {
 
 TEST_F(FileSystemAccessSafeMoveHelperAfterWriteChecksTest,
        LocalNoExtensionChange) {
-  if (!base::FeatureList::IsEnabled(
-          features::
-              kFileSystemAccessSkipAfterWriteChecksIfUnchangingExtension)) {
-    return;
-  }
-
   auto source_url = file_system_context_->CreateCrackedFileSystemURL(
       kTestStorageKey, storage::kFileSystemTypeLocal,
       dir_.GetPath().AppendASCII("source.txt"));
@@ -608,12 +599,6 @@ TEST_F(FileSystemAccessSafeMoveHelperAfterWriteChecksTest,
 
 TEST_F(FileSystemAccessSafeMoveHelperAfterWriteChecksTest,
        LocalNoExtensionChangeSecurityCheckFailed) {
-  if (!base::FeatureList::IsEnabled(
-          features::
-              kFileSystemAccessSkipAfterWriteChecksIfUnchangingExtension)) {
-    return;
-  }
-
   auto source_url = file_system_context_->CreateCrackedFileSystemURL(
       kTestStorageKey, storage::kFileSystemTypeLocal,
       dir_.GetPath().AppendASCII("source.txt"));

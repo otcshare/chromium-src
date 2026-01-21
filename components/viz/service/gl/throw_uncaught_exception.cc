@@ -6,6 +6,7 @@
 
 #include "base/android/jni_android.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/viz/service/service_jni_headers/ThrowUncaughtException_jni.h"
 
 namespace viz {
@@ -15,3 +16,5 @@ void ThrowUncaughtException() {
 }
 
 }  // namespace viz
+
+DEFINE_JNI(ThrowUncaughtException)

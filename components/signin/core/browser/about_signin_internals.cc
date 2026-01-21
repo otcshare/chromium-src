@@ -7,26 +7,30 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <string>
 #include <tuple>
 
 #include "base/command_line.h"
 #include "base/hash/hash.h"
+#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/observer_list.h"
 #include "base/strings/stringprintf.h"
-#include "base/time/time_to_iso8601.h"
+#include "base/strings/to_string.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_reconcilor.h"
+#include "components/signin/core/browser/signin_internals_util.h"
 #include "components/signin/public/base/signin_client.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/diagnostics_provider.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/load_credentials_state.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "net/base/backoff_entry.h"
 
 namespace {
@@ -41,14 +45,22 @@ enum class GaiaCookiesState {
   kBlocked,
 };
 
+constexpr char kOk[] = "OK";
+constexpr char kRunning[] = "Running";
+constexpr char kError[] = "Error";
+constexpr char kScheduled[] = "Scheduled";
+constexpr char kInactive[] = "Inactive";
+
 GaiaCookiesState GetGaiaCookiesState(SigninClient* signin_client) {
   bool signin_cookies_allowed = signin_client->AreSigninCookiesAllowed();
-  if (!signin_cookies_allowed)
+  if (!signin_cookies_allowed) {
     return GaiaCookiesState::kBlocked;
+  }
 
   bool clear_cookies_on_exit = signin_client->AreSigninCookiesDeletedOnExit();
-  if (clear_cookies_on_exit)
+  if (clear_cookies_on_exit) {
     return GaiaCookiesState::kClearOnExit;
+  }
 
   return GaiaCookiesState::kAllowed;
 }
@@ -86,11 +98,11 @@ void AddSectionEntry(base::Value::List& section_list,
 
 void AddCookieEntry(base::Value::List& accounts_list,
                     const std::string& field_email,
-                    const std::string& field_gaia_id,
+                    const GaiaId& field_gaia_id,
                     const std::string& field_valid) {
   base::Value::Dict entry;
   entry.Set("email", field_email);
-  entry.Set("gaia_id", field_gaia_id);
+  entry.Set("gaia_id", field_gaia_id.ToString());
   entry.Set("valid", field_valid);
   accounts_list.Append(std::move(entry));
 }
@@ -104,12 +116,8 @@ std::string SigninStatusFieldToLabel(
       return "Gaia Id";
     case signin_internals_util::USERNAME:
       return "Username";
-    case signin_internals_util::UNTIMED_FIELDS_END:
-      NOTREACHED();
-      return std::string();
   }
   NOTREACHED();
-  return std::string();
 }
 
 std::string TokenServiceLoadCredentialsStateToLabel(
@@ -138,10 +146,9 @@ std::string TokenServiceLoadCredentialsStateToLabel(
       return "Load credentials failed with unknown errors";
   }
   NOTREACHED();
-  return std::string();
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 std::string SigninStatusFieldToLabel(
     signin_internals_util::TimedSigninStatusField field) {
   switch (field) {
@@ -149,14 +156,16 @@ std::string SigninStatusFieldToLabel(
       return "Gaia Authentication Result";
     case signin_internals_util::REFRESH_TOKEN_RECEIVED:
       return "RefreshToken Received";
+    case signin_internals_util::LAST_SIGNIN_ACCESS_POINT:
+      return "Sign-in Access Point";
+    case signin_internals_util::LAST_SIGNOUT_SOURCE:
+      return "Last Sign-out Source";
     case signin_internals_util::TIMED_FIELDS_END:
       NOTREACHED();
-      return "Error";
   }
   NOTREACHED();
-  return "Error";
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // It's quite unfortunate that |time| is saved in prefs as a string instead of
 // base::Time because any change of the format would create inconsistency.
@@ -199,7 +208,6 @@ std::string GetAccountConsistencyDescription(
       return "DICE";
   }
   NOTREACHED();
-  return "";
 }
 
 std::string GetSigninStatusDescription(
@@ -207,9 +215,26 @@ std::string GetSigninStatusDescription(
   if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
     return "Not Signed In";
   } else if (identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSync)) {
+    // TODO(crbug.com/40067058): Delete when ConsentLevel::kSync is deleted from
+    // the codebase. See ConsentLevel::kSync documentation for details.
     return "Signed In, Consented for Sync";
   } else {
     return "Signed In, Not Consented for Sync";
+  }
+}
+
+std::string ToString(const signin_metrics::AccountReconcilorState& state) {
+  switch (state) {
+    case signin_metrics::AccountReconcilorState::kOk:
+      return kOk;
+    case signin_metrics::AccountReconcilorState::kRunning:
+      return kRunning;
+    case signin_metrics::AccountReconcilorState::kError:
+      return kError;
+    case signin_metrics::AccountReconcilorState::kScheduled:
+      return kScheduled;
+    case signin_metrics::AccountReconcilorState::kInactive:
+      return kInactive;
   }
 }
 
@@ -227,14 +252,15 @@ AboutSigninInternals::AboutSigninInternals(
       account_reconcilor_(account_reconcilor),
       account_consistency_(account_consistency) {
   RefreshSigninPrefs();
-  client_->AddContentSettingsObserver(this);
-  signin_error_controller_->AddObserver(this);
-  identity_manager_->AddObserver(this);
-  identity_manager_->AddDiagnosticsObserver(this);
-  account_reconcilor_->AddObserver(this);
+
+  identity_manager_observeration_.Observe(identity_manager_);
+  diganostics_observeration_.Observe(identity_manager_);
+  client_observeration_.Observe(client_);
+  signin_error_observeration_.Observe(signin_error_controller_);
+  account_reconcilor_observeration_.Observe(account_reconcilor_);
 }
 
-AboutSigninInternals::~AboutSigninInternals() {}
+AboutSigninInternals::~AboutSigninInternals() = default;
 
 signin_internals_util::UntimedSigninStatusField& operator++(
     signin_internals_util::UntimedSigninStatusField& field) {
@@ -251,16 +277,7 @@ signin_internals_util::TimedSigninStatusField& operator++(
 
 // static
 void AboutSigninInternals::RegisterPrefs(PrefRegistrySimple* user_prefs) {
-  // TODO(rogerta): leaving untimed fields here for now because legacy
-  // profiles still have these prefs.  In three or four version from M43
-  // we can probably remove them.
-  for (signin_internals_util::UntimedSigninStatusField i =
-           signin_internals_util::UNTIMED_FIELDS_BEGIN;
-       i < signin_internals_util::UNTIMED_FIELDS_END; ++i) {
-    const std::string pref_path = SigninStatusFieldToString(i);
-    user_prefs->RegisterStringPref(pref_path, std::string());
-  }
-
+  // All TimedSigninStatusField entries are backed by prefs.
   for (signin_internals_util::TimedSigninStatusField i =
            signin_internals_util::TIMED_FIELDS_BEGIN;
        i < signin_internals_util::TIMED_FIELDS_END; ++i) {
@@ -271,12 +288,12 @@ void AboutSigninInternals::RegisterPrefs(PrefRegistrySimple* user_prefs) {
   }
 }
 
-void AboutSigninInternals::AddSigninObserver(
+void AboutSigninInternals::AddObserver(
     AboutSigninInternals::Observer* observer) {
   signin_observers_.AddObserver(observer);
 }
 
-void AboutSigninInternals::RemoveSigninObserver(
+void AboutSigninInternals::RemoveObserver(
     AboutSigninInternals::Observer* observer) {
   signin_observers_.RemoveObserver(observer);
 }
@@ -288,14 +305,19 @@ void AboutSigninInternals::NotifyTimedSigninFieldValueChanged(
   DCHECK(field_index >= 0 &&
          field_index < signin_status_.timed_signin_fields.size());
 
-  base::Time now = base::Time::NowFromSystemTime();
-  std::string time_as_str = base::TimeToISO8601(now);
-  TimedSigninStatusValue timed_value(value, time_as_str);
+  if (value.empty()) {
+    // Clear prefs for time and value when passing the empty string as a value.
+    signin_status_.timed_signin_fields[field_index] = TimedSigninStatusValue();
+    ClearPref(client_->GetPrefs(), field);
+  } else {
+    base::Time now = base::Time::NowFromSystemTime();
+    std::string time_as_str = base::TimeFormatAsIso8601(now);
+    TimedSigninStatusValue timed_value(value, time_as_str);
+    signin_status_.timed_signin_fields[field_index] = timed_value;
 
-  signin_status_.timed_signin_fields[field_index] = timed_value;
-
-  // Also persist these values in the prefs.
-  SetPref(client_->GetPrefs(), field, value, time_as_str);
+    // Persist the values in the prefs.
+    SetPref(client_->GetPrefs(), field, value, time_as_str);
+  }
 
   // If the user is restarting a sign in process, clear the fields that are
   // to come.
@@ -309,8 +331,9 @@ void AboutSigninInternals::NotifyTimedSigninFieldValueChanged(
 
 void AboutSigninInternals::RefreshSigninPrefs() {
   // Return if no client exists. Can occur in unit tests.
-  if (!client_)
+  if (!client_) {
     return;
+  }
 
   PrefService* pref_service = client_->GetPrefs();
   for (signin_internals_util::TimedSigninStatusField i =
@@ -331,11 +354,11 @@ void AboutSigninInternals::RefreshSigninPrefs() {
 }
 
 void AboutSigninInternals::Shutdown() {
-  client_->RemoveContentSettingsObserver(this);
-  signin_error_controller_->RemoveObserver(this);
-  identity_manager_->RemoveObserver(this);
-  identity_manager_->RemoveDiagnosticsObserver(this);
-  account_reconcilor_->RemoveObserver(this);
+  identity_manager_observeration_.Reset();
+  diganostics_observeration_.Reset();
+  client_observeration_.Reset();
+  signin_error_observeration_.Reset();
+  account_reconcilor_observeration_.Reset();
 }
 
 void AboutSigninInternals::OnContentSettingChanged(
@@ -343,22 +366,25 @@ void AboutSigninInternals::OnContentSettingChanged(
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsTypeSet content_type_set) {
   // If this is not a change to cookie settings, just ignore.
-  if (!content_type_set.Contains(ContentSettingsType::COOKIES))
+  if (!content_type_set.Contains(ContentSettingsType::COOKIES)) {
     return;
+  }
 
   NotifyObservers();
 }
 
 void AboutSigninInternals::NotifyObservers() {
-  if (signin_observers_.empty())
+  if (signin_observers_.empty()) {
     return;
+  }
 
   base::Value::Dict signin_status_value = signin_status_.ToValue(
       identity_manager_, signin_error_controller_, client_,
       account_consistency_, account_reconcilor_);
 
-  for (auto& observer : signin_observers_)
+  for (auto& observer : signin_observers_) {
     observer.OnSigninStateChanged(signin_status_value);
+  }
 }
 
 base::Value::Dict AboutSigninInternals::GetSigninStatus() {
@@ -386,7 +412,7 @@ void AboutSigninInternals::OnAccessTokenRequestCompleted(
     const CoreAccountId& account_id,
     const std::string& consumer_id,
     const signin::ScopeSet& scopes,
-    GoogleServiceAuthError error,
+    const GoogleServiceAuthError& error,
     base::Time expiration_time) {
   TokenInfo* token = signin_status_.FindToken(account_id, consumer_id, scopes);
   if (!token) {
@@ -442,8 +468,9 @@ void AboutSigninInternals::OnAccessTokenRemovedFromCache(
     const signin::ScopeSet& scopes) {
   for (const std::unique_ptr<TokenInfo>& token :
        signin_status_.token_info_map[account_id]) {
-    if (token->scopes == scopes)
+    if (token->scopes == scopes) {
       token->Invalidate();
+    }
   }
   NotifyObservers();
 }
@@ -471,35 +498,62 @@ void AboutSigninInternals::OnUnblockReconcile() {
   NotifyObservers();
 }
 
+void AboutSigninInternals::OnStateChanged(
+    signin_metrics::AccountReconcilorState state) {
+  NotifyObservers();
+}
+
 void AboutSigninInternals::OnPrimaryAccountChanged(
     const signin::PrimaryAccountChangeEvent& event) {
+  switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
+    case signin::PrimaryAccountChangeEvent::Type::kNone:
+      break;
+
+    case signin::PrimaryAccountChangeEvent::Type::kSet:
+      NotifyTimedSigninFieldValueChanged(
+          signin_internals_util::LAST_SIGNIN_ACCESS_POINT,
+          base::ToString(event.GetSetPrimaryAccountAccessPoint().value()));
+      break;
+
+    case signin::PrimaryAccountChangeEvent::Type::kCleared:
+      NotifyTimedSigninFieldValueChanged(
+          signin_internals_util::LAST_SIGNIN_ACCESS_POINT, std::string());
+      NotifyTimedSigninFieldValueChanged(
+          signin_internals_util::LAST_SIGNOUT_SOURCE,
+          base::ToString(event.GetClearPrimaryAccountSource().value()));
+      break;
+  }
+
   NotifyObservers();
 }
 
 void AboutSigninInternals::OnAccountsInCookieUpdated(
     const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
     const GoogleServiceAuthError& error) {
-  if (error.state() != GoogleServiceAuthError::NONE)
+  if (error.state() != GoogleServiceAuthError::NONE) {
     return;
+  }
 
   base::Value::List cookie_info;
   for (const auto& signed_in_account :
-       accounts_in_cookie_jar_info.signed_in_accounts) {
+       accounts_in_cookie_jar_info.GetPotentiallyInvalidSignedInAccounts()) {
     AddCookieEntry(cookie_info, signed_in_account.raw_email,
                    signed_in_account.gaia_id,
                    signed_in_account.valid ? "Valid" : "Invalid");
   }
 
-  if (accounts_in_cookie_jar_info.signed_in_accounts.size() == 0) {
-    AddCookieEntry(cookie_info, "No Accounts Present.", std::string(),
+  if (accounts_in_cookie_jar_info.GetPotentiallyInvalidSignedInAccounts()
+          .size() == 0) {
+    AddCookieEntry(cookie_info, "No Accounts Present.", GaiaId(),
                    std::string());
   }
 
   base::Value::Dict cookie_status_dict;
   cookie_status_dict.Set("cookie_info", std::move(cookie_info));
   // Update the observers that the cookie's accounts are updated.
-  for (auto& observer : signin_observers_)
+  for (auto& observer : signin_observers_) {
     observer.OnCookieAccountsFetched(cookie_status_dict);
+  }
 }
 
 AboutSigninInternals::TokenInfo::TokenInfo(const std::string& consumer_id,
@@ -510,7 +564,7 @@ AboutSigninInternals::TokenInfo::TokenInfo(const std::string& consumer_id,
       error(GoogleServiceAuthError::AuthErrorNone()),
       removed_(false) {}
 
-AboutSigninInternals::TokenInfo::~TokenInfo() {}
+AboutSigninInternals::TokenInfo::~TokenInfo() = default;
 
 bool AboutSigninInternals::TokenInfo::LessThan(
     const std::unique_ptr<TokenInfo>& a,
@@ -519,7 +573,9 @@ bool AboutSigninInternals::TokenInfo::LessThan(
          std::tie(b->request_time, b->consumer_id, b->scopes);
 }
 
-void AboutSigninInternals::TokenInfo::Invalidate() { removed_ = true; }
+void AboutSigninInternals::TokenInfo::Invalidate() {
+  removed_ = true;
+}
 
 base::Value::Dict AboutSigninInternals::TokenInfo::ToValue() const {
   base::Value::Dict token_info;
@@ -530,24 +586,26 @@ base::Value::Dict AboutSigninInternals::TokenInfo::ToValue() const {
     scopes_str += *it + "\n";
   }
   token_info.Set("scopes", scopes_str);
-  token_info.Set("request_time", base::TimeToISO8601(request_time));
+  token_info.Set("request_time", base::TimeFormatAsIso8601(request_time));
 
   if (removed_) {
     token_info.Set("status", "Token was revoked.");
   } else if (!receive_time.is_null()) {
     if (error == GoogleServiceAuthError::AuthErrorNone()) {
       bool token_expired = expiration_time < base::Time::Now();
-      std::string expiration_time_string = base::TimeToISO8601(expiration_time);
+      std::string expiration_time_string =
+          base::TimeFormatAsIso8601(expiration_time);
       if (expiration_time.is_null()) {
         token_expired = false;
         expiration_time_string = "Expiration time not available";
       }
       std::string status_str;
       std::string expire_string = "Expire";
-      if (token_expired)
+      if (token_expired) {
         expire_string = "Expired";
+      }
       base::StringAppendF(&status_str, "Received token at %s. %s at %s",
-                          base::TimeToISO8601(receive_time).c_str(),
+                          base::TimeFormatAsIso8601(receive_time).c_str(),
                           expire_string.c_str(),
                           expiration_time_string.c_str());
       // JS code looks for `Expired at` string in order to mark
@@ -582,25 +640,27 @@ std::string AboutSigninInternals::RefreshTokenEvent::GetTypeAsString() const {
 }
 
 AboutSigninInternals::SigninStatus::SigninStatus()
-    : timed_signin_fields(signin_internals_util::TIMED_FIELDS_COUNT) {}
+    : timed_signin_fields(signin_internals_util::TIMED_FIELDS_END) {}
 
-AboutSigninInternals::SigninStatus::~SigninStatus() {}
+AboutSigninInternals::SigninStatus::~SigninStatus() = default;
 
 AboutSigninInternals::TokenInfo* AboutSigninInternals::SigninStatus::FindToken(
     const CoreAccountId& account_id,
     const std::string& consumer_id,
     const signin::ScopeSet& scopes) {
   for (const std::unique_ptr<TokenInfo>& token : token_info_map[account_id]) {
-    if (token->consumer_id == consumer_id && token->scopes == scopes)
+    if (token->consumer_id == consumer_id && token->scopes == scopes) {
       return token.get();
+    }
   }
   return nullptr;
 }
 
 void AboutSigninInternals::SigninStatus::AddRefreshTokenEvent(
     const AboutSigninInternals::RefreshTokenEvent& event) {
-  if (refresh_token_events.size() > kMaxRefreshTokenListSize)
+  if (refresh_token_events.size() > kMaxRefreshTokenListSize) {
     refresh_token_events.pop_front();
+  }
 
   refresh_token_events.push_back(event);
 }
@@ -638,7 +698,7 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
           account_info.account_id.ToString());
       AddSectionEntry(basic_info,
                       SigninStatusFieldToLabel(signin_internals_util::GAIA_ID),
-                      account_info.gaia);
+                      account_info.gaia.ToString());
       AddSectionEntry(basic_info,
                       SigninStatusFieldToLabel(signin_internals_util::USERNAME),
                       account_info.email);
@@ -663,18 +723,41 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
         basic_info, "Account Reconcilor blocked",
         account_reconcilor->IsReconcileBlocked() ? "True" : "False");
 
+    AddSectionEntry(basic_info, "Account Reconcilor State",
+                    ToString(account_reconcilor->GetState()));
+
+    // At this moment, it is mainly used to debug the state of
+    // `AccountReconcilor`. It will be refreshed automatically when
+    // `AccountReconcilor`'s state changes.
+    AddSectionEntry(basic_info, "Network calls delayed",
+                    signin_client->AreNetworkCallsDelayed() ? "True" : "False");
+
+#if !BUILDFLAG(IS_CHROMEOS)
+    const auto& last_signout_value =
+        timed_signin_fields[signin_internals_util::LAST_SIGNOUT_SOURCE -
+                            signin_internals_util::TIMED_FIELDS_BEGIN];
+    AddSectionEntry(
+        basic_info,
+        SigninStatusFieldToLabel(signin_internals_util::LAST_SIGNOUT_SOURCE),
+        last_signout_value.first, last_signout_value.second);
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
     AddSection(signin_info, std::move(basic_info), "Basic Information");
   }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Time and status information of the possible sign in types.
   {
     base::Value::List detailed_info;
     for (signin_internals_util::TimedSigninStatusField i =
              signin_internals_util::TIMED_FIELDS_BEGIN;
          i < signin_internals_util::TIMED_FIELDS_END; ++i) {
-      const std::string status_field_label = SigninStatusFieldToLabel(i);
+      // The sign-out source is logged in the basic section.
+      if (i == signin_internals_util::LAST_SIGNOUT_SOURCE) {
+        continue;
+      }
 
+      const std::string status_field_label = SigninStatusFieldToLabel(i);
       AddSectionEntry(
           detailed_info, status_field_label,
           timed_signin_fields[i - signin_internals_util::TIMED_FIELDS_BEGIN]
@@ -691,7 +774,7 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
       base::Time next_retry_time =
           base::Time::NowFromSystemTime() + cookie_requests_delay;
       AddSectionEntry(detailed_info, "Cookie Manager Next Retry",
-                      base::TimeToISO8601(next_retry_time), "");
+                      base::TimeFormatAsIso8601(next_retry_time), "");
     }
 
     base::TimeDelta token_requests_delay =
@@ -702,12 +785,12 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
       base::Time next_retry_time =
           base::Time::NowFromSystemTime() + token_requests_delay;
       AddSectionEntry(detailed_info, "Token Service Next Retry",
-                      base::TimeToISO8601(next_retry_time), "");
+                      base::TimeFormatAsIso8601(next_retry_time), "");
     }
 
     AddSection(signin_info, std::move(detailed_info), "Last Signin Details");
   }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   base::Value::Dict signin_status;
   signin_status.Set("signin_info", std::move(signin_info));
@@ -717,8 +800,9 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
   for (auto& it : token_info_map) {
     base::Value::List token_details;
     std::sort(it.second.begin(), it.second.end(), TokenInfo::LessThan);
-    for (const std::unique_ptr<TokenInfo>& token : it.second)
+    for (const std::unique_ptr<TokenInfo>& token : it.second) {
       token_details.Append(token->ToValue());
+    }
 
     AddSection(token_info, std::move(token_details), it.first.ToString());
   }
@@ -736,7 +820,7 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
     for (const CoreAccountInfo& account_info : accounts_with_refresh_tokens) {
       base::Value::Dict entry;
       entry.Set("accountId", account_info.account_id.ToString());
-      // TODO(https://crbug.com/919793): Remove this field once the token
+      // TODO(crbug.com/41434401): Remove this field once the token
       // service is internally consistent on all platforms.
       entry.Set("hasRefreshToken", identity_manager->HasAccountWithRefreshToken(
                                        account_info.account_id));
@@ -744,6 +828,13 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
           "hasAuthError",
           identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
               account_info.account_id));
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+      if (switches::IsChromeRefreshTokenBindingEnabled(
+              signin_client->GetPrefs())) {
+        entry.Set("isBound", identity_manager->HasAccountWithBoundRefreshToken(
+                                 account_info.account_id));
+      }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
       account_info_section.Append(std::move(entry));
     }
   }
@@ -754,7 +845,7 @@ base::Value::Dict AboutSigninInternals::SigninStatus::ToValue(
   for (const auto& event : refresh_token_events) {
     base::Value::Dict entry;
     entry.Set("accountId", event.account_id.ToString());
-    entry.Set("timestamp", base::TimeToISO8601(event.timestamp));
+    entry.Set("timestamp", base::TimeFormatAsIso8601(event.timestamp));
     entry.Set("type", event.GetTypeAsString());
     entry.Set("source", event.source);
     refresh_token_events_value.Append(std::move(entry));

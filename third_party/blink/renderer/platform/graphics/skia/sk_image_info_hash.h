@@ -9,11 +9,10 @@
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 
-namespace WTF {
+namespace blink {
 
 template <>
-struct DefaultHash<SkImageInfo> {
-  STATIC_ONLY(DefaultHash);
+struct HashTraits<SkImageInfo> : GenericHashTraits<SkImageInfo> {
   static unsigned GetHash(const SkImageInfo& key) {
     unsigned result = HashInts(key.width(), key.height());
     result = HashInts(result, key.colorType());
@@ -22,32 +21,18 @@ struct DefaultHash<SkImageInfo> {
       result = HashInts(result, static_cast<uint32_t>(cs->hash()));
     return result;
   }
-  static bool Equal(const SkImageInfo& a, const SkImageInfo& b) {
-    return a == b;
-  }
-  static const bool safe_to_compare_to_empty_or_deleted = true;
-};
 
-template <>
-struct HashTraits<SkImageInfo> : GenericHashTraits<SkImageInfo> {
-  STATIC_ONLY(HashTraits);
   static const bool kEmptyValueIsZero = true;
-  static SkImageInfo EmptyValue() {
-    return SkImageInfo::Make(0, 0, kUnknown_SkColorType, kUnknown_SkAlphaType,
-                             nullptr);
-  }
-  static void ConstructDeletedValue(SkImageInfo& slot, bool) {
-    slot = SkImageInfo::Make(-1, -1, kUnknown_SkColorType, kUnknown_SkAlphaType,
-                             nullptr);
+  static SkImageInfo EmptyValue() { return SkImageInfo::MakeUnknown(); }
+  static void ConstructDeletedValue(SkImageInfo& slot) {
+    new (base::NotNullTag::kNotNull, &slot)
+        SkImageInfo(SkImageInfo::MakeUnknown(-1, -1));
   }
   static bool IsDeletedValue(const SkImageInfo& value) {
-    return value.width() == -1 && value.height() == -1 &&
-           value.colorType() == kUnknown_SkColorType &&
-           value.alphaType() == kUnknown_SkAlphaType &&
-           value.colorSpace() == nullptr;
+    return value == SkImageInfo::MakeUnknown(-1, -1);
   }
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SKIA_SK_IMAGE_INFO_HASH_H_

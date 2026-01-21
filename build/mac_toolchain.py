@@ -20,7 +20,6 @@ the full revision, e.g. 9A235.
 
 import argparse
 import os
-import pkg_resources
 import platform
 import plistlib
 import shutil
@@ -34,22 +33,29 @@ def LoadPList(path):
     return plistlib.load(f)
 
 
-# This contains binaries from Xcode 14.0 14B47b along with the macOS 13 SDK
-# (13.0 22A372). To build these packages, see comments in
-# build/xcode_binaries.yaml
-
+# This contains binaries from Xcode 26.2 (17C52) along with the macOS 26.2 SDK
+# (25C57, which is like macOS 26.2 25C56) and the Metal toolchain (17C48,
+# 32023). To build these packages, see comments in build/xcode_binaries.yaml.
+#
+# To update the version numbers, open Xcode's "About Xcode" or run `xcodebuild
+# -version` for the Xcode version, and run `xcrun --show-sdk-version` and `xcrun
+# --show-sdk-build-version` for the SDK version. To update the _TAG, use the
+# output of the `cipd create` command mentioned in xcode_binaries.yaml; it's the
+# part after the colon. Or check the CIPD site
+# (https://chrome-infra-packages.appspot.com/) at the path given in
+# MAC_BINARIES_LABEL.
 MAC_BINARIES_LABEL = 'infra_internal/ios/xcode/xcode_binaries/mac-amd64'
-MAC_BINARIES_TAG = '14b47b'
+MAC_BINARIES_TAG = 'FsAKlPgYHTC5c2eAvQEgkLGSTsmEpz8YH2TWTyewW6YC'
 
 # The toolchain will not be downloaded if the minimum OS version is not met. 19
-# is the major version number for macOS 10.15. Xcode 14.0 14B47b only runs on
-# macOS 12.4 and newer, but some bots are still running older OS versions. macOS
-# 10.15.4, the OS minimum through Xcode 12.4, still seems to work.
+# is the Darwin major version number for macOS 10.15. Xcode 26.0 17A324 only
+# runs on macOS 15.6 and newer, but some bots are still running older OS
+# versions. macOS 10.15.4, the OS minimum through Xcode 12.4, still seems to
+# work.
 MAC_MINIMUM_OS_VERSION = [19, 4]
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 TOOLCHAIN_ROOT = os.path.join(BASE_DIR, 'mac_files')
-TOOLCHAIN_BUILD_DIR = os.path.join(TOOLCHAIN_ROOT, 'Xcode.app')
 
 # Always integrity-check the entire SDK. Mac SDK packages are complex and often
 # hit edge cases in cipd (eg https://crbug.com/1033987,
@@ -152,8 +158,8 @@ def InstallXcodeBinaries():
     current_license_plist = LoadPList(current_license_path)
     xcode_version = current_license_plist.get(
         'IDEXcodeVersionForAgreedToGMLicense')
-    if (xcode_version is not None and pkg_resources.parse_version(xcode_version)
-        >= pkg_resources.parse_version(cipd_xcode_version)):
+    if (xcode_version is not None
+        and xcode_version.split('.') >= cipd_xcode_version.split('.')):
       should_overwrite_license = False
 
   if not should_overwrite_license:

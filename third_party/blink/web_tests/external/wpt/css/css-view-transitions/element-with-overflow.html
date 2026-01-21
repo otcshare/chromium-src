@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html class=reftest-wait>
 <title>View transitions: element with overflow</title>
-<link rel="help" href="https://github.com/WICG/view-transitions">
+<link rel="help" href="https://drafts.csswg.org/css-view-transitions-1/">
 <link rel="author" href="mailto:khushalsagar@chromium.org">
 <link rel="match" href="element-with-overflow-ref.html">
 
@@ -12,14 +12,12 @@
     height: 10px;
     view-transition-name: hidden;
     background: green;
-    contain: layout;
   }
 
   .target {
     width: 100px;
     height: 100px;
     background: lightblue;
-    contain: layout;
     view-transition-name: target;
   }
   .inner {

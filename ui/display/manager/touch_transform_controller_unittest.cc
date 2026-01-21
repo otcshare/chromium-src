@@ -4,10 +4,12 @@
 
 #include "ui/display/manager/touch_transform_controller.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/manager/default_touch_transform_setter.h"
@@ -15,10 +17,12 @@
 #include "ui/display/manager/test/touch_device_manager_test_api.h"
 #include "ui/display/manager/touch_device_manager.h"
 #include "ui/display/screen_base.h"
+#include "ui/display/tablet_state.h"
+#include "ui/display/test/test_screen.h"
 #include "ui/events/devices/device_data_manager.h"
 
-namespace display {
-namespace test {
+namespace display::test {
+
 namespace {
 
 constexpr int kDisplayId1 = 1;
@@ -114,6 +118,10 @@ class TouchTransformControllerTest : public testing::Test {
         display, touch_display, touchscreen);
   }
 
+  void SetIsCalibrating(bool is_calibrating) {
+    touch_transform_controller_->SetForCalibration(is_calibrating);
+  }
+
   double GetTouchResolutionScale(
       const ManagedDisplayInfo& touch_display,
       const ui::TouchscreenDevice& touch_device) const {
@@ -121,14 +129,19 @@ class TouchTransformControllerTest : public testing::Test {
                                                                 touch_device);
   }
 
+  void SetTabletState(TabletState state) {
+    static_cast<test::TestScreen&>(*Screen::Get())
+        .OverrideTabletStateForTesting(state);
+  }
+
   TouchDeviceManager* touch_device_manager() { return touch_device_manager_; }
 
   // testing::Test:
   void SetUp() override {
     ui::DeviceDataManager::CreateInstance();
-    std::unique_ptr<ScreenBase> screen = std::make_unique<ScreenBase>();
-    Screen::SetScreenInstance(screen.get());
-    display_manager_ = std::make_unique<DisplayManager>(std::move(screen));
+    std::unique_ptr<ScreenBase> test_screen = std::make_unique<TestScreen>();
+    Screen::SetScreenInstance(test_screen.get());
+    display_manager_ = std::make_unique<DisplayManager>(std::move(test_screen));
     touch_device_manager_ = display_manager_->touch_device_manager();
     touch_transform_controller_ = std::make_unique<TouchTransformController>(
         display_manager_.get(),
@@ -143,8 +156,7 @@ class TouchTransformControllerTest : public testing::Test {
   ManagedDisplayInfo CreateDisplayInfo(int64_t id,
                                        const ui::TouchscreenDevice& device,
                                        const gfx::Rect& bounds) {
-    ManagedDisplayInfo info(id, std::string(), false);
-    info.SetBounds(bounds);
+    ManagedDisplayInfo info = display::CreateDisplayInfo(id, bounds);
 
     // Create a default mode.
     ManagedDisplayInfo::ManagedDisplayModeList default_modes(
@@ -161,7 +173,7 @@ class TouchTransformControllerTest : public testing::Test {
  private:
   std::unique_ptr<DisplayManager> display_manager_;
   std::unique_ptr<TouchTransformController> touch_transform_controller_;
-  TouchDeviceManager* touch_device_manager_;
+  raw_ptr<TouchDeviceManager> touch_device_manager_;
 };
 
 TEST_F(TouchTransformControllerTest, MirrorModeLetterboxing) {
@@ -281,7 +293,7 @@ TEST_F(TouchTransformControllerTest, MirrorModePillarboxing) {
   EXPECT_EQ(100, y);
 
   // In pillarboxing, there is (1-768*(1024/768)/1366)/2 = 12.5% of the
-  // width on both the left & rigth region of the screen is blank.
+  // width on both the left & right region of the screen is blank.
   // When touch events coming at X range [0, 1024), the mapping should be
   // [0, ~128] ---> < 0
   // [~128, ~896] ---> [0, 1024)
@@ -445,12 +457,12 @@ TEST_F(TouchTransformControllerTest, ExtendedMode) {
 
 TEST_F(TouchTransformControllerTest, TouchRadiusScale) {
   ui::TouchscreenDevice touch_device =
-      CreateTouchscreenDevice(5, gfx::Size(1001, 1001));
+      CreateTouchscreenDevice(5, gfx::Size(100001, 100001));
   ManagedDisplayInfo display =
       CreateDisplayInfo(1, touch_device, gfx::Rect(0, 0, 2560, 1600));
 
-  // Default touchscreen position range is 1001x1001;
-  EXPECT_EQ(sqrt((2560.0 * 1600.0) / (1001.0 * 1001.0)),
+  // Default touchscreen position range is 100001x100001;
+  EXPECT_EQ(sqrt((2560.0 * 1600.0) / (100001.0 * 100001.0)),
             GetTouchResolutionScale(display, touch_device));
 }
 
@@ -535,6 +547,207 @@ TEST_F(TouchTransformControllerTest, OzoneTranslation) {
   device_manager->ApplyTouchTransformer(kTouchId2, &x, &y);
   EXPECT_NEAR(1920, x, 0.5);
   EXPECT_NEAR(1200 + kDisplaySize.height() + kHiddenGap, y, 0.5);
+
+  // Mirror mode with external display as primary. Touch screen 1 is associated
+  // to display 2.
+  transforms.push_back(CreateTouchDeviceTransform(
+      display2.id(), touchscreen1.id,
+      GetTouchTransform(display2, display1, touchscreen1)));
+  device_manager->ConfigureTouchDevices(transforms);
+
+  EXPECT_EQ(kDisplayId2,
+            device_manager->GetTargetDisplayForTouchDevice(kTouchId1));
+  EXPECT_EQ(kDisplayId2,
+            device_manager->GetTargetDisplayForTouchDevice(kTouchId2));
+
+  x = 1920.0;
+  y = 1200.0;
+  device_manager->ApplyTouchTransformer(kTouchId1, &x, &y);
+  EXPECT_NEAR(1920, x, 0.5);
+  EXPECT_NEAR(1200 + kDisplaySize.height() + kHiddenGap, y, 0.5);
+
+  x = y = 0;
+  device_manager->ApplyTouchTransformer(kTouchId1, &x, &y);
+  EXPECT_NEAR(0, x, 0.5);
+  EXPECT_NEAR(kDisplaySize.height() + kHiddenGap, y, 0.5);
+}
+
+TEST_F(TouchTransformControllerTest, RotationInTabletMirrorMode) {
+  constexpr gfx::Size kDisplaySize1(1920, 1200);
+  constexpr gfx::Size kDisplaySize2(1920, 1080);
+  constexpr int kHiddenGap = 50;
+
+  SetTabletState(TabletState::kInTabletMode);
+
+  ui::TouchscreenDevice touchscreen1 =
+      CreateTouchscreenDevice(kTouchId1, kDisplaySize1);
+  ui::TouchscreenDevice touchscreen2 =
+      CreateTouchscreenDevice(kTouchId2, kDisplaySize2);
+
+  ManagedDisplayInfo display1 =
+      CreateDisplayInfo(kDisplayId1, touchscreen1,
+                        {kDisplaySize1.width(), kDisplaySize1.height()});
+  ManagedDisplayInfo display2 =
+      CreateDisplayInfo(kDisplayId2, touchscreen2,
+                        {0, kDisplaySize2.height() + kHiddenGap,
+                         kDisplaySize2.width(), kDisplaySize2.height()});
+
+  constexpr std::array<Display::Rotation, 4> rotList = {
+      Display::ROTATE_0, Display::ROTATE_90, Display::ROTATE_180,
+      Display::ROTATE_270};
+
+  // Test the transformation of 2 points. Bottom left and Top right.
+  struct TestPoint {
+    float x;
+    float y;
+  };
+
+  // Scenario 1: Display1 has same rotation as Display2.
+  // All the coordinates are scaled by (1200/1080) = 1.111. Then a
+  // translation of (1 - 1200/1080) * 0.5 * 1920 = -106.667 will be applied
+  // for pillar boxing. Display2 touch points with x coordinates in (96,
+  // 1824) will be mapped to (0, 1920), and y coordinates in (0, 1080) will
+  // be mapped to (0, 1200). The expected points are flipped when there is a
+  // 180 rotation.
+  constexpr std::pair<TestPoint, TestPoint> test1_touch = {{96, 0},
+                                                           {1824, 1080}};
+  constexpr std::pair<TestPoint, TestPoint> test1_transformed = {{0, 0},
+                                                                 {1920, 1200}};
+
+  // Scenario 2: Display 1 has a 90 degree rotation over Display 2.
+  // (i.e. Display1 1200x1920 Display2 1920x1080).
+  // All the coordinates are scaled by
+  // (1920/1080) = 1.778. Then a translation of (1 - (1920/1080)/(1200/1920)) *
+  // 0.5 * 1200 = -1106.667 will be applied for pillar boxing.
+  // Display2 touch points with x coordinates in (622.5, 1297.5) will be mapped
+  // to y coordinate (0, 1200), and y coordinates in (0, 1080) will be mapped to
+  // x coordinate (0, 1920). The expected points are flipped when there is a 180
+  // rotation.
+
+  const std::pair<TestPoint, TestPoint> test2_touch = {{622.5, 0},
+                                                       {1297.5, 1080}};
+  const std::pair<TestPoint, TestPoint> test2_transformed = {{0, 1200},
+                                                             {1920, 0}};
+
+  ui::DeviceDataManager* device_manager = ui::DeviceDataManager::GetInstance();
+
+  for (const Display::Rotation rot1 : rotList) {
+    for (const Display::Rotation rot2 : rotList) {
+      display1.SetRotation(rot1, Display::RotationSource::ACTIVE);
+      display2.SetRotation(rot2, Display::RotationSource::ACTIVE);
+
+      std::vector<ui::TouchDeviceTransform> transforms;
+
+      // Mirror Mode, both touch screen associated with Display 1
+      transforms.push_back(CreateTouchDeviceTransform(
+          display1.id(), touchscreen1.id,
+          GetTouchTransform(display1, display1, touchscreen1)));
+
+      transforms.push_back(CreateTouchDeviceTransform(
+          display1.id(), touchscreen2.id,
+          GetTouchTransform(display1, display2, touchscreen2)));
+      device_manager->ConfigureTouchDevices(transforms);
+
+      EXPECT_EQ(kDisplayId1,
+                device_manager->GetTargetDisplayForTouchDevice(kTouchId1));
+      EXPECT_EQ(kDisplayId1,
+                device_manager->GetTargetDisplayForTouchDevice(kTouchId2));
+
+      std::pair<TestPoint, TestPoint> touches;
+      std::pair<TestPoint, TestPoint> expected;
+      if ((rot1 - rot2) % 2 == 0) {
+        // Both landscape or both portrait.
+        touches = test1_touch;
+        expected = test1_transformed;
+      } else {
+        // One is landscape one is portrait.
+        touches = test2_touch;
+        expected = test2_transformed;
+      }
+
+      // Since our test points are defined for the case of having 0 or 90-degree
+      // rotation between the 2 displays, for the case of 180 or 270-degree
+      // rotation, we need to flip the order of the test points.
+      if (((rot2 - rot1 + 4) % 4 > 1)) {
+        expected = std::pair(expected.second, expected.first);
+      }
+
+      float x = touches.first.x;
+      float y = touches.first.y;
+
+      device_manager->ApplyTouchTransformer(kTouchId2, &x, &y);
+      EXPECT_NEAR(expected.first.x, x, 0.5);
+      EXPECT_NEAR(expected.first.y, y, 0.5);
+
+      x = touches.second.x;
+      y = touches.second.y;
+
+      device_manager->ApplyTouchTransformer(kTouchId2, &x, &y);
+      EXPECT_NEAR(expected.second.x, x, 0.5);
+      EXPECT_NEAR(expected.second.y, y, 0.5);
+    }
+  }
+
+  SetTabletState(TabletState::kInClamshellMode);
+}
+
+// Test that the controller doesn't apply any mirror mode transformation while
+// calibrating.
+TEST_F(TouchTransformControllerTest, NoMirrorTransformWhileCalibrating) {
+  constexpr gfx::Size kDisplaySize(1920, 1200);
+
+  ui::TouchscreenDevice touchscreen1 =
+      CreateTouchscreenDevice(kTouchId1, kDisplaySize);
+  ui::TouchscreenDevice touchscreen2 =
+      CreateTouchscreenDevice(kTouchId2, kDisplaySize);
+
+  ManagedDisplayInfo display1 = CreateDisplayInfo(
+      kDisplayId1, touchscreen1, {kDisplaySize.width(), kDisplaySize.height()});
+  ManagedDisplayInfo display2 = CreateDisplayInfo(
+      kDisplayId2, touchscreen2,
+      {0, kDisplaySize.height(), kDisplaySize.width(), kDisplaySize.height()});
+
+  ui::DeviceDataManager* device_manager = ui::DeviceDataManager::GetInstance();
+
+  std::vector<ui::TouchDeviceTransform> transforms;
+
+  // Test the general case of mirror Mode, primary is display 2, touch display 1
+  // associated with display 2.
+  transforms.push_back(CreateTouchDeviceTransform(
+      display2.id(), touchscreen1.id,
+      GetTouchTransform(display2, display1, touchscreen1)));
+
+  device_manager->ConfigureTouchDevices(transforms);
+
+  EXPECT_EQ(kDisplayId2,
+            device_manager->GetTargetDisplayForTouchDevice(kTouchId1));
+
+  float x, y;
+  x = y = 0.0;
+
+  device_manager->ApplyTouchTransformer(kTouchId1, &x, &y);
+  EXPECT_NEAR(0, x, 0.5);
+  EXPECT_NEAR(kDisplaySize.height(), y, 0.5);
+
+  // Calibration mode.
+  SetIsCalibrating(true);
+
+  // Refresh the touch transformer with the same parameters.
+  transforms.push_back(CreateTouchDeviceTransform(
+      display2.id(), touchscreen1.id,
+      GetTouchTransform(display2, display1, touchscreen1)));
+
+  device_manager->ConfigureTouchDevices(transforms);
+
+  x = y = 0.0;
+
+  // No transform should be applied.
+  device_manager->ApplyTouchTransformer(kTouchId1, &x, &y);
+  EXPECT_NEAR(0, x, 0.5);
+  EXPECT_NEAR(0, y, 0.5);
+
+  // Exit calibration mode.
+  SetIsCalibrating(false);
 }
 
 TEST_F(TouchTransformControllerTest, AccurateUserTouchCalibration) {
@@ -900,5 +1113,4 @@ TEST_F(TouchTransformControllerTest, PillarBoxingUserTouchCalibration) {
   EXPECT_NEAR(0.0f, y, 0.01f);
 }
 
-}  // namespace test
-}  // namespace display
+}  // namespace display::test

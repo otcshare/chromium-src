@@ -7,9 +7,13 @@
 #include <xcb/xcb.h>
 #include <xcb/xproto.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/x/event.h"
 #include "ui/gtk/gtk_compat.h"
+#include "ui/gtk/gtk_util.h"
 
 namespace gtk {
 
@@ -25,8 +29,9 @@ x11::Event ConvertGdkEventToKeyEvent(GdkEvent* gdk_event) {
     auto* key = reinterpret_cast<GdkEventKey*>(gdk_event);
     DCHECK(key->type == GdkKeyPress() || key->type == GdkKeyRelease());
     x11::Window window = x11::Window::None;
-    if (key->window)
+    if (key->window) {
       window = static_cast<x11::Window>(gdk_x11_window_get_xid(key->window));
+    }
 
     x11::KeyEvent key_event{
         .opcode = key->type == GdkKeyPress() ? x11::KeyEvent::Press
@@ -50,9 +55,17 @@ x11::Event ConvertGdkEventToKeyEvent(GdkEvent* gdk_event) {
   guint keyval = gdk_key_event_get_keyval(gdk_event);
   GdkKeymapKey keymap_key{0, 0, 0};
   if (keys) {
+    // SAFETY: `gdk_display_map_keycode` allocates memory for `keys` and
+    // `keyvals` and returns the size in `n_entries`. The returned pointers are
+    // valid for `n_entries` elements.
+    // https://docs.gtk.org/gdk4/method.Display.map_keycode.html
+    base::span<GdkKeymapKey> keys_span =
+        UNSAFE_BUFFERS(base::span(keys, base::checked_cast<size_t>(n_entries)));
+    base::span<guint> keyvals_span = UNSAFE_BUFFERS(
+        base::span(keyvals, base::checked_cast<size_t>(n_entries)));
     for (gint i = 0; i < n_entries; i++) {
-      if (keyvals[i] == keyval) {
-        keymap_key = keys[i];
+      if (keyvals_span[i] == keyval) {
+        keymap_key = keys_span[i];
         break;
       }
     }
@@ -94,8 +107,9 @@ void ProcessGdkEvent(GdkEvent* gdk_event) {
   auto event_type = gtk::GtkCheckVersion(4)
                         ? gtk::GdkEventGetEventType(gdk_event)
                         : *reinterpret_cast<GdkEventType*>(gdk_event);
-  if (event_type != GdkKeyPress() && event_type != GdkKeyRelease())
+  if (event_type != GdkKeyPress() && event_type != GdkKeyRelease()) {
     return;
+  }
 
   // We want to process the gtk event; mapped to an X11 event immediately
   // otherwise if we put it back on the queue we may get items out of order.
@@ -104,26 +118,26 @@ void ProcessGdkEvent(GdkEvent* gdk_event) {
 
 }  // namespace
 
-GtkEventLoopX11::GtkEventLoopX11(GtkWidget* widget) {
+GtkEventLoopX11::GtkEventLoopX11() {
   if (gtk::GtkCheckVersion(4)) {
-    surface_ = gtk_native_get_surface(gtk_widget_get_native(widget));
-    signal_id_ =
-        g_signal_connect(surface_, "event", G_CALLBACK(OnEventThunk), this);
+    auto* surface =
+        gtk_native_get_surface(gtk_widget_get_native(GetDummyWindow()));
+    signal_ = ScopedGSignal(
+        surface, "event",
+        base::BindRepeating(&GtkEventLoopX11::OnEvent, base::Unretained(this)));
   } else {
     gdk_event_handler_set(DispatchGdkEvent, nullptr, nullptr);
   }
 }
 
 GtkEventLoopX11::~GtkEventLoopX11() {
-  if (gtk::GtkCheckVersion(4)) {
-    g_signal_handler_disconnect(surface_, signal_id_);
-  } else {
+  if (!gtk::GtkCheckVersion(4)) {
     gdk_event_handler_set(reinterpret_cast<GdkEventFunc>(gtk_main_do_event),
                           nullptr, nullptr);
   }
 }
 
-gboolean GtkEventLoopX11::OnEvent(GdkEvent* gdk_event) {
+gboolean GtkEventLoopX11::OnEvent(GdkSurface* surface, GdkEvent* gdk_event) {
   DCHECK(gtk::GtkCheckVersion(4));
   ProcessGdkEvent(gdk_event);
   return false;

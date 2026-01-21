@@ -7,20 +7,22 @@
 #include <inttypes.h>
 
 #include <algorithm>
+#include <array>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/time/default_tick_clock.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
-void LogRuntimeCallStats() {
-  LOG(INFO) << "\n"
-            << RuntimeCallStats::From(MainThreadIsolate())->ToString().Utf8();
+void LogRuntimeCallStats(v8::Isolate* isolate) {
+  LOG(INFO) << "\n" << RuntimeCallStats::From(isolate)->ToString().Utf8();
 }
 
 namespace {
@@ -56,32 +58,27 @@ RuntimeCallTimer* RuntimeCallTimer::Stop() {
 }
 
 RuntimeCallStats::RuntimeCallStats(const base::TickClock* clock)
-    : clock_(clock) {
-  static const char* const names[] = {
-#define BINDINGS_COUNTER_NAME(name) "Blink_Bindings_" #name,
-      BINDINGS_COUNTERS(BINDINGS_COUNTER_NAME)  //
+    : counters_{
+#define BINDINGS_COUNTER_NAME(name) RuntimeCallCounter("Blink_Bindings_" #name),
+          BINDINGS_COUNTERS(BINDINGS_COUNTER_NAME)
 #undef BINDINGS_COUNTER_NAME
-#define GC_COUNTER_NAME(name) "Blink_GC_" #name,
-      GC_COUNTERS(GC_COUNTER_NAME)  //
+#define GC_COUNTER_NAME(name) RuntimeCallCounter("Blink_GC_" #name),
+          GC_COUNTERS(GC_COUNTER_NAME)
 #undef GC_COUNTER_NAME
-#define PARSING_COUNTER_NAME(name) "Blink_Parsing_" #name,
-      PARSING_COUNTERS(PARSING_COUNTER_NAME)  //
+#define PARSING_COUNTER_NAME(name) RuntimeCallCounter("Blink_Parsing_" #name),
+          PARSING_COUNTERS(PARSING_COUNTER_NAME)
 #undef PARSING_COUNTER_NAME
-#define STYLE_COUNTER_NAME(name) "Blink_Style_" #name,
-      STYLE_COUNTERS(STYLE_COUNTER_NAME)  //
+#define STYLE_COUNTER_NAME(name) RuntimeCallCounter("Blink_Style_" #name),
+          STYLE_COUNTERS(STYLE_COUNTER_NAME)
 #undef STYLE_COUNTER_NAME
-#define LAYOUT_COUNTER_NAME(name) "Blink_Layout_" #name,
-      LAYOUT_COUNTERS(LAYOUT_COUNTER_NAME)  //
-#undef STYLE_COUNTER_NAME
-#define COUNTER_NAME(name) "Blink_" #name,
-      CALLBACK_COUNTERS(COUNTER_NAME)  //
-      EXTRA_COUNTERS(COUNTER_NAME)
+#define LAYOUT_COUNTER_NAME(name) RuntimeCallCounter("Blink_Layout_" #name),
+          LAYOUT_COUNTERS(LAYOUT_COUNTER_NAME)
+#undef LAYOUT_COUNTER_NAME
+#define COUNTER_NAME(name) RuntimeCallCounter("Blink_" #name),
+          CALLBACK_COUNTERS(COUNTER_NAME) EXTRA_COUNTERS(COUNTER_NAME)
 #undef COUNTER_NAME
-  };
-
-  for (int i = 0; i < number_of_counters_; i++) {
-    counters_[i] = RuntimeCallCounter(names[i]);
-  }
+      },
+      clock_(clock) {
 }
 
 // static
@@ -92,8 +89,8 @@ RuntimeCallStats* RuntimeCallStats::From(v8::Isolate* isolate) {
 }
 
 void RuntimeCallStats::Reset() {
-  for (int i = 0; i < number_of_counters_; i++) {
-    counters_[i].Reset();
+  for (auto& counter : counters_) {
+    counter.Reset();
   }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -104,9 +101,10 @@ void RuntimeCallStats::Reset() {
 }
 
 void RuntimeCallStats::Dump(TracedValue& value) const {
-  for (int i = 0; i < number_of_counters_; i++) {
-    if (counters_[i].GetCount() > 0)
-      counters_[i].Dump(value);
+  for (const auto& counter : counters_) {
+    if (counter.GetCount() > 0) {
+      counter.Dump(value);
+    }
   }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -127,10 +125,10 @@ String RuntimeCallStats::ToString() const {
   builder.Append(
       "Name                                                    Count     Time "
       "(ms)\n\n");
-  for (int i = 0; i < number_of_counters_; i++) {
-    const RuntimeCallCounter* counter = &counters_[i];
-    builder.AppendFormat(row_format, counter->GetName(), counter->GetCount(),
-                         counter->GetTime().InMillisecondsF());
+  for (const auto& counter : counters_) {
+    UNSAFE_TODO(builder.AppendFormat(row_format, counter.GetName(),
+                                     counter.GetCount(),
+                                     counter.GetTime().InMillisecondsF()));
   }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -151,6 +149,12 @@ void RuntimeCallStats::SetRuntimeCallStatsForTesting() {
 // static
 void RuntimeCallStats::ClearRuntimeCallStatsForTesting() {
   g_runtime_call_stats_for_testing = nullptr;
+}
+
+// This function exists to remove runtime_enabled_features.h dependnency from
+// runtime_call_stats.h.
+bool RuntimeCallStats::IsEnabled() {
+  return RuntimeEnabledFeatures::BlinkRuntimeCallStatsEnabled();
 }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -194,11 +198,9 @@ constexpr const char* RuntimeCallStatsScopedTracer::s_name_ =
 
 void RuntimeCallStatsScopedTracer::AddBeginTraceEventIfEnabled(
     v8::Isolate* isolate) {
-  bool category_group_enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(s_category_group_,
-                                     &category_group_enabled);
-  if (LIKELY(!category_group_enabled))
+  if (!TRACE_EVENT_CATEGORY_ENABLED(s_category_group_)) [[likely]] {
     return;
+  }
 
   RuntimeCallStats* stats = RuntimeCallStats::From(isolate);
   if (stats->InUse())

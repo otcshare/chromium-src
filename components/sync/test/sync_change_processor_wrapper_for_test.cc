@@ -4,7 +4,7 @@
 
 #include "components/sync/test/sync_change_processor_wrapper_for_test.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/sync/model/syncable_service.h"
 
 namespace syncer {
@@ -28,8 +28,7 @@ SyncChangeProcessorWrapperForTest::SyncChangeProcessorWrapperForTest(
 SyncChangeProcessorWrapperForTest::~SyncChangeProcessorWrapperForTest() =
     default;
 
-absl::optional<ModelError>
-SyncChangeProcessorWrapperForTest::ProcessSyncChanges(
+std::optional<ModelError> SyncChangeProcessorWrapperForTest::ProcessSyncChanges(
     const base::Location& from_here,
     const SyncChangeList& change_list) {
   return process_sync_changes_.Run(from_here, change_list);

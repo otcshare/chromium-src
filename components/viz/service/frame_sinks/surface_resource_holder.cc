@@ -4,10 +4,18 @@
 
 #include "components/viz/service/frame_sinks/surface_resource_holder.h"
 
+#include <utility>
+
 #include "base/check.h"
 #include "components/viz/service/frame_sinks/surface_resource_holder_client.h"
 
 namespace viz {
+
+ReservedResourceDelegate::~ReservedResourceDelegate() = default;
+
+SurfaceResourceHolder::ResourceRefs::ResourceRefs() = default;
+
+SurfaceResourceHolder::ResourceRefs::~ResourceRefs() = default;
 
 SurfaceResourceHolder::SurfaceResourceHolder(
     SurfaceResourceHolderClient* client)
@@ -22,9 +30,17 @@ void SurfaceResourceHolder::Reset() {
 void SurfaceResourceHolder::ReceiveFromChild(
     const std::vector<TransferableResource>& resources) {
   for (const auto& resource : resources) {
+    // We don't handle reserved resources here. CompositorFrames from clients
+    // can never contain reserved ResourceIds, but viz may handle resources
+    // of its own (e.g. see `SurfaceAnimationManager`), so skip them here.
+    if (resource.id >= kVizReservedRangeStartId) {
+      continue;
+    }
+
     ResourceRefs& ref = resource_id_info_map_[resource.id];
     ref.refs_holding_resource_alive++;
     ref.refs_received_from_child++;
+    ref.shared_image = resource.shared_image();
   }
 }
 
@@ -43,26 +59,30 @@ void SurfaceResourceHolder::RefResources(
 }
 
 void SurfaceResourceHolder::UnrefResources(
-    std::vector<ReturnedResource> resources) {
+    std::vector<ReturnedResourceViz> resources_viz) {
   std::vector<ReturnedResource> resources_available_to_return;
 
-  for (auto& resource : resources) {
+  for (auto& resource_viz : resources_viz) {
     // We don't handle reserved resources here.
-    if (resource.id >= kVizReservedRangeStartId)
+    if (resource_viz.id >= kVizReservedRangeStartId) {
       continue;
+    }
 
-    auto count_it = resource_id_info_map_.find(resource.id);
+    auto count_it = resource_id_info_map_.find(resource_viz.id);
     if (count_it == resource_id_info_map_.end())
       continue;
     ResourceRefs& ref = count_it->second;
-    ref.refs_holding_resource_alive -= resource.count;
+    ref.refs_holding_resource_alive -= resource_viz.count;
     // Keep the newest return sync token that has data.
     // TODO(jbauman): Handle the case with two valid sync tokens.
-    if (resource.sync_token.HasData())
-      ref.sync_token = resource.sync_token;
+    if (resource_viz.sync_token.HasData()) {
+      ref.sync_token = resource_viz.sync_token;
+    }
     if (ref.refs_holding_resource_alive == 0) {
-      resource.sync_token = ref.sync_token;
-      resource.count = ref.refs_received_from_child;
+      ReturnedResource resource{
+          resource_viz.id, ref.shared_image->EndImport(ref.sync_token),
+          std::move(resource_viz.release_fence),
+          /*count=*/ref.refs_received_from_child, resource_viz.lost};
       resources_available_to_return.push_back(std::move(resource));
       resource_id_info_map_.erase(count_it);
     }

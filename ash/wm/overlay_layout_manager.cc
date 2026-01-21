@@ -26,7 +26,7 @@ void OverlayLayoutManager::OnDisplayMetricsChanged(
     const display::Display& display,
     uint32_t changed_metrics) {
   if (display.id() !=
-      Screen::GetScreen()->GetDisplayNearestWindow(overlay_container_).id()) {
+      Screen::Get()->GetDisplayNearestWindow(overlay_container_).id()) {
     // The update wasn't for this container's display.
     return;
   }
@@ -34,7 +34,8 @@ void OverlayLayoutManager::OnDisplayMetricsChanged(
   for (aura::Window* child : overlay_container_->children()) {
     WindowState* window_state = WindowState::Get(child);
     if (window_state->IsFullscreen()) {
-      const WMEvent event(WM_EVENT_WORKAREA_BOUNDS_CHANGED);
+      const DisplayMetricsChangedWMEvent event(
+          display::DisplayObserver::DISPLAY_METRIC_WORK_AREA);
       window_state->OnWMEvent(&event);
     }
   }

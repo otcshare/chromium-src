@@ -4,37 +4,69 @@
 
 #include "third_party/blink/renderer/core/animation/effect_model.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/v8_iteration_composite_operation.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_keyframe_effect_options.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
-absl::optional<EffectModel::CompositeOperation>
-EffectModel::StringToCompositeOperation(const String& composite_string) {
-  DCHECK(composite_string == "replace" || composite_string == "add" ||
-         composite_string == "accumulate" || composite_string == "auto");
-  if (composite_string == "auto")
-    return absl::nullopt;
-  if (composite_string == "add")
-    return kCompositeAdd;
-  if (composite_string == "accumulate")
-    return kCompositeAccumulate;
-  return kCompositeReplace;
+EffectModel::CompositeOperation EffectModel::EnumToCompositeOperation(
+    V8CompositeOperation::Enum composite) {
+  switch (composite) {
+    case V8CompositeOperation::Enum::kAccumulate:
+      return EffectModel::kCompositeAccumulate;
+    case V8CompositeOperation::Enum::kAdd:
+      return EffectModel::kCompositeAdd;
+    case V8CompositeOperation::Enum::kReplace:
+      return EffectModel::kCompositeReplace;
+  }
 }
 
-String EffectModel::CompositeOperationToString(
-    absl::optional<CompositeOperation> composite) {
-  if (!composite)
-    return "auto";
-  switch (composite.value()) {
+std::optional<EffectModel::CompositeOperation>
+EffectModel::EnumToCompositeOperation(
+    V8CompositeOperationOrAuto::Enum composite) {
+  switch (composite) {
+    case V8CompositeOperationOrAuto::Enum::kAccumulate:
+      return EffectModel::kCompositeAccumulate;
+    case V8CompositeOperationOrAuto::Enum::kAdd:
+      return EffectModel::kCompositeAdd;
+    case V8CompositeOperationOrAuto::Enum::kReplace:
+      return EffectModel::kCompositeReplace;
+    case V8CompositeOperationOrAuto::Enum::kAuto:
+      return std::nullopt;
+  }
+}
+
+V8CompositeOperation::Enum EffectModel::CompositeOperationToEnum(
+    CompositeOperation composite) {
+  switch (composite) {
     case EffectModel::kCompositeAccumulate:
-      return "accumulate";
+      return V8CompositeOperation::Enum::kAccumulate;
     case EffectModel::kCompositeAdd:
-      return "add";
+      return V8CompositeOperation::Enum::kAdd;
     case EffectModel::kCompositeReplace:
-      return "replace";
-    default:
-      NOTREACHED();
-      return "";
+      return V8CompositeOperation::Enum::kReplace;
+  }
+}
+
+EffectModel::IterationCompositeOperation
+EffectModel::EnumToIterationCompositeOperation(
+    V8IterationCompositeOperation::Enum iteration_composite) {
+  switch (iteration_composite) {
+    case V8IterationCompositeOperation::Enum::kAccumulate:
+      return EffectModel::kIterationCompositeAccumulate;
+    case V8IterationCompositeOperation::Enum::kReplace:
+      return EffectModel::kIterationCompositeReplace;
+  }
+}
+
+V8IterationCompositeOperation::Enum
+EffectModel::IterationCompositeOperationToEnum(
+    IterationCompositeOperation iteration_composite) {
+  switch (iteration_composite) {
+    case EffectModel::kIterationCompositeAccumulate:
+      return V8IterationCompositeOperation::Enum::kAccumulate;
+    case EffectModel::kIterationCompositeReplace:
+      return V8IterationCompositeOperation::Enum::kReplace;
   }
 }
 }  // namespace blink

@@ -87,6 +87,12 @@ class POLICY_EXPORT DesktopCloudPolicyStore : public UserCloudPolicyStoreBase {
   void Load() override;
   void Store(const enterprise_management::PolicyFetchResponse& policy) override;
 
+  // Reset `persisted_policy_key_` so that we can update signing key in the next
+  // policy fetch request. Not touching other signing key cache to reduce impact
+  // before key is updated.
+  // virtual for testing.
+  virtual void ResetPolicyKey();
+
  protected:
   // Loads cloud policies that have been written on the disk at |policy_path|
   // for caching purposes. Reads the optional |key_path| to load the signing key
@@ -179,6 +185,12 @@ class POLICY_EXPORT UserCloudPolicyStore : public DesktopCloudPolicyStore {
   // Factory method for creating a UserCloudPolicyStore for a profile with path
   // |profile_path|.
   static std::unique_ptr<UserCloudPolicyStore> Create(
+      const base::FilePath& profile_path,
+      scoped_refptr<base::SequencedTaskRunner> background_task_runner);
+
+  // Factory method for creating a UserCloudPolicyStore for extension install
+  // policy with path |profile_path|.
+  static std::unique_ptr<UserCloudPolicyStore> CreateForExtensionInstall(
       const base::FilePath& profile_path,
       scoped_refptr<base::SequencedTaskRunner> background_task_runner);
 

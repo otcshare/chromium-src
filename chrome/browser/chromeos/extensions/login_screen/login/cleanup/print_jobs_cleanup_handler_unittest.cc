@@ -7,8 +7,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/printing/history/print_job_history_service.h"
@@ -34,7 +35,6 @@
 namespace chromeos {
 
 using testing::_;
-using testing::Invoke;
 using testing::WithArg;
 
 namespace {
@@ -55,7 +55,7 @@ class MockPrintingManager
   MockPrintingManager(const MockPrintingManager&) = delete;
   MockPrintingManager& operator=(const MockPrintingManager&) = delete;
 
-  ~MockPrintingManager() override {}
+  ~MockPrintingManager() override = default;
 
   MOCK_METHOD(void,
               DeleteAllPrintJobs,
@@ -129,10 +129,10 @@ class PrintJobsCleanupHandlerUnittest : public testing::Test {
             testing_profile_));
     EXPECT_CALL(*mock, DeleteAllPrintJobs(_))
         .WillOnce(WithArg<0>(
-            Invoke([success](ash::printing::print_management::PrintingManager::
-                                 DeleteAllPrintJobsCallback callback) {
+            [success](ash::printing::print_management::PrintingManager::
+                          DeleteAllPrintJobsCallback callback) {
               std::move(callback).Run(success);
-            })));
+            }));
   }
 
   content::BrowserTaskEnvironment task_environment_;
@@ -140,7 +140,7 @@ class PrintJobsCleanupHandlerUnittest : public testing::Test {
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
   TestingPrefServiceSimple test_prefs_;
   TestingProfileManager testing_profile_manager_;
-  TestingProfile* testing_profile_;
+  raw_ptr<TestingProfile, DanglingUntriaged> testing_profile_;
   base::ScopedTempDir history_dir_;
   std::unique_ptr<ash::TestCupsPrintJobManager> print_job_manager_;
   std::unique_ptr<history::HistoryService> history_service_;
@@ -155,7 +155,7 @@ TEST_F(PrintJobsCleanupHandlerUnittest, Cleanup) {
   base::RunLoop run_loop;
 
   CleanupHandler::CleanupHandlerCallback callback = base::BindLambdaForTesting(
-      [&](const absl::optional<std::string>& error_message) {
+      [&](const std::optional<std::string>& error_message) {
         ASSERT_FALSE(error_message);
         run_loop.QuitClosure().Run();
       });
@@ -172,7 +172,7 @@ TEST_F(PrintJobsCleanupHandlerUnittest, CleanupWithError) {
   base::RunLoop run_loop;
 
   CleanupHandler::CleanupHandlerCallback callback = base::BindLambdaForTesting(
-      [&](const absl::optional<std::string>& error_message) {
+      [&](const std::optional<std::string>& error_message) {
         ASSERT_EQ(error_message, "Failed to delete all print jobs");
         run_loop.QuitClosure().Run();
       });

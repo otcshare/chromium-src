@@ -7,12 +7,13 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/api_resource.h"
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/api/feedback_private/log_source_access_manager.h"
+#include "extensions/common/extension_id.h"
 
 namespace extensions {
 
@@ -23,7 +24,7 @@ class LogSourceResource : public ApiResource {
   static const content::BrowserThread::ID kThreadId =
       content::BrowserThread::UI;
 
-  LogSourceResource(const std::string& extension_id,
+  LogSourceResource(const ExtensionId& extension_id,
                     std::unique_ptr<system_logs::SystemLogsSource> source);
 
   LogSourceResource(const LogSourceResource&) = delete;

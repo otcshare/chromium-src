@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -83,8 +83,7 @@ void CacheStorageBlobToDiskCache::OnComplete(int32_t status,
   received_on_complete_ = true;
   expected_total_size_ = data_length;
   if (data_pipe_closed_) {
-    RunCallback(static_cast<uint64_t>(cache_entry_offset_) ==
-                expected_total_size_);
+    RunCallback(cache_entry_offset_ == expected_total_size_);
   }
 }
 
@@ -95,7 +94,7 @@ void CacheStorageBlobToDiskCache::ReadFromBlob() {
 void CacheStorageBlobToDiskCache::DidWriteDataToEntry(int expected_bytes,
                                                       int rv) {
   if (rv != expected_bytes) {
-    quota_manager_proxy_->NotifyWriteFailed(storage_key_);
+    quota_manager_proxy_->OnClientWriteFailed(storage_key_);
     RunCallback(false /* success */);
     return;
   }
@@ -117,10 +116,8 @@ void CacheStorageBlobToDiskCache::OnDataPipeReadable(MojoResult unused) {
     pending_read_ = nullptr;
   }
 
-  uint32_t available = 0;
-
   MojoResult result = network::MojoToNetPendingBuffer::BeginRead(
-      &consumer_handle_, &pending_read_, &available);
+      &consumer_handle_, &pending_read_);
 
   if (result == MOJO_RESULT_SHOULD_WAIT) {
     handle_watcher_.ArmOrNotify();
@@ -131,8 +128,7 @@ void CacheStorageBlobToDiskCache::OnDataPipeReadable(MojoResult unused) {
     // Done reading, but only signal success if OnComplete has also been called.
     data_pipe_closed_ = true;
     if (received_on_complete_) {
-      RunCallback(static_cast<uint64_t>(cache_entry_offset_) ==
-                  expected_total_size_);
+      RunCallback(cache_entry_offset_ == expected_total_size_);
     }
     return;
   }
@@ -142,20 +138,22 @@ void CacheStorageBlobToDiskCache::OnDataPipeReadable(MojoResult unused) {
     return;
   }
 
-  int bytes_to_read = std::min<int>(kBufferSize, available);
-
-  auto buffer = base::MakeRefCounted<network::MojoToNetIOBuffer>(
-      pending_read_.get(), bytes_to_read);
+  const int bytes_to_read = std::min<int>(kBufferSize, pending_read_->size());
+  auto buffer = base::MakeRefCounted<network::MojoToNetIOBuffer>(pending_read_,
+                                                                 bytes_to_read);
 
   net::CompletionOnceCallback cache_write_callback =
       base::BindOnce(&CacheStorageBlobToDiskCache::DidWriteDataToEntry,
                      weak_ptr_factory_.GetWeakPtr(), bytes_to_read);
 
   int rv = entry_->WriteData(
-      disk_cache_body_index_, cache_entry_offset_, buffer.get(), bytes_to_read,
-      std::move(cache_write_callback), true /* truncate */);
-  if (rv != net::ERR_IO_PENDING)
+      disk_cache_body_index_, base::checked_cast<int64_t>(cache_entry_offset_),
+      buffer.get(), bytes_to_read, std::move(cache_write_callback),
+      true /* truncate */);
+
+  if (rv != net::ERR_IO_PENDING) {
     CacheStorageBlobToDiskCache::DidWriteDataToEntry(bytes_to_read, rv);
+  }
 }
 
 }  // namespace content

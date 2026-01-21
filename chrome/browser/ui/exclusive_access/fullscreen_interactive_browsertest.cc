@@ -4,8 +4,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/test/popup_test_base.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_frame_host.h"
@@ -29,25 +31,38 @@ class FullscreenWebContentsObserver : public content::WebContentsObserver {
   FullscreenWebContentsObserver& operator=(
       const FullscreenWebContentsObserver&) = delete;
 
-  // WebContentsObserver override.
+  // WebContentsObserver overrides.
   void DidAcquireFullscreen(content::RenderFrameHost* rfh) override {
-    EXPECT_EQ(wanted_rfh_, rfh);
-    EXPECT_FALSE(found_value_);
-
+    // Note: This function may be called twice for cross-process child frame
+    // fullscreen.
     if (rfh == wanted_rfh_) {
       found_value_ = true;
       run_loop_.Quit();
     }
   }
+  void DidToggleFullscreenModeForTab(bool entered_fullscreen,
+                                     bool will_cause_resize) override {
+    if (!entered_fullscreen) {
+      did_exit_ = true;
+      run_loop_.Quit();
+    }
+  }
 
   void Wait() {
-    if (!found_value_)
+    if (!found_value_) {
       run_loop_.Run();
+    }
+  }
+  void WaitForExit() {
+    if (!did_exit_) {
+      run_loop_.Run();
+    }
   }
 
  private:
   base::RunLoop run_loop_;
   bool found_value_ = false;
+  bool did_exit_ = false;
   raw_ptr<content::RenderFrameHost> wanted_rfh_;
 };
 
@@ -55,14 +70,14 @@ class FullscreenWebContentsObserver : public content::WebContentsObserver {
 
 class FullscreenInteractiveBrowserTest : public InProcessBrowserTest {
  public:
-  FullscreenInteractiveBrowserTest() {}
+  FullscreenInteractiveBrowserTest() = default;
 
   FullscreenInteractiveBrowserTest(const FullscreenInteractiveBrowserTest&) =
       delete;
   FullscreenInteractiveBrowserTest& operator=(
       const FullscreenInteractiveBrowserTest&) = delete;
 
-  ~FullscreenInteractiveBrowserTest() override {}
+  ~FullscreenInteractiveBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -75,7 +90,7 @@ class FullscreenInteractiveBrowserTest : public InProcessBrowserTest {
 };
 
 // https://crbug.com/1087875: Flaky on Linux, Mac and Windows.
-// TODO(crbug.com/1278361): Flaky on Chrome OS.
+// TODO(crbug.com/40810181): Flaky on Chrome OS.
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_WIN)
 #define MAYBE_NotifyFullscreenAcquired DISABLED_NotifyFullscreenAcquired
@@ -96,16 +111,16 @@ IN_PROC_BROWSER_TEST_F(FullscreenInteractiveBrowserTest,
   // Make the top page fullscreen.
   {
     FullscreenWebContentsObserver observer(web_contents, main_frame);
-    EXPECT_TRUE(
-        ExecuteScript(main_frame, "document.body.webkitRequestFullscreen();"));
+    EXPECT_TRUE(ExecJs(main_frame, "document.body.webkitRequestFullscreen();",
+                       content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
     observer.Wait();
   }
 
   // Make the child frame fullscreen.
   {
     FullscreenWebContentsObserver observer(web_contents, child_frame);
-    EXPECT_TRUE(
-        ExecuteScript(child_frame, "document.body.webkitRequestFullscreen();"));
+    EXPECT_TRUE(ExecJs(child_frame, "document.body.webkitRequestFullscreen();",
+                       content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
     observer.Wait();
   }
 
@@ -115,8 +130,8 @@ IN_PROC_BROWSER_TEST_F(FullscreenInteractiveBrowserTest,
   if (!content::SiteIsolationPolicy::UseDedicatedProcessesForAllSites()) {
     {
       FullscreenWebContentsObserver observer(web_contents, main_frame);
-      EXPECT_TRUE(
-          ExecuteScript(child_frame, "document.webkitExitFullscreen();"));
+      EXPECT_TRUE(ExecJs(child_frame, "document.webkitExitFullscreen();",
+                         content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
       observer.Wait();
     }
   }
@@ -136,23 +151,24 @@ IN_PROC_BROWSER_TEST_F(FullscreenInteractiveBrowserTest,
   // Make the top page fullscreen.
   {
     FullscreenWebContentsObserver observer(web_contents, main_frame);
-    EXPECT_TRUE(
-        ExecuteScript(main_frame, "document.body.webkitRequestFullscreen();"));
+    EXPECT_TRUE(ExecJs(main_frame, "document.body.webkitRequestFullscreen();",
+                       content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
     observer.Wait();
   }
 
   // Make the child frame fullscreen.
   {
     FullscreenWebContentsObserver observer(web_contents, child_frame);
-    EXPECT_TRUE(
-        ExecuteScript(child_frame, "document.body.webkitRequestFullscreen();"));
+    EXPECT_TRUE(ExecJs(child_frame, "document.body.webkitRequestFullscreen();",
+                       content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
     observer.Wait();
   }
 
   // Exit fullscreen on the child frame.
   {
     FullscreenWebContentsObserver observer(web_contents, main_frame);
-    EXPECT_TRUE(ExecuteScript(child_frame, "document.webkitExitFullscreen();"));
+    EXPECT_TRUE(ExecJs(child_frame, "document.webkitExitFullscreen();",
+                       content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
     observer.Wait();
   }
 }

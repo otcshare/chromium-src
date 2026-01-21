@@ -6,8 +6,7 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "device/fido/fido_parsing_utils.h"
 #include "device/fido/hid/fido_hid_discovery.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -73,15 +72,14 @@ void MockFidoHidConnection::ExpectWriteHidInit(
                               IsCtapHidCommand(FidoHidDeviceCommand::kInit),
                               ::testing::_))
       .InSequence(sequence)
-      .WillOnce(::testing::Invoke(
-          [&](auto&&, const std::vector<uint8_t>& buffer,
-              device::mojom::HidConnection::WriteCallback* cb) {
-            ASSERT_EQ(64u, buffer.size());
-            // First 7 bytes are 4 bytes of channel id, one byte representing
-            // HID command, 2 bytes for payload length.
-            SetNonce(base::make_span(buffer).subspan(7, 8));
-            std::move(*cb).Run(true);
-          }));
+      .WillOnce([&](auto&&, const std::vector<uint8_t>& buffer,
+                    device::mojom::HidConnection::WriteCallback* cb) {
+        ASSERT_EQ(64u, buffer.size());
+        // First 7 bytes are 4 bytes of channel id, one byte representing
+        // HID command, 2 bytes for payload length.
+        SetNonce(base::span(buffer).subspan<7, 8>());
+        std::move(*cb).Run(true);
+      });
 }
 
 void MockFidoHidConnection::ExpectHidWriteWithCommand(
@@ -95,11 +93,10 @@ void MockFidoHidConnection::ExpectHidWriteWithCommand(
   EXPECT_CALL(*this,
               WritePtr(::testing::_, IsCtapHidCommand(cmd), ::testing::_))
       .InSequence(sequence)
-      .WillOnce(::testing::Invoke(
-          [&](auto&&, const std::vector<uint8_t>& buffer,
-              device::mojom::HidConnection::WriteCallback* cb) {
-            std::move(*cb).Run(true);
-          }));
+      .WillOnce([&](auto&&, const std::vector<uint8_t>& buffer,
+                    device::mojom::HidConnection::WriteCallback* cb) {
+        std::move(*cb).Run(true);
+      });
 }
 
 void MockFidoHidConnection::ExpectReadAndReplyWith(
@@ -107,10 +104,9 @@ void MockFidoHidConnection::ExpectReadAndReplyWith(
     std::vector<uint8_t> response) {
   EXPECT_CALL(*this, ReadPtr(testing::_))
       .InSequence(sequence)
-      .WillOnce(::testing::Invoke(
-          [response](device::mojom::HidConnection::ReadCallback* cb) {
-            std::move(*cb).Run(true, 0, std::move(response));
-          }));
+      .WillOnce([response](device::mojom::HidConnection::ReadCallback* cb) {
+        std::move(*cb).Run(true, 0, std::move(response));
+      });
 }
 
 bool FakeFidoHidConnection::mock_connection_error_ = false;
@@ -222,7 +218,7 @@ void FakeFidoHidManager::Connect(
 }
 
 void FakeFidoHidManager::AddDevice(device::mojom::HidDeviceInfoPtr device) {
-  DCHECK(!base::Contains(devices_, device->guid));
+  DCHECK(!devices_.contains(device->guid));
   device::mojom::HidDeviceInfo* device_info = device.get();
   for (auto& client : clients_)
     client->DeviceAdded(device_info->Clone());
@@ -249,7 +245,7 @@ void FakeFidoHidManager::RemoveDevice(const std::string device_guid) {
 }
 
 void FakeFidoHidManager::ChangeDevice(device::mojom::HidDeviceInfoPtr device) {
-  DCHECK(base::Contains(devices_, device->guid));
+  DCHECK(devices_.contains(device->guid));
   device::mojom::HidDeviceInfo* device_info = device.get();
   for (auto& client : clients_)
     client->DeviceChanged(device_info->Clone());

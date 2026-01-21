@@ -11,8 +11,6 @@
 #include "Edge.h"
 #include "RecordInfo.h"
 
-struct BlinkGCPluginOptions;
-
 // This visitor checks that the fields of a class and the fields of
 // its embedded objects don't define GC roots.
 class CheckForbiddenFieldsVisitor : public RecursiveEdgeVisitor {
@@ -21,13 +19,15 @@ class CheckForbiddenFieldsVisitor : public RecursiveEdgeVisitor {
     kTaskRunnerInGCManaged,
     kMojoRemoteInGCManaged,
     kMojoReceiverInGCManaged,
+    kMojoAssociatedRemoteInGCManaged,
+    kMojoAssociatedReceiverInGCManaged,
   };
 
   using RootPath = std::vector<FieldPoint*>;
   using VisitingSet = std::set<RecordInfo*>;
   using Errors = std::vector<std::pair<RootPath, Error>>;
 
-  explicit CheckForbiddenFieldsVisitor(const BlinkGCPluginOptions&);
+  explicit CheckForbiddenFieldsVisitor();
 
   // The forbidden fields found across the call(s) to
   // `ContainsForbiddenFields`.
@@ -39,6 +39,7 @@ class CheckForbiddenFieldsVisitor : public RecursiveEdgeVisitor {
   bool ContainsForbiddenFields(RecordInfo* info);
 
   void VisitValue(Value* edge) override;
+  void VisitArrayEdge(ArrayEdge* edge) override;
 
  private:
   bool ContainsForbiddenFieldsInternal(RecordInfo* info);

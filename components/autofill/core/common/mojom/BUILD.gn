@@ -19,10 +19,6 @@ mojom("mojo_types") {
     {
       types = [
         {
-          mojom = "autofill.mojom.Section"
-          cpp = "::autofill::Section"
-        },
-        {
           mojom = "autofill.mojom.FormData"
           cpp = "::autofill::FormData"
         },
@@ -35,12 +31,12 @@ mojom("mojo_types") {
           cpp = "::autofill::FormFieldData"
         },
         {
-          mojom = "autofill.mojom.FormFieldDataPredictions"
-          cpp = "::autofill::FormFieldDataPredictions"
+          mojom = "autofill.mojom.FormFieldData_FillData"
+          cpp = "::autofill::FormFieldData::FillData"
         },
         {
-          mojom = "autofill.mojom.FormsPredictionsMap"
-          cpp = "::autofill::FormsPredictionsMap"
+          mojom = "autofill.mojom.FormFieldDataPredictions"
+          cpp = "::autofill::FormFieldDataPredictions"
         },
         {
           mojom = "autofill.mojom.FormRendererId"
@@ -53,16 +49,16 @@ mojom("mojo_types") {
           copyable_pass_by_value = true
         },
         {
+          mojom = "autofill.mojom.FillId"
+          cpp = "::autofill::FillId"
+        },
+        {
           mojom = "autofill.mojom.ParsingResult"
           cpp = "::autofill::ParsingResult"
         },
         {
           mojom = "autofill.mojom.PasswordAndMetadata"
           cpp = "::autofill::PasswordAndMetadata"
-        },
-        {
-          mojom = "autofill.mojom.PasswordFormFieldPredictionMap"
-          cpp = "::autofill::PasswordFormFieldPredictionMap"
         },
         {
           mojom = "autofill.mojom.PasswordFormFillData"
@@ -77,14 +73,8 @@ mojom("mojo_types") {
           cpp = "::autofill::password_generation::PasswordGenerationUIData"
         },
         {
-          mojom = "autofill.mojom.FormElementWasClicked"
-          cpp = "::autofill::FormElementWasClicked"
-          copyable_pass_by_value = true
-        },
-        {
-          mojom = "autofill.mojom.AutoselectFirstSuggestion"
-          cpp = "::autofill::AutoselectFirstSuggestion"
-          copyable_pass_by_value = true
+          mojom = "autofill.mojom.PasswordSuggestionRequest"
+          cpp = "::autofill::PasswordSuggestionRequest"
         },
       ]
       traits_headers = [ "autofill_types_mojom_traits.h" ]
@@ -118,6 +108,11 @@ source_set("unit_tests") {
     "//components/autofill/core/browser:test_support",
     "//components/password_manager/core/common",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/test_support:test_utils",
     "//testing/gtest",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

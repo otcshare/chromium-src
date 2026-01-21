@@ -7,15 +7,16 @@
 #include <fuchsia/io/cpp/fidl.h>
 #include <lib/sys/cpp/component_context.h>
 #include <lib/sys/cpp/service_directory.h>
+#include <lib/vfs/cpp/pseudo_dir.h>
 #include <lib/vfs/cpp/remote_dir.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 
 namespace fuchsia_component_support {
 
@@ -32,28 +33,46 @@ vfs::PseudoDir* DynamicComponentCapabilitiesDir() {
 }  // namespace
 
 DynamicComponentHost::DynamicComponentHost(
-    base::StringPiece collection,
-    base::StringPiece child_id,
-    base::StringPiece component_url,
+    std::string_view collection,
+    std::string_view child_id,
+    std::string_view component_url,
+    base::OnceClosure on_teardown,
+    fidl::InterfaceHandle<fuchsia::io::Directory> services)
+    : DynamicComponentHost(base::ComponentContextForProcess()
+                               ->svc()
+                               ->Connect<fuchsia::component::Realm>(),
+                           collection,
+                           child_id,
+                           component_url,
+                           std::move(on_teardown),
+                           std::move(services)) {}
+
+DynamicComponentHost::DynamicComponentHost(
+    fuchsia::component::RealmHandle realm,
+    std::string_view collection,
+    std::string_view child_id,
+    std::string_view component_url,
     base::OnceClosure on_teardown,
     fidl::InterfaceHandle<fuchsia::io::Directory> services)
     : collection_(collection),
       child_id_(child_id),
       on_teardown_(std::move(on_teardown)) {
+  DCHECK(realm);
+
+  realm_.Bind(std::move(realm));
   realm_.set_error_handler([this](zx_status_t status) {
     ZX_LOG(ERROR, status) << "Realm disconnected";
     if (on_teardown_) {
       std::move(on_teardown_).Run();
     }
   });
-  base::ComponentContextForProcess()->svc()->Connect(realm_.NewRequest());
 
   // If there is a service directory then offer it to the Component as "/svc".
   fuchsia::component::CreateChildArgs create_args;
   if (services) {
     // Link the service-directory to offer to the CFv2 component.
     zx_status_t status = DynamicComponentCapabilitiesDir()->AddEntry(
-        child_id_, std::make_unique<vfs::RemoteDir>(std::move(services)));
+        child_id_, std::make_unique<vfs::RemoteDir>(services.TakeChannel()));
     ZX_CHECK(status == ZX_OK, status);
     create_args.mutable_dynamic_offers()->push_back(
         fuchsia::component::decl::Offer::WithDirectory(std::move(
@@ -62,7 +81,7 @@ DynamicComponentHost::DynamicComponentHost(
                 .set_source_name(kDynamicComponentCapabilitiesPath)
                 .set_subdir(child_id_)
                 .set_target_name("svc")
-                .set_rights(fuchsia::io::RW_STAR_DIR)
+                .set_rights(fuchsia::io::R_STAR_DIR)
                 .set_dependency_type(
                     fuchsia::component::decl::DependencyType::STRONG))));
   }
@@ -128,6 +147,14 @@ DynamicComponentHost::DynamicComponentHost(
 
 DynamicComponentHost::~DynamicComponentHost() {
   Destroy();
+
+  // If a capabilities directory was created for this component then it must
+  // be torn-down to ensure that it cannot continue to be used after the
+  // component is supposed to have been destroyed.
+  zx_status_t status =
+      DynamicComponentCapabilitiesDir()->RemoveEntry(child_id_);
+  ZX_CHECK(status == ZX_OK || status == ZX_ERR_NOT_FOUND, status)
+      << "RemoveEntry()";
 
   DVLOG(1) << "Deleted DynamicComponentHost " << child_id_;
 

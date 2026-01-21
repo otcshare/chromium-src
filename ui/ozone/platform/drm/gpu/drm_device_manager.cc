@@ -4,14 +4,11 @@
 
 #include "ui/ozone/platform/drm/gpu/drm_device_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/file_descriptor_posix.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
-#include "base/task/single_thread_task_runner.h"
 #include "ui/ozone/platform/drm/gpu/drm_device.h"
 #include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
 
@@ -26,14 +23,14 @@ DrmDeviceManager::~DrmDeviceManager() {
 }
 
 bool DrmDeviceManager::AddDrmDevice(const base::FilePath& path,
-                                    base::File file) {
-  if (base::Contains(devices_, path, &DrmDevice::device_path)) {
+                                    base::ScopedFD fd) {
+  if (std::ranges::contains(devices_, path, &DrmDevice::device_path)) {
     VLOG(2) << "Got request to add existing device: " << path.value();
     return false;
   }
 
   scoped_refptr<DrmDevice> device = drm_device_generator_->CreateDevice(
-      path, std::move(file), !primary_device_);
+      path, std::move(fd), !primary_device_);
   if (!device) {
     // This is expected for non-modesetting devices like VGEM.
     VLOG(1) << "Could not initialize DRM device for " << path.value();
@@ -50,7 +47,7 @@ bool DrmDeviceManager::AddDrmDevice(const base::FilePath& path,
 }
 
 void DrmDeviceManager::RemoveDrmDevice(const base::FilePath& path) {
-  auto it = base::ranges::find(devices_, path, &DrmDevice::device_path);
+  auto it = std::ranges::find(devices_, path, &DrmDevice::device_path);
   if (it == devices_.end()) {
     VLOG(2) << "Got request to remove non-existent device: " << path.value();
     return;

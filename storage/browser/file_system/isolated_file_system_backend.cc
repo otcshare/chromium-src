@@ -10,9 +10,9 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -85,7 +85,6 @@ AsyncFileUtil* IsolatedFileSystemBackend::GetAsyncFileUtil(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
 WatcherManager* IsolatedFileSystemBackend::GetWatcherManager(
@@ -104,11 +103,13 @@ IsolatedFileSystemBackend::GetCopyOrMoveFileValidatorFactory(
 
 std::unique_ptr<FileSystemOperation>
 IsolatedFileSystemBackend::CreateFileSystemOperation(
+    OperationType type,
     const FileSystemURL& url,
     FileSystemContext* context,
     base::File::Error* error_code) const {
   return FileSystemOperation::Create(
-      url, context, std::make_unique<FileSystemOperationContext>(context));
+      type, url, context,
+      std::make_unique<FileSystemOperationContext>(context));
 }
 
 bool IsolatedFileSystemBackend::SupportsStreaming(
@@ -129,10 +130,12 @@ IsolatedFileSystemBackend::CreateFileStreamReader(
     int64_t offset,
     int64_t max_bytes_to_read,
     const base::Time& expected_modification_time,
-    FileSystemContext* context) const {
+    FileSystemContext* context,
+    file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+        file_access) const {
   return FileStreamReader::CreateForLocalFile(
       context->default_file_task_runner(), url.path(), offset,
-      expected_modification_time);
+      expected_modification_time, std::move(file_access));
 }
 
 std::unique_ptr<FileStreamWriter>

@@ -5,8 +5,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -18,7 +18,7 @@
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -106,8 +106,9 @@ void PingPongTest::OnPingDone(const std::string& reply) {
   DCHECK_GT(calls_outstanding_, 0);
   calls_outstanding_--;
 
-  if (!calls_outstanding_)
+  if (!calls_outstanding_) {
     DoPing();
+  }
 }
 
 class MojoE2EPerftest : public core::test::MojoTestBase {
@@ -144,8 +145,9 @@ class MojoE2EPerftest : public core::test::MojoTestBase {
     for (int batch_size : kBatchSizes) {
       for (int message_size : kMessageSizes) {
         int num_messages = kMessages;
-        if (message_size == 65536)
+        if (message_size == 65536) {
           num_messages /= 10;
+        }
         std::string sub_test_name = base::StringPrintf(
             "%s/%dx%d/%dbytes", test_name.c_str(), num_messages / batch_size,
             batch_size, message_size);

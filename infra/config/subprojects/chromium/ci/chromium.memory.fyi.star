@@ -3,35 +3,51 @@
 # found in the LICENSE file.
 """Definitions of builders in the chromium.memory.fyi builder group."""
 
-load("//lib/branches.star", "branches")
-load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "os", "reclient")
-load("//lib/ci.star", "ci")
-load("//lib/consoles.star", "consoles")
+load("@chromium-luci//builder_config.star", "builder_config")
+load("@chromium-luci//builder_health_indicators.star", "blank_low_value_thresholds", "health_spec", "modified_default")
+load("@chromium-luci//builders.star", "cpu", "os")
+load("@chromium-luci//ci.star", "ci")
+load("@chromium-luci//consoles.star", "consoles")
+load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//targets.star", "targets")
+load("//lib/ci_constants.star", "ci_constants")
+load("//lib/siso.star", "siso")
 
 ci.defaults.set(
+    executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_group = "chromium.memory.fyi",
+    pool = ci_constants.DEFAULT_POOL,
     cores = 8,
-    executable = ci.DEFAULT_EXECUTABLE,
-    execution_timeout = ci.DEFAULT_EXECUTION_TIMEOUT,
     os = os.LINUX_DEFAULT,
-    pool = ci.DEFAULT_POOL,
-    priority = ci.DEFAULT_FYI_PRIORITY,
-    reclient_instance = reclient.instance.DEFAULT_TRUSTED,
-    reclient_jobs = reclient.jobs.LOW_JOBS_FOR_CI,
-    service_account = ci.DEFAULT_SERVICE_ACCOUNT,
+    execution_timeout = ci_constants.DEFAULT_EXECUTION_TIMEOUT,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
+    health_spec = health_spec.default(),
+    priority = ci_constants.DEFAULT_FYI_PRIORITY,
+    service_account = ci_constants.DEFAULT_SERVICE_ACCOUNT,
+    shadow_service_account = ci_constants.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
+)
+
+targets.builder_defaults.set(
+    mixins = [
+        "chromium-tester-service-account",
+    ],
 )
 
 consoles.console_view(
     name = "chromium.memory.fyi",
-    branch_selector = branches.STANDARD_MILESTONE,
 )
 
-# TODO(crbug.com/1394755): Remove this builder after burning down failures
-# and measuring performance to see if we can roll UBSan into ASan.
+# TODO(crbug.com/40223516): Remove this builder after burning down failures
+# and measuring performance to see if we can roll LSan into ASan.
 ci.builder(
-    name = "linux-ubsan-fyi-rel",
-    branch_selector = branches.MAIN,
+    name = "mac-lsan-fyi-rel",
+    description_html = "Runs basic Mac tests with is_lsan=true",
+    schedule = "with 24h interval",
+    triggered_by = [],
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -41,14 +57,100 @@ ci.builder(
             apply_configs = ["mb"],
             build_config = builder_config.build_config.RELEASE,
             target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
         ),
+        run_tests_serially = True,
     ),
-    console_view_entry = consoles.console_view_entry(
-        category = "linux|ubsan",
-        short_name = "fyi",
+    gn_args = gn_args.config(
+        configs = [
+            "asan",
+            "lsan",
+            "dcheck_always_on",
+            "release_builder",
+            "remoteexec",
+            "mac",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "mac_lsan_fyi_gtests",
+        ],
+        mixins = [
+            targets.mixin(
+                args = [
+                    "--test-launcher-print-test-stdio=always",
+                ],
+            ),
+            "mac_default_arm64",
+        ],
     ),
     builderless = 1,
-    execution_timeout = 4 * time.hour,
-    schedule = "with 12h interval",
-    reclient_jobs = reclient.jobs.DEFAULT,
+    cores = None,
+    os = os.MAC_ANY,
+    cpu = cpu.ARM64,
+    console_view_entry = consoles.console_view_entry(
+        category = "mac|lsan",
+        short_name = "lsan",
+    ),
+    execution_timeout = 12 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
+)
+
+ci.builder(
+    name = "mac-ubsan-fyi-rel",
+    description_html = "Runs basic Mac tests with is_ubsan=true",
+    schedule = "with 24h interval",
+    triggered_by = [],
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+        run_tests_serially = True,
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "ubsan_no_recover",
+            "dcheck_always_on",
+            "release_builder",
+            "remoteexec",
+            "mac",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_mac_gtests",
+        ],
+        mixins = [
+            targets.mixin(
+                args = [
+                    "--test-launcher-print-test-stdio=always",
+                ],
+            ),
+            "mac_default_arm64",
+        ],
+    ),
+    builderless = 1,
+    cores = None,
+    os = os.MAC_DEFAULT,
+    console_view_entry = consoles.console_view_entry(
+        category = "mac|ubsan",
+        short_name = "ubsan",
+    ),
+    execution_timeout = 12 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
 )

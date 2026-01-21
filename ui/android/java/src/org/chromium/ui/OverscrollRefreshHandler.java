@@ -4,51 +4,58 @@
 
 package org.chromium.ui;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
 
-/**
- * Simple interface allowing customized response to an overscrolling pull input.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.ui.base.BackGestureEventSwipeEdge;
+
+/** Simple interface allowing customized response to an overscrolling pull input. */
+@NullMarked
 public interface OverscrollRefreshHandler {
+    // LINT.IfChange
+    int DEFAULT_NAVIGATION_EDGE_WIDTH = 24;
+
+    // LINT.ThenChange(//ui/android/overscroll_refresh.h:kDefaultNavigationEdgeWidth)
+
     /**
      * Signals the start of an overscrolling pull.
+     *
      * @param type Type of the overscroll action.
-     * @param startX X position of touch event at the beginning of overscroll.
-     * @param startY Y position of touch event at the beginning of overscroll.
-     * @param navigateForward {@code true} for forward navigation, {@code false} for back.
-     *        Used only for {@link OverscrollAction.HISTORY_NAVIGATION}.
+     * @param initiatingEdge Whether the history gesture is being initiated from the LEFT or RIGHT
+     *     edge of the screen. Only used with the HISTORY_NAVIGATION `type`. TODO(bokan): Can we
+     *     make the initiatingEdge param nullable in JNI?
      * @return Whether the handler will consume the overscroll sequence.
      */
     @CalledByNative
-    public boolean start(
-            @OverscrollAction int type, float startX, float startY, boolean navigateForward);
+    boolean start(@OverscrollAction int type, @BackGestureEventSwipeEdge int initiatingEdge);
 
     /**
      * Signals a pull update.
+     *
      * @param xDelta The change in horizontal pull distance (positive if pulling down, negative if
-     *         up).
+     *     up).
      * @param yDelta The change in vertical pull distance.
      */
     @CalledByNative
-    public void pull(float xDelta, float yDelta);
+    void pull(float xDelta, float yDelta);
 
     /**
      * Signals the release of the pull.
+     *
      * @param allowRefresh Whether the release signal should be allowed to trigger a refresh.
      */
     @CalledByNative
-    public void release(boolean allowRefresh);
+    void release(boolean allowRefresh);
 
-    /**
-     * Reset the active pull state.
-     */
+    /** Reset the active pull state. */
     @CalledByNative
-    public void reset();
+    void reset();
 
     /**
      * Toggle whether the effect is active.
-     * @param enabled Whether to enable the effect.
-     *                If disabled, the effect should deactive itself apropriately.
+     *
+     * @param enabled Whether to enable the effect. If disabled, the effect should deactive itself
+     *     apropriately.
      */
-    public void setEnabled(boolean enabled);
+    void setEnabled(boolean enabled);
 }

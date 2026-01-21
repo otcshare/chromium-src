@@ -7,16 +7,18 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "mojo/public/java/system/system_impl_java_jni_headers/WatcherImpl_jni.h"
 
 namespace mojo {
 namespace android {
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 namespace {
 
@@ -32,11 +34,11 @@ class WatcherImpl {
 
   ~WatcherImpl() = default;
 
-  jint Start(JNIEnv* env,
-             const JavaParamRef<jobject>& jcaller,
-             jlong mojo_handle,
-             jint signals) {
-    java_watcher_.Reset(env, jcaller);
+  int32_t Start(JNIEnv* env,
+                const JavaRef<jobject>& obj,
+                int64_t mojo_handle,
+                int32_t signals) {
+    java_watcher_.Reset(env, obj);
 
     auto ready_callback = base::BindRepeating(&WatcherImpl::OnHandleReady,
                                               base::Unretained(this));
@@ -44,8 +46,9 @@ class WatcherImpl {
     MojoResult result =
         watcher_.Watch(mojo::Handle(static_cast<MojoHandle>(mojo_handle)),
                        static_cast<MojoHandleSignals>(signals), ready_callback);
-    if (result != MOJO_RESULT_OK)
+    if (result != MOJO_RESULT_OK) {
       java_watcher_.Reset();
+    }
 
     return result;
   }
@@ -60,8 +63,9 @@ class WatcherImpl {
     DCHECK(!java_watcher_.is_null());
 
     base::android::ScopedJavaGlobalRef<jobject> java_watcher_preserver;
-    if (result == MOJO_RESULT_CANCELLED)
+    if (result == MOJO_RESULT_CANCELLED) {
       java_watcher_preserver = std::move(java_watcher_);
+    }
 
     Java_WatcherImpl_onHandleReady(
         base::android::AttachCurrentThread(),
@@ -75,32 +79,28 @@ class WatcherImpl {
 
 }  // namespace
 
-static jlong JNI_WatcherImpl_CreateWatcher(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
-  return reinterpret_cast<jlong>(new WatcherImpl);
+static int64_t JNI_WatcherImpl_CreateWatcher(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(new WatcherImpl);
 }
 
-static jint JNI_WatcherImpl_Start(JNIEnv* env,
-                                  const JavaParamRef<jobject>& jcaller,
-                                  jlong watcher_ptr,
-                                  jlong mojo_handle,
-                                  jint signals) {
+static int32_t JNI_WatcherImpl_Start(JNIEnv* env,
+                                     const JavaRef<jobject>& obj,
+                                     int64_t watcher_ptr,
+                                     int64_t mojo_handle,
+                                     int32_t signals) {
   auto* watcher = reinterpret_cast<WatcherImpl*>(watcher_ptr);
-  return watcher->Start(env, jcaller, mojo_handle, signals);
+  return watcher->Start(env, obj, mojo_handle, signals);
 }
 
-static void JNI_WatcherImpl_Cancel(JNIEnv* env,
-                                   const JavaParamRef<jobject>& jcaller,
-                                   jlong watcher_ptr) {
+static void JNI_WatcherImpl_Cancel(JNIEnv* env, int64_t watcher_ptr) {
   reinterpret_cast<WatcherImpl*>(watcher_ptr)->Cancel();
 }
 
-static void JNI_WatcherImpl_Delete(JNIEnv* env,
-                                   const JavaParamRef<jobject>& jcaller,
-                                   jlong watcher_ptr) {
+static void JNI_WatcherImpl_Delete(JNIEnv* env, int64_t watcher_ptr) {
   delete reinterpret_cast<WatcherImpl*>(watcher_ptr);
 }
 
 }  // namespace android
 }  // namespace mojo
+
+DEFINE_JNI(WatcherImpl)

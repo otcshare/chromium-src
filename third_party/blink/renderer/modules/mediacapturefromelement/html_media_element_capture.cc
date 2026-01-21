@@ -4,8 +4,12 @@
 
 #include "third_party/blink/renderer/modules/mediacapturefromelement/html_media_element_capture.h"
 
+#include <variant>
+
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
+#include "base/task/single_thread_task_runner.h"
+#include "media/base/media_switches.h"
 #include "third_party/blink/public/mojom/mediastream/media_devices.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -62,12 +66,12 @@ bool AddVideoTrackToMediaStream(
           WebPlatformMediaStreamSource::SourceStoppedCallback(),
           std::move(video_source));
   auto* media_stream_video_source_ptr = media_stream_video_source.get();
-  const String track_id(WTF::CreateCanonicalUUIDString());
+  const String track_id(CreateCanonicalUUIDString());
   auto* media_stream_source = MakeGarbageCollected<MediaStreamSource>(
       track_id, MediaStreamSource::kTypeVideo, track_id, is_remote,
       std::move(media_stream_video_source));
   media_stream_source->SetCapabilities(ComputeCapabilitiesForVideoSource(
-      track_id, preferred_formats, mojom::blink::FacingMode::NONE,
+      track_id, preferred_formats, mojom::blink::FacingMode::kNone,
       false /* is_device_capture */));
   descriptor->AddRemoteTrack(MediaStreamVideoTrack::CreateVideoTrack(
       media_stream_video_source_ptr,
@@ -103,7 +107,7 @@ void CreateHTMLAudioElementCapturer(
   DCHECK(descriptor);
   DCHECK(web_media_player);
 
-  const String track_id = WTF::CreateCanonicalUUIDString();
+  const String track_id = CreateCanonicalUUIDString();
 
   MediaStreamAudioSource* const media_stream_audio_source =
       HtmlAudioElementCapturerSource::CreateFromWebMediaPlayerImpl(
@@ -119,9 +123,10 @@ void CreateHTMLAudioElementCapturer(
 
   MediaStreamSource::Capabilities capabilities;
   capabilities.device_id = track_id;
-  capabilities.echo_cancellation.emplace_back(false);
+  capabilities.echo_cancellation.emplace_back(EchoCancellationMode::kDisabled);
   capabilities.auto_gain_control.emplace_back(false);
   capabilities.noise_suppression.emplace_back(false);
+  capabilities.voice_isolation.emplace_back(false);
   capabilities.sample_size = {
       media::SampleFormatToBitsPerChannel(media::kSampleFormatS16),  // min
       media::SampleFormatToBitsPerChannel(media::kSampleFormatS16)   // max
@@ -163,8 +168,16 @@ void MediaElementEventListener::Invoke(ExecutionContext* context,
 
   if (event->type() == event_type_names::kEnded) {
     const MediaStreamTrackVector tracks = media_stream_->getTracks();
+    // Stop all tracks before removing them. This ensures multi-track stream
+    // consumers like the MediaRecorder sees all tracks ended before they're
+    // removed from the stream, which is interpreted as an error if happening
+    // earlier, see for example
+    // https://www.w3.org/TR/mediastream-recording/#dom-mediarecorder-start
+    // step 14.4.
     for (const auto& track : tracks) {
       track->stopTrack(context);
+    }
+    for (const auto& track : tracks) {
       media_stream_->RemoveTrackByComponentAndFireEvents(
           track->Component(),
           MediaStreamDescriptorClient::DispatchEventTiming::kScheduled);
@@ -187,9 +200,9 @@ void MediaElementEventListener::Invoke(ExecutionContext* context,
     }
     auto variant = media_element_->GetSrcObjectVariant();
     // The load type check above, should prevent this from failing:
-    DCHECK(absl::holds_alternative<MediaStreamDescriptor*>(variant));
+    DCHECK(std::holds_alternative<MediaStreamDescriptor*>(variant));
     MediaStreamDescriptor* const descriptor =
-        absl::get<MediaStreamDescriptor*>(variant);
+        std::get<MediaStreamDescriptor*>(variant);
     DCHECK(descriptor);
     for (unsigned i = 0; i < descriptor->NumberOfAudioComponents(); i++) {
       media_stream_->AddTrackByComponentAndFireEvents(
@@ -206,7 +219,7 @@ void MediaElementEventListener::Invoke(ExecutionContext* context,
   }
 
   auto* descriptor = MakeGarbageCollected<MediaStreamDescriptor>(
-      WTF::CreateCanonicalUUIDString(), MediaStreamComponentVector(),
+      CreateCanonicalUUIDString(), MediaStreamComponentVector(),
       MediaStreamComponentVector());
 
   if (media_element_->HasVideo()) {
@@ -222,6 +235,9 @@ void MediaElementEventListener::Invoke(ExecutionContext* context,
         media_element_->GetWebMediaPlayer(),
         media_element_->GetExecutionContext()->GetTaskRunner(
             TaskType::kInternalMediaRealTime));
+    if (base::FeatureList::IsEnabled(media::kRenderMutedAudio)) {
+      media_element_->GetWebMediaPlayer()->SetRenderMutedAudio(true);
+    }
   }
 
   MediaStreamComponentVector video_components = descriptor->VideoComponents();
@@ -250,6 +266,7 @@ void DidStopMediaStreamSource(MediaStreamSource* source) {
   WebPlatformMediaStreamSource* const platform_source =
       source->GetPlatformSource();
   DCHECK(platform_source);
+  platform_source->SetSourceMuted(true);
   platform_source->StopSource();
 }
 
@@ -306,7 +323,7 @@ MediaStream* HTMLMediaElementCapture::captureStream(
   }
 
   auto* descriptor = MakeGarbageCollected<MediaStreamDescriptor>(
-      WTF::CreateCanonicalUUIDString(), MediaStreamComponentVector(),
+      CreateCanonicalUUIDString(), MediaStreamComponentVector(),
       MediaStreamComponentVector());
 
   // Create() duplicates the MediaStreamTracks inside |descriptor|.
@@ -321,9 +338,9 @@ MediaStream* HTMLMediaElementCapture::captureStream(
   if (element.GetLoadType() == WebMediaPlayer::kLoadTypeMediaStream) {
     auto variant = element.GetSrcObjectVariant();
     // The load type check above, should prevent this from failing:
-    DCHECK(absl::holds_alternative<MediaStreamDescriptor*>(variant));
+    DCHECK(std::holds_alternative<MediaStreamDescriptor*>(variant));
     MediaStreamDescriptor* const element_descriptor =
-        absl::get<MediaStreamDescriptor*>(variant);
+        std::get<MediaStreamDescriptor*>(variant);
     DCHECK(element_descriptor);
     return MediaStream::Create(context, element_descriptor);
   }
@@ -341,6 +358,10 @@ MediaStream* HTMLMediaElementCapture::captureStream(
                                    element.GetWebMediaPlayer(),
                                    element.GetExecutionContext()->GetTaskRunner(
                                        TaskType::kInternalMediaRealTime));
+
+    if (base::FeatureList::IsEnabled(media::kRenderMutedAudio)) {
+      element.GetWebMediaPlayer()->SetRenderMutedAudio(true);
+    }
   }
   listener->UpdateSources(context);
 

@@ -4,7 +4,6 @@
 
 #include "mojo/core/invitation_dispatcher.h"
 
-#include "base/strings/string_piece.h"
 #include "mojo/core/core.h"
 
 namespace mojo {
@@ -20,18 +19,20 @@ MojoResult InvitationDispatcher::Close() {
   PortMapping attached_ports;
   {
     base::AutoLock lock(lock_);
-    if (is_closed_)
+    if (is_closed_) {
       return MOJO_RESULT_INVALID_ARGUMENT;
+    }
     is_closed_ = true;
     std::swap(attached_ports, attached_ports_);
   }
-  for (auto& entry : attached_ports)
+  for (auto& entry : attached_ports) {
     Core::Get()->GetNodeController()->ClosePort(entry.second);
+  }
   return MOJO_RESULT_OK;
 }
 
 MojoResult InvitationDispatcher::AttachMessagePipe(
-    base::StringPiece name,
+    std::string_view name,
     ports::PortRef remote_peer_port) {
   base::AutoLock lock(lock_);
   auto result = attached_ports_.emplace(std::string(name), remote_peer_port);
@@ -43,22 +44,24 @@ MojoResult InvitationDispatcher::AttachMessagePipe(
 }
 
 MojoResult InvitationDispatcher::ExtractMessagePipe(
-    base::StringPiece name,
+    std::string_view name,
     MojoHandle* message_pipe_handle) {
   ports::PortRef remote_peer_port;
   {
     base::AutoLock lock(lock_);
     auto it = attached_ports_.find(std::string(name));
-    if (it == attached_ports_.end())
+    if (it == attached_ports_.end()) {
       return MOJO_RESULT_NOT_FOUND;
+    }
     remote_peer_port = std::move(it->second);
     attached_ports_.erase(it);
   }
 
   *message_pipe_handle =
       Core::Get()->CreatePartialMessagePipe(remote_peer_port);
-  if (*message_pipe_handle == MOJO_HANDLE_INVALID)
+  if (*message_pipe_handle == MOJO_HANDLE_INVALID) {
     return MOJO_RESULT_RESOURCE_EXHAUSTED;
+  }
   return MOJO_RESULT_OK;
 }
 

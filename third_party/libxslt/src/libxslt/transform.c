@@ -40,8 +40,10 @@
 #include "xslt.h"
 #include "xsltInternals.h"
 #include "xsltutils.h"
+#include "xsltlocale.h"
 #include "pattern.h"
 #include "transform.h"
+#include "transformInternals.h"
 #include "variables.h"
 #include "numbersInternals.h"
 #include "namespaces.h"
@@ -119,26 +121,18 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
 static int
 templPush(xsltTransformContextPtr ctxt, xsltTemplatePtr value)
 {
-    if (ctxt->templMax == 0) {
-        ctxt->templMax = 4;
-        ctxt->templTab =
-            (xsltTemplatePtr *) xmlMalloc(ctxt->templMax *
-                                          sizeof(ctxt->templTab[0]));
-        if (ctxt->templTab == NULL) {
-            xmlGenericError(xmlGenericErrorContext, "malloc failed !\n");
-            return (0);
-        }
-    }
-    else if (ctxt->templNr >= ctxt->templMax) {
-        ctxt->templMax *= 2;
-        ctxt->templTab =
-            (xsltTemplatePtr *) xmlRealloc(ctxt->templTab,
-                                           ctxt->templMax *
-                                           sizeof(ctxt->templTab[0]));
-        if (ctxt->templTab == NULL) {
+    if (ctxt->templNr >= ctxt->templMax) {
+        xsltTemplatePtr *tmp;
+        int newMax = ctxt->templMax == 0 ? 4 : ctxt->templMax * 2;
+
+        tmp = (xsltTemplatePtr *) xmlRealloc(ctxt->templTab,
+                newMax * sizeof(*tmp));
+        if (tmp == NULL) {
             xmlGenericError(xmlGenericErrorContext, "realloc failed !\n");
             return (0);
         }
+        ctxt->templTab = tmp;
+        ctxt->templMax = newMax;
     }
     ctxt->templTab[ctxt->templNr] = value;
     ctxt->templ = value;
@@ -525,19 +519,20 @@ xsltTransformCacheFree(xsltTransformCachePtr cache)
     /*
     * Free tree fragments.
     */
-    if (cache->RVT) {
-	xmlDocPtr tmp, cur = cache->RVT;
+    if (cache->rvtList) {
+	xsltRVTListPtr tmp, cur = cache->rvtList;
 	while (cur) {
 	    tmp = cur;
-	    cur = (xmlDocPtr) cur->next;
-	    if (tmp->_private != NULL) {
+	    cur = cur->next;
+	    if (tmp->RVT->_private != NULL) {
 		/*
-		* Tree the document info.
+		* Free the document info.
 		*/
-		xsltFreeDocumentKeys((xsltDocumentPtr) tmp->_private);
-		xmlFree(tmp->_private);
+		xsltFreeDocumentKeys((xsltDocumentPtr) tmp->RVT->_private);
+		xmlFree(tmp->RVT->_private);
 	    }
-	    xmlFreeDoc(tmp);
+            xmlFreeDoc(tmp->RVT);
+            xmlFree(tmp);
 	}
     }
     /*
@@ -706,6 +701,10 @@ xsltNewTransformContext(xsltStylesheetPtr style, xmlDocPtr doc) {
     cur->xinclude = xsltGetXIncludeDefault();
     cur->keyInitLevel = 0;
 
+    cur->newLocale = xsltNewLocale;
+    cur->freeLocale = xsltFreeLocale;
+    cur->genSortKey = xsltStrxfrm;
+
     return(cur);
 
 internal_err:
@@ -716,7 +715,7 @@ internal_err:
 
 /**
  * xsltFreeTransformContext:
- * @ctxt:  an XSLT parser context
+ * @ctxt:  an XSLT transform context
  *
  * Free up the memory allocated by @ctxt
  */
@@ -1090,8 +1089,10 @@ xsltCopyText(xsltTransformContextPtr ctxt, xmlNodePtr target,
 	if (xmlDictOwns(ctxt->dict, cur->content))
 	    copy->content = cur->content;
 	else {
-	    if ((copy->content = xmlStrdup(cur->content)) == NULL)
+	    if ((copy->content = xmlStrdup(cur->content)) == NULL) {
+                xmlFreeNode(copy);
 		return NULL;
+            }
 	}
 
 	ctxt->lasttext = NULL;
@@ -1993,7 +1994,21 @@ xsltDefaultProcessOneNode(xsltTransformContextPtr ctxt, xmlNodePtr node,
 	    case XML_ELEMENT_NODE:
 		ctxt->xpathCtxt->contextSize = nbchild;
 		ctxt->xpathCtxt->proximityPosition = childno;
+
+                if (ctxt->depth >= ctxt->maxTemplateDepth) {
+                    xsltTransformError(ctxt, NULL, cur,
+                        "xsltDefaultProcessOneNode: Maximum template depth "
+                        "exceeded.\n"
+                        "You can adjust xsltMaxDepth (--maxdepth) in order to "
+                        "raise the maximum number of nested template calls and "
+                        "variables/params (currently set to %d).\n",
+                        ctxt->maxTemplateDepth);
+                    ctxt->state = XSLT_STATE_STOPPED;
+                    return;
+                }
+                ctxt->depth++;
 		xsltProcessOneNode(ctxt, cur, params);
+                ctxt->depth--;
 		break;
 	    case XML_CDATA_SECTION_NODE:
 		template = xsltGetTemplate(ctxt, cur, NULL);
@@ -2224,26 +2239,18 @@ xsltLocalVariablePush(xsltTransformContextPtr ctxt,
 		      xsltStackElemPtr variable,
 		      int level)
 {
-    if (ctxt->varsMax == 0) {
-	ctxt->varsMax = 10;
-	ctxt->varsTab =
-	    (xsltStackElemPtr *) xmlMalloc(ctxt->varsMax *
-	    sizeof(ctxt->varsTab[0]));
-	if (ctxt->varsTab == NULL) {
-	    xmlGenericError(xmlGenericErrorContext, "malloc failed !\n");
-	    return (-1);
-	}
-    }
     if (ctxt->varsNr >= ctxt->varsMax) {
-	ctxt->varsMax *= 2;
-	ctxt->varsTab =
-	    (xsltStackElemPtr *) xmlRealloc(ctxt->varsTab,
-	    ctxt->varsMax *
-	    sizeof(ctxt->varsTab[0]));
-	if (ctxt->varsTab == NULL) {
+        xsltStackElemPtr *tmp;
+        int newMax = ctxt->varsMax == 0 ? 10 : 2 * ctxt->varsMax;
+
+	tmp = (xsltStackElemPtr *) xmlRealloc(ctxt->varsTab,
+                newMax * sizeof(*tmp));
+	if (tmp == NULL) {
 	    xmlGenericError(xmlGenericErrorContext, "realloc failed !\n");
 	    return (-1);
 	}
+        ctxt->varsTab = tmp;
+        ctxt->varsMax = newMax;
     }
     ctxt->varsTab[ctxt->varsNr++] = variable;
     ctxt->vars = variable;
@@ -2258,38 +2265,36 @@ xsltLocalVariablePush(xsltTransformContextPtr ctxt,
  * are preserved; all other fragments are freed/cached.
  */
 static void
-xsltReleaseLocalRVTs(xsltTransformContextPtr ctxt, xmlDocPtr base)
+xsltReleaseLocalRVTs(xsltTransformContextPtr ctxt, xsltRVTListPtr base)
 {
-    xmlDocPtr cur = ctxt->localRVT, tmp;
+    xsltRVTListPtr cur = ctxt->localRVTList, tmp;
 
     if (cur == base)
         return;
-    if (cur->prev != NULL)
-        xsltTransformError(ctxt, NULL, NULL, "localRVT not head of list\n");
 
-    /* Reset localRVT early because some RVTs might be registered again. */
-    ctxt->localRVT = base;
-    if (base != NULL)
-        base->prev = NULL;
+    /* Reset localRVTList early because some RVTs might be registered again. */
+    ctxt->localRVTList = base;
 
     do {
         tmp = cur;
-        cur = (xmlDocPtr) cur->next;
-        if (tmp->compression == XSLT_RVT_LOCAL) {
-            xsltReleaseRVT(ctxt, tmp);
-        } else if (tmp->compression == XSLT_RVT_GLOBAL) {
-            xsltRegisterPersistRVT(ctxt, tmp);
-        } else if (tmp->compression == XSLT_RVT_FUNC_RESULT) {
+        cur = cur->next;
+        if (tmp->RVT->compression == XSLT_RVT_LOCAL) {
+            xsltReleaseRVTList(ctxt, tmp);
+        } else if (tmp->RVT->compression == XSLT_RVT_GLOBAL) {
+            xsltRegisterPersistRVT(ctxt, tmp->RVT);
+            xmlFree(tmp);
+        } else if (tmp->RVT->compression == XSLT_RVT_FUNC_RESULT) {
             /*
              * This will either register the RVT again or move it to the
              * context variable.
              */
-            xsltRegisterLocalRVT(ctxt, tmp);
-            tmp->compression = XSLT_RVT_FUNC_RESULT;
+            xsltRegisterLocalRVT(ctxt, tmp->RVT);
+            tmp->RVT->compression = XSLT_RVT_FUNC_RESULT;
+            xmlFree(tmp);
         } else {
             xmlGenericError(xmlGenericErrorContext,
-                    "xsltReleaseLocalRVTs: Unexpected RVT flag %p\n",
-                    tmp->psvi);
+                    "xsltReleaseLocalRVTs: Unexpected RVT flag %d\n",
+                    tmp->RVT->compression);
         }
     } while (cur != base);
 }
@@ -2317,7 +2322,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
     xmlNodePtr oldInsert, oldInst, oldCurInst, oldContextNode;
     xmlNodePtr cur, insert, copy = NULL;
     int level = 0, oldVarsNr;
-    xmlDocPtr oldLocalFragmentTop;
+    xsltRVTListPtr oldLocalFragmentTop;
 
 #ifdef XSLT_REFACTORED
     xsltStylePreCompPtr info;
@@ -2363,7 +2368,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
     }
     ctxt->depth++;
 
-    oldLocalFragmentTop = ctxt->localRVT;
+    oldLocalFragmentTop = ctxt->localRVTList;
     oldInsert = insert = ctxt->insert;
     oldInst = oldCurInst = ctxt->inst;
     oldContextNode = ctxt->node;
@@ -2597,7 +2602,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
 		    /*
 		    * Cleanup temporary tree fragments.
 		    */
-		    if (oldLocalFragmentTop != ctxt->localRVT)
+		    if (oldLocalFragmentTop != ctxt->localRVTList)
 			xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
 
 		    ctxt->insert = oldInsert;
@@ -2692,7 +2697,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
 		    /*
 		    * Cleanup temporary tree fragments.
 		    */
-		    if (oldLocalFragmentTop != ctxt->localRVT)
+		    if (oldLocalFragmentTop != ctxt->localRVTList)
 			xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
 
 		    ctxt->insert = oldInsert;
@@ -2758,7 +2763,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
 		/*
 		* Cleanup temporary tree fragments.
 		*/
-		if (oldLocalFragmentTop != ctxt->localRVT)
+		if (oldLocalFragmentTop != ctxt->localRVTList)
 		    xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
 
                 ctxt->insert = oldInsert;
@@ -2888,7 +2893,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
 		/*
 		* Cleanup temporary tree fragments.
 		*/
-		if (oldLocalFragmentTop != ctxt->localRVT)
+		if (oldLocalFragmentTop != ctxt->localRVTList)
 		    xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
 
                 ctxt->insert = oldInsert;
@@ -3067,7 +3072,7 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
     int oldVarsBase = 0;
     xmlNodePtr cur;
     xsltStackElemPtr tmpParam = NULL;
-    xmlDocPtr oldUserFragmentTop;
+    xsltRVTListPtr oldUserFragmentTop;
 #ifdef WITH_PROFILER
     long start = 0;
 #endif
@@ -3115,8 +3120,8 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
         return;
 	}
 
-    oldUserFragmentTop = ctxt->tmpRVT;
-    ctxt->tmpRVT = NULL;
+    oldUserFragmentTop = ctxt->tmpRVTList;
+    ctxt->tmpRVTList = NULL;
 
     /*
     * Initiate a distinct scope of local params/variables.
@@ -3227,16 +3232,16 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
     * user code should now use xsltRegisterLocalRVT() instead
     * of the obsolete xsltRegisterTmpRVT().
     */
-    if (ctxt->tmpRVT) {
-	xmlDocPtr curdoc = ctxt->tmpRVT, tmp;
+    if (ctxt->tmpRVTList) {
+	xsltRVTListPtr curRVTList = ctxt->tmpRVTList, tmp;
 
-	while (curdoc != NULL) {
-	    tmp = curdoc;
-	    curdoc = (xmlDocPtr) curdoc->next;
-	    xsltReleaseRVT(ctxt, tmp);
+	while (curRVTList != NULL) {
+	    tmp = curRVTList;
+	    curRVTList = curRVTList->next;
+	    xsltReleaseRVTList(ctxt, tmp);
 	}
     }
-    ctxt->tmpRVT = oldUserFragmentTop;
+    ctxt->tmpRVTList = oldUserFragmentTop;
 
     /*
     * Pop the xsl:template declaration from the stack.
@@ -5314,7 +5319,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
 
 #ifdef XSLT_FAST_IF
     {
-	xmlDocPtr oldLocalFragmentTop = ctxt->localRVT;
+	xsltRVTListPtr oldLocalFragmentTop = ctxt->localRVTList;
 
 	res = xsltPreCompEvalToBoolean(ctxt, contextNode, comp);
 
@@ -5322,7 +5327,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
 	* Cleanup fragments created during evaluation of the
 	* "select" expression.
 	*/
-	if (oldLocalFragmentTop != ctxt->localRVT)
+	if (oldLocalFragmentTop != ctxt->localRVTList)
 	    xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
     }
 
@@ -5752,7 +5757,7 @@ xsltCountKeys(xsltTransformContextPtr ctxt)
  *
  * Resets source node flags and ids stored in 'psvi' member.
  */
-static void
+void
 xsltCleanupSourceDoc(xmlDocPtr doc) {
     xmlNodePtr cur = (xmlNodePtr) doc;
     void **psviPtr;
@@ -5776,6 +5781,8 @@ xsltCleanupSourceDoc(xmlDocPtr doc) {
         if (cur->children != NULL && cur->type != XML_ENTITY_REF_NODE) {
             cur = cur->children;
         } else {
+            if (cur == (xmlNodePtr) doc)
+                return;
             while (cur->next == NULL) {
                 cur = cur->parent;
                 if (cur == (xmlNodePtr) doc)

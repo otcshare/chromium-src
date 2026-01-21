@@ -4,277 +4,163 @@
 
 package org.chromium.chrome.browser.app.appmenu;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
+import androidx.test.filters.LargeTest;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.layouts.LayoutTestUtils;
-import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.ui.appmenu.AppMenuTestSupport;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
+import org.chromium.chrome.browser.quick_delete.QuickDeleteMetricsDelegate;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
-import org.chromium.ui.test.util.UiRestriction;
+import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.ChromeTabbedActivityEntryPoints;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
+import org.chromium.chrome.test.transit.hub.IncognitoTabSwitcherStation;
+import org.chromium.chrome.test.transit.hub.RegularTabSwitcherStation;
+import org.chromium.chrome.test.transit.hub.TabSwitcherAppMenuFacility;
+import org.chromium.chrome.test.transit.quick_delete.QuickDeleteDialogFacility;
+import org.chromium.components.feature_engagement.Tracker;
 
-/**
- * Tests overview mode app menu popup.
- *
- * TODO(crbug.com/1031958): Add more required tests.
- */
+import java.util.ArrayList;
+import java.util.List;
+
+/** Tests the Tab Switcher app menu. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@Restriction(
-        {UiRestriction.RESTRICTION_TYPE_PHONE, Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+@Restriction({Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE})
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class OverviewAppMenuTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public ReusedCtaTransitTestRule<RegularTabSwitcherStation> mCtaTestRule =
+            ChromeTransitTestRules.customStartReusedActivityRule(
+                    RegularTabSwitcherStation.class,
+                    rule ->
+                            ChromeTabbedActivityEntryPoints.startOnBlankPage(rule)
+                                    .openRegularTabSwitcher());
+
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock Tracker mTracker;
+
+    public RegularTabSwitcherStation mTabSwitcher;
 
     @Before
     public void setUp() {
-        mActivityTestRule.startMainActivityOnBlankPage();
-        LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.TAB_SWITCHER, true);
+        // Disable IPHs from interfering with tests.
+        when(mTracker.shouldTriggerHelpUi(anyString())).thenReturn(false);
+        TrackerFactory.setTrackerForTests(mTracker);
+
+        mTabSwitcher = mCtaTestRule.start();
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testAllMenuItemsWithoutStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testAllMenuItems() {
+        TabSwitcherAppMenuFacility menu = mTabSwitcher.openAppMenu();
 
-        verifyTabSwitcherMenu(false);
+        try {
+            List<Integer> expectedItems =
+                    buildExpectedMenuItemIds(/* isIncognitoSwitcher= */ false);
+            menu.verifyModelItems(expectedItems);
+
+            menu.verifyPresentItems();
+        } finally {
+            menu.closeProgrammatically();
+        }
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testIncognitoAllMenuItemsWithoutStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testIncognitoAllMenuItems() {
+        IncognitoTabSwitcherStation incognitoTabSwitcher =
+                mTabSwitcher.openAppMenu().openNewIncognitoTabOrWindow().openIncognitoTabSwitcher();
+        TabSwitcherAppMenuFacility menu = incognitoTabSwitcher.openAppMenu();
 
-        verifyTabSwitcherMenuIncognito(false);
+        try {
+            List<Integer> expectedItems = buildExpectedMenuItemIds(/* isIncognitoSwitcher= */ true);
+            menu.verifyModelItems(expectedItems);
+
+            menu.verifyPresentItems();
+        } finally {
+            menu.closeProgrammatically();
+            if (!IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+                incognitoTabSwitcher.selectRegularTabsPane();
+            } else {
+                incognitoTabSwitcher.finishActivity();
+            }
+        }
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    public void testAllMenuItemsWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testQuickDeleteTabSwitcherMenu_entryFromTabSwitcherMenuItemHistogram() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(
+                                QuickDeleteMetricsDelegate.HISTOGRAM_NAME,
+                                QuickDeleteMetricsDelegate.QuickDeleteAction
+                                        .TAB_SWITCHER_MENU_ITEM_CLICKED,
+                                QuickDeleteMetricsDelegate.QuickDeleteAction
+                                        .LAST_15_MINUTES_SELECTED)
+                        .build();
 
-        verifyTabSwitcherMenu(false);
+        QuickDeleteDialogFacility dialog = mTabSwitcher.openAppMenu().clearBrowsingData();
+
+        try {
+            histogramWatcher.assertExpected();
+        } finally {
+            dialog.clickCancel();
+        }
     }
 
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.TAB_GROUPS_ANDROID, ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    public void
-    testAllMenuItemsWithStartSurfaceAndSelectTabs() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    private List<Integer> buildExpectedMenuItemIds(boolean isIncognitoSwitcher) {
+        List<Integer> expectedItems = new ArrayList<>();
 
-        verifyTabSwitcherMenu(true);
-    }
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+            if (isIncognitoSwitcher) {
+                expectedItems.add(R.id.new_incognito_tab_menu_id);
+                expectedItems.add(R.id.new_window_menu_id);
+                expectedItems.add(R.id.new_incognito_window_menu_id);
+            } else {
+                expectedItems.add(R.id.new_tab_menu_id);
+                expectedItems.add(R.id.new_window_menu_id);
+                expectedItems.add(R.id.new_incognito_window_menu_id);
+            }
+        } else {
+            expectedItems.add(R.id.new_tab_menu_id);
+            expectedItems.add(R.id.new_incognito_tab_menu_id);
+        }
 
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.DisableFeatures({ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testIncognitoAllMenuItemsWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+        expectedItems.add(R.id.new_tab_group_menu_id);
 
-        verifyTabSwitcherMenuIncognito(false);
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.TAB_GROUPS_ANDROID, ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    public void
-    testIncognitoAllMenuItemsWithStartSurfaceAndSelectTabs() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        verifyTabSwitcherMenuIncognito(true);
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    // clang-format off
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID,
-        ChromeFeatureList.START_SURFACE_ANDROID + "<Study"})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-        "force-fieldtrial-params=Study.Group:open_ntp_instead_of_start/true"})
-    public void testNewTabIsEnabledWithStartSurfaceV2() throws Exception {
-        // clang-format on
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.new_tab_menu_id));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.
-    DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsDisabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_group_tabs));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testGroupTabsIsEnabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_group_tabs));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsDisabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_group_tabs));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.DisableFeatures({ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsEnabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_group_tabs));
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_select_tabs));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.TAB_GROUPS_ANDROID, ChromeFeatureList.TAB_SELECTION_EDITOR_V2})
-    public void
-    testGroupTabsIsEnabledWithStartSurfaceAndSelectTabs() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_group_tabs));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.menu_select_tabs));
-    }
-
-    private void verifyTabSwitcherMenu(boolean selectTabs) {
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.new_tab_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.new_incognito_tab_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.close_all_tabs_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(),
-                selectTabs ? R.id.menu_select_tabs : R.id.menu_group_tabs));
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(),
-                selectTabs ? R.id.menu_group_tabs : R.id.menu_select_tabs));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.preferences_id));
-
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.close_all_incognito_tabs_menu_id));
-
-        ModelList menuItemsModelList =
-                AppMenuTestSupport.getMenuModelList(mActivityTestRule.getAppMenuCoordinator());
-        assertEquals(5, menuItemsModelList.size());
-    }
-
-    private void verifyTabSwitcherMenuIncognito(boolean selectTabs) {
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.new_tab_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.new_incognito_tab_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.close_all_incognito_tabs_menu_id));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(),
-                selectTabs ? R.id.menu_select_tabs : R.id.menu_group_tabs));
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(),
-                selectTabs ? R.id.menu_group_tabs : R.id.menu_select_tabs));
-        assertNotNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.preferences_id));
-
-        assertNull(AppMenuTestSupport.getMenuItemPropertyModel(
-                mActivityTestRule.getAppMenuCoordinator(), R.id.close_all_tabs_menu_id));
-
-        ModelList menuItemsModelList =
-                AppMenuTestSupport.getMenuModelList(mActivityTestRule.getAppMenuCoordinator());
-        assertEquals(5, menuItemsModelList.size());
+        if (isIncognitoSwitcher) {
+            expectedItems.add(R.id.close_all_incognito_tabs_menu_id);
+        } else {
+            expectedItems.add(R.id.close_all_tabs_menu_id);
+        }
+        expectedItems.add(R.id.menu_select_tabs);
+        if (!isIncognitoSwitcher) {
+            expectedItems.add(R.id.quick_delete_menu_id);
+        }
+        expectedItems.add(R.id.preferences_id);
+        return expectedItems;
     }
 }

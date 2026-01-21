@@ -4,21 +4,22 @@
 
 #include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/ash/login/users/mock_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/login_manager/dbus-constants.h"
 
@@ -58,7 +59,7 @@ class ManagedSessionServiceTest : public ::testing::Test,
     profile_builder.SetProfileName(account_id.GetUserEmail());
     auto profile = profile_builder.Build();
     user_manager_->AddUserWithAffiliationAndTypeAndProfile(
-        account_id, is_affiliated, user_manager::UserType::USER_TYPE_REGULAR,
+        account_id, is_affiliated, user_manager::UserType::kRegular,
         profile.get());
     if (login) {
       user_manager_->LoginUser(account_id, true);
@@ -71,7 +72,6 @@ class ManagedSessionServiceTest : public ::testing::Test,
     TestingProfile::Builder profile_builder;
     profile_builder.SetProfileName(user->GetAccountId().GetUserEmail());
     auto profile = profile_builder.Build();
-    ash::ProfileHelper::Get()->SetProfileToUserMappingForTesting(user);
     ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(user,
                                                                  profile.get());
     user_manager_->LoginUser(user->GetAccountId(), true);
@@ -138,8 +138,8 @@ class ManagedSessionServiceTest : public ::testing::Test,
   void OnKioskLoginFailure() override { ++observed_kiosk_login_failure_count_; }
 
   ash::AuthFailure auth_failure_ = ash::AuthFailure(ash::AuthFailure::NONE);
-  Profile* logged_in_ = nullptr;
-  Profile* logged_out_ = nullptr;
+  raw_ptr<Profile, DanglingUntriaged> logged_in_ = nullptr;
+  raw_ptr<Profile, DanglingUntriaged> logged_out_ = nullptr;
   bool locked_ = false;
   bool unlocked_ = false;
   session_manager::UnlockType unlock_type_ =
@@ -149,10 +149,11 @@ class ManagedSessionServiceTest : public ::testing::Test,
  private:
   content::BrowserTaskEnvironment task_environment_;
 
-  ash::FakeChromeUserManager* user_manager_;
+  raw_ptr<ash::FakeChromeUserManager, DanglingUntriaged> user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
 
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
 
   std::unique_ptr<::ash::SessionTerminationManager>
       session_termination_manager_;

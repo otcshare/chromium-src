@@ -41,11 +41,11 @@ extern "C" {
 
 // The minimum number of days an installation can be dormant before reactivation
 // may be offered.
-const int kReactivationMinDaysDormant = 50;
+inline constexpr int kReactivationMinDaysDormant = 50;
 
 // The minimum number of days an installation can be dormant before a relaunch
 // may be offered.
-const int kRelaunchMinDaysDormant = 30;
+inline constexpr int kRelaunchMinDaysDormant = 30;
 
 // This function returns TRUE if Google Chrome should be offered.
 // If the return is FALSE, the |reasons| DWORD explains why.  If you don't care
@@ -61,9 +61,7 @@ BOOL __stdcall GoogleChromeCompatibilityCheck(BOOL set_flag,
                                               int shell_mode,
                                               DWORD* reasons);
 
-// This function launches Google Chrome after a successful install. Make
-// sure COM library is NOT initialized before you call this function (so if
-// you called CoInitialize, call CoUninitialize before calling this function).
+// This function launches Google Chrome after a successful install.
 BOOL __stdcall LaunchGoogleChrome();
 
 // This function launches Google Chrome after a successful install, ensuring

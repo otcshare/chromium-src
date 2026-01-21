@@ -31,9 +31,8 @@ import contextlib
 import io
 import logging
 import os
-from unittest.mock import Mock, patch
-
-import six
+from unittest.mock import Mock
+from unittest.mock import patch
 
 from blinkpy.common.system.executive import ScriptError
 
@@ -41,6 +40,7 @@ _log = logging.getLogger(__name__)
 
 
 class MockProcess(object):
+
     def __init__(self, args, stdout='MOCK STDOUT\n', stderr='', returncode=0):
         self.args = args
         self.pid = 42
@@ -127,7 +127,7 @@ class MockExecutive(object):
         return running_pids
 
     def command_for_printing(self, args):
-        string_args = list(map(six.ensure_text, args))
+        string_args = list(map(str, args))
         return ' '.join(string_args)
 
     # The argument list should match Executive.run_command, even if
@@ -141,8 +141,7 @@ class MockExecutive(object):
             timeout_seconds=None,
             error_handler=None,
             return_exit_code=False,
-            return_stderr=True,
-            ignore_stderr=False,
+            stderr=STDOUT,
             decode_output=True,
             debug_logging=True):
         self._append_call(args, cwd=cwd, input=input, env=env)
@@ -173,18 +172,16 @@ class MockExecutive(object):
             return self._exit_code
 
         if self._exit_code and error_handler:
-            script_error = ScriptError(
-                script_args=args,
-                exit_code=self._exit_code,
-                output=self._output)
+            script_error = ScriptError(script_args=args,
+                                       exit_code=self._exit_code,
+                                       output=self._output)
             error_handler(script_error)
 
         output = self._output
-        if return_stderr:
+        if stderr == self.STDOUT:
             output += self._stderr
-        if decode_output:
-            output = six.ensure_text(output)
-
+        if decode_output and isinstance(output, bytes):
+            output = output.decode()
         return output
 
     def cpu_count(self):
@@ -197,7 +194,7 @@ class MockExecutive(object):
         pass
 
     def popen(self, args, cwd=None, env=None, **_):
-        assert all(isinstance(arg, six.string_types) for arg in args)
+        assert all(isinstance(arg, str) for arg in args)
         self._append_call(args, cwd=cwd, env=env)
         if self._should_log:
             cwd_string = ''
@@ -215,7 +212,7 @@ class MockExecutive(object):
         return self._proc
 
     def call(self, args, **_):
-        assert all(isinstance(arg, six.string_types) for arg in args)
+        assert all(isinstance(arg, str) for arg in args)
         self._append_call(args)
         _log.info('Mock call: %s', args)
 
@@ -225,7 +222,7 @@ class MockExecutive(object):
         num_previous_calls = len(self.full_calls)
         command_outputs = []
         for cmd_line, cwd in commands:
-            assert all(isinstance(arg, six.string_types) for arg in cmd_line)
+            assert all(isinstance(arg, str) for arg in cmd_line)
             command_outputs.append(
                 [0, self.run_command(cmd_line, cwd=cwd), ''])
 
@@ -248,8 +245,8 @@ class MockExecutive(object):
             elif isinstance(v, MockCall):
                 return v.args
             else:
-                return TypeError(
-                    'Unknown full_calls type: %s' % (type(v).__name__, ))
+                return TypeError('Unknown full_calls type: %s' %
+                                 (type(v).__name__, ))
 
         return get_args(self.full_calls)
 
@@ -263,9 +260,16 @@ class MockExecutive(object):
 
     @contextlib.contextmanager
     def patch_builtins(self):
+        # `mozprocess` subclasses `subprocess.Popen`, so patch in a real type,
+        # not just a callable.
+        class MockPopen:
+
+            def __new__(cls, *args, **kwargs):
+                return self.popen(*args, **kwargs)
+
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch('subprocess.run', self._run_mock))
-            stack.enter_context(patch('subprocess.Popen', self.popen))
+            stack.enter_context(patch('subprocess.Popen', MockPopen))
             yield
 
 

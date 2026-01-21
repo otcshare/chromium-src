@@ -8,8 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_forward.h"
 #include "components/segmentation_platform/internal/database/ukm_database.h"
 #include "components/segmentation_platform/internal/execution/processing/query_processor.h"
 #include "components/segmentation_platform/public/proto/model_metadata.pb.h"
@@ -18,6 +18,7 @@ namespace segmentation_platform::processing {
 class CustomInputProcessor;
 class FeatureProcessorState;
 class InputDelegateHolder;
+struct Data;
 
 // SqlFeatureProcessor takes a list of SqlFeature type of input, fetches samples
 // from the UKMDatabase, and computes an input tensor to use when executing the
@@ -33,7 +34,7 @@ class SqlFeatureProcessor : public QueryProcessor {
   ~SqlFeatureProcessor() override;
 
   // QueryProcessor implementation.
-  void Process(std::unique_ptr<FeatureProcessorState> feature_processor_state,
+  void Process(FeatureProcessorState& feature_processor_state,
                QueryProcessorCallback callback) override;
 
  private:
@@ -43,13 +44,13 @@ class SqlFeatureProcessor : public QueryProcessor {
   // Callback method for when all relevant bind values have been processed.
   void OnCustomInputProcessed(
       std::unique_ptr<CustomInputProcessor> custom_input_processor,
-      std::unique_ptr<FeatureProcessorState> feature_processor_state,
+      base::WeakPtr<FeatureProcessorState> feature_processor_state,
       base::flat_map<SqlFeatureAndBindValueIndices, Tensor> result);
 
   // Callback method for when all queries have been processed by the ukm
   // database.
   void OnQueriesRun(
-      std::unique_ptr<FeatureProcessorState> feature_processor_state,
+      base::WeakPtr<FeatureProcessorState> feature_processor_state,
       bool success,
       IndexedTensors result);
 

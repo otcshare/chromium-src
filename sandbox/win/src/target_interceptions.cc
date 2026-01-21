@@ -4,6 +4,9 @@
 
 #include "sandbox/win/src/target_interceptions.h"
 
+#include <ntstatus.h>
+
+#include "base/compiler_specific.h"
 #include "base/win/static_constants.h"
 #include "sandbox/win/src/interception_agent.h"
 #include "sandbox/win/src/sandbox_factory.h"
@@ -44,8 +47,6 @@ TargetNtMapViewOfSection(NtMapViewOfSectionFunction orig_MapViewOfSection,
     if (!IsSameProcess(process))
       break;
 
-    // Only check for verifier.dll or kernel32.dll loading if we haven't moved
-    // past that state yet.
     if (s_state == kBeforeKernel32) {
       const char* ansi_module_name =
           GetAnsiImageInfoFromModule(reinterpret_cast<HMODULE>(*base));
@@ -54,24 +55,19 @@ TargetNtMapViewOfSection(NtMapViewOfSectionFunction orig_MapViewOfSection,
       // find what looks like a valid export directory for a PE module but the
       // pointer to the module name will be pointing to invalid memory.
       __try {
-        // Don't initialize the heap if verifier.dll is being loaded. This
-        // indicates Application Verifier is enabled and we should wait until
-        // the next module is loaded.
-        if (ansi_module_name &&
-            (GetNtExports()->_strnicmp(
-                 ansi_module_name, base::win::kApplicationVerifierDllName,
-                 GetNtExports()->strlen(
-                     base::win::kApplicationVerifierDllName) +
-                     1) == 0)) {
-          break;
-        }
-        if (ansi_module_name &&
-            (GetNtExports()->_strnicmp(ansi_module_name, KERNEL32_DLL_NAME,
-                                       sizeof(KERNEL32_DLL_NAME)) == 0)) {
+        if (ansi_module_name && (UNSAFE_TODO(GetNtExports()->_strnicmp)(
+                                     ansi_module_name, KERNEL32_DLL_NAME,
+                                     sizeof(KERNEL32_DLL_NAME)) == 0)) {
           s_state = kAfterKernel32;
         }
       } __except (EXCEPTION_EXECUTE_HANDLER) {
       }
+    }
+
+    // Assume the heap may not be initialized before kernel32 loads, which is
+    // the case when AppVerifier is enabled.
+    if (s_state == kBeforeKernel32) {
+      break;
     }
 
     if (!InitHeap())

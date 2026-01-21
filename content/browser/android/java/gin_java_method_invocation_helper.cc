@@ -36,7 +36,7 @@ GinJavaMethodInvocationHelper::GinJavaMethodInvocationHelper(
     : object_(std::move(object)),
       method_name_(method_name),
       arguments_(arguments.Clone()),
-      invocation_error_(kGinJavaBridgeNoError) {}
+      invocation_error_(mojom::GinJavaBridgeError::kGinJavaBridgeNoError) {}
 
 GinJavaMethodInvocationHelper::~GinJavaMethodInvocationHelper() {}
 
@@ -105,14 +105,15 @@ void GinJavaMethodInvocationHelper::Invoke() {
   const JavaMethod* method =
       object_->FindMethod(method_name_, arguments_.size());
   if (!method) {
-    SetInvocationError(kGinJavaBridgeMethodNotFound);
+    SetInvocationError(mojom::GinJavaBridgeError::kGinJavaBridgeMethodNotFound);
     return;
   }
 
   if (object_->IsObjectGetClassMethod(method)) {
     base::android::EventLogWriteInt(kObjectGetClassInvocationAttemptLogTag,
                                     getuid());
-    SetInvocationError(kGinJavaBridgeAccessToObjectGetClassIsBlocked);
+    SetInvocationError(mojom::GinJavaBridgeError::
+                           kGinJavaBridgeAccessToObjectGetClassIsBlocked);
     return;
   }
 
@@ -124,11 +125,12 @@ void GinJavaMethodInvocationHelper::Invoke() {
     obj = object_->GetLocalRef(env);
   }
   if (obj.is_null() && cls.is_null()) {
-    SetInvocationError(kGinJavaBridgeObjectIsGone);
+    SetInvocationError(mojom::GinJavaBridgeError::kGinJavaBridgeObjectIsGone);
     return;
   }
 
-  GinJavaBridgeError coercion_error = kGinJavaBridgeNoError;
+  mojom::GinJavaBridgeError coercion_error =
+      mojom::GinJavaBridgeError::kGinJavaBridgeNoError;
   std::vector<jvalue> parameters(method->num_parameters());
   for (size_t i = 0; i < method->num_parameters(); ++i) {
     const base::Value& argument = arguments_[i];
@@ -137,7 +139,7 @@ void GinJavaMethodInvocationHelper::Invoke() {
         &coercion_error);
   }
 
-  if (coercion_error == kGinJavaBridgeNoError) {
+  if (coercion_error == mojom::GinJavaBridgeError::kGinJavaBridgeNoError) {
     if (method->is_static()) {
       InvokeMethod(nullptr, cls.obj(), method->return_type(), method->id(),
                    parameters.data());
@@ -157,7 +159,7 @@ void GinJavaMethodInvocationHelper::Invoke() {
 }
 
 void GinJavaMethodInvocationHelper::SetInvocationError(
-    GinJavaBridgeError error) {
+    mojom::GinJavaBridgeError error) {
   holds_primitive_result_ = true;
   primitive_result_ = std::make_unique<base::Value::List>();
   invocation_error_ = error;
@@ -196,7 +198,7 @@ GinJavaMethodInvocationHelper::GetSafeAnnotationClass() {
   return safe_annotation_clazz_;
 }
 
-GinJavaBridgeError GinJavaMethodInvocationHelper::GetInvocationError() {
+mojom::GinJavaBridgeError GinJavaMethodInvocationHelper::GetInvocationError() {
   return invocation_error_;
 }
 
@@ -286,10 +288,12 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
       // methods. ScopedJavaLocalRef is liable to make such calls, so we test
       // first.
       if (base::android::ClearException(env)) {
-        SetInvocationError(kGinJavaBridgeJavaExceptionRaised);
+        SetInvocationError(
+            mojom::GinJavaBridgeError::kGinJavaBridgeJavaExceptionRaised);
         return;
       }
-      ScopedJavaLocalRef<jstring> scoped_java_string(env, java_string);
+      auto scoped_java_string =
+          ScopedJavaLocalRef<jstring>::Adopt(env, java_string);
       if (!scoped_java_string.obj()) {
         // LIVECONNECT_COMPLIANCE: Existing behavior is to return undefined.
         // Spec requires returning a null string.
@@ -309,10 +313,12 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
           object ? env->CallObjectMethodA(object, id, parameters)
                  : env->CallStaticObjectMethodA(clazz, id, parameters);
       if (base::android::ClearException(env)) {
-        SetInvocationError(kGinJavaBridgeJavaExceptionRaised);
+        SetInvocationError(
+            mojom::GinJavaBridgeError::kGinJavaBridgeJavaExceptionRaised);
         return;
       }
-      ScopedJavaLocalRef<jobject> scoped_java_object(env, java_object);
+      auto scoped_java_object =
+          ScopedJavaLocalRef<jobject>::Adopt(env, java_object);
       if (!scoped_java_object.obj()) {
         result_wrapper.Append(base::Value());
         break;
@@ -325,7 +331,8 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
   if (!base::android::ClearException(env)) {
     SetPrimitiveResult(std::move(result_wrapper));
   } else {
-    SetInvocationError(kGinJavaBridgeJavaExceptionRaised);
+    SetInvocationError(
+        mojom::GinJavaBridgeError::kGinJavaBridgeJavaExceptionRaised);
   }
 }
 

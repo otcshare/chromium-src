@@ -8,6 +8,7 @@
 #include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "net/base/schemeful_site.h"
 #include "url/origin.h"
 
@@ -30,7 +31,7 @@ class ClearingTask : public BrowsingDataRemover::Observer {
     // for it to be destroyed should be the "delete this" part in
     // OnBrowsingDataRemoverDone() function, and it invokes the |callback_|. So
     // when this destructor is called, the |callback_| should be null.
-    DCHECK(!callback_);
+    CHECK(!callback_);
   }
 
   void RunAndDestroySelfWhenDone() {
@@ -43,21 +44,22 @@ class ClearingTask : public BrowsingDataRemover::Observer {
 
     for (const auto& site : sites_) {
       // For clearing eTLD+1 scoped data.
-      cookie_filter_builder->AddRegisterableDomain(site.GetURL().host());
+      cookie_filter_builder->AddRegisterableDomain(site.GetURL().GetHost());
       // For clearing origin-scoped data.
       origin_filter_builder->AddOrigin(url::Origin::Create(site.GetURL()));
     }
 
-    uint64_t remove_mask = BrowsingDataRemover::DATA_TYPE_COOKIES;
     task_count_++;
     remover_->RemoveWithFilterAndReply(
-        base::Time(), base::Time::Max(), remove_mask,
-        content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
-            content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
+        base::Time(), base::Time::Max(), BrowsingDataRemover::DATA_TYPE_COOKIES,
+        BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
+            BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
         std::move(cookie_filter_builder), this);
 
-    // TODO(crbug.com/1318161)): maybe we should clear PrivacySandbox API data.
-    remove_mask = BrowsingDataRemover::DATA_TYPE_DOM_STORAGE;
+    uint64_t remove_mask =
+        BrowsingDataRemover::DATA_TYPE_DOM_STORAGE |
+        BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX |
+        BrowsingDataRemover::DATA_TYPE_RELATED_WEBSITE_SETS_PERMISSIONS;
     task_count_++;
     remover_->RemoveWithFilterAndReply(
         base::Time(), base::Time::Max(), remove_mask,
@@ -65,13 +67,13 @@ class ClearingTask : public BrowsingDataRemover::Observer {
             BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
         std::move(origin_filter_builder), this);
 
-    DCHECK_GT(task_count_, 0);
+    CHECK_GT(task_count_, 0);
   }
 
  private:
   // BrowsingDataRemover::Observer:
   void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
-    DCHECK_GT(task_count_, 0);
+    CHECK_GT(task_count_, 0);
     failed_data_types_ |= failed_data_types;
     if (--task_count_)
       return;

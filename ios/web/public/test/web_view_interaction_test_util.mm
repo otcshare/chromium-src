@@ -4,7 +4,7 @@
 
 #import "ios/web/public/test/web_view_interaction_test_util.h"
 
-#import "base/bind.h"
+#import "base/functional/bind.h"
 #import "base/json/string_escape.h"
 #import "base/logging.h"
 #import "base/strings/stringprintf.h"
@@ -13,17 +13,13 @@
 #import "base/test/ios/wait_util.h"
 #import "ios/web/js_messaging/java_script_feature_manager.h"
 #import "ios/web/js_messaging/web_frame_impl.h"
-#import "ios/web/js_messaging/web_view_js_utils.h"
 #import "ios/web/public/js_messaging/web_frame.h"
-#import "ios/web/public/js_messaging/web_frame_util.h"
+#import "ios/web/public/js_messaging/web_frames_manager.h"
+#import "ios/web/public/js_messaging/web_view_js_utils.h"
 #import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/web_state/ui/crw_web_controller.h"
 #import "ios/web/web_state/ui/crw_web_view_proxy_impl.h"
 #import "ios/web/web_state/web_state_impl.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::kWaitForUIElementTimeout;
@@ -46,7 +42,7 @@ std::unique_ptr<base::Value> ExecuteJavaScript(web::WebState* web_state,
   __block id result = nil;
   __block bool did_finish = false;
   CRWWebController* web_controller =
-      static_cast<WebStateImpl*>(web_state)->GetWebController();
+      WebStateImpl::FromWebState(web_state)->GetWebController();
   [web_controller executeJavaScript:base::SysUTF8ToNSString(script)
                   completionHandler:^(id handler_result, NSError*) {
                     result = handler_result;
@@ -66,7 +62,7 @@ std::unique_ptr<base::Value> ExecuteJavaScript(web::WebState* web_state,
 std::unique_ptr<base::Value> CallJavaScriptFunction(
     web::WebState* web_state,
     const std::string& function,
-    const std::vector<base::Value>& parameters) {
+    const base::Value::List& parameters) {
   return CallJavaScriptFunctionForFeature(web_state, function, parameters,
                                           /*feature=*/nullptr);
 }
@@ -74,13 +70,14 @@ std::unique_ptr<base::Value> CallJavaScriptFunction(
 std::unique_ptr<base::Value> CallJavaScriptFunctionForFeature(
     web::WebState* web_state,
     const std::string& function,
-    const std::vector<base::Value>& parameters,
+    const base::Value::List& parameters,
     JavaScriptFeature* feature) {
   if (!web_state) {
     DLOG(ERROR) << "JavaScript can not be called on a null WebState.";
     return nullptr;
   }
 
+  WebFrameImpl* frame = nullptr;
   JavaScriptContentWorld* world = nullptr;
   if (feature) {
     JavaScriptFeatureManager* feature_manager =
@@ -92,12 +89,16 @@ std::unique_ptr<base::Value> CallJavaScriptFunctionForFeature(
                   << "JavaScriptFeature does not appear to be configured.";
       return nullptr;
     }
+    ContentWorld content_world = feature->GetSupportedContentWorld();
+    frame = static_cast<WebFrameImpl*>(
+        web_state->GetWebFramesManager(content_world)->GetMainWebFrame());
   } else {
-    world = JavaScriptFeatureManager::GetPageContentWorldForBrowserState(
-        web_state->GetBrowserState());
+    world = JavaScriptFeatureManager::GetContentWorldForBrowserState(
+        ContentWorld::kPageContentWorld, web_state->GetBrowserState());
+    frame = static_cast<WebFrameImpl*>(
+        web_state->GetPageWorldWebFramesManager()->GetMainWebFrame());
   }
 
-  WebFrameImpl* frame = static_cast<WebFrameImpl*>(GetMainFrame(web_state));
   if (!frame) {
     DLOG(ERROR) << "JavaScript can not be called on a null WebFrame.";
     return nullptr;
@@ -107,8 +108,9 @@ std::unique_ptr<base::Value> CallJavaScriptFunctionForFeature(
   __block bool did_finish = false;
   bool function_call_successful = frame->CallJavaScriptFunctionInContentWorld(
       function, parameters, world, base::BindOnce(^(const base::Value* value) {
-        if (value)
+        if (value) {
           result = std::make_unique<base::Value>(value->Clone());
+        }
         did_finish = true;
       }),
       kWaitForJSCompletionTimeout);
@@ -147,8 +149,8 @@ std::unique_ptr<base::Value> CallJavaScriptFunctionForFeature(
 
 CGRect GetBoundingRectOfElement(web::WebState* web_state,
                                 ElementSelector* selector) {
-#if !TARGET_IPHONE_SIMULATOR
-  // TODO(crbug.com/1013714): Replace delay with improved JavaScript.
+#if !TARGET_OS_SIMULATOR
+  // TODO(crbug.com/40652803): Replace delay with improved JavaScript.
   // As of iOS 13.1, devices need additional time to stabalize the page before
   // getting the element location. Without this wait, the element's bounding
   // rect will be incorrect.
@@ -203,15 +205,17 @@ CGRect GetBoundingRectOfElement(web::WebState* web_state,
     return false;
   });
 
-  if (!found)
+  if (!found) {
     return CGRectNull;
+  }
 
-  absl::optional<double> left = rect->FindDouble("left");
-  absl::optional<double> top = rect->FindDouble("top");
-  absl::optional<double> width = rect->FindDouble("width");
-  absl::optional<double> height = rect->FindDouble("height");
-  if (!(left && top && width && height))
+  std::optional<double> left = rect->FindDouble("left");
+  std::optional<double> top = rect->FindDouble("top");
+  std::optional<double> width = rect->FindDouble("width");
+  std::optional<double> height = rect->FindDouble("height");
+  if (!(left && top && width && height)) {
     return CGRectNull;
+  }
 
   CGFloat scale = [[web_state->GetWebViewProxy() scrollViewProxy] zoomScale];
 
@@ -235,7 +239,7 @@ bool RunActionOnWebViewElementWithScript(web::WebState* web_state,
                                          ElementAction action,
                                          NSError* __autoreleasing* error) {
   CRWWebController* web_controller =
-      static_cast<WebStateImpl*>(web_state)->GetWebController();
+      WebStateImpl::FromWebState(web_state)->GetWebController();
   const char* js_action = nullptr;
   switch (action) {
     case ELEMENT_ACTION_CLICK:
@@ -251,16 +255,16 @@ bool RunActionOnWebViewElementWithScript(web::WebState* web_state,
       js_action = ".selected = true;";
       break;
   }
-  NSString* script = [NSString stringWithFormat:
-                                   @"(function() {"
-                                    "  var element = %s;"
-                                    "  if (element) {"
-                                    "    element%s;"
-                                    "    return true;"
-                                    "  }"
-                                    "  return false;"
-                                    "})();",
-                                   element_script.c_str(), js_action];
+  NSString* script =
+      [NSString stringWithFormat:@"(function() {"
+                                  "  var element = %s;"
+                                  "  if (element) {"
+                                  "    element%s;"
+                                  "    return true;"
+                                  "  }"
+                                  "  return false;"
+                                  "})();",
+                                 element_script.c_str(), js_action];
   __block bool did_complete = false;
   __block bool element_found = false;
   __block NSError* block_error = nil;

@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
 #include "third_party/widevine/cdm/buildflags.h"
@@ -48,11 +47,9 @@ Robustness ConvertRobustness(const std::string& robustness) {
 
 #if BUILDFLAG(IS_WIN)
 bool IsHardwareSecurityEnabledForKeySystem(const std::string& key_system) {
-  return (key_system == kWidevineKeySystem &&
-          base::FeatureList::IsEnabled(media::kHardwareSecureDecryption)) ||
-         (key_system == kWidevineExperimentKeySystem &&
-          base::FeatureList::IsEnabled(
-              media::kHardwareSecureDecryptionExperiment));
+  return (key_system == kWidevineExperimentKeySystem) &&
+         base::FeatureList::IsEnabled(
+             media::kHardwareSecureDecryptionExperiment);
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -178,12 +175,6 @@ EmeConfig::Rule WidevineKeySystemInfo::GetRobustnessConfigRule(
   // require an identifier.
   if (robustness >= Robustness::HW_SECURE_CRYPTO || hw_secure_codecs_required) {
 #if BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kLacrosUseChromeosProtectedMedia)) {
-      return EmeConfig{.identifier = EmeConfigRuleState::kRequired};
-    }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
     return EmeConfig{.identifier = EmeConfigRuleState::kRequired,
                      .hw_secure_codecs = EmeConfigRuleState::kRequired};
 #else
@@ -222,7 +213,10 @@ EmeConfig::Rule WidevineKeySystemInfo::GetRobustnessConfigRule(
     // On Windows, when software security is queried, explicitly not allow
     // hardware secure codecs to prevent robustness level upgrade, for stability
     // and compatibility reasons. See https://crbug.com/1327043.
-    return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
+    // Also explicitly not allow identifier to prevent permission request.
+    // https://crbug.com/432054935.
+    return EmeConfig{.identifier = EmeConfigRuleState::kNotAllowed,
+                     .hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
   }
 #else
   // On other platforms, require hardware secure codecs for HW_SECURE_CRYPTO and
@@ -247,7 +241,7 @@ EmeConfig::Rule WidevineKeySystemInfo::GetPersistentLicenseSessionSupport()
   // support only based on `is_supported` and ignore `is_hw_secure_supported`.
   // Note: On ChromeOS, platform verification (similar to CDM host verification)
   // is required for persistent license support, which requires identifier.
-  // TODO(crbug.com/1324262): Fix the logic after refactoring EmeConfig.
+  // TODO(crbug.com/40839176): Fix the logic after refactoring EmeConfig.
   if (is_supported) {
     return EmeConfig{.identifier = EmeConfigRuleState::kRequired,
                      .persistence = EmeConfigRuleState::kRequired};

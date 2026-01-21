@@ -6,24 +6,36 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/callback.h"
-#include "base/mac/scoped_nsobject.h"
+#include "base/functional/callback.h"
 #include "base/strings/sys_string_conversions.h"
+#include "chrome/browser/ui/cocoa/group_menu_util.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/tabs/public/tab_group.h"
+#include "components/tabs/public/tab_interface.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+#include "ui/base/models/image_model.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_util_mac.h"
 
 using MenuItemCallback = base::RepeatingCallback<void(NSMenuItem*)>;
 
 namespace {
 
 void UpdateItemForWebContents(NSMenuItem* item,
-                              content::WebContents* web_contents) {
-  TabUIHelper* tab_ui_helper = TabUIHelper::FromWebContents(web_contents);
+                              content::WebContents* web_contents,
+                              TabStripModel* tab_strip_model) {
+  tabs::TabInterface* const tab_interface =
+      tabs::TabInterface::GetFromContents(web_contents);
+  TabUIHelper* const tab_ui_helper = TabUIHelper::From(tab_interface);
 
   auto* audio_helper = RecentlyAudibleHelper::FromWebContents(web_contents);
   if (audio_helper && audio_helper->WasRecentlyAudible()) {
@@ -45,7 +57,24 @@ void UpdateItemForWebContents(NSMenuItem* item,
   } else {
     item.title = base::SysUTF16ToNSString(tab_ui_helper->GetTitle());
   }
-  item.image = tab_ui_helper->GetFavicon().AsNSImage();
+
+  if (base::FeatureList::IsEnabled(features::kShowTabGroupsMacSystemMenu)) {
+    std::optional<tab_groups::TabGroupColorId> tab_group_color_id;
+    std::optional<tab_groups::TabGroupId> group =
+        tab_strip_model->GetTabForWebContents(web_contents)->GetGroup();
+    if (group.has_value()) {
+      TabGroup* tab_group =
+          tab_strip_model->group_model()->GetTabGroup(group.value());
+      if (tab_group) {
+        tab_group_color_id = tab_group->visual_data()->color();
+      }
+    }
+
+    chrome::UpdateGroupIndicatorForMenuItem(item, tab_group_color_id);
+  }
+
+  item.image = NSImageFromImageSkia(
+      tab_ui_helper->GetFavicon().Rasterize(&web_contents->GetColorProvider()));
 }
 
 void RemoveMenuItems(NSArray* menu_items) {
@@ -58,90 +87,148 @@ void RemoveMenuItems(NSArray* menu_items) {
 
 }  // namespace
 
-@interface TabMenuListener : NSObject
-- (instancetype)initWithCallback:(MenuItemCallback)callback;
+@interface TabMenuListener : NSObject <NSMenuDelegate>
+@property(nonatomic, readonly, getter=isMenuOpen) BOOL menuOpen;
+@property(nonatomic, assign) BOOL rebuildMenu;
+
+- (instancetype)initWithCallback:(MenuItemCallback)callback
+                 rebuildCallback:
+                     (base::RepeatingCallback<void()>)rebuildCallback;
 - (void)activateTab:(id)sender;
 @end
 
 @implementation TabMenuListener {
   MenuItemCallback _callback;
+  base::RepeatingCallback<void()> _rebuildCallback;
 }
 
-- (instancetype)initWithCallback:(MenuItemCallback)callback {
+@synthesize menuOpen = _menuOpen;
+@synthesize rebuildMenu = _rebuildMenu;
+
+- (instancetype)initWithCallback:(MenuItemCallback)callback
+                 rebuildCallback:
+                     (base::RepeatingCallback<void()>)rebuildCallback {
   if ((self = [super init])) {
     _callback = callback;
+    _rebuildCallback = rebuildCallback;
   }
   return self;
+}
+
+- (void)menuNeedsUpdate:(NSMenu*)menu {
+  if (_rebuildMenu) {
+    _rebuildCallback.Run();
+    _rebuildMenu = NO;
+  }
 }
 
 - (IBAction)activateTab:(id)sender {
   _callback.Run(sender);
 }
+
+- (void)menuWillOpen:(NSMenu*)menu {
+  _menuOpen = YES;
+}
+
+- (void)menuDidClose:(NSMenu*)menu {
+  _menuOpen = NO;
+}
 @end
 
-TabMenuBridge::TabMenuBridge(TabStripModel* model, NSMenuItem* menu_item)
-    : model_(model), menu_item_(menu_item) {
-  menu_listener_.reset([[TabMenuListener alloc]
+TabMenuBridge::TabMenuBridge(NSMenuItem* menu_item) : menu_item_(menu_item) {
+  menu_listener_ = [[TabMenuListener alloc]
       initWithCallback:base::BindRepeating(
                            &TabMenuBridge::OnDynamicItemChosen,
                            // Unretained is safe here: this class owns
                            // MenuListener, which holds the callback
                            // being constructed here, so the callback
                            // will be destructed before this class.
-                           base::Unretained(this))]);
-  model_->AddObserver(this);
+                           base::Unretained(this))
+       rebuildCallback:base::BindRepeating(
+                           &TabMenuBridge::AddDynamicItemsFromModel,
+                           // Unretained is safe here: this class owns
+                           // MenuListener, which holds the callback
+                           // being constructed here, so the callback
+                           // will be destructed before this class.
+                           base::Unretained(this))];
+  [menu_item_.submenu setDelegate:menu_listener_];
 }
 
 TabMenuBridge::~TabMenuBridge() {
-  if (model_)
+  [menu_item_.submenu setDelegate:nil];
+  if (model_) {
     model_->RemoveObserver(this);
+  }
   RemoveMenuItems(DynamicMenuItems());
 }
 
-void TabMenuBridge::BuildMenu() {
-  DCHECK(model_);
-  AddDynamicItemsFromModel();
+void TabMenuBridge::SetTabStripModel(TabStripModel* model) {
+  if (model_ == model) {
+    return;
+  }
+
+  if (model_) {
+    model_->RemoveObserver(this);
+  }
+
+  model_ = model;
+
+  if (model_) {
+    model_->AddObserver(this);
+    AddDynamicItemsFromModel();
+  } else {
+    RemoveMenuItems(DynamicMenuItems());
+  }
+}
+
+void TabMenuBridge::SetForceRebuildMenuForTesting(bool force) {
+  force_rebuild_menu_for_testing_ = force;
 }
 
 NSMutableArray* TabMenuBridge::DynamicMenuItems() {
   NSMenu* tabMenu = menu_item_.submenu;
-  NSMutableArray* array = [[[NSMutableArray alloc]
-      initWithCapacity:[tabMenu numberOfItems]] autorelease];
+  NSMutableArray* array =
+      [[NSMutableArray alloc] initWithCapacity:[tabMenu numberOfItems]];
 
   for (NSMenuItem* item in menu_item_.submenu.itemArray) {
-    if (item.target == menu_listener_.get())
+    if (item.target == menu_listener_) {
       [array addObject:item];
+    }
   }
 
   return array;
 }
 
 void TabMenuBridge::AddDynamicItemsFromModel() {
+  if (!model_) {
+    return;
+  }
+
   NSMutableArray* recyclable_items = DynamicMenuItems();
   NSMenu* tabMenu = menu_item_.submenu;
 
   dynamic_items_start_ = tabMenu.numberOfItems - recyclable_items.count;
   for (int i = 0; i < model_->count(); ++i) {
-    base::scoped_nsobject<NSMenuItem> item;
+    NSMenuItem* item;
 
     if (recyclable_items.count) {
-      item.reset([[recyclable_items firstObject] retain]);
+      item = [recyclable_items firstObject];
       [recyclable_items removeObjectAtIndex:0];
-      [item setState:NSControlStateValueOff];
+      item.state = NSControlStateValueOff;
     } else {
-      item.reset([[NSMenuItem alloc] initWithTitle:@""
-                                            action:@selector(activateTab:)
-                                     keyEquivalent:@""]);
-      [item setTarget:menu_listener_.get()];
+      item = [[NSMenuItem alloc] initWithTitle:@""
+                                        action:@selector(activateTab:)
+                                 keyEquivalent:@""];
+      [item setTarget:menu_listener_];
     }
 
     if (model_->active_index() == i) {
       [item setState:NSControlStateValueOn];
     }
-    UpdateItemForWebContents(item, model_->GetWebContentsAt(i));
+    UpdateItemForWebContents(item, model_->GetWebContentsAt(i), model_);
 
     if ([item menu] == nil) {
-      [tabMenu addItem:item.get()];
+      [tabMenu addItem:item];
     }
   }
 
@@ -149,10 +236,11 @@ void TabMenuBridge::AddDynamicItemsFromModel() {
 }
 
 void TabMenuBridge::OnDynamicItemChosen(NSMenuItem* item) {
-  if (!model_)
+  if (!model_) {
     return;
+  }
 
-  DCHECK_EQ(item.target, menu_listener_.get());
+  DCHECK_EQ(item.target, menu_listener_);
   int index = [menu_item_.submenu indexOfItem:item] - dynamic_items_start_;
   model_->ActivateTabAt(index,
                         TabStripUserGestureDetails(
@@ -166,28 +254,39 @@ void TabMenuBridge::OnTabStripModelChanged(
   DCHECK(tab_strip_model);
   DCHECK_EQ(tab_strip_model, model_);
 
+  if (!force_rebuild_menu_for_testing_ && ![menu_listener_ isMenuOpen]) {
+    [menu_listener_ setRebuildMenu:YES];
+    return;
+  }
+
   // If a single WebContents is being replaced, just regenerate that one menu
   // item.
   if (change.type() == TabStripModelChange::kReplaced) {
     const TabStripModelChange::Replace* replace = change.GetReplace();
     int menu_index = replace->index + dynamic_items_start_;
     UpdateItemForWebContents([menu_item_.submenu itemAtIndex:menu_index],
-                             replace->new_contents);
+                             replace -> new_contents, model_);
     return;
   }
 
   AddDynamicItemsFromModel();
 }
 
-void TabMenuBridge::TabChangedAt(content::WebContents* contents,
-                                 int index,
-                                 TabChangeType change_type) {
+void TabMenuBridge::OnTabChangedAt(tabs::TabInterface* tab,
+                                   int index,
+                                   TabChangeType change_type) {
   DCHECK(model_);
 
   // Ignore loading state changes - they happen very often during page load and
   // are used to drive the load spinner, which is not interesting to this menu.
-  if (change_type == TabChangeType::kLoadingOnly)
+  if (change_type == TabChangeType::kLoadingOnly) {
     return;
+  }
+
+  if (!force_rebuild_menu_for_testing_ && ![menu_listener_ isMenuOpen]) {
+    [menu_listener_ setRebuildMenu:YES];
+    return;
+  }
 
   int menu_index = index + dynamic_items_start_;
 
@@ -203,11 +302,41 @@ void TabMenuBridge::TabChangedAt(content::WebContents* contents,
   // As such, this code early-outs instead of DCHECKing. The newly-added
   // WebContents will be picked up later anyway when this object does get
   // notified of the addition.
-  if (menu_index < 0 || menu_index >= menu_item_.submenu.numberOfItems)
+  if (menu_index < 0 || menu_index >= menu_item_.submenu.numberOfItems) {
     return;
+  }
 
   NSMenuItem* item = [menu_item_.submenu itemAtIndex:menu_index];
-  UpdateItemForWebContents(item, contents);
+  UpdateItemForWebContents(item, tab->GetContents(), model_);
+}
+
+// If a tab group is changed, update group indicator for each tab.
+void TabMenuBridge::OnTabGroupChanged(const TabGroupChange& change) {
+  if (!force_rebuild_menu_for_testing_ && ![menu_listener_ isMenuOpen]) {
+    [menu_listener_ setRebuildMenu:YES];
+    return;
+  }
+
+  AddDynamicItemsFromModel();
+}
+
+// If a tab is moved into or outside the group, then update group indicator for
+// each tab.
+void TabMenuBridge::TabGroupedStateChanged(
+    TabStripModel* tab_strip_model,
+    std::optional<tab_groups::TabGroupId> old_group,
+    std::optional<tab_groups::TabGroupId> new_group,
+    tabs::TabInterface* tab,
+    int index) {
+  DCHECK(tab_strip_model);
+  DCHECK_EQ(tab_strip_model, model_);
+
+  if (!force_rebuild_menu_for_testing_ && ![menu_listener_ isMenuOpen]) {
+    [menu_listener_ setRebuildMenu:YES];
+    return;
+  }
+
+  AddDynamicItemsFromModel();
 }
 
 void TabMenuBridge::OnTabStripModelDestroyed(TabStripModel* model) {

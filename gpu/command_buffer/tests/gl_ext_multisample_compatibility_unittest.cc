@@ -7,8 +7,11 @@
 #include <GLES2/gl2extchromium.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
 #include <memory>
 
+#include "base/containers/heap_array.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
@@ -45,11 +48,28 @@ class EXTMultisampleCompatibilityTest : public testing::Test {
     GLuint vbo = 0;
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    static float vertices[] = {
-        1.0f,  1.0f, -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, 1.0f, -1.0f,
-        -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f, 1.0f,
-    };
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    static auto vertices = std::to_array<float>({
+        1.0f,
+        1.0f,
+        -1.0f,
+        1.0f,
+        -1.0f,
+        -1.0f,
+        -1.0f,
+        1.0f,
+        -1.0f,
+        -1.0f,
+        1.0f,
+        -1.0f,
+        -1.0f,
+        -1.0f,
+        1.0f,
+        -1.0f,
+        1.0f,
+        1.0f,
+    });
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(vertices[0]),
+                 vertices.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(position_loc);
     glVertexAttribPointer(position_loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
@@ -150,9 +170,10 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAndResolve) {
     return;
   }
 
-  // TODO(crbug.com/1144270) Fails on Mac Mini 8.1
-  if (GPUTestBotConfig::CurrentConfigMatches("Mac Intel 0x3e9b"))
+  // TODO(crbug.com/40728740) Fails on Mac Mini 8.1
+  if (GPUTestBotConfig::CurrentConfigMatches("Mac Intel 0x3e9b")) {
     return;
+  }
 
   static const float kBlue[] = {0.0f, 0.0f, 1.0f, 1.0f};
   static const float kGreen[] = {0.0f, 1.0f, 0.0f, 1.0f};
@@ -162,7 +183,7 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAndResolve) {
   // values. These might be due to different MSAA sample counts causing
   // different samples to hit.  Other option is driver bugs. Just test that
   // disabling multisample causes a difference.
-  std::unique_ptr<uint8_t[]> results[3];
+  std::array<base::HeapArray<uint8_t>, 3> results;
   const GLint kResultSize = kWidth * kHeight * 4;
   for (int pass = 0; pass < 3; pass++) {
     PrepareForDraw();
@@ -184,15 +205,18 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAndResolve) {
       glEnable(GL_MULTISAMPLE_EXT);
     }
     PrepareForVerify();
-    results[pass].reset(new uint8_t[kResultSize]);
-    memset(results[pass].get(), GLTestHelper::kCheckClearValue, kResultSize);
+    results[pass] = base::HeapArray<uint8_t>::Uninit(kResultSize);
+    std::fill(results[pass].begin(), results[pass].end(),
+              GLTestHelper::kCheckClearValue);
     glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE,
-                 results[pass].get());
+                 results[pass].data());
   }
-  EXPECT_NE(0, memcmp(results[0].get(), results[1].get(), kResultSize));
+  EXPECT_FALSE(
+      std::equal(results[0].begin(), results[0].end(), results[1].begin()));
   // Verify that rendering is deterministic, so that the pass above does not
   // come from non-deterministic rendering.
-  EXPECT_EQ(0, memcmp(results[0].get(), results[2].get(), kResultSize));
+  EXPECT_TRUE(
+      std::equal(results[0].begin(), results[0].end(), results[2].begin()));
 }
 
 TEST_F(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve) {
@@ -205,9 +229,10 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve) {
   // TODO: Figure out why this fails on NVIDIA Shield. crbug.com/700060.
   std::string renderer(gl_.context()->GetGLRenderer());
   std::string version(gl_.context()->GetGLVersion());
-  if (renderer.find("NVIDIA Tegra") != std::string::npos &&
-      version.find("OpenGL ES 3.2 NVIDIA 361.00") != std::string::npos)
+  if (renderer.contains("NVIDIA Tegra") &&
+      version.contains("OpenGL ES 3.2 NVIDIA 361.00")) {
     return;
+  }
 #endif
 
   // SAMPLE_ALPHA_TO_ONE is specified to transform alpha values of
@@ -223,7 +248,7 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve) {
   // even approximate sample values is not that easy.  Thus, just test
   // representative positions which have fractional pixels, inspecting that
   // normal rendering is different to SAMPLE_ALPHA_TO_ONE rendering.
-  std::unique_ptr<uint8_t[]> results[3];
+  std::array<base::HeapArray<uint8_t>, 3> results;
   const GLint kResultSize = kWidth * kHeight * 4;
 
   for (int pass = 0; pass < 3; ++pass) {
@@ -243,18 +268,21 @@ TEST_F(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve) {
     glDrawArrays(GL_TRIANGLES, 6, 3);
 
     PrepareForVerify();
-    results[pass].reset(new uint8_t[kResultSize]);
-    memset(results[pass].get(), GLTestHelper::kCheckClearValue, kResultSize);
+    results[pass] = base::HeapArray<uint8_t>::Uninit(kResultSize);
+    std::fill(results[pass].begin(), results[pass].end(),
+              GLTestHelper::kCheckClearValue);
     glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE,
-                 results[pass].get());
+                 results[pass].data());
     if (pass == 1) {
       glDisable(GL_SAMPLE_ALPHA_TO_ONE_EXT);
     }
   }
-  EXPECT_NE(0, memcmp(results[0].get(), results[1].get(), kResultSize));
+  EXPECT_FALSE(
+      std::equal(results[0].begin(), results[0].end(), results[1].begin()));
   // Verify that rendering is deterministic, so that the pass above does not
   // come from non-deterministic rendering.
-  EXPECT_EQ(0, memcmp(results[0].get(), results[2].get(), kResultSize));
+  EXPECT_TRUE(
+      std::equal(results[0].begin(), results[0].end(), results[2].begin()));
 }
 
 }  // namespace gpu

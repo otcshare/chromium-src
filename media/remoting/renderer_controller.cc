@@ -4,13 +4,15 @@
 
 #include "media/remoting/renderer_controller.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "media/base/remoting_constants.h"
 #include "media/remoting/metrics.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -26,17 +28,8 @@ using mojom::RemotingSinkVideoCapability;
 
 namespace {
 
-// The duration to delay the start of media remoting to ensure all preconditions
-// are held stable before switching to media remoting.
-constexpr base::TimeDelta kDelayedStart = base::Seconds(5);
-
 constexpr int kPixelsPerSec4k = 3840 * 2160 * 30;  // 4k 30fps.
 constexpr int kPixelsPerSec2k = 1920 * 1080 * 30;  // 1080p 30fps.
-
-// The minimum media element duration that is allowed for media remoting.
-// Frequent switching into and out of media remoting for short-duration media
-// can feel "janky" to the user.
-constexpr double kMinRemotingMediaDurationInSec = 60;
 
 StopTrigger GetStopTrigger(mojom::RemotingStopReason reason) {
   switch (reason) {
@@ -330,12 +323,12 @@ void RendererController::OnDataSourceInitialized(
 }
 
 void RendererController::OnHlsManifestDetected() {
-#if BUILDFLAG(IS_ANDROID)
   is_hls_ = true;
+  // TODO(crbug.com/40057824) Android used to rely solely on MediaPlayer for HLS
+  // playback, but now there is an alternative native player. Should we still
+  // be doing this in all cases? It does work in its current state, on both
+  // android and desktop, but it is not thoroughly tested.
   UpdateRemotePlaybackAvailabilityMonitoringState();
-#else
-  NOTREACHED();
-#endif
 }
 
 void RendererController::UpdateRemotePlaybackAvailabilityMonitoringState() {
@@ -343,17 +336,22 @@ void RendererController::UpdateRemotePlaybackAvailabilityMonitoringState() {
 // thus the source is supported when the URL is either http or https, video and
 // audio codecs are supported by the remote playback device; HLS is playable by
 // Chrome on Android (which is not detected by the pipeline metadata atm).
+// On Desktop, `sink_metadata_` is empty until a streaming session has been
+// established. So it's not possible to check if the receiver device supports
+// the media's codec.
 #if BUILDFLAG(IS_ANDROID)
   const bool is_media_supported = is_hls_ || IsRemotePlaybackSupported();
 #else
-  const bool is_media_supported = IsAudioOrVideoSupported();
+  const bool is_media_supported =
+      !pipeline_metadata_.video_decoder_config.is_encrypted() &&
+      !pipeline_metadata_.audio_decoder_config.is_encrypted();
 #endif
   // TODO(avayvod): add a check for CORS.
   bool is_source_supported = url_after_redirects_.has_scheme() &&
                              (url_after_redirects_.SchemeIs("http") ||
-                              url_after_redirects_.SchemeIs("https")) &&
+                              url_after_redirects_.SchemeIs("https") ||
+                              url_after_redirects_.SchemeIs("file")) &&
                              is_media_supported;
-
   if (client_)
     client_->UpdateRemotePlaybackCompatibility(is_source_supported);
 }
@@ -415,6 +413,9 @@ RemotingCompatibility RendererController::GetVideoCompatibility() const {
     case VideoCodec::kHEVC:
       compatible = HasVideoCapability(RemotingSinkVideoCapability::CODEC_HEVC);
       break;
+    case VideoCodec::kAV1:
+      compatible = HasVideoCapability(RemotingSinkVideoCapability::CODEC_AV1);
+      break;
     default:
       VLOG(2) << "Remoting does not support video codec: "
               << pipeline_metadata_.video_decoder_config.codec();
@@ -455,6 +456,7 @@ RemotingCompatibility RendererController::GetAudioCompatibility() const {
     case AudioCodec::kAC3:
     case AudioCodec::kDTS:
     case AudioCodec::kDTSXP2:
+    case AudioCodec::kDTSE:
       compatible =
           HasAudioCapability(RemotingSinkAudioCapability::CODEC_BASELINE_SET);
       break;
@@ -476,13 +478,15 @@ RemotingCompatibility RendererController::GetCompatibility() const {
   if (!has_video() && !has_audio())
     return RemotingCompatibility::kNoAudioNorVideo;
 
-  if (client_->Duration() <= kMinRemotingMediaDurationInSec)
-    return RemotingCompatibility::kDurationBelowThreshold;
-
   // When `is_media_remoting_requested_`, it is guaranteed that the sink is
-  // compatible. So there's no need to check for compatibilities.
+  // compatible and the media element meets the minimum duration requirement. So
+  // there's no need to check for compatibilities.
   if (is_media_remoting_requested_) {
     return RemotingCompatibility::kCompatible;
+  }
+
+  if (client_->Duration() <= kMinMediaDurationForSwitchingToRemotingInSec) {
+    return RemotingCompatibility::kDurationBelowThreshold;
   }
 
   if (has_video()) {
@@ -561,8 +565,10 @@ void RendererController::OnRendererFatalError(StopTrigger stop_trigger) {
 
   // MOJO_DISCONNECTED means the streaming session has stopped, which is not a
   // fatal error and should not prevent future sessions.
+  // Clean sinks so that `UpdateAndMaybeSwitch` will stop remoting.
   if (stop_trigger != StopTrigger::MOJO_DISCONNECTED) {
     encountered_renderer_fatal_error_ = true;
+    OnSinkGone();
   }
 
   UpdateAndMaybeSwitch(UNKNOWN_START_TRIGGER, stop_trigger);
@@ -572,6 +578,10 @@ void RendererController::SetClient(MediaObserverClient* client) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   client_ = client;
+  // Reset `encountered_renderer_fatal_error_` when the media element changes so
+  // that the previous renderer fatal error won't prevent Remoting the new
+  // content.
+  encountered_renderer_fatal_error_ = false;
   if (!client_) {
     pixel_rate_timer_.Stop();
     if (remote_rendering_started_) {
@@ -585,18 +595,19 @@ void RendererController::SetClient(MediaObserverClient* client) {
 bool RendererController::HasVideoCapability(
     mojom::RemotingSinkVideoCapability capability) const {
   return sink_metadata_ &&
-         base::Contains(sink_metadata_->video_capabilities, capability);
+         std::ranges::contains(sink_metadata_->video_capabilities, capability);
 }
 
 bool RendererController::HasAudioCapability(
     mojom::RemotingSinkAudioCapability capability) const {
   return sink_metadata_ &&
-         base::Contains(sink_metadata_->audio_capabilities, capability);
+         std::ranges::contains(sink_metadata_->audio_capabilities, capability);
 }
 
 bool RendererController::HasFeatureCapability(
     RemotingSinkFeature capability) const {
-  return sink_metadata_ && base::Contains(sink_metadata_->features, capability);
+  return sink_metadata_ &&
+         std::ranges::contains(sink_metadata_->features, capability);
 }
 
 bool RendererController::SinkSupportsRemoting() const {
@@ -635,7 +646,7 @@ void RendererController::MaybeStartCalculatePixelRateTimer() {
   }
 
   pixel_rate_timer_.Start(
-      FROM_HERE, kDelayedStart,
+      FROM_HERE, base::Seconds(kPixelRateCalInSec),
       base::BindOnce(&RendererController::DoCalculatePixelRate,
                      base::Unretained(this), client_->DecodedFrameCount(),
                      clock_->NowTicks()));
@@ -704,6 +715,7 @@ bool RendererController::IsAudioRemotePlaybackSupported() const {
     case AudioCodec::kAC3:
     case AudioCodec::kDTS:
     case AudioCodec::kDTSXP2:
+    case AudioCodec::kDTSE:
       return true;
     default:
       return false;

@@ -4,8 +4,10 @@
 
 #include "third_party/blink/renderer/modules/accessibility/testing/accessibility_test.h"
 
+#include "base/strings/strcat.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -20,7 +22,8 @@ AccessibilityTest::AccessibilityTest(LocalFrameClient* local_frame_client)
 
 void AccessibilityTest::SetUp() {
   RenderingTest::SetUp();
-  ax_context_ = std::make_unique<AXContext>(GetDocument(), ui::kAXModeComplete);
+  ax_context_ =
+      std::make_unique<AXContext>(GetDocument(), ui::kAXModeDefaultForTests);
 }
 
 AXObjectCacheImpl& AccessibilityTest::GetAXObjectCache() const {
@@ -33,50 +36,67 @@ AXObjectCacheImpl& AccessibilityTest::GetAXObjectCache() const {
 }
 
 AXObject* AccessibilityTest::GetAXObject(LayoutObject* layout_object) const {
-  return GetAXObjectCache().GetOrCreate(layout_object);
+  return GetAXObjectCache().Get(layout_object);
 }
 
 AXObject* AccessibilityTest::GetAXObject(const Node& node) const {
-  return GetAXObjectCache().GetOrCreate(&node);
+  return GetAXObjectCache().Get(&node);
 }
 
 AXObject* AccessibilityTest::GetAXRootObject() const {
-  return GetAXObjectCache().GetOrCreate(&GetLayoutView());
+  GetAXObjectCache().UpdateAXForAllDocuments();
+  return GetAXObjectCache().Root();
 }
 
 AXObject* AccessibilityTest::GetAXBodyObject() const {
-  return GetAXObjectCache().GetOrCreate(GetDocument().body());
+  return GetAXObjectCache().Get(GetDocument().body());
 }
 
 AXObject* AccessibilityTest::GetAXFocusedObject() const {
   return GetAXObjectCache().FocusedObject();
 }
 
-AXObject* AccessibilityTest::GetAXObjectByElementId(const char* id) const {
+AXObject* AccessibilityTest::GetAXObjectByElementId(const char* id,
+                                                    PseudoId pseudo_id) const {
   const auto* element = GetElementById(id);
-  return element ? GetAXObjectCache().GetOrCreate(element) : nullptr;
+  if (element && pseudo_id != kPseudoIdNone) {
+    return GetAXObjectCache().Get(element->GetPseudoElement(pseudo_id));
+  }
+  return GetAXObjectCache().Get(element);
 }
 
-std::string AccessibilityTest::PrintAXTree() const {
-  std::ostringstream stream;
-  PrintAXTreeHelper(stream, GetAXRootObject(), 0);
-  return stream.str();
+// static
+std::string AccessibilityTest::PrintAXTree(Document& document) {
+  auto ax_context =
+      std::make_unique<AXContext>(document, ui::kAXModeDefaultForTests);
+
+  DCHECK(document.View());
+  document.View()->UpdateAllLifecyclePhasesForTest();
+  auto* ax_object_cache =
+      To<AXObjectCacheImpl>(document.ExistingAXObjectCache());
+  DCHECK(ax_object_cache);
+
+  ax_object_cache->UpdateAXForAllDocuments();
+  AXObject* root = ax_object_cache->Root();
+
+  std::string out;
+  PrintAXTreeHelper(out, root, 0);
+  return out;
 }
 
-std::ostringstream& AccessibilityTest::PrintAXTreeHelper(
-    std::ostringstream& stream,
-    const AXObject* root,
-    size_t level) const {
+// static
+void AccessibilityTest::PrintAXTreeHelper(std::string& out,
+                                          const AXObject* root,
+                                          size_t level) {
   if (!root)
-    return stream;
+    return;
 
-  stream << std::string(level * 2, '+');
-  stream << *root << std::endl;
+  base::StrAppend(&out,
+                  {std::string(level * 2, '+'), root->ToString().Utf8(), "\n"});
   for (const AXObject* child : root->ChildrenIncludingIgnored()) {
     DCHECK(child);
-    PrintAXTreeHelper(stream, child, level + 1);
+    PrintAXTreeHelper(out, child, level + 1);
   }
-  return stream;
 }
 
 }  // namespace blink

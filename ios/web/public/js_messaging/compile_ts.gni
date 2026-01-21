@@ -57,6 +57,10 @@ template("compile_ts") {
                              "testonly",
                            ])
 
+    if (defined(invoker.tsconfig_base)) {
+      tsconfig_base = invoker.tsconfig_base
+    }
+
     composite = true
 
     # The root must be the src directory since it must contain all scripts.
@@ -79,13 +83,5 @@ template("compile_ts") {
 
     # in_files are defined relative to root_dir as described in ts_library.py
     in_files = rebase_path(rebase_path(invoker.sources), root_dir)
-
-    # Specify the tsconfig file depending on whether JS is allowed.
-    if (defined(invoker.allow_js) && invoker.allow_js) {
-      tsconfig_base =
-          "//ios/web/public/js_messaging/tsconfig_allow_js_base.json"
-    } else {
-      tsconfig_base = "//ios/web/public/js_messaging/tsconfig_base.json"
-    }
   }
 }

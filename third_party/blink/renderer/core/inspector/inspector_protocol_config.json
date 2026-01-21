@@ -27,10 +27,6 @@
                 "async": ["enable", "takeComputedStyleUpdates"]
             },
             {
-                "domain": "Database",
-                "async": ["executeSQL"]
-            },
-            {
                 "domain": "DeviceOrientation"
             },
             {
@@ -46,8 +42,24 @@
                 "domain": "DOMStorage"
             },
             {
+                "domain": "EventBreakpoints"
+            },
+            {
+                "domain": "Storage"
+            },
+            {
+              "domain": "FileSystem",
+              "async": [
+                "getDirectory"
+              ]
+            },
+            {
                 "domain": "IndexedDB",
                 "async": ["requestDatabaseNames", "requestDatabase", "requestData", "getMetadata", "deleteObjectStoreEntries", "clearObjectStore", "deleteDatabase"]
+            },
+            {
+                "domain": "Inspector",
+                "include": []
             },
             {
                 "domain": "LayerTree"
@@ -73,9 +85,10 @@
             {
                 "domain": "Page",
                 "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-                            "getAppManifest", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "setSPCTransactionMode"],
+                            "getAppManifest", "getAnnotatedPageContent", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "setSPCTransactionMode", "setRPHRegistrationMode", "setPrerenderingAllowed"],
                 "async": ["getResourceContent", "searchInResource", "createIsolatedWorld"],
-                "exclude_events": ["screencastFrame", "screencastVisibilityChanged", "colorPicked", "interstitialShown", "interstitialHidden", "javascriptDialogOpening", "javascriptDialogClosed", "navigationRequested"]
+                "exclude_events": ["screencastFrame", "screencastVisibilityChanged", "colorPicked", "interstitialShown", "interstitialHidden",
+                                   "javascriptDialogOpening", "javascriptDialogClosed", "navigationRequested", "frameStartedLoading", "frameStoppedLoading"]
             },
             {
                 "domain": "Performance"
@@ -84,17 +97,28 @@
                 "domain": "PerformanceTimeline"
             },
             {
+                "domain": "Preload"
+            },
+            {
                 "domain": "Emulation",
-                "include": ["forceViewport", "resetViewport", "resetPageScaleFactor", "setPageScaleFactor", "setScriptExecutionDisabled", "setTouchEmulationEnabled",
-                            "setEmulatedMedia", "setEmulatedVisionDeficiency", "setCPUThrottlingRate", "setVirtualTimePolicy", "setTimezoneOverride", "setNavigatorOverrides", "setDefaultBackgroundColorOverride", "setDeviceMetricsOverride", "clearDeviceMetricsOverride",
-                            "setHardwareConcurrencyOverride", "setUserAgentOverride", "setScrollbarsHidden", "setDocumentCookieDisabled", "setFocusEmulationEnabled", "setAutoDarkModeOverride", "setLocaleOverride", "setDisabledImageTypes", "setAutomationOverride"],
+                "include": ["forceViewport", "resetViewport", "resetPageScaleFactor", "setPageScaleFactor", "setScriptExecutionDisabled", "setTouchEmulationEnabled", "setSmallViewportHeightDifferenceOverride",
+                            "setEmulatedMedia", "setEmulatedVisionDeficiency", "setEmulatedOSTextScale", "setCPUThrottlingRate", "setVirtualTimePolicy", "setTimezoneOverride", "setNavigatorOverrides", "setDefaultBackgroundColorOverride", "setSafeAreaInsetsOverride", "setDeviceMetricsOverride", "clearDeviceMetricsOverride",
+                            "setDataSaverOverride", "setHardwareConcurrencyOverride", "setUserAgentOverride", "setScrollbarsHidden", "setDocumentCookieDisabled", "setFocusEmulationEnabled", "setAutoDarkModeOverride", "setLocaleOverride", "setDisabledImageTypes", "setAutomationOverride"],
                 "include_events": ["virtualTimeBudgetExpired", "virtualTimeAdvanced", "virtualTimePaused"]
             },
             {
                 "domain": "Network",
                 "exclude": ["clearBrowserCache", "clearBrowserCookies", "getCookies", "getAllCookies", "deleteCookies", "setCookie", "setCookies", "canEmulateNetworkConditions",
                             "setRequestInterception", "continueInterceptedRequest", "getResponseBodyForInterception",
-                            "takeResponseBodyForInterceptionAsStream", "getSecurityIsolationStatus", "loadNetworkResource", "enableReportingApi"],
+                            "takeResponseBodyForInterceptionAsStream",
+                            "getSecurityIsolationStatus",
+                            "loadNetworkResource",
+                            "enableReportingApi",
+                            "enableDeviceBoundSessions",
+                            "fetchSchemefulSite",
+                            "setCookieControls",
+                            "configureDurableMessages"
+                          ],
                 "async": ["getResponseBody", "getRequestPostData"]
             },
             {

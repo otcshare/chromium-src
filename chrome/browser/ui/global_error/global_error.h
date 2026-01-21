@@ -19,8 +19,17 @@ class GlobalErrorBubbleViewBase;
 class GlobalError {
  public:
   enum Severity {
+    // The error requires user action, but is low priority. Users' attention may
+    // be drawn to the error in a less alarming way than an error at a higher
+    // level.
     SEVERITY_LOW,
+
+    // The error requires prompt user action. This is a safe default for general
+    // errors.
     SEVERITY_MEDIUM,
+
+    // The error requires prompt user action and should take priority over all
+    // other errors.
     SEVERITY_HIGH,
   };
 
@@ -56,9 +65,7 @@ class GlobalError {
 // This object describes a single global error that already comes with support
 // for showing a standard Bubble UI. Derived classes just need to supply the
 // content to be displayed in the bubble.
-class GlobalErrorWithStandardBubble
-    : public GlobalError,
-      public base::SupportsWeakPtr<GlobalErrorWithStandardBubble> {
+class GlobalErrorWithStandardBubble : public GlobalError {
  public:
   GlobalErrorWithStandardBubble();
 
@@ -75,7 +82,6 @@ class GlobalErrorWithStandardBubble
   virtual bool ShouldShowCloseButton() const;
   virtual bool ShouldAddElevationIconToAcceptButton();
   virtual std::u16string GetBubbleViewCancelButtonLabel() = 0;
-  virtual int GetDefaultDialogButton() const;
   virtual bool ShouldCloseOnDeactivate() const;
   virtual std::u16string GetBubbleViewDetailsButtonLabel();
 
@@ -84,6 +90,9 @@ class GlobalErrorWithStandardBubble
   virtual void BubbleViewAcceptButtonPressed(Browser* browser) = 0;
   virtual void BubbleViewCancelButtonPressed(Browser* browser) = 0;
   virtual void BubbleViewDetailsButtonPressed(Browser* browser);
+
+  // Leaf classes must provide a WeakPtr to themselves.
+  virtual base::WeakPtr<GlobalErrorWithStandardBubble> AsWeakPtr() = 0;
 
   // GlobalError overrides:
   bool HasBubbleView() override;

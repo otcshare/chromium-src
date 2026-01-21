@@ -4,9 +4,8 @@
 
 package org.chromium.chrome.browser;
 
-import android.support.test.InstrumentationRegistry;
-
 import androidx.test.filters.SmallTest;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Assert;
 import org.junit.Rule;
@@ -18,83 +17,66 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.net.test.EmbeddedTestServer;
-import org.chromium.ui.test.util.UiRestriction;
+import org.chromium.ui.base.DeviceFormFactor;
 
-/**
- * Tests starting the activity with URLs.
- */
+/** Tests starting the activity with URLs. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class MainActivityWithURLTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
-    /**
-     * Verify launch the activity with URL.
-     */
+    /** Verify launch the activity with URL. */
     @Test
     @SmallTest
     @Feature({"Navigation"})
     public void testLaunchActivityWithURL() {
-        EmbeddedTestServer testServer =
-                EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
-        try {
-            // Launch chrome
-            mActivityTestRule.startMainActivityWithURL(
-                    testServer.getURL("/chrome/test/data/android/simple.html"));
-            String expectedTitle = "Activity test page";
-            TabModel model = mActivityTestRule.getActivity().getCurrentTabModel();
-            String title = ChromeTabUtils.getTitleOnUiThread(model.getTabAt(model.index()));
-            Assert.assertEquals(expectedTitle, title);
-        } finally {
-            testServer.stopAndDestroyServer();
-        }
+        // Launch chrome
+        mActivityTestRule.startOnTestServerUrl("/chrome/test/data/android/simple.html");
+        String expectedTitle = "Activity test page";
+        String title = ChromeTabUtils.getCurrentTabTitleOnUiThread(mActivityTestRule.getActivity());
+        Assert.assertEquals(expectedTitle, title);
     }
 
-    /**
-     * Launch and verify URL is neither null nor empty.
-     */
+    /** Launch and verify URL is neither null nor empty. */
     @Test
     @SmallTest
     @Feature({"Navigation"})
-    @Restriction(UiRestriction.RESTRICTION_TYPE_TABLET) // https://crbug.com/1392547
+    @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP) // https://crbug.com/1392547
     public void testLaunchActivity() {
         // Launch chrome
-        mActivityTestRule.startMainActivityFromLauncher();
-        String currentUrl = ChromeTabUtils.getUrlStringOnUiThread(
-                mActivityTestRule.getActivity().getActivityTab());
+        mActivityTestRule.startFromLauncherAtNtp();
+        String currentUrl =
+                ChromeTabUtils.getCurrentTabUrlOnUiThread(mActivityTestRule.getActivity());
         Assert.assertNotNull(currentUrl);
         Assert.assertEquals(false, currentUrl.isEmpty());
     }
 
     /**
-     * Launch a NTP and make sure it loads correctly. This makes sure the
-     * NTP loading complete notification is received.
+     * Launch a NTP and make sure it loads correctly. This makes sure the NTP loading complete
+     * notification is received.
      */
     @Test
     @SmallTest
     @Feature({"Navigation"})
     public void testNewTabPageLaunch() {
         // Launch chrome with NTP.
-        mActivityTestRule.startMainActivityWithURL(UrlConstants.NTP_URL);
-        String currentUrl = ChromeTabUtils.getUrlStringOnUiThread(
-                mActivityTestRule.getActivity().getActivityTab());
+        mActivityTestRule.startOnNtp();
+        ChromeTabbedActivity activity = mActivityTestRule.getActivity();
+        String currentUrl = ChromeTabUtils.getCurrentTabUrlOnUiThread(activity);
         Assert.assertNotNull(currentUrl);
         Assert.assertEquals(false, currentUrl.isEmpty());
 
         // Open NTP.
-        ChromeTabUtils.newTabFromMenu(
-                InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
+        ChromeTabUtils.newTabFromMenu(InstrumentationRegistry.getInstrumentation(), activity);
 
-        currentUrl = ChromeTabUtils.getUrlStringOnUiThread(
-                mActivityTestRule.getActivity().getActivityTab());
+        currentUrl = ChromeTabUtils.getCurrentTabUrlOnUiThread(activity);
         Assert.assertNotNull(currentUrl);
         Assert.assertEquals(false, currentUrl.isEmpty());
     }

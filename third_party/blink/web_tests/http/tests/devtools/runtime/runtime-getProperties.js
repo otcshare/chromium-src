@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests RemoteObject.getProperties.\n`);
   await TestRunner.evaluateInPagePromise(`
@@ -21,10 +23,10 @@
     async function testSetUp(next) {
       await new Promise(resolve => TestRunner.evaluateInPage('dumpObjects(\'Initial\')', resolve));
 
-      var result = await TestRunner.RuntimeAgent.evaluate('object1');
+      var {result} = await TestRunner.RuntimeAgent.invoke_evaluate({expression: 'object1'});
 
       obj1 = TestRunner.runtimeModel.createRemoteObject(result);
-      var result = await TestRunner.RuntimeAgent.evaluate('object2');
+      ({result} = await TestRunner.RuntimeAgent.invoke_evaluate({expression: 'object2'}));
 
       obj2 = TestRunner.runtimeModel.createRemoteObject(result);
       next();

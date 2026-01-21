@@ -4,15 +4,13 @@
 
 #include "components/prefs/segregated_pref_store.h"
 
-#include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/barrier_closure.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "components/prefs/pref_name_set.h"
 
@@ -23,14 +21,16 @@ SegregatedPrefStore::UnderlyingPrefStoreObserver::UnderlyingPrefStoreObserver(
 }
 
 void SegregatedPrefStore::UnderlyingPrefStoreObserver::OnPrefValueChanged(
-    const std::string& key) {
+    std::string_view key) {
   // Notify Observers only after all underlying PrefStores of the outer
   // SegregatedPrefStore are initialized.
-  if (!outer_->IsInitializationComplete())
+  if (!outer_->IsInitializationComplete()) {
     return;
+  }
 
-  for (auto& observer : outer_->observers_)
+  for (auto& observer : outer_->observers_) {
     observer.OnPrefValueChanged(key);
+  }
 }
 
 void SegregatedPrefStore::UnderlyingPrefStoreObserver::
@@ -39,17 +39,21 @@ void SegregatedPrefStore::UnderlyingPrefStoreObserver::
 
   // Notify Observers only after all underlying PrefStores of the outer
   // SegregatedPrefStore are initialized.
-  if (!outer_->IsInitializationComplete())
+  if (!outer_->IsInitializationComplete()) {
     return;
-
-  if (outer_->read_error_delegate_) {
-    PersistentPrefStore::PrefReadError read_error = outer_->GetReadError();
-    if (read_error != PersistentPrefStore::PREF_READ_ERROR_NONE)
-      outer_->read_error_delegate_->OnError(read_error);
   }
 
-  for (auto& observer : outer_->observers_)
+  if (outer_->read_error_delegate_.has_value() &&
+      outer_->read_error_delegate_.value()) {
+    PersistentPrefStore::PrefReadError read_error = outer_->GetReadError();
+    if (read_error != PersistentPrefStore::PREF_READ_ERROR_NONE) {
+      outer_->read_error_delegate_.value()->OnError(read_error);
+    }
+  }
+
+  for (auto& observer : outer_->observers_) {
     observer.OnInitializationCompleted(outer_->IsInitializationSuccessful());
+  }
 }
 
 SegregatedPrefStore::SegregatedPrefStore(
@@ -87,7 +91,7 @@ bool SegregatedPrefStore::IsInitializationSuccessful() const {
          selected_observer_.initialization_succeeded();
 }
 
-bool SegregatedPrefStore::GetValue(base::StringPiece key,
+bool SegregatedPrefStore::GetValue(std::string_view key,
                                    const base::Value** result) const {
   return StoreForKey(key)->GetValue(key, result);
 }
@@ -106,35 +110,35 @@ base::Value::Dict SegregatedPrefStore::GetValues() const {
   return values;
 }
 
-void SegregatedPrefStore::SetValue(const std::string& key,
+void SegregatedPrefStore::SetValue(std::string_view key,
                                    base::Value value,
                                    uint32_t flags) {
   StoreForKey(key)->SetValue(key, std::move(value), flags);
 }
 
-void SegregatedPrefStore::RemoveValue(const std::string& key, uint32_t flags) {
+void SegregatedPrefStore::RemoveValue(std::string_view key, uint32_t flags) {
   StoreForKey(key)->RemoveValue(key, flags);
 }
 
 void SegregatedPrefStore::RemoveValuesByPrefixSilently(
-    const std::string& prefix) {
+    std::string_view prefix) {
   // Since we can't guarantee to have all the prefs in one the pref stores, we
   // have to push the removal command down to both of them.
   default_pref_store_->RemoveValuesByPrefixSilently(prefix);
   selected_pref_store_->RemoveValuesByPrefixSilently(prefix);
 }
 
-bool SegregatedPrefStore::GetMutableValue(const std::string& key,
+bool SegregatedPrefStore::GetMutableValue(std::string_view key,
                                           base::Value** result) {
   return StoreForKey(key)->GetMutableValue(key, result);
 }
 
-void SegregatedPrefStore::ReportValueChanged(const std::string& key,
+void SegregatedPrefStore::ReportValueChanged(std::string_view key,
                                              uint32_t flags) {
   StoreForKey(key)->ReportValueChanged(key, flags);
 }
 
-void SegregatedPrefStore::SetValueSilently(const std::string& key,
+void SegregatedPrefStore::SetValueSilently(std::string_view key,
                                            base::Value value,
                                            uint32_t flags) {
   StoreForKey(key)->SetValueSilently(key, std::move(value), flags);
@@ -150,8 +154,9 @@ PersistentPrefStore::PrefReadError SegregatedPrefStore::GetReadError() const {
   if (read_error == PersistentPrefStore::PREF_READ_ERROR_NONE) {
     read_error = selected_pref_store_->GetReadError();
     // Ignore NO_FILE from selected_pref_store_.
-    if (read_error == PersistentPrefStore::PREF_READ_ERROR_NO_FILE)
+    if (read_error == PersistentPrefStore::PREF_READ_ERROR_NO_FILE) {
       read_error = PersistentPrefStore::PREF_READ_ERROR_NONE;
+    }
   }
   return read_error;
 }
@@ -171,9 +176,9 @@ PersistentPrefStore::PrefReadError SegregatedPrefStore::ReadPrefs() {
 }
 
 void SegregatedPrefStore::ReadPrefsAsync(ReadErrorDelegate* error_delegate) {
-  read_error_delegate_.reset(error_delegate);
-  default_pref_store_->ReadPrefsAsync(NULL);
-  selected_pref_store_->ReadPrefsAsync(NULL);
+  read_error_delegate_.emplace(error_delegate);
+  default_pref_store_->ReadPrefsAsync(nullptr);
+  selected_pref_store_->ReadPrefsAsync(nullptr);
 }
 
 void SegregatedPrefStore::CommitPendingWrite(
@@ -214,15 +219,27 @@ SegregatedPrefStore::~SegregatedPrefStore() {
   selected_pref_store_->RemoveObserver(&selected_observer_);
 }
 
-PersistentPrefStore* SegregatedPrefStore::StoreForKey(base::StringPiece key) {
-  return (base::Contains(selected_preference_names_, key) ? selected_pref_store_
-                                                          : default_pref_store_)
+PersistentPrefStore* SegregatedPrefStore::StoreForKey(std::string_view key) {
+  return (selected_preference_names_.contains(key) ? selected_pref_store_
+                                                   : default_pref_store_)
       .get();
 }
 
 const PersistentPrefStore* SegregatedPrefStore::StoreForKey(
-    base::StringPiece key) const {
-  return (base::Contains(selected_preference_names_, key) ? selected_pref_store_
-                                                          : default_pref_store_)
+    std::string_view key) const {
+  return (selected_preference_names_.contains(key) ? selected_pref_store_
+                                                   : default_pref_store_)
       .get();
+}
+
+bool SegregatedPrefStore::HasReadErrorDelegate() const {
+  return read_error_delegate_.has_value();
+}
+
+PrefFilter* SegregatedPrefStore::GetDefaultStoreFilter() {
+  return default_pref_store_->GetFilter();
+}
+
+PrefFilter* SegregatedPrefStore::GetSelectedStoreFilter() {
+  return selected_pref_store_ ? selected_pref_store_->GetFilter() : nullptr;
 }

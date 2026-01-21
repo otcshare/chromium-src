@@ -5,6 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_IIR_FILTER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_IIR_FILTER_H_
 
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
@@ -26,10 +28,9 @@ class PLATFORM_EXPORT IIRFilter final {
 
   void Reset();
 
-  void GetFrequencyResponse(int n_frequencies,
-                            const float* frequency,
-                            float* mag_response,
-                            float* phase_response);
+  void GetFrequencyResponse(base::span<const float> frequency,
+                            base::span<float> mag_response,
+                            base::span<float> phase_response);
 
   // Compute the tail time of the IIR filter
   double TailTime(double sample_rate,
@@ -63,8 +64,8 @@ class PLATFORM_EXPORT IIRFilter final {
 
   // Coefficients of the IIR filter.  To minimize storage, these point to the
   // arrays given in the constructor.
-  const AudioDoubleArray* feedback_;
-  const AudioDoubleArray* feedforward_;
+  raw_ptr<const AudioDoubleArray> feedback_;
+  raw_ptr<const AudioDoubleArray> feedforward_;
 };
 
 }  // namespace blink

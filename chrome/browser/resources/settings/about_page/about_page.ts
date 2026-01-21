@@ -7,42 +7,51 @@
  * information.
  */
 
-import '../icons.html.js';
-import '../prefs/prefs.js';
-// <if expr="not chromeos_ash">
+import '/shared/settings/prefs/prefs.js';
+// <if expr="not is_chromeos">
 import '../relaunch_confirmation_dialog.js';
 // </if>
 import '../settings_page/settings_section.js';
-import '../settings_page_styles.css.js';
 import '../settings_shared.css.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/cr_elements/icons.html.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
-import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
-import {assert} from 'chrome://resources/js/assert_ts.js';
+import {assert} from 'chrome://resources/js/assert.js';
+// <if expr="_google_chrome">
+import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
+// </if>
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 import {RelaunchMixin, RestartType} from '../relaunch_mixin.js';
+import type {SettingsPlugin} from '../settings_main/settings_plugin.js';
 
 import {getTemplate} from './about_page.html.js';
-import {AboutPageBrowserProxy, AboutPageBrowserProxyImpl, UpdateStatus, UpdateStatusChangedEvent} from './about_page_browser_proxy.js';
+import type {AboutPageBrowserProxy, UpdateStatusChangedEvent} from './about_page_browser_proxy.js';
+import {AboutPageBrowserProxyImpl, UpdateStatus} from './about_page_browser_proxy.js';
+// clang-format off
 // <if expr="_google_chrome and is_macosx">
-import {PromoteUpdaterStatus} from './about_page_browser_proxy.js';
+import type {PromoteUpdaterStatus} from './about_page_browser_proxy.js';
+// </if>
+// clang-format on
 
+// <if expr="_google_chrome">
+export const ABOUT_PAGE_PRIVACY_POLICY_URL: string =
+    'https://policies.google.com/privacy';
 // </if>
 
 const SettingsAboutPageElementBase =
     RelaunchMixin(WebUiListenerMixin(I18nMixin(PolymerElement)));
 
-export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
+export class SettingsAboutPageElement extends SettingsAboutPageElementBase
+    implements SettingsPlugin {
   static get is() {
     return 'settings-about-page';
   }
@@ -74,11 +83,22 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
         },
       },
 
+      /**
+       * The name of the icon to display in the management card.
+       * Should only be read if isManaged_ is true.
+       */
+      managedByIcon_: {
+        type: String,
+        value() {
+          return loadTimeData.getString('managedByIcon');
+        },
+      },
+
       // <if expr="_google_chrome and is_macosx">
       promoteUpdaterStatus_: Object,
       // </if>
 
-      // <if expr="not chromeos_ash">
+      // <if expr="not is_chromeos">
       obsoleteSystemInfo_: {
         type: Object,
         value() {
@@ -104,7 +124,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
     };
   }
 
-  // <if expr="not chromeos_ash">
+  // <if expr="not is_chromeos">
   static get observers() {
     return [
       'updateShowUpdateStatus_(' +
@@ -115,18 +135,19 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
   }
   // </if>
 
-  private currentUpdateStatusEvent_: UpdateStatusChangedEvent|null;
-  private isManaged_: boolean;
+  declare private currentUpdateStatusEvent_: UpdateStatusChangedEvent|null;
+  declare private isManaged_: boolean;
+  declare private managedByIcon_: string;
 
   // <if expr="_google_chrome and is_macosx">
-  private promoteUpdaterStatus_: PromoteUpdaterStatus;
+  declare private promoteUpdaterStatus_: PromoteUpdaterStatus;
   // </if>
 
-  // <if expr="not chromeos_ash">
-  private obsoleteSystemInfo_: {obsolete: boolean, endOfLine: boolean};
-  private showUpdateStatus_: boolean;
-  private showButtonContainer_: boolean;
-  private showRelaunch_: boolean;
+  // <if expr="not is_chromeos">
+  declare private obsoleteSystemInfo_: {obsolete: boolean, endOfLine: boolean};
+  declare private showUpdateStatus_: boolean;
+  declare private showButtonContainer_: boolean;
+  declare private showRelaunch_: boolean;
   // </if>
 
   private aboutBrowserProxy_: AboutPageBrowserProxy =
@@ -137,7 +158,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
 
     this.aboutBrowserProxy_.pageReady();
 
-    // <if expr="not chromeos_ash">
+    // <if expr="not is_chromeos">
     this.startListening_();
     // </if>
   }
@@ -152,7 +173,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
     return '';
   }
 
-  // <if expr="not chromeos_ash">
+  // <if expr="not is_chromeos">
   private startListening_() {
     this.addWebUiListener(
         'update-status-changed', this.onUpdateStatusChanged_.bind(this));
@@ -165,7 +186,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
   }
 
   private onUpdateStatusChanged_(event: UpdateStatusChangedEvent) {
-    this.currentUpdateStatusEvent_! = event;
+    this.currentUpdateStatusEvent_ = event;
   }
   // </if>
 
@@ -177,7 +198,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
   /**
    * If #promoteUpdater isn't disabled, trigger update promotion.
    */
-  private onPromoteUpdaterTap_() {
+  private onPromoteUpdaterClick_() {
     // This is necessary because #promoteUpdater is not a button, so by default
     // disable doesn't do anything.
     if (this.promoteUpdaterStatus_.disabled) {
@@ -187,21 +208,21 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
   }
   // </if>
 
-  private onLearnMoreTap_(event: Event) {
+  private onLearnMoreClick_(event: Event) {
     // Stop the propagation of events, so that clicking on links inside
     // actionable items won't trigger action.
     event.stopPropagation();
   }
 
-  private onHelpTap_() {
+  private onHelpClick_() {
     this.aboutBrowserProxy_.openHelpPage();
   }
 
-  private onRelaunchTap_() {
+  private onRelaunchClick_() {
     this.performRestart(RestartType.RELAUNCH);
   }
 
-  // <if expr="not chromeos_ash">
+  // <if expr="not is_chromeos">
   private updateShowUpdateStatus_() {
     if (this.obsoleteSystemInfo_.endOfLine) {
       this.showUpdateStatus_ = false;
@@ -240,7 +261,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
         assert(typeof this.currentUpdateStatusEvent_!.progress === 'number');
         const progressPercent = this.currentUpdateStatusEvent_!.progress + '%';
 
-        if (this.currentUpdateStatusEvent_!.progress! > 0) {
+        if (this.currentUpdateStatusEvent_!.progress > 0) {
           // NOTE(dbeam): some platforms (i.e. Mac) always send 0% while
           // updating (they don't support incremental upgrade progress). Though
           // it's certainly quite possible to validly end up here with 0% on
@@ -266,7 +287,7 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
     }
   }
 
-  private getUpdateStatusIcon_(): string|null {
+  private getUpdateStatusIcon_(): string {
     // If this platform has reached the end of the line, display an error icon
     // and ignore UpdateStatus.
     if (this.obsoleteSystemInfo_.endOfLine) {
@@ -280,23 +301,23 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
         return 'cr:error';
       case UpdateStatus.UPDATED:
       case UpdateStatus.NEARLY_UPDATED:
-        return 'settings:check-circle';
+        return 'cr:check-circle';
       default:
-        return null;
+        return '';
     }
   }
 
-  private getThrobberSrcIfUpdating_(): string|null {
+  private shouldShowThrobber_(): boolean {
     if (this.obsoleteSystemInfo_.endOfLine) {
-      return null;
+      return false;
     }
 
     switch (this.currentUpdateStatusEvent_!.status) {
       case UpdateStatus.CHECKING:
       case UpdateStatus.UPDATING:
-        return 'chrome://resources/images/throbber_small.svg';
+        return true;
       default:
-        return null;
+        return false;
     }
   }
   // </if>
@@ -305,11 +326,11 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
     return this.currentUpdateStatusEvent_!.status === status;
   }
 
-  private onManagementPageTap_() {
-    window.location.href = 'chrome://management';
+  private onManagementPageClick_() {
+    window.location.href = loadTimeData.getString('managementPageUrl');
   }
 
-  private onProductLogoTap_() {
+  private onProductLogoClick_() {
     this.$['product-logo'].animate(
         {
           transform: ['none', 'rotate(-10turn)'],
@@ -321,12 +342,16 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
   }
 
   // <if expr="_google_chrome">
-  private onReportIssueTap_() {
+  private onReportIssueClick_() {
     this.aboutBrowserProxy_.openFeedbackDialog();
+  }
+
+  private onPrivacyPolicyClick_() {
+    OpenWindowProxyImpl.getInstance().openUrl(ABOUT_PAGE_PRIVACY_POLICY_URL);
   }
   // </if>
 
-  // <if expr="not chromeos_ash">
+  // <if expr="not is_chromeos">
   private shouldShowIcons_(): boolean {
     if (this.obsoleteSystemInfo_.endOfLine) {
       return true;
@@ -334,6 +359,16 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase {
     return this.showUpdateStatus_;
   }
   // </if>
+
+  // SettingsPlugin implementation
+  searchContents(query: string) {
+    // settings-about-page is intentionally not included in search.
+    return Promise.resolve({
+      canceled: false,
+      matchCount: 0,
+      wasClearSearch: query === '',
+    });
+  }
 }
 
 declare global {

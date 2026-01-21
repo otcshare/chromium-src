@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-test-utils.h"
@@ -27,18 +27,12 @@ using testing::_;
 
 class MockDriveFs : public mojom::DriveFsInterceptorForTesting {
  public:
-  DriveFs* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  DriveFs* GetForwardingInterface() override { NOTREACHED(); }
 };
 
 class MockDriveFsDelegate : public mojom::DriveFsDelegateInterceptorForTesting {
  public:
-  DriveFsDelegate* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  DriveFsDelegate* GetForwardingInterface() override { NOTREACHED(); }
 };
 
 class DriveFsBootstrapListenerForTest : public DriveFsBootstrapListener {

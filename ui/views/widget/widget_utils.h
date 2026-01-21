@@ -5,11 +5,11 @@
 #ifndef UI_VIEWS_WIDGET_WIDGET_UTILS_H_
 #define UI_VIEWS_WIDGET_WIDGET_UTILS_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -37,7 +37,7 @@ class VIEWS_EXPORT WidgetOpenTimer : public WidgetObserver {
   Callback callback_;
 
   // Time the bubble has been open. Used for UMA metrics collection.
-  absl::optional<base::ElapsedTimer> open_timer_;
+  std::optional<base::ElapsedTimer> open_timer_;
 
   base::ScopedObservation<Widget, WidgetObserver> observed_widget_{this};
 };

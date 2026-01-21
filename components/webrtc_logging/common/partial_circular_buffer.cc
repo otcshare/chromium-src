@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 
 namespace webrtc_logging {
 
@@ -68,7 +69,7 @@ uint32_t PartialCircularBuffer::Read(void* buffer, uint32_t buffer_size) {
     uint32_t to_wrap_pos = buffer_data_->wrap_position - position_;
     uint32_t to_eow = buffer_data_->total_written - total_read_;
     uint32_t to_read = std::min({buffer_size, to_wrap_pos, to_eow});
-    memcpy(buffer_uint8, buffer_data_->data + position_, to_read);
+    UNSAFE_TODO(memcpy(buffer_uint8, buffer_data_->data + position_, to_read));
     position_ += to_read;
     total_read_ += to_read;
     read += to_read;
@@ -97,7 +98,8 @@ uint32_t PartialCircularBuffer::Read(void* buffer, uint32_t buffer_size) {
     uint32_t to_eof = data_size_ - position_;
     uint32_t to_eow = buffer_data_->total_written - total_read_;
     uint32_t to_read = std::min({remaining_buffer_size, to_eof, to_eow});
-    memcpy(buffer_uint8 + read, buffer_data_->data + position_, to_read);
+    UNSAFE_TODO(
+        memcpy(buffer_uint8 + read, buffer_data_->data + position_, to_read));
     position_ += to_read;
     total_read_ += to_read;
     read += to_read;
@@ -122,7 +124,8 @@ uint32_t PartialCircularBuffer::Read(void* buffer, uint32_t buffer_size) {
   uint32_t to_eob = buffer_data_->end_position - position_;
   uint32_t to_eow = buffer_data_->total_written - total_read_;
   uint32_t to_read = std::min({remaining_buffer_size, to_eob, to_eow});
-  memcpy(buffer_uint8 + read, buffer_data_->data + position_, to_read);
+  UNSAFE_TODO(
+      memcpy(buffer_uint8 + read, buffer_data_->data + position_, to_read));
   position_ += to_read;
   total_read_ += to_read;
   read += to_read;
@@ -142,14 +145,14 @@ void PartialCircularBuffer::Write(const void* buffer, uint32_t buffer_size) {
     uint32_t space_left = wrap_position - position_;
     uint32_t write_size = std::min(buffer_size, space_left);
     DoWrite(input, write_size);
-    input += write_size;
+    UNSAFE_TODO(input += write_size);
     buffer_size -= write_size;
   }
 
   // Skip the part that would overlap.
   if (buffer_size > cycle_size) {
     uint32_t skip = buffer_size - cycle_size;
-    input += skip;
+    UNSAFE_TODO(input += skip);
     buffer_size -= skip;
     position_ = wrap_position + (position_ - wrap_position + skip) % cycle_size;
   }
@@ -167,8 +170,8 @@ void PartialCircularBuffer::DoWrite(const uint8_t* input, uint32_t input_size) {
   while (input_size > 0) {
     uint32_t space_left = data_size_ - position_;
     uint32_t write_size = std::min(input_size, space_left);
-    memcpy(buffer_data_->data + position_, input, write_size);
-    input += write_size;
+    UNSAFE_TODO(memcpy(buffer_data_->data + position_, input, write_size));
+    UNSAFE_TODO(input += write_size);
     input_size -= write_size;
     position_ += write_size;
     if (position_ >= data_size_) {

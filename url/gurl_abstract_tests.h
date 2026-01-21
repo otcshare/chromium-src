@@ -11,7 +11,7 @@
 // by parametrizing the tests with a class that has to expose the following
 // members:
 //   using UrlType = ...;
-//   static UrlType CreateUrlFromString(base::StringPiece s);
+//   static UrlType CreateUrlFromString(std::string_view s);
 //   static bool IsAboutBlank(const UrlType& url);
 //   static bool IsAboutSrcdoc(const UrlType& url);
 template <typename TUrlTraits>
@@ -23,7 +23,7 @@ class AbstractUrlTest : public testing::Test {
   // avoid hitting: explicit qualification required to use member 'IsAboutBlank'
   // from dependent base class.
   using UrlType = typename TUrlTraits::UrlType;
-  UrlType CreateUrlFromString(base::StringPiece s) {
+  UrlType CreateUrlFromString(std::string_view s) {
     return TUrlTraits::CreateUrlFromString(s);
   }
   bool IsAboutBlank(const UrlType& url) {
@@ -40,7 +40,7 @@ TYPED_TEST_P(AbstractUrlTest, IsAboutBlankTest) {
   // See https://tools.ietf.org/html/rfc6694 which explicitly allows
   // `about-query` and `about-fragment` parts in about: URLs.
   const std::string kAboutBlankUrls[] = {"about:blank", "about:blank?foo",
-                                         "about:blank/#foo",
+                                         "about:blank#foo", "about:blank/#foo",
                                          "about:blank?foo#foo"};
   for (const auto& input : kAboutBlankUrls) {
     SCOPED_TRACE(testing::Message() << "Test input: " << input);

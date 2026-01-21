@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -66,7 +67,7 @@ class WinKeyNetworkDelegateTest : public testing::Test {
         std::make_unique<MockWinNetworkFetcherFactory>();
     mock_network_fetcher_factory_ = mock_network_fetcher_factory.get();
 
-    network_delegate_ = absl::WrapUnique(
+    network_delegate_ = base::WrapUnique(
         new WinKeyNetworkDelegate(std::move(mock_network_fetcher_factory)));
   }
 
@@ -117,7 +118,8 @@ class WinKeyNetworkDelegateTest : public testing::Test {
     EXPECT_EQ(response_code, future.Get());
   }
 
-  raw_ptr<MockWinNetworkFetcherFactory> mock_network_fetcher_factory_ = nullptr;
+  raw_ptr<MockWinNetworkFetcherFactory, DanglingUntriaged>
+      mock_network_fetcher_factory_ = nullptr;
   std::unique_ptr<WinKeyNetworkDelegate> network_delegate_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};

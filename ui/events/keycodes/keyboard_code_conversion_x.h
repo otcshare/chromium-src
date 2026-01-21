@@ -7,16 +7,16 @@
 
 #include <stdint.h>
 
-
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/keycodes/keycodes_x_export.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
+#include "ui/gfx/x/xinput.h"
 
 namespace ui {
 
-enum class DomCode;
+enum class DomCode : uint32_t;
 
 KEYCODES_X_EXPORT KeyboardCode KeyboardCodeFromXKeyEvent(const x11::Event& xev);
 
@@ -46,6 +46,13 @@ KEYCODES_X_EXPORT unsigned int XKeyCodeForWindowsKeyCode(
 // Converts an X keycode into ui::KeyboardCode.
 KEYCODES_X_EXPORT KeyboardCode
 DefaultKeyboardCodeFromHardwareKeycode(unsigned int hardware_code);
+
+// Returns the state of an XI2 event, including the keyboard group.
+KEYCODES_X_EXPORT uint32_t
+GetXI2StateFromEvent(const x11::Input::DeviceEvent& xievent);
+
+// Returns the keyboard group from the core state.
+KEYCODES_X_EXPORT int XkbGroupForCoreState(int state);
 
 }  // namespace ui
 

@@ -5,10 +5,14 @@
 #ifndef ASH_APP_LIST_VIEWS_FOLDER_HEADER_VIEW_H_
 #define ASH_APP_LIST_VIEWS_FOLDER_HEADER_VIEW_H_
 
+#include <memory>
 #include <string>
+#include <string_view>
 
 #include "ash/app_list/model/app_list_item_observer.h"
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
@@ -22,6 +26,8 @@ class FolderHeaderViewDelegate;
 class ASH_EXPORT FolderHeaderView : public views::View,
                                     public views::TextfieldController,
                                     public AppListItemObserver {
+  METADATA_HEADER(FolderHeaderView, views::View)
+
  public:
   FolderHeaderView(FolderHeaderViewDelegate* delegate, bool tablet_mode);
 
@@ -37,16 +43,20 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   bool is_tablet_mode() const { return is_tablet_mode_; }
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  const char* GetClassName() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   views::Textfield* GetFolderNameViewForTest() const;
+  bool IsFolderNameViewActiveForTest() const;
 
   int GetMaxFolderNameCharLengthForTest() const;
 
  private:
   class FolderNameView;
+  class FolderNameJellyView;
+  class FolderNameViewController;
+
   friend class FolderHeaderViewTest;
   friend class PopulatedAppListTest;
 
@@ -57,7 +67,7 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   void UpdateFolderNameAccessibleName();
 
   // Gets and sets the folder name for test.
-  const std::u16string& GetFolderNameForTest();
+  std::u16string_view GetFolderNameForTest();
   void SetFolderNameForTest(const std::u16string& name);
 
   // Returns true if folder name is enabled, only for testing use.
@@ -74,7 +84,7 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   bool ShouldNameViewClearFocus(const ui::KeyEvent& key_event);
 
   // views::View:
-  void Layout() override;
+  void Layout(PassKey) override;
 
   // views::TextfieldController overrides:
   void ContentsChanged(views::Textfield* sender,
@@ -82,16 +92,21 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
 
+  // Updates the backing folder item name in response to folder name textfield
+  // change.
+  void UpdateFolderName(const std::u16string& textfield_contents);
+
   // AppListItemObserver overrides:
   void ItemNameChanged() override;
 
-  AppListFolderItem* folder_item_;  // Not owned.
+  raw_ptr<AppListFolderItem> folder_item_;  // Not owned.
 
-  FolderNameView* folder_name_view_;  // Owned by views hierarchy.
+  raw_ptr<views::Textfield> folder_name_view_;
+  std::unique_ptr<FolderNameViewController> folder_name_controller_;
 
   const std::u16string folder_name_placeholder_text_;
 
-  FolderHeaderViewDelegate* delegate_;
+  raw_ptr<FolderHeaderViewDelegate> delegate_;
 
   bool folder_name_visible_;
 

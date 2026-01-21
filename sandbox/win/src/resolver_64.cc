@@ -4,13 +4,14 @@
 
 #include "sandbox/win/src/resolver.h"
 
+#include <windows.h>
+
+#include <ntstatus.h>
 #include <stddef.h>
 
 // For placement new. This file must not depend on the CRT at runtime, but
 // placement operator new is inline.
 #include <new>
-
-#include "sandbox/win/src/sandbox_nt_util.h"
 
 namespace {
 
@@ -83,13 +84,6 @@ bool ResolverThunk::SetInternalThunk(void* storage,
   thunk->interceptor_function = reinterpret_cast<ULONG_PTR>(interceptor);
 
   return true;
-}
-
-NTSTATUS ResolverThunk::ResolveTarget(const void* module,
-                                      const char* function_name,
-                                      void** address) {
-  // We don't support sidestep & co.
-  return STATUS_NOT_IMPLEMENTED;
 }
 
 }  // namespace sandbox

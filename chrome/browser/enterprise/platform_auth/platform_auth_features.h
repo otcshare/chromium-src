@@ -6,19 +6,22 @@
 #define CHROME_BROWSER_ENTERPRISE_PLATFORM_AUTH_PLATFORM_AUTH_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
 
 namespace enterprise_auth {
 
-#if BUILDFLAG(IS_WIN)
-// Controls whether ambient authentication using the CloudAP framework is
-// enabled.
-BASE_DECLARE_FEATURE(kCloudApAuth);
+BASE_DECLARE_FEATURE(kEnableExtensibleEnterpriseSSO);
 
-// Determines whether authentication data beginning with 'x-ms-' should be added
-// to requests as a header instead of a cookie.
-BASE_DECLARE_FEATURE(kCloudApAuthAttachAsHeader);
-#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC)
+BASE_DECLARE_FEATURE(kOktaSSO);
+
+BASE_DECLARE_FEATURE_PARAM(std::string, kOktaSsoRequestHeadersAllowlist);
+
+BASE_DECLARE_FEATURE_PARAM(std::string, kOktaSsoResponseHeadersAllowlist);
+
+BASE_DECLARE_FEATURE_PARAM(std::string, kOktaSsoFixedRequestHeaders);
+#endif
 
 }  // namespace enterprise_auth
 

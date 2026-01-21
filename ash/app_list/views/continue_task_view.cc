@@ -21,16 +21,21 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/style_util.h"
-#include "base/bind.h"
+#include "ash/style/typography.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "extensions/common/constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/menu_separator_types.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
@@ -39,6 +44,7 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/highlight_border.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout.h"
@@ -59,12 +65,10 @@ constexpr int kViewCornerRadiusTablet = 20;
 constexpr int kTaskMinWidth = 204;
 constexpr int kTaskMaxWidth = 264;
 
-gfx::ImageSkia CreateIconWithCircleBackground(
-    const gfx::ImageSkia& icon,
-    ColorProvider::ControlsLayerType color_id) {
+gfx::ImageSkia CreateIconWithCircleBackground(const gfx::ImageSkia& icon,
+                                              SkColor color) {
   return gfx::ImageSkiaOperations::CreateImageWithCircleBackground(
-      kCircleRadius, ColorProvider::Get()->GetControlsLayerColor(color_id),
-      icon);
+      kCircleRadius, color, icon);
 }
 
 int GetCornerRadius(bool tablet_mode) {
@@ -75,9 +79,8 @@ int GetCornerRadius(bool tablet_mode) {
 
 ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
                                    bool tablet_mode)
-    : view_delegate_(view_delegate), is_tablet_mode_(tablet_mode) {
+    : view_delegate_(view_delegate) {
   SetPaintToLayer();
-  layer()->SetFillsBoundsOpaquely(false);
 
   SetFocusBehavior(FocusBehavior::ALWAYS);
   SetCallback(base::BindRepeating(&ContinueTaskView::OnButtonPressed,
@@ -90,7 +93,10 @@ ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
   views::HighlightPathGenerator::Install(this,
                                          std::move(ink_drop_highlight_path));
   SetInstallFocusRingOnFocus(true);
-  views::FocusRing::Get(this)->SetColorId(ui::kColorAshFocusRing);
+
+  const ui::ColorId focus_ring_color = cros_tokens::kCrosSysFocusRing;
+  views::FocusRing::Get(this)->SetOutsetFocusRingDisabled(true);
+  views::FocusRing::Get(this)->SetColorId(focus_ring_color);
   SetFocusPainter(nullptr);
 
   views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
@@ -99,9 +105,31 @@ ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
   SetShowInkDropWhenHotTracked(false);
 
   StyleUtil::ConfigureInkDropAttributes(
-      this, StyleUtil::kBaseColor | StyleUtil::kInkDropOpacity);
+      this, StyleUtil::kBaseColor | StyleUtil::kInkDropOpacity,
+      tablet_mode ? cros_tokens::kCrosSysRippleNeutralOnSubtle
+                  : cros_tokens::kCrosSysHoverOnSubtle);
 
-  UpdateStyleForTabletMode();
+  if (tablet_mode) {
+    if (chromeos::features::IsSystemBlurEnabled()) {
+      layer()->SetFillsBoundsOpaquely(false);
+      layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+      layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    }
+
+    layer()->SetRoundedCornerRadius(
+        gfx::RoundedCornersF(GetCornerRadius(/*tablet_mode=*/true)));
+
+    const ui::ColorId background_color_id =
+        chromeos::features::IsSystemBlurEnabled()
+            ? cros_tokens::kCrosSysSystemBaseElevated
+            : cros_tokens::kCrosSysSystemBaseElevatedOpaque;
+    SetBackground(views::CreateSolidBackground(background_color_id));
+    SetBorder(std::make_unique<views::HighlightBorder>(
+        GetCornerRadius(/*tablet_mode=*/true),
+        views::HighlightBorder::Type::kHighlightBorderNoShadow));
+  } else {
+    layer()->SetFillsBoundsOpaquely(false);
+  }
 
   auto* layout_manager = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
@@ -110,7 +138,7 @@ ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
   layout_manager->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  GetViewAccessibility().OverrideRole(ax::mojom::Role::kListItem);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kListItem);
 
   icon_ = AddChildView(std::make_unique<views::ImageView>());
   icon_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
@@ -122,16 +150,16 @@ ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
 
   title_ = label_container->AddChildView(
       std::make_unique<views::Label>(std::u16string()));
-  bubble_utils::ApplyStyle(title_, bubble_utils::TypographyStyle::kBody1);
-  title_->SetAccessibleName(std::u16string());
+  bubble_utils::ApplyStyle(title_, TypographyToken::kCrosButton1,
+                           cros_tokens::kCrosSysOnSurface);
+  title_->GetViewAccessibility().SetName(std::u16string());
   title_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
   title_->SetElideBehavior(gfx::ElideBehavior::ELIDE_TAIL);
 
   subtitle_ = label_container->AddChildView(
       std::make_unique<views::Label>(std::u16string()));
-  bubble_utils::ApplyStyle(subtitle_,
-                           bubble_utils::TypographyStyle::kAnnotation1,
-                           kColorAshTextColorSecondary);
+  bubble_utils::ApplyStyle(subtitle_, TypographyToken::kCrosAnnotation1,
+                           cros_tokens::kCrosSysOnSurfaceVariant);
   subtitle_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
   subtitle_->SetElideBehavior(gfx::ElideBehavior::ELIDE_MIDDLE);
 
@@ -145,7 +173,6 @@ ContinueTaskView::~ContinueTaskView() {}
 void ContinueTaskView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateIcon();
-  UpdateStyleForTabletMode();
 }
 
 gfx::Size ContinueTaskView::GetMaximumSize() const {
@@ -158,7 +185,8 @@ gfx::Size ContinueTaskView::GetMinimumSize() const {
                    GetLayoutManager()->GetPreferredSize(this).height());
 }
 
-gfx::Size ContinueTaskView::CalculatePreferredSize() const {
+gfx::Size ContinueTaskView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return GetMinimumSize();
 }
 
@@ -170,19 +198,36 @@ void ContinueTaskView::OnButtonPressed(const ui::Event& event) {
 
 void ContinueTaskView::UpdateIcon() {
   if (!result()) {
-    icon_->SetImage(gfx::ImageSkia());
+    icon_->SetImage(ui::ImageModel());
     return;
   }
 
-  const gfx::ImageSkia& icon = result()->chip_icon();
-  icon_->SetImage(CreateIconWithCircleBackground(
+  if (!GetWidget()) {
+    return;
+  }
+
+  gfx::ImageSkia icon;
+
+  if (!result()->icon().icon.IsEmpty()) {
+    icon = result()->icon().icon.Rasterize(GetColorProvider());
+  } else {
+    icon = result()->chip_icon();
+  }
+
+  icon_->SetImage(ui::ImageModel::FromImageSkia(CreateIconWithCircleBackground(
       icon.size() == GetIconSize()
           ? icon
           : gfx::ImageSkiaOperations::CreateResizedImage(
                 icon, skia::ImageOperations::RESIZE_BEST, GetIconSize()),
-      result()->result_type() == AppListSearchResultType::kZeroStateHelpApp
-          ? ColorProvider::ControlsLayerType::kControlBackgroundColorActive
-          : ColorProvider::ControlsLayerType::kControlBackgroundColorInactive));
+      GetColorProvider()->GetColor(GetIconBackgroundColorId()))));
+}
+
+ui::ColorId ContinueTaskView::GetIconBackgroundColorId() const {
+  if (result()->result_type() == AppListSearchResultType::kZeroStateHelpApp) {
+    return cros_tokens::kCrosSysPrimary;
+  }
+
+  return cros_tokens::kCrosSysSystemOnBase;
 }
 
 gfx::Size ContinueTaskView::GetIconSize() const {
@@ -203,16 +248,17 @@ void ContinueTaskView::UpdateResult() {
   if (!result()) {
     title_->SetText(std::u16string());
     subtitle_->SetText(std::u16string());
-    GetViewAccessibility().OverrideName(
+    GetViewAccessibility().SetName(
         std::u16string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
     return;
   }
 
   title_->SetText(result()->title());
   subtitle_->SetText(result()->details());
+  subtitle_->SetVisible(!result()->details().empty());
 
-  GetViewAccessibility().OverrideName(result()->title() + u" " +
-                                      result()->details());
+  GetViewAccessibility().SetName(result()->title() + u" " + result()->details(),
+                                 ax::mojom::NameFrom::kAttribute);
 }
 
 void ContinueTaskView::OnResultDestroying() {
@@ -227,7 +273,7 @@ void ContinueTaskView::SetResult(SearchResult* result) {
 
   result_ = result;
   if (result_) {
-    search_result_observation_.Observe(result_);
+    search_result_observation_.Observe(result_.get());
     UpdateResult();
   }
 }
@@ -235,7 +281,7 @@ void ContinueTaskView::SetResult(SearchResult* result) {
 void ContinueTaskView::ShowContextMenuForViewImpl(
     views::View* source,
     const gfx::Point& point,
-    ui::MenuSourceType source_type) {
+    ui::mojom::MenuSourceType source_type) {
   // May be null if the result got reset, and the task view is animating out.
   if (!result())
     return;
@@ -272,6 +318,7 @@ void ContinueTaskView::ExecuteCommand(int command_id, int event_flags) {
 }
 
 ui::SimpleMenuModel* ContinueTaskView::BuildMenuModel() {
+  DCHECK(result_);
   context_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
   context_menu_model_->AddItemWithIcon(
       ContinueTaskCommandId::kOpenResult,
@@ -280,13 +327,18 @@ ui::SimpleMenuModel* ContinueTaskView::BuildMenuModel() {
       ui::ImageModel::FromVectorIcon(kLaunchIcon,
                                      ui::kColorAshSystemUIMenuIcon));
 
-  context_menu_model_->AddItemWithIcon(
-      ContinueTaskCommandId::kRemoveResult,
-      l10n_util::GetStringUTF16(
-          IDS_ASH_LAUNCHER_CONTINUE_SECTION_CONTEXT_MENU_REMOVE),
-      ui::ImageModel::FromVectorIcon(kRemoveOutlineIcon,
-                                     ui::kColorAshSystemUIMenuIcon));
-  if (Shell::Get()->IsInTabletMode()) {
+  // We won't create the `Remove suggestion` option for admin templates.
+  // Reference: b/273800982.
+  if (result_->result_type() != AppListSearchResultType::kDesksAdminTemplate) {
+    context_menu_model_->AddItemWithIcon(
+        ContinueTaskCommandId::kRemoveResult,
+        l10n_util::GetStringUTF16(
+            IDS_ASH_LAUNCHER_CONTINUE_SECTION_CONTEXT_MENU_REMOVE),
+        ui::ImageModel::FromVectorIcon(kRemoveOutlineIcon,
+                                       ui::kColorAshSystemUIMenuIcon));
+  }
+
+  if (display::Screen::Get()->InTabletMode()) {
     context_menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
     context_menu_model_->AddItemWithIcon(
         ContinueTaskCommandId::kHideContinueSection,
@@ -320,10 +372,13 @@ ContinueTaskView::TaskResultType ContinueTaskView::GetTaskResultType() {
       return TaskResultType::kLocalFile;
     case AppListSearchResultType::kZeroStateDrive:
       return TaskResultType::kDriveFile;
+    case AppListSearchResultType::kZeroStateHelpApp:
+      return TaskResultType::kHelpApp;
+    case AppListSearchResultType::kDesksAdminTemplate:
+      return TaskResultType::kDesksAdminTemplate;
     default:
-      NOTREACHED();
+      return TaskResultType::kUnknown;
   }
-  return TaskResultType::kUnknown;
 }
 
 void ContinueTaskView::RemoveResult() {
@@ -346,25 +401,6 @@ void ContinueTaskView::CloseContextMenu() {
   context_menu_runner_->Cancel();
 }
 
-void ContinueTaskView::UpdateStyleForTabletMode() {
-  // Do nothing if the view is not in tablet mode.
-  if (!is_tablet_mode_)
-    return;
-
-  layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-  layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
-  layer()->SetRoundedCornerRadius(
-      gfx::RoundedCornersF(GetCornerRadius(/*tablet_mode=*/true)));
-
-  SetBackground(
-      views::CreateSolidBackground(ColorProvider::Get()->GetBaseLayerColor(
-          ColorProvider::BaseLayerType::kTransparent60)));
-  SetBorder(std::make_unique<views::HighlightBorder>(
-      GetCornerRadius(/*tablet_mode=*/true),
-      views::HighlightBorder::Type::kHighlightBorder2,
-      /*use_light_colors=*/false));
-}
-
 void ContinueTaskView::LogMetricsOnResultRemoved() {
   RecordCumulativeContinueSectionResultRemovedNumber();
 
@@ -372,7 +408,7 @@ void ContinueTaskView::LogMetricsOnResultRemoved() {
                                 GetTaskResultType(), TaskResultType::kMaxValue);
 }
 
-BEGIN_METADATA(ContinueTaskView, views::View)
+BEGIN_METADATA(ContinueTaskView)
 END_METADATA
 
 }  // namespace ash

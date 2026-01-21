@@ -9,8 +9,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 namespace {
 
@@ -29,22 +28,22 @@ uint16_t GenerateRandomPort() {
 
 }  // namespace
 
-absl::optional<TcpServerSocketPort> TcpServerSocketPort::FromInt(int port) {
+std::optional<TcpServerSocketPort> TcpServerSocketPort::FromInt(int port) {
   if (!base::IsValueInRangeForNumericType<uint16_t>(port)) {
     LOG(ERROR) << "TcpServerSocketPort::" << __func__ << ": Port " << port
                << " is not uint16.";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return TcpServerSocketPort::FromUInt16(static_cast<uint16_t>(port));
 }
 
-absl::optional<TcpServerSocketPort> TcpServerSocketPort::FromUInt16(
+std::optional<TcpServerSocketPort> TcpServerSocketPort::FromUInt16(
     uint16_t port) {
   if (!IsPortInRange(port)) {
     LOG(ERROR) << "TcpServerSocketPort::" << __func__ << ": Port " << port
                << " is not in the range [" << kMin << "," << kMax << "].";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return TcpServerSocketPort(port);
@@ -63,5 +62,4 @@ TcpServerSocketPort::TcpServerSocketPort(uint16_t port) : port_(port) {
 
 TcpServerSocketPort::~TcpServerSocketPort() = default;
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

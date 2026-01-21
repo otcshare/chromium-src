@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "content/browser/payments/installed_payment_apps_finder_impl.h"
@@ -22,6 +22,11 @@
 #include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
+
+MATCHER_P(PermissionTypeMatcher, id, "") {
+  return ::testing::Matches(::testing::Eq(id))(
+      blink::PermissionDescriptorToPermissionType(arg));
+}
 
 namespace content {
 
@@ -74,7 +79,8 @@ class PaymentAppProviderTest : public PaymentAppContentUnitTestBase {
         new testing::NiceMock<MockPermissionManager>());
     ON_CALL(*mock_permission_manager,
             GetPermissionResultForOriginWithoutContext(
-                blink::PermissionType::PAYMENT_HANDLER, testing::_))
+                PermissionTypeMatcher(blink::PermissionType::PAYMENT_HANDLER),
+                testing::_, testing::_))
         .WillByDefault(testing::Return(
             PermissionResult(blink::mojom::PermissionStatus::GRANTED,
                              PermissionStatusSource::UNSPECIFIED)));

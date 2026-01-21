@@ -12,6 +12,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -73,8 +74,8 @@ class ContactCenterInsightsExtensionManagerTest : public ::testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager profile_manager_;
 
-  raw_ptr<TestingProfile> affiliated_user_profile_;
-  raw_ptr<TestingProfile> unaffiliated_user_profile_;
+  raw_ptr<TestingProfile, DanglingUntriaged> affiliated_user_profile_;
+  raw_ptr<TestingProfile, DanglingUntriaged> unaffiliated_user_profile_;
 };
 
 TEST_F(ContactCenterInsightsExtensionManagerTest,

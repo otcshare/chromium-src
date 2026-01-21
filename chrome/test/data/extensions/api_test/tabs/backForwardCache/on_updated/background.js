@@ -13,6 +13,20 @@ function expect(data) {
       shouldIgnore = false;
     if (shouldIgnore)
       return;
+
+    // Ignore 'frozen' updates. This test focuses on navigation status
+    // transitions ('loading' and 'complete') during BackForwardCache restores.
+    // The 'frozen' property represents lifecycle state changes that can occur
+    // non-deterministically relative to navigation events depending on platform
+    // and timing. Since lifecycle state is not the focus of this test, we strip
+    // it to avoid flakiness caused by unexpected event ordering.
+    if ('frozen' in info) {
+      delete info.frozen;
+    }
+    if (Object.keys(info).length === 0) {
+      return;
+    }
+
     capturedEventData.push(info);
     checkExpectations();
   });
@@ -40,14 +54,12 @@ function promise(fun, ...args) {
   });
 }
 
-onload = async function() {
+chrome.test.getConfig(async function(config) {
   let tab = await promise(chrome.tabs.create, {"url": "about:blank"});
-  let config = await promise(chrome.test.getConfig);
   let port = config.testServer.port;
-
-  var URL_A = "http://a.com:" + port +
-        "/extensions/api_test/tabs/backForwardCache/on_updated/a.html";
-  var URL_B = "http://b.com:" + port +
+  let URL_A = "http://a.com:" + port +
+      "/extensions/api_test/tabs/backForwardCache/on_updated/a.html";
+  let URL_B = "http://b.com:" + port +
         "/extensions/api_test/tabs/backForwardCache/on_updated/b.html";
 
   chrome.test.runTests([
@@ -65,5 +77,5 @@ onload = async function() {
 
       chrome.tabs.update(tab.id, { url: URL_A });
     }
-  ]);
-};
+  ])
+});

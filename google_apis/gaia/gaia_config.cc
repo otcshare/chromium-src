@@ -4,18 +4,20 @@
 
 #include "google_apis/gaia/gaia_config.h"
 
+#include <optional>
+#include <string_view>
+
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_piece.h"
 #include "base/threading/thread_restrictions.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/google_api_keys.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 // static
@@ -23,21 +25,21 @@ GaiaConfig* GaiaConfig::GetInstance() {
   return GetGlobalConfig()->get();
 }
 
-GaiaConfig::GaiaConfig(base::Value parsed_config)
+GaiaConfig::GaiaConfig(base::Value::Dict parsed_config)
     : parsed_config_(std::move(parsed_config)) {}
 
 GaiaConfig::~GaiaConfig() = default;
 
-bool GaiaConfig::GetURLIfExists(base::StringPiece key, GURL* out_url) {
-  const base::Value* urls = parsed_config_.FindDictKey("urls");
+bool GaiaConfig::GetURLIfExists(std::string_view key, GURL* out_url) {
+  const base::Value::Dict* urls = parsed_config_.FindDict("urls");
   if (!urls)
     return false;
 
-  const base::Value* url_config = urls->FindDictKey(key);
+  const base::Value::Dict* url_config = urls->FindDict(key);
   if (!url_config)
     return false;
 
-  const std::string* url_string = url_config->FindStringKey("url");
+  const std::string* url_string = url_config->FindString("url");
   if (!url_string) {
     LOG(ERROR) << "Incorrect format of \"" << key
                << "\" gaia config key. A key should contain {\"url\": "
@@ -51,17 +53,17 @@ bool GaiaConfig::GetURLIfExists(base::StringPiece key, GURL* out_url) {
     return false;
   }
 
-  *out_url = url;
+  *out_url = std::move(url);
   return true;
 }
 
-bool GaiaConfig::GetAPIKeyIfExists(base::StringPiece key,
+bool GaiaConfig::GetAPIKeyIfExists(std::string_view key,
                                    std::string* out_api_key) {
-  const base::Value* api_keys = parsed_config_.FindDictKey("api_keys");
+  const base::Value::Dict* api_keys = parsed_config_.FindDict("api_keys");
   if (!api_keys)
     return false;
 
-  const std::string* api_key = api_keys->FindStringKey(key);
+  const std::string* api_key = api_keys->FindString(key);
   if (!api_key)
     return false;
 
@@ -69,12 +71,19 @@ bool GaiaConfig::GetAPIKeyIfExists(base::StringPiece key,
   return true;
 }
 
+std::optional<bool> GaiaConfig::GetFlagIfExists(std::string_view key) {
+  const base::Value::Dict* flags = parsed_config_.FindDict("flags");
+  if (!flags) {
+    return std::nullopt;
+  }
+
+  return flags->FindBool(key);
+}
+
 void GaiaConfig::SerializeContentsToCommandLineSwitch(
     base::CommandLine* command_line) const {
-  std::string config_contents;
-  base::JSONWriter::Write(parsed_config_, &config_contents);
   command_line->AppendSwitchASCII(switches::kGaiaConfigContents,
-                                  config_contents);
+                                  base::WriteJson(parsed_config_).value_or(""));
 }
 
 // static
@@ -84,9 +93,15 @@ std::unique_ptr<GaiaConfig> GaiaConfig::CreateFromCommandLineForTesting(
 }
 
 // static
-void GaiaConfig::ResetInstanceForTesting() {
-  *GetGlobalConfig() =
-      ReadConfigFromCommandLineSwitches(base::CommandLine::ForCurrentProcess());
+base::ScopedClosureRunner GaiaConfig::SetScopedConfigForTesting(
+    std::unique_ptr<GaiaConfig> config) {
+  std::unique_ptr<GaiaConfig> previous_config =
+      std::exchange(*GetGlobalConfig(), std::move(config));
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](std::unique_ptr<GaiaConfig> config_to_restore) {
+        *GetGlobalConfig() = std::move(config_to_restore);
+      },
+      std::move(previous_config)));
 }
 
 // static
@@ -100,13 +115,13 @@ std::unique_ptr<GaiaConfig>* GaiaConfig::GetGlobalConfig() {
 // static
 std::unique_ptr<GaiaConfig> GaiaConfig::ReadConfigFromString(
     const std::string& config_contents) {
-  absl::optional<base::Value> dict = base::JSONReader::Read(config_contents);
-  if (!dict || !dict->is_dict()) {
+  std::optional<base::Value::Dict> dict = base::JSONReader::ReadDict(
+      config_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!dict) {
     LOG(FATAL) << "Couldn't parse Gaia config file";
-    return nullptr;
   }
 
-  return std::make_unique<GaiaConfig>(std::move(dict.value()));
+  return std::make_unique<GaiaConfig>(std::move(*dict));
 }
 
 // static
@@ -120,7 +135,6 @@ std::unique_ptr<GaiaConfig> GaiaConfig::ReadConfigFromDisk(
   std::string config_contents;
   if (!base::ReadFileToString(config_path, &config_contents)) {
     LOG(FATAL) << "Couldn't read Gaia config file " << config_path;
-    return nullptr;
   }
   return ReadConfigFromString(config_contents);
 }
@@ -133,7 +147,6 @@ std::unique_ptr<GaiaConfig> GaiaConfig::ReadConfigFromCommandLineSwitches(
     LOG(FATAL) << "Either a Gaia config file path or a config file contents "
                   "can be provided; "
                << "not both";
-    return nullptr;
   }
 
   if (command_line->HasSwitch(switches::kGaiaConfigContents)) {

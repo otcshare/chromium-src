@@ -9,6 +9,8 @@
 #include "components/password_manager/core/browser/password_manager_settings_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
+namespace password_manager {
+
 class MockPasswordManagerSettingsService
     : public PasswordManagerSettingsService {
  public:
@@ -18,10 +20,12 @@ class MockPasswordManagerSettingsService
   MOCK_METHOD(bool,
               IsSettingEnabled,
               (password_manager::PasswordManagerSetting),
-              (override));
+              (const override));
   MOCK_METHOD(void, RequestSettingsFromBackend, (), (override));
 
   MOCK_METHOD(void, TurnOffAutoSignIn, (), (override));
 };
+
+}  // namespace password_manager
 
 #endif  // COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_MOCK_PASSWORD_MANAGER_SETTINGS_SERVICE_H_

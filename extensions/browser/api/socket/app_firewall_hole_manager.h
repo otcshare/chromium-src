@@ -9,13 +9,15 @@
 
 #include <map>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "chromeos/components/firewall_hole/firewall_hole.h"
 #include "extensions/browser/app_window/app_window_registry.h"
+#include "extensions/common/extension_id.h"
 
 namespace content {
 class BrowserContext;
-class FirewallHoleProxy;
 }  // namespace content
 
 namespace extensions {
@@ -27,33 +29,31 @@ class AppFirewallHoleManager;
 // closed on destruction.
 class AppFirewallHole {
  public:
-  enum class PortType { kTcp, kUdp };
-
   ~AppFirewallHole();
 
-  const std::string& extension_id() const { return extension_id_; }
+  const ExtensionId& extension_id() const { return extension_id_; }
 
  private:
   friend class AppFirewallHoleManager;
 
   AppFirewallHole(const base::WeakPtr<AppFirewallHoleManager>& manager,
-                  PortType type,
+                  chromeos::FirewallHole::PortType type,
                   uint16_t port,
-                  const std::string& extension_id);
+                  const ExtensionId& extension_id);
 
   void SetVisible(bool app_visible);
   void OnFirewallHoleOpened(
-      std::unique_ptr<content::FirewallHoleProxy> firewall_hole);
+      std::unique_ptr<chromeos::FirewallHole> firewall_hole);
 
-  PortType type_;
+  chromeos::FirewallHole::PortType type_;
   uint16_t port_;
-  std::string extension_id_;
+  ExtensionId extension_id_;
   bool app_visible_ = false;
 
   base::WeakPtr<AppFirewallHoleManager> manager_;
 
-  // This will hold the FirewallHoleProxy object if one is opened.
-  std::unique_ptr<content::FirewallHoleProxy> firewall_hole_;
+  // This will hold the FirewallHole object if one is opened.
+  std::unique_ptr<chromeos::FirewallHole> firewall_hole_;
 
   base::WeakPtrFactory<AppFirewallHole> weak_factory_{this};
 };
@@ -72,9 +72,11 @@ class AppFirewallHoleManager : public KeyedService,
 
   // Opens a port on the system firewall if the associated application is
   // currently visible.
-  std::unique_ptr<AppFirewallHole> Open(AppFirewallHole::PortType type,
+  std::unique_ptr<AppFirewallHole> Open(chromeos::FirewallHole::PortType type,
                                         uint16_t port,
-                                        const std::string& extension_id);
+                                        const ExtensionId& extension_id);
+
+  static void EnsureFactoryBuilt();
 
  private:
   friend class AppFirewallHole;
@@ -89,7 +91,8 @@ class AppFirewallHoleManager : public KeyedService,
   raw_ptr<content::BrowserContext> context_;
   base::ScopedObservation<AppWindowRegistry, AppWindowRegistry::Observer>
       observation_{this};
-  std::multimap<std::string, AppFirewallHole*> tracked_holes_;
+  std::multimap<ExtensionId, raw_ptr<AppFirewallHole, CtnExperimental>>
+      tracked_holes_;
 
   base::WeakPtrFactory<AppFirewallHoleManager> weak_factory_{this};
 };

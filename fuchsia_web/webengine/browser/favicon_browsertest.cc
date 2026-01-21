@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/compiler_specific.h"
 #include "base/fuchsia/mem_buffer_util.h"
+#include "base/run_loop.h"
 #include "content/public/test/browser_test.h"
+#include "fuchsia_web/common/test/frame_for_test.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "fuchsia_web/common/test/test_navigation_listener.h"
-#include "fuchsia_web/webengine/test/frame_for_test.h"
 #include "fuchsia_web/webengine/test/test_data.h"
 #include "fuchsia_web/webengine/test/web_engine_browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,12 +45,13 @@ void ValidateFavicon(const fuchsia::web::Favicon& favicon,
   ASSERT_TRUE(favicon.has_height());
   EXPECT_EQ(favicon.height(), expected_height);
   ASSERT_TRUE(favicon.has_data());
-  absl::optional<std::string> data = base::StringFromMemBuffer(favicon.data());
+  std::optional<std::string> data = base::StringFromMemBuffer(favicon.data());
   ASSERT_TRUE(data.has_value());
   size_t expected_size = expected_width * expected_height * sizeof(uint32_t);
   ASSERT_EQ(data->size(), expected_size);
   size_t offset = check_point_x + check_point_y * expected_width;
-  uint32_t color = reinterpret_cast<const uint32_t*>(data->data())[offset];
+  uint32_t color =
+      UNSAFE_TODO(reinterpret_cast<const uint32_t*>(data->data())[offset]);
   EXPECT_EQ(color, expected_color);
 }
 
@@ -66,6 +69,12 @@ class FaviconTest : public WebEngineBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
 
     frame_ = FrameForTest::Create(context(), {});
+  }
+
+  void TearDownOnMainThread() override {
+    frame_ = {};
+
+    WebEngineBrowserTest::TearDownOnMainThread();
   }
 
   FrameForTest frame_;

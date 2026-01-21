@@ -6,8 +6,9 @@
 
 #include <cstring>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/strings/latin1_string_conversions.h"
+
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
 
@@ -15,9 +16,9 @@ namespace mojo {
 
 MaybeOwnedString16::MaybeOwnedString16(std::u16string owned_storage)
     : owned_storage_(owned_storage),
-      unowned_(base::make_span(
-          reinterpret_cast<const uint16_t*>(owned_storage_.data()),
-          owned_storage_.size())) {}
+      UNSAFE_TODO(
+          unowned_(reinterpret_cast<const uint16_t*>(owned_storage_.data()),
+                   owned_storage_.size())) {}
 
 MaybeOwnedString16::MaybeOwnedString16(base::span<const uint16_t> unowned)
     : unowned_(unowned) {}
@@ -25,45 +26,46 @@ MaybeOwnedString16::MaybeOwnedString16(base::span<const uint16_t> unowned)
 MaybeOwnedString16::~MaybeOwnedString16() = default;
 
 // static
-MaybeOwnedString16 StructTraits<mojo_base::mojom::String16DataView,
-                                WTF::String>::data(const WTF::String& input) {
+MaybeOwnedString16
+StructTraits<mojo_base::mojom::String16DataView, blink::String>::data(
+    const blink::String& input) {
   if (input.Is8Bit()) {
-    return MaybeOwnedString16(base::Latin1OrUTF16ToUTF16(
-        input.length(), input.Characters8(), nullptr));
+    auto latin1 = input.Span8();
+    return MaybeOwnedString16(std::u16string(latin1.begin(), latin1.end()));
   }
-  return MaybeOwnedString16(base::make_span(
-      reinterpret_cast<const uint16_t*>(input.Characters16()), input.length()));
+  return MaybeOwnedString16(input.SpanUint16());
 }
 
 // static
-bool StructTraits<mojo_base::mojom::String16DataView, WTF::String>::Read(
+bool StructTraits<mojo_base::mojom::String16DataView, blink::String>::Read(
     mojo_base::mojom::String16DataView data,
-    WTF::String* out) {
+    blink::String* out) {
   ArrayDataView<uint16_t> view;
   data.GetDataDataView(&view);
   if (view.size() > std::numeric_limits<uint32_t>::max())
     return false;
-  *out = WTF::String(reinterpret_cast<const UChar*>(view.data()),
-                     static_cast<uint32_t>(view.size()));
+  *out = blink::String(UNSAFE_TODO(
+      base::span(reinterpret_cast<const UChar*>(view.data()), view.size())));
   return true;
 }
 
 // static
-mojo_base::BigBuffer StructTraits<mojo_base::mojom::BigString16DataView,
-                                  WTF::String>::data(const WTF::String& input) {
+mojo_base::BigBuffer
+StructTraits<mojo_base::mojom::BigString16DataView, blink::String>::data(
+    const blink::String& input) {
   if (input.Is8Bit()) {
-    std::u16string input16(input.Characters8(),
-                           input.Characters8() + input.length());
-    return mojo_base::BigBuffer(base::as_bytes(base::make_span(input16)));
+    auto latin1 = input.Span8();
+    std::u16string input16(latin1.begin(), latin1.end());
+    return mojo_base::BigBuffer(base::as_byte_span(input16));
   }
 
   return mojo_base::BigBuffer(base::as_bytes(input.Span16()));
 }
 
 // static
-bool StructTraits<mojo_base::mojom::BigString16DataView, WTF::String>::Read(
+bool StructTraits<mojo_base::mojom::BigString16DataView, blink::String>::Read(
     mojo_base::mojom::BigString16DataView data,
-    WTF::String* out) {
+    blink::String* out) {
   mojo_base::BigBuffer buffer;
   if (!data.ReadData(&buffer))
     return false;
@@ -77,10 +79,10 @@ bool StructTraits<mojo_base::mojom::BigString16DataView, WTF::String>::Read(
 
   // An empty |mojo_base::BigBuffer| may have a null |data()| if empty.
   if (!size) {
-    *out = g_empty_string;
+    *out = blink::g_empty_string;
   } else {
-    *out = WTF::String(reinterpret_cast<const UChar*>(buffer.data()),
-                       static_cast<uint32_t>(size));
+    *out = blink::String(UNSAFE_TODO(
+        base::span(reinterpret_cast<const UChar*>(buffer.data()), size)));
   }
 
   return true;

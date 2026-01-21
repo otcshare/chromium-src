@@ -10,9 +10,10 @@
 #include <string>
 #include <vector>
 
-namespace crypto {
-class RSAPrivateKey;
-}  // namespace crypto
+#include "components/policy/proto/device_management_backend.pb.h"
+#include "crypto/keypair.h"
+
+namespace em = enterprise_management;
 
 namespace policy {
 
@@ -23,7 +24,7 @@ class SignatureProvider {
   // Provides access to a predefined test signing key.
   class SigningKey {
    public:
-    SigningKey(std::unique_ptr<crypto::RSAPrivateKey> private_key,
+    SigningKey(crypto::keypair::PrivateKey private_key,
                const std::map<std::string, std::string>& signatures);
     SigningKey(SigningKey&& signing_key);
     SigningKey& operator=(SigningKey&& signing_key);
@@ -35,15 +36,18 @@ class SignatureProvider {
                                std::string* signature) const;
 
     // Signs |str| using the private key.
-    bool Sign(const std::string& str, std::string* signature) const;
+    bool Sign(const std::string& str,
+              em::PolicyFetchRequest::SignatureType signature_type,
+              std::string* signature) const;
 
     const std::string& public_key() const { return public_key_; }
 
    private:
     // The key used for signing.
-    std::unique_ptr<crypto::RSAPrivateKey> private_key_;
+    crypto::keypair::PrivateKey private_key_;
 
-    // The public key corresponding to |private_key_|.
+    // The public key corresponding to |private_key_|, encoded as a
+    // SubjectPublicKeyInfo.
     std::string public_key_;
 
     // Maps domains to the corresponding signatures.
@@ -85,8 +89,17 @@ class SignatureProvider {
   // Sets universal signing keys that can sign any domain.
   void SetUniversalSigningKeys();
 
+  // Set the signing key signature for child domain (gmail.com).
+  void SetSigningKeysForChildDomain();
+
+  bool SignVerificationData(const std::string& data,
+                            std::string* signature) const;
+
+  std::string GetVerificationPublicKey();
+
  private:
   std::vector<SigningKey> signing_keys_;
+  crypto::keypair::PrivateKey verification_key_;
 
   // The key version to be used if no key version is defined by the client.
   int current_key_version_ = 1;

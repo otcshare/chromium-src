@@ -4,9 +4,9 @@
 
 #include "third_party/blink/renderer/core/html/parser/atomic_html_token.h"
 
-namespace blink {
+#include "base/compiler_specific.h"
 
-bool g_use_html_attribute_name_lookup = true;
+namespace blink {
 
 bool AtomicHTMLToken::UsesName() const {
   return type_ == HTMLToken::kStartTag || type_ == HTMLToken::kEndTag ||
@@ -30,13 +30,14 @@ const char* ToString(HTMLToken::TokenType type) {
     DEFINE_STRINGIFY(kComment);
     DEFINE_STRINGIFY(kCharacter);
     DEFINE_STRINGIFY(kEndOfFile);
+    DEFINE_STRINGIFY(kDOMPart);
 #undef DEFINE_STRINGIFY
   }
   return "<unknown>";
 }
 
 void AtomicHTMLToken::Show() const {
-  printf("AtomicHTMLToken %s", ToString(type_));
+  UNSAFE_TODO(printf("AtomicHTMLToken %s", ToString(type_)));
   switch (type_) {
     case HTMLToken::kStartTag:
     case HTMLToken::kEndTag:

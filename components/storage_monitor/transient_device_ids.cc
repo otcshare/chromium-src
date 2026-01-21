@@ -7,25 +7,24 @@
 #include "components/storage_monitor/transient_device_ids.h"
 
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/guid.h"
+#include "base/uuid.h"
 #include "components/storage_monitor/storage_info.h"
 
 namespace storage_monitor {
 
-TransientDeviceIds::TransientDeviceIds() {}
+TransientDeviceIds::TransientDeviceIds() = default;
 
-TransientDeviceIds::~TransientDeviceIds() {}
+TransientDeviceIds::~TransientDeviceIds() = default;
 
 std::string TransientDeviceIds::GetTransientIdForDeviceId(
     const std::string& device_id) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (!base::Contains(device_id_map_, device_id)) {
+  if (!device_id_map_.contains(device_id)) {
     std::string transient_id;
     do {
-      transient_id = base::GenerateGUID();
-    } while (base::Contains(transient_id_map_, transient_id));
+      transient_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+    } while (transient_id_map_.contains(transient_id));
 
     device_id_map_[device_id] = transient_id;
     transient_id_map_[transient_id] = device_id;
@@ -37,8 +36,9 @@ std::string TransientDeviceIds::GetTransientIdForDeviceId(
 std::string TransientDeviceIds::DeviceIdFromTransientId(
     const std::string& transient_id) const {
   auto it = transient_id_map_.find(transient_id);
-  if (it == transient_id_map_.end())
+  if (it == transient_id_map_.end()) {
     return std::string();
+  }
   return it->second;
 }
 

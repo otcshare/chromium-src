@@ -5,14 +5,19 @@
 #include "mojo/core/ipcz_driver/invitation.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <string>
 
+#include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
 #include "build/build_config.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/ipcz_driver/base_shared_memory_service.h"
 #include "mojo/core/ipcz_driver/transport.h"
 #include "mojo/core/platform_handle_utils.h"
 #include "mojo/core/scoped_ipcz_handle.h"
+#include "mojo/public/c/system/invitation.h"
 #include "mojo/public/cpp/platform/platform_channel_endpoint.h"
 #include "mojo/public/cpp/platform/platform_channel_server_endpoint.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
@@ -55,7 +60,7 @@ size_t GetAttachmentIndex(base::span<const uint8_t> name) {
   }
 
   // Otherwise interpret the first 4 bytes as an integer.
-  uint32_t index = *reinterpret_cast<const uint32_t*>(name.data());
+  uint32_t index = base::U32FromLittleEndian(name.first<4u>());
   if (index < Invitation::kMaxAttachments) {
     // The resulting index is small enough to fit within the normal index range,
     // so assume case (b) above:
@@ -81,7 +86,7 @@ IpczDriverHandle CreateTransportForMojoEndpoint(
     base::Process remote_process = base::Process(),
     MojoProcessErrorHandler error_handler = nullptr,
     uintptr_t error_handler_context = 0,
-    bool is_remote_process_untrusted = false) {
+    Transport::ProcessTrust remote_process_trust = Transport::ProcessTrust{}) {
   CHECK_EQ(endpoint.num_platform_handles, 1u);
   auto handle =
       PlatformHandle::FromMojoPlatformHandle(&endpoint.platform_handles[0]);
@@ -89,21 +94,54 @@ IpczDriverHandle CreateTransportForMojoEndpoint(
     return IPCZ_INVALID_DRIVER_HANDLE;
   }
 
-  Channel::Endpoint channel_endpoint;
-  if (endpoint.type == MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER) {
-    channel_endpoint = PlatformChannelServerEndpoint(std::move(handle));
-  } else {
-    channel_endpoint = PlatformChannelEndpoint(std::move(handle));
-  }
-  auto transport = base::MakeRefCounted<Transport>(
-      endpoint_types, std::move(channel_endpoint), std::move(remote_process),
-      is_remote_process_untrusted);
+  auto transport = Transport::Create(
+      endpoint_types, PlatformChannelEndpoint(std::move(handle)),
+      std::move(remote_process), remote_process_trust);
   transport->SetErrorHandler(error_handler, error_handler_context);
   transport->set_leak_channel_on_shutdown(options.leak_channel_on_shutdown);
   transport->set_is_peer_trusted(options.is_peer_trusted);
   transport->set_is_trusted_by_peer(options.is_trusted_by_peer);
   return ObjectBase::ReleaseAsHandle(std::move(transport));
 }
+
+#if BUILDFLAG(IS_WIN)
+// Helper function on Windows platform to open the remote server/client process
+// given a handle to a connected named pipe. It may return an invalid process
+// object if either the handle does not refer to a named pipe or the handle
+// refers to a named pipe that is not connected.
+base::Process OpenRemoteProcess(const MojoInvitationTransportEndpoint& endpoint,
+                                bool remote_is_server) {
+  base::ProcessId remote_process_id = 0;
+  // Extract the handle to the connected named pipe from mojo invitation
+  // transport endpoint.
+  HANDLE handle =
+      LongToHandle(static_cast<long>(endpoint.platform_handles[0].value));
+  auto get_remote_pid = remote_is_server ? &GetNamedPipeServerProcessId
+                                         : &GetNamedPipeClientProcessId;
+  // Try to get the remote client process id given the extracted handle via
+  // GetNamedPipe(Server|Client)ProcessId API.
+  if ((!get_remote_pid(handle, &remote_process_id) ||
+       remote_process_id == base::Process::Current().Pid())) {
+    DVLOG(2) << "Failed to get remote process id via the connected named pipe";
+    return base::Process();
+  }
+
+  if (remote_process_id == 0) {
+    DVLOG(2) << "Remote process id is invalid";
+    return base::Process();
+  }
+
+  // Try to open the remote process.
+  base::Process remote_process =
+      base::Process::OpenWithAccess(remote_process_id, PROCESS_DUP_HANDLE);
+  if (!remote_process.IsValid()) {
+    DVLOG(2) << "Remote process is invalid";
+    return base::Process();
+  }
+
+  return remote_process;
+}
+#endif
 
 }  // namespace
 
@@ -190,16 +228,24 @@ MojoResult Invitation::Send(
     }
   }
 
+  const bool share_broker =
+      options && (options->flags & MOJO_SEND_INVITATION_FLAG_SHARE_BROKER);
   const bool is_isolated =
       options && (options->flags & MOJO_SEND_INVITATION_FLAG_ISOLATED) != 0;
   const IpczNodeOptions& config = GetIpczNodeOptions();
+  if (share_broker && (is_isolated || config.is_broker)) {
+    return MOJO_RESULT_INVALID_ARGUMENT;
+  }
+
   IpczConnectNodeFlags flags = 0;
   if (!config.is_broker) {
-    // TODO: Support non-broker to non-broker connection. Requires new flags for
-    // MojoSendInvitation and MojoAcceptInvitation, because ipcz requires
-    // explicit opt-in from both sides of the connection in order for broker
-    // inheritance to be allowed.
-    flags |= IPCZ_CONNECT_NODE_TO_BROKER;
+    if (share_broker) {
+      flags |= IPCZ_CONNECT_NODE_SHARE_BROKER;
+    } else {
+      // If we're a non-broker not sharing our broker, we have to assume the
+      // target is itself a broker.
+      flags |= IPCZ_CONNECT_NODE_TO_BROKER;
+    }
     if (!config.use_local_shared_memory_allocation) {
       flags |= IPCZ_CONNECT_NODE_TO_ALLOCATION_DELEGATE;
     }
@@ -218,37 +264,58 @@ MojoResult Invitation::Send(
   // bit essentially means that the remote process is especially untrustworthy
   // (e.g. a Chrome renderer) and should be subject to additional constraints
   // regarding what types of objects can be transferred to it.
-  const bool is_remote_process_untrusted =
-      options &&
-      (options->flags & MOJO_SEND_INVITATION_FLAG_UNTRUSTED_PROCESS) != 0;
+  Transport::ProcessTrust remote_process_trust{};
+#if BUILDFLAG(IS_WIN)
+  if (options &&
+      (options->flags & MOJO_SEND_INVITATION_FLAG_UNTRUSTED_PROCESS) != 0) {
+    remote_process_trust = Transport::ProcessTrust::kUntrusted;
+  } else {
+    remote_process_trust = Transport::ProcessTrust::kTrusted;
+  }
+#endif
 
   const bool is_peer_elevated =
       options && (options->flags & MOJO_SEND_INVITATION_FLAG_ELEVATED);
 #if !BUILDFLAG(IS_WIN)
   // For now, the concept of an elevated process is only meaningful on Windows.
-  DCHECK(!is_peer_elevated);
+  CHECK(!is_peer_elevated);
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  // On Windows, if `remote_process` is invalid when sending invitation, that
+  // usually means the required remote process is not set in advance by sender,
+  // in such case, rely on the connected named pipe to get the remote process
+  // id, then open and set the remote process.
+  if (!remote_process.IsValid()) {
+    remote_process =
+        OpenRemoteProcess(*transport_endpoint, /* remote_is_server= */ false);
+  }
+#endif
+
   IpczDriverHandle transport = CreateTransportForMojoEndpoint(
       {.source = config.is_broker ? Transport::kBroker : Transport::kNonBroker,
        .destination = is_isolated ? Transport::kBroker : Transport::kNonBroker},
       *transport_endpoint,
       {.is_peer_trusted = is_peer_elevated, .is_trusted_by_peer = true},
       std::move(remote_process), error_handler, error_handler_context,
-      is_remote_process_untrusted);
+      remote_process_trust);
   if (transport == IPCZ_INVALID_DRIVER_HANDLE) {
     return MOJO_RESULT_INVALID_ARGUMENT;
   }
 
   if (num_attachments_ == 0 || max_attachment_index_ != num_attachments_ - 1) {
+    // The transport was created above but will not be used. Ensure it's closed.
+    ObjectBase::TakeFromHandle(transport);
     return MOJO_RESULT_FAILED_PRECONDITION;
   }
 
   // Note that we reserve the first initial portal for internal use, hence the
   // additional (kMaxAttachments + 1) portal here. Portals corresponding to
   // application-provided attachments begin at index 1.
-  IpczHandle portals[kMaxAttachments + 1];
-  IpczResult result = GetIpczAPI().ConnectNode(
-      GetIpczNode(), transport, num_attachments_ + 1, flags, nullptr, portals);
+  std::array<IpczHandle, kMaxAttachments + 1> portals;
+  IpczResult result =
+      GetIpczAPI().ConnectNode(GetIpczNode(), transport, num_attachments_ + 1,
+                               flags, nullptr, portals.data());
   if (result != IPCZ_RESULT_OK) {
     return result;
   }
@@ -281,6 +348,7 @@ MojoHandle Invitation::Accept(
   // normal process termination.
   bool leak_transport = false;
   bool is_isolated = false;
+  bool inherit_broker = false;
   if (options) {
     if (options->struct_size < sizeof(*options)) {
       return MOJO_RESULT_INVALID_ARGUMENT;
@@ -288,6 +356,8 @@ MojoHandle Invitation::Accept(
     leak_transport =
         (options->flags & MOJO_ACCEPT_INVITATION_FLAG_LEAK_TRANSPORT_ENDPOINT);
     is_isolated = (options->flags & MOJO_ACCEPT_INVITATION_FLAG_ISOLATED);
+    inherit_broker =
+        (options->flags & MOJO_ACCEPT_INVITATION_FLAG_INHERIT_BROKER);
   }
 
   auto invitation = base::MakeRefCounted<Invitation>();
@@ -296,14 +366,20 @@ MojoHandle Invitation::Accept(
   if (is_isolated) {
     // Nodes using isolated invitations are required by MojoIpcz to both be
     // brokers.
-    CHECK(config.is_broker);
+    CHECK(config.is_broker && !inherit_broker);
   } else {
     CHECK(!config.is_broker);
   }
 
-  IpczConnectNodeFlags flags = IPCZ_CONNECT_NODE_TO_BROKER;
+  IpczConnectNodeFlags flags = IPCZ_NO_FLAGS;
   if (!config.use_local_shared_memory_allocation) {
     flags |= IPCZ_CONNECT_NODE_TO_ALLOCATION_DELEGATE;
+  }
+
+  if (inherit_broker) {
+    flags |= IPCZ_CONNECT_NODE_INHERIT_BROKER;
+  } else {
+    flags |= IPCZ_CONNECT_NODE_TO_BROKER;
   }
 
   const bool is_elevated =
@@ -326,7 +402,7 @@ MojoHandle Invitation::Accept(
   // Note that we reserve the first portal slot for internal use, hence an
   // the additional (kMaxAttachments + 1) portal here. Portals corresponding to
   // application-provided attachments begin at index 1.
-  IpczHandle portals[kMaxAttachments + 1];
+  std::array<IpczHandle, kMaxAttachments + 1> portals;
   IpczDriverHandle transport = CreateTransportForMojoEndpoint(
       {.source = is_isolated ? Transport::kBroker : Transport::kNonBroker,
        .destination = Transport::kBroker},
@@ -341,22 +417,23 @@ MojoHandle Invitation::Accept(
   }
 
   // In an elevated Windows process our transport needs a handle to the broker's
-  // own process (assumed to be our parent process). This is required to support
-  // transmission of arbitrary Windows handles to and from the elevated process.
-  base::Process launcher;
+  // own process. This is required to support transmission of arbitrary Windows
+  // handles to and from the elevated process.
+  base::Process remote_process;
 #if BUILDFLAG(IS_WIN)
-  if (base::IsCurrentProcessElevated()) {
-    launcher = base::Process(::OpenProcess(
-        PROCESS_DUP_HANDLE, FALSE,
-        base::GetParentProcessId(base::GetCurrentProcessHandle())));
+  if (is_elevated) {
+    remote_process =
+        OpenRemoteProcess(*transport_endpoint, /* remote_is_server= */ true);
   }
 #endif
-  if (launcher.IsValid()) {
-    Transport::FromHandle(transport)->set_remote_process(std::move(launcher));
+  if (remote_process.IsValid()) {
+    Transport::FromHandle(transport)->set_remote_process(
+        std::move(remote_process));
   }
 
-  IpczResult result = GetIpczAPI().ConnectNode(
-      GetIpczNode(), transport, kMaxAttachments + 1, flags, nullptr, portals);
+  IpczResult result =
+      GetIpczAPI().ConnectNode(GetIpczNode(), transport, kMaxAttachments + 1,
+                               flags, nullptr, portals.data());
   CHECK_EQ(result, IPCZ_RESULT_OK);
 
   BaseSharedMemoryService::CreateClient(ScopedIpczHandle(portals[0]));

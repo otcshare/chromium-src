@@ -7,9 +7,10 @@
 #include <limits>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
@@ -230,8 +231,9 @@ void LoopbackHandler::SendDataInternal(int64_t timestamp,
   DCHECK_LE(data_size_bytes, data_size_);
   DCHECK(buffer_pool_);
   auto buffer = buffer_pool_->GetBuffer();
-  memcpy(buffer->data() + mixer_service::MixerSocket::kAudioMessageHeaderSize,
-         data, data_size_bytes);
+  UNSAFE_TODO(memcpy(
+      buffer->data() + mixer_service::MixerSocket::kAudioMessageHeaderSize,
+      data, data_size_bytes));
   io_.AsyncCall(&LoopbackIO::SendData)
       .WithArgs(std::move(buffer), data_size_bytes, timestamp);
 }

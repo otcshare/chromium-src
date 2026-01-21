@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -22,12 +22,12 @@ class PlatformPolicyManagementServiceTest : public PolicyTest {
   ~PlatformPolicyManagementServiceTest() override = default;
 };
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-// Some testing machines/bots are managed, so we cannot test that they become managed after
-// setting one policy. For those machines we check the presence of
-// `EnterpriseManagementAuthority::COMPUTER_LOCAL` in the management authorities. For other machines
-// we test that the management authority thrustworthiness becomes
-// `ManagementAuthorityTrustworthiness::LOW`.
+#if !BUILDFLAG(IS_CHROMEOS)
+// Some testing machines/bots are managed, so we cannot test that they become
+// managed after setting one policy. For those machines we check the presence of
+// `EnterpriseManagementAuthority::COMPUTER_LOCAL` in the management
+// authorities. For other machines we test that the management authority
+// trustworthiness becomes `ManagementAuthorityTrustworthiness::LOW`.
 IN_PROC_BROWSER_TEST_F(PlatformPolicyManagementServiceTest, HasPolicy) {
   bool testing_on_managed_device =
       ManagementServiceFactory::GetForPlatform()->IsManaged();

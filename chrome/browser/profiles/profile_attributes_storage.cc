@@ -4,56 +4,65 @@
 
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 
+#include <algorithm>
 #include <unordered_set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/check_op.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/string_compare.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_avatar_downloader.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/account_id/account_id.h"
-#include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/profile_metrics/state.h"
 #include "components/signin/public/base/persistent_repeating_timer.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_managed_status_finder.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "third_party/icu/source/i18n/unicode/coll.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
 #endif
 
 namespace {
 
 using ImageData = std::vector<unsigned char>;
 
-// First eight are generic icons, which use IDS_NUMBERED_PROFILE_NAME.
+// First eight are generic icons, which used to be called "User <i>" for i=1..7,
+// and are no longer available.
 const int kDefaultNames[] = {
   IDS_DEFAULT_AVATAR_NAME_8,
   IDS_DEFAULT_AVATAR_NAME_9,
@@ -84,10 +93,10 @@ enum class MultiProfileUserType {
 };
 
 const char kProfileCountLastUpdatePref[] = "profile.profile_counts_reported";
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 const char kLegacyProfileNameMigrated[] = "legacy.profile.name.migrated";
 bool g_migration_enabled_for_testing = false;
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
 // Reads a PNG from disk and decodes it. If the bitmap was successfully read
 // from disk then this will return the bitmap image, otherwise it will return
@@ -128,8 +137,7 @@ bool SaveBitmap(std::unique_ptr<ImageData> data,
     return false;
   }
 
-  if (base::WriteFile(image_path, reinterpret_cast<char*>(&(*data)[0]),
-                      data->size()) == -1) {
+  if (!base::WriteFile(image_path, *data)) {
     LOG(ERROR) << "Failed to save image to file.";
     return false;
   }
@@ -188,64 +196,36 @@ MultiProfileUserType GetMultiProfileUserType(
     return MultiProfileUserType::kSingleProfile;
 
   int active_count =
-      base::ranges::count_if(entries, &ProfileMetrics::IsProfileActive);
+      std::ranges::count_if(entries, [](ProfileAttributesEntry* entry) {
+        return ProfileMetrics::IsProfileActive(entry);
+      });
 
   if (active_count <= 1)
     return MultiProfileUserType::kLatentMultiProfile;
   return MultiProfileUserType::kActiveMultiProfile;
 }
 
-profile_metrics::AvatarState GetAvatarState(ProfileAttributesEntry* entry) {
-  size_t index = entry->GetAvatarIconIndex();
-  bool is_modern = profiles::IsModernAvatarIconIndex(index);
-  if (entry->GetSigninState() == SigninState::kNotSignedIn) {
-    if (index == profiles::GetPlaceholderAvatarIndex())
-      return profile_metrics::AvatarState::kSignedOutDefault;
-    return is_modern ? profile_metrics::AvatarState::kSignedOutModern
-                     : profile_metrics::AvatarState::kSignedOutOld;
-  }
-  if (entry->IsUsingGAIAPicture())
-    return profile_metrics::AvatarState::kSignedInGaia;
-  return is_modern ? profile_metrics::AvatarState::kSignedInModern
-                   : profile_metrics::AvatarState::kSignedInOld;
-}
-
-profile_metrics::NameState GetNameState(ProfileAttributesEntry* entry) {
-  bool has_default_name = entry->IsUsingDefaultName();
-  switch (entry->GetNameForm()) {
-    case NameForm::kGaiaName:
-      return profile_metrics::NameState::kGaiaName;
-    case NameForm::kLocalName:
-      return has_default_name ? profile_metrics::NameState::kDefaultName
-                              : profile_metrics::NameState::kCustomName;
-    case NameForm::kGaiaAndLocalName:
-      return has_default_name ? profile_metrics::NameState::kGaiaAndDefaultName
-                              : profile_metrics::NameState::kGaiaAndCustomName;
-  }
-}
-
 profile_metrics::UnconsentedPrimaryAccountType GetUnconsentedPrimaryAccountType(
     ProfileAttributesEntry* entry) {
   if (entry->GetSigninState() == SigninState::kNotSignedIn)
     return profile_metrics::UnconsentedPrimaryAccountType::kSignedOut;
-  if (entry->IsChild())
+  if (entry->IsSupervised()) {
     return profile_metrics::UnconsentedPrimaryAccountType::kChild;
-  // TODO(crbug.com/1060113): Replace this check by
+  }
+  // TODO(crbug.com/40121889): Replace this check by
   // !entry->GetHostedDomain().has_value() in M84 (once the attributes storage
   // gets reasonably well populated).
-  if (policy::BrowserPolicyConnector::IsNonEnterpriseUser(
+  if (!signin::AccountManagedStatusFinder::MayBeEnterpriseUserBasedOnEmail(
           base::UTF16ToUTF8(entry->GetUserName()))) {
     return profile_metrics::UnconsentedPrimaryAccountType::kConsumer;
   }
-  // TODO(crbug.com/1060113): Figure out how to distinguish EDU accounts from
+  // TODO(crbug.com/40121889): Figure out how to distinguish EDU accounts from
   // other enterprise.
   return profile_metrics::UnconsentedPrimaryAccountType::kEnterprise;
 }
 
 void RecordProfileState(ProfileAttributesEntry* entry,
                         profile_metrics::StateSuffix suffix) {
-  profile_metrics::LogProfileAvatar(GetAvatarState(entry), suffix);
-  profile_metrics::LogProfileName(GetNameState(entry), suffix);
   profile_metrics::LogProfileAccountType(
       GetUnconsentedPrimaryAccountType(entry), suffix);
   profile_metrics::LogProfileSyncEnabled(
@@ -254,6 +234,29 @@ void RecordProfileState(ProfileAttributesEntry* entry,
       suffix);
   profile_metrics::LogProfileDaysSinceLastUse(
       (base::Time::Now() - entry->GetActiveTime()).InDays(), suffix);
+}
+
+// Rotating between `from_index` to `to_index` by 1 step. Rotation is done to
+// the left or the right based on the index comparison.
+void Rotate(base::Value::List& list, size_t from_index, size_t to_index) {
+  CHECK_LT(from_index, list.size());
+  CHECK_LT(to_index, list.size());
+
+  // Rotating left.
+  if (from_index <= to_index) {
+    std::rotate(list.begin() + from_index, list.begin() + from_index + 1,
+                list.begin() + to_index + 1);
+    return;
+  }
+
+  // Rotating right;
+  // We invert the indices and work with the reverse iterator.
+  size_t inv_from_index = list.size() - from_index - 1;
+  size_t inv_to_index = list.size() - to_index - 1;
+
+  std::rotate(list.rbegin() + inv_from_index,
+              list.rbegin() + inv_from_index + 1,
+              list.rbegin() + inv_to_index + 1);
 }
 
 }  // namespace
@@ -270,11 +273,12 @@ ProfileAttributesStorage::ProfileAttributesStorage(
   ScopedDictPrefUpdate update(prefs_, prefs::kProfileAttributes);
   base::Value::Dict& attributes = update.Get();
   for (auto kv : attributes) {
-    base::Value& info = kv.second;
-    std::string* name = info.FindStringKey(ProfileAttributesEntry::kNameKey);
+    DCHECK(kv.second.is_dict());
+    base::Value::Dict& info = kv.second.GetDict();
+    std::string* name = info.FindString(ProfileAttributesEntry::kNameKey);
 
-    absl::optional<bool> using_default_name =
-        info.FindBoolKey(ProfileAttributesEntry::kIsUsingDefaultNameKey);
+    std::optional<bool> using_default_name =
+        info.FindBool(ProfileAttributesEntry::kIsUsingDefaultNameKey);
     if (!using_default_name.has_value()) {
       // If the preference hasn't been set, and the name is default, assume
       // that the user hasn't done this on purpose.
@@ -283,15 +287,15 @@ ProfileAttributesStorage::ProfileAttributesStorage(
       using_default_name = IsDefaultProfileName(
           name ? base::UTF8ToUTF16(*name) : std::u16string(),
           /*include_check_for_legacy_profile_name=*/true);
-      info.SetBoolKey(ProfileAttributesEntry::kIsUsingDefaultNameKey,
-                      using_default_name.value());
+      info.Set(ProfileAttributesEntry::kIsUsingDefaultNameKey,
+               using_default_name.value());
     }
 
     // For profiles that don't have the "using default avatar" state set yet,
     // assume it's the same as the "using default name" state.
-    if (!info.FindBoolKey(ProfileAttributesEntry::kIsUsingDefaultAvatarKey)) {
-      info.SetBoolKey(ProfileAttributesEntry::kIsUsingDefaultAvatarKey,
-                      using_default_name.value());
+    if (!info.FindBool(ProfileAttributesEntry::kIsUsingDefaultAvatarKey)) {
+      info.Set(ProfileAttributesEntry::kIsUsingDefaultAvatarKey,
+               using_default_name.value());
     }
 
     // `info` may become invalid after this call.
@@ -314,7 +318,7 @@ ProfileAttributesStorage::ProfileAttributesStorage(
   LoadGAIAPictureIfNeeded();
 #endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   bool migrate_legacy_profile_names =
       (!prefs_->GetBoolean(kLegacyProfileNameMigrated) ||
        g_migration_enabled_for_testing);
@@ -327,7 +331,9 @@ ProfileAttributesStorage::ProfileAttributesStorage(
       prefs_, kProfileCountLastUpdatePref, base::Hours(24),
       base::BindRepeating(&ProfileMetrics::LogNumberOfProfiles, this));
   repeating_timer_->Start();
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+
+  EnsureProfilesOrderPrefIsInitialized();
 }
 
 ProfileAttributesStorage::~ProfileAttributesStorage() = default;
@@ -335,10 +341,26 @@ ProfileAttributesStorage::~ProfileAttributesStorage() = default;
 // static
 void ProfileAttributesStorage::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kProfileAttributes);
+  registry->RegisterListPref(prefs::kProfilesOrder);
   registry->RegisterTimePref(kProfileCountLastUpdatePref, base::Time());
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   registry->RegisterBooleanPref(kLegacyProfileNameMigrated, false);
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+}
+
+// static
+base::flat_set<std::string> ProfileAttributesStorage::GetAllProfilesKeys(
+    PrefService* local_prefs) {
+  base::flat_set<std::string> profile_keys;
+
+  const base::Value::Dict& attribute_storage =
+      local_prefs->GetDict(prefs::kProfileAttributes);
+  for (std::pair<const std::string&, const base::Value&> attribute_entry :
+       attribute_storage) {
+    profile_keys.insert(attribute_entry.first);
+  }
+
+  return profile_keys;
 }
 
 void ProfileAttributesStorage::AddProfile(ProfileAttributesInitParams params) {
@@ -346,37 +368,46 @@ void ProfileAttributesStorage::AddProfile(ProfileAttributesInitParams params) {
   ScopedDictPrefUpdate update(prefs_, prefs::kProfileAttributes);
   base::Value::Dict& attributes = update.Get();
 
-  base::Value info(base::Value::Type::DICTIONARY);
-  info.SetStringKey(ProfileAttributesEntry::kNameKey, params.profile_name);
-  info.SetStringKey(ProfileAttributesEntry::kGAIAIdKey, params.gaia_id);
-  info.SetStringKey(ProfileAttributesEntry::kUserNameKey, params.user_name);
   DCHECK(!params.is_consented_primary_account || !params.gaia_id.empty() ||
          !params.user_name.empty());
-  info.SetBoolKey(ProfileAttributesEntry::kIsConsentedPrimaryAccountKey,
-                  params.is_consented_primary_account);
-  info.SetStringKey(ProfileAttributesEntry::kAvatarIconKey,
-                    profiles::GetDefaultAvatarIconUrl(params.icon_index));
-  // Default value for whether background apps are running is false.
-  info.SetBoolKey(ProfileAttributesEntry::kBackgroundAppsKey, false);
-  info.SetStringKey(ProfileAttributesEntry::kSupervisedUserId,
-                    params.supervised_user_id);
-  info.SetBoolKey(ProfileAttributesEntry::kProfileIsEphemeral,
-                  params.is_ephemeral);
-  // Either the user has provided a name manually on purpose, and in this case
-  // we should not check for legacy profile names or this a new profile but then
-  // it is not a legacy name, so we dont need to check for legacy names.
-  info.SetBoolKey(
-      ProfileAttributesEntry::kIsUsingDefaultNameKey,
-      IsDefaultProfileName(params.profile_name,
-                           /*include_check_for_legacy_profile_name*/ false));
-  // Assume newly created profiles use a default avatar.
-  info.SetBoolKey(ProfileAttributesEntry::kIsUsingDefaultAvatarKey, true);
-  if (params.account_id.HasAccountIdKey())
-    info.SetStringKey(ProfileAttributesEntry::kAccountIdKey,
-                      params.account_id.GetAccountIdKey());
-  info.SetBoolKey(prefs::kSignedInWithCredentialProvider,
-                  params.is_signed_in_with_credential_provider);
+
+  base::Value::Dict info =
+      base::Value::Dict()
+          .Set(ProfileAttributesEntry::kNameKey, params.profile_name)
+          .Set(ProfileAttributesEntry::kGAIAIdKey, params.gaia_id.ToString())
+          .Set(ProfileAttributesEntry::kUserNameKey, params.user_name)
+          .Set(ProfileAttributesEntry::kIsConsentedPrimaryAccountKey,
+               params.is_consented_primary_account)
+          .Set(ProfileAttributesEntry::kAvatarIconKey,
+               profiles::GetDefaultAvatarIconUrl(params.icon_index))
+          // Default value for whether background apps are running is false.
+          .Set(ProfileAttributesEntry::kBackgroundAppsKey, false)
+          .Set(ProfileAttributesEntry::kSupervisedUserId,
+               params.supervised_user_id)
+          .Set(ProfileAttributesEntry::kProfileIsEphemeral, params.is_ephemeral)
+          // Either the user has provided a name manually on purpose, and in
+          // this case we should not check for legacy profile names or this a
+          // new profile but then it is not a legacy name, so we dont need to
+          // check for legacy names.
+          .Set(ProfileAttributesEntry::kIsUsingDefaultNameKey,
+               IsDefaultProfileName(
+                   params.profile_name,
+                   /*include_check_for_legacy_profile_name*/ false))
+          // Assume newly created profiles use a default avatar.
+          .Set(ProfileAttributesEntry::kIsUsingDefaultAvatarKey, true)
+          .Set(prefs::kSignedInWithCredentialProvider,
+               params.is_signed_in_with_credential_provider);
+
+  if (params.account_id.HasAccountIdKey()) {
+    info.Set(ProfileAttributesEntry::kAccountIdKey,
+             params.account_id.GetAccountIdKey());
+  }
+
   attributes.Set(key, std::move(info));
+
+  ScopedListPrefUpdate ordered_list_update(prefs_, prefs::kProfilesOrder);
+  base::Value::List& ordered_list = ordered_list_update.Get();
+  ordered_list.Append(key);
 
   ProfileAttributesEntry* entry = InitEntryWithKey(key, params.is_omitted);
   entry->InitializeLastNameToDisplay();
@@ -418,7 +449,6 @@ void ProfileAttributesStorage::RemoveProfile(
   ProfileAttributesEntry* entry = GetProfileAttributesWithPath(profile_path);
   if (!entry) {
     NOTREACHED();
-    return;
   }
 
   std::u16string name = entry->GetName();
@@ -431,6 +461,10 @@ void ProfileAttributesStorage::RemoveProfile(
   std::string key = StorageKeyFromProfilePath(profile_path);
   attributes.Remove(key);
   profile_attributes_entries_.erase(profile_path.value());
+
+  ScopedListPrefUpdate ordered_list_update(prefs_, prefs::kProfilesOrder);
+  base::Value::List& ordered_list = ordered_list_update.Get();
+  ordered_list.EraseValue(base::Value(key));
 
   // `OnProfileWasRemoved()` must be the first observer method being called
   // right after a profile was removed from the storage.
@@ -473,6 +507,124 @@ ProfileAttributesStorage::GetAllProfilesAttributesSorted(
   return ret;
 }
 
+bool ProfileAttributesStorage::IsProfilesOrderPrefValid() const {
+  const base::Value::List& profile_keys_order =
+      prefs_->GetList(prefs::kProfilesOrder);
+
+  // We use this map to validate the values in the prefs.
+  base::flat_map<std::string, ProfileAttributesEntry*> key_entry_map =
+      GetStorageKeyEntryMap();
+
+  // Make sure the sizes are equal to proceed.
+  if (profile_keys_order.size() != key_entry_map.size()) {
+    return false;
+  }
+
+  base::flat_set<ProfileAttributesEntry*> entries_set;
+  for (const base::Value& keyValue : profile_keys_order) {
+    const std::string& key = keyValue.GetString();
+
+    auto key_entry_it = key_entry_map.find(key);
+    // If the entry is not found, there is a mismatch.
+    if (key_entry_it == key_entry_map.end()) {
+      return false;
+    }
+
+    ProfileAttributesEntry* found_entry = key_entry_it->second;
+    CHECK(found_entry);
+    auto inserted_entry = entries_set.insert(found_entry);
+    // We do not expect the same entry to be repeated or be invalid.
+    // `inserted_entry.second` is false if the element already exists.
+    if (!inserted_entry.second) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void ProfileAttributesStorage::EnsureProfilesOrderPrefIsInitialized() {
+  ScopedListPrefUpdate update(prefs_, prefs::kProfilesOrder);
+  base::Value::List& profile_keys_order = update.Get();
+
+  // If the saved order pref is not valid, we recover by reseting the whole list
+  // and re-populate it with the profiles ordered by local profile name.
+  if (!IsProfilesOrderPrefValid()) {
+    profile_keys_order.clear();
+
+    std::vector<ProfileAttributesEntry*> entries =
+        GetAllProfilesAttributesSortedByLocalProfileName();
+    for (ProfileAttributesEntry* entry : entries) {
+      profile_keys_order.Append(StorageKeyFromProfilePath(entry->GetPath()));
+    }
+  }
+
+  DCHECK_EQ(profile_keys_order.size(), GetNumberOfProfiles());
+}
+
+void ProfileAttributesStorage::UpdateProfilesOrderPref(size_t from_index,
+                                                       size_t to_index) {
+  if (from_index == to_index) {
+    return;
+  }
+
+  ScopedListPrefUpdate update(prefs_, prefs::kProfilesOrder);
+  base::Value::List& profile_keys_order = update.Get();
+
+  // Apply the shift by rotating the element based on the indices.
+  // Element at `from_index` will be placed at `to_index` and the rest will
+  // shift left or right based on the index comparison.
+  Rotate(profile_keys_order, from_index, to_index);
+
+  base::UmaHistogramBoolean("Profile.ProfilesOrderChanged", true);
+}
+
+base::flat_map<std::string, ProfileAttributesEntry*>
+ProfileAttributesStorage::GetStorageKeyEntryMap() const {
+  base::flat_map<std::string, ProfileAttributesEntry*> key_entry_map;
+  for (auto& path_and_entry : profile_attributes_entries_) {
+    auto key = StorageKeyFromProfilePath(base::FilePath(path_and_entry.first));
+    key_entry_map[key] = &path_and_entry.second;
+  }
+  return key_entry_map;
+}
+
+std::vector<ProfileAttributesEntry*>
+ProfileAttributesStorage::GetAllProfilesAttributesSortedForDisplay() const {
+  std::vector<ProfileAttributesEntry*> ret_ordered_entries;
+
+  const base::Value::List& ordered_keys =
+      prefs_->GetList(prefs::kProfilesOrder);
+  DCHECK_EQ(ordered_keys.size(), GetNumberOfProfiles());
+
+  base::flat_map<std::string, ProfileAttributesEntry*> key_entry_map =
+      GetStorageKeyEntryMap();
+  for (const base::Value& key : ordered_keys) {
+    ProfileAttributesEntry* entry = key_entry_map[key.GetString()];
+    DCHECK(entry);
+    ret_ordered_entries.emplace_back(entry);
+  }
+
+  return ret_ordered_entries;
+}
+
+std::vector<ProfileAttributesEntry*> ProfileAttributesStorage::
+    GetAllProfilesAttributesSortedByLocalProfileNameWithCheck() const {
+  if (base::FeatureList::IsEnabled(switches::kProfilesReordering)) {
+    return GetAllProfilesAttributesSortedForDisplay();
+  }
+  return GetAllProfilesAttributesSortedByLocalProfileName();
+}
+
+std::vector<ProfileAttributesEntry*>
+ProfileAttributesStorage::GetAllProfilesAttributesSortedByNameWithCheck()
+    const {
+  if (base::FeatureList::IsEnabled(switches::kProfilesReordering)) {
+    return GetAllProfilesAttributesSortedForDisplay();
+  }
+  return GetAllProfilesAttributesSortedByName();
+}
+
 std::vector<ProfileAttributesEntry*>
 ProfileAttributesStorage::GetAllProfilesAttributesSortedByName() const {
   return GetAllProfilesAttributesSorted(false);
@@ -487,8 +639,9 @@ ProfileAttributesStorage::GetAllProfilesAttributesSortedByLocalProfileName()
 ProfileAttributesEntry* ProfileAttributesStorage::GetProfileAttributesWithPath(
     const base::FilePath& path) {
   const auto entry_iter = profile_attributes_entries_.find(path.value());
-  if (entry_iter == profile_attributes_entries_.end())
+  if (entry_iter == profile_attributes_entries_.end()) {
     return nullptr;
+  }
 
   return &entry_iter->second;
 }
@@ -497,37 +650,25 @@ size_t ProfileAttributesStorage::GetNumberOfProfiles() const {
   return profile_attributes_entries_.size();
 }
 
-std::u16string ProfileAttributesStorage::ChooseNameForNewProfile(
-    size_t icon_index) const {
+std::u16string ProfileAttributesStorage::ChooseNameForNewProfile() const {
   std::u16string name;
-  for (int name_index = 1; ; ++name_index) {
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
+  for (int name_index = 0;; ++name_index) {
+    // Try using "Your Chrome" if possible, or use the lowest <i> so that
+    // "Person <i>" is available.
     // Using native digits will break IsDefaultProfileName() below because
     // it uses sscanf.
     // TODO(jshin): fix IsDefaultProfileName to handle native digits.
-    name = l10n_util::GetStringFUTF16(IDS_NEW_NUMBERED_PROFILE_NAME,
-                                      base::NumberToString16(name_index));
-#else
-    // TODO(crbug.com/937834): Clean up this code.
-    if (icon_index < profiles::GetGenericAvatarIconCount() ||
-        profiles::IsModernAvatarIconIndex(icon_index)) {
-      name = l10n_util::GetStringFUTF16Int(IDS_NUMBERED_PROFILE_NAME,
-                                           name_index);
-    } else {
-      // TODO(jshin): Check with UX if appending |name_index| to the default
-      // name without a space is intended.
-      name = l10n_util::GetStringUTF16(
-          kDefaultNames[icon_index - profiles::GetGenericAvatarIconCount()]);
-      if (name_index > 1)
-        name.append(base::FormatNumber(name_index));
-    }
-#endif
+    name = name_index == 0
+               ? l10n_util::GetStringUTF16(
+                     IDS_PROFILE_MENU_PLACEHOLDER_PROFILE_NAME)
+               : l10n_util::GetStringFUTF16(IDS_NEW_NUMBERED_PROFILE_NAME,
+                                            base::NumberToString16(name_index));
 
     // Loop through previously named profiles to ensure we're not duplicating.
     std::vector<ProfileAttributesEntry*> entries =
         const_cast<ProfileAttributesStorage*>(this)->GetAllProfilesAttributes();
 
-    if (base::ranges::none_of(entries, [name](ProfileAttributesEntry* entry) {
+    if (std::ranges::none_of(entries, [name](ProfileAttributesEntry* entry) {
           return entry->GetLocalProfileName() == name ||
                  entry->GetName() == name;
         })) {
@@ -539,17 +680,24 @@ std::u16string ProfileAttributesStorage::ChooseNameForNewProfile(
 bool ProfileAttributesStorage::IsDefaultProfileName(
     const std::u16string& name,
     bool include_check_for_legacy_profile_name) const {
-  // Check whether it's one of the "Person %d" style names.
-  std::string default_name_format =
-      l10n_util::GetStringFUTF8(IDS_NEW_NUMBERED_PROFILE_NAME, u"%d");
-  int generic_profile_number;  // Unused. Just a placeholder for sscanf.
-  int assignments =
-      sscanf(base::UTF16ToUTF8(name).c_str(), default_name_format.c_str(),
-             &generic_profile_number);
-  if (assignments == 1)
+  if (name ==
+      l10n_util::GetStringUTF16(IDS_PROFILE_MENU_PLACEHOLDER_PROFILE_NAME)) {
+    // Profile name is "Your Chrome".
     return true;
+  }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
+  // Check whether it's one of the "Person %d" style names.
+  std::u16string default_name_prefix =
+      l10n_util::GetStringFUTF16(IDS_NEW_NUMBERED_PROFILE_NAME, u"");
+  if (base::StartsWith(name, default_name_prefix)) {
+    int generic_profile_number;  // Unused. Just a placeholder for StringToInt.
+    if (base::StringToInt(name.substr(default_name_prefix.length()),
+                          &generic_profile_number)) {
+      return true;
+    }
+  }
+
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
   if (!include_check_for_legacy_profile_name)
     return false;
 #endif
@@ -560,9 +708,10 @@ bool ProfileAttributesStorage::IsDefaultProfileName(
     return true;
 
   // Check if it's one of the old-style profile names.
-  for (size_t i = 0; i < std::size(kDefaultNames); ++i) {
-    if (name == l10n_util::GetStringUTF16(kDefaultNames[i]))
+  for (int default_name : kDefaultNames) {
+    if (name == l10n_util::GetStringUTF16(default_name)) {
       return true;
+    }
   }
   return false;
 }
@@ -601,13 +750,12 @@ const gfx::Image* ProfileAttributesStorage::LoadAvatarPictureFromPath(
   file_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(&ReadBitmap, image_path),
       base::BindOnce(&ProfileAttributesStorage::OnAvatarPictureLoaded,
-                     const_cast<ProfileAttributesStorage*>(this)->AsWeakPtr(),
-                     profile_path, key));
+                     weak_ptr_factory_.GetWeakPtr(), profile_path, key));
   return nullptr;
 }
 bool ProfileAttributesStorage::IsGAIAPictureLoaded(
     const std::string& key) const {
-  return base::Contains(cached_avatar_images_, key);
+  return cached_avatar_images_.contains(key);
 }
 
 void ProfileAttributesStorage::SaveGAIAImageAtPath(
@@ -619,8 +767,9 @@ void ProfileAttributesStorage::SaveGAIAImageAtPath(
   cached_avatar_images_.erase(key);
   SaveAvatarImageAtPath(
       profile_path, image, key, image_path,
-      base::BindOnce(&ProfileAttributesStorage::OnGAIAPictureSaved, AsWeakPtr(),
-                     image_url_with_size, profile_path));
+      base::BindOnce(&ProfileAttributesStorage::OnGAIAPictureSaved,
+                     weak_ptr_factory_.GetWeakPtr(), image_url_with_size,
+                     profile_path));
 }
 
 void ProfileAttributesStorage::DeleteGAIAImageAtPath(
@@ -651,7 +800,8 @@ void ProfileAttributesStorage::RecordDeletedProfileState(
   bool is_last_profile = GetNumberOfProfiles() <= 1u;
   // If the profile has windows opened, they are still open at this moment.
   // Thus, this really means that only the profile manager is open.
-  bool no_browser_windows = BrowserList::GetInstance()->empty();
+  const bool no_browser_windows =
+      GlobalBrowserCollection::GetInstance()->IsEmpty();
   profile_metrics::LogProfileDeletionContext(is_last_profile,
                                              no_browser_windows);
 }
@@ -666,6 +816,23 @@ void ProfileAttributesStorage::RecordProfilesState() {
 
   for (ProfileAttributesEntry* entry : entries) {
     RecordProfileState(entry, profile_metrics::StateSuffix::kAll);
+
+    if (policy::ManagementServiceFactory::GetForPlatform()->IsManaged()) {
+      RecordProfileState(entry,
+                         profile_metrics::StateSuffix::kAllManagedDevice);
+    } else {
+      RecordProfileState(entry,
+                         profile_metrics::StateSuffix::kAllUnmanagedDevice);
+    }
+
+    if (entry->UserAcceptedAccountManagement()) {
+      RecordProfileState(
+          entry, profile_metrics::StateSuffix::kManagementDisclaimerAccepted);
+    } else {
+      RecordProfileState(
+          entry,
+          profile_metrics::StateSuffix::kManagementDisclaimerNotAccepted);
+    }
 
     switch (type) {
       case MultiProfileUserType::kSingleProfile:
@@ -744,6 +911,13 @@ void ProfileAttributesStorage::NotifyProfileHostedDomainChanged(
     observer.OnProfileHostedDomainChanged(profile_path);
 }
 
+void ProfileAttributesStorage::NotifyProfileIsManagedChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_) {
+    observer.OnProfileIsManagedChanged(profile_path);
+  }
+}
+
 void ProfileAttributesStorage::NotifyOnProfileHighResAvatarLoaded(
     const base::FilePath& profile_path) const {
   for (auto& observer : observer_list_)
@@ -756,6 +930,20 @@ void ProfileAttributesStorage::NotifyProfileUserManagementAcceptanceChanged(
     observer.OnProfileUserManagementAcceptanceChanged(profile_path);
 }
 
+void ProfileAttributesStorage::NotifyProfileManagementEnrollmentTokenChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_) {
+    observer.OnProfileManagementEnrollmentTokenChanged(profile_path);
+  }
+}
+
+void ProfileAttributesStorage::NotifyProfileManagementIdChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_) {
+    observer.OnProfileManagementIdChanged(profile_path);
+  }
+}
+
 std::string ProfileAttributesStorage::StorageKeyFromProfilePath(
     const base::FilePath& profile_path) const {
   DCHECK_EQ(user_data_dir_, profile_path.DirName());
@@ -763,7 +951,7 @@ std::string ProfileAttributesStorage::StorageKeyFromProfilePath(
 }
 
 void ProfileAttributesStorage::DisableProfileMetricsForTesting() {
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   repeating_timer_.reset();
 #endif
 }
@@ -786,7 +974,7 @@ void ProfileAttributesStorage::DownloadHighResAvatarIfNeeded(
       profiles::GetPathOfHighResAvatarAtIndex(icon_index);
   base::OnceClosure callback =
       base::BindOnce(&ProfileAttributesStorage::DownloadHighResAvatar,
-                     AsWeakPtr(), icon_index, profile_path);
+                     weak_ptr_factory_.GetWeakPtr(), icon_index, profile_path);
   file_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&RunCallbackIfFileMissing, file_path,
                                 std::move(callback)));
@@ -811,7 +999,7 @@ void ProfileAttributesStorage::DownloadHighResAvatar(
   current_downloader = std::make_unique<ProfileAvatarDownloader>(
       icon_index,
       base::BindOnce(&ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback,
-                     AsWeakPtr(), profile_path));
+                     weak_ptr_factory_.GetWeakPtr(), profile_path));
 
   current_downloader->Start();
 #endif
@@ -825,9 +1013,9 @@ void ProfileAttributesStorage::SaveAvatarImageAtPath(
     base::OnceClosure callback) {
   cached_avatar_images_[key] = image;
 
-  std::unique_ptr<ImageData> data(new ImageData);
   scoped_refptr<base::RefCountedMemory> png_data = image.As1xPNGBytes();
-  data->assign(png_data->front(), png_data->front() + png_data->size());
+  auto data = std::make_unique<ImageData>(png_data->size());
+  base::span(*data).copy_from(*png_data);
 
   // Remove the file from the list of downloads in progress. Note that this list
   // only contains the high resolution avatars, and not the Gaia profile images.
@@ -846,7 +1034,8 @@ void ProfileAttributesStorage::SaveAvatarImageAtPath(
     file_task_runner_->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(&SaveBitmap, std::move(data), image_path),
         base::BindOnce(&ProfileAttributesStorage::OnAvatarPictureSaved,
-                       AsWeakPtr(), key, profile_path, std::move(callback)));
+                       weak_ptr_factory_.GetWeakPtr(), key, profile_path,
+                       std::move(callback)));
   }
 }
 
@@ -856,7 +1045,7 @@ ProfileAttributesEntry* ProfileAttributesStorage::InitEntryWithKey(
   base::FilePath path =
       user_data_dir_.Append(base::FilePath::FromUTF8Unsafe(key));
 
-  DCHECK(!base::Contains(profile_attributes_entries_, path.value()));
+  DCHECK(!profile_attributes_entries_.contains(path.value()));
   ProfileAttributesEntry* new_entry =
       &profile_attributes_entries_[path.value()];
   new_entry->Initialize(this, path, prefs_);
@@ -891,7 +1080,7 @@ void ProfileAttributesStorage::LoadGAIAPictureIfNeeded() {
 }
 #endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 void ProfileAttributesStorage::MigrateLegacyProfileNamesAndRecomputeIfNeeded() {
   std::vector<ProfileAttributesEntry*> entries = GetAllProfilesAttributes();
   for (size_t i = 0; i < entries.size(); i++) {
@@ -903,9 +1092,8 @@ void ProfileAttributesStorage::MigrateLegacyProfileNamesAndRecomputeIfNeeded() {
     // "Saratoga", ...) to new style default names Person %n ("Person 1").
     if (!IsDefaultProfileName(
             profile_name, /*include_check_for_legacy_profile_name=*/false)) {
-      entries[i]->SetLocalProfileName(
-          ChooseNameForNewProfile(entries[i]->GetAvatarIconIndex()),
-          /*is_default_name=*/true);
+      entries[i]->SetLocalProfileName(ChooseNameForNewProfile(),
+                                      /*is_default_name=*/true);
       continue;
     }
 
@@ -914,9 +1102,8 @@ void ProfileAttributesStorage::MigrateLegacyProfileNamesAndRecomputeIfNeeded() {
     // Person 1, Person 2.
     for (size_t j = i + 1; j < entries.size(); j++) {
       if (profile_name == entries[j]->GetLocalProfileName()) {
-        entries[j]->SetLocalProfileName(
-            ChooseNameForNewProfile(entries[j]->GetAvatarIconIndex()),
-            /*is_default_name=*/true);
+        entries[j]->SetLocalProfileName(ChooseNameForNewProfile(),
+                                        /*is_default_name=*/true);
       }
     }
   }
@@ -926,7 +1113,7 @@ void ProfileAttributesStorage::MigrateLegacyProfileNamesAndRecomputeIfNeeded() {
 void ProfileAttributesStorage::SetLegacyProfileMigrationForTesting(bool value) {
   g_migration_enabled_for_testing = value;
 }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
 void ProfileAttributesStorage::OnAvatarPictureLoaded(
     const base::FilePath& profile_path,
@@ -982,4 +1169,9 @@ void ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback(
     const base::FilePath& image_path) {
   SaveAvatarImageAtPath(profile_path, image, key, image_path,
                         base::OnceClosure());
+}
+
+void ProfileAttributesStorage::
+    EnsureProfilesOrderPrefIsInitializedForTesting() {
+  EnsureProfilesOrderPrefIsInitialized();
 }

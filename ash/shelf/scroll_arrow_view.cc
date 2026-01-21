@@ -9,8 +9,11 @@
 #include "ash/shelf/shelf_button_delegate.h"
 #include "ash/style/ash_color_provider.h"
 #include "base/i18n/rtl.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/animation/ink_drop.h"
@@ -42,8 +45,7 @@ void ScrollArrowView::PaintButtonContents(gfx::Canvas* canvas) {
                                (arrow_type_ == kRight && base::i18n::IsRTL());
   gfx::ImageSkia img = CreateVectorIcon(
       show_left_arrow ? kOverflowShelfLeftIcon : kOverflowShelfRightIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorPrimary));
+      GetColorProvider()->GetColor(cros_tokens::kIconColorPrimary));
 
   if (!is_horizontal_alignment_) {
     img = gfx::ImageSkiaOperations::CreateRotatedImage(
@@ -56,13 +58,12 @@ void ScrollArrowView::PaintButtonContents(gfx::Canvas* canvas) {
                        center_point.y() - img.height() / 2);
 }
 
-const char* ScrollArrowView::GetClassName() const {
-  return "ScrollArrowView";
-}
-
 void ScrollArrowView::OnThemeChanged() {
   ShelfButton::OnThemeChanged();
   SchedulePaint();
 }
+
+BEGIN_METADATA(ScrollArrowView)
+END_METADATA
 
 }  // namespace ash

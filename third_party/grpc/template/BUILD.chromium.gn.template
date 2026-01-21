@@ -10,9 +10,6 @@
   # See //third_party/grpc/README.chromium for more information.
 
   declare_args() {
-    # Compiles with ares.
-    enable_grpc_ares = false
-
     # TODO(169395837): Somehow gRPC symbols cannot be found on Android.
     # Keep using static linking for now.
     # In windows, mac and iOS use static linking.
@@ -28,19 +25,28 @@
     import("//build/config/android/rules.gni")
   }
 
+  # WARNING: This config is public and applies to many targets that are first
+  # party code. Keep this config to a minimum and do not disable any compiler
+  # warnings here.
   config("grpc_config") {
     include_dirs = [
-      "src/include",
-      "src",
-      "src/src/core/ext/upb-generated",
-      "src/src/core/ext/upbdefs-generated",
-      "src/third_party/cares",
-      "//third_party/cares/include",
-      "src/third_party/upb",
+      "source/include",
+      "source",
+      "source/src/core/ext/upb-gen",
+      "source/third_party/xxhash",
+      "source/src/core/ext/upbdefs-gen",
+      "source/third_party/cares",
+      "source/third_party/upb",
       "//third_party/abseil-cpp",
+      "//third_party/protobuf/third_party/utf8_range",
     ]
 
     defines = [
+      # Override some unused functionality in config_protobuf.h to sidestep
+      # compilation errors.
+      "GRPC_CUSTOM_JSONUTIL=::google::protobuf",
+      "GRPC_CUSTOM_UTIL_STATUS=int",
+
       "GRPC_USE_PROTO_LITE",
       "HAVE_CONFIG_H",
       "PB_FIELD_16BIT",
@@ -54,23 +60,16 @@
       defines += [ "GRPC_NO_BINDER", ]
     }
 
-    cflags = [
-      "-Wno-implicit-fallthrough",
-      "-Wno-shadow",
-      "-Wno-unreachable-code-return",
-      "-Wno-unreachable-code-break",
-    ]
-
     if (is_android) {
       libs = [ "log" ]  # For __android_log_write
     }
 
     if (is_android) {
-      include_dirs += [ "src/third_party/cares/config_android" ]
+      include_dirs += [ "source/third_party/cares/config_android" ]
     } else if (is_fuchsia) {
       include_dirs += [ "third_party/cares/config_fuchsia" ]
     } else {
-      include_dirs += [ "src/third_party/cares/config_linux" ]
+      include_dirs += [ "source/third_party/cares/config_linux" ]
     }
 
     if (is_fuchsia) {
@@ -80,24 +79,25 @@
       ]
     }
 
-    if (!enable_grpc_ares) {
-      defines += [
-        # Disable c-ares since it doesn't currently support Fuchsia
-        "GRPC_ARES=0",
-      ]
-    }
+    defines += [
+      # Disable c-ares since it doesn't currently support Fuchsia
+      "GRPC_ARES=0",
+    ]
   }
 
   config("grpc_config_private") {
+    # TODO(b/311287092): Clean up the code and remove this list.
     cflags = [
       "-Wno-c++98-compat-extra-semi",
+      "-Wno-deprecated-copy",
       "-Wno-extra-semi",
+      "-Wno-gnu-flexible-array-initializer",
+      "-Wno-implicit-fallthrough",
+      "-Wno-shadow",
       "-Wno-sign-compare",
-      "-Wno-sometimes-uninitialized",
-      "-Wno-string-concatenation",
       "-Wno-unreachable-code",
-      "-Wno-unused-variable",
-      "-Wno-unused-result",
+      "-Wno-unreachable-code-break",
+      "-Wno-unreachable-code-return",
     ]
 
     # TODO(b/260740023): Remove when gRPC has CFI checks enabled.
@@ -153,9 +153,13 @@
     out_sources = []
     repeated1 = []
     repeated2 = []
+    repeated3 = []
+    repeated4 = []
     out_sources_basenames = set()
     repeated1_basenames = set()
     repeated2_basenames = set()
+    repeated3_basenames = set()
+    repeated4_basenames = set()
     for s in sources:
       basename = os.path.basename(s)
       ext = os.path.splitext(basename)
@@ -163,9 +167,17 @@
         out_sources.append(s)
         continue
       if basename in out_sources_basenames:
-        if basename in repeated1_basenames:
-          # If there is a basename that appears more than 3 times,
+        if basename in repeated3_basenames:
+          # If there is a basename that appears more than 5 times,
           # we need to create more GN targets for it
+          assert(s not in repeated4_basenames)
+          repeated4_basenames.add(basename)
+          repeated4.append(s)
+        elif basename in repeated2_basenames:
+          assert(s not in repeated3_basenames)
+          repeated3_basenames.add(basename)
+          repeated3.append(s)
+        elif basename in repeated1_basenames:
           assert(s not in repeated2_basenames)
           repeated2_basenames.add(basename)
           repeated2.append(s)
@@ -175,32 +187,33 @@
       else:
         out_sources_basenames.add(basename)
         out_sources.append(s)
-    return (gn_sort(out_sources), gn_sort(repeated1), gn_sort(repeated2))
+    return (gn_sort(out_sources), gn_sort(repeated1), gn_sort(repeated2),
+            gn_sort(repeated3), gn_sort(repeated4))
 
   def is_xds_source(s):
     file_names = [
-        'src/src/core/ext/filters/client_channel/resolver/google_c2p/google_c2p_resolver.cc',
-        'src/src/core/ext/xds/xds_server_config_fetcher.cc',
-        'src/src/core/lib/security/credentials/xds/xds_credentials.cc',
-        'src/src/core/lib/security/credentials/xds/xds_credentials.h',
-        'src/src/cpp/client/xds_credentials.cc',
-        'src/src/cpp/client/xds_credentials.cc',
-        'src/src/cpp/client/xds_credentials.h',
-        'src/src/cpp/client/xds_credentials.h',
-        'src/src/cpp/server/csds/csds.cc',
-        'src/src/cpp/server/xds_server_credentials.cc',
-        'src/src/cpp/server/xds_server_credentials.cc',
-        'src/src/cpp/server/xds_server_credentials.h',
-        'src/src/core/ext/filters/rbac/rbac_filter.cc',
-        'src/src/core/ext/filters/rbac/rbac_filter.h',
-        'src/src/core/ext/filters/rbac/rbac_service_config_parser.cc',
-        'src/src/core/ext/filters/rbac/rbac_service_config_parser.h',
-        'src/src/core/lib/security/authorization/grpc_authorization_engine.cc',
-        'src/src/core/lib/security/authorization/grpc_authorization_engine.h',
-        'src/src/core/lib/security/authorization/matchers.cc',
-        'src/src/core/lib/security/authorization/matchers.h',
-        'src/src/core/lib/security/authorization/rbac_policy.cc',
-        'src/src/core/lib/security/authorization/rbac_policy.h',
+        'source/src/core/ext/filters/client_channel/resolver/google_c2p/google_c2p_resolver.cc',
+        'source/src/core/ext/xds/xds_server_config_fetcher.cc',
+        'source/src/core/lib/security/credentials/xds/xds_credentials.cc',
+        'source/src/core/lib/security/credentials/xds/xds_credentials.h',
+        'source/src/cpp/client/xds_credentials.cc',
+        'source/src/cpp/client/xds_credentials.cc',
+        'source/src/cpp/client/xds_credentials.h',
+        'source/src/cpp/client/xds_credentials.h',
+        'source/src/cpp/server/csds/csds.cc',
+        'source/src/cpp/server/xds_server_credentials.cc',
+        'source/src/cpp/server/xds_server_credentials.cc',
+        'source/src/cpp/server/xds_server_credentials.h',
+        'source/src/core/ext/filters/rbac/rbac_filter.cc',
+        'source/src/core/ext/filters/rbac/rbac_filter.h',
+        'source/src/core/ext/filters/rbac/rbac_service_config_parser.cc',
+        'source/src/core/ext/filters/rbac/rbac_service_config_parser.h',
+        'source/src/core/lib/security/authorization/grpc_authorization_engine.cc',
+        'source/src/core/lib/security/authorization/grpc_authorization_engine.h',
+        'source/src/core/lib/security/authorization/matchers.cc',
+        'source/src/core/lib/security/authorization/matchers.h',
+        'source/src/core/lib/security/authorization/rbac_policy.cc',
+        'source/src/core/lib/security/authorization/rbac_policy.h',
     ]
     return s in file_names
 
@@ -208,18 +221,18 @@
   def get_commented_sources(sources):
     out_sources = []
     for s in sources:
-      if s == 'src/src/core/lib/gpr/wrap_memcpy.cc':
+      if s == 'source/src/core/lib/gpr/wrap_memcpy.cc':
         out_sources.append('# gRPC memcpy wrapping logic isn\'t useful here.')
         out_sources.append('# See https://crbug.com/661171')
         out_sources.append('# "{}",'.format(s))
-      elif s == 'src/src/core/plugin_registry/grpc_plugin_registry.cc':
+      elif s == 'source/src/core/plugin_registry/grpc_plugin_registry.cc':
         out_sources.append('# Disabling some default plugins.')
         out_sources.append('# "{}",'.format(s))
         out_sources.append('"plugin_registry/grpc_plugin_registry.cc",')
-      elif s == 'src/src/core/lib/matchers/matchers.cc':
+      elif s == 'source/src/core/lib/matchers/matchers.cc':
         # matchers are disabled to reduce binary size
         out_sources.append('# "{}",'.format(s))
-      elif s == 'src/src/core/lib/matchers/matchers.h':
+      elif s == 'source/src/core/lib/matchers/matchers.h':
         # matchers are disabled to reduce binary size
         out_sources.append('# "{}",'.format(s))
       elif is_xds_source(s):
@@ -248,6 +261,14 @@
     for d in target_dict.get("deps", []):
       if d.startswith('libssl'):
         add_boring_ssl = True
+      elif d == "protobuf":
+        deps.add("//third_party/protobuf:protobuf_lite")
+      elif d == "protoc":
+        deps.add("//third_party/protobuf:protoc_lib")
+      elif d == "re2":
+        deps.add("//third_party/re2:re2")
+      elif d == "z":
+        deps.add("//third_party/zlib:zlib")
       elif d.startswith('absl'):
         add_absl = True
       elif d.startswith(("//", ":")):
@@ -279,7 +300,7 @@
     if needs_ares(sources):
       dirs = [":cares"]
     if needs_address_sorting(sources):
-      dirs.append("src/third_party/address_sorting/include")
+      dirs.append("source/third_party/address_sorting/include")
     return dirs
 
   def get_extra_stuff():
@@ -293,22 +314,25 @@
 
 
   def strip_sources(sources):
-    exceptions = [
-      "src/src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_balancer_addresses.h",
-      "src/src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_balancer_addresses.cc",
-      "src/src/core/ext/filters/client_channel/lb_policy/pick_first/pick_first.cc",
+    lb_policy_allowlist = [
+      "source/src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_balancer_addresses.h",
+      "source/src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_balancer_addresses.cc",
+      "source/src/core/ext/filters/client_channel/lb_policy/pick_first/pick_first.cc",
     ]
 
     return [f for f in sources
-            if "ruby_generator" not in f
-            and not (re.match("src/src/core/ext/filters/client_channel/lb_policy/.*/.*",f)
-                and not f in exceptions)
-            and not re.match("src/src/core/ext/filters/client_channel/resolver/xds/.*",f)
-            and not re.match("src/src/core/ext/xds/.*",f)
+            if not re.match("source/src/compiler/ruby_generator.*", f)
+            and not re.match("source/src/compiler/csharp_generator.*", f)
+            and not re.match("source/src/compiler/objective_c_generator.*", f)
+            and not re.match("source/src/compiler/php_generator.*", f)
+            and not (re.match("source/src/core/ext/filters/client_channel/lb_policy/.*/.*",f)
+                and not f in lb_policy_allowlist)
+            and not re.match("source/src/core/ext/filters/client_channel/resolver/xds/.*",f)
+            and not re.match("source/src/core/ext/xds/.*",f)
             ]
 
   def adjust_srcs(sources):
-    return ["src/" + f for f in sources]
+    return ["source/" + f for f in sources]
 
   def get_sources(target):
     sources = (([] if not hasattr(target, "public_headers") else target.public_headers or []) +
@@ -338,7 +362,7 @@
         ext = os.path.splitext(f)
         if (len(ext) > 1) and (ext[1] in ('.h', '.c')):
           sources.append(os.path.join(root, f))
-    return ["src/" + s for s in sources]
+    return ["source/" + s for s in sources]
 
   cares_sources = glob.glob('third_party/cares/cares/include/*.h') + \
     glob.glob('third_party/cares/cares/src/lib/*.c')
@@ -405,18 +429,22 @@
     sources = adjust_srcs(sources)
     sources = [f for f in sources if f not in upb_sources]
     sources = strip_sources(sources)
-    (sources, repeated1, repeated2) = find_repeated(sources)
+    (sources, repeated1, repeated2, repeated3, repeated4) = find_repeated(sources)
     deps = [d for d in deps if d not in (':gpr', ':grpc')]
     cc_lib_name = 'grpc++_cc'
     h_lib_name = 'grpc++_h'
     repeated_lib_name1 = 'grpc++_repeated1'
     repeated_lib_name2 = 'grpc++_repeated2'
+    repeated_lib_name3 = 'grpc++_repeated3'
+    repeated_lib_name4 = 'grpc++_repeated4'
     other_deps = deps[:]
     other_deps.append(":{}".format(h_lib_name))
     deps_so = [
       ':{}'.format(cc_lib_name),
       ':{}'.format(repeated_lib_name1),
       ':{}'.format(repeated_lib_name2),
+      ':{}'.format(repeated_lib_name3),
+      ':{}'.format(repeated_lib_name4),
     ]
     public_deps_so = [
       ':{}'.format(h_lib_name),
@@ -443,6 +471,8 @@
 
   ${cc_library_internal(repeated_lib_name1, '', repeated1, other_deps, extra_stuff, extra_configs)}
   ${cc_library_internal(repeated_lib_name2, '', repeated2, other_deps, extra_stuff, extra_configs)}
+  ${cc_library_internal(repeated_lib_name3, '', repeated3, other_deps, extra_stuff, extra_configs)}
+  ${cc_library_internal(repeated_lib_name4, '', repeated4, other_deps, extra_stuff, extra_configs)}
   </%def>\
   <%def name="cc_library(lib, indent, is_host)">\
   <%
@@ -450,7 +480,9 @@
       sources = strip_sources(sources)
       repeated_lib_name1 = "{}_repeated1".format(lib.name)
       repeated_lib_name2 = "{}_repeated2".format(lib.name)
-      (sources, repeated1, repeated2) = find_repeated(sources)
+      repeated_lib_name3 = "{}_repeated3".format(lib.name)
+      repeated_lib_name4 = "{}_repeated4".format(lib.name)
+      (sources, repeated1, repeated2, repeated3, repeated4) = find_repeated(sources)
       extra_configs = [':grpc_config_private']
       extra_stuff = []
       target_type = 'source_set'
@@ -462,6 +494,10 @@
         deps.append(":{}".format(repeated_lib_name1))
       if repeated2:
         deps.append(":{}".format(repeated_lib_name2))
+      if repeated3:
+        deps.append(":{}".format(repeated_lib_name3))
+      if repeated4:
+        deps.append(":{}".format(repeated_lib_name4))
     %>\
   ${cc_library_internal(lib.name, indent, sources, deps, extra_stuff, extra_configs)}
     % if repeated1:
@@ -476,6 +512,19 @@
   # that. Moving them to another target.
   ${cc_library_internal(repeated_lib_name2, indent, repeated2, repeated_deps, extra_stuff, extra_configs)}
     % endif
+    % if repeated3:
+
+  # There are some .cc files that are in multiple places. GN doesn't like
+  # that. Moving them to another target.
+  ${cc_library_internal(repeated_lib_name3, indent, repeated3, repeated_deps, extra_stuff, extra_configs)}
+    % endif
+    % if repeated4:
+
+  # There are some .cc files that are in multiple places. GN doesn't like
+  # that. Moving them to another target.
+  ${cc_library_internal(repeated_lib_name4, indent, repeated4, repeated_deps, extra_stuff, extra_configs)}
+    % endif
+
   </%def>\
   <%def name="cc_library_internal(name, indent, sources, lib_deps, extra_stuff, extra_configs)">\
   <%
@@ -527,7 +576,7 @@
   </%def>
   <%def name="cc_binary(tgt, indent)">\
   <%
-  sources = ["src/"+s for s in tgt.src]
+  sources = ["source/"+s for s in tgt.src]
   sources = gn_sort(sources)
   deps = get_deps_from_target(tgt) + get_deps_from_sources(sources)
   deps = gn_sort(deps)
@@ -545,8 +594,9 @@
   ${indent}  ]
   ${indent}  configs += [
   ${indent}    "//third_party/protobuf:protobuf_config",
+  ${indent}    ":grpc_config_private",
+  ${indent}    ":grpc_config",
   ${indent}  ]
-  ${indent}  public_configs = [ ":grpc_config" ]
   ${indent}}
   </%def><%!
   %>\
@@ -562,25 +612,16 @@
 
   source_set("cares") {
     sources = [
-      "src/third_party/cares/ares_build.h",
+      "source/third_party/cares/ares_build.h",
     ]
 
-    if (enable_grpc_ares) {
-      include_dirs = [ "//third_party/cares/include" ]
-      sources += [
-  % for src in cares_sources:
-        "${src}",
-  % endfor
-      ]
-    }
-
     if (is_android) {
-      sources += [ "src/third_party/cares/config_android/ares_config.h" ]
+      sources += [ "source/third_party/cares/config_android/ares_config.h" ]
       configs += [ ":cares_config" ]
     } else if (is_fuchsia) {
       sources += [ "third_party/cares/config_fuchsia/ares_config.h" ]
     } else {
-      sources += [ "src/third_party/cares/config_linux/ares_config.h" ]
+      sources += [ "source/third_party/cares/config_linux/ares_config.h" ]
     }
     deps = [
       "//third_party/boringssl",
@@ -588,18 +629,3 @@
 
     public_configs = [ ":grpc_config" ]
   }
-
-  group("fuzzers") {}
-
-  if (is_android) {
-    # gRPC BinderTransport's Java API and internal code, which cannot be handled by GN's source_set
-    # and we need manually create a android_library target for them.
-    android_library("binder_java_helper") {
-      sources = [
-        "src/src/core/ext/transport/binder/java/io/grpc/binder/cpp/GrpcBinderConnection.java",
-        "src/src/core/ext/transport/binder/java/io/grpc/binder/cpp/GrpcCppServerBuilder.java",
-        "src/src/core/ext/transport/binder/java/io/grpc/binder/cpp/NativeConnectionHelper.java",
-      ]
-    }
-  }
-

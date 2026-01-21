@@ -6,7 +6,7 @@
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="/cookies/resources/testharness-helpers.js"></script>
-<title>Test partitioned cookies do not consider ancestor chain</title>
+<title>Test partitioned cookies consider ancestor chain</title>
 </head>
 <body>
 <script>
@@ -19,7 +19,7 @@ document.body.onload = function main() {
   test(() => {
     assert_equals(document.cookie, "");
 
-    // Valid Partitioned cookie: __Host- prefix and no SameParty attribute.
+    // Valid Partitioned cookie: __Host- prefix.
     const sameSiteCookie = "__Host-same=site";
     // Include Partitioned attribute to make sure we don't introduce a site for
     // cookies regression.

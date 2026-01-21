@@ -6,8 +6,8 @@
 
 #include "base/android/callback_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
-#include "chrome/android/chrome_jni_headers/BackgroundSchedulerBridge_jni.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "chrome/browser/offline_pages/android/offline_page_auto_fetcher_service_factory.h"
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
 #include "chrome/browser/offline_pages/request_coordinator_factory.h"
@@ -17,7 +17,10 @@
 #include "components/offline_pages/core/background/offliner.h"
 #include "components/offline_pages/core/background/request_coordinator.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/BackgroundSchedulerBridge_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -25,18 +28,19 @@ namespace offline_pages {
 namespace android {
 
 // JNI call to start request processing in scheduled mode.
-static jboolean JNI_BackgroundSchedulerBridge_StartScheduledProcessing(
+static bool JNI_BackgroundSchedulerBridge_StartScheduledProcessing(
     JNIEnv* env,
-    const jboolean j_power_connected,
-    const jint j_battery_percentage,
-    const jint j_net_connection_type,
-    const JavaParamRef<jobject>& j_callback_obj) {
+    const bool j_power_connected,
+    const int32_t j_battery_percentage,
+    const int32_t j_net_connection_type,
+    const JavaRef<jobject>& j_callback_obj) {
   ScopedJavaGlobalRef<jobject> j_callback_ref;
   j_callback_ref.Reset(env, j_callback_obj);
 
   Profile* profile = ProfileManager::GetLastUsedProfile();
-  if (!profile)
+  if (!profile) {
     return false;
+  }
 
   // Make sure the auto-fetch service is running, so it can respond to completed
   // pages.
@@ -45,8 +49,7 @@ static jboolean JNI_BackgroundSchedulerBridge_StartScheduledProcessing(
   // Lookup/create RequestCoordinator KeyedService and call
   // StartScheduledProcessing on it with bound j_callback_obj.
   RequestCoordinator* coordinator =
-      RequestCoordinatorFactory::GetInstance()->
-      GetForBrowserContext(profile);
+      RequestCoordinatorFactory::GetInstance()->GetForBrowserContext(profile);
   DVLOG(2) << "resource_coordinator: " << coordinator;
   DeviceConditions device_conditions(
       j_power_connected, j_battery_percentage,
@@ -61,13 +64,15 @@ static jboolean JNI_BackgroundSchedulerBridge_StartScheduledProcessing(
 // JNI call to stop request processing in scheduled mode.
 static void JNI_BackgroundSchedulerBridge_StopScheduledProcessing(JNIEnv* env) {
   Profile* profile = ProfileManager::GetLastUsedProfile();
-  if (!profile)
+  if (!profile) {
     return;
+  }
   RequestCoordinator* coordinator =
       RequestCoordinatorFactory::GetInstance()->GetForBrowserContext(profile);
   DVLOG(2) << "resource_coordinator: " << coordinator;
-  if (!coordinator)
+  if (!coordinator) {
     return;
+  }
   coordinator->CancelProcessing();
 }
 
@@ -93,8 +98,8 @@ void BackgroundSchedulerBridge::BackupSchedule(
       CreateTriggerConditions(env, trigger_conditions.require_power_connected,
                               trigger_conditions.minimum_battery_percentage,
                               trigger_conditions.require_unmetered_network);
-  Java_BackgroundSchedulerBridge_backupSchedule(
-      env, j_conditions, delay_in_seconds);
+  Java_BackgroundSchedulerBridge_backupSchedule(env, j_conditions,
+                                                delay_in_seconds);
 }
 
 void BackgroundSchedulerBridge::Unschedule() {
@@ -116,9 +121,9 @@ const DeviceConditions&
 BackgroundSchedulerBridge::GetCurrentDeviceConditions() {
   JNIEnv* env = base::android::AttachCurrentThread();
   // Call the JNI methods to get the device conditions we need.
-  jboolean jpower = Java_BackgroundSchedulerBridge_getPowerConditions(env);
-  jint jbattery = Java_BackgroundSchedulerBridge_getBatteryConditions(env);
-  jint jnetwork = Java_BackgroundSchedulerBridge_getNetworkConditions(env);
+  bool jpower = Java_BackgroundSchedulerBridge_getPowerConditions(env);
+  int32_t jbattery = Java_BackgroundSchedulerBridge_getBatteryConditions(env);
+  int32_t jnetwork = Java_BackgroundSchedulerBridge_getNetworkConditions(env);
 
   // Cast the java types back to the types we use.
   bool power = static_cast<bool>(jpower);
@@ -135,3 +140,5 @@ BackgroundSchedulerBridge::GetCurrentDeviceConditions() {
 
 }  // namespace android
 }  // namespace offline_pages
+
+DEFINE_JNI(BackgroundSchedulerBridge)

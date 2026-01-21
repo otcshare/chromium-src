@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/test/values_test_util.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/chrome_content_browser_client.h"
@@ -17,6 +19,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -29,10 +32,11 @@
 #include "url/url_constants.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/unpacked_installer.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/common/extension.h"
 #endif
 
@@ -101,7 +105,7 @@ class NoBestEffortTasksTest : public InProcessBrowserTest {
 };
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-constexpr base::StringPiece kExtensionId = "ddchlicdkolnonkihahngkmmmjnjlkkf";
+constexpr std::string_view kExtensionId = "ddchlicdkolnonkihahngkmmmjnjlkkf";
 constexpr base::TimeDelta kSendMessageRetryPeriod = base::Milliseconds(250);
 #endif
 
@@ -109,7 +113,8 @@ constexpr base::TimeDelta kSendMessageRetryPeriod = base::Milliseconds(250);
 
 // Verify that it is possible to load and paint the initial about:blank page
 // without running BEST_EFFORT tasks.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintAboutBlank) {
+// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintAboutBlank) {
   content::WebContents* const web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   EXPECT_TRUE(web_contents->GetLastCommittedURL().IsAboutBlank());
@@ -123,14 +128,17 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintAboutBlank) {
 //
 // This test has more dependencies than LoadAndPaintAboutBlank, including
 // loading cookies.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFromNetwork) {
+// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest,
+                       DISABLED_LoadAndPaintFromNetwork) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::OpenURLParams open(
       embedded_test_server()->GetURL("a.com", "/empty.html"),
       content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui::PAGE_TRANSITION_TYPED, false);
-  content::WebContents* const web_contents = browser()->OpenURL(open);
+  content::WebContents* const web_contents =
+      browser()->OpenURL(open, /*navigation_handle_callback=*/{});
   EXPECT_TRUE(web_contents->IsLoading());
 
   RunLoopUntilLoadedAndPainted run_until_loaded_and_painted(web_contents);
@@ -139,9 +147,10 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFromNetwork) {
 
 // Verify that it is possible to load and paint a file:// URL without running
 // BEST_EFFORT tasks. Regression test for https://crbug.com/973244.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFileScheme) {
+// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintFileScheme) {
   constexpr base::FilePath::CharType kFile[] = FILE_PATH_LITERAL("links.html");
-  GURL file_url(ui_test_utils::GetTestUrl(
+  GURL file_url(chrome_test_utils::GetTestUrl(
       base::FilePath(base::FilePath::kCurrentDirectory),
       base::FilePath(kFile)));
   ASSERT_TRUE(file_url.SchemeIs(url::kFileScheme));
@@ -149,7 +158,8 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFileScheme) {
   content::OpenURLParams open(file_url, content::Referrer(),
                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
                               ui::PAGE_TRANSITION_TYPED, false);
-  content::WebContents* const web_contents = browser()->OpenURL(open);
+  content::WebContents* const web_contents =
+      browser()->OpenURL(open, /*navigation_handle_callback=*/{});
   EXPECT_TRUE(web_contents->IsLoading());
 
   RunLoopUntilLoadedAndPainted run_until_loaded_and_painted(web_contents);
@@ -163,6 +173,9 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFileScheme) {
 // http://crbug.com/924416 was resolved.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Load the extension, waiting until the ExtensionRegistry reports that its
@@ -175,9 +188,7 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
                       .AppendASCII("no_best_effort_tasks_test_extension");
   extensions::TestExtensionRegistryObserver observer(
       extensions::ExtensionRegistry::Get(browser()->profile()));
-  extensions::UnpackedInstaller::Create(
-      extensions::ExtensionSystem::Get(browser()->profile())
-          ->extension_service())
+  extensions::UnpackedInstaller::Create(browser()->profile())
       ->Load(extension_dir);
   scoped_refptr<const extensions::Extension> extension =
       observer.WaitForExtensionReady();
@@ -214,9 +225,9 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
     const auto result =
         content::EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
                         request_reply_javascript);
-    if (result.error.empty()) {
+    if (result.is_ok()) {
       LOG(INFO) << "Got a response from the extension.";
-      EXPECT_TRUE(result.value.FindBoolKey("pong").value_or(false));
+      EXPECT_TRUE(result.ExtractDict().FindBool("pong").value_or(false));
       break;
     }
     // An error indicates the extension's message listener isn't up yet. Wait a

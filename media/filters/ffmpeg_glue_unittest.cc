@@ -6,12 +6,14 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "base/check.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "build/chromeos_buildflags.h"
+#include "base/test/scoped_feature_list.h"
 #include "media/base/container_names.h"
+#include "media/base/media_switches.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_data_util.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -37,7 +39,7 @@ class MockProtocol : public FFmpegURLProtocol {
 
   virtual ~MockProtocol() = default;
 
-  MOCK_METHOD2(Read, int(int size, uint8_t* data));
+  MOCK_METHOD1(Read, int(base::span<uint8_t> data));
   MOCK_METHOD1(GetPosition, bool(int64_t* position_out));
   MOCK_METHOD1(SetPosition, bool(int64_t position));
   MOCK_METHOD1(GetSize, bool(int64_t* size_out));
@@ -46,8 +48,7 @@ class MockProtocol : public FFmpegURLProtocol {
 
 class FFmpegGlueTest : public ::testing::Test {
  public:
-  FFmpegGlueTest()
-      : protocol_(new StrictMock<MockProtocol>()) {
+  FFmpegGlueTest() : protocol_(std::make_unique<StrictMock<MockProtocol>>()) {
     // IsStreaming() is called when opening.
     EXPECT_CALL(*protocol_.get(), IsStreaming()).WillOnce(Return(true));
     glue_ = std::make_unique<FFmpegGlue>(protocol_.get());
@@ -67,9 +68,9 @@ class FFmpegGlueTest : public ::testing::Test {
     glue_.reset();
   }
 
-  int ReadPacket(int size, uint8_t* data) {
-    return glue_->format_context()->pb->read_packet(protocol_.get(), data,
-                                                    size);
+  int ReadPacket(base::span<uint8_t> data) {
+    return glue_->format_context()->pb->read_packet(
+        protocol_.get(), data.data(), static_cast<int>(data.size()));
   }
 
   int64_t Seek(int64_t offset, int whence) {
@@ -87,8 +88,7 @@ class FFmpegGlueDestructionTest : public ::testing::Test {
 
   void Initialize(const char* filename) {
     data_ = ReadTestDataFile(filename);
-    protocol_ = std::make_unique<InMemoryUrlProtocol>(
-        data_->data(), data_->data_size(), false);
+    protocol_ = std::make_unique<InMemoryUrlProtocol>(*data_, false);
     glue_ = std::make_unique<FFmpegGlue>(protocol_.get());
     CHECK(glue_->format_context());
     CHECK(glue_->format_context()->pb);
@@ -154,20 +154,19 @@ TEST_F(FFmpegGlueTest, Write) {
 // Test both successful and unsuccessful reads pass through correctly.
 TEST_F(FFmpegGlueTest, Read) {
   const int kBufferSize = 16;
-  uint8_t buffer[kBufferSize];
+  std::array<uint8_t, kBufferSize> buffer;
+  std::ranges::fill(buffer, 42);
+  base::span<uint8_t> span(buffer);
 
   // Reads are for the most part straight-through calls to Read().
   InSequence s;
-  EXPECT_CALL(*protocol_, Read(0, buffer))
-      .WillOnce(Return(0));
-  EXPECT_CALL(*protocol_, Read(kBufferSize, buffer))
-      .WillOnce(Return(kBufferSize));
-  EXPECT_CALL(*protocol_, Read(kBufferSize, buffer))
-      .WillOnce(Return(AVERROR(EIO)));
+  EXPECT_CALL(*protocol_, Read(span.first(0u))).WillOnce(Return(0));
+  EXPECT_CALL(*protocol_, Read(span)).WillOnce(Return(kBufferSize));
+  EXPECT_CALL(*protocol_, Read(span)).WillOnce(Return(AVERROR(EIO)));
 
-  EXPECT_EQ(0, ReadPacket(0, buffer));
-  EXPECT_EQ(kBufferSize, ReadPacket(kBufferSize, buffer));
-  EXPECT_EQ(AVERROR(EIO), ReadPacket(kBufferSize, buffer));
+  EXPECT_EQ(0, ReadPacket(span.first(0u)));
+  EXPECT_EQ(kBufferSize, ReadPacket(buffer));
+  EXPECT_EQ(AVERROR(EIO), ReadPacket(buffer));
 }
 
 // Test a variety of seek operations.
@@ -272,14 +271,15 @@ TEST_F(FFmpegGlueDestructionTest, WithOpenWithStreams) {
 TEST_F(FFmpegGlueDestructionTest, WithOpenWithOpenStreams) {
   Initialize("bear-320x240.webm");
   ASSERT_TRUE(glue_->OpenContext());
-  ASSERT_GT(glue_->format_context()->nb_streams, 0u);
+  const auto streams = AVFormatContextToSpan(glue_->format_context());
+  ASSERT_GT(streams.size(), 0u);
 
   // Use ScopedPtrAVFreeContext to ensure |context| is closed, and use scoping
   // and ordering to ensure |context| is destructed before |glue_|.
   // Pick the audio stream (1) so this works when the ffmpeg video decoders are
   // disabled.
   std::unique_ptr<AVCodecContext, ScopedPtrAVFreeContext> context(
-      AVStreamToAVCodecContext(glue_->format_context()->streams[1]));
+      AVStreamToAVCodecContext(streams[1]));
   ASSERT_NE(nullptr, context.get());
   ASSERT_EQ(0, avcodec_open2(context.get(),
                              avcodec_find_decoder(context->codec_id), nullptr));
@@ -287,53 +287,46 @@ TEST_F(FFmpegGlueDestructionTest, WithOpenWithOpenStreams) {
 
 TEST_F(FFmpegGlueContainerTest, OGG) {
   InitializeAndOpen("sfx.ogg");
-  ExpectContainer(container_names::CONTAINER_OGG);
+  ExpectContainer(container_names::MediaContainerName::kContainerOgg);
 }
 
 TEST_F(FFmpegGlueContainerTest, WEBM) {
   InitializeAndOpen("sfx-opus-441.webm");
-  ExpectContainer(container_names::CONTAINER_WEBM);
+  ExpectContainer(container_names::MediaContainerName::kContainerWEBM);
 }
 
 TEST_F(FFmpegGlueContainerTest, FLAC) {
   InitializeAndOpen("sfx.flac");
-  ExpectContainer(container_names::CONTAINER_FLAC);
+  ExpectContainer(container_names::MediaContainerName::kContainerFLAC);
 }
 
 TEST_F(FFmpegGlueContainerTest, WAV) {
   InitializeAndOpen("sfx_s16le.wav");
-  ExpectContainer(container_names::CONTAINER_WAV);
+  ExpectContainer(container_names::MediaContainerName::kContainerWAV);
 }
 
 TEST_F(FFmpegGlueContainerTest, MP3) {
   InitializeAndOpen("sfx.mp3");
-  ExpectContainer(container_names::CONTAINER_MP3);
+  ExpectContainer(container_names::MediaContainerName::kContainerMP3);
 }
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 TEST_F(FFmpegGlueContainerTest, MOV) {
   InitializeAndOpen("sfx.m4a");
-  ExpectContainer(container_names::CONTAINER_MOV);
+  ExpectContainer(container_names::MediaContainerName::kContainerMOV);
 }
 
 TEST_F(FFmpegGlueContainerTest, AAC) {
   InitializeAndOpen("sfx.adts");
-  ExpectContainer(container_names::CONTAINER_AAC);
+  ExpectContainer(container_names::MediaContainerName::kContainerAAC);
 }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-TEST_F(FFmpegGlueContainerTest, AVI) {
-  InitializeAndOpen("bear.avi");
-  ExpectContainer(container_names::CONTAINER_AVI);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
 // Probe something unsupported to ensure we fall back to the our internal guess.
 TEST_F(FFmpegGlueContainerTest, FLV) {
   Initialize("bear.flv");
   ASSERT_FALSE(glue_->OpenContext());
-  ExpectContainer(container_names::CONTAINER_FLV);
+  ExpectContainer(container_names::MediaContainerName::kContainerFLV);
 }
 
 }  // namespace media

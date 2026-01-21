@@ -4,44 +4,46 @@
 
 #include "ui/gfx/font_render_params.h"
 
-#include <memory>
+#include <windows.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <memory>
+#include <optional>
+
+#include "base/callback_list.h"
+#include "base/feature_list.h"
+#include "base/features.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/singleton.h"
+#include "base/notimplemented.h"
 #include "base/win/registry.h"
-#include "ui/gfx/win/singleton_hwnd_observer.h"
+#include "skia/ext/legacy_display_globals.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/gfx/animation/animation.h"
+#include "ui/gfx/font_util_win.h"
+#include "ui/gfx/win/singleton_hwnd.h"
 
 namespace gfx {
 
 namespace {
 
 FontRenderParams::SubpixelRendering GetSubpixelRenderingGeometry() {
-  DISPLAY_DEVICE display_device = {sizeof(DISPLAY_DEVICE)};
-  for (int i = 0; EnumDisplayDevices(nullptr, i, &display_device, 0); ++i) {
-    // TODO(scottmg): We only support the primary device currently.
-    if (display_device.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) {
-      base::FilePath trimmed =
-          base::FilePath(display_device.DeviceName).BaseName();
-      base::win::RegKey key(
-          HKEY_LOCAL_MACHINE,
-          (L"SOFTWARE\\Microsoft\\Avalon.Graphics\\" + trimmed.value()).c_str(),
-          KEY_READ);
-      DWORD structure;
-      if (key.ReadValueDW(L"PixelStructure", &structure) == ERROR_SUCCESS) {
-        switch (structure) {
-          case 0:
-            return FontRenderParams::SUBPIXEL_RENDERING_NONE;
-          case 1:
-            return FontRenderParams::SUBPIXEL_RENDERING_RGB;
-          case 2:
-            return FontRenderParams::SUBPIXEL_RENDERING_BGR;
-        }
+  DWORD pixel_structure;
+  base::win::RegKey key = FontUtilWin::GetTextSettingsRegistryKey();
+  if (key.Valid() &&
+      key.ReadValueDW(L"PixelStructure", &pixel_structure) == ERROR_SUCCESS) {
+    switch (pixel_structure) {
+      case 0:
         return FontRenderParams::SUBPIXEL_RENDERING_NONE;
-      }
-      break;
+      case 1:
+        return FontRenderParams::SUBPIXEL_RENDERING_RGB;
+      case 2:
+        return FontRenderParams::SUBPIXEL_RENDERING_BGR;
     }
+    // TODO(kschmi): Determine usage of this fallback and remove if it's not
+    // hit.
+    return FontRenderParams::SUBPIXEL_RENDERING_NONE;
   }
 
   UINT structure = 0;
@@ -91,10 +93,30 @@ class CachedFontRenderParams {
         params_->subpixel_rendering = GetSubpixelRenderingGeometry();
       }
     }
-    singleton_hwnd_observer_ =
-        std::make_unique<SingletonHwndObserver>(base::BindRepeating(
+
+    if (base::FeatureList::IsEnabled(
+            features::kUseGammaContrastRegistrySettings)) {
+      params_->text_contrast = FontUtilWin::GetContrastFromRegistry();
+      params_->text_gamma = FontUtilWin::GetGammaFromRegistry();
+    } else {
+      params_->text_contrast = SK_GAMMA_CONTRAST;
+      params_->text_gamma = SK_GAMMA_EXPONENT;
+    }
+
+    skia::LegacyDisplayGlobals::SetCachedParams(
+        FontRenderParams::SubpixelRenderingToSkiaPixelGeometry(
+            params_->subpixel_rendering),
+        params_->text_contrast, params_->text_gamma);
+
+    hwnd_subscription_ =
+        gfx::SingletonHwnd::GetInstance()->RegisterCallback(base::BindRepeating(
             &CachedFontRenderParams::OnWndProc, base::Unretained(this)));
     return *params_;
+  }
+
+  void Reset() {
+    params_.reset();
+    hwnd_subscription_.reset();
   }
 
  private:
@@ -107,13 +129,17 @@ class CachedFontRenderParams {
     if (message == WM_SETTINGCHANGE) {
       // TODO(khushalsagar): This should trigger an update to the
       // renderer and gpu processes, where the params are cached.
+      if (wparam == SPI_GETCLIENTAREAANIMATION &&
+          base::features::IsReducePPMsEnabled()) {
+        Animation::UpdatePrefersReducedMotion();
+      }
       params_.reset();
-      singleton_hwnd_observer_.reset(nullptr);
+      hwnd_subscription_.reset();
     }
   }
 
   std::unique_ptr<FontRenderParams> params_;
-  std::unique_ptr<SingletonHwndObserver> singleton_hwnd_observer_;
+  std::optional<base::CallbackListSubscription> hwnd_subscription_;
 };
 
 }  // namespace
@@ -124,6 +150,10 @@ FontRenderParams GetFontRenderParams(const FontRenderParamsQuery& query,
     NOTIMPLEMENTED();
   // Customized font rendering settings are not supported, only defaults.
   return CachedFontRenderParams::GetInstance()->GetParams();
+}
+
+void ClearFontRenderParamsCacheForTest() {
+  CachedFontRenderParams::GetInstance()->Reset();
 }
 
 float GetFontRenderParamsDeviceScaleFactor() {

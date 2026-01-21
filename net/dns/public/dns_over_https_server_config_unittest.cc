@@ -5,6 +5,7 @@
 #include "net/dns/public/dns_over_https_server_config.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/json/json_reader.h"
 #include "net/base/ip_address.h"
@@ -87,11 +88,13 @@ TEST(DnsOverHttpsServerConfigTest, ToValueSimple) {
       "https://dnsserver.example.net/dns-query{?dns}");
   ASSERT_TRUE(parsed);
 
-  base::Value expected = *base::JSONReader::Read(R"(
+  base::Value expected =
+      *base::JSONReader::Read(R"(
     {
       "template": "https://dnsserver.example.net/dns-query{?dns}"
     }
-  )");
+  )",
+                              base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_EQ(expected.GetDict(), parsed->ToValue());
 }
 
@@ -113,16 +116,19 @@ TEST(DnsOverHttpsServerConfigTest, ToValueWithEndpoints) {
         }, {
           "ips": ["192.0.2.2", "2001:db8::2"]
         }]
-      })");
+      })",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_EQ(expected.GetDict(), parsed->ToValue());
 }
 
 TEST(DnsOverHttpsServerConfigTest, FromValueSimple) {
-  base::Value input = *base::JSONReader::Read(R"(
+  base::Value input =
+      *base::JSONReader::Read(R"(
     {
       "template": "https://dnsserver.example.net/dns-query{?dns}"
     }
-  )");
+  )",
+                              base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   auto parsed =
       DnsOverHttpsServerConfig::FromValue(std::move(input).TakeDict());
@@ -133,7 +139,8 @@ TEST(DnsOverHttpsServerConfigTest, FromValueSimple) {
 }
 
 TEST(DnsOverHttpsServerConfigTest, FromValueWithEndpoints) {
-  base::Value input = *base::JSONReader::Read(R"(
+  base::Value input =
+      *base::JSONReader::Read(R"(
     {
       "template": "https://dnsserver.example.net/dns-query{?dns}",
       "endpoints": [{
@@ -142,7 +149,8 @@ TEST(DnsOverHttpsServerConfigTest, FromValueWithEndpoints) {
         "ips": ["192.0.2.2", "2001:db8::2"]
       }]
     }
-  )");
+  )",
+                              base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   auto parsed =
       DnsOverHttpsServerConfig::FromValue(std::move(input).TakeDict());
@@ -153,12 +161,14 @@ TEST(DnsOverHttpsServerConfigTest, FromValueWithEndpoints) {
 }
 
 TEST(DnsOverHttpsServerConfigTest, FromValueWithUnknownKey) {
-  base::Value input = *base::JSONReader::Read(R"(
+  base::Value input =
+      *base::JSONReader::Read(R"(
     {
       "template": "https://dnsserver.example.net/dns-query{?dns}",
       "unknown key": "value is ignored"
     }
-  )");
+  )",
+                              base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   auto parsed =
       DnsOverHttpsServerConfig::FromValue(std::move(input).TakeDict());
@@ -173,18 +183,20 @@ TEST(DnsOverHttpsServerConfigTest, FromValueInvalid) {
   EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(base::Value::Dict()));
 
   // Wrong scheme
-  base::StringPiece input = R"(
+  std::string_view input = R"(
     {
       "template": "http://dnsserver.example.net/dns-query{?dns}"
     }
   )";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 
   // Wrong template type
   input = R"({"template": 12345})";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 
   // Wrong endpoints type
   input = R"(
@@ -195,8 +207,9 @@ TEST(DnsOverHttpsServerConfigTest, FromValueInvalid) {
       }
     }
   )";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 
   // Wrong "ips" type
   input = R"(
@@ -207,8 +220,9 @@ TEST(DnsOverHttpsServerConfigTest, FromValueInvalid) {
       }]
     }
   )";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 
   // Wrong IP type
   input = R"(
@@ -219,8 +233,9 @@ TEST(DnsOverHttpsServerConfigTest, FromValueInvalid) {
       }]
     }
   )";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 
   // Bad IP address
   input = R"(
@@ -231,8 +246,9 @@ TEST(DnsOverHttpsServerConfigTest, FromValueInvalid) {
       }]
     }
   )";
-  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(
-      std::move(base::JSONReader::Read(input)->GetDict())));
+  EXPECT_FALSE(DnsOverHttpsServerConfig::FromValue(std::move(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          ->GetDict())));
 }
 
 }  // namespace

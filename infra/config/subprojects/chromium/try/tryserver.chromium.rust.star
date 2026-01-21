@@ -3,22 +3,27 @@
 # found in the LICENSE file.
 """Definitions of builders in the tryserver.chromium.rust builder group."""
 
-load("//lib/builders.star", "goma", "os", "reclient")
-load("//lib/try.star", "try_")
-load("//lib/consoles.star", "consoles")
+load("@chromium-luci//builders.star", "os")
+load("@chromium-luci//consoles.star", "consoles")
+load("@chromium-luci//try.star", "try_")
+load("//lib/siso.star", "siso")
+load("//lib/try_constants.star", "try_constants")
 
 try_.defaults.set(
+    executable = try_constants.DEFAULT_EXECUTABLE,
     builder_group = "tryserver.chromium.rust",
-    executable = try_.DEFAULT_EXECUTABLE,
-    builderless = False,
+    pool = try_constants.DEFAULT_POOL,
+    builderless = True,
     cores = 8,
     os = os.LINUX_DEFAULT,
-    pool = try_.DEFAULT_POOL,
-    service_account = try_.DEFAULT_SERVICE_ACCOUNT,
-    execution_timeout = try_.DEFAULT_EXECUTION_TIMEOUT,
-    goma_backend = goma.backend.RBE_PROD,
-    reclient_instance = reclient.instance.DEFAULT_UNTRUSTED,
-    reclient_jobs = reclient.jobs.LOW_JOBS_FOR_CQ,
+    execution_timeout = try_constants.DEFAULT_EXECUTION_TIMEOUT,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
+    service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
+    siso_project = siso.project.DEFAULT_UNTRUSTED,
+    siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
 )
 
 consoles.list_view(
@@ -26,30 +31,53 @@ consoles.list_view(
 )
 
 try_.builder(
-    name = "android-rust-arm-dbg",
-    mirrors = ["ci/android-rust-arm-dbg"],
-    goma_backend = None,
+    name = "android-rust-arm32-rel",
+    mirrors = ["ci/android-rust-arm32-rel"],
+    gn_args = "ci/android-rust-arm32-rel",
 )
 
 try_.builder(
-    name = "android-rust-arm-rel",
-    mirrors = ["ci/android-rust-arm-rel"],
-    goma_backend = None,
+    name = "android-rust-arm64-dbg",
+    mirrors = ["ci/android-rust-arm64-dbg"],
+    gn_args = "ci/android-rust-arm64-dbg",
+)
+
+try_.builder(
+    name = "android-rust-arm64-rel",
+    mirrors = ["ci/android-rust-arm64-rel"],
+    gn_args = "ci/android-rust-arm64-rel",
 )
 
 try_.builder(
     name = "linux-rust-x64-rel",
     mirrors = ["ci/linux-rust-x64-rel"],
-    goma_backend = None,
-)
-
-try_.builder(
-    name = "linux-rust-x64-rel-android-toolchain",
-    mirrors = ["ci/linux-rust-x64-rel"],
+    gn_args = "ci/linux-rust-x64-rel",
 )
 
 try_.builder(
     name = "linux-rust-x64-dbg",
     mirrors = ["ci/linux-rust-x64-dbg"],
-    goma_backend = None,
+    gn_args = "ci/linux-rust-x64-dbg",
+)
+
+try_.builder(
+    name = "win-rust-x64-rel",
+    mirrors = ["ci/win-rust-x64-rel"],
+    gn_args = "ci/win-rust-x64-rel",
+    os = os.WINDOWS_DEFAULT,
+)
+
+try_.builder(
+    name = "win-rust-x64-dbg",
+    mirrors = ["ci/win-rust-x64-dbg"],
+    gn_args = "ci/win-rust-x64-dbg",
+    os = os.WINDOWS_DEFAULT,
+)
+
+try_.builder(
+    name = "mac-rust-x64-dbg",
+    mirrors = ["ci/mac-rust-x64-dbg"],
+    gn_args = "ci/mac-rust-x64-dbg",
+    cores = None,
+    os = os.MAC_DEFAULT,
 )

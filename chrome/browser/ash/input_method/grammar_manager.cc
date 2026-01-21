@@ -14,7 +14,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/input_method/assistive_window_properties.h"
-#include "chrome/browser/ash/input_method/ui/suggestion_details.h"
+#include "chrome/browser/ui/ash/input_method/suggestion_details.h"
 #include "ui/base/ime/ash/ime_bridge.h"
 #include "ui/base/ime/ash/text_input_target.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -45,8 +45,9 @@ void RecordGrammarAction(GrammarActions action) {
 bool IsValidSentence(const std::u16string& text, const Sentence& sentence) {
   uint32_t start = sentence.original_range.start();
   uint32_t end = sentence.original_range.end();
-  if (start >= end || start >= text.size() || end > text.size())
+  if (start >= end || start >= text.size() || end > text.size()) {
     return false;
+  }
 
   return FindCurrentSentence(text, start) == sentence;
 }
@@ -82,8 +83,7 @@ bool GrammarManager::IsOnDeviceGrammarEnabled() {
   return base::FeatureList::IsEnabled(features::kOnDeviceGrammarCheck);
 }
 
-void GrammarManager::OnFocus(int context_id,
-                             ui::SpellcheckMode spellcheck_mode) {
+void GrammarManager::OnFocus(int context_id, SpellcheckMode spellcheck_mode) {
   if (context_id != context_id_) {
     current_text_ = u"";
     last_sentence_ = Sentence();
@@ -97,8 +97,9 @@ void GrammarManager::OnFocus(int context_id,
 }
 
 bool GrammarManager::OnKeyEvent(const ui::KeyEvent& event) {
-  if (!suggestion_shown_ || event.type() != ui::ET_KEY_PRESSED)
+  if (!suggestion_shown_ || event.type() != ui::EventType::kKeyPressed) {
     return false;
+  }
 
   if (event.code() == ui::DomCode::ESCAPE) {
     DismissSuggestion();
@@ -152,12 +153,16 @@ bool GrammarManager::OnKeyEvent(const ui::KeyEvent& event) {
   return false;
 }
 
-bool GrammarManager::HandleSurroundingTextChange(const std::u16string& text,
-                                                 int cursor_pos,
-                                                 int anchor_pos) {
-  if (spellcheck_mode_ == ui::SpellcheckMode::kDisabled)
+bool GrammarManager::HandleSurroundingTextChange(
+    const std::u16string& text,
+    const gfx::Range selection_range) {
+  if (spellcheck_mode_ == SpellcheckMode::kDisabled) {
     return false;
+  }
 
+  // TODO(b/269385926): Investigate if `selection_range.start()` needs to be
+  // inspected as well.
+  const int cursor_pos = selection_range.end();
   bool text_updated = text != current_text_;
   current_text_ = text;
   current_sentence_ = FindCurrentSentence(text, cursor_pos);
@@ -168,10 +173,10 @@ bool GrammarManager::HandleSurroundingTextChange(const std::u16string& text,
   }
 
   if (text_updated) {
-    ui::TextInputTarget* input_context =
-        ui::IMEBridge::Get()->GetInputContextHandler();
-    if (!input_context)
+    TextInputTarget* input_context = IMEBridge::Get()->GetInputContextHandler();
+    if (!input_context) {
       return false;
+    }
 
     // Grammar check is cpu consuming, so we only send request to ml service
     // when the user has finished a sentence or stopped typing for some time.
@@ -193,13 +198,14 @@ bool GrammarManager::HandleSurroundingTextChange(const std::u16string& text,
 
   // Do not show the suggestion when the user is selecting a range of text, so
   // that we will not show conflict with the system copy/paste popup.
-  if (cursor_pos != anchor_pos)
+  if (!selection_range.is_empty()) {
     return false;
+  }
 
-  ui::TextInputTarget* input_context =
-      ui::IMEBridge::Get()->GetInputContextHandler();
-  if (!input_context)
+  TextInputTarget* input_context = IMEBridge::Get()->GetInputContextHandler();
+  if (!input_context) {
     return false;
+  }
 
   // Do not show suggestion when the cursor is within an auto correct range.
   const gfx::Range range = input_context->GetAutocorrectRange();
@@ -209,11 +215,12 @@ bool GrammarManager::HandleSurroundingTextChange(const std::u16string& text,
     return false;
   }
 
-  absl::optional<ui::GrammarFragment> grammar_fragment_opt =
+  std::optional<ui::GrammarFragment> grammar_fragment_opt =
       input_context->GetGrammarFragmentAtCursor();
 
-  if (!grammar_fragment_opt)
+  if (!grammar_fragment_opt) {
     return false;
+  }
 
   if (current_fragment_ != grammar_fragment_opt.value()) {
     current_fragment_ = grammar_fragment_opt.value();
@@ -238,17 +245,18 @@ bool GrammarManager::HandleSurroundingTextChange(const std::u16string& text,
   return true;
 }
 
-void GrammarManager::OnSurroundingTextChanged(const std::u16string& text,
-                                              int cursor_pos,
-                                              int anchor_pos) {
-  if (!HandleSurroundingTextChange(text, cursor_pos, anchor_pos)) {
+void GrammarManager::OnSurroundingTextChanged(
+    const std::u16string& text,
+    const gfx::Range selection_range) {
+  if (!HandleSurroundingTextChange(text, selection_range)) {
     DismissSuggestion();
   }
 }
 
 void GrammarManager::Check(const Sentence& sentence) {
-  if (!IsValidSentence(current_text_, sentence))
+  if (!IsValidSentence(current_text_, sentence)) {
     return;
+  }
 
   grammar_client_->RequestTextCheck(
       profile_, sentence.text,
@@ -260,8 +268,10 @@ void GrammarManager::OnGrammarCheckDone(
     const Sentence& sentence,
     bool success,
     const std::vector<ui::GrammarFragment>& results) {
-  if (!success || !IsValidSentence(current_text_, sentence) || results.empty())
+  if (!success || !IsValidSentence(current_text_, sentence) ||
+      results.empty()) {
     return;
+  }
 
   std::vector<ui::GrammarFragment> corrected_results;
   auto it = ignored_marker_hashes_.find(sentence.text);
@@ -275,10 +285,10 @@ void GrammarManager::OnGrammarCheckDone(
     }
   }
 
-  ui::TextInputTarget* input_context =
-      ui::IMEBridge::Get()->GetInputContextHandler();
-  if (!input_context)
+  TextInputTarget* input_context = IMEBridge::Get()->GetInputContextHandler();
+  if (!input_context) {
     return;
+  }
 
   if (input_context->AddGrammarFragments(corrected_results)) {
     for (const ui::GrammarFragment& fragment : corrected_results) {
@@ -295,8 +305,9 @@ void GrammarManager::OnGrammarCheckDone(
 }
 
 void GrammarManager::DismissSuggestion() {
-  if (!suggestion_shown_)
+  if (!suggestion_shown_) {
     return;
+  }
 
   std::string error;
   suggestion_handler_->DismissSuggestion(context_id_, &error);
@@ -308,13 +319,13 @@ void GrammarManager::DismissSuggestion() {
 }
 
 void GrammarManager::AcceptSuggestion() {
-  if (!suggestion_shown_)
+  if (!suggestion_shown_) {
     return;
+  }
 
   DismissSuggestion();
 
-  ui::TextInputTarget* input_context =
-      ui::IMEBridge::Get()->GetInputContextHandler();
+  TextInputTarget* input_context = IMEBridge::Get()->GetInputContextHandler();
   if (!input_context) {
     LOG(ERROR) << "Failed to commit grammar suggestion.";
   }
@@ -331,15 +342,19 @@ void GrammarManager::AcceptSuggestion() {
     // TextInputClient.
     // TODO(crbug/1194424): Work around the issue or fix
     // GetSurroundingTextInfo().
-    const ui::SurroundingTextInfo surrounding_text =
+    const SurroundingTextInfo surrounding_text =
         input_context->GetSurroundingTextInfo();
+    // Convert selection_range from surrounding_text relative to absolute.
+    const gfx::Range selection_range(
+        surrounding_text.selection_range.start() + surrounding_text.offset,
+        surrounding_text.selection_range.end() + surrounding_text.offset);
 
     // Delete the incorrect grammar fragment.
-    DCHECK(current_fragment_.range.Contains(surrounding_text.selection_range));
-    const uint32_t before = surrounding_text.selection_range.start() -
-                            current_fragment_.range.start();
+    DCHECK(current_fragment_.range.Contains(selection_range));
+    const uint32_t before =
+        selection_range.start() - current_fragment_.range.start();
     const uint32_t after =
-        current_fragment_.range.end() - surrounding_text.selection_range.end();
+        current_fragment_.range.end() - selection_range.end();
     input_context->DeleteSurroundingText(before, after);
     // Insert the suggestion and put cursor after it.
     input_context->CommitText(
@@ -352,15 +367,16 @@ void GrammarManager::AcceptSuggestion() {
 }
 
 void GrammarManager::IgnoreSuggestion() {
-  if (!suggestion_shown_)
+  if (!suggestion_shown_) {
     return;
+  }
 
   DismissSuggestion();
 
-  ui::TextInputTarget* input_context =
-      ui::IMEBridge::Get()->GetInputContextHandler();
-  if (!input_context)
+  TextInputTarget* input_context = IMEBridge::Get()->GetInputContextHandler();
+  if (!input_context) {
     return;
+  }
 
   input_context->ClearGrammarFragments(current_fragment_.range);
   if (ignored_marker_hashes_.find(current_sentence_.text) ==

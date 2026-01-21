@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "components/update_client/protocol_parser.h"
+#include "chrome/updater/win/protocol_parser_xml.h"
 
 namespace base {
 class FilePath;
@@ -17,9 +17,21 @@ namespace updater {
 
 // Parses the offline manifest file and extracts the app install command line.
 //
-// The function looks for the manifest file "OfflineManifest.gup" in
-// `offline_dir`, and falls back to "<app_id>.gup" in the same directory if
+// The function looks for the manifest file "OfflineManifest.gup" inside the
+// offline directory, and falls back to "<app_id>.gup" in the same directory if
 // needed.
+//
+// `offline_dir_guid`: the offline directory is specified on the command line as
+// a relative path in the format "/offlinedir {GUID}", where `{GUID}` is the
+// `offline_dir_guid` parameter.
+// * The actual offline directory is at `{CURRENT_PROCESS_DIR}\Offline\{GUID}`.
+// * The offline manifest is at
+// `{CURRENT_PROCESS_DIR}\Offline\{GUID}\OfflineManifest.gup`.
+// * The installer is at
+// `{CURRENT_PROCESS_DIR}\Offline\{GUID}\{app_id}\installer.exe`.
+//   * `installer.exe` may not correspond exactly to the value of the manifest's
+//   `run` attribute, so the code picks the first file it finds in the
+//   directory if that is the case.
 //
 // The manifest file contains the update check response in XML format.
 // See https://github.com/google/omaha/blob/master/doc/ServerProtocol.md for
@@ -27,7 +39,8 @@ namespace updater {
 //
 // The function extracts the values from the manifest using a best-effort
 // approach. If matching values are found, then:
-//   `results`: contains the protocol parser results.
+//   `requirements`: contains the system requirements for the app.
+//   `installer_version`: contains the version of the app installer.
 //   `installer_path`: contains the full path to the app installer.
 //   `install_args`: the command line arguments for the app installer.
 //   `install_data`: the text value for the key `install_data_index` if such
@@ -35,10 +48,11 @@ namespace updater {
 //                   installation, the text will be serialized to a file and
 //                   passed to the app installer.
 void ReadInstallCommandFromManifest(
-    const base::FilePath& offline_dir,
+    const std::wstring& offline_dir_guid,
     const std::string& app_id,
     const std::string& install_data_index,
-    update_client::ProtocolParser::Results& results,
+    OfflineManifestSystemRequirements& requirements,
+    std::string& installer_version,
     base::FilePath& installer_path,
     std::string& install_args,
     std::string& install_data);
@@ -97,8 +111,8 @@ bool IsArchitectureCompatible(const std::string& arch_list,
 bool IsOSVersionCompatible(const std::string& min_os_version);
 
 // Returns `true` if the platform, architecture, and OS within the parser
-// `results` are all compatible with the current OS.
-bool IsOsSupported(const update_client::ProtocolParser::Results& results);
+// `requirements` are all compatible with the current OS.
+bool IsOsSupported(const OfflineManifestSystemRequirements& requirements);
 
 }  // namespace updater
 

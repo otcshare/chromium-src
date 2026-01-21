@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BrowserServiceImpl, ensureLazyLoaded, HistoryAppElement, HistoryEntry, HistoryListElement, HistoryToolbarElement} from 'chrome://history/history.js';
+import type {HistoryAppElement, HistoryEntry, HistoryListElement, HistoryToolbarElement} from 'chrome://history/history.js';
+import {BrowserServiceImpl} from 'chrome://history/history.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
-import {eventToPromise} from 'chrome://webui-test/test_util.js';
+import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestBrowserService} from './test_browser_service.js';
 import {createHistoryEntry, createHistoryInfo} from './test_util.js';
@@ -23,24 +23,24 @@ suite('history-list supervised-user', function() {
     testService = new TestBrowserService();
     BrowserServiceImpl.setInstance(testService);
 
-    testService.setQueryResult({
-      info: createHistoryInfo(),
-      value: TEST_HISTORY_RESULTS,
-    });
+    testService.handler.setResultFor('queryHistory', Promise.resolve({
+      results: {
+        info: createHistoryInfo(),
+        value: TEST_HISTORY_RESULTS,
+      },
+    }));
+
     app = document.createElement('history-app');
     document.body.appendChild(app);
 
     historyList = app.$.history;
     toolbar = app.$.toolbar;
-    return Promise.all([
-      testService.whenCalled('queryHistory'),
-      ensureLazyLoaded(),
-    ]);
+    return testService.handler.whenCalled('queryHistory');
   });
 
   test('checkboxes disabled for supervised user', function() {
-    return flushTasks().then(function() {
-      const items = historyList.shadowRoot!.querySelectorAll('history-item');
+    return microtasksFinished().then(function() {
+      const items = historyList.shadowRoot.querySelectorAll('history-item');
 
       items[0]!.$.checkbox.click();
 
@@ -49,13 +49,13 @@ suite('history-list supervised-user', function() {
   });
 
   test('deletion disabled for supervised user', function() {
-    return flushTasks()
+    return microtasksFinished()
         .then(function() {
           const whenChecked =
               eventToPromise('history-checkbox-select', historyList);
           // Manually dispatch the event since the checkboxes are disabled due
           // to the test configuration.
-          historyList.shadowRoot!.querySelector('history-item')!.dispatchEvent(
+          historyList.shadowRoot.querySelector('history-item')!.dispatchEvent(
               new CustomEvent('history-checkbox-select', {
                 bubbles: true,
                 composed: true,
@@ -66,14 +66,14 @@ suite('history-list supervised-user', function() {
         .then(() => {
           toolbar.deleteSelectedItems();
           // Make sure that removeVisits is not being called.
-          assertEquals(0, testService.getCallCount('removeVisits'));
+          assertEquals(0, testService.handler.getCallCount('removeVisits'));
         });
   });
 
   test('remove history menu button disabled', function() {
     historyList.$.sharedMenu.get();
     assertTrue(
-        historyList.shadowRoot!.querySelector<HTMLElement>(
-                                   '#menuRemoveButton')!.hidden);
+        historyList.shadowRoot.querySelector<HTMLElement>(
+                                  '#menuRemoveButton')!.hidden);
   });
 });

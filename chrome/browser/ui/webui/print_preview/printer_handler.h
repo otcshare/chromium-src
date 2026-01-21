@@ -8,12 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/buildflags.h"
 
 namespace content {
@@ -53,7 +52,7 @@ class PrinterHandler {
   using GetEulaUrlCallback =
       base::OnceCallback<void(const std::string& license)>;
   using PrinterStatusRequestCallback = base::OnceCallback<void(
-      absl::optional<base::Value::Dict> cups_printer_status)>;
+      std::optional<base::Value::Dict> cups_printer_status)>;
 #endif
 
   // Creates an instance of a PrinterHandler for extension printers.

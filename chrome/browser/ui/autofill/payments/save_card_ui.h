@@ -8,39 +8,33 @@
 namespace autofill {
 
 // The type of save card bubble to show.
-enum class BubbleType {
+enum class PaymentsBubbleType {
   // Save prompt when the user is saving locally.
-  LOCAL_SAVE,
+  kLocalSave,
 
-  // Save prompt when uploading a card to Google payments.
-  UPLOAD_SAVE,
+  // Save prompt for saving CVC locally to an existing local card.
+  kLocalCvcSave,
 
-  // Credit card upload is in progress. No bubble visible but show the credit
-  // card icon with the loading indicator animation.
-  UPLOAD_IN_PROGRESS,
+  // Save prompt when uploading a card to Google Payments.
+  kUploadSave,
+
+  // Save prompt for uploading CVC to the Sync server for an existing server
+  // card.
+  kUploadCvcSave,
+
+  // Credit card upload is in progress.
+  kUploadInProgress,
+
+  // Credit card upload is completed.
+  kUploadComplete,
 
   // The manage cards bubble when bubble is reshown after
   // icon is clicked.
-  MANAGE_CARDS,
-
-  // The failure bubble when credit card uploading failed.
-  FAILURE,
+  kManageCards,
 
   // There is no bubble to show anymore. This also
   // indicates that the icon should not be visible.
-  INACTIVE
-};
-
-// The type of experiment running for the save card ui.
-enum SaveCardUiExperiment {
-  // Show the text for default/current image.
-  DEFAULT = 0,
-
-  // Show the text for faster and protected image.
-  FASTER_AND_PROTECTED = 1,
-
-  // Show the text for encrypted and secure image.
-  ENCRYPTED_AND_SECURE = 2
+  kInactive
 };
 
 }  // namespace autofill

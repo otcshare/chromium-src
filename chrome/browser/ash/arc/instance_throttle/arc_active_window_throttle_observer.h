@@ -5,9 +5,14 @@
 #ifndef CHROME_BROWSER_ASH_ARC_INSTANCE_THROTTLE_ARC_ACTIVE_WINDOW_THROTTLE_OBSERVER_H_
 #define CHROME_BROWSER_ASH_ARC_INSTANCE_THROTTLE_ARC_ACTIVE_WINDOW_THROTTLE_OBSERVER_H_
 
-#include "chrome/browser/ash/window_throttle_observer_base.h"
+#include "chromeos/ash/components/throttle/window_throttle_observer_base.h"
 
 namespace arc {
+
+namespace {
+inline constexpr char kArcActiveWindowThrottleObserverName[] =
+    "ArcWindowIsActiveWindow";
+}  // namespace
 
 // This class observes window activations and sets the state to active if the
 // currently active window is an ARC window.

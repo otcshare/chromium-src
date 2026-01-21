@@ -5,17 +5,18 @@
 #ifndef BASE_FUCHSIA_SCOPED_FX_LOGGER_H_
 #define BASE_FUCHSIA_SCOPED_FX_LOGGER_H_
 
-#include <fuchsia/logger/cpp/fidl.h>
+#include <fidl/fuchsia.logger/cpp/fidl.h>
 #include <lib/syslog/structured_backend/cpp/fuchsia_syslog.h>
+#include <lib/syslog/structured_backend/cpp/logger.h>
 #include <lib/zx/socket.h>
-
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base_export.h"
-#include "base/strings/string_piece_forward.h"
+#include "base/logging.h"
 
 namespace base {
 
@@ -32,29 +33,29 @@ class BASE_EXPORT ScopedFxLogger {
   // Returns an instance connected to the process' incoming LogSink service.
   // The returned instance has a single tag attributing the calling process in
   // some way (e.g. by Component or process name).
-  // Additional tags may optionally be specified via |tags|.
+  // Additional tags may optionally be specified via `tags`.
   static ScopedFxLogger CreateForProcess(
-      std::vector<base::StringPiece> tags = {});
+      std::vector<std::string_view> tags = {});
 
   // Returns an instance connected to the specified LogSink.
   static ScopedFxLogger CreateFromLogSink(
-      fuchsia::logger::LogSinkHandle,
-      std::vector<base::StringPiece> tags = {});
+      fidl::ClientEnd<fuchsia_logger::LogSink> client_end,
+      std::vector<std::string_view> tags = {});
 
-  void LogMessage(base::StringPiece file,
+  // Logs a message to the Fuchsia logger at the specified severity. This will
+  // *not* filter the message based on Fuchsia'a configured minimum severity
+  // level; the caller should take steps to filter messages accordingly.
+  void LogMessage(std::string_view file,
                   uint32_t line_number,
-                  base::StringPiece msg,
-                  FuchsiaLogSeverity severity);
+                  std::string_view msg,
+                  logging::LogSeverity severity);
 
-  bool is_valid() const { return socket_.is_valid(); }
+  bool is_valid() const { return logger_.IsValid(); }
 
  private:
-  ScopedFxLogger(std::vector<base::StringPiece> tags, zx::socket socket);
+  ScopedFxLogger(fuchsia_logging::Logger logger) : logger_(std::move(logger)) {}
 
-  // For thread-safety these members should be treated as read-only.
-  // They are non-const only to allow move-assignment of ScopedFxLogger.
-  std::vector<std::string> tags_;
-  zx::socket socket_;
+  fuchsia_logging::Logger logger_;
 };
 
 }  // namespace base

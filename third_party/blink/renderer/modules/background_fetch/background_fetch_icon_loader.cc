@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/modules/background_fetch/background_fetch_bridge.h"
 #include "third_party/blink/renderer/modules/manifest/image_resource_type_converters.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
@@ -40,7 +41,7 @@ void BackgroundFetchIconLoader::Start(
   DCHECK(bridge);
 
   icons_ = std::move(icons);
-  bridge->GetIconDisplaySize(WTF::BindOnce(
+  bridge->GetIconDisplaySize(blink::BindOnce(
       &BackgroundFetchIconLoader::DidGetIconDisplaySizeIfSoLoadIcon,
       WrapWeakPersistent(this), WrapWeakPersistent(execution_context),
       std::move(icon_callback)));
@@ -83,16 +84,19 @@ void BackgroundFetchIconLoader::DidGetIconDisplaySizeIfSoLoadIcon(
   resource_request.SetSkipServiceWorker(true);
   resource_request.SetTimeoutInterval(kIconFetchTimeout);
 
-  threaded_icon_loader_->Start(
-      execution_context, resource_request, icon_display_size_pixels,
-      WTF::BindOnce(&BackgroundFetchIconLoader::DidGetIcon,
-                    WrapWeakPersistent(this)));
+  FetchUtils::LogFetchKeepAliveRequestMetric(
+      resource_request.GetRequestContext(),
+      FetchUtils::FetchKeepAliveRequestState::kTotal);
+  threaded_icon_loader_->Start(execution_context, resource_request,
+                               icon_display_size_pixels,
+                               BindOnce(&BackgroundFetchIconLoader::DidGetIcon,
+                                        WrapWeakPersistent(this)));
 }
 
 KURL BackgroundFetchIconLoader::PickBestIconForDisplay(
     ExecutionContext* execution_context,
     int ideal_size_pixels) {
-  WebVector<Manifest::ImageResource> icons;
+  std::vector<Manifest::ImageResource> icons;
   for (auto& icon : icons_) {
     // Update the src of |icon| to include the base URL in case relative paths
     // were used.
@@ -110,7 +114,7 @@ KURL BackgroundFetchIconLoader::PickBestIconForDisplay(
   }
 
   return KURL(ManifestIconSelector::FindBestMatchingSquareIcon(
-      icons.ReleaseVector(), ideal_size_pixels, kMinimumIconSizeInPx,
+      std::move(icons), ideal_size_pixels, kMinimumIconSizeInPx,
       mojom::ManifestImageResource_Purpose::ANY));
 }
 

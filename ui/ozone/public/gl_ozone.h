@@ -9,8 +9,10 @@
 
 #include "base/component_export.h"
 #include "base/memory/scoped_refptr.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_pixmap.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gl/gl_display.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gpu_preference.h"
@@ -24,6 +26,10 @@ class Presenter;
 
 struct GLContextAttribs;
 struct GLVersionInfo;
+}
+
+namespace gfx {
+class ColorSpace;
 }
 
 namespace ui {
@@ -41,7 +47,9 @@ class COMPONENT_EXPORT(OZONE_BASE) GLOzone {
 
   // Performs any one off initialization for GL implementation.
   virtual gl::GLDisplay* InitializeGLOneOffPlatform(
-      uint64_t system_device_id) = 0;
+      bool supports_angle,
+      std::vector<gl::DisplayType> init_displays,
+      gl::GpuPreference gpu_preference) = 0;
 
   // Disables the specified extensions in the window system bindings,
   // e.g., GLX, EGL, etc. This is part of the GPU driver bug workarounds
@@ -58,9 +66,9 @@ class COMPONENT_EXPORT(OZONE_BASE) GLOzone {
   // Clears static GL bindings.
   virtual void ShutdownGL(gl::GLDisplay* display) = 0;
 
-  // Returns true if the NativePixmap of the specified type can be imported
-  // into GL using ImportNativePixmap().
-  virtual bool CanImportNativePixmap() = 0;
+  // Returns true if the NativePixmap of the specified type and format can be
+  // imported into GL using ImportNativePixmap().
+  virtual bool CanImportNativePixmap(viz::SharedImageFormat format) = 0;
 
   // Imports NativePixmap into GL and binds it to the provided texture_id. The
   // NativePixmapGLBinding does not take ownership of the provided texture_id
@@ -69,7 +77,7 @@ class COMPONENT_EXPORT(OZONE_BASE) GLOzone {
   // live until glDeleteTextures fn is called on all platforms.
   virtual std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
-      gfx::BufferFormat plane_format,
+      viz::SharedImageFormat plane_format,
       gfx::BufferPlane plane,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,

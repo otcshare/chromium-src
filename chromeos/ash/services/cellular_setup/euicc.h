@@ -5,7 +5,7 @@
 #ifndef CHROMEOS_ASH_SERVICES_CELLULAR_SETUP_EUICC_H_
 #define CHROMEOS_ASH_SERVICES_CELLULAR_SETUP_EUICC_H_
 
-#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_euicc_client.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_profile_client.h"
 #include "chromeos/ash/components/network/cellular_inhibitor.h"
@@ -40,9 +40,12 @@ class Euicc : public mojom::Euicc {
   void InstallProfileFromActivationCode(
       const std::string& activation_code,
       const std::string& confirmation_code,
-      bool is_install_via_qr_code,
+      mojom::ProfileInstallMethod install_method,
       InstallProfileFromActivationCodeCallback callback) override;
-  void RequestPendingProfiles(RequestPendingProfilesCallback callback) override;
+  void RequestAvailableProfiles(
+      RequestAvailableProfilesCallback callback) override;
+  void RefreshInstalledProfiles(
+      RefreshInstalledProfilesCallback callback) override;
   void GetEidQRCode(GetEidQRCodeCallback callback) override;
 
   // Updates list of eSIM profiles for this euicc from with the given
@@ -63,8 +66,6 @@ class Euicc : public mojom::Euicc {
   const mojom::EuiccPropertiesPtr& properties() { return properties_; }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(EuiccTest, RequestPendingProfiles);
-
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
   enum class RequestPendingProfilesResult {
@@ -79,18 +80,12 @@ class Euicc : public mojom::Euicc {
   void OnESimInstallProfileResult(
       InstallProfileFromActivationCodeCallback callback,
       HermesResponseStatus hermes_status,
-      absl::optional<dbus::ObjectPath> profile_path,
-      absl::optional<std::string> service_path);
-  void PerformRequestPendingProfiles(
-      RequestPendingProfilesCallback callback,
-      std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock);
-  void OnRequestPendingProfilesResult(
-      RequestPendingProfilesCallback callback,
-      std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock,
-      HermesResponseStatus status);
-  mojom::ProfileInstallResult GetPendingProfileInfoFromActivationCode(
-      const std::string& activation_code,
-      ESimProfile** profile_info);
+      std::optional<dbus::ObjectPath> profile_path,
+      std::optional<std::string> service_path);
+  void OnRequestAvailableProfiles(
+      RequestAvailableProfilesCallback callback,
+      mojom::ESimOperationResult result,
+      std::vector<CellularESimProfile> profile_list);
   // Updates an ESimProfile in |esim_profiles_| with values from given
   // |esim_profile_state| or creates new one if it doesn't exist. Returns
   // pointer to ESimProfile object if one was created.
@@ -102,7 +97,7 @@ class Euicc : public mojom::Euicc {
       const std::vector<CellularESimProfile>& esim_profile_states);
 
   // Reference to ESimManager that owns this Euicc.
-  ESimManager* esim_manager_;
+  raw_ptr<ESimManager> esim_manager_;
   mojo::ReceiverSet<mojom::Euicc> receiver_set_;
   mojom::EuiccPropertiesPtr properties_;
   dbus::ObjectPath path_;

@@ -4,11 +4,18 @@
 
 #include "components/permissions/contexts/nfc_permission_context_android.h"
 
+#include <variant>
+
 #include "base/android/jni_android.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/permissions/android/nfc/nfc_system_level_setting_impl.h"
+#include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_id.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_request_description.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 
 namespace permissions {
 
@@ -22,29 +29,24 @@ NfcPermissionContextAndroid::NfcPermissionContextAndroid(
 NfcPermissionContextAndroid::~NfcPermissionContextAndroid() = default;
 
 void NfcPermissionContextAndroid::NotifyPermissionSet(
-    const PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
+    const PermissionRequestData& request_data,
     BrowserPermissionCallback callback,
     bool persist,
-    ContentSetting content_setting,
-    bool is_one_time,
-    bool is_final_decision) {
-  DCHECK(!is_one_time);
-  DCHECK(is_final_decision);
+    const permissions::PermissionPromptDecision& decision) {
+  DCHECK(decision.is_final);
 
-  if (content_setting != CONTENT_SETTING_ALLOW ||
+  if (decision.overall_decision != PermissionDecision::kAllow ||
       !nfc_system_level_setting_->IsNfcAccessPossible() ||
       nfc_system_level_setting_->IsNfcSystemLevelSettingEnabled()) {
-    NfcPermissionContext::NotifyPermissionSet(
-        id, requesting_origin, embedding_origin, std::move(callback), persist,
-        content_setting, is_one_time, is_final_decision);
+    NfcPermissionContext::NotifyPermissionSet(request_data, std::move(callback),
+                                              persist, decision);
     return;
   }
 
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(
-          content::RenderFrameHost::FromID(id.global_render_frame_host_id()));
+          content::RenderFrameHost::FromID(
+              request_data.id.global_render_frame_host_id()));
 
   // Ignore when the associated RenderFrameHost has already been destroyed.
   if (!web_contents)
@@ -54,10 +56,11 @@ void NfcPermissionContextAndroid::NotifyPermissionSet(
   // is user-interactable (i.e. is the current tab, and Chrome is active and not
   // in tab-switching mode).
   if (!delegate_->IsInteractable(web_contents)) {
-    PermissionContextBase::NotifyPermissionSet(
-        id, requesting_origin, embedding_origin, std::move(callback),
-        false /* persist */, CONTENT_SETTING_BLOCK, /*is_one_time=*/false,
-        is_final_decision);
+    ContentSettingPermissionContextBase::NotifyPermissionSet(
+        request_data, std::move(callback), false /* persist */,
+        permissions::PermissionPromptDecision{PermissionDecision::kDeny,
+                                              decision.prompt_options,
+                                              decision.is_final});
     return;
   }
 
@@ -65,8 +68,9 @@ void NfcPermissionContextAndroid::NotifyPermissionSet(
       web_contents,
       base::BindOnce(
           &NfcPermissionContextAndroid::OnNfcSystemLevelSettingPromptClosed,
-          weak_factory_.GetWeakPtr(), id, requesting_origin, embedding_origin,
-          std::move(callback), persist, content_setting));
+          weak_factory_.GetWeakPtr(), request_data.id,
+          request_data.requesting_origin, request_data.embedding_origin,
+          std::move(callback), persist, decision.overall_decision));
 }
 
 void NfcPermissionContextAndroid::OnNfcSystemLevelSettingPromptClosed(
@@ -75,10 +79,18 @@ void NfcPermissionContextAndroid::OnNfcSystemLevelSettingPromptClosed(
     const GURL& embedding_origin,
     BrowserPermissionCallback callback,
     bool persist,
-    ContentSetting content_setting) {
+    PermissionDecision decision) {
   NfcPermissionContext::NotifyPermissionSet(
-      id, requesting_origin, embedding_origin, std::move(callback), persist,
-      content_setting, /*is_one_time=*/false, /*is_final_decision=*/true);
+      PermissionRequestData(this, id,
+                            content::PermissionRequestDescription(
+                                content::PermissionDescriptorUtil::
+                                    CreatePermissionDescriptorForPermissionType(
+                                        blink::PermissionType::NFC)),
+                            requesting_origin, embedding_origin),
+      std::move(callback), persist,
+      PermissionPromptDecision{.overall_decision = decision,
+                               .prompt_options = std::monostate(),
+                               .is_final = true});
 }
 
 }  // namespace permissions

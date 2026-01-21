@@ -6,72 +6,62 @@
 #include <utility>
 
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
 #include "chrome/common/extensions/api/file_browser_handlers/file_browser_handler.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace errors = extensions::manifest_errors;
 
-using extensions::DictionaryBuilder;
-using extensions::Extension;
-using extensions::ExtensionBuilder;
-using extensions::ListBuilder;
-
+namespace extensions {
 namespace {
 
-class FileBrowserHandlerManifestTest : public ChromeManifestTest {
-};
+using FileBrowserHandlerManifestTest = ChromeManifestTest;
 
 TEST_F(FileBrowserHandlerManifestTest, PermissionAllowed) {
-  RunTestcase(Testcase("filebrowser_valid.json"), EXPECT_TYPE_SUCCESS);
+  RunTestcase(Testcase("filebrowser_valid.json"), ExpectType::kSuccess);
 }
 
 TEST_F(FileBrowserHandlerManifestTest, GetHandlersRequiresPermission) {
-  extensions::DictionaryBuilder bad_manifest_builder;
-  bad_manifest_builder.Set("name", "Foo")
-      .Set("version", "1.0.0")
-      .Set("manifest_version", 2)
-      .Set("file_browser_handlers",
-           extensions::ListBuilder()
-               .Append(extensions::DictionaryBuilder()
-                           .Set("id", "open")
-                           .Set("default_title", "open")
-                           .Set("file_filters", extensions::ListBuilder()
-                                                    .Append("filesystem:*.txt")
-                                                    .Append("filesystem:*.html")
-                                                    .BuildList())
-                           .BuildDict())
-               .BuildList());
-  base::Value::Dict bad_manifest_value(bad_manifest_builder.BuildDict());
-
+  auto bad_manifest =
+      base::Value::Dict()
+          .Set("name", "Foo")
+          .Set("version", "1.0.0")
+          .Set("manifest_version", 2)
+          .Set("file_browser_handlers",
+               base::Value::List().Append(
+                   base::Value::Dict()
+                       .Set("id", "open")
+                       .Set("default_title", "open")
+                       .Set("file_filters", base::Value::List()
+                                                .Append("filesystem:*.txt")
+                                                .Append("filesystem:*.html"))));
   // Create a good manifest by extending the bad one with the missing
   // permission.
-  extensions::DictionaryBuilder good_manifest_builder(bad_manifest_value);
-  good_manifest_builder.Set(
-      "permissions",
-      extensions::ListBuilder().Append("fileBrowserHandler").Build());
+  auto good_manifest = bad_manifest.Clone();
+  good_manifest.Set("permissions",
+                    base::Value::List().Append("fileBrowserHandler"));
 
-  extensions::ExtensionBuilder bad_app_builder;
-  bad_app_builder.SetManifest(std::move(bad_manifest_value));
-  scoped_refptr<const extensions::Extension> bad_app(bad_app_builder.Build());
+  ExtensionBuilder bad_app_builder;
+  bad_app_builder.SetManifest(std::move(bad_manifest));
+  scoped_refptr<const Extension> bad_app = bad_app_builder.Build();
   EXPECT_FALSE(FileBrowserHandler::GetHandlers(bad_app.get()));
 
-  extensions::ExtensionBuilder good_app_builder;
-  good_app_builder.SetManifest(good_manifest_builder.Build());
-  scoped_refptr<const extensions::Extension> good_app(good_app_builder.Build());
+  ExtensionBuilder good_app_builder;
+  good_app_builder.SetManifest(std::move(good_manifest));
+  scoped_refptr<const Extension> good_app = good_app_builder.Build();
   EXPECT_TRUE(FileBrowserHandler::GetHandlers(good_app.get()));
 }
 
 TEST_F(FileBrowserHandlerManifestTest, InvalidFileBrowserHandlers) {
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("filebrowser_invalid_access_permission.json",
-               extensions::ErrorUtils::FormatErrorMessage(
-                   errors::kInvalidFileAccessValue, base::NumberToString(1))),
+               ErrorUtils::FormatErrorMessage(errors::kInvalidFileAccessValue,
+                                              base::NumberToString(1))),
       Testcase("filebrowser_invalid_access_permission_list.json",
                errors::kInvalidFileAccessList),
       Testcase("filebrowser_invalid_empty_access_permission_list.json",
@@ -89,41 +79,35 @@ TEST_F(FileBrowserHandlerManifestTest, InvalidFileBrowserHandlers) {
       Testcase("filebrowser_invalid_file_filters_1.json",
                errors::kInvalidFileFiltersList),
       Testcase("filebrowser_invalid_file_filters_2.json",
-               extensions::ErrorUtils::FormatErrorMessage(
-                   errors::kInvalidFileFilterValue, base::NumberToString(0))),
+               ErrorUtils::FormatErrorMessage(errors::kInvalidFileFilterValue,
+                                              base::NumberToString(0))),
       Testcase("filebrowser_invalid_file_filters_url.json",
-               extensions::ErrorUtils::FormatErrorMessage(
-                   errors::kInvalidURLPatternError, "http:*.html"))};
-  RunTestcases(testcases, std::size(testcases), EXPECT_TYPE_ERROR);
+               ErrorUtils::FormatErrorMessage(errors::kInvalidURLPatternError,
+                                              "http:*.html"))};
+  RunTestcases(testcases, ExpectType::kError);
   RunTestcase(Testcase("filebrowser_missing_permission.json",
                        errors::kInvalidFileBrowserHandlerMissingPermission),
-              EXPECT_TYPE_WARNING);
+              ExpectType::kWarning);
 }
 
 TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandler) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetManifest(
-              DictionaryBuilder()
+              base::Value::Dict()
                   .Set("name", "file browser handler test")
                   .Set("version", "1.0.0")
                   .Set("manifest_version", 2)
-                  .Set("permissions", extensions::ListBuilder()
-                                          .Append("fileBrowserHandler")
-                                          .BuildList())
+                  .Set("permissions",
+                       base::Value::List().Append("fileBrowserHandler"))
                   .Set("file_browser_handlers",
-                       ListBuilder()
-                           .Append(DictionaryBuilder()
-                                       .Set("id", "ExtremelyCoolAction")
-                                       .Set("default_title", "Be Amazed")
-                                       .Set("default_icon", "icon.png")
-                                       .Set("file_filters",
-                                            ListBuilder()
-                                                .Append("filesystem:*.txt")
-                                                .BuildList())
-                                       .BuildDict())
-                           .BuildList())
-                  .BuildDict())
+                       base::Value::List().Append(
+                           base::Value::Dict()
+                               .Set("id", "ExtremelyCoolAction")
+                               .Set("default_title", "Be Amazed")
+                               .Set("default_icon", "icon.png")
+                               .Set("file_filters", base::Value::List().Append(
+                                                        "filesystem:*.txt")))))
           .Build();
 
   ASSERT_TRUE(extension.get());
@@ -136,7 +120,7 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandler) {
   EXPECT_EQ("ExtremelyCoolAction", action->id());
   EXPECT_EQ("Be Amazed", action->title());
   EXPECT_EQ("icon.png", action->icon_path());
-  const extensions::URLPatternSet& patterns = action->file_url_patterns();
+  const URLPatternSet& patterns = action->file_url_patterns();
   ASSERT_EQ(1U, patterns.patterns().size());
   EXPECT_TRUE(action->MatchesURL(
       GURL("filesystem:chrome-extension://foo/local/test.txt")));
@@ -155,26 +139,20 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandlerMIMETypes) {
       ExtensionBuilder()
           .SetID(extension_misc::kQuickOfficeExtensionId)
           .SetManifest(
-              DictionaryBuilder()
+              base::Value::Dict()
                   .Set("name", "file browser handler test")
                   .Set("version", "1.0.0")
                   .Set("manifest_version", 2)
-                  .Set("permissions", extensions::ListBuilder()
-                                          .Append("fileBrowserHandler")
-                                          .BuildList())
+                  .Set("permissions",
+                       base::Value::List().Append("fileBrowserHandler"))
                   .Set("file_browser_handlers",
-                       ListBuilder()
-                           .Append(DictionaryBuilder()
-                                       .Set("id", "ID")
-                                       .Set("default_title", "Default title")
-                                       .Set("default_icon", "icon.png")
-                                       .Set("file_filters",
-                                            ListBuilder()
-                                                .Append("filesystem:*.txt")
-                                                .BuildList())
-                                       .BuildDict())
-                           .BuildList())
-                  .BuildDict())
+                       base::Value::List().Append(
+                           base::Value::Dict()
+                               .Set("id", "ID")
+                               .Set("default_title", "Default title")
+                               .Set("default_icon", "icon.png")
+                               .Set("file_filters", base::Value::List().Append(
+                                                        "filesystem:*.txt")))))
           .Build();
 
   ASSERT_TRUE(extension.get());
@@ -184,7 +162,7 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandlerMIMETypes) {
   ASSERT_EQ(1U, handlers->size());
   const FileBrowserHandler* action = handlers->at(0).get();
 
-  const extensions::URLPatternSet& patterns = action->file_url_patterns();
+  const URLPatternSet& patterns = action->file_url_patterns();
   ASSERT_EQ(1U, patterns.patterns().size());
   EXPECT_TRUE(action->MatchesURL(
       GURL("filesystem:chrome-extension://foo/local/test.txt")));
@@ -198,29 +176,22 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandlerWithCreate) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetManifest(
-              DictionaryBuilder()
+              base::Value::Dict()
                   .Set("name", "file browser handler test create")
                   .Set("version", "1.0.0")
                   .Set("manifest_version", 2)
-                  .Set("permissions", extensions::ListBuilder()
-                                          .Append("fileBrowserHandler")
-                                          .BuildList())
+                  .Set("permissions",
+                       base::Value::List().Append("fileBrowserHandler"))
                   .Set("file_browser_handlers",
-                       ListBuilder()
-                           .Append(DictionaryBuilder()
-                                       .Set("id", "ID")
-                                       .Set("default_title", "Default title")
-                                       .Set("default_icon", "icon.png")
-                                       .Set("file_filters",
-                                            ListBuilder()
-                                                .Append("filesystem:*.txt")
-                                                .BuildList())
-                                       .Set("file_access", ListBuilder()
-                                                               .Append("create")
-                                                               .BuildList())
-                                       .BuildDict())
-                           .BuildList())
-                  .BuildDict())
+                       base::Value::List().Append(
+                           base::Value::Dict()
+                               .Set("id", "ID")
+                               .Set("default_title", "Default title")
+                               .Set("default_icon", "icon.png")
+                               .Set("file_filters", base::Value::List().Append(
+                                                        "filesystem:*.txt"))
+                               .Set("file_access",
+                                    base::Value::List().Append("create")))))
           .Build();
 
   ASSERT_TRUE(extension.get());
@@ -229,7 +200,7 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandlerWithCreate) {
   ASSERT_TRUE(handlers != nullptr);
   ASSERT_EQ(1U, handlers->size());
   const FileBrowserHandler* action = handlers->at(0).get();
-  const extensions::URLPatternSet& patterns = action->file_url_patterns();
+  const URLPatternSet& patterns = action->file_url_patterns();
 
   EXPECT_EQ(0U, patterns.patterns().size());
   EXPECT_TRUE(action->HasCreateAccessPermission());
@@ -242,3 +213,4 @@ TEST_F(FileBrowserHandlerManifestTest, ValidFileBrowserHandlerWithCreate) {
 }
 
 }  // namespace
+}  // namespace extensions

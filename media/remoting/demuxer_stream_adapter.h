@@ -8,9 +8,10 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
@@ -24,8 +25,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/openscreen/src/cast/streaming/rpc_messenger.h"
+#include "third_party/openscreen/src/cast/streaming/public/rpc_messenger.h"
 #include "third_party/openscreen/src/util/weak_ptr.h"
 
 namespace base {
@@ -91,8 +91,8 @@ class DemuxerStreamAdapter {
   // signal when flush starts and when is done. During flush operation, all
   // fetching data actions will be discarded. The return value indicates frame
   // count in order to signal receiver what frames are in flight before flush,
-  // or absl::nullopt if the flushing state was unchanged.
-  absl::optional<uint32_t> SignalFlush(bool flushing);
+  // or std::nullopt if the flushing state was unchanged.
+  std::optional<uint32_t> SignalFlush(bool flushing);
 
   bool is_processing_read_request() const {
     // |read_until_callback_handle_| is set when RPC_DS_READUNTIL message is
@@ -105,7 +105,7 @@ class DemuxerStreamAdapter {
 
   // Indicates whether there is data waiting to be written to the mojo data
   // pipe.
-  bool is_data_pending() const { return !pending_frame_.empty(); }
+  bool is_data_pending() const { return !!pending_frame_; }
 
  private:
   friend class MockDemuxerStreamAdapter;
@@ -121,12 +121,19 @@ class DemuxerStreamAdapter {
   void SendReadAck();
 
   // Callback function when retrieving data from demuxer.
+  void OnNewBuffersRead(DemuxerStream::Status status,
+                        DemuxerStream::DecoderBufferVector buffers_queue);
   void OnNewBuffer(DemuxerStream::Status status,
                    scoped_refptr<DecoderBuffer> input);
+
   // Write the current frame into the mojo data pipe. OnFrameWritten() will be
-  // called when the writing has finished.
+  // called when the writing has finished. OnWrittenFrameRead() will be called
+  // once the mojo call completes. TryCompleteFrameWrite() will be called
+  // following both of the above.
   void WriteFrame();
   void OnFrameWritten(bool success);
+  void OnWrittenFrameRead();
+  void TryCompleteFrameWrite();
   void ResetPendingFrame();
 
   // Callback function when a fatal runtime error occurs.
@@ -176,6 +183,11 @@ class DemuxerStreamAdapter {
   // valid handle while in reading state.
   int read_until_callback_handle_;
 
+  // Used for synchronization and validation of writing and reading both the
+  // writing of a frame to the mojo pipe and the acknowledgement of its reading.
+  bool was_pending_frame_written_ = false;
+  bool was_pending_frame_read_ = false;
+
   // Current frame count issued by RPC_DS_READUNTIL RPC message. It should send
   // all frame data with count id smaller than |read_until_count_| before
   // sending RPC_DS_READUNTIL_CALLBACK back to receiver.
@@ -190,8 +202,7 @@ class DemuxerStreamAdapter {
 
   // Frame buffer and its information that is currently in process of writing to
   // Mojo data pipe.
-  std::vector<uint8_t> pending_frame_;
-  bool pending_frame_is_eos_;
+  scoped_refptr<media::DecoderBuffer> pending_frame_;
 
   // Keeps latest demuxer stream status and audio/video decoder config.
   DemuxerStream::Status media_status_;

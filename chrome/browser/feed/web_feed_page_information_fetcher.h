@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
@@ -46,7 +46,7 @@ class WebFeedPageInformationFetcher
   ~WebFeedPageInformationFetcher();
 
   void CallCallbackIfReady();
-  void OnCanonicalUrlFetched(const absl::optional<::GURL>& url);
+  void OnCanonicalUrlFetched(const std::optional<::GURL>& url);
   void OnRssFetched(std::vector<GURL> rss_urls);
 
   WebFeedPageInformation page_info_;

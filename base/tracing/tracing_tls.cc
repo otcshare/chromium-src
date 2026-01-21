@@ -4,16 +4,12 @@
 
 #include "base/tracing/tracing_tls.h"
 
-#include "base/no_destructor.h"
-
-namespace base {
-namespace tracing {
+namespace base::tracing {
 
 // static
-ThreadLocalBoolean* GetThreadIsInTraceEventTLS() {
-  static base::NoDestructor<base::ThreadLocalBoolean> thread_is_in_trace_event;
-  return thread_is_in_trace_event.get();
+bool* GetThreadIsInTraceEvent() {
+  thread_local bool thread_is_in_trace_event = false;
+  return &thread_is_in_trace_event;
 }
 
-}  // namespace tracing
-}  // namespace base
+}  // namespace base::tracing

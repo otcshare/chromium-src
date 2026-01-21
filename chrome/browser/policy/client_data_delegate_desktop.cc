@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
@@ -17,8 +17,6 @@ void ClientDataDelegateDesktop::FillRegisterBrowserRequest(
     base::OnceClosure callback) const {
   request->set_os_platform(GetOSPlatform());
   request->set_os_version(GetOSVersion());
-  request->set_machine_name(GetMachineName());
-
   request->set_allocated_browser_device_identifier(
       GetBrowserDeviceIdentifier().release());
 

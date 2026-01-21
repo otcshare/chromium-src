@@ -9,6 +9,7 @@
 #include <ostream>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/device_sync/cryptauth_device_sync_result.h"
@@ -67,8 +68,8 @@ class CryptAuthGroupPrivateKeySharerImpl
 
   friend std::ostream& operator<<(std::ostream& stream, const State& state);
 
-  static absl::optional<base::TimeDelta> GetTimeoutForState(State state);
-  static absl::optional<CryptAuthDeviceSyncResult::ResultCode>
+  static std::optional<base::TimeDelta> GetTimeoutForState(State state);
+  static std::optional<CryptAuthDeviceSyncResult::ResultCode>
   ResultCodeErrorFromTimeoutDuringState(State state);
 
   CryptAuthGroupPrivateKeySharerImpl(CryptAuthClientFactory* client_factory,
@@ -105,7 +106,7 @@ class CryptAuthGroupPrivateKeySharerImpl
 
   bool did_non_fatal_error_occur_ = false;
   State state_ = State::kNotStarted;
-  CryptAuthClientFactory* client_factory_ = nullptr;
+  raw_ptr<CryptAuthClientFactory> client_factory_ = nullptr;
   std::unique_ptr<base::OneShotTimer> timer_;
 };
 

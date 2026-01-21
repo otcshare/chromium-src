@@ -5,9 +5,9 @@
 #ifndef BASE_MEMORY_RAW_PTR_ASAN_SERVICE_H_
 #define BASE_MEMORY_RAW_PTR_ASAN_SERVICE_H_
 
-#include "base/allocator/partition_allocator/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
 
-#if BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+#if PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
 #include <cstddef>
 #include <cstdint>
 
@@ -30,6 +30,12 @@ class BASE_EXPORT RawPtrAsanService {
     kDereference,
     kExtraction,
     kInstantiation,
+  };
+
+  struct PendingReport {
+    ReportType type = ReportType::kDereference;
+    uintptr_t allocation_base = 0;
+    size_t allocation_size = 0;
   };
 
   void Configure(EnableDereferenceCheck,
@@ -59,6 +65,9 @@ class BASE_EXPORT RawPtrAsanService {
     return instance_;
   }
 
+  void WarnOnDanglingExtraction(const volatile void* ptr) const;
+  void CrashOnDanglingInstantiation(const volatile void* ptr) const;
+
   static void SetPendingReport(ReportType type, const volatile void* ptr);
 
  private:
@@ -68,20 +77,13 @@ class BASE_EXPORT RawPtrAsanService {
     kEnabled,
   };
 
-  struct PendingReport {
-    ReportType type;
-    uintptr_t allocation_base;
-    size_t allocation_size;
-  };
-
-  static PendingReport& GetPendingReport();
-
   uint8_t* GetShadow(void* ptr) const;
 
   static void MallocHook(const volatile void*, size_t);
   static void FreeHook(const volatile void*) {}
-  static void ErrorReportCallback(const char* report,
-                                  bool* should_exit_cleanly);
+  static void ErrorReportCallback(const char* reason,
+                                  bool* should_exit_cleanly,
+                                  bool* should_abort);
 
   Mode mode_ = Mode::kUninitialized;
   bool is_dereference_check_enabled_ = false;
@@ -96,5 +98,5 @@ class BASE_EXPORT RawPtrAsanService {
 
 }  // namespace base
 
-#endif  // BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+#endif  // PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
 #endif  // BASE_MEMORY_RAW_PTR_ASAN_SERVICE_H_

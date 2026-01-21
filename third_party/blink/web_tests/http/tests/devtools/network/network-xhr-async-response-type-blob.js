@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+
+import * as TextUtils from 'devtools/models/text_utils/text_utils.js';
+
 (async function() {
   TestRunner.addResult(
       `Tests XHR network resource type and size for asynchronous requests when "blob" is specified as the response type.\n`);
-  await TestRunner.loadTestModule('network_test_runner');
   await TestRunner.showPanel('network');
 
   NetworkTestRunner.recordNetwork();
@@ -18,7 +22,7 @@
     TestRunner.addResult('resource.type: ' + request1.resourceType());
     TestRunner.addResult('resource.size: ' + request1.resourceSize);
     TestRunner.assertTrue(!request1.failed, 'Resource loading failed.');
-    request1.requestContent().then(step3);
+    request1.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(step3);
   }
 
   function step3({ content, error, isEncoded }) {

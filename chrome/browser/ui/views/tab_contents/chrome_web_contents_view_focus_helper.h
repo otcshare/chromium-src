@@ -5,9 +5,8 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TAB_CONTENTS_CHROME_WEB_CONTENTS_VIEW_FOCUS_HELPER_H_
 #define CHROME_BROWSER_UI_VIEWS_TAB_CONTENTS_CHROME_WEB_CONTENTS_VIEW_FOCUS_HELPER_H_
 
-#include "base/supports_user_data.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/view_tracker.h"
 
 namespace content {
@@ -18,7 +17,7 @@ namespace views {
 class FocusManager;
 class Widget;
 class View;
-}
+}  // namespace views
 
 // A chrome specific helper class that handles focus management.
 class ChromeWebContentsViewFocusHelper
@@ -28,6 +27,7 @@ class ChromeWebContentsViewFocusHelper
       delete;
   ChromeWebContentsViewFocusHelper& operator=(
       const ChromeWebContentsViewFocusHelper&) = delete;
+  ~ChromeWebContentsViewFocusHelper() override;
 
   void StoreFocus();
   bool RestoreFocus();
@@ -36,6 +36,7 @@ class ChromeWebContentsViewFocusHelper
   bool TakeFocus(bool reverse);
   // Returns the View that will be focused if RestoreFocus() is called.
   views::View* GetStoredFocus();
+  void SetStoredFocusView(views::View* view);
 
  private:
   explicit ChromeWebContentsViewFocusHelper(content::WebContents* web_contents);

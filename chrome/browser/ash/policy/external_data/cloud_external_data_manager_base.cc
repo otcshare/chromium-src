@@ -7,18 +7,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/callback_list.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
@@ -45,7 +45,7 @@ const int kMaxParallelFetches = 2;
 // external data even if no |max_size| was specified in policy_templates.json.
 int g_max_external_data_size_for_testing = 0;
 
-// Keys for 'DictionaryValue' objects
+// Keys for 'Value::Dict' objects
 const char kUrlKey[] = "url";
 const char kHashKey[] = "hash";
 const char kCustomIconKey[] = "custom_icon";
@@ -205,6 +205,7 @@ void CloudExternalDataManagerBase::Backend::Disconnect() {
 void CloudExternalDataManagerBase::Backend::OnMetadataUpdated(
     std::unique_ptr<Metadata> metadata) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   metadata_set_ = true;
   Metadata old_metadata;
   metadata_.swap(old_metadata);
@@ -268,7 +269,7 @@ void CloudExternalDataManagerBase::Backend::Fetch(
     return;
   }
 
-  const bool has_pending_download = base::Contains(pending_downloads_, key);
+  const bool has_pending_download = pending_downloads_.contains(key);
   if (!has_pending_download && external_data_store_) {
     auto data = std::make_unique<std::string>();
     const base::FilePath file_path =
@@ -306,7 +307,7 @@ void CloudExternalDataManagerBase::Backend::FetchAll() {
   for (const auto& it : metadata_) {
     const MetadataKey& key = it.first;
     std::unique_ptr<std::string> data(new std::string);
-    if (base::Contains(pending_downloads_, key) ||
+    if (pending_downloads_.contains(key) ||
         (external_data_store_ &&
          !external_data_store_
               ->Load(key.ToString(), it.second.hash,
@@ -339,7 +340,6 @@ size_t CloudExternalDataManagerBase::Backend::GetMaxExternalDataSize(
   if (details)
     return details->max_external_data_size;
   NOTREACHED();
-  return 0;
 }
 
 void CloudExternalDataManagerBase::Backend::RunCallback(
@@ -355,7 +355,7 @@ void CloudExternalDataManagerBase::Backend::RunCallback(
 void CloudExternalDataManagerBase::Backend::StartDownload(
     const MetadataKey& key) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(base::Contains(pending_downloads_, key));
+  DCHECK(pending_downloads_.contains(key));
   if (!updater_)
     return;
 
@@ -376,11 +376,10 @@ void CloudExternalDataManagerBase::Backend::PruneDataStore() {
   // Extract the list of (key, hash) pairs from the Metadata map to tell the
   // store which data should be kept.
   CloudExternalDataStore::PruningData key_hash_pairs;
-  std::transform(metadata_.begin(), metadata_.end(),
-                 std::back_inserter(key_hash_pairs),
-                 [](const std::pair<MetadataKey, MetadataEntry>& p) {
-                   return make_pair(p.first.ToString(), p.second.hash);
-                 });
+  std::ranges::transform(metadata_, std::back_inserter(key_hash_pairs),
+                         [](const std::pair<MetadataKey, MetadataEntry>& p) {
+                           return make_pair(p.first.ToString(), p.second.hash);
+                         });
   external_data_store_->Prune(key_hash_pairs);
 }
 

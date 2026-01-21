@@ -34,6 +34,21 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
   enum EndpointType : uint32_t {
     kBroker,
     kNonBroker,
+    // For ValidateEnum().
+    kMinValue = kBroker,
+    kMaxValue = kNonBroker,
+  };
+
+  // Is the remote process trusted, only tracked on Windows. Not directly
+  // sent over the wire.
+  enum class ProcessTrust : uint32_t {
+#if BUILDFLAG(IS_WIN)
+    // Default to kTrusted. TODO(crbug.com/414392683) - invert this.
+    kTrusted,
+    kUntrusted,
+#else
+    kUntracked,
+#endif
   };
 
   struct EndpointTypes {
@@ -41,16 +56,17 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
     EndpointType destination;
   };
   Transport(EndpointTypes endpoint_types,
-            Channel::Endpoint endpoint,
+            PlatformChannelEndpoint endpoint,
             base::Process remote_process,
-            bool is_remote_process_untrusted = false);
+            ProcessTrust remote_process_trust);
 
   // Static helper that is slightly more readable due to better type deduction
   // than MakeRefCounted<T>.
   static scoped_refptr<Transport> Create(
       EndpointTypes endpoint_types,
-      Channel::Endpoint endpoint,
-      base::Process remote_process = base::Process());
+      PlatformChannelEndpoint endpoint,
+      base::Process remote_process = base::Process(),
+      ProcessTrust remote_process_trust = ProcessTrust{});
 
   static std::pair<scoped_refptr<Transport>, scoped_refptr<Transport>>
   CreatePair(EndpointType first_type, EndpointType second_type);
@@ -83,16 +99,23 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
   void set_is_trusted_by_peer(bool trusted) { is_trusted_by_peer_ = trusted; }
   bool is_trusted_by_peer() const { return is_trusted_by_peer_; }
 
+  ProcessTrust remote_process_trust() const { return remote_process_trust_; }
+
   void SetErrorHandler(MojoProcessErrorHandler handler, uintptr_t context) {
     error_handler_ = handler;
     error_handler_context_ = context;
   }
 
+  // Overrides the IO task runner used to monitor this transport for IO. Unless
+  // this is called, all Transports use the global IO task runner by default.
+  void OverrideIOTaskRunner(
+      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+
   // Takes ownership of the Transport's underlying channel endpoint, effectively
   // invalidating the transport. May only be called on a Transport which has not
   // yet been activated, and only when the channel endpoint is not a server.
   PlatformChannelEndpoint TakeEndpoint() {
-    return std::move(absl::get<PlatformChannelEndpoint>(inactive_endpoint_));
+    return std::move(inactive_endpoint_);
   }
 
   // Handles reports of bad activity from ipcz, resulting from parcel rejection
@@ -150,9 +173,13 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
   bool IsIpczTransport() const override;
   void OnChannelMessage(const void* payload,
                         size_t payload_size,
-                        std::vector<PlatformHandle> handles) override;
+                        std::vector<PlatformHandle> handles,
+                        scoped_refptr<ipcz_driver::Envelope> envelope) override;
   void OnChannelError(Channel::Error error) override;
   void OnChannelDestroyed() override;
+
+  // Allow tests to nerf serialized handles to validate recipient behavior.
+  static size_t FirstHandleOffsetForTesting();
 
  private:
   struct PendingTransmission {
@@ -167,7 +194,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
 
   ~Transport() override;
 
-  bool IsEndpointValid() const;
   bool CanTransmitHandles() const;
 
   // Indicates whether this transport should serialize its remote process handle
@@ -197,18 +223,16 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
   // meaningless on platforms other than Windows.
   bool is_trusted_by_peer_ = false;
 
-#if BUILDFLAG(IS_WIN)
   // Indicates whether the remote process is "untrusted" in Mojo parlance,
   // meaning this Transport restricts what kinds of objects can be transferred
-  // from this end (Windows only.)
-  bool is_remote_process_untrusted_;
-#endif
+  // from this end (kTrusted or kUntrusted on Windows, kUntracked elsewhere.)
+  const ProcessTrust remote_process_trust_;
 
   // The channel endpoint which will be used by this Transport to construct and
   // start its underlying Channel instance once activated. Not guarded by a lock
   // since it must not accessed beyond activation, where thread safety becomes a
   // factor.
-  Channel::Endpoint inactive_endpoint_;
+  PlatformChannelEndpoint inactive_endpoint_;
 
   base::Lock lock_;
   scoped_refptr<Channel> channel_ GUARDED_BY(lock_);
@@ -223,9 +247,13 @@ class MOJO_SYSTEM_IMPL_EXPORT Transport : public Object<Transport>,
   // still alive. So we retain a self-reference on behalf of the Channel and
   // release it only once notified of the Channel's destruction.
   //
-  // TODO(https://crbug.com/1299283): Refactor Channel so that this is
+  // TODO(crbug.com/40058840): Refactor Channel so that this is
   // unnecessary, once the non-ipcz Mojo implementation is phased out.
   scoped_refptr<Transport> self_reference_for_channel_ GUARDED_BY(lock_);
+
+  // The IO task runner used by this Transport to watch for incoming I/O events.
+  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_{
+      GetIOTaskRunner()};
 
   // These fields are not guarded by locks, since they're only set prior to
   // activation and remain constant throughout the remainder of this object's

@@ -9,8 +9,6 @@
 #include <wayland-server-core.h>
 #include <wayland-server-protocol-core.h>
 
-#include "base/callback.h"
-
 // These structs are populated with function pointers and values from the v1 and
 // v2 remote shell protocol.
 struct WaylandRemoteOutputEventMapping {
@@ -101,6 +99,7 @@ struct WaylandRemoteShellEventMapping {
   int change_zoom_level_since_version;
   int send_workspace_info_since_version;
   int set_use_default_scale_cancellation_since_version;
+  bool has_bounds_change_reason_float;
 };
 
 #endif  // COMPONENTS_EXO_WAYLAND_ZCR_REMOTE_SHELL_EVENT_MAPPING_H_

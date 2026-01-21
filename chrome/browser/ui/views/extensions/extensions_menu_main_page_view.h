@@ -5,49 +5,150 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_MAIN_PAGE_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_MAIN_PAGE_VIEW_H_
 
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
+#include "build/branding_buildflags.h"
+#include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/views/layout/flex_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
 namespace views {
 class Label;
-}
+class ToggleButton;
+}  // namespace views
 
 class Browser;
-class ExtensionsMenuNavigationHandler;
+class ExtensionsMenuHandler;
+class ExtensionActionViewModel;
 
 // The main view of the extensions menu.
-class ExtensionsMenuMainPageView : public views::View,
-                                   public TabStripModelObserver {
+class ExtensionsMenuMainPageView : public views::View {
+  METADATA_HEADER(ExtensionsMenuMainPageView, views::View)
+
  public:
-  explicit ExtensionsMenuMainPageView(
-      Browser* browser,
-      ExtensionsMenuNavigationHandler* navigation_handler);
-  ~ExtensionsMenuMainPageView() override = default;
+  explicit ExtensionsMenuMainPageView(Browser* browser,
+                                      ExtensionsMenuHandler* menu_handler);
+  ~ExtensionsMenuMainPageView() override;
   ExtensionsMenuMainPageView(const ExtensionsMenuMainPageView&) = delete;
   const ExtensionsMenuMainPageView& operator=(
       const ExtensionsMenuMainPageView&) = delete;
 
-  void Update();
+  // Creates and adds a menu entry for `action_model` with `entry_state` at
+  // `index` for a newly-added extension.
+  void CreateAndInsertMenuEntry(
+      ExtensionActionViewModel* action_model,
+      ExtensionsMenuViewModel::MenuEntryState entry_state,
+      int index);
 
-  // TabStripModelObserver:
-  // Sometimes, menu can stay open when tab changes (e.g keyboard shortcuts) or
-  // due to the extension (e.g extension switching the active tab). Thus, we
-  // listen for tab changes to properly update the menu content.
-  void TabChangedAt(content::WebContents* contents,
-                    int index,
-                    TabChangeType change_type) override;
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
+  // Removes the menu entry at `index`.
+  void RemoveMenuEntry(int index);
+
+  // Returns the menu entry views.
+  std::vector<ExtensionsMenuEntryView*> GetMenuEntries() const;
+
+  // Updates the site settings views with the given parameters.
+  void UpdateSiteSettings(
+      ExtensionsMenuViewModel::SiteSettingsState site_settings_state);
+
+  // Adds or updates the extension entry in the `requests_access_section_` at
+  // `index` with the given information. Doesn't update the requests section
+  // view visibility.
+  void AddExtensionRequestingAccess(
+      ExtensionsMenuViewModel::HostAccessRequest request,
+      int index);
+
+  // Updates the extension entry in the `requests_access_section_` at `index`
+  // with the given information. Doesn't update the requests section view
+  // visibility.
+  void UpdateExtensionRequestingAccess(
+      ExtensionsMenuViewModel::HostAccessRequest request,
+      int index);
+
+  // Removes the entry in the `requests_access_section_` at `index`. Doesn't
+  // update the requests section view visibility.
+  void RemoveExtensionRequestingAccess(const extensions::ExtensionId& id,
+                                       int index);
+
+  // Clears the entries in the `request_access_section_`, if existent. Doesn't
+  // update the requests section view visibility.
+  void ClearExtensionsRequestingAccess();
+
+  // Shows/hides the optional section.
+  void SetOptionalSectionVisibility(
+      ExtensionsMenuViewModel::OptionalSection optional_section);
+
+  // Accessors used by tests:
+  std::u16string_view GetSiteSettingLabelForTesting() const;
+  const views::View* site_settings_tooltip() const;
+  views::ToggleButton* GetSiteSettingsToggleForTesting() {
+    return site_settings_toggle_;
+  }
+  const views::View* reload_section() const;
+  const views::View* requests_section() const;
+  std::vector<extensions::ExtensionId>
+  GetExtensionsRequestingAccessForTesting();
+  views::View* GetExtensionRequestingAccessEntryForTesting(
+      const extensions::ExtensionId& extension_id);
 
  private:
-  content::WebContents* GetActiveWebContents() const;
+  // Returns the request entry for `extension_id` if existent.
+  views::View* GetExtensionRequestEntry(
+      const extensions::ExtensionId& extension_id) const;
 
-  raw_ptr<Browser> browser_;
-  raw_ptr<ExtensionsMenuNavigationHandler> navigation_handler_;
+  // Returns the header builder, which contains information about the site.
+  [[nodiscard]] views::Builder<views::FlexLayoutView> CreateHeaderBuilder(
+      gfx::Insets margins,
+      views::FlexSpecification stretch_specification);
 
-  raw_ptr<views::Label> subheader_subtitle_;
+  // Returns the site settings section builder, which contains information and
+  // access controls for the site.
+  [[nodiscard]] views::Builder<views::FlexLayoutView> CreateSiteSettingsBuilder(
+      gfx::Insets margins,
+      views::FlexSpecification);
+
+  // Returns the contents builder, which contains the reload section, the access
+  // requests section and the menu entries section on a scrollable view.
+  [[nodiscard]] views::Builder<views::ScrollView> CreateContentsBuilder(
+      gfx::Insets scroll_margins,
+      gfx::Insets contents_margins,
+      gfx::Insets reload_button_margins,
+      gfx::Insets menu_entries_margins);
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // Returns the webstore button builder.
+  [[nodiscard]] views::Builder<HoverButton> CreateWebstoreButtonBuilder();
+#endif
+
+  // Returns the manage extensions button builder.
+  [[nodiscard]] views::Builder<HoverButton> CreateManageButtonBuilder();
+
+  const raw_ptr<Browser> browser_;
+  const raw_ptr<ExtensionsMenuHandler> menu_handler_;
+
+  // Site settings section.
+  raw_ptr<views::Label> site_settings_label_;
+  raw_ptr<views::View> site_settings_tooltip_;
+  raw_ptr<views::ToggleButton> site_settings_toggle_;
+
+  // Reload section.
+  raw_ptr<views::View> reload_section_;
+
+  // Site access requests section.
+  raw_ptr<views::View> requests_section_;
+  // View that holds the requests entries in `requests_section_`.
+  raw_ptr<views::View> requests_entries_view_;
+  // A collection of all the requests entries in `requests_section_`. This is
+  // separated for easy insertion and removal of requests entries.
+  std::map<extensions::ExtensionId, raw_ptr<views::View, CtnExperimental>>
+      requests_entries_;
+
+  // Menu entries section. The children are guaranteed to only be
+  // ExtensionsMenuEntryView.
+  raw_ptr<views::View> menu_entries_ = nullptr;
 };
 
 BEGIN_VIEW_BUILDER(/* no export */, ExtensionsMenuMainPageView, views::View)

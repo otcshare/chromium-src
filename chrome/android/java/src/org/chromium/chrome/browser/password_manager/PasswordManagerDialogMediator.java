@@ -9,35 +9,35 @@ import static org.chromium.chrome.browser.password_manager.PasswordManagerDialog
 import android.content.res.Resources;
 import android.view.View;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.Callback;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.modaldialog.ChromeTabModalPresenter;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * Mediator class responsible for the logic of showing the password manager dialog.
- */
+/** Mediator class responsible for the logic of showing the password manager dialog. */
+@NullMarked
 class PasswordManagerDialogMediator implements View.OnLayoutChangeListener {
     private final ModalDialogManager mDialogManager;
     private final View mAndroidContentView;
-    private final BrowserControlsStateProvider mBrowserControlsStateProvider;
+    private final @Nullable BrowserControlsStateProvider mBrowserControlsStateProvider;
 
-    private PropertyModel.Builder mHostDialogModelBuilder;
-    private PropertyModel mHostDialogModel;
-    private PropertyModel mModel;
-    private Resources mResources;
+    private final PropertyModel.Builder mHostDialogModelBuilder;
+    private @MonotonicNonNull PropertyModel mHostDialogModel;
+    private @MonotonicNonNull PropertyModel mModel;
+    private @MonotonicNonNull Resources mResources;
     private @ModalDialogManager.ModalDialogType int mDialogType;
 
     private static class DialogClickHandler implements ModalDialogProperties.Controller {
-        private Callback<Integer> mCallback;
+        private final Callback<Integer> mCallback;
 
         DialogClickHandler(Callback<Integer> onClick) {
             mCallback = onClick;
@@ -63,9 +63,11 @@ class PasswordManagerDialogMediator implements View.OnLayoutChangeListener {
         }
     }
 
-    PasswordManagerDialogMediator(PropertyModel.Builder hostDialogModelBuilder,
-            ModalDialogManager manager, View androidContentView,
-            BrowserControlsStateProvider controlsStateProvider) {
+    PasswordManagerDialogMediator(
+            PropertyModel.Builder hostDialogModelBuilder,
+            ModalDialogManager manager,
+            View androidContentView,
+            @Nullable BrowserControlsStateProvider controlsStateProvider) {
         mDialogManager = manager;
         mHostDialogModelBuilder = hostDialogModelBuilder;
         mAndroidContentView = androidContentView;
@@ -77,20 +79,25 @@ class PasswordManagerDialogMediator implements View.OnLayoutChangeListener {
         mResources = view.getResources();
         mModel = model;
         mHostDialogModel =
-                mHostDialogModelBuilder.with(ModalDialogProperties.CUSTOM_VIEW, view)
-                        .with(ModalDialogProperties.CONTROLLER,
+                mHostDialogModelBuilder
+                        .with(ModalDialogProperties.CUSTOM_VIEW, view)
+                        .with(
+                                ModalDialogProperties.CONTROLLER,
                                 new DialogClickHandler(contents.getButtonClickCallback()))
                         .with(ModalDialogProperties.CONTENT_DESCRIPTION, contents.getTitle())
-                        .with(ModalDialogProperties.POSITIVE_BUTTON_TEXT,
+                        .with(
+                                ModalDialogProperties.POSITIVE_BUTTON_TEXT,
                                 contents.getPrimaryButtonText())
-                        .with(ModalDialogProperties.NEGATIVE_BUTTON_TEXT,
+                        .with(
+                                ModalDialogProperties.NEGATIVE_BUTTON_TEXT,
                                 contents.getSecondaryButtonText())
-                        .with(ModalDialogProperties.BUTTON_STYLES,
+                        .with(
+                                ModalDialogProperties.BUTTON_STYLES,
                                 contents.isPrimaryButtonFilled()
                                         ? ModalDialogProperties.ButtonStyles
-                                                  .PRIMARY_FILLED_NEGATIVE_OUTLINE
+                                                .PRIMARY_FILLED_NEGATIVE_OUTLINE
                                         : ModalDialogProperties.ButtonStyles
-                                                  .PRIMARY_OUTLINE_NEGATIVE_OUTLINE)
+                                                .PRIMARY_OUTLINE_NEGATIVE_OUTLINE)
                         .build();
         mDialogType = contents.getDialogType();
     }
@@ -98,28 +105,43 @@ class PasswordManagerDialogMediator implements View.OnLayoutChangeListener {
     private boolean hasSufficientSpaceForIllustration(int heightPx) {
         // If |mResources| is null, it means that the dialog was not initialized yet.
         if (mResources == null) return false;
-        heightPx -= ChromeTabModalPresenter.getContainerTopMargin(
-                mResources, mBrowserControlsStateProvider);
+        // The space for the illustration can't be guaranteed if the controls state provider
+        // is not available (yet or anymore).
+        if (mBrowserControlsStateProvider == null) return false;
+        heightPx -= ChromeTabModalPresenter.getContainerTopMargin(mBrowserControlsStateProvider);
         heightPx -= ChromeTabModalPresenter.getContainerBottomMargin(mBrowserControlsStateProvider);
-        return heightPx >= mResources.getDimensionPixelSize(
-                       R.dimen.password_manager_dialog_min_vertical_space_to_show_illustration);
+        return heightPx
+                >= mResources.getDimensionPixelSize(
+                        R.dimen.password_manager_dialog_min_vertical_space_to_show_illustration);
     }
 
     @Override
-    public void onLayoutChange(View view, int left, int top, int right, int bottom, int oldLeft,
-            int oldTop, int oldRight, int oldBottom) {
+    public void onLayoutChange(
+            View view,
+            int left,
+            int top,
+            int right,
+            int bottom,
+            int oldLeft,
+            int oldTop,
+            int oldRight,
+            int oldBottom) {
         // Return if the dialog wasn't initialized
         if (mModel == null) return;
         int oldHeight = oldBottom - oldTop;
         int newHeight = bottom - top;
         if (newHeight == oldHeight) return;
-        PostTask.postTask(UiThreadTaskTraits.DEFAULT, () -> {
-            mModel.set(ILLUSTRATION_VISIBLE, hasSufficientSpaceForIllustration(newHeight));
-        });
+        PostTask.postTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mModel.set(ILLUSTRATION_VISIBLE, hasSufficientSpaceForIllustration(newHeight));
+                });
     }
 
     void showDialog() {
-        mModel.set(ILLUSTRATION_VISIBLE,
+        assert mModel != null;
+        mModel.set(
+                ILLUSTRATION_VISIBLE,
                 hasSufficientSpaceForIllustration(mAndroidContentView.getHeight()));
         mHostDialogModel = mHostDialogModelBuilder.build();
         mDialogManager.showDialog(mHostDialogModel, mDialogType);
@@ -130,8 +152,7 @@ class PasswordManagerDialogMediator implements View.OnLayoutChangeListener {
         mAndroidContentView.removeOnLayoutChangeListener(this);
     }
 
-    @VisibleForTesting
-    public PropertyModel getModelForTesting() {
+    public @Nullable PropertyModel getModelForTesting() {
         return mModel;
     }
 }

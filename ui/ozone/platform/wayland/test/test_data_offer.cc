@@ -5,11 +5,13 @@
 #include "ui/ozone/platform/wayland/test/test_data_offer.h"
 
 #include <wayland-server-core.h>
+
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "ui/ozone/platform/wayland/test/test_selection_device_manager.h"
 
 namespace wl {
@@ -50,8 +52,6 @@ struct WlDataOfferImpl : public TestSelectionOffer::Delegate {
     wl_data_offer_send_offer(offer_->resource(), mime_type.c_str());
   }
 
-  void OnDestroying() override { delete this; }
-
  private:
   const raw_ptr<TestDataOffer> offer_;
 };
@@ -63,7 +63,7 @@ const struct wl_data_offer_interface kTestDataOfferImpl = {
     DataOfferFinish, DataOfferSetActions};
 
 TestDataOffer::TestDataOffer(wl_resource* resource)
-    : TestSelectionOffer(resource, new WlDataOfferImpl(this)) {}
+    : TestSelectionOffer(resource, std::make_unique<WlDataOfferImpl>(this)) {}
 
 TestDataOffer::~TestDataOffer() = default;
 

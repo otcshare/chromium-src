@@ -20,6 +20,12 @@
  *   openReportingPrivacy: function(),
  *   openWhitepaper: function(),
  *   reportPhishingError: function(),
+ *   openAndroidAdvancedProtectionSettings: function(),
+ *   openHelpCenterInNewTab: function(),
+ *   openDiagnosticInNewTab: function(),
+ *   openReportingPrivacyInNewTab: function(),
+ *   openWhitepaperInNewTab: function(),
+ *   reportPhishingErrorInNewTab: function(),
  * }}
  */
 // eslint-disable-next-line no-var
@@ -27,7 +33,7 @@ var certificateErrorPageController;
 
 // Should match security_interstitials::SecurityInterstitialCommand
 /** @enum {number} */
-const SecurityInterstitialCommandId = {
+export const SecurityInterstitialCommandId = {
   CMD_DONT_PROCEED: 0,
   CMD_PROCEED: 1,
   // Ways for user to get more information
@@ -47,15 +53,24 @@ const SecurityInterstitialCommandId = {
   CMD_REPORT_PHISHING_ERROR: 12,
   // Open enhanced protection settings.
   CMD_OPEN_ENHANCED_PROTECTION_SETTINGS: 13,
+  CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS: 16,
+  // Commands for opening links in a new tab, used by middle-clicks.
+  CMD_OPEN_HELP_CENTER_IN_NEW_TAB: 17,
+  CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB: 18,
+  CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB: 19,
+  CMD_OPEN_WHITEPAPER_IN_NEW_TAB: 20,
+  CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB: 21,
+  // View the certificate.
+  CMD_SHOW_CERTIFICATE_VIEWER: 22,
 };
 
-const HIDDEN_CLASS = 'hidden';
+export const HIDDEN_CLASS = 'hidden';
 
 /**
  * A convenience method for sending commands to the parent page.
  * @param {SecurityInterstitialCommandId} cmd  The command to send.
  */
-function sendCommand(cmd) {
+export function sendCommand(cmd) {
   if (window.certificateErrorPageController) {
     switch (cmd) {
       case SecurityInterstitialCommandId.CMD_DONT_PROCEED:
@@ -100,16 +115,43 @@ function sendCommand(cmd) {
       case SecurityInterstitialCommandId.CMD_OPEN_ENHANCED_PROTECTION_SETTINGS:
         certificateErrorPageController.openEnhancedProtectionSettings();
         break;
+      case SecurityInterstitialCommandId
+          .CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
+        certificateErrorPageController.openAndroidAdvancedProtectionSettings();
+        break;
+      case SecurityInterstitialCommandId.CMD_OPEN_HELP_CENTER_IN_NEW_TAB:
+        certificateErrorPageController.openHelpCenterInNewTab();
+        break;
+      case SecurityInterstitialCommandId.CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB:
+        certificateErrorPageController.openDiagnosticInNewTab();
+        break;
+      case SecurityInterstitialCommandId.CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB:
+        certificateErrorPageController.openReportingPrivacyInNewTab();
+        break;
+      case SecurityInterstitialCommandId.CMD_OPEN_WHITEPAPER_IN_NEW_TAB:
+        certificateErrorPageController.openWhitepaperInNewTab();
+        break;
+      case SecurityInterstitialCommandId.CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB:
+        certificateErrorPageController.reportPhishingErrorInNewTab();
+        break;
+      case SecurityInterstitialCommandId.CMD_SHOW_CERTIFICATE_VIEWER:
+        certificateErrorPageController.showCertificateViewer();
+        break;
+      default:
+        break;
     }
     return;
   }
   // <if expr="not is_ios">
-  window.domAutomationController.send(cmd);
+  if (window.domAutomationController) {
+    window.domAutomationController.send(cmd);
+  }
   // </if>
   // <if expr="is_ios">
   // Send commands for iOS committed interstitials.
   /** @suppress {undefinedVars|missingProperties} */ (function() {
-    __gCrWeb.message.invokeOnHost({'command': 'blockingPage.' + cmd});
+    window.webkit.messageHandlers['IOSInterstitialMessage'].postMessage(
+        {'command': cmd.toString()});
   })();
   // </if>
 }
@@ -118,7 +160,7 @@ function sendCommand(cmd) {
  * Call this to stop clicks on <a href="#"> links from scrolling to the top of
  * the page (and possibly showing a # in the link).
  */
-function preventDefaultOnPoundLinkClicks() {
+export function preventDefaultOnPoundLinkClicks() {
   const anchors = document.body.querySelectorAll('a[href="#"]');
   for (const anchor of anchors) {
     anchor.addEventListener('click', e => e.preventDefault());

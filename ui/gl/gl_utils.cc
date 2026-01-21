@@ -14,25 +14,27 @@
 #include "ui/gl/gl_display_manager.h"
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_switches.h"
-
-#if defined(USE_EGL)
 #include "ui/gl/gl_surface_egl.h"
-#endif  // defined(USE_EGL)
 
 #if BUILDFLAG(IS_ANDROID)
+#include <sync/sync.h>  // nogncheck
+
 #include "base/posix/eintr_wrapper.h"
-#include "third_party/libsync/src/include/sync/sync.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
 #include <d3d11_1.h>
 #include "base/strings/stringprintf.h"
-#include "media/base/win/mf_helpers.h"
+#include "ui/gl/debug_utils.h"
 #include "ui/gl/direct_composition_support.h"
 #endif
 
 namespace gl {
 namespace {
+
+// The global set of workarounds.
+GlWorkarounds g_workarounds;
+bool g_is_angle_enabled = true;
 
 int GetIntegerv(unsigned int name) {
   int value = 0;
@@ -81,15 +83,24 @@ base::ScopedFD MergeFDs(base::ScopedFD a, base::ScopedFD b) {
     LOG(ERROR) << "Failed to merge fences.";
   return merged;
 }
+
+void DisableANGLE() {
+  DCHECK_NE(GetGLImplementation(), kGLImplementationEGLANGLE);
+  g_is_angle_enabled = false;
+}
 #endif
 
 bool UsePassthroughCommandDecoder(const base::CommandLine* command_line) {
+  if (!g_is_angle_enabled) {
+    return false;
+  }
+
   std::string switch_value;
   if (command_line->HasSwitch(switches::kUseCmdDecoder)) {
     switch_value = command_line->GetSwitchValueASCII(switches::kUseCmdDecoder);
   }
 
-#if defined(PASSTHROUGH_COMMAND_DECODER_LAUNCHED)
+#if !BUILDFLAG(ENABLE_VALIDATING_COMMAND_DECODER)
   if (switch_value == kCmdDecoderValidatingName) {
     LOG(WARNING) << "Ignoring request for the validating command decoder. It "
                     "is not supported on this platform.";
@@ -104,37 +115,20 @@ bool UsePassthroughCommandDecoder(const base::CommandLine* command_line) {
     // Unrecognized or missing switch, use the default.
     return features::UsePassthroughCommandDecoder();
   }
-#endif  // defined(PASSTHROUGH_COMMAND_DECODER_LAUNCHED)
+#endif  // !BUILDFLAG(ENABLE_VALIDATING_COMMAND_DECODER)
 }
 
-bool PassthroughCommandDecoderSupported() {
-#if defined(USE_EGL)
-  GLDisplayEGL* display = gl::GLSurfaceEGL::GetGLDisplayEGL();
-  // Using the passthrough command buffer requires that specific ANGLE
-  // extensions are exposed
-  return display->ext->b_EGL_CHROMIUM_create_context_bind_generates_resource &&
-         display->ext->b_EGL_ANGLE_create_context_webgl_compatibility &&
-         display->ext->b_EGL_ANGLE_robust_resource_initialization &&
-         display->ext->b_EGL_ANGLE_display_texture_share_group &&
-         display->ext->b_EGL_ANGLE_create_context_client_arrays;
-#else
-  // The passthrough command buffer is only supported on top of ANGLE/EGL
-  return false;
-#endif  // defined(USE_EGL)
+const GlWorkarounds& GetGlWorkarounds() {
+  return g_workarounds;
+}
+
+void SetGlWorkarounds(const GlWorkarounds& workarounds) {
+  g_workarounds = workarounds;
 }
 
 #if BUILDFLAG(IS_WIN)
-unsigned int FrameRateToPresentDuration(float frame_rate) {
-  if (frame_rate == 0)
-    return 0u;
-  // Present duration unit is 100 ns.
-  return static_cast<unsigned int>(1.0E7 / frame_rate);
-}
-
 unsigned int DirectCompositionRootSurfaceBufferCount() {
-  return base::FeatureList::IsEnabled(features::kDCompTripleBufferRootSwapChain)
-             ? 3u
-             : 2u;
+  return 2u;
 }
 
 // Labels swapchain buffers with the string name_prefix + _Buffer_ +
@@ -158,7 +152,7 @@ void LabelSwapChainBuffers(IDXGISwapChain* swap_chain,
     }
     const std::string buffer_name =
         base::StringPrintf("%s_Buffer_%d", name_prefix, i);
-    hr = media::SetDebugName(swap_chain_buffer.Get(), buffer_name.c_str());
+    hr = SetDebugName(swap_chain_buffer.Get(), buffer_name.c_str());
     if (FAILED(hr)) {
       DLOG(ERROR) << "Failed to label swap chain buffer " << i << ": "
                   << logging::SystemErrorCodeToString(hr);
@@ -166,36 +160,41 @@ void LabelSwapChainBuffers(IDXGISwapChain* swap_chain,
   }
 }
 
-// Same as LabelSwapChainAndBuffers, but only does the buffers. Used for resize
-// operations
+// Labels swapchain with the name_prefix and its buffers with the string
+// name_prefix + _Buffer_ + <buffer_number>.
 void LabelSwapChainAndBuffers(IDXGISwapChain* swap_chain,
                               const char* name_prefix) {
-  media::SetDebugName(swap_chain, name_prefix);
+  SetDebugName(swap_chain, name_prefix);
   LabelSwapChainBuffers(swap_chain, name_prefix);
 }
 #endif  // BUILDFLAG(IS_WIN)
 
 GLDisplay* GetDisplay(GpuPreference gpu_preference) {
-#if defined(USE_GLX)
-  if (!GLDisplayManagerX11::GetInstance()->IsEmpty()) {
-    return GLDisplayManagerX11::GetInstance()->GetDisplay(gpu_preference);
-  }
-#endif
-#if defined(USE_EGL)
-  return GLDisplayManagerEGL::GetInstance()->GetDisplay(gpu_preference);
-#endif
-  NOTREACHED();
-  return nullptr;
+  return GetDisplay(gpu_preference, gl::DisplayKey::kDefault);
+}
+
+GL_EXPORT GLDisplay* GetDisplay(GpuPreference gpu_preference,
+                                gl::DisplayKey display_key) {
+  // TODO(344606399): Consider making callers directly create the EGL display.
+  return GLDisplayManagerEGL::GetInstance()->GetDisplay(gpu_preference,
+                                                        display_key);
 }
 
 GLDisplay* GetDefaultDisplay() {
   return GetDisplay(GpuPreference::kDefault);
 }
 
-#if defined(USE_EGL)
 void SetGpuPreferenceEGL(GpuPreference preference, uint64_t system_device_id) {
   GLDisplayManagerEGL::GetInstance()->SetGpuPreference(preference,
                                                        system_device_id);
+}
+
+uint64_t GetSystemDeviceIdEGLForTesting(GpuPreference preference) {
+  return GLDisplayManagerEGL::GetInstance()->GetSystemDeviceId(preference);
+}
+
+void RemoveGpuPreferenceEGL(GpuPreference preference) {
+  GLDisplayManagerEGL::GetInstance()->RemoveGpuPreference(preference);
 }
 
 GLDisplayEGL* GetDefaultDisplayEGL() {
@@ -203,16 +202,9 @@ GLDisplayEGL* GetDefaultDisplayEGL() {
       GpuPreference::kDefault);
 }
 
-GLDisplayEGL* GetDisplayEGL(uint64_t system_device_id) {
-  return GLDisplayManagerEGL::GetInstance()->GetDisplay(system_device_id);
+GLDisplayEGL* GetDisplayEGL(GpuPreference gpu_preference) {
+  return GLDisplayManagerEGL::GetInstance()->GetDisplay(gpu_preference);
 }
-#endif  // USE_EGL
-
-#if defined(USE_GLX)
-GLDisplayX11* GetDisplayX11(uint64_t system_device_id) {
-  return GLDisplayManagerX11::GetInstance()->GetDisplay(system_device_id);
-}
-#endif  // USE_GLX
 
 #if BUILDFLAG(IS_MAC)
 
@@ -246,4 +238,58 @@ ScopedPixelStore::~ScopedPixelStore() {
     glPixelStorei(name_, old_value_);
 }
 
+const char* GetDebugSourceString(unsigned int source) {
+  switch (source) {
+    case GL_DEBUG_SOURCE_API:
+      return "OpenGL";
+    case GL_DEBUG_SOURCE_WINDOW_SYSTEM:
+      return "Window System";
+    case GL_DEBUG_SOURCE_SHADER_COMPILER:
+      return "Shader Compiler";
+    case GL_DEBUG_SOURCE_THIRD_PARTY:
+      return "Third Party";
+    case GL_DEBUG_SOURCE_APPLICATION:
+      return "Application";
+    case GL_DEBUG_SOURCE_OTHER:
+      return "Other";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* GetDebugTypeString(unsigned int type) {
+  switch (type) {
+    case GL_DEBUG_TYPE_ERROR:
+      return "Error";
+    case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
+      return "Deprecated behavior";
+    case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:
+      return "Undefined behavior";
+    case GL_DEBUG_TYPE_PORTABILITY:
+      return "Portability";
+    case GL_DEBUG_TYPE_PERFORMANCE:
+      return "Performance";
+    case GL_DEBUG_TYPE_OTHER:
+      return "Other";
+    case GL_DEBUG_TYPE_MARKER:
+      return "Marker";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* GetDebugSeverityString(unsigned int severity) {
+  switch (severity) {
+    case GL_DEBUG_SEVERITY_HIGH:
+      return "High";
+    case GL_DEBUG_SEVERITY_MEDIUM:
+      return "Medium";
+    case GL_DEBUG_SEVERITY_LOW:
+      return "Low";
+    case GL_DEBUG_SEVERITY_NOTIFICATION:
+      return "Notification";
+    default:
+      return "UNKNOWN";
+  }
+}
 }  // namespace gl

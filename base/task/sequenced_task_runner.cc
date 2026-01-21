@@ -6,23 +6,18 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/no_destructor.h"
+#include "base/functional/bind.h"
 #include "base/task/default_delayed_task_handle_delegate.h"
-#include "base/threading/thread_local.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/time/time.h"
 
 namespace base {
 
 namespace {
 
-ThreadLocalPointer<SequencedTaskRunner::CurrentDefaultHandle>&
-CurrentDefaultHandleTls() {
-  static NoDestructor<
-      ThreadLocalPointer<SequencedTaskRunner::CurrentDefaultHandle>>
-      instance;
-  return *instance;
-}
+constinit thread_local SequencedTaskRunner::CurrentDefaultHandle*
+    current_default_handle = nullptr;
 
 }  // namespace
 
@@ -83,53 +78,87 @@ bool SequencedTaskRunner::PostDelayedTaskAt(
                              : delayed_run_time - TimeTicks::Now());
 }
 
+bool SequencedTaskRunner::RunOrPostTask(subtle::RunOrPostTaskPassKey,
+                                        const Location& from_here,
+                                        OnceClosure task) {
+  return PostTask(from_here, std::move(task));
+}
+
 // static
 const scoped_refptr<SequencedTaskRunner>&
 SequencedTaskRunner::GetCurrentDefault() {
-  const CurrentDefaultHandle* current_default = CurrentDefaultHandleTls().Get();
-  CHECK(current_default)
+  CHECK(HasCurrentDefault())
       << "Error: This caller requires a sequenced context (i.e. the current "
          "task needs to run from a SequencedTaskRunner). If you're in a test "
          "refer to //docs/threading_and_tasks_testing.md.";
-  return current_default->task_runner_;
+  return current_default_handle->task_runner_;
 }
 
 // static
 bool SequencedTaskRunner::HasCurrentDefault() {
-  return !!CurrentDefaultHandleTls().Get();
+  return !!current_default_handle && !!current_default_handle->task_runner_;
+}
+
+// static
+scoped_refptr<SequencedTaskRunner> SequencedTaskRunner::GetCurrentBestEffort() {
+  // Currently only threads that multiplex several task queues have current
+  // best-effort task runners.
+  if (SingleThreadTaskRunner::HasCurrentBestEffort()) {
+    return SingleThreadTaskRunner::GetCurrentBestEffort();
+  }
+  return GetCurrentDefault();
+}
+
+// static
+bool SequencedTaskRunner::HasCurrentBestEffort() {
+  // Currently only threads that multiplex several task queues have current
+  // best-effort task runners.
+  return SingleThreadTaskRunner::HasCurrentBestEffort();
 }
 
 SequencedTaskRunner::CurrentDefaultHandle::CurrentDefaultHandle(
     scoped_refptr<SequencedTaskRunner> task_runner)
-    : task_runner_(std::move(task_runner)) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!SequencedTaskRunner::HasCurrentDefault());
-  CurrentDefaultHandleTls().Set(this);
+    : CurrentDefaultHandle(std::move(task_runner), MayAlreadyExist{}) {
+  CHECK(!previous_handle_ || !previous_handle_->task_runner_);
 }
 
 SequencedTaskRunner::CurrentDefaultHandle::~CurrentDefaultHandle() {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  DCHECK_EQ(CurrentDefaultHandleTls().Get(), this);
-  CurrentDefaultHandleTls().Set(nullptr);
+  DCHECK_EQ(current_default_handle, this);
+  current_default_handle = previous_handle_;
+}
+
+SequencedTaskRunner::CurrentDefaultHandle::CurrentDefaultHandle(
+    scoped_refptr<SequencedTaskRunner> task_runner,
+    MayAlreadyExist)
+    : task_runner_(std::move(task_runner)),
+      previous_handle_(current_default_handle) {
+  // Support overriding the current default with a null task runner or a task
+  // runner that runs its tasks in the current sequence.
+  DCHECK(!task_runner_ || task_runner_->RunsTasksInCurrentSequence());
+  current_default_handle = this;
 }
 
 bool SequencedTaskRunner::DeleteOrReleaseSoonInternal(
     const Location& from_here,
     void (*deleter)(const void*),
     const void* object) {
+  // Allow memory to leak on shutdown. ScopedFizzleBlockShutdownTasks avoids a
+  // DCHECK about posting a task to a potentially BLOCK_SHUTDOWN task runner
+  // after shut down in cleanups that happen as things are reaped in the final
+  // phases of shutdown (ref. crbug.com/420259698; and other instances).
+  ThreadPoolInstance::ScopedFizzleBlockShutdownTasks fizzler;
   return PostNonNestableTask(from_here, BindOnce(deleter, object));
 }
 
 OnTaskRunnerDeleter::OnTaskRunnerDeleter(
     scoped_refptr<SequencedTaskRunner> task_runner)
-    : task_runner_(std::move(task_runner)) {
-}
+    : task_runner_(std::move(task_runner)) {}
 
 OnTaskRunnerDeleter::~OnTaskRunnerDeleter() = default;
 
 OnTaskRunnerDeleter::OnTaskRunnerDeleter(OnTaskRunnerDeleter&&) = default;
 
-OnTaskRunnerDeleter& OnTaskRunnerDeleter::operator=(
-    OnTaskRunnerDeleter&&) = default;
+OnTaskRunnerDeleter& OnTaskRunnerDeleter::operator=(OnTaskRunnerDeleter&&) =
+    default;
 
 }  // namespace base

@@ -16,8 +16,9 @@ class CORE_EXPORT SoftNavigationEntry final : public PerformanceEntry {
  public:
   SoftNavigationEntry(AtomicString name,
                       double start_time,
-                      uint32_t navigation_id,
-                      DOMWindow* source);
+                      const DOMPaintTimingInfo& paint_timing_info,
+                      DOMWindow* source,
+                      uint32_t navigation_id);
   ~SoftNavigationEntry() override;
 
   const AtomicString& entryType() const override;

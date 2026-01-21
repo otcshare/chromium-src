@@ -12,9 +12,9 @@
 #include "pdf/pdfium/pdfium_engine.h"
 #include "pdf/pdfium/pdfium_test_base.h"
 #include "pdf/test/test_client.h"
+#include "pdf/test/test_helpers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/web/blink.h"
 #include "third_party/pdfium/public/fpdf_annot.h"
 #include "third_party/pdfium/public/fpdf_formfill.h"
 #include "ui/gfx/geometry/point.h"
@@ -31,16 +31,17 @@ using ::testing::Return;
 
 class FormFillerTestClient : public TestClient {
  public:
-  FormFillerTestClient() = default;
-  ~FormFillerTestClient() override = default;
+  explicit FormFillerTestClient(bool use_skia_renderer)
+      : TestClient(use_skia_renderer) {}
   FormFillerTestClient(const FormFillerTestClient&) = delete;
   FormFillerTestClient& operator=(const FormFillerTestClient&) = delete;
+  ~FormFillerTestClient() override = default;
 
-  // Mock PDFEngine::Client methods.
+  // Mock PDFiumEngineClient methods.
   MOCK_METHOD(void, Beep, (), (override));
   MOCK_METHOD(std::string, GetURL, (), (override));
-  MOCK_METHOD(void, ScrollToX, (int), (override));
-  MOCK_METHOD(void, ScrollToY, (int), (override));
+  MOCK_METHOD(void, ScrollToX, (int, bool), (override));
+  MOCK_METHOD(void, ScrollToY, (int, bool), (override));
   MOCK_METHOD(void,
               NavigateTo,
               (const std::string&, WindowOpenDisposition),
@@ -87,7 +88,7 @@ class FormFillerTest : public PDFiumTestBase {
 };
 
 TEST_P(FormFillerTest, DoURIActionWithKeyboardModifier) {
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   std::unique_ptr<PDFiumEngine> engine = InitializeEngine(
       &client, FILE_PATH_LITERAL("annotation_form_fields.pdf"));
   ASSERT_TRUE(engine);
@@ -95,24 +96,17 @@ TEST_P(FormFillerTest, DoURIActionWithKeyboardModifier) {
   const char kUri[] = "https://www.google.com/";
   {
     InSequence sequence;
-    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::CURRENT_TAB))
-        .Times(1);
-    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::SAVE_TO_DISK))
-        .Times(1);
+    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::CURRENT_TAB));
+    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::SAVE_TO_DISK));
     EXPECT_CALL(client,
-                NavigateTo(kUri, WindowOpenDisposition::NEW_BACKGROUND_TAB))
-        .Times(1);
-    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::NEW_WINDOW))
-        .Times(1);
+                NavigateTo(kUri, WindowOpenDisposition::NEW_BACKGROUND_TAB));
+    EXPECT_CALL(client, NavigateTo(kUri, WindowOpenDisposition::NEW_WINDOW));
     EXPECT_CALL(client,
-                NavigateTo(kUri, WindowOpenDisposition::NEW_FOREGROUND_TAB))
-        .Times(1);
+                NavigateTo(kUri, WindowOpenDisposition::NEW_FOREGROUND_TAB));
     EXPECT_CALL(client,
-                NavigateTo(kUri, WindowOpenDisposition::NEW_BACKGROUND_TAB))
-        .Times(1);
+                NavigateTo(kUri, WindowOpenDisposition::NEW_BACKGROUND_TAB));
     EXPECT_CALL(client,
-                NavigateTo(kUri, WindowOpenDisposition::NEW_FOREGROUND_TAB))
-        .Times(1);
+                NavigateTo(kUri, WindowOpenDisposition::NEW_FOREGROUND_TAB));
   }
 
   constexpr blink::WebInputEvent::Modifiers kModifierKey =
@@ -155,7 +149,7 @@ TEST_P(FormFillerTest, FormOnFocusChange) {
       {{242, 758}, 0, 0, {0, 0}},   {{242, 768}, 0, 0, {0, 746}},
       {{274, 758}, 0, 0, {242, 0}}, {{60, 40}, 1, 0, {242, 1816}}};
 
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   std::unique_ptr<PDFiumEngine> engine = InitializeEngine(
       &client, FILE_PATH_LITERAL("annotation_form_fields.pdf"));
   ASSERT_TRUE(engine);
@@ -167,10 +161,12 @@ TEST_P(FormFillerTest, FormOnFocusChange) {
 
     for (const auto& test_case : test_cases) {
       if (test_case.final_scroll_position.y() != 0) {
-        EXPECT_CALL(client, ScrollToY(test_case.final_scroll_position.y()));
+        EXPECT_CALL(client, ScrollToY(test_case.final_scroll_position.y(),
+                                      /*force_smooth_scroll=*/false));
       }
       if (test_case.final_scroll_position.x() != 0)
-        EXPECT_CALL(client, ScrollToX(test_case.final_scroll_position.x()));
+        EXPECT_CALL(client, ScrollToX(test_case.final_scroll_position.x(),
+                                      /*force_smooth_scroll=*/false));
     }
   }
 
@@ -179,7 +175,7 @@ TEST_P(FormFillerTest, FormOnFocusChange) {
     engine->ScrolledToXPosition(test_case.initial_position.x());
     engine->ScrolledToYPosition(test_case.initial_position.y());
 
-    PDFiumPage& page = GetPDFiumPageForTest(*engine, test_case.page_index);
+    PDFiumPage& page = GetPDFiumPage(*engine, test_case.page_index);
     ScopedFPDFAnnotation annot(
         FPDFPage_GetAnnot(page.GetPage(), test_case.annot_index));
     ASSERT_TRUE(annot);
@@ -192,21 +188,29 @@ INSTANTIATE_TEST_SUITE_P(All, FormFillerTest, testing::Bool());
 #if defined(PDF_ENABLE_V8)
 class FormFillerJavaScriptTest : public FormFillerTest {
  public:
-  FormFillerJavaScriptTest() {
+  void SetUp() override {
     // Needed for setting up V8.
-    InitializeSDK(/*enable_v8=*/true, FontMappingMode::kNoMapping);
+    //
+    // Note that this does not call FormFillerTest::SetUp() to avoid double SDK
+    // initialization.
+    InitializeSDK(/*enable_v8=*/true, /*use_skia_renderer=*/GetParam(),
+                  FontMappingMode::kNoMapping);
   }
 
-  ~FormFillerJavaScriptTest() override { ShutdownSDK(); }
+  void TearDown() override {
+    // Note that this does not call FormFillerTest::TearDown() to avoid double
+    // SDK destruction.
+    ShutdownSDK();
+  }
 };
 
 TEST_P(FormFillerJavaScriptTest, IsolateScoping) {
   // Enter the embedder's isolate so it can be captured when the
   // `PDFiumFormFiller` is created.
-  v8::Isolate* embedder_isolate = blink::MainThreadIsolate();
+  v8::Isolate* embedder_isolate = GetBlinkIsolate();
   v8::Isolate::Scope embedder_isolate_scope(embedder_isolate);
 
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   PDFiumEngine engine(&client, PDFiumFormFiller::ScriptOption::kJavaScript);
 
   gin::IsolateHolder pdfium_test_isolate_holder(
@@ -230,7 +234,7 @@ TEST_P(FormFillerJavaScriptTest, GetFilePath) {
   constexpr char kTestPath[] = "https://www.example.com/path/to/the.pdf";
   constexpr int kTestPathSize = static_cast<int>(std::size(kTestPath));
 
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   EXPECT_CALL(client, GetURL).Times(2).WillRepeatedly(Return(kTestPath));
   PDFiumEngine engine(&client, PDFiumFormFiller::ScriptOption::kJavaScript);
 
@@ -244,7 +248,7 @@ TEST_P(FormFillerJavaScriptTest, GetFilePath) {
 }
 
 TEST_P(FormFillerJavaScriptTest, GetFilePathEmpty) {
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   EXPECT_CALL(client, GetURL).Times(2).WillRepeatedly(Return(std::string()));
   PDFiumEngine engine(&client, PDFiumFormFiller::ScriptOption::kJavaScript);
 
@@ -261,7 +265,7 @@ TEST_P(FormFillerJavaScriptTest, GetFilePathShortBuffer) {
   constexpr char kTestPath[] = "https://www.example.com/path/to/the.pdf";
   constexpr int kTestPathSize = static_cast<int>(std::size(kTestPath));
 
-  FormFillerTestClient client;
+  FormFillerTestClient client(/*use_skia_renderer=*/GetParam());
   EXPECT_CALL(client, GetURL).WillRepeatedly(Return(kTestPath));
   PDFiumEngine engine(&client, PDFiumFormFiller::ScriptOption::kJavaScript);
 

@@ -5,16 +5,12 @@
 #ifndef CHROME_BROWSER_GEOLOCATION_GEOLOCATION_PERMISSION_CONTEXT_DELEGATE_H_
 #define CHROME_BROWSER_GEOLOCATION_GEOLOCATION_PERMISSION_CONTEXT_DELEGATE_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/geolocation/geolocation_permission_context_extensions.h"
 #include "components/permissions/contexts/geolocation_permission_context.h"
 
 namespace content {
 class WebContents;
-}
-
-namespace permissions {
-class PermissionRequestID;
 }
 
 class GeolocationPermissionContextDelegate
@@ -34,9 +30,7 @@ class GeolocationPermissionContextDelegate
   // checks that it is only code from valid iframes.
   // It also adds special logic when called through an extension.
   bool DecidePermission(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      bool user_gesture,
+      const permissions::PermissionRequestData& request_data,
       permissions::BrowserPermissionCallback* callback,
       permissions::GeolocationPermissionContext* context) override;
 

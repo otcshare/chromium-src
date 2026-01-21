@@ -6,8 +6,25 @@
 #define CHROME_BROWSER_UI_WEBUI_VERSION_VERSION_UI_H_
 
 #include "build/build_config.h"
+#include "chrome/common/url_constants.h"
+#include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/browser/webui_config.h"
+#include "ui/base/resource/resource_scale_factor.h"
+
+namespace base {
+class RefCountedMemory;
+}
+
+class VersionUI;
+
+class VersionUIConfig : public content::DefaultWebUIConfig<VersionUI> {
+ public:
+  VersionUIConfig()
+      : DefaultWebUIConfig(content::kChromeUIScheme,
+                           chrome::kChromeUIVersionHost) {}
+};
 
 // The WebUI handler for chrome://version.
 class VersionUI : public content::WebUIController {
@@ -25,6 +42,9 @@ class VersionUI : public content::WebUIController {
   // Loads a data source with many named details comprising version info.
   // The keys are from version_ui_constants.
   static void AddVersionDetailStrings(content::WebUIDataSource* html_source);
+
+  static base::RefCountedMemory* GetFaviconResourceBytes(
+      ui::ResourceScaleFactor scale_factor);
 
 #if !BUILDFLAG(IS_ANDROID)
   // Returns a localized version string suitable for displaying in UI.

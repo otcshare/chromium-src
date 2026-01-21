@@ -9,8 +9,9 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chromeos/ash/components/network/network_connection_observer.h"
@@ -97,6 +98,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
   // Trying to configure a network that is blocked by policy.
   static const char kErrorBlockedByPolicy[];
 
+  // Trying to connect to a network while enterprise policy mandates that a scan
+  // must finish first for policy enforcement purposes.
+  static const char kErrorWaitingForScan[];
+
   // The HexSSID is missing.
   static const char kErrorHexSsidRequired[];
 
@@ -121,9 +126,13 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
   // Error occurred while trying to perform an operation with an eSIM profile.
   static const char kErrorESimProfileIssue[];
 
-  // Failed due to a connection attempt to a cellular network with a locked SIM.
-  // The SIM must be unlocked before a connection can succeed.
-  static const char kErrorSimLocked[];
+  // Failed due to a connection attempt to a cellular network with a PIN/PUK
+  // locked SIM. The SIM must be unlocked before a connection can succeed.
+  static const char kErrorSimPinPukLocked[];
+
+  // Connection attempt failed because SIM is incompatible with Carrier lock
+  // policy.
+  static const char kErrorSimCarrierLocked[];
 
   // Connect failed because cellular device is busy.
   static const char kErrorCellularDeviceBusy[];
@@ -209,6 +218,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
       ManagedNetworkConfigurationHandler* managed_network_configuration_handler,
       CellularConnectionHandler* cellular_connection_handler) = 0;
 
+  // Called when AutoConnectHandler initiates an auto connection.
+  virtual void OnAutoConnectedInitiated(int auto_connect_reasons) = 0;
+
   // Construct and initialize an instance for testing.
   static std::unique_ptr<NetworkConnectionHandler> InitializeForTesting(
       NetworkStateHandler* network_state_handler,
@@ -244,7 +256,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
   base::ObserverList<NetworkConnectionObserver, true>::Unchecked observers_;
 
   // Delegate used to start a connection to a tether network.
-  TetherDelegate* tether_delegate_;
+  raw_ptr<TetherDelegate> tether_delegate_;
 
  private:
   // Only to be used by NetworkConnectionHandler implementation (and not by
@@ -253,11 +265,5 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when the migration is finished.
-namespace chromeos {
-using ::ash::ConnectCallbackMode;
-using ::ash::NetworkConnectionHandler;
-}  // namespace chromeos
 
 #endif  // CHROMEOS_ASH_COMPONENTS_NETWORK_NETWORK_CONNECTION_HANDLER_H_

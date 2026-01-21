@@ -6,10 +6,11 @@
 #define CHROME_BROWSER_BROWSER_SWITCHER_BROWSER_SWITCHER_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
 #include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -77,7 +78,7 @@ class XmlDownloader {
 
   // Parses the XML for a source, and calls DoneParsing() on the UI thread when
   // done.
-  void ParseXml(RulesetSource* source, std::unique_ptr<std::string> bytes);
+  void ParseXml(RulesetSource* source, std::optional<std::string> bytes);
 
   // Runs hooks on the source, and runs |all_done_callback| and
   // ScheduleRefresh() if this is the last source.

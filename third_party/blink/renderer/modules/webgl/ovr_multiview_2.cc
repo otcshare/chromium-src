@@ -10,7 +10,8 @@
 
 namespace blink {
 
-OVRMultiview2::OVRMultiview2(WebGLRenderingContextBase* context)
+OVRMultiview2::OVRMultiview2(WebGLRenderingContextBase* context,
+                             ExecutionContext*)
     : WebGLExtension(context) {
   context->ExtensionsUtil()->EnsureExtensionEnabled("GL_OVR_multiview2");
   context->ContextGL()->GetIntegerv(GL_MAX_VIEWS_OVR, &max_views_ovr_);
@@ -77,7 +78,7 @@ void OVRMultiview2::framebufferTextureMultiviewOVR(GLenum target,
   framebuffer_binding->SetAttachmentForBoundFramebuffer(
       target, attachment, textarget, texture, level, base_view_index,
       num_views);
-  scoped.Context()->ApplyStencilTest();
+  scoped.Context()->ApplyDepthAndStencilTest();
 }
 
 bool OVRMultiview2::Supported(WebGLRenderingContextBase* context) {

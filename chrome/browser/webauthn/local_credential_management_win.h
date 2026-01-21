@@ -7,8 +7,8 @@
 
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/webauthn/local_credential_management.h"
 #include "device/fido/win/authenticator.h"
@@ -38,7 +38,7 @@ class LocalCredentialManagementWin : public LocalCredentialManagement {
   void HasCredentials(base::OnceCallback<void(bool)> callback) override;
   void Enumerate(
       base::OnceCallback<void(
-          absl::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
+          std::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
           callback) override;
   void Delete(base::span<const uint8_t> credential_id,
               base::OnceCallback<void(bool)> callback) override;

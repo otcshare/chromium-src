@@ -5,19 +5,33 @@
 #include <string>
 
 #include "components/prefs/pref_service.h"
-#include "components/user_prefs/android/jni_headers/UserPrefs_jni.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/android/browser_context_handle.h"
 #include "content/public/browser/browser_context.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/user_prefs/android/jni_headers/UserPrefs_jni.h"
+
 namespace user_prefs {
+
+static bool JNI_UserPrefs_AreNativePrefsLoaded(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& jbrowser_context_handle) {
+  content::BrowserContext* browser_context =
+      content::BrowserContextFromJavaHandle(jbrowser_context_handle);
+  return browser_context && UserPrefs::IsInitialized(browser_context) &&
+         UserPrefs::Get(browser_context)->GetInitializationStatus() ==
+             PrefService::INITIALIZATION_STATUS_SUCCESS;
+}
 
 static base::android::ScopedJavaLocalRef<jobject> JNI_UserPrefs_Get(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jbrowser_context_handle) {
+    const base::android::JavaRef<jobject>& jbrowser_context_handle) {
   return UserPrefs::Get(
              content::BrowserContextFromJavaHandle(jbrowser_context_handle))
       ->GetJavaObject();
 }
 
 }  // namespace user_prefs
+
+DEFINE_JNI(UserPrefs)

@@ -5,7 +5,6 @@
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 
 #include "base/check.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 
@@ -22,14 +21,14 @@ NamedPlatformChannel::NamedPlatformChannel(const Options& options) {
 NamedPlatformChannel::NamedPlatformChannel(NamedPlatformChannel&& other) =
     default;
 
-NamedPlatformChannel::~NamedPlatformChannel() = default;
-
 NamedPlatformChannel& NamedPlatformChannel::operator=(
     NamedPlatformChannel&& other) = default;
 
+NamedPlatformChannel::~NamedPlatformChannel() = default;
+
 // static
 NamedPlatformChannel::ServerName NamedPlatformChannel::ServerNameFromUTF8(
-    base::StringPiece name) {
+    std::string_view name) {
 #if BUILDFLAG(IS_WIN)
   return base::UTF8ToWide(name);
 #else
@@ -61,8 +60,9 @@ PlatformChannelEndpoint NamedPlatformChannel::ConnectToServer(
 PlatformChannelEndpoint NamedPlatformChannel::ConnectToServer(
     const base::CommandLine& command_line) {
   ServerName name = command_line.GetSwitchValueNative(kNamedHandleSwitch);
-  if (name.empty())
+  if (name.empty()) {
     return PlatformChannelEndpoint();
+  }
   return ConnectToServer(name);
 }
 

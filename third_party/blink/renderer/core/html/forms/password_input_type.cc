@@ -34,7 +34,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
@@ -46,7 +45,8 @@
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/input/keyboard_event_manager.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
-#include "third_party/blink/renderer/core/layout/layout_text_control_single_line.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
 
@@ -56,10 +56,6 @@ void PasswordInputType::CountUsage() {
     CountUsageIfVisible(WebFeature::kInputTypePasswordMaxLength);
 }
 
-const AtomicString& PasswordInputType::FormControlType() const {
-  return input_type_names::kPassword;
-}
-
 bool PasswordInputType::ShouldSaveAndRestoreFormControlState() const {
   return false;
 }
@@ -67,7 +63,6 @@ bool PasswordInputType::ShouldSaveAndRestoreFormControlState() const {
 FormControlState PasswordInputType::SaveFormControlState() const {
   // Should never save/restore password fields.
   NOTREACHED();
-  return FormControlState();
 }
 
 void PasswordInputType::RestoreFormControlState(const FormControlState&) {
@@ -106,6 +101,7 @@ void PasswordInputType::DidSetValueByUserEdit() {
     }
     UpdatePasswordRevealButton();
   }
+
   BaseTextInputType::DidSetValueByUserEdit();
 }
 
@@ -117,6 +113,7 @@ void PasswordInputType::DidSetValue(const String& string, bool value_changed) {
       UpdatePasswordRevealButton();
     }
   }
+
   BaseTextInputType::DidSetValue(string, value_changed);
 }
 
@@ -152,7 +149,7 @@ bool PasswordInputType::ShouldDrawCapsLockIndicator() const {
 }
 
 void PasswordInputType::UpdatePasswordRevealButton() {
-  Element* button = GetElement().UserAgentShadowRoot()->getElementById(
+  Element* button = GetElement().EnsureShadowSubtree()->getElementById(
       shadow_element_names::kIdPasswordRevealButton);
 
   // Update the glyph.
@@ -172,7 +169,7 @@ void PasswordInputType::UpdatePasswordRevealButton() {
         0.7;                       // 0.7em which is enough for ~2 chars.
     const int kLeftMarginPx = 3;   // 3px
     const int kRightMarginPx = 3;  // 3px
-    float current_width = GetElement().getBoundingClientRect()->width();
+    float current_width = GetElement().GetBoundingClientRect()->width();
     float width_needed = GetElement().ComputedStyleRef().FontSize() *
                              (kRevealButtonWidthEm + kPasswordMinWidthEm) +
                          kLeftMarginPx + kRightMarginPx;

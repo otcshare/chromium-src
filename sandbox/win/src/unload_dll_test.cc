@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/compiler_specific.h"
 #include "base/win/scoped_handle.h"
 #include "build/build_config.h"
 #include "sandbox/win/src/sandbox.h"
@@ -21,12 +22,12 @@ SBOX_TESTS_COMMAND int UseOneDLL(int argc, wchar_t** argv) {
 
   wchar_t option = (argv[0])[0];
   if ((option == L'L') || (option == L'B')) {
-    HMODULE module1 = ::LoadLibraryW(argv[1]);
+    HMODULE module1 = ::LoadLibraryW(UNSAFE_TODO(argv[1]));
     rv = (!module1) ? SBOX_TEST_FAILED : SBOX_TEST_SUCCEEDED;
   }
 
   if ((option == L'U') || (option == L'B')) {
-    HMODULE module2 = ::GetModuleHandleW(argv[1]);
+    HMODULE module2 = ::GetModuleHandleW(UNSAFE_TODO(argv[1]));
     rv = ::FreeLibrary(module2) ? SBOX_TEST_SUCCEEDED : SBOX_TEST_FAILED;
   }
   return rv;
@@ -46,10 +47,9 @@ std::unique_ptr<TestRunner> BaselineAvicapRunner() {
   auto runner = std::make_unique<TestRunner>();
   runner->SetTestState(BEFORE_REVERT);
   runner->SetTimeout(2000);
-  // Add a registry rule, because that ensures that the interception agent has
+  // Add a file rule, because that ensures that the interception agent has
   // more than one item in its internal table.
-  runner->AddRule(SubSystem::kFiles, Semantics::kFilesAllowQuery,
-                  L"\\??\\*.exe");
+  runner->AllowFileAccess(FileSemantics::kAllowReadonly, L"\\??\\*.exe");
   return runner;
 }
 
@@ -91,10 +91,8 @@ std::unique_ptr<TestRunner> UnloadAvicapWithPatchingRunner() {
   // Add a couple of rules that ensures that the interception agent add EAT
   // patching on the client which makes sure that the unload dll record does
   // not interact badly with them.
-  runner->AddRule(SubSystem::kFiles, Semantics::kFilesAllowQuery,
-                  L"\\??\\*.exe");
-  runner->AddRule(SubSystem::kFiles, Semantics::kFilesAllowQuery,
-                  L"\\??\\*.log");
+  runner->AllowFileAccess(FileSemantics::kAllowReadonly, L"\\??\\*.exe");
+  runner->AllowFileAccess(FileSemantics::kAllowReadonly, L"\\??\\*.log");
   return runner;
 }
 

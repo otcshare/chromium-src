@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "net/base/completion_once_callback.h"
@@ -21,8 +21,7 @@ namespace storage {
 class FileSystemContext;
 }  // namespace storage
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 struct EntryMetadata;
 
@@ -114,7 +113,6 @@ class FileStreamReader : public storage::FileStreamReader {
   base::WeakPtrFactory<FileStreamReader> weak_ptr_factory_{this};
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FILEAPI_FILE_STREAM_READER_H_

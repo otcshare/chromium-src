@@ -9,6 +9,7 @@
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/network_handle.h"
+#include "net/log/net_log_with_source.h"
 
 namespace net {
 
@@ -32,7 +33,8 @@ class NET_EXPORT LoggingNetworkChangeObserver
 
  private:
   // NetworkChangeNotifier::IPAddressObserver implementation.
-  void OnIPAddressChanged() override;
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override;
 
   // NetworkChangeNotifier::ConnectionTypeObserver implementation.
   void OnConnectionTypeChanged(
@@ -47,7 +49,7 @@ class NET_EXPORT LoggingNetworkChangeObserver
   void OnNetworkSoonToDisconnect(handles::NetworkHandle network) override;
   void OnNetworkMadeDefault(handles::NetworkHandle network) override;
 
-  raw_ptr<NetLog> net_log_;
+  NetLogWithSource net_log_;
 };
 
 }  // namespace net

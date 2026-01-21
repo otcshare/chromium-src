@@ -5,9 +5,9 @@
 package org.chromium.android_webview.test;
 
 import android.os.Message;
-import android.support.test.InstrumentationRegistry;
 import android.util.Base64;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
@@ -16,8 +16,12 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
 import org.chromium.android_webview.AwContents;
+import org.chromium.android_webview.test.TestAwContentsClient.OnFormResubmissionHelper;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer;
 import org.chromium.content_public.common.ContentUrlConstants;
@@ -26,13 +30,11 @@ import org.chromium.net.test.util.TestWebServer;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests if resubmission of post data is handled properly.
- */
-@RunWith(AwJUnit4ClassRunner.class)
-public class AwContentsClientOnFormResubmissionTest {
-    @Rule
-    public AwActivityTestRule mActivityTestRule = new AwActivityTestRule();
+/** Tests if resubmission of post data is handled properly. */
+@RunWith(Parameterized.class)
+@UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
+public class AwContentsClientOnFormResubmissionTest extends AwParameterizedTest {
+    @Rule public AwActivityTestRule mActivityTestRule;
 
     private static class TestAwContentsClient
             extends org.chromium.android_webview.test.TestAwContentsClient {
@@ -88,6 +90,10 @@ public class AwContentsClientOnFormResubmissionTest {
     private TestAwContentsClient mContentsClient;
     private AwContents mAwContents;
 
+    public AwContentsClientOnFormResubmissionTest(AwSettingsMutation param) {
+        this.mActivityTestRule = new AwActivityTestRule(param.getMutation());
+    }
+
     @Before
     public void setUp() throws Exception {
         mServer = TestWebServer.start();
@@ -142,10 +148,10 @@ public class AwContentsClientOnFormResubmissionTest {
         TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
                 mContentsClient.getOnPageFinishedHelper();
         Assert.assertEquals(1, onPageFinishedHelper.getCallCount());
-        TestAwContentsClient.OnFormResubmissionHelper onFormResubmissionHelper =
+        OnFormResubmissionHelper onFormResubmissionHelper =
                 mContentsClient.getOnFormResubmissionHelper();
         // Run reload on UI thread.
-        mActivityTestRule.runOnUiThread(() -> mAwContents.getNavigationController().reload(true));
+        ThreadUtils.runOnUiThreadBlocking(() -> mAwContents.getNavigationController().reload(true));
         // Load another url to cancel form resubmission.
         mActivityTestRule.loadUrlSync(
                 mAwContents, onPageFinishedHelper, ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL);
@@ -179,8 +185,8 @@ public class AwContentsClientOnFormResubmissionTest {
                 mContentsClient.getOnPageFinishedHelper();
         int callCount = onPageFinishedHelper.getCallCount();
         // Run reload on UI thread.
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(
-                () -> mAwContents.getNavigationController().reload(true));
+        InstrumentationRegistry.getInstrumentation()
+                .runOnMainSync(() -> mAwContents.getNavigationController().reload(true));
         try {
             // Wait for page finished callback, or a timeout. A timeout is necessary
             // to detect a dontResend response.

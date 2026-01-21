@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/plugin_vm/plugin_vm_image_download_client.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_installer.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_installer_factory.h"
@@ -57,7 +57,9 @@ void PluginVmImageDownloadClient::OnDownloadStarted(
     return;
   }
 
-  content_length_ = headers ? headers->GetContentLength() : -1;
+  std::optional<base::ByteCount> content_length =
+      headers ? headers->GetContentLength() : std::nullopt;
+  content_length_ = content_length ? content_length->InBytes() : -1;
   response_code_ = headers ? headers->response_code() : -1;
 
   GetInstaller()->OnDownloadStarted();

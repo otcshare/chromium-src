@@ -24,7 +24,7 @@ GbmPixmap::GbmPixmap(GbmSurfaceFactory* surface_manager,
       buffer_(std::move(buffer)),
       framebuffer_(std::move(framebuffer)) {}
 
-gfx::NativePixmapHandle GbmPixmap::ExportHandle() {
+gfx::NativePixmapHandle GbmPixmap::ExportHandle() const {
   return buffer_->ExportHandle();
 }
 
@@ -60,8 +60,8 @@ uint64_t GbmPixmap::GetBufferFormatModifier() const {
   return buffer_->GetFormatModifier();
 }
 
-gfx::BufferFormat GbmPixmap::GetBufferFormat() const {
-  return buffer_->GetBufferFormat();
+viz::SharedImageFormat GbmPixmap::GetSharedImageFormat() const {
+  return buffer_->GetSharedImageFormat();
 }
 
 gfx::Size GbmPixmap::GetBufferSize() const {
@@ -93,6 +93,6 @@ bool GbmPixmap::ScheduleOverlayPlane(
   return true;
 }
 
-GbmPixmap::~GbmPixmap() {}
+GbmPixmap::~GbmPixmap() = default;
 
 }  // namespace ui

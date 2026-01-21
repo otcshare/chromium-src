@@ -3,7 +3,6 @@
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/linux/pkg_config.gni")
 import("//build/config/ui.gni")
 import("//chrome/common/features.gni")
@@ -11,7 +10,7 @@ import("//testing/test.gni")
 import("//ui/base/ui_features.gni")
 
 assert(use_ozone)
-assert(is_chromeos_ash)
+assert(is_chromeos)
 
 if (use_xkbcommon) {
   pkg_config("xkbcommon") {
@@ -51,6 +50,8 @@ static_library("exo") {
     "extended_drag_source.h",
     "frame_sink_resource_manager.cc",
     "frame_sink_resource_manager.h",
+    "frame_timing_history.cc",
+    "frame_timing_history.h",
     "gamepad.cc",
     "gamepad.h",
     "gamepad_observer.h",
@@ -86,7 +87,6 @@ static_library("exo") {
     "seat.cc",
     "seat.h",
     "seat_observer.h",
-    "security_delegate.cc",
     "security_delegate.h",
     "shared_memory.cc",
     "shared_memory.h",
@@ -95,8 +95,6 @@ static_library("exo") {
     "shell_surface_base.cc",
     "shell_surface_base.h",
     "shell_surface_observer.h",
-    "shell_surface_presentation_time_recorder.cc",
-    "shell_surface_presentation_time_recorder.h",
     "shell_surface_util.cc",
     "shell_surface_util.h",
     "sub_surface.cc",
@@ -124,8 +122,6 @@ static_library("exo") {
     "window_properties.h",
     "wm_helper.cc",
     "wm_helper.h",
-    "wm_helper_chromeos.cc",
-    "wm_helper_chromeos.h",
     "xdg_shell_surface.cc",
     "xdg_shell_surface.h",
     "xkb_tracker.cc",
@@ -140,24 +136,25 @@ static_library("exo") {
     "//ash/resources/vector_icons",
     "//base",
     "//cc",
-    "//chromeos/crosapi/cpp:crosapi_constants",
+    "//cc/mojo_embedder",
     "//chromeos/dbus/power",
     "//chromeos/dbus/power:power_manager_proto",
     "//chromeos/ui/base",
     "//chromeos/ui/frame",
+    "//components/account_id",
     "//components/app_restore",
     "//components/fullscreen_control",
     "//components/strings",
     "//components/viz/host",
     "//device/gamepad",
     "//device/gamepad/public/cpp:shared_with_blink",
-    "//gpu",
     "//gpu/command_buffer/client:raster_interface",
     "//net",
     "//services/data_decoder/public/cpp",
     "//services/viz/privileged/mojom/compositing",
     "//skia",
     "//third_party/blink/public/common",
+    "//ui/accessibility",
     "//ui/accessibility:ax_base",
     "//ui/aura",
     "//ui/base",
@@ -165,11 +162,13 @@ static_library("exo") {
     "//ui/base/dragdrop:types",
     "//ui/base/dragdrop/mojom",
     "//ui/base/ime",
+    "//ui/base/ime/ash",
     "//ui/compositor",
     "//ui/compositor_extra",
     "//ui/display/manager",
-    "//ui/events/devices:devices",
+    "//ui/events/devices",
     "//ui/events/ozone",
+    "//ui/events/ozone/evdev:mouse_button_property",
     "//ui/events/ozone/layout",
     "//ui/gfx",
     "//ui/gfx/geometry",
@@ -183,8 +182,8 @@ static_library("exo") {
   ]
 
   assert_no_deps = [
-    "//ash/components/arc",
-    "//components/arc",
+    "//chromeos/ash/experiences/arc",
+    "//chromeos/ash/experiences/arc/intent_helper",
     "//content/public/browser",
     "//content/public/common",
   ]
@@ -198,6 +197,10 @@ static_library("exo") {
   if (use_xkbcommon) {
     configs += [ ":xkbcommon" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("test_support") {
@@ -208,8 +211,6 @@ source_set("test_support") {
     "mock_vsync_timing_observer.h",
     "test/exo_test_base.cc",
     "test/exo_test_base.h",
-    "test/exo_test_base_views.cc",
-    "test/exo_test_base_views.h",
     "test/exo_test_data_exchange_delegate.cc",
     "test/exo_test_data_exchange_delegate.h",
     "test/exo_test_helper.cc",
@@ -220,6 +221,14 @@ source_set("test_support") {
     "test/mock_security_delegate.h",
     "test/shell_surface_builder.cc",
     "test/shell_surface_builder.h",
+    "test/surface_tree_host_test_util.cc",
+    "test/surface_tree_host_test_util.h",
+    "test/test_data_device_delegate.cc",
+    "test/test_data_device_delegate.h",
+    "test/test_data_offer_delegate.cc",
+    "test/test_data_offer_delegate.h",
+    "test/test_data_source_delegate.cc",
+    "test/test_data_source_delegate.h",
     "test/test_security_delegate.cc",
     "test/test_security_delegate.h",
   ]
@@ -232,11 +241,10 @@ source_set("test_support") {
     "//ash/public/cpp",
     "//base",
     "//base/test:test_support",
+    "//cc/mojo_embedder",
     "//chromeos/ui/base",
     "//components/exo/wayland:ui_controls_protocol_stub",
-    "//components/exo/wayland:weston_test_stub",
     "//components/viz/service",
-    "//gpu",
     "//skia",
     "//ui/aura",
     "//ui/base/dragdrop/mojom",
@@ -276,7 +284,6 @@ source_set("unit_tests") {
     "pointer_unittest.cc",
     "seat_unittest.cc",
     "shared_memory_unittest.cc",
-    "shell_surface_presentation_time_recorder_unittest.cc",
     "shell_surface_unittest.cc",
     "shell_surface_util_unittest.cc",
     "sub_surface_unittest.cc",
@@ -288,7 +295,7 @@ source_set("unit_tests") {
     "toast_surface_unittest.cc",
     "touch_unittest.cc",
     "ui_lock_controller_unittest.cc",
-    "wm_helper_chromeos_unittest.cc",
+    "wm_helper_unittest.cc",
     "xdg_shell_surface_unittest.cc",
   ]
 
@@ -300,26 +307,29 @@ source_set("unit_tests") {
     "//ash/constants",
     "//ash/keyboard/ui",
     "//ash/public/cpp",
-    "//ash/public/cpp/external_arc",
     "//base",
     "//base/test:test_support",
     "//cc",
     "//cc:test_support",
+    "//cc/mojo_embedder",
+    "//chromeos/ash/components/login/auth",
+    "//chromeos/ash/experiences/arc",
     "//chromeos/dbus/power",
     "//chromeos/dbus/power:power_manager_proto",
     "//chromeos/ui/base",
     "//chromeos/ui/frame",
+    "//chromeos/ui/wm",
     "//components/fullscreen_control",
     "//components/user_manager",
     "//components/viz/service",
     "//components/viz/test:test_support",
-    "//content/test:test_support",
     "//device/gamepad:test_helpers",
     "//gpu/command_buffer/client:raster_interface",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
     "//ui/aura",
+    "//ui/aura:test_support",
     "//ui/base:test_support",
     "//ui/base/cursor/mojom:cursor_type",
     "//ui/base/dragdrop:types",
@@ -333,10 +343,16 @@ source_set("unit_tests") {
     "//ui/gfx",
     "//ui/gfx:test_support",
     "//ui/gfx/geometry",
+    "//ui/gl:test_support",
     "//ui/message_center",
     "//ui/views",
+    "//ui/views:test_support",
     "//ui/wm",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 test("exo_unittests") {
@@ -365,4 +381,8 @@ test("exo_unittests") {
   ]
 
   data_deps = []
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

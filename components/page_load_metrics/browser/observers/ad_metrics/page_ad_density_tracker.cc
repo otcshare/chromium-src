@@ -4,15 +4,18 @@
 
 #include "components/page_load_metrics/browser/observers/ad_metrics/page_ad_density_tracker.h"
 
+#include <optional>
+
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
 #include "base/time/default_tick_clock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace page_load_metrics {
 
 namespace {
+
+using RectId = PageAdDensityTracker::RectId;
 
 int CalculateIntersectedLength(int start1, int end1, int start2, int end2) {
   DCHECK_LE(start1, end1);
@@ -25,7 +28,7 @@ int CalculateIntersectedLength(int start1, int end1, int start2, int end2) {
 // This counts each overlapping area a single time and does not include areas
 // where there is no line segment.
 //
-// TODO(https://crbug.com/1068586): Optimize segment length calculation.
+// TODO(crbug.com/40683539): Optimize segment length calculation.
 // AddSegment and RemoveSegment are both logarithmic operations, making this
 // linearithmic with the number of segments. However the expected number
 // of segments at any given time in the density calculation is low.
@@ -34,7 +37,7 @@ class BoundedSegmentLength {
   // An event to process corresponding to the left or right point of each
   // line segment.
   struct SegmentEvent {
-    SegmentEvent(int segment_id, int pos, bool is_segment_start)
+    SegmentEvent(RectId segment_id, int pos, bool is_segment_start)
         : segment_id(segment_id),
           pos(pos),
           is_segment_start(is_segment_start) {}
@@ -44,7 +47,7 @@ class BoundedSegmentLength {
     bool operator<(const SegmentEvent& rhs) const {
       if (pos == rhs.pos) {
         // We do not have 0-length segment.
-        DCHECK_NE(segment_id, rhs.segment_id);
+        DCHECK(segment_id != rhs.segment_id);
 
         return segment_id < rhs.segment_id;
       } else {
@@ -52,7 +55,7 @@ class BoundedSegmentLength {
       }
     }
 
-    int segment_id;
+    RectId segment_id;
     int pos;
     bool is_segment_start;
   };
@@ -82,7 +85,7 @@ class BoundedSegmentLength {
 
   // Add a line segment to the set of active line segments, the segment
   // corresponds to the bottom or top of a rect.
-  void AddSegment(int segment_id, int start, int end) {
+  void AddSegment(RectId segment_id, int start, int end) {
     DCHECK_LE(start, end);
 
     int clipped_start = std::max(bound_start_, start);
@@ -106,7 +109,7 @@ class BoundedSegmentLength {
   }
 
   // Remove a segment from the set of active line segmnets.
-  void RemoveSegment(int segment_id) {
+  void RemoveSegment(RectId segment_id) {
     auto it = segment_event_iterators_.find(segment_id);
     if (it == segment_event_iterators_.end())
       return;
@@ -119,9 +122,9 @@ class BoundedSegmentLength {
 
   // Calculate the combined length of segments in the active set of segments by
   // iterating over the sorted set of segment events.
-  absl::optional<int> Length() {
+  std::optional<int> Length() {
     base::CheckedNumeric<int> length = 0;
-    absl::optional<int> last_event_pos;
+    std::optional<int> last_event_pos;
     int num_active = 0;
     for (const auto& segment_event : active_segments_) {
       if (!last_event_pos) {
@@ -140,7 +143,7 @@ class BoundedSegmentLength {
       }
     }
 
-    absl::optional<int> total_length;
+    std::optional<int> total_length;
     if (length.IsValid())
       total_length = length.ValueOrDie();
 
@@ -154,12 +157,12 @@ class BoundedSegmentLength {
   std::set<SegmentEvent> active_segments_;
 
   // Map from the segment_id passed by user to the Segment struct.
-  std::unordered_map<int, SegmentEventSetIterators> segment_event_iterators_;
+  std::map<RectId, SegmentEventSetIterators> segment_event_iterators_;
 };
 
 }  // namespace
 
-PageAdDensityTracker::RectEvent::RectEvent(int id,
+PageAdDensityTracker::RectEvent::RectEvent(RectId id,
                                            bool is_bottom,
                                            const gfx::Rect& rect)
     : rect_id(id), is_bottom(is_bottom), rect(rect) {}
@@ -174,8 +177,10 @@ PageAdDensityTracker::RectEventSetIterators::RectEventSetIterators(
 PageAdDensityTracker::RectEventSetIterators::RectEventSetIterators(
     const RectEventSetIterators& other) = default;
 
-PageAdDensityTracker::PageAdDensityTracker(base::TickClock* clock)
-    : clock_(clock ? clock : base::DefaultTickClock::GetInstance()) {
+PageAdDensityTracker::PageAdDensityTracker(bool is_in_foreground,
+                                           const base::TickClock* clock)
+    : is_in_foreground_(is_in_foreground),
+      clock_(clock ? clock : base::DefaultTickClock::GetInstance()) {
   last_viewport_density_accumulate_time_ = clock_->NowTicks();
 }
 
@@ -199,7 +204,7 @@ int PageAdDensityTracker::ViewportAdDensityByArea() const {
   return last_viewport_ad_density_by_area_;
 }
 
-void PageAdDensityTracker::AddRect(int rect_id, const gfx::Rect& rect) {
+void PageAdDensityTracker::AddRect(RectId rect_id, const gfx::Rect& rect) {
   // Check that we do not already have rect events for the rect.
   DCHECK(rect_events_iterators_.find(rect_id) == rect_events_iterators_.end());
 
@@ -219,16 +224,9 @@ void PageAdDensityTracker::AddRect(int rect_id, const gfx::Rect& rect) {
       rect_events_.insert(RectEvent(rect_id, true /*is_bottom*/, rect)).first;
   rect_events_iterators_.emplace(rect_id,
                                  RectEventSetIterators(top_it, bottom_it));
-
-  // TODO(https://crbug.com/1068586): Improve performance by adding additional
-  // throttling to only calculate when max density can decrease (frame deleted
-  // or moved).
-  CalculatePageAdDensity();
-
-  CalculateViewportAdDensity();
 }
 
-void PageAdDensityTracker::RemoveRect(int rect_id) {
+void PageAdDensityTracker::RemoveRect(RectId rect_id) {
   auto it = rect_events_iterators_.find(rect_id);
 
   if (it == rect_events_iterators_.end())
@@ -240,12 +238,41 @@ void PageAdDensityTracker::RemoveRect(int rect_id) {
   rect_events_iterators_.erase(it);
 }
 
+void PageAdDensityTracker::OnHidden() {
+  DCHECK(is_in_foreground_);
+
+  // Accumulate the viewport ad density for the last visible period before
+  // pausing.
+  AccumulateOutstandingViewportAdDensity();
+  last_viewport_ad_density_by_area_ = 0;
+
+  is_in_foreground_ = false;
+}
+
+void PageAdDensityTracker::OnShown() {
+  DCHECK(!is_in_foreground_);
+  is_in_foreground_ = true;
+
+  // Time spent in the background is ignored. Reset the accumulation start time
+  // for this new interval for viewport density; no need to accumulate yet.
+  last_viewport_density_accumulate_time_ = clock_->NowTicks();
+
+  // Recalculate densities now that the page is visible. This ensures that any
+  // ad rectangles added or changed while the page was hidden will be accounted
+  // for in the metrics from this point forward.
+  CalculatePageAdDensity();
+  CalculateViewportAdDensity();
+}
+
 void PageAdDensityTracker::UpdateMainFrameRect(const gfx::Rect& rect) {
   if (rect == last_main_frame_rect_)
     return;
 
   last_main_frame_rect_ = rect;
-  CalculatePageAdDensity();
+
+  if (is_in_foreground_) {
+    CalculatePageAdDensity();
+  }
 }
 
 void PageAdDensityTracker::UpdateMainFrameViewportRect(const gfx::Rect& rect) {
@@ -253,18 +280,46 @@ void PageAdDensityTracker::UpdateMainFrameViewportRect(const gfx::Rect& rect) {
     return;
 
   last_main_frame_viewport_rect_ = rect;
-  CalculateViewportAdDensity();
+
+  if (is_in_foreground_) {
+    AccumulateOutstandingViewportAdDensity();
+    CalculateViewportAdDensity();
+  }
+}
+
+void PageAdDensityTracker::UpdateMainFrameAdRects(
+    const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) {
+  for (auto const& [element_id, rect] : main_frame_ad_rects) {
+    RectId rect_id = element_id;
+
+    RemoveRect(rect_id);
+
+    if (!rect.IsEmpty()) {
+      AddRect(rect_id, rect);
+    }
+  }
+
+  if (is_in_foreground_) {
+    CalculatePageAdDensity();
+
+    AccumulateOutstandingViewportAdDensity();
+    CalculateViewportAdDensity();
+  }
 }
 
 void PageAdDensityTracker::Finalize() {
   DCHECK(!finalize_called_);
 
-  AccumulateOutstandingViewportAdDensity();
+  if (is_in_foreground_) {
+    AccumulateOutstandingViewportAdDensity();
+  }
 
   finalize_called_ = true;
 }
 
 void PageAdDensityTracker::AccumulateOutstandingViewportAdDensity() {
+  DCHECK(is_in_foreground_);
+
   base::TimeTicks now = clock_->NowTicks();
   base::TimeDelta elapsed_time = now - last_viewport_density_accumulate_time_;
 
@@ -278,6 +333,8 @@ void PageAdDensityTracker::AccumulateOutstandingViewportAdDensity() {
 }
 
 void PageAdDensityTracker::CalculatePageAdDensity() {
+  DCHECK(is_in_foreground_);
+
   AdDensityCalculationResult result =
       CalculateDensityWithin(last_main_frame_rect_);
   if (result.ad_density_by_area) {
@@ -298,12 +355,13 @@ void PageAdDensityTracker::CalculatePageAdDensity() {
 }
 
 void PageAdDensityTracker::CalculateViewportAdDensity() {
+  DCHECK(is_in_foreground_);
+
   AdDensityCalculationResult result =
       CalculateDensityWithin(last_main_frame_viewport_rect_);
   if (!result.ad_density_by_area)
     return;
 
-  AccumulateOutstandingViewportAdDensity();
   last_viewport_ad_density_by_area_ = result.ad_density_by_area.value();
 
   if (VLOG_IS_ON(2)) {
@@ -331,7 +389,7 @@ PageAdDensityTracker::CalculateDensityWithin(const gfx::Rect& bounding_rect) {
       /*bound_start=*/bounding_rect.x(),
       /*bound_end=*/bounding_rect.x() + bounding_rect.width());
 
-  absl::optional<int> last_y;
+  std::optional<int> last_y;
   base::CheckedNumeric<int> total_area = 0;
   base::CheckedNumeric<int> total_height = 0;
   for (const auto& rect_event : rect_events_) {
@@ -350,7 +408,7 @@ PageAdDensityTracker::CalculateDensityWithin(const gfx::Rect& bounding_rect) {
     DCHECK_LE(current_y, last_y.value());
 
     // If the segment length value is invalid, skip this ad density calculation.
-    absl::optional<int> horizontal_segment_length =
+    std::optional<int> horizontal_segment_length =
         horizontal_segment_length_tracker.Length();
     if (!horizontal_segment_length)
       return {};
@@ -417,7 +475,7 @@ bool PageAdDensityTracker::RectEvent::operator<(const RectEvent& rhs) const {
   // Tiebreak with |rect_id|.
   if (lhs_y == rhs_y) {
     // We do not have 0-length Rect.
-    DCHECK_NE(rect_id, rhs.rect_id);
+    DCHECK(rect_id != rhs.rect_id);
     return rect_id < rhs.rect_id;
   } else {
     return lhs_y > rhs_y;

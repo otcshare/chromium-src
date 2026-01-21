@@ -6,16 +6,16 @@
 #define CHROME_BROWSER_UI_THUMBNAILS_THUMBNAIL_TAB_HELPER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_capture_info.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_image.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class BackgroundThumbnailCapturer;
 class ThumbnailScheduler;
@@ -32,6 +32,11 @@ class ThumbnailTabHelper
   scoped_refptr<ThumbnailImage> thumbnail() const { return thumbnail_; }
 
   bool is_tab_discarded() const { return is_tab_discarded_; }
+
+  // Notify the helper that the tab is being hidden by being put into the
+  // background. Allows for an updated preview image after swapping away from an
+  // active tab.
+  void CaptureThumbnailOnTabBackgrounded();
 
  private:
   class TabStateTracker;
@@ -51,15 +56,14 @@ class ThumbnailTabHelper
   // before a page is frozen or swapped out.
   void StartVideoCapture();
   void StopVideoCapture();
-  void CaptureThumbnailOnTabHidden();
 
   void StoreThumbnailForTabSwitch(base::TimeTicks start_time,
-                                  const SkBitmap& bitmap);
+                                  const content::CopyFromSurfaceResult& result);
   void StoreThumbnailForBackgroundCapture(const SkBitmap& bitmap,
                                           uint64_t frame_id);
   void StoreThumbnail(CaptureType type,
                       const SkBitmap& bitmap,
-                      absl::optional<uint64_t> frame_id);
+                      std::optional<uint64_t> frame_id);
 
   // Clears the data associated to the currently set thumbnail. For when the
   // thumbnail is no longer valid.

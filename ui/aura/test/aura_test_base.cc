@@ -11,6 +11,7 @@
 #include "ui/aura/window.h"
 #include "ui/base/ime/init/input_method_initializer.h"
 #include "ui/base/ui_base_switches.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/events/event_dispatcher.h"
 #include "ui/events/event_sink.h"
 #include "ui/events/gesture_detection/gesture_configuration.h"
@@ -81,11 +82,15 @@ void AuraTestBase::TearDown() {
 
 Window* AuraTestBase::CreateNormalWindow(int id, Window* parent,
                                          WindowDelegate* delegate) {
-  return CreateTestWindowWithDelegateAndType(
-      delegate ? delegate
-               : test::TestWindowDelegate::CreateSelfDestroyingDelegate(),
-      client::WINDOW_TYPE_UNKNOWN, id, gfx::Rect(0, 0, 100, 100), parent,
-      /* show_on_creation */ true);
+  return CreateTestWindow({.delegate = delegate
+                                           ? delegate
+                                           : test::TestWindowDelegate::
+                                                 CreateSelfDestroyingDelegate(),
+                           .parent = parent,
+                           .bounds = {100, 100},
+                           .window_type = client::WINDOW_TYPE_UNKNOWN,
+                           .window_id = id})
+      .release();
 }
 
 void AuraTestBase::RunAllPendingInMessageLoop() {
@@ -93,7 +98,8 @@ void AuraTestBase::RunAllPendingInMessageLoop() {
 }
 
 void AuraTestBase::ParentWindow(Window* window) {
-  client::ParentWindowWithContext(window, root_window(), gfx::Rect());
+  client::ParentWindowWithContext(window, root_window(), gfx::Rect(),
+                                  display::kInvalidDisplayId);
 }
 
 bool AuraTestBase::DispatchEventUsingWindowDispatcher(ui::Event* event) {

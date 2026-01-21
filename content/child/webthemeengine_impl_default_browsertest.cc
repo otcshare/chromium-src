@@ -6,6 +6,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/browser_test_utils.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
@@ -15,7 +16,7 @@ namespace content {
 
 class WebThemeEngineImplDefaultBrowserTest : public ContentBrowserTest {
  public:
-  WebThemeEngineImplDefaultBrowserTest() {}
+  WebThemeEngineImplDefaultBrowserTest() = default;
 };
 
 #if BUILDFLAG(IS_WIN)
@@ -23,6 +24,9 @@ IN_PROC_BROWSER_TEST_F(WebThemeEngineImplDefaultBrowserTest, GetSystemColor) {
   // The test non-deterministically fails on Windows-2008ServerR2 builders due
   // to a difference in the default theme. As a result, only run the test on
   // non-server versions.
+  // TODO(crbug.com/40246975): Remove this, and the windows_version.h
+  // include, if the failure turns out to be specific to Windows-2008ServerR2
+  // and not any Windows server.
   if (base::win::OSInfo::GetInstance()->version_type() ==
       base::win::VersionType::SUITE_SERVER) {
     return;
@@ -112,36 +116,19 @@ IN_PROC_BROWSER_TEST_F(WebThemeEngineImplDefaultBrowserTest, GetSystemColor) {
                                   "window",
                                   "windowFrame",
                                   "windowText"};
-  std::vector<std::string> expected_colors;
-  if (base::win::GetVersion() <= base::win::Version::WIN8_1) {
-    expected_colors = {
-        "rgb(0, 0, 0)",       "rgb(0, 0, 0)",       "rgb(0, 102, 204)",
-        "rgb(255, 255, 255)", "rgb(255, 255, 255)", "rgb(240, 240, 240)",
-        "rgb(240, 240, 240)", "rgb(240, 240, 240)", "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(109, 109, 109)",
-        "rgb(51, 153, 255)",  "rgb(255, 255, 255)", "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(128, 128, 128)", "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(255, 255, 255)", "rgb(0, 0, 0)",
-        "rgb(240, 240, 240)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
-        "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(0, 0, 0)"};
-  } else {
-    expected_colors = {
-        "rgb(0, 0, 0)",       "rgb(0, 0, 0)",       "rgb(0, 102, 204)",
-        "rgb(255, 255, 255)", "rgb(255, 255, 255)", "rgb(240, 240, 240)",
-        "rgb(240, 240, 240)", "rgb(240, 240, 240)", "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(109, 109, 109)",
-        "rgb(0, 120, 215)",   "rgb(255, 255, 255)", "rgb(0, 0, 0)",
-        "rgb(255, 255, 255)", "rgb(128, 128, 128)", "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(255, 255, 255)", "rgb(0, 0, 0)",
-        "rgb(240, 240, 240)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
-        "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
-        "rgb(0, 0, 0)",       "rgb(0, 0, 0)"};
-  }
+  const std::vector<std::string> expected_colors = {
+      "rgb(0, 0, 0)",       "rgb(0, 0, 0)",       "rgb(0, 102, 204)",
+      "rgb(255, 255, 255)", "rgb(255, 255, 255)", "rgb(240, 240, 240)",
+      "rgb(240, 240, 240)", "rgb(240, 240, 240)", "rgb(0, 0, 0)",
+      "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
+      "rgb(255, 255, 255)", "rgb(0, 0, 0)",       "rgb(109, 109, 109)",
+      "rgb(0, 120, 215)",   "rgb(255, 255, 255)", "rgb(0, 0, 0)",
+      "rgb(255, 255, 255)", "rgb(128, 128, 128)", "rgb(255, 255, 255)",
+      "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
+      "rgb(0, 0, 0)",       "rgb(255, 255, 255)", "rgb(0, 0, 0)",
+      "rgb(240, 240, 240)", "rgb(0, 0, 0)",       "rgb(0, 0, 0)",
+      "rgb(0, 0, 0)",       "rgb(0, 102, 204)",   "rgb(255, 255, 255)",
+      "rgb(0, 0, 0)",       "rgb(0, 0, 0)"};
 
   ASSERT_EQ(ids.size(), expected_colors.size());
 
@@ -154,4 +141,61 @@ IN_PROC_BROWSER_TEST_F(WebThemeEngineImplDefaultBrowserTest, GetSystemColor) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+IN_PROC_BROWSER_TEST_F(WebThemeEngineImplDefaultBrowserTest,
+                       FieldAndCanvasAreDistinctInDarkMode) {
+  GURL url(
+      "data:text/html,"
+      "<!doctype html><html>"
+      "<body style='color-scheme: dark;'>"
+      "<div id='field' style='color: Field'>Field</div>"
+      "<div id='canvas' style='color: Canvas'>Canvas</div>"
+      "</body></html>");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  const std::string field_color =
+      EvalJs(shell(),
+             "window.getComputedStyle(document.getElementById('field'))."
+             "getPropertyValue('color').toString()")
+          .ExtractString();
+  const std::string canvas_color =
+      EvalJs(shell(),
+             "window.getComputedStyle(document.getElementById('canvas'))."
+             "getPropertyValue('color').toString()")
+          .ExtractString();
+
+  EXPECT_NE(field_color, canvas_color);
+}
+
+IN_PROC_BROWSER_TEST_F(WebThemeEngineImplDefaultBrowserTest,
+                       ActiveLinkAndVisitedTextAreDistinctInDarkMode) {
+  GURL url(
+      "data:text/html,"
+      "<!doctype html><html>"
+      "<body style='color-scheme: dark;'>"
+      "<div id='active-text' style='color: ActiveText'>ActiveText</div>"
+      "<div id='link-text' style='color: LinkText'>LinkText</div>"
+      "<div id='visited-text' style='color: VisitedText'>VisitedText</div>"
+      "</body></html>");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  const std::string active_text_color =
+      EvalJs(shell(),
+             "window.getComputedStyle(document.getElementById('active-text'))."
+             "getPropertyValue('color').toString()")
+          .ExtractString();
+  const std::string link_text_color =
+      EvalJs(shell(),
+             "window.getComputedStyle(document.getElementById('link-text'))."
+             "getPropertyValue('color').toString()")
+          .ExtractString();
+  const std::string visitied_text_color =
+      EvalJs(shell(),
+             "window.getComputedStyle(document.getElementById('visited-text'))."
+             "getPropertyValue('color').toString()")
+          .ExtractString();
+
+  EXPECT_NE(active_text_color, link_text_color);
+  EXPECT_NE(link_text_color, visitied_text_color);
+  EXPECT_NE(visitied_text_color, active_text_color);
+}
 }  // namespace content

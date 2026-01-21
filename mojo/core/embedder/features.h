@@ -9,35 +9,34 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
+#include "mojo/buildflags.h"
 
 namespace mojo {
 namespace core {
 
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-BASE_DECLARE_FEATURE(kMojoLinuxChannelSharedMem);
+BASE_DECLARE_FEATURE(kMojoUseEventFd);
 
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::FeatureParam<int> kMojoLinuxChannelSharedMemPages;
-
-COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::FeatureParam<bool> kMojoLinuxChannelSharedMemEfdZeroOnWake;
+extern const base::FeatureParam<int> kMojoUseEventFdPages;
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_ANDROID)
 
-COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-BASE_DECLARE_FEATURE(kMojoPosixUseWritev);
-
-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_MAC)
-
-COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-BASE_DECLARE_FEATURE(kMojoInlineMessagePayloads);
-
-COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-BASE_DECLARE_FEATURE(kMojoAvoidRandomPipeId);
-
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES) BASE_DECLARE_FEATURE(kMojoIpcz);
+#endif
+
+COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
+BASE_DECLARE_FEATURE(kMojoIpczMemV2);
+
+COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
+BASE_DECLARE_FEATURE(kMojoFixGeometricBufferGrowth);
+
+#if BUILDFLAG(IS_WIN)
+COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
+BASE_DECLARE_FEATURE(kMojoHandleTypeProtections);
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace core
 }  // namespace mojo

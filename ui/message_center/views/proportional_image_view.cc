@@ -8,6 +8,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/message_center/message_center_style.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
@@ -47,13 +48,14 @@ void ProportionalImageView::OnPaint(gfx::Canvas* canvas) {
                 rasterized, skia::ImageOperations::RESIZE_BEST, draw_size);
 
   if (apply_rounded_corners_) {
-    SkPath path;
-    const SkScalar corner_radius =
-        SkIntToScalar(message_center::kImageCornerRadius);
-    const SkScalar kRadius[8] = {corner_radius, corner_radius, corner_radius,
-                                 corner_radius, corner_radius, corner_radius,
-                                 corner_radius, corner_radius};
-    path.addRoundRect(gfx::RectToSkRect(draw_bounds), kRadius);
+    SkScalar corner_radius = SkIntToScalar(message_center::kImageCornerRadius);
+
+#if BUILDFLAG(IS_CHROMEOS)
+    corner_radius = SkIntToScalar(message_center::kJellyImageCornerRadius);
+#endif
+
+    const SkPath path = SkPath::RRect(gfx::RectToSkRect(draw_bounds),
+                                      corner_radius, corner_radius);
 
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
@@ -75,7 +77,7 @@ gfx::Size ProportionalImageView::GetImageDrawingSize() {
   return GetImageSizeForContainerSize(max_size, image_.Size());
 }
 
-BEGIN_METADATA(ProportionalImageView, views::View)
+BEGIN_METADATA(ProportionalImageView)
 END_METADATA
 
 }  // namespace message_center

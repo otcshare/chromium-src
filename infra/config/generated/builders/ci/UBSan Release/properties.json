@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/ci/UBSan Release/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -23,7 +26,8 @@
                 ],
                 "build_config": "Release",
                 "config": "chromium_linux_ubsan",
-                "target_bits": 64
+                "target_bits": 64,
+                "target_platform": "linux"
               },
               "legacy_gclient_config": {
                 "config": "chromium"
@@ -38,13 +42,27 @@
           "builder": "UBSan Release",
           "project": "chromium"
         }
-      ]
+      ],
+      "mirroring_builder_group_and_names": [
+        {
+          "builder": "linux-ubsan-rel",
+          "group": "tryserver.chromium.fuzz"
+        }
+      ],
+      "retry_failed_shards": true,
+      "targets_spec_directory": "infra/config/generated/builders/ci/UBSan Release/targets"
     }
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-trusted",
-    "jobs": 250,
-    "metrics_project": "chromium-reclient-metrics"
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-trusted",
+    "remote_jobs": 250
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -54,8 +72,11 @@
     ]
   },
   "builder_group": "chromium.fuzz",
+  "gardener_rotations": [
+    "chromium"
+  ],
   "recipe": "chromium",
   "sheriff_rotations": [
-    "chromium.fuzz"
+    "chromium"
   ]
 }

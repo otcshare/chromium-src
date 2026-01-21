@@ -22,7 +22,6 @@ PaletteTrayOptions PaletteToolIdToPaletteTrayOptions(PaletteToolId tool_id) {
   }
 
   NOTREACHED();
-  return PALETTE_OPTIONS_COUNT;
 }
 
 PaletteModeCancelType PaletteToolIdToPaletteModeCancelType(

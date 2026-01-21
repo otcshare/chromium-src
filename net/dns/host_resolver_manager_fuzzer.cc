@@ -11,8 +11,9 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
@@ -34,8 +35,8 @@
 
 namespace {
 
-const char* kHostNames[] = {"foo", "foo.com",   "a.foo.com",
-                            "bar", "localhost", "localhost6"};
+constexpr const char* kHostNames[] = {"foo", "foo.com",   "a.foo.com",
+                                      "bar", "localhost", "localhost6"};
 
 class DnsRequest {
  public:
@@ -143,7 +144,7 @@ class DnsRequest {
   int Start() {
     net::HostResolver::ResolveHostParameters parameters;
 
-    auto* query_types_it = net::kDnsQueryTypes.cbegin();
+    auto query_types_it = net::kDnsQueryTypes.cbegin();
     std::advance(query_types_it, data_provider_->ConsumeIntegralInRange<size_t>(
                                      0, net::kDnsQueryTypes.size() - 1));
     parameters.dns_query_type = query_types_it->first;
@@ -213,7 +214,8 @@ class DnsRequest {
     if (parameters.source == net::HostResolverSource::MULTICAST_DNS &&
         (parameters.include_canonical_name || parameters.loopback_only ||
          parameters.cache_usage !=
-             net::HostResolver::ResolveHostParameters::CacheUsage::ALLOWED)) {
+             net::HostResolver::ResolveHostParameters::CacheUsage::ALLOWED ||
+         parameters.dns_query_type == net::DnsQueryType::HTTPS)) {
       return false;
     }
 
@@ -223,9 +225,9 @@ class DnsRequest {
   // Cancel the request, if not already completed. Otherwise, does nothing.
   void Cancel() { request_.reset(); }
 
-  net::HostResolver* host_resolver_;
-  FuzzedDataProvider* data_provider_;
-  std::vector<std::unique_ptr<DnsRequest>>* dns_requests_;
+  raw_ptr<net::HostResolver> host_resolver_;
+  raw_ptr<FuzzedDataProvider> data_provider_;
+  raw_ptr<std::vector<std::unique_ptr<DnsRequest>>> dns_requests_;
 
   // Non-null only while running.
   std::unique_ptr<net::HostResolver::ResolveHostRequest> request_;

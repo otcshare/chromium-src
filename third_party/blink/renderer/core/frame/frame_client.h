@@ -7,6 +7,7 @@
 
 #include "base/unguessable_token.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace gfx {
@@ -43,6 +44,11 @@ class CORE_EXPORT FrameClient : public GarbageCollected<FrameClient> {
   // the viewport dimensions themselves changed. Only invoked on the main frame.
   virtual void OnMainFrameViewportRectangleChanged(
       const gfx::Rect& main_frame_viewport_rect) {}
+
+  // Called when an ad element's geometry changed. An empty `ad_rect` is used to
+  // signal the removal of the element. Only invoked on the main frame.
+  virtual void OnMainFrameAdRectangleChanged(DOMNodeId element_id,
+                                             const gfx::Rect& ad_rect) {}
 
   virtual ~FrameClient() = default;
 

@@ -83,7 +83,7 @@ update
     * [PermissionDescriptorInfoToPermissionType()](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/common/permissions/permission_utils.cc;l=126;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
 6. In [permission_controller_impl.cc](https://source.chromium.org/chromium/chromium/src/+/main:content/browser/permissions/permission_controller_impl.cc)
 update [PermissionToSchedulingFeature()](https://source.chromium.org/chromium/chromium/src/+/main:content/browser/permissions/permission_controller_impl.cc;l=31;drc=a989b8968ead0d1a80b285eef0a2acf9feb71c82)
-. By default the new feature should return `absl::nullopt`. That means it will
+. By default the new feature should return `std::nullopt`. That means it will
 not block back-forward cache. If your feature needs to block it, make sure it is
 explicitly mentioned in a design doc as that needs to be reviewed.
 7. In [aw_permission_manager.cc](https://source.chromium.org/chromium/chromium/src/+/main:android_webview/browser/aw_permission_manager.cc)
@@ -92,14 +92,24 @@ update
     * [CancelPermissionRequest()](https://source.chromium.org/chromium/chromium/src/+/main:android_webview/browser/aw_permission_manager.cc;l=514;drc=334d00e7293fa3a7127a6270f0c5720d5e46a7eb)
 8. In [shell_permission_manager.cc](https://source.chromium.org/chromium/chromium/src/+/main:content/shell/browser/shell_permission_manager.cc)
 update [IsAllowlistedPermissionType()](https://source.chromium.org/chromium/chromium/src/+/main:content/shell/browser/shell_permission_manager.cc;l=24;drc=334d00e7293fa3a7127a6270f0c5720d5e46a7eb)
+9. For Controlled Frame:
+    * By default, [GetPermissionStatus() / IsPermissionRequestable()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_context_base.cc;l=343;drc=2046c842c9a8e7abe63a74f26e05896c15daa258) disable
+      permissions for WebView/Controlled Frame. If your PermissionType needs to
+      be used by Controlled Frame embedded content, you can rely on examples
+      from [WEB_VIEW_PERMISSION_TYPE_GEOLOCATION](https://source.chromium.org/search?q=WEB_VIEW_PERMISSION_TYPE_GEOLOCATION&sq=&ss=chromium%2Fchromium%2Fsrc) and
+      [WEB_VIEW_PERMISSION_TYPE_MEDIA](https://source.chromium.org/search?q=WEB_VIEW_PERMISSION_TYPE_MEDIA&ss=chromium%2Fchromium%2Fsrc) to guide how to do this in
+      Controlled Frame.
+    * Add permission type to
+      [controlled_frame_permissions_unittest.cc](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/controlled_frame/controlled_frame_permissions_unittest.cc).
 
-### Add ContentSettingType
-1. In [content_settings_types.h](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings_types.h)
+### Add ContentSettingsType
+1. In
+   [content_settings_types.mojo](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings_types.mojom)
 update
-[ContentSettingsType](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings_types.h;l=17;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)
-2. In [content_settings.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings.cc)
+[ContentSettingsType](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings_types.mojom;bpv=1;bpt=1;l=18?gsn=ContentSettingsType&gs=KYTHE%3A%2F%2Fkythe%3A%2F%2Fchromium.googlesource.com%2Fcodesearch%2Fchromium%2Fsrc%2F%2Fmain%3Flang%3Dmojom%23content_settings.mojom.ContentSettingsType)
+2. In [content_settings_uma_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_uma_util.cc)
 update
-[kHistogramValue](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings.cc;l=31;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)
+[kHistogramValue](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_uma_util.cc;drc=c6239d599e27bb680984bd6e86e69321b3fe5a9d;l=16)
 3. In [content_settings_registry.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_registry.cc)
 update method
 [ContentSettingsRegistry::Init()](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_registry.cc;l=122;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)
@@ -115,8 +125,18 @@ update
     * [GetPermissionType()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_util.cc;l=78;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
     * [PermissionTypeToContentSettingTypeSafe()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_util.cc;l=229;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
 5. In [WebsitePermissionsFetcherTest.java](https://source.chromium.org/chromium/chromium/src/+/main:chrome/android/javatests/src/org/chromium/chrome/browser/site_settings/WebsitePermissionsFetcherTest.java) update [assertion](https://source.chromium.org/chromium/chromium/src/+/main:chrome/android/javatests/src/org/chromium/chrome/browser/site_settings/WebsitePermissionsFetcherTest.java;l=516;drc=c08fa134ac65f3bec52794d30281c98d18c7aa0f).
+6. For Controlled Frame:
+    * By default, we disable capabilities that use ContentSettingsType as keys
+      for permission storage from being used in Controlled Frame.
+    * Examples of enabling:
+      * [WebView: add hid permission request crrev.com/c/5136796](https://chromium-review.googlesource.com/c/chromium/src/+/5136796)
+      * [Delegate HID permission to Chrome App in webview crrev.com/c/4946553](https://chromium-review.googlesource.com/c/chromium/src/+/4946553)
+    * Example of disabling:
+      * [controlledframe: Disable Web Serial for <webview> & <controlledframe> crrev.com/c/5838413](https://chromium-review.googlesource.com/c/chromium/src/+/5838413)
+    * Add your new ContentSettingsType to
+      [controlled_frame_permissions_unittest.cc](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/controlled_frame/controlled_frame_permissions_unittest.cc).
 
-### UI-less ContentSettingType
+### UI-less ContentSettingsType
 If you add a new [ContentSettingsType](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/content_settings_types.h;l=17;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)
 which require no UI and no associated permission, then:
 
@@ -153,11 +173,14 @@ update enum [RequestType](https://source.chromium.org/chromium/chromium/src/+/ma
 2. In [request_type.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/request_type.cc) update
     * [GetIconId*()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/request_type.cc;l=269;drc=c970b8647281cc3fc7ffe1288ce7c5f2e5f7acf6) for Android and Desktop
         * Reuse icons from the step above.
-    * [GetDialogMessageText()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_request.cc;l=44;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0) for Android
-    * [GetMessageTextFragment()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_request.cc;l=166;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0) for Desktop
-        * Permission prompt strings should be reviewed by meggynwatkins@ and permissions-core@ in a design doc.
     * [PermissionKeyForRequestType()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/request_type.cc;l=288;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
     * [GetBlockedIconIdDesktop()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/request_type.cc;l=116;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
+3. In [components/permissions/permission_request.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_request.cc) update
+    * [GetMessageTextFragment()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_request.cc;bpv=1;bpt=1;l=327?q=GetMessageTextFragment&gsn=GetMessageTextFragment&gs=KYTHE%3A%2F%2Fkythe%3A%2F%2Fchromium.googlesource.com%2Fcodesearch%2Fchromium%2Fsrc%2F%2Fmain%3Flang%3Dc%252B%252B%3Fpath%3Dcomponents%2Fpermissions%2Fpermission_request.cc%23kBkUz4YwtxNBDhcFhLXHTIM5t94AN0E96I-f4u9eO7U)
+      for Desktop
+    * [GetDialogAnnotatedMessageText()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_request.cc;bpv=1;bpt=1;l=65?q=GetMessageTextFragment&gsn=GetDialogAnnotatedMessageText&gs=KYTHE%3A%2F%2Fkythe%3A%2F%2Fchromium.googlesource.com%2Fcodesearch%2Fchromium%2Fsrc%2F%2Fmain%3Flang%3Dc%252B%252B%3Fpath%3Dcomponents%2Fpermissions%2Fpermission_request.cc%23kEqGMBoAXnGsWfDviX0MQ3duf32L_2SML_eLtmCQr_g)
+      for Android
+    * Permission prompt strings should be reviewed by meggynwatkins@ and permissions-core@ in a design doc.
 
 ### Tracking
 1. In [tools/metrics/histograms/enums.xml](https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/enums.xml)
@@ -165,19 +188,20 @@ update histograms:
     * `name="PermissionType"`
     * `name="ContentType"`
     * `name="PermissionRequestType"`
-2. In  [tools/metrics/histograms/metadata/histogram_suffixes_list.xml](https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/histogram_suffixes_list.xml)
-update histograms
-    * `name="PermissionTypes"`
-    * `name="PermissionRequestTypes"`
-3. In [tools/metrics/histograms/metadata/content/histograms.xml](https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/content/histograms.xml) update `<token key="ContentSettingsType">`
-4. In [permission_uma_util.h](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.h)
+1. In
+   [tools/metrics/histograms/metadata/permissions/histograms.xml](https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/permissions/histograms.xml)
+   update:
+   * `name="PermissionRequestTypes"`
+1. In [tools/metrics/histograms/metadata/content/histograms.xml](https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/content/histograms.xml) update `<token key="ContentSettingsType">`
+1. In [permission_uma_util.h](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.h)
 updated enum
 [RequestTypeForUma](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.h;l=41;drc=796b971e6e0d1b033bda58b31e9f24d397ad6178)
-5. In [permission_uma_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc)
+1. In [permission_uma_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc)
 updated methods:
-    * [GetUmaValueForRequestType()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc;l=55;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
     * [GetPermissionRequestString()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc;l=117;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
-    * [RecordPermissionAction()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc;l=843-914;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
+    * [GetPermissionStringForUma](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_uma_util.cc?q=symbol%3A%5Cbpermissions%3A%3AGetPermissionStringForUma%5Cb%20case%3Ayes)
+1. In [components/permissions/permission_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_util.cc) update:
+    * [GetUmaValueForRequestType()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_util.cc?q=symbol:%5CbGetUmaValueForRequestType)
 
 ### Extend PermissionContextBase
 To extend [PermissionContextBase](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_context_base.h):
@@ -186,8 +210,7 @@ To extend [PermissionContextBase](https://source.chromium.org/chromium/chromium/
 [permissions::PermissionContextBase](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_context_base.h).
 2. Put it in `components/permissions/contexts/` or in a feature folder.
 3. In [permission_manager_factory.cc](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/permissions/permission_manager_factory.cc) update [CreatePermissionContexts()](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/permissions/permission_manager_factory.cc;l=50;drc=c970b8647281cc3fc7ffe1288ce7c5f2e5f7acf6)
-4. In [permission_manager_factory.cc](https://source.chromium.org/chromium/chromium/src/+/main:weblayer/browser/permissions/permission_manager_factory.cc) update [CreatePermissionContexts()](https://source.chromium.org/chromium/chromium/src/+/main:weblayer/browser/permissions/permission_manager_factory.cc;l=61;drc=0e1f7e00e6ee851f977f5f37d711ee5d4e9b28eb)
-5. In [permission_test_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/test/permission_test_util.cc) update [CreatePermissionContexts()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/test/permission_test_util.cc;l=46;drc=0e1f7e00e6ee851f977f5f37d711ee5d4e9b28eb)
+4. In [permission_test_util.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/test/permission_test_util.cc) update [CreatePermissionContexts()](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/test/permission_test_util.cc;l=46;drc=0e1f7e00e6ee851f977f5f37d711ee5d4e9b28eb)
 
 ### DevTools
 Add new permissions for browser automation (e2e testing).
@@ -202,15 +225,24 @@ update
 ### Optional: Add a permission policy
 If you need to add a permission policy:
 
-1. In [permissions_policy_feature.mojom](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom)
+1. In [permissions_policy_feature.mojom](https://source.chromium.org/chromium/chromium/src/+/main:services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom)
 update enum
-[PermissionsPolicyFeature](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom;l=16;drc=272becfe736870f18b79355d73475a5eb86c93b1)
-2. In [permissions_policy_features.json5](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/permissions_policy/permissions_policy_features.json5)
-update `data` array with the new policy.
+[PermissionsPolicyFeature](https://source.chromium.org/chromium/chromium/src/+/main:services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom;l=16)
+
+2. In [permissions_policy_features.json5](https://source.chromium.org/chromium/chromium/src/+/main:services/network/public/cpp/permissions_policy/permissions_policy_features.json5)
+update `data` array with the new policy. Also update PermissionPolicyFeature
+enum in
+[third_party/blink/public/devtools_protocol/domains/Page.pdl](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/public/devtools_protocol/domains/Page.pdl)
+
 5. Update [feature-policy-features-expected.txt](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/web_tests/webexposed/feature-policy-features-expected.txt)
 6. In the `<PermissionName>PermissionContext`, make sure to initialize the permission policy variable
 [permissions_policy_feature_](https://source.chromium.org/chromium/chromium/src/+/main:components/permissions/permission_context_base.h;l=223;drc=caa1747121ee9f14ba7d4e346ea2dc5e7a2e05c0)
 in the class ctor.
+
+7. In [third_party/blink/common/permissions/permission_utils.cc](
+https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/common/permissions/permission_utils.cc)
+update PermissionTypeToPermissionsPolicyFeature
+
 
 ### Optional: Enterprise policies
 Permissions infrastructure has its own provider for storing policies
@@ -225,7 +257,7 @@ That allows automatically verifying policy values for a given permission.
     * Create a new policy in
     [components/content_settings/core/common/pref_names.(h/cc)](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/pref_names.h)
     * In
-    [content_settings_policy_provider.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/common/pref_names.cc)
+    [content_settings_policy_provider.cc](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_policy_provider.cc)
 update
         * [PrefsForManagedContentSettingsMapEntry](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_policy_provider.cc;l=35;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)
         * [kManagedPrefs](https://source.chromium.org/chromium/chromium/src/+/main:components/content_settings/core/browser/content_settings_policy_provider.cc;l=112;drc=0c2e6d2e27af976e1b28eebd7dacc7a0296bb1cc)

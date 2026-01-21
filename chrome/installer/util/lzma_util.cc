@@ -4,17 +4,21 @@
 
 #include "chrome/installer/util/lzma_util.h"
 
-#include <ntstatus.h>
 #include <windows.h>
 
+#include <ntstatus.h>
 #include <stddef.h>
 
+#include <memory>
 #include <set>
+#include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
-#include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/types/expected_macros.h"
+#include "chrome/installer/util/unbuffered_file_writer.h"
 #include "third_party/lzma_sdk/google/seven_zip_reader.h"
 
 namespace {
@@ -27,7 +31,7 @@ class SevenZipDelegateImpl : public seven_zip::Delegate {
   SevenZipDelegateImpl(const SevenZipDelegateImpl&) = delete;
   SevenZipDelegateImpl& operator=(const SevenZipDelegateImpl&) = delete;
 
-  absl::optional<DWORD> error_code() const { return error_code_; }
+  std::optional<DWORD> error_code() const { return error_code_; }
   UnPackStatus unpack_error() const { return unpack_error_; }
 
   // seven_zip::Delegate implementation:
@@ -46,9 +50,11 @@ class SevenZipDelegateImpl : public seven_zip::Delegate {
   const raw_ptr<base::FilePath> output_file_;
 
   std::set<base::FilePath> directories_created_;
-  absl::optional<DWORD> error_code_;
-  base::File current_file_;
-  absl::optional<base::MemoryMappedFile> mapped_file_;
+  std::optional<DWORD> error_code_;
+
+  // The file to which the current entry will be written.
+  std::optional<installer::UnbufferedFileWriter> current_file_;
+
   UnPackStatus unpack_error_ = UNPACK_NO_ERROR;
 };
 
@@ -88,8 +94,8 @@ void SevenZipDelegateImpl::OnOpenError(seven_zip::Result result) {
     case seven_zip::Result::kSuccess:
     case seven_zip::Result::kMemoryMappingFailed:
     case seven_zip::Result::kNoFilename:
+    case seven_zip::Result::kEncryptedHeaders:
       NOTREACHED();
-      return;
   }
 }
 
@@ -140,39 +146,18 @@ bool SevenZipDelegateImpl::OnEntry(const seven_zip::EntryInfo& entry,
 
   CreateDirectory(file_path.DirName());
 
-  current_file_ =
-      base::File(file_path, base::File::FLAG_CREATE_ALWAYS |
-                                base::File::FLAG_READ | base::File::FLAG_WRITE |
-                                base::File::FLAG_WIN_EXCLUSIVE_READ |
-                                base::File::FLAG_WIN_EXCLUSIVE_WRITE |
-                                base::File::FLAG_CAN_DELETE_ON_CLOSE |
-                                base::File::FLAG_WIN_SHARE_DELETE);
-  if (!current_file_.IsValid()) {
-    PLOG(ERROR) << "Invalid file";
-    error_code_ = ::GetLastError();
-    unpack_error_ = UNPACK_CREATE_FILE_ERROR;
-    return false;
-  }
+  ASSIGN_OR_RETURN(
+      current_file_,
+      installer::UnbufferedFileWriter::Create(file_path, entry.file_size),
+      [this](DWORD error) {
+        error_code_ = error;
+        PLOG(ERROR) << "Invalid file";
+        unpack_error_ = UNPACK_CREATE_FILE_ERROR;
+        return false;
+      });
 
-  // The target file is deleted by default unless extracting succeeds.
-  current_file_.DeleteOnClose(true);
-
-  if (entry.file_size > 0) {
-    mapped_file_.emplace();
-    bool mapped_file_ok = mapped_file_->Initialize(
-        current_file_.Duplicate(), {0, static_cast<size_t>(entry.file_size)},
-        base::MemoryMappedFile::READ_WRITE_EXTEND);
-    if (!mapped_file_ok) {
-      PLOG(ERROR) << "Can't map file to memory";
-      error_code_ = ::GetLastError();
-      unpack_error_ = UNPACK_ALLOCATE_ERROR;
-      return false;
-    }
-
-    output = base::span<uint8_t>(mapped_file_->data(), mapped_file_->length());
-  } else {
-    output = base::span<uint8_t>();
-  }
+  // Return a view into the writer's output buffer.
+  output = current_file_->write_buffer().first(entry.file_size);
 
   // Clear the last error code before the entry is extracted to reduce the
   // likelihood that it will hold an unrelated error code in case extraction
@@ -185,8 +170,8 @@ bool SevenZipDelegateImpl::OnEntry(const seven_zip::EntryInfo& entry,
 bool SevenZipDelegateImpl::EntryDone(seven_zip::Result result,
                                      const seven_zip::EntryInfo& entry) {
   // Take ownership of `current_file_` so that it is always closed when this
-  // function exits.
-  base::File current_file = std::move(current_file_);
+  // function exits
+  auto current_file = *std::move(current_file_);
 
   if (result != seven_zip::Result::kSuccess) {
     auto error_code = ::GetLastError();
@@ -196,7 +181,6 @@ bool SevenZipDelegateImpl::EntryDone(seven_zip::Result result,
     switch (result) {
       case seven_zip::Result::kSuccess:
         NOTREACHED();
-        break;
       case seven_zip::Result::kFailedToAllocate:
         unpack_error_ = UNPACK_ALLOCATE_ERROR;
         break;
@@ -215,45 +199,31 @@ bool SevenZipDelegateImpl::EntryDone(seven_zip::Result result,
       case seven_zip::Result::kMemoryMappingFailed:
       case seven_zip::Result::kMalformedArchive:
       case seven_zip::Result::kUnsupported:
+      case seven_zip::Result::kEncryptedHeaders:
         unpack_error_ = UNPACK_EXTRACT_ERROR;
         break;
     }
 
-    mapped_file_.reset();
     return false;
   }
 
-  if (mapped_file_) {
-    // Modified pages are not written to disk until they're evicted from the
-    // working set. Explicitly kick off the write to disk now
-    // (asynchronously) to improve the odds that the file's contents are
-    // on-disk when another process (such as chrome.exe) would like to use
-    // them.
-    ::FlushViewOfFile(mapped_file_->data(), 0);
-    // Unmap the target file from the process's address space.
-    mapped_file_.reset();
-    // Flush to avoid odd behavior, such as the bug in Windows 7 through
-    // Windows 10 1809 for PE files described in
-    // https://randomascii.wordpress.com/2018/02/25/compiler-bug-linker-bug-windows-kernel-bug/.
-    // We've also observed oddly empty files on other Windows versions, so
-    // this is unconditional.
-    current_file.Flush();
-  }
+  // The writer's buffer now holds the entire entry.
+  current_file.Advance(entry.file_size);
 
-  // On success, `current_file` is kept.
-  current_file.DeleteOnClose(false);
-
-  if (!entry.last_modified_time.is_null()) {
-    FILETIME filetime = entry.last_modified_time.ToFileTime();
-    if (!SetFileTime(current_file.GetPlatformFile(), nullptr, nullptr,
-                     &filetime)) {
-      PLOG(ERROR) << "Error returned by SetFileTime";
-      // TODO(crbug/1368654): This should not be a fatal error.
-      error_code_ = ::GetLastError();
-      unpack_error_ = UNPACK_SET_FILE_TIME_ERROR;
-      return false;
-    }
-  }
+  // Commit the file, which sizes it appropriately and sets the last-modified
+  // time.
+  // TODO(crbug.com/394631579): Monitor UnbufferedFileWriter error metrics to
+  // see if/what errors are happening in the field. Consider using a retry loop
+  // here based on the data.
+  RETURN_IF_ERROR(current_file.Commit(entry.last_modified_time.is_null()
+                                          ? std::nullopt
+                                          : std::optional<base::Time>(
+                                                entry.last_modified_time)),
+                  [this](DWORD error) {
+                    error_code_ = error;
+                    unpack_error_ = UNPACK_EXTRACT_ERROR;
+                    return false;
+                  });
 
   return true;
 }
@@ -275,7 +245,7 @@ UnPackStatus UnPackArchive(const base::FilePath& archive,
   }
 
   if (status != UNPACK_NO_ERROR) {
-    absl::optional<DWORD> error_code = lzma_util.GetErrorCode();
+    std::optional<DWORD> error_code = lzma_util.GetErrorCode();
     if (error_code.value_or(ERROR_SUCCESS) == ERROR_DISK_FULL)
       return UNPACK_DISK_FULL;
     if (error_code.value_or(ERROR_SUCCESS) == ERROR_IO_DEVICE)
@@ -313,12 +283,16 @@ UnPackStatus LzmaUtilImpl::UnPack(const base::FilePath& location,
   DCHECK(archive_file_.IsValid());
 
   SevenZipDelegateImpl delegate(location, output_file);
-  seven_zip::Extract(archive_file_.Duplicate(), delegate);
+  std::unique_ptr<seven_zip::SevenZipReader> reader =
+      seven_zip::SevenZipReader::Create(archive_file_.Duplicate(), delegate);
+  if (reader) {
+    reader->Extract();
+  }
   error_code_ = delegate.error_code();
   return delegate.unpack_error();
 }
 
 void LzmaUtilImpl::CloseArchive() {
   archive_file_.Close();
-  error_code_ = absl::nullopt;
+  error_code_ = std::nullopt;
 }

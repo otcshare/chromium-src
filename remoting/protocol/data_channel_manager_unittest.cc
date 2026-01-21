@@ -7,7 +7,8 @@
 #include <map>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "remoting/base/compound_buffer.h"
@@ -24,8 +25,8 @@ namespace {
 class FakeNamedMessagePipeHandler final : public NamedMessagePipeHandler {
  public:
   FakeNamedMessagePipeHandler(const std::string& name,
-                         std::unique_ptr<MessagePipe> pipe,
-                         const std::string& expected_data)
+                              std::unique_ptr<MessagePipe> pipe,
+                              const std::string& expected_data)
       : NamedMessagePipeHandler(name, std::move(pipe)),
         expected_data_(expected_data) {
     handlers_[name] = this;
@@ -65,7 +66,7 @@ void FakeNamedMessagePipeHandler::OnIncomingMessage(
   ASSERT_TRUE(message != nullptr);
   std::string content;
   content.resize(expected_data_.size());
-  message->CopyTo(&(content[0]), content.size());
+  message->CopyTo(base::as_writable_byte_span(content));
   ASSERT_EQ(content, expected_data_);
   received_message_count_++;
 }
@@ -95,7 +96,7 @@ void FakeNamedMessagePipeHandler::Send(
 
 // static
 std::map<std::string, FakeNamedMessagePipeHandler*>
-FakeNamedMessagePipeHandler::handlers_;
+    FakeNamedMessagePipeHandler::handlers_;
 
 void TestDataChannelManagerFullMatch(bool asynchronous) {
   base::test::SingleThreadTaskEnvironment task_environment;
@@ -171,12 +172,12 @@ void TestDataChannelManagerFullMatch(bool asynchronous) {
     std::string content;
     auto message = std::make_unique<CompoundBuffer>();
     content = "FullMatchContent";
-    message->AppendCopyOf(&(content[0]), content.size());
+    message->AppendCopyOf(base::as_byte_span(content));
     pipe1.Receive(std::move(message));
 
     message = std::make_unique<CompoundBuffer>();
     content = "AnotherFullMatchContent";
-    message->AppendCopyOf(&(content[0]), content.size());
+    message->AppendCopyOf(base::as_byte_span(content));
     pipe2.Receive(std::move(message));
 
     base::RunLoop().RunUntilIdle();

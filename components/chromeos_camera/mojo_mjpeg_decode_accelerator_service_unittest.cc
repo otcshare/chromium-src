@@ -4,8 +4,8 @@
 
 #include "components/chromeos_camera/mojo_mjpeg_decode_accelerator_service.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -52,8 +52,11 @@ class MojoMjpegDecodeAcceleratorServiceTest : public ::testing::Test {
 
 TEST_F(MojoMjpegDecodeAcceleratorServiceTest, InitializeAndDecode) {
   mojo::Remote<chromeos_camera::mojom::MjpegDecodeAccelerator> jpeg_decoder;
+  base::RepeatingCallback<void(std::optional<base::RepeatingClosure>)>
+      mjpeg_decode_begin_frame_cb;
   MojoMjpegDecodeAcceleratorService::Create(
-      jpeg_decoder.BindNewPipeAndPassReceiver());
+      jpeg_decoder.BindNewPipeAndPassReceiver(),
+      std::move(mjpeg_decode_begin_frame_cb));
 
   base::RunLoop run_loop;
   jpeg_decoder->Initialize(

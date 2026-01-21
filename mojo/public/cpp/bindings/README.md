@@ -75,6 +75,8 @@ You can include the above generated header in your sources in order to use the
 definitions therein:
 
 ``` cpp
+#include <string_view>
+
 #include "services/business/public/mojom/factory.mojom.h"
 
 class TableImpl : public db::mojom::Table {
@@ -256,6 +258,9 @@ sequence:
 ``` cpp
 LoggerImpl impl(std::move(receiver));
 ```
+
+If `LoggerImpl` is in another process, see
+[Sending Interfaces Over Interfaces](#sending-interfaces-over-interfaces).
 
 The diagram below illustrates the following sequence of events, all set in
 motion by the above line of code:
@@ -710,7 +715,103 @@ attempts to access that field will DCHECK:
 
 ```cpp
 ValuePtr value = Value::NewIntValue(42);
-LOG(INFO) << "Value is " << value->string_value();  // DCHECK!
+LOG(INFO) << "Value is " << value->get_string_value();  // DCHECK!
+```
+
+### Result
+
+Methods may use a special `result<T,E>` type to express that a method may either
+return a message of type T on success and a message of type E on failure. This
+type maps to `base::expected` in C++.
+
+For example, consider the following Mojom method:
+
+```mojom
+module foo.mojom;
+
+struct Success {
+  int64 elapsed_ms;
+};
+
+struct Failure {
+  string reason;
+};
+
+interface Iface {
+  DoSomething() => result<Success, Failure>;
+};
+```
+
+This would generate a C++ interface like so:
+
+```cpp
+namespace foo::mojom {
+
+class Iface {
+  virtual ~IFace() {}
+
+  virtual void DoSomething(DoSomethingCallback callback) = 0;
+};
+
+}  // namespace foo::mojom
+```
+
+`DoSomethingCallback` takes a base::expected as the single parameter. If the
+API invocation was successful, the callback can be invoked with `base::ok`
+along with the success type. If the API invocation was unsuccessful, the
+callback can be invoked with `base::unexpected` along with the error type.
+For example:
+
+```cpp
+namespace foo {
+
+class IfaceImpl : public mojom::Iface {
+  DoSomething(DoSomethingCallback callback) override {
+    if (success) {
+      auto success = mojom::Success::New();
+      success->elapsed_ms = 9001;
+      callback.Run(base::ok(std::move(success)));
+    } else {
+      auto failure = mojom::Failure::New();
+      failure->reason = "too hard!";
+      callback.Run(base::unexpected(std::move(failure)));
+    }
+  }
+};
+
+} // namespace foo
+```
+
+### Features
+
+Mojom `feature` generates a `base::Feature` with the given `name` and
+`default_state` (`true` => `ENABLED_BY_DEFAULT`). The feature can be accessed
+and tested in C++ using the mapped name even if it is not used to mark any
+[interfaces](#runtimefeature-on-interfaces) or
+[methods](#runtimefeature-on-methods).
+
+```mojom
+module experiment.mojom;
+
+// Introduce a new runtime feature flag.
+feature kUseElevator {
+  const string name = "UseElevator";
+  const bool default_state = false;
+};
+```
+
+```cpp
+#include "base/feature_list.h"
+#include "experiment.mojom-features.h"
+
+if (base::FeatureList::IsEnabled(experiment::mojom::kUseElevator)) {
+  LOG(INFO) << "Going up....";
+}
+```
+
+```sh
+./chrome --enable-features=UseElevator
+# Going up....
 ```
 
 ### Sending Interfaces Over Interfaces
@@ -855,6 +956,72 @@ TableListenerImpl impl(listener.InitWithNewPipeAndPassReceiver());
 table->AddListener(std::move(listener));
 ```
 
+### RuntimeFeature on interfaces
+
+If an interface is marked with a `RuntimeFeature` attribute, and the associated
+feature is disabled, then it is not possible to bind the interface to a
+receiver, and not possible to create a remote to call methods on. Attempts to
+bind remotes or receivers will result in the underlying pipe being `reset()`.
+`SelfOwnedReceivers` will not be created. A compromised process can override
+these checks and might falsely request a disabled interface but a trustworthy
+process will not bind a concrete endpoint to interact with the disabled
+interface.
+
+Note that it remains possible to create and transport generic wrapper
+objects to disabled interfaces - security decisions should be made based on a
+test of the generated feature - or the bound state of a Remote or Receiver.
+
+```mojom
+// Feature controls runtime availability of interface.
+[RuntimeFeature=kUseElevator]
+interface DefaultDenied {
+  GetInt() => (int32 ret);
+};
+
+interface PassesInterfaces {
+  BindPendingRemoteDisabled(pending_remote<DefaultDenied> iface);
+  BindPendingReceiverDisabled(pending_receiver<DefaultDenied> iface);
+};
+```
+
+```C++
+  void BindPendingRemoteDisabled(
+      mojo::PendingRemote<mojom::DefaultDenied> iface) override {
+    mojo::Remote<mojom::DefaultDenied> denied_remote;
+    // Remote will not bind:
+    denied_remote.Bind(std::move(iface));
+    ASSERT_FALSE(denied_remote);
+  }
+  void BindPendingReceiverDisabled(
+      mojo::PendingReceiver<mojom::DefaultDenied> iface) override {
+    std::unique_ptr<DefaultDeniedImpl> denied_impl;
+    // Object can still be created:
+    denied_impl = std::make_unique<DefaultDeniedImpl>(std::move(iface));
+    // But its internal receiver_ will not bind or receive remote calls.
+    ASSERT_FALSE(denied_impl->receiver().is_bound());
+  }
+```
+
+### RuntimeFeature on methods
+
+If a method is marked with a `RuntimeFeature` attribute it is not possible to
+call that method on a remote (attempting to do so will result in a CHECK()),
+and receivers will reject incoming messages at the validation stage, causing
+their linked remote to become disconnected.
+
+```mojom
+// Feature controls runtime availability of interface.
+interface NormalInterface {
+  [RuntimeFeature=related.module.mojom.kFeature]
+  GetInt() => (int32 ret);
+};
+```
+
+```C++
+mojo::Remote<mojom::NormalInterface> remote;
+remote->GetInt();  // CHECKs if kFeature is not enabled.
+```
+
 ## Other Interface Binding Types
 
 The [Interfaces](#Interfaces) section above covers basic usage of the most
@@ -975,9 +1142,9 @@ class TableImpl : public db::mojom::Table {
   // db::mojom::Table:
   void AddRow(int32_t key, const std::string& data) override {
     rows_.insert({key, data});
-    listeners_.ForEach([key, &data](db::mojom::TableListener* listener) {
+    for (auto& listener : listeners_) {
       listener->OnRowAdded(key, data);
-    });
+    }
   }
 
   void AddListener(mojo::PendingRemote<db::mojom::TableListener> listener) {
@@ -1094,7 +1261,7 @@ The implementation of `Foo` looks like this:
 ``` cpp
 class FooImpl : public Foo {
   ...
-  void PassBarReceiver(mojo::AssociatedReceiver<Bar> bar) override {
+  void PassBarReceiver(mojo::PendingAssociatedReceiver<Bar> bar) override {
     bar_receiver_.Bind(std::move(bar));
     ...
   }
@@ -1176,6 +1343,10 @@ are not absolutely necessary:
 probably never think about while you are coding. It has always been a
 huge pain.
 * Sync calls may lead to deadlocks.
+* Sync web apis are [strongly discouraged](https://www.w3.org/TR/design-principles/#async-by-default).
+* The `[Sync]` annotation does not affect the bindings for the service side
+and therefore does **not** guard against re-entrancy, especially when the
+client is untrusted (e.g. the renderer process).
 
 ### Mojom changes
 
@@ -1330,17 +1501,26 @@ methods:
 
 In order to define the mapping for `gfx::Rect`, we want the following
 `StructTraits` specialization, which we'll define in
-`//ui/gfx/geometry/mojo/geometry_mojom_traits.h`:
+`//ui/gfx/geometry/mojo/geometry_mojom_traits.h`.
 
-``` cpp
+*** note
+**NOTE**:  whereas in other usages of the mojom type in C++ we might directly
+use the mojom type `gfx::mojom::Rect`, our `StructTraits` template must use the
+[DataView](#using-generated-dataview-types) version (e.g.
+`gfx::mojom::RectDataView`), which exposes a direct view of the serialized Mojom
+structure within an incoming message's contents which we need in order to
+perform the serialization.
+***
+
+<pre><code>
 #include "mojo/public/cpp/bindings/mojom_traits.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/mojo/geometry.mojom.h"
 
 namespace mojo {
 
-template <>
-class StructTraits<gfx::mojom::RectDataView, gfx::Rect> {
+template &lt;>
+class StructTraits&lt;gfx::mojom::Rect<b>DataView</b>, gfx::Rect> {
  public:
   static int32_t x(const gfx::Rect& r) { return r.x(); }
   static int32_t y(const gfx::Rect& r) { return r.y(); }
@@ -1351,7 +1531,7 @@ class StructTraits<gfx::mojom::RectDataView, gfx::Rect> {
 };
 
 }  // namespace mojo
-```
+</code></pre>
 
 And in `//ui/gfx/geometry/mojo/geometry_mojom_traits.cc`:
 
@@ -1364,12 +1544,13 @@ namespace mojo {
 bool StructTraits<gfx::mojom::RectDataView, gfx::Rect>::Read(
     gfx::mojom::RectDataView data,
   gfx::Rect* out_rect) {
-  if (data.width() < 0 || data.height() < 0)
+  if (data.width() < 0 || data.height() < 0) {
     return false;
+  }
 
   out_rect->SetRect(data.x(), data.y(), data.width(), data.height());
   return true;
-};
+}
 
 }  // namespace mojo
 ```
@@ -1386,11 +1567,11 @@ returning a read-only view of the data in the accessor is recommended to
 avoid copying. It is safe because the input object is guaranteed to
 outlive the usage of the result returned by the accessor method.
 
-The following example uses `StringPiece` to return a view of the GURL's
+The following example uses `std::string_view` to return a view of the GURL's
 data (`//url/mojom/url_gurl_mojom_traits.h`):
 
 ``` cpp
-#include "base/strings/string_piece.h"
+
 #include "url/gurl.h"
 #include "url/mojom/url.mojom.h"
 #include "url/url_constants.h"
@@ -1399,20 +1580,74 @@ namespace mojo {
 
 template <>
 struct StructTraits<url::mojom::UrlDataView, GURL> {
-  static base::StringPiece url(const GURL& r) {
+  static std::string_view url(const GURL& r) {
     if (r.possibly_invalid_spec().length() > url::kMaxURLChars ||
         !r.is_valid()) {
-      return base::StringPiece();
+      return std::string_view();
     }
-    return base::StringPiece(r.possibly_invalid_spec().c_str(),
-                             r.possibly_invalid_spec().length());
+    return r.possibly_invalid_spec();
   }
+};
+
 }  // namespace mojo
+```
+
+### Defining `EnumTraits`
+
+Similar to `StructTraits`, you can specialize the
+[`mojo::EnumTraits`](https://cs.chromium.org/chromium/src/mojo/public/cpp/bindings/enum_traits.h)
+to handle conversion between a Mojom enum and a native enum
+
+In general, it's better to just use the Mojom enum directly. However, in some circumstances this
+is impractical: perhaps the native enum is from a third-party library, or the value must be used
+by code that is not aware of Mojo (such as Cronet).
+
+A specialization typically uses simple `switch` statements to convert between the two enums:
+
+```cpp
+#include "mojo/public/cpp/bindings/enum_traits.h"
+
+template <>
+struct EnumTraits<mojom::MyEnum, MyEnum> {
+  static mojom::MyEnum ToMojom(MyEnum input);
+  static bool FromMojom(mojom::MyEnum input, MyEnum* output);
+};
+```
+
+```cpp
+#include "mojo/public/cpp/bindings/enum_traits.h"
+
+// static
+mojom::MyEnum
+EnumTraits<mojom::MyEnum, MyEnum>::ToMojom(MyEnum input) {
+  switch (input) {
+    case MyEnum::CUSTOM_VALUE_0:
+      return mojom::MyEnum::VALUE_0;
+    case MyEnum::CUSTOM_VALUE_1:
+      return mojom::MyEnum::VALUE_1;
+  };
+
+  NOTREACHED();
+}
+
+// static
+bool EnumTraits<mojom::MyEnum, MyEnum>::FromMojom(mojom::MyEnum input, MyEnum* output) {
+  switch (input) {
+    case mojom::MyEnum::VALUE_0:
+      *output = MyEnum::CUSTOM_VALUE_0;
+      return true;
+    case mojom::MyEnum::VALUE_1:
+      *output = MyEnum::CUSTOM_VALUE_1;
+      return true;
+  };
+
+  return false;
+}
 ```
 
 ### Enabling a New Type Mapping
 
-We've defined the `StructTraits` necessary, but we still need to teach the
+We've defined the `StructTraits` or `EnumTraits` necessary, but we still need to teach the
 bindings generator (and hence the build system) about the mapping. To do this we
 must add some more information to our `mojom` target in GN:
 
@@ -1441,6 +1676,10 @@ mojom("mojom") {
         {
           mojom = "gfx.mojom.Rect"
           cpp = "::gfx::Rect"
+        },
+        {
+          mojom = "mojom.MyEnum"
+          cpp = "::MyEnum"
         },
       ]
       traits_headers = [ "//ui/gfx/geometry/mojo/geometry_mojom_traits.h" ]
@@ -1533,14 +1772,14 @@ to valid getter return types:
 | `pending_receiver<Foo>`      | `mojo::PendingReceiver<Foo>`
 | `pending_associated_remote<Foo>`    | `mojo::PendingAssociatedRemote<Foo>`
 | `pending_associated_receiver<Foo>`    | `mojo::PendingAssociatedReceiver<Foo>`
-| `string`                     | Value or reference to any type `T` that has a `mojo::StringTraits` specialization defined. By default this includes `std::string`, `base::StringPiece`, and `WTF::String` (Blink).
-| `array<T>`                   | Value or reference to any type `T` that has a `mojo::ArrayTraits` specialization defined. By default this includes `std::array<T, N>`, `std::vector<T>`, `WTF::Vector<T>` (Blink), etc.
+| `string`                     | Value or reference to any type `T` that has a `mojo::StringTraits` specialization defined. By default this includes `std::string`, `std::string_view`, and `blink::String` (Blink).
+| `array<T>`                   | Value or reference to any type `T` that has a `mojo::ArrayTraits` specialization defined. By default this includes `std::array<T, N>`, `std::vector<T>`, `blink::Vector<T>` (Blink), etc.
 | `array<T, N>`                | Similar to the above, but the length of the data must be always the same as `N`.
-| `map<K, V>`                  | Value or reference to any type `T` that has a `mojo::MapTraits` specialization defined. By default this includes `std::map<T>`, `mojo::unordered_map<T>`, `WTF::HashMap<T>` (Blink), etc.
+| `map<K, V>`                  | Value or reference to any type `T` that has a `mojo::MapTraits` specialization defined. By default this includes `std::map<T>`, `mojo::unordered_map<T>`, `blink::HashMap<T>` (Blink), etc.
 | `FooEnum`                    | Value of any type that has an appropriate `EnumTraits` specialization defined. By default this includes only the generated `FooEnum` type.
 | `FooStruct`                  | Value or reference to any type that has an appropriate `StructTraits` specialization defined. By default this includes only the generated `FooStructPtr` type.
 | `FooUnion`                   | Value of reference to any type that has an appropriate `UnionTraits` specialization defined. By default this includes only the generated `FooUnionPtr` type.
-| `Foo?`                       | `absl::optional<CppType>`, where `CppType` is the value type defined by the appropriate traits class specialization (e.g. `StructTraits`, `mojo::MapTraits`, etc.). This may be customized by the [typemapping](#Enabling-a-New-Type-Mapping).
+| `Foo?`                       | `std::optional<CppType>`, where `CppType` is the value type defined by the appropriate traits class specialization (e.g. `StructTraits`, `mojo::MapTraits`, etc.). This may be customized by the [typemapping](#Enabling-a-New-Type-Mapping).
 
 ### Using Generated DataView Types
 
@@ -1652,7 +1891,7 @@ out/gen/sample/db.mojom-blink.h
 
 These files mirror the definitions in the default variant but with different
 C++ types in place of certain builtin field and parameter types. For example,
-Mojom strings are represented by `WTF::String` instead of `std::string`. To
+Mojom strings are represented by `blink::String` instead of `std::string`. To
 avoid symbol collisions, the variant's symbols are nested in an extra inner
 namespace, so Blink consumer of the interface might write something like:
 
@@ -1661,7 +1900,7 @@ namespace, so Blink consumer of the interface might write something like:
 
 class TableImpl : public db::mojom::blink::Table {
  public:
-  void AddRow(int32_t key, const WTF::String& data) override {
+  void AddRow(int32_t key, const blink::String& data) override {
     // ...
   }
 };
@@ -1710,6 +1949,15 @@ example above.
 
 For converting between Blink and non-Blink variants, please see
 `//third_party/blink/public/platform/cross_variant_mojo_util.h`.
+
+Blink strings deserve a special mention, since `blink::String` can store either
+Latin-1 or UTF-16, and converts to UTF-8 as needed. Since Mojo strings are
+supposed to be UTF-8, converting a `blink::String` to a mojo string will convert
+it to UTF-8. When converting a Mojo string back to a blink::String, the string
+is re-encoded from UTF-8 back into UTF-16. Invalid UTF-16 is tolerated
+throughout and converted to invalid UTF-8, so if your blink::String may contain
+invalid UTF-16, don't represent it on the wire with a mojo string - use a mojo
+ByteString instead.
 
 ## Versioning Considerations
 
@@ -1760,9 +2008,31 @@ enum Department {
 };
 ```
 
+*** note
+**NOTE**: The `[Default]` enumerator value is distinct from the automatically
+populated enum value used when a non-nullable enum field is not defined in an
+older client's versioned struct definition
+([the enumerator value corresponding to `0`](/mojo/public/tools/bindings/README.md#ensuring-backward-compatible-behavior)).
+***
+
 ### Using Mojo Bindings in Chrome
 
 See [Converting Legacy Chrome IPC To Mojo](/docs/mojo_ipc_conversion.md).
+
+### Files to include
+
+|Mojo Types|C++ Type|`.mojom-forward.h`|Include|Notes|
+|----------|--------|-------|-------|-----|
+|`interface`|`mojo::Remote<Xyz>`, `mojo::PendingRemote<Xyz>`, ...||`.mojom.h`||
+|`interface`|`class Xyz`|Y|`.mojom.h`||
+|`struct`, `union`|`XyzPtr`|Y|`.mojom-shared.h`||
+|`struct`, `union`|`XyzDataView`|Y|`.mojom-data-view.h`|Use in `xyz_mojom_traits.*` only.|
+|`enum`|`enum class Xyz`|Y| `.mojom-shared.h`||
+|`feature`|`base::FeatureList Xyz`|Y|`.mojom-features.h`||
+
+Prefer `.mojom-forward.h` in headers. Avoid using several includes, so
+if you need anything in `.mojom.h` prefer that, then `.mojom-shared.h` then
+specific files like `.mojom-data-view.h` or `.mojom-feature.h`.
 
 ### Additional Documentation
 

@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -32,6 +31,8 @@ namespace {
 using performance_manager::NodeBase;
 
 const char kHtmlMimeType[] = "text/html";
+const blink::mojom::PermissionStatus kAskPermissionStatus =
+    blink::mojom::PermissionStatus::ASK;
 
 class TestChangeStream : public discards::mojom::GraphChangeStream {
  public:
@@ -41,7 +42,7 @@ class TestChangeStream : public discards::mojom::GraphChangeStream {
   using WorkerMap = std::map<int64_t, discards::mojom::WorkerInfoPtr>;
   using IdSet = std::set<int64_t>;
 
-  TestChangeStream() {}
+  TestChangeStream() = default;
 
   mojo::PendingRemote<discards::mojom::GraphChangeStream> GetRemote() {
     mojo::PendingRemote<discards::mojom::GraphChangeStream> remote;
@@ -123,7 +124,7 @@ class TestChangeStream : public discards::mojom::GraphChangeStream {
   size_t num_changes() const { return num_changes_; }
 
  private:
-  bool HasId(int64_t id) { return base::Contains(id_set_, id); }
+  bool HasId(int64_t id) { return id_set_.contains(id); }
   bool HasIdIfValid(int64_t id) { return id == 0u || HasId(id); }
 
   FrameMap frame_map_;
@@ -138,6 +139,7 @@ class TestChangeStream : public discards::mojom::GraphChangeStream {
 
 class DiscardsGraphDumpImplTest : public testing::Test {
  public:
+  void SetUp() override { graph_.SetUp(); }
   void TearDown() override { graph_.TearDown(); }
 
  protected:
@@ -147,25 +149,35 @@ class DiscardsGraphDumpImplTest : public testing::Test {
 class TestNodeDataDescriber : public performance_manager::NodeDataDescriber {
  public:
   // NodeDataDescriber implementations:
-  base::Value DescribeFrameNodeData(
+  base::Value::Dict DescribeFrameNodeData(
       const performance_manager::FrameNode* node) const override {
-    return base::Value("frame");
+    base::Value::Dict dict;
+    dict.Set("type", "frame");
+    return dict;
   }
-  base::Value DescribePageNodeData(
+  base::Value::Dict DescribePageNodeData(
       const performance_manager::PageNode* node) const override {
-    return base::Value("page");
+    base::Value::Dict dict;
+    dict.Set("type", "page");
+    return dict;
   }
-  base::Value DescribeProcessNodeData(
+  base::Value::Dict DescribeProcessNodeData(
       const performance_manager::ProcessNode* node) const override {
-    return base::Value("process");
+    base::Value::Dict dict;
+    dict.Set("type", "process");
+    return dict;
   }
-  base::Value DescribeSystemNodeData(
+  base::Value::Dict DescribeSystemNodeData(
       const performance_manager::SystemNode* node) const override {
-    return base::Value("system");
+    base::Value::Dict dict;
+    dict.Set("type", "system");
+    return dict;
   }
-  base::Value DescribeWorkerNodeData(
+  base::Value::Dict DescribeWorkerNodeData(
       const performance_manager::WorkerNode* node) const override {
-    return base::Value("worker");
+    base::Value::Dict dict;
+    dict.Set("type", "worker");
+    return dict;
   }
 };
 
@@ -190,12 +202,16 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
   const GURL kExampleUrl("http://www.example.org");
   int64_t next_navigation_id = 1;
   mock_graph.page->OnMainFrameNavigationCommitted(
-      false, now, next_navigation_id++, kExampleUrl, kHtmlMimeType);
+      false, now, next_navigation_id++, kExampleUrl, kHtmlMimeType,
+      kAskPermissionStatus);
   mock_graph.other_page->OnMainFrameNavigationCommitted(
-      false, now, next_navigation_id++, kExampleUrl, kHtmlMimeType);
+      false, now, next_navigation_id++, kExampleUrl, kHtmlMimeType,
+      kAskPermissionStatus);
 
-  auto* main_frame = mock_graph.page->GetMainFrameNodeImpl();
-  main_frame->OnNavigationCommitted(kExampleUrl, /* same_document */ false);
+  auto* main_frame = mock_graph.page->main_frame_node();
+  main_frame->OnNavigationCommitted(
+      kExampleUrl, url::Origin::Create(kExampleUrl), /*same_document=*/false,
+      /*is_served_from_back_forward_cache=*/false);
 
   std::unique_ptr<DiscardsGraphDumpImpl> impl =
       std::make_unique<DiscardsGraphDumpImpl>();
@@ -214,27 +230,39 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
   task_environment.RunUntilIdle();
 
   // Validate that the initial graph state dump is complete. Note that there is
-  // an update for each node as part of the initial state dump.
-  EXPECT_EQ(8u, change_stream.num_changes());
-  EXPECT_EQ(8u, change_stream.id_set().size());
+  // an update for each node as part of the initial state dump, except the
+  // system node.
+  size_t expected_changes =
+      graph_.GetAllFrameNodes().size() + graph_.GetAllPageNodes().size() +
+      graph_.GetAllProcessNodes().size() + graph_.GetAllWorkerNodes().size();
+  EXPECT_EQ(expected_changes, change_stream.num_changes());
+  EXPECT_EQ(expected_changes, change_stream.id_set().size());
 
-  EXPECT_EQ(2u, change_stream.process_map().size());
+  EXPECT_EQ(graph_.GetAllProcessNodes().size(),
+            change_stream.process_map().size());
   for (const auto& kv : change_stream.process_map()) {
     const auto* process_info = kv.second.get();
     EXPECT_NE(0u, process_info->id);
-    EXPECT_EQ(base::JSONReader::Read("{\"test\":\"process\"}"),
-              base::JSONReader::Read(process_info->description_json));
+    EXPECT_EQ(base::JSONReader::Read("{\"test\":{\"type\":\"process\"}}",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+              base::JSONReader::Read(process_info->description_json,
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   }
 
-  EXPECT_EQ(3u, change_stream.frame_map().size());
+  EXPECT_EQ(graph_.GetAllFrameNodes().size(), change_stream.frame_map().size());
   for (const auto& kv : change_stream.frame_map()) {
-    EXPECT_EQ(base::JSONReader::Read("{\"test\":\"frame\"}"),
-              base::JSONReader::Read(kv.second->description_json));
+    EXPECT_EQ(base::JSONReader::Read("{\"test\":{\"type\":\"frame\"}}",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+              base::JSONReader::Read(kv.second->description_json,
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   }
-  EXPECT_EQ(1u, change_stream.worker_map().size());
+  EXPECT_EQ(graph_.GetAllWorkerNodes().size(),
+            change_stream.worker_map().size());
   for (const auto& kv : change_stream.worker_map()) {
-    EXPECT_EQ(base::JSONReader::Read("{\"test\":\"worker\"}"),
-              base::JSONReader::Read(kv.second->description_json));
+    EXPECT_EQ(base::JSONReader::Read("{\"test\":{\"type\":\"worker\"}}",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+              base::JSONReader::Read(kv.second->description_json,
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   }
 
   // Count the top-level frames as we go.
@@ -248,8 +276,9 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
       EXPECT_NE(0u, frame->page_id);
 
       // The page's main frame should have an URL.
-      if (frame->id == impl_raw->GetNodeIdForTesting(main_frame))
+      if (frame->id == impl_raw->GetNodeIdForTesting(main_frame)) {
         EXPECT_EQ(kExampleUrl, frame->url);
+      }
     }
     EXPECT_NE(0u, frame->id);
     EXPECT_NE(0u, frame->process_id);
@@ -258,19 +287,22 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
   // Make sure we have one top-level frame per page.
   EXPECT_EQ(change_stream.page_map().size(), top_level_frames);
 
-  EXPECT_EQ(2u, change_stream.page_map().size());
+  EXPECT_EQ(graph_.GetAllPageNodes().size(), change_stream.page_map().size());
   for (const auto& kv : change_stream.page_map()) {
     const auto& page = kv.second;
     EXPECT_NE(0u, page->id);
     EXPECT_EQ(kExampleUrl, page->main_frame_url);
-    EXPECT_EQ(base::JSONReader::Read("{\"test\":\"page\"}"),
-              base::JSONReader::Read(kv.second->description_json));
+    EXPECT_EQ(base::JSONReader::Read("{\"test\":{\"type\":\"page\"}}",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+              base::JSONReader::Read(kv.second->description_json,
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   }
 
   // Test change notifications.
   const GURL kAnotherURL("http://www.google.com/");
   mock_graph.page->OnMainFrameNavigationCommitted(
-      false, now, next_navigation_id++, kAnotherURL, kHtmlMimeType);
+      false, now, next_navigation_id++, kAnotherURL, kHtmlMimeType,
+      kAskPermissionStatus);
 
   size_t child_frame_id =
       impl_raw->GetNodeIdForTesting(mock_graph.child_frame.get());
@@ -279,8 +311,9 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
   task_environment.RunUntilIdle();
 
   // Main frame navigation results in a notification for the url.
-  EXPECT_EQ(9u, change_stream.num_changes());
-  EXPECT_FALSE(base::Contains(change_stream.id_set(), child_frame_id));
+  expected_changes += 1;
+  EXPECT_EQ(expected_changes, change_stream.num_changes());
+  EXPECT_FALSE(change_stream.id_set().contains(child_frame_id));
 
   const auto main_page_it = change_stream.page_map().find(
       impl_raw->GetNodeIdForTesting(mock_graph.page.get()));
@@ -312,10 +345,12 @@ TEST_F(DiscardsGraphDumpImplTest, ChangeStream) {
               // Check that the descriptions make sense.
               for (auto kv : node_descriptions_json) {
                 keys_received.push_back(kv.first);
-                absl::optional<base::Value> v =
-                    base::JSONReader::Read(kv.second);
+                std::optional<base::Value> v = base::JSONReader::Read(
+                    kv.second, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
                 EXPECT_TRUE(v->is_dict());
-                std::string* str = v->GetDict().FindString("test");
+                base::Value::Dict* dict = v->GetDict().FindDict("test");
+                EXPECT_TRUE(dict);
+                std::string* str = dict->FindString("type");
                 EXPECT_TRUE(str);
                 if (str) {
                   EXPECT_TRUE(*str == "frame" || *str == "page" ||

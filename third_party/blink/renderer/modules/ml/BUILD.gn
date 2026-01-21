@@ -2,8 +2,19 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//third_party/blink/renderer/modules/ml/webnn/features.gni")
+import("//build/buildflag_header.gni")
+import("//build/config/dcheck_always_on.gni")
 import("//third_party/blink/renderer/modules/modules.gni")
+
+declare_args() {
+  webnn_enable_graph_dump =
+      (is_win || is_linux || is_mac) && !is_official_build && dcheck_always_on
+}
+
+buildflag_header("buildflags") {
+  header = "buildflags.h"
+  flags = [ "WEBNN_ENABLE_GRAPH_DUMP=$webnn_enable_graph_dump" ]
+}
 
 blink_modules_sources("ml") {
   sources = [
@@ -11,27 +22,77 @@ blink_modules_sources("ml") {
     "ml.h",
     "ml_context.cc",
     "ml_context.h",
-    "ml_model.cc",
-    "ml_model.h",
-    "ml_model_loader.cc",
-    "ml_model_loader.h",
     "navigator_ml.cc",
     "navigator_ml.h",
+    "webnn/allow_shared_buffer_source_util.h",
+    "webnn/ml_constant_operand.cc",
+    "webnn/ml_constant_operand.h",
+    "webnn/ml_error.cc",
+    "webnn/ml_error.h",
+    "webnn/ml_graph.cc",
+    "webnn/ml_graph.h",
+    "webnn/ml_graph_builder.cc",
+    "webnn/ml_graph_builder.h",
+    "webnn/ml_graph_transform/constant_folding_transformer.cc",
+    "webnn/ml_graph_transform/constant_folding_transformer.h",
+    "webnn/ml_graph_transform/layout_transformer.cc",
+    "webnn/ml_graph_transform/layout_transformer.h",
+    "webnn/ml_graph_transform/ml_graph_transformer.cc",
+    "webnn/ml_graph_transform/ml_graph_transformer.h",
+    "webnn/ml_graph_transform/pipeline.cc",
+    "webnn/ml_graph_transform/pipeline.h",
+    "webnn/ml_graph_transform/qdq_detection_transformer.cc",
+    "webnn/ml_graph_transform/qdq_detection_transformer.h",
+    "webnn/ml_graph_transform/transpose_elimination_transformer.cc",
+    "webnn/ml_graph_transform/transpose_elimination_transformer.h",
+    "webnn/ml_graph_type_converter.cc",
+    "webnn/ml_graph_type_converter.h",
+    "webnn/ml_graph_utils.cc",
+    "webnn/ml_graph_utils.h",
+    "webnn/ml_operand.cc",
+    "webnn/ml_operand.h",
+    "webnn/ml_operator.cc",
+    "webnn/ml_operator.h",
+    "webnn/ml_tensor.cc",
+    "webnn/ml_tensor.h",
   ]
 
-  deps = [ "//components/ml/mojom:mojom_blink" ]
+  deps = [
+    ":buildflags",
+    "//services/webnn/public/cpp",
+    "//services/webnn/public/mojom:mojom_blink",
+    "//third_party/blink/renderer/modules/webgpu",
+  ]
+
+  if (webnn_enable_graph_dump) {
+    sources += [
+      "webnn/ml_graph_transform/utils/ml_graph_dump.cc",
+      "webnn/ml_graph_transform/utils/ml_graph_dump.h",
+    ]
+    deps += [ "//third_party/fp16" ]
+  }
+}
+
+source_set("operand_id_hash_traits") {
+  sources = [ "webnn/operand_id_hash_traits.h" ]
+
+  deps = [
+    "//services/webnn/public/cpp",
+    "//third_party/blink/renderer/platform/wtf",
+  ]
 }
 
 source_set("unit_tests") {
   testonly = true
   sources = [
-    "ml_model_loader_test.cc",
-    "webnn/ml_graph_builder_test.cc",
-    "webnn/ml_graph_builder_test.h",
+    "webnn/ml_graph_builder_test_utils.cc",
+    "webnn/ml_graph_builder_test_utils.h",
+    "webnn/ml_graph_test.cc",
   ]
 
   deps = [
-    "//components/ml/mojom:mojom_blink",
+    ":buildflags",
+    "//services/webnn/public/mojom:mojom_blink",
     "//testing/gtest",
     "//third_party/blink/public:test_headers",
     "//third_party/blink/renderer/controller:blink_bindings_test_sources",
@@ -41,9 +102,4 @@ source_set("unit_tests") {
     "//third_party/blink/renderer/platform:test_support",
     "//third_party/blink/renderer/platform/wtf",
   ]
-
-  if (build_webnn_with_xnnpack) {
-    sources += [ "webnn/ml_graph_xnnpack_test.cc" ]
-    deps += [ "//third_party/xnnpack" ]
-  }
 }

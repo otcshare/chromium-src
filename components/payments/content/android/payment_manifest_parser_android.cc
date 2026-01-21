@@ -11,29 +11,31 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/numerics/safe_conversions.h"
-#include "components/payments/content/android/jni_headers/PaymentManifestParser_jni.h"
 #include "components/payments/content/developer_console_logger.h"
 #include "components/payments/core/error_logger.h"
 #include "content/public/browser/web_contents.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/jni_headers/PaymentManifestParser_jni.h"
+
 namespace payments {
 namespace {
 
 class ParseCallback {
  public:
-  explicit ParseCallback(const base::android::JavaParamRef<jobject>& jcallback)
+  explicit ParseCallback(const base::android::JavaRef<jobject>& jcallback)
       : jcallback_(jcallback) {}
 
   ParseCallback(const ParseCallback&) = delete;
   ParseCallback& operator=(const ParseCallback&) = delete;
 
-  ~ParseCallback() {}
+  ~ParseCallback() = default;
 
   // Copies payment method manifest into Java.
   void OnPaymentMethodManifestParsed(
@@ -127,15 +129,15 @@ PaymentManifestParserAndroid::PaymentManifestParserAndroid(
     std::unique_ptr<ErrorLogger> log)
     : parser_(std::move(log)) {}
 
-PaymentManifestParserAndroid::~PaymentManifestParserAndroid() {}
+PaymentManifestParserAndroid::~PaymentManifestParserAndroid() = default;
 
 void PaymentManifestParserAndroid::ParsePaymentMethodManifest(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jmanifest_url,
-    const base::android::JavaParamRef<jstring>& jcontent,
-    const base::android::JavaParamRef<jobject>& jcallback) {
+    const base::android::JavaRef<jobject>& jmanifest_url,
+    const base::android::JavaRef<jstring>& jcontent,
+    const base::android::JavaRef<jobject>& jcallback) {
   parser_.ParsePaymentMethodManifest(
-      *url::GURLAndroid::ToNativeGURL(env, jmanifest_url),
+      url::GURLAndroid::ToNativeGURL(env, jmanifest_url),
       base::android::ConvertJavaStringToUTF8(env, jcontent),
       base::BindOnce(&ParseCallback::OnPaymentMethodManifestParsed,
                      std::make_unique<ParseCallback>(jcallback)));
@@ -143,8 +145,8 @@ void PaymentManifestParserAndroid::ParsePaymentMethodManifest(
 
 void PaymentManifestParserAndroid::ParseWebAppManifest(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& jcontent,
-    const base::android::JavaParamRef<jobject>& jcallback) {
+    const base::android::JavaRef<jstring>& jcontent,
+    const base::android::JavaRef<jobject>& jcallback) {
   parser_.ParseWebAppManifest(
       base::android::ConvertJavaStringToUTF8(env, jcontent),
       base::BindOnce(&ParseCallback::OnWebAppManifestParsed,
@@ -157,16 +159,18 @@ void PaymentManifestParserAndroid::DestroyPaymentManifestParserAndroid(
 }
 
 // Caller owns the result.
-jlong JNI_PaymentManifestParser_CreatePaymentManifestParserAndroid(
+static int64_t JNI_PaymentManifestParser_CreatePaymentManifestParserAndroid(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jweb_contents) {
+    const base::android::JavaRef<jobject>& jweb_contents) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   auto log = web_contents
                  ? std::make_unique<DeveloperConsoleLogger>(web_contents)
                  : std::make_unique<ErrorLogger>();
-  return reinterpret_cast<jlong>(
+  return reinterpret_cast<int64_t>(
       new PaymentManifestParserAndroid(std::move(log)));
 }
 
 }  // namespace payments
+
+DEFINE_JNI(PaymentManifestParser)

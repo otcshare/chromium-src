@@ -4,6 +4,8 @@
 
 #include "content/browser/client_hints/client_hints.h"
 
+#include <algorithm>
+
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,10 +20,11 @@
 #include "net/http/http_response_headers.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/client_hints.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/blink/public/common/origin_trials/origin_trial_policy.h"
-#include "third_party/blink/public/common/origin_trials/origin_trial_public_key.h"
-#include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "testing/gmock/include/gmock/gmock-matchers.h"
+#include "third_party/blink/public/common/client_hints/client_hints.h"
 
 namespace content {
 
@@ -30,40 +33,11 @@ namespace {
 using ClientHintsVector = std::vector<network::mojom::WebClientHintsType>;
 using network::mojom::WebClientHintsType;
 
-static const blink::OriginTrialPublicKey kTestPublicKey = {
-    0x75, 0x10, 0xac, 0xf9, 0x3a, 0x1c, 0xb8, 0xa9, 0x28, 0x70, 0xd2,
-    0x9a, 0xd0, 0x0b, 0x59, 0xe1, 0xac, 0x2b, 0xb7, 0xd5, 0xca, 0x1f,
-    0x64, 0x90, 0x08, 0x8e, 0xa8, 0xe0, 0x56, 0x3a, 0x04, 0xd0,
-};
-
 }  // namespace
-
-class TestOriginTrialPolicy : public blink::OriginTrialPolicy {
- public:
-  bool IsOriginTrialsSupported() const override { return true; }
-  bool IsOriginSecure(const GURL& url) const override {
-    return network::IsUrlPotentiallyTrustworthy(url);
-  }
-  const std::vector<blink::OriginTrialPublicKey>& GetPublicKeys()
-      const override {
-    return keys_;
-  }
-  void SetPublicKeys(const std::vector<blink::OriginTrialPublicKey>& keys) {
-    keys_ = keys;
-  }
-
- private:
-  std::vector<blink::OriginTrialPublicKey> keys_;
-};
 
 class ClientHintsTest : public RenderViewHostImplTestHarness {
  public:
-  ClientHintsTest() {
-    blink::TrialTokenValidator::SetOriginTrialPolicyGetter(base::BindRepeating(
-        [](blink::OriginTrialPolicy* policy) { return policy; },
-        base::Unretained(&policy_)));
-    policy_.SetPublicKeys({kTestPublicKey});
-  }
+  ClientHintsTest() = default;
   ClientHintsTest(const ClientHintsTest&) = delete;
   ClientHintsTest& operator=(const ClientHintsTest&) = delete;
   ~ClientHintsTest() override {
@@ -71,14 +45,6 @@ class ClientHintsTest : public RenderViewHostImplTestHarness {
   }
 
   static constexpr char kOriginUrl[] = "https://example.com";
-  // generate_token.py https://example.com SendFullUserAgentAfterReduction
-  // --expire-timestamp=2000000000
-  static constexpr char kValidOriginTrialToken[] =
-      "AzA4UoK24p1LV/y6B032+L/M50GZfI4zx0aTri3ZGJpiq/"
-      "o4eLMdErZ9p4YzbsCY9nrjmccZe12bs80EON8/"
-      "eAYAAABpeyJvcmlnaW4iOiAiaHR0cHM6Ly9leGFtcGxlLmNvbTo0NDMiLCAiZmVhdHVyZSI6"
-      "ICJTZW5kRnVsbFVzZXJBZ2VudEFmdGVyUmVkdWN0aW9uIiwgImV4cGlyeSI6IDIwMDAwMDAw"
-      "MDB9";
 
   void AddOneChildNode() {
     main_test_rfh()->OnCreateChildFrame(
@@ -97,7 +63,7 @@ class ClientHintsTest : public RenderViewHostImplTestHarness {
         /*document_ukm_source_id=*/ukm::kInvalidSourceId);
   }
 
-  absl::optional<ClientHintsVector> ParseAndPersist(
+  std::optional<ClientHintsVector> ParseAndPersist(
       const GURL& url,
       const net::HttpResponseHeaders* response_header,
       const std::string& accept_ch_str,
@@ -111,36 +77,29 @@ class ClientHintsTest : public RenderViewHostImplTestHarness {
         browser_context(), delegate, frame_tree_node);
   }
 
-  std::string HintsToString(absl::optional<ClientHintsVector> hints) {
+  std::string HintsToString(std::optional<ClientHintsVector> hints) {
     if (!hints)
       return "";
 
     std::vector<std::string> hints_list;
-    std::transform(hints.value().begin(), hints.value().end(),
-                   std::back_inserter(hints_list),
-                   [](network::mojom::WebClientHintsType hint) {
-                     return network::GetClientHintToNameMap().at(hint);
-                   });
+    const auto& map = network::GetClientHintToNameMap();
+    std::ranges::transform(hints.value(), std::back_inserter(hints_list),
+                           [&map](network::mojom::WebClientHintsType hint) {
+                             return map.at(hint);
+                           });
 
     return base::JoinString(hints_list, ",");
   }
 
-  std::pair<std::string, ClientHintsVector> GetAllNonOriginTrialHints() {
+  std::pair<std::string, ClientHintsVector> GetAllClientHints() {
     std::vector<std::string> accept_ch_tokens;
     ClientHintsVector hints_list;
     for (const auto& pair : network::GetClientHintToNameMap()) {
-      // Skip client hints used to origin trial.
-      if (pair.first == WebClientHintsType::kFullUserAgent ||
-          pair.first == WebClientHintsType::kUAReduced)
-        continue;
       hints_list.push_back(pair.first);
       accept_ch_tokens.push_back(pair.second);
     }
     return {base::JoinString(accept_ch_tokens, ","), hints_list};
   }
-
- private:
-  TestOriginTrialPolicy policy_;
 };
 
 TEST_F(ClientHintsTest, RttRoundedOff) {
@@ -266,10 +225,6 @@ TEST_F(ClientHintsTest, DownlinkRandomized) {
 }
 
 TEST_F(ClientHintsTest, IntegrationTestsOnParseLookUp) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({blink::features::kUserAgentClientHint},
-                                       {});
-
   GURL url = GURL(ClientHintsTest::kOriginUrl);
   contents()->NavigateAndCommit(url);
   FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
@@ -280,67 +235,35 @@ TEST_F(ClientHintsTest, IntegrationTestsOnParseLookUp) {
   blink::UserAgentMetadata ua_metadata;
   MockClientHintsControllerDelegate delegate(ua_metadata);
 
-  const auto& all_non_origin_trial_hints_pair = GetAllNonOriginTrialHints();
+  const auto& all_non_origin_trial_hints_pair = GetAllClientHints();
   const struct {
     std::string description;
-    absl::optional<std::string> origin_trial_token;
     std::string accept_ch_str;
     raw_ptr<FrameTreeNode> frame_tree_node;
-    absl::optional<ClientHintsVector> expect_hints;
+    std::optional<ClientHintsVector> expect_hints;
     ClientHintsVector expect_commit_hints;
   } tests[] = {
-      {"Persist hints for main frame", absl::nullopt,
-       "sec-ch-ua-platform, sec-ch-ua-bitness", main_frame_node,
-       absl::make_optional(ClientHintsVector{WebClientHintsType::kUAPlatform,
-                                             WebClientHintsType::kUABitness}),
+      {"Persist hints for main frame", "sec-ch-ua-platform, sec-ch-ua-bitness",
+       main_frame_node,
+       std::make_optional(ClientHintsVector{WebClientHintsType::kUAPlatform,
+                                            WebClientHintsType::kUABitness}),
        ClientHintsVector{WebClientHintsType::kUAPlatform,
                          WebClientHintsType::kUABitness}},
-      {"No persist hints for sub frame", absl::nullopt,
-       "sec-ch-ua-platform, sec-ch-ua-bitness", sub_frame_node, absl::nullopt,
+      {"No persist hints for sub frame",
+       "sec-ch-ua-platform, sec-ch-ua-bitness", sub_frame_node, std::nullopt,
        ClientHintsVector{WebClientHintsType::kUAPlatform,
                          WebClientHintsType::kUABitness}},
-      {"Origin trial hint for main frame",
-       absl::nullopt,
-       "sec-ch-ua-full",
+      {"All client hints for main frame", all_non_origin_trial_hints_pair.first,
        main_frame_node,
-       absl::make_optional(ClientHintsVector{}),
-       {}},
-      {"Origin trial hint for sub frame",
-       absl::nullopt,
-       "sec-ch-ua-full",
-       sub_frame_node,
-       absl::make_optional(ClientHintsVector{}),
-       {}},
-      {"Response with valid origin trial for main frame",
-       kValidOriginTrialToken,
-       "sec-ch-ua-full",
-       main_frame_node,
-       absl::make_optional(
-           ClientHintsVector{WebClientHintsType::kFullUserAgent}),
-       {WebClientHintsType::kFullUserAgent}},
-      {"Response with valid origin trial for sub frame",
-       kValidOriginTrialToken,
-       "sec-ch-ua-full",
-       sub_frame_node,
-       absl::make_optional(
-           ClientHintsVector{WebClientHintsType::kFullUserAgent}),
-       {WebClientHintsType::kFullUserAgent}},
-      {"All non origin trial client hints for main frame", absl::nullopt,
-       all_non_origin_trial_hints_pair.first, main_frame_node,
-       absl::make_optional(all_non_origin_trial_hints_pair.second),
+       std::make_optional(all_non_origin_trial_hints_pair.second),
        all_non_origin_trial_hints_pair.second},
-      {"All non origin trial client hints for sub frame", absl::nullopt,
-       all_non_origin_trial_hints_pair.first, sub_frame_node, absl::nullopt,
-       all_non_origin_trial_hints_pair.second},
+      {"All client hints for sub frame", all_non_origin_trial_hints_pair.first,
+       sub_frame_node, std::nullopt, all_non_origin_trial_hints_pair.second},
   };
 
   for (const auto& test : tests) {
     auto response_headers =
         base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n");
-
-    if (test.origin_trial_token)
-      response_headers->SetHeader("Origin-Trial",
-                                  test.origin_trial_token.value());
 
     auto actual_hints =
         ParseAndPersist(url, response_headers.get(), test.accept_ch_str,
@@ -357,6 +280,369 @@ TEST_F(ClientHintsTest, IntegrationTestsOnParseLookUp) {
         << "Test case [" << test.description << "]: expected commit hints "
         << HintsToString(test.expect_commit_hints) << " but got "
         << HintsToString(actual_commit_hints) << ".";
+  }
+}
+
+TEST_F(ClientHintsTest, SubFrame) {
+  GURL url = GURL(ClientHintsTest::kOriginUrl);
+  contents()->NavigateAndCommit(url);
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneChildNode();
+  FrameTreeNode* sub_frame_node = main_frame_node->child_at(0);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Persist existing hint to accept-ch cache.
+  ClientHintsVector existing_hints = ClientHintsVector{
+      WebClientHintsType::kUAPlatform, WebClientHintsType::kUABitness};
+  delegate.PersistClientHints(url::Origin::Create(url),
+                              main_frame_node->GetParentOrOuterDocument(),
+                              existing_hints);
+  auto response_headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n");
+  std::string accept_ch_str = "sec-ch-ua-platform-version";
+
+  // We shouldn't parse accept-ch in subframe, it should not overwrite existing
+  // hints.
+  auto actual_updated_hints = ParseAndPersist(
+      url, response_headers.get(), accept_ch_str, sub_frame_node, &delegate);
+
+  EXPECT_EQ(std::nullopt, actual_updated_hints);
+  blink::EnabledClientHints current_hints;
+  delegate.GetAllowedClientHintsFromSource(url::Origin::Create(url),
+                                           &current_hints);
+  EXPECT_EQ(existing_hints, current_hints.GetEnabledHints());
+}
+
+TEST_F(ClientHintsTest, GetEnabledClientHintsMainFrame) {
+  GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  url::Origin origin = url::Origin::Create(main_url);
+
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  std::vector<network::mojom::WebClientHintsType> expected_types = {
+      network::mojom::WebClientHintsType::kUAArch,
+      network::mojom::WebClientHintsType::kUAWoW64,
+  };
+  delegate.SetAdditionalClientHints(expected_types);
+  // Add default ClientHints.
+  for (const auto& [hint, _] : network::GetClientHintToNameMap()) {
+    if (blink::IsClientHintSentByDefault(hint)) {
+      expected_types.push_back(hint);
+    }
+  }
+
+  const auto& actual_hints =
+      GetEnabledClientHints(origin, main_frame_node, &delegate);
+
+  EXPECT_EQ(origin, actual_hints.origin);
+  EXPECT_TRUE(actual_hints.is_outermost_main_frame);
+  // We do not care the order of contents.
+  EXPECT_THAT(actual_hints.hints,
+              testing::UnorderedElementsAreArray(expected_types));
+  EXPECT_TRUE(actual_hints.not_allowed_hints.empty());
+}
+
+TEST_F(ClientHintsTest, GetEnabledClientHintsSubframe) {
+  GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  url::Origin origin = url::Origin::Create(main_url);
+
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneChildNode();
+  FrameTreeNode* sub_frame_node = main_frame_node->child_at(0);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Add default ClientHints.
+  std::vector<network::mojom::WebClientHintsType> expected_types;
+  for (const auto& [hint, _] : network::GetClientHintToNameMap()) {
+    if (blink::IsClientHintSentByDefault(hint)) {
+      expected_types.push_back(hint);
+    }
+  }
+
+  // The origin passed to GetEnabledClientHints is the resource origin.
+  // The origin in the result is the main frame origin.
+  GURL sub_url("https://sub.example.com");
+  const auto& actual_hints = GetEnabledClientHints(url::Origin::Create(sub_url),
+                                                   sub_frame_node, &delegate);
+
+  EXPECT_EQ(origin, actual_hints.origin);
+  EXPECT_FALSE(actual_hints.is_outermost_main_frame);
+  // Just check if the hints has the default low entropy client hints.
+  // We do not care the order of contents.
+  EXPECT_THAT(actual_hints.hints,
+              testing::UnorderedElementsAreArray(expected_types));
+}
+
+TEST_F(ClientHintsTest, AddPrefetchNavigationRequestClientHintsHeaders) {
+  GURL url = GURL(ClientHintsTest::kOriginUrl);
+  url::Origin origin = url::Origin::Create(url);
+
+  blink::UserAgentMetadata ua_metadata;
+  ua_metadata.architecture = "x86";
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Enable a variety of hints.
+  delegate.SetAdditionalClientHints(
+      {WebClientHintsType::kDeviceMemory, WebClientHintsType::kDpr,
+       WebClientHintsType::kUAArch, WebClientHintsType::kPrefersColorScheme});
+
+  // TODO(crbug.com/427866914): Add tests for UA overrides by DevTools.
+  net::HttpRequestHeaders headers;
+  AddPrefetchNavigationRequestClientHintsHeaders(
+      origin, &headers, browser_context(), &delegate,
+      /*is_ua_override_on=*/false, /*ftn_for_devtools_override=*/nullptr);
+
+  // Low-entropy UA hints are sent by default.
+  EXPECT_TRUE(headers.HasHeader("sec-ch-ua"));
+  EXPECT_TRUE(headers.HasHeader("sec-ch-ua-mobile"));
+
+  // High-entropy hints that were enabled.
+  std::optional<std::string> header_value = headers.GetHeader("sec-ch-ua-arch");
+  EXPECT_TRUE(header_value.has_value());
+  EXPECT_EQ("\"x86\"", header_value.value());
+
+  EXPECT_TRUE(headers.HasHeader("sec-ch-device-memory"));
+  EXPECT_TRUE(headers.HasHeader("sec-ch-dpr"));
+
+  // Prefers-color-scheme depends on a frame, which is null for prefetch.
+  EXPECT_FALSE(headers.HasHeader("sec-ch-prefers-color-scheme"));
+
+  // Verify hints not in the requested list.
+  EXPECT_FALSE(headers.HasHeader("sec-ch-ua-bitness"));
+}
+
+TEST_F(ClientHintsTest, AddNavigationRequestClientHintsHeaders_MainFrame) {
+  GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  url::Origin origin = url::Origin::Create(main_url);
+  FrameTreeNode* main_frame_node = contents()->GetPrimaryFrameTree().root();
+
+  blink::UserAgentMetadata ua_metadata;
+  ua_metadata.architecture = "x86";
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Enable a variety of hints.
+  delegate.SetAdditionalClientHints(
+      {WebClientHintsType::kDeviceMemory, WebClientHintsType::kDpr,
+       WebClientHintsType::kUAArch, WebClientHintsType::kPrefersColorScheme});
+
+  net::HttpRequestHeaders headers;
+  AddNavigationRequestClientHintsHeaders(
+      origin, &headers, browser_context(), &delegate,
+      /*is_ua_override_on=*/false, main_frame_node,
+      /*container_policy=*/{});
+
+  // Low-entropy UA hints are sent by default.
+  EXPECT_TRUE(headers.HasHeader("sec-ch-ua"));
+  EXPECT_TRUE(headers.HasHeader("sec-ch-ua-mobile"));
+
+  // High-entropy hints that were enabled.
+  std::optional<std::string> header_value = headers.GetHeader("sec-ch-ua-arch");
+  EXPECT_TRUE(header_value.has_value());
+  EXPECT_EQ("\"x86\"", header_value.value());
+
+  EXPECT_TRUE(headers.HasHeader("sec-ch-device-memory"));
+  EXPECT_TRUE(headers.HasHeader("sec-ch-dpr"));
+
+  // Prefers-color-scheme should have value for navigation request.
+  EXPECT_TRUE(headers.HasHeader("sec-ch-prefers-color-scheme"));
+
+  // Verify hints not in the requested list.
+  EXPECT_FALSE(headers.HasHeader("sec-ch-ua-bitness"));
+}
+
+TEST_F(ClientHintsTest, AddNavigationRequestClientHintsHeaders_Subframe) {
+  GURL url = GURL(ClientHintsTest::kOriginUrl);
+  contents()->NavigateAndCommit(url);
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneChildNode();
+  FrameTreeNode* sub_frame_node = main_frame_node->child_at(0);
+
+  GURL subframe_url("https://sub.example.com");
+  url::Origin subframe_origin = url::Origin::Create(subframe_url);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Enable a hint that requires delegation.
+  delegate.SetAdditionalClientHints({WebClientHintsType::kDeviceMemory});
+
+  net::HttpRequestHeaders headers;
+  // Case 1: No delegation policy. Hint should not be added.
+  AddNavigationRequestClientHintsHeaders(
+      subframe_origin, &headers, browser_context(), &delegate,
+      /*is_ua_override_on=*/false, sub_frame_node,
+      /*container_policy=*/{});
+  EXPECT_FALSE(headers.HasHeader("sec-ch-device-memory"));
+
+  // Case 2: With delegation policy. Hint should be added.
+  headers.Clear();
+  network::ParsedPermissionsPolicy container_policy;
+  network::ParsedPermissionsPolicyDeclaration decl(
+      network::mojom::PermissionsPolicyFeature::kClientHintDeviceMemory,
+      {*network::OriginWithPossibleWildcards::FromOrigin(subframe_origin)},
+      /*self_if_matches=*/std::nullopt,
+      /*matches_all_origins=*/false, /*matches_opaque_src=*/false);
+  container_policy.push_back(std::move(decl));
+
+  AddNavigationRequestClientHintsHeaders(
+      subframe_origin, &headers, browser_context(), &delegate,
+      /*is_ua_override_on=*/false, sub_frame_node, container_policy);
+
+  EXPECT_TRUE(headers.HasHeader("sec-ch-device-memory"));
+}
+
+TEST_F(ClientHintsTest, GetCriticalHintsMissingStatus) {
+  const GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  const url::Origin origin = url::Origin::Create(main_url);
+
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  const ClientHintsVector critical_hints = {WebClientHintsType::kDeviceMemory,
+                                            WebClientHintsType::kDpr};
+
+  // No hints persisted.
+  EXPECT_EQ(GetCriticalHintsMissingStatus(origin, main_frame_node, &delegate,
+                                          critical_hints),
+            CriticalHintsMissingStatus::kMissing);
+
+  // One hint persisted.
+  delegate.PersistClientHints(origin,
+                              main_frame_node->GetParentOrOuterDocument(),
+                              {WebClientHintsType::kDeviceMemory});
+  EXPECT_EQ(GetCriticalHintsMissingStatus(origin, main_frame_node, &delegate,
+                                          critical_hints),
+            CriticalHintsMissingStatus::kMissing);
+
+  // All hints persisted.
+  delegate.PersistClientHints(
+      origin, main_frame_node->GetParentOrOuterDocument(), critical_hints);
+  EXPECT_EQ(GetCriticalHintsMissingStatus(origin, main_frame_node, &delegate,
+                                          critical_hints),
+            CriticalHintsMissingStatus::kPresent);
+}
+
+TEST_F(ClientHintsTest, GetEnabledClientHintsSubframeNotAllowed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeaturesAndParameters(
+      {{network::features::kOffloadAcceptCHFrameCheck,
+        {{network::features::kAcceptCHFrameOffloadNotAllowedHints.name,
+          "true"}}}},
+      {});
+
+  GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  url::Origin main_origin = url::Origin::Create(main_url);
+
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneChildNode();
+  FrameTreeNode* sub_frame_node = main_frame_node->child_at(0);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  GURL sub_url("https://sub.example.com");
+  const auto& actual_hints = GetEnabledClientHints(url::Origin::Create(sub_url),
+                                                   sub_frame_node, &delegate);
+
+  std::vector<network::mojom::WebClientHintsType> expected_allowed_hints;
+  std::vector<network::mojom::WebClientHintsType> expected_not_allowed_hints;
+
+  for (const auto& [hint, _] : network::GetClientHintToNameMap()) {
+    if (blink::IsClientHintSentByDefault(hint)) {
+      expected_allowed_hints.push_back(hint);
+    } else {
+      expected_not_allowed_hints.push_back(hint);
+    }
+  }
+
+  EXPECT_EQ(main_origin, actual_hints.origin);
+  EXPECT_FALSE(actual_hints.is_outermost_main_frame);
+  EXPECT_THAT(actual_hints.hints,
+              testing::UnorderedElementsAreArray(expected_allowed_hints));
+  EXPECT_THAT(actual_hints.not_allowed_hints,
+              testing::UnorderedElementsAreArray(expected_not_allowed_hints));
+}
+
+TEST_F(ClientHintsTest, GetEnabledClientHintsNotAllowedHintsLogic) {
+  GURL main_url(kOriginUrl);
+  contents()->NavigateAndCommit(main_url);
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneChildNode();
+  FrameTreeNode* sub_frame_node = main_frame_node->child_at(0);
+  GURL sub_url("https://sub.example.com");
+  url::Origin sub_origin = url::Origin::Create(sub_url);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Case 1: kOffloadAcceptCHFrameCheck is disabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        network::features::kOffloadAcceptCHFrameCheck);
+    const auto& actual_hints =
+        GetEnabledClientHints(sub_origin, sub_frame_node, &delegate);
+    EXPECT_TRUE(actual_hints.not_allowed_hints.empty());
+  }
+
+  // Case 2: Both kAcceptCHFrameOffloadNotAllowedHints and
+  // kAlwaysGenerateNotAllowedClientHints are false.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        network::features::kOffloadAcceptCHFrameCheck);
+    const auto& actual_hints =
+        GetEnabledClientHints(sub_origin, sub_frame_node, &delegate);
+    EXPECT_TRUE(actual_hints.not_allowed_hints.empty());
+  }
+
+  // Case 3: kOffloadAcceptCHFrameCheck enabled,
+  // kAcceptCHFrameOffloadNotAllowedHints enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeaturesAndParameters(
+        {{network::features::kOffloadAcceptCHFrameCheck,
+          {{network::features::kAcceptCHFrameOffloadNotAllowedHints.name,
+            "true"}}}},
+        {});
+    const auto& actual_hints =
+        GetEnabledClientHints(sub_origin, sub_frame_node, &delegate);
+    EXPECT_FALSE(actual_hints.not_allowed_hints.empty());
+  }
+
+  // Case 4: kOffloadAcceptCHFrameCheck enabled,
+  // kAlwaysGenerateNotAllowedClientHints enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeaturesAndParameters(
+        {{network::features::kOffloadAcceptCHFrameCheck,
+          {{network::features::kAlwaysGenerateNotAllowedClientHints.name,
+            "true"}}}},
+        {});
+    const auto& actual_hints =
+        GetEnabledClientHints(sub_origin, sub_frame_node, &delegate);
+    EXPECT_FALSE(actual_hints.not_allowed_hints.empty());
   }
 }
 

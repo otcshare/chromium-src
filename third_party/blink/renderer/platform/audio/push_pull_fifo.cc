@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/synchronization/lock.h"
 #include "build/build_config.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 
@@ -22,13 +24,10 @@ namespace {
 const unsigned kMaxMessagesToLog = 100;
 }
 
-const uint32_t PushPullFIFO::kMaxFIFOLength = 65536;
-
 PushPullFIFO::PushPullFIFO(unsigned number_of_channels,
                            uint32_t fifo_length,
                            unsigned render_quantum_frames)
     : fifo_length_(fifo_length), render_quantum_frames_(render_quantum_frames) {
-  CHECK_LE(fifo_length_, kMaxFIFOLength);
   fifo_bus_ = AudioBus::Create(number_of_channels, fifo_length_);
 }
 
@@ -79,14 +78,15 @@ void PushPullFIFO::Push(const AudioBus* input_bus) {
     const float* input_bus_channel = input_bus->Channel(i)->Data();
     if (remainder >= input_bus_length) {
       // The remainder is big enough for the input data.
-      memcpy(fifo_bus_channel + index_write_, input_bus_channel,
-             input_bus_length * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(fifo_bus_channel + index_write_, input_bus_channel,
+                         input_bus_length * sizeof(*fifo_bus_channel)));
     } else {
       // The input data overflows the remainder size. Wrap around the index.
-      memcpy(fifo_bus_channel + index_write_, input_bus_channel,
-             remainder * sizeof(*fifo_bus_channel));
-      memcpy(fifo_bus_channel, input_bus_channel + remainder,
-             (input_bus_length - remainder) * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(fifo_bus_channel + index_write_, input_bus_channel,
+                         remainder * sizeof(*fifo_bus_channel)));
+      UNSAFE_TODO(
+          memcpy(fifo_bus_channel, input_bus_channel + remainder,
+                 (input_bus_length - remainder) * sizeof(*fifo_bus_channel)));
     }
   }
 
@@ -104,11 +104,16 @@ void PushPullFIFO::Push(const AudioBus* input_bus) {
                    << ", inputFrames=" << input_bus_length
                    << ", fifoLength=" << fifo_length_ << ")";
     }
+    TRACE_EVENT_INSTANT2("webaudio", "PushPullFIFO overrun",
+                         TRACE_EVENT_SCOPE_THREAD, "extra frames",
+                         input_bus_length + frames_available_ - fifo_length_,
+                         "overflow_count_", overflow_count_);
   }
 
   // Update the number of frames available in FIFO.
   frames_available_ =
       std::min(frames_available_ + input_bus_length, fifo_length_);
+  TRACE_COUNTER_ID1("webaudio", "PushPullFIFO frames", this, frames_available_);
   DCHECK_EQ((index_read_ + frames_available_) % fifo_length_, index_write_);
 }
 
@@ -164,24 +169,24 @@ size_t PushPullFIFO::Pull(AudioBus* output_bus, uint32_t frames_requested) {
     // Fill up the output bus with the available frames first.
     if (remainder >= frames_to_fill) {
       // The remainder is big enough for the frames to pull.
-      memcpy(output_bus_channel, fifo_bus_channel + index_read_,
-             frames_to_fill * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(output_bus_channel, fifo_bus_channel + index_read_,
+                         frames_to_fill * sizeof(*fifo_bus_channel)));
     } else {
       // The frames to pull is bigger than the remainder size.
       // Wrap around the index.
-      memcpy(output_bus_channel, fifo_bus_channel + index_read_,
-             remainder * sizeof(*fifo_bus_channel));
-      memcpy(output_bus_channel + remainder, fifo_bus_channel,
-             (frames_to_fill - remainder) * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(output_bus_channel, fifo_bus_channel + index_read_,
+                         remainder * sizeof(*fifo_bus_channel)));
+      UNSAFE_TODO(
+          memcpy(output_bus_channel + remainder, fifo_bus_channel,
+                 (frames_to_fill - remainder) * sizeof(*fifo_bus_channel)));
     }
 
     // The frames available was not enough to fulfill the requested frames. Fill
     // the rest of the channel with silence.
     if (frames_requested > frames_to_fill) {
-      TRACE_EVENT1("webaudio", "PushPullFIFO::Pull underrun", "missing frames",
-                   frames_requested - frames_to_fill);
-      memset(output_bus_channel + frames_to_fill, 0,
-             (frames_requested - frames_to_fill) * sizeof(*output_bus_channel));
+      UNSAFE_TODO(memset(
+          output_bus_channel + frames_to_fill, 0,
+          (frames_requested - frames_to_fill) * sizeof(*output_bus_channel)));
     }
   }
 
@@ -198,10 +203,16 @@ size_t PushPullFIFO::Pull(AudioBus* output_bus, uint32_t frames_requested) {
                    << ", requestedFrames=" << frames_requested
                    << ", fifoLength=" << fifo_length_ << ")";
     }
+    TRACE_EVENT_INSTANT2("webaudio", "PushPullFIFO::Pull underrun",
+                         TRACE_EVENT_SCOPE_THREAD, "missing frames",
+                         frames_requested - frames_to_fill, "underflow_count_",
+                         underflow_count_);
   }
 
   // Update the number of frames in FIFO.
   frames_available_ -= frames_to_fill;
+  TRACE_COUNTER_ID1("webaudio", "PushPullFIFO frames", this, frames_available_);
+
   DCHECK_EQ((index_read_ + frames_available_) % fifo_length_, index_write_);
 
   pull_count_++;
@@ -213,8 +224,9 @@ size_t PushPullFIFO::Pull(AudioBus* output_bus, uint32_t frames_requested) {
       : 0;
 }
 
-size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
-                                          uint32_t frames_requested) {
+PushPullFIFO::PullResult PushPullFIFO::PullAndUpdateEarmark(
+    AudioBus* output_bus,
+    uint32_t frames_requested) {
   TRACE_EVENT2("webaudio", "PushPullFIFO::PullAndUpdateEarmark", "this",
                static_cast<void*>(this), "frames_requested", frames_requested);
 
@@ -231,7 +243,7 @@ size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
   // The frames available was not enough to fulfill |frames_requested|. Fill
   // the output buffer with silence and update |earmark_frames_|.
   if (frames_requested > frames_available_) {
-    const size_t missing_frames = frames_requested - frames_available_;
+    const uint32_t missing_frames = frames_requested - frames_available_;
 
     if (underflow_count_++ < kMaxMessagesToLog) {
       LOG(WARNING) << "PushPullFIFO::PullAndUpdateEarmark"
@@ -242,10 +254,10 @@ size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
                    << ", fifoLength=" << fifo_length_ << ")";
     }
 
-    TRACE_EVENT2("webaudio",
-                 "PushPullFIFO::PullAndUpdateEarmark (underrun)",
-                 "missing frames", missing_frames,
-                 "underflow_count_", underflow_count_);
+    TRACE_EVENT_INSTANT2("webaudio",
+                         "PushPullFIFO::PullAndUpdateEarmark underrun",
+                         TRACE_EVENT_SCOPE_THREAD, "missing frames",
+                         missing_frames, "underflow_count_", underflow_count_);
 
     // We assume that the next |frames_requested| from |AudioOutputDevice| will
     // be the same.
@@ -260,17 +272,18 @@ size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
     // frames in subsequent callbacks without silence in between.
     for (unsigned i = 0; i < fifo_bus_->NumberOfChannels(); ++i) {
       float* output_bus_channel = output_bus->Channel(i)->MutableData();
-      memset(output_bus_channel, 0,
-             frames_requested * sizeof(*output_bus_channel));
+      UNSAFE_TODO(memset(output_bus_channel, 0,
+                         frames_requested * sizeof(*output_bus_channel)));
     }
 
-    // The producer (WebAudio) needs to prepare the next pull plus what's
-    // missing.
-    return frames_requested + missing_frames;
+    // No frames were pulled; the producer (WebAudio) needs to prepare the next
+    // pull plus what's missing.
+    return PullResult{.frames_provided = 0,
+                      .frames_to_render = frames_requested + missing_frames};
   }
 
   const size_t remainder = fifo_length_ - index_read_;
-  const size_t frames_to_fill = std::min(frames_available_, frames_requested);
+  const uint32_t frames_to_fill = std::min(frames_available_, frames_requested);
 
   for (unsigned i = 0; i < fifo_bus_->NumberOfChannels(); ++i) {
     const float* fifo_bus_channel = fifo_bus_->Channel(i)->Data();
@@ -279,15 +292,16 @@ size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
     // Fill up the output bus with the available frames first.
     if (remainder >= frames_to_fill) {
       // The remainder is big enough for the frames to pull.
-      memcpy(output_bus_channel, fifo_bus_channel + index_read_,
-            frames_to_fill * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(output_bus_channel, fifo_bus_channel + index_read_,
+                         frames_to_fill * sizeof(*fifo_bus_channel)));
     } else {
       // The frames to pull is bigger than the remainder size.
       // Wrap around the index.
-      memcpy(output_bus_channel, fifo_bus_channel + index_read_,
-            remainder * sizeof(*fifo_bus_channel));
-      memcpy(output_bus_channel + remainder, fifo_bus_channel,
-            (frames_to_fill - remainder) * sizeof(*fifo_bus_channel));
+      UNSAFE_TODO(memcpy(output_bus_channel, fifo_bus_channel + index_read_,
+                         remainder * sizeof(*fifo_bus_channel)));
+      UNSAFE_TODO(
+          memcpy(output_bus_channel + remainder, fifo_bus_channel,
+                 (frames_to_fill - remainder) * sizeof(*fifo_bus_channel)));
     }
   }
 
@@ -297,12 +311,16 @@ size_t PushPullFIFO::PullAndUpdateEarmark(AudioBus* output_bus,
   // Update the number of frames in FIFO.
   frames_available_ -= frames_to_fill;
   DCHECK_EQ((index_read_ + frames_available_) % fifo_length_, index_write_);
+  TRACE_COUNTER_ID1("webaudio", "PushPullFIFO frames", this, frames_available_);
 
   pull_count_++;
 
   // Ask the producer to fill the FIFO up to |earmark_frames_|.
-  return earmark_frames_ > frames_available_
-      ? earmark_frames_ - frames_available_ : 0;
+  return PullResult{
+      .frames_provided = frames_to_fill,
+      .frames_to_render = earmark_frames_ > frames_available_
+                              ? earmark_frames_ - frames_available_
+                              : 0};
 }
 
 const PushPullFIFOStateForTest PushPullFIFO::GetStateForTest() {

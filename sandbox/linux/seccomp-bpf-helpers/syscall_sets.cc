@@ -496,22 +496,6 @@ bool SyscallSets::IsAllowedEpoll(int sysno) {
   }
 }
 
-bool SyscallSets::IsAllowedGetOrModifySocket(int sysno) {
-  switch (sysno) {
-#if !defined(__aarch64__)
-    case __NR_pipe:
-#endif
-    case __NR_pipe2:
-      return true;
-    default:
-#if defined(__x86_64__) || defined(__arm__) || defined(__mips__) || \
-    defined(__aarch64__)
-    case __NR_socketpair:  // We will want to inspect its argument.
-#endif
-      return false;
-  }
-}
-
 bool SyscallSets::IsDeniedGetOrModifySocket(int sysno) {
   switch (sysno) {
 #if defined(__x86_64__) || defined(__arm__) || defined(__mips__) || \
@@ -564,6 +548,7 @@ bool SyscallSets::IsAllowedAddressSpaceAccess(int sysno) {
     case __NR_mlock:
     case __NR_munlock:
     case __NR_munmap:
+    case __NR_mseal:
       return true;
     case __NR_madvise:
     case __NR_mincore:
@@ -633,15 +618,6 @@ bool SyscallSets::IsAllowedGeneralIo(int sysno) {
 #if defined(__i386__) || defined(__arm__) || defined(__mips__)
     case __NR__newselect:
 #endif
-#if defined(__arm__) || \
-    (defined(ARCH_CPU_MIPS_FAMILY) && defined(ARCH_CPU_32_BITS))
-    case __NR_send:
-#endif
-#if defined(__x86_64__) || defined(__arm__) || defined(__mips__) || \
-    defined(__aarch64__)
-    case __NR_sendmsg:  // Could specify destination.
-    case __NR_sendto:   // Could specify destination.
-#endif
     case __NR_write:
     case __NR_writev:
       return true;
@@ -649,15 +625,42 @@ bool SyscallSets::IsAllowedGeneralIo(int sysno) {
     case __NR_preadv:
     case __NR_pwrite64:
     case __NR_pwritev:
+    case __NR_splice:
+    case __NR_tee:
+    case __NR_vmsplice:
     case __NR_recvmmsg:  // Could specify source.
 #if defined(__i386__) || defined(__arm__) || \
     (defined(ARCH_CPU_MIPS_FAMILY) && defined(ARCH_CPU_32_BITS))
     case __NR_recvmmsg_time64:  // Could specify source.
 #endif
+// send* syscalls need their flags filtered.
+#if defined(__arm__) || \
+    (defined(ARCH_CPU_MIPS_FAMILY) && defined(ARCH_CPU_32_BITS))
+    case __NR_send:
+#endif
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || \
+    defined(__mips__) || defined(__aarch64__)
+    case __NR_sendmsg:  // Could specify destination.
+    case __NR_sendto:   // Could specify destination.
+#endif
     case __NR_sendmmsg:  // Could specify destination.
-    case __NR_splice:
-    case __NR_tee:
-    case __NR_vmsplice:
+    default:
+      return false;
+  }
+}
+
+bool SyscallSets::IsSockSendOneMsg(int sysno) {
+  switch (sysno) {
+#if defined(__arm__) || \
+    (defined(ARCH_CPU_MIPS_FAMILY) && defined(ARCH_CPU_32_BITS))
+    case __NR_send:
+#endif
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || \
+    defined(__mips__) || defined(__aarch64__)
+    case __NR_sendmsg:  // Could specify destination.
+    case __NR_sendto:   // Could specify destination.
+#endif
+      return true;
     default:
       return false;
   }
@@ -1112,9 +1115,6 @@ bool SyscallSets::IsExtendedAttributes(int sysno) {
 // TODO(jln): classify this better.
 bool SyscallSets::IsMisc(int sysno) {
   switch (sysno) {
-#if !defined(__mips__)
-    case __NR_getrandom:
-#endif
     case __NR_name_to_handle_at:
     case __NR_open_by_handle_at:
     case __NR_perf_event_open:

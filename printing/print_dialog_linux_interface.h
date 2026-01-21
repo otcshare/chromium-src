@@ -9,7 +9,7 @@
 #include <string>
 
 #include "printing/printing_context_linux.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace printing {
 
@@ -28,6 +28,11 @@ class PrintDialogLinuxInterface {
   // system print dialog. E.g. for Print Preview.
   virtual void UpdateSettings(std::unique_ptr<PrintSettings> settings) = 0;
 
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+  // Updates the dialog to use system print dialog settings saved in `settings`.
+  virtual void LoadPrintSettings(const PrintSettings& settings) = 0;
+#endif
+
   // Shows the dialog and handles the response with `callback`. Only used when
   // printing with the native print dialog.
   virtual void ShowDialog(
@@ -41,12 +46,6 @@ class PrintDialogLinuxInterface {
   virtual void PrintDocument(const MetafilePlayer& metafile,
                              const std::u16string& document_name) = 0;
 
-  // Releases the caller's ownership of the PrintDialogLinuxInterface. When
-  // called, the caller must not access the PrintDialogLinuxInterface
-  // afterwards, and vice versa.
-  virtual void ReleaseDialog() = 0;
-
- protected:
   virtual ~PrintDialogLinuxInterface() = default;
 };
 

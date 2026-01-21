@@ -1,7 +1,7 @@
 // Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Declaration of a Windows event trace controller class.
 // The controller takes care of creating and manipulating event trace
 // sessions.
@@ -29,6 +29,7 @@
 #include <string>
 
 #include "base/base_export.h"
+#include "base/compiler_specific.h"
 
 namespace base {
 namespace win {
@@ -50,13 +51,15 @@ class BASE_EXPORT EtwTraceProperties {
   }
 
   const wchar_t* GetLoggerName() const {
-    return reinterpret_cast<const wchar_t*>(buffer_ + get()->LoggerNameOffset);
+    return reinterpret_cast<const wchar_t*>(
+        UNSAFE_TODO(buffer_ + get())->LoggerNameOffset);
   }
 
   // Copies logger_name to the properties structure.
   HRESULT SetLoggerName(const wchar_t* logger_name);
   const wchar_t* GetLoggerFileName() const {
-    return reinterpret_cast<const wchar_t*>(buffer_ + get()->LogFileNameOffset);
+    return reinterpret_cast<const wchar_t*>(
+        UNSAFE_TODO(buffer_ + get())->LogFileNameOffset);
   }
 
   // Copies logger_file_name to the properties structure.

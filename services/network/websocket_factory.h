@@ -8,10 +8,12 @@
 #include <set>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/component_export.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
+#include "net/storage_access_api/status.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "services/network/websocket.h"
@@ -22,7 +24,6 @@ class GURL;
 namespace net {
 class IsolationInfo;
 class SiteForCookies;
-class SSLInfo;
 struct NetworkTrafficAnnotationTag;
 }  // namespace net
 
@@ -35,7 +36,7 @@ namespace network {
 class NetworkContext;
 class WebSocket;
 
-class WebSocketFactory final {
+class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocketFactory final {
  public:
   explicit WebSocketFactory(NetworkContext* context);
 
@@ -48,10 +49,12 @@ class WebSocketFactory final {
       const GURL& url,
       const std::vector<std::string>& requested_protocols,
       const net::SiteForCookies& site_for_cookies,
+      net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       std::vector<mojom::HttpHeaderPtr> additional_headers,
       int32_t process_id,
       const url::Origin& origin,
+      network::mojom::ClientSecurityStatePtr client_security_state,
       uint32_t options,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       mojo::PendingRemote<mojom::WebSocketHandshakeClient> handshake_client,
@@ -59,22 +62,18 @@ class WebSocketFactory final {
           url_loader_network_observer,
       mojo::PendingRemote<mojom::WebSocketAuthenticationHandler> auth_handler,
       mojo::PendingRemote<mojom::TrustedHeaderClient> header_client,
-      const absl::optional<base::UnguessableToken>& throttling_profile_id);
+      const std::optional<base::UnguessableToken>& throttling_profile_id);
 
   // Returns a URLRequestContext associated with this factory.
   net::URLRequestContext* GetURLRequestContext();
 
-  // Called when a WebSocket sees a SSL certificate error.
-  void OnSSLCertificateError(base::OnceCallback<void(int)> callback,
-                             const GURL& url,
-                             int process_id,
-                             int render_frame_id,
-                             int net_error,
-                             const net::SSLInfo& ssl_info,
-                             bool fatal);
-
   // Removes and deletes |impl|.
   void Remove(WebSocket* impl);
+
+  // Close existing WebSocket connections when network access is revoked from a
+  // fenced frame. The frame's associated WebSockets are identified via their
+  // IsolationInfo's nonce.
+  void RemoveIfNonceMatches(const base::UnguessableToken& nonce);
 
  private:
   using WebSocketSet =

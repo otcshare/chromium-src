@@ -5,9 +5,12 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_ASH_ADD_SUPERVISION_ADD_SUPERVISION_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_ASH_ADD_SUPERVISION_ADD_SUPERVISION_HANDLER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/add_supervision.mojom.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
@@ -18,7 +21,6 @@ class WebUI;
 namespace signin {
 class AccessTokenFetcher;
 struct AccessTokenInfo;
-class IdentityManager;
 }  // namespace signin
 
 class GoogleServiceAuthError;
@@ -26,7 +28,8 @@ class GoogleServiceAuthError;
 namespace ash {
 
 class AddSupervisionHandler
-    : public add_supervision::mojom::AddSupervisionHandler {
+    : public add_supervision::mojom::AddSupervisionHandler,
+      public signin::IdentityManager::Observer {
  public:
   // Interface for Delegates for specific behavior of AddSupervisionHandler.
   class Delegate {
@@ -64,21 +67,31 @@ class AddSupervisionHandler
   void NotifySupervisionEnabled() override;
   void SetCloseOnEscape(bool enabled) override;
 
+  // signin::IdentityManager::Observer:
+  void OnIdentityManagerShutdown(
+      signin::IdentityManager* identity_manager) override;
+
  private:
   void OnAccessTokenFetchComplete(GetOAuthTokenCallback callback,
                                   GoogleServiceAuthError error,
                                   signin::AccessTokenInfo access_token_info);
 
   // The AddSupervisionUI that this AddSupervisionHandler belongs to.
-  content::WebUI* web_ui_;
+  raw_ptr<content::WebUI> web_ui_;
 
   // Used to fetch OAuth2 access tokens.
-  signin::IdentityManager* identity_manager_;
+  // The pointer to the identity manager gets reset when an identity manager
+  // shutdown is detected.
+  raw_ptr<signin::IdentityManager> identity_manager_;
   std::unique_ptr<signin::AccessTokenFetcher> oauth2_access_token_fetcher_;
+
+  base::ScopedObservation<signin::IdentityManager,
+                          signin::IdentityManager::Observer>
+      identity_manager_observation_{this};
 
   mojo::Receiver<add_supervision::mojom::AddSupervisionHandler> receiver_;
 
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   base::WeakPtrFactory<AddSupervisionHandler> weak_ptr_factory_{this};
 };

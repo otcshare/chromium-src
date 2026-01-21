@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/storage_monitor/storage_monitor.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -22,7 +24,8 @@ namespace storage_monitor {
 
 // This client listens for MTP storage attachment and detachment events
 // from MtpManager and forwards them to StorageMonitor.
-class MtpManagerClientChromeOS : public device::mojom::MtpManagerClient {
+class COMPONENT_EXPORT(STORAGE_MONITOR) MtpManagerClientChromeOS
+    : public device::mojom::MtpManagerClient {
  public:
   MtpManagerClientChromeOS(StorageMonitor::Receiver* receiver,
                            device::mojom::MtpManager* mtp_manager);
@@ -65,13 +68,13 @@ class MtpManagerClientChromeOS : public device::mojom::MtpManagerClient {
 
   // Pointer to the MTP manager. Not owned. Client must ensure the MTP
   // manager outlives this object.
-  device::mojom::MtpManager* const mtp_manager_;
+  const raw_ptr<device::mojom::MtpManager> mtp_manager_;
 
   mojo::AssociatedReceiver<device::mojom::MtpManagerClient> receiver_{this};
 
   // The notifications object to use to signal newly attached devices.
   // Guaranteed to outlive this class.
-  StorageMonitor::Receiver* const notifications_;
+  const raw_ptr<StorageMonitor::Receiver> notifications_;
 
   base::WeakPtrFactory<MtpManagerClientChromeOS> weak_ptr_factory_{this};
 };

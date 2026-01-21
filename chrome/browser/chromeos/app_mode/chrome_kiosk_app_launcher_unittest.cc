@@ -10,25 +10,33 @@
 #include "ash/test/ash_test_helper.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/app_service/app_service_test.h"
 #include "chrome/browser/ash/app_mode/test_kiosk_extension_builder.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/ash/extensions/scoped_app_window.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/ui/apps/chrome_app_delegate.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/test_app_window_contents.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/test_event_router.h"
 #include "extensions/common/api/app_runtime.h"
 
+using base::test::ErrorIs;
 using base::test::TestFuture;
 using extensions::Manifest;
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::IsEmpty;
-using LaunchResult = ash::ChromeKioskAppLauncher::LaunchResult;
+using PreLaunchError = chromeos::ChromeKioskAppLauncher::PreLaunchError;
+using chromeos::ChromeKioskAppLauncher;
 
 namespace ash {
 
@@ -59,11 +67,11 @@ class AppLaunchTracker : public extensions::TestEventRouter::EventObserver {
               extensions::api::app_runtime::OnLaunched::kEventName);
     ASSERT_EQ(1u, event.event_args.size());
 
-    const base::Value& launch_data = event.event_args[0];
-    const base::Value* is_kiosk_session =
-        launch_data.FindKeyOfType("isKioskSession", base::Value::Type::BOOLEAN);
+    const base::Value::Dict& launch_data = event.event_args[0].GetDict();
+    std::optional<bool> is_kiosk_session =
+        launch_data.FindBool("isKioskSession");
     ASSERT_TRUE(is_kiosk_session);
-    EXPECT_TRUE(is_kiosk_session->GetBool());
+    EXPECT_TRUE(*is_kiosk_session);
 
     launched_apps_.push_back(extension_id);
   }
@@ -99,12 +107,12 @@ void InitAppWindow(extensions::AppWindow* app_window, const gfx::Rect& bounds) {
   app_window->Init(GURL(), std::move(app_window_contents), main_frame, params);
 }
 
-extensions::AppWindow* CreateAppWindow(Profile* profile,
-                                       const extensions::Extension* extension,
-                                       gfx::Rect bounds = {}) {
-  extensions::AppWindow* app_window = new extensions::AppWindow(
-      profile, std::make_unique<ChromeAppDelegate>(profile, true), extension);
-  InitAppWindow(app_window, bounds);
+ScopedAppWindow CreateAppWindow(Profile* profile,
+                                const extensions::Extension* extension,
+                                gfx::Rect bounds = {}) {
+  ScopedAppWindow app_window(new extensions::AppWindow(
+      profile, std::make_unique<ChromeAppDelegate>(profile, true), extension));
+  InitAppWindow(app_window.Get(), bounds);
   return app_window;
 }
 
@@ -129,12 +137,16 @@ class ChromeKioskAppLauncherTest : public extensions::ExtensionServiceTestBase,
     extensions::ExtensionServiceTestBase::SetUp();
     InitializeEmptyExtensionService();
 
+    apps::WaitForAppServiceProxyReady(
+        apps::AppServiceProxyFactory::GetForProfile(profile()));
+
     extensions::TestEventRouter* event_router =
         extensions::CreateAndUseTestEventRouter(browser_context());
     app_launch_tracker_ = std::make_unique<AppLaunchTracker>(event_router);
   }
 
   void TearDown() override {
+    launcher_.reset();
     app_launch_tracker_.reset();
 
     extensions::ExtensionServiceTestBase::TearDown();
@@ -147,8 +159,9 @@ class ChromeKioskAppLauncherTest : public extensions::ExtensionServiceTestBase,
         profile(), kTestPrimaryAppId, is_network_ready);
   }
 
-  void SimulateAppWindowLaunch(const extensions::Extension* extension) {
-    CreateAppWindow(profile(), extension);
+  ScopedAppWindow SimulateAppWindowLaunch(
+      const extensions::Extension* extension) {
+    return CreateAppWindow(profile(), extension);
   }
 
   ash::AshTestHelper ash_test_helper_;
@@ -162,10 +175,8 @@ class ChromeKioskAppLauncherTest : public extensions::ExtensionServiceTestBase,
 TEST_F(ChromeKioskAppLauncherTest, ShouldFailIfPrimaryAppNotInstalled) {
   CreateLauncher(/*is_network_ready=*/true);
 
-  TestFuture<LaunchResult> future;
-  launcher_->LaunchApp(future.GetCallback());
-
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kUnableToLaunch));
+  ASSERT_THAT(launcher_->PerformPreLaunchChecks(),
+              ErrorIs(PreLaunchError::kPrimaryAppMissing));
   ASSERT_THAT(app_launch_tracker_->launched_apps(), IsEmpty());
 }
 
@@ -176,14 +187,12 @@ TEST_F(ChromeKioskAppLauncherTest, ShouldFailIfSecondaryAppNotInstalled) {
   primary_app_builder.AddSecondaryExtension(kSecondaryAppId);
   scoped_refptr<const extensions::Extension> primary_app =
       primary_app_builder.Build();
-  service()->AddExtension(primary_app.get());
+  registrar()->AddExtension(primary_app.get());
 
   CreateLauncher(/*is_network_ready=*/true);
 
-  TestFuture<LaunchResult> future;
-  launcher_->LaunchApp(future.GetCallback());
-
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kUnableToLaunch));
+  ASSERT_THAT(launcher_->PerformPreLaunchChecks(),
+              ErrorIs(PreLaunchError::kSecondaryAppsMissing));
   ASSERT_THAT(app_launch_tracker_->launched_apps(), IsEmpty());
 }
 
@@ -195,14 +204,12 @@ TEST_F(ChromeKioskAppLauncherTest,
   primary_app_builder.set_offline_enabled(false);
   scoped_refptr<const extensions::Extension> primary_app =
       primary_app_builder.Build();
-  service()->AddExtension(primary_app.get());
+  registrar()->AddExtension(primary_app.get());
 
   CreateLauncher(/*is_network_ready=*/false);
 
-  TestFuture<LaunchResult> future;
-  launcher_->LaunchApp(future.GetCallback());
-
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kNetworkMissing));
+  ASSERT_THAT(launcher_->PerformPreLaunchChecks(),
+              ErrorIs(PreLaunchError::kNetworkMissing));
   ASSERT_THAT(app_launch_tracker_->launched_apps(), IsEmpty());
 }
 
@@ -212,16 +219,16 @@ TEST_F(ChromeKioskAppLauncherTest, ShouldSucceedIfNetworkAvailable) {
   primary_app_builder.set_version("1.0");
   scoped_refptr<const extensions::Extension> primary_app =
       primary_app_builder.Build();
-  service()->AddExtension(primary_app.get());
+  registrar()->AddExtension(primary_app.get());
 
   CreateLauncher(/*is_network_ready=*/true);
 
-  TestFuture<LaunchResult> future;
+  TestFuture<bool> future;
   launcher_->LaunchApp(future.GetCallback());
 
-  SimulateAppWindowLaunch(primary_app.get());
+  ScopedAppWindow app_window = SimulateAppWindowLaunch(primary_app.get());
 
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kSuccess));
+  ASSERT_TRUE(future.Get());
 
   EXPECT_THAT(app_launch_tracker_->launched_apps(),
               ElementsAre(kTestPrimaryAppId));
@@ -237,30 +244,30 @@ TEST_F(ChromeKioskAppLauncherTest, ShouldSucceedWithSecondaryApp) {
       kExtraSecondaryAppId, false);
   scoped_refptr<const extensions::Extension> primary_app =
       primary_app_builder.Build();
-  service()->AddExtension(primary_app.get());
+  registrar()->AddExtension(primary_app.get());
 
   TestKioskExtensionBuilder secondary_app_builder(Manifest::TYPE_PLATFORM_APP,
                                                   kSecondaryAppId);
   secondary_app_builder.set_kiosk_enabled(false);
   scoped_refptr<const extensions::Extension> secondary_app =
       secondary_app_builder.Build();
-  service()->AddExtension(secondary_app.get());
+  registrar()->AddExtension(secondary_app.get());
 
   TestKioskExtensionBuilder extra_secondary_app_builder(
       Manifest::TYPE_PLATFORM_APP, kExtraSecondaryAppId);
   extra_secondary_app_builder.set_kiosk_enabled(false);
   scoped_refptr<const extensions::Extension> extra_secondary_app =
       extra_secondary_app_builder.Build();
-  service()->AddExtension(extra_secondary_app.get());
+  registrar()->AddExtension(extra_secondary_app.get());
 
   CreateLauncher(/*is_network_ready=*/true);
 
-  TestFuture<LaunchResult> future;
+  TestFuture<bool> future;
   launcher_->LaunchApp(future.GetCallback());
 
-  SimulateAppWindowLaunch(primary_app.get());
+  ScopedAppWindow app_window = SimulateAppWindowLaunch(primary_app.get());
 
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kSuccess));
+  ASSERT_TRUE(future.Get());
 
   EXPECT_THAT(app_launch_tracker_->launched_apps(),
               ElementsAre(kTestPrimaryAppId));
@@ -275,16 +282,16 @@ TEST_F(ChromeKioskAppLauncherTest, ShouldSucceedWithAppService) {
   primary_app_builder.set_version("1.0");
   scoped_refptr<const extensions::Extension> primary_app =
       primary_app_builder.Build();
-  service()->AddExtension(primary_app.get());
+  registrar()->AddExtension(primary_app.get());
 
   CreateLauncher(/*is_network_ready=*/true);
 
-  TestFuture<LaunchResult> future;
+  TestFuture<bool> future;
   launcher_->LaunchApp(future.GetCallback());
 
-  SimulateAppWindowLaunch(primary_app.get());
+  ScopedAppWindow app_window = SimulateAppWindowLaunch(primary_app.get());
 
-  ASSERT_THAT(future.Get(), Eq(LaunchResult::kSuccess));
+  ASSERT_TRUE(future.Get());
 
   EXPECT_THAT(app_launch_tracker_->launched_apps(),
               ElementsAre(kTestPrimaryAppId));

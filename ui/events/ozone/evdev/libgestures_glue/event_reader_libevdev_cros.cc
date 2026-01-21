@@ -7,8 +7,11 @@
 #include <errno.h>
 #include <libevdev/libevdev.h>
 #include <linux/input.h>
+
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -53,14 +56,12 @@ EventReaderLibevdevCros::EventReaderLibevdevCros(
   // This class assumes it does not deal with internal keyboards.
   CHECK(!has_keyboard_ || type() != INPUT_DEVICE_INTERNAL);
 
-  memset(&evdev_, 0, sizeof(evdev_));
   evdev_.log = OnLogMessage;
   evdev_.log_udata = this;
   evdev_.syn_report = OnSynReport;
   evdev_.syn_report_udata = this;
   evdev_.fd = fd.release();
 
-  memset(&evstate_, 0, sizeof(evstate_));
   evdev_.evstate = &evstate_;
   Event_Init(&evdev_);
 
@@ -116,7 +117,7 @@ bool EventReaderLibevdevCros::HasHapticTouchpad() const {
   return haptic_touchpad_handler_ != nullptr;
 }
 
-bool EventReaderLibevdevCros::CanHandleHapticFeedback() {
+bool EventReaderLibevdevCros::CanHandleHapticFeedback() const {
   return haptic_touchpad_handler_ && haptic_feedback_enabled_ &&
          touch_count_ > 0;
 }
@@ -137,12 +138,47 @@ void EventReaderLibevdevCros::SetHapticTouchpadEffectForNextButtonRelease(
 
 void EventReaderLibevdevCros::ApplyDeviceSettings(
     const InputDeviceSettingsEvdev& settings) {
+  const auto& touchpad_settings = settings.GetTouchpadSettings(id());
   if (haptic_touchpad_handler_) {
     haptic_touchpad_handler_->SetClickStrength(
         static_cast<HapticTouchpadEffectStrength>(
-            settings.touchpad_haptic_click_sensitivity));
+            touchpad_settings.haptic_click_sensitivity));
   }
-  haptic_feedback_enabled_ = settings.touchpad_haptic_feedback_enabled;
+  haptic_feedback_enabled_ = touchpad_settings.haptic_feedback_enabled;
+}
+
+void EventReaderLibevdevCros::ReceivedKeyboardInput(
+    uint64_t key,
+    double timestamp_in_seconds) {
+  if (!IsSuspectedKeyboardImposter() || !IsValidKeyboardKeyPress(key)) {
+    return;
+  }
+
+  SetSuspectedKeyboardImposter(false);
+  received_valid_input_callback_.Run(this, timestamp_in_seconds);
+}
+
+void EventReaderLibevdevCros::ReceivedMouseInput(int rel_value,
+                                                 double timestamp_in_seconds) {
+  if (!IsSuspectedMouseImposter() || rel_value == 0) {
+    return;
+  }
+
+  SetSuspectedMouseImposter(false);
+  received_valid_input_callback_.Run(this, timestamp_in_seconds);
+}
+
+void EventReaderLibevdevCros::SetReceivedValidInputCallback(
+    ReceivedValidInputCallback callback) {
+  delegate_->SetReceivedValidKeyboardInputCallback(base::BindRepeating(
+      &EventReaderLibevdevCros::ReceivedKeyboardInput, base::Unretained(this)));
+  delegate_->SetReceivedValidMouseInputCallback(base::BindRepeating(
+      &EventReaderLibevdevCros::ReceivedMouseInput, base::Unretained(this)));
+  received_valid_input_callback_ = std::move(callback);
+}
+
+void EventReaderLibevdevCros::SetBlockModifiers(bool block_modifiers) {
+  delegate_->SetBlockModifiers(block_modifiers);
 }
 
 bool EventReaderLibevdevCros::HasCapsLockLed() const {
@@ -155,6 +191,19 @@ bool EventReaderLibevdevCros::HasStylusSwitch() const {
 
 void EventReaderLibevdevCros::OnDisabled() {
   delegate_->OnLibEvdevCrosStopped(&evdev_, &evstate_);
+}
+
+std::ostream& EventReaderLibevdevCros::DescribeForLog(std::ostream& os) const {
+  os << "class=EventReaderLibevdevCros id=" << input_device_.id << std::endl
+     << " has_keyboard=" << has_keyboard_ << std::endl
+     << " has_mouse=" << has_mouse_ << std::endl
+     << " has_pointing_stick=" << has_pointing_stick_ << std::endl
+     << " HasHapticTouchpad=" << HasHapticTouchpad() << std::endl
+     << " CanHandleHapticFeedback=" << CanHandleHapticFeedback() << std::endl
+     << " has_caps_lock_led=" << has_caps_lock_led_ << std::endl
+     << " has_stylus_switch=" << has_stylus_switch_ << std::endl
+     << "base ";
+  return EventConverterEvdev::DescribeForLog(os);
 }
 
 // static

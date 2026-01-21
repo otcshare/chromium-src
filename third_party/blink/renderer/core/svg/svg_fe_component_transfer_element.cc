@@ -20,7 +20,9 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_component_transfer_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_fe_func_a_element.h"
@@ -30,15 +32,14 @@
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_component_transfer.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 SVGFEComponentTransferElement::SVGFEComponentTransferElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFEComponentTransferTag,
                                            document),
-      in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)) {
-  AddToPropertyMap(in1_);
-}
+      in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)) {}
 
 void SVGFEComponentTransferElement::Trace(Visitor* visitor) const {
   visitor->Trace(in1_);
@@ -48,7 +49,6 @@ void SVGFEComponentTransferElement::Trace(Visitor* visitor) const {
 void SVGFEComponentTransferElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   if (params.name == svg_names::kInAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -59,6 +59,7 @@ void SVGFEComponentTransferElement::SvgAttributeChanged(
 FilterEffect* SVGFEComponentTransferElement::Build(
     SVGFilterBuilder* filter_builder,
     Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEComponentTransferElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   DCHECK(input1);
@@ -84,6 +85,22 @@ FilterEffect* SVGFEComponentTransferElement::Build(
                                                            blue, alpha);
   effect->InputEffects().push_back(input1);
   return effect;
+}
+
+SVGAnimatedPropertyBase* SVGFEComponentTransferElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kInAttr) {
+    return in1_.Get();
+  } else {
+    return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+        attribute_name);
+  }
+}
+
+void SVGFEComponentTransferElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{in1_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

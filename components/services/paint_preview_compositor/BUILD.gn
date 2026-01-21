@@ -2,9 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/features.gni")
 import("//testing/test.gni")
 
-assert(!is_ios, "Paint Previews are not supported on iOS.")
+assert(use_blink,
+       "Paint Previews are not supported on platforms that do not use Blink.")
 
 static_library("paint_preview_compositor") {
   sources = [
@@ -23,6 +25,7 @@ static_library("paint_preview_compositor") {
     "//components/paint_preview/common",
     "//components/paint_preview/common/proto",
     "//content/public/utility",
+    "//mojo/public/cpp/base:protobuf_support",
     "//mojo/public/cpp/bindings",
     "//skia",
     "//ui/gfx/geometry",
@@ -33,7 +36,7 @@ static_library("paint_preview_compositor") {
     deps += [ "//components/services/font/public/cpp" ]
   }
 
-  if (is_win) {
+  if (is_win || is_linux) {
     deps += [ "//content/public/child" ]
   }
 
@@ -56,6 +59,7 @@ source_set("unit_tests") {
     "//components/paint_preview/common",
     "//components/paint_preview/common:test_utils",
     "//components/paint_preview/common/proto",
+    "//mojo/public/cpp/base:protobuf_support",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",

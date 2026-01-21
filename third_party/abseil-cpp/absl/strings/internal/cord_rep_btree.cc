@@ -14,6 +14,7 @@
 
 #include "absl/strings/internal/cord_rep_btree.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
@@ -23,6 +24,7 @@
 #include "absl/base/attributes.h"
 #include "absl/base/config.h"
 #include "absl/base/internal/raw_logging.h"
+#include "absl/base/optimization.h"
 #include "absl/strings/internal/cord_data_edge.h"
 #include "absl/strings/internal/cord_internal.h"
 #include "absl/strings/internal/cord_rep_consume.h"
@@ -34,10 +36,6 @@ namespace absl {
 ABSL_NAMESPACE_BEGIN
 namespace cord_internal {
 
-#ifdef ABSL_INTERNAL_NEED_REDUNDANT_CONSTEXPR_DECL
-constexpr size_t CordRepBtree::kMaxCapacity;
-#endif
-
 namespace {
 
 using NodeStack = CordRepBtree * [CordRepBtree::kMaxDepth];
@@ -48,9 +46,7 @@ using CopyResult = CordRepBtree::CopyResult;
 constexpr auto kFront = CordRepBtree::kFront;
 constexpr auto kBack = CordRepBtree::kBack;
 
-inline bool exhaustive_validation() {
-  return cord_btree_exhaustive_validation.load(std::memory_order_relaxed);
-}
+ABSL_CONST_INIT std::atomic<bool> cord_btree_exhaustive_validation(false);
 
 // Implementation of the various 'Dump' functions.
 // Prints the entire tree structure or 'rep'. External callers should
@@ -286,7 +282,7 @@ struct StackOperations {
       case CordRepBtree::kSelf:
         return result.tree;
     }
-    ABSL_INTERNAL_UNREACHABLE;
+    ABSL_UNREACHABLE();
     return result.tree;
   }
 
@@ -360,6 +356,15 @@ struct StackOperations {
 };
 
 }  // namespace
+
+void SetCordBtreeExhaustiveValidation(bool do_exaustive_validation) {
+  cord_btree_exhaustive_validation.store(do_exaustive_validation,
+                                         std::memory_order_relaxed);
+}
+
+bool IsCordBtreeExhaustiveValidationEnabled() {
+  return cord_btree_exhaustive_validation.load(std::memory_order_relaxed);
+}
 
 void CordRepBtree::Dump(const CordRep* rep, absl::string_view label,
                         bool include_contents, std::ostream& stream) {
@@ -449,7 +454,8 @@ bool CordRepBtree::IsValid(const CordRepBtree* tree, bool shallow) {
     child_length += edge->length;
   }
   NODE_CHECK_EQ(child_length, tree->length);
-  if ((!shallow || exhaustive_validation()) && tree->height() > 0) {
+  if ((!shallow || IsCordBtreeExhaustiveValidationEnabled()) &&
+      tree->height() > 0) {
     for (CordRep* edge : tree->Edges()) {
       if (!IsValid(edge->btree(), shallow)) return false;
     }

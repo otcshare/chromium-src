@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -109,6 +109,8 @@ var defaultTests = [
           chrome.test.assertTrue(status.hasOwnProperty("isLoggedIn"));
           chrome.test.assertTrue(status.hasOwnProperty("isOwner"));
           chrome.test.assertTrue(status.hasOwnProperty("isScreenLocked"));
+          chrome.test.assertTrue(
+              status.hasOwnProperty('isLockscreenWallpaperAnimating'));
           chrome.test.assertTrue(status.hasOwnProperty("isRegularUser"));
           chrome.test.assertTrue(status.hasOwnProperty("isGuest"));
           chrome.test.assertTrue(status.hasOwnProperty("isKiosk"));
@@ -236,16 +238,6 @@ var defaultTests = [
     });
   },
 
-  async function douleStopArc() {
-    try {
-      await promisify(chrome.autotestPrivate.stopArc);
-      chrome.test.fail();
-    } catch (error) {
-      chrome.test.assertEq("ARC is already stopped", error.message);
-      chrome.test.succeed();
-    }
-  },
-
   // This test verifies that Play Store window is not shown by default but
   // Chrome is shown.
   function isAppShown() {
@@ -300,10 +292,6 @@ var defaultTests = [
           chrome.test.succeed();
         });
   },
-  function bootstrapMachineLearningService() {
-    chrome.autotestPrivate.bootstrapMachineLearningService(
-        chrome.test.callbackFail('ML Service connection error'));
-  },
   function runCrostiniUninstaller() {
     chrome.autotestPrivate.runCrostiniUninstaller(chrome.test.callbackFail(
         'Crostini is not available for the current user'));
@@ -335,46 +323,6 @@ var defaultTests = [
     chrome.autotestPrivate.getPrinterList(function(){
       chrome.test.succeed();
     });
-  },
-  // The state dumped in Assistant API error message is AssistantAllowedState
-  // defined in ash/public/cpp/assistant/assistant_state_base.h
-  // 3 is DISALLOWED_BY_NONPRIMARY_USER from IsAssistantAllowedForProfile when
-  // running under test without setting up a primary account.
-  function setAssistantEnabled() {
-    chrome.autotestPrivate.setAssistantEnabled(true, 1000 /* timeout_ms */,
-        chrome.test.callbackFail(
-            'Assistant not allowed - state: 3'));
-  },
-  function sendAssistantTextQuery() {
-    chrome.autotestPrivate.sendAssistantTextQuery(
-        'what time is it?' /* query */,
-        1000 /* timeout_ms */,
-        chrome.test.callbackFail(
-            'Assistant not allowed - state: 3'));
-  },
-  function waitForAssistantQueryStatus() {
-    chrome.autotestPrivate.waitForAssistantQueryStatus(10 /* timeout_s */,
-        chrome.test.callbackFail(
-            'Assistant not allowed - state: 3'));
-  },
-  // This test verifies the error message when trying to set Assistant-related
-  // preferences without enabling Assistant service first.
-  function setAllowedPref() {
-    chrome.autotestPrivate.setAllowedPref(
-        'settings.voice_interaction.hotword.enabled' /* pref_name */,
-        true /* value */,
-        chrome.test.callbackFail(
-            'Unable to set the pref because Assistant has not been enabled.'));
-    chrome.autotestPrivate.setAllowedPref(
-        'settings.voice_interaction.context.enabled' /* pref_name */,
-        true /* value */,
-        chrome.test.callbackFail(
-            'Unable to set the pref because Assistant has not been enabled.'));
-    // Note that onboarding pref is a counter that can be set without
-    // enabling Assistant at the same time.
-    chrome.autotestPrivate.setAllowedPref(
-        'ash.assistant.num_sessions_where_onboarding_shown' /* pref_name */,
-        3 /* value */, chrome.test.callbackPass());
   },
   // This test verifies that getArcState returns provisioned False in case ARC
   // is not provisioned by default.
@@ -592,6 +540,7 @@ var defaultTests = [
       chrome.test.assertEq('Running', item.status);
       chrome.test.assertTrue(item.showsTooltip);
       chrome.test.assertFalse(item.pinnedByPolicy);
+      chrome.test.assertTrue(item.pinStateForcedByType);
       chrome.test.assertFalse(item.hasNotification);
     }));
   },
@@ -607,7 +556,7 @@ var defaultTests = [
           break;
         }
       }
-      chrome.test.assertTrue(displayId != "-1");
+      chrome.test.assertNe("-1", displayId);
       // SHELF_AUTO_HIDE_ALWAYS_HIDDEN not supported by shelf_prefs.
       // TODO(ricardoq): Use enums in IDL instead of hardcoded strings.
       var behaviors = ["always", "never"];
@@ -639,7 +588,7 @@ var defaultTests = [
           break;
         }
       }
-      chrome.test.assertTrue(displayId != "-1");
+      chrome.test.assertNe("-1", displayId);
       // SHELF_ALIGNMENT_BOTTOM_LOCKED not supported by shelf_prefs.
       var alignments = [chrome.autotestPrivate.ShelfAlignmentType.LEFT,
         chrome.autotestPrivate.ShelfAlignmentType.BOTTOM,
@@ -672,7 +621,7 @@ var defaultTests = [
           break;
         }
       }
-      chrome.test.assertTrue(displayId != "-1");
+      chrome.test.assertNe("-1", displayId);
       chrome.system.display.setDisplayProperties(displayId, {rotation: 90},
         function() {
           chrome.autotestPrivate.waitForDisplayRotation(displayId, 'Rotate90',
@@ -705,7 +654,7 @@ var defaultTests = [
           break;
         }
       }
-      chrome.test.assertTrue(displayId != "-1");
+      chrome.test.assertNe("-1", displayId);
       chrome.system.display.setDisplayProperties(
           displayId, {rotation: 180},
           function() {
@@ -754,7 +703,7 @@ var defaultTests = [
         }
         browserFrameIndex = i;
         // Sanity check
-        chrome.test.assertEq('BrowserFrame', window.name);
+        chrome.test.assertEq('BrowserWidget', window.name);
         chrome.test.assertTrue(window.title.includes('New Tab') > 0);
         chrome.test.assertEq('Browser', window.windowType);
         chrome.test.assertEq(window.stateType, 'Normal');
@@ -814,7 +763,7 @@ var defaultTests = [
               });
             });
       }
-      chrome.test.assertTrue(-1 != browserFrameIndex);
+      chrome.test.assertNe(browserFrameIndex, -1);
     });
   },
 
@@ -990,10 +939,16 @@ var defaultTests = [
     });
   },
   function startSmoothnessTrackingExplicitThroughputInterval() {
-    chrome.autotestPrivate.startSmoothnessTracking(100, async function() {
+    chrome.autotestPrivate.startSmoothnessTracking(10, async function() {
       chrome.test.assertNoLastError();
 
+      // Let test run a bit to collect a few data points.
+      // Minimizing/unminimizing to generate some screen changes.
+      await sleep(100);
+      await promisify(minimizeBrowserWindow);
+
       await sleep(200);
+      await promisify(unminimizeBrowserWindow);
 
       chrome.autotestPrivate.stopSmoothnessTracking(function(data) {
         chrome.test.assertNoLastError();
@@ -1066,7 +1021,7 @@ var defaultTests = [
   function setAndGetClipboardTextData() {
     const textData = 'foo bar';
     chrome.autotestPrivate.getClipboardTextData(function(beforeData) {
-      chrome.test.assertTrue(textData != beforeData);
+      chrome.test.assertNe(beforeData, textData);
       chrome.autotestPrivate.setClipboardTextData(textData, function() {
         chrome.autotestPrivate.getClipboardTextData(function(afterData) {
           chrome.test.assertEq(afterData, textData);
@@ -1106,8 +1061,16 @@ var defaultTests = [
   },
 
   function collectFrameCountingData() {
+    let extraWindow;
     promisify(
         chrome.autotestPrivate.startFrameCounting, /*bucketSizeInSeconds=*/1)
+        .then(function() {
+          // Create a browser window after start api call.
+          return new Promise(resolve => {
+            extraWindow = window.open("about:blank");
+            resolve();
+          });
+        })
         .then(function() {
           // Minimize/restore to trigger screen updates.
           return promisify(minimizeBrowserWindow);
@@ -1120,12 +1083,154 @@ var defaultTests = [
               chrome.autotestPrivate.stopFrameCounting);
         })
         .then(function(data) {
+          extraWindow.close();
           chrome.test.assertTrue(data.length >= 0);
           chrome.test.succeed();
         })
         .catch(function(err) {
+          if (extraWindow)
+            extraWindow.close();
           chrome.test.fail(err);
         });
+  },
+
+  function stopFrameCountingWithoutStart() {
+    // Expects the stop call to fail when not paired with a start call.
+    chrome.autotestPrivate.stopFrameCounting(
+        chrome.test.callbackFail('No frame counting data'));
+  },
+
+  async function startOverdrawTracking() {
+    let browserWindow;
+    try {
+      // Wait so that gpu process can fully initialize.
+      await sleep(500);
+      await promisify(
+          chrome.autotestPrivate.startOverdrawTracking,
+          /*bucketSizeInSeconds=*/ 1);
+
+      // Perform a UI action to generate compositor frames so that overdraw
+      // of those frames can be tracked.
+      await new Promise(resolve => {
+        browserWindow = window.open('about:blank');
+        resolve();
+      });
+
+      const data = await promisify(chrome.autotestPrivate.stopOverdrawTracking);
+
+      chrome.test.assertTrue(!!data);
+      chrome.test.assertTrue(data.averageOverdraws.length > 0);
+      browserWindow.close();
+
+      chrome.test.succeed();
+    } catch (error) {
+      if (browserWindow) {
+        browserWindow.close();
+      }
+      chrome.test.fail();
+    }
+  },
+
+  async function collectOverdrawDataWithExplicitDisplayId() {
+    const displaysInfo = await promisify(chrome.system.display.getInfo);
+    const displayId = displaysInfo[0].id;
+
+    let browserWindow;
+
+    try {
+      // Wait so that gpu process can fully initialize.
+      await sleep(500);
+      await promisify(
+          chrome.autotestPrivate.startOverdrawTracking,
+          /*bucketSizeInSeconds=*/ 1),
+          displayId;
+
+      // Perform a UI action to generate compositor frames so that overdraw
+      // of those frames can be tracked.
+      await new Promise(resolve => {
+        browserWindow = window.open('about:blank');
+        resolve();
+      });
+
+      const data = await promisify(chrome.autotestPrivate.stopOverdrawTracking);
+
+      chrome.test.assertTrue(!!data);
+      chrome.test.assertTrue(data.averageOverdraws.length > 0);
+      browserWindow.close();
+
+      chrome.test.succeed();
+    } catch (error) {
+      if (browserWindow) {
+        browserWindow.close();
+      }
+      chrome.test.fail();
+    }
+  },
+
+  async function noOverdrawDataCollectedBetweenStartAndStopCalls() {
+    try {
+      // Wait so that gpu process can fully initialize.
+      await sleep(500);
+      await promisify(
+          chrome.autotestPrivate.startOverdrawTracking,
+          /*bucketSizeInSeconds=*/ 1);
+
+      // No data since no compositor frame was submitted to viz in between start
+      // and stop calls. (No overdraw data is treated as an error)
+      await promisify(chrome.autotestPrivate.stopOverdrawTracking);
+
+      chrome.test.fail();
+    } catch (error) {
+      chrome.test.assertEq(
+          error.message,
+          'No overdraw data; maybe forgot to call startOverdrawTracking or ' +
+              'no UI changes between start and stop calls');
+      chrome.test.succeed();
+    }
+  },
+
+  async function stopCollectingOverdrawDataWithoutStart() {
+    try {
+      // Wait so that gpu process can fully initialize.
+      await sleep(500);
+      await promisify(chrome.autotestPrivate.stopOverdrawTracking);
+      chrome.test.fail();
+    } catch (error) {
+      chrome.test.assertEq(
+          error.message,
+          'No overdraw data; maybe forgot to call startOverdrawTracking or ' +
+              'no UI changes between start and stop calls');
+      chrome.test.succeed();
+    }
+  },
+
+  async function startCollectingOverdrawDataForInvalidDisplay() {
+    const badDisplayId = '-1';
+    try {
+      await promisify(
+          chrome.autotestPrivate.startOverdrawTracking,
+          /*bucketSizeInSeconds=*/ 1, badDisplayId);
+      chrome.test.fail();
+    } catch (error) {
+      chrome.test.assertEq(
+          error.message,
+          'Invalid displayId; no display found for the display id -1');
+      chrome.test.succeed();
+    }
+  },
+
+  async function stopCollectingOverdrawDataForInvalidDisplay() {
+    const badDisplayId = '-1';
+    try {
+      await promisify(
+          chrome.autotestPrivate.stopOverdrawTracking, badDisplayId);
+      chrome.test.fail();
+    } catch (error) {
+      chrome.test.assertEq(
+          error.message,
+          'Invalid displayId; no display found for the display id -1');
+      chrome.test.succeed();
+    }
   },
 
   // KEEP |lockScreen()| TESTS AT THE BOTTOM OF THE defaultTests AS IT WILL
@@ -1214,27 +1319,6 @@ var arcEnabledTests = [
           chrome.test.assertEq(false, packageInfo.vpnProvider);
           chrome.test.succeed();
         }));
-  },
-
-  async function douleStartArc() {
-    try {
-      await promisify(
-          chrome.autotestPrivate.startArc);
-          chrome.test.fail();
-    } catch (error) {
-      chrome.test.assertEq("ARC is already started", error.message);
-      chrome.test.succeed();
-    }
-  },
-
-  // This test verifies restating ARC.
-  function restartArc() {
-    chrome.autotestPrivate.stopArc(function() {
-          chrome.test.assertNoLastError();
-          chrome.autotestPrivate.startArc(
-              chrome.test.callbackPass(function() {
-          }));
-    });
   }
 ];
 
@@ -1383,13 +1467,13 @@ var overviewDragTests = [
   }
 ];
 
-var splitviewLeftSnappedTests = [
-  function getSplitViewControllerStateLeftSnapped() {
+var splitviewPrimarySnappedTests = [
+  function getSplitViewControllerStatePrimarySnapped() {
     chrome.autotestPrivate.getAppWindowList(
         chrome.test.callbackPass(function(list) {
           var found = false;
           list.forEach(window => {
-            if (window.stateType == 'LeftSnapped')
+            if (window.stateType == 'PrimarySnapped')
               found = true;
           });
           chrome.test.assertTrue(found);
@@ -1497,6 +1581,27 @@ var shelfTests = [function fetchShelfUIInfo() {
       }));
 }];
 
+var isFeatureEnabledTests = [
+  function getEnabledFeature() {
+    chrome.autotestPrivate.isFeatureEnabled("EnabledFeatureForTest",
+      chrome.test.callbackPass(enabled => {
+        chrome.test.assertTrue(enabled);
+      }));
+  },
+  function getDisabledFeature() {
+    chrome.autotestPrivate.isFeatureEnabled("DisabledFeatureForTest",
+      chrome.test.callbackPass(enabled => {
+        chrome.test.assertFalse(enabled);
+      }));
+  },
+  function getUnknownFeature() {
+    chrome.autotestPrivate.isFeatureEnabled("UnknownFeature",
+      chrome.test.callbackFail(
+        "feature UnknownFeature is not on allowlist, see " +
+        "AutotestPrivateIsFeatureEnabledFunction::Run() to update the list"));
+  }
+];
+
 var launcherSearchBoxStateTests = [ function verifyGhostText(){
   chrome.autotestPrivate.getLauncherSearchBoxState(
       chrome.test.callbackPass(info => {
@@ -1510,6 +1615,71 @@ var holdingSpaceTests = [
     chrome.autotestPrivate.resetHoldingSpace(options,
       chrome.test.callbackPass());
   },
+];
+
+var isFieldTrialActiveTests = [
+  function getActiveTrialActiveGroup() {
+    chrome.autotestPrivate.isFieldTrialActive(
+        'ActiveTrialForTest', 'GroupForTest',
+        chrome.test.callbackPass(enabled => {
+          chrome.test.assertTrue(enabled);
+        }));
+  },
+  function getActiveTrialInactiveGroup() {
+    chrome.autotestPrivate.isFieldTrialActive(
+        'ActiveTrialForTest', 'WrongGroupForTest',
+        chrome.test.callbackPass(enabled => {
+          chrome.test.assertFalse(enabled);
+        }));
+  },
+  function getInactiveTrial() {
+    chrome.autotestPrivate.isFieldTrialActive(
+        'InactiveTrialForTest', 'GroupForTest',
+        chrome.test.callbackPass(enabled => {
+          chrome.test.assertFalse(enabled);
+        }));
+  }
+];
+
+var clearAllowedPrefTests = [
+  function clearAllowedPrefs(pref_name) {
+    chrome.autotestPrivate.clearAllowedPref(pref_name,
+        chrome.test.callbackPass());
+  }
+];
+
+var setDeviceLanguage = [
+  function setDeviceLanguage(locale) {
+    chrome.autotestPrivate.setDeviceLanguage(locale,
+        chrome.test.callbackPass());
+  }
+];
+
+var getDeviceEventLog = [
+  function getDeviceEventLogSingle() {
+    chrome.autotestPrivate.getDeviceEventLog('printer',
+      chrome.test.callbackPass(logs => {
+        chrome.test.assertTrue(logs.includes('PrinterTestLog'));
+        chrome.test.assertFalse(logs.includes('NetworkTestLog'));
+        chrome.test.assertFalse(logs.includes('USBTestLog'));
+      }));
+  },
+  function getDeviceEventLogMultiple() {
+    chrome.autotestPrivate.getDeviceEventLog('printer,network',
+      chrome.test.callbackPass(logs => {
+        chrome.test.assertTrue(logs.includes('PrinterTestLog'));
+        chrome.test.assertTrue(logs.includes('NetworkTestLog'));
+        chrome.test.assertFalse(logs.includes('USBTestLog'));
+      }));
+  },
+  function getDeviceEventLogAll() {
+    chrome.autotestPrivate.getDeviceEventLog('',
+      chrome.test.callbackPass(logs => {
+        chrome.test.assertTrue(logs.includes('PrinterTestLog'));
+        chrome.test.assertTrue(logs.includes('NetworkTestLog'));
+        chrome.test.assertTrue(logs.includes('USBTestLog'));
+      }));
+  }
 ];
 
 // Tests that requires a concrete system web app installation.
@@ -1526,57 +1696,40 @@ var systemWebAppsTests = [
       })
     );
   },
-  function isSystemWebAppOpen() {
-    chrome.autotestPrivate.waitForSystemWebAppsInstall(
-        chrome.test.callbackPass(() => {
-          // Test system app should not be open by default.
-          chrome.autotestPrivate.isSystemWebAppOpen(
-              'maphiehpiinjgiaepbljmopkodkadcbh',
-              chrome.test.callbackPass(isOpen => {
-                chrome.test.assertFalse(isOpen);
-              }));
+  async function isSystemWebAppOpen() {
+    const waitForSystemWebAppsInstall = (...args) =>
+        promisify(chrome.autotestPrivate.waitForSystemWebAppsInstall, ...args);
+    const isSystemWebAppOpen = (...args) =>
+        promisify(chrome.autotestPrivate.isSystemWebAppOpen, ...args);
+    const launchSystemWebApp = (...args) =>
+        promisify(chrome.autotestPrivate.launchSystemWebApp, ...args);
 
-          // Open test app and verify the state should be open.
-          chrome.autotestPrivate.launchSystemWebApp(
-              'OSSettings', 'chrome://test-system-app/',
-              chrome.test.callbackPass(() => {
-                chrome.autotestPrivate.isSystemWebAppOpen(
-                    'maphiehpiinjgiaepbljmopkodkadcbh',
-                    chrome.test.callbackPass(isOpen => {
-                      chrome.test.assertTrue(isOpen);
-                    }));
-              }));
+    await waitForSystemWebAppsInstall();
 
-          // Check for invalid app.
-          chrome.autotestPrivate.isSystemWebAppOpen(
-              '',
-              chrome.test.callbackFail(
-                  'No system web app is found by given app id.'));
-        }));
+    // Checking for an invalid app should fail.
+    let did_error = false;
+    await isSystemWebAppOpen('').catch(() => did_error = true);
+    chrome.test.assertTrue(did_error, 'Checking an invalid app should error');
+    chrome.test.assertLastError('No system web app is found by given app id.');
+
+    // App isn't opened at the start.
+    chrome.test.assertFalse(
+        await isSystemWebAppOpen('maphiehpiinjgiaepbljmopkodkadcbh'),
+        'App shouldn\'t be opened before launchSystemWebApp');
+
+    // Launch an app.
+    await launchSystemWebApp('OSSettings', 'chrome://test-system-app/');
+
+    // App launch might be queued and processed later. We don't have a method to
+    // wait for launch completion, so we poll instead. If this test times out,
+    // most likely something is wrong with system web app launch logic.
+    while (!await isSystemWebAppOpen('maphiehpiinjgiaepbljmopkodkadcbh')) {
+      await sleep(100);
+    }
+
+    chrome.test.succeed();
   },
 ]
-
-    var lacrosEnabledTests = [
-      function checkLacrosInfoFields() {
-        chrome.autotestPrivate.getLacrosInfo(
-            chrome.test.callbackPass(function(lacrosInfo) {
-              chrome.test.assertEq(typeof lacrosInfo, 'object');
-              chrome.test.assertTrue(lacrosInfo.hasOwnProperty('state'));
-              chrome.test.assertTrue(lacrosInfo.hasOwnProperty('isKeepAlive'));
-              chrome.test.assertTrue(lacrosInfo.hasOwnProperty('lacrosPath'));
-              chrome.test.assertTrue(lacrosInfo.hasOwnProperty('mode'));
-            }));
-      },
-      function checkLacrosInfoFieldValue() {
-        chrome.autotestPrivate.getLacrosInfo(
-            chrome.test.callbackPass(function(lacrosInfo) {
-              chrome.test.assertEq('Unavailable', lacrosInfo['state']);
-              chrome.test.assertTrue(!lacrosInfo['isKeepAlive']);
-              chrome.test.assertEq('', lacrosInfo['lacrosPath']);
-              chrome.test.assertEq('SideBySide', lacrosInfo['mode']);
-            }));
-      },
-    ]
 
     var test_suites = {
       'default': defaultTests,
@@ -1587,13 +1740,17 @@ var systemWebAppsTests = [
       'arcPerformanceTracing': arcPerformanceTracingTests,
       'overviewDefault': overviewTests,
       'overviewDrag': overviewDragTests,
-      'splitviewLeftSnapped': splitviewLeftSnappedTests,
+      'splitviewPrimarySnapped': splitviewPrimarySnappedTests,
       'scrollableShelf': scrollableShelfTests,
       'shelf': shelfTests,
+      'isFeatureEnabled': isFeatureEnabledTests,
       'holdingSpace': holdingSpaceTests,
       'systemWebApps': systemWebAppsTests,
-      'lacrosEnabled': lacrosEnabledTests,
-      'launcherSearchBoxState' : launcherSearchBoxStateTests,
+      'launcherSearchBoxState': launcherSearchBoxStateTests,
+      'isFieldTrialActive': isFieldTrialActiveTests,
+      'clearAllowedPref': clearAllowedPrefTests,
+      'setDeviceLanguage': setDeviceLanguage,
+      'getDeviceEventLog': getDeviceEventLog
     };
 
 chrome.test.getConfig(function(config) {

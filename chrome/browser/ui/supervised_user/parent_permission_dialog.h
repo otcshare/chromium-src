@@ -9,10 +9,12 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/supervised_user/supervised_user_extensions_metrics_recorder.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class Profile;
 
@@ -48,6 +50,12 @@ class Extension;
 // API for the Dialog.
 class ParentPermissionDialog {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kDialogViewIdForTesting);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+      kExtensionsParentApprovalVerificationTextIdForTesting);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kParentAccountTextIdForTesting);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kIncorrectParentPasswordIdForTesting);
+
   enum class Result {
     // The parent has given their permission for the action.
     kParentPermissionReceived,
@@ -85,7 +93,8 @@ class ParentPermissionDialog {
   // specified |extension|.
   // |profile| is the child user's profile.
   // |window| is the window to which the dialog will be modal. Can be nullptr.
-  // |icon| will be used as a backup in case |extension| doesn't have a loaded
+  // |icon| will be used as a backup in case |extension| has not loaded.
+  // |extension_approval_entry_point| indicates which flow invoked the dialog.
   // |done_callback| will be called  on dialog completion.
   static std::unique_ptr<ParentPermissionDialog>
   CreateParentPermissionDialogForExtension(

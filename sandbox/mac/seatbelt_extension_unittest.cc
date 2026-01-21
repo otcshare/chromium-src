@@ -12,9 +12,11 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/bind.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
-#include "sandbox/mac/sandbox_compiler.h"
+#include "sandbox/mac/sandbox_serializer.h"
+#include "sandbox/mac/sandbox_test.h"
 #include "sandbox/mac/seatbelt_extension_token.h"
 #include "testing/multiprocess_func_list.h"
 
@@ -31,22 +33,36 @@ const char kSandboxProfile[] = R"(
 )";
 
 const char kTestData[] = "hello world";
-constexpr int kTestDataLen = std::size(kTestData);
-
 const char kSwitchFile[] = "test-file";
 const char kSwitchExtension[] = "test-extension";
 
-class SeatbeltExtensionTest : public base::MultiProcessTest {
+class SeatbeltExtensionTest : public SandboxTest {
  public:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     file_path_ = temp_dir_.GetPath().AppendASCII("sbox.test");
 
-    ASSERT_EQ(kTestDataLen,
-              base::WriteFile(file_path_, kTestData, kTestDataLen));
+    ASSERT_TRUE(base::WriteFile(file_path_, kTestData));
   }
 
   base::FilePath file_path() { return file_path_; }
+
+  base::Process SpawnChildForPathWithToken(
+      const std::string& procname,
+      const base::FilePath& path,
+      const SeatbeltExtensionToken& token) {
+    // Ensure any symlinks in the path are canonicalized.
+    const base::FilePath canonicalized_path = base::MakeAbsoluteFilePath(path);
+    const std::string token_value = token.token();
+    CHECK(!canonicalized_path.empty());
+    CHECK(!token_value.empty());
+    return SpawnChild(
+        procname,
+        base::BindLambdaForTesting([&](base::CommandLine& command_line) {
+          command_line.AppendSwitchPath(kSwitchFile, canonicalized_path);
+          command_line.AppendSwitchASCII(kSwitchExtension, token_value);
+        }));
+  }
 
  private:
   base::ScopedTempDir temp_dir_;
@@ -57,20 +73,12 @@ TEST_F(SeatbeltExtensionTest, FileReadAccess) {
   base::CommandLine command_line(
       base::GetMultiProcessTestChildBaseCommandLine());
 
-  auto token = sandbox::SeatbeltExtension::Issue(
-      sandbox::SeatbeltExtension::FILE_READ, file_path().value());
+  auto token = SeatbeltExtension::Issue(SeatbeltExtension::FILE_READ,
+                                        file_path().value());
   ASSERT_TRUE(token.get());
 
-  // Ensure any symlinks in the path are canonicalized.
-  base::FilePath path = base::MakeAbsoluteFilePath(file_path());
-  ASSERT_FALSE(path.empty());
-
-  command_line.AppendSwitchPath(kSwitchFile, path);
-  command_line.AppendSwitchASCII(kSwitchExtension, token->token());
-
-  base::Process test_child = base::SpawnMultiProcessTestChild(
-      "FileReadAccess", command_line, base::LaunchOptions());
-
+  base::Process test_child =
+      SpawnChildForPathWithToken("FileReadAccess", file_path(), *token);
   int exit_code = 42;
   test_child.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
                                     &exit_code);
@@ -78,10 +86,11 @@ TEST_F(SeatbeltExtensionTest, FileReadAccess) {
 }
 
 MULTIPROCESS_TEST_MAIN(FileReadAccess) {
-  sandbox::SandboxCompiler compiler;
-  compiler.SetProfile(kSandboxProfile);
-  std::string error;
-  CHECK(compiler.CompileAndApplyProfile(error)) << error;
+  SandboxSerializer serializer(SandboxSerializer::Target::kSource);
+  serializer.SetProfile(kSandboxProfile);
+  std::string error, serialized;
+  CHECK(serializer.SerializePolicy(serialized, error)) << error;
+  CHECK(serializer.ApplySerializedPolicy(serialized));
 
   auto* command_line = base::CommandLine::ForCurrentProcess();
 
@@ -92,8 +101,8 @@ MULTIPROCESS_TEST_MAIN(FileReadAccess) {
   std::string token_str = command_line->GetSwitchValueASCII(kSwitchExtension);
   CHECK(!token_str.empty());
 
-  auto token = sandbox::SeatbeltExtensionToken::CreateForTesting(token_str);
-  auto extension = sandbox::SeatbeltExtension::FromToken(std::move(token));
+  auto token = SeatbeltExtensionToken::CreateForTesting(token_str);
+  auto extension = SeatbeltExtension::FromToken(std::move(token));
   CHECK(extension);
   CHECK(token.token().empty());
 
@@ -128,8 +137,8 @@ MULTIPROCESS_TEST_MAIN(FileReadAccess) {
 
   // Re-acquire the access by using the token, but this time consume it
   // permanetly.
-  token = sandbox::SeatbeltExtensionToken::CreateForTesting(token_str);
-  extension = sandbox::SeatbeltExtension::FromToken(std::move(token));
+  token = SeatbeltExtensionToken::CreateForTesting(token_str);
+  extension = SeatbeltExtension::FromToken(std::move(token));
   CHECK(extension);
   CHECK(extension->ConsumePermanently());
 
@@ -145,21 +154,12 @@ TEST_F(SeatbeltExtensionTest, DirReadWriteAccess) {
   base::CommandLine command_line(
       base::GetMultiProcessTestChildBaseCommandLine());
 
-  auto token = sandbox::SeatbeltExtension::Issue(
-      sandbox::SeatbeltExtension::FILE_READ_WRITE,
-      file_path().DirName().value());
+  auto token = SeatbeltExtension::Issue(SeatbeltExtension::FILE_READ_WRITE,
+                                        file_path().DirName().value());
   ASSERT_TRUE(token.get());
 
-  // Ensure any symlinks in the path are canonicalized.
-  base::FilePath path = base::MakeAbsoluteFilePath(file_path());
-  ASSERT_FALSE(path.empty());
-
-  command_line.AppendSwitchPath(kSwitchFile, path);
-  command_line.AppendSwitchASCII(kSwitchExtension, token->token());
-
-  base::Process test_child = base::SpawnMultiProcessTestChild(
-      "DirReadWriteAccess", command_line, base::LaunchOptions());
-
+  base::Process test_child =
+      SpawnChildForPathWithToken("DirReadWriteAccess", file_path(), *token);
   int exit_code = 42;
   test_child.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
                                     &exit_code);
@@ -167,10 +167,11 @@ TEST_F(SeatbeltExtensionTest, DirReadWriteAccess) {
 }
 
 MULTIPROCESS_TEST_MAIN(DirReadWriteAccess) {
-  sandbox::SandboxCompiler compiler;
-  compiler.SetProfile(kSandboxProfile);
-  std::string error;
-  CHECK(compiler.CompileAndApplyProfile(error)) << error;
+  SandboxSerializer serializer(SandboxSerializer::Target::kSource);
+  serializer.SetProfile(kSandboxProfile);
+  std::string serialized, error;
+  CHECK(serializer.SerializePolicy(serialized, error)) << error;
+  CHECK(serializer.ApplySerializedPolicy(serialized));
 
   auto* command_line = base::CommandLine::ForCurrentProcess();
 
@@ -181,8 +182,8 @@ MULTIPROCESS_TEST_MAIN(DirReadWriteAccess) {
   std::string token_str = command_line->GetSwitchValueASCII(kSwitchExtension);
   CHECK(!token_str.empty());
 
-  auto token = sandbox::SeatbeltExtensionToken::CreateForTesting(token_str);
-  auto extension = sandbox::SeatbeltExtension::FromToken(std::move(token));
+  auto token = SeatbeltExtensionToken::CreateForTesting(token_str);
+  auto extension = SeatbeltExtension::FromToken(std::move(token));
   CHECK(extension);
   CHECK(token.token().empty());
 

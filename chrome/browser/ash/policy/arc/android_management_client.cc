@@ -6,10 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/uuid.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
@@ -17,8 +17,6 @@
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -69,12 +67,8 @@ void AndroidManagementClientImpl::RequestAccessToken() {
   // The user must be signed in already.
   DCHECK(identity_manager_->HasAccountWithRefreshToken(account_id_));
 
-  signin::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-
   access_token_fetcher_ = identity_manager_->CreateAccessTokenFetcherForAccount(
-      account_id_, "android_management_client", scopes,
+      account_id_, signin::OAuthConsumerId::kAndroidManagementClient,
       base::BindOnce(&AndroidManagementClientImpl::OnAccessTokenFetchComplete,
                      base::Unretained(this)),
       signin::AccessTokenFetcher::Mode::kImmediate);
@@ -86,7 +80,7 @@ void AndroidManagementClientImpl::CheckAndroidManagement(
       DMServerJobConfiguration>(
       device_management_service_,
       DeviceManagementService::JobConfiguration::TYPE_ANDROID_MANAGEMENT_CHECK,
-      /*client_id=*/base::GenerateGUID(),
+      /*client_id=*/base::Uuid::GenerateRandomV4().AsLowercaseString(),
       /*critical=*/false, DMAuth::NoAuth(), access_token, url_loader_factory_,
       base::BindOnce(&AndroidManagementClientImpl::OnAndroidManagementChecked,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -132,7 +126,6 @@ std::ostream& operator<<(std::ostream& os,
       return os << "ERROR";
   }
   NOTREACHED();
-  return os;
 }
 
 }  // namespace policy

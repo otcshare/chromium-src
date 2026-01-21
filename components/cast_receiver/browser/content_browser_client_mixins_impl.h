@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/cast_receiver/browser/application_client.h"
 #include "components/cast_receiver/browser/public/content_browser_client_mixins.h"
 
@@ -29,22 +29,18 @@ namespace cast_receiver {
 class ContentBrowserClientMixinsImpl : public ContentBrowserClientMixins {
  public:
   explicit ContentBrowserClientMixinsImpl(
-      NetworkContextGetter network_context_getter);
+      network::NetworkContextGetter network_context_getter);
   ~ContentBrowserClientMixinsImpl() override;
 
   // ContentBrowserClientMixins implementation.
   void AddApplicationStateObserver(ApplicationStateObserver* observer) override;
   void RemoveApplicationStateObserver(
       ApplicationStateObserver* observer) override;
-  void AddStreamingResolutionObserver(
-      StreamingResolutionObserver* observer) override;
-  void RemoveStreamingResolutionObserver(
-      StreamingResolutionObserver* observer) override;
   void OnWebContentsCreated(content::WebContents* web_contents) override;
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
   CreateURLLoaderThrottles(
       const base::RepeatingCallback<content::WebContents*()>& wc_getter,
-      int frame_tree_node_id,
+      content::FrameTreeNodeId frame_tree_node_id,
       CorsExemptHeaderCallback is_cors_exempt_header_cb) override;
   ApplicationClient& GetApplicationClient() override;
 

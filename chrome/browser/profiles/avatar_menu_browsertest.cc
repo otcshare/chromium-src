@@ -5,7 +5,9 @@
 #include "chrome/browser/profiles/avatar_menu.h"
 
 #include <memory>
+#include <optional>
 
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
@@ -14,10 +16,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/profile_picker.h"
-#include "chrome/browser/ui/profile_ui_test_utils.h"
+#include "chrome/browser/ui/profiles/profile_picker.h"
+#include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -29,7 +30,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class AvatarMenuBrowserTest : public InProcessBrowserTest {
  public:
@@ -70,7 +70,7 @@ IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, AddNewProfile) {
 }
 
 IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, EditProfile) {
-  absl::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
+  std::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
   ASSERT_TRUE(active_profile_index.has_value());
   ASSERT_EQ(menu()->GetItemAt(*active_profile_index).profile_path,
             browser()->profile()->GetPath());
@@ -89,11 +89,11 @@ IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, EditProfile_NoBrowser) {
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   Profile* profile = browser()->profile();
-  BrowserList::CloseAllBrowsersWithProfile(profile);
+  chrome::CloseAllBrowsersWithProfile(profile);
   ui_test_utils::WaitForBrowserToClose(browser());
   EXPECT_EQ(chrome::GetBrowserCount(profile), 0U);
 
-  absl::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
+  std::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
   ASSERT_TRUE(active_profile_index.has_value());
   ASSERT_EQ(menu()->GetItemAt(*active_profile_index).profile_path,
             profile->GetPath());
@@ -124,11 +124,11 @@ IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, EditProfile_SigninRequired) {
   // Keep the browser process running while browsers are closed.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
-  BrowserList::CloseAllBrowsersWithProfile(profile);
+  chrome::CloseAllBrowsersWithProfile(profile);
   ui_test_utils::WaitForBrowserToClose(browser());
   EXPECT_EQ(chrome::GetBrowserCount(profile), 0U);
 
-  absl::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
+  std::optional<size_t> active_profile_index = menu()->GetActiveProfileIndex();
   ASSERT_TRUE(active_profile_index.has_value());
   ASSERT_EQ(menu()->GetItemAt(*active_profile_index).profile_path,
             profile->GetPath());
@@ -149,18 +149,26 @@ IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, EditProfile_SigninRequired) {
 // startup.
 IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, PRE_EditProfile_NotLoaded) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  Profile* secondary_profile = profiles::testing::CreateProfileSync(
+  Profile& secondary_profile = profiles::testing::CreateProfileSync(
       profile_manager, profile_manager->GenerateNextProfileDirectoryPath());
-  chrome::NewEmptyWindow(secondary_profile);
-  // Let the browser window fully open before closing it.
-  if (chrome::GetBrowserCount(secondary_profile) == 0)
-    ui_test_utils::WaitForBrowserToOpen();
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
+  chrome::NewEmptyWindow(&secondary_profile);
+  // Wait for secondary profile browser window open and becomes the last active
+  // one.
+  ui_test_utils::WaitForBrowserSetLastActive(browser_created_observer.Wait());
+
   // Close all browsers to avoid restoring profiles on the next startup.
   CloseAllBrowsers();
 }
 
+// TODO(crbug.com/432068316): Flaky on linux-msan-rel.
+#if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_EditProfile_NotLoaded DISABLED_EditProfile_NotLoaded
+#else
+#define MAYBE_EditProfile_NotLoaded EditProfile_NotLoaded
+#endif
 // "Edit" isn't enabled if no profiles are loaded.
-IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, EditProfile_NotLoaded) {
+IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, MAYBE_EditProfile_NotLoaded) {
   EXPECT_EQ(chrome::GetTotalBrowserCount(), 0U);
   EXPECT_FALSE(menu()->ShouldShowEditProfileLink());
   EXPECT_FALSE(menu()->GetActiveProfileIndex().has_value());
@@ -177,10 +185,15 @@ IN_PROC_BROWSER_TEST_F(AvatarMenuBrowserTest, Guest) {
 
   profiles::SwitchToGuestProfile();
   Browser* guest_browser = ui_test_utils::WaitForBrowserToOpen();
+
+  // ProfileManager will switch active profile upon observing
+  // BrowserList::OnBrowserSetLastActive().
+  bool wait_for_set_last_active_observed =
+      !ProfileManager::GetLastUsedProfileIfLoaded()->IsGuestSession();
+  ui_test_utils::WaitForBrowserSetLastActive(guest_browser,
+                                             wait_for_set_last_active_observed);
+
   ASSERT_TRUE(guest_browser);
-
-  BrowserList::SetLastActive(guest_browser);
-
   ASSERT_TRUE(guest_browser->profile()->IsGuestSession());
   // This should not crash.
   EXPECT_FALSE(menu()->ShouldShowEditProfileLink());

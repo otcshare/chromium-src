@@ -8,8 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
@@ -34,8 +35,7 @@ class DeviceManagementService;
 // `DeviceCloudPolicyManager::StartConnection` with a new `CloudPolicyClient`
 // for a given |DeviceManagementService|. It does so, once
 // - the `DeviceCloudPolicyStoreAsh` is initialized and has policy,
-// - the `ServerBackedStateKeysBroker` is available,
-// - `ash::InstallAttributes::IsActiveDirectoryManaged()` == false.
+// - the `ServerBackedStateKeysBroker` is available.
 //
 // It is expected that the |DeviceCloudPolicyInitializer| will be
 // destroyed soon after it called |StartConnection|, but see
@@ -80,12 +80,12 @@ class DeviceCloudPolicyInitializer
   void TryToStartConnection();
   void StartConnection(std::unique_ptr<CloudPolicyClient> client);
 
-  DeviceManagementService* enterprise_service_;
-  ash::InstallAttributes* install_attributes_;
-  ServerBackedStateKeysBroker* state_keys_broker_;
-  DeviceCloudPolicyStoreAsh* policy_store_;
-  DeviceCloudPolicyManagerAsh* policy_manager_;
-  ash::system::StatisticsProvider* statistics_provider_;
+  raw_ptr<DeviceManagementService, DanglingUntriaged> enterprise_service_;
+  raw_ptr<ash::InstallAttributes, DanglingUntriaged> install_attributes_;
+  raw_ptr<ServerBackedStateKeysBroker> state_keys_broker_;
+  raw_ptr<DeviceCloudPolicyStoreAsh, DanglingUntriaged> policy_store_;
+  raw_ptr<DeviceCloudPolicyManagerAsh, DanglingUntriaged> policy_manager_;
+  raw_ptr<ash::system::StatisticsProvider> statistics_provider_;
   bool is_initialized_ = false;
   bool policy_manager_store_ready_notified_ = false;
 

@@ -40,6 +40,13 @@ CWV_EXPORT
 // differ from the final download URL if there were redirects.
 @property(nonatomic, readonly) NSURL* originalURL;
 
+// The URL that the download request attempted to fetch after redirection.
+// This may differ from the Original download URL if there were redirects.
+@property(nonatomic, readonly) NSURL* redirectedURL;
+
+// The host of the frame that initiated the download (if available).
+@property(nonatomic, readonly) NSString* originatingHost;
+
 // Total number of expected bytes (a best-guess upper-bound). Returns
 // CWVDownloadSizeUnknown if the total size is unknown.
 @property(nonatomic, readonly) int64_t totalBytes;
@@ -63,7 +70,7 @@ CWV_EXPORT
 //
 // NOTE: It is currently required that an instance of CWVWebView which created
 // this task is not deallocated before this method is called.
-// TODO(crbug.com/932099): Remove the restriction.
+// TODO(crbug.com/40613954): Remove the restriction.
 - (void)startDownloadToLocalFileAtPath:(NSString*)path;
 
 // Cancels the download.
@@ -76,7 +83,7 @@ CWV_EXPORT
 @end
 
 // Delegate to observe updates to CWVDownloadTask.
-@protocol CWVDownloadTaskDelegate<NSObject>
+@protocol CWVDownloadTaskDelegate <NSObject>
 @optional
 
 // Called when the download has finished. |error| is nil when it has completed

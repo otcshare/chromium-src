@@ -8,8 +8,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <array>
 #include <memory>
+#include <variant>
 
+#include "base/compiler_specific.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/decoder_buffer.h"
@@ -26,7 +29,7 @@ namespace {
 
 void CompareBytes(uint8_t* original_data, uint8_t* result_data, size_t length) {
   EXPECT_GT(length, 0u);
-  EXPECT_EQ(memcmp(original_data, result_data, length), 0);
+  UNSAFE_TODO(EXPECT_EQ(memcmp(original_data, result_data, length), 0));
 }
 
 void CompareAudioBuffers(SampleFormat sample_format,
@@ -60,18 +63,25 @@ void CompareAudioBuffers(SampleFormat sample_format,
 
 TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_Normal) {
   const uint8_t kData[] = "hello, world";
-  const uint8_t kSideData[] = "sideshow bob";
+  const uint8_t kAlphaData[] = "sideshow bob";
+  const auto kSpatialLayers = std::to_array<uint32_t>({36, 24, 36});
   const size_t kDataSize = std::size(kData);
-  const size_t kSideDataSize = std::size(kSideData);
+  const size_t kSpatialLayersSize = std::size(kSpatialLayers);
+  const size_t kSecureHandle = 42;
 
   // Original.
-  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(
-      reinterpret_cast<const uint8_t*>(&kData), kDataSize,
-      reinterpret_cast<const uint8_t*>(&kSideData), kSideDataSize));
+  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
   buffer->set_timestamp(base::Milliseconds(123));
   buffer->set_duration(base::Milliseconds(456));
   buffer->set_discard_padding(DecoderBuffer::DiscardPadding(
       base::Milliseconds(5), base::Milliseconds(6)));
+  buffer->WritableSideData().alpha_data =
+      base::HeapArray<uint8_t>::CopiedFrom(kAlphaData);
+  buffer->WritableSideData().spatial_layers.assign(
+      kSpatialLayers.data(), base::span<const uint32_t>(kSpatialLayers)
+                                 .subspan(kSpatialLayersSize)
+                                 .data());
+  buffer->WritableSideData().secure_handle = kSecureHandle;
 
   // Convert from and back.
   mojom::DecoderBufferPtr ptr(mojom::DecoderBuffer::From(*buffer));
@@ -80,9 +90,9 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_Normal) {
   // Compare.
   // Note: We intentionally do not serialize the data section of the
   // DecoderBuffer; no need to check the data here.
-  EXPECT_EQ(kDataSize, result->data_size());
-  EXPECT_EQ(kSideDataSize, result->side_data_size());
-  EXPECT_EQ(0, memcmp(result->side_data(), kSideData, kSideDataSize));
+  EXPECT_EQ(kDataSize, result->size());
+  EXPECT_TRUE(result->side_data());
+  EXPECT_TRUE(buffer->side_data()->Matches(*result->side_data()));
   EXPECT_EQ(buffer->timestamp(), result->timestamp());
   EXPECT_EQ(buffer->duration(), result->duration());
   EXPECT_EQ(buffer->is_key_frame(), result->is_key_frame());
@@ -105,13 +115,43 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_EOS) {
   EXPECT_TRUE(result->end_of_stream());
 }
 
+TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_EOS_Video_NextConfig) {
+  // Original.
+  auto buffer = DecoderBuffer::CreateEOSBuffer(TestVideoConfig::Normal());
+
+  // Convert from and back.
+  auto ptr = mojom::DecoderBuffer::From(*buffer);
+  auto result = ptr.To<scoped_refptr<DecoderBuffer>>();
+
+  // Compare.
+  EXPECT_TRUE(result->end_of_stream());
+  ASSERT_TRUE(result->next_config());
+  EXPECT_TRUE(std::get<VideoDecoderConfig>(*result->next_config())
+                  .Matches(TestVideoConfig::Normal()));
+}
+
+TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_EOS_Audio_NextConfig) {
+  // Original.
+  auto buffer = DecoderBuffer::CreateEOSBuffer(TestAudioConfig::Normal());
+
+  // Convert from and back.
+  auto ptr = mojom::DecoderBuffer::From(*buffer);
+  ASSERT_TRUE(ptr);
+  auto result = ptr.To<scoped_refptr<DecoderBuffer>>();
+
+  // Compare.
+  EXPECT_TRUE(result->end_of_stream());
+  ASSERT_TRUE(result->next_config());
+  EXPECT_TRUE(std::get<AudioDecoderConfig>(*result->next_config())
+                  .Matches(TestAudioConfig::Normal()));
+}
+
 TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_KeyFrame) {
   const uint8_t kData[] = "hello, world";
   const size_t kDataSize = std::size(kData);
 
   // Original.
-  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(
-      reinterpret_cast<const uint8_t*>(&kData), kDataSize));
+  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
   buffer->set_is_key_frame(true);
   EXPECT_TRUE(buffer->is_key_frame());
 
@@ -122,7 +162,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_KeyFrame) {
   // Compare.
   // Note: We intentionally do not serialize the data section of the
   // DecoderBuffer; no need to check the data here.
-  EXPECT_EQ(kDataSize, result->data_size());
+  EXPECT_EQ(kDataSize, result->size());
   EXPECT_TRUE(result->is_key_frame());
 }
 
@@ -138,8 +178,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CencEncryptedBuffer) {
   subsamples.push_back(SubsampleEntry(50, 60));
 
   // Original.
-  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(
-      reinterpret_cast<const uint8_t*>(&kData), kDataSize));
+  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
   buffer->set_decrypt_config(
       DecryptConfig::CreateCencConfig(kKeyId, kIv, subsamples));
 
@@ -150,7 +189,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CencEncryptedBuffer) {
   // Compare.
   // Note: We intentionally do not serialize the data section of the
   // DecoderBuffer; no need to check the data here.
-  EXPECT_EQ(kDataSize, result->data_size());
+  EXPECT_EQ(kDataSize, result->size());
   EXPECT_TRUE(buffer->decrypt_config()->Matches(*result->decrypt_config()));
 
   // Test without DecryptConfig. This is used for clear buffer in an
@@ -176,8 +215,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CbcsEncryptedBuffer) {
   EncryptionPattern pattern{1, 2};
 
   // Original.
-  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(
-      reinterpret_cast<const uint8_t*>(&kData), kDataSize));
+  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
   buffer->set_decrypt_config(
       DecryptConfig::CreateCbcsConfig(kKeyId, kIv, subsamples, pattern));
 
@@ -188,7 +226,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CbcsEncryptedBuffer) {
   // Compare.
   // Note: We intentionally do not serialize the data section of the
   // DecoderBuffer; no need to check the data here.
-  EXPECT_EQ(kDataSize, result->data_size());
+  EXPECT_EQ(kDataSize, result->size());
   EXPECT_TRUE(buffer->decrypt_config()->Matches(*result->decrypt_config()));
 
   // Test without DecryptConfig. This is used for clear buffer in an
@@ -238,6 +276,23 @@ TEST(MediaTypeConvertersTest, ConvertAudioBuffer_FLOAT) {
       kSampleFormatPlanarF32, kChannelLayout,
       ChannelLayoutToChannelCount(kChannelLayout), kSampleRate, 0.0f, 1.0f,
       kSampleRate / 10, start_time);
+  // Convert to and back.
+  mojom::AudioBufferPtr ptr(mojom::AudioBuffer::From(*buffer));
+  scoped_refptr<AudioBuffer> result(ptr.To<scoped_refptr<AudioBuffer>>());
+
+  // Compare.
+  CompareAudioBuffers(kSampleFormatPlanarF32, *buffer, *result);
+}
+
+TEST(MediaTypeConvertersTest, ConvertAudioBuffer_DISCRETE) {
+  // Original.
+  const ChannelLayout kChannelLayout = CHANNEL_LAYOUT_DISCRETE;
+  const int kChannelCount = 12;
+  const int kSampleRate = 48000;
+  const base::TimeDelta start_time = base::Seconds(1000.0);
+  scoped_refptr<AudioBuffer> buffer = MakeAudioBuffer<float>(
+      kSampleFormatPlanarF32, kChannelLayout, kChannelCount, kSampleRate, 0.0f,
+      1.0f, kSampleRate / 10, start_time);
   // Convert to and back.
   mojom::AudioBufferPtr ptr(mojom::AudioBuffer::From(*buffer));
   scoped_refptr<AudioBuffer> result(ptr.To<scoped_refptr<AudioBuffer>>());

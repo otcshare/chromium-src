@@ -9,11 +9,8 @@
 #import "base/memory/ptr_util.h"
 #import "ios/web/common/features.h"
 #import "ios/web/navigation/navigation_item_impl.h"
+#import "ios/web/public/web_state.h"
 #import "net/http/http_response_headers.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace web {
 
@@ -48,14 +45,14 @@ NSString* NavigationContextImpl::GetDescription() const {
       stringWithFormat:
           @"web::WebState: %ld, url: %s, "
            "is_same_document: %@, error: %@ is_loading_error_page: %@",
-          reinterpret_cast<long>(web_state_), url_.spec().c_str(),
+          reinterpret_cast<long>(web_state_.get()), url_.spec().c_str(),
           is_same_document_ ? @"true" : @"false", error_,
           is_loading_error_page_ ? @"true" : @"false"];
 }
 #endif  // NDEBUG
 
 WebState* NavigationContextImpl::GetWebState() {
-  return web_state_;
+  return web_state_.get();
 }
 
 int64_t NavigationContextImpl::GetNavigationId() const {
@@ -203,12 +200,16 @@ base::TimeDelta NavigationContextImpl::GetElapsedTimeSinceCreation() const {
   return elapsed_timer_.Elapsed();
 }
 
+base::WeakPtr<NavigationContextImpl> NavigationContextImpl::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
 NavigationContextImpl::NavigationContextImpl(WebState* web_state,
                                              const GURL& url,
                                              bool has_user_gesture,
                                              ui::PageTransition page_transition,
                                              bool is_renderer_initiated)
-    : web_state_(web_state),
+    : web_state_(web_state ? web_state->GetWeakPtr() : nullptr),
       navigation_id_(CreateUniqueContextId()),
       url_(url),
       has_user_gesture_(has_user_gesture),

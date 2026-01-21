@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
+
 #include "base/check_op.h"
 
 namespace ash {
@@ -44,7 +45,7 @@ const std::string AuthFailure::GetErrorString() const {
     case NETWORK_AUTH_FAILED:
       if (google_service_auth_error_.state() ==
           GoogleServiceAuthError::CONNECTION_FAILED) {
-        return net::ErrorToString(google_service_auth_error_.network_error());
+        return net::ErrorToString(google_service_auth_error_.GetNetworkError());
       }
       return "Google authentication failed.";
     case OWNER_REQUIRED:
@@ -67,10 +68,11 @@ const std::string AuthFailure::GetErrorString() const {
       return "Failed to get hashed username";
     case CRYPTOHOME_RECOVERY_SERVICE_ERROR:
       return "Failed interaction with cryptohome recovery server";
+    case CRYPTOHOME_RECOVERY_OAUTH_TOKEN_ERROR:
+      return "Failed to fetch OAuth2 token for recovery service";
     case NONE:
     case NUM_FAILURE_REASONS:
       NOTREACHED();
-      return std::string();
   }
 }
 

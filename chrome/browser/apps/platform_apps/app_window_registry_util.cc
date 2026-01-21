@@ -4,9 +4,9 @@
 
 #include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -80,10 +80,11 @@ void AppWindowRegistryUtil::CloseAllAppWindows() {
     // Ask each app window to close, but cater for windows removing or
     // rearranging themselves in the ordered window list in response.
     AppWindowList window_list_copy(registry->app_windows());
-    for (auto* window : window_list_copy) {
+    for (AppWindow* window : window_list_copy) {
       // Ensure window is still valid.
-      if (base::Contains(registry->app_windows(), window))
+      if (std::ranges::contains(registry->app_windows(), window)) {
         window->GetBaseWindow()->Close();
+      }
     }
   }
 }

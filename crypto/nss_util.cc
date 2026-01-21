@@ -17,17 +17,17 @@
 
 #include "base/base_paths.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/heap_array.h"
 #include "base/debug/alias.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "crypto/nss_crypto_module_delegate.h"
 #include "crypto/nss_util_internal.h"
 
@@ -35,14 +35,7 @@ namespace crypto {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-
-// Fake certificate authority database used for testing.
-static const base::FilePath::CharType kReadOnlyCertDB[] =
-    FILE_PATH_LITERAL("/etc/fake_root_ca/nssdb");
-
-#else
-
+#if !BUILDFLAG(IS_CHROMEOS)
 base::FilePath GetDefaultConfigDirectory() {
   base::FilePath dir;
   base::PathService::Get(base::DIR_HOME, &dir);
@@ -58,23 +51,17 @@ base::FilePath GetDefaultConfigDirectory() {
   DVLOG(2) << "DefaultConfigDirectory: " << dir.value();
   return dir;
 }
+#endif  // BUILDFLAG!(IS_CHROMEOS)
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-
-// On non-Chrome OS platforms, return the default config directory. On Chrome OS
-// test images, return a read-only directory with fake root CA certs (which are
-// used by the local Google Accounts server mock we use when testing our login
-// code). On Chrome OS non-test images (where the read-only directory doesn't
-// exist), return an empty path.
+// On non-ChromeOS platforms, return the default config directory. On ChromeOS
+// return a empty path which will result in NSS being initialized without a
+// persistent database.
 base::FilePath GetInitialConfigDirectory() {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  base::FilePath database_dir = base::FilePath(kReadOnlyCertDB);
-  if (!base::PathExists(database_dir))
-    database_dir.clear();
-  return database_dir;
+#if BUILDFLAG(IS_CHROMEOS)
+  return base::FilePath();
 #else
   return GetDefaultConfigDirectory();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 // This callback for NSS forwards all requests to a caller-specified
@@ -102,7 +89,7 @@ char* PKCS11PasswordFunc(PK11SlotInfo* slot, PRBool retry, void* arg) {
 // singleton.
 class NSPRInitSingleton {
  private:
-  friend struct base::LazyInstanceTraitsBase<NSPRInitSingleton>;
+  friend class base::NoDestructor<NSPRInitSingleton>;
 
   NSPRInitSingleton() { PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 0); }
 
@@ -112,8 +99,10 @@ class NSPRInitSingleton {
   ~NSPRInitSingleton() = delete;
 };
 
-base::LazyInstance<NSPRInitSingleton>::Leaky g_nspr_singleton =
-    LAZY_INSTANCE_INITIALIZER;
+NSPRInitSingleton& GetNSPRInitSingleton() {
+  static base::NoDestructor<NSPRInitSingleton> instance;
+  return *instance;
+}
 
 // Force a crash with error info on NSS_NoDB_Init failure.
 void CrashOnNSSInitFailure() {
@@ -169,9 +158,6 @@ class NSSInitSingleton {
     } else {
       LOG(ERROR) << "Error opening persistent database (" << modspec
                  << "): " << GetNSSErrorMessage();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      DiagnosePublicSlotAndCrash(path);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
     }
 
     return ScopedPK11Slot(db_slot_info);
@@ -194,7 +180,7 @@ class NSSInitSingleton {
   }
 
  private:
-  friend struct base::LazyInstanceTraitsBase<NSSInitSingleton>;
+  friend class base::NoDestructor<NSSInitSingleton>;
 
   NSSInitSingleton() {
     // Initializing NSS causes us to do blocking IO.
@@ -204,13 +190,13 @@ class NSSInitSingleton {
 
     EnsureNSPRInit();
 
-    // We *must* have NSS >= 3.26 at compile time.
-    static_assert((NSS_VMAJOR == 3 && NSS_VMINOR >= 26) || (NSS_VMAJOR > 3),
+    // We *must* have NSS >= 3.35 at compile time.
+    static_assert((NSS_VMAJOR == 3 && NSS_VMINOR >= 35) || (NSS_VMAJOR > 3),
                   "nss version check failed");
     // Also check the run-time NSS version.
     // NSS_VersionCheck is a >= check, not strict equality.
-    if (!NSS_VersionCheck("3.26")) {
-      LOG(FATAL) << "NSS_VersionCheck(\"3.26\") failed. NSS >= 3.26 is "
+    if (!NSS_VersionCheck("3.35")) {
+      LOG(FATAL) << "NSS_VersionCheck(\"3.35\") failed. NSS >= 3.35 is "
                     "required. Please upgrade to the latest NSS, and if you "
                     "still get this error, contact your distribution "
                     "maintainer.";
@@ -230,7 +216,7 @@ class NSSInitSingleton {
       // Use "sql:" which can be shared by multiple processes safely.
       std::string nss_config_dir =
           base::StringPrintf("sql:%s", database_dir.value().c_str());
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
       status = NSS_Init(nss_config_dir.c_str());
 #else
       status = NSS_InitReadWrite(nss_config_dir.c_str());
@@ -292,25 +278,28 @@ class NSSInitSingleton {
   base::Lock slot_map_lock_;
 };
 
-base::LazyInstance<NSSInitSingleton>::Leaky g_nss_singleton =
-    LAZY_INSTANCE_INITIALIZER;
+NSSInitSingleton& GetNSSInitSingleton() {
+  static base::NoDestructor<NSSInitSingleton> instance;
+  return *instance;
+}
+
 }  // namespace
 
 ScopedPK11Slot OpenSoftwareNSSDB(const base::FilePath& path,
                                  const std::string& description) {
-  return g_nss_singleton.Get().OpenSoftwareNSSDB(path, description);
+  return GetNSSInitSingleton().OpenSoftwareNSSDB(path, description);
 }
 
 SECStatus CloseSoftwareNSSDB(PK11SlotInfo* slot) {
-  return g_nss_singleton.Get().CloseSoftwareNSSDB(slot);
+  return GetNSSInitSingleton().CloseSoftwareNSSDB(slot);
 }
 
 void EnsureNSPRInit() {
-  g_nspr_singleton.Get();
+  GetNSPRInitSingleton();
 }
 
 void EnsureNSSInit() {
-  g_nss_singleton.Get();
+  GetNSSInitSingleton();
 }
 
 bool CheckNSSVersion(const char* version) {
@@ -365,9 +354,10 @@ SECMODModule* LoadNSSModule(const char* name,
 std::string GetNSSErrorMessage() {
   std::string result;
   if (PR_GetErrorTextLength()) {
-    std::unique_ptr<char[]> error_text(new char[PR_GetErrorTextLength() + 1]);
-    PRInt32 copied = PR_GetErrorText(error_text.get());
-    result = std::string(error_text.get(), copied);
+    auto error_text =
+        base::HeapArray<char>::Uninit(PR_GetErrorTextLength() + 1);
+    PRInt32 copied = PR_GetErrorText(error_text.data());
+    result = std::string(error_text.data(), copied);
   } else {
     result = base::StringPrintf("NSS error code: %d", PR_GetError());
   }

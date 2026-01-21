@@ -4,14 +4,15 @@
 
 #include "content/browser/mojo_binder_policy_applier.h"
 
-#include "base/containers/contains.h"
+#include <string_view>
+
 #include "base/containers/fixed_flat_set.h"
 #include "content/public/browser/mojo_binder_policy_map.h"
 #include "mojo/public/cpp/bindings/message.h"
 
 namespace {
 
-// TODO(https://crbug.com/1245961): It is not sustainable to maintain a list.
+// TODO(crbug.com/40196368): It is not sustainable to maintain a list.
 // An ideal solution should:
 // 1. Show a pre-submit warning if a frame-scoped interface is specified with
 //    kDefer but declares synchronous methods.
@@ -20,9 +21,8 @@ namespace {
 // 3. Bind these receivers to a generic implementation, and terminate the
 //    execution context if it receives a synchronous message.
 // Stores the list of interface names that declare sync methods.
-constexpr auto kSyncMethodInterfaces =
-    base::MakeFixedFlatSet<base::StringPiece>(
-        {"blink.mojom.NotificationService"});
+constexpr auto kSyncMethodInterfaces = base::MakeFixedFlatSet<std::string_view>(
+    {"blink.mojom.NotificationService"});
 
 }  // namespace
 
@@ -42,6 +42,16 @@ MojoBinderPolicyApplier::CreateForSameOriginPrerendering(
         cancel_callback) {
   return std::make_unique<MojoBinderPolicyApplier>(
       MojoBinderPolicyMapImpl::GetInstanceForSameOriginPrerendering(),
+      std::move(cancel_callback));
+}
+
+// static
+std::unique_ptr<MojoBinderPolicyApplier>
+MojoBinderPolicyApplier::CreateForPreview(
+    base::OnceCallback<void(const std::string& interface_name)>
+        cancel_callback) {
+  return std::make_unique<MojoBinderPolicyApplier>(
+      MojoBinderPolicyMapImpl::GetInstanceForPreview(),
       std::move(cancel_callback));
 }
 
@@ -73,7 +83,7 @@ void MojoBinderPolicyApplier::ApplyPolicyToNonAssociatedBinder(
         std::move(binder_callback).Run();
         break;
       case MojoBinderNonAssociatedPolicy::kDefer:
-        if (base::Contains(kSyncMethodInterfaces, interface_name)) {
+        if (kSyncMethodInterfaces.contains(interface_name)) {
           std::move(binder_callback).Run();
         } else {
           deferred_binders_.push_back(std::move(binder_callback));
@@ -94,7 +104,7 @@ void MojoBinderPolicyApplier::ApplyPolicyToNonAssociatedBinder(
       }
       break;
     case MojoBinderNonAssociatedPolicy::kDefer:
-      if (base::Contains(kSyncMethodInterfaces, interface_name)) {
+      if (kSyncMethodInterfaces.contains(interface_name)) {
         deferred_sync_binders_.push_back(std::move(binder_callback));
       } else {
         deferred_binders_.push_back(std::move(binder_callback));
@@ -121,8 +131,9 @@ bool MojoBinderPolicyApplier::ApplyPolicyToAssociatedBinder(
       policy = policy_map_->GetAssociatedMojoBinderPolicy(
           interface_name, MojoBinderAssociatedPolicy::kCancel);
       if (policy != MojoBinderAssociatedPolicy::kGrant) {
-        if (cancel_callback_)
+        if (cancel_callback_) {
           std::move(cancel_callback_).Run(interface_name);
+        }
         return false;
       }
   }
@@ -149,7 +160,7 @@ void MojoBinderPolicyApplier::GrantAll() {
   // Check that we are in a Mojo message dispatch, since the deferred binders
   // might call mojo::ReportBadMessage().
   //
-  // TODO(https://crbug.com/1217977): Give the deferred_binders_ a
+  // TODO(crbug.com/40185437): Give the deferred_binders_ a
   // BadMessageCallback and forbid them from using mojo::ReportBadMessage()
   // directly. We are currently in the message stack of one of the PageBroadcast
   // Mojo callbacks handled by RenderViewHost, so if a binder calls
@@ -164,8 +175,9 @@ void MojoBinderPolicyApplier::GrantAll() {
 
   // It's safe to iterate over `deferred_binders_` because no more callbacks
   // will be added to it once `grant_all_` is true."
-  for (auto& deferred_binder : deferred_binders_)
+  for (auto& deferred_binder : deferred_binders_) {
     std::move(deferred_binder).Run();
+  }
   deferred_binders_.clear();
 }
 

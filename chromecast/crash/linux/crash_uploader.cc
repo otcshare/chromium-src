@@ -5,12 +5,14 @@
 #include <sys/resource.h>
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/threading/platform_thread.h"
@@ -56,8 +58,16 @@ int main(int argc, char** argv) {
 
   std::string server_url(
       command_line->GetSwitchValueASCII(switches::kCrashServerUrl));
-  chromecast::MinidumpUploader uploader(sys_info.get(), server_url);
-  while (true) {
+  bool daemon =
+      chromecast::GetSwitchValueBoolean(switches::kCrashUploaderDaemon, false);
+  LOG_IF(INFO, daemon) << "Running crash uploader in daemon-mode";
+
+  std::string crash_report_product_name(
+      command_line->GetSwitchValueASCII(switches::kCrashReportProductName));
+
+  chromecast::MinidumpUploader uploader(sys_info.get(), server_url,
+                                        crash_report_product_name);
+  do {
     if (!uploader.UploadAllMinidumps())
       LOG(ERROR) << "Failed to process minidumps";
 
@@ -65,8 +75,10 @@ int main(int argc, char** argv) {
       chromecast::RebootUtil::RebootNow(
           chromecast::RebootShlib::CRASH_UPLOADER);
 
-    base::PlatformThread::Sleep(base::Seconds(kUploadRetryIntervalDefault));
-  }
+    if (daemon) {
+      base::PlatformThread::Sleep(base::Seconds(kUploadRetryIntervalDefault));
+    }
+  } while (daemon);
 
   return EXIT_SUCCESS;
 }

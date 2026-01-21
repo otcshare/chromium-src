@@ -9,59 +9,62 @@ import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.Card
 import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType.MESSAGE;
 
 import android.content.Context;
-import android.graphics.drawable.Drawable;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.tasks.tab_management.IphMessageService.IphMessageData;
+import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
+import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * This is a util class for creating the property model of the IphMessageCardView.
- */
+/** This is a util class for creating the property model of the IphMessageCardView. */
+@NullMarked
 public class IphMessageCardViewModel {
     /**
      * Create a {@link PropertyModel} for IphMessageCardView.
+     *
      * @param context The {@link Context} to use.
-     * @param uiDismissActionProvider The {@link MessageCardView.DismissActionProvider} to set.
-     * @param data The {@link IphMessageService.IphMessageData} to use.
+     * @param msgServiceDismissActionProvider The {@link ServiceDismissActionProvider} to set.
+     * @param data The {@link IphMessageData} to use.
      * @return A {@link PropertyModel} for the given {@code data}.
      */
-    public static PropertyModel create(Context context,
-            MessageCardView.DismissActionProvider uiDismissActionProvider,
-            IphMessageService.IphMessageData data) {
+    public static PropertyModel create(
+            Context context,
+            ServiceDismissActionProvider<@MessageType Integer> msgServiceDismissActionProvider,
+            IphMessageData data) {
         String descriptionText = context.getString(R.string.iph_drag_and_drop_introduction);
         String actionText = context.getString(R.string.iph_drag_and_drop_show_me);
         String dismissButtonContextDescription =
                 context.getString(R.string.accessibility_tab_suggestion_dismiss_button);
 
         return new PropertyModel.Builder(MessageCardViewProperties.ALL_KEYS)
-                .with(MessageCardViewProperties.MESSAGE_TYPE, MessageService.MessageType.IPH)
-                .with(MessageCardViewProperties.MESSAGE_IDENTIFIER,
+                .with(MessageCardViewProperties.MESSAGE_TYPE, MessageType.IPH)
+                .with(
+                        MessageCardViewProperties.MESSAGE_IDENTIFIER,
                         MessageService.DEFAULT_MESSAGE_IDENTIFIER)
-                .with(MessageCardViewProperties.ICON_PROVIDER,
-                        IphMessageCardViewModel::getIconDrawable)
-                .with(MessageCardViewProperties.UI_DISMISS_ACTION_PROVIDER, uiDismissActionProvider)
-                .with(MessageCardViewProperties.MESSAGE_SERVICE_DISMISS_ACTION_PROVIDER,
+                .with(
+                        MessageCardViewProperties.UI_DISMISS_ACTION_PROVIDER,
                         data.getDismissActionProvider())
-                .with(MessageCardViewProperties.MESSAGE_SERVICE_ACTION_PROVIDER,
-                        data.getReviewActionProvider())
+                .with(
+                        MessageCardViewProperties.MESSAGE_SERVICE_DISMISS_ACTION_PROVIDER,
+                        msgServiceDismissActionProvider)
+                .with(
+                        MessageCardViewProperties.MESSAGE_SERVICE_ACTION_PROVIDER,
+                        data.getAcceptActionProvider())
                 .with(MessageCardViewProperties.DESCRIPTION_TEXT, descriptionText)
-                .with(MessageCardViewProperties.DESCRIPTION_TEXT_TEMPLATE, null)
                 .with(MessageCardViewProperties.ACTION_TEXT, actionText)
-                .with(MessageCardViewProperties.DISMISS_BUTTON_CONTENT_DESCRIPTION,
+                .with(
+                        MessageCardViewProperties.DISMISS_BUTTON_CONTENT_DESCRIPTION,
                         dismissButtonContextDescription)
                 .with(MessageCardViewProperties.SHOULD_KEEP_AFTER_REVIEW, true)
                 .with(MessageCardViewProperties.IS_ICON_VISIBLE, false)
-                .with(MessageCardViewProperties.IS_INCOGNITO, false)
-                .with(MessageCardViewProperties
+                .with(MessageCardViewProperties.IS_INCOGNITO, data.isIncognito())
+                .with(
+                        MessageCardViewProperties
                                 .MESSAGE_CARD_VISIBILITY_CONTROL_IN_REGULAR_AND_INCOGNITO_MODE,
                         MessageCardViewProperties.MessageCardScope.BOTH)
                 .with(CARD_TYPE, MESSAGE)
                 .with(CARD_ALPHA, 1f)
                 .build();
-    }
-
-    private static Drawable getIconDrawable() {
-        // TODO(yuezhanggg): make it possible for message card to not have icon.
-        return null;
     }
 }

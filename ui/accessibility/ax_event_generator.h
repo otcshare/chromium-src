@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
 #include "ui/accessibility/ax_event_intent.h"
 #include "ui/accessibility/ax_export.h"
@@ -34,6 +35,7 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
     ACTIVE_DESCENDANT_CHANGED,
     ALERT,
     ARIA_CURRENT_CHANGED,
+    ARIA_NOTIFICATIONS_POSTED,
 
     // ATK treats alignment, indentation, and other format-related attributes as
     // text attributes even when they are only applicable to the entire object.
@@ -41,20 +43,20 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
     ATK_TEXT_OBJECT_ATTRIBUTE_CHANGED,
     ATOMIC_CHANGED,
     AUTO_COMPLETE_CHANGED,
+    AUTOFILL_AVAILABILITY_CHANGED,
     BUSY_CHANGED,
     CARET_BOUNDS_CHANGED,
     CHECKED_STATE_CHANGED,
     CHECKED_STATE_DESCRIPTION_CHANGED,
     CHILDREN_CHANGED,
-    CLASS_NAME_CHANGED,
     COLLAPSED,
     CONTROLS_CHANGED,
+    DEFAULT_ACTION_VERB_CHANGED,
     DETAILS_CHANGED,
     DESCRIBED_BY_CHANGED,
     DESCRIPTION_CHANGED,
     DOCUMENT_SELECTION_CHANGED,
     DOCUMENT_TITLE_CHANGED,
-    DROPEFFECT_CHANGED,
 
     // TODO(nektar): Deprecate this event and replace it with
     // "VALUE_IN_TEXT_FIELD_CHANGED".
@@ -64,7 +66,6 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
     FOCUS_CHANGED,
     FLOW_FROM_CHANGED,
     FLOW_TO_CHANGED,
-    GRABBED_CHANGED,
     HASPOPUP_CHANGED,
     HIERARCHICAL_LEVEL_CHANGED,
     IGNORED_CHANGED,
@@ -92,10 +93,9 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
     MULTISELECTABLE_STATE_CHANGED,
     NAME_CHANGED,
     OBJECT_ATTRIBUTE_CHANGED,
-    OTHER_ATTRIBUTE_CHANGED,
+    ORIENTATION_CHANGED,
     PARENT_CHANGED,
     PLACEHOLDER_CHANGED,
-    PORTAL_ACTIVATED,
     POSITION_IN_SET_CHANGED,
     RANGE_VALUE_CHANGED,
     RANGE_VALUE_MAX_CHANGED,
@@ -154,7 +154,7 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
     ~TargetedEvent();
 
     const AXNodeID node_id;
-    const EventParams& event_params;
+    const raw_ref<const EventParams, DanglingUntriaged> event_params;
   };
 
   class AX_EXPORT Iterator {
@@ -179,7 +179,6 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
 
    private:
     AX_EXPORT friend bool operator==(const Iterator& lhs, const Iterator& rhs);
-    AX_EXPORT friend bool operator!=(const Iterator& lhs, const Iterator& rhs);
     AX_EXPORT friend void swap(Iterator& lhs, Iterator& rhs);
 
     std::map<AXNodeID, std::set<EventParams>>::const_iterator map_iter_;
@@ -241,7 +240,14 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
   // Note that events are organized by node and then by event id to
   // efficiently remove duplicates, so events won't be retrieved in the
   // same order they were added.
-  void AddEvent(ui::AXNode* node, Event event);
+  void AddEvent(AXNode* node, Event event);
+
+  // Registers for events on the node or one of its descendants.
+  // Registration offers a more performant path for event generation.
+  // See the implementation for currently supported events for registration.
+  // Gradually move as many events to registration as possible.
+  void RegisterEventOnNode(Event event_type, AXNodeID node_id);
+  void UnregisterEventOnNode(Event event_type, AXNodeID node_id);
 
   void AddEventsForTesting(const AXNode& node,
                            const std::set<EventParams>& events);
@@ -293,8 +299,8 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
       const std::vector<int32_t>& old_value,
       const std::vector<int32_t>& new_value) override;
   void OnTreeDataChanged(AXTree* tree,
-                         const ui::AXTreeData& old_data,
-                         const ui::AXTreeData& new_data) override;
+                         const AXTreeData& old_data,
+                         const AXTreeData& new_data) override;
   void OnSubtreeWillBeDeleted(AXTree* tree, AXNode* node) override;
   void OnNodeWillBeReparented(AXTree* tree, AXNode* node) override;
   void OnSubtreeWillBeReparented(AXTree* tree, AXNode* node) override;
@@ -352,7 +358,7 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
 
   // Valid between the call to OnIntAttributeChanged and the call to
   // OnAtomicUpdateFinished. List of nodes whose active descendant changed.
-  std::vector<AXNode*> active_descendant_changed_;
+  std::vector<raw_ptr<AXNode, VectorExperimental>> active_descendant_changed_;
 
   // Keeps track of nodes that have changed their state from ignored to
   // unignored, but which used to be in an invisible subtree. We should not fire
@@ -360,8 +366,11 @@ class AX_EXPORT AXEventGenerator : public AXTreeObserver {
   // previously unknown to ATs.
   std::set<AXNodeID> nodes_to_suppress_parent_changed_on_;
 
-  // Please make sure that this ScopedObserver is always declared last in order
-  // to prevent any use-after-free.
+  // Registered events for a given node.
+  std::map<Event, std::set<AXNodeID>> registered_event_to_node_ids_;
+
+  // Please make sure that this ScopedObservation is always declared last in
+  // order to prevent any use-after-free.
   base::ScopedObservation<AXTree, AXTreeObserver> tree_event_observation_{this};
 };
 

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <memory>
 #include <string>
@@ -215,11 +216,13 @@ class DisassemblerElf : public Disassembler {
 
   // Section header table, ordered by section id.
   elf::Elf32_Half sections_count_ = 0;
-  raw_ptr<const typename Traits::Elf_Shdr> sections_ = nullptr;
+  raw_ptr<const typename Traits::Elf_Shdr, AllowPtrArithmetic> sections_ =
+      nullptr;
 
   // Program header table.
   elf::Elf32_Half segments_count_ = 0;
-  raw_ptr<const typename Traits::Elf_Phdr> segments_ = nullptr;
+  raw_ptr<const typename Traits::Elf_Phdr, AllowPtrArithmetic> segments_ =
+      nullptr;
 
   // Bit fields to store the role each section may play.
   std::vector<int> section_judgements_;
@@ -313,8 +316,8 @@ class DisassemblerElfArm : public DisassemblerElf<TRAITS> {
 
  protected:
   // Sorted file offsets of rel32 locations for each rel32 address type.
-  std::deque<offset_t>
-      rel32_locations_table_[Traits::ArmReferenceType::kTypeCount];
+  std::array<std::deque<offset_t>, Traits::ArmReferenceType::kTypeCount>
+      rel32_locations_table_;
 };
 
 // Disassembler for ELF with AArch32 (AKA ARM32).

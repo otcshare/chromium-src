@@ -8,25 +8,26 @@
 #include <stdint.h>
 
 #include <list>
-#include <map>
 #include <memory>
+#include <optional>
 
-#include "base/callback_forward.h"
+#include "base/auto_reset.h"
 #include "base/compiler_specific.h"
-#include "base/feature_list.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/webrtc/rtc_base/thread.h"
+#include "third_party/webrtc_overrides/api/location.h"
 #include "third_party/webrtc_overrides/coalesced_tasks.h"
 
 namespace webrtc {
 
-// ThreadWrapper implements rtc::Thread interface on top of
+// ThreadWrapper implements webrtc::Thread interface on top of
 // Chromium's SingleThreadTaskRunner interface. Currently only the bare minimum
 // that is used by P2P part of libjingle is implemented. There are two ways to
 // create this object:
@@ -38,7 +39,7 @@ namespace webrtc {
 //   must pass a valid task runner for the current thread and also delete the
 //   wrapper later.
 class ThreadWrapper : public base::CurrentThread::DestructionObserver,
-                      public rtc::Thread {
+                      public webrtc::Thread {
  public:
   // A repeating callback whose TimeDelta argument indicates a duration sample.
   // What the duration represents is contextual.
@@ -53,7 +54,7 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
   // Creates ThreadWrapper for |task_runner| that runs tasks on the
   // current thread.
   static std::unique_ptr<ThreadWrapper> WrapTaskRunner(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      ::scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
   // Returns thread wrapper for the current thread or nullptr if it doesn't
   // exist.
@@ -67,7 +68,8 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
   //   it begins running.
   // * task duration is defined as the duration between the moment the
   //   ThreadWrapper begins running a task and the moment it ends
-  //   executing it. It only measures durations of tasks posted to rtc::Thread.
+  //   executing it. It only measures durations of tasks posted to
+  //   webrtc::Thread.
   // The passed callbacks are called in the ThreadWrapper's task runner
   // context.
   void SetLatencyAndTaskDurationCallbacks(
@@ -86,19 +88,10 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
   // need to call BlockingCall() for other threads.
   void set_send_allowed(bool allowed) { send_allowed_ = allowed; }
 
-  rtc::SocketServer* SocketServer();
+  webrtc::SocketServer* SocketServer();
 
   // CurrentThread::DestructionObserver implementation.
   void WillDestroyCurrentMessageLoop() override;
-
-  // TaskQueueBase overrides.
-  void PostTask(absl::AnyInvocable<void() &&> task) override;
-  void PostDelayedTask(absl::AnyInvocable<void() &&> task,
-                       webrtc::TimeDelta delay) override;
-  void PostDelayedHighPrecisionTask(absl::AnyInvocable<void() &&> task,
-                                    webrtc::TimeDelta delay) override;
-
-  void BlockingCall(rtc::FunctionView<void()> functor) override;
 
   // Following methods are not supported. They are overriden just to
   // ensure that they are not called (each of them contain NOTREACHED
@@ -109,7 +102,7 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
   void Restart() override;
   int GetDelay() override;
 
-  // rtc::Thread overrides.
+  // webrtc::Thread overrides.
   void Stop() override;
   void Run() override;
 
@@ -118,7 +111,19 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
   class PostTaskLatencySampler;
 
   explicit ThreadWrapper(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      ::scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+
+  // webrtc::Thread overrides.
+  void BlockingCallImpl(webrtc::FunctionView<void()> functor,
+                        const webrtc::Location& location) override;
+  // TaskQueueBase overrides.
+  void PostTaskImpl(absl::AnyInvocable<void() &&> task,
+                    const PostTaskTraits& traits,
+                    const Location& location) override;
+  void PostDelayedTaskImpl(absl::AnyInvocable<void() &&> task,
+                           TimeDelta delay,
+                           const PostDelayedTaskTraits& traits,
+                           const Location& location) override;
 
   void ProcessPendingSends();
 
@@ -129,19 +134,21 @@ class ThreadWrapper : public base::CurrentThread::DestructionObserver,
 
   // Called before a task runs, returns an opaque optional timestamp which
   // should be passed into FinalizeRunTask.
-  absl::optional<base::TimeTicks> PrepareRunTask();
+  std::optional<base::TimeTicks> PrepareRunTask();
   // Called after a task has run. Move the return value of PrepareRunTask as
   // |task_start_timestamp|.
-  void FinalizeRunTask(absl::optional<base::TimeTicks> task_start_timestamp);
+  void FinalizeRunTask(std::optional<base::TimeTicks> task_start_timestamp);
+
+  const base::AutoReset<ThreadWrapper*> resetter_;
 
   // Task runner used to execute messages posted on this thread.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  ::scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   bool send_allowed_;
 
   // |lock_| must be locked when accessing |pending_send_messages_|.
   base::Lock lock_;
-  std::list<PendingSend*> pending_send_messages_;
+  std::list<raw_ptr<PendingSend, CtnExperimental>> pending_send_messages_;
   base::WaitableEvent pending_send_event_;
   std::unique_ptr<PostTaskLatencySampler> latency_sampler_;
   SampledDurationCallback task_latency_callback_;

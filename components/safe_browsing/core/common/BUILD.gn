@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/features.gni")
 import("//components/safe_browsing/buildflags.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
@@ -12,11 +11,13 @@ static_library("safe_browsing_prefs") {
     "safe_browsing_prefs.h",
   ]
 
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
   deps = [
-    ":common",
-    "//components/pref_registry:pref_registry",
+    ":features",
+    "//components/pref_registry",
     "//components/prefs",
-    "//net:net",
+    "//net",
   ]
 
   public_deps = [ "//base" ]
@@ -28,9 +29,11 @@ source_set("safe_browsing_policy_handler") {
     "safe_browsing_policy_handler.h",
   ]
 
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
   deps = [
     ":safe_browsing_prefs",
-    "//base:base",
+    "//base",
     "//components/policy:generated",
     "//components/policy/core/browser",
     "//components/prefs",
@@ -41,60 +44,91 @@ source_set("safe_browsing_policy_handler") {
 source_set("unit_tests") {
   testonly = true
   sources = [
-    "features_unittest.cc",
     "safe_browsing_policy_handler_unittest.cc",
     "safe_browsing_prefs_unittest.cc",
-    "utils_unittest.cc",
+    "scheme_logger_unittest.cc",
   ]
 
   deps = [
     ":common",
     ":safe_browsing_policy_handler",
     ":safe_browsing_prefs",
-    "//base:base",
+    "//base",
     "//base/test:test_support",
-    "//components/policy/core/browser:browser",
+    "//components/policy/core/browser",
     "//components/policy/core/browser:test_support",
     "//components/prefs:test_support",
     "//testing/gtest",
-    "//url:url",
+    "//url",
   ]
+  if (is_ios) {
+    deps += [ "//components/test:safe_browsing_test_bundle_data" ]
+  }
 }
 
 source_set("common") {
   sources = [
-    "features.cc",
-    "features.h",
+    "safe_browsing_settings_metrics.cc",
+    "safe_browsing_settings_metrics.h",
     "safebrowsing_constants.cc",
     "safebrowsing_constants.h",
+    "safebrowsing_referral_methods.h",
     "safebrowsing_switches.cc",
     "safebrowsing_switches.h",
+    "scheme_logger.cc",
+    "scheme_logger.h",
     "utils.cc",
     "utils.h",
     "web_ui_constants.cc",
     "web_ui_constants.h",
   ]
 
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
-    "//components/policy/core/browser:browser",
-    "//components/prefs:prefs",
+    "//components/policy/core/browser",
+    "//components/prefs",
     "//components/safe_browsing:buildflags",
+    "//components/safe_browsing/core/browser/db:v4_protocol_manager_util",
     "//components/safe_browsing/core/common/proto:csd_proto",
+    "//components/security_interstitials/core:unsafe_resource",
     "//components/variations",
-    "//crypto:crypto",
+    "//crypto",
     "//ipc",
     "//net",
+    "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//url/ipc:url_ipc",
   ]
 
-  public_deps = [ ":interfaces" ]
+  public_deps = [
+    ":features",
+    ":interfaces",
+    ":threat_enums",
+  ]
+}
+
+source_set("features") {
+  sources = [
+    "features.cc",
+    "features.h",
+  ]
+
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
+  deps = [
+    "//base",
+    "//components/safe_browsing:buildflags",
+  ]
 }
 
 mojom("interfaces") {
   sources = [ "safe_browsing_url_checker.mojom" ]
 
   public_deps = [ "//url/mojom:url_mojom_gurl" ]
+}
+
+source_set("threat_enums") {
+  sources = [ "threat_enums.h" ]
 }

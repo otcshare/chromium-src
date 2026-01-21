@@ -6,44 +6,47 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
-#include "chrome/browser/ash/app_mode/certificate_manager_dialog.h"
-#include "chrome/browser/ash/app_mode/kiosk_app_manager.h"
-#include "chrome/browser/ash/login/auth/chrome_login_performer.h"
-#include "chrome/browser/ash/login/chrome_restart_request.h"
-#include "chrome/browser/ash/login/ui/captive_portal_window_proxy.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ash/login/ui/login_display_host_mojo.h"
-#include "chrome/browser/ash/login/ui/webui_login_view.h"
+#include "chrome/browser/ash/login/existing_user_controller.h"
+#include "chrome/browser/ash/login/screens/app_launch_splash_screen.h"
+#include "chrome/browser/ash/login/screens/connectivity_diagnostics_dialog.h"
+#include "chrome/browser/ash/login/signin_specifics.h"
+#include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/webui/ash/connectivity_diagnostics_dialog.h"
-#include "chrome/browser/ui/webui/ash/internet_detail_dialog.h"
-#include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
+#include "chrome/browser/ui/ash/login/captive_portal_window_proxy.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/ash/login/login_display_host_mojo.h"
+#include "chrome/browser/ui/ash/login/login_web_dialog.h"
+#include "chrome/browser/ui/ash/login/webui_login_view.h"
+#include "chrome/browser/ui/webui/ash/internet/internet_detail_dialog.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/network_state_informer.h"
 #include "chrome/browser/ui/webui/ash/login/offline_login_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/signin_screen_handler.h"
 #include "chrome/grit/browser_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_connection_handler.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/dbus/power/power_manager_client.h"
-#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_names.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ash {
 
@@ -64,9 +67,8 @@ bool g_offline_login_per_user_allowed_ = true;
 // Returns the current running kiosk app profile in a kiosk session. Otherwise,
 // returns nullptr.
 Profile* GetAppProfile() {
-  return chrome::IsRunningInForcedAppMode()
-             ? ProfileManager::GetActiveUserProfile()
-             : nullptr;
+  return IsRunningInForcedAppMode() ? ProfileManager::GetActiveUserProfile()
+                                    : nullptr;
 }
 
 }  // namespace
@@ -100,36 +102,54 @@ ErrorScreen::~ErrorScreen() {
 }
 
 void ErrorScreen::AllowGuestSignin(bool allowed) {
-  if (view_)
+  if (view_) {
     view_->SetGuestSigninAllowed(allowed);
+  }
+}
+
+void ErrorScreen::DisallowOfflineLogin() {
+  ShowOfflineLoginOption(false);
 }
 
 void ErrorScreen::ShowOfflineLoginOption(bool show) {
-  if (view_)
+  is_offline_login_link_shown_ = show;
+  if (view_) {
     view_->SetOfflineSigninAllowed(show);
+  }
 }
 
 void ErrorScreen::OnOfflineLoginClicked() {
+  CHECK(is_offline_login_link_shown_)
+      << "Offline login option selected, while it shall not be displayed.";
   // Reset hide callback as we advance to OfflineLoginScreen. Exit from this
   // screen is handled by WizardController.
-  // TODO(https://crbug.com/1199816, dkuzmin): Use exit_callback_ once available
   on_hide_callback_ = base::OnceClosure();
   Hide();
   LoginDisplayHost::default_host()->StartWizard(OfflineLoginView::kScreenId);
 }
 
+// static
 void ErrorScreen::AllowOfflineLogin(bool allowed) {
   g_offline_login_allowed_ = allowed;
 }
 
+// static
 void ErrorScreen::AllowOfflineLoginPerUser(bool allowed) {
   g_offline_login_per_user_allowed_ = allowed;
 }
 
 void ErrorScreen::FixCaptivePortal() {
+  const std::string network_path = network_state_informer_->network_path();
+  const std::string network_name =
+      NetworkStateInformer::GetNetworkName(network_path);
+  const auto state = network_state_informer_->state();
+  if (network_name.empty() || state != NetworkStateInformer::CAPTIVE_PORTAL) {
+    LOG(ERROR) << __func__ << " without network in a portalled state.";
+    return;
+  }
   MaybeInitCaptivePortalWindowProxy(
       LoginDisplayHost::default_host()->GetOobeWebContents());
-  captive_portal_window_proxy_->ShowIfRedirected();
+  captive_portal_window_proxy_->ShowIfRedirected(network_name);
 }
 
 NetworkError::UIState ErrorScreen::GetUIState() const {
@@ -145,15 +165,17 @@ OobeScreenId ErrorScreen::GetParentScreen() const {
 }
 
 void ErrorScreen::HideCaptivePortal() {
-  if (captive_portal_window_proxy_.get())
+  if (captive_portal_window_proxy_.get()) {
     captive_portal_window_proxy_->Close();
+  }
 }
 
 void ErrorScreen::SetUIState(NetworkError::UIState ui_state) {
   LOG(WARNING) << __func__ << " to " << ui_state;
   ui_state_ = ui_state;
-  if (view_)
+  if (view_) {
     view_->SetUIState(ui_state);
+  }
 }
 
 void ErrorScreen::SetErrorState(NetworkError::ErrorState error_state,
@@ -176,20 +198,29 @@ void ErrorScreen::SetHideCallback(base::OnceClosure on_hide) {
 }
 
 void ErrorScreen::ShowCaptivePortal() {
+  const std::string network_path = network_state_informer_->network_path();
+  const std::string network_name =
+      NetworkStateInformer::GetNetworkName(network_path);
+  const auto state = network_state_informer_->state();
+  if (network_name.empty() || state != NetworkStateInformer::CAPTIVE_PORTAL) {
+    LOG(ERROR) << __func__ << " without network in a portalled state.";
+    return;
+  }
+
   // This call is an explicit user action
   // i.e. clicking on link so force dialog show.
   FixCaptivePortal();
-  captive_portal_window_proxy_->Show();
+  captive_portal_window_proxy_->Show(network_name);
 }
 
 void ErrorScreen::ShowConnectingIndicator(bool show) {
-  if (view_)
+  if (view_) {
     view_->SetShowConnectingIndicator(show);
+  }
 }
 
 void ErrorScreen::SetIsPersistentError(bool is_persistent) {
-  if (view_)
-    view_->SetIsPersistentError(is_persistent);
+  is_persistent_ = is_persistent;
 }
 
 base::CallbackListSubscription ErrorScreen::RegisterConnectRequestCallback(
@@ -205,21 +236,26 @@ void ErrorScreen::MaybeInitCaptivePortalWindowProxy(
   }
 }
 
-void ErrorScreen::ShowNetworkErrorMessage(NetworkStateInformer::State state,
-                                          NetworkError::ErrorReason reason) {
-  LOG(WARNING) << __func__ << " state = " << state << " reason = " << reason;
+void ErrorScreen::ShowNetworkErrorMessage(
+    NetworkStateInformer::State state,
+    NetworkError::ErrorReason reason,
+    bool show_offline_login_option_if_allowed) {
+  LOG(WARNING) << __func__ << " state = " << state << " reason = " << reason
+               << " show_offline_login_option_if_allowed = "
+               << show_offline_login_option_if_allowed;
   const std::string network_path = network_state_informer_->network_path();
   const std::string network_name =
       NetworkStateInformer::GetNetworkName(network_path);
 
   const bool is_behind_captive_portal =
-      NetworkStateInformer::IsBehindCaptivePortal(state, reason);
+      state == NetworkStateInformer::CAPTIVE_PORTAL;
   const bool is_proxy_error = NetworkStateInformer::IsProxyError(state, reason);
   const bool is_loading_timeout =
       (reason == NetworkError::ERROR_REASON_LOADING_TIMEOUT);
 
-  if (!is_behind_captive_portal)
+  if (!is_behind_captive_portal) {
     HideCaptivePortal();
+  }
 
   if (is_proxy_error) {
     SetErrorState(NetworkError::ERROR_STATE_PROXY, std::string());
@@ -229,7 +265,7 @@ void ErrorScreen::ShowNetworkErrorMessage(NetworkStateInformer::State state,
     }
     SetErrorState(NetworkError::ERROR_STATE_PORTAL, network_name);
   } else if (is_loading_timeout) {
-    SetErrorState(NetworkError::ERROR_STATE_AUTH_EXT_TIMEOUT, network_name);
+    SetErrorState(NetworkError::ERROR_STATE_LOADING_TIMEOUT, network_name);
   } else {
     SetErrorState(NetworkError::ERROR_STATE_OFFLINE, std::string());
   }
@@ -239,12 +275,13 @@ void ErrorScreen::ShowNetworkErrorMessage(NetworkStateInformer::State state,
   AllowGuestSignin(guest_signin_allowed);
   ShowOfflineLoginOption(
       g_offline_login_allowed_ && g_offline_login_per_user_allowed_ &&
-      GetErrorState() != NetworkError::ERROR_STATE_AUTH_EXT_TIMEOUT);
+      GetErrorState() != NetworkError::ERROR_STATE_LOADING_TIMEOUT &&
+      show_offline_login_option_if_allowed);
 
   // No need to show the screen again if it is already shown.
   if (is_hidden()) {
     SetUIState(NetworkError::UI_STATE_SIGNIN);
-    Show(nullptr /*wizard_context*/);
+    Show(/*wizard_context=*/nullptr);
   }
 }
 
@@ -253,18 +290,21 @@ void ErrorScreen::ShowImpl() {
     SetHideCallback(base::BindOnce(&ErrorScreen::DefaultHideCallback,
                                    weak_factory_.GetWeakPtr()));
   }
-  if (!view_)
+  if (!view_) {
     return;
+  }
 
-  view_->Show();
+  const bool is_closeable = LoginDisplayHost::default_host() &&
+                            LoginDisplayHost::default_host()->HasUserPods() &&
+                            !is_persistent_;
+  view_->ShowScreenWithParam(is_closeable);
   LOG(WARNING) << "Network error screen message is shown";
-  session_manager::SessionManager::Get()->NotifyNetworkErrorScreenShown();
-  NetworkHandler::Get()->network_state_handler()->RequestPortalDetection();
 }
 
 void ErrorScreen::HideImpl() {
-  if (!view_ || is_hidden())
+  if (!view_ || is_hidden()) {
     return;
+  }
 
   LOG(WARNING) << "Network error screen message is hidden";
   if (on_hide_callback_) {
@@ -310,42 +350,10 @@ void ErrorScreen::OnUserAction(const base::Value::List& args) {
   }
 }
 
-void ErrorScreen::OnAuthFailure(const AuthFailure& error) {
-  // The only condition leading here is guest mount failure, which should not
-  // happen in practice. For now, just log an error so this situation is visible
-  // in logs if it ever occurs.
-  NOTREACHED() << "Guest login failed.";
-  guest_login_performer_.reset();
-}
-
-void ErrorScreen::OnAuthSuccess(const UserContext& user_context) {
-  LOG(FATAL);
-}
-
-void ErrorScreen::OnOffTheRecordAuthSuccess() {
-  // Restart Chrome to enter the guest session.
-  const base::CommandLine& browser_command_line =
-      *base::CommandLine::ForCurrentProcess();
-  base::CommandLine command_line(browser_command_line.GetProgram());
-  GetOffTheRecordCommandLine(GURL(), browser_command_line, &command_line);
-  RestartChrome(command_line, RestartChromeReason::kGuest);
-}
-
-void ErrorScreen::OnPasswordChangeDetected(const UserContext& user_context) {
-  LOG(FATAL);
-}
-
-void ErrorScreen::AllowlistCheckFailed(const std::string& email) {
-  LOG(FATAL);
-}
-
-void ErrorScreen::PolicyLoadFailed() {
-  LOG(FATAL);
-}
-
 void ErrorScreen::DefaultHideCallback() {
-  if (parent_screen_ != OOBE_SCREEN_UNKNOWN && view_)
+  if (parent_screen_ != OOBE_SCREEN_UNKNOWN && view_) {
     view_->ShowOobeScreen(parent_screen_);
+  }
 
   // TODO(antrim): Due to potential race with GAIA reload and hiding network
   // error UI we can't just reset parent screen to SCREEN_UNKNOWN here.
@@ -354,13 +362,19 @@ void ErrorScreen::DefaultHideCallback() {
 void ErrorScreen::OnConfigureCerts() {
   gfx::NativeWindow native_window =
       LoginDisplayHost::default_host()->GetNativeWindow();
-  CertificateManagerDialog* dialog =
-      new CertificateManagerDialog(GetAppProfile(), native_window);
+  LoginWebDialog* dialog = new LoginWebDialog(
+      GetAppProfile(), native_window,
+      l10n_util::GetStringUTF16(IDS_CERTIFICATE_MANAGER_TITLE),
+      GURL(chrome::kChromeUICertificateManagerDialogURL));
+  // The width matches the Settings UI width.
+  dialog->set_dialog_size(gfx::Size{640, 480});
   dialog->Show();
 }
 
 void ErrorScreen::OnDiagnoseButtonClicked() {
-  ConnectivityDiagnosticsDialog::ShowDialog();
+  gfx::NativeWindow native_window =
+      LoginDisplayHost::default_host()->GetNativeWindow();
+  ConnectivityDiagnosticsDialog::ShowDialog(native_window);
 }
 
 void ErrorScreen::OnLaunchOobeGuestSession() {
@@ -389,10 +403,9 @@ void ErrorScreen::OnReloadGaiaClicked() {
 
 void ErrorScreen::OnContinueAppLaunchButtonClicked() {
   DCHECK_EQ(parent_screen_, AppLaunchSplashScreenView::kScreenId.AsId());
-  // TODO(https://crbug.com/1199816, dkuzmin): Use exit_callback_ once
-  // available
-  auto* oobe_ui = LoginDisplayHost::default_host()->GetOobeUI();
-  oobe_ui->GetView<AppLaunchSplashScreenHandler>()->ContinueAppLaunch();
+  WizardController::default_controller()
+      ->GetScreen<AppLaunchSplashScreen>()
+      ->ContinueAppLaunch();
 }
 
 void ErrorScreen::LaunchHelpApp(int help_topic_id) {
@@ -404,8 +417,11 @@ void ErrorScreen::LaunchHelpApp(int help_topic_id) {
       static_cast<HelpAppLauncher::HelpTopic>(help_topic_id));
 }
 
-void ErrorScreen::ConnectToNetworkRequested(const std::string& service_path) {
+ConnectToNetworkRequestVerdict ErrorScreen::ConnectToNetworkRequested(
+    const std::string& service_path) {
   connect_request_callbacks_.Notify();
+
+  return ConnectToNetworkRequestVerdict::kProceed;
 }
 
 void ErrorScreen::StartGuestSessionAfterOwnershipCheck(
@@ -421,25 +437,36 @@ void ErrorScreen::StartGuestSessionAfterOwnershipCheck(
       return;
     case CrosSettingsProvider::PERMANENTLY_UNTRUSTED:
       // Only allow guest sessions if there is no owner yet.
-      if (ownership_status == DeviceSettingsService::OWNERSHIP_NONE)
+      if (ownership_status ==
+          DeviceSettingsService::OwnershipStatus::kOwnershipNone) {
         break;
+      }
       return;
     case CrosSettingsProvider::TRUSTED: {
       // Honor kAccountsPrefAllowGuest.
       bool allow_guest = false;
       CrosSettings::Get()->GetBoolean(kAccountsPrefAllowGuest, &allow_guest);
-      if (allow_guest)
+      if (allow_guest) {
         break;
+      }
       return;
     }
   }
 
-  if (guest_login_performer_)
+  // If EULA was not accepted yet, Show the Guest ToS screen.
+  if (!StartupUtils::IsEulaAccepted()) {
+    if (LoginDisplayHost::default_host()) {
+      LoginDisplayHost::default_host()->ShowGuestTosScreen();
+    } else {
+      LOG(ERROR) << "Failed to show Guest ToS screen.";
+    }
     return;
+  }
 
-  guest_login_performer_ =
-      std::make_unique<ChromeLoginPerformer>(this, AuthMetricsRecorder::Get());
-  guest_login_performer_->LoginOffTheRecord();
+  LoginDisplayHost::default_host()->GetExistingUserController()->Login(
+      UserContext(user_manager::UserType::kGuest,
+                  user_manager::GuestAccountId()),
+      SigninSpecifics());
 }
 
 }  // namespace ash

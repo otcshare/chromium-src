@@ -47,19 +47,18 @@ class MEDIA_EXPORT NullAudioSink : public SwitchableAudioRendererSink {
   void StartAudioHashForTesting();
 
   // Returns the hash of all audio frames seen since construction.
-  std::string GetAudioHashForTesting();
-
- protected:
-  ~NullAudioSink() override;
+  const AudioHash& GetAudioHashForTesting() const;
 
  private:
+  ~NullAudioSink() override;
+
   // Task that periodically calls Render() to consume audio data.
   void CallRender(base::TimeTicks ideal_time, base::TimeTicks now);
 
   bool initialized_;
   bool started_;
   bool playing_;
-  raw_ptr<RenderCallback> callback_;
+  raw_ptr<RenderCallback, DanglingUntriaged> callback_;
 
   // Controls whether or not a running hash is computed for audio frames.
   std::unique_ptr<AudioHash> audio_hash_;

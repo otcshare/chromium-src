@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -12,13 +14,11 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -77,7 +77,8 @@ void CheckJSONIsStillTheSame(const Value& value) {
 }
 
 void ValidateJsonList(const std::string& json) {
-  absl::optional<Value> value = JSONReader::Read(json);
+  std::optional<Value> value =
+      JSONReader::Read(json, JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value);
   Value::List* list = value->GetIfList();
   ASSERT_TRUE(list);
@@ -103,11 +104,11 @@ TEST(JSONValueDeserializerTest, ReadProperJSONFromString) {
   CheckJSONIsStillTheSame(*value);
 }
 
-// Test proper JSON deserialization from a StringPiece substring.
+// Test proper JSON deserialization from a std::string_view substring.
 TEST(JSONValueDeserializerTest, ReadProperJSONFromStringPiece) {
-  // Create a StringPiece for the substring of kProperJSONPadded that matches
-  // kProperJSON.
-  StringPiece proper_json(kProperJSONPadded);
+  // Create a std::string_view for the substring of kProperJSONPadded that
+  // matches kProperJSON.
+  std::string_view proper_json(kProperJSONPadded);
   proper_json = proper_json.substr(5, proper_json.length() - 10);
   JSONStringValueDeserializer str_deserializer(proper_json);
 
@@ -370,7 +371,8 @@ TEST(JSONValueSerializerTest, JSONReaderComments) {
   ValidateJsonList("[ 1 //// ,2\r\n ]");
 
   // It's ok to have a comment in a string.
-  absl::optional<Value> value = JSONReader::Read("[\"// ok\\n /* foo */ \"]");
+  std::optional<Value> value = JSONReader::Read("[\"// ok\\n /* foo */ \"]",
+                                                JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value);
   Value::List* list = value->GetIfList();
   ASSERT_TRUE(list);
@@ -380,10 +382,11 @@ TEST(JSONValueSerializerTest, JSONReaderComments) {
   ASSERT_EQ("// ok\n /* foo */ ", elt.GetString());
 
   // You can't nest comments.
-  ASSERT_FALSE(JSONReader::Read("/* /* inner */ outer */ [ 1 ]"));
+  ASSERT_FALSE(JSONReader::Read("/* /* inner */ outer */ [ 1 ]",
+                                JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Not a open comment token.
-  ASSERT_FALSE(JSONReader::Read("/ * * / [1]"));
+  ASSERT_FALSE(JSONReader::Read("/ * * / [1]", JSON_PARSE_CHROMIUM_EXTENSIONS));
 }
 
 class JSONFileValueSerializerTest : public testing::Test {

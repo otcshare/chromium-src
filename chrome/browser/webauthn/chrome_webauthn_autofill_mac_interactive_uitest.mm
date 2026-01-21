@@ -2,31 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/password_manager/chrome_webauthn_credentials_delegate.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl.h"
+#include "chrome/browser/ui/autofill/autofill_popup_controller_impl_test_api.h"
+#include "chrome/browser/ui/autofill/autofill_suggestion_controller.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+#include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/ui/popup_item_ids.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/password_manager/core/browser/password_ui_utils.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "device/fido/features.h"
 #include "device/fido/mac/credential_store.h"
 #include "device/fido/mac/scoped_touch_id_test_environment.h"
-#include "device/fido/public_key_credential_user_entity.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -91,8 +94,6 @@ class WebAuthnMacAutofillIntegrationTest : public CertVerifierBrowserTest {
     touch_id_test_environment_->SimulateTouchIdPromptSuccess();
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kWebAuthConditionalUI};
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
   device::fido::mac::AuthenticatorConfig config_;
   std::unique_ptr<device::fido::mac::ScopedTouchIdTestEnvironment>
@@ -107,8 +108,8 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMacAutofillIntegrationTest, SelectAccount) {
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   autofill::ChromeAutofillClient* autofill_client =
-      autofill::ChromeAutofillClient::FromWebContents(web_contents);
-  autofill_client->KeepPopupOpenForTesting();
+      autofill::ChromeAutofillClient::FromWebContentsForTesting(web_contents);
+  autofill_client->SetKeepPopupOpenForTesting(true);
 
   // Execute the Conditional UI request.
   content::DOMMessageQueue message_queue(web_contents);
@@ -117,32 +118,37 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMacAutofillIntegrationTest, SelectAccount) {
   // Interact with the username field until the popup shows up. This has the
   // effect of waiting for the browser to send the renderer the password
   // information, and waiting for the UI to render.
-  base::WeakPtr<autofill::AutofillPopupController> popup_controller;
-  while (!popup_controller) {
+  base::WeakPtr<autofill::AutofillSuggestionController> controller;
+  base::TimeTicks start_time = base::TimeTicks::Now();
+  while (!controller ||
+         std::ranges::count(controller->GetSuggestions(),
+                            autofill::SuggestionType::kWebauthnCredential,
+                            &autofill::Suggestion::type) == 0) {
+    if (base::TimeTicks::Now() - start_time > base::Seconds(2)) {
+      ASSERT_TRUE(controller) << "Timed out waiting for suggestion popup.";
+      FAIL() << "Timed out waiting for WebAuthn suggestion in popup.";
+    }
     content::SimulateMouseClickOrTapElementWithId(web_contents, "username");
-    popup_controller = autofill_client->popup_controller_for_testing();
+    controller = autofill_client->suggestion_controller_for_testing();
   }
 
-  auto suggestions = popup_controller->GetSuggestions();
-  size_t suggestion_index;
-  autofill::Suggestion webauthn_entry;
-  for (suggestion_index = 0; suggestion_index < suggestions.size();
-       ++suggestion_index) {
-    if (suggestions[suggestion_index].frontend_id ==
-        autofill::PopupItemId::POPUP_ITEM_ID_WEBAUTHN_CREDENTIAL) {
-      webauthn_entry = suggestions[suggestion_index];
-      break;
-    }
-  }
-  ASSERT_LT(suggestion_index, suggestions.size()) << "WebAuthn entry not found";
-  EXPECT_EQ(webauthn_entry.main_text.value, u"flandre");
-  EXPECT_EQ(webauthn_entry.labels.at(0).at(0).value,
+  std::vector<autofill::Suggestion> suggestions = controller->GetSuggestions();
+  auto it = std::ranges::find(suggestions,
+                              autofill::SuggestionType::kWebauthnCredential,
+                              &autofill::Suggestion::type);
+  ASSERT_NE(it, suggestions.end()) << "WebAuthn entry not found";
+  EXPECT_EQ(it->main_text.value, u"flandre");
+  EXPECT_EQ(it->labels.at(0).at(0).value,
             l10n_util::GetStringUTF16(
-                password_manager::GetPlatformAuthenticatorLabel()));
-  EXPECT_EQ(webauthn_entry.icon, "globeIcon");
+                IDS_PASSWORD_MANAGER_PASSKEY_FROM_CHROME_PROFILE));
+  EXPECT_EQ(it->icon, autofill::Suggestion::Icon::kGlobe);
 
   // Click the credential.
-  popup_controller->AcceptSuggestion(suggestion_index);
+  test_api(static_cast<autofill::AutofillPopupControllerImpl&>(*controller))
+      .DisableThreshold(true);
+  controller->AcceptSuggestion(
+      it - suggestions.begin(),
+      autofill::AutofillMetrics::SuggestionAcceptedMethod::kMouse);
   std::string result;
   ASSERT_TRUE(message_queue.WaitForMessage(&result));
   EXPECT_EQ(result, "\"webauthn: OK\"");

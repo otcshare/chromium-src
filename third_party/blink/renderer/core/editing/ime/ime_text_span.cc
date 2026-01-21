@@ -27,7 +27,6 @@ ImeTextSpan::Type ConvertUiTypeToType(ui::ImeTextSpan::Type type) {
   }
 
   NOTREACHED();
-  return ImeTextSpan::Type::kComposition;
 }
 
 ImeTextSpan::ImeTextSpan(Type type,
@@ -41,7 +40,8 @@ ImeTextSpan::ImeTextSpan(Type type,
                          const Color& suggestion_highlight_color,
                          bool remove_on_finish_composing,
                          bool interim_char_selection,
-                         const Vector<String>& suggestions)
+                         const Vector<String>& suggestions,
+                         bool should_hide_suggestion_menu)
     : type_(type),
       underline_color_(underline_color),
       thickness_(thickness),
@@ -51,7 +51,8 @@ ImeTextSpan::ImeTextSpan(Type type,
       suggestion_highlight_color_(suggestion_highlight_color),
       remove_on_finish_composing_(remove_on_finish_composing),
       interim_char_selection_(interim_char_selection),
-      suggestions_(suggestions) {
+      suggestions_(suggestions),
+      should_hide_suggestion_menu_(should_hide_suggestion_menu) {
   // Sanitize offsets by ensuring a valid range corresponding to the last
   // possible position.
   // TODO(wkorman): Consider replacing with DCHECK_LT(startOffset, endOffset).
@@ -94,7 +95,6 @@ ui::mojom::ImeTextSpanThickness ConvertUiThicknessToThickness(
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanThickness::kNone;
 }
 
 ui::mojom::ImeTextSpanUnderlineStyle ConvertUiUnderlineToUnderline(
@@ -113,7 +113,6 @@ ui::mojom::ImeTextSpanUnderlineStyle ConvertUiUnderlineToUnderline(
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanUnderlineStyle::kNone;
 }
 
 ui::ImeTextSpan::Type ConvertImeTextSpanTypeToUiType(ImeTextSpan::Type type) {
@@ -146,13 +145,15 @@ ImeTextSpan::ImeTextSpan(const ui::ImeTextSpan& ime_text_span)
                   ime_text_span.remove_on_finish_composing,
                   ime_text_span.interim_char_selection,
                   ConvertStdVectorOfStdStringsToVectorOfStrings(
-                      ime_text_span.suggestions)) {}
+                      ime_text_span.suggestions),
+                  ime_text_span.should_hide_suggestion_menu) {}
 
 ui::ImeTextSpan ImeTextSpan::ToUiImeTextSpan() {
   auto span = ui::ImeTextSpan(ConvertImeTextSpanTypeToUiType(GetType()),
                               StartOffset(), EndOffset());
   span.suggestions =
       ConvertVectorOfStringsToStdVectorOfStdStrings(Suggestions());
+  span.should_hide_suggestion_menu = should_hide_suggestion_menu_;
   return span;
 }
 

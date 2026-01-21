@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/services/secure_channel/public/cpp/client/connection_attempt_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/client_channel_impl.h"
 
@@ -47,9 +47,12 @@ void ConnectionAttemptImpl::OnConnectionAttemptFailure(
 
 void ConnectionAttemptImpl::OnConnection(
     mojo::PendingRemote<mojom::Channel> channel,
-    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver) {
+    mojo::PendingReceiver<mojom::MessageReceiver> message_receiver_receiver,
+    mojo::PendingReceiver<mojom::NearbyConnectionStateListener>
+        nearby_connection_state_listener_receiver) {
   NotifyConnection(ClientChannelImpl::Factory::Create(
-      std::move(channel), std::move(message_receiver_receiver)));
+      std::move(channel), std::move(message_receiver_receiver),
+      std::move(nearby_connection_state_listener_receiver)));
 }
 
 }  // namespace ash::secure_channel

@@ -64,6 +64,41 @@
         "enum": ["off", "characters", "words", "sentences"]
       },
       {
+        "id": "LanguagePackStatus",
+        "type": "string",
+        "description": "The aggregated status of all language packs for a given input method.",
+        "enum": [
+          // This should only be used when we have uninitialised data.
+          "unknown",
+          "notInstalled",
+          "inProgress",
+          // If there are no language packs associated with an input method,
+          // such as for input methods which aren't Google 1P, installed is
+          // returned.
+          "installed",
+          "errorOther",
+          "errorNeedsReboot"
+        ]
+      },
+      {
+        "id": "LanguagePackStatusChange",
+        "type": "object",
+        "description": "Object returned by callbacks when the status of language packs change.",
+        "properties": {
+          "engineIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All engine IDs for which this language pack status change applies to."
+          },
+          "status": {
+            "$ref": "LanguagePackStatus",
+            "description": "The new language pack status."
+          }
+        }
+      },
+      {
         "id": "InputContext",
         "type": "object",
         "description": "Describes an input Context",
@@ -77,26 +112,129 @@
           "spellCheck": {"type": "boolean", "description": "Whether the text field wants spell-check."},
           "shouldDoLearning": {"type": "boolean", "description": "Whether text entered into the text field should be used to improve typing suggestions for the user."},
           "focusReason": {"$ref": "FocusReason", "description": "How the text field was focused"},
-          "hasBeenPassword": {"type": "boolean", "description": "Whether the text field has ever been a password field."},
           "appKey": {"type": "string", "optional": true, "description": "Key of the app associated with this text field if any."}
         }
       },
       {
+        "id": "JapaneseInputMode",
+        "type": "string",
+        "description": "Japanese IME: input mode. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["Kana", "Romaji"]
+      },
+      {
+        "id": "JapanesePunctuationStyle",
+        "type": "string",
+        "description": "Japanese IME: punctuation style. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["KutenTouten", "CommaPeriod", "KutenPeriod", "CommaTouten"]
+      },
+      {
+        "id": "JapaneseSymbolStyle",
+        "type": "string",
+        "description": "Japanese IME: symbol style. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["CornerBracketMiddleDot", "SquareBracketSlash", "CornerBracketSlash", "SquareBracketMiddleDot"]
+      },
+      {
+        "id": "JapaneseSpaceInputStyle",
+        "type": "string",
+        "description": "Japanese IME: space input style. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["InputMode", "Fullwidth", "Halfwidth"]
+      },
+      {
+        "id": "JapaneseSelectionShortcut",
+        "type": "string",
+        "description": "Japanese IME: selection shortcut. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["NoShortcut", "Digits123456789", "ASDFGHJKL"]
+      },
+      {
+        "id": "JapaneseKeymapStyle",
+        "type": "string",
+        "description": "Japanese IME: keymap style. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["Atok", "MsIme", "Kotoeri", "ChromeOs"]
+      },
+      {
+        "id": "ShiftKeyModeStyle",
+        "type": "string",
+        "description": "Japanese IME: shift key mode switch. Enum values MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
+        "enum": ["Off", "Alphanumeric", "Katakana"]
+      },
+      {
         "id": "InputMethodSettings",
         "type": "object",
-        "description": "User preference settings for a specific input method. Japanese input methods are not included because they are managed separately by Mozc module.",
+        "description": "User preference settings for a specific input method. Entry names MUST match CrOS Settings @ https://crsrc.org/c/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts",
         "properties": {
           "enableCompletion": { "type": "boolean", "optional": true, "description": "Whether to enable auto completion."},
           "enableDoubleSpacePeriod": { "type": "boolean", "optional": true, "description": "Whether to auto transform double spaces to type period."},
           "enableGestureTyping": { "type": "boolean", "optional": true, "description": "Whether to enable gesture typing."},
           "enablePrediction": { "type": "boolean", "optional": true, "description": "Whether to enable word prediction."},
           "enableSoundOnKeypress": { "type": "boolean", "optional": true, "description": "Whether to enable sound on keypress."},
+          "physicalKeyboardAutoCorrectionEnabledByDefault": {"type": "boolean", "optional": true, "description": "Whether auto correction should be enabled for physical keyboard by default."},
           "physicalKeyboardAutoCorrectionLevel": { "type": "integer", "optional": true, "description": "The level of auto correction for physical keyboard (0: Off, 1: Modest, 2: Aggressive)."},
           "physicalKeyboardEnableCapitalization": { "type": "boolean", "optional": true, "description": "Whether to enable auto capitalization for physical keyboard."},
           "physicalKeyboardEnableDiacriticsOnLongpress": { "type": "boolean", "optional": true, "description": "Whether to enable diacritics on longpress for physical keyboard."},
+          "physicalKeyboardEnablePredictiveWriting" : {"type": "boolean", "optional": true, "description": "Whether to enable physical keyboard predictive writing"},
           "virtualKeyboardAutoCorrectionLevel": { "type": "integer", "optional": true, "description": "The level of auto correction for virtual keyboard (0: Off, 1: Modest, 2: Aggressive)."},
           "virtualKeyboardEnableCapitalization": { "type": "boolean", "optional": true, "description": "Whether enable auto capitalization for virtual keyboard."},
           "xkbLayout": { "type": "string", "optional": true, "description": "The xkb keyboard (system provided keyboard) layout."},
+          "JapaneseInputMode": {
+            "$ref": "JapaneseInputMode",
+            "optional": true,
+            "description": "Japanese IME: input mode."
+          },
+          "JapanesePunctuationStyle": {
+            "$ref": "JapanesePunctuationStyle",
+            "optional": true,
+            "description": "Japanese IME: punctuation style."
+          },
+          "JapaneseSymbolStyle": {
+            "$ref": "JapaneseSymbolStyle",
+            "optional": true,
+            "description": "Japanese IME: symbol style."
+          },
+          "JapaneseSpaceInputStyle": {
+            "$ref": "JapaneseSpaceInputStyle",
+            "optional": true,
+            "description": "Japanese IME: space input style."
+          },
+          "JapaneseSectionShortcut": {
+            "$ref": "JapaneseSelectionShortcut",
+            "optional": true,
+            "description": "Japanese IME: selection shortcut (NOTE: 'Section' in property name is a persisted typo)."
+          },
+          "JapaneseKeymapStyle": {
+            "$ref": "JapaneseKeymapStyle",
+            "optional": true,
+            "description": "Japanese IME: keymap style."
+          },
+          "AutomaticallySwitchToHalfwidth": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Japanese IME: Whether to switch to halfwidth automatically."
+          },
+          "ShiftKeyModeStyle": {
+            "$ref": "ShiftKeyModeStyle",
+            "optional": true,
+            "description": "Japanese IME: shift key mode switch."
+          },
+          "UseInputHistory": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Japanese IME: Whether to use input history for suggestions."
+          },
+          "UseSystemDictionary": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Japanese IME: Whether to use system dictionary for suggestions."
+          },
+          "numberOfSuggestions" : {
+            "type": "integer",
+            "optional": true,
+            "description": "Japanese IME: Number of suggestions."
+          },
+          "JapaneseDisableSuggestions": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Japanese IME: Whether to disable personalized conversions, suggestions, and user dictionary."
+          },
           "koreanEnableSyllableInput": { "type": "boolean", "optional": true, "description": "Whether input one syllable at a time in korean input method."},
           "koreanKeyboardLayout": { "type": "string", "optional": true, "description": "The layout of korean keyboard."},
           "koreanShowHangulCandidate": { "type": "boolean", "optional": true, "description": "Whether to show hangul candidates in korean input method."},
@@ -106,32 +244,21 @@
             "optional": true,
             "description": "User can use shortcuts to switch between Chinese and English quickly when using pinyin, this flag indicates whether the default language is Chinese."
           },
-          "pinyinEnableFuzzy": { "type": "boolean", "optional": true, "description": "Whether to enable fuzzy pinyin."},
           "pinyinEnableLowerPaging": { "type": "boolean", "optional": true, "description": "Whether to enable using ','/'.' to page up/down the candidates in pinyin."},
           "pinyinEnableUpperPaging": { "type": "boolean", "optional": true, "description": "Whether to enable using '-'/'=' to page up/down the candidates in pinyin."},
           "pinyinFullWidthCharacter": { "type": "boolean", "optional": true, "description": "Whether to output full width letters and digits in pinyin."},
-          "pinyinFuzzyConfig": {
-            "type": "object",
-            "optional": true,
-            "description": "The configuration of which fuzzy pairs are enable.",
-            "properties": {
-              "an_ang": {"type": "boolean", "optional": true, "description": "Whether to enable an_ang fuzzy"},
-              "c_ch": {"type": "boolean", "optional": true, "description": "Whether to enable c_ch fuzzy"},
-              "en_eng": {"type": "boolean", "optional": true, "description": "Whether to enable en_eng fuzzy"},
-              "f_h": {"type": "boolean", "optional": true, "description": "Whether to enable f_h fuzzy"},
-              "ian_iang": {"type": "boolean", "optional": true, "description": "Whether to enable ian_iang fuzzy"},
-              "in_ing": {"type": "boolean", "optional": true, "description": "Whether to enable in_ing fuzzy"},
-              "k_g": {"type": "boolean", "optional": true, "description": "Whether to enable k_g fuzzy"},
-              "l_n": {"type": "boolean", "optional": true, "description": "Whether to enable l_n fuzzy"},
-              "r_l": {"type": "boolean", "optional": true, "description": "Whether to enable r_l fuzzy"},
-              "s_sh": {"type": "boolean", "optional": true, "description": "Whether to enable s_sh fuzzy"},
-              "uan_uang": {"type": "boolean", "optional": true, "description": "Whether to enable uan_uang fuzzy"},
-              "z_zh": {"type": "boolean", "optional": true, "description": "Whether to enable z_zh fuzzy"}
-            }
-          },
           "zhuyinKeyboardLayout": { "type": "string", "optional": true, "description": "The layout of zhuyin keyboard."},
           "zhuyinPageSize": { "type": "integer", "optional": true, "description": "The page size of zhuyin candidate page."},
-          "zhuyinSelectKeys": { "type": "string", "optional": true, "description": "The keys used to select candidates in zhuyin."}
+          "zhuyinSelectKeys": { "type": "string", "optional": true, "description": "The keys used to select candidates in zhuyin."},
+          "vietnameseVniAllowFlexibleDiacritics": { "type": "boolean", "optional": true, "description": "Enable VNI flexible Vietnamese typing mode"},
+          "vietnameseVniNewStyleToneMarkPlacement": { "type": "boolean", "optional": true, "description": "Enable VNI modern tone mark placement"},
+          "vietnameseVniInsertDoubleHornOnUo": { "type": "boolean", "optional": true, "description": "Enable VNI insert-double-horn-on-UO shortcut"},
+          "vietnameseVniShowUnderline": { "type": "boolean", "optional": true, "description": "Enable VNI showing underline on composition text"},
+          "vietnameseTelexAllowFlexibleDiacritics": { "type": "boolean", "optional": true, "description": "Enable Telex flexible Vietnamese typing mode"},
+          "vietnameseTelexNewStyleToneMarkPlacement": { "type": "boolean", "optional": true, "description": "Enable Telex modern tone mark placement"},
+          "vietnameseTelexInsertDoubleHornOnUo": { "type": "boolean", "optional": true, "description": "Enable Telex insert-double-horn-on-UO horn shortcut"},
+          "vietnameseTelexInsertUHornOnW": { "type": "boolean", "optional": true, "description": "Enable Telex inser-U-Horn-on-W shortcut"},
+          "vietnameseTelexShowUnderline": { "type": "boolean", "optional": true, "description": "Enable Telex showing underline on composition text"}
         }
       }
     ],
@@ -140,68 +267,62 @@
         "name": "getInputMethodConfig",
         "type": "function",
         "description": "Gets configurations for input methods.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "description": "Callback which is called with the config object.",
-            "parameters": [
-              {
-                "name": "config",
-                "type": "object",
-                "description": "The input method config object.",
-                "properties": {
-                  "isPhysicalKeyboardAutocorrectEnabled": {"type": "boolean"},
-                  "isImeMenuActivated": {"type": "boolean"}
-                }
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves with the config object.",
+          "parameters": [
+            {
+              "name": "config",
+              "type": "object",
+              "description": "The input method config object.",
+              "properties": {
+                "isPhysicalKeyboardAutocorrectEnabled": {"type": "boolean"},
+                "isImeMenuActivated": {"type": "boolean"}
               }
-            ]
-          }
-        ]
+            }
+          ]
+        }
       }, {
         "name": "getInputMethods",
         "type": "function",
         "description": "Gets all enabled input methods, sorted in ascending order of their localized full display names, according to the lexicographical order defined by the current system locale aka. display language.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "description": "Callback which is called with the input method objects.",
-            "parameters": [
-              {
-                "name": "inputMethods",
-                "type": "array",
-                "description": "Enabled input method objects, sorted in ascending order of their localized full display names, according to the lexicographical order defined by the current system locale aka. display language.",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": {"type": "string"},
-                    "name": {"type": "string"},
-                    "indicator": {"type": "string"}
-                  }
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves with the input method objects.",
+          "parameters": [
+            {
+              "name": "inputMethods",
+              "type": "array",
+              "description": "Enabled input method objects, sorted in ascending order of their localized full display names, according to the lexicographical order defined by the current system locale aka. display language.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string"},
+                  "name": {"type": "string"},
+                  "indicator": {"type": "string"}
                 }
               }
-            ]
-          }
-        ]
+            }
+          ]
+        }
       }, {
         "name": "getCurrentInputMethod",
         "type": "function",
         "description": "Gets the current input method.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "description": "Callback which is called with the current input method.",
-            "parameters": [
-              {
-                "name": "inputMethodId",
-                "type": "string",
-                "description": "Current input method."
-              }
-            ]
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves with the current input method.",
+          "parameters": [
+            {
+              "name": "inputMethodId",
+              "type": "string",
+              "description": "Current input method."
+            }
+          ]
+        }
       }, {
         "name": "setCurrentInputMethod",
         "type": "function",
@@ -211,49 +332,44 @@
             "name": "inputMethodId",
             "type": "string",
             "description": "The input method ID to be set as current input method."
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "optional": true,
-            "description": "Callback which is called once the current input method is set. If unsuccessful $(ref:runtime.lastError) is set.",
-            "parameters": []
           }
-        ]
-        }, {
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves once the current input method is set. If unsuccessful, the promise is rejected.",
+          "parameters": []
+        }
+      }, {
           "name": "switchToLastUsedInputMethod",
           "type": "function",
           "description": "Switches to the last used input method. If no last used input method, this is a no-op.",
-          "parameters": [
-            {
-              "name": "callback",
-              "type": "function",
-              "optional": true,
-              "description": "Callback which is called once the input method is swapped (if applicable). If unsuccessful $(ref:runtime.lastError) is set.",
-              "parameters": []
-            }
-          ]
+          "parameters": [],
+          "returns_async": {
+            "name": "callback",
+            "optional": true,
+            "description": "Resolves once the input method is swapped (if applicable). If unsuccessful, the promise is rejected.",
+            "parameters": []
+          }
       }, {
         "name": "fetchAllDictionaryWords",
         "type": "function",
         "description": "Fetches a list of all the words currently in the dictionary.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "description": "Callback which is called once the list of dictionary words are ready.",
-            "parameters": [
-              {
-                "name": "words",
-                "type": "array",
-                "description": "List of dictionary words.",
-                "items": {
-                  "type": "string"
-                }
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves once the list of dictionary words are ready.",
+          "parameters": [
+            {
+              "name": "words",
+              "type": "array",
+              "description": "List of dictionary words.",
+              "items": {
+                "type": "string"
               }
-            ]
-          }
-        ]
+            }
+          ]
+        }
       }, {
         "name": "addWordToDictionary",
         "type": "function",
@@ -263,15 +379,14 @@
             "name": "word",
             "type": "string",
             "description": "A new word to add to the dictionary."
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "optional": true,
-            "description": "Callback which is called once the word is added. If unsuccessful $(ref:runtime.lastError) is set.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves once the word is added. If unsuccessful, the promise is rejected.",
+          "parameters": []
+        }
       }, {
         "name": "setXkbLayout",
         "type": "function",
@@ -281,15 +396,14 @@
             "name": "xkb_name",
             "type": "string",
             "description": "The XKB layout name."
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "optional": true,
-            "description": "Callback which is called when the layout is set.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the layout is set.",
+          "parameters": []
+        }
       }, {
         "name": "finishComposingText",
         "type": "function",
@@ -304,41 +418,36 @@
                 "type": "integer"
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": []
+        }
       }, {
         "name": "showInputView",
         "type": "function",
         "description": "Shows the input view window. If the input view window is already shown, this function will do nothing.",
-        "parameters": [
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": []
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": []
+        }
       }, {
         "name": "hideInputView",
         "type": "function",
         "description": "Hides the input view window. If the input view window is already hidden, this function will do nothing.",
-        "parameters": [
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": []
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": []
+        }
       }, {
         "name": "openOptionsPage",
         "type": "function",
@@ -348,33 +457,6 @@
             "name": "inputMethodId",
             "type": "string",
             "description": "ID of the input method to open options for."
-          }
-        ]
-      }, {
-        "name": "getCompositionBounds",
-        "type": "function",
-        "description": "Gets the composition bounds",
-        "parameters": [
-          {
-            "type": "function",
-            "name": "callback",
-            "description": "Callback which is called to provide the result",
-            "parameters": [
-              {
-                "name": "boundsList",
-                "type": "array",
-                "description": "List of bounds information.",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                    "w": {"type": "integer"},
-                    "h": {"type": "integer"}
-                  }
-                }
-              }
-            ]
           }
         ]
       }, {
@@ -391,25 +473,24 @@
             "name": "afterLength",
             "type": "integer",
             "description": "The number of characters after the current selection."
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "description": "Callback which is called to provide the result",
-            "parameters": [
-              {
-                "name": "surroundingInfo",
-                "type": "object",
-                "description": "The surrouding text info.",
-                "properties": {
-                  "before": {"type": "string"},
-                  "selected": {"type": "string"},
-                  "after": {"type": "string"}
-                }
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves to provide the result",
+          "parameters": [
+            {
+              "name": "surroundingInfo",
+              "type": "object",
+              "description": "The surrouding text info.",
+              "properties": {
+                "before": {"type": "string"},
+                "selected": {"type": "string"},
+                "after": {"type": "string"}
+              }
+            }
+          ]
+        }
       }, {
         "name": "getSettings",
         "type": "function",
@@ -419,21 +500,20 @@
             "name": "engineID",
             "type": "string",
             "description": "The ID of the engine (e.g. 'zh-t-i0-pinyin', 'xkb:us::eng')"
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "description": "Callback to receive the settings",
-            "parameters": [
-              {
-                "name": "settings",
-                "$ref": "InputMethodSettings",
-                "optional": true,
-                "description": "The requested setting, or null if there's no value"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves with the settings",
+          "parameters": [
+            {
+              "name": "settings",
+              "$ref": "InputMethodSettings",
+              "optional": true,
+              "description": "The requested setting, or null if there's no value"
+            }
+          ]
+        }
       }, {
         "name": "setSettings",
         "type": "function",
@@ -448,15 +528,14 @@
             "name": "settings",
             "$ref": "InputMethodSettings",
             "description": "The settings to set"
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Callback to notify that the new value has been set",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves to notify that the new value has been set",
+          "parameters": []
+        }
       }, {
         "name": "setCompositionRange",
         "type": "function",
@@ -501,20 +580,19 @@
                 }
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes with a boolean indicating if the text was accepted or not. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes with a boolean indicating if the text was accepted or not. On failure, the promise will be rejected.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       }, {
         "name": "reset",
         "type": "function",
@@ -550,56 +628,33 @@
         }]
     },
     {
-      "name" : "getTextFieldBounds",
-      "type" : "function",
-      "description" : "Get the bounds of the current text field",
-      "parameters" :[
-        {
-            "name": "parameters",
-            "type": "object",
-            "properties": {
-              "contextID": {
-                "description": "ID of the context.",
-                "type": "integer"
-              }
-            }
-        },
-        {
-            "type": "function",
-            "name": "callback",
-            "description": "Called with screen coordinates of the text field when the operation completes. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": [
-              {
-                "name": "textFieldBounds",
-                "type": "object",
-                "properties": {
-                  "x": {
-                    "description": "The x-coordinate of the text field's bounds.",
-                    "type": "integer"
-                  },
-                  "y": {
-                    "description": "The y-coordinate of the text field's bounds.",
-                    "type": "integer"
-                  },
-                  "width": {
-                    "description": "The width of the text field's bounds.",
-                    "type": "integer"
-                  },
-                  "height":{
-                    "description": "The height of the  bounds.",
-                    "type": "integer"
-                  }
-                }
-              }
-            ]
-          }
-        ]
-    },
-    {
       "name" : "notifyInputMethodReadyForTesting",
       "type" : "function",
       "description" : "Notifies Chrome that the current input method is ready to accept key events from Tast.",
       "parameters": []
+    },
+    {
+      "name": "getLanguagePackStatus",
+      "type": "function",
+      "description": "Gets the aggregate status of all language packs for a given input method.",
+      "parameters": [
+        {
+          "name": "inputMethodId",
+          "type": "string",
+          "description": "Fully qualified ID of the input method"
+        }
+      ],
+      "returns_async": {
+        "name": "callback",
+        "description": "Resolves with a LanguagePackStatus when the operation completes.",
+        "parameters": [
+          {
+            "name": "status",
+            "$ref": "LanguagePackStatus",
+            "description": "The aggregated status of all language packs for the given input method, or 'installed' if there are no language packs."
+          }
+        ]
+      }
     }
     ],
     "events": [
@@ -630,36 +685,6 @@
             "name": "newInputMethodId",
             "type": "string",
             "description": "New input method which is being used."
-          }
-        ]
-      }, {
-        "name": "onCompositionBoundsChanged",
-        "type": "function",
-        "description": "Fired when the composition bounds or cursor bounds are changed.",
-        "parameters": [
-          {
-            "name": "firstBounds",
-            "type": "object",
-            "description": "The bounds information for the first character in composition.",
-            "properties": {
-              "x": {"type": "integer"},
-              "y": {"type": "integer"},
-              "w": {"type": "integer"},
-              "h": {"type": "integer"}
-            }
-          }, {
-            "name": "boundsList",
-            "type": "array",
-            "description": "List of bounds information.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-                "w": {"type": "integer"},
-                "h": {"type": "integer"}
-              }
-            }
           }
         ]
       }, {
@@ -735,33 +760,6 @@
           }
         ]
       }, {
-        "name": "onTouch",
-        "type": "function",
-        "description": "This event is sent when a touch occurs in a text field. Should only happen after onFocus()",
-        "parameters": [
-          {
-            "$ref": "FocusReason",
-            "name": "pointerType",
-            "description": "Pointer type used to touch the text field"
-          }
-        ]
-      }, {
-        "name": "onSettingsChanged",
-        "type": "function",
-        "description": "This event is sent when the settings for any input method changed. It is sent to all extensions that are listening to this event, and enabled by the user.",
-        "parameters": [
-          {
-            "name": "engineID",
-            "type": "string",
-            "description": "ID of the engine that changed"
-          },
-          {
-            "name": "settings",
-            "$ref": "InputMethodSettings",
-            "description": "The new settings"
-          }
-        ]
-      }, {
         "name": "onScreenProjectionChanged",
         "type": "function",
         "description": "This event is sent when the screen is being mirrored or the desktop is being cast.",
@@ -795,6 +793,17 @@
             "name": "engineID",
             "type": "string",
             "description": "The engine ID for the input method being changed."
+          }
+        ]
+      }, {
+        "name": "onLanguagePackStatusChanged",
+        "type": "function",
+        "description": "This event is sent when any IME's language pack status is changed.",
+        "parameters": [
+          {
+            "name": "change",
+            "$ref": "LanguagePackStatusChange",
+            "description": "Information about what changed."
           }
         ]
       }

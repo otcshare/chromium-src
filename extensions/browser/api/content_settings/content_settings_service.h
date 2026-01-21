@@ -11,6 +11,10 @@
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_prefs_observer.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -41,13 +45,13 @@ class ContentSettingsService : public BrowserContextKeyedAPI,
       GetFactoryInstance();
 
   // ExtensionPrefsObserver implementation.
-  void OnExtensionRegistered(const std::string& extension_id,
+  void OnExtensionRegistered(const ExtensionId& extension_id,
                              const base::Time& install_time,
                              bool is_enabled) override;
-  void OnExtensionPrefsLoaded(const std::string& extension_id,
+  void OnExtensionPrefsLoaded(const ExtensionId& extension_id,
                               const ExtensionPrefs* prefs) override;
-  void OnExtensionPrefsDeleted(const std::string& extension_id) override;
-  void OnExtensionStateChanged(const std::string& extension_id,
+  void OnExtensionPrefsDeleted(const ExtensionId& extension_id) override;
+  void OnExtensionStateChanged(const ExtensionId& extension_id,
                                bool state) override;
   void OnExtensionPrefsWillBeDestroyed(ExtensionPrefs* prefs) override;
 

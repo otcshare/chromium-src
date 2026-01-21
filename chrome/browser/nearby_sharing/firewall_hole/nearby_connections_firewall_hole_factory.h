@@ -11,12 +11,13 @@
 #include "chromeos/ash/services/nearby/public/mojom/firewall_hole.mojom.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
 
-namespace ash {
-class FirewallHole;
-namespace nearby {
+namespace ash::nearby {
 class TcpServerSocketPort;
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby
+
+namespace chromeos {
+class FirewallHole;
+}  // namespace chromeos
 
 // An implementation of the mojo service used to open firewall holes for Nearby
 // Connections WifiLan TCP sockets. This implementation is essentially a wrapper
@@ -24,7 +25,7 @@ class TcpServerSocketPort;
 // mirrors the lifetime of the mojo remote provided by OpenFirewallHole(); the
 // corresponding mojo receivers are owned by |firewall_hole_receivers_|.
 class NearbyConnectionsFirewallHoleFactory
-    : public sharing::mojom::FirewallHoleFactory {
+    : public ::sharing::mojom::FirewallHoleFactory {
  public:
   NearbyConnectionsFirewallHoleFactory();
   NearbyConnectionsFirewallHoleFactory(
@@ -37,11 +38,12 @@ class NearbyConnectionsFirewallHoleFactory
                         OpenFirewallHoleCallback callback) override;
 
  private:
-  void OnFirewallHoleOpened(const ash::nearby::TcpServerSocketPort& port,
-                            OpenFirewallHoleCallback callback,
-                            std::unique_ptr<ash::FirewallHole> firewall_hole);
+  void OnFirewallHoleOpened(
+      const ash::nearby::TcpServerSocketPort& port,
+      OpenFirewallHoleCallback callback,
+      std::unique_ptr<chromeos::FirewallHole> firewall_hole);
 
-  mojo::UniqueReceiverSet<sharing::mojom::FirewallHole>
+  mojo::UniqueReceiverSet<::sharing::mojom::FirewallHole>
       firewall_hole_receivers_;
   base::WeakPtrFactory<NearbyConnectionsFirewallHoleFactory> weak_ptr_factory_{
       this};

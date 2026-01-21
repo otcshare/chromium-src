@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace offline_pages {
 
@@ -15,7 +15,7 @@ GetRequestsTask::GetRequestsTask(
     RequestQueueStore::GetRequestsCallback callback)
     : store_(store), callback_(std::move(callback)) {}
 
-GetRequestsTask::~GetRequestsTask() {}
+GetRequestsTask::~GetRequestsTask() = default;
 
 void GetRequestsTask::Run() {
   ReadRequest();

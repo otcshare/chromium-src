@@ -7,12 +7,15 @@
 #include <tuple>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/platform_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/notreached.h"
 #include "base/rand_util.h"
+#include "base/strings/string_view_util.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "mojo/public/c/system/platform_handle.h"
@@ -24,6 +27,8 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include "base/win/scoped_handle.h"
 #else
 #include "base/files/scoped_file.h"
@@ -69,18 +74,22 @@ class PlatformHandleTest : public testing::Test,
     test_type_ = TestType::kFile;
 
 #if BUILDFLAG(IS_FUCHSIA)
-    if (GetParam() == HandleType::kHandle)
+    if (GetParam() == HandleType::kHandle) {
       test_type_ = TestType::kSharedMemory;
+    }
 #elif BUILDFLAG(IS_MAC)
-    if (GetParam() == HandleType::kMachPort)
+    if (GetParam() == HandleType::kMachPort) {
       test_type_ = TestType::kSharedMemory;
+    }
 #endif
 
-    if (test_type_ == TestType::kFile)
+    if (test_type_ == TestType::kFile) {
       test_handle_ = SetUpFile();
+    }
 #if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_MAC)
-    else
+    else {
       test_handle_ = SetUpSharedMemory();
+    }
 #endif
   }
 
@@ -88,13 +97,13 @@ class PlatformHandleTest : public testing::Test,
   // PlatformHandle wrapping it. Used to verify that a |handle| refers to some
   // expected platform object.
   std::string GetObjectContents(PlatformHandle& handle) {
-    if (test_type_ == TestType::kFile)
+    if (test_type_ == TestType::kFile) {
       return GetFileContents(handle);
+    }
 #if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_MAC)
     return GetSharedMemoryContents(handle);
 #else
     NOTREACHED();
-    return std::string();
 #endif
   }
 
@@ -110,8 +119,7 @@ class PlatformHandleTest : public testing::Test,
     base::File test_file(temp_dir_.GetPath().AppendASCII("test"),
                          base::File::FLAG_CREATE | base::File::FLAG_WRITE |
                              base::File::FLAG_READ);
-    test_file.WriteAtCurrentPos(kTestData.data(),
-                                static_cast<int>(kTestData.size()));
+    test_file.WriteAtCurrentPos(base::as_byte_span(kTestData));
 
 #if BUILDFLAG(IS_WIN)
     return PlatformHandle(
@@ -134,7 +142,7 @@ class PlatformHandleTest : public testing::Test,
     base::File file(handle.TakeFD());
 #endif
     std::vector<char> buffer(kTestData.size());
-    file.Read(0, buffer.data(), static_cast<int>(buffer.size()));
+    file.Read(0, base::as_writable_byte_span(buffer));
     std::string contents(buffer.begin(), buffer.end());
 
 // Let |handle| retain ownership.
@@ -153,7 +161,7 @@ class PlatformHandleTest : public testing::Test,
   PlatformHandle SetUpSharedMemory() {
     auto region = base::UnsafeSharedMemoryRegion::Create(kTestData.size());
     auto mapping = region.Map();
-    memcpy(mapping.memory(), kTestData.data(), kTestData.size());
+    base::as_writable_chars(base::span(mapping)).copy_from(kTestData);
     auto generic_region =
         base::UnsafeSharedMemoryRegion::TakeHandleForSerialization(
             std::move(region));
@@ -179,8 +187,7 @@ class PlatformHandleTest : public testing::Test,
     auto region =
         base::UnsafeSharedMemoryRegion::Deserialize(std::move(generic_region));
     auto mapping = region.Map();
-    std::string contents(static_cast<char*>(mapping.memory()),
-                         kTestData.size());
+    std::string contents(base::as_string_view(mapping));
 
     // Let |handle| retain ownership.
     generic_region = base::UnsafeSharedMemoryRegion::TakeHandleForSerialization(
@@ -246,6 +253,21 @@ TEST_P(PlatformHandleTest, CStructConversion) {
   PlatformHandle handle = PlatformHandle::FromMojoPlatformHandle(&c_handle);
   EXPECT_EQ(kTestData, GetObjectContents(handle));
 }
+
+#if BUILDFLAG(IS_WIN) && !DCHECK_IS_ON()
+// In DCHECK builds these explode but we include defense-in-depth measures as
+// third party code can cause unexpected values to manifest in handles.
+TEST_P(PlatformHandleTest, InvalidHandles) {
+  // Validate the security assumption that a pseudo handle cannot be adopted as
+  // a PlatformHandle and that it cannot be cloned to a valid handle.
+  PlatformHandle invalid((base::win::ScopedHandle(::GetCurrentThread())));
+  EXPECT_FALSE(invalid.is_valid());
+  PlatformHandle cloned = invalid.Clone();
+  EXPECT_FALSE(cloned.is_valid());
+  EXPECT_EQ(invalid.ReleaseHandle(), nullptr);
+  EXPECT_EQ(cloned.ReleaseHandle(), nullptr);
+}
+#endif  // BUILDFLAG(IS_WIN) && !DCHECK_IS_ON()
 
 INSTANTIATE_TEST_SUITE_P(All,
                          PlatformHandleTest,

@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests requests loaded from disk cache have correct timing\n`);
-  await TestRunner.loadTestModule('network_test_runner');
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('network');
   await TestRunner.addScriptTag('resources/gc.js');
   await TestRunner.evaluateInPagePromise(`
@@ -26,7 +28,7 @@
   var timeZero = 0;
 
   NetworkTestRunner.recordNetwork();
-  TestRunner.NetworkAgent.setCacheDisabled(true).then(step1);
+  TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: true}).then(step1);
 
   function step1() {
     ConsoleTestRunner.addConsoleSniffer(step2);
@@ -42,7 +44,7 @@
   }
 
   function step4() {
-    TestRunner.NetworkAgent.setCacheDisabled(true).then(step5);
+    TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: true}).then(step5);
   }
 
   function step5() {
@@ -53,7 +55,7 @@
     TestRunner.addResult('has timing: ' + !!request.timing);
     TestRunner.addResult('');
     timeZero = request.timing.requestTime;
-    TestRunner.NetworkAgent.setCacheDisabled(false).then(step6);
+    TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: false}).then(step6);
   }
 
   function step6() {

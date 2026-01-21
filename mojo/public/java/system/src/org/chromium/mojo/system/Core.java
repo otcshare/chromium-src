@@ -6,21 +6,21 @@ package org.chromium.mojo.system;
 
 import android.os.ParcelFileDescriptor;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 /**
  * Core mojo interface giving access to the base operations. See |src/mojo/public/c/system/core.h|
  * for the underlying api.
  */
+@NullMarked
 public interface Core {
 
-    /**
-     * Used to indicate an infinite deadline (timeout).
-     */
-    public static final long DEADLINE_INFINITE = -1;
+    /** Used to indicate an infinite deadline (timeout). */
+    long DEADLINE_INFINITE = -1;
 
-    /**
-     * Signals for the wait operations on handles.
-     */
-    public static class HandleSignals extends Flags<HandleSignals> {
+    /** Signals for the wait operations on handles. */
+    class HandleSignals extends Flags<HandleSignals> {
         /**
          * Constructor.
          *
@@ -35,10 +35,9 @@ public interface Core {
         private static final int FLAG_WRITABLE = 1 << 1;
         private static final int FLAG_PEER_CLOSED = 1 << 2;
 
-        /**
-         * Immutable signals.
-         */
+        /** Immutable signals. */
         public static final HandleSignals NONE = HandleSignals.none().immutable();
+
         public static final HandleSignals READABLE =
                 HandleSignals.none().setReadable(true).immutable();
         public static final HandleSignals WRITABLE =
@@ -74,27 +73,20 @@ public interface Core {
             return setFlag(FLAG_PEER_CLOSED, peerClosed);
         }
 
-        /**
-         * Returns a signal with no bit set.
-         */
+        /** Returns a signal with no bit set. */
         public static HandleSignals none() {
             return new HandleSignals(FLAG_NONE);
         }
-
     }
 
     /**
      * Returns a platform-dependent monotonically increasing tick count representing "right now."
      */
-    public long getTimeTicksNow();
+    long getTimeTicksNow();
 
-    /**
-     * Returned by wait functions to indicate the signaling state of handles.
-     */
-    public static class HandleSignalsState {
-        /**
-         * Signals that were satisfied at some time // before the call returned.
-         */
+    /** Returned by wait functions to indicate the signaling state of handles. */
+    class HandleSignalsState {
+        /** Signals that were satisfied at some time // before the call returned. */
         private final HandleSignals mSatisfiedSignals;
 
         /**
@@ -104,25 +96,19 @@ public interface Core {
          */
         private final HandleSignals mSatisfiableSignals;
 
-        /**
-         * Constructor.
-         */
+        /** Constructor. */
         public HandleSignalsState(
                 HandleSignals satisfiedSignals, HandleSignals satisfiableSignals) {
             mSatisfiedSignals = satisfiedSignals;
             mSatisfiableSignals = satisfiableSignals;
         }
 
-        /**
-         * Returns the satisfiedSignals.
-         */
+        /** Returns the satisfiedSignals. */
         public HandleSignals getSatisfiedSignals() {
             return mSatisfiedSignals;
         }
 
-        /**
-         * Returns the satisfiableSignals.
-         */
+        /** Returns the satisfiableSignals. */
         public HandleSignals getSatisfiableSignals() {
             return mSatisfiableSignals;
         }
@@ -134,8 +120,8 @@ public interface Core {
      *
      * @return the set of handles for the two endpoints (ports) of the message pipe.
      */
-    public Pair<MessagePipeHandle, MessagePipeHandle> createMessagePipe(
-            MessagePipeHandle.CreateOptions options);
+    Pair<MessagePipeHandle, MessagePipeHandle> createMessagePipe(
+            MessagePipeHandle.@Nullable CreateOptions options);
 
     /**
      * Creates a data pipe, which is a unidirectional communication channel for unframed data, with
@@ -147,7 +133,7 @@ public interface Core {
      *
      * @return the set of handles for the two endpoints of the data pipe.
      */
-    public Pair<DataPipe.ProducerHandle, DataPipe.ConsumerHandle> createDataPipe(
+    Pair<DataPipe.ProducerHandle, DataPipe.ConsumerHandle> createDataPipe(
             DataPipe.CreateOptions options);
 
     /**
@@ -157,8 +143,7 @@ public interface Core {
      *
      * @return the new |SharedBufferHandle|.
      */
-    public SharedBufferHandle createSharedBuffer(SharedBufferHandle.CreateOptions options,
-            long numBytes);
+    SharedBufferHandle createSharedBuffer(SharedBufferHandle.CreateOptions options, long numBytes);
 
     /**
      * Acquires a handle from the native side. The handle will be owned by the returned object and
@@ -166,7 +151,7 @@ public interface Core {
      *
      * @return a new {@link UntypedHandle} representing the native handle.
      */
-    public UntypedHandle acquireNativeHandle(long handle);
+    UntypedHandle acquireNativeHandle(long handle);
 
     /**
      * Creates and acquires a handle from the native side. The handle will be owned by the returned
@@ -175,20 +160,14 @@ public interface Core {
      * @param fd Java file descriptor to be wrapped as a native platform handle.
      * @return a new {@link UntypedHandle} representing the native handle.
      */
-    public UntypedHandle wrapFileDescriptor(ParcelFileDescriptor fd);
+    UntypedHandle wrapFileDescriptor(ParcelFileDescriptor fd);
 
-    /**
-     * Returns an implementation of {@link Watcher}.
-     */
-    public Watcher getWatcher();
+    /** Returns an implementation of {@link Watcher}. */
+    Watcher getWatcher();
 
-    /**
-     * Returns a new run loop.
-     */
-    public RunLoop createDefaultRunLoop();
+    /** Returns a new run loop. */
+    RunLoop createDefaultRunLoop();
 
-    /**
-     * Returns the current run loop if it exists.
-     */
-    public RunLoop getCurrentRunLoop();
+    /** Returns the current run loop if it exists. */
+    RunLoop getCurrentRunLoop();
 }

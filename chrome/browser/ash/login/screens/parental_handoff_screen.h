@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
@@ -20,7 +20,7 @@ class ParentalHandoffScreen : public BaseScreen {
  public:
   using TView = ParentalHandoffScreenView;
 
-  enum class Result { DONE, SKIPPED };
+  enum class Result { kDone, kSkipped };
 
   static std::string GetResultString(Result result);
 

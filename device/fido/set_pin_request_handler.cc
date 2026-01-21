@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "device/fido/set_pin_request_handler.h"
+
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "device/fido/fido_authenticator.h"
-#include "device/fido/fido_constants.h"
 #include "device/fido/pin.h"
-#include "device/fido/set_pin_request_handler.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
 
@@ -87,7 +88,7 @@ void SetPINRequestHandler::OnTouch(FidoAuthenticator* authenticator) {
 
   authenticator_ = authenticator;
 
-  switch (authenticator_->Options()->client_pin_availability) {
+  switch (authenticator_->Options().client_pin_availability) {
     case AuthenticatorSupportedOptions::ClientPinAvailability::kNotSupported:
       state_ = State::kFinished;
       CancelActiveAuthenticators(authenticator->GetId());
@@ -109,14 +110,14 @@ void SetPINRequestHandler::OnTouch(FidoAuthenticator* authenticator) {
       CancelActiveAuthenticators(authenticator->GetId());
       std::move(get_pin_callback_)
           .Run(authenticator->CurrentMinPINLength(),
-               authenticator->NewMinPINLength(), absl::nullopt);
+               authenticator->NewMinPINLength(), std::nullopt);
       break;
   }
 }
 
 void SetPINRequestHandler::OnRetriesResponse(
     CtapDeviceResponseCode status,
-    absl::optional<pin::RetriesResponse> response) {
+    std::optional<pin::RetriesResponse> response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(my_sequence_checker_);
   DCHECK_EQ(state_, State::kGettingRetries);
 
@@ -134,7 +135,7 @@ void SetPINRequestHandler::OnRetriesResponse(
 
 void SetPINRequestHandler::OnSetPINComplete(
     CtapDeviceResponseCode status,
-    absl::optional<pin::EmptyResponse> response) {
+    std::optional<pin::EmptyResponse> response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(my_sequence_checker_);
   DCHECK_EQ(state_, State::kSettingPIN);
 

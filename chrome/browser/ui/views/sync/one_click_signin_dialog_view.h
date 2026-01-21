@@ -8,8 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/gtest_prod_util.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/sync/one_click_signin_links_delegate.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -20,9 +19,9 @@
 // This class allows users to confirm sync signin in cases where signin is
 // untrusted.
 class OneClickSigninDialogView : public views::DialogDelegateView {
- public:
-  METADATA_HEADER(OneClickSigninDialogView);
+  METADATA_HEADER(OneClickSigninDialogView, views::DialogDelegateView)
 
+ public:
   OneClickSigninDialogView(const OneClickSigninDialogView&) = delete;
   OneClickSigninDialogView& operator=(const OneClickSigninDialogView&) = delete;
   ~OneClickSigninDialogView() override;

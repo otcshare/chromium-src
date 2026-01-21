@@ -10,6 +10,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/web_contents_tester.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -47,9 +50,7 @@ DeclarativeContentConditionTrackerTest::GetTestingFactories() const {
 
 TestingProfile* DeclarativeContentConditionTrackerTest::profile() {
   if (!profile_) {
-    for (auto& pair : GetTestingFactories())
-      profile_builder_.AddTestingFactory(pair.first, pair.second);
-
+    profile_builder_.AddTestingFactories(GetTestingFactories());
     profile_ = profile_builder_.Build();
   }
   return profile_.get();

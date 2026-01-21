@@ -13,7 +13,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/queue.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -37,6 +37,11 @@ class NetworkConnectionTracker;
 class SharedURLLoaderFactory;
 }
 
+namespace os_crypt_async {
+class Encryptor;
+class OSCryptAsync;
+}  // namespace os_crypt_async
+
 namespace gcm {
 
 class GCMAccountMapper;
@@ -49,15 +54,11 @@ class GCMDelayedTaskController;
 class GCMDriverDesktop : public GCMDriver,
                          protected InstanceIDHandler {
  public:
-  // |remove_account_mappings_with_email_key| indicates whether account mappings
-  // having email as account key should be removed while loading. This is
-  // required during the migration of account identifier from email to Gaia ID.
   GCMDriverDesktop(
       std::unique_ptr<GCMClientFactory> gcm_client_factory,
       const GCMClient::ChromeBuildInfo& chrome_build_info,
       PrefService* prefs,
       const base::FilePath& store_path,
-      bool remove_account_mappings_with_email_key,
       base::RepeatingCallback<void(
           mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>)>
           get_socket_factory_callback,
@@ -65,7 +66,8 @@ class GCMDriverDesktop : public GCMDriver,
       network::NetworkConnectionTracker* network_connection_tracker,
       const scoped_refptr<base::SequencedTaskRunner>& ui_thread,
       const scoped_refptr<base::SequencedTaskRunner>& io_thread,
-      const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
+      os_crypt_async::OSCryptAsync* os_crypt_async);
 
   GCMDriverDesktop(const GCMDriverDesktop&) = delete;
   GCMDriverDesktop& operator=(const GCMDriverDesktop&) = delete;
@@ -78,8 +80,6 @@ class GCMDriverDesktop : public GCMDriver,
                             const std::string& registration_id,
                             ValidateRegistrationCallback callback) override;
   void Shutdown() override;
-  void OnSignedIn() override;
-  void OnSignedOut() override;
   void AddAppHandler(const std::string& app_id,
                      GCMAppHandler* handler) override;
   void RemoveAppHandler(const std::string& app_id) override;
@@ -144,6 +144,10 @@ class GCMDriverDesktop : public GCMDriver,
     bool operator()(const TokenTuple& a, const TokenTuple& b) const;
   };
 
+  void OnOsCryptReady(
+      base::OnceCallback<void(os_crypt_async::Encryptor)> io_callback,
+      os_crypt_async::Encryptor encryptor);
+
   void DoValidateRegistration(scoped_refptr<RegistrationInfo> registration_info,
                               const std::string& registration_id,
                               ValidateRegistrationCallback callback);
@@ -200,9 +204,6 @@ class GCMDriverDesktop : public GCMDriver,
                            const std::string& authorized_entity,
                            const std::string& scope,
                            GCMClient::Result result);
-
-  // Flag to indicate whether the user is signed in to a GAIA account.
-  bool signed_in_;
 
   // Flag to indicate if GCM is started.
   bool gcm_started_;

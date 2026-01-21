@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_POLICY_MESSAGING_LAYER_UTIL_REPORT_QUEUE_MANUAL_TEST_CONTEXT_H_
 #define CHROME_BROWSER_POLICY_MESSAGING_LAYER_UTIL_REPORT_QUEUE_MANUAL_TEST_CONTEXT_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
@@ -31,6 +31,7 @@ namespace reporting {
 //      /*number_of_messages_to_enqueue=*/10,
 //      UPLOAD_EVENTS,
 //      FAST_BATCH,
+//      EventType::kUser,
 //      base::BindOnce([](Status status) { LOG(INFO) << status; }),
 //      base::ThreadPool::CreateSequencedTaskRunner());
 // As configured this context will create a ReportQueue and upload an event
@@ -51,6 +52,7 @@ class ReportQueueManualTestContext : public TaskRunnerContext<Status> {
       uint64_t number_of_messages_to_enqueue,
       Destination destination,
       Priority priorty,
+      EventType event_type,
       CompletionCallback completion_cb,
       scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner,
       BuildReportQueueCallback queue_builder =  // can be replaced in test
@@ -77,6 +79,7 @@ class ReportQueueManualTestContext : public TaskRunnerContext<Status> {
 
   const Destination destination_;
   const Priority priority_;
+  const EventType event_type_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

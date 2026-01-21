@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
@@ -18,11 +19,10 @@
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/download_source.h"
 #include "components/download/public/common/download_url_parameters.h"
-#include "net/http/http_response_info.h"
+#include "net/http/http_connection_info.h"
 #include "net/url_request/referrer_policy.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -81,7 +81,7 @@ struct COMPONENTS_DOWNLOAD_EXPORT DownloadCreateInfo {
   GURL tab_referrer_url;
 
   // The origin of the requester that originally initiated the download.
-  absl::optional<url::Origin> request_initiator;
+  std::optional<url::Origin> request_initiator;
 
   // The time when the download started.
   base::Time start_time;
@@ -105,7 +105,7 @@ struct COMPONENTS_DOWNLOAD_EXPORT DownloadCreateInfo {
   // Whether this download requires safety checks.
   bool require_safety_checks;
 
-  absl::optional<ui::PageTransition> transition_type;
+  std::optional<ui::PageTransition> transition_type;
 
   // The HTTP response headers. This contains a nullptr when the response has
   // not yet been received. Only for consuming headers.
@@ -157,7 +157,7 @@ struct COMPONENTS_DOWNLOAD_EXPORT DownloadCreateInfo {
   RangeRequestSupportType accept_range;
 
   // The HTTP connection type.
-  net::HttpResponseInfo::ConnectionInfo connection_info;
+  net::HttpConnectionInfo connection_info;
 
   // The HTTP request method.
   std::string method;
@@ -187,7 +187,15 @@ struct COMPONENTS_DOWNLOAD_EXPORT DownloadCreateInfo {
   ::network::mojom::CredentialsMode credentials_mode;
 
   // Isolation info for the download request, mainly for same site cookies.
-  absl::optional<net::IsolationInfo> isolation_info;
+  std::optional<net::IsolationInfo> isolation_info;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Whether the original URL may allow auto open after download completion.
+  // Some download, such as those from context menu or download service, or has
+  // "attachment" in content-disposition, will disallow auto-open after
+  // completion.
+  bool allow_auto_open_after_completion = true;
+#endif  // BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace download

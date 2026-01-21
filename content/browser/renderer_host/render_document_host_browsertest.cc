@@ -4,9 +4,11 @@
 
 #include "base/command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/values.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/common/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -26,11 +28,13 @@ namespace {
 class RenderDocumentHostBrowserTest : public ContentBrowserTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    // RenderDocumentHost only works when RenderDocument is enabled at at least
-    // the sub-frame level.
     InitAndEnableRenderDocumentFeature(
-        &feature_list_,
-        GetRenderDocumentLevelName(RenderDocumentLevel::kSubframe));
+        &feature_list_for_render_document_,
+        GetRenderDocumentLevelName(RenderDocumentLevel::kAllFrames));
+    // Disable BackForwardCache so that the RenderFrameHost changes aren't
+    // caused by proactive BrowsingInstance swap.
+    feature_list_for_back_forward_cache_.InitAndDisableFeature(
+        features::kBackForwardCache);
   }
 
   void SetUpOnMainThread() override {
@@ -47,33 +51,30 @@ class RenderDocumentHostBrowserTest : public ContentBrowserTest {
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedFeatureList feature_list_for_render_document_;
+  base::test::ScopedFeatureList feature_list_for_back_forward_cache_;
 };
 
 }  // namespace
 
 // A new RenderFrameHost must be used after a same process navigation.
-// TODO(arthursonzogni): Implement RenderDocument and enable this test.
-IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest, DISABLED_BasicMainFrame) {
+IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest, BasicMainFrame) {
   GURL url_1(embedded_test_server()->GetURL("/title1.html"));
   GURL url_2(embedded_test_server()->GetURL("/title2.html"));
   GURL url_3(embedded_test_server()->GetURL("/title3.html"));
 
   // 1) Navigate to A1.
   EXPECT_TRUE(NavigateToURL(shell(), url_1));
-  RenderFrameHostImpl* rfh_1 = current_main_frame();
-  RenderFrameDeletedObserver delete_rfh_1(rfh_1);
+  RenderFrameHostWrapper rfh_1(current_main_frame());
 
   // 2) Navigate to A2.
   EXPECT_TRUE(NavigateToURL(shell(), url_2));
-  RenderFrameHostImpl* rfh_2 = current_main_frame();
-  EXPECT_TRUE(delete_rfh_1.deleted());
-  EXPECT_NE(rfh_1, rfh_2);
-  RenderFrameDeletedObserver delete_rfh_2(rfh_2);
+  RenderFrameHostWrapper rfh_2(current_main_frame());
+  EXPECT_TRUE(rfh_1.WaitUntilRenderFrameDeleted());
 
   // 3) Navigate to A3.
   EXPECT_TRUE(NavigateToURL(shell(), url_3));
-  EXPECT_TRUE(delete_rfh_2.deleted());
+  EXPECT_TRUE(rfh_2.WaitUntilRenderFrameDeleted());
 }
 
 // A new RenderFrameHost must be used after a same process subframe navigation.
@@ -93,21 +94,21 @@ IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest, BasicSubframe) {
   // 2) Navigate the subframe same-process. (non local root case).
   NavigateIframeToURL(web_contents(), "test_iframe", url_subframe_2);
   RenderFrameHostImpl* child_rfh_2 = subframe->current_frame_host();
-  EXPECT_TRUE(delete_child_rfh_1.deleted());
+  EXPECT_TRUE(delete_child_rfh_1.WaitUntilDeleted());
   EXPECT_NE(child_rfh_1, child_rfh_2);
   RenderFrameDeletedObserver delete_child_rfh_2(child_rfh_2);
 
   // 3) Navigate the subframe cross-process.
   NavigateIframeToURL(web_contents(), "test_iframe", url_subframe_3);
   RenderFrameHostImpl* child_rfh_3 = subframe->current_frame_host();
-  EXPECT_TRUE(delete_child_rfh_1.deleted());
+  EXPECT_TRUE(delete_child_rfh_2.WaitUntilDeleted());
   EXPECT_NE(child_rfh_2, child_rfh_3);
   RenderFrameDeletedObserver delete_child_rfh_3(child_rfh_3);
 
   // 4) Navigate the subframe same-process. (local root case).
   NavigateIframeToURL(web_contents(), "test_iframe", url_subframe_4);
   RenderFrameHostImpl* child_rfh_4 = subframe->current_frame_host();
-  EXPECT_TRUE(delete_child_rfh_3.deleted());
+  EXPECT_TRUE(delete_child_rfh_3.WaitUntilDeleted());
   EXPECT_NE(child_rfh_3, child_rfh_4);
 }
 
@@ -137,15 +138,26 @@ IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest, PopupScriptableNavigate) {
   EXPECT_EQ("bar_1", EvalJs(web_contents(), "other_window.foo;"));
   EXPECT_EQ("bar_1", EvalJs(new_contents, "window.foo;"));
 
+  // The URL is accessible from each side.
+  EXPECT_EQ(url_1, EvalJs(web_contents(), "other_window.location.href;"));
+  EXPECT_EQ(url_1, EvalJs(new_contents, "window.location.href;"));
+
   // 3) Navigate the new window same-process.
-  int process_id = new_contents->GetPrimaryMainFrame()->GetProcess()->GetID();
+  int process_id =
+      new_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID();
   EXPECT_TRUE(NavigateToURL(new_contents, url_2));
-  EXPECT_EQ(process_id,
-            new_contents->GetPrimaryMainFrame()->GetProcess()->GetID());
+  EXPECT_EQ(
+      process_id,
+      new_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
+
+  // The URL is accessible from each side and correctly reflects the current
+  // value.
+  EXPECT_EQ(url_2, EvalJs(web_contents(), "other_window.location.href;"));
+  EXPECT_EQ(url_2, EvalJs(new_contents, "window.location.href;"));
 
   // The object is no longer accessible from each side.
-  EXPECT_EQ(nullptr, EvalJs(web_contents(), "other_window.foo;"));
-  EXPECT_EQ(nullptr, EvalJs(new_contents, "window.foo"));
+  EXPECT_EQ(base::Value(), EvalJs(web_contents(), "other_window.foo;"));
+  EXPECT_EQ(base::Value(), EvalJs(new_contents, "window.foo"));
 
   // Define the variable again.
   EXPECT_TRUE(ExecJs(web_contents(), "other_window.foo = 'bar_2';"));
@@ -155,10 +167,16 @@ IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest, PopupScriptableNavigate) {
   EXPECT_EQ("bar_2", EvalJs(new_contents, "window.foo;"));
 }
 
+// TODO(crbug.com/458460875): Test has flaked regularly since 2025-11-04.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_SubframeScriptableNavigate DISABLED_SubframeScriptableNavigate
+#else
+#define MAYBE_SubframeScriptableNavigate SubframeScriptableNavigate
+#endif
 // Two frames are scriptable with each other. Test it works appropriately after
 // one of them doing a same-origin navigation.
 IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest,
-                       SubframeScriptableNavigate) {
+                       MAYBE_SubframeScriptableNavigate) {
   GURL url_1(embedded_test_server()->GetURL("/page_with_iframe.html"));
   GURL url_2(embedded_test_server()->GetURL("/title2.html"));
   GURL url_3(embedded_test_server()->GetURL("/title3.html"));
@@ -188,9 +206,9 @@ IN_PROC_BROWSER_TEST_F(RenderDocumentHostBrowserTest,
   RenderFrameHostImpl* subframe_rfh_2 =
       main_rfh->child_at(0)->current_frame_host();
 
-  // The object is no accessible here from each side.
-  EXPECT_EQ(nullptr, EvalJs(main_rfh, "other_window.foo;"));
-  EXPECT_EQ(nullptr, EvalJs(subframe_rfh_2, "window.foo"));
+  // The object is no longer accessible from each side.
+  EXPECT_EQ(base::Value(), EvalJs(main_rfh, "other_window.foo;"));
+  EXPECT_EQ(base::Value(), EvalJs(subframe_rfh_2, "window.foo"));
 
   // Define the variable again.
   EXPECT_TRUE(ExecJs(main_rfh, "other_window.foo = 'bar_2';"));

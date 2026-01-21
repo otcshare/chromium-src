@@ -4,8 +4,8 @@
 
 #include "chromeos/ash/services/secure_channel/fake_single_client_proxy.h"
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "chromeos/ash/services/secure_channel/file_transfer_update_callback.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 #include "chromeos/ash/services/secure_channel/register_payload_file_request.h"
@@ -35,6 +35,13 @@ void FakeSingleClientProxy::HandleReceivedMessage(const std::string& feature,
 
 void FakeSingleClientProxy::HandleRemoteDeviceDisconnection() {
   was_remote_device_disconnection_handled_ = true;
+}
+
+void FakeSingleClientProxy::HandleNearbyConnectionStateChanged(
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  nearby_connection_step_ = step;
+  nearby_connection_step_result_ = result;
 }
 
 FakeSingleClientProxyDelegate::FakeSingleClientProxyDelegate() = default;

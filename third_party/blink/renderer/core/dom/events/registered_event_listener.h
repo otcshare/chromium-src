@@ -25,7 +25,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_REGISTERED_EVENT_LISTENER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_REGISTERED_EVENT_LISTENER_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 
@@ -34,27 +33,26 @@ namespace blink {
 class AddEventListenerOptionsResolved;
 class Event;
 class EventListener;
-class EventListenerOptions;
 
 // RegisteredEventListener represents 'event listener' defined in the DOM
 // standard. https://dom.spec.whatwg.org/#concept-event-listener
-class RegisteredEventListener final {
-  DISALLOW_NEW();
-
+class RegisteredEventListener final
+    : public GarbageCollected<RegisteredEventListener> {
  public:
   RegisteredEventListener();
   RegisteredEventListener(EventListener* listener,
                           const AddEventListenerOptionsResolved* options);
-  RegisteredEventListener(const RegisteredEventListener& that);
-  RegisteredEventListener& operator=(const RegisteredEventListener& that);
+  RegisteredEventListener(const RegisteredEventListener& that) = delete;
+  RegisteredEventListener& operator=(const RegisteredEventListener& that) =
+      delete;
 
   void Trace(Visitor* visitor) const;
 
   AddEventListenerOptionsResolved* Options() const;
 
-  const EventListener* Callback() const { return callback_; }
+  const EventListener* Callback() const { return callback_.Get(); }
 
-  EventListener* Callback() { return callback_; }
+  EventListener* Callback() { return callback_.Get(); }
 
   void SetCallback(EventListener* listener);
 
@@ -78,10 +76,31 @@ class RegisteredEventListener final {
     blocked_event_warning_emitted_ = true;
   }
 
+  struct OptionsForMatching {
+    STACK_ALLOCATED();
+
+   public:
+    OptionsForMatching() = default;
+    OptionsForMatching(const OptionsForMatching&) = default;
+    OptionsForMatching(bool use_capture) : use_capture_(use_capture) {}
+    bool operator==(const OptionsForMatching&) const = default;
+
+    bool use_capture_{false};
+  };
+
+  OptionsForMatching GetOptionsForMatching() const {
+    return OptionsForMatching(use_capture_);
+  }
   bool Matches(const EventListener* listener,
-               const EventListenerOptions* options) const;
+               const OptionsForMatching& options) const;
 
   bool ShouldFire(const Event&) const;
+
+  bool Removed() const { return removed_; }
+
+  void SetRemoved() { removed_ = true; }
+
+  bool IsAnimationTrigger() const { return animation_trigger_; }
 
  private:
   Member<EventListener> callback_;
@@ -91,6 +110,8 @@ class RegisteredEventListener final {
   unsigned blocked_event_warning_emitted_ : 1;
   unsigned passive_forced_for_document_target_ : 1;
   unsigned passive_specified_ : 1;
+  unsigned removed_ : 1;
+  unsigned animation_trigger_ : 1;
 };
 
 bool operator==(const RegisteredEventListener&, const RegisteredEventListener&);

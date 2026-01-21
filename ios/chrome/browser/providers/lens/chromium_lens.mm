@@ -2,19 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/public/provider/chrome/browser/lens/lens_api.h"
-#import "ios/public/provider/chrome/browser/lens/lens_configuration.h"
-#import "ios/web/public/navigation/navigation_manager.h"
-
-#import "base/bind.h"
-#import "base/notreached.h"
-#import "base/threading/sequenced_task_runner_handle.h"
-
 #import <UIKit/UIKit.h>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import <ostream>
+
+#import "base/functional/bind.h"
+#import "base/notreached.h"
+#import "ios/public/provider/chrome/browser/lens/lens_api.h"
+#import "ios/public/provider/chrome/browser/lens/lens_configuration.h"
+#import "ios/public/provider/chrome/browser/lens/lens_overlay_api.h"
+#import "ios/web/public/navigation/navigation_manager.h"
 
 namespace ios {
 namespace provider {
@@ -29,12 +26,35 @@ enum ChromiumLensProviderErrors : NSInteger {
   kChromiumLensProviderErrorNotImplemented,
 };
 
-}
+}  // namespace
 
 using LensWebParamsCallback =
     base::OnceCallback<void(web::NavigationManager::WebLoadParams)>;
 
 id<ChromeLensController> NewChromeLensController(LensConfiguration* config) {
+  // Lens is not supported in Chromium.
+  return nil;
+}
+
+UIViewController<ChromeLensViewFinderController>*
+NewChromeLensViewFinderController(LensConfiguration* config) {
+  // Lens is not supported in Chromium.
+  return nil;
+}
+
+UIViewController<ChromeLensOverlay>* NewChromeLensOverlay(
+    LensImageSource* imageSource,
+    LensConfiguration* config,
+    NSArray<UIAction*>* precedingMenuItems,
+    NSArray<UIAction*>* additionalMenuItems) {
+  // Lens is not supported in Chromium.
+  return nil;
+}
+
+UIViewController<ChromeLensOverlay>* NewChromeLensOverlay(
+    LensImageSource* imageSource,
+    LensConfiguration* config,
+    NSArray<UIAction*>* additionalMenuItems) {
   // Lens is not supported in Chromium.
   return nil;
 }
@@ -49,8 +69,8 @@ bool IsLensWebResultsURL(const GURL& url) {
   return false;
 }
 
-absl::optional<LensEntrypoint> GetLensEntryPointFromURL(const GURL& url) {
-  return absl::nullopt;
+std::optional<LensEntrypoint> GetLensEntryPointFromURL(const GURL& url) {
+  return std::nullopt;
 }
 
 void GenerateLensLoadParamsAsync(LensQuery* query,

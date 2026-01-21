@@ -15,6 +15,8 @@
 #include "base/memory/raw_ptr.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
@@ -52,12 +54,12 @@ class ContentSettingsRegistry {
   friend struct base::LazyInstanceTraitsBase<ContentSettingsRegistry>;
 
   ContentSettingsRegistry();
-  ContentSettingsRegistry(WebsiteSettingsRegistry* website_settings_registry);
+  ContentSettingsRegistry(
+      PermissionSettingsRegistry* permission_settings_registry,
+      WebsiteSettingsRegistry* website_settings_registry);
   ~ContentSettingsRegistry();
 
   void Init();
-
-  typedef uint32_t Platforms;
 
   // Register a new content setting. This maps an origin to an ALLOW/ASK/BLOCK
   // value (see the ContentSetting enum).
@@ -65,15 +67,15 @@ class ContentSettingsRegistry {
                 const std::string& name,
                 ContentSetting initial_default_value,
                 WebsiteSettingsInfo::SyncStatus sync_status,
-                const std::vector<std::string>& allowlisted_schemes,
+                const std::vector<std::string>& allowlisted_primary_schemes,
                 const std::set<ContentSetting>& valid_settings,
                 WebsiteSettingsInfo::ScopingType scoping_type,
-                Platforms platforms,
+                WebsiteSettingsRegistry::Platforms platforms,
                 ContentSettingsInfo::IncognitoBehavior incognito_behavior,
-                ContentSettingsInfo::StorageBehavior storage_behavior,
-                ContentSettingsInfo::OriginRestriction origin_restriction);
+                PermissionSettingsInfo::OriginRestriction origin_restriction);
 
   Map content_settings_info_;
+  raw_ptr<PermissionSettingsRegistry> permission_settings_registry_;
   raw_ptr<WebsiteSettingsRegistry> website_settings_registry_;
 };
 

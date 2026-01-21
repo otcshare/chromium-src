@@ -5,6 +5,7 @@
 #include "services/network/disk_cache/mojo_backend_file_operations.h"
 
 #include "base/task/sequenced_task_runner.h"
+#include "net/disk_cache/basic_cache_file.h"
 
 namespace network {
 
@@ -20,9 +21,9 @@ class FileEnumeratorImpl final
       : remote_(std::move(remote)) {}
   ~FileEnumeratorImpl() override = default;
 
-  absl::optional<FileEnumerationEntry> Next() override {
+  std::optional<FileEnumerationEntry> Next() override {
     if (has_seen_end_) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     if (index_ >= entries_.size()) {
       index_ = 0;
@@ -31,14 +32,14 @@ class FileEnumeratorImpl final
     }
     if (entries_.empty()) {
       if (has_seen_end_) {
-        return absl::nullopt;
+        return std::nullopt;
       }
       has_error_ = true;
       has_seen_end_ = true;
-      return absl::nullopt;
+      return std::nullopt;
     }
     DCHECK_LT(index_, entries_.size());
-    return absl::make_optional<FileEnumerationEntry>(
+    return std::make_optional<FileEnumerationEntry>(
         std::move(entries_[index_++]));
   }
 
@@ -80,17 +81,18 @@ bool MojoBackendFileOperations::DirectoryExists(const base::FilePath& path) {
   return result;
 }
 
-base::File MojoBackendFileOperations::OpenFile(const base::FilePath& path,
-                                               uint32_t flags) {
+std::unique_ptr<disk_cache::CacheFile> MojoBackendFileOperations::OpenFile(
+    const base::FilePath& path,
+    uint32_t flags) {
   base::File file;
   base::File::Error error;
   // The value will be checked in the message receiver side.
   auto flags_to_pass = static_cast<mojom::HttpCacheBackendOpenFileFlags>(flags);
   remote_->OpenFile(path, flags_to_pass, &file, &error);
   if (error != base::File::FILE_OK) {
-    return base::File(error);
+    return std::make_unique<disk_cache::BasicCacheFile>(base::File(error));
   }
-  return file;
+  return std::make_unique<disk_cache::BasicCacheFile>(std::move(file));
 }
 
 bool MojoBackendFileOperations::DeleteFile(const base::FilePath& path,
@@ -121,9 +123,9 @@ bool MojoBackendFileOperations::ReplaceFile(const base::FilePath& from_path,
   return error == base::File::FILE_OK;
 }
 
-absl::optional<base::File::Info> MojoBackendFileOperations::GetFileInfo(
+std::optional<base::File::Info> MojoBackendFileOperations::GetFileInfo(
     const base::FilePath& path) {
-  absl::optional<base::File::Info> info;
+  std::optional<base::File::Info> info;
   remote_->GetFileInfo(path, &info);
   return info;
 }
@@ -144,6 +146,10 @@ void MojoBackendFileOperations::CleanupDirectory(
 std::unique_ptr<disk_cache::UnboundBackendFileOperations>
 MojoBackendFileOperations::Unbind() {
   return std::make_unique<UnboundMojoBackendFileOperations>(remote_.Unbind());
+}
+
+bool MojoBackendFileOperations::IsEncrypted() const {
+  return false;
 }
 
 UnboundMojoBackendFileOperations::UnboundMojoBackendFileOperations(

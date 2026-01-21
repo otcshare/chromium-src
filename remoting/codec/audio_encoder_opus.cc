@@ -4,10 +4,12 @@
 
 #include "remoting/codec/audio_encoder_opus.h"
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/multi_channel_resampler.h"
 #include "third_party/opus/src/include/opus.h"
 
@@ -46,8 +48,7 @@ AudioEncoderOpus::AudioEncoderOpus()
       frame_size_(0),
       resampling_data_(nullptr),
       resampling_data_size_(0),
-      resampling_data_pos_(0) {
-}
+      resampling_data_pos_(0) {}
 
 AudioEncoderOpus::~AudioEncoderOpus() {
   DestroyEncoder();
@@ -65,8 +66,8 @@ void AudioEncoderOpus::InitEncoder() {
 
   opus_encoder_ctl(encoder_.get(), OPUS_SET_BITRATE(kOutputBitrateBps));
 
-  frame_size_ = sampling_rate_ * kFrameSizeMs /
-      base::Time::kMillisecondsPerSecond;
+  frame_size_ =
+      sampling_rate_ * kFrameSizeMs / base::Time::kMillisecondsPerSecond;
 
   if (sampling_rate_ != kOpusSamplingRate) {
     resample_buffer_.reset(
@@ -107,9 +108,9 @@ bool AudioEncoderOpus::ResetForPacket(AudioPacket* packet) {
 
     if (channels_ <= 0 || channels_ > 2 ||
         !IsSupportedSampleRate(sampling_rate_)) {
-      LOG(WARNING) << "Unsupported OPUS parameters: "
-                   << channels_ << " channels with "
-                   << sampling_rate_ << " samples per second.";
+      LOG(WARNING) << "Unsupported OPUS parameters: " << channels_
+                   << " channels with " << sampling_rate_
+                   << " samples per second.";
       return false;
     }
 
@@ -123,11 +124,12 @@ void AudioEncoderOpus::FetchBytesToResample(int resampler_frame_delay,
                                             media::AudioBus* audio_bus) {
   DCHECK(resampling_data_);
   int samples_left = (resampling_data_size_ - resampling_data_pos_) /
-      kBytesPerSample / channels_;
+                     kBytesPerSample / channels_;
   DCHECK_LE(audio_bus->frames(), samples_left);
   static_assert(kBytesPerSample == 2, "FromInterleaved expects 2 bytes.");
   audio_bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-      reinterpret_cast<const int16_t*>(resampling_data_ + resampling_data_pos_),
+      reinterpret_cast<const int16_t*>(
+          UNSAFE_TODO(resampling_data_ + resampling_data_pos_)),
       audio_bus->frames());
   resampling_data_pos_ += audio_bus->frames() * kBytesPerSample * channels_;
   DCHECK_LE(resampling_data_pos_, static_cast<int>(resampling_data_size_));
@@ -150,7 +152,7 @@ std::unique_ptr<AudioPacket> AudioEncoderOpus::Encode(
 
   int samples_in_packet = packet->data(0).size() / kBytesPerSample / channels_;
   const int16_t* next_sample =
-      reinterpret_cast<const int16_t*>(packet->data(0).data());
+      UNSAFE_TODO(reinterpret_cast<const int16_t*>(packet->data(0).data()));
 
   // Create a new packet of encoded data.
   std::unique_ptr<AudioPacket> encoded_packet(new AudioPacket());
@@ -169,8 +171,9 @@ std::unique_ptr<AudioPacket> AudioEncoderOpus::Encode(
     if (leftover_samples_ > 0) {
       pcm_buffer = leftover_buffer_.get();
       int samples_to_copy = samples_wanted - leftover_samples_;
-      memcpy(leftover_buffer_.get() + leftover_samples_ * channels_,
-             next_sample, samples_to_copy * kBytesPerSample * channels_);
+      UNSAFE_TODO(memcpy(leftover_buffer_.get() + leftover_samples_ * channels_,
+                         next_sample,
+                         samples_to_copy * kBytesPerSample * channels_));
     } else {
       pcm_buffer = next_sample;
     }
@@ -199,8 +202,8 @@ std::unique_ptr<AudioPacket> AudioEncoderOpus::Encode(
 
     // Encode.
     unsigned char* buffer = reinterpret_cast<unsigned char*>(std::data(*data));
-    int result = opus_encode(encoder_, pcm_buffer, kFrameSamples,
-                             buffer, data->length());
+    int result = opus_encode(encoder_, pcm_buffer, kFrameSamples, buffer,
+                             data->length());
     if (result < 0) {
       LOG(ERROR) << "opus_encode() failed with error code: " << result;
       return nullptr;
@@ -213,27 +216,29 @@ std::unique_ptr<AudioPacket> AudioEncoderOpus::Encode(
     if (samples_consumed >= leftover_samples_) {
       samples_consumed -= leftover_samples_;
       leftover_samples_ = 0;
-      next_sample += samples_consumed * channels_;
+      UNSAFE_TODO(next_sample += samples_consumed * channels_);
       samples_in_packet -= samples_consumed;
     } else {
       leftover_samples_ -= samples_consumed;
-      memmove(leftover_buffer_.get(),
-              leftover_buffer_.get() + samples_consumed * channels_,
-              leftover_samples_ * channels_ * kBytesPerSample);
+      UNSAFE_TODO(memmove(leftover_buffer_.get(),
+                          leftover_buffer_.get() + samples_consumed * channels_,
+                          leftover_samples_ * channels_ * kBytesPerSample));
     }
   }
 
   // Store the leftover samples.
   if (samples_in_packet > 0) {
     DCHECK_LE(leftover_samples_ + samples_in_packet, leftover_buffer_size_);
-    memmove(leftover_buffer_.get() + leftover_samples_ * channels_,
-            next_sample, samples_in_packet * kBytesPerSample * channels_);
+    UNSAFE_TODO(memmove(leftover_buffer_.get() + leftover_samples_ * channels_,
+                        next_sample,
+                        samples_in_packet * kBytesPerSample * channels_));
     leftover_samples_ += samples_in_packet;
   }
 
   // Return nullptr if there's nothing in the packet.
-  if (encoded_packet->data_size() == 0)
+  if (encoded_packet->data_size() == 0) {
     return nullptr;
+  }
 
   return encoded_packet;
 }

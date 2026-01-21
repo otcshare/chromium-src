@@ -4,24 +4,27 @@
 
 #include "net/proxy_resolution/proxy_config_service_linux.h"
 
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
@@ -136,23 +139,23 @@ class MockEnvironment : public base::Environment {
   }
 
   // Begin base::Environment implementation.
-  bool GetVar(base::StringPiece variable_name, std::string* result) override {
+  std::optional<std::string> GetVar(base::cstring_view variable_name) override {
     auto it = table_.find(variable_name);
-    if (it == table_.end() || !*it->second)
-      return false;
+    if (it == table_.end() || !*it->second) {
+      return std::nullopt;
+    }
 
     // Note that the variable may be defined but empty.
-    *result = *(it->second);
-    return true;
+    return *(it->second);
   }
 
-  bool SetVar(base::StringPiece variable_name,
+  bool SetVar(base::cstring_view variable_name,
               const std::string& new_value) override {
     ADD_FAILURE();
     return false;
   }
 
-  bool UnSetVar(base::StringPiece variable_name) override {
+  bool UnSetVar(base::cstring_view variable_name) override {
     ADD_FAILURE();
     return false;
   }
@@ -162,7 +165,7 @@ class MockEnvironment : public base::Environment {
   EnvVarValues values;
 
  private:
-  std::map<base::StringPiece, const char**> table_;
+  std::map<base::cstring_view, const char**> table_;
 };
 
 class MockSettingGetter : public ProxyConfigServiceLinux::SettingGetter {
@@ -473,7 +476,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGSettingsTest) {
 
   // Inspired from proxy_config_service_win_unittest.cc.
   // Very neat, but harder to track down failures though.
-  const struct {
+  struct Tests {
     // Short description to identify the test
     std::string description;
 
@@ -485,7 +488,8 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGSettingsTest) {
     bool auto_detect;
     GURL pac_url;
     ProxyRulesExpectation proxy_rules;
-  } tests[] = {
+  };
+  const auto tests = std::to_array<Tests>({
       {
           TEST_DESC("No proxying"),
           {
@@ -762,7 +766,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGSettingsTest) {
           ProxyRulesExpectation::Single("www.google.com:80",  // single proxy
                                         "*.google.com"),      // bypass rules
       },
-  };
+  });
 
   for (size_t i = 0; i < std::size(tests); ++i) {
     SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
@@ -791,7 +795,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGSettingsTest) {
 
 TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
   // Inspired from proxy_config_service_win_unittest.cc.
-  const struct {
+  struct Tests {
     // Short description to identify the test
     std::string description;
 
@@ -803,7 +807,8 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
     bool auto_detect;
     GURL pac_url;
     ProxyRulesExpectation proxy_rules;
-  } tests[] = {
+  };
+  const auto tests = std::to_array<Tests>({
       {
           TEST_DESC("No proxying"),
           {
@@ -1094,7 +1099,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
               "www.google.com:80",
               "*.google.com,*foo.com:99,1.2.3.4:22,127.0.0.1/8"),
       },
-  };
+  });
 
   for (size_t i = 0; i < std::size(tests); ++i) {
     SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
@@ -1169,7 +1174,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
     long_line += "-";
 
   // Inspired from proxy_config_service_win_unittest.cc.
-  const struct {
+  struct Tests {
     // Short description to identify the test
     std::string description;
 
@@ -1182,7 +1187,8 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
     bool auto_detect;
     GURL pac_url;
     ProxyRulesExpectation proxy_rules;
-  } tests[] = {
+  };
+  const auto tests = std::to_array<Tests>({
       {
           TEST_DESC("No proxying"),
 
@@ -1709,7 +1715,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
               "socks5://socks.comfy.com:1234",  // socks
               "*.google.com,*.kde.org"),        // bypass rules
       },
-  };
+  });
 
   for (size_t i = 0; i < std::size(tests); ++i) {
     SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
@@ -1724,8 +1730,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
             std::move(env), TRAFFIC_ANNOTATION_FOR_TESTS));
     ProxyConfigWithAnnotation config;
     // Overwrite the kioslaverc file.
-    base::WriteFile(kioslaverc_, tests[i].kioslaverc.c_str(),
-                    tests[i].kioslaverc.length());
+    base::WriteFile(kioslaverc_, tests[i].kioslaverc);
     sync_config_getter.SetupAndInitialFetch();
     ProxyConfigService::ConfigAvailability availability =
         sync_config_getter.SyncGetLatestProxyConfig(&config);
@@ -1757,7 +1762,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEHomePicker) {
                                        "");                  // bypass rules
 
   // Overwrite the .kde kioslaverc file.
-  base::WriteFile(kioslaverc_, slaverc3.c_str(), slaverc3.length());
+  base::WriteFile(kioslaverc_, slaverc3);
 
   // If .kde4 exists it will mess up the first test. It should not, as
   // we created the directory for $HOME in the test setup.
@@ -1782,7 +1787,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEHomePicker) {
   // Now create .kde4 and put a kioslaverc in the config directory.
   // Note that its timestamp will be at least as new as the .kde one.
   base::CreateDirectory(kde4_config_);
-  base::WriteFile(kioslaverc4_, slaverc4.c_str(), slaverc4.length());
+  base::WriteFile(kioslaverc4_, slaverc4);
   CHECK(base::PathExists(kioslaverc4_));
 
   {
@@ -1856,7 +1861,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEHomePicker) {
 
   // For KDE 5 create ${HOME}/.config and put a kioslaverc in the directory.
   base::CreateDirectory(config_home_);
-  base::WriteFile(kioslaverc5_, slaverc5.c_str(), slaverc5.length());
+  base::WriteFile(kioslaverc5_, slaverc5);
   CHECK(base::PathExists(kioslaverc5_));
 
   {
@@ -1963,7 +1968,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEMultipleKioslaverc) {
   xdg_config_dirs += ':';
   xdg_config_dirs += config_xdg_home_.value();
 
-  const struct {
+  struct Tests {
     // Short description to identify the test
     std::string description;
 
@@ -1973,7 +1978,8 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEMultipleKioslaverc) {
     bool auto_detect;
     GURL pac_url;
     ProxyRulesExpectation proxy_rules;
-  } tests[] = {
+  };
+  const auto tests = std::to_array<Tests>({
       {
           TEST_DESC("Use xdg/kioslaverc"),
 
@@ -2012,7 +2018,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEMultipleKioslaverc) {
               "",                         // ftp
               "*.google.com,*.kde.org"),  // bypass rules,
       },
-  };
+  });
 
   // Create directories for all configs
   base::CreateDirectory(config_home_);

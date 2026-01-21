@@ -9,7 +9,6 @@
 
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/base/signin_buildflags.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -39,6 +38,9 @@ class NetworkConnectionTracker;
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 class TokenWebData;
+namespace unexportable_keys {
+class UnexportableKeyService;
+}
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -56,11 +58,12 @@ std::unique_ptr<ProfileOAuth2TokenService> BuildProfileOAuth2TokenService(
     account_manager::AccountManagerFacade* account_manager_facade,
     bool is_regular_profile,
 #endif  // BUILDFLAG(IS_CHROMEOS)
-#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
     bool delete_signin_cookies_on_exit,
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
     scoped_refptr<TokenWebData> token_web_data,
+    unexportable_keys::UnexportableKeyService* unexportable_key_service,
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 #if BUILDFLAG(IS_IOS)
     std::unique_ptr<DeviceAccountsProvider> device_accounts_provider,

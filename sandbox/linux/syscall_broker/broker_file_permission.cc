@@ -14,6 +14,7 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/strings/string_util.h"
 #include "sandbox/linux/syscall_broker/broker_command.h"
 
@@ -30,6 +31,25 @@ BrokerFilePermission& BrokerFilePermission::operator=(
 
 BrokerFilePermission::~BrokerFilePermission() = default;
 
+namespace {
+bool ContainsParentReference(const char* path, size_t len) {
+  // No trailing /..
+  if (len >= 3 && UNSAFE_TODO(path[len - 3]) == '/' &&
+      UNSAFE_TODO(path[len - 2]) == '.' && UNSAFE_TODO(path[len - 1]) == '.') {
+    return true;
+  }
+  for (size_t i = 0; i < len; i++) {
+    if (UNSAFE_TODO(path[i]) == '/' && (len - i) > 3) {
+      if (UNSAFE_TODO(path[i + 1]) == '.' && UNSAFE_TODO(path[i + 2]) == '.' &&
+          UNSAFE_TODO(path[i + 3]) == '/') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+}  // namespace
+
 bool BrokerFilePermission::ValidatePath(const char* path) {
   if (!path) {
     return false;
@@ -37,25 +57,19 @@ bool BrokerFilePermission::ValidatePath(const char* path) {
 
   const size_t len = strlen(path);
   // No empty paths
-  if (len == 0)
+  if (len == 0) {
     return false;
+  }
   // Paths must be absolute and not relative
-  if (path[0] != '/')
+  if (path[0] != '/') {
     return false;
+  }
   // No trailing / (but "/" is valid)
-  if (len > 1 && path[len - 1] == '/')
+  if (len > 1 && UNSAFE_TODO(path[len - 1]) == '/') {
     return false;
-  // No trailing /..
-  if (len >= 3 && path[len - 3] == '/' && path[len - 2] == '.' &&
-      path[len - 1] == '.')
+  }
+  if (ContainsParentReference(path, len)) {
     return false;
-  // No /../ anywhere
-  for (size_t i = 0; i < len; i++) {
-    if (path[i] == '/' && (len - i) > 3) {
-      if (path[i + 1] == '.' && path[i + 2] == '.' && path[i + 3] == '/') {
-        return false;
-      }
-    }
   }
   return true;
 }
@@ -234,7 +248,10 @@ const char* BrokerFilePermission::CheckInotifyAddWatchWithIntermediates(
     return nullptr;
   }
 
-  if (!CheckIntermediates(requested_filename,
+  // If this permission is recursive and a prefix of `requested_filename`
+  // matches this permission, allow. Otherwise check intermediates.
+  if (!(recursive() && MatchPath(requested_filename)) &&
+      !CheckIntermediates(requested_filename,
                           /*can_match_full_path=*/true)) {
     return nullptr;
   }
@@ -259,8 +276,9 @@ bool BrokerFilePermission::CheckIntermediates(const char* requested_filename,
          // Check whether |requested_filename| matches a leading directory of
          // |path_|.
          (requested_length < path_.length() &&
-          memcmp(path_.c_str(), requested_filename, requested_length) == 0 &&
-          path_.c_str()[requested_length] == '/');
+          UNSAFE_TODO(memcmp(path_.c_str(), requested_filename,
+                             requested_length)) == 0 &&
+          UNSAFE_TODO(path_.c_str()[requested_length]) == '/');
 }
 
 const char* BrokerFilePermission::GetErrorMessageForTests() {
@@ -285,6 +303,8 @@ void BrokerFilePermission::DieOnInvalidPermission() {
     CHECK(last_char == '/') << GetErrorMessageForTests();
   else
     CHECK(last_char != '/') << GetErrorMessageForTests();
+
+  CHECK(!ContainsParentReference(path_.c_str(), path_.length()));
 }
 
 BrokerFilePermission::BrokerFilePermission(std::string path, uint64_t flags)

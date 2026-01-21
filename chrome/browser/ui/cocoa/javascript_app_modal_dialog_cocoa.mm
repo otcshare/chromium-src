@@ -7,7 +7,7 @@
 #import <Cocoa/Cocoa.h>
 #include <stddef.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
@@ -60,11 +60,6 @@ JavaScriptAppModalDialogCocoa::GetAlertParams() {
   params->title = controller_->title();
   params->message_text = controller_->message_text();
 
-  // Set a blank icon for dialogs with text provided by the page.
-  // "onbeforeunload" dialogs don't have text provided by the page, so it's
-  // OK to use the app icon.
-  params->hide_application_icon = !controller_->is_before_unload_dialog();
-
   // Determine the names of the dialog buttons based on the flags. "Default"
   // is the OK button. "Other" is the cancel button. We don't use the
   // "Alternate" button in NSRunAlertPanel.
@@ -111,14 +106,16 @@ void JavaScriptAppModalDialogCocoa::OnAlertFinished(
     case AlertDisposition::SECONDARY_BUTTON:
       // If the user wants to stay on this page, stop quitting (if a quit is in
       // progress).
-      if (controller_->is_before_unload_dialog())
+      if (controller_->is_before_unload_dialog()) {
         chrome_browser_application_mac::CancelTerminate();
+      }
       controller_->OnCancel(check_box_value);
       break;
     case AlertDisposition::CLOSE:
       controller_->OnClose();
       break;
   }
+  alert_bridge_ = nullptr;
   delete this;
 }
 
@@ -133,12 +130,11 @@ void JavaScriptAppModalDialogCocoa::OnMojoDisconnect() {
 void JavaScriptAppModalDialogCocoa::ShowAppModalDialog() {
   is_showing_ = true;
 
-  // Set `alert_bridge` to point to the in-process or out-of-process interface
+  // Set `alert_bridge_` to point to the in-process or out-of-process interface
   // on which we will call Show. We need different paths (mojo for remote and
   // raw pointers for in-process) to have consistent ordering with other
   // remote_cocoa interfaces.
   // https://crbug.com/1236369
-  remote_cocoa::mojom::AlertBridge* alert_bridge = nullptr;
   if (auto* application_host = remote_cocoa::ApplicationHost::GetForNativeView(
           controller_->web_contents()->GetNativeView())) {
     // If the alert is from a window that is out of process then use the
@@ -149,24 +145,26 @@ void JavaScriptAppModalDialogCocoa::ShowAppModalDialog() {
         base::BindOnce(&JavaScriptAppModalDialogCocoa::OnMojoDisconnect,
                        weak_factory_.GetWeakPtr()));
     application_host->GetApplication()->CreateAlert(std::move(bridge_receiver));
-    alert_bridge = alert_bridge_remote_.get();
+    alert_bridge_ = alert_bridge_remote_.get();
   } else {
     // Otherwise create an remote_cocoa::AlertBridge directly in-process. Note
     // that `alert_bridge` will delete itself.
-    alert_bridge = new remote_cocoa::AlertBridge(
+    alert_bridge_ = new remote_cocoa::AlertBridge(
         mojo::PendingReceiver<remote_cocoa::mojom::AlertBridge>());
   }
 
-  alert_bridge->Show(
+  alert_bridge_->Show(
       GetAlertParams(),
       base::BindOnce(&JavaScriptAppModalDialogCocoa::OnAlertFinished,
                      weak_factory_.GetWeakPtr()));
 }
 
-void JavaScriptAppModalDialogCocoa::ActivateAppModalDialog() {
-}
+void JavaScriptAppModalDialogCocoa::ActivateAppModalDialog() {}
 
 void JavaScriptAppModalDialogCocoa::CloseAppModalDialog() {
+  if (alert_bridge_) {
+    alert_bridge_->Dismiss();
+  }
   // This function expects that controller_->OnClose will be called before this
   // function completes.
   OnAlertFinished(AlertDisposition::CLOSE, std::u16string(),
@@ -174,6 +172,9 @@ void JavaScriptAppModalDialogCocoa::CloseAppModalDialog() {
 }
 
 void JavaScriptAppModalDialogCocoa::AcceptAppModalDialog() {
+  if (alert_bridge_) {
+    alert_bridge_->Dismiss();
+  }
   // Note that for out-of-process dialogs, we cannot find out the actual
   // prompt text or suppression checkbox state in time (because the caller
   // expects that OnAlertFinished be called before the function ends), so just
@@ -184,6 +185,9 @@ void JavaScriptAppModalDialogCocoa::AcceptAppModalDialog() {
 }
 
 void JavaScriptAppModalDialogCocoa::CancelAppModalDialog() {
+  if (alert_bridge_) {
+    alert_bridge_->Dismiss();
+  }
   OnAlertFinished(AlertDisposition::SECONDARY_BUTTON, std::u16string(), false
                   /* check_box_value */);
 }

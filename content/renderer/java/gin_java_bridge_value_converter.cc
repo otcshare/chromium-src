@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/values.h"
 #include "content/common/android/gin_java_bridge_value.h"
@@ -89,9 +90,8 @@ class TypedArraySerializerImpl : public TypedArraySerializer {
                    base::Value::List* out) override {
     DCHECK_EQ(data_length, typed_array_->Length() * sizeof(ElementType));
     for (ElementType *element = reinterpret_cast<ElementType*>(data),
-                     *end = element + typed_array_->Length();
-         element != end;
-         ++element) {
+                     *end = UNSAFE_TODO(element + typed_array_->Length());
+         element != end; UNSAFE_TODO(++element)) {
       // Serialize the uint32 value as the binary type since base::Value
       // supports only int for the integer type, and the uint8 and the uint16
       // with Base::Value since they fit into int.
@@ -133,7 +133,6 @@ std::unique_ptr<TypedArraySerializer> TypedArraySerializer::Create(
     return TypedArraySerializerImpl<double, double>::Create(typed_array);
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace

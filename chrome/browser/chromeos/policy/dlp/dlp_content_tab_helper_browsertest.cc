@@ -5,16 +5,19 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
 
 #include "base/path_service.h"
+#include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_observer.h"
-#include "chrome/browser/chromeos/policy/dlp/mock_dlp_content_observer.h"
+#include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_content_observer.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -59,6 +62,8 @@ IN_PROC_BROWSER_TEST_F(DlpContentTabHelperBrowserTest, PlatformApp) {
   content::CreateAndLoadWebContentsObserver app_loaded_observer;
   const extensions::Extension* extension = InstallPlatformApp("dlp_test");
   ASSERT_TRUE(extension);
+  apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting allowlist(
+      extension->id());
 
   // Restrict screenshot for Platform App
   GURL kUrl = GURL("chrome-extension://" + extension->id() + "/index.html");
@@ -91,10 +96,9 @@ class DlpContentTabHelperBFCacheBrowserTest : public InProcessBrowserTest {
       : scoped_dlp_content_observer_(&mock_dlp_content_observer_),
         ignore_dlp_rules_manager_(
             DlpContentTabHelper::IgnoreDlpRulesManagerForTesting()) {
-    bfcache_feature_list_.InitWithFeatures(
-        {features::kBackForwardCache},
-        // Allow BackForwardCache for all devices regardless of their memory.
-        {features::kBackForwardCacheMemoryControls});
+    bfcache_feature_list_.InitWithFeaturesAndParameters(
+        content::GetBasicBackForwardCacheFeatureForTesting(),
+        content::GetDefaultDisabledBackForwardCacheFeaturesForTesting());
   }
 
   void SetUpOnMainThread() override {

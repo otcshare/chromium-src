@@ -1,8 +1,9 @@
 // Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
 #include "device/vr/public/mojom/pose.h"
+
+#include <sstream>
 
 #include "ui/gfx/geometry/decomposed_transform.h"
 #include "ui/gfx/geometry/transform.h"
@@ -22,11 +23,11 @@ Pose::Pose(const gfx::Point3F& position, const gfx::Quaternion& orientation)
   other_from_this_ = gfx::Transform::Compose(decomposed_pose);
 }
 
-absl::optional<Pose> Pose::Create(const gfx::Transform& other_from_this) {
-  absl::optional<gfx::DecomposedTransform> decomposed_other_from_this =
+std::optional<Pose> Pose::Create(const gfx::Transform& other_from_this) {
+  std::optional<gfx::DecomposedTransform> decomposed_other_from_this =
       other_from_this.Decompose();
   if (!decomposed_other_from_this)
-    return absl::nullopt;
+    return std::nullopt;
 
   return Pose(gfx::Point3F(decomposed_other_from_this->translate[0],
                            decomposed_other_from_this->translate[1],
@@ -36,6 +37,13 @@ absl::optional<Pose> Pose::Create(const gfx::Transform& other_from_this) {
 
 const gfx::Transform& Pose::ToTransform() const {
   return other_from_this_;
+}
+
+std::string Pose::ToString() const {
+  std::stringstream ss;
+  ss << "Position=" << position_.ToString()
+     << " Orientation=" << orientation_.ToString();
+  return ss.str();
 }
 
 }  // namespace device

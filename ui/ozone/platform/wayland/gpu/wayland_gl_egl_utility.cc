@@ -4,7 +4,7 @@
 
 #include "ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
 
 // From ANGLE's egl/eglext.h. Follows the same approach as in
 // ui/gl/gl_surface_egl.cc
@@ -18,6 +18,11 @@
 #define EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE 0x348F
 #define EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE 0x3209
 #endif /* EGL_ANGLE_platform_angle */
+
+#ifndef EGL_KHR_platform_gbm
+#define EGL_KHR_platform_gbm 1
+#define EGL_PLATFORM_GBM_KHR 0x31D7
+#endif /* EGL_KHR_platform_gbm */
 
 #ifndef EGL_ANGLE_platform_angle_vulkan
 #define EGL_ANGLE_platform_angle_vulkan 1
@@ -44,14 +49,19 @@ WaylandGLEGLUtility::~WaylandGLEGLUtility() = default;
 void WaylandGLEGLUtility::GetAdditionalEGLAttributes(
     EGLenum platform_type,
     std::vector<EGLAttrib>* display_attributes) {
-  if (base::Contains(*display_attributes,
-                     EGL_PLATFORM_ANGLE_DEVICE_TYPE_SWIFTSHADER_ANGLE)) {
+  if (std::ranges::contains(*display_attributes,
+                            EGL_PLATFORM_ANGLE_DEVICE_TYPE_SWIFTSHADER_ANGLE)) {
     display_attributes->push_back(
         EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
     display_attributes->push_back(
         EGL_PLATFORM_VULKAN_DISPLAY_MODE_HEADLESS_ANGLE);
     return;
   }
+
+#if defined(WAYLAND_GBM)
+  display_attributes->push_back(EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
+  display_attributes->push_back(EGL_PLATFORM_GBM_KHR);
+#endif  // defined(WAYLAND_GBM)
 
   if (std::find(display_attributes->begin(), display_attributes->end(),
                 EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE) !=
@@ -67,18 +77,6 @@ void WaylandGLEGLUtility::GetAdditionalEGLAttributes(
 
 void WaylandGLEGLUtility::ChooseEGLAlphaAndBufferSize(EGLint* alpha_size,
                                                       EGLint* buffer_size) {}
-
-bool WaylandGLEGLUtility::IsTransparentBackgroundSupported() const {
-  return true;
-}
-
-void WaylandGLEGLUtility::CollectGpuExtraInfo(
-    bool enable_native_gpu_memory_buffers,
-    gfx::GpuExtraInfo& gpu_extra_info) const {}
-
-bool WaylandGLEGLUtility::X11DoesVisualHaveAlphaForTest() const {
-  return false;
-}
 
 bool WaylandGLEGLUtility::HasVisualManager() {
   return false;

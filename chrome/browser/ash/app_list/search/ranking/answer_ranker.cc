@@ -7,17 +7,20 @@
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
+#include "chrome/browser/ash/app_list/search/types.h"
 
 namespace app_list {
 namespace {
 
 // Returns the provider type's priority. A higher value indicates higher
 // priority. Providers that are never used for answers will have 0 priority.
-bool GetPriority(ProviderType type) {
+int GetPriority(ProviderType type) {
   switch (type) {
     case ProviderType::kOmnibox:
-      return 2;
+      return 3;
     case ProviderType::kKeyboardShortcut:
+      return 2;
+    case ProviderType::kSystemInfo:
       return 1;
     default:
       return 0;
@@ -30,8 +33,29 @@ ChromeSearchResult* GetOmniboxCandidate(Results& results) {
   ChromeSearchResult* top_answer = nullptr;
   double top_score = 0.0;
   for (const auto& result : results) {
-    if (result->display_type() != DisplayType::kAnswerCard)
+    if (result->display_type() != DisplayType::kAnswerCard) {
       continue;
+    }
+
+    const double score = result->relevance();
+    if (!top_answer || score > top_score) {
+      top_answer = result.get();
+      top_score = score;
+    }
+  }
+  return top_answer;
+}
+
+// If there are any best match SystemInfo answers, returns the highest scoring
+// one. If not, returns nullptr.
+ChromeSearchResult* GetSystemInfoCandidate(Results& results) {
+  ChromeSearchResult* top_answer = nullptr;
+  double top_score = 0.0;
+  for (const auto& result : results) {
+    if (result->display_type() != DisplayType::kAnswerCard ||
+        !result->best_match()) {
+      continue;
+    }
 
     const double score = result->relevance();
     if (!top_answer || score > top_score) {
@@ -47,8 +71,9 @@ ChromeSearchResult* GetOmniboxCandidate(Results& results) {
 ChromeSearchResult* GetShortcutCandidate(Results& results) {
   ChromeSearchResult* best_shortcut = nullptr;
   for (auto& result : results) {
-    if (!result->best_match())
+    if (!result->best_match()) {
       continue;
+    }
 
     if (best_shortcut) {
       // A best match shortcut has already been found, so there are at least
@@ -67,28 +92,28 @@ AnswerRanker::AnswerRanker() = default;
 AnswerRanker::~AnswerRanker() = default;
 
 void AnswerRanker::Start(const std::u16string& query,
-                         ResultsMap& results,
-                         CategoriesList& categories) {
+                         const CategoriesList& categories) {
   burn_in_elapsed_ = false;
   chosen_answer_ = nullptr;
+  omnibox_candidates_.clear();
 }
 
 void AnswerRanker::UpdateResultRanks(ResultsMap& results,
                                      ProviderType provider) {
-  if (GetPriority(provider) == 0)
+  if (GetPriority(provider) == 0) {
     return;
+  }
 
   const auto it = results.find(provider);
   DCHECK(it != results.end());
   auto& new_results = it->second;
 
-  // Omnibox answers should not be displayed unless they are selected, so filter
-  // them out by default. If an Omnibox answer is selected later, it will be
-  // un-filtered then.
+  // Keep track of Omnibox candidates. Any candidates that are not selected
+  // should be filtered out later.
   if (provider == ProviderType::kOmnibox) {
-    for (auto& result : new_results) {
+    for (const auto& result : new_results) {
       if (result->display_type() == DisplayType::kAnswerCard) {
-        result->scoring().filter = true;
+        omnibox_candidates_.push_back(result.get());
       }
     }
   }
@@ -96,9 +121,7 @@ void AnswerRanker::UpdateResultRanks(ResultsMap& results,
   // Don't change a selected answer after the burn-in period has elapsed. This
   // includes ensuring that the answer is re-selected.
   if (burn_in_elapsed_ && chosen_answer_) {
-    if (chosen_answer_->result_type() == provider) {
-      PromoteChosenAnswer();
-    }
+    PromoteChosenAnswer();
     return;
   }
 
@@ -118,14 +141,19 @@ void AnswerRanker::UpdateResultRanks(ResultsMap& results,
     case ProviderType::kKeyboardShortcut:
       new_answer = GetShortcutCandidate(new_results);
       break;
+    case ProviderType::kSystemInfo:
+      new_answer = GetSystemInfoCandidate(new_results);
+      break;
     default:
       return;
   }
-  if (new_answer)
+  if (new_answer) {
     chosen_answer_ = new_answer->GetWeakPtr();
+  }
 
-  if (burn_in_elapsed_)
+  if (burn_in_elapsed_) {
     PromoteChosenAnswer();
+  }
 }
 
 void AnswerRanker::OnBurnInPeriodElapsed() {
@@ -134,13 +162,24 @@ void AnswerRanker::OnBurnInPeriodElapsed() {
 }
 
 void AnswerRanker::PromoteChosenAnswer() {
-  if (!chosen_answer_)
+  if (!chosen_answer_) {
     return;
+  }
+
+  // Filter out unsuccessful Omnibox candidates.
+  for (ChromeSearchResult* result : omnibox_candidates_) {
+    if (result && result->id() != chosen_answer_->id()) {
+      result->scoring().set_filtered(true);
+    }
+  }
 
   chosen_answer_->SetDisplayType(DisplayType::kAnswerCard);
   chosen_answer_->SetMultilineTitle(true);
-  chosen_answer_->SetIconDimension(kAnswerCardIconDimension);
-  chosen_answer_->scoring().filter = false;
+  if (chosen_answer_->result_type() == ResultType::kSystemInfo) {
+    chosen_answer_->SetIconDimension(kSystemAnswerCardIconDimension);
+  } else {
+    chosen_answer_->SetIconDimension(kAnswerCardIconDimension);
+  }
 }
 
 }  // namespace app_list

@@ -5,7 +5,7 @@
 import("//build/config/android/config.gni")
 import("//build/config/android/rules.gni")
 import("//third_party/icu/config.gni")
-import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
+import("//third_party/jni_zero/jni_zero.gni")
 
 content_shell_manifest =
     "$target_gen_dir/content_shell_manifest/AndroidManifest.xml"
@@ -19,13 +19,28 @@ generate_jni("content_shell_jni_headers") {
   ]
 }
 
-shared_library("libcontent_shell_content_view") {
-  testonly = true
+template("content_shell_library") {
+  shared_library_with_jni(target_name) {
+    testonly = true
+    deps = invoker.deps + [
+             "//content/shell:content_shell_app",
+             "//content/shell:content_shell_lib",
+           ]
+    if (enable_javaless_renderers) {
+      deps += [ "//content/app:javaless_renderer" ]
+    }
+
+    sources = [ "shell_library_loader.cc" ]
+    configs -= [ "//build/config/android:hide_all_but_jni_onload" ]
+    configs += [ "//build/config/android:hide_all_but_jni" ]
+    forward_variables_from(invoker, [ "java_targets" ])
+  }
+}
+
+content_shell_library("libcontent_shell_content_view") {
   deps = [
     ":content_shell_jni_headers",
     "//components/crash/content/browser",
-    "//content/shell:content_shell_app",
-    "//content/shell:content_shell_lib",
     "//content/shell:pak",
     "//media",
     "//skia",
@@ -39,24 +54,16 @@ shared_library("libcontent_shell_content_view") {
       "//media/midi",
     ]
   }
-  sources = [ "shell_library_loader.cc" ]
-  configs -= [ "//build/config/android:hide_all_but_jni_onload" ]
-  configs += [ "//build/config/android:hide_all_but_jni" ]
+  java_targets = [ ":content_shell_apk" ]
 }
 
-shared_library("libcontent_native_test") {
-  testonly = true
+content_shell_library("libcontent_native_test") {
   deps = [
     "//base",
     "//base:base_javatests_lib",
     "//content/public/test/android:content_native_test_support",
-    "//content/shell:content_shell_app",
-    "//content/shell:content_shell_lib",
   ]
-
-  sources = [ "shell_test_library_loader.cc" ]
-  configs -= [ "//build/config/android:hide_all_but_jni_onload" ]
-  configs += [ "//build/config/android:hide_all_but_jni" ]
+  java_targets = [ ":content_shell_test_apk__test_apk" ]
 }
 
 android_resources("content_shell_java_resources") {
@@ -81,7 +88,6 @@ android_library("content_shell_java") {
     ":content_shell_java_resources",
     ":content_shell_manifest",
     "//base:base_java",
-    "//base:jni_java",
     "//build/android:build_java",
     "//components/download/internal/common:internal_java",
     "//components/embedder_support/android:content_view_java",
@@ -92,17 +98,17 @@ android_library("content_shell_java") {
     "//media/capture/video/android:capture_java",
     "//mojo/public/java:system_java",
     "//net/android:net_java",
+    "//third_party/jni_zero:jni_zero_java",
     "//ui/android:ui_java",
     "//ui/base/cursor/mojom:cursor_type_java",
     "//url:gurl_java",
   ]
+  srcjar_deps = [ ":content_shell_jni_headers" ]
   sources = [
     "java/src/org/chromium/content_shell/Shell.java",
     "java/src/org/chromium/content_shell/ShellManager.java",
     "java/src/org/chromium/content_shell/ShellViewAndroidDelegate.java",
   ]
-
-  annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
 }
 
 jinja_template("content_shell_manifest") {
@@ -110,6 +116,12 @@ jinja_template("content_shell_manifest") {
   input = "shell_apk/AndroidManifest.xml.jinja2"
   output = content_shell_manifest
   variables = [ "manifest_package=org.chromium.content_shell_apk" ]
+  if (enable_javaless_renderers) {
+    variables += [
+      "javaless_renderers=true",
+      "library_name=content_shell_content_view",
+    ]
+  }
 }
 
 jinja_template("content_shell_test_manifest") {
@@ -118,6 +130,12 @@ jinja_template("content_shell_test_manifest") {
   includes = [ "shell_apk/AndroidManifest.xml.jinja2" ]
   output = content_shell_test_manifest
   variables = [ "manifest_package=org.chromium.content_shell_apk.tests" ]
+  if (enable_javaless_renderers) {
+    variables += [
+      "javaless_renderers=true",
+      "library_name=content_native_test",
+    ]
+  }
 }
 
 android_resources("content_shell_apk_resources") {
@@ -140,7 +158,9 @@ android_library("content_shell_apk_java") {
     ":content_shell_java",
     ":content_shell_manifest",
     "//base:base_java",
+    "//base:process_launcher_java",
     "//build/android:build_java",
+    "//components/cached_flags:java",
     "//components/embedder_support/android:view_java",
     "//content/public/android:content_java",
     "//media/capture/video/android:capture_java",
@@ -151,7 +171,6 @@ android_library("content_shell_apk_java") {
   ]
 
   sources = [
-    "shell_apk/src/org/chromium/content_shell_apk/ChildProcessLauncherTestHelperService.java",
     "shell_apk/src/org/chromium/content_shell_apk/ChildProcessLauncherTestUtils.java",
     "shell_apk/src/org/chromium/content_shell_apk/ContentShellActivity.java",
     "shell_apk/src/org/chromium/content_shell_apk/ContentShellApplication.java",
@@ -173,13 +192,9 @@ android_assets("content_shell_assets") {
   disable_compression = true
   deps = [
     "//content/shell:pak",
+    "//gin:v8_snapshot_assets",
     "//third_party/icu:icu_assets",
   ]
-  if (use_v8_context_snapshot) {
-    deps += [ "//tools/v8_context_snapshot:v8_context_snapshot_assets" ]
-  } else {
-    deps += [ "//v8:v8_external_startup_data_assets" ]
-  }
 }
 
 template("content_shell_apk_tmpl") {
@@ -203,8 +218,8 @@ template("content_shell_apk_tmpl") {
       "//media/capture/video/android:capture_java",
       "//net/android:net_java",
       "//services/shape_detection:shape_detection_java",
-      "//third_party/mesa_headers",
       "//ui/android:ui_java",
+      "//ui/gl:gl_headers",
     ]
     loadable_modules = [ "$root_out_dir/libchrome_crashpad_handler.so" ]
   }
@@ -216,6 +231,7 @@ content_shell_apk_tmpl("content_shell_apk") {
   android_manifest = content_shell_manifest
   android_manifest_dep = ":content_shell_manifest"
   shared_libraries = [ ":libcontent_shell_content_view" ]
+  srcjar_deps = [ ":libcontent_shell_content_view__jni_registration" ]
   command_line_flags_file = "content-shell-command-line"
 }
 
@@ -225,12 +241,12 @@ content_shell_apk_tmpl("content_shell_test_apk") {
   android_manifest = content_shell_test_manifest
   android_manifest_dep = ":content_shell_test_manifest"
   shared_libraries = [ ":libcontent_native_test" ]
+  srcjar_deps = [ ":libcontent_native_test__jni_registration" ]
   deps = [
     "//base:base_java_test_support",
     "//base:base_javatests",
     "//content/public/android:content_javatests",
-    "//net/android:net_javatests",
-    "//third_party/android_support_test_runner:runner_java",
+    "//net/android:net_tests_java",
   ]
   data_deps = [ "//testing/buildbot/filters:content_shell_test_apk_filters" ]
   if (enable_chrome_android_internal) {
@@ -238,9 +254,6 @@ content_shell_apk_tmpl("content_shell_test_apk") {
   }
 
   additional_apks = [ "//net/android:net_test_support_apk" ]
-
-  # TODO(crbug.com/1099536): Fix tests that break when this is increased.
-  target_sdk_version = 24
 }
 
 android_library("content_shell_test_java") {
@@ -254,11 +267,10 @@ android_library("content_shell_test_java") {
     "//content/public/test/android:content_java_test_support",
     "//content/shell/android:content_shell_java",
     "//mojo/public/java/system:test_support_java",
-    "//third_party/android_support_test_runner:rules_java",
-    "//third_party/android_support_test_runner:runner_java",
+    "//third_party/androidx:androidx_test_monitor_java",
     "//third_party/androidx:androidx_test_runner_java",
     "//third_party/hamcrest:hamcrest_java",
-    "//third_party/junit:junit",
+    "//third_party/junit",
     "//ui/android:ui_java",
     "//url:gurl_java",
   ]
@@ -276,7 +288,7 @@ android_library("content_shell_browsertests_java") {
     ":content_shell_java",
     "//base:base_java",
     "//content/public/android:content_java",
-    "//testing/android/native_test:native_test_java",
+    "//testing/android/native_test:native_browser_test_java",
     "//third_party/androidx:androidx_core_core_java",
     "//ui/android:ui_java",
   ]

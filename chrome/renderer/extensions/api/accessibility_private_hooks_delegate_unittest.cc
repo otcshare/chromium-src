@@ -8,6 +8,7 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/features/feature_provider.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
@@ -20,24 +21,23 @@ using AccessibilityPrivateHooksDelegateTest =
 
 TEST_F(AccessibilityPrivateHooksDelegateTest, TestGetDisplayNameForLocale) {
   // Initialize bindings system.
-  bindings_system()
-      ->api_system()
-      ->GetHooksForAPI("accessibilityPrivate")
-      ->SetDelegate(std::make_unique<AccessibilityPrivateHooksDelegate>());
+  bindings_system()->api_system()->RegisterHooksDelegate(
+      "accessibilityPrivate",
+      std::make_unique<AccessibilityPrivateHooksDelegate>());
   // Register extension.
   // Ensure that the extension has access to the accessibilityPrivate API by
   // setting the extension ID to the ChromeVox extension ID, as well as giving
   // it permission to the accessibilityPrivate API.
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("testExtension")
-          .AddPermission("accessibilityPrivate")
+          .AddAPIPermission("accessibilityPrivate")
           .SetLocation(mojom::ManifestLocation::kComponent)
           .Build();
   RegisterExtension(extension);
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context);
 

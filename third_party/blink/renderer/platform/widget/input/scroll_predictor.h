@@ -7,14 +7,11 @@
 
 #include <vector>
 
+#include "third_party/blink/public/mojom/input/gesture_event.mojom-blink.h"
 #include "third_party/blink/renderer/platform/widget/input/event_with_callback.h"
 #include "third_party/blink/renderer/platform/widget/input/prediction/filter_factory.h"
 #include "ui/base/prediction/input_predictor.h"
 #include "ui/base/prediction/prediction_metrics_handler.h"
-
-namespace cc {
-class ScrollUpdateEventMetrics;
-}
 
 namespace blink {
 
@@ -40,11 +37,26 @@ class PLATFORM_EXPORT ScrollPredictor {
 
   // Resampling GestureScrollUpdate events. Updates the prediction with events
   // in original events list, and apply the prediction to the aggregated GSU
-  // event if enable_resampling is true.
+  // event if enable_resampling is true. |next_event| is the first event after
+  // sample_time.
   std::unique_ptr<EventWithCallback> ResampleScrollEvents(
       std::unique_ptr<EventWithCallback> event_with_callback,
       base::TimeTicks frame_time,
-      base::TimeDelta frame_interval);
+      base::TimeDelta frame_interval,
+      const WebInputEvent* next_event);
+
+  // Resamples the current GestureScrollUpdate events at the given `frame_time`.
+  std::unique_ptr<EventWithCallback> GenerateSyntheticScrollUpdate(
+      base::TimeTicks frame_time,
+      base::TimeDelta frame_interval,
+      mojom::blink::GestureDevice gesture_device,
+      int modifiers);
+
+  bool HasPrediction(base::TimeTicks frame_time) const;
+
+  void UpdatePredictionForEventAfterSampleTime(const WebInputEvent& event);
+
+  base::TimeDelta ResampleLatency(base::TimeDelta frame_interval) const;
 
  private:
   friend class test::InputHandlerProxyEventQueueTest;
@@ -57,12 +69,11 @@ class PLATFORM_EXPORT ScrollPredictor {
   // Update the prediction with GestureScrollUpdate deltaX and deltaY
   void UpdatePrediction(const WebInputEvent& event, base::TimeTicks frame_time);
 
-  // Apply resampled deltaX/deltaY to gesture events
+  // Apply resampled deltaX/deltaY to gesture events.
   void ResampleEvent(base::TimeTicks frame_time,
                      base::TimeDelta frame_interval,
                      WebInputEvent* event,
-                     ui::LatencyInfo* latency_info,
-                     cc::ScrollUpdateEventMetrics* metrics);
+                     int64_t trace_id);
 
   // Reports metrics scores UMA histogram based on the metrics defined
   // in |PredictionMetricsHandler|
@@ -79,6 +90,11 @@ class PLATFORM_EXPORT ScrollPredictor {
   // Total scroll delta from original scroll update events, used for calculating
   // predictions. Reset on GestureScrollBegin.
   gfx::PointF current_event_accumulated_delta_;
+
+  // The timestamp of the last GestureScrollUpdate event that was used to update
+  // the prediction model.
+  base::TimeTicks last_prediction_update_timestamp_;
+
   // Predicted accumulated delta from last vsync, use for calculating delta_x
   // and delta_y for the resampled/predicted event.
   gfx::PointF last_predicted_accumulated_delta_;

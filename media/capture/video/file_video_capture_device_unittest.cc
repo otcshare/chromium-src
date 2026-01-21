@@ -2,20 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/capture/video/file_video_capture_device.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/bind_post_task.h"
 #include "base/test/task_environment.h"
-#include "media/base/bind_to_current_loop.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "media/base/test_data_util.h"
-#include "media/capture/video/file_video_capture_device.h"
 #include "media/capture/video/mock_video_capture_device_client.h"
-#include "media/video/fake_gpu_memory_buffer.h"
+#include "media/capture/video/video_capture_gpu_channel_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -79,16 +81,18 @@ class FileVideoCaptureDeviceTest : public ::testing::Test {
     EXPECT_CALL(*client_, OnError(_, _, _)).Times(0);
     EXPECT_CALL(*client_, OnStarted());
     device_ = std::make_unique<FileVideoCaptureDevice>(
-        GetTestDataFilePath("bear.mjpeg"),
-        std::make_unique<FakeGpuMemoryBufferSupport>());
+        GetTestDataFilePath("bear.mjpeg"));
     device_->AllocateAndStart(VideoCaptureParams(), std::move(client_));
+    test_sii_ = base::MakeRefCounted<gpu::TestSharedImageInterface>();
+    VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
+        test_sii_);
   }
 
   void TearDown() override { device_->StopAndDeAllocate(); }
 
   std::unique_ptr<MockVideoCaptureDeviceClient> CreateClient() {
     return MockVideoCaptureDeviceClient::CreateMockClientWithBufferAllocator(
-        BindToCurrentLoop(
+        base::BindPostTaskToCurrentDefault(
             base::BindRepeating(&FileVideoCaptureDeviceTest::OnFrameCaptured,
                                 base::Unretained(this))));
   }
@@ -123,6 +127,7 @@ class FileVideoCaptureDeviceTest : public ::testing::Test {
   MockImageCaptureClient image_capture_client_;
   std::unique_ptr<VideoCaptureDevice> device_;
   VideoCaptureFormat last_format_;
+  scoped_refptr<gpu::TestSharedImageInterface> test_sii_;
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<base::RunLoop> run_loop_;
 };
@@ -175,7 +180,7 @@ TEST_F(FileVideoCaptureDeviceTest, TakePhoto) {
 
   base::RunLoop run_loop;
   base::RepeatingClosure quit_closure =
-      BindToCurrentLoop(run_loop.QuitClosure());
+      base::BindPostTaskToCurrentDefault(run_loop.QuitClosure());
   EXPECT_CALL(image_capture_client_, OnCorrectPhotoTaken())
       .Times(1)
       .WillOnce(InvokeWithoutArgs([quit_closure]() { quit_closure.Run(); }));
@@ -188,8 +193,7 @@ TEST_F(FileVideoCaptureDeviceTest, CaptureWithGpuMemoryBuffer) {
   VideoCaptureParams params;
   params.buffer_type = VideoCaptureBufferType::kGpuMemoryBuffer;
   auto device = std::make_unique<FileVideoCaptureDevice>(
-      GetTestDataFilePath("bear.mjpeg"),
-      std::make_unique<FakeGpuMemoryBufferSupport>());
+      GetTestDataFilePath("bear.mjpeg"));
   device->AllocateAndStart(params, std::move(client));
   WaitForCapturedFrame();
   EXPECT_EQ(last_format_.pixel_format, PIXEL_FORMAT_NV12);

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/color/native_chrome_color_mixer.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -14,7 +14,7 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
-#include "ui/color/color_provider_manager.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_utils.h"
 #include "ui/color/color_recipe.h"
 #include "ui/color/color_transform.h"
@@ -29,8 +29,8 @@ ui::ColorTransform UseIfNonzeroAlpha(ui::ColorTransform transform) {
     const SkColor transform_color = transform.Run(input_color, mixer);
     const SkColor result_color =
         SkColorGetA(transform_color) ? transform_color : input_color;
-    DVLOG(2) << "ColorTransform UseIfNonzeroAlpha:"
-             << " Input Color: " << ui::SkColorName(input_color)
+    DVLOG(2) << "ColorTransform UseIfNonzeroAlpha:" << " Input Color: "
+             << ui::SkColorName(input_color)
              << " Transform Color: " << ui::SkColorName(transform_color)
              << " Result Color: " << ui::SkColorName(result_color);
     return result_color;
@@ -50,8 +50,10 @@ ui::ColorTransform GetToolbarTopSeparatorColorTransform(
         color_utils::BlendForMinContrast(toolbar, toolbar, gfx::kGoogleGrey900,
                                          kMinContrastRatio)
             .color;
-    if (color_utils::GetContrastRatio(separator, toolbar) >= kMinContrastRatio)
+    if (color_utils::GetContrastRatio(separator, toolbar) >=
+        kMinContrastRatio) {
       return separator;
+    }
     // If a darker separator didn't give good enough contrast, try a lighter
     // separator.
     return color_utils::BlendForMinContrast(toolbar, toolbar, SK_ColorWHITE,
@@ -65,22 +67,24 @@ ui::ColorTransform GetToolbarTopSeparatorColorTransform(
 }  // namespace
 
 void AddNativeChromeColorMixer(ui::ColorProvider* provider,
-                               const ui::ColorProviderManager::Key& key) {
-  if (key.system_theme == ui::SystemTheme::kDefault)
+                               const ui::ColorProviderKey& key) {
+  if (key.system_theme == ui::SystemTheme::kDefault) {
     return;
+  }
 
   ui::ColorMixer& mixer = provider->AddMixer();
   mixer[kColorBookmarkBarSeparator] = {kColorToolbarSeparatorDefault};
   mixer[kColorBookmarkButtonIcon] = {kColorToolbarButtonIconDefault};
-  mixer[kColorDownloadShelfContentAreaSeparator] = {
-      kColorToolbarContentAreaSeparator};
-  mixer[kColorInfoBarForeground] = {kColorToolbarTextDefault};
+  mixer[kColorBookmarkFavicon] = {kColorToolbarButtonIcon};
+  mixer[kColorInfoBarForeground] = {ui::kColorNativeLabelForeground};
   mixer[kColorInfoBarContentAreaSeparator] = {
       kColorToolbarContentAreaSeparator};
   mixer[kColorLocationBarBorder] =
       UseIfNonzeroAlpha(ui::kColorNativeTextfieldBorderUnfocused);
+  mixer[kColorNewTabButtonBackgroundFrameActive] = {SK_ColorTRANSPARENT};
+  mixer[kColorNewTabButtonBackgroundFrameInactive] = {SK_ColorTRANSPARENT};
   mixer[kColorNewTabPageBackground] = {ui::kColorTextfieldBackground};
-  mixer[kColorNewTabPageHeader] = {ui::kColorNativeButtonBorder};
+  mixer[kColorNewTabPageHeader] = {ui::kColorNativeBoxFrameBorder};
   mixer[kColorNewTabPageLink] = {ui::kColorTextfieldSelectionBackground};
   mixer[kColorNewTabPageText] = {ui::kColorTextfieldForeground};
   mixer[kColorOmniboxText] = {ui::kColorTextfieldForeground};
@@ -97,21 +101,15 @@ void AddNativeChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorToolbarButtonIcon] = {kColorToolbarText};
   mixer[kColorToolbarButtonIconHovered] = {kColorToolbarButtonIcon};
   mixer[kColorToolbarContentAreaSeparator] = {kColorToolbarSeparator};
-  mixer[kColorToolbarSeparator] = {ui::kColorNativeButtonBorder};
+  mixer[kColorToolbarSeparator] = {ui::kColorNativeBoxFrameBorder};
   mixer[kColorToolbarText] = {ui::kColorNativeLabelForeground};
   mixer[kColorToolbarTextDisabled] =
       ui::SetAlpha(kColorToolbarText, gfx::kDisabledControlAlpha);
   const bool high_contrast =
-      key.contrast_mode == ui::ColorProviderManager::ContrastMode::kHigh;
+      key.contrast_mode == ui::ColorProviderKey::ContrastMode::kHigh;
   mixer[kColorToolbarTopSeparatorFrameActive] =
       GetToolbarTopSeparatorColorTransform(ui::kColorNativeToolbarBackground,
                                            high_contrast);
   mixer[kColorToolbarTopSeparatorFrameInactive] = {
       kColorToolbarTopSeparatorFrameActive};
-
-  // Explicitly override certain colors for the NTP to those corresponding to
-  // the light theme. See crbug.com/998903. This logic will be removed once the
-  // NewTabPage comprehensive theming experiment has completed.
-  if (!base::FeatureList::IsEnabled(ntp_features::kNtpComprehensiveTheming))
-    AddWebThemeNewTabPageColors(mixer, false);
 }

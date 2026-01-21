@@ -5,13 +5,15 @@
 #include "chrome/browser/ash/login/screens/signin_fatal_error_screen.h"
 
 #include "base/values.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 
 namespace ash {
 namespace {
 
 constexpr char kUserActionScreenDismissed[] = "screen-dismissed";
+constexpr char kUserActionRestartAndPowerwash[] = "restart-and-powerwash";
 constexpr char kUserActionLearnMore[] = "learn-more";
 
 }  // namespace
@@ -37,7 +39,7 @@ void SignInFatalErrorScreen::SetCustomError(const std::string& error_text,
                                             const std::string& keyboard_hint,
                                             const std::string& details,
                                             const std::string& help_link_text) {
-  error_state_ = Error::CUSTOM;
+  error_state_ = Error::kCustom;
   extra_error_info_ = base::Value::Dict();
   DCHECK(!error_text.empty());
   extra_error_info_.Set("errorText", error_text);
@@ -65,6 +67,9 @@ void SignInFatalErrorScreen::OnUserAction(const base::Value::List& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionScreenDismissed) {
     exit_callback_.Run();
+  } else if (action_id == kUserActionRestartAndPowerwash) {
+    CHECK(error_state_ == Error::kOobeCompletionSkipped);
+    SessionManagerClient::Get()->StartDeviceWipe(base::DoNothing());
   } else if (action_id == kUserActionLearnMore) {
     if (!help_app_.get()) {
       help_app_ = new HelpAppLauncher(

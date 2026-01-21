@@ -31,12 +31,17 @@
 #include "third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.h"
 
 #include <v8-inspector.h>
+
 #include <memory>
 #include <utility>
 
+#include "base/auto_reset.h"
+#include "base/unguessable_token.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_scoped_page_pauser.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_settings.h"
 #include "third_party/blink/public/web/web_view_client.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
@@ -62,6 +67,7 @@
 #include "third_party/blink/renderer/core/inspector/inspector_dom_debugger_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_snapshot_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_emulation_agent.h"
+#include "third_party/blink/renderer/core/inspector/inspector_event_breakpoints_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_io_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_layer_tree_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_log_agent.h"
@@ -72,6 +78,7 @@
 #include "third_party/blink/renderer/core/inspector/inspector_page_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_performance_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_performance_timeline_agent.h"
+#include "third_party/blink/renderer/core/inspector/inspector_preload_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_resource_container.h"
 #include "third_party/blink/renderer/core/inspector/inspector_resource_content_loader.h"
 #include "third_party/blink/renderer/core/inspector/inspector_task_runner.h"
@@ -82,6 +89,7 @@
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -90,28 +98,37 @@
 
 namespace blink {
 
-namespace {
-
-bool IsMainFrame(WebLocalFrameImpl* frame) {
-  // TODO(dgozman): sometimes view->mainFrameImpl() does return null, even
-  // though |frame| is meant to be main frame.  See http://crbug.com/526162.
-  return frame->ViewImpl() && !frame->Parent();
-}
-
-}  // namespace
 
 class ClientMessageLoopAdapter : public MainThreadDebugger::ClientMessageLoop {
  public:
-  ~ClientMessageLoopAdapter() override { instance_ = nullptr; }
+  ~ClientMessageLoopAdapter() override {
+    DCHECK(running_for_debug_break_kind_ != kInstrumentationPause);
+    instance_ = nullptr;
+  }
 
-  static void EnsureMainThreadDebuggerCreated() {
+  static void EnsureMainThreadDebuggerCreated(v8::Isolate* isolate) {
     if (instance_)
       return;
     std::unique_ptr<ClientMessageLoopAdapter> instance(
         new ClientMessageLoopAdapter(
             Platform::Current()->CreateNestedMessageLoopRunner()));
     instance_ = instance.get();
-    MainThreadDebugger::Instance()->SetClientMessageLoop(std::move(instance));
+    MainThreadDebugger::Instance(isolate)->SetClientMessageLoop(
+        std::move(instance));
+  }
+
+  static void ActivatePausedDebuggerWindow(WebLocalFrameImpl* frame) {
+    if (!instance_ || !instance_->paused_frame_ ||
+        instance_->paused_frame_ == frame) {
+      return;
+    }
+    if (!base::FeatureList::IsEnabled(
+            features::kShowHudDisplayForPausedPages)) {
+      return;
+    }
+    instance_->paused_frame_->DevToolsAgentImpl(/*create_if_necessary=*/true)
+        ->GetDevToolsAgent()
+        ->BringDevToolsWindowToFocus();
   }
 
   static void ContinueProgram() {
@@ -126,21 +143,50 @@ class ClientMessageLoopAdapter : public MainThreadDebugger::ClientMessageLoop {
   }
 
  private:
-  ClientMessageLoopAdapter(
+  // A RAII class that disables input events for frames that belong to the
+  // same browsing context group. Note that this does not support nesting, as
+  // DevTools doesn't require nested pauses.
+  class ScopedInputEventsDisabler {
+   public:
+    explicit ScopedInputEventsDisabler(WebLocalFrameImpl& frame)
+        : browsing_context_group_token_(WebFrame::ToCoreFrame(frame)
+                                            ->GetPage()
+                                            ->BrowsingContextGroupToken()) {
+      WebFrameWidgetImpl::SetIgnoreInputEvents(browsing_context_group_token_,
+                                               true);
+    }
+
+    ~ScopedInputEventsDisabler() {
+      WebFrameWidgetImpl::SetIgnoreInputEvents(browsing_context_group_token_,
+                                               false);
+    }
+
+   private:
+    const base::UnguessableToken browsing_context_group_token_;
+  };
+
+  explicit ClientMessageLoopAdapter(
       std::unique_ptr<Platform::NestedMessageLoopRunner> message_loop)
-      : running_for_debug_break_(false),
-        running_for_page_wait_(false),
-        message_loop_(std::move(message_loop)) {
+      : message_loop_(std::move(message_loop)) {
     DCHECK(message_loop_.get());
   }
 
-  void Run(LocalFrame* frame) override {
-    if (running_for_debug_break_)
+  void Run(LocalFrame* frame, MessageLoopKind message_loop_kind) override {
+    if (running_for_debug_break_kind_) {
       return;
+    }
 
-    running_for_debug_break_ = true;
-    if (!running_for_page_wait_)
-      RunLoop(WebLocalFrameImpl::FromFrame(frame));
+    running_for_debug_break_kind_ = message_loop_kind;
+    if (!running_for_page_wait_) {
+      switch (message_loop_kind) {
+        case kNormalPause:
+          RunLoop(WebLocalFrameImpl::FromFrame(frame));
+          break;
+        case kInstrumentationPause:
+          RunInstrumentationPauseLoop(WebLocalFrameImpl::FromFrame(frame));
+          break;
+      }
+    }
   }
 
   void RunForPageWait(WebLocalFrameImpl* frame) {
@@ -148,57 +194,113 @@ class ClientMessageLoopAdapter : public MainThreadDebugger::ClientMessageLoop {
       return;
 
     running_for_page_wait_ = true;
-    if (!running_for_debug_break_)
+    if (!running_for_debug_break_kind_) {
       RunLoop(frame);
+    } else {
+      // We should not start waiting for the debugger during instrumentation
+      // pauses, so the current pause must be a normal pause.
+      DCHECK_EQ(*running_for_debug_break_kind_, kNormalPause);
+    }
+  }
+
+  void QuitNow() override {
+    if (!running_for_debug_break_kind_) {
+      return;
+    }
+
+    if (!running_for_page_wait_) {
+      switch (*running_for_debug_break_kind_) {
+        case kNormalPause:
+          DoQuitNormalPause();
+          break;
+        case kInstrumentationPause:
+          DoQuitInstrumentationPause();
+          break;
+      }
+    }
+    running_for_debug_break_kind_.reset();
+  }
+
+  void RunInstrumentationPauseLoop(WebLocalFrameImpl* frame) {
+    // 0. Flush pending frontend messages.
+    WebDevToolsAgentImpl* agent =
+        frame->DevToolsAgentImpl(/*create_if_necessary=*/true);
+    agent->FlushProtocolNotifications();
+
+    // 1. Run the instrumentation message loop. Also remember the task runner
+    // so that we can later quit the loop.
+    DCHECK(!inspector_task_runner_for_instrumentation_pause_);
+    inspector_task_runner_for_instrumentation_pause_ =
+        frame->GetFrame()->GetInspectorTaskRunner();
+    inspector_task_runner_for_instrumentation_pause_
+        ->ProcessInterruptingTasks();
+  }
+
+  void DoQuitInstrumentationPause() {
+    DCHECK(inspector_task_runner_for_instrumentation_pause_);
+    inspector_task_runner_for_instrumentation_pause_
+        ->RequestQuitProcessingInterruptingTasks();
+    inspector_task_runner_for_instrumentation_pause_.reset();
   }
 
   void RunLoop(WebLocalFrameImpl* frame) {
     // 0. Flush pending frontend messages.
-    WebDevToolsAgentImpl* agent = frame->DevToolsAgentImpl();
+    WebDevToolsAgentImpl* agent =
+        frame->DevToolsAgentImpl(/*create_if_necessary=*/true);
     agent->FlushProtocolNotifications();
+    agent->MainThreadDebuggerPaused();
+    CHECK(!paused_frame_);
+    paused_frame_ = WrapWeakPersistent(frame);
 
     // 1. Disable input events.
-    WebFrameWidgetImpl::SetIgnoreInputEvents(true);
+    CHECK(!input_events_disabler_);
+    input_events_disabler_ =
+        std::make_unique<ScopedInputEventsDisabler>(*frame);
     for (auto* const view : WebViewImpl::AllInstances())
       view->GetChromeClient().NotifyPopupOpeningObservers();
 
     // 2. Disable active objects
-    page_pauser_ = WebScopedPagePauser::Create();
+    page_pauser_ = std::make_unique<WebScopedPagePauser>(*frame);
 
     // 3. Process messages until quitNow is called.
     message_loop_->Run();
   }
 
-  void QuitNow() override {
-    if (running_for_debug_break_) {
-      running_for_debug_break_ = false;
-      if (!running_for_page_wait_)
-        DoQuit();
-    }
-  }
-
   void RunIfWaitingForDebugger(LocalFrame* frame) override {
     if (!running_for_page_wait_)
       return;
+    if (!running_for_debug_break_kind_) {
+      DoQuitNormalPause();
+    }
     running_for_page_wait_ = false;
-    if (!running_for_debug_break_)
-      DoQuit();
   }
 
-  void DoQuit() {
+  void DoQuitNormalPause() {
     // Undo steps (3), (2) and (1) from above.
     // NOTE: This code used to be above right after the |mesasge_loop_->Run()|
     // code, but it is moved here to support browser-side navigation.
+    DCHECK(running_for_page_wait_ ||
+           *running_for_debug_break_kind_ == kNormalPause);
     message_loop_->QuitNow();
     page_pauser_.reset();
-    WebFrameWidgetImpl::SetIgnoreInputEvents(false);
+    input_events_disabler_.reset();
+
+    CHECK(paused_frame_);
+    if (paused_frame_->GetFrame()) {
+      paused_frame_->DevToolsAgentImpl(/*create_if_necessary=*/true)
+          ->MainThreadDebuggerResumed();
+    }
+    paused_frame_ = nullptr;
   }
 
-  bool running_for_debug_break_;
-  bool running_for_page_wait_;
+  std::optional<MessageLoopKind> running_for_debug_break_kind_;
+  bool running_for_page_wait_ = false;
   std::unique_ptr<Platform::NestedMessageLoopRunner> message_loop_;
+  std::unique_ptr<ScopedInputEventsDisabler> input_events_disabler_;
   std::unique_ptr<WebScopedPagePauser> page_pauser_;
-
+  WeakPersistent<WebLocalFrameImpl> paused_frame_;
+  scoped_refptr<InspectorTaskRunner>
+      inspector_task_runner_for_instrumentation_pause_;
   static ClientMessageLoopAdapter* instance_;
 };
 
@@ -206,13 +308,18 @@ ClientMessageLoopAdapter* ClientMessageLoopAdapter::instance_ = nullptr;
 
 void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
                                          bool restore) {
-  if (!network_agents_.size())
+  if (!network_agents_.size()) {
     Thread::Current()->AddTaskObserver(this);
+    web_local_frame_impl_->OnDevToolsSessionConnectionChanged(
+        /*attached=*/true);
+  }
 
-  ClientMessageLoopAdapter::EnsureMainThreadDebuggerCreated();
-  MainThreadDebugger* main_thread_debugger = MainThreadDebugger::Instance();
-  v8::Isolate* isolate = V8PerIsolateData::MainThreadIsolate();
   InspectedFrames* inspected_frames = inspected_frames_.Get();
+  v8::Isolate* isolate =
+      inspected_frames->Root()->GetPage()->GetAgentGroupScheduler().Isolate();
+  ClientMessageLoopAdapter::EnsureMainThreadDebuggerCreated(isolate);
+  MainThreadDebugger* main_thread_debugger =
+      MainThreadDebugger::Instance(isolate);
 
   int context_group_id =
       main_thread_debugger->ContextGroupId(inspected_frames->Root());
@@ -236,6 +343,9 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
       session->CreateAndAppend<InspectorDOMDebuggerAgent>(isolate, dom_agent,
                                                           session->V8Session());
 
+  session->CreateAndAppend<InspectorEventBreakpointsAgent>(
+      session->V8Session());
+
   session->CreateAndAppend<InspectorPerformanceAgent>(inspected_frames);
 
   session->CreateAndAppend<InspectorDOMSnapshotAgent>(inspected_frames,
@@ -248,7 +358,7 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
 
   auto* page_agent = session->CreateAndAppend<InspectorPageAgent>(
       inspected_frames, this, resource_content_loader_.Get(),
-      session->V8Session());
+      session->V8Session(), session->script_to_evaluate_on_load());
 
   session->CreateAndAppend<InspectorLogAgent>(
       &inspected_frames->Root()->GetPage()->GetConsoleMessageStorage(),
@@ -264,22 +374,27 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
   session->CreateAndAppend<InspectorAuditsAgent>(
       network_agent,
       &inspected_frames->Root()->GetPage()->GetInspectorIssueStorage(),
-      inspected_frames);
+      inspected_frames, web_local_frame_impl_->AutofillClient());
 
   session->CreateAndAppend<InspectorMediaAgent>(
       inspected_frames, /*worker_global_scope=*/nullptr);
 
+  auto* virtual_time_controller =
+      web_local_frame_impl_->View()->Scheduler()->GetVirtualTimeController();
+  DCHECK(virtual_time_controller);
   // TODO(dgozman): we should actually pass the view instead of frame, but
   // during remote->local transition we cannot access mainFrameImpl() yet, so
   // we have to store the frame which will become the main frame later.
-  session->CreateAndAppend<InspectorEmulationAgent>(
-      web_local_frame_impl_.Get());
+  session->CreateAndAppend<InspectorEmulationAgent>(web_local_frame_impl_.Get(),
+                                                    *virtual_time_controller);
 
   session->CreateAndAppend<InspectorPerformanceTimelineAgent>(inspected_frames);
 
+  session->CreateAndAppend<InspectorPreloadAgent>(inspected_frames);
+
   // Call session init callbacks registered from higher layers.
   CoreInitializer::GetInstance().InitInspectorAgentSession(
-      session, include_view_agents_, dom_agent, inspected_frames,
+      session, dom_agent, inspected_frames,
       web_local_frame_impl_->ViewImpl()->GetPage());
 
   if (node_to_inspect_) {
@@ -295,18 +410,11 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
 // static
 WebDevToolsAgentImpl* WebDevToolsAgentImpl::CreateForFrame(
     WebLocalFrameImpl* frame) {
-  return MakeGarbageCollected<WebDevToolsAgentImpl>(frame, IsMainFrame(frame));
-}
-
-// static
-WebDevToolsAgentImpl* WebDevToolsAgentImpl::CreateForWorker(
-    WebLocalFrameImpl* frame) {
-  return MakeGarbageCollected<WebDevToolsAgentImpl>(frame, true);
+  return MakeGarbageCollected<WebDevToolsAgentImpl>(frame);
 }
 
 WebDevToolsAgentImpl::WebDevToolsAgentImpl(
-    WebLocalFrameImpl* web_local_frame_impl,
-    bool include_view_agents)
+    WebLocalFrameImpl* web_local_frame_impl)
     : web_local_frame_impl_(web_local_frame_impl),
       probe_sink_(web_local_frame_impl_->GetFrame()->GetProbeSink()),
       resource_content_loader_(
@@ -315,8 +423,7 @@ WebDevToolsAgentImpl::WebDevToolsAgentImpl(
       inspected_frames_(MakeGarbageCollected<InspectedFrames>(
           web_local_frame_impl_->GetFrame())),
       resource_container_(
-          MakeGarbageCollected<InspectorResourceContainer>(inspected_frames_)),
-      include_view_agents_(include_view_agents) {
+          MakeGarbageCollected<InspectorResourceContainer>(inspected_frames_)) {
   DCHECK(IsMainThread());
   agent_ = MakeGarbageCollected<DevToolsAgent>(
       this, inspected_frames_.Get(), probe_sink_.Get(),
@@ -358,8 +465,11 @@ void WebDevToolsAgentImpl::DetachSession(DevToolsSession* session) {
   network_agents_.erase(session);
   page_agents_.erase(session);
   overlay_agents_.erase(session);
-  if (!network_agents_.size())
+  if (!network_agents_.size()) {
     Thread::Current()->RemoveTaskObserver(this);
+    web_local_frame_impl_->OnDevToolsSessionConnectionChanged(
+        /*attached=*/false);
+  }
 }
 
 void WebDevToolsAgentImpl::InspectElement(
@@ -389,20 +499,29 @@ void WebDevToolsAgentImpl::InspectElement(
   if (!node && web_local_frame_impl_->GetFrame()->GetDocument())
     node = web_local_frame_impl_->GetFrame()->GetDocument()->documentElement();
 
+  // There could be multiple sessions and the current ones are not
+  // necessarily interested in inspecting an element. Therefore, we
+  // set the node to inspect for the next created session as well.
+  // With this we cover scenarios like inspecting an element while
+  // running a ChromeDriver or Puppeteer session in the background. The drawback
+  // is that the next session might not be a DevTools frontend one, so it will
+  // get the event when/if the overlay domain is enabled.
+  node_to_inspect_ = node;
   if (!overlay_agents_.empty()) {
     for (auto& it : overlay_agents_)
       it.value->Inspect(node);
-  } else {
-    node_to_inspect_ = node;
   }
 }
 
 void WebDevToolsAgentImpl::DebuggerTaskStarted() {
+  client_navigation_throttler_ =
+      web_local_frame_impl_->Client()->CreateScopedClientNavigationThrottler();
   probe::WillStartDebuggerTask(probe_sink_);
 }
 
 void WebDevToolsAgentImpl::DebuggerTaskFinished() {
   probe::DidFinishDebuggerTask(probe_sink_);
+  client_navigation_throttler_.reset();
 }
 
 void WebDevToolsAgentImpl::DidCommitLoadForLocalFrame(LocalFrame* frame) {
@@ -427,6 +546,7 @@ void WebDevToolsAgentImpl::DidShowNewWindow() {
   if (!wait_for_debugger_when_shown_)
     return;
   wait_for_debugger_when_shown_ = false;
+  base::AutoReset<bool> is_paused(&is_paused_for_new_window_shown_, true);
   WaitForDebugger();
 }
 
@@ -436,6 +556,10 @@ void WebDevToolsAgentImpl::WaitForDebuggerWhenShown() {
 
 void WebDevToolsAgentImpl::WaitForDebugger() {
   ClientMessageLoopAdapter::PauseForPageWait(web_local_frame_impl_);
+}
+
+bool WebDevToolsAgentImpl::IsPausedForNewWindow() {
+  return is_paused_for_new_window_shown_;
 }
 
 bool WebDevToolsAgentImpl::IsInspectorLayer(const cc::Layer* layer) {
@@ -483,6 +607,11 @@ WebInputEventResult WebDevToolsAgentImpl::HandleInputEvent(
   return WebInputEventResult::kNotHandled;
 }
 
+void WebDevToolsAgentImpl::ActivatePausedDebuggerWindow(
+    WebLocalFrameImpl* local_root) {
+  ClientMessageLoopAdapter::ActivatePausedDebuggerWindow(local_root);
+}
+
 String WebDevToolsAgentImpl::NavigationInitiatorInfo(LocalFrame* frame) {
   for (auto& it : network_agents_) {
     String initiator = it.value->NavigationInitiatorInfo(frame);
@@ -496,19 +625,31 @@ void WebDevToolsAgentImpl::FlushProtocolNotifications() {
   agent_->FlushProtocolNotifications();
 }
 
+void WebDevToolsAgentImpl::MainThreadDebuggerPaused() {
+  agent_->DebuggerPaused();
+}
+
+void WebDevToolsAgentImpl::MainThreadDebuggerResumed() {
+  agent_->DebuggerResumed();
+}
+
 void WebDevToolsAgentImpl::WillProcessTask(
     const base::PendingTask& pending_task,
     bool was_blocked_or_low_priority) {
   if (network_agents_.empty())
     return;
-  ThreadDebugger::IdleFinished(V8PerIsolateData::MainThreadIsolate());
+  v8::Isolate* isolate =
+      inspected_frames_->Root()->GetPage()->GetAgentGroupScheduler().Isolate();
+  ThreadDebugger::IdleFinished(isolate);
 }
 
 void WebDevToolsAgentImpl::DidProcessTask(
     const base::PendingTask& pending_task) {
   if (network_agents_.empty())
     return;
-  ThreadDebugger::IdleStarted(V8PerIsolateData::MainThreadIsolate());
+  v8::Isolate* isolate =
+      inspected_frames_->Root()->GetPage()->GetAgentGroupScheduler().Isolate();
+  ThreadDebugger::IdleStarted(isolate);
   FlushProtocolNotifications();
 }
 

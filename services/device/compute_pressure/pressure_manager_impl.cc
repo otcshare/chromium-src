@@ -4,50 +4,30 @@
 
 #include "services/device/compute_pressure/pressure_manager_impl.h"
 
+#include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "services/device/compute_pressure/cpu_probe.h"
-#include "services/device/compute_pressure/platform_collector.h"
-#include "services/device/public/mojom/pressure_update.mojom.h"
+#include "services/device/compute_pressure/probes_manager.h"
+#include "services/device/compute_pressure/virtual_probes_manager.h"
+#include "services/device/public/mojom/pressure_manager.mojom.h"
 
 namespace device {
 
-constexpr base::TimeDelta PressureManagerImpl::kDefaultSamplingInterval;
-
 // static
-std::unique_ptr<PressureManagerImpl> PressureManagerImpl::Create() {
-  return base::WrapUnique(new PressureManagerImpl(
-      CpuProbe::Create(), PressureManagerImpl::kDefaultSamplingInterval));
-}
-
-// static
-std::unique_ptr<PressureManagerImpl> PressureManagerImpl::CreateForTesting(
-    std::unique_ptr<CpuProbe> cpu_probe,
+std::unique_ptr<PressureManagerImpl> PressureManagerImpl::Create(
     base::TimeDelta sampling_interval) {
-  return base::WrapUnique(
-      new PressureManagerImpl(std::move(cpu_probe), sampling_interval));
+  return base::WrapUnique(new PressureManagerImpl(sampling_interval));
 }
 
-PressureManagerImpl::PressureManagerImpl(std::unique_ptr<CpuProbe> cpu_probe,
-                                         base::TimeDelta sampling_interval)
-    // base::Unretained usage is safe here because the callback is only run
-    // while `collector_` is alive, and `collector_` is owned by this instance.
-    : collector_(std::move(cpu_probe),
-                 sampling_interval,
-                 base::BindRepeating(&PressureManagerImpl::UpdateClients,
-                                     base::Unretained(this))) {
-  // base::Unretained use is safe because mojo guarantees the callback will not
-  // be called after `clients_` is deallocated, and `clients_` is owned by
-  // PressureManagerImpl.
-  clients_.set_disconnect_handler(
-      base::BindRepeating(&PressureManagerImpl::OnClientRemoteDisconnected,
-                          base::Unretained(this)));
-}
+PressureManagerImpl::PressureManagerImpl(base::TimeDelta sampling_interval)
+    : sampling_interval_(sampling_interval),
+      probes_manager_(std::make_unique<ProbesManager>(sampling_interval)) {}
 
 PressureManagerImpl::~PressureManagerImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -57,42 +37,98 @@ void PressureManagerImpl::Bind(
     mojo::PendingReceiver<mojom::PressureManager> receiver) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  receivers_.Add(this, std::move(receiver));
+  manager_receivers_.Add(this, std::move(receiver));
 }
 
 void PressureManagerImpl::AddClient(
-    mojo::PendingRemote<mojom::PressureClient> client,
+    mojom::PressureSource source,
+    const std::optional<base::UnguessableToken>& token,
+    mojo::PendingAssociatedRemote<mojom::PressureClient> client,
     AddClientCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!collector_.has_probe()) {
-    std::move(callback).Run(false);
+  ProbesManager* manager = probes_manager_.get();
+
+  if (token) {
+    auto it = virtual_probes_managers_.find(*token);
+    if (it == virtual_probes_managers_.end()) {
+      // For now, treat a non-existent token just like a non-existent pressure
+      // source.
+      std::move(callback).Run(
+          mojom::PressureManagerAddClientResult::kNotSupported);
+      return;
+    }
+    manager = it->second.get();
+  }
+
+  if (!manager->is_supported(source)) {
+    std::move(callback).Run(
+        mojom::PressureManagerAddClientResult::kNotSupported);
     return;
   }
-  clients_.Add(std::move(client));
-  collector_.EnsureStarted();
-  std::move(callback).Run(true);
+
+  manager->RegisterClientRemote(std::move(client), source);
+
+  std::move(callback).Run(mojom::PressureManagerAddClientResult::kOk);
 }
 
-void PressureManagerImpl::UpdateClients(mojom::PressureState state) {
+ProbesManager* PressureManagerImpl::GetProbesManagerForTesting() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const base::Time timestamp = base::Time::Now();
+  return probes_manager_.get();
+}
 
-  // TODO(crbug.com/1365627): Implement algorithm for pressure factors.
-  // https://wicg.github.io/compute-pressure/#contributing-factors
+void PressureManagerImpl::AddVirtualPressureSource(
+    const base::UnguessableToken& token,
+    mojom::PressureSource source,
+    mojom::VirtualPressureSourceMetadataPtr metadata,
+    AddVirtualPressureSourceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  mojom::PressureUpdate update(state, {}, timestamp);
-  for (auto& client : clients_) {
-    client->PressureStateChanged(update.Clone());
+  auto& virtual_probes_manager = virtual_probes_managers_[token];
+  if (!virtual_probes_manager) {
+    virtual_probes_manager =
+        std::make_unique<VirtualProbesManager>(sampling_interval_);
   }
+
+  if (!virtual_probes_manager->AddOverrideForSource(source,
+                                                    std::move(metadata))) {
+    manager_receivers_.ReportBadMessage(
+        "The provided pressure source is already being overridden");
+    return;
+  }
+
+  std::move(callback).Run();
 }
 
-void PressureManagerImpl::OnClientRemoteDisconnected(
-    mojo::RemoteSetElementId /*id*/) {
+void PressureManagerImpl::RemoveVirtualPressureSource(
+    const base::UnguessableToken& token,
+    mojom::PressureSource source,
+    RemoveVirtualPressureSourceCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (clients_.empty())
-    collector_.Stop();
+  auto it = virtual_probes_managers_.find(token);
+  if (it != virtual_probes_managers_.end()) {
+    auto& virtual_probe = it->second;
+    virtual_probe->RemoveOverrideForSource(source);
+  }
+
+  std::move(callback).Run();
+}
+
+void PressureManagerImpl::UpdateVirtualPressureSourceData(
+    const base::UnguessableToken& token,
+    mojom::PressureSource source,
+    mojom::PressureState state,
+    double own_contribution_estimate,
+    UpdateVirtualPressureSourceDataCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto it = virtual_probes_managers_.find(token);
+  if (it != virtual_probes_managers_.end() &&
+      it->second->IsOverriding(source)) {
+    it->second->AddDataUpdate(source, state, own_contribution_estimate);
+  }
+  std::move(callback).Run();
 }
 
 }  // namespace device

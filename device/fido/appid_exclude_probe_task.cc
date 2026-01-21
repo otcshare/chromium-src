@@ -35,7 +35,7 @@ void AppIdExcludeProbeTask::StartTask() {
   if (exclude_list_batches_.size() == 1 &&
       exclude_list_batches_.front().empty()) {
     // None of the credential IDs are candidates for this device.
-    std::move(callback_).Run(CtapDeviceResponseCode::kSuccess, absl::nullopt);
+    std::move(callback_).Run(CtapDeviceResponseCode::kSuccess, std::nullopt);
     return;
   }
 
@@ -66,13 +66,14 @@ void AppIdExcludeProbeTask::NextSilentSignOperation() {
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&ReadCTAPGetAssertionResponse,
                      device()->DeviceTransport()),
-      /*string_fixup_predicate=*/nullptr);
+      /*string_fixup_predicate=*/nullptr,
+      base::BindOnce(RedactCtapGetAssertionResponse));
   silent_sign_operation_->Start();
 }
 
 void AppIdExcludeProbeTask::HandleResponseToSilentSignRequest(
     CtapDeviceResponseCode response_code,
-    absl::optional<AuthenticatorGetAssertionResponse> response_data) {
+    std::optional<AuthenticatorGetAssertionResponse> response_data) {
   silent_sign_operation_.reset();
 
   if (canceled_) {
@@ -83,14 +84,14 @@ void AppIdExcludeProbeTask::HandleResponseToSilentSignRequest(
     // The authenticator recognized a credential from previous exclude list
     // batch.
     std::move(callback_).Run(
-        CtapDeviceResponseCode::kCtap2ErrCredentialExcluded, absl::nullopt);
+        CtapDeviceResponseCode::kCtap2ErrCredentialExcluded, std::nullopt);
     return;
   }
 
   if (!FidoDevice::IsStatusForUnrecognisedCredentialID(response_code)) {
     // The authenticator returned an unexpected error.
     std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrOther,
-                             absl::nullopt);
+                             std::nullopt);
     return;
   }
 
@@ -100,7 +101,7 @@ void AppIdExcludeProbeTask::HandleResponseToSilentSignRequest(
 
   if (current_exclude_list_batch_ == exclude_list_batches_.size()) {
     // All done.
-    std::move(callback_).Run(CtapDeviceResponseCode::kSuccess, absl::nullopt);
+    std::move(callback_).Run(CtapDeviceResponseCode::kSuccess, std::nullopt);
     return;
   }
 

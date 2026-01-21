@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/values_test_util.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/common/extensions/permissions/chrome_permission_message_provider.h"
 #include "components/version_info/version_info.h"
@@ -36,7 +37,7 @@ class PermissionMessageCombinationsUnittest : public testing::Test {
   PermissionMessageCombinationsUnittest& operator=(
       const PermissionMessageCombinationsUnittest&) = delete;
 
-  ~PermissionMessageCombinationsUnittest() override {}
+  ~PermissionMessageCombinationsUnittest() override = default;
 
   // Overridden from testing::Test:
   void SetUp() override {
@@ -51,7 +52,7 @@ class PermissionMessageCombinationsUnittest : public testing::Test {
     std::replace(json_manifest_with_double_quotes.begin(),
                  json_manifest_with_double_quotes.end(), '\'', '"');
     app_ = env_.MakeExtension(
-        base::test::ParseJson(json_manifest_with_double_quotes),
+        base::test::ParseJsonDict(json_manifest_with_double_quotes),
         kAllowlistedExtensionID);
   }
 
@@ -204,7 +205,7 @@ class PermissionMessageCombinationsUnittest : public testing::Test {
   }
 
  private:
-  extensions::TestExtensionEnvironment env_;
+  TestExtensionEnvironment env_;
   std::unique_ptr<ChromePermissionMessageProvider> message_provider_;
   scoped_refptr<const Extension> app_;
   // Add a known extension id to the explicit allowlist so we can test all
@@ -349,24 +350,46 @@ TEST_F(PermissionMessageCombinationsUnittest, USBSerialBluetoothCoalescing) {
 }
 
 // Test that the History permission takes precedence over the Tabs permission,
-// and that the Sessions permission modifies this final message.
+// and that the Sessions permission modifies the Tabs permission message.
 TEST_F(PermissionMessageCombinationsUnittest, TabsHistorySessionsCoalescing) {
+  // By itself, "tabs" only gives access to tabs on the current device.
   CreateAndInstall(
       "{"
       "  'permissions': ["
       "    'tabs'"
       "  ]"
       "}");
-  ASSERT_TRUE(CheckManifestProducesPermissions("Read your browsing history"));
+  EXPECT_TRUE(CheckManifestProducesPermissions("Read your browsing history"));
 
+  // Combined with "sessions", "tabs" gives access to data from all devices.
   CreateAndInstall(
       "{"
       "  'permissions': ["
       "    'tabs', 'sessions'"
       "  ]"
       "}");
-  ASSERT_TRUE(CheckManifestProducesPermissions(
+  EXPECT_TRUE(CheckManifestProducesPermissions(
       "Read your browsing history on all your signed-in devices"));
+
+  // "history" by itself already produces the most comprehensive warning, so it
+  // makes no difference whether "sessions" and/or "tabs" are also present.
+  CreateAndInstall(
+      "{"
+      "  'permissions': ["
+      "    'history'"
+      "  ]"
+      "}");
+  EXPECT_TRUE(CheckManifestProducesPermissions(
+      "Read and change your browsing history on all your signed-in devices"));
+
+  CreateAndInstall(
+      "{"
+      "  'permissions': ["
+      "    'sessions', 'history'"
+      "  ]"
+      "}");
+  EXPECT_TRUE(CheckManifestProducesPermissions(
+      "Read and change your browsing history on all your signed-in devices"));
 
   CreateAndInstall(
       "{"
@@ -374,8 +397,8 @@ TEST_F(PermissionMessageCombinationsUnittest, TabsHistorySessionsCoalescing) {
       "    'tabs', 'history'"
       "  ]"
       "}");
-  ASSERT_TRUE(CheckManifestProducesPermissions(
-      "Read and change your browsing history"));
+  EXPECT_TRUE(CheckManifestProducesPermissions(
+      "Read and change your browsing history on all your signed-in devices"));
 
   CreateAndInstall(
       "{"
@@ -383,7 +406,7 @@ TEST_F(PermissionMessageCombinationsUnittest, TabsHistorySessionsCoalescing) {
       "    'tabs', 'history', 'sessions'"
       "  ]"
       "}");
-  ASSERT_TRUE(CheckManifestProducesPermissions(
+  EXPECT_TRUE(CheckManifestProducesPermissions(
       "Read and change your browsing history on all your signed-in devices"));
 }
 
@@ -699,6 +722,7 @@ TEST_F(PermissionMessageCombinationsUnittest,
       "Exchange data with any device on the local network or internet"));
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 // Check that permission messages are generated correctly for
 // MediaGalleriesPermission (an API permission with custom messages).
 TEST_F(PermissionMessageCombinationsUnittest,
@@ -780,6 +804,7 @@ TEST_F(PermissionMessageCombinationsUnittest,
       "}");
   ASSERT_TRUE(CheckManifestProducesPermissions());
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // TODO(sashab): Add tests for SettingsOverrideAPIPermission (an API permission
 // with custom messages).

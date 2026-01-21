@@ -7,17 +7,18 @@
 #include <strings.h>
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "net/android/keystore.h"
 #include "net/base/net_errors.h"
 #include "net/ssl/ssl_platform_key_util.h"
 #include "net/ssl/threaded_ssl_private_key.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/boringssl/src/include/openssl/ecdsa.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
@@ -73,7 +74,7 @@ class SSLPlatformKeyAndroid : public ThreadedSSLPrivateKey::Delegate {
         provider_name_(android::GetPrivateKeyClassName(key)) {
     key_.Reset(key);
 
-    absl::optional<bool> supports_rsa_no_padding;
+    std::optional<bool> supports_rsa_no_padding;
     for (uint16_t algorithm : SSLPrivateKey::DefaultAlgorithmPreferences(
              EVP_PKEY_id(pubkey_.get()), true /* include PSS */)) {
       const char* java_algorithm = GetJavaAlgorithm(algorithm);
@@ -108,12 +109,6 @@ class SSLPlatformKeyAndroid : public ThreadedSSLPrivateKey::Delegate {
   Error Sign(uint16_t algorithm,
              base::span<const uint8_t> input,
              std::vector<uint8_t>* signature) override {
-    if (algorithm == SSL_SIGN_RSA_PKCS1_MD5_SHA1) {
-      // SSL_SIGN_RSA_PKCS1_MD5_SHA1 cannot be implemented with the Java
-      // signature API directly.
-      return SignRSAWithMD5SHA1(input, signature);
-    }
-
     if (use_pss_fallback_.contains(algorithm)) {
       return SignPSSFallback(algorithm, input, signature);
     }
@@ -131,25 +126,6 @@ class SSLPlatformKeyAndroid : public ThreadedSSLPrivateKey::Delegate {
   }
 
  private:
-  Error SignRSAWithMD5SHA1(base::span<const uint8_t> input,
-                           std::vector<uint8_t>* signature) {
-    uint8_t digest[EVP_MAX_MD_SIZE];
-    unsigned digest_len;
-    if (!EVP_Digest(input.data(), input.size(), digest, &digest_len,
-                    EVP_md5_sha1(), nullptr)) {
-      LOG(ERROR) << "Could not take digest.";
-      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
-    }
-
-    if (!android::SignWithPrivateKey(key_, "NONEwithRSA",
-                                     base::make_span(digest, digest_len),
-                                     signature)) {
-      LOG(ERROR) << "Could not sign message with private key!";
-      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
-    }
-    return OK;
-  }
-
   Error SignPSSFallback(uint16_t algorithm,
                         base::span<const uint8_t> input,
                         std::vector<uint8_t>* signature) {
@@ -161,8 +137,8 @@ class SSLPlatformKeyAndroid : public ThreadedSSLPrivateKey::Delegate {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
 
-    absl::optional<std::vector<uint8_t>> padded =
-        AddPSSPadding(pubkey_.get(), md, base::make_span(digest, digest_len));
+    std::optional<std::vector<uint8_t>> padded = AddPSSPadding(
+        pubkey_.get(), md, UNSAFE_TODO(base::span(digest, digest_len)));
     if (!padded) {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
@@ -187,12 +163,43 @@ scoped_refptr<SSLPrivateKey> WrapJavaPrivateKey(
     const X509Certificate* certificate,
     const JavaRef<jobject>& key) {
   bssl::UniquePtr<EVP_PKEY> pubkey = GetClientCertPublicKey(certificate);
-  if (!pubkey)
-    return nullptr;
+  return WrapJavaPrivateKey(std::move(pubkey), key);
+}
 
+scoped_refptr<SSLPrivateKey> WrapJavaPrivateKey(
+    bssl::UniquePtr<EVP_PKEY> pubkey,
+    const JavaRef<jobject>& key) {
+   if (!pubkey) {
+    return nullptr;
+  }
   return base::MakeRefCounted<ThreadedSSLPrivateKey>(
       std::make_unique<SSLPlatformKeyAndroid>(std::move(pubkey), key),
       GetSSLPlatformKeyTaskRunner());
+}
+
+std::vector<std::string> SignatureAlgorithmsToJavaKeyTypes(
+    base::span<const uint16_t> algorithms) {
+  std::vector<std::string> key_types;
+  bool has_rsa = false, has_ec = false;
+  for (uint16_t alg : algorithms) {
+    switch (SSL_get_signature_algorithm_key_type(alg)) {
+      case EVP_PKEY_RSA:
+        if (!has_rsa) {
+          // https://developer.android.com/reference/android/security/keystore/KeyProperties#KEY_ALGORITHM_RSA
+          key_types.push_back("RSA");
+          has_rsa = true;
+        }
+        break;
+      case EVP_PKEY_EC:
+        if (!has_ec) {
+          // https://developer.android.com/reference/android/security/keystore/KeyProperties#KEY_ALGORITHM_EC
+          key_types.push_back("EC");
+          has_ec = true;
+        }
+        break;
+    }
+  }
+  return key_types;
 }
 
 }  // namespace net

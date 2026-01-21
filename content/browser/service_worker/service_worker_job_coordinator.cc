@@ -95,27 +95,15 @@ void ServiceWorkerJobCoordinator::Unregister(
     const GURL& scope,
     const blink::StorageKey& key,
     bool is_immediate,
+    ServiceWorkerRegistration::DeleteInitiator initiator,
     ServiceWorkerUnregisterJob::UnregistrationCallback callback) {
   std::unique_ptr<ServiceWorkerRegisterJobBase> job(
-      new ServiceWorkerUnregisterJob(context_, scope, key, is_immediate));
+      new ServiceWorkerUnregisterJob(context_, scope, key, is_immediate,
+                                     initiator));
   ServiceWorkerUnregisterJob* queued_job =
       static_cast<ServiceWorkerUnregisterJob*>(
           job_queues_[UniqueRegistrationKey(scope, key)].Push(std::move(job)));
   queued_job->AddCallback(std::move(callback));
-}
-
-void ServiceWorkerJobCoordinator::Update(
-    ServiceWorkerRegistration* registration,
-    bool force_bypass_cache) {
-  DCHECK(registration);
-  // Use an empty fetch client settings object because this method is for
-  // browser-initiated update and there is no associated execution context.
-  job_queues_[UniqueRegistrationKey(registration->scope(), registration->key())]
-      .Push(base::WrapUnique<ServiceWorkerRegisterJobBase>(
-          new ServiceWorkerRegisterJob(
-              context_, registration, force_bypass_cache,
-              false /* skip_script_comparison */,
-              blink::mojom::FetchClientSettingsObject::New())));
 }
 
 void ServiceWorkerJobCoordinator::Update(
@@ -134,7 +122,9 @@ void ServiceWorkerJobCoordinator::Update(
                   context_, registration, force_bypass_cache,
                   skip_script_comparison,
                   std::move(outside_fetch_client_settings_object)))));
-  queued_job->AddCallback(std::move(callback));
+  if (callback) {
+    queued_job->AddCallback(std::move(callback));
+  }
 }
 
 void ServiceWorkerJobCoordinator::Abort(const GURL& scope,
@@ -156,7 +146,7 @@ void ServiceWorkerJobCoordinator::FinishJob(const GURL& scope,
                                             const blink::StorageKey& key,
                                             ServiceWorkerRegisterJobBase* job) {
   auto pending_jobs = job_queues_.find(UniqueRegistrationKey(scope, key));
-  DCHECK(pending_jobs != job_queues_.end()) << "Deleting non-existent job.";
+  CHECK(pending_jobs != job_queues_.end()) << "Deleting non-existent job.";
   pending_jobs->second.Pop(job);
   if (pending_jobs->second.empty())
     job_queues_.erase(pending_jobs);

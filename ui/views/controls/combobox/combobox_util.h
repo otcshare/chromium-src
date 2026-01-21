@@ -14,29 +14,28 @@
 namespace gfx {
 class Canvas;
 class Rect;
-class PointF;
 }  // namespace gfx
 
 namespace views {
+class Button;
 
 // Constants for the size of the combobox arrow.
-constexpr gfx::Size ComboboxArrowSize() {
+inline constexpr gfx::Size ComboboxArrowSize() {
   return gfx::Size(/*width=*/8, /*height=*/4);
 }
-extern const int kComboboxArrowPaddingWidth;
-extern const int kComboboxArrowContainerWidth;
+
+inline constexpr int kComboboxArrowPaddingWidth = 4;
 
 int GetComboboxArrowContainerWidthAndMargins();
+
+int GetComboboxArrowContainerWidth();
 
 // Paints the arrow for a combobox.
 void PaintComboboxArrow(SkColor color,
                         const gfx::Rect& bounds,
                         gfx::Canvas* canvas);
 
-// Draws a background around the combobox arrow.
-void PaintComboboxArrowBackground(SkColor color,
-                                  gfx::Canvas* canvas,
-                                  gfx::PointF origin);
+void ConfigureComboboxButtonInkDrop(Button* host_view);
 
 }  // namespace views
 

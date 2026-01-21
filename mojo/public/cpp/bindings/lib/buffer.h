@@ -10,7 +10,10 @@
 
 #include <vector>
 
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/message.h"
 
@@ -78,7 +81,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) Buffer {
   template <typename T>
   T* Get(size_t index) {
     DCHECK_LT(index, cursor_);
-    return reinterpret_cast<T*>(static_cast<uint8_t*>(data_) + index);
+    return reinterpret_cast<T*>(
+        UNSAFE_TODO(static_cast<uint8_t*>(data_) + index));
   }
 
   // A template helper combining Allocate() and Get<T>() above to allocate and
@@ -118,7 +122,9 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) Buffer {
 
   // The storage location and capacity currently backing |message_|. Owned by
   // the message object internally, not by this Buffer.
-  void* data_ = nullptr;
+  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
+  // #union, #addr-of
+  RAW_PTR_EXCLUSION void* data_ = nullptr;
   size_t size_ = 0;
 
   // The current write offset into |data_| if this Buffer is being used for

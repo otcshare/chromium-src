@@ -93,7 +93,6 @@ Member<const CSSValue>& StyleRuleCounterStyle::GetDescriptorReference(
       return speak_as_;
     default:
       NOTREACHED();
-      return speak_as_;
   }
 }
 
@@ -102,8 +101,9 @@ bool StyleRuleCounterStyle::NewValueInvalidOrEqual(
     const CSSValue* new_value) {
   Member<const CSSValue>& original_value =
       GetDescriptorReference(descriptor_id);
-  if (base::ValuesEquivalent(original_value.Get(), new_value))
+  if (base::ValuesEquivalent(original_value.Get(), new_value)) {
     return false;
+  }
 
   switch (descriptor_id) {
     case AtRuleDescriptorID::System:
@@ -141,7 +141,6 @@ void StyleRuleCounterStyle::TraceAfterDispatch(blink::Visitor* visitor) const {
   visitor->Trace(symbols_);
   visitor->Trace(additive_symbols_);
   visitor->Trace(speak_as_);
-  visitor->Trace(layer_);
   StyleRuleBase::TraceAfterDispatch(visitor);
 }
 

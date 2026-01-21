@@ -52,9 +52,11 @@ void AudioTimestampValidator::CheckForTimestampGap(
   // If audio_base_ts_ == kNoTimestamp, we are processing our first buffer.
   // If stream has neither codec delay nor discard padding, we should expect
   // timestamps and output durations to line up from the start (i.e. be stable).
+  auto discard_padding = buffer.discard_padding();
   if (audio_base_ts_ == kNoTimestamp && !has_codec_delay_ &&
-      buffer.discard_padding().first == base::TimeDelta() &&
-      buffer.discard_padding().second == base::TimeDelta()) {
+      (!discard_padding.has_value() ||
+       (discard_padding->first == base::TimeDelta() &&
+        discard_padding->second == base::TimeDelta()))) {
     DVLOG(3) << __func__ << " Expecting stable timestamps - stream has neither "
              << "codec delay nor discard padding.";
     limit_unstable_audio_tries_ = 0;
@@ -75,6 +77,9 @@ void AudioTimestampValidator::CheckForTimestampGap(
     return;
   }
 
+  // If we have `audio_output_ts_helper_` we must have a base timestamp.
+  DCHECK(audio_output_ts_helper_->base_timestamp());
+
   base::TimeDelta expected_ts = audio_output_ts_helper_->GetTimestamp();
   base::TimeDelta ts_delta = buffer.timestamp() - expected_ts;
 
@@ -89,9 +94,9 @@ void AudioTimestampValidator::CheckForTimestampGap(
       reached_stable_state_ = true;
       DVLOG(3) << __func__ << " stabilized! tries:" << num_unstable_audio_tries_
                << " offset:"
-               << audio_output_ts_helper_->base_timestamp().InMicroseconds();
+               << audio_output_ts_helper_->base_timestamp()->InMicroseconds();
     } else {
-      base::TimeDelta orig_offset = audio_output_ts_helper_->base_timestamp();
+      base::TimeDelta orig_offset = *audio_output_ts_helper_->base_timestamp();
 
       // Save since this gets reset when we set new base time.
       int64_t decoded_frame_count = audio_output_ts_helper_->frame_count();
@@ -101,7 +106,7 @@ void AudioTimestampValidator::CheckForTimestampGap(
       DVLOG(3) << __func__
                << " NOT stabilized. tries:" << num_unstable_audio_tries_
                << " offset was:" << orig_offset.InMicroseconds() << " now:"
-               << audio_output_ts_helper_->base_timestamp().InMicroseconds();
+               << audio_output_ts_helper_->base_timestamp()->InMicroseconds();
       num_unstable_audio_tries_++;
 
       // Let developers know if their files timestamps are way off from
@@ -129,7 +134,7 @@ void AudioTimestampValidator::CheckForTimestampGap(
            << " expected_ts:" << expected_ts.InMicroseconds()
            << " actual_ts:" << buffer.timestamp().InMicroseconds()
            << " audio_ts_offset:"
-           << audio_output_ts_helper_->base_timestamp().InMicroseconds();
+           << audio_output_ts_helper_->base_timestamp()->InMicroseconds();
 }
 
 void AudioTimestampValidator::RecordOutputDuration(

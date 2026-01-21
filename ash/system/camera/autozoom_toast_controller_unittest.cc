@@ -6,6 +6,8 @@
 
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
 
@@ -42,7 +44,7 @@ class TestDelegate : public AutozoomToastController::Delegate {
     }
   }
 
-  AutozoomObserver* autozoom_observer = nullptr;
+  raw_ptr<AutozoomObserver> autozoom_observer = nullptr;
 
  private:
   bool autozoom_enabled_ = false;
@@ -68,8 +70,8 @@ class AutozoomToastControllerTest : public AshTestBase {
   }
 
   void TearDown() override {
-    controller_ = nullptr;
     delegate_ = nullptr;
+    controller_.reset();
     AshTestBase::TearDown();
   }
 
@@ -77,8 +79,14 @@ class AutozoomToastControllerTest : public AshTestBase {
     return controller_->bubble_widget_for_test();
   }
 
+  TrayBubbleView* bubble_view() { return controller_->bubble_view_.get(); }
+
+  std::u16string GetAccessibleNameForBubble() {
+    return controller_->GetAccessibleNameForBubble();
+  }
+
   std::unique_ptr<AutozoomToastController> controller_;
-  TestDelegate* delegate_;
+  raw_ptr<TestDelegate> delegate_;
 };
 
 TEST_F(AutozoomToastControllerTest, ShowToastWhenCameraActive) {
@@ -97,6 +105,17 @@ TEST_F(AutozoomToastControllerTest, ShowToastWhenCameraActive) {
   delegate_->SetAutozoomControlEnabled(true);
   ASSERT_NE(bubble_widget(), nullptr);
   EXPECT_TRUE(bubble_widget()->IsVisible());
+}
+
+TEST_F(AutozoomToastControllerTest, BubbleViewAccessibleName) {
+  delegate_->SetAutozoomEnabled(true);
+  delegate_->SetAutozoomControlEnabled(true);
+  ASSERT_TRUE(bubble_view());
+
+  ui::AXNodeData node_data;
+  bubble_view()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            GetAccessibleNameForBubble());
 }
 
 }  // namespace ash

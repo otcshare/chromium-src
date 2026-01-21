@@ -5,11 +5,13 @@
 #include "chrome/browser/ui/ash/network/mobile_data_notifications.h"
 
 #include <gtest/gtest.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
@@ -20,10 +22,12 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/dbus/shill/shill_device_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/network_connect.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -41,13 +45,13 @@ const char kTestUserName[] = "test-user@example.com";
 
 class NetworkConnectTestDelegate : public ash::NetworkConnect::Delegate {
  public:
-  NetworkConnectTestDelegate() {}
+  NetworkConnectTestDelegate() = default;
 
   NetworkConnectTestDelegate(const NetworkConnectTestDelegate&) = delete;
   NetworkConnectTestDelegate& operator=(const NetworkConnectTestDelegate&) =
       delete;
 
-  ~NetworkConnectTestDelegate() override {}
+  ~NetworkConnectTestDelegate() override = default;
 
   void ShowNetworkConfigure(const std::string& network_id) override {}
   void ShowNetworkSettings(const std::string& network_id) override {}
@@ -56,6 +60,7 @@ class NetworkConnectTestDelegate : public ash::NetworkConnect::Delegate {
   }
   void ShowMobileSetupDialog(const std::string& network_id) override {}
   void ShowCarrierAccountDetail(const std::string& network_id) override {}
+  void ShowCarrierUnlockNotification() override {}
   void ShowPortalSignin(const std::string& network_id,
                         ash::NetworkConnect::Source source) override {}
   void ShowNetworkConnectError(const std::string& error_name,
@@ -65,17 +70,18 @@ class NetworkConnectTestDelegate : public ash::NetworkConnect::Delegate {
 
 class MobileDataNotificationsTest : public testing::Test {
  public:
-  MobileDataNotificationsTest() {}
+  MobileDataNotificationsTest() = default;
 
   MobileDataNotificationsTest(const MobileDataNotificationsTest&) = delete;
   MobileDataNotificationsTest& operator=(const MobileDataNotificationsTest&) =
       delete;
 
-  ~MobileDataNotificationsTest() override {}
+  ~MobileDataNotificationsTest() override = default;
 
   void SetUp() override {
     session_manager_.SetSessionState(session_manager::SessionState::ACTIVE);
     testing::Test::SetUp();
+    ash::LoginState::Initialize();
     SetupUserManagerAndProfileManager();
     SetupSystemNotifications();
     AddUserAndSetActive(kTestUserName);
@@ -92,6 +98,7 @@ class MobileDataNotificationsTest : public testing::Test {
     network_connect_delegate_.reset();
     profile_manager_.reset();
     user_manager_enabler_.reset();
+    ash::LoginState::Shutdown();
     testing::Test::TearDown();
   }
 
@@ -106,7 +113,7 @@ class MobileDataNotificationsTest : public testing::Test {
   void SetupUserManagerAndProfileManager() {
     user_manager_ = new ash::FakeChromeUserManager;
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
-        base::WrapUnique(user_manager_));
+        base::WrapUnique(user_manager_.get()));
 
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
@@ -122,11 +129,12 @@ class MobileDataNotificationsTest : public testing::Test {
     device_test->ClearDevices();
     device_test->AddDevice(kCellularDevicePath, shill::kTypeCellular,
                            "stub_cellular_device1");
-    base::DictionaryValue home_provider;
-    home_provider.SetStringKey("name", "Cellular1_Provider");
-    home_provider.SetStringKey("country", "us");
+    base::Value::Dict home_provider;
+    home_provider.Set("name", "Cellular1_Provider");
+    home_provider.Set("country", "us");
     device_test->SetDeviceProperty(kCellularDevicePath,
-                                   shill::kHomeProviderProperty, home_provider,
+                                   shill::kHomeProviderProperty,
+                                   base::Value(std::move(home_provider)),
                                    /*notify_changed=*/true);
 
     // Create a cellular network and activate it.
@@ -159,12 +167,13 @@ class MobileDataNotificationsTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_;
   ash::NetworkHandlerTestHelper network_handler_test_helper_;
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   std::unique_ptr<MobileDataNotifications> mobile_data_notifications_;
   std::unique_ptr<NetworkConnectTestDelegate> network_connect_delegate_;
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
 
-  ash::FakeChromeUserManager* user_manager_;
+  raw_ptr<ash::FakeChromeUserManager, DanglingUntriaged> user_manager_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
   std::unique_ptr<NotificationDisplayServiceTester> display_service_;
 };

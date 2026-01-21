@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests DOMAgent.querySelector and DOMAgent.querySelectorAll.\n`);
-  await TestRunner.loadLegacyModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
   await TestRunner.loadHTML(`
       <div id="id1" class="foo"></div>
@@ -26,19 +28,19 @@
 
     TestRunner.runTestSuite([
       function testDocumentQuerySelector(next) {
-        TestRunner.DOMAgent.querySelector(documentId, 'div.foo').then(dumpNodes.bind(null, next));
+        TestRunner.DOMAgent.invoke_querySelector({nodeId: documentId, selector: 'div.foo'}).then(({nodeId}) => dumpNodes(next, [nodeId]));
       },
 
       function testDocumentQuerySelectorAll(next) {
-        TestRunner.DOMAgent.querySelectorAll(documentId, 'div.foo').then(dumpNodes.bind(null, next));
+        TestRunner.DOMAgent.invoke_querySelectorAll({nodeId: documentId, selector: 'div.foo'}).then(({nodeIds}) => dumpNodes(next, nodeIds));
       },
 
       function testQuerySelector(next) {
-        TestRunner.DOMAgent.querySelector(containerId, 'div.foo').then(dumpNodes.bind(null, next));
+        TestRunner.DOMAgent.invoke_querySelector({nodeId: containerId, selector: 'div.foo'}).then(({nodeId}) => dumpNodes(next, [nodeId]));
       },
 
       function testQuerySelectorAll(next) {
-        TestRunner.DOMAgent.querySelectorAll(containerId, 'div.foo').then(dumpNodes.bind(null, next));
+        TestRunner.DOMAgent.invoke_querySelectorAll({nodeId: containerId, selector: 'div.foo'}).then(({nodeIds}) => dumpNodes(next, nodeIds));
       }
     ]);
   }

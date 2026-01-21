@@ -10,10 +10,12 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/containers/stack.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "components/history/core/browser/history_service.h"
@@ -21,6 +23,7 @@
 #include "components/omnibox/browser/scored_history_match.h"
 
 class HistoryQuickProviderTest;
+class OmniboxTriggeredFeatureService;
 class TemplateURLService;
 
 namespace bookmarks {
@@ -29,7 +32,6 @@ class BookmarkModel;
 
 namespace history {
 class HistoryDatabase;
-class InMemoryURLIndex;
 }  // namespace history
 
 // A structure private to InMemoryURLIndex describing its internal data and
@@ -64,15 +66,14 @@ class URLIndexPrivateData
   // will be found in nearly all history candidates. Results are sorted by
   // descending score. The full results set (i.e. beyond the
   // `kItemsToScoreLimit` limit) will be retained and used for subsequent calls
-  // to this function. In total, `max_matches` of items will be returned. If
-  // `host_filter` is not empty, only matches of that host are returned.
+  // to this function. In total, `max_matches` of items will be returned.
   ScoredHistoryMatches HistoryItemsForTerms(
       std::u16string term_string,
       size_t cursor_position,
-      const std::string& host_filter,
       size_t max_matches,
       bookmarks::BookmarkModel* bookmark_model,
-      TemplateURLService* template_url_service);
+      TemplateURLService* template_url_service,
+      OmniboxTriggeredFeatureService* triggered_feature_service);
 
   // Returns URL hosts that have been visited more than a threshold.
   const std::vector<std::string>& HighlyVisitedHosts() const;
@@ -129,6 +130,16 @@ class URLIndexPrivateData
   // Estimates dynamic memory usage.
   // See base/trace_event/memory_usage_estimator.h for more info.
   size_t EstimateMemoryUsage() const;
+
+  // Break up the raw search string (complete with escaped URL elements) into
+  // 'terms' (as opposed to 'words'; see comment in HistoryItemsForTerms()).
+  // We only want to break up the search string on 'true' whitespace rather than
+  // escaped whitespace.  For example, when the user types
+  // "colspec=ID%20Mstone Release" we get two 'terms': "colspec=id%20mstone" and
+  // "release".
+  // Also returns word starts in each term.
+  static std::pair<String16Vector, WordStarts> GetTermsAndWordStartsOffsets(
+      const std::u16string& lower_raw_string);
 
  private:
   friend class base::RefCountedThreadSafe<URLIndexPrivateData>;
@@ -194,24 +205,7 @@ class URLIndexPrivateData
     bool operator()(const HistoryID h1, const HistoryID h2);
 
    private:
-    const HistoryInfoMap& history_info_map_;
-  };
-
-  // Information about a URL host aggregated from all URLs of that host. Used to
-  // determine `highly_visited_hosts_`.
-  class HostInfo {
-   public:
-    // Returns whether this host is considered highly-visited.
-    bool IsHighlyVisited() const;
-
-    // Called for each URL of the same host.
-    void AddUrl(const history::URLRow& row);
-
-   private:
-    int typed_urls_ = 0;    // The number of URLs that have `typed_count > X`;
-                            // where X is finch param controlled.
-    int typed_visits_ = 0;  // The sum of all URLs' `clamp(typed_count - X, 0,
-                            // Y)`; where X and Y are finch param controlled.
+    const raw_ref<const HistoryInfoMap> history_info_map_;
   };
 
   // URL History indexing support functions.
@@ -237,12 +231,13 @@ class URLIndexPrivateData
 
   // Helper function for HistoryItemsForTerms().  Fills in |scored_items| from
   // the matches listed in |history_ids|.
-  void HistoryIdsToScoredMatches(HistoryIDVector history_ids,
-                                 const std::u16string& lower_raw_string,
-                                 const std::string& host_filter,
-                                 const TemplateURLService* template_url_service,
-                                 bookmarks::BookmarkModel* bookmark_model,
-                                 ScoredHistoryMatches* scored_items) const;
+  void HistoryIdsToScoredMatches(
+      HistoryIDVector history_ids,
+      const std::u16string& lower_raw_string,
+      const TemplateURLService* template_url_service,
+      bookmarks::BookmarkModel* bookmark_model,
+      ScoredHistoryMatches* scored_items,
+      OmniboxTriggeredFeatureService* triggered_feature_service) const;
 
   // Fills in |terms_to_word_starts_offsets| according to where the word starts
   // in each term.  For example, in the term "-foo" the word starts at offset 1.
@@ -291,11 +286,9 @@ class URLIndexPrivateData
                                      const std::set<std::string>& allowlist);
 
   // Returns true if the URL associated with `history_id` is missing, malformed,
-  // or otherwise should not be displayed. If `host_filter` is not empty,
-  // results of a different host are filtered. Results from the default search
+  // or otherwise should not be displayed. Results from the default search
   // provider are filtered.
   bool ShouldExclude(const HistoryID history_id,
-                     const std::string& host_filter,
                      const TemplateURLService* template_url_service) const;
 
   // Cache of search terms.
@@ -340,17 +333,6 @@ class URLIndexPrivateData
   // A one-to-one mapping from HistoryID to the word starts detected in each
   // item's URL and page title.
   WordStartsMap word_starts_map_;
-
-  // Aggregates typed visit counts by URL hosts. Isn't a pure sum, but rather
-  // each visit's contribution is capped.
-  // TODO(manukh): Consider capping the size of `host_visits_`. It's typically
-  //  (based on my own history DB) about 250 items, but can grow as the user
-  //  navigate to new hosts.
-  std::map<std::string, HostInfo> host_visits_;
-
-  // The URL hosts that have been visited more than some threshold. Empty if the
-  // `kDomainSuggestions` feature is disabled.
-  std::vector<std::string> highly_visited_hosts_;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_URL_INDEX_PRIVATE_DATA_H_

@@ -7,13 +7,13 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chromecast/media/cma/backend/proxy/cast_runtime_audio_channel_broker.h"
 #include "third_party/cast_core/public/src/proto/runtime/cast_audio_channel_service.grpc.pb.h"
 #include "third_party/cast_core/public/src/proto/runtime/cast_audio_channel_service.pb.h"
-#include "third_party/grpc/src/include/grpcpp/impl/codegen/status.h"
+#include "third_party/grpc/source/include/grpcpp/impl/codegen/status.h"
 #include "third_party/protobuf/src/google/protobuf/duration.pb.h"
 
 namespace chromecast {
@@ -65,9 +65,6 @@ class AudioChannelBrokerImpl
   template <typename TParams, typename TResult>
   struct GrpcCall {
     // The response to a gRPC Call.
-    //
-    // TODO(rwkeane): It's possible that this gets deleted by the async method,
-    // and that the reactor will need to be created as a subclass.
     class Response : public grpc::ClientUnaryReactor {
      public:
       using Callback =

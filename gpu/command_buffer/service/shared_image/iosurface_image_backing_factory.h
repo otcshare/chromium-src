@@ -10,14 +10,12 @@
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "components/viz/common/resources/resource_format.h"
-#include "gpu/command_buffer/service/shared_image/gl_texture_image_backing_helper.h"
+#include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing_factory.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/gpu_gles2_export.h"
 #include "ui/gfx/mac/io_surface.h"
-#include "ui/gl/gl_image.h"
 
 namespace gfx {
 class Size;
@@ -31,37 +29,23 @@ class ProgressReporter;
 namespace gpu {
 
 class SharedImageBacking;
-class GpuDriverBugWorkarounds;
-struct GpuPreferences;
 struct Mailbox;
 
-// Helper functions used used by SharedImageRepresentationGLImage to do
-// IOSurface-specific sharing.
+// IOSurfaceImageBackingFactory is used to create SharedImage backings
+// backed by IOSurface instances.
 class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
     : public SharedImageBackingFactory {
  public:
-  static sk_sp<SkPromiseImageTexture> ProduceSkiaPromiseTextureMetal(
-      SharedImageBacking* backing,
-      scoped_refptr<SharedContextState> context_state,
-      gfx::ScopedIOSurface io_surface,
-      uint32_t io_surface_plane);
-  static std::unique_ptr<DawnImageRepresentation> ProduceDawn(
-      SharedImageManager* manager,
-      SharedImageBacking* backing,
-      MemoryTypeTracker* tracker,
-      WGPUDevice device,
-      std::vector<WGPUTextureFormat> view_formats,
-      gfx::ScopedIOSurface io_surface,
-      uint32_t io_surface_plane);
-
-  // It is used for migrating GLImage backing, for part that works with
-  // SharedMemory GMB with SharedMemoryImageBacking and Composite backings, and
-  // all other parts with OzoneImageBacking and other backings.
-  IOSurfaceImageBackingFactory(const GpuPreferences& gpu_preferences,
-                               const GpuDriverBugWorkarounds& workarounds,
+  IOSurfaceImageBackingFactory(GrContextType gr_context_type,
+                               int32_t max_texture_size,
                                const gles2::FeatureInfo* feature_info,
-                               gl::ProgressReporter* progress_reporter);
+                               gl::ProgressReporter* progress_reporter,
+                               uint32_t texture_target);
   ~IOSurfaceImageBackingFactory() override;
+
+  static gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
+      const gfx::Size& size,
+      viz::SharedImageFormat format);
 
   // SharedImageBackingFactory implementation.
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
@@ -72,7 +56,8 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      SharedImageUsageSet usage,
+      std::string debug_label,
       bool is_thread_safe) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
@@ -81,35 +66,43 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      SharedImageUsageSet usage,
+      std::string debug_label,
+      bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      int client_id,
-      gfx::GpuMemoryBufferHandle handle,
-      gfx::BufferFormat format,
-      gfx::BufferPlane plane,
+      viz::SharedImageFormat format,
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage) override;
-  bool IsSupported(uint32_t usage,
+      SharedImageUsageSet usage,
+      std::string debug_label,
+      bool is_thread_safe,
+      gfx::GpuMemoryBufferHandle handle) override;
+  std::unique_ptr<SharedImageBacking> CreateSharedImage(
+      const Mailbox& mailbox,
+      viz::SharedImageFormat format,
+      SurfaceHandle surface_handle,
+      const gfx::Size& size,
+      const gfx::ColorSpace& color_space,
+      GrSurfaceOrigin surface_origin,
+      SkAlphaType alpha_type,
+      SharedImageUsageSet usage,
+      std::string debug_label,
+      bool is_thread_safe,
+      gfx::BufferUsage buffer_usage) override;
+  bool IsSupported(SharedImageUsageSet usage,
                    viz::SharedImageFormat format,
                    const gfx::Size& size,
                    bool thread_safe,
                    gfx::GpuMemoryBufferType gmb_type,
                    GrContextType gr_context_type,
                    base::span<const uint8_t> pixel_data) override;
+  SharedImageBackingType GetBackingType() override;
 
  private:
-  scoped_refptr<gl::GLImage> MakeGLImage(int client_id,
-                                         gfx::GpuMemoryBufferHandle handle,
-                                         gfx::BufferFormat format,
-                                         const gfx::ColorSpace& color_space,
-                                         gfx::BufferPlane plane,
-                                         const gfx::Size& size);
-
   std::unique_ptr<SharedImageBacking> CreateSharedImageInternal(
       const Mailbox& mailbox,
       viz::SharedImageFormat format,
@@ -118,18 +111,34 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      gpu::SharedImageUsageSet usage,
+      std::string debug_label,
+      bool is_thread_safe,
       base::span<const uint8_t> pixel_data);
+  std::unique_ptr<SharedImageBacking> CreateSharedImageGMBs(
+      const Mailbox& mailbox,
+      viz::SharedImageFormat format,
+      const gfx::Size& size,
+      const gfx::ColorSpace& color_space,
+      GrSurfaceOrigin surface_origin,
+      SkAlphaType alpha_type,
+      gpu::SharedImageUsageSet usage,
+      std::string debug_label,
+      gfx::GpuMemoryBufferHandle handle,
+      bool is_thread_safe,
+      std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
+
+  const GrContextType gr_context_type_;
+  const int32_t max_texture_size_;
+  const bool angle_texture_usage_;
+
+  base::flat_set<viz::SharedImageFormat> supported_formats_;
 
   // Used to notify the watchdog before a buffer allocation in case it takes
   // long.
-  const raw_ptr<gl::ProgressReporter> progress_reporter_ = nullptr;
+  const raw_ptr<gl::ProgressReporter> progress_reporter_;
 
-  GpuMemoryBufferFormatSet gpu_memory_buffer_formats_;
-  base::flat_set<viz::ResourceFormat> supported_formats_;
-
-  int32_t max_texture_size_ = 0;
-  bool angle_texture_usage_ = false;
+  const uint32_t texture_target_;
 };
 
 }  // namespace gpu

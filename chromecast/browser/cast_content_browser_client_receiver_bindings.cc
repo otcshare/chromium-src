@@ -4,11 +4,9 @@
 
 // This file exposes services from the cast browser to child processes.
 
-#include "chromecast/browser/cast_content_browser_client.h"
-
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/sequence_local_storage_slot.h"
@@ -17,6 +15,7 @@
 #include "chromecast/browser/cast_browser_interface_binders.h"
 #include "chromecast/browser/cast_browser_main_parts.h"
 #include "chromecast/browser/cast_browser_process.h"
+#include "chromecast/browser/cast_content_browser_client.h"
 #include "chromecast/browser/media/media_caps_impl.h"
 #include "chromecast/browser/metrics/metrics_helper_impl.h"
 #include "chromecast/browser/service_connector.h"
@@ -30,14 +29,10 @@
 #include "url/origin.h"
 
 #if BUILDFLAG(ENABLE_CAST_RENDERER)
-#include "chromecast/media/service/cast_mojo_media_client.h"
+#include "chromecast/media/service/create_mojo_media_client.h"
 #include "chromecast/media/service/video_geometry_setter_service.h"
 #include "media/mojo/services/media_service.h"  // nogncheck
 #endif  // BUILDFLAG(ENABLE_CAST_RENDERER)
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chromecast/browser/memory_pressure_controller_impl.h"
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace chromecast {
 namespace shell {
@@ -88,17 +83,6 @@ void CastContentBrowserClient::ExposeInterfacesToRenderer(
           &metrics::MetricsHelperImpl::AddReceiver,
           base::Unretained(cast_browser_main_parts_->metrics_helper())),
       base::SingleThreadTaskRunner::GetCurrentDefault());
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
-  if (!memory_pressure_controller_) {
-    memory_pressure_controller_.reset(new MemoryPressureControllerImpl());
-  }
-
-  registry->AddInterface<mojom::MemoryPressureController>(
-      base::BindRepeating(&MemoryPressureControllerImpl::AddReceiver,
-                          base::Unretained(memory_pressure_controller_.get())),
-      base::SingleThreadTaskRunner::GetCurrentDefault());
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
 }
 
 void CastContentBrowserClient::BindMediaServiceReceiver(
@@ -155,16 +139,15 @@ void CastContentBrowserClient::CreateMediaService(
 
   // Using base::Unretained is safe here because this class will persist for
   // the duration of the browser process' lifetime.
-  auto mojo_media_client = std::make_unique<media::CastMojoMediaClient>(
-      GetCmaBackendFactory(),
-      base::BindRepeating(&CastContentBrowserClient::CreateCdmFactory,
-                          base::Unretained(this)),
-      GetVideoModeSwitcher(), GetVideoResolutionPolicy(),
-      browser_main_parts()->media_connector(),
-      base::BindRepeating(&CastContentBrowserClient::IsBufferingEnabled,
-                          base::Unretained(this)));
-  mojo_media_client->SetVideoGeometrySetterService(
-      video_geometry_setter_service_.get());
+  std::unique_ptr<::media::MojoMediaClient> mojo_media_client =
+      CreateMojoMediaClientForCast(
+          GetCmaBackendFactory(),
+          base::BindRepeating(&CastContentBrowserClient::CreateCdmFactory,
+                              base::Unretained(this)),
+          GetVideoModeSwitcher(), GetVideoResolutionPolicy(),
+          video_geometry_setter_service_.get(),
+          base::BindRepeating(&CastContentBrowserClient::IsBufferingEnabled,
+                              base::Unretained(this)));
 
   static base::SequenceLocalStorageSlot<::media::MediaService> service;
   service.emplace(std::move(mojo_media_client), std::move(receiver));

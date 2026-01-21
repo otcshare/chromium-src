@@ -15,27 +15,32 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/read_only_shared_memory_region.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_multi_source_observation.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/safe_browsing/content/browser/client_side_phishing_model.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/render_process_host_creation_observer.h"
+#include "content/public/browser/render_process_host_observer.h"
 #include "net/base/ip_address.h"
+#include "net/http/http_status_code.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
@@ -48,14 +53,30 @@ namespace safe_browsing {
 class ClientPhishingRequest;
 class ClientSideDetectionHost;
 
+// Enum used to keep stats on classification using threshold comparison.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class SBClientDetectionClassifyThresholdsResult {
+  kSuccess = 0,
+  kModelSizeMismatch = 1,
+  kModelLabelNotFound = 2,
+  kMaxValue = kModelLabelNotFound,
+};
+
 // Main service which pushes models to the renderers, responds to classification
 // requests. This owns two ModelLoader objects.
 class ClientSideDetectionService
     : public KeyedService,
-      public content::RenderProcessHostCreationObserver {
+      public content::RenderProcessHostCreationObserver,
+      public content::RenderProcessHostObserver {
  public:
-  // void(GURL phishing_url, bool is_phishing).
-  typedef base::OnceCallback<void(GURL, bool)>
+  // void(GURL phishing_url, bool is_phishing,
+  // std::optional<net::HttpStatusCode> response_code,
+  // std::optional<IntelligentScanVerdict> intelligent_scan_verdict).
+  typedef base::OnceCallback<void(GURL,
+                                  bool,
+                                  std::optional<net::HttpStatusCode>,
+                                  std::optional<IntelligentScanVerdict>)>
       ClientReportPhishingRequestCallback;
 
   // Delegate which allows to provide embedder specific implementations.
@@ -70,9 +91,13 @@ class ClientSideDetectionService
     GetURLLoaderFactory() = 0;
     virtual scoped_refptr<network::SharedURLLoaderFactory>
     GetSafeBrowsingURLLoaderFactory() = 0;
+    virtual bool ShouldSendModelToBrowserContext(
+        content::BrowserContext* context) = 0;
   };
 
-  explicit ClientSideDetectionService(std::unique_ptr<Delegate> delegate);
+  ClientSideDetectionService(
+      std::unique_ptr<Delegate> delegate,
+      optimization_guide::OptimizationGuideModelProvider* opt_guide);
 
   ClientSideDetectionService(const ClientSideDetectionService&) = delete;
   ClientSideDetectionService& operator=(const ClientSideDetectionService&) =
@@ -89,7 +114,7 @@ class ClientSideDetectionService
 
   void OnURLLoaderComplete(network::SimpleURLLoader* url_loader,
                            base::Time start_time,
-                           std::unique_ptr<std::string> response_body);
+                           std::optional<std::string> response_body);
 
   // Sends a request to the SafeBrowsing servers with the ClientPhishingRequest.
   // The URL scheme of the |url()| in the request should be HTTP.  This method
@@ -121,19 +146,12 @@ class ClientSideDetectionService
   // Returns true and sets is_phishing if url is in the cache and valid.
   virtual bool GetValidCachedResult(const GURL& url, bool* is_phishing);
 
-  // Returns true if the url is in the cache.
-  virtual bool IsInCache(const GURL& url);
-
-  // Returns true if we have sent more than kMaxReportsPerInterval phishing
+  // Returns true if we have sent at least kMaxReportsPerInterval phishing
   // reports in the last kReportsInterval.
-  virtual bool OverPhishingReportLimit();
+  virtual bool AtPhishingReportLimit();
 
   // Sends a model to each renderer.
   virtual void SendModelToRenderers();
-
-  // Returns the model string. Used only for protobuf model. Virtual so that
-  // mock implementation can override it.
-  virtual const std::string& GetModelStr();
 
   // Returns the model type (protobuf or flatbuffer). Virtual so that mock
   // implementation can override it.
@@ -147,15 +165,68 @@ class ClientSideDetectionService
   // override it.
   virtual const base::File& GetVisualTfLiteModel();
 
+  // Returns the Image Embedding model file. Virtual so that mock implementation
+  // can override it.
+  virtual const base::File& GetImageEmbeddingModel();
+
+  virtual int GetClassificationInputWidth();
+  virtual int GetClassificationInputHeight();
+  virtual int GetImageEmbeddingInputWidth();
+  virtual int GetImageEmbeddingInputHeight();
+
+  virtual bool IsModelMetadataImageEmbeddingVersionMatching();
+
+  // Returns the visual TFLite model thresholds from the model class
+  virtual const std::vector<TfLiteModelMetadata::Threshold>&
+  GetVisualTfLiteModelThresholds();
+
+  // Compare the scores from classification to TFLite model thresholds
+  virtual void ClassifyPhishingThroughThresholds(
+      ClientPhishingRequest* verdict);
+
+#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+  // Returns the list of target image embeddings.
+  virtual const std::vector<TargetEmbedding>& GetTargetImageEmbeddings();
+#endif
   // Overrides the SharedURLLoaderFactory
   void SetURLLoaderFactoryForTesting(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
   // Sends a model to each renderer.
-  void SetPhishingModel(content::RenderProcessHost* rph);
+  void SetPhishingModel(content::RenderProcessHost* rph,
+                        bool new_renderer_process_host);
 
   // Returns a WeakPtr for this service.
   base::WeakPtr<ClientSideDetectionService> GetWeakPtr();
+
+  // Checks whether the model class has a model available or not. Virtual so
+  // that mock classes can override it.
+  virtual bool IsModelAvailable();
+
+  // Checks whether the model class has an image embedding model available or
+  // not.
+  bool HasImageEmbeddingModel();
+
+  // For testing the model in browser test.
+  void SetModelAndVisualTfLiteForTesting(const base::FilePath& model,
+                                         const base::FilePath& visual_tf_lite);
+#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+  void SetTargetImageEmbeddingsForTesting(
+      std::vector<TargetEmbedding> target_embeddings);
+#endif
+
+  bool IsSubscribedToImageEmbeddingModelUpdates();
+
+  base::CallbackListSubscription RegisterCallbackForModelUpdates(
+      base::RepeatingClosure callback);
+
+  // Returns the trigger model version to be used in cache for CSD-Phishing
+  // debugging metadata.
+  int GetTriggerModelVersion();
+
+  // Returns the image embedding model version to be passed onto
+  // |ClientPhishingRequest| when image embedding is called.
+  int GetImageEmbeddingModelVersion();
 
  private:
   friend class ClientSideDetectionServiceTest;
@@ -165,7 +236,10 @@ class ClientSideDetectionService
                            ServiceObjectDeletedBeforeCallbackDone);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
                            SendClientReportPhishingRequest);
+  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
+                           GetNumReportTestWhenPrefsPreloaded);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, GetNumReportTest);
+  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, GetNumReportTestESB);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
                            TestModelFollowsPrefs);
 
@@ -192,6 +266,11 @@ class ClientSideDetectionService
   // updated to match the state
   void OnPrefsUpdated();
 
+  // Unsubscribes to model subscriptions. Currently we unsubscribe to the image
+  // embedding model as well as the on device model depending on user
+  // preferences.
+  void UnsubscribeToModelSubscription();
+
   // Starts sending the request to the client-side detection frontends.
   // This method takes ownership of both pointers.
   void StartClientReportPhishingRequest(
@@ -204,7 +283,7 @@ class ClientSideDetectionService
   void HandlePhishingVerdict(network::SimpleURLLoader* source,
                              const GURL& url,
                              int net_error,
-                             int response_code,
+                             std::optional<net::HttpStatusCode> response_code,
                              const std::string& data);
 
   // Invalidate cache results which are no longer useful.
@@ -213,9 +292,10 @@ class ClientSideDetectionService
   // Get the number of phishing reports that we have sent over kReportsInterval.
   int GetPhishingNumReports();
 
-  // Adds a phishing report to |phishing_report_times_| and stores the result in
-  // prefs.
-  void AddPhishingReport(base::Time timestamp);
+  // Returns true if we can successfully add a phishing report to
+  // |phishing_report_times_| and stores the result in prefs. Returns false if
+  // we're at the ping limit or prefs is null.
+  bool AddPhishingReport(base::Time timestamp);
 
   // Populates |phishing_report_times_| with the data stored in local prefs.
   void LoadPhishingReportTimesFromPrefs();
@@ -226,6 +306,10 @@ class ClientSideDetectionService
   // content::RenderProcessHostCreationObserver:
   void OnRenderProcessHostCreated(content::RenderProcessHost* rph) override;
 
+  //  content::RenderProcessHostObserver
+  void RenderProcessHostDestroyed(content::RenderProcessHost* rph) override;
+  void RenderProcessReady(content::RenderProcessHost* rph) override;
+
   // Whether the service is running or not.  When the service is not running,
   // it won't download the model nor report detected phishing URLs.
   bool enabled_ = false;
@@ -233,6 +317,20 @@ class ClientSideDetectionService
   // Whether the service is in extended reporting mode or not. This affects the
   // choice of model.
   bool extended_reporting_ = false;
+
+  // Whether the trigger models have been sent or not. This is used to determine
+  // whether an empty model in the model class determines whether the models
+  // haven't been sent or we should clear the models in the scorer because they
+  // have been sent.
+  bool sent_trigger_models_ = false;
+
+  // This is to keep track of the trigger model version that was last sent to
+  // the renderer host processes. This is used to determine, when the image
+  // embedding model arrives, whether a new scorer should be made with all
+  // models or the image embedding model can be attached to the current scorer.
+  // This is also used to add to CSD-Phishing debugging metadata to PhishGuard
+  // pings.
+  int trigger_model_version_ = 0;
 
   // Map of client report phishing request to the corresponding callback that
   // has to be invoked when the request is done.
@@ -262,6 +360,13 @@ class ClientSideDetectionService
   std::unique_ptr<Delegate> delegate_;
 
   base::CallbackListSubscription update_model_subscription_;
+
+  std::unique_ptr<ClientSidePhishingModel> client_side_phishing_model_;
+  base::ScopedMultiSourceObservation<content::RenderProcessHost,
+                                     content::RenderProcessHostObserver>
+      observed_render_process_hosts_{this};
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // Used to asynchronously call the callbacks for
   // SendClientReportPhishingRequest.

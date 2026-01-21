@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
@@ -15,40 +16,27 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/api/messaging/native_message_port.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/api/messaging/channel_endpoint.h"
 #include "extensions/browser/api/messaging/message_service.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
+#include "extensions/browser/api/messaging/native_message_port.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
-#include "extensions/common/api/messaging/serialization_format.h"
+#include "extensions/common/api/messaging/messaging_util.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "url/gurl.h"
 
 namespace ash {
 namespace guest_os {
 
 // static
-const char* const VmSKForwardingNativeMessageHost::kHostName =
-    "com.google.vm_sk_forwarding";
-
-// static
-const char* const VmSKForwardingNativeMessageHost::kOrigins[] = {
-    "chrome-extension://lehkgnicackihfeppclgiffgbgbhmbdp/",
-    "chrome-extension://lcooaekmckohjjnpaaokodoepajbnill/"};
-
-// static
 const char* const
     VmSKForwardingNativeMessageHost::kHostCreatedByExtensionNotSupportedError =
         "{\"error\":\"Communication initiated by extension is not "
         "supported.\"}";
-
-// static
-const size_t VmSKForwardingNativeMessageHost::kOriginCount =
-    std::size(kOrigins);
 
 // static
 std::unique_ptr<extensions::NativeMessageHost>
@@ -118,9 +106,14 @@ void VmSKForwardingNativeMessageHost::DeliverMessageToExtensionByID(
     const std::string& extension_id,
     const std::string& json_message,
     base::OnceCallback<void(const std::string& response)> response_callback) {
-  const extensions::PortId port_id(base::UnguessableToken::Create(),
-                                   1 /* port_number */, true /* is_opener */,
-                                   extensions::SerializationFormat::kJson);
+  auto* extension =
+      extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(
+          extension_id);
+  const extensions::PortId port_id(
+      base::UnguessableToken::Create(), /*port_number=*/1,
+      /*is_opener=*/true,
+      extensions::messaging_util::GetSerializationFormat(
+          extension, extensions::mojom::ChannelType::kNative));
 
   extensions::MessageService* const message_service =
       extensions::MessageService::Get(profile);
@@ -137,6 +130,7 @@ void VmSKForwardingNativeMessageHost::DeliverMessageToExtensionByID(
       extensions::MessagingEndpoint::ForNativeApp(
           VmSKForwardingNativeMessageHost::kHostName),
       std::move(native_message_port), extension_id, GURL(),
+      extensions::mojom::ChannelType::kNative,
       std::string() /* channel_name */);
 }
 
@@ -153,7 +147,7 @@ void VmSKForwardingNativeMessageHost::DeliverMessageToSKForwardingExtension(
     if (extensions::ExtensionRegistry::Get(profile)
             ->enabled_extensions()
             .GetExtensionOrAppByURL(url)) {
-      DeliverMessageToExtensionByID(profile, url.host(), json_message,
+      DeliverMessageToExtensionByID(profile, url.GetHost(), json_message,
                                     std::move(response_callback));
       return;
     }

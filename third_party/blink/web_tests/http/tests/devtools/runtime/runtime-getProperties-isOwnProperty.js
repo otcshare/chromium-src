@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests RemoteObject.getProperties.\n`);
   await TestRunner.evaluateInPagePromise(`
@@ -17,8 +19,9 @@
       b = new B();
   `);
 
-  var result = await TestRunner.RuntimeAgent.evaluate('window.b');
-  var properties = await TestRunner.RuntimeAgent.getProperties(result.objectId, /* isOwnProperty */ false);
+  var {result} = await TestRunner.RuntimeAgent.invoke_evaluate({expression: 'window.b'});
+  var {result: properties} =
+      await TestRunner.RuntimeAgent.invoke_getProperties({objectId: result.objectId, ownProperties: false});
 
   if (!properties) {
     TestRunner.addResult('Properties do not exist');

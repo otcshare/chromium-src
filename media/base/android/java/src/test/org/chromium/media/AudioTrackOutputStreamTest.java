@@ -4,20 +4,23 @@
 
 package org.chromium.media;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.media.AudioFormat;
 import android.media.AudioTrack;
-import android.os.Build;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowAudioTrack;
 
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.media.AudioTrackOutputStream.AudioBufferInfo;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -25,19 +28,21 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Tests for AudioTrackOutputStream.
- */
-@RunWith(LocalRobolectricTestRunner.class)
-// Need sdk > Q for robolectric 4.6.
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.Q)
+/** Tests for AudioTrackOutputStream. */
+@RunWith(BaseRobolectricTestRunner.class)
+@Config(manifest = Config.NONE)
 public class AudioTrackOutputStreamTest {
     static class ObservableAudioTrack extends AudioTrack {
-        private List<Byte> mReceivedData = new ArrayList<Byte>();
+        private final List<Byte> mReceivedData = new ArrayList<Byte>();
         private boolean mPartialWrite = true;
 
-        public ObservableAudioTrack(int streamType, int sampleRateInHz, int channelConfig,
-                int audioFormat, int bufferSizeInBytes, int mode) {
+        ObservableAudioTrack(
+                int streamType,
+                int sampleRateInHz,
+                int channelConfig,
+                int audioFormat,
+                int bufferSizeInBytes,
+                int mode) {
             super(streamType, sampleRateInHz, channelConfig, audioFormat, bufferSizeInBytes, mode);
         }
 
@@ -76,17 +81,17 @@ public class AudioTrackOutputStreamTest {
 
     static class DataProvider implements AudioTrackOutputStream.Callback {
         private static final int MIN_BUFFER_SIZE = 800;
-        private List<Byte> mGeneratedData = new ArrayList<Byte>();
+        private final List<Byte> mGeneratedData = new ArrayList<Byte>();
         private CountDownLatch mDoneSignal;
         private ObservableAudioTrack mAudioTrack;
 
-        public DataProvider(int bufferCount) {
-            assert bufferCount > 0;
+        DataProvider(int bufferCount) {
+            assertThat(bufferCount).isGreaterThan(0);
             mDoneSignal = new CountDownLatch(bufferCount + 1);
         }
 
         public void updateBufferCount(int bufferCount) {
-            assert bufferCount > 0;
+            assertThat(bufferCount).isGreaterThan(0);
             mDoneSignal = new CountDownLatch(bufferCount + 1);
         }
 
@@ -96,10 +101,21 @@ public class AudioTrackOutputStreamTest {
         }
 
         @Override
-        public AudioTrack createAudioTrack(int streamType, int sampleRateInHz, int channelConfig,
-                int audioFormat, int bufferSizeInBytes, int mode) {
-            mAudioTrack = new ObservableAudioTrack(streamType, sampleRateInHz, channelConfig,
-                    audioFormat, bufferSizeInBytes, mode);
+        public AudioTrack createAudioTrack(
+                int streamType,
+                int sampleRateInHz,
+                int channelConfig,
+                int audioFormat,
+                int bufferSizeInBytes,
+                int mode) {
+            mAudioTrack =
+                    new ObservableAudioTrack(
+                            streamType,
+                            sampleRateInHz,
+                            channelConfig,
+                            audioFormat,
+                            bufferSizeInBytes,
+                            mode);
             return mAudioTrack;
         }
 
@@ -146,7 +162,12 @@ public class AudioTrackOutputStreamTest {
         public int getBufferSize() {
             return MIN_BUFFER_SIZE;
         }
-    };
+    }
+
+    @Before
+    public void setUp() {
+        ShadowAudioTrack.addAllowedNonPcmEncoding(AudioFormat.ENCODING_E_AC3);
+    }
 
     @Test
     public void playSimpleBitstream() throws InterruptedException {
@@ -160,7 +181,7 @@ public class AudioTrackOutputStreamTest {
         List<Byte> generatedData = provider.getGeneratedData();
         List<Byte> receivedData = provider.getReceivedData();
 
-        assertEquals(3 * provider.getBufferSize(), generatedData.size());
+        assertEquals(3L * provider.getBufferSize(), generatedData.size());
         assertArrayEquals(generatedData.toArray(), receivedData.toArray());
 
         stream.stop();

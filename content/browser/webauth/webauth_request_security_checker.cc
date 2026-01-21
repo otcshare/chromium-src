@@ -4,98 +4,74 @@
 
 #include "content/browser/webauth/webauth_request_security_checker.h"
 
-#include "base/feature_list.h"
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/string_number_conversions.h"
+#include "components/webauthn/core/browser/remote_validation.h"
+#include "components/webauthn/core/browser/webauthn_security_utils.h"
 #include "content/browser/bad_message.h"
-#include "content/public/browser/authenticator_request_client_delegate.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_authentication_delegate.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
-#include "device/fido/features.h"
-#include "device/fido/fido_transport_protocol.h"
+#include "device/fido/public/fido_transport_protocol.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "net/base/url_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_util.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "content/public/browser/authenticator_request_client_delegate.h"
+#endif
+
 namespace content {
 
 namespace {
-
-// Returns AuthenticatorStatus::SUCCESS if the caller origin is in principle
-// authorized to make WebAuthn requests, and an error if it fails one of the
-// criteria below.
-//
-// Reference https://url.spec.whatwg.org/#valid-domain-string and
-// https://html.spec.whatwg.org/multipage/origin.html#concept-origin-effective-domain.
-blink::mojom::AuthenticatorStatus OriginAllowedToMakeWebAuthnRequests(
-    url::Origin caller_origin) {
-  if (caller_origin.opaque()) {
-    return blink::mojom::AuthenticatorStatus::OPAQUE_DOMAIN;
+blink::mojom::AuthenticatorStatus ToAuthenticatorStatus(
+    webauthn::ValidationStatus status) {
+  switch (status) {
+    case webauthn::ValidationStatus::kSuccess:
+      return blink::mojom::AuthenticatorStatus::SUCCESS;
+    case webauthn::ValidationStatus::kOpaqueDomain:
+      return blink::mojom::AuthenticatorStatus::OPAQUE_DOMAIN;
+    case webauthn::ValidationStatus::kInvalidProtocol:
+      return blink::mojom::AuthenticatorStatus::INVALID_PROTOCOL;
+    case webauthn::ValidationStatus::kInvalidDomain:
+      return blink::mojom::AuthenticatorStatus::INVALID_DOMAIN;
+    case webauthn::ValidationStatus::kBadRelyingPartyId:
+      return blink::mojom::AuthenticatorStatus::BAD_RELYING_PARTY_ID;
+    case webauthn::ValidationStatus::kJsonParseError:
+      return blink::mojom::AuthenticatorStatus::
+          BAD_RELYING_PARTY_ID_JSON_PARSE_ERROR;
+    case webauthn::ValidationStatus::kNoJsonMatchHitLimits:
+      return blink::mojom::AuthenticatorStatus::
+          BAD_RELYING_PARTY_ID_NO_JSON_MATCH_HIT_LIMITS;
+    case webauthn::ValidationStatus::kNoJsonMatch:
+      return blink::mojom::AuthenticatorStatus::
+          BAD_RELYING_PARTY_ID_NO_JSON_MATCH;
+    case webauthn::ValidationStatus::kAttemptedFetch:
+      return blink::mojom::AuthenticatorStatus::
+          BAD_RELYING_PARTY_ID_ATTEMPTED_FETCH;
+    case webauthn::ValidationStatus::kWrongContentType:
+      return blink::mojom::AuthenticatorStatus::
+          BAD_RELYING_PARTY_ID_WRONG_CONTENT_TYPE;
   }
-
-  // The scheme is required to be HTTP(S).  Given the
-  // |network::IsUrlPotentiallyTrustworthy| check below, HTTP is effectively
-  // restricted to just "localhost".
-  if (caller_origin.scheme() != url::kHttpScheme &&
-      caller_origin.scheme() != url::kHttpsScheme) {
-    return blink::mojom::AuthenticatorStatus::INVALID_PROTOCOL;
-  }
-
-  // TODO(https://crbug.com/1158302): Use IsOriginPotentiallyTrustworthy?
-  if (url::HostIsIPAddress(caller_origin.host()) ||
-      !network::IsUrlPotentiallyTrustworthy(caller_origin.GetURL())) {
-    return blink::mojom::AuthenticatorStatus::INVALID_DOMAIN;
-  }
-
-  return blink::mojom::AuthenticatorStatus::SUCCESS;
 }
-
-// Returns whether a caller origin is allowed to claim a given Relying Party ID.
-// It's valid for the requested RP ID to be a registrable domain suffix of, or
-// be equal to, the origin's effective domain.  Reference:
-// https://html.spec.whatwg.org/multipage/origin.html#is-a-registrable-domain-suffix-of-or-is-equal-to.
-bool OriginIsAllowedToClaimRelyingPartyId(
-    const std::string& claimed_relying_party_id,
-    const url::Origin& caller_origin) {
-  // `OriginAllowedToMakeWebAuthnRequests()` must have been called before.
-  DCHECK_EQ(OriginAllowedToMakeWebAuthnRequests(caller_origin),
-            blink::mojom::AuthenticatorStatus::SUCCESS);
-
-  if (claimed_relying_party_id.empty()) {
-    return false;
-  }
-
-  if (caller_origin.host() == claimed_relying_party_id) {
-    return true;
-  }
-
-  if (!caller_origin.DomainIs(claimed_relying_party_id)) {
-    return false;
-  }
-
-  if (!net::registry_controlled_domains::HostHasRegistryControlledDomain(
-          caller_origin.host(),
-          net::registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES) ||
-      !net::registry_controlled_domains::HostHasRegistryControlledDomain(
-          claimed_relying_party_id,
-          net::registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)) {
-    // TODO(crbug.com/803414): Accept corner-case situations like the
-    // following origin: "https://login.awesomecompany", relying_party_id:
-    // "awesomecompany".
-    return false;
-  }
-
-  return true;
-}
-
 }  // namespace
 
 WebAuthRequestSecurityChecker::WebAuthRequestSecurityChecker(
@@ -108,8 +84,9 @@ bool WebAuthRequestSecurityChecker::IsSameOriginWithAncestors(
     const url::Origin& origin) {
   RenderFrameHost* parent = render_frame_host_->GetParentOrOuterDocument();
   while (parent) {
-    if (!parent->GetLastCommittedOrigin().IsSameOriginWith(origin))
+    if (!parent->GetLastCommittedOrigin().IsSameOriginWith(origin)) {
       return false;
+    }
     parent = parent->GetParentOrOuterDocument();
   }
   return true;
@@ -129,75 +106,126 @@ WebAuthRequestSecurityChecker::ValidateAncestorOrigins(
 
   *is_cross_origin = !IsSameOriginWithAncestors(origin);
 
-  // MakeCredential requests do not have an associated permissions policy, but
-  // are prohibited in cross-origin subframes.
-  if (!*is_cross_origin && type == RequestType::kMakeCredential) {
+  // Requests in cross-origin iframes are permitted if enabled via permissions
+  // policy and for SPC requests.
+  if (type == RequestType::kMakeCredential &&
+      render_frame_host_->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::
+              kPublicKeyCredentialsCreate)) {
+    return blink::mojom::AuthenticatorStatus::SUCCESS;
+  }
+  if (type == RequestType::kGetAssertion &&
+      render_frame_host_->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kPublicKeyCredentialsGet)) {
+    return blink::mojom::AuthenticatorStatus::SUCCESS;
+  }
+  // For credential creation, SPC credentials (i.e., credentials with the
+  // "payment" extension) may use either the 'publickey-credentials-create' or
+  // 'payment' permissions policy.
+  if (type == RequestType::kMakePaymentCredential) {
+    if (render_frame_host_->IsFeatureEnabled(
+            network::mojom::PermissionsPolicyFeature::
+                kPublicKeyCredentialsCreate) ||
+        render_frame_host_->IsFeatureEnabled(
+            network::mojom::PermissionsPolicyFeature::kPayment)) {
+      return blink::mojom::AuthenticatorStatus::SUCCESS;
+    }
+  }
+
+  if (type == RequestType::kGetPaymentCredentialAssertion &&
+      render_frame_host_->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kPayment)) {
+    return blink::mojom::AuthenticatorStatus::SUCCESS;
+  }
+  // TODO(crbug.com/347727501): Add a permissions policy for report.
+  if (type == RequestType::kReport) {
     return blink::mojom::AuthenticatorStatus::SUCCESS;
   }
 
-  // Requests in cross-origin iframes are permitted if enabled via permissions
-  // policy and for SPC requests.
-  if (type == RequestType::kGetAssertion &&
-      render_frame_host_->IsFeatureEnabled(
-          blink::mojom::PermissionsPolicyFeature::kPublicKeyCredentialsGet)) {
-    return blink::mojom::AuthenticatorStatus::SUCCESS;
-  }
-  if ((type == RequestType::kMakePaymentCredential ||
-       type == RequestType::kGetPaymentCredentialAssertion) &&
-      render_frame_host_->IsFeatureEnabled(
-          blink::mojom::PermissionsPolicyFeature::kPayment)) {
-    return blink::mojom::AuthenticatorStatus::SUCCESS;
-  }
   return blink::mojom::AuthenticatorStatus::NOT_ALLOWED_ERROR;
 }
 
-blink::mojom::AuthenticatorStatus
+std::unique_ptr<webauthn::RemoteValidation>
 WebAuthRequestSecurityChecker::ValidateDomainAndRelyingPartyID(
     const url::Origin& caller_origin,
     const std::string& relying_party_id,
     RequestType request_type,
-    const blink::mojom::RemoteDesktopClientOverridePtr&
-        remote_desktop_client_override) {
+    const std::optional<url::Origin>& remote_desktop_client_override_origin,
+    base::OnceCallback<void(blink::mojom::AuthenticatorStatus)> callback) {
+#if !BUILDFLAG(IS_ANDROID)
+  // Extensions are not supported on Android.
   if (GetContentClient()
           ->browser()
           ->GetWebAuthenticationDelegate()
           ->OverrideCallerOriginAndRelyingPartyIdValidation(
               render_frame_host_->GetBrowserContext(), caller_origin,
               relying_party_id)) {
-    return blink::mojom::AuthenticatorStatus::SUCCESS;
+    std::move(callback).Run(blink::mojom::AuthenticatorStatus::SUCCESS);
+    return nullptr;
   }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-  blink::mojom::AuthenticatorStatus domain_validation =
-      OriginAllowedToMakeWebAuthnRequests(caller_origin);
-  if (domain_validation != blink::mojom::AuthenticatorStatus::SUCCESS) {
-    return domain_validation;
+  webauthn::ValidationStatus domain_validation =
+      webauthn::OriginAllowedToMakeWebAuthnRequests(caller_origin);
+  if (domain_validation != webauthn::ValidationStatus::kSuccess) {
+    std::move(callback).Run(ToAuthenticatorStatus(domain_validation));
+    return nullptr;
   }
 
   // SecurePaymentConfirmation allows third party payment service provider to
   // get assertions on behalf of the Relying Parties. Hence it is not required
   // for the RP ID to be a registrable suffix of the caller origin, as it would
   // be for WebAuthn requests.
-  if (request_type == RequestType::kGetPaymentCredentialAssertion)
-    return blink::mojom::AuthenticatorStatus::SUCCESS;
+  if (request_type == RequestType::kGetPaymentCredentialAssertion) {
+    std::move(callback).Run(blink::mojom::AuthenticatorStatus::SUCCESS);
+    return nullptr;
+  }
 
   url::Origin relying_party_origin = caller_origin;
-  if (remote_desktop_client_override) {
+  if (remote_desktop_client_override_origin.has_value()) {
+    // SECURITY: `remote_desktop_client_override_origin` comes from the renderer
+    // process and should not be trusted by default. We only allow its use when
+    // the `caller_origin` is explicitly allowlisted through device level
+    // enterprise policy.
     if (!GetContentClient()
              ->browser()
              ->GetWebAuthenticationDelegate()
              ->OriginMayUseRemoteDesktopClientOverride(
                  render_frame_host_->GetBrowserContext(), caller_origin)) {
-      return blink::mojom::AuthenticatorStatus::
-          REMOTE_DESKTOP_CLIENT_OVERRIDE_NOT_AUTHORIZED;
+      std::move(callback).Run(
+          blink::mojom::AuthenticatorStatus::
+              REMOTE_DESKTOP_CLIENT_OVERRIDE_NOT_AUTHORIZED);
+      return nullptr;
     }
-    relying_party_origin = remote_desktop_client_override->origin;
+    relying_party_origin = remote_desktop_client_override_origin.value();
   }
 
-  if (!OriginIsAllowedToClaimRelyingPartyId(relying_party_id,
-                                            relying_party_origin)) {
-    return blink::mojom::AuthenticatorStatus::BAD_RELYING_PARTY_ID;
+  if (webauthn::OriginIsAllowedToClaimRelyingPartyId(relying_party_id,
+                                                     relying_party_origin)) {
+    std::move(callback).Run(blink::mojom::AuthenticatorStatus::SUCCESS);
+    return nullptr;
   }
-  return blink::mojom::AuthenticatorStatus::SUCCESS;
+
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
+  if (!WebAuthRequestSecurityChecker::
+          UseSystemSharedURLLoaderFactoryForTesting()) {
+    url_loader_factory = render_frame_host_->GetStoragePartition()
+                             ->GetURLLoaderFactoryForBrowserProcess();
+  }
+  if (!url_loader_factory) {
+    url_loader_factory =
+        GetContentClient()->browser()->GetSystemSharedURLLoaderFactory();
+  }
+
+  return webauthn::RemoteValidation::Create(
+      caller_origin, relying_party_id, url_loader_factory,
+      base::BindOnce(
+          [](base::OnceCallback<void(blink::mojom::AuthenticatorStatus)>
+                 callback,
+             webauthn::ValidationStatus status) {
+            std::move(callback).Run(ToAuthenticatorStatus(status));
+          },
+          std::move(callback)));
 }
 
 blink::mojom::AuthenticatorStatus
@@ -247,14 +275,14 @@ WebAuthRequestSecurityChecker::ValidateAppIdExtension(
   // https://fido.example.com/myAppId), no additional processing is necessary
   // and the operation may proceed."
   GURL appid_url = GURL(appid);
-  if (!appid_url.is_valid() || appid_url.scheme() != url::kHttpsScheme ||
-      appid_url.scheme_piece() != caller_origin.scheme()) {
+  if (!appid_url.is_valid() || appid_url.GetScheme() != url::kHttpsScheme ||
+      appid_url.scheme() != caller_origin.scheme()) {
     return blink::mojom::AuthenticatorStatus::INVALID_DOMAIN;
   }
 
   // This check is repeated inside |SameDomainOrHost|, just after this. However
   // it's cheap and mirrors the structure of the spec.
-  if (appid_url.host_piece() == caller_origin.host()) {
+  if (appid_url.host() == caller_origin.host()) {
     *out_appid = appid;
     return blink::mojom::AuthenticatorStatus::SUCCESS;
   }
@@ -318,7 +346,7 @@ bool WebAuthRequestSecurityChecker::
       base::flat_set<device::FidoTransportProtocol> merged_transports;
       if (!it->transports.empty() &&
           !credential_descriptor.transports.empty()) {
-        base::ranges::set_union(
+        std::ranges::set_union(
             it->transports, credential_descriptor.transports,
             std::inserter(merged_transports, merged_transports.begin()));
       }
@@ -331,6 +359,13 @@ bool WebAuthRequestSecurityChecker::
   *list = {unique_credential_descriptors.begin(),
            unique_credential_descriptors.end()};
   return true;
+}
+
+// static
+bool& WebAuthRequestSecurityChecker::
+    UseSystemSharedURLLoaderFactoryForTesting() {
+  static bool value = false;
+  return value;
 }
 
 }  // namespace content

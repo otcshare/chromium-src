@@ -11,7 +11,7 @@ namespace feedbackPrivate {
     [instanceOf=Blob] object? data;
   };
 
-  dictionary SystemInformation {
+  dictionary LogsMapEntry {
     DOMString key;
     DOMString value;
   };
@@ -30,7 +30,10 @@ namespace feedbackPrivate {
     sadTabCrash,
 
     // Flow for internal Google users.
-    googleInternal
+    googleInternal,
+
+    // Flow for AI features.
+    ai
   };
 
   dictionary FeedbackInfo {
@@ -66,7 +69,7 @@ namespace feedbackPrivate {
 
     // An array of key/value pairs providing system information for this
     // feedback report.
-    SystemInformation[]? systemInformation;
+    LogsMapEntry[]? systemInformation;
 
     // True if we have permission to add histograms to this feedback report.
     boolean? sendHistograms;
@@ -100,6 +103,23 @@ namespace feedbackPrivate {
     // Whether to show questionnaire in the report description based on detected
     // domain-related keywords (crbug/1241169).
     boolean? showQuestionnaire;
+
+    // Whether or not triggered for Autofill.
+    boolean? fromAutofill;
+
+    // A JSON formatted string containing autofill metadata for this
+    // feedback report.
+    DOMString? autofillMetadata;
+
+    // Whether or not |autofillMetadata| should be included in the feedback
+    // report.
+    boolean? sendAutofillMetadata;
+
+    // Whether or not the content is offensive or unsafe.
+    boolean? isOffensiveOrUnsafe;
+
+    // A JSON formatted string containing ai metadata.
+    DOMString? aiMetadata;
   };
 
   // Possible statuses that can result from sending feedback.
@@ -200,7 +220,7 @@ namespace feedbackPrivate {
 
   callback GetUserEmailCallback = void(DOMString email);
   callback GetSystemInformationCallback =
-      void(SystemInformation[] systemInformation);
+      void(LogsMapEntry[] systemInformation);
   callback SendFeedbackCallback = void(SendFeedbackResult result);
   callback ReadLogSourceCallback = void (ReadLogSourceResult result);
 
@@ -221,10 +241,11 @@ namespace feedbackPrivate {
     // information is slow.
     // |formOpenTime|: The epoch time when the feedback form was opened. This is
     // used for metrics.
-    [supportsPromises] static void sendFeedback(FeedbackInfo feedback,
-                                                optional boolean loadSystemInfo,
-                                                optional double formOpenTime,
-                                                SendFeedbackCallback callback);
+    static void sendFeedback(
+        FeedbackInfo feedback,
+        optional boolean loadSystemInfo,
+        optional double formOpenTime,
+        SendFeedbackCallback callback);
 
     // Reads from a log source indicated by <code>source</code>.
     // <p>If <code>incremental</code> is false:
@@ -251,8 +272,9 @@ namespace feedbackPrivate {
     //       </li>
     //   <li>Returns the same <code>readerId</code> value to the callback.</li>
     // </ul>
-    static void readLogSource(ReadLogSourceParams params,
-                              ReadLogSourceCallback callback);
+    static void readLogSource(
+        ReadLogSourceParams params,
+        ReadLogSourceCallback callback);
 
   };
 

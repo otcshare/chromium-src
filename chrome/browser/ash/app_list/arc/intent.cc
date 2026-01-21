@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ash/app_list/arc/intent.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <string_view>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -39,7 +41,7 @@ Intent::~Intent() = default;
 
 // static
 std::unique_ptr<Intent> Intent::Get(const std::string& intent_as_string) {
-  const std::vector<base::StringPiece> parts = base::SplitStringPiece(
+  const std::vector<std::string_view> parts = base::SplitStringPiece(
       intent_as_string, ";", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (parts.size() < 2 || parts.front() != kIntentPrefix ||
       parts.back() != kEndSuffix) {
@@ -62,8 +64,8 @@ std::unique_ptr<Intent> Intent::Get(const std::string& intent_as_string) {
       intent->AddExtraParam(std::string(parts[i]));
       continue;
     }
-    const base::StringPiece key = parts[i].substr(0, separator);
-    const base::StringPiece value = parts[i].substr(separator + 1);
+    const std::string_view key = parts[i].substr(0, separator);
+    const std::string_view value = parts[i].substr(separator + 1);
     if (key == kAction) {
       intent->set_action(std::string(value));
     } else if (key == kCategory) {
@@ -82,7 +84,7 @@ std::unique_ptr<Intent> Intent::Get(const std::string& intent_as_string) {
         return nullptr;
       intent->set_package_name(
           std::string(value.substr(0, component_separator)));
-      const base::StringPiece activity_compact_name =
+      const std::string_view activity_compact_name =
           value.substr(component_separator + 1);
       if (!activity_compact_name.empty() && activity_compact_name[0] == '.') {
         std::string activity(value.substr(0, component_separator));
@@ -104,7 +106,7 @@ void Intent::AddExtraParam(const std::string& extra_param) {
 }
 
 bool Intent::HasExtraParam(const std::string& extra_param) const {
-  return base::Contains(extra_params_, extra_param);
+  return std::ranges::contains(extra_params_, extra_param);
 }
 
 bool Intent::GetExtraParamValue(const std::string& extra_param_key,
@@ -129,7 +131,7 @@ std::string GetLaunchIntent(const std::string& package_name,
   // Remove the |package_name| prefix, if activity starts with it.
   const char* activity_compact_name =
       activity.find(package_name.c_str()) == 0
-          ? activity.c_str() + package_name.length()
+          ? UNSAFE_TODO(activity.c_str() + package_name.length())
           : activity.c_str();
 
   // Construct a string in format:

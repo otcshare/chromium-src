@@ -12,21 +12,35 @@ namespace file_manager {
 namespace file_tasks {
 
 FileTasksNotifierFactory ::FileTasksNotifierFactory()
-    : ProfileKeyedServiceFactory("FileTasksNotifier") {}
+    : ProfileKeyedServiceFactory(
+          "FileTasksNotifier",
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {}
 
+// static
 FileTasksNotifierFactory* FileTasksNotifierFactory::GetInstance() {
   static base::NoDestructor<FileTasksNotifierFactory> instance;
   return instance.get();
 }
 
+// static
 FileTasksNotifier* FileTasksNotifierFactory::GetForProfile(Profile* profile) {
   return static_cast<FileTasksNotifier*>(
-      GetServiceForBrowserContext(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
-KeyedService* FileTasksNotifierFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+FileTasksNotifierFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new FileTasksNotifier(Profile::FromBrowserContext(context));
+  return std::make_unique<FileTasksNotifier>(
+      Profile::FromBrowserContext(context));
 }
 
 }  // namespace file_tasks

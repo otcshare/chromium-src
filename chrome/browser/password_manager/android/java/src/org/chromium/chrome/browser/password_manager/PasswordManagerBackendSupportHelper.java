@@ -4,20 +4,27 @@
 
 package org.chromium.chrome.browser.password_manager;
 
-import androidx.annotation.VisibleForTesting;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.base.ServiceLoaderUtil;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * Helper class to check PasswordManager backend availability.
- */
+/** Helper class to check PasswordManager backend availability. */
+@NullMarked
 public abstract class PasswordManagerBackendSupportHelper {
-    private static PasswordManagerBackendSupportHelper sInstance;
+    private static @Nullable PasswordManagerBackendSupportHelper sInstance;
 
     /**
      * Return an instance of PasswordManagerBackendSupportHelper. If no helper was used yet, it is
      * created.
      */
     public static PasswordManagerBackendSupportHelper getInstance() {
-        if (sInstance == null) sInstance = new PasswordManagerBackendSupportHelperImpl();
+        if (sInstance == null) {
+            sInstance = ServiceLoaderUtil.maybeCreate(PasswordManagerBackendSupportHelper.class);
+        }
+        if (sInstance == null) {
+            sInstance = new PasswordManagerBackendSupportHelperUpstreamImpl();
+        }
         return sInstance;
     }
 
@@ -31,18 +38,10 @@ public abstract class PasswordManagerBackendSupportHelper {
         return false;
     }
 
-    /**
-     * Returns whether the GMS Core version is not supported and needs to be updated.
-     *
-     * @return True if update is needed, false otherwise.
-     */
-    public boolean isUpdateNeeded() {
-        return false;
-    }
-
-    @VisibleForTesting
     public static void setInstanceForTesting(
             PasswordManagerBackendSupportHelper backendSupportHelper) {
+        var oldValue = sInstance;
         sInstance = backendSupportHelper;
+        ResettersForTesting.register(() -> sInstance = oldValue);
     }
 }

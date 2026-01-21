@@ -5,11 +5,13 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_files.h"
 
 #include "ash/public/cpp/shelf_model.h"
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_running_on_chromeos.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
@@ -118,7 +120,7 @@ class PluginVmFilesTest : public testing::Test {
   FakePluginVmFeatures fake_plugin_vm_features_;
   base::test::ScopedRunningOnChromeOS running_on_chromeos_;
   std::string app_id_;
-  storage::ExternalMountPoints* mount_points_;
+  raw_ptr<storage::ExternalMountPoints> mount_points_;
   std::string mount_name_;
 };
 
@@ -155,6 +157,8 @@ TEST_F(PluginVmFilesTest, LaunchPluginVmApp) {
   using LaunchContainerApplicationCallback = chromeos::DBusMethodCallback<
       vm_tools::cicerone::LaunchContainerApplicationResponse>;
 
+  ash::BrowserControllerImpl browser_controller;
+
   auto& plugin_vm_manager = *static_cast<MockPluginVmManager*>(
       PluginVmManagerFactory::GetInstance()->SetTestingFactoryAndUse(
           &profile_,
@@ -163,8 +167,7 @@ TEST_F(PluginVmFilesTest, LaunchPluginVmApp) {
                 return std::make_unique<MockPluginVmManager>();
               })));
   ash::ShelfModel shelf_model;
-  ChromeShelfController chrome_shelf_controller(&profile_, &shelf_model,
-                                                /*shelf_item_factory=*/nullptr);
+  ChromeShelfController chrome_shelf_controller(&profile_, &shelf_model);
   chrome_shelf_controller.SetProfileForTest(&profile_);
   chrome_shelf_controller.SetShelfControllerHelperForTest(
       std::make_unique<ShelfControllerHelper>(&profile_));
@@ -173,10 +176,9 @@ TEST_F(PluginVmFilesTest, LaunchPluginVmApp) {
   AppLaunchedCallback app_launched_callback;
   PluginVmManager::LaunchPluginVmCallback launch_plugin_vm_callback;
   EXPECT_CALL(plugin_vm_manager, LaunchPluginVm(testing::_))
-      .WillOnce(testing::Invoke(
-          [&](PluginVmManager::LaunchPluginVmCallback callback) {
-            launch_plugin_vm_callback = std::move(callback);
-          }));
+      .WillOnce([&](PluginVmManager::LaunchPluginVmCallback callback) {
+        launch_plugin_vm_callback = std::move(callback);
+      });
   LaunchPluginVmApp(&profile_, app_id_,
                     {GetMyFilesFileSystemURL("PvmDefault/file")},
                     app_launched_callback.Get());

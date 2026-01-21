@@ -43,6 +43,8 @@ include_rules = [
 
   # For ProxyServiceMojoTest. Remove once it moves to the network service.
   "+services/network/proxy_service_mojo.h",
+
+  "+third_party/fuzztest",
 ]
 
 specific_include_rules = {
@@ -63,10 +65,8 @@ specific_include_rules = {
   "content_browser_test_test.cc": [
     "+ui/ozone/public/ozone_switches.h",
   ],
-  "mock_web_bundle_reader_factory.cc": [
-    "+components/web_package/test_support",
-  ],
-  "test_aggregation_service_impl.cc": [
-    "+components/aggregation_service",
+  "setup_field_trials.cc": [
+    "+components/metrics",
+    "+components/prefs",
   ],
 }

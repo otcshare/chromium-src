@@ -8,6 +8,7 @@
 #include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
 #include "extensions/browser/process_map.h"
 #endif
 
@@ -17,8 +18,16 @@ ChromeMetricsExtensionsHelper::~ChromeMetricsExtensionsHelper() = default;
 bool ChromeMetricsExtensionsHelper::IsExtensionProcess(
     content::RenderProcessHost* render_process_host) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  return extensions::ProcessMap::Get(render_process_host->GetBrowserContext())
-      ->Contains(render_process_host->GetID());
+  if (extensions::ChromeContentBrowserClientExtensionsPart::
+          AreExtensionsDisabledForProfile(
+              render_process_host->GetBrowserContext())) {
+    return false;
+  }
+
+  auto* process_map =
+      extensions::ProcessMap::Get(render_process_host->GetBrowserContext());
+  CHECK(process_map);
+  return process_map->Contains(render_process_host->GetDeprecatedID());
 #else
   return false;
 #endif

@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BookmarksToolbarElement, Command} from 'chrome://bookmarks/bookmarks.js';
+import type {BookmarksToolbarElement} from 'chrome://bookmarks/bookmarks.js';
+import {BookmarkManagerApiProxyImpl, Command} from 'chrome://bookmarks/bookmarks.js';
 import {isMac} from 'chrome://resources/js/platform.js';
-import {pressAndReleaseKeyOn} from 'chrome://resources/polymer/v3_0/iron-test-helpers/mock-interactions.js';
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {pressAndReleaseKeyOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
+import {TestBookmarkManagerApiProxy} from './test_bookmark_manager_api_proxy.js';
 import {TestCommandManager} from './test_command_manager.js';
 import {TestStore} from './test_store.js';
 import {createFolder, createItem, getAllFoldersOpenState, replaceBody, testTree} from './test_util.js';
@@ -18,7 +20,8 @@ suite('<bookmarks-toolbar>', function() {
   let testCommandManager: TestCommandManager;
 
   suiteSetup(function() {
-    chrome.bookmarkManagerPrivate.removeTrees = function() {};
+    const bookmarkManagerApi = new TestBookmarkManagerApiProxy();
+    BookmarkManagerApiProxyImpl.setInstance(bookmarkManagerApi);
   });
 
   setup(function() {
@@ -51,47 +54,54 @@ suite('<bookmarks-toolbar>', function() {
 
     testCommandManager = new TestCommandManager();
     document.body.appendChild(testCommandManager.getCommandManager());
+
+    const toastManager = document.createElement('cr-toast-manager');
+    document.body.appendChild(toastManager);
   });
 
-  test('selecting multiple items shows toolbar overlay', function() {
+  test('selecting multiple items shows toolbar overlay', async () => {
     assertFalse(toolbar.showSelectionOverlay);
 
     store.data.selection.items = new Set(['2']);
     store.notifyObservers();
+    await microtasksFinished();
     assertFalse(toolbar.showSelectionOverlay);
 
     store.data.selection.items = new Set(['2', '3']);
     store.notifyObservers();
+    await microtasksFinished();
     assertTrue(toolbar.showSelectionOverlay);
   });
 
-  test('overlay does not show when editing is disabled', function() {
+  test('overlay does not show when editing is disabled', async () => {
     store.data.prefs.canEdit = false;
     store.data.selection.items = new Set(['2', '3']);
     store.notifyObservers();
+    await microtasksFinished();
     assertFalse(toolbar.showSelectionOverlay);
   });
 
-  test('clicking overlay delete button triggers a delete command', function() {
+  test('clicking overlay delete button triggers a delete command', async () => {
     store.data.selection.items = new Set(['2', '3']);
     store.notifyObservers();
 
-    flush();
+    await microtasksFinished();
     const button =
-        toolbar.shadowRoot!.querySelector(
-                               'cr-toolbar-selection-overlay')!.deleteButton;
+        toolbar.shadowRoot.querySelector('cr-toolbar-selection-overlay')!
+            .querySelector('cr-button')!;
     assertFalse(button.disabled);
     button.click();
 
     testCommandManager.assertLastCommand(Command.DELETE, ['2', '3']);
   });
 
-  test('commands do not trigger from the search field', function() {
+  test('commands do not trigger from the search field', async () => {
     store.data.selection.items = new Set(['2']);
     store.notifyObservers();
+    await microtasksFinished();
 
     const input =
-        toolbar.shadowRoot!.querySelector('cr-toolbar')!.getSearchField()
+        toolbar.shadowRoot.querySelector('cr-toolbar')!.getSearchField()
             .getSearchInput();
     const modifier = isMac ? 'meta' : 'ctrl';
     pressAndReleaseKeyOn(input, 67, modifier, 'c');
@@ -99,15 +109,14 @@ suite('<bookmarks-toolbar>', function() {
     testCommandManager.assertLastCommand(null);
   });
 
-  test('delete button is disabled when items are unmodifiable', function() {
+  test('delete button is disabled when items are unmodifiable', async () => {
     store.data.nodes['3']!.unmodifiable = 'managed';
     store.data.selection.items = new Set(['2', '3']);
     store.notifyObservers();
-    flush();
+    await microtasksFinished();
 
     assertTrue(toolbar.showSelectionOverlay);
-    assertTrue(
-        toolbar.shadowRoot!.querySelector('cr-toolbar-selection-overlay')!
-            .deleteButton.disabled);
+    assertTrue(toolbar.shadowRoot.querySelector('cr-toolbar-selection-overlay')!
+                   .querySelector('cr-button')!.disabled);
   });
 });

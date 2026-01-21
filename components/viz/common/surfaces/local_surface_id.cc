@@ -9,6 +9,8 @@
 #include "base/hash/hash.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"
 
 namespace viz {
 
@@ -43,14 +45,24 @@ std::ostream& operator<<(std::ostream& out,
 }
 
 bool LocalSurfaceId::IsNewerThan(const LocalSurfaceId& other) const {
+  return embed_token_ == other.embed_token_ &&
+         IsNewerThanIgnoringEmbedToken(other);
+}
+
+bool LocalSurfaceId::IsNewerThanIgnoringEmbedToken(
+    const LocalSurfaceId& other) const {
   // Sequence numbers can wrap around so look at their difference instead of
   // their absolute values.
-  return embed_token_ == other.embed_token_ &&
-         (child_sequence_number_ - other.child_sequence_number_ < (1u << 31)) &&
+  return (child_sequence_number_ - other.child_sequence_number_ < (1u << 31)) &&
          (parent_sequence_number_ - other.parent_sequence_number_ <
           (1u << 31)) &&
          (child_sequence_number_ != other.child_sequence_number_ ||
           parent_sequence_number_ != other.parent_sequence_number_);
+}
+
+bool LocalSurfaceId::IsNewerThanOrEmbeddingChanged(
+    const LocalSurfaceId& other) const {
+  return IsNewerThan(other) || embed_token_ != other.embed_token_;
 }
 
 bool LocalSurfaceId::IsSameOrNewerThan(const LocalSurfaceId& other) const {
@@ -59,6 +71,16 @@ bool LocalSurfaceId::IsSameOrNewerThan(const LocalSurfaceId& other) const {
 
 LocalSurfaceId LocalSurfaceId::ToSmallestId() const {
   return LocalSurfaceId(1, 1, embed_token_);
+}
+
+void LocalSurfaceId::WriteIntoTrace(
+    perfetto::TracedProto<TraceProto> proto) const {
+  proto->set_parent_sequence_number(parent_sequence_number_);
+  proto->set_child_sequence_number(child_sequence_number_);
+  perfetto::protos::pbzero::ChromeUnguessableToken& unguessable_token =
+      *(proto->set_unguessable_token());
+  unguessable_token.set_low_token(embed_token_.GetLowForSerialization());
+  unguessable_token.set_high_token(embed_token_.GetHighForSerialization());
 }
 
 }  // namespace viz

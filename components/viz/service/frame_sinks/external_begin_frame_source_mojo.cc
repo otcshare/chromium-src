@@ -14,10 +14,13 @@ ExternalBeginFrameSourceMojo::ExternalBeginFrameSourceMojo(
     FrameSinkManagerImpl* frame_sink_manager,
     mojo::PendingAssociatedReceiver<mojom::ExternalBeginFrameController>
         controller_receiver,
+    mojo::PendingAssociatedRemote<mojom::ExternalBeginFrameControllerClient>
+        controller_client_remote,
     uint32_t restart_id)
     : ExternalBeginFrameSource(this, restart_id),
       frame_sink_manager_(frame_sink_manager),
-      receiver_(this, std::move(controller_receiver)) {
+      receiver_(this, std::move(controller_receiver)),
+      remote_client_(std::move(controller_client_remote)) {
   frame_sink_manager_->AddObserver(this);
 }
 
@@ -45,9 +48,24 @@ void ExternalBeginFrameSourceMojo::IssueExternalBeginFrame(
   // if it doesn't currently need it. This way, we ensure that
   // OnDisplayDidFinishFrame will be called for this BeginFrame.
   DCHECK(display_);
-  display_->SetNeedsOneBeginFrame();
+  display_->SetNeedsOneBeginFrame(args);
   MaybeProduceFrameCallback();
 }
+
+#if BUILDFLAG(IS_MAC)
+void ExternalBeginFrameSourceMojo::IssueExternalVSync(
+    const CADisplayLinkParams& params) {
+  // For ExternalBeginFrameSourceMojoMac only.
+  NOTREACHED();
+}
+
+void ExternalBeginFrameSourceMojo::SetSupportedDisplayLinkId(
+    int64_t display_id,
+    bool is_supported) {
+  // For ExternalBeginFrameSourceMojoMac only.
+  NOTREACHED();
+}
+#endif
 
 void ExternalBeginFrameSourceMojo::OnDestroyedCompositorFrameSink(
     const FrameSinkId& sink_id) {
@@ -136,6 +154,19 @@ void ExternalBeginFrameSourceMojo::SetDisplay(Display* display) {
   display_ = display;
   if (display_)
     display_->AddObserver(this);
+}
+
+void ExternalBeginFrameSourceMojo::OnNeedsBeginFrames(bool needs_begin_frames) {
+  if (remote_client_) {
+    remote_client_->SetNeedsBeginFrame(needs_begin_frames);
+  }
+}
+
+void ExternalBeginFrameSourceMojo::SetPreferredInterval(
+    base::TimeDelta interval) {
+  if (remote_client_) {
+    remote_client_->SetPreferredInterval(interval);
+  }
 }
 
 }  // namespace viz

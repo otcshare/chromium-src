@@ -8,7 +8,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
-#include "components/optimization_guide/core/model_util.h"
+#include "components/optimization_guide/core/delivery/model_util.h"
 
 namespace {
 // Helper function which finds the model and return its filename from the model
@@ -22,22 +22,6 @@ std::string GetModelFilenameFromDirectory(const base::FilePath& model_dir) {
   return optimization_guide::FilePathToString(model_file_path);
 }
 
-// Helper function which returns tail model filename and its vocabulary.
-std::pair<std::string, std::string> GetTailModelAndVocabFilenames(
-    const base::FilePath& model_file_path,
-    const base::flat_set<base::FilePath>& additional_files) {
-  std::string model_filename, vocab_filename;
-
-  if (!model_file_path.empty())
-    model_filename = optimization_guide::FilePathToString(model_file_path);
-
-  if (additional_files.size() > 0)
-    vocab_filename =
-        optimization_guide::FilePathToString(*additional_files.begin());
-
-  return std::make_pair(model_filename, vocab_filename);
-}
-
 }  // namespace
 
 // static
@@ -49,16 +33,6 @@ OnDeviceModelUpdateListener* OnDeviceModelUpdateListener::GetInstance() {
 std::string OnDeviceModelUpdateListener::head_model_filename() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return head_model_filename_;
-}
-
-std::string OnDeviceModelUpdateListener::tail_model_filename() const {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return tail_model_filename_;
-}
-
-std::string OnDeviceModelUpdateListener::vocab_filename() const {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return vocab_filename_;
 }
 
 OnDeviceModelUpdateListener::OnDeviceModelUpdateListener() = default;
@@ -82,30 +56,7 @@ void OnDeviceModelUpdateListener::OnHeadModelUpdate(
   }
 }
 
-void OnDeviceModelUpdateListener::OnTailModelUpdate(
-    const base::FilePath& model_file,
-    const base::flat_set<base::FilePath>& additional_files) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (!(model_file.empty() || additional_files.empty())) {
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE,
-        {base::TaskPriority::BEST_EFFORT,
-         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN, base::MayBlock()},
-        base::BindOnce(&GetTailModelAndVocabFilenames, model_file,
-                       additional_files),
-        base::BindOnce(
-            [](const std::pair<std::string, std::string>& filenames) {
-              if (!filenames.first.empty())
-                GetInstance()->tail_model_filename_ = filenames.first;
-              if (!filenames.second.empty())
-                GetInstance()->vocab_filename_ = filenames.second;
-            }));
-  }
-}
-
 void OnDeviceModelUpdateListener::ResetListenerForTest() {
   head_model_dir_.clear();
   head_model_filename_.clear();
-  tail_model_filename_.clear();
-  vocab_filename_.clear();
 }

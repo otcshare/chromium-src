@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "ui/events/event_observer.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/test/widget_test.h"
@@ -16,7 +17,20 @@
 #include "ui/aura/window.h"
 #endif
 
+#if BUILDFLAG(IS_MAC)
+#include "ui/views/event_monitor_mac.h"
+#endif
+
 namespace views::test {
+
+namespace {
+enum class Implementation {
+  kRegular,
+#if BUILDFLAG(IS_MAC)
+  kRemoteCocoa,
+#endif
+};
+}  // namespace
 
 // A simple event observer that records the number of events.
 class TestEventObserver : public ui::EventObserver {
@@ -37,7 +51,8 @@ class TestEventObserver : public ui::EventObserver {
   size_t observed_event_count_ = 0;
 };
 
-class EventMonitorTest : public WidgetTest {
+class EventMonitorTest : public WidgetTest,
+                         public testing::WithParamInterface<Implementation> {
  public:
   EventMonitorTest() = default;
 
@@ -53,9 +68,15 @@ class EventMonitorTest : public WidgetTest {
     generator_ = std::make_unique<ui::test::EventGenerator>(
         GetContext(), widget_->GetNativeWindow());
     generator_->set_target(ui::test::EventGenerator::Target::APPLICATION);
+
+#if BUILDFLAG(IS_MAC)
+    if (GetParam() == Implementation::kRemoteCocoa) {
+      override_implementation_ = EventMonitorMac::UseRemoteCocoaForTesting();
+    }
+#endif
   }
   void TearDown() override {
-    widget_->CloseNow();
+    widget_.ExtractAsDangling()->CloseNow();
     WidgetTest::TearDown();
   }
 
@@ -63,12 +84,15 @@ class EventMonitorTest : public WidgetTest {
   raw_ptr<Widget> widget_ = nullptr;
   std::unique_ptr<ui::test::EventGenerator> generator_;
   TestEventObserver observer_;
+#if BUILDFLAG(IS_MAC)
+  std::optional<base::AutoReset<bool>> override_implementation_;
+#endif
 };
 
-TEST_F(EventMonitorTest, ShouldReceiveAppEventsWhileInstalled) {
+TEST_P(EventMonitorTest, ShouldReceiveAppEventsWhileInstalled) {
   std::unique_ptr<EventMonitor> monitor(EventMonitor::CreateApplicationMonitor(
       &observer_, widget_->GetNativeWindow(),
-      {ui::ET_MOUSE_PRESSED, ui::ET_MOUSE_RELEASED}));
+      {ui::EventType::kMousePressed, ui::EventType::kMouseReleased}));
 
   generator_->ClickLeftButton();
   EXPECT_EQ(2u, observer_.observed_event_count());
@@ -78,10 +102,10 @@ TEST_F(EventMonitorTest, ShouldReceiveAppEventsWhileInstalled) {
   EXPECT_EQ(2u, observer_.observed_event_count());
 }
 
-TEST_F(EventMonitorTest, ShouldReceiveWindowEventsWhileInstalled) {
+TEST_P(EventMonitorTest, ShouldReceiveWindowEventsWhileInstalled) {
   std::unique_ptr<EventMonitor> monitor(EventMonitor::CreateWindowMonitor(
       &observer_, widget_->GetNativeWindow(),
-      {ui::ET_MOUSE_PRESSED, ui::ET_MOUSE_RELEASED}));
+      {ui::EventType::kMousePressed, ui::EventType::kMouseReleased}));
 
   generator_->ClickLeftButton();
   EXPECT_EQ(2u, observer_.observed_event_count());
@@ -91,11 +115,11 @@ TEST_F(EventMonitorTest, ShouldReceiveWindowEventsWhileInstalled) {
   EXPECT_EQ(2u, observer_.observed_event_count());
 }
 
-TEST_F(EventMonitorTest, ShouldNotReceiveEventsFromOtherWindow) {
+TEST_P(EventMonitorTest, ShouldNotReceiveEventsFromOtherWindow) {
   Widget* widget2 = CreateTopLevelNativeWidget();
   std::unique_ptr<EventMonitor> monitor(EventMonitor::CreateWindowMonitor(
       &observer_, widget2->GetNativeWindow(),
-      {ui::ET_MOUSE_PRESSED, ui::ET_MOUSE_RELEASED}));
+      {ui::EventType::kMousePressed, ui::EventType::kMouseReleased}));
 
   generator_->ClickLeftButton();
   EXPECT_EQ(0u, observer_.observed_event_count());
@@ -104,10 +128,10 @@ TEST_F(EventMonitorTest, ShouldNotReceiveEventsFromOtherWindow) {
   widget2->CloseNow();
 }
 
-TEST_F(EventMonitorTest, ShouldOnlyReceiveRequestedEventTypes) {
+TEST_P(EventMonitorTest, ShouldOnlyReceiveRequestedEventTypes) {
   // This event monitor only listens to mouse press, not release.
   std::unique_ptr<EventMonitor> monitor(EventMonitor::CreateWindowMonitor(
-      &observer_, widget_->GetNativeWindow(), {ui::ET_MOUSE_PRESSED}));
+      &observer_, widget_->GetNativeWindow(), {ui::EventType::kMousePressed}));
 
   generator_->ClickLeftButton();
   EXPECT_EQ(1u, observer_.observed_event_count());
@@ -115,12 +139,12 @@ TEST_F(EventMonitorTest, ShouldOnlyReceiveRequestedEventTypes) {
   monitor.reset();
 }
 
-TEST_F(EventMonitorTest, WindowMonitorTornDownOnWindowClose) {
+TEST_P(EventMonitorTest, WindowMonitorTornDownOnWindowClose) {
   Widget* widget2 = CreateTopLevelNativeWidget();
   widget2->Show();
 
   std::unique_ptr<EventMonitor> monitor(EventMonitor::CreateWindowMonitor(
-      &observer_, widget2->GetNativeWindow(), {ui::ET_MOUSE_PRESSED}));
+      &observer_, widget2->GetNativeWindow(), {ui::EventType::kMousePressed}));
 
   // Closing the widget before destroying the monitor should not crash.
   widget2->CloseNow();
@@ -132,7 +156,8 @@ class DeleteOtherOnEventObserver : public ui::EventObserver {
  public:
   explicit DeleteOtherOnEventObserver(gfx::NativeWindow context) {
     monitor_ = EventMonitor::CreateApplicationMonitor(
-        this, context, {ui::ET_MOUSE_PRESSED, ui::ET_MOUSE_RELEASED});
+        this, context,
+        {ui::EventType::kMousePressed, ui::EventType::kMouseReleased});
   }
 
   DeleteOtherOnEventObserver(const DeleteOtherOnEventObserver&) = delete;
@@ -159,7 +184,7 @@ class DeleteOtherOnEventObserver : public ui::EventObserver {
 
 // Ensure correct behavior when an event monitor is removed while iterating
 // over the OS-controlled observer list.
-TEST_F(EventMonitorTest, TwoMonitors) {
+TEST_P(EventMonitorTest, TwoMonitors) {
   gfx::NativeWindow window = widget_->GetNativeWindow();
   auto deleter = std::make_unique<DeleteOtherOnEventObserver>(window);
   auto deletee = std::make_unique<DeleteOtherOnEventObserver>(window);
@@ -178,5 +203,14 @@ TEST_F(EventMonitorTest, TwoMonitors) {
   generator_->ReleaseLeftButton();
   EXPECT_TRUE(deleter->DidDelete());
 }
+
+INSTANTIATE_TEST_SUITE_P(,
+                         EventMonitorTest,
+                         testing::Values(Implementation::kRegular
+#if BUILDFLAG(IS_MAC)
+                                         ,
+                                         Implementation::kRemoteCocoa
+#endif
+                                         ));
 
 }  // namespace views::test

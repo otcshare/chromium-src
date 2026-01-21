@@ -10,7 +10,7 @@
 #include "base/synchronization/waitable_event.h"
 #include "third_party/leveldatabase/src/include/leveldb/env.h"
 
-namespace content {
+namespace content::indexed_db {
 
 // static
 scoped_refptr<LevelDBState> LevelDBState::CreateForDiskDB(
@@ -59,13 +59,10 @@ void LevelDBState::RequestDestruction(
 
 LevelDBState::~LevelDBState() {
   if (db_) {
-    base::TimeTicks begin_time = base::TimeTicks::Now();
     const_cast<std::unique_ptr<leveldb::DB>*>(&db_)->reset();
-    base::UmaHistogramMediumTimes("WebCore.IndexedDB.LevelDB.CloseTime",
-                                  base::TimeTicks::Now() - begin_time);
   }
   if (signal_on_destruction_)
     signal_on_destruction_->Signal();
 }
 
-}  // namespace content
+}  // namespace content::indexed_db

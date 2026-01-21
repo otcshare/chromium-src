@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/config/android/rules.gni")
+import("//third_party/jni_zero/jni_zero.gni")
 
 _jni_sources = [
   "java/src/org/chromium/components/policy/CombinedPolicyProvider.java",
@@ -16,18 +17,20 @@ java_cpp_strings("java_switches_srcjar") {
   # External code should depend on ":policy_java" instead.
   visibility = [ ":*" ]
   sources = [ "//components/policy/core/common/policy_switches.cc" ]
-  template = "java_templates/PolicySwitches.java.tmpl"
+  class_name = "org.chromium.components.policy.PolicySwitches"
 }
 
 android_library("policy_java") {
   deps = [
     "//base:base_java",
-    "//base:jni_java",
     "//build/android:build_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
+    "//third_party/jni_zero:jni_zero_java",
   ]
-  srcjar_deps = [ ":java_switches_srcjar" ]
-  annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
+  srcjar_deps = [
+    ":java_switches_srcjar",
+    ":jni_headers",
+  ]
 
   sources = _jni_sources + [
               "java/src/org/chromium/components/policy/AbstractAppRestrictionsProvider.java",
@@ -76,7 +79,8 @@ robolectric_library("components_policy_junit_tests") {
     "//base:base_junit_test_support",
     "//build/android:build_java",
     "//third_party/androidx:androidx_test_core_java",
-    "//third_party/hamcrest:hamcrest_java",
+    "//third_party/google-truth:google_truth_java",
+    "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
   ]
@@ -92,12 +96,12 @@ android_library("native_test_support_java") {
   testonly = true
   deps = [
     ":policy_java",
-    "//base:jni_java",
+    "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
   ]
-  annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
 
+  srcjar_deps = [ ":test_jni_headers" ]
   sources = _test_jni_sources
 }
 

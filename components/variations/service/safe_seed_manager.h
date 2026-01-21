@@ -5,8 +5,7 @@
 #ifndef COMPONENTS_VARIATIONS_SERVICE_SAFE_SEED_MANAGER_H_
 #define COMPONENTS_VARIATIONS_SERVICE_SAFE_SEED_MANAGER_H_
 
-#include <memory>
-#include <string>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -18,6 +17,12 @@ namespace variations {
 
 struct ClientFilterableState;
 class VariationsSeedStore;
+
+enum class SeedType {
+  kRegularSeed,
+  kSafeSeed,
+  kNullSeed,
+};
 
 // As of January 2018, users at the 99.5th percentile, across all platforms,
 // tend to experience fewer than 3 consecutive crashes: [1], [2], [3], [4].
@@ -36,13 +41,7 @@ class VariationsSeedStore;
 // consecutive crashes are ones with very few users, plus Canary. It's probably
 // not realistic to avoid false positives for these less-stable configurations.
 constexpr int kCrashStreakSafeSeedThreshold = 3;
-constexpr int kCrashStreakNullSeedThreshold = 6;
-
-enum class SeedType {
-  kRegularSeed,
-  kSafeSeed,
-  kNullSeed,
-};
+constexpr int kCrashStreakNullSeedThreshold = 4;
 
 // The primary class that encapsulates state for managing the safe seed.
 class SafeSeedManager {
@@ -62,12 +61,14 @@ class SafeSeedManager {
   // Returns the type of seed the client should use.  Uses Regular seed by
   // default, but will use Safe seed, and Null seed after continual crashes or
   // network fetch failures.
+  //
   // Virtual for testing.
   virtual SeedType GetSeedType() const;
 
   // Stores the combined server and client state that control the active
   // variations state. May be called at most once per Chrome app launch. As an
   // optimization, should not be called when running in safe mode.
+  //
   // Virtual for testing.
   virtual void SetActiveSeedState(
       const std::string& seed_data,
@@ -95,6 +96,7 @@ class SafeSeedManager {
         int seed_milestone,
         std::unique_ptr<ClientFilterableState> client_filterable_state,
         base::Time seed_fetch_time);
+
     ~ActiveSeedState();
 
     // The serialized variations seed data.
@@ -113,14 +115,15 @@ class SafeSeedManager {
     // client-side timestamp, never a server-provided timestamp.
     const base::Time seed_fetch_time;
   };
-  std::unique_ptr<ActiveSeedState> active_seed_state_;
 
-  // The active seed state must never be set more than once.
-  bool has_set_active_seed_state_ = false;
+  // Accessor for active_seed_state_.
+  const std::optional<ActiveSeedState>& GetActiveSeedState() const;
 
   // The pref service used to persist the variations seed. Weak reference; must
   // outlive |this| instance.
   raw_ptr<PrefService> local_state_;
+
+  std::optional<ActiveSeedState> active_seed_state_;
 };
 
 }  // namespace variations

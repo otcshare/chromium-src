@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_KEY_REGISTRY_IMPL_H_
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_CRYPTAUTH_KEY_REGISTRY_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chromeos/ash/services/device_sync/cryptauth_key_registry.h"
 
@@ -53,11 +54,11 @@ class CryptAuthKeyRegistryImpl : public CryptAuthKeyRegistry {
   void OnKeyRegistryUpdated() override;
 
   // Converts the registry to a dictionary value in a form suitable for a pref.
-  base::Value AsDictionary() const;
+  base::Value::Dict AsDictionary() const;
 
   // Contains preferences that outlive the lifetime of this object and across
   // process restarts. Not owned and must outlive this instance.
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
 };
 
 }  // namespace device_sync

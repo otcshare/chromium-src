@@ -6,7 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_implementation.h"
@@ -27,7 +28,7 @@ bool GLSurfaceEglReadback::Resize(const gfx::Size& size,
                                   float scale_factor,
                                   const gfx::ColorSpace& color_space,
                                   bool has_alpha) {
-  pixels_.reset();
+  pixels_ = base::HeapArray<uint8_t>();
 
   if (!PbufferGLSurfaceEGL::Resize(size, scale_factor, color_space, has_alpha))
     return false;
@@ -42,13 +43,9 @@ bool GLSurfaceEglReadback::Resize(const gfx::Size& size,
 
   // Allocate a new buffer for readback.
   const size_t buffer_size = size.width() * size.height() * kBytesPerPixelBGRA;
-  pixels_ = std::make_unique<uint8_t[]>(buffer_size);
+  pixels_ = base::HeapArray<uint8_t>::Uninit(buffer_size);
 
   return true;
-}
-
-bool GLSurfaceEglReadback::IsOffscreen() {
-  return false;
 }
 
 gfx::SwapResult GLSurfaceEglReadback::SwapBuffers(PresentationCallback callback,
@@ -56,9 +53,9 @@ gfx::SwapResult GLSurfaceEglReadback::SwapBuffers(PresentationCallback callback,
   gfx::SwapResult swap_result = gfx::SwapResult::SWAP_FAILED;
   gfx::PresentationFeedback feedback;
 
-  if (pixels_) {
-    ReadPixels(pixels_.get());
-    if (HandlePixels(pixels_.get())) {
+  if (!pixels_.empty()) {
+    ReadPixels(pixels_.as_span());
+    if (UNSAFE_TODO(HandlePixels(pixels_.as_span().data()))) {
       // Swap is successful, so return SWAP_ACK and provide the current time
       // with presentation feedback.
       swap_result = gfx::SwapResult::SWAP_ACK;
@@ -86,7 +83,7 @@ bool GLSurfaceEglReadback::HandlePixels(uint8_t* pixels) {
   return true;
 }
 
-void GLSurfaceEglReadback::ReadPixels(void* buffer) {
+void GLSurfaceEglReadback::ReadPixels(base::span<uint8_t> buffer) {
   const gfx::Size size = GetSize();
   GLint read_fbo = 0;
   GLint pixel_pack_buffer = 0;
@@ -102,8 +99,10 @@ void GLSurfaceEglReadback::ReadPixels(void* buffer) {
   if (pixel_pack_buffer)
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-  glReadPixels(0, 0, size.width(), size.height(), GL_BGRA, GL_UNSIGNED_BYTE,
-               buffer);
+  CHECK_GE(buffer.size() / base::checked_cast<size_t>(size.width()),
+           base::checked_cast<size_t>(size.height()));
+  glReadPixels(0, 0, size.width(), size.height(), GL_BGRA_EXT, GL_UNSIGNED_BYTE,
+               buffer.data());
 
   if (read_fbo)
     glBindFramebufferEXT(GL_READ_FRAMEBUFFER, read_fbo);

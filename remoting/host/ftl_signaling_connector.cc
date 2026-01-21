@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "google_apis/google_api_keys.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -97,7 +97,7 @@ void FtlSignalingConnector::OnSignalStrategyStateChange(
   } else if (state == SignalStrategy::DISCONNECTED) {
     HOST_LOG << "Signaling disconnected. error="
              << SignalStrategyErrorToString(signal_strategy_->GetError());
-    backoff_reset_timer_.AbandonAndStop();
+    backoff_reset_timer_.Stop();
     backoff_.InformOfRequest(false);
     if (signal_strategy_->IsSignInError() &&
         signal_strategy_->GetError() == SignalStrategy::AUTHENTICATION_FAILED) {

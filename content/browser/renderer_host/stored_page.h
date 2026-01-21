@@ -19,12 +19,6 @@ class RenderFrameHostImpl;
 class RenderFrameProxyHost;
 class RenderViewHostImpl;
 
-// Comparator for RenderViewHostImpl SafeRefs.
-struct RenderViewHostImplSafeRefComparator {
-  bool operator()(const base::SafeRef<RenderViewHostImpl>& a,
-                  const base::SafeRef<RenderViewHostImpl>& b) const;
-};
-
 // StoredPage contains a page which is not tied to a FrameTree. It holds the
 // main RenderFrameHost together with RenderViewHosts and main document's
 // proxies. It's used for storing pages in back/forward cache or when preparing
@@ -37,12 +31,10 @@ class StoredPage : public SiteInstanceGroup::Observer {
  public:
   using RenderFrameProxyHostMap =
       std::unordered_map<SiteInstanceGroupId,
-                         std::unique_ptr<RenderFrameProxyHost>,
-                         SiteInstanceGroupId::Hasher>;
+                         std::unique_ptr<RenderFrameProxyHost>>;
 
   using RenderViewHostImplSafeRefSet =
-      std::set<base::SafeRef<RenderViewHostImpl>,
-               RenderViewHostImplSafeRefComparator>;
+      std::set<base::SafeRef<RenderViewHostImpl>>;
 
   // A delegate class for various state change callbacks.
   class Delegate {
@@ -56,7 +48,7 @@ class StoredPage : public SiteInstanceGroup::Observer {
   StoredPage(std::unique_ptr<RenderFrameHostImpl> rfh,
              RenderFrameProxyHostMap proxy_hosts,
              RenderViewHostImplSafeRefSet render_view_hosts);
-  virtual ~StoredPage();
+  ~StoredPage() override;
 
   void SetDelegate(Delegate* delegate);
 
@@ -93,6 +85,10 @@ class StoredPage : public SiteInstanceGroup::Observer {
   RenderFrameProxyHostMap TakeProxyHosts();
   RenderViewHostImplSafeRefSet TakeRenderViewHosts();
 
+  void SetViewTransitionState(
+      std::optional<blink::ViewTransitionState> view_transition_state);
+  std::optional<blink::ViewTransitionState> TakeViewTransitionState();
+
  private:
   void ClearAllObservers();
 
@@ -124,6 +120,10 @@ class StoredPage : public SiteInstanceGroup::Observer {
   blink::mojom::PageRestoreParamsPtr page_restore_params_;
 
   raw_ptr<Delegate> delegate_ = nullptr;
+
+  // View transition state to use when the page is activated, either via BFCache
+  // activation or prerender activation.
+  std::optional<blink::ViewTransitionState> view_transition_state_;
 };
 
 }  // namespace content

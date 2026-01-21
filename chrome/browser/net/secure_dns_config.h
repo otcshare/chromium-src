@@ -5,10 +5,13 @@
 #ifndef CHROME_BROWSER_NET_SECURE_DNS_CONFIG_H_
 #define CHROME_BROWSER_NET_SECURE_DNS_CONFIG_H_
 
-#include "base/strings/string_piece.h"
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include "net/base/ip_endpoint.h"
 #include "net/dns/public/dns_over_https_config.h"
 #include "net/dns/public/secure_dns_mode.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // Representation of a complete Secure DNS configuration.
 class SecureDnsConfig {
@@ -34,7 +37,8 @@ class SecureDnsConfig {
 
   SecureDnsConfig(net::SecureDnsMode mode,
                   net::DnsOverHttpsConfig doh_config,
-                  ManagementMode management_mode);
+                  ManagementMode management_mode,
+                  std::vector<net::IPEndPoint> fallback_doh_nameservers);
   // This class is move-only to avoid any accidental copying.
   SecureDnsConfig(SecureDnsConfig&& other);
   SecureDnsConfig& operator=(SecureDnsConfig&& other);
@@ -42,18 +46,22 @@ class SecureDnsConfig {
 
   // Identifies the SecureDnsMode corresponding to one of the above names, or
   // returns nullopt if the name is unrecognized.
-  static absl::optional<net::SecureDnsMode> ParseMode(base::StringPiece name);
+  static std::optional<net::SecureDnsMode> ParseMode(std::string_view name);
   // Converts a secure DNS mode to one of the above names.
   static const char* ModeToString(net::SecureDnsMode mode);
 
   net::SecureDnsMode mode() { return mode_; }
   const net::DnsOverHttpsConfig& doh_servers() { return doh_servers_; }
   ManagementMode management_mode() { return management_mode_; }
+  const std::vector<net::IPEndPoint>& fallback_doh_nameservers() {
+    return fallback_doh_nameservers_;
+  }
 
  private:
   net::SecureDnsMode mode_;
   net::DnsOverHttpsConfig doh_servers_;
   ManagementMode management_mode_;
+  std::vector<net::IPEndPoint> fallback_doh_nameservers_;
 };
 
 #endif  // CHROME_BROWSER_NET_SECURE_DNS_CONFIG_H_

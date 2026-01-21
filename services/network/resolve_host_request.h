@@ -6,6 +6,7 @@
 #define SERVICES_NETWORK_RESOLVE_HOST_REQUEST_H_
 
 #include <memory>
+#include <optional>
 
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -16,7 +17,6 @@
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 class NetLog;
@@ -34,7 +34,7 @@ class ResolveHostRequest : public mojom::ResolveHostHandle {
       net::HostResolver* resolver,
       mojom::HostResolverHostPtr host,
       const net::NetworkAnonymizationKey& network_anonymization_key,
-      const absl::optional<net::HostResolver::ResolveHostParameters>&
+      const std::optional<net::HostResolver::ResolveHostParameters>&
           optional_parameters,
       net::NetLog* net_log);
 
@@ -54,9 +54,8 @@ class ResolveHostRequest : public mojom::ResolveHostHandle {
  private:
   void OnComplete(int error);
   net::ResolveErrorInfo GetResolveErrorInfo() const;
-  const net::AddressList* GetAddressResults() const;
-  absl::optional<net::HostResolverEndpointResults>
-  GetEndpointResultsWithMetadata() const;
+  net::AddressList GetAddressResults() const;
+  net::HostResolverEndpointResults GetAlternativeEndpoints() const;
   void SignalNonAddressResults();
 
   std::unique_ptr<net::HostResolver::ResolveHostRequest> internal_request_;

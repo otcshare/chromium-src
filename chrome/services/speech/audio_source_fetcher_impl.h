@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "chrome/services/speech/audio_source_consumer.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_capturer_source.h"
@@ -18,7 +19,6 @@
 #include "media/mojo/mojom/audio_logging.mojom.h"
 #include "media/mojo/mojom/speech_recognition_service.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace speech {
 
@@ -59,8 +59,8 @@ class AudioSourceFetcherImpl
   void OnCaptureStarted() final {}
   void Capture(const media::AudioBus* audio_source,
                base::TimeTicks audio_capture_time,
-               double volume,
-               bool key_pressed) final;
+               const media::AudioGlitchInfo& glitch_info,
+               double volume) final;
   void OnCaptureError(media::AudioCapturerSource::ErrorCode code,
                       const std::string& message) final;
   void OnCaptureMuted(bool is_muted) final {}
@@ -76,7 +76,7 @@ class AudioSourceFetcherImpl
   void OnProcessingStateChanged(const std::string& message) override;
 
   // The output callback for ConvertingAudioFifo.
-  void OnAudioFinishedConvert(media::AudioBus* output_bus);
+  void OnAudioFinishedConvert(const media::AudioBus* output_bus);
 
   void set_audio_capturer_source_for_tests(
       media::AudioCapturerSource* audio_capturer_source_for_tests) {
@@ -94,7 +94,13 @@ class AudioSourceFetcherImpl
 
   void SendAudioToResample(std::unique_ptr<media::AudioBus> audio_data);
 
+  void SendAudioEndToSpeechRecognitionService();
+
+  void SendError();
+
   media::AudioCapturerSource* GetAudioCapturerSource();
+
+  void DrainConverterOutput();
 
   // Sends audio to the speech recognition recognizer.
   SendAudioToSpeechRecognitionServiceCallback send_audio_callback_;
@@ -123,13 +129,18 @@ class AudioSourceFetcherImpl
   std::unique_ptr<media::ConvertingAudioFifo> converter_;
 
   // The output params for resampling for the server based speech recognition.
-  absl::optional<media::AudioParameters> server_based_recognition_params_ =
-      absl::nullopt;
+  std::optional<media::AudioParameters> server_based_recognition_params_ =
+      std::nullopt;
   bool is_multi_channel_supported_;
   bool is_server_based_;
 
+  base::TimeDelta audio_length_ = base::Seconds(0);
+
   // A callback to push audio data into `converter_`.
   SendAudioToResampleCallback resample_callback_;
+
+  // Callback bound to correct thread to send errors to `audio_consumer_`.
+  base::RepeatingClosure send_error_callback_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

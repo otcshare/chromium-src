@@ -14,20 +14,22 @@
 #include "device/gamepad/gamepad_data_fetcher.h"
 #include "device/gamepad/gamepad_data_fetcher_manager.h"
 #include "device/gamepad/public/cpp/gamepad_features.h"
+#include "device/gamepad/simulated_gamepad_data_fetcher.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "device/gamepad/gamepad_platform_data_fetcher_android.h"
 #elif BUILDFLAG(IS_WIN)
-#include "base/win/windows_version.h"
 #include "device/gamepad/nintendo_data_fetcher.h"
 #include "device/gamepad/raw_input_data_fetcher_win.h"
 #include "device/gamepad/wgi_data_fetcher_win.h"
 #include "device/gamepad/xinput_data_fetcher_win.h"
-#elif BUILDFLAG(IS_MAC)
+#elif BUILDFLAG(IS_APPLE)
 #include "device/gamepad/game_controller_data_fetcher_mac.h"
+#if BUILDFLAG(IS_MAC)
 #include "device/gamepad/gamepad_platform_data_fetcher_mac.h"
 #include "device/gamepad/nintendo_data_fetcher.h"
 #include "device/gamepad/xbox_data_fetcher_mac.h"
+#endif
 #elif (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(USE_UDEV)
 #include "device/gamepad/gamepad_platform_data_fetcher_linux.h"
 #include "device/gamepad/nintendo_data_fetcher.h"
@@ -44,8 +46,7 @@ void AddGamepadPlatformDataFetchers(GamepadDataFetcherManager* manager) {
 
   // Windows.Gaming.Input is available in Windows 10.0.10240.0 and later.
   if (base::FeatureList::IsEnabled(
-          features::kEnableWindowsGamingInputDataFetcher) &&
-      base::win::GetVersion() >= base::win::Version::WIN10) {
+          features::kEnableWindowsGamingInputDataFetcher)) {
     manager->AddFactory(new WgiDataFetcherWin::Factory());
   } else {
     manager->AddFactory(new XInputDataFetcherWin::Factory());
@@ -53,12 +54,14 @@ void AddGamepadPlatformDataFetchers(GamepadDataFetcherManager* manager) {
   manager->AddFactory(new NintendoDataFetcher::Factory());
   manager->AddFactory(new RawInputDataFetcher::Factory());
 
-#elif BUILDFLAG(IS_MAC)
+#elif BUILDFLAG(IS_APPLE)
 
   manager->AddFactory(new GameControllerDataFetcherMac::Factory());
+#if BUILDFLAG(IS_MAC)
   manager->AddFactory(new GamepadPlatformDataFetcherMac::Factory());
   manager->AddFactory(new NintendoDataFetcher::Factory());
   manager->AddFactory(new XboxDataFetcher::Factory());
+#endif
 
 #elif (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(USE_UDEV)
 
@@ -67,6 +70,11 @@ void AddGamepadPlatformDataFetchers(GamepadDataFetcherManager* manager) {
   manager->AddFactory(new NintendoDataFetcher::Factory());
 
 #endif
+
+  if (base::FeatureList::IsEnabled(
+          features::kEnableSimulatedGamepadDataFetcher)) {
+    manager->AddFactory(new SimulatedGamepadDataFetcher::Factory());
+  }
 }
 
 }  // namespace device

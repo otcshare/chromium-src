@@ -4,12 +4,22 @@
 
 import {assertDeepEquals} from 'chrome://webui-test/chromeos/chai_assert.js';
 
-import {FilesAppDirEntry} from '../externs/files_app_entry_interfaces.js';
-import {FileKey, PropStatus, State} from '../externs/ts/state.js';
+import type {Crostini} from '../background/js/crostini.js';
+import {MockVolumeManager} from '../background/js/mock_volume_manager.js';
+import type {VolumeInfo} from '../background/js/volume_info.js';
+import type {FilesAppDirEntry} from '../common/js/files_app_entry_types.js';
+import type {DirectoryTreeNamingController} from '../foreground/js/directory_tree_naming_controller.js';
+import {FakeFileSelectionHandler} from '../foreground/js/fake_file_selection_handler.js';
+import type {MetadataModel} from '../foreground/js/metadata/metadata_model.js';
+import {MockMetadataModel} from '../foreground/js/metadata/mock_metadata.js';
+import {createFakeDirectoryModel} from '../foreground/js/mock_directory_model.js';
+import type {TaskController} from '../foreground/js/task_controller.js';
+import type {FileManagerUI} from '../foreground/js/ui/file_manager_ui.js';
 
-import {EntryMetadata, updateMetadata} from './actions/all_entries.js';
-import {changeDirectory, updateDirectoryContent, updateSelection} from './actions/current_directory.js';
-import {StateSelector, Store, waitForState} from './store.js';
+import {type EntryMetadata, updateMetadata} from './ducks/all_entries.js';
+import {changeDirectory, updateDirectoryContent, updateSelection} from './ducks/current_directory.js';
+import {DialogType, type FileKey, PropStatus, type State} from './state.js';
+import {getEmptyState, getStore, type StateSelector, type Store, waitForState} from './store.js';
 
 /**
  * Compares 2 State objects and fails with nicely formatted message when it
@@ -62,7 +72,22 @@ export function updMetadata(store: Store, metadata: EntryMetadata[]) {
 
 /** Updates the directory content in the store. */
 export function updateContent(store: Store, entries: Entry[]) {
-  store.dispatch(updateDirectoryContent({entries}));
+  store.dispatch(updateDirectoryContent({entries, status: PropStatus.SUCCESS}));
+}
+
+/**
+ * Store state might include objects (e.g. Entry type) which can not stringified
+ * by JSON, here we implement a custom "replacer" to handle that.
+ */
+function jsonStringifyStoreState(state: any): string {
+  return JSON.stringify(state, (key, value) => {
+    // Currently only the key with "entry" (inside `FileData`) can't be
+    // stringified, we just return its URL.
+    if (key === 'entry') {
+      return value.toURL();
+    }
+    return value;
+  }, 2);
 }
 
 /**
@@ -81,7 +106,9 @@ export async function waitDeepEquals(
   let got: any;
   const timeout = new Promise((_, reject) => {
     setTimeout(() => {
-      reject(new Error(`waitDeepEquals timed out waiting for \n${want}`));
+      reject(new Error(`waitDeepEquals timed out.\nWANT:\n${
+          jsonStringifyStoreState(
+              want)}\nGOT:\n${jsonStringifyStoreState(got)}`));
     }, 10000);
   });
 
@@ -94,11 +121,86 @@ export async function waitDeepEquals(
       if (error.constructor?.name === 'AssertionError') {
         return false;
       }
-      console.log(error.stack);
-      console.error(error);
       throw error;
     }
   });
 
   await Promise.race([checker, timeout]);
+}
+
+/** Setup store and initialize it with empty state. */
+export function setupStore(initialState: State = getEmptyState()): Store {
+  const store = getStore();
+  store.init(initialState);
+  return store;
+}
+
+/**
+ * Setup fileManager dependencies on window object.
+ */
+export function setUpFileManagerOnWindow() {
+  const volumeManager = new MockVolumeManager();
+  // Keys are defined in file_manager.d.ts
+  window.fileManager = {
+    volumeManager: volumeManager,
+    metadataModel: new MockMetadataModel({}) as unknown as MetadataModel,
+    ui: {} as unknown as FileManagerUI,
+    crostini: {} as unknown as Crostini,
+    selectionHandler: new FakeFileSelectionHandler(),
+    taskController: {} as unknown as TaskController,
+    dialogType: DialogType.FULL_PAGE,
+    directoryModel: createFakeDirectoryModel(),
+    fileFilter: {
+      filter() {
+        return true;
+      },
+    },
+    directoryTreeNamingController: {} as unknown as
+        DirectoryTreeNamingController,
+    getLastVisitedUrl() {
+      return '';
+    },
+    getTranslatedString(_id: string) {
+      return '';
+    },
+    onUnloadForTest() {},
+  };
+}
+
+/**
+ * Create a fake VolumeMetadata with VolumeInfo, VolumeInfo can be created by
+ * MockVolumeManager.createMockVolumeInfo.
+ */
+export function createFakeVolumeMetadata(
+    volumeInfo: VolumeInfo,
+    ): chrome.fileManagerPrivate.VolumeMetadata {
+  return {
+    volumeId: volumeInfo.volumeId,
+    volumeType: volumeInfo.volumeType as chrome.fileManagerPrivate.VolumeType,
+    profile: {
+      ...volumeInfo.profile,
+      profileId: '',
+    },
+    configurable: volumeInfo.configurable,
+    watchable: volumeInfo.watchable,
+    source: volumeInfo.source as chrome.fileManagerPrivate.Source,
+    volumeLabel: volumeInfo.label,
+    fileSystemId: undefined,
+    providerId: volumeInfo.providerId,
+    sourcePath: undefined,
+    deviceType: volumeInfo.deviceType as chrome.fileManagerPrivate.DeviceType,
+    devicePath: volumeInfo.devicePath,
+    isParentDevice: undefined,
+    isReadOnly: volumeInfo.isReadOnly,
+    isReadOnlyRemovableDevice: volumeInfo.isReadOnlyRemovableDevice,
+    hasMedia: false,
+    mountCondition: undefined,
+    mountContext: undefined,
+    diskFileSystemType: volumeInfo.diskFileSystemType,
+    iconSet: volumeInfo.iconSet,
+    driveLabel: volumeInfo.driveLabel,
+    remoteMountPath: volumeInfo.remoteMountPath,
+    hidden: false,
+    vmType: volumeInfo.vmType,
+  };
 }

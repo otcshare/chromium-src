@@ -56,8 +56,7 @@ base::Value::List SerializeChallengeResponseKeysForKnownUser(
     const std::vector<ChallengeResponseKey>& challenge_response_keys) {
   base::Value::List pref_value;
   for (const auto& key : challenge_response_keys) {
-    std::string spki_base64;
-    base::Base64Encode(key.public_key_spki_der(), &spki_base64);
+    std::string spki_base64 = base::Base64Encode(key.public_key_spki_der());
     base::Value::Dict key_representation;
     key_representation.Set(kPublicKeySpkiKey, spki_base64);
     key_representation.Set(kExtensionId, key.extension_id());
@@ -67,13 +66,11 @@ base::Value::List SerializeChallengeResponseKeysForKnownUser(
 }
 
 bool DeserializeChallengeResponseKeyFromKnownUser(
-    const base::Value& pref_value,
+    const base::Value::List& pref_value,
     std::vector<DeserializedChallengeResponseKey>*
         deserialized_challenge_response_keys) {
   deserialized_challenge_response_keys->clear();
-  if (!pref_value.is_list())
-    return false;
-  for (const base::Value& key_representation : pref_value.GetList()) {
+  for (const base::Value& key_representation : pref_value) {
     if (!key_representation.is_dict()) {
       LOG(WARNING) << "Ignoring challenge-response key info: not a dictionary";
       continue;

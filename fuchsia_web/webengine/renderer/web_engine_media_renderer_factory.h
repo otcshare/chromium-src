@@ -8,7 +8,9 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "fuchsia_web/webengine/mojom/web_engine_media_resource_provider.mojom.h"
 #include "media/base/renderer_factory.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -53,11 +55,11 @@ class WebEngineMediaRendererFactory final : public media::RendererFactory {
       const gfx::ColorSpace& target_color_space,
       media::GpuVideoAcceleratorFactories* gpu_factories);
 
-  media::MediaLog* const media_log_;
+  const raw_ptr<media::MediaLog> media_log_;
 
   // Factory to create extra audio and video decoders.
   // Could be nullptr if not extra decoders are available.
-  media::DecoderFactory* const decoder_factory_;
+  const raw_ptr<media::DecoderFactory> decoder_factory_;
 
   // Creates factories for supporting video accelerators. May be null.
   GetGpuFactoriesCB get_gpu_factories_cb_;

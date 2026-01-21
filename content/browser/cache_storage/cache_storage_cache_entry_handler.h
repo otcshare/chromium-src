@@ -6,11 +6,14 @@
 #define CONTENT_BROWSER_CACHE_STORAGE_CACHE_STORAGE_CACHE_ENTRY_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
 #include "components/services/storage/public/mojom/cache_storage_control.mojom.h"
 #include "content/browser/cache_storage/blob_storage_context_wrapper.h"
@@ -21,7 +24,6 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/disk_cache/disk_cache.h"
 #include "storage/browser/blob/blob_data_builder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom.h"
 
 namespace storage {
@@ -85,7 +87,7 @@ class CacheStorageCacheEntryHandler {
              int bytes_to_read,
              base::OnceCallback<void(int)> callback);
 
-    int GetSize(CacheStorageCache::EntryIndex disk_cache_index) const;
+    int64_t GetSize(CacheStorageCache::EntryIndex disk_cache_index) const;
 
     void Invalidate();
 
@@ -96,7 +98,7 @@ class CacheStorageCacheEntryHandler {
     ~DiskCacheBlobEntry();
 
     base::WeakPtr<CacheStorageCacheEntryHandler> entry_handler_;
-    absl::optional<CacheStorageCacheHandle> cache_handle_;
+    std::optional<CacheStorageCacheHandle> cache_handle_;
     disk_cache::ScopedEntryPtr disk_cache_entry_;
 
     SEQUENCE_CHECKER(sequence_checker_);
@@ -156,7 +158,7 @@ class CacheStorageCacheEntryHandler {
   // them if the cache has to be deleted while there are still references to
   // data in it.  DiskCacheBlobEntries are owned by EntryReaderImpl, which
   // are owned by their mojo remote (which indirectly is is owned by some blob).
-  std::set<DiskCacheBlobEntry*> blob_entries_;
+  std::set<raw_ptr<DiskCacheBlobEntry, SetExperimental>> blob_entries_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

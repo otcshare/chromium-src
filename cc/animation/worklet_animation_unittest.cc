@@ -18,7 +18,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::Mock;
 using ::testing::NiceMock;
 using ::testing::Return;
@@ -32,7 +31,7 @@ class MockKeyframeEffect : public KeyframeEffect {
  public:
   explicit MockKeyframeEffect(Animation* animation)
       : KeyframeEffect(animation) {}
-  MOCK_METHOD1(Tick, void(base::TimeTicks monotonic_time));
+  MOCK_METHOD1(Tick, bool(base::TimeTicks monotonic_time));
 };
 
 class WorkletAnimationTest : public AnimationTimelinesTest {
@@ -60,10 +59,10 @@ class MockScrollTimeline : public ScrollTimeline {
   MockScrollTimeline()
       : ScrollTimeline(ElementId(),
                        ScrollTimeline::ScrollDown,
-                       /* scroll_offsets */ absl::nullopt,
+                       /* scroll_offsets */ std::nullopt,
                        AnimationIdProvider::NextTimelineId()) {}
   MOCK_CONST_METHOD2(CurrentTime,
-                     absl::optional<base::TimeTicks>(const ScrollTree&, bool));
+                     std::optional<base::TimeTicks>(const ScrollTree&, bool));
   MOCK_CONST_METHOD2(IsActive, bool(const ScrollTree&, bool));
 
  protected:
@@ -122,7 +121,7 @@ TEST_F(WorkletAnimationTest, LocalTimeIsUsedWhenTicking) {
 TEST_F(WorkletAnimationTest, AnimationEventLocalTimeUpdate) {
   AttachWorkletAnimation();
 
-  absl::optional<base::TimeDelta> local_time = base::Seconds(1);
+  std::optional<base::TimeDelta> local_time = base::Seconds(1);
   MutatorOutputState::AnimationState state(worklet_animation_id_);
   state.local_times.push_back(local_time);
   worklet_animation_->SetOutputState(state);
@@ -134,9 +133,9 @@ TEST_F(WorkletAnimationTest, AnimationEventLocalTimeUpdate) {
   // One event is generated as a result of update state.
   EXPECT_TRUE(animation_events->needs_time_updated_events());
   worklet_animation_->TakeTimeUpdatedEvent(animation_events);
-  EXPECT_EQ(1u, animation_events->events_.size());
-  AnimationEvent event = animation_events->events_[0];
-  EXPECT_EQ(AnimationEvent::TIME_UPDATED, event.type);
+  EXPECT_EQ(1u, animation_events->events().size());
+  AnimationEvent event = animation_events->events()[0];
+  EXPECT_EQ(AnimationEvent::Type::kTimeUpdated, event.type);
   EXPECT_EQ(worklet_animation_->id(), event.uid.animation_id);
   EXPECT_EQ(local_time, event.local_time);
 
@@ -156,7 +155,7 @@ TEST_F(WorkletAnimationTest, AnimationEventLocalTimeUpdate) {
   // If local time is set to null value, an animation event with null local
   // time is generated.
   state.local_times.clear();
-  local_time = absl::nullopt;
+  local_time = std::nullopt;
   state.local_times.push_back(local_time);
   worklet_animation_->SetOutputState(state);
   mutator_events = host_->CreateEvents();
@@ -164,8 +163,8 @@ TEST_F(WorkletAnimationTest, AnimationEventLocalTimeUpdate) {
   worklet_animation_->UpdateState(true, animation_events);
   EXPECT_TRUE(animation_events->needs_time_updated_events());
   worklet_animation_->TakeTimeUpdatedEvent(animation_events);
-  EXPECT_EQ(1u, animation_events->events_.size());
-  EXPECT_EQ(local_time, animation_events->events_[0].local_time);
+  EXPECT_EQ(1u, animation_events->events().size());
+  EXPECT_EQ(local_time, animation_events->events()[0].local_time);
 }
 
 TEST_F(WorkletAnimationTest, CurrentTimeCorrectlyUsesScrollTimeline) {
@@ -489,8 +488,8 @@ TEST_F(WorkletAnimationTest, SkipUnchangedAnimations) {
   EXPECT_EQ(input->removed_animations.size(), 1u);
 }
 
-absl::optional<base::TimeTicks> FakeIncreasingScrollTimelineTime(Unused,
-                                                                 Unused) {
+std::optional<base::TimeTicks> FakeIncreasingScrollTimelineTime(Unused,
+                                                                Unused) {
   static base::TimeTicks current_time;
   current_time += base::Seconds(0.1);
   return current_time;
@@ -502,7 +501,7 @@ TEST_F(WorkletAnimationTest, SkipLockedAnimations) {
   auto scroll_timeline = base::WrapRefCounted(new MockScrollTimeline());
   EXPECT_CALL(*scroll_timeline, IsActive(_, _)).WillRepeatedly(Return(true));
   EXPECT_CALL(*scroll_timeline, CurrentTime(_, _))
-      .WillRepeatedly(Invoke(FakeIncreasingScrollTimelineTime));
+      .WillRepeatedly(FakeIncreasingScrollTimelineTime);
   scoped_refptr<WorkletAnimation> worklet_animation = WorkletAnimation::Create(
       worklet_animation_id_, "test_name", 1, nullptr, nullptr);
   host_->AddAnimationTimeline(scroll_timeline);

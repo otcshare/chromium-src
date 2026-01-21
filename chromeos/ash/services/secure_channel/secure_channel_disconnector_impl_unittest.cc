@@ -6,9 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/unguessable_token.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
 #include "chromeos/ash/services/secure_channel/fake_connection.h"
@@ -56,7 +55,7 @@ class SecureChannelSecureChannelDisconnectorImplTest : public testing::Test {
   }
 
   bool HasChannelBeenDeleted(const base::UnguessableToken id) {
-    return base::Contains(deleted_request_ids_, id);
+    return deleted_request_ids_.contains(id);
   }
 
  private:

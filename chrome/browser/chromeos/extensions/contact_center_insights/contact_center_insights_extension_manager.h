@@ -10,7 +10,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 
@@ -47,10 +46,6 @@ class ContactCenterInsightsExtensionManager : public KeyedService {
         ::extensions::ComponentLoader* component_loader) const;
   };
 
-  // Retrieves the `ContactCenterInsightsExtensionManager` for the given
-  // profile.
-  static ContactCenterInsightsExtensionManager* GetForProfile(Profile* profile);
-
   ContactCenterInsightsExtensionManager(
       ::extensions::ComponentLoader* component_loader,
       Profile* profile,
@@ -65,10 +60,6 @@ class ContactCenterInsightsExtensionManager : public KeyedService {
   bool CanInstallExtension() const;
 
  private:
-  // Retrieves the factory instance for the
-  // `ContactCenterInsightsExtensionManager`.
-  static BrowserContextKeyedServiceFactory* GetFactory();
-
   // Initializes the extension manager and sets up appropriate observers for
   // the relevant pref.
   void Init();

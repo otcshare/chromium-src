@@ -4,6 +4,10 @@
 
 #include "chrome/test/chromedriver/server/http_server.h"
 
+#include "base/compiler_specific.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_interfaces.h"
 #include "net/base/sys_addrinfo.h"
@@ -43,8 +47,7 @@ bool IsMatch(const std::string& system_host, const std::string& hostname) {
 }
 
 void GetCanonicalHostName(std::vector<std::string>* canonical_host_names) {
-  struct addrinfo hints, *info = nullptr, *p;
-  memset(&hints, 0, sizeof(hints));
+  struct addrinfo hints = {}, *info = nullptr, *p;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_CANONNAME;
@@ -71,7 +74,7 @@ bool HostIsSafeToServe(GURL host_url,
                        std::string host_header_value,
                        const std::vector<net::IPAddress>& whitelisted_ips,
                        const std::vector<std::string>& allowed_origins) {
-  auto host = host_url.host();
+  auto host = host_url.GetHost();
   // Check if the origin is in the allowed origins.
   for (const std::string& allowed_origin : allowed_origins) {
     if (allowed_origin == kAnyHostPattern) {
@@ -191,14 +194,18 @@ int HttpServer::Start(uint16_t port, bool allow_remote, bool use_ipv4) {
       new net::TCPServerSocket(nullptr, net::NetLogSource()));
   int status = use_ipv4 ? ListenOnIPv4(server_socket.get(), port, allow_remote)
                         : ListenOnIPv6(server_socket.get(), port, allow_remote);
+
   if (status != net::OK) {
     VLOG(0) << "listen on " << (use_ipv4 ? "IPv4" : "IPv6")
             << " failed with error " << net::ErrorToShortString(status);
     return status;
   }
   server_ = std::make_unique<net::HttpServer>(std::move(server_socket), this);
-  net::IPEndPoint address;
-  return server_->GetLocalAddress(&address);
+  return server_->GetLocalAddress(&local_address_);
+}
+
+const net::IPEndPoint& HttpServer::LocalAddress() const {
+  return local_address_;
 }
 
 void HttpServer::OnConnect(int connection_id) {

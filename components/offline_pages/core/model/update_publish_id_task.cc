@@ -4,7 +4,7 @@
 
 #include "components/offline_pages/core/model/update_publish_id_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/offline_pages/core/client_namespace_constants.h"
 #include "components/offline_pages/core/model/offline_page_model_utils.h"
 #include "components/offline_pages/core/offline_page_metadata_store.h"
@@ -59,7 +59,7 @@ UpdatePublishIdTask::UpdatePublishIdTask(
   DCHECK(store_);
 }
 
-UpdatePublishIdTask::~UpdatePublishIdTask() {}
+UpdatePublishIdTask::~UpdatePublishIdTask() = default;
 
 void UpdatePublishIdTask::Run() {
   store_->Execute(

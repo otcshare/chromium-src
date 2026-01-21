@@ -2,23 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import <memory>
+#import <set>
+
+#import "base/test/task_environment.h"
+#import "components/prefs/in_memory_pref_store.h"
+#import "components/prefs/pref_registry_simple.h"
+#import "components/prefs/pref_service.h"
+#import "components/prefs/pref_service_factory.h"
+#import "components/webui/flags/pref_service_flags_storage.h"
 #import "ios/web_view/internal/cwv_flags_internal.h"
-
-#include <memory>
-#include <set>
-
-#include "base/test/task_environment.h"
-#include "components/flags_ui/pref_service_flags_storage.h"
-#include "components/prefs/in_memory_pref_store.h"
-#include "components/prefs/pref_registry_simple.h"
-#include "components/prefs/pref_service.h"
-#include "components/prefs/pref_service_factory.h"
 #import "testing/gtest_mac.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "testing/platform_test.h"
 
 namespace ios_web_view {
 
@@ -47,15 +42,13 @@ class CWVFlagsTest : public PlatformTest {
 TEST_F(CWVFlagsTest, SetUsesSyncAndWalletSandbox) {
   flags_.usesSyncAndWalletSandbox = YES;
   std::set<std::string> stored_flags = flags_storage_->GetFlags();
-  EXPECT_NE(stored_flags.end(), stored_flags.find(kUseSyncSandboxFlagName));
-  EXPECT_NE(stored_flags.end(),
-            stored_flags.find(kUseWalletSandboxFlagNameEnabled));
+  EXPECT_TRUE(stored_flags.contains(kUseSyncSandboxFlagName));
+  EXPECT_TRUE(stored_flags.contains(kUseWalletSandboxFlagNameEnabled));
 
   flags_.usesSyncAndWalletSandbox = NO;
   stored_flags = flags_storage_->GetFlags();
-  EXPECT_EQ(stored_flags.end(), stored_flags.find(kUseSyncSandboxFlagName));
-  EXPECT_EQ(stored_flags.end(),
-            stored_flags.find(kUseWalletSandboxFlagNameEnabled));
+  EXPECT_FALSE(stored_flags.contains(kUseSyncSandboxFlagName));
+  EXPECT_FALSE(stored_flags.contains(kUseWalletSandboxFlagNameEnabled));
 }
 
 // Tests CWVFlag's usesSyncAndWalletSandbox getter.

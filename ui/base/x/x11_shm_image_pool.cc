@@ -10,15 +10,13 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/environment.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/url_util.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/events/platform/platform_event_source.h"
@@ -57,7 +55,7 @@ std::size_t MaxShmSegmentSize() {
   return max_size;
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 bool IsRemoteHost(const std::string& name) {
   if (name.empty())
     return false;
@@ -82,10 +80,10 @@ bool ShouldUseMitShm(x11::Connection* connection) {
     return false;
 
   // Used by JRE.
-  std::string j2d_use_mitshm;
-  if (env->GetVar("J2D_USE_MITSHM", &j2d_use_mitshm) &&
-      (j2d_use_mitshm == "0" ||
-       base::EqualsCaseInsensitiveASCII(j2d_use_mitshm, "false"))) {
+  std::optional<std::string> j2d_use_mitshm = env->GetVar("J2D_USE_MITSHM");
+  if (j2d_use_mitshm.has_value() &&
+      (*j2d_use_mitshm == "0" ||
+       base::EqualsCaseInsensitiveASCII(*j2d_use_mitshm, "false"))) {
     return false;
   }
 
@@ -95,7 +93,7 @@ bool ShouldUseMitShm(x11::Connection* connection) {
 
   return true;
 }
-#endif
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 
@@ -139,10 +137,10 @@ bool XShmImagePool::Resize(const gfx::Size& pixel_size) {
   std::unique_ptr<XShmImagePool, decltype(cleanup_fn)> cleanup{this,
                                                                cleanup_fn};
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   if (!ShouldUseMitShm(connection_))
     return false;
-#endif
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   if (!ui::QueryShmSupport())
     return false;
@@ -292,7 +290,7 @@ void XShmImagePool::OnEvent(const x11::Event& xev) {
 void XShmImagePool::Cleanup() {
   for (FrameState& state : frame_states_) {
     if (state.shmaddr)
-      shmdt(state.shmaddr);
+      shmdt(state.shmaddr.ExtractAsDangling());
     if (state.shmem_attached_to_server)
       connection_->shm().Detach({state.shmseg});
     state.shmem_attached_to_server = false;

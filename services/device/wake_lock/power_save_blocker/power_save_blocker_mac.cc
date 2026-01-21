@@ -6,11 +6,12 @@
 
 #include <IOKit/pwr_mgt/IOPMLib.h>
 
-#include "base/bind.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
@@ -41,21 +42,23 @@ base::LazyInstance<base::Thread, PowerSaveBlockerLazyInstanceTraits>
 
 }  // namespace
 
-class PowerSaveBlocker::Delegate
-    : public base::RefCountedThreadSafe<PowerSaveBlocker::Delegate> {
+class PowerSaveBlocker::Delegate {
  public:
   Delegate(mojom::WakeLockType type, const std::string& description)
       : type_(type),
         description_(description),
         assertion_(kIOPMNullAssertionID) {}
 
+  Delegate(const Delegate&) = delete;
+  Delegate& operator=(const Delegate&) = delete;
+
+  ~Delegate() = default;
+
   // Does the actual work to apply or remove the desired power save block.
   void ApplyBlock();
   void RemoveBlock();
 
  private:
-  friend class base::RefCountedThreadSafe<Delegate>;
-  ~Delegate() {}
   mojom::WakeLockType type_;
   std::string description_;
   IOPMAssertionID assertion_;
@@ -78,13 +81,12 @@ void PowerSaveBlocker::Delegate::ApplyBlock() {
       break;
     default:
       NOTREACHED();
-      break;
   }
   if (level) {
-    base::ScopedCFTypeRef<CFStringRef> cf_description(
+    base::apple::ScopedCFTypeRef<CFStringRef> cf_description(
         base::SysUTF8ToCFStringRef(description_));
-    IOReturn result = IOPMAssertionCreateWithName(level, kIOPMAssertionLevelOn,
-                                                  cf_description, &assertion_);
+    IOReturn result = IOPMAssertionCreateWithName(
+        level, kIOPMAssertionLevelOn, cf_description.get(), &assertion_);
     LOG_IF(ERROR, result != kIOReturnSuccess)
         << "IOPMAssertionCreate: " << result;
   }
@@ -105,18 +107,13 @@ PowerSaveBlocker::PowerSaveBlocker(
     mojom::WakeLockType type,
     mojom::WakeLockReason reason,
     const std::string& description,
-    scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> blocking_task_runner)
-    : delegate_(new Delegate(type, description)),
-      ui_task_runner_(ui_task_runner),
-      blocking_task_runner_(blocking_task_runner) {
-  g_power_thread.Pointer()->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&Delegate::ApplyBlock, delegate_));
+    scoped_refptr<base::SequencedTaskRunner> ui_task_runner)
+    : delegate_(g_power_thread.Pointer()->task_runner(), type, description) {
+  delegate_.AsyncCall(&Delegate::ApplyBlock);
 }
 
 PowerSaveBlocker::~PowerSaveBlocker() {
-  g_power_thread.Pointer()->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&Delegate::RemoveBlock, delegate_));
+  delegate_.AsyncCall(&Delegate::RemoveBlock);
 }
 
 }  // namespace device

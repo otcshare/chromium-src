@@ -15,8 +15,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -185,19 +184,18 @@ class NotificationProcessorTest : public testing::Test {
   proto::Notification CreateNewInlineReplyableMonochromeIconNotification(
       int64_t notification_id,
       int64_t inline_reply_id,
-      absl::optional<SkColor> icon_color = absl::nullopt,
+      std::optional<SkColor> icon_color = std::nullopt,
       std::string icon = std::string()) {
     proto::Notification notification = CreateNewInlineReplyableNotification(
         notification_id, inline_reply_id, icon);
     proto::App* origin_app = notification.mutable_origin_app();
-    origin_app->set_icon_styling(
-        proto::NotificationIconStyling::ICON_STYLE_MONOCHROME_SMALL_ICON);
-    if (icon_color != absl::nullopt) {
+    origin_app->set_monochrome_icon_mask(icon);
+    if (icon_color != std::nullopt) {
       auto color_rgb = std::make_unique<proto::ColorRgb>();
       color_rgb->set_red(SkColorGetR(*icon_color));
       color_rgb->set_green(SkColorGetG(*icon_color));
       color_rgb->set_blue(SkColorGetB(*icon_color));
-      origin_app->set_allocated_icon_color(color_rgb.release());
+      origin_app->set_allocated_monochrome_icon_color(color_rgb.release());
     }
     return notification;
   }
@@ -286,15 +284,17 @@ TEST_F(NotificationProcessorTest, FailedToDecodeImage) {
   std::vector<proto::Notification> first_set_of_notifications;
 
   // The icon should be an empty image as the decoder failed to decode the
-  // image.
+  // image to be used as both the color_icon and monochrome_icon_mask.
   first_set_of_notifications.emplace_back(CreateNewInlineReplyableNotification(
       kNotificationIdA, kInlineReplyIdA, kIconDataA));
   notification_processor()->AddNotifications(first_set_of_notifications);
   image_decoder_delegate()->RunNextCallback(SkBitmap());
+  image_decoder_delegate()->RunNextCallback(SkBitmap());
 
   const Notification* notification =
       fake_notification_manager()->GetNotification(kNotificationIdA);
-  EXPECT_TRUE(notification->app_metadata().icon.IsEmpty());
+  EXPECT_TRUE(notification->app_metadata().color_icon.IsEmpty());
+  EXPECT_TRUE(notification->app_metadata().monochrome_icon_mask.has_value());
   EXPECT_FALSE(notification->shared_image().has_value());
   EXPECT_FALSE(notification->contact_image().has_value());
 }
@@ -323,8 +323,7 @@ TEST_F(NotificationProcessorTest, MonochromeIconFieldsPopulatedCorrectly) {
 
   const Notification* notification =
       fake_notification_manager()->GetNotification(kNotificationIdA);
-  EXPECT_FALSE(notification->app_metadata().icon_is_monochrome);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_FALSE(notification->app_metadata().icon_color.has_value());
 
@@ -332,13 +331,13 @@ TEST_F(NotificationProcessorTest, MonochromeIconFieldsPopulatedCorrectly) {
   first_set_of_notifications.clear();
   first_set_of_notifications.emplace_back(
       CreateNewInlineReplyableMonochromeIconNotification(
-          kNotificationIdA, kInlineReplyIdA, absl::nullopt, kIconDataA));
+          kNotificationIdA, kInlineReplyIdA, std::nullopt, kIconDataA));
   notification_processor()->AddNotifications(first_set_of_notifications);
   image_decoder_delegate()->RunAllCallbacks();
 
   notification = fake_notification_manager()->GetNotification(kNotificationIdA);
   EXPECT_TRUE(notification->app_metadata().icon_is_monochrome);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_FALSE(notification->app_metadata().icon_color.has_value());
 
@@ -352,7 +351,7 @@ TEST_F(NotificationProcessorTest, MonochromeIconFieldsPopulatedCorrectly) {
 
   notification = fake_notification_manager()->GetNotification(kNotificationIdA);
   EXPECT_TRUE(notification->app_metadata().icon_is_monochrome);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_TRUE(notification->app_metadata().icon_color.has_value());
   EXPECT_TRUE(*notification->app_metadata().icon_color == kIconColor);
@@ -368,7 +367,7 @@ TEST_F(NotificationProcessorTest, MonochromeIconFieldsPopulatedCorrectly) {
 
   notification = fake_notification_manager()->GetNotification(kNotificationIdA);
   EXPECT_TRUE(notification->app_metadata().icon_is_monochrome);
-  EXPECT_TRUE(notification->app_metadata().icon.IsEmpty());
+  EXPECT_TRUE(notification->app_metadata().color_icon.IsEmpty());
   EXPECT_FALSE(notification->app_metadata().icon_color.has_value());
 }
 
@@ -383,7 +382,7 @@ TEST_F(NotificationProcessorTest, ImageFieldPopulatedCorrectly) {
 
   const Notification* notification =
       fake_notification_manager()->GetNotification(kNotificationIdA);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_FALSE(notification->shared_image().has_value());
   EXPECT_FALSE(notification->contact_image().has_value());
@@ -397,7 +396,7 @@ TEST_F(NotificationProcessorTest, ImageFieldPopulatedCorrectly) {
   image_decoder_delegate()->RunAllCallbacks();
 
   notification = fake_notification_manager()->GetNotification(kNotificationIdA);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_TRUE(
       gfx::test::AreImagesEqual(*notification->shared_image(), TestImage()));
@@ -413,7 +412,7 @@ TEST_F(NotificationProcessorTest, ImageFieldPopulatedCorrectly) {
   image_decoder_delegate()->RunAllCallbacks();
 
   notification = fake_notification_manager()->GetNotification(kNotificationIdA);
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_FALSE(notification->shared_image().has_value());
   EXPECT_TRUE(
@@ -426,7 +425,7 @@ TEST_F(NotificationProcessorTest, ImageFieldPopulatedCorrectly) {
       kContactImageA));
   notification_processor()->AddNotifications(first_set_of_notifications);
   image_decoder_delegate()->RunAllCallbacks();
-  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().icon,
+  EXPECT_TRUE(gfx::test::AreImagesEqual(notification->app_metadata().color_icon,
                                         TestImage()));
   EXPECT_TRUE(
       gfx::test::AreImagesEqual(*notification->shared_image(), TestImage()));
@@ -462,9 +461,10 @@ TEST_F(NotificationProcessorTest, AddRemoveClearWithoutRace) {
 
   notification_processor()->AddNotifications(first_set_of_notifications);
 
-  // 6 image decode callbacks will occur for kIconDataA, kSharedImageA,
-  // kContactImageA, kIconDataB, kSharedImageB, and kContactImageB.
-  EXPECT_EQ(6u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
+  // 8 image decode callbacks will occur for kIconDataA, data for icons twice
+  // for each notification, kSharedImageA, kContactImageA, kIconDataB,
+  // kSharedImageB, and kContactImageB.
+  EXPECT_EQ(8u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
   image_decoder_delegate()->RunAllCallbacks();
 
   EXPECT_EQ(2u, fake_notification_manager()->num_notifications());
@@ -520,25 +520,28 @@ TEST_F(NotificationProcessorTest, AddRemoveWithRace) {
   EXPECT_EQ(3u, NumPendingRequests());
   EXPECT_EQ(0u, fake_notification_manager()->num_notifications());
 
-  // 3 image decode callbacks will occur. When the last image decode callback is
-  // finished running, which in this case is icon2, it will cause the next
-  // notification edit request to be executed.
+  // 5 image decode callbacks will occur (two icons, two monochrome icons, and a
+  // shared image). When the last image decode callback is finished running,
+  // which in this case is original icon2, it will cause the next notification
+  // edit request to be executed.
+  EXPECT_EQ(5u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
+  EXPECT_EQ(3u, NumPendingRequests());
+  image_decoder_delegate()->RunNextCallback(TestBitmap());
+
+  EXPECT_EQ(4u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
+  EXPECT_EQ(3u, NumPendingRequests());
+  image_decoder_delegate()->RunNextCallback(TestBitmap());
+
   EXPECT_EQ(3u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
-  EXPECT_EQ(3u, NumPendingRequests());
-  image_decoder_delegate()->RunNextCallback(TestBitmap());
-
-  EXPECT_EQ(2u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
-  EXPECT_EQ(3u, NumPendingRequests());
-  image_decoder_delegate()->RunNextCallback(TestBitmap());
-
-  EXPECT_EQ(1u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
   EXPECT_EQ(3u, NumPendingRequests());
 
   // The scheduled remove callback will occur, then subsequently the add
   // notification with 1 image.
   image_decoder_delegate()->RunNextCallback(TestBitmap());
+  image_decoder_delegate()->RunNextCallback(TestBitmap());
+  image_decoder_delegate()->RunNextCallback(TestBitmap());
   EXPECT_EQ(1u, NumPendingRequests());
-  EXPECT_EQ(1u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
+  EXPECT_EQ(2u, image_decoder_delegate()->NumberOfDecodeImageCallbacks());
 
   EXPECT_EQ(1u, fake_notification_manager()->num_notifications());
   EXPECT_FALSE(fake_notification_manager()->GetNotification(kNotificationIdA));
@@ -667,5 +670,4 @@ TEST_F(NotificationProcessorTest, ActionIdMapPopulatedCorrectly) {
                                  Notification::ActionType::kHangup));
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

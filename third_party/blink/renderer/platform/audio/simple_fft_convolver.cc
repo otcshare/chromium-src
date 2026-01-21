@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/audio/simple_fft_convolver.h"
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 
 namespace blink {
@@ -48,8 +50,8 @@ void SimpleFFTConvolver::Process(const float* source_p,
                     dest_p, 1, half_size);
 
   // Finally, save 2nd half for the next time.
-  last_overlap_buffer_.CopyToRange(output_buffer_.Data() + half_size, 0,
-                                   half_size);
+  last_overlap_buffer_.CopyToRange(
+      UNSAFE_TODO(output_buffer_.Data() + half_size), 0, half_size);
 }
 
 void SimpleFFTConvolver::Reset() {

@@ -9,7 +9,8 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
 
 namespace chrome_pdf {
 
@@ -46,17 +47,17 @@ class URLLoaderWrapper {
   virtual void Close() = 0;
 
   // Open new connection and send http range request.
-  virtual void OpenRange(const std::string& url,
-                         const std::string& referrer_url,
-                         uint32_t position,
-                         uint32_t size,
-                         base::OnceCallback<void(int)> callback) = 0;
+  virtual void OpenRange(
+      const std::string& url,
+      const std::string& referrer_url,
+      uint32_t position,
+      uint32_t size,
+      base::OnceCallback<void(bool /*success*/)> callback) = 0;
 
   // Read the response body. The size of the buffer must be large enough to
   // hold the specified number of bytes to read.
   // This function might perform a partial read.
-  virtual void ReadResponseBody(char* buffer,
-                                int buffer_size,
+  virtual void ReadResponseBody(base::span<uint8_t> buffer,
                                 base::OnceCallback<void(int)> callback) = 0;
 };
 

@@ -8,8 +8,10 @@
 #include <array>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "content/public/browser/permission_result.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 
@@ -40,7 +42,7 @@ class FramePermissionController {
   // Sets the default |state| for the specified |permission|. Setting |state| to
   // ASK causes the |default_permissions_| state to be used for |permission| for
   // this origin.
-  // TODO(crbug.com/1063094): Allow ASK to be the default state, to indicate
+  // TODO(crbug.com/40680523): Allow ASK to be the default state, to indicate
   // that the user should be prompted.
   void SetDefaultPermissionState(blink::PermissionType permission,
                                  blink::mojom::PermissionStatus state);
@@ -55,15 +57,14 @@ class FramePermissionController {
   // is resolved, the |callback| is called with a list of status values, one for
   // each value in |permissions|, in the same order.
   //
-  // TODO(crbug.com/1063094): Current implementation doesn't actually prompt the
-  // user: all permissions in the ASK state are denied silently. Define
+  // TODO(crbug.com/40680523): Current implementation doesn't actually prompt
+  // the user: all permissions in the ASK state are denied silently. Define
   // fuchsia.web.PermissionManager protocol and use it to request permissions.
   void RequestPermissions(
       const std::vector<blink::PermissionType>& permissions,
       const url::Origin& requesting_origin,
-      bool user_gesture,
-      base::OnceCallback<
-          void(const std::vector<blink::mojom::PermissionStatus>&)> callback);
+      base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
+          callback);
 
  private:
   struct PermissionSet {
@@ -85,7 +86,7 @@ class FramePermissionController {
   // to ASK for specific origins.
   PermissionSet GetEffectivePermissionsForOrigin(const url::Origin& origin);
 
-  content::WebContents* const web_contents_;
+  const raw_ptr<content::WebContents> web_contents_;
 
   base::flat_map<url::Origin, PermissionSet> per_origin_permissions_;
   PermissionSet default_permissions_{blink::mojom::PermissionStatus::DENIED};

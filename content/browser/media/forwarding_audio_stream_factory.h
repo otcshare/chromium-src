@@ -7,10 +7,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
@@ -19,16 +21,14 @@
 #include "content/public/browser/audio_stream_broker.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "media/mojo/mojom/audio_output_stream.mojom.h"
-#include "media/mojo/mojom/audio_processing.mojom.h"
+#include "media/mojo/mojom/audio_processing.mojom-forward.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/media/renderer_audio_input_stream_factory.mojom.h"
 
 namespace media {
 class AudioParameters;
-class UserInputMonitorBase;
 }
 
 namespace content {
@@ -57,7 +57,6 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
   class CONTENT_EXPORT Core final : public AudioStreamBroker::LoopbackSource {
    public:
     Core(base::WeakPtr<ForwardingAudioStreamFactory> owner,
-         media::UserInputMonitorBase* user_input_monitor,
          std::unique_ptr<AudioStreamBrokerFactory> factory);
 
     Core(const Core&) = delete;
@@ -69,7 +68,7 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
 
     base::WeakPtr<ForwardingAudioStreamFactory::Core> AsWeakPtr();
 
-    // TODO(https://crbug.com/787806): Automatically restore streams on audio
+    // TODO(crbug.com/40551225): Automatically restore streams on audio
     // service restart.
     void CreateInputStream(
         int render_process_id,
@@ -89,6 +88,7 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     void CreateOutputStream(
         int render_process_id,
         int render_frame_id,
+        const GlobalRenderFrameHostToken& main_frame_token,
         const std::string& device_id,
         const media::AudioParameters& params,
         mojo::PendingRemote<media::mojom::AudioOutputStreamProviderClient>
@@ -129,8 +129,6 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     void ResetRemoteFactoryPtrIfIdle();
     void ResetRemoteFactoryPtr();
 
-    const raw_ptr<media::UserInputMonitorBase> user_input_monitor_;
-
     // Used for posting tasks the UI thread to communicate when a loopback
     // stream is started/stopped. Weak since |this| on the IO thread outlives
     // |owner| on the UI thread.
@@ -151,16 +149,17 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
 
     // Running id used for tracking audible streams. We keep count here to avoid
     // collisions.
-    // TODO(https://crbug.com/830494): Refactor to make this unnecessary and
+    // TODO(crbug.com/40570752): Refactor to make this unnecessary and
     // remove it.
     int stream_id_counter_ = 0;
 
     // Instantiated when |outputs_| should be muted, empty otherwise.
-    absl::optional<AudioMutingSession> muter_;
+    std::optional<AudioMutingSession> muter_;
 
     StreamBrokerSet inputs_;
     StreamBrokerSet outputs_;
-    base::flat_set<AudioStreamBroker::LoopbackSink*> loopback_sinks_;
+    base::flat_set<raw_ptr<AudioStreamBroker::LoopbackSink, CtnExperimental>>
+        loopback_sinks_;
 
     base::WeakPtrFactory<ForwardingAudioStreamFactory::Core> weak_ptr_factory_{
         this};
@@ -181,7 +180,6 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
   // the streams created with this factory will not be consumed by a renderer.
   ForwardingAudioStreamFactory(
       WebContents* web_contents,
-      media::UserInputMonitorBase* user_input_monitor,
       std::unique_ptr<AudioStreamBrokerFactory> factory);
 
   ForwardingAudioStreamFactory(const ForwardingAudioStreamFactory&) = delete;

@@ -5,12 +5,11 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_TEST_NETWORK_PORTAL_DETECTOR_MIXIN_H_
 #define CHROME_BROWSER_ASH_LOGIN_TEST_NETWORK_PORTAL_DETECTOR_MIXIN_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
-#include "chromeos/ash/components/network/portal_detector/network_portal_detector.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace ash {
-
-class NetworkPortalDetectorTestImpl;
 
 // DEPRECATED, DO NOT USE IN NEW TESTS. NetworkStateHandler should be used
 // to track portal state. This mixin is maintained for compatibility with
@@ -20,6 +19,13 @@ class NetworkPortalDetectorTestImpl;
 // network captive portal detector state.
 class NetworkPortalDetectorMixin : public InProcessBrowserTestMixin {
  public:
+  enum class NetworkStatus {
+    kUnknown,
+    kOffline,
+    kOnline,
+    kPortal,
+  };
+
   explicit NetworkPortalDetectorMixin(InProcessBrowserTestMixinHost* host);
   ~NetworkPortalDetectorMixin() override;
 
@@ -32,7 +38,7 @@ class NetworkPortalDetectorMixin : public InProcessBrowserTestMixin {
   // completion.
   void SetDefaultNetwork(const std::string& network_guid,
                          const std::string& network_type,
-                         NetworkPortalDetector::CaptivePortalStatus status);
+                         NetworkStatus network_status);
 
   // Simulates no network state. It notifies NetworkPortalDetector observers of
   // the portal detection state.
@@ -40,20 +46,16 @@ class NetworkPortalDetectorMixin : public InProcessBrowserTestMixin {
 
   // Sets the default network's captive portal state. It notifies
   // NetworkPortalDetector observers of the new portal detection state.
-  void SimulateDefaultNetworkState(
-      NetworkPortalDetector::CaptivePortalStatus status);
+  void SimulateDefaultNetworkState(NetworkStatus status);
 
   // InProcessBrowserTestMixin:
   void SetUpOnMainThread() override;
-  void TearDownOnMainThread() override;
 
  private:
-  void SetShillDefaultNetwork(
-      const std::string& network_guid,
-      const std::string& network_type,
-      NetworkPortalDetector::CaptivePortalStatus status);
+  void SetShillDefaultNetwork(const std::string& network_guid,
+                              const std::string& network_type,
+                              NetworkStatus status);
 
-  NetworkPortalDetectorTestImpl* network_portal_detector_ = nullptr;
   std::string default_network_guid_;
 };
 

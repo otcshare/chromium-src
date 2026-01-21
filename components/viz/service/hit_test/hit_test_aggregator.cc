@@ -52,30 +52,35 @@ void HitTestAggregator::Aggregate(const SurfaceId& display_surface_id) {
   SendHitTestData();
 }
 
+const std::vector<AggregatedHitTestRegion>& HitTestAggregator::GetHitTestData()
+    const {
+  return hit_test_data_;
+}
+
 void HitTestAggregator::SendHitTestData() {
   hit_test_data_.resize(hit_test_data_size_);
   delegate_->OnAggregatedHitTestRegionListUpdated(root_frame_sink_id_,
                                                   hit_test_data_);
 }
 
-absl::optional<int64_t> HitTestAggregator::GetTraceIdIfUpdated(
+std::optional<int64_t> HitTestAggregator::GetTraceIdIfUpdated(
     const SurfaceId& surface_id,
-    uint64_t active_frame_index) {
+    uint32_t active_frame_index) {
   bool enabled;
   TRACE_EVENT_CATEGORY_GROUP_ENABLED(
       TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"), &enabled);
   if (!enabled)
-    return absl::nullopt;
+    return std::nullopt;
 
-  uint64_t& frame_index = last_active_frame_index_[surface_id.frame_sink_id()];
+  uint32_t& frame_index = last_active_frame_index_[surface_id.frame_sink_id()];
   if (frame_index == active_frame_index)
-    return absl::nullopt;
+    return std::nullopt;
   frame_index = active_frame_index;
   return ~hit_test_manager_->GetTraceId(surface_id);
 }
 
 void HitTestAggregator::AppendRoot(const SurfaceId& surface_id) {
-  uint64_t active_frame_index;
+  uint32_t active_frame_index;
   const HitTestRegionList* hit_test_region_list =
       hit_test_manager_->GetActiveHitTestRegionList(
           local_surface_id_lookup_delegate_, surface_id.frame_sink_id(),
@@ -84,13 +89,15 @@ void HitTestAggregator::AppendRoot(const SurfaceId& surface_id) {
   if (!hit_test_region_list)
     return;
 
-  absl::optional<int64_t> trace_id =
+  std::optional<int64_t> trace_id =
       GetTraceIdIfUpdated(surface_id, active_frame_index);
-  TRACE_EVENT_WITH_FLOW1(
-      TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"), "Event.Pipeline",
-      TRACE_ID_GLOBAL(trace_id.value_or(-1)),
-      trace_id ? TRACE_EVENT_FLAG_FLOW_IN : TRACE_EVENT_FLAG_NONE, "step",
-      "AggregateHitTestData(Root)");
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"),
+              "Event.Pipeline", "step", "AggregateHitTestData(Root)",
+              [&](perfetto::EventContext& ctx) {
+                if (trace_id) {
+                  perfetto::TerminatingFlow::Global (*trace_id)(ctx);
+                }
+              });
 
   DCHECK(referenced_child_regions_.empty());
   referenced_child_regions_.insert(surface_id.frame_sink_id());
@@ -134,7 +141,7 @@ size_t HitTestAggregator::AppendRegion(size_t region_index,
 
     referenced_child_regions_.insert(region.frame_sink_id);
 
-    uint64_t active_frame_index;
+    uint32_t active_frame_index;
     const HitTestRegionList* hit_test_region_list =
         hit_test_manager_->GetActiveHitTestRegionList(
             local_surface_id_lookup_delegate_, region.frame_sink_id,
@@ -168,13 +175,15 @@ size_t HitTestAggregator::AppendRegion(size_t region_index,
                 region.frame_sink_id);
         SurfaceId surface_id(region.frame_sink_id, local_surface_id);
 
-        absl::optional<int64_t> trace_id =
+        std::optional<int64_t> trace_id =
             GetTraceIdIfUpdated(surface_id, active_frame_index);
-        TRACE_EVENT_WITH_FLOW1(
-            TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"), "Event.Pipeline",
-            TRACE_ID_GLOBAL(trace_id.value_or(-1)),
-            trace_id ? TRACE_EVENT_FLAG_FLOW_IN : TRACE_EVENT_FLAG_NONE, "step",
-            "AggregateHitTestData");
+        TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"),
+                    "Event.Pipeline", "step", "AggregateHitTestData",
+                    [&](perfetto::EventContext& ctx) {
+                      if (trace_id) {
+                        perfetto::TerminatingFlow::Global (*trace_id)(ctx);
+                      }
+                    });
       }
 
       for (const auto& child_region : hit_test_region_list->regions) {

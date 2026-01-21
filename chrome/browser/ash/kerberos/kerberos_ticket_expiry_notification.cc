@@ -8,7 +8,7 @@
 
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/notifications/notification_display_service.h"
@@ -53,7 +53,7 @@ constexpr SystemNotificationWarningLevel kWarningLevel =
 
 void OnClick(ClickCallback click_callback,
              const std::string& passed_principal_name,
-             absl::optional<int> /* button_idx */) {
+             std::optional<int> /* button_idx */) {
   click_callback.Run(passed_principal_name);
 }
 

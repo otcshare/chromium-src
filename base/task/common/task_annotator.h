@@ -7,14 +7,29 @@
 
 #include <stdint.h>
 
+#include <string_view>
+
+#include "base/auto_reset.h"
 #include "base/base_export.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/pending_task.h"
-#include "base/strings/string_piece.h"
 #include "base/time/tick_clock.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
+#include "base/types/pass_key.h"
 
 namespace base {
+
+// Enables task-controlled purge for the scheduler loop quarantine in
+// TaskAnnotator.
+BASE_EXPORT void EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+// Disables task-controlled purge for the scheduler loop quarantine in
+// TaskAnnotator. For use in tests.
+BASE_EXPORT void DisableSchedulerLoopQuarantineTaskControlledPurgeForTesting();
+
+namespace sequence_manager::internal {
+class WorkQueue;
+}
 
 // Constant used to measure which long-running tasks should be traced.
 constexpr TimeDelta kMaxTaskDurationTimeDelta = Milliseconds(4);
@@ -41,12 +56,21 @@ class BASE_EXPORT TaskAnnotator {
   class LongTaskTracker;
 
   static const PendingTask* CurrentTaskForThread();
+  static void SetCurrentTaskForThread(
+      PassKey<sequence_manager::internal::WorkQueue>,
+      const PendingTask* pending_task);
 
   static void OnIPCReceived(const char* interface_name,
                             uint32_t (*method_info)(),
                             bool is_response);
 
   static void MarkCurrentTaskAsInterestingForTracing();
+
+  //  TRACE_EVENT argument helper, writing the task start time into
+  //  EventContext.
+  //  NOTE: Should only be used with TRACE_EVENT or TRACE_EVENT_BEGIN since the
+  //          function records the timestamp for event start at call time.
+  static void EmitTaskTimingDetails(perfetto::EventContext& ctx);
 
   TaskAnnotator();
 
@@ -59,14 +83,14 @@ class BASE_EXPORT TaskAnnotator {
   // giving one last chance for this TaskAnnotator to add metadata to
   // |pending_task| before it is moved into the queue.
   void WillQueueTask(perfetto::StaticString trace_event_name,
-                     PendingTask* pending_task);
+                     TaskMetadata* pending_task);
 
   // Creates a process-wide unique ID to represent this task in trace events.
   // This will be mangled with a Process ID hash to reduce the likelyhood of
   // colliding with TaskAnnotator pointers on other processes. Callers may use
   // this when generating their own flow events (i.e. when passing
   // |queue_function == nullptr| in above methods).
-  uint64_t GetTaskTraceID(const PendingTask& task) const;
+  uint64_t GetTaskTraceID(const TaskMetadata& task) const;
 
   // Run the given task, emitting the toplevel trace event and additional
   // trace event arguments. Like for TRACE_EVENT macros, all of the arguments
@@ -80,8 +104,9 @@ class BASE_EXPORT TaskAnnotator {
         "toplevel", event_name,
         [&](perfetto::EventContext& ctx) {
           EmitTaskLocation(ctx, pending_task);
+          MaybeEmitDelayAndPolicy(ctx, pending_task);
           MaybeEmitIncomingTaskFlow(ctx, pending_task);
-          MaybeEmitIPCHashAndDelay(ctx, pending_task);
+          MaybeEmitIPCHash(ctx, pending_task);
         },
         std::forward<Args>(args)...);
     RunTaskImpl(pending_task);
@@ -91,7 +116,7 @@ class BASE_EXPORT TaskAnnotator {
   friend class TaskAnnotatorBacktraceIntegrationTest;
 
   // Run a previously queued task.
-  void NOT_TAIL_CALLED RunTaskImpl(PendingTask& pending_task);
+  NOT_TAIL_CALLED void RunTaskImpl(PendingTask& pending_task);
 
   // Registers an ObserverForTesting that will be invoked by all TaskAnnotators'
   // RunTask(). This registration and the implementation of BeforeRunTask() are
@@ -99,23 +124,23 @@ class BASE_EXPORT TaskAnnotator {
   static void RegisterObserverForTesting(ObserverForTesting* observer);
   static void ClearObserverForTesting();
 
-#if BUILDFLAG(ENABLE_BASE_TRACING)
   // TRACE_EVENT argument helper, writing the task location data into
   // EventContext.
   static void EmitTaskLocation(perfetto::EventContext& ctx,
                                const PendingTask& task);
+  static void MaybeEmitDelayAndPolicy(perfetto::EventContext& ctx,
+                                      const PendingTask& task);
 
   // TRACE_EVENT argument helper, writing the incoming task flow information
   // into EventContext if toplevel.flow category is enabled.
   void MaybeEmitIncomingTaskFlow(perfetto::EventContext& ctx,
                                  const PendingTask& task) const;
 
-  void MaybeEmitIPCHashAndDelay(perfetto::EventContext& ctx,
-                                const PendingTask& task) const;
-#endif  //  BUILDFLAG(ENABLE_BASE_TRACING)
+  void MaybeEmitIPCHash(perfetto::EventContext& ctx,
+                        const PendingTask& task) const;
 };
 
-class BASE_EXPORT TaskAnnotator::ScopedSetIpcHash {
+class BASE_EXPORT [[maybe_unused, nodiscard]] TaskAnnotator::ScopedSetIpcHash {
  public:
   explicit ScopedSetIpcHash(uint32_t ipc_hash);
 
@@ -131,20 +156,22 @@ class BASE_EXPORT TaskAnnotator::ScopedSetIpcHash {
   uint32_t GetIpcHash() const { return ipc_hash_; }
   const char* GetIpcInterfaceName() const { return ipc_interface_name_; }
 
-  static uint32_t MD5HashMetricName(base::StringPiece name);
+  static uint32_t MD5HashMetricName(std::string_view name);
 
  private:
   ScopedSetIpcHash(uint32_t ipc_hash, const char* ipc_interface_name);
-  raw_ptr<ScopedSetIpcHash> old_scoped_ipc_hash_ = nullptr;
-  uint32_t ipc_hash_ = 0;
-  const char* ipc_interface_name_ = nullptr;
+
+  const AutoReset<ScopedSetIpcHash*> resetter_;
+  uint32_t ipc_hash_;
+  const char* ipc_interface_name_;
 };
 
-class BASE_EXPORT TaskAnnotator::LongTaskTracker {
+class BASE_EXPORT [[maybe_unused, nodiscard]] TaskAnnotator::LongTaskTracker {
  public:
-  explicit LongTaskTracker(const TickClock* tick_clock,
-                           PendingTask& pending_task,
-                           TaskAnnotator* task_annotator);
+  LongTaskTracker(const TickClock* tick_clock,
+                  PendingTask& pending_task,
+                  TaskAnnotator* task_annotator,
+                  TimeTicks task_start_time);
 
   LongTaskTracker(const LongTaskTracker&) = delete;
 
@@ -162,20 +189,25 @@ class BASE_EXPORT TaskAnnotator::LongTaskTracker {
   // calculating scroll jank metrics.
   bool is_interesting_task = false;
 
+  TimeTicks GetTaskStartTime() const { return task_start_time_; }
+
  private:
   void EmitReceivedIPCDetails(perfetto::EventContext& ctx);
 
-  // For tracking task duration
-  raw_ptr<const TickClock> tick_clock_;  // Not owned.
+  const AutoReset<LongTaskTracker*> resetter_;
+
+  // For tracking task duration.
+  //
+  // RAW_PTR_EXCLUSION: Performance reasons: based on analysis of sampling
+  // profiler data (TaskAnnotator::LongTaskTracker::~LongTaskTracker).
+  RAW_PTR_EXCLUSION const TickClock* tick_clock_;  // Not owned.
+
+  // Task start time, sampled before the LongTaskTracker instance
+  // is created.
   TimeTicks task_start_time_;
   TimeTicks task_end_time_;
 
   // Tracing variables.
-
-  // Use this to ensure that tracing and NowTicks() are not called
-  // unnecessarily.
-  bool is_tracing_;
-  raw_ptr<LongTaskTracker> old_long_task_tracker_ = nullptr;
   const char* ipc_interface_name_ = nullptr;
   uint32_t ipc_hash_ = 0;
 
@@ -183,8 +215,10 @@ class BASE_EXPORT TaskAnnotator::LongTaskTracker {
   // known. Note that this will not compile in the Native client.
   uint32_t (*ipc_method_info_)();
   bool is_response_ = false;
-  PendingTask& pending_task_;
-  raw_ptr<TaskAnnotator> task_annotator_;
+  // RAW_PTR_EXCLUSION: Performance reasons: based on analysis of sampling
+  // profiler data (TaskAnnotator::LongTaskTracker::~LongTaskTracker).
+  [[maybe_unused]] RAW_PTR_EXCLUSION PendingTask& pending_task_;
+  [[maybe_unused]] RAW_PTR_EXCLUSION TaskAnnotator* task_annotator_;
 };
 
 }  // namespace base

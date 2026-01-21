@@ -6,7 +6,6 @@
 
 #include <map>
 
-#include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/download/internal/background_service/startup_status.h"
@@ -50,14 +49,13 @@ std::string TaskTypeToHistogramSuffix(DownloadTaskType task_type) {
     case DownloadTaskType::CLEANUP_TASK:
       return "CleanUpTask";
     case DownloadTaskType::DOWNLOAD_AUTO_RESUMPTION_TASK:
+    case DownloadTaskType::DOWNLOAD_AUTO_RESUMPTION_UNMETERED_TASK:
+    case DownloadTaskType::DOWNLOAD_AUTO_RESUMPTION_ANY_NETWORK_TASK:
       NOTREACHED();
-      return "DownloadAutoResumptionTask";
     case DownloadTaskType::DOWNLOAD_LATER_TASK:
       NOTREACHED();
-      return "DownloadLaterTask";
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Converts FileCleanupReason to histogram suffix.
@@ -76,7 +74,6 @@ std::string FileCleanupReasonToHistogramSuffix(FileCleanupReason reason) {
       NOTREACHED();
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Helper method to log the pause reason for a particular download.
@@ -222,16 +219,6 @@ void LogEntryEvent(DownloadEvent event) {
 
 void LogEntryRetryCount(uint32_t retry_count) {
   UMA_HISTOGRAM_COUNTS_100("Download.Service.Entry.RetryCount", retry_count);
-}
-
-void LogEntryRemovedWhileWaitingForUploadResponse() {
-  UMA_HISTOGRAM_BOOLEAN("Download.Service.Upload.EntryNotFound", true);
-}
-
-void LogHasUploadData(DownloadClient client, bool has_upload_data) {
-  std::string name("Download.Service.Upload.HasUploadData");
-  name.append(".").append(BackgroundDownloadClientToString(client));
-  base::UmaHistogramBoolean(name, has_upload_data);
 }
 
 }  // namespace stats

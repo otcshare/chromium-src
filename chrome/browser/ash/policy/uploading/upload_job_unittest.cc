@@ -10,9 +10,9 @@
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
@@ -37,15 +37,15 @@ namespace policy {
 
 namespace {
 
-const char kUploadPath[] = "/upload";
-const char kRobotAccountId[] = "robot@gmail.com";
-const char kCustomField1[] = "customfield1";
-const char kCustomField2[] = "customfield2";
-const char kTestPayload1[] = "**||--||PAYLOAD1||--||**";
-const char kTestPayload2[] = "**||--||PAYLOAD2||--||**";
-const char kTokenExpired[] = "EXPIRED_TOKEN";
-const char kTokenInvalid[] = "INVALID_TOKEN";
-const char kTokenValid[] = "VALID_TOKEN";
+constexpr char kUploadPath[] = "/upload";
+constexpr char kRobotAccountId[] = "robot@gserviceaccount.com";
+constexpr char kCustomField1[] = "customfield1";
+constexpr char kCustomField2[] = "customfield2";
+constexpr char kTestPayload1[] = "**||--||PAYLOAD1||--||**";
+constexpr char kTestPayload2[] = "**||--||PAYLOAD2||--||**";
+constexpr char kTokenExpired[] = "EXPIRED_TOKEN";
+constexpr char kTokenInvalid[] = "INVALID_TOKEN";
+constexpr char kTokenValid[] = "VALID_TOKEN";
 
 class RepeatingMimeBoundaryGenerator
     : public UploadJobImpl::MimeBoundaryGenerator {
@@ -58,7 +58,7 @@ class RepeatingMimeBoundaryGenerator
   RepeatingMimeBoundaryGenerator& operator=(
       const RepeatingMimeBoundaryGenerator&) = delete;
 
-  ~RepeatingMimeBoundaryGenerator() override {}
+  ~RepeatingMimeBoundaryGenerator() override = default;
 
   // MimeBoundaryGenerator:
   std::string GenerateBoundary() const override {
@@ -179,15 +179,16 @@ class FakeOAuth2AccessTokenManagerDelegate
   std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const CoreAccountId& account_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      OAuth2AccessTokenConsumer* consumer) override {
-    EXPECT_EQ(CoreAccountId(kRobotAccountId), account_id);
+      OAuth2AccessTokenConsumer* consumer,
+      const std::string& token_binding_challenge) override {
+    EXPECT_EQ(CoreAccountId::FromRobotEmail(kRobotAccountId), account_id);
     return GaiaAccessTokenFetcher::
         CreateExchangeRefreshTokenForAccessTokenInstance(
             consumer, url_loader_factory, "fake_refresh_token");
   }
 
   bool HasRefreshToken(const CoreAccountId& account_id) const override {
-    return CoreAccountId(kRobotAccountId) == account_id;
+    return CoreAccountId::FromRobotEmail(kRobotAccountId) == account_id;
   }
 };
 
@@ -240,9 +241,9 @@ class UploadJobTestBase : public testing::Test, public UploadJob::Delegate {
       std::unique_ptr<UploadJobImpl::MimeBoundaryGenerator>
           mime_boundary_generator) {
     std::unique_ptr<UploadJob> upload_job(new UploadJobImpl(
-        GetServerURL(), CoreAccountId(kRobotAccountId), &access_token_manager_,
-        url_loader_factory_, this, std::move(mime_boundary_generator),
-        TRAFFIC_ANNOTATION_FOR_TESTS,
+        GetServerURL(), CoreAccountId::FromRobotEmail(kRobotAccountId),
+        &access_token_manager_, url_loader_factory_, this,
+        std::move(mime_boundary_generator), TRAFFIC_ANNOTATION_FOR_TESTS,
         base::SingleThreadTaskRunner::GetCurrentDefault()));
 
     std::map<std::string, std::string> header_entries;
@@ -269,7 +270,7 @@ class UploadJobTestBase : public testing::Test, public UploadJob::Delegate {
 
 class UploadFlowTest : public UploadJobTestBase {
  public:
-  UploadFlowTest() {}
+  UploadFlowTest() = default;
 
   // UploadJobTestBase:
   void SetUp() override {
@@ -390,7 +391,7 @@ TEST_F(UploadFlowTest, InternalServerError) {
 
 class UploadRequestTest : public UploadJobTestBase {
  public:
-  UploadRequestTest() {}
+  UploadRequestTest() = default;
 
   // UploadJobTestBase:
   void SetUp() override {

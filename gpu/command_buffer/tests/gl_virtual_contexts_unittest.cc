@@ -7,6 +7,9 @@
 #include <GLES2/gl2extchromium.h>
 #include <stdint.h>
 
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
@@ -134,12 +137,8 @@ void SetupSimpleShader(const uint8_t* color) {
   GLTestHelper::SetupUnitQuad(position_loc);
 
   GLuint color_loc = glGetUniformLocation(program, "u_color");
-  glUniform4f(
-      color_loc,
-      color[0] / 255.0f,
-      color[1] / 255.0f,
-      color[2] / 255.0f,
-      color[3] / 255.0f);
+  glUniform4f(color_loc, color[0] / 255.0f, UNSAFE_TODO(color[1]) / 255.0f,
+              UNSAFE_TODO(color[2]) / 255.0f, UNSAFE_TODO(color[3]) / 255.0f);
 }
 
 void TestDraw(int size) {
@@ -163,11 +162,11 @@ TEST_P(GLVirtualContextsTest, Basic) {
     raw_ptr<GLManager> manager;
   };
   const int kNumTests = 3;
-  TestInfo tests[] = {
-    { kSize0, { 255, 0, 0, 0, }, &gl_real_, },
-    { kSize1, { 0, 255, 0, 0, }, &gl1_, },
-    { kSize2, { 0, 0, 255, 0, }, &gl2_, },
-  };
+  auto tests = std::to_array<TestInfo>({
+      {kSize0, {255, 0, 0, 0}, &gl_real_},
+      {kSize1, {0, 255, 0, 0}, &gl1_},
+      {kSize2, {0, 0, 255, 0}, &gl2_},
+  });
 
   for (int ii = 0; ii < kNumTests; ++ii) {
     const TestInfo& test = tests[ii];
@@ -322,7 +321,6 @@ TEST_P(GLVirtualContextsTest, VirtualQueries) {
     GL_COMMANDS_COMPLETED_CHROMIUM,
     GL_COMMANDS_ISSUED_CHROMIUM,
     GL_GET_ERROR_QUERY_CHROMIUM,
-    GL_LATENCY_QUERY_CHROMIUM,
     GL_TIME_ELAPSED_EXT,
   };
 
@@ -445,4 +443,3 @@ INSTANTIATE_TEST_SUITE_P(WithWorkarounds,
                          ::testing::ValuesIn(workarounds_cases));
 
 }  // namespace gpu
-

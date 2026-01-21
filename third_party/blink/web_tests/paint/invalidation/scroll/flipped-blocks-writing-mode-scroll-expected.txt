@@ -7,14 +7,13 @@
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow DIV id='scroller'",
+      "name": "LayoutBlockFlow DIV id='scroller'",
       "bounds": [400, 400],
-      "contentsOpaqueForText": true,
       "drawsContent": false,
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow DIV id='scroller'",
+      "name": "LayoutBlockFlow DIV id='scroller'",
       "bounds": [400, 385],
       "drawsContent": false,
       "transform": 1
@@ -27,9 +26,8 @@
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow DIV id='scroller'",
-      "bounds": [10000, 200],
-      "contentsOpaque": true,
+      "name": "LayoutBlockFlow DIV id='scroller'",
+      "bounds": [10000, 385],
       "backgroundColor": "#008000",
       "invalidations": [
         [0, 0, 10000, 200]

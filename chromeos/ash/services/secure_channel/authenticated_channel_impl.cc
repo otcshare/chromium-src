@@ -4,9 +4,8 @@
 
 #include "chromeos/ash/services/secure_channel/authenticated_channel_impl.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -74,11 +73,10 @@ void AuthenticatedChannelImpl::PerformSendMessage(
 
   int sequence_number = secure_channel_->SendMessage(feature, payload);
 
-  if (base::Contains(sequence_number_to_callback_map_, sequence_number)) {
-    PA_LOG(ERROR) << "AuthenticatedChannelImpl::SendMessage(): Started sending "
-                  << "a message whose sequence number already exists in the "
-                  << "map.";
-    NOTREACHED();
+  if (sequence_number_to_callback_map_.contains(sequence_number)) {
+    NOTREACHED() << "AuthenticatedChannelImpl::SendMessage(): Started sending "
+                 << "a message whose sequence number already exists in the "
+                 << "map.";
   }
 
   sequence_number_to_callback_map_[sequence_number] =
@@ -127,11 +125,19 @@ void AuthenticatedChannelImpl::OnMessageReceived(SecureChannel* secure_channel,
   NotifyMessageReceived(feature, payload);
 }
 
+void AuthenticatedChannelImpl::OnNearbyConnectionStateChanged(
+    SecureChannel* secure_channel,
+    mojom::NearbyConnectionStep step,
+    mojom::NearbyConnectionStepResult result) {
+  DCHECK_EQ(secure_channel_.get(), secure_channel);
+  NotifyNearbyConnectionStateChanged(step, result);
+}
+
 void AuthenticatedChannelImpl::OnMessageSent(SecureChannel* secure_channel,
                                              int sequence_number) {
   DCHECK_EQ(secure_channel_.get(), secure_channel);
 
-  if (!base::Contains(sequence_number_to_callback_map_, sequence_number)) {
+  if (!sequence_number_to_callback_map_.contains(sequence_number)) {
     PA_LOG(WARNING) << "AuthenticatedChannelImpl::OnMessageSent(): Sent a "
                     << "message whose sequence number did not exist in the "
                     << "map. Disregarding.";
@@ -147,7 +153,7 @@ void AuthenticatedChannelImpl::OnMessageSent(SecureChannel* secure_channel,
 
 void AuthenticatedChannelImpl::OnRssiFetched(
     base::OnceCallback<void(mojom::ConnectionMetadataPtr)> callback,
-    absl::optional<int32_t> current_rssi) {
+    std::optional<int32_t> current_rssi) {
   mojom::BluetoothConnectionMetadataPtr bluetooth_connection_metadata_ptr;
   if (current_rssi) {
     bluetooth_connection_metadata_ptr =

@@ -24,24 +24,11 @@ class AppListFolderViewTest : public AshTestBase {
  public:
   AppListFolderViewTest() = default;
   ~AppListFolderViewTest() override = default;
-
-  // testing::Test:
-  void SetUp() override {
-    AshTestBase::SetUp();
-
-    app_list_test_model_ = std::make_unique<test::AppListTestModel>();
-    search_model_ = std::make_unique<SearchModel>();
-    Shell::Get()->app_list_controller()->SetActiveModel(
-        /*profile_id=*/1, app_list_test_model_.get(), search_model_.get());
-  }
-
-  std::unique_ptr<test::AppListTestModel> app_list_test_model_;
-  std::unique_ptr<SearchModel> search_model_;
 };
 
 TEST_F(AppListFolderViewTest, ScrollViewSizeIsCappedForLargeFolders) {
   // Create a large number of apps, more than a 4 rows.
-  app_list_test_model_->CreateAndPopulateFolderWithApps(30);
+  GetAppListTestHelper()->model()->CreateAndPopulateFolderWithApps(30);
 
   // Open the app list and open the folder.
   auto* helper = GetAppListTestHelper();
@@ -63,7 +50,7 @@ TEST_F(AppListFolderViewTest, ScrollViewSizeIsCappedForLargeFolders) {
 
 TEST_F(AppListFolderViewTest, CloseFolderMakesA11yAnnouncement) {
   // Create a folder with a couple items.
-  app_list_test_model_->CreateAndPopulateFolderWithApps(2);
+  GetAppListTestHelper()->model()->CreateAndPopulateFolderWithApps(2);
 
   // Open the app list and open the folder.
   auto* helper = GetAppListTestHelper();
@@ -98,6 +85,47 @@ TEST_F(AppListFolderViewTest, CloseFolderMakesA11yAnnouncement) {
   announcement_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
   EXPECT_EQ(node_data.GetStringAttribute(ax::mojom::StringAttribute::kName),
             "Close folder");
+}
+
+TEST_F(AppListFolderViewTest, ExpandedCollapsedAccessibleState) {
+  GetAppListTestHelper()->model()->CreateSingleWebAppShortcutItemFolder(
+      "folder_id", "shortcut_id");
+
+  // Open the app list and open the folder.
+  auto* helper = GetAppListTestHelper();
+  helper->ShowAppList();
+  auto* apps_grid_view = helper->GetScrollableAppsGridView();
+  AppListItemView* folder_item_view = apps_grid_view->GetItemViewAt(0);
+  LeftClickOn(folder_item_view);
+
+  auto* folder_view = helper->GetBubbleFolderView();
+
+  ui::AXNodeData node_data;
+  folder_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_TRUE(node_data.HasState(ax::mojom::State::kExpanded));
+  EXPECT_FALSE(node_data.HasState(ax::mojom::State::kCollapsed));
+
+  folder_view->ScheduleShowHideAnimation(false, false);
+
+  // Check accessibility of app list view folder while it's closed.
+  node_data = ui::AXNodeData();
+  folder_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(node_data.HasState(ax::mojom::State::kExpanded));
+  EXPECT_TRUE(node_data.HasState(ax::mojom::State::kCollapsed));
+}
+
+TEST_F(AppListFolderViewTest, AccessibleProperties) {
+  GetAppListTestHelper()->model()->CreateSingleWebAppShortcutItemFolder(
+      "folder_id", "shortcut_id");
+
+  GetAppListTestHelper()->ShowAppList();
+  LeftClickOn(
+      GetAppListTestHelper()->GetScrollableAppsGridView()->GetItemViewAt(0));
+  auto* folder_view = GetAppListTestHelper()->GetBubbleFolderView();
+
+  ui::AXNodeData node_data;
+  folder_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_EQ(node_data.role, ax::mojom::Role::kGenericContainer);
 }
 
 }  // namespace ash

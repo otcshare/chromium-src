@@ -5,33 +5,31 @@
 #include "chrome/browser/net/dns_probe_test_util.h"
 
 #include <stdint.h>
+
 #include <utility>
 
+#include "base/notreached.h"
 #include "chrome/browser/net/dns_probe_runner.h"
 #include "net/base/ip_address.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/dns/public/resolve_error_info.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chrome_browser_net {
 
 namespace {
 
-static absl::optional<net::AddressList> AddressListForResponse(
+static net::AddressList AddressListForResponse(
     FakeHostResolver::Response response) {
-  absl::optional<net::AddressList> resolved_addresses;
   switch (response) {
     case FakeHostResolver::kNoResponse:
-      break;
-    case FakeHostResolver::kEmptyResponse:
-      resolved_addresses = net::AddressList();
-      break;
+      return net::AddressList();
     case FakeHostResolver::kOneAddressResponse:
-      resolved_addresses =
-          net::AddressList(net::IPEndPoint(net::IPAddress(192, 168, 1, 1), 0));
-      break;
+      return net::AddressList(
+          net::IPEndPoint(net::IPAddress(192, 168, 1, 1), 0));
   }
-  return resolved_addresses;
+  NOTREACHED();
 }
 
 }  // namespace
@@ -77,7 +75,7 @@ void FakeHostResolver::ResolveHost(
       std::move(pending_response_client));
   response_client->OnComplete(cur_result.result, cur_result.resolve_error_info,
                               AddressListForResponse(cur_result.response),
-                              /*endpoint_results_with_metadata=*/absl::nullopt);
+                              /*alternative_endpoints=*/{});
 }
 
 void FakeHostResolver::MdnsListen(
@@ -124,7 +122,7 @@ FakeHostResolverNetworkContext::FakeHostResolverNetworkContext(
 FakeHostResolverNetworkContext::~FakeHostResolverNetworkContext() = default;
 
 void FakeHostResolverNetworkContext::CreateHostResolver(
-    const absl::optional<net::DnsConfigOverrides>& config_overrides,
+    const std::optional<net::DnsConfigOverrides>& config_overrides,
     mojo::PendingReceiver<network::mojom::HostResolver> receiver) {
   ASSERT_TRUE(config_overrides);
   if (!config_overrides->nameservers) {
@@ -146,7 +144,7 @@ HangingHostResolverNetworkContext::~HangingHostResolverNetworkContext() =
     default;
 
 void HangingHostResolverNetworkContext::CreateHostResolver(
-    const absl::optional<net::DnsConfigOverrides>& config_overrides,
+    const std::optional<net::DnsConfigOverrides>& config_overrides,
     mojo::PendingReceiver<network::mojom::HostResolver> receiver) {
   resolver_ = std::make_unique<HangingHostResolver>(std::move(receiver));
 }

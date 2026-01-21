@@ -9,13 +9,15 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "net/base/backoff_entry.h"
 #include "url/gurl.h"
@@ -58,10 +60,14 @@ class GCM_EXPORT RegistrationRequest {
     INTERNAL_SERVER_ERROR,      // Internal server error during request.
     QUOTA_EXCEEDED,             // Registration quota exceeded.
     TOO_MANY_REGISTRATIONS,     // Max registrations per device exceeded.
+    TOO_MANY_SUBSCRIBERS,       // Max subscribers per sender exceeded.
+    INVALID_TARGET_VERSION,     // Invalid target version.
+    FIS_AUTH_ERROR,             // FIS auth check failed.
+
     // NOTE: always keep this entry at the end. Add new status types only
     // immediately above this line. Make sure to update the corresponding
     // histogram enum accordingly.
-    kMaxValue = TOO_MANY_REGISTRATIONS
+    kMaxValue = FIS_AUTH_ERROR
   };
 
   // Callback completing the registration request.
@@ -135,7 +141,7 @@ class GCM_EXPORT RegistrationRequest {
 
   // Invoked from SimpleURLLoader.
   void OnURLLoadComplete(const network::SimpleURLLoader* source,
-                         std::unique_ptr<std::string> body);
+                         std::optional<std::string> body);
 
  private:
   // Schedules a retry attempt with a backoff.
@@ -147,7 +153,7 @@ class GCM_EXPORT RegistrationRequest {
   // Parse the response returned by the URL loader into token, and returns the
   // status.
   Status ParseResponse(const network::SimpleURLLoader* source,
-                       std::unique_ptr<std::string> body,
+                       std::optional<std::string> body,
                        std::string* token);
 
   RegistrationCallback callback_;

@@ -7,9 +7,8 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -128,7 +127,7 @@ CryptAuthDeviceSyncerImpl::CryptAuthDeviceSyncerImpl(
 CryptAuthDeviceSyncerImpl::~CryptAuthDeviceSyncerImpl() = default;
 
 // static
-absl::optional<base::TimeDelta> CryptAuthDeviceSyncerImpl::GetTimeoutForState(
+std::optional<base::TimeDelta> CryptAuthDeviceSyncerImpl::GetTimeoutForState(
     State state) {
   switch (state) {
     case State::kWaitingForEncryptedGroupPrivateKeyProcessing:
@@ -142,12 +141,12 @@ absl::optional<base::TimeDelta> CryptAuthDeviceSyncerImpl::GetTimeoutForState(
       // the callbacks passed to their public methods are always invoke; in
       // other words, these implementations handle their relevant timeouts
       // internally.
-      return absl::nullopt;
+      return std::nullopt;
   }
 }
 
 // static
-absl::optional<CryptAuthDeviceSyncResult::ResultCode>
+std::optional<CryptAuthDeviceSyncResult::ResultCode>
 CryptAuthDeviceSyncerImpl::ResultCodeErrorFromTimeoutDuringState(State state) {
   switch (state) {
     case State::kWaitingForEncryptedGroupPrivateKeyProcessing:
@@ -157,7 +156,7 @@ CryptAuthDeviceSyncerImpl::ResultCodeErrorFromTimeoutDuringState(State state) {
       return CryptAuthDeviceSyncResult::ResultCode::
           kErrorTimeoutWaitingForDeviceMetadataDecryption;
     default:
-      return absl::nullopt;
+      return std::nullopt;
   }
 }
 
@@ -195,7 +194,7 @@ void CryptAuthDeviceSyncerImpl::SetState(State state) {
   state_ = state;
   last_state_change_timestamp_ = base::TimeTicks::Now();
 
-  absl::optional<base::TimeDelta> timeout_for_state = GetTimeoutForState(state);
+  std::optional<base::TimeDelta> timeout_for_state = GetTimeoutForState(state);
   if (!timeout_for_state)
     return;
 
@@ -206,7 +205,7 @@ void CryptAuthDeviceSyncerImpl::SetState(State state) {
 
 void CryptAuthDeviceSyncerImpl::OnTimeout() {
   // If there's a timeout specified, there should be a corresponding error code.
-  absl::optional<CryptAuthDeviceSyncResult::ResultCode> error_code =
+  std::optional<CryptAuthDeviceSyncResult::ResultCode> error_code =
       ResultCodeErrorFromTimeoutDuringState(state_);
   DCHECK(error_code);
 
@@ -234,7 +233,7 @@ void CryptAuthDeviceSyncerImpl::AttemptNextStep() {
       GetBluetoothAddress();
       return;
     case State::kWaitingForBluetoothAddress:
-      if (features::IsEcheSWAEnabled()) {
+      if (features::IsCryptauthAttestationSyncingEnabled()) {
         GetAttestationCertificates();
         return;
       }
@@ -265,7 +264,6 @@ void CryptAuthDeviceSyncerImpl::AttemptNextStep() {
     }
     case State::kFinished:
       NOTREACHED();
-      return;
   }
 }
 
@@ -330,9 +328,9 @@ void CryptAuthDeviceSyncerImpl::OnSyncMetadataFinished(
     const CryptAuthMetadataSyncer::IdToDeviceMetadataPacketMap&
         id_to_device_metadata_packet_map,
     std::unique_ptr<CryptAuthKey> new_group_key,
-    const absl::optional<cryptauthv2::EncryptedGroupPrivateKey>&
+    const std::optional<cryptauthv2::EncryptedGroupPrivateKey>&
         encrypted_group_private_key,
-    const absl::optional<cryptauthv2::ClientDirective>& new_client_directive,
+    const std::optional<cryptauthv2::ClientDirective>& new_client_directive,
     CryptAuthDeviceSyncResult::ResultCode device_sync_result_code) {
   DCHECK_EQ(State::kWaitingForMetadataSync, state_);
 
@@ -353,8 +351,8 @@ void CryptAuthDeviceSyncerImpl::OnSyncMetadataFinished(
     case CryptAuthDeviceSyncResult::ResultType::kSuccess:
       // At a minimum, the local device metadata should be returned if no fatal
       // error occurred.
-      DCHECK(base::Contains(id_to_device_metadata_packet_map_,
-                            request_context_.device_id()));
+      DCHECK(id_to_device_metadata_packet_map_.contains(
+          request_context_.device_id()));
 
       // A group key should be established by now if no fatal error occurred.
       DCHECK(key_registry_->GetActiveKey(
@@ -429,8 +427,8 @@ void CryptAuthDeviceSyncerImpl::OnGetFeatureStatusesFinished(
     case CryptAuthDeviceSyncResult::ResultType::kSuccess:
       // We require that the local device feature statuses are returned; the
       // local device is needed in the registry.
-      if (!base::Contains(id_to_device_software_feature_info_map,
-                          request_context_.device_id())) {
+      if (!id_to_device_software_feature_info_map.contains(
+              request_context_.device_id())) {
         FinishAttempt(CryptAuthDeviceSyncResult::ResultCode::
                           kErrorMissingLocalDeviceFeatureStatuses);
         return;
@@ -466,7 +464,7 @@ void CryptAuthDeviceSyncerImpl::BuildNewDeviceRegistry(
 
     // Add BetterTogetherDeviceMetadata for the local device and all devices
     // with BetterTogetherDeviceMetadata in the existing device registry.
-    absl::optional<cryptauthv2::BetterTogetherDeviceMetadata> beto_metadata;
+    std::optional<cryptauthv2::BetterTogetherDeviceMetadata> beto_metadata;
     if (id == request_context_.device_id()) {
       beto_metadata = local_better_together_device_metadata_;
     } else {
@@ -497,7 +495,7 @@ void CryptAuthDeviceSyncerImpl::ProcessEncryptedGroupPrivateKey() {
   }
 
   if (encrypted_group_private_key_->encrypted_private_key().empty()) {
-    // TODO(https://crbug.com/936273): Log metrics for empty private key.
+    // TODO(crbug.com/41443836): Log metrics for empty private key.
     PA_LOG(ERROR) << "Group private key from CryptAuth unexpectedly empty.";
     did_non_fatal_error_occur_ = true;
     group_private_key_status_ =
@@ -527,7 +525,7 @@ void CryptAuthDeviceSyncerImpl::ProcessEncryptedGroupPrivateKey() {
 }
 
 void CryptAuthDeviceSyncerImpl::OnGroupPrivateKeyDecrypted(
-    const absl::optional<std::string>& group_private_key_from_cryptauth) {
+    const std::optional<std::string>& group_private_key_from_cryptauth) {
   DCHECK_EQ(State::kWaitingForEncryptedGroupPrivateKeyProcessing, state_);
 
   bool success = group_private_key_from_cryptauth.has_value();
@@ -774,7 +772,7 @@ void CryptAuthDeviceSyncerImpl::FinishAttempt(
   if (result_type == CryptAuthDeviceSyncResult::ResultType::kSuccess) {
     synced_bluetooth_address_tracker_->SetLastSyncedBluetoothAddress(
         local_better_together_device_metadata_.bluetooth_public_address());
-    if (features::IsEcheSWAEnabled()) {
+    if (features::IsCryptauthAttestationSyncingEnabled()) {
       if (are_attestation_certs_valid_) {
         attestation_certificates_syncer_->SetLastSyncTimestamp();
       }

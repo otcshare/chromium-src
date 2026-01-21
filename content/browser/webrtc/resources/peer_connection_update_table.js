@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {$} from 'chrome://resources/js/util_ts.js';
+import {$} from 'chrome://resources/js/util.js';
+import * as SDPUtils from './sdp_utils.js';
 
 const MAX_NUMBER_OF_STATE_CHANGES_DISPLAYED = 10;
 const MAX_NUMBER_OF_EXPANDED_MEDIASECTIONS = 10;
@@ -78,13 +79,13 @@ export class PeerConnectionUpdateTable {
     const row = document.createElement('tr');
     tableElement.firstChild.appendChild(row);
 
-    const time = new Date(parseFloat(update.time));
+    const time = new Date(parseFloat(update.timestamp));
     const timeItem = document.createElement('td');
     timeItem.textContent = time.toLocaleString();
     row.appendChild(timeItem);
 
     // `type` is a display variant of update.type which does not get serialized
-    // into chrome://webrtc-internals.
+    // into the JSON dump.
     let type = update.type;
 
     if (update.value.length === 0) {
@@ -95,11 +96,20 @@ export class PeerConnectionUpdateTable {
     }
 
     if (update.type === 'icecandidate' || update.type === 'addIceCandidate') {
-      const parts = update.value.split(', ');
-      type += '(' + parts[0] + ', ' + parts[1]; // show sdpMid/sdpMLineIndex.
-      const candidateParts = parts[2].substr(11).split(' ');
-      if (candidateParts && candidateParts[7]) { // show candidate type.
-        type += ', type: ' + candidateParts[7];
+      const parts = JSON.parse(update.value);
+      type += '(sdpMid="' + parts.sdpMid +'", ' +
+          'sdpMLineIndex=' + parts.sdpMLineIndex;
+      if (parts.candidate) {
+        const candidateParts = parts.candidate.split(' ');
+        if (candidateParts && candidateParts[7]) { // show candidate type.
+          type += ', type: ' + candidateParts[7];
+        }
+        if (parts[3]) { // url, if present.
+          type += ', ' + parts[3];
+        }
+        if (parts[4]) { // relayProtocol, if present.
+          type += ', ' + parts[4];
+        }
       }
       type += ')';
     } else if (
@@ -107,25 +117,32 @@ export class PeerConnectionUpdateTable {
         update.type === 'createAnswerOnSuccess') {
       this.setLastOfferAnswer_(tableElement, update);
     } else if (update.type === 'setLocalDescription') {
-      if (update.value !== this.getLastOfferAnswer_(tableElement)) {
+      const lastOfferAnswer = this.getLastOfferAnswer_(tableElement);
+      if (update.value.startsWith('type: rollback')) {
+        this.setLastOfferAnswer_(tableElement, {value: undefined})
+      } else if (lastOfferAnswer && update.value !== lastOfferAnswer) {
         type += ' (munged)';
       }
     } else if (update.type === 'setConfiguration') {
       // Update the configuration that is displayed at the top.
       peerConnectionElement.firstChild.children[2].textContent = update.value;
-    } else if (['iceconnectionstatechange', 'connectionstatechange',
-        'signalingstatechange'].includes(update.type)) {
+    } else if (['transceiverAdded',
+        'transceiverModified'].includes(update.type)) {
+      const data = JSON.parse(update.value);
+      type += '(index=' + data.transceiverIndex + ', kind=' + data.kind + ')';
+    } else if (['oniceconnectionstatechange', 'onconnectionstatechange',
+        'onsignalingstatechange'].includes(update.type)) {
       const fieldName = {
-        'iceconnectionstatechange' : 'iceconnectionstate',
-        'connectionstatechange' : 'connectionstate',
-        'signalingstatechange' : 'signalingstate',
+        'oniceconnectionstatechange' : 'iceconnectionstate',
+        'onconnectionstatechange' : 'connectionstate',
+        'onsignalingstatechange' : 'signalingstate',
       }[update.type];
       const el = peerConnectionElement.getElementsByClassName(fieldName)[0];
       const numberOfEvents = el.textContent.split(' => ').length;
       if (numberOfEvents < MAX_NUMBER_OF_STATE_CHANGES_DISPLAYED) {
         el.textContent += ' => ' + update.value;
-      } else if (numberOfEvents === MAX_NUMBER_OF_STATE_CHANGES_DISPLAYED) {
-        el.textContent += ' ...';
+      } else if (numberOfEvents >= MAX_NUMBER_OF_STATE_CHANGES_DISPLAYED) {
+        el.textContent += ' => ...';
       }
     }
 
@@ -139,54 +156,87 @@ export class PeerConnectionUpdateTable {
     details.appendChild(valueContainer);
 
     // Highlight ICE/DTLS failures and failure callbacks.
-    if ((update.type === 'iceconnectionstatechange' &&
-         update.value === 'failed') ||
-        (update.type === 'connectionstatechange' &&
-         update.value === 'failed') ||
+    if ((update.type === 'oniceconnectionstatechange' &&
+         update.value === '"failed"') ||
+        (update.type === 'onconnectionstatechange' &&
+         update.value === '"failed"') ||
         update.type.indexOf('OnFailure') !== -1 ||
         update.type === 'addIceCandidateFailed') {
       valueContainer.parentElement.classList.add('update-log-failure');
     }
 
-    // RTCSessionDescription is serialized as 'type: <type>, sdp:'
-    if (update.value.indexOf(', sdp:') !== -1) {
-      const [type, sdp] = update.value.substr(6).split(', sdp: ');
+    // RTCSessionDescription is serialized as JSON.
+    if (update.value.startsWith("{\"type\":")) {
+      const {type, sdp} = JSON.parse(update.value);
+      if (type === 'rollback') {
+        // Rollback has no SDP.
+        summary.textContent += ' (type: "rollback")';
+      } else {
+        // Create a copy-to-clipboard button.
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy description to clipboard';
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(JSON.stringify({type, sdp}));
+        };
+        valueContainer.appendChild(copyBtn);
 
-      // Create a copy-to-clipboard button.
-      const copyBtn = document.createElement('button');
-      copyBtn.textContent = 'Copy description to clipboard';
-      copyBtn.onclick = () => {
-        navigator.clipboard.writeText(JSON.stringify({type, sdp}));
-      };
-      valueContainer.appendChild(copyBtn);
+        let lastSections;
+        const lastOfferAnswer = this.getLastOfferAnswer_(tableElement);
+        if (update.type === 'setLocalDescription' && lastOfferAnswer &&
+            lastOfferAnswer !== update.value) {
+          lastSections = SDPUtils.splitSections(
+              JSON.parse(lastOfferAnswer).sdp);
+        }
+        // Fold the SDP sections.
+        const sections = SDPUtils.splitSections(sdp);
+        summary.textContent +=
+          ' (type: "' + type + '", ' + sections.length + ' sections)';
+        sections.forEach((section, index) => {
+          const lines = SDPUtils.splitLines(section);
+          // Extract the mid attribute.
+          const mid = lines
+              .filter(line => line.startsWith('a=mid:'))
+              .map(line => line.substring(6))[0];
+          const direction = SDPUtils.getDirection(section, sections[0]);
 
-      // Fold the SDP sections.
-      const sections = sdp.split('\nm=')
-        .map((part, index) => (index > 0 ?
-          'm=' + part : part).trim() + '\r\n');
-      summary.textContent +=
-        ' (type: "' + type + '", ' + sections.length + ' sections)';
-      sections.forEach(section => {
-        const lines = section.trim().split('\n');
-        // Extract the mid attribute.
-        const mid = lines
-            .filter(line => line.startsWith('a=mid:'))
-            .map(line => line.substr(6))[0];
-        const sectionDetails = document.createElement('details');
-        // Fold by default for large SDP.
-        sectionDetails.open =
-          sections.length <= MAX_NUMBER_OF_EXPANDED_MEDIASECTIONS;
-        sectionDetails.textContent = lines.slice(1).join('\n');
+          const sectionDetails = document.createElement('details');
+          const rejected = index !== 0 &&
+              SDPUtils.parseMLine(lines[0]).port === 0;
+          // Fold by default for large SDP, inactive SDP or rejected m-lines.
+          sectionDetails.open =
+            sections.length <= MAX_NUMBER_OF_EXPANDED_MEDIASECTIONS &&
+            direction !== 'inactive' && !rejected;
+          sectionDetails.textContent = lines.slice(1).join('\n');
 
-        const sectionSummary = document.createElement('summary');
-        sectionSummary.textContent =
-          lines[0].trim() +
-          ' (' + (lines.length - 1) + ' more lines)' +
-          (mid ? ' mid=' + mid : '');
-        sectionDetails.appendChild(sectionSummary);
+          const sectionSummary = document.createElement('summary');
+          sectionSummary.textContent =
+            lines[0].trim() +
+            ' (' + (lines.length - 1) + ' more lines)' +
+            (section.startsWith('m=') ? ' direction=' + direction : '') +
+            (mid ? ' mid=' + mid : '');
+          if (lastSections && lastSections[index] !== sections[index]) {
+            // Open munged sections by default and give visual feedback.
+            sectionDetails.open = true;
+            sectionSummary.textContent += ' munged';
+            sectionSummary.style.backgroundColor = '#FBCEB1';
+            const lastLines = SDPUtils.splitLines(lastSections[index]);
+            // Show the first different line using a HTML title 'popover'.
+            for (let i = 0; i < lines.length && i < lastLines.length; i++) {
+              if (lines[i] !== lastLines[i]) {
+                sectionSummary.title = 'First different line: ' + lines[i];
+                break;
+              }
+            }
+          }
+          sectionDetails.appendChild(sectionSummary);
 
-        valueContainer.appendChild(sectionDetails);
-      });
+          valueContainer.appendChild(sectionDetails);
+        });
+      }
+    } else if (['icecandidate', 'addIceCandidate', 'transceiverAdded',
+        'transceiverModified'].includes(update.type)) {
+      const parts = JSON.parse(update.value);
+      valueContainer.textContent = JSON.stringify(parts, null, ' ');
     } else {
       valueContainer.textContent = update.value;
     }

@@ -9,10 +9,12 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/supports_user_data.h"
 #include "components/commerce/core/shopping_service.h"
+#include "components/commerce/core/subscriptions/subscriptions_observer.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -21,8 +23,10 @@ class GURL;
 namespace commerce {
 
 class ShoppingService;
+struct CommerceSubscription;
 
-class ShoppingServiceAndroid : public base::SupportsUserData::Data {
+class ShoppingServiceAndroid : public base::SupportsUserData::Data,
+                               public SubscriptionsObserver {
  public:
   ShoppingServiceAndroid(const ShoppingServiceAndroid&) = delete;
   ShoppingServiceAndroid& operator=(const ShoppingServiceAndroid&) = delete;
@@ -30,25 +34,77 @@ class ShoppingServiceAndroid : public base::SupportsUserData::Data {
   ShoppingServiceAndroid(ShoppingService* service);
   ~ShoppingServiceAndroid() override;
 
+  ShoppingService* GetShoppingService();
+
   void GetProductInfoForUrl(JNIEnv* env,
-                            const JavaParamRef<jobject>& obj,
-                            const JavaParamRef<jobject>& j_gurl,
-                            const JavaParamRef<jobject>& j_callback);
+                            const JavaRef<jobject>& j_gurl,
+                            const JavaRef<jobject>& j_callback);
 
   ScopedJavaLocalRef<jobject> GetAvailableProductInfoForUrl(
       JNIEnv* env,
-      const JavaParamRef<jobject>& obj,
-      const JavaParamRef<jobject>& j_gurl);
+      const JavaRef<jobject>& j_gurl);
 
   void GetMerchantInfoForUrl(JNIEnv* env,
-                             const JavaParamRef<jobject>& obj,
-                             const JavaParamRef<jobject>& j_gurl,
-                             const JavaParamRef<jobject>& j_callback);
+                             const JavaRef<jobject>& j_gurl,
+                             const JavaRef<jobject>& j_callback);
 
-  void FetchPriceEmailPref(JNIEnv* env, const JavaParamRef<jobject>& obj);
+  void GetPriceInsightsInfoForUrl(JNIEnv* env,
+                                  const JavaRef<jobject>& j_gurl,
+                                  const JavaRef<jobject>& j_callback);
 
-  void ScheduleSavedProductUpdate(JNIEnv* env,
-                                  const JavaParamRef<jobject>& obj);
+  void GetDiscountInfoForUrl(JNIEnv* env,
+                             const JavaRef<jobject>& j_gurl,
+                             const JavaRef<jobject>& j_callback);
+
+  void GetAvailableDiscountInfoForUrl(JNIEnv* env,
+                                      const JavaRef<jobject>& j_gurl,
+                                      const JavaRef<jobject>& j_callback);
+
+  void FetchPriceEmailPref(JNIEnv* env);
+
+  void ScheduleSavedProductUpdate(JNIEnv* env);
+
+  void Subscribe(JNIEnv* env,
+                 int32_t j_type,
+                 int32_t j_id_type,
+                 int32_t j_management_type,
+                 const JavaRef<jstring>& j_id,
+                 const JavaRef<jstring>& j_seen_offer_id,
+                 int64_t j_seen_price,
+                 const JavaRef<jstring>& j_seen_country,
+                 const JavaRef<jstring>& j_seen_locale,
+                 const JavaRef<jobject>& j_callback);
+
+  void Unsubscribe(JNIEnv* env,
+                   int32_t j_type,
+                   int32_t j_id_type,
+                   int32_t j_management_type,
+                   const JavaRef<jstring>& j_id,
+                   const JavaRef<jobject>& j_callback);
+
+  void IsSubscribed(JNIEnv* env,
+                    int32_t j_type,
+                    int32_t j_id_type,
+                    int32_t j_management_type,
+                    const JavaRef<jstring>& j_id,
+                    const JavaRef<jobject>& j_callback);
+
+  bool IsSubscribedFromCache(JNIEnv* env,
+                             int32_t j_type,
+                             int32_t j_id_type,
+                             int32_t j_management_type,
+                             const JavaRef<jstring>& j_id);
+
+  void GetAllPriceTrackedBookmarks(JNIEnv* env,
+                                   const JavaRef<jobject>& j_callback);
+
+  bool IsShoppingListEligible(JNIEnv* env);
+
+  bool IsMerchantViewerEnabled(JNIEnv* env);
+
+  bool IsPriceInsightsEligible(JNIEnv* env);
+
+  bool IsDiscountEligibleToShowOnNavigation(JNIEnv* env);
 
   ScopedJavaGlobalRef<jobject> java_ref() { return java_ref_; }
 
@@ -56,12 +112,26 @@ class ShoppingServiceAndroid : public base::SupportsUserData::Data {
   void HandleProductInfoCallback(JNIEnv* env,
                                  const ScopedJavaGlobalRef<jobject>& callback,
                                  const GURL& url,
-                                 const absl::optional<ProductInfo>& info);
+                                 const std::optional<const ProductInfo>& info);
 
   void HandleMerchantInfoCallback(JNIEnv* env,
                                   const ScopedJavaGlobalRef<jobject>& callback,
                                   const GURL& url,
-                                  absl::optional<MerchantInfo> info);
+                                  std::optional<MerchantInfo> info);
+
+  void HandlePriceInsightsInfoCallback(
+      JNIEnv* env,
+      const ScopedJavaGlobalRef<jobject>& callback,
+      const GURL& url,
+      const std::optional<PriceInsightsInfo>& info);
+
+  void HandleDiscountInfoCallback(JNIEnv* env,
+                                  const ScopedJavaGlobalRef<jobject>& callback,
+                                  const GURL& url,
+                                  const std::vector<DiscountInfo> info);
+
+  void OnSubscribe(const CommerceSubscription& sub, bool succeeded) override;
+  void OnUnsubscribe(const CommerceSubscription& sub, bool succeeded) override;
 
   // A handle to the backing shopping service. This is held as a raw pointer
   // since this object's lifecycle is tied to the service itself. This object
@@ -70,6 +140,9 @@ class ShoppingServiceAndroid : public base::SupportsUserData::Data {
 
   // A handle to the java side of this object.
   ScopedJavaGlobalRef<jobject> java_ref_;
+
+  base::ScopedObservation<ShoppingService, SubscriptionsObserver>
+      scoped_subscriptions_observer_{this};
 
   base::WeakPtrFactory<ShoppingServiceAndroid> weak_ptr_factory_;
 };

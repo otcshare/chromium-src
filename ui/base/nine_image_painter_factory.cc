@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/nine_image_painter.h"
 
@@ -18,8 +19,9 @@ std::vector<gfx::ImageSkia> ImageIdsToImages(const int image_ids[]) {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   std::vector<gfx::ImageSkia> images(9);
   for (size_t i = 0; i < 9; ++i) {
-    if (image_ids[i] != 0)
-      images[i] = *rb.GetImageSkiaNamed(image_ids[i]);
+    if (UNSAFE_TODO(image_ids[i]) != 0) {
+      images[i] = *rb.GetImageSkiaNamed(UNSAFE_TODO(image_ids[i]));
+    }
   }
   return images;
 }

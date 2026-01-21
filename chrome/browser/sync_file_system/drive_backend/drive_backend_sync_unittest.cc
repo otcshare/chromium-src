@@ -9,10 +9,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/stack.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -43,6 +43,7 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/common/extension.h"
 #include "google_apis/drive/drive_api_parser.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -87,7 +88,7 @@ class DriveBackendSyncTest : public testing::Test,
   DriveBackendSyncTest(const DriveBackendSyncTest&) = delete;
   DriveBackendSyncTest& operator=(const DriveBackendSyncTest&) = delete;
 
-  ~DriveBackendSyncTest() override {}
+  ~DriveBackendSyncTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(base_dir_.CreateUniqueTempDir());
@@ -108,7 +109,7 @@ class DriveBackendSyncTest : public testing::Test,
 
     std::unique_ptr<drive::FakeDriveService> drive_service(
         new drive::FakeDriveService);
-    drive_service->Initialize(CoreAccountId("account_id"));
+    drive_service->Initialize(CoreAccountId::FromGaiaId(GaiaId("account_id")));
     ASSERT_TRUE(drive::test_util::SetUpTestEntries(drive_service.get()));
 
     std::unique_ptr<drive::DriveUploaderInterface> uploader(
@@ -122,9 +123,7 @@ class DriveBackendSyncTest : public testing::Test,
         base::SingleThreadTaskRunner::GetCurrentDefault(),  // ui_task_runner
         worker_task_runner_.get(), drive_task_runner.get(), base_dir_.GetPath(),
         nullptr,  // task_logger
-        nullptr,  // notification_manager
-        nullptr,  // extension_service
-        nullptr,  // extension_registry
+        &profile_,
         nullptr,  // identity_manager
         nullptr,  // url_loader_factory
         nullptr,  // drive_service
@@ -220,7 +219,7 @@ class DriveBackendSyncTest : public testing::Test,
 
   SyncStatusCode RegisterApp(const std::string& app_id) {
     GURL origin = extensions::Extension::GetBaseURLFromExtensionId(app_id);
-    if (!base::Contains(file_systems_, app_id)) {
+    if (!file_systems_.contains(app_id)) {
       CannedSyncableFileSystem* file_system = new CannedSyncableFileSystem(
           origin, in_memory_env_.get(), io_task_runner_.get(),
           file_task_runner_.get());
@@ -254,7 +253,7 @@ class DriveBackendSyncTest : public testing::Test,
 
   void AddLocalFolder(const std::string& app_id,
                       const base::FilePath::StringType& path) {
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     EXPECT_EQ(base::File::FILE_OK,
               file_systems_[app_id]->CreateDirectory(CreateURL(app_id, path)));
   }
@@ -263,7 +262,7 @@ class DriveBackendSyncTest : public testing::Test,
                             const base::FilePath::StringType& path,
                             const std::string& content) {
     storage::FileSystemURL url(CreateURL(app_id, path));
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     EXPECT_EQ(base::File::FILE_OK, file_systems_[app_id]->CreateFile(url));
     int64_t bytes_written = file_systems_[app_id]->WriteString(url, content);
     EXPECT_EQ(static_cast<int64_t>(content.size()), bytes_written);
@@ -273,7 +272,7 @@ class DriveBackendSyncTest : public testing::Test,
   void UpdateLocalFile(const std::string& app_id,
                        const base::FilePath::StringType& path,
                        const std::string& content) {
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     int64_t bytes_written =
         file_systems_[app_id]->WriteString(CreateURL(app_id, path), content);
     EXPECT_EQ(static_cast<int64_t>(content.size()), bytes_written);
@@ -282,7 +281,7 @@ class DriveBackendSyncTest : public testing::Test,
 
   void RemoveLocal(const std::string& app_id,
                    const base::FilePath::StringType& path) {
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     EXPECT_EQ(base::File::FILE_OK,
               file_systems_[app_id]->Remove(CreateURL(app_id, path),
                                             true /* recursive */));
@@ -319,7 +318,7 @@ class DriveBackendSyncTest : public testing::Test,
   }
 
   void FetchRemoteChanges() {
-    remote_sync_service_->OnNotificationTimerFired();
+    remote_sync_service_->OnReadyToSendRequests();
     WaitForIdleWorker();
   }
 
@@ -406,17 +405,18 @@ class DriveBackendSyncTest : public testing::Test,
                                                             &remote_entries));
     std::map<std::string, const google_apis::FileResource*> app_root_by_title;
     for (const auto& remote_entry : remote_entries) {
-      EXPECT_FALSE(base::Contains(app_root_by_title, remote_entry->title()));
+      EXPECT_FALSE(app_root_by_title.contains(remote_entry->title()));
       app_root_by_title[remote_entry->title()] = remote_entry.get();
     }
 
-    for (std::map<std::string, CannedSyncableFileSystem*>::const_iterator itr =
+    for (std::map<std::string, raw_ptr<CannedSyncableFileSystem,
+                                       CtnExperimental>>::const_iterator itr =
              file_systems_.begin();
          itr != file_systems_.end(); ++itr) {
       const std::string& app_id = itr->first;
       SCOPED_TRACE(testing::Message() << "Verifying app: " << app_id);
       CannedSyncableFileSystem* file_system = itr->second;
-      ASSERT_TRUE(base::Contains(app_root_by_title, app_id));
+      ASSERT_TRUE(app_root_by_title.contains(app_id));
       VerifyConsistencyForFolder(app_id, base::FilePath(),
                                  app_root_by_title[app_id]->file_id(),
                                  file_system);
@@ -437,7 +437,7 @@ class DriveBackendSyncTest : public testing::Test,
         remote_entry_by_title;
     for (size_t i = 0; i < remote_entries.size(); ++i) {
       google_apis::FileResource* remote_entry = remote_entries[i].get();
-      EXPECT_FALSE(base::Contains(remote_entry_by_title, remote_entry->title()))
+      EXPECT_FALSE(remote_entry_by_title.contains(remote_entry->title()))
           << "title: " << remote_entry->title();
       remote_entry_by_title[remote_entry->title()] = remote_entry;
     }
@@ -453,7 +453,7 @@ class DriveBackendSyncTest : public testing::Test,
           storage::VirtualPath::BaseName(entry_url.path()).AsUTF8Unsafe();
       SCOPED_TRACE(testing::Message() << "Verifying entry: " << title);
 
-      ASSERT_TRUE(base::Contains(remote_entry_by_title, title));
+      ASSERT_TRUE(remote_entry_by_title.contains(title));
       const google_apis::FileResource& remote_entry =
           *remote_entry_by_title[title];
       if (local_entry.type == filesystem::mojom::FsFileType::DIRECTORY) {
@@ -485,8 +485,9 @@ class DriveBackendSyncTest : public testing::Test,
   size_t CountApp() { return file_systems_.size(); }
 
   size_t CountLocalFile(const std::string& app_id) {
-    if (!base::Contains(file_systems_, app_id))
+    if (!file_systems_.contains(app_id)) {
       return 0;
+    }
 
     CannedSyncableFileSystem* file_system = file_systems_[app_id];
     base::stack<base::FilePath> folders;
@@ -515,7 +516,7 @@ class DriveBackendSyncTest : public testing::Test,
     SCOPED_TRACE(testing::Message()
                  << "Verifying local file: "
                  << "app_id = " << app_id << ", path = " << path);
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     EXPECT_EQ(base::File::FILE_OK, file_systems_[app_id]->VerifyFile(
                                        CreateURL(app_id, path), content));
   }
@@ -525,7 +526,7 @@ class DriveBackendSyncTest : public testing::Test,
     SCOPED_TRACE(testing::Message()
                  << "Verifying local file: "
                  << "app_id = " << app_id << ", path = " << path);
-    ASSERT_TRUE(base::Contains(file_systems_, app_id));
+    ASSERT_TRUE(file_systems_.contains(app_id));
     EXPECT_EQ(base::File::FILE_OK,
               file_systems_[app_id]->DirectoryExists(CreateURL(app_id, path)));
   }
@@ -599,7 +600,8 @@ class DriveBackendSyncTest : public testing::Test,
   int64_t pending_local_changes_;
 
   std::unique_ptr<FakeDriveServiceHelper> fake_drive_service_helper_;
-  std::map<std::string, CannedSyncableFileSystem*> file_systems_;
+  std::map<std::string, raw_ptr<CannedSyncableFileSystem, CtnExperimental>>
+      file_systems_;
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
   scoped_refptr<base::SequencedTaskRunner> worker_task_runner_;

@@ -70,6 +70,15 @@ namespace log_internal {
 // Used for int32_t, int64_t, uint32_t, uint64_t, bool, and enum field types.
 // Consumes up to kMaxVarintSize * 2 bytes (20).
 bool EncodeVarint(uint64_t tag, uint64_t value, absl::Span<char> *buf);
+inline bool EncodeVarint(uint64_t tag, int64_t value, absl::Span<char> *buf) {
+  return EncodeVarint(tag, static_cast<uint64_t>(value), buf);
+}
+inline bool EncodeVarint(uint64_t tag, uint32_t value, absl::Span<char> *buf) {
+  return EncodeVarint(tag, static_cast<uint64_t>(value), buf);
+}
+inline bool EncodeVarint(uint64_t tag, int32_t value, absl::Span<char> *buf) {
+  return EncodeVarint(tag, static_cast<uint64_t>(value), buf);
+}
 
 // Encodes the specified integer as a varint field using ZigZag encoding and
 // returns true if it fits.
@@ -86,6 +95,15 @@ inline bool EncodeVarintZigZag(uint64_t tag, int64_t value,
 // Used for fixed64 and sfixed64 field types.
 // Consumes up to kMaxVarintSize + 8 bytes (18).
 bool Encode64Bit(uint64_t tag, uint64_t value, absl::Span<char> *buf);
+inline bool Encode64Bit(uint64_t tag, int64_t value, absl::Span<char> *buf) {
+  return Encode64Bit(tag, static_cast<uint64_t>(value), buf);
+}
+inline bool Encode64Bit(uint64_t tag, uint32_t value, absl::Span<char> *buf) {
+  return Encode64Bit(tag, static_cast<uint64_t>(value), buf);
+}
+inline bool Encode64Bit(uint64_t tag, int32_t value, absl::Span<char> *buf) {
+  return Encode64Bit(tag, static_cast<uint64_t>(value), buf);
+}
 
 // Encodes the specified double as a 64-bit field and returns true if it fits.
 // Used for double field type.
@@ -98,6 +116,9 @@ inline bool EncodeDouble(uint64_t tag, double value, absl::Span<char> *buf) {
 // Used for fixed32 and sfixed32 field types.
 // Consumes up to kMaxVarintSize + 4 bytes (14).
 bool Encode32Bit(uint64_t tag, uint32_t value, absl::Span<char> *buf);
+inline bool Encode32Bit(uint64_t tag, int32_t value, absl::Span<char> *buf) {
+  return Encode32Bit(tag, static_cast<uint32_t>(value), buf);
+}
 
 // Encodes the specified float as a 32-bit field and returns true if it fits.
 // Used for float field type.
@@ -148,9 +169,9 @@ inline bool EncodeStringTruncate(uint64_t tag, absl::string_view value,
 // safe to pass to `EncodeMessageLength` but need not be.
 // Used for string, bytes, message, and packed-repeated field type.
 // Consumes up to kMaxVarintSize * 2 bytes (20).
-ABSL_MUST_USE_RESULT absl::Span<char> EncodeMessageStart(uint64_t tag,
-                                                         uint64_t max_size,
-                                                         absl::Span<char> *buf);
+[[nodiscard]] absl::Span<char> EncodeMessageStart(uint64_t tag,
+                                                  uint64_t max_size,
+                                                  absl::Span<char> *buf);
 
 // Finalizes the length field in `msg` so that it encompasses all data encoded
 // since the call to `EncodeMessageStart` which returned `msg`.  Does nothing if
@@ -164,13 +185,13 @@ enum class WireType : uint64_t {
   k32Bit = 5,
 };
 
-constexpr uint64_t VarintSize(uint64_t value) {
+constexpr size_t VarintSize(uint64_t value) {
   return value < 128 ? 1 : 1 + VarintSize(value >> 7);
 }
-constexpr uint64_t MinVarintSize() {
+constexpr size_t MinVarintSize() {
   return VarintSize((std::numeric_limits<uint64_t>::min)());
 }
-constexpr uint64_t MaxVarintSize() {
+constexpr size_t MaxVarintSize() {
   return VarintSize((std::numeric_limits<uint64_t>::max)());
 }
 
@@ -178,23 +199,33 @@ constexpr uint64_t MaxVarintForSize(size_t size) {
   return size >= 10 ? (std::numeric_limits<uint64_t>::max)()
                     : (static_cast<uint64_t>(1) << size * 7) - 1;
 }
+constexpr uint64_t MakeTagType(uint64_t tag, WireType type) {
+  return tag << 3 | static_cast<uint64_t>(type);
+}
 
 // `BufferSizeFor` returns a number of bytes guaranteed to be sufficient to
-// store encoded fields of the specified WireTypes regardless of tag numbers and
-// data values.  This only makes sense for `WireType::kLengthDelimited` if you
-// add in the length of the contents yourself, e.g. for string and bytes fields
-// by adding the lengths of any encoded strings to the return value or for
-// submessage fields by enumerating the fields you may encode into their
-// contents.
-constexpr size_t BufferSizeFor() { return 0; }
-template <typename... T>
-constexpr size_t BufferSizeFor(WireType type, T... tail) {
-  // tag_type + data + ...
-  return MaxVarintSize() +
-         (type == WireType::kVarint ? MaxVarintSize() :              //
-              type == WireType::k64Bit ? 8 :                         //
-                  type == WireType::k32Bit ? 4 : MaxVarintSize()) +  //
-         BufferSizeFor(tail...);
+// store encoded fields as `(tag, WireType)`, regardless of data values.  This
+// only makes sense for `WireType::kLengthDelimited` if you add in the length of
+// the contents yourself, e.g. for string and bytes fields by adding the lengths
+// of any encoded strings to the return value or for submessage fields by
+// enumerating the fields you may encode into their contents.
+constexpr size_t BufferSizeFor(uint64_t tag, WireType type) {
+  size_t buffer_size = VarintSize(MakeTagType(tag, type));
+  switch (type) {
+    case WireType::kVarint:
+      buffer_size += MaxVarintSize();
+      break;
+    case WireType::k64Bit:
+      buffer_size += size_t{8};
+      break;
+    case WireType::kLengthDelimited:
+      buffer_size += MaxVarintSize();
+      break;
+    case WireType::k32Bit:
+      buffer_size += size_t{4};
+      break;
+  }
+  return buffer_size;
 }
 
 // absl::Span<const char> represents a view into the un-processed space in a

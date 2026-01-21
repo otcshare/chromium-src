@@ -4,8 +4,8 @@
 
 #include "chrome/browser/gpu/gpu_mode_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/browser_process.h"
@@ -69,8 +69,7 @@ GpuModeManager::GpuModeManager()
   }
 }
 
-GpuModeManager::~GpuModeManager() {
-}
+GpuModeManager::~GpuModeManager() = default;
 
 bool GpuModeManager::initial_gpu_mode_pref() const {
   return initial_gpu_mode_pref_;

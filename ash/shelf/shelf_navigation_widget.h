@@ -9,6 +9,7 @@
 
 #include "ash/ash_export.h"
 #include "ash/shelf/shelf_component.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -27,6 +28,7 @@ class HomeButton;
 enum class HotseatState;
 class NavigationButtonAnimationMetricsReporter;
 class Shelf;
+class ShelfNavigationWidgetDelegate;
 class ShelfView;
 
 // The shelf navigation widget holds the home button and (when in tablet mode)
@@ -47,8 +49,10 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
 
     views::BoundsAnimator* GetBoundsAnimator();
 
+    views::View* GetWidgetDelegateView();
+
    private:
-    ShelfNavigationWidget* navigation_widget_;
+    raw_ptr<ShelfNavigationWidget> navigation_widget_;
   };
 
   ShelfNavigationWidget(Shelf* shelf, ShelfView* shelf_view);
@@ -100,8 +104,6 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
   }
 
  private:
-  class Delegate;
-
   void UpdateButtonVisibility(
       views::View* button,
       bool visible,
@@ -120,8 +122,8 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
   // Returns the number of visible control buttons.
   int CalculateButtonCount() const;
 
-  Shelf* shelf_ = nullptr;
-  Delegate* delegate_ = nullptr;
+  raw_ptr<Shelf> shelf_ = nullptr;
+  raw_ptr<ShelfNavigationWidgetDelegate> delegate_ = nullptr;
 
   // In tablet mode with hotseat enabled, `clip_rect_after_rtl_` is used to hide
   // the invisible widget part. We try best to avoid changing the widget's

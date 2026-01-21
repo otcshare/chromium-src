@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/features.gni")
 import("//build/config/ozone.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
@@ -20,12 +21,12 @@ mojom("mojom") {
     "frame_data.mojom",
     "gpu_extra_info.mojom",
     "gpu_fence_handle.mojom",
-    "hdr_metadata.mojom",
     "hdr_static_metadata.mojom",
     "linear_gradient.mojom",
     "mask_filter_info.mojom",
     "overlay_priority_hint.mojom",
     "overlay_transform.mojom",
+    "overlay_type.mojom",
     "presentation_feedback.mojom",
     "rrect_f.mojom",
     "selection_bound.mojom",
@@ -34,19 +35,23 @@ mojom("mojom") {
     "transform.mojom",
   ]
 
-  if (is_mac) {
+  if (is_apple) {
     sources += [ "ca_layer_result.mojom" ]
   }
 
   public_deps = [
+    ":hdr_metadata",
     ":native_handle_types",
     "//mojo/public/mojom/base",
+    "//services/viz/public/mojom/compositing:shared_image_format",
     "//skia/public/mojom",
     "//ui/gfx/geometry/mojom",
   ]
-  webui_module_path = "chrome://resources/mojo/ui/gfx/mojom"
 
   enabled_features = []
+  if (use_blink) {
+    enabled_features += [ "use_blink" ]
+  }
   if (ozone_platform_x11) {
     enabled_features += [ "enable_x11_params" ]
   }
@@ -61,29 +66,6 @@ mojom("mojom") {
         {
           mojom = "gfx.mojom.BufferUsage"
           cpp = "::gfx::BufferUsage"
-        },
-        {
-          mojom = "gfx.mojom.BufferUsageAndFormat"
-          cpp = "::gfx::BufferUsageAndFormat"
-        },
-        {
-          mojom = "gfx.mojom.BufferPlane"
-          cpp = "::gfx::BufferPlane"
-        },
-        {
-          mojom = "gfx.mojom.GpuMemoryBufferHandle"
-          cpp = "::gfx::GpuMemoryBufferHandle"
-          move_only = true
-          nullable_is_same_type = true
-        },
-        {
-          mojom = "gfx.mojom.GpuMemoryBufferId"
-          cpp = "::gfx::GpuMemoryBufferId"
-          copyable_pass_by_value = true
-        },
-        {
-          mojom = "gfx.mojom.GpuMemoryBufferType"
-          cpp = "::gfx::GpuMemoryBufferType"
         },
       ]
 
@@ -102,6 +84,10 @@ mojom("mojom") {
     },
     {
       types = [
+        {
+          mojom = "gfx.mojom.ContentColorUsage"
+          cpp = "::gfx::ContentColorUsage"
+        },
         {
           mojom = "gfx.mojom.DisplayColorSpaces"
           cpp = "::gfx::DisplayColorSpaces"
@@ -162,6 +148,10 @@ mojom("mojom") {
           mojom = "gfx.mojom.SelectionBound"
           cpp = "::gfx::SelectionBound"
         },
+        {
+          mojom = "gfx.mojom.SelectionBoundType"
+          cpp = "::gfx::SelectionBound::Type"
+        },
       ]
       traits_headers = [ "selection_bound_mojom_traits.h" ]
       traits_public_deps = [ "//ui/gfx/geometry/mojom:mojom_traits" ]
@@ -203,28 +193,6 @@ mojom("mojom") {
     {
       types = [
         {
-          mojom = "gfx.mojom.CALayerParams"
-          cpp = "::gfx::CALayerParams"
-        },
-      ]
-      traits_sources = [ "ca_layer_params_mojom_traits.cc" ]
-      traits_headers = [ "ca_layer_params_mojom_traits.h" ]
-      traits_public_deps = [ "//ui/gfx" ]
-    },
-    {
-      types = [
-        {
-          mojom = "gfx.mojom.CALayerResult"
-          cpp = "::gfx::CALayerResult"
-        },
-      ]
-      traits_sources = [ "ca_layer_result_mojom_traits.cc" ]
-      traits_headers = [ "ca_layer_result_mojom_traits.h" ]
-      traits_public_deps = [ "//ui/gfx" ]
-    },
-    {
-      types = [
-        {
           mojom = "gfx.mojom.DelegatedInkMetadata"
           cpp = "::std::unique_ptr<::gfx::DelegatedInkMetadata>"
           move_only = true
@@ -244,21 +212,6 @@ mojom("mojom") {
       ]
       traits_sources = [ "delegated_ink_point_mojom_traits.cc" ]
       traits_headers = [ "delegated_ink_point_mojom_traits.h" ]
-      traits_public_deps = [ "//ui/gfx" ]
-    },
-    {
-      types = [
-        {
-          mojom = "gfx.mojom.ColorVolumeMetadata"
-          cpp = "::gfx::ColorVolumeMetadata"
-        },
-        {
-          mojom = "gfx.mojom.HDRMetadata"
-          cpp = "::gfx::HDRMetadata"
-        },
-      ]
-      traits_headers = [ "hdr_metadata_mojom_traits.h" ]
-      traits_sources = [ "hdr_metadata_mojom_traits.cc" ]
       traits_public_deps = [ "//ui/gfx" ]
     },
     {
@@ -347,7 +300,70 @@ mojom("mojom") {
       traits_headers = [ "frame_data_mojom_traits.h" ]
       traits_public_deps = [ "//ui/gfx" ]
     },
+    {
+      types = [
+        {
+          mojom = "gfx.mojom.OverlayType"
+          cpp = "::gfx::OverlayType"
+        },
+      ]
+      traits_headers = [ "overlay_type_mojom_traits.h" ]
+      traits_public_deps = [ "//ui/gfx" ]
+    },
   ]
+
+  if (is_apple) {
+    cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "gfx.mojom.CALayerResult"
+            cpp = "::gfx::CALayerResult"
+          },
+        ]
+        traits_sources = [ "ca_layer_result_mojom_traits.cc" ]
+        traits_headers = [ "ca_layer_result_mojom_traits.h" ]
+        traits_public_deps = [ "//ui/gfx" ]
+      },
+    ]
+  }
+
+  if (use_blink) {
+    cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "gfx.mojom.CALayerParams"
+            cpp = "::gfx::CALayerParams"
+          },
+        ]
+        traits_sources = [ "ca_layer_params_mojom_traits.cc" ]
+        traits_headers = [ "ca_layer_params_mojom_traits.h" ]
+        traits_public_deps = [ "//ui/gfx" ]
+      },
+    ]
+  }
+
+  if (use_blink) {
+    shared_cpp_typemaps += [
+      {
+        types = [
+          {
+            # TODO(crbug.com/40584691): Note that this is typemapped to the same
+            # type as the gfx.mojom.GpuMemoryBufferPlatformHandle *union*. This
+            # is intentional since the C++ GpuMemoryBufferHandle type is is a
+            # hybrid union+struct today. This can be cleaned up once the
+            # associated bug is fixed.
+            mojom = "gfx.mojom.GpuMemoryBufferHandle"
+            cpp = "::gfx::GpuMemoryBufferHandle"
+            move_only = true
+          },
+        ]
+        traits_headers = [ "buffer_types_mojom_traits.h" ]
+        traits_public_deps = [ ":shared_mojom_traits" ]
+      },
+    ]
+  }
 
   cpp_typemaps += shared_cpp_typemaps
   blink_cpp_typemaps = shared_cpp_typemaps
@@ -369,38 +385,98 @@ mojom("mojom") {
 
 mojom("native_handle_types") {
   sources = [ "native_handle_types.mojom" ]
-  if (is_linux || is_chromeos || use_ozone) {
+  supports_native_pixmap = is_linux || is_chromeos || use_ozone
+
+  if (supports_native_pixmap) {
     enabled_features = [ "supports_native_pixmap" ]
   }
-  if (is_linux || is_chromeos) {
-    enabled_features += [ "is_linux_or_chromeos_ash" ]
-  }
+
   public_deps = [ "//mojo/public/mojom/base" ]
   generate_java = true
-  webui_module_path = "chrome://resources/mojo/ui/gfx/mojom"
 
-  shared_cpp_typemap = {
-    types = [
+  shared_cpp_typemaps = []
+
+  if (supports_native_pixmap) {
+    shared_cpp_typemaps += [
       {
-        mojom = "gfx.mojom.DXGIHandleToken"
-        cpp = "::gfx::DXGIHandleToken"
-      },
-      {
-        mojom = "gfx.mojom.NativePixmapHandle"
-        cpp = "::gfx::NativePixmapHandle"
-        move_only = true
-      },
-      {
-        mojom = "gfx.mojom.NativePixmapPlane"
-        cpp = "::gfx::NativePixmapPlane"
-        move_only = true
+        types = [
+          {
+            mojom = "gfx.mojom.NativePixmapHandle"
+            cpp = "::gfx::NativePixmapHandle"
+            move_only = true
+          },
+          {
+            mojom = "gfx.mojom.NativePixmapPlane"
+            cpp = "::gfx::NativePixmapPlane"
+            move_only = true
+          },
+        ]
+        traits_headers = [ "native_handle_types_mojom_traits.h" ]
+        traits_public_deps = [ ":native_handle_types_mojom_traits" ]
       },
     ]
-    traits_headers = [ "native_handle_types_mojom_traits.h" ]
-    traits_public_deps = [ ":native_handle_types_mojom_traits" ]
   }
-  cpp_typemaps = [ shared_cpp_typemap ]
-  blink_cpp_typemaps = [ shared_cpp_typemap ]
+
+  if (use_blink) {
+    shared_cpp_typemaps += [
+      {
+        types = [
+          {
+            # TODO(crbug.com/40584691): Note that this is typemapped to the same
+            # type as the gfx.mojom.GpuMemoryBufferHandle *struct*. This is
+            # intentional since the C++ GpuMemoryBufferHandle type is is a hybrid
+            # union+struct today. This can be cleaned up once the associated bug is
+            # fixed.
+            mojom = "gfx.mojom.GpuMemoryBufferPlatformHandle"
+            cpp = "::gfx::GpuMemoryBufferHandle"
+            move_only = true
+            nullable_is_same_type = true
+          },
+        ]
+        traits_headers = [ "native_handle_types_mojom_traits.h" ]
+        traits_public_deps = [ ":native_handle_types_mojom_traits" ]
+      },
+    ]
+  }
+
+  if (is_android) {
+    shared_cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "gfx.mojom.AHardwareBufferHandle"
+            cpp = "::base::android::ScopedHardwareBufferHandle"
+            move_only = true
+          },
+        ]
+        traits_headers = [ "native_handle_types_mojom_traits.h" ]
+        traits_public_deps = [ ":native_handle_types_mojom_traits" ]
+      },
+    ]
+  }
+
+  if (is_win) {
+    shared_cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "gfx.mojom.DXGIHandle"
+            cpp = "::gfx::DXGIHandle"
+            move_only = true
+          },
+          {
+            mojom = "gfx.mojom.DXGIHandleToken"
+            cpp = "::gfx::DXGIHandleToken"
+          },
+        ]
+        traits_headers = [ "native_handle_types_mojom_traits.h" ]
+        traits_public_deps = [ ":native_handle_types_mojom_traits" ]
+      },
+    ]
+  }
+
+  cpp_typemaps = shared_cpp_typemaps
+  blink_cpp_typemaps = shared_cpp_typemaps
 }
 
 if (is_win) {
@@ -415,6 +491,11 @@ if (is_win) {
 
 mojom("test_interfaces") {
   sources = [ "traits_test_service.mojom" ]
+
+  enabled_features = []
+  if (use_blink) {
+    enabled_features += [ "use_blink" ]
+  }
 
   public_deps = [ ":mojom" ]
 }
@@ -432,6 +513,53 @@ component("native_handle_types_mojom_traits") {
     "//base",
     "//mojo/public/mojom/base",
     "//ui/gfx",
+  ]
+
+  if (is_apple) {
+    frameworks = [
+      "CoreFoundation.framework",
+      "IOSurface.framework",
+    ]
+  }
+}
+
+mojom("hdr_metadata") {
+  generate_java = true
+
+  sources = [ "hdr_metadata.mojom" ]
+
+  public_deps = [
+    "//mojo/public/mojom/base",
+    "//skia/public/mojom",
+  ]
+
+  cpp_typemaps = [
+    {
+      types = [
+        {
+          mojom = "gfx.mojom.HdrMetadataCta861_3"
+          cpp = "::gfx::HdrMetadataCta861_3"
+        },
+        {
+          mojom = "gfx.mojom.HdrMetadataSmpteSt2086"
+          cpp = "::gfx::HdrMetadataSmpteSt2086"
+        },
+        {
+          mojom = "gfx.mojom.HdrMetadataNdwl"
+          cpp = "::gfx::HdrMetadataNdwl"
+        },
+        {
+          mojom = "gfx.mojom.HdrMetadataExtendedRange"
+          cpp = "::gfx::HdrMetadataExtendedRange"
+        },
+        {
+          mojom = "gfx.mojom.HDRMetadata"
+          cpp = "::gfx::HDRMetadata"
+        },
+      ]
+      traits_headers = [ "hdr_metadata_mojom_traits.h" ]
+      traits_sources = [ "hdr_metadata_mojom_traits.cc" ]
+    },
   ]
 }
 
@@ -455,14 +583,13 @@ component("shared_mojom_traits") {
   public_deps = [
     ":mojom_shared",
     ":native_handle_types",
+    "//build:blink_buildflags",
     "//ui/gfx",
   ]
-  deps = [ "//skia/public/mojom" ]
-  if (use_ozone) {
-    public_deps += [ "//ui/ozone:buildflags" ]
-  }
-  frameworks = [
-    "CoreFoundation.framework",
-    "IOSurface.framework",
+  deps = [
+    "//components/viz/common/resources:shared_image_format",
+    "//services/viz/public/mojom/compositing:shared_image_format",
+    "//skia/public/mojom",
+    "//ui/base:ozone_buildflags",
   ]
 }

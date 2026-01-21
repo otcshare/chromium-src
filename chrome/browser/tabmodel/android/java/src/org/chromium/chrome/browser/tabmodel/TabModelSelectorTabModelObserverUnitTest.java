@@ -9,14 +9,14 @@ import static org.junit.Assert.assertSame;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -26,30 +26,24 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests for the TabModelSelectorTabModelObserver.
- */
+/** Tests for the TabModelSelectorTabModelObserver. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class TabModelSelectorTabModelObserverUnitTest {
-    @Mock
-    private TabModelSelector mSelector;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private TabModelSelector mSelector;
 
-    @Mock
-    private TabModel mTabModel;
+    @Mock private TabModel mTabModel;
 
     private List<TabModel> mTabModels = new ArrayList<>();
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
         mTabModels = new ArrayList<>();
         doReturn(mTabModels).when(mSelector).getModels();
     }
 
     @Test
-    @SmallTest
     public void testAlreadyInitializedSelector() throws TimeoutException {
         // ARRANGE
         mTabModels.add(mTabModel);
@@ -69,12 +63,11 @@ public class TabModelSelectorTabModelObserverUnitTest {
         // ASSERT
         registrationCompleteCallback.waitForCallback(0);
         verify(mTabModel).addObserver(arg1.capture());
-        assertEquals(1, mSelector.getModels().size());
+        assertEquals(1, mTabModels.size());
         assertSame(observer, arg1.getValue());
     }
 
     @Test
-    @SmallTest
     public void testUninitializedSelector() throws TimeoutException {
         // ARRANGE
         ArgumentCaptor<TabModelSelectorObserver> arg1 =
@@ -98,12 +91,11 @@ public class TabModelSelectorTabModelObserverUnitTest {
         // ASSERT
         registrationCompleteCallback.waitForCallback(0);
         verify(mTabModel).addObserver(arg2.capture());
-        assertEquals(1, mSelector.getModels().size());
+        assertEquals(1, mTabModels.size());
         assertSame(observer, arg2.getValue());
     }
 
     @Test
-    @SmallTest
     public void testDestroySelector() {
         // ARRANGE
         ArgumentCaptor<TabModelSelectorObserver> arg1 =

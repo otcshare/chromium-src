@@ -6,11 +6,14 @@
 #define CHROME_BROWSER_ASH_PLUGIN_VM_PLUGIN_VM_LICENSE_CHECKER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_forward.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
@@ -39,14 +42,14 @@ class PluginVmLicenseChecker {
 
  private:
   std::unique_ptr<network::ResourceRequest> CreateResourceRequest(
-      base::StringPiece access_token);
+      std::string_view access_token);
 
   void FetchAccessToken();
-  void HandleStringResponse(std::unique_ptr<std::string> response_body);
+  void HandleStringResponse(std::optional<std::string> response_body);
   void CallEndpointWithAccessToken(GoogleServiceAuthError error,
                                    signin::AccessTokenInfo access_token_info);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   GURL validation_url_;
   net::NetworkTrafficAnnotationTag traffic_annotation_;
 

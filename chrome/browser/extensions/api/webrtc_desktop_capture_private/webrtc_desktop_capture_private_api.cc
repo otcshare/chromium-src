@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/tabs.h"
 #include "chrome/common/extensions/api/webrtc_desktop_capture_private.h"
@@ -25,12 +24,10 @@ const char kUrlNotSecure[] =
 }  // namespace
 
 WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::
-    WebrtcDesktopCapturePrivateChooseDesktopMediaFunction() {
-}
+    WebrtcDesktopCapturePrivateChooseDesktopMediaFunction() = default;
 
 WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::
-    ~WebrtcDesktopCapturePrivateChooseDesktopMediaFunction() {
-}
+    ~WebrtcDesktopCapturePrivateChooseDesktopMediaFunction() = default;
 
 ExtensionFunction::ResponseAction
 WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::Run() {
@@ -44,20 +41,21 @@ WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::Run() {
   DesktopCaptureRequestsRegistry::GetInstance()->AddRequest(source_process_id(),
                                                             request_id_, this);
 
-  mutable_args().erase(args().begin());
+  GetMutableArgs().erase(args().begin());
 
-  std::unique_ptr<Params> params = Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Params> params = Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
-  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
-      params->request.guest_process_id,
-      params->request.guest_render_frame_id);
+  content::RenderFrameHost* render_frame_host =
+      content::RenderFrameHost::FromID(params->request.guest_process_id,
+                                       params->request.guest_render_frame_id);
 
-  if (!rfh) {
+  if (!render_frame_host) {
     return RespondNow(Error(kTargetNotFoundError));
   }
 
-  GURL origin = rfh->GetLastCommittedURL().DeprecatedGetOriginAsURL();
+  GURL origin =
+      render_frame_host->GetLastCommittedURL().DeprecatedGetOriginAsURL();
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           ::switches::kAllowHttpScreenCapture) &&
       !network::IsUrlPotentiallyTrustworthy(origin)) {
@@ -71,18 +69,18 @@ WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::Run() {
   using Sources = std::vector<api::desktop_capture::DesktopCaptureSourceType>;
   Sources* sources = reinterpret_cast<Sources*>(&params->sources);
 
-  // TODO(crbug.com/1329129): Plumb systemAudio, selfBrowserSurface and
+  // TODO(crbug.com/40226648): Plumb systemAudio, selfBrowserSurface and
   // suppressLocalAudioPlaybackIntended here.
   return Execute(*sources, /*exclude_system_audio=*/false,
                  /*exclude_self_browser_surface=*/false,
-                 /*suppress_local_audio_playback_intended=*/false, rfh, origin,
-                 target_name);
+                 /*suppress_local_audio_playback_intended=*/false,
+                 render_frame_host, origin, target_name);
 }
 
 WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction::
-    WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction() {}
+    WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction() = default;
 
 WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction::
-    ~WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction() {}
+    ~WebrtcDesktopCapturePrivateCancelChooseDesktopMediaFunction() = default;
 
 }  // namespace extensions

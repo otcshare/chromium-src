@@ -4,7 +4,7 @@
 
 package org.chromium.android_webview.robolectric;
 
-import static org.mockito.Mockito.any;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
@@ -28,7 +28,6 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.android_webview.AwDisplayModeController;
 import org.chromium.base.Log;
@@ -36,9 +35,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
 import org.chromium.blink.mojom.DisplayMode;
 
-/**
- * JUnit tests for AwDisplayModeController.
- */
+/** JUnit tests for AwDisplayModeController. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class AwDisplayModeControllerTest {
@@ -48,20 +45,14 @@ public class AwDisplayModeControllerTest {
     private InOrder mInOrder;
     private Context mContext;
 
-    @Mock
-    private AwDisplayModeController.Delegate mDelegate;
-    @Mock
-    private View mView;
-    @Mock
-    private View mAnotherView;
+    @Mock private AwDisplayModeController.Delegate mDelegate;
+    @Mock private View mView;
+    @Mock private View mAnotherView;
 
-    @Mock
-    private ViewGroup mParentView;
-    @Mock
-    private ViewGroup mRootView;
+    @Mock private ViewGroup mRootView;
 
     private View.OnApplyWindowInsetsListener mListener;
-    private int[] mLocationOnScreen = {0, 0};
+    private final int[] mLocationOnScreen = {0, 0};
     private int mViewWidth;
     private int mViewHeight;
 
@@ -73,9 +64,7 @@ public class AwDisplayModeControllerTest {
 
     private AwDisplayModeController mController;
 
-    public AwDisplayModeControllerTest() {
-        if (DEBUG) ShadowLog.stream = System.out; // allows logging
-    }
+    public AwDisplayModeControllerTest() {}
 
     @Before
     public void setUp() {
@@ -91,41 +80,44 @@ public class AwDisplayModeControllerTest {
         mGlobalTransformMatrix = new Matrix(); // identity matrix
 
         // Set up the view.
-        doAnswer(new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) throws Throwable {
-                int[] loc = (int[]) (invocation.getArguments()[0]);
-                loc[0] = mLocationOnScreen[0];
-                loc[1] = mLocationOnScreen[1];
-                return null;
-            }
-        })
+        doAnswer(
+                        new Answer<Void>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) throws Throwable {
+                                int[] loc = (int[]) invocation.getArguments()[0];
+                                loc[0] = mLocationOnScreen[0];
+                                loc[1] = mLocationOnScreen[1];
+                                return null;
+                            }
+                        })
                 .when(mView)
                 .getLocationOnScreen(any(int[].class));
 
         when(mView.getMeasuredWidth()).thenReturn(mViewWidth);
         when(mView.getMeasuredHeight()).thenReturn(mViewHeight);
-        doAnswer(new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) throws Throwable {
-                Matrix matrix = (Matrix) (invocation.getArguments()[0]);
-                matrix.set(mGlobalTransformMatrix);
-                return null;
-            }
-        })
+        doAnswer(
+                        new Answer<Void>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) throws Throwable {
+                                Matrix matrix = (Matrix) invocation.getArguments()[0];
+                                matrix.set(mGlobalTransformMatrix);
+                                return null;
+                            }
+                        })
                 .when(mView)
                 .transformMatrixToGlobal(any(Matrix.class));
 
         // Set up the root view.
-        doAnswer(new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) throws Throwable {
-                int[] loc = (int[]) (invocation.getArguments()[0]);
-                loc[0] = mLocationOnScreen[0];
-                loc[1] = mLocationOnScreen[1];
-                return null;
-            }
-        })
+        doAnswer(
+                        new Answer<Void>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) throws Throwable {
+                                int[] loc = (int[]) invocation.getArguments()[0];
+                                loc[0] = mLocationOnScreen[0];
+                                loc[1] = mLocationOnScreen[1];
+                                return null;
+                            }
+                        })
                 .when(mRootView)
                 .getLocationOnScreen(any(int[].class));
         when(mRootView.getMeasuredWidth()).thenReturn(mViewWidth);

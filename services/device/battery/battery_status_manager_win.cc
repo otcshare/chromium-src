@@ -7,9 +7,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/win/message_window.h"
+#include "base/callback_list.h"
+#include "base/functional/bind.h"
 #include "services/device/battery/battery_status_manager.h"
+#include "ui/gfx/win/singleton_hwnd.h"
 
 namespace device {
 
@@ -17,9 +18,7 @@ namespace {
 
 typedef BatteryStatusService::BatteryUpdateCallback BatteryCallback;
 
-const wchar_t kWindowClassName[] = L"BatteryStatusMessageWindow";
-
-// Message-only window for handling battery changes on Windows.
+// Singleton hwnd for handling battery changes on Windows.
 class BatteryStatusObserver {
  public:
   explicit BatteryStatusObserver(const BatteryCallback& callback)
@@ -30,24 +29,19 @@ class BatteryStatusObserver {
   BatteryStatusObserver(const BatteryStatusObserver&) = delete;
   BatteryStatusObserver& operator=(const BatteryStatusObserver&) = delete;
 
-  ~BatteryStatusObserver() { DCHECK(!window_); }
+  ~BatteryStatusObserver() {}
 
   void Start() {
-    if (CreateMessageWindow()) {
-      BatteryChanged();
-      // RegisterPowerSettingNotification function work from Windows Vista
-      // onwards. However even without them we will receive notifications,
-      // e.g. when a power source is connected.
-      // TODO(timvolodine) : consider polling for battery changes on windows
-      // versions prior to Vista, see crbug.com/402466.
-      power_handle_ = RegisterNotification(&GUID_ACDC_POWER_SOURCE);
-      battery_change_handle_ =
-          RegisterNotification(&GUID_BATTERY_PERCENTAGE_REMAINING);
-    } else {
-      // Could not create a message window, execute callback with the default
-      // values.
-      callback_.Run(mojom::BatteryStatus());
-    }
+    hwnd_subscription_ =
+        gfx::SingletonHwnd::GetInstance()->RegisterCallback(base::BindRepeating(
+            &BatteryStatusObserver::OnWndProc, base::Unretained(this)));
+    BatteryChanged();
+    // RegisterPowerSettingNotification function work from Windows Vista
+    // onwards. However even without them we will receive notifications, e.g.
+    // when a power source is connected.
+    power_handle_ = RegisterNotification(&GUID_ACDC_POWER_SOURCE);
+    battery_change_handle_ =
+        RegisterNotification(&GUID_BATTERY_PERCENTAGE_REMAINING);
   }
 
   void Stop() {
@@ -59,7 +53,6 @@ class BatteryStatusObserver {
       UnregisterNotification(battery_change_handle_);
       battery_change_handle_ = nullptr;
     }
-    window_.reset();
   }
 
  private:
@@ -71,50 +64,29 @@ class BatteryStatusObserver {
       callback_.Run(mojom::BatteryStatus());
   }
 
-  bool HandleMessage(UINT message,
-                     WPARAM wparam,
-                     LPARAM lparam,
-                     LRESULT* result) {
-    switch (message) {
-      case WM_POWERBROADCAST:
-        if (wparam == PBT_APMPOWERSTATUSCHANGE ||
-            wparam == PBT_POWERSETTINGCHANGE) {
-          BatteryChanged();
-        }
-        *result = 0;
-        return true;
-      default:
-        return false;
+  void OnWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_POWERBROADCAST) {
+      if (wparam == PBT_APMPOWERSTATUSCHANGE ||
+          wparam == PBT_POWERSETTINGCHANGE) {
+        BatteryChanged();
+      }
     }
   }
 
   HPOWERNOTIFY RegisterNotification(LPCGUID power_setting) {
-    return RegisterPowerSettingNotification(window_->hwnd(), power_setting,
-                                            DEVICE_NOTIFY_WINDOW_HANDLE);
+    return RegisterPowerSettingNotification(
+        gfx::SingletonHwnd::GetInstance()->hwnd(), power_setting,
+        DEVICE_NOTIFY_WINDOW_HANDLE);
   }
 
   BOOL UnregisterNotification(HPOWERNOTIFY handle) {
     return UnregisterPowerSettingNotification(handle);
   }
 
-  bool CreateMessageWindow() {
-    // TODO(timvolodine): consider reusing the message window of PowerMonitor.
-    window_ = std::make_unique<base::win::MessageWindow>();
-    if (!window_->CreateNamed(
-            base::BindRepeating(&BatteryStatusObserver::HandleMessage,
-                                base::Unretained(this)),
-            kWindowClassName)) {
-      LOG(ERROR) << "Failed to create message window: " << kWindowClassName;
-      window_.reset();
-      return false;
-    }
-    return true;
-  }
-
   HPOWERNOTIFY power_handle_;
   HPOWERNOTIFY battery_change_handle_;
   BatteryCallback callback_;
-  std::unique_ptr<base::win::MessageWindow> window_;
+  base::CallbackListSubscription hwnd_subscription_;
 };
 
 class BatteryStatusManagerWin : public BatteryStatusManager {

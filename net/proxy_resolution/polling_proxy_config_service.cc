@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/observer_list.h"
 #include "base/synchronization/lock.h"
@@ -100,7 +100,7 @@ class PollingProxyConfigService::Core
 
   void PollAsync(GetConfigFunction func) {
     ProxyConfigWithAnnotation config;
-    func(traffic_annotation_, &config);
+    func.Run(traffic_annotation_, &config);
 
     base::AutoLock lock(lock_);
     if (origin_task_runner_.get()) {
@@ -114,8 +114,9 @@ class PollingProxyConfigService::Core
     DCHECK(poll_task_outstanding_);
     poll_task_outstanding_ = false;
 
-    if (!origin_task_runner_.get())
+    if (!origin_task_runner_.get()) {
       return;  // Was orphaned (parent has already been destroyed).
+    }
 
     DCHECK(origin_task_runner_->BelongsToCurrentThread());
 
@@ -123,12 +124,14 @@ class PollingProxyConfigService::Core
       // If the configuration has changed, notify the observers.
       has_config_ = true;
       last_config_ = config;
-      for (auto& observer : observers_)
+      for (auto& observer : observers_) {
         observer.OnProxyConfigChanged(config, ProxyConfigService::CONFIG_VALID);
+      }
     }
 
-    if (poll_task_queued_)
+    if (poll_task_queued_) {
       CheckForChangesNow();
+    }
   }
 
   void LazyInitializeOriginLoop() {
@@ -176,6 +179,10 @@ PollingProxyConfigService::GetLatestProxyConfig(
 
 void PollingProxyConfigService::OnLazyPoll() {
   core_->OnLazyPoll();
+}
+
+bool PollingProxyConfigService::UsesPolling() {
+  return true;
 }
 
 PollingProxyConfigService::PollingProxyConfigService(

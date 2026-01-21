@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/api/device_permissions_manager.h"
+
 #include <stdint.h>
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/test/base/testing_profile.h"
-#include "extensions/browser/api/device_permissions_manager.h"
 #include "extensions/browser/api/hid/hid_device_manager.h"
 #include "extensions/browser/api/usb/usb_device_manager.h"
 #include "extensions/browser/extension_prefs.h"
@@ -45,14 +46,14 @@ class DevicePermissionsManagerTest : public testing::Test {
     testing::Test::SetUp();
     env_ = std::make_unique<extensions::TestExtensionEnvironment>();
     extension_ = env_->MakeExtension(
-        base::test::ParseJson("{"
-                              "  \"app\": {"
-                              "    \"background\": {"
-                              "      \"scripts\": [\"background.js\"]"
-                              "    }"
-                              "  },"
-                              "  \"permissions\": [ \"hid\", \"usb\" ]"
-                              "}"));
+        base::test::ParseJsonDict("{"
+                                  "  \"app\": {"
+                                  "    \"background\": {"
+                                  "      \"scripts\": [\"background.js\"]"
+                                  "    }"
+                                  "  },"
+                                  "  \"permissions\": [ \"hid\", \"usb\" ]"
+                                  "}"));
 
     // Set fake device manager for extensions::UsbDeviceManager.
     mojo::PendingRemote<device::mojom::UsbDeviceManager> usb_manager;
@@ -85,10 +86,13 @@ class DevicePermissionsManagerTest : public testing::Test {
         "7", 0, 0, "Test HID Device", "", HidBusType::kHIDBusTypeUSB);
   }
 
-  void TearDown() override { env_.reset(nullptr); }
+  void TearDown() override {
+    extension_ = nullptr;
+    env_.reset(nullptr);
+  }
 
   std::unique_ptr<extensions::TestExtensionEnvironment> env_;
-  raw_ptr<const extensions::Extension> extension_;
+  raw_ptr<const extensions::Extension> extension_ = nullptr;
   device::FakeUsbDeviceManager fake_usb_manager_;
   device::mojom::UsbDeviceInfoPtr device0_;
   device::mojom::UsbDeviceInfoPtr device1_;
@@ -308,9 +312,8 @@ TEST_F(DevicePermissionsManagerTest, LoadPrefs) {
       "    \"vendor_id\": 0"
       "  }"
       "]");
-  env_->GetExtensionPrefs()->UpdateExtensionPref(
-      extension_->id(), "devices",
-      base::Value::ToUniquePtrValue(std::move(prefs_value)));
+  env_->GetExtensionPrefs()->UpdateExtensionPref(extension_->id(), "devices",
+                                                 std::move(prefs_value));
 
   DevicePermissionsManager* manager =
       DevicePermissionsManager::Get(env_->profile());
@@ -349,13 +352,13 @@ TEST_F(DevicePermissionsManagerTest, PermissionMessages) {
             DevicePermissionsManager::GetPermissionMessage(
                 0x0000, 0x0001, empty, empty, u"A", false));
 
-  EXPECT_EQ(u"Unknown product 0001 from Google Inc.",
+  EXPECT_EQ(u"Unknown product 0010 from Google Inc.",
             DevicePermissionsManager::GetPermissionMessage(
-                0x18D1, 0x0001, empty, empty, empty, false));
+                0x18D1, 0x0010, empty, empty, empty, false));
 
-  EXPECT_EQ(u"Unknown product 0001 from Google Inc. (serial number A)",
+  EXPECT_EQ(u"Unknown product 0010 from Google Inc. (serial number A)",
             DevicePermissionsManager::GetPermissionMessage(
-                0x18D1, 0x0001, empty, empty, serial_number, false));
+                0x18D1, 0x0010, empty, empty, serial_number, false));
 
   EXPECT_EQ(u"Nexus One from Google Inc.",
             DevicePermissionsManager::GetPermissionMessage(

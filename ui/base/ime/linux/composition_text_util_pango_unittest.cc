@@ -8,9 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ime/composition_text.h"
@@ -38,7 +40,7 @@ struct TestData {
   const ImeTextSpan ime_text_spans[10];
 };
 
-const TestData kTestData[] = {
+constexpr auto kTestData = std::to_array<TestData>({
     // Normal case
     {"One Two Three",
      {{PANGO_ATTR_UNDERLINE, PANGO_UNDERLINE_SINGLE, 0, 3},
@@ -106,7 +108,7 @@ const TestData kTestData[] = {
       {9, 15, SK_ColorTRANSPARENT, ui::ImeTextSpan::Thickness::kThin,
        SK_ColorTRANSPARENT},
       {0, 0, 0, ui::ImeTextSpan::Thickness::kThin, SK_ColorTRANSPARENT}}},
-};
+});
 
 void CompareImeTextSpan(const ImeTextSpan& a, const ui::ImeTextSpan& b) {
   EXPECT_EQ(a.start_offset, b.start_offset);
@@ -119,7 +121,7 @@ void CompareImeTextSpan(const ImeTextSpan& a, const ui::ImeTextSpan& b) {
 TEST(CompositionTextUtilPangoTest, ExtractCompositionText) {
   for (size_t i = 0; i < std::size(kTestData); ++i) {
     const char* text = kTestData[i].text;
-    const AttributeInfo* attrs = kTestData[i].attrs;
+    base::span<const AttributeInfo> attrs = kTestData[i].attrs;
     SCOPED_TRACE(testing::Message() << "Testing:" << i
                  << " text:" << text);
 
@@ -147,7 +149,7 @@ TEST(CompositionTextUtilPangoTest, ExtractCompositionText) {
     ui::CompositionText result;
     ui::ExtractCompositionTextFromGtkPreedit(text, pango_attrs, 0, &result);
 
-    const ImeTextSpan* ime_text_spans = kTestData[i].ime_text_spans;
+    base::span<const ImeTextSpan> ime_text_spans = kTestData[i].ime_text_spans;
     for (size_t u = 0;
          ime_text_spans[u].underline_color && u < result.ime_text_spans.size();
          ++u) {

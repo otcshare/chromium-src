@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "third_party/boringssl/src/include/openssl/hmac.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/numerics/safe_math.h"
 #include "components/webcrypto/algorithm_implementation.h"
 #include "components/webcrypto/algorithms/secret_key_util.h"
@@ -19,7 +23,6 @@
 #include "crypto/secure_util.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
 #include "third_party/blink/public/platform/web_crypto_key_algorithm.h"
-#include "third_party/boringssl/src/include/openssl/hmac.h"
 
 namespace webcrypto {
 
@@ -112,7 +115,7 @@ Status SignHmac(const std::vector<uint8_t>& raw_key,
 
 class HmacImplementation : public AlgorithmImplementation {
  public:
-  HmacImplementation() {}
+  HmacImplementation() = default;
 
   Status GenerateKey(const blink::WebCryptoAlgorithm& algorithm,
                      bool extractable,
@@ -199,8 +202,7 @@ class HmacImplementation : public AlgorithmImplementation {
     }
 
     // Otherwise zero out the unused bits in the key data before importing.
-    std::vector<uint8_t> modified_key_data(key_data.data(),
-                                           key_data.data() + key_data.size());
+    std::vector<uint8_t> modified_key_data = base::ToVector(key_data);
     TruncateToBitLength(keylen_bits, &modified_key_data);
     return CreateWebCryptoSecretKey(modified_key_data, key_algorithm,
                                     extractable, usages, key);
@@ -275,10 +277,7 @@ class HmacImplementation : public AlgorithmImplementation {
     if (status.IsError())
       return status;
 
-    // Do not allow verification of truncated MACs.
-    *signature_match = result.size() == signature.size() &&
-                       crypto::SecureMemEqual(result.data(), signature.data(),
-                                              signature.size());
+    *signature_match = crypto::SecureMemEqual(result, signature);
 
     return Status::Success();
   }
@@ -298,20 +297,25 @@ class HmacImplementation : public AlgorithmImplementation {
   }
 
   Status GetKeyLength(const blink::WebCryptoAlgorithm& key_length_algorithm,
-                      bool* has_length_bits,
-                      unsigned int* length_bits) const override {
+                      std::optional<unsigned int>* length_bits) const override {
     const blink::WebCryptoHmacImportParams* params =
         key_length_algorithm.HmacImportParams();
 
-    *has_length_bits = true;
     if (params->HasLengthBits()) {
       *length_bits = params->OptionalLengthBits();
-      if (*length_bits == 0)
+      if (length_bits->value() == 0) {
         return Status::ErrorGetHmacKeyLengthZero();
+      }
       return Status::Success();
     }
 
-    return GetDigestBlockSizeBits(params->GetHash(), length_bits);
+    unsigned int block_size_bits;
+    Status status = GetDigestBlockSizeBits(params->GetHash(), &block_size_bits);
+    if (status.IsError()) {
+      return status;
+    }
+    *length_bits = block_size_bits;
+    return Status::Success();
   }
 };
 

@@ -5,17 +5,18 @@
 #ifndef CONTENT_BROWSER_INTEREST_GROUP_INTEREST_GROUP_PERMISSIONS_CHECKER_H_
 #define CONTENT_BROWSER_INTEREST_GROUP_INTEREST_GROUP_PERMISSIONS_CHECKER_H_
 
-#include "content/common/content_export.h"
-
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
+#include <string>
 #include <tuple>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "content/browser/interest_group/interest_group_permissions_cache.h"
+#include "content/common/content_export.h"
 #include "net/base/network_isolation_key.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -33,7 +34,7 @@ namespace content {
 // Groups permissions checks that can be handled by the same .well-known fetch,
 // to avoid redundant fetches.
 //
-// TODO(https://crbug.com/1315805):
+// TODO(crbug.com/40221941):
 // * Consider adding a per-NIK / per-page / per-frame LRU cache. Roundtrip to
 //   the HTTP cache are slow, and we'll likely want to limit the number of
 //   pending operations the renderer sends to the browser process at a time.
@@ -143,7 +144,7 @@ class CONTENT_EXPORT InterestGroupPermissionsChecker {
 
   // Invoked with the result of the ".well-known" fetch for `active_request`.
   void OnRequestComplete(ActiveRequestMap::iterator active_request,
-                         std::unique_ptr<std::string> response_body);
+                         std::optional<std::string> response_body);
 
   // Invoked with the result of parsing the response body associated with
   // `active_request` as JSON.

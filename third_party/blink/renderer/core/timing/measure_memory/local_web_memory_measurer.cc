@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_count.h"
 #include "base/check.h"
 #include "third_party/blink/renderer/core/timing/measure_memory/measure_memory_controller.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -20,7 +21,6 @@ using performance_manager::mojom::blink::WebMemoryBreakdownEntry;
 using performance_manager::mojom::blink::WebMemoryBreakdownEntryPtr;
 using performance_manager::mojom::blink::WebMemoryMeasurement;
 using performance_manager::mojom::blink::WebMemoryMeasurementPtr;
-using performance_manager::mojom::blink::WebMemoryUsage;
 
 namespace {
 v8::MeasureMemoryExecution ToV8MeasureMemoryExecution(
@@ -41,7 +41,7 @@ void LocalWebMemoryMeasurer::StartMeasurement(
     WebMemoryMeasurement::Mode mode,
     MeasureMemoryController* controller,
     WebMemoryAttribution::Scope attribution_scope,
-    WTF::String attribution_url) {
+    String attribution_url) {
   // We cannot use std::make_unique here because the constructor is private.
   auto delegate =
       std::unique_ptr<LocalWebMemoryMeasurer>(new LocalWebMemoryMeasurer(
@@ -52,7 +52,7 @@ void LocalWebMemoryMeasurer::StartMeasurement(
 LocalWebMemoryMeasurer::LocalWebMemoryMeasurer(
     MeasureMemoryController* controller,
     WebMemoryAttribution::Scope attribution_scope,
-    WTF::String attribution_url)
+    String attribution_url)
     : controller_(controller),
       attribution_scope_(attribution_scope),
       attribution_url_(attribution_url) {}
@@ -64,25 +64,25 @@ bool LocalWebMemoryMeasurer::ShouldMeasure(v8::Local<v8::Context> context) {
 }
 
 void LocalWebMemoryMeasurer::MeasurementComplete(
-    const std::vector<std::pair<v8::Local<v8::Context>, size_t>>& context_sizes,
-    size_t unattributed_size) {
-  DCHECK_LE(context_sizes.size(), 1u);
+    v8::MeasureMemoryDelegate::Result result) {
+  DCHECK_LE(result.contexts.size(), 1u);
+  DCHECK_LE(result.sizes_in_bytes.size(), 1u);
   // The isolate has only one context, so all memory of the isolate can be
   // attributed to that context.
-  size_t bytes = unattributed_size;
-  for (const auto& context_size : context_sizes) {
-    bytes += context_size.second;
+  base::ByteSize bytes(result.unattributed_size_in_bytes);
+  for (size_t size : result.sizes_in_bytes) {
+    bytes += base::ByteSize(size);
   }
   WebMemoryAttributionPtr attribution = WebMemoryAttribution::New();
   attribution->scope = attribution_scope_;
   attribution->url = attribution_url_;
   WebMemoryBreakdownEntryPtr breakdown = WebMemoryBreakdownEntry::New();
   breakdown->attribution.emplace_back(std::move(attribution));
-  breakdown->memory = WebMemoryUsage::New(bytes);
+  breakdown->memory = bytes;
   WebMemoryMeasurementPtr measurement = WebMemoryMeasurement::New();
   measurement->breakdown.push_back(std::move(breakdown));
-  measurement->blink_memory = WebMemoryUsage::New(0);
-  measurement->shared_memory = WebMemoryUsage::New(0);
+  measurement->blink_memory = base::ByteSize(0);
+  measurement->shared_memory = base::ByteSize(0);
   controller_->MeasurementComplete(std::move(measurement));
 }
 

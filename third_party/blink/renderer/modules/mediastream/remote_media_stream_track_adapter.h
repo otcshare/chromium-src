@@ -33,7 +33,7 @@ class TrackObserver;
 // (RemoteAudioTrackAdapter) and video (RemoteVideoTrackAdapter) track.
 template <typename WebRtcMediaStreamTrackType>
 class MODULES_EXPORT RemoteMediaStreamTrackAdapter
-    : public WTF::ThreadSafeRefCounted<
+    : public ThreadSafeRefCounted<
           RemoteMediaStreamTrackAdapter<WebRtcMediaStreamTrackType>> {
  public:
   RemoteMediaStreamTrackAdapter(
@@ -74,7 +74,7 @@ class MODULES_EXPORT RemoteMediaStreamTrackAdapter
   }
 
  protected:
-  friend class WTF::ThreadSafeRefCounted<
+  friend class ThreadSafeRefCounted<
       RemoteMediaStreamTrackAdapter<WebRtcMediaStreamTrackType>>;
 
   virtual ~RemoteMediaStreamTrackAdapter() {
@@ -90,12 +90,8 @@ class MODULES_EXPORT RemoteMediaStreamTrackAdapter
 
     auto* source = MakeGarbageCollected<MediaStreamSource>(
         id_, type, id_, true /*remote*/, std::move(platform_source));
-    if (platform_track) {
-      component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
-          id_, source, std::move(platform_track));
-    } else {
-      component_ = MakeGarbageCollected<MediaStreamComponentImpl>(id_, source);
-    }
+    component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
+        id_, source, std::move(platform_track));
     // If we have a reference to a window frame where the track was created,
     // store it on the component. This allows other code to use the correct
     // per-frame object for the track, such as the audio device for playout.
@@ -103,10 +99,14 @@ class MODULES_EXPORT RemoteMediaStreamTrackAdapter
         To<LocalDOMWindow>(track_execution_context_.Get())->GetFrame()) {
       // IsWindow() being true means that the ExecutionContext is a
       // LocalDOMWindow, so these casts should be safe.
-      component_->SetCreationFrame(
-          WebFrame::FromCoreFrame(
-              To<LocalDOMWindow>(track_execution_context_.Get())->GetFrame())
-              ->ToWebLocalFrame());
+      component_->SetCreationFrameGetter(BindRepeating(
+          [](LocalFrame* local_frame) {
+            return local_frame
+                       ? WebFrame::FromCoreFrame(local_frame)->ToWebLocalFrame()
+                       : nullptr;
+          },
+          WrapWeakPersistent(
+              To<LocalDOMWindow>(track_execution_context_.Get())->GetFrame())));
     }
     DCHECK(component_);
   }

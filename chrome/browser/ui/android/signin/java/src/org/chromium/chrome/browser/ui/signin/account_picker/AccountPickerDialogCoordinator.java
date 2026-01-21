@@ -9,12 +9,13 @@ import android.view.LayoutInflater;
 import android.view.View;
 
 import androidx.annotation.MainThread;
-import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerCoordinator.Listener;
+import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
@@ -22,37 +23,45 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modaldialog.ModalDialogProperties.Controller;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * Coordinator to show the modal account picker dialog.
- */
+/** Coordinator to show the modal account picker dialog. */
+@NullMarked
 public class AccountPickerDialogCoordinator {
     private final RecyclerView mAccountPickerView;
     private final AccountPickerCoordinator mCoordinator;
     private final ModalDialogManager mDialogManager;
     private final PropertyModel mModel;
 
-    /**
-     * Constructs the coordinator and shows the account picker dialog.
-     */
+    /** Constructs the coordinator and shows the account picker dialog. */
     @MainThread
     public AccountPickerDialogCoordinator(
-            Context context, Listener listener, ModalDialogManager modalDialogManager) {
-        mAccountPickerView = inflateAccountPickerView(context);
-        mCoordinator = new AccountPickerCoordinator(mAccountPickerView, listener);
+            Context context,
+            Listener listener,
+            ModalDialogManager modalDialogManager,
+            IdentityManager identityManager) {
         mDialogManager = modalDialogManager;
-        mModel = new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
-                         .with(ModalDialogProperties.TITLE,
-                                 context.getString(R.string.signin_account_picker_dialog_title))
-                         .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
-                         .with(ModalDialogProperties.CUSTOM_VIEW, mAccountPickerView)
-                         .with(ModalDialogProperties.CONTROLLER, createController())
-                         .build();
+        mAccountPickerView = inflateAccountPickerView(context);
+
+        mCoordinator =
+                new AccountPickerCoordinator(
+                        mAccountPickerView,
+                        listener,
+                        identityManager,
+                        R.layout.account_picker_dialog_row,
+                        R.layout.account_picker_dialog_new_account_row);
+        mModel =
+                new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
+                        .with(
+                                ModalDialogProperties.TITLE,
+                                context.getString(R.string.signin_account_picker_dialog_title))
+                        .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
+                        .with(ModalDialogProperties.CUSTOM_VIEW, mAccountPickerView)
+                        .with(ModalDialogProperties.CONTROLLER, createController())
+                        .build();
+
         mDialogManager.showDialog(mModel, ModalDialogType.APP);
     }
 
-    /**
-     * Dismisses the account picker dialog.
-     */
+    /** Dismisses the account picker dialog. */
     @MainThread
     public void dismissDialog() {
         mDialogManager.dismissDialog(mModel, DialogDismissalCause.ACTION_ON_CONTENT);
@@ -78,7 +87,6 @@ public class AccountPickerDialogCoordinator {
         };
     }
 
-    @VisibleForTesting
     View getAccountPickerViewForTests() {
         return mAccountPickerView;
     }

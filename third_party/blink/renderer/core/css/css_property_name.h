@@ -5,8 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_PROPERTY_NAME_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_PROPERTY_NAME_H_
 
+#include <optional>
+
 #include "base/check_op.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -20,6 +21,7 @@ class ExecutionContext;
 // including custom properties.
 class CORE_EXPORT CSSPropertyName {
   DISALLOW_NEW();
+
  public:
   explicit CSSPropertyName(CSSPropertyID property_id)
       : value_(static_cast<int>(property_id)) {
@@ -33,21 +35,20 @@ class CORE_EXPORT CSSPropertyName {
     DCHECK(!custom_property_name.IsNull());
   }
 
-  static absl::optional<CSSPropertyName> From(
+  static std::optional<CSSPropertyName> From(
       const ExecutionContext* execution_context,
       const String& value) {
     const CSSPropertyID property_id = CssPropertyID(execution_context, value);
-    if (property_id == CSSPropertyID::kInvalid)
-      return absl::nullopt;
-    if (property_id == CSSPropertyID::kVariable)
-      return absl::make_optional(CSSPropertyName(AtomicString(value)));
-    return absl::make_optional(CSSPropertyName(property_id));
+    if (property_id == CSSPropertyID::kInvalid) {
+      return std::nullopt;
+    }
+    if (property_id == CSSPropertyID::kVariable) {
+      return std::make_optional(CSSPropertyName(AtomicString(value)));
+    }
+    return std::make_optional(CSSPropertyName(property_id));
   }
 
   bool operator==(const CSSPropertyName&) const;
-  bool operator!=(const CSSPropertyName& other) const {
-    return !(*this == other);
-  }
 
   CSSPropertyID Id() const {
     DCHECK(!IsEmptyValue() && !IsDeletedValue());
@@ -56,7 +57,7 @@ class CORE_EXPORT CSSPropertyName {
 
   bool IsCustomProperty() const { return Id() == CSSPropertyID::kVariable; }
 
-  AtomicString ToAtomicString() const;
+  const AtomicString& ToAtomicString() const;
 
  private:
   // For HashTraits::EmptyValue().
@@ -78,48 +79,32 @@ class CORE_EXPORT CSSPropertyName {
   AtomicString custom_property_name_;
 
   friend class CSSPropertyNameTest;
-  friend struct ::WTF::DefaultHash<blink::CSSPropertyName>;
-  friend struct ::WTF::HashTraits<blink::CSSPropertyName>;
+  friend struct HashTraits<blink::CSSPropertyName>;
 };
 
-}  // namespace blink
-
-namespace WTF {
-
 template <>
-struct DefaultHash<blink::CSSPropertyName> {
-  STATIC_ONLY(DefaultHash);
-  static unsigned GetHash(const blink::CSSPropertyName& name) {
+struct HashTraits<CSSPropertyName> : SimpleClassHashTraits<CSSPropertyName> {
+  static unsigned GetHash(const CSSPropertyName& name) {
     return name.GetHash();
   }
 
-  static bool Equal(const blink::CSSPropertyName& a,
-                    const blink::CSSPropertyName& b) {
-    return a == b;
-  }
-
-  static const bool safe_to_compare_to_empty_or_deleted = true;
-};
-
-template <>
-struct HashTraits<blink::CSSPropertyName>
-    : SimpleClassHashTraits<blink::CSSPropertyName> {
-  using CSSPropertyName = blink::CSSPropertyName;
   static const bool kEmptyValueIsZero = false;
-  static const bool kNeedsDestruction = true;
-  static void ConstructDeletedValue(CSSPropertyName& slot, bool) {
-    new (NotNullTag::kNotNull, &slot)
+  static void ConstructDeletedValue(CSSPropertyName& slot) {
+    new (base::NotNullTag::kNotNull, &slot)
         CSSPropertyName(CSSPropertyName::kDeletedValue);
   }
-  static bool IsDeletedValue(CSSPropertyName value) {
+  static bool IsDeletedValue(const CSSPropertyName& value) {
     return value.IsDeletedValue();
   }
-  static blink::CSSPropertyName EmptyValue() {
-    return blink::CSSPropertyName(CSSPropertyName::kEmptyValue);
+  static bool IsEmptyValue(const CSSPropertyName& value) {
+    return value.IsEmptyValue();
+  }
+  static CSSPropertyName EmptyValue() {
+    return CSSPropertyName(CSSPropertyName::kEmptyValue);
   }
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 WTF_ALLOW_MOVE_INIT_AND_COMPARE_WITH_MEM_FUNCTIONS(blink::CSSPropertyName)
 

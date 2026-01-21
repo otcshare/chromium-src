@@ -8,10 +8,10 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/sequenced_task_runner.h"
@@ -99,7 +99,7 @@ void BluetoothSocketNet::ResetData() {
 }
 
 void BluetoothSocketNet::ResetTCPSocket() {
-  tcp_socket_.reset(new net::TCPSocket(NULL, NULL, net::NetLogSource()));
+  tcp_socket_ = net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
 }
 
 void BluetoothSocketNet::SetTCPSocket(

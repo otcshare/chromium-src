@@ -7,14 +7,15 @@
 #include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/commerce/core/pref_names.h"
 #include "components/commerce/core/price_tracking_utils.h"
+#include "components/commerce/core/shopping_service.h"
 #include "components/power_bookmarks/core/power_bookmark_utils.h"
 #include "components/power_bookmarks/core/proto/shopping_specifics.pb.h"
 #include "url/gurl.h"
@@ -85,20 +86,61 @@ void BookmarkUpdateManager::RunUpdate() {
   ScheduleUpdate();
 
   std::vector<const bookmarks::BookmarkNode*> nodes =
-      GetAllShoppingBookmarks(bookmark_model_);
-  std::vector<int64_t> ids;
-  for (auto* node : nodes)
-    ids.push_back(node->id());
+      shopping_service_->GetAllShoppingBookmarks();
 
+  if (nodes.empty()) {
+    return;
+  }
+
+  size_t current_batch_count = 0;
+  size_t total_bookmarks_processed = 0;
+  pending_update_batches_.emplace();
+  for (auto* node : nodes) {
+    // If we've reached the max for a batch, push a new vector onto the queue
+    // and continue.
+    if (current_batch_count >=
+        shopping_service_->GetMaxProductBookmarkUpdatesPerBatch()) {
+      pending_update_batches_.emplace();
+      current_batch_count = 0;
+    }
+    pending_update_batches_.back().push_back(node->id());
+    current_batch_count++;
+    total_bookmarks_processed++;
+
+    // If we've reached the maximum number of bookmarks we're willing to
+    // update, stop.
+    if (total_bookmarks_processed >= kShoppingListBookmarkUpdateBatchMaxParam) {
+      break;
+    }
+  }
+
+  StartNextBatch();
+}
+
+void BookmarkUpdateManager::StartNextBatch() {
+  if (pending_update_batches_.empty()) {
+    return;
+  }
+
+  expected_bookmark_updates_ = pending_update_batches_.front().size();
+  received_bookmark_updates_ = 0;
+  std::vector<int64_t> ids = std::move(pending_update_batches_.front());
+  pending_update_batches_.pop();
   shopping_service_->GetUpdatedProductInfoForBookmarks(
-      ids, base::BindRepeating(&BookmarkUpdateManager::HandleOnDemandResponse,
-                               weak_ptr_factory_.GetWeakPtr()));
+      std::move(ids),
+      base::BindRepeating(&BookmarkUpdateManager::HandleOnDemandResponse,
+                          weak_ptr_factory_.GetWeakPtr()));
 }
 
 void BookmarkUpdateManager::HandleOnDemandResponse(
     const int64_t bookmark_id,
     const GURL& url,
-    absl::optional<ProductInfo> info) {
+    std::optional<ProductInfo> info) {
+  received_bookmark_updates_++;
+  if (received_bookmark_updates_ >= expected_bookmark_updates_) {
+    StartNextBatch();
+  }
+
   if (!info.has_value())
     return;
 

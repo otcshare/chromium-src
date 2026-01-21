@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -142,7 +142,7 @@ void UsbDeviceManagerHelper::SetUsbManagerForTesting(
   GetInstance()->SetUsbManagerForTestingInternal(std::move(fake_usb_manager));
 }
 
-UsbDeviceManagerHelper::UsbDeviceManagerHelper() {}
+UsbDeviceManagerHelper::UsbDeviceManagerHelper() = default;
 
 UsbDeviceManagerHelper::~UsbDeviceManagerHelper() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

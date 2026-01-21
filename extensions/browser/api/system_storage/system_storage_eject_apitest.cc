@@ -4,8 +4,7 @@
 //
 // SystemStorage eject API browser tests.
 
-#include "base/callback_helpers.h"
-#include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -13,9 +12,9 @@
 #include "components/storage_monitor/storage_monitor.h"
 #include "components/storage_monitor/test_storage_monitor.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/system_storage/storage_api_test_util.h"
-#include "extensions/browser/api/system_storage/storage_info_provider.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/extension.h"
@@ -39,7 +38,7 @@ class SystemStorageEjectApiTest : public extensions::ShellApiTest {
   SystemStorageEjectApiTest& operator=(const SystemStorageEjectApiTest&) =
       delete;
 
-  ~SystemStorageEjectApiTest() override {}
+  ~SystemStorageEjectApiTest() override = default;
 
  protected:
   void SetUpOnMainThread() override {
@@ -65,7 +64,8 @@ class SystemStorageEjectApiTest : public extensions::ShellApiTest {
                                const std::string& ok_message) {
     ExtensionTestMessageListener listener(ok_message);
     frame->ExecuteJavaScriptForTests(base::ASCIIToUTF16(js_command),
-                                     base::NullCallback());
+                                     base::NullCallback(),
+                                     content::ISOLATED_WORLD_ID_GLOBAL);
     EXPECT_TRUE(listener.WaitUntilSatisfied());
   }
 

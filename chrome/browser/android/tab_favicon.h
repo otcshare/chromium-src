@@ -8,6 +8,13 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "components/favicon/core/favicon_driver_observer.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+
+class TabAndroid;
+
+namespace content {
+class WebContents;
+}
 
 namespace favicon {
 class FaviconDriver;
@@ -16,20 +23,18 @@ class FaviconDriver;
 // Native Favicon provider for Tab. Managed by Java layer.
 class TabFavicon : public favicon::FaviconDriverObserver {
  public:
-  TabFavicon(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  static SkBitmap GetBitmapForTab(TabAndroid* tab_android);
+
+  TabFavicon(JNIEnv* env,
+             const base::android::JavaRef<jobject>& obj,
+             int navigation_transition_favicon_size);
   ~TabFavicon() override;
 
-  void SetWebContents(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jweb_contents);
-  void ResetWebContents(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj);
-  void OnDestroyed(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj);
-  base::android::ScopedJavaLocalRef<jobject> GetFavicon(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
+  void SetWebContents(JNIEnv* env,
+                      const base::android::JavaRef<jobject>& jweb_contents);
+  void ResetWebContents(JNIEnv* env);
+  void OnDestroyed(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jobject> GetFavicon(JNIEnv* env);
 
   // favicon::FaviconDriverObserver
   void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
@@ -39,6 +44,9 @@ class TabFavicon : public favicon::FaviconDriverObserver {
                         const gfx::Image& image) override;
 
  private:
+  const int navigation_transition_favicon_size_;
+  raw_ptr<content::WebContents> active_web_contents_ = nullptr;
+
   base::android::ScopedJavaGlobalRef<jobject> jobj_;
   raw_ptr<favicon::FaviconDriver> favicon_driver_;
 };

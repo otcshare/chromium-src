@@ -5,21 +5,25 @@
 #include "chromecast/base/cast_sys_info_android.h"
 
 #include <sys/system_properties.h>
+
 #include <memory>
+#include <sstream>
 #include <string>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "base/logging.h"
 #include "base/system/sys_info.h"
 #include "chromecast/base/cast_sys_info_util.h"
-#include "chromecast/base/jni_headers/CastSysInfoAndroid_jni.h"
 #include "chromecast/base/version.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chromecast/base/jni_headers/CastSysInfoAndroid_jni.h"
 
 namespace chromecast {
 
-CastSysInfoAndroid::CastSysInfoAndroid()
-    : build_info_(base::android::BuildInfo::GetInstance()) {}
+CastSysInfoAndroid::CastSysInfoAndroid() {}
 
 CastSysInfoAndroid::~CastSysInfoAndroid() {}
 
@@ -34,15 +38,15 @@ std::string CastSysInfoAndroid::GetSerialNumber() {
 }
 
 std::string CastSysInfoAndroid::GetProductName() {
-  return build_info_->device();
+  return base::android::android_info::device();
 }
 
 std::string CastSysInfoAndroid::GetDeviceModel() {
-  return build_info_->model();
+  return base::android::android_info::model();
 }
 
 std::string CastSysInfoAndroid::GetManufacturer() {
-  return build_info_->manufacturer();
+  return base::android::android_info::manufacturer();
 }
 
 std::string CastSysInfoAndroid::GetSystemBuildNumber() {
@@ -124,3 +128,5 @@ std::string CastSysInfoAndroid::GetAndroidProperty(
 }
 
 }  // namespace chromecast
+
+DEFINE_JNI(CastSysInfoAndroid)

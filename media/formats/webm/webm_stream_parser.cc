@@ -7,11 +7,13 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/numerics/checked_math.h"
 #include "base/strings/string_number_conversions.h"
+#include "media/base/byte_queue.h"
 #include "media/base/media_track.h"
 #include "media/base/media_tracks.h"
 #include "media/base/stream_parser.h"
@@ -35,7 +37,6 @@ void WebMStreamParser::Init(
     InitCB init_cb,
     NewConfigCB config_cb,
     NewBuffersCB new_buffers_cb,
-    bool ignore_text_tracks,
     EncryptedMediaInitDataCB encrypted_media_init_data_cb,
     NewMediaSegmentCB new_segment_cb,
     EndMediaSegmentCB end_of_segment_cb,
@@ -53,7 +54,6 @@ void WebMStreamParser::Init(
   init_cb_ = std::move(init_cb);
   config_cb_ = std::move(config_cb);
   new_buffers_cb_ = std::move(new_buffers_cb);
-  ignore_text_tracks_ = ignore_text_tracks;
   encrypted_media_init_data_cb_ = std::move(encrypted_media_init_data_cb);
   new_segment_cb_ = std::move(new_segment_cb);
   end_of_segment_cb_ = std::move(end_of_segment_cb);
@@ -78,7 +78,7 @@ bool WebMStreamParser::GetGenerateTimestampsFlag() const {
   return false;
 }
 
-bool WebMStreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
+bool WebMStreamParser::AppendToParseBuffer(base::span<const uint8_t> buf) {
   DCHECK_NE(state_, kWaitingForInit);
 
   if (state_ == kError) {
@@ -90,8 +90,8 @@ bool WebMStreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
     // synchronous with the app's appendBuffer() call, instead of async decode
     // error during async parse. Since Parse() cannot succeed in kError state,
     // don't even copy `buf` into `byte_queue_` in this case.
-    // TODO(crbug.com/1379160): Instrument this path to see if it can be changed
-    // to just DCHECK_NE(state_, kError).
+    // TODO(crbug.com/40244241): Instrument this path to see if it can be
+    // changed to just DCHECK_NE(state_, kError).
     return true;
   }
 
@@ -101,9 +101,13 @@ bool WebMStreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
   // could lead to memory corruption, preferring CHECK.
   CHECK_EQ(uninspected_pending_bytes_, 0);
 
-  uninspected_pending_bytes_ = base::checked_cast<int>(size);
-  byte_queue_.Push(buf, uninspected_pending_bytes_);
+  if (!byte_queue_.Push(buf)) {
+    DVLOG(2) << "AppendToParseBuffer(): Failed to push buf of size "
+             << buf.size();
+    return false;
+  }
 
+  uninspected_pending_bytes_ = base::checked_cast<int>(buf.size());
   return true;
 }
 
@@ -118,9 +122,8 @@ StreamParser::ParseStatus WebMStreamParser::Parse(
 
   int result = 0;
   int bytes_parsed = 0;
-  const uint8_t* cur = nullptr;
-  int queue_size = 0;
-  byte_queue_.Peek(&cur, &queue_size);
+  const uint8_t* cur = byte_queue_.Data().data();
+  int queue_size = byte_queue_.Data().size();
 
   // First, determine the amount of bytes not yet popped, though already
   // inspected by previous call(s) to Parse().
@@ -164,7 +167,7 @@ StreamParser::ParseStatus WebMStreamParser::Parse(
       break;
 
     DCHECK_GE(result, 0);
-    cur += result;
+    UNSAFE_TODO(cur += result);
     cur_size -= result;
     bytes_parsed += result;
   }
@@ -243,11 +246,11 @@ int WebMStreamParser::ParseInfoAndTracks(const uint8_t* data, int size) {
   if (result <= 0)
     return result;
 
-  cur += result;
+  UNSAFE_TODO(cur += result);
   cur_size -= result;
   bytes_parsed += result;
 
-  WebMTracksParser tracks_parser(media_log_, ignore_text_tracks_);
+  WebMTracksParser tracks_parser(media_log_);
   result = tracks_parser.Parse(cur, cur_size);
 
   if (result <= 0)
@@ -285,7 +288,7 @@ int WebMStreamParser::ParseInfoAndTracks(const uint8_t* data, int size) {
 
   std::unique_ptr<MediaTracks> media_tracks = tracks_parser.media_tracks();
   CHECK(media_tracks.get());
-  if (!config_cb_.Run(std::move(media_tracks), tracks_parser.text_tracks())) {
+  if (!config_cb_.Run(std::move(media_tracks))) {
     DVLOG(1) << "New config data isn't allowed.";
     return -1;
   }
@@ -295,8 +298,7 @@ int WebMStreamParser::ParseInfoAndTracks(const uint8_t* data, int size) {
       tracks_parser.GetAudioDefaultDuration(timecode_scale_in_ns),
       tracks_parser.video_track_num(),
       tracks_parser.GetVideoDefaultDuration(timecode_scale_in_ns),
-      tracks_parser.text_tracks(), tracks_parser.ignored_tracks(),
-      tracks_parser.audio_encryption_key_id(),
+      tracks_parser.ignored_tracks(), tracks_parser.audio_encryption_key_id(),
       tracks_parser.video_encryption_key_id(), audio_config.codec(),
       media_log_);
 
@@ -305,8 +307,6 @@ int WebMStreamParser::ParseInfoAndTracks(const uint8_t* data, int size) {
         tracks_parser.detected_audio_track_count();
     params.detected_video_track_count =
         tracks_parser.detected_video_track_count();
-    params.detected_text_track_count =
-        tracks_parser.detected_text_track_count();
     std::move(init_cb_).Run(params);
   }
 

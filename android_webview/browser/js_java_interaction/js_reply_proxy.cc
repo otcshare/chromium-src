@@ -6,10 +6,12 @@
 
 #include <utility>
 
-#include "android_webview/browser_jni_headers/JsReplyProxy_jni.h"
 #include "base/android/jni_string.h"
 #include "components/js_injection/browser/web_message_reply_proxy.h"
 #include "content/public/browser/android/message_payload.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/JsReplyProxy_jni.h"
 
 namespace android_webview {
 
@@ -32,12 +34,13 @@ base::android::ScopedJavaLocalRef<jobject> JsReplyProxy::GetJavaPeer() {
   return base::android::ScopedJavaLocalRef<jobject>(java_ref_);
 }
 
-void JsReplyProxy::PostMessage(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& payload) {
+void JsReplyProxy::PostMessage(JNIEnv* env,
+                               const base::android::JavaRef<jobject>& payload) {
   reply_proxy_->PostWebMessage(
       content::android::ConvertToWebMessagePayloadFromJava(
           base::android::ScopedJavaLocalRef<jobject>(payload)));
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(JsReplyProxy)

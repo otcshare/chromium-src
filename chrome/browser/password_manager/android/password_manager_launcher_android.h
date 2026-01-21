@@ -15,7 +15,8 @@ namespace password_manager_launcher {
 
 // Opens the password settings page.
 void ShowPasswordSettings(content::WebContents* web_contents,
-                          password_manager::ManagePasswordsReferrer referrer);
+                          password_manager::ManagePasswordsReferrer referrer,
+                          bool manage_passkeys);
 
 }  // namespace password_manager_launcher
 

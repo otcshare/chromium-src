@@ -7,11 +7,14 @@
 #include <sys/prctl.h>
 #include <sys/utsname.h>
 
-#include "base/android/linker/linker_jni.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/system/sys_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/android/linker/linker_jni.h"
 
 extern char __executable_start;
 
@@ -70,9 +73,10 @@ int LibraryRangeFinder::VisitLibraryPhdrs(dl_phdr_info* info,
   ElfW(Addr) min_relro_vaddr = ~0;
   ElfW(Addr) max_relro_vaddr = 0;
 
+  const size_t kPageSize = sysconf(_SC_PAGESIZE);
   bool is_matching = false;
   for (int i = 0; i < info->dlpi_phnum; ++i) {
-    const ElfW(Phdr)* phdr = &info->dlpi_phdr[i];
+    const ElfW(Phdr)* phdr = &UNSAFE_TODO(info->dlpi_phdr[i]);
     switch (phdr->p_type) {
       case PT_LOAD:
         // See if this segment's load address matches the value passed to
@@ -82,16 +86,19 @@ int LibraryRangeFinder::VisitLibraryPhdrs(dl_phdr_info* info,
         //     address == info->dlpi_addr + program_header->p_vaddr
         // that is, the p_vaddr fields is relative to the object base address.
         // See dl_iterate_phdr(3) for details.
-        if (lookup_address == info->dlpi_addr + phdr->p_vaddr)
+        if (lookup_address == info->dlpi_addr + phdr->p_vaddr) {
           is_matching = true;
+        }
 
-        if (phdr->p_vaddr < min_vaddr)
+        if (phdr->p_vaddr < min_vaddr) {
           min_vaddr = phdr->p_vaddr;
-        if (phdr->p_vaddr + phdr->p_memsz > max_vaddr)
+        }
+        if (phdr->p_vaddr + phdr->p_memsz > max_vaddr) {
           max_vaddr = phdr->p_vaddr + phdr->p_memsz;
+        }
         break;
       case PT_GNU_RELRO:
-        min_relro_vaddr = PAGE_START(phdr->p_vaddr);
+        min_relro_vaddr = PageStart(kPageSize, phdr->p_vaddr);
         max_relro_vaddr = phdr->p_vaddr + phdr->p_memsz;
 
         // As of 2020-11 in libmonochrome.so RELRO is covered by a LOAD segment.
@@ -99,10 +106,12 @@ int LibraryRangeFinder::VisitLibraryPhdrs(dl_phdr_info* info,
         // the future. Include the RELRO segment as part of the 'load size'.
         // This way a potential future change in layout of LOAD segments would
         // not open address space for racy mmap(MAP_FIXED).
-        if (min_relro_vaddr < min_vaddr)
+        if (min_relro_vaddr < min_vaddr) {
           min_vaddr = min_relro_vaddr;
-        if (max_vaddr < max_relro_vaddr)
+        }
+        if (max_vaddr < max_relro_vaddr) {
           max_vaddr = max_relro_vaddr;
+        }
         break;
       default:
         break;
@@ -111,14 +120,12 @@ int LibraryRangeFinder::VisitLibraryPhdrs(dl_phdr_info* info,
 
   // Fill out size and relro information if there was a match.
   if (is_matching) {
-    int page_size = sysconf(_SC_PAGESIZE);
-    if (page_size != PAGE_SIZE)
-      abort();
-
-    finder->load_size_ = PAGE_END(max_vaddr) - PAGE_START(min_vaddr);
-    finder->relro_size_ =
-        PAGE_END(max_relro_vaddr) - PAGE_START(min_relro_vaddr);
-    finder->relro_start_ = info->dlpi_addr + PAGE_START(min_relro_vaddr);
+    finder->load_size_ =
+        PageEnd(kPageSize, max_vaddr) - PageStart(kPageSize, min_vaddr);
+    finder->relro_size_ = PageEnd(kPageSize, max_relro_vaddr) -
+                          PageStart(kPageSize, min_relro_vaddr);
+    finder->relro_start_ =
+        info->dlpi_addr + PageStart(kPageSize, min_relro_vaddr);
 
     return 1;
   }
@@ -140,12 +147,6 @@ class LinkerTest : public testing::Test {
 // Checks that NativeLibInfo::CreateSharedRelroFd() creates a shared memory
 // region that is 'sealed' as read-only.
 TEST_F(LinkerTest, CreatedRegionIsSealed) {
-  if (!NativeLibInfo::SharedMemoryFunctionsSupportedForTesting()) {
-    // The Linker uses functions from libandroid.so that are not available
-    // on Android releases before O. Disable unittests for old releases.
-    return;
-  }
-
   // Fill a synthetic RELRO region with 0xEE in private anonynous memory.
   constexpr size_t kRelroSize = 1 << 21;  // 2 MiB.
   void* relro_address = mmap(nullptr, kRelroSize, PROT_READ | PROT_WRITE,
@@ -154,7 +155,7 @@ TEST_F(LinkerTest, CreatedRegionIsSealed) {
   NativeLibInfo lib_info = {0, 0};
   lib_info.set_relro_info_for_testing(
       reinterpret_cast<uintptr_t>(relro_address), kRelroSize);
-  memset(relro_address, 0xEE, kRelroSize);
+  UNSAFE_TODO(memset(relro_address, 0xEE, kRelroSize));
 
   // Create shared RELRO.
   ASSERT_EQ(true, lib_info.CreateSharedRelroFdForTesting());
@@ -167,7 +168,7 @@ TEST_F(LinkerTest, CreatedRegionIsSealed) {
       mmap(nullptr, kRelroSize, PROT_READ, MAP_SHARED, relro_fd, 0);
   ASSERT_NE(MAP_FAILED, ro_address);
   EXPECT_EQ(0xEEEEEEEEU, *reinterpret_cast<uint32_t*>(ro_address));
-  int not_equal = memcmp(relro_address, ro_address, kRelroSize);
+  int not_equal = UNSAFE_TODO(memcmp(relro_address, ro_address, kRelroSize));
   EXPECT_EQ(0, not_equal);
   munmap(ro_address, kRelroSize);
 
@@ -198,7 +199,7 @@ TEST_F(LinkerTest, FindReservedMemoryRegion) {
     return;
   }
 
-  // TODO(crbug.com/1223747): Check that only non-low-end Android Q+ devices
+  // TODO(crbug.com/40774803): Check that only non-low-end Android Q+ devices
   // reach this point.
 
   // Create a properly named synthetic region with a size smaller than a real

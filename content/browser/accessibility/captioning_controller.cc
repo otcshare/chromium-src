@@ -6,12 +6,13 @@
 
 #include "base/android/jni_string.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/public/android/content_jni_headers/CaptioningController_jni.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/CaptioningController_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -37,8 +38,9 @@ CaptioningController::CaptioningController(JNIEnv* env,
 CaptioningController::~CaptioningController() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj.is_null())
+  if (!obj.is_null()) {
     Java_CaptioningController_onDestroy(env, obj);
+  }
 }
 
 void CaptioningController::PrimaryPageChanged(Page& page) {
@@ -48,8 +50,9 @@ void CaptioningController::PrimaryPageChanged(Page& page) {
 void CaptioningController::RenderViewReady() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj.is_null())
+  if (!obj.is_null()) {
     Java_CaptioningController_onRenderProcessChange(env, obj);
+  }
 }
 
 void CaptioningController::WebContentsDestroyed() {
@@ -58,15 +61,14 @@ void CaptioningController::WebContentsDestroyed() {
 
 void CaptioningController::SetTextTrackSettings(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    jboolean textTracksEnabled,
-    const JavaParamRef<jstring>& textTrackBackgroundColor,
-    const JavaParamRef<jstring>& textTrackFontFamily,
-    const JavaParamRef<jstring>& textTrackFontStyle,
-    const JavaParamRef<jstring>& textTrackFontVariant,
-    const JavaParamRef<jstring>& textTrackTextColor,
-    const JavaParamRef<jstring>& textTrackTextShadow,
-    const JavaParamRef<jstring>& textTrackTextSize) {
+    bool textTracksEnabled,
+    const JavaRef<jstring>& textTrackBackgroundColor,
+    const JavaRef<jstring>& textTrackFontFamily,
+    const JavaRef<jstring>& textTrackFontStyle,
+    const JavaRef<jstring>& textTrackFontVariant,
+    const JavaRef<jstring>& textTrackTextColor,
+    const JavaRef<jstring>& textTrackTextShadow,
+    const JavaRef<jstring>& textTrackTextSize) {
   auto web_prefs = web_contents()->GetOrCreateWebPreferences();
   web_prefs.text_tracks_enabled = textTracksEnabled;
   web_prefs.text_track_background_color =
@@ -86,10 +88,10 @@ void CaptioningController::SetTextTrackSettings(
   web_contents()->SetWebPreferences(web_prefs);
 }
 
-jlong JNI_CaptioningController_Init(
+static int64_t JNI_CaptioningController_Init(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& jweb_contents) {
+    const JavaRef<jobject>& obj,
+    const JavaRef<jobject>& jweb_contents) {
   WebContentsImpl* web_contents = static_cast<WebContentsImpl*>(
       WebContents::FromJavaWebContents(jweb_contents));
   CHECK(web_contents);
@@ -98,3 +100,5 @@ jlong JNI_CaptioningController_Init(
 }
 
 }  // namespace content
+
+DEFINE_JNI(CaptioningController)

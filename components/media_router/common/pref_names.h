@@ -8,11 +8,14 @@
 namespace media_router {
 namespace prefs {
 
+// Local State
 extern const char kMediaRouterCastAllowAllIPs[];
+extern const char kSuppressLocalDiscoveryPermissionError[];
+
+// Profile Prefs
 extern const char kMediaRouterMediaRemotingEnabled[];
 extern const char kMediaRouterReceiverIdHashToken[];
 extern const char kMediaRouterShowCastSessionsStartedByOtherDevices[];
-extern const char kMediaRouterTabMirroringSources[];
 
 }  // namespace prefs
 }  // namespace media_router

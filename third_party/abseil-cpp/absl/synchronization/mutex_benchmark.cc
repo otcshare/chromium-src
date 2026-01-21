@@ -19,6 +19,7 @@
 #include "absl/base/config.h"
 #include "absl/base/internal/cycleclock.h"
 #include "absl/base/internal/spinlock.h"
+#include "absl/base/no_destructor.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/internal/thread_pool.h"
 #include "absl/synchronization/mutex.h"
@@ -27,12 +28,40 @@
 namespace {
 
 void BM_Mutex(benchmark::State& state) {
-  static absl::Mutex* mu = new absl::Mutex;
+  static absl::NoDestructor<absl::Mutex> mu;
   for (auto _ : state) {
-    absl::MutexLock lock(mu);
+    absl::MutexLock lock(*mu.get());
   }
 }
 BENCHMARK(BM_Mutex)->UseRealTime()->Threads(1)->ThreadPerCpu();
+
+void BM_ReaderLock(benchmark::State& state) {
+  static absl::NoDestructor<absl::Mutex> mu;
+  for (auto _ : state) {
+    absl::ReaderMutexLock lock(*mu.get());
+  }
+}
+BENCHMARK(BM_ReaderLock)->UseRealTime()->Threads(1)->ThreadPerCpu();
+
+void BM_TryLock(benchmark::State& state) {
+  absl::Mutex mu;
+  for (auto _ : state) {
+    if (mu.try_lock()) {
+      mu.unlock();
+    }
+  }
+}
+BENCHMARK(BM_TryLock);
+
+void BM_ReaderTryLock(benchmark::State& state) {
+  static absl::NoDestructor<absl::Mutex> mu;
+  for (auto _ : state) {
+    if (mu->try_lock_shared()) {
+      mu->unlock_shared();
+    }
+  }
+}
+BENCHMARK(BM_ReaderTryLock)->UseRealTime()->Threads(1)->ThreadPerCpu();
 
 static void DelayNs(int64_t ns, int* data) {
   int64_t end = absl::base_internal::CycleClock::Now() +
@@ -42,24 +71,6 @@ static void DelayNs(int64_t ns, int* data) {
     benchmark::DoNotOptimize(*data);
   }
 }
-
-template <typename MutexType>
-class RaiiLocker {
- public:
-  explicit RaiiLocker(MutexType* mu) : mu_(mu) { mu_->Lock(); }
-  ~RaiiLocker() { mu_->Unlock(); }
- private:
-  MutexType* mu_;
-};
-
-template <>
-class RaiiLocker<std::mutex> {
- public:
-  explicit RaiiLocker(std::mutex* mu) : mu_(mu) { mu_->lock(); }
-  ~RaiiLocker() { mu_->unlock(); }
- private:
-  std::mutex* mu_;
-};
 
 // RAII object to change the Mutex priority of the running thread.
 class ScopedThreadMutexPriority {
@@ -105,7 +116,7 @@ void BM_MutexEnqueue(benchmark::State& state) {
     std::atomic<int> blocked_threads{0};
     std::atomic<bool> thread_has_mutex{false};
   };
-  static Shared* shared = new Shared;
+  static absl::NoDestructor<Shared> shared;
 
   // Set up 'blocked_threads' to count how many threads are currently blocked
   // in Abseil synchronization code.
@@ -134,7 +145,7 @@ void BM_MutexEnqueue(benchmark::State& state) {
     shared->looping_threads.fetch_add(1);
     for (int i = 0; i < kBatchSize; i++) {
       {
-        absl::MutexLock l(&shared->mu);
+        absl::MutexLock l(shared->mu);
         shared->thread_has_mutex.store(true, std::memory_order_relaxed);
         // Spin until all other threads are either out of the benchmark loop
         // or blocked on the mutex. This ensures that the mutex queue is kept
@@ -183,7 +194,7 @@ void BM_Contended(benchmark::State& state) {
     MutexType mu;
     int data = 0;
   };
-  static auto* shared = new Shared;
+  static absl::NoDestructor<Shared> shared;
   int local = 0;
   for (auto _ : state) {
     // Here we model both local work outside of the critical section as well as
@@ -197,7 +208,7 @@ void BM_Contended(benchmark::State& state) {
     // to keep ratio between local work and critical section approximately
     // equal regardless of number of threads.
     DelayNs(100 * state.threads(), &local);
-    RaiiLocker<MutexType> locker(&shared->mu);
+    std::scoped_lock locker(shared->mu);
     DelayNs(state.range(0), &shared->data);
   }
 }
@@ -262,7 +273,7 @@ void BM_ConditionWaiters(benchmark::State& state) {
       init->DecrementCount();
       m->LockWhen(absl::Condition(
           static_cast<bool (*)(int*)>([](int* v) { return *v == 0; }), p));
-      m->Unlock();
+      m->unlock();
     }
   };
 
@@ -288,15 +299,15 @@ void BM_ConditionWaiters(benchmark::State& state) {
   init.Wait();
 
   for (auto _ : state) {
-    mu.Lock();
-    mu.Unlock();  // Each unlock requires Condition evaluation for our waiters.
+    mu.lock();
+    mu.unlock();  // Each unlock requires Condition evaluation for our waiters.
   }
 
-  mu.Lock();
+  mu.lock();
   for (int i = 0; i < num_classes; i++) {
     equivalence_classes[i] = 0;
   }
-  mu.Unlock();
+  mu.unlock();
 }
 
 // Some configurations have higher thread limits than others.

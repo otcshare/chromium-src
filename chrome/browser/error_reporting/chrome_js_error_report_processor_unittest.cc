@@ -5,16 +5,18 @@
 #include "chrome/browser/error_reporting/chrome_js_error_report_processor.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/byte_size.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/simple_test_clock.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/error_reporting/mock_chrome_js_error_report_processor.h"
 #include "chrome/common/chrome_paths.h"
@@ -27,10 +29,13 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/text/bytes_formatting.h"
 
 using ::testing::AllOf;
+using ::testing::EndsWith;
 using ::testing::HasSubstr;
 using ::testing::SizeIs;
+using ::testing::StartsWith;
 
 JavaScriptErrorReport MakeErrorReport(const std::string& message) {
   JavaScriptErrorReport report;
@@ -87,24 +92,16 @@ class ChromeJsErrorReportProcessorTest : public ::testing::Test {
 
   static constexpr time_t kFakeNow = 1586581472;
   static constexpr char kFirstMessage[] = "An Error Is Me";
-  static constexpr char kFirstMessageQuery[] =
-      "error_message=An%20Error%20Is%20Me";
   static constexpr char kSecondMessage[] = "A bad error";
-  static constexpr char kSecondMessageQuery[] = "error_message=A%20bad%20error";
   static constexpr char kThirdMessage[] = "Wow that's a lot of errors";
-  static constexpr char kThirdMessageQuery[] =
-      "error_message=Wow%20that%27s%20a%20lot%20of%20errors";
   static constexpr char kProduct[] = "Chrome_ChromeOS";
   static constexpr char kSecondProduct[] = "Chrome_Linux";
 };
 
 constexpr time_t ChromeJsErrorReportProcessorTest::kFakeNow;
 constexpr char ChromeJsErrorReportProcessorTest::kFirstMessage[];
-constexpr char ChromeJsErrorReportProcessorTest::kFirstMessageQuery[];
 constexpr char ChromeJsErrorReportProcessorTest::kSecondMessage[];
-constexpr char ChromeJsErrorReportProcessorTest::kSecondMessageQuery[];
 constexpr char ChromeJsErrorReportProcessorTest::kThirdMessage[];
-constexpr char ChromeJsErrorReportProcessorTest::kThirdMessageQuery[];
 constexpr char ChromeJsErrorReportProcessorTest::kProduct[];
 constexpr char ChromeJsErrorReportProcessorTest::kSecondProduct[];
 
@@ -115,45 +112,40 @@ TEST_F(ChromeJsErrorReportProcessorTest, Basic) {
   SendErrorReport(std::move(report));
   EXPECT_TRUE(finish_callback_was_called_);
 
-  const absl::optional<MockCrashEndpoint::Report>& actual_report =
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
       endpoint_->last_report();
   ASSERT_TRUE(actual_report);
-  EXPECT_THAT(actual_report->query, HasSubstr("error_message=Hello%20World"));
-  EXPECT_THAT(actual_report->query, HasSubstr("type=JavascriptError"));
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  EXPECT_THAT(actual_report->query, HasSubstr("build_time_millis="));
-#endif
-  EXPECT_THAT(actual_report->query, HasSubstr("browser_process_uptime_ms="));
-  EXPECT_THAT(actual_report->query, HasSubstr("renderer_process_uptime_ms=0"));
+  EXPECT_EQ(actual_report->GetQueryParam("error_message"), "Hello World");
+  EXPECT_EQ(actual_report->GetQueryParam("type"), "JavascriptError");
+  EXPECT_NE(actual_report->GetQueryParam("browser_process_uptime_ms"),
+            std::nullopt);
+  EXPECT_EQ(actual_report->GetQueryParam("renderer_process_uptime_ms"), "0");
   // TODO(iby) research why URL is repeated...
-  EXPECT_THAT(actual_report->query,
-              HasSubstr("src=https%3A%2F%2Fwww.chromium.org%2FHome"));
-  EXPECT_THAT(actual_report->query,
-              HasSubstr("full_url=https%3A%2F%2Fwww.chromium.org%2FHome"));
-  EXPECT_THAT(actual_report->query, HasSubstr("url=%2FHome"));
-  EXPECT_THAT(actual_report->query, HasSubstr("browser=Chrome"));
-  EXPECT_THAT(actual_report->query, Not(HasSubstr("source_system=")));
-  EXPECT_THAT(actual_report->query, HasSubstr("num-experiments=1"));
-  EXPECT_THAT(
-      actual_report->query,
-      HasSubstr(base::StrCat(
-          {"variations=",
-           MockChromeJsErrorReportProcessor::kDefaultExperimentListString})));
+  EXPECT_EQ(actual_report->GetQueryParam("src"),
+            "https://www.chromium.org/Home");
+  EXPECT_EQ(actual_report->GetQueryParam("full_url"),
+            "https://www.chromium.org/Home");
+  EXPECT_EQ(actual_report->GetQueryParam("url"), "/Home");
+  EXPECT_EQ(actual_report->GetQueryParam("browser"), "Chrome");
+  EXPECT_EQ(actual_report->GetQueryParam("source_system"), std::nullopt);
+  EXPECT_EQ(actual_report->GetQueryParam("num-experiments"), "1");
+  EXPECT_EQ(actual_report->GetQueryParam("variations"),
+            MockChromeJsErrorReportProcessor::kDefaultExperimentListString);
 
 #if !BUILDFLAG(IS_CHROMEOS)
   // This is from MockChromeJsErrorReportProcessor::GetOsVersion()
-  EXPECT_THAT(actual_report->query, HasSubstr("os_version=7.20.1"));
+  EXPECT_EQ(actual_report->GetQueryParam("os_version"), "7.20.1");
 #endif
-  // These are from MockCrashEndpoint::Client::GetProductNameAndVersion, which
-  // is only defined for non-MAC POSIX systems. TODO(https://crbug.com/1121816):
+  // These are from MockCrashEndpoint::Client::GetProductInfo, which
+  // is only defined for non-MAC POSIX systems. TODO(crbug.com/40146362):
   // Get this info for non-POSIX platforms.
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
-  EXPECT_THAT(actual_report->query, HasSubstr("prod=Chrome_ChromeOS"));
-  EXPECT_THAT(actual_report->query, HasSubstr("ver=1.2.3.4"));
-  EXPECT_THAT(actual_report->query, HasSubstr("browser_version=1.2.3.4"));
-  EXPECT_THAT(actual_report->query, HasSubstr("channel=Stable"));
+  EXPECT_EQ(actual_report->GetQueryParam("prod"), "Chrome_ChromeOS");
+  EXPECT_EQ(actual_report->GetQueryParam("ver"), "1.2.3.4");
+  EXPECT_EQ(actual_report->GetQueryParam("browser_version"), "1.2.3.4");
+  EXPECT_EQ(actual_report->GetQueryParam("channel"), "Stable");
 #endif
-  EXPECT_EQ(actual_report->content, "");
+  EXPECT_EQ(actual_report->content(), "");
 }
 
 void ChromeJsErrorReportProcessorTest::TestAllFields() {
@@ -167,59 +159,54 @@ void ChromeJsErrorReportProcessorTest::TestAllFields() {
   report.debug_id = "ABC:123";
   report.stack_trace = "bad_func(1, 2)\nonclick()\n";
   report.renderer_process_uptime_ms = 1234;
-  report.window_type = WindowType::kSystemWebApp;
+  report.window_type = JavaScriptErrorReport::WindowType::kSystemWebApp;
   report.source_system = JavaScriptErrorReport::SourceSystem::kWebUIObserver;
 
   SendErrorReport(std::move(report));
   EXPECT_TRUE(finish_callback_was_called_);
 
-  const absl::optional<MockCrashEndpoint::Report>& actual_report =
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
       endpoint_->last_report();
   ASSERT_TRUE(actual_report);
-  EXPECT_THAT(actual_report->query, HasSubstr("error_message=Hello%20World"));
-  EXPECT_THAT(actual_report->query, HasSubstr("type=JavascriptError"));
-  EXPECT_THAT(actual_report->query, HasSubstr("browser_process_uptime_ms="));
-  EXPECT_THAT(actual_report->query,
-              HasSubstr("renderer_process_uptime_ms=1234"));
-  EXPECT_THAT(actual_report->query, HasSubstr("window_type=SYSTEM_WEB_APP"));
-  EXPECT_THAT(actual_report->query, HasSubstr("debug_id=ABC%3A123"));
+  EXPECT_EQ(actual_report->GetQueryParam("error_message"), "Hello World");
+  EXPECT_EQ(actual_report->GetQueryParam("type"), "JavascriptError");
+  EXPECT_NE(actual_report->GetQueryParam("browser_process_uptime_ms"),
+            std::nullopt);
+  EXPECT_EQ(actual_report->GetQueryParam("renderer_process_uptime_ms"), "1234");
+  EXPECT_EQ(actual_report->GetQueryParam("window_type"), "SYSTEM_WEB_APP");
+  EXPECT_EQ(actual_report->GetQueryParam("debug_id"), "ABC:123");
   // TODO(iby) research why URL is repeated...
-  EXPECT_THAT(
-      actual_report->query,
-      HasSubstr("src=https%3A%2F%2Fwww.chromium.org%2FHome%2Fscripts.js"));
-  EXPECT_THAT(
-      actual_report->query,
-      HasSubstr("full_url=https%3A%2F%2Fwww.chromium.org%2FHome%2Fscripts.js"));
-  EXPECT_THAT(actual_report->query, HasSubstr("url=%2FHome%2Fscripts.js"));
-  EXPECT_THAT(actual_report->query,
-              HasSubstr("page_url=https%3A%2F%2Fwww.chromium.org%2FHome.html"));
-  EXPECT_THAT(actual_report->query, HasSubstr("browser=Chrome"));
+  EXPECT_EQ(actual_report->GetQueryParam("src"),
+            "https://www.chromium.org/Home/scripts.js");
+  EXPECT_EQ(actual_report->GetQueryParam("full_url"),
+            "https://www.chromium.org/Home/scripts.js");
+  EXPECT_EQ(actual_report->GetQueryParam("url"), "/Home/scripts.js");
+  EXPECT_EQ(actual_report->GetQueryParam("page_url"),
+            "https://www.chromium.org/Home.html");
+  EXPECT_EQ(actual_report->GetQueryParam("browser"), "Chrome");
   // product is double-escaped. The first time, it transforms to Unit%20test,
   // then the % is turned into %25.
-  EXPECT_THAT(actual_report->query, HasSubstr("prod=Unit%2520test"));
-  EXPECT_THAT(actual_report->query, HasSubstr("ver=6.2.3.4"));
-  EXPECT_THAT(actual_report->query, HasSubstr("line=83"));
-  EXPECT_THAT(actual_report->query, HasSubstr("column=14"));
-  EXPECT_THAT(actual_report->query, HasSubstr("source_system=webui_observer"));
-  EXPECT_THAT(actual_report->query, HasSubstr("num-experiments=1"));
-  EXPECT_THAT(
-      actual_report->query,
-      HasSubstr(base::StrCat(
-          {"variations=",
-           MockChromeJsErrorReportProcessor::kDefaultExperimentListString})));
+  EXPECT_EQ(actual_report->GetQueryParam("prod"), "Unit%20test");
+  EXPECT_EQ(actual_report->GetQueryParam("ver"), "6.2.3.4");
+  EXPECT_EQ(actual_report->GetQueryParam("line"), "83");
+  EXPECT_EQ(actual_report->GetQueryParam("column"), "14");
+  EXPECT_EQ(actual_report->GetQueryParam("source_system"), "webui_observer");
+  EXPECT_EQ(actual_report->GetQueryParam("num-experiments"), "1");
+  EXPECT_EQ(actual_report->GetQueryParam("variations"),
+            MockChromeJsErrorReportProcessor::kDefaultExperimentListString);
 
 #if !BUILDFLAG(IS_CHROMEOS)
   // This is from MockChromeJsErrorReportProcessor::GetOsVersion()
-  EXPECT_THAT(actual_report->query, HasSubstr("os_version=7.20.1"));
+  EXPECT_EQ(actual_report->GetQueryParam("os_version"), "7.20.1");
 #endif
-  // These are from MockCrashEndpoint::Client::GetProductNameAndVersion, which
-  // is only defined for non-MAC POSIX systems. TODO(https://crbug.com/1121816):
+  // These are from MockCrashEndpoint::Client::GetProductInfo, which
+  // is only defined for non-MAC POSIX systems. TODO(crbug.com/40146362):
   // Get this info for non-POSIX platforms.
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
-  EXPECT_THAT(actual_report->query, HasSubstr("browser_version=1.2.3.4"));
-  EXPECT_THAT(actual_report->query, HasSubstr("channel=Stable"));
+  EXPECT_EQ(actual_report->GetQueryParam("browser_version"), "1.2.3.4");
+  EXPECT_EQ(actual_report->GetQueryParam("channel"), "Stable");
 #endif
-  EXPECT_EQ(actual_report->content, "bad_func(1, 2)\nonclick()\n");
+  EXPECT_EQ(actual_report->content(), "bad_func(1, 2)\nonclick()\n");
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest, AllFields) {
@@ -249,11 +236,11 @@ TEST_F(ChromeJsErrorReportProcessorTest, StackTraceWithErrorMessage) {
   SendErrorReport(std::move(report));
   EXPECT_TRUE(finish_callback_was_called_);
 
-  const absl::optional<MockCrashEndpoint::Report>& actual_report =
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
       endpoint_->last_report();
   ASSERT_TRUE(actual_report);
-  EXPECT_THAT(actual_report->query, HasSubstr("error_message=Hello%20World"));
-  EXPECT_EQ(actual_report->content, "bad_func(1, 2)\nonclick()\n");
+  EXPECT_EQ(actual_report->GetQueryParam("error_message"), "Hello World");
+  EXPECT_EQ(actual_report->content(), "bad_func(1, 2)\nonclick()\n");
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest, RedactMessage) {
@@ -266,15 +253,56 @@ TEST_F(ChromeJsErrorReportProcessorTest, RedactMessage) {
   SendErrorReport(std::move(report));
   EXPECT_TRUE(finish_callback_was_called_);
 
-  const absl::optional<MockCrashEndpoint::Report>& actual_report =
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
       endpoint_->last_report();
   ASSERT_TRUE(actual_report);
-  // Escaped version of "<email: 1> says hi to <email: 2>"
-  EXPECT_THAT(actual_report->query,
-              HasSubstr("error_message=%3Cemail%3A%201%3E%20says%20hi%20to%20"
-                        "%3Cemail%3A%202%3E"));
+  EXPECT_EQ(actual_report->GetQueryParam("error_message"),
+            "(email: 1) says hi to (email: 2)");
   // Redacted messages still need to be removed from stack trace.
-  EXPECT_EQ(actual_report->content, "bad_func(1, 2)\nonclick()\n");
+  EXPECT_EQ(actual_report->content(), "bad_func(1, 2)\nonclick()\n");
+}
+
+TEST_F(ChromeJsErrorReportProcessorTest, TruncateMessage) {
+  std::string long_error_message;
+  for (int i = 0; i <= 2000; i++) {
+    base::StrAppend(&long_error_message, {base::NumberToString(i), "~"});
+  }
+  auto report = MakeErrorReport(long_error_message);
+  report.url = "https://www.chromium.org/Home";
+
+  SendErrorReport(std::move(report));
+  EXPECT_TRUE(finish_callback_was_called_);
+
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
+      endpoint_->last_report();
+  ASSERT_TRUE(actual_report);
+  std::optional<std::string_view> error_message =
+      actual_report->GetQueryParam("error_message");
+  ASSERT_TRUE(error_message);
+  EXPECT_THAT(*error_message, SizeIs(1000));
+  EXPECT_THAT(*error_message, StartsWith("0~1~2~3~4~5~6~7~8~9~10~11~12"));
+  EXPECT_THAT(*error_message, EndsWith("1996~1997~1998~1999~2000~"));
+  EXPECT_THAT(*error_message, HasSubstr("--[TRUNCATED]--"));
+}
+
+TEST_F(ChromeJsErrorReportProcessorTest, TruncateMessageWithEscapes) {
+  std::string long_error_message(2000, ' ');
+  auto report = MakeErrorReport(long_error_message);
+  report.url = "https://www.chromium.org/Home";
+
+  SendErrorReport(std::move(report));
+  EXPECT_TRUE(finish_callback_was_called_);
+
+  const std::optional<MockCrashEndpoint::Report>& actual_report =
+      endpoint_->last_report();
+  ASSERT_TRUE(actual_report);
+  std::optional<std::string_view> error_message =
+      actual_report->GetQueryParam("error_message");
+  ASSERT_TRUE(error_message);
+  EXPECT_THAT(*error_message, SizeIs(1000));
+  EXPECT_THAT(*error_message, StartsWith("     "));
+  EXPECT_THAT(*error_message, EndsWith("     "));
+  EXPECT_THAT(*error_message, HasSubstr("  --[TRUNCATED]--  "));
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest, NoMoreThanOneDuplicatePerHour) {
@@ -295,7 +323,8 @@ TEST_F(ChromeJsErrorReportProcessorTest, MultipleDistinctReportsAllowed) {
 
   SendErrorReport(MakeErrorReport(kSecondMessage));
   EXPECT_EQ(endpoint_->report_count(), 2);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kSecondMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kSecondMessage);
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest, DuplicatesAllowedAfterAnHour) {
@@ -337,7 +366,8 @@ TEST_F(ChromeJsErrorReportProcessorTest, DuplicateTimingIsIndependent) {
   SendErrorReport(MakeErrorReport(kSecondMessage));
   SendErrorReport(MakeErrorReport(kThirdMessage));
   EXPECT_EQ(endpoint_->report_count(), 4);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kFirstMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kFirstMessage);
 
   // An hour+ from second error. First error should be back in cooldown, and
   // third error should still be blocked from its original send.
@@ -346,7 +376,8 @@ TEST_F(ChromeJsErrorReportProcessorTest, DuplicateTimingIsIndependent) {
   SendErrorReport(MakeErrorReport(kSecondMessage));
   SendErrorReport(MakeErrorReport(kThirdMessage));
   EXPECT_EQ(endpoint_->report_count(), 5);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kSecondMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kSecondMessage);
 
   // An hour+ from third error. First and second are still in cooldown.
   test_clock_.SetNow(test_clock_.Now() + base::Minutes(15));
@@ -354,7 +385,8 @@ TEST_F(ChromeJsErrorReportProcessorTest, DuplicateTimingIsIndependent) {
   SendErrorReport(MakeErrorReport(kSecondMessage));
   SendErrorReport(MakeErrorReport(kThirdMessage));
   EXPECT_EQ(endpoint_->report_count(), 6);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kThirdMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kThirdMessage);
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest,
@@ -374,13 +406,15 @@ TEST_F(ChromeJsErrorReportProcessorTest,
   test_clock_.SetNow(test_clock_.Now() + base::Minutes(-600));
   SendErrorReport(MakeErrorReport(kFirstMessage));
   EXPECT_EQ(endpoint_->report_count(), 4);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kFirstMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kFirstMessage);
 
   test_clock_.SetNow(test_clock_.Now() + base::Minutes(15));
   SendErrorReport(MakeErrorReport(kFirstMessage));
   SendErrorReport(MakeErrorReport(kSecondMessage));
   EXPECT_EQ(endpoint_->report_count(), 5);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kSecondMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kSecondMessage);
 
   // First and second are still in cooldown.
   test_clock_.SetNow(test_clock_.Now() + base::Minutes(15));
@@ -388,7 +422,8 @@ TEST_F(ChromeJsErrorReportProcessorTest,
   SendErrorReport(MakeErrorReport(kSecondMessage));
   SendErrorReport(MakeErrorReport(kThirdMessage));
   EXPECT_EQ(endpoint_->report_count(), 6);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kThirdMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kThirdMessage);
 }
 
 TEST_F(ChromeJsErrorReportProcessorTest,
@@ -410,7 +445,8 @@ TEST_F(ChromeJsErrorReportProcessorTest,
   SendErrorReport(MakeErrorReport(kSecondMessage));
   SendErrorReport(MakeErrorReport(kThirdMessage));
   EXPECT_EQ(endpoint_->report_count(), 4);
-  EXPECT_THAT(endpoint_->last_report()->query, HasSubstr(kThirdMessageQuery));
+  EXPECT_EQ(endpoint_->last_report()->GetQueryParam("error_message"),
+            kThirdMessage);
 }
 TEST_F(ChromeJsErrorReportProcessorTest, DuplicateMapIsCleanedUpAfterAnHour) {
   SendErrorReport(MakeErrorReport(kFirstMessage));
@@ -494,23 +530,27 @@ static std::string UploadInfoStateToString(
 }
 
 static std::string UploadInfoVectorToString(
-    const std::vector<UploadList::UploadInfo>& uploads) {
+    const std::vector<const UploadList::UploadInfo*>& uploads) {
   std::string result = "[";
   bool first = true;
-  for (const UploadList::UploadInfo& upload : uploads) {
+  for (const UploadList::UploadInfo* upload : uploads) {
     if (first) {
       first = false;
     } else {
       result += ", ";
     }
-    base::StrAppend(&result,
-                    {"{state ", UploadInfoStateToString(upload.state),
-                     ", upload_id ", upload.upload_id, ", upload_time ",
-                     base::NumberToString(upload.upload_time.ToTimeT()),
-                     ", local_id ", upload.local_id, ", capture_time ",
-                     base::NumberToString(upload.capture_time.ToTimeT()),
-                     ", source ", upload.source, ", file size ",
-                     base::UTF16ToUTF8(upload.file_size), "}"});
+    auto file_size =
+        upload->file_size.has_value()
+            ? base::UTF16ToUTF8(ui::FormatBytes(base::ByteSize(
+                  base::checked_cast<uint64_t>(*upload->file_size))))
+            : "";
+    base::StrAppend(
+        &result, {"{state ", UploadInfoStateToString(upload->state),
+                  ", upload_id ", upload->upload_id, ", upload_time ",
+                  base::NumberToString(upload->upload_time.ToTimeT()),
+                  ", local_id ", upload->local_id, ", capture_time ",
+                  base::NumberToString(upload->capture_time.ToTimeT()),
+                  ", source ", upload->source, ", file size ", file_size, "}"});
   }
   result += "]";
   return result;
@@ -530,17 +570,17 @@ TEST_F(ChromeJsErrorReportProcessorTest, UpdatesUploadsLog) {
   base::RunLoop run_loop;
   upload_list->Load(run_loop.QuitClosure());
   run_loop.Run();
-  std::vector<UploadList::UploadInfo> uploads;
-  upload_list->GetUploads(50, &uploads);
+  const std::vector<const UploadList::UploadInfo*> uploads =
+      upload_list->GetUploads(50);
   EXPECT_EQ(uploads.size(), 1U) << UploadInfoVectorToString(uploads);
 
   bool found = false;
-  for (const UploadList::UploadInfo& upload : uploads) {
-    if (upload.state == UploadList::UploadInfo::State::Uploaded &&
-        upload.upload_id == kCrashId) {
+  for (const UploadList::UploadInfo* upload : uploads) {
+    if (upload->state == UploadList::UploadInfo::State::Uploaded &&
+        upload->upload_id == kCrashId) {
       EXPECT_FALSE(found) << "Found twice";
       found = true;
-      EXPECT_EQ(upload.upload_time.ToTimeT(), kFakeNow);
+      EXPECT_EQ(upload->upload_time.ToTimeT(), kFakeNow);
     }
   }
   EXPECT_TRUE(found) << "Didn't find upload record in "

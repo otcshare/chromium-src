@@ -6,10 +6,13 @@
 #define BASE_FILES_FILE_H_
 
 #include <stdint.h>
+#include <sys/types.h>
 
+#include <optional>
 #include <string>
 
 #include "base/base_export.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_tracing.h"
@@ -18,20 +21,15 @@
 #include "base/trace_event/base_tracing_forward.h"
 #include "build/build_config.h"
 
-#if BUILDFLAG(IS_BSD) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_NACL) || \
-    BUILDFLAG(IS_FUCHSIA) || (BUILDFLAG(IS_ANDROID) && __ANDROID_API__ < 21)
-struct stat;
-namespace base {
-typedef struct stat stat_wrapper_t;
-}
-#elif BUILDFLAG(IS_POSIX)
-struct stat64;
-namespace base {
-typedef struct stat64 stat_wrapper_t;
-}
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/scoped_java_ref.h"
 #endif
 
+struct stat;
+
 namespace base {
+
+using stat_wrapper_t = struct stat;
 
 // Thin wrapper around an OS-level file.
 // Note that this class does not provide any support for asynchronous IO, other
@@ -43,6 +41,9 @@ namespace base {
 // obvious non-modifying way are marked as const. Any method that forward calls
 // to the OS is not considered const, even if there is no apparent change to
 // member variables.
+//
+// On POSIX, if the given file is a symbolic link, most of the methods apply to
+// the file that the symbolic link resolves to.
 class BASE_EXPORT File {
  public:
   // FLAG_(OPEN|CREATE).* are mutually exclusive. You should specify exactly one
@@ -77,6 +78,10 @@ class BASE_EXPORT File {
     FLAG_CAN_DELETE_ON_CLOSE = 1 << 20,  // Requests permission to delete a file
                                          // via DeleteOnClose() (Windows only).
                                          // See DeleteOnClose() for details.
+    FLAG_WIN_NO_EXECUTE =
+        1 << 21,  // Windows only. Marks the file with a deny ACE that prevents
+                  // opening the file with EXECUTE access. Cannot be used with
+                  // FILE_WIN_EXECUTE flag. See also PreventExecuteMapping.
   };
 
   // This enum has been recorded in multiple histograms using PlatformFileError
@@ -109,17 +114,13 @@ class BASE_EXPORT File {
   };
 
   // This explicit mapping matches both FILE_ on Windows and SEEK_ on Linux.
-  enum Whence {
-    FROM_BEGIN   = 0,
-    FROM_CURRENT = 1,
-    FROM_END     = 2
-  };
+  enum Whence { FROM_BEGIN = 0, FROM_CURRENT = 1, FROM_END = 2 };
 
   // Used to hold information about a given file.
   // If you add more fields to this structure (platform-specific fields are OK),
   // make sure to update all functions that use it in file_util_{win|posix}.cc,
   // too, and the ParamTraits<base::File::Info> implementation in
-  // ipc/ipc_message_utils.cc.
+  // ipc/param_traits_utils.cc.
   struct BASE_EXPORT Info {
     Info();
     ~Info();
@@ -207,13 +208,11 @@ class BASE_EXPORT File {
   // (relative to the start) or -1 in case of error.
   int64_t Seek(Whence whence, int64_t offset);
 
-  // Simplified versions of Read() and friends (see below) that check the int
+  // Simplified versions of Read() and friends (see below) that check the
   // return value and just return a boolean. They return true if and only if
-  // the function read in / wrote out exactly |data.size()| bytes of data.
+  // the function read in exactly |data.size()| bytes of data.
   bool ReadAndCheck(int64_t offset, span<uint8_t> data);
   bool ReadAtCurrentPosAndCheck(span<uint8_t> data);
-  bool WriteAndCheck(int64_t offset, span<const uint8_t> data);
-  bool WriteAtCurrentPosAndCheck(span<const uint8_t> data);
 
   // Reads the given number of bytes (or until EOF is reached) starting with the
   // given offset. Returns the number of bytes read, or -1 on error. Note that
@@ -221,18 +220,31 @@ class BASE_EXPORT File {
   // is not intended for stream oriented files but instead for cases when the
   // normal expectation is that actually |size| bytes are read unless there is
   // an error.
-  int Read(int64_t offset, char* data, int size);
+  // PRECONDITIONS: `size` must be non-negative and `data` must point to at
+  // least `size` valid bytes.
+  UNSAFE_BUFFER_USAGE int Read(int64_t offset, char* data, int size);
+  std::optional<size_t> Read(int64_t offset, base::span<uint8_t> data);
 
   // Same as above but without seek.
-  int ReadAtCurrentPos(char* data, int size);
+  // PRECONDITIONS: `size` must be non-negative and `data` must point to at
+  // least `size` valid bytes.
+  UNSAFE_BUFFER_USAGE int ReadAtCurrentPos(char* data, int size);
+  std::optional<size_t> ReadAtCurrentPos(base::span<uint8_t> data);
 
   // Reads the given number of bytes (or until EOF is reached) starting with the
   // given offset, but does not make any effort to read all data on all
-  // platforms. Returns the number of bytes read, or -1 on error.
-  int ReadNoBestEffort(int64_t offset, char* data, int size);
+  // platforms. Returns the number of bytes read, or std::nullopt on error.
+  std::optional<size_t> ReadNoBestEffort(int64_t offset,
+                                         base::span<uint8_t> data);
 
   // Same as above but without seek.
-  int ReadAtCurrentPosNoBestEffort(char* data, int size);
+  std::optional<size_t> ReadAtCurrentPosNoBestEffort(base::span<uint8_t> data);
+
+  // Simplified versions of Write() and friends (see below) that check the
+  // return value and just return a boolean. They return true if and only if
+  // the function wrote out exactly |data.size()| bytes of data.
+  bool WriteAndCheck(int64_t offset, span<const uint8_t> data);
+  bool WriteAtCurrentPosAndCheck(span<const uint8_t> data);
 
   // Writes the given buffer into the file at the given offset, overwritting any
   // data that was previously there. Returns the number of bytes written, or -1
@@ -240,17 +252,25 @@ class BASE_EXPORT File {
   // all platforms. |data| can be nullptr when |size| is 0.
   // Ignores the offset and writes to the end of the file if the file was opened
   // with FLAG_APPEND.
-  int Write(int64_t offset, const char* data, int size);
+  // PRECONDITIONS: `size` must be non-negative and `data` must point to at
+  // least `size` valid bytes.
+  UNSAFE_BUFFER_USAGE int Write(int64_t offset, const char* data, int size);
+  std::optional<size_t> Write(int64_t offset, base::span<const uint8_t> data);
 
-  // Save as above but without seek.
-  int WriteAtCurrentPos(const char* data, int size);
+  // Same as above but without seek.
+  // PRECONDITIONS: `size` must be non-negative and `data` must point to at
+  // least `size` valid bytes.
+  UNSAFE_BUFFER_USAGE int WriteAtCurrentPos(const char* data, int size);
+  std::optional<size_t> WriteAtCurrentPos(base::span<const uint8_t> data);
 
-  // Save as above but does not make any effort to write all data on all
-  // platforms. Returns the number of bytes written, or -1 on error.
-  int WriteAtCurrentPosNoBestEffort(const char* data, int size);
+  // Same as above but does not make any effort to write all data on all
+  // platforms. Returns the number of bytes written, or std::nullopt
+  // on error.
+  std::optional<size_t> WriteAtCurrentPosNoBestEffort(
+      base::span<const uint8_t> data);
 
   // Returns the current size of this file, or a negative number on failure.
-  int64_t GetLength();
+  int64_t GetLength() const;
 
   // Truncates the file to the given length. If |length| is greater than the
   // current size of the file, the file is extended with zeros. If the file
@@ -275,7 +295,7 @@ class BASE_EXPORT File {
   bool SetTimes(Time last_access_time, Time last_modified_time);
 
   // Returns some basic information for the given file.
-  bool GetInfo(Info* info);
+  bool GetInfo(Info* info) const;
 
 #if !BUILDFLAG( \
     IS_FUCHSIA)  // Fuchsia's POSIX API does not support file locking.
@@ -323,6 +343,12 @@ class BASE_EXPORT File {
   // Serialise this object into a trace.
   void WriteIntoTrace(perfetto::TracedValue context) const;
 
+#if BUILDFLAG(IS_APPLE)
+  // Initializes experiments. Must be invoked early in process startup, but
+  // after `FeatureList` initialization.
+  static void InitializeFeatures();
+#endif  // BUILDFLAG(IS_APPLE)
+
 #if BUILDFLAG(IS_WIN)
   // Sets or clears the DeleteFile disposition on the file. Returns true if
   // the disposition was set or cleared, as indicated by |delete_on_close|.
@@ -356,29 +382,47 @@ class BASE_EXPORT File {
   //   deleted in the event of untimely process termination, and then clearing
   //   this state once the file is suitable for persistence.
   bool DeleteOnClose(bool delete_on_close);
-#endif
 
-#if BUILDFLAG(IS_WIN)
+  // Precondition: last_error is not 0, also known as ERROR_SUCCESS.
   static Error OSErrorToFileError(DWORD last_error);
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+  // Precondition: saved_errno is not 0.
   static Error OSErrorToFileError(int saved_errno);
 #endif
 
   // Gets the last global error (errno or GetLastError()) and converts it to the
-  // closest base::File::Error equivalent via OSErrorToFileError(). The returned
-  // value is only trustworthy immediately after another base::File method
-  // fails. base::File never resets the global error to zero.
+  // closest base::File::Error equivalent via OSErrorToFileError(). It should
+  // therefore only be called immediately after another base::File method fails.
+  // base::File never resets the global error to zero.
   static Error GetLastFileError();
 
   // Converts an error value to a human-readable form. Used for logging.
   static std::string ErrorToString(Error error);
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
-  // Wrapper for stat() or stat64().
-  static int Stat(const char* path, stat_wrapper_t* sb);
+  // Wrapper for stat().
+  static int Stat(const FilePath& path, stat_wrapper_t* sb);
+  // Wrapper for fstat().
   static int Fstat(int fd, stat_wrapper_t* sb);
-  static int Lstat(const char* path, stat_wrapper_t* sb);
+  // Wrapper for lstat().
+  static int Lstat(const FilePath& path, stat_wrapper_t* sb);
+  // Wrapper for mkdir().
+  static int Mkdir(const FilePath& path, mode_t mode);
 #endif
+
+  // This function can be used to augment `flags` with the correct flags
+  // required to create a File that can be safely passed to an untrusted
+  // process. It must be called if the File is intended to be transferred to an
+  // untrusted process, but can still be safely called even if the File is not
+  // intended to be transferred.
+  static constexpr uint32_t AddFlagsForPassingToUntrustedProcess(
+      uint32_t flags) {
+    if (flags & File::FLAG_WRITE || flags & File::FLAG_APPEND ||
+        flags & File::FLAG_WRITE_ATTRIBUTES) {
+      flags |= File::FLAG_WIN_NO_EXECUTE;
+    }
+    return flags;
+  }
 
  private:
   friend class FileTracing::ScopedTrace;
@@ -391,9 +435,20 @@ class BASE_EXPORT File {
 
   ScopedPlatformFile file_;
 
-  // A path to use for tracing purposes. Set if file tracing is enabled during
-  // |Initialize()|.
-  FilePath tracing_path_;
+#if BUILDFLAG(IS_ANDROID)
+  // Keeps the Java ParcelFileDescriptor alive when `this` wraps a file from an
+  // Android content provider (i.e. a content URI). Close() is called on the
+  // object when the file is closed.
+  base::android::ScopedJavaGlobalRef<jobject> java_parcel_file_descriptor_;
+#endif
+
+  // Platform path to `file_`. Set if `this` wraps a file from an Android
+  // content provider (i.e. a content URI) or if tracing is enabled in
+  // `Initialize()`.
+  // On Android it could be a content URI, but never a virtual document path.
+  // path_ will be empty if content URI cannot be opened making the file
+  // invalid.
+  FilePath path_;
 
   // Object tied to the lifetime of |this| that enables/disables tracing.
   FileTracing::ScopedEnabler trace_enabler_;

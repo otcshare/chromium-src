@@ -8,10 +8,9 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner_helpers.h"
-#include "ui/gl/gl_export.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -20,18 +19,17 @@ class SingleThreadTaskRunner;
 namespace gl {
 
 // Listener class for all the callbacks from android SurfaceTexture.
-class GL_EXPORT SurfaceTextureListener {
+class SurfaceTextureListener {
  public:
   SurfaceTextureListener() = delete;
   SurfaceTextureListener(const SurfaceTextureListener&) = delete;
   SurfaceTextureListener& operator=(const SurfaceTextureListener&) = delete;
 
   // Destroy this listener.
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Destroy(JNIEnv* env);
 
   // A new frame is available to consume.
-  void FrameAvailable(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj);
+  void FrameAvailable(JNIEnv* env);
 
  private:
   friend class base::DeleteHelper<SurfaceTextureListener>;

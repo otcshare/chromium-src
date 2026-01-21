@@ -5,6 +5,7 @@
 #ifndef BASE_ENTERPRISE_UTIL_H_
 #define BASE_ENTERPRISE_UTIL_H_
 
+#include "base/auto_reset.h"
 #include "base/base_export.h"
 #include "build/build_config.h"
 
@@ -32,27 +33,23 @@ BASE_EXPORT bool IsEnterpriseDevice();
 // if possible.
 BASE_EXPORT bool IsManagedOrEnterpriseDevice();
 
+#if BUILDFLAG(IS_WIN)
+// Note: returning base::AutoReset<bool> is preferred, but including that header
+// here causes libc++ header pollution on Windows due to the low-level nature
+// of this file.
+// Sets the global flag for testing enterprise device status.
+[[nodiscard]] BASE_EXPORT AutoReset<bool> SetIsEnterpriseDeviceForTesting(
+    bool is_enterprise);
+#endif  // BUILDFLAG(IS_WIN)
+
 #if BUILDFLAG(IS_APPLE)
 
-// Returns true if the device is being managed by an MDM system. Uses an old API
-// not intended for the purpose.
-enum class MacDeviceManagementStateOld {
-  kFailureAPIUnavailable = 0,
-  kFailureUnableToParseResult = 1,
-  kNoEnrollment = 2,
-  kMDMEnrollment = 3,
-
-  kMaxValue = kMDMEnrollment
-};
-BASE_EXPORT MacDeviceManagementStateOld IsDeviceRegisteredWithManagementOld();
-
-// Returns the state of the management of the device. Uses a new API so results
-// aren't always available. For more details, this is documented at
+// Returns the state of the management of the device. For more details:
 // https://blog.fleetsmith.com/what-is-user-approved-mdm-uamdm/ .
 
 // These values are persisted to logs. Entries must not be renumbered and
 // numeric values must never be reused.
-enum class MacDeviceManagementStateNew {
+enum class MacDeviceManagementState {
   kFailureAPIUnavailable = 0,
   kFailureUnableToParseResult = 1,
   kNoEnrollment = 2,
@@ -62,7 +59,7 @@ enum class MacDeviceManagementStateNew {
 
   kMaxValue = kDEPMDMEnrollment
 };
-BASE_EXPORT MacDeviceManagementStateNew IsDeviceRegisteredWithManagementNew();
+BASE_EXPORT MacDeviceManagementState IsDeviceRegisteredWithManagement();
 
 // Returns whether the device and/or the current user is enrolled to a domain.
 struct DeviceUserDomainJoinState {

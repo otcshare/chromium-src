@@ -5,10 +5,11 @@
 #include "chrome/browser/ash/chromebox_for_meetings/browser/cfm_browser_service.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/run_loop.h"
@@ -17,22 +18,22 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/fake_cfm_hotline_client.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/fake_service_connection.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/fake_service_context.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/service_connection.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/mojom/cfm_browser.mojom.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/fake_service_connection.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/fake_service_context.h"
+#include "chromeos/services/chromebox_for_meetings/public/cpp/service_connection.h"
+#include "chromeos/services/chromebox_for_meetings/public/mojom/cfm_browser.mojom.h"
+#include "chromeos/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
 #include "components/variations/field_trial_config/field_trial_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash::cfm {
 namespace {
 
-// TODO(https://crbug.com/1164001): remove after the migration to namespace ash.
+// TODO(https://crbug.com/1403174): Remove when namespace of mojoms for CfM are
+// migarted to ash.
 namespace mojom = ::chromeos::cfm::mojom;
 
 class CfmBrowserServiceTest : public testing::Test {
@@ -45,7 +46,7 @@ class CfmBrowserServiceTest : public testing::Test {
 
   void SetUp() override {
     CfmHotlineClient::InitializeFake();
-    ServiceConnection::UseFakeServiceConnectionForTesting(
+    chromeos::cfm::ServiceConnection::UseFakeServiceConnectionForTesting(
         &fake_service_connection_);
     CfmBrowserService::Initialize();
   }
@@ -104,11 +105,11 @@ class CfmBrowserServiceTest : public testing::Test {
  protected:
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
-  FakeCfmServiceContext context_;
+  chromeos::cfm::FakeCfmServiceContext context_;
   mojo::Remote<mojom::CfmBrowser> browser_remote_;
   mojo::ReceiverSet<mojom::CfmServiceContext> context_receiver_set_;
   mojo::Remote<mojom::CfmServiceAdaptor> adaptor_remote_;
-  FakeServiceConnectionImpl fake_service_connection_;
+  chromeos::cfm::FakeServiceConnectionImpl fake_service_connection_;
 };
 
 // This test ensures that the CfmBrowserService is discoverable by its mojom
@@ -126,7 +127,7 @@ TEST_F(CfmBrowserServiceTest, GetBrowserRemote) {
 
 TEST_F(CfmBrowserServiceTest, GetVariationsData) {
   std::string field_trial_parameters = "Foo.Bar:Key/Value";
-  std::string field_trial_states = "*Baz/Qux/Foo/Bar/";
+  std::string field_trial_states = "*Baz/Qux/Foo/Bar";
   std::string enabled_features = "enabled<Foo";
   std::string disabled_features = "disabled<Baz";
 

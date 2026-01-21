@@ -9,9 +9,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
@@ -122,10 +123,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkDeviceHandlerImpl
   // specified yet.
   void ApplyUsbEthernetMacAddressSourceToShill();
 
-  // Applies the current value of the |cellular-use-attach-apn| flag to all
-  // existing cellular devices of Shill.
-  void ApplyUseAttachApnToShill();
-
   // Utility function for applying enabled setting of WiFi features that needs
   // to check if the feature is supported first.
   // This function will update |supported| if it is still NOT_REQUESTED by
@@ -148,7 +145,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkDeviceHandlerImpl
       std::string support_property_name,
       WifiFeatureSupport* feature_support_to_set,
       const std::string& device_path,
-      absl::optional<base::Value> properties);
+      std::optional<base::Value::Dict> properties);
 
   // Callback to be called on MAC address source change request failure.
   // The request was called on device with |device_path| path and
@@ -181,7 +178,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkDeviceHandlerImpl
   // Get the DeviceState for the wifi device, if any.
   const DeviceState* GetWifiDeviceState();
 
-  NetworkStateHandler* network_state_handler_ = nullptr;
+  raw_ptr<NetworkStateHandler> network_state_handler_ = nullptr;
   base::ScopedObservation<NetworkStateHandler, NetworkStateHandlerObserver>
       network_state_handler_observer_{this};
   bool allow_cellular_sim_lock_ = true;

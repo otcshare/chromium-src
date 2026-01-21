@@ -15,10 +15,15 @@
 
 namespace content {
 
-TestNavigationURLLoaderDelegate::TestNavigationURLLoaderDelegate()
-    : net_error_(0), on_request_handled_counter_(0) {}
+TestNavigationURLLoaderDelegate::TestNavigationURLLoaderDelegate() = default;
 
 TestNavigationURLLoaderDelegate::~TestNavigationURLLoaderDelegate() {}
+
+void TestNavigationURLLoaderDelegate::WaitForOnReceiveRedirect() {
+  on_receive_redirect_ = std::make_unique<base::RunLoop>();
+  on_receive_redirect_->Run();
+  on_receive_redirect_.reset();
+}
 
 void TestNavigationURLLoaderDelegate::WaitForRequestRedirected() {
   request_redirected_ = std::make_unique<base::RunLoop>();
@@ -38,14 +43,24 @@ void TestNavigationURLLoaderDelegate::WaitForRequestFailed() {
   request_failed_.reset();
 }
 
+bool TestNavigationURLLoaderDelegate::
+    ShouldClearParsedHeadersOnTestReceiveRedirect() {
+  if (on_receive_redirect_) {
+    on_receive_redirect_->Quit();
+  }
+  return clear_parsed_headers_on_redirect_;
+}
+
 void TestNavigationURLLoaderDelegate::OnRequestRedirected(
     const net::RedirectInfo& redirect_info,
     const net::NetworkAnonymizationKey& network_anonymization_key,
     network::mojom::URLResponseHeadPtr response_head) {
   redirect_info_ = redirect_info;
   redirect_response_ = std::move(response_head);
-  ASSERT_TRUE(request_redirected_);
-  request_redirected_->Quit();
+  ++on_redirect_handled_counter_;
+  if (request_redirected_) {
+    request_redirected_->Quit();
+  }
 }
 
 void TestNavigationURLLoaderDelegate::OnResponseStarted(
@@ -55,7 +70,7 @@ void TestNavigationURLLoaderDelegate::OnResponseStarted(
     GlobalRequestID request_id,
     bool is_download,
     net::NetworkAnonymizationKey network_anonymization_key,
-    absl::optional<SubresourceLoaderParams> subresource_loader_params,
+    SubresourceLoaderParams subresource_loader_params,
     EarlyHints early_hints) {
   on_request_handled_counter_++;
   response_head_ = std::move(response_head);
@@ -76,11 +91,10 @@ void TestNavigationURLLoaderDelegate::OnRequestFailed(
     request_failed_->Quit();
 }
 
-absl::optional<NavigationEarlyHintsManagerParams>
+std::optional<NavigationEarlyHintsManagerParams>
 TestNavigationURLLoaderDelegate::CreateNavigationEarlyHintsManagerParams(
     const network::mojom::EarlyHints& early_hints) {
   NOTREACHED();
-  return absl::nullopt;
 }
 
 }  // namespace content

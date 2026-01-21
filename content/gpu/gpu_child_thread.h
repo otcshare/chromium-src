@@ -8,15 +8,17 @@
 #include <stdint.h>
 
 #include <memory>
-#include <queue>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_observer.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/performance_manager/scenario_api/performance_scenarios.h"
 #include "components/viz/service/gl/gpu_service_impl.h"
 #include "components/viz/service/main/viz_main_impl.h"
 #include "content/child/child_thread_impl.h"
@@ -29,8 +31,10 @@
 #include "gpu/ipc/service/gpu_config.h"
 #include "gpu/ipc/service/x_util.h"
 #include "media/base/android_overlay_mojo_factory.h"
-#include "ui/gfx/gpu_extra_info.h"
-#include "ui/gfx/native_widget_types.h"
+
+namespace base::sequence_manager {
+class SequenceManager;
+}  // namespace base::sequence_manager
 
 namespace content {
 class GpuServiceFactory;
@@ -40,7 +44,8 @@ class GpuServiceFactory;
 // IPC messages to gpu::GpuChannelManager, which is responsible for issuing
 // rendering commands to the GPU.
 class GpuChildThread : public ChildThreadImpl,
-                       public viz::VizMainImpl::Delegate {
+                       public viz::VizMainImpl::Delegate,
+                       public base::TaskObserver {
  public:
   GpuChildThread(base::RepeatingClosure quit_closure,
                  std::unique_ptr<gpu::GpuInit> gpu_init);
@@ -53,7 +58,9 @@ class GpuChildThread : public ChildThreadImpl,
 
   ~GpuChildThread() override;
 
-  void Init(const base::TimeTicks& process_start_time);
+  void Init(
+      const base::TimeTicks& process_start_time,
+      base::sequence_manager::SequenceManager* sequence_manager = nullptr);
 
  private:
   GpuChildThread(base::RepeatingClosure quit_closure,
@@ -72,8 +79,10 @@ class GpuChildThread : public ChildThreadImpl,
       base::SingleThreadTaskRunner* task_runner) override;
   void QuitMainMessageLoop() override;
 
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel level);
+  // base::TaskObserver:
+  void WillProcessTask(const base::PendingTask& pending_task,
+                       bool was_blocked_or_low_priority) override;
+  void DidProcessTask(const base::PendingTask& pending_task) override {}
 
   // Returns a closure which calls into the VizMainImpl to perform shutdown
   // before quitting the main message loop. Must be called on the main thread.
@@ -100,7 +109,7 @@ class GpuChildThread : public ChildThreadImpl,
   // A closure which quits the main message loop.
   base::RepeatingClosure quit_closure_;
 
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
+  performance_scenarios::InputScenario last_input_scenario_;
 
   base::WeakPtrFactory<GpuChildThread> weak_factory_{this};
 };

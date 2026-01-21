@@ -2,20 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "media/capture/video/chromeos/token_manager.h"
 
 #include <grp.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
 
 namespace {
 
@@ -59,8 +59,7 @@ bool WriteTokenToFile(const base::FilePath& token_path,
                << token_path.AsUTF8Unsafe();
     return false;
   }
-  std::string token_string = token.ToString();
-  token_file.WriteAtCurrentPos(token_string.c_str(), token_string.length());
+  token_file.WriteAtCurrentPos(base::as_byte_span(token.ToString()));
   return true;
 }
 
@@ -69,7 +68,6 @@ bool WriteTokenToFile(const base::FilePath& token_path,
 namespace media {
 
 constexpr char TokenManager::kServerTokenPath[];
-constexpr char TokenManager::kServerSensorClientTokenPath[];
 constexpr char TokenManager::kTestClientTokenPath[];
 constexpr std::array<cros::mojom::CameraClientType, 3>
     TokenManager::kTrustedClientTypes;
@@ -82,16 +80,6 @@ bool TokenManager::GenerateServerToken() {
   return WriteTokenToFile(base::FilePath(kServerTokenPath), server_token_);
 }
 
-bool TokenManager::GenerateServerSensorClientToken() {
-  auto* sensor_hal_dispatcher =
-      chromeos::sensors::SensorHalDispatcher::GetInstance();
-  if (!sensor_hal_dispatcher)
-    return false;
-
-  return WriteTokenToFile(base::FilePath(kServerSensorClientTokenPath),
-                          sensor_hal_dispatcher->GetTokenForTrustedClient());
-}
-
 bool TokenManager::GenerateTestClientToken() {
   return WriteTokenToFile(
       base::FilePath(kTestClientTokenPath),
@@ -101,7 +89,7 @@ bool TokenManager::GenerateTestClientToken() {
 base::UnguessableToken TokenManager::GetTokenForTrustedClient(
     cros::mojom::CameraClientType type) {
   base::AutoLock l(client_token_map_lock_);
-  if (!base::Contains(kTrustedClientTypes, type)) {
+  if (!std::ranges::contains(kTrustedClientTypes, type)) {
     return base::UnguessableToken();
   }
   auto& token_set = client_token_map_[type];
@@ -135,17 +123,7 @@ bool TokenManager::AuthenticateServer(const base::UnguessableToken& token) {
   return server_token_ == token;
 }
 
-bool TokenManager::AuthenticateServerSensorClient(
-    const base::UnguessableToken& token) {
-  auto* sensor_hal_dispatcher =
-      chromeos::sensors::SensorHalDispatcher::GetInstance();
-  if (!sensor_hal_dispatcher)
-    return false;
-
-  return sensor_hal_dispatcher->AuthenticateClient(token);
-}
-
-absl::optional<cros::mojom::CameraClientType> TokenManager::AuthenticateClient(
+std::optional<cros::mojom::CameraClientType> TokenManager::AuthenticateClient(
     cros::mojom::CameraClientType type,
     const base::UnguessableToken& token) {
   base::AutoLock l(client_token_map_lock_);
@@ -155,11 +133,11 @@ absl::optional<cros::mojom::CameraClientType> TokenManager::AuthenticateClient(
         return client_type;
       }
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
   auto& token_set = client_token_map_[type];
   if (token_set.find(token) == token_set.end()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return type;
 }

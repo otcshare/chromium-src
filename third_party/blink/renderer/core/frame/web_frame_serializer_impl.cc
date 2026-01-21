@@ -77,7 +77,9 @@
 
 #include "third_party/blink/renderer/core/frame/web_frame_serializer_impl.h"
 
-#include "third_party/blink/public/platform/web_vector.h"
+#include <vector>
+
+#include "base/containers/to_vector.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_type.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -86,11 +88,14 @@
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/html_all_collection.h"
+#include "third_party/blink/renderer/core/html/html_base_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+#include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/html/html_meta_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
@@ -106,8 +111,7 @@ String GenerateBaseTagDeclaration(const String& base_target) {
   // TODO(yosin) We should call |FrameSerializer::baseTagDeclarationOf()|.
   if (base_target.empty())
     return String("<base href=\".\">");
-  String base_string = "<base href=\".\" target=\"" + base_target + "\">";
-  return base_string;
+  return StrCat({"<base href=\".\" target=\"", base_target, "\">"});
 }
 
 }  // namespace
@@ -119,7 +123,7 @@ static const unsigned kDataBufferCapacity = 65536;
 
 WebFrameSerializerImpl::SerializeDomParam::SerializeDomParam(
     const KURL& url,
-    const WTF::TextEncoding& text_encoding,
+    const TextEncoding& text_encoding,
     Document* document)
     : url(url),
       text_encoding(text_encoding),
@@ -174,7 +178,7 @@ String WebFrameSerializerImpl::PreActionBeforeSerializeOpenTag(
       if (xml_encoding.empty())
         xml_encoding = param->document->EncodingName();
       if (xml_encoding.empty())
-        xml_encoding = UTF8Encoding().GetName();
+        xml_encoding = Utf8Encoding().GetName();
       result.Append("<?xml version=\"");
       result.Append(param->document->xmlVersion());
       result.Append("\" encoding=\"");
@@ -212,7 +216,7 @@ String WebFrameSerializerImpl::PostActionAfterSerializeOpenTag(
     // See http://bugs.webkit.org/show_bug.cgi?id=16621.
     // First we generate new content for writing correct META element.
     result.Append(WebFrameSerializer::GenerateMetaCharsetDeclaration(
-        String(param->text_encoding.GetName())));
+        param->text_encoding.GetName()));
 
     param->have_added_contents_before_end = true;
     // Will search each META which has charset declaration, and skip them all
@@ -279,13 +283,11 @@ void WebFrameSerializerImpl::EncodeAndFlushBuffer(
   String content = data_buffer_.ToString();
   data_buffer_.Clear();
 
-  std::string encoded_content =
-      param->text_encoding.Encode(content, WTF::kEntitiesForUnencodables);
+  std::string encoded_content = param->text_encoding.Encode(
+      content, UnencodableHandling::kEntitiesForUnencodables);
 
   // Send result to the client.
-  client_->DidSerializeDataForFrame(
-      WebVector<char>(encoded_content.c_str(), encoded_content.length()),
-      status);
+  client_->DidSerializeDataForFrame(base::ToVector(encoded_content), status);
 }
 
 // TODO(yosin): We should utilize |MarkupFormatter| here to share code,
@@ -372,8 +374,10 @@ void WebFrameSerializerImpl::OpenTagToString(Element* element,
   // Do post action for open tag.
   String added_contents = PostActionAfterSerializeOpenTag(element, param);
   // Complete the open tag for element when it has child/children.
-  if (element->HasChildren() || param->have_added_contents_before_end)
+  if (element->HasChildren() || param->have_added_contents_before_end ||
+      element->AuthorShadowRoot()) {
     result.Append('>');
+  }
   // Append the added contents generate in  post action of open tag.
   result.Append(added_contents);
   // Save the result to data buffer.
@@ -390,7 +394,8 @@ void WebFrameSerializerImpl::EndTagToString(Element* element,
   if (need_skip)
     return;
   // Write end tag when element has child/children.
-  if (element->HasChildren() || param->have_added_contents_before_end) {
+  if (element->HasChildren() || param->have_added_contents_before_end ||
+      element->AuthorShadowRoot()) {
     result.Append("</");
     result.Append(element->nodeName().DeprecatedLower());
     result.Append('>');
@@ -417,6 +422,23 @@ void WebFrameSerializerImpl::EndTagToString(Element* element,
   SaveHTMLContentToBuffer(result.ToString(), param);
 }
 
+void WebFrameSerializerImpl::ShadowRootTagToString(ShadowRoot* shadow_root,
+                                                   SerializeDomParam* param) {
+  CHECK(!shadow_root->IsUserAgent());
+
+  StringBuilder result;
+  result.Append("<template shadowrootmode=");
+  result.Append(shadow_root->IsOpen() ? "\"open\"" : "\"closed\"");
+
+  if (shadow_root->delegatesFocus()) {
+    result.Append(" shadowrootdelegatesfocus");
+  }
+
+  result.Append('>');
+
+  SaveHTMLContentToBuffer(result.ToString(), param);
+}
+
 void WebFrameSerializerImpl::BuildContentForNode(Node* node,
                                                  SerializeDomParam* param) {
   switch (node->getNodeType()) {
@@ -424,11 +446,23 @@ void WebFrameSerializerImpl::BuildContentForNode(Node* node,
       auto* element = To<Element>(node);
       // Process open tag of element.
       OpenTagToString(element, param);
+
+      // Process the ShadowRoot into a <template> if present.
+      if (auto* shadow_root = element->AuthorShadowRoot()) {
+        ShadowRootTagToString(shadow_root, param);
+        for (Node* child = shadow_root->firstChild(); child;
+             child = child->nextSibling()) {
+          BuildContentForNode(child, param);
+        }
+        SaveHTMLContentToBuffer("</template>", param);
+      }
+
       // Walk through the children nodes and process it.
       for (Node* child = element->firstChild(); child;
            child = child->nextSibling()) {
         BuildContentForNode(child, param);
       }
+
       // Process end tag of element.
       EndTagToString(element, param);
       break;
@@ -441,7 +475,6 @@ void WebFrameSerializerImpl::BuildContentForNode(Node* node,
     case Node::kDocumentFragmentNode:
       // Should not exist.
       NOTREACHED();
-      break;
     // Document type node can be in DOM?
     case Node::kDocumentTypeNode:
       param->have_seen_doc_type = true;
@@ -484,8 +517,8 @@ bool WebFrameSerializerImpl::Serialize() {
   if (url.IsValid()) {
     did_serialization = true;
 
-    const WTF::TextEncoding& text_encoding =
-        document->Encoding().IsValid() ? document->Encoding() : UTF8Encoding();
+    const TextEncoding& text_encoding =
+        document->Encoding().IsValid() ? document->Encoding() : Utf8Encoding();
     if (text_encoding.IsNonByteBasedEncoding()) {
       const UChar kByteOrderMark = 0xFEFF;
       data_buffer_.Append(kByteOrderMark);
@@ -502,7 +535,7 @@ bool WebFrameSerializerImpl::Serialize() {
   } else {
     // Report empty contents for invalid URLs.
     client_->DidSerializeDataForFrame(
-        WebVector<char>(), WebFrameSerializerClient::kCurrentFrameIsFinished);
+        std::vector<char>(), WebFrameSerializerClient::kCurrentFrameIsFinished);
   }
 
   DCHECK(data_buffer_.empty());

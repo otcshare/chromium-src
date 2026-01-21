@@ -5,22 +5,28 @@
 #ifndef COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_ACCOUNTS_COOKIE_MUTATOR_H_
 #define COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_ACCOUNTS_COOKIE_MUTATOR_H_
 
+#include <memory>
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 
-struct CoreAccountId;
 class GoogleServiceAuthError;
 
-namespace network {
-namespace mojom {
+namespace network::mojom {
 class CookieManager;
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+class DeviceBoundSessionManager;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 }
-}  // namespace network
 
 namespace signin {
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+class BoundSessionOAuthMultiLoginDelegate;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 struct MultiloginParameters;
 enum class SetAccountsInCookieResult;
 
@@ -39,6 +45,19 @@ class AccountsCookieMutator {
 
     // Returns the CookieManager for the partition.
     virtual network::mojom::CookieManager* GetCookieManagerForPartition() = 0;
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+    // Creates a new BoundSessionOAuthMultiLoginDelegate for the partition. If
+    // prototype cookie binding is not supported for the partition, returns
+    // nullptr.
+    virtual std::unique_ptr<BoundSessionOAuthMultiLoginDelegate>
+    CreateBoundSessionOAuthMultiLoginDelegateForPartition();
+
+    // Returns the DeviceBoundSessionManager for the partition. If the
+    // partition does not support standard cookie binding, returns nullptr.
+    virtual network::mojom::DeviceBoundSessionManager*
+    GetDeviceBoundSessionManagerForPartition() = 0;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   };
 
   // Task handle for SetAccountsInCookieForPartition. Deleting this object
@@ -55,27 +74,8 @@ class AccountsCookieMutator {
 
   virtual ~AccountsCookieMutator() = default;
 
-  typedef base::OnceCallback<void(const CoreAccountId& account_id,
-                                  const GoogleServiceAuthError& error)>
-      AddAccountToCookieCompletedCallback;
   typedef base::OnceCallback<void(const GoogleServiceAuthError& error)>
       LogOutFromCookieCompletedCallback;
-
-  // Adds an account identified by |account_id| to the cookie responsible for
-  // tracking the list of logged-in Google sessions across the web.
-  virtual void AddAccountToCookie(
-      const CoreAccountId& account_id,
-      gaia::GaiaSource source,
-      AddAccountToCookieCompletedCallback completion_callback) = 0;
-
-  // Adds an account identified by |account_id| and with |access_token| to the
-  // cookie responsible for tracking the list of logged-in Google sessions
-  // across the web.
-  virtual void AddAccountToCookieWithToken(
-      const CoreAccountId& account_id,
-      const std::string& access_token,
-      gaia::GaiaSource source,
-      AddAccountToCookieCompletedCallback completion_callback) = 0;
 
   // Updates the state of the Gaia cookie to contain the accounts in
   // |parameters|.
@@ -90,7 +90,7 @@ class AccountsCookieMutator {
   // GoogleServiceAuthError::AuthErrorNone() then the operation succeeded.
   // Notably, if there are accounts being added for which IdentityManager does
   // not have refresh tokens, the operation will fail with a
-  // GoogleServiceAuthError::USER_NOT_SIGNED_UP error.
+  // GoogleServiceAuthError::ACCOUNT_NOT_FOUND error.
   virtual void SetAccountsInCookie(
       const MultiloginParameters& parameters,
       gaia::GaiaSource source,
@@ -121,7 +121,7 @@ class AccountsCookieMutator {
   // iOS, it's necessary to force-trigger the processing of cookie changes
   // from the client as the normal mechanism for internally observing them
   // is not wired up.
-  // TODO(https://crbug.com/930582) : Remove the need to expose this method
+  // TODO(crbug.com/40613324) : Remove the need to expose this method
   // or move it to the network::CookieManager.
   virtual void ForceTriggerOnCookieChange() = 0;
 #endif
@@ -136,7 +136,7 @@ class AccountsCookieMutator {
 
   // Indicates that an account previously listed via ListAccounts should now
   // be removed.
-  virtual void RemoveLoggedOutAccountByGaiaId(const std::string& gaia_id) = 0;
+  virtual void RemoveLoggedOutAccountByGaiaId(const GaiaId& gaia_id) = 0;
 };
 
 }  // namespace signin

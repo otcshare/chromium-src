@@ -9,44 +9,36 @@
 namespace download {
 namespace features {
 
-BASE_FEATURE(kUseDownloadOfflineContentProvider,
-             "UseDownloadOfflineContentProvider",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kDownloadAutoResumptionNative,
-             "DownloadsAutoResumptionNative",
-#if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
-
 BASE_FEATURE(kParallelDownloading,
-             "ParallelDownloading",
 #if BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
              base::FEATURE_DISABLED_BY_DEFAULT
 #endif
 );
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+BASE_FEATURE(kBackoffInDownloading, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+bool IsBackoffInDownloadingEnabled() {
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_MAC)
+  return false;
+#else
+  return base::FeatureList::IsEnabled(kBackoffInDownloading);
+#endif
+}
 
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kSmartSuggestionForLargeDownloads,
-             "SmartSuggestionForLargeDownloads",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kRefreshExpirationDate,
-             "RefreshExpirationDate",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kShowBlockedSensitiveDownload, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kShowDownloadScanningState, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-BASE_FEATURE(kUseInProgressDownloadManagerForDownloadService,
-             "UseInProgressDownloadManagerForDownloadService",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kAllowDownloadResumptionWithoutStrongValidators,
-             "AllowDownloadResumptionWithoutStrongValidators",
+BASE_FEATURE(kDownloadNotificationServiceUnifiedAPI,
 #if BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
@@ -54,28 +46,34 @@ BASE_FEATURE(kAllowDownloadResumptionWithoutStrongValidators,
 #endif
 );
 
-BASE_FEATURE(kUseParallelRequestsForHTTP2,
-             "UseParallelRequestsForHTTP2",
+BASE_FEATURE(kUseInProgressDownloadManagerForDownloadService,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAllowDownloadResumptionWithoutStrongValidators,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kUseParallelRequestsForHTTP2, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseParallelRequestsForQUIC, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDeleteOverwrittenDownloads, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAllowFileBufferSizeControl, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAllowedMixedContentInlinePdf, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableAsyncNotificationManagerForDownload,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kEnableSavePackageForOffTheRecord,
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kUseParallelRequestsForQUIC,
-             "UseParallelRequestsForQUIC",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kDeleteExpiredDownloads,
-             "DeleteExpiredDownloads",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kDeleteOverwrittenDownloads,
-             "DeleteOverwrittenDownloads",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kAllowFileBufferSizeControl,
-             "AllowFileBufferSizeControl",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kDownloadRange, "DownloadRange", base::FEATURE_ENABLED_BY_DEFAULT);
-
+#endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace features
 
 }  // namespace download

@@ -6,7 +6,7 @@
 
 #include "base/android/path_utils.h"
 #include "base/base_paths_android.h"
-#include "base/files/file_util.h"
+#include "base/files/file_path.h"
 #include "base/path_service.h"
 
 namespace android_webview {
@@ -36,6 +36,12 @@ bool PathProvider(int key, base::FilePath* result) {
       if (!base::android::GetCacheDirectory(&cur))
         return false;
       cur = cur.Append(FILE_PATH_LITERAL("SafeBrowsing"));
+      break;
+    case DIR_LOCAL_TRACES:
+      if (!base::android::GetCacheDirectory(&cur)) {
+        return false;
+      }
+      cur = cur.Append(FILE_PATH_LITERAL("Local Traces"));
       break;
     default:
       return false;

@@ -4,7 +4,7 @@
 
 #include "extensions/browser/api/dns/dns_api.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -25,12 +25,12 @@ namespace extensions {
 
 DnsResolveFunction::DnsResolveFunction() = default;
 
-DnsResolveFunction::~DnsResolveFunction() {}
+DnsResolveFunction::~DnsResolveFunction() = default;
 
 ExtensionFunction::ResponseAction DnsResolveFunction::Run() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  std::unique_ptr<Resolve::Params> params(Resolve::Params::Create(args()));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<Resolve::Params> params = Resolve::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   // Intentionally pass host only (no scheme or non-zero port) to only get a
   // basic resolution for the hostname itself.
@@ -41,13 +41,12 @@ ExtensionFunction::ResponseAction DnsResolveFunction::Run() {
       ->GetNetworkContext()
       ->ResolveHost(network::mojom::HostResolverHost::NewHostPortPair(
                         std::move(host_port_pair)),
-                    net::NetworkAnonymizationKey(site, site), nullptr,
+                    net::NetworkAnonymizationKey::CreateSameSite(site), nullptr,
                     receiver_.BindNewPipeAndPassRemote());
   receiver_.set_disconnect_handler(base::BindOnce(
       &DnsResolveFunction::OnComplete, base::Unretained(this),
       net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net::ERR_FAILED),
-      /*resolved_addresses=*/absl::nullopt,
-      /*endpoint_results_with_metadata=*/absl::nullopt));
+      net::AddressList(), net::HostResolverEndpointResults()));
 
   // Balanced in OnComplete().
   AddRef();
@@ -57,17 +56,16 @@ ExtensionFunction::ResponseAction DnsResolveFunction::Run() {
 void DnsResolveFunction::OnComplete(
     int result,
     const net::ResolveErrorInfo& resolve_error_info,
-    const absl::optional<net::AddressList>& resolved_addresses,
-    const absl::optional<net::HostResolverEndpointResults>&
-        endpoint_results_with_metadata) {
+    const net::AddressList& resolved_addresses,
+    const net::HostResolverEndpointResults& alternative_endpoints) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   receiver_.reset();
 
   ResolveCallbackResolveInfo resolve_info;
   resolve_info.result_code = resolve_error_info.error;
   if (result == net::OK) {
-    DCHECK(resolved_addresses.has_value() && !resolved_addresses->empty());
-    resolve_info.address = resolved_addresses->front().ToStringWithoutPort();
+    DCHECK(!resolved_addresses.empty());
+    resolve_info.address = resolved_addresses.front().ToStringWithoutPort();
   }
 
   Respond(ArgumentList(Resolve::Results::Create(resolve_info)));

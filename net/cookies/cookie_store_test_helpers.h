@@ -5,18 +5,18 @@
 #ifndef NET_COOKIES_COOKIE_STORE_TEST_HELPERS_H_
 #define NET_COOKIES_COOKIE_STORE_TEST_HELPERS_H_
 
-#include "net/cookies/cookie_monster.h"
-
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "net/cookies/cookie_change_dispatcher.h"
+#include "net/cookies/cookie_monster.h"
 #include "net/log/net_log_with_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
@@ -37,11 +37,11 @@ class DelayedCookieMonsterChangeDispatcher : public CookieChangeDispatcher {
   [[nodiscard]] std::unique_ptr<CookieChangeSubscription> AddCallbackForCookie(
       const GURL& url,
       const std::string& name,
-      const absl::optional<CookiePartitionKey>& cookie_partition_key,
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
       CookieChangeCallback callback) override;
   [[nodiscard]] std::unique_ptr<CookieChangeSubscription> AddCallbackForUrl(
       const GURL& url,
-      const absl::optional<CookiePartitionKey>& cookie_partition_key,
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
       CookieChangeCallback callback) override;
   [[nodiscard]] std::unique_ptr<CookieChangeSubscription>
   AddCallbackForAllChanges(CookieChangeCallback callback) override;
@@ -65,8 +65,16 @@ class DelayedCookieMonster : public CookieStore {
       const GURL& source_url,
       const CookieOptions& options,
       SetCookiesCallback callback,
-      const absl::optional<CookieAccessResult> cookie_access_result =
-          absl::nullopt) override;
+      const std::optional<CookieAccessResult> cookie_access_result =
+          std::nullopt) override;
+
+  // This function is for test purposes only.
+  // Call the asynchronous CookieMonster function, expect it to immediately
+  // invoke the internal callback.
+  // Post a delayed task to invoke the original callback with the results.
+  void SetUnsafeCanonicalCookieForTestAsync(
+      std::unique_ptr<CanonicalCookie> cookie,
+      SetCookiesCallback callback) override;
 
   void GetCookieListWithOptionsAsync(
       const GURL& url,
@@ -94,7 +102,7 @@ class DelayedCookieMonster : public CookieStore {
 
   CookieChangeDispatcher& GetChangeDispatcher() override;
 
-  void SetCookieableSchemes(const std::vector<std::string>& schemes,
+  void SetCookieableSchemes(std::vector<std::string> schemes,
                             SetCookieableSchemesCallback callback) override;
 
  private:
@@ -132,7 +140,7 @@ class CookieURLHelper {
   explicit CookieURLHelper(const std::string& url_string);
 
   const std::string& domain() const { return domain_and_registry_; }
-  std::string host() const { return url_.host(); }
+  std::string host() const { return url_.GetHost(); }
   const GURL& url() const { return url_; }
   const GURL AppendPath(const std::string& path) const;
 

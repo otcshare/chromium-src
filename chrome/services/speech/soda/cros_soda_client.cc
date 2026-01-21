@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "chrome/services/speech/soda/cros_soda_client.h"
+
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 #include "chromeos/services/machine_learning/public/mojom/machine_learning_service.mojom.h"
@@ -49,8 +51,9 @@ void CrosSodaClient::AddAudio(const char* audio_buffer,
   DCHECK(IsInitialized()) << "Unable to add audio before starting.";
   const uint8_t* audio_buffer_casted =
       reinterpret_cast<const uint8_t*>(audio_buffer);
-  std::vector<uint8_t> audio(audio_buffer_casted,
-                             audio_buffer_casted + audio_buffer_size);
+  std::vector<uint8_t> audio(
+      audio_buffer_casted,
+      UNSAFE_TODO(audio_buffer_casted + audio_buffer_size));
   soda_recognizer_->AddAudio(audio);
 }
 
@@ -62,7 +65,8 @@ void CrosSodaClient::MarkDone() {
 void CrosSodaClient::Reset(
     chromeos::machine_learning::mojom::SodaConfigPtr soda_config,
     CrosSodaClient::TranscriptionResultCallback transcription_callback,
-    CrosSodaClient::OnStopCallback stop_callback) {
+    CrosSodaClient::OnStopCallback stop_callback,
+    CrosSodaClient::OnLanguageIdentificationEventCallback langid_callback) {
   sample_rate_ = soda_config->sample_rate;
   channel_count_ = soda_config->channel_count;
   if (is_initialized_) {
@@ -87,6 +91,7 @@ void CrosSodaClient::Reset(
 
   transcription_callback_ = transcription_callback;
   stop_callback_ = stop_callback;
+  langid_callback_ = langid_callback;
 
   // Ensure this one is started.
   soda_recognizer_->Start();
@@ -113,6 +118,13 @@ void CrosSodaClient::OnSpeechRecognizerEvent(
       transcription_callback_.Run(
           media::SpeechRecognitionResult(partial_hyp, false));
     }
+  } else if (event->is_langid_event()) {
+    const auto& langid_event = event->get_langid_event();
+    langid_callback_.Run(langid_event->language,
+                         static_cast<media::mojom::ConfidenceLevel>(
+                             langid_event->confidence_level),
+                         static_cast<media::mojom::AsrSwitchResult>(
+                             langid_event->asr_switch_result));
   } else if (!event->is_endpointer_event() && !event->is_audio_event()) {
     LOG(ERROR) << "Some kind of other soda event, ignoring completely. Tag is '"
                << static_cast<uint32_t>(event->which()) << "'";

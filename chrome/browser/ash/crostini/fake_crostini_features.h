@@ -5,8 +5,10 @@
 #ifndef CHROME_BROWSER_ASH_CROSTINI_FAKE_CROSTINI_FEATURES_H_
 #define CHROME_BROWSER_ASH_CROSTINI_FAKE_CROSTINI_FEATURES_H_
 
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class Profile;
 
@@ -22,17 +24,16 @@ class FakeCrostiniFeatures : public CrostiniFeatures {
   ~FakeCrostiniFeatures() override;
 
   // CrostiniFeatures:
-  bool CouldBeAllowed(Profile* profile, std::string* reason) override;
-  bool IsAllowedNow(Profile* profile, std::string* reason) override;
-  bool IsEnabled(Profile* profile) override;
-  bool IsExportImportUIAllowed(Profile* profile) override;
-  bool IsRootAccessAllowed(Profile* profile) override;
-  bool IsContainerUpgradeUIAllowed(Profile* profile) override;
+  bool CouldBeAllowed(Profile* profile, std::string* reason) const override;
+  bool IsAllowedNow(Profile* profile, std::string* reason) const override;
+  bool IsEnabled(Profile* profile) const override;
+  bool IsExportImportUIAllowed(Profile* profile) const override;
+  bool IsRootAccessAllowed(Profile* profile) const override;
   void CanChangeAdbSideloading(
       Profile* profile,
-      CanChangeAdbSideloadingCallback callback) override;
-  bool IsPortForwardingAllowed(Profile* profile) override;
-  bool IsMultiContainerAllowed(Profile* profile) override;
+      CanChangeAdbSideloadingCallback callback) const override;
+  bool IsPortForwardingAllowed(Profile* profile) const override;
+  bool IsMultiContainerAllowed(Profile* profile) const override;
 
   void SetAll(bool flag);
   void ClearAll();
@@ -44,9 +45,6 @@ class FakeCrostiniFeatures : public CrostiniFeatures {
     export_import_ui_allowed_ = allowed;
   }
   void set_root_access_allowed(bool allowed) { root_access_allowed_ = allowed; }
-  void set_container_upgrade_ui_allowed(bool allowed) {
-    container_upgrade_ui_allowed_ = allowed;
-  }
 
   void set_can_change_adb_sideloading(bool can_change) {
     can_change_adb_sideloading_ = can_change;
@@ -63,17 +61,16 @@ class FakeCrostiniFeatures : public CrostiniFeatures {
  private:
   // Original global static when this instance is created. It is captured when
   // FakeCrostiniFeatures is created and replaced at destruction.
-  CrostiniFeatures* original_features_;
+  raw_ptr<CrostiniFeatures> original_features_;
 
-  absl::optional<bool> could_be_allowed_;
-  absl::optional<bool> allowed_now_;
-  absl::optional<bool> enabled_;
-  absl::optional<bool> export_import_ui_allowed_;
-  absl::optional<bool> root_access_allowed_;
-  absl::optional<bool> container_upgrade_ui_allowed_;
-  absl::optional<bool> can_change_adb_sideloading_;
-  absl::optional<bool> port_forwarding_allowed_;
-  absl::optional<bool> multi_container_allowed_;
+  std::optional<bool> could_be_allowed_;
+  std::optional<bool> allowed_now_;
+  std::optional<bool> enabled_;
+  std::optional<bool> export_import_ui_allowed_;
+  std::optional<bool> root_access_allowed_;
+  std::optional<bool> can_change_adb_sideloading_;
+  std::optional<bool> port_forwarding_allowed_;
+  std::optional<bool> multi_container_allowed_;
 };
 
 }  // namespace crostini

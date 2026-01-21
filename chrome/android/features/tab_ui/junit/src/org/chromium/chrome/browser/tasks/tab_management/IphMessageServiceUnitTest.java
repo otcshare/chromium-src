@@ -4,61 +4,57 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.mockito.ArgumentMatchers.any;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import org.junit.After;
-import org.junit.Assert;
+import android.content.Context;
+
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tasks.tab_management.MessageService.MessageType;
+import org.chromium.chrome.browser.tab_ui.TabSwitcherIphController;
+import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
+import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
-/**
- * Unit tests for {@link IphMessageService}.
- */
+/** Unit tests for {@link IphMessageService}. */
 @SuppressWarnings({"ResultOfMethodCallIgnored", "ArraysAsListWithZeroOrOneArgument"})
-@RunWith(LocalRobolectricTestRunner.class)
+@RunWith(BaseRobolectricTestRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class IphMessageServiceUnitTest {
-    @Mock
-    private TabSwitcherCoordinator.IphController mIphController;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock
-    private Profile mProfile;
+    @Mock private Context mContext;
 
-    @Mock
-    private Tracker mTracker;
+    @Mock private TabSwitcherIphController mIphController;
 
-    @Mock
-    private MessageService.MessageObserver mMessageObserver;
+    @Mock private Profile mProfile;
+
+    @Mock private Tracker mTracker;
+
+    @Mock private ServiceDismissActionProvider<@MessageType Integer> mServiceDismissActionProvider;
 
     private IphMessageService mIphMessageService;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        Profile.setLastUsedProfileForTesting(mProfile);
+        IphMessageService.setSkipIphInTestsForTesting(false);
         TrackerFactory.setTrackerForTests(mTracker);
-        mIphMessageService = new IphMessageService(mIphController);
-    }
-
-    @After
-    public void tearDown() {
-        Profile.setLastUsedProfileForTesting(null);
-        TrackerFactory.setTrackerForTests(null);
+        mIphMessageService = new IphMessageService(mContext, () -> mProfile, mIphController);
     }
 
     @Test
@@ -69,39 +65,50 @@ public class IphMessageServiceUnitTest {
 
     @Test
     public void testDismiss() {
+        mIphMessageService.initialize(mServiceDismissActionProvider);
         mIphMessageService.dismiss();
         verify(mTracker, times(1))
-                .shouldTriggerHelpUI(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
+                .shouldTriggerHelpUi(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
         verify(mTracker, times(1)).dismissed(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE);
     }
 
     @Test
-    public void testAddObserver() {
-        mIphMessageService.addObserver(mMessageObserver);
-        Assert.assertTrue(
-                mIphMessageService.getObserversForTesting().hasObserver(mMessageObserver));
+    public void testInitialize_TrackerNotInitialized() {
+        doReturn(false).when(mTracker).isInitialized();
+        mIphMessageService.initialize(mServiceDismissActionProvider);
         verify(mTracker, times(1))
                 .addOnInitializedCallback(mIphMessageService.getInitializedCallbackForTesting());
     }
 
     @Test
-    public void testCallbackWouldTriggerDragDrop() {
-        doReturn(true).when(mTracker).wouldTriggerHelpUI(
-                eq(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE));
+    public void testInitialize_TrackerInitialized() {
+        doReturn(true)
+                .when(mTracker)
+                .wouldTriggerHelpUi(eq(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE));
         doReturn(true).when(mTracker).isInitialized();
-        mIphMessageService.addObserver(mMessageObserver);
+        mIphMessageService.initialize(mServiceDismissActionProvider);
+        assertFalse(mIphMessageService.getMessageItems().isEmpty());
+    }
+
+    @Test
+    public void testCallbackWouldTriggerDragDrop() {
+        doReturn(true)
+                .when(mTracker)
+                .wouldTriggerHelpUi(eq(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE));
+        doReturn(false).when(mTracker).isInitialized();
+        mIphMessageService.initialize(mServiceDismissActionProvider);
+        doReturn(true).when(mTracker).isInitialized();
         mIphMessageService.getInitializedCallbackForTesting().onResult(true);
-        verify(mMessageObserver, times(1))
-                .messageReady(eq(MessageType.IPH), any(IphMessageService.IphMessageData.class));
+        assertFalse(mIphMessageService.getMessageItems().isEmpty());
     }
 
     @Test
     public void testCallbackWouldNotTriggerDragDrop() {
-        doReturn(false).when(mTracker).wouldTriggerHelpUI(
-                eq(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE));
-        mIphMessageService.addObserver(mMessageObserver);
+        doReturn(false)
+                .when(mTracker)
+                .wouldTriggerHelpUi(eq(FeatureConstants.TAB_GROUPS_DRAG_AND_DROP_FEATURE));
+        mIphMessageService.initialize(mServiceDismissActionProvider);
         mIphMessageService.getInitializedCallbackForTesting().onResult(true);
-        verify(mMessageObserver, times(0))
-                .messageReady(eq(MessageType.IPH), any(IphMessageService.IphMessageData.class));
+        assertTrue(mIphMessageService.getMessageItems().isEmpty());
     }
 }

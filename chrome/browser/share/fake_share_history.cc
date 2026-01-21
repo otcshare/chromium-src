@@ -4,7 +4,8 @@
 
 #include "chrome/browser/share/fake_share_history.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
 
 namespace sharing {

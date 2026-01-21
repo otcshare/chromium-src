@@ -4,6 +4,7 @@
 
 #include "ash/system/pcie_peripheral/pcie_peripheral_notification_controller.h"
 
+#include <optional>
 #include <string>
 
 #include "ash/constants/ash_pref_names.h"
@@ -16,11 +17,10 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/system_tray_model.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
@@ -87,7 +87,7 @@ void RemoveNotification(const std::string& notification_id) {
                                                            /*from_user=*/true);
 }
 
-void OnPeripheralLimitedNotificationClicked(absl::optional<int> button_index) {
+void OnPeripheralLimitedNotificationClicked(std::optional<int> button_index) {
   // Clicked on body.
   if (!button_index) {
     ShowPrivacyAndSecuritySettings();
@@ -102,7 +102,7 @@ void OnPeripheralLimitedNotificationClicked(absl::optional<int> button_index) {
       UpdateNotificationPrefCount(/*clicked_settings=*/true);
       break;
     case ButtonIndex::kLearnMore:
-      NewWindowDelegate::GetPrimary()->OpenUrl(
+      NewWindowDelegate::GetInstance()->OpenUrl(
           GURL(kLearnMoreHelpUrl),
           NewWindowDelegate::OpenUrlFrom::kUserInteraction,
           NewWindowDelegate::Disposition::kNewForegroundTab);
@@ -112,7 +112,7 @@ void OnPeripheralLimitedNotificationClicked(absl::optional<int> button_index) {
 }
 
 void OnGuestNotificationClicked(bool is_thunderbolt_only) {
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(kLearnMoreHelpUrl), NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
 
@@ -125,14 +125,14 @@ void OnGuestNotificationClicked(bool is_thunderbolt_only) {
 }
 
 void OnPeripheralBlockedNotificationClicked() {
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(kLearnMoreHelpUrl), NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
   RemoveNotification(kPciePeripheralDeviceBlockedNotificationId);
 }
 
 void OnBillboardNotificationClicked() {
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(kLearnMoreHelpUrl), NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
   RemoveNotification(kPciePeripheralBillboardDeviceNotificationId);

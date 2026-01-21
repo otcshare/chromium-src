@@ -33,10 +33,16 @@ std::unique_ptr<FlossAdminClient> FlossAdminClient::Create() {
 }
 
 constexpr char FlossAdminClient::kExportedCallbacksPath[] =
-    "/org/chromium/bluetooth/adminclient";
+    "/org/chromium/bluetooth/admin/callback";
 
 FlossAdminClient::FlossAdminClient() = default;
 FlossAdminClient::~FlossAdminClient() {
+  if (callback_id_) {
+    CallAdminMethod<bool>(
+        base::BindOnce(&FlossAdminClient::HandleCallbackUnregistered,
+                       weak_ptr_factory_.GetWeakPtr()),
+        admin::kUnregisterCallback, callback_id_.value());
+  }
   if (bus_) {
     exported_callback_manager_.UnexportCallback(
         dbus::ObjectPath(kExportedCallbacksPath));
@@ -45,12 +51,35 @@ FlossAdminClient::~FlossAdminClient() {
   }
 }
 
+void FlossAdminClient::OnMethodsExported() {
+  CallAdminMethod<uint32_t>(
+      base::BindOnce(&FlossAdminClient::HandleCallbackRegistered,
+                     weak_ptr_factory_.GetWeakPtr()),
+      admin::kRegisterCallback, dbus::ObjectPath(kExportedCallbacksPath));
+}
+
 void FlossAdminClient::HandleCallbackRegistered(DBusResult<uint32_t> result) {
+  if (!result.has_value()) {
+    LOG(WARNING) << "Failed to register admin client: " << result.error();
+    return;
+  }
+
+  if (on_ready_) {
+    std::move(on_ready_).Run();
+  }
+
   client_registered_ = true;
+  callback_id_ = *result;
   while (!initialized_callbacks_.empty()) {
     auto& cb = initialized_callbacks_.front();
     std::move(cb).Run();
     initialized_callbacks_.pop();
+  }
+}
+
+void FlossAdminClient::HandleCallbackUnregistered(DBusResult<bool> result) {
+  if (!result.has_value() || *result == false) {
+    LOG(WARNING) << __func__ << ": Failed to unregister callback";
   }
 }
 
@@ -68,10 +97,13 @@ void FlossAdminClient::HandleGetAllowedServices(
 
 void FlossAdminClient::Init(dbus::Bus* bus,
                             const std::string& service_name,
-                            const int adapter_index) {
+                            const int adapter_index,
+                            base::Version version,
+                            base::OnceClosure on_ready) {
   bus_ = bus;
   admin_path_ = FlossDBusClient::GenerateAdminPath(adapter_index);
   service_name_ = service_name;
+  version_ = version;
 
   dbus::ObjectProxy* object_proxy =
       bus_->GetObjectProxy(service_name_, admin_path_);
@@ -98,15 +130,14 @@ void FlossAdminClient::Init(dbus::Bus* bus,
 
   if (!exported_callback_manager_.ExportCallback(
           dbus::ObjectPath(kExportedCallbacksPath),
-          weak_ptr_factory_.GetWeakPtr())) {
+          weak_ptr_factory_.GetWeakPtr(),
+          base::BindOnce(&FlossAdminClient::OnMethodsExported,
+                         weak_ptr_factory_.GetWeakPtr()))) {
     LOG(ERROR) << "Unable to successfully export FlossAdminClientObserver.";
     return;
   }
 
-  CallAdminMethod<uint32_t>(
-      base::BindOnce(&FlossAdminClient::HandleCallbackRegistered,
-                     weak_ptr_factory_.GetWeakPtr()),
-      admin::kRegisterCallback, dbus::ObjectPath(kExportedCallbacksPath));
+  on_ready_ = std::move(on_ready);
 }
 
 void FlossAdminClient::AddObserver(FlossAdminClientObserver* observer) {
@@ -126,9 +157,6 @@ void FlossAdminClient::SetAllowedServices(
     const std::vector<device::BluetoothUUID>& UUIDs) {
   // Delay this function until we're initialized.
   if (!IsClientRegistered()) {
-    // This shouldn't happen unless we have multiple policies to set.
-    DCHECK(initialized_callbacks_.empty());
-
     initialized_callbacks_.push(BindOnce(&FlossAdminClient::SetAllowedServices,
                                          weak_ptr_factory_.GetWeakPtr(),
                                          std::move(callback), UUIDs));
@@ -159,6 +187,21 @@ void FlossAdminClient::GetDevicePolicyEffect(
                                 admin::kGetDevicePolicyEffect, device);
 }
 
+void FlossAdminClient::SetSimpleSecurePairingEnabled(
+    ResponseCallback<Void> callback,
+    const bool enable) {
+  // Delay this function until we're initialized.
+  if (!IsClientRegistered()) {
+    initialized_callbacks_.push(
+        BindOnce(&FlossAdminClient::SetSimpleSecurePairingEnabled,
+                 weak_ptr_factory_.GetWeakPtr(), std::move(callback), enable));
+    return;
+  }
+
+  CallAdminMethod<Void>(std::move(callback),
+                        admin::kSetSimpleSecurePairingEnabled, enable);
+}
+
 void FlossAdminClient::OnServiceAllowlistChanged(
     const std::vector<std::vector<uint8_t>>& allowlist) {
   std::vector<device::BluetoothUUID> uuids;
@@ -174,7 +217,7 @@ void FlossAdminClient::OnServiceAllowlistChanged(
 
 void FlossAdminClient::OnDevicePolicyEffectChanged(
     const FlossDeviceId& device_id,
-    const absl::optional<PolicyEffect>& effect) {
+    const std::optional<PolicyEffect>& effect) {
   for (auto& observer : observers_) {
     observer.DevicePolicyEffectChanged(device_id, effect);
   }

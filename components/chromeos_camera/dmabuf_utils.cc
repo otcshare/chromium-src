@@ -22,19 +22,19 @@
 namespace chromeos_camera {
 
 bool VerifyMjpegBufferHandle(const gfx::GpuMemoryBufferHandle& gmb_handle) {
-  if (gmb_handle.native_pixmap_handle.planes[0].offset != 0u) {
+  if (gmb_handle.native_pixmap_handle().planes[0].offset != 0u) {
     DLOG(ERROR) << "Invalid DMA buf plane offset";
     return false;
   }
   // For MJPEG, we expect the byte size to be at least as large as the stride
   // (see b/142105578).
   if (base::strict_cast<uint64_t>(
-          gmb_handle.native_pixmap_handle.planes[0].stride) >
-      gmb_handle.native_pixmap_handle.planes[0].size) {
+          gmb_handle.native_pixmap_handle().planes[0].stride) >
+      gmb_handle.native_pixmap_handle().planes[0].size) {
     DLOG(ERROR) << "Invalid DMA buf plane stride or size";
     return false;
   }
-  const auto dma_buf_fd = gmb_handle.native_pixmap_handle.planes[0].fd.get();
+  const auto dma_buf_fd = gmb_handle.native_pixmap_handle().planes[0].fd.get();
   const off_t data_size = lseek(dma_buf_fd, /*offset=*/0, SEEK_END);
   if (data_size == static_cast<off_t>(-1)) {
     PLOG(ERROR) << "Failed to get the size of the dma-buf";
@@ -46,7 +46,7 @@ bool VerifyMjpegBufferHandle(const gfx::GpuMemoryBufferHandle& gmb_handle) {
   }
   if (!base::IsValueInRangeForNumericType<uint64_t>(data_size) ||
       base::checked_cast<uint64_t>(data_size) <
-          gmb_handle.native_pixmap_handle.planes[0].size) {
+          gmb_handle.native_pixmap_handle().planes[0].size) {
     DLOG(ERROR) << "Invalid DMA buf plane size";
     return false;
   }
@@ -56,7 +56,8 @@ bool VerifyMjpegBufferHandle(const gfx::GpuMemoryBufferHandle& gmb_handle) {
 scoped_refptr<media::VideoFrame> ConstructVideoFrame(
     std::vector<mojom::DmaBufPlanePtr> dma_buf_planes,
     media::VideoPixelFormat pixel_format,
-    const gfx::Size& coded_size) {
+    const gfx::Size& coded_size,
+    uint64_t modifier) {
   const size_t num_planes = media::VideoFrame::NumPlanes(pixel_format);
   if (num_planes != dma_buf_planes.size()) {
     DLOG(ERROR) << "The number of DMA buf planes does not match the format";
@@ -69,9 +70,9 @@ scoped_refptr<media::VideoFrame> ConstructVideoFrame(
   }
   const gfx::Rect visible_rect(coded_size);
 
-  gfx::GpuMemoryBufferHandle gmb_handle;
-  gmb_handle.type = gfx::GpuMemoryBufferType::NATIVE_PIXMAP;
-  gmb_handle.native_pixmap_handle.planes.resize(num_planes);
+  gfx::NativePixmapHandle native_pixmap_handle;
+  native_pixmap_handle.planes.resize(num_planes);
+  native_pixmap_handle.modifier = modifier;
   for (size_t i = 0; i < num_planes; ++i) {
     mojo::PlatformHandle handle =
         mojo::UnwrapPlatformHandle(std::move(dma_buf_planes[i]->fd_handle));
@@ -83,14 +84,17 @@ scoped_refptr<media::VideoFrame> ConstructVideoFrame(
       DLOG(ERROR) << "Invalid DMA buf stride";
       return nullptr;
     }
-    gmb_handle.native_pixmap_handle.planes[i].stride =
+    native_pixmap_handle.planes[i].stride =
         base::checked_cast<uint32_t>(dma_buf_planes[i]->stride);
-    gmb_handle.native_pixmap_handle.planes[i].offset =
+    native_pixmap_handle.planes[i].offset =
         base::strict_cast<uint64_t>(dma_buf_planes[i]->offset);
-    gmb_handle.native_pixmap_handle.planes[i].size =
+    native_pixmap_handle.planes[i].size =
         base::strict_cast<uint64_t>(dma_buf_planes[i]->size);
-    gmb_handle.native_pixmap_handle.planes[i].fd = handle.TakeFD();
+    native_pixmap_handle.planes[i].fd = handle.TakeFD();
   }
+  // TODO(dcheng): It's a bit silly to move this into a GpuMemoryBufferHandle
+  // just so it can be verified, only to extract it again after this.
+  gfx::GpuMemoryBufferHandle gmb_handle(std::move(native_pixmap_handle));
   if (pixel_format == media::PIXEL_FORMAT_MJPEG) {
     if (!VerifyMjpegBufferHandle(gmb_handle)) {
       return nullptr;
@@ -102,18 +106,20 @@ scoped_refptr<media::VideoFrame> ConstructVideoFrame(
     }
   }
 
+  native_pixmap_handle = std::move(gmb_handle).native_pixmap_handle();
   std::vector<base::ScopedFD> dma_buf_fds(num_planes);
   std::vector<media::ColorPlaneLayout> planes(num_planes);
   for (size_t i = 0; i < num_planes; ++i) {
-    dma_buf_fds[i] = std::move(gmb_handle.native_pixmap_handle.planes[i].fd);
+    dma_buf_fds[i] = std::move(native_pixmap_handle.planes[i].fd);
     planes[i] = media::ColorPlaneLayout(
         dma_buf_planes[i]->stride,
         base::strict_cast<size_t>(dma_buf_planes[i]->offset),
         base::strict_cast<size_t>(dma_buf_planes[i]->size));
   }
-  const absl::optional<media::VideoFrameLayout> layout =
-      media::VideoFrameLayout::CreateWithPlanes(pixel_format, coded_size,
-                                                std::move(planes));
+  const std::optional<media::VideoFrameLayout> layout =
+      media::VideoFrameLayout::CreateWithPlanes(
+          pixel_format, coded_size, std::move(planes),
+          media::VideoFrameLayout::kBufferAddressAlignment, modifier);
   if (!layout) {
     DLOG(ERROR) << "Failed to create video frame layout";
     return nullptr;

@@ -8,10 +8,10 @@
 #include <stdint.h>
 
 #include <memory>
-#include <queue>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "ui/gl/gl_export.h"
 
 // The gpu_timing classes handles the abstraction of GL GPU Timing extensions
@@ -55,8 +55,6 @@ class GPUTiming {
   enum TimerType {
     kTimerTypeInvalid = -1,
 
-    kTimerTypeEXT,      // EXT_timer_query
-    kTimerTypeARB,      // ARB_timer_query
     kTimerTypeDisjoint  // EXT_disjoint_timer_query
   };
 

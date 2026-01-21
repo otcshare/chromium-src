@@ -31,7 +31,12 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_DOCUMENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_DOCUMENT_H_
 
+#include <vector>
+
+#include "base/types/expected.h"
 #include "net/cookies/site_for_cookies.h"
+#include "net/storage_access_api/status.h"
+#include "net/url_request/referrer_policy.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom-shared.h"
@@ -39,12 +44,20 @@
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_css_origin.h"
 #include "third_party/blink/public/web/web_draggable_region.h"
-#include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_node.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/accessibility/ax_error_types.h"
+
+namespace base {
+class UnguessableToken;
+}
+
+namespace ui {
+struct AXTreeUpdate;
+class AXMode;
+}  // namespace ui
 
 namespace blink {
 
@@ -53,6 +66,7 @@ class WebElement;
 class WebFormElement;
 class WebFormControlElement;
 class WebElementCollection;
+class WebLocalFrame;
 class WebString;
 class WebURL;
 struct WebDistillabilityFeatures;
@@ -69,7 +83,9 @@ enum class BackForwardCacheAware { kAllow, kPossiblyDisallow };
 // Provides readonly access to some properties of a DOM document.
 class BLINK_EXPORT WebDocument : public WebNode {
  public:
-  WebDocument() = default;
+  explicit WebDocument(
+      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
+      : WebNode(loc) {}
   WebDocument(const WebDocument& e) = default;
 
   WebDocument& operator=(const WebDocument& e) {
@@ -88,7 +104,7 @@ class BLINK_EXPORT WebDocument : public WebNode {
   WebString Encoding() const;
   WebString ContentLanguage() const;
   WebString GetReferrer() const;
-  absl::optional<SkColor> ThemeColor();
+  std::optional<SkColor> ThemeColor();
   // The url of the OpenSearch Description Document (if any).
   WebURL OpenSearchDescriptionURL() const;
 
@@ -98,6 +114,7 @@ class BLINK_EXPORT WebDocument : public WebNode {
   bool IsHTMLDocument() const;
   bool IsXHTMLDocument() const;
   bool IsPluginDocument() const;
+  bool IsActive() const;
   WebURL BaseURL() const;
   ukm::SourceId GetUkmSourceId() const;
 
@@ -106,6 +123,12 @@ class BLINK_EXPORT WebDocument : public WebNode {
   // cookie blocking.
   net::SiteForCookies SiteForCookies() const;
 
+  // `StorageAccessApiStatus` is used to describe how/if this document has opted
+  // into accessing cross-site cookies using the Storage Access API. This is
+  // relevant when attempting to access cookies in a context where third-party
+  // cookies may be blocked.
+  net::StorageAccessApiStatus StorageAccessApiStatus() const;
+
   WebSecurityOrigin TopFrameOrigin() const;
   WebElement DocumentElement() const;
   WebElement Body() const;
@@ -113,14 +136,20 @@ class BLINK_EXPORT WebDocument : public WebNode {
   WebString Title() const;
   WebString ContentAsTextForTesting() const;
   WebElementCollection All() const;
-  WebVector<WebFormElement> Forms() const;
+  std::vector<WebFormElement> Forms() const;
+  WebElement ScrollingElement();
+
+  // Returns all form elements that have no shadow-tree including ancestor that
+  // is also a form element. This includes form elements inside shadow trees.
+  std::vector<WebFormElement> GetTopLevelForms() const;
+
   WebURL CompleteURL(const WebString&) const;
   WebElement GetElementById(const WebString&) const;
   WebElement FocusedElement() const;
 
   // The unassociated form controls are form control elements that are not
   // associated to a <form> element.
-  WebVector<WebFormControlElement> UnassociatedFormControls() const;
+  std::vector<WebFormControlElement> UnassociatedFormControls() const;
 
   // Inserts the given CSS source code as a style sheet in the document.
   WebStyleSheetKey InsertStyleSheet(
@@ -137,24 +166,23 @@ class BLINK_EXPORT WebDocument : public WebNode {
   // Arranges to call WebLocalFrameClient::didMatchCSS(frame(), ...) when one of
   // the selectors matches or stops matching an element in this document.
   // Each call to this method overrides any previous calls.
-  void WatchCSSSelectors(const WebVector<WebString>& selectors);
+  void WatchCSSSelectors(const std::vector<WebString>& selectors);
 
-  WebVector<WebDraggableRegion> DraggableRegions() const;
+  std::vector<WebDraggableRegion> DraggableRegions() const;
 
   WebDistillabilityFeatures DistillabilityFeatures();
 
   void SetShowBeforeUnloadDialog(bool show_dialog);
 
-  // See cc/paint/element_id.h for the definition of these id.
-  uint64_t GetVisualViewportScrollingElementIdForTesting();
+  cc::ElementId GetVisualViewportScrollingElementIdForTesting();
 
   bool IsLoaded();
 
   // Returns true if the document is in prerendering.
   bool IsPrerendering();
 
-  // Return true if  accessibility processing has been enabled.
-  bool IsAccessibilityEnabled();
+  // Returns true if the document has a Document Picture-in-Picture window.
+  bool HasDocumentPictureInPictureWindow() const;
 
   // Adds `callback` to the post-prerendering activation steps.
   // https://wicg.github.io/nav-speculation/prerendering.html#document-post-prerendering-activation-steps-list
@@ -165,15 +193,53 @@ class BLINK_EXPORT WebDocument : public WebNode {
       CrossVariantMojoRemote<
           network::mojom::RestrictedCookieManagerInterfaceBase> cookie_manager);
 
-  // Get an element that's a descendent of this document by the stable Devtools'
-  // node id.
-  // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#type-BackendNodeId
-  // Returns a null WebElement if any of the following are true:
-  // * the `node_id` does not identify any Node
-  // * the Node identified by `node_id` is not an Element
-  // * the Element is not a descendant of this WebDocument or any shadow
-  //   document contained within it
-  WebElement GetElementByDevToolsNodeId(int node_id);
+  // Returns the referrer policy for this document's referrer.
+  net::ReferrerPolicy GetReferrerPolicy() const;
+
+  // Returns the referrer for this document.
+  WebString OutgoingReferrer() const;
+
+  // (Experimental) Initiates Link Preview for `url`.
+  //
+  // It is intended to be used in WebLinkPreviewTriggerer.
+  void InitiatePreview(const WebURL& url);
+
+  void SnapshotAccessibilityTree(
+      size_t max_nodes,
+      base::TimeDelta timeout,
+      ui::AXTreeUpdate* response,
+      ui::AXMode mode,
+      std::set<ui::AXSerializationErrorFlag>* out_error);
+
+  // Returns the number of active resource requests that are being loaded by the
+  // document's ResourceFetcher.
+  size_t ActiveResourceRequestCount() const;
+
+  // Executes a script tool with the given `name` and `input_arguments`.
+  //
+  // The associated callback is invoked once the async execution of the tool is
+  // finished along with the result of the execution. A null response indicates
+  // a failure in tool execution.
+  enum class ScriptToolError {
+    kInvalidToolName,
+    kInvalidInputArguments,
+    kToolInvocationFailed
+  };
+  using ScriptToolExecutedCallback =
+      base::OnceCallback<void(base::expected<WebString, ScriptToolError>)>;
+  void ExecuteScriptTool(const WebString& name,
+                         const WebString& input_arguments,
+                         ScriptToolExecutedCallback tool_executed_cb);
+
+  // Dispatches an autofill event on the document with the given field data.
+  // This is called by the autofill agent before filling form fields.
+  // The `fill_id` is passed so that refill requests can be associated with
+  // the original fill operation. If `supports_refill` is false, the event's
+  // refill() method will be null.
+  void DispatchAutofillEvent(
+      std::vector<std::pair<WebFormControlElement, WebString>> autofill_values,
+      const base::UnguessableToken& fill_id,
+      bool supports_refill);
 
 #if INSIDE_BLINK
   WebDocument(Document*);

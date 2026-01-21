@@ -34,9 +34,6 @@ class CC_EXPORT ScrollState {
   int position_x() const { return data_.position_x; }
   int position_y() const { return data_.position_y; }
 
-  double velocity_x() const { return data_.velocity_x; }
-  double velocity_y() const { return data_.velocity_y; }
-
   bool is_beginning() const { return data_.is_beginning; }
   void set_is_beginning(bool is_beginning) {
     data_.is_beginning = is_beginning;
@@ -93,8 +90,8 @@ class CC_EXPORT ScrollState {
     return data_.current_native_scrolling_element();
   }
 
-  bool is_main_thread_hit_tested() const {
-    return data_.is_main_thread_hit_tested;
+  uint32_t main_thread_hit_tested_reasons() const {
+    return data_.main_thread_hit_tested_reasons;
   }
 
   ScrollStateData* data() { return &data_; }

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "mojo/core/entrypoints.h"
 #include "mojo/core/node_controller.h"
@@ -29,7 +30,7 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   DCHECK_EQ(result, MOJO_RESULT_OK);
   DCHECK(event);
   auto* message = event->GetMessage<mojo::core::UserMessageImpl>();
-  std::copy(data, data + size,
+  std::copy(data, UNSAFE_TODO(data + size),
             static_cast<unsigned char*>(message->user_payload()));
   mojo::core::Channel::MessagePtr serialized_event =
       mojo::core::UserMessageImpl::FinalizeEventMessage(std::move(event));

@@ -6,6 +6,7 @@
 #define CC_RASTER_PLAYBACK_IMAGE_PROVIDER_H_
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "cc/cc_export.h"
 #include "cc/paint/image_id.h"
 #include "cc/paint/image_provider.h"
@@ -19,7 +20,7 @@ class ImageDecodeCache;
 // decoded images for raster from the ImageDecodeCache.
 class CC_EXPORT PlaybackImageProvider : public ImageProvider {
  public:
-  enum class RasterMode { kSoftware, kGpu, kOop };
+  enum class RasterMode { kSoftware, kGpu };
   struct CC_EXPORT Settings {
     Settings();
     Settings(const Settings&) = delete;
@@ -43,7 +44,7 @@ class CC_EXPORT PlaybackImageProvider : public ImageProvider {
   // If no settings are provided, all images are skipped during rasterization.
   PlaybackImageProvider(ImageDecodeCache* cache,
                         const TargetColorParams& target_color_params,
-                        absl::optional<Settings>&& settings);
+                        std::optional<Settings>&& settings);
   PlaybackImageProvider(const PlaybackImageProvider&) = delete;
   PlaybackImageProvider(PlaybackImageProvider&& other);
   ~PlaybackImageProvider() override;
@@ -56,9 +57,11 @@ class CC_EXPORT PlaybackImageProvider : public ImageProvider {
       const DrawImage& draw_image) override;
 
  private:
-  ImageDecodeCache* cache_;
+  // RAW_PTR_EXCLUSION: ImageDecodeCache is marked as not supported by raw_ptr.
+  // See raw_ptr.h for more information.
+  RAW_PTR_EXCLUSION ImageDecodeCache* cache_ = nullptr;
   TargetColorParams target_color_params_;
-  absl::optional<Settings> settings_;
+  std::optional<Settings> settings_;
 };
 
 }  // namespace cc

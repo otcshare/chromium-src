@@ -5,12 +5,10 @@
 #include "chrome/browser/net/secure_dns_policy_handler.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
-#include "chrome/browser/ash/arc/policy/managed_configuration_variables.h"
-#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/net/secure_dns_config.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/common/pref_names.h"
@@ -19,44 +17,27 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_value_map.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
 #include "net/dns/public/dns_over_https_config.h"
 #include "net/dns/public/util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #endif
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 constexpr int kMinDohSaltSize = 8;
 constexpr int kMaxDohSaltSize = 32;
 
-// Returns true if the policy `kDnsOverHttpsSalt` has a valid value, otherwise
-// returns false. This method also evaluates if the combination of
-// `kDnsOverHttpsTemplatesWithIdentifiers` and the `kDnsOverHttpsSalt` policy
-// values is correct (i.e. both are set or both are unset). If an error occurs,
-// the error message will be appended to `errors`.
+// Returns true if the policy `kDnsOverHttpsSalt` is not set or if it has a
+// valid value, otherwise returns false. kDnsOverHttpsSalt` is only valid if
+// `kDnsOverHttpsTemplatesWithIdentifiers` is set. If an error occurs, the error
+// message will be appended to `errors`.
 bool CheckDnsOverHttpsSaltPolicy(const policy::PolicyMap& policies,
                                  policy::PolicyErrorMap* errors) {
-  bool templates_set = false;
-
-  if (policies.IsPolicySet(
-          policy::key::kDnsOverHttpsTemplatesWithIdentifiers)) {
-    const base::Value* templates =
-        policies.GetValue(policy::key::kDnsOverHttpsTemplatesWithIdentifiers,
-                          base::Value::Type::STRING);
-    templates_set = templates && !templates->GetString().empty();
-  }
   if (!policies.IsPolicySet(policy::key::kDnsOverHttpsSalt)) {
-    if (templates_set) {
-      errors->AddError(
-          policy::key::kDnsOverHttpsTemplatesWithIdentifiers,
-          IDS_POLICY_SECURE_DNS_TEMPLATES_WITH_IDENTIFIERS_IRRELEVANT_ERROR);
-    }
-    return false;
+    return true;
   }
   const base::Value* salt =
       policies.GetValueUnsafe(policy::key::kDnsOverHttpsSalt);
@@ -67,26 +48,30 @@ bool CheckDnsOverHttpsSaltPolicy(const policy::PolicyMap& policies,
     return false;
   }
 
-  // The general case where the salt is set and empty is evaluated with the salt
-  // size requirements checks.
-  if (templates_set && salt->GetString().empty()) {
-    errors->AddError(
-        policy::key::kDnsOverHttpsTemplatesWithIdentifiers,
-        IDS_POLICY_SECURE_DNS_TEMPLATES_WITH_IDENTIFIERS_IRRELEVANT_ERROR);
+  // Salt is optional.
+  if (salt->GetString().empty()) {
+    return true;
   }
-
   if (salt->GetString().size() < kMinDohSaltSize ||
       salt->GetString().size() > kMaxDohSaltSize) {
     errors->AddError(policy::key::kDnsOverHttpsSalt,
                      IDS_POLICY_SECURE_DNS_SALT_INVALID_SIZE_ERROR);
     return false;
   }
-
+  bool templates_set = false;
+  if (policies.IsPolicySet(
+          policy::key::kDnsOverHttpsTemplatesWithIdentifiers)) {
+    const base::Value* templates =
+        policies.GetValue(policy::key::kDnsOverHttpsTemplatesWithIdentifiers,
+                          base::Value::Type::STRING);
+    templates_set = templates && !templates->GetString().empty();
+  }
   if (!templates_set) {
     errors->AddError(policy::key::kDnsOverHttpsSalt,
-                     IDS_POLICY_SECURE_DNS_SALT_IRRELEVANT_ERROR);
+                     IDS_POLICY_DEPENDENCY_ERROR_ANY_VALUE,
+                     policy::key::kDnsOverHttpsTemplatesWithIdentifiers);
+    return false;
   }
-
   return true;
 }
 #endif
@@ -97,7 +82,7 @@ bool CheckDnsOverHttpsSaltPolicy(const policy::PolicyMap& policies,
 bool CheckDnsOverHttpsTemplatePolicy(const policy::PolicyMap& policies,
                                      policy::PolicyErrorMap* errors,
                                      const std::string& policy_name,
-                                     const base::StringPiece& mode) {
+                                     std::string_view mode) {
   // It is safe to use `GetValueUnsafe()` because type checking is performed
   // before the value is used.
   const base::Value* templates = policies.GetValueUnsafe(policy_name);
@@ -125,9 +110,9 @@ bool CheckDnsOverHttpsTemplatePolicy(const policy::PolicyMap& policies,
 
 namespace policy {
 
-SecureDnsPolicyHandler::SecureDnsPolicyHandler() {}
+SecureDnsPolicyHandler::SecureDnsPolicyHandler() = default;
 
-SecureDnsPolicyHandler::~SecureDnsPolicyHandler() {}
+SecureDnsPolicyHandler::~SecureDnsPolicyHandler() = default;
 
 // Verifies if the combination of policies which set the secure DNS mode and
 // the templates URI is valid. The templates URIs can be set via the cross
@@ -143,7 +128,7 @@ bool SecureDnsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
   // It is safe to use `GetValueUnsafe()` because type checking is performed
   // before the value is used.
   const base::Value* mode = policies.GetValueUnsafe(key::kDnsOverHttpsMode);
-  base::StringPiece mode_str;
+  std::string_view mode_str;
   if (!mode) {
     mode_is_applicable = false;
   } else if (!mode->is_string()) {
@@ -168,13 +153,12 @@ bool SecureDnsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
       policies, errors, key::kDnsOverHttpsTemplates, mode_str);
   templates_is_applicable = is_templates_policy_valid_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (ash::features::IsDnsOverHttpsWithIdentifiersEnabled()) {
-    bool templates_valid = CheckDnsOverHttpsTemplatePolicy(
-        policies, errors, key::kDnsOverHttpsTemplatesWithIdentifiers, mode_str);
-    bool salt_valid = CheckDnsOverHttpsSaltPolicy(policies, errors);
-    is_templates_with_identifiers_policy_valid_ = templates_valid && salt_valid;
-  }
+#if BUILDFLAG(IS_CHROMEOS)
+  bool templates_valid = CheckDnsOverHttpsTemplatePolicy(
+      policies, errors, key::kDnsOverHttpsTemplatesWithIdentifiers, mode_str);
+  bool salt_valid = CheckDnsOverHttpsSaltPolicy(policies, errors);
+  is_templates_with_identifiers_policy_valid_ = templates_valid && salt_valid;
+
   templates_is_applicable =
       is_templates_policy_valid_ || is_templates_with_identifiers_policy_valid_;
 
@@ -207,7 +191,7 @@ void SecureDnsPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
                                                  PrefValueMap* prefs) {
   const base::Value* mode =
       policies.GetValue(key::kDnsOverHttpsMode, base::Value::Type::STRING);
-  base::StringPiece mode_str;
+  std::string_view mode_str;
   if (mode) {
     mode_str = mode->GetString();
     prefs->SetString(prefs::kDnsOverHttpsMode,
@@ -225,32 +209,31 @@ void SecureDnsPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
   else if (is_templates_policy_valid_)
     prefs->SetString(prefs::kDnsOverHttpsTemplates, templates->GetString());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (ash::features::IsDnsOverHttpsWithIdentifiersEnabled()) {
-    const base::Value* templates_with_identifiers = policies.GetValue(
-        key::kDnsOverHttpsTemplatesWithIdentifiers, base::Value::Type::STRING);
-    const base::Value* salt =
-        policies.GetValue(key::kDnsOverHttpsSalt, base::Value::Type::STRING);
+#if BUILDFLAG(IS_CHROMEOS)
+  const base::Value* templates_with_identifiers = policies.GetValue(
+      key::kDnsOverHttpsTemplatesWithIdentifiers, base::Value::Type::STRING);
+  const base::Value* salt =
+      policies.GetValue(key::kDnsOverHttpsSalt, base::Value::Type::STRING);
 
-    // A templates not specified error means that the pref should be set blank.
-    if (IsTemplatesPolicyNotSpecified(
-            is_templates_with_identifiers_policy_valid_, mode_str)) {
-      prefs->SetString(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
-                       std::string());
-      prefs->SetString(prefs::kDnsOverHttpsSalt, std::string());
+  // A templates not specified error means that the pref should be set blank.
+  if (IsTemplatesPolicyNotSpecified(is_templates_with_identifiers_policy_valid_,
+                                    mode_str)) {
+    prefs->SetString(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+                     std::string());
+    prefs->SetString(prefs::kDnsOverHttpsSalt, std::string());
 
-    } else if (is_templates_with_identifiers_policy_valid_) {
-      prefs->SetString(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
-                       templates_with_identifiers->GetString());
-      prefs->SetString(prefs::kDnsOverHttpsSalt, salt->GetString());
-    }
+  } else if (is_templates_with_identifiers_policy_valid_) {
+    prefs->SetString(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+                     templates_with_identifiers->GetString());
+    prefs->SetString(prefs::kDnsOverHttpsSalt,
+                     salt ? salt->GetString() : std::string());
   }
 #endif
 }
 
 bool SecureDnsPolicyHandler::IsTemplatesPolicyNotSpecified(
     bool is_templates_policy_valid,
-    base::StringPiece mode_str) {
+    std::string_view mode_str) {
   if (mode_str == SecureDnsConfig::kModeSecure)
     return !is_templates_policy_valid;
 

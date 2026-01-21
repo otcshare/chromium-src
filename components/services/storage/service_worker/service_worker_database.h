@@ -25,7 +25,6 @@
 #include "third_party/blink/public/mojom/service_worker/navigation_preload_state.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace base {
@@ -35,7 +34,6 @@ class Location;
 namespace leveldb {
 class DB;
 class Env;
-class Status;
 class WriteBatch;
 }  // namespace leveldb
 
@@ -46,7 +44,7 @@ namespace storage {
 // file io. The ServiceWorkerStorage class owns this class and
 // is responsible for only calling it serially on background
 // non-IO threads (ala SequencedWorkerPool).
-// TODO(crbug.com/1016064): Update the above comments once the instance of this
+// TODO(crbug.com/40103973): Update the above comments once the instance of this
 // class lives in the Storage Service.
 class ServiceWorkerDatabase {
  public:
@@ -167,6 +165,13 @@ class ServiceWorkerDatabase {
       const blink::StorageKey& key,
       const blink::mojom::ServiceWorkerFetchHandlerType type);
 
+  // Updates script resource records for the specified registration.
+  // Returns OK if it's successfully updated. Otherwise, returns an error.
+  Status UpdateResourceSha256Checksums(
+      int64_t registration_id,
+      const blink::StorageKey& key,
+      const base::flat_map<int64_t, std::string>& updated_sha256_checksums);
+
   // Deletes a registration for |registration_id| and moves resource records
   // associated with it into the purgeable list. If deletion occurred, fills
   // |deleted_version| with the version that was deleted; otherwise, sets
@@ -273,11 +278,17 @@ class ServiceWorkerDatabase {
   Status PurgeUncommittedResourceIds(const std::vector<int64_t>& ids);
 
   // Deletes all data for |keys|, namely, unique origin, registrations and
-  // resource records. Resources are moved to the purgeable list. Returns OK if
+  // resource records.
+  //
+  // Specifically, this will delete data from any context where the origin
+  // matches or where the context is cross-site and the origin is same-site with
+  // the top-level-site.
+  //
+  // Resources are moved to the purgeable list. Returns OK if
   // they are successfully deleted or not found in the database. Otherwise,
   // returns an error.
-  Status DeleteAllDataForStorageKeys(
-      const std::set<blink::StorageKey>& keys,
+  Status DeleteAllDataForOrigins(
+      const std::set<url::Origin>& origins,
       std::vector<int64_t>* newly_purgeable_resources);
 
   // Completely deletes the contents of the database.
@@ -428,6 +439,10 @@ class ServiceWorkerDatabase {
                            NoCrossOriginEmbedderPolicyValue);
   FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDatabaseTest, NoFetchHandlerType);
   FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDatabaseTest, FetchHandlerType);
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDatabaseTest,
+                           RouterRulesLegacyPathname);
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerDatabaseTest,
+                           EnsureNetworkAndFetchHandlerSet);
 };
 
 }  // namespace storage

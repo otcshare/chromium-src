@@ -8,13 +8,17 @@
 #include <set>
 #include <string>
 
-#include "base/containers/span.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/test/mock_entropy_provider.h"
+#include "components/variations/active_field_trials.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/field_trial_config/fieldtrial_testing_config.h"
+#include "components/variations/proto/variations_seed.pb.h"
+#include "components/variations/seed_reader_writer.h"
+#include "components/variations/synthetic_trial_registry.h"
 #include "components/variations/variations_associated_data.h"
 
 class PrefService;
@@ -26,15 +30,18 @@ struct ClientFilterableState;
 // Packages signed variations seed data into a tuple for use with
 // WriteSeedData(). This allows for encapsulated seed information to be created
 // below for generic test seeds as well as seeds which cause crashes.
+//
+// Note: To manually get the raw data, you can use the following command:
+// echo -n base64_compressed_data | base64 -d | hexdump -e '8 1 ", 0x%x"'
 struct SignedSeedData {
-  base::span<const char*> study_names;  // Names of all studies in the seed.
+  // Names of all studies in the seed.
+  base::raw_span<const char*> study_names;
   const char* base64_uncompressed_data;
   const char* base64_compressed_data;
   const char* base64_signature;
 
-  // Out-of-line constructor/destructor/copy/move required for 'complex'
-  // classes.
-  SignedSeedData(base::span<const char*> in_study_names,
+  // Out-of-line ctor/dtor/copy/move required for 'complex' classes.
+  SignedSeedData(base::raw_span<const char*> in_study_names,
                  const char* in_base64_uncompressed_data,
                  const char* in_base64_compressed_data,
                  const char* in_base64_signature);
@@ -57,12 +64,12 @@ struct SignedSeedPrefKeys {
 // "UMA-Uniformity-Trial-10-Percent", and ten equally weighted groups: "default"
 // and "group_01" through "group_09". The study is not associated with channels,
 // platforms, or features.
-extern const SignedSeedData kTestSeedData;
+const SignedSeedData& TestSeedData();
 
 // The crashing seed data contains a CrashingStudy that enables the
 // variations::kForceFieldTrialSetupCrashForTesting feature at 100% on all
 // platforms and on all channels except Unknown.
-extern const SignedSeedData kCrashingSeedData;
+const SignedSeedData& CrashingSeedData();
 
 // The pref keys used to store safe signed variations seed data.
 extern const SignedSeedPrefKeys kSafeSeedPrefKeys;
@@ -85,12 +92,25 @@ bool ExtractVariationIds(const std::string& variations,
                          std::set<VariationID>* variation_ids,
                          std::set<VariationID>* trigger_ids);
 
-// Creates FieldTrial from given |key| and |id|.
+// Creates an inactive FieldTrial, `trial_name`, where the client is assigned to
+// `group_name`, and associates a VariationID for the trial using the given
+// `key`, `id` and optional `time_window`.
+scoped_refptr<base::FieldTrial> CreateInactiveTrialAndAssociateId(
+    const std::string& trial_name,
+    const std::string& group_name,
+    IDCollectionKey key,
+    VariationID id,
+    TimeWindow time_window = TimeWindow());
+
+// Creates an active FieldTrial, `trial_name`, where the client is assigned to
+// `group_name`, and associates a VariationID for the trial using the given
+// `key`, `id` and optional `time_window`.
 scoped_refptr<base::FieldTrial> CreateTrialAndAssociateId(
     const std::string& trial_name,
-    const std::string& default_group_name,
+    const std::string& group_name,
     IDCollectionKey key,
-    VariationID id);
+    VariationID id,
+    TimeWindow time_window = TimeWindow());
 
 // Simulates a crash by setting the clean exit pref to false and disabling
 // the steps to update the pref on clean shutdown.
@@ -109,10 +129,6 @@ bool FieldTrialListHasAllStudiesFrom(const SignedSeedData& seed_data);
 // are stored as process singleton.
 void ResetVariations();
 
-// A no-op UIStringOverrideCallback implementation.
-inline void NoopUIStringOverrideCallback(uint32_t hash,
-                                         const std::u16string& string) {}
-
 // Create a ClientFilterableState with valid, but unimportant values.
 // Tests that actually expect specific values should set them on the result.
 std::unique_ptr<ClientFilterableState> CreateDummyClientFilterableState();
@@ -127,7 +143,8 @@ class MockEntropyProviders : public EntropyProviders {
  public:
   struct Results {
     double low_entropy = kAlwaysUseLastGroup;
-    absl::optional<double> high_entropy = absl::nullopt;
+    std::optional<double> high_entropy = std::nullopt;
+    std::optional<double> limited_entropy = std::nullopt;
   };
   explicit MockEntropyProviders(Results results,
                                 uint32_t low_entropy_domain = 8000);
@@ -135,11 +152,41 @@ class MockEntropyProviders : public EntropyProviders {
 
   const base::FieldTrial::EntropyProvider& low_entropy() const override;
   const base::FieldTrial::EntropyProvider& default_entropy() const override;
+  const base::FieldTrial::EntropyProvider& limited_entropy() const override;
 
  private:
   base::MockEntropyProvider low_provider_;
   base::MockEntropyProvider high_provider_;
+  base::MockEntropyProvider limited_provider_;
 };
+
+// Returns a hex string of the GZipped, base64 encoded, and serialized seed.
+std::string GZipAndB64EncodeToHexString(const VariationsSeed& seed);
+
+// Returns whether the active group ids includes the given trial name.
+bool ContainsTrialName(const std::vector<ActiveGroupId>& active_group_ids,
+                       std::string_view trial_name);
+
+// Returns whether the active group ids includes the given trial name with the
+// given group name.
+bool ContainsTrialAndGroupName(
+    const std::vector<ActiveGroupId>& active_group_ids,
+    std::string_view trial_name,
+    std::string_view group_name);
+
+// Sets up the seed file experiment where `group_name` is the active group.
+void SetUpSeedFileTrial(std::string group_name);
+
+// Returns true if there are no adjacent elements (a, b) when iterating over
+// `container` such that a >= b.
+template <typename Container>
+bool IsSortedAndUnique(const Container& container) {
+  return std::adjacent_find(container.begin(), container.end(),
+                            [](const typename Container::value_type& a,
+                               const typename Container::value_type& b) {
+                              return a >= b;
+                            }) == container.end();
+}
 
 }  // namespace variations
 

@@ -33,10 +33,7 @@ class PLATFORM_EXPORT NullResourceFetcherProperties final
   ControllerServiceWorkerMode GetControllerServiceWorkerMode() const override {
     return ControllerServiceWorkerMode::kNoController;
   }
-  int64_t ServiceWorkerId() const override {
-    NOTREACHED();
-    return 0;
-  }
+  int64_t ServiceWorkerId() const override { NOTREACHED(); }
   bool IsPaused() const override { return false; }
   LoaderFreezeMode FreezeMode() const override {
     return LoaderFreezeMode::kNone;
@@ -48,7 +45,6 @@ class PLATFORM_EXPORT NullResourceFetcherProperties final
   scheduler::FrameStatus GetFrameStatus() const override {
     return scheduler::FrameStatus::kNone;
   }
-  const KURL& WebBundlePhysicalUrl() const override;
   int GetOutstandingThrottledLimit() const override { return 0; }
 
  private:

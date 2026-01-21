@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include "content/browser/renderer_host/render_widget_host_factory.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 
 namespace content {
 
@@ -29,9 +28,11 @@ class TestRenderWidgetHostFactory : public RenderWidgetHostFactory {
   std::unique_ptr<RenderWidgetHostImpl> CreateRenderWidgetHost(
       FrameTree* frame_tree,
       RenderWidgetHostDelegate* delegate,
+      viz::FrameSinkId frame_sink_id,
       base::SafeRef<SiteInstanceGroup> site_instance_group,
       int32_t routing_id,
-      bool hidden) override;
+      bool hidden,
+      bool renderer_initiated_creation) override;
 };
 
 }  // namespace content

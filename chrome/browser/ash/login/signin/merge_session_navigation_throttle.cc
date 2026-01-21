@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ash/login/signin/merge_session_navigation_throttle.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/signin/merge_session_throttling_utils.h"
 #include "chrome/browser/ash/login/signin/oauth2_login_manager_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -19,12 +21,14 @@ constexpr base::TimeDelta kTotalWaitTime = base::Seconds(10);
 
 OAuth2LoginManager* GetOAuth2LoginManager(content::WebContents* web_contents) {
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  if (!browser_context)
+  if (!browser_context) {
     return nullptr;
+  }
 
   Profile* profile = Profile::FromBrowserContext(browser_context);
-  if (!profile)
+  if (!profile) {
     return nullptr;
+  }
 
   return OAuth2LoginManagerFactory::GetInstance()->GetForProfile(profile);
 }
@@ -32,15 +36,15 @@ OAuth2LoginManager* GetOAuth2LoginManager(content::WebContents* web_contents) {
 }  // namespace
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-MergeSessionNavigationThrottle::Create(content::NavigationHandle* handle) {
-  return std::unique_ptr<content::NavigationThrottle>(
-      new MergeSessionNavigationThrottle(handle));
+void MergeSessionNavigationThrottle::CreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
+  registry.AddThrottle(
+      base::WrapUnique(new MergeSessionNavigationThrottle(registry)));
 }
 
 MergeSessionNavigationThrottle::MergeSessionNavigationThrottle(
-    content::NavigationHandle* handle)
-    : NavigationThrottle(handle) {
+    content::NavigationThrottleRegistry& registry)
+    : NavigationThrottle(registry) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
@@ -58,8 +62,9 @@ MergeSessionNavigationThrottle::WillStartRequest() {
     return content::NavigationThrottle::PROCEED;
   }
 
-  if (BeforeDefer())
+  if (BeforeDefer()) {
     return content::NavigationThrottle::DEFER;
+  }
 
   return content::NavigationThrottle::PROCEED;
 }

@@ -69,4 +69,3 @@
 
 # crbug.com/1096612
 -All/SitePerProcessBrowserTest.DetachedIframeUnloadHandlerABCB/*
-

@@ -5,25 +5,22 @@
 #include "chrome/browser/metrics/chromeos_metrics_provider.h"
 
 #include <stddef.h>
+
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/arc_features_parser.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/files/file_util.h"
-#include "base/hash/md5.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_byteorder.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
@@ -41,10 +38,11 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/experiences/arc/arc_features_parser.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
-#include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/structured/recorder.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -66,11 +64,18 @@ using metrics::SystemProfileProto;
 
 namespace {
 
-void IncrementPrefValue(const char* path) {
+inline constexpr char kFeatureManagementLevelFlag[] =
+    "feature-management-level";
+inline constexpr char kFeatureManagementMaxLevelFlag[] =
+    "feature-management-max-level";
+inline constexpr char kFeatureManagementScopeFlag[] =
+    "feature-management-scope";
+
+void IncrementPrefValue(const char* path, int num_samples) {
   PrefService* pref = g_browser_process->local_state();
   DCHECK(pref);
   int value = pref->GetInteger(path);
-  pref->SetInteger(path, value + 1);
+  pref->SetInteger(path, value + num_samples);
 }
 
 }  // namespace
@@ -94,15 +99,18 @@ void ChromeOSMetricsProvider::RegisterPrefs(PrefRegistrySimple* registry) {
 }
 
 // static
-void ChromeOSMetricsProvider::LogCrash(const std::string& crash_type) {
-  if (crash_type == "user")
-    IncrementPrefValue(prefs::kStabilityOtherUserCrashCount);
-  else if (crash_type == "kernel")
-    IncrementPrefValue(prefs::kStabilityKernelCrashCount);
-  else if (crash_type == "uncleanshutdown")
-    IncrementPrefValue(prefs::kStabilitySystemUncleanShutdownCount);
-  else
+void ChromeOSMetricsProvider::LogCrash(const std::string& crash_type,
+                                       int num_samples) {
+  if (crash_type == "user") {
+    IncrementPrefValue(prefs::kStabilityOtherUserCrashCount, num_samples);
+  } else if (crash_type == "kernel") {
+    IncrementPrefValue(prefs::kStabilityKernelCrashCount, num_samples);
+  } else if (crash_type == "uncleanshutdown") {
+    IncrementPrefValue(prefs::kStabilitySystemUncleanShutdownCount,
+                       num_samples);
+  } else {
     NOTREACHED() << "Unexpected Chrome OS crash type " << crash_type;
+  }
 
   // Wake up metrics logs sending if necessary now that new
   // log data is available.
@@ -126,12 +134,13 @@ void ChromeOSMetricsProvider::Init() {
 
 void ChromeOSMetricsProvider::OnDidCreateMetricsLog() {
   cros_system_profile_provider_->OnDidCreateMetricsLog();
-  if (base::FeatureList::IsEnabled(metrics::features::kEmitHistogramsEarlier)) {
-    // Not guaranteed to result in emitting hisotograms when called early on
-    // browser startup.
-    arc::StabilityMetricsManager::Get()->RecordMetricsToUMA();
-    emitted_ = UpdateUserTypeUMA();
+  if (!arc::StabilityMetricsManager::Get()) {
+    return;
   }
+  // Not guaranteed to result in emitting hisotograms when called early on
+  // browser startup.
+  arc::StabilityMetricsManager::Get()->RecordMetricsToUMA();
+  emitted_ = UpdateUserTypeUMA();
 }
 
 void ChromeOSMetricsProvider::OnRecordingEnabled() {
@@ -148,13 +157,6 @@ void ChromeOSMetricsProvider::ProvideSystemProfileMetrics(
     metrics::SystemProfileProto* system_profile_proto) {
   cros_system_profile_provider_->ProvideSystemProfileMetrics(
       system_profile_proto);
-}
-
-void ChromeOSMetricsProvider::ProvideAccessibilityMetrics() {
-  bool is_spoken_feedback_enabled =
-      ash::AccessibilityManager::Get()->IsSpokenFeedbackEnabled();
-  UMA_HISTOGRAM_BOOLEAN("Accessibility.CrosSpokenFeedback.EveryReport",
-                        is_spoken_feedback_enabled);
 }
 
 void ChromeOSMetricsProvider::ProvideSuggestedContentMetrics() {
@@ -209,15 +211,9 @@ void ChromeOSMetricsProvider::ProvideStabilityMetrics(
 
 void ChromeOSMetricsProvider::ProvideCurrentSessionData(
     metrics::ChromeUserMetricsExtension* uma_proto) {
-  bool should_provide_histograms =
-      !base::FeatureList::IsEnabled(
-          metrics::features::kEmitHistogramsEarlier) ||
-      !emitted_;
-
-  ProvideAccessibilityMetrics();
   ProvideSuggestedContentMetrics();
   ProvideMetrics(uma_proto->mutable_system_profile(),
-                 /*should_include_arc_metrics=*/should_provide_histograms);
+                 /*should_include_arc_metrics=*/!emitted_);
   std::vector<SampledProfile> sampled_profiles;
   if (profile_provider_->GetSampledProfiles(&sampled_profiles)) {
     for (auto& profile : sampled_profiles) {
@@ -225,7 +221,7 @@ void ChromeOSMetricsProvider::ProvideCurrentSessionData(
     }
   }
   arc::UpdateEnabledStateByUserTypeUMA();
-  if (should_provide_histograms) {
+  if (!emitted_) {
     UpdateUserTypeUMA();
   }
 }
@@ -248,7 +244,73 @@ bool ChromeOSMetricsProvider::UpdateUserTypeUMA() {
     return false;
   }
   user_manager::UserType user_type = primary_user->GetType();
-  base::UmaHistogramEnumeration("UMA.PrimaryUserType", user_type,
-                                user_manager::UserType::NUM_USER_TYPES);
+  base::UmaHistogramEnumeration("UMA.PrimaryUserType", user_type);
+  return true;
+}
+
+ChromeOSHistogramMetricsProvider::ChromeOSHistogramMetricsProvider() = default;
+
+ChromeOSHistogramMetricsProvider::~ChromeOSHistogramMetricsProvider() = default;
+
+bool ChromeOSHistogramMetricsProvider::ProvideHistograms() {
+  // The scope type. Used in a histogram; do not modify existing types.
+  // see histograms/enums.xml.
+  enum {
+    FEATURE_MANAGEMENT_REGULAR = 0,
+    FEATURE_MANAGEMENT_SOFT_BRANDED = 1,
+    FEATURE_MANAGEMENT_HARD_BRANDED = 2,
+    kMaxValue = FEATURE_MANAGEMENT_HARD_BRANDED
+  } scope_level;
+
+  if (!base::CommandLine::InitializedForCurrentProcess()) {
+    return false;
+  }
+
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (!command_line->HasSwitch(kFeatureManagementLevelFlag) ||
+      !command_line->HasSwitch(kFeatureManagementMaxLevelFlag) ||
+      !command_line->HasSwitch(kFeatureManagementScopeFlag)) {
+    return false;
+  }
+  int feature_level = -1;
+  int feature_max_level = -1;
+  int scope_level_raw = -1;
+  if (!base::StringToInt(
+          command_line->GetSwitchValueASCII(kFeatureManagementLevelFlag),
+          &feature_level) ||
+      !base::StringToInt(
+          command_line->GetSwitchValueASCII(kFeatureManagementMaxLevelFlag),
+          &feature_max_level) ||
+      !base::StringToInt(
+          command_line->GetSwitchValueASCII(kFeatureManagementScopeFlag),
+          &scope_level_raw)) {
+    return false;
+  }
+  if (feature_level < 0 || feature_max_level < 0 || scope_level_raw < 0 ||
+      feature_max_level < feature_level) {
+    LOG(ERROR) << "Invalid FeatureLevel arguments: "
+               << kFeatureManagementLevelFlag << " (" << feature_level
+               << ") or " << kFeatureManagementMaxLevelFlag << " ("
+               << feature_max_level << ") or " << kFeatureManagementScopeFlag
+               << " (" << scope_level_raw << ")";
+    return false;
+  }
+  if (feature_level == 0 && scope_level_raw == 0) {
+    scope_level = FEATURE_MANAGEMENT_REGULAR;
+  } else if (feature_level > 0 && scope_level_raw == 0) {
+    scope_level = FEATURE_MANAGEMENT_SOFT_BRANDED;
+  } else if (feature_level > 0 && scope_level_raw == 1) {
+    scope_level = FEATURE_MANAGEMENT_HARD_BRANDED;
+  } else {
+    LOG(ERROR) << "Invalid ScopeLevel:" << kFeatureManagementLevelFlag << " ("
+               << feature_level << ") or " << kFeatureManagementScopeFlag
+               << " (" << scope_level_raw << ")";
+    return false;
+  }
+
+  base::UmaHistogramExactLinear("Platform.Segmentation.FeatureLevel",
+                                feature_level, feature_max_level + 1);
+  base::UmaHistogramEnumeration("Platform.Segmentation.ScopeLevel",
+                                scope_level);
   return true;
 }

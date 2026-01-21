@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/mock_timer.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,23 +23,22 @@ using SyncState = SyncScheduler::SyncState;
 namespace {
 
 // Constants configuring the the scheduler.
-const int kElapsedTimeDays = 40;
-const int kRefreshPeriodDays = 30;
-const int kRecoveryPeriodSeconds = 10;
-const double kMaxJitterPercentage = 0.1;
-const char kTestSchedulerName[] = "TestSyncSchedulerImpl";
+constexpr auto kElapsedTime = base::Days(40);
+constexpr auto kRefreshPeriod = base::Days(30);
+constexpr auto kRecoveryPeriod = base::Seconds(10);
+constexpr char kTestSchedulerName[] = "TestSyncSchedulerImpl";
 
 // Returns true if |jittered_time_delta| is within the range of a jittered
-// |base_time_delta| with a maximum of |max_jitter_ratio|.
+// |base_time_delta| with a maximum of |max_jitter_percentage|.
 bool IsTimeDeltaWithinJitter(const base::TimeDelta& base_time_delta,
                              const base::TimeDelta& jittered_time_delta,
-                             double max_jitter_ratio) {
+                             double max_jitter_percentage) {
   if (base_time_delta.is_zero())
     return jittered_time_delta.is_zero();
 
   const base::TimeDelta difference =
       (jittered_time_delta - base_time_delta).magnitude();
-  return (difference / base_time_delta) < max_jitter_ratio;
+  return (difference / base_time_delta) < (max_jitter_percentage / 100);
 }
 
 // Test harness for the SyncSchedulerImpl to create MockOneShotTimers.
@@ -47,11 +47,11 @@ class TestSyncSchedulerImpl : public SyncSchedulerImpl {
   TestSyncSchedulerImpl(Delegate* delegate,
                         base::TimeDelta refresh_period,
                         base::TimeDelta recovery_period,
-                        double max_jitter_ratio)
+                        double max_jitter_percentage)
       : SyncSchedulerImpl(delegate,
                           refresh_period,
                           recovery_period,
-                          max_jitter_ratio,
+                          max_jitter_percentage,
                           kTestSchedulerName) {}
 
   TestSyncSchedulerImpl(const TestSyncSchedulerImpl&) = delete;
@@ -64,11 +64,11 @@ class TestSyncSchedulerImpl : public SyncSchedulerImpl {
  private:
   std::unique_ptr<base::OneShotTimer> CreateTimer() override {
     mock_timer_ = new base::MockOneShotTimer();
-    return base::WrapUnique(mock_timer_);
+    return base::WrapUnique(mock_timer_.get());
   }
 
   // A timer instance for testing. Owned by the parent scheduler.
-  base::MockOneShotTimer* mock_timer_;
+  raw_ptr<base::MockOneShotTimer, DanglingUntriaged> mock_timer_;
 };
 
 }  // namespace
@@ -77,8 +77,8 @@ class DeviceSyncSyncSchedulerImplTest : public testing::Test,
                                         public SyncSchedulerImpl::Delegate {
  protected:
   DeviceSyncSyncSchedulerImplTest()
-      : refresh_period_(base::Days(kRefreshPeriodDays)),
-        base_recovery_period_(base::Seconds(kRecoveryPeriodSeconds)),
+      : refresh_period_(kRefreshPeriod),
+        base_recovery_period_(kRecoveryPeriod),
         zero_elapsed_time_(base::Seconds(0)),
         scheduler_(new TestSyncSchedulerImpl(this,
                                              refresh_period_,
@@ -212,7 +212,7 @@ TEST_F(DeviceSyncSyncSchedulerImplTest, RefreshFailureRecoverySuccess) {
 }
 
 TEST_F(DeviceSyncSyncSchedulerImplTest, SyncImmediatelyForPeriodicRefresh) {
-  scheduler_->Start(base::Days(kElapsedTimeDays), Strategy::PERIODIC_REFRESH);
+  scheduler_->Start(kElapsedTime, Strategy::PERIODIC_REFRESH);
   EXPECT_TRUE(scheduler_->GetTimeToNextSync().is_zero());
   EXPECT_TRUE(timer()->GetCurrentDelay().is_zero());
   timer()->Fire();
@@ -222,8 +222,7 @@ TEST_F(DeviceSyncSyncSchedulerImplTest, SyncImmediatelyForPeriodicRefresh) {
 }
 
 TEST_F(DeviceSyncSyncSchedulerImplTest, SyncImmediatelyForAggressiveRecovery) {
-  scheduler_->Start(base::Days(kElapsedTimeDays),
-                    Strategy::AGGRESSIVE_RECOVERY);
+  scheduler_->Start(kElapsedTime, Strategy::AGGRESSIVE_RECOVERY);
   EXPECT_TRUE(scheduler_->GetTimeToNextSync().is_zero());
   EXPECT_TRUE(timer()->GetCurrentDelay().is_zero());
   timer()->Fire();
@@ -241,6 +240,7 @@ TEST_F(DeviceSyncSyncSchedulerImplTest, InitialSyncShorterByElapsedTime) {
 }
 
 TEST_F(DeviceSyncSyncSchedulerImplTest, PeriodicRefreshJitter) {
+  static constexpr double kMaxJitterPercentage = 10;
   scheduler_ = std::make_unique<TestSyncSchedulerImpl>(
       this, refresh_period_, base_recovery_period_, kMaxJitterPercentage);
 
@@ -264,16 +264,16 @@ TEST_F(DeviceSyncSyncSchedulerImplTest, PeriodicRefreshJitter) {
 
 TEST_F(DeviceSyncSyncSchedulerImplTest, JitteredTimeDeltaIsNonNegative) {
   base::TimeDelta zero_delta = base::Seconds(0);
-  double max_jitter_ratio = 1;
+  static constexpr double kMaxJitterPercentage = 100;
   scheduler_ = std::make_unique<TestSyncSchedulerImpl>(
-      this, zero_delta, zero_delta, max_jitter_ratio);
+      this, zero_delta, zero_delta, kMaxJitterPercentage);
   scheduler_->Start(zero_elapsed_time_, Strategy::PERIODIC_REFRESH);
 
   for (int i = 0; i < 10; ++i) {
     base::TimeDelta next_sync_delta = scheduler_->GetTimeToNextSync();
     EXPECT_GE(zero_delta, next_sync_delta);
-    EXPECT_TRUE(
-        IsTimeDeltaWithinJitter(zero_delta, next_sync_delta, max_jitter_ratio));
+    EXPECT_TRUE(IsTimeDeltaWithinJitter(zero_delta, next_sync_delta,
+                                        kMaxJitterPercentage));
     timer()->Fire();
     sync_request_->OnDidComplete(true);
   }

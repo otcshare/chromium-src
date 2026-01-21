@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_APP_LIST_APP_LIST_TEST_UTIL_H_
 #define CHROME_BROWSER_ASH_APP_LIST_APP_LIST_TEST_UTIL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/protocol/app_list_specifics.pb.h"
@@ -30,10 +31,15 @@ class AppListTestBase : public extensions::ExtensionServiceTestBase {
 
   web_app::TestWebAppUrlLoader& url_loader() { return *url_loader_; }
 
+ protected:
+  // Returns the profile that should be used for app services.
+  Profile* GetAppServiceProfile();
+
  private:
   void ConfigureWebAppProvider();
 
-  web_app::TestWebAppUrlLoader* url_loader_ = nullptr;
+  raw_ptr<web_app::TestWebAppUrlLoader, DanglingUntriaged> url_loader_ =
+      nullptr;
 };
 
 // Test util constants --------------------------------------------------------
@@ -61,7 +67,8 @@ syncer::SyncData CreateAppRemoteData(
     const std::string& item_ordinal,
     const std::string& item_pin_ordinal,
     sync_pb::AppListSpecifics_AppListItemType item_type =
-        sync_pb::AppListSpecifics_AppListItemType_TYPE_APP);
+        sync_pb::AppListSpecifics_AppListItemType_TYPE_APP,
+    const std::string& promise_package_id = kUnset);
 
 }  // namespace app_list
 

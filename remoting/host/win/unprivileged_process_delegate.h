@@ -24,12 +24,11 @@
 namespace base {
 class CommandLine;
 class SingleThreadTaskRunner;
-} // namespace base
+}  // namespace base
 
 namespace IPC {
 class ChannelProxy;
-class Message;
-} // namespace IPC
+}  // namespace IPC
 
 namespace remoting {
 
@@ -58,7 +57,6 @@ class UnprivilegedProcessDelegate : public IPC::Listener,
 
  private:
   // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnChannelConnected(int32_t peer_pid) override;
   void OnChannelError() override;
   void OnAssociatedInterfaceRequest(

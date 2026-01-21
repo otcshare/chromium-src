@@ -8,7 +8,6 @@
 #include <ostream>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "services/tracing/public/cpp/perfetto/java_heap_profiler/hprof_data_type_android.h"
 

@@ -21,7 +21,7 @@ function checkExpectations() {
   chrome.test.succeed();
 }
 
-var getURL = chrome.extension.getURL;
+var getURL = chrome.runtime.getURL;
 
 chrome.tabs.onUpdated.addListener(function(tabId, info, tab) {
   console.log('---onUpdated: ' + info.status + ', ' + info.url + '. ' +
@@ -58,7 +58,7 @@ chrome.test.runTests([
   },
 
   /*
-  // TODO(rafaelw) -- This is disabled because this test is flakey.
+  // TODO(rafaelw) -- This is disabled because this test is flaky.
   function updateDuringCreateCallback() {
     // Test for crbug.com/27204.
     // We have to ignore anything that comes before the about:blank loading

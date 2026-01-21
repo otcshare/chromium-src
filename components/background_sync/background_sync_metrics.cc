@@ -4,7 +4,7 @@
 
 #include "components/background_sync/background_sync_metrics.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/background_sync/background_sync_delegate.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -83,7 +83,7 @@ void BackgroundSyncMetrics::MaybeRecordPeriodicSyncEventCompletion(
 
 void BackgroundSyncMetrics::DidGetBackgroundSourceId(
     RecordCallback record_callback,
-    absl::optional<ukm::SourceId> source_id) {
+    std::optional<ukm::SourceId> source_id) {
   // This background event did not meet the requirements for the UKM service.
   if (!source_id)
     return;

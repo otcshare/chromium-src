@@ -7,13 +7,10 @@
 
 #include "ash/ash_export.h"
 #include "ash/system/time/calendar_view_controller.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
-
-namespace views {
-class BoxLayout;
-}
 
 namespace ash {
 
@@ -21,27 +18,34 @@ namespace ash {
 // events that a user has coming up, either imminently or that are already in
 // progress but not yet finished.
 class ASH_EXPORT CalendarUpNextView : public views::View {
- public:
-  METADATA_HEADER(CalendarUpNextView);
+  METADATA_HEADER(CalendarUpNextView, views::View)
 
-  explicit CalendarUpNextView(CalendarViewController* calendar_view_controller);
+ public:
+  CalendarUpNextView(CalendarViewController* calendar_view_controller,
+                     views::Button::PressedCallback callback);
   CalendarUpNextView(const CalendarUpNextView& other) = delete;
   CalendarUpNextView& operator=(const CalendarUpNextView& other) = delete;
   ~CalendarUpNextView() override;
 
+  // Called by a timer in the calendar whilst the up next view is open to
+  // refresh any ongoing events.
+  void RefreshEvents();
+
+  // Returns the `SkPath` for the background of the `CalendarUpNextView`.
+  SkPath GetClipPath() const;
+
   // views::View
-  void Layout() override;
-  void OnThemeChanged() override;
+  void Layout(PassKey) override;
 
  private:
-  friend class CalendarUpNextViewTest;
   friend class CalendarUpNextViewAnimationTest;
   friend class CalendarUpNextViewPixelTest;
+  friend class CalendarUpNextViewTest;
+  friend class CalendarViewTest;
 
   // Populates the scroll view with events.
   void UpdateEvents(
-      const std::list<google_apis::calendar::CalendarEvent>& events,
-      views::BoxLayout* content_layout_manager);
+      const std::list<google_apis::calendar::CalendarEvent>& events);
 
   // Callbacks for scroll buttons.
   void OnScrollLeftButtonPressed(const ui::Event& event);
@@ -60,25 +64,30 @@ class ASH_EXPORT CalendarUpNextView : public views::View {
                                       const int target_edge);
 
   // Owned by `CalendarView`.
-  CalendarViewController* calendar_view_controller_;
+  raw_ptr<CalendarViewController, DanglingUntriaged> calendar_view_controller_;
 
   // Owned by `CalendarUpNextView`.
-  views::View* const header_view_;
-  views::Button* left_scroll_button_;
-  views::Button* right_scroll_button_;
-  views::ScrollView* const scroll_view_;
+  const raw_ptr<views::View> todays_events_button_container_;
+  const raw_ptr<views::View> header_view_;
+  raw_ptr<views::Button> left_scroll_button_;
+  raw_ptr<views::Button> right_scroll_button_;
+  const raw_ptr<views::ScrollView> scroll_view_;
+
+  // The current events displayed in calendar up next. Serves as a cache to diff
+  // against when refreshing events.
+  SingleDayEventList displayed_events_;
 
   // The content of the horizontal `scroll_view`, which carries a list of
   // `CalendarEventListItemView`.
-  views::View* const content_view_;
+  const raw_ptr<views::View> content_view_;
 
   // Helper class for animating the `scroll_view_` when a scroll button is
   // pressed.
-
   std::unique_ptr<gfx::LinearAnimation> scrolling_animation_;
 
-  // Bounds animator used in the `scrolling_animation_` class.
-  views::BoundsAnimator bounds_animator_;
+  // Animation container used in the `scrolling_animation_` class.
+  scoped_refptr<gfx::AnimationContainer> animation_container_ =
+      base::MakeRefCounted<gfx::AnimationContainer>();
 
   // Callback subscriptions.
   base::CallbackListSubscription on_contents_scrolled_subscription_;

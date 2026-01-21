@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
@@ -113,7 +113,7 @@ class NET_EXPORT MDnsListener {
                                 const RecordParsed* record) = 0;
 
     // Called when a record is marked nonexistent by an NSEC record.
-    virtual void OnNsecRecord(const std::string& name, unsigned type) = 0;
+    virtual void OnNsecRecord(const std::string& name, uint32_t type) = 0;
 
     // Called when the cache is purged (due, for example, ot the network
     // disconnecting).

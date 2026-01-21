@@ -7,7 +7,6 @@
 #include <windows.storage.streams.h>
 #include <wrl/implements.h>
 
-#include "base/strings/string_piece.h"
 #include "base/win/com_init_util.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/win_util.h"
@@ -44,7 +43,6 @@ static HRESULT FakeRoGetActivationFactory(HSTRING class_id,
 
   if (!instance) {
     NOTREACHED();
-    return E_NOTIMPL;
   }
 
   *out_factory = instance;
@@ -53,11 +51,6 @@ static HRESULT FakeRoGetActivationFactory(HSTRING class_id,
 }
 
 }  // namespace
-
-// static
-bool ScopedShareOperationFakeComponents::IsSupportedEnvironment() {
-  return ScopedFakeDataTransferManagerInterop::IsSupportedEnvironment();
-}
 
 ScopedShareOperationFakeComponents::ScopedShareOperationFakeComponents() =
     default;
@@ -71,7 +64,6 @@ ScopedShareOperationFakeComponents::~ScopedShareOperationFakeComponents() {
 }
 
 void ScopedShareOperationFakeComponents::SetUp() {
-  ASSERT_TRUE(IsSupportedEnvironment());
   base::win::AssertComInitialized();
 
   ASSERT_NO_FATAL_FAILURE(scoped_fake_data_transfer_manager_interop_.SetUp());

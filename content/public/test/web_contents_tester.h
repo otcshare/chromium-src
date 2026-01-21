@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "content/public/browser/prerender_host_id.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -99,6 +100,10 @@ class WebContentsTester {
   // main frame of |opener|.
   virtual void SetOpener(WebContents* opener) = 0;
 
+  // Simulate this WebContents' main frame having a live original opener chain
+  // where the root of the chain points to the main frame of `opener`.
+  virtual void SetOriginalOpener(WebContents* opener) = 0;
+
   // Sets the process state for the primary main frame renderer.
   virtual void SetIsCrashed(base::TerminationStatus status, int error_code) = 0;
 
@@ -121,6 +126,14 @@ class WebContentsTester {
       const std::vector<SkBitmap>& bitmaps,
       const std::vector<gfx::Size>& original_bitmap_sizes) = 0;
 
+  // Simulates a console message event and notifies web contents observers.
+  virtual bool TestDidAddMessageToConsole(
+      blink::mojom::ConsoleMessageLevel log_level,
+      const std::u16string& message,
+      int32_t line_no,
+      const std::u16string& source_id,
+      const std::optional<std::u16string>& untrusted_stack_trace) = 0;
+
   // Simulates initial favicon urls set.
   virtual void TestSetFaviconURL(
       const std::vector<blink::mojom::FaviconURLPtr>& favicon_urls) = 0;
@@ -139,6 +152,9 @@ class WebContentsTester {
   // Sets the return value of GetContentsMimeType().
   virtual void SetMainFrameMimeType(const std::string& mime_type) = 0;
 
+  // Sets the main frame size.
+  virtual void SetMainFrameSize(const gfx::Size& frame_size) = 0;
+
   // Change currently audible state for testing. This will cause all relevant
   // notifications to fire as well.
   virtual void SetIsCurrentlyAudible(bool audible) = 0;
@@ -152,37 +168,46 @@ class WebContentsTester {
   // Simulates terminating an load with a network error.
   virtual void TestDidFailLoadWithError(const GURL& url, int error_code) = 0;
 
+  // Simulates the first non-empty paint.
+  virtual void TestDidFirstVisuallyNonEmptyPaint() = 0;
+
   // Returns whether PauseSubresourceLoading was called on this web contents.
   virtual bool GetPauseSubresourceLoadingCalled() = 0;
 
   // Resets the state around PauseSubresourceLoadingCalled.
   virtual void ResetPauseSubresourceLoadingCalled() = 0;
 
+  // Sets the last active time ticks.
+  virtual void SetLastActiveTimeTicks(
+      base::TimeTicks last_active_time_ticks) = 0;
+
   // Sets the last active time.
-  virtual void SetLastActiveTime(base::TimeTicks last_active_time) = 0;
+  virtual void SetLastActiveTime(base::Time last_active_time) = 0;
 
   // Increments/decrements the number of frames with connected USB devices.
   virtual void TestIncrementUsbActiveFrameCount() = 0;
   virtual void TestDecrementUsbActiveFrameCount() = 0;
 
+  // Increments/decrements the number of frames with connected HID devices.
+  virtual void TestIncrementHidActiveFrameCount() = 0;
+  virtual void TestDecrementHidActiveFrameCount() = 0;
+
+  // Increments/decrements the number of frames actively using serial ports.
+  virtual void TestIncrementSerialActiveFrameCount() = 0;
+  virtual void TestDecrementSerialActiveFrameCount() = 0;
+
   // Increments/decrements the number of connected Bluetooth devices.
   virtual void TestIncrementBluetoothConnectedDeviceCount() = 0;
   virtual void TestDecrementBluetoothConnectedDeviceCount() = 0;
-
-  // Used to create portals and retrieve their WebContents.
-  virtual const blink::PortalToken& CreatePortal(
-      std::unique_ptr<WebContents> portal_web_contents) = 0;
-  virtual WebContents* GetPortalContents(
-      const blink::PortalToken& portal_token) = 0;
 
   // Indicates if this WebContents has been frozen via a call to
   // SetPageFrozen().
   virtual bool IsPageFrozen() = 0;
 
-  // Starts prerendering a page with |url|, and returns the root frame tree node
-  // id of the page. The page has a pending navigation in the root frame tree
-  // node when this method returns.
-  virtual int AddPrerender(const GURL& url) = 0;
+  // Starts prerendering a page with |url|, and returns the PrerenderHostId of
+  // the page. The page has a pending navigation in the root frame tree node
+  // when this method returns.
+  virtual PrerenderHostId AddPrerender(const GURL& url) = 0;
   // Starts prerendering a page, simulates a navigation to |url| in the main
   // frame and returns the main frame of the page after the navigation is
   // complete.
@@ -197,6 +222,20 @@ class WebContentsTester {
   // Returns the time that was set with SetTabSwitchStartTime, or a null
   // TimeTicks if it was never called.
   virtual base::TimeTicks GetTabSwitchStartTime() = 0;
+
+  // Sets the return value for GetPictureInPictureOptions().
+  virtual void SetPictureInPictureOptions(
+      std::optional<blink::mojom::PictureInPictureWindowOptions> options) = 0;
+
+  virtual bool GetOverscrollNavigationEnabled() = 0;
+
+  // Sets return value for GetMediaCaptureRawDeviceIdsOpened(), keyed by `type`.
+  virtual void SetMediaCaptureRawDeviceIdsOpened(
+      blink::mojom::MediaStreamType type,
+      std::vector<std::string> ids) = 0;
+
+  // Sets the return value for GetCurrentlyPlayingVideoCount().
+  virtual void SetCurrentlyPlayingVideoCount(int count) = 0;
 };
 
 }  // namespace content

@@ -9,6 +9,8 @@
 
 #include "ash/ash_export.h"
 #include "ash/system/video_conference/effects/video_conference_tray_effects_delegate.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/views/controls/button/button.h"
 
 namespace gfx {
@@ -18,6 +20,7 @@ struct VectorIcon;
 namespace ash {
 
 class FakeVideoConferenceTrayController;
+enum class VcEffectId;
 
 namespace fake_video_conference {
 
@@ -30,23 +33,26 @@ class SimpleToggleEffect : public VcEffectsDelegate {
   // Allows setting `icon` and `accessible_name_id` if desired, for unit tests
   // or the emulator.
   SimpleToggleEffect(const std::u16string& label_text,
-                     absl::optional<const gfx::VectorIcon*> icon,
-                     absl::optional<int> accessible_name_id);
+                     std::optional<const gfx::VectorIcon*> icon,
+                     std::optional<int> accessible_name_id);
 
   SimpleToggleEffect(const SimpleToggleEffect&) = delete;
   SimpleToggleEffect& operator=(const SimpleToggleEffect&) = delete;
 
-  ~SimpleToggleEffect() override = default;
+  ~SimpleToggleEffect() override;
 
   // VcEffectsDelegate:
-  int GetEffectState(int effect_id) override;
-  void OnEffectControlActivated(int effect_id, int value) override;
+  std::optional<int> GetEffectState(VcEffectId effect_id) override;
+  void OnEffectControlActivated(VcEffectId effect_id,
+                                std::optional<int> state) override;
 
   int num_activations_for_testing() { return num_activations_for_testing_; }
 
  private:
   // Number of times the control has been activated, used by unit tests.
   int num_activations_for_testing_ = 0;
+
+  base::WeakPtrFactory<SimpleToggleEffect> weak_factory_{this};
 };
 
 // Delegates that host a series of "fake" effects used in unit tests and the
@@ -112,14 +118,17 @@ class ASH_EXPORT StylishKitchenEffect : public SimpleToggleEffect {
   ~StylishKitchenEffect() override = default;
 };
 
-class ASH_EXPORT GreenhouseEffect : public SimpleToggleEffect {
+// A fake toggle effect with long text label (used to text multi-line label in
+// the toggle effect button).
+class ASH_EXPORT FakeLongTextLabelToggleEffect : public SimpleToggleEffect {
  public:
-  GreenhouseEffect();
+  FakeLongTextLabelToggleEffect();
 
-  GreenhouseEffect(const GreenhouseEffect&) = delete;
-  GreenhouseEffect& operator=(const GreenhouseEffect&) = delete;
+  FakeLongTextLabelToggleEffect(const FakeLongTextLabelToggleEffect&) = delete;
+  FakeLongTextLabelToggleEffect& operator=(
+      const FakeLongTextLabelToggleEffect&) = delete;
 
-  ~GreenhouseEffect() override = default;
+  ~FakeLongTextLabelToggleEffect() override = default;
 };
 
 // Delegate that hosts a set-value effect.
@@ -141,17 +150,25 @@ class ASH_EXPORT ShaggyFurEffect : public VcEffectsDelegate {
   ~ShaggyFurEffect() override;
 
   // VcEffectsDelegate:
-  int GetEffectState(int effect_id) override;
-  void OnEffectControlActivated(int effect_id, int value) override;
+  std::optional<int> GetEffectState(VcEffectId effect_id) override;
+  void OnEffectControlActivated(VcEffectId effect_id,
+                                std::optional<int> state) override;
 
-  // Returns the number of times the button/state for `value` has been
+  // Returns the number of times the button for `state_value` has been
   // activated.
-  int GetNumActivationsForTesting(int value);
+  int GetNumActivationsForTesting(int state_value);
 
  private:
+  // Adds a `std::unique_ptr<VcEffectState>` to `effect`.
+  void AddStateToEffect(VcHostedEffect* effect,
+                        int state_value,
+                        std::u16string label_text);
+
   // Number of times each value has been clicked, one count for each value in
   // `FurShagginess`.
   std::vector<int> num_activations_for_testing_;
+
+  base::WeakPtrFactory<ShaggyFurEffect> weak_factory_{this};
 };
 
 class ASH_EXPORT SuperCutnessEffect : public VcEffectsDelegate {
@@ -160,8 +177,7 @@ class ASH_EXPORT SuperCutnessEffect : public VcEffectsDelegate {
     kUglyDog = 0,
     kTeddyBear = 1,
     kZara = 2,
-    kInscrutable = 3,
-    kMaxNumValues = 4,
+    kMaxNumValues = 3,
   };
 
   SuperCutnessEffect();
@@ -172,17 +188,35 @@ class ASH_EXPORT SuperCutnessEffect : public VcEffectsDelegate {
   ~SuperCutnessEffect() override;
 
   // VcEffectsDelegate:
-  int GetEffectState(int effect_id) override;
-  void OnEffectControlActivated(int effect_id, int value) override;
+  std::optional<int> GetEffectState(VcEffectId effect_id) override;
+  void OnEffectControlActivated(VcEffectId effect_id,
+                                std::optional<int> state) override;
 
-  // Returns the number of times the button/state for `value` has been
-  // activated.
-  int GetNumActivationsForTesting(int value);
+  // Returns the number of times the button for `state` has been activated.
+  int GetNumActivationsForTesting(int state);
+
+  void set_has_invalid_effect_state_for_testing(bool has_invalid_state) {
+    has_invalid_effect_state_for_testing_ = has_invalid_state;
+  }
+  bool has_invalid_effect_state_for_testing() {
+    return has_invalid_effect_state_for_testing_;
+  }
 
  private:
+  // Adds a `std::unique_ptr<VcEffectState>` to `effect`.
+  void AddStateToEffect(VcHostedEffect* effect,
+                        int state_value,
+                        std::u16string label_text);
+
   // Number of times each value has been clicked, one count for each value in
   // `HowCute`.
   std::vector<int> num_activations_for_testing_;
+
+  // Set to 'true' for testing the case where a valid effect state cannot be
+  // obtained.
+  bool has_invalid_effect_state_for_testing_;
+
+  base::WeakPtrFactory<SuperCutnessEffect> weak_factory_{this};
 };
 
 // A simple residence for any fake effects used for testing. For all of these
@@ -198,14 +232,14 @@ class EffectRepository {
   ~EffectRepository();
 
  private:
-  FakeVideoConferenceTrayController* controller_;
+  raw_ptr<FakeVideoConferenceTrayController> controller_;
   std::unique_ptr<CatEarsEffect> cat_ears_;
   std::unique_ptr<DogFurEffect> dog_fur_;
   std::unique_ptr<SpaceshipEffect> spaceship_;
   std::unique_ptr<OfficeBunnyEffect> office_bunny_;
   std::unique_ptr<CalmForestEffect> calm_forest_;
   std::unique_ptr<StylishKitchenEffect> stylish_kitchen_;
-  std::unique_ptr<GreenhouseEffect> greenhouse_;
+  std::unique_ptr<FakeLongTextLabelToggleEffect> long_text_label_effect_;
   std::unique_ptr<ShaggyFurEffect> shaggy_fur_;
   std::unique_ptr<SuperCutnessEffect> super_cuteness_;
 };

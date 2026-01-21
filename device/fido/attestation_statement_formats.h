@@ -6,6 +6,7 @@
 #define DEVICE_FIDO_ATTESTATION_STATEMENT_FORMATS_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <vector>
 
@@ -13,7 +14,7 @@
 #include "base/containers/span.h"
 #include "components/cbor/values.h"
 #include "device/fido/attestation_statement.h"
-#include "device/fido/fido_constants.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
 
@@ -36,7 +37,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoAttestationStatement
   bool IsNoneAttestation() const override;
   bool IsSelfAttestation() const override;
   bool IsAttestationCertificateInappropriatelyIdentifying() const override;
-  absl::optional<base::span<const uint8_t>> GetLeafCertificate() const override;
+  std::optional<base::span<const uint8_t>> GetLeafCertificate() const override;
 
  private:
   const std::vector<uint8_t> signature_;
@@ -61,7 +62,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) PackedAttestationStatement
   bool IsNoneAttestation() const override;
   bool IsSelfAttestation() const override;
   bool IsAttestationCertificateInappropriatelyIdentifying() const override;
-  absl::optional<base::span<const uint8_t>> GetLeafCertificate() const override;
+  std::optional<base::span<const uint8_t>> GetLeafCertificate() const override;
 
  private:
   const CoseAlgorithmIdentifier algorithm_;

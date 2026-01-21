@@ -7,11 +7,13 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 
 #include "base/process/process.h"
 #include "base/types/id_type.h"
 #include "content/common/content_export.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -32,6 +34,7 @@ using ServiceProcessId =
 class CONTENT_EXPORT ServiceProcessInfo {
  public:
   ServiceProcessInfo(const std::string& name,
+                     const std::optional<GURL>& site,
                      const ServiceProcessId& id,
                      base::Process process);
   ServiceProcessInfo(const ServiceProcessInfo&) = delete;
@@ -58,11 +61,19 @@ class CONTENT_EXPORT ServiceProcessInfo {
   const std::string service_interface_name() const {
     return service_interface_name_;
   }
+  const std::optional<GURL>& site() const { return site_; }
   const base::Process& GetProcess() const { return process_; }
+  std::optional<bool> crashed_pre_ipc() const { return crashed_pre_ipc_; }
+  void set_crashed_pre_ipc(bool crashed_pre_ipc) {
+    crashed_pre_ipc_ = crashed_pre_ipc;
+  }
 
  private:
   // The name of the service interface for which the process was launched.
   std::string service_interface_name_;
+
+  // Optional site associated with the process for per-site service processes.
+  std::optional<GURL> site_;
 
   // A unique identifier for this service process instance. ServiceProcessIds
   // are never reused.
@@ -70,6 +81,11 @@ class CONTENT_EXPORT ServiceProcessInfo {
 
   // The service process.
   base::Process process_;
+
+  // If a value is present then the process has crashed. This bool indicates
+  // whether or not the crash happened before UtilityMain e.g. a crash very
+  // early in startup before IPC has initialized.
+  std::optional<bool> crashed_pre_ipc_;
 };
 
 }  // namespace content

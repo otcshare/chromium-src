@@ -7,10 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/run_loop.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/attestation/mock_machine_certificate_uploader.h"
 #include "components/policy/core/common/remote_commands/remote_command_job.h"
@@ -23,7 +23,6 @@ namespace {
 
 using ::ash::attestation::MachineCertificateUploader;
 using ::ash::attestation::MockMachineCertificateUploader;
-using ::testing::Invoke;
 using ::testing::StrictMock;
 
 constexpr base::TimeDelta kWorldAge = base::Days(365);
@@ -77,7 +76,7 @@ class DeviceCommandRefreshMachineCertificateJobTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::RunLoop run_loop_;
+  base::test::TestFuture<void> job_finished_future;
 
   base::SimpleTestClock fake_clock_;
   base::SimpleTestTickClock fake_tick_clock_;
@@ -94,8 +93,8 @@ TEST_F(DeviceCommandRefreshMachineCertificateJobTest,
   EXPECT_CALL(cert_uploader_, RefreshAndUploadCertificate).Times(0);
 
   EXPECT_TRUE(job->Run(fake_clock_.Now(), fake_tick_clock_.NowTicks(),
-                       run_loop_.QuitClosure()));
-  run_loop_.Run();
+                       job_finished_future.GetCallback()));
+  ASSERT_TRUE(job_finished_future.Wait()) << "Job did not finish.";
 
   EXPECT_EQ(job->status(), RemoteCommandJob::FAILED);
 }
@@ -106,14 +105,13 @@ TEST_F(DeviceCommandRefreshMachineCertificateJobTest,
       kDefaultCommandAge, fake_tick_clock_.NowTicks(), &cert_uploader_);
 
   EXPECT_CALL(cert_uploader_, RefreshAndUploadCertificate)
-      .WillOnce(Invoke([](MachineCertificateUploader::UploadCallback callback) {
+      .WillOnce([](MachineCertificateUploader::UploadCallback callback) {
         std::move(callback).Run(/*success=*/false);
-      }));
+      });
 
   EXPECT_TRUE(job->Run(fake_clock_.Now(), fake_tick_clock_.NowTicks(),
-                       run_loop_.QuitClosure()));
-
-  run_loop_.Run();
+                       job_finished_future.GetCallback()));
+  ASSERT_TRUE(job_finished_future.Wait()) << "Job did not finish.";
 
   EXPECT_EQ(job->status(), RemoteCommandJob::FAILED);
 }
@@ -124,14 +122,13 @@ TEST_F(DeviceCommandRefreshMachineCertificateJobTest,
       kDefaultCommandAge, fake_tick_clock_.NowTicks(), &cert_uploader_);
 
   EXPECT_CALL(cert_uploader_, RefreshAndUploadCertificate)
-      .WillOnce(Invoke([](MachineCertificateUploader::UploadCallback callback) {
+      .WillOnce([](MachineCertificateUploader::UploadCallback callback) {
         std::move(callback).Run(/*success=*/true);
-      }));
+      });
 
   EXPECT_TRUE(job->Run(fake_clock_.Now(), fake_tick_clock_.NowTicks(),
-                       run_loop_.QuitClosure()));
-
-  run_loop_.Run();
+                       job_finished_future.GetCallback()));
+  ASSERT_TRUE(job_finished_future.Wait()) << "Job did not finish.";
 
   EXPECT_EQ(job->status(), RemoteCommandJob::SUCCEEDED);
 }
@@ -142,14 +139,13 @@ TEST_F(DeviceCommandRefreshMachineCertificateJobTest,
       kVeryOldCommandAge, fake_tick_clock_.NowTicks(), &cert_uploader_);
 
   EXPECT_CALL(cert_uploader_, RefreshAndUploadCertificate)
-      .WillOnce(Invoke([](MachineCertificateUploader::UploadCallback callback) {
+      .WillOnce([](MachineCertificateUploader::UploadCallback callback) {
         std::move(callback).Run(/*success=*/true);
-      }));
+      });
 
   EXPECT_TRUE(job->Run(fake_clock_.Now(), fake_tick_clock_.NowTicks(),
-                       run_loop_.QuitClosure()));
-
-  run_loop_.Run();
+                       job_finished_future.GetCallback()));
+  ASSERT_TRUE(job_finished_future.Wait()) << "Job did not finish.";
 
   EXPECT_EQ(job->status(), RemoteCommandJob::SUCCEEDED);
 }

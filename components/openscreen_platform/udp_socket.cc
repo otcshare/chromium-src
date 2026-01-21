@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "components/openscreen_platform/network_context.h"
 #include "components/openscreen_platform/network_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -23,7 +24,7 @@ namespace openscreen {
 
 // static
 ErrorOr<std::unique_ptr<UdpSocket>> UdpSocket::Create(
-    TaskRunner* task_runner,
+    TaskRunner& task_runner,
     Client* client,
     const IPEndpoint& local_endpoint) {
   network::mojom::NetworkContext* const network_context =
@@ -52,6 +53,7 @@ namespace openscreen_platform {
 
 namespace {
 
+using openscreen::ByteView;
 using openscreen::Error;
 using openscreen::IPAddress;
 using openscreen::IPEndpoint;
@@ -134,13 +136,9 @@ void UdpSocket::JoinMulticastGroup(const IPAddress& address,
                                         weak_ptr_factory_.GetWeakPtr()));
 }
 
-void UdpSocket::SendMessage(const void* data,
-                            size_t length,
-                            const IPEndpoint& dest) {
+void UdpSocket::SendMessage(ByteView data, const IPEndpoint& dest) {
   const auto send_to_address = openscreen_platform::ToNetEndPoint(dest);
-  base::span<const uint8_t> data_span(static_cast<const uint8_t*>(data),
-                                      length);
-
+  base::span<const uint8_t> UNSAFE_TODO(data_span(data.data(), data.size()));
   udp_socket_->SendTo(
       send_to_address, data_span,
       net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
@@ -152,13 +150,12 @@ void UdpSocket::SetDscp(openscreen::UdpSocket::DscpMode state) {}
 
 void UdpSocket::OnReceived(
     int32_t net_result,
-    const absl::optional<net::IPEndPoint>& source_endpoint,
-    absl::optional<base::span<const uint8_t>> data) {
+    const std::optional<net::IPEndPoint>& source_endpoint,
+    std::optional<base::span<const uint8_t>> data) {
   if (net_result != net::OK) {
     client_->OnRead(this, Error::Code::kSocketReadFailure);
   } else if (data) {
     UdpPacket packet(data->begin(), data->end());
-    packet.set_socket(this);
     if (source_endpoint) {
       packet.set_source(
           openscreen_platform::ToOpenScreenEndPoint(source_endpoint.value()));
@@ -170,7 +167,7 @@ void UdpSocket::OnReceived(
 }
 
 void UdpSocket::BindCallback(int32_t result,
-                             const absl::optional<net::IPEndPoint>& address) {
+                             const std::optional<net::IPEndPoint>& address) {
   if (result != net::OK) {
     client_->OnError(this, Error(Error::Code::kSocketBindFailure,
                                  net::ErrorToString(result)));

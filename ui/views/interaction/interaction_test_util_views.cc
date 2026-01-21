@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/i18n/rtl.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -21,6 +20,7 @@
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_test_util.h"
+#include "ui/base/test/ui_controls.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
@@ -36,7 +36,9 @@
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/controls/tabbed_pane/tabbed_pane.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
@@ -45,14 +47,84 @@
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_CHROMEOS)
+#define HANDLE_WAYLAND_FAILURE 1
+#else
+#define HANDLE_WAYLAND_FAILURE 0
+#endif
+
+#if HANDLE_WAYLAND_FAILURE
+#include "ui/views/widget/widget_observer.h"
+#endif
+
 namespace views::test {
 
-InteractionTestUtilSimulatorViews::InteractionTestUtilSimulatorViews() =
-    default;
-InteractionTestUtilSimulatorViews::~InteractionTestUtilSimulatorViews() =
-    default;
-
 namespace {
+
+#if HANDLE_WAYLAND_FAILURE
+
+// On Wayland on Linux, window activation isn't guaranteed to work (based on
+// what compositor extensions are installed). So instead, make a best effort to
+// wait for the widget to activate, and if it fails, skip the test as it cannot
+// possibly pass.
+class WidgetActivationWaiterWayland final : public WidgetObserver {
+ public:
+  // A more than reasonable amount of time to wait for a window to activate.
+  static constexpr base::TimeDelta kTimeout = base::Seconds(1);
+
+  // Constructs an activation waiter for the given widget.
+  explicit WidgetActivationWaiterWayland(Widget* widget)
+      : active_(widget->IsActive()) {
+    if (!active_) {
+      widget_observation_.Observe(widget);
+    }
+  }
+  ~WidgetActivationWaiterWayland() override = default;
+
+  // Waits for the widget to become active or the operation to time out; returns
+  // true on success. Returns immediately if the widget is already active.
+  bool Wait() {
+    if (!active_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&WidgetActivationWaiterWayland::OnTimeout,
+                         weak_ptr_factory_.GetWeakPtr()),
+          kTimeout);
+      run_loop_.Run();
+    }
+    return active_;
+  }
+
+ private:
+  // WidgetObserver:
+  void OnWidgetDestroyed(Widget* widget) override {
+    NOTREACHED() << "Widget destroyed before observation.";
+  }
+  void OnWidgetActivationChanged(Widget* widget, bool active) override {
+    if (!active) {
+      return;
+    }
+    active_ = true;
+    widget_observation_.Reset();
+    run_loop_.Quit();
+  }
+
+  void OnTimeout() {
+    widget_observation_.Reset();
+    run_loop_.Quit();
+  }
+
+  bool active_;
+  base::RunLoop run_loop_{base::RunLoop::Type::kNestableTasksAllowed};
+  base::ScopedObservation<Widget, WidgetObserver> widget_observation_{this};
+  base::WeakPtrFactory<WidgetActivationWaiterWayland> weak_ptr_factory_{this};
+};
+
+#endif  // HANDLE_WAYLAND_FAILURE
 
 // Waits for the dropdown pop-up and selects the specified item from the list.
 class DropdownItemSelector {
@@ -139,7 +211,6 @@ class DropdownItemSelector {
           break;
         case ui::test::ActionResult::kNotAttempted:
           NOTREACHED();
-          break;
         case ui::test::ActionResult::kKnownIncompatible:
           LOG(WARNING)
               << "Select dropdown item not available on this platform with "
@@ -169,11 +240,12 @@ class DropdownItemSelector {
   // Searches in-order, depth-first. It is assumed that menu items will appear
   // in search order in the same order they appear visually.
   static MenuItemView* FindMenuItem(View* from, size_t& index) {
-    for (auto* child : from->children()) {
+    for (views::View* child : from->children()) {
       auto* const item = AsViewClass<MenuItemView>(child);
       if (item) {
-        if (index == 0U)
+        if (index == 0U) {
           return item;
+        }
         --index;
       } else if (auto* result = FindMenuItem(child, index)) {
         return result;
@@ -182,13 +254,13 @@ class DropdownItemSelector {
     return nullptr;
   }
 
-  const base::raw_ptr<InteractionTestUtilSimulatorViews> simulator_;
+  const raw_ptr<InteractionTestUtilSimulatorViews> simulator_;
   const ui::test::InteractionTestUtil::InputType input_type_;
   const size_t item_index_;
   base::RunLoop run_loop_{base::RunLoop::Type::kNestableTasksAllowed};
   AnyWidgetObserver observer_{views::test::AnyWidgetTestPasskey()};  // IN-TEST
-  absl::optional<ui::test::ActionResult> result_;
-  base::raw_ptr<Widget> widget_ = nullptr;
+  std::optional<ui::test::ActionResult> result_;
+  raw_ptr<Widget> widget_ = nullptr;
   base::WeakPtrFactory<DropdownItemSelector> weak_ptr_factory_{this};
 };
 
@@ -207,11 +279,11 @@ bool SendDefaultAction(View* target) {
 // event handling, so use a templated approach to support both cases.
 template <class T>
 void SendMouseClick(T* target, const gfx::Point& point) {
-  ui::MouseEvent mouse_down(ui::ET_MOUSE_PRESSED, point, point,
+  ui::MouseEvent mouse_down(ui::EventType::kMousePressed, point, point,
                             ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                             ui::EF_LEFT_MOUSE_BUTTON);
   target->OnMouseEvent(&mouse_down);
-  ui::MouseEvent mouse_up(ui::ET_MOUSE_RELEASED, point, point,
+  ui::MouseEvent mouse_up(ui::EventType::kMouseReleased, point, point,
                           ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                           ui::EF_LEFT_MOUSE_BUTTON);
   target->OnMouseEvent(&mouse_up);
@@ -222,13 +294,13 @@ void SendMouseClick(T* target, const gfx::Point& point) {
 // event handling, so use a templated approach to support both cases.
 template <class T>
 void SendTapGesture(T* target, const gfx::Point& point) {
-  ui::GestureEventDetails press_details(ui::ET_GESTURE_TAP);
+  ui::GestureEventDetails press_details(ui::EventType::kGestureTap);
   press_details.set_device_type(ui::GestureDeviceType::DEVICE_TOUCHSCREEN);
   ui::GestureEvent press_event(point.x(), point.y(), ui::EF_NONE,
                                ui::EventTimeForNow(), press_details);
   target->OnGestureEvent(&press_event);
 
-  ui::GestureEventDetails release_details(ui::ET_GESTURE_END);
+  ui::GestureEventDetails release_details(ui::EventType::kGestureEnd);
   release_details.set_device_type(ui::GestureDeviceType::DEVICE_TOUCHSCREEN);
   ui::GestureEvent release_event(point.x(), point.y(), ui::EF_NONE,
                                  ui::EventTimeForNow(), release_details);
@@ -239,31 +311,63 @@ void SendTapGesture(T* target, const gfx::Point& point) {
 // still valid after processing the keypress.
 bool SendKeyPress(View* view, ui::KeyboardCode code, int flags = ui::EF_NONE) {
   ViewTracker tracker(view);
-  view->OnKeyPressed(
-      ui::KeyEvent(ui::ET_KEY_PRESSED, code, flags, ui::EventTimeForNow()));
+  view->OnKeyPressed(ui::KeyEvent(ui::EventType::kKeyPressed, code, flags,
+                                  ui::EventTimeForNow()));
 
   // Verify that the button is not destroyed after the key-down before trying
   // to send the key-up.
-  if (!tracker.view())
+  if (!tracker.view()) {
     return false;
+  }
 
-  tracker.view()->OnKeyReleased(
-      ui::KeyEvent(ui::ET_KEY_RELEASED, code, flags, ui::EventTimeForNow()));
+  tracker.view()->OnKeyReleased(ui::KeyEvent(ui::EventType::kKeyReleased, code,
+                                             flags, ui::EventTimeForNow()));
 
   return tracker.view();
 }
 
 }  // namespace
 
+ViewFocusedWaiter::ViewFocusedWaiter(View& target_view)
+    : manager_(*target_view.GetFocusManager()), target_view_(target_view) {
+  manager_->AddFocusChangeListener(this);
+}
+
+ViewFocusedWaiter::~ViewFocusedWaiter() {
+  manager_->RemoveFocusChangeListener(this);
+}
+
+void ViewFocusedWaiter::Wait() {
+  if (manager_->GetFocusedView() != &*target_view_) {
+    run_loop_.Run();
+  }
+}
+
+void ViewFocusedWaiter::OnWillChangeFocus(View* focused_before,
+                                          View* focused_now) {}
+void ViewFocusedWaiter::OnDidChangeFocus(View* focused_before,
+                                         View* focused_now) {
+  if (focused_now == &*target_view_) {
+    run_loop_.Quit();
+  }
+}
+
+InteractionTestUtilSimulatorViews::InteractionTestUtilSimulatorViews() =
+    default;
+InteractionTestUtilSimulatorViews::~InteractionTestUtilSimulatorViews() =
+    default;
+
 ui::test::ActionResult InteractionTestUtilSimulatorViews::PressButton(
     ui::TrackedElement* element,
     InputType input_type) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const button =
       Button::AsButton(element->AsA<TrackedElementViews>()->view());
-  if (!button)
+  if (!button) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
   PressButton(button, input_type);
   return ui::test::ActionResult::kSucceeded;
@@ -272,18 +376,21 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::PressButton(
 ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectMenuItem(
     ui::TrackedElement* element,
     InputType input_type) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const menu_item =
       AsViewClass<MenuItemView>(element->AsA<TrackedElementViews>()->view());
-  if (!menu_item)
+  if (!menu_item) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
 #if BUILDFLAG(IS_MAC)
   // Keyboard input isn't reliable on Mac for submenus, so unless the test
   // specifically calls for keyboard input, prefer mouse.
-  if (input_type == ui::test::InteractionTestUtil::InputType::kDontCare)
+  if (input_type == ui::test::InteractionTestUtil::InputType::kDontCare) {
     input_type = ui::test::InteractionTestUtil::InputType::kMouse;
+  }
 #endif  // BUILDFLAG(IS_MAC)
 
   auto* const host = menu_item->GetWidget()->GetRootView();
@@ -306,8 +413,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectMenuItem(
 #endif
       MenuController* const controller = menu_item->GetMenuController();
       controller->SelectItemAndOpenSubmenu(menu_item);
-      ui::KeyEvent key_event(ui::ET_KEY_PRESSED, kSelectMenuKeyboardCode,
-                             ui::EF_NONE, ui::EventTimeForNow());
+      ui::KeyEvent key_event(ui::EventType::kKeyPressed,
+                             kSelectMenuKeyboardCode, ui::EF_NONE,
+                             ui::EventTimeForNow());
       controller->OnWillDispatchKeyEvent(&key_event);
       break;
     }
@@ -318,8 +426,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectMenuItem(
 ui::test::ActionResult InteractionTestUtilSimulatorViews::DoDefaultAction(
     ui::TrackedElement* element,
     InputType input_type) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   if (!DoDefaultAction(element->AsA<TrackedElementViews>()->view(),
                        input_type)) {
     LOG(ERROR) << "Failed to send default action to " << *element;
@@ -331,17 +440,20 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::DoDefaultAction(
 ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectTab(
     ui::TrackedElement* tab_collection,
     size_t index,
-    InputType input_type) {
+    InputType input_type,
+    std::optional<size_t> expected_index_after_selection) {
   // Currently, only TabbedPane is supported, but other types of tab
   // collections (e.g. browsers and tabstrips) may be supported by a different
   // kind of simulator specific to browser code, so if this is not a supported
   // View type, just return false instead of sending an error.
-  if (!tab_collection->IsA<TrackedElementViews>())
+  if (!tab_collection->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const pane = views::AsViewClass<TabbedPane>(
       tab_collection->AsA<TrackedElementViews>()->view());
-  if (!pane)
+  if (!pane) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
   // Unlike with the element type, an out-of-bounds tab is always an error.
   auto* const tab = pane->GetTabAt(index);
@@ -364,6 +476,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectTab(
       SendTapGesture(tab, GetCenter(tab));
       break;
     case ui::test::InteractionTestUtil::InputType::kKeyboard: {
+      CHECK_EQ(index, expected_index_after_selection.value_or(index))
+          << "Since keyboard input requires advancing through tabs one-by-one, "
+             "a different expected index cannot be used.";
       // Keyboard navigation is done by sending arrow keys to the currently-
       // selected tab. Scan through the tabs by using the right arrow until the
       // correct tab is selected; limit the number of times this is tried to
@@ -380,7 +495,7 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectTab(
             << index << " will pass through intermediate tabs.";
         for (int i = 0; i < count; ++i) {
           auto* const current_tab = pane->GetTabAt(pane->GetSelectedTabIndex());
-          SendKeyPress(current_tab, code);
+          ::views::test::SendKeyPress(current_tab, code);
         }
         if (index != pane->GetSelectedTabIndex()) {
           LOG(ERROR) << "Unable to cycle through tabs to reach index " << index;
@@ -390,6 +505,13 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectTab(
       break;
     }
   }
+  const size_t expected = expected_index_after_selection.value_or(index);
+  const size_t actual = pane->GetSelectedTabIndex();
+  if (actual != expected) {
+    LOG(ERROR) << "Expected to finish with index " << expected
+               << " but selected index was " << actual;
+    return ui::test::ActionResult::kFailed;
+  }
   return ui::test::ActionResult::kSucceeded;
 }
 
@@ -397,15 +519,17 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectDropdownItem(
     ui::TrackedElement* dropdown,
     size_t index,
     InputType input_type) {
-  if (!dropdown->IsA<TrackedElementViews>())
+  if (!dropdown->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const view = dropdown->AsA<TrackedElementViews>()->view();
   auto* const combobox = views::AsViewClass<Combobox>(view);
   auto* const editable_combobox = views::AsViewClass<EditableCombobox>(view);
-  if (!combobox && !editable_combobox)
+  if (!combobox && !editable_combobox) {
     return ui::test::ActionResult::kNotAttempted;
-  auto* const model = combobox ? combobox->GetModel()
-                               : editable_combobox->combobox_model_.get();
+  }
+  auto* const model =
+      combobox ? combobox->GetModel() : editable_combobox->GetComboboxModel();
   if (index >= model->GetItemCount()) {
     LOG(ERROR) << "Item index " << index << " is out of range, there are "
                << model->GetItemCount() << " items.";
@@ -417,7 +541,7 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectDropdownItem(
   // dropdown and selecting individual items.
   if (input_type == InputType::kDontCare) {
     if (combobox) {
-      combobox->SetSelectedRow(index);
+      combobox->MenuSelectionAt(index);
     } else {
       editable_combobox->SetText(model->GetItemAt(index));
     }
@@ -434,8 +558,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectDropdownItem(
 
   // This is required in case we want to repeatedly test a combobox; otherwise
   // it will refuse to open the second time.
-  if (combobox)
+  if (combobox) {
     combobox->closed_time_ = base::TimeTicks();
+  }
 
   // The highest-fidelity input simulation involves actually opening the
   // drop-down and selecting an item from the list.
@@ -459,7 +584,8 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SelectDropdownItem(
       case InputType::kDontCare:
       case InputType::kKeyboard:
         // Have to resort to keyboard input; DoDefaultAction() doesn't work.
-        SendKeyPress(editable_combobox->textfield_, ui::VKEY_DOWN);
+        ::views::test::SendKeyPress(editable_combobox->textfield_,
+                                    ui::VKEY_DOWN);
         break;
       default:
         LOG(WARNING) << "Mouse and touch input are not supported for "
@@ -477,15 +603,17 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::EnterText(
     ui::TrackedElement* element,
     std::u16string text,
     TextEntryMode mode) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const view = element->AsA<TrackedElementViews>()->view();
 
   // Currently, Textfields (and derived types like Textareas) are supported, as
   // well as EditableCombobox.
   Textfield* textfield = AsViewClass<Textfield>(view);
-  if (!textfield && IsViewClass<EditableCombobox>(view))
+  if (!textfield && IsViewClass<EditableCombobox>(view)) {
     textfield = AsViewClass<EditableCombobox>(view)->textfield_;
+  }
 
   if (!textfield) {
     return ui::test::ActionResult::kNotAttempted;
@@ -529,12 +657,51 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::EnterText(
 
 ui::test::ActionResult InteractionTestUtilSimulatorViews::ActivateSurface(
     ui::TrackedElement* element) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
   auto* const widget = element->AsA<TrackedElementViews>()->view()->GetWidget();
-  views::test::WidgetActivationWaiter waiter(widget, true);
-  widget->Activate();
+  if (!widget) {
+    LOG(WARNING) << "View not associated with a widget.";
+    return ui::test::ActionResult::kFailed;
+  }
+
+  return ActivateWidget(widget);
+}
+
+ui::test::ActionResult InteractionTestUtilSimulatorViews::FocusElement(
+    ui::TrackedElement* element) {
+  if (!element->IsA<TrackedElementViews>()) {
+    return ui::test::ActionResult::kNotAttempted;
+  }
+
+  auto* const view = element->AsA<TrackedElementViews>()->view();
+  if (!view->GetWidget()) {
+    LOG(WARNING) << "View not associated with a widget.";
+    return ui::test::ActionResult::kFailed;
+  }
+
+  // Note: this duplicates logic in View that is not public.
+  if (!view->IsFocusable()) {
+    if (!view->GetViewAccessibility().IsAccessibilityFocusable()) {
+      LOG(WARNING) << "View cannot request focus.";
+      return ui::test::ActionResult::kFailed;
+    }
+    LOG(WARNING) << "Switching focus manager to accessibility mode.";
+    view->GetFocusManager()->SetKeyboardAccessible(true);
+  }
+
+#if BUILDFLAG(IS_MAC)
+  if (!view->GetWidget()->IsActive()) {
+    LOG(WARNING) << "View cannot receive focus in inactive window on this "
+                    "platform; activate this surface first..";
+    return ui::test::ActionResult::kFailed;
+  }
+#endif
+
+  ViewFocusedWaiter waiter(*view);
+  view->RequestFocus();
   waiter.Wait();
   return ui::test::ActionResult::kSucceeded;
 }
@@ -542,8 +709,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::ActivateSurface(
 ui::test::ActionResult InteractionTestUtilSimulatorViews::SendAccelerator(
     ui::TrackedElement* element,
     ui::Accelerator accelerator) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
   element->AsA<TrackedElementViews>()
       ->view()
@@ -552,10 +720,37 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::SendAccelerator(
   return ui::test::ActionResult::kSucceeded;
 }
 
+ui::test::ActionResult InteractionTestUtilSimulatorViews::SendKeyPress(
+    ui::TrackedElement* element,
+    ui::KeyboardCode key,
+    int flags) {
+  if (!element->IsA<TrackedElementViews>()) {
+    return ui::test::ActionResult::kNotAttempted;
+  }
+
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+
+  const auto native_window = element->AsA<TrackedElementViews>()
+                                 ->view()
+                                 ->GetWidget()
+                                 ->GetNativeWindow();
+  const bool result = ui_controls::SendKeyPressNotifyWhenDone(
+      native_window, key, flags & ui::EF_CONTROL_DOWN,
+      flags & ui::EF_SHIFT_DOWN, flags & ui::EF_ALT_DOWN,
+      flags & ui::EF_COMMAND_DOWN, run_loop.QuitClosure());
+  if (!result) {
+    LOG(ERROR) << "Send key press failed. Is this the active window?";
+    return ui::test::ActionResult::kFailed;
+  }
+  run_loop.Run();
+  return ui::test::ActionResult::kSucceeded;
+}
+
 ui::test::ActionResult InteractionTestUtilSimulatorViews::Confirm(
     ui::TrackedElement* element) {
-  if (!element->IsA<TrackedElementViews>())
+  if (!element->IsA<TrackedElementViews>()) {
     return ui::test::ActionResult::kNotAttempted;
+  }
   auto* const view = element->AsA<TrackedElementViews>()->view();
 
   // Currently, only dialogs can be confirmed. Fetch the delegate and call
@@ -567,8 +762,9 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::Confirm(
     delegate = bubble->AsDialogDelegate();
   }
 
-  if (!delegate)
+  if (!delegate) {
     return ui::test::ActionResult::kNotAttempted;
+  }
 
   if (!delegate->GetOkButton()) {
     LOG(ERROR) << "Confirm(): cannot confirm dialog that has no OK button.";
@@ -579,6 +775,38 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::Confirm(
   return ui::test::ActionResult::kSucceeded;
 }
 
+// static
+bool InteractionTestUtilSimulatorViews::IsWayland() {
+#if BUILDFLAG(IS_OZONE)
+  return ui::OzonePlatform::GetPlatformNameForTest() == "wayland";
+#else
+  return false;
+#endif
+}
+
+// static
+ui::test::ActionResult InteractionTestUtilSimulatorViews::ActivateWidget(
+    Widget* widget) {
+#if HANDLE_WAYLAND_FAILURE
+  if (IsWayland()) {
+    WidgetActivationWaiterWayland waiter(widget);
+    widget->Activate();
+    if (!waiter.Wait()) {
+      LOG(WARNING)
+          << "Unable to activate widget due to lack of Wayland support for "
+             "widget activation; test is not meaningful on this platform.";
+      return ui::test::ActionResult::kKnownIncompatible;
+    }
+    return ui::test::ActionResult::kSucceeded;
+  }
+#endif  // HANDLE_WAYLAND_FAILURE
+
+  widget->Activate();
+  views::test::WaitForWidgetActive(widget, true);
+  return ui::test::ActionResult::kSucceeded;
+}
+
+// static
 bool InteractionTestUtilSimulatorViews::DoDefaultAction(View* view,
                                                         InputType input_type) {
   switch (input_type) {
@@ -591,7 +819,7 @@ bool InteractionTestUtilSimulatorViews::DoDefaultAction(View* view,
       SendTapGesture(view, GetCenter(view));
       return true;
     case ui::test::InteractionTestUtil::InputType::kKeyboard:
-      SendKeyPress(view, ui::VKEY_SPACE);
+      ::views::test::SendKeyPress(view, ui::VKEY_SPACE);
       return true;
   }
 }
@@ -608,7 +836,7 @@ void InteractionTestUtilSimulatorViews::PressButton(Button* button,
       break;
     case ui::test::InteractionTestUtil::InputType::kKeyboard:
     case ui::test::InteractionTestUtil::InputType::kDontCare:
-      SendKeyPress(button, ui::VKEY_SPACE);
+      ::views::test::SendKeyPress(button, ui::VKEY_SPACE);
       break;
   }
 }

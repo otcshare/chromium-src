@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -37,32 +37,32 @@ IN_PROC_BROWSER_TEST_F(BrowserThreadPostTaskBeforeInitBrowserTest,
                        ExpectFailures) {}
 
 IN_PROC_BROWSER_TEST_F(ContentBrowserTest, ExpectedThreadPriorities) {
-  base::ThreadPriorityForTest expected_priority =
-      base::ThreadPriorityForTest::kNormal;
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
-  // In browser main loop the kCompositing thread type is set.
-  // Only Windows, Android and ChromeOS will set kDisplay priority for
-  // kCompositing thread type. We omit Windows here as it has a special
-  // treatment for the UI thread.
-#if BUILDFLAG(IS_CHROMEOS)
-  // TODO(1340997): ChromeOS results a kNormal priority unexpectedly.
-  expected_priority = base::ThreadPriorityForTest::kNormal;
+  base::ThreadType expected_priority;
+  // In browser main loop the kDisplayCritical thread type is set.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+  // TODO(40230522): ChromeOS and Linux result in a kDefault priority
+  // unexpectedly.
+  expected_priority = base::ThreadType::kDefault;
 #else
-  expected_priority = base::ThreadPriorityForTest::kDisplay;
+  expected_priority = base::ThreadType::kDisplayCritical;
 #endif
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 
-  EXPECT_EQ(base::PlatformThread::GetCurrentThreadPriorityForTest(),
+  EXPECT_EQ(base::PlatformThread::GetCurrentEffectiveThreadTypeForTest(),
             expected_priority);
 
-  // Browser IO thread is set to kCompositing except for Windows, so the
-  // `expected_priority` for browser IO is the same as browser main's.
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          [](base::ThreadPriorityForTest expected_priority) {
-            EXPECT_EQ(base::PlatformThread::GetCurrentThreadPriorityForTest(),
-                      expected_priority);
+          [](base::ThreadType expected_priority) {
+            // Under IOThreadInteractiveThreadType, the IO thread will have a
+            // higher priority on Windows.
+            // TODO(crbug.com/423313079): Update expectation once
+            // IOThreadInteractiveThreadType is enabled by default.
+            EXPECT_TRUE(
+                base::PlatformThread::GetCurrentEffectiveThreadTypeForTest() ==
+                    expected_priority ||
+                base::PlatformThread::GetCurrentEffectiveThreadTypeForTest() ==
+                    base::ThreadType::kInteractive);
           },
           expected_priority));
   BrowserThread::RunAllPendingTasksOnThreadForTesting(BrowserThread::IO);

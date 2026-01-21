@@ -10,7 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "components/web_modal/modal_dialog_host.h"
 #include "components/web_modal/single_web_contents_dialog_manager.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget_observer.h"
 
 namespace views {
@@ -46,6 +46,7 @@ class NativeWebContentsModalDialogManagerViews
   void Close() override;
   void Focus() override;
   void Pulse() override;
+  bool IsActive() const override;
 
   // web_modal::ModalDialogHostObserver:
   void OnPositionRequiresUpdate() override;
@@ -80,8 +81,8 @@ class NativeWebContentsModalDialogManagerViews
   gfx::NativeWindow dialog_;
   raw_ptr<web_modal::WebContentsModalDialogHost> host_ = nullptr;
   bool host_destroying_ = false;
-  std::set<views::Widget*> observed_widgets_;
-  std::set<views::Widget*> shown_widgets_;
+  std::set<raw_ptr<views::Widget, SetExperimental>> observed_widgets_;
+  std::set<raw_ptr<views::Widget, SetExperimental>> shown_widgets_;
 };
 
 }  // namespace constrained_window

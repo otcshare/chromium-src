@@ -8,9 +8,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-
 #include "dbus/message.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
@@ -137,15 +137,15 @@ bool PropertySet::GetAndBlock(PropertyBase* property) {
   writer.AppendString(property->name());
 
   DCHECK(object_proxy_);
-  std::unique_ptr<dbus::Response> response(object_proxy_->CallMethodAndBlock(
-      &method_call, ObjectProxy::TIMEOUT_USE_DEFAULT));
+  auto result = object_proxy_->CallMethodAndBlock(
+      &method_call, ObjectProxy::TIMEOUT_USE_DEFAULT);
 
-  if (!response.get()) {
+  if (!result.has_value()) {
     LOG(WARNING) << property->name() << ": GetAndBlock: failed.";
     return false;
   }
 
-  MessageReader reader(response.get());
+  MessageReader reader(result->get());
   if (property->PopValueFromReader(&reader)) {
     property->set_valid(true);
     NotifyPropertyChanged(property->name());
@@ -203,11 +203,9 @@ bool PropertySet::SetAndBlock(PropertyBase* property) {
   property->AppendSetValueToWriter(&writer);
 
   DCHECK(object_proxy_);
-  std::unique_ptr<dbus::Response> response(object_proxy_->CallMethodAndBlock(
-      &method_call, ObjectProxy::TIMEOUT_USE_DEFAULT));
-  if (response.get())
-    return true;
-  return false;
+  return object_proxy_
+      ->CallMethodAndBlock(&method_call, ObjectProxy::TIMEOUT_USE_DEFAULT)
+      .has_value();
 }
 
 void PropertySet::OnSet(PropertyBase* property,
@@ -537,11 +535,11 @@ bool Property<std::vector<uint8_t>>::PopValueFromReader(MessageReader* reader) {
     return false;
 
   value_.clear();
-  const uint8_t* bytes = nullptr;
-  size_t length = 0;
-  if (!variant_reader.PopArrayOfBytes(&bytes, &length))
+  base::span<const uint8_t> bytes;
+  if (!variant_reader.PopArrayOfBytes(&bytes)) {
     return false;
-  value_.assign(bytes, bytes + length);
+  }
+  value_ = base::ToVector(bytes);
   return true;
 }
 
@@ -550,7 +548,7 @@ void Property<std::vector<uint8_t>>::AppendSetValueToWriter(
     MessageWriter* writer) {
   MessageWriter variant_writer(nullptr);
   writer->OpenVariant("ay", &variant_writer);
-  variant_writer.AppendArrayOfBytes(set_value_.data(), set_value_.size());
+  variant_writer.AppendArrayOfBytes(set_value_);
   writer->CloseContainer(&variant_writer);
 }
 
@@ -620,14 +618,14 @@ bool Property<std::vector<std::pair<std::vector<uint8_t>, uint16_t>>>::
       return false;
 
     std::pair<std::vector<uint8_t>, uint16_t> entry;
-    const uint8_t* bytes = nullptr;
-    size_t length = 0;
-    if (!struct_reader.PopArrayOfBytes(&bytes, &length))
+    base::span<const uint8_t> bytes;
+    if (!struct_reader.PopArrayOfBytes(&bytes)) {
       return false;
-    entry.first.assign(bytes, bytes + length);
+    }
+    entry.first = base::ToVector(bytes);
     if (!struct_reader.PopUint16(&entry.second))
       return false;
-    value_.push_back(entry);
+    value_.push_back(std::move(entry));
   }
   return true;
 }
@@ -642,8 +640,7 @@ void Property<std::vector<std::pair<std::vector<uint8_t>, uint16_t>>>::
   for (const auto& pair : set_value_) {
     dbus::MessageWriter struct_writer(nullptr);
     array_writer.OpenStruct(&struct_writer);
-    struct_writer.AppendArrayOfBytes(std::get<0>(pair).data(),
-                                     std::get<0>(pair).size());
+    struct_writer.AppendArrayOfBytes(std::get<0>(pair));
     struct_writer.AppendUint16(std::get<1>(pair));
     array_writer.CloseContainer(&struct_writer);
   }
@@ -675,22 +672,22 @@ bool Property<std::map<std::string, std::vector<uint8_t>>>::PopValueFromReader(
     if (!entry_reader.PopString(&key))
       return false;
 
-    const uint8_t* bytes = nullptr;
-    size_t length = 0;
-
+    base::span<const uint8_t> bytes;
     if (entry_reader.GetDataType() == Message::VARIANT) {
       // Make BlueZ happy since it wraps the array of bytes with a variant.
       MessageReader value_variant_reader(nullptr);
       if (!entry_reader.PopVariant(&value_variant_reader))
         return false;
-      if (!value_variant_reader.PopArrayOfBytes(&bytes, &length))
+      if (!value_variant_reader.PopArrayOfBytes(&bytes)) {
         return false;
+      }
     } else {
-      if (!entry_reader.PopArrayOfBytes(&bytes, &length))
+      if (!entry_reader.PopArrayOfBytes(&bytes)) {
         return false;
+      }
     }
 
-    value_[key].assign(bytes, bytes + length);
+    value_[key] = base::ToVector(bytes);
   }
   return true;
 }
@@ -712,8 +709,7 @@ void Property<std::map<std::string, std::vector<uint8_t>>>::
 
     MessageWriter value_varient_writer(nullptr);
     entry_writer.OpenVariant("ay", &value_varient_writer);
-    value_varient_writer.AppendArrayOfBytes(pair.second.data(),
-                                            pair.second.size());
+    value_varient_writer.AppendArrayOfBytes(pair.second);
     entry_writer.CloseContainer(&value_varient_writer);
 
     dict_writer.CloseContainer(&entry_writer);
@@ -747,22 +743,22 @@ bool Property<std::map<uint16_t, std::vector<uint8_t>>>::PopValueFromReader(
     if (!entry_reader.PopUint16(&key))
       return false;
 
-    const uint8_t* bytes = nullptr;
-    size_t length = 0;
-
+    base::span<const uint8_t> bytes;
     if (entry_reader.GetDataType() == Message::VARIANT) {
       // Make BlueZ happy since it wraps the array of bytes with a variant.
       MessageReader value_variant_reader(nullptr);
       if (!entry_reader.PopVariant(&value_variant_reader))
         return false;
-      if (!value_variant_reader.PopArrayOfBytes(&bytes, &length))
+      if (!value_variant_reader.PopArrayOfBytes(&bytes)) {
         return false;
+      }
     } else {
-      if (!entry_reader.PopArrayOfBytes(&bytes, &length))
+      if (!entry_reader.PopArrayOfBytes(&bytes)) {
         return false;
+      }
     }
 
-    value_[key].assign(bytes, bytes + length);
+    value_[key] = base::ToVector(bytes);
   }
   return true;
 }
@@ -784,8 +780,7 @@ void Property<std::map<uint16_t, std::vector<uint8_t>>>::AppendSetValueToWriter(
 
     MessageWriter value_varient_writer(nullptr);
     entry_writer.OpenVariant("ay", &value_varient_writer);
-    value_varient_writer.AppendArrayOfBytes(pair.second.data(),
-                                            pair.second.size());
+    value_varient_writer.AppendArrayOfBytes(pair.second);
     entry_writer.CloseContainer(&value_varient_writer);
 
     dict_writer.CloseContainer(&entry_writer);

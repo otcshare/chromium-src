@@ -4,18 +4,22 @@
 
 #include "media/base/video_util.h"
 
+#include <array>
 #include <cmath>
 
-#include "base/bind.h"
 #include "base/bits.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "media/base/limits.h"
@@ -24,14 +28,14 @@
 #include "media/base/video_types.h"
 #include "media/base/wait_and_replace_sync_token_client.h"
 #include "third_party/libyuv/include/libyuv.h"
-#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
+#include "third_party/skia/include/core/SkColorType.h"
 #include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
+#include "third_party/skia/include/core/SkPixmap.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
-#include "third_party/skia/include/gpu/gl/GrGLTypes.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "third_party/skia/include/gpu/GpuTypes.h"
 
 namespace media {
 
@@ -45,32 +49,39 @@ void FillRegionOutsideVisibleRect(uint8_t* data,
                                   const gfx::Size& visible_size) {
   if (visible_size.IsEmpty()) {
     if (!coded_size.IsEmpty())
-      memset(data, 0, coded_size.height() * stride);
+      UNSAFE_TODO(memset(data, 0, coded_size.height() * stride));
     return;
   }
 
   const int coded_width = coded_size.width();
   if (visible_size.width() < coded_width) {
     const int pad_length = coded_width - visible_size.width();
-    uint8_t* dst = data + visible_size.width();
-    for (int i = 0; i < visible_size.height(); ++i, dst += stride)
-      memset(dst, *(dst - 1), pad_length);
+    uint8_t* dst = UNSAFE_TODO(data + visible_size.width());
+    for (int i = 0; i < visible_size.height();
+         ++i, UNSAFE_TODO(dst += stride)) {
+      UNSAFE_TODO(memset(dst, *(dst - 1), pad_length));
+    }
   }
 
   if (visible_size.height() < coded_size.height()) {
-    uint8_t* dst = data + visible_size.height() * stride;
-    uint8_t* src = dst - stride;
+    uint8_t* dst = UNSAFE_TODO(data + visible_size.height() * stride);
+    uint8_t* src = UNSAFE_TODO(dst - stride);
     for (int i = visible_size.height(); i < coded_size.height();
-         ++i, dst += stride)
-      memcpy(dst, src, coded_width);
+         ++i, UNSAFE_TODO(dst += stride)) {
+      UNSAFE_TODO(memcpy(dst, src, coded_width));
+    }
   }
 }
 
 VideoPixelFormat ReadbackFormat(const VideoFrame& frame) {
-  // The |frame|.BitDepth() restriction is to avoid treating a P016LE frame as a
+  // The |frame|.BitDepth() restriction is to avoid treating a P010LE frame as a
   // low-bit depth frame.
-  if (frame.RequiresExternalSampler() && frame.BitDepth() == 8u)
+  bool si_prefers_external_sampler =
+      frame.HasSharedImage() &&
+      frame.shared_image()->format().PrefersExternalSampler();
+  if (si_prefers_external_sampler && frame.BitDepth() == 8u) {
     return PIXEL_FORMAT_XRGB;
+  }
 
   switch (frame.format()) {
     case PIXEL_FORMAT_I420:
@@ -82,6 +93,8 @@ VideoPixelFormat ReadbackFormat(const VideoFrame& frame) {
     case PIXEL_FORMAT_ABGR:
     case PIXEL_FORMAT_XBGR:
     case PIXEL_FORMAT_NV12:
+    case PIXEL_FORMAT_NV16:
+    case PIXEL_FORMAT_NV24:
     case PIXEL_FORMAT_NV12A:
       return frame.format();
     default:
@@ -90,166 +103,51 @@ VideoPixelFormat ReadbackFormat(const VideoFrame& frame) {
   }
 }
 
-GrGLenum GLFormatForPlane(VideoPixelFormat format, size_t plane) {
-  switch (SkColorTypeForPlane(format, plane)) {
-    case kAlpha_8_SkColorType:
-      return GL_R8_EXT;
-    case kR8G8_unorm_SkColorType:
-      return GL_RG8_EXT;
-    case kRGBA_8888_SkColorType:
-      return GL_RGBA8_OES;
-    case kBGRA_8888_SkColorType:
-      return GL_BGRA8_EXT;
-    default:
-      NOTREACHED();
-      return 0;
-  }
-}
-
-bool ReadbackTexturePlaneToMemorySyncSkImage(const VideoFrame& src_frame,
-                                             size_t src_plane,
-                                             gfx::Rect& src_rect,
-                                             uint8_t* dest_pixels,
-                                             size_t dest_stride,
-                                             gpu::raster::RasterInterface* ri,
-                                             GrDirectContext* gr_context) {
-  DCHECK(gr_context);
-
-  VideoPixelFormat format = ReadbackFormat(src_frame);
-  if (format == PIXEL_FORMAT_UNKNOWN) {
-    DLOG(ERROR) << "Readback is not possible for this frame: "
-                << src_frame.AsHumanReadableString();
-    return false;
-  }
-
-  int width = src_frame.columns(src_plane);
-  int height = src_frame.rows(src_plane);
-  bool has_alpha = !IsOpaque(format) && src_frame.NumTextures() == 1;
-
-  const gpu::MailboxHolder& holder = src_frame.mailbox_holder(src_plane);
-  DCHECK(!holder.mailbox.IsZero());
-  ri->WaitSyncTokenCHROMIUM(holder.sync_token.GetConstData());
-  auto texture_id = ri->CreateAndConsumeForGpuRaster(holder.mailbox);
-  if (holder.mailbox.IsSharedImage()) {
-    ri->BeginSharedImageAccessDirectCHROMIUM(
-        texture_id, GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM);
-  }
-  base::ScopedClosureRunner cleanup(base::BindOnce(
-      [](GLuint texture_id, bool shared, gpu::raster::RasterInterface* ri) {
-        if (shared)
-          ri->EndSharedImageAccessDirectCHROMIUM(texture_id);
-        ri->DeleteGpuRasterTexture(texture_id);
-      },
-      texture_id, holder.mailbox.IsSharedImage(), ri));
-
-  GrGLenum texture_format = GLFormatForPlane(format, src_plane);
-  SkColorType sk_color_type = SkColorTypeForPlane(format, src_plane);
-  SkAlphaType sk_alpha_type =
-      has_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
-
-  GrGLTextureInfo gl_texture_info;
-  gl_texture_info.fID = texture_id;
-  gl_texture_info.fTarget = holder.texture_target;
-  gl_texture_info.fFormat = texture_format;
-  GrBackendTexture texture(width, height, GrMipMapped::kNo, gl_texture_info);
-
-  auto image =
-      SkImage::MakeFromTexture(gr_context, texture,
-                               src_frame.metadata().texture_origin_is_top_left
-                                   ? kTopLeft_GrSurfaceOrigin
-                                   : kBottomLeft_GrSurfaceOrigin,
-                               sk_color_type, sk_alpha_type,
-                               /*colorSpace=*/nullptr);
-  if (!image) {
-    DLOG(ERROR) << "Can't create SkImage from texture plane " << src_plane;
-    return false;
-  }
-
-  auto dest_info = SkImageInfo::Make(src_rect.width(), src_rect.height(),
-                                     sk_color_type, sk_alpha_type);
-  SkPixmap dest_pixmap(dest_info, dest_pixels, dest_stride);
-  if (!image->readPixels(gr_context, dest_pixmap, src_rect.x(), src_rect.y(),
-                         SkImage::kDisallow_CachingHint)) {
-    DLOG(ERROR) << "Plane readback failed."
-                << " plane:" << src_plane << " width: " << width
-                << " height: " << height;
-    return false;
-  }
-
-  return true;
-}
-
-bool ReadbackTexturePlaneToMemorySyncOOP(const VideoFrame& src_frame,
-                                         size_t src_plane,
-                                         gfx::Rect& src_rect,
-                                         uint8_t* dest_pixels,
-                                         size_t dest_stride,
-                                         gpu::raster::RasterInterface* ri) {
-  VideoPixelFormat format = ReadbackFormat(src_frame);
-  if (format == PIXEL_FORMAT_UNKNOWN) {
-    DLOG(ERROR) << "Readback is not possible for this frame: "
-                << src_frame.AsHumanReadableString();
-    return false;
-  }
-
-  bool has_alpha = !IsOpaque(format) && src_frame.NumTextures() == 1;
-
-  const gpu::MailboxHolder& holder = src_frame.mailbox_holder(src_plane);
-  DCHECK(!holder.mailbox.IsZero());
-  ri->WaitSyncTokenCHROMIUM(holder.sync_token.GetConstData());
-
-  SkColorType sk_color_type = SkColorTypeForPlane(format, src_plane);
-  SkAlphaType sk_alpha_type =
-      has_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
-
-  auto info = SkImageInfo::Make(src_rect.width(), src_rect.height(),
-                                sk_color_type, sk_alpha_type);
-  ri->ReadbackImagePixels(holder.mailbox, info, dest_stride, src_rect.x(),
-                          src_rect.y(), dest_pixels);
-  return ri->GetGraphicsResetStatusKHR() == GL_NO_ERROR &&
-         ri->GetError() == GL_NO_ERROR;
-}
-
 void LetterboxPlane(const gfx::Rect& view_area_in_bytes,
-                    uint8_t* ptr,
+                    base::span<uint8_t> plane_data,
                     int rows,
                     int row_bytes,
                     int stride,
                     int bytes_per_element,
                     uint8_t fill_byte) {
   if (view_area_in_bytes.IsEmpty()) {
-    libyuv::SetPlane(ptr, stride, row_bytes, rows, fill_byte);
+    libyuv::SetPlane(plane_data.data(), stride, row_bytes, rows, fill_byte);
     return;
   }
 
   if (view_area_in_bytes.y() > 0) {
-    libyuv::SetPlane(ptr, stride, row_bytes, view_area_in_bytes.y(), fill_byte);
-    ptr += stride * view_area_in_bytes.y();
+    libyuv::SetPlane(plane_data.data(), stride, row_bytes,
+                     view_area_in_bytes.y(), fill_byte);
+    plane_data = plane_data.subspan(
+        static_cast<size_t>(stride * view_area_in_bytes.y()));
   }
 
   if (view_area_in_bytes.width() < row_bytes) {
     if (view_area_in_bytes.x() > 0) {
-      libyuv::SetPlane(ptr, stride, view_area_in_bytes.x(),
+      libyuv::SetPlane(plane_data.data(), stride, view_area_in_bytes.x(),
                        view_area_in_bytes.height(), fill_byte);
     }
     if (view_area_in_bytes.right() < row_bytes) {
-      libyuv::SetPlane(ptr + view_area_in_bytes.right(), stride,
-                       row_bytes - view_area_in_bytes.right(),
-                       view_area_in_bytes.height(), fill_byte);
+      libyuv::SetPlane(
+          plane_data.subspan(static_cast<size_t>(view_area_in_bytes.right()))
+              .data(),
+          stride, row_bytes - view_area_in_bytes.right(),
+          view_area_in_bytes.height(), fill_byte);
     }
   }
 
-  ptr += stride * view_area_in_bytes.height();
+  plane_data = plane_data.subspan(
+      static_cast<size_t>(stride * view_area_in_bytes.height()));
 
   if (view_area_in_bytes.bottom() < rows) {
-    libyuv::SetPlane(ptr, stride, row_bytes, rows - view_area_in_bytes.bottom(),
-                     fill_byte);
+    libyuv::SetPlane(plane_data.data(), stride, row_bytes,
+                     rows - view_area_in_bytes.bottom(), fill_byte);
   }
 }
 
 void LetterboxPlane(VideoFrame* frame,
                     int plane,
-                    uint8_t* ptr,
+                    base::span<uint8_t> plane_data,
                     const gfx::Rect& view_area_in_pixels,
                     uint8_t fill_byte) {
   const int rows = frame->rows(plane);
@@ -269,37 +167,82 @@ void LetterboxPlane(VideoFrame* frame,
   CHECK_LE(view_area_in_bytes.right(), row_bytes);
   CHECK_LE(view_area_in_bytes.bottom(), rows);
 
-  LetterboxPlane(view_area_in_bytes, ptr, rows, row_bytes, stride,
+  LetterboxPlane(view_area_in_bytes, plane_data, rows, row_bytes, stride,
                  bytes_per_element, fill_byte);
 }
 
-// Helper for `LetterboxVideoFrame()`, assumes that if |frame| is GMB-backed,
-// the GpuMemoryBuffer is already mapped (via a call to `Map()`).
+// Helper for `LetterboxVideoFrame()`, assumes that if |frame| is
+// MappableSI-backed, the frame's shared image is already mapped (via a call to
+// `Map()`).
 void LetterboxPlane(VideoFrame* frame,
+                    gpu::ClientSharedImage::ScopedMapping* scoped_mapping,
                     int plane,
                     const gfx::Rect& view_area_in_pixels,
                     uint8_t fill_byte) {
-  uint8_t* ptr = nullptr;
+  base::span<uint8_t> plane_data;
   if (frame->IsMappable()) {
-    ptr = frame->writable_data(plane);
-  } else if (frame->HasGpuMemoryBuffer()) {
-    ptr = static_cast<uint8_t*>(frame->GetGpuMemoryBuffer()->memory(plane));
+    plane_data = frame->writable_span(plane);
+  } else if (scoped_mapping) {
+    plane_data = scoped_mapping->GetMemoryForPlane(plane);
+  }
+  CHECK(!plane_data.empty());
+
+  LetterboxPlane(frame, plane, plane_data, view_area_in_pixels, fill_byte);
+}
+
+void ProcessAsyncMappingResult(
+    scoped_refptr<VideoFrame> video_frame,
+    base::OnceCallback<void(scoped_refptr<VideoFrame>)> result_cb,
+    std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> scoped_mapping) {
+  CHECK(video_frame);
+  if (!scoped_mapping) {
+    std::move(result_cb).Run(nullptr);
+    return;
   }
 
-  DCHECK(ptr);
+  const size_t num_planes = VideoFrame::NumPlanes(video_frame->format());
+  std::array<base::span<uint8_t>, VideoFrame::kMaxPlanes> planes = {};
+  for (size_t i = 0; i < num_planes; i++) {
+    planes[i] = scoped_mapping->GetMemoryForPlane(i);
+  }
 
-  LetterboxPlane(frame, plane, ptr, view_area_in_pixels, fill_byte);
+  auto mapped_frame = VideoFrame::WrapExternalYuvDataWithLayout(
+      video_frame->layout(), video_frame->visible_rect(),
+      video_frame->natural_size(), planes[0], planes[1], planes[2],
+      video_frame->timestamp());
+
+  if (!mapped_frame) {
+    std::move(result_cb).Run(nullptr);
+    return;
+  }
+
+  mapped_frame->set_color_space(video_frame->ColorSpace());
+  mapped_frame->metadata().MergeMetadataFrom(video_frame->metadata());
+
+  // Pass |video_frame| so that it outlives |mapped_frame| and the mapped buffer
+  // is unmapped on destruction.
+  mapped_frame->AddDestructionObserver(base::BindOnce(
+      [](scoped_refptr<VideoFrame> frame,
+         std::unique_ptr<gpu::ClientSharedImage::ScopedMapping>
+             scoped_mapping) {
+        CHECK(scoped_mapping);
+        // The VideoFrame::ScopedMapping must be destroyed before the
+        // VideoFrame that produced it in order to avoid dangling pointers.
+        scoped_mapping.reset();
+      },
+      std::move(video_frame), std::move(scoped_mapping)));
+  std::move(result_cb).Run(std::move(mapped_frame));
 }
 
 }  // namespace
 
 void FillYUV(VideoFrame* frame, uint8_t y, uint8_t u, uint8_t v) {
-  libyuv::I420Rect(frame->writable_data(VideoFrame::kYPlane),
-                   frame->stride(VideoFrame::kYPlane),
-                   frame->writable_data(VideoFrame::kUPlane),
-                   frame->stride(VideoFrame::kUPlane),
-                   frame->writable_data(VideoFrame::kVPlane),
-                   frame->stride(VideoFrame::kVPlane), 0, 0,
+  libyuv::I420Rect(frame->writable_data(VideoFrame::Plane::kY),
+                   frame->stride(VideoFrame::Plane::kY),
+                   frame->writable_data(VideoFrame::Plane::kU),
+                   frame->stride(VideoFrame::Plane::kU),
+                   frame->writable_data(VideoFrame::Plane::kV),
+                   frame->stride(VideoFrame::Plane::kV), 0, 0,
                    frame->coded_size().width(), frame->coded_size().height(), y,
                    u, v);
 }
@@ -309,22 +252,23 @@ void FillYUVA(VideoFrame* frame, uint8_t y, uint8_t u, uint8_t v, uint8_t a) {
   FillYUV(frame, y, u, v);
 
   // Fill the A plane.
-  libyuv::SetPlane(frame->writable_data(VideoFrame::kAPlane),
-                   frame->stride(VideoFrame::kAPlane),
-                   frame->row_bytes(VideoFrame::kAPlane),
-                   frame->rows(VideoFrame::kAPlane), a);
+  libyuv::SetPlane(frame->writable_data(VideoFrame::Plane::kA),
+                   frame->stride(VideoFrame::Plane::kA),
+                   frame->row_bytes(VideoFrame::Plane::kA),
+                   frame->rows(VideoFrame::Plane::kA), a);
 }
 
 void LetterboxVideoFrame(VideoFrame* frame, const gfx::Rect& view_area) {
-  bool gmb_mapped = false;
-  if (!frame->IsMappable() && frame->HasGpuMemoryBuffer()) {
-    gmb_mapped = frame->GetGpuMemoryBuffer()->Map();
-    DCHECK(gmb_mapped);
+  std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> scoped_mapping;
+  if (frame->HasMappableSharedImage()) {
+    scoped_mapping = frame->shared_image()->Map();
+    CHECK(scoped_mapping);
   }
 
   switch (frame->format()) {
     case PIXEL_FORMAT_ARGB:
-      LetterboxPlane(frame, VideoFrame::kARGBPlane, view_area, 0x00);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kARGB,
+                     view_area, 0x00);
       break;
     case PIXEL_FORMAT_YV12:
     case PIXEL_FORMAT_I420: {
@@ -333,11 +277,14 @@ void LetterboxVideoFrame(VideoFrame* frame, const gfx::Rect& view_area) {
       DCHECK(!(view_area.width() & 1));
       DCHECK(!(view_area.height() & 1));
 
-      LetterboxPlane(frame, VideoFrame::kYPlane, view_area, 0x00);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kY,
+                     view_area, 0x00);
       gfx::Rect half_view_area(view_area.x() / 2, view_area.y() / 2,
                                view_area.width() / 2, view_area.height() / 2);
-      LetterboxPlane(frame, VideoFrame::kUPlane, half_view_area, 0x80);
-      LetterboxPlane(frame, VideoFrame::kVPlane, half_view_area, 0x80);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kU,
+                     half_view_area, 0x80);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kV,
+                     half_view_area, 0x80);
       break;
     }
     case PIXEL_FORMAT_NV12: {
@@ -346,11 +293,13 @@ void LetterboxVideoFrame(VideoFrame* frame, const gfx::Rect& view_area) {
       DCHECK(!(view_area.width() & 1));
       DCHECK(!(view_area.height() & 1));
 
-      LetterboxPlane(frame, VideoFrame::kYPlane, view_area, 0x00);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kY,
+                     view_area, 0x00);
       gfx::Rect half_view_area(view_area.x() / 2, view_area.y() / 2,
                                view_area.width() / 2, view_area.height() / 2);
 
-      LetterboxPlane(frame, VideoFrame::kUVPlane, half_view_area, 0x80);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kUV,
+                     half_view_area, 0x80);
       break;
     }
     case PIXEL_FORMAT_NV12A: {
@@ -359,19 +308,18 @@ void LetterboxVideoFrame(VideoFrame* frame, const gfx::Rect& view_area) {
       DCHECK(!(view_area.width() & 1));
       DCHECK(!(view_area.height() & 1));
 
-      LetterboxPlane(frame, VideoFrame::kYPlane, view_area, 0x00);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kY,
+                     view_area, 0x00);
       gfx::Rect half_view_area(view_area.x() / 2, view_area.y() / 2,
                                view_area.width() / 2, view_area.height() / 2);
-      LetterboxPlane(frame, VideoFrame::kUVPlane, half_view_area, 0x80);
-      LetterboxPlane(frame, VideoFrame::kAPlaneTriPlanar, view_area, 0x00);
+      LetterboxPlane(frame, scoped_mapping.get(), VideoFrame::Plane::kUV,
+                     half_view_area, 0x80);
+      LetterboxPlane(frame, scoped_mapping.get(),
+                     VideoFrame::Plane::kATriPlanar, view_area, 0x00);
       break;
     }
     default:
       NOTREACHED();
-  }
-
-  if (gmb_mapped) {
-    frame->GetGpuMemoryBuffer()->Unmap();
   }
 }
 
@@ -410,21 +358,21 @@ void RotatePlaneByPixels(const uint8_t* src,
       if (flip_vert) {
         // Rotation 180.
         dest_row_step = -width;
-        dest += height * width - 1;
+        UNSAFE_TODO(dest += height * width - 1);
       } else {
-        dest += width - 1;
+        UNSAFE_TODO(dest += width - 1);
       }
     } else {
       if (flip_vert) {
         // Fast copy by rows.
-        dest += width * (height - 1);
+        UNSAFE_TODO(dest += width * (height - 1));
         for (int row = 0; row < height; ++row) {
-          memcpy(dest, src, width);
-          src += width;
-          dest -= width;
+          UNSAFE_TODO(memcpy(dest, src, width));
+          UNSAFE_TODO(src += width);
+          UNSAFE_TODO(dest -= width);
         }
       } else {
-        memcpy(dest, src, width * height);
+        UNSAFE_TODO(memcpy(dest, src, width * height));
       }
       return;
     }
@@ -432,11 +380,11 @@ void RotatePlaneByPixels(const uint8_t* src,
     int offset;
     if (width > height) {
       offset = (width - height) / 2;
-      src += offset;
+      UNSAFE_TODO(src += offset);
       num_rows = num_cols = height;
     } else {
       offset = (height - width) / 2;
-      src += width * offset;
+      UNSAFE_TODO(src += width * offset);
       num_rows = num_cols = width;
     }
 
@@ -444,18 +392,18 @@ void RotatePlaneByPixels(const uint8_t* src,
     dest_row_step = (flip_horiz ? 1 : -1);
     if (flip_horiz) {
       if (flip_vert) {
-        dest += (width > height ? width * (height - 1) + offset :
-                                  width * (height - offset - 1));
+        UNSAFE_TODO(dest += (width > height ? width * (height - 1) + offset
+                                            : width * (height - offset - 1)));
       } else {
-        dest += (width > height ? offset : width * offset);
+        UNSAFE_TODO(dest += (width > height ? offset : width * offset));
       }
     } else {
       if (flip_vert) {
-        dest += (width > height ?  width * height - offset - 1 :
-                                   width * (height - offset) - 1);
+        UNSAFE_TODO(dest += (width > height ? width * height - offset - 1
+                                            : width * (height - offset) - 1));
       } else {
-        dest += (width > height ? width - offset - 1 :
-                                  width * (offset + 1) - 1);
+        UNSAFE_TODO(dest += (width > height ? width - offset - 1
+                                            : width * (offset + 1) - 1));
       }
     }
   } else {
@@ -467,11 +415,11 @@ void RotatePlaneByPixels(const uint8_t* src,
     const uint8_t* src_ptr = src;
     uint8_t* dest_ptr = dest;
     for (int col = 0; col < num_cols; ++col) {
-      *dest_ptr = *src_ptr++;
-      dest_ptr += dest_col_step;
+      *dest_ptr = *UNSAFE_TODO(src_ptr++);
+      UNSAFE_TODO(dest_ptr += dest_col_step);
     }
-    src += src_stride;
-    dest += dest_row_step;
+    UNSAFE_TODO(src += src_stride);
+    UNSAFE_TODO(dest += dest_row_step);
   }
 }
 
@@ -618,25 +566,25 @@ gfx::Size PadToMatchAspectRatio(const gfx::Size& size,
 
 scoped_refptr<VideoFrame> ConvertToMemoryMappedFrame(
     scoped_refptr<VideoFrame> video_frame) {
-  DCHECK(video_frame);
-  DCHECK(video_frame->HasGpuMemoryBuffer());
+  CHECK(video_frame);
+  CHECK(video_frame->HasMappableSharedImage());
 
-  auto* gmb = video_frame->GetGpuMemoryBuffer();
-  if (!gmb->Map())
+  auto scoped_mapping = video_frame->shared_image()->Map();
+  if (!scoped_mapping) {
     return nullptr;
+  }
 
   const size_t num_planes = VideoFrame::NumPlanes(video_frame->format());
-  uint8_t* plane_addrs[VideoFrame::kMaxPlanes] = {};
+  std::array<base::span<uint8_t>, VideoFrame::kMaxPlanes> planes = {};
   for (size_t i = 0; i < num_planes; i++)
-    plane_addrs[i] = static_cast<uint8_t*>(gmb->memory(i));
+    planes[i] = scoped_mapping->GetMemoryForPlane(i);
 
   auto mapped_frame = VideoFrame::WrapExternalYuvDataWithLayout(
       video_frame->layout(), video_frame->visible_rect(),
-      video_frame->natural_size(), plane_addrs[0], plane_addrs[1],
-      plane_addrs[2], video_frame->timestamp());
+      video_frame->natural_size(), planes[0], planes[1], planes[2],
+      video_frame->timestamp());
 
   if (!mapped_frame) {
-    gmb->Unmap();
     return nullptr;
   }
 
@@ -646,12 +594,26 @@ scoped_refptr<VideoFrame> ConvertToMemoryMappedFrame(
   // Pass |video_frame| so that it outlives |mapped_frame| and the mapped buffer
   // is unmapped on destruction.
   mapped_frame->AddDestructionObserver(base::BindOnce(
-      [](scoped_refptr<VideoFrame> frame) {
-        DCHECK(frame->HasGpuMemoryBuffer());
-        frame->GetGpuMemoryBuffer()->Unmap();
+      [](scoped_refptr<VideoFrame> frame,
+         std::unique_ptr<gpu::ClientSharedImage::ScopedMapping>
+             scoped_mapping) {
+        CHECK(scoped_mapping);
+        // The ScopedMapping must be destroyed before the VideoFrame that
+        // produced it in order to avoid dangling pointers.
+        scoped_mapping.reset();
       },
-      std::move(video_frame)));
+      std::move(video_frame), std::move(scoped_mapping)));
   return mapped_frame;
+}
+
+void ConvertToMemoryMappedFrameAsync(
+    scoped_refptr<VideoFrame> video_frame,
+    base::OnceCallback<void(scoped_refptr<VideoFrame>)> result_cb) {
+  CHECK(video_frame);
+  CHECK(video_frame->HasMappableSharedImage());
+
+  video_frame->shared_image()->MapAsync(base::BindOnce(
+      &ProcessAsyncMappingResult, video_frame, std::move(result_cb)));
 }
 
 scoped_refptr<VideoFrame> WrapAsI420VideoFrame(
@@ -673,41 +635,42 @@ bool I420CopyWithPadding(const VideoFrame& src_frame, VideoFrame* dst_frame) {
             src_frame.visible_rect().height());
   DCHECK(dst_frame->visible_rect().origin().IsOrigin());
 
-  if (libyuv::I420Copy(src_frame.visible_data(VideoFrame::kYPlane),
-                       src_frame.stride(VideoFrame::kYPlane),
-                       src_frame.visible_data(VideoFrame::kUPlane),
-                       src_frame.stride(VideoFrame::kUPlane),
-                       src_frame.visible_data(VideoFrame::kVPlane),
-                       src_frame.stride(VideoFrame::kVPlane),
-                       dst_frame->writable_data(VideoFrame::kYPlane),
-                       dst_frame->stride(VideoFrame::kYPlane),
-                       dst_frame->writable_data(VideoFrame::kUPlane),
-                       dst_frame->stride(VideoFrame::kUPlane),
-                       dst_frame->writable_data(VideoFrame::kVPlane),
-                       dst_frame->stride(VideoFrame::kVPlane),
+  if (libyuv::I420Copy(src_frame.visible_data(VideoFrame::Plane::kY),
+                       src_frame.stride(VideoFrame::Plane::kY),
+                       src_frame.visible_data(VideoFrame::Plane::kU),
+                       src_frame.stride(VideoFrame::Plane::kU),
+                       src_frame.visible_data(VideoFrame::Plane::kV),
+                       src_frame.stride(VideoFrame::Plane::kV),
+                       dst_frame->writable_data(VideoFrame::Plane::kY),
+                       dst_frame->stride(VideoFrame::Plane::kY),
+                       dst_frame->writable_data(VideoFrame::Plane::kU),
+                       dst_frame->stride(VideoFrame::Plane::kU),
+                       dst_frame->writable_data(VideoFrame::Plane::kV),
+                       dst_frame->stride(VideoFrame::Plane::kV),
                        src_frame.visible_rect().width(),
-                       src_frame.visible_rect().height()))
+                       src_frame.visible_rect().height())) {
     return false;
+  }
 
   // Padding the region outside the visible rect with the repeated last
   // column / row of the visible rect. This can improve the coding efficiency.
-  FillRegionOutsideVisibleRect(dst_frame->writable_data(VideoFrame::kYPlane),
-                               dst_frame->stride(VideoFrame::kYPlane),
+  FillRegionOutsideVisibleRect(dst_frame->writable_data(VideoFrame::Plane::kY),
+                               dst_frame->stride(VideoFrame::Plane::kY),
                                dst_frame->coded_size(),
                                src_frame.visible_rect().size());
   FillRegionOutsideVisibleRect(
-      dst_frame->writable_data(VideoFrame::kUPlane),
-      dst_frame->stride(VideoFrame::kUPlane),
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kUPlane,
+      dst_frame->writable_data(VideoFrame::Plane::kU),
+      dst_frame->stride(VideoFrame::Plane::kU),
+      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kU,
                             dst_frame->coded_size()),
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kUPlane,
+      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kU,
                             src_frame.visible_rect().size()));
   FillRegionOutsideVisibleRect(
-      dst_frame->writable_data(VideoFrame::kVPlane),
-      dst_frame->stride(VideoFrame::kVPlane),
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kVPlane,
+      dst_frame->writable_data(VideoFrame::Plane::kV),
+      dst_frame->stride(VideoFrame::Plane::kV),
+      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kV,
                             dst_frame->coded_size()),
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kVPlane,
+      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kV,
                             src_frame.visible_rect().size()));
 
   return true;
@@ -716,12 +679,11 @@ bool I420CopyWithPadding(const VideoFrame& src_frame, VideoFrame* dst_frame) {
 scoped_refptr<VideoFrame> ReadbackTextureBackedFrameToMemorySync(
     VideoFrame& txt_frame,
     gpu::raster::RasterInterface* ri,
-    GrDirectContext* gr_context,
     VideoFramePool* pool) {
   DCHECK(ri);
 
-  TRACE_EVENT2("media", "ReadbackTextureBackedFrameToMemorySync", "timestamp",
-               txt_frame.timestamp(), "gr_ctx", !!gr_context);
+  TRACE_EVENT1("media", "ReadbackTextureBackedFrameToMemorySync", "timestamp",
+               txt_frame.timestamp());
   VideoPixelFormat format = ReadbackFormat(txt_frame);
   if (format == PIXEL_FORMAT_UNKNOWN) {
     DLOG(ERROR) << "Readback is not possible for this frame: "
@@ -738,14 +700,18 @@ scoped_refptr<VideoFrame> ReadbackTextureBackedFrameToMemorySync(
                  txt_frame.natural_size(), txt_frame.timestamp());
   result->set_color_space(txt_frame.ColorSpace());
   result->metadata().MergeMetadataFrom(txt_frame.metadata());
-  result->metadata().ClearTextureFrameMedatada();
+  result->metadata().ClearTextureFrameMetadata();
 
+  // NOTE: Iterating over the number of planes of the readback format (rather
+  // than `txt_frame`) ensures that frames with external
+  // sampling are correctly sampled as a single opaque texture, as
+  // ReadbackFormat() returns RGB for such frames.
   size_t planes = VideoFrame::NumPlanes(format);
   for (size_t plane = 0; plane < planes; plane++) {
     gfx::Rect src_rect(0, 0, txt_frame.columns(plane), txt_frame.rows(plane));
-    if (!ReadbackTexturePlaneToMemorySync(
-            txt_frame, plane, src_rect, result->writable_data(plane),
-            result->stride(plane), ri, gr_context)) {
+    if (!ReadbackTexturePlaneToMemorySync(txt_frame, plane, src_rect,
+                                          result->writable_data(plane),
+                                          result->stride(plane), ri)) {
       return nullptr;
     }
   }
@@ -757,482 +723,48 @@ bool ReadbackTexturePlaneToMemorySync(VideoFrame& src_frame,
                                       gfx::Rect& src_rect,
                                       uint8_t* dest_pixels,
                                       size_t dest_stride,
-                                      gpu::raster::RasterInterface* ri,
-                                      GrDirectContext* gr_context) {
+                                      gpu::raster::RasterInterface* ri) {
   DCHECK(ri);
-
-  bool result;
-  if (gr_context) {
-    result = ReadbackTexturePlaneToMemorySyncSkImage(
-        src_frame, src_plane, src_rect, dest_pixels, dest_stride, ri,
-        gr_context);
-  } else {
-    result = ReadbackTexturePlaneToMemorySyncOOP(src_frame, src_plane, src_rect,
-                                                 dest_pixels, dest_stride, ri);
+  VideoPixelFormat format = ReadbackFormat(src_frame);
+  if (format == PIXEL_FORMAT_UNKNOWN) {
+    DLOG(ERROR) << "Readback is not possible for this frame: "
+                << src_frame.AsHumanReadableString();
+    return false;
   }
-  WaitAndReplaceSyncTokenClient client(ri);
-  src_frame.UpdateReleaseSyncToken(&client);
+
+  bool has_alpha = !IsOpaque(format);
+  auto sk_color_type = SkColorTypeForPlane(format, src_plane);
+  auto sk_alpha_type = has_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
+
+  auto info = SkImageInfo::Make(src_rect.width(), src_rect.height(),
+                                sk_color_type, sk_alpha_type);
+
+  // Perform readback passing the appropriate `src_plane` for the mailbox.
+  auto mailbox = src_frame.shared_image()->mailbox();
+  auto sync_token = src_frame.acquire_sync_token();
+  std::unique_ptr<gpu::RasterScopedAccess> ri_access =
+      src_frame.shared_image()->BeginRasterAccess(ri, sync_token,
+                                                  /*readonly=*/true);
+  bool readback_result =
+      ri->ReadbackImagePixels(mailbox, info, dest_stride, src_rect.x(),
+                              src_rect.y(), src_plane, dest_pixels);
+
+  bool result = readback_result &&
+                ri->GetGraphicsResetStatusKHR() == GL_NO_ERROR &&
+                ri->GetError() == GL_NO_ERROR;
+  if (result) {
+    WaitAndReplaceSyncTokenClient client(ri, std::move(ri_access));
+    src_frame.UpdateReleaseSyncToken(&client);
+  } else {
+    gpu::RasterScopedAccess::EndAccess(std::move(ri_access));
+  }
+
   return result;
 }
 
-EncoderStatus ConvertAndScaleFrame(const VideoFrame& src_frame,
-                                   VideoFrame& dst_frame,
-                                   std::vector<uint8_t>& tmp_buf) {
-  TRACE_EVENT2("media", "ConvertAndScaleFrame", "src_format",
-               VideoPixelFormatToString(src_frame.format()), "dst_format",
-               VideoPixelFormatToString(dst_frame.format()));
-  constexpr auto kDefaultFiltering = libyuv::kFilterBox;
-  if (!src_frame.IsMappable() || !dst_frame.IsMappable())
-    return EncoderStatus::Codes::kUnsupportedFrameFormat;
-
-  if ((dst_frame.format() == PIXEL_FORMAT_I420A ||
-       dst_frame.format() == PIXEL_FORMAT_I420 ||
-       dst_frame.format() == PIXEL_FORMAT_NV12 ||
-       dst_frame.format() == PIXEL_FORMAT_NV12A) &&
-      (src_frame.format() == PIXEL_FORMAT_XBGR ||
-       src_frame.format() == PIXEL_FORMAT_XRGB ||
-       src_frame.format() == PIXEL_FORMAT_ABGR ||
-       src_frame.format() == PIXEL_FORMAT_ARGB)) {
-    if (!media::IsOpaque(dst_frame.format()) &&
-        media::IsOpaque(src_frame.format())) {
-      // We can drop an alpha channel, but we don't add it out of nothing.
-      return EncoderStatus::Codes::kUnsupportedFrameFormat;
-    }
-
-    // libyuv's RGB to YUV methods always output BT.601.
-    dst_frame.set_color_space(gfx::ColorSpace::CreateREC601());
-
-    size_t src_stride = src_frame.stride(VideoFrame::kARGBPlane);
-    const uint8_t* src_data = src_frame.visible_data(VideoFrame::kARGBPlane);
-    if (src_frame.visible_rect().size() != dst_frame.visible_rect().size()) {
-      size_t tmp_buffer_size = VideoFrame::AllocationSize(
-          src_frame.format(), dst_frame.coded_size());
-      if (tmp_buf.size() < tmp_buffer_size)
-        tmp_buf.resize(tmp_buffer_size);
-
-      size_t stride =
-          VideoFrame::RowBytes(VideoFrame::kARGBPlane, src_frame.format(),
-                               dst_frame.visible_rect().width());
-      int error = libyuv::ARGBScale(
-          src_data, src_stride, src_frame.visible_rect().width(),
-          src_frame.visible_rect().height(), tmp_buf.data(), stride,
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      if (error)
-        return EncoderStatus::Codes::kScalingError;
-      src_data = tmp_buf.data();
-      src_stride = stride;
-    }
-
-    if (dst_frame.format() == PIXEL_FORMAT_I420 ||
-        dst_frame.format() == PIXEL_FORMAT_I420A) {
-      auto convert_fn = (src_frame.format() == PIXEL_FORMAT_XBGR ||
-                         src_frame.format() == PIXEL_FORMAT_ABGR)
-                            ? libyuv::ABGRToI420
-                            : libyuv::ARGBToI420;
-      int error = convert_fn(
-          src_data, src_stride,
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-          dst_frame.stride(VideoFrame::kUPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-          dst_frame.stride(VideoFrame::kVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-      if (error)
-        return EncoderStatus::Codes::kFormatConversionError;
-
-      if (dst_frame.format() == PIXEL_FORMAT_I420A) {
-        // Convert alpha channel separately
-        libyuv::ARGBExtractAlpha(
-            src_data, src_stride,
-            dst_frame.GetWritableVisibleData(media::VideoFrame::kAPlane),
-            dst_frame.stride(media::VideoFrame::kAPlane),
-            dst_frame.visible_rect().width(),
-            dst_frame.visible_rect().height());
-      }
-
-      return OkStatus();
-    }
-
-    auto convert_fn = (src_frame.format() == PIXEL_FORMAT_XBGR ||
-                       src_frame.format() == PIXEL_FORMAT_ABGR)
-                          ? libyuv::ABGRToNV12
-                          : libyuv::ARGBToNV12;
-    int error = convert_fn(
-        src_data, src_stride,
-        dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-        dst_frame.stride(VideoFrame::kYPlane),
-        dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-        dst_frame.stride(VideoFrame::kUVPlane),
-        dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-    if (error)
-      return EncoderStatus::Codes::kFormatConversionError;
-
-    if (dst_frame.format() == PIXEL_FORMAT_NV12A) {
-      // Convert alpha channel separately.
-      libyuv::ARGBExtractAlpha(
-          src_data, src_stride,
-          dst_frame.GetWritableVisibleData(media::VideoFrame::kAPlaneTriPlanar),
-          dst_frame.stride(media::VideoFrame::kAPlaneTriPlanar),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-    }
-
-    return OkStatus();
-  }
-
-  // Converting between YUV formats doesn't change the color space.
-  dst_frame.set_color_space(src_frame.ColorSpace());
-
-  // Both frames are I420 or I420A, only scaling is required.
-  if ((dst_frame.format() == PIXEL_FORMAT_I420 ||
-       dst_frame.format() == PIXEL_FORMAT_I420A) &&
-      (src_frame.format() == PIXEL_FORMAT_I420 ||
-       src_frame.format() == PIXEL_FORMAT_I420A)) {
-    if (dst_frame.format() == PIXEL_FORMAT_I420A) {
-      libyuv::ScalePlane(src_frame.visible_data(VideoFrame::kAPlane),
-                         src_frame.stride(VideoFrame::kAPlane),
-                         src_frame.visible_rect().width(),
-                         src_frame.visible_rect().height(),
-                         dst_frame.GetWritableVisibleData(VideoFrame::kAPlane),
-                         dst_frame.stride(VideoFrame::kAPlane),
-                         dst_frame.visible_rect().width(),
-                         dst_frame.visible_rect().height(), kDefaultFiltering);
-    }
-    int error = libyuv::I420Scale(
-        src_frame.visible_data(VideoFrame::kYPlane),
-        src_frame.stride(VideoFrame::kYPlane),
-        src_frame.visible_data(VideoFrame::kUPlane),
-        src_frame.stride(VideoFrame::kUPlane),
-        src_frame.visible_data(VideoFrame::kVPlane),
-        src_frame.stride(VideoFrame::kVPlane), src_frame.visible_rect().width(),
-        src_frame.visible_rect().height(),
-        dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-        dst_frame.stride(VideoFrame::kYPlane),
-        dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-        dst_frame.stride(VideoFrame::kUPlane),
-        dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-        dst_frame.stride(VideoFrame::kVPlane), dst_frame.visible_rect().width(),
-        dst_frame.visible_rect().height(), kDefaultFiltering);
-    if (error)
-      return EncoderStatus::Codes::kScalingError;
-    return OkStatus();
-  }
-
-  // Both frames are NV12 or NV12A, only scaling is required.
-  if ((dst_frame.format() == PIXEL_FORMAT_NV12 ||
-       dst_frame.format() == PIXEL_FORMAT_NV12A) &&
-      (src_frame.format() == PIXEL_FORMAT_NV12 ||
-       src_frame.format() == PIXEL_FORMAT_NV12A)) {
-    if (dst_frame.format() == PIXEL_FORMAT_NV12A) {
-      libyuv::ScalePlane(
-          src_frame.visible_data(VideoFrame::kAPlaneTriPlanar),
-          src_frame.stride(VideoFrame::kAPlaneTriPlanar),
-          src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.stride(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-    }
-    int error = libyuv::NV12Scale(
-        src_frame.visible_data(VideoFrame::kYPlane),
-        src_frame.stride(VideoFrame::kYPlane),
-        src_frame.visible_data(VideoFrame::kUVPlane),
-        src_frame.stride(VideoFrame::kUVPlane),
-        src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-        dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-        dst_frame.stride(VideoFrame::kYPlane),
-        dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-        dst_frame.stride(VideoFrame::kUVPlane),
-        dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-        kDefaultFiltering);
-    if (error)
-      return EncoderStatus::Codes::kScalingError;
-    return OkStatus();
-  }
-
-  if (dst_frame.format() == PIXEL_FORMAT_I420 &&
-      src_frame.format() == PIXEL_FORMAT_NV12) {
-    if (src_frame.visible_rect().size() == dst_frame.visible_rect().size()) {
-      // Both frames have the same size, only NV12-to-I420 conversion is
-      // required.
-      int error = libyuv::NV12ToI420(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          src_frame.visible_data(VideoFrame::kUVPlane),
-          src_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-          dst_frame.stride(VideoFrame::kUPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-          dst_frame.stride(VideoFrame::kVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-      if (error)
-        return EncoderStatus::Codes::kFormatConversionError;
-      return OkStatus();
-    } else {
-      // Both resize and NV12-to-I420 conversion are required.
-      // First, split UV planes into two, basically producing a I420 frame.
-      const int tmp_uv_width = (src_frame.visible_rect().width() + 1) / 2;
-      const int tmp_uv_height = (src_frame.visible_rect().height() + 1) / 2;
-      size_t tmp_buffer_size = tmp_uv_width * tmp_uv_height * 2;
-      if (tmp_buf.size() < tmp_buffer_size)
-        tmp_buf.resize(tmp_buffer_size);
-
-      uint8_t* tmp_u = tmp_buf.data();
-      uint8_t* tmp_v = tmp_u + tmp_uv_width * tmp_uv_height;
-      DCHECK_EQ(tmp_buf.data() + tmp_buffer_size,
-                tmp_v + (tmp_uv_width * tmp_uv_height));
-      libyuv::SplitUVPlane(src_frame.visible_data(VideoFrame::kUVPlane),
-                           src_frame.stride(VideoFrame::kUVPlane), tmp_u,
-                           tmp_uv_width, tmp_v, tmp_uv_width, tmp_uv_width,
-                           tmp_uv_height);
-
-      // Second, scale resulting I420 frame into the destination.
-      int error = libyuv::I420Scale(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          tmp_u,  // Temporary U-plane for src UV-plane.
-          tmp_uv_width,
-          tmp_v,  // Temporary V-plane for src UV-plane.
-          tmp_uv_width, src_frame.visible_rect().width(),
-          src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-          dst_frame.stride(VideoFrame::kUPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-          dst_frame.stride(VideoFrame::kVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      if (error)
-        return EncoderStatus::Codes::kScalingError;
-      return OkStatus();
-    }
-  }
-
-  if (dst_frame.format() == PIXEL_FORMAT_I420A &&
-      src_frame.format() == PIXEL_FORMAT_NV12A) {
-    if (src_frame.visible_rect().size() == dst_frame.visible_rect().size()) {
-      // Both frames have the same size, only NV12-to-I420 conversion is
-      // required.
-      int error = libyuv::NV12ToI420(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          src_frame.visible_data(VideoFrame::kUVPlane),
-          src_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-          dst_frame.stride(VideoFrame::kUPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-          dst_frame.stride(VideoFrame::kVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-      if (error)
-        return EncoderStatus::Codes::kFormatConversionError;
-      // Convert alpha channel separately.
-      libyuv::ScalePlane(src_frame.visible_data(VideoFrame::kAPlaneTriPlanar),
-                         src_frame.stride(VideoFrame::kAPlaneTriPlanar),
-                         src_frame.visible_rect().width(),
-                         src_frame.visible_rect().height(),
-                         dst_frame.GetWritableVisibleData(VideoFrame::kAPlane),
-                         dst_frame.stride(VideoFrame::kAPlane),
-                         dst_frame.visible_rect().width(),
-                         dst_frame.visible_rect().height(), kDefaultFiltering);
-      return OkStatus();
-    } else {
-      // Both resize and NV12-to-I420 conversion are required.
-      // First, split UV planes into two, basically producing a I420 frame.
-      const int tmp_uv_width = (src_frame.visible_rect().width() + 1) / 2;
-      const int tmp_uv_height = (src_frame.visible_rect().height() + 1) / 2;
-      size_t tmp_buffer_size = tmp_uv_width * tmp_uv_height * 2;
-      if (tmp_buf.size() < tmp_buffer_size)
-        tmp_buf.resize(tmp_buffer_size);
-
-      uint8_t* tmp_u = tmp_buf.data();
-      uint8_t* tmp_v = tmp_u + tmp_uv_width * tmp_uv_height;
-      DCHECK_EQ(tmp_buf.data() + tmp_buffer_size,
-                tmp_v + (tmp_uv_width * tmp_uv_height));
-      libyuv::SplitUVPlane(src_frame.visible_data(VideoFrame::kUVPlane),
-                           src_frame.stride(VideoFrame::kUVPlane), tmp_u,
-                           tmp_uv_width, tmp_v, tmp_uv_width, tmp_uv_width,
-                           tmp_uv_height);
-
-      // Second, scale resulting I420 frame into the destination.
-      int error = libyuv::I420Scale(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          tmp_u,  // Temporary U-plane for src UV-plane.
-          tmp_uv_width,
-          tmp_v,  // Temporary V-plane for src UV-plane.
-          tmp_uv_width, src_frame.visible_rect().width(),
-          src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUPlane),
-          dst_frame.stride(VideoFrame::kUPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kVPlane),
-          dst_frame.stride(VideoFrame::kVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      if (error)
-        return EncoderStatus::Codes::kScalingError;
-      // Convert alpha channel separately.
-      libyuv::ScalePlane(src_frame.visible_data(VideoFrame::kAPlaneTriPlanar),
-                         src_frame.stride(VideoFrame::kAPlaneTriPlanar),
-                         src_frame.visible_rect().width(),
-                         src_frame.visible_rect().height(),
-                         dst_frame.GetWritableVisibleData(VideoFrame::kAPlane),
-                         dst_frame.stride(VideoFrame::kAPlane),
-                         dst_frame.visible_rect().width(),
-                         dst_frame.visible_rect().height(), kDefaultFiltering);
-      return OkStatus();
-    }
-  }
-
-  if (dst_frame.format() == PIXEL_FORMAT_NV12 &&
-      src_frame.format() == PIXEL_FORMAT_I420) {
-    if (src_frame.visible_rect().size() == dst_frame.visible_rect().size()) {
-      // Both frames have the same size, only I420-to-NV12 conversion is
-      // required.
-      int error = libyuv::I420ToNV12(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          src_frame.visible_data(VideoFrame::kUPlane),
-          src_frame.stride(VideoFrame::kUPlane),
-          src_frame.visible_data(VideoFrame::kVPlane),
-          src_frame.stride(VideoFrame::kVPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-          dst_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-      if (error)
-        return EncoderStatus::Codes::kFormatConversionError;
-      return OkStatus();
-    } else {
-      // Both resize and I420-to-NV12 conversion are required.
-      // First, merge U and V planes into one, basically producing a NV12 frame.
-      const int tmp_uv_width = (src_frame.visible_rect().width() + 1) / 2;
-      const int tmp_uv_height = (src_frame.visible_rect().height() + 1) / 2;
-      size_t tmp_buffer_size = tmp_uv_width * tmp_uv_height * 2;
-      if (tmp_buf.size() < tmp_buffer_size)
-        tmp_buf.resize(tmp_buffer_size);
-
-      uint8_t* tmp_uv = tmp_buf.data();
-      size_t stride_uv = tmp_uv_width * 2;
-      libyuv::MergeUVPlane(src_frame.visible_data(VideoFrame::kUPlane),
-                           src_frame.stride(VideoFrame::kUPlane),
-                           src_frame.visible_data(VideoFrame::kVPlane),
-                           src_frame.stride(VideoFrame::kVPlane),
-                           tmp_uv,     // Temporary for merged UV-plane
-                           stride_uv,  // Temporary stride
-                           tmp_uv_width, tmp_uv_height);
-
-      // Second, scale resulting NV12 frame into the destination.
-      int error = libyuv::NV12Scale(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          tmp_uv,     // Temporary for merged UV-plane
-          stride_uv,  // Temporary stride
-          src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-          dst_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      if (error)
-        return EncoderStatus::Codes::kScalingError;
-      return OkStatus();
-    }
-  }
-
-  if (dst_frame.format() == PIXEL_FORMAT_NV12A &&
-      src_frame.format() == PIXEL_FORMAT_I420A) {
-    if (src_frame.visible_rect().size() == dst_frame.visible_rect().size()) {
-      // Both frames have the same size, only I420-to-NV12 conversion is
-      // required.
-      int error = libyuv::I420ToNV12(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          src_frame.visible_data(VideoFrame::kUPlane),
-          src_frame.stride(VideoFrame::kUPlane),
-          src_frame.visible_data(VideoFrame::kVPlane),
-          src_frame.stride(VideoFrame::kVPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-          dst_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height());
-      if (error)
-        return EncoderStatus::Codes::kFormatConversionError;
-      // Convert alpha channel separately.
-      libyuv::ScalePlane(
-          src_frame.visible_data(VideoFrame::kAPlane),
-          src_frame.stride(VideoFrame::kAPlane),
-          src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.stride(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      return OkStatus();
-    } else {
-      // Both resize and I420-to-NV12 conversion are required.
-      // First, merge U and V planes into one, basically producing a NV12 frame.
-      const int tmp_uv_width = (src_frame.visible_rect().width() + 1) / 2;
-      const int tmp_uv_height = (src_frame.visible_rect().height() + 1) / 2;
-      size_t tmp_buffer_size = tmp_uv_width * tmp_uv_height * 2;
-      if (tmp_buf.size() < tmp_buffer_size)
-        tmp_buf.resize(tmp_buffer_size);
-
-      uint8_t* tmp_uv = tmp_buf.data();
-      size_t stride_uv = tmp_uv_width * 2;
-      libyuv::MergeUVPlane(src_frame.visible_data(VideoFrame::kUPlane),
-                           src_frame.stride(VideoFrame::kUPlane),
-                           src_frame.visible_data(VideoFrame::kVPlane),
-                           src_frame.stride(VideoFrame::kVPlane),
-                           tmp_uv,     // Temporary for merged UV-plane
-                           stride_uv,  // Temporary stride
-                           tmp_uv_width, tmp_uv_height);
-
-      // Second, scale resulting NV12 frame into the destination.
-      int error = libyuv::NV12Scale(
-          src_frame.visible_data(VideoFrame::kYPlane),
-          src_frame.stride(VideoFrame::kYPlane),
-          tmp_uv,     // Temporary for merged UV-plane
-          stride_uv,  // Temporary stride
-          src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kYPlane),
-          dst_frame.stride(VideoFrame::kYPlane),
-          dst_frame.GetWritableVisibleData(VideoFrame::kUVPlane),
-          dst_frame.stride(VideoFrame::kUVPlane),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      if (error)
-        return EncoderStatus::Codes::kScalingError;
-      // Convert alpha channel separately.
-      libyuv::ScalePlane(
-          src_frame.visible_data(VideoFrame::kAPlane),
-          src_frame.stride(VideoFrame::kAPlane),
-          src_frame.visible_rect().width(), src_frame.visible_rect().height(),
-          dst_frame.GetWritableVisibleData(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.stride(VideoFrame::kAPlaneTriPlanar),
-          dst_frame.visible_rect().width(), dst_frame.visible_rect().height(),
-          kDefaultFiltering);
-      return OkStatus();
-    }
-  }
-
-  return EncoderStatus(EncoderStatus::Codes::kUnsupportedFrameFormat)
-      .WithData("src", src_frame.AsHumanReadableString())
-      .WithData("dst", dst_frame.AsHumanReadableString());
-}
-
-// TODO(crbug.com/1395524): There is some strange channel switch during RGB
-// readback. When frame's pixel format matches GL and Skia color types we get
-// reversed channels. But why?
+// Media pixel format enums have names opposite to their byte order.
+// That's why PIXEL_FORMAT_ABGR corresponds to kRGBA_8888_SkColorType
+// and so on.
 MEDIA_EXPORT SkColorType SkColorTypeForPlane(VideoPixelFormat format,
                                              size_t plane) {
   switch (format) {
@@ -1243,25 +775,30 @@ MEDIA_EXPORT SkColorType SkColorTypeForPlane(VideoPixelFormat format,
       // kGray_8_SkColorType would make more sense but doesn't work on Windows.
       return kAlpha_8_SkColorType;
     case PIXEL_FORMAT_NV12:
-      return plane == VideoFrame::kYPlane ? kAlpha_8_SkColorType
-                                          : kR8G8_unorm_SkColorType;
+    case PIXEL_FORMAT_NV16:
+    case PIXEL_FORMAT_NV24:
+      return plane == VideoFrame::Plane::kY ? kAlpha_8_SkColorType
+                                            : kR8G8_unorm_SkColorType;
     case PIXEL_FORMAT_NV12A:
-      return plane == VideoFrame::kYPlane ||
-                     plane == VideoFrame::kAPlaneTriPlanar
+      return plane == VideoFrame::Plane::kY ||
+                     plane == VideoFrame::Plane::kATriPlanar
                  ? kAlpha_8_SkColorType
                  : kR8G8_unorm_SkColorType;
-    case PIXEL_FORMAT_P016LE:
-      return plane == VideoFrame::kYPlane ? kA16_unorm_SkColorType
-                                          : kR16G16_unorm_SkColorType;
+    case PIXEL_FORMAT_P010LE:
+    case PIXEL_FORMAT_P210LE:
+    case PIXEL_FORMAT_P410LE:
+      return plane == VideoFrame::Plane::kY ? kA16_unorm_SkColorType
+                                            : kR16G16_unorm_SkColorType;
     case PIXEL_FORMAT_XBGR:
     case PIXEL_FORMAT_ABGR:
       return kRGBA_8888_SkColorType;
     case PIXEL_FORMAT_XRGB:
     case PIXEL_FORMAT_ARGB:
       return kBGRA_8888_SkColorType;
+    case PIXEL_FORMAT_RGBAF16:
+      return kRGBA_F16_SkColorType;
     default:
       NOTREACHED();
-      return kUnknown_SkColorType;
   }
 }
 
@@ -1272,8 +809,9 @@ VideoPixelFormatFromSkColorType(SkColorType sk_color_type, bool is_opaque) {
       return is_opaque ? PIXEL_FORMAT_XBGR : PIXEL_FORMAT_ABGR;
     case kBGRA_8888_SkColorType:
       return is_opaque ? PIXEL_FORMAT_XRGB : PIXEL_FORMAT_ARGB;
+    case kRGBA_F16_SkColorType:
+      return PIXEL_FORMAT_RGBAF16;
     default:
-      // TODO(crbug.com/1073995): Add F16 support.
       return PIXEL_FORMAT_UNKNOWN;
   }
 }
@@ -1302,15 +840,18 @@ scoped_refptr<VideoFrame> CreateFromSkImage(sk_sp<SkImage> sk_image,
 
   auto coded_size = gfx::Size(sk_image->width(), sk_image->height());
   auto layout = VideoFrameLayout::CreateWithStrides(
-      format, coded_size, std::vector<int32_t>(1, pm.rowBytes()));
+      format, coded_size, std::vector<size_t>(1, pm.rowBytes()));
   if (!layout)
     return nullptr;
 
   auto frame = VideoFrame::WrapExternalDataWithLayout(
       *layout, visible_rect, natural_size,
-      // TODO(crbug.com/1161304): We should be able to wrap readonly memory in
+      // TODO(crbug.com/40162403): We should be able to wrap readonly memory in
       // a VideoFrame instead of using writable_addr() here.
-      reinterpret_cast<uint8_t*>(pm.writable_addr()), pm.computeByteSize(),
+      // SAFETY: We take the pointer and size from SkPixmap, we rely on Skia
+      // to give us a valid memory region.
+      UNSAFE_BUFFERS(base::span(reinterpret_cast<uint8_t*>(pm.writable_addr()),
+                                pm.computeByteSize())),
       timestamp);
   if (!frame)
     return nullptr;
@@ -1318,6 +859,83 @@ scoped_refptr<VideoFrame> CreateFromSkImage(sk_sp<SkImage> sk_image,
   frame->AddDestructionObserver(
       base::DoNothingWithBoundArgs(std::move(sk_image)));
   return frame;
+}
+
+SkYUVAInfo::PlaneConfig ToSkYUVAPlaneConfig(viz::SharedImageFormat format) {
+  using PlaneConfig = viz::SharedImageFormat::PlaneConfig;
+  switch (format.plane_config()) {
+    case PlaneConfig::kY_U_V:
+      return SkYUVAInfo::PlaneConfig::kY_U_V;
+    case PlaneConfig::kY_V_U:
+      return SkYUVAInfo::PlaneConfig::kY_V_U;
+    case PlaneConfig::kY_UV:
+      return SkYUVAInfo::PlaneConfig::kY_UV;
+    case PlaneConfig::kY_UV_A:
+      return SkYUVAInfo::PlaneConfig::kY_UV_A;
+    case PlaneConfig::kY_U_V_A:
+      return SkYUVAInfo::PlaneConfig::kY_U_V_A;
+  }
+}
+
+SkYUVAInfo::Subsampling ToSkYUVASubsampling(viz::SharedImageFormat format) {
+  using Subsampling = viz::SharedImageFormat::Subsampling;
+  switch (format.subsampling()) {
+    case Subsampling::k420:
+      return SkYUVAInfo::Subsampling::k420;
+    case Subsampling::k422:
+      return SkYUVAInfo::Subsampling::k422;
+    case Subsampling::k444:
+      return SkYUVAInfo::Subsampling::k444;
+  }
+}
+
+const libyuv::YuvConstants* GetYuvContantsForColorSpace(
+    SkYUVColorSpace cs,
+    bool output_argb_matrix) {
+#define YUV_MATRIX(matrix) (output_argb_matrix ? matrix : matrix##VU)
+  switch (cs) {
+    case kJPEG_Full_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuvJPEGConstants);
+    case kRec601_Limited_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuvI601Constants);
+    case kRec709_Full_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuvF709Constants);
+    case kRec709_Limited_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuvH709Constants);
+    case kBT2020_8bit_Full_SkYUVColorSpace:
+    case kBT2020_10bit_Full_SkYUVColorSpace:
+    case kBT2020_12bit_Full_SkYUVColorSpace:
+    case kBT2020_16bit_Full_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuvV2020Constants);
+    case kBT2020_8bit_Limited_SkYUVColorSpace:
+    case kBT2020_10bit_Limited_SkYUVColorSpace:
+    case kBT2020_12bit_Limited_SkYUVColorSpace:
+    case kBT2020_16bit_Limited_SkYUVColorSpace:
+      return &YUV_MATRIX(libyuv::kYuv2020Constants);
+    case kFCC_Full_SkYUVColorSpace:
+    case kFCC_Limited_SkYUVColorSpace:
+    case kSMPTE240_Full_SkYUVColorSpace:
+    case kSMPTE240_Limited_SkYUVColorSpace:
+    case kYDZDX_Full_SkYUVColorSpace:
+    case kYDZDX_Limited_SkYUVColorSpace:
+    case kGBR_Full_SkYUVColorSpace:
+    case kGBR_Limited_SkYUVColorSpace:
+    case kYCgCo_8bit_Full_SkYUVColorSpace:
+    case kYCgCo_8bit_Limited_SkYUVColorSpace:
+    case kYCgCo_10bit_Full_SkYUVColorSpace:
+    case kYCgCo_10bit_Limited_SkYUVColorSpace:
+    case kYCgCo_12bit_Full_SkYUVColorSpace:
+    case kYCgCo_12bit_Limited_SkYUVColorSpace:
+    case kYCgCo_16bit_Full_SkYUVColorSpace:
+    case kYCgCo_16bit_Limited_SkYUVColorSpace:
+      // TODO(crbug.com/41486014): Return color space for default
+      // kRec601_SkYUVColorSpace as libyuv does not have FCC, SMPTE240M, YDZDX,
+      // GBR, YCgCo equivalent support.
+      return &YUV_MATRIX(libyuv::kYuvI601Constants);
+    case kIdentity_SkYUVColorSpace:
+      NOTREACHED();
+  };
+#undef YUV_MATRIX
 }
 
 }  // namespace media

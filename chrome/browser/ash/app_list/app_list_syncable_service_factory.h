@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 class Profile;
@@ -31,18 +31,22 @@ class AppListSyncableServiceFactory : public ProfileKeyedServiceFactory {
   // Marks AppListSyncableService to be used in tests.
   static void SetUseInTesting(bool use);
 
+  // Get if the factory will construct services during testing, useful for
+  // dependant factories to be aware.
+  static bool IsUsedInTesting();
+
   AppListSyncableServiceFactory(const AppListSyncableServiceFactory&) = delete;
   AppListSyncableServiceFactory& operator=(
       const AppListSyncableServiceFactory&) = delete;
 
  private:
-  friend struct base::DefaultSingletonTraits<AppListSyncableServiceFactory>;
+  friend base::NoDestructor<AppListSyncableServiceFactory>;
 
   AppListSyncableServiceFactory();
   ~AppListSyncableServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
   void RegisterProfilePrefs(
       user_prefs::PrefRegistrySyncable* registry) override;

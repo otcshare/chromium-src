@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/printing/print_management/printing_manager.h"
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -54,19 +55,19 @@ class WaitForURLsDeletedObserver : public history::HistoryServiceObserver {
  public:
   explicit WaitForURLsDeletedObserver(base::RunLoop* runner)
       : runner_(runner) {}
-  ~WaitForURLsDeletedObserver() override {}
+  ~WaitForURLsDeletedObserver() override = default;
   WaitForURLsDeletedObserver(const WaitForURLsDeletedObserver&) = delete;
   WaitForURLsDeletedObserver& operator=(const WaitForURLsDeletedObserver&) =
       delete;
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* service,
-                     const history::DeletionInfo& deletion_info) override {
+  void OnHistoryDeletions(history::HistoryService* service,
+                          const history::DeletionInfo& deletion_info) override {
     runner_->Quit();
   }
 
  private:
-  base::RunLoop* runner_;
+  raw_ptr<base::RunLoop> runner_;
 };
 
 void WaitForURLsDeletedNotification(history::HistoryService* history_service) {
@@ -132,7 +133,7 @@ class PrintingManagerTest : public ::testing::Test {
   std::unique_ptr<CupsPrintJob> CreateOngoingPrintJob(int id) {
     auto print_job = std::make_unique<CupsPrintJob>(
         chromeos::Printer(), id, kTitle, kPagesNumber,
-        ::printing::PrintJob::Source::PRINT_PREVIEW,
+        ::printing::PrintJob::Source::kPrintPreview,
         /*source_id=*/"", proto::PrintSettings());
     print_job_manager_->CreatePrintJob(print_job.get());
     return print_job;
@@ -265,7 +266,7 @@ TEST_F(PrintingManagerTest, DeletingBrowserHistoryDeletesAllPrintJobs) {
   // Simulate deleting all history, expect print job history to also be deleted.
   base::CancelableTaskTracker task_tracker;
   local_history_->ExpireHistoryBetween(
-      std::set<GURL>(), base::Time(), base::Time(),
+      std::set<GURL>(), history::kNoAppIdFilter, base::Time(), base::Time(),
       /*user_initiated*/ true, base::DoNothing(), &task_tracker);
   mock_time_task_runner_->RunUntilIdle();
 
@@ -291,7 +292,7 @@ TEST_F(PrintingManagerTest, PolicyPreventsDeletingBrowserHistoryDeletingJobs) {
   // Simulate deleting all history, expect print job history to not be deleted.
   base::CancelableTaskTracker task_tracker;
   local_history_->ExpireHistoryBetween(
-      std::set<GURL>(), base::Time(), base::Time(),
+      std::set<GURL>(), history::kNoAppIdFilter, base::Time(), base::Time(),
       /*user_initiated*/ true, base::DoNothing(), &task_tracker);
   mock_time_task_runner_->RunUntilIdle();
 

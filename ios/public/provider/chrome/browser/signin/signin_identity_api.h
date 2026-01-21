@@ -7,16 +7,11 @@
 
 #include <memory>
 
-#include "ios/chrome/browser/signin/system_identity_manager.h"
+#include "ios/chrome/browser/signin/model/system_identity_manager.h"
 #include "ios/public/provider/chrome/browser/signin/signin_sso_api.h"
 
 namespace ios {
 namespace provider {
-
-// Returns whether signin is supported by the provider. If this returns
-// false, then the manager returned by `CreateSystemIdentityManager()`
-// will be a null object.
-bool IsSigninSupported();
 
 // Creates a new SystemIdentityManager instance. Returns null if signin
 // is not supported by the application.

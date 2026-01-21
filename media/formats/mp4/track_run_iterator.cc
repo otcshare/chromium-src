@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
@@ -44,9 +45,10 @@ struct TrackRunInfo {
   int64_t sample_start_offset;
 
   bool is_audio;
-  raw_ptr<const AudioSampleEntry> audio_description;
-  raw_ptr<const VideoSampleEntry> video_description;
-  raw_ptr<const SampleGroupDescription> track_sample_encryption_group;
+  raw_ptr<const AudioSampleEntry, DanglingUntriaged> audio_description;
+  raw_ptr<const VideoSampleEntry, DanglingUntriaged> video_description;
+  raw_ptr<const SampleGroupDescription, DanglingUntriaged>
+      track_sample_encryption_group;
 
   // Stores sample encryption entries, which is populated from 'senc' box if it
   // is available, otherwise will try to load from cenc auxiliary information.
@@ -286,14 +288,14 @@ bool TrackRunIterator::Init(const MovieFragment& moof) {
   for (size_t i = 0; i < moof.tracks.size(); i++) {
     const TrackFragment& traf = moof.tracks[i];
 
-    const Track* trak = NULL;
+    const Track* trak = nullptr;
     for (size_t t = 0; t < moov_->tracks.size(); t++) {
       if (moov_->tracks[t].header.track_id == traf.header.track_id)
         trak = &moov_->tracks[t];
     }
     RCHECK(trak);
 
-    const TrackExtends* trex = NULL;
+    const TrackExtends* trex = nullptr;
     for (size_t t = 0; t < moov_->extends.tracks.size(); t++) {
       if (moov_->extends.tracks[t].track_id == traf.header.track_id)
         trex = &moov_->extends.tracks[t];
@@ -424,42 +426,27 @@ bool TrackRunIterator::Init(const MovieFragment& moof) {
       }
 
       // Avoid allocating insane sample counts for invalid media.
-      const size_t max_sample_count =
-          GetDemuxerMemoryLimit(Demuxer::DemuxerTypes::kChunkDemuxer) /
+      size_t max_sample_count =
+          GetDemuxerMemoryLimit(DemuxerType::kChunkDemuxer).InBytes() /
           sizeof(decltype(tri.samples)::value_type);
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+      // The fuzzer frequently gets stuck running out of memory on long useless
+      // chains of empty TRUN values. Histogram analysis shows large in the wild
+      // sample counts, so we can't limit more than the memory limit above.
+      max_sample_count = std::min(size_t{10000}, max_sample_count);
+#endif
+
       RCHECK_MEDIA_LOGGED(
           base::strict_cast<size_t>(trun.sample_count) <= max_sample_count,
           media_log_, "Metadata overhead exceeds storage limit.");
       tri.samples.resize(trun.sample_count);
-
-      int empty_sample_count = 0;
-      int empty_samples_in_sequence_count = 0;
-
-      UMA_HISTOGRAM_COUNTS_1M("Media.MSE.Mp4TrunSampleCount",
-                              trun.sample_count);
 
       for (size_t k = 0; k < trun.sample_count; k++) {
         if (!PopulateSampleInfo(*trex, traf.header, trun, edit_list_offset, k,
                                 &tri.samples[k], traf.sdtp.sample_depends_on(k),
                                 tri.is_audio, media_log_)) {
           return false;
-        }
-
-        UMA_HISTOGRAM_COUNTS_1M("Media.MSE.Mp4SampleSize", tri.samples[k].size);
-
-        if (tri.samples[k].size == 0) {
-          empty_sample_count++;
-          empty_samples_in_sequence_count++;
-        }
-
-        // Report the number of consecutive zero-sized samples seen in a
-        // sequence. Can report counts for 1 or more such sequences within the
-        // same trun, and a sequence can be as short as just 1 empty sample.
-        if (empty_samples_in_sequence_count &&
-            (tri.samples[k].size != 0 || k == trun.sample_count - 1)) {
-          UMA_HISTOGRAM_COUNTS_1M("Media.MSE.Mp4ConsecutiveEmptySamples",
-                                  empty_samples_in_sequence_count);
-          empty_samples_in_sequence_count = 0;
         }
 
         RCHECK(std::numeric_limits<int64_t>::max() - tri.samples[k].duration >
@@ -480,9 +467,6 @@ bool TrackRunIterator::Init(const MovieFragment& moof) {
           RCHECK(GetSampleEncryptionInfoEntry(tri, index));
         is_sample_to_group_valid = sample_to_group_itr.Advance();
       }
-
-      UMA_HISTOGRAM_COUNTS_1M("Media.MSE.Mp4EmptySamplesInTRun",
-                              empty_sample_count);
 
       if (sample_encryption_entries_count > 0) {
         RCHECK(sample_encryption_entries_count >=
@@ -524,14 +508,9 @@ bool TrackRunIterator::Init(const MovieFragment& moof) {
           }
 #endif  // BUILDFLAG(IS_CASTOS)
           if (is_encrypted && !iv_size) {
-            const uint8_t constant_iv_size =
-                index == 0 ? track_encryption->default_constant_iv_size
-                           : info_entry->constant_iv_size;
-            RCHECK(constant_iv_size != 0);
-            const uint8_t* constant_iv =
+            entry.initialization_vector =
                 index == 0 ? track_encryption->default_constant_iv
                            : info_entry->constant_iv;
-            memcpy(entry.initialization_vector, constant_iv, constant_iv_size);
           }
         }
       }
@@ -598,8 +577,9 @@ bool TrackRunIterator::AuxInfoNeedsToBeCached() {
 }
 
 // This implementation currently only caches CENC auxiliary info.
-bool TrackRunIterator::CacheAuxInfo(const uint8_t* buf, int buf_size) {
-  RCHECK(AuxInfoNeedsToBeCached() && buf_size >= aux_info_size());
+bool TrackRunIterator::CacheAuxInfo(base::span<const uint8_t> buf) {
+  RCHECK(AuxInfoNeedsToBeCached() &&
+         buf.size() >= base::checked_cast<size_t>(aux_info_size()));
 
   std::vector<SampleEncryptionEntry>& sample_encryption_entries =
       runs_[run_itr_ - runs_.begin()].sample_encryption_entries;
@@ -611,7 +591,8 @@ bool TrackRunIterator::CacheAuxInfo(const uint8_t* buf, int buf_size) {
       info_size = run_itr_->aux_info_sizes[i];
 
     if (IsSampleEncrypted(i)) {
-      BufferReader reader(buf + pos, info_size);
+      BufferReader reader(buf.subspan(base::checked_cast<size_t>(pos)).data(),
+                          info_size);
       const uint8_t iv_size = GetIvSize(i);
       const bool has_subsamples = info_size > iv_size;
       SampleEncryptionEntry& entry = sample_encryption_entries[i];
@@ -752,8 +733,8 @@ std::unique_ptr<DecryptConfig> TrackRunIterator::GetDecryptConfig() {
     SampleEncryptionEntry sample_encryption_entry;
     if (ApplyConstantIv(sample_idx, &sample_encryption_entry)) {
       std::string iv(reinterpret_cast<const char*>(
-                         sample_encryption_entry.initialization_vector),
-                     std::size(sample_encryption_entry.initialization_vector));
+                         sample_encryption_entry.initialization_vector.data()),
+                     sample_encryption_entry.initialization_vector.size());
       switch (run_itr_->encryption_scheme) {
         case EncryptionScheme::kUnencrypted:
           return nullptr;
@@ -774,8 +755,8 @@ std::unique_ptr<DecryptConfig> TrackRunIterator::GetDecryptConfig() {
   const SampleEncryptionEntry& sample_encryption_entry =
       run_itr_->sample_encryption_entries[sample_idx];
   std::string iv(reinterpret_cast<const char*>(
-                     sample_encryption_entry.initialization_vector),
-                 std::size(sample_encryption_entry.initialization_vector));
+                     sample_encryption_entry.initialization_vector.data()),
+                 sample_encryption_entry.initialization_vector.size());
 
   size_t total_size = 0;
   if (!sample_encryption_entry.subsamples.empty() &&
@@ -835,16 +816,18 @@ bool TrackRunIterator::ApplyConstantIv(size_t sample_index,
                                        SampleEncryptionEntry* entry) const {
   DCHECK(IsSampleEncrypted(sample_index));
   uint32_t index = GetGroupDescriptionIndex(sample_index);
-  const uint8_t constant_iv_size =
-      index == 0
-          ? track_encryption().default_constant_iv_size
-          : GetSampleEncryptionInfoEntry(*run_itr_, index)->constant_iv_size;
-  RCHECK(constant_iv_size != 0);
-  const uint8_t* constant_iv =
-      index == 0 ? track_encryption().default_constant_iv
-                 : GetSampleEncryptionInfoEntry(*run_itr_, index)->constant_iv;
-  RCHECK(constant_iv != nullptr);
-  memcpy(entry->initialization_vector, constant_iv, kInitializationVectorSize);
+  if (index == 0) {
+    const auto& tenc = track_encryption();
+    RCHECK(tenc.default_constant_iv_size != 0);
+    base::span(entry->initialization_vector)
+        .copy_from(tenc.default_constant_iv);
+  } else {
+    const CencSampleEncryptionInfoEntry* entry_info =
+        GetSampleEncryptionInfoEntry(*run_itr_, index);
+    RCHECK(entry_info);
+    RCHECK(entry_info->constant_iv_size != 0);
+    base::span(entry->initialization_vector).copy_from(entry_info->constant_iv);
+  }
   return true;
 }
 

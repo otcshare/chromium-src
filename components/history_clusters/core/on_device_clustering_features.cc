@@ -18,14 +18,6 @@ BASE_FEATURE(kOnDeviceClustering,
              "HistoryClustersOnDeviceClustering",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOnDeviceClusteringContentClustering,
-             "JourneysOnDeviceClusteringContentClustering",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kUseEngagementScoreCache,
-             "JourneysUseEngagementScoreCache",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kOnDeviceClusteringBlocklists,
              "JourneysOnDeviceClusteringBlocklist",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -33,10 +25,6 @@ BASE_FEATURE(kOnDeviceClusteringBlocklists,
 BASE_FEATURE(kOnDeviceClusteringKeywordFiltering,
              "JourneysKeywordFiltering",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kOnDeviceClusteringCategoryFiltering,
-             "JourneysCategoryFiltering",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kOnDeviceClusteringVisitRanking,
              "JourneysOnDeviceClusteringVisitRanking",

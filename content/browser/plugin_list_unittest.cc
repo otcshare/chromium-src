@@ -4,6 +4,7 @@
 
 #include "content/browser/plugin_list.h"
 
+#include <memory>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -30,8 +31,9 @@ bool Contains(const std::vector<WebPluginInfo>& list,
               const WebPluginInfo& plugin) {
   for (std::vector<WebPluginInfo>::const_iterator it = list.begin();
        it != list.end(); ++it) {
-    if (Equals(*it, plugin))
+    if (Equals(*it, plugin)) {
       return true;
+    }
   }
   return false;
 }
@@ -41,7 +43,8 @@ bool Contains(const std::vector<WebPluginInfo>& list,
 class PluginListTest : public testing::Test {
  public:
   PluginListTest()
-      : foo_plugin_(u"Foo PluginListTest",
+      : plugin_list_(nullptr, PluginListDeleter),
+        foo_plugin_(u"Foo PluginListTest",
                     base::FilePath(kFooPath),
                     u"1.2.3",
                     u"foo"),
@@ -49,33 +52,29 @@ class PluginListTest : public testing::Test {
   }
 
   void SetUp() override {
-    // Cannot use std::unique_ptr due to private ctor.
-    plugin_list_ = new PluginList();
-    plugin_list_->RegisterInternalPlugin(bar_plugin_, false);
+    // Needed because `PluginList` is normally a singleton and has a private
+    // ctor. Also, `plugin_list_` uses a custom deleter.
+    plugin_list_.reset(new PluginList());
     foo_plugin_.mime_types.emplace_back(kFooMimeType, kFooFileType,
                                         std::string());
-    plugin_list_->RegisterInternalPlugin(foo_plugin_, false);
+    plugin_list_->RegisterInternalPlugin(foo_plugin_);
+    plugin_list_->RegisterInternalPlugin(bar_plugin_);
   }
 
-  void TearDown() override {
-    // Cannot use std::unique_ptr due to private dtor.
-    delete plugin_list_;
-  }
+  // Needed because `PluginList` is normally a singleton and has a private dtor.
+  static void PluginListDeleter(PluginList* plugin_list) { delete plugin_list; }
 
  protected:
   // Must be first.
   BrowserTaskEnvironment task_environment_;
 
-  // Owns the PluginList but cannot be a std::unique_ptr due to private
-  // ctor/dtor.
-  raw_ptr<PluginList> plugin_list_;
+  std::unique_ptr<PluginList, decltype(&PluginListDeleter)> plugin_list_;
   WebPluginInfo foo_plugin_;
   WebPluginInfo bar_plugin_;
 };
 
 TEST_F(PluginListTest, GetPlugins) {
-  std::vector<WebPluginInfo> plugins;
-  plugin_list_->GetPlugins(&plugins);
+  const std::vector<WebPluginInfo>& plugins = plugin_list_->GetPlugins();
   EXPECT_EQ(2u, plugins.size());
   EXPECT_TRUE(Contains(plugins, foo_plugin_));
   EXPECT_TRUE(Contains(plugins, bar_plugin_));
@@ -85,12 +84,8 @@ TEST_F(PluginListTest, BadPluginDescription) {
   WebPluginInfo plugin_3043(
       std::u16string(), base::FilePath(FILE_PATH_LITERAL("/myplugin.3.0.43")),
       std::u16string(), std::u16string());
-  // Simulate loading of the plugins.
-  plugin_list_->RegisterInternalPlugin(plugin_3043, false);
-  // Now we should have them in the state we specified above.
-  plugin_list_->RefreshPlugins();
-  std::vector<WebPluginInfo> plugins;
-  plugin_list_->GetPlugins(&plugins);
+  plugin_list_->RegisterInternalPlugin(plugin_3043);
+  const std::vector<WebPluginInfo>& plugins = plugin_list_->GetPlugins();
   ASSERT_TRUE(Contains(plugins, plugin_3043));
 }
 
@@ -99,49 +94,46 @@ TEST_F(PluginListTest, GetPluginInfoArray) {
   GURL target_url(kTargetUrl);
   std::vector<WebPluginInfo> plugins;
   std::vector<std::string> actual_mime_types;
-  bool is_stale;
 
-  // The PluginList starts out in a stale state.
-  is_stale = plugin_list_->GetPluginInfoArray(
-      target_url, "application/octet-stream",
-      /*allow_wildcard=*/false, &plugins, &actual_mime_types);
-  EXPECT_TRUE(is_stale);
+  // Without a GetPlugins() call, the PluginList starts out in an empty state.
+  plugin_list_->GetPluginInfoArray(target_url, "application/octet-stream",
+                                   &plugins, &actual_mime_types);
   EXPECT_EQ(0u, plugins.size());
   EXPECT_EQ(0u, actual_mime_types.size());
 
-  // Refresh it.
-  plugin_list_->GetPlugins(&plugins);
-  plugins.clear();
-
-  // The file type of the URL is supported by |foo_plugin_|. However,
-  // GetPluginInfoArray should not match |foo_plugin_| because the MIME type is
-  // application/octet-stream.
-  is_stale = plugin_list_->GetPluginInfoArray(
-      target_url, "application/octet-stream",
-      /*allow_wildcard=*/false, &plugins, &actual_mime_types);
-  EXPECT_FALSE(is_stale);
-  EXPECT_EQ(0u, plugins.size());
-  EXPECT_EQ(0u, actual_mime_types.size());
-
-  // |foo_plugin_| matches due to the MIME type.
+  // Even with the correct MIME type, the empty state means there is no result.
   plugins.clear();
   actual_mime_types.clear();
-  is_stale = plugin_list_->GetPluginInfoArray(target_url, kFooMimeType,
-                                              /*allow_wildcard=*/false,
-                                              &plugins, &actual_mime_types);
-  EXPECT_FALSE(is_stale);
+  plugin_list_->GetPluginInfoArray(target_url, kFooMimeType, &plugins,
+                                   &actual_mime_types);
+  EXPECT_EQ(0u, plugins.size());
+  EXPECT_EQ(0u, actual_mime_types.size());
+
+  plugin_list_->GetPlugins();
+
+  // The file type of the URL is supported by `foo_plugin_`. However,
+  // GetPluginInfoArray should not match `foo_plugin_` because the MIME type is
+  // application/octet-stream.
+  plugin_list_->GetPluginInfoArray(target_url, "application/octet-stream",
+                                   &plugins, &actual_mime_types);
+  EXPECT_EQ(0u, plugins.size());
+  EXPECT_EQ(0u, actual_mime_types.size());
+
+  // `foo_plugin_` matches due to the MIME type.
+  plugins.clear();
+  actual_mime_types.clear();
+  plugin_list_->GetPluginInfoArray(target_url, kFooMimeType, &plugins,
+                                   &actual_mime_types);
   EXPECT_EQ(1u, plugins.size());
   EXPECT_TRUE(Contains(plugins, foo_plugin_));
   ASSERT_EQ(1u, actual_mime_types.size());
   EXPECT_EQ(kFooMimeType, actual_mime_types.front());
 
-  // |foo_plugin_| matches due to the file type and empty MIME type.
+  // `foo_plugin_` matches due to the file type and empty MIME type.
   plugins.clear();
   actual_mime_types.clear();
-  is_stale = plugin_list_->GetPluginInfoArray(target_url, "",
-                                              /*allow_wildcard=*/false,
-                                              &plugins, &actual_mime_types);
-  EXPECT_FALSE(is_stale);
+  plugin_list_->GetPluginInfoArray(target_url, "", &plugins,
+                                   &actual_mime_types);
   EXPECT_EQ(1u, plugins.size());
   EXPECT_TRUE(Contains(plugins, foo_plugin_));
   ASSERT_EQ(1u, actual_mime_types.size());

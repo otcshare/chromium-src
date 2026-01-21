@@ -4,94 +4,183 @@
 
 package org.chromium.chrome.browser.app.creator;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.tab.Tab.INVALID_TAB_ID;
+
+import android.content.Context;
 import android.os.Bundle;
 import android.view.MenuItem;
-import android.view.ViewGroup;
 
 import androidx.appcompat.widget.Toolbar;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
-import org.chromium.base.supplier.UnownedUserDataSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.SnackbarActivity;
-import org.chromium.chrome.browser.WebContentsFactory;
-import org.chromium.chrome.browser.compositor.bottombar.ephemeraltab.EphemeralTabCoordinator;
+import org.chromium.chrome.browser.content.WebContentsFactory;
 import org.chromium.chrome.browser.creator.CreatorCoordinator;
-import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
+import org.chromium.chrome.browser.feed.SingleWebFeedEntryPoint;
+import org.chromium.chrome.browser.feed.webfeed.CreatorIntentConstants;
 import org.chromium.chrome.browser.init.ActivityLifecycleDispatcherImpl;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.ShareDelegateImpl;
-import org.chromium.chrome.browser.share.ShareDelegateSupplier;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tabmodel.document.TabDelegate;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.tabmodel.document.ChromeAsyncTabLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.browser_ui.widget.scrim.ScrimCoordinator;
+import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.IntentRequestTracker;
 
-/**
- * Activity for the Creator Page.
- */
-public class CreatorActivity extends SnackbarActivity {
-    // CREATOR_WEB_FEED_ID is the Intent key under which the Web Feed ID is stored.
-    public static final String CREATOR_WEB_FEED_ID = "CREATOR_WEB_FEED_ID";
-    public static final String CREATOR_TITLE = "CREATOR_TITLE";
-    public static final String CREATOR_URL = "CREATOR_URL";
+import java.util.function.Supplier;
 
-    private ActivityWindowAndroid mWindowAndroid;
-    private BottomSheetController mBottomSheetController;
-    private ViewGroup mBottomSheetContainer;
-    private CreatorActionDelegateImpl mCreatorActionDelegate;
-    private ScrimCoordinator mScrim;
-    private EphemeralTabCoordinator mEphemeralTabCoordinator;
-    private ActivityTabProvider mActivityTabProvider;
-    private ActivityLifecycleDispatcherImpl mLifecycleDispatcher;
-    private UnownedUserDataSupplier<ShareDelegate> mShareDelegateSupplier;
-    private UnownedUserDataSupplier<ShareDelegate> mTabShareDelegateSupplier;
-    private ObservableSupplierImpl<Profile> mProfileSupplier;
-    private Profile mProfile;
+// import org.chromium.components.feed.proto.wire.FeedEntryPointSource;
+
+/** Activity for the Creator Page. */
+@NullMarked
+public class CreatorActivity extends SnackbarActivity {
+    private @Nullable ActivityWindowAndroid mWindowAndroid;
+    private @Nullable BottomSheetController mBottomSheetController;
+    private @Nullable CreatorActionDelegateImpl mCreatorActionDelegate;
+    private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
+    private final ActivityLifecycleDispatcherImpl mLifecycleDispatcher =
+            new ActivityLifecycleDispatcherImpl(this);
+    private final SettableMonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier =
+            ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<ShareDelegate> mTabShareDelegateSupplier =
+            ObservableSuppliers.createMonotonic();
+
+    private static class TabShareDelegateImpl extends ShareDelegateImpl {
+        public TabShareDelegateImpl(
+                Context context,
+                @Nullable BottomSheetController controller,
+                ActivityLifecycleDispatcherImpl lifecycleDispatcher,
+                ActivityTabProvider tabProvider,
+                Supplier<TabModelSelector> tabModelSelectorProvider,
+                Supplier profileSupplier,
+                ShareSheetDelegate delegate,
+                boolean isCustomTab) {
+            super(
+                    context,
+                    controller,
+                    lifecycleDispatcher,
+                    tabProvider,
+                    tabModelSelectorProvider,
+                    profileSupplier,
+                    delegate,
+                    isCustomTab,
+                    /* dataSharingTabManager= */ null);
+        }
+
+        @Override
+        public boolean isSharingHubEnabled() {
+            return false;
+        }
+    }
+
+    @Initializer
+    @Override
+    protected void onCreateInternal(@Nullable Bundle savedInstanceState) {
+
+        super.onCreateInternal(savedInstanceState);
+    }
 
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        byte[] mWebFeedId = getIntent().getByteArrayExtra(CREATOR_WEB_FEED_ID);
-        String mTitle = getIntent().getStringExtra(CREATOR_TITLE);
-        String mUrl = getIntent().getStringExtra(CREATOR_URL);
-        mActivityTabProvider = new ActivityTabProvider();
-        mLifecycleDispatcher = new ActivityLifecycleDispatcherImpl(this);
-        mShareDelegateSupplier = new ShareDelegateSupplier();
-        mTabShareDelegateSupplier = new ShareDelegateSupplier();
-        mProfileSupplier = new ObservableSupplierImpl<>();
-        mProfile = Profile.getLastUsedRegularProfile();
-        mProfileSupplier.set(mProfile);
+    protected void onProfileAvailable(Profile profile) {
+        super.onProfileAvailable(profile);
+        byte[] webFeedId =
+                getIntent().getByteArrayExtra(CreatorIntentConstants.CREATOR_WEB_FEED_ID);
+        String url = getIntent().getStringExtra(CreatorIntentConstants.CREATOR_URL);
+        boolean following =
+                getIntent().getBooleanExtra(CreatorIntentConstants.CREATOR_FOLLOWING, false);
+        int entryPoint =
+                getIntent()
+                        .getIntExtra(
+                                CreatorIntentConstants.CREATOR_ENTRY_POINT,
+                                SingleWebFeedEntryPoint.OTHER);
+        int parentTabId =
+                getIntent().getIntExtra(CreatorIntentConstants.CREATOR_TAB_ID, INVALID_TAB_ID);
 
-        super.onCreate(savedInstanceState);
         IntentRequestTracker intentRequestTracker = IntentRequestTracker.createFromActivity(this);
-        mWindowAndroid = new ActivityWindowAndroid(this, false, intentRequestTracker);
-        CreatorCoordinator coordinator = new CreatorCoordinator(this, mWebFeedId,
-                getSnackbarManager(), mWindowAndroid, mProfile, mTitle, mUrl,
-                this::createWebContents, this::createNewTab, mTabShareDelegateSupplier);
+        mWindowAndroid =
+                new ActivityWindowAndroid(
+                        this,
+                        false,
+                        intentRequestTracker,
+                        getInsetObserver(),
+                        /* trackOcclusion= */ true);
+
+        TabShareDelegateImpl tabshareDelegate =
+                new TabShareDelegateImpl(
+                        this,
+                        mBottomSheetController,
+                        mLifecycleDispatcher,
+                        mActivityTabProvider,
+                        /* tabModelSelectProvider */ ObservableSuppliers.createMonotonic(),
+                        getProfileSupplier(),
+                        new ShareDelegateImpl.ShareSheetDelegate(),
+                        /* isCustomTab= */ false);
+        mTabShareDelegateSupplier.set(tabshareDelegate);
+
+        assert webFeedId != null;
+        assumeNonNull(url);
+        CreatorCoordinator coordinator =
+                new CreatorCoordinator(
+                        this,
+                        webFeedId,
+                        getSnackbarManager(),
+                        mWindowAndroid,
+                        profile,
+                        url,
+                        this::createWebContents,
+                        this::createNewTab,
+                        mTabShareDelegateSupplier,
+                        entryPoint,
+                        following,
+                        this::showSignInInterstitial);
 
         mBottomSheetController = coordinator.getBottomSheetController();
-        ShareDelegate shareDelegate = new ShareDelegateImpl(mBottomSheetController,
-                mLifecycleDispatcher, mActivityTabProvider,
-                /* tabModelSelectProvider */ new ObservableSupplierImpl<>(), mProfileSupplier,
-                new ShareDelegateImpl.ShareSheetDelegate(),
-                /* isCustomTab */ false);
+
+        ShareDelegate shareDelegate =
+                new ShareDelegateImpl(
+                        this,
+                        mBottomSheetController,
+                        mLifecycleDispatcher,
+                        mActivityTabProvider,
+                        /* tabModelSelectProvider */ ObservableSuppliers.createMonotonic(),
+                        getProfileSupplier(),
+                        new ShareDelegateImpl.ShareSheetDelegate(),
+                        /* isCustomTab= */ false,
+                        null);
         mShareDelegateSupplier.set(shareDelegate);
         mCreatorActionDelegate =
-                new CreatorActionDelegateImpl(this, mProfile, getSnackbarManager(), coordinator);
-        coordinator.initFeedStream(mCreatorActionDelegate,
-                HelpAndFeedbackLauncherImpl.getInstance(), mShareDelegateSupplier);
+                new CreatorActionDelegateImpl(
+                        this,
+                        profile,
+                        getSnackbarManager(),
+                        coordinator,
+                        parentTabId,
+                        mBottomSheetController);
+
+        coordinator.queryFeedStream(mCreatorActionDelegate, mShareDelegateSupplier);
 
         setContentView(coordinator.getView());
         Toolbar actionBar = findViewById(R.id.action_bar);
         setSupportActionBar(actionBar);
+        assumeNonNull(getSupportActionBar());
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         getSupportActionBar().setTitle("");
+
+        // For this Activity, the home button in the action bar acts as the back button.
+        getSupportActionBar().setHomeActionContentDescription(R.string.back);
     }
 
     @Override
@@ -104,20 +193,42 @@ public class CreatorActivity extends SnackbarActivity {
         return super.onOptionsItemSelected(item);
     }
 
+    @SuppressWarnings("NullAway")
     @Override
     protected void onDestroy() {
+        // Dispatch onDestroy() for objects created for the activity.
+        mLifecycleDispatcher.dispatchOnDestroy();
         mTabShareDelegateSupplier.destroy();
         mShareDelegateSupplier.destroy();
+
+        // Destroy ActivityWindowAndroid if it exists. This must be after
+        // mLifecycleDispatcher.dispatchOnDestroy() because objects subscribing to
+        // mLifecycleDispatcher's onDestroy events may have references to ActivityWindowAndroid.
+        if (mWindowAndroid != null) {
+            mWindowAndroid.destroy();
+            mWindowAndroid = null;
+        }
+
+        // Finally, destroy the activity. This must be after destroying ActivityWindowAndroid
+        // because it has a reference to the Activity.
         super.onDestroy();
     }
 
     // This implements the CreatorWebContents interface.
     public WebContents createWebContents() {
-        return WebContentsFactory.createWebContents(mProfile, true);
+        return WebContentsFactory.createWebContents(
+                assertNonNull(getProfileSupplier().get()), true, false);
     }
 
     // This implements the CreatorOpenTab interface.
     public void createNewTab(LoadUrlParams params) {
-        new TabDelegate(false).createNewTab(params, TabLaunchType.FROM_LINK, null);
+        new ChromeAsyncTabLauncher(false).launchNewTab(params, TabLaunchType.FROM_LINK, null);
+    }
+
+    // This implements the SignInInterstitialInitiator interface.
+    public void showSignInInterstitial() {
+        assumeNonNull(mCreatorActionDelegate);
+        mCreatorActionDelegate.showSignInInterstitial(
+                SigninAccessPoint.CREATOR_FEED_FOLLOW, mBottomSheetController);
     }
 }

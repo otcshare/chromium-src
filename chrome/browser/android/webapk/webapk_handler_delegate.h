@@ -8,7 +8,7 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/android/webapk/webapk_info.h"
 
 // Delegate for retrieving installed WebAPKs for display in WebUI.
@@ -29,27 +29,29 @@ class WebApkHandlerDelegate {
   // Called once for each installed WebAPK when RetrieveWebApks() is called.
   void OnWebApkInfoRetrieved(
       JNIEnv* env,
-      const base::android::JavaParamRef<jstring>& jname,
-      const base::android::JavaParamRef<jstring>& jshort_name,
-      const base::android::JavaParamRef<jstring>& jpackage_name,
-      const base::android::JavaParamRef<jstring>& jid,
-      const jint jshell_apk_version,
-      const jint jversion_code,
-      const base::android::JavaParamRef<jstring>& juri,
-      const base::android::JavaParamRef<jstring>& jscope,
-      const base::android::JavaParamRef<jstring>& jmanifest_url,
-      const base::android::JavaParamRef<jstring>& jmanifest_start_url,
-      const base::android::JavaParamRef<jstring>& jmanifest_id,
-      const jint jdisplay_mode,
-      const jint jorientation,
-      const jlong jtheme_color,
-      const jlong jbackground_color,
-      const jlong jlast_update_check_time_ms,
-      const jlong jlast_update_completion_time_ms,
-      const jboolean jrelax_updates,
-      const base::android::JavaParamRef<jstring>& jbacking_browser_package_name,
-      const jboolean jis_backing_browser,
-      const base::android::JavaParamRef<jstring>& jupdate_status);
+      const std::string& jname,
+      const std::string& jshort_name,
+      const std::string& jpackage_name,
+      const std::string& jid,
+      const int32_t jshell_apk_version,
+      const int32_t jversion_code,
+      const std::string& juri,
+      const std::string& jscope,
+      const std::string& jmanifest_url,
+      const std::string& jmanifest_start_url,
+      const base::android::JavaRef<jstring>& jmanifest_id,
+      const int32_t jdisplay_mode,
+      const int32_t jorientation,
+      const int64_t jtheme_color,
+      const int64_t jbackground_color,
+      const int64_t jdark_theme_color,
+      const int64_t jdark_background_color,
+      const int64_t jlast_update_check_time_ms,
+      const int64_t jlast_update_completion_time_ms,
+      const bool jrelax_updates,
+      const base::android::JavaRef<jstring>& jbacking_browser_package_name,
+      const bool jis_backing_browser,
+      const std::string& jupdate_status);
 
  private:
   WebApkInfoCallback callback_;

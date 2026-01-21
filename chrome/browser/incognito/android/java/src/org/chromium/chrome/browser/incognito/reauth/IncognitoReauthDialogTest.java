@@ -20,10 +20,12 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 
@@ -34,48 +36,53 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * Robolectric tests for {@link IncognitoReauthDialog}.
- */
+/** Robolectric tests for {@link IncognitoReauthDialog}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 @Batch(UNIT_TESTS)
 public class IncognitoReauthDialogTest {
-    @Mock
-    private ModalDialogManager mModalDialogManagerMock;
-    @Mock
-    private View mIncognitoReauthViewMock;
-    @Mock
-    private OnBackPressedCallback mOnBackPressedCallbackMock;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private ModalDialogManager mModalDialogManagerMock;
+    @Mock private View mIncognitoReauthViewMock;
+
+    private final OnBackPressedCallback mOnBackPressedCallbackMock =
+            new OnBackPressedCallback(false) {
+                @Override
+                public void handleOnBackPressed() {}
+            };
 
     private IncognitoReauthDialog mIncognitoReauthDialog;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        mIncognitoReauthDialog = new IncognitoReauthDialog(
-                mModalDialogManagerMock, mIncognitoReauthViewMock, mOnBackPressedCallbackMock);
+        mIncognitoReauthDialog =
+                new IncognitoReauthDialog(
+                        mModalDialogManagerMock,
+                        mIncognitoReauthViewMock,
+                        mOnBackPressedCallbackMock);
     }
 
     @After
     public void tearDown() {
-        verifyNoMoreInteractions(
-                mModalDialogManagerMock, mIncognitoReauthViewMock, mOnBackPressedCallbackMock);
+        verifyNoMoreInteractions(mModalDialogManagerMock, mIncognitoReauthViewMock);
     }
 
     @Test
     @SmallTest
     public void testPropertyModelAttributes_CorrectlySet() {
         PropertyModel model = mIncognitoReauthDialog.getModalDialogPropertyModelForTesting();
-        assertEquals("View mis-match! Supplied view can't be different from the custom view.",
-                mIncognitoReauthViewMock, model.get(ModalDialogProperties.CUSTOM_VIEW));
-        assertFalse("Interactions done outside the re-auth dialog must be ignored.",
+        assertEquals(
+                "View mis-match! Supplied view can't be different from the custom view.",
+                mIncognitoReauthViewMock,
+                model.get(ModalDialogProperties.CUSTOM_VIEW));
+        assertFalse(
+                "Interactions done outside the re-auth dialog must be ignored.",
                 model.get(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE));
-        assertTrue("Re-auth dialog must be full-screen.",
-                model.get(ModalDialogProperties.FULLSCREEN_DIALOG));
-        assertTrue("re-auth dialog must exceed the default height constraint.",
-                model.get(ModalDialogProperties.EXCEED_MAX_HEIGHT));
+        assertTrue(
+                "re-auth dialog must be dark full-screen style.",
+                model.get(ModalDialogProperties.DIALOG_STYLES)
+                        == ModalDialogProperties.DialogStyles.FULLSCREEN_DARK_DIALOG);
     }
 
     @Test
@@ -84,13 +91,17 @@ public class IncognitoReauthDialogTest {
         PropertyModel model = mIncognitoReauthDialog.getModalDialogPropertyModelForTesting();
         doNothing()
                 .when(mModalDialogManagerMock)
-                .showDialog(model, ModalDialogManager.ModalDialogType.APP,
+                .showDialog(
+                        model,
+                        ModalDialogManager.ModalDialogType.APP,
                         ModalDialogManager.ModalDialogPriority.VERY_HIGH);
 
         mIncognitoReauthDialog.showIncognitoReauthDialog();
 
         verify(mModalDialogManagerMock)
-                .showDialog(model, ModalDialogManager.ModalDialogType.APP,
+                .showDialog(
+                        model,
+                        ModalDialogManager.ModalDialogType.APP,
                         ModalDialogManager.ModalDialogPriority.VERY_HIGH);
     }
 

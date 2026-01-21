@@ -8,13 +8,15 @@
 #include "base/android/jni_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/permissions/android/bluetooth_scanning_prompt_android_delegate.h"
-#include "components/permissions/android/jni_headers/BluetoothScanningPermissionDialog_jni.h"
 #include "components/permissions/permission_util.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/render_frame_host.h"
 #include "ui/android/window_android.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/permissions/android/jni_headers/BluetoothScanningPermissionDialog_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
@@ -92,7 +94,7 @@ void BluetoothScanningPromptAndroid::AddOrUpdateDevice(
 }
 
 void BluetoothScanningPromptAndroid::OnDialogFinished(JNIEnv* env,
-                                                      jint event_type) {
+                                                      int32_t event_type) {
   // Values are defined in BluetoothScanningPromptDialog as DIALOG_FINISHED
   // constants.
   switch (event_type) {
@@ -109,4 +111,19 @@ void BluetoothScanningPromptAndroid::OnDialogFinished(JNIEnv* env,
   NOTREACHED();
 }
 
+// static
+std::unique_ptr<BluetoothScanningPromptAndroid>
+BluetoothScanningPromptAndroid::CreateForTesting(
+    content::RenderFrameHost* frame,
+    const EventHandler& event_handler,
+    std::unique_ptr<BluetoothScanningPromptAndroidDelegate> delegate,
+    CreateJavaDialogCallback create_java_dialog_callback) {
+  // Using `new` to access a non-public constructor.
+  return base::WrapUnique(new BluetoothScanningPromptAndroid(
+      frame, event_handler, std::move(delegate),
+      std::move(create_java_dialog_callback)));
+}
+
 }  // namespace permissions
+
+DEFINE_JNI(BluetoothScanningPermissionDialog)

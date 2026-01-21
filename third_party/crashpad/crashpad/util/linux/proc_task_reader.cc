@@ -17,12 +17,13 @@
 #include <stdio.h>
 
 #include <iterator>
+#include <utility>
 
+#include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "util/file/directory_reader.h"
-#include "util/misc/as_underlying_type.h"
 
 namespace crashpad {
 
@@ -49,8 +50,8 @@ bool ReadThreadIDs(pid_t pid, std::vector<pid_t>* tids) {
 
     local_tids.push_back(tid);
   }
-  DCHECK_EQ(AsUnderlyingType(result),
-            AsUnderlyingType(DirectoryReader::Result::kNoMoreFiles));
+  DCHECK_EQ(std::to_underlying(result),
+            std::to_underlying(DirectoryReader::Result::kNoMoreFiles));
   DCHECK(!local_tids.empty());
 
   tids->swap(local_tids);

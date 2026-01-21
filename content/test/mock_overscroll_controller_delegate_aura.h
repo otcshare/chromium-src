@@ -6,7 +6,7 @@
 #define CONTENT_TEST_MOCK_OVERSCROLL_CONTROLLER_DELEGATE_AURA_H_
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "content/browser/renderer_host/overscroll_controller_delegate.h"
 #include "content/test/mock_overscroll_observer.h"
 
@@ -31,7 +31,7 @@ class MockOverscrollControllerDelegateAura
 
   // OverscrollControllerDelegate:
   gfx::Size GetDisplaySize() const override;
-  absl::optional<float> GetMaxOverscrollDelta() const override;
+  std::optional<float> GetMaxOverscrollDelta() const override;
   bool OnOverscrollUpdate(float, float) override;
   void OnOverscrollComplete(OverscrollMode) override;
   void OnOverscrollModeChange(OverscrollMode old_mode,

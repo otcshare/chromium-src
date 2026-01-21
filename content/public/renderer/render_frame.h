@@ -9,22 +9,31 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/byte_count.h"
 #include "base/supports_user_data.h"
-#include "base/task/single_thread_task_runner.h"
+#include "content/common/buildflags.h"
 #include "content/common/content_export.h"
-#include "ipc/ipc_listener.h"
-#include "ipc/ipc_sender.h"
-#include "ppapi/buildflags/buildflags.h"
+#include "content/public/common/bindings_policy.h"
+#include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
+#include "third_party/blink/public/common/subresource_load_metrics.h"
+#include "third_party/blink/public/common/use_counter/use_counter_feature.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/public/platform/web_url_response.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/ax_tree_update.h"
 
 class GURL;
+
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace blink {
 namespace scheduler {
@@ -36,30 +45,21 @@ struct WebPreferences;
 class AssociatedInterfaceProvider;
 class AssociatedInterfaceRegistry;
 class BrowserInterfaceBrokerProxy;
-class WebElement;
 class WebFrame;
 class WebLocalFrame;
-class WebPlugin;
-struct WebPluginParams;
 class WebView;
 }  // namespace blink
 
 namespace gfx {
 class Range;
 class Rect;
-class RectF;
 }  // namespace gfx
-
-namespace network {
-class SharedURLLoaderFactory;
-}  // namespace network
 
 namespace content {
 
 class RenderAccessibility;
 struct RenderFrameMediaPlaybackOptions;
 class RenderFrameVisitor;
-struct WebPluginInfo;
 
 // A class that takes a snapshot of the accessibility tree. Accessibility
 // support in Blink is enabled for the lifetime of this object, which can
@@ -71,10 +71,6 @@ class AXTreeSnapshotter {
   // Return in |accessibility_tree| a snapshot of the accessibility tree
   // for the frame with the given accessibility mode.
   //
-  // - |exclude_offscreen| excludes a subtree if a node is entirely offscreen,
-  //   but note that this heuristic is imperfect, and an aboslute-positioned
-  //   node that's visible, but whose ancestors are entirely offscreen, may
-  //   get excluded.
   // - |max_nodes_count| specifies the maximum number of nodes to snapshot
   //   before exiting early. Note that this is not a hard limit; once this limit
   //   is reached a few more nodes may be added in order to ensure a
@@ -83,8 +79,7 @@ class AXTreeSnapshotter {
   //   (per frame), specified in milliseconds. Like max_node_count, this is not
   //   a hard limit, and once this/ limit is reached a few more nodes may
   //   be added in order to ensure a well-formed tree. Use 0 for no timeout.
-  virtual void Snapshot(bool exclude_offscreen,
-                        size_t max_node_count,
+  virtual void Snapshot(size_t max_node_count,
                         base::TimeDelta timeout,
                         ui::AXTreeUpdate* accessibility_tree) = 0;
 
@@ -94,38 +89,11 @@ class AXTreeSnapshotter {
 // This interface wraps functionality, which is specific to frames, such as
 // navigation. It provides communication with a corresponding RenderFrameHost
 // in the browser process.
-class CONTENT_EXPORT RenderFrame : public IPC::Listener,
-                                   public IPC::Sender,
-                                   public base::SupportsUserData {
+class CONTENT_EXPORT RenderFrame :
+    public base::SupportsUserData {
  public:
-  // These numeric values are used in UMA logs; do not change them.
-  enum PeripheralContentStatus {
-    // Content is peripheral, and should be throttled, but is not tiny.
-    CONTENT_STATUS_PERIPHERAL = 0,
-    // Content is essential because it's same-origin with the top-level frame.
-    CONTENT_STATUS_ESSENTIAL_SAME_ORIGIN = 1,
-    // Content is essential even though it's cross-origin, because it's large.
-    CONTENT_STATUS_ESSENTIAL_CROSS_ORIGIN_BIG = 2,
-    // Content is essential because there's large content from the same origin.
-    CONTENT_STATUS_ESSENTIAL_CROSS_ORIGIN_ALLOWLISTED = 3,
-    // Content is tiny in size. These are usually blocked.
-    CONTENT_STATUS_TINY = 4,
-    // Deprecated, as now entirely obscured content is treated as tiny.
-    DEPRECATED_CONTENT_STATUS_UNKNOWN_SIZE = 5,
-    // Must be last.
-    CONTENT_STATUS_NUM_ITEMS
-  };
-
-  enum RecordPeripheralDecision {
-    DONT_RECORD_DECISION = 0,
-    RECORD_DECISION = 1
-  };
-
   // Returns the RenderFrame given a WebLocalFrame.
   static RenderFrame* FromWebFrame(blink::WebLocalFrame* web_frame);
-
-  // Returns the RenderFrame given a routing id.
-  static RenderFrame* FromRoutingID(int routing_id);
 
   // Visit all live RenderFrames.
   static void ForEach(RenderFrameVisitor* visitor);
@@ -144,9 +112,6 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
   virtual std::unique_ptr<AXTreeSnapshotter> CreateAXTreeSnapshotter(
       ui::AXMode ax_mode) = 0;
 
-  // Get the routing ID of the frame.
-  virtual int GetRoutingID() = 0;
-
   // Returns the associated WebView.
   virtual blink::WebView* GetWebView() = 0;
   virtual const blink::WebView* GetWebView() const = 0;
@@ -160,12 +125,6 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
 
   // Issues a request to show the virtual keyboard.
   virtual void ShowVirtualKeyboard() = 0;
-
-  // Create a new Pepper plugin depending on |info|. Returns NULL if no plugin
-  // was found.
-  virtual blink::WebPlugin* CreatePlugin(
-      const WebPluginInfo& info,
-      const blink::WebPluginParams& params) = 0;
 
   // Execute a string of JavaScript in this frame's context.
   virtual void ExecuteJavaScript(const std::u16string& javascript) = 0;
@@ -189,7 +148,8 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
 
   // Returns the BrowserInterfaceBrokerProxy that this process can use to bind
   // interfaces exposed to it by the application running in this frame.
-  virtual blink::BrowserInterfaceBrokerProxy* GetBrowserInterfaceBroker() = 0;
+  virtual const blink::BrowserInterfaceBrokerProxy&
+  GetBrowserInterfaceBroker() = 0;
 
   // Returns the AssociatedInterfaceRegistry this frame can use to expose
   // frame-specific Channel-associated interfaces to the remote RenderFrameHost.
@@ -222,7 +182,7 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
   //
   // This should be used only for testing. Real code should follow the
   // navigation code path and inherit the correct security properties
-  virtual void LoadHTMLStringForTesting(const std::string& html,
+  virtual void LoadHTMLStringForTesting(std::string_view html,
                                         const GURL& base_url,
                                         const std::string& text_encoding,
                                         const GURL& unreachable_url,
@@ -230,23 +190,18 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
 
   // Returns true in between the time that Blink requests navigation until the
   // browser responds with the result.
-  // TODO(ahemery): Rename this to be more explicit.
-  virtual bool IsBrowserSideNavigationPending() = 0;
+  virtual bool IsRequestingNavigation() = 0;
 
   // Renderer scheduler frame-specific task queues handles.
   // See third_party/WebKit/Source/platform/WebFrameScheduler.h for details.
   virtual scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(
       blink::TaskType task_type) = 0;
 
-  // Bitwise-ORed set of extra bindings that have been enabled.  See
-  // BindingsPolicy for details.
-  virtual int GetEnabledBindings() = 0;
+  // The extra bindings that have been enabled.
+  virtual BindingsPolicySet GetEnabledBindings() = 0;
 
   // Set the accessibility mode to force creation of RenderAccessibility.
   virtual void SetAccessibilityModeForTest(ui::AXMode new_mode) = 0;
-
-  virtual scoped_refptr<network::SharedURLLoaderFactory>
-  GetURLLoaderFactory() = 0;
 
   // Per-frame media playback options passed to each WebMediaPlayer.
   virtual const RenderFrameMediaPlaybackOptions&
@@ -257,16 +212,11 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
   // Sets that cross browsing instance frame lookup is allowed.
   virtual void SetAllowsCrossBrowsingInstanceFrameLookup() = 0;
 
-  // Returns the bounds of |element| in Window coordinates which are device
-  // scale independent. The bounds have been adjusted to include any
-  // transformations, including page scale. This function will update the layout
-  // if required.
-  virtual gfx::RectF ElementBoundsInWindow(
-      const blink::WebElement& element) = 0;
-
   // Converts the |rect| to Window coordinates which are device scale
-  // independent.
-  virtual void ConvertViewportToWindow(gfx::Rect* rect) = 0;
+  // independent. The bounds have been adjusted to include any transformations,
+  // including page scale.
+  [[nodiscard]] virtual gfx::Rect ConvertViewportToWindow(
+      const gfx::Rect& rect) = 0;
 
   // Returns the device scale factor of the display the render frame is in.
   virtual float GetDeviceScaleFactor() = 0;
@@ -275,6 +225,46 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
   // this RenderFrame.
   virtual blink::scheduler::WebAgentGroupScheduler&
   GetAgentGroupScheduler() = 0;
+
+  // Sets the callback which is called when the renderer observes a new use
+  // counter usage. This is used for UseCounter metrics.
+  using NewFeatureUsageCallback =
+      base::RepeatingCallback<void(const blink::UseCounterFeature&)>;
+  virtual void SetNewFeatureUsageCallback(NewFeatureUsageCallback callback) = 0;
+
+  // Sets the callback which is called when the renderer observes a new
+  // subresource load. This is used for subresource loading metrics.
+  using SubresourceLoadCallback =
+      base::RepeatingCallback<void(const blink::SubresourceLoadMetrics&)>;
+  virtual void SetSubresourceLoadCallback(SubresourceLoadCallback callback) = 0;
+
+  using LoadFromMemoryCacheCallback =
+      base::RepeatingCallback<void(const GURL& response_url,
+                                   int request_id,
+                                   base::ByteCount encoded_body_length,
+                                   const std::string& mime_type,
+                                   bool from_archive)>;
+  virtual void SetLoadFromMemoryCacheCallback(
+      LoadFromMemoryCacheCallback callback) = 0;
+
+  // Sets the callback which is called when the renderer observes a new response
+  // start, completion, and cancellation.
+  using DidStartResponseCallback = base::RepeatingCallback<void(
+      const url::SchemeHostPort& final_response_url,
+      int request_id,
+      const network::mojom::URLResponseHead& response_head,
+      network::mojom::RequestDestination request_destination,
+      bool is_ad_resource)>;
+  using DidCompleteResponseCallback = base::RepeatingCallback<
+      void(int request_id, const network::URLLoaderCompletionStatus& status)>;
+  using DidCancelResponseCallback =
+      base::RepeatingCallback<void(int request_id)>;
+  virtual void SetDidStartResponseCallback(
+      DidStartResponseCallback callback) = 0;
+  virtual void SetDidCompleteResponseCallback(
+      DidCompleteResponseCallback callback) = 0;
+  virtual void SetDidCancelResponseCallback(
+      DidCancelResponseCallback callback) = 0;
 
  protected:
   ~RenderFrame() override {}

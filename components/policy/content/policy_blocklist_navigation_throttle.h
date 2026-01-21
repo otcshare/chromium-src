@@ -5,12 +5,19 @@
 #ifndef COMPONENTS_POLICY_CONTENT_POLICY_BLOCKLIST_NAVIGATION_THROTTLE_H_
 #define COMPONENTS_POLICY_CONTENT_POLICY_BLOCKLIST_NAVIGATION_THROTTLE_H_
 
-#include "components/policy/content/safe_sites_navigation_throttle.h"
+#include "base/gtest_prod_util.h"
+#include "base/time/time.h"
+#include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "content/public/browser/navigation_throttle.h"
 
 class GURL;
 class PolicyBlocklistService;
 class PrefService;
+class SafeSearchService;
+
+namespace content {
+class NavigationThrottleRegistry;
+}  // namespace content
 
 // PolicyBlocklistNavigationThrottle provides a simple way to block a navigation
 // based on the URLBlocklistManager and Safe Search API. If the URL is on the
@@ -21,8 +28,10 @@ class PrefService;
 class PolicyBlocklistNavigationThrottle : public content::NavigationThrottle {
  public:
   PolicyBlocklistNavigationThrottle(
-      content::NavigationHandle* navigation_handle,
-      content::BrowserContext* context);
+      content::NavigationThrottleRegistry& registry,
+      PrefService* prefs,
+      PolicyBlocklistService* blocklist_service,
+      SafeSearchService* safe_search_service);
   PolicyBlocklistNavigationThrottle(const PolicyBlocklistNavigationThrottle&) =
       delete;
   PolicyBlocklistNavigationThrottle& operator=(
@@ -32,24 +41,39 @@ class PolicyBlocklistNavigationThrottle : public content::NavigationThrottle {
   // NavigationThrottle overrides.
   ThrottleCheckResult WillStartRequest() override;
   ThrottleCheckResult WillRedirectRequest() override;
+  ThrottleCheckResult WillProcessResponse() override;
   const char* GetNameForLogging() override;
 
  private:
-  // Returns TRUE if this navigation is to view-source: and view-source is on
-  // the URLBlocklist.
-  bool IsBlockedViewSourceNavigation();
+  FRIEND_TEST_ALL_PREFIXES(PolicyBlocklistNavigationThrottleTest, Blocklist);
+  FRIEND_TEST_ALL_PREFIXES(PolicyBlocklistNavigationThrottleTest, Allowlist);
+  FRIEND_TEST_ALL_PREFIXES(PolicyBlocklistNavigationThrottleTest,
+                           SafeSites_Safe);
+  FRIEND_TEST_ALL_PREFIXES(PolicyBlocklistNavigationThrottleTest,
+                           SafeSites_Porn);
+
+  // Returns TRUE if this navigation is to view-source.
+  bool IsViewSourceNavigation();
+
+  // Returns the PolicyBlocklistState for a view-source navigation.
+  // Should only be called if the navigation is a view-source.
+  PolicyBlocklistService::PolicyBlocklistState
+  GetViewSourceNavigationBlocklistState();
 
   // To ensure both allow and block policies override Safe Sites,
   // SafeSitesNavigationThrottle must be consulted as part of this throttle
   // rather than added separately to the list of throttles.
-  ThrottleCheckResult CheckSafeSitesFilter(const GURL& url);
-  void OnDeferredSafeSitesResult(bool is_safe,
-                                 ThrottleCheckResult cancel_result);
-  SafeSitesNavigationThrottle safe_sites_navigation_throttle_;
+  ThrottleCheckResult CheckSafeSitesFilter(const GURL& url, bool is_redirect);
+  void OnDeferredSafeSitesResult(bool proceed,
+                                 std::optional<ThrottleCheckResult> result);
 
-  raw_ptr<PolicyBlocklistService> blocklist_service_;
+  ThrottleCheckResult WillStartOrRedirectRequest(bool is_redirect);
 
-  raw_ptr<PrefService> prefs_;
+  std::unique_ptr<content::NavigationThrottle> safe_sites_navigation_throttle_;
+
+  const raw_ptr<PolicyBlocklistService, DanglingUntriaged> blocklist_service_;
+
+  const raw_ptr<PrefService> prefs_;
 };
 
 #endif  // COMPONENTS_POLICY_CONTENT_POLICY_BLOCKLIST_NAVIGATION_THROTTLE_H_

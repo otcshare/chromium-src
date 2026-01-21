@@ -4,16 +4,17 @@
 
 #include "net/cookies/cookie_monster_change_dispatcher.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/strings/string_piece.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_runner.h"
 #include "net/base/features.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_delegate.h"
+#include "net/cookies/cookie_access_params.h"
 #include "net/cookies/cookie_change_dispatcher.h"
 #include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_monster.h"
@@ -24,10 +25,10 @@ namespace net {
 namespace {
 
 // Special key in GlobalDomainMap for global listeners.
-constexpr base::StringPiece kGlobalDomainKey = base::StringPiece("\0", 1);
+constexpr std::string_view kGlobalDomainKey = std::string_view("\0", 1);
 
 //
-constexpr base::StringPiece kGlobalNameKey = base::StringPiece("\0", 1);
+constexpr std::string_view kGlobalNameKey = std::string_view("\0", 1);
 
 }  // anonymous namespace
 
@@ -36,16 +37,15 @@ CookieMonsterChangeDispatcher::Subscription::Subscription(
     std::string domain_key,
     std::string name_key,
     GURL url,
-    absl::optional<CookiePartitionKey> cookie_partition_key,
-    bool same_party_attribute_enabled,
+    CookiePartitionKeyCollection cookie_partition_key_collection,
     net::CookieChangeCallback callback)
     : change_dispatcher_(std::move(change_dispatcher)),
       domain_key_(std::move(domain_key)),
       name_key_(std::move(name_key)),
       url_(std::move(url)),
-      cookie_partition_key_(std::move(cookie_partition_key)),
+      cookie_partition_key_collection_(
+          std::move(cookie_partition_key_collection)),
       callback_(std::move(callback)),
-      same_party_attribute_enabled_(same_party_attribute_enabled),
       task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {
   DCHECK(url_.is_valid() || url_.is_empty());
   DCHECK_EQ(url_.is_empty(), domain_key_ == kGlobalDomainKey);
@@ -74,33 +74,35 @@ void CookieMonsterChangeDispatcher::Subscription::DispatchChange(
         cookie_access_delegate &&
         cookie_access_delegate->ShouldTreatUrlAsTrustworthy(url_);
     CookieOptions options = CookieOptions::MakeAllInclusive();
-    CookieSamePartyStatus same_party_status = cookie_util::GetSamePartyStatus(
-        cookie, options, same_party_attribute_enabled_);
     if (!cookie
              .IncludeForRequestURL(
                  url_, options,
                  CookieAccessParams{change.access_result.access_semantics,
-                                    delegate_treats_url_as_trustworthy,
-                                    same_party_status})
+                                    change.access_result.scope_semantics,
+                                    delegate_treats_url_as_trustworthy})
              .status.IsInclude()) {
       return;
     }
   }
 
-  if (!change.cookie.IsPartitioned() &&
-      net::CookiePartitionKey::HasNonce(cookie_partition_key_)) {
-    return;
+  if (!cookie_partition_key_collection_.ContainsAllKeys()) {
+    if (cookie_partition_key_collection_.PartitionKeys().empty()) {
+      if (cookie.IsPartitioned()) {
+        return;
+      }
+    } else {
+      DCHECK_EQ(1u, cookie_partition_key_collection_.PartitionKeys().size());
+      const CookiePartitionKey& key =
+          *cookie_partition_key_collection_.PartitionKeys().begin();
+      if (CookiePartitionKey::HasNonce(key) && !cookie.IsPartitioned()) {
+        return;
+      }
+      if (cookie.IsPartitioned() && key != *cookie.PartitionKey()) {
+        return;
+      }
+    }
   }
-
-  if (change.cookie.IsPartitioned() &&
-      change.cookie.PartitionKey() != cookie_partition_key_) {
-    return;
-  }
-
-  // TODO(mmenke, pwnall): Run callbacks synchronously?
-  task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&Subscription::DoDispatchChange,
-                                weak_ptr_factory_.GetWeakPtr(), change));
+  Subscription::DoDispatchChange(change);
 }
 
 void CookieMonsterChangeDispatcher::Subscription::DoDispatchChange(
@@ -111,10 +113,8 @@ void CookieMonsterChangeDispatcher::Subscription::DoDispatchChange(
 }
 
 CookieMonsterChangeDispatcher::CookieMonsterChangeDispatcher(
-    const CookieMonster* cookie_monster,
-    bool same_party_attribute_enabled)
-    : cookie_monster_(cookie_monster),
-      same_party_attribute_enabled_(same_party_attribute_enabled) {}
+    const CookieMonster* cookie_monster)
+    : cookie_monster_(cookie_monster) {}
 
 CookieMonsterChangeDispatcher::~CookieMonsterChangeDispatcher() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
@@ -149,13 +149,13 @@ std::unique_ptr<CookieChangeSubscription>
 CookieMonsterChangeDispatcher::AddCallbackForCookie(
     const GURL& url,
     const std::string& name,
-    const absl::optional<CookiePartitionKey>& cookie_partition_key,
+    const std::optional<CookiePartitionKey>& cookie_partition_key,
     CookieChangeCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   std::unique_ptr<Subscription> subscription = std::make_unique<Subscription>(
       weak_ptr_factory_.GetWeakPtr(), DomainKey(url), NameKey(name), url,
-      cookie_partition_key, same_party_attribute_enabled_, std::move(callback));
+      CookiePartitionKeyCollection(cookie_partition_key), std::move(callback));
 
   LinkSubscription(subscription.get());
   return subscription;
@@ -164,14 +164,14 @@ CookieMonsterChangeDispatcher::AddCallbackForCookie(
 std::unique_ptr<CookieChangeSubscription>
 CookieMonsterChangeDispatcher::AddCallbackForUrl(
     const GURL& url,
-    const absl::optional<CookiePartitionKey>& cookie_partition_key,
+    const std::optional<CookiePartitionKey>& cookie_partition_key,
     CookieChangeCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   std::unique_ptr<Subscription> subscription = std::make_unique<Subscription>(
       weak_ptr_factory_.GetWeakPtr(), DomainKey(url),
-      std::string(kGlobalNameKey), url, cookie_partition_key,
-      same_party_attribute_enabled_, std::move(callback));
+      std::string(kGlobalNameKey), url,
+      CookiePartitionKeyCollection(cookie_partition_key), std::move(callback));
 
   LinkSubscription(subscription.get());
   return subscription;
@@ -184,8 +184,8 @@ CookieMonsterChangeDispatcher::AddCallbackForAllChanges(
 
   std::unique_ptr<Subscription> subscription = std::make_unique<Subscription>(
       weak_ptr_factory_.GetWeakPtr(), std::string(kGlobalDomainKey),
-      std::string(kGlobalNameKey), GURL(""), absl::nullopt,
-      same_party_attribute_enabled_, std::move(callback));
+      std::string(kGlobalNameKey), GURL(""),
+      CookiePartitionKeyCollection::ContainsAll(), std::move(callback));
 
   LinkSubscription(subscription.get());
   return subscription;
@@ -251,12 +251,12 @@ void CookieMonsterChangeDispatcher::UnlinkSubscription(
 
   auto cookie_domain_map_iterator =
       cookie_domain_map_.find(subscription->domain_key());
-  DCHECK(cookie_domain_map_iterator != cookie_domain_map_.end());
+  CHECK(cookie_domain_map_iterator != cookie_domain_map_.end());
 
   CookieNameMap& cookie_name_map = cookie_domain_map_iterator->second;
   auto cookie_name_map_iterator =
       cookie_name_map.find(subscription->name_key());
-  DCHECK(cookie_name_map_iterator != cookie_name_map.end());
+  CHECK(cookie_name_map_iterator != cookie_name_map.end());
 
   SubscriptionList& subscription_list = cookie_name_map_iterator->second;
   subscription->RemoveFromList();

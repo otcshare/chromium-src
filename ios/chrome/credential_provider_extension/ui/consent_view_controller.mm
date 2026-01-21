@@ -5,13 +5,11 @@
 #import "ios/chrome/credential_provider_extension/ui/consent_view_controller.h"
 
 #import "ios/chrome/common/app_group/app_group_constants.h"
+#import "ios/chrome/common/app_group/app_group_utils.h"
 #import "ios/chrome/common/credential_provider/constants.h"
+#import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/credential_provider_extension/ui/feature_flags.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/credential_provider_extension/generated_localized_strings.h"
 
 namespace {
 NSString* const kConsentViewControllerIdentifier =
@@ -20,44 +18,41 @@ NSString* const kConsentViewControllerIdentifier =
 
 @implementation ConsentViewController
 
+#pragma mark - Initialization
+
+- (instancetype)init {
+  return [super initWithTaskRunner:nullptr];
+}
+
 #pragma mark - UIViewController
 
 - (void)viewDidLoad {
   self.view.accessibilityIdentifier = kConsentViewControllerIdentifier;
+  self.bannerName = @"consent_view_controller";
 
-  if (IsPasswordManagerBrandingUpdateEnable()) {
-    self.bannerName = @"consent_view_controller";
+  NSString* userEmail = app_group::UserDefaultsStringForKey(
+      AppGroupUserDefaultsCredentialProviderUserEmail(),
+      /*default_value=*/@"");
 
-    NSString* userEmail = [app_group::GetGroupUserDefaults()
-        stringForKey:AppGroupUserDefaultsCredentialProviderUserEmail()];
-
-    if (userEmail.length) {
-      NSString* baseLocalizedString = NSLocalizedString(
-          @"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_SUBTITLE_BRANDED_SYNC",
-          @"The subtitle in the consent screen.");
-      self.subtitleText =
-          [baseLocalizedString stringByReplacingOccurrencesOfString:@"$1"
-                                                         withString:userEmail];
-    } else {
-      self.subtitleText = NSLocalizedString(
-          @"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_SUBTITLE_BRANDED_NO_SYNC",
-          @"The subtitle in the consent screen.");
-    }
-  } else {
-    self.bannerName = @"legacy_consent_view_controller";
+  if (userEmail.length) {
+    NSString* baseLocalizedString =
+        CredentialProviderConsentSubtitleBrandedSyncString();
     self.subtitleText =
-        NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_SUBTITLE",
-                          @"The subtitle in the consent screen.");
+        [baseLocalizedString stringByReplacingOccurrencesOfString:@"$1"
+                                                       withString:userEmail];
+  } else {
+    self.subtitleText = CredentialProviderConsentSubtitleBrandedNoSyncString();
   }
-  self.titleText =
-      NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_TITLE",
-                        @"The title in the consent screen.");
-  self.isTallBanner = NO;
+
+  self.titleText = CredentialProviderConsentTitleString();
+  self.bannerSize = BannerImageSizeType::kStandard;
   self.shouldShowLearnMoreButton = YES;
-  self.primaryActionString = NSLocalizedString(
-      @"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_BUTTON_TITLE",
-      @"The primary action title in the consent screen. Used to enable the "
-      @"extension and dismiss the view");
+  // Primary action button is initialized regardless of the visibility set and
+  // the view crashes without this value set.
+  self.configuration.primaryActionString = @"";
+  self.actionButtonsVisibility = ActionButtonsVisibility::kHidden;
+  self.shouldShowDismissButton = YES;
+  self.dismissButtonString = CredentialProviderDoneString();
 
   // Add consent view specific content.
   UILabel* captionLabel = [self drawCaptionLabel];
@@ -80,9 +75,7 @@ NSString* const kConsentViewControllerIdentifier =
 
 - (UILabel*)drawCaptionLabel {
   UILabel* captionLabel = [[UILabel alloc] init];
-  captionLabel.text = NSLocalizedString(
-      @"IDS_IOS_CREDENTIAL_PROVIDER_CONSENT_CAPTION",
-      @"Caption below subtitle to show when enabling the extension");
+  captionLabel.text = CredentialProviderConsentCaptionString();
   captionLabel.numberOfLines = 0;
   captionLabel.textAlignment = NSTextAlignmentCenter;
   captionLabel.font =
@@ -92,4 +85,5 @@ NSString* const kConsentViewControllerIdentifier =
   captionLabel.adjustsFontForContentSizeCategory = YES;
   return captionLabel;
 }
+
 @end

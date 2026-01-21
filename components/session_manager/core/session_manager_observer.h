@@ -18,6 +18,15 @@ class SessionManagerObserver : public base::CheckedObserver {
   // Invoked when session state is changed.
   virtual void OnSessionStateChanged() {}
 
+  // Invoked when session creation is triggered.
+  virtual void OnSessionCreationStarted(const AccountId& account_id) {}
+
+  // Invoked when session is created. Note: though, on this invocation,
+  // the session may not be fully ready to be started. Followed by this
+  // callback, more initialization is required to set up a user session,
+  // such as profile creation, service initialization tied to user, etc.
+  virtual void OnSessionCreated(const AccountId& account_id) {}
+
   // Invoked when a user profile is loaded.
   virtual void OnUserProfileLoaded(const AccountId& account_id) {}
 
@@ -28,21 +37,15 @@ class SessionManagerObserver : public base::CheckedObserver {
   // after the user has logged in.
   virtual void OnUserSessionStarted(bool is_primary_user) {}
 
-  // Invoked when a network error message is displayed on the WebUI login
-  // screen.
-  virtual void OnNetworkErrorScreenShown() {}
-
   // Invoked when the specific part of login/lock WebUI is considered to be
-  // visible. That moment is tracked as the first paint event after
-  // `OnNetworkErrorScreenShown()`.
+  // visible.
   //
   // Possible series of notifications:
   // 1. Boot into fresh OOBE. `OnLoginOrLockScreenVisible()`.
   // 2. Boot into user pods list (normal boot). Same for lock screen.
   //    `OnLoginOrLockScreenVisible()`.
   // 3. Boot into GAIA sign in UI (user pods display disabled or no users):
-  //    if no network is connected or flaky network
-  //    (`OnLoginOrLockScreenVisible()` + `OnNetworkErrorScreenShown()`).
+  //    `OnLoginOrLockScreenVisible()`.
   // 4. Boot into retail mode. `OnLoginOrLockScreenVisible()`.
   virtual void OnLoginOrLockScreenVisible() {}
 
@@ -51,6 +54,13 @@ class SessionManagerObserver : public base::CheckedObserver {
   // failed unlock attempt.
   virtual void OnUnlockScreenAttempt(const bool success,
                                      const UnlockType unlock_type) {}
+
+  // Invoked when the tasks to make a user session work are completed.
+  // Currently following ones are considered as critical tasks:
+  // - Login state update.
+  // - Shelf Icon loading.
+  // - Browser window restoration.
+  virtual void OnUserSessionStartUpTaskCompleted() {}
 };
 
 }  // namespace session_manager

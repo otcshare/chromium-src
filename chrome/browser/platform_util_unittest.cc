@@ -6,24 +6,23 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/platform_util_internal.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/json/json_string_value_serializer.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ash/fileapi/file_system_backend_delegate.h"
 #include "chrome/browser/chrome_content_browser_client.h"
@@ -46,7 +45,7 @@ namespace platform_util {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 // ChromeContentBrowserClient subclass that sets up a custom file system backend
 // that allows the test to grant file access to the file manager extension ID
@@ -120,12 +119,14 @@ class PlatformUtilTestBase : public BrowserWithTestWindowTest {
     base::Value::Dict* manifest_dictionary = manifest->GetIfDict();
     ASSERT_TRUE(manifest_dictionary);
 
+    std::u16string utf16_error;
     scoped_refptr<extensions::Extension> extension =
         extensions::Extension::Create(
             test_directory.AppendASCII("invalid-extension"),
             extensions::mojom::ManifestLocation::kInvalidLocation,
-            *manifest_dictionary, extensions::Extension::NO_FLAGS, &error);
-    ASSERT_TRUE(error.empty()) << error;
+            *manifest_dictionary, extensions::Extension::NO_FLAGS,
+            &utf16_error);
+    ASSERT_TRUE(utf16_error.empty()) << utf16_error;
 
     std::vector<apps::AppPtr> apps;
     auto app = std::make_unique<apps::App>(apps::AppType::kChromeApp,
@@ -135,9 +136,8 @@ class PlatformUtilTestBase : public BrowserWithTestWindowTest {
     app->intent_filters =
         apps_util::CreateIntentFiltersForChromeApp(extension.get());
     apps.push_back(std::move(app));
-    app_service_proxy_->AppRegistryCache().OnApps(
-        std::move(apps), apps::AppType::kChromeApp,
-        /*should_notify_initialized=*/false);
+    app_service_proxy_->OnApps(std::move(apps), apps::AppType::kChromeApp,
+                               /*should_notify_initialized=*/false);
   }
 
   void SetUp() override {
@@ -158,9 +158,10 @@ class PlatformUtilTestBase : public BrowserWithTestWindowTest {
 
  private:
   std::unique_ptr<content::ContentBrowserClient> content_browser_client_;
-  content::ContentBrowserClient* old_content_browser_client_ = nullptr;
+  raw_ptr<content::ContentBrowserClient> old_content_browser_client_ = nullptr;
   apps::AppServiceTest app_service_test_;
-  apps::AppServiceProxy* app_service_proxy_ = nullptr;
+  raw_ptr<apps::AppServiceProxy, DanglingUntriaged> app_service_proxy_ =
+      nullptr;
 };
 
 #else
@@ -183,7 +184,6 @@ class PlatformUtilTest : public PlatformUtilTestBase {
     ASSERT_NO_FATAL_FAILURE(PlatformUtilTestBase::SetUp());
 
     static const char kTestFileData[] = "Cow says moo!";
-    const int kTestFileDataLength = std::size(kTestFileData) - 1;
 
     // This prevents platform_util from invoking any shell or external APIs
     // during tests. Doing so may result in external applications being launched
@@ -194,9 +194,7 @@ class PlatformUtilTest : public PlatformUtilTestBase {
 
     // A valid file.
     existing_file_ = directory_.GetPath().AppendASCII("test_file.txt");
-    ASSERT_EQ(
-        kTestFileDataLength,
-        base::WriteFile(existing_file_, kTestFileData, kTestFileDataLength));
+    ASSERT_TRUE(base::WriteFile(existing_file_, kTestFileData));
 
     // A valid folder.
     existing_folder_ = directory_.GetPath().AppendASCII("test_folder");
@@ -276,7 +274,7 @@ class PlatformUtilPosixTest : public PlatformUtilTest {
 };
 #endif  // BUILDFLAG(IS_POSIX)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // ChromeOS doesn't follow symbolic links in sandboxed filesystems. So all the
 // symbolic link tests should return PATH_NOT_FOUND.
 
@@ -301,13 +299,13 @@ TEST_F(PlatformUtilPosixTest, OpenFolderWithPosixSymlinksChromeOS) {
 TEST_F(PlatformUtilTest, OpenFileWithUnhandledFileType) {
   base::FilePath unhandled_file =
       directory_.GetPath().AppendASCII("myfile.filetype");
-  ASSERT_EQ(3, base::WriteFile(unhandled_file, "cat", 3));
+  ASSERT_TRUE(base::WriteFile(unhandled_file, "cat"));
   EXPECT_EQ(OPEN_FAILED_NO_HANLDER_FOR_FILE_TYPE,
             CallOpenItem(unhandled_file, OPEN_FILE));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_CHROMEOS)
 // On all other Posix platforms, the symbolic link tests should work as
 // expected.
 
@@ -326,6 +324,6 @@ TEST_F(PlatformUtilPosixTest, OpenFolderWithPosixSymlinks) {
   EXPECT_EQ(OPEN_FAILED_PATH_NOT_FOUND,
             CallOpenItem(symlink_to_nowhere_, OPEN_FOLDER));
 }
-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace platform_util

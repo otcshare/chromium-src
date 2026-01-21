@@ -3,13 +3,16 @@
 // found in the LICENSE file.
 
 #include <stdint.h>
+
 #include <cstddef>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/task/execution_fence.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/scoped_command_line.h"
 #include "content/browser/browser_main_loop.h"                 //nogncheck
 #include "content/browser/image_capture/image_capture_impl.h"  //nogncheck
@@ -29,10 +32,9 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
 
-const char* kCmdline[] = {"image_capture_mojolpm_fuzzer", nullptr};
+constexpr const char* kCmdline[] = {"image_capture_mojolpm_fuzzer", nullptr};
 
 content::mojolpm::FuzzerEnvironment& GetEnvironment() {
   static base::NoDestructor<content::mojolpm::FuzzerEnvironment> environment(
@@ -71,7 +73,7 @@ class ImageCaptureTestcase
 
   // Prerequisite state.
   content::mojolpm::RenderViewHostTestHarnessAdapter test_adapter_;
-  content::TestRenderFrameHost* render_frame_host_ = nullptr;
+  raw_ptr<content::TestRenderFrameHost> render_frame_host_ = nullptr;
 };
 
 ImageCaptureTestcase::ImageCaptureTestcase(const ProtoTestcase& testcase)
@@ -83,7 +85,7 @@ ImageCaptureTestcase::ImageCaptureTestcase(const ProtoTestcase& testcase)
       scoped_command_line.GetProcessCommandLine());
   content::BrowserMainLoop browser_main_loop_(
       std::move(main_function_params),
-      std::make_unique<base::ThreadPoolInstance::ScopedExecutionFence>());
+      std::make_unique<base::ScopedThreadPoolExecutionFence>());
   browser_main_loop_.Init();
 }
 

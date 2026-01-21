@@ -6,6 +6,7 @@
 #define BASE_WIN_VARIANT_VECTOR_H_
 
 #include <objbase.h>
+
 #include <oleauto.h>
 
 #include <type_traits>
@@ -16,10 +17,9 @@
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/win/scoped_variant.h"
-#include "base/win/variant_util.h"
+#include "base/win/variant_conversions.h"
 
-namespace base {
-namespace win {
+namespace base::win {
 
 // This class has RAII semantics and is used to build a vector for a specific
 // OLE VARTYPE, and handles converting the data to a VARIANT or VARIANT
@@ -39,9 +39,6 @@ class BASE_EXPORT VariantVector final {
   VariantVector& operator=(const VariantVector&) = delete;
   ~VariantVector();
 
-  bool operator==(const VariantVector& other) const;
-  bool operator!=(const VariantVector& other) const;
-
   // Returns the variant type for data stored in the VariantVector.
   VARTYPE Type() const { return vartype_; }
 
@@ -56,11 +53,13 @@ class BASE_EXPORT VariantVector final {
 
   // Helper template method for selecting the correct |Insert| call based
   // on the underlying type that is expected for a VARTYPE.
-  template <VARTYPE ExpectedVartype,
-            std::enable_if_t<ExpectedVartype != VT_BOOL, int> = 0>
-  void Insert(typename internal::VariantUtil<ExpectedVartype>::Type value) {
-    if (vartype_ == VT_EMPTY)
+  template <VARTYPE ExpectedVartype>
+    requires(ExpectedVartype != VT_BOOL)
+  void Insert(
+      typename internal::VariantConverter<ExpectedVartype>::Type value) {
+    if (vartype_ == VT_EMPTY) {
       vartype_ = ExpectedVartype;
+    }
     AssertVartype<ExpectedVartype>();
     ScopedVariant scoped_variant;
     scoped_variant.Set(value);
@@ -69,11 +68,12 @@ class BASE_EXPORT VariantVector final {
 
   // Specialize VT_BOOL to accept a bool type instead of VARIANT_BOOL,
   // this is to make calling insert with VT_BOOL safer.
-  template <VARTYPE ExpectedVartype,
-            std::enable_if_t<ExpectedVartype == VT_BOOL, int> = 0>
+  template <VARTYPE ExpectedVartype>
+    requires(ExpectedVartype == VT_BOOL)
   void Insert(bool value) {
-    if (vartype_ == VT_EMPTY)
+    if (vartype_ == VT_EMPTY) {
       vartype_ = ExpectedVartype;
+    }
     AssertVartype<ExpectedVartype>();
     ScopedVariant scoped_variant;
     scoped_variant.Set(value);
@@ -83,9 +83,11 @@ class BASE_EXPORT VariantVector final {
   // Specialize VT_DATE because ScopedVariant has a separate SetDate method,
   // this is because VT_R8 and VT_DATE share the same underlying type.
   template <>
-  void Insert<VT_DATE>(typename internal::VariantUtil<VT_DATE>::Type value) {
-    if (vartype_ == VT_EMPTY)
+  void Insert<VT_DATE>(
+      typename internal::VariantConverter<VT_DATE>::Type value) {
+    if (vartype_ == VT_EMPTY) {
       vartype_ = VT_DATE;
+    }
     AssertVartype<VT_DATE>();
     ScopedVariant scoped_variant;
     scoped_variant.SetDate(value);
@@ -118,7 +120,8 @@ class BASE_EXPORT VariantVector final {
   // for inserting into |vector_|.
   template <VARTYPE ExpectedVartype>
   void AssertVartype() const {
-    DCHECK(internal::VariantUtil<ExpectedVartype>::IsConvertibleTo(vartype_))
+    DCHECK(
+        internal::VariantConverter<ExpectedVartype>::IsConvertibleTo(vartype_))
         << "Type mismatch, " << ExpectedVartype << " is not convertible to "
         << Type();
   }
@@ -133,7 +136,10 @@ class BASE_EXPORT VariantVector final {
   std::vector<ScopedVariant> vector_;
 };
 
-}  // namespace win
-}  // namespace base
+inline bool operator==(const VariantVector& lhs, const VariantVector& rhs) {
+  return !lhs.Compare(rhs);
+}
+
+}  // namespace base::win
 
 #endif  // BASE_WIN_VARIANT_VECTOR_H_

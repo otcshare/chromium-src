@@ -11,14 +11,15 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "build/chromeos_buildflags.h"
+#include "base/timer/elapsed_timer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/sync_startup_tracker.h"
+#include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "google_apis/gaia/core_account_id.h"
 
 #if !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
 #error "This file should only be included if DICE support / mirror is enabled"
@@ -27,15 +28,9 @@
 class Browser;
 class SigninUIError;
 class TurnSyncOnHelperPolicyFetchTracker;
-class AccountSelectionInProgressHandle;
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 class DiceSignedInProfileCreator;
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-class ProfilePickerLacrosSignInProvider;
-#endif
+class SyncServiceStartupStateObserver;
 
 namespace signin {
 class IdentityManager;
@@ -56,14 +51,16 @@ class TurnSyncOnHelper {
   enum class SigninAbortedMode {
     // The token is revoked and the account is signed out of the web.
     REMOVE_ACCOUNT,
-    // The account is kept.
-    KEEP_ACCOUNT
+    // The account is kept as primary account in Chrome and on the web.
+    KEEP_ACCOUNT,
+    // The primary account is cleared, but the account is kept on the web only.
+    KEEP_ACCOUNT_ON_WEB_ONLY,
   };
 
   // Delegate implementing the UI prompts.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     // Shows a login error to the user.
     virtual void ShowLoginError(const SigninUIError& error) = 0;
@@ -105,11 +102,17 @@ class TurnSyncOnHelper {
     // Defaults to false.
     virtual bool ShouldAbortBeforeShowSyncDisabledConfirmation();
 
+    // Returns whether the account for which sync is being turned on requires a
+    // profile.
+    // TODO(b/375053564): Revisit this function to find a better way  to convey
+    // that profile creation is required by policy.
+    virtual bool IsProfileCreationRequiredByPolicy() const;
+
     // Shows a screen informing that sync is disabled for the user.
     // |is_managed_account| is true if the account (where sync is being set up)
     // is managed (which may influence the UI or strings). |callback| must be
     // called.
-    // TODO(crbug.com/1126913): Use a new enum for this callback with only
+    // TODO(crbug.com/40249681): Use a new enum for this callback with only
     // values that make sense here (stay signed-in / signout).
     virtual void ShowSyncDisabledConfirmation(
         bool is_managed_account,
@@ -136,20 +139,27 @@ class TurnSyncOnHelper {
   TurnSyncOnHelper(Profile* profile,
                    signin_metrics::AccessPoint signin_access_point,
                    signin_metrics::PromoAction signin_promo_action,
-                   signin_metrics::Reason signin_reason,
                    const CoreAccountId& account_id,
                    SigninAbortedMode signin_aborted_mode,
                    std::unique_ptr<Delegate> delegate,
-                   base::OnceClosure callback);
+                   base::OnceClosure callback,
+                   bool user_already_signed_in = false);
 
   // Convenience constructor using the default delegate and empty callback.
+  // `is_sync_promo` is true if the sync confirmation dialog is offered as an
+  // option. It is false if the user explicitly initiated the flow.
+  // `user_already_signed_in` is true if the user was already signed in
+  // before starting the sync flow. Used by UIs to decide whether the signin
+  // proposition value should be shown, and what state should the user be in if
+  // they cancel.
   TurnSyncOnHelper(Profile* profile,
                    Browser* browser,
                    signin_metrics::AccessPoint signin_access_point,
                    signin_metrics::PromoAction signin_promo_action,
-                   signin_metrics::Reason signin_reason,
                    const CoreAccountId& account_id,
-                   SigninAbortedMode signin_aborted_mode);
+                   SigninAbortedMode signin_aborted_mode,
+                   bool is_sync_promo,
+                   bool user_already_signed_in = false);
 
   TurnSyncOnHelper(const TurnSyncOnHelper&) = delete;
   TurnSyncOnHelper& operator=(const TurnSyncOnHelper&) = delete;
@@ -161,9 +171,11 @@ class TurnSyncOnHelper {
   // Returns true if a `TurnSyncOnHelper` is currently active for `profile`.
   static bool HasCurrentTurnSyncOnHelperForTesting(Profile* profile);
 
-  // Used as callback for `SyncStartupTracker`.
-  // Public for testing.
-  void OnSyncStartupStateChanged(SyncStartupTracker::ServiceStartupState state);
+  static void EnsureFactoryBuilt();
+
+  SyncServiceStartupStateObserver* GetSyncStartupStateObserverForTesting() {
+    return sync_startup_state_observer_.get();
+  }
 
  private:
   enum class ProfileMode {
@@ -212,7 +224,9 @@ class TurnSyncOnHelper {
   void CreateNewSignedInProfile();
 
   // Called when the new profile is created.
-  void OnNewSignedInProfileCreated(Profile* new_profile);
+  void OnNewSignedInProfileCreated(
+      search_engines::ChoiceData search_engine_choice_data,
+      Profile* new_profile);
 
   // Returns the SyncService, or nullptr if sync is not allowed.
   syncer::SyncService* GetSyncService();
@@ -241,15 +255,20 @@ class TurnSyncOnHelper {
   // Aborts the flow and deletes this object.
   void AbortAndDelete();
 
+  // Removes the account on abort taking into consideration if it is the primary
+  // account.
+  void RemoveAccount();
+
   std::unique_ptr<Delegate> delegate_;
   raw_ptr<Profile> profile_;
   raw_ptr<signin::IdentityManager> identity_manager_;
   const signin_metrics::AccessPoint signin_access_point_;
   const signin_metrics::PromoAction signin_promo_action_;
-  const signin_metrics::Reason signin_reason_;
 
   // Whether the refresh token should be deleted if the Sync flow is aborted.
   SigninAbortedMode signin_aborted_mode_;
+
+  const bool user_already_signed_in_;
 
   // Account information.
   const AccountInfo account_info_;
@@ -257,24 +276,19 @@ class TurnSyncOnHelper {
   // Prevents Sync from running until configuration is complete.
   std::unique_ptr<syncer::SyncSetupInProgressHandle> sync_blocker_;
 
-  // Prevents `SigninManager` from changing the unconsented primary account
-  // until the flow is complete.
-  std::unique_ptr<AccountSelectionInProgressHandle> account_change_blocker_;
-
   // Called when this object is deleted.
   base::ScopedClosureRunner scoped_callback_runner_;
 
-  std::unique_ptr<SyncStartupTracker> sync_startup_tracker_;
+  std::unique_ptr<SyncServiceStartupStateObserver> sync_startup_state_observer_;
   std::unique_ptr<TurnSyncOnHelperPolicyFetchTracker> policy_fetch_tracker_;
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   std::unique_ptr<DiceSignedInProfileCreator> dice_signed_in_profile_creator_;
-#endif
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<ProfilePickerLacrosSignInProvider> lacros_sign_in_provider_;
-#endif
+
+  // The initial primary account is restored if the flow aborts.
+  CoreAccountId initial_primary_account_;
   base::CallbackListSubscription shutdown_subscription_;
   bool enterprise_account_confirmed_ = false;
-
+  base::ScopedClosureRunner
+      enable_automatic_management_disclaimer_on_primary_account_change_;
   base::WeakPtrFactory<TurnSyncOnHelper> weak_pointer_factory_{this};
 };
 

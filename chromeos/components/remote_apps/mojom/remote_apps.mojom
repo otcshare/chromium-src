@@ -25,10 +25,10 @@ union AddAppResult {
 };
 
 // Interface for communication between an extension and the Remote Apps
-// Manager or |RemoteAppsProxyLacros|.
+// Manager.
 //
-// Next MinVersion: 2
-// Next Method ID: 4
+// Next MinVersion: 3
+// Next Method ID: 5
 [Stable]
 interface RemoteApps {
   // Adds a Remote Apps folder to the launcher. Empty folders are not shown in
@@ -84,6 +84,14 @@ interface RemoteApps {
   // - |error|: A string describing the error if any.
   [MinVersion=1]
   SortLauncherWithRemoteAppsFirst@3() => (string? error);
+
+  // Set the list of apps to be pinned on the shelf. Can be called with an
+  // empty list to unpin all the apps.
+  //
+  // Output parameters:
+  // - |error|: A string describing the error if any.
+  [MinVersion=2]
+  SetPinnedApps@4(array<string> app_ids) => (string? error);
 };
 
 // Factory for creating an instance of |RemoteApps|.
@@ -93,17 +101,6 @@ interface RemoteAppsFactory {
   // |OnRemoteAppLaunched| event is only dispatched to the observer associated
   // with the source which added the app.
   BindRemoteAppsAndAppLaunchObserver@0(string source_id,
-         pending_receiver<RemoteApps> remote_apps,
-         pending_remote<RemoteAppLaunchObserver> observer);
-};
-
-// Bridge for binding the |RemoteApps| interfaces from Lacros to Ash. Used by
-// |RemoteAppsProxyLacros|.
-[Stable, Uuid="80d5b638-317b-4e9c-b8fc-5ecfa7ec5f30"]
-interface RemoteAppsLacrosBridge {
-  // Binds to the |RemoteApps| implementation in Ash. All |OnRemoteAppLaunched|
-  // events will be dispatched to the observer.
-  BindRemoteAppsAndAppLaunchObserverForLacros@0(
          pending_receiver<RemoteApps> remote_apps,
          pending_remote<RemoteAppLaunchObserver> observer);
 };

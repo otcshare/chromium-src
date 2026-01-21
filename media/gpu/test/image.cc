@@ -7,9 +7,11 @@
 #include <memory>
 
 #include "base/files/file_util.h"
-#include "base/hash/md5.h"
 #include "base/json/json_reader.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
+#include "crypto/obsolete/md5.h"
 #include "media/base/test_data_util.h"
 #include "media/gpu/macros.h"
 
@@ -21,8 +23,7 @@ namespace {
 // Resolve the specified test file path to an absolute path. The path can be
 // either an absolute path, a path relative to the current directory, or a path
 // relative to the test data path.
-absl::optional<base::FilePath> ResolveFilePath(
-    const base::FilePath& file_path) {
+std::optional<base::FilePath> ResolveFilePath(const base::FilePath& file_path) {
   base::FilePath resolved_path = file_path;
 
   // Try to resolve the path into an absolute path. If the path doesn't exist,
@@ -35,8 +36,8 @@ absl::optional<base::FilePath> ResolveFilePath(
   }
 
   return PathExists(resolved_path)
-             ? absl::optional<base::FilePath>(resolved_path)
-             : absl::nullopt;
+             ? std::optional<base::FilePath>(resolved_path)
+             : std::nullopt;
 }
 
 // Converts the |pixel_format| string into a VideoPixelFormat.
@@ -47,6 +48,8 @@ VideoPixelFormat ConvertStringtoPixelFormat(const std::string& pixel_format) {
     return PIXEL_FORMAT_I420;
   } else if (pixel_format == "NV12") {
     return PIXEL_FORMAT_NV12;
+  } else if (pixel_format == "P010" || pixel_format == "MT2T") {
+    return PIXEL_FORMAT_P010LE;
   } else if (pixel_format == "YV12") {
     return PIXEL_FORMAT_YV12;
   } else if (pixel_format == "RGBA") {
@@ -75,7 +78,7 @@ bool Image::Load() {
   DCHECK(!file_path_.empty());
   DCHECK(!IsLoaded());
 
-  absl::optional<base::FilePath> resolved_path = ResolveFilePath(file_path_);
+  std::optional<base::FilePath> resolved_path = ResolveFilePath(file_path_);
   if (!resolved_path) {
     LOG(ERROR) << "Image file not found: " << file_path_;
     return false;
@@ -94,9 +97,9 @@ bool Image::Load() {
   }
 
   // Verify that the image's checksum matches the checksum in the metadata.
-  base::MD5Digest digest;
-  base::MD5Sum(mapped_file_.data(), mapped_file_.length(), &digest);
-  if (base::MD5DigestToBase16(digest) != checksum_) {
+  const std::string actual_checksum = base::HexEncodeLower(
+      crypto::obsolete::Md5::HashForTesting(mapped_file_.bytes()));
+  if (actual_checksum != checksum_) {
     LOG(ERROR) << "Image checksum not matching metadata";
     return false;
   }
@@ -114,7 +117,7 @@ bool Image::LoadMetadata() {
   }
 
   base::FilePath json_path = file_path_.AddExtension(kMetadataSuffix);
-  absl::optional<base::FilePath> resolved_path = ResolveFilePath(json_path);
+  std::optional<base::FilePath> resolved_path = ResolveFilePath(json_path);
   if (!resolved_path) {
     LOG(ERROR) << "Image metadata file not found: " << json_path;
     return false;
@@ -132,8 +135,8 @@ bool Image::LoadMetadata() {
     return false;
   }
 
-  auto metadata_result =
-      base::JSONReader::ReadAndReturnValueWithError(json_data);
+  auto metadata_result = base::JSONReader::ReadAndReturnValueWithError(
+      json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!metadata_result.has_value()) {
     VLOGF(1) << "Failed to parse image metadata: " << json_path << ": "
              << metadata_result.error().message;
@@ -154,12 +157,12 @@ bool Image::LoadMetadata() {
   }
 
   // Get the image dimensions from the json data.
-  absl::optional<int> width = metadata.FindInt("width");
+  std::optional<int> width = metadata.FindInt("width");
   if (!width.has_value()) {
     VLOGF(1) << "Key \"width\" is not found in " << json_path;
     return false;
   }
-  absl::optional<int> height = metadata.FindInt("height");
+  std::optional<int> height = metadata.FindInt("height");
   if (!height) {
     VLOGF(1) << "Key \"height\" is not found in " << json_path;
     return false;
@@ -187,7 +190,7 @@ bool Image::LoadMetadata() {
   }
 
   // Get the image rotation info from the json data.
-  absl::optional<int> rotation = metadata.FindInt("rotation");
+  std::optional<int> rotation = metadata.FindInt("rotation");
   if (!rotation.has_value()) {
     // Default rotation value is VIDEO_ROTATION_0
     rotation_ = VIDEO_ROTATION_0;
@@ -224,6 +227,10 @@ bool Image::LoadMetadata() {
 
 bool Image::IsMetadataLoaded() const {
   return pixel_format_ != PIXEL_FORMAT_UNKNOWN;
+}
+
+base::span<const uint8_t> Image::DataSpan() const {
+  return mapped_file_.bytes();
 }
 
 uint8_t* Image::Data() const {

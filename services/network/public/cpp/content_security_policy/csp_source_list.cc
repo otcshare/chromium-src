@@ -4,12 +4,14 @@
 
 #include "services/network/public/cpp/content_security_policy/csp_source_list.h"
 
+#include <algorithm>
+
 #include "base/check_op.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
-#include "base/ranges/algorithm.h"
+#include "base/feature_list.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/cpp/content_security_policy/csp_source.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/content_security_policy.mojom-shared.h"
 
 namespace network {
@@ -24,9 +26,11 @@ bool AllowFromSources(const GURL& url,
                       bool has_followed_redirect,
                       bool is_opaque_fenced_frame) {
   for (const auto& source : sources) {
-    if (CheckCSPSource(*source, url, self_source, has_followed_redirect,
-                       is_opaque_fenced_frame))
+    if (CheckCSPSource(*source, url, self_source,
+                       CSPSourceContext::ContentSecurityPolicy,
+                       has_followed_redirect, is_opaque_fenced_frame)) {
       return true;
+    }
   }
   return false;
 }
@@ -38,14 +42,15 @@ void IntersectNonces(base::flat_set<std::string>& a,
 }
 
 // Removes from |a| elements not contained in |b|.
-void IntersectHashes(base::flat_set<mojom::CSPHashSourcePtr>& a,
-                     const base::flat_set<mojom::CSPHashSourcePtr>& b) {
+void IntersectHashes(base::flat_set<network::IntegrityMetadata>& a,
+                     const base::flat_set<network::IntegrityMetadata>& b) {
   base::EraseIf(
-      a, [&b](const mojom::CSPHashSourcePtr& h) { return !b.contains(h); });
+      a, [&b](const network::IntegrityMetadata& h) { return !b.contains(h); });
 }
 
 bool IsScriptDirective(CSPDirectiveName directive) {
   return directive == CSPDirectiveName::ScriptSrc ||
+         directive == CSPDirectiveName::ScriptSrcV2 ||
          directive == CSPDirectiveName::ScriptSrcAttr ||
          directive == CSPDirectiveName::ScriptSrcElem ||
          directive == CSPDirectiveName::DefaultSrc;
@@ -183,8 +188,8 @@ bool UrlSourceListSubsumes(
 
   // Every item in |source_list_b| must be subsumed by at least one item in
   // |source_list_a|.
-  return base::ranges::all_of(source_list_b, [&](const auto& source_b) {
-    return base::ranges::any_of(source_list_a, [&](const auto& source_a) {
+  return std::ranges::all_of(source_list_b, [&](const auto& source_b) {
+    return std::ranges::any_of(source_list_a, [&](const auto& source_a) {
       return CSPSourceSubsumes(*source_a, *source_b);
     });
   });
@@ -192,22 +197,14 @@ bool UrlSourceListSubsumes(
 
 }  // namespace
 
-bool CheckCSPSourceList(mojom::CSPDirectiveName directive_name,
-                        const mojom::CSPSourceList& source_list,
-                        const GURL& url,
-                        const mojom::CSPSource& self_source,
-                        bool has_followed_redirect,
-                        bool is_response_check,
-                        bool is_opaque_fenced_frame) {
+CSPCheckResult CheckCSPSourceList(mojom::CSPDirectiveName directive_name,
+                                  const mojom::CSPSourceList& source_list,
+                                  const GURL& url,
+                                  const mojom::CSPSource& self_source,
+                                  bool has_followed_redirect,
+                                  bool is_opaque_fenced_frame) {
   if (is_opaque_fenced_frame)
     DCHECK_EQ(directive_name, mojom::CSPDirectiveName::FencedFrameSrc);
-
-  // If the source list allows all redirects, the decision can't be made until
-  // the response is received.
-  if (directive_name == mojom::CSPDirectiveName::NavigateTo &&
-      source_list.allow_response_redirects && !is_response_check) {
-    return true;
-  }
 
   // Wildcards match network schemes ('http', 'https', 'ftp', 'ws', 'wss'), and
   // the scheme of the protected resource:
@@ -216,26 +213,39 @@ bool CheckCSPSourceList(mojom::CSPDirectiveName directive_name,
   // list.
   // Note: Opaque fenced frames only allow https urls, therefore it's fine to
   // allow '*'.
-  // TODO(crbug.com/1243568): Update the return condition below if opaque
+  // TODO(crbug.com/40195488): Update the return condition below if opaque
   // fenced frames can map to non-https potentially trustworthy urls to avoid
   // privacy leak.
   if (source_list.allow_star) {
-    if (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS() ||
-        url.SchemeIs("ftp")) {
-      return true;
+    if (url.SchemeIsHTTPOrHTTPS()) {
+      return CSPCheckResult::Allowed();
     }
     if (!self_source.scheme.empty() && url.SchemeIs(self_source.scheme))
-      return true;
+      return CSPCheckResult::Allowed();
   }
 
   if (source_list.allow_self &&
-      CheckCSPSource(self_source, url, self_source, has_followed_redirect,
-                     is_opaque_fenced_frame)) {
-    return true;
+      CheckCSPSource(self_source, url, self_source,
+                     CSPSourceContext::ContentSecurityPolicy,
+                     has_followed_redirect, is_opaque_fenced_frame)) {
+    return CSPCheckResult::Allowed();
   }
 
-  return AllowFromSources(url, source_list.sources, self_source,
-                          has_followed_redirect, is_opaque_fenced_frame);
+  if (AllowFromSources(url, source_list.sources, self_source,
+                       has_followed_redirect, is_opaque_fenced_frame)) {
+    return CSPCheckResult::Allowed();
+  }
+
+  if (source_list.allow_star) {
+    if (url.SchemeIsWSOrWSS()) {
+      return CSPCheckResult::AllowedOnlyIfWildcardMatchesWs();
+    }
+    if (url.SchemeIs("ftp")) {
+      return CSPCheckResult::Blocked();
+    }
+  }
+
+  return CSPCheckResult::Blocked();
 }
 
 bool CSPSourceListSubsumes(
@@ -254,7 +264,8 @@ bool CSPSourceListSubsumes(
   bool is_hash_or_nonce_present_b =
       !(*it)->nonces.empty() || !(*it)->hashes.empty();
   base::flat_set<std::string> nonces_b((*it)->nonces);
-  base::flat_set<mojom::CSPHashSourcePtr> hashes_b(mojo::Clone((*it)->hashes));
+  base::flat_set<network::IntegrityMetadata> hashes_b(
+      mojo::Clone((*it)->hashes));
 
   std::vector<mojom::CSPSourcePtr> normalized_sources_b =
       ExpandSchemeStarAndSelf(**it, origin_b);
@@ -272,7 +283,7 @@ bool CSPSourceListSubsumes(
         (!(*it)->nonces.empty() || !(*it)->hashes.empty());
     base::flat_set<std::string> item_nonces((*it)->nonces);
     IntersectNonces(nonces_b, item_nonces);
-    base::flat_set<mojom::CSPHashSourcePtr> item_hashes(
+    base::flat_set<network::IntegrityMetadata> item_hashes(
         mojo::Clone((*it)->hashes));
     IntersectHashes(hashes_b, item_hashes);
     normalized_sources_b =
@@ -286,7 +297,7 @@ bool CSPSourceListSubsumes(
 
   // All hashes enforced by source_list_b must be contained in source_list_a.
   if (!hashes_b.empty()) {
-    base::flat_set<mojom::CSPHashSourcePtr> hashes_a(
+    base::flat_set<network::IntegrityMetadata> hashes_a(
         mojo::Clone(source_list_a.hashes));
     for (const auto& hash : hashes_b) {
       if (!hashes_a.count(hash))

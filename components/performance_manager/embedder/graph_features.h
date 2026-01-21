@@ -7,6 +7,9 @@
 
 #include <cstdint>
 
+#include "components/performance_manager/public/features.h"
+#include "ui/base/device_form_factor.h"
+
 namespace performance_manager {
 
 class Graph;
@@ -40,20 +43,21 @@ class GraphFeatures {
       // (1) Add a corresponding EnableFeatureFoo() member function.
       // (2) Add the feature to EnableDefault() if necessary.
       // (3) Add the feature to the implementation of ConfigureGraph().
-      bool execution_context_priority_decorator : 1;
-      bool execution_context_registry : 1;
-      bool frame_node_impl_describer : 1;
       bool frame_visibility_decorator : 1;
-      bool freezing_vote_decorator : 1;
+      bool frozen_frame_aggregator : 1;
+      bool important_frame_decorator : 1;
       bool metrics_collector : 1;
+      bool node_impl_describers : 1;
+      bool page_aggregator : 1;
       bool page_load_tracker_decorator : 1;
-      bool page_node_impl_describer : 1;
+      bool performance_scenarios : 1;
+      bool priority_tracking : 1;
       bool process_hosted_content_types_aggregator : 1;
-      bool process_node_impl_describer : 1;
+      bool resource_attribution_scheduler : 1;
       bool site_data_recorder : 1;
-      bool tab_properties_decorator : 1;
+      bool tab_page_decorator : 1;
       bool v8_context_tracker : 1;
-      bool worker_node_impl_describer : 1;
+      bool tracing_observers : 1;
     };
   };
 
@@ -61,24 +65,23 @@ class GraphFeatures {
   constexpr GraphFeatures(const GraphFeatures& other) = default;
   GraphFeatures& operator=(const GraphFeatures& other) = default;
 
-  constexpr GraphFeatures& EnableExecutionContextPriorityDecorator() {
-    EnableExecutionContextRegistry();
-    flags_.execution_context_priority_decorator = true;
-    return *this;
-  }
-
-  constexpr GraphFeatures& EnableExecutionContextRegistry() {
-    flags_.execution_context_registry = true;
-    return *this;
-  }
-
-  constexpr GraphFeatures& EnableFrameNodeImplDescriber() {
-    flags_.frame_node_impl_describer = true;
-    return *this;
-  }
-
   constexpr GraphFeatures& EnableFrameVisibilityDecorator() {
     flags_.frame_visibility_decorator = true;
+    return *this;
+  }
+
+  constexpr GraphFeatures& EnableFrozenFrameAggregator() {
+    flags_.frozen_frame_aggregator = true;
+    return *this;
+  }
+
+  constexpr GraphFeatures& EnableImportantFrameDecorator() {
+    flags_.important_frame_decorator = true;
+    return *this;
+  }
+
+  constexpr GraphFeatures& EnablePerformanceScenarios() {
+    flags_.performance_scenarios = true;
     return *this;
   }
 
@@ -87,8 +90,13 @@ class GraphFeatures {
     return *this;
   }
 
-  constexpr GraphFeatures& EnableFreezingVoteDecorator() {
-    flags_.freezing_vote_decorator = true;
+  constexpr GraphFeatures& EnableNodeImplDescribers() {
+    flags_.node_impl_describers = true;
+    return *this;
+  }
+
+  constexpr GraphFeatures& EnablePageAggregator() {
+    flags_.page_aggregator = true;
     return *this;
   }
 
@@ -97,8 +105,10 @@ class GraphFeatures {
     return *this;
   }
 
-  constexpr GraphFeatures& EnablePageNodeImplDescriber() {
-    flags_.page_node_impl_describer = true;
+  constexpr GraphFeatures& EnablePriorityTracking() {
+    EnableFrameVisibilityDecorator();
+    EnableImportantFrameDecorator();
+    flags_.priority_tracking = true;
     return *this;
   }
 
@@ -107,58 +117,60 @@ class GraphFeatures {
     return *this;
   }
 
-  constexpr GraphFeatures& EnableProcessNodeImplDescriber() {
-    flags_.process_node_impl_describer = true;
+  constexpr GraphFeatures& EnableResourceAttributionScheduler() {
+    flags_.resource_attribution_scheduler = true;
     return *this;
   }
 
-  // This is a nop on the Android platform, as the feature isn't available
-  // there.
   constexpr GraphFeatures& EnableSiteDataRecorder() {
     flags_.site_data_recorder = true;
     return *this;
   }
 
-  constexpr GraphFeatures& EnableTabPropertiesDecorator() {
-    flags_.tab_properties_decorator = true;
+  constexpr GraphFeatures& EnableTabPageDecorator() {
+    flags_.tab_page_decorator = true;
     return *this;
   }
 
   constexpr GraphFeatures& EnableV8ContextTracker() {
-    EnableExecutionContextRegistry();
     flags_.v8_context_tracker = true;
     return *this;
   }
 
-  constexpr GraphFeatures& EnableWorkerNodeImplDescriber() {
-    flags_.worker_node_impl_describer = true;
+  constexpr GraphFeatures& EnableTracingObservers() {
+    flags_.tracing_observers = true;
     return *this;
   }
 
   // Helper to enable the minimal set of features required for a content_shell
   // browser to work.
   constexpr GraphFeatures& EnableMinimal() {
-    EnableExecutionContextRegistry();
     EnableV8ContextTracker();
     return *this;
   }
 
   // Helper to enable the default set of features. This is only intended for use
   // from production code.
-  constexpr GraphFeatures& EnableDefault() {
-    EnableExecutionContextRegistry();
-    EnableFrameNodeImplDescriber();
+  GraphFeatures& EnableDefault() {
     EnableFrameVisibilityDecorator();
-    EnableFreezingVoteDecorator();
+    EnableFrozenFrameAggregator();
+    EnableImportantFrameDecorator();
     EnableMetricsCollector();
+    EnableNodeImplDescribers();
+    EnablePageAggregator();
     EnablePageLoadTrackerDecorator();
-    EnablePageNodeImplDescriber();
+    EnablePerformanceScenarios();
+    EnablePriorityTracking();
     EnableProcessHostedContentTypesAggregator();
-    EnableProcessNodeImplDescriber();
-    EnableSiteDataRecorder();
-    EnableTabPropertiesDecorator();
+    EnableResourceAttributionScheduler();
+    EnableTabPageDecorator();
     EnableV8ContextTracker();
-    EnableWorkerNodeImplDescriber();
+    EnableTracingObservers();
+
+    if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_DESKTOP) {
+      EnableSiteDataRecorder();
+    }
+
     return *this;
   }
 

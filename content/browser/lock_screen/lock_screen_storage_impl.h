@@ -13,7 +13,6 @@
 #include "base/threading/sequence_bound.h"
 #include "content/public/browser/lock_screen_storage.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/lock_screen/lock_screen.mojom.h"
 
 namespace base {
@@ -62,7 +61,8 @@ class CONTENT_EXPORT LockScreenStorageImpl : public LockScreenStorage {
   void InitForTesting(content::BrowserContext* browser_context,
                       const base::FilePath& base_path);
 
-  raw_ptr<content::BrowserContext> browser_context_ = nullptr;
+  raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_ =
+      nullptr;
   base::SequenceBound<LockScreenStorageHelper> helper_;
 
   base::WeakPtrFactory<LockScreenStorageImpl> weak_factory_{this};

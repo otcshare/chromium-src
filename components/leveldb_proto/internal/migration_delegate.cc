@@ -7,12 +7,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 
 namespace leveldb_proto {
 
-MigrationDelegate::MigrationDelegate() {}
+MigrationDelegate::MigrationDelegate() = default;
 MigrationDelegate::~MigrationDelegate() = default;
 
 void MigrationDelegate::DoMigration(UniqueProtoDatabase* from,

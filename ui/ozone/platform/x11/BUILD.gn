@@ -32,8 +32,8 @@ source_set("x11") {
     "x11_clipboard_ozone.h",
     "x11_global_shortcut_listener_ozone.cc",
     "x11_global_shortcut_listener_ozone.h",
-    "x11_keyboard_hook_ozone.cc",
-    "x11_keyboard_hook_ozone.h",
+    "x11_keyboard_hook.cc",
+    "x11_keyboard_hook.h",
     "x11_menu_utils.cc",
     "x11_menu_utils.h",
     "x11_screen_ozone.cc",
@@ -53,11 +53,12 @@ source_set("x11") {
   deps = [
     "//base",
     "//build:chromecast_buildflags",
-    "//build:chromeos_buildflags",
+    "//components/viz/common/resources:shared_image_format",
     "//gpu/vulkan:buildflags",
     "//net",
     "//skia",
-    "//ui/base:base",
+    "//third_party/angle:includes",
+    "//ui/base",
     "//ui/base:buildflags",
     "//ui/base:data_exchange",
     "//ui/base:hit_test",
@@ -70,8 +71,9 @@ source_set("x11") {
     "//ui/base/ime",
     "//ui/base/x",
     "//ui/base/x:gl",
-    "//ui/display/fake",
+    "//ui/display/types",
     "//ui/events",
+    "//ui/events:dom_keycode_converter",
     "//ui/events/devices",
     "//ui/events/devices/x11",
     "//ui/events/ozone",
@@ -82,7 +84,7 @@ source_set("x11") {
     "//ui/gfx",
     "//ui/gfx/geometry",
     "//ui/gfx/linux:gbm",
-    "//ui/gfx/linux:gpu_memory_buffer_support_x11",
+    "//ui/gfx/linux:gbm_support_x11",
     "//ui/gfx/x",
     "//ui/gl",
     "//ui/ozone:ozone_base",
@@ -100,7 +102,7 @@ source_set("x11") {
     deps += [ "//ui/linux:linux_ui" ]
   }
 
-  if (is_chromeos_ash) {
+  if (is_chromeos) {
     deps += [ "//ui/base/ime/ash" ]
   } else {
     deps += [ "//ui/base/ime/linux" ]
@@ -119,8 +121,6 @@ source_set("x11") {
   if (use_xkbcommon) {
     configs += [ "//ui/events/ozone/layout:xkbcommon" ]
   }
-
-  public_configs = [ "//third_party/khronos:khronos_headers" ]
 
   if (use_atk) {
     sources += [
@@ -147,7 +147,6 @@ source_set("x11_unittests") {
     ":x11",
     "//base",
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
@@ -170,7 +169,7 @@ source_set("x11_unittests") {
     "//ui/ozone/common",
   ]
 
-  if (!is_chromeos && !is_chromeos) {
+  if (!is_chromeos) {
     sources += [ "test/os_exchange_data_provider_x11_unittest.cc" ]
     deps += [ "//ui/base/clipboard:clipboard_types" ]
 
@@ -194,6 +193,7 @@ source_set("test_support") {
   ]
 
   deps = [
+    "//ui/aura",
     "//ui/base/x",
     "//ui/base/x:test_support",
   ]

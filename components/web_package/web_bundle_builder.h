@@ -7,10 +7,10 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "components/cbor/writer.h"
 #include "url/gurl.h"
 
@@ -39,16 +39,16 @@ class WebBundleBuilder {
   // Add an exchange to the Web Bundle for a given `GURL`.
   void AddExchange(const GURL& url,
                    const Headers& response_headers,
-                   base::StringPiece payload);
+                   std::string_view payload);
   // Add an exchange to the Web Bundle for a given `url` represented as a
   // string. In contrast to providing the URL as `GURL`, this allows adding
   // relative URLs to the Web Bundle.
-  void AddExchange(base::StringPiece url,
+  void AddExchange(std::string_view url,
                    const Headers& response_headers,
-                   base::StringPiece payload);
+                   std::string_view payload);
 
   ResponseLocation AddResponse(const Headers& headers,
-                               base::StringPiece payload);
+                               std::string_view payload);
 
   // Adds an entry to the "index" section of the Web Bundle for the given
   // `GURL`.
@@ -57,36 +57,24 @@ class WebBundleBuilder {
   // Adds an entry to the "index" section of the Web Bundle  for the given `url`
   // represented as a string. In contrast to providing the URL as `GURL`, this
   // allows adding relative URLs to the Web Bundle.
-  void AddIndexEntry(base::StringPiece url,
+  void AddIndexEntry(std::string_view url,
                      const ResponseLocation& response_location);
 
-  void AddSection(base::StringPiece name, cbor::Value section);
-  void AddAuthority(cbor::Value::MapValue authority);
-  void AddVouchedSubset(cbor::Value::MapValue vouched_subset);
+  void AddSection(std::string_view name, cbor::Value section);
 
   // Adds a "primary" section to the Web Bundle containing a given `GURL`.
   void AddPrimaryURL(const GURL& url);
   // Adds a "primary" section to the Web Bundle for a given `url` represented as
   // a string. In contrast to providing the URL as `GURL`, this allows setting
   // relative URLs as the primary URL of a Web Bundle.
-  void AddPrimaryURL(base::StringPiece url);
+  void AddPrimaryURL(std::string_view url);
 
   std::vector<uint8_t> CreateBundle();
-
-  // Creates a signed-subset structure with single subset-hashes entry,
-  // and returns it as a CBOR bytestring.
-  cbor::Value CreateEncodedSigned(base::StringPiece validity_url,
-                                  base::StringPiece auth_sha256,
-                                  int64_t date,
-                                  int64_t expires,
-                                  base::StringPiece url,
-                                  base::StringPiece header_sha256,
-                                  base::StringPiece payload_integrity_header);
 
  private:
   std::vector<uint8_t> CreateTopLevel();
   std::vector<uint8_t> Encode(const cbor::Value& value);
-  cbor::Value GetCborValueOfURL(base::StringPiece url);
+  cbor::Value GetCborValueOfURL(std::string_view url);
 
   int64_t EncodedLength(const cbor::Value& value);
 
@@ -95,8 +83,6 @@ class WebBundleBuilder {
   cbor::Value::ArrayValue sections_;
   std::map<std::string, ResponseLocation> delayed_index_;
   cbor::Value::ArrayValue responses_;
-  cbor::Value::ArrayValue authorities_;
-  cbor::Value::ArrayValue vouched_subsets_;
   BundleVersion version_;
   int64_t current_responses_offset_ = 0;
 };

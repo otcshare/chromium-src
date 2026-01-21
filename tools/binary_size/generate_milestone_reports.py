@@ -39,11 +39,8 @@ _GSUTIL = os.path.join(_DIR_SOURCE_ROOT, 'third_party', 'depot_tools',
 
 _PUSH_URL = 'gs://chrome-supersize/milestones/'
 
-_DESIRED_CPUS = ['arm', 'arm_64']
-_DESIRED_APKS = [
-    'ChromeModern.apk', 'Monochrome.apk', 'AndroidWebview.apk',
-    'TrichromeGoogle'
-]
+_DESIRED_CPUS = ['arm', 'arm_64', 'high-arm_64']
+_DESIRED_APKS = ['Monochrome.apk', 'AndroidWebview.apk', 'TrichromeGoogle']
 
 # Versions are manually gathered from
 # https://omahaproxy.appspot.com/history?os=android&channel=stable
@@ -98,6 +95,41 @@ _DESIRED_VERSIONS = [
     '107.0.5304.14',
     '108.0.5359.12',
     '109.0.5414.8',
+    '110.0.5481.29',
+    '111.0.5563.31',
+    '112.0.5615.7',
+    '113.0.5672.10',
+    '114.0.5735.4',
+    '115.0.5790.5',
+    '116.0.5845.20',
+    '117.0.5938.5',
+    '118.0.5993.5',
+    '119.0.6045.7',
+    '120.0.6099.18',
+    '121.0.6167.7',
+    '122.0.6261.8',
+    '123.0.6312.54',
+    '124.0.6367.47',
+    '125.0.6422.3',
+    '126.0.6478.16',
+    '127.0.6533.27',
+    '128.0.6613.20',
+    '129.0.6668.32',
+    '130.0.6723.20',
+    '131.0.6778.20',
+    '132.0.6834.24',
+    '133.0.6943.20',
+    '134.0.6998.48',
+    '135.0.7049.24',
+    '136.0.7103.52',
+    '137.0.7151.20',
+    '138.0.7204.40',
+    '139.0.7258.38',
+    '140.0.7339.32',
+    '141.0.7390.48',
+    '142.0.7444.56',
+    '143.0.7499.26',
+    '144.0.7559.34',
 ]
 
 
@@ -107,8 +139,6 @@ def _VersionMajor(version):
 
 def _IsBundle(apk, version):
   version = _VersionMajor(version)
-  if apk == 'ChromeModern.apk' and version >= 73:
-    return True
   if apk == 'Monochrome.apk' and version >= 73:
     return True
   if apk == 'AndroidWebview.apk' and version >= 89:
@@ -119,13 +149,21 @@ def _IsBundle(apk, version):
 def _EnumerateReports():
   for cpu, apk in itertools.product(_DESIRED_CPUS, _DESIRED_APKS):
     versions = _DESIRED_VERSIONS
-    # Webview .size files do not exist before M71.
-    if apk == 'AndroidWebview.apk':
+    if cpu == 'high-arm_64':
+      if apk != 'TrichromeGoogle':
+        continue
+      versions = [v for v in versions if _VersionMajor(v) >= 126]
+    elif apk == 'AndroidWebview.apk':
+      # Webview .size files do not exist before M71.
       versions = [v for v in versions if _VersionMajor(v) >= 71]
     elif apk == 'TrichromeGoogle':
       versions = [v for v in versions if _VersionMajor(v) >= 88]
-    elif apk == 'ChromeModern.apk':
-      versions = [v for v in versions if _VersionMajor(v) <= 108]
+    elif apk == 'Monochrome.apk':
+      versions = [v for v in versions if _VersionMajor(v) < 140]
+
+    # Switched to high-end only.
+    if cpu == 'arm_64':
+      versions = [v for v in versions if _VersionMajor(v) < 127]
 
     for version in versions:
       yield Report(cpu, apk, version)
@@ -138,6 +176,8 @@ class Report(collections.namedtuple('Report', 'cpu,apk,version')):
     if not local and self.apk == 'TrichromeGoogle' and _VersionMajor(
         self.version) < 91:
       template = '{version}/{cpu}/for-signing-only/{apk}.size'
+    elif self.cpu == 'high-arm_64':
+      template = '{version}/{cpu}/{apk}6432.size'
     else:
       template = '{version}/{cpu}/{apk}.size'
 
@@ -224,6 +264,9 @@ def main():
       '--sync',
       action='store_true',
       help='Sync data files to GCS (otherwise just prints out command to run).')
+  parser.add_argument('--wait',
+                      action='store_true',
+                      help='Allow user to examine staged content before exit.')
   args = parser.parse_args()
 
   size_file_bucket = args.size_file_bucket.rstrip('/')
@@ -234,9 +277,10 @@ def main():
 
   logging.warning('Downloading %d size files.', len(reports_to_make))
   with _DownloadSizeFiles(args.size_file_bucket, reports_to_make) as sizes_dir:
-
     staging_dir = os.path.join(sizes_dir, 'staging')
     _MakeDirectory(staging_dir)
+    if not args.sync:
+      logging.warning('Staging dir: %s', staging_dir)
 
     for r in reports_to_make:
       _BuildOneReport(r, staging_dir, sizes_dir)
@@ -255,6 +299,8 @@ def main():
           [_GSUTIL, 'setmeta', '-h', 'Cache-Control:no-cache', milestones_json])
     else:
       logging.warning('Finished dry run. Run with --sync to upload.')
+    if args.wait:
+      input('Press <enter> to delete staging dir %s, and finish.' % staging_dir)
 
 
 if __name__ == '__main__':

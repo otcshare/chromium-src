@@ -4,6 +4,8 @@
 
 #include "chromeos/ash/services/bluetooth_config/system_properties_provider_impl.h"
 
+#include "base/logging.h"
+#include "base/trace_event/trace_event.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 
@@ -14,8 +16,9 @@ SystemPropertiesProviderImpl::SystemPropertiesProviderImpl(
     DeviceCache* device_cache)
     : adapter_state_controller_(adapter_state_controller),
       device_cache_(device_cache) {
-  adapter_state_controller_observation_.Observe(adapter_state_controller_);
-  device_cache_observation_.Observe(device_cache_);
+  adapter_state_controller_observation_.Observe(
+      adapter_state_controller_.get());
+  device_cache_observation_.Observe(device_cache_.get());
   session_manager::SessionManager::Get()->AddObserver(this);
 }
 
@@ -34,6 +37,7 @@ void SystemPropertiesProviderImpl::OnAdapterStateChanged() {
 }
 
 void SystemPropertiesProviderImpl::OnSessionStateChanged() {
+  TRACE_EVENT0("login", "SystemPropertiesProviderImpl::OnSessionStateChanged");
   NotifyPropertiesChanged();
 }
 

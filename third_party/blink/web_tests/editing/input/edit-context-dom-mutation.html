@@ -56,7 +56,7 @@
   if (onMacPlatform) {
     formatCommands = [{'modifier': 'metaKey', 'key': 'b', 'command': 'formatBold'},
                       {'modifier': 'metaKey', 'key': 'i', 'command': 'formatItalic'},
-                      {'modifier': 'ctrlKey', 'key': 'u', 'command': 'formatUnderline'}];
+                      {'modifier': 'metaKey', 'key': 'u', 'command': 'formatUnderline'}];
   } else {
     formatCommands = [{'modifier': 'ctrlKey', 'key': 'b', 'command': 'formatBold'},
                       {'modifier': 'ctrlKey', 'key': 'i', 'command': 'formatItalic'},
@@ -193,75 +193,7 @@
     div.innerHTML = divText;
 
     let editContext = new EditContext();
-    editContext.text = "Hello!😎";
-    editContext.updateSelection(8, 8); // Move to the end. Note '😎' occupies 2 characters.
-    div.editContext = editContext;
-    div.focus();
-
-    let got_textupdate_event = false;
-    editContext.addEventListener("textupdate", e => {
-      assert_equals(e.updateRangeStart, 6);
-      assert_equals(e.updateRangeEnd, 8);
-      assert_equals(e.updateText, '');
-      got_textupdate_event = true;
-    });
-
-    let got_beforeinput_event = false;
-    div.addEventListener('beforeinput', (event) => {
-      assert_equals(event.inputType, 'deleteContentBackward');
-      got_beforeinput_event = true;
-    });
-
-    eventSender.keyDown('Backspace');
-
-    assert_equals(div.editContext.text, "Hello!", "'😎' should be deleted.");
-    assert_equals(got_textupdate_event, true, "The textupdate event should be fired on the EditContext.");
-    assert_equals(div.innerText, divText, "DOM shouldn't be modified");
-    assert_equals(got_beforeinput_event, true, "The beforeinput event should be fired on the Div.");
-  }, "EditContext should disable DOM mutation from Backspace and also update EditContext.text");
-
-  test(() => {
-    let div = document.createElement("div");
-    document.body.appendChild(div);
-    let divText = "abc";
-    div.innerHTML = divText;
-
-    let editContext = new EditContext();
-    editContext.text = "Hello!😎";
-    editContext.updateSelection(6, 6);
-    div.editContext = editContext;
-    div.focus();
-
-    let got_textupdate_event = false;
-    editContext.addEventListener("textupdate", e => {
-      assert_equals(e.updateRangeStart, 6);
-      assert_equals(e.updateRangeEnd, 8);
-      assert_equals(e.updateText, '');
-      got_textupdate_event = true;
-    });
-
-    let got_beforeinput_event = false;
-    div.addEventListener('beforeinput', (event) => {
-      assert_equals(event.inputType, 'deleteContentForward');
-      got_beforeinput_event = true;
-    });
-
-    eventSender.keyDown('Delete');
-
-    assert_equals(div.editContext.text, "Hello!", "'😎' should be deleted.");
-    assert_equals(got_textupdate_event, true, "The textupdate event should be fired on the EditContext.");
-    assert_equals(div.innerText, divText, "DOM shouldn't be modified");
-    assert_equals(got_beforeinput_event, true, "The beforeinput event should be fired on the Div.");
-  }, "EditContext should disable DOM mutation from Delete and also update EditContext.text");
-
-  test(() => {
-    let div = document.createElement("div");
-    document.body.appendChild(div);
-    let divText = "abc";
-    div.innerHTML = divText;
-
-    let editContext = new EditContext();
-    editContext.text = "Hello world!";
+    editContext.updateText(0, 12, "Hello world!");
     editContext.updateSelection(5, 5);
     div.editContext = editContext;
     div.focus();
@@ -270,7 +202,7 @@
     editContext.addEventListener("textupdate", e => {
       assert_equals(e.updateRangeStart, 0);
       assert_equals(e.updateRangeEnd, 5);
-      assert_equals(e.updateText, '');
+      assert_equals(e.text, '');
       got_textupdate_event = true;
     });
 
@@ -298,7 +230,7 @@
     div.innerHTML = divText;
 
     let editContext = new EditContext();
-    editContext.text = "Hello world!";
+    editContext.updateText(0, 12, "Hello world!");
     editContext.updateSelection(6, 6);
     div.editContext = editContext;
     div.focus();
@@ -307,7 +239,7 @@
     editContext.addEventListener("textupdate", e => {
       assert_equals(e.updateRangeStart, 6);
       assert_equals(e.updateRangeEnd, 11);
-      assert_equals(e.updateText, '');
+      assert_equals(e.text, '');
       got_textupdate_event = true;
     });
 
@@ -327,5 +259,75 @@
     assert_equals(div.innerText, divText, "DOM shouldn't be modified");
     assert_equals(got_beforeinput_event, true, "The beforeinput event should be fired on the Div.");
   }, "EditContext should disable DOM mutation from Ctrl+Delete and also update EditContext.text");
+
+  test(() => {
+    if(window.internals) {
+      // The flag is not enabled in stable. This is required to repro the crash.
+      internals.runtimeFlags.editContextHandleTextOrSelectionUpdateDuringCompositionEnabled = false;
+    }
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+
+    const editContext = new EditContext();
+    editContext.updateText(0, 12, "Hello world!");
+    editContext.updateSelection(12, 12);
+    div.editContext = editContext;
+    div.focus();
+
+    editContext.updateText(6, 12, "foo"); // replace "world!" with "foo"
+    assert_equals(editContext.text, "Hello foo");
+
+    if (onMacPlatform)
+      eventSender.keyDown('Backspace', 'altKey');
+    else
+      eventSender.keyDown('Backspace', 'ctrlKey');
+
+    assert_equals(editContext.text, "Hello ");
+    assert_equals(editContext.selectionStart, 6);
+    assert_equals(editContext.selectionEnd, 6);
+
+    editContext.updateText(0, 6, "Hi"); // replace "Hello " with "Hi"
+    assert_equals(editContext.text, "Hi");
+
+    eventSender.keyDown('Backspace');
+    assert_equals(editContext.text, "H");
+    assert_equals(editContext.selectionStart, 1);
+    assert_equals(editContext.selectionEnd, 1);
+  }, "EditContext should not crash during backward deletion if selection is not updated after updateText()")
+
+  test(() => {
+    if(window.internals) {
+      // The flag is not enabled in stable. This is required to repro the crash.
+      internals.runtimeFlags.editContextHandleTextOrSelectionUpdateDuringCompositionEnabled = false;
+    }
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+
+    const editContext = new EditContext();
+    editContext.updateText(0, 12, "Hello world!");
+    editContext.updateSelection(10, 10);
+    div.editContext = editContext;
+    div.focus();
+
+    editContext.updateText(5, 12, ""); // remove " world!"
+    assert_equals(editContext.text, "Hello");
+
+    if (onMacPlatform)
+      eventSender.keyDown('Delete', 'altKey');
+    else
+      eventSender.keyDown('Delete', 'ctrlKey');
+
+    assert_equals(editContext.text, "Hello");
+    assert_equals(editContext.selectionStart, 5);
+    assert_equals(editContext.selectionEnd, 5);
+
+    editContext.updateText(0, 5, "Hi"); // replace "Hello" with "Hi"
+    assert_equals(editContext.text, "Hi");
+
+    eventSender.keyDown('Delete');
+    assert_equals(editContext.text, "Hi");
+    assert_equals(editContext.selectionStart, 2);
+    assert_equals(editContext.selectionEnd, 2);
+  }, "EditContext should not crash during forward deletion if selection is not updated after updateText()")
 </script>
 </body>

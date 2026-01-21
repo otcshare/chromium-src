@@ -100,11 +100,6 @@ bool operator==(const PolicyValue& lhs, const PolicyValue& rhs) {
       return true;
   }
   NOTREACHED();
-  return false;
-}
-
-bool operator!=(const PolicyValue& lhs, const PolicyValue& rhs) {
-  return !(lhs == rhs);
 }
 
 bool PolicyValue::IsCompatibleWith(const PolicyValue& required) const {
@@ -118,7 +113,6 @@ bool PolicyValue::IsCompatibleWith(const PolicyValue& required) const {
       return int_value_ == required.int_value_;
     case mojom::PolicyValueType::kNull:
       NOTREACHED();
-      break;
   }
   return false;
 }

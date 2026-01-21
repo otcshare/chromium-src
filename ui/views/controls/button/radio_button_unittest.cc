@@ -5,12 +5,15 @@
 #include "ui/views/controls/button/radio_button.h"
 
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/views/cascading_property.h"
 #include "ui/views/test/views_test_base.h"
 
 namespace {
@@ -33,8 +36,8 @@ class RadioButtonTest : public ViewsTestBase {
     // Create a Widget so the radio buttons can find their group siblings.
     widget_ = std::make_unique<Widget>();
     Widget::InitParams params =
-        CreateParams(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     widget_->Init(std::move(params));
     widget_->Show();
 
@@ -57,9 +60,9 @@ class RadioButtonTest : public ViewsTestBase {
 
 TEST_F(RadioButtonTest, Basics) {
   RadioButton* button1 = new RadioButton(u"Blah", kGroup);
-  button_container().AddChildView(button1);
+  button_container().AddChildViewRaw(button1);
   RadioButton* button2 = new RadioButton(u"Blah", kGroup);
-  button_container().AddChildView(button2);
+  button_container().AddChildViewRaw(button2);
 
   button1->SetChecked(true);
   EXPECT_TRUE(button1->GetChecked());
@@ -72,14 +75,15 @@ TEST_F(RadioButtonTest, Basics) {
 
 TEST_F(RadioButtonTest, Focus) {
   RadioButton* button1 = new RadioButton(u"Blah", kGroup);
-  button_container().AddChildView(button1);
+  button_container().AddChildViewRaw(button1);
   RadioButton* button2 = new RadioButton(u"Blah", kGroup);
-  button_container().AddChildView(button2);
+  button_container().AddChildViewRaw(button2);
 
   // Tabbing through only focuses the checked button.
   button1->SetChecked(true);
   auto* focus_manager = button_container().GetFocusManager();
-  ui::KeyEvent pressed_tab(ui::ET_KEY_PRESSED, ui::VKEY_TAB, ui::EF_NONE);
+  ui::KeyEvent pressed_tab(ui::EventType::kKeyPressed, ui::VKEY_TAB,
+                           ui::EF_NONE);
   focus_manager->OnKeyEvent(pressed_tab);
   EXPECT_EQ(button1, focus_manager->GetFocusedView());
   focus_manager->OnKeyEvent(pressed_tab);
@@ -87,13 +91,13 @@ TEST_F(RadioButtonTest, Focus) {
 
   // The checked button can be moved using arrow keys.
   focus_manager->OnKeyEvent(
-      ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_DOWN, ui::EF_NONE));
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_DOWN, ui::EF_NONE));
   EXPECT_EQ(button2, focus_manager->GetFocusedView());
   EXPECT_FALSE(button1->GetChecked());
   EXPECT_TRUE(button2->GetChecked());
 
   focus_manager->OnKeyEvent(
-      ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_UP, ui::EF_NONE));
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_UP, ui::EF_NONE));
   EXPECT_EQ(button1, focus_manager->GetFocusedView());
   EXPECT_TRUE(button1->GetChecked());
   EXPECT_FALSE(button2->GetChecked());
@@ -102,14 +106,14 @@ TEST_F(RadioButtonTest, Focus) {
 TEST_F(RadioButtonTest, FocusOnClick) {
   RadioButton* button1 = new RadioButton(std::u16string(), kGroup);
   button1->SetSize(gfx::Size(10, 10));
-  button_container().AddChildView(button1);
+  button_container().AddChildViewRaw(button1);
   button1->SetChecked(true);
   RadioButton* button2 = new RadioButton(std::u16string(), kGroup);
   button2->SetSize(gfx::Size(10, 10));
-  button_container().AddChildView(button2);
+  button_container().AddChildViewRaw(button2);
 
   const gfx::Point point(1, 1);
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, point, point,
+  const ui::MouseEvent event(ui::EventType::kMousePressed, point, point,
                              ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                              ui::EF_LEFT_MOUSE_BUTTON);
   button2->OnMousePressed(event);
@@ -120,7 +124,8 @@ TEST_F(RadioButtonTest, FocusOnClick) {
   // No focus on click.
   EXPECT_EQ(nullptr, focus_manager->GetFocusedView());
 
-  ui::KeyEvent pressed_tab(ui::ET_KEY_PRESSED, ui::VKEY_TAB, ui::EF_NONE);
+  ui::KeyEvent pressed_tab(ui::EventType::kKeyPressed, ui::VKEY_TAB,
+                           ui::EF_NONE);
   focus_manager->OnKeyEvent(pressed_tab);
   EXPECT_EQ(button2, focus_manager->GetFocusedView());
 
@@ -129,6 +134,41 @@ TEST_F(RadioButtonTest, FocusOnClick) {
   // Button 1 gets focus on click because button 2 already had it.
   EXPECT_TRUE(button1->GetChecked());
   EXPECT_EQ(button1, focus_manager->GetFocusedView());
+}
+
+TEST_F(RadioButtonTest, RadioGroupHierarchy) {
+  auto make_radio_button = [](std::u16string_view text,
+                              raw_ptr<RadioButton>* button) -> Builder<View> {
+    return Builder<View>().SetUseDefaultFillLayout(true).AddChild(
+        Builder<RadioButton>(std::make_unique<RadioButton>(u"", -1))
+            .SetText(std::u16string(text))
+            .SetGroup(kGroup)
+            .CopyAddressTo(button));
+  };
+  raw_ptr<RadioButton> button1 = nullptr;
+  raw_ptr<RadioButton> button2 = nullptr;
+  raw_ptr<RadioButton> button3 = nullptr;
+  Builder<View>(&button_container())
+      .AddChildren(make_radio_button(u"Blah 1", &button1),
+                   make_radio_button(u"Blah 2", &button2),
+                   make_radio_button(u"Blah 3", &button3))
+      .BuildChildren();
+  SetCascadingRadioGroupView(&button_container(), kCascadingRadioGroupView);
+
+  button1->SetChecked(true);
+  EXPECT_TRUE(button1->GetChecked());
+  EXPECT_FALSE(button2->GetChecked());
+  EXPECT_FALSE(button3->GetChecked());
+
+  button2->SetChecked(true);
+  EXPECT_FALSE(button1->GetChecked());
+  EXPECT_TRUE(button2->GetChecked());
+  EXPECT_FALSE(button3->GetChecked());
+
+  button3->SetChecked(true);
+  EXPECT_FALSE(button1->GetChecked());
+  EXPECT_FALSE(button2->GetChecked());
+  EXPECT_TRUE(button3->GetChecked());
 }
 
 }  // namespace views

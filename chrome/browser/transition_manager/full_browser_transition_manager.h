@@ -8,8 +8,9 @@
 #include <map>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "components/keyed_service/core/simple_factory_key.h"
@@ -50,7 +51,8 @@ class FullBrowserTransitionManager {
   FullBrowserTransitionManager();
   ~FullBrowserTransitionManager();
 
-  std::map<SimpleFactoryKey*, Profile*> simple_key_to_profile_;
+  std::map<SimpleFactoryKey*, raw_ptr<Profile, CtnExperimental>>
+      simple_key_to_profile_;
   std::map<SimpleFactoryKey*, std::vector<OnProfileCreationCallback>>
       on_profile_creation_callbacks_;
   SEQUENCE_CHECKER(sequence_checker_);

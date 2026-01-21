@@ -8,10 +8,8 @@
 #include <memory>
 #include <string>
 
+#include "chrome/browser/ash/printing/enterprise/print_servers_provider_factory.h"
 #include "chrome/browser/ash/printing/print_server.h"
-#include "chrome/browser/ash/printing/print_servers_provider.h"
-#include "chrome/browser/ash/printing/print_servers_provider_factory.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -21,7 +19,8 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libipp/libipp/ipp.h"
+#include "third_party/libipp/libipp/builder.h"
+#include "third_party/libipp/libipp/frame.h"
 
 namespace ash {
 
@@ -105,19 +104,20 @@ class ServerPrintersProviderTest : public ::testing::Test {
         ServerPrintersProvider::Create(test_profile_.get());
   }
 
-  void TearDown() override { PrintServersProviderFactory::Get()->Shutdown(); }
+  void TearDown() override {
+    PrintServersProviderFactory::Get()->ShutdownForTesting();
+  }
 
   std::string CreateResponse(const std::string& name,
                              const std::string& description) {
-    ipp::Response_CUPS_Get_Printers response;
-    response.printer_attributes[0].printer_name.Set(
-        ipp::StringWithLanguage(name, "us-EN"));
-    response.printer_attributes[0].printer_info.Set(
-        ipp::StringWithLanguage(description, "us-EN"));
-    ipp::Server server(ipp::Version::_1_1, 1);
-    server.BuildResponseFrom(&response);
-    std::vector<uint8_t> bin_data;
-    EXPECT_TRUE(server.WriteResponseFrameTo(&bin_data));
+    ipp::Frame response(ipp::Operation::CUPS_Get_Printers);
+    ipp::CollsView::iterator grp;
+    response.AddGroup(ipp::GroupTag::printer_attributes, grp);
+    grp->AddAttr("printer-name", ipp::ValueTag::nameWithLanguage,
+                 ipp::StringWithLanguage(name, "us-EN"));
+    grp->AddAttr("printer-info", ipp::ValueTag::textWithLanguage,
+                 ipp::StringWithLanguage(description, "us-EN"));
+    std::vector<uint8_t> bin_data = ipp::BuildBinaryFrame(response);
     std::string response_body(bin_data.begin(), bin_data.end());
     return response_body;
   }

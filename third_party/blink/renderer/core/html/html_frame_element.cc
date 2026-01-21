@@ -23,7 +23,7 @@
 
 #include "third_party/blink/renderer/core/html/html_frame_element.h"
 
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/mojom/permissions_policy/policy_value.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/html/frame_edge_info.h"
 #include "third_party/blink/renderer/core/html/html_frame_set_element.h"
@@ -37,16 +37,15 @@ HTMLFrameElement::HTMLFrameElement(Document& document)
       frame_border_(true),
       frame_border_set_(false) {}
 
-bool HTMLFrameElement::LayoutObjectIsNeeded(const ComputedStyle&) const {
+bool HTMLFrameElement::LayoutObjectIsNeeded(const DisplayStyle&) const {
   // For compatibility, frames render even when display: none is set.
   return ContentFrame();
 }
 
-LayoutObject* HTMLFrameElement::CreateLayoutObject(const ComputedStyle& style,
-                                                   LegacyLayout legacy) {
+LayoutObject* HTMLFrameElement::CreateLayoutObject(const ComputedStyle& style) {
   if (IsA<HTMLFrameSetElement>(parentNode()))
     return MakeGarbageCollected<LayoutFrame>(this);
-  return LayoutObject::CreateObject(this, style, legacy);
+  return LayoutObject::CreateObject(this, style);
 }
 
 bool HTMLFrameElement::HasFrameBorder() const {
@@ -80,16 +79,9 @@ void HTMLFrameElement::ParseAttribute(
   }
 }
 
-ParsedPermissionsPolicy HTMLFrameElement::ConstructContainerPolicy() const {
-  // Frame elements are not allowed to enable the fullscreen feature. Add an
-  // empty allowlist for the fullscreen feature so that the framed content is
-  // unable to use the API, regardless of origin.
-  // https://fullscreen.spec.whatwg.org/#model
-  ParsedPermissionsPolicy container_policy;
-  ParsedPermissionsPolicyDeclaration allowlist(
-      mojom::blink::PermissionsPolicyFeature::kFullscreen);
-  container_policy.push_back(allowlist);
-  return container_policy;
+network::ParsedPermissionsPolicy HTMLFrameElement::ConstructContainerPolicy()
+    const {
+  return GetLegacyFramePolicies();
 }
 
 }  // namespace blink

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/profiles/profile_downloader.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
@@ -46,7 +46,7 @@ class ProfileDownloaderTest
 
   bool NeedsProfilePicture() const override { return true; }
   int GetDesiredImageSideLength() const override { return 128; }
-  std::string GetCachedPictureURL() const override { return std::string(); }
+  const GURL& GetCachedPictureURL() const override { return GURL::EmptyGURL(); }
   signin::IdentityManager* GetIdentityManager() override {
     return identity_test_env_.identity_manager();
   }
@@ -148,7 +148,7 @@ TEST_F(ProfileDownloaderTest, AccountInfoNoPictureDoesNotCrash) {
   run_loop.Run();
   profile_downloader_.StartFetchingImage();
 
-  EXPECT_TRUE(profile_downloader_.GetProfilePictureURL().empty());
+  EXPECT_TRUE(profile_downloader_.GetProfilePictureURL().is_empty());
   ASSERT_EQ(ProfileDownloader::PICTURE_DEFAULT,
             profile_downloader_.GetProfilePictureStatus());
 }
@@ -165,7 +165,7 @@ TEST_F(ProfileDownloaderTest, AccountInfoInvalidPictureURLDoesNotCrash) {
   run_loop.Run();
   profile_downloader_.StartFetchingImage();
 
-  EXPECT_TRUE(profile_downloader_.GetProfilePictureURL().empty());
+  EXPECT_TRUE(profile_downloader_.GetProfilePictureURL().is_empty());
   ASSERT_EQ(ProfileDownloader::PICTURE_FAILED,
             profile_downloader_.GetProfilePictureStatus());
 }

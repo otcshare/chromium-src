@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "ash/public/cpp/app_list/app_list_notifier.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_forward.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
@@ -44,7 +46,7 @@ class HelpAppZeroStateResult : public ChromeSearchResult {
   void Open(int event_flags) override;
 
  private:
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 };
 
 // Provides zero-state results from the Help App.
@@ -76,11 +78,16 @@ class HelpAppZeroStateProvider : public SearchProvider,
   void OnLoadIcon(apps::IconValuePtr icon_value);
   void LoadIcon();
 
-  Profile* const profile_;
-  ash::AppListNotifier* const notifier_;
+  const raw_ptr<Profile> profile_;
 
-  apps::AppServiceProxy* app_service_proxy_;
   gfx::ImageSkia icon_;
+
+  base::ScopedObservation<apps::AppRegistryCache,
+                          apps::AppRegistryCache::Observer>
+      app_registry_cache_observer_{this};
+
+  base::ScopedObservation<ash::AppListNotifier, ash::AppListNotifier::Observer>
+      notifier_observer_{this};
 
   base::WeakPtrFactory<HelpAppZeroStateProvider> weak_factory_{this};
 };

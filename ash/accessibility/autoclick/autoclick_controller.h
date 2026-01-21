@@ -8,13 +8,15 @@
 #include "ash/ash_export.h"
 #include "ash/constants/ash_constants.h"
 #include "ash/public/cpp/ash_constants.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "ui/aura/client/cursor_client_observer.h"
 #include "ui/aura/window_observer.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace base {
 class RetainingOneShotTimer;
@@ -27,7 +29,7 @@ class Widget;
 namespace ash {
 
 class AccessibilityFeatureDisableDialog;
-class AutoclickDragEventRewriter;
+class DragEventRewriter;
 class AutoclickMenuBubbleController;
 class AutoclickRingHandler;
 class AutoclickScrollPositionHandler;
@@ -91,9 +93,9 @@ class ASH_EXPORT AutoclickController
   // The cursor has exited a scroll (up/down/left/right) button.
   void OnExitedScrollButton();
 
-  // The Accessibility Common extension has found scrollble bounds at the
+  // The Accessibility Common extension has found scrollable bounds at the
   // current scroll point.
-  void HandleAutoclickScrollableBoundsFound(gfx::Rect& bounds_in_screen);
+  void HandleAutoclickScrollableBoundsFound(const gfx::Rect& bounds_in_screen);
 
   // Update the bubble menu bounds if necessary to avoid system UI.
   void UpdateAutoclickMenuBoundsIfNeeded();
@@ -121,6 +123,10 @@ class ASH_EXPORT AutoclickController
   }
   AccessibilityFeatureDisableDialog* GetDisableDialogForTesting() {
     return disable_dialog_.get();
+  }
+  void SetScrollableBoundsCallbackForTesting(
+      base::RepeatingCallback<void(const gfx::Rect&)> callback) {
+    scrollable_bounds_callback_for_testing_ = callback;
   }
 
  private:
@@ -154,9 +160,8 @@ class ASH_EXPORT AutoclickController
   void OnWindowDestroying(aura::Window* window) override;
 
   // aura::client::CursorClientObserver overrides:
+  void OnCursorDisplayChanged(const display::Display& display) override;
   void OnCursorVisibilityChanged(bool is_visible) override;
-  // TODO(katie): Override OnCursorDisplayChanged to move the autoclick
-  // bubble menu to the same display as the cursor.
 
   // Whether Autoclick is currently enabled.
   bool enabled_ = false;
@@ -174,7 +179,7 @@ class ASH_EXPORT AutoclickController
   int mouse_event_flags_ = ui::EF_NONE;
   // The target window is observed by AutoclickController for the duration
   // of a autoclick gesture.
-  aura::Window* tap_down_target_ = nullptr;
+  raw_ptr<aura::Window> tap_down_target_ = nullptr;
   // The most recent mouse location.
   gfx::Point last_mouse_location_{-kDefaultAutoclickMovementThreshold,
                                   -kDefaultAutoclickMovementThreshold};
@@ -183,11 +188,11 @@ class ASH_EXPORT AutoclickController
   // if move events should cancel the gesture.
   gfx::Point anchor_location_{-kDefaultAutoclickMovementThreshold,
                               -kDefaultAutoclickMovementThreshold};
-  // The position in screen coodinates tracking where the autoclick gesture
+  // The position in screen coordinates tracking where the autoclick gesture
   // should be anchored. While the |start_gesture_timer_| is running and before
   // the animation is drawn, subtle mouse movements will update the
   // |gesture_anchor_location_|, so that once animation begins it can focus on
-  // the most recent mose point.
+  // the most recent mouse point.
   gfx::Point gesture_anchor_location_{-kDefaultAutoclickMovementThreshold,
                                       -kDefaultAutoclickMovementThreshold};
   // The point at which the next scroll event will occur.
@@ -201,6 +206,8 @@ class ASH_EXPORT AutoclickController
   // will not be started. This ensures the autoclick ring is not drawn over
   // the scroll position buttons, and extra clicks will not be generated there.
   bool over_scroll_button_ = false;
+  base::RepeatingCallback<void(const gfx::Rect&)>
+      scrollable_bounds_callback_for_testing_;
 
   // The widget containing the autoclick ring.
   std::unique_ptr<views::Widget> ring_widget_;
@@ -215,7 +222,7 @@ class ASH_EXPORT AutoclickController
   std::unique_ptr<AutoclickRingHandler> autoclick_ring_handler_;
   std::unique_ptr<AutoclickScrollPositionHandler>
       autoclick_scroll_position_handler_;
-  std::unique_ptr<AutoclickDragEventRewriter> drag_event_rewriter_;
+  std::unique_ptr<DragEventRewriter> drag_event_rewriter_;
   std::unique_ptr<AutoclickMenuBubbleController> menu_bubble_controller_;
 
   // Holds a weak pointer to the dialog shown when autoclick is being disabled.

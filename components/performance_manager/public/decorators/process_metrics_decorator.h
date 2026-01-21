@@ -5,23 +5,29 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_DECORATORS_PROCESS_METRICS_DECORATOR_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_DECORATORS_PROCESS_METRICS_DECORATOR_H_
 
-#include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
-#include "base/timer/timer.h"
-#include "components/performance_manager/public/graph/graph.h"
-#include "components/performance_manager/public/graph/graph_registered.h"
+#include <memory>
+#include <optional>
 
-namespace memory_instrumentation {
-class GlobalMemoryDump;
-}
+#include "base/functional/callback_helpers.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "components/performance_manager/public/graph/graph_registered.h"
+#include "components/performance_manager/public/graph/node_data_describer.h"
+#include "components/performance_manager/public/resource_attribution/queries.h"
 
 namespace performance_manager {
+
+class Graph;
+class SystemNode;
 
 // The ProcessMetricsDecorator is responsible for adorning process nodes with
 // performance metrics.
 class ProcessMetricsDecorator
-    : public GraphOwned,
-      public GraphRegisteredImpl<ProcessMetricsDecorator> {
+    : public GraphOwnedAndRegistered<ProcessMetricsDecorator>,
+      public NodeDataDescriberDefaultImpl,
+      public resource_attribution::QueryResultObserver {
  public:
   ProcessMetricsDecorator();
 
@@ -56,54 +62,42 @@ class ProcessMetricsDecorator
   void OnPassedToGraph(Graph* graph) override;
   void OnTakenFromGraph(Graph* graph) override;
 
-  void SetGraphForTesting(Graph* graph) { graph_ = graph; }
-  bool IsTimerRunningForTesting() const { return refresh_timer_.IsRunning(); }
+  // NodeDataDescriber
+  base::Value::Dict DescribeSystemNodeData(
+      const SystemNode* node) const override;
 
-  base::TimeDelta GetTimerDelayForTesting() const {
-    return refresh_timer_.GetCurrentDelay();
-  }
+  bool IsTimerRunningForTesting() const;
+  base::TimeDelta GetTimerDelayForTesting() const;
+
+  // Immediately refreshes the metrics for all the process nodes.
+  // TODO(crbug.com/441134587):
+  // Only MemoryMetricsRefreshWaiter uses it, and it can be replaced by
+  // TabResourceUsageRefreshWaiter. The function can be removed further.
+  void RequestImmediateMetrics(
+      base::OnceClosure on_metrics_received = base::DoNothing());
 
  protected:
   class ScopedMetricsInterestTokenImpl;
-
-  // Starts/Stop the timer responsible for refreshing the process nodes metrics.
-  void StartTimer();
-  void StopTimer();
-
-  // Schedule a refresh of the metrics for all the process nodes.
-  void RefreshMetrics();
-
-  // Query the MemoryInstrumentation service to get the memory metrics for all
-  // processes and run |callback| with the result. Virtual to make a test seam.
-  virtual void RequestProcessesMemoryMetrics(
-      base::OnceCallback<
-          void(bool success,
-               std::unique_ptr<memory_instrumentation::GlobalMemoryDump> dump)>
-          callback);
-
-  // Function that should be used as a callback to
-  // MemoryInstrumentation::RequestPrivateMemoryFootprint. |success| will
-  // indicate if the data has been retrieved successfully and |process_dumps|
-  // will contain the data for all the Chrome processes for which this data was
-  // available.
-  void DidGetMemoryUsage(
-      bool success,
-      std::unique_ptr<memory_instrumentation::GlobalMemoryDump> process_dumps);
+  class NodeMetricsUpdater;
 
   // Called whenever a ScopedMetricsInterestToken is created/released.
   void OnMetricsInterestTokenCreated();
   void OnMetricsInterestTokenReleased();
 
+  // QueryResultObserver:
+  void OnResourceUsageUpdated(
+      const resource_attribution::QueryResultMap& results) override;
+
  private:
-  // The timer responsible for refreshing the metrics.
-  base::RetainingOneShotTimer refresh_timer_;
-
-  // The Graph instance owning this decorator.
-  raw_ptr<Graph> graph_;
-
   // The number of clients currently interested by the metrics tracked by this
   // class.
-  size_t metrics_interest_token_count_ = 0;
+  size_t metrics_interest_token_count_ GUARDED_BY_CONTEXT(sequence_checker_) =
+      0;
+
+  std::optional<resource_attribution::ScopedResourceUsageQuery> scoped_query_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  resource_attribution::ScopedQueryObservation query_observer_{this};
 
   SEQUENCE_CHECKER(sequence_checker_);
 

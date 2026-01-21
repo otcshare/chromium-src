@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/process/process.h"
@@ -252,7 +252,7 @@ class ServiceManagerTest : public testing::Test,
   void StartTarget() {
     // The test executable is a data_deps and thus generated test data.
     base::FilePath target_path;
-    CHECK(base::PathService::Get(base::DIR_GEN_TEST_DATA_ROOT, &target_path));
+    CHECK(base::PathService::Get(base::DIR_OUT_TEST_DATA_ROOT, &target_path));
 
     target_path = target_path.AppendASCII(kTestTargetName);
 #if BUILDFLAG(IS_WIN)

@@ -5,19 +5,18 @@
 #ifndef UI_DISPLAY_UTIL_GPU_INFO_UTIL_H_
 #define UI_DISPLAY_UTIL_GPU_INFO_UTIL_H_
 
-#include "base/strings/string_piece_forward.h"
+#include <string_view>
 
-namespace base {
-class Value;
-}
+#include "base/values.h"
 
 namespace display {
 
 // Helpers for internal pages like chrome://gpu.  Create a dictionary with two
 // values named description (string) and value (depends on the helper).
-base::Value BuildGpuInfoEntry(base::StringPiece description,
-                              base::StringPiece value);
-base::Value BuildGpuInfoEntry(base::StringPiece description, base::Value value);
+base::Value BuildGpuInfoEntry(std::string_view description,
+                              std::string_view value);
+base::Value::Dict BuildGpuInfoEntry(std::string_view description,
+                                    base::Value value);
 
 }  // namespace display
 

@@ -4,23 +4,27 @@
 
 #include "ui/gfx/text_utils.h"
 
+#import <CoreText/CoreText.h>
 #import <UIKit/UIKit.h>
 
 #include <cmath>
+#include <string_view>
 
+#include "base/apple/bridging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "ui/gfx/font_list.h"
 
 namespace gfx {
 
-int GetStringWidth(const std::u16string& text, const FontList& font_list) {
+int GetStringWidth(std::u16string_view text, const FontList& font_list) {
   return std::ceil(GetStringWidthF(text, font_list));
 }
 
-float GetStringWidthF(const std::u16string& text, const FontList& font_list) {
+float GetStringWidthF(std::u16string_view text, const FontList& font_list) {
   NSString* ns_text = base::SysUTF16ToNSString(text);
-  NativeFont native_font = font_list.GetPrimaryFont().GetNativeFont();
-  NSDictionary* attributes = @{NSFontAttributeName : native_font};
+  CTFontRef font = font_list.GetPrimaryFont().GetCTFont();
+  NSDictionary* attributes =
+      @{NSFontAttributeName : base::apple::CFToNSPtrCast(font)};
   return [ns_text sizeWithAttributes:attributes].width;
 }
 

@@ -15,7 +15,6 @@
 #include "extensions/common/error_utils.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/strings/grit/extensions_strings.h"
-#include "ipc/ipc_message.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using extensions::mojom::APIPermissionID;
@@ -51,7 +50,7 @@ static bool ParseHostPattern(
 static bool ParseHostPatterns(
     SocketsManifestPermission* permission,
     content::SocketPermissionRequest::OperationType operation_type,
-    const absl::optional<SocketHostPatterns>& host_patterns,
+    const std::optional<SocketHostPatterns>& host_patterns,
     std::u16string* error) {
   if (!host_patterns)
     return true;
@@ -74,7 +73,7 @@ static bool ParseHostPatterns(
 }
 
 static void SetHostPatterns(
-    absl::optional<SocketHostPatterns>& host_patterns,
+    std::optional<SocketHostPatterns>& host_patterns,
     const SocketsManifestPermission* permission,
     content::SocketPermissionRequest::OperationType operation_type) {
   host_patterns.emplace();
@@ -145,17 +144,19 @@ void AddNetworkListMessage(const SocketPermissionEntrySet& sockets,
 
 }  // namespace
 
-SocketsManifestPermission::SocketsManifestPermission() {}
+SocketsManifestPermission::SocketsManifestPermission() = default;
 
-SocketsManifestPermission::~SocketsManifestPermission() {}
+SocketsManifestPermission::~SocketsManifestPermission() = default;
 
 // static
 std::unique_ptr<SocketsManifestPermission> SocketsManifestPermission::FromValue(
     const base::Value& value,
     std::u16string* error) {
-  std::unique_ptr<Sockets> sockets = Sockets::FromValue(value, error);
-  if (!sockets)
+  auto sockets = Sockets::FromValue(value);
+  if (!sockets.has_value()) {
+    *error = std::move(sockets).error();
     return nullptr;
+  }
 
   std::unique_ptr<SocketsManifestPermission> result(
       new SocketsManifestPermission());

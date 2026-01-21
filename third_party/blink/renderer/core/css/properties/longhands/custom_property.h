@@ -22,7 +22,7 @@ class PropertyRegistry;
 // TODO(andruud): Move functionality from Variable to here, and eventually
 // remove Variable.
 class CORE_EXPORT CustomProperty : public Variable {
-  DISALLOW_NEW();
+  STACK_ALLOCATED();
 
  public:
   CustomProperty() = default;
@@ -35,40 +35,51 @@ class CORE_EXPORT CustomProperty : public Variable {
 
   void ApplyInitial(StyleResolverState&) const override;
   void ApplyInherit(StyleResolverState&) const override;
-  void ApplyValue(StyleResolverState&, const CSSValue&) const override;
+  void ApplyValue(StyleResolverState&,
+                  const CSSValue&,
+                  ValueMode) const override;
 
-  const CSSValue* ParseSingleValue(CSSParserTokenRange&,
+  // Never used.
+  const CSSValue* ParseSingleValue(CSSParserTokenStream&,
                                    const CSSParserContext&,
-                                   const CSSParserLocalContext&) const override;
+                                   CSSParserLocalContext&) const override;
+
+  // The custom property is parsed according to the registered syntax (if
+  // available).
+  //
+  // NOTE: This is distinct from ParseSingleValue() because it takes in
+  // original_text, not a token stream.
+  const CSSValue* Parse(StringView,
+                        const CSSParserContext&,
+                        CSSParserLocalContext&) const;
 
   const CSSValue* CSSValueFromComputedStyleInternal(
       const ComputedStyle&,
       const LayoutObject*,
-      bool allow_visited_style) const override;
+      bool allow_visited_style,
+      CSSValuePhase value_phase) const override;
 
-  bool IsRegistered() const { return registration_; }
+  bool IsRegistered() const { return registration_ != nullptr; }
 
   bool HasInitialValue() const;
 
   // https://drafts.csswg.org/css-variables/#guaranteed-invalid-value
   bool SupportsGuaranteedInvalid() const;
 
-  void Trace(Visitor* visitor) const { visitor->Trace(registration_); }
+  // https://drafts.css-houdini.org/css-properties-values-api-1/#universal-syntax-definition
+  bool HasUniversalSyntax() const;
 
  private:
   CustomProperty(const AtomicString& name,
                  const PropertyRegistration* registration);
   explicit CustomProperty(const PropertyRegistration* registration);
 
-  const CSSValue* ParseUntyped(CSSParserTokenRange,
+  const CSSValue* ParseUntyped(StringView,
                                const CSSParserContext&,
-                               const CSSParserLocalContext&) const;
-  const CSSValue* ParseTyped(CSSParserTokenRange,
-                             const CSSParserContext&,
-                             const CSSParserLocalContext&) const;
+                               CSSParserLocalContext&) const;
 
   AtomicString name_;
-  Member<const PropertyRegistration> registration_;
+  const PropertyRegistration* registration_;
 };
 
 template <>

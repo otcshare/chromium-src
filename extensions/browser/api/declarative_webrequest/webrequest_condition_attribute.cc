@@ -6,15 +6,14 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "extensions/browser/api/declarative/deduping_factory.h"
@@ -79,8 +78,10 @@ struct WebRequestConditionAttributeFactory {
   }
 };
 
-base::LazyInstance<WebRequestConditionAttributeFactory>::Leaky
-    g_web_request_condition_attribute_factory = LAZY_INSTANCE_INITIALIZER;
+WebRequestConditionAttributeFactory& GetWebRequestConditionAttributeFactory() {
+  static base::NoDestructor<WebRequestConditionAttributeFactory> instance;
+  return *instance;
+}
 
 }  // namespace
 
@@ -88,9 +89,9 @@ base::LazyInstance<WebRequestConditionAttributeFactory>::Leaky
 // WebRequestConditionAttribute
 //
 
-WebRequestConditionAttribute::WebRequestConditionAttribute() {}
+WebRequestConditionAttribute::WebRequestConditionAttribute() = default;
 
-WebRequestConditionAttribute::~WebRequestConditionAttribute() {}
+WebRequestConditionAttribute::~WebRequestConditionAttribute() = default;
 
 bool WebRequestConditionAttribute::Equals(
     const WebRequestConditionAttribute* other) const {
@@ -105,7 +106,7 @@ WebRequestConditionAttribute::Create(
     std::string* error) {
   CHECK(value != nullptr && error != nullptr);
   bool bad_message = false;
-  return g_web_request_condition_attribute_factory.Get().factory.Instantiate(
+  return GetWebRequestConditionAttributeFactory().factory.Instantiate(
       name, value, error, &bad_message);
 }
 
@@ -166,7 +167,7 @@ bool WebRequestConditionAttributeResourceType::IsFulfilled(
     const WebRequestData& request_data) const {
   if (!(request_data.stage & GetStages()))
     return false;
-  return base::Contains(types_, request_data.request->web_request_type);
+  return std::ranges::contains(types_, request_data.request->web_request_type);
 }
 
 WebRequestConditionAttribute::Type
@@ -237,9 +238,10 @@ bool WebRequestConditionAttributeContentType::IsFulfilled(
   if (!(request_data.stage & GetStages()))
     return false;
 
-  std::string content_type;
-  request_data.original_response_headers->GetNormalizedHeader(
-      net::HttpRequestHeaders::kContentType, &content_type);
+  std::string content_type =
+      request_data.original_response_headers
+          ->GetNormalizedHeader(net::HttpRequestHeaders::kContentType)
+          .value_or(std::string());
   std::string mime_type;
   std::string charset;
   bool had_charset = false;
@@ -247,9 +249,9 @@ bool WebRequestConditionAttributeContentType::IsFulfilled(
                                   &had_charset, nullptr);
 
   if (inclusive_) {
-    return base::Contains(content_types_, mime_type);
+    return std::ranges::contains(content_types_, mime_type);
   } else {
-    return !base::Contains(content_types_, mime_type);
+    return !std::ranges::contains(content_types_, mime_type);
   }
 }
 
@@ -405,7 +407,7 @@ HeaderMatcher::StringMatchTest::Create(const base::Value& data,
       new StringMatchTest(data.GetString(), type, case_sensitive));
 }
 
-HeaderMatcher::StringMatchTest::~StringMatchTest() {}
+HeaderMatcher::StringMatchTest::~StringMatchTest() = default;
 
 bool HeaderMatcher::StringMatchTest::Matches(
     const std::string& str) const {
@@ -419,16 +421,15 @@ bool HeaderMatcher::StringMatchTest::Matches(
              base::StartsWith(str, data_, case_sensitive_);
     case kContains:
       if (case_sensitive_ == base::CompareCase::INSENSITIVE_ASCII) {
-        return base::ranges::search(str, data_,
-                                    CaseInsensitiveCompareASCII<char>()) !=
-               str.end();
+        return std::ranges::search(str, data_,
+                                   CaseInsensitiveCompareASCII<char>())
+                   .begin() != str.end();
       } else {
-        return str.find(data_) != std::string::npos;
+        return str.contains(data_);
       }
   }
   // We never get past the "switch", but the compiler worries about no return.
   NOTREACHED();
-  return false;
 }
 
 HeaderMatcher::StringMatchTest::StringMatchTest(const std::string& data,
@@ -447,7 +448,7 @@ HeaderMatcher::HeaderMatchTest::HeaderMatchTest(
     : name_match_(std::move(name_match)),
       value_match_(std::move(value_match)) {}
 
-HeaderMatcher::HeaderMatchTest::~HeaderMatchTest() {}
+HeaderMatcher::HeaderMatchTest::~HeaderMatchTest() = default;
 
 // static
 std::unique_ptr<const HeaderMatcher::HeaderMatchTest>
@@ -480,7 +481,6 @@ HeaderMatcher::HeaderMatchTest::Create(const base::Value::Dict& tests) {
       match_type = StringMatchTest::kEquals;
     } else {
       NOTREACHED();  // JSON schema type checking should prevent this.
-      return nullptr;
     }
     const base::Value* content = &entry.second;
 
@@ -502,7 +502,6 @@ HeaderMatcher::HeaderMatchTest::Create(const base::Value::Dict& tests) {
       }
       default: {
         NOTREACHED();  // JSON schema type checking should prevent this.
-        return nullptr;
       }
     }
   }
@@ -733,7 +732,6 @@ bool ParseListOfStages(const base::Value& value, int* out_stages) {
       stages |= ON_AUTH_REQUIRED;
     } else {
       NOTREACHED();  // JSON schema checks prevent getting here.
-      return false;
     }
   }
 

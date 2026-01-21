@@ -11,10 +11,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/observer_list.h"
+#include "base/gtest_prod_util.h"
 #include "components/safe_browsing/content/browser/base_ui_manager.h"
 #include "components/safe_browsing/content/browser/safe_browsing_blocking_page_factory.h"
+#include "components/security_interstitials/content/security_interstitial_page.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 
 class GURL;
@@ -33,32 +33,11 @@ class NoStatePrefetchContents;
 
 namespace safe_browsing {
 
-class BaseBlockingPage;
 class PingManager;
-
-struct HitReport;
 
 // Construction needs to happen on the main thread.
 class SafeBrowsingUIManager : public BaseUIManager {
  public:
-  // Observer class can be used to get notified when a SafeBrowsing hit
-  // is found.
-  class Observer {
-   public:
-    Observer(const Observer&) = delete;
-    Observer& operator=(const Observer&) = delete;
-
-    // Called when |resource| is classified as unsafe by SafeBrowsing, and is
-    // not allowlisted.
-    // The |resource| must not be accessed after OnSafeBrowsingHit returns.
-    // This method will be called on the UI thread.
-    virtual void OnSafeBrowsingHit(const UnsafeResource& resource) = 0;
-
-   protected:
-    Observer() {}
-    virtual ~Observer() {}
-  };
-
   // Interface via which the embedder supplies contextual information to
   // SafeBrowsingUIManager.
   class Delegate {
@@ -89,13 +68,11 @@ class SafeBrowsingUIManager : public BaseUIManager {
         const GURL& page_url,
         const std::string& reason,
         int net_error_code) = 0;
-#if !BUILDFLAG(IS_ANDROID)
     virtual void TriggerUrlFilteringInterstitialExtensionEventIfDesired(
         content::WebContents* web_contents,
         const GURL& page_url,
         const std::string& threat_type,
         safe_browsing::RTLookupResponse rt_lookup_response) = 0;
-#endif
 
     // Gets the NoStatePrefetchContents instance associated with |web_contents|
     // if one exists (i.e., if |web_contents| is being prerendered).
@@ -120,14 +97,6 @@ class SafeBrowsingUIManager : public BaseUIManager {
 
     // Returns true if metrics reporting is enabled.
     virtual bool IsMetricsAndCrashReportingEnabled() = 0;
-
-    // Returns true if sending of hit reports is enabled, in which case
-    // SafeBrowsingUIManager will send hit reports when it deems the context
-    // appropriate to do so (see ShouldSendHitReport()). If this method returns
-    // false, SafeBrowsingUIManager will never send hit reports.
-    // TODO(crbug.com/1232315): Eliminate this method if/once hit report sending
-    // is enabled in WebLayer.
-    virtual bool IsSendingOfHitReportsEnabled() = 0;
   };
 
   SafeBrowsingUIManager(
@@ -142,14 +111,29 @@ class SafeBrowsingUIManager : public BaseUIManager {
   // |resource| is the unsafe resource for which the warning is displayed.
   void StartDisplayingBlockingPage(const UnsafeResource& resource);
 
+  // Creates a blocking page, used for both pre commit and post commit warnings.
+  // Override is using a different blocking page.
+  security_interstitials::SecurityInterstitialPage* CreateBlockingPage(
+      content::WebContents* contents,
+      const GURL& blocked_url,
+      const UnsafeResource& unsafe_resource,
+      bool forward_extension_event,
+      std::optional<base::TimeTicks> blocked_page_shown_timestamp) override;
+
   // Called to stop or shutdown operations on the UI thread. This may be called
   // multiple times during the life of the UIManager. Should be called
   // on UI thread. If shutdown is true, the manager is disabled permanently.
   void Stop(bool shutdown);
 
-  // Called on the IO thread by the ThreatDetails with the report, so the
-  // service can send it over.
+  // Called on the UI thread by the ThreatDetails with the report, so the
+  // PingManager can send it over.
   void SendThreatDetails(
+      content::BrowserContext* browser_context,
+      std::unique_ptr<ClientSafeBrowsingReportRequest> report) override;
+
+  // Called on the UI thread by the ThreatDetails with the report, so the
+  // HaTS service can later send it over if the user takes the survey.
+  void AttachThreatDetailsAndLaunchSurvey(
       content::BrowserContext* browser_context,
       std::unique_ptr<ClientSafeBrowsingReportRequest> report) override;
 
@@ -161,24 +145,19 @@ class SafeBrowsingUIManager : public BaseUIManager {
                           const GURL& main_frame_url,
                           bool showed_interstitial) override;
 
-  // Report hits to unsafe contents (malware, phishing, unsafe download URL)
-  // to the server. Can only be called on UI thread.  The hit report will
-  // only be sent if the user has enabled SBER and is not in incognito mode.
-  void MaybeReportSafeBrowsingHit(const safe_browsing::HitReport& hit_report,
-                                  content::WebContents* web_contents) override;
+  // Send ClientSafeBrowsingReport for unsafe contents (malware, phishing,
+  // unsafe download URL) to the server. Can only be called on UI thread.  The
+  // report will only be sent if the user has enabled SBER and is not in
+  // incognito mode.
+  void MaybeSendClientSafeBrowsingWarningShownReport(
+      std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+      content::WebContents* web_contents) override;
 
   // Creates the allowlist URL set for tests that create a blocking page
   // themselves and then simulate OnBlockingPageDone(). OnBlockingPageDone()
   // expects the allowlist to exist, but the tests don't necessarily call
   // DisplayBlockingPage(), which creates it.
   static void CreateAllowlistForTesting(content::WebContents* web_contents);
-
-  static std::string GetThreatTypeStringForInterstitial(
-      safe_browsing::SBThreatType threat_type);
-
-  // Add and remove observers. These methods must be invoked on the UI thread.
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* remove);
 
   // Invokes TriggerSecurityInterstitialShownExtensionEventIfDesired() on
   // |delegate_|.
@@ -188,7 +167,6 @@ class SafeBrowsingUIManager : public BaseUIManager {
       const std::string& reason,
       int net_error_code);
 
-#if !BUILDFLAG(IS_ANDROID)
   // Invokes TriggerUrlFilteringInterstitialExtensionEventIfDesired() on
   // |delegate_|.
   void ForwardUrlFilteringInterstitialExtensionEventToEmbedder(
@@ -196,10 +174,6 @@ class SafeBrowsingUIManager : public BaseUIManager {
       const GURL& page_url,
       const std::string& threat_type,
       safe_browsing::RTLookupResponse rt_lookup_response);
-#endif
-  SafeBrowsingBlockingPageFactory* blocking_page_factory() {
-    return blocking_page_factory_.get();
-  }
 
   const std::string app_locale() const override;
   history::HistoryService* history_service(
@@ -209,37 +183,29 @@ class SafeBrowsingUIManager : public BaseUIManager {
  protected:
   ~SafeBrowsingUIManager() override;
 
-  // Creates a hit report for the given resource and calls
-  // MaybeReportSafeBrowsingHit. This also notifies all observers in
-  // |observer_list_|.
-  void CreateAndSendHitReport(const UnsafeResource& resource) override;
+  // Creates a safe browsing report for the given resource and calls
+  // MaybeSendClientSafeBrowsingWarningShownReport.
+  void CreateAndSendClientSafeBrowsingWarningShownReport(
+      const UnsafeResource& resource) override;
 
-  // Helper method to ensure hit reports are only sent when the user has
-  // opted in to extended reporting and is not currently in incognito mode.
-  bool ShouldSendHitReport(const HitReport& hit_report,
-                           content::WebContents* web_contents);
+  // Helper method to ensure client safe browsing reports are only sent when the
+  // user has opted in to extended reporting and is not currently in incognito
+  // mode.
+  bool ShouldSendClientSafeBrowsingWarningShownReport(
+      content::WebContents* web_contents);
 
  private:
   friend class SafeBrowsingUIManagerTest;
   friend class TestSafeBrowsingUIManager;
-
-  static GURL GetMainFrameAllowlistUrlForResourceForTesting(
-      const safe_browsing::SafeBrowsingUIManager::UnsafeResource& resource);
-
-  // Creates a blocking page, used for interstitials triggered by subresources.
-  // Override is using a different blocking page.
-  BaseBlockingPage* CreateBlockingPageForSubresource(
-      content::WebContents* contents,
-      const GURL& blocked_url,
-      const UnsafeResource& unsafe_resource) override;
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingUIManagerTest,
+      DontSendClientSafeBrowsingWarningShownReportNullWebContents);
 
   std::unique_ptr<Delegate> delegate_;
 
   std::unique_ptr<SafeBrowsingBlockingPageFactory> blocking_page_factory_;
 
   GURL default_safe_page_;
-
-  base::ObserverList<Observer>::Unchecked observer_list_;
 
   bool shut_down_ = false;
 };

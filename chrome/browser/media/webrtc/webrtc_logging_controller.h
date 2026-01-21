@@ -8,19 +8,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/sequence_checker.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/rtp_dump_type.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/media/webrtc/webrtc_text_log_handler.h"
 #include "chrome/common/media/webrtc_logging.mojom.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -59,8 +61,7 @@ class WebRtcLoggingController
       void(bool, const std::string&, const std::string&)>
       StartEventLoggingCallback;
 
-  static void AttachToRenderProcessHost(content::RenderProcessHost* host,
-                                        WebRtcLogUploader* log_uploader);
+  static void AttachToRenderProcessHost(content::RenderProcessHost* host);
   static WebRtcLoggingController* FromRenderProcessHost(
       content::RenderProcessHost* host);
 
@@ -115,8 +116,7 @@ class WebRtcLoggingController
 
   // Called when an RTP packet is sent or received. Must be called on the UI
   // thread.
-  void OnRtpPacket(std::unique_ptr<uint8_t[]> packet_header,
-                   size_t header_length,
+  void OnRtpPacket(base::HeapArray<uint8_t> packet_header,
                    size_t packet_length,
                    bool incoming);
 
@@ -133,25 +133,30 @@ class WebRtcLoggingController
                          size_t web_app_id,
                          const StartEventLoggingCallback& callback);
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  base::RepeatingCallback<void(const std::string&)> GetLogMessageCallback();
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Ensures that the WebRTC Logs directory exists and then grants render
   // process access to the 'WebRTC Logs' directory, and invokes |callback| with
   // the ids necessary to create a DirectoryEntry object.
   void GetLogsDirectory(LogsDirectoryCallback callback,
                         LogsDirectoryErrorCallback error_callback);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif
 
   // chrome::mojom::WebRtcLoggingClient methods:
   void OnAddMessages(
       std::vector<chrome::mojom::WebRtcLoggingMessagePtr> messages) override;
   void OnStopped() override;
 
+  // Checks whether WebRTC text-logs is permitted by
+  // the relevant policy (prefs::kWebRtcTextLogCollectionAllowed).
+  static bool IsWebRtcTextLogAllowed(content::BrowserContext* browser_context);
+
  private:
   friend class base::RefCounted<WebRtcLoggingController>;
 
   WebRtcLoggingController(int render_process_id,
-                          content::BrowserContext* browser_context,
-                          WebRtcLogUploader* log_uploader);
+                          content::BrowserContext* browser_context);
   ~WebRtcLoggingController() override;
 
   void OnAgentDisconnected();
@@ -192,7 +197,9 @@ class WebRtcLoggingController
       bool success,
       const std::string& error_message);
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  content::BrowserContext* GetBrowserContext() const;
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Grants the render process access to the 'WebRTC Logs' directory, and
   // invokes |callback| with the ids necessary to create a DirectoryEntry
   // object. If the |logs_path| couldn't be created or found, |error_callback|
@@ -200,7 +207,7 @@ class WebRtcLoggingController
   void GrantLogsDirectoryAccess(LogsDirectoryCallback callback,
                                 LogsDirectoryErrorCallback error_callback,
                                 const base::FilePath& logs_path);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif
 
   static base::FilePath GetLogDirectoryAndEnsureExists(
       const base::FilePath& browser_context_directory_path);
@@ -229,10 +236,6 @@ class WebRtcLoggingController
 
   // The callback to call when StopRtpDump is called.
   content::RenderProcessHost::WebRtcStopRtpDumpCallback stop_rtp_dump_callback_;
-
-  // A pointer to the log uploader that's shared for all browser contexts.
-  // Ownership lies with the browser process.
-  const raw_ptr<WebRtcLogUploader> log_uploader_;
 
   // Web app id used for statistics. Created as the hash of the value of a
   // "client" meta data key, if exists. 0 means undefined, and is the hash of

@@ -6,9 +6,10 @@
 
 #include <limits>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "components/device_event_log/device_event_log.h"
@@ -46,7 +47,7 @@ const size_t kMaxControlTransferLength = std::numeric_limits<uint8_t>::max();
 const int kControlTransferTimeoutMs = 2000;  // 2 seconds
 
 using ReadCompatabilityDescriptorCallback = base::OnceCallback<void(
-    const absl::optional<WebUsbPlatformCapabilityDescriptor>& descriptor)>;
+    const std::optional<WebUsbPlatformCapabilityDescriptor>& descriptor)>;
 using ReadLandingPageCallback =
     base::OnceCallback<void(const GURL& landing_page)>;
 
@@ -63,7 +64,8 @@ void OnReadLandingPage(uint8_t landing_page_id,
   }
 
   GURL url;
-  ParseWebUsbUrlDescriptor(base::make_span(buffer->front(), length), &url);
+  ParseWebUsbUrlDescriptor(UNSAFE_TODO(base::span(buffer->data(), length)),
+                           &url);
   std::move(callback).Run(url);
 }
 
@@ -74,14 +76,14 @@ void OnReadBosDescriptor(scoped_refptr<UsbDeviceHandle> device_handle,
                          size_t length) {
   if (status != UsbTransferStatus::COMPLETED) {
     USB_LOG(EVENT) << "Failed to read BOS descriptor.";
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
   WebUsbPlatformCapabilityDescriptor descriptor;
   if (!descriptor.ParseFromBosDescriptor(
-          base::make_span(buffer->front(), length))) {
-    std::move(callback).Run(absl::nullopt);
+          UNSAFE_TODO(base::span(buffer->data(), length)))) {
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
@@ -95,11 +97,11 @@ void OnReadBosDescriptorHeader(scoped_refptr<UsbDeviceHandle> device_handle,
                                size_t length) {
   if (status != UsbTransferStatus::COMPLETED || length != 5) {
     USB_LOG(EVENT) << "Failed to read BOS descriptor header.";
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
-  const uint8_t* data = buffer->front();
+  base::span<const uint8_t> data = *buffer;
   uint16_t new_length = data[2] | (data[3] << 8);
   auto new_buffer = base::MakeRefCounted<base::RefCountedBytes>(new_length);
   device_handle->ControlTransfer(
@@ -112,7 +114,7 @@ void OnReadBosDescriptorHeader(scoped_refptr<UsbDeviceHandle> device_handle,
 void OnReadWebUsbCapabilityDescriptor(
     scoped_refptr<UsbDeviceHandle> device_handle,
     ReadLandingPageCallback callback,
-    const absl::optional<WebUsbPlatformCapabilityDescriptor>& descriptor) {
+    const std::optional<WebUsbPlatformCapabilityDescriptor>& descriptor) {
   if (!descriptor || !descriptor->landing_page_id) {
     std::move(callback).Run(GURL());
     return;
@@ -176,7 +178,8 @@ bool WebUsbPlatformCapabilityDescriptor::ParseFromBosDescriptor(
       return false;
     }
 
-    if (memcmp(&it[4], kWebUsbCapabilityUUID, sizeof(kWebUsbCapabilityUUID)) !=
+    if (UNSAFE_TODO(memcmp(&it[4], kWebUsbCapabilityUUID,
+                           sizeof(kWebUsbCapabilityUUID))) !=
         0) {  // PlatformCapabilityUUID
       continue;
     }
@@ -244,7 +247,8 @@ bool ParseWebUsbUrlDescriptor(base::span<const uint8_t> bytes, GURL* output) {
     default:
       return false;
   }
-  url.append(reinterpret_cast<const char*>(bytes.data() + 3), length - 3);
+  url.append(reinterpret_cast<const char*>(UNSAFE_TODO(bytes.data() + 3)),
+             length - 3);
 
   *output = GURL(url);
   if (!output->is_valid()) {

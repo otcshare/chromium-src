@@ -9,13 +9,9 @@
 #include <memory>
 
 #include "base/android/scoped_hardware_buffer_fence_sync.h"
-#include "base/callback_helpers.h"
 #include "base/debug/dump_without_crashing.h"
-#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
-#include "gpu/command_buffer/service/texture_manager.h"
-#include "gpu/config/gpu_finch_features.h"
-#include "ui/gl/gl_context.h"
-#include "ui/gl/scoped_make_current.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace media {
 
@@ -94,27 +90,8 @@ void CodecImage::ReleaseResources() {
   ReleaseCodecBuffer();
 }
 
-bool CodecImage::IsUsingGpuMemory() const {
-  DCHECK_CALLED_ON_VALID_THREAD(gpu_main_thread_checker_);
-  AssertAcquiredDrDcLock();
-  if (!output_buffer_renderer_)
-    return false;
-
-  // Only the images which are bound to texture accounts for gpu memory.
-  return output_buffer_renderer_->was_tex_image_bound();
-}
-
-void CodecImage::UpdateAndBindTexImage(GLuint service_id) {
-  AssertAcquiredDrDcLock();
-  RenderToTextureOwnerFrontBuffer(BindingsMode::kBindImage, service_id);
-}
-
 bool CodecImage::HasTextureOwner() const {
   return !!texture_owner();
-}
-
-gpu::TextureBase* CodecImage::GetTextureBase() const {
-  return texture_owner()->GetTextureBase();
 }
 
 bool CodecImage::RenderToFrontBuffer() {
@@ -134,13 +111,11 @@ bool CodecImage::RenderToTextureOwnerBackBuffer() {
   return output_buffer_renderer_->RenderToTextureOwnerBackBuffer();
 }
 
-bool CodecImage::RenderToTextureOwnerFrontBuffer(BindingsMode bindings_mode,
-                                                 GLuint service_id) {
+bool CodecImage::RenderToTextureOwnerFrontBuffer() {
   AssertAcquiredDrDcLock();
   if (!output_buffer_renderer_)
     return false;
-  return output_buffer_renderer_->RenderToTextureOwnerFrontBuffer(bindings_mode,
-                                                                  service_id);
+  return output_buffer_renderer_->RenderToTextureOwnerFrontBuffer();
 }
 
 bool CodecImage::RenderToOverlay() {
@@ -148,13 +123,6 @@ bool CodecImage::RenderToOverlay() {
   if (!output_buffer_renderer_)
     return false;
   return output_buffer_renderer_->RenderToOverlay();
-}
-
-bool CodecImage::TextureOwnerBindsTextureOnUpdate() {
-  AssertAcquiredDrDcLock();
-  if (!output_buffer_renderer_)
-    return false;
-  return output_buffer_renderer_->texture_owner()->binds_texture_on_update();
 }
 
 void CodecImage::ReleaseCodecBuffer() {
@@ -174,11 +142,9 @@ CodecImage::GetAHardwareBuffer() {
   if (!output_buffer_renderer_)
     return nullptr;
 
-  // Using BindingsMode::kDontBindImage here since we do not want to bind
-  // the image. We just want to get the AHardwareBuffer from the latest image.
-  // Hence pass service_id as 0.
-  RenderToTextureOwnerFrontBuffer(BindingsMode::kDontBindImage,
-                                  0 /* service_id */);
+  // Render to the front buffer to get the AHardwareBuffer from the latest
+  // image.
+  RenderToTextureOwnerFrontBuffer();
   return output_buffer_renderer_->texture_owner()->GetAHardwareBuffer();
 }
 

@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extension_web_request_api_constants {
 
@@ -48,6 +51,12 @@ const char kAuthCredentialsKey[] = "authCredentials";
 const char kUsernameKey[] = "username";
 const char kPasswordKey[] = "password";
 const char kInitiatorKey[] = "initiator";
+const char kSecurityInfoKey[] = "securityInfo";
+const char kCertificatesKey[] = "certificates";
+const char kFingerprintKey[] = "fingerprint";
+const char kRawDerKey[] = "rawDER";
+const char kSha256Key[] = "sha256";
+const char kStateKey[] = "state";
 
 const char kOnBeforeRedirectEvent[] = "webRequest.onBeforeRedirect";
 const char kOnBeforeSendHeadersEvent[] = "webRequest.onBeforeSendHeaders";
@@ -57,16 +66,6 @@ const char kOnResponseStartedEvent[] = "webRequest.onResponseStarted";
 const char kOnSendHeadersEvent[] = "webRequest.onSendHeaders";
 const char kOnAuthRequiredEvent[] = "webRequest.onAuthRequired";
 
-const char kOnBeforeRedirect[] = "onBeforeRedirect";
-const char kOnBeforeRequest[] = "onBeforeRequest";
-const char kOnBeforeSendHeaders[] = "onBeforeSendHeaders";
-const char kOnCompleted[] = "onCompleted";
-const char kOnErrorOccurred[] = "onErrorOccurred";
-const char kOnHeadersReceived[] = "onHeadersReceived";
-const char kOnResponseStarted[] = "onResponseStarted";
-const char kOnSendHeaders[] = "onSendHeaders";
-const char kOnAuthRequired[] = "onAuthRequired";
-
 const char kInvalidRedirectUrl[] = "redirectUrl '*' is not a valid URL.";
 const char kInvalidBlockingResponse[] =
     "cancel cannot be true in the presence of other keys.";
@@ -74,7 +73,8 @@ const char kInvalidRequestFilterUrl[] = "'*' is not a valid URL pattern.";
 const char kBlockingPermissionRequired[] =
     "You do not have permission to use blocking webRequest listeners. "
     "Be sure to declare the webRequestBlocking permission in your "
-    "manifest.";
+    "manifest. Note that webRequestBlocking is only allowed for extensions "
+    "that are installed using ExtensionInstallForcelist.";
 const char kHostPermissionsRequired[] =
     "You need to request host permissions in the manifest file in order to "
     "be notified about requests from the webRequest API.";
@@ -83,5 +83,14 @@ const char kInvalidHeaderKeyCombination[] =
 const char kInvalidHeader[] = "Invalid header specification '*'.";
 const char kInvalidHeaderName[] = "Invalid header name.";
 const char kInvalidHeaderValue[] = "Header '*' has an invalid value.";
+const char kSecurityInfoAPINotAvailable[] =
+    "ExtraInfoSpec.securityInfo is only allowed in extensions or Controlled "
+    "Frame";
+const char kSecurityInfoFlagAbsentInExtensions[] =
+    "ExtraInfoSpec.securityInfo is allowed only with WebRequestSecurityInfo "
+    "developer flag";
+const char kSecurityInfoFlagAbsentInControlledFrame[] =
+    "ExtraInfoSpec.securityInfo is allowed only with "
+    "controlled_frame_security_info developer flag";
 
 }  // namespace extension_web_request_api_constants

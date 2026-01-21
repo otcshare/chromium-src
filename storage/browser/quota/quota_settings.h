@@ -7,12 +7,13 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include <optional>
+
 #include "base/component_export.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "storage/browser/quota/quota_device_info_helper.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace storage {
 
@@ -60,9 +61,9 @@ struct QuotaSettings {
 
 // Function type used to return the settings in response to a
 // GetQuotaSettingsFunc invocation. If the embedder cannot
-// produce a settings values, absl::nullopt can be returned.
+// produce a settings values, std::nullopt can be returned.
 using OptionalQuotaSettingsCallback =
-    base::OnceCallback<void(absl::optional<QuotaSettings>)>;
+    base::OnceCallback<void(std::optional<QuotaSettings>)>;
 
 // Function type used to query the embedder about the quota manager settings.
 // This function is invoked on the UI thread.
@@ -82,11 +83,6 @@ void GetNominalDynamicSettings(const base::FilePath& partition_path,
                                OptionalQuotaSettingsCallback callback);
 
 COMPONENT_EXPORT(STORAGE_BROWSER)
-
-// Returns settings with a poolsize of zero and no per StorageKey quota.
-inline QuotaSettings GetNoQuotaSettings() {
-  return QuotaSettings();
-}
 
 // Returns settings that provide given `per_storage_key_quota` and a total
 // poolsize of five times that.

@@ -9,6 +9,9 @@
 
 namespace content {
 
+class PrerenderHost;
+enum class PrerenderFinalStatus;
+
 // PrerenderNavigationThrottle applies restrictions to prerendering navigation
 // on the main frame. Specifically this cancels prerendering in the following
 // cases.
@@ -18,10 +21,9 @@ namespace content {
 // - Cross-origin navigation from a prerendered page
 class PrerenderNavigationThrottle : public NavigationThrottle {
  public:
-  ~PrerenderNavigationThrottle() override;
+  static void MaybeCreateAndAdd(NavigationThrottleRegistry& registry);
 
-  static std::unique_ptr<PrerenderNavigationThrottle> MaybeCreateThrottleFor(
-      NavigationHandle* navigation_handle);
+  ~PrerenderNavigationThrottle() override;
 
   // NavigationThrottle
   const char* GetNameForLogging() override;
@@ -30,9 +32,17 @@ class PrerenderNavigationThrottle : public NavigationThrottle {
   ThrottleCheckResult WillProcessResponse() override;
 
  private:
-  explicit PrerenderNavigationThrottle(NavigationHandle* navigation_handle);
+  explicit PrerenderNavigationThrottle(NavigationThrottleRegistry& registry);
 
   ThrottleCheckResult WillStartOrRedirectRequest(bool is_redirection);
+
+  // Returns true if this throttle is for prerender initial navigation.
+  bool IsInitialNavigation() const;
+
+  // Cancels prerendering hosting this navigation with `final_status`.
+  void CancelPrerendering(PrerenderFinalStatus final_status);
+
+  const base::WeakPtr<PrerenderHost> prerender_host_ = nullptr;
 
   bool is_same_site_cross_origin_prerender_ = false;
   bool same_site_cross_origin_prerender_did_redirect_ = false;

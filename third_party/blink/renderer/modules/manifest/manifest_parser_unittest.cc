@@ -6,67 +6,195 @@
 
 #include <stdint.h>
 
-#include <memory>
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "services/device/public/mojom/screen_orientation_lock_types.mojom-shared.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom-blink.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-blink.h"
+#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-blink.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/loader/document_loader.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
+#include "third_party/icu/source/common/unicode/locid.h"
+#include "third_party/liburlpattern/part.h"
 
 namespace blink {
+
+using liburlpattern::PartType;
+using testing::AllOf;
+using testing::ElementsAreArray;
+using testing::Field;
+
+namespace {
 
 bool IsManifestEmpty(const mojom::blink::ManifestPtr& manifest) {
   return manifest == mojom::blink::Manifest::New();
 }
 
-class ManifestParserTest : public testing::Test {
+// Holds values to be compared against a `SafeUrlPattern`. See also the
+// `PatternDataEq` matcher.
+struct UrlPatternData {
+  // Represents either a `liburlpattern::Part::value` or a
+  // `liburlpattern::Part::type`.
+  using ValueOrType = std::variant<std::string_view, PartType>;
+
+  // The fields below correspond to the fields of `SafeUrlPattern`.
+  std::vector<ValueOrType> protocol;
+  std::vector<ValueOrType> username;
+  std::vector<ValueOrType> password;
+  std::vector<ValueOrType> hostname;
+  std::vector<ValueOrType> port;
+  std::vector<ValueOrType> pathname;
+  std::vector<ValueOrType> search;
+  std::vector<ValueOrType> hash;
+};
+
+// Matcher to compare a `liburlpattern::Part` to a `ValueOrType`.
+testing::Matcher<const liburlpattern::Part&> PatternPartEq(
+    const UrlPatternData::ValueOrType& value_or_type) {
+  // The docs in `liburlpattern::Part::value` explain the relationship between
+  // different `part` types and values. Refer to those docs for details.
+  return std::visit(
+      absl::Overload(
+          // When `value_or_type` is a string value, expect `part` has the same
+          // `value` and its type is `kFixed`.
+          [](const std::string_view value) {
+            return AllOf(
+                Field("type", &liburlpattern::Part::type, PartType::kFixed),
+                Field("value", &liburlpattern::Part::value, value));
+          },
+          // Otherwise, expect `part` has the same `type` and an empty value.
+          [](const PartType type) {
+            return AllOf(Field("type", &liburlpattern::Part::type, type),
+                         Field("value", &liburlpattern::Part::value, ""));
+          }),
+      value_or_type);
+}
+
+// Returns a list of matchers for `values` using `PatternDataEq`.
+std::vector<testing::Matcher<const liburlpattern::Part&>> PatternDataMatchers(
+    const std::vector<UrlPatternData::ValueOrType>& values) {
+  std::vector<testing::Matcher<const liburlpattern::Part&>> result;
+  std::ranges::transform(values, std::back_inserter(result), &PatternPartEq);
+  return result;
+}
+
+// Matches a `SafeUrlPattern` by the values and types of its parts against the
+// given `expected` data.
+testing::Matcher<const SafeUrlPattern&> PatternDataEq(
+    const UrlPatternData& expected) {
+  return AllOf(Field("protocol", &SafeUrlPattern::protocol,
+                     ElementsAreArray(PatternDataMatchers(expected.protocol))),
+               Field("username", &SafeUrlPattern::username,
+                     ElementsAreArray(PatternDataMatchers(expected.username))),
+               Field("password", &SafeUrlPattern::password,
+                     ElementsAreArray(PatternDataMatchers(expected.password))),
+               Field("hostname", &SafeUrlPattern::hostname,
+                     ElementsAreArray(PatternDataMatchers(expected.hostname))),
+               Field("port", &SafeUrlPattern::port,
+                     ElementsAreArray(PatternDataMatchers(expected.port))),
+               Field("pathname", &SafeUrlPattern::pathname,
+                     ElementsAreArray(PatternDataMatchers(expected.pathname))),
+               Field("search", &SafeUrlPattern::search,
+                     ElementsAreArray(PatternDataMatchers(expected.search))),
+               Field("hash", &SafeUrlPattern::hash,
+                     ElementsAreArray(PatternDataMatchers(expected.hash))));
+}
+
+// Matches a mojo `DisplayOverrideItem` by `display` mode and `url_patterns`.
+testing::Matcher<const mojom::blink::DisplayOverrideItemPtr&>
+DisplayOverrideItemIs(
+    blink::mojom::DisplayMode display,
+    std::vector<testing::Matcher<const SafeUrlPattern&>> url_patterns = {}) {
+  return testing::Pointee(
+      AllOf(Field(&mojom::blink::DisplayOverrideItem::display, display),
+            Field(&mojom::blink::DisplayOverrideItem::url_patterns,
+                  ElementsAreArray(url_patterns))));
+}
+
+}  // namespace
+
+class ManifestParserTest : public SimTest {
  public:
   ManifestParserTest(const ManifestParserTest&) = delete;
   ManifestParserTest& operator=(const ManifestParserTest&) = delete;
 
  protected:
-  ManifestParserTest() {}
-  ~ManifestParserTest() override {}
+  ManifestParserTest() = default;
+  ~ManifestParserTest() override = default;
 
   mojom::blink::ManifestPtr& ParseManifestWithURLs(const String& data,
                                                    const KURL& manifest_url,
                                                    const KURL& document_url) {
     ManifestParser parser(data, manifest_url, document_url,
-                          /*execution_context=*/nullptr);
+                          GetDocument().GetExecutionContext());
     parser.Parse();
     Vector<mojom::blink::ManifestErrorPtr> errors;
     parser.TakeErrors(&errors);
 
     errors_.clear();
-    for (auto& error : errors)
+    for (auto& error : errors) {
       errors_.push_back(std::move(error->message));
-    manifest_ = parser.manifest().Clone();
+    }
+    manifest_ = parser.TakeManifest();
+    EXPECT_TRUE(manifest_);
     return manifest_;
   }
 
   mojom::blink::ManifestPtr& ParseManifest(const String& data) {
-    return ParseManifestWithURLs(data, default_manifest_url,
-                                 default_document_url);
+    return ParseManifestWithURLs(data, DefaultManifestUrl(),
+                                 DefaultDocumentUrl());
   }
 
   const Vector<String>& errors() const { return errors_; }
 
   unsigned int GetErrorCount() const { return errors_.size(); }
 
-  const KURL& DefaultDocumentUrl() const { return default_document_url; }
-  const KURL& DefaultManifestUrl() const { return default_manifest_url; }
+  static KURL DefaultDocumentUrl() { return KURL("http://foo.com/index.html"); }
+  static KURL DefaultManifestUrl() {
+    return KURL("http://foo.com/manifest.json");
+  }
+
+  bool HasDefaultValuesWithUrls(
+      const mojom::blink::ManifestPtr& manifest,
+      const KURL& document_url = DefaultDocumentUrl(),
+      const KURL& manifest_url = DefaultManifestUrl()) {
+    mojom::blink::ManifestPtr expected_manifest = mojom::blink::Manifest::New();
+    // A true "default" manifest would have an empty manifest URL. However in
+    // these tests we don't want to check for that, rather this method is used
+    // to check that a manifest has all its fields set to "default" values, but
+    // also have the expected manifest url.
+    expected_manifest->manifest_url = manifest_url;
+    expected_manifest->start_url = document_url;
+    expected_manifest->id = document_url;
+    expected_manifest->id.RemoveFragmentIdentifier();
+    expected_manifest->scope = KURL(document_url.BaseAsString().ToString());
+    return manifest == expected_manifest;
+  }
 
  private:
   mojom::blink::ManifestPtr manifest_;
   Vector<String> errors_;
-
-  const KURL default_document_url = KURL("http://foo.com/index.html");
-  const KURL default_manifest_url = KURL("http://foo.com/manifest.json");
 };
 
 TEST_F(ManifestParserTest, CrashTest) {
@@ -78,8 +206,8 @@ TEST_F(ManifestParserTest, CrashTest) {
   bool has_comments = parser.Parse();
   EXPECT_FALSE(has_comments);
   Vector<mojom::blink::ManifestErrorPtr> errors;
-  const auto& manifest = parser.manifest();
   parser.TakeErrors(&errors);
+  auto manifest = parser.TakeManifest();
 
   // .Parse() should have been call without crashing and succeeded.
   EXPECT_EQ(0u, errors.size());
@@ -106,28 +234,66 @@ TEST_F(ManifestParserTest, EmptyStringNull) {
   EXPECT_EQ("Line: 1, column: 1, Syntax error.", errors()[0]);
 
   // A parsing error is equivalent to an empty manifest.
-  ASSERT_TRUE(IsManifestEmpty(manifest));
+  EXPECT_TRUE(IsManifestEmpty(manifest));
+  EXPECT_FALSE(HasDefaultValuesWithUrls(manifest));
 }
 
 TEST_F(ManifestParserTest, ValidNoContentParses) {
-  auto& manifest = ParseManifest("{}");
+  base::HistogramTester histogram_tester;
+  auto& manifest = ParseManifestWithURLs("{}", KURL(), DefaultDocumentUrl());
 
   // Empty Manifest is not a parsing error.
   EXPECT_EQ(0u, GetErrorCount());
 
   // Check that the fields are null or set to their default values.
-  ASSERT_FALSE(IsManifestEmpty(manifest));
-  ASSERT_TRUE(manifest->name.IsNull());
-  ASSERT_TRUE(manifest->short_name.IsNull());
-  ASSERT_TRUE(manifest->start_url.IsEmpty());
-  ASSERT_EQ(manifest->display, blink::mojom::DisplayMode::kUndefined);
-  ASSERT_EQ(manifest->orientation,
+  EXPECT_FALSE(IsManifestEmpty(manifest));
+  EXPECT_TRUE(HasDefaultValuesWithUrls(manifest, DefaultDocumentUrl(), KURL()));
+  EXPECT_EQ(manifest->dir, mojom::blink::Manifest::TextDirection::kAuto);
+  EXPECT_TRUE(manifest->name.IsNull());
+  EXPECT_TRUE(manifest->short_name.IsNull());
+  EXPECT_EQ(manifest->start_url, DefaultDocumentUrl());
+  EXPECT_EQ(manifest->display, blink::mojom::DisplayMode::kUndefined);
+  EXPECT_EQ(manifest->orientation,
             device::mojom::ScreenOrientationLockType::DEFAULT);
-  ASSERT_FALSE(manifest->has_theme_color);
-  ASSERT_FALSE(manifest->has_background_color);
-  ASSERT_TRUE(manifest->gcm_sender_id.IsNull());
-  ASSERT_EQ(DefaultDocumentUrl().BaseAsString(), manifest->scope.GetString());
-  ASSERT_TRUE(manifest->shortcuts.empty());
+  EXPECT_FALSE(manifest->has_theme_color);
+  EXPECT_FALSE(manifest->has_background_color);
+  EXPECT_TRUE(manifest->gcm_sender_id.IsNull());
+  EXPECT_EQ(DefaultDocumentUrl().BaseAsString(), manifest->scope.GetString());
+  EXPECT_TRUE(manifest->shortcuts.empty());
+
+  // Check that the metrics don't record anything
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.name"),
+              testing::IsEmpty());
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.start_url"),
+              testing::IsEmpty());
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.short_name"),
+              testing::IsEmpty());
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.description"),
+      testing::IsEmpty());
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.start_url"),
+              testing::IsEmpty());
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.display"),
+              testing::IsEmpty());
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.orientation"),
+      testing::IsEmpty());
+  EXPECT_THAT(histogram_tester.GetAllSamples("Manifest.HasProperty.icons"),
+              testing::IsEmpty());
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.screenshots"),
+      testing::IsEmpty());
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.share_target"),
+      testing::IsEmpty());
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.protocol_handlers"),
+      testing::IsEmpty());
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Manifest.HasProperty.gcm_sender_id"),
+      testing::IsEmpty());
 }
 
 TEST_F(ManifestParserTest, UnrecognizedFieldsIgnored) {
@@ -141,73 +307,139 @@ TEST_F(ManifestParserTest, UnrecognizedFieldsIgnored) {
   EXPECT_EQ(0u, GetErrorCount());
 
   // Check that subsequent fields parsed.
-  ASSERT_FALSE(IsManifestEmpty(manifest));
-  ASSERT_EQ(manifest->name, "bar");
-  ASSERT_EQ(DefaultDocumentUrl().BaseAsString(), manifest->scope.GetString());
+  EXPECT_FALSE(IsManifestEmpty(manifest));
+  EXPECT_FALSE(HasDefaultValuesWithUrls(manifest));
+  EXPECT_EQ(manifest->name, "bar");
+  EXPECT_EQ(DefaultDocumentUrl().BaseAsString(), manifest->scope.GetString());
 }
 
 TEST_F(ManifestParserTest, MultipleErrorsReporting) {
   auto& manifest = ParseManifest(
-      R"({ "name": 42, "short_name": 4, "id": 12,
-      "orientation": {}, "display": "foo",
+      R"({ "dir": "foo", "name": 42, "short_name": 4,
+      "id": 12, "orientation": {}, "display": "foo",
       "start_url": null, "icons": {}, "theme_color": 42,
       "background_color": 42, "shortcuts": {} })");
-  ASSERT_FALSE(IsManifestEmpty(manifest));
+  EXPECT_FALSE(IsManifestEmpty(manifest));
+  EXPECT_TRUE(HasDefaultValuesWithUrls(manifest));
 
-  EXPECT_EQ(9u, GetErrorCount());
+  EXPECT_THAT(errors(),
+              testing::UnorderedElementsAre(
+                  "unknown 'dir' value ignored.",
+                  "property 'name' ignored, type string expected.",
+                  "property 'short_name' ignored, type string expected.",
+                  "property 'start_url' ignored, type string expected.",
+                  "property 'id' ignored, type string expected.",
+                  "unknown 'display' value ignored.",
+                  "property 'orientation' ignored, type string expected.",
+                  "property 'icons' ignored, type array expected.",
+                  "property 'theme_color' ignored, type string expected.",
+                  "property 'background_color' ignored, type string expected.",
+                  "property 'shortcuts' ignored, type array expected."));
+}
 
-  EXPECT_EQ("property 'name' ignored, type string expected.", errors()[0]);
-  EXPECT_EQ("property 'short_name' ignored, type string expected.",
-            errors()[1]);
-  EXPECT_EQ("property 'start_url' ignored, type string expected.", errors()[2]);
-  EXPECT_EQ("unknown 'display' value ignored.", errors()[3]);
-  EXPECT_EQ("property 'orientation' ignored, type string expected.",
-            errors()[4]);
-  EXPECT_EQ("property 'icons' ignored, type array expected.", errors()[5]);
-  EXPECT_EQ("property 'theme_color' ignored, type string expected.",
-            errors()[6]);
-  EXPECT_EQ("property 'background_color' ignored, type string expected.",
-            errors()[7]);
-  EXPECT_EQ("property 'shortcuts' ignored, type array expected.", errors()[8]);
+TEST_F(ManifestParserTest, DirParseRules) {
+  using TextDirection = mojom::blink::Manifest::TextDirection;
+
+  // Smoke test.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "ltr" })");
+    EXPECT_EQ(manifest->dir, TextDirection::kLTR);
+    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_FALSE(HasDefaultValuesWithUrls(manifest));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Trim whitespaces.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "  rtl  " })");
+    EXPECT_EQ(manifest->dir, TextDirection::kRTL);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Don't parse if dir isn't a string.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": {} })");
+    EXPECT_EQ(manifest->dir, TextDirection::kAuto);
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'dir' ignored, type string expected.", errors()[0]);
+  }
+
+  // Don't parse if dir isn't a string.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": 42 })");
+    EXPECT_EQ(manifest->dir, TextDirection::kAuto);
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'dir' ignored, type string expected.", errors()[0]);
+  }
+
+  // Accept 'auto'.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "auto" })");
+    EXPECT_EQ(manifest->dir, TextDirection::kAuto);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'ltr'.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "ltr" })");
+    EXPECT_EQ(manifest->dir, TextDirection::kLTR);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'rtl'.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "rtl" })");
+    EXPECT_EQ(manifest->dir, TextDirection::kRTL);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Parse fails if string isn't known.
+  {
+    auto& manifest = ParseManifest(R"({ "dir": "foo" })");
+    EXPECT_EQ(manifest->dir, TextDirection::kAuto);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("unknown 'dir' value ignored.", errors()[0]);
+  }
 }
 
 TEST_F(ManifestParserTest, NameParseRules) {
   // Smoke test.
   {
     auto& manifest = ParseManifest(R"({ "name": "foo" })");
-    ASSERT_EQ(manifest->name, "foo");
-    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_EQ(manifest->name, "foo");
+    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_FALSE(HasDefaultValuesWithUrls(manifest));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
   // Trim whitespaces.
   {
     auto& manifest = ParseManifest(R"({ "name": "  foo  " })");
-    ASSERT_EQ(manifest->name, "foo");
+    EXPECT_EQ(manifest->name, "foo");
     EXPECT_EQ(0u, GetErrorCount());
   }
 
   // Don't parse if name isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "name": {} })");
-    ASSERT_TRUE(manifest->name.IsNull());
-    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_TRUE(manifest->name.IsNull());
+    ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ("property 'name' ignored, type string expected.", errors()[0]);
   }
 
   // Don't parse if name isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "name": 42 })");
-    ASSERT_TRUE(manifest->name.IsNull());
-    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_TRUE(manifest->name.IsNull());
+    ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ("property 'name' ignored, type string expected.", errors()[0]);
   }
 
   // Test stripping out of \t \r and \n.
   {
     auto& manifest = ParseManifest("{ \"name\": \"abc\\t\\r\\ndef\" }");
-    ASSERT_EQ(manifest->name, "abcdef");
-    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_EQ(manifest->name, "abcdef");
+    EXPECT_FALSE(IsManifestEmpty(manifest));
     EXPECT_EQ(0u, GetErrorCount());
   }
 }
@@ -217,22 +449,22 @@ TEST_F(ManifestParserTest, DescriptionParseRules) {
   {
     auto& manifest =
         ParseManifest(R"({ "description": "foo is the new black" })");
-    ASSERT_EQ(manifest->description, "foo is the new black");
-    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_EQ(manifest->description, "foo is the new black");
+    EXPECT_FALSE(IsManifestEmpty(manifest));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
   // Trim whitespaces.
   {
     auto& manifest = ParseManifest(R"({ "description": "  foo  " })");
-    ASSERT_EQ(manifest->description, "foo");
+    EXPECT_EQ(manifest->description, "foo");
     EXPECT_EQ(0u, GetErrorCount());
   }
 
   // Don't parse if description isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "description": {} })");
-    ASSERT_TRUE(manifest->description.IsNull());
+    EXPECT_TRUE(manifest->description.IsNull());
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ("property 'description' ignored, type string expected.",
               errors()[0]);
@@ -241,8 +473,8 @@ TEST_F(ManifestParserTest, DescriptionParseRules) {
   // Don't parse if description isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "description": 42 })");
-    ASSERT_TRUE(manifest->description.IsNull());
-    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_TRUE(manifest->description.IsNull());
+    EXPECT_EQ(1u, GetErrorCount());
     EXPECT_EQ("property 'description' ignored, type string expected.",
               errors()[0]);
   }
@@ -295,117 +527,159 @@ TEST_F(ManifestParserTest, IdParseRules) {
   // Empty manifest.
   {
     auto& manifest = ParseManifest("{ }");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ(String(), manifest->id);
+    ASSERT_TRUE(manifest);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ(manifest->id, DefaultDocumentUrl());
+    EXPECT_FALSE(manifest->has_custom_id);
   }
   // Does not contain id field.
   {
     auto& manifest = ParseManifest(R"({"start_url": "/start?query=a" })");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("start?query=a", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/start?query=a", manifest->id);
+    EXPECT_FALSE(manifest->has_custom_id);
   }
   // Invalid type.
   {
     auto& manifest =
         ParseManifest("{\"start_url\": \"/start?query=a\", \"id\": 1}");
-    ASSERT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("start?query=a", manifest->id);
+    EXPECT_THAT(errors(), testing::ElementsAre(
+                              "property 'id' ignored, type string expected."));
+    EXPECT_EQ("http://foo.com/start?query=a", manifest->id);
+    EXPECT_FALSE(manifest->has_custom_id);
   }
   // Empty string.
   {
     auto& manifest =
         ParseManifest(R"({ "start_url": "/start?query=a", "id": "" })");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("start?query=a", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/start?query=a", manifest->id);
+    EXPECT_FALSE(manifest->has_custom_id);
   }
   // Full url.
   {
     auto& manifest = ParseManifest(
         "{ \"start_url\": \"/start?query=a\", \"id\": \"http://foo.com/foo\" "
         "}");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("foo", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/foo", manifest->id);
+    EXPECT_TRUE(manifest->has_custom_id);
   }
   // Full url with different origin.
   {
     auto& manifest = ParseManifest(
         "{ \"start_url\": \"/start?query=a\", \"id\": "
         "\"http://another.com/foo\" }");
-    ASSERT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("start?query=a", manifest->id);
+    EXPECT_THAT(
+        errors(),
+        testing::ElementsAre(
+            "property 'id' ignored, should be same origin as document."));
+    EXPECT_EQ("http://foo.com/start?query=a", manifest->id);
+    EXPECT_FALSE(manifest->has_custom_id);
   }
   // Relative path
   {
     auto& manifest =
         ParseManifest("{ \"start_url\": \"/start?query=a\", \"id\": \".\" }");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/", manifest->id);
+    EXPECT_TRUE(manifest->has_custom_id);
   }
   // Absolute path
   {
     auto& manifest =
         ParseManifest("{ \"start_url\": \"/start?query=a\", \"id\": \"/\" }");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/", manifest->id);
+    EXPECT_TRUE(manifest->has_custom_id);
   }
   // url with fragment
   {
     auto& manifest = ParseManifest(
         "{ \"start_url\": \"/start?query=a\", \"id\": \"/#abc\" }");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/", manifest->id);
+    EXPECT_TRUE(manifest->has_custom_id);
   }
   // Smoke test.
   {
     auto& manifest =
         ParseManifest(R"({ "start_url": "/start?query=a", "id": "foo" })");
-    ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ("foo", manifest->id);
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_EQ("http://foo.com/foo", manifest->id);
+    EXPECT_TRUE(manifest->has_custom_id);
+  }
+  // Invalid UTF-8 character.
+  {
+    UChar invalid_utf8_chars[] = {0xD801, 0x0000};
+    String manifest_str =
+        String("{ \"start_url\": \"/start?query=a\", \"id\": \"") +
+        String(invalid_utf8_chars) + String("\" }");
+
+    auto& manifest = ParseManifest(manifest_str);
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_THAT(
+        errors()[0].Utf8(),
+        testing::EndsWith("Unsupported encoding. JSON and all string literals "
+                          "must contain valid Unicode characters."));
+    ASSERT_TRUE(manifest);
+    EXPECT_FALSE(manifest->has_custom_id);
   }
 }
 
 TEST_F(ManifestParserTest, StartURLParseRules) {
   // Smoke test.
   {
+    base::HistogramTester histogram_tester;
     auto& manifest = ParseManifest(R"({ "start_url": "land.html" })");
     ASSERT_EQ(manifest->start_url, KURL(DefaultDocumentUrl(), "land.html"));
     ASSERT_FALSE(IsManifestEmpty(manifest));
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_TRUE(manifest->has_valid_specified_start_url);
+    EXPECT_FALSE(HasDefaultValuesWithUrls(manifest));
+    EXPECT_THAT(
+        histogram_tester.GetAllSamples("Manifest.HasProperty.start_url"),
+        base::BucketsAre(base::Bucket(1, 1)));
   }
 
   // Whitespaces.
   {
     auto& manifest = ParseManifest(R"({ "start_url": "  land.html  " })");
     ASSERT_EQ(manifest->start_url, KURL(DefaultDocumentUrl(), "land.html"));
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_TRUE(manifest->has_valid_specified_start_url);
   }
 
   // Don't parse if property isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "start_url": {} })");
-    ASSERT_TRUE(manifest->start_url.IsEmpty());
-    ASSERT_EQ(String(), manifest->id);
-    EXPECT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("property 'start_url' ignored, type string expected.",
-              errors()[0]);
+    EXPECT_EQ(manifest->start_url, DefaultDocumentUrl());
+    EXPECT_EQ(DefaultDocumentUrl(), manifest->id);
+    EXPECT_THAT(errors(),
+                testing::ElementsAre(
+                    "property 'start_url' ignored, type string expected."));
+    EXPECT_FALSE(manifest->has_valid_specified_start_url);
+    EXPECT_TRUE(HasDefaultValuesWithUrls(manifest));
   }
 
   // Don't parse if property isn't a string.
   {
     auto& manifest = ParseManifest(R"({ "start_url": 42 })");
-    ASSERT_TRUE(manifest->start_url.IsEmpty());
-    EXPECT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("property 'start_url' ignored, type string expected.",
-              errors()[0]);
+    EXPECT_EQ(manifest->start_url, DefaultDocumentUrl());
+    EXPECT_THAT(errors(),
+                testing::ElementsAre(
+                    "property 'start_url' ignored, type string expected."));
+    EXPECT_FALSE(manifest->has_valid_specified_start_url);
   }
 
   // Don't parse if property isn't a valid URL.
   {
     auto& manifest =
         ParseManifest(R"({ "start_url": "http://www.google.ca:a" })");
-    ASSERT_TRUE(manifest->start_url.IsEmpty());
-    EXPECT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("property 'start_url' ignored, URL is invalid.", errors()[0]);
+    EXPECT_EQ(manifest->start_url, DefaultDocumentUrl());
+    EXPECT_THAT(errors(), testing::ElementsAre(
+                              "property 'start_url' ignored, URL is invalid."));
+    EXPECT_FALSE(manifest->has_valid_specified_start_url);
   }
 
   // Absolute start_url, same origin with document.
@@ -414,8 +688,9 @@ TEST_F(ManifestParserTest, StartURLParseRules) {
         ParseManifestWithURLs(R"({ "start_url": "http://foo.com/land.html" })",
                               KURL("http://foo.com/manifest.json"),
                               KURL("http://foo.com/index.html"));
-    ASSERT_EQ(manifest->start_url.GetString(), "http://foo.com/land.html");
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_EQ(manifest->start_url.GetString(), "http://foo.com/land.html");
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_TRUE(manifest->has_valid_specified_start_url);
   }
 
   // Absolute start_url, cross origin with document.
@@ -424,12 +699,11 @@ TEST_F(ManifestParserTest, StartURLParseRules) {
         ParseManifestWithURLs(R"({ "start_url": "http://bar.com/land.html" })",
                               KURL("http://foo.com/manifest.json"),
                               KURL("http://foo.com/index.html"));
-    ASSERT_TRUE(manifest->start_url.IsEmpty());
-    EXPECT_EQ(1u, GetErrorCount());
-    EXPECT_EQ(
-        "property 'start_url' ignored, should "
-        "be same origin as document.",
-        errors()[0]);
+    EXPECT_EQ(manifest->start_url, DefaultDocumentUrl());
+    EXPECT_THAT(errors(),
+                testing::ElementsAre("property 'start_url' ignored, should "
+                                     "be same origin as document."));
+    EXPECT_FALSE(manifest->has_valid_specified_start_url);
   }
 
   // Resolving has to happen based on the manifest_url.
@@ -438,9 +712,10 @@ TEST_F(ManifestParserTest, StartURLParseRules) {
         ParseManifestWithURLs(R"({ "start_url": "land.html" })",
                               KURL("http://foo.com/landing/manifest.json"),
                               KURL("http://foo.com/index.html"));
-    ASSERT_EQ(manifest->start_url.GetString(),
+    EXPECT_EQ(manifest->start_url.GetString(),
               "http://foo.com/landing/land.html");
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_THAT(errors(), testing::IsEmpty());
+    EXPECT_TRUE(manifest->has_valid_specified_start_url);
   }
 }
 
@@ -451,7 +726,7 @@ TEST_F(ManifestParserTest, ScopeParseRules) {
         R"({ "scope": "land", "start_url": "land/landing.html" })");
     ASSERT_EQ(manifest->scope, KURL(DefaultDocumentUrl(), "land"));
     ASSERT_FALSE(IsManifestEmpty(manifest));
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_THAT(errors(), testing::IsEmpty());
   }
 
   // Whitespaces.
@@ -459,7 +734,7 @@ TEST_F(ManifestParserTest, ScopeParseRules) {
     auto& manifest = ParseManifest(
         R"({ "scope": "  land  ", "start_url": "land/landing.html" })");
     ASSERT_EQ(manifest->scope, KURL(DefaultDocumentUrl(), "land"));
-    EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_THAT(errors(), testing::IsEmpty());
   }
 
   // Return the default value if the property isn't a string.
@@ -594,9 +869,28 @@ TEST_F(ManifestParserTest, ScopeParseRules) {
     EXPECT_EQ(0u, GetErrorCount());
   }
 
+  // Scope removes query args.
+  {
+    auto& manifest = ParseManifest(
+        R"({ "start_url": "app/index.html",
+             "scope": "/?test=abc" })");
+    ASSERT_EQ(manifest->scope.GetString(), "http://foo.com/");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Scope removes fragments.
+  {
+    auto& manifest = ParseManifest(
+        R"({ "start_url": "app/index.html",
+             "scope": "/#abc" })");
+    ASSERT_EQ(manifest->scope.GetString(), "http://foo.com/");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
   // Scope defaults to start_url with the filename, query, and fragment removed.
   {
-    auto& manifest = ParseManifest(R"({ "start_url": "land/landing.html" })");
+    auto& manifest =
+        ParseManifest(R"({ "start_url": "land/landing.html?query=test#abc" })");
     ASSERT_EQ(manifest->scope, KURL(DefaultDocumentUrl(), "land/"));
     EXPECT_EQ(0u, GetErrorCount());
   }
@@ -613,6 +907,62 @@ TEST_F(ManifestParserTest, ScopeParseRules) {
     auto& manifest = ParseManifest("{}");
     ASSERT_EQ(manifest->scope, KURL(DefaultDocumentUrl(), "."));
     EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, UpdateManifestUrlParseRules) {
+  // Smoke test.
+  {
+    auto& manifest =
+        ParseManifest(R"({ "update_manifest_url": "https://foo.com" })");
+    ASSERT_EQ(manifest->update_manifest_url, KURL("https://foo.com/"));
+    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(errors(), testing::IsEmpty());
+  }
+
+  // Whitespaces.
+  {
+    auto& manifest =
+        ParseManifest(R"({ "update_manifest_url": "  https://foo.com  " })");
+    ASSERT_EQ(manifest->update_manifest_url, KURL("https://foo.com/"));
+    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(errors(), testing::IsEmpty());
+  }
+
+  // Use nullopt if the property isn't a string.
+  {
+    auto& manifest = ParseManifest(R"({ "update_manifest_url": {} })");
+    ASSERT_FALSE(manifest->update_manifest_url.has_value());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'update_manifest_url' ignored, type string expected.",
+              errors()[0]);
+  }
+
+  // Use nullopt if the property isn't a string.
+  {
+    auto& manifest = ParseManifest(R"({ "update_manifest_url": 42 })");
+    ASSERT_FALSE(manifest->update_manifest_url.has_value());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'update_manifest_url' ignored, type string expected.",
+              errors()[0]);
+  }
+
+  // Absolute update manifest url (not in scope).
+  {
+    auto& manifest = ParseManifestWithURLs(
+        R"({ "scope": "http://foo.com/land",
+        "start_url": "http://foo.com/land/landing.html", "update_manifest_url": "https://bar.com/" })",
+        KURL("http://foo.com/manifest.json"),
+        KURL("http://foo.com/index.html"));
+
+    ASSERT_EQ(manifest->update_manifest_url, KURL("https://bar.com/"));
+    ASSERT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(errors(), testing::IsEmpty());
+  }
+
+  {
+    auto& manifest = ParseManifest(R"({})");
+    ASSERT_FALSE(manifest->update_manifest_url.has_value());
   }
 }
 
@@ -697,9 +1047,8 @@ TEST_F(ManifestParserTest, DisplayParseRules) {
     EXPECT_EQ(0u, GetErrorCount());
   }
 
-  // Parsing fails for 'window-controls-overlay' when WCO flag is disabled.
+  // Do not accept 'window-controls-overlay' as a display mode.
   {
-    ScopedWebAppWindowControlsOverlayForTest window_controls_overlay(false);
     auto& manifest =
         ParseManifest(R"({ "display": "window-controls-overlay" })");
     EXPECT_EQ(manifest->display, blink::mojom::DisplayMode::kUndefined);
@@ -707,16 +1056,27 @@ TEST_F(ManifestParserTest, DisplayParseRules) {
     EXPECT_EQ("inapplicable 'display' value ignored.", errors()[0]);
   }
 
-  // Parsing fails for 'window-controls-overlay' when WCO flag is enabled.
+  // Parsing fails for 'unframed' when flag is disabled.
   {
-    ScopedWebAppWindowControlsOverlayForTest window_controls_overlay(true);
-    auto& manifest =
-        ParseManifest(R"({ "display": "window-controls-overlay" })");
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({ "display": "unframed" })");
     EXPECT_EQ(manifest->display, blink::mojom::DisplayMode::kUndefined);
     EXPECT_EQ(1u, GetErrorCount());
     EXPECT_EQ("inapplicable 'display' value ignored.", errors()[0]);
   }
 
+  // Parsing fails for 'unframed' when flag is enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({ "display": "unframed" })");
+    EXPECT_EQ(manifest->display, blink::mojom::DisplayMode::kUndefined);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("inapplicable 'display' value ignored.", errors()[0]);
+  }
+
+  // TODO(crbug.com/466441366): Stop accepting 'borderless'.
   // Parsing fails for 'borderless' when Borderless flag is disabled.
   {
     base::test::ScopedFeatureList feature_list;
@@ -757,7 +1117,6 @@ TEST_F(ManifestParserTest, DisplayParseRules) {
 }
 
 TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
-
   // Smoke test: if no display_override, no value.
   {
     auto& manifest = ParseManifest(R"({ "display_override": [] })");
@@ -791,10 +1150,9 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
   // Case insensitive
   {
     auto& manifest = ParseManifest(R"({ "display_override": [ "BROWSER" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBrowser)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
@@ -802,20 +1160,18 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
   {
     auto& manifest =
         ParseManifest(R"({ "display_override": [ " browser " ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBrowser)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
   // Accept 'browser'
   {
     auto& manifest = ParseManifest(R"({ "display_override": [ "browser" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBrowser)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
@@ -823,12 +1179,11 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
   {
     auto& manifest =
         ParseManifest(R"({ "display_override": [ "browser", "minimal-ui" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_EQ(manifest->display_override[1],
-              blink::mojom::DisplayMode::kMinimalUi);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kMinimalUi)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
@@ -838,12 +1193,11 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
     auto& manifest = ParseManifest(
         R"({ "display_override": [ 3, "browser", "invalid-display",
         "minimal-ui" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_EQ(manifest->display_override[1],
-              blink::mojom::DisplayMode::kMinimalUi);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kMinimalUi)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
@@ -856,13 +1210,12 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
         "minimal-ui", "standalone" ] })");
     EXPECT_EQ(manifest->display, blink::mojom::DisplayMode::kStandalone);
     EXPECT_EQ(0u, GetErrorCount());
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_EQ(manifest->display_override[1],
-              blink::mojom::DisplayMode::kMinimalUi);
-    EXPECT_EQ(manifest->display_override[2],
-              blink::mojom::DisplayMode::kStandalone);
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kMinimalUi),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kStandalone)));
     EXPECT_FALSE(IsManifestEmpty(manifest));
   }
 
@@ -872,38 +1225,26 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
     auto& manifest =
         ParseManifest(R"({ "display_override": [ "browser", "minimal-ui",
         "browser" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_EQ(manifest->display_override[1],
-              blink::mojom::DisplayMode::kMinimalUi);
-    EXPECT_EQ(manifest->display_override[2],
-              blink::mojom::DisplayMode::kBrowser);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kMinimalUi),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
-  // Reject 'window-controls-overlay' when WCO flag is disabled.
+  // Accept 'window-controls-overlay'.
   {
-    ScopedWebAppWindowControlsOverlayForTest window_controls_overlay(false);
     auto& manifest = ParseManifest(
         R"({ "display_override": [ "window-controls-overlay" ] })");
-    EXPECT_TRUE(manifest->display_override.empty());
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kWindowControlsOverlay)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
-  // Accept 'window-controls-overlay' when WCO flag is enabled.
-  {
-    ScopedWebAppWindowControlsOverlayForTest window_controls_overlay(true);
-    auto& manifest = ParseManifest(
-        R"({ "display_override": [ "window-controls-overlay" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kWindowControlsOverlay);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
-    EXPECT_EQ(0u, GetErrorCount());
-  }
-
+  // TODO(crbug.com/466441366): Stop accepting 'borderless'.
   // Reject 'borderless' when Borderless flag is disabled.
   {
     base::test::ScopedFeatureList feature_list;
@@ -920,10 +1261,29 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
     feature_list.InitAndEnableFeature(blink::features::kWebAppBorderless);
     auto& manifest =
         ParseManifest(R"({ "display_override": [ "borderless" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kBorderless);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBorderless)));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Reject 'unframed' when flag is disabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({ "display_override": [ "unframed" ] })");
+    EXPECT_TRUE(manifest->display_override.empty());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'unframed' as an alias for `kBorderless` when flag is enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({ "display_override": [ "unframed" ] })");
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBorderless)));
     EXPECT_EQ(0u, GetErrorCount());
   }
 
@@ -939,10 +1299,168 @@ TEST_F(ManifestParserTest, DisplayOverrideParseRules) {
   {
     ScopedWebAppTabStripForTest tabbed(true);
     auto& manifest = ParseManifest(R"({ "display_override": [ "tabbed" ] })");
-    EXPECT_FALSE(manifest->display_override.empty());
-    EXPECT_EQ(manifest->display_override[0],
-              blink::mojom::DisplayMode::kTabbed);
-    EXPECT_FALSE(IsManifestEmpty(manifest));
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(DisplayOverrideItemIs(blink::mojom::DisplayMode::kTabbed)));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'unframed' with url_patterns when flag is enabled.
+  {
+    base::test::ScopedFeatureList feature_list(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({
+      "display_override": [
+        {
+          "display": "unframed",
+          "url_patterns": [
+            {"protocol": "https", "hostname": "foo.com"},
+            {"pathname": "/bar"}
+          ]
+        }
+      ]
+    })");
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(DisplayOverrideItemIs(
+            blink::mojom::DisplayMode::kBorderless,
+            {PatternDataEq({.protocol = {"https"}, .hostname = {"foo.com"}}),
+             PatternDataEq({.protocol = {"http"},
+                            .hostname = {"foo.com"},
+                            .pathname = {"/bar"}})})));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'borderless' with url_patterns when flag is enabled.
+  {
+    base::test::ScopedFeatureList feature_list(
+        blink::features::kWebAppBorderless);
+    auto& manifest = ParseManifest(R"({
+      "display_override": [
+        {
+          "display": "borderless",
+          "url_patterns": [ {"pathname": "/bar"} ]
+        }
+      ]
+    })");
+    EXPECT_THAT(manifest->display_override,
+                ElementsAre(DisplayOverrideItemIs(
+                    blink::mojom::DisplayMode::kBorderless,
+                    {PatternDataEq({.protocol = {"http"},
+                                    .hostname = {"foo.com"},
+                                    .pathname = {"/bar"}})})));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Ignore object without 'display' field.
+  {
+    auto& manifest = ParseManifest(R"({
+      "display_override": [
+        { "url_patterns": [] }
+      ]
+    })");
+    EXPECT_TRUE(manifest->display_override.empty());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Ignore displays with url_patterns other than 'unframed'.
+  {
+    auto& manifest = ParseManifest(R"({
+      "display_override": [
+        {
+          "display": "standalone",
+          "url_patterns": [ {"pathname": "/foo"} ]
+        }
+      ]
+    })");
+    EXPECT_THAT(manifest->display_override, testing::IsEmpty());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "display override 'standalone' ignored, url_patterns are not allowed.",
+        errors()[0]);
+  }
+
+  // Accept mixed strings and objects.
+  {
+    base::test::ScopedFeatureList feature_list(blink::features::kUnframedIwa);
+    auto& manifest = ParseManifest(R"({
+      "display_override": [
+        "minimal-ui",
+        {
+          "display": "unframed",
+          "url_patterns": [ {"pathname": "/bar"} ]
+        },
+        "browser"
+      ]
+    })");
+    EXPECT_THAT(
+        manifest->display_override,
+        ElementsAre(
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kMinimalUi),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBorderless,
+                                  {PatternDataEq({.protocol = {"http"},
+                                                  .hostname = {"foo.com"},
+                                                  .pathname = {"/bar"}})}),
+            DisplayOverrideItemIs(blink::mojom::DisplayMode::kBrowser)));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, DisplayOverrideAcceptsOutOfScopeUrlPatterns) {
+  base::test::ScopedFeatureList feature_list(blink::features::kUnframedIwa);
+  // The manifest parser does not validate that URL patterns are same-origin or
+  // in-scope. Consumers should verify the pattern is within the app scope
+  // before applying the display mode.
+  auto& manifest = ParseManifest(R"({
+      "start_url": "/app/index.html",
+      "scope": "/app/",
+      "display_override": [
+        {
+          "display": "unframed",
+          "url_patterns": [
+            { "pathname": "/bar" },
+            { "hostname": "bar.com" }
+          ]
+        }
+      ]
+    })");
+  EXPECT_THAT(
+      manifest->display_override,
+      ElementsAre(DisplayOverrideItemIs(
+          blink::mojom::DisplayMode::kBorderless,
+          {PatternDataEq({.protocol = {"http"},
+                          .hostname = {"foo.com"},
+                          .pathname = {"/bar"}}),
+           PatternDataEq({.protocol = {"http"}, .hostname = {"bar.com"}})})));
+  EXPECT_EQ(0u, GetErrorCount());
+}
+
+TEST_F(ManifestParserTest, BorderlessUrlPatternsParseRules) {
+  // Reject 'borderless_url_patterns' when the flag is disabled (default).
+  {
+    auto& manifest = ParseManifest(R"({
+      "borderless_url_patterns": [ {"hostname": "foo.com"} ]
+    })");
+    EXPECT_TRUE(manifest->borderless_url_patterns.empty());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Accept 'borderless_url_patterns' when the flag is enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(blink::features::kWebAppBorderless);
+    auto& manifest = ParseManifest(R"({
+      "borderless_url_patterns": [
+        {"protocol": "ftp"},
+        {"hostname": "foo.com"},
+        {"protocol": "ftp", "hostname": "bar.com"}
+      ]
+    })");
+    EXPECT_THAT(
+        manifest->borderless_url_patterns,
+        ElementsAre(
+            PatternDataEq({.protocol = {"ftp"}}),
+            PatternDataEq({.protocol = {"http"}, .hostname = {"foo.com"}}),
+            PatternDataEq({.protocol = {"ftp"}, .hostname = {"bar.com"}})));
     EXPECT_EQ(0u, GetErrorCount());
   }
 }
@@ -3125,364 +3643,514 @@ TEST_F(ManifestParserTest, ProtocolHandlerParseRules) {
   }
 }
 
-TEST_F(ManifestParserTest, UrlHandlerParseRules) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(blink::features::kWebAppEnableUrlHandlers);
-
-  // Manifest does not contain a 'url_handlers' field.
+TEST_F(ManifestParserTest, ScopeExtensionsParseRules) {
+  // Manifest does not contain a 'scope_extensions' field.
   {
     auto& manifest = ParseManifest("{ }");
     ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ(0u, manifest->url_handlers.size());
+    EXPECT_EQ(0u, manifest->scope_extensions.size());
   }
 
-  // 'url_handlers' is not an array.
+  // 'scope_extensions' is not an array.
   {
-    auto& manifest = ParseManifest(R"({ "url_handlers": { } })");
+    auto& manifest = ParseManifest(R"({ "scope_extensions": { } })");
     EXPECT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("property 'url_handlers' ignored, type array expected.",
+    EXPECT_EQ("property 'scope_extensions' ignored, type array expected.",
               errors()[0]);
-    EXPECT_EQ(0u, manifest->url_handlers.size());
+    EXPECT_EQ(0u, manifest->scope_extensions.size());
   }
 
-  // Contains 'url_handlers' field but no URL handler entries.
+  // Contains 'scope_extensions' field but no scope extension entries.
   {
-    auto& manifest = ParseManifest(R"({ "url_handlers": [ ] })");
+    auto& manifest = ParseManifest(R"({ "scope_extensions": [ ] })");
     ASSERT_EQ(0u, GetErrorCount());
-    EXPECT_EQ(0u, manifest->url_handlers.size());
+    EXPECT_EQ(0u, manifest->scope_extensions.size());
   }
 
-  // 'url_handlers' array entries must be objects.
+  // Scope extension entry must be an object or a string.
+  {
+    auto& manifest = ParseManifest(R"({ "scope_extensions": [ 7 ] })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("scope_extensions entry ignored, type object expected.",
+              errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
+  }
+
+  // A valid scope extension.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            "foo.com"
+          "scope_extensions": [
+            {
+              "type" : "origin", "origin" : "https://foo.com"
+            }
           ]
         })");
-    ASSERT_EQ(1u, GetErrorCount());
-    EXPECT_EQ("url_handlers entry ignored, type object expected.", errors()[0]);
-    EXPECT_EQ(0u, manifest->url_handlers.size());
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(0u, GetErrorCount());
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
   }
 
-  // A valid url handler.
+  // Origin field is missing from the scope extension entry.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
+            {
+              "type": "invalid_field", "origin": "https://foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("Scope extension 'type' invalid.", errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
+  }
+
+  // Scope extension missing `type` key
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
             {
               "origin": "https://foo.com"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
-    ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(1u, url_handlers.size());
-    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "scope_extensions entry ignored, required properties 'type' and "
+        "'origin' "
+        "are missing.",
+        errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
+  }
+
+  // Scope extension missing `origin` key
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "asdf": "http://foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "scope_extensions entry ignored, required properties 'type' and "
+        "'origin' "
+        "are missing.",
+        errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
+  }
+
+  // Scope extension using unsupported `type` key
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "site", "origin": "http://foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("Scope extension 'type' invalid.", errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
+  }
+
+  // Scope extension entry origin must be a string.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": 7
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    EXPECT_EQ(2u, GetErrorCount());
+    EXPECT_EQ("property 'origin' ignored, type string expected.", errors()[0]);
+    EXPECT_EQ(0u, scope_extensions.size());
   }
 
   // Scheme must be https.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "http://foo.com"
+              "type": "origin", "origin": "http://foo.com"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ(
-        "url_handlers entry ignored, required property 'origin' must use the "
-        "https scheme.",
+        "scope_extensions entry ignored, required property 'origin' must use "
+        "the https scheme.",
         errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
+    ASSERT_EQ(0u, scope_extensions.size());
   }
 
   // Origin must be valid.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https:///////"
+              "type": "origin", "origin": "https:///////"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ(
-        "url_handlers entry ignored, required property 'origin' is invalid.",
+        "scope_extensions entry ignored, required property 'origin' is "
+        "invalid.",
         errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
+    ASSERT_EQ(0u, scope_extensions.size());
   }
 
-  // Parse multiple valid handlers.
+  // Parse multiple valid scope extensions.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https://foo.com"
+              "type": "origin", "origin": "https://foo.com"
             },
             {
-              "origin": "https://bar.com"
+              "type": "origin", "origin": "https://bar.com"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(2u, url_handlers.size());
+    ASSERT_EQ(2u, scope_extensions.size());
     ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
     ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://bar.com")
-                    ->IsSameOriginWith(url_handlers[1]->origin.get()));
+                    ->IsSameOriginWith(scope_extensions[1]->origin.get()));
   }
 
-  // Parse both valid and invalid handlers.
+  // Parse invalid scope extensions list with an array entry.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https://foo.com"
+              "type": "origin", "origin": "https://foo.com"
+            },
+            []
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("scope_extensions entry ignored, type object expected.",
+              errors()[0]);
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+  }
+
+  // Parse shorthand notation as an invalid format
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            "https://bar.com"
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("scope_extensions entry ignored, type object expected.",
+              errors()[0]);
+    ASSERT_EQ(0u, scope_extensions.size());
+  }
+
+  // Parse both valid and invalid scope extensions.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://foo.com"
             },
             {
-              "origin": "about:"
+              "type": "origin", "origin": "about:"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ(
-        "url_handlers entry ignored, required property 'origin' is invalid.",
+        "scope_extensions entry ignored, required property 'origin' is "
+        "invalid.",
         errors()[0]);
-    ASSERT_EQ(1u, url_handlers.size());
+    ASSERT_EQ(1u, scope_extensions.size());
     ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
   }
 
-  // Parse invalid handler where the origin is a TLD.
+  // Parse invalid scope extension where the origin is a TLD.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https://co.uk"
+              "type": "origin", "origin": "https://co.uk"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ(
-        "url_handlers entry ignored, domain of required property 'origin' is "
-        "invalid.",
+        "scope_extensions entry ignored, domain of required property 'origin' "
+        "is invalid.",
         errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
-  }
-
-  // Parse origin with wildcard.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*.foo.com"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(1u, url_handlers.size());
-    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
-    ASSERT_TRUE(url_handlers[0]->has_origin_wildcard);
-  }
-
-  // Parse invalid origin wildcard format.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*foo.com"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(1u, url_handlers.size());
-    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://*foo.com")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
-    ASSERT_FALSE(url_handlers[0]->has_origin_wildcard);
-  }
-
-  // Parse origin where the host is just the wildcard prefix.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*."
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(1u, GetErrorCount());
-    ASSERT_EQ(
-        "url_handlers entry ignored, domain of required property 'origin' is "
-        "invalid.",
-        errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
-  }
-
-  // Parse invalid origin where wildcard is used with a TLD.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*.com"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(1u, GetErrorCount());
-    ASSERT_EQ(
-        "url_handlers entry ignored, domain of required property 'origin' is "
-        "invalid.",
-        errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
-  }
-
-  // Parse invalid origin where wildcard is used with an unknown TLD.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*.foo"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(1u, GetErrorCount());
-    ASSERT_EQ(
-        "url_handlers entry ignored, domain of required property 'origin' is "
-        "invalid.",
-        errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
-  }
-
-  // Parse invalid origin where wildcard is used with a multipart TLD.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*.co.uk"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(1u, GetErrorCount());
-    ASSERT_EQ(
-        "url_handlers entry ignored, domain of required property 'origin' is "
-        "invalid.",
-        errors()[0]);
-    ASSERT_EQ(0u, url_handlers.size());
-  }
-
-  // Parse valid origin with private registry.
-  {
-    auto& manifest = ParseManifest(R"({
-          "url_handlers": [
-            {
-              "origin": "https://*.glitch.me"
-            }
-          ]
-        })");
-    auto& url_handlers = manifest->url_handlers;
-
-    ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(1u, url_handlers.size());
-    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://glitch.me")
-                    ->IsSameOriginWith(url_handlers[0]->origin.get()));
-    ASSERT_TRUE(url_handlers[0]->has_origin_wildcard);
+    ASSERT_EQ(0u, scope_extensions.size());
   }
 
   // Parse valid IP address as origin.
   {
     auto& manifest = ParseManifest(R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https://192.168.0.1:8888"
+              "type": "origin", "origin": "https://192.168.0.1:8888"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(0u, GetErrorCount());
-    ASSERT_EQ(1u, url_handlers.size());
+    ASSERT_EQ(1u, scope_extensions.size());
     ASSERT_TRUE(
         blink::SecurityOrigin::CreateFromString("https://192.168.0.1:8888")
-            ->IsSameOriginWith(url_handlers[0]->origin.get()));
-    ASSERT_FALSE(url_handlers[0]->has_origin_wildcard);
+            ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+    ASSERT_FALSE(scope_extensions[0]->has_origin_wildcard);
   }
 
-  // Validate only the first 10 handlers are parsed. The following manifest
-  // specifies 11 handlers, so the last one should not be in the result.
+  // Validate only the first 10 scope extensions are parsed. The following
+  // manifest specifies 11 scope extensions, so the last one should not be in
+  // the result.
   {
     auto& manifest = ParseManifest(
         R"({
-          "url_handlers": [
+          "scope_extensions": [
             {
-              "origin": "https://192.168.0.1:8001"
+              "type": "origin", "origin": "https://192.168.0.1:8001"
             },
             {
-              "origin": "https://192.168.0.1:8002"
+              "type": "origin", "origin": "https://192.168.0.1:8002"
             },
             {
-              "origin": "https://192.168.0.1:8003"
+              "type": "origin", "origin": "https://192.168.0.1:8003"
             },
             {
-              "origin": "https://192.168.0.1:8004"
+              "type": "origin", "origin": "https://192.168.0.1:8004"
             },
             {
-              "origin": "https://192.168.0.1:8005"
+              "type": "origin", "origin": "https://192.168.0.1:8005"
             },
             {
-              "origin": "https://192.168.0.1:8006"
+              "type": "origin", "origin": "https://192.168.0.1:8006"
             },
             {
-              "origin": "https://192.168.0.1:8007"
+              "type": "origin", "origin": "https://192.168.0.1:8007"
             },
             {
-              "origin": "https://192.168.0.1:8008"
+              "type": "origin", "origin": "https://192.168.0.1:8008"
             },
             {
-              "origin": "https://192.168.0.1:8009"
+              "type": "origin", "origin": "https://192.168.0.1:8009"
             },
             {
-              "origin": "https://192.168.0.1:8010"
+              "type": "origin", "origin": "https://192.168.0.1:8010"
             },
             {
-              "origin": "https://192.168.0.1:8011"
+              "type": "origin", "origin": "https://192.168.0.1:8011"
             }
           ]
         })");
-    auto& url_handlers = manifest->url_handlers;
+    auto& scope_extensions = manifest->scope_extensions;
 
     ASSERT_EQ(1u, GetErrorCount());
     EXPECT_EQ(
-        "property 'url_handlers' contains more than 10 valid elements, "
+        "property 'scope_extensions' contains more than 10 valid elements, "
         "only the first 10 are parsed.",
         errors()[0]);
-    ASSERT_EQ(10u, url_handlers.size());
+    ASSERT_EQ(10u, scope_extensions.size());
     ASSERT_TRUE(
         blink::SecurityOrigin::CreateFromString("https://192.168.0.1:8010")
-            ->IsSameOriginWith(url_handlers[9]->origin.get()));
+            ->IsSameOriginWith(scope_extensions[9]->origin.get()));
+  }
+}
+
+TEST_F(ManifestParserTest, ScopeExtensionsBySiteParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kWebAppEnableScopeExtensionsBySite);
+
+  // Parse origin with wildcard.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(0u, GetErrorCount());
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://foo.com")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+    ASSERT_TRUE(scope_extensions[0]->has_origin_wildcard);
+  }
+
+  // Parse origin with wildcard with feature disabled.
+  {
+    base::test::ScopedFeatureList inner_feature_list;
+    inner_feature_list.InitAndDisableFeature(
+        blink::features::kWebAppEnableScopeExtensionsBySite);
+    // Valid wildcard format.
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(0u, GetErrorCount());
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://*.foo.com")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+    ASSERT_FALSE(scope_extensions[0]->has_origin_wildcard);
+  }
+
+  // Parse invalid origin wildcard format.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*foo.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(0u, GetErrorCount());
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://*foo.com")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+    ASSERT_FALSE(scope_extensions[0]->has_origin_wildcard);
+  }
+
+  // Parse origin where the host is just the wildcard prefix.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*."
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    ASSERT_EQ(
+        "scope_extensions entry ignored, domain of required property 'origin' "
+        "is invalid.",
+        errors()[0]);
+    ASSERT_EQ(0u, scope_extensions.size());
+  }
+
+  // Parse invalid origin where wildcard is used with a TLD.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.com"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    ASSERT_EQ(
+        "scope_extensions entry ignored, domain of required property 'origin' "
+        "is invalid.",
+        errors()[0]);
+    ASSERT_EQ(0u, scope_extensions.size());
+  }
+
+  // Parse invalid origin where wildcard is used with an unknown TLD.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.foo"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    ASSERT_EQ(
+        "scope_extensions entry ignored, domain of required property 'origin' "
+        "is invalid.",
+        errors()[0]);
+    ASSERT_EQ(0u, scope_extensions.size());
+  }
+
+  // Parse invalid origin where wildcard is used with a multipart TLD.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.co.uk"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(1u, GetErrorCount());
+    ASSERT_EQ(
+        "scope_extensions entry ignored, domain of required property 'origin' "
+        "is invalid.",
+        errors()[0]);
+    ASSERT_EQ(0u, scope_extensions.size());
+  }
+
+  // Parse valid origin with private registry.
+  {
+    auto& manifest = ParseManifest(R"({
+          "scope_extensions": [
+            {
+              "type": "origin", "origin": "https://*.glitch.me"
+            }
+          ]
+        })");
+    auto& scope_extensions = manifest->scope_extensions;
+
+    ASSERT_EQ(0u, GetErrorCount());
+    ASSERT_EQ(1u, scope_extensions.size());
+    ASSERT_TRUE(blink::SecurityOrigin::CreateFromString("https://glitch.me")
+                    ->IsSameOriginWith(scope_extensions[0]->origin.get()));
+    ASSERT_TRUE(scope_extensions[0]->has_origin_wildcard);
   }
 }
 
@@ -4743,6 +5411,228 @@ TEST_F(ManifestParserTest, ParsePreferRelatedApplicationsParseRules) {
   }
 }
 
+TEST_F(ManifestParserTest, MigrateToParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(blink::features::kWebAppMigrationApi);
+
+  // If no migrate_to, null.
+  {
+    auto& manifest = ParseManifest(R"({})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // If non-object, null and error.
+  {
+    auto& manifest = ParseManifest(R"({"migrate_to": "not-an-object"})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'migrate_to' ignored, type object expected.",
+              errors()[0]);
+  }
+
+  // Missing id, null and error.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_to": {"install_url": "http://foo.com/install"}})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'migrate_to' ignored, 'id' is missing or not a valid URL.",
+        errors()[0]);
+  }
+
+  // Empty id, null and error.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_to": {"id": "", "install_url": "http://foo.com/install"}})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'migrate_to' ignored, 'id' is missing or not a valid URL.",
+        errors()[0]);
+  }
+
+  // Missing install_url, null and error.
+  {
+    auto& manifest =
+        ParseManifest(R"({"migrate_to": {"id": "http://new.example.com/"}})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'migrate_to' ignored, 'install_url' is missing or invalid.",
+        errors()[0]);
+  }
+
+  // Invalid install_url, null and error.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_to": {"id": "http://new.example.com/", "install_url": "http://www.foo.com:co&uk"}})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(2u, GetErrorCount());
+    EXPECT_EQ("property 'install_url' ignored, URL is invalid.", errors()[0]);
+    EXPECT_EQ(
+        "property 'migrate_to' ignored, 'install_url' is missing or invalid.",
+        errors()[1]);
+  }
+
+  // Cross-origin install_url, null and error.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_to": {"id": "http://new.example.com/", "install_url": "http://other.example.com/install"}})");
+    EXPECT_TRUE(manifest->migrate_to.is_null());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'migrate_to' ignored, 'install_url' must be same origin as "
+        "'id'.",
+        errors()[0]);
+  }
+
+  // Valid migrate_to object.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_to": {"id": "http://new.example.com/", "install_url": "http://new.example.com/install"}})");
+    EXPECT_FALSE(manifest->migrate_to.is_null());
+    EXPECT_EQ(manifest->migrate_to->id, "http://new.example.com/");
+    EXPECT_FALSE(manifest->migrate_to->install_url.IsEmpty());
+    EXPECT_EQ(manifest->migrate_to->install_url.GetString(),
+              "http://new.example.com/install");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, MigrateFromParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(blink::features::kWebAppMigrationApi);
+
+  // If no migrate_from, empty.
+  {
+    auto& manifest = ParseManifest(R"({})");
+    EXPECT_EQ(0u, manifest->migrate_from.size());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // If non-array, empty and error.
+  {
+    auto& manifest = ParseManifest(R"({"migrate_from": "not-an-array"})");
+    EXPECT_EQ(0u, manifest->migrate_from.size());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'migrate_from' ignored, type array expected.",
+              errors()[0]);
+  }
+
+  // Array with non-strings and non-objects, ignore invalid types.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_from": ["app_id_1", 123, {"id": "app_id_2"}]})");
+    EXPECT_EQ(2u, manifest->migrate_from.size());
+    EXPECT_EQ("http://foo.com/app_id_1",
+              manifest->migrate_from[0]->id.GetString());
+    EXPECT_FALSE(manifest->migrate_from[0]->install_url.has_value());
+    EXPECT_EQ("http://foo.com/app_id_2",
+              manifest->migrate_from[1]->id.GetString());
+    EXPECT_FALSE(manifest->migrate_from[1]->install_url.has_value());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("migrate_from entry ignored, type string or object expected.",
+              errors()[0]);
+  }
+
+  // Valid array with mixed string and object with install_url.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_from": ["app_id_1", {"id": "app_id_2", "install_url": "http://foo.com/install"}]})");
+    EXPECT_EQ(2u, manifest->migrate_from.size());
+    EXPECT_EQ("http://foo.com/app_id_1",
+              manifest->migrate_from[0]->id.GetString());
+    EXPECT_FALSE(manifest->migrate_from[0]->install_url.has_value());
+    EXPECT_EQ("http://foo.com/app_id_2",
+              manifest->migrate_from[1]->id.GetString());
+    ASSERT_TRUE(manifest->migrate_from[1]->install_url.has_value());
+    EXPECT_EQ("http://foo.com/install",
+              manifest->migrate_from[1]->install_url->GetString());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Object with missing id.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_from": [{"install_url": "http://example.com/install"}]})");
+    EXPECT_EQ(0u, manifest->migrate_from.size());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("migrate_from entry ignored, 'id' is missing or not a valid URL.",
+              errors()[0]);
+  }
+
+  // Object with cross-origin install_url.
+  {
+    auto& manifest = ParseManifest(
+        R"({"migrate_from": [{"id": "http://foo.com/app", "install_url": "http://example.com/install"}]})");
+    EXPECT_EQ(0u, manifest->migrate_from.size());
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "migrate_from entry ignored, 'install_url' must be same origin as "
+        "'id'.",
+        errors()[0]);
+  }
+
+  // Mixed object with install_url and object without install_url.
+  {
+    auto& manifest = ParseManifest(
+        R"({
+          "migrate_from": [
+            {
+              "id": "app_id_1",
+              "install_url": "http://foo.com/install"
+            }, {
+              "id": "app_id_2"
+            }
+          ]
+        })");
+    EXPECT_EQ(2u, manifest->migrate_from.size());
+    EXPECT_EQ("http://foo.com/app_id_1",
+              manifest->migrate_from[0]->id.GetString());
+    ASSERT_TRUE(manifest->migrate_from[0]->install_url.has_value());
+    EXPECT_EQ("http://foo.com/install",
+              manifest->migrate_from[0]->install_url->GetString());
+    EXPECT_EQ("http://foo.com/app_id_2",
+              manifest->migrate_from[1]->id.GetString());
+    EXPECT_FALSE(manifest->migrate_from[1]->install_url.has_value());
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Object with behavior.
+  {
+    auto& manifest = ParseManifest(
+        R"({
+          "migrate_from": [
+            {
+              "id": "app_id_1",
+              "behavior": "force"
+            }, {
+              "id": "app_id_2",
+              "behavior": "suggest"
+            }, {
+              "id": "app_id_3"
+            }, {
+              "id": "app_id_4",
+              "behavior": "invalid"
+            }
+          ]
+        })");
+    EXPECT_EQ(4u, manifest->migrate_from.size());
+    EXPECT_EQ(manifest->migrate_from[0]->behavior,
+              mojom::blink::ManifestMigrationBehavior::kForce);
+    EXPECT_EQ(manifest->migrate_from[1]->behavior,
+              mojom::blink::ManifestMigrationBehavior::kSuggest);
+    EXPECT_EQ(manifest->migrate_from[2]->behavior,
+              mojom::blink::ManifestMigrationBehavior::kSuggest);
+    EXPECT_EQ(manifest->migrate_from[3]->behavior,
+              mojom::blink::ManifestMigrationBehavior::kSuggest);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("behavior value 'invalid' ignored, unknown value.", errors()[0]);
+  }
+}
+
 TEST_F(ManifestParserTest, ThemeColorParserRules) {
   // Smoke test.
   {
@@ -5111,24 +6001,7 @@ TEST_F(ManifestParserTest, GCMSenderIDParseRules) {
   }
 }
 
-TEST_F(ManifestParserTest, StorageIsolationEnabled) {
-  auto& manifest = ParseManifest(R"({ "isolated_storage": true })");
-  EXPECT_EQ(manifest->isolated_storage, true);
-  EXPECT_EQ(0u, GetErrorCount());
-}
-
-TEST_F(ManifestParserTest, StorageIsolationBadScope) {
-  auto& manifest = ParseManifest(
-      R"({ "isolated_storage": true,
-      "scope": "/invalid",
-      "start_url": "/invalid/index.html" })");
-  EXPECT_EQ(manifest->isolated_storage, false);
-  EXPECT_EQ(1u, GetErrorCount());
-  EXPECT_EQ("Isolated storage is only supported with a scope of \"/\".",
-            errors()[0]);
-}
-
-TEST_F(ManifestParserTest, PermissionsPolicy) {
+TEST_F(ManifestParserTest, PermissionsPolicyParsesOrigins) {
   auto& manifest = ParseManifest(
       R"({ "permissions_policy": {
                 "geolocation": ["https://example.com"],
@@ -5136,6 +6009,54 @@ TEST_F(ManifestParserTest, PermissionsPolicy) {
         }})");
   EXPECT_EQ(0u, GetErrorCount());
   EXPECT_EQ(2u, manifest->permissions_policy.size());
+  for (const auto& policy : manifest->permissions_policy) {
+    EXPECT_EQ(1u, policy.allowed_origins.size());
+    EXPECT_EQ("https://example.com", policy.allowed_origins[0].Serialize());
+    EXPECT_FALSE(manifest->permissions_policy[0].self_if_matches.has_value());
+  }
+}
+
+TEST_F(ManifestParserTest, PermissionsPolicyParsesSelf) {
+  auto& manifest = ParseManifest(
+      R"({ "permissions_policy": {
+        "geolocation": ["self"]
+      }})");
+  EXPECT_EQ(0u, GetErrorCount());
+  EXPECT_EQ(1u, manifest->permissions_policy.size());
+  EXPECT_EQ("http://foo.com",
+            manifest->permissions_policy[0].self_if_matches->Serialize());
+  EXPECT_EQ(0u, manifest->permissions_policy[0].allowed_origins.size());
+}
+
+TEST_F(ManifestParserTest, PermissionsPolicyIgnoresSrc) {
+  auto& manifest = ParseManifest(
+      R"({ "permissions_policy": {
+        "geolocation": ["src"]
+      }})");
+  EXPECT_EQ(0u, GetErrorCount());
+  EXPECT_EQ(1u, manifest->permissions_policy.size());
+  EXPECT_EQ(0u, manifest->permissions_policy[0].allowed_origins.size());
+  EXPECT_FALSE(manifest->permissions_policy[0].self_if_matches.has_value());
+}
+
+TEST_F(ManifestParserTest, PermissionsPolicyParsesNone) {
+  auto& manifest = ParseManifest(
+      R"({ "permissions_policy": {
+        "geolocation": ["none"]
+      }})");
+  EXPECT_EQ(0u, GetErrorCount());
+  EXPECT_EQ(1u, manifest->permissions_policy.size());
+  EXPECT_EQ(0u, manifest->permissions_policy[0].allowed_origins.size());
+}
+
+TEST_F(ManifestParserTest, PermissionsPolicyParsesWildcard) {
+  auto& manifest = ParseManifest(
+      R"({ "permissions_policy": {
+        "geolocation": ["*"]
+      }})");
+  EXPECT_EQ(0u, GetErrorCount());
+  EXPECT_EQ(1u, manifest->permissions_policy.size());
+  EXPECT_TRUE(manifest->permissions_policy[0].matches_all_origins);
 }
 
 TEST_F(ManifestParserTest, PermissionsPolicyEmptyOrigin) {
@@ -5208,120 +6129,100 @@ TEST_F(ManifestParserTest, PermissionsPolicyInvalidAllowlistEntry) {
 
 TEST_F(ManifestParserTest, LaunchHandlerParseRules) {
   using ClientMode = mojom::blink::ManifestLaunchHandler::ClientMode;
-
+  // Smoke test.
   {
-    ScopedWebAppLaunchHandlerForTest feature(false);
-
-    // Feature not enabled, should not be parsed.
     auto& manifest = ParseManifest(R"({
       "launch_handler": {
-        "client_mode": "navigate-existing"
+        "client_mode": "focus-existing"
       }
     })");
-    EXPECT_FALSE(manifest->launch_handler);
+    EXPECT_EQ(manifest->launch_handler->client_mode,
+              ClientMode::kFocusExisting);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {
+        "client_mode": "navigate-new"
+      }
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode, ClientMode::kNavigateNew);
     EXPECT_EQ(0u, GetErrorCount());
   }
 
+  // Empty object is fine.
   {
-    ScopedWebAppLaunchHandlerForTest feature(true);
-    // Smoke test.
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": "focus-existing"
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode,
-                ClientMode::kFocusExisting);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": "navigate-new"
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode,
-                ClientMode::kNavigateNew);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {}
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode, std::nullopt);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
 
-    // Empty object is fine.
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {}
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode, ClientMode::kAuto);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
+  // Empty array is fine.
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {
+        "client_mode": []
+      }
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode, std::nullopt);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
 
-    // Empty array is fine.
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": []
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode, ClientMode::kAuto);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
+  // Unknown single string.
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {
+        "client_mode": "space"
+      }
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode, std::nullopt);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("client_mode value 'space' ignored, unknown value.", errors()[0]);
+  }
 
-    // Unknown single string.
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": "space"
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode, ClientMode::kAuto);
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("client_mode value 'space' ignored, unknown value.",
-                errors()[0]);
-    }
+  // First known value in array is used.
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {
+        "client_mode": ["navigate-existing", "navigate-new"]
+      }
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode,
+              ClientMode::kNavigateExisting);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": {
+        "client_mode": [null, "space", "focus-existing", "auto"]
+      }
+    })");
+    EXPECT_EQ(manifest->launch_handler->client_mode,
+              ClientMode::kFocusExisting);
+    EXPECT_EQ(2u, GetErrorCount());
+    EXPECT_EQ("client_mode value 'null' ignored, string expected.",
+              errors()[0]);
+    EXPECT_EQ("client_mode value 'space' ignored, unknown value.", errors()[1]);
+  }
 
-    // First known value in array is used.
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": ["navigate-existing", "navigate-new"]
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode,
-                ClientMode::kNavigateExisting);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": {
-          "client_mode": [null, "space", "focus-existing", "auto"]
-        }
-      })");
-      EXPECT_EQ(manifest->launch_handler->client_mode,
-                ClientMode::kFocusExisting);
-      EXPECT_EQ(2u, GetErrorCount());
-      EXPECT_EQ("client_mode value 'null' ignored, string expected.",
-                errors()[0]);
-      EXPECT_EQ("client_mode value 'space' ignored, unknown value.",
-                errors()[1]);
-    }
-
-    // Don't parse if the property isn't an object.
-    {
-      auto& manifest = ParseManifest(R"({ "launch_handler": null })");
-      EXPECT_FALSE(manifest->launch_handler);
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("launch_handler value ignored, object expected.", errors()[0]);
-    }
-    {
-      auto& manifest = ParseManifest(R"({
-        "launch_handler": [{
-          "client_mode": "navigate-new"
-        }]
-      })");
-      EXPECT_FALSE(manifest->launch_handler);
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("launch_handler value ignored, object expected.", errors()[0]);
-    }
+  // Don't parse if the property isn't an object.
+  {
+    auto& manifest = ParseManifest(R"({ "launch_handler": null })");
+    EXPECT_FALSE(manifest->launch_handler);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("launch_handler value ignored, object expected.", errors()[0]);
+  }
+  {
+    auto& manifest = ParseManifest(R"({
+      "launch_handler": [{
+        "client_mode": "navigate-new"
+      }]
+    })");
+    EXPECT_FALSE(manifest->launch_handler);
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("launch_handler value ignored, object expected.", errors()[0]);
   }
 }
 
@@ -5334,6 +6235,8 @@ TEST_F(ManifestParserTest, TranslationsParseRules) {
         ParseManifest(R"({ "translations": {"fr": {"name": "french name"}} })");
     EXPECT_TRUE(manifest->translations.empty());
     EXPECT_EQ(0u, GetErrorCount());
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTranslations));
   }
   {
     ScopedWebAppTranslationsForTest feature(true);
@@ -5373,6 +6276,8 @@ TEST_F(ManifestParserTest, TranslationsParseRules) {
       EXPECT_EQ(manifest->translations.find("fr")->value->description,
                 "french description");
       EXPECT_EQ(0u, GetErrorCount());
+      EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+          WebFeature::kWebAppManifestTranslations));
     }
 
     // Don't parse if the property isn't an object.
@@ -5429,6 +6334,8 @@ TEST_F(ManifestParserTest, TranslationsStringsParseRules) {
     EXPECT_EQ(
         "property 'name' of 'translations' ignored, type string expected.",
         errors()[0]);
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTranslations));
   }
 
   // Ignore non-string translations short_name.
@@ -5441,6 +6348,8 @@ TEST_F(ManifestParserTest, TranslationsStringsParseRules) {
         "property 'short_name' of 'translations' ignored, type string "
         "expected.",
         errors()[0]);
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTranslations));
   }
 
   // Ignore non-string translations description.
@@ -5453,6 +6362,8 @@ TEST_F(ManifestParserTest, TranslationsStringsParseRules) {
         "property 'description' of 'translations' ignored, type string "
         "expected.",
         errors()[0]);
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTranslations));
   }
 
   // Translation with empty strings is ignored.
@@ -5469,347 +6380,38 @@ TEST_F(ManifestParserTest, TranslationsStringsParseRules) {
               errors()[1]);
     EXPECT_EQ("property 'description' of 'translations' is an empty string.",
               errors()[2]);
-  }
-}
-
-TEST_F(ManifestParserTest, UserPreferencesParseRules) {
-  {
-    ScopedWebAppDarkModeForTest feature(false);
-
-    // Feature not enabled, should not be parsed.
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences":
-          {"color_scheme_dark": {"theme_color": "#FF0000"}} })");
-      EXPECT_TRUE(manifest->user_preferences.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences":
-          {"color_scheme": {"dark": {"theme_color": "#FF0000"}}} })");
-      EXPECT_TRUE(manifest->user_preferences.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-  }
-  {
-    ScopedWebAppDarkModeForTest feature(true);
-
-    // Manifest does not contain a 'user_preferences' field.
-    {
-      auto& manifest = ParseManifest(R"({ })");
-      EXPECT_TRUE(manifest->user_preferences.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // user_preferences object is empty.
-    {
-      auto& manifest = ParseManifest(R"({ "user_preferences": {} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Empty preference is ignored.
-    {
-      auto& manifest =
-          ParseManifest(R"({ "user_preferences": {"color_scheme_dark": {}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences": {"color_scheme": {"dark": {}}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Valid theme_color and background_color should be parsed
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences": {"color_scheme_dark":
-          {"theme_color": "#FF0000", "background_color": "#FFF"}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_FALSE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->theme_color,
-                0xFFFF0000u);
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->background_color,
-                0xFFFFFFFFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences": {"color_scheme": {"dark":
-          {"theme_color": "#FF0000", "background_color": "#FFF"}}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_FALSE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->theme_color,
-                0xFFFF0000u);
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->background_color,
-                0xFFFFFFFFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Don't parse if the property isn't an object.
-    {
-      auto& manifest = ParseManifest(R"({ "user_preferences": [] })");
-      EXPECT_TRUE(manifest->user_preferences.is_null());
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("property 'user_preferences' ignored, object expected.",
-                errors()[0]);
-    }
-
-    // Ignore preference if it isn't an object.
-    {
-      auto& manifest =
-          ParseManifest(R"({ "user_preferences": {"color_scheme_dark": []} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("preference 'color_scheme_dark' ignored, object expected.",
-                errors()[0]);
-    }
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences": {"color_scheme": {"dark": []}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("preference 'dark' ignored, object expected.", errors()[0]);
-    }
-
-    // Ignore color_scheme if it isn't an object.
-    {
-      auto& manifest =
-          ParseManifest(R"({ "user_preferences": {"color_scheme": []} })");
-      EXPECT_TRUE(manifest->user_preferences.is_null());
-      EXPECT_EQ(1u, GetErrorCount());
-      EXPECT_EQ("property 'color_scheme' ignored, object expected.",
-                errors()[0]);
-    }
-
-    // Preferences overriding a single value should be parsed.
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences":
-          {"color_scheme_dark": {"theme_color": "#FF0000"}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_FALSE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->theme_color,
-                0xFFFF0000u);
-      EXPECT_FALSE(
-          manifest->user_preferences->color_scheme_dark->has_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences":
-          {"color_scheme": {"dark": {"theme_color": "#FF0000"}}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_FALSE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->theme_color,
-                0xFFFF0000u);
-      EXPECT_FALSE(
-          manifest->user_preferences->color_scheme_dark->has_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Unknown preference string should be ignored.
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences": {"something": {"theme_color": "#FF0000"}} })");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_TRUE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Manifests with both old and new formats should prefer the new format.
-    {
-      auto& manifest = ParseManifest(
-          R"({ "user_preferences":
-          {"color_scheme_dark": {"theme_color": "#FFFFFF"},
-          "color_scheme": {"dark": {"theme_color": "#FF0000"}}}})");
-      EXPECT_FALSE(manifest->user_preferences.is_null());
-      EXPECT_FALSE(manifest->user_preferences->color_scheme_dark.is_null());
-      EXPECT_EQ(manifest->user_preferences->color_scheme_dark->theme_color,
-                0xFFFF0000u);
-      EXPECT_FALSE(
-          manifest->user_preferences->color_scheme_dark->has_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-  }
-}
-
-TEST_F(ManifestParserTest, DarkColorOverrideParseRules) {
-  {
-    ScopedWebAppDarkModeForTest feature(false);
-
-    // Feature not enabled, should not be parsed.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000", "media": "(prefers-color-scheme: dark) "}],
-          "background_colors":
-            [{"color": "#000000", "media": "(prefers-color-scheme: dark) "}]
-          })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-  }
-  {
-    ScopedWebAppDarkModeForTest feature(true);
-
-    // Manifest does not contain any overrides fields.
-    {
-      auto& manifest = ParseManifest(R"({ })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Overrides objects are empty.
-    {
-      auto& manifest =
-          ParseManifest(R"({ "theme_colors": [], "background_colors": [] })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Don't parse if the overrides aren't arrays.
-    {
-      auto& manifest =
-          ParseManifest(R"({ "theme_colors": {}, "background_colors": 5 })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(2u, GetErrorCount());
-      EXPECT_EQ("property 'theme_colors' ignored, type array expected.",
-                errors()[0]);
-      EXPECT_EQ("property 'background_colors' ignored, type array expected.",
-                errors()[1]);
-    }
-
-    // Override arrays don't contain objects.
-    {
-      auto& manifest = ParseManifest(R"({
-            "theme_colors": [true],
-            "background_colors":
-            [5, {"color": "#0000FF", "media": "(prefers-color-scheme: dark) "}]
-            })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_TRUE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_background_color, 0xFF0000FFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Valid overrides should be parsed
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000", "media": "(prefers-color-scheme: dark) "}],
-          "background_colors":
-            [{"color": "#FFFFFF", "media": "(prefers-color-scheme: dark) "}]
-          })");
-      EXPECT_TRUE(manifest->has_dark_theme_color);
-      EXPECT_TRUE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_theme_color, 0xFF000000u);
-      EXPECT_EQ(manifest->dark_background_color, 0xFFFFFFFFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Color from first matching media condition used.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000", "media":
-            "(prefers-color-scheme: dark) and (prefers-contrast: more) "},
-            {"color": "#0000FF", "media": "(prefers-color-scheme: dark) "},
-            {"color": "#00FF00", "media": "(prefers-color-scheme: dark) "}]
-          })");
-      EXPECT_TRUE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_theme_color, 0xFF0000FFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Invalid list items skipped.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000"},
-            {"media": "(prefers-color-scheme: dark) "},
-            {"color": "#0000FF", "media": "(prefers-color-scheme: dark) "}]
-          })");
-      EXPECT_TRUE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_theme_color, 0xFF0000FFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Media query without "(prefers-color-scheme: dark)" not used as dark
-    // color.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000", "media": "(width >= 0) "}]
-          })");
-      EXPECT_FALSE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Case-insensitive media query is parsed.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000", "media": "(Prefers-color-scheme: DARK) "}]
-          })");
-      EXPECT_TRUE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_theme_color, 0xFF000000u);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
-
-    // Media query containing more than "(prefer-color-scheme: dark)" skipped.
-    {
-      auto& manifest = ParseManifest(R"({
-          "theme_colors":
-            [{"color": "#000000",
-              "media": "(width >= 0) and (prefers-color-scheme: dark) "},
-            {"color": "#0000FF", "media": "(prefers-color-scheme: dark) "}]
-          })");
-      EXPECT_TRUE(manifest->has_dark_theme_color);
-      EXPECT_FALSE(manifest->has_dark_background_color);
-      EXPECT_EQ(manifest->dark_theme_color, 0xFF0000FFu);
-      EXPECT_EQ(0u, GetErrorCount());
-    }
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTranslations));
   }
 }
 
 TEST_F(ManifestParserTest, TabStripParseRules) {
   using Visibility = mojom::blink::TabStripMemberVisibility;
   {
-    ScopedWebAppTabStripForTest feature(false);
-    // Feature not enabled, should not be parsed.
+    ScopedWebAppTabStripForTest feature1(true);
+    ScopedWebAppTabStripCustomizationsForTest feature2(false);
+    // Tab strip customizations feature not enabled, should not be parsed.
     {
       auto& manifest =
           ParseManifest(R"({ "tab_strip": {"home_tab": "auto"} })");
       EXPECT_TRUE(manifest->tab_strip.is_null());
       EXPECT_EQ(0u, GetErrorCount());
     }
+    EXPECT_FALSE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
   }
   {
-    ScopedWebAppTabStripForTest feature(true);
+    ScopedWebAppTabStripForTest feature1(true);
+    ScopedWebAppTabStripCustomizationsForTest feature2(true);
 
-    // Display mode not 'tabbed', 'tab_strip' should not be parsed.
+    // Display mode not 'tabbed', 'tab_strip' should still be parsed.
     {
       auto& manifest =
           ParseManifest(R"({ "tab_strip": {"home_tab": "auto"} })");
-      EXPECT_TRUE(manifest->tab_strip.is_null());
+      EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(0u, GetErrorCount());
+      EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+          WebFeature::kWebAppManifestTabStrip));
     }
 
     // Manifest does not contain 'tab_strip' field.
@@ -5821,72 +6423,62 @@ TEST_F(ManifestParserTest, TabStripParseRules) {
 
     // 'tab_strip' object is empty.
     {
-      auto& manifest = ParseManifest(
-          R"({  "display_override": [ "tabbed" ], "tab_strip": {} })");
+      auto& manifest = ParseManifest(R"({  "tab_strip": {} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_visibility(),
                 Visibility::kAuto);
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_visibility(),
-                Visibility::kAuto);
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
     // Home tab and new tab button are empty objects.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {"home_tab": {}, "new_tab_button": {}} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_params()->icons.size(), 0u);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_visibility());
-      EXPECT_FALSE(
-          manifest->tab_strip->new_tab_button->get_params()->url.has_value());
+      EXPECT_EQ(
+          manifest->tab_strip->home_tab->get_params()->scope_patterns.size(),
+          0u);
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
     // Home tab and new tab button are invalid.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {"home_tab": "something", "new_tab_button": 42} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_visibility(),
                 Visibility::kAuto);
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_params());
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_visibility(),
-                Visibility::kAuto);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_params());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
     // Unknown members of 'tab_strip' are ignored.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {"unknown": {}} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_visibility(),
                 Visibility::kAuto);
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_params());
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_visibility(),
-                Visibility::kAuto);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_params());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
     // Home tab with icons and new tab button with url are parsed.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {
             "home_tab": {"icons": [{"src": "foo.jpg"}]},
             "new_tab_button": {"url": "foo"}} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_params()->icons.size(), 1u);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_visibility());
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_params()->url,
+      EXPECT_EQ(manifest->tab_strip->new_tab_button->url,
                 KURL(DefaultDocumentUrl(), "foo"));
       EXPECT_EQ(0u, GetErrorCount());
     }
@@ -5894,12 +6486,9 @@ TEST_F(ManifestParserTest, TabStripParseRules) {
     // New tab button url out of scope.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {"new_tab_button": {"url": "https://bar.com"}} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_visibility());
-      EXPECT_FALSE(
-          manifest->tab_strip->new_tab_button->get_params()->url.has_value());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(1u, GetErrorCount());
       EXPECT_EQ(
           "property 'url' ignored, should be within scope of the manifest.",
@@ -5909,48 +6498,1277 @@ TEST_F(ManifestParserTest, TabStripParseRules) {
     // Home tab and new tab button set to 'auto'.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {"home_tab": "auto", "new_tab_button": "auto"} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_visibility(),
                 Visibility::kAuto);
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_params());
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_visibility(),
-                Visibility::kAuto);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_params());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
-    // Home tab and new tab button set to 'absent'.
+    // Home tab set to 'absent'.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
-          "tab_strip": {"home_tab": "absent", "new_tab_button": "absent"} })");
+          "tab_strip": {"home_tab": "absent"} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_visibility(),
                 Visibility::kAbsent);
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_params());
-      EXPECT_EQ(manifest->tab_strip->new_tab_button->get_visibility(),
-                Visibility::kAbsent);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_params());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
 
     // Home tab with 'auto' icons and new tab button with 'auto' url.
     {
       auto& manifest = ParseManifest(R"({
-          "display_override": [ "tabbed" ],
           "tab_strip": {
             "home_tab": {"icons": "auto"},
             "new_tab_button": {"url": "auto"}} })");
       EXPECT_FALSE(manifest->tab_strip.is_null());
       EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
       EXPECT_EQ(manifest->tab_strip->home_tab->get_params()->icons.size(), 0u);
-      EXPECT_FALSE(manifest->tab_strip->new_tab_button->is_visibility());
-      EXPECT_FALSE(
-          manifest->tab_strip->new_tab_button->get_params()->url.has_value());
+      EXPECT_FALSE(manifest->tab_strip->new_tab_button->url.has_value());
       EXPECT_EQ(0u, GetErrorCount());
     }
+  }
+}
+
+TEST_F(ManifestParserTest, TabStripHomeTabScopeParseRules) {
+  ScopedWebAppTabStripForTest feature(true);
+
+  // Valid scope hostname and protocol patterns override the default manifest
+  // URL.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {
+            "scope_patterns": [
+              { "protocol": "ftp" },
+              { "hostname": "bar.com" },
+              { "protocol": "ftp", "hostname": "bar.com" }
+            ]
+          }
+        }
+      })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+    EXPECT_THAT(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns,
+        ElementsAre(
+            PatternDataEq({.protocol = {"ftp"}}),
+            PatternDataEq({.protocol = {"http"}, .hostname = {"bar.com"}}),
+            PatternDataEq({.protocol = {"ftp"}, .hostname = {"bar.com"}})));
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Valid scope pathname patterns are parsed. Relative pathnames are made
+  // absolute, resolved relative to the manifest URL.
+  {
+    auto& manifest = ParseManifestWithURLs(
+        R"({
+          "tab_strip": {
+            "home_tab": {
+              "scope_patterns": [
+                { "pathname": "foo" },
+                { "pathname": "foo/bar/" },
+                { "pathname": "/foo/" },
+                { "pathname": "/foo/bar/" }
+              ]
+            }
+          }
+        })",
+        KURL("http://foo.com/static/manifest.json"), DefaultDocumentUrl());
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+    EXPECT_THAT(manifest->tab_strip->home_tab->get_params()->scope_patterns,
+                ElementsAre(PatternDataEq({.protocol = {"http"},
+                                           .hostname = {"foo.com"},
+                                           .pathname = {"/static/foo"}}),
+                            PatternDataEq({.protocol = {"http"},
+                                           .hostname = {"foo.com"},
+                                           .pathname = {"/static/foo/bar/"}}),
+                            PatternDataEq({.protocol = {"http"},
+                                           .hostname = {"foo.com"},
+                                           .pathname = {"/foo/"}}),
+                            PatternDataEq({.protocol = {"http"},
+                                           .hostname = {"foo.com"},
+                                           .pathname = {"/foo/bar/"}})));
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Base URL provided in scope patterns is respected if it is valid.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {
+            "scope_patterns": [
+              { "protocol": "ftp", "baseURL": "https://www.bar.com" },
+              { "hostname": "bar.com", "baseURL": "https://foobar.com" },
+              { "pathname": "/foo/bar/", "baseURL": "https://bar.com" },
+              // Invalid (expect to be discarded).
+              { "pathname": "/foobar/", "baseURL": "notaurl" },
+              { "pathname": "bar", "baseURL": "https://bar.com/foo" },
+              { "pathname": "bar", "baseURL": "https://bar.com/foo/" }
+            ]
+          }
+        }
+      })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+
+    EXPECT_THAT(manifest->tab_strip->home_tab->get_params()->scope_patterns,
+                ElementsAre(PatternDataEq({.protocol = {"ftp"}}),
+                            PatternDataEq({.protocol = {"https"},
+                                           .hostname = {"bar.com"}}),
+                            PatternDataEq({.protocol = {"https"},
+                                           .hostname = {"bar.com"},
+                                           .pathname = {"/foo/bar/"}}),
+                            PatternDataEq({.protocol = {"https"},
+                                           .hostname = {"bar.com"},
+                                           .pathname = {"/bar"}}),
+                            PatternDataEq({.protocol = {"https"},
+                                           .hostname = {"bar.com"},
+                                           .pathname = {"/foo/bar"}})));
+
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+
+  // Allow patterns with wildcards and named groups in the pathname.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {
+            "scope_patterns": [
+              { "pathname": "*" },
+              { "pathname": ":foo" },
+              { "pathname": "/foo/*" },
+              { "pathname": "/foo/*/bar" },
+              { "pathname": "/foo/:bar" },
+              { "pathname": "/foo/:bar/*" }
+            ]
+          }
+        }
+      })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+
+    EXPECT_THAT(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns,
+        ElementsAre(PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {PartType::kFullWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {PartType::kSegmentWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {"/foo", PartType::kFullWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {"/foo", PartType::kFullWildcard, "/bar"},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {"/foo", PartType::kSegmentWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo.com"},
+                        .pathname = {"/foo", PartType::kSegmentWildcard,
+                                     PartType::kFullWildcard},
+                    })));
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Allow patterns with wildcards and named groups in the hostname.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {
+            "scope_patterns": [
+              { "hostname": "*" },
+              { "hostname": "bar.com" },
+              { "hostname": "bar*.com" },
+              { "hostname": "bar.*" },
+              { "hostname": "bar.*.com" },
+              { "hostname": "foo.:bar.*" },
+              { "hostname": "*.com" }
+            ]
+          }
+        }
+      })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+
+    EXPECT_THAT(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns,
+        ElementsAre(PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {PartType::kFullWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"bar.com"},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"bar", PartType::kFullWildcard, ".com"},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"bar", PartType::kFullWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"bar", PartType::kFullWildcard, ".com"},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {"foo", PartType::kSegmentWildcard,
+                                     PartType::kFullWildcard},
+                    }),
+                    PatternDataEq({
+                        .protocol = {"http"},
+                        .hostname = {PartType::kFullWildcard, ".com"},
+                    })));
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Reject patterns containing custom regex in any field, with errors.
+  {
+    auto& manifest = ParseManifest(R"a({
+        "tab_strip": {
+          "home_tab": {"scope_patterns":
+            [{"pathname": "([a-z]+)/"}, {"pathname": "/foo/([a-z]+)/"},
+            {"protocol": "http([a-z])+)"}, {"hostname": "([a-z]+).com"},
+            {"username": "([A-Za-z])+"}, {"password": "([A-Za-z0-9@%^!])+"},
+            {"port": "(80|443)"}, {"hash": "([a-zA-Z0-9])+"},
+            {"search": "([A-Za-z0-9])+"}
+    ]}} })a");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+    EXPECT_EQ(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns.size(), 0u);
+
+    EXPECT_EQ(9u, GetErrorCount());
+  }
+
+  // Patterns list doesn't contain objects.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {"scope_patterns": ["blah", 3]}} })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+    EXPECT_EQ(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns.size(), 0u);
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Pattern list is empty.
+  {
+    auto& manifest = ParseManifest(R"({
+        "tab_strip": {
+          "home_tab": {"scope_patterns": []}} })");
+    EXPECT_FALSE(manifest->tab_strip.is_null());
+    EXPECT_TRUE(GetDocument().Loader()->GetUseCounter().IsCounted(
+        WebFeature::kWebAppManifestTabStrip));
+    EXPECT_FALSE(manifest->tab_strip->home_tab->is_visibility());
+    EXPECT_EQ(
+        manifest->tab_strip->home_tab->get_params()->scope_patterns.size(), 0u);
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, VersionParseRules) {
+  // Valid versions are parsed.
+  {
+    auto& manifest = ParseManifest(R"({ "version": "1.2.3" })");
+    EXPECT_FALSE(manifest->version.IsNull());
+    EXPECT_EQ(manifest->version, "1.2.3");
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Do not tamper with the version string in any way.
+  {
+    auto& manifest = ParseManifest(R"({ "version": " abc !^?$ test " })");
+    EXPECT_FALSE(manifest->version.IsNull());
+    EXPECT_EQ(manifest->version, " abc !^?$ test ");
+
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Reject versions that are not strings.
+  {
+    auto& manifest = ParseManifest(R"({ "version": 123 })");
+    EXPECT_TRUE(manifest->version.IsNull());
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, NameLocalizedParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebAppManifestLocalization);
+
+  // Smoke test.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": "English Name",
+        "es": "Nombre en Español"
+      }
+    })");
+    EXPECT_FALSE(!manifest->name_localized ||
+                 manifest->name_localized->empty());
+    EXPECT_EQ(manifest->name_localized->size(), 2u);
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "English Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Nombre en Español");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: object format.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": {
+          "value": "English Name",
+          "lang": "en-US",
+          "dir": "ltr"
+        },
+        "ar": {
+          "value": "اسم عربي",
+          "lang": "ar",
+          "dir": "rtl"
+        }
+      }
+    })");
+    EXPECT_FALSE(!manifest->name_localized ||
+                 manifest->name_localized->empty());
+    EXPECT_EQ(manifest->name_localized->size(), 2u);
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "English Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->lang,
+              "en-US");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->dir,
+              mojom::blink::Manifest::TextDirection::kLTR);
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("ar"))->value->value,
+              "اسم عربي");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("ar"))->value->lang,
+              "ar");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("ar"))->value->dir,
+              mojom::blink::Manifest::TextDirection::kRTL);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Trim whitespaces.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": "  English Name  ",
+        "es": {
+          "value": "  Nombre en Español  ",
+          "lang": "  es-ES  "
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "English Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Nombre en Español");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->lang,
+              "es-ES");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Test stripping out of \t \r and \n.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": "\t\r\nEnglish Name\t\r\n",
+        "es": {
+          "value": "\t\r\nNombre en Español\t\r\n",
+          "lang": "\t\r\nes-ES\t\r\n"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "English Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Nombre en Español");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->lang,
+              "es-ES");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Empty values are ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": "",
+        "es": "Valid Name",
+        "fr": {
+          "value": "",
+          "lang": "fr"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 1u);
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Valid Name");
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+
+  // Non-string and non-object values are ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": "Valid Name",
+        "es": 42,
+        "fr": null,
+        "de": ["array", "value"]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 1u);
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("en")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "Valid Name");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Missing value in object format is ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": {
+          "lang": "en-US",
+          "dir": "ltr"
+        },
+        "es": {
+          "value": "Valid Name",
+          "lang": "es"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 1u);
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Valid Name");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Invalid language tags are ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "name_localized": {
+        "en": {
+          "value": "Valid Name",
+          "lang": "en-US"
+        },
+        "es": {
+          "value": "Should be ignored",
+          "lang": "not-a-valid-language-tag-!!!"
+        },
+        "fr": {
+          "value": "Also ignored",
+          "lang": "123-invalid"
+        },
+        "de": {
+          "value": "German Name",
+          "lang": "de-DE"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 2u);
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("de")));
+    EXPECT_FALSE(manifest->name_localized->Contains(icu::Locale("es")));
+    EXPECT_FALSE(manifest->name_localized->Contains(icu::Locale("fr")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "Valid Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->lang,
+              "en-US");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("de"))->value->value,
+              "German Name");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("de"))->value->lang,
+              "de-DE");
+    EXPECT_EQ(2u, GetErrorCount());
+    EXPECT_EQ(
+        errors()[0],
+        "property 'name_localized' entry for 'es' ignored, invalid language "
+        "tag 'not-a-valid-language-tag-!!!'.");
+    EXPECT_EQ(errors()[1],
+              "property 'name_localized' entry for 'fr' ignored, invalid "
+              "language tag '123-invalid'.");
+  }
+
+  // Manifest-level lang is used as fallback when entry has no lang.
+  {
+    auto& manifest = ParseManifest(R"({
+      "lang": "en-US",
+      "name_localized": {
+        "en": "Uses Manifest Lang",
+        "es": {
+          "value": "Uses Own Lang",
+          "lang": "es-ES"
+        },
+        "fr": {
+          "value": "Also Uses Manifest Lang"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 3u);
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->value,
+              "Uses Manifest Lang");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("en"))->value->lang,
+              "en-US");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Uses Own Lang");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->lang,
+              "es-ES");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("fr"))->value->value,
+              "Also Uses Manifest Lang");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("fr"))->value->lang,
+              "en-US");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Manifest-level lang fallback is validated.
+  {
+    auto& manifest = ParseManifest(R"({
+      "lang": "invalid-lang-!!!",
+      "name_localized": {
+        "en": "Should be ignored",
+        "es": {
+          "value": "Uses Valid Lang",
+          "lang": "es-ES"
+        }
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(manifest->name_localized->size(), 1u);
+    EXPECT_FALSE(manifest->name_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->value,
+              "Uses Valid Lang");
+    EXPECT_EQ(manifest->name_localized->find(icu::Locale("es"))->value->lang,
+              "es-ES");
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        errors()[0],
+        "property 'name_localized' entry for 'en' ignored, invalid language "
+        "tag 'invalid-lang-!!!'.");
+  }
+
+  // Don't parse if name_localized isn't an object.
+  {
+    auto& manifest = ParseManifest(R"({ "name_localized": "not an object" })");
+    EXPECT_TRUE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Don't parse if name_localized is an array.
+  {
+    auto& manifest =
+        ParseManifest(R"({ "name_localized": ["array", "value"] })");
+    EXPECT_TRUE(
+        (!manifest->name_localized || manifest->name_localized->empty()));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, ShortNameLocalizedParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebAppManifestLocalization);
+
+  // Smoke test.
+  {
+    auto& manifest = ParseManifest(R"({
+      "short_name_localized": {
+        "en": "Short",
+        "es": "Corto"
+      }
+    })");
+    EXPECT_FALSE((!manifest->short_name_localized ||
+                  manifest->short_name_localized->empty()));
+    EXPECT_EQ(manifest->short_name_localized->size(), 2u);
+    EXPECT_TRUE(manifest->short_name_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->short_name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->value,
+        "Short");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->value,
+        "Corto");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: object format.
+  {
+    auto& manifest = ParseManifest(R"({
+      "short_name_localized": {
+        "en": {
+          "value": "Short",
+          "lang": "en-US",
+          "dir": "ltr"
+        },
+        "ar": {
+          "value": "قصير",
+          "lang": "ar",
+          "dir": "rtl"
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->short_name_localized ||
+                  manifest->short_name_localized->empty()));
+    EXPECT_EQ(manifest->short_name_localized->size(), 2u);
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->value,
+        "Short");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->lang,
+        "en-US");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->dir,
+        mojom::blink::Manifest::TextDirection::kLTR);
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("ar"))->value->value,
+        "قصير");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("ar"))->value->lang,
+        "ar");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("ar"))->value->dir,
+        mojom::blink::Manifest::TextDirection::kRTL);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Trim whitespaces.
+  {
+    auto& manifest = ParseManifest(R"({
+      "short_name_localized": {
+        "en": "  Short  ",
+        "es": {
+          "value": "  Corto  ",
+          "lang": "  es-ES  "
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->short_name_localized ||
+                  manifest->short_name_localized->empty()));
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->value,
+        "Short");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->value,
+        "Corto");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->lang,
+        "es-ES");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Test stripping out of \t \r and \n.
+  {
+    auto& manifest = ParseManifest(R"({
+      "short_name_localized": {
+        "en": "\t\r\nShort\t\r\n",
+        "es": {
+          "value": "\t\r\nCorto\t\r\n",
+          "lang": "\t\r\nes-ES\t\r\n"
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->short_name_localized ||
+                  manifest->short_name_localized->empty()));
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("en"))->value->value,
+        "Short");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->value,
+        "Corto");
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->lang,
+        "es-ES");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Empty values are ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "short_name_localized": {
+        "en": "",
+        "es": "Valid",
+        "fr": {
+          "value": "",
+          "lang": "fr"
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->short_name_localized ||
+                  manifest->short_name_localized->empty()));
+    EXPECT_EQ(manifest->short_name_localized->size(), 1u);
+    EXPECT_TRUE(manifest->short_name_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(
+        manifest->short_name_localized->find(icu::Locale("es"))->value->value,
+        "Valid");
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+
+  // Don't parse if short_name_localized isn't an object.
+  {
+    auto& manifest =
+        ParseManifest(R"({ "short_name_localized": "not an object" })");
+    EXPECT_TRUE((!manifest->short_name_localized ||
+                 manifest->short_name_localized->empty()));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, DescriptionLocalizedParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebAppManifestLocalization);
+
+  // Smoke test.
+  {
+    auto& manifest = ParseManifest(R"({
+      "description_localized": {
+        "en": "English description",
+        "es": "Descripción en español"
+      }
+    })");
+    EXPECT_FALSE((!manifest->description_localized ||
+                  manifest->description_localized->empty()));
+    EXPECT_EQ(manifest->description_localized->size(), 2u);
+    EXPECT_TRUE(manifest->description_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->description_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("en"))->value->value,
+        "English description");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("es"))->value->value,
+        "Descripción en español");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: object format.
+  {
+    auto& manifest = ParseManifest(R"({
+      "description_localized": {
+        "en": {
+          "value": "English description",
+          "lang": "en-US",
+          "dir": "ltr"
+        },
+        "ar": {
+          "value": "وصف عربي",
+          "lang": "ar",
+          "dir": "rtl"
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->description_localized ||
+                  manifest->description_localized->empty()));
+    EXPECT_EQ(manifest->description_localized->size(), 2u);
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("en"))->value->value,
+        "English description");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("en"))->value->lang,
+        "en-US");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("en"))->value->dir,
+        mojom::blink::Manifest::TextDirection::kLTR);
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("ar"))->value->value,
+        "وصف عربي");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("ar"))->value->lang,
+        "ar");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("ar"))->value->dir,
+        mojom::blink::Manifest::TextDirection::kRTL);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Trim whitespaces.
+  {
+    auto& manifest = ParseManifest(R"({
+      "description_localized": {
+        "en": "  English description  ",
+        "es": {
+          "value": "  Descripción en español  ",
+          "lang": "  es-ES  "
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->description_localized ||
+                  manifest->description_localized->empty()));
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("en"))->value->value,
+        "English description");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("es"))->value->value,
+        "Descripción en español");
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("es"))->value->lang,
+        "es-ES");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Empty values are ignored.
+  {
+    auto& manifest = ParseManifest(R"({
+      "description_localized": {
+        "en": "",
+        "es": "Valid description",
+        "fr": {
+          "value": "",
+          "lang": "fr"
+        }
+      }
+    })");
+    EXPECT_FALSE((!manifest->description_localized ||
+                  manifest->description_localized->empty()));
+    EXPECT_EQ(manifest->description_localized->size(), 1u);
+    EXPECT_TRUE(manifest->description_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(
+        manifest->description_localized->find(icu::Locale("es"))->value->value,
+        "Valid description");
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+
+  // Don't parse if description_localized isn't an object.
+  {
+    auto& manifest =
+        ParseManifest(R"({ "description_localized": "not an object" })");
+    EXPECT_TRUE((!manifest->description_localized ||
+                 manifest->description_localized->empty()));
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+}
+
+TEST_F(ManifestParserTest, IconsLocalizedParseRules) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebAppManifestLocalization);
+
+  // Smoke test: if one icon with valid src, it will be present in the list.
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [
+          { "src": "icon-en.png", "sizes": "32x32", "type": "image/png" }
+        ],
+        "es": [
+          { "src": "icon-es.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 2u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("en")));
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("es")));
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/icon-en.png");
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/icon-es.png");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: multiple icons per locale.
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [
+          { "src": "icon-en-32.png", "sizes": "32x32", "type": "image/png" },
+          { "src": "icon-en-64.png", "sizes": "64x64", "type": "image/png" }
+        ],
+        "es": [
+          { "src": "icon-es-32.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 2u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              2u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/icon-en-32.png");
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[1]
+                  ->src.GetString(),
+              "http://foo.com/icon-en-64.png");
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/icon-es-32.png");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Test that empty icon arrays are ignored
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [],
+        "es": [
+          { "src": "icon-es.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("es")));
+    EXPECT_FALSE(manifest->icons_localized->Contains(icu::Locale("en")));
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))->value.size(),
+              1u);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: if empty icon, no value.
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [ {} ],
+        "es": [
+          { "src": "icon-es.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("es")));
+    EXPECT_FALSE(manifest->icons_localized->Contains(icu::Locale("en")));
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("es"))->value.size(),
+              1u);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: icon with invalid src, no value.
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [
+          { "icons": [] },
+          { "src": "valid-icon.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/valid-icon.png");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Smoke test: if icon with empty src, it will be present in the list.
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [ { "src": "" } ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/manifest.json");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Test icon src validation - non-string src property should cause icon to be
+  // ignored
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [
+          { "src": {} },
+          { "src": "valid-icon.png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/valid-icon.png");
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'src' ignored, type string expected.", errors()[0]);
+  }
+
+  // Test comprehensive icon with all properties
+  {
+    auto& manifest = ParseManifest(R"(
+        {
+          "icons_localized": {
+            "en": [
+              {
+                "src": "foo.webp",
+                "type": "image/webp",
+                "sizes": "192x192"
+              },
+              {
+                "src": "foo.svg",
+                "type": "image/svg+xml",
+                "sizes": "144x144"
+              }
+            ]
+          }
+        }
+      )");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              2u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value[0]->src,
+              KURL(DefaultDocumentUrl(), "foo.webp"));
+    EXPECT_EQ(
+        manifest->icons_localized->find(icu::Locale("en"))->value[0]->type,
+        "image/webp");
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->sizes.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->sizes[0]
+                  .width(),
+              192);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->sizes[0]
+                  .height(),
+              192);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value[1]->src,
+              KURL(DefaultDocumentUrl(), "foo.svg"));
+    EXPECT_EQ(
+        manifest->icons_localized->find(icu::Locale("en"))->value[1]->type,
+        "image/svg+xml");
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[1]
+                  ->sizes.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[1]
+                  ->sizes[0]
+                  .width(),
+              144);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[1]
+                  ->sizes[0]
+                  .height(),
+              144);
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Test that invalid icons are ignored but valid ones are kept
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": [
+          { "sizes": "32x32", "type": "image/png" },
+          { "src": "valid-icon.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))->value.size(),
+              1u);
+    EXPECT_EQ(manifest->icons_localized->find(icu::Locale("en"))
+                  ->value[0]
+                  ->src.GetString(),
+              "http://foo.com/valid-icon.png");
+    EXPECT_EQ(0u, GetErrorCount());
+  }
+
+  // Don't parse if icons_localized isn't an object
+  {
+    auto& manifest = ParseManifest(R"({ "icons_localized": "not an object" })");
+    EXPECT_TRUE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'icons_localized' ignored, type object expected.",
+              errors()[0]);
+  }
+
+  // Don't parse if icons_localized is an array
+  {
+    auto& manifest =
+        ParseManifest(R"({ "icons_localized": ["array", "value"] })");
+    EXPECT_TRUE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ("property 'icons_localized' ignored, type object expected.",
+              errors()[0]);
+  }
+
+  // Test that non-array values for locales are ignored
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "en": "not an array",
+        "es": [
+          { "src": "valid-icon.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("es")));
+    EXPECT_FALSE(manifest->icons_localized->Contains(icu::Locale("en")));
+    EXPECT_EQ(1u, GetErrorCount());
+  }
+
+  // Test that invalid locale keys are ignored
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "invalid@locale": [
+          { "src": "icon-invalid.png", "sizes": "32x32", "type": "image/png" }
+        ],
+        "en": [
+          { "src": "icon-en.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("en")));
+    EXPECT_FALSE(
+        manifest->icons_localized->Contains(icu::Locale("invalid@locale")));
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'icons_localized' entry for 'invalid@locale' ignored, "
+        "invalid locale key.",
+        errors()[0]);
+  }
+
+  // Test that root locale ("") is treated as invalid
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "": [
+          { "src": "icon-root.png", "sizes": "32x32", "type": "image/png" }
+        ],
+        "fr": [
+          { "src": "icon-fr.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("fr")));
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'icons_localized' entry for '' ignored, invalid locale key.",
+        errors()[0]);
+  }
+
+  // Test that bogus locale tags are ignored
+  {
+    auto& manifest = ParseManifest(R"({
+      "icons_localized": {
+        "!!!": [
+          { "src": "icon-bogus.png", "sizes": "32x32", "type": "image/png" }
+        ],
+        "de": [
+          { "src": "icon-de.png", "sizes": "32x32", "type": "image/png" }
+        ]
+      }
+    })");
+    EXPECT_FALSE(
+        (!manifest->icons_localized || manifest->icons_localized->empty()));
+    EXPECT_EQ(manifest->icons_localized->size(), 1u);
+    EXPECT_TRUE(manifest->icons_localized->Contains(icu::Locale("de")));
+    EXPECT_EQ(1u, GetErrorCount());
+    EXPECT_EQ(
+        "property 'icons_localized' entry for '!!!' ignored, invalid locale "
+        "key.",
+        errors()[0]);
   }
 }
 

@@ -14,10 +14,6 @@
 #import "testing/gtest_mac.h"
 #import "url/gurl.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
 
@@ -59,7 +55,7 @@ TEST_F(HttpAuthTest, SuccessfullBasicAuth) {
   EXPECT_NSEQ(@"Realm1", protection_space.realm);
   EXPECT_FALSE(protection_space.receivesCredentialSecurely);
   EXPECT_FALSE([protection_space isProxy]);
-  EXPECT_EQ(url.host(), base::SysNSStringToUTF8(protection_space.host));
+  EXPECT_EQ(url.GetHost(), base::SysNSStringToUTF8(protection_space.host));
   EXPECT_EQ(server_.port(),
             base::checked_cast<uint16_t>(protection_space.port));
   EXPECT_FALSE(protection_space.proxyType);
@@ -98,7 +94,7 @@ TEST_F(HttpAuthTest, UnsucessfulBasicAuth) {
   EXPECT_NSEQ(@"Realm2", protection_space.realm);
   EXPECT_FALSE(protection_space.receivesCredentialSecurely);
   EXPECT_FALSE([protection_space isProxy]);
-  EXPECT_EQ(url.host(), base::SysNSStringToUTF8(protection_space.host));
+  EXPECT_EQ(url.GetHost(), base::SysNSStringToUTF8(protection_space.host));
   EXPECT_EQ(server_.port(),
             base::checked_cast<uint16_t>(protection_space.port));
   EXPECT_FALSE(protection_space.proxyType);
@@ -114,4 +110,4 @@ TEST_F(HttpAuthTest, UnsucessfulBasicAuth) {
   }));
 }
 
-}  // web
+}  // namespace web

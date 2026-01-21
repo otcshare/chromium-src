@@ -16,25 +16,26 @@ namespace content {
 class FrameTreeNode;
 
 // PrerenderSubframeNavigationThrottle defers cross-origin subframe loading
-// during the main frame is in a prerendered state.
+// during the main frame is in a prerendered state unless the main frame
+// has `Supports-Loading-Mode: prerender-cross-origin-frames` header.
 class PrerenderSubframeNavigationThrottle : public NavigationThrottle,
                                             public PrerenderHost::Observer,
                                             public WebContentsObserver {
  public:
   ~PrerenderSubframeNavigationThrottle() override;
 
-  static std::unique_ptr<PrerenderSubframeNavigationThrottle>
-  MaybeCreateThrottleFor(NavigationHandle* navigation_handle);
+  static void MaybeCreateAndAdd(NavigationThrottleRegistry& registry);
 
  private:
   explicit PrerenderSubframeNavigationThrottle(
-      NavigationHandle* navigation_handle);
+          NavigationThrottleRegistry& registry);
 
   // NavigationThrottle
   const char* GetNameForLogging() override;
   ThrottleCheckResult WillStartRequest() override;
   ThrottleCheckResult WillRedirectRequest() override;
   ThrottleCheckResult WillProcessResponse() override;
+  ThrottleCheckResult WillCommitWithoutUrlLoader() override;
 
   // PrerenderHost::Observer
   void OnActivated() override;
@@ -45,15 +46,11 @@ class PrerenderSubframeNavigationThrottle : public NavigationThrottle,
 
   ThrottleCheckResult WillStartOrRedirectRequest();
 
-  // Called when this throttle defers a navigation. Observes the PrerenderHost
-  // so that the throttle can resume the navigation upon activation, and returns
-  // ThrottleCheckResult::DEFER. If it's not feasible to defer it, returns
-  // Throttlecheckresult::CANCEL.
-  ThrottleCheckResult DeferOrCancelCrossOriginSubframeNavigation(
+  ThrottleCheckResult DecidePolicyForCrossOriginSubframeNavigation(
       const FrameTreeNode& frame_tree_node);
 
   bool is_deferred_ = false;
-  const int prerender_root_ftn_id_;
+  const PrerenderHostId prerender_host_id_;
   base::ScopedObservation<PrerenderHost, PrerenderHost::Observer> observation_{
       this};
 };

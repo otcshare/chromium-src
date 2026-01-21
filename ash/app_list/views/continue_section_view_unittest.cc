@@ -5,6 +5,7 @@
 #include "ash/app_list/views/continue_section_view.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -25,21 +26,25 @@
 #include "ash/app_list/views/recent_apps_view.h"
 #include "ash/app_list/views/scrollable_apps_grid_view.h"
 #include "ash/app_list/views/search_box_view.h"
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animation_stopped_waiter.h"
+#include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/radio_button.h"
@@ -123,14 +128,15 @@ class ContinueSectionViewTestBase : public AshTestBase {
       animations_timer->FireNow();
 
     animation_duration_.emplace(
-        ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+        gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
     return GetCurrentLayerBoundsForAllTaskViews();
   }
 
   ContinueSectionView* GetContinueSectionView() {
-    if (Shell::Get()->tablet_mode_controller()->InTabletMode())
+    if (display::Screen::Get()->InTabletMode()) {
       return GetAppListTestHelper()->GetFullscreenContinueSectionView();
+    }
     return GetAppListTestHelper()->GetBubbleContinueSectionView();
   }
 
@@ -139,14 +145,16 @@ class ContinueSectionViewTestBase : public AshTestBase {
   }
 
   views::View* GetRecentAppsView() {
-    if (Shell::Get()->tablet_mode_controller()->InTabletMode())
+    if (display::Screen::Get()->InTabletMode()) {
       return GetAppListTestHelper()->GetFullscreenRecentAppsView();
+    }
     return GetAppListTestHelper()->GetBubbleRecentAppsView();
   }
 
   views::View* GetAppsGridView() {
-    if (Shell::Get()->tablet_mode_controller()->InTabletMode())
+    if (display::Screen::Get()->InTabletMode()) {
       return GetAppListTestHelper()->GetRootPagedAppsGridView();
+    }
     return GetAppListTestHelper()->GetScrollableAppsGridView();
   }
 
@@ -189,8 +197,9 @@ class ContinueSectionViewTestBase : public AshTestBase {
   }
 
   SearchBoxView* GetSearchBoxView() {
-    if (Shell::Get()->tablet_mode_controller()->InTabletMode())
+    if (display::Screen::Get()->InTabletMode()) {
       return GetAppListTestHelper()->GetSearchBoxView();
+    }
     return GetAppListTestHelper()->GetBubbleSearchBoxView();
   }
 
@@ -219,7 +228,7 @@ class ContinueSectionViewTestBase : public AshTestBase {
   void EnsureLauncherShown() {
     if (tablet_mode_param()) {
       // Convert to tablet mode to show fullscren launcher.
-      Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+      ash::TabletModeControllerTestApi().EnterTabletMode();
       Shell::Get()->app_list_controller()->ShowAppList(
           AppListShowSource::kSearchKey);
       test_api_ = std::make_unique<test::AppsGridViewTestApi>(
@@ -245,7 +254,7 @@ class ContinueSectionViewTestBase : public AshTestBase {
       ui::test::EventGenerator* generator = GetEventGenerator();
       generator->set_current_screen_location(location);
       generator->PressTouch();
-      ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+      ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
       ui::GestureEvent long_press(location.x(), location.y(), 0,
                                   base::TimeTicks::Now(), event_details);
       generator->Dispatch(&long_press);
@@ -298,7 +307,7 @@ class ContinueSectionViewTestBase : public AshTestBase {
  private:
   bool tablet_mode_ = false;
 
-  absl::optional<ui::ScopedAnimationDurationScaleMode> animation_duration_;
+  std::optional<gfx::ScopedAnimationDurationScaleMode> animation_duration_;
   std::unique_ptr<test::AppsGridViewTestApi> test_api_;
 };
 
@@ -340,7 +349,7 @@ class ContinueSectionViewWithReorderNudgeTest
   }
 
   AppListToastContainerView* GetToastContainerView() {
-    if (!Shell::Get()->tablet_mode_controller()->InTabletMode()) {
+    if (!display::Screen::Get()->InTabletMode()) {
       return GetAppListTestHelper()
           ->GetBubbleAppsPage()
           ->toast_container_for_test();
@@ -380,6 +389,21 @@ TEST_P(ContinueSectionViewTest, VerifyAddedViewsOrder) {
   EXPECT_EQ(GetResultViewAt(0)->result()->id(), "id1");
   EXPECT_EQ(GetResultViewAt(1)->result()->id(), "id2");
   EXPECT_EQ(GetResultViewAt(2)->result()->id(), "id3");
+}
+
+// Tests that the continue section view will be visible once we have a admin
+// template.
+TEST_P(ContinueSectionViewTest, ShowContinueSectionWhenAdminTemplateAvailable) {
+  base::test::ScopedFeatureList scoped_list;
+
+  AddSearchResult("id", AppListSearchResultType::kDesksAdminTemplate);
+
+  EnsureLauncherShown();
+  VerifyResultViewsUpdated();
+
+  ContinueSectionView* view = GetContinueSectionView();
+  ASSERT_EQ(view->GetTasksSuggestionsCount(), 1u);
+  EXPECT_TRUE(GetContinueSectionView()->GetVisible());
 }
 
 TEST_P(ContinueSectionViewTest, ShowsHelpAppResults) {
@@ -862,6 +886,8 @@ TEST_P(ContinueSectionViewTest, UpdateAppsOnModelChange) {
   // accordingly.
   auto model_override = std::make_unique<test::AppListTestModel>();
   auto search_model_override = std::make_unique<SearchModel>();
+  auto quick_app_access_model_override =
+      std::make_unique<QuickAppAccessModel>();
 
   AddSearchResultToModel("id21", AppListSearchResultType::kZeroStateFile,
                          search_model_override.get(), "Fake Title");
@@ -871,7 +897,8 @@ TEST_P(ContinueSectionViewTest, UpdateAppsOnModelChange) {
                          search_model_override.get(), "Fake Title");
 
   Shell::Get()->app_list_controller()->SetActiveModel(
-      /*profile_id=*/1, model_override.get(), search_model_override.get());
+      /*profile_id=*/1, model_override.get(), search_model_override.get(),
+      quick_app_access_model_override.get());
   GetContinueSectionView()->GetWidget()->LayoutRootViewIfNecessary();
 
   EXPECT_EQ(std::vector<std::string>({"id21", "id22", "id23"}), GetResultIds());
@@ -1384,7 +1411,7 @@ TEST_F(ContinueSectionViewTabletModeTest, PrivacyNoticeIsShownInBackground) {
   // Activate the search box. The privacy notice will become inactive but the
   // view still exists.
   auto* search_box = GetAppListTestHelper()->GetSearchBoxView();
-  search_box->SetSearchBoxActive(true, ui::ET_MOUSE_PRESSED);
+  search_box->SetSearchBoxActive(true, ui::EventType::kMousePressed);
 
   EXPECT_TRUE(IsPrivacyNoticeVisible());
   EXPECT_EQ(GetAppListNudgeController()->current_nudge(),
@@ -1405,8 +1432,8 @@ TEST_F(ContinueSectionViewTabletModeTest, PrivacyNoticeIsShownInBackground) {
             AppListNudgeController::NudgeType::kPrivacyNotice);
 
   // Activate the search box and then deactivate it.
-  search_box->SetSearchBoxActive(true, ui::ET_MOUSE_PRESSED);
-  search_box->SetSearchBoxActive(false, ui::ET_MOUSE_PRESSED);
+  search_box->SetSearchBoxActive(true, ui::EventType::kMousePressed);
+  search_box->SetSearchBoxActive(false, ui::EventType::kMousePressed);
 
   // The privacy notice timer should be restarted after the search box becomes
   // inactive.
@@ -1424,7 +1451,7 @@ TEST_P(ContinueSectionViewTest, InitialShowDoesNotAnimate) {
       InitializeForAnimationTest(/*result_count=*/5);
   ASSERT_EQ(4u, initial_bounds.size());
 
-  std::vector<views::View*> container_children =
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
       GetContinueSectionView()->suggestions_container()->children();
   ASSERT_EQ(4u, container_children.size());
   for (int i = 0; i < 4; ++i) {
@@ -1441,7 +1468,7 @@ TEST_P(ContinueSectionViewTest, UpdateWithNoChangesDoesNotAnimate) {
   GetContinueSectionView()->suggestions_container()->Update();
   base::RunLoop().RunUntilIdle();
 
-  std::vector<views::View*> container_children =
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
       GetContinueSectionView()->suggestions_container()->children();
   ASSERT_EQ(4u, container_children.size());
   for (int i = 0; i < 4; ++i) {
@@ -1461,7 +1488,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenLastItemReplaced) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1518,7 +1546,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenFirstItemRemoved) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1581,7 +1610,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenSecondItemRemoved) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1651,7 +1681,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenThirdItemRemoved) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1726,7 +1757,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenItemInserted) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1804,7 +1836,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenTwoItemsRemoved) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
 
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
@@ -1884,7 +1917,8 @@ TEST_P(ContinueSectionViewTest, ResultRemovedMidAnimation) {
   GetResults()->DeleteAt(1);
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 4, container_children.size());
 
@@ -1963,7 +1997,8 @@ TEST_P(ContinueSectionViewTest, ContinueSectionHiddenMidAnimation) {
   container_view->Update();
 
   EXPECT_FALSE(GetContinueSectionView()->GetVisible());
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   ASSERT_EQ(1u, container_children.size());
   EXPECT_FALSE(container_children[0]->layer()->GetAnimator()->is_animating());
 }
@@ -1979,7 +2014,8 @@ TEST_P(ContinueSectionViewTest, AnimatesWhenNumberOfChipsChanges) {
       GetContinueSectionView()->suggestions_container();
   container_view->Update();
 
-  std::vector<views::View*> container_children = container_view->children();
+  std::vector<raw_ptr<views::View, VectorExperimental>> container_children =
+      container_view->children();
   const size_t new_views_start = 4;
   ASSERT_EQ(new_views_start + 3, container_children.size());
 

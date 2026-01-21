@@ -9,8 +9,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/global_routing_id.h"
 #include "media/mojo/mojom/audio_output_stream.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/media/renderer_audio_input_stream_factory.mojom.h"
@@ -21,7 +22,6 @@ class UnguessableToken;
 
 namespace media {
 class AudioParameters;
-class UserInputMonitorBase;
 namespace mojom {
 class AudioStreamFactory;
 }
@@ -70,13 +70,6 @@ class CONTENT_EXPORT AudioStreamBroker {
 
   virtual void CreateStream(media::mojom::AudioStreamFactory* factory) = 0;
 
-  // Thread-safe utility that notifies the process host identified by
-  // |render_process_id| of a started stream to ensure that the renderer is not
-  // backgrounded. Must be paired with a later call to
-  // NotifyRenderProcessOfStoppedStream()
-  static void NotifyProcessHostOfStartedStream(int render_process_id);
-  static void NotifyProcessHostOfStoppedStream(int render_process_id);
-
   int render_process_id() const { return render_process_id_; }
   int render_frame_id() const { return render_frame_id_; }
 
@@ -103,8 +96,8 @@ class CONTENT_EXPORT AudioStreamBrokerFactory {
       int render_frame_id,
       const std::string& device_id,
       const media::AudioParameters& params,
+      const base::UnguessableToken& group_id,
       uint32_t shared_memory_count,
-      media::UserInputMonitorBase* user_input_monitor,
       bool enable_agc,
       media::mojom::AudioProcessingConfigPtr processing_config,
       AudioStreamBroker::DeleterCallback deleter,
@@ -125,6 +118,7 @@ class CONTENT_EXPORT AudioStreamBrokerFactory {
   virtual std::unique_ptr<AudioStreamBroker> CreateAudioOutputStreamBroker(
       int render_process_id,
       int render_frame_id,
+      const GlobalRenderFrameHostToken& main_frame_token,
       int stream_id,
       const std::string& output_device_id,
       const media::AudioParameters& params,

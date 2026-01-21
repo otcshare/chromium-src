@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {PageCallbackRouter, PageHandlerFactory, PageHandlerInterface, PageHandlerRemote} from './app_home.mojom-webui.js';
+import type {PageHandlerInterface} from './app_home.mojom-webui.js';
+import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from './app_home.mojom-webui.js';
 
 export class BrowserProxy {
   callbackRouter: PageCallbackRouter;
@@ -25,10 +26,6 @@ export class BrowserProxy {
 
   static setInstance(obj: BrowserProxy) {
     instance = obj;
-  }
-
-  registerAppEnableEvent(callback: Function) {
-    this.callbackRouter.enableExtensionApp.addListener(callback);
   }
 }
 

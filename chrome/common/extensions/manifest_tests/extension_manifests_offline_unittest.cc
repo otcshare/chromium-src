@@ -3,17 +3,19 @@
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/offline_enabled_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
 namespace errors = manifest_errors;
 
-class ExtensionManifestOfflineEnabledTest : public ChromeManifestTest {
-};
+using ExtensionManifestOfflineEnabledTest = ChromeManifestTest;
 
 TEST_F(ExtensionManifestOfflineEnabledTest, OfflineEnabled) {
   LoadAndExpectError("offline_enabled_invalid.json",
@@ -36,9 +38,12 @@ TEST_F(ExtensionManifestOfflineEnabledTest, OfflineEnabled) {
   scoped_refptr<Extension> extension_5(
       LoadAndExpectSuccess("offline_default_platform_app.json"));
   EXPECT_TRUE(OfflineEnabledInfo::IsOfflineEnabled(extension_5.get()));
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  // Desktop Android does not support webview.
   scoped_refptr<Extension> extension_6(
       LoadAndExpectSuccess("offline_default_platform_app_with_webview.json"));
   EXPECT_FALSE(OfflineEnabledInfo::IsOfflineEnabled(extension_6.get()));
+#endif
 }
 
 }  // namespace extensions

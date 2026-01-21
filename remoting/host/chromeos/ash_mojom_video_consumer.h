@@ -66,7 +66,8 @@ class AshMojomVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
   void OnStopped() override;
   void OnFrameWithEmptyRegionCapture() override;
   void OnLog(const std::string& message) override;
-  void OnNewCropVersion(uint32_t crop_version) override;
+  void OnNewCaptureVersion(
+      const media::CaptureVersion& capture_version) override;
 
   std::unique_ptr<Frame> latest_frame_;
   UpdatedRegionAggregator updated_region_aggregator_;

@@ -17,16 +17,15 @@ namespace printing {
 
 class PrinterXmlParserImpl : public mojom::PrinterXmlParser {
  public:
-  using ParseXmlCallback =
-      base::OnceCallback<void(mojom::PrinterCapabilitiesValueResultPtr)>;
 
   PrinterXmlParserImpl();
   PrinterXmlParserImpl(const PrinterXmlParserImpl&) = delete;
   PrinterXmlParserImpl& operator=(const PrinterXmlParserImpl&) = delete;
   ~PrinterXmlParserImpl() override;
 
-  void ParseXmlForPrinterCapabilities(const std::string& capabilities_xml,
-                                      ParseXmlCallback callback) override;
+  void ParseXmlForPrinterCapabilities(
+      const std::string& capabilities_xml,
+      ParseXmlForPrinterCapabilitiesCallback callback) override;
 
   mojo::PendingRemote<mojom::PrinterXmlParser> GetRemote();
 
@@ -37,4 +36,4 @@ class PrinterXmlParserImpl : public mojom::PrinterXmlParser {
 
 }  // namespace printing
 
-#endif  // PRINTING_PRINTER_XML_PARSER_IMPL_H_
+#endif  // CHROME_BROWSER_PRINTING_PRINTER_XML_PARSER_IMPL_H_

@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include <stddef.h>
+
+#include <optional>
 #include <utility>
 
 #include "base/allocator/partition_alloc_support.h"
@@ -22,34 +24,42 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequence_manager/sequence_manager.h"
+#include "base/threading/hang_watcher.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/platform_thread_metrics.h"
+#include "base/time/time.h"
 #include "base/timer/hi_res_timer_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/performance_manager/scenario_api/performance_scenario_memory.h"
+#include "content/child/memory_coordinator/child_memory_consumer_registry.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/content_switches_internal.h"
+#include "content/common/features.h"
 #include "content/common/skia_utils.h"
-#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/renderer/render_thread.h"
+#include "content/renderer/memory_coordinator/renderer_memory_coordinator_policy.h"
 #include "content/renderer/render_process_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
 #include "media/media_buildflags.h"
+#include "mojo/public/cpp/bindings/direct_receiver.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/mojo_buildflags.h"
-#include "ppapi/buildflags/buildflags.h"
 #include "sandbox/policy/switches.h"
 #include "services/tracing/public/cpp/trace_startup.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
-#include "third_party/icu/source/common/unicode/unistr.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
 #include "third_party/webrtc_overrides/init_webrtc.h"  // nogncheck
 #include "ui/base/ui_base_switches.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "components/startup_metric_utils/renderer/startup_metric_utils.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/library_loader/library_loader_hooks.h"
@@ -60,27 +70,21 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include "base/mac/scoped_nsautorelease_pool.h"
-#include "base/message_loop/message_pump_mac.h"
+#include "base/apple/scoped_nsautorelease_pool.h"
+#include "base/message_loop/message_pump_apple.h"
 #include "third_party/blink/public/web/web_view.h"
 #endif  // BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#if defined(ARCH_CPU_X86_64)
+#if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
 #include "chromeos/ash/components/memory/userspace_swap/userspace_swap_renderer_initialization_impl.h"
-#endif  // defined(X86_64)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/system/core_scheduling.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#include "content/renderer/renderer_thread_type_handler.h"
-#endif
-
-#if BUILDFLAG(ENABLE_PPAPI)
-#include "content/renderer/pepper/pepper_plugin_registry.h"
+#include "content/child/sandboxed_process_thread_type_handler.h"
 #endif
 
 #if BUILDFLAG(MOJO_RANDOM_DELAYS_ENABLED)
@@ -101,23 +105,25 @@ void HandleRendererErrorTestParameters(const base::CommandLine& command_line) {
 }
 
 std::unique_ptr<base::MessagePump> CreateMainThreadMessagePump() {
-#if BUILDFLAG(IS_MAC)
-  // As long as scrollbars on Mac are painted with Cocoa, the message pump
-  // needs to be backed by a Foundation-level loop to process NSTimers. See
-  // http://crbug.com/306348#c24 for details.
-  return base::MessagePump::Create(base::MessagePumpType::NS_RUNLOOP);
-#elif BUILDFLAG(IS_FUCHSIA)
+  std::unique_ptr<base::MessagePump> message_pump;
+#if BUILDFLAG(IS_FUCHSIA)
   // Allow FIDL APIs on renderer main thread.
-  return base::MessagePump::Create(base::MessagePumpType::IO);
+  message_pump = base::MessagePump::Create(base::MessagePumpType::IO);
 #else
-  return base::MessagePump::Create(base::MessagePumpType::DEFAULT);
+  message_pump = base::MessagePump::Create(base::MessagePumpType::DEFAULT);
 #endif
+  return message_pump;
 }
 
 void LogTimeToStartRunLoop(const base::CommandLine& command_line,
                            base::TimeTicks run_loop_start_time) {
-  if (!command_line.HasSwitch(switches::kRendererProcessLaunchTimeTicks))
+#if BUILDFLAG(IS_WIN)
+  startup_metric_utils::GetRenderer().RecordRunLoopStart(run_loop_start_time);
+#endif
+
+  if (!command_line.HasSwitch(switches::kRendererProcessLaunchTimeTicks)) {
     return;
+  }
 
   const std::string launch_time_delta_micro_as_string =
       command_line.GetSwitchValueASCII(
@@ -140,18 +146,24 @@ int RendererMain(MainFunctionParams parameters) {
   // expect synchronous events around the main loop of a thread.
   TRACE_EVENT_INSTANT0("startup", "RendererMain", TRACE_EVENT_SCOPE_THREAD);
 
+#if BUILDFLAG(IS_MAC)
+  // Declare that this process has CPU security mitigations enabled (see
+  // RendererSandboxedProcessLauncherDelegate::EnableCpuSecurityMitigations).
+  // This must be done before the first call to
+  // base::SysInfo::NumberOfProcessors().
+  base::SysInfo::SetCpuSecurityMitigationsEnabled();
+#endif
+
   base::CurrentProcess::GetInstance().SetProcessType(
       base::CurrentProcessType::PROCESS_RENDERER);
-  base::trace_event::TraceLog::GetInstance()->SetProcessSortIndex(
-      kTraceEventRendererProcessSortIndex);
 
   const base::CommandLine& command_line = *parameters.command_line;
 
 #if BUILDFLAG(IS_MAC)
-  base::mac::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool;
+  base::apple::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool;
 #endif  // BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // As the Zygote process starts up earlier than the browser process, it gets
   // its own locale (at login time for Chrome OS). So we have to set the ICU
   // default locale for the renderer process here.
@@ -161,27 +173,15 @@ int RendererMain(MainFunctionParams parameters) {
         command_line.GetSwitchValueASCII(switches::kLang);
     base::i18n::SetICUDefaultLocale(locale);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Turn on core scheduling for ash renderers only if kLacrosOnly is not
-  // enabled. If kLacrosOnly is enabled, ash renderers don't run user code. This
-  // means they don't need core scheduling. Lacros renderers will get core
-  // scheduling in this case.
-  if (!command_line.HasSwitch(switches::kAshWebBrowserDisabled)) {
-    chromeos::system::EnableCoreSchedulingIfAvailable();
-  }
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Turn on core scheduling for lacros renderers since they run user code in
-  // most cases.
+  // When we start the renderer on ChromeOS if the system has core scheduling
+  // available we want to turn it on.
   chromeos::system::EnableCoreSchedulingIfAvailable();
-#endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 #if defined(ARCH_CPU_X86_64)
   using UserspaceSwapInit =
       ash::memory::userspace_swap::UserspaceSwapRendererInitializationImpl;
-  absl::optional<UserspaceSwapInit> swap_init;
+  std::optional<UserspaceSwapInit> swap_init;
   if (UserspaceSwapInit::UserspaceSwapSupportedAndEnabled()) {
     swap_init.emplace();
 
@@ -189,14 +189,7 @@ int RendererMain(MainFunctionParams parameters) {
         << "Unable to complete presandbox userspace swap initialization";
   }
 #endif  // defined(ARCH_CPU_X86_64)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-  if (command_line.HasSwitch(switches::kTimeZoneForTesting)) {
-    std::string time_zone =
-        command_line.GetSwitchValueASCII(switches::kTimeZoneForTesting);
-    icu::TimeZone::adoptDefault(
-        icu::TimeZone::createTimeZone(icu::UnicodeString(time_zone.c_str())));
-  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   InitializeSkia();
 
@@ -209,10 +202,15 @@ int RendererMain(MainFunctionParams parameters) {
   RendererMainPlatformDelegate platform(parameters);
 
   base::PlatformThread::SetName("CrRendererMain");
+  mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics("RendererMain");
 
   // Force main thread initialization. When the implementation is based on a
   // better means of determining which is the main thread, remove.
   RenderThread::IsMainThread();
+
+  // This must be created before `main_thread_scheduler` because the scheduler
+  // can install observers.
+  performance_scenarios::ScopedScenarioObserverList scenario_observer_list;
 
   blink::Platform::InitializeBlink();
   std::unique_ptr<blink::scheduler::WebThreadScheduler> main_thread_scheduler =
@@ -221,15 +219,15 @@ int RendererMain(MainFunctionParams parameters) {
 
   platform.PlatformInitialize();
 
-#if BUILDFLAG(ENABLE_PPAPI)
-  // Load pepper plugins before engaging the sandbox.
-  PepperPluginRegistry::GetInstance();
-#endif
   // Initialize WebRTC before engaging the sandbox.
   // NOTE: On linux, this call could already have been made from
   // zygote_main_linux.cc.  However, calling multiple times from the same thread
   // is OK.
-  InitializeWebRtcModule();
+  InitializeWebRtcModuleBeforeSandbox();
+
+  RendererMemoryCoordinatorPolicy render_memory_coordinator_policy(
+      static_cast<ChildMemoryConsumerRegistry&>(
+          base::MemoryConsumerRegistry::Get()));
 
   {
     content::ContentRendererClient* client = GetContentClient()->renderer();
@@ -260,11 +258,25 @@ int RendererMain(MainFunctionParams parameters) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // Thread type delegate of the process should be registered before
     // first thread type change in ChildProcess constructor.
-    if (base::FeatureList::IsEnabled(
-            features::kHandleRendererThreadTypeChangesInBrowser)) {
-      RendererThreadTypeHandler::Create();
-    }
+    // It also needs to be registered before the process has multiple threads,
+    // which may race with application of the sandbox.
+    SandboxedProcessThreadTypeHandler::Create();
 #endif
+    // Consider CrRendererMain a display critical thread. While some Javascript
+    // running on the main thread might not be, experiments demonstrated that
+    // overall this improves user-perceived performance.
+    base::PlatformThread::SetCurrentThreadType(
+        base::ThreadType::kDisplayCritical);
+
+    // Startup tracing creates a tracing thread, which is incompatible on
+    // platforms that require single-threaded sandbox initialization. In these
+    // cases, startup tracing is initialized right after sandbox initialization.
+    if (parameters.needs_startup_tracing_after_sandbox_init) {
+      tracing::InitTracingPostFeatureList(/*enable_consumer=*/false,
+                                          /*will_trace_thread_restart=*/false);
+      TRACE_EVENT_INSTANT1("startup", "RendererMain", TRACE_EVENT_SCOPE_THREAD,
+                           "needs_startup_tracing_after_sandbox_init", true);
+    }
 
     std::unique_ptr<RenderProcess> render_process = RenderProcessImpl::Create();
     // It's not a memory leak since RenderThread has the same lifetime
@@ -273,7 +285,7 @@ int RendererMain(MainFunctionParams parameters) {
     new RenderThreadImpl(run_loop.QuitClosure(),
                          std::move(main_thread_scheduler));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && defined(ARCH_CPU_X86_64)
+#if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
     // Once the sandbox has been entered and initialization of render threads
     // complete we will transfer FDs to the browser, or close them on failure.
     // This should always be called because it will also transfer the errno that
@@ -289,17 +301,15 @@ int RendererMain(MainFunctionParams parameters) {
     }
 #endif
 
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
-    // Startup tracing is usually enabled earlier, but if we forked from a
-    // zygote, we can only enable it after mojo IPC support is brought up
-    // initialized by RenderThreadImpl, because the mojo broker has to create
-    // the tracing SMB on our behalf due to the zygote sandbox.
-    if (parameters.zygote_child) {
-      tracing::EnableStartupTracingIfNeeded();
-      TRACE_EVENT_INSTANT1("startup", "RendererMain", TRACE_EVENT_SCOPE_THREAD,
-                           "zygote_child", true);
+#if BUILDFLAG(IS_WIN)
+    // Now that Mojo is initialized, but before the sandbox is enabled, set up
+    // DirectReceiver.
+    if (base::FeatureList::IsEnabled(
+            blink::features::kDirectCompositorThreadIpc)) {
+      // Pre-initialize a transport since a feature that will use it is enabled.
+      mojo::CreateDirectReceiverTransportBeforeSandbox();
     }
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
     if (need_sandbox) {
       should_run_loop = platform.EnableSandbox();
@@ -307,6 +317,26 @@ int RendererMain(MainFunctionParams parameters) {
         client->PostSandboxInitialized();
       }
     }
+
+    // Start the HangWatcher now that the sandbox is engaged, if it hasn't
+    // already been started.
+    if (base::HangWatcher::IsEnabled() &&
+        !base::HangWatcher::GetInstance()->IsStarted()) {
+      DCHECK(parameters.hang_watcher_not_started_time.has_value());
+      base::TimeDelta uncovered_hang_watcher_time =
+          base::TimeTicks::Now() -
+          parameters.hang_watcher_not_started_time.value();
+      base::UmaHistogramTimes(
+          "HangWatcher.RendererProcess.UncoveredStartupTime",
+          uncovered_hang_watcher_time);
+      base::HangWatcher::GetInstance()->Start();
+    }
+
+#if BUILDFLAG(IS_ANDROID)
+    base::PlatformThreadPriorityMonitor::Get().RegisterCurrentThread(
+        "RendererMain");
+    base::PlatformThreadPriorityMonitor::Get().Start();
+#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(MOJO_RANDOM_DELAYS_ENABLED)
     mojo::BeginRandomMojoDelays();

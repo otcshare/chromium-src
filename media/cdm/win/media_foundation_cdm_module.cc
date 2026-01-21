@@ -4,9 +4,12 @@
 
 #include "media/cdm/win/media_foundation_cdm_module.h"
 
+#include <string_view>
+
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_hstring.h"
 #include "media/base/win/hresults.h"
@@ -37,7 +40,7 @@ MediaFoundationCdmModule* MediaFoundationCdmModule::GetInstance() {
 MediaFoundationCdmModule::MediaFoundationCdmModule() = default;
 MediaFoundationCdmModule::~MediaFoundationCdmModule() = default;
 
-void MediaFoundationCdmModule::Initialize(const base::FilePath& cdm_path) {
+bool MediaFoundationCdmModule::Initialize(const base::FilePath& cdm_path) {
   DVLOG(1) << __func__ << ": cdm_path=" << cdm_path.value();
   CHECK(!initialized_)
       << "MediaFoundationCdmModule can only be initialized once!";
@@ -57,12 +60,16 @@ void MediaFoundationCdmModule::Initialize(const base::FilePath& cdm_path) {
                                        ? CdmLoadResult::kLoadFailed
                                        : CdmLoadResult::kFileMissing);
       ReportLoadErrorCode(kUmaPrefix, library_.GetError());
-      return;
+      return false;
     }
 
     // Only report load time for success loads.
     ReportLoadTime(kUmaPrefix, load_time);
+
+    ReportLoadResult(kUmaPrefix, CdmLoadResult::kLoadSuccess);
   }
+
+  return true;
 }
 
 HRESULT MediaFoundationCdmModule::GetCdmFactory(
@@ -89,13 +96,10 @@ HRESULT MediaFoundationCdmModule::GetCdmFactory(
   if (!cdm_factory_) {
     auto hr = ActivateCdmFactory();
     if (FAILED(hr)) {
-      ReportLoadResult(kUmaPrefix, CdmLoadResult::kActivateCdmFactoryFailed);
       base::UmaHistogramSparse(
           std::string(kUmaPrefix) + "ActivateCdmFactoryResult", hr);
       return hr;
     }
-
-    ReportLoadResult(kUmaPrefix, CdmLoadResult::kLoadSuccess);
   }
 
   cdm_factory = cdm_factory_;
@@ -103,11 +107,18 @@ HRESULT MediaFoundationCdmModule::GetCdmFactory(
 }
 
 HRESULT MediaFoundationCdmModule::ActivateCdmFactory() {
-  DCHECK(initialized_);
+  CHECK(initialized_);
+
+  if (activated_) {
+    DLOG(ERROR) << "CDM failed to activate previously";
+    return E_NOT_VALID_STATE;
+  }
+
+  activated_ = true;
 
   // For OS or store CDM, the `cdm_path_` is empty. Just use default creation.
   if (cdm_path_.empty()) {
-    DCHECK(!library_.is_valid());
+    CHECK(!library_.is_valid());
     ComPtr<IMFMediaEngineClassFactory4> class_factory;
     RETURN_IF_FAILED(CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr,
                                       CLSCTX_INPROC_SERVER,
@@ -122,10 +133,6 @@ HRESULT MediaFoundationCdmModule::ActivateCdmFactory() {
     LOG(ERROR) << "CDM failed to load previously";
     return kErrorLoadLibrary;
   }
-
-  // Initialization required to call base::win::ScopedHString::Create();
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload())
-    return kErrorResolveCoreWinRTStringDelayload;
 
   // Get function pointer to the activation factory.
   using GetActivationFactoryFunc =
@@ -142,7 +149,7 @@ HRESULT MediaFoundationCdmModule::ActivateCdmFactory() {
   // Activate CdmFactory. Assuming the class ID is always in the format
   // "<key_system>.ContentDecryptionModuleFactory".
   auto class_name = base::win::ScopedHString::Create(
-      base::StringPiece(key_system_ + ".ContentDecryptionModuleFactory"));
+      std::string_view(key_system_ + ".ContentDecryptionModuleFactory"));
   ComPtr<IActivationFactory> activation_factory;
   RETURN_IF_FAILED(
       get_activation_factory_func(class_name.get(), &activation_factory));

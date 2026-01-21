@@ -5,20 +5,21 @@
 #ifndef COMPONENTS_STORAGE_MONITOR_VOLUME_MOUNT_WATCHER_WIN_H_
 #define COMPONENTS_STORAGE_MONITOR_VOLUME_MOUNT_WATCHER_WIN_H_
 
+#include <windows.h>
+
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/component_export.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/storage_monitor/storage_info.h"
 #include "components/storage_monitor/storage_monitor.h"
-
-#include <windows.h>
 
 namespace storage_monitor {
 
@@ -27,7 +28,7 @@ class TestVolumeMountWatcherWin;
 // This class watches the volume mount points and sends notifications to
 // StorageMonitor about the device attach/detach events.
 // This is a singleton class instantiated by StorageMonitorWin.
-class VolumeMountWatcherWin {
+class COMPONENT_EXPORT(STORAGE_MONITOR) VolumeMountWatcherWin {
  public:
   VolumeMountWatcherWin();
 

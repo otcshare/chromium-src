@@ -39,6 +39,7 @@ source_set("test_support") {
   testonly = true
   deps = [
     "//base",
+    "//components/onc",
     "//testing/gtest",
   ]
   data = [ "//chromeos/components/test/data/onc/" ]
@@ -65,6 +66,10 @@ source_set("unit_tests") {
     "onc_validator_unittest.cc",
     "variable_expander_unittest.cc",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 fuzzer_test("variable_expander_fuzzer") {

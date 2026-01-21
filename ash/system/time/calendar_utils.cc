@@ -4,10 +4,12 @@
 
 #include "ash/system/time/calendar_utils.h"
 
-#include <map>
+#include <optional>
 #include <string>
 
-#include "ash/constants/ash_pref_names.h"
+#include "ash/calendar/calendar_client.h"
+#include "ash/calendar/calendar_controller.h"
+#include "ash/constants/ash_features.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_provider.h"
@@ -15,26 +17,27 @@
 #include "ash/system/time/date_helper.h"
 #include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
-#include "chromeos/ash/components/settings/timezone_settings.h"
-#include "components/prefs/pref_service.h"
 #include "components/user_manager/user_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/icu/source/i18n/unicode/gregocal.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/views/layout/table_layout.h"
 
-namespace ash {
+namespace ash::calendar_utils {
 
-namespace calendar_utils {
+bool IsMultiCalendarEnabled() {
+  return features::IsMultiCalendarSupportEnabled();
+}
 
 bool IsToday(const base::Time selected_date) {
   return IsTheSameDay(selected_date, base::Time::Now());
 }
 
-bool IsTheSameDay(absl::optional<base::Time> date_a,
-                  absl::optional<base::Time> date_b) {
-  if (!date_a.has_value() || !date_b.has_value())
+bool IsTheSameDay(std::optional<base::Time> date_a,
+                  std::optional<base::Time> date_b) {
+  if (!date_a.has_value() || !date_b.has_value()) {
     return false;
+  }
 
   return calendar_utils::GetMonthDayYear(date_a.value()) ==
          calendar_utils::GetMonthDayYear(date_b.value());
@@ -174,13 +177,10 @@ std::u16string FormatTwentyFourHourClockTimeInterval(
 }
 
 void SetUpWeekColumns(views::TableLayout* layout) {
-  layout->AddPaddingColumn(views::TableLayout::kFixedSize, kColumnSetPadding);
   for (int i = 0; i < calendar_utils::kDateInOneWeek; ++i) {
-    layout
-        ->AddColumn(views::LayoutAlignment::kStretch,
-                    views::LayoutAlignment::kStretch, 1.0f,
-                    views::TableLayout::ColumnSize::kFixed, 0, 0)
-        .AddPaddingColumn(views::TableLayout::kFixedSize, kColumnSetPadding);
+    layout->AddColumn(views::LayoutAlignment::kStretch,
+                      views::LayoutAlignment::kStretch, 1.0f,
+                      views::TableLayout::ColumnSize::kFixed, 0, 0);
   }
 }
 
@@ -201,20 +201,18 @@ base::Time GetMinTime(const base::Time d1, const base::Time d2) {
 
 SkColor GetPrimaryTextColor() {
   const ash::AshColorProvider* color_provider = ash::AshColorProvider::Get();
-  return color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary);
+  return color_provider->GetColor(cros_tokens::kTextColorPrimary);
 }
 
 SkColor GetSecondaryTextColor() {
   const ash::AshColorProvider* color_provider = ash::AshColorProvider::Get();
-  return color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorSecondary);
+  return color_provider->GetColor(cros_tokens::kTextColorSecondary);
 }
 
 SkColor GetDisabledTextColor() {
   const ash::AshColorProvider* color_provider = ash::AshColorProvider::Get();
-  const SkColor primary_color = color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary);
+  const SkColor primary_color =
+      color_provider->GetColor(cros_tokens::kTextColorPrimary);
   return ColorUtil::GetDisabledColor(primary_color);
 }
 
@@ -252,21 +250,21 @@ ASH_EXPORT base::Time GetStartOfNextMonthUTC(base::Time date) {
   return GetStartOfMonthUTC(GetStartOfMonthUTC(date) + base::Days(33));
 }
 
-ASH_EXPORT bool ShouldFetchEvents() {
+ASH_EXPORT bool ShouldFetchCalendarData() {
   return IsActiveUser() && !IsDisabledByAdmin();
 }
 
 ASH_EXPORT bool IsActiveUser() {
-  absl::optional<user_manager::UserType> user_type =
+  std::optional<user_manager::UserType> user_type =
       Shell::Get()->session_controller()->GetUserType();
-  return (user_type && *user_type == user_manager::USER_TYPE_REGULAR) &&
+  return (user_type && (*user_type == user_manager::UserType::kRegular ||
+                        *user_type == user_manager::UserType::kChild)) &&
          !Shell::Get()->session_controller()->IsUserSessionBlocked();
 }
 
 ASH_EXPORT bool IsDisabledByAdmin() {
-  auto* pref_service =
-      Shell::Get()->session_controller()->GetActivePrefService();
-  return !pref_service->GetBoolean(prefs::kCalendarIntegrationEnabled);
+  const auto* const client = Shell::Get()->calendar_controller()->GetClient();
+  return !client || client->IsDisabledByAdmin();
 }
 
 base::TimeDelta GetTimeDifference(base::Time date) {
@@ -294,8 +292,9 @@ ASH_EXPORT const std::pair<base::Time, base::Time> GetFetchStartEndTimes(
 
 int GetDayOfWeekInt(const base::Time date) {
   int day_int;
-  if (base::StringToInt(GetDayOfWeek(date), &day_int))
+  if (base::StringToInt(GetDayOfWeek(date), &day_int)) {
     return day_int;
+  }
 
   // For a few special locales the day of week is not in a number. In these
   // cases, use the default day of week from time exploded. For example:
@@ -352,9 +351,10 @@ ASH_EXPORT const std::tuple<base::Time, base::Time> GetStartAndEndTime(
   // `base::Time` which are set to UTC midnight in the response, so we need to
   // negate the timezone, so when the formatter formats, it will make the dates
   // midnight in the local timezone.
-  if (event->all_day_event())
+  if (event->all_day_event()) {
     return std::make_tuple(selected_date_midnight_utc,
                            selected_last_minute_utc);
+  }
 
   base::Time start_time = calendar_utils::GetMaxTime(
       event->start_time().date_time(), selected_date_midnight_utc);
@@ -364,6 +364,12 @@ ASH_EXPORT const std::tuple<base::Time, base::Time> GetStartAndEndTime(
   return std::make_tuple(start_time, end_time);
 }
 
-}  // namespace calendar_utils
+const std::tuple<base::Time, base::Time> GetMidnight(const base::Time time) {
+  const auto time_difference = GetTimeDifference(time);
+  const auto utc_midnight = (time + time_difference).UTCMidnight();
+  const auto local_midnight = utc_midnight - time_difference;
 
-}  // namespace ash
+  return std::make_tuple(utc_midnight, local_midnight);
+}
+
+}  // namespace ash::calendar_utils

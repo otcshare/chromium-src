@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/byte_queue.h"
 #include "media/formats/mp2t/ts_section.h"
 
@@ -31,8 +32,7 @@ class TsSectionPes : public TsSection {
 
   // TsSection implementation.
   bool Parse(bool payload_unit_start_indicator,
-             const uint8_t* buf,
-             int size) override;
+             base::span<const uint8_t> buf) override;
   void Flush() override;
   void Reset() override;
 
@@ -44,7 +44,7 @@ class TsSectionPes : public TsSection {
   bool Emit(bool emit_for_unknown_size);
 
   // Parse a PES packet, return true if successful.
-  bool ParseInternal(const uint8_t* raw_pes, int raw_pes_size);
+  bool ParseInternal(base::span<const uint8_t> pes);
 
   void ResetPesState();
 
@@ -58,7 +58,7 @@ class TsSectionPes : public TsSection {
   bool wait_for_pusi_;
 
   // Used to unroll PTS and DTS.
-  TimestampUnroller* const timestamp_unroller_;
+  const raw_ptr<TimestampUnroller> timestamp_unroller_;
 };
 
 }  // namespace mp2t

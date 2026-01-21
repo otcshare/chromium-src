@@ -5,14 +5,16 @@
 #include "net/dns/dns_config_service_posix.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -28,7 +30,6 @@
 #include "net/dns/notify_watcher_mac.h"
 #include "net/dns/public/resolv_reader.h"
 #include "net/dns/serial_worker.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "net/dns/dns_config_watcher_mac.h"
@@ -89,11 +90,11 @@ class DnsConfigWatcher {
 };
 #endif  // BUILDFLAG(IS_IOS)
 
-absl::optional<DnsConfig> ReadDnsConfig() {
+std::optional<DnsConfig> ReadDnsConfig() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
-  absl::optional<DnsConfig> dns_config;
+  std::optional<DnsConfig> dns_config;
   {
     std::unique_ptr<ScopedResState> scoped_res_state =
         ResolvReader().GetResState();
@@ -108,7 +109,7 @@ absl::optional<DnsConfig> ReadDnsConfig() {
 #if BUILDFLAG(IS_MAC)
   if (!DnsConfigWatcher::CheckDnsConfig(
           dns_config->unhandled_options /* out_unhandled_options */)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 #endif  // BUILDFLAG(IS_MAC)
   // Override |fallback_period| value to match default setting on Windows.
@@ -205,7 +206,7 @@ class DnsConfigServicePosix::ConfigReader : public SerialWorker {
 
    private:
     friend class ConfigReader;
-    absl::optional<DnsConfig> dns_config_;
+    std::optional<DnsConfig> dns_config_;
   };
 
   // Raw pointer to owning DnsConfigService.
@@ -249,22 +250,22 @@ void DnsConfigServicePosix::CreateReader() {
   config_reader_ = std::make_unique<ConfigReader>(*this);
 }
 
-absl::optional<DnsConfig> ConvertResStateToDnsConfig(
+std::optional<DnsConfig> ConvertResStateToDnsConfig(
     const struct __res_state& res) {
   DnsConfig dns_config;
   dns_config.unhandled_options = false;
 
   if (!(res.options & RES_INIT))
-    return absl::nullopt;
+    return std::nullopt;
 
-  absl::optional<std::vector<IPEndPoint>> nameservers = GetNameservers(res);
+  std::optional<std::vector<IPEndPoint>> nameservers = GetNameservers(res);
   if (!nameservers)
-    return absl::nullopt;
+    return std::nullopt;
 
   dns_config.nameservers = std::move(*nameservers);
   dns_config.search.clear();
-  for (int i = 0; (i < MAXDNSRCH) && res.dnsrch[i]; ++i) {
-    dns_config.search.emplace_back(res.dnsrch[i]);
+  for (int i = 0; (i < MAXDNSRCH) && UNSAFE_TODO(res.dnsrch[i]); ++i) {
+    dns_config.search.emplace_back(UNSAFE_TODO(res.dnsrch[i]));
   }
 
   dns_config.ndots = res.ndots;
@@ -294,13 +295,13 @@ absl::optional<DnsConfig> ConvertResStateToDnsConfig(
   }
 
   if (dns_config.nameservers.empty())
-    return absl::nullopt;
+    return std::nullopt;
 
   // If any name server is 0.0.0.0, assume the configuration is invalid.
   // TODO(szym): Measure how often this happens. http://crbug.com/125599
   for (const IPEndPoint& nameserver : dns_config.nameservers) {
     if (nameserver.address().IsZero())
-      return absl::nullopt;
+      return std::nullopt;
   }
   return dns_config;
 }

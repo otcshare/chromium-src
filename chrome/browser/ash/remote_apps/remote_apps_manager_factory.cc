@@ -24,14 +24,14 @@ RemoteAppsManager* RemoteAppsManagerFactory::GetForProfile(Profile* profile) {
 
 // static
 RemoteAppsManagerFactory* RemoteAppsManagerFactory::GetInstance() {
-  // TODO(crbug.com/1269752): Restore use of base::NoDestructor when
-  // it no longer causes unit_test failures.
-  return base::Singleton<RemoteAppsManagerFactory>::get();
+  static base::NoDestructor<RemoteAppsManagerFactory> instance;
+  return instance.get();
 }
 
 RemoteAppsManagerFactory::RemoteAppsManagerFactory()
     : ProfileKeyedServiceFactory("RemoteAppsManager",
                                  ProfileSelections::Builder()
+                                     .WithGuest(ProfileSelection::kOriginalOnly)
                                      .WithSystem(ProfileSelection::kNone)
                                      .WithAshInternals(ProfileSelection::kNone)
                                      .Build()) {
@@ -42,7 +42,8 @@ RemoteAppsManagerFactory::RemoteAppsManagerFactory()
 
 RemoteAppsManagerFactory::~RemoteAppsManagerFactory() = default;
 
-KeyedService* RemoteAppsManagerFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+RemoteAppsManagerFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   ProfileHelper* profile_helper = ProfileHelper::Get();
   if (!profile_helper)
@@ -50,16 +51,23 @@ KeyedService* RemoteAppsManagerFactory::BuildServiceInstanceFor(
 
   Profile* profile = Profile::FromBrowserContext(context);
   user_manager::User* user = profile_helper->GetUserByProfile(profile);
-  if (!user || (user->GetType() != user_manager::USER_TYPE_PUBLIC_ACCOUNT &&
-                user->GetType() != user_manager::USER_TYPE_REGULAR)) {
+  if (!user || (user->GetType() != user_manager::UserType::kPublicAccount &&
+                user->GetType() != user_manager::UserType::kRegular)) {
     return nullptr;
   }
 
-  return new RemoteAppsManager(profile);
+  return std::make_unique<RemoteAppsManager>(profile);
 }
 
 bool RemoteAppsManagerFactory::ServiceIsCreatedWithBrowserContext() const {
   return true;
+}
+
+bool RemoteAppsManagerFactory::ServiceIsNULLWhileTesting() const {
+  // `RemoteAppsManager` depends on `AppListSyncableService` to be useful,
+  // meaning that it's availability for testing also depends on
+  // `AppListSyncableService`'s service availability.
+  return !app_list::AppListSyncableServiceFactory::IsUsedInTesting();
 }
 
 }  // namespace ash

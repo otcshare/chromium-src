@@ -17,29 +17,15 @@
 
 class Profile;
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
+class CacheManager;
 class ProvidedFileSystemInterface;
 class ProviderId;
 
 typedef base::OnceCallback<void(base::File::Error result)> RequestMountCallback;
 
 struct Capabilities {
-  Capabilities(bool configurable,
-               bool watchable,
-               bool multiple_mounts,
-               extensions::FileSystemProviderSource source)
-      : configurable(configurable),
-        watchable(watchable),
-        multiple_mounts(multiple_mounts),
-        source(source) {}
-  Capabilities()
-      : configurable(false),
-        watchable(false),
-        multiple_mounts(false),
-        source(extensions::SOURCE_NETWORK) {}
-
   bool configurable;
   bool watchable;
   bool multiple_mounts;
@@ -53,12 +39,13 @@ class ProviderInterface {
     SIZE_32_32,
   };
 
-  virtual ~ProviderInterface() {}
+  virtual ~ProviderInterface() = default;
 
   // Returns a pointer to a created file system.
   virtual std::unique_ptr<ProvidedFileSystemInterface> CreateProvidedFileSystem(
       Profile* profile,
-      const ProvidedFileSystemInfo& file_system_info) = 0;
+      const ProvidedFileSystemInfo& file_system_info,
+      CacheManager* cache_manager) = 0;
 
   // Returns the capabilites of the provider.
   virtual const Capabilities& GetCapabilities() const = 0;
@@ -82,7 +69,6 @@ class ProviderInterface {
                             RequestMountCallback callback) = 0;
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_PROVIDER_INTERFACE_H_

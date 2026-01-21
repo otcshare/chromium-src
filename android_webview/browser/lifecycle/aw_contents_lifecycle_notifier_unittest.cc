@@ -4,8 +4,9 @@
 
 #include "android_webview/browser/lifecycle/aw_contents_lifecycle_notifier.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -51,7 +52,7 @@ class TestAwContentsLifecycleNotifier : public AwContentsLifecycleNotifier {
   ~TestAwContentsLifecycleNotifier() override = default;
 
   size_t GetAwContentsStateCount(AwContentsState state) const {
-    return state_count_[ToIndex(state)];
+    return UNSAFE_TODO(state_count_[ToIndex(state)]);
   }
 
   bool HasAwContentsInstanceForTesting() const {
@@ -99,6 +100,7 @@ class AwContentsLifecycleNotifierTest : public testing::Test {
  protected:
   // testing::Test.
   void SetUp() override {
+    AwContentsLifecycleNotifier::InitForTesting();
     observer_ = std::make_unique<TestWebViewAppObserver>();
     callback_ = std::make_unique<TestOnLoseForegroundCallback>(observer_.get());
     notifier_ = std::make_unique<TestAwContentsLifecycleNotifier>(

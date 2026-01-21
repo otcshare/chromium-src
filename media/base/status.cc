@@ -5,7 +5,8 @@
 #include "media/base/status.h"
 
 #include <memory>
-#include "base/strings/string_piece.h"
+
+#include "base/json/json_writer.h"
 #include "media/base/media_serializers.h"
 
 namespace media {
@@ -20,19 +21,15 @@ StatusData::StatusData(const StatusData& copy) {
 
 StatusData::StatusData(StatusGroupType group,
                        StatusCodeType code,
-                       std::string message,
-                       UKMPackedType root_cause)
+                       std::string_view message)
     : group(group),
       code(code),
-      message(std::move(message)),
-      data(base::Value(base::Value::Type::DICT)),
-      packed_root_cause(root_cause) {}
+      message(message),
+      data(base::Value(base::Value::Type::DICT)) {}
 
 std::unique_ptr<StatusData> StatusData::copy() const {
-  auto result =
-      std::make_unique<StatusData>(group, code, message, packed_root_cause);
-  for (const auto& frame : frames)
-    result->frames.push_back(frame.Clone());
+  auto result = std::make_unique<StatusData>(group, code, message);
+  result->frames = frames.Clone();
   if (cause)
     result->cause = cause->copy();
   result->data = data.Clone();
@@ -45,9 +42,7 @@ StatusData& StatusData::operator=(const StatusData& copy) {
   group = copy.group;
   code = copy.code;
   message = copy.message;
-  packed_root_cause = copy.packed_root_cause;
-  for (const auto& frame : copy.frames)
-    frames.push_back(frame.Clone());
+  frames = copy.frames.Clone();
   if (copy.cause)
     cause = copy.cause->copy();
   data = copy.data.Clone();
@@ -55,7 +50,35 @@ StatusData& StatusData::operator=(const StatusData& copy) {
 }
 
 void StatusData::AddLocation(const base::Location& location) {
-  frames.push_back(MediaSerialize(location));
+  frames.Append(MediaSerialize(location));
+}
+
+void StatusData::RenderToLogWriter(logging::LogSeverity severity) const {
+  auto* file = frames.front().GetDict().FindString(StatusConstants::kFileKey);
+  auto line = frames.front().GetDict().FindInt(StatusConstants::kLineKey);
+  DCHECK(file);
+  DCHECK(line);
+
+  auto log_writer = logging::LogMessage(file->c_str(), *line, severity);
+  log_writer.stream() << group;
+
+  if (message.size()) {
+    log_writer.stream() << ": " << message;
+  }
+
+  if (data.GetDict().size()) {
+    log_writer.stream()
+        << " Data: " << base::WriteJson(data.GetDict()).value_or(std::string());
+  }
+
+  if (frames.size() > 1) {
+    log_writer.stream() << " Trace: "
+                        << base::WriteJson(frames).value_or(std::string());
+  }
+
+  if (cause) {
+    cause->RenderToLogWriter(severity);
+  }
 }
 
 std::ostream& operator<<(std::ostream& stream,

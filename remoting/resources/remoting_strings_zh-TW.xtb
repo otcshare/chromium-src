@@ -28,7 +28,6 @@
 <translation id="2329392777730037872">無法在用戶端上開啟 <ph name="URL" />。</translation>
 <translation id="2359808026110333948">繼續</translation>
 <translation id="2366718077645204424">無法連線到主機，原因可能與你使用的網路設定有關。</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />上次上線時間：<ph name="RELATIVE_TIMESTAMP" />。</translation>
 <translation id="2504109125669302160">將「無障礙功能」權限授予 <ph name="PRODUCT_NAME" /></translation>
 <translation id="2509394361235492552">已連線至「<ph name="HOSTNAME" />」</translation>
 <translation id="2540992418118313681">您要與其他使用者分享這台電腦的瀏覽及控制權限嗎？</translation>
@@ -36,17 +35,18 @@
 <translation id="2599300881200251572">這項服務允許來自 Chrome 遠端桌面用戶端的連線。</translation>
 <translation id="2647232381348739934">Chromoting 服務</translation>
 <translation id="2676780859508944670">運作中…</translation>
-<translation id="2692522824157224199">版權所有 2022 Google LLC。保留所有權利。</translation>
 <translation id="2699970397166997657">Chromoting</translation>
 <translation id="2758123043070977469">進行驗證時發生問題，請重新登入。</translation>
 <translation id="2803375539583399270">輸入 PIN</translation>
 <translation id="2919669478609886916">你目前正與另一位使用者共用這台電腦，你要繼續共用嗎？</translation>
+<translation id="2929683002824598593">共用裝置</translation>
 <translation id="2939145106548231838">主機驗證</translation>
 <translation id="3027681561976217984">觸控模式</translation>
 <translation id="3106379468611574572">遠端電腦未回應你的連線要求。請確認遠端電腦已在線上，然後再試一次。</translation>
 <translation id="3150823315463303127">主機無法讀取政策。</translation>
 <translation id="3171922709365450819">由於需要第三方驗證，因此這個用戶端不支援這部裝置。</translation>
 <translation id="3197730452537982411">遠端桌面</translation>
+<translation id="3236334139428307578">著作權所有 2026 The Chromium Authors。保留所有權利。</translation>
 <translation id="324272851072175193">寄送說明電子郵件</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> 要求進行變更。</translation>
 <translation id="3339299787263251426">安全地透過網際網路存取您的電腦</translation>
@@ -54,7 +54,6 @@
 <translation id="3423542133075182604">遠端處理安全金鑰</translation>
 <translation id="3581045510967524389">無法連上網路，請確認裝置是否處於上線狀態。</translation>
 <translation id="3596628256176442606">這項服務允許來自 Chromoting 用戶端的連線。</translation>
-<translation id="369442766917958684">離線。</translation>
 <translation id="3695446226812920698">操作說明</translation>
 <translation id="3776024066357219166">你的 Chrome 遠端桌面工作階段已結束。</translation>
 <translation id="3858860766373142691">名稱</translation>
@@ -73,7 +72,6 @@
 <translation id="4257751272692708833"><ph name="PRODUCT_NAME" /> URL 轉發工具</translation>
 <translation id="4277736576214464567">存取碼無效，請再試一次。</translation>
 <translation id="4281844954008187215">服務條款</translation>
-<translation id="4372650392690220936">版權所有 2022 The Chromium Authors。保留所有權利。</translation>
 <translation id="4405930547258349619">核心資料庫</translation>
 <translation id="443560535555262820">開啟無障礙功能偏好設定</translation>
 <translation id="4450893287417543264">不要再顯示</translation>
@@ -95,6 +93,7 @@
 <translation id="4987330545941822761">Chrome 遠端桌面無法決定要用哪個瀏覽器在本機上開啟網址。請從下方清單中選擇瀏覽器。</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (離線)</translation>
 <translation id="507204348399810022">您確定要停用與「<ph name="HOSTNAME" />」之間的遠端連線嗎？</translation>
+<translation id="5095424396646120601">當機回報</translation>
 <translation id="5170982930780719864">主機 ID 無效。</translation>
 <translation id="5204575267916639804">常見問題</translation>
 <translation id="5222676887888702881">登出</translation>
@@ -107,12 +106,12 @@
 <translation id="5601503069213153581">PIN</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">你目前正與 <ph name="USER" /> 共用電腦。</translation>
-<translation id="5750083143895808682">目前登入的帳戶是 <ph name="EMAIL_ADDRESS" />。</translation>
 <translation id="579702532610384533">重新連線</translation>
 <translation id="5810269635982033450">把螢幕當作觸控板使用</translation>
 <translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> 要求你授予螢幕的檢視權限和鍵盤與滑鼠的控制權限。如果這不是預期收到的要求，請按下 [<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />]；否則，請在準備就緒時選取 [<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />] 允許連線。</translation>
 <translation id="5823658491130719298">在你要從遠端存取的電腦上，開啟 Chrome 並造訪 <ph name="INSTALLATION_LINK" /></translation>
 <translation id="5841343754884244200">顯示選項</translation>
+<translation id="5965133372831030509">著作權所有 2026 Google LLC。保留所有權利。</translation>
 <translation id="6033507038939587647">鍵盤選項</translation>
 <translation id="6040143037577758943">關閉</translation>
 <translation id="6062854958530969723">主機初始化失敗。</translation>
@@ -121,10 +120,12 @@
 <translation id="6178645564515549384">用於遠端協助的內建訊息傳遞主機</translation>
 <translation id="618120821413932081">更新遠端桌面解析度以符合視窗大小</translation>
 <translation id="6223301979382383752">開啟螢幕畫面錄製偏好設定</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> 要求你授予螢幕檢視權限和鍵盤與滑鼠的控制權限。要共用裝置嗎？</translation>
 <translation id="6284412385303060032">在控制台登入畫面執行的主機已關閉。這樣才能切換成在個別使用者工作階段中執行的主機，以支援帷幕模式。</translation>
 <translation id="6542902059648396432">回報問題…</translation>
 <translation id="6583902294974160967">支援</translation>
 <translation id="6612717000975622067">傳送 Ctrl-Alt-Del</translation>
+<translation id="6625262630437221505">{0,plural, =1{如果未採取行動，裝置將在 # 秒後自動開始共用。}other{如果未採取行動，裝置將在 # 秒後自動開始共用。}}</translation>
 <translation id="6654753848497929428">共用</translation>
 <translation id="677755392401385740">已為下列使用者啟動主機：<ph name="HOST_USERNAME" />。</translation>
 <translation id="6902524959760471898">協助在 <ph name="PRODUCT_NAME" />用戶端上開啟網址的輔助應用程式</translation>

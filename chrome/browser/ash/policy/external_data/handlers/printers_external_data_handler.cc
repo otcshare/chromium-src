@@ -7,10 +7,8 @@
 #include <utility>
 
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ash/printing/bulk_printers_calculator.h"
-#include "chrome/browser/ash/printing/bulk_printers_calculator_factory.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "components/policy/policy_constants.h"
+#include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator.h"
+#include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator_factory.h"
 
 namespace policy {
 
@@ -23,20 +21,12 @@ base::WeakPtr<ash::BulkPrintersCalculator> GetBulkPrintersCalculator(
     return nullptr;
   }
   return factory->GetForAccountId(
-      CloudExternalDataPolicyHandler::GetAccountId(user_id));
+      CloudExternalDataPolicyObserver::GetAccountId(user_id));
 }
 
 }  // namespace
 
-PrintersExternalDataHandler::PrintersExternalDataHandler(
-    ash::CrosSettings* cros_settings,
-    DeviceLocalAccountPolicyService* policy_service)
-    : printers_observer_(cros_settings,
-                         policy_service,
-                         key::kPrintersBulkConfiguration,
-                         this) {
-  printers_observer_.Init();
-}
+PrintersExternalDataHandler::PrintersExternalDataHandler() = default;
 
 PrintersExternalDataHandler::~PrintersExternalDataHandler() = default;
 

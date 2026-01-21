@@ -7,7 +7,6 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -74,8 +73,7 @@ class SerialPortImpl : public mojom::SerialPort {
                 OpenCallback callback);
   void PortOpened(OpenCallback callback, bool success);
   void WriteToPort(MojoResult result, const mojo::HandleSignalsState& state);
-  void OnWriteToPortCompleted(uint32_t bytes_expected,
-                              uint32_t bytes_sent,
+  void OnWriteToPortCompleted(uint32_t bytes_sent,
                               mojom::SerialSendError error);
   void ReadFromPortAndWriteOut(MojoResult result,
                                const mojo::HandleSignalsState& state);

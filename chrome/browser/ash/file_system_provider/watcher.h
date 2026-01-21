@@ -9,13 +9,12 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "storage/browser/file_system/watcher_manager.h"
 #include "url/gurl.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 struct Watcher;
 struct Subscriber;
@@ -80,7 +79,6 @@ struct Watcher {
   std::string last_tag;
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_WATCHER_H_

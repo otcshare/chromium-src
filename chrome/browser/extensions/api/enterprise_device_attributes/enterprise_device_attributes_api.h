@@ -8,29 +8,58 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_ENTERPRISE_DEVICE_ATTRIBUTES_ENTERPRISE_DEVICE_ATTRIBUTES_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_ENTERPRISE_DEVICE_ATTRIBUTES_ENTERPRISE_DEVICE_ATTRIBUTES_API_H_
 
-#include "chromeos/crosapi/mojom/device_attributes.mojom.h"
+#include <concepts>
+#include <memory>
+#include <type_traits>
+
+#include "base/types/pass_key.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_histogram_value.h"
 
+namespace policy {
+class DeviceAttributes;
+}  // namespace policy
+
 namespace extensions {
+
+class EnterpriseDeviceAttributesApiAshTest;
 
 // The implementation requires forwarding to ash via crosapi. This subclass is
 // used to reduce redundant code.
 class EnterpriseDeviceAttributesBase : public ExtensionFunction {
+ public:
+  // Injects DeviceAttributes for testing.
+  void SetDeviceAttributes(
+      base::PassKey<EnterpriseDeviceAttributesApiAshTest>,
+      std::unique_ptr<policy::DeviceAttributes> device_attributes);
+
  protected:
+  EnterpriseDeviceAttributesBase();
   ~EnterpriseDeviceAttributesBase() override;
 
-  // Called asynchronously when crosapi returns the result.
-  void OnCrosapiResult(crosapi::mojom::DeviceAttributesStringResultPtr result);
+  // Checks whether it is allowed to respond with a valid value, and if it is
+  // responds the value returned from `f()`, which is called synchronously.
+  // Otherwise, responds with an empty string as an error.
+  // We cannot use RespondWithValidation/PreRunValidation, because it'll cause
+  // to return Error on error, while enterprise.deviceAttributes functions
+  // expect to return an empty string as an error.
+  template <std::invocable F>
+    requires std::convertible_to<std::invoke_result_t<F>, std::string>
+  ResponseAction RespondWithCheck(F&& f);
+
+  policy::DeviceAttributes& device_attributes() { return *device_attributes_; }
+
+ private:
+  std::unique_ptr<policy::DeviceAttributes> device_attributes_;
 };
 
 class EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction
     : public EnterpriseDeviceAttributesBase {
  public:
-  EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction();
+  EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction() = default;
 
  protected:
-  ~EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction() override;
+  ~EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -42,10 +71,10 @@ class EnterpriseDeviceAttributesGetDirectoryDeviceIdFunction
 class EnterpriseDeviceAttributesGetDeviceSerialNumberFunction
     : public EnterpriseDeviceAttributesBase {
  public:
-  EnterpriseDeviceAttributesGetDeviceSerialNumberFunction();
+  EnterpriseDeviceAttributesGetDeviceSerialNumberFunction() = default;
 
  protected:
-  ~EnterpriseDeviceAttributesGetDeviceSerialNumberFunction() override;
+  ~EnterpriseDeviceAttributesGetDeviceSerialNumberFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -58,10 +87,10 @@ class EnterpriseDeviceAttributesGetDeviceSerialNumberFunction
 class EnterpriseDeviceAttributesGetDeviceAssetIdFunction
     : public EnterpriseDeviceAttributesBase {
  public:
-  EnterpriseDeviceAttributesGetDeviceAssetIdFunction();
+  EnterpriseDeviceAttributesGetDeviceAssetIdFunction() = default;
 
  protected:
-  ~EnterpriseDeviceAttributesGetDeviceAssetIdFunction() override;
+  ~EnterpriseDeviceAttributesGetDeviceAssetIdFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -73,10 +102,11 @@ class EnterpriseDeviceAttributesGetDeviceAssetIdFunction
 class EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction
     : public EnterpriseDeviceAttributesBase {
  public:
-  EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction();
+  EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction() = default;
 
  protected:
-  ~EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction() override;
+  ~EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction() override =
+      default;
 
   ResponseAction Run() override;
 
@@ -89,10 +119,10 @@ class EnterpriseDeviceAttributesGetDeviceAnnotatedLocationFunction
 class EnterpriseDeviceAttributesGetDeviceHostnameFunction
     : public EnterpriseDeviceAttributesBase {
  public:
-  EnterpriseDeviceAttributesGetDeviceHostnameFunction();
+  EnterpriseDeviceAttributesGetDeviceHostnameFunction() = default;
 
  protected:
-  ~EnterpriseDeviceAttributesGetDeviceHostnameFunction() override;
+  ~EnterpriseDeviceAttributesGetDeviceHostnameFunction() override = default;
 
   ResponseAction Run() override;
 

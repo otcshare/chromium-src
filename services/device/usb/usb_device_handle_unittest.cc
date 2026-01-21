@@ -8,7 +8,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -164,7 +165,7 @@ TEST_F(UsbDeviceHandleTest, InterruptTransfer) {
       base::MakeRefCounted<base::RefCountedBytes>(in_buffer->size());
   TestCompletionCallback out_completion;
   for (size_t i = 0; i < out_buffer->size(); ++i) {
-    out_buffer->data()[i] = i;
+    out_buffer->as_vector()[i] = i;
   }
 
   handle->GenericTransfer(UsbTransferDirection::OUTBOUND, 0x01, out_buffer,
@@ -180,7 +181,7 @@ TEST_F(UsbDeviceHandleTest, InterruptTransfer) {
   EXPECT_EQ(static_cast<size_t>(in_buffer->size()),
             in_completion.transferred());
   for (size_t i = 0; i < in_completion.transferred(); ++i) {
-    EXPECT_EQ(out_buffer->front()[i], in_buffer->front()[i])
+    UNSAFE_TODO(EXPECT_EQ(out_buffer->front()[i], in_buffer->front()[i]))
         << "Mismatch at index " << i << ".";
   }
 
@@ -230,7 +231,7 @@ TEST_F(UsbDeviceHandleTest, BulkTransfer) {
       base::MakeRefCounted<base::RefCountedBytes>(in_buffer->size());
   TestCompletionCallback out_completion;
   for (size_t i = 0; i < out_buffer->size(); ++i) {
-    out_buffer->data()[i] = i;
+    out_buffer->as_vector()[i] = i;
   }
 
   handle->GenericTransfer(UsbTransferDirection::OUTBOUND, 0x02, out_buffer,
@@ -246,7 +247,7 @@ TEST_F(UsbDeviceHandleTest, BulkTransfer) {
   EXPECT_EQ(static_cast<size_t>(in_buffer->size()),
             in_completion.transferred());
   for (size_t i = 0; i < in_completion.transferred(); ++i) {
-    EXPECT_EQ(out_buffer->front()[i], in_buffer->front()[i])
+    UNSAFE_TODO(EXPECT_EQ(out_buffer->front()[i], in_buffer->front()[i]))
         << "Mismatch at index " << i << ".";
   }
 
@@ -281,7 +282,7 @@ TEST_F(UsbDeviceHandleTest, ControlTransfer) {
   const char expected_str[] = "\x18\x03G\0o\0o\0g\0l\0e\0 \0I\0n\0c\0.\0";
   EXPECT_EQ(sizeof(expected_str) - 1, completion.transferred());
   for (size_t i = 0; i < completion.transferred(); ++i) {
-    EXPECT_EQ(expected_str[i], buffer->front()[i])
+    UNSAFE_TODO(EXPECT_EQ(expected_str[i], buffer->front()[i]))
         << "Mismatch at index " << i << ".";
   }
 

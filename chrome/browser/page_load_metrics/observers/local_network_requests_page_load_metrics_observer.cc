@@ -4,8 +4,8 @@
 
 #include "chrome/browser/page_load_metrics/observers/local_network_requests_page_load_metrics_observer.h"
 
-#include "base/lazy_instance.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/browser_process.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "content/public/browser/navigation_handle.h"
@@ -17,74 +17,6 @@
 #include "url/gurl.h"
 
 namespace {
-// These constants are used to generate the UMA histograms for local network
-// request metrics. If the enums for |DomainType|, |ResourceType|, or |PortType|
-// change, the bitwise arithmetic below must also change.
-static const int kNumNonlocalhostHistograms =
-    ((internal::DOMAIN_TYPE_LOCALHOST << 6) |
-     (internal::RESOURCE_TYPE_LOCALHOST << 1) | 1) + 1;
-static const int kNumLocalhostHistograms =
-    ((internal::DOMAIN_TYPE_LOCALHOST << 5) | (internal::PORT_TYPE_DEV << 1) |
-     1) + 1;
-
-// Generates a histogram for a non-localhost resource using the values stored in
-// |counts| given a combination of domain type, resource type, and status for
-// the resource.
-void CreateHistogram(std::map<const std::string, int> counts,
-                     internal::DomainType domain_type,
-                     internal::ResourceType resource_type,
-                     bool status) {
-  const std::string& histogram_name = internal::GetNonlocalhostHistogramNames()
-                                          .at(domain_type)
-                                          .at(resource_type)
-                                          .at(status);
-  // Because the macro requires a single value for the maximum histogram index,
-  // but we use three variables to distinguish histograms, we bitwise
-  // concatenate them here to uniquely distinguish each combination. If the
-  // enums for |DomainType| or |ResourceType| change, the bitwise arithmetic
-  // below must also change.
-  const int histogram_index =
-      (domain_type << 6) | (resource_type << 1) | (status ? 1 : 0);
-  STATIC_HISTOGRAM_POINTER_GROUP(
-      histogram_name, histogram_index, kNumNonlocalhostHistograms,
-      Add(counts[histogram_name]),
-      base::Histogram::FactoryGet(
-          histogram_name,
-          1,     // min value
-          1000,  // max value
-          50,    // number of buckets
-          base::HistogramBase::kUmaTargetedHistogramFlag));
-}
-
-// Generates a histogram for a localhost resource using the values stored in
-// |counts| given a combination of domain type, port type, and status for
-// the resource.
-void CreateHistogram(std::map<const std::string, int> counts,
-                     internal::DomainType domain_type,
-                     internal::PortType port_type,
-                     bool status) {
-  const std::string& histogram_name = internal::GetLocalhostHistogramNames()
-                                          .at(domain_type)
-                                          .at(port_type)
-                                          .at(status);
-  // Because the macro requires a single value for the maximum histogram index,
-  // but we use three variables to distinguish histograms, we bitwise
-  // concatenate them here to uniquely distinguish each combination. If the
-  // enums for |DomainType| or |PortType| change, the bitwise arithmetic
-  // below must also change.
-  const int histogram_index =
-      (domain_type << 5) | (port_type << 1) | (status ? 1 : 0);
-  STATIC_HISTOGRAM_POINTER_GROUP(
-      histogram_name, histogram_index, kNumLocalhostHistograms,
-      Add(counts[histogram_name]),
-      base::Histogram::FactoryGet(
-          histogram_name,
-          1,     // min value
-          1000,  // max value
-          50,    // number of buckets
-          base::HistogramBase::kUmaTargetedHistogramFlag));
-}
-
 // TODO(uthakore): Update router regex based on further study.
 // Returns true if the IP address matches the following regular expression for
 // common router IP addresses:
@@ -134,7 +66,8 @@ bool GetIPAndPort(
       *resource_ip = net::IPAddress::IPv4Localhost();
       ip_exists = true;
     } else {
-      ip_exists = net::ParseURLHostnameToAddress(final_url.host(), resource_ip);
+      ip_exists =
+          net::ParseURLHostnameToAddress(final_url.GetHost(), resource_ip);
     }
     *resource_port = final_url.EffectiveIntPort();
   }
@@ -150,159 +83,31 @@ bool GetIPAndPort(
 // Getter for the list of mappings for localhost ports that belong to special
 // categories that we want to track.
 const std::map<uint16_t, internal::PortType>& GetLocalhostPortCategories() {
-  static base::LazyInstance<std::map<uint16_t, internal::PortType>>::Leaky
-      localhost_port_categories = LAZY_INSTANCE_INITIALIZER;
-  if (localhost_port_categories.Get().empty()) {
-    localhost_port_categories.Get() = {
-        {80, internal::PORT_TYPE_WEB},     {443, internal::PORT_TYPE_WEB},
-        {8000, internal::PORT_TYPE_WEB},   {8008, internal::PORT_TYPE_WEB},
-        {8080, internal::PORT_TYPE_WEB},   {8081, internal::PORT_TYPE_WEB},
-        {8088, internal::PORT_TYPE_WEB},   {8181, internal::PORT_TYPE_WEB},
-        {8888, internal::PORT_TYPE_WEB},   {3306, internal::PORT_TYPE_DB},
-        {5432, internal::PORT_TYPE_DB},    {27017, internal::PORT_TYPE_DB},
-        {427, internal::PORT_TYPE_PRINT},  {515, internal::PORT_TYPE_PRINT},
-        {631, internal::PORT_TYPE_PRINT},  {9100, internal::PORT_TYPE_PRINT},
-        {9220, internal::PORT_TYPE_PRINT}, {9500, internal::PORT_TYPE_PRINT},
-        {3000, internal::PORT_TYPE_DEV},   {5000, internal::PORT_TYPE_DEV},
-        {9000, internal::PORT_TYPE_DEV},
-        // TODO(uthakore): Add additional port mappings based on further study.
-    };
-  }
-
-  return localhost_port_categories.Get();
+  static const base::NoDestructor<std::map<uint16_t, internal::PortType>>
+      localhost_port_categories{{
+          {80, internal::PORT_TYPE_WEB},     {443, internal::PORT_TYPE_WEB},
+          {8000, internal::PORT_TYPE_WEB},   {8008, internal::PORT_TYPE_WEB},
+          {8080, internal::PORT_TYPE_WEB},   {8081, internal::PORT_TYPE_WEB},
+          {8088, internal::PORT_TYPE_WEB},   {8181, internal::PORT_TYPE_WEB},
+          {8888, internal::PORT_TYPE_WEB},   {3306, internal::PORT_TYPE_DB},
+          {5432, internal::PORT_TYPE_DB},    {27017, internal::PORT_TYPE_DB},
+          {427, internal::PORT_TYPE_PRINT},  {515, internal::PORT_TYPE_PRINT},
+          {631, internal::PORT_TYPE_PRINT},  {9100, internal::PORT_TYPE_PRINT},
+          {9220, internal::PORT_TYPE_PRINT}, {9500, internal::PORT_TYPE_PRINT},
+          {3000, internal::PORT_TYPE_DEV},   {5000, internal::PORT_TYPE_DEV},
+          {9000, internal::PORT_TYPE_DEV},
+          // TODO(uthakore): Add additional port mappings based on further
+          // study.
+      }};
+  return *localhost_port_categories;
 }
 
 }  // namespace
 
-namespace internal {
-
-// Definitions of getters for the histogram names maps.
-const std::map<internal::DomainType,
-               std::map<internal::ResourceType, std::map<bool, std::string>>>&
-GetNonlocalhostHistogramNames() {
-  static base::LazyInstance<std::map<
-      internal::DomainType,
-      std::map<internal::ResourceType, std::map<bool, std::string>>>>::Leaky
-      histogram_names = LAZY_INSTANCE_INITIALIZER;
-
-  if (histogram_names.Get().empty()) {
-    histogram_names.Get()[internal::DOMAIN_TYPE_PUBLIC]
-                         [internal::RESOURCE_TYPE_PRIVATE][true] =
-        "LocalNetworkRequests.PublicPage.PrivateRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PUBLIC]
-                         [internal::RESOURCE_TYPE_PRIVATE][false] =
-        "LocalNetworkRequests.PublicPage.PrivateRequests.Failed";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PUBLIC]
-                         [internal::RESOURCE_TYPE_ROUTER][true] =
-        "LocalNetworkRequests.PublicPage.RouterRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PUBLIC]
-                         [internal::RESOURCE_TYPE_ROUTER][false] =
-        "LocalNetworkRequests.PublicPage.RouterRequests.Failed";
-
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_PUBLIC][true] =
-        "LocalNetworkRequests.PrivatePage.PublicRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_PUBLIC][false] =
-        "LocalNetworkRequests.PrivatePage.PublicRequests.Failed";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_LOCAL_SAME_SUBNET][true] =
-        "LocalNetworkRequests.PrivatePage.SameSubnetRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_LOCAL_SAME_SUBNET][false] =
-        "LocalNetworkRequests.PrivatePage.SameSubnetRequests.Failed";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_LOCAL_DIFF_SUBNET][true] =
-        "LocalNetworkRequests.PrivatePage.DifferentSubnetRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::RESOURCE_TYPE_LOCAL_DIFF_SUBNET][false] =
-        "LocalNetworkRequests.PrivatePage.DifferentSubnetRequests.Failed";
-  }
-
-  return histogram_names.Get();
-}
-
-const std::map<internal::DomainType,
-               std::map<internal::PortType, std::map<bool, std::string>>>&
-GetLocalhostHistogramNames() {
-  static base::LazyInstance<std::map<
-      internal::DomainType,
-      std::map<internal::PortType, std::map<bool, std::string>>>>::Leaky
-      histogram_names = LAZY_INSTANCE_INITIALIZER;
-
-  if (histogram_names.Get().empty()) {
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_WEB][true] =
-        "LocalNetworkRequests.PublicPage.Localhost.WebRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_WEB][false] =
-        "LocalNetworkRequests.PublicPage.Localhost.WebRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_DB][true] =
-        "LocalNetworkRequests.PublicPage.Localhost.DbRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_DB][false] =
-        "LocalNetworkRequests.PublicPage.Localhost.DbRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_PRINT][true] =
-        "LocalNetworkRequests.PublicPage.Localhost.PrinterRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_PRINT][false] =
-        "LocalNetworkRequests.PublicPage.Localhost.PrinterRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_DEV][true] =
-        "LocalNetworkRequests.PublicPage.Localhost.DevRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_DEV][false] =
-        "LocalNetworkRequests.PublicPage.Localhost.DevRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_OTHER][true] =
-        "LocalNetworkRequests.PublicPage.Localhost.OtherRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PUBLIC][internal::PORT_TYPE_OTHER][false] =
-        "LocalNetworkRequests.PublicPage.Localhost.OtherRequests.Failed";
-
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_WEB][true] =
-        "LocalNetworkRequests.PrivatePage.Localhost.WebRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_WEB][false] =
-        "LocalNetworkRequests.PrivatePage.Localhost.WebRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_DB][true] =
-        "LocalNetworkRequests.PrivatePage.Localhost.DbRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_DB][false] =
-        "LocalNetworkRequests.PrivatePage.Localhost.DbRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_PRINT][true] =
-        "LocalNetworkRequests.PrivatePage.Localhost.PrinterRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::PORT_TYPE_PRINT][false] =
-        "LocalNetworkRequests.PrivatePage.Localhost.PrinterRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_DEV][true] =
-        "LocalNetworkRequests.PrivatePage.Localhost.DevRequests.Successful";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_DEV][false] =
-        "LocalNetworkRequests.PrivatePage.Localhost.DevRequests.Failed";
-    histogram_names
-        .Get()[internal::DOMAIN_TYPE_PRIVATE][internal::PORT_TYPE_OTHER][true] =
-        "LocalNetworkRequests.PrivatePage.Localhost.OtherRequests.Successful";
-    histogram_names.Get()[internal::DOMAIN_TYPE_PRIVATE]
-                         [internal::PORT_TYPE_OTHER][false] =
-        "LocalNetworkRequests.PrivatePage.Localhost.OtherRequests.Failed";
-  }
-
-  return histogram_names.Get();
-}
-
-}  // namespace internal
-
 LocalNetworkRequestsPageLoadMetricsObserver::
-    LocalNetworkRequestsPageLoadMetricsObserver() {}
+    LocalNetworkRequestsPageLoadMetricsObserver() = default;
 LocalNetworkRequestsPageLoadMetricsObserver::
-    ~LocalNetworkRequestsPageLoadMetricsObserver() {}
+    ~LocalNetworkRequestsPageLoadMetricsObserver() = default;
 
 const char* LocalNetworkRequestsPageLoadMetricsObserver::GetObserverName()
     const {
@@ -379,7 +184,6 @@ LocalNetworkRequestsPageLoadMetricsObserver::FlushMetricsOnAppEnterBackground(
   // The browser may come back, but there is no guarantee. To be safe, we record
   // what we have now and treat changes to this navigation as new page loads.
   if (GetDelegate().DidCommit()) {
-    RecordHistograms();
     RecordUkmMetrics(GetDelegate().GetPageUkmSourceId());
     ClearLocalState();
   }
@@ -421,7 +225,6 @@ void LocalNetworkRequestsPageLoadMetricsObserver::OnLoadedResource(
 void LocalNetworkRequestsPageLoadMetricsObserver::OnComplete(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
   if (GetDelegate().DidCommit()) {
-    RecordHistograms();
     RecordUkmMetrics(GetDelegate().GetPageUkmSourceId());
   }
 }
@@ -430,61 +233,6 @@ void LocalNetworkRequestsPageLoadMetricsObserver::ClearLocalState() {
   localhost_request_counts_.clear();
   resource_request_counts_.clear();
   requested_resource_types_.reset();
-}
-
-void LocalNetworkRequestsPageLoadMetricsObserver::RecordHistograms() {
-  if (page_domain_type_ == internal::DOMAIN_TYPE_LOCALHOST) {
-    return;
-  }
-  ResolveResourceTypes();
-
-  // Compute the number of requests of each resource type for the loaded page.
-  std::map<const std::string, int> counts;
-  for (const auto& entry : resource_request_counts_) {
-    counts[internal::GetNonlocalhostHistogramNames()
-               .at(page_domain_type_)
-               .at(requested_resource_types_->at(entry.first))
-               .at(true)] += entry.second.first;
-    counts[internal::GetNonlocalhostHistogramNames()
-               .at(page_domain_type_)
-               .at(requested_resource_types_->at(entry.first))
-               .at(false)] += entry.second.second;
-  }
-
-  for (const auto& entry : localhost_request_counts_) {
-    counts[internal::GetLocalhostHistogramNames()
-               .at(page_domain_type_)
-               .at(DeterminePortType(entry.first))
-               .at(true)] += entry.second.first;
-    counts[internal::GetLocalhostHistogramNames()
-               .at(page_domain_type_)
-               .at(DeterminePortType(entry.first))
-               .at(false)] += entry.second.second;
-  }
-
-  // Log a histogram for each type of resource depending on the domain type of
-  // the page load.
-  if (page_domain_type_ == internal::DOMAIN_TYPE_PUBLIC) {
-    for (auto resource_type :
-         {internal::RESOURCE_TYPE_PRIVATE, internal::RESOURCE_TYPE_ROUTER}) {
-      CreateHistogram(counts, page_domain_type_, resource_type, true);
-      CreateHistogram(counts, page_domain_type_, resource_type, false);
-    }
-  } else {
-    DCHECK_EQ(page_domain_type_, internal::DOMAIN_TYPE_PRIVATE);
-    for (auto resource_type : {internal::RESOURCE_TYPE_PUBLIC,
-                               internal::RESOURCE_TYPE_LOCAL_SAME_SUBNET,
-                               internal::RESOURCE_TYPE_LOCAL_DIFF_SUBNET}) {
-      CreateHistogram(counts, page_domain_type_, resource_type, true);
-      CreateHistogram(counts, page_domain_type_, resource_type, false);
-    }
-  }
-  for (auto port_type : {internal::PORT_TYPE_WEB, internal::PORT_TYPE_DB,
-                         internal::PORT_TYPE_PRINT, internal::PORT_TYPE_DEV,
-                         internal::PORT_TYPE_OTHER}) {
-    CreateHistogram(counts, page_domain_type_, port_type, true);
-    CreateHistogram(counts, page_domain_type_, port_type, false);
-  }
 }
 
 internal::ResourceType

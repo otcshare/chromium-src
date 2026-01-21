@@ -7,11 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
@@ -74,7 +73,7 @@ void LocalFileSyncContext::MaybeInitializeFileSystemContext(
     FileSystemContext* file_system_context,
     SyncStatusCallback callback) {
   DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  if (base::Contains(file_system_contexts_, file_system_context)) {
+  if (file_system_contexts_.contains(file_system_context)) {
     // The context has been already initialized. Just dispatch the callback
     // with SYNC_STATUS_OK.
     ui_task_runner_->PostTask(
@@ -96,7 +95,8 @@ void LocalFileSyncContext::MaybeInitializeFileSystemContext(
       base::BindOnce(
           &LocalFileSyncContext::InitializeFileSystemContextOnIOThread, this,
           source_url, base::RetainedRef(file_system_context));
-  blink::StorageKey storage_key(url::Origin::Create(source_url));
+  const blink::StorageKey storage_key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(source_url));
   io_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&storage::SandboxFileSystemBackendDelegate::OpenFileSystem,
@@ -306,7 +306,6 @@ void LocalFileSyncContext::ApplyRemoteChange(
       return;
   }
   NOTREACHED();
-  std::move(callback).Run(SYNC_STATUS_FAILED);
 }
 
 void LocalFileSyncContext::HandleRemoteDelete(
@@ -460,9 +459,9 @@ void LocalFileSyncContext::GetFileMetadata(
       file_system_context, url);
   file_system_context->operation_runner()->GetMetadata(
       url_for_sync,
-      FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-          FileSystemOperation::GET_METADATA_FIELD_SIZE |
-          FileSystemOperation::GET_METADATA_FIELD_LAST_MODIFIED,
+      {storage::FileSystemOperation::GetMetadataField::kIsDirectory,
+       storage::FileSystemOperation::GetMetadataField::kSize,
+       storage::FileSystemOperation::GetMetadataField::kLastModified},
       base::BindOnce(&LocalFileSyncContext::DidGetFileMetadata, this,
                      std::move(callback)));
 }
@@ -577,8 +576,7 @@ void LocalFileSyncContext::OnWriteEnabled(const FileSystemURL& url) {
   // Nothing to do for now.
 }
 
-LocalFileSyncContext::~LocalFileSyncContext() {
-}
+LocalFileSyncContext::~LocalFileSyncContext() = default;
 
 void LocalFileSyncContext::ScheduleNotifyChangesUpdatedOnIOThread(
     base::OnceClosure callback) {
@@ -751,8 +749,8 @@ void LocalFileSyncContext::DidInitialize(
     return;
   }
   DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!base::Contains(file_system_contexts_, file_system_context));
-  DCHECK(base::Contains(pending_initialize_callbacks_, file_system_context));
+  DCHECK(!file_system_contexts_.contains(file_system_context));
+  DCHECK(pending_initialize_callbacks_.contains(file_system_context));
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);

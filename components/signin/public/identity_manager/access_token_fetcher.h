@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
@@ -16,7 +16,8 @@
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/consent_level.h"
-#include "components/signin/public/identity_manager/scope_set.h"
+#include "components/signin/public/base/oauth_consumer.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
 
@@ -81,11 +82,6 @@ struct AccessTokenInfo;
 //     // AccessTokenFetchers directly themselves rather than introducing
 //     // wrapper API surfaces.
 //     MyClass::StartAccessTokenRequestForAccount(CoreAccountId account_id) {
-//       // Choose scopes to obtain for the access token.
-//       ScopeSet scopes;
-//       scopes.insert(GaiaConstants::kMyFirstScope);
-//       scopes.insert(GaiaConstants::kMySecondScope);
-
 //       // Choose the mode in which to fetch the access token:
 //       // see AccessTokenFetcher::Mode below for definitions.
 //       auto mode = signin::AccessTokenFetcher::Mode::kImmediate;
@@ -93,8 +89,7 @@ struct AccessTokenInfo;
 //       // Create the fetcher via |identity_manager_|.
 //       access_token_fetcher_ =
 //           identity_manager_->CreateAccessTokenFetcherForAccount(
-//               account_id, /*consumer_name=*/"MyClass",
-//               scopes,
+//               account_id, OAuthConsumerId::MyFeatureId,
 //               base::BindOnce(&MyClass::OnAccessTokenRequestCompleted,
 //                              // It is safe to use base::Unretained as
 //                              // |this| owns |access_token_fetcher_|.
@@ -150,6 +145,15 @@ class AccessTokenFetcher : public ProfileOAuth2TokenServiceObserver,
   // forever if the user is not signed in and doesn't sign in.
   enum class Mode { kImmediate, kWaitUntilRefreshTokenAvailable };
 
+  // Specifies the source of the access token which can be stored either in the
+  // profile or on the device itself.
+  enum class Source {
+    kProfile,
+#if BUILDFLAG(IS_IOS)
+    kDevice,
+#endif
+  };
+
   // Callback for when a request completes (successful or not). On successful
   // requests, |error| is NONE and |access_token_info| contains info of the
   // obtained OAuth2 access token. On failed requests, |error| contains the
@@ -161,31 +165,37 @@ class AccessTokenFetcher : public ProfileOAuth2TokenServiceObserver,
                               AccessTokenInfo access_token_info)>;
 
   // Instantiates a fetcher and immediately starts the process of obtaining an
-  // OAuth2 access token for |account_id| and |scopes|. The |callback| is called
-  // once the request completes (successful or not). If the AccessTokenFetcher
-  // is destroyed before the process completes, the callback is not called.
+  // OAuth2 access token for |account_id| and |oauth_consumer_id|. The
+  // |callback| is called once the request completes (successful or not). If the
+  // AccessTokenFetcher is destroyed before the process completes, the callback
+  // is not called.
   AccessTokenFetcher(const CoreAccountId& account_id,
-                     const std::string& oauth_consumer_name,
+                     OAuthConsumerId oauth_consumer_id,
+                     const OAuthConsumer& oauth_consumer,
                      ProfileOAuth2TokenService* token_service,
                      PrimaryAccountManager* primary_account_manager,
-                     const ScopeSet& scopes,
                      TokenCallback callback,
-                     Mode mode);
+                     Mode mode,
+                     bool require_sync_consent_for_scope_verification,
+                     Source token_source = Source::kProfile);
 
   // Instantiates a fetcher and immediately starts the process of obtaining an
-  // OAuth2 access token for |account_id| and |scopes|, allowing clients to pass
-  // a |url_loader_factory| of their choice. The |callback| is called
-  // once the request completes (successful or not). If the AccessTokenFetcher
-  // is destroyed before the process completes, the callback is not called.
+  // OAuth2 access token for |account_id| and |oauth_consumer_id|, allowing
+  // clients to pass a |url_loader_factory| of their choice. The |callback| is
+  // called once the request completes (successful or not). If the
+  // AccessTokenFetcher is destroyed before the process completes, the callback
+  // is not called.
   AccessTokenFetcher(
       const CoreAccountId& account_id,
-      const std::string& oauth_consumer_name,
+      OAuthConsumerId oauth_consumer_id,
+      const OAuthConsumer& oauth_consumer,
       ProfileOAuth2TokenService* token_service,
       PrimaryAccountManager* primary_account_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      const ScopeSet& scopes,
       TokenCallback callback,
-      Mode mode);
+      Mode mode,
+      bool require_sync_consent_for_scope_verification,
+      Source token_source = Source::kProfile);
 
   AccessTokenFetcher(const AccessTokenFetcher&) = delete;
   AccessTokenFetcher& operator=(const AccessTokenFetcher&) = delete;
@@ -221,24 +231,31 @@ class AccessTokenFetcher : public ProfileOAuth2TokenServiceObserver,
                               AccessTokenInfo access_token_info);
 
   const CoreAccountId account_id_;
-  raw_ptr<ProfileOAuth2TokenService> token_service_;
+  raw_ptr<ProfileOAuth2TokenService, DanglingUntriaged> token_service_;
   // Suppress unused typedef warnings in some compiler builds when DCHECK is
   // disabled.
-  [[maybe_unused]] raw_ptr<PrimaryAccountManager> primary_account_manager_;
+  [[maybe_unused]] raw_ptr<PrimaryAccountManager, DanglingUntriaged>
+      primary_account_manager_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   const ScopeSet scopes_;
-  const Mode mode_;
-
   // NOTE: This callback should only be invoked from |RunCallbackAndMaybeDie|,
   // as invoking it has the potential to destroy this object per this class's
   // contract.
   TokenCallback callback_;
+  const Mode mode_;
+  const Source token_source_;
+
+  // TODO(crbug.com/40067025): Remove this field once
+  // kReplaceSyncPromosWithSignInPromos launches.
+  const bool require_sync_consent_for_scope_verification_;
 
   base::ScopedObservation<ProfileOAuth2TokenService,
                           ProfileOAuth2TokenServiceObserver>
       token_service_observation_{this};
 
   std::unique_ptr<OAuth2AccessTokenManager::Request> access_token_request_;
+
+  const OAuthConsumerId oauth_consumer_id_;
 };
 
 }  // namespace signin

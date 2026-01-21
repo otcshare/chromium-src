@@ -4,12 +4,11 @@
 
 #include "content/browser/download/save_file.h"
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_task_runner.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 
@@ -41,9 +40,9 @@ download::DownloadInterruptReason SaveFile::Initialize() {
   return reason;
 }
 
-download::DownloadInterruptReason SaveFile::AppendDataToFile(const char* data,
-                                                             size_t data_len) {
-  return file_.AppendDataToFile(data, data_len);
+download::DownloadInterruptReason SaveFile::AppendDataToFile(
+    base::span<const uint8_t> data) {
+  return file_.AppendDataToFile(data);
 }
 
 download::DownloadInterruptReason SaveFile::Rename(
@@ -69,9 +68,11 @@ void SaveFile::AnnotateWithSourceInformation(
     const GURL& referrer_url,
     mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
     download::BaseFile::OnAnnotationDoneCallback on_annotation_done_callback) {
-  file_.AnnotateWithSourceInformation(client_guid, source_url, referrer_url,
-                                      std::move(remote_quarantine),
-                                      std::move(on_annotation_done_callback));
+  // TODO(crbug.com/351165321): Consider propagating request_initiator
+  // information here.
+  file_.AnnotateWithSourceInformation(
+      client_guid, source_url, referrer_url, /*request_initiator=*/std::nullopt,
+      std::move(remote_quarantine), std::move(on_annotation_done_callback));
 }
 
 base::FilePath SaveFile::FullPath() const {
@@ -88,6 +89,12 @@ int64_t SaveFile::BytesSoFar() const {
 
 std::string SaveFile::DebugString() const {
   return file_.DebugString();
+}
+
+void SaveFile::RunQuarantineCallback() {
+  if (!info_->quarantine_callback.is_null()) {
+    std::move(info_->quarantine_callback).Run();
+  }
 }
 
 }  // namespace content

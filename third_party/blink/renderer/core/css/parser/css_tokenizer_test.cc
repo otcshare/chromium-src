@@ -5,20 +5,10 @@
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/core/css/parser/css_parser_token_range.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 
 namespace blink {
-
-constexpr char kCSSText[] = R"(
-  .foo {
-    background: url(https://example.com);
-  }
-  /* A comment. */
-  @hello {
-   some: stuff;
-  }
-)";
 
 // This let's us see the line numbers of failing tests
 #define TEST_TOKENS(string, ...)     \
@@ -69,26 +59,28 @@ void CompareTokens(const CSSParserToken& expected,
 void TestTokens(const String& string,
                 const CSSParserToken& token1,
                 const CSSParserToken& token2 = CSSParserToken(kEOFToken),
-                const CSSParserToken& token3 = CSSParserToken(kEOFToken)) {
-  Vector<CSSParserToken> expected_tokens;
-  expected_tokens.push_back(token1);
-  if (token2.GetType() != kEOFToken) {
-    expected_tokens.push_back(token2);
-    if (token3.GetType() != kEOFToken)
-      expected_tokens.push_back(token3);
+                const CSSParserToken& token3 = CSSParserToken(kEOFToken),
+                bool unicode_ranges_allowed = false) {
+  CSSParserTokenStream stream(string);
+  CSSParserTokenStream::EnableUnicodeRanges enable(stream,
+                                                   unicode_ranges_allowed);
+  CompareTokens(token1, stream.Peek());
+  if (!stream.AtEnd()) {
+    stream.ConsumeRaw();
+    CompareTokens(token2, stream.Peek());
+    if (!stream.AtEnd()) {
+      stream.ConsumeRaw();
+      CompareTokens(token3, stream.Peek());
+    }
   }
+}
 
-  CSSParserTokenRange expected(expected_tokens);
-
-  CSSTokenizer tokenizer(string);
-  const auto tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange actual(tokens);
-
-  // Just check that serialization doesn't hit any asserts
-  actual.Serialize();
-
-  while (!expected.AtEnd() || !actual.AtEnd())
-    CompareTokens(expected.Consume(), actual.Consume());
+void TestUnicodeRangeTokens(
+    const String& string,
+    const CSSParserToken& token1,
+    const CSSParserToken& token2 = CSSParserToken(kEOFToken),
+    const CSSParserToken& token3 = CSSParserToken(kEOFToken)) {
+  TEST_TOKENS(string, token1, token2, token3, true);
 }
 
 static CSSParserToken Ident(const String& string) {
@@ -139,10 +131,10 @@ static CSSParserToken Percentage(NumericValueType type, double value) {
 
 // We need to initialize PartitionAlloc before creating CSSParserTokens
 // because CSSParserToken depends on PartitionAlloc. It is safe to call
-// WTF::Partitions::initialize() multiple times.
+// Partitions::initialize() multiple times.
 #define DEFINE_TOKEN(name, argument)                       \
   static CSSParserToken& name() {                          \
-    WTF::Partitions::Initialize();                         \
+    Partitions::Initialize();                              \
     DEFINE_STATIC_LOCAL(CSSParserToken, name, (argument)); \
     return name;                                           \
   }
@@ -244,8 +236,9 @@ TEST(CSSTokenizerTest, Escapes) {
   TEST_TOKENS("\\\f", Delim('\\'), Whitespace());
   TEST_TOKENS("\\\r\n", Delim('\\'), Whitespace());
   String replacement = FromUChar32(0xFFFD);
-  TEST_TOKENS(String("null\\\0", 6u), Ident("null" + replacement));
-  TEST_TOKENS(String("null\\\0\0", 7u),
+  TEST_TOKENS(String(base::span_from_cstring("null\\\0")),
+              Ident("null" + replacement));
+  TEST_TOKENS(String(base::span_from_cstring("null\\\0\0")),
               Ident("null" + replacement + replacement));
   TEST_TOKENS("null\\0", Ident("null" + replacement));
   TEST_TOKENS("null\\0000", Ident("null" + replacement));
@@ -278,9 +271,12 @@ TEST(CSSTokenizerTest, IdentToken) {
               Ident(FromUChar32(0xA0)));  // non-breaking space
   TEST_TOKENS(FromUChar32(0x1234), Ident(FromUChar32(0x1234)));
   TEST_TOKENS(FromUChar32(0x12345), Ident(FromUChar32(0x12345)));
-  TEST_TOKENS(String("\0", 1u), Ident(FromUChar32(0xFFFD)));
-  TEST_TOKENS(String("ab\0c", 4u), Ident("ab" + FromUChar32(0xFFFD) + "c"));
-  TEST_TOKENS(String("ab\0c", 4u), Ident("ab" + FromUChar32(0xFFFD) + "c"));
+  TEST_TOKENS(String(base::span_from_cstring("\0")),
+              Ident(FromUChar32(0xFFFD)));
+  TEST_TOKENS(String(base::span_from_cstring("ab\0c")),
+              Ident("ab" + FromUChar32(0xFFFD) + "c"));
+  TEST_TOKENS(String(base::span_from_cstring("ab\0c")),
+              Ident("ab" + FromUChar32(0xFFFD) + "c"));
 }
 
 TEST(CSSTokenizerTest, FunctionToken) {
@@ -355,10 +351,11 @@ TEST(CSSTokenizerTest, StringToken) {
   TEST_TOKENS("'bad\rstring", BadString(), Whitespace(), Ident("string"));
   TEST_TOKENS("'bad\r\nstring", BadString(), Whitespace(), Ident("string"));
   TEST_TOKENS("'bad\fstring", BadString(), Whitespace(), Ident("string"));
-  TEST_TOKENS(String("'\0'", 3u), GetString(FromUChar32(0xFFFD)));
-  TEST_TOKENS(String("'hel\0lo'", 8u),
+  TEST_TOKENS(String(base::span_from_cstring("'\0'")),
+              GetString(FromUChar32(0xFFFD)));
+  TEST_TOKENS(String(base::span_from_cstring("'hel\0lo'")),
               GetString("hel" + FromUChar32(0xFFFD) + "lo"));
-  TEST_TOKENS(String("'h\\65l\0lo'", 10u),
+  TEST_TOKENS(String(base::span_from_cstring("'h\\65l\0lo'")),
               GetString("hel" + FromUChar32(0xFFFD) + "lo"));
 }
 
@@ -432,32 +429,39 @@ TEST(CSSTokenizerTest, PercentageToken) {
 }
 
 TEST(CSSTokenizerTest, UnicodeRangeToken) {
-  TEST_TOKENS("u+012345-123456", UnicodeRng(0x012345, 0x123456));
-  TEST_TOKENS("U+1234-2345", UnicodeRng(0x1234, 0x2345));
-  TEST_TOKENS("u+222-111", UnicodeRng(0x222, 0x111));
-  TEST_TOKENS("U+CafE-d00D", UnicodeRng(0xcafe, 0xd00d));
-  TEST_TOKENS("U+2??", UnicodeRng(0x200, 0x2ff));
-  TEST_TOKENS("U+ab12??", UnicodeRng(0xab1200, 0xab12ff));
-  TEST_TOKENS("u+??????", UnicodeRng(0x000000, 0xffffff));
-  TEST_TOKENS("u+??", UnicodeRng(0x00, 0xff));
+  TestUnicodeRangeTokens("u+012345-123456", UnicodeRng(0x012345, 0x123456));
+  TestUnicodeRangeTokens("U+1234-2345", UnicodeRng(0x1234, 0x2345));
+  TestUnicodeRangeTokens("u+222-111", UnicodeRng(0x222, 0x111));
+  TestUnicodeRangeTokens("U+CafE-d00D", UnicodeRng(0xcafe, 0xd00d));
+  TestUnicodeRangeTokens("U+2??", UnicodeRng(0x200, 0x2ff));
+  TestUnicodeRangeTokens("U+ab12??", UnicodeRng(0xab1200, 0xab12ff));
+  TestUnicodeRangeTokens("u+??????", UnicodeRng(0x000000, 0xffffff));
+  TestUnicodeRangeTokens("u+??", UnicodeRng(0x00, 0xff));
 
-  TEST_TOKENS("u+222+111", UnicodeRng(0x222, 0x222),
-              Number(kIntegerValueType, 111, kPlusSign));
-  TEST_TOKENS("u+12345678", UnicodeRng(0x123456, 0x123456),
-              Number(kIntegerValueType, 78, kNoSign));
-  TEST_TOKENS("u+123-12345678", UnicodeRng(0x123, 0x123456),
-              Number(kIntegerValueType, 78, kNoSign));
-  TEST_TOKENS("u+cake", UnicodeRng(0xca, 0xca), Ident("ke"));
-  TEST_TOKENS("u+1234-gggg", UnicodeRng(0x1234, 0x1234), Ident("-gggg"));
-  TEST_TOKENS("U+ab12???", UnicodeRng(0xab1200, 0xab12ff), Delim('?'));
-  TEST_TOKENS("u+a1?-123", UnicodeRng(0xa10, 0xa1f),
-              Number(kIntegerValueType, -123, kMinusSign));
-  TEST_TOKENS("u+1??4", UnicodeRng(0x100, 0x1ff),
-              Number(kIntegerValueType, 4, kNoSign));
+  TestUnicodeRangeTokens("u+222+111", UnicodeRng(0x222, 0x222),
+                         Number(kIntegerValueType, 111, kPlusSign));
+  TestUnicodeRangeTokens("u+12345678", UnicodeRng(0x123456, 0x123456),
+                         Number(kIntegerValueType, 78, kNoSign));
+  TestUnicodeRangeTokens("u+123-12345678", UnicodeRng(0x123, 0x123456),
+                         Number(kIntegerValueType, 78, kNoSign));
+  TestUnicodeRangeTokens("u+cake", UnicodeRng(0xca, 0xca), Ident("ke"));
+  TestUnicodeRangeTokens("u+1234-gggg", UnicodeRng(0x1234, 0x1234),
+                         Ident("-gggg"));
+  TestUnicodeRangeTokens("U+ab12???", UnicodeRng(0xab1200, 0xab12ff),
+                         Delim('?'));
+  TestUnicodeRangeTokens("u+a1?-123", UnicodeRng(0xa10, 0xa1f),
+                         Number(kIntegerValueType, -123, kMinusSign));
+  TestUnicodeRangeTokens("u+1??4", UnicodeRng(0x100, 0x1ff),
+                         Number(kIntegerValueType, 4, kNoSign));
   TEST_TOKENS("u+z", Ident("u"), Delim('+'), Ident("z"));
   TEST_TOKENS("u+", Ident("u"), Delim('+'));
   TEST_TOKENS("u+-543", Ident("u"), Delim('+'),
               Number(kIntegerValueType, -543, kMinusSign));
+
+  TEST_TOKENS("u+012345", Ident("u"),
+              Number(kIntegerValueType, 12345, kPlusSign));
+  TEST_TOKENS("u+a", Ident("u"), Delim('+'), Ident("a"));
+  TestUnicodeRangeTokens("u+a", UnicodeRng(0xa, 0xa));
 }
 
 TEST(CSSTokenizerTest, CommentToken) {
@@ -469,57 +473,5 @@ TEST(CSSTokenizerTest, CommentToken) {
   TEST_TOKENS("/**/*", Delim('*'));
   TEST_TOKENS(";/******", Semicolon());
 }
-
-StringView GetLastTokenRange(const CSSTokenizerWrapper& tokenizer) {
-  wtf_size_t start = tokenizer.PreviousOffset();
-  return tokenizer.StringRangeAt(start, tokenizer.Offset() - start);
-}
-
-class CachedCSSTokenizerTest
-    : public testing::Test,
-      public testing::WithParamInterface<bool /* include_comments */> {};
-
-TEST_P(CachedCSSTokenizerTest, CachedTokenizer) {
-  // Make sure the cached tokenizer gives the exact same results as
-  // CSSTokenizer.
-  CSSTokenizer uncached_tokenizer(kCSSText);
-  CSSTokenizerWrapper tokenizer1(uncached_tokenizer);
-
-  auto cached_tokenizer = CSSTokenizer::CreateCachedTokenizer(kCSSText);
-  CSSTokenizerWrapper tokenizer2(*cached_tokenizer);
-
-  EXPECT_EQ(tokenizer1.Offset(), tokenizer2.Offset());
-  EXPECT_EQ(tokenizer1.PreviousOffset(), tokenizer2.PreviousOffset());
-
-  // Tokenize the full CSS text with comments and verify the tokens and state.
-  bool last_token_eof = false;
-  while (true) {
-    CSSParserToken token1(kEOFToken);
-    CSSParserToken token2(kEOFToken);
-    if (GetParam()) {
-      token1 = tokenizer1.TokenizeSingleWithComments();
-      token2 = tokenizer2.TokenizeSingleWithComments();
-    } else {
-      token1 = tokenizer1.TokenizeSingle();
-      token2 = tokenizer2.TokenizeSingle();
-    }
-    CompareTokens(token1, token2);
-    EXPECT_EQ(tokenizer1.Offset(), tokenizer2.Offset());
-    EXPECT_EQ(tokenizer1.PreviousOffset(), tokenizer2.PreviousOffset());
-    EXPECT_EQ(GetLastTokenRange(tokenizer1), GetLastTokenRange(tokenizer2));
-    if (last_token_eof)
-      break;
-
-    // Perform one more iteration of the loop to make sure behavior is the same
-    // if TokenizeSingle() is called beyond EOF.
-    last_token_eof = token1.GetType() == kEOFToken;
-
-    // CSSTokenizer keeps adding to token count after EOF and CachedCSSTokenizer
-    // doesn't match this behavior.
-    EXPECT_EQ(tokenizer1.TokenCount(), tokenizer2.TokenCount());
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(All, CachedCSSTokenizerTest, ::testing::Bool());
 
 }  // namespace blink

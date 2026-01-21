@@ -6,10 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -102,6 +102,7 @@ TEST_F(SandboxFileSystemBackendDelegateTest, IsAccessValid) {
   EXPECT_FALSE(IsAccessValid(CreateFileSystemURL(".")));
   EXPECT_FALSE(IsAccessValid(CreateFileSystemURL("..")));
 
+#if BUILDFLAG(IS_WIN)
   // This is also disallowed due to Windows XP parent path handling.
   EXPECT_FALSE(IsAccessValid(CreateFileSystemURL("...")));
 
@@ -109,6 +110,11 @@ TEST_F(SandboxFileSystemBackendDelegateTest, IsAccessValid) {
   // on Windows.
   EXPECT_FALSE(IsAccessValid(CreateFileSystemURL(" ..")));
   EXPECT_FALSE(IsAccessValid(CreateFileSystemURL(".. ")));
+#else
+  EXPECT_TRUE(IsAccessValid(CreateFileSystemURL("...")));
+  EXPECT_TRUE(IsAccessValid(CreateFileSystemURL(" ..")));
+  EXPECT_TRUE(IsAccessValid(CreateFileSystemURL(".. ")));
+#endif
 
   // Similar but safe cases.
   EXPECT_TRUE(IsAccessValid(CreateFileSystemURL(" .")));
@@ -127,7 +133,7 @@ TEST_F(SandboxFileSystemBackendDelegateTest, OpenFileSystemAccessesStorage) {
   const blink::StorageKey& storage_key =
       blink::StorageKey::CreateFromStringForTesting("http://example.com");
 
-  // TODO(https://crbug.com/1330608): ensure that this test suite properly
+  // TODO(crbug.com/40227222): ensure that this test suite properly
   // integrates non-default BucketLocators into OpenFileSystem.
   OpenFileSystem(BucketLocator::ForDefaultBucket(storage_key),
                  kFileSystemTypeTemporary,
@@ -137,8 +143,6 @@ TEST_F(SandboxFileSystemBackendDelegateTest, OpenFileSystemAccessesStorage) {
   EXPECT_EQ(last_error(), base::File::FILE_OK);
   EXPECT_EQ(quota_manager_proxy()->notify_bucket_accessed_count(), 1);
   EXPECT_EQ(quota_manager_proxy()->last_notified_storage_key(), storage_key);
-  EXPECT_EQ(quota_manager_proxy()->last_notified_type(),
-            blink::mojom::StorageType::kTemporary);
 }
 
 }  // namespace storage

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ash/public/cpp/holding_space/holding_space_file.h"
 #include "ash/public/cpp/holding_space/holding_space_image.h"
 #include "ash/public/cpp/holding_space/holding_space_section.h"
 #include "ash/public/cpp/holding_space/holding_space_test_api.h"
@@ -17,13 +18,16 @@
 #include "ash/system/holding_space/test_holding_space_item_views_section.h"
 #include "ash/system/holding_space/test_holding_space_tray_child_bubble.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "ui/views/widget/unique_widget_ptr.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
 namespace {
+
+// Helpers ---------------------------------------------------------------------
 
 std::vector<std::pair<HoldingSpaceSectionId, HoldingSpaceItem::Type>>
 GetSectionIdItemTypePairs() {
@@ -44,6 +48,8 @@ GetSectionIdItemTypePairs() {
 
 }  // namespace
 
+// HoldingSpaceItemViewsSectionTest --------------------------------------------
+
 class HoldingSpaceItemViewsSectionTest
     : public HoldingSpaceAshTestBase,
       public testing::WithParamInterface<
@@ -61,11 +67,12 @@ class HoldingSpaceItemViewsSectionTest
   }
 
  private:
-  // HoldingSpaceAshTestBase
+  // HoldingSpaceAshTestBase:
   void SetUp() override {
     HoldingSpaceAshTestBase::SetUp();
     widget_ = std::make_unique<views::Widget>();
-    widget_->Init(views::Widget::InitParams{});
+    widget_->Init(views::Widget::InitParams{
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET});
 
     view_delegate_ = std::make_unique<HoldingSpaceViewDelegate>(nullptr);
 
@@ -80,6 +87,7 @@ class HoldingSpaceItemViewsSectionTest
   }
 
   void TearDown() override {
+    item_views_section_ = nullptr;
     if (!tear_down_asynchronously_)
       widget_->CloseNow();
 
@@ -108,16 +116,18 @@ class HoldingSpaceItemViewsSectionTest
   views::UniqueWidgetPtr widget_;
   std::unique_ptr<HoldingSpaceViewDelegate> view_delegate_;
 
-  TestHoldingSpaceItemViewsSection* item_views_section_ = nullptr;
+  raw_ptr<TestHoldingSpaceItemViewsSection> item_views_section_ = nullptr;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
                          HoldingSpaceItemViewsSectionTest,
                          testing::ValuesIn(GetSectionIdItemTypePairs()));
 
+// Tests -----------------------------------------------------------------------
+
 // Verifies the items are ordered as expected.
 TEST_P(HoldingSpaceItemViewsSectionTest, ItemOrder) {
-  const absl::optional<size_t> section_max_views =
+  const std::optional<size_t> section_max_views =
       GetHoldingSpaceSection(section_id())->max_visible_item_count;
 
   // Add a number of items.
@@ -129,7 +139,7 @@ TEST_P(HoldingSpaceItemViewsSectionTest, ItemOrder) {
 
   // Reverse the items so that the are the same order that we expect from the
   // views.
-  std::reverse(items.begin(), items.end());
+  std::ranges::reverse(items);
 
   auto views = item_views_section()->GetHoldingSpaceItemViews();
 
@@ -167,9 +177,12 @@ TEST_P(HoldingSpaceItemViewsSectionTest, PartiallyInitializedItemsDontShow) {
   // Once initialized, the item should show a view as normal.
   model()->InitializeOrRemoveItem(
       partially_initialized_item->id(),
-      GURL(base::StrCat(
-          {"filesystem:",
-           partially_initialized_item->file_path().BaseName().value()})));
+      HoldingSpaceFile(
+          partially_initialized_item->file().file_path,
+          HoldingSpaceFile::FileSystemType::kTest,
+          GURL(base::StrCat({"filesystem:", partially_initialized_item->file()
+                                                .file_path.BaseName()
+                                                .value()}))));
 
   views = item_views_section()->GetHoldingSpaceItemViews();
   ASSERT_EQ(views.size(), 2u);
@@ -178,7 +191,7 @@ TEST_P(HoldingSpaceItemViewsSectionTest, PartiallyInitializedItemsDontShow) {
 
 // Verifies that resetting a section allows it to be destroyed asynchronously.
 TEST_P(HoldingSpaceItemViewsSectionTest, ResetForAsyncDestruction) {
-  const absl::optional<size_t> section_max_views =
+  const std::optional<size_t> section_max_views =
       GetHoldingSpaceSection(section_id())->max_visible_item_count;
 
   // Add items to the section.

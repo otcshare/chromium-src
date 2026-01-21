@@ -4,7 +4,7 @@
 
 #include "ui/gtk/gtk_ui_platform_stub.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/base/ime/linux/linux_input_method_context.h"
 
 namespace gtk {
@@ -13,30 +13,16 @@ GtkUiPlatformStub::GtkUiPlatformStub() = default;
 
 GtkUiPlatformStub::~GtkUiPlatformStub() = default;
 
-void GtkUiPlatformStub::OnInitialized(GtkWidget* widget) {}
+void GtkUiPlatformStub::OnInitialized() {}
 
-GdkKeymap* GtkUiPlatformStub::GetGdkKeymap() {
+GdkWindow* GtkUiPlatformStub::GetGdkWindow(
+    gfx::AcceleratedWidget window_id) const {
   return nullptr;
 }
 
-GdkModifierType GtkUiPlatformStub::GetGdkKeyEventState(
-    const ui::KeyEvent& key_event) {
-  return static_cast<GdkModifierType>(0);
-}
-
-int GtkUiPlatformStub::GetGdkKeyEventGroup(const ui::KeyEvent& key_event) {
-  return 0;
-}
-
-GdkWindow* GtkUiPlatformStub::GetGdkWindow(gfx::AcceleratedWidget window_id) {
-  return nullptr;
-}
-
-bool GtkUiPlatformStub::SetGtkWidgetTransientFor(
+void GtkUiPlatformStub::SetGtkWidgetTransientFor(
     GtkWidget* widget,
-    gfx::AcceleratedWidget parent) {
-  return false;
-}
+    gfx::AcceleratedWidget parent) {}
 
 void GtkUiPlatformStub::ClearTransientFor(gfx::AcceleratedWidget parent) {}
 
@@ -48,6 +34,14 @@ std::unique_ptr<ui::LinuxInputMethodContext>
 GtkUiPlatformStub::CreateInputMethodContext(
     ui::LinuxInputMethodContextDelegate* delegate) const {
   return nullptr;
+}
+
+bool GtkUiPlatformStub::IncludeFontScaleInDeviceScale() const {
+  return false;
+}
+
+bool GtkUiPlatformStub::IncludeScaleInCursorSize() const {
+  return false;
 }
 
 }  // namespace gtk

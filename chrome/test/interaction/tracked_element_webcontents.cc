@@ -7,6 +7,10 @@
 
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/interaction/element_tracker.h"
+
+DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(TrackedElementWebContents,
+                                       kFirstNonEmptyPaint);
 
 TrackedElementWebContents::TrackedElementWebContents(
     ui::ElementIdentifier identifier,
@@ -20,6 +24,10 @@ TrackedElementWebContents::~TrackedElementWebContents() {
 
 void TrackedElementWebContents::Init() {
   ui::ElementTracker::GetFrameworkDelegate()->NotifyElementShown(this);
+}
+
+gfx::Rect TrackedElementWebContents::GetScreenBounds() const {
+  return owner_->web_contents()->GetContainerBounds();
 }
 
 std::string TrackedElementWebContents::ToString() const {

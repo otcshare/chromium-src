@@ -2,35 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/devtools/devtools_http_handler.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
+#include "base/uuid.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "content/browser/devtools/devtools_http_handler.h"
+#include "build/util/chromium_git_revision.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -40,10 +46,10 @@
 #include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/devtools_socket_factory.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_constants.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
-#include "content/public/common/user_agent.h"
 #include "net/base/io_buffer.h"
-#include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
@@ -52,23 +58,19 @@
 #include "net/server/http_server_response_info.h"
 #include "net/socket/server_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "v8/include/v8-version-string.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
+#include "base/android/apk_info.h"
 #endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
 extern const int kCcompressedProtocolJSON;
 #endif
 
 namespace content {
 
 namespace {
-
-const base::FilePath::CharType kDevToolsActivePortFileName[] =
-    FILE_PATH_LITERAL("DevToolsActivePort");
 
 const char kDevToolsHandlerThreadName[] = "Chrome_DevToolsHandlerThread";
 
@@ -84,17 +86,13 @@ const char kTargetUrlField[] = "url";
 const char kTargetFaviconUrlField[] = "faviconUrl";
 const char kTargetWebSocketDebuggerUrlField[] = "webSocketDebuggerUrl";
 const char kTargetDevtoolsFrontendUrlField[] = "devtoolsFrontendUrl";
+const char kMissingGitRevision[] = "@0000000000000000000000000000000000000000";
 
 const int32_t kSendBufferSizeForDevTools = 256 * 1024 * 1024;  // 256Mb
 const int32_t kReceiveBufferSizeForDevTools = 100 * 1024 * 1024;  // 100Mb
 
 const char kRemoteUrlPattern[] =
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    "https://chrome-devtools-frontend.appspot.com/serve_internal_file/%s/"
-    "%s.html";
-#else
     "https://chrome-devtools-frontend.appspot.com/serve_rev/%s/%s.html";
-#endif
 
 constexpr net::NetworkTrafficAnnotationTag
     kDevtoolsHttpHandlerTrafficAnnotation =
@@ -126,7 +124,13 @@ bool RequestIsSafeToServe(const net::HttpServerRequestInfo& info) {
   if (header.empty())
     return true;
   GURL url = GURL("https://" + header);
-  return url.HostIsIPAddress() || net::IsLocalHostname(url.host());
+  return url.HostIsIPAddress() || net::IsLocalHostname(url.GetHost());
+}
+
+// Returns the (incorrectly named, for historical reasons) WebKit version, in
+// the form "major.minor (@chromium_git_revision)".
+std::string GetWebKitVersion() {
+  return base::StringPrintf("537.36 (%s)", CHROMIUM_GIT_REVISION);
 }
 
 }  // namespace
@@ -299,9 +303,8 @@ void StartServerOnHandlerThread(
           output_directory.Append(kDevToolsActivePortFileName);
       std::string port_target_string = base::StringPrintf(
           "%d\n%s", ip_address->port(), browser_guid.c_str());
-      if (base::WriteFile(path, port_target_string.c_str(),
-                          static_cast<int>(port_target_string.length())) < 0) {
-        LOG(ERROR) << "Error writing DevTools active port to file";
+      if (!base::WriteFile(path, port_target_string)) {
+        PLOG(ERROR) << "Error writing DevTools active port to file " << path;
       }
     }
   } else {
@@ -352,8 +355,7 @@ class DevToolsAgentHostClientImpl : public DevToolsAgentHostClient {
     constexpr char kMsg[] =
         "{\"method\":\"Inspector.detached\","
         "\"params\":{\"reason\":\"target_closed\"}}";
-    DispatchProtocolMessage(
-        agent_host, base::as_bytes(base::make_span(kMsg, strlen(kMsg))));
+    DispatchProtocolMessage(agent_host, base::byte_span_from_cstring(kMsg));
 
     agent_host_ = nullptr;
     task_runner_->PostTask(
@@ -381,7 +383,7 @@ class DevToolsAgentHostClientImpl : public DevToolsAgentHostClient {
 
  private:
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
-  ServerWrapper* const server_wrapper_;
+  const raw_ptr<ServerWrapper> server_wrapper_;
   const int connection_id_;
   scoped_refptr<DevToolsAgentHost> agent_host_;
 };
@@ -393,13 +395,26 @@ static bool TimeComparator(scoped_refptr<DevToolsAgentHost> host1,
 
 // DevToolsHttpHandler -------------------------------------------------------
 
+net::IPEndPoint DevToolsHttpHandler::GetServerIpAddress() const {
+  if (server_ip_address_) {
+    return *server_ip_address_;
+  }
+  return net::IPEndPoint();
+}
+
 DevToolsHttpHandler::~DevToolsHttpHandler() {
+  if (delegate_ &&
+      mode_ ==
+          DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    delegate_->SetActiveWebSocketConnections(0);
+  }
   // Disconnecting sessions might lead to the last minute messages generated
   // by the targets. It is essential that this happens before we issue delete
   // soon for the server wrapper.
   connection_to_client_.clear();
   TerminateOnUI(std::move(thread_), std::move(server_wrapper_),
                 std::move(socket_factory_));
+  delegate_ = nullptr;
 }
 
 static std::string PathWithoutParams(const std::string& path) {
@@ -416,6 +431,8 @@ static std::string GetMimeType(const std::string& filename) {
                             base::CompareCase::INSENSITIVE_ASCII)) {
     return "text/css";
   } else if (base::EndsWith(filename, ".js",
+                            base::CompareCase::INSENSITIVE_ASCII) ||
+             base::EndsWith(filename, ".mjs",
                             base::CompareCase::INSENSITIVE_ASCII)) {
     return "text/javascript";
   } else if (base::EndsWith(filename, ".png",
@@ -518,25 +535,24 @@ std::string DevToolsHttpHandler::GetFrontendURLInternal(
     const std::string& id,
     const std::string& host) {
   std::string frontend_url;
-  if (delegate_->HasBundledFrontendResources()) {
+  const std::string git_revision = CHROMIUM_GIT_REVISION;
+  if (git_revision == kMissingGitRevision &&
+      delegate_->HasBundledFrontendResources()) {
     frontend_url = "/devtools/inspector.html";
   } else {
     std::string type = agent_host->GetType();
     bool is_worker = type == DevToolsAgentHost::kTypeServiceWorker ||
                      type == DevToolsAgentHost::kTypeSharedWorker;
-    frontend_url =
-        base::StringPrintf(kRemoteUrlPattern, GetChromiumGitRevision().c_str(),
-                           is_worker ? "worker_app" : "inspector");
+    frontend_url = base::StringPrintf(kRemoteUrlPattern, git_revision.c_str(),
+                                      is_worker ? "worker_app" : "inspector");
   }
   return base::StringPrintf("%s?ws=%s%s%s", frontend_url.c_str(), host.c_str(),
                             kPageUrlPrefix, id.c_str());
 }
 
-static bool ParseJsonPath(
-    const std::string& path,
-    std::string* command,
-    std::string* target_id) {
-
+static bool ParseJsonPath(std::string_view path,
+                          std::string* command,
+                          std::string* target_id) {
   // Fall back to list in case of empty query.
   if (path.empty()) {
     *command = "list";
@@ -547,19 +563,25 @@ static bool ParseJsonPath(
     // Malformed command.
     return false;
   }
-  *command = path.substr(1);
+  std::string_view command_view = path.substr(1);
 
-  size_t separator_pos = command->find("/");
-  if (separator_pos != std::string::npos) {
-    *target_id = command->substr(separator_pos + 1);
-    *command = command->substr(0, separator_pos);
+  size_t separator_pos = command_view.find("/");
+  if (separator_pos != std::string_view::npos) {
+    *target_id = command_view.substr(separator_pos + 1);
+    command_view = command_view.substr(0, separator_pos);
   }
+  *command = command_view;
   return true;
 }
 
 void DevToolsHttpHandler::OnJsonRequest(
     int connection_id,
     const net::HttpServerRequestInfo& info) {
+  if (mode_ ==
+      DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    Send404(connection_id);
+    return;
+  }
   // Trim /json
   std::string path = info.path.substr(5);
 
@@ -578,7 +600,7 @@ void DevToolsHttpHandler::OnJsonRequest(
   std::string command;
   std::string target_id;
   if (!ParseJsonPath(path, &command, &target_id)) {
-    SendJson(connection_id, net::HTTP_NOT_FOUND, absl::nullopt,
+    SendJson(connection_id, net::HTTP_NOT_FOUND, std::nullopt,
              "Malformed query: " + info.path);
     return;
   }
@@ -596,7 +618,7 @@ void DevToolsHttpHandler::OnJsonRequest(
         base::StringPrintf("ws://%s%s", host.c_str(), browser_guid_.c_str()));
 #if BUILDFLAG(IS_ANDROID)
     version.Set("Android-Package",
-                base::android::BuildInfo::GetInstance()->host_package_name());
+                base::android::apk_info::host_package_name());
 #endif
     SendJson(connection_id, net::HTTP_OK, version, std::string());
     return;
@@ -606,14 +628,21 @@ void DevToolsHttpHandler::OnJsonRequest(
     DecompressAndSendJsonProtocol(connection_id);
     return;
   }
+  std::vector<std::string_view> query_components = base::SplitStringPiece(
+      query, "&", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+
+  bool for_tab = std::ranges::contains(query_components, "for_tab");
 
   if (command == "list") {
     DevToolsManager* manager = DevToolsManager::GetInstance();
     DevToolsAgentHost::List list =
-        manager->delegate() ? manager->delegate()->RemoteDebuggingTargets()
-                            : DevToolsAgentHost::GetOrCreateAll();
+        manager->delegate() ? manager->delegate()->RemoteDebuggingTargets(
+                                  for_tab ? DevToolsManagerDelegate::kTab
+                                          : DevToolsManagerDelegate::kFrame)
+            : DevToolsAgentHost::GetOrCreateAll();
+
     RespondToJsonList(connection_id, info.GetHeaderValue("host"),
-                      std::move(list));
+                      std::move(list), for_tab);
     return;
   }
 
@@ -621,26 +650,27 @@ void DevToolsHttpHandler::OnJsonRequest(
     if (!base::EqualsCaseInsensitiveASCII(
             info.method, net::HttpRequestHeaders::kPutMethod)) {
       SendJson(
-          connection_id, net::HTTP_METHOD_NOT_ALLOWED, absl::nullopt,
+          connection_id, net::HTTP_METHOD_NOT_ALLOWED, std::nullopt,
           base::StringPrintf("Using unsafe HTTP verb %s to invoke /json/new. "
                              "This action supports only PUT verb.",
                              info.method.c_str()));
       return;
     }
 
-    std::vector<base::StringPiece> query_components = base::SplitStringPiece(
-        query, "&", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-    base::StringPiece escaped_url =
+    std::string_view escaped_url =
         query_components.empty() ? "" : query_components[0];
     GURL url(base::UnescapeBinaryURLComponent(escaped_url));
     if (!url.is_valid())
       url = GURL(url::kAboutBlankURL);
     // TODO(dsv): Remove for "for_tab" support once DevTools Frontend
     // no longer needs it for e2e tests
-    scoped_refptr<DevToolsAgentHost> agent_host = delegate_->CreateNewTarget(
-        url, query_components.size() > 1 && query_components[1] == "for_tab");
+    scoped_refptr<DevToolsAgentHost> agent_host =
+        delegate_->CreateNewTarget(url,
+                                   for_tab ? DevToolsManagerDelegate::kTab
+                                           : DevToolsManagerDelegate::kFrame,
+                                   /*new_window=*/false);
     if (!agent_host) {
-      SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, absl::nullopt,
+      SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, std::nullopt,
                "Could not create new page");
       return;
     }
@@ -654,17 +684,16 @@ void DevToolsHttpHandler::OnJsonRequest(
     scoped_refptr<DevToolsAgentHost> agent_host =
         DevToolsAgentHost::GetForId(target_id);
     if (!agent_host) {
-      SendJson(connection_id, net::HTTP_NOT_FOUND, absl::nullopt,
+      SendJson(connection_id, net::HTTP_NOT_FOUND, std::nullopt,
                "No such target id: " + target_id);
       return;
     }
 
     if (command == "activate") {
       if (agent_host->Activate()) {
-        SendJson(connection_id, net::HTTP_OK, absl::nullopt,
-                 "Target activated");
+        SendJson(connection_id, net::HTTP_OK, std::nullopt, "Target activated");
       } else {
-        SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, absl::nullopt,
+        SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, std::nullopt,
                  "Could not activate target id: " + target_id);
       }
       return;
@@ -672,56 +701,59 @@ void DevToolsHttpHandler::OnJsonRequest(
 
     if (command == "close") {
       if (agent_host->Close()) {
-        SendJson(connection_id, net::HTTP_OK, absl::nullopt,
+        SendJson(connection_id, net::HTTP_OK, std::nullopt,
                  "Target is closing");
       } else {
-        SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, absl::nullopt,
+        SendJson(connection_id, net::HTTP_INTERNAL_SERVER_ERROR, std::nullopt,
                  "Could not close target id: " + target_id);
       }
       return;
     }
   }
-  SendJson(connection_id, net::HTTP_NOT_FOUND, absl::nullopt,
+  SendJson(connection_id, net::HTTP_NOT_FOUND, std::nullopt,
            "Unknown command: " + command);
 }
 
 void DevToolsHttpHandler::DecompressAndSendJsonProtocol(int connection_id) {
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
-  NOTREACHED();
-#else
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
   scoped_refptr<base::RefCountedMemory> bytes =
       GetContentClient()->GetDataResourceBytes(kCcompressedProtocolJSON);
   CHECK(bytes) << "Could not load protocol";
-  std::string json_protocol(reinterpret_cast<const char*>(bytes->front()),
-                            bytes->size());
 
   net::HttpServerResponseInfo response(net::HTTP_OK);
-  response.SetBody(json_protocol, "application/json; charset=UTF-8");
+  response.SetBody(std::string(base::as_string_view(*bytes)),
+                   "application/json; charset=UTF-8");
 
   thread_->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&ServerWrapper::SendResponse,
                                 base::Unretained(server_wrapper_.get()),
                                 connection_id, response));
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
+#else
+  NOTREACHED();
+#endif  // BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
 }
 
-void DevToolsHttpHandler::RespondToJsonList(
-    int connection_id,
-    const std::string& host,
-    DevToolsAgentHost::List hosts) {
+void DevToolsHttpHandler::RespondToJsonList(int connection_id,
+                                            const std::string& host,
+                                            DevToolsAgentHost::List hosts,
+                                            bool for_tab) {
   DevToolsAgentHost::List agent_hosts = std::move(hosts);
   std::sort(agent_hosts.begin(), agent_hosts.end(), TimeComparator);
   base::Value::List list_value;
   for (auto& agent_host : agent_hosts) {
-    // TODO(caseq): figure out if it makes sense exposing tab target to
-    // HTTP clients and potentially compatibility risks involved.
-    if (agent_host->GetType() != DevToolsAgentHost::kTypeTab)
+    if (agent_host->GetType() != DevToolsAgentHost::kTypeTab || for_tab) {
       list_value.Append(SerializeDescriptor(agent_host, host));
+    }
   }
   SendJson(connection_id, net::HTTP_OK, list_value, std::string());
 }
 
 void DevToolsHttpHandler::OnDiscoveryPageRequest(int connection_id) {
+  if (mode_ ==
+      DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    Send404(connection_id);
+    return;
+  }
   net::HttpServerResponseInfo response(net::HTTP_OK);
   response.AddHeader("X-Frame-Options", "DENY");
   response.SetBody(delegate_->GetDiscoveryPageHTML(),
@@ -735,13 +767,38 @@ void DevToolsHttpHandler::OnDiscoveryPageRequest(int connection_id) {
 
 void DevToolsHttpHandler::OnFrontendResourceRequest(
     int connection_id, const std::string& path) {
-#if BUILDFLAG(IS_ANDROID)
-  Send404(connection_id);
-#else
+  if (mode_ ==
+      DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    Send404(connection_id);
+    return;
+  }
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
   Send200(connection_id,
           content::DevToolsFrontendHost::GetFrontendResource(path),
           GetMimeType(path));
+#else
+  Send404(connection_id);
 #endif
+}
+
+void DevToolsHttpHandler::HandleDebuggingApproval(
+    int connection_id,
+    const net::HttpServerRequestInfo& request,
+    DevToolsManagerDelegate::AcceptConnectionResult result) {
+  if (result == DevToolsManagerDelegate::AcceptConnectionResult::kAllow) {
+    scoped_refptr<DevToolsAgentHost> browser_agent =
+        DevToolsAgentHost::CreateForBrowser(
+            thread_->task_runner(),
+            base::BindRepeating(&DevToolsSocketFactory::CreateForTethering,
+                                base::Unretained(socket_factory_.get())));
+    connection_to_client_[connection_id] =
+        std::make_unique<DevToolsAgentHostClientImpl>(
+            thread_->task_runner(), server_wrapper_.get(), connection_id,
+            browser_agent);
+    AcceptWebSocket(connection_id, request);
+  } else {
+    Send403(connection_id, "Connection rejected");
+  }
 }
 
 void DevToolsHttpHandler::OnWebSocketRequest(
@@ -749,6 +806,36 @@ void DevToolsHttpHandler::OnWebSocketRequest(
     const net::HttpServerRequestInfo& request) {
   if (!thread_)
     return;
+
+  if (request.headers.count("origin") &&
+      !remote_allow_origins_.count(request.headers.at("origin")) &&
+      !remote_allow_origins_.count("*")) {
+    const std::string& origin = request.headers.at("origin");
+    const std::string message = base::StringPrintf(
+        "Rejected an incoming WebSocket connection from the %s origin. "
+        "Use the command line flag --remote-allow-origins=%s to allow "
+        "connections from this origin or --remote-allow-origins=* to allow all "
+        "origins.",
+        origin.c_str(), origin.c_str());
+    Send403(connection_id, message);
+    LOG(ERROR) << message;
+    return;
+  }
+
+  // If we require user approval, we do not require guid.
+  if (mode_ ==
+      DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    if (base::StartsWith(request.path, kBrowserUrlPrefix,
+                         base::CompareCase::SENSITIVE)) {
+      delegate_->AcceptDebugging(
+          base::BindOnce(&DevToolsHttpHandler::HandleDebuggingApproval,
+                         weak_factory_.GetWeakPtr(), connection_id, request));
+
+      return;
+    }
+    Send403(connection_id, "Connection rejected");
+    return;
+  }
 
   if (base::StartsWith(request.path, browser_guid_,
                        base::CompareCase::SENSITIVE)) {
@@ -790,24 +877,32 @@ void DevToolsHttpHandler::OnWebSocketMessage(int connection_id,
                                              std::string data) {
   auto it = connection_to_client_.find(connection_id);
   if (it != connection_to_client_.end()) {
-    it->second->OnMessage(base::as_bytes(base::make_span(data)));
+    it->second->OnMessage(base::as_byte_span(data));
   }
 }
 
 void DevToolsHttpHandler::OnClose(int connection_id) {
-  connection_to_client_.erase(connection_id);
+  auto removed_count = connection_to_client_.erase(connection_id);
+  if (delegate_ && removed_count > 0 &&
+      mode_ ==
+          DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    delegate_->SetActiveWebSocketConnections(connection_to_client_.size());
+  }
 }
 
 DevToolsHttpHandler::DevToolsHttpHandler(
     DevToolsManagerDelegate* delegate,
     std::unique_ptr<DevToolsSocketFactory> socket_factory,
     const base::FilePath& output_directory,
-    const base::FilePath& debug_frontend_dir)
-    : delegate_(delegate) {
-  browser_guid_ = delegate_->IsBrowserTargetDiscoverable()
-                      ? kBrowserUrlPrefix
-                      : base::StringPrintf("%s/%s", kBrowserUrlPrefix,
-                                           base::GenerateGUID().c_str());
+    const base::FilePath& debug_frontend_dir,
+    DevToolsAgentHost::RemoteDebuggingServerMode mode)
+    : mode_(mode), delegate_(delegate) {
+  browser_guid_ =
+      delegate_->IsBrowserTargetDiscoverable()
+          ? kBrowserUrlPrefix
+          : base::StringPrintf(
+                "%s/%s", kBrowserUrlPrefix,
+                base::Uuid::GenerateRandomV4().AsLowercaseString().c_str());
   std::unique_ptr<base::Thread> thread(
       new base::Thread(kDevToolsHandlerThreadName));
   base::Thread::Options options;
@@ -821,6 +916,14 @@ DevToolsHttpHandler::DevToolsHttpHandler(
                        output_directory, debug_frontend_dir, browser_guid_,
                        delegate_->HasBundledFrontendResources()));
   }
+  std::string remote_allow_origins = base::ToLowerASCII(
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+          switches::kRemoteAllowOrigins));
+
+  auto origins =
+      base::SplitString(remote_allow_origins, ",", base::TRIM_WHITESPACE,
+                        base::SPLIT_WANT_NONEMPTY);
+  remote_allow_origins_.insert(origins.begin(), origins.end());
 }
 
 void DevToolsHttpHandler::ServerStarted(
@@ -836,7 +939,7 @@ void DevToolsHttpHandler::ServerStarted(
 
 void DevToolsHttpHandler::SendJson(int connection_id,
                                    net::HttpStatusCode status_code,
-                                   absl::optional<base::ValueView> value,
+                                   std::optional<base::ValueView> value,
                                    const std::string& message) {
   if (!thread_)
     return;
@@ -847,8 +950,7 @@ void DevToolsHttpHandler::SendJson(int connection_id,
     base::JSONWriter::WriteWithOptions(
         *value, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_value);
   }
-  std::string json_message;
-  base::JSONWriter::Write(base::Value(message), &json_message);
+  std::string json_message = base::WriteJson(base::Value(message)).value_or("");
 
   net::HttpServerResponseInfo response(status_code);
   response.AddHeader("Content-Security-Policy", "frame-ancestors 'none'");
@@ -880,6 +982,19 @@ void DevToolsHttpHandler::Send404(int connection_id) {
                      base::Unretained(server_wrapper_.get()), connection_id));
 }
 
+void DevToolsHttpHandler::Send403(int connection_id,
+                                  const std::string& message) {
+  if (!thread_) {
+    return;
+  }
+  net::HttpServerResponseInfo response(net::HTTP_FORBIDDEN);
+  response.SetBody(message, "text/html");
+  thread_->task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(&ServerWrapper::SendResponse,
+                                base::Unretained(server_wrapper_.get()),
+                                connection_id, response));
+}
+
 void DevToolsHttpHandler::Send500(int connection_id,
                                   const std::string& message) {
   if (!thread_)
@@ -895,6 +1010,10 @@ void DevToolsHttpHandler::AcceptWebSocket(
     const net::HttpServerRequestInfo& request) {
   if (!thread_)
     return;
+  if (mode_ ==
+      DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly) {
+    delegate_->SetActiveWebSocketConnections(connection_to_client_.size());
+  }
   thread_->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&ServerWrapper::AcceptWebSocket,
                                 base::Unretained(server_wrapper_.get()),

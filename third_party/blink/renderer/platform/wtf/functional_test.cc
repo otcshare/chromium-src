@@ -25,31 +25,19 @@
 
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
-#include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/gtest_util.h"
 #include "base/threading/thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
-#include "third_party/blink/renderer/platform/wtf/ref_counted.h"
-#include "third_party/blink/renderer/platform/wtf/wtf_test_helper.h"
 
-namespace WTF {
-
-class UnwrappedClass {
- public:
-  explicit UnwrappedClass(int value) : value_(value) {}
-
-  int Value() const { return value_; }
-
- private:
-  int value_;
-};
+namespace blink {
 
 class HasWeakPtrSupport {
  public:
@@ -67,85 +55,13 @@ class HasWeakPtrSupport {
   base::WeakPtrFactory<HasWeakPtrSupport> weak_ptr_factory_{this};
 };
 
-}  // namespace WTF
-
-namespace WTF {
 namespace {
-
-class A {
- public:
-  explicit A(int i) : i_(i) {}
-  virtual ~A() = default;
-
-  int F() { return i_; }
-  int AddF(int j) { return i_ + j; }
-  virtual int Overridden() { return 42; }
-
- private:
-  int i_;
-};
-
-class B : public A {
- public:
-  explicit B(int i) : A(i) {}
-
-  int F() { return A::F() + 1; }
-  int AddF(int j) { return A::AddF(j) + 1; }
-  int Overridden() override { return 43; }
-};
-
-class Number {
- public:
-  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
-  static scoped_refptr<Number> Create(int value) {
-    return base::AdoptRef(new Number(value));
-  }
-
-  ~Number() { value_ = 0; }
-
-  int Value() const { return value_; }
-
-  int RefCount() const { return ref_count_; }
-  bool HasOneRef() const { return ref_count_ == 1; }
-
-  // For RefPtr support.
-  void Adopted() const {}
-  void AddRef() const { ++ref_count_; }
-  void Release() const {
-    if (--ref_count_ == 0)
-      delete this;
-  }
-
- private:
-  explicit Number(int value) : value_(value) {}
-
-  int value_;
-  mutable int ref_count_ = 1;
-};
-
-class CountGeneration {
-  STACK_ALLOCATED();
-
- public:
-  CountGeneration() : copies_(0) {}
-  CountGeneration(const CountGeneration& other) : copies_(other.copies_ + 1) {}
-
-  int Copies() const { return copies_; }
-
- private:
-  // Copy/move-assignment is not needed in the test.
-  CountGeneration& operator=(const CountGeneration&) = delete;
-  CountGeneration& operator=(CountGeneration&&) = delete;
-
-  int copies_;
-};
 
 TEST(FunctionalTest, WeakPtr) {
   HasWeakPtrSupport obj;
   int counter = 0;
-  base::RepeatingClosure bound =
-      WTF::BindRepeating(&HasWeakPtrSupport::Increment, obj.GetWeakPtr(),
-                         WTF::Unretained(&counter));
+  base::RepeatingClosure bound = blink::BindRepeating(
+      &HasWeakPtrSupport::Increment, obj.GetWeakPtr(), Unretained(&counter));
 
   bound.Run();
   EXPECT_FALSE(bound.IsCancelled());
@@ -165,13 +81,13 @@ TEST(FunctionalTest, RawPtr) {
   int i = 123;
   raw_ptr<int> p = &i;
 
-  auto callback = WTF::BindRepeating(PingPong, WTF::Unretained(p));
+  auto callback = BindRepeating(PingPong, Unretained(p));
   int res = callback.Run();
   EXPECT_EQ(123, res);
 }
 
 void MakeClosure(base::OnceClosure** closure_out) {
-  *closure_out = new base::OnceClosure(WTF::BindOnce([] {}));
+  *closure_out = new base::OnceClosure(BindOnce([] {}));
   LEAK_SANITIZER_IGNORE_OBJECT(*closure_out);
 }
 
@@ -180,8 +96,9 @@ TEST(FunctionalTest, ThreadRestriction) {
 
   base::Thread thread("testing");
   thread.Start();
-  thread.task_runner()->PostTask(FROM_HERE,
-                                 base::BindOnce(&MakeClosure, &closure));
+  thread.task_runner()->PostTask(
+      FROM_HERE, ConvertToBaseOnceCallback(CrossThreadBindOnce(
+                     &MakeClosure, CrossThreadUnretained(&closure))));
   thread.Stop();
 
   ASSERT_TRUE(closure);
@@ -189,5 +106,5 @@ TEST(FunctionalTest, ThreadRestriction) {
   EXPECT_DCHECK_DEATH(delete closure);
 }
 
-}  // anonymous namespace
-}  // namespace WTF
+}  // namespace
+}  // namespace blink

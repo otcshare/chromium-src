@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include "base/containers/small_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "base/unguessable_token.h"
@@ -21,6 +22,7 @@
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_pixmap.h"
+#include "ui/ozone/public/native_pixmap_usage.h"
 
 namespace ui {
 
@@ -38,19 +40,20 @@ class FlatlandSysmemBufferManager {
 
   // Initializes the buffer manager with a connection to the Sysmem service and
   // Flatland Allocator.
-  void Initialize(fuchsia::sysmem::AllocatorHandle sysmem_allocator,
+  void Initialize(fuchsia::sysmem2::AllocatorHandle sysmem_allocator,
                   fuchsia::ui::composition::AllocatorHandle flatland_allocator);
 
   // Disconnects from the sysmem service. After disconnecting, it's safe to call
   // Initialize() again.
   void Shutdown();
 
-  scoped_refptr<gfx::NativePixmap> CreateNativePixmap(VkDevice vk_device,
-                                                      gfx::Size size,
-                                                      gfx::BufferFormat format,
-                                                      gfx::BufferUsage usage);
+  scoped_refptr<gfx::NativePixmap> CreateNativePixmap(
+      VkDevice vk_device,
+      gfx::Size size,
+      viz::SharedImageFormat format,
+      NativePixmapUsageSet usage);
 
-  // TODO(crbug.com/1380090): Instead of an additional
+  // TODO(crbug.com/42050538): Instead of an additional
   // |register_with_flatland_allocator| bool, we can rely on |usage| to decide
   // if the buffers should be registered with Flatland or not.
   scoped_refptr<FlatlandSysmemBufferCollection> ImportSysmemBufferCollection(
@@ -58,7 +61,7 @@ class FlatlandSysmemBufferManager {
       zx::eventpair service_handle,
       zx::channel sysmem_token,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
       size_t min_buffer_count,
       bool register_with_flatland_allocator);
@@ -69,14 +72,22 @@ class FlatlandSysmemBufferManager {
   scoped_refptr<FlatlandSysmemBufferCollection> GetCollectionByHandle(
       const zx::eventpair& handle);
 
+  fuchsia::sysmem2::Allocator_Sync* sysmem_allocator() {
+    return sysmem_allocator_.get();
+  }
+
+  fuchsia::ui::composition::Allocator* flatland_allocator() {
+    return flatland_allocator_.get();
+  }
+
  private:
   void RegisterCollection(
       scoped_refptr<FlatlandSysmemBufferCollection> collection);
 
   void OnCollectionReleased(zx_koid_t id);
 
-  FlatlandSurfaceFactory* const flatland_surface_factory_;
-  fuchsia::sysmem::AllocatorSyncPtr sysmem_allocator_;
+  const raw_ptr<FlatlandSurfaceFactory> flatland_surface_factory_;
+  fuchsia::sysmem2::AllocatorSyncPtr sysmem_allocator_;
   fuchsia::ui::composition::AllocatorPtr flatland_allocator_;
 
   base::small_map<

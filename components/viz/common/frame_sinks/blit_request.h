@@ -12,11 +12,14 @@
 
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/viz_common_export.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 
+namespace gpu {
+class ClientSharedImage;
+}
 namespace viz {
 
 // `BlendBitmap` can be added to `BlitRequest`, and signifies that the caller
@@ -68,12 +71,13 @@ enum class LetterboxingBehavior {
 // in textures that they own.
 class VIZ_COMMON_EXPORT BlitRequest {
  public:
-  explicit BlitRequest(
-      const gfx::Point& destination_region_offset,
-      LetterboxingBehavior letterboxing_behavior,
-      const std::array<gpu::MailboxHolder, CopyOutputResult::kMaxPlanes>&
-          mailboxes,
-      bool populates_gpu_memory_buffer);
+  BlitRequest();
+  // `shared_image` must not be null
+  explicit BlitRequest(const gfx::Point& destination_region_offset,
+                       LetterboxingBehavior letterboxing_behavior,
+                       scoped_refptr<gpu::ClientSharedImage> shared_image,
+                       const gpu::SyncToken& sync_token,
+                       bool populates_mappable_shared_image);
 
   BlitRequest(BlitRequest&& other);
   BlitRequest& operator=(BlitRequest&& other);
@@ -90,18 +94,14 @@ class VIZ_COMMON_EXPORT BlitRequest {
     return letterboxing_behavior_;
   }
 
-  const std::array<gpu::MailboxHolder, CopyOutputResult::kMaxPlanes>&
-  mailboxes() const {
-    return mailboxes_;
+  const scoped_refptr<gpu::ClientSharedImage>& shared_image() const {
+    return shared_image_;
   }
 
-  const gpu::MailboxHolder& mailbox(size_t i) const {
-    CHECK(i < std::size(mailboxes_));
-    return mailboxes_[i];
-  }
+  const gpu::SyncToken& sync_token() const { return sync_token_; }
 
-  bool populates_gpu_memory_buffer() const {
-    return populates_gpu_memory_buffer_;
+  bool populates_mappable_shared_image() const {
+    return populates_mappable_shared_image_;
   }
 
   // Appends a new `BlendBitmap` request to this blit request.
@@ -121,7 +121,7 @@ class VIZ_COMMON_EXPORT BlitRequest {
   }
 
  private:
-  // Offset from the origin of the image represented by the |mailboxes|.
+  // Offset from the origin of the image represented by the `shared_image_`.
   // The results of the blit request will be placed at that offset in those
   // images.
   gfx::Point destination_region_offset_;
@@ -129,18 +129,19 @@ class VIZ_COMMON_EXPORT BlitRequest {
   // Specifies the letterboxing behavior of this request.
   LetterboxingBehavior letterboxing_behavior_;
 
-  // Mailboxes with planes that will be populated.
-  // The textures can (but don't have to be) backed by
-  // a GpuMemoryBuffer. The pixel format of the request determines
-  // how many planes need to be present.
-  std::array<gpu::MailboxHolder, CopyOutputResult::kMaxPlanes> mailboxes_;
+  // The image that will be populated. The texture can (but doesn't have to) be
+  // backed by a GpuMemoryBuffer.
+  scoped_refptr<gpu::ClientSharedImage> shared_image_;
 
-  // True if `mailboxes_` describe shared images that have been created from
-  // a GpuMemoryBuffer. In this case, the CopyOutputResult needs to be sent out
-  // only after it's safe to map the GpuMemoryBuffer to system memory.
-  bool populates_gpu_memory_buffer_;
+  // SyncToken to wait on before accessing `shared_image_`;
+  gpu::SyncToken sync_token_;
 
-  // Collection of bitmaps that will be blended onto the textures.
+  // True if `shared_image_` is mappable. In this case, the `CopyOutputResult`
+  // needs to be sent out only after it's safe to map the SharedImage to
+  // system memory.
+  bool populates_mappable_shared_image_;
+
+  // Collection of bitmaps that will be blended onto the texture.
   // They will be blended in order (so if i < j, bitmap at offset i will
   // be blended before bitmap at offset j), using SrcOver blend mode.
   std::vector<BlendBitmap> blend_bitmaps_;

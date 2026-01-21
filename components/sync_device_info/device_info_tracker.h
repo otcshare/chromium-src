@@ -5,12 +5,11 @@
 #ifndef COMPONENTS_SYNC_DEVICE_INFO_DEVICE_INFO_TRACKER_H_
 #define COMPONENTS_SYNC_DEVICE_INFO_DEVICE_INFO_TRACKER_H_
 
-#include <map>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "components/sync_device_info/device_info.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace sync_pb {
 enum SyncEnums_DeviceType : int;
@@ -18,11 +17,11 @@ enum SyncEnums_DeviceType : int;
 
 namespace syncer {
 
-// Interface for tracking synced DeviceInfo. This excludes sync-ing clients that
-// are not chromium-based.
+// Interface for tracking synced DeviceInfo. Note that this includes sync-ing
+// clients that are not chromium-based.
 class DeviceInfoTracker {
  public:
-  virtual ~DeviceInfoTracker() {}
+  virtual ~DeviceInfoTracker() = default;
 
   // Observer class for listening to device info changes.
   class Observer {
@@ -39,18 +38,24 @@ class DeviceInfoTracker {
     // GUID or this is the first browser startup), it will be updated later
     // during the initial merge.
     virtual void OnDeviceInfoChange() = 0;
+
     virtual ~Observer() = default;
   };
 
   // Returns true when DeviceInfo datatype is enabled and syncing.
   virtual bool IsSyncing() const = 0;
   // Gets DeviceInfo the synced device with specified client ID.
-  // Returns an empty unique_ptr if device with the given |client_id| hasn't
-  // been synced.
-  virtual std::unique_ptr<DeviceInfo> GetDeviceInfo(
+  // Returns null if device with the given |client_id| hasn't been synced.
+  // The returned pointer is meant to be short-lived (i.e. use only within the
+  // ongoing task) and may be dangling otherwise.
+  virtual const DeviceInfo* GetDeviceInfo(
       const std::string& client_id) const = 0;
-  // Gets DeviceInfo for all synced devices (including the local one).
-  virtual std::vector<std::unique_ptr<DeviceInfo>> GetAllDeviceInfo() const = 0;
+  // Gets DeviceInfo for all synced devices (including the local one). The
+  // returned pointers are meant to be short-lived (i.e. use only within the
+  // ongoing task) and may be dangling otherwise.
+  virtual std::vector<const DeviceInfo*> GetAllDeviceInfo() const = 0;
+  // Same as above but returns only DeviceInfo for Chrome clients.
+  virtual std::vector<const DeviceInfo*> GetAllChromeDeviceInfo() const = 0;
   // Registers an observer to be called on syncing any updated DeviceInfo.
   virtual void AddObserver(Observer* observer) = 0;
   // Unregisters an observer.
@@ -59,8 +64,8 @@ class DeviceInfoTracker {
   // OsType and the FormFactor. Deduping logic may be used internally to prevent
   // double counting for devices that disable sync and reenable it, but callers
   // should nevertheless consider this an upper bound per type.
-  virtual std::map<DeviceInfo::FormFactor, int> CountActiveDevicesByType()
-      const = 0;
+  virtual absl::flat_hash_map<DeviceInfo::FormFactor, int>
+  CountActiveDevicesByType() const = 0;
   // A function to to allow tests to ensure active devices. If called when the
   // local device info provider is not initialized, will force update after
   // initialization.

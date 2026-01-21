@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "mojo/public/tests/test_support_private.h"
 
 #include <assert.h>
@@ -29,16 +34,18 @@ void MojoTestSupportLogPerfResult(const char* test_name,
 }
 
 FILE* MojoTestSupportOpenSourceRootRelativeFile(const char* relative_path) {
-  if (g_test_support)
+  if (g_test_support) {
     return g_test_support->OpenSourceRootRelativeFile(relative_path);
+  }
   printf("[no test runner]\n");
   return NULL;
 }
 
 char** MojoTestSupportEnumerateSourceRootRelativeDirectory(
     const char* relative_path) {
-  if (g_test_support)
+  if (g_test_support) {
     return g_test_support->EnumerateSourceRootRelativeDirectory(relative_path);
+  }
 
   printf("[no test runner]\n");
 
@@ -53,8 +60,7 @@ char** MojoTestSupportEnumerateSourceRootRelativeDirectory(
 namespace mojo {
 namespace test {
 
-TestSupport::~TestSupport() {
-}
+TestSupport::~TestSupport() {}
 
 // static
 void TestSupport::Init(TestSupport* test_support) {

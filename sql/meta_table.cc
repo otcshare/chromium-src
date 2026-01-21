@@ -6,9 +6,10 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
+#include "base/check.h"
 #include "base/check_op.h"
-#include "base/strings/string_piece.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/statement_id.h"
@@ -23,15 +24,19 @@ constexpr char kVersionKey[] = "version";
 constexpr char kCompatibleVersionKey[] = "last_compatible_version";
 constexpr char kMmapStatusKey[] = "mmap_status";
 
-void PrepareSetStatement(base::StringPiece key,
+bool PrepareSetStatement(std::string_view key,
                          Database& db,
                          Statement& insert_statement) {
   insert_statement.Assign(db.GetCachedStatement(
       SQL_FROM_HERE, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)"));
+  if (!insert_statement.is_valid()) {
+    return false;
+  }
   insert_statement.BindString(0, key);
+  return true;
 }
 
-bool PrepareGetStatement(base::StringPiece key,
+bool PrepareGetStatement(std::string_view key,
                          Database& db,
                          Statement& select_statement) {
   select_statement.Assign(db.GetCachedStatement(
@@ -46,6 +51,8 @@ bool PrepareGetStatement(base::StringPiece key,
 }  // namespace
 
 MetaTable::MetaTable() = default;
+
+MetaTable::MetaTable(Database& db) : db_(&db) {}
 
 MetaTable::~MetaTable() = default;
 
@@ -88,27 +95,34 @@ bool MetaTable::SetMmapStatus(Database* db, int64_t status) {
   DCHECK(status == kMmapFailure || status == kMmapSuccess || status >= 0);
 
   Statement insert;
-  PrepareSetStatement(kMmapStatusKey, *db, insert);
+  if (!PrepareSetStatement(kMmapStatusKey, *db, insert)) {
+    return false;
+  }
+
   insert.BindInt64(1, status);
   return insert.Run();
 }
 
 // static
-void MetaTable::RazeIfIncompatible(Database* db,
-                                   int lowest_supported_version,
-                                   int current_version) {
+RazeIfIncompatibleResult MetaTable::RazeIfIncompatible(
+    Database* db,
+    int lowest_supported_version,
+    int current_version) {
   DCHECK(db);
 
-  if (!DoesTableExist(db))
-    return;
+  if (!DoesTableExist(db)) {
+    return RazeIfIncompatibleResult::kCompatible;
+  }
 
   sql::Statement select;
-  if (!PrepareGetStatement(kVersionKey, *db, select))
-    return;
+  if (!PrepareGetStatement(kVersionKey, *db, select)) {
+    return RazeIfIncompatibleResult::kFailed;
+  }
   int64_t on_disk_schema_version = select.ColumnInt64(0);
 
-  if (!PrepareGetStatement(kCompatibleVersionKey, *db, select))
-    return;
+  if (!PrepareGetStatement(kCompatibleVersionKey, *db, select)) {
+    return RazeIfIncompatibleResult::kFailed;
+  }
   int64_t on_disk_compatible_version = select.ColumnInt(0);
 
   select.Clear();  // Clear potential automatic transaction for Raze().
@@ -116,9 +130,10 @@ void MetaTable::RazeIfIncompatible(Database* db,
   if ((lowest_supported_version != kNoLowestSupportedVersion &&
        lowest_supported_version > on_disk_schema_version) ||
       (current_version < on_disk_compatible_version)) {
-    db->Raze();
-    return;
+    return db->Raze() ? RazeIfIncompatibleResult::kRazedSuccessfully
+                      : RazeIfIncompatibleResult::kFailed;
   }
+  return RazeIfIncompatibleResult::kCompatible;
 }
 
 bool MetaTable::Init(Database* db, int version, int compatible_version) {
@@ -130,7 +145,7 @@ bool MetaTable::Init(Database* db, int version, int compatible_version) {
   DCHECK_GT(version, 0);
   DCHECK_GT(compatible_version, 0);
 
-  // Make sure the table is created an populated atomically.
+  // Make sure the table is created and populated atomically.
   sql::Transaction transaction(db_);
   if (!transaction.Begin())
     return false;
@@ -144,13 +159,20 @@ bool MetaTable::Init(Database* db, int version, int compatible_version) {
 
     // Newly-created databases start out with mmap'ed I/O, but have no place to
     // store the setting.  Set here so that later opens don't need to validate.
-    SetMmapStatus(db_, kMmapSuccess);
+    if (!SetMmapStatus(db_, kMmapSuccess)) {
+      return false;
+    }
 
     // Note: there is no index over the meta table. We currently only have a
     // couple of keys, so it doesn't matter. If we start storing more stuff in
     // there, we should create an index.
-    SetVersionNumber(version);
-    SetCompatibleVersionNumber(compatible_version);
+
+    // If setting either version number fails, return early to avoid likely
+    // crashes or incorrect behavior with respect to migrations.
+    if (!SetVersionNumber(version) ||
+        !SetCompatibleVersionNumber(compatible_version)) {
+      return false;
+    }
   }
   return transaction.Commit();
 }
@@ -159,9 +181,9 @@ void MetaTable::Reset() {
   db_ = nullptr;
 }
 
-void MetaTable::SetVersionNumber(int version) {
+bool MetaTable::SetVersionNumber(int version) {
   DCHECK_GT(version, 0);
-  SetValue(kVersionKey, version);
+  return SetValue(kVersionKey, version);
 }
 
 int MetaTable::GetVersionNumber() {
@@ -169,9 +191,9 @@ int MetaTable::GetVersionNumber() {
   return GetValue(kVersionKey, &version) ? version : 0;
 }
 
-void MetaTable::SetCompatibleVersionNumber(int version) {
+bool MetaTable::SetCompatibleVersionNumber(int version) {
   DCHECK_GT(version, 0);
-  SetValue(kCompatibleVersionKey, version);
+  return SetValue(kCompatibleVersionKey, version);
 }
 
 int MetaTable::GetCompatibleVersionNumber() {
@@ -179,7 +201,7 @@ int MetaTable::GetCompatibleVersionNumber() {
   return GetValue(kCompatibleVersionKey, &version) ? version : 0;
 }
 
-bool MetaTable::SetValue(base::StringPiece key, const std::string& value) {
+bool MetaTable::SetValue(std::string_view key, const std::string& value) {
   DCHECK(db_);
 
   Statement insert;
@@ -188,7 +210,7 @@ bool MetaTable::SetValue(base::StringPiece key, const std::string& value) {
   return insert.Run();
 }
 
-bool MetaTable::SetValue(base::StringPiece key, int64_t value) {
+bool MetaTable::SetValue(std::string_view key, int64_t value) {
   DCHECK(db_);
 
   Statement insert;
@@ -197,7 +219,7 @@ bool MetaTable::SetValue(base::StringPiece key, int64_t value) {
   return insert.Run();
 }
 
-bool MetaTable::GetValue(base::StringPiece key, std::string* value) {
+bool MetaTable::GetValue(std::string_view key, std::string* value) {
   DCHECK(value);
   DCHECK(db_);
 
@@ -209,7 +231,7 @@ bool MetaTable::GetValue(base::StringPiece key, std::string* value) {
   return true;
 }
 
-bool MetaTable::GetValue(base::StringPiece key, int* value) {
+bool MetaTable::GetValue(std::string_view key, int* value) {
   DCHECK(value);
   DCHECK(db_);
 
@@ -221,7 +243,7 @@ bool MetaTable::GetValue(base::StringPiece key, int* value) {
   return true;
 }
 
-bool MetaTable::GetValue(base::StringPiece key, int64_t* value) {
+bool MetaTable::GetValue(std::string_view key, int64_t* value) {
   DCHECK(value);
   DCHECK(db_);
 
@@ -233,7 +255,7 @@ bool MetaTable::GetValue(base::StringPiece key, int64_t* value) {
   return true;
 }
 
-bool MetaTable::DeleteKey(base::StringPiece key) {
+bool MetaTable::DeleteKey(std::string_view key) {
   DCHECK(db_);
 
   Statement delete_statement(

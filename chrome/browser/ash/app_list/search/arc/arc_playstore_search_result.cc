@@ -6,18 +6,17 @@
 
 #include <utility>
 
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/vector_icons/vector_icons.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
-#include "chrome/browser/ash/app_list/arc/arc_playstore_app_context_menu.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "components/crx_file/id_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/gfx/canvas.h"
@@ -99,12 +98,9 @@ namespace app_list {
 
 ArcPlayStoreSearchResult::ArcPlayStoreSearchResult(
     arc::mojom::AppDiscoveryResultPtr data,
-    Profile* profile,
     AppListControllerDelegate* list_controller,
     const std::u16string& query)
-    : data_(std::move(data)),
-      profile_(profile),
-      list_controller_(list_controller) {
+    : data_(std::move(data)), list_controller_(list_controller) {
   const auto title = base::UTF8ToUTF16(label().value());
   SetTitle(title);
   set_id(kPlayAppPrefix +
@@ -140,25 +136,12 @@ void ArcPlayStoreSearchResult::Open(int event_flags) {
                list_controller_->GetAppListDisplayId());
 }
 
-void ArcPlayStoreSearchResult::GetContextMenuModel(
-    GetMenuModelCallback callback) {
-  context_menu_ = std::make_unique<ArcPlayStoreAppContextMenu>(
-      this, profile_, list_controller_);
-  // TODO(755701): Enable context menu once Play Store API starts returning both
-  // install and launch intents.
-  std::move(callback).Run(nullptr);
-}
-
 void ArcPlayStoreSearchResult::ExecuteLaunchCommand(int event_flags) {
   Open(event_flags);
 }
 
-AppContextMenu* ArcPlayStoreSearchResult::GetAppContextMenu() {
-  return context_menu_.get();
-}
-
 void ArcPlayStoreSearchResult::OnIconDecoded(const gfx::ImageSkia& icon) {
-  SetIcon(IconInfo(icon, kAppIconDimension));
+  SetIcon(IconInfo(ui::ImageModel::FromImageSkia(icon), kAppIconDimension));
 }
 
 }  // namespace app_list

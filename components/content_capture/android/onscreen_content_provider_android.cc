@@ -9,11 +9,13 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "components/content_capture/common/content_capture_features.h"
+#include "content/public/browser/web_contents.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/content_capture/android/jni_headers/ContentCaptureData_jni.h"
 #include "components/content_capture/android/jni_headers/ContentCaptureFrame_jni.h"
 #include "components/content_capture/android/jni_headers/OnscreenContentProvider_jni.h"
-#include "components/content_capture/common/content_capture_features.h"
-#include "content/public/browser/web_contents.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
@@ -75,42 +77,60 @@ ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfContentCaptureFrame(
     JNIEnv* env,
     const ContentCaptureSession& session,
     int offset_y) {
-  ScopedJavaLocalRef<jclass> object_clazz =
-      base::android::GetClass(env, "java/lang/Object");
   jobjectArray joa =
-      env->NewObjectArray(session.size(), object_clazz.obj(), nullptr);
-  jni_generator::CheckException(env);
+      env->NewObjectArray(session.size(), jni_zero::g_object_class, nullptr);
+  base::android::CheckException(env);
 
   for (size_t i = 0; i < session.size(); ++i) {
     ScopedJavaLocalRef<jobject> item =
         ToJavaObjectOfContentCaptureFrame(env, session[i], offset_y);
     env->SetObjectArrayElement(joa, i, item.obj());
   }
-  return ScopedJavaLocalRef<jobjectArray>(env, joa);
+  return ScopedJavaLocalRef<jobjectArray>::Adopt(env, joa);
 }
 
 }  // namespace
 
-static jlong JNI_OnscreenContentProvider_Init(
+static int64_t JNI_OnscreenContentProvider_Init(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jcaller,
-    const base::android::JavaParamRef<jobject>& jwebContents) {
-  auto* web_contents = content::WebContents::FromJavaWebContents(jwebContents);
+    const base::android::JavaRef<jobject>& obj,
+    const base::android::JavaRef<jobject>& jweb_contents) {
+  auto* web_contents = content::WebContents::FromJavaWebContents(jweb_contents);
   DCHECK(web_contents);
   auto* provider = new content_capture::OnscreenContentProviderAndroid(
-      env, jcaller, web_contents);
+      env, obj, web_contents);
   return reinterpret_cast<intptr_t>(provider);
 }
 
 OnscreenContentProviderAndroid::OnscreenContentProviderAndroid(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jobject,
+    const jni_zero::JavaRef<jobject>& jobject,
     content::WebContents* web_contents)
     : java_ref_(jobject) {
   AttachToWebContents(web_contents);
 }
 
 OnscreenContentProviderAndroid::~OnscreenContentProviderAndroid() = default;
+
+void OnscreenContentProviderAndroid::FlushCaptureContent(
+    const ContentCaptureSession& parent_session,
+    const ContentCaptureFrame& data) {
+  JNIEnv* env = AttachCurrentThread();
+  DCHECK(java_ref_.obj());
+
+  auto* web_contents = GetWebContents();
+  DCHECK(web_contents);
+  const int offset_y = Java_OnscreenContentProvider_getOffsetY(
+      env, java_ref_, web_contents->GetJavaWebContents());
+  ScopedJavaLocalRef<jobject> jdata =
+      ToJavaObjectOfContentCaptureFrame(env, data, offset_y);
+  if (jdata.is_null()) {
+    return;
+  }
+  Java_OnscreenContentProvider_flushCaptureContent(
+      env, java_ref_,
+      ToJavaArrayOfContentCaptureFrame(env, parent_session, offset_y), jdata);
+}
 
 void OnscreenContentProviderAndroid::DidCaptureContent(
     const ContentCaptureSession& parent_session,
@@ -210,11 +230,42 @@ void OnscreenContentProviderAndroid::DidUpdateFavicon(
   Java_OnscreenContentProvider_didUpdateFavicon(env, java_ref_, jdata);
 }
 
+void OnscreenContentProviderAndroid::DidUpdateSensitivityScore(
+    const GURL& url,
+    float sensitivity_score) {
+  JNIEnv* env = AttachCurrentThread();
+  DCHECK(java_ref_.obj());
+
+  Java_OnscreenContentProvider_didUpdateSensitivityScore(
+      env, java_ref_, ConvertUTF8ToJavaString(env, url.spec()),
+      static_cast<jfloat>(sensitivity_score));
+}
+
+void OnscreenContentProviderAndroid::DidUpdateLanguageDetails(
+    const GURL& url,
+    const std::string& detected_language,
+    float language_confidence) {
+  JNIEnv* env = AttachCurrentThread();
+  if (!java_ref_.obj()) {
+    return;
+  }
+
+  Java_OnscreenContentProvider_didUpdateLanguageDetails(
+      env, java_ref_, base::android::ConvertUTF8ToJavaString(env, url.spec()),
+      base::android::ConvertUTF8ToJavaString(env, detected_language),
+      static_cast<jfloat>(language_confidence));
+}
+
+void OnscreenContentProviderAndroid::ClearContentCaptureMetadata() {
+  JNIEnv* env = AttachCurrentThread();
+  if (!java_ref_.obj()) {
+    return;
+  }
+
+  Java_OnscreenContentProvider_clearContentCaptureMetadata(env, java_ref_);
+}
+
 bool OnscreenContentProviderAndroid::ShouldCapture(const GURL& url) {
-  // Capture all urls for experiment, the url will be checked
-  // before the content is sent to the consumers.
-  if (features::ShouldTriggerContentCaptureForExperiment())
-    return true;
   JNIEnv* env = AttachCurrentThread();
   return Java_OnscreenContentProvider_shouldCapture(
       env, java_ref_, ConvertUTF8ToJavaString(env, url.spec()));
@@ -226,7 +277,7 @@ ScopedJavaLocalRef<jobject> OnscreenContentProviderAndroid::GetJavaObject() {
 
 void OnscreenContentProviderAndroid::OnWebContentsChanged(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jweb_contents) {
+    const base::android::JavaRef<jobject>& jweb_contents) {
   if (auto* web_contents =
           content::WebContents::FromJavaWebContents(jweb_contents)) {
     AttachToWebContents(web_contents);
@@ -261,3 +312,7 @@ content::WebContents* OnscreenContentProviderAndroid::GetWebContents() {
 }
 
 }  // namespace content_capture
+
+DEFINE_JNI(ContentCaptureData)
+DEFINE_JNI(ContentCaptureFrame)
+DEFINE_JNI(OnscreenContentProvider)

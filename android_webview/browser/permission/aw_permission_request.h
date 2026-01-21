@@ -21,6 +21,8 @@ class AwPermissionRequestDelegate;
 // The specific permission request should implement the
 // AwPermissionRequestDelegate interface, See MediaPermissionRequest.
 // This object is owned by the java peer.
+//
+// Lifetime: Temporary
 class AwPermissionRequest {
  public:
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.android_webview.permission
@@ -46,9 +48,7 @@ class AwPermissionRequest {
 
   // Invoked by Java peer when request is processed, |granted| indicates the
   // request was granted or not.
-  void OnAccept(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& jcaller,
-                jboolean granted);
+  void OnAccept(JNIEnv* env, bool granted);
   void Destroy(JNIEnv* env);
 
   // Return the origin which initiated the request.

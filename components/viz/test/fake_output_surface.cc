@@ -4,16 +4,14 @@
 
 #include "components/viz/test/fake_output_surface.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/service/display/output_surface_client.h"
 #include "components/viz/test/begin_frame_args_test.h"
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/swap_result.h"
 
@@ -52,22 +50,10 @@ void FakeSoftwareOutputSurface::SwapBuffersAck() {
   client_->DidReceivePresentationFeedback({now, base::TimeDelta(), 0});
 }
 
-void FakeSoftwareOutputSurface::SetDrawRectangle(const gfx::Rect& rect) {
-  NOTREACHED();
-}
-
-void FakeSoftwareOutputSurface::SetEnableDCLayers(bool enabled) {
-  NOTREACHED();
-}
-
 void FakeSoftwareOutputSurface::BindToClient(OutputSurfaceClient* client) {
   DCHECK(client);
   DCHECK(!client_);
   client_ = client;
-}
-
-bool FakeSoftwareOutputSurface::IsDisplayedAsOverlayPlane() const {
-  return false;
 }
 
 void FakeSoftwareOutputSurface::SetUpdateVSyncParametersCallback(
@@ -84,9 +70,7 @@ gfx::OverlayTransform FakeSoftwareOutputSurface::GetDisplayTransform() {
                                          : gfx::OVERLAY_TRANSFORM_NONE;
 }
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 void FakeSoftwareOutputSurface::SetNeedsSwapSizeNotifications(
     bool needs_swap_size_notifications) {}
 #endif

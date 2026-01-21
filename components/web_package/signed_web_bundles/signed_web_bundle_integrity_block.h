@@ -11,7 +11,8 @@
 
 #include "base/types/expected.h"
 #include "components/web_package/mojom/web_bundle_parser.mojom-forward.h"
-#include "components/web_package/signed_web_bundles/ed25519_public_key.h"
+#include "components/web_package/signed_web_bundles/integrity_block_attributes.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_stack.h"
 
 namespace web_package {
@@ -35,39 +36,42 @@ class SignedWebBundleIntegrityBlock {
   static base::expected<SignedWebBundleIntegrityBlock, std::string> Create(
       mojom::BundleIntegrityBlockPtr integrity_block);
 
-  SignedWebBundleIntegrityBlock(const SignedWebBundleIntegrityBlock&) = delete;
+  SignedWebBundleIntegrityBlock(const SignedWebBundleIntegrityBlock&);
   SignedWebBundleIntegrityBlock& operator=(
-      const SignedWebBundleIntegrityBlock&) = delete;
-
-  SignedWebBundleIntegrityBlock(SignedWebBundleIntegrityBlock&&);
-  SignedWebBundleIntegrityBlock& operator=(SignedWebBundleIntegrityBlock&&);
+      const SignedWebBundleIntegrityBlock&);
 
   ~SignedWebBundleIntegrityBlock();
 
+  friend bool operator==(const SignedWebBundleIntegrityBlock&,
+                         const SignedWebBundleIntegrityBlock&) = default;
+
   // Returns the size of this integrity block in bytes. This is useful for
   // finding out where the actual Web Bundle starts.
-  uint64_t size_in_bytes() const { return size_; }
-
-  // Returns the the public keys contained in the signature stack in order.
-  // The first public key in the vector is the first key that signed the Web
-  // Bundle, the second key is the public key that countersigned the signature
-  // of the first key, and so on.
-  //
-  // TODO(crbug.com/1376076): Remove this method - consumers should instead use
-  // `::signature_stack`.
-  const std::vector<Ed25519PublicKey> GetPublicKeyStack() const;
+  uint64_t size_in_bytes() const { return size_in_bytes_; }
 
   const SignedWebBundleSignatureStack& signature_stack() const {
     return signature_stack_;
   }
 
+  // Returns the id of the web bundle specified in integrity block attributes.
+  const SignedWebBundleId& web_bundle_id() const { return web_bundle_id_; }
+
+  const std::vector<uint8_t>& attributes_cbor() const {
+    return attributes_cbor_;
+  }
+
  private:
   explicit SignedWebBundleIntegrityBlock(
-      uint64_t size,
-      SignedWebBundleSignatureStack&& signature_stack);
+      uint64_t size_in_bytes,
+      SignedWebBundleSignatureStack&& signature_stack,
+      SignedWebBundleId web_bundle_id,
+      std::vector<uint8_t> attributes_cbor);
 
-  uint64_t size_;
+  uint64_t size_in_bytes_;
   SignedWebBundleSignatureStack signature_stack_;
+
+  SignedWebBundleId web_bundle_id_;
+  std::vector<uint8_t> attributes_cbor_;
 };
 
 }  // namespace web_package

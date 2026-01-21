@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "extensions/common/hashed_extension_id.h"
@@ -58,9 +58,11 @@ class TestingPolicyMigrator : public ChromeExtensionPolicyMigrator {
         Migration(kOldPolicy4, kNewPolicy4,
                   base::BindRepeating(&MultiplyByTwo)),
     };
-    CopyPoliciesIfUnset(bundle,
-                        extensions::HashedExtensionId(kExtensionId).value(),
-                        migrations);
+    CopyPoliciesIfUnset(
+        bundle,
+        extensions::HashedExtensionId(extensions::ExtensionId(kExtensionId))
+            .value(),
+        migrations);
   }
 };
 

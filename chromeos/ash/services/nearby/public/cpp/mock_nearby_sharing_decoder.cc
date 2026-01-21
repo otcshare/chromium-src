@@ -4,11 +4,10 @@
 
 #include "chromeos/ash/services/nearby/public/cpp/mock_nearby_sharing_decoder.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 MockNearbySharingDecoder::MockNearbySharingDecoder() {
-  mojo::PendingRemote<sharing::mojom::NearbySharingDecoder> pending_remote;
+  mojo::PendingRemote<::sharing::mojom::NearbySharingDecoder> pending_remote;
   receiver_set_.Add(this, pending_remote.InitWithNewPipeAndPassReceiver());
   shared_remote_.Bind(std::move(pending_remote), /*bind_task_runner=*/nullptr);
 }
@@ -16,10 +15,9 @@ MockNearbySharingDecoder::MockNearbySharingDecoder() {
 MockNearbySharingDecoder::~MockNearbySharingDecoder() = default;
 
 void MockNearbySharingDecoder::BindInterface(
-    mojo::PendingReceiver<sharing::mojom::NearbySharingDecoder>
+    mojo::PendingReceiver<::sharing::mojom::NearbySharingDecoder>
         pending_receiver) {
   receiver_set_.Add(this, std::move(pending_receiver));
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

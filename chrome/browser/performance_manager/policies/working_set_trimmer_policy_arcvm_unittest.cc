@@ -7,30 +7,36 @@
 #include <memory>
 #include <utility>
 
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/metrics/arc_metrics_service.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_app_host.h"
-#include "ash/components/arc/test/fake_app_instance.h"
-#include "ash/components/arc/test/fake_arc_session.h"
-#include "ash/constants/app_types.h"
 #include "ash/public/cpp/app_types_util.h"
 #include "base/command_line.h"
 #include "chrome/browser/ash/arc/boot_phase_monitor/arc_boot_phase_monitor_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
+#include "chrome/browser/ash/arc/vmm/arcvm_working_set_trim_executor.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
-#include "components/arc/test/fake_intent_helper_host.h"
-#include "components/arc/test/fake_intent_helper_instance.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_host.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_host.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_instance.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/test/test_windows.h"
+#include "ui/display/test/test_screen.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace performance_manager {
@@ -46,6 +52,7 @@ class WorkingSetTrimmerPolicyArcVmTest : public testing::Test {
     arc::prefs::RegisterLocalStatePrefs(local_state_.registry());
     arc::StabilityMetricsManager::Initialize(&local_state_);
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
+    ash::DlcserviceClient::InitializeFake();
 
     arc_service_manager_ = std::make_unique<arc::ArcServiceManager>();
 
@@ -56,9 +63,11 @@ class WorkingSetTrimmerPolicyArcVmTest : public testing::Test {
         arc_service_manager_->arc_bridge_service()->intent_helper());
     intent_helper_instance_ = std::make_unique<arc::FakeIntentHelperInstance>();
 
-    arc_session_manager_ =
-        CreateTestArcSessionManager(std::make_unique<arc::ArcSessionRunner>(
-            base::BindRepeating(arc::FakeArcSession::Create)));
+    arc_dlc_installer_ = std::make_unique<arc::ArcDlcInstaller>();
+    arc_session_manager_ = CreateTestArcSessionManager(
+        std::make_unique<arc::ArcSessionRunner>(
+            base::BindRepeating(arc::FakeArcSession::Create)),
+        arc_dlc_installer_.get());
     testing_profile_ = std::make_unique<TestingProfile>();
     policy_ =
         WorkingSetTrimmerPolicyArcVm::CreateForTesting(testing_profile_.get());
@@ -76,6 +85,7 @@ class WorkingSetTrimmerPolicyArcVmTest : public testing::Test {
     policy_.reset();
     testing_profile_.reset();
     arc_session_manager_.reset();
+    arc_dlc_installer_.reset();
     intent_helper_instance_.reset();
     intent_helper_host_.reset();
     app_instance_.reset();
@@ -83,6 +93,7 @@ class WorkingSetTrimmerPolicyArcVmTest : public testing::Test {
     arc_service_manager_.reset();
 
     // All other object must be destroyed before shutting down ConciergeClient.
+    ash::DlcserviceClient::Shutdown();
     ash::ConciergeClient::Shutdown();
     arc::StabilityMetricsManager::Shutdown();
   }
@@ -119,9 +130,13 @@ class WorkingSetTrimmerPolicyArcVmTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
+  display::test::TestScreen test_screen_{/*create_display=*/true,
+                                         /*register_screen=*/true};
   TestingPrefServiceSimple local_state_;
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   std::unique_ptr<arc::ArcServiceManager> arc_service_manager_;
+  std::unique_ptr<arc::ArcDlcInstaller> arc_dlc_installer_;
   std::unique_ptr<arc::FakeAppHost> app_host_;
   std::unique_ptr<arc::FakeAppInstance> app_instance_;
   std::unique_ptr<arc::FakeIntentHelperHost> intent_helper_host_;
@@ -265,13 +280,16 @@ TEST_F(WorkingSetTrimmerPolicyArcVmTest, WindowFocused) {
   container_window.Init(ui::LAYER_NOT_DRAWN);
 
   // Create two fake windows.
-  aura::Window* arc_window = aura::test::CreateTestWindow(
-      SK_ColorGREEN, 0, gfx::Rect(), &container_window);
-  arc_window->SetProperty(aura::client::kAppType,
-                          static_cast<int>(ash::AppType::ARC_APP));
+  aura::Window* arc_window =
+      aura::test::CreateTestWindow(
+          {.parent = &container_window, .window_id = 0}, SK_ColorGREEN)
+          .release();
+  arc_window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
   ASSERT_TRUE(ash::IsArcWindow(arc_window));
-  aura::Window* chrome_window = aura::test::CreateTestWindow(
-      SK_ColorRED, 0, gfx::Rect(), &container_window);
+  aura::Window* chrome_window =
+      aura::test::CreateTestWindow(
+          {.parent = &container_window, .window_id = 0}, SK_ColorRED)
+          .release();
   ASSERT_FALSE(ash::IsArcWindow(chrome_window));
 
   bool is_first_trim_post_boot = true;

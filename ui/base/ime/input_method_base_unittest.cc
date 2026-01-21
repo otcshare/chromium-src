@@ -102,8 +102,8 @@ class ClientChangeVerifier {
   }
 
  private:
-  TextInputClient* previous_client_ = nullptr;
-  TextInputClient* next_client_ = nullptr;
+  raw_ptr<TextInputClient> previous_client_ = nullptr;
+  raw_ptr<TextInputClient> next_client_ = nullptr;
   bool call_expected_ = false;
   bool on_will_change_focused_client_called_ = false;
   bool on_did_change_focused_client_called_ = false;
@@ -143,6 +143,7 @@ class MockInputMethodBase : public InputMethodBase {
   }
   void OnInputLocaleChanged() override {}
   bool IsInputLocaleCJK() const override { return false; }
+  void OnUrlChanged() override {}
 #endif
 
   // InputMethodBase:
@@ -294,6 +295,20 @@ TEST_F(InputMethodBaseTest, DetachTextInputClient) {
     EXPECT_EQ(nullptr, input_method.GetTextInputClient());
     verifier.Verify();
   }
+}
+
+TEST_F(InputMethodBaseTest, SetsPasswordWhenHasBeenPassword) {
+  FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
+
+  ClientChangeVerifier verifier;
+  verifier.ExpectClientChange(nullptr, &fake_text_input_client);
+  MockInputMethodBase input_method(&verifier);
+
+  fake_text_input_client.SetFlags(ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD);
+
+  input_method.SetFocusedTextInputClient(&fake_text_input_client);
+
+  EXPECT_EQ(TEXT_INPUT_TYPE_PASSWORD, input_method.GetTextInputType());
 }
 
 }  // namespace

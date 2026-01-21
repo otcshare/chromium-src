@@ -11,11 +11,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/public/cpp/app_list/app_list_switches.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/launch.h"
 #include "base/strings/string_split.h"
@@ -24,8 +23,7 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "cc/base/switches.h"
-#include "chrome/browser/ash/boot_times_recorder.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
+#include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/common/chrome_constants.h"
@@ -37,6 +35,7 @@
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/policy_switches.h"
@@ -44,16 +43,20 @@
 #include "components/prefs/pref_service.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "components/user_manager/user_names.h"
+#include "components/variations/variations_switches.h"
 #include "components/viz/common/switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
+#include "extensions/common/switches.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "media/base/media_switches.h"
 #include "media/capture/capture_switches.h"
 #include "media/media_buildflags.h"
+#include "mojo/core/embedder/features.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/cros_system_api/switches/chrome_switches.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/display_features.h"
 #include "ui/display/display_switches.h"
@@ -91,152 +94,141 @@ void DeriveCommandLine(const GURL& start_url,
   DCHECK_NE(&base_command_line, command_line);
 
   static const char* const kForwardSwitches[] = {
-    sandbox::policy::switches::kDisableGpuSandbox,
-    sandbox::policy::switches::kDisableSeccompFilterSandbox,
-    sandbox::policy::switches::kDisableSetuidSandbox,
-    sandbox::policy::switches::kGpuSandboxAllowSysVShm,
-    sandbox::policy::switches::kGpuSandboxFailuresFatal,
-    sandbox::policy::switches::kNoSandbox,
-    ::switches::kDisable2dCanvasImageChromium,
-    ::switches::kDisableAccelerated2dCanvas,
-    ::switches::kDisableAcceleratedMjpegDecode,
-    ::switches::kDisableAcceleratedVideoDecode,
-    ::switches::kDisableAcceleratedVideoEncode,
-    ::switches::kDisableBlinkFeatures,
-    ::switches::kDisableGpu,
-    ::switches::kDisableGpuMemoryBufferVideoFrames,
-    ::switches::kDisableGpuShaderDiskCache,
-    ::switches::kUseCmdDecoder,
-    ::switches::kUseANGLE,
-    ::switches::kDisableGpuWatchdog,
-    ::switches::kDisableGpuCompositing,
-    ::switches::kDisableGpuRasterization,
-    ::switches::kDisableMojoBroker,
-    ::switches::kDisablePepper3DImageChromium,
-    ::switches::kDisableTouchDragDrop,
-    ::switches::kDisableVideoCaptureUseGpuMemoryBuffer,
-    ::switches::kDisableYUVImageDecoding,
-    ::switches::kEnableBlinkFeatures,
-    ::switches::kEnableGpuMemoryBufferVideoFrames,
-    ::switches::kEnableGpuRasterization,
-    ::switches::kEnableLogging,
-    ::switches::kEnableMicrophoneMuteSwitchDeviceSwitch,
-    ::switches::kEnableNativeGpuMemoryBuffers,
-    ::switches::kEnableTouchDragDrop,
-    ::switches::kEnableUnifiedDesktop,
-    ::switches::kEnableViewport,
-    ::switches::kEnableHardwareOverlays,
-    ::switches::kEdgeTouchFiltering,
-    ::switches::kHostWindowBounds,
-    ::switches::kForceDeviceScaleFactor,
-    ::switches::kForceGpuMemAvailableMb,
-    ::switches::kGpuStartupDialog,
-    ::switches::kGpuSandboxStartEarly,
-    ::switches::kPlatformDisallowsChromeOSDirectVideoDecoder,
-    ::switches::kPpapiInProcess,
-    ::switches::kRemoteDebuggingPort,
-    ::switches::kRendererStartupDialog,
-    ::switches::kSchedulerBoostUrgent,
-    ::switches::kSchedulerConfigurationDefault,
-    ::switches::kTouchDevices,
-    ::switches::kTouchEventFeatureDetection,
-    ::switches::kTopChromeTouchUi,
-    ::switches::kTraceToConsole,
-    ::switches::kUIDisablePartialSwap,
-#if defined(USE_CRAS)
-    ::switches::kUseCras,
+      sandbox::policy::switches::kDisableGpuSandbox,
+      sandbox::policy::switches::kDisableLandlockSandbox,
+      sandbox::policy::switches::kDisableSeccompFilterSandbox,
+      sandbox::policy::switches::kDisableSetuidSandbox,
+      sandbox::policy::switches::kGpuSandboxAllowSysVShm,
+      sandbox::policy::switches::kGpuSandboxFailuresFatal,
+      sandbox::policy::switches::kNoSandbox,
+      ::switches::kDisable2dCanvasImageChromium,
+      ::switches::kDisableAccelerated2dCanvas,
+      ::switches::kDisableAcceleratedMjpegDecode,
+      ::switches::kDisableAcceleratedVideoDecode,
+      ::switches::kDisableAcceleratedVideoEncode,
+      ::switches::kDisableBlinkFeatures,
+      ::switches::kDisableGpu,
+      ::switches::kDisableGpuMemoryBufferVideoFrames,
+      ::switches::kDisableGpuShaderDiskCache,
+      ::switches::kUseCmdDecoder,
+      ::switches::kUseANGLE,
+      ::switches::kDisableGpuWatchdog,
+      ::switches::kDisableGpuCompositing,
+      ::switches::kDisableGpuRasterization,
+      ::switches::kDisableMojoBroker,
+      ::switches::kDisableVideoCaptureUseGpuMemoryBuffer,
+      ::switches::kDisableYUVImageDecoding,
+      ::switches::kEnableBlinkFeatures,
+      ::switches::kEnableGpuMemoryBufferVideoFrames,
+      ::switches::kEnableGpuRasterization,
+      ::switches::kEnableLogging,
+      ::switches::kEnableMicrophoneMuteSwitchDeviceSwitch,
+      ::switches::kEnableNativeGpuMemoryBuffers,
+      ::switches::kEnableUnifiedDesktop,
+      ::switches::kEnableViewport,
+      ::switches::kEnableHardwareOverlays,
+      ::switches::kEdgeTouchFiltering,
+      ::switches::kHostWindowBounds,
+      ::switches::kForceDeviceScaleFactor,
+      ::switches::kGpuStartupDialog,
+      ::switches::kGpuSandboxStartEarly,
+      ::switches::kRemoteDebuggingPort,
+      ::switches::kRendererStartupDialog,
+      ::switches::kSchedulerBoostUrgent,
+      ::switches::kTouchDevices,
+      ::switches::kTouchEventFeatureDetection,
+      ::switches::kTopChromeTouchUi,
+      ::switches::kUIDisablePartialSwap,
+#if BUILDFLAG(USE_CRAS)
+      ::switches::kUseCras,
 #endif
-    ::switches::kUseGL,
-    ::switches::kUserDataDir,
-    ::switches::kV,
-    ::switches::kVModule,
-    ::switches::kVideoCaptureUseGpuMemoryBuffer,
-    ::switches::kWebAuthRemoteDesktopSupport,
-    ::switches::kEnableWebGLDeveloperExtensions,
-    ::switches::kEnableWebGLDraftExtensions,
-    ::switches::kDisableWebGLImageChromium,
-    ::switches::kEnableWebGLImageChromium,
-    ::switches::kEnableUnsafeWebGPU,
-    ::switches::kEnableWebGPUDeveloperFeatures,
-    ::switches::kDisableWebRtcHWDecoding,
-    ::switches::kDisableWebRtcHWEncoding,
-    ::switches::kOzonePlatform,
-    switches::kAshClearFastInkBuffer,
-    switches::kAshEnablePaletteOnAllDisplays,
-    switches::kAshEnableTabletMode,
-    switches::kAshEnableWaylandServer,
-    switches::kAshForceEnableStylusTools,
-    switches::kAshTouchHud,
-    switches::kAuraLegacyPowerButton,
-    switches::kEnableDimShelf,
-    switches::kSupportsClamshellAutoRotation,
-    switches::kShowTaps,
-    blink::switches::kBlinkSettings,
-    blink::switches::kDarkModeSettings,
-    blink::switches::kDisableLowResTiling,
-    blink::switches::kDisablePartialRaster,
-    blink::switches::kDisablePreferCompositingToLCDText,
-    blink::switches::kDisableRGBA4444Textures,
-    blink::switches::kDisableThreadedScrolling,
-    blink::switches::kDisableZeroCopy,
-    blink::switches::kEnableLowResTiling,
-    blink::switches::kEnablePreferCompositingToLCDText,
-    blink::switches::kEnableRGBA4444Textures,
-    blink::switches::kEnableRasterSideDarkModeForImages,
-    blink::switches::kEnableZeroCopy,
-    blink::switches::kGpuRasterizationMSAASampleCount,
-    blink::switches::kNumRasterThreads,
-    switches::kAshPowerButtonPosition,
-    switches::kAshSideVolumeButtonPosition,
-    switches::kDefaultWallpaperLarge,
-    switches::kDefaultWallpaperSmall,
-    switches::kGuestWallpaperLarge,
-    switches::kGuestWallpaperSmall,
-    // Please keep these in alphabetical order. Non-UI Compositor switches
-    // here should also be added to
-    // content/browser/renderer_host/render_process_host_impl.cc.
-    cc::switches::kCheckDamageEarly,
-    cc::switches::kDisableCompositedAntialiasing,
-    cc::switches::kDisableMainFrameBeforeActivation,
-    cc::switches::kDisableThreadedAnimation,
-    cc::switches::kEnableGpuBenchmarking,
-    cc::switches::kEnableMainFrameBeforeActivation,
-    cc::switches::kHighlightNonLCDTextLayers,
-    cc::switches::kShowCompositedLayerBorders,
-    cc::switches::kShowFPSCounter,
-    cc::switches::kShowLayerAnimationBounds,
-    cc::switches::kShowPropertyChangedRects,
-    cc::switches::kShowScreenSpaceRects,
-    cc::switches::kShowSurfaceDamageRects,
-    cc::switches::kSlowDownRasterScaleFactor,
-    cc::switches::kUIEnableLayerLists,
-    cc::switches::kUIShowFPSCounter,
-    switches::kArcAvailability,
-    switches::kArcAvailable,
-    switches::kArcScale,
-    chromeos::switches::kDbusStub,
-    switches::kDisableArcDataWipe,
-    switches::kDisableArcOptInVerification,
-    switches::kDisableLoginAnimations,
-    switches::kEnableArc,
-    switches::kEnterpriseDisableArc,
-    switches::kEnterpriseEnableForcedReEnrollment,
-    switches::kFormFactor,
-    switches::kHasChromeOSKeyboard,
-    switches::kLacrosChromeAdditionalArgs,
-    switches::kLacrosChromeAdditionalEnv,
-    switches::kLacrosChromePath,
-    crosapi::browser_util::kLacrosStabilitySwitch,
-    switches::kLoginProfile,
-    switches::kNaturalScrollDefault,
-    switches::kRlzPingDelay,
-    chromeos::switches::kSystemInDevMode,
-    switches::kTouchscreenUsableWhileScreenOff,
-    policy::switches::kDeviceManagementUrl,
-    wm::switches::kWindowAnimationsDisabled,
+      ::switches::kUseGL,
+      ::switches::kUserDataDir,
+      ::switches::kV,
+      ::switches::kVModule,
+      ::switches::kVideoCaptureUseGpuMemoryBuffer,
+      ::switches::kWebAuthRemoteDesktopSupport,
+      ::switches::kEnableWebGLDeveloperExtensions,
+      ::switches::kEnableWebGLDraftExtensions,
+      ::switches::kDisableWebGLImageChromium,
+      ::switches::kEnableWebGLImageChromium,
+      ::switches::kEnableUnsafeWebGPU,
+      ::switches::kEnableWebGPUDeveloperFeatures,
+      ::switches::kOzonePlatform,
+      ::switches::kRenderNodeOverride,
+      switches::kAshClearFastInkBuffer,
+      switches::kAshConstrainPointerToRoot,
+      switches::kAshDebugShortcuts,
+      switches::kAshDeveloperShortcuts,
+      switches::kAshEnablePaletteOnAllDisplays,
+      switches::kAshEnableTabletMode,
+      switches::kAshEnableWaylandServer,
+      switches::kAshForceEnableStylusTools,
+      switches::kAshTouchHud,
+      switches::kAuraLegacyPowerButton,
+      switches::kEnableDimShelf,
+      switches::kSchedulerConfigurationDefault,
+      switches::kSupportsClamshellAutoRotation,
+      switches::kShowTaps,
+      blink::switches::kBlinkSettings,
+      blink::switches::kDarkModeSettings,
+      blink::switches::kDisablePartialRaster,
+      blink::switches::kDisablePreferCompositingToLCDText,
+      blink::switches::kDisableRGBA4444Textures,
+      blink::switches::kDisableZeroCopy,
+      blink::switches::kEnablePreferCompositingToLCDText,
+      blink::switches::kEnableRGBA4444Textures,
+      blink::switches::kEnableRasterSideDarkModeForImages,
+      blink::switches::kEnableZeroCopy,
+      blink::switches::kForceGpuMemAvailableMb,
+      blink::switches::kGpuRasterizationMSAASampleCount,
+      switches::kAshPowerButtonPosition,
+      switches::kAshSideVolumeButtonPosition,
+      switches::kDefaultWallpaperLarge,
+      switches::kDefaultWallpaperSmall,
+      switches::kGuestWallpaperLarge,
+      switches::kGuestWallpaperSmall,
+      // Please keep these in alphabetical order. Non-UI Compositor switches
+      // here should also be added to
+      // content/browser/renderer_host/render_process_host_impl.cc.
+      ::switches::kCheckDamageEarly,
+      ::switches::kDisableCompositedAntialiasing,
+      ::switches::kDisableMainFrameBeforeActivation,
+      ::switches::kDisableThreadedAnimation,
+      ::switches::kEnableGpuBenchmarking,
+      ::switches::kEnableMainFrameBeforeActivation,
+      ::switches::kNumRasterThreads,
+      ::switches::kShowCompositedLayerBorders,
+      ::switches::kShowFPSCounter,
+      ::switches::kShowLayerAnimationBounds,
+      ::switches::kShowPropertyChangedRects,
+      ::switches::kShowScreenSpaceRects,
+      ::switches::kShowSurfaceDamageRects,
+      ::switches::kSlowDownRasterScaleFactor,
+      ::switches::kUIShowFPSCounter,
+      extensions::switches::kLoadGuestModeTestExtension,
+      switches::kArcAvailability,
+      switches::kArcAvailable,
+      switches::kArcScale,
+      chromeos::switches::kDbusStub,
+      switches::kDisableArcOptInVerification,
+      switches::kDisableLoginAnimations,
+      switches::kEnableArc,
+      switches::kEnterpriseDisableArc,
+      switches::kForceTabletPowerButton,
+      switches::kFormFactor,
+      switches::kHasChromeOSKeyboard,
+      switches::kLoginProfile,
+      switches::kNaturalScrollDefault,
+      switches::kOobeForceTabletFirstRun,
+      switches::kRlzPingDelay,
+      chromeos::switches::kSystemInDevMode,
+      switches::kTouchscreenUsableWhileScreenOff,
+      policy::switches::kDeviceManagementUrl,
+      variations::switches::kEnableFieldTrialTestingConfig,
+      wm::switches::kWindowAnimationsDisabled,
   };
-  command_line->CopySwitchesFrom(base_command_line, kForwardSwitches,
-                                 std::size(kForwardSwitches));
+  command_line->CopySwitchesFrom(base_command_line, kForwardSwitches);
 
   if (start_url.is_valid())
     command_line->AppendArg(start_url.spec());
@@ -247,26 +239,44 @@ void DeriveCommandLine(const GURL& start_url,
   }
 }
 
-// Adds allowlisted features to `out_command_line` if they are enabled in the
+// Adds allowlisted features to `out_command_line` if they are overridden in the
 // current session.
-void DeriveEnabledFeatures(base::CommandLine* out_command_line) {
-  std::vector<const base::Feature*> kForwardEnabledFeatures{
-      &features::kAutoNightLight, &features::kLacrosOnly,
-      &features::kLacrosPrimary,  &features::kLacrosSupport,
+void DeriveFeatures(base::CommandLine* out_command_line) {
+  auto kForwardFeatures = {
+      &::features::kAccessibilityManifestV3EspeakNGTts,
+      &::features::kAccessibilityManifestV3GoogleTts,
+      &features::kAutoNightLight,
+      &chromeos::features::kFeatureManagementRoundedWindows,
+      &ash::features::kSeamlessRefreshRateSwitching,
       &::features::kPluginVm,
+      &display::features::kCtmColorManagement,
+      &display::features::kDrmColorSpaceDefaultIsRec709,
+      &display::features::kOledScaleFactorEnabled,
+#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+      &media::kPlatformHEVCDecoderSupport,
+#endif
+      &mojo::core::kMojoIpcz,
   };
-
   std::vector<std::string> enabled_features;
-  for (const auto* feature : kForwardEnabledFeatures) {
-    if (base::FeatureList::IsEnabled(*feature))
-      enabled_features.push_back(feature->name);
+  std::vector<std::string> disabled_features;
+  for (const auto* feature : kForwardFeatures) {
+    if (auto state = base::FeatureList::GetStateIfOverridden(*feature)) {
+      if (*state) {
+        enabled_features.push_back(feature->name);
+      } else {
+        disabled_features.push_back(feature->name);
+      }
+    }
   }
 
-  if (enabled_features.empty())
-    return;
-
-  out_command_line->AppendSwitchASCII("enable-features",
-                                      base::JoinString(enabled_features, ","));
+  if (!enabled_features.empty()) {
+    out_command_line->AppendSwitchASCII(
+        "enable-features", base::JoinString(enabled_features, ","));
+  }
+  if (!disabled_features.empty()) {
+    out_command_line->AppendSwitchASCII(
+        "disable-features", base::JoinString(disabled_features, ","));
+  }
 }
 
 // Simulates a session manager restart by launching give command line
@@ -279,8 +289,7 @@ void ReLaunch(const base::CommandLine& command_line) {
 // Wraps the work of sending chrome restart request to session manager.
 // If local state is present, try to commit it first. The request is fired when
 // the commit goes through or some time (3 seconds) has elapsed.
-class ChromeRestartRequest
-    : public base::SupportsWeakPtr<ChromeRestartRequest> {
+class ChromeRestartRequest {
  public:
   explicit ChromeRestartRequest(const std::vector<std::string>& argv,
                                 RestartChromeReason reson);
@@ -304,13 +313,15 @@ class ChromeRestartRequest
   const RestartChromeReason reason_;
 
   base::OneShotTimer timer_;
+
+  base::WeakPtrFactory<ChromeRestartRequest> weak_ptr_factory_{this};
 };
 
 ChromeRestartRequest::ChromeRestartRequest(const std::vector<std::string>& argv,
                                            RestartChromeReason reason)
     : argv_(argv), reason_(reason) {}
 
-ChromeRestartRequest::~ChromeRestartRequest() {}
+ChromeRestartRequest::~ChromeRestartRequest() = default;
 
 void ChromeRestartRequest::Start() {
   VLOG(1) << "Requesting a restart with command line: "
@@ -322,8 +333,8 @@ void ChromeRestartRequest::Start() {
 
   // XXX: normally this call must not be needed, however RestartJob
   // just kills us so settings may be lost. See http://crosbug.com/13102
-  g_browser_process->FlushLocalStateAndReply(
-      base::BindOnce(&ChromeRestartRequest::RestartJob, AsWeakPtr()));
+  g_browser_process->FlushLocalStateAndReply(base::BindOnce(
+      &ChromeRestartRequest::RestartJob, weak_ptr_factory_.GetWeakPtr()));
   timer_.Start(FROM_HERE, base::Seconds(3), this,
                &ChromeRestartRequest::RestartJob);
 }
@@ -352,8 +363,8 @@ void ChromeRestartRequest::RestartJob() {
   SessionManagerClient::Get()->RestartJob(
       remote_auth_fd.get(), argv_,
       static_cast<SessionManagerClient::RestartJobReason>(reason_),
-      base::BindOnce(&ChromeRestartRequest::OnRestartJob, AsWeakPtr(),
-                     std::move(local_auth_fd)));
+      base::BindOnce(&ChromeRestartRequest::OnRestartJob,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(local_auth_fd)));
 }
 
 void ChromeRestartRequest::OnRestartJob(base::ScopedFD local_auth_fd,
@@ -386,7 +397,7 @@ void GetOffTheRecordCommandLine(const GURL& start_url,
                    GURL(chrome::kChromeUINewTabURL).spec());
 
   DeriveCommandLine(start_url, base_command_line, otr_switches, command_line);
-  DeriveEnabledFeatures(command_line);
+  DeriveFeatures(command_line);
 }
 
 void RestartChrome(const base::CommandLine& command_line,

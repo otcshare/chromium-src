@@ -5,7 +5,7 @@
 #include "components/user_education/webui/help_bubble_webui.h"
 
 #include "components/user_education/webui/help_bubble_handler.h"
-#include "components/user_education/webui/tracked_element_webui.h"
+#include "components/user_education/webui/tracked_element_help_bubble_webui_anchor.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/framework_specific_implementation.h"
 
@@ -16,8 +16,13 @@ HelpBubbleWebUI::HelpBubbleWebUI(HelpBubbleHandlerBase* handler,
     : handler_(handler), anchor_id_(anchor_id) {
   CHECK(handler_);
 }
+
 HelpBubbleWebUI::~HelpBubbleWebUI() {
-  Close();
+  Close(HelpBubble::CloseReason::kBubbleDestroyed);
+}
+
+content::WebContents* HelpBubbleWebUI::GetWebContents() {
+  return is_open() ? handler_->GetWebContents() : nullptr;
 }
 
 bool HelpBubbleWebUI::ToggleFocusForAccessibility() {
@@ -45,13 +50,13 @@ std::unique_ptr<HelpBubble> HelpBubbleFactoryWebUI::CreateBubble(
     ui::TrackedElement* element,
     HelpBubbleParams params) {
   HelpBubbleHandlerBase* const handler =
-      element->AsA<TrackedElementWebUI>()->handler();
+      element->AsA<TrackedElementHelpBubbleWebUIAnchor>()->handler();
   return handler->CreateHelpBubble(element->identifier(), std::move(params));
 }
 
 bool HelpBubbleFactoryWebUI::CanBuildBubbleForTrackedElement(
     const ui::TrackedElement* element) const {
-  return element->IsA<TrackedElementWebUI>();
+  return element->IsA<TrackedElementHelpBubbleWebUIAnchor>();
 }
 
 DEFINE_FRAMEWORK_SPECIFIC_METADATA(HelpBubbleFactoryWebUI)

@@ -6,15 +6,12 @@
 
 #include <string.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/win/windows_types.h"
-#include "components/viz/common/resources/resource_format.h"
-#include "components/viz/common/resources/resource_sizes.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/scheduler.h"
 #include "gpu/command_buffer/service/scheduler_task_runner.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
@@ -47,9 +44,9 @@ class DCOMPTextureRepresentation : public OverlayImageRepresentation {
       : OverlayImageRepresentation(manager, backing, tracker),
         dcomp_surface_proxy_(std::move(dcomp_surface_proxy)) {}
 
-  absl::optional<gl::DCLayerOverlayImage> GetDCLayerOverlayImage() override {
-    return absl::make_optional<gl::DCLayerOverlayImage>(size(),
-                                                        dcomp_surface_proxy_);
+  std::optional<gl::DCLayerOverlayImage> GetDCLayerOverlayImage() override {
+    return std::make_optional<gl::DCLayerOverlayImage>(size(),
+                                                       dcomp_surface_proxy_);
   }
 
   bool BeginReadAccess(gfx::GpuFenceHandle& acquire_fence) override {
@@ -69,12 +66,14 @@ class DCOMPTextureBacking : public ClearTrackingSharedImageBacking {
                       const gfx::Size& size)
       : ClearTrackingSharedImageBacking(
             mailbox,
-            viz::SharedImageFormat::SinglePlane(viz::BGRA_8888),
+            viz::SinglePlaneFormat::kBGRA_8888,
             size,
-            gfx::ColorSpace::CreateSRGB(),
+            gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT709,
+                            gfx::ColorSpace::TransferID::BT709),
             kTopLeft_GrSurfaceOrigin,
             kPremul_SkAlphaType,
             gpu::SHARED_IMAGE_USAGE_SCANOUT,
+            {},
             /*estimated_size=*/0,
             /*is_thread_safe=*/false),
         dcomp_surface_proxy_(std::move(dcomp_surface_proxy)) {
@@ -130,7 +129,7 @@ DCOMPTexture::DCOMPTexture(
   IPC::ScopedAllowOffSequenceChannelAssociatedBindings allow_binding;
   receiver_.Bind(std::move(receiver), runner);
   context_state_->AddContextLostObserver(this);
-  base::PowerMonitor::AddPowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
   channel_->AddRoute(route_id, sequence_);
 }
 
@@ -141,7 +140,7 @@ DCOMPTexture::~DCOMPTexture() {
   DCHECK(!channel_);
 
   context_state_->RemoveContextLostObserver(this);
-  base::PowerMonitor::RemovePowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
 
   if (window_pos_timer_.IsRunning()) {
     window_pos_timer_.Stop();
@@ -186,7 +185,6 @@ void DCOMPTexture::ResetSizeIfNeeded() {
   // destroyed, but we are still showing the last frame), which will trigger
   // `ReleaseChannel()` and set `channel_` to null.
   if (!channel_ &&
-      protected_video_type_ == gfx::ProtectedVideoType::kHardwareProtected &&
       base::TimeTicks::Now() - last_power_change_time_ <
           kPowerChangeDetectionGracePeriod) {
     DVLOG(1) << __func__
@@ -228,7 +226,7 @@ void DCOMPTexture::SetDCOMPSurfaceHandle(
 
   base::win::ScopedHandle surface_handle =
       gl::DCOMPSurfaceRegistry::GetInstance()->TakeDCOMPSurfaceHandle(token);
-  if (!surface_handle.IsValid()) {
+  if (!surface_handle.is_valid()) {
     DLOG(ERROR) << __func__ << ": No surface registered for token " << token;
     std::move(callback).Run(false);
     return;
@@ -241,7 +239,7 @@ void DCOMPTexture::SetDCOMPSurfaceHandle(
 gpu::Mailbox DCOMPTexture::CreateSharedImage() {
   DCHECK(channel_);
 
-  auto mailbox = gpu::Mailbox::GenerateForSharedImage();
+  auto mailbox = gpu::Mailbox::Generate();
 
   // Use DCOMPTextureBacking as the backing to hold DCOMPSurfaceProxy i.e. this,
   // and be able to retrieve it later via ProduceOverlay.
@@ -295,16 +293,6 @@ void DCOMPTexture::SetRect(const gfx::Rect& window_relative_rect) {
 
   if (should_send_output_rect)
     SendOutputRect();
-}
-
-void DCOMPTexture::SetProtectedVideoType(
-    gfx::ProtectedVideoType protected_video_type) {
-  if (protected_video_type == protected_video_type_)
-    return;
-
-  DVLOG(2) << __func__ << ": protected_video_type="
-           << static_cast<int>(protected_video_type);
-  protected_video_type_ = protected_video_type;
 }
 
 void DCOMPTexture::SendOutputRect() {

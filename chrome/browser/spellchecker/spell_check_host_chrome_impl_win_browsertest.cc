@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -32,20 +32,15 @@ class SpellCheckHostChromeImplWinBrowserTest : public InProcessBrowserTest {
  public:
   SpellCheckHostChromeImplWinBrowserTest() = default;
 
-  void SetUp() override {
-    // Don't delay initialization of the SpellcheckService on browser launch.
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{spellcheck::kWinUseBrowserSpellChecker},
-        /*disabled_features=*/{spellcheck::kWinDelaySpellcheckServiceInit});
-    InProcessBrowserTest::SetUp();
-  }
+  void SetUp() override { InProcessBrowserTest::SetUp(); }
 
   void SetUpOnMainThread() override {
     content::BrowserContext* context = browser()->profile();
     renderer_ = std::make_unique<content::MockRenderProcessHost>(context);
 
     SpellCheckHostChromeImpl::Create(
-        renderer_->GetID(), spell_check_host_.BindNewPipeAndPassReceiver());
+        renderer_->GetDeprecatedID(),
+        spell_check_host_.BindNewPipeAndPassReceiver());
 
     InitializeSpellcheckService();
 
@@ -55,7 +50,22 @@ class SpellCheckHostChromeImplWinBrowserTest : public InProcessBrowserTest {
 
   void TearDownOnMainThread() override { renderer_.reset(); }
 
-  virtual void InitializeSpellcheckService() {}
+  void InitializeSpellcheckService() {
+    spell_check_host_->InitializeDictionaries(base::BindOnce(
+        &SpellCheckHostChromeImplWinBrowserTest::InitializeDictionariesCallback,
+        base::Unretained(this)));
+    RunUntilResultReceived();
+  }
+
+  void InitializeDictionariesCallback(
+      std::vector<spellcheck::mojom::SpellCheckBDictLanguagePtr> dictionaries,
+      const std::vector<std::string>& custom_words,
+      bool enable) {
+    received_result_ = true;
+    if (quit_) {
+      std::move(quit_).Run();
+    }
+  }
 
   void OnSpellcheckResult(const std::vector<SpellCheckResult>& result) {
     received_result_ = true;
@@ -110,10 +120,6 @@ IN_PROC_BROWSER_TEST_F(SpellCheckHostChromeImplWinBrowserTest,
 }
 
 void SpellCheckHostChromeImplWinBrowserTest::RunSpellCheckReturnMessageTest() {
-  if (!spellcheck::WindowsVersionSupportsSpellchecker()) {
-    return;
-  }
-
   spellcheck_platform::SetLanguage(
       platform_spell_checker_, "en-US",
       base::BindOnce(&SpellCheckHostChromeImplWinBrowserTest::
@@ -123,7 +129,7 @@ void SpellCheckHostChromeImplWinBrowserTest::RunSpellCheckReturnMessageTest() {
 
   spell_check_host_->RequestTextCheck(
       u"zz.",
-      /*route_id=*/123,
+      /*spelling_markers=*/{},
       base::BindOnce(
           &SpellCheckHostChromeImplWinBrowserTest::OnSpellcheckResult,
           base::Unretained(this)));
@@ -132,45 +138,5 @@ void SpellCheckHostChromeImplWinBrowserTest::RunSpellCheckReturnMessageTest() {
   ASSERT_EQ(1U, result_.size());
   EXPECT_EQ(result_[0].location, 0);
   EXPECT_EQ(result_[0].length, 2);
-  EXPECT_EQ(result_[0].decoration, SpellCheckResult::SPELLING);
-}
-
-class SpellCheckHostChromeImplWinBrowserTestDelayInit
-    : public SpellCheckHostChromeImplWinBrowserTest {
- public:
-  SpellCheckHostChromeImplWinBrowserTestDelayInit() = default;
-
-  void SetUp() override {
-    // Don't initialize the SpellcheckService on browser launch.
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{spellcheck::kWinUseBrowserSpellChecker,
-                              spellcheck::kWinDelaySpellcheckServiceInit},
-        /*disabled_features=*/{});
-    InProcessBrowserTest::SetUp();
-  }
-
-  void InitializeSpellcheckService() override {
-    // With the kWinDelaySpellcheckServiceInit feature flag set, the spellcheck
-    // service is not initialized when instantiated. Call InitializeDictionaries
-    // to load the dictionaries.
-    spell_check_host_->InitializeDictionaries(
-        base::BindOnce(&SpellCheckHostChromeImplWinBrowserTestDelayInit::
-                           InitializeDictionariesCallback,
-                       base::Unretained(this)));
-    RunUntilResultReceived();
-  }
-
-  void InitializeDictionariesCallback(
-      std::vector<spellcheck::mojom::SpellCheckBDictLanguagePtr> dictionaries,
-      const std::vector<std::string>& custom_words,
-      bool enable) {
-    received_result_ = true;
-    if (quit_)
-      std::move(quit_).Run();
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(SpellCheckHostChromeImplWinBrowserTestDelayInit,
-                       SpellCheckReturnMessage) {
-  RunSpellCheckReturnMessageTest();
+  EXPECT_EQ(result_[0].decoration, spellcheck::Decoration::SPELLING);
 }

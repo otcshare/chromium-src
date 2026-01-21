@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/dbus/bluez_dbus_client.h"
@@ -32,11 +32,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDebugManagerClient
   typedef base::OnceCallback<void(const std::string& error_name,
                                   const std::string& error_message)>
       ErrorCallback;
-
-  // Invoke D-Bus API to update bluetooth devcoredump state.
-  virtual void SetDevCoredump(const bool enable,
-                              base::OnceClosure callback,
-                              ErrorCallback error_callback) = 0;
 
   // Invoke D-Bus API to enable or disable LL privacy.
   virtual void SetLLPrivacy(const bool enable,

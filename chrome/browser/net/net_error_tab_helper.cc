@@ -4,7 +4,7 @@
 
 #include "chrome/browser/net/net_error_tab_helper.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chrome/browser/net/dns_probe_service.h"
 #include "chrome/browser/net/dns_probe_service_factory.h"
@@ -18,6 +18,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -31,7 +32,7 @@
 #include "components/offline_pages/core/client_namespace_constants.h"
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "chrome/browser/ui/ash/network/network_portal_signin_controller.h"
 #endif
@@ -53,8 +54,7 @@ static NetErrorTabHelper::TestingState testing_state_ =
 
 }  // namespace
 
-NetErrorTabHelper::~NetErrorTabHelper() {
-}
+NetErrorTabHelper::~NetErrorTabHelper() = default;
 
 // static
 void NetErrorTabHelper::BindNetErrorPageSupport(
@@ -166,19 +166,8 @@ void NetErrorTabHelper::SetIsShowingDownloadButtonInErrorPage(
 
 #if BUILDFLAG(IS_CHROMEOS)
 void NetErrorTabHelper::ShowPortalSignin() {
-  // TODO(b/247618374): Lacros implementation.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!ash::features::IsCaptivePortalErrorPageEnabled()) {
-    mojo::ReportBadMessage("Captive Portal Error Page feature not enabled");
-    return;
-  }
-  if (!portal_signin_controller_) {
-    portal_signin_controller_ =
-        std::make_unique<ash::NetworkPortalSigninController>();
-  }
-  portal_signin_controller_->ShowSignin(
+  ash::NetworkPortalSigninController::Get()->ShowSignin(
       ash::NetworkPortalSigninController::SigninSource::kErrorPage);
-#endif
 }
 #endif
 

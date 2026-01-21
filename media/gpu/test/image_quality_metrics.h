@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 
 namespace media {
@@ -39,6 +40,13 @@ double ComputeSSIM(const VideoFrame& frame1, const VideoFrame& frame2);
 // go/log-likelihood-artifact-detection
 double ComputeLogLikelihoodRatio(scoped_refptr<const VideoFrame> golden_frame,
                                  scoped_refptr<const VideoFrame> test_frame);
+
+double ComputeAR30PSNR(base::span<const uint32_t> frame1_data,
+                       size_t frame1_stride,
+                       base::span<const uint32_t> frame2_data,
+                       size_t frame2_stride,
+                       size_t width,
+                       size_t height);
 
 }  // namespace test
 }  // namespace media

@@ -46,6 +46,11 @@ class SyncedBookmarkTrackerEntity {
   // A commit may or may not be in progress at this time.
   bool IsUnsynced() const;
 
+  // Returns true if this entity was created locally and not yet committed to
+  // the server (including while the commit is in flight, until a response is
+  // received from the server).
+  bool IsUnsyncedLocalCreation() const;
+
   // Check whether |data| matches the stored specifics hash. It also compares
   // parent information (which is included in specifics).
   bool MatchesData(const syncer::EntityData& data) const;
@@ -66,7 +71,7 @@ class SyncedBookmarkTrackerEntity {
   void clear_bookmark_node() { bookmark_node_ = nullptr; }
 
   // Used when replacing a node in order to update its otherwise immutable
-  // GUID.
+  // UUID.
   void set_bookmark_node(const bookmarks::BookmarkNode* bookmark_node) {
     bookmark_node_ = bookmark_node;
   }
@@ -87,7 +92,8 @@ class SyncedBookmarkTrackerEntity {
 
  private:
   // Null for tombstones.
-  raw_ptr<const bookmarks::BookmarkNode, DanglingUntriaged> bookmark_node_;
+  raw_ptr<const bookmarks::BookmarkNode, AcrossTasksDanglingUntriaged>
+      bookmark_node_;
 
   // Serializable Sync metadata.
   sync_pb::EntityMetadata metadata_;

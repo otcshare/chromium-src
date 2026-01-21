@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <array>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -16,7 +17,6 @@
 #include "chrome/common/search/ntp_logging_events.h"
 #include "components/ntp_tiles/constants.h"
 #include "components/ntp_tiles/ntp_tile_impression.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #error "Instant is only used on desktop";
@@ -49,6 +49,8 @@ class NTPUserDataLogger {
   // Called when all NTP tiles have finished loading (successfully or failing).
   void LogMostVisitedLoaded(base::TimeDelta time,
                             bool using_most_visited,
+                            bool using_custom_links,
+                            bool using_enterprise_shortcuts,
                             bool is_visible);
 
   // Logs an impression on one of the NTP tiles by given details.
@@ -70,6 +72,8 @@ class NTPUserDataLogger {
   // the tab/shutting down Chrome), or when the user navigates to a URL.
   void EmitNtpStatistics(base::TimeDelta load_time,
                          bool using_most_visited,
+                         bool using_custom_links,
+                         bool using_enterprise_shortcuts,
                          bool is_visible);
 
   void EmitNtpTraceEvent(const char* event_name, base::TimeDelta duration);
@@ -91,7 +95,7 @@ class NTPUserDataLogger {
   // sources, such as signing in (switching from client to server tiles), then
   // only the impressions for the first source will be logged, leaving the
   // number of impressions for a source slightly out-of-sync with navigations.
-  std::array<absl::optional<ntp_tiles::NTPTileImpression>,
+  std::array<std::optional<ntp_tiles::NTPTileImpression>,
              ntp_tiles::kMaxNumTiles>
       logged_impressions_;
 

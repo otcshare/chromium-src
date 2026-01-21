@@ -11,75 +11,74 @@ import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
-import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.components.browser_ui.settings.ContainedRadioButtonGroupPreference;
+import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
+import org.chromium.components.browser_ui.settings.ManagedPreferencesUtils;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout;
 import org.chromium.components.browser_ui.widget.RadioButtonWithEditText;
 import org.chromium.components.browser_ui.widget.RadioButtonWithEditText.OnTextChangeListener;
+import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
 /**
- * A radio button group Preference used for Homepage Preference. It contains 2 options:
- * a {@link RadioButtonWithDescription} that represent Chrome NTP, and a
- * {@link RadioButtonWithEditText} that represents customized URL set by partner or user.
+ * A radio button group Preference used for Homepage Preference. It contains 2 options: a {@link
+ * RadioButtonWithDescription} that represent Chrome NTP, and a {@link RadioButtonWithEditText} that
+ * represents customized URL set by partner or user.
  */
-public final class RadioButtonGroupHomepagePreference
-        extends Preference implements RadioGroup.OnCheckedChangeListener, OnTextChangeListener {
-    /**
-     * A data structure which holds the displayed value and the status for this preference.
-     */
+@NullMarked
+public final class RadioButtonGroupHomepagePreference extends ContainedRadioButtonGroupPreference
+        implements RadioGroup.OnCheckedChangeListener, OnTextChangeListener, ContainmentItem {
+    /** A data structure which holds the displayed value and the status for this preference. */
     static class PreferenceValues {
-        /**
-         * The option that is checked in {@link RadioButtonGroupHomepagePreference}.
-         */
+        /** The option that is checked in {@link RadioButtonGroupHomepagePreference}. */
         private @HomepageOption int mCheckedOption;
 
-        /**
-         * The string that displayed on the edit text box.
-         */
+        /** The string that displayed on the edit text box. */
         private String mCustomizedText;
 
-        /**
-         * Whether the RadioButtonGroup is enabled.
-         */
-        private boolean mIsEnabled;
+        /** Whether the RadioButtonGroup is enabled. */
+        private final boolean mIsEnabled;
 
-        /**
-         * Whether the option for to {@link HomepageOption#ENTRY_CHROME_NTP} is visible.
-         */
-        private boolean mIsNTPOptionVisible;
+        /** Whether the option for to {@link HomepageOption#ENTRY_CHROME_NTP} is visible. */
+        private final boolean mIsNtpOptionVisible;
 
-        /**
-         * Whether the option for to {@link HomepageOption#ENTRY_CUSTOM_URI} is visible.
-         */
-        private boolean mIsCustomizedOptionVisible;
+        /** Whether the option for to {@link HomepageOption#ENTRY_CUSTOM_URI} is visible. */
+        private final boolean mIsCustomizedOptionVisible;
 
         /**
          * Created the data structure for {@link RadioButtonGroupHomepagePreference} to communicate
          * the preference status to outside fragment.
+         *
          * @param checkedOption The option that is checked in {@link
-         *         RadioButtonGroupHomepagePreference}
+         *     RadioButtonGroupHomepagePreference}
          * @param customizedText The string that displayed on the edit text box.
          * @param isEnabled Whether the RadioButtonGroup is enabled.
-         * @param isNTPButtonVisible Whether the option for to {@link
-         *         HomepageOption#ENTRY_CHROME_NTP} is visible.
+         * @param isNtpButtonVisible Whether the option for to {@link
+         *     HomepageOption#ENTRY_CHROME_NTP} is visible.
          * @param isCustomizedOptionVisible Whether the option for to {@link
-         *         HomepageOption#ENTRY_CUSTOM_URI} is visible.
+         *     HomepageOption#ENTRY_CUSTOM_URI} is visible.
          */
-        PreferenceValues(@HomepageOption int checkedOption, String customizedText,
-                boolean isEnabled, boolean isNTPButtonVisible, boolean isCustomizedOptionVisible) {
+        PreferenceValues(
+                @HomepageOption int checkedOption,
+                String customizedText,
+                boolean isEnabled,
+                boolean isNtpButtonVisible,
+                boolean isCustomizedOptionVisible) {
             mCheckedOption = checkedOption;
             mCustomizedText = customizedText;
 
             mIsEnabled = isEnabled;
-            mIsNTPOptionVisible = isNTPButtonVisible;
+            mIsNtpOptionVisible = isNtpButtonVisible;
             mIsCustomizedOptionVisible = isCustomizedOptionVisible;
         }
 
@@ -99,9 +98,7 @@ public final class RadioButtonGroupHomepagePreference
         }
     }
 
-    /**
-     * Enums that represent the status of radio buttons inside this Preference.
-     */
+    /** Enums that represent the status of radio buttons inside this Preference. */
     @IntDef({HomepageOption.ENTRY_CHROME_NTP, HomepageOption.ENTRY_CUSTOM_URI})
     @Retention(RetentionPolicy.SOURCE)
     @interface HomepageOption {
@@ -111,21 +108,41 @@ public final class RadioButtonGroupHomepagePreference
         int NUM_ENTRIES = 2;
     }
 
+    /** Listener used to receive updates from this preference. */
+    interface OnHomepagePreferenceChangeListener {
+        void onHomepagePreferenceChange(PreferenceValues newValues);
+    }
+
     private boolean mIsBoundToViewHolder;
 
     private RadioButtonWithEditText mCustomUri;
-    private RadioButtonWithDescription mChromeNTP;
+    private RadioButtonWithDescription mChromeNtp;
 
     private RadioButtonWithDescriptionLayout mGroup;
     private TextView mTitle;
 
-    private PreferenceValues mPreferenceValues;
+    private View mView;
+    private @Nullable PreferenceValues mPreferenceValues;
+    private @Nullable ManagedPreferenceDelegate mManagedPrefDelegate;
+    private @Nullable OnHomepagePreferenceChangeListener mListener;
 
     public RadioButtonGroupHomepagePreference(Context context, AttributeSet attrs) {
         super(context, attrs);
+    }
 
-        // Inflating from XML.
-        setLayoutResource(R.layout.radio_button_group_homepage_preference);
+    /** Sets the ManagedPreferenceDelegate necessary to use ManagedPreferencesUtils. */
+    void setManagedPreferenceDelegate(ManagedPreferenceDelegate delegate) {
+        mManagedPrefDelegate = delegate;
+        ManagedPreferencesUtils.initPreference(
+                mManagedPrefDelegate,
+                this,
+                /* allowManagedIcon= */ false,
+                /* hasCustomLayout= */ true);
+    }
+
+    /** Sets the listener for homepage preference change. */
+    void setOnHomepagePreferenceChangeListener(OnHomepagePreferenceChangeListener listener) {
+        mListener = listener;
     }
 
     /**
@@ -137,22 +154,31 @@ public final class RadioButtonGroupHomepagePreference
      */
     @Override
     public void onCheckedChanged(RadioGroup group, int checkedId) {
-        assert mCustomUri.isChecked() != mChromeNTP.isChecked();
+        assert mCustomUri.isChecked() != mChromeNtp.isChecked();
+        assert mPreferenceValues != null;
 
         @HomepageOption
-        int checkedOption = mChromeNTP.isChecked() ? HomepageOption.ENTRY_CHROME_NTP
-                                                   : HomepageOption.ENTRY_CUSTOM_URI;
+        int checkedOption =
+                mChromeNtp.isChecked()
+                        ? HomepageOption.ENTRY_CHROME_NTP
+                        : HomepageOption.ENTRY_CUSTOM_URI;
 
         mPreferenceValues.mCheckedOption = checkedOption;
+
+        if (mListener != null) {
+            mListener.onHomepagePreferenceChange(mPreferenceValues);
+        }
     }
 
+    @Initializer
     @Override
     public void onBindViewHolder(PreferenceViewHolder holder) {
         super.onBindViewHolder(holder);
-        mChromeNTP = (RadioButtonWithDescription) holder.findViewById(R.id.radio_button_chrome_ntp);
+        mView = holder.itemView;
+        mChromeNtp = (RadioButtonWithDescription) holder.findViewById(R.id.radio_button_chrome_ntp);
         mCustomUri = (RadioButtonWithEditText) holder.findViewById(R.id.radio_button_uri_edit);
 
-        assert mChromeNTP != null : "Chrome NTP button missing in the layout";
+        assert mChromeNtp != null : "Chrome NTP button missing in the layout";
         assert mCustomUri != null : "Custom URI button missing in the layout";
 
         mGroup = (RadioButtonWithDescriptionLayout) holder.findViewById(R.id.radio_button_group);
@@ -168,11 +194,11 @@ public final class RadioButtonGroupHomepagePreference
 
         // Set up text listeners after initial value are set.
         mCustomUri.addTextChangeListener(this);
+        // Bind view and preference.
+        ManagedPreferencesUtils.onBindViewToPreference(mManagedPrefDelegate, this, mView);
     }
 
-    /**
-     * Will be called when the text edit has a value change.
-     */
+    /** Will be called when the text edit has a value change. */
     @Override
     public void onTextChanged(CharSequence newText) {
         assert mPreferenceValues != null;
@@ -182,6 +208,10 @@ public final class RadioButtonGroupHomepagePreference
 
         mPreferenceValues.mCheckedOption = HomepageOption.ENTRY_CUSTOM_URI;
         mPreferenceValues.mCustomizedText = newText.toString();
+
+        if (mListener != null) {
+            mListener.onHomepagePreferenceChange(mPreferenceValues);
+        }
     }
 
     /**
@@ -191,7 +221,7 @@ public final class RadioButtonGroupHomepagePreference
      *
      * @param value The {@link PreferenceValues} that should be presents by this preference.
      */
-    void setupPreferenceValues(@NonNull PreferenceValues value) {
+    void setupPreferenceValues(PreferenceValues value) {
         if (mIsBoundToViewHolder) {
             mGroup.setEnabled(value.mIsEnabled);
             mTitle.setEnabled(value.mIsEnabled);
@@ -201,12 +231,12 @@ public final class RadioButtonGroupHomepagePreference
             mCustomUri.setPrimaryText(value.mCustomizedText);
 
             if (value.mCheckedOption == HomepageOption.ENTRY_CHROME_NTP) {
-                mChromeNTP.setChecked(true);
+                mChromeNtp.setChecked(true);
             } else {
                 mCustomUri.setChecked(true);
             }
 
-            mChromeNTP.setVisibility(value.mIsNTPOptionVisible ? View.VISIBLE : View.GONE);
+            mChromeNtp.setVisibility(value.mIsNtpOptionVisible ? View.VISIBLE : View.GONE);
             mCustomUri.setVisibility(value.mIsCustomizedOptionVisible ? View.VISIBLE : View.GONE);
         }
 
@@ -215,10 +245,24 @@ public final class RadioButtonGroupHomepagePreference
         mPreferenceValues = value;
     }
 
+    /** Schedules an update of the managed-state views (e.g., managed_disclaimer_text). */
+    public void scheduleManagedViewUpdate() {
+        if (mView != null) {
+            mView.post(
+                    () -> {
+                        if (mManagedPrefDelegate != null && mView != null) {
+                            ManagedPreferencesUtils.onBindViewToPreference(
+                                    mManagedPrefDelegate, this, mView);
+                        }
+                    });
+        }
+    }
+
     /**
      * @return The current preference value stored in the preference.
      */
     PreferenceValues getPreferenceValue() {
+        assert mPreferenceValues != null;
         return mPreferenceValues;
     }
 
@@ -228,12 +272,16 @@ public final class RadioButtonGroupHomepagePreference
     }
 
     @VisibleForTesting
-    RadioButtonWithDescription getChromeNTPRadioButton() {
-        return mChromeNTP;
+    RadioButtonWithDescription getChromeNtpRadioButton() {
+        return mChromeNtp;
     }
 
     @VisibleForTesting
     TextView getTitleTextView() {
         return mTitle;
+    }
+
+    View getViewForTesting() {
+        return mView;
     }
 }

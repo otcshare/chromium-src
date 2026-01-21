@@ -46,7 +46,8 @@ void MatchesProxyServerHelper(const char* failure_message,
     return;
   }
 
-  ProxyServer actual_proxy = actual_proxies.Get();
+  ASSERT_EQ(1u, actual_proxies.First().length());
+  ProxyServer actual_proxy = actual_proxies.First().First();
   std::string actual_proxy_string;
   if (actual_proxy.is_valid())
     actual_proxy_string = ProxyServerToProxyUri(actual_proxy);
@@ -59,7 +60,7 @@ void MatchesProxyServerHelper(const char* failure_message,
   }
 }
 
-std::string FlattenProxyBypass(const ProxyBypassRules& bypass_rules) {
+std::string FlattenProxyBypass(const ProxyHostMatchingRules& bypass_rules) {
   std::string flattened_proxy_bypass;
   for (const auto& bypass_rule : bypass_rules.rules()) {
     if (!flattened_proxy_bypass.empty())

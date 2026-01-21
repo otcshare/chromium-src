@@ -2,24 +2,39 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {FileData, FileKey, State} from '../externs/ts/state.js';
+import type {FilesAppEntry} from '../common/js/files_app_entry_types.js';
+import type {VolumeType} from '../common/js/volume_manager_types.js';
 import {BaseStore} from '../lib/base_store.js';
 
-import {Action} from './actions.js';
-import {rootReducer} from './reducers/root.js';
+import {allEntriesSlice} from './ducks/all_entries.js';
+import {androidAppsSlice} from './ducks/android_apps.js';
+import {bulkPinningSlice} from './ducks/bulk_pinning.js';
+import {currentDirectorySlice} from './ducks/current_directory.js';
+import {deviceSlice} from './ducks/device.js';
+import {driveSlice} from './ducks/drive.js';
+import {folderShortcutsSlice} from './ducks/folder_shortcuts.js';
+import {launchParamsSlice} from './ducks/launch_params.js';
+import {navigationSlice} from './ducks/navigation.js';
+import {preferencesSlice} from './ducks/preferences.js';
+import {searchSlice} from './ducks/search.js';
+import {uiEntriesSlice} from './ducks/ui_entries.js';
+import {volumesSlice} from './ducks/volumes.js';
+import type {FileData, FileKey, State, Volume} from './state.js';
 
 /**
  * Files app's Store type.
  *
  * It enforces the types for the State and the Actions managed by Files app.
  */
-export type Store = BaseStore<State, Action>;
+export type Store = BaseStore<State>;
 
 /**
  * Store singleton instance.
  * It's only exposed via `getStore()` to guarantee it's a single instance.
+ * TODO(b/272120634): Use window.store temporarily, uncomment below code after
+ * the duplicate store issue is resolved.
  */
-let store: null|Store = null;
+// let store: null|Store = null;
 
 /**
  * Returns the singleton instance for the Files app's Store.
@@ -28,12 +43,27 @@ let store: null|Store = null;
  * at the app's main entry point.
  */
 export function getStore(): Store {
-  if (!store) {
-    store =
-        new BaseStore<State, Action>({allEntries: {}} as State, rootReducer);
+  // TODO(b/272120634): Put the store on window to prevent Store being created
+  // twice.
+  if (!window.store) {
+    window.store = new BaseStore<State>(getEmptyState(), [
+      searchSlice,
+      volumesSlice,
+      bulkPinningSlice,
+      uiEntriesSlice,
+      androidAppsSlice,
+      folderShortcutsSlice,
+      navigationSlice,
+      preferencesSlice,
+      deviceSlice,
+      driveSlice,
+      currentDirectorySlice,
+      allEntriesSlice,
+      launchParamsSlice,
+    ]);
   }
 
-  return store;
+  return window.store;
 }
 
 export function getEmptyState(): State {
@@ -41,10 +71,29 @@ export function getEmptyState(): State {
   return {
     allEntries: {},
     currentDirectory: undefined,
+    device: {
+      connection: chrome.fileManagerPrivate.DeviceConnectionState.ONLINE,
+    },
+    drive: {
+      connectionType: chrome.fileManagerPrivate.DriveConnectionStateType.ONLINE,
+      offlineReason: undefined,
+    },
     search: {
       query: undefined,
       status: undefined,
       options: undefined,
+    },
+    navigation: {
+      roots: [],
+    },
+    volumes: {},
+    uiEntries: [],
+    folderShortcuts: [],
+    androidApps: {},
+    bulkPinning: undefined,
+    preferences: undefined,
+    launchParams: {
+      dialogType: undefined,
     },
   };
 }
@@ -79,27 +128,45 @@ export async function waitForState(
 
 /**
  * Returns the `FileData` from a FileKey.
- * @throws {Error} if it can't find the FileData.
  */
-export function getFileData(state: State, key: FileKey): FileData {
-  const entry = state.allEntries[key];
-  if (!entry) {
-    throw new Error(`Key ${key} not found in the store`);
+export function getFileData(state: State, key: FileKey): FileData|null {
+  const fileData = state.allEntries[key];
+  if (fileData) {
+    return fileData;
   }
-  return entry;
+  return null;
 }
 
 /**
  * Returns FileData for each key.
- * @throws {Error} if it can't find the FileData.
+ * NOTE: It might return less results than the requested keys when the key isn't
+ * found.
  */
 export function getFilesData(state: State, keys: FileKey[]): FileData[] {
   const filesData: FileData[] = [];
   for (const key of keys) {
-    filesData.push(getFileData(state, key));
+    const fileData = getFileData(state, key);
+    if (fileData) {
+      filesData.push(fileData);
+    }
   }
 
   return filesData;
+}
+
+export function getEntry(state: State, key: FileKey): Entry|FilesAppEntry|null {
+  const fileData = state.allEntries[key];
+  return fileData?.entry ?? null;
+}
+
+export function getVolume(state: State, fileData?: FileData|null): Volume|null {
+  const volumeId = fileData?.volumeId;
+  return (volumeId && state.volumes[volumeId]) || null;
+}
+
+export function getVolumeType(
+    state: State, fileData?: FileData|null): VolumeType|null {
+  return getVolume(state, fileData)?.volumeType ?? null;
 }
 
 /**

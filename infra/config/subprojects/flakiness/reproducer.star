@@ -2,8 +2,16 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("//lib/builders.star", "builders", "os")
-load("//lib/consoles.star", "consoles")
+load("@chromium-luci//builders.star", "builders", "os")
+load("@chromium-luci//consoles.star", "consoles")
+
+consoles.defaults.set(
+    repo = "https://chromium.googlesource.com/chromium/src",
+)
+
+consoles.console_view(
+    name = "chromium.flakiness",
+)
 
 luci.bucket(
     name = "flaky-reproducer",
@@ -27,14 +35,14 @@ builders.builder(
     name = "runner",
     bucket = "flaky-reproducer",
     executable = "recipe:flakiness/reproducer",
-    os = os.LINUX_DEFAULT,
     pool = "luci.chromium.try",
+    os = os.LINUX_DEFAULT,
     console_view_entry = consoles.console_view_entry(
         console_view = "chromium.flakiness",
         category = "flakiness",
         short_name = "reproducer",
     ),
-    service_account = "flaky-reproducer-builder@chops-service-accounts.iam.gserviceaccount.com",
     build_numbers = False,
     execution_timeout = 2 * time.hour,
+    service_account = "flaky-reproducer-builder@chops-service-accounts.iam.gserviceaccount.com",
 )

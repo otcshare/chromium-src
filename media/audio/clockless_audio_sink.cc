@@ -6,19 +6,20 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/simple_thread.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_glitch_info.h"
-#include "media/base/audio_hash.h"
 
 namespace media {
 
-// Internal to ClocklessAudioSink. Class is used to call Render() on a seperate
+// Internal to ClocklessAudioSink. Class is used to call Render() on a separate
 // thread, running as fast as it can read the data.
 class ClocklessAudioSinkThread : public base::DelegateSimpleThread::Delegate {
  public:
@@ -48,9 +49,9 @@ class ClocklessAudioSinkThread : public base::DelegateSimpleThread::Delegate {
     return playback_time_;
   }
 
-  std::string GetAudioHash() {
+  const AudioHash& GetAudioHash() const {
     DCHECK(audio_hash_);
-    return audio_hash_->ToString();
+    return *audio_hash_;
   }
 
  private:
@@ -76,7 +77,7 @@ class ClocklessAudioSinkThread : public base::DelegateSimpleThread::Delegate {
     }
   }
 
-  raw_ptr<AudioRendererSink::RenderCallback> callback_;
+  raw_ptr<AudioRendererSink::RenderCallback, DanglingUntriaged> callback_;
   std::unique_ptr<AudioBus> audio_bus_;
   std::unique_ptr<base::WaitableEvent> stop_event_;
   std::unique_ptr<base::DelegateSimpleThread> thread_;
@@ -164,8 +165,8 @@ void ClocklessAudioSink::StartAudioHashForTesting() {
   hashing_ = true;
 }
 
-std::string ClocklessAudioSink::GetAudioHashForTesting() {
-  return thread_ && hashing_ ? thread_->GetAudioHash() : std::string();
+const AudioHash& ClocklessAudioSink::GetAudioHashForTesting() const {
+  return thread_->GetAudioHash();
 }
 
 void ClocklessAudioSink::SetIsOptimizedForHardwareParametersForTesting(

@@ -30,6 +30,12 @@ void ArcGhostWindowHandler::WindowSessionResolver::PopulateProperties(
   if (params.window_session_id <= 0)
     return;
   auto* handler = ArcGhostWindowHandler::Get();
+  if (!handler) {
+    // TODO(b/291693166): Remove this null check after change the lifecycle of
+    // the handler.
+    LOG(ERROR) << "ArcGhostWindowHandler haven't been initialized.";
+    return;
+  }
   auto it =
       handler->session_id_to_shell_surface_.find(params.window_session_id);
   if (it != handler->session_id_to_shell_surface_.end()) {
@@ -100,19 +106,21 @@ bool ArcGhostWindowHandler::LaunchArcGhostWindow(
     int32_t session_id,
     app_restore::AppRestoreData* restore_data) {
   DCHECK(restore_data);
-  DCHECK(restore_data->current_bounds.has_value());
   DCHECK(restore_data->display_id.has_value());
 
-  gfx::Rect adjust_bounds = restore_data->current_bounds.value_or(gfx::Rect());
+  const app_restore::WindowInfo& window_info = restore_data->window_info;
+  CHECK(window_info.current_bounds.has_value());
+
+  gfx::Rect adjust_bounds = window_info.current_bounds.value_or(gfx::Rect());
 
   // Replace the screen bounds by root bounds if there is.
-  if (restore_data->bounds_in_root.has_value())
-    adjust_bounds = restore_data->bounds_in_root.value();
-  if (restore_data->window_state_type.has_value() &&
-      (restore_data->window_state_type.value() ==
-           chromeos::WindowStateType::kDefault ||
-       restore_data->window_state_type.value() ==
-           chromeos::WindowStateType::kNormal)) {
+  if (window_info.arc_extra_info &&
+      window_info.arc_extra_info->bounds_in_root) {
+    adjust_bounds = *window_info.arc_extra_info->bounds_in_root;
+  }
+
+  if (window_info.window_state_type &&
+      chromeos::IsNormalWindowStateType(*window_info.window_state_type)) {
     adjust_bounds.Inset(gfx::Insets().set_top(
         views::GetCaptionButtonLayoutSize(
             views::CaptionButtonLayoutSize::kNonBrowserCaption)
@@ -190,16 +198,20 @@ void ArcGhostWindowHandler::OnWindowInfoUpdated(int window_id,
   auto window_info = ::arc::mojom::WindowInfo::New();
   window_info->window_id = window_id;
   window_info->display_id = display_id;
-  window_info->bounds = gfx::Rect(bounds);
   window_info->state = state;
-
-  if (is_app_instance_connected_) {
-    ::arc::UpdateWindowInfo(std::move(window_info));
-    return;
+  // Do not override bounds in window info if the window state type is not
+  // specified when ghost window launched.
+  if (window_info->state !=
+      static_cast<int32_t>(chromeos::WindowStateType::kDefault)) {
+    window_info->bounds = gfx::Rect(bounds);
   }
 
   session_id_to_pending_window_info_[window_info->window_id] =
-      std::move(window_info);
+      window_info->Clone();
+
+  if (is_app_instance_connected_) {
+    ::arc::UpdateWindowInfo(std::move(window_info));
+  }
 }
 
 }  // namespace ash::full_restore

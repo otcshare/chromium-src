@@ -8,6 +8,7 @@
 
 [
     Exposed(ServiceWorker WebHIDOnServiceWorkers,
+            DedicatedWorker WebHID,
             Window WebHID),
     SecureContext
 ] interface HID : EventTarget {
@@ -23,6 +24,7 @@
 
     // Requests permission from the user to use a device.
     [
+        Exposed(Window WebHID),
         CallWith=ScriptState,
         RaisesException,
         MeasureAs=HidRequestDevice

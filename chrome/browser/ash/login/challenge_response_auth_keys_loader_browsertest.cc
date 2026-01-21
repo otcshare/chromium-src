@@ -6,16 +6,17 @@
 
 #include <vector>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/test/bind.h"
+#include "chrome/browser/ash/certificate_provider/test_certificate_provider_extension.h"
+#include "chrome/browser/ash/certificate_provider/test_certificate_provider_extension_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/certificate_provider/test_certificate_provider_extension.h"
-#include "chrome/browser/certificate_provider/test_certificate_provider_extension_mixin.h"
 #include "chrome/browser/policy/extension_force_install_mixin.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/login/auth/challenge_response/known_user_pref_utils.h"
@@ -34,12 +35,12 @@ namespace {
 
 constexpr char kUserEmail[] = "testuser@example.com";
 
-Profile* GetProfile() {
+Profile* GetOriginalProfile() {
   return ProfileHelper::GetSigninProfile()->GetOriginalProfile();
 }
 
 extensions::ProcessManager* GetProcessManager() {
-  return extensions::ProcessManager::Get(GetProfile());
+  return extensions::ProcessManager::Get(GetOriginalProfile());
 }
 
 }  // namespace
@@ -64,7 +65,7 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
         base::TimeDelta::Max());
 
     extension_force_install_mixin_.InitWithDeviceStateMixin(
-        GetProfile(), &device_state_mixin_);
+        GetOriginalProfile(), &device_state_mixin_);
 
     // Register the ChallengeResponseKey for the user.
     user_manager::KnownUser(g_browser_process->local_state())
@@ -111,7 +112,8 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
 
   void InstallExtension(bool wait_on_extension_loaded) {
     test_certificate_provider_extension_mixin_.ForceInstall(
-        GetProfile(), /*wait_on_extension_loaded=*/wait_on_extension_loaded,
+        GetOriginalProfile(),
+        /*wait_on_extension_loaded=*/wait_on_extension_loaded,
         /*immediately_provide_certificates=*/wait_on_extension_loaded);
   }
 
@@ -375,8 +377,9 @@ class ChallengeResponseExtensionLoadObserverTest
   }
 
  private:
-  base::RunLoop* extension_host_created_loop_ = nullptr;
-  extensions::ExtensionHost* extension_host_ = nullptr;
+  raw_ptr<base::RunLoop> extension_host_created_loop_ = nullptr;
+  raw_ptr<extensions::ExtensionHost, DanglingUntriaged> extension_host_ =
+      nullptr;
   base::ScopedObservation<extensions::ProcessManager,
                           extensions::ProcessManagerObserver>
       process_manager_observation_{this};

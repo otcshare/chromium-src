@@ -19,6 +19,7 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
@@ -31,14 +32,16 @@ int IsEnhancedProtectionMessageVisibleOnInterstitial(
     SafeBrowsingPolicyTest* browser_test) {
   const std::string command = base::StringPrintf(
       "var node = document.getElementById('enhanced-protection-message');"
+      "var result;"
       "if (node) {"
-      "  window.domAutomationController.send(node.offsetWidth > 0 || "
-      "      node.offsetHeight > 0 ? %d : %d);"
+      "  result = node.offsetWidth > 0 || "
+      "      node.offsetHeight > 0 ? %d : %d;"
       "} else {"
       // The node should be present but not visible, so trigger an error
       // by sending false if it's not present.
-      "  window.domAutomationController.send(%d);"
-      "}",
+      "  result = %d;"
+      "}"
+      "result;",
       security_interstitials::CMD_TEXT_FOUND,
       security_interstitials::CMD_TEXT_NOT_FOUND,
       security_interstitials::CMD_ERROR);
@@ -49,10 +52,7 @@ int IsEnhancedProtectionMessageVisibleOnInterstitial(
     ADD_FAILURE() << "Expected interstitial when checking for enhanced "
                      "protection message.";
   }
-  int result = 0;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractInt(tab->GetPrimaryMainFrame(),
-                                                  command, &result));
-  return result;
+  return content::EvalJs(tab->GetPrimaryMainFrame(), command).ExtractInt();
 }
 
 // Test extended reporting is managed by policy.
@@ -78,53 +78,23 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
 
   // Also make sure the SafeBrowsing prefs helper functions agree with the
   // policy.
-  EXPECT_TRUE(safe_browsing::IsExtendedReportingPolicyManaged(*prefs));
+  if (base::FeatureList::IsEnabled(
+          safe_browsing::kExtendedReportingRemovePrefDependency)) {
+    EXPECT_FALSE(safe_browsing::IsExtendedReportingPolicyManaged(*prefs));
+  } else {
+    EXPECT_TRUE(safe_browsing::IsExtendedReportingPolicyManaged(*prefs));
+  }
+
   // Note that making SBER policy managed does NOT affect the SBEROptInAllowed
   // setting, which is intentionally kept distinct for now. When the latter is
   // deprecated, then SBER's policy management will imply whether the checkbox
   // is visible.
-  EXPECT_TRUE(safe_browsing::IsExtendedReportingOptInAllowed(*prefs));
-}
-
-#if !BUILDFLAG(IS_ANDROID)
-// Test that when Safe Browsing state is managed by policy, the enhanced
-// protection message does not appear on SSL blocking pages.
-IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, SafeBrowsingStatePolicyManaged) {
-  net::EmbeddedTestServer https_server_expired(
-      net::EmbeddedTestServer::TYPE_HTTPS);
-  https_server_expired.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
-  https_server_expired.ServeFilesFromSourceDirectory("chrome/test/data");
-  ASSERT_TRUE(https_server_expired.Start());
-
-  // Set the Safe Browsing state to standard protection.
-  PrefService* prefs = chrome_test_utils::GetProfile(this)->GetPrefs();
-  safe_browsing::SetSafeBrowsingState(
-      prefs, safe_browsing::SafeBrowsingState::STANDARD_PROTECTION);
-
-  // First, navigate to an SSL error page and make sure the enhanced protection
-  // message appears by default.
-  ASSERT_TRUE(NavigateToUrl(https_server_expired.GetURL("/"), this));
-  EXPECT_EQ(security_interstitials::CMD_TEXT_FOUND,
-            IsEnhancedProtectionMessageVisibleOnInterstitial(this));
-
-  // Set the enterprise policy to force standard protection.
-  PolicyMap policies;
-  policies.Set(policy::key::kSafeBrowsingProtectionLevel,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(/* standard protection */ 1), nullptr);
-  UpdateProviderPolicy(policies);
-  // Policy should have overwritten the pref, and it should be managed.
-  EXPECT_EQ(safe_browsing::SafeBrowsingState::STANDARD_PROTECTION,
-            safe_browsing::GetSafeBrowsingState(*prefs));
-  EXPECT_TRUE(prefs->IsManagedPreference(prefs::kSafeBrowsingEnabled));
-  EXPECT_TRUE(prefs->IsManagedPreference(prefs::kSafeBrowsingEnhanced));
-
-  // Navigate to an SSL error page, the enhanced protection message should not
-  // appear.
-  ASSERT_TRUE(NavigateToUrl(https_server_expired.GetURL("/"), this));
-  EXPECT_EQ(security_interstitials::CMD_TEXT_NOT_FOUND,
-            IsEnhancedProtectionMessageVisibleOnInterstitial(this));
+  if (base::FeatureList::IsEnabled(
+          safe_browsing::kExtendedReportingRemovePrefDependency)) {
+    EXPECT_FALSE(safe_browsing::IsExtendedReportingOptInAllowed(*prefs));
+  } else {
+    EXPECT_TRUE(safe_browsing::IsExtendedReportingOptInAllowed(*prefs));
+  }
 }
 
 // Test that when safe browsing allowlist domains are set by policy, safe
@@ -173,6 +143,47 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, SafeBrowsingAllowlistDomains) {
   EXPECT_TRUE(canonicalized_domains.empty());
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+// Test that when Safe Browsing state is managed by policy, the enhanced
+// protection message does not appear on SSL blocking pages.
+IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, SafeBrowsingStatePolicyManaged) {
+  net::EmbeddedTestServer https_server_expired(
+      net::EmbeddedTestServer::TYPE_HTTPS);
+  https_server_expired.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
+  https_server_expired.ServeFilesFromSourceDirectory("chrome/test/data");
+  ASSERT_TRUE(https_server_expired.Start());
+
+  // Set the Safe Browsing state to standard protection.
+  PrefService* prefs = chrome_test_utils::GetProfile(this)->GetPrefs();
+  safe_browsing::SetSafeBrowsingState(
+      prefs, safe_browsing::SafeBrowsingState::STANDARD_PROTECTION);
+
+  // First, navigate to an SSL error page and make sure the enhanced protection
+  // message appears by default.
+  ASSERT_TRUE(NavigateToUrl(https_server_expired.GetURL("/"), this));
+  EXPECT_EQ(security_interstitials::CMD_TEXT_FOUND,
+            IsEnhancedProtectionMessageVisibleOnInterstitial(this));
+
+  // Set the enterprise policy to force standard protection.
+  PolicyMap policies;
+  policies.Set(policy::key::kSafeBrowsingProtectionLevel,
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD,
+               base::Value(/* standard protection */ 1), nullptr);
+  UpdateProviderPolicy(policies);
+  // Policy should have overwritten the pref, and it should be managed.
+  EXPECT_EQ(safe_browsing::SafeBrowsingState::STANDARD_PROTECTION,
+            safe_browsing::GetSafeBrowsingState(*prefs));
+  EXPECT_TRUE(prefs->IsManagedPreference(prefs::kSafeBrowsingEnabled));
+  EXPECT_TRUE(prefs->IsManagedPreference(prefs::kSafeBrowsingEnhanced));
+
+  // Navigate to an SSL error page, the enhanced protection message should not
+  // appear.
+  ASSERT_TRUE(NavigateToUrl(https_server_expired.GetURL("/"), this));
+  EXPECT_EQ(security_interstitials::CMD_TEXT_NOT_FOUND,
+            IsEnhancedProtectionMessageVisibleOnInterstitial(this));
+}
+
 // Test that when password protection login URLs are set by policy, password
 // protection service gets the correct value.
 IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, PasswordProtectionLoginURLs) {
@@ -184,8 +195,12 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, PasswordProtectionLoginURLs) {
       prefs->FindPreference(prefs::kPasswordProtectionLoginURLs)->IsManaged());
   std::vector<GURL> login_urls;
   safe_browsing::GetPasswordProtectionLoginURLsPref(*prefs, &login_urls);
+#if BUILDFLAG(IS_CHROMEOS)
+  // ChromeOS prepopulates chrome:// URLs.
+  EXPECT_FALSE(login_urls.empty());
+#else
   EXPECT_TRUE(login_urls.empty());
-
+#endif
   // Add 2 login URLs to this enterprise policy .
   PolicyMap policies;
   base::Value::List login_url_values;
@@ -198,11 +213,18 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, PasswordProtectionLoginURLs) {
   EXPECT_TRUE(
       prefs->FindPreference(prefs::kPasswordProtectionLoginURLs)->IsManaged());
   safe_browsing::GetPasswordProtectionLoginURLsPref(*prefs, &login_urls);
+#if BUILDFLAG(IS_CHROMEOS)
+  EXPECT_EQ(3u, login_urls.size());
+  EXPECT_EQ(GURL("chrome://os-settings"), login_urls[0]);
+  EXPECT_EQ(GURL("https://login.mydomain.com"), login_urls[1]);
+  EXPECT_EQ(GURL("https://mydomian.com/login.html"), login_urls[2]);
+#else
   EXPECT_EQ(2u, login_urls.size());
   EXPECT_EQ(GURL("https://login.mydomain.com"), login_urls[0]);
   EXPECT_EQ(GURL("https://mydomian.com/login.html"), login_urls[1]);
+#endif
 
-  // Verify non-http/https schemes, or invalid URLs will be skipped.
+  // Verify unsupported schemes, or invalid URLs will be skipped.
   login_url_values.clear();
   login_url_values.Append("invalid");
   login_url_values.Append("ftp://login.mydomain.com");
@@ -214,7 +236,12 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest, PasswordProtectionLoginURLs) {
       prefs->FindPreference(prefs::kPasswordProtectionLoginURLs)->IsManaged());
   login_urls.clear();
   safe_browsing::GetPasswordProtectionLoginURLsPref(*prefs, &login_urls);
+#if BUILDFLAG(IS_CHROMEOS)
+  // Prepopulated URL should be present.
+  EXPECT_FALSE(login_urls.empty());
+#else
   EXPECT_TRUE(login_urls.empty());
+#endif
 }
 
 // Test that when password protection change password URL is set by policy,
@@ -264,7 +291,7 @@ class MockPasswordProtectionService
   MockPasswordProtectionService(safe_browsing::SafeBrowsingService* sb_service,
                                 Profile* profile)
       : safe_browsing::ChromePasswordProtectionService(sb_service, profile) {}
-  ~MockPasswordProtectionService() override {}
+  ~MockPasswordProtectionService() override = default;
 
   MOCK_CONST_METHOD0(IsPrimaryAccountGmail, bool());
 
@@ -335,8 +362,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
   EXPECT_EQ(safe_browsing::PHISHING_REUSE,
             mock_service.GetPasswordProtectionWarningTriggerPref(account_type));
   // Sets the enterprise policy to 1 (a.k.a PASSWORD_REUSE). Gmail accounts
-  // should always return PHISHING_REUSE regardless of what the policy is set
-  // to.
+  // should always return PHISHING_REUSE if the policy is not set to 0.
   PolicyMap policies;
   policies.Set(key::kPasswordProtectionWarningTrigger, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(1), nullptr);
@@ -350,6 +376,12 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(2), nullptr);
   UpdateProviderPolicy(policies);
   EXPECT_EQ(safe_browsing::PHISHING_REUSE,
+            mock_service.GetPasswordProtectionWarningTriggerPref(account_type));
+  // Sets the enterprise policy to 0 (a.k.a PASSWORD_PROTECTION_OFF).
+  policies.Set(key::kPasswordProtectionWarningTrigger, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(0), nullptr);
+  UpdateProviderPolicy(policies);
+  EXPECT_EQ(safe_browsing::PASSWORD_PROTECTION_OFF,
             mock_service.GetPasswordProtectionWarningTriggerPref(account_type));
 }
 

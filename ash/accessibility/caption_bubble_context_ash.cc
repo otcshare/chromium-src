@@ -6,6 +6,10 @@
 
 #include "ash/shell.h"
 #include "ash/wm/work_area_insets.h"
+#include "base/functional/callback.h"
+#include "base/location.h"
+#include "base/notreached.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace {
 constexpr char kAshSessionId[] = "ash";
@@ -13,13 +17,22 @@ constexpr char kAshSessionId[] = "ash";
 
 namespace ash::captions {
 
-CaptionBubbleContextAsh::CaptionBubbleContextAsh() = default;
+CaptionBubbleContextAsh::CaptionBubbleContextAsh(
+    ::captions::OpenCaptionSettingsCallback callback)
+    : open_caption_settings_callback_(std::move(callback)) {}
 
 CaptionBubbleContextAsh::~CaptionBubbleContextAsh() = default;
 
-absl::optional<gfx::Rect> CaptionBubbleContextAsh::GetBounds() const {
-  return WorkAreaInsets::ForWindow(Shell::GetRootWindowForNewWindows())
-      ->user_work_area_bounds();
+void CaptionBubbleContextAsh::GetBounds(GetBoundsCallback callback) const {
+  const std::optional<gfx::Rect> bounds =
+      WorkAreaInsets::ForWindow(Shell::GetRootWindowForNewWindows())
+          ->user_work_area_bounds();
+  if (!bounds.has_value()) {
+    return;
+  }
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), *bounds));
 }
 
 const std::string CaptionBubbleContextAsh::GetSessionId() const {
@@ -30,9 +43,18 @@ bool CaptionBubbleContextAsh::IsActivatable() const {
   return false;
 }
 
+bool CaptionBubbleContextAsh::ShouldAvoidOverlap() const {
+  return false;
+}
+
 std::unique_ptr<::captions::CaptionBubbleSessionObserver>
 CaptionBubbleContextAsh::GetCaptionBubbleSessionObserver() {
   return nullptr;
+}
+
+::captions::OpenCaptionSettingsCallback
+CaptionBubbleContextAsh::GetOpenCaptionSettingsCallback() {
+  return open_caption_settings_callback_;
 }
 
 }  // namespace ash::captions

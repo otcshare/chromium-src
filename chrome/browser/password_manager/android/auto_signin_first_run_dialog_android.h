@@ -5,10 +5,8 @@
 #ifndef CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_AUTO_SIGNIN_FIRST_RUN_DIALOG_ANDROID_H_
 #define CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_AUTO_SIGNIN_FIRST_RUN_DIALOG_ANDROID_H_
 
-#include "base/android/jni_android.h"
-#include "base/gtest_prod_util.h"
+#include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/ui/passwords/manage_passwords_state.h"
 #include "content/public/browser/web_contents_observer.h"
 
 namespace content {
@@ -21,7 +19,7 @@ class AutoSigninFirstRunDialogAndroid : public content::WebContentsObserver {
  public:
   explicit AutoSigninFirstRunDialogAndroid(content::WebContents* web_contents);
 
-  void Destroy(JNIEnv* env, jobject obj);
+  void Destroy(JNIEnv* env);
 
   AutoSigninFirstRunDialogAndroid(const AutoSigninFirstRunDialogAndroid&) =
       delete;
@@ -31,16 +29,16 @@ class AutoSigninFirstRunDialogAndroid : public content::WebContentsObserver {
   void ShowDialog();
 
   // Closes the dialog and propagates that no credentials was chosen.
-  void CancelDialog(JNIEnv* env, jobject obj);
+  void CancelDialog(JNIEnv* env);
 
   // Opens new tab with page which explains the Smart Lock branding.
-  void OnLinkClicked(JNIEnv* env, jobject obj);
+  void OnLinkClicked(JNIEnv* env);
 
   // Records the user decision to use auto sign-in feature.
-  void OnOkClicked(JNIEnv* env, jobject obj);
+  void OnOkClicked(JNIEnv* env);
 
   // Opts user out of the auto sign-in feature.
-  void OnTurnOffClicked(JNIEnv* env, jobject obj);
+  void OnTurnOffClicked(JNIEnv* env);
 
   // content::WebContentsObserver overrides:
   void WebContentsDestroyed() override;

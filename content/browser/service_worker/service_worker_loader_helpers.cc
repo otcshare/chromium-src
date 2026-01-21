@@ -4,17 +4,29 @@
 
 #include "content/browser/service_worker/service_worker_loader_helpers.h"
 
+#include <optional>
+#include <string_view>
+
 #include "base/command_line.h"
+#include "base/no_destructor.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/network_session_configurator/common/network_switches.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/loader/browser_initiated_resource_request.h"
 #include "content/browser/service_worker/service_worker_consts.h"
+#include "content/browser/service_worker/service_worker_synthetic_response_manager.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/referrer.h"
+#include "net/base/url_util.h"
 #include "services/network/public/cpp/constants.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
@@ -33,7 +45,7 @@ bool IsPathRestrictionSatisfiedInternal(
     const GURL& scope,
     const GURL& script_url,
     bool service_worker_allowed_header_supported,
-    const std::string* service_worker_allowed_header_value,
+    const std::optional<std::string_view>& service_worker_allowed_header_value,
     std::string* error_message) {
   DCHECK(scope.is_valid());
   DCHECK(!scope.has_ref());
@@ -64,12 +76,12 @@ bool IsPathRestrictionSatisfiedInternal(
       error_message->append("') was received when fetching the script.");
       return false;
     }
-    max_scope_string = max_scope.path();
+    max_scope_string = max_scope.GetPath();
   } else {
-    max_scope_string = script_url.GetWithoutFilename().path();
+    max_scope_string = script_url.GetWithoutFilename().GetPath();
   }
 
-  std::string scope_string = scope.path();
+  std::string scope_string = scope.GetPath();
   if (!base::StartsWith(scope_string, max_scope_string,
                         base::CompareCase::SENSITIVE)) {
     *error_message = "The path of the provided scope ('";
@@ -93,6 +105,65 @@ bool IsPathRestrictionSatisfiedInternal(
   return true;
 }
 
+bool HasUrlParamInSyntheticResponseDenyList(
+    const GURL& url,
+    const base::flat_set<std::string>& denied_url_params = {}) {
+  if (denied_url_params.empty()) {
+    return false;
+  }
+  for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
+    if (denied_url_params.contains(it.GetKey())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsUrlInSyntheticResponseAllowList(const GURL& client_url,
+                                       const std::string& allowed_url) {
+  if (allowed_url.empty()) {
+    return false;
+  }
+  const GURL url(allowed_url);
+  bool is_allowed = false;
+  // TODO(crbug.com/352578800): It's OK to use `start_with()` as far as the
+  // variation of given `client_url` value is limited, but consider
+  // replacing it with the standard SW scope matching if possible.
+  //
+  // We intentionally ignore port matching as the port is dynamically decided
+  // in tests, which is not predictable at the browser launch phase.
+  if (client_url.scheme() == url.scheme() && client_url.host() == url.host() &&
+      client_url.path() == url.path() &&
+      client_url.query().starts_with(url.query())) {
+    is_allowed = true;
+  }
+
+  if (!is_allowed) {
+    return false;
+  }
+
+  return true;
+}
+
+const std::string& GetSyntheticResponseAllowedUrl() {
+  static const base::NoDestructor<std::string> allowed_url(
+      blink::features::kServiceWorkerSyntheticResponseAllowedUrl.Get());
+  return *allowed_url;
+}
+
+const base::flat_set<std::string>& GetSyntheticResponseDeniedUrlParams() {
+  static const base::NoDestructor<base::flat_set<std::string>>
+      denied_url_params_set([]() {
+        const std::string params_str(
+            blink::features::kServiceWorkerSyntheticResponseDeniedUrlParams
+                .Get());
+        const std::vector<std::string_view> params = base::SplitStringPiece(
+            params_str, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+        return base::flat_set<std::string>(params.begin(), params.end());
+      }());
+  return *denied_url_params_set;
+}
+
 }  // namespace
 
 bool CheckResponseHead(
@@ -111,7 +182,8 @@ bool CheckResponseHead(
     return false;
   }
 
-  if (net::IsCertStatusError(response_head.cert_status) &&
+  if (!devtools_instrumentation::ShouldBypassCertificateErrors() &&
+      net::IsCertStatusError(response_head.cert_status) &&
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kIgnoreCertificateErrors)) {
     *out_completion_status = network::URLLoaderCompletionStatus(
@@ -151,7 +223,6 @@ bool ShouldBypassCacheDueToUpdateViaCache(
       return false;
   }
   NOTREACHED() << static_cast<int>(cache_mode);
-  return false;
 }
 
 bool ShouldValidateBrowserCacheForScript(
@@ -195,7 +266,7 @@ void CheckVersionStatusBeforeWorkerScriptLoad(
 
 network::ResourceRequest CreateRequestForServiceWorkerScript(
     const GURL& script_url,
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     bool is_main_script,
     blink::mojom::ScriptType worker_script_type,
     const blink::mojom::FetchClientSettingsObject& fetch_client_settings_object,
@@ -205,7 +276,14 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
   network::ResourceRequest request;
   request.url = script_url;
 
-  request.site_for_cookies = net::SiteForCookies::FromOrigin(origin);
+  // TODO(https://crbug.com/406525486): Permissions policies for workers are
+  // currently not supported so an all-blocking permissions policy is set.
+  // Propagate the actual permissions policy once it is available.
+  request.permissions_policy =
+      *network::PermissionsPolicy::CreateFromParsedPolicy(
+          {}, {}, url::Origin::Create(request.url));
+
+  request.site_for_cookies = storage_key.ToNetSiteForCookies();
   request.do_not_prompt_for_login = true;
 
   blink::RendererPreferences renderer_preferences;
@@ -232,6 +310,8 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
       fetch_client_settings_object.insecure_requests_policy ==
       blink::mojom::InsecureRequestsPolicy::kUpgrade;
 
+  const url::Origin& origin = storage_key.origin();
+
   // ResourceRequest::request_initiator is the request's origin in the spec.
   // https://fetch.spec.whatwg.org/#concept-request-origin
   // It's needed to be set to the origin where the service worker is registered.
@@ -242,8 +322,7 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
   // shared network resources like the http cache.
   request.trusted_params = network::ResourceRequest::TrustedParams();
   request.trusted_params->isolation_info =
-      net::IsolationInfo::Create(net::IsolationInfo::RequestType::kOther,
-                                 origin, origin, request.site_for_cookies);
+      storage_key.ToPartialNetIsolationInfo();
 
   if (worker_script_type == blink::mojom::ScriptType::kClassic) {
     if (is_main_script) {
@@ -309,7 +388,7 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
 bool IsPathRestrictionSatisfied(
     const GURL& scope,
     const GURL& script_url,
-    const std::string* service_worker_allowed_header_value,
+    const std::optional<std::string_view>& service_worker_allowed_header_value,
     std::string* error_message) {
   return IsPathRestrictionSatisfiedInternal(scope, script_url, true,
                                             service_worker_allowed_header_value,
@@ -319,8 +398,171 @@ bool IsPathRestrictionSatisfied(
 bool IsPathRestrictionSatisfiedWithoutHeader(const GURL& scope,
                                              const GURL& script_url,
                                              std::string* error_message) {
-  return IsPathRestrictionSatisfiedInternal(scope, script_url, false, nullptr,
-                                            error_message);
+  return IsPathRestrictionSatisfiedInternal(scope, script_url, false,
+                                            std::nullopt, error_message);
+}
+
+const base::flat_set<std::string> FetchHandlerBypassedHashStrings() {
+  const static base::NoDestructor<base::flat_set<std::string>> result(
+      base::SplitString(
+          features::kServiceWorkerBypassFetchHandlerBypassedHashStrings.Get(),
+          ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
+
+  return *result;
+}
+
+bool IsEligibleForSyntheticResponse(BrowserContext* browser_context,
+                                    const GURL& client_url) {
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kServiceWorkerSyntheticResponse)) {
+    return false;
+  }
+  return IsEligibleForSyntheticResponseInternal(
+      browser_context, client_url, GetSyntheticResponseAllowedUrl(),
+      GetSyntheticResponseDeniedUrlParams());
+}
+
+bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
+    BrowserContext* browser_context,
+    const GURL& client_url,
+    const std::string& allowed_url,
+    const std::string& denied_url_params) {
+  const std::vector<std::string_view> params = base::SplitStringPiece(
+      denied_url_params, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+
+  return IsEligibleForSyntheticResponseInternal(
+      browser_context, client_url, allowed_url,
+      base::flat_set<std::string>(params.begin(), params.end()));
+}
+
+bool IsEligibleForSyntheticResponseInternal(
+    BrowserContext* browser_context,
+    const GURL& client_url,
+    const std::string& allowed_url,
+    const base::flat_set<std::string>& denied_url_params) {
+  // If `client_url` should be either 1) allowed by the browser content
+  // client, or 2) listed in the allowlist.
+  if ((browser_context &&
+       GetContentClient()->browser()->IsServiceWorkerSyntheticResponseAllowed(
+           browser_context, client_url)) ||
+      IsUrlInSyntheticResponseAllowList(client_url, allowed_url)) {
+    // And some URL params are not in the denylist.
+    if (!HasUrlParamInSyntheticResponseDenyList(client_url,
+                                                denied_url_params)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool IsSyntheticResponseDryRunModeEnabled() {
+  if (ServiceWorkerSyntheticResponseManager::IsDryRunModeEnabledForTesting()) {
+    return true;
+  }
+  static const bool is_dry_run(
+      blink::features::kServiceWorkerSyntheticResponseDryRun.Get());
+
+  return is_dry_run;
+}
+
+storage::mojom::ServiceWorkerFindRegistrationResultPtr
+CreateSyntheticRegistration(const GURL& client_url,
+                            const blink::StorageKey& key) {
+  GURL::Replacements replacements_for_script;
+  replacements_for_script.ClearQuery();
+  replacements_for_script.SetPathStr(
+      "/service-worker-for-synthetic-response.js");
+  const auto kScript = client_url.ReplaceComponents(replacements_for_script);
+
+  GURL::Replacements replacements_for_scope;
+  replacements_for_scope.ClearQuery();
+  const auto kScope = client_url.ReplaceComponents(replacements_for_scope);
+
+  std::vector<storage::mojom::ServiceWorkerResourceRecordPtr> resources;
+  {
+    auto resource = storage::mojom::ServiceWorkerResourceRecord::New(
+        blink::mojom::kSyntheticResponseServiceWorkerResourceId, kScript, 0,
+        /*sha256_checksum=*/"");
+    resources.push_back(std::move(resource));
+  }
+
+  auto data = storage::mojom::ServiceWorkerRegistrationData::New();
+  data->registration_id =
+      blink::mojom::kSyntheticResponseServiceWorkerRegistrationId;
+  data->scope = kScope;
+  data->key = key;
+  data->script = kScript;
+  data->script_type = blink::mojom::ScriptType::kModule;
+  data->update_via_cache = blink::mojom::ServiceWorkerUpdateViaCache::kNone;
+  data->version_id = blink::mojom::kSyntheticResponseServiceWorkerVersionId;
+  data->is_active = true;
+  data->fetch_handler_type =
+      blink::mojom::ServiceWorkerFetchHandlerType::kNoHandler;
+  data->last_update_check = base::Time::Now();
+  data->navigation_preload_state = blink::mojom::NavigationPreloadState::New();
+
+  {
+    int64_t resources_total_size_bytes = 0;
+    for (auto& resource : resources) {
+      resources_total_size_bytes += resource->size_bytes;
+    }
+    data->resources_total_size_bytes = resources_total_size_bytes;
+  }
+
+  data->script_response_time = base::Time::Now();
+  data->ancestor_frame_type = blink::mojom::AncestorFrameType::kNormalFrame;
+  data->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
+
+  // Add the router rules to let all requests go to network source.
+  {
+    blink::ServiceWorkerRouterRules router_rules;
+    {
+      blink::ServiceWorkerRouterRule rule;
+      {
+        blink::ServiceWorkerRouterOrCondition or_condition;
+        {
+          blink::ServiceWorkerRouterRequestCondition request;
+          request.mode = network::mojom::RequestMode::kNavigate;
+          or_condition.conditions.push_back(
+              blink::ServiceWorkerRouterCondition::WithRequest(
+                  std::move(request)));
+        }
+        {
+          blink::ServiceWorkerRouterNotCondition not_condition;
+          {
+            blink::ServiceWorkerRouterRequestCondition request;
+            request.mode = network::mojom::RequestMode::kNavigate;
+            not_condition.condition =
+                std::make_unique<blink::ServiceWorkerRouterCondition>(
+                    blink::ServiceWorkerRouterCondition::WithRequest(
+                        std::move(request)));
+          }
+          or_condition.conditions.push_back(
+              blink::ServiceWorkerRouterCondition::WithNotCondition(
+                  std::move(not_condition)));
+        }
+        rule.condition = blink::ServiceWorkerRouterCondition::WithOrCondition(
+            std::move(or_condition));
+      }
+      {
+        blink::ServiceWorkerRouterSource source;
+        source.type = network::mojom::ServiceWorkerRouterSourceType::kNetwork;
+        source.network_source = blink::ServiceWorkerRouterNetworkSource{};
+        rule.sources.emplace_back(std::move(source));
+      }
+      router_rules.rules.emplace_back(std::move(rule));
+    }
+    data->router_rules = std::move(router_rules);
+  }
+
+  mojo::PendingRemote<storage::mojom::ServiceWorkerLiveVersionRef>
+      remote_reference;
+  // We don't need to care about the receiver since this is a fake one.
+  std::ignore = remote_reference.InitWithNewPipeAndPassReceiver();
+  return storage::mojom::ServiceWorkerFindRegistrationResult::New(
+      std::move(remote_reference), std::move(data), std::move(resources));
 }
 
 }  // namespace service_worker_loader_helpers

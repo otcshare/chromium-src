@@ -5,11 +5,15 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
+#include <vector>
 
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,7 +25,6 @@
 #include "components/spellcheck/renderer/spellcheck_provider_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_text_checking_result.h"
 
 namespace {
@@ -36,8 +39,10 @@ struct SpellcheckTestCase {
 
 base::FilePath GetHunspellDirectory() {
   base::FilePath hunspell_directory;
-  if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &hunspell_directory))
+  if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT,
+                              &hunspell_directory)) {
     return base::FilePath();
+  }
 
   hunspell_directory = hunspell_directory.AppendASCII("third_party");
   hunspell_directory = hunspell_directory.AppendASCII("hunspell_dictionaries");
@@ -48,7 +53,7 @@ base::FilePath GetHunspellDirectory() {
 
 class MultilingualSpellCheckTest : public testing::Test {
  public:
-  MultilingualSpellCheckTest() {}
+  MultilingualSpellCheckTest() = default;
 
   void ReinitializeSpellCheck(const std::string& unsplit_languages) {
     spellcheck_ = new SpellCheck(&embedder_provider_);
@@ -71,16 +76,16 @@ class MultilingualSpellCheckTest : public testing::Test {
     }
   }
 
-  ~MultilingualSpellCheckTest() override {}
+  ~MultilingualSpellCheckTest() override = default;
   TestingSpellCheckProvider* provider() { return provider_.get(); }
 
  protected:
-  void ExpectSpellCheckWordResults(const std::string& languages,
-                                   const SpellcheckTestCase* test_cases,
-                                   size_t num_test_cases) {
+  void ExpectSpellCheckWordResults(
+      const std::string& languages,
+      base::span<const SpellcheckTestCase> test_cases) {
     ReinitializeSpellCheck(languages);
 
-    for (size_t i = 0; i < num_test_cases; ++i) {
+    for (size_t i = 0; i < test_cases.size(); ++i) {
       size_t misspelling_start = 0;
       size_t misspelling_length = 0;
       static_cast<blink::WebTextCheckClient*>(provider())
@@ -100,8 +105,9 @@ class MultilingualSpellCheckTest : public testing::Test {
   void ExpectSpellCheckParagraphResults(
       const std::u16string& input,
       const std::vector<SpellCheckResult>& expected) {
-    blink::WebVector<blink::WebTextCheckingResult> results;
-    spellcheck_->SpellCheckParagraph(input, &results);
+    std::vector<blink::WebTextCheckingResult> results;
+    spellcheck_->SpellCheckParagraph(input, provider_->GetSpellCheckHost(),
+                                     &results);
 
     EXPECT_EQ(expected.size(), results.size());
     size_t size = std::min(results.size(), expected.size());
@@ -117,7 +123,7 @@ class MultilingualSpellCheckTest : public testing::Test {
   spellcheck::EmptyLocalInterfaceProvider embedder_provider_;
 
   // Owned by |provider_|.
-  SpellCheck* spellcheck_;
+  raw_ptr<SpellCheck, DanglingUntriaged> spellcheck_;
   std::unique_ptr<TestingSpellCheckProvider> provider_;
 };
 
@@ -143,13 +149,12 @@ TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckWord) {
   // A sorted list of languages. This must start sorted to get all possible
   // permutations.
   std::string languages = "el-GR,en-US,es-ES,ru-RU";
-  std::vector<base::StringPiece> permuted_languages = base::SplitStringPiece(
+  std::vector<std::string_view> permuted_languages = base::SplitStringPiece(
       languages, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   do {
     std::string reordered_languages = base::JoinString(permuted_languages, ",");
-    ExpectSpellCheckWordResults(reordered_languages, kTestCases,
-                                std::size(kTestCases));
+    ExpectSpellCheckWordResults(reordered_languages, kTestCases);
   } while (std::next_permutation(permuted_languages.begin(),
                                  permuted_languages.end()));
 }
@@ -179,8 +184,9 @@ TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckWordEnglishSpanish) {
       {L"sand hola sand hola sand hola", 0, 0},
       {L"hola sand hola sand hola sand", 0, 0},
       {L"hola:legs", 0, 9},
-      {L"legs:hola", 0, 9}};
-  ExpectSpellCheckWordResults("en-US,es-ES", kTestCases, std::size(kTestCases));
+      {L"legs:hola", 0, 9},
+  };
+  ExpectSpellCheckWordResults("en-US,es-ES", kTestCases);
 }
 
 // If there are no spellcheck languages, no text should be marked as misspelled.
@@ -207,8 +213,8 @@ TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckParagraphCorrect) {
 TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckParagraph) {
   ReinitializeSpellCheck("en-US,es-ES");
   std::vector<SpellCheckResult> expected;
-  expected.push_back(SpellCheckResult(SpellCheckResult::SPELLING, 7, 15));
-  expected.push_back(SpellCheckResult(SpellCheckResult::SPELLING, 33, 7));
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 7, 15);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 33, 7);
 
   ExpectSpellCheckParagraphResults(
       // English, German, Spanish, and a misspelled word.
@@ -218,7 +224,7 @@ TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckParagraph) {
 // Ensure that suggestions are handled properly for multiple languages.
 TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckSuggestions) {
   ReinitializeSpellCheck("en-US,es-ES");
-  static const struct {
+  struct TestCases {
     // A string of text for checking.
     const wchar_t* input;
     // The position and the length of the first invalid word.
@@ -227,16 +233,17 @@ TEST_F(MultilingualSpellCheckTest, MultilingualSpellCheckSuggestions) {
     // A comma separated string of suggested words that should occur, in their
     // expected order.
     const wchar_t* expected_suggestions;
-  } kTestCases[] = {
+  };
+  static const auto kTestCases = std::to_array<TestCases>({
       {L"rocket", 0, 0},
       {L"destruyan", 0, 0},
       {L"rocet", 0, 5, L"rocket,roce,crochet,troce,rocen"},
       {L"jum", 0, 3, L"hum,jun,ju,um,juma"},
       {L"asdne", 0, 5, L"sadness,desasne"},
-  };
+  });
 
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
-    blink::WebVector<blink::WebString> suggestions;
+    std::vector<blink::WebString> suggestions;
     size_t misspelling_start;
     size_t misspelling_length;
     static_cast<blink::WebTextCheckClient*>(provider())

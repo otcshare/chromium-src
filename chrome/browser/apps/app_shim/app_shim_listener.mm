@@ -5,14 +5,15 @@
 #include "chrome/browser/apps/app_shim/app_shim_listener.h"
 
 #import <Foundation/Foundation.h>
+#include <bsm/libbsm.h>
 #include <unistd.h>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/hash/md5.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_bootstrap_mac.h"
@@ -21,9 +22,11 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/mac/app_mode_common.h"
+#include "components/variations/net/variations_command_line.h"
 #include "content/public/browser/browser_task_traits.h"
+#include "crypto/hash.h"
 
-AppShimListener::AppShimListener() {}
+AppShimListener::AppShimListener() = default;
 
 void AppShimListener::Init() {
   has_initialized_ = true;
@@ -75,7 +78,7 @@ void AppShimListener::InitOnBackgroundThread() {
 
   std::string name_fragment =
       std::string(app_mode::kAppShimBootstrapNameFragment) + "." +
-      base::MD5String(user_data_dir.value());
+      base::HexEncode(crypto::hash::Sha256(user_data_dir.value()));
   mach_acceptor_ =
       std::make_unique<apps::MachBootstrapAcceptor>(name_fragment, this);
   mach_acceptor_->Start();
@@ -90,21 +93,27 @@ void AppShimListener::InitOnBackgroundThread() {
       app_mode::ChromeConnectionConfig::GenerateForCurrentProcess();
   base::DeleteFile(version_path);
   base::CreateSymbolicLink(config.EncodeAsPath(), version_path);
+
+  if (!variations::VariationsCommandLine::GetForCurrentProcess().WriteToFile(
+          user_data_dir.Append(app_mode::kFeatureStateFileName))) {
+    LOG(ERROR) << "Failed to write feature state to " << user_data_dir;
+  }
 }
 
 void AppShimListener::OnClientConnected(mojo::PlatformChannelEndpoint endpoint,
-                                        base::ProcessId peer_pid) {
-  // TODO(https://crbug.com/1052131): Remove NSLog logging, and move to an
+                                        audit_token_t audit_token) {
+  // TODO(crbug.com/40674145): Remove NSLog logging, and move to an
   // internal debugging URL.
-  NSLog(@"AppShim: Connection received from pid %d", peer_pid);
+  NSLog(@"AppShim: Connection received from pid %d",
+        audit_token_to_pid(audit_token));
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
-      base::BindOnce(&AppShimHostBootstrap::CreateForChannelAndPeerID,
-                     std::move(endpoint), peer_pid));
+      base::BindOnce(&AppShimHostBootstrap::CreateForChannelAndPeerAuditToken,
+                     std::move(endpoint), audit_token));
 }
 
 void AppShimListener::OnServerChannelCreateError() {
-  // TODO(https://crbug.com/272577): Set a timeout and attempt to reconstruct
+  // TODO(crbug.com/41035623): Set a timeout and attempt to reconstruct
   // the channel. Until cases where the error could occur are better known,
   // just reset the acceptor to allow failure to be communicated via the test
   // API.

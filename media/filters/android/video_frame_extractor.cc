@@ -1,13 +1,10 @@
 // Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
 #include "media/filters/android/video_frame_extractor.h"
 
-#include "base/android/build_info.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "media/base/android/media_codec_bridge_impl.h"
 #include "media/base/data_source.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -47,8 +44,9 @@ void VideoFrameExtractor::Start(VideoFrameCallback video_frame_callback) {
 
   // Extract the video stream.
   AVFormatContext* format_context = glue_->format_context();
-  for (unsigned int i = 0; i < format_context->nb_streams; ++i) {
-    AVStream* stream = format_context->streams[i];
+  auto streams = AVFormatContextToSpan(format_context);
+  for (size_t i = 0; i < streams.size(); ++i) {
+    AVStream* stream = streams[i];
     if (!stream)
       continue;
     const AVCodecParameters* codec_parameters = stream->codecpar;
@@ -81,9 +79,7 @@ void VideoFrameExtractor::Start(VideoFrameCallback video_frame_callback) {
   }
 
   ConvertPacket(packet.get());
-  NotifyComplete(
-      std::vector<uint8_t>(packet->data, packet->data + packet->size),
-      video_config_);
+  NotifyComplete(AVPacketData(*packet), video_config_);
 }
 
 void VideoFrameExtractor::ConvertPacket(AVPacket* packet) {
@@ -94,18 +90,20 @@ void VideoFrameExtractor::ConvertPacket(AVPacket* packet) {
   switch (video_stream_->codecpar->codec_id) {
     case AV_CODEC_ID_H264:
       video_config_.SetExtraData(std::vector<uint8_t>());
-      bitstream_converter_.reset(
-          new FFmpegH264ToAnnexBBitstreamConverter(video_stream_->codecpar));
+      bitstream_converter_ =
+          std::make_unique<FFmpegH264ToAnnexBBitstreamConverter>(
+              video_stream_->codecpar);
       break;
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
     case AV_CODEC_ID_HEVC:
-      bitstream_converter_.reset(
-          new FFmpegH265ToAnnexBBitstreamConverter(video_stream_->codecpar));
+      bitstream_converter_ =
+          std::make_unique<FFmpegH265ToAnnexBBitstreamConverter>(
+              video_stream_->codecpar);
       break;
 #endif
     case AV_CODEC_ID_AAC:
-      bitstream_converter_.reset(
-          new FFmpegAACBitstreamConverter(video_stream_->codecpar));
+      bitstream_converter_ = std::make_unique<FFmpegAACBitstreamConverter>(
+          video_stream_->codecpar);
       break;
     default:
       break;
@@ -130,11 +128,14 @@ ScopedAVPacket VideoFrameExtractor::ReadVideoFrame() {
   return {};
 }
 
-void VideoFrameExtractor::NotifyComplete(std::vector<uint8_t> encoded_frame,
+void VideoFrameExtractor::NotifyComplete(base::span<uint8_t> encoded_frame,
                                          const VideoDecoderConfig& config) {
   // Return the encoded video key frame.
   DCHECK(video_frame_callback_);
-  std::move(video_frame_callback_).Run(true, std::move(encoded_frame), config);
+  std::vector<uint8_t> encoded_frame_copy(encoded_frame.begin(),
+                                          encoded_frame.end());
+  std::move(video_frame_callback_)
+      .Run(true, std::move(encoded_frame_copy), config);
 }
 
 void VideoFrameExtractor::OnError() {

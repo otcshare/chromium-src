@@ -19,6 +19,7 @@ public class MockLocationProvider implements LocationProvider {
     private Handler mHandler;
     private HandlerThread mHandlerThread;
     private final Object mLock = new Object();
+    private boolean mEnableHighAccuracy;
 
     private static final int UPDATE_LOCATION_MSG = 100;
 
@@ -39,6 +40,7 @@ public class MockLocationProvider implements LocationProvider {
         }
 
         mIsRunning = true;
+        mEnableHighAccuracy = enableHighAccuracy;
         synchronized (mLock) {
             mHandler.sendEmptyMessage(UPDATE_LOCATION_MSG);
         }
@@ -64,23 +66,24 @@ public class MockLocationProvider implements LocationProvider {
 
         mHandlerThread = new HandlerThread("MockLocationProviderImpl");
         mHandlerThread.start();
-        mHandler = new Handler(mHandlerThread.getLooper()) {
-            @Override
-            public void handleMessage(Message msg) {
-                synchronized (mLock) {
-                    if (msg.what == UPDATE_LOCATION_MSG) {
-                        newLocation();
-                        sendEmptyMessageDelayed(UPDATE_LOCATION_MSG, 250);
+        mHandler =
+                new Handler(mHandlerThread.getLooper()) {
+                    @Override
+                    public void handleMessage(Message msg) {
+                        synchronized (mLock) {
+                            if (msg.what == UPDATE_LOCATION_MSG) {
+                                newLocation();
+                                sendEmptyMessageDelayed(UPDATE_LOCATION_MSG, 250);
+                            }
+                        }
                     }
-                }
-            }
-        };
+                };
     }
 
     private void newLocation() {
         Location location = new Location("MockLocationProvider");
         location.setTime(System.currentTimeMillis());
         location.setAccuracy(0.5f);
-        LocationProviderAdapter.onNewLocationAvailable(location);
+        LocationProviderAdapter.onNewLocationAvailable(location, mEnableHighAccuracy);
     }
-};
+}

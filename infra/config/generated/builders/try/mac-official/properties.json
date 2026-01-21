@@ -1,6 +1,9 @@
 {
   "$build/chromium_tests_builder_config": {
     "builder_config": {
+      "additional_exclusions": [
+        "infra/config/generated/builders/try/mac-official/gn-args.json"
+      ],
       "builder_db": {
         "entries": [
           {
@@ -17,7 +20,8 @@
                   "mb"
                 ],
                 "config": "chromium",
-                "target_bits": 64
+                "target_bits": 64,
+                "target_platform": "mac"
               },
               "legacy_gclient_config": {
                 "apply_configs": [
@@ -35,12 +39,24 @@
           "builder": "mac-official",
           "project": "chromium"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/try/mac-official/targets"
     }
   },
-  "$build/goma": {
-    "rpc_extra_params": "?prod",
-    "server_host": "goma.chromium.org"
+  "$build/flakiness": {
+    "check_for_flakiness": true,
+    "check_for_flakiness_with_resultdb": true
+  },
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted",
+    "remote_jobs": -1
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -50,5 +66,6 @@
     ]
   },
   "builder_group": "tryserver.chromium",
+  "cq": "path-based",
   "recipe": "chromium_trybot"
 }

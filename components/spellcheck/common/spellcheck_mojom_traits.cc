@@ -4,36 +4,37 @@
 
 #include "components/spellcheck/common/spellcheck_mojom_traits.h"
 
+#include <algorithm>
+
+#include "components/spellcheck/common/spellcheck_decoration.h"
 #include "mojo/public/cpp/base/string16_mojom_traits.h"
 
 namespace mojo {
 
 spellcheck::mojom::Decoration
-EnumTraits<spellcheck::mojom::Decoration, SpellCheckResult::Decoration>::
-    ToMojom(SpellCheckResult::Decoration decoration) {
+EnumTraits<spellcheck::mojom::Decoration, spellcheck::Decoration>::ToMojom(
+    spellcheck::Decoration decoration) {
   switch (decoration) {
-    case SpellCheckResult::SPELLING:
+    case spellcheck::Decoration::SPELLING:
       return spellcheck::mojom::Decoration::kSpelling;
-    case SpellCheckResult::GRAMMAR:
+    case spellcheck::Decoration::GRAMMAR:
       return spellcheck::mojom::Decoration::kGrammar;
   }
   NOTREACHED();
-  return spellcheck::mojom::Decoration::kSpelling;
 }
 
-bool EnumTraits<spellcheck::mojom::Decoration, SpellCheckResult::Decoration>::
+bool EnumTraits<spellcheck::mojom::Decoration, spellcheck::Decoration>::
     FromMojom(spellcheck::mojom::Decoration input,
-              SpellCheckResult::Decoration* output) {
+              spellcheck::Decoration* output) {
   switch (input) {
     case spellcheck::mojom::Decoration::kSpelling:
-      *output = SpellCheckResult::SPELLING;
+      *output = spellcheck::Decoration::SPELLING;
       return true;
     case spellcheck::mojom::Decoration::kGrammar:
-      *output = SpellCheckResult::GRAMMAR;
+      *output = spellcheck::Decoration::GRAMMAR;
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<
@@ -44,8 +45,27 @@ bool StructTraits<
     return false;
   output->location = input.location();
   output->length = input.length();
+  output->should_hide_suggestion_menu = input.should_hide_suggestion_menu();
   if (!input.ReadReplacements(&output->replacements))
     return false;
+  return true;
+}
+
+bool StructTraits<spellcheck::mojom::SpellingMarkerDataView,
+                  spellcheck::SpellingMarker>::
+    Read(spellcheck::mojom::SpellingMarkerDataView input,
+         spellcheck::SpellingMarker* output) {
+  if (!input.ReadMarkerType(&output->marker_type)) {
+    return false;
+  }
+
+  if (input.start() > input.end()) {
+    return false;
+  }
+
+  output->start = input.start();
+  output->end = input.end();
+
   return true;
 }
 

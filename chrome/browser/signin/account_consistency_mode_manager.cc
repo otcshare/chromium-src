@@ -10,12 +10,16 @@
 #include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/signin/account_consistency_mode_manager_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -23,7 +27,7 @@
 #include "components/signin/public/base/signin_pref_names.h"
 #include "google_apis/google_api_keys.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/account_manager/account_manager_util.h"
 #endif
 
@@ -78,25 +82,30 @@ bool CanEnableDiceForBuild() {
 
 }  // namespace
 
-// static
-AccountConsistencyModeManager* AccountConsistencyModeManager::GetForProfile(
-    Profile* profile) {
-  return AccountConsistencyModeManagerFactory::GetForProfile(profile);
-}
-
 AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
     : profile_(profile),
       account_consistency_(signin::AccountConsistencyMethod::kDisabled),
       account_consistency_initialized_(false) {
   DCHECK(profile_);
   DCHECK(ShouldBuildServiceForProfile(profile));
-
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  PrefService* prefs = profile->GetPrefs();
+  auto* entry = g_browser_process->profile_manager()
+                    ? g_browser_process->profile_manager()
+                          ->GetProfileAttributesStorage()
+                          .GetProfileAttributesWithPath(profile_->GetPath())
+                    : nullptr;
+  PrefService* prefs = profile_->GetPrefs();
   // Propagate settings changes from the previous launch to the signin-allowed
   // pref.
-  bool signin_allowed = IsDiceSignInAllowed() &&
+  bool signin_allowed = IsDiceSignInAllowed(entry) &&
                         prefs->GetBoolean(prefs::kSigninAllowedOnNextStartup);
+
+  // Disable sign-in if experimental-ai is enabled, regardless of channel.
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(::switches::kExperimentalAiStableChannel)) {
+    signin_allowed = false;
+  }
+
   prefs->SetBoolean(prefs::kSigninAllowed, signin_allowed);
 
   UMA_HISTOGRAM_BOOLEAN("Signin.SigninAllowed", signin_allowed);
@@ -107,7 +116,7 @@ AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
   account_consistency_initialized_ = true;
 }
 
-AccountConsistencyModeManager::~AccountConsistencyModeManager() {}
+AccountConsistencyModeManager::~AccountConsistencyModeManager() = default;
 
 // static
 void AccountConsistencyModeManager::RegisterProfilePrefs(
@@ -121,7 +130,7 @@ AccountConsistencyMethod AccountConsistencyModeManager::GetMethodForProfile(
   if (!ShouldBuildServiceForProfile(profile))
     return AccountConsistencyMethod::kDisabled;
 
-  return AccountConsistencyModeManager::GetForProfile(profile)
+  return AccountConsistencyModeManagerFactory::GetForProfile(profile)
       ->GetAccountConsistencyMethod();
 }
 
@@ -132,8 +141,18 @@ bool AccountConsistencyModeManager::IsDiceEnabledForProfile(Profile* profile) {
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 // static
-bool AccountConsistencyModeManager::IsDiceSignInAllowed() {
-  return CanEnableDiceForBuild() && IsBrowserSigninAllowedByCommandLine();
+bool AccountConsistencyModeManager::IsDiceSignInAllowed(
+    ProfileAttributesEntry* entry) {
+  // Sign in should only be allowed for OIDC profiles with 3P identities that
+  // are sync-ed to Google. Otherwise, we won't have a valid GAIA ID to sign in
+  // to.
+  bool is_oidc_sign_in_disallowed =
+      entry && !entry->GetProfileManagementOidcTokens().id_token.empty() &&
+      entry->IsDasherlessManagement();
+  return CanEnableDiceForBuild() && IsBrowserSigninAllowedByCommandLine() &&
+         !is_oidc_sign_in_disallowed &&
+         (!entry || entry->GetProfileManagementEnrollmentToken().empty());
+  ;
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
@@ -156,8 +175,8 @@ bool AccountConsistencyModeManager::ShouldBuildServiceForProfile(
 
 AccountConsistencyMethod
 AccountConsistencyModeManager::GetAccountConsistencyMethod() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(https://crbug.com/860671): ChromeOS should use the cached value.
+#if BUILDFLAG(IS_CHROMEOS)
+  // TODO(crbug.com/40583837): ChromeOS should use the cached value.
   // Changing the value dynamically is not supported.
   return ComputeAccountConsistencyMethod(profile_);
 #else
@@ -176,23 +195,14 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
     Profile* profile) {
   DCHECK(ShouldBuildServiceForProfile(profile));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (!ash::IsAccountManagerAvailable(profile))
-    return AccountConsistencyMethod::kDisabled;
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Account consistency is unavailable on Managed Guest Sessions and Public
-  // Sessions.
-  if (profiles::IsPublicSession())
     return AccountConsistencyMethod::kDisabled;
 #endif
 
 #if BUILDFLAG(ENABLE_MIRROR)
   return AccountConsistencyMethod::kMirror;
-#endif
-
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#elif BUILDFLAG(ENABLE_DICE_SUPPORT)
   if (!profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed)) {
     VLOG(1) << "Desktop Identity Consistency disabled as sign-in to Chrome "
                "is not allowed";
@@ -200,8 +210,7 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
   }
 
   return AccountConsistencyMethod::kDice;
-#endif
-
+#else
   NOTREACHED();
-  return AccountConsistencyMethod::kDisabled;
+#endif
 }

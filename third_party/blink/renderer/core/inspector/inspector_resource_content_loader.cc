@@ -32,22 +32,6 @@ bool ShouldSkipFetchingUrl(const KURL& url) {
   return !url.IsValid() || url.IsAboutBlankURL() || url.IsAboutSrcdocURL();
 }
 
-bool IsServiceWorkerPresent(Document* document) {
-  DocumentLoader* loader = document->Loader();
-  if (!loader)
-    return false;
-
-  if (loader->GetResponse().WasFetchedViaServiceWorker())
-    return true;
-
-  WebServiceWorkerNetworkProvider* provider =
-      loader->GetServiceWorkerNetworkProvider();
-  if (!provider)
-    return false;
-
-  return provider->ControllerServiceWorkerID() >= 0;
-}
-
 }  // namespace
 
 // NOTE: While this is a RawResourceClient, it loads both raw and css stylesheet
@@ -111,20 +95,14 @@ void InspectorResourceContentLoader::Start() {
       resource_request = ResourceRequest(document->Url());
       resource_request.SetCacheMode(mojom::FetchCacheMode::kOnlyIfCached);
     }
+    // kOnlyIfCached requires kSameOrigin mode.
+    resource_request.SetMode(network::mojom::RequestMode::kSameOrigin);
     resource_request.SetRequestContext(
         mojom::blink::RequestContextType::INTERNAL);
 
-    if (IsServiceWorkerPresent(document)) {
-      // If the request is going to be intercepted by a service worker, then
-      // don't use only-if-cached. only-if-cached will cause the service worker
-      // to throw an exception if it repeats the request, which is a problem:
-      // crbug.com/823392 crbug.com/1098389
-      resource_request.SetCacheMode(mojom::FetchCacheMode::kDefault);
-    }
-
     ResourceFetcher* fetcher = document->Fetcher();
 
-    scoped_refptr<const DOMWrapperWorld> world =
+    const DOMWrapperWorld* world =
         document->GetExecutionContext()->GetCurrentWorld();
     if (!ShouldSkipFetchingUrl(resource_request.Url())) {
       urls_to_fetch.insert(resource_request.Url().GetString());
@@ -153,6 +131,10 @@ void InspectorResourceContentLoader::Start() {
           mojom::blink::RequestContextType::INTERNAL);
       ResourceLoaderOptions options(world);
       options.initiator_info.name = fetch_initiator_type_names::kInternal;
+      auto* owner_element = DynamicTo<HTMLElement>(style_sheet->ownerNode());
+      if (owner_element && owner_element->nonce()) {
+        options.content_security_policy_nonce = owner_element->nonce();
+      }
       FetchParameters params(std::move(style_sheet_resource_request), options);
       ResourceClient* resource_client =
           MakeGarbageCollected<ResourceClient>(this);
@@ -242,7 +224,7 @@ void InspectorResourceContentLoader::DidCommitLoadForLocalFrame(
 Resource* InspectorResourceContentLoader::ResourceForURL(const KURL& url) {
   for (const auto& resource : resources_) {
     if (resource->Url() == url)
-      return resource;
+      return resource.Get();
   }
   return nullptr;
 }

@@ -10,6 +10,7 @@
 #include "base/command_line.h"
 #include "build/build_config.h"
 #include "ui/gl/gl_context.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_switches.h"
 #include "ui/gl/init/gl_factory.h"
@@ -40,16 +41,16 @@ GLDisplay* InitializeOneOffHelper(bool init_extensions) {
 #endif
 
   bool use_software_gl = true;
+  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
 
   // We usually use software GL as this works on all bots. The
   // command line can override this behaviour to use hardware GL.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kUseGpuInTests)) {
+  if (cmd->HasSwitch(switches::kUseGpuInTests)) {
     use_software_gl = false;
   }
 
-#if BUILDFLAG(IS_ANDROID)
-  // On Android we always use hardware GL.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // On Android and iOS we always use hardware GL.
   use_software_gl = false;
 #endif
 
@@ -59,20 +60,18 @@ GLDisplay* InitializeOneOffHelper(bool init_extensions) {
 
   GLImplementationParts impl = allowed_impls[0];
   if (use_software_gl) {
-    impl = gl::GetSoftwareGLImplementation();
+    // Disable D3D11 WARP for consistent cross-platform software rendering.
+    cmd->AppendSwitch(::switches::kDisableD3D11Warp);
+    impl = gl::GetSoftwareGLImplementation(cmd);
   }
 
-  DCHECK(!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kUseGL))
-      << "kUseGL has not effect in tests";
+  DCHECK(!cmd->HasSwitch(switches::kUseGL)) << "kUseGL has not effect in tests";
 
-  bool fallback_to_software_gl = false;
   bool disable_gl_drawing = true;
 
-  CHECK(gl::init::InitializeStaticGLBindingsImplementation(
-      impl, fallback_to_software_gl));
+  CHECK(gl::init::InitializeStaticGLBindingsImplementation(impl));
   GLDisplay* display = gl::init::InitializeGLOneOffPlatformImplementation(
-      fallback_to_software_gl, disable_gl_drawing, init_extensions,
-      /*system_device_id=*/0);
+      disable_gl_drawing, init_extensions, gl::GpuPreference::kDefault);
   CHECK(display);
   return display;
 }
@@ -90,19 +89,16 @@ GLDisplay* GLSurfaceTestSupport::InitializeNoExtensionsOneOff() {
 
 // static
 GLDisplay* GLSurfaceTestSupport::InitializeOneOffImplementation(
-    GLImplementationParts impl,
-    bool fallback_to_software_gl) {
+    GLImplementationParts impl) {
   DCHECK(!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kUseGL))
       << "kUseGL has not effect in tests";
 
   bool disable_gl_drawing = false;
   bool init_extensions = true;
 
-  CHECK(gl::init::InitializeStaticGLBindingsImplementation(
-      impl, fallback_to_software_gl));
+  CHECK(gl::init::InitializeStaticGLBindingsImplementation(impl));
   GLDisplay* display = gl::init::InitializeGLOneOffPlatformImplementation(
-      fallback_to_software_gl, disable_gl_drawing, init_extensions,
-      /*system_device_id=*/0);
+      disable_gl_drawing, init_extensions, gl::GpuPreference::kDefault);
   CHECK(display);
   return display;
 }
@@ -116,7 +112,7 @@ GLDisplay* GLSurfaceTestSupport::InitializeOneOffWithMockBindings() {
 #endif
 
   return InitializeOneOffImplementation(
-      GLImplementationParts(kGLImplementationMockGL), false);
+      GLImplementationParts(kGLImplementationMockGL));
 }
 
 // static
@@ -126,9 +122,22 @@ GLDisplay* GLSurfaceTestSupport::InitializeOneOffWithStubBindings() {
   params.single_process = true;
   ui::OzonePlatform::InitializeForGPU(params);
 #endif
-
   return InitializeOneOffImplementation(
-      GLImplementationParts(kGLImplementationStubGL), false);
+      GLImplementationParts(kGLImplementationStubGL));
+}
+
+// static
+GLDisplay* GLSurfaceTestSupport::InitializeOneOffWithNullAngleBindings() {
+#if BUILDFLAG(IS_OZONE)
+  ui::OzonePlatform::InitParams params;
+  params.single_process = true;
+  ui::OzonePlatform::InitializeForGPU(params);
+#endif
+  auto* display = InitializeOneOffImplementation(
+      GLImplementationParts(gl::ANGLEImplementation::kNull));
+
+  DCHECK_EQ(gl::GetANGLEImplementation(), gl::ANGLEImplementation::kNull);
+  return display;
 }
 
 // static

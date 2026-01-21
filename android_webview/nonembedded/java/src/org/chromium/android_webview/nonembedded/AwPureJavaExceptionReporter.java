@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 package org.chromium.android_webview.nonembedded;
 
-import org.chromium.android_webview.common.crash.CrashUploadUtil;
-import org.chromium.android_webview.common.crash.SystemWideCrashDirectories;
+import org.chromium.android_webview.nonembedded.crash.CrashUploadUtil;
+import org.chromium.android_webview.nonembedded.crash.SystemWideCrashDirectories;
+import org.chromium.android_webview.services.CrashLoggingUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.components.crash.PureJavaExceptionReporter;
 import org.chromium.components.minidump_uploader.CrashFileManager;
@@ -18,7 +19,17 @@ import java.io.File;
     private static boolean sCrashDirMade;
 
     public AwPureJavaExceptionReporter() {
-        super(/*attachLogcat=*/false);
+        super(/* attachLogcat= */ false);
+    }
+
+    @Override
+    protected void createReportFile() {
+        super.createReportFile();
+        if (mMinidumpFile != null) {
+            File jsonLogFile =
+                    SystemWideCrashDirectories.createCrashJsonLogFile(mMinidumpFile.getName());
+            CrashLoggingUtils.writeCrashInfoToLogFile(jsonLogFile, mMinidumpFile, mReportContent);
+        }
     }
 
     @Override
@@ -26,10 +37,11 @@ import java.io.File;
         if (!sCrashDirMade) {
             // The reporter doesn't create a minidump if the crash dump directory doesn't exist, so
             // make sure to create it.
-            // TODO(https://crbug.com/1293108): this should be shared with chrome as well and
+            // TODO(crbug.com/40213369): this should be shared with chrome as well and
             // removed from here.
-            new File(SystemWideCrashDirectories.getOrCreateWebViewCrashDir(),
-                    CrashFileManager.CRASH_DUMP_DIR)
+            new File(
+                            SystemWideCrashDirectories.getOrCreateWebViewCrashDir(),
+                            CrashFileManager.CRASH_DUMP_DIR)
                     .mkdirs();
             sCrashDirMade = true;
         }

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/css/css_quad_value.h"
 
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -14,8 +15,9 @@ String CSSQuadValue::CustomCSSText() const {
   String bottom = bottom_->CssText();
   String left = left_->CssText();
 
-  if (serialization_type_ == TypeForSerialization::kSerializeAsRect)
-    return "rect(" + top + ", " + right + ", " + bottom + ", " + left + ')';
+  if (serialization_type_ == TypeForSerialization::kSerializeAsRect) {
+    return StrCat({"rect(", top, ", ", right, ", ", bottom, ", ", left, ")"});
+  }
 
   StringBuilder result;
   // reserve space for the four strings, plus three space separator characters.

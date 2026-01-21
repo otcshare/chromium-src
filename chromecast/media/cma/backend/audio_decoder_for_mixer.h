@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chromecast/media/api/cast_audio_decoder.h"
 #include "chromecast/media/audio/mixer_service/output_stream_connection.h"
 #include "chromecast/public/media/decoder_config.h"
@@ -73,7 +73,7 @@ class AudioDecoderForMixer
   friend class AvSyncTest;
 
   // mixer_service::OutputStreamConnection::Delegate implementation:
-  void FillNextBuffer(void* buffer,
+  void FillNextBuffer(base::span<uint8_t> buffer,
                       int frames,
                       int64_t delay_timestamp,
                       int64_t delay) override;

@@ -16,7 +16,6 @@ constexpr float kHoldingSpaceSelectedOverlayOpacity = 0.3f;
 constexpr gfx::Insets kHoldingSpaceChildBubblePadding(16);
 constexpr gfx::Size kHoldingSpaceScreenCaptureSize(104, 80);
 constexpr int kHoldingSpaceBubbleContainerChildSpacing = 8;
-constexpr int kHoldingSpaceBubbleWidth = 360;
 constexpr int kHoldingSpaceChildBubbleChildSpacing = 16;
 constexpr int kHoldingSpaceChipCountPerRow = 2;
 constexpr int kHoldingSpaceChipIconSize = 24;
@@ -46,8 +45,10 @@ enum class HoldingSpaceCommandId {
 
   // In-progress item commands.
   kCancelItem,
-  kResumeItem,
+  kOpenItem,
   kPauseItem,
+  kResumeItem,
+  kViewItemDetailsInBrowser,
 
   // Tray commands.
   kHidePreviews,
@@ -57,33 +58,32 @@ enum class HoldingSpaceCommandId {
 };
 
 // View IDs.
-constexpr int kHoldingSpaceDownloadsSectionHeaderId = 1;
-constexpr int kHoldingSpaceFilesAppChipId = 2;
-constexpr int kHoldingSpaceHeaderLabelId = 3;
-constexpr int kHoldingSpaceItemCancelButtonId = 4;
-constexpr int kHoldingSpaceItemCheckmarkId = 5;
-constexpr int kHoldingSpaceItemImageId = 6;
-constexpr int kHoldingSpaceItemPauseButtonId = 7;
-constexpr int kHoldingSpaceItemPinButtonId = 8;
-constexpr int kHoldingSpaceItemPrimaryActionContainerId = 9;
-constexpr int kHoldingSpaceItemPrimaryChipLabelId = 10;
-constexpr int kHoldingSpaceItemResumeButtonId = 11;
-constexpr int kHoldingSpaceItemSecondaryActionContainerId = 12;
-constexpr int kHoldingSpaceItemSecondaryChipLabelId = 13;
-constexpr int kHoldingSpacePinnedFilesBubbleId = 14;
-constexpr int kHoldingSpacePinnedFilesSectionId = 15;
-constexpr int kHoldingSpacePinnedFilesSectionPlaceholderGSuiteIconsId = 16;
-constexpr int kHoldingSpacePinnedFilesSectionPlaceholderLabelId = 17;
-constexpr int kHoldingSpaceRecentFilesBubbleId = 18;
-constexpr int kHoldingSpaceRecentFilesPlaceholderId = 19;
-constexpr int kHoldingSpaceScreenCapturePlayIconId = 20;
-constexpr int kHoldingSpaceSuggestionsChevronIconId = 21;
-constexpr int kHoldingSpaceSuggestionsSectionContainerId = 22;
-constexpr int kHoldingSpaceSuggestionsSectionHeaderId = 23;
-constexpr int kHoldingSpaceSuggestionsSectionId = 24;
-constexpr int kHoldingSpaceTrayDefaultIconId = 25;
-constexpr int kHoldingSpaceTrayDropTargetOverlayId = 26;
-constexpr int kHoldingSpaceTrayPreviewsIconId = 27;
+inline constexpr int kHoldingSpaceDownloadsSectionHeaderId = 1;
+inline constexpr int kHoldingSpaceItemCancelButtonId = 2;
+inline constexpr int kHoldingSpaceItemCheckmarkId = 3;
+inline constexpr int kHoldingSpaceItemImageId = 4;
+inline constexpr int kHoldingSpaceItemPauseButtonId = 5;
+inline constexpr int kHoldingSpaceItemPinButtonId = 6;
+inline constexpr int kHoldingSpaceItemPrimaryActionContainerId = 7;
+inline constexpr int kHoldingSpaceItemPrimaryChipLabelId = 8;
+inline constexpr int kHoldingSpaceItemResumeButtonId = 9;
+inline constexpr int kHoldingSpaceItemSecondaryActionContainerId = 10;
+inline constexpr int kHoldingSpaceItemSecondaryChipLabelId = 11;
+inline constexpr int kHoldingSpacePinnedFilesBubbleId = 12;
+inline constexpr int kHoldingSpacePinnedFilesSectionId = 13;
+inline constexpr int kHoldingSpacePinnedFilesSectionPlaceholderGSuiteIconsId =
+    14;
+inline constexpr int kHoldingSpacePinnedFilesSectionPlaceholderLabelId = 15;
+inline constexpr int kHoldingSpaceRecentFilesBubbleId = 16;
+inline constexpr int kHoldingSpaceRecentFilesPlaceholderId = 17;
+inline constexpr int kHoldingSpaceScreenCaptureOverlayIconId = 18;
+inline constexpr int kHoldingSpaceSuggestionsChevronIconId = 19;
+inline constexpr int kHoldingSpaceSuggestionsSectionContainerId = 20;
+inline constexpr int kHoldingSpaceSuggestionsSectionHeaderId = 21;
+inline constexpr int kHoldingSpaceSuggestionsSectionId = 22;
+inline constexpr int kHoldingSpaceTrayDefaultIconId = 23;
+inline constexpr int kHoldingSpaceTrayDropTargetOverlayId = 24;
+inline constexpr int kHoldingSpaceTrayPreviewsIconId = 25;
 
 // The maximum allowed age for files restored into the holding space model.
 // Note that this is not enforced for pinned items.

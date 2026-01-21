@@ -1,9 +1,12 @@
 noparent = True
 
 include_rules = [
+  "+chromeos/constants",
+  "+ash/constants",
   "+base",
   "+chromeos/ash/components/network",
   "+google_apis",
+  "+services/device/public/cpp/geolocation/network_location_request_source.h",
   "+services/network/public/cpp",
   "+services/network/public/mojom",
   "+third_party/cros_system_api",
@@ -16,5 +19,10 @@ specific_include_rules = {
     "+chromeos/ash/components/dbus",
     "+services/network/test",
     "+testing/gtest",
+    "+testing/gmock",
+  ],
+  "test_utils\.(cc|h)": [
+    "+testing/gtest",
+    "+services/network/test",
   ],
 }

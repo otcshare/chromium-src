@@ -8,43 +8,57 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/notreached.h"
 #include "base/values.h"
 #include "build/buildflag.h"
-#include "printing/buildflags/buildflags.h"
 #include "printing/metafile.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/print_dialog_linux_interface.h"
 #include "printing/print_job_constants.h"
 #include "printing/units.h"
-
-// Avoid using LinuxUi on Fuchsia.
-#if BUILDFLAG(IS_LINUX)
 #include "ui/linux/linux_ui.h"
+
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+#include "printing/printing_features.h"
 #endif
 
 namespace printing {
 
+namespace {
+
+PrintingContextLinux::PrintDialogFactory* g_print_dialog_factory = nullptr;
+
+}  // namespace
+
 // static
 std::unique_ptr<PrintingContext> PrintingContext::CreateImpl(
     Delegate* delegate,
-    bool skip_system_calls) {
-  auto context = std::make_unique<PrintingContextLinux>(delegate);
-#if BUILDFLAG(ENABLE_OOP_PRINTING)
-  if (skip_system_calls)
-    context->set_skip_system_calls();
-#endif
-  return context;
+    OutOfProcessBehavior out_of_process_behavior) {
+  return std::make_unique<PrintingContextLinux>(delegate,
+                                                out_of_process_behavior);
 }
 
-PrintingContextLinux::PrintingContextLinux(Delegate* delegate)
-    : PrintingContext(delegate), print_dialog_(nullptr) {}
+// static
+void PrintingContextLinux::SetPrintDialogFactory(PrintDialogFactory* factory) {
+  CHECK(!g_print_dialog_factory || !factory);
+  g_print_dialog_factory = factory;
+}
 
-PrintingContextLinux::~PrintingContextLinux() {
-  ReleaseContext();
+PrintingContextLinux::PrintingContextLinux(
+    Delegate* delegate,
+    OutOfProcessBehavior out_of_process_behavior)
+    : PrintingContext(delegate, out_of_process_behavior) {}
 
-  if (print_dialog_)
-    print_dialog_.ExtractAsDangling()->ReleaseDialog();
+PrintingContextLinux::~PrintingContextLinux() = default;
+
+void PrintingContextLinux::EnsurePrintDialog(bool show_system_dialog) {
+  if (print_dialog_) {
+    return;
+  }
+
+  if (g_print_dialog_factory) {
+    print_dialog_ =
+        g_print_dialog_factory->CreatePrintDialog(this, show_system_dialog);
+  }
 }
 
 void PrintingContextLinux::AskUserForSettings(int max_pages,
@@ -52,10 +66,8 @@ void PrintingContextLinux::AskUserForSettings(int max_pages,
                                               bool is_scripted,
                                               PrintSettingsCallback callback) {
   if (!print_dialog_) {
-    // Can only get here if the renderer is sending bad messages.
-    // http://crbug.com/341777
-    NOTREACHED();
-    std::move(callback).Run(mojom::ResultCode::kFailed);
+    // Can only get here if the renderer is sending bad messages. Ignore.
+    // https://crbug.com/41088489
     return;
   }
 
@@ -66,25 +78,19 @@ void PrintingContextLinux::AskUserForSettings(int max_pages,
 mojom::ResultCode PrintingContextLinux::UseDefaultSettings() {
   DCHECK(!in_print_job_);
 
-  ResetSettings();
+  EnsurePrintDialog(/*show_system_dialog=*/true);
 
-#if BUILDFLAG(IS_LINUX)
-  if (!ui::LinuxUi::instance())
-    return mojom::ResultCode::kSuccess;
-
-  if (!print_dialog_)
-    print_dialog_ = ui::LinuxUi::instance()->CreatePrintDialog(this);
-  print_dialog_->UseDefaultSettings();
-#endif
+  if (print_dialog_) {
+    print_dialog_->UseDefaultSettings();
+  }
 
   return mojom::ResultCode::kSuccess;
 }
 
 gfx::Size PrintingContextLinux::GetPdfPaperSizeDeviceUnits() {
-#if BUILDFLAG(IS_LINUX)
-  if (ui::LinuxUi::instance())
+  if (ui::LinuxUi::instance()) {
     return ui::LinuxUi::instance()->GetPdfPaperSize(this);
-#endif
+  }
 
   return gfx::Size();
 }
@@ -94,18 +100,14 @@ mojom::ResultCode PrintingContextLinux::UpdatePrinterSettings(
   DCHECK(!printer_settings.show_system_dialog);
   DCHECK(!in_print_job_);
 
-#if BUILDFLAG(IS_LINUX)
-  if (!ui::LinuxUi::instance())
-    return mojom::ResultCode::kSuccess;
+  EnsurePrintDialog(/*show_system_dialog=*/false);
 
-  if (!print_dialog_)
-    print_dialog_ = ui::LinuxUi::instance()->CreatePrintDialog(this);
-
-  // PrintDialogGtk::UpdateSettings() calls InitWithSettings() so settings_ will
-  // remain non-null after this line.
-  print_dialog_->UpdateSettings(std::move(settings_));
-  DCHECK(settings_);
-#endif
+  if (print_dialog_) {
+    // PrintDialogGtk::UpdateSettings() calls InitWithSettings() so settings_
+    // will remain non-null after this line.
+    print_dialog_->UpdateSettings(std::move(settings_));
+    DCHECK(settings_);
+  }
 
   return mojom::ResultCode::kSuccess;
 }
@@ -122,10 +124,33 @@ mojom::ResultCode PrintingContextLinux::NewDocument(
   DCHECK(!in_print_job_);
   in_print_job_ = true;
 
-  // If this implementation is expanded to include system calls then such calls
-  // should be gated upon `skip_system_calls()`.
-
   document_name_ = document_name;
+
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+  if (out_of_process_behavior() ==
+      OutOfProcessBehavior::kEnabledSkipSystemCalls) {
+    return mojom::ResultCode::kSuccess;
+  }
+
+  if (out_of_process_behavior() ==
+          OutOfProcessBehavior::kEnabledPerformSystemCalls &&
+      !settings_->system_print_dialog_data().empty()) {
+    // Take the settings captured by the browser process from the system print
+    // dialog and apply them to this printing context in the PrintBackend
+    // service.
+    if (!print_dialog_) {
+      // Ensure a print dialog is created with a type matching the settings
+      // provided by the browser process.
+      if (g_print_dialog_factory) {
+        print_dialog_ = g_print_dialog_factory->CreatePrintDialogForSettings(
+            this, *settings_);
+      }
+    }
+    if (print_dialog_) {
+      print_dialog_->LoadPrintSettings(*settings_);
+    }
+  }
+#endif
 
   return mojom::ResultCode::kSuccess;
 }
@@ -134,19 +159,23 @@ mojom::ResultCode PrintingContextLinux::PrintDocument(
     const MetafilePlayer& metafile,
     const PrintSettings& settings,
     uint32_t num_pages) {
-  if (abort_printing_)
+  if (abort_printing_) {
     return mojom::ResultCode::kCanceled;
+  }
   DCHECK(in_print_job_);
-  DCHECK(print_dialog_);
-  // TODO(crbug.com/1252685)  Plumb error code back from
+  if (!print_dialog_) {
+    return mojom::ResultCode::kFailed;
+  }
+  // TODO(crbug.com/40198881)  Plumb error code back from
   // `PrintDialogLinuxInterface`.
   print_dialog_->PrintDocument(metafile, document_name_);
   return mojom::ResultCode::kSuccess;
 }
 
 mojom::ResultCode PrintingContextLinux::DocumentDone() {
-  if (abort_printing_)
+  if (abort_printing_) {
     return mojom::ResultCode::kCanceled;
+  }
   DCHECK(in_print_job_);
 
   ResetSettings();

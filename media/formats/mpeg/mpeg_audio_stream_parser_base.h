@@ -11,7 +11,7 @@
 #include <set>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/audio_timestamp_helper.h"
@@ -42,15 +42,14 @@ class MEDIA_EXPORT MPEGAudioStreamParserBase : public StreamParser {
   void Init(InitCB init_cb,
             NewConfigCB config_cb,
             NewBuffersCB new_buffers_cb,
-            bool ignore_text_tracks,
             EncryptedMediaInitDataCB encrypted_media_init_data_cb,
             NewMediaSegmentCB new_segment_cb,
             EndMediaSegmentCB end_of_segment_cb,
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* buf,
-                                         size_t size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
   [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_inspect) override;
 
  protected:
@@ -84,12 +83,11 @@ class MEDIA_EXPORT MPEGAudioStreamParserBase : public StreamParser {
   // > 0 : The number of bytes parsed.
   //   0 : If more data is needed to parse the entire frame header.
   // < 0 : An error was encountered during parsing.
-  virtual int ParseFrameHeader(const uint8_t* data,
-                               int size,
-                               int* frame_size,
-                               int* sample_rate,
+  virtual int ParseFrameHeader(base::span<const uint8_t> data,
+                               size_t* frame_size,
+                               size_t* sample_rate,
                                ChannelLayout* channel_layout,
-                               int* sample_count,
+                               size_t* sample_count,
                                bool* metadata_frame,
                                std::vector<uint8_t>* extra_data) = 0;
 
@@ -111,7 +109,7 @@ class MEDIA_EXPORT MPEGAudioStreamParserBase : public StreamParser {
   // > 0 : The number of bytes parsed.
   //   0 : If more data is needed to parse the entire element.
   // < 0 : An error was encountered during parsing.
-  int ParseFrame(const uint8_t* data, int size, BufferQueue* buffers);
+  int ParseFrame(base::span<const uint8_t> data, BufferQueue* buffers);
   int ParseIcecastHeader(const uint8_t* data, int size);
   int ParseID3v1(const uint8_t* data, int size);
   int ParseID3v2(const uint8_t* data, int size);

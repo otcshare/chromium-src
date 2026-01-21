@@ -16,8 +16,19 @@
 #include <winsock2.h>  // for timeval
 #endif
 
-#include <chrono>  // NOLINT(build/c++11)
+#include "absl/base/config.h"
+
+// For feature testing and determining which headers can be included.
+#if ABSL_INTERNAL_CPLUSPLUS_LANG >= 202002L
+#include <version>
+#endif
+
+#include <array>
 #include <cfloat>
+#include <chrono>  // NOLINT(build/c++11)
+#ifdef __cpp_lib_three_way_comparison
+#include <compare>
+#endif  // __cpp_lib_three_way_comparison
 #include <cmath>
 #include <cstdint>
 #include <ctime>
@@ -25,9 +36,12 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <type_traits>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "absl/random/random.h"
+#include "absl/strings/str_format.h"
 #include "absl/time/time.h"
 
 namespace {
@@ -43,8 +57,7 @@ absl::Duration ApproxYears(int64_t n) { return absl::Hours(n) * 365 * 24; }
 // timespec ts1, ts2;
 // EXPECT_THAT(ts1, TimespecMatcher(ts2));
 MATCHER_P(TimespecMatcher, ts, "") {
-  if (ts.tv_sec == arg.tv_sec && ts.tv_nsec == arg.tv_nsec)
-    return true;
+  if (ts.tv_sec == arg.tv_sec && ts.tv_nsec == arg.tv_nsec) return true;
   *result_listener << "expected: {" << ts.tv_sec << ", " << ts.tv_nsec << "} ";
   *result_listener << "actual: {" << arg.tv_sec << ", " << arg.tv_nsec << "}";
   return false;
@@ -54,14 +67,15 @@ MATCHER_P(TimespecMatcher, ts, "") {
 // timeval tv1, tv2;
 // EXPECT_THAT(tv1, TimevalMatcher(tv2));
 MATCHER_P(TimevalMatcher, tv, "") {
-  if (tv.tv_sec == arg.tv_sec && tv.tv_usec == arg.tv_usec)
-    return true;
+  if (tv.tv_sec == arg.tv_sec && tv.tv_usec == arg.tv_usec) return true;
   *result_listener << "expected: {" << tv.tv_sec << ", " << tv.tv_usec << "} ";
   *result_listener << "actual: {" << arg.tv_sec << ", " << arg.tv_usec << "}";
   return false;
 }
 
 TEST(Duration, ConstExpr) {
+  static_assert(std::is_trivially_destructible<absl::Duration>::value,
+                "Duration is documented as being trivially destructible");
   constexpr absl::Duration d0 = absl::ZeroDuration();
   static_assert(d0 == absl::ZeroDuration(), "ZeroDuration()");
   constexpr absl::Duration d1 = absl::Seconds(1);
@@ -207,12 +221,12 @@ TEST(Duration, ToConversionDeprecated) {
 
 template <int64_t N>
 void TestFromChronoBasicEquality() {
-  using std::chrono::nanoseconds;
+  using std::chrono::hours;
   using std::chrono::microseconds;
   using std::chrono::milliseconds;
-  using std::chrono::seconds;
   using std::chrono::minutes;
-  using std::chrono::hours;
+  using std::chrono::nanoseconds;
+  using std::chrono::seconds;
 
   static_assert(absl::Nanoseconds(N) == absl::FromChrono(nanoseconds(N)), "");
   static_assert(absl::Microseconds(N) == absl::FromChrono(microseconds(N)), "");
@@ -272,12 +286,12 @@ TEST(Duration, FromChrono) {
 
 template <int64_t N>
 void TestToChrono() {
-  using std::chrono::nanoseconds;
+  using std::chrono::hours;
   using std::chrono::microseconds;
   using std::chrono::milliseconds;
-  using std::chrono::seconds;
   using std::chrono::minutes;
-  using std::chrono::hours;
+  using std::chrono::nanoseconds;
+  using std::chrono::seconds;
 
   EXPECT_EQ(nanoseconds(N), absl::ToChronoNanoseconds(absl::Nanoseconds(N)));
   EXPECT_EQ(microseconds(N), absl::ToChronoMicroseconds(absl::Microseconds(N)));
@@ -304,12 +318,12 @@ void TestToChrono() {
 }
 
 TEST(Duration, ToChrono) {
-  using std::chrono::nanoseconds;
+  using std::chrono::hours;
   using std::chrono::microseconds;
   using std::chrono::milliseconds;
-  using std::chrono::seconds;
   using std::chrono::minutes;
-  using std::chrono::hours;
+  using std::chrono::nanoseconds;
+  using std::chrono::seconds;
 
   TestToChrono<kint64min>();
   TestToChrono<-1>();
@@ -349,11 +363,6 @@ TEST(Duration, ToChrono) {
 }
 
 TEST(Duration, FactoryOverloads) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
   enum E { kOne = 1 };
 #define TEST_FACTORY_OVERLOADS(NAME)                                          \
   EXPECT_EQ(1, NAME(kOne) / NAME(kOne));                                      \
@@ -434,6 +443,15 @@ TEST(Duration, InfinityComparison) {
   EXPECT_LT(-inf, any_dur);
   EXPECT_LT(-inf, inf);
   EXPECT_GT(inf, -inf);
+
+#ifdef ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+  EXPECT_EQ(inf <=> inf, std::strong_ordering::equal);
+  EXPECT_EQ(-inf <=> -inf, std::strong_ordering::equal);
+  EXPECT_EQ(-inf <=> inf, std::strong_ordering::less);
+  EXPECT_EQ(inf <=> -inf, std::strong_ordering::greater);
+  EXPECT_EQ(any_dur <=> inf, std::strong_ordering::less);
+  EXPECT_EQ(any_dur <=> -inf, std::strong_ordering::greater);
+#endif  // ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
 }
 
 TEST(Duration, InfinityAddition) {
@@ -499,8 +517,19 @@ TEST(Duration, InfinitySubtraction) {
   // Interesting case
   absl::Duration almost_neg_inf = sec_min;
   EXPECT_LT(-inf, almost_neg_inf);
+
+#ifdef ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+  EXPECT_EQ(-inf <=> almost_neg_inf, std::strong_ordering::less);
+  EXPECT_EQ(almost_neg_inf <=> -inf, std::strong_ordering::greater);
+#endif  // ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+
   almost_neg_inf -= -absl::Nanoseconds(1);
   EXPECT_LT(-inf, almost_neg_inf);
+
+#ifdef ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+  EXPECT_EQ(-inf <=> almost_neg_inf, std::strong_ordering::less);
+  EXPECT_EQ(almost_neg_inf <=> -inf, std::strong_ordering::greater);
+#endif  // ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
 
   // For reference: IEEE 754 behavior
   const double dbl_inf = std::numeric_limits<double>::infinity();
@@ -515,18 +544,18 @@ TEST(Duration, InfinityMultiplication) {
   const absl::Duration sec_min = absl::Seconds(kint64min);
   const absl::Duration inf = absl::InfiniteDuration();
 
-#define TEST_INF_MUL_WITH_TYPE(T)                                     \
-  EXPECT_EQ(inf, inf * static_cast<T>(2));                            \
-  EXPECT_EQ(-inf, inf * static_cast<T>(-2));                          \
-  EXPECT_EQ(-inf, -inf * static_cast<T>(2));                          \
-  EXPECT_EQ(inf, -inf * static_cast<T>(-2));                          \
-  EXPECT_EQ(inf, inf * static_cast<T>(0));                            \
-  EXPECT_EQ(-inf, -inf * static_cast<T>(0));                          \
-  EXPECT_EQ(inf, sec_max * static_cast<T>(2));                        \
-  EXPECT_EQ(inf, sec_min * static_cast<T>(-2));                       \
-  EXPECT_EQ(inf, (sec_max / static_cast<T>(2)) * static_cast<T>(3));  \
-  EXPECT_EQ(-inf, sec_max * static_cast<T>(-2));                      \
-  EXPECT_EQ(-inf, sec_min * static_cast<T>(2));                       \
+#define TEST_INF_MUL_WITH_TYPE(T)                                    \
+  EXPECT_EQ(inf, inf* static_cast<T>(2));                            \
+  EXPECT_EQ(-inf, inf* static_cast<T>(-2));                          \
+  EXPECT_EQ(-inf, -inf* static_cast<T>(2));                          \
+  EXPECT_EQ(inf, -inf* static_cast<T>(-2));                          \
+  EXPECT_EQ(inf, inf* static_cast<T>(0));                            \
+  EXPECT_EQ(-inf, -inf* static_cast<T>(0));                          \
+  EXPECT_EQ(inf, sec_max* static_cast<T>(2));                        \
+  EXPECT_EQ(inf, sec_min* static_cast<T>(-2));                       \
+  EXPECT_EQ(inf, (sec_max / static_cast<T>(2)) * static_cast<T>(3)); \
+  EXPECT_EQ(-inf, sec_max* static_cast<T>(-2));                      \
+  EXPECT_EQ(-inf, sec_min* static_cast<T>(2));                       \
   EXPECT_EQ(-inf, (sec_min / static_cast<T>(2)) * static_cast<T>(3));
 
   TEST_INF_MUL_WITH_TYPE(int64_t);  // NOLINT(readability/function)
@@ -810,18 +839,18 @@ TEST(Duration, DivisionByZero) {
 
 TEST(Duration, NaN) {
   // Note that IEEE 754 does not define the behavior of a nan's sign when it is
-  // copied, so the code below allows for either + or - InfiniteDuration.
+  // copied. We return -InfiniteDuration in either case.
 #define TEST_NAN_HANDLING(NAME, NAN)           \
   do {                                         \
     const auto inf = absl::InfiniteDuration(); \
     auto x = NAME(NAN);                        \
-    EXPECT_TRUE(x == inf || x == -inf);        \
+    EXPECT_TRUE(x == -inf);                    \
     auto y = NAME(42);                         \
     y *= NAN;                                  \
-    EXPECT_TRUE(y == inf || y == -inf);        \
+    EXPECT_TRUE(y == -inf);                    \
     auto z = NAME(42);                         \
     z /= NAN;                                  \
-    EXPECT_TRUE(z == inf || z == -inf);        \
+    EXPECT_TRUE(z == -inf);                    \
   } while (0)
 
   const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -860,6 +889,21 @@ TEST(Duration, Range) {
 
   EXPECT_LT(neg_full_range, full_range);
   EXPECT_EQ(neg_full_range, -full_range);
+
+#ifdef ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+  EXPECT_EQ(range_future <=> absl::InfiniteDuration(),
+            std::strong_ordering::less);
+  EXPECT_EQ(range_past <=> -absl::InfiniteDuration(),
+            std::strong_ordering::greater);
+  EXPECT_EQ(full_range <=> absl::ZeroDuration(),  //
+            std::strong_ordering::greater);
+  EXPECT_EQ(full_range <=> -absl::InfiniteDuration(),
+            std::strong_ordering::greater);
+  EXPECT_EQ(neg_full_range <=> -absl::InfiniteDuration(),
+            std::strong_ordering::greater);
+  EXPECT_EQ(neg_full_range <=> full_range, std::strong_ordering::less);
+  EXPECT_EQ(neg_full_range <=> -full_range, std::strong_ordering::equal);
+#endif  // ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
 }
 
 TEST(Duration, RelationalOperators) {
@@ -883,12 +927,27 @@ TEST(Duration, RelationalOperators) {
 #undef TEST_REL_OPS
 }
 
-TEST(Duration, Addition) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
+#ifdef ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
 
+TEST(Duration, SpaceshipOperators) {
+#define TEST_REL_OPS(UNIT)                                               \
+  static_assert(UNIT(2) <=> UNIT(2) == std::strong_ordering::equal, ""); \
+  static_assert(UNIT(1) <=> UNIT(2) == std::strong_ordering::less, "");  \
+  static_assert(UNIT(3) <=> UNIT(2) == std::strong_ordering::greater, "");
+
+  TEST_REL_OPS(absl::Nanoseconds);
+  TEST_REL_OPS(absl::Microseconds);
+  TEST_REL_OPS(absl::Milliseconds);
+  TEST_REL_OPS(absl::Seconds);
+  TEST_REL_OPS(absl::Minutes);
+  TEST_REL_OPS(absl::Hours);
+
+#undef TEST_REL_OPS
+}
+
+#endif  // ABSL_INTERNAL_TIME_HAS_THREE_WAY_COMPARISON
+
+TEST(Duration, Addition) {
 #define TEST_ADD_OPS(UNIT)                  \
   do {                                      \
     EXPECT_EQ(UNIT(2), UNIT(1) + UNIT(1));  \
@@ -982,11 +1041,6 @@ TEST(Duration, Negation) {
 }
 
 TEST(Duration, AbsoluteValue) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
   EXPECT_EQ(absl::ZeroDuration(), AbsDuration(absl::ZeroDuration()));
   EXPECT_EQ(absl::Seconds(1), AbsDuration(absl::Seconds(1)));
   EXPECT_EQ(absl::Seconds(1), AbsDuration(absl::Seconds(-1)));
@@ -1004,11 +1058,6 @@ TEST(Duration, AbsoluteValue) {
 }
 
 TEST(Duration, Multiplication) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
 #define TEST_MUL_OPS(UNIT)                                    \
   do {                                                        \
     EXPECT_EQ(UNIT(5), UNIT(2) * 2.5);                        \
@@ -1108,8 +1157,7 @@ TEST(Duration, Multiplication) {
   EXPECT_EQ(0, absl::Nanoseconds(-1) / absl::Seconds(1));  // Actual -1e-9
 
   // Tests identity a = (a/b)*b + a%b
-#define TEST_MOD_IDENTITY(a, b) \
-  EXPECT_EQ((a), ((a) / (b))*(b) + ((a)%(b)))
+#define TEST_MOD_IDENTITY(a, b) EXPECT_EQ((a), ((a) / (b)) * (b) + ((a) % (b)))
 
   TEST_MOD_IDENTITY(absl::Seconds(0), absl::Seconds(2));
   TEST_MOD_IDENTITY(absl::Seconds(1), absl::Seconds(1));
@@ -1261,11 +1309,6 @@ TEST(Duration, RoundTripUnits) {
 }
 
 TEST(Duration, TruncConversions) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
   // Tests ToTimespec()/DurationFromTimespec()
   const struct {
     absl::Duration d;
@@ -1469,9 +1512,7 @@ TEST(Duration, ToDoubleSecondsCheckEdgeCases) {
 }
 
 TEST(Duration, ToDoubleSecondsCheckRandom) {
-  std::random_device rd;
-  std::seed_seq seed({rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()});
-  std::mt19937_64 gen(seed);
+  absl::InsecureBitGen gen;
   // We want doubles distributed from 1/8ns up to 2^63, where
   // as many values are tested from 1ns to 2ns as from 1sec to 2sec,
   // so even distribute along a log-scale of those values, and
@@ -1562,11 +1603,6 @@ TEST(Duration, ConversionSaturation) {
 }
 
 TEST(Duration, FormatDuration) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
   // Example from Go's docs.
   EXPECT_EQ("72h3m0.5s",
             absl::FormatDuration(absl::Hours(72) + absl::Minutes(3) +
@@ -1701,11 +1737,6 @@ TEST(Duration, FormatDuration) {
 }
 
 TEST(Duration, ParseDuration) {
-#if defined(ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT) && \
-    ABSL_SKIP_TIME_TESTS_BROKEN_ON_MSVC_OPT
-  GTEST_SKIP();
-#endif
-
   absl::Duration d;
 
   // No specified unit. Should only work for zero and infinity.
@@ -1851,6 +1882,20 @@ TEST(Duration, FormatParseRoundTrip) {
   TEST_PARSE_ROUNDTRIP(huge_range + (absl::Seconds(1) - absl::Nanoseconds(1)));
 
 #undef TEST_PARSE_ROUNDTRIP
+}
+
+TEST(Duration, AbslStringify) {
+  // FormatDuration is already well tested, so just use one test case here to
+  // verify that StrFormat("%v", d) works as expected.
+  absl::Duration d = absl::Seconds(1);
+  EXPECT_EQ(absl::StrFormat("%v", d), absl::FormatDuration(d));
+}
+
+TEST(Duration, NoPadding) {
+  // Should match the size of a struct with uint32_t alignment and no padding.
+  using NoPadding = std::array<uint32_t, 3>;
+  EXPECT_EQ(sizeof(NoPadding), sizeof(absl::Duration));
+  EXPECT_EQ(alignof(NoPadding), alignof(absl::Duration));
 }
 
 }  // namespace

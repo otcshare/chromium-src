@@ -29,12 +29,16 @@
 #include "third_party/blink/renderer/platform/audio/hrtf_elevation.h"
 
 #include <math.h>
+
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/synchronization/lock.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/hrtf_database.h"
 #include "third_party/blink/renderer/platform/audio/hrtf_panner.h"
@@ -43,6 +47,19 @@
 namespace blink {
 
 namespace {
+// Spacing, in degrees, between every azimuth loaded from resource.
+constexpr unsigned kAzimuthSpacing = 15;
+
+// Number of azimuths loaded from resource.
+constexpr unsigned kNumberOfRawAzimuths = 360 / kAzimuthSpacing;
+
+// Interpolates by this factor to get the total number of azimuths from every
+// azimuth loaded from resource.
+constexpr unsigned kInterpolationFactor = 8;
+
+// Total number of azimuths after interpolation.
+constexpr unsigned kNumberOfTotalAzimuths =
+    kNumberOfRawAzimuths * kInterpolationFactor;
 
 // Total number of components of an HRTF database.
 constexpr size_t kTotalNumberOfResponses = 240;
@@ -59,14 +76,15 @@ constexpr float kResponseSampleRate = 44100;
 // angle. See https://bugs.webkit.org/show_bug.cgi?id=98294#c9 for the
 // elevation angles and their order in the concatenated response.
 constexpr int kElevationIndexTableSize = 10;
-constexpr int kElevationIndexTable[kElevationIndexTableSize] = {
-    0, 15, 30, 45, 60, 75, 90, 315, 330, 345};
+constexpr std::array<int, kElevationIndexTableSize> kElevationIndexTable = {
+    0, 15, 30, 45, 60, 75, 90, 315, 330, 345,
+};
 
 // The range of elevations for the IRCAM impulse responses varies depending on
 // azimuth, but the minimum elevation appears to always be -45.
 //
 // Here's how it goes:
-constexpr int kMaxElevations[] = {
+constexpr auto kMaxElevations = std::to_array<int>({
     //  Azimuth
     //
     90,  // 0
@@ -92,8 +110,8 @@ constexpr int kMaxElevations[] = {
     75,  // 300
     45,  // 315
     60,  // 330
-    45   // 345
-};
+    45,  // 345
+});
 
 // Lazily load a concatenated HRTF database for given subject and store it in a
 // local hash table to ensure quick efficient future retrievals.
@@ -175,7 +193,7 @@ bool HRTFElevation::CalculateKernelsForAzimuthElevation(
   // order. So for a given azimuth and elevation we need to compute
   // the index of the wanted audio frames in the concatenated table.
   unsigned index =
-      ((azimuth / kAzimuthSpacing) * HRTFDatabase::kNumberOfRawElevations) +
+      ((azimuth / kAzimuthSpacing) * HRTFDatabase::NumberOfRawElevations()) +
       elevation_index;
   DCHECK_LE(index, kTotalNumberOfResponses);
 
@@ -201,9 +219,9 @@ bool HRTFElevation::CalculateKernelsForAzimuthElevation(
         AudioBus::Create(response->NumberOfChannels(), fft_size / 2));
     for (unsigned channel = 0; channel < response->NumberOfChannels();
          ++channel) {
-      memcpy(padded_response->Channel(channel)->MutableData(),
-             response->Channel(channel)->Data(),
-             response->length() * sizeof(float));
+      UNSAFE_TODO(memcpy(padded_response->Channel(channel)->MutableData(),
+                         response->Channel(channel)->Data(),
+                         response->length() * sizeof(float)));
     }
     response = padded_response;
   }
@@ -270,17 +288,16 @@ std::unique_ptr<HRTFElevation> HRTFElevation::CreateForSubject(
     }
   }
 
-  std::unique_ptr<HRTFElevation> hrtf_elevation = base::WrapUnique(
-      new HRTFElevation(std::move(kernel_list_l), std::move(kernel_list_r),
-                        elevation, sample_rate));
+  std::unique_ptr<HRTFElevation> hrtf_elevation =
+      base::WrapUnique(new HRTFElevation(std::move(kernel_list_l),
+                                         std::move(kernel_list_r), elevation));
   return hrtf_elevation;
 }
 
 std::unique_ptr<HRTFElevation> HRTFElevation::CreateByInterpolatingSlices(
     HRTFElevation* hrtf_elevation1,
     HRTFElevation* hrtf_elevation2,
-    float x,
-    float sample_rate) {
+    float x) {
   DCHECK(hrtf_elevation1);
   DCHECK(hrtf_elevation2);
 
@@ -306,13 +323,17 @@ std::unique_ptr<HRTFElevation> HRTFElevation::CreateByInterpolatingSlices(
   }
 
   // Interpolate elevation angle.
-  const double angle = (1.0 - x) * hrtf_elevation1->ElevationAngle() +
-                       x * hrtf_elevation2->ElevationAngle();
+  const double angle = (1.0 - x) * hrtf_elevation1->elevation_angle_ +
+                       x * hrtf_elevation2->elevation_angle_;
 
   std::unique_ptr<HRTFElevation> hrtf_elevation = base::WrapUnique(
       new HRTFElevation(std::move(kernel_list_l), std::move(kernel_list_r),
-                        static_cast<int>(angle), sample_rate));
+                        static_cast<int>(angle)));
   return hrtf_elevation;
+}
+
+unsigned HRTFElevation::NumberOfAzimuths() {
+  return kNumberOfTotalAzimuths;
 }
 
 void HRTFElevation::GetKernelsFromAzimuth(double azimuth_blend,

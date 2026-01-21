@@ -7,13 +7,13 @@
 
 #include <string>
 
-#include "ppapi/buildflags/buildflags.h"
+#include "content/public/common/buildflags.h"
 
 #if !BUILDFLAG(ENABLE_PLUGINS)
 #error "Plugins should be enabled"
 #endif
 
-// TODO(crbug.com/1064647): Remove this class.
+// TODO(crbug.com/40123808): Remove this class.
 class PluginMetadata {
  public:
   // Security status of the plugin.

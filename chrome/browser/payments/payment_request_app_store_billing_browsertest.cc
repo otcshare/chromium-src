@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/chromeos_buildflags.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/test/payments/payment_request_platform_browsertest_base.h"
+#include "components/payments/core/features.h"
 #include "content/public/test/browser_test.h"
 
 namespace payments {
@@ -21,6 +22,16 @@ class PaymentRequestAppStoreBillingTest
     PaymentRequestPlatformBrowserTestBase::SetUpOnMainThread();
     NavigateTo("/app_store_billing_tests/index.html");
   }
+};
+
+class PaymentRequestTwaBillingTest : public PaymentRequestAppStoreBillingTest {
+ public:
+  PaymentRequestTwaBillingTest() = default;
+  ~PaymentRequestTwaBillingTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      payments::features::kAppStoreBilling};
 };
 
 // When requesting app store billing methods (e.g., google play store method)
@@ -46,9 +57,9 @@ IN_PROC_BROWSER_TEST_F(
 
 // Test requesting app store billing method (e.g., google play store method)
 // in a Trusted Web Activity
-// TODO(crbug.com/1095827): This test should simulate being in a TWA such that
+// TODO(crbug.com/40700424): This test should simulate being in a TWA such that
 // Play Billing is discovered as an app store payment app.
-IN_PROC_BROWSER_TEST_F(PaymentRequestAppStoreBillingTest,
+IN_PROC_BROWSER_TEST_F(PaymentRequestTwaBillingTest,
                        RequestAppStoreBillingInTwa) {
   test_controller()->SetTwaPackageName("com.merchant.twa");
 
@@ -64,9 +75,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestAppStoreBillingTest,
       "NotSupportedError: The payment method "
       "\"https://play.google.com/billing\" is not supported.";
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   expected_error = expected_error + " Unable to invoke Android apps.";
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // We expect the standard NotSupportedError inside a TWA because Play Billing
   // isn't supported yet.

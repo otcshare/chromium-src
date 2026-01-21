@@ -15,16 +15,8 @@ void StubSpeculationHost::BindUnsafe(mojo::ScopedMessagePipeHandle handle) {
 void StubSpeculationHost::Bind(
     mojo::PendingReceiver<SpeculationHost> receiver) {
   receiver_.Bind(std::move(receiver));
-  receiver_.set_disconnect_handler(WTF::BindOnce(
-      &StubSpeculationHost::OnConnectionLost, WTF::Unretained(this)));
-}
-
-void StubSpeculationHost::UpdateSpeculationCandidates(Candidates candidates) {
-  candidates_ = std::move(candidates);
-  if (candidates_updated_callback_)
-    candidates_updated_callback_.Run(candidates_);
-  if (done_closure_)
-    std::move(done_closure_).Run();
+  receiver_.set_disconnect_handler(
+      BindOnce(&StubSpeculationHost::OnConnectionLost, Unretained(this)));
 }
 
 void StubSpeculationHost::OnConnectionLost() {
@@ -32,8 +24,17 @@ void StubSpeculationHost::OnConnectionLost() {
     std::move(done_closure_).Run();
 }
 
-void StubSpeculationHost::EnableNoVarySearchSupport() {
-  sent_no_vary_search_support_to_browser_ = true;
+void StubSpeculationHost::UpdateSpeculationCandidates(
+    Candidates candidates,
+    bool enable_cross_origin_prerender_iframes) {
+  candidates_ = std::move(candidates);
+  if (candidates_updated_callback_) {
+    candidates_updated_callback_.Run(candidates_);
+  }
+  if (done_closure_)
+    std::move(done_closure_).Run();
 }
+
+void StubSpeculationHost::InitiatePreview(const KURL& url) {}
 
 }  // namespace blink

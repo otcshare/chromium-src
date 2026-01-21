@@ -33,6 +33,8 @@ String GetReducedNavigatorPlatform() {
   return "";
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   return "Linux x86_64";
+#elif BUILDFLAG(IS_IOS)
+  return "iPhone";
 #else
 #error Unsupported platform
 #endif
@@ -45,50 +47,23 @@ NavigatorBase::NavigatorBase(ExecutionContext* context)
 
 String NavigatorBase::userAgent() const {
   ExecutionContext* execution_context = GetExecutionContext();
-  if (!execution_context)
-    return String();
-
-  execution_context->ReportNavigatorUserAgentAccess();
-  return execution_context->UserAgent();
+  return execution_context ? execution_context->UserAgent() : String();
 }
 
 String NavigatorBase::platform() const {
+#if BUILDFLAG(IS_ANDROID)
   ExecutionContext* execution_context = GetExecutionContext();
-  // Report as user agent access
-  if (execution_context)
-    execution_context->ReportNavigatorUserAgentAccess();
 
-  // If the User-Agent string is opted into the SendFullUserAgentAfterReduction,
-  // platform should be a full value.
-  if (RuntimeEnabledFeatures::SendFullUserAgentAfterReductionEnabled(
+  // For user-agent reduction phase 6, Android platform should be frozen
+  // string, see https://www.chromium.org/updates/ua-reduction/.
+  if (!RuntimeEnabledFeatures::ReduceUserAgentAndroidVersionDeviceModelEnabled(
           execution_context)) {
     return NavigatorID::platform();
   }
-
-  // If the User-Agent string is frozen, platform should be a value
-  // matching the frozen string per https://github.com/WICG/ua-client-hints.
-  // See content::frozen_user_agent_strings.
-  if (RuntimeEnabledFeatures::UserAgentReductionEnabled(execution_context)) {
-    return GetReducedNavigatorPlatform();
-  }
-
-#if BUILDFLAG(IS_ANDROID)
-  // For user-agent reduction phase 6, Android platform should be frozen
-  // string, see https://www.chromium.org/updates/ua-reduction/.
-  if (RuntimeEnabledFeatures::ReduceUserAgentAndroidVersionDeviceModelEnabled(
-          execution_context)) {
-    return GetReducedNavigatorPlatform();
-  }
-#else
-  // For user-agent reduction phase 5, all desktop platform should be frozen
-  // string, see https://www.chromium.org/updates/ua-reduction/.
-  if (RuntimeEnabledFeatures::ReduceUserAgentPlatformOsCpuEnabled(
-          execution_context)) {
-    return GetReducedNavigatorPlatform();
-  }
 #endif
-
-  return NavigatorID::platform();
+  // TODO(crbug.com/469458271): When we remove phase 6 feature flags, we can
+  // move GetReducedNavigatorPlatform logic directly to NavigatorID::platform().
+  return GetReducedNavigatorPlatform();
 }
 
 void NavigatorBase::Trace(Visitor* visitor) const {

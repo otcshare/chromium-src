@@ -3,14 +3,18 @@
 // found in the LICENSE file.
 
 #include "base/android/event_log.h"
-#include "base/base_jni_headers/EventLog_jni.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/base_jni/EventLog_jni.h"
 
 namespace base {
 namespace android {
 
 void EventLogWriteInt(int tag, int value) {
-  Java_EventLog_writeEvent(AttachCurrentThread(), tag, value);
+  Java_EventLog_writeEvent(jni_zero::AttachCurrentThread(), tag, value);
 }
 
 }  // namespace android
 }  // namespace base
+
+DEFINE_JNI(EventLog)

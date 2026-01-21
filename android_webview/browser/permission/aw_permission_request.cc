@@ -7,13 +7,15 @@
 #include <utility>
 
 #include "android_webview/browser/permission/aw_permission_request_delegate.h"
-#include "android_webview/browser_jni_headers/AwPermissionRequest_jni.h"
 #include "base/android/jni_string.h"
 
-using base::android::AttachCurrentThread;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwPermissionRequest_jni.h"
+
 using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
+using jni_zero::AttachCurrentThread;
 
 namespace android_webview {
 
@@ -37,18 +39,15 @@ AwPermissionRequest::AwPermissionRequest(
 
   JNIEnv* env = AttachCurrentThread();
   *java_peer = Java_AwPermissionRequest_create(
-      env, reinterpret_cast<jlong>(this),
-      ConvertUTF8ToJavaString(env, GetOrigin().spec()), GetResources());
-  java_ref_ = JavaObjectWeakGlobalRef(env, java_peer->obj());
+      env, reinterpret_cast<int64_t>(this), GetOrigin().spec(), GetResources());
+  java_ref_ = JavaObjectWeakGlobalRef(env, *java_peer);
 }
 
 AwPermissionRequest::~AwPermissionRequest() {
   OnAcceptInternal(false);
 }
 
-void AwPermissionRequest::OnAccept(JNIEnv* env,
-                                   const JavaParamRef<jobject>& jcaller,
-                                   jboolean accept) {
+void AwPermissionRequest::OnAccept(JNIEnv* env, bool accept) {
   OnAcceptInternal(accept);
 }
 
@@ -88,3 +87,5 @@ void AwPermissionRequest::CancelAndDelete() {
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwPermissionRequest)

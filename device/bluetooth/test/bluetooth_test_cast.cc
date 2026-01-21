@@ -4,7 +4,7 @@
 
 #include "device/bluetooth/test/bluetooth_test_cast.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "chromecast/device/bluetooth/bluetooth_util.h"
 #include "chromecast/device/bluetooth/le/mock_gatt_client_manager.h"
 #include "chromecast/device/bluetooth/le/remote_device.h"
@@ -68,16 +68,12 @@ void BluetoothTestCast::InitWithFakeAdapter() {
   adapter_->SetPowered(true, base::DoNothing(), base::DoNothing());
 }
 
-bool BluetoothTestCast::PlatformSupportsLowEnergy() {
-  return true;
-}
-
 BluetoothDevice* BluetoothTestCast::SimulateLowEnergyDevice(
     int device_ordinal) {
   if (device_ordinal > 7 || device_ordinal < 1)
     return nullptr;
 
-  absl::optional<std::string> device_name = std::string(kTestDeviceName);
+  std::optional<std::string> device_name = std::string(kTestDeviceName);
   std::string device_address = kTestDeviceAddress1;
   std::vector<std::string> service_uuids;
   std::map<std::string, std::vector<uint8_t>> service_data;
@@ -105,7 +101,7 @@ BluetoothDevice* BluetoothTestCast::SimulateLowEnergyDevice(
       device_address = kTestDeviceAddress2;
       break;
     case 5:
-      device_name = absl::nullopt;
+      device_name = std::nullopt;
       break;
     default:
       NOTREACHED();
@@ -117,7 +113,7 @@ BluetoothDevice* BluetoothTestCast::SimulateLowEnergyDevice(
 
 void BluetoothTestCast::UpdateAdapter(
     const std::string& address,
-    const absl::optional<std::string>& name,
+    const std::optional<std::string>& name,
     const std::vector<std::string>& service_uuids,
     const std::map<std::string, std::vector<uint8_t>>& service_data,
     const std::map<uint16_t, std::vector<uint8_t>>& manufacturer_data) {

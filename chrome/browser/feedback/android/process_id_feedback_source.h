@@ -22,15 +22,14 @@ class ProcessIdFeedbackSource
     : public base::RefCountedThreadSafe<ProcessIdFeedbackSource> {
  public:
   ProcessIdFeedbackSource(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj);
+                          const base::android::JavaRef<jobject>& obj);
 
   ProcessIdFeedbackSource(const ProcessIdFeedbackSource&) = delete;
   ProcessIdFeedbackSource& operator=(const ProcessIdFeedbackSource&) = delete;
 
   base::android::ScopedJavaLocalRef<jlongArray> GetProcessIdsForType(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jint process_type);
+      int32_t process_type);
   void PrepareProcessIds();
 
  private:

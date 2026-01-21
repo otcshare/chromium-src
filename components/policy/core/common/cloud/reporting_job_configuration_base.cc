@@ -5,25 +5,26 @@
 #include "components/policy/core/common/cloud/reporting_job_configuration_base.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "components/policy/core/common/cloud/cloud_policy_client.h"
+#include "components/enterprise/common/proto/synced_from_google3/chrome_reporting_entity.pb.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
-#include "components/policy/policy_export.h"
+#include "components/policy/core/common/features.h"
 #include "components/version_info/version_info.h"
 #include "google_apis/google_api_keys.h"
+#include "net/base/net_errors.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace policy {
@@ -44,6 +45,12 @@ const char
         "osPlatform";
 const char ReportingJobConfigurationBase::DeviceDictionaryBuilder::kName[] =
     "name";
+const char
+    ReportingJobConfigurationBase::DeviceDictionaryBuilder::kDeviceFqdn[] =
+        "deviceFqdn";
+const char
+    ReportingJobConfigurationBase::DeviceDictionaryBuilder::kNetworkName[] =
+        "networkName";
 
 // static
 base::Value::Dict
@@ -56,7 +63,31 @@ ReportingJobConfigurationBase::DeviceDictionaryBuilder::BuildDeviceDictionary(
   device_dictionary.Set(kOSVersion, GetOSVersion());
   device_dictionary.Set(kOSPlatform, GetOSPlatform());
   device_dictionary.Set(kName, GetDeviceName());
+  if (base::FeatureList::IsEnabled(
+          policy::features::kEnhancedSecurityEventFields)) {
+    device_dictionary.Set(kDeviceFqdn, GetDeviceFqdn());
+    device_dictionary.Set(kNetworkName, GetNetworkName());
+  }
   return device_dictionary;
+}
+
+// static
+::chrome::cros::reporting::proto::Device
+ReportingJobConfigurationBase::DeviceDictionaryBuilder::BuildDeviceProto(
+    const std::string& dm_token,
+    const std::string& client_id) {
+  ::chrome::cros::reporting::proto::Device device;
+  device.set_dm_token(dm_token);
+  device.set_client_id(client_id);
+  device.set_os_version(GetOSVersion());
+  device.set_os_platform(GetOSPlatform());
+  device.set_name(GetDeviceName());
+  if (base::FeatureList::IsEnabled(
+          policy::features::kEnhancedSecurityEventFields)) {
+    device.set_device_fqdn(GetDeviceFqdn());
+    device.set_network_name(GetNetworkName());
+  }
+  return device;
 }
 
 // static
@@ -89,10 +120,22 @@ ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetNamePath() {
   return GetStringPath(kName);
 }
 
+//static
+std::string
+ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetDeviceFqdnPath() {
+  return GetStringPath(kDeviceFqdn);
+}
+
+// static
+std::string
+ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetNetworkNamePath() {
+  return GetStringPath(kNetworkName);
+}
+
 // static
 std::string
 ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetStringPath(
-    base::StringPiece leaf_name) {
+    std::string_view leaf_name) {
   return base::JoinString({kDeviceKey, leaf_name}, ".");
 }
 
@@ -114,22 +157,40 @@ const char
         "chromeVersion";
 
 // static
-base::Value
+base::Value::Dict
 ReportingJobConfigurationBase::BrowserDictionaryBuilder::BuildBrowserDictionary(
     bool include_device_info) {
-  base::Value browser_dictionary{base::Value::Type::DICTIONARY};
+  base::Value::Dict browser_dictionary;
 
   base::FilePath browser_id;
   if (base::PathService::Get(base::DIR_EXE, &browser_id)) {
-    browser_dictionary.SetStringKey(kBrowserId, browser_id.AsUTF8Unsafe());
+    browser_dictionary.Set(kBrowserId, browser_id.AsUTF8Unsafe());
   }
 
-  if (include_device_info)
-    browser_dictionary.SetStringKey(kMachineUser, GetOSUsername());
+  if (include_device_info) {
+    browser_dictionary.Set(kMachineUser, GetOSUsername());
+  }
 
-  browser_dictionary.SetStringKey(kChromeVersion,
-                                  version_info::GetVersionNumber());
+  browser_dictionary.Set(kChromeVersion, version_info::GetVersionNumber());
   return browser_dictionary;
+}
+
+// static
+::chrome::cros::reporting::proto::Browser
+ReportingJobConfigurationBase::BrowserDictionaryBuilder::BuildBrowserProto(
+    bool include_device_info) {
+  ::chrome::cros::reporting::proto::Browser browser;
+  base::FilePath browser_id;
+  if (base::PathService::Get(base::DIR_EXE, &browser_id)) {
+    browser.set_browser_id(browser_id.AsUTF8Unsafe());
+  }
+
+  if (include_device_info) {
+    browser.set_machine_user(GetOSUsername());
+  }
+
+  browser.set_chrome_version(std::string(version_info::GetVersionNumber()));
+  return browser;
 }
 
 // static
@@ -159,7 +220,7 @@ std::string ReportingJobConfigurationBase::BrowserDictionaryBuilder::
 // static
 std::string
 ReportingJobConfigurationBase::BrowserDictionaryBuilder::GetStringPath(
-    base::StringPiece leaf_name) {
+    std::string_view leaf_name) {
   return base::JoinString({kBrowserKey, leaf_name}, ".");
 }
 
@@ -173,12 +234,17 @@ std::string ReportingJobConfigurationBase::GetPayload() {
   // Allow children to mutate the payload if need be.
   UpdatePayloadBeforeGetInternal();
 
-  std::string payload_string;
-  base::JSONWriter::Write(payload_, &payload_string);
+  std::string payload_string = base::WriteJson(payload_).value_or("");
+
+  // Record UMA request payload size
+  base::UmaHistogramCounts1M("Browser.ERP.SingleRequestPayloadSize",
+                             payload_string.size());
+
   return payload_string;
 }
 
 std::string ReportingJobConfigurationBase::GetUmaName() {
+  DCHECK(ShouldRecordUma());
   return GetUmaString() + GetJobTypeAsString(GetType());
 }
 
@@ -211,7 +277,8 @@ void ReportingJobConfigurationBase::OnURLLoadComplete(
     int net_error,
     int response_code,
     const std::string& response_body) {
-  absl::optional<base::Value> response = base::JSONReader::Read(response_body);
+  std::optional<base::Value> response = base::JSONReader::Read(
+      response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   // Parse the response even if |response_code| is not a success since the
   // response data may contain an error message.
@@ -236,18 +303,18 @@ void ReportingJobConfigurationBase::OnURLLoadComplete(
       default:
         // Handle all unknown 5xx HTTP error codes as temporary and any other
         // unknown error as one that needs more time to recover.
-        if (response_code >= 500 && response_code <= 599)
+        if (response_code >= 500 && response_code <= 599) {
           status = DM_STATUS_TEMPORARY_UNAVAILABLE;
-        else
+        } else {
           status = DM_STATUS_HTTP_STATUS_ERROR;
+        }
         break;
     }
   }
 
-  auto response_dict =
-      response && response->is_dict()
-          ? absl::make_optional(std::move(*response).TakeDict())
-          : absl::nullopt;
+  auto response_dict = response && response->is_dict()
+                           ? std::make_optional(std::move(*response).TakeDict())
+                           : std::nullopt;
   std::move(callback_).Run(job, status, response_code,
                            std::move(response_dict));
 }
@@ -272,32 +339,35 @@ GURL ReportingJobConfigurationBase::GetURL(int last_error) const {
 ReportingJobConfigurationBase::ReportingJobConfigurationBase(
     JobType type,
     scoped_refptr<network::SharedURLLoaderFactory> factory,
-    CloudPolicyClient* client,
+    DMAuth auth_data,
     const std::string& server_url,
-    bool include_device_info,
     UploadCompleteCallback callback)
     : JobConfigurationBase(type,
-                           DMAuth::FromDMToken(client->dm_token()),
-                           /*oauth_token=*/absl::nullopt,
+                           std::move(auth_data),
+                           /*oauth_token=*/std::nullopt,
+                           /*use_cookies=*/false,
                            factory),
       callback_(std::move(callback)),
-      server_url_(server_url) {
-  DCHECK(GetAuth().has_dm_token());
-  InitializePayload(client, include_device_info);
-}
+      server_url_(server_url) {}
 
 ReportingJobConfigurationBase::~ReportingJobConfigurationBase() = default;
 
+void ReportingJobConfigurationBase::InitializePayloadWithDeviceInfo(
+    const std::string& dm_token,
+    const std::string& client_id) {
+  payload_.Set(
+      DeviceDictionaryBuilder::kDeviceKey,
+      DeviceDictionaryBuilder::BuildDeviceDictionary(dm_token, client_id));
+  InitializePayload(/*include_device_info=*/true);
+}
+
+void ReportingJobConfigurationBase::InitializePayloadWithoutDeviceInfo() {
+  InitializePayload(/*include_device_info=*/false);
+}
+
 void ReportingJobConfigurationBase::InitializePayload(
-    CloudPolicyClient* client,
     bool include_device_info) {
   AddParameter("key", google_apis::GetAPIKey());
-
-  if (include_device_info) {
-    payload_.Set(DeviceDictionaryBuilder::kDeviceKey,
-                 DeviceDictionaryBuilder::BuildDeviceDictionary(
-                     client->dm_token(), client->client_id()));
-  }
   payload_.Set(
       BrowserDictionaryBuilder::kBrowserKey,
       BrowserDictionaryBuilder::BuildBrowserDictionary(include_device_info));

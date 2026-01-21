@@ -6,6 +6,7 @@
 // META: script=/html/browsers/browsing-the-web/back-forward-cache/resources/rc-helper.js
 // META: script=/html/browsers/browsing-the-web/remote-context-helper/resources/remote-context-helper.js
 // META: script=/websockets/constants.sub.js
+// META: timeout=long
 
 'use strict';
 const {ORIGIN, REMOTE_ORIGIN} = get_host_info();
@@ -20,14 +21,15 @@ promise_test(async t => {
   await useWebSocket(rc1);
 
   // Create a remote context with the redirected URL.
-  let [rc1_redirected, saveUrl] =
-      await rcHelper.createContextWithUrl(/*extraConfig=*/ {
+  let rc1_redirected =
+      await rcHelper.createContext(/*extraConfig=*/ {
         origin: 'HTTP_ORIGIN',
         scripts: [],
         headers: [],
       });
 
-  const redirectUrl = `${ORIGIN}/common/redirect.py?location=${encodeURIComponent(saveUrl)}`;
+  const redirectUrl =
+      `${ORIGIN}/common/redirect.py?location=${encodeURIComponent(rc1_redirected.url)}`;
   // Replace the history state.
   await rc1.executeScript((url) => {
     window.history.replaceState(null, '', url);
@@ -43,8 +45,7 @@ promise_test(async t => {
     return performance.getEntriesByType('navigation')[0];
   });
   assert_equals(
-    navigation_entry.redirectCount, 1,
-    'Expected redirectCount is 1.');
+      navigation_entry.redirectCount, 1, 'Expected redirectCount is 1.');
   // Becauase of the redirect, notRestoredReasons is reset.
   assert_equals(
       navigation_entry.notRestoredReasons, null,

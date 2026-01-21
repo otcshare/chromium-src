@@ -2,23 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/cache_type.h"
 #include "net/base/features.h"
 #include "net/base/net_errors.h"
+#include "net/base/schemeful_site.h"
 #include "net/base/test_completion_callback.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/disk_cache_test_util.h"
@@ -26,10 +28,12 @@
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_manager.h"
 #include "net/http/http_transaction_factory.h"
+#include "net/http/mock_http_cache.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "services/network/test/fake_test_cert_verifier_params_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,7 +55,7 @@ MakeHttpCacheDataRemoverCallback(base::OnceClosure callback) {
       std::move(callback));
 }
 
-constexpr CacheTestEntry kCacheEntries[] = {
+constexpr const auto kCacheEntries = std::to_array<CacheTestEntry>({
     {"http://www.google.com", "15 Jun 1975"},
     {"https://www.google.com", "15 Jun 1985"},
     {"http://www.wikipedia.com", "15 Jun 1995"},
@@ -59,7 +63,8 @@ constexpr CacheTestEntry kCacheEntries[] = {
     {"http://localhost:1234/mysite", "15 Jun 2015"},
     {"https://localhost:1234/mysite", "15 Jun 2016"},
     {"http://localhost:3456/yoursite", "15 Jun 2017"},
-    {"https://localhost:3456/yoursite", "15 Jun 2018"}};
+    {"https://localhost:3456/yoursite", "15 Jun 2018"},
+});
 
 mojom::NetworkContextParamsPtr CreateContextParams() {
   mojom::NetworkContextParamsPtr params = mojom::NetworkContextParams::New();
@@ -89,9 +94,12 @@ class HttpCacheDataRemoverTest : public testing::Test {
                  ->GetCache();
     ASSERT_TRUE(cache_);
     {
-      net::TestCompletionCallback callback;
-      int rv = cache_->GetBackend(&backend_, callback.callback());
-      ASSERT_EQ(net::OK, callback.GetResult(rv));
+      net::TestGetBackendCompletionCallback callback;
+      net::HttpCache::GetBackendResult result =
+          cache_->GetBackend(callback.callback());
+      result = callback.GetResult(result);
+      ASSERT_EQ(net::OK, result.first);
+      backend_ = result.second;
       ASSERT_TRUE(backend_);
     }
 
@@ -111,21 +119,20 @@ class HttpCacheDataRemoverTest : public testing::Test {
       entry->Close();
       task_environment_.RunUntilIdle();
     }
-    ASSERT_EQ(std::size(kCacheEntries),
-              static_cast<size_t>(backend_->GetEntryCount()));
+    ASSERT_EQ(std::size(kCacheEntries), static_cast<size_t>(GetEntryCount()));
   }
 
   std::string ComputeCacheKey(const std::string& url_string) {
     GURL url(url_string);
     const auto kOrigin = url::Origin::Create(url);
+    const net::SchemefulSite kSite = net::SchemefulSite(kOrigin);
     net::HttpRequestInfo request_info;
     request_info.url = url;
     request_info.method = "GET";
-    request_info.network_isolation_key =
-        net::NetworkIsolationKey(kOrigin, kOrigin);
-    request_info.network_anonymization_key = net::NetworkAnonymizationKey(
-        net::SchemefulSite(kOrigin), net::SchemefulSite(kOrigin));
-    return *cache_->GenerateCacheKeyForRequest(&request_info);
+    request_info.network_isolation_key = net::NetworkIsolationKey(kSite, kSite);
+    request_info.network_anonymization_key =
+        net::NetworkAnonymizationKey::CreateSameSite(kSite);
+    return *net::HttpCache::GenerateCacheKeyForRequest(&request_info);
   }
 
   void RemoveData(mojom::ClearDataFilterPtr filter,
@@ -156,6 +163,8 @@ class HttpCacheDataRemoverTest : public testing::Test {
 
  protected:
   void InitNetworkContext() {
+    backend_ = nullptr;
+    cache_ = nullptr;
     mojom::NetworkContextParamsPtr context_params = CreateContextParams();
     context_params->http_cache_enabled = true;
     network_context_remote_.reset();
@@ -165,6 +174,17 @@ class HttpCacheDataRemoverTest : public testing::Test {
         std::move(context_params));
   }
 
+  int32_t GetEntryCount() {
+    base::test::TestFuture<int32_t> future;
+    base::expected<int32_t, net::Error> result =
+        backend_->GetEntryCount(future.GetCallback());
+    if (result.has_value()) {
+      return result.value();
+    }
+    CHECK_EQ(result.error(), net::ERR_IO_PENDING);
+    return future.Get();
+  }
+
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<NetworkService> network_service_;
   std::unique_ptr<NetworkContext> network_context_;
@@ -172,7 +192,7 @@ class HttpCacheDataRemoverTest : public testing::Test {
   // Stores the mojo::Remote<NetworkContext> of the most recently created
   // NetworkContext.
   mojo::Remote<mojom::NetworkContext> network_context_remote_;
-  disk_cache::Backend* backend_ = nullptr;
+  raw_ptr<disk_cache::Backend> backend_ = nullptr;
 
  private:
   raw_ptr<net::HttpCache> cache_;
@@ -191,9 +211,9 @@ class HttpCacheDataRemoverSplitCacheTest : public HttpCacheDataRemoverTest {
 };
 
 TEST_F(HttpCacheDataRemoverTest, ClearAll) {
-  EXPECT_NE(0, backend_->GetEntryCount());
+  EXPECT_NE(0, GetEntryCount());
   RemoveData(/*url_filter=*/nullptr, base::Time(), base::Time());
-  EXPECT_EQ(0, backend_->GetEntryCount());
+  EXPECT_EQ(0, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomain) {
@@ -206,7 +226,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomain) {
   EXPECT_FALSE(HasEntry(kCacheEntries[1].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[2].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[3].url));
-  EXPECT_EQ(4, backend_->GetEntryCount());
+  EXPECT_EQ(4, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomain) {
@@ -219,7 +239,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomain) {
   EXPECT_TRUE(HasEntry(kCacheEntries[1].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[2].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[3].url));
-  EXPECT_EQ(4, backend_->GetEntryCount());
+  EXPECT_EQ(4, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterDeleteByOrigin) {
@@ -230,7 +250,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterDeleteByOrigin) {
   RemoveData(std::move(filter), base::Time(), base::Time());
   EXPECT_FALSE(HasEntry(kCacheEntries[0].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(6, backend_->GetEntryCount());
+  EXPECT_EQ(6, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterKeepByOrigin) {
@@ -241,7 +261,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterKeepByOrigin) {
   RemoveData(std::move(filter), base::Time(), base::Time());
   EXPECT_TRUE(HasEntry(kCacheEntries[0].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(2, backend_->GetEntryCount());
+  EXPECT_EQ(2, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomainAndOrigin) {
@@ -253,7 +273,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomainAndOrigin) {
   EXPECT_FALSE(HasEntry(kCacheEntries[2].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[3].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(5, backend_->GetEntryCount());
+  EXPECT_EQ(5, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomainAndOrigin) {
@@ -265,7 +285,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomainAndOrigin) {
   EXPECT_TRUE(HasEntry(kCacheEntries[2].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[3].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(3, backend_->GetEntryCount());
+  EXPECT_EQ(3, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterByDateFromUnbounded) {
@@ -275,7 +295,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterByDateFromUnbounded) {
   EXPECT_TRUE(HasEntry(kCacheEntries[5].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[6].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[7].url));
-  EXPECT_EQ(3, backend_->GetEntryCount());
+  EXPECT_EQ(3, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterByDateToUnbounded) {
@@ -285,7 +305,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterByDateToUnbounded) {
   EXPECT_FALSE(HasEntry(kCacheEntries[5].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[6].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[7].url));
-  EXPECT_EQ(5, backend_->GetEntryCount());
+  EXPECT_EQ(5, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterByDateRange) {
@@ -299,7 +319,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterByDateRange) {
   EXPECT_FALSE(HasEntry(kCacheEntries[3].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[4].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[5].url));
-  EXPECT_EQ(3, backend_->GetEntryCount());
+  EXPECT_EQ(3, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomainAndDate) {
@@ -317,7 +337,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterDeleteByDomainAndDate) {
   EXPECT_FALSE(HasEntry(kCacheEntries[1].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[2].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[3].url));
-  EXPECT_EQ(5, backend_->GetEntryCount());
+  EXPECT_EQ(5, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomainAndDate) {
@@ -334,7 +354,7 @@ TEST_F(HttpCacheDataRemoverTest, FilterKeepByDomainAndDate) {
   RemoveData(std::move(filter), start_time, end_time);
   EXPECT_FALSE(HasEntry(kCacheEntries[4].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[5].url));
-  EXPECT_EQ(6, backend_->GetEntryCount());
+  EXPECT_EQ(6, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverTest, DeleteHttpRemover) {
@@ -384,7 +404,7 @@ TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterDeleteByDomain) {
   EXPECT_FALSE(HasEntry(kCacheEntries[1].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[2].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[3].url));
-  EXPECT_EQ(4, backend_->GetEntryCount());
+  EXPECT_EQ(4, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterKeepByDomain) {
@@ -397,7 +417,7 @@ TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterKeepByDomain) {
   EXPECT_TRUE(HasEntry(kCacheEntries[1].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[2].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[3].url));
-  EXPECT_EQ(4, backend_->GetEntryCount());
+  EXPECT_EQ(4, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterDeleteByOrigin) {
@@ -408,7 +428,7 @@ TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterDeleteByOrigin) {
   RemoveData(std::move(filter), base::Time(), base::Time());
   EXPECT_FALSE(HasEntry(kCacheEntries[0].url));
   EXPECT_FALSE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(6, backend_->GetEntryCount());
+  EXPECT_EQ(6, GetEntryCount());
 }
 
 TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterKeepByOrigin) {
@@ -419,7 +439,7 @@ TEST_F(HttpCacheDataRemoverSplitCacheTest, FilterKeepByOrigin) {
   RemoveData(std::move(filter), base::Time(), base::Time());
   EXPECT_TRUE(HasEntry(kCacheEntries[0].url));
   EXPECT_TRUE(HasEntry(kCacheEntries[4].url));
-  EXPECT_EQ(2, backend_->GetEntryCount());
+  EXPECT_EQ(2, GetEntryCount());
 }
 
 }  // namespace

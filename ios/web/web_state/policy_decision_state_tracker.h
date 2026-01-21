@@ -5,8 +5,8 @@
 #ifndef IOS_WEB_WEB_STATE_POLICY_DECISION_STATE_TRACKER_H_
 #define IOS_WEB_WEB_STATE_POLICY_DECISION_STATE_TRACKER_H_
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #import "ios/web/public/navigation/web_state_policy_decider.h"
 
@@ -22,8 +22,7 @@ namespace web {
 // the error associated with the first such decision. If this is destroyed
 // before all decisions have been received and the callback has not yet been
 // invoked, the callback is invoked with PolicyDecision::Cancel.
-class PolicyDecisionStateTracker
-    : public base::SupportsWeakPtr<PolicyDecisionStateTracker> {
+class PolicyDecisionStateTracker final {
  public:
   // Constructor that takes a `callback` to be called once all decisions have
   // been received.
@@ -68,6 +67,8 @@ class PolicyDecisionStateTracker
   // that handles invoking `callback_` after receiving the remaining
   // outstanding decisions.
   base::RepeatingClosure decision_closure_ = base::DoNothing();
+
+  base::WeakPtrFactory<PolicyDecisionStateTracker> weak_ptr_factory_{this};
 };
 
 }  // namespace web

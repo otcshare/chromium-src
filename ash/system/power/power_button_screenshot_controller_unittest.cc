@@ -15,11 +15,11 @@
 #include "ash/system/power/power_button_screenshot_controller_test_api.h"
 #include "ash/system/power/power_button_test_base.h"
 #include "ash/wm/lock_state_controller_test_api.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "ui/aura/test/test_window_delegate.h"
+#include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/wm/core/window_util.h"
 
@@ -83,13 +83,13 @@ class PowerButtonScreenshotControllerTest : public PowerButtonTestBase {
  protected:
   // PowerButtonTestBase:
   void PressKey(ui::KeyboardCode key_code) override {
-    last_key_event_ = std::make_unique<ui::KeyEvent>(ui::ET_KEY_PRESSED,
+    last_key_event_ = std::make_unique<ui::KeyEvent>(ui::EventType::kKeyPressed,
                                                      key_code, ui::EF_NONE);
     screenshot_controller_->OnKeyEvent(last_key_event_.get());
   }
   void ReleaseKey(ui::KeyboardCode key_code) override {
-    last_key_event_ = std::make_unique<ui::KeyEvent>(ui::ET_KEY_RELEASED,
-                                                     key_code, ui::EF_NONE);
+    last_key_event_ = std::make_unique<ui::KeyEvent>(
+        ui::EventType::kKeyReleased, key_code, ui::EF_NONE);
     screenshot_controller_->OnKeyEvent(last_key_event_.get());
   }
 
@@ -104,7 +104,7 @@ class PowerButtonScreenshotControllerTest : public PowerButtonTestBase {
         "Ash.CaptureModeController.EntryPoint.ClamshellMode";
     constexpr char kTabletHistogram[] =
         "Ash.CaptureModeController.EntryPoint.TabletMode";
-    if (Shell::Get()->tablet_mode_controller()->InTabletMode()) {
+    if (display::Screen::Get()->InTabletMode()) {
       return histogram_tester_->GetBucketCount(
           kTabletHistogram, CaptureModeEntryType::kCaptureAllDisplays);
     }
@@ -148,7 +148,7 @@ class PowerButtonScreenshotControllerWithSystemKeysTest
     PowerButtonScreenshotControllerTest::SetUp();
     if (GetParam()) {
       aura::Window* window =
-          CreateTestWindowInShellWithDelegate(&delegate_, 1, gfx::Rect());
+          CreateTestWindowInShell({.delegate = &delegate_, .window_id = 1});
       window->SetProperty(ash::kCanConsumeSystemKeysKey, true);
     }
   }
@@ -269,7 +269,7 @@ TEST_F(PowerButtonScreenshotControllerTest, WindowWithSystemKeys) {
 
   KeyEventWindowDelegate delegate;
   std::unique_ptr<aura::Window> window = base::WrapUnique(
-      CreateTestWindowInShellWithDelegate(&delegate, 1, gfx::Rect()));
+      CreateTestWindowInShell({.delegate = &delegate, .window_id = 1}));
   window->SetProperty(ash::kCanConsumeSystemKeysKey, true);
   ::wm::ActivateWindow(window.get());
 

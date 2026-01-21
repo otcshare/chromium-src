@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_HATS_HATS_HELPER_H_
 #define CHROME_BROWSER_UI_HATS_HATS_HELPER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -13,6 +14,7 @@ class WebContents;
 }
 
 class Profile;
+class PerformanceControlsHatsService;
 
 // This is a browser side per tab helper that allows an entry trigger to
 // launch Happiness Tracking Surveys (HaTS)
@@ -28,6 +30,8 @@ class HatsHelper : public content::WebContentsObserver,
   friend class content::WebContentsUserData<HatsHelper>;
 
   explicit HatsHelper(content::WebContents* web_contents);
+
+  raw_ptr<PerformanceControlsHatsService> performance_controls_hats_service_;
 
   // contents::WebContentsObserver:
   void PrimaryPageChanged(content::Page& page) override;

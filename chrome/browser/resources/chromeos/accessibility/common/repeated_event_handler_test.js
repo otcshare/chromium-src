@@ -3,21 +3,53 @@
 // found in the LICENSE file.
 
 // Include test fixture.
-GEN_INCLUDE([
-  '../select_to_speak/select_to_speak_e2e_test_base.js',
-]);
+GEN_INCLUDE(['testing/e2e_test_base.js']);
 
-/** Test fixture for array_util.js. */
-RepeatedEventHandlerTest = class extends SelectToSpeakE2ETest {
+/**
+ * Test fixture for repeated_event_handler.js.
+ * Note it uses SwitchAccess extension because `repeated_event_handler.js` is
+ * only loaded there.
+ */
+AccessibilityExtensionRepeatedEventHandlerTest = class extends E2ETestBase {
+  /** @override */
+  testGenCppIncludes() {
+    super.testGenCppIncludes();
+    GEN(`
+#include "ash/accessibility/accessibility_controller.h"
+#include "chrome/browser/ash/accessibility/accessibility_manager.h"
+    `);
+  }
+
+  /** @override */
+  testGenPreamble() {
+    super.testGenPreamble();
+    GEN(`
+    auto* controller = ash::AccessibilityController::Get();
+    controller->DisableSwitchAccessDisableConfirmationDialogTesting();
+    // Don't show the dialog saying Switch Access was enabled.
+    controller->DisableSwitchAccessEnableNotificationTesting();
+    base::OnceClosure load_cb =
+        base::BindOnce(&ash::AccessibilityManager::SetSwitchAccessEnabled,
+            base::Unretained(ash::AccessibilityManager::Get()),
+            true);
+    `);
+    super.testGenPreambleCommon('kSwitchAccessExtensionId');
+  }
+
   /** @override */
   async setUpDeferred() {
-    await importModule(
-        'RepeatedEventHandler', '/common/repeated_event_handler.js');
+    await super.setUpDeferred();
+
+    const imports = TestImportManager.getImports();
+    globalThis.EventGenerator = imports.EventGenerator;
+    globalThis.KeyCode = imports.KeyCode;
+    globalThis.RepeatedEventHandler = imports.RepeatedEventHandler;
   }
 };
 
 AX_TEST_F(
-    'RepeatedEventHandlerTest', 'RepeatedEventHandledOnce', async function() {
+    'AccessibilityExtensionRepeatedEventHandlerTest',
+    'RepeatedEventHandledOnce', async function() {
       const root = await this.runWithLoadedTree('');
       this.handlerCallCount = 0;
       const handler = () => this.handlerCallCount++;
@@ -37,8 +69,8 @@ AX_TEST_F(
     });
 
 AX_TEST_F(
-    'RepeatedEventHandlerTest', 'NoEventsHandledAfterStopListening',
-    async function() {
+    'AccessibilityExtensionRepeatedEventHandlerTest',
+    'NoEventsHandledAfterStopListening', async function() {
       const root = await this.runWithLoadedTree('');
       this.handlerCallCount = 0;
       const handler = () => this.handlerCallCount++;

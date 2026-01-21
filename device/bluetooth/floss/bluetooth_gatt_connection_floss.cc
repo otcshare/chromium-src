@@ -4,7 +4,7 @@
 
 #include "device/bluetooth/floss/bluetooth_gatt_connection_floss.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_device.h"
@@ -25,7 +25,11 @@ BluetoothGattConnectionFloss::BluetoothGattConnectionFloss(
 }
 
 BluetoothGattConnectionFloss::~BluetoothGattConnectionFloss() {
-  floss::FlossDBusManager::Get()->GetAdapterClient()->RemoveObserver(this);
+  // It's possible for the DbusManager to have been torn down before
+  // the Gatt Connection is destructed, causing a CHECK failure.
+  if (floss::FlossDBusManager::IsInitialized()) {
+    floss::FlossDBusManager::Get()->GetAdapterClient()->RemoveObserver(this);
+  }
   Disconnect();
 }
 

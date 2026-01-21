@@ -49,6 +49,12 @@ class PrefProvider : public UserModifiableProvider {
   std::unique_ptr<RuleIterator> GetRuleIterator(
       ContentSettingsType content_type,
       bool off_the_record) const override;
+
+  std::unique_ptr<Rule> GetRule(const GURL& primary_url,
+                                const GURL& secondary_url,
+                                ContentSettingsType content_type,
+                                bool off_the_record) const override;
+
   bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
                          const ContentSettingsPattern& secondary_pattern,
                          ContentSettingsType content_type,
@@ -56,15 +62,22 @@ class PrefProvider : public UserModifiableProvider {
                          const ContentSettingConstraints& constraints) override;
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
   void ShutdownOnUIThread() override;
+  bool UpdateLastUsedTime(const GURL& primary_url,
+                          const GURL& secondary_url,
+                          ContentSettingsType content_type,
+                          const base::Time time) override;
   bool ResetLastVisitTime(const ContentSettingsPattern& primary_pattern,
                           const ContentSettingsPattern& secondary_pattern,
                           ContentSettingsType content_type) override;
   bool UpdateLastVisitTime(const ContentSettingsPattern& primary_pattern,
                            const ContentSettingsPattern& secondary_pattern,
                            ContentSettingsType content_type) override;
-  void SetClockForTesting(base::Clock* clock) override;
-
-  void ClearPrefs();
+  std::optional<base::TimeDelta> RenewContentSetting(
+      const GURL& primary_url,
+      const GURL& secondary_url,
+      ContentSettingsType content_type,
+      std::optional<ContentSetting> setting_to_match) override;
+  void SetClockForTesting(const base::Clock* clock) override;
 
   ContentSettingsPref* GetPref(ContentSettingsType type) const;
 
@@ -80,8 +93,24 @@ class PrefProvider : public UserModifiableProvider {
                         ContentSettingsType content_type,
                         const base::Time time);
 
+  // Finds the first setting whose Rule satisfies `is_match`, and performs some
+  // update. `perform_update` may modify the Rule in-place, and should return
+  // true if any modifications were made.  Returns whether or not any setting
+  // was updated.
+  bool UpdateSetting(ContentSettingsType content_type,
+                     base::FunctionRef<bool(const Rule&)> is_match,
+                     base::FunctionRef<bool(Rule&)> perform_update);
+
   // Clean up the obsolete preferences from the user's profile.
   void DiscardOrMigrateObsoletePreferences();
+
+  // Migrate between GEOLOCATION and GEOLOCATION_WITH_OPTIONS.
+  void MigrateGeolocationExceptions();
+
+#if !BUILDFLAG(IS_IOS)
+  // Migrate between LOCAL_NETWORK_ACCESS and LOCAL_NETWORK/LOOPBACK_NETWORK
+  void MigrateLocalNetworkAccessExceptions();
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Returns true if this provider supports the given |content_type|.
   bool supports_type(ContentSettingsType content_type) const {
@@ -103,7 +132,7 @@ class PrefProvider : public UserModifiableProvider {
 
   base::ThreadChecker thread_checker_;
 
-  raw_ptr<base::Clock> clock_;
+  raw_ptr<const base::Clock> clock_;
 };
 
 }  // namespace content_settings

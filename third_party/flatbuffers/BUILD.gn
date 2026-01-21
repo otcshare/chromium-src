@@ -6,11 +6,23 @@ import("//testing/test.gni")
 import("//third_party/flatbuffers/flatbuffer.gni")
 
 config("flatbuffers_config") {
-  include_dirs = [ "src/include" ]
+  include_dirs = [
+    "src/include",
+    "src/src",
+    "src",
+    "generated",
+  ]
 
   # Required to prevent static initialization of locale
   # in util.cpp
   defines = [ "FLATBUFFERS_LOCALE_INDEPENDENT=0" ]
+
+  if (is_clang) {
+    cflags = [
+      "-Wno-constant-conversion",
+      "-Wno-shorten-64-to-32",
+    ]
+  }
 }
 
 # The part of FlatBuffers that Chrome is interested in.
@@ -53,8 +65,10 @@ source_set("compiler_files") {
     "src/grpc/src/compiler/swift_generator.h",
     "src/grpc/src/compiler/ts_generator.cc",
     "src/grpc/src/compiler/ts_generator.h",
-    "src/include/flatbuffers/bfbs_generator.h",
+    "src/include/codegen/python.cc",
+    "src/include/codegen/python.h",
     "src/include/flatbuffers/code_generators.h",
+    "src/include/flatbuffers/file_manager.h",
     "src/include/flatbuffers/flatc.h",
     "src/include/flatbuffers/grpc.h",
     "src/include/flatbuffers/hash.h",
@@ -68,28 +82,51 @@ source_set("compiler_files") {
     "src/src/bfbs_gen.h",
     "src/src/bfbs_gen_lua.cpp",
     "src/src/bfbs_gen_lua.h",
+    "src/src/bfbs_gen_nim.cpp",
+    "src/src/bfbs_gen_nim.h",
+    "src/src/bfbs_namer.h",
     "src/src/binary_annotator.cpp",
     "src/src/binary_annotator.h",
     "src/src/code_generators.cpp",
+    "src/src/file_manager.cpp",
+    "src/src/file_name_manager.cpp",
     "src/src/flatc.cpp",
+    "src/src/idl_gen_binary.cpp",
+    "src/src/idl_gen_binary.h",
     "src/src/idl_gen_cpp.cpp",
+    "src/src/idl_gen_cpp.h",
     "src/src/idl_gen_csharp.cpp",
+    "src/src/idl_gen_csharp.h",
     "src/src/idl_gen_dart.cpp",
+    "src/src/idl_gen_dart.h",
     "src/src/idl_gen_fbs.cpp",
     "src/src/idl_gen_go.cpp",
+    "src/src/idl_gen_go.h",
     "src/src/idl_gen_grpc.cpp",
     "src/src/idl_gen_java.cpp",
+    "src/src/idl_gen_java.h",
     "src/src/idl_gen_json_schema.cpp",
+    "src/src/idl_gen_json_schema.h",
     "src/src/idl_gen_kotlin.cpp",
+    "src/src/idl_gen_kotlin.h",
+    "src/src/idl_gen_kotlin_kmp.cpp",
     "src/src/idl_gen_lobster.cpp",
-    "src/src/idl_gen_lua.cpp",
+    "src/src/idl_gen_lobster.h",
     "src/src/idl_gen_php.cpp",
+    "src/src/idl_gen_php.h",
     "src/src/idl_gen_python.cpp",
+    "src/src/idl_gen_python.h",
     "src/src/idl_gen_rust.cpp",
+    "src/src/idl_gen_rust.h",
     "src/src/idl_gen_swift.cpp",
+    "src/src/idl_gen_swift.h",
     "src/src/idl_gen_text.cpp",
+    "src/src/idl_gen_text.h",
     "src/src/idl_gen_ts.cpp",
+    "src/src/idl_gen_ts.h",
+    "src/src/idl_namer.h",
     "src/src/idl_parser.cpp",
+    "src/src/namer.h",
     "src/src/reflection.cpp",
     "src/src/util.cpp",
   ]
@@ -135,6 +172,7 @@ source_set("flatbuffers_test_files") {
   sources = [
     "src/include/flatbuffers/base.h",
     "src/include/flatbuffers/code_generators.h",
+    "src/include/flatbuffers/file_manager.h",
     "src/include/flatbuffers/flatbuffers.h",
     "src/include/flatbuffers/flexbuffers.h",
     "src/include/flatbuffers/grpc.h",
@@ -147,8 +185,11 @@ source_set("flatbuffers_test_files") {
     "src/include/flatbuffers/stl_emulation.h",
     "src/include/flatbuffers/util.h",
     "src/src/code_generators.cpp",
+    "src/src/file_manager.cpp",
+    "src/src/file_name_manager.cpp",
     "src/src/idl_gen_fbs.cpp",
     "src/src/idl_gen_text.cpp",
+    "src/src/idl_gen_text.h",
     "src/src/idl_parser.cpp",
     "src/src/reflection.cpp",
     "src/src/util.cpp",
@@ -161,22 +202,42 @@ source_set("flatbuffers_test_files") {
 
 test("flatbuffers_unittests") {
   sources = [
+    "src/tests/64bit/offset64_test.cpp",
+    "src/tests/64bit/offset64_test.h",
     "src/tests/alignment_test.cpp",
     "src/tests/alignment_test.h",
     "src/tests/evolution_test.cpp",
+    "src/tests/evolution_test.h",
     "src/tests/flexbuffers_test.cpp",
+    "src/tests/flexbuffers_test.h",
     "src/tests/fuzz_test.cpp",
+    "src/tests/fuzz_test.h",
+    "src/tests/is_quiet_nan.h",
     "src/tests/json_test.cpp",
+    "src/tests/json_test.h",
+    "src/tests/key_field_test.cpp",
+    "src/tests/key_field_test.h",
     "src/tests/monster_test.cpp",
+    "src/tests/monster_test.h",
     "src/tests/native_type_test_impl.cpp",
+    "src/tests/native_type_test_impl.h",
     "src/tests/optional_scalars_test.cpp",
+    "src/tests/optional_scalars_test.h",
     "src/tests/parser_test.cpp",
+    "src/tests/parser_test.h",
     "src/tests/proto_test.cpp",
+    "src/tests/proto_test.h",
     "src/tests/reflection_test.cpp",
+    "src/tests/reflection_test.h",
     "src/tests/test.cpp",
     "src/tests/test_assert.cpp",
+    "src/tests/test_assert.h",
     "src/tests/test_builder.cpp",
+    "src/tests/test_builder.h",
     "src/tests/util_test.cpp",
+    "src/tests/util_test.h",
+    "src/tests/vector_table_naked_ptr_test.cpp",
+    "src/tests/vector_table_naked_ptr_test.h",
   ]
   deps = [
     ":flatbuffers",
@@ -199,6 +260,9 @@ test("flatbuffers_unittests") {
     "FLATBUFFERS_TEST_PATH_PREFIX=" +
         rebase_path("//third_party/flatbuffers/src/", root_build_dir),
   ]
+  if (is_win) {
+    defines += [ "DEBUG_NEW=new" ]
+  }
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
 }

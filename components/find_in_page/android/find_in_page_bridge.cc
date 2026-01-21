@@ -5,13 +5,14 @@
 #include "components/find_in_page/android/find_in_page_bridge.h"
 
 #include "base/android/jni_string.h"
-#include "components/find_in_page/android/jni_headers/FindInPageBridge_jni.h"
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
 #include "content/public/browser/web_contents.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/find_in_page/android/jni_headers/FindInPageBridge_jni.h"
+
 using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -24,15 +25,14 @@ FindInPageBridge::FindInPageBridge(JNIEnv* env,
   web_contents_ = content::WebContents::FromJavaWebContents(j_web_contents);
 }
 
-void FindInPageBridge::Destroy(JNIEnv*, const JavaParamRef<jobject>&) {
+void FindInPageBridge::Destroy(JNIEnv*) {
   delete this;
 }
 
 void FindInPageBridge::StartFinding(JNIEnv* env,
-                                    const JavaParamRef<jobject>& obj,
-                                    const JavaParamRef<jstring>& search_string,
-                                    jboolean forward_direction,
-                                    jboolean case_sensitive) {
+                                    const JavaRef<jstring>& search_string,
+                                    bool forward_direction,
+                                    bool case_sensitive) {
   find_in_page::FindTabHelper::FromWebContents(web_contents_)
       ->StartFinding(
           base::android::ConvertJavaStringToUTF16(env, search_string),
@@ -40,52 +40,46 @@ void FindInPageBridge::StartFinding(JNIEnv* env,
           true /* find_match */);
 }
 
-void FindInPageBridge::StopFinding(JNIEnv* env,
-                                   const JavaParamRef<jobject>& obj,
-                                   jboolean clearSelection) {
+void FindInPageBridge::StopFinding(JNIEnv* env, bool clearSelection) {
   find_in_page::FindTabHelper::FromWebContents(web_contents_)
       ->StopFinding(clearSelection ? find_in_page::SelectionAction::kClear
                                    : find_in_page::SelectionAction::kKeep);
 }
 
-ScopedJavaLocalRef<jstring> FindInPageBridge::GetPreviousFindText(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
+ScopedJavaLocalRef<jstring> FindInPageBridge::GetPreviousFindText(JNIEnv* env) {
   return ConvertUTF16ToJavaString(
       env, find_in_page::FindTabHelper::FromWebContents(web_contents_)
                ->previous_find_text());
 }
 
 void FindInPageBridge::RequestFindMatchRects(JNIEnv* env,
-                                             const JavaParamRef<jobject>& obj,
-                                             jint current_version) {
+                                             int32_t current_version) {
   find_in_page::FindTabHelper::FromWebContents(web_contents_)
       ->RequestFindMatchRects(current_version);
 }
 
 void FindInPageBridge::ActivateNearestFindResult(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
     jfloat x,
     jfloat y) {
   find_in_page::FindTabHelper::FromWebContents(web_contents_)
       ->ActivateNearestFindResult(x, y);
 }
 
-void FindInPageBridge::ActivateFindInPageResultForAccessibility(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
+void FindInPageBridge::ActivateFindInPageResultForAccessibility(JNIEnv* env) {
   find_in_page::FindTabHelper::FromWebContents(web_contents_)
       ->ActivateFindInPageResultForAccessibility();
 }
 
 // static
-static jlong JNI_FindInPageBridge_Init(
+static int64_t JNI_FindInPageBridge_Init(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& j_web_contents) {
-  FindInPageBridge* bridge = new FindInPageBridge(env, obj, j_web_contents);
+    const JavaRef<jobject>& self,
+    const JavaRef<jobject>& j_web_contents) {
+  FindInPageBridge* bridge = new FindInPageBridge(env, self, j_web_contents);
   return reinterpret_cast<intptr_t>(bridge);
 }
 
 }  // namespace find_in_page
+
+DEFINE_JNI(FindInPageBridge)

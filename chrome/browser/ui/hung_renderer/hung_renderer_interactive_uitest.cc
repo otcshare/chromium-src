@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tab_dialogs.h"
@@ -20,13 +20,13 @@
 
 class HungRendererNavigationTest : public InProcessBrowserTest {
  public:
-  HungRendererNavigationTest() {}
+  HungRendererNavigationTest() = default;
 
   HungRendererNavigationTest(const HungRendererNavigationTest&) = delete;
   HungRendererNavigationTest& operator=(const HungRendererNavigationTest&) =
       delete;
 
-  ~HungRendererNavigationTest() override {}
+  ~HungRendererNavigationTest() override = default;
 
  protected:
   void SetUpOnMainThread() override {

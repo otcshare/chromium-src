@@ -4,17 +4,16 @@
 
 #include "ios/web/web_thread_impl.h"
 
+#include <array>
 #include <string>
 #include <utility>
 
-#include "base/atomicops.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/lazy_instance.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/task/task_executor.h"
 #include "base/time/time.h"
 #include "ios/web/public/thread/web_task_traits.h"
 #include "ios/web/public/thread/web_thread_delegate.h"
@@ -34,8 +33,12 @@ enum WebThreadState {
 };
 
 struct WebThreadGlobals {
-  WebThreadGlobals() {
+  static WebThreadGlobals& Get() {
+    static base::NoDestructor<WebThreadGlobals> instance;
+    return *instance;
   }
+
+  static bool IsCreated() { return is_created; }
 
   // This lock protects `threads` and `states`. Do not read or modify those
   // arrays without holding this lock. Do not block while holding this lock.
@@ -43,15 +46,24 @@ struct WebThreadGlobals {
 
   // This array is protected by `lock`. This array is filled as WebThreadImpls
   // are constructed and depopulated when they are destructed.
-  scoped_refptr<base::SingleThreadTaskRunner>
-      task_runners[WebThread::ID_COUNT] GUARDED_BY(lock);
+  std::array<scoped_refptr<base::SingleThreadTaskRunner>, WebThread::ID_COUNT>
+      task_runners GUARDED_BY(lock);
 
   // This array is protected by `lock`. Holds the state of each WebThread::ID.
-  WebThreadState states[WebThread::ID_COUNT] GUARDED_BY(lock) = {};
+  std::array<WebThreadState, WebThread::ID_COUNT> states GUARDED_BY(lock) = {
+      UNINITIALIZED,
+      UNINITIALIZED,
+  };
+
+ private:
+  friend class base::NoDestructor<WebThreadGlobals>;
+
+  static bool is_created;
+
+  WebThreadGlobals() { is_created = true; }
 };
 
-base::LazyInstance<WebThreadGlobals>::Leaky g_globals =
-    LAZY_INSTANCE_INITIALIZER;
+bool WebThreadGlobals::is_created = false;
 
 bool PostTaskHelper(WebThread::ID identifier,
                     const base::Location& from_here,
@@ -71,9 +83,10 @@ bool PostTaskHelper(WebThread::ID identifier,
       WebThread::GetCurrentThreadIdentifier(&current_thread) &&
       current_thread >= identifier;
 
-  WebThreadGlobals& globals = g_globals.Get();
-  if (!target_thread_outlives_current)
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
+  if (!target_thread_outlives_current) {
     globals.lock.Acquire();
+  }
 
   const bool accepting_tasks =
       globals.states[identifier] == WebThreadState::RUNNING;
@@ -89,8 +102,9 @@ bool PostTaskHelper(WebThread::ID identifier,
     }
   }
 
-  if (!target_thread_outlives_current)
+  if (!target_thread_outlives_current) {
     globals.lock.Release();
+  }
 
   return accepting_tasks;
 }
@@ -130,40 +144,15 @@ class WebThreadTaskRunner : public base::SingleThreadTaskRunner {
   WebThread::ID id_;
 };
 
-class WebThreadTaskExecutor : public base::TaskExecutor {
+class WebThreadTaskExecutor {
  public:
   WebThreadTaskExecutor() {}
-  ~WebThreadTaskExecutor() override {}
-
-  // base::TaskExecutor implementation.
-  bool PostDelayedTask(const base::Location& from_here,
-                       const base::TaskTraits& traits,
-                       base::OnceClosure task,
-                       base::TimeDelta delay) override {
-    return PostTaskHelper(
-        GetWebThreadIdentifier(traits), from_here, std::move(task), delay,
-        traits.GetExtension<WebTaskTraitsExtension>().nestable());
-  }
-  scoped_refptr<base::TaskRunner> CreateTaskRunner(
-      const base::TaskTraits& traits) override {
-    return GetTaskRunner(GetWebThreadIdentifier(traits), traits);
-  }
-  scoped_refptr<base::SequencedTaskRunner> CreateSequencedTaskRunner(
-      const base::TaskTraits& traits) override {
-    return GetTaskRunner(GetWebThreadIdentifier(traits), traits);
-  }
-  scoped_refptr<base::SingleThreadTaskRunner> CreateSingleThreadTaskRunner(
-      const base::TaskTraits& traits,
-      base::SingleThreadTaskRunnerThreadMode thread_mode) override {
-    // It's not possible to request DEDICATED access to a WebThread.
-    DCHECK_EQ(thread_mode, base::SingleThreadTaskRunnerThreadMode::SHARED);
-    return GetTaskRunner(GetWebThreadIdentifier(traits), traits);
-  }
+  ~WebThreadTaskExecutor() {}
 
   scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(
       WebThread::ID identifier,
       const base::TaskTraits& traits) const {
-    // //TODO(crbug.com/1304248): Unlike content, iOS never honored
+    // //TODO(crbug.com/40217644): Unlike content, iOS never honored
     // `traits.priority()`... but this is where it could.
     // Ref. content::BaseBrowserTaskExecutor::GetTaskRunner()
     switch (identifier) {
@@ -173,7 +162,6 @@ class WebThreadTaskExecutor : public base::TaskExecutor {
         return io_thread_task_runner_;
       case WebThread::ID_COUNT:
         NOTREACHED();
-        return nullptr;
     }
   }
 
@@ -182,7 +170,7 @@ class WebThreadTaskExecutor : public base::TaskExecutor {
   static const WebThreadTaskExecutor* GetInstance() {
     DCHECK(g_instance)
         << "No web task executor created.\nHint: if this is in a unit test, "
-           "you're likely missing a WebTaskEnvironment member in  your "
+           "you're likely missing a WebTaskEnvironment member in your "
            "fixture.";
     return g_instance;
   }
@@ -193,41 +181,15 @@ class WebThreadTaskExecutor : public base::TaskExecutor {
   static void CreateInstance() {
     DCHECK(!g_instance);
     g_instance = new WebThreadTaskExecutor();
-    base::RegisterTaskExecutor(WebTaskTraitsExtension::kExtensionId,
-                               g_instance);
   }
 
   static void ResetInstanceForTesting() {
     DCHECK(g_instance);
-    base::UnregisterTaskExecutorForTesting(
-        WebTaskTraitsExtension::kExtensionId);
     delete g_instance;
     g_instance = nullptr;
   }
 
  private:
-  WebThread::ID GetWebThreadIdentifier(const base::TaskTraits& traits) {
-    DCHECK_EQ(traits.extension_id(), WebTaskTraitsExtension::kExtensionId);
-    const WebThread::ID id =
-        traits.GetExtension<WebTaskTraitsExtension>().web_thread();
-    DCHECK_LT(id, WebThread::ID_COUNT);
-
-    // TODO(crbug.com/872372): Support shutdown behavior on UI/IO threads.
-    if (traits.shutdown_behavior_set_explicitly()) {
-      if (id == WebThread::UI) {
-        DCHECK_EQ(base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN,
-                  traits.shutdown_behavior())
-            << "Only SKIP_ON_SHUTDOWN is supported on UI thread.";
-      } else if (id == WebThread::IO) {
-        DCHECK_EQ(base::TaskShutdownBehavior::BLOCK_SHUTDOWN,
-                  traits.shutdown_behavior())
-            << "Only BLOCK_SHUTDOWN is supported on IO thread.";
-      }
-    }
-
-    return id;
-  }
-
   static WebThreadTaskExecutor* g_instance;
 
   scoped_refptr<WebThreadTaskRunner> ui_thread_task_runner_ =
@@ -241,14 +203,14 @@ WebThreadTaskExecutor* WebThreadTaskExecutor::g_instance = nullptr;
 
 }  // namespace
 
-scoped_refptr<base::SingleThreadTaskRunner> GetUIThreadTaskRunner(
-    const WebTaskTraits& traits) {
+scoped_refptr<base::SingleThreadTaskRunner>
+WebThreadImpl::GetUIThreadTaskRunner(const WebTaskTraits& traits) {
   return WebThreadTaskExecutor::GetInstance()->GetTaskRunner(WebThread::UI,
                                                              traits);
 }
 
-scoped_refptr<base::SingleThreadTaskRunner> GetIOThreadTaskRunner(
-    const WebTaskTraits& traits) {
+scoped_refptr<base::SingleThreadTaskRunner>
+WebThreadImpl::GetIOThreadTaskRunner(const WebTaskTraits& traits) {
   return WebThreadTaskExecutor::GetInstance()->GetTaskRunner(WebThread::IO,
                                                              traits);
 }
@@ -259,7 +221,7 @@ WebThreadImpl::WebThreadImpl(
     : identifier_(identifier) {
   DCHECK(task_runner);
 
-  WebThreadGlobals& globals = g_globals.Get();
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
 
   base::AutoLock lock(globals.lock);
   DCHECK_GE(identifier_, 0);
@@ -273,7 +235,7 @@ WebThreadImpl::WebThreadImpl(
 }
 
 WebThreadImpl::~WebThreadImpl() {
-  WebThreadGlobals& globals = g_globals.Get();
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
   base::AutoLock lock(globals.lock);
 
   DCHECK_EQ(globals.states[identifier_], WebThreadState::RUNNING);
@@ -282,34 +244,36 @@ WebThreadImpl::~WebThreadImpl() {
 
 // static
 void WebThreadImpl::ResetGlobalsForTesting(WebThread::ID identifier) {
-  WebThreadGlobals& globals = g_globals.Get();
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
 
   base::AutoLock lock(globals.lock);
   DCHECK_EQ(globals.states[identifier], WebThreadState::SHUTDOWN);
   globals.states[identifier] = WebThreadState::UNINITIALIZED;
   globals.task_runners[identifier] = nullptr;
 }
-
 // Friendly names for the well-known threads.
 
 // static
 const char* WebThreadImpl::GetThreadName(WebThread::ID thread) {
-  static const char* const kWebThreadNames[WebThread::ID_COUNT] = {
-      "Web_UIThread",  // UI
-      "Web_IOThread",  // IO
-  };
+  static constexpr std::array<const char*, WebThread::ID_COUNT>
+      kWebThreadNames = {
+          "Web_UIThread",  // UI
+          "Web_IOThread",  // IO
+      };
 
-  if (WebThread::UI <= thread && thread < WebThread::ID_COUNT)
+  if (WebThread::UI <= thread && thread < WebThread::ID_COUNT) {
     return kWebThreadNames[thread];
+  }
   return "Unknown Thread";
 }
 
 // static
-bool WebThread::IsThreadInitialized(ID identifier) {
-  if (!g_globals.IsCreated())
+bool WebThreadImpl::IsThreadInitialized(ID identifier) {
+  if (!WebThreadGlobals::IsCreated()) {
     return false;
+  }
 
-  WebThreadGlobals& globals = g_globals.Get();
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
   base::AutoLock lock(globals.lock);
   DCHECK_GE(identifier, 0);
   DCHECK_LT(identifier, ID_COUNT);
@@ -317,8 +281,8 @@ bool WebThread::IsThreadInitialized(ID identifier) {
 }
 
 // static
-bool WebThread::CurrentlyOn(ID identifier) {
-  WebThreadGlobals& globals = g_globals.Get();
+bool WebThreadImpl::CurrentlyOn(ID identifier) {
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
   base::AutoLock lock(globals.lock);
   DCHECK_GE(identifier, 0);
   DCHECK_LT(identifier, ID_COUNT);
@@ -327,10 +291,11 @@ bool WebThread::CurrentlyOn(ID identifier) {
 }
 
 // static
-std::string WebThread::GetDCheckCurrentlyOnErrorMessage(ID expected) {
+std::string WebThreadImpl::GetCurrentlyOnErrorMessage(ID expected) {
   std::string actual_name = base::PlatformThread::GetName();
-  if (actual_name.empty())
+  if (actual_name.empty()) {
     actual_name = "Unknown Thread";
+  }
 
   std::string result = "Must be called on ";
   result += WebThreadImpl::GetThreadName(expected);
@@ -341,11 +306,12 @@ std::string WebThread::GetDCheckCurrentlyOnErrorMessage(ID expected) {
 }
 
 // static
-bool WebThread::GetCurrentThreadIdentifier(ID* identifier) {
-  if (!g_globals.IsCreated())
+bool WebThreadImpl::GetCurrentThreadIdentifier(ID* identifier) {
+  if (!WebThreadGlobals::IsCreated()) {
     return false;
+  }
 
-  WebThreadGlobals& globals = g_globals.Get();
+  WebThreadGlobals& globals = WebThreadGlobals::Get();
   base::AutoLock lock(globals.lock);
   for (int i = 0; i < ID_COUNT; ++i) {
     if (globals.task_runners[i] &&
@@ -356,22 +322,6 @@ bool WebThread::GetCurrentThreadIdentifier(ID* identifier) {
   }
 
   return false;
-}
-
-// static
-scoped_refptr<base::SingleThreadTaskRunner> WebThread::GetTaskRunnerForThread(
-    ID identifier) {
-  DCHECK_GE(identifier, 0);
-  DCHECK_LT(identifier, ID_COUNT);
-  switch (identifier) {
-    case UI:
-      return GetUIThreadTaskRunner({});
-    case IO:
-      return GetIOThreadTaskRunner({});
-    case ID_COUNT:
-      NOTREACHED();
-      return nullptr;
-  }
 }
 
 // static

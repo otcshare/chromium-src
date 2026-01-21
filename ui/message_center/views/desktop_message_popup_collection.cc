@@ -15,7 +15,7 @@ DesktopMessagePopupCollection::DesktopMessagePopupCollection() = default;
 DesktopMessagePopupCollection::~DesktopMessagePopupCollection() = default;
 
 void DesktopMessagePopupCollection::StartObserving() {
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   if (screen_ || !screen)
     return;
 
@@ -26,11 +26,11 @@ void DesktopMessagePopupCollection::StartObserving() {
   RecomputeAlignment(display);
 }
 
-int DesktopMessagePopupCollection::GetToastOriginX(
-    const gfx::Rect& toast_bounds) const {
+int DesktopMessagePopupCollection::GetPopupOriginX(
+    const gfx::Rect& popup_bounds) const {
   if (IsFromLeft())
     return work_area_.x() + kMarginBetweenPopups;
-  return work_area_.right() - kMarginBetweenPopups - toast_bounds.width();
+  return work_area_.right() - kMarginBetweenPopups - popup_bounds.width();
 }
 
 int DesktopMessagePopupCollection::GetBaseline() const {
@@ -94,6 +94,13 @@ bool DesktopMessagePopupCollection::BlockForMixedFullscreen(
   return false;
 }
 
+bool DesktopMessagePopupCollection::CanUseTransformForBoundsAnimation() const {
+  // Desktop message popups are desktop widgets. Transform could not be used
+  // for bounds change because each widget hosts a window tree and transform
+  // could not show contents outside the window tree.
+  return false;
+}
+
 // Anytime the display configuration changes, we need to recompute the alignment
 // on the primary display. But, we get different events on different platforms.
 // On Windows, for example, when switching from a laptop display to an external
@@ -115,9 +122,9 @@ void DesktopMessagePopupCollection::OnDisplayAdded(
   UpdatePrimaryDisplay();
 }
 
-void DesktopMessagePopupCollection::OnDisplayRemoved(
-    const display::Display& removed_display) {
-  // The removed display may have been the primary display.
+void DesktopMessagePopupCollection::OnDisplaysRemoved(
+    const display::Displays& removed_displays) {
+  // One of the removed displays may have been the primary display.
   UpdatePrimaryDisplay();
 }
 

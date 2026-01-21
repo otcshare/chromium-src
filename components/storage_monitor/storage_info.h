@@ -9,11 +9,13 @@
 
 #include <string>
 
+#include "base/component_export.h"
 #include "base/files/file_path.h"
+#include "build/build_config.h"
 
 namespace storage_monitor {
 
-class StorageInfo {
+class COMPONENT_EXPORT(STORAGE_MONITOR) StorageInfo {
  public:
   enum Type {
     // A removable mass storage device with a DCIM directory.
@@ -22,10 +24,10 @@ class StorageInfo {
     REMOVABLE_MASS_STORAGE_NO_DCIM,
     // A fixed mass storage device.
     FIXED_MASS_STORAGE,
+#if BUILDFLAG(IS_CHROMEOS)
     // A MTP or PTP device.
     MTP_OR_PTP,
-    // A Mac ImageCapture device.
-    MAC_IMAGE_CAPTURE,
+#endif
   };
 
   StorageInfo();

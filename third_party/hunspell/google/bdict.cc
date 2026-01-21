@@ -5,19 +5,27 @@
 #include <string.h>
 
 #include "base/numerics/safe_math.h"
+#include "crypto/obsolete/md5.h"
 #include "third_party/hunspell/google/bdict.h"
 
+namespace hunspell {
+std::array<uint8_t, crypto::obsolete::kMd5Size> Md5ForBdict(
+    base::span<const uint8_t> data) {
+  return crypto::obsolete::Md5::Hash(data);
+}
+}  // namespace hunspell
+
 // static
-bool hunspell::BDict::Verify(const char* bdict_data, size_t bdict_length) {
-  if (bdict_length <= sizeof(hunspell::BDict::Header))
+bool hunspell::BDict::Verify(base::span<const uint8_t> bdict) {
+  if (bdict.size() <= sizeof(hunspell::BDict::Header)) {
     return false;
+  }
 
   const BDict::Header* header =
-      reinterpret_cast<const hunspell::BDict::Header*>(bdict_data);
+      reinterpret_cast<const hunspell::BDict::Header*>(bdict.data());
   if (header->signature != hunspell::BDict::SIGNATURE ||
       header->major_version > hunspell::BDict::MAJOR_VERSION ||
-      header->aff_offset > bdict_length ||
-      header->dic_offset > bdict_length) {
+      header->aff_offset > bdict.size() || header->dic_offset > bdict.size()) {
     return false;
   }
 
@@ -25,13 +33,14 @@ bool hunspell::BDict::Verify(const char* bdict_data, size_t bdict_length) {
     // Make sure there is enough room for the affix header.
     base::CheckedNumeric<uint32_t> aff_offset(header->aff_offset);
     aff_offset += sizeof(hunspell::BDict::AffHeader);
-    if (!aff_offset.IsValid() || aff_offset.ValueOrDie() > bdict_length)
+    if (!aff_offset.IsValid() || aff_offset.ValueOrDie() > bdict.size()) {
       return false;
+    }
   }
 
   const hunspell::BDict::AffHeader* aff_header =
       reinterpret_cast<const hunspell::BDict::AffHeader*>(
-          &bdict_data[header->aff_offset]);
+          &bdict[header->aff_offset]);
 
   // Make sure there is enough room for the affix group count dword.
   {
@@ -39,7 +48,7 @@ bool hunspell::BDict::Verify(const char* bdict_data, size_t bdict_length) {
         aff_header->affix_group_offset);
     affix_group_offset += sizeof(uint32_t);
     if (!affix_group_offset.IsValid() ||
-        affix_group_offset.ValueOrDie() > bdict_length) {
+        affix_group_offset.ValueOrDie() > bdict.size()) {
       return false;
     }
   }
@@ -47,8 +56,8 @@ bool hunspell::BDict::Verify(const char* bdict_data, size_t bdict_length) {
   // The new BDICT header has a MD5 digest of the dictionary data. Compare the
   // MD5 digest of the data with the one in the BDICT header.
   if (header->major_version >= 2) {
-    base::MD5Digest digest;
-    base::MD5Sum(aff_header, bdict_length - header->aff_offset, &digest);
+    std::array<uint8_t, 16> digest =
+        Md5ForBdict(bdict.subspan(header->aff_offset));
     if (memcmp(&digest, &header->digest, sizeof(digest)))
       return false;
   }

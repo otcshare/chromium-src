@@ -4,9 +4,9 @@
 
 #include "chrome/services/sharing/nearby/platform/recursive_mutex.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+#include "base/check_op.h"
+
+namespace nearby::chrome {
 
 RecursiveMutex::RecursiveMutex() = default;
 
@@ -59,6 +59,4 @@ void RecursiveMutex::Unlock() UNLOCK_FUNCTION() {
   }
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

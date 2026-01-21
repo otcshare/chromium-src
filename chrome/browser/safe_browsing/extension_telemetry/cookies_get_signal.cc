@@ -3,17 +3,20 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/extension_telemetry/cookies_get_signal.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_signal_util.h"
-
-#include <sstream>
 
 namespace safe_browsing {
 
 CookiesGetSignal::CookiesGetSignal(const extensions::ExtensionId& extension_id,
                                    const std::string& name,
                                    const std::string& store_id,
-                                   const std::string& url)
-    : ExtensionSignal(extension_id), name_(name), store_id_(store_id) {
+                                   const std::string& url,
+                                   extensions::StackTrace js_callstack)
+    : ExtensionSignal(extension_id),
+      name_(name),
+      store_id_(store_id),
+      js_callstack_(std::move(js_callstack)) {
   url_ = SanitizeURLWithoutFilename(url);
 }
 
@@ -24,9 +27,7 @@ ExtensionSignalType CookiesGetSignal::GetType() const {
 }
 
 std::string CookiesGetSignal::getUniqueArgSetId() const {
-  std::stringstream ss;
-  ss << name_ << store_id_ << url_;
-  return ss.str();
+  return base::JoinString({name_, store_id_, url_}, ",");
 }
 
 }  // namespace safe_browsing

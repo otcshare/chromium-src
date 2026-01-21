@@ -4,13 +4,12 @@
 
 #include "chromecast/device/bluetooth/le/le_scan_manager_impl.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chromecast/device/bluetooth/bluetooth_util.h"
 #include "chromecast/device/bluetooth/le/remote_characteristic.h"
 #include "chromecast/device/bluetooth/le/remote_descriptor.h"
@@ -21,7 +20,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::Return;
 
 namespace chromecast {
@@ -295,8 +293,7 @@ TEST_F(LeScanManagerTest, TestGetScanResultsSortedByRssi) {
 TEST_F(LeScanManagerTest, TestOnNewScanResult) {
   LeScanResult result;
   ON_CALL(mock_observer_, OnNewScanResult(_))
-      .WillByDefault(
-          Invoke([&result](LeScanResult result_in) { result = result_in; }));
+      .WillByDefault([&result](LeScanResult result_in) { result = result_in; });
 
   // Add a scan result with service 0x4444.
   bluetooth_v2_shlib::LeScanner::ScanResult raw_scan_result(

@@ -6,7 +6,9 @@
 
 #include <stddef.h>
 
-#include "cc/layers/layer.h"
+#include <array>
+
+#include "cc/slim/layer.h"
 #include "ui/android/edge_effect.h"
 #include "ui/android/window_android_compositor.h"
 
@@ -120,7 +122,7 @@ bool OverscrollGlow::OnOverscrolled(base::TimeTicks current_time,
 }
 
 bool OverscrollGlow::Animate(base::TimeTicks current_time,
-                             cc::Layer* parent_layer) {
+                             cc::slim::Layer* parent_layer) {
   DCHECK(parent_layer);
   if (!CheckNeedsAnimate())
     return false;
@@ -169,7 +171,7 @@ bool OverscrollGlow::CheckNeedsAnimate() {
   return false;
 }
 
-void OverscrollGlow::UpdateLayerAttachment(cc::Layer* parent) {
+void OverscrollGlow::UpdateLayerAttachment(cc::slim::Layer* parent) {
   DCHECK(parent);
   if (!root_layer_.get())
     return;
@@ -197,7 +199,7 @@ bool OverscrollGlow::InitializeIfNecessary() {
     return false;
 
   DCHECK(!root_layer_.get());
-  root_layer_ = cc::Layer::Create();
+  root_layer_ = cc::slim::Layer::Create();
   for (size_t i = 0; i < EDGE_COUNT; ++i) {
     edge_effects_[i] = client_->CreateEdgeEffect();
     DCHECK(edge_effects_[i]);
@@ -218,7 +220,7 @@ void OverscrollGlow::Pull(base::TimeTicks current_time,
 
   gfx::Vector2dF overscroll_pull =
       gfx::ScaleVector2d(overscroll_delta, inv_width, inv_height);
-  const float edge_pull[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> edge_pull = {
       min(overscroll_pull.y(), 0.f),  // Top
       min(overscroll_pull.x(), 0.f),  // Left
       max(overscroll_pull.y(), 0.f),  // Bottom
@@ -229,7 +231,7 @@ void OverscrollGlow::Pull(base::TimeTicks current_time,
       gfx::ScaleVector2d(overscroll_location, inv_width, inv_height);
   displacement.set_x(max(0.f, min(1.f, displacement.x())));
   displacement.set_y(max(0.f, min(1.f, displacement.y())));
-  const float edge_displacement[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> edge_displacement = {
       1.f - displacement.x(),  // Top
       displacement.y(),        // Left
       displacement.x(),        // Bottom
@@ -254,7 +256,7 @@ void OverscrollGlow::Absorb(base::TimeTicks current_time,
   DCHECK(!velocity.IsZero());
 
   // Only trigger on initial overscroll at a non-zero velocity
-  const float overscroll_velocities[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> overscroll_velocities = {
       y_overscroll_started ? min(velocity.y(), 0.f) : 0,  // Top
       x_overscroll_started ? min(velocity.x(), 0.f) : 0,  // Left
       y_overscroll_started ? max(velocity.y(), 0.f) : 0,  // Bottom

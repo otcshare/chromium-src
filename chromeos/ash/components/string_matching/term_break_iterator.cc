@@ -7,6 +7,7 @@
 #include <ostream>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/char_iterator.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -38,8 +39,8 @@ bool TermBreakIterator::Advance() {
   };
 
   while (iter_->Advance()) {
-    const State new_state = GetNewState(word_[iter_->array_pos()]);
-    const bool is_boundary = kBoundary[state_][new_state];
+    const State new_state = GetNewState((*word_)[iter_->array_pos()]);
+    const bool is_boundary = UNSAFE_TODO(kBoundary[state_][new_state]);
     state_ = new_state;
     if (is_boundary)
       break;
@@ -53,7 +54,7 @@ bool TermBreakIterator::Advance() {
 
 const std::u16string TermBreakIterator::GetCurrentTerm() const {
   DCHECK(prev_ != npos && pos_ != npos);
-  return word_.substr(prev_, pos_ - prev_);
+  return word_->substr(prev_, pos_ - prev_);
 }
 
 TermBreakIterator::State TermBreakIterator::GetNewState(char16_t ch) {
@@ -65,7 +66,6 @@ TermBreakIterator::State TermBreakIterator::GetNewState(char16_t ch) {
 
   if (is_upper && is_lower) {
     NOTREACHED() << "Invalid state for ch=" << std::u16string(1, ch);
-    return STATE_CHAR;
   }
 
   if (is_upper)

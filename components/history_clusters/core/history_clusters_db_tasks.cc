@@ -6,9 +6,7 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/history/core/browser/history_backend.h"
@@ -16,19 +14,7 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/history_clusters/core/config.h"
 #include "components/history_clusters/core/history_clusters_types.h"
-
-namespace {
-
-// Is the transition user-visible.
-bool IsTransitionUserVisible(int32_t transition) {
-  ui::PageTransition page_transition = ui::PageTransitionFromInt(transition);
-  return (ui::PAGE_TRANSITION_CHAIN_END & transition) != 0 &&
-         ui::PageTransitionIsMainFrame(page_transition) &&
-         !ui::PageTransitionCoreTypeIs(page_transition,
-                                       ui::PAGE_TRANSITION_KEYWORD_GENERATED);
-}
-
-}  // namespace
+#include "components/history_clusters/core/history_clusters_util.h"
 
 namespace history_clusters {
 
@@ -165,10 +151,14 @@ bool GetAnnotatedVisitsToCluster::AddUnclusteredVisits(
     history::QueryOptions options) {
   bool limited_by_max_count = false;
 
-  for (const auto& visit :
-       backend->GetAnnotatedVisits(options, &limited_by_max_count)) {
+  for (const auto& visit : backend->GetAnnotatedVisits(
+           options, /*compute_redirect_chain_start_properties=*/true,
+           /*get_unclustered_visits_only=*/false, &limited_by_max_count)) {
+    // TODO(crbug.com/41492963): Consider changing `get_unclustered_visits_only`
+    // above to true, and getting rid of the `exhausted_unclustered_visits`
+    // parameter setting below.
     const bool is_clustered =
-        GetConfig().persist_clusters_in_history_db && !recluster_
+        !recluster_
             ? db->GetClusterIdContainingVisit(visit.visit_row.visit_id) > 0
             : false;
     if (is_clustered && recent_first_)
@@ -178,10 +168,7 @@ bool GetAnnotatedVisitsToCluster::AddUnclusteredVisits(
       continue;
     }
 
-    if ((visit.source != history::SOURCE_SYNCED) ||
-        GetConfig().include_synced_visits) {
-      annotated_visits_.push_back(std::move(visit));
-    }
+    annotated_visits_.push_back(std::move(visit));
   }
 
   return limited_by_max_count;
@@ -225,9 +212,9 @@ void GetAnnotatedVisitsToCluster::AddIncompleteVisits(
     // https://crbug.com/1252047.
     history::VisitID visit_id =
         incomplete_visit_context_annotations.visit_row.visit_id;
-    if (base::Contains(annotated_visits_, visit_id, [](const auto& visit) {
-          return visit.visit_row.visit_id;
-        })) {
+    if (std::ranges::contains(
+            annotated_visits_, visit_id,
+            [](const auto& visit) { return visit.visit_row.visit_id; })) {
       continue;
     }
 
@@ -318,7 +305,7 @@ void GetAnnotatedVisitsToCluster::AddClusteredVisits(
   // unclustered visits.
   const auto cluster_ids = db->GetMostRecentClusterIds(
       unclustered_begin_time - base::Days(days_of_clustered_visits_),
-      unclustered_begin_time, 1000);
+      base::Time::Max(), 1000);
 
   // If we found a cluster and are iterating recent_first_, then we've reached
   // the cluster threshold and have no more unclustered visits remaining.
@@ -333,8 +320,10 @@ void GetAnnotatedVisitsToCluster::AddClusteredVisits(
         static_cast<size_t>(GetConfig().max_visits_to_cluster))
       break;
     cluster_ids_.push_back(cluster_id);
-    base::ranges::move(backend->ToAnnotatedVisits(visit_ids_of_cluster),
-                       std::back_inserter(annotated_visits_));
+    std::ranges::move(backend->ToAnnotatedVisitsFromIds(
+                          visit_ids_of_cluster,
+                          /*compute_redirect_chain_start_properties=*/true),
+                      std::back_inserter(annotated_visits_));
   }
 }
 

@@ -7,12 +7,14 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_popup_contents_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/theme_copying_widget.h"
@@ -20,8 +22,8 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
+#include "components/omnibox/browser/actions/tab_switch_action.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
-#include "components/omnibox/browser/omnibox_edit_model.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/strings/grit/components_strings.h"
@@ -48,8 +50,9 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
 
     // Populate suggestions for the omnibox popup.
     AutocompleteController* autocomplete_controller =
-        omnibox_view->model()->autocomplete_controller();
-    AutocompleteResult& results = autocomplete_controller->result_;
+        GetLocationBar()->GetOmniboxController()->autocomplete_controller();
+    autocomplete_controller->Start({});
+    AutocompleteResult& results = autocomplete_controller->internal_result_;
     ACMatches matches;
     TermMatches termMatches = {{0, 0, 0}};
 
@@ -63,8 +66,9 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
         ACMatchClassification::MATCH | ACMatchClassification::URL,
         ACMatchClassification::URL);
     search_match.keyword = u"match";
-    search_match.associated_keyword = std::make_unique<AutocompleteMatch>();
+    search_match.associated_keyword = u"match";
 
+    auto tab_switch_action = base::MakeRefCounted<TabSwitchAction>(GURL());
     AutocompleteMatch switch_to_tab_match(nullptr, 500, false,
                                           AutocompleteMatchType::HISTORY_URL);
     switch_to_tab_match.contents = u"https://foobar.com";
@@ -74,10 +78,11 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
         ACMatchClassification::MATCH | ACMatchClassification::URL,
         ACMatchClassification::URL);
     switch_to_tab_match.has_tab_match = true;
+    switch_to_tab_match.actions.push_back(tab_switch_action);
 
     AutocompleteMatch action_match(nullptr, 500, false,
                                    AutocompleteMatchType::SEARCH_SUGGEST);
-    action_match.contents = u"clear data";
+    action_match.contents = u"delete data";
     action_match.description = u"Search";
     action_match.description_class = ClassifyTermMatches(
         termMatches, action_match.description.size(),
@@ -91,7 +96,7 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
             IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_SUFFIX,
             IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA),
         GURL());
-    action_match.action = action_.get();
+    action_match.actions.push_back(action_);
 
     AutocompleteMatch multiple_actions_match(
         nullptr, 500, false, AutocompleteMatchType::HISTORY_URL);
@@ -102,9 +107,9 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
         ACMatchClassification::MATCH | ACMatchClassification::URL,
         ACMatchClassification::URL);
     multiple_actions_match.keyword = u"match";
-    multiple_actions_match.associated_keyword =
-        std::make_unique<AutocompleteMatch>();
+    multiple_actions_match.associated_keyword = u"match";
     multiple_actions_match.has_tab_match = true;
+    multiple_actions_match.actions.push_back(tab_switch_action);
 
     matches.push_back(search_match);
     matches.push_back(switch_to_tab_match);
@@ -114,39 +119,50 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     autocomplete_controller->NotifyChanged();
 
     // The omnibox popup should open with suggestions displayed.
-    omnibox_view->model()->OnPopupResultChanged();
-    EXPECT_TRUE(omnibox_view->model()->PopupIsOpen());
+    GetLocationBar()
+        ->GetOmniboxController()
+        ->edit_model()
+        ->OnPopupResultChanged();
+    EXPECT_TRUE(GetLocationBar()->GetOmniboxController()->IsPopupOpen());
   }
 
   bool VerifyUi() override {
-    OmniboxPopupContentsView* popup_view =
-        GetOmniboxViewViews()->GetPopupContentsViewForTesting();
-    OmniboxEditModel* model = GetOmniboxViewViews()->model();
+    OmniboxPopupView* popup_view =
+        BrowserView::GetBrowserViewForBrowser(browser())
+            ->GetLocationBarView()
+            ->GetOmniboxPopupViewForTesting();
+    OmniboxEditModel* model =
+        GetLocationBar()->GetOmniboxController()->edit_model();
 
     model->SetPopupSelection(
         OmniboxPopupSelection(0, OmniboxPopupSelection::KEYWORD_MODE));
-    if (!VerifyActiveButtonText(popup_view->result_view_at(0), "Search"))
+    if (!VerifyActiveButtonText(popup_view, 0, u"Search")) {
       return false;
+    }
 
-    model->SetPopupSelection(OmniboxPopupSelection(
-        1, OmniboxPopupSelection::FOCUSED_BUTTON_TAB_SWITCH));
-    if (!VerifyActiveButtonText(popup_view->result_view_at(1), "Switch"))
+    model->SetPopupSelection(
+        OmniboxPopupSelection(1, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
+    if (!VerifyActiveButtonText(popup_view, 1, u"Switch")) {
       return false;
+    }
 
     model->SetPopupSelection(
         OmniboxPopupSelection(2, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
-    if (!VerifyActiveButtonText(popup_view->result_view_at(2), "Clear"))
+    if (!VerifyActiveButtonText(popup_view, 2, u"Delete")) {
       return false;
+    }
 
     model->SetPopupSelection(
         OmniboxPopupSelection(3, OmniboxPopupSelection::KEYWORD_MODE));
-    if (!VerifyActiveButtonText(popup_view->result_view_at(3), "Search"))
+    if (!VerifyActiveButtonText(popup_view, 3, u"Search")) {
       return false;
+    }
 
-    model->SetPopupSelection(OmniboxPopupSelection(
-        3, OmniboxPopupSelection::FOCUSED_BUTTON_TAB_SWITCH));
-    if (!VerifyActiveButtonText(popup_view->result_view_at(3), "Switch"))
+    model->SetPopupSelection(
+        OmniboxPopupSelection(3, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
+    if (!VerifyActiveButtonText(popup_view, 3, u"Switch")) {
       return false;
+    }
 
     return DialogBrowserTest::VerifyUi();
   }
@@ -155,17 +171,19 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     return "RoundedOmniboxResultsFrameWindow";
   }
 
-  OmniboxViewViews* GetOmniboxViewViews() {
-    LocationBar* location_bar = browser()->window()->GetLocationBar();
-    return static_cast<OmniboxViewViews*>(location_bar->GetOmniboxView());
+  LocationBar* GetLocationBar() {
+    return browser()->window()->GetLocationBar();
   }
 
-  bool VerifyActiveButtonText(OmniboxResultView* result_view,
-                              std::string text) {
-    views::LabelButton* button = static_cast<views::LabelButton*>(
-        result_view->GetActiveAuxiliaryButtonForAccessibility());
-    return button->GetText().find(base::ASCIIToUTF16(text)) !=
-           std::string::npos;
+  OmniboxViewViews* GetOmniboxViewViews() {
+    return static_cast<OmniboxViewViews*>(GetLocationBar()->GetOmniboxView());
+  }
+
+  bool VerifyActiveButtonText(OmniboxPopupView* popup_view,
+                              size_t result_index,
+                              const std::u16string& text) {
+    return popup_view->GetAccessibleButtonTextForResult(result_index)
+               .find(text) != std::u16string::npos;
   }
 
  private:

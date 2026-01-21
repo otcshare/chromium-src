@@ -10,66 +10,31 @@
 #include "ash/app_list/views/apps_grid_view_test_api.h"
 #include "ash/app_list/views/continue_section_view.h"
 #include "ash/app_list/views/page_switcher.h"
+#include "ash/app_list/views/pagination_model_transition_waiter.h"
 #include "ash/app_list/views/recent_apps_view.h"
 #include "ash/app_list/views/search_box_view.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/overview/overview_controller.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animation_stopped_waiter.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/textfield/textfield.h"
 
 namespace ash {
-
-namespace {
-
-class TransitionWaiter : public PaginationModelObserver {
- public:
-  explicit TransitionWaiter(PaginationModel* model) : model_(model) {
-    model_->AddObserver(this);
-  }
-
-  TransitionWaiter(const TransitionWaiter&) = delete;
-  TransitionWaiter& operator=(const TransitionWaiter&) = delete;
-
-  ~TransitionWaiter() override { model_->RemoveObserver(this); }
-
-  void Wait() {
-    ui_run_loop_ = std::make_unique<base::RunLoop>();
-    ui_run_loop_->Run();
-  }
-
- private:
-  // PaginationModelObserver:
-  void TransitionEnded() override { ui_run_loop_->QuitWhenIdle(); }
-
-  std::unique_ptr<base::RunLoop> ui_run_loop_;
-  PaginationModel* model_ = nullptr;
-};
-
-}  // namespace
 
 class AppsContainerViewTest : public AshTestBase {
  public:
   AppsContainerViewTest() = default;
   ~AppsContainerViewTest() override = default;
 
-  // testing::Test:
-  void SetUp() override {
-    AshTestBase::SetUp();
-    app_list_test_model_ = std::make_unique<test::AppListTestModel>();
-    search_model_ = std::make_unique<SearchModel>();
-    Shell::Get()->app_list_controller()->SetActiveModel(
-        /*profile_id=*/1, app_list_test_model_.get(), search_model_.get());
-  }
-
   void AddFolderWithApps(int count) {
-    app_list_test_model_->CreateAndPopulateFolderWithApps(count);
+    GetAppListTestHelper()->model()->CreateAndPopulateFolderWithApps(count);
   }
 
   AppListToastContainerView* GetToastContainerView() {
@@ -98,16 +63,13 @@ class AppsContainerViewTest : public AshTestBase {
   }
 
   bool HasGradientMask() {
-    return GetAppListTestHelper()
-        ->GetAppsContainerView()
-        ->scrollable_container_for_test()
-        ->layer()
-        ->layer_mask_layer();
+    return !GetAppListTestHelper()
+                ->GetAppsContainerView()
+                ->scrollable_container_for_test()
+                ->layer()
+                ->gradient_mask()
+                .IsEmpty();
   }
-
- private:
-  std::unique_ptr<test::AppListTestModel> app_list_test_model_;
-  std::unique_ptr<SearchModel> search_model_;
 };
 
 TEST_F(AppsContainerViewTest, ContinueSectionVisibleByDefault) {
@@ -145,8 +107,8 @@ TEST_F(AppsContainerViewTest, CanHideContinueSection) {
 
 TEST_F(AppsContainerViewTest, HideContinueSectionPlaysAnimation) {
   // Show the app list without animation.
-  ASSERT_EQ(ui::ScopedAnimationDurationScaleMode::duration_multiplier(),
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  ASSERT_EQ(gfx::ScopedAnimationDurationScaleMode::duration_multiplier(),
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   auto* helper = GetAppListTestHelper();
   helper->AddContinueSuggestionResults(4);
   helper->AddRecentApps(5);
@@ -155,8 +117,8 @@ TEST_F(AppsContainerViewTest, HideContinueSectionPlaysAnimation) {
   TabletMode::Get()->SetEnabledForTest(true);
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Hide the continue section.
   Shell::Get()->app_list_controller()->SetHideContinueSection(true);
@@ -231,8 +193,8 @@ TEST_F(AppsContainerViewTest, ShowContinueSectionPlaysAnimation) {
   TabletMode::Get()->SetEnabledForTest(true);
 
   // Enable animations.
-  ui::ScopedAnimationDurationScaleMode duration(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Show the continue section.
   Shell::Get()->app_list_controller()->SetHideContinueSection(false);
@@ -287,28 +249,28 @@ TEST_F(AppsContainerViewTest, OpeningFolderRemovesOtherViewsFromAccessibility) {
   // Note: For fullscreen app list, the search box is part of the focus cycle
   // when a folder is open.
   auto* continue_section = helper->GetFullscreenContinueSectionView();
-  EXPECT_TRUE(continue_section->GetViewAccessibility().IsIgnored());
+  EXPECT_TRUE(continue_section->GetViewAccessibility().GetIsIgnored());
   EXPECT_TRUE(continue_section->GetViewAccessibility().IsLeaf());
   auto* recent_apps = helper->GetFullscreenRecentAppsView();
-  EXPECT_TRUE(recent_apps->GetViewAccessibility().IsIgnored());
+  EXPECT_TRUE(recent_apps->GetViewAccessibility().GetIsIgnored());
   EXPECT_TRUE(recent_apps->GetViewAccessibility().IsLeaf());
   auto* toast_container = GetToastContainerView();
-  EXPECT_TRUE(toast_container->GetViewAccessibility().IsIgnored());
+  EXPECT_TRUE(toast_container->GetViewAccessibility().GetIsIgnored());
   EXPECT_TRUE(toast_container->GetViewAccessibility().IsLeaf());
   auto* apps_grid_view = helper->GetRootPagedAppsGridView();
-  EXPECT_TRUE(apps_grid_view->GetViewAccessibility().IsIgnored());
+  EXPECT_TRUE(apps_grid_view->GetViewAccessibility().GetIsIgnored());
   EXPECT_TRUE(apps_grid_view->GetViewAccessibility().IsLeaf());
 
   // Close the folder.
   PressAndReleaseKey(ui::VKEY_ESCAPE);
 
-  EXPECT_FALSE(continue_section->GetViewAccessibility().IsIgnored());
+  EXPECT_FALSE(continue_section->GetViewAccessibility().GetIsIgnored());
   EXPECT_FALSE(continue_section->GetViewAccessibility().IsLeaf());
-  EXPECT_FALSE(recent_apps->GetViewAccessibility().IsIgnored());
+  EXPECT_FALSE(recent_apps->GetViewAccessibility().GetIsIgnored());
   EXPECT_FALSE(recent_apps->GetViewAccessibility().IsLeaf());
-  EXPECT_FALSE(toast_container->GetViewAccessibility().IsIgnored());
+  EXPECT_FALSE(toast_container->GetViewAccessibility().GetIsIgnored());
   EXPECT_FALSE(toast_container->GetViewAccessibility().IsLeaf());
-  EXPECT_FALSE(apps_grid_view->GetViewAccessibility().IsIgnored());
+  EXPECT_FALSE(apps_grid_view->GetViewAccessibility().GetIsIgnored());
   EXPECT_FALSE(apps_grid_view->GetViewAccessibility().IsLeaf());
 }
 
@@ -377,7 +339,8 @@ TEST_F(AppsContainerViewTest, StartPageDragThenRelease) {
   EXPECT_EQ(0, GetSelectedPage());
   EXPECT_EQ(2, GetTotalPages());
 
-  TransitionWaiter transition_waiter(apps_grid_view->pagination_model());
+  PaginationModelTransitionWaiter transition_waiter(
+      apps_grid_view->pagination_model());
   gfx::Point start_page_drag = test_api.GetViewAtIndex(GridIndex(0, 0))
                                    ->GetIconBoundsInScreen()
                                    .bottom_right();
@@ -423,6 +386,50 @@ TEST_F(AppsContainerViewTest,
 
   EXPECT_EQ(initial_bounds,
             helper->GetAppsContainerView()->page_switcher()->bounds());
+}
+
+// Verify that metrics are recorded when the grid changes page into the last
+// page of the app list.
+TEST_F(AppsContainerViewTest, NavigateToBottomPageLogsAction) {
+  auto* helper = GetAppListTestHelper();
+  helper->AddContinueSuggestionResults(4);
+  helper->AddRecentApps(5);
+  helper->AddAppItems(35);
+  TabletMode::Get()->SetEnabledForTest(true);
+
+  auto* apps_grid_view = helper->GetRootPagedAppsGridView();
+  base::HistogramTester histograms;
+
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.TabletMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                0);
+
+  PaginationModel* pagination_model = apps_grid_view->pagination_model();
+  int last_page = pagination_model->total_pages() - 1;
+
+  // Select the second to last page. The metric should not be recorded.
+  pagination_model->SelectPage(last_page - 1, /*animate=*/false);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.TabletMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                0);
+
+  // Select the last page. The metric should be recorded.
+  pagination_model->SelectPage(last_page, /*animate=*/false);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.TabletMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Select the second to last page again. The metric should not be recorded.
+  pagination_model->SelectPage(last_page - 1, /*animate=*/false);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.TabletMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                1);
+
+  // Select the last page again. The metric should be recorded one more time.
+  pagination_model->SelectPage(last_page, /*animate=*/false);
+  histograms.ExpectUniqueSample("Apps.AppList.UserAction.TabletMode",
+                                AppListUserAction::kNavigatedToBottomOfAppList,
+                                2);
 }
 
 }  // namespace ash

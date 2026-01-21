@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 
 namespace ash {
 
@@ -59,7 +59,6 @@ void FakeModemMessagingClient::ReceiveSms(const dbus::ObjectPath& object_path,
                                           const dbus::ObjectPath& sms_path) {
   if (message_paths_map_.find(object_path) == message_paths_map_.end()) {
     NOTREACHED() << "object_path not found!";
-    return;
   }
 
   message_paths_map_[object_path].push_back(sms_path);

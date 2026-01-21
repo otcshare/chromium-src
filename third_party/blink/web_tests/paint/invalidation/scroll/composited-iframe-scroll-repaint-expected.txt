@@ -14,9 +14,8 @@
       "transform": 2
     },
     {
-      "name": "LayoutNGBlockFlow BODY",
+      "name": "LayoutBlockFlow BODY",
       "bounds": [284, 500],
-      "contentsOpaqueForText": true,
       "drawsContent": false,
       "transform": 3
     }

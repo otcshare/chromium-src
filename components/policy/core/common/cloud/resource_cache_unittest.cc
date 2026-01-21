@@ -4,11 +4,11 @@
 
 #include "components/policy/core/common/cloud/resource_cache.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
@@ -57,7 +57,7 @@ class ResourceCacheTest : public testing::Test {
 TEST_F(ResourceCacheTest, StoreAndLoad) {
   ResourceCache cache(temp_dir_.GetPath(),
                       base::SingleThreadTaskRunner::GetCurrentDefault(),
-                      /* max_cache_size */ absl::nullopt);
+                      /* max_cache_size */ std::nullopt);
 
   // No data initially.
   std::string data;
@@ -147,7 +147,7 @@ TEST_F(ResourceCacheTest, StoreAndLoad) {
 TEST_F(ResourceCacheTest, FilterSubkeys) {
   ResourceCache cache(temp_dir_.GetPath(),
                       base::SingleThreadTaskRunner::GetCurrentDefault(),
-                      /* max_cache_size */ absl::nullopt);
+                      /* max_cache_size */ std::nullopt);
 
   // Store some data.
   EXPECT_FALSE(cache.Store(kKey1, kSubA, kData0).empty());

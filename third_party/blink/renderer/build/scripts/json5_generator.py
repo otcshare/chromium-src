@@ -55,27 +55,13 @@ default_metadata or an exception raised.
 """
 
 import argparse
-import ast
 import copy
+import json5
 import os
 import os.path
 import re
 
 from blinkbuild.name_style_converter import NameStyleConverter
-
-
-def _json5_load(lines):
-    # Use json5.loads when json5 is available. Currently we use simple
-    # regexs to convert well-formed JSON5 to PYL format.
-    # Strip away comments and quote unquoted keys.
-    re_comment = re.compile(r"^\s*//.*$|//+ .*$", re.MULTILINE)
-    re_map_keys = re.compile(r"^\s*([$A-Za-z_][\w]*)\s*:", re.MULTILINE)
-    pyl = re.sub(re_map_keys, r"'\1':", re.sub(re_comment, "", lines))
-    # Convert map values of true/false to Python version True/False.
-    re_true = re.compile(r":\s*true\b")
-    re_false = re.compile(r":\s*false\b")
-    pyl = re.sub(re_true, ":True", re.sub(re_false, ":False", pyl))
-    return ast.literal_eval(pyl)
 
 
 def _merge_doc(doc, doc2):
@@ -130,14 +116,46 @@ class Json5File(object):
         merged_doc = dict()
         for path in file_paths:
             assert path.endswith(".json5")
-            with open(os.path.abspath(path)) as json5_file:
-                doc = _json5_load(json5_file.read())
+            with open(os.path.abspath(path), encoding='utf-8') as json5_file:
+                doc = json5.loads(json5_file.read())
                 if not merged_doc:
                     merged_doc = doc
                 else:
                     _merge_doc(merged_doc, doc)
         return Json5File(file_paths, merged_doc, default_metadata,
                          default_parameters)
+
+    def load_override_file(self, file_path):
+        assert file_path.endswith(".json5")
+
+        name_dict = {}
+        overrides_list = []
+        with open(os.path.abspath(file_path), encoding='utf-8') as json5_file:
+            doc = json5.loads(json5_file.read())
+            items = doc["data"]
+            if len(items) > 0:
+                self.file_paths.append(file_path)
+
+            if type(items) is list:
+                for item in items:
+                    entry = self._get_entry(item)
+                    name_dict[entry["name"]] = entry
+                    overrides_list.append(entry)
+            else:
+                for key, value in items.items():
+                    value["name"] = key
+                    entry = self._get_entry(value)
+                    overrides_list.append(entry)
+                overrides_list.sort(key=lambda entry: entry["name"])
+
+        for index, entry in enumerate(self.name_dictionaries):
+            name = entry['name']
+            if name in name_dict:
+                self.name_dictionaries[index] = name_dict.pop(name)
+
+        for entry in overrides_list:
+            if entry['name'] in name_dict:
+                self.name_dictionaries.append(entry)
 
     def _process(self, doc):
         # Process optional metadata map entries.
@@ -273,7 +291,8 @@ class Writer(object):
         self.gperf_path = None
         if json5_files:
             self.json5_file = Json5File.load_from_files(
-                json5_files, self.default_metadata, self.default_parameters)
+                self._input_files, self.default_metadata,
+                self.default_parameters)
         match = re.search(r'\bgen[\\/]', output_dir)
         if match:
             self._relative_output_dir = output_dir[match.end():].replace(

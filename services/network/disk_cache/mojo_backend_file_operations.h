@@ -29,18 +29,20 @@ class MojoBackendFileOperations final
   bool CreateDirectory(const base::FilePath& path) override;
   bool PathExists(const base::FilePath& path) override;
   bool DirectoryExists(const base::FilePath& path) override;
-  base::File OpenFile(const base::FilePath& path, uint32_t flags) override;
+  std::unique_ptr<disk_cache::CacheFile> OpenFile(const base::FilePath& path,
+                                                  uint32_t flags) override;
   bool DeleteFile(const base::FilePath& path, DeleteFileMode mode) override;
   bool ReplaceFile(const base::FilePath& from_path,
                    const base::FilePath& to_path,
                    base::File::Error* error) override;
-  absl::optional<base::File::Info> GetFileInfo(
+  std::optional<base::File::Info> GetFileInfo(
       const base::FilePath& path) override;
   std::unique_ptr<disk_cache::BackendFileOperations::FileEnumerator>
   EnumerateFiles(const base::FilePath& path) override;
   void CleanupDirectory(const base::FilePath& path,
                         base::OnceCallback<void(bool)> callback) override;
   std::unique_ptr<disk_cache::UnboundBackendFileOperations> Unbind() override;
+  bool IsEncrypted() const override;
 
  private:
   mojo::Remote<mojom::HttpCacheBackendFileOperations> remote_;

@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "dbus/bus.h"
@@ -20,7 +22,6 @@
 #include "device/bluetooth/dbus/bluetooth_advertisement_monitor_service_provider_impl.h"
 #include "device/bluetooth/dbus/fake_bluetooth_advertisement_monitor_service_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace bluez {
@@ -164,7 +165,7 @@ class FakeBluetoothLowEnergyScanSessionDelegate
   // BluetoothLowEnergyScanSession::Delegate
   void OnSessionStarted(
       device::BluetoothLowEnergyScanSession* scan_session,
-      absl::optional<device::BluetoothLowEnergyScanSession::ErrorCode>
+      std::optional<device::BluetoothLowEnergyScanSession::ErrorCode>
           error_code) override {}
   void OnDeviceFound(device::BluetoothLowEnergyScanSession* scan_session,
                      device::BluetoothDevice* device) override {}
@@ -235,7 +236,7 @@ TEST(BluetoothAdvertisementMonitorApplicationServiceProviderImplTest,
      AddMonitorThenRemoveMonitor) {
   dbus::Bus::Options options;
   options.bus_type = dbus::Bus::SYSTEM;
-  scoped_refptr<dbus::MockBus> mock_bus = new dbus::MockBus(options);
+  scoped_refptr<dbus::MockBus> mock_bus = new dbus::MockBus(std::move(options));
   dbus::ObjectPath application_object_path = dbus::ObjectPath("/path");
   scoped_refptr<dbus::MockExportedObject> mock_exported_object =
       new dbus::MockExportedObject(/*bus=*/mock_bus.get(),
@@ -260,7 +261,7 @@ TEST(BluetoothAdvertisementMonitorApplicationServiceProviderImplTest,
       std::move(pattern_value));
   auto filter = device::BluetoothLowEnergyScanFilter::Create(
       device::BluetoothLowEnergyScanFilter::Range::kNear, kDeviceFoundTimeout,
-      kDeviceLostTimeout, {pattern}, /*rssi_sampling_period=*/absl::nullopt);
+      kDeviceLostTimeout, {pattern}, /*rssi_sampling_period=*/std::nullopt);
 
   SetupExpectedMockAdvertisementMonitorDbusCalls(
       mock_bus.get(), mock_exported_object.get(), monitor_object_path);
@@ -275,8 +276,8 @@ TEST(BluetoothAdvertisementMonitorApplicationServiceProviderImplTest,
       &method_call, base::BindOnce(&ResponseSenderCallback, kExpectedMessage1));
 
   ON_CALL(*mock_exported_object, SendSignal(testing::_))
-      .WillByDefault(testing::Invoke(
-          [](dbus::Signal* signal) { SendSignal(kExpectedMessage3, signal); }));
+      .WillByDefault(
+          [](dbus::Signal* signal) { SendSignal(kExpectedMessage3, signal); });
   EXPECT_CALL(*mock_exported_object, SendSignal(testing::_));
 
   provider_impl.AddMonitor(std::move(advertisement_monitor));
@@ -285,8 +286,8 @@ TEST(BluetoothAdvertisementMonitorApplicationServiceProviderImplTest,
       &method_call, base::BindOnce(&ResponseSenderCallback, kExpectedMessage2));
 
   ON_CALL(*mock_exported_object, SendSignal(testing::_))
-      .WillByDefault(testing::Invoke(
-          [](dbus::Signal* signal) { SendSignal(kExpectedMessage4, signal); }));
+      .WillByDefault(
+          [](dbus::Signal* signal) { SendSignal(kExpectedMessage4, signal); });
   EXPECT_CALL(*mock_exported_object, SendSignal(testing::_));
   provider_impl.RemoveMonitor(monitor_object_path);
 
@@ -298,7 +299,7 @@ TEST(BluetoothAdvertisementMonitorApplicationServiceProviderImplTest,
      RemoveFailure) {
   dbus::Bus::Options options;
   options.bus_type = dbus::Bus::SYSTEM;
-  scoped_refptr<dbus::MockBus> mock_bus = new dbus::MockBus(options);
+  scoped_refptr<dbus::MockBus> mock_bus = new dbus::MockBus(std::move(options));
   dbus::ObjectPath application_object_path = dbus::ObjectPath("/path");
   scoped_refptr<dbus::MockExportedObject> mock_exported_object =
       new dbus::MockExportedObject(/*bus=*/mock_bus.get(),

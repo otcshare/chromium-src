@@ -27,11 +27,10 @@ PermissionSet::PermissionSet(APIPermissionSet apis,
       explicit_hosts_(std::move(explicit_hosts)),
       scriptable_hosts_(std::move(scriptable_hosts)) {
   CleanExplicitHostPaths();
-  InitImplicitPermissions();
   InitEffectiveHosts();
 }
 
-PermissionSet::~PermissionSet() {}
+PermissionSet::~PermissionSet() = default;
 
 PermissionSet::PermissionSet(PermissionSet&& other) = default;
 
@@ -148,7 +147,7 @@ bool PermissionSet::IsEmpty() const {
 }
 
 bool PermissionSet::HasAPIPermission(APIPermissionID id) const {
-  return apis().find(id) != apis().end();
+  return apis().count(id);
 }
 
 bool PermissionSet::HasAPIPermission(const std::string& permission_name) const {
@@ -193,19 +192,26 @@ bool PermissionSet::HasEffectiveAccessToAllHosts() const {
 }
 
 bool PermissionSet::ShouldWarnAllHosts(bool include_api_permissions) const {
-  if (host_permissions_should_warn_all_hosts_ == UNINITIALIZED)
+  if (host_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kUninitialized) {
     InitShouldWarnAllHostsForHostPermissions();
+  }
 
-  if (host_permissions_should_warn_all_hosts_ == WARN_ALL_HOSTS)
+  if (host_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kWarnAllHosts) {
     return true;
+  }
 
   if (!include_api_permissions)
     return false;
 
-  if (api_permissions_should_warn_all_hosts_ == UNINITIALIZED)
+  if (api_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kUninitialized) {
     InitShouldWarnAllHostsForAPIPermissions();
+  }
 
-  return api_permissions_should_warn_all_hosts_ == WARN_ALL_HOSTS;
+  return api_permissions_should_warn_all_hosts_ ==
+         ShouldWarnAllHostsType::kWarnAllHosts;
 }
 
 bool PermissionSet::HasEffectiveAccessToURL(const GURL& url) const {
@@ -215,10 +221,9 @@ bool PermissionSet::HasEffectiveAccessToURL(const GURL& url) const {
 void PermissionSet::SetAPIPermissions(APIPermissionSet new_apis) {
   apis_ = std::move(new_apis);
   // Since we're rewriting the API permissions, we need to re-initialize the
-  // value of whether to warn about all hosts and re-add any implicit API
-  // permissions.
-  InitImplicitPermissions();
-  api_permissions_should_warn_all_hosts_ = UNINITIALIZED;
+  // value of whether to warn about all hosts.
+  api_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
 }
 
 void PermissionSet::SetManifestPermissions(
@@ -232,7 +237,8 @@ void PermissionSet::SetExplicitHosts(URLPatternSet new_explicit_hosts) {
   // value of whether to warn about all hosts, clean up the paths for the
   // explicit hosts, and re-calculate the effective hosts (the combination of
   // explicit and scriptable hosts).
-  host_permissions_should_warn_all_hosts_ = UNINITIALIZED;
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
   CleanExplicitHostPaths();
   InitEffectiveHosts();
 }
@@ -242,7 +248,8 @@ void PermissionSet::SetScriptableHosts(URLPatternSet new_scriptable_hosts) {
   // Since we're rewriting the host permissions, we need to re-initialize the
   // value of whether to warn about all hosts and also the effective hosts (the
   // combination of explicit and scriptable hosts).
-  host_permissions_should_warn_all_hosts_ = UNINITIALIZED;
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
   InitEffectiveHosts();
 }
 
@@ -279,44 +286,41 @@ void PermissionSet::CleanExplicitHostPaths() {
     explicit_hosts_.AddPattern(std::move(pattern));
 }
 
-void PermissionSet::InitImplicitPermissions() {
-  // The downloads permission implies the internal version as well.
-  if (apis_.find(APIPermissionID::kDownloads) != apis_.end())
-    apis_.insert(APIPermissionID::kDownloadsInternal);
-
-  // The fileBrowserHandler permission implies the internal version as well.
-  if (apis_.find(APIPermissionID::kFileBrowserHandler) != apis_.end())
-    apis_.insert(APIPermissionID::kFileBrowserHandlerInternal);
-}
-
 void PermissionSet::InitEffectiveHosts() {
   effective_hosts_ =
       URLPatternSet::CreateUnion(explicit_hosts(), scriptable_hosts());
 }
 
 void PermissionSet::InitShouldWarnAllHostsForHostPermissions() const {
-  DCHECK_EQ(UNINITIALIZED, host_permissions_should_warn_all_hosts_);
-  host_permissions_should_warn_all_hosts_ = DONT_WARN_ALL_HOSTS;
+  DCHECK_EQ(ShouldWarnAllHostsType::kUninitialized,
+            host_permissions_should_warn_all_hosts_);
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kDontWarnAllHosts;
   if (effective_hosts().MatchesAllURLs()) {
-    host_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+    host_permissions_should_warn_all_hosts_ =
+        ShouldWarnAllHostsType::kWarnAllHosts;
     return;
   }
 
   for (const auto& pattern : effective_hosts_) {
     if (pattern.MatchesEffectiveTld()) {
-      host_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+      host_permissions_should_warn_all_hosts_ =
+          ShouldWarnAllHostsType::kWarnAllHosts;
       break;
     }
   }
 }
 
 void PermissionSet::InitShouldWarnAllHostsForAPIPermissions() const {
-  DCHECK_EQ(UNINITIALIZED, api_permissions_should_warn_all_hosts_);
-  api_permissions_should_warn_all_hosts_ = DONT_WARN_ALL_HOSTS;
+  DCHECK_EQ(ShouldWarnAllHostsType::kUninitialized,
+            api_permissions_should_warn_all_hosts_);
+  api_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kDontWarnAllHosts;
 
   for (const auto* api : apis_) {
     if (api->info()->implies_full_url_access()) {
-      api_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+      api_permissions_should_warn_all_hosts_ =
+          ShouldWarnAllHostsType::kWarnAllHosts;
       break;
     }
   }

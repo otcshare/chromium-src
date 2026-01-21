@@ -12,7 +12,6 @@
 
 namespace remoting {
 
-class VideoPacket;
 class FrameStatsMessage;
 
 namespace protocol {
@@ -22,15 +21,12 @@ struct HostFrameStats {
   HostFrameStats(const HostFrameStats&);
   ~HostFrameStats();
 
-  // Extracts timing fields from the |packet|.
-  static HostFrameStats GetForVideoPacket(const VideoPacket& packet);
-
   // Converts FrameStatsMessage protobuf message to HostFrameStats.
   static HostFrameStats FromFrameStatsMessage(const FrameStatsMessage& message);
   void ToFrameStatsMessage(FrameStatsMessage* message_out) const;
 
   // Frame Size.
-  int frame_size {};
+  int frame_size{};
 
   // Set to null for frames that were not sent after a fresh input event.
   base::TimeTicks latest_event_timestamp;
@@ -77,6 +73,7 @@ struct FrameStats {
 class FrameStatsConsumer {
  public:
   virtual void OnVideoFrameStats(const FrameStats& stats) = 0;
+
  protected:
   virtual ~FrameStatsConsumer() {}
 };

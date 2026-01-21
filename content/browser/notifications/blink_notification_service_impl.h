@@ -77,6 +77,12 @@ class CONTENT_EXPORT BlinkNotificationServiceImpl
                         GetNotificationsCallback callback) override;
 
  private:
+  friend class PlatformNotificationContextImpl;
+
+  // Called when the PlatformNotificationContext is shutting down.
+  // Nulls out the browser_context_ pointer to prevent dangling pointer access.
+  void OnContextShutdown();
+
   // Called when an error is detected on binding_.
   void OnConnectionError();
 
@@ -110,7 +116,8 @@ class CONTENT_EXPORT BlinkNotificationServiceImpl
   bool IsValidForNonPersistentNotification();
 
   // The notification context that owns this service instance.
-  raw_ptr<PlatformNotificationContextImpl> notification_context_;
+  raw_ptr<PlatformNotificationContextImpl, DanglingUntriaged>
+      notification_context_;
 
   raw_ptr<BrowserContext> browser_context_;
 

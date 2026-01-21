@@ -20,6 +20,7 @@ enum TestPolicy {
   TESTPOLICY_ASLR,
   TESTPOLICY_STRICTHANDLE,
   TESTPOLICY_WIN32K,
+  TESTPOLICY_WIN32K_NOFAKEGDI,
   TESTPOLICY_EXTENSIONPOINT,
   TESTPOLICY_DYNAMICCODE,
   TESTPOLICY_NONSYSFONT,
@@ -34,6 +35,8 @@ enum TestPolicy {
   TESTPOLICY_CETSTRICT,
   TESTPOLICY_KTMCOMPONENTFILTER,
   TESTPOLICY_PREANDPOSTSTARTUP,
+  TESTPOLICY_FSCTLDISABLED,
+  TESTPOLICY_RESTRICTCORESHARING,
 };
 
 // Timeout for ::WaitForSingleObject synchronization.
@@ -46,8 +49,8 @@ public:
   explicit ScopedTestMutex(const wchar_t* name)
     : mutex_(::CreateMutexW(nullptr, false, name)) {
     EXPECT_TRUE(mutex_);
-    EXPECT_EQ(WAIT_OBJECT_0,
-      ::WaitForSingleObject(mutex_, SboxTestEventTimeout()));
+    EXPECT_EQ(DWORD{WAIT_OBJECT_0},
+              ::WaitForSingleObject(mutex_, SboxTestEventTimeout()));
   }
 
   ScopedTestMutex(const ScopedTestMutex&) = delete;

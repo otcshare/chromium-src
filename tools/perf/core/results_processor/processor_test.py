@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from core.results_processor.formatters import csv_output
 from core.results_processor.formatters import json3_output
@@ -30,7 +31,6 @@ from tracing.value import histogram
 from tracing.value import histogram_set
 from tracing_build import render_histograms_viewer
 
-import mock
 
 # For testing the TBMv2 workflow we use sampleMetric defined in
 # third_party/catapult/tracing/tracing/metrics/sample_metric.html.
@@ -778,7 +778,6 @@ class ResultsProcessorIntegrationTests(unittest.TestCase):
         self.intermediate_dir,
         '--results-label',
         'label',
-        '--experimental-tbmv3-metrics',
     ])
 
     with open(os.path.join(self.output_dir,
@@ -829,7 +828,6 @@ class ResultsProcessorIntegrationTests(unittest.TestCase):
         self.intermediate_dir,
         '--results-label',
         'label',
-        '--experimental-tbmv3-metrics',
     ])
 
     with open(os.path.join(self.output_dir,
@@ -891,7 +889,6 @@ class ResultsProcessorIntegrationTests(unittest.TestCase):
         self.intermediate_dir,
         '--results-label',
         'label',
-        '--experimental-tbmv3-metrics',
         '--extra-metric',
         'tbmv3:dummy_metric',
     ])
@@ -934,7 +931,6 @@ class ResultsProcessorIntegrationTests(unittest.TestCase):
         self.intermediate_dir,
         '--results-label',
         'label',
-        '--experimental-tbmv3-metrics',
     ])
 
     with open(os.path.join(self.output_dir,

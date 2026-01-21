@@ -8,10 +8,8 @@
 #include <string>
 
 #include "base/metrics/single_sample_metrics.h"
-#include "base/threading/thread_local.h"
 #include "components/metrics/public/mojom/single_sample_metrics.mojom.h"
 #include "components/metrics/single_sample_metrics.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace metrics {
 
@@ -43,8 +41,8 @@ class SingleSampleMetricsFactoryImpl : public base::SingleSampleMetricsFactory {
   // base::SingleSampleMetricsFactory:
   std::unique_ptr<base::SingleSampleMetric> CreateCustomCountsMetric(
       const std::string& histogram_name,
-      base::HistogramBase::Sample min,
-      base::HistogramBase::Sample max,
+      base::HistogramBase::Sample32 min,
+      base::HistogramBase::Sample32 max,
       uint32_t bucket_count) override;
 
   // Providers live forever in production, but tests should be kind and clean up
@@ -56,8 +54,8 @@ class SingleSampleMetricsFactoryImpl : public base::SingleSampleMetricsFactory {
   // Creates a single sample metric.
   std::unique_ptr<base::SingleSampleMetric> CreateMetric(
       const std::string& histogram_name,
-      base::HistogramBase::Sample min,
-      base::HistogramBase::Sample max,
+      base::HistogramBase::Sample32 min,
+      base::HistogramBase::Sample32 max,
       uint32_t bucket_count,
       int32_t flags);
 
@@ -66,10 +64,6 @@ class SingleSampleMetricsFactoryImpl : public base::SingleSampleMetricsFactory {
   mojom::SingleSampleMetricsProvider* GetProvider();
 
   CreateProviderCB create_provider_cb_;
-
-  // Per thread storage slot for the mojo provider.
-  base::ThreadLocalPointer<mojo::Remote<mojom::SingleSampleMetricsProvider>>
-      provider_tls_;
 };
 
 }  // namespace metrics

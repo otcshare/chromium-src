@@ -6,8 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/dbus/rgbkbd/fake_rgbkbd_client.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -115,7 +117,7 @@ class RgbkbdClientImpl : public RgbkbdClient {
     if (!response) {
       VLOG(1)
           << "rgbkbd: No Dbus response received for GetRgbKeyboardCapabilities";
-      std::move(callback).Run(absl::nullopt);
+      std::move(callback).Run(std::nullopt);
       return;
     }
     dbus::MessageReader reader(response);
@@ -125,7 +127,7 @@ class RgbkbdClientImpl : public RgbkbdClient {
       LOG(ERROR)
           << "rgbkbd: Error reading GetRgbKeyboardCapabilities response: "
           << response->ToString();
-      std::move(callback).Run(absl::nullopt);
+      std::move(callback).Run(std::nullopt);
       return;
     }
     VLOG(1) << "rgbkbd: Value for keyboard capabilities is: "
@@ -156,7 +158,7 @@ class RgbkbdClientImpl : public RgbkbdClient {
         << "Failed to connect to CapabilityUpdatedForTesting signal.";
   }
 
-  dbus::ObjectProxy* rgbkbd_proxy_ = nullptr;
+  raw_ptr<dbus::ObjectProxy> rgbkbd_proxy_ = nullptr;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

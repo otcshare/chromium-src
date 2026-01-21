@@ -9,7 +9,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/javascript_dialogs/tab_modal_dialog_view.h"
 #include "content/public/browser/javascript_dialog_manager.h"
@@ -42,12 +42,8 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
   void CloseDialogWithoutCallback() override;
   std::u16string GetUserInput() override;
 
-  void Accept(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>&,
-              const base::android::JavaParamRef<jstring>& prompt);
-  void Cancel(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>&,
-              jboolean button_clicked);
+  void Accept(JNIEnv* env, const base::android::JavaRef<jstring>& prompt);
+  void Cancel(JNIEnv* env, bool button_clicked);
 
  private:
   TabModalDialogViewAndroid(

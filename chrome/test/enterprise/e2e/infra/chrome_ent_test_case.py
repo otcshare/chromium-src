@@ -2,11 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import contextlib
+import logging
 import os
+from posixpath import join
 import random
 import string
 import subprocess
 import time
+from typing import Sequence
 
 from absl import flags
 from chrome_ent_test.infra.core import EnterpriseTestCase
@@ -20,6 +24,12 @@ flags.DEFINE_string(
     'chromedriver', None,
     'The path to the chromedriver executable. If not specified, '
     'a chocholatey chromedriver packae will be installed and used.')
+
+flags.DEFINE_string('omaha_installer', None,
+                    'The path to the omaha 4 UpdaterSetup.exe')
+
+flags.DEFINE_string('omaha_updater', None,
+                    'The path to the omaha 4 Updater.exe')
 
 
 class ChromeEnterpriseTestCase(EnterpriseTestCase):
@@ -39,17 +49,102 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
       'client': 'client2019',
       'dc': 'win2019-dc',
   }
-  # Current Win Server version for testing
-  win_config = win_2016_config
 
-  def InstallChrome(self, instance_name):
+  win_2022_config = {
+      'client': 'client2022',
+      'dc': 'win2022-dc',
+  }
+
+  # Current Win Server version for testing
+  win_config = win_2022_config
+
+  def AddFirewallExclusion(self, instance_name):
+    """Add-MpPreference to exclude some folders from defenser scan."""
+    program_file = '"$Env:ProgramFiles"'
+    program_file_x86 = '"$Env:ProgramFiles(x86)"'
+    local_appdata = '"$Env:LOCALAPPDATA"'
+    celab_path = r'"c:\cel\supporting_files"'
+    updater_path = r'"c:\temp"'
+    cmd = (r'Add-MpPreference -ExclusionPath ' + ', '.join([
+        program_file, program_file_x86, local_appdata, celab_path, updater_path
+    ]))
+    self.clients[instance_name].RunPowershell(cmd)
+
+  def InstallGoogleUpdater(self, instance_name):
+    """Install Omaha4 client on VM."""
+    if not FLAGS.omaha_installer:
+      # No omaha installer/updater. Do nothing.
+      logging.debug('--omaha_installer flag is empty.'
+                    'Skip installing google updater.')
+      return
+    self.EnsureDirectory(instance_name, r'c:\temp')
+    installer = self.UploadFile(instance_name, FLAGS.omaha_installer,
+                                r'c:\temp')
+    cmd = installer + r' --install --system'
+    self.RunCommand(instance_name, cmd)
+
+  def WakeGoogleUpdater(self, instance_name):
+    """Runs updater.exe to wake up Omaha 4 service."""
+    if not FLAGS.omaha_updater:
+      logging.debug('--omaha_updater flag is empty.' 'Skip run google updater.')
+      return
+
+    updater = self.UploadFile(instance_name, FLAGS.omaha_updater, r'c:\temp')
+    cmd = (
+        updater + r' --wake' + r' --enable-logging' +
+        r' --vmodule=*/components/winhttp/*=2,*/components/update_client/*=2,'
+        r'*/chrome/updater/*=2')
+    self.RunCommand(instance_name, cmd)
+
+  def GetChromeVersion(self, instance_name):
+    """Get Chrome Version by querying Windows registry"""
+    cmd = (
+        r'reg query'
+        r' "HKLM\SOFTWARE\Google\Update\Clients\{8A69D345-D564-463C-AFF1-A69D9E530F96}"'
+        r' /reg:32 /v pv')
+    chrome_version = self.RunCommand(instance_name, cmd)
+
+    return chrome_version.decode().split()[-1]
+
+  def RunGoogleUpdaterTaskSchedulerCommand(self, instance_name, cmd):
+    """Run task scheduler powershell command to Google Updater"""
+    script = r'Get-ScheduledTask -TaskPath \GoogleSystem\GoogleUpdater\ | ' + cmd
+    return self.clients[instance_name].RunPowershell(script).decode().strip()
+
+  def WaitForUpdateCheck(self, instance_name):
+    """Wait for the updater task to be ready again"""
+    max_wait_time_secs = 120
+    total_wait_time_secs = 0
+    delta_secs = 5
+
+    while total_wait_time_secs < max_wait_time_secs:
+      time.sleep(delta_secs)
+      total_wait_time_secs += delta_secs
+      state = self.RunGoogleUpdaterTaskSchedulerCommand(
+          instance_name, 'Select -ExpandProperty "State"')
+      if state == 'Ready':
+        break
+
+  def InstallChrome(self, instance_name, system_level=False):
     """Installs chrome.
 
     Currently supports two types of installer:
     - mini_installer.exe, and
     - *.msi
+
+    system_level is False by default for all reporting connector
+    e2e tests as it does not need Omaha client to be installed.
+    For DTC e2e test, however,
+    system_level should be set True so that it will be installed together
+    with Omaha 4 client and then call powershell script to add
+    chrome path to $Env:Path.
+
+    Args:
+      instance_name: the gcp instance.
+      system_level: whether the chrome install with --system-level
+        or not. By default, the value is False.
     """
-    self.RunCommand(instance_name, r'md -Force c:\temp')
+    self.EnsureDirectory(instance_name, r'c:\temp')
     file_name = self.UploadFile(instance_name, FLAGS.chrome_installer,
                                 r'c:\temp')
 
@@ -57,7 +152,12 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
       dir = os.path.dirname(os.path.abspath(__file__))
       self.UploadFile(instance_name, os.path.join(dir, 'installer_data'),
                       r'c:\temp')
-      cmd = file_name + r' --installerdata=c:\temp\installer_data'
+      if system_level:
+        cmd = (
+            file_name + r' --installerdata=c:\temp\installer_data' +
+            r' --system-level')
+      else:
+        cmd = file_name + r' --installerdata=c:\temp\installer_data'
     else:
       cmd = 'msiexec /i %s' % file_name
 
@@ -67,6 +167,9 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
         r'powershell -File c:\cel\supporting_files\ensure_chromium_api_keys.ps1'
         r' -Path gs://%s/api/key') % self.gsbucket
     self.RunCommand(instance_name, cmd)
+    if system_level:
+      cmd = r'powershell -File c:\cel\supporting_files\add_chrome_path.ps1'
+      self.RunCommand(instance_name, cmd)
 
   def SetPolicy(self, instance_name, policy_name, policy_value, policy_type):
     r"""Sets a Google Chrome policy in registry.
@@ -94,9 +197,29 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
                  key, policy_name, policy_value, policy_type)
       self.clients[instance_name].RunPowershell(cmd)
 
+  def SetOmahaPolicy(self, instance_name, policy_name, policy_value,
+                     policy_type):
+    key = r'HKLM\Software\Policies\Google\Update'
+    cmd = (r"Set-GPRegistryValue -Name 'Default Domain Policy' "
+           "-Key %s -ValueName %s -Value %s -Type %s") % (
+               key, policy_name, policy_value, policy_type)
+    self.clients[instance_name].RunPowershell(cmd)
+
+  def RemoveDeviceTrustKey(self, instance_name):
+    """Removes a device trust key in registry.
+
+    Args:
+      instance_name: the name of the GCP VM machine.
+    """
+    cmd = (r'Remove-Item -Path HKLM:\SOFTWARE\Google\Chrome\DeviceTrust '
+           '-Force -Verbose')
+    self.clients[instance_name].RunPowershell(cmd)
+
   def RemovePolicy(self, instance_name, policy_name):
     """Removes a Google Chrome policy in registry.
+
     Args:
+      instance_name: the name of the GCP VM machine.
       policy_name: the policy name.
     """
     segments = policy_name.split('\\')
@@ -114,11 +237,17 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
              "-Key %s -ValueName %s") % (key, policy_name)
       self.clients[instance_name].RunPowershell(cmd)
 
+  def GetFileFromGCSBucket(self, path):
+    """Get file from GCS bucket"""
+    path = "gs://%s/%s" % (self.gsbucket, path)
+    cmd = r'gsutil cat ' + path
+    return self.RunCommand(self.win_config['client'], cmd).rstrip().decode()
+
   def InstallWebDriver(self, instance_name):
-    self.RunCommand(instance_name, r'md -Force c:\temp')
+    self.EnsureDirectory(instance_name, r'c:\temp')
     self.EnsurePythonInstalled(instance_name)
     self.InstallPipPackagesLatest(instance_name,
-                                  ['selenium', 'absl-py', 'pywin32'])
+                                  ['selenium', 'absl-py', 'pywin32', 'attrs'])
 
     temp_dir = 'C:\\temp\\'
     if FLAGS.chromedriver is None:
@@ -135,7 +264,10 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
     dir = os.path.dirname(os.path.abspath(__file__))
     self.UploadFile(instance_name, os.path.join(dir, 'test_util.py'), temp_dir)
 
-  def RunWebDriverTest(self, instance_name, test_file, args=[]):
+  def RunWebDriverTest(self,
+                       instance_name,
+                       test_file,
+                       args: list[str] | None = None):
     """Runs a python webdriver test on an instance.
 
     Args:
@@ -149,14 +281,63 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
     file_name = self.UploadFile(instance_name, test_file, r'c:\temp')
 
     # run the test
-    args = subprocess.list2cmdline(args)
+    args = subprocess.list2cmdline(args or [])
     self._pythonExecutablePath[instance_name] = (
         r'C:\ProgramData\chocolatey\lib\python\tools\python.exe')
-    cmd = r'%s %s %s' % (self._pythonExecutablePath[instance_name], file_name,
-                         args)
+    cmd = r'%s -u %s %s' % (self._pythonExecutablePath[instance_name],
+                            file_name, args)
     return self.RunCommand(instance_name, cmd).decode()
 
-  def RunUITest(self, instance_name, test_file, timeout=300, args=[]):
+  def EnableHistogramSupport(self, instance_name, base_path):
+    """Enable histogram package support on an instance.
+
+    Note that base_path is the path to chrome/test/enterprise/e2e/connector.
+
+    Args:
+      instance_name: name of the instance.
+      base_path: the base path of the test in the chromium_src.
+    """
+    dest_path = join('c:', 'temp', 'histogram')
+    self.EnsureDirectory(instance_name, dest_path)
+
+    self.UploadFile(
+        self.win_config['client'],
+        os.path.join(base_path, 'common', 'histogram', '__init__.py'),
+        dest_path)
+    self.UploadFile(self.win_config['client'],
+                    os.path.join(base_path, 'common', 'histogram', 'util.py'),
+                    dest_path)
+
+  def EnableDemoAgent(self, instance_name):
+    # enterprise/e2e/connector/common/demo_agent
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    agent_path = os.path.join(base_path, 'connector', 'common', 'demo_agent')
+
+    # create dest path
+    dest_path = join('c:', 'temp', 'demo_agent')
+    self.EnsureDirectory(instance_name, dest_path)
+
+    # Install Visual C++ Redistributable package as demo agent's dependency
+    gspath = "gs://%s/%s" % (self.gsbucket, 'secrets/VC_redist.x64.exe')
+    cmd = r'gsutil cp ' + gspath + ' ' + dest_path
+
+    self.RunCommand(instance_name, cmd)
+
+    cmd = r'C:\temp\demo_agent\VC_redist.x64.exe /passive'
+    self.RunCommand(instance_name, cmd)
+
+    # upload demo agent
+    self.UploadFile(self.win_config['client'],
+                    os.path.join(agent_path, 'agent.zip'), dest_path)
+    cmd = (r'Expand-Archive -Path c:\temp\demo_agent\agent.zip '
+           r'-DestinationPath c:\temp\demo_agent')
+    self.clients[instance_name].RunPowershell(cmd)
+
+  def RunUITest(self,
+                instance_name,
+                test_file,
+                timeout=300,
+                args: list[str] | None = None):
     """Runs a UI test on an instance.
 
     Args:
@@ -171,12 +352,15 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
     # upload the test
     file_name = self.UploadFile(instance_name, test_file, r'c:\temp')
 
+    # check for cel_ui_agent.exe running
+    self._checkUIAgentRunningOnInstance(instance_name)
+
     # run the test.
     # note that '-u' flag is passed to enable unbuffered stdout and stderr.
     # Without this flag, if the test is killed because of timeout, we will not
     # get any output from stdout because the output is buffered. When this
     # happens it makes debugging really hard.
-    args = subprocess.list2cmdline(args)
+    args = subprocess.list2cmdline(args or [])
     self._pythonExecutablePath[instance_name] = (
         r'C:\ProgramData\chocolatey\lib\python\tools\python.exe')
     ui_test_cmd = r'%s -u %s %s' % (self._pythonExecutablePath[instance_name],
@@ -193,6 +377,9 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
     random.shuffle(s)
     return ''.join(s)
 
+  def _checkUIAgentRunningOnInstance(self, instance_name):
+    self.RunCommand(instance_name, 'tasklist | findstr cel_ui_agent.exe')
+
   def _rebootInstance(self, instance_name):
     self.RunCommand(instance_name, 'shutdown /r /t 0')
 
@@ -208,14 +395,42 @@ class ChromeEnterpriseTestCase(EnterpriseTestCase):
     self.InstallPipPackagesLatest(instance_name,
                                   ['pywinauto', 'pyperclip', 'requests'])
 
-    password = self._generatePassword()
-    user_name = 'ui_user'
+    ui_test_user = 'ui_user'
+    ui_test_password = self._generatePassword()
     cmd = (r'powershell -File c:\cel\supporting_files\enable_auto_logon.ps1 '
-           r'-userName %s -password %s') % (user_name, password)
+           r'-userName %s -password %s') % (ui_test_user, ui_test_password)
     self.RunCommand(instance_name, cmd)
     self._rebootInstance(instance_name)
 
     cmd = (r'powershell -File c:\cel\supporting_files\set_ui_agent.ps1 '
-           '-username %s') % user_name
+           '-username %s') % ui_test_user
     self.RunCommand(instance_name, cmd)
     self._rebootInstance(instance_name)
+
+  def EnsureDirectory(self, instance_name: str, path: str):
+    cmd = f'New-Item -ItemType Directory -Force -Path {path}'
+    self.clients[instance_name].RunPowershell(cmd)
+
+  @contextlib.contextmanager
+  def RunScriptInBackground(self,
+                            instance_name: str,
+                            local_script_path: str,
+                            args: list[str] | None = None):
+    remote_script_path = self.UploadFile(instance_name, local_script_path,
+                                         r'c:\temp')
+    python_exec = self._pythonExecutablePath[instance_name]
+    python_args = ' '.join([
+        '-u',
+        remote_script_path,
+        *(args or []),
+    ])
+    cmd = (f'(Start-Process -PassThru -FilePath {python_exec} '
+           f'-ArgumentList "{python_args}").ID')
+    client = self.clients[instance_name]
+    pid = client.RunPowershell(cmd).decode().strip()
+    try:
+      yield
+    finally:
+      # Use `taskkill /t` instead of `Stop-Process` to kill all subprocesses as
+      # well.
+      client.RunPowershell(f'taskkill /pid {pid} /f /t')

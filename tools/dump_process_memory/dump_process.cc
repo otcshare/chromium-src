@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/debug/proc_maps_linux.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -164,35 +165,32 @@ bool DumpRegion(const MappedMemoryRegion& region,
         ((region.start / kPageSize) + i) * sizeof(PageMapEntry);
     PageMapEntry entry;
     proc_pagemap->Seek(base::File::FROM_BEGIN, pagemap_offset);
-    int size_read = proc_pagemap->ReadAtCurrentPos(
-        reinterpret_cast<char*>(&entry), sizeof(PageMapEntry));
-    if (size_read != sizeof(PageMapEntry)) {
+    if (proc_pagemap->ReadAtCurrentPos(base::byte_span_from_ref(entry)) !=
+        sizeof(PageMapEntry)) {
       PLOG(ERROR) << "Cannot read from /proc/pid/pagemap at offset "
                   << pagemap_offset;
       return false;
     }
     std::string metadata = base::StringPrintf(
         "%c%c\n", entry.present ? '1' : '0', entry.swapped ? '1' : '0');
-    metadata_file.WriteAtCurrentPos(metadata.c_str(), metadata.size());
+    metadata_file.WriteAtCurrentPos(base::as_byte_span(metadata));
   }
 
   // Writing data page by page to avoid allocating too much memory.
-  std::vector<char> buffer(kPageSize);
+  std::vector<uint8_t> buffer(kPageSize);
   for (size_t i = 0; i < size_in_pages; ++i) {
     uint64_t address = region.start + i * kPageSize;
     // Works because the upper half of the address space is reserved for the
     // kernel on at least ARM64 and x86_64 bit architectures.
     CHECK(address <= std::numeric_limits<int64_t>::max());
     proc_mem->Seek(base::File::FROM_BEGIN, static_cast<int64_t>(address));
-    int size_read = proc_mem->ReadAtCurrentPos(&buffer[0], kPageSize);
-    if (size_read != kPageSize) {
+    if (proc_mem->ReadAtCurrentPos(buffer) != kPageSize) {
       PLOG(ERROR) << "Cannot read from /proc/pid/mem at offset " << address;
       return false;
     }
 
     int64_t output_offset = i * kPageSize;
-    int size_written = output_file.Write(output_offset, &buffer[0], kPageSize);
-    if (size_written != kPageSize) {
+    if (output_file.Write(output_offset, buffer) != kPageSize) {
       PLOG(ERROR) << "Cannot write to output file";
       return false;
     }

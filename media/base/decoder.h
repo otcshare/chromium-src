@@ -26,9 +26,10 @@ enum class AudioDecoderType : int {
   kAudioToolbox = 7,     // AudioToolbox (macOS)
   kMediaFoundation = 8,  // MediaFoundationAudioDecoder
   kPassthroughDTS = 9,   // Passthrough DTS audio
+  kSymphonia = 10,       // Symphonia Rust-backed SymphoniaAudioDecoder.
 
   // Keep this at the end and equal to the last entry.
-  kMaxValue = kPassthroughDTS,
+  kMaxValue = kSymphonia,
 };
 
 // List of known VideoDecoder implementations; recorded to UKM, always add new
@@ -49,17 +50,19 @@ enum class VideoDecoderType : int {
   kVaapi = 12,   // VaapiVideoDecoder
   kBroker = 13,  // VideoDecoderBroker (Webcodecs)
   kVda = 14,     // VDAVideoDecoder
-  // kChromeOs = 15,  // DEPRECATED, should be kVaapi or kV4L2 instead.
-  kV4L2 = 16,  // V4L2VideoDecoder
-
-  kTesting = 17,  // Never send this to UKM, for tests only.
+  // kChromeOs = 15,  // DEPRECATED, should be kVaapi, kV4L2, or kOutOfProcess
+  // instead.
+  kV4L2 = 16,          // V4L2VideoDecoder
+  kTesting = 17,       // Never send this to UKM, for tests only.
+  kOutOfProcess = 18,  // OOPVideoDecoder (Linux and ChromeOS)
+  kVideoToolbox = 19,  // VideoToolboxVideoDecoder (Mac)
 
   // Keep this at the end and equal to the last entry.
-  kMaxValue = kTesting
+  kMaxValue = kVideoToolbox
 };
 
-MEDIA_EXPORT std::string GetDecoderName(AudioDecoderType type);
-MEDIA_EXPORT std::string GetDecoderName(VideoDecoderType type);
+MEDIA_EXPORT const char* GetDecoderName(AudioDecoderType type);
+MEDIA_EXPORT const char* GetDecoderName(VideoDecoderType type);
 MEDIA_EXPORT std::ostream& operator<<(std::ostream& out, AudioDecoderType type);
 MEDIA_EXPORT std::ostream& operator<<(std::ostream& out, VideoDecoderType type);
 
@@ -74,7 +77,7 @@ class MEDIA_EXPORT Decoder {
 
   // Returns true if the implementation supports decoding configs with
   // encryption.
-  // TODO(crbug.com/1099488): Sometimes it's not possible to give a definitive
+  // TODO(crbug.com/40137516): Sometimes it's not possible to give a definitive
   // yes or no answer unless more context is given. While this doesn't pose any
   // problems, it does allow incompatible decoders to pass the filtering step in
   // |DecoderSelector| potentially slowing down the selection process.

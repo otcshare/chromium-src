@@ -6,17 +6,14 @@
 
 #include <memory>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_device_state.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
@@ -24,6 +21,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -78,8 +76,7 @@ class DeviceDisablingManagerTestBase : public testing::Test,
 
   // Configure install attributes.
   void SetUnowned();
-  void SetEnterpriseCloudOwned();
-  void SetEnterpriseActiveDirectoryOwned();
+  void SetEnterpriseOwned();
   void SetConsumerOwned();
 
  private:
@@ -100,7 +97,8 @@ void DeviceDisablingManagerTestBase::TearDown() {
 
 void DeviceDisablingManagerTestBase::CreateDeviceDisablingManager() {
   device_disabling_manager_ = std::make_unique<DeviceDisablingManager>(
-      this, CrosSettings::Get(), &fake_user_manager_);
+      TestingBrowserProcess::GetGlobal()->local_state(), this,
+      CrosSettings::Get(), &fake_user_manager_);
   device_disabling_manager_->Init();
 }
 
@@ -116,13 +114,8 @@ void DeviceDisablingManagerTestBase::SetUnowned() {
   cros_settings_test_helper_.InstallAttributes()->Clear();
 }
 
-void DeviceDisablingManagerTestBase::SetEnterpriseCloudOwned() {
+void DeviceDisablingManagerTestBase::SetEnterpriseOwned() {
   cros_settings_test_helper_.InstallAttributes()->SetCloudManaged(
-      kEnrollmentDomain, kDeviceId);
-}
-
-void DeviceDisablingManagerTestBase::SetEnterpriseActiveDirectoryOwned() {
-  cros_settings_test_helper_.InstallAttributes()->SetActiveDirectoryManaged(
       kEnrollmentDomain, kDeviceId);
 }
 
@@ -154,7 +147,6 @@ class DeviceDisablingManagerOOBETest : public DeviceDisablingManagerTestBase {
  private:
   void OnDeviceDisabledChecked(bool device_disabled);
 
-  TestingPrefServiceSimple local_state_;
   FakeStatisticsProvider statistics_provider_;
 
   base::RunLoop run_loop_;
@@ -167,15 +159,12 @@ DeviceDisablingManagerOOBETest::DeviceDisablingManagerOOBETest() {
 }
 
 void DeviceDisablingManagerOOBETest::SetUp() {
-  TestingBrowserProcess::GetGlobal()->SetLocalState(&local_state_);
-  policy::DeviceCloudPolicyManagerAsh::RegisterPrefs(local_state_.registry());
   CreateDeviceDisablingManager();
   StatisticsProvider::SetTestProvider(&statistics_provider_);
 }
 
 void DeviceDisablingManagerOOBETest::TearDown() {
   DeviceDisablingManagerTestBase::TearDown();
-  TestingBrowserProcess::GetGlobal()->SetLocalState(nullptr);
 }
 
 void DeviceDisablingManagerOOBETest::CheckWhetherDeviceDisabledDuringOOBE() {
@@ -186,7 +175,8 @@ void DeviceDisablingManagerOOBETest::CheckWhetherDeviceDisabledDuringOOBE() {
 }
 
 void DeviceDisablingManagerOOBETest::SetDeviceDisabled(bool disabled) {
-  ScopedDictPrefUpdate dict(&local_state_, prefs::kServerBackedDeviceState);
+  ScopedDictPrefUpdate dict(TestingBrowserProcess::GetGlobal()->local_state(),
+                            prefs::kServerBackedDeviceState);
   if (disabled) {
     dict->Set(policy::kDeviceStateMode, policy::kDeviceStateModeDisabled);
   } else {
@@ -227,25 +217,11 @@ TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenTurnedOffBySwitch) {
 }
 
 // Verifies that the device is not considered disabled during OOBE when it is
-// already enrolled, even if the device is marked as disabled.
+// already enterprise enrolled, even if the device is marked as disabled.
 TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenEnterpriseOwned) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   SetDeviceDisabled(true);
   CheckWhetherDeviceDisabledDuringOOBE();
-  EXPECT_FALSE(device_disabled());
-}
-
-// Verifies that the device is not considered disabled during OOBE when it is
-// enrolled in AD mode, even if the device is marked as disabled and Chromad is
-// disabled by flag.
-TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenAdOwnedChromadDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kChromadAvailable);
-  SetEnterpriseActiveDirectoryOwned();
-  SetDeviceDisabled(true);
-
-  CheckWhetherDeviceDisabledDuringOOBE();
-
   EXPECT_FALSE(device_disabled());
 }
 
@@ -289,6 +265,7 @@ class DeviceDisablingManagerTest : public DeviceDisablingManagerTestBase,
 
   // DeviceDisablingManager::Observer:
   MOCK_METHOD1(OnDisabledMessageChanged, void(const std::string&));
+  MOCK_METHOD0(OnRestrictionScheduleMessageChanged, void());
 
   void MakeCrosSettingsTrusted();
 
@@ -305,7 +282,7 @@ class DeviceDisablingManagerTest : public DeviceDisablingManagerTestBase,
 DeviceDisablingManagerTest::DeviceDisablingManagerTest() = default;
 
 void DeviceDisablingManagerTest::TearDown() {
-  DeviceSettingsService::Get()->UnsetSessionManager();
+  DeviceSettingsService::Get()->StopProcessing();
   DeviceDisablingManagerTestBase::TearDown();
 }
 
@@ -324,8 +301,9 @@ void DeviceDisablingManagerTest::MakeCrosSettingsTrusted() {
   scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util(
       new ownership::MockOwnerKeyUtil);
   owner_key_util->SetPublicKeyFromPrivateKey(*device_policy_.GetSigningKey());
-  DeviceSettingsService::Get()->SetSessionManager(&session_manager_client_,
-                                                  owner_key_util);
+  DeviceSettingsService::Get()->StartProcessing(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      &session_manager_client_, owner_key_util);
   SimulatePolicyFetch();
 }
 
@@ -358,7 +336,7 @@ void DeviceDisablingManagerTest::SimulatePolicyFetch() {
 // Verifies that the device is not considered disabled by default when it is
 // enrolled for enterprise management.
 TEST_F(DeviceDisablingManagerTest, NotDisabledByDefault) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
 
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
@@ -370,7 +348,7 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledByDefault) {
 // Verifies that the device is not considered disabled when it is explicitly
 // marked as not disabled.
 TEST_F(DeviceDisablingManagerTest, NotDisabledWhenExplicitlyNotDisabled) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDeviceDisabled(false);
 
@@ -383,28 +361,10 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledWhenExplicitlyNotDisabled) {
 // Verifies that the device is not considered disabled when device disabling is
 // turned off by switch, even if the device is marked as disabled.
 TEST_F(DeviceDisablingManagerTest,
-       NotDisabledWhenTurnedOffBySwitchCloudManaged) {
+       NotDisabledWhenTurnedOffBySwitchEnterpriseManaged) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kDisableDeviceDisabling);
-  SetEnterpriseCloudOwned();
-  MakeCrosSettingsTrusted();
-  SetDeviceDisabled(true);
-
-  EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
-  EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
-  EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
-  CreateDeviceDisablingManager();
-}
-
-// Verifies that the device is not considered disabled when device disabling is
-// turned off by switch, even if the device is AD managed.
-TEST_F(DeviceDisablingManagerTest, NotDisabledWhenTurnedOffBySwitchAdManaged) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kChromadAvailable);
-
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kDisableDeviceDisabling);
-  SetEnterpriseActiveDirectoryOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDeviceDisabled(true);
 
@@ -427,44 +387,10 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledWhenConsumerOwned) {
   CreateDeviceDisablingManager();
 }
 
-// Verifies that AD device is not considered disabled when Chromad is enabled
-// via flag, and the device is explicitly marked as not disabled.
-TEST_F(DeviceDisablingManagerTest, NotDisabledWhenAdManagedAndChromadEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kChromadAvailable);
-
-  SetEnterpriseActiveDirectoryOwned();
-  MakeCrosSettingsTrusted();
-  SetDeviceDisabled(false);
-
-  EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
-  EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
-  EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
-  CreateDeviceDisablingManager();
-}
-
-// Verifies that AD device is considered disabled when Chromad is disabled via
-// flag, even when it is explicitly marked as not disabled.
-TEST_F(DeviceDisablingManagerTest, DisabledWhenAdManagedAndChromadDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kChromadAvailable);
-
-  SetEnterpriseActiveDirectoryOwned();
-  MakeCrosSettingsTrusted();
-  SetDisabledMessage("");
-  SetDeviceDisabled(false);
-
-  EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
-  EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(1);
-  EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
-  CreateDeviceDisablingManager();
-  EXPECT_TRUE(GetDeviceDisablingManager()->disabled_message().empty());
-}
-
 // Verifies that the device disabled screen is shown immediately when the device
 // is already marked as disabled on start-up.
 TEST_F(DeviceDisablingManagerTest, DisabledOnLoginScreen) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDisabledMessage(kDisabledMessage1);
   SetDeviceDisabled(true);
@@ -482,7 +408,7 @@ TEST_F(DeviceDisablingManagerTest, DisabledOnLoginScreen) {
 // becomes disabled while the login screen is showing. Also verifies that Chrome
 // restarts when the device becomes enabled again.
 TEST_F(DeviceDisablingManagerTest, DisableAndReEnableOnLoginScreen) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDisabledMessage(kDisabledMessage1);
 
@@ -526,7 +452,7 @@ TEST_F(DeviceDisablingManagerTest, DisableAndReEnableOnLoginScreen) {
 // Verifies that Chrome restarts when the device becomes disabled while a
 // session is in progress.
 TEST_F(DeviceDisablingManagerTest, DisableDuringSession) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDisabledMessage(kDisabledMessage1);
   LogIn();
@@ -556,7 +482,7 @@ TEST_F(DeviceDisablingManagerTest, HonorDeviceDisablingDuringNormalOperation) {
       DeviceDisablingManager::HonorDeviceDisablingDuringNormalOperation());
 
   // Enterprise owned, not disabled by switch.
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   EXPECT_TRUE(
       DeviceDisablingManager::HonorDeviceDisablingDuringNormalOperation());
 
@@ -584,12 +510,8 @@ TEST_F(DeviceDisablingManagerTest, IsDeviceDisabledWhenTurnedOffBySwitch) {
   SetConsumerOwned();
   EXPECT_FALSE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
 
-  // Enterprise cloud owned.
-  SetEnterpriseCloudOwned();
-  EXPECT_FALSE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
-
-  // Enterprise AD owned.
-  SetEnterpriseActiveDirectoryOwned();
+  // Enterprise owned.
+  SetEnterpriseOwned();
   EXPECT_FALSE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
 }
 
@@ -606,27 +528,13 @@ TEST_F(DeviceDisablingManagerTest, IsDeviceDisabledNotEnterpriseOwned) {
 // Tests the IsDeviceDisabledDuringNormalOperation() method, when device is
 // enterprise owned.
 TEST_F(DeviceDisablingManagerTest, IsDeviceDisabledEnterpriseOwned) {
-  SetEnterpriseCloudOwned();
+  SetEnterpriseOwned();
   MakeCrosSettingsTrusted();
   SetDeviceDisabled(false);
 
   EXPECT_FALSE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
 
   SetDeviceDisabled(true);
-
-  EXPECT_TRUE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
-}
-
-// Tests the IsDeviceDisabledDuringNormalOperation() method, when device is
-// enterprise AD owned, Chromad disabled by flag.
-TEST_F(DeviceDisablingManagerTest, IsDeviceDisabledChromadDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kChromadAvailable);
-
-  // Enterprise AD owned.
-  SetEnterpriseActiveDirectoryOwned();
-  MakeCrosSettingsTrusted();
-  SetDeviceDisabled(false);
 
   EXPECT_TRUE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
 }

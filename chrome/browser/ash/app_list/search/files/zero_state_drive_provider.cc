@@ -4,27 +4,30 @@
 
 #include "chrome/browser/ash/app_list/search/files/zero_state_drive_provider.h"
 
-#include <algorithm>
 #include <memory>
-#include <utility>
+#include <optional>
 
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_keyed_service.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_keyed_service_factory.h"
-#include "chrome/browser/ash/app_list/search/files/file_suggest_util.h"
+#include "base/trace_event/common/trace_event_common.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/ash/app_list/search/search_controller.h"
+#include "chrome/browser/ash/app_list/search/search_provider.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
+#include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
 #include "content/public/browser/browser_context.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace app_list {
 namespace {
 
-using SuggestResults = std::vector<FileSuggestData>;
+using SuggestResults = std::vector<ash::FileSuggestData>;
 
 // How long to wait before making the first request for results from the
 // ItemSuggestCache.
@@ -42,11 +45,13 @@ ZeroStateDriveProvider::ZeroStateDriveProvider(
     SearchController* search_controller,
     drive::DriveIntegrationService* drive_service,
     session_manager::SessionManager* session_manager)
-    : profile_(profile),
+    : SearchProvider(SearchCategory::kFiles),
+      profile_(profile),
       drive_service_(drive_service),
       session_manager_(session_manager),
       file_suggest_service_(
-          FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile)),
+          ash::FileSuggestKeyedServiceFactory::GetInstance()->GetService(
+              profile)),
       construction_time_(base::Time::Now()) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(profile_);
@@ -64,12 +69,12 @@ ZeroStateDriveProvider::ZeroStateDriveProvider(
     } else {
       // Wait for DriveFS to be mounted, then fetch results. This happens in
       // OnFileSystemMounted.
-      drive_observation_.Observe(drive_service_);
+      Observe(drive_service_.get());
     }
   }
 
   if (session_manager_)
-    session_observation_.Observe(session_manager_);
+    session_observation_.Observe(session_manager_.get());
 
   auto* power_manager = chromeos::PowerManagerClient::Get();
   if (power_manager)
@@ -89,6 +94,7 @@ void ZeroStateDriveProvider::OnFileSystemMounted() {
 }
 
 void ZeroStateDriveProvider::OnSessionStateChanged() {
+  TRACE_EVENT0("ui", "ZeroStateDriveProvider::OnSessionStateChanged");
   // Update cache if the user has logged in.
   if (session_manager_->session_state() ==
       session_manager::SessionState::ACTIVE) {
@@ -127,13 +133,13 @@ void ZeroStateDriveProvider::StartZeroState() {
   suggestion_query_weak_factory_.InvalidateWeakPtrs();
 
   file_suggest_service_->GetSuggestFileData(
-      FileSuggestionType::kDriveFile,
+      ash::FileSuggestionType::kDriveFile,
       base::BindOnce(&ZeroStateDriveProvider::OnSuggestFileDataFetched,
                      suggestion_query_weak_factory_.GetWeakPtr()));
 }
 
 void ZeroStateDriveProvider::OnSuggestFileDataFetched(
-    const absl::optional<SuggestResults>& suggest_results) {
+    const std::optional<SuggestResults>& suggest_results) {
   // Fail to fetch the suggest data, so return early.
   if (!suggest_results) {
     // Send empty result list to search controller to unblock zero state.
@@ -152,36 +158,44 @@ void ZeroStateDriveProvider::SetSearchResults(
   // Assign scores to results by simply using their position in the results
   // list. The order of results from the ItemSuggest API is significant:
   // the first is better than the second, etc. Resulting scores are in [0, 1].
+  //
+  // If drive files and local files need to be mixed in continue section, create
+  // ranking using time stamps, so local and drive files are consistently
+  // ranked.
+  const bool timestamp_based_score =
+      ash::features::UseMixedFileLauncherContinueSection();
+
   const double total_items = static_cast<double>(suggest_results.size());
   int item_index = 0;
+
+  const base::TimeDelta max_recency = ash::GetMaxFileSuggestionRecency();
   SearchProvider::Results provider_results;
   for (const auto& result : suggest_results) {
-    const double score = 1.0 - (item_index / total_items);
+    const double score = timestamp_based_score
+                             ? ash::ToTimestampBasedScore(result, max_recency)
+                             : (1.0 - item_index / total_items);
     ++item_index;
+    auto provider_result = std::make_unique<FileResult>(
+        result.id, result.file_path, result.prediction_reason,
+        ash::AppListSearchResultType::kZeroStateDrive,
+        ash::SearchResultDisplayType::kContinue, score, std::u16string(),
+        FileResult::Type::kFile, profile_, /*thumbnail_loader=*/nullptr);
+    if (result.modified_time) {
+      provider_result->SetContinueFileSuggestionType(
+          ash::ContinueFileSuggestionType::kModifiedByCurrentUserDrive);
+    } else if (result.viewed_time) {
+      provider_result->SetContinueFileSuggestionType(
+          ash::ContinueFileSuggestionType::kViewedDrive);
+    } else if (result.shared_time) {
+      provider_result->SetContinueFileSuggestionType(
+          ash::ContinueFileSuggestionType::kSharedWithUserDrive);
+    }
 
-    provider_results.emplace_back(MakeListResult(
-        result.id, result.file_path, result.prediction_reason, score));
+    provider_results.emplace_back(std::move(provider_result));
   }
 
   SwapResults(&provider_results);
   LogLatency(base::TimeTicks::Now() - query_start_time_);
-}
-
-std::unique_ptr<FileResult> ZeroStateDriveProvider::MakeListResult(
-    const std::string& result_id,
-    const base::FilePath& filepath,
-    const absl::optional<std::u16string>& prediction_reason,
-    const float relevance) {
-  absl::optional<std::u16string> details;
-  if (prediction_reason)
-    details = prediction_reason.value();
-
-  auto result = std::make_unique<FileResult>(
-      result_id, filepath, details,
-      ash::AppListSearchResultType::kZeroStateDrive,
-      ash::SearchResultDisplayType::kContinue, relevance, std::u16string(),
-      FileResult::Type::kFile, profile_);
-  return result;
 }
 
 void ZeroStateDriveProvider::MaybeUpdateCache() {
@@ -191,9 +205,11 @@ void ZeroStateDriveProvider::MaybeUpdateCache() {
   }
 }
 
-void ZeroStateDriveProvider::OnFileSuggestionUpdated(FileSuggestionType type) {
-  if (type == FileSuggestionType::kDriveFile)
+void ZeroStateDriveProvider::OnFileSuggestionUpdated(
+    ash::FileSuggestionType type) {
+  if (type == ash::FileSuggestionType::kDriveFile) {
     StartZeroState();
+  }
 }
 
 }  // namespace app_list

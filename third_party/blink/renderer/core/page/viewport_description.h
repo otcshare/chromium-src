@@ -29,7 +29,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_VIEWPORT_DESCRIPTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_VIEWPORT_DESCRIPTION_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/public/mojom/page/display_cutout.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/page_scale_constraints.h"
@@ -143,10 +144,6 @@ struct CORE_EXPORT ViewportDescription {
            viewport_fit_ == other.viewport_fit_;
   }
 
-  bool operator!=(const ViewportDescription& other) const {
-    return !(*this == other);
-  }
-
   bool IsLegacyViewportType() const {
     return type >= kHandheldFriendlyMeta && type <= kViewportMeta;
   }
@@ -168,7 +165,7 @@ struct CORE_EXPORT ViewportDescription {
   // This is because a Document will have multiple ViewportDescriptions are
   // which one that will be used is dependent on whether any values have been
   // explicitly set.
-  absl::optional<mojom::ViewportFit> viewport_fit_;
+  std::optional<mojom::ViewportFit> viewport_fit_;
 };
 
 }  // namespace blink

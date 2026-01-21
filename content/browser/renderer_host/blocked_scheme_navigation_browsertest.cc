@@ -18,10 +18,11 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "content/browser/site_per_process_browsertest.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
+#include "content/public/common/buildflags.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -34,7 +35,10 @@
 #include "content/shell/browser/shell_download_manager_delegate.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "pdf/buildflags.h"
+#include "storage/browser/file_system/external_mount_points.h"
+#include "storage/common/file_system/file_system_mount_option.h"
+#include "storage/common/file_system/file_system_types.h"
+#include "third_party/blink/public/common/features.h"
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "content/public/browser/plugin_service.h"
@@ -128,27 +132,25 @@ void RegisterFakePlugin() {
   const char kPdfMimeType[] = "application/pdf";
   const char kPdfFileType[] = "pdf";
   WebPluginInfo plugin_info;
-  plugin_info.type = WebPluginInfo::PLUGIN_TYPE_PEPPER_OUT_OF_PROCESS;
+  plugin_info.type = WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
   plugin_info.name = kPluginName;
   plugin_info.mime_types.emplace_back(kPdfMimeType, kPdfFileType,
                                       std::string());
   auto* plugin_service = PluginService::GetInstance();
-  plugin_service->RegisterInternalPlugin(plugin_info, false);
-  plugin_service->RefreshPlugins();
+  plugin_service->RegisterInternalPlugin(plugin_info);
+  plugin_service->GetPlugins();
 }
 
 void UnregisterFakePlugin() {
   auto* plugin_service = PluginService::GetInstance();
-  std::vector<WebPluginInfo> plugins;
-  plugin_service->GetInternalPlugins(&plugins);
-  EXPECT_EQ(1u, plugins.size());
+  const std::vector<WebPluginInfo> plugins =
+      plugin_service->GetInternalPluginsForTesting();
+  ASSERT_EQ(1u, plugins.size());
 
   plugin_service->UnregisterInternalPlugin(plugins[0].path);
-  plugin_service->RefreshPlugins();
+  plugin_service->GetPlugins();
 
-  plugins.clear();
-  plugin_service->GetInternalPlugins(&plugins);
-  EXPECT_TRUE(plugins.empty());
+  EXPECT_TRUE(plugin_service->GetInternalPluginsForTesting().empty());
 }
 #endif  // BUILDFLAG(ENABLE_PLUGINS)
 
@@ -213,21 +215,22 @@ class BlockedSchemeNavigationBrowserTest
                            const std::string& mime_type) {
     const char kCreateFilesystemUrlScript[] =
         "var contents = `%s`;"
-        "webkitRequestFileSystem(window.TEMPORARY, 1024, fs => {"
-        "  fs.root.getFile('%s', {create: true}, entry => {"
-        "    entry.createWriter(w => {"
-        "      w.write(new Blob([contents], {type: '%s'}));"
-        "      w.onwrite = function(evt) {"
-        "        domAutomationController.send(entry.toURL());"
-        "      }"
+        "new Promise(resolve => {"
+        "    webkitRequestFileSystem(window.TEMPORARY, 1024, fs => {"
+        "    fs.root.getFile('%s', {create: true}, entry => {"
+        "      entry.createWriter(w => {"
+        "        w.write(new Blob([contents], {type: '%s'}));"
+        "        w.onwrite = function(evt) {"
+        "          resolve(entry.toURL());"
+        "        }"
+        "      });"
         "    });"
         "  });"
         "});";
     std::string filesystem_url_string =
         EvalJs(shell()->web_contents()->GetPrimaryMainFrame(),
                base::StringPrintf(kCreateFilesystemUrlScript, content.c_str(),
-                                  filename.c_str(), mime_type.c_str()),
-               EXECUTE_SCRIPT_USE_MANUAL_REPLY)
+                                  filename.c_str(), mime_type.c_str()))
             .ExtractString();
     GURL filesystem_url(filesystem_url_string);
     EXPECT_TRUE(filesystem_url.is_valid());
@@ -264,7 +267,8 @@ class BlockedSchemeNavigationBrowserTest
 
   // Adds an iframe to |rfh| pointing to |url|.
   void AddIFrame(RenderFrameHost* rfh, const GURL& url) {
-    content::DOMMessageQueue message_queue(rfh);
+    content::DOMMessageQueue message_queue(
+        WebContents::FromRenderFrameHost(rfh));
     const std::string javascript = base::StringPrintf(
         "f = document.createElement('iframe'); f.src = '%s';"
         "document.body.appendChild(f);",
@@ -368,7 +372,7 @@ class BlockedSchemeNavigationBrowserTest
             ? std::string()
             : base::StringPrintf(kNavigationBlockedMessage, scheme.c_str());
 
-    absl::optional<WebContentsConsoleObserver> console_observer;
+    std::optional<WebContentsConsoleObserver> console_observer;
     if (!expected_message.empty()) {
       console_observer.emplace(shell()->web_contents());
       console_observer->SetPattern(expected_message);
@@ -685,8 +689,15 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest, HTML_Download) {
 
 // Tests that navigating the main frame to a blocked scheme with HTML mimetype
 // from a subframe is blocked.
+// TODO: crbug.com/40943572 - Fix and re-enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_HTML_NavigationFromFrame_Block \
+  DISABLED_HTML_NavigationFromFrame_Block
+#else
+#define MAYBE_HTML_NavigationFromFrame_Block HTML_NavigationFromFrame_Block
+#endif
 IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
-                       HTML_NavigationFromFrame_Block) {
+                       MAYBE_HTML_NavigationFromFrame_Block) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("a.com", "/simple_page.html")));
   AddIFrame(
@@ -702,8 +713,15 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
 
 // Tests that opening a new window with a blocked scheme from a subframe is
 // blocked.
+// TODO: crbug.com/40943572 - Fix and re-enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_HTML_WindowOpenFromFrame_Block \
+  DISABLED_HTML_WindowOpenFromFrame_Block
+#else
+#define MAYBE_HTML_WindowOpenFromFrame_Block HTML_WindowOpenFromFrame_Block
+#endif
 IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
-                       HTML_WindowOpenFromFrame_Block) {
+                       MAYBE_HTML_WindowOpenFromFrame_Block) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("a.com", "/simple_page.html")));
   AddIFrame(
@@ -786,7 +804,8 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
     // original page may clear all filesystem: URLs associated with that origin,
     // so we keep the origin around in the original shell.
     ShellAddedObserver new_shell_observer;
-    // TODO(crbug/811558): about:blank might commit without needing to wait.
+    // TODO(crbug.com/40090464): about:blank might commit without needing to
+    // wait.
     //                     Remove the wait.
     EXPECT_TRUE(ExecJs(shell()->web_contents(), "window.open('about:blank');"));
     Shell* new_shell = new_shell_observer.GetShell();
@@ -802,9 +821,17 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
 
 // Tests that navigating the top frame to a blocked scheme with HTML mimetype is
 // blocked even if the top frame already has a blocked scheme.
+// TODO: crbug.com/40943572 - Fix and re-enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block \
+  DISABLED_HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block
+#else
+#define MAYBE_HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block \
+  HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block
+#endif
 IN_PROC_BROWSER_TEST_P(
     BlockedSchemeNavigationBrowserTest,
-    HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block) {
+    MAYBE_HTML_NavigationFromFrame_TopFrameHasBlockedScheme_Block) {
   EXPECT_TRUE(NavigateToURL(shell(), CreateEmptyURLWithBlockedScheme()));
   AddIFrame(shell()->web_contents()->GetPrimaryMainFrame(), GetTestURL());
 
@@ -945,8 +972,16 @@ IN_PROC_BROWSER_TEST_F(BlockedSchemeNavigationBrowserTest,
 
 // Tests navigation of the main frame to a filesystem URL with a binary mimetype
 // from a subframe. Navigations to filesystem URLs never end up as downloads.
+// TODO(crbug.com/40943572): Enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_FilesystemUrl_OctetStream_NavigationFromFrame \
+  DISABLED_FilesystemUrl_OctetStream_NavigationFromFrame
+#else
+#define MAYBE_FilesystemUrl_OctetStream_NavigationFromFrame \
+  FilesystemUrl_OctetStream_NavigationFromFrame
+#endif
 IN_PROC_BROWSER_TEST_F(BlockedSchemeNavigationBrowserTest,
-                       FilesystemUrl_OctetStream_NavigationFromFrame) {
+                       MAYBE_FilesystemUrl_OctetStream_NavigationFromFrame) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("a.com", "/simple_page.html")));
   AddIFrame(shell()->web_contents()->GetPrimaryMainFrame(),
@@ -1074,8 +1109,17 @@ IN_PROC_BROWSER_TEST_F(BlockedSchemeNavigationBrowserTest,
 // Test navigation of the main frame to a filesystem URL with an unknown
 // mimetype from a subframe. Navigations to filesystem URLs don't end up as
 // downloads.
-IN_PROC_BROWSER_TEST_F(BlockedSchemeNavigationBrowserTest,
-                       FilesystemUrl_UnknownMimeType_NavigationFromFrame) {
+// TODO(crbug.com/40943572): Enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_FilesystemUrl_UnknownMimeType_NavigationFromFrame \
+  DISABLED_FilesystemUrl_UnknownMimeType_NavigationFromFrame
+#else
+#define MAYBE_FilesystemUrl_UnknownMimeType_NavigationFromFrame \
+  FilesystemUrl_UnknownMimeType_NavigationFromFrame
+#endif
+IN_PROC_BROWSER_TEST_F(
+    BlockedSchemeNavigationBrowserTest,
+    MAYBE_FilesystemUrl_UnknownMimeType_NavigationFromFrame) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("a.com", "/simple_page.html")));
   AddIFrame(shell()->web_contents()->GetPrimaryMainFrame(),
@@ -1095,12 +1139,11 @@ IN_PROC_BROWSER_TEST_F(BlockedSchemeNavigationBrowserTest,
 // mime type is allowed, or initiates a download on Android.
 IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
                        PDF_BrowserInitiatedNavigation_Allow) {
-  std::string pdf_base64;
-  base::Base64Encode(kPDF, &pdf_base64);
+  std::string pdf_base64 = base::Base64Encode(kPDF);
   const GURL kPDFUrl(CreateURLWithBlockedScheme(
       "test.pdf", IsDataURLTest() ? pdf_base64 : kPDF, "application/pdf"));
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   TestNavigationObserver observer(shell()->web_contents());
   EXPECT_TRUE(NavigateToURL(shell(), kPDFUrl));
   EXPECT_EQ(kPDFUrl, observer.last_navigation_url());
@@ -1118,7 +1161,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
                        PDF_WindowOpen_Block) {
   Navigate(GetTestURL());
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   ExecuteScriptAndCheckWindowOpen(
       shell()->web_contents()->GetPrimaryMainFrame(), GetParam(),
       "document.getElementById('window-open-pdf').click()", NAVIGATION_BLOCKED);
@@ -1146,7 +1189,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
                        PDF_Navigation_Block) {
   Navigate(GetTestURL());
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   ExecuteScriptAndCheckPDFNavigation(
       shell()->web_contents()->GetPrimaryMainFrame(), GetParam(),
       "document.getElementById('navigate-top-frame-to-pdf').click()",
@@ -1174,7 +1217,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
 IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest, PDF_FormPost_Block) {
   Navigate(GetTestURL());
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   ExecuteScriptAndCheckPDFNavigation(
       shell()->web_contents()->GetPrimaryMainFrame(), GetParam(),
       "document.getElementById('form-post-to-pdf').click()",
@@ -1199,8 +1242,15 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest, PDF_FormPost_Block) {
 
 // Tests that navigating the main frame to a blocked scheme with PDF mimetype
 // from a subframe is blocked, or is downloaded on Android.
+// TODO: crbug.com/40943572 - Fix and re-enable the flaky test.
+#if BUILDFLAG(IS_FUCHSIA)
+#define MAYBE_PDF_NavigationFromFrame_Block \
+  DISABLED_PDF_NavigationFromFrame_Block
+#else
+#define MAYBE_PDF_NavigationFromFrame_Block PDF_NavigationFromFrame_Block
+#endif
 IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
-                       PDF_NavigationFromFrame_Block) {
+                       MAYBE_PDF_NavigationFromFrame_Block) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("a.com", "/simple_page.html")));
   AddIFrame(
@@ -1208,7 +1258,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
       embedded_test_server()->GetURL(
           "b.com", base::StringPrintf("/%s_url_navigations.html", GetParam())));
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   TestPDFNavigationFromFrame(
       GetParam(),
       "document.getElementById('navigate-top-frame-to-pdf').click()",
@@ -1246,7 +1296,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
             embedded_test_server()->GetURL(
                 base::StringPrintf("/%s_url_navigations.html", GetParam())));
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   TestWindowOpenFromFrame(GetParam(),
                           "document.getElementById('window-open-pdf').click()",
                           NAVIGATION_BLOCKED);
@@ -1280,7 +1330,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), CreateEmptyURLWithBlockedScheme()));
   AddIFrame(shell()->web_contents()->GetPrimaryMainFrame(), GetTestURL());
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   TestPDFNavigationFromFrame(
       GetParam(),
       "document.getElementById('navigate-top-frame-to-pdf').click()",
@@ -1315,7 +1365,7 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), CreateEmptyURLWithBlockedScheme()));
   AddIFrame(shell()->web_contents()->GetPrimaryMainFrame(), GetTestURL());
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PLUGINS)
   TestWindowOpenFromFrame(GetParam(),
                           "document.getElementById('window-open-pdf').click()",
                           NAVIGATION_BLOCKED);
@@ -1416,5 +1466,59 @@ IN_PROC_BROWSER_TEST_P(BlockedSchemeNavigationBrowserTest,
     EXPECT_EQ(entry->GetURL(), entry->GetVirtualURL());
   }
 }
+
+class FilesystemUrlNavigationBrowserTest
+    : public ContentBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  FilesystemUrlNavigationBrowserTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitWithFeatureState(
+          blink::features::kFileSystemUrlNavigation, GetParam());
+    }
+  }
+
+  FilesystemUrlNavigationBrowserTest(
+      const FilesystemUrlNavigationBrowserTest&) = delete;
+  FilesystemUrlNavigationBrowserTest& operator=(
+      const FilesystemUrlNavigationBrowserTest&) = delete;
+
+  ~FilesystemUrlNavigationBrowserTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that navigation to external mounted filesystem: URLs are blocked
+// unless FileSystemUrlNavigation feature flag is enabled (b/291526810).
+IN_PROC_BROWSER_TEST_P(FilesystemUrlNavigationBrowserTest, External) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir mount_point;
+  ASSERT_TRUE(mount_point.CreateUniqueTempDir());
+  ASSERT_TRUE(
+      base::WriteFile(mount_point.GetPath().AppendASCII("file.html"),
+                      "<html><script>console.log('success')</script></html>"));
+  storage::ExternalMountPoints::GetSystemInstance()->RegisterFileSystem(
+      "mount-name", storage::kFileSystemTypeLocal,
+      storage::FileSystemMountOption(), mount_point.GetPath());
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+  console_observer.SetPattern(
+      GetParam() ? "success" : "Not allowed to navigate to filesystem URL:*");
+  EXPECT_EQ(GetParam(),
+            NavigateToURL(shell(), GURL("filesystem:http://remote/"
+                                        "external/mount-name/file.html")));
+  ASSERT_TRUE(console_observer.Wait());
+
+  storage::ExternalMountPoints::GetSystemInstance()->RevokeFileSystem(
+      "mount-name");
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         FilesystemUrlNavigationBrowserTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool> info) {
+                           return info.param ? "FlagOn" : "FlagOff";
+                         });
 
 }  // namespace content

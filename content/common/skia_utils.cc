@@ -8,10 +8,12 @@
 #include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "build/build_config.h"
 #include "content/public/common/content_switches.h"
 #include "skia/ext/event_tracer_impl.h"
+#include "skia/ext/font_utils.h"
 #include "skia/ext/skia_memory_dump_provider.h"
 #include "third_party/skia/include/core/SkGraphics.h"
 
@@ -22,12 +24,7 @@ namespace {
 // require pre-scaling. Skia will fallback to a filter that doesn't
 // require pre-scaling if the default filter would require an
 // allocation that exceeds this limit.
-const size_t kImageCacheSingleAllocationByteLimit = 64 * 1024 * 1024;
-
-// Decreases the size of the font cache to 1MiB.
-BASE_FEATURE(kSmallerFontCache,
-             "SmallerFontCache",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+constexpr size_t kImageCacheSingleAllocationByteLimit = 64 * 1024 * 1024;
 
 }  // namespace
 
@@ -39,12 +36,15 @@ void InitializeSkia() {
     SkGraphics::Init();
   }
 
-  const int kMB = 1024 * 1024;
+  constexpr int kMB = 1024 * 1024;
+
+  // Could also reduce the maximum number of cached strikes, but the intent
+  // being to reduce memory usage, only control cache memory usage.
+  SkGraphics::SetFontCacheLimit(kMB);
+  skia::InitializeFontRendering();
+
+#if !BUILDFLAG(IS_ANDROID)
   size_t font_cache_limit;
-#if BUILDFLAG(IS_ANDROID)
-  font_cache_limit = base::SysInfo::IsLowEndDevice() ? kMB : 8 * kMB;
-  SkGraphics::SetFontCacheLimit(font_cache_limit);
-#else
   if (cmd.HasSwitch(switches::kSkiaFontCacheLimitMb)) {
     if (base::StringToSizeT(
             cmd.GetSwitchValueASCII(switches::kSkiaFontCacheLimitMb),
@@ -62,12 +62,6 @@ void InitializeSkia() {
     }
   }
 #endif
-
-  if (base::FeatureList::IsEnabled(kSmallerFontCache)) {
-    // Could also reduce the maximum number of cached strikes, but the intent
-    // being to reduce memory usage, only control cache memory usage.
-    SkGraphics::SetFontCacheLimit(kMB);
-  }
 
   InitSkiaEventTracer();
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(

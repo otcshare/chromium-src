@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <memory>
 
-#include "ash/constants/app_types.h"
-#include "ash/frame/non_client_frame_view_ash.h"
+#include "ash/frame/frame_view_ash.h"
+#include "ash/public/cpp/test/test_new_window_delegate.h"
+#include "ash/wm/window_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/sharesheet/sharesheet_metrics.h"
@@ -31,12 +33,18 @@
 #include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/events/base_event_utils.h"
-#include "ui/lottie/resource.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/test/test_widget_builder.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/widget/widget_observer.h"
+#include "ui/wm/core/transient_window_manager.h"
 
 namespace {
 
@@ -46,6 +54,28 @@ void Click(const views::View* view) {
   event_generator.MoveMouseTo(view->GetBoundsInScreen().CenterPoint());
   event_generator.ClickLeftButton();
 }
+
+class TestNewWindowDelegate : public ash::TestNewWindowDelegate {
+ public:
+  TestNewWindowDelegate() = default;
+  TestNewWindowDelegate(const TestNewWindowDelegate&) = delete;
+  TestNewWindowDelegate& operator=(const TestNewWindowDelegate&) = delete;
+  ~TestNewWindowDelegate() override = default;
+
+  void OpenUrl(const GURL& url,
+               OpenUrlFrom from,
+               Disposition disposition) override {
+    url_ = url;
+    // Window will be deleted by shell upon shutdown.
+    auto* widget = views::test::TestWidgetBuilder().BuildOwnedByNativeWidget();
+    ASSERT_TRUE(widget->IsActive());
+  }
+
+  std::optional<GURL> retrieve_url() { return std::move(url_); }
+
+ private:
+  std::optional<GURL> url_;
+};
 
 }  // namespace
 
@@ -60,59 +90,77 @@ class TestWidgetDelegate : public views::WidgetDelegateView {
   // views::WidgetDelegateView:
   bool CanActivate() const override { return true; }
 
-  std::unique_ptr<views::NonClientFrameView> CreateNonClientFrameView(
+  std::unique_ptr<views::FrameView> CreateFrameView(
       views::Widget* widget) override {
-    return std::make_unique<NonClientFrameViewAsh>(widget);
+    return std::make_unique<FrameViewAsh>(widget);
   }
 };
 
-class SharesheetBubbleViewTest : public ChromeAshTestBase {
+class SharesheetBubbleViewTest : public ChromeAshTestBase,
+                                 public views::WidgetObserver {
  public:
   SharesheetBubbleViewTest() = default;
 
   // ChromeAshTestBase:
   void SetUp() override {
+    new_window_delegate_ = std::make_unique<::TestNewWindowDelegate>();
     ChromeAshTestBase::SetUp();
 
     profile_ = std::make_unique<TestingProfile>();
 
     // Set up parent window for sharesheet to anchor to.
     auto* widget = new views::Widget();
-    views::Widget::InitParams params;
+    views::Widget::InitParams params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
     params.delegate = new TestWidgetDelegate();
     params.context = GetContext();
     widget->Init(std::move(params));
     widget->Show();
-    widget->GetNativeWindow()->SetProperty(aura::client::kShowStateKey,
-                                           ui::SHOW_STATE_FULLSCREEN);
+    widget->GetNativeWindow()->SetProperty(
+        aura::client::kShowStateKey, ui::mojom::WindowShowState::kFullscreen);
     gfx::Size window_size = widget->GetWindowBoundsInScreen().size();
     auto* content_view = new views::NativeViewHost();
     content_view->SetBounds(0, 0, window_size.width(), window_size.height());
     widget->GetContentsView()->AddChildView(content_view);
 
     parent_window_ = widget->GetNativeWindow();
-
-    ui::ResourceBundle::SetLottieParsingFunctions(
-        &lottie::ParseLottieAsStillImage,
-        &lottie::ParseLottieAsThemedStillImage);
   }
 
-  void ShowAndVerifyBubble(apps::IntentPtr intent,
-                           ::sharesheet::LaunchSource source,
-                           int num_actions_to_add = 0) {
-    ::sharesheet::SharesheetService* const sharesheet_service =
-        ::sharesheet::SharesheetServiceFactory::GetForProfile(profile_.get());
+  void TearDown() override {
+    if (bubble_delegate_) {
+      bubble_delegate_->CloseBubble(::sharesheet::SharesheetResult::kCancel);
+    }
+    ASSERT_FALSE(sharesheet_bubble_view_);
+    ChromeAshTestBase::TearDown();
+
+    new_window_delegate_.reset();
+  }
+
+  ::sharesheet::SharesheetService* GetSharesheetService() {
+    return ::sharesheet::SharesheetServiceFactory::GetForProfile(
+        profile_.get());
+  }
+
+  void ShowAndVerifyBubble(
+      apps::IntentPtr intent,
+      ::sharesheet::LaunchSource source,
+      std::vector<::sharesheet::ShareActionType> actions = {}) {
+    auto* sharesheet_service = GetSharesheetService();
     sharesheet_service->ShowBubbleForTesting(
-        parent_window_, std::move(intent),
-        /*contains_hosted_document=*/false, source,
+        parent_window_, std::move(intent), source,
         /*delivered_callback=*/base::DoNothing(),
-        /*close_callback=*/base::DoNothing(), num_actions_to_add);
+        /*close_callback=*/
+        base::BindOnce(&SharesheetBubbleViewTest::OnClose,
+                       base::Unretained(this)),
+        actions);
     bubble_delegate_ = static_cast<SharesheetBubbleViewDelegate*>(
         sharesheet_service->GetUiDelegateForTesting(parent_window_));
     EXPECT_NE(bubble_delegate_, nullptr);
     sharesheet_bubble_view_ = bubble_delegate_->GetBubbleViewForTesting();
     EXPECT_NE(sharesheet_bubble_view_, nullptr);
     EXPECT_EQ(sharesheet_bubble_view_->GetID(), SHARESHEET_BUBBLE_VIEW_ID);
+
+    sharesheet_bubble_view_->GetWidget()->AddObserver(this);
 
     ASSERT_TRUE(bubble_delegate_->IsBubbleVisible());
     sharesheet_widget_ = sharesheet_bubble_view_->GetWidget();
@@ -122,23 +170,28 @@ class SharesheetBubbleViewTest : public ChromeAshTestBase {
 
   void CloseBubble() {
     bubble_delegate_->CloseBubble(::sharesheet::SharesheetResult::kCancel);
-    // |bubble_delegate_| and |sharesheet_bubble_view_| destruct on close.
-    bubble_delegate_ = nullptr;
-    sharesheet_bubble_view_ = nullptr;
-
-    ASSERT_FALSE(IsSharesheetVisible());
+    ASSERT_FALSE(sharesheet_bubble_view_);
   }
 
   void CloseBubbleWithEscKey() {
     GetEventGenerator()->PressAndReleaseKey(ui::VKEY_ESCAPE);
-    // |bubble_delegate_| and |sharesheet_bubble_view_| destruct on close.
-    bubble_delegate_ = nullptr;
-    sharesheet_bubble_view_ = nullptr;
-
-    ASSERT_FALSE(IsSharesheetVisible());
+    ASSERT_FALSE(sharesheet_bubble_view_);
   }
 
   bool IsSharesheetVisible() { return sharesheet_widget_->IsVisible(); }
+
+  views::Widget* sharesheet_widget() { return sharesheet_widget_; }
+
+  void OnClose(views::Widget::ClosedReason reason) {
+    sharesheet_bubble_view_ = nullptr;
+    bubble_delegate_ = nullptr;
+  }
+
+  // views::WidgetObserver::
+  void OnWidgetDestroyed(views::Widget* widget) override {
+    widget->RemoveObserver(this);
+    sharesheet_widget_ = nullptr;
+  }
 
   SharesheetBubbleView* sharesheet_bubble_view() {
     return sharesheet_bubble_view_;
@@ -161,32 +214,16 @@ class SharesheetBubbleViewTest : public ChromeAshTestBase {
  private:
   gfx::NativeWindow parent_window_;
   std::unique_ptr<TestingProfile> profile_;
-  SharesheetBubbleViewDelegate* bubble_delegate_;
-  SharesheetBubbleView* sharesheet_bubble_view_;
-  views::Widget* sharesheet_widget_;
+  raw_ptr<SharesheetBubbleViewDelegate> bubble_delegate_;
+  raw_ptr<SharesheetBubbleView> sharesheet_bubble_view_;
+  raw_ptr<views::Widget> sharesheet_widget_;
+  std::unique_ptr<::TestNewWindowDelegate> new_window_delegate_;
 };
 
 TEST_F(SharesheetBubbleViewTest, BubbleDoesOpenAndClose) {
   ShowAndVerifyBubble(::sharesheet::CreateValidTextIntent(),
                       ::sharesheet::LaunchSource::kUnknown);
   CloseBubble();
-}
-
-TEST_F(SharesheetBubbleViewTest, EmptyState) {
-  ShowAndVerifyBubble(::sharesheet::CreateInvalidIntent(),
-                      ::sharesheet::LaunchSource::kUnknown);
-
-  // Header should contain Share label.
-  ASSERT_TRUE(header_view()->GetVisible());
-  ASSERT_EQ(header_view()->children().size(), 1u);
-
-  // Body view should contain 3 children, an image and 2 labels.
-  ASSERT_TRUE(body_view()->GetVisible());
-  ASSERT_EQ(body_view()->children().size(), 3u);
-
-  // Footer should be an empty view that just acts as padding.
-  ASSERT_TRUE(footer_view()->GetVisible());
-  ASSERT_EQ(footer_view()->children().size(), 0u);
 }
 
 TEST_F(SharesheetBubbleViewTest, RecordLaunchSource) {
@@ -205,42 +242,6 @@ TEST_F(SharesheetBubbleViewTest, RecordLaunchSource) {
       ::sharesheet::kSharesheetLaunchSourceResultHistogram, source, 1);
 }
 
-TEST_F(SharesheetBubbleViewTest, RecordShareActionCount) {
-  // Text intent should only show copy action.
-  base::HistogramTester histograms;
-  ShowAndVerifyBubble(::sharesheet::CreateValidTextIntent(),
-                      ::sharesheet::LaunchSource::kUnknown);
-  CloseBubble();
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kDriveAction, 0);
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kCopyAction, 1);
-
-  // Drive intent should show only drive action.
-  ShowAndVerifyBubble(::sharesheet::CreateDriveIntent(),
-                      ::sharesheet::LaunchSource::kUnknown);
-  CloseBubble();
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kDriveAction, 1);
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kCopyAction, 1);
-
-  // Invalid intent should not show any actions.
-  ShowAndVerifyBubble(::sharesheet::CreateInvalidIntent(),
-                      ::sharesheet::LaunchSource::kUnknown);
-  CloseBubble();
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kDriveAction, 1);
-  histograms.ExpectBucketCount(
-      ::sharesheet::kSharesheetShareActionResultHistogram,
-      ::sharesheet::SharesheetMetrics::UserAction::kCopyAction, 1);
-}
-
 TEST_F(SharesheetBubbleViewTest, ClickCopyToClipboard) {
   base::HistogramTester histograms;
   // Text intent should only show copy action.
@@ -257,6 +258,79 @@ TEST_F(SharesheetBubbleViewTest, ClickCopyToClipboard) {
 
   // Bubble should close after copy target was pressed.
   ASSERT_FALSE(IsSharesheetVisible());
+
+  // Copy to clipboard was clicked on.
+  histograms.ExpectBucketCount(
+      ::sharesheet::kSharesheetUserActionResultHistogram,
+      ::sharesheet::SharesheetMetrics::UserAction::kCopyAction, 1);
+
+  // Check text copied correctly.
+  std::u16string clipboard_text;
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr,
+      &clipboard_text);
+  EXPECT_EQ(::sharesheet::kTestText, base::UTF16ToUTF8(clipboard_text));
+}
+
+TEST_F(SharesheetBubbleViewTest, KeyPressCopyToClipboard) {
+  base::HistogramTester histograms;
+
+  // Text intent should only show copy action.
+  ShowAndVerifyBubble(::sharesheet::CreateValidTextIntent(),
+                      ::sharesheet::LaunchSource::kUnknown);
+
+  // |targets_view| should only contain the copy to clipboard target.
+  views::View* targets_view = sharesheet_bubble_view()->GetViewByID(
+      SharesheetViewID::TARGETS_DEFAULT_VIEW_ID);
+  ASSERT_EQ(targets_view->children().size(), 1u);
+
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_TAB);
+  ASSERT_TRUE(targets_view->children()[0]->HasFocus());
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_RETURN);
+
+  // Bubble should close after copy target was pressed.
+  ASSERT_FALSE(IsSharesheetVisible());
+
+  // Copy to clipboard was clicked on.
+  histograms.ExpectBucketCount(
+      ::sharesheet::kSharesheetUserActionResultHistogram,
+      ::sharesheet::SharesheetMetrics::UserAction::kCopyAction, 1);
+
+  // Check text copied correctly.
+  std::u16string clipboard_text;
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr,
+      &clipboard_text);
+  EXPECT_EQ(::sharesheet::kTestText, base::UTF16ToUTF8(clipboard_text));
+}
+
+TEST_F(SharesheetBubbleViewTest, ClickAndKeyPressCopyToClipboardTogether) {
+  base::HistogramTester histograms;
+
+  // Text intent should only show copy action.
+  ShowAndVerifyBubble(::sharesheet::CreateValidTextIntent(),
+                      ::sharesheet::LaunchSource::kUnknown);
+
+  // |targets_view| should only contain the copy to clipboard target.
+  views::View* targets_view = sharesheet_bubble_view()->GetViewByID(
+      SharesheetViewID::TARGETS_DEFAULT_VIEW_ID);
+  ASSERT_EQ(targets_view->children().size(), 1u);
+
+  gfx::ScopedAnimationDurationScaleMode normal_animation_duration(
+      gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_TAB);
+  ASSERT_TRUE(targets_view->children()[0]->HasFocus());
+
+  // Wait for the widget to get destroyed.
+  views::test::WidgetDestroyedWaiter widget_observer(sharesheet_widget());
+
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_RETURN);
+
+  // Click on copy target.
+  Click(targets_view->children()[0]);
+
+  // Ensure the widget does close.
+  widget_observer.Wait();
 
   // Copy to clipboard was clicked on.
   histograms.ExpectBucketCount(
@@ -323,7 +397,7 @@ TEST_F(SharesheetBubbleViewTest, TextPreviewOneFile) {
 
   auto* title_text = static_cast<views::Label*>(text_views->children()[1]);
   ASSERT_EQ(title_text->GetText(), u"text.txt");
-  ASSERT_EQ(title_text->GetAccessibleName(), u"text.txt");
+  ASSERT_EQ(title_text->GetViewAccessibility().GetCachedName(), u"text.txt");
   CloseBubble();
 }
 
@@ -344,7 +418,8 @@ TEST_F(SharesheetBubbleViewTest, TextPreviewMultipleFiles) {
 
   auto* title_text = static_cast<views::Label*>(text_views->children()[1]);
   ASSERT_EQ(title_text->GetText(), u"2 files");
-  ASSERT_EQ(title_text->GetAccessibleName(), u"2 files file.pdf, text.txt");
+  ASSERT_EQ(title_text->GetViewAccessibility().GetCachedName(),
+            u"2 files file.pdf, text.txt");
   CloseBubble();
 }
 
@@ -473,7 +548,7 @@ TEST_F(SharesheetBubbleViewTest, HoldEscapeKey) {
 TEST_F(SharesheetBubbleViewTest, ShareActionShowsUpAsExpected) {
   ShowAndVerifyBubble(::sharesheet::CreateValidTextIntent(),
                       ::sharesheet::LaunchSource::kUnknown,
-                      /*num_actions_to_add=*/1);
+                      {::sharesheet::kExample});
   views::View* share_action_view = sharesheet_bubble_view()->GetViewByID(
       SharesheetViewID::SHARE_ACTION_VIEW_ID);
   ASSERT_FALSE(share_action_view->GetVisible());
@@ -490,6 +565,67 @@ TEST_F(SharesheetBubbleViewTest, ShareActionShowsUpAsExpected) {
 
   CloseBubble();
   ASSERT_FALSE(IsSharesheetVisible());
+}
+
+TEST_F(SharesheetBubbleViewTest, DriveActionShouldNotCrash) {
+  auto drive_intent = ::sharesheet::CreateDriveIntent();
+  auto drive_share_url = drive_intent->drive_share_url.value();
+  ShowAndVerifyBubble(std::move(drive_intent),
+                      ::sharesheet::LaunchSource::kUnknown,
+                      {::sharesheet::ShareActionType::kDriveShare});
+
+  views::View* share_action_view = sharesheet_bubble_view()->GetViewByID(
+      SharesheetViewID::SHARE_ACTION_VIEW_ID);
+  ASSERT_FALSE(share_action_view->GetVisible());
+
+  // |targets_view| should contain the share with others, copy, and drive share
+  // target.
+  views::View* targets_view = sharesheet_bubble_view()->GetViewByID(
+      SharesheetViewID::TARGETS_DEFAULT_VIEW_ID);
+  ASSERT_EQ(targets_view->children().size(), 3u);
+
+  // The last one is drive share.
+  Click(targets_view->children()[2]);
+  EXPECT_FALSE(sharesheet_bubble_view());
+
+  // Make sure the drive action was invoked.
+  auto* delegate = static_cast<::TestNewWindowDelegate*>(
+      ash::NewWindowDelegate::GetInstance());
+  auto url = delegate->retrieve_url();
+  ASSERT_TRUE(url.has_value());
+  EXPECT_EQ(drive_share_url, *url);
+}
+
+TEST_F(SharesheetBubbleViewTest, ReshowHiddenBubble) {
+  auto* sharesheet_service = GetSharesheetService();
+  auto app_window = CreateAppWindow();
+
+  auto* transient_window_manager =
+      ::wm::TransientWindowManager::GetIfExists(app_window.get());
+  EXPECT_EQ(0u, transient_window_manager->transient_children().size());
+
+  sharesheet_service->AddShareActionForTest(
+      ::sharesheet::ShareActionType::kNearbyShare);
+  sharesheet_service->ShowNearbyShareBubbleForArc(
+      app_window.get(), ::sharesheet::CreateValidTextIntent(),
+      ::sharesheet::LaunchSource::kUnknown, base::DoNothing(),
+      base::DoNothing(), base::DoNothing());
+  ASSERT_EQ(1u, transient_window_manager->transient_children().size());
+
+  auto* bubble_window = transient_window_manager->transient_children()[0].get();
+
+  window_util::MinimizeAndHideWithoutAnimation({app_window.get()});
+
+  EXPECT_FALSE(app_window->IsVisible());
+  EXPECT_FALSE(bubble_window->IsVisible());
+
+  // Reshowing the bubble shouldn't crash.
+  sharesheet_service->ShowNearbyShareBubbleForArc(
+      app_window.get(), ::sharesheet::CreateValidTextIntent(),
+      ::sharesheet::LaunchSource::kUnknown, base::DoNothing(),
+      base::DoNothing(), base::DoNothing());
+
+  EXPECT_TRUE(bubble_window->IsVisible());
 }
 
 }  // namespace sharesheet

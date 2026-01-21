@@ -1,9 +1,11 @@
 Name: wayland-protocols
 URL: http://wayland.freedesktop.org/
-Version: 1.26
+Version: 1.45
+Update Mechanism: Manual
 License: MIT
 License File: src/COPYING
 Security Critical: yes
+Shipped: yes
 
 Description:
 wayland-protocols/src contains the official library of Wayland protocol
@@ -32,13 +34,15 @@ To upgrade a source to a new version:
 Please follow the guideline below when updating an extension protocol.
 https://source.chromium.org/chromium/chromium/src/+/main:components/exo/wayland/README.md
 
---------------------------------------------------------------------------------
+-------------------- DEPENDENCY DIVIDER --------------------
 Name: gtk
 URL: https://github.com/GNOME/gtk
 Version: 4.3.0
-License: GNU LGPL 2
+Update Mechanism: Manual
+License: LGPL-2.0
 License File: gtk/COPYING
 Security Critical: yes
+Shipped: yes
 
 Description:
 wayland-protocols/gtk contains the GTK toolkit.  In its gdk/wayland/protocol
@@ -51,13 +55,16 @@ https://github.com/GNOME/gtk.git.
 Source checkout path:
 src/third_party/wayland-protocols/gtk
 
---------------------------------------------------------------------------------
+-------------------- DEPENDENCY DIVIDER --------------------
 Name: plasma-wayland-protocols
 URL: https://github.com/KDE/plasma-wayland-protocols
 Version: 1.3.0
-License: GNU LGPL 2.1
+Revision: 493efe04e01780f4371f95b7b2de957cf4a31bf3
+Update Mechanism: Manual
+License: LGPL-2.1
 License File: kde/COPYING.LIB
 Security Critical: yes
+Shipped: yes
 
 Description:
 wayland-protocols/kde contains Wayland protocol extensions exposed by

@@ -7,14 +7,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/hash/md5.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -23,9 +22,19 @@
 #include "base/time/time.h"
 #include "components/drive/file_system_core_util.h"
 #include "components/drive/service/test_util.h"
+#include "crypto/obsolete/md5.h"
 #include "google_apis/common/test_util.h"
 #include "google_apis/drive/drive_api_parser.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+namespace {
+
+std::string GetMd5Checksum(std::string_view input) {
+  return base::HexEncodeLower(
+      crypto::obsolete::Md5::HashForTesting(base::as_bytes(base::span(input))));
+}
+
+}  // namespace
 
 using google_apis::AboutResource;
 using google_apis::ApiErrorCode;
@@ -1184,7 +1193,7 @@ TEST_F(FakeDriveServiceTest, DownloadFile_ExistingFile) {
   ASSERT_TRUE(base::ReadFileToString(output_file_path, &content));
   EXPECT_EQ("This is some test content.", content);
   ASSERT_TRUE(!download_progress_values.empty());
-  EXPECT_TRUE(base::ranges::is_sorted(download_progress_values));
+  EXPECT_TRUE(std::ranges::is_sorted(download_progress_values));
   EXPECT_LE(0, download_progress_values.front().first);
   EXPECT_GE(26, download_progress_values.back().first);
   EXPECT_EQ(content, get_content_callback.GetConcatenatedData());
@@ -1230,7 +1239,13 @@ TEST_F(FakeDriveServiceTest, DownloadFile_Offline) {
 }
 
 TEST_F(FakeDriveServiceTest, CopyResource) {
-  const base::Time::Exploded kModifiedDate = {2012, 7, 0, 19, 15, 59, 13, 123};
+  static constexpr base::Time::Exploded kModifiedDate = {.year = 2012,
+                                                         .month = 7,
+                                                         .day_of_month = 19,
+                                                         .hour = 15,
+                                                         .minute = 59,
+                                                         .second = 13,
+                                                         .millisecond = 123};
 
   ASSERT_TRUE(test_util::SetUpTestEntries(&fake_service_));
 
@@ -1317,8 +1332,21 @@ TEST_F(FakeDriveServiceTest, CopyResource_Offline) {
 }
 
 TEST_F(FakeDriveServiceTest, UpdateResource) {
-  const base::Time::Exploded kModifiedDate = {2012, 7, 0, 19, 15, 59, 13, 123};
-  const base::Time::Exploded kViewedDate = {2013, 8, 1, 20, 16, 00, 14, 234};
+  static constexpr base::Time::Exploded kModifiedDate = {.year = 2012,
+                                                         .month = 7,
+                                                         .day_of_month = 19,
+                                                         .hour = 15,
+                                                         .minute = 59,
+                                                         .second = 13,
+                                                         .millisecond = 123};
+  static constexpr base::Time::Exploded kViewedDate = {.year = 2013,
+                                                       .month = 8,
+                                                       .day_of_week = 1,
+                                                       .day_of_month = 20,
+                                                       .hour = 16,
+                                                       .minute = 0,
+                                                       .second = 14,
+                                                       .millisecond = 234};
 
   ASSERT_TRUE(test_util::SetUpTestEntries(&fake_service_));
 
@@ -1987,7 +2015,7 @@ TEST_F(FakeDriveServiceTest, ResumeUpload_ExistingFile) {
   EXPECT_EQ(HTTP_RESUME_INCOMPLETE, response.code);
   EXPECT_FALSE(entry);
   ASSERT_TRUE(!upload_progress_values.empty());
-  EXPECT_TRUE(base::ranges::is_sorted(upload_progress_values));
+  EXPECT_TRUE(std::ranges::is_sorted(upload_progress_values));
   EXPECT_LE(0, upload_progress_values.front().first);
   EXPECT_GE(static_cast<int64_t>(contents.size() / 2),
             upload_progress_values.back().first);
@@ -2006,11 +2034,11 @@ TEST_F(FakeDriveServiceTest, ResumeUpload_ExistingFile) {
   EXPECT_EQ(static_cast<int64_t>(contents.size()), entry->file_size());
   EXPECT_TRUE(Exists(entry->file_id()));
   ASSERT_TRUE(!upload_progress_values.empty());
-  EXPECT_TRUE(base::ranges::is_sorted(upload_progress_values));
+  EXPECT_TRUE(std::ranges::is_sorted(upload_progress_values));
   EXPECT_LE(0, upload_progress_values.front().first);
   EXPECT_GE(static_cast<int64_t>(contents.size() - contents.size() / 2),
             upload_progress_values.back().first);
-  EXPECT_EQ(base::MD5String(contents), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(contents), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, ResumeUpload_NewFile) {
@@ -2049,7 +2077,7 @@ TEST_F(FakeDriveServiceTest, ResumeUpload_NewFile) {
   EXPECT_EQ(HTTP_RESUME_INCOMPLETE, response.code);
   EXPECT_FALSE(entry);
   ASSERT_TRUE(!upload_progress_values.empty());
-  EXPECT_TRUE(base::ranges::is_sorted(upload_progress_values));
+  EXPECT_TRUE(std::ranges::is_sorted(upload_progress_values));
   EXPECT_LE(0, upload_progress_values.front().first);
   EXPECT_GE(static_cast<int64_t>(contents.size() / 2),
             upload_progress_values.back().first);
@@ -2068,11 +2096,11 @@ TEST_F(FakeDriveServiceTest, ResumeUpload_NewFile) {
   EXPECT_EQ(static_cast<int64_t>(contents.size()), entry->file_size());
   EXPECT_TRUE(Exists(entry->file_id()));
   ASSERT_TRUE(!upload_progress_values.empty());
-  EXPECT_TRUE(base::ranges::is_sorted(upload_progress_values));
+  EXPECT_TRUE(std::ranges::is_sorted(upload_progress_values));
   EXPECT_LE(0, upload_progress_values.front().first);
   EXPECT_GE(static_cast<int64_t>(contents.size() - contents.size() / 2),
             upload_progress_values.back().first);
-  EXPECT_EQ(base::MD5String(contents), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(contents), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, AddNewFile_ToRootDirectory) {
@@ -2103,7 +2131,7 @@ TEST_F(FakeDriveServiceTest, AddNewFile_ToRootDirectory) {
   EXPECT_EQ(old_largest_change_id + 1,
             fake_service_.about_resource().largest_change_id());
   EXPECT_EQ(old_largest_change_id + 1, GetLargestChangeByAboutResource());
-  EXPECT_EQ(base::MD5String(kContentData), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(kContentData), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, AddNewFile_ToRootDirectoryOnEmptyFileSystem) {
@@ -2132,7 +2160,7 @@ TEST_F(FakeDriveServiceTest, AddNewFile_ToRootDirectoryOnEmptyFileSystem) {
   EXPECT_EQ(old_largest_change_id + 1,
             fake_service_.about_resource().largest_change_id());
   EXPECT_EQ(old_largest_change_id + 1, GetLargestChangeByAboutResource());
-  EXPECT_EQ(base::MD5String(kContentData), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(kContentData), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, AddNewFile_ToNonRootDirectory) {
@@ -2164,7 +2192,7 @@ TEST_F(FakeDriveServiceTest, AddNewFile_ToNonRootDirectory) {
   EXPECT_EQ(old_largest_change_id + 1,
             fake_service_.about_resource().largest_change_id());
   EXPECT_EQ(old_largest_change_id + 1, GetLargestChangeByAboutResource());
-  EXPECT_EQ(base::MD5String(kContentData), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(kContentData), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, AddNewFile_ToNonexistingDirectory) {
@@ -2236,7 +2264,7 @@ TEST_F(FakeDriveServiceTest, AddNewFile_SharedWithMeLabel) {
   EXPECT_EQ(old_largest_change_id + 1,
             fake_service_.about_resource().largest_change_id());
   EXPECT_EQ(old_largest_change_id + 1, GetLargestChangeByAboutResource());
-  EXPECT_EQ(base::MD5String(kContentData), entry->md5_checksum());
+  EXPECT_EQ(GetMd5Checksum(kContentData), entry->md5_checksum());
 }
 
 TEST_F(FakeDriveServiceTest, SetLastModifiedTime_ExistingFile) {

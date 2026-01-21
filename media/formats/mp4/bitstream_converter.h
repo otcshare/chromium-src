@@ -7,11 +7,11 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
 #include "base/memory/ref_counted.h"
 #include "media/base/media_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -25,16 +25,19 @@ namespace mp4 {
 class MEDIA_EXPORT BitstreamConverter
     : public base::RefCountedThreadSafe<BitstreamConverter> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   // Describes the result of Analyze(). Not all analyses are implemented or
   // enabled across mp4::BitstreamConverter implementations, hence the use of
-  // absl::optional<>.
+  // std::optional<>.
   struct MEDIA_EXPORT AnalysisResult {
     AnalysisResult();
     AnalysisResult(const AnalysisResult&);
     ~AnalysisResult();
 
-    absl::optional<bool> is_conformant;
-    absl::optional<bool> is_keyframe;
+    std::optional<bool> is_conformant;
+    std::optional<bool> is_keyframe;
+    std::optional<bool> is_sei_recovery_point;
   };
 
   // Converts a single frame/buffer |frame_buf| into the output format.
@@ -63,7 +66,7 @@ class MEDIA_EXPORT BitstreamConverter
   // inspects further to see if the converted frame appears to be a keyframe.
   // Note, the checks may not be exhaustive (or implemented at all).
   virtual AnalysisResult Analyze(
-      std::vector<uint8_t>* frame_buf,
+      base::span<const uint8_t> frame_buf,
       std::vector<SubsampleEntry>* subsamples) const = 0;
 };
 

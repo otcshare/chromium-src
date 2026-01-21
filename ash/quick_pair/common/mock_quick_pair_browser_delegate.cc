@@ -4,12 +4,14 @@
 
 #include "ash/quick_pair/common/mock_quick_pair_browser_delegate.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
-MockQuickPairBrowserDelegate::MockQuickPairBrowserDelegate() = default;
+MockQuickPairBrowserDelegate::MockQuickPairBrowserDelegate() {
+  SetInstance(this);
+}
 
-MockQuickPairBrowserDelegate::~MockQuickPairBrowserDelegate() = default;
+MockQuickPairBrowserDelegate::~MockQuickPairBrowserDelegate() {
+  SetInstance(nullptr);
+}
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

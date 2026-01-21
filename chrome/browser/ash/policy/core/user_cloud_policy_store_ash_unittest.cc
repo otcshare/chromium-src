@@ -10,9 +10,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -26,10 +27,10 @@
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/policy_switches.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/cloud_policy.pb.h"
-#include "crypto/rsa_private_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -135,8 +136,15 @@ class UserCloudPolicyStoreAshTest : public testing::Test {
     store_ = std::make_unique<UserCloudPolicyStoreAsh>(
         &cryptohome_misc_client_, session_manager_client_.get(),
         base::SingleThreadTaskRunner::GetCurrentDefault(), account_id_,
-        user_policy_dir(), false /* is_active_directory */);
+        user_policy_dir());
     store_->AddObserver(&observer_);
+
+    // Set the verification key to be used for testing by the
+    // CloudPolicyValidator.
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    command_line->AppendSwitchASCII(
+        switches::kPolicyVerificationKey,
+        PolicyBuilder::GetEncodedPolicyVerificationKey());
 
     // Install the initial public key, so that by default the validation of
     // the stored/loaded policy blob succeeds.
@@ -432,7 +440,7 @@ TEST_F(UserCloudPolicyStoreAshTest, MultipleStoresWithRotation) {
   EXPECT_EQ(initial_public_key, store_->policy_signature_public_key());
 
   // Store the correct policy signed with the new public key.
-  policy_.policy_data().set_policy_type(dm_protocol::kChromeUserPolicyType);
+  policy_.policy_data().set_policy_type(dm_protocol::GetChromeUserPolicyType());
   policy_.Build();
   std::string new_public_key = policy_.GetPublicNewSigningKeyAsString();
   ASSERT_FALSE(new_public_key.empty());

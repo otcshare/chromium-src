@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ash/system_logs/single_log_file_log_source.h"
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/process/process_info.h"
 #include "base/strings/string_split.h"
 #include "base/task/thread_pool.h"
@@ -28,10 +30,6 @@ constexpr int kMaxNumAllowedLogRotationsDuringFileRead = 3;
 //  * This cap is applied to the read buffer before dropping trailing incomplete
 //    lines.
 constexpr size_t kMaxReadSize = 5 * 1024 * 1024;
-
-// A custom timestamp for when the current Chrome session started. Used during
-// testing to override the actual time.
-const base::Time* g_chrome_start_time_for_test = nullptr;
 
 // Converts a logs source type to the corresponding file path, relative to the
 // base system log directory path. In the future, if non-file source types are
@@ -57,7 +55,6 @@ base::FilePath::StringType GetLogFileSourceRelativeFilePathValue(
       return "power_manager/powerd.PREVIOUS";
   }
   NOTREACHED();
-  return base::FilePath::StringType();
 }
 
 // Returns the inode value of file at |path|, or 0 if it doesn't exist or is
@@ -92,13 +89,7 @@ SingleLogFileLogSource::SingleLogFileLogSource(SupportedSource source_type)
       file_cursor_position_(0),
       file_inode_(0) {}
 
-SingleLogFileLogSource::~SingleLogFileLogSource() {}
-
-// static
-void SingleLogFileLogSource::SetChromeStartTimeForTesting(
-    const base::Time* start_time) {
-  g_chrome_start_time_for_test = start_time;
-}
+SingleLogFileLogSource::~SingleLogFileLogSource() = default;
 
 void SingleLogFileLogSource::Fetch(SysLogsSourceCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -178,8 +169,9 @@ void SingleLogFileLogSource::ContinueReadFile(
   // Read from file until end.
   std::string new_result_string;
   new_result_string.resize(size_to_read);
-  size_t size_read =
-      file_.ReadAtCurrentPos(&new_result_string[0], size_to_read);
+  std::optional<size_t> read_bytes =
+      file_.ReadAtCurrentPos(base::as_writable_byte_span(new_result_string));
+  size_t size_read = read_bytes.value_or(0);
   new_result_string.resize(size_read);
 
   const bool file_was_rotated = file_inode_ != GetInodeValue(GetLogFilePath());

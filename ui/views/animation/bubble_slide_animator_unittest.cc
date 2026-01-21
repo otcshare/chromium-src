@@ -9,8 +9,10 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout_view.h"
@@ -31,22 +33,6 @@ constexpr gfx::Size kTestViewSize(100, 100);
 // Make this big enough that even if we anchor to a third view horizontally, no
 // mirroring should happen.
 constexpr gfx::Rect kAnchorWidgetRect(50, 50, 400, 250);
-
-class TestBubbleView : public BubbleDialogDelegateView {
- public:
-  explicit TestBubbleView(View* anchor_view)
-      : BubbleDialogDelegateView(anchor_view, BubbleBorder::TOP_LEFT) {
-    SetButtons(ui::DIALOG_BUTTON_NONE);
-    SetLayoutManager(std::make_unique<FillLayout>());
-    AddChildView(std::make_unique<View>())->SetPreferredSize(kTestViewSize);
-  }
-
- protected:
-  void AddedToWidget() override {
-    BubbleDialogDelegateView::AddedToWidget();
-    SizeToContents();
-  }
-};
 
 class TestBubbleSlideAnimator : public BubbleSlideAnimator {
  public:
@@ -72,11 +58,25 @@ class TestBubbleSlideAnimator : public BubbleSlideAnimator {
 
 }  // namespace
 
+class TestBubbleView : public BubbleDialogDelegateView {
+ public:
+  explicit TestBubbleView(View* anchor_view)
+      : BubbleDialogDelegateView(anchor_view,
+                                 BubbleBorder::TOP_LEFT,
+                                 BubbleBorder::DIALOG_SHADOW,
+                                 true) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    SetLayoutManager(std::make_unique<FillLayout>());
+    AddChildView(std::make_unique<View>())->SetPreferredSize(kTestViewSize);
+  }
+};
+
 class BubbleSlideAnimatorTest : public test::WidgetTest {
  public:
   void SetUp() override {
     test::WidgetTest::SetUp();
-    anchor_widget_ = CreateTestWidget(Widget::InitParams::Type::TYPE_WINDOW);
+    anchor_widget_ = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                      Widget::InitParams::Type::TYPE_WINDOW);
     auto* const contents_view = anchor_widget_->GetRootView()->AddChildView(
         std::make_unique<FlexLayoutView>());
     contents_view->SetOrientation(LayoutOrientation::kHorizontal);
@@ -94,20 +94,24 @@ class BubbleSlideAnimatorTest : public test::WidgetTest {
     widget_ = BubbleDialogDelegateView::CreateBubble(bubble_);
     delegate_ = std::make_unique<TestBubbleSlideAnimator>(bubble_);
     delegate_->SetSlideDuration(kSlideDuration);
+    normal_duration_.emplace(
+        gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   }
 
   void TearDown() override {
+    normal_duration_.reset();
     CloseWidget();
-    if (anchor_widget_ && !anchor_widget_->IsClosed())
+    if (anchor_widget_ && !anchor_widget_->IsClosed()) {
       anchor_widget_->CloseNow();
+    }
     test::WidgetTest::TearDown();
   }
 
   void CloseWidget() {
-    if (widget_ && !widget_->IsClosed())
-      widget_->CloseNow();
-    widget_ = nullptr;
     bubble_ = nullptr;
+    if (widget_ && !widget_->IsClosed()) {
+      widget_.ExtractAsDangling()->CloseNow();
+    }
   }
 
  protected:
@@ -118,6 +122,7 @@ class BubbleSlideAnimatorTest : public test::WidgetTest {
   raw_ptr<View> view2_;
   raw_ptr<View> view3_;
   std::unique_ptr<TestBubbleSlideAnimator> delegate_;
+  std::optional<gfx::ScopedAnimationDurationScaleMode> normal_duration_;
 };
 
 TEST_F(BubbleSlideAnimatorTest, InitiateSlide) {

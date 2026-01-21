@@ -3,18 +3,18 @@
 // found in the LICENSE file.
 
 import 'chrome://personalization/strings.m.js';
-import 'chrome://webui-test/mojo_webui_test_support.js';
 
-import {AvatarCameraMode, AvatarList, UserActionName, UserImageObserver} from 'chrome://personalization/js/personalization_app.js';
+import {AvatarCameraMode, AvatarListElement, UserActionName, UserImageObserver} from 'chrome://personalization/js/personalization_app.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
 
 import {baseSetup, initElement, teardownElement} from './personalization_app_test_utils.js';
-import {TestPersonalizationStore} from './test_personalization_store.js';
-import {TestUserProvider} from './test_user_interface_provider.js';
+import type {TestPersonalizationStore} from './test_personalization_store.js';
+import type {TestUserProvider} from './test_user_interface_provider.js';
 
-suite('AvatarListTest', function() {
-  let avatarListElement: AvatarList|null;
+suite('AvatarListElementTest', function() {
+  let avatarListElement: AvatarListElement|null;
 
   let testUserProvider: TestUserProvider;
   let testPersonalizationStore: TestPersonalizationStore;
@@ -33,7 +33,7 @@ suite('AvatarListTest', function() {
   });
 
   test('fetches list of default avatar images and saves to store', async () => {
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
     testPersonalizationStore.expectAction(
         UserActionName.SET_DEFAULT_USER_IMAGES);
     await testUserProvider.whenCalled('getDefaultUserImages');
@@ -52,12 +52,11 @@ suite('AvatarListTest', function() {
   test('calls selectDefaultImage with correct index on click', async () => {
     testPersonalizationStore.data.user.defaultUserImages =
         testUserProvider.defaultUserImages;
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
 
-    const image =
-        avatarListElement.shadowRoot!.querySelector(
-            `div[data-id="${testUserProvider.defaultUserImages[0]!.index}"]`) as
-        HTMLDivElement;
+    const image = avatarListElement.shadowRoot!.querySelector<HTMLElement>(
+        `div[data-id="${testUserProvider.defaultUserImages[0]!.index}"]`);
+    assertTrue(!!image);
 
     image.click();
     const index = await testUserProvider.whenCalled('selectDefaultImage');
@@ -66,7 +65,7 @@ suite('AvatarListTest', function() {
 
   test('fetches profile image and saves to store on load', async () => {
     testPersonalizationStore.setReducersEnabled(true);
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
 
     await testUserProvider.whenCalled('setUserImageObserver');
 
@@ -92,7 +91,7 @@ suite('AvatarListTest', function() {
   test('calls selectProfileImage on click', async () => {
     testPersonalizationStore.data.user.profileImage =
         testUserProvider.profileImage;
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
 
     const image = avatarListElement.shadowRoot!.getElementById(
                       'profileImage') as HTMLImageElement;
@@ -106,11 +105,11 @@ suite('AvatarListTest', function() {
 
   test('hides open camera button if no camera present', async () => {
     testPersonalizationStore.data.user.isCameraPresent = false;
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
     await waitAfterNextRender(avatarListElement);
 
     assertEquals(
-        null, avatarListElement!.shadowRoot!.getElementById('openCamera'),
+        null, avatarListElement.shadowRoot!.getElementById('openCamera'),
         'open camera button does not exist');
 
     testPersonalizationStore.data.user.isCameraPresent = true;
@@ -118,14 +117,14 @@ suite('AvatarListTest', function() {
     await waitAfterNextRender(avatarListElement);
 
     assertTrue(
-        !!avatarListElement!.shadowRoot!.getElementById('openCamera'),
+        !!avatarListElement.shadowRoot!.getElementById('openCamera'),
         'open camera button exists');
   });
 
   test('click open camera button shows the avatar-camera modal', async () => {
     testPersonalizationStore.data.user.isCameraPresent = true;
 
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
     await waitAfterNextRender(avatarListElement);
 
     assertTrue(
@@ -133,7 +132,7 @@ suite('AvatarListTest', function() {
         'avatar-camera element should not be open');
 
     const openCameraButton =
-        avatarListElement!.shadowRoot!.getElementById('openCamera')!;
+        avatarListElement.shadowRoot!.getElementById('openCamera')!;
     openCameraButton.click();
 
     await waitAfterNextRender(avatarListElement);
@@ -147,7 +146,7 @@ suite('AvatarListTest', function() {
   test('closes camera ui if camera goes offline', async () => {
     testPersonalizationStore.data.user.isCameraPresent = true;
 
-    avatarListElement = initElement(AvatarList);
+    avatarListElement = initElement(AvatarListElement);
     await waitAfterNextRender(avatarListElement);
 
     avatarListElement.shadowRoot?.getElementById('openCamera')?.click();
@@ -166,5 +165,51 @@ suite('AvatarListTest', function() {
     assertTrue(
         !avatarListElement.shadowRoot!.querySelector('avatar-camera'),
         'avatar-camera should be gone because camera no longer available');
+  });
+
+  test('custom avatar selectors are shown with pref enabled', async () => {
+    testPersonalizationStore.data.user.isCameraPresent = true;
+    testPersonalizationStore.data.user.profileImage =
+        testUserProvider.profileImage;
+    avatarListElement = initElement(AvatarListElement);
+
+    await waitAfterNextRender(avatarListElement);
+
+    assertTrue(
+        !!avatarListElement.shadowRoot!.getElementById('openCamera'),
+        'open camera button exists');
+    assertTrue(
+        !!avatarListElement.shadowRoot!.getElementById('openVideo'),
+        'open video button exists');
+    assertTrue(
+        !!avatarListElement.shadowRoot!.getElementById('openFolder'),
+        'open folder button exists');
+    assertTrue(
+        !!avatarListElement.shadowRoot!.getElementById('profileImage'),
+        'select profile image button exists');
+  });
+
+  test('custom avatar selectors are not shown with pref disabled', async () => {
+    loadTimeData.overrideValues(
+        {isUserAvatarCustomizationSelectorsEnabled: false});
+    testPersonalizationStore.data.user.isCameraPresent = true;
+    testPersonalizationStore.data.user.profileImage =
+        testUserProvider.profileImage;
+    avatarListElement = initElement(AvatarListElement);
+
+    await waitAfterNextRender(avatarListElement);
+
+    assertTrue(
+        !avatarListElement.shadowRoot!.getElementById('openCamera'),
+        'open camera button does not exist');
+    assertTrue(
+        !avatarListElement.shadowRoot!.getElementById('openVideo'),
+        'open video button does not exist');
+    assertTrue(
+        !avatarListElement.shadowRoot!.getElementById('openFolder'),
+        'open folder button does not exist');
+    assertTrue(
+        !avatarListElement.shadowRoot!.getElementById('profileImage'),
+        'select profile button does not exist');
   });
 });

@@ -9,6 +9,8 @@
 #include "base/base64.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "build/buildflag.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
@@ -16,10 +18,21 @@
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/test/test_network_connection_tracker.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace policy {
+
+namespace {
+MockCloudPolicyClient* AddMockClient(CloudPolicyCore* core) {
+  auto client = std::make_unique<MockCloudPolicyClient>();
+  auto* client_ptr = client.get();
+  core->Connect(std::move(client));
+  return client_ptr;
+}
+}  // namespace
 
 class CloudPolicyCoreTest : public testing::Test,
                             public CloudPolicyCore::Observer {
@@ -30,7 +43,8 @@ class CloudPolicyCoreTest : public testing::Test,
  protected:
   CloudPolicyCoreTest() {
     core_ = std::make_unique<CloudPolicyCore>(
-        dm_protocol::kChromeUserPolicyType, std::string(), &store_,
+        dm_protocol::GetChromeUserPolicyType(), std::string(), &store_,
+        &extension_install_store_,
         base::SingleThreadTaskRunner::GetCurrentDefault(),
         network::TestNetworkConnectionTracker::CreateGetter());
     prefs_.registry()->RegisterIntegerPref(
@@ -78,6 +92,7 @@ class CloudPolicyCoreTest : public testing::Test,
 
   TestingPrefServiceSimple prefs_;
   MockCloudPolicyStore store_;
+  MockCloudPolicyStore extension_install_store_;
   std::unique_ptr<CloudPolicyCore> core_;
 
   int core_connected_callback_count_ = 0;
@@ -92,12 +107,15 @@ TEST_F(CloudPolicyCoreTest, ConnectAndDisconnectAndDestroy) {
   EXPECT_FALSE(core_->client());
   EXPECT_FALSE(core_->service());
   EXPECT_FALSE(core_->refresh_scheduler());
+  EXPECT_TRUE(core_->extension_install_store());
+  EXPECT_FALSE(core_->extension_install_service());
 
   // Connect() brings up client and service.
   core_->Connect(
       std::unique_ptr<CloudPolicyClient>(new MockCloudPolicyClient()));
   EXPECT_TRUE(core_->client());
   EXPECT_TRUE(core_->service());
+  EXPECT_TRUE(core_->extension_install_service());
   EXPECT_FALSE(core_->refresh_scheduler());
   EXPECT_EQ(1, core_connected_callback_count_);
   EXPECT_EQ(0, refresh_scheduler_started_callback_count_);
@@ -107,6 +125,7 @@ TEST_F(CloudPolicyCoreTest, ConnectAndDisconnectAndDestroy) {
   core_->Disconnect();
   EXPECT_FALSE(core_->client());
   EXPECT_FALSE(core_->service());
+  EXPECT_FALSE(core_->extension_install_service());
   EXPECT_FALSE(core_->refresh_scheduler());
   EXPECT_EQ(1, core_connected_callback_count_);
   EXPECT_EQ(0, refresh_scheduler_started_callback_count_);
@@ -116,6 +135,7 @@ TEST_F(CloudPolicyCoreTest, ConnectAndDisconnectAndDestroy) {
   core_->Disconnect();
   EXPECT_FALSE(core_->client());
   EXPECT_FALSE(core_->service());
+  EXPECT_FALSE(core_->extension_install_service());
   EXPECT_FALSE(core_->refresh_scheduler());
   EXPECT_EQ(1, core_connected_callback_count_);
   EXPECT_EQ(0, refresh_scheduler_started_callback_count_);
@@ -157,12 +177,65 @@ TEST_F(CloudPolicyCoreTest, RefreshScheduler) {
   EXPECT_EQ(0, bad_callback_count_);
 }
 
+TEST_F(CloudPolicyCoreTest, RefreshSoonWithoutScheduler) {
+  // `RefreshSoon` requires a started `RefreshScheduler` with a connected
+  // `CloudPolicyClient` to do anything useful.
+  // This test verifies that the client is not called if there is no
+  // RefreshScheduler yet.
+  auto* client = AddMockClient(core_.get());
+  EXPECT_CALL(*client, FetchPolicy(testing::_)).Times(0);
+  EXPECT_FALSE(core_->refresh_scheduler());
+  core_->RefreshSoon(PolicyFetchReason::kTest);
+  base::RunLoop().RunUntilIdle();
+  testing::Mock::VerifyAndClearExpectations(client);
+}
+
+TEST_F(CloudPolicyCoreTest, RefreshSoonWithoutConnectedClient) {
+  // `RefreshSoon` requires a started `RefreshScheduler` with a connected
+  // `CloudPolicyClient` to do anything useful.
+  // This test verifies that the client is not called if there is a
+  // RefreshScheduler, but the client is not connected yet.
+  auto* client = AddMockClient(core_.get());
+  EXPECT_CALL(*client, FetchPolicy(testing::_)).Times(0);
+  core_->StartRefreshScheduler();
+  EXPECT_TRUE(core_->refresh_scheduler());
+  core_->RefreshSoon(PolicyFetchReason::kTest);
+  base::RunLoop().RunUntilIdle();
+  testing::Mock::VerifyAndClearExpectations(client);
+}
+
+TEST_F(CloudPolicyCoreTest, RefreshSoon) {
+  // In order to cleanly observe `RefreshSoon` triggering a `FetchPolicy` call
+  // in the client, we need to
+  //   a) start the scheduler and connect the client (`RefreshSoon` is a no-op
+  //      otherwise),
+  //   b) wait for the resulting initial fetch to be done.
+  auto* client = AddMockClient(core_.get());
+  EXPECT_CALL(*client, FetchPolicy(testing::_)).Times(1);
+  client->SetDMToken("new_token");
+  core_->StartRefreshScheduler();
+  base::RunLoop().RunUntilIdle();
+  testing::Mock::VerifyAndClearExpectations(client);
+
+  // Now that the initialization phase is over, we can observe that
+  // `RefreshSoon` triggers the `FetchPolicy` call in the client.
+  EXPECT_CALL(*client, FetchPolicy(PolicyFetchReason::kTest)).Times(1);
+  core_->RefreshSoon(PolicyFetchReason::kTest);
+  base::RunLoop().RunUntilIdle();
+  testing::Mock::VerifyAndClearExpectations(client);
+}
+
+// Based64 string is used on desktop when reading policy cache from Google
+// Update.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
 TEST_F(CloudPolicyCoreTest, DmProtocolBase64Constants) {
-  std::string encoded;
-  base::Base64Encode(dm_protocol::kChromeMachineLevelUserCloudPolicyType,
-                     &encoded);
+  std::string encoded =
+      base::Base64Encode(dm_protocol::kChromeMachineLevelUserCloudPolicyType);
   EXPECT_EQ(encoded, dm_protocol::kChromeMachineLevelUserCloudPolicyTypeBase64);
 }
+
+#endif
 
 TEST_F(CloudPolicyCoreTest, DestroyWithoutConnecting) {
   core_.reset();

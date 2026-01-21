@@ -11,32 +11,33 @@
 #include "base/command_line.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/cursor/cursor_factory.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_factory_ozone.h"
 #include "ui/base/x/x11_cursor_factory.h"
 #include "ui/base/x/x11_util.h"
-#include "ui/display/fake/fake_display_delegate.h"
+#include "ui/display/types/native_display_delegate.h"
 #include "ui/events/devices/x11/touch_factory_x11.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
 #include "ui/events/platform/x11/x11_event_source.h"
-#include "ui/gfx/linux/gpu_memory_buffer_support_x11.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/linux/gbm_support_x11.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/switches.h"
+#include "ui/gfx/x/atom_cache.h"
+#include "ui/gfx/x/visual_manager.h"
 #include "ui/linux/linux_ui_delegate.h"
 #include "ui/ozone/common/stub_overlay_manager.h"
 #include "ui/ozone/platform/x11/gl_egl_utility_x11.h"
 #include "ui/ozone/platform/x11/linux_ui_delegate_x11.h"
 #include "ui/ozone/platform/x11/x11_clipboard_ozone.h"
 #include "ui/ozone/platform/x11/x11_global_shortcut_listener_ozone.h"
-#include "ui/ozone/platform/x11/x11_keyboard_hook_ozone.h"
+#include "ui/ozone/platform/x11/x11_keyboard_hook.h"
 #include "ui/ozone/platform/x11/x11_menu_utils.h"
 #include "ui/ozone/platform/x11/x11_screen_ozone.h"
 #include "ui/ozone/platform/x11/x11_surface_factory.h"
@@ -46,11 +47,12 @@
 #include "ui/ozone/public/gpu_platform_support_host.h"
 #include "ui/ozone/public/input_controller.h"
 #include "ui/ozone/public/ozone_platform.h"
+#include "ui/ozone/public/stub_input_controller.h"
 #include "ui/ozone/public/system_input_injector.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_init_properties.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/base/dragdrop/os_exchange_data_provider_non_backed.h"
 #include "ui/base/ime/ash/input_method_ash.h"
 #else
@@ -106,7 +108,7 @@ class OzonePlatformX11 : public OzonePlatform,
 
   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
       override {
-    return std::make_unique<display::FakeDisplayDelegate>();
+    return nullptr;
   }
 
   std::unique_ptr<PlatformScreen> CreateScreen() override {
@@ -131,11 +133,12 @@ class OzonePlatformX11 : public OzonePlatform,
 
   std::unique_ptr<InputMethod> CreateInputMethod(
       ImeKeyEventDispatcher* ime_key_event_dispatcher,
-      gfx::AcceleratedWidget) override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    return std::make_unique<InputMethodAsh>(ime_key_event_dispatcher);
+      gfx::AcceleratedWidget widget) override {
+#if BUILDFLAG(IS_CHROMEOS)
+    return std::make_unique<ash::InputMethodAsh>(ime_key_event_dispatcher);
 #else
-    return std::make_unique<InputMethodAuraLinux>(ime_key_event_dispatcher);
+    return std::make_unique<InputMethodAuraLinux>(ime_key_event_dispatcher,
+                                                  widget);
 #endif
   }
 
@@ -157,11 +160,11 @@ class OzonePlatformX11 : public OzonePlatform,
   std::unique_ptr<PlatformKeyboardHook> CreateKeyboardHook(
       PlatformKeyboardHookTypes type,
       base::RepeatingCallback<void(KeyEvent* event)> callback,
-      absl::optional<base::flat_set<DomCode>> dom_codes,
+      std::optional<base::flat_set<DomCode>> dom_codes,
       gfx::AcceleratedWidget accelerated_widget) override {
     switch (type) {
       case PlatformKeyboardHookTypes::kModifier:
-        return std::make_unique<X11KeyboardHookOzone>(
+        return std::make_unique<X11KeyboardHook>(
             std::move(dom_codes), std::move(callback), accelerated_widget);
       case PlatformKeyboardHookTypes::kMedia:
         return nullptr;
@@ -169,7 +172,7 @@ class OzonePlatformX11 : public OzonePlatform,
   }
 
   std::unique_ptr<OSExchangeDataProvider> CreateProvider() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     return std::make_unique<OSExchangeDataProviderNonBacked>();
 #else
     return std::make_unique<OSExchangeDataProviderX11>();
@@ -177,6 +180,11 @@ class OzonePlatformX11 : public OzonePlatform,
   }
 
   const PlatformProperties& GetPlatformProperties() override {
+    using SupportsForTest = OzonePlatform::PlatformProperties::SupportsForTest;
+    const auto& override_set_parent_for_non_top_level_windows_for_test =
+        OzonePlatform::PlatformProperties::
+            override_set_parent_for_non_top_level_windows_for_test;
+
     static base::NoDestructor<OzonePlatform::PlatformProperties> properties;
     static bool initialised = false;
     if (!initialised) {
@@ -192,12 +200,12 @@ class OzonePlatformX11 : public OzonePlatform,
       properties->supports_vulkan_swap_chain = true;
       properties->skia_can_fall_back_to_x11 = true;
       properties->platform_shows_drag_image = false;
-      properties->supports_global_application_menus = true;
       properties->app_modal_dialogs_use_event_blocker = true;
-      properties->fetch_buffer_formats_for_gmb_on_gpu = true;
-#if BUILDFLAG(IS_LINUX)
-      properties->supports_vaapi = true;
-#endif
+
+      // Defaults to false unless explicitly enabled for testing.
+      properties->set_parent_for_non_top_level_windows =
+          override_set_parent_for_non_top_level_windows_for_test ==
+          SupportsForTest::kYes;
 
       initialised = true;
     }
@@ -209,20 +217,30 @@ class OzonePlatformX11 : public OzonePlatform,
     static OzonePlatform::PlatformRuntimeProperties properties;
 
     if (has_initialized_gpu() &&
-        ui::GpuMemoryBufferSupportX11::GetInstance()->has_gbm_device()) {
+        ui::GBMSupportX11::GetInstance()->has_gbm_device()) {
       // This property is set when the GetPlatformRuntimeProperties is
       // called on the gpu process side.
       properties.supports_native_pixmaps = true;
     }
+    properties.supports_subwindows_as_accelerated_widgets = false;
+    properties.supports_system_tray_windowing = true;
+    properties.supports_server_window_menus =
+        x11::Connection::Get()->WmSupportsHint(
+            x11::GetAtom("_GTK_SHOW_WINDOW_MENU"));
+    properties.supports_global_application_menus = true;
 
     return properties;
   }
 
-  bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                      gfx::BufferUsage usage) const override {
-    // Native pixmap support is determined on gpu process via gpu extra info
-    // that gets this information from GpuMemoryBufferSupportX11.
     return false;
+  }
+
+  bool IsWindowCompositingSupported() const override {
+    return x11::Connection::Get()
+        ->GetOrCreateVisualManager()
+        .ArgbVisualAvailable();
   }
 
   bool InitializeUI(const InitParams& params) override {
@@ -242,12 +260,12 @@ class OzonePlatformX11 : public OzonePlatform,
     InitializeCommon(params);
     CreatePlatformEventSource();
     overlay_manager_ = std::make_unique<StubOverlayManager>();
-    input_controller_ = CreateStubInputController();
+    input_controller_ = std::make_unique<StubInputController>();
     clipboard_ = std::make_unique<X11ClipboardOzone>();
     cursor_factory_ = std::make_unique<X11CursorFactory>();
     gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
 
-    // TODO(crbug.com/987939): Support XKB.
+    // TODO(crbug.com/41472924): Support XKB.
     keyboard_layout_engine_ = std::make_unique<StubKeyboardLayoutEngine>();
     KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
         keyboard_layout_engine_.get());
@@ -263,17 +281,19 @@ class OzonePlatformX11 : public OzonePlatform,
 
     base::UmaHistogramEnumeration("Linux.WindowManager", GetWindowManagerUMA());
 
+    base::UmaHistogramBoolean(
+        "Linux.X11.XInput2",
+        x11::Connection::Get()->xinput_version().first == 2);
+
     return true;
   }
 
   void InitializeGPU(const InitParams& params) override {
     InitializeCommon(params);
     if (params.enable_native_gpu_memory_buffers) {
-      base::ThreadPool::PostTask(
-          FROM_HERE, base::BindOnce([]() {
-            SCOPED_UMA_HISTOGRAM_TIMER("Linux.X11.GbmSupportX11CreationTime");
-            ui::GpuMemoryBufferSupportX11::GetInstance();
-          }));
+      base::ThreadPool::PostTask(FROM_HERE, base::BindOnce([]() {
+                                   ui::GBMSupportX11::GetInstance();
+                                 }));
     }
     // In single process mode either the UI thread will create an event source
     // or it's a test and an event source isn't desired.

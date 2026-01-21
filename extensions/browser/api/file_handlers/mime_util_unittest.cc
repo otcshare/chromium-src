@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "content/public/browser/browser_context.h"
@@ -77,9 +77,7 @@ class FileHandlersMimeUtilTest : public ExtensionsTest {
   base::FilePath CreateTemporaryFile(const std::string& contents) {
     base::FilePath temp_filename;
     EXPECT_TRUE(base::CreateTemporaryFile(&temp_filename));
-    EXPECT_EQ(
-        static_cast<int>(contents.size()),
-        base::WriteFile(temp_filename, contents.c_str(), contents.size()));
+    EXPECT_TRUE(base::WriteFile(temp_filename, contents));
     return temp_filename;
   }
 

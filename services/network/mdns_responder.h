@@ -7,14 +7,16 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -23,7 +25,6 @@
 #include "net/dns/dns_query.h"
 #include "net/dns/dns_response.h"
 #include "services/network/public/mojom/mdns_responder.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 class IOBufferWithSize;
@@ -93,7 +94,7 @@ struct COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponseSendOption
   // shared resource record set.
   bool shared_result = false;
   // If not nullopt, returns true if the response to send is cancelled.
-  absl::optional<base::RepeatingCallback<bool()>> cancelled_callback;
+  std::optional<base::RepeatingCallback<bool()>> cancelled_callback;
 
  private:
   friend class base::RefCounted<MdnsResponseSendOption>;

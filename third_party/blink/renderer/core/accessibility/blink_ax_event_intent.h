@@ -65,16 +65,14 @@ class CORE_EXPORT BlinkAXEventIntent final {
                      ax::mojom::blink::MoveDirection move_direction);
 
   // Used by HashCountedSet to create a deleted BlinkAXEventIntent instance.
-  explicit BlinkAXEventIntent(WTF::HashTableDeletedValueType type);
+  explicit BlinkAXEventIntent(HashTableDeletedValueType type);
 
-  virtual ~BlinkAXEventIntent();
+  ~BlinkAXEventIntent();
 
   BlinkAXEventIntent(const BlinkAXEventIntent& intent);
   BlinkAXEventIntent& operator=(const BlinkAXEventIntent& intent);
 
   CORE_EXPORT friend bool operator==(const BlinkAXEventIntent& a,
-                                     const BlinkAXEventIntent& b);
-  CORE_EXPORT friend bool operator!=(const BlinkAXEventIntent& a,
                                      const BlinkAXEventIntent& b);
 
   const ui::AXEventIntent& intent() const { return intent_; }
@@ -108,18 +106,10 @@ class CORE_EXPORT BlinkAXEventIntent final {
   bool is_deleted_ = false;
 };
 
-struct CORE_EXPORT BlinkAXEventIntentHash final {
+struct CORE_EXPORT BlinkAXEventIntentHashTraits
+    : SimpleClassHashTraits<BlinkAXEventIntent> {
   // Computes the hash of a BlinkAXEventIntent instance.
   static unsigned GetHash(const BlinkAXEventIntent& key);
-  // Used by HashSet to compare two BlinkAXEventIntent instances.
-  static bool Equal(const BlinkAXEventIntent& a, const BlinkAXEventIntent& b);
-  // We support creating and comparing with empty (uninitialized) and deleted
-  // HashSet BlinkAXEventIntent entries.
-  static constexpr bool safe_to_compare_to_empty_or_deleted = true;
-};
-
-struct CORE_EXPORT BlinkAXEventIntentHashTraits final
-    : WTF::SimpleClassHashTraits<BlinkAXEventIntent> {
   // Zeroed memory cannot be used for BlinkAXEventIntent.
   static constexpr bool kEmptyValueIsZero = false;
 };

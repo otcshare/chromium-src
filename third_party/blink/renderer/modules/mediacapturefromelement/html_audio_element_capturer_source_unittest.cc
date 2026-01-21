@@ -4,10 +4,12 @@
 
 #include "third_party/blink/renderer/modules/mediacapturefromelement/html_audio_element_capturer_source.h"
 
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/time/time.h"
 #include "media/audio/null_audio_sink.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/fake_audio_render_callback.h"
 #include "media/base/media_util.h"
@@ -15,13 +17,14 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_audio_sink.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
+#include "third_party/blink/public/platform/web_audio_source_provider_impl.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/webaudiosourceprovider_impl.h"
 #include "third_party/blink/public/web/web_heap.h"
 #include "third_party/blink/renderer/modules/mediastream/mock_media_stream_audio_sink.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 
@@ -47,9 +50,9 @@ class HTMLAudioElementCapturerSourceTest : public testing::Test {
  public:
   HTMLAudioElementCapturerSourceTest()
       : fake_callback_(0.1, kAudioTrackSampleRate),
-        audio_source_(new blink::WebAudioSourceProviderImpl(
-            new media::NullAudioSink(
-                blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
+        audio_source_(base::MakeRefCounted<WebAudioSourceProviderImpl>(
+            base::MakeRefCounted<media::NullAudioSink>(
+                scheduler::GetSingleThreadTaskRunnerForTesting()),
             &media_log_)) {}
 
   void SetUp() final {
@@ -99,6 +102,7 @@ class HTMLAudioElementCapturerSourceTest : public testing::Test {
         source()->ConnectToInitializedTrack(media_stream_component_.Get()));
   }
 
+  test::TaskEnvironment task_environment_;
   Persistent<MediaStreamSource> media_stream_source_;
   Persistent<MediaStreamComponent> media_stream_component_;
 

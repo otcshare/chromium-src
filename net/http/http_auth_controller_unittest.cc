@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
 #include "net/base/net_errors.h"
@@ -119,9 +118,12 @@ TEST(HttpAuthControllerTest, PermanentErrors) {
   // Now try an async handler that returns
   // ERR_MISSING_AUTH_CREDENTIALS.  Async and sync handlers invoke
   // different code paths in HttpAuthController when generating
-  // tokens.
+  // tokens. For this particular error the scheme state depends on
+  // the AllowsExplicitCredentials of the handler (which equals true for
+  // the mock handler). If it's true we expect the same behaviour as
+  // for ERR_INVALID_AUTH_CREDENTIALS so we pass SCHEME_IS_ENABLED.
   RunSingleRoundAuthTest(RUN_HANDLER_ASYNC, ERR_MISSING_AUTH_CREDENTIALS, OK,
-                         SCHEME_IS_DISABLED);
+                         SCHEME_IS_ENABLED);
 
   // If a non-permanent error is returned by the handler, then the
   // controller should report it unchanged.
@@ -149,7 +151,7 @@ TEST(HttpAuthControllerTest, Logging) {
   ASSERT_GE(entries.size(), 2u);
 
   auto begin =
-      base::ranges::find_if(entries, [](const NetLogEntry& e) {
+      std::ranges::find_if(entries, [](const NetLogEntry& e) {
         if (e.type != NetLogEventType::AUTH_CONTROLLER ||
             e.phase != NetLogEventPhase::BEGIN)
           return false;

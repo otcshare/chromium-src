@@ -9,8 +9,8 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -27,13 +27,14 @@
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace background_fetch {
 
 namespace {
 
-// TODO(crbug.com/889401): Consider making this configurable by finch.
+// TODO(crbug.com/40595478): Consider making this configurable by finch.
 constexpr size_t kRegistrationLimitPerStorageKey = 5u;
 
 // Finds the number of active registrations associated with the provided storage
@@ -128,6 +129,18 @@ class CanCreateRegistrationTask : public DatabaseTask {
       this};  // Keep as last.
 };
 
+proto::ImageResource_Purpose
+ManifestImageResourcePurposeToImageResoucePurposeProto(
+    blink::mojom::ManifestImageResource_Purpose purpose) {
+  switch (purpose) {
+    case blink::mojom::ManifestImageResource_Purpose::ANY:
+      return proto::ImageResource_Purpose_ANY;
+    case blink::mojom::ManifestImageResource_Purpose::MONOCHROME:
+      return proto::ImageResource_Purpose_MONOCHROME;
+    case blink::mojom::ManifestImageResource_Purpose::MASKABLE:
+      return proto::ImageResource_Purpose_MASKABLE;
+  }
+}
 }  // namespace
 
 CreateMetadataTask::CreateMetadataTask(
@@ -266,29 +279,13 @@ void CreateMetadataTask::InitializeMetadataProto() {
     image_resource_proto->set_type(base::UTF16ToASCII(icon.type));
 
     for (const auto& purpose : icon.purpose) {
-      switch (purpose) {
-        case blink::mojom::ManifestImageResource_Purpose::ANY:
-          image_resource_proto->add_purpose(
-              proto::BackgroundFetchOptions_ImageResource_Purpose_ANY);
-          break;
-        case blink::mojom::ManifestImageResource_Purpose::MONOCHROME:
-          image_resource_proto->add_purpose(
-              proto::BackgroundFetchOptions_ImageResource_Purpose_MONOCHROME);
-          break;
-        case blink::mojom::ManifestImageResource_Purpose::MASKABLE:
-          image_resource_proto->add_purpose(
-              proto::BackgroundFetchOptions_ImageResource_Purpose_MASKABLE);
-          break;
-      }
+      image_resource_proto->add_purpose(
+          ManifestImageResourcePurposeToImageResoucePurposeProto(purpose));
     }
   }
 
   // Set other metadata fields.
-  //
-  // TODO(https://crbug.com/1199077): Store the full serialization of the
-  // storage key inside `metadata_proto_`.
-  metadata_proto_->set_origin(
-      registration_id_.storage_key().origin().Serialize());
+  metadata_proto_->set_storage_key(registration_id_.storage_key().Serialize());
   metadata_proto_->set_creation_microseconds_since_unix_epoch(
       (base::Time::Now() - base::Time::UnixEpoch()).InMicroseconds());
   metadata_proto_->set_num_fetches(requests_.size());
@@ -364,9 +361,8 @@ void CreateMetadataTask::StoreMetadata() {
 void CreateMetadataTask::DidStoreMetadata(
     blink::ServiceWorkerStatusCode status) {
   int64_t trace_id = blink::cache_storage::CreateTraceId();
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "CacheStorageMigrationTask::DidStoreMetadata",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "CacheStorageMigrationTask::DidStoreMetadata",
+              perfetto::Flow::Global(trace_id));
 
   switch (ToDatabaseStatus(status)) {
     case DatabaseStatus::kOk:
@@ -386,10 +382,8 @@ void CreateMetadataTask::DidStoreMetadata(
 
 void CreateMetadataTask::DidOpenCache(int64_t trace_id,
                                       blink::mojom::CacheStorageError error) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "CacheStorageMigrationTask::DidReopenCache",
-                         TRACE_ID_GLOBAL(trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "CacheStorageMigrationTask::DidReopenCache",
+              perfetto::Flow::Global(trace_id));
 
   if (error != blink::mojom::CacheStorageError::kSuccess) {
     SetStorageErrorAndFinish(BackgroundFetchStorageError::kCacheStorageError);
@@ -458,14 +452,8 @@ void CreateMetadataTask::FinishWithError(
     }
   }
 
-  ReportStorageError();
-
   std::move(callback_).Run(error, std::move(registration_data));
   Finished();  // Destroys |this|.
-}
-
-std::string CreateMetadataTask::HistogramName() const {
-  return "CreateMetadataTask";
 }
 
 }  // namespace background_fetch

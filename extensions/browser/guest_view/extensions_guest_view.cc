@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -19,61 +18,60 @@
 
 namespace extensions {
 
-ExtensionsGuestView::ExtensionsGuestView(int render_process_id)
-    : guest_view::GuestViewMessageHandler(render_process_id) {}
+ExtensionsGuestView::ExtensionsGuestView(
+    const content::GlobalRenderFrameHostId& frame_id)
+    : guest_view::GuestViewMessageHandler(frame_id) {}
 ExtensionsGuestView::~ExtensionsGuestView() = default;
 
 // static
 void ExtensionsGuestView::CreateForComponents(
-    int render_process_id,
+    const content::GlobalRenderFrameHostId& frame_id,
     mojo::PendingAssociatedReceiver<guest_view::mojom::GuestViewHost>
         receiver) {
   mojo::MakeSelfOwnedAssociatedReceiver(
-      base::WrapUnique(new ExtensionsGuestView(render_process_id)),
-      std::move(receiver));
+      base::WrapUnique(new ExtensionsGuestView(frame_id)), std::move(receiver));
 }
 
 // static
 void ExtensionsGuestView::CreateForExtensions(
-    int render_process_id,
+    const content::GlobalRenderFrameHostId& frame_id,
     mojo::PendingAssociatedReceiver<extensions::mojom::GuestView> receiver) {
   mojo::MakeSelfOwnedAssociatedReceiver(
-      base::WrapUnique(new ExtensionsGuestView(render_process_id)),
-      std::move(receiver));
+      base::WrapUnique(new ExtensionsGuestView(frame_id)), std::move(receiver));
 }
 
 std::unique_ptr<guest_view::GuestViewManagerDelegate>
-ExtensionsGuestView::CreateGuestViewManagerDelegate(
-    content::BrowserContext* context) const {
-  return ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate(context);
+ExtensionsGuestView::CreateGuestViewManagerDelegate() const {
+  return ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate();
 }
 
-void ExtensionsGuestView::ReadyToCreateMimeHandlerView(int32_t render_frame_id,
-                                                       bool success) {
+void ExtensionsGuestView::ReadyToCreateMimeHandlerView(bool success) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  auto* rfh =
-      content::RenderFrameHost::FromID(render_process_id(), render_frame_id);
-  if (!rfh)
+  auto* render_frame_host = content::RenderFrameHost::FromID(frame_id_);
+  if (!render_frame_host) {
     return;
-  if (auto* mhve = MimeHandlerViewEmbedder::Get(rfh->GetFrameTreeNodeId()))
+  }
+  if (auto* mhve = MimeHandlerViewEmbedder::Get(
+          render_frame_host->GetFrameTreeNodeId())) {
     mhve->ReadyToCreateMimeHandlerView(success);
+  }
 }
 
 void ExtensionsGuestView::CanExecuteContentScript(
-    int routing_id,
     const std::string& script_id,
     CanExecuteContentScriptCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   WebViewRendererState::WebViewInfo info;
   const bool success = WebViewRendererState::GetInstance()->GetInfo(
-      render_process_id(), routing_id, &info);
+      // TODO(crbug.com/379869738): Remove GetUnsafeValue
+      render_process_id().GetUnsafeValue(), frame_id_.frame_routing_id, &info);
   // GetInfo can fail if the process id does not correspond to a WebView. Those
   // cases are just defaulted to false.
   if (!success) {
     std::move(callback).Run(false);
     return;
   }
-  const bool can_execute = base::Contains(info.content_script_ids, script_id);
+  const bool can_execute = info.content_script_ids.contains(script_id);
   std::move(callback).Run(can_execute);
 }
 

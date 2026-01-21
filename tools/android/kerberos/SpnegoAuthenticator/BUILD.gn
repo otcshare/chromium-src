@@ -8,7 +8,6 @@ import("//build/config/android/rules.gni")
 android_apk("spnego_authenticator_apk") {
   testonly = true
   android_manifest = "AndroidManifest.xml"
-  min_sdk_version = 21
   apk_name = "SpnegoAuthenticator"
 
   deps = [
@@ -38,5 +37,4 @@ android_resources("spnego_authenticator_apk_assets") {
     "res/xml/spnego_account_preferences.xml",
     "res/xml/spnego_authenticator.xml",
   ]
-  android_manifest = "AndroidManifest.xml"
 }

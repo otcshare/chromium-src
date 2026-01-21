@@ -11,8 +11,6 @@
 #include "base/memory/raw_ptr.h"
 #include "extensions/browser/api/socket/socket_api.h"
 #include "extensions/common/api/sockets_udp.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 
 namespace extensions {
 class ResumableUDPSocket;
@@ -100,7 +98,7 @@ class SocketsUdpBindFunction : public UDPSocketApiFunction {
   void OnCompleted(int net_result);
 
  private:
-  std::unique_ptr<sockets_udp::Bind::Params> params_;
+  std::optional<sockets_udp::Bind::Params> params_;
   raw_ptr<UDPSocketEventDispatcher> socket_event_dispatcher_ = nullptr;
 };
 
@@ -124,7 +122,7 @@ class SocketsUdpSendFunction : public UDPSocketExtensionWithDnsLookupFunction {
  private:
   void StartSendTo();
 
-  std::unique_ptr<sockets_udp::Send::Params> params_;
+  std::optional<sockets_udp::Send::Params> params_;
   scoped_refptr<net::IOBuffer> io_buffer_;
   size_t io_buffer_size_ = 0;
 };

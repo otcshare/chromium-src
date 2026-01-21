@@ -6,17 +6,21 @@
 
 #include <stddef.h>
 
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "google_apis/credentials_mode.h"
 #include "google_apis/gcm/base/gcm_util.h"
 #include "google_apis/gcm/monitoring/gcm_stats_recorder.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -45,26 +49,45 @@ const char kDeviceRegistrationError[] = "PHONE_REGISTRATION_ERROR";
 const char kAuthenticationFailed[] = "AUTHENTICATION_FAILED";
 const char kInvalidSender[] = "INVALID_SENDER";
 const char kInvalidParameters[] = "INVALID_PARAMETERS";
-const char kInternalServerError[] = "InternalServerError";
+const char kInternalServerError[] = "INTERNAL_SERVER_ERROR";
 const char kQuotaExceeded[] = "QUOTA_EXCEEDED";
 const char kTooManyRegistrations[] = "TOO_MANY_REGISTRATIONS";
+const char kTooManySubscribers[] = "TOO_MANY_SUBSCRIBERS";
+const char kInvalidTargetVersion[] = "INVALID_TARGET_VERSION";
+const char kFisAuthError[] = "FIS_AUTH_ERROR";
 
 // Gets correct status from the error message.
-RegistrationRequest::Status GetStatusFromError(const std::string& error) {
-  if (error.find(kDeviceRegistrationError) != std::string::npos)
+RegistrationRequest::Status GetStatusFromError(std::string_view error) {
+  if (error.contains(kDeviceRegistrationError)) {
     return RegistrationRequest::DEVICE_REGISTRATION_ERROR;
-  if (error.find(kAuthenticationFailed) != std::string::npos)
+  }
+  if (error.contains(kAuthenticationFailed)) {
     return RegistrationRequest::AUTHENTICATION_FAILED;
-  if (error.find(kInvalidSender) != std::string::npos)
+  }
+  if (error.contains(kInvalidSender)) {
     return RegistrationRequest::INVALID_SENDER;
-  if (error.find(kInvalidParameters) != std::string::npos)
+  }
+  if (error.contains(kInvalidParameters)) {
     return RegistrationRequest::INVALID_PARAMETERS;
-  if (error.find(kInternalServerError) != std::string::npos)
+  }
+  if (error.contains(kInternalServerError)) {
     return RegistrationRequest::INTERNAL_SERVER_ERROR;
-  if (error.find(kQuotaExceeded) != std::string::npos)
+  }
+  if (error.contains(kQuotaExceeded)) {
     return RegistrationRequest::QUOTA_EXCEEDED;
-  if (error.find(kTooManyRegistrations) != std::string::npos)
+  }
+  if (error.contains(kTooManyRegistrations)) {
     return RegistrationRequest::TOO_MANY_REGISTRATIONS;
+  }
+  if (error.contains(kTooManySubscribers)) {
+    return RegistrationRequest::TOO_MANY_SUBSCRIBERS;
+  }
+  if (error.contains(kInvalidTargetVersion)) {
+    return RegistrationRequest::INVALID_TARGET_VERSION;
+  }
+  if (error.contains(kFisAuthError)) {
+    return RegistrationRequest::FIS_AUTH_ERROR;
+  }
   // Should not be reached, unless the server adds new error types.
   return RegistrationRequest::UNKNOWN_ERROR;
 }
@@ -80,6 +103,8 @@ bool ShouldRetryWithStatus(RegistrationRequest::Status status) {
     case RegistrationRequest::NO_RESPONSE_BODY:
     case RegistrationRequest::RESPONSE_PARSING_FAILED:
     case RegistrationRequest::INTERNAL_SERVER_ERROR:
+    case RegistrationRequest::TOO_MANY_SUBSCRIBERS:
+    case RegistrationRequest::FIS_AUTH_ERROR:
       return true;
     case RegistrationRequest::SUCCESS:
     case RegistrationRequest::INVALID_PARAMETERS:
@@ -87,6 +112,7 @@ bool ShouldRetryWithStatus(RegistrationRequest::Status status) {
     case RegistrationRequest::QUOTA_EXCEEDED:
     case RegistrationRequest::TOO_MANY_REGISTRATIONS:
     case RegistrationRequest::REACHED_MAX_RETRIES:
+    case RegistrationRequest::INVALID_TARGET_VERSION:
       return false;
   }
   return false;
@@ -175,7 +201,8 @@ void RegistrationRequest::Start() {
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = registration_url_;
   request->method = "POST";
-  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  request->credentials_mode =
+      google_apis::GetOmitCredentialsModeForGaiaRequests();
   BuildRequestHeaders(&request->headers);
 
   std::string body;
@@ -242,26 +269,25 @@ void RegistrationRequest::RetryWithBackoff() {
 
 RegistrationRequest::Status RegistrationRequest::ParseResponse(
     const network::SimpleURLLoader* source,
-    std::unique_ptr<std::string> body,
+    std::optional<std::string> body,
     std::string* token) {
   if (source->NetError() != net::OK) {
     LOG(ERROR) << "Registration URL fetching failed.";
     return URL_FETCHING_FAILED;
   }
 
-  std::string response;
   if (!body) {
     LOG(ERROR) << "Failed to get registration response body.";
     return NO_RESPONSE_BODY;
   }
-  response = std::move(*body);
+  std::string response = std::move(body).value();
 
   // If we are able to parse a meaningful known error, let's do so. Note that
   // some errors will have HTTP_OK response code!
   size_t error_pos = response.find(kErrorPrefix);
   if (error_pos != std::string::npos) {
-    std::string error =
-        response.substr(error_pos + std::size(kErrorPrefix) - 1);
+    std::string_view error = std::string_view(response).substr(
+        error_pos + std::size(kErrorPrefix) - 1);
     LOG(ERROR) << "Registration response error message: " << error;
     RegistrationRequest::Status status = GetStatusFromError(error);
     return status;
@@ -293,7 +319,7 @@ RegistrationRequest::Status RegistrationRequest::ParseResponse(
 
 void RegistrationRequest::OnURLLoadComplete(
     const network::SimpleURLLoader* source,
-    std::unique_ptr<std::string> body) {
+    std::optional<std::string> body) {
   std::string token;
   Status status = ParseResponse(source, std::move(body), &token);
   recorder_->RecordRegistrationResponse(request_info_.app_id(),

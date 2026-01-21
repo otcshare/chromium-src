@@ -8,7 +8,7 @@
 #include <map>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "content/common/content_export.h"
@@ -35,6 +35,10 @@ class CONTENT_EXPORT FrameTokenMessageQueue {
 
     // Notified when an invalid frame token was received.
     virtual void OnInvalidFrameToken(uint32_t frame_token) = 0;
+
+    // Query the main frame's last committed URL for debugging purpose.
+    // Returns empty string if frame tree or its main frame is nullptr.
+    virtual std::string GetMainFrameLastCommittedURLSpec() = 0;
   };
   FrameTokenMessageQueue();
 

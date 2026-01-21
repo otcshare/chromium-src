@@ -22,8 +22,9 @@ FeatureObserver::FeatureObserver(FeatureObserverClient* client,
         [](mojo::ReceiverSet<blink::mojom::ObservedFeature>* set,
            FeatureObserverClient* client, GlobalRenderFrameHostId id,
            blink::mojom::ObservedFeatureType type) {
-          if (!set->empty())
+          if (!set->empty()) {
             return;
+          }
 
           // Notify if this is the last receiver.
           client->OnStopUsing(id, type);

@@ -7,6 +7,8 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -38,14 +40,18 @@ class MediaTrackConstraints;
 class MediaStream;
 class MediaTrackSettings;
 class ScriptState;
+class SpeechRecognitionMediaStreamAudioSink;
+class V8MediaStreamTrackState;
+class V8UnionMediaStreamTrackAudioStatsOrMediaStreamTrackVideoStats;
 
 String ContentHintToString(
     const WebMediaStreamTrack::ContentHintType& content_hint);
 
-String ReadyStateToString(const MediaStreamSource::ReadyState& ready_state);
+V8MediaStreamTrackState ReadyStateToV8TrackState(
+    const MediaStreamSource::ReadyState& ready_state);
 
 class MODULES_EXPORT MediaStreamTrack
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ActiveScriptWrappable<MediaStreamTrack> {
   DEFINE_WRAPPERTYPEINFO();
 
@@ -58,7 +64,7 @@ class MODULES_EXPORT MediaStreamTrack
 
   // For carrying data to the FromTransferredState method.
   struct TransferredValues {
-    const WrapperTypeInfo* track_impl_subtype;
+    raw_ptr<const WrapperTypeInfo> track_impl_subtype;
     base::UnguessableToken session_id;
     base::UnguessableToken transfer_id;
     String kind;
@@ -70,7 +76,7 @@ class MODULES_EXPORT MediaStreamTrack
     MediaStreamSource::ReadyState ready_state;
     // Set only if
     // track_impl_subtype->IsSubclass(BrowserCaptureMediaStreamTrack::GetStaticWrapperTypeInfo())
-    absl::optional<uint32_t> crop_version;
+    std::optional<uint32_t> sub_capture_target_version;
   };
 
   // See SetFromTransferredStateImplForTesting in ./test/transfer_test_utils.h.
@@ -84,6 +90,8 @@ class MODULES_EXPORT MediaStreamTrack
   static MediaStreamTrack* FromTransferredState(ScriptState* script_state,
                                                 const TransferredValues& data);
 
+  MediaStreamTrack();
+
   // MediaStreamTrack.idl
   virtual String kind() const = 0;
   virtual String id() const = 0;
@@ -92,18 +100,21 @@ class MODULES_EXPORT MediaStreamTrack
   virtual void setEnabled(bool) = 0;
   virtual bool muted() const = 0;
   virtual String ContentHint() const = 0;
-  virtual String readyState() const = 0;
+  virtual V8MediaStreamTrackState readyState() const = 0;
   virtual void SetContentHint(const String&) = 0;
   virtual void stopTrack(ExecutionContext*) = 0;
   virtual MediaStreamTrack* clone(ExecutionContext*) = 0;
   virtual MediaTrackCapabilities* getCapabilities() const = 0;
   virtual MediaTrackConstraints* getConstraints() const = 0;
   virtual MediaTrackSettings* getSettings() const = 0;
+  virtual V8UnionMediaStreamTrackAudioStatsOrMediaStreamTrackVideoStats*
+  stats() = 0;
   virtual CaptureHandle* getCaptureHandle() const = 0;
-  virtual ScriptPromise applyConstraints(ScriptState*,
-                                         const MediaTrackConstraints*) = 0;
+  virtual ScriptPromise<IDLUndefined> applyConstraints(
+      ScriptState*,
+      const MediaTrackConstraints*) = 0;
 
-  virtual void applyConstraints(ScriptPromiseResolver*,
+  virtual void applyConstraints(ScriptPromiseResolver<IDLUndefined>*,
                                 const MediaTrackConstraints*) = 0;
   virtual void SetInitialConstraints(const MediaConstraints& constraints) = 0;
   virtual void SetConstraints(const MediaConstraints& constraints) = 0;
@@ -112,6 +123,7 @@ class MODULES_EXPORT MediaStreamTrack
   DEFINE_ATTRIBUTE_EVENT_LISTENER(unmute, kUnmute)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(ended, kEnded)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(capturehandlechange, kCapturehandlechange)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(configurationchange, kConfigurationchange)
 
   virtual MediaStreamSource::ReadyState GetReadyState() = 0;
 
@@ -120,6 +132,7 @@ class MODULES_EXPORT MediaStreamTrack
 
   virtual void RegisterMediaStream(MediaStream*) = 0;
   virtual void UnregisterMediaStream(MediaStream*) = 0;
+  virtual void RegisterSink(SpeechRecognitionMediaStreamAudioSink* sink) = 0;
 
   // EventTarget
   const AtomicString& InterfaceName() const override = 0;
@@ -131,21 +144,24 @@ class MODULES_EXPORT MediaStreamTrack
   bool HasPendingActivity() const override = 0;
 
   virtual std::unique_ptr<AudioSourceProvider> CreateWebAudioSource(
-      int context_sample_rate) = 0;
+      int context_sample_rate,
+      base::TimeDelta platform_buffer_duration) = 0;
 
   virtual ImageCapture* GetImageCapture() = 0;
-  virtual absl::optional<const MediaStreamDevice> device() const = 0;
+  virtual std::optional<const MediaStreamDevice> device() const = 0;
   // This function is called on the track by the serializer once it has been
   // serialized for transfer to another context.
   // Prepares the track for a potentially cross-renderer transfer. After this
   // is called, the track will be in an ended state and no longer usable.
   virtual void BeingTransferred(const base::UnguessableToken& transfer_id) = 0;
+  // Returns true if this track is allowed to be transferred. If a transfer is
+  //  not allowed, message will contain an explanatory text that can be
+  //  surfaced to the caller.
+  virtual bool TransferAllowed(String& message) const = 0;
 
   virtual void AddObserver(Observer*) = 0;
 
-  void Trace(Visitor* visitor) const override {
-    EventTargetWithInlineData::Trace(visitor);
-  }
+  void Trace(Visitor* visitor) const override { EventTarget::Trace(visitor); }
 
  private:
   // Friend in order to allow setting a new impl for FromTransferredState.

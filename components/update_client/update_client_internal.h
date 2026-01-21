@@ -10,11 +10,12 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/circular_deque.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "components/update_client/crx_downloader.h"
 #include "components/update_client/update_checker.h"
 #include "components/update_client/update_client.h"
@@ -44,6 +45,11 @@ class UpdateClientImpl : public UpdateClient {
       CrxDataCallback crx_data_callback,
       CrxStateChangeCallback crx_state_change_callback,
       Callback callback) override;
+  void CheckForUpdate(const std::string& id,
+                      CrxDataCallback crx_data_callback,
+                      CrxStateChangeCallback crx_state_change_callback,
+                      bool is_foreground,
+                      Callback callback) override;
   void Update(const std::vector<std::string>& ids,
               CrxDataCallback crx_data_callback,
               CrxStateChangeCallback crx_state_change_callback,
@@ -53,21 +59,21 @@ class UpdateClientImpl : public UpdateClient {
                          CrxUpdateItem* update_item) const override;
   bool IsUpdating(const std::string& id) const override;
   void Stop() override;
-  void SendUninstallPing(const CrxComponent& crx_component,
-                         int reason,
-                         Callback callback) override;
+  void SendPing(const CrxComponent& crx_component,
+                PingParams ping_params,
+                Callback callback) override;
 
  private:
   ~UpdateClientImpl() override;
 
   void RunTask(scoped_refptr<Task> task);
   void OnTaskComplete(Callback callback, scoped_refptr<Task> task, Error error);
+  void NotifyObservers(const CrxUpdateItem& item);
+  void RunOrEnqueueTask(scoped_refptr<Task> task);
 
-  void NotifyObservers(Observer::Events event, const std::string& id);
+  SEQUENCE_CHECKER(sequence_checker_);
 
-  base::ThreadChecker thread_checker_;
-
-  // True if Stop method has been called.
+  // True if `Stop()` has been called.
   bool is_stopped_ = false;
 
   scoped_refptr<Configurator> config_;
@@ -87,6 +93,7 @@ class UpdateClientImpl : public UpdateClient {
   scoped_refptr<PingManager> ping_manager_;
   scoped_refptr<UpdateEngine> update_engine_;
   base::ObserverList<Observer>::Unchecked observer_list_;
+  base::WeakPtrFactory<UpdateClientImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace update_client

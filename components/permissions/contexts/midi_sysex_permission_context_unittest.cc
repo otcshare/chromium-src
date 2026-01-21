@@ -6,12 +6,16 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "components/permissions/test/test_permissions_client.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
@@ -22,6 +26,8 @@
 namespace permissions {
 
 namespace {
+
+using PermissionStatus = blink::mojom::PermissionStatus;
 
 class TestPermissionContext : public MidiSysexPermissionContext {
  public:
@@ -39,14 +45,13 @@ class TestPermissionContext : public MidiSysexPermissionContext {
 
   bool tab_context_updated() { return tab_context_updated_; }
 
-  void TrackPermissionDecision(ContentSetting content_setting) {
+  void TrackPermissionDecision(content::PermissionResult permission_result) {
     permission_set_ = true;
-    permission_granted_ = content_setting == CONTENT_SETTING_ALLOW;
+    permission_granted_ = permission_result.status == PermissionStatus::GRANTED;
   }
 
  protected:
-  void UpdateTabContext(const PermissionRequestID& id,
-                        const GURL& requesting_origin,
+  void UpdateTabContext(const PermissionRequestData& request_data,
                         bool allowed) override {
     tab_context_updated_ = true;
   }
@@ -79,7 +84,10 @@ TEST_F(MidiSysexPermissionContextTests, TestInsecureRequestingUrl) {
       web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       permissions::PermissionRequestID::RequestLocalId());
   permission_context.RequestPermission(
-      id, url, true,
+      std::make_unique<PermissionRequestData>(
+          std::make_unique<ContentSettingPermissionResolver>(
+              ContentSettingsType::MIDI_SYSEX),
+          id, /*user_gesture=*/true, url),
       base::BindOnce(&TestPermissionContext::TrackPermissionDecision,
                      base::Unretained(&permission_context)));
 
@@ -122,17 +130,23 @@ TEST_F(MidiSysexPermissionContextTests, TestInsecureQueryingUrl) {
                                     secure_url.DeprecatedGetOriginAsURL(),
                                     ContentSettingsType::MIDI_SYSEX));
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+  EXPECT_EQ(PermissionStatus::DENIED,
             permission_context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     insecure_url, insecure_url)
-                .content_setting);
+                .GetPermissionStatus(
+                    content::PermissionDescriptorUtil::
+                        CreatePermissionDescriptorForPermissionType(
+                            blink::PermissionType::MIDI_SYSEX),
+                    nullptr /* render_frame_host */, insecure_url, insecure_url)
+                .status);
 
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+  EXPECT_EQ(PermissionStatus::DENIED,
             permission_context
-                .GetPermissionStatus(nullptr /* render_frame_host */,
-                                     insecure_url, secure_url)
-                .content_setting);
+                .GetPermissionStatus(
+                    content::PermissionDescriptorUtil::
+                        CreatePermissionDescriptorForPermissionType(
+                            blink::PermissionType::MIDI_SYSEX),
+                    nullptr /* render_frame_host */, insecure_url, secure_url)
+                .status);
 }
 
 }  // namespace permissions

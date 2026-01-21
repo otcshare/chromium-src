@@ -11,15 +11,17 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util_win.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/windows_version.h"
@@ -28,6 +30,7 @@
 #include "device/gamepad/gamepad_id_list.h"
 #include "device/gamepad/gamepad_standard_mappings.h"
 #include "device/gamepad/nintendo_controller.h"
+#include "device/gamepad/public/cpp/gamepad_features.h"
 #include "device/gamepad/wgi_gamepad_device.h"
 
 namespace device {
@@ -68,33 +71,40 @@ GetRawGameController(ABI::Windows::Gaming::Input::IGamepad* gamepad,
   return raw_game_controller;
 }
 
-GamepadId GetGamepadId(const std::u16string& product_name,
-                       ABI::Windows::Gaming::Input::IGamepad* gamepad,
-                       WgiDataFetcherWin::GetActivationFactoryFunction
-                           get_activation_factory_function) {
+std::optional<GamepadId> GetGamepadId(
+    const std::u16string& product_name,
+    ABI::Windows::Gaming::Input::IGamepad* gamepad,
+    WgiDataFetcherWin::GetActivationFactoryFunction
+        get_activation_factory_function) {
   std::string product_name_string = base::UTF16ToUTF8(product_name);
   HRESULT hr = S_OK;
   Microsoft::WRL::ComPtr<ABI::Windows::Gaming::Input::IRawGameController>
       raw_game_controller =
           GetRawGameController(gamepad, get_activation_factory_function);
   if (!raw_game_controller) {
-    return GamepadId::kUnknownGamepad;
+    return std::nullopt;
   }
 
   uint16_t vendor_id;
   hr = raw_game_controller->get_HardwareVendorId(&vendor_id);
   if (FAILED(hr)) {
-    return GamepadId::kUnknownGamepad;
+    return std::nullopt;
   }
 
   uint16_t product_id;
   hr = raw_game_controller->get_HardwareProductId(&product_id);
   if (FAILED(hr)) {
-    return GamepadId::kUnknownGamepad;
+    return std::nullopt;
   }
 
   return GamepadIdList::Get().GetGamepadId(product_name_string, vendor_id,
                                            product_id);
+}
+
+// Returns true if `gamepad_id` is DualSense or DualSense Edge.
+bool IsPlayStation5Gamepad(GamepadId gamepad_id) {
+  return gamepad_id == GamepadId::kSonyProduct0ce6 ||
+         gamepad_id == GamepadId::kSonyProduct0df2;
 }
 
 // Check if the gamepad should be added by Windows.Gaming.Input. In the
@@ -102,10 +112,6 @@ GamepadId GetGamepadId(const std::u16string& product_name,
 // dedicated data fetchers designed for these gamepads.
 // We want to let those data fetchers handle the gamepad input instead.
 bool ShouldEnumerateGamepad(GamepadId gamepad_id) {
-  if (gamepad_id == GamepadId::kUnknownGamepad) {
-    return false;
-  }
-
   if (NintendoController::IsNintendoController(gamepad_id)) {
     // Nintendo devices are handled by the Nintendo data fetcher.
     return false;
@@ -113,6 +119,12 @@ bool ShouldEnumerateGamepad(GamepadId gamepad_id) {
 
   if (Dualshock4Controller::IsDualshock4(gamepad_id)) {
     // Dualshock4 devices are handled by the RawInput data fetcher.
+    return false;
+  }
+
+  if (base::FeatureList::IsEnabled(features::kIgnorePS5GamepadsInWgi) &&
+      IsPlayStation5Gamepad(gamepad_id)) {
+    // PlayStation 5 gamepads are handled by the RawInput data fetcher.
     return false;
   }
 
@@ -152,35 +164,6 @@ uint32_t GetPaddleNumber(
   return num_paddles;
 }
 
-bool HasTriggerRumbleSupport(GamepadId gamepad_id) {
-  // Xbox One USB
-  return gamepad_id == GamepadId::kMicrosoftProduct02d1 ||
-         // Xbox One USB 2015 Firmware
-         gamepad_id == GamepadId::kMicrosoftProduct02dd ||
-         // Xbox One S Bluetooth 2016 Firmware
-         gamepad_id == GamepadId::kMicrosoftProduct02fd ||
-         // Xbox One S Bluetooth 2021 Firmware
-         gamepad_id == GamepadId::kMicrosoftProduct0b20 ||
-         // Xbox One S USB
-         gamepad_id == GamepadId::kMicrosoftProduct02ea ||
-         // Xbox One S Bluetooth
-         gamepad_id == GamepadId::kMicrosoftProduct02e0 ||
-         // Xbox One S USB
-         gamepad_id == GamepadId::kMicrosoftProduct0b06 ||
-         // Xbox Series X USB
-         gamepad_id == GamepadId::kMicrosoftProduct0b12 ||
-         // Xbox Series X Bluetooth
-         gamepad_id == GamepadId::kMicrosoftProduct0b13 ||
-         // Xbox One Elite USB
-         gamepad_id == GamepadId::kMicrosoftProduct02e3 ||
-         // Xbox One Elite Series 2 USB
-         gamepad_id == GamepadId::kMicrosoftProduct0b00 ||
-         // Xbox One Elite Series 2 Bluetooth
-         gamepad_id == GamepadId::kMicrosoftProduct0b05 ||
-         // Xbox Elite Series 2 Bluetooth 2021 Firmware
-         gamepad_id == GamepadId::kMicrosoftProduct0b22;
-}
-
 }  // namespace
 
 WgiDataFetcherWin::WgiDataFetcherWin() {
@@ -211,12 +194,6 @@ GamepadSource WgiDataFetcherWin::source() {
 
 void WgiDataFetcherWin::OnAddedToProvider() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!base::win::HStringReference::ResolveCoreWinRTStringDelayload()) {
-    initialization_state_ =
-        InitializationState::kCoreWinrtStringDelayLoadFailed;
-    return;
-  }
-
   HRESULT hr = get_activation_factory_function_(
       base::win::HStringReference(RuntimeClass_Windows_Gaming_Input_Gamepad)
           .Get(),
@@ -271,8 +248,16 @@ void WgiDataFetcherWin::OnGamepadAdded(
     return;
 
   const std::u16string display_name = GetGamepadDisplayName(gamepad);
-  GamepadId gamepad_id =
+  std::optional<GamepadId> gamepad_id_optional =
       GetGamepadId(display_name, gamepad, get_activation_factory_function_);
+
+  // If `gamepad_id_optional` has std::nullopt, it means that an error has
+  // happened when calling the Windows API's.
+  if (!gamepad_id_optional.has_value()) {
+    return;
+  }
+
+  GamepadId gamepad_id = gamepad_id_optional.value();
   if (!ShouldEnumerateGamepad(gamepad_id)) {
     return;
   }
@@ -286,7 +271,7 @@ void WgiDataFetcherWin::OnGamepadAdded(
   pad.SetID(BuildGamepadIdString(gamepad_id, display_name, gamepad));
   pad.connected = true;
 
-  if (HasTriggerRumbleSupport(gamepad_id)) {
+  if (GamepadIdList::Get().HasTriggerRumbleSupport(gamepad_id)) {
     pad.vibration_actuator.type = GamepadHapticActuatorType::kTriggerRumble;
   } else {
     pad.vibration_actuator.type = GamepadHapticActuatorType::kDualRumble;
@@ -511,15 +496,21 @@ std::u16string WgiDataFetcherWin::BuildGamepadIdString(
     GamepadId gamepad_id,
     const std::u16string& display_name,
     ABI::Windows::Gaming::Input::IGamepad* gamepad) {
+  // Return early for GamepadId::kUnknownGamepad because
+  // GetDeviceIdsFromGamepadId has a DCHECK against it.
+  if (gamepad_id == GamepadId::kUnknownGamepad) {
+    return display_name + u" (STANDARD GAMEPAD)";
+  }
+
   uint16_t vendor_id, product_id;
   std::tie(vendor_id, product_id) =
       GamepadIdList::Get().GetDeviceIdsFromGamepadId(gamepad_id);
   XInputType xinput_type =
       GamepadIdList::Get().GetXInputType(vendor_id, product_id);
   if (xinput_type == kXInputTypeNone) {
-    return base::StringPrintf(
-        u"%ls (STANDARD GAMEPAD Vendor: %04x Product: %04x)",
-        display_name.data(), vendor_id, product_id);
+    return display_name + base::ASCIIToUTF16(base::StringPrintf(
+                              " (STANDARD GAMEPAD Vendor: %04x Product: %04x)",
+                              vendor_id, product_id));
   }
 
   // If the device is an already known XInput device that is now being

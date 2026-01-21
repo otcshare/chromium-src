@@ -7,8 +7,8 @@
 #include <map>
 #include <tuple>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -20,6 +20,7 @@
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/cert_verifier.h"
 #include "net/cert/cert_verify_result.h"
+#include "net/log/net_log_source.h"
 #include "net/log/net_log_with_source.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
@@ -50,6 +51,15 @@ CreateUnconnectedURLLoaderFactory() {
   return url_loader_factory;
 }
 
+class CertVerifierObserverWaiter : public net::CertVerifier::Observer {
+ public:
+  void OnCertVerifierChanged() override { run_loop_.Quit(); }
+  void Wait() { run_loop_.Run(); }
+
+ private:
+  base::RunLoop run_loop_;
+};
+
 class MojoCertVerifierTest : public PlatformTest {
  public:
   MojoCertVerifierTest()
@@ -57,6 +67,7 @@ class MojoCertVerifierTest : public PlatformTest {
         cv_service_receiver_(&dummy_cv_service_),
         mojo_cert_verifier_(
             cv_service_receiver_.BindNewPipeAndPassRemote(),
+            cv_service_client_.BindNewPipeAndPassReceiver(),
             CreateUnconnectedURLLoaderFactory(),
             base::BindRepeating(&MojoCertVerifierTest::ReconnectCb,
                                 base::Unretained(this))) {
@@ -68,15 +79,23 @@ class MojoCertVerifierTest : public PlatformTest {
    public:
     explicit DummyCVService(MojoCertVerifierTest* test) : test_(test) {}
     void Verify(const net::CertVerifier::RequestParams& params,
-                uint32_t netlog_source_type,
-                uint32_t netlog_source_id,
-                base::TimeTicks netlog_source_start_time,
+                const net::NetLogSource& net_log_source,
                 mojo::PendingRemote<mojom::CertVerifierRequest>
                     cert_verifier_request) override {
       ASSERT_FALSE(test_->received_requests_.count(params));
       test_->received_requests_[params].Bind(std::move(cert_verifier_request));
-      test_->received_netlogsources_[params] = std::make_tuple(
-          netlog_source_type, netlog_source_id, netlog_source_start_time);
+      test_->received_netlogsources_[params] = net_log_source;
+    }
+
+    void Verify2QwacBinding(
+        const std::string& binding,
+        const std::string& hostname,
+        const scoped_refptr<net::X509Certificate>& tls_cert,
+        const net::NetLogSource& net_log_source,
+        base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+            callback) override {
+      ADD_FAILURE();
+      std::move(callback).Run(nullptr);
     }
 
     void SetConfig(const net::CertVerifier::Config& config) override {
@@ -109,11 +128,18 @@ class MojoCertVerifierTest : public PlatformTest {
 
   DummyCVService* dummy_cv_service() { return &dummy_cv_service_; }
 
-  void RespondToRequest(const net::CertVerifier::RequestParams& params) {
+  void RespondToRequestWithResult(
+      const net::CertVerifier::RequestParams& params,
+      const net::CertVerifyResult& result,
+      int net_error) {
     ASSERT_TRUE(received_requests_.count(params));
+    received_requests_[params]->Complete(result, net_error);
+  }
+
+  void RespondToRequest(const net::CertVerifier::RequestParams& params) {
     net::CertVerifyResult result;
     result.cert_status = kExpectedCertStatus;
-    received_requests_[params]->Complete(result, kExpectedNetError);
+    RespondToRequestWithResult(params, result, kExpectedNetError);
   }
 
   bool DidRequestDisconnect(const net::CertVerifier::RequestParams& params) {
@@ -147,24 +173,27 @@ class MojoCertVerifierTest : public PlatformTest {
       uint32_t id,
       base::TimeTicks start_time) {
     ASSERT_TRUE(received_netlogsources_.count(params));
-    EXPECT_EQ(static_cast<uint32_t>(type),
-              std::get<0>(received_netlogsources_[params]));
-    EXPECT_EQ(id, std::get<1>(received_netlogsources_[params]));
-    EXPECT_EQ(start_time, std::get<2>(received_netlogsources_[params]));
+    EXPECT_EQ(type, received_netlogsources_[params].type);
+    EXPECT_EQ(id, received_netlogsources_[params].id);
+    EXPECT_EQ(start_time, received_netlogsources_[params].start_time);
+  }
+
+  void SimulateClientOnCertVerifierChanged() {
+    cv_service_client_->OnCertVerifierChanged();
   }
 
  private:
   std::map<net::CertVerifier::RequestParams,
            mojo::Remote<mojom::CertVerifierRequest>>
       received_requests_;
-  std::map<net::CertVerifier::RequestParams,
-           std::tuple<uint32_t, uint32_t, base::TimeTicks>>
+  std::map<net::CertVerifier::RequestParams, net::NetLogSource>
       received_netlogsources_;
 
   base::test::TaskEnvironment task_environment_;
 
   MojoCertVerifierTest::DummyCVService dummy_cv_service_;
   mojo::Receiver<mojom::CertVerifierService> cv_service_receiver_;
+  mojo::Remote<mojom::CertVerifierServiceClient> cv_service_client_;
 
   MojoCertVerifier mojo_cert_verifier_;
 
@@ -189,11 +218,21 @@ TEST_F(MojoCertVerifierTest, BasicVerify) {
   // Handle Mojo request
   task_environment()->RunUntilIdle();
 
-  RespondToRequest(dummy_params);
+  net::CertVerifyResult sent_result;
+  sent_result.cert_status =
+      net::CERT_STATUS_AUTHORITY_INVALID | net::CERT_STATUS_COMMON_NAME_INVALID;
+  sent_result.public_key_hashes.push_back({2});
+  sent_result.public_key_hashes.push_back({1});
+  sent_result.public_key_hashes.push_back({3});
+  const int sent_net_error = net::CERT_STATUS_AUTHORITY_INVALID;
+
+  RespondToRequestWithResult(dummy_params, sent_result, sent_net_error);
 
   net_error = test_cb.WaitForResult();
-  EXPECT_EQ(net_error, kExpectedNetError);
-  EXPECT_EQ(cert_verify_result->cert_status, kExpectedCertStatus);
+  EXPECT_EQ(net_error, sent_net_error);
+  EXPECT_EQ(cert_verify_result->cert_status, sent_result.cert_status);
+  EXPECT_EQ(cert_verify_result->public_key_hashes,
+            sent_result.public_key_hashes);
   ExpectReceivedNetlogSource(dummy_params, net_log.source().type,
                              net_log.source().id, net_log.source().start_time);
 }
@@ -340,15 +379,16 @@ TEST_F(MojoCertVerifierTest, IgnoresCVServiceDisconnection) {
 }
 
 TEST_F(MojoCertVerifierTest, SendsConfig) {
-  ASSERT_FALSE(dummy_cv_service()->config()->disable_symantec_enforcement);
+  ASSERT_FALSE(
+      dummy_cv_service()->config()->require_rev_checking_local_anchors);
 
   net::CertVerifier::Config config;
-  config.disable_symantec_enforcement = true;
+  config.require_rev_checking_local_anchors = true;
 
   mojo_cert_verifier()->SetConfig(config);
   task_environment()->RunUntilIdle();
 
-  ASSERT_TRUE(dummy_cv_service()->config()->disable_symantec_enforcement);
+  ASSERT_TRUE(dummy_cv_service()->config()->require_rev_checking_local_anchors);
 }
 
 TEST_F(MojoCertVerifierTest, ReconnectorCallsCb) {
@@ -367,6 +407,17 @@ TEST_F(MojoCertVerifierTest, ReconnectorCallsCb) {
       dummy_url_loader_factory_remote.InitWithNewPipeAndPassReceiver());
 
   run_loop.Run();
+}
+
+// Tests that a OnCertVerifierChanged message received from the
+// CertVerifierServiceClient creates notifications to the
+// CertVerifier::Observers registered with CertVerifier::AddObserver.
+TEST_F(MojoCertVerifierTest, ClientOnCertVerifierChangedIsProxiedToObservers) {
+  CertVerifierObserverWaiter observer;
+  mojo_cert_verifier()->AddObserver(&observer);
+  SimulateClientOnCertVerifierChanged();
+  observer.Wait();
+  mojo_cert_verifier()->RemoveObserver(&observer);
 }
 
 }  // namespace cert_verifier

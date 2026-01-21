@@ -11,8 +11,6 @@
 #import "ios/web/public/security/certificate_policy_cache.h"
 #import "ios/web/public/security/security_style.h"
 #import "ios/web/public/security/ssl_status.h"
-#import "ios/web/public/session/crw_session_certificate_policy_cache_storage.h"
-#import "ios/web/public/session/crw_session_storage.h"
 #import "ios/web/public/session/session_certificate_policy_cache.h"
 #import "ios/web/public/test/error_test_util.h"
 #import "ios/web/public/test/fakes/fake_web_client.h"
@@ -26,10 +24,6 @@
 #import "net/test/embedded_test_server/default_handlers.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest/include/gtest/gtest.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;

@@ -6,28 +6,29 @@
 
 #include "base/android/callback_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "chrome/android/chrome_jni_headers/ProxyNativeTask_jni.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/android/background_task_scheduler/chrome_background_task_factory.h"
 #include "chrome/browser/android/profile_key_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/profiles/profile_key_android.h"
 
-static jlong JNI_ProxyNativeTask_Init(JNIEnv* env,
-                                      const JavaParamRef<jobject>& jobj,
-                                      jint task_id,
-                                      const JavaParamRef<jstring>& jextras,
-                                      const JavaParamRef<jobject>& jcallback) {
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ProxyNativeTask_jni.h"
+
+static int64_t JNI_ProxyNativeTask_Init(JNIEnv* env,
+                                        const JavaRef<jobject>& jobj,
+                                        int32_t task_id,
+                                        std::string& extras,
+                                        const JavaRef<jobject>& jcallback) {
   std::unique_ptr<background_task::BackgroundTask> background_task =
       ChromeBackgroundTaskFactory::GetNativeBackgroundTaskFromTaskId(task_id);
 
   background_task::TaskParameters params;
   params.task_id = task_id;
 
-  if (!jextras.is_null()) {
-    params.extras = base::android::ConvertJavaStringToUTF8(
-        base::android::AttachCurrentThread(), jextras);
+  if (!extras.empty()) {
+    params.extras = extras;
   }
 
   background_task::TaskFinishedCallback finish_callback =
@@ -48,17 +49,15 @@ ProxyNativeTask::ProxyNativeTask(
       task_params_(std::move(task_params)),
       finish_callback_(std::move(finish_callback)) {}
 
-ProxyNativeTask::~ProxyNativeTask() {}
+ProxyNativeTask::~ProxyNativeTask() = default;
 
-void ProxyNativeTask::Destroy(JNIEnv* env,
-                              const JavaParamRef<jobject>& jcaller) {
+void ProxyNativeTask::Destroy(JNIEnv* env) {
   delete this;
 }
 
 void ProxyNativeTask::StartBackgroundTaskInReducedMode(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller,
-    const JavaParamRef<jobject>& jkey) {
+    const JavaRef<jobject>& jkey) {
   if (!background_task_) {
     std::move(finish_callback_).Run(false);
     return;
@@ -70,38 +69,32 @@ void ProxyNativeTask::StartBackgroundTaskInReducedMode(
                                              std::move(finish_callback_), key);
 }
 
-void ProxyNativeTask::StartBackgroundTaskWithFullBrowser(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller,
-    const JavaParamRef<jobject>& jprofile) {
+void ProxyNativeTask::StartBackgroundTaskWithFullBrowser(JNIEnv* env,
+                                                         Profile* profile) {
   if (!background_task_) {
     std::move(finish_callback_).Run(false);
     return;
   }
 
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
   DCHECK(profile);
   background_task_->OnStartTaskWithFullBrowser(
       task_params_, std::move(finish_callback_), profile);
 }
 
-void ProxyNativeTask::OnFullBrowserLoaded(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller,
-    const JavaParamRef<jobject>& jprofile) {
+void ProxyNativeTask::OnFullBrowserLoaded(JNIEnv* env,
+                                          Profile* profile) {
   if (!background_task_)
     return;
 
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
   DCHECK(profile);
   background_task_->OnFullBrowserLoaded(profile);
 }
 
-jboolean ProxyNativeTask::StopBackgroundTask(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
+bool ProxyNativeTask::StopBackgroundTask(JNIEnv* env) {
   if (!background_task_)
     return false;
 
   return background_task_->OnStopTask(task_params_);
 }
+
+DEFINE_JNI(ProxyNativeTask)

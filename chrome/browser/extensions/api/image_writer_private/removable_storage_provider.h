@@ -4,7 +4,7 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_IMAGE_WRITER_PRIVATE_REMOVABLE_STORAGE_PROVIDER_H_
 #define CHROME_BROWSER_EXTENSIONS_API_IMAGE_WRITER_PRIVATE_REMOVABLE_STORAGE_PROVIDER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "chrome/common/extensions/api/image_writer_private.h"
 #include "chrome/common/ref_counted_util.h"
@@ -27,8 +27,8 @@ class RemovableStorageProvider {
   static void GetAllDevices(DeviceListReadyCallback callback);
 
   // Sets the list of devices that will be returned by GetAllDevices during
-  // testing.  All calls to |GetAllDevices| will return this list until
-  // |ClearDeviceListForTesting| is called.
+  // testing.  All calls to `GetAllDevices` will return this list until
+  // `ClearDeviceListForTesting` is called.
   static void SetDeviceListForTesting(
       scoped_refptr<StorageDeviceList> device_list);
   // Clears the list of devices that is used during testing.

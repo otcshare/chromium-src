@@ -22,14 +22,18 @@
 
 #include "third_party/blink/renderer/core/html/html_li_element.h"
 
+#include "third_party/blink/renderer/core/css/css_counter_value.h"
 #include "third_party/blink/renderer/core/css/css_custom_ident_value.h"
+#include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
 #include "third_party/blink/renderer/core/html/list_item_ordinal.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 
 namespace blink {
 
@@ -37,35 +41,41 @@ HTMLLIElement::HTMLLIElement(Document& document)
     : HTMLElement(html_names::kLiTag, document) {}
 
 bool HTMLLIElement::IsPresentationAttribute(const QualifiedName& name) const {
-  if (name == html_names::kTypeAttr)
+  if (name == html_names::kTypeAttr ||
+      (RuntimeEnabledFeatures::CSSListCounterAccountingEnabled() &&
+       name == html_names::kValueAttr)) {
     return true;
+  }
   return HTMLElement::IsPresentationAttribute(name);
 }
 
 AtomicString ListTypeAttributeToStyleName(const AtomicString& value) {
   if (value == "a")
-    return "lower-alpha";
+    return keywords::kLowerAlpha;
   if (value == "A")
-    return "upper-alpha";
+    return keywords::kUpperAlpha;
   if (value == "i")
-    return "lower-roman";
+    return keywords::kLowerRoman;
   if (value == "I")
-    return "upper-roman";
+    return keywords::kUpperRoman;
   if (value == "1")
-    return "decimal";
-  if (EqualIgnoringASCIICase(value, "disc"))
-    return "disc";
-  if (EqualIgnoringASCIICase(value, "circle"))
-    return "circle";
-  if (EqualIgnoringASCIICase(value, "square"))
-    return "square";
+    return keywords::kDecimal;
+  if (EqualIgnoringASCIICase(value, keywords::kDisc)) {
+    return keywords::kDisc;
+  }
+  if (EqualIgnoringASCIICase(value, keywords::kCircle)) {
+    return keywords::kCircle;
+  }
+  if (EqualIgnoringASCIICase(value, keywords::kSquare)) {
+    return keywords::kSquare;
+  }
   return g_null_atom;
 }
 
 void HTMLLIElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kTypeAttr) {
     if (EqualIgnoringASCIICase(value, "none")) {
       AddPropertyToPresentationAttributeStyle(
@@ -78,13 +88,31 @@ void HTMLLIElement::CollectStyleForPresentationAttribute(
             *MakeGarbageCollected<CSSCustomIdentValue>(list_style_type_name));
       }
     }
+  } else if (RuntimeEnabledFeatures::CSSListCounterAccountingEnabled() &&
+             name == html_names::kValueAttr) {
+    int parsed_value = 0;
+    if (!ParseHTMLInteger(value, parsed_value)) {
+      return;
+    }
+    // https://html.spec.whatwg.org/multipage/rendering.html#lists
+    const CSSCustomIdentValue* identifier =
+        MakeGarbageCollected<CSSCustomIdentValue>(AtomicString("list-item"));
+    const CSSNumericLiteralValue* numeric_literal_value =
+        CSSNumericLiteralValue::Create(parsed_value,
+                                       CSSPrimitiveValue::UnitType::kNumber);
+    CSSValueList* list = CSSValueList::CreateSpaceSeparated();
+    list->Append(*MakeGarbageCollected<cssvalue::CSSCounterValue>(
+        *identifier, numeric_literal_value, false));
+    AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kCounterSet,
+                                            *list);
   } else {
     HTMLElement::CollectStyleForPresentationAttribute(name, value, style);
   }
 }
 
 void HTMLLIElement::ParseAttribute(const AttributeModificationParams& params) {
-  if (params.name == html_names::kValueAttr) {
+  if (!RuntimeEnabledFeatures::CSSListCounterAccountingEnabled() &&
+      params.name == html_names::kValueAttr) {
     if (ListItemOrdinal* ordinal = ListItemOrdinal::Get(*this))
       ParseValue(params.new_value, ordinal);
   } else {
@@ -94,7 +122,9 @@ void HTMLLIElement::ParseAttribute(const AttributeModificationParams& params) {
 
 void HTMLLIElement::AttachLayoutTree(AttachContext& context) {
   HTMLElement::AttachLayoutTree(context);
-
+  if (RuntimeEnabledFeatures::CSSListCounterAccountingEnabled()) {
+    return;
+  }
   if (ListItemOrdinal* ordinal = ListItemOrdinal::Get(*this)) {
     ParseValue(FastGetAttribute(html_names::kValueAttr), ordinal);
   }
@@ -102,6 +132,7 @@ void HTMLLIElement::AttachLayoutTree(AttachContext& context) {
 
 void HTMLLIElement::ParseValue(const AtomicString& value,
                                ListItemOrdinal* ordinal) {
+  DCHECK(!RuntimeEnabledFeatures::CSSListCounterAccountingEnabled());
   DCHECK(ListItemOrdinal::IsListItem(*this));
 
   int requested_value = 0;

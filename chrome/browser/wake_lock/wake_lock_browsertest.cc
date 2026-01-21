@@ -31,8 +31,9 @@ std::unique_ptr<net::test_server::HttpResponse> RespondWithJS(
     base::OnceClosure done_callback,
     const net::test_server::HttpRequest& request) {
   GURL request_url = request.GetURL();
-  if (request_url.path() != path)
+  if (request_url.GetPath() != path) {
     return nullptr;
+  }
 
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_content_type("text/javascript");
@@ -50,8 +51,8 @@ class WakeLockBrowserTest : public InProcessBrowserTest {
 
   // Shorthand for starting the embedded web server and navigating to
   // simple.html.
-  // Tests calling this usually call content::ExecuteScriptAndExtractString()
-  // afterwards to run custom code on the dummy page.
+  // Tests calling this usually call content::EvalJs() afterwards to run custom
+  // code on the dummy page.
   void NavigateToSimplePage();
 
   // Registers a handle for "/js-response" in the embedded web server that

@@ -20,6 +20,7 @@
 #include "util/misc/address_types.h"
 #include "util/win/registration_protocol_win_structs.h"
 
+#include <stddef.h>
 #include <Windows.h>
 #include <werapi.h>
 
@@ -102,7 +103,8 @@ bool ProcessException(const DWORD* handled_exceptions,
       break;
     }
   }
-  if (!found)
+  // If num_handled_exceptions == 0, all exceptions should be passed on.
+  if (!found && num_handled_exceptions != 0)
     return false;
 
   // Grab out the handles to the crashpad server.

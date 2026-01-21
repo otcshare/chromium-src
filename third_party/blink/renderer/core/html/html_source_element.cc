@@ -25,6 +25,7 @@
 
 #include "third_party/blink/renderer/core/html/html_source_element.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
 #include "third_party/blink/renderer/core/css/media_query_list.h"
@@ -95,9 +96,9 @@ Node::InsertionNotificationRequest HTMLSourceElement::InsertedInto(
   auto* html_picture_element = parent == insertion_point
                                    ? DynamicTo<HTMLPictureElement>(parent)
                                    : nullptr;
-  if (html_picture_element)
-    html_picture_element->SourceOrMediaChanged();
-
+  if (html_picture_element) {
+    html_picture_element->SourceChanged(ImageSourceChangeType::kAdded);
+  }
   return kInsertionDone;
 }
 
@@ -111,7 +112,7 @@ void HTMLSourceElement::RemovedFrom(ContainerNode& removal_root) {
   if (auto* picture = DynamicTo<HTMLPictureElement>(parent)) {
     RemoveMediaQueryListListener();
     if (was_removed_from_parent)
-      picture->SourceOrMediaChanged();
+      picture->SourceChanged(ImageSourceChangeType::kRemoved);
   }
   HTMLElement::RemovedFrom(removal_root);
 }
@@ -139,8 +140,7 @@ void HTMLSourceElement::ScheduleErrorEvent() {
 
   pending_error_event_ = PostCancellableTask(
       *GetDocument().GetTaskRunner(TaskType::kDOMManipulation), FROM_HERE,
-      WTF::BindOnce(&HTMLSourceElement::DispatchPendingEvent,
-                    WrapPersistent(this)));
+      BindOnce(&HTMLSourceElement::DispatchPendingEvent, WrapPersistent(this)));
 }
 
 void HTMLSourceElement::CancelPendingErrorEvent() {
@@ -165,7 +165,7 @@ void HTMLSourceElement::AttributeChanged(
   const QualifiedName& name = params.name;
   if (name == html_names::kWidthAttr || name == html_names::kHeightAttr) {
     if (auto* picture = DynamicTo<HTMLPictureElement>(parentElement()))
-      picture->SourceAttributeChanged();
+      picture->SourceDimensionChanged();
   }
 
   HTMLElement::AttributeChanged(params);
@@ -184,14 +184,16 @@ void HTMLSourceElement::ParseAttribute(
     CreateMediaQueryList(params.new_value);
   if (name == html_names::kSrcsetAttr || name == html_names::kSizesAttr ||
       name == html_names::kMediaAttr || name == html_names::kTypeAttr) {
-    if (auto* picture = DynamicTo<HTMLPictureElement>(parentElement()))
-      picture->SourceOrMediaChanged();
+    if (auto* picture = DynamicTo<HTMLPictureElement>(parentElement())) {
+      picture->SourceChanged(ImageSourceChangeType::kAttribute);
+    }
   }
 }
 
 void HTMLSourceElement::NotifyMediaQueryChanged() {
-  if (auto* picture = DynamicTo<HTMLPictureElement>(parentElement()))
-    picture->SourceOrMediaChanged();
+  if (auto* picture = DynamicTo<HTMLPictureElement>(parentElement())) {
+    picture->SourceChanged(ImageSourceChangeType::kMedia);
+  }
 }
 
 void HTMLSourceElement::Trace(Visitor* visitor) const {

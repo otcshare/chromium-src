@@ -4,11 +4,14 @@
 
 #include "ash/display/display_alignment_controller.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
 #include "ash/display/display_alignment_indicator.h"
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/ranges/algorithm.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/timer/mock_timer.h"
 #include "ui/display/display_layout_builder.h"
@@ -77,6 +80,12 @@ class DisplayAlignmentControllerTest : public AshTestBase {
     display_alignment_controller()->SetTimerForTesting(std::move(mock_timer));
   }
 
+  // AshTestBase:
+  void TearDown() override {
+    mock_timer_ptr_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
   void DragDisplay(int64_t id, int32_t delta_x, int32_t delta_y) {
     display_alignment_controller()->DisplayDragged(id, delta_x, delta_y);
   }
@@ -125,8 +134,8 @@ class DisplayAlignmentControllerTest : public AshTestBase {
         display_alignment_controller()->GetActiveIndicatorsForTesting();
 
     const auto& iter =
-        base::ranges::find(active_indicators_, target_display_id,
-                           &DisplayAlignmentIndicator::display_id);
+        std::ranges::find(active_indicators_, target_display_id,
+                          &DisplayAlignmentIndicator::display_id);
 
     if (iter == active_indicators_.end()) {
       EXPECT_FALSE(is_visible);
@@ -148,7 +157,7 @@ class DisplayAlignmentControllerTest : public AshTestBase {
     EXPECT_TRUE(indicator_widget.IsVisible());
   }
 
-  base::MockOneShotTimer* mock_timer_ptr_ = nullptr;
+  raw_ptr<base::MockOneShotTimer> mock_timer_ptr_ = nullptr;
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -246,7 +255,7 @@ TEST_F(DisplayAlignmentControllerTest, TriggerTwoDisplayOnSameEdge) {
   //      +-------------------+
   //
 
-  int64_t primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t primary_id = display::Screen::Get()->GetPrimaryDisplay().id();
   display::DisplayIdList list =
       display::test::CreateDisplayIdListN(primary_id, 3);
   display::DisplayLayoutBuilder builder(primary_id);

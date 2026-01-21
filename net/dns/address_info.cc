@@ -5,7 +5,9 @@
 #include "net/dns/address_info.h"
 
 #include <memory>
+#include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/sys_byteorder.h"
@@ -31,11 +33,6 @@ const addrinfo* Next(const addrinfo* ai) {
 //// iterator
 
 AddressInfo::const_iterator::const_iterator(const addrinfo* ai) : ai_(ai) {}
-
-bool AddressInfo::const_iterator::operator!=(
-    const AddressInfo::const_iterator& o) const {
-  return ai_ != o.ai_;
-}
 
 AddressInfo::const_iterator& AddressInfo::const_iterator::operator++() {
   ai_ = Next(ai_);
@@ -82,12 +79,12 @@ AddressInfo::AddressInfoAndResult AddressInfo::Get(
       err = ERR_NAME_RESOLUTION_FAILED;
 #endif
 
-    return AddressInfoAndResult(absl::optional<AddressInfo>(), err, os_error);
+    return AddressInfoAndResult(std::optional<AddressInfo>(), err, os_error);
   }
 
-  return AddressInfoAndResult(absl::optional<AddressInfo>(AddressInfo(
-                                  std::move(ai), std::move(getter))),
-                              OK, 0);
+  return AddressInfoAndResult(
+      std::optional<AddressInfo>(AddressInfo(std::move(ai), std::move(getter))),
+      OK, 0);
 }
 
 AddressInfo::AddressInfo(AddressInfo&& other) = default;
@@ -106,10 +103,10 @@ AddressInfo::const_iterator AddressInfo::end() const {
   return const_iterator(nullptr);
 }
 
-absl::optional<std::string> AddressInfo::GetCanonicalName() const {
+std::optional<std::string> AddressInfo::GetCanonicalName() const {
   return (ai_->ai_canonname != nullptr)
-             ? absl::optional<std::string>(std::string(ai_->ai_canonname))
-             : absl::optional<std::string>();
+             ? std::optional<std::string>(std::string(ai_->ai_canonname))
+             : std::optional<std::string>();
 }
 
 bool AddressInfo::IsAllLocalhostOfOneFamily() const {
@@ -131,14 +128,14 @@ bool AddressInfo::IsAllLocalhostOfOneFamily() const {
       case AF_INET6: {
         const struct sockaddr_in6* addr_in6 =
             reinterpret_cast<struct sockaddr_in6*>(ai->ai_addr);
-        if (IN6_IS_ADDR_LOOPBACK(&addr_in6->sin6_addr))
+        if (UNSAFE_TODO(IN6_IS_ADDR_LOOPBACK(&addr_in6->sin6_addr))) {
           saw_v6_localhost = true;
-        else
+        } else {
           return false;
+        }
         break;
       }
       default:
-        NOTREACHED();
         return false;
     }
   }
@@ -148,9 +145,9 @@ bool AddressInfo::IsAllLocalhostOfOneFamily() const {
 
 AddressList AddressInfo::CreateAddressList() const {
   AddressList list;
-  auto canonical_name = GetCanonicalName();
+  std::optional<std::string> canonical_name = GetCanonicalName();
   if (canonical_name) {
-    std::vector<std::string> aliases({*canonical_name});
+    std::vector<std::string> aliases({*std::move(canonical_name)});
     list.SetDnsAliases(std::move(aliases));
   }
   for (auto&& ai : *this) {

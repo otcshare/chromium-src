@@ -5,6 +5,7 @@
 #include "sandbox/policy/sandbox.h"
 
 #include "base/command_line.h"
+#include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
@@ -12,6 +13,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
+#include "third_party/jni_zero/common_apis.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -23,9 +25,12 @@
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_WIN)
+#include "base/check_op.h"
 #include "base/process/process_info.h"
 #include "sandbox/policy/win/sandbox_win.h"
 #include "sandbox/win/src/sandbox.h"
+#include "sandbox/win/src/sandbox_factory.h"
+#include "sandbox/win/src/target_services.h"
 #endif  // BUILDFLAG(IS_WIN)
 
 namespace sandbox {
@@ -59,6 +64,8 @@ bool Sandbox::Initialize(sandbox::mojom::Sandbox sandbox_type,
       // will be broken. This has to run before threads and windows are created.
       ResultCode result = broker_services->CreateAlternateDesktop(
           Desktop::kAlternateWinstation);
+      // This failure is usually caused by third-party software or by the host
+      // system exhausting its desktop heap.
       CHECK(result == SBOX_ALL_OK);
     }
     return true;
@@ -85,14 +92,9 @@ bool Sandbox::IsProcessSandboxed() {
   // Note that this does not check the status of the Seccomp sandbox. Call
   // https://developer.android.com/reference/android/os/Process#isIsolated().
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jclass> process_class =
-      base::android::GetClass(env, "android/os/Process");
-  jmethodID is_isolated =
-      base::android::MethodID::Get<base::android::MethodID::TYPE_STATIC>(
-          env, process_class.obj(), "isIsolated", "()Z");
-  return env->CallStaticBooleanMethod(process_class.obj(), is_isolated);
+  return jni_zero::ProcessIsIsolated(env);
 #elif BUILDFLAG(IS_FUCHSIA)
-  // TODO(https://crbug.com/1071420): Figure out what to do here. Process
+  // TODO(crbug.com/40126761): Figure out what to do here. Process
   // launching controls the sandbox and there are no ambient capabilities, so
   // basically everything but the browser is considered sandboxed.
   return !is_browser;
@@ -106,8 +108,21 @@ bool Sandbox::IsProcessSandboxed() {
   return (status & kLayer1Flags) != 0 && (status & kLayer2Flags) != 0;
 #elif BUILDFLAG(IS_MAC)
   return Seatbelt::IsSandboxed();
+#elif BUILDFLAG(IS_IOS)
+  // Process launching on iOS is only supported via BrowserEngineKit which
+  // will automatically sandbox processes.
+  return !is_browser;
 #elif BUILDFLAG(IS_WIN)
-  return base::GetCurrentProcessIntegrityLevel() < base::MEDIUM_INTEGRITY;
+#if !defined(COMPONENT_BUILD)
+  // Target services is not available in the component build.
+  auto* target_services = sandbox::SandboxFactory::GetTargetServices();
+  if (!target_services || !target_services->GetState()->InitCompleted()) {
+    return false;
+  }
+#endif  // !defined(COMPONENT_BUILD)
+  const auto integrity_level = base::GetCurrentProcessIntegrityLevel();
+  return integrity_level != base::INTEGRITY_UNKNOWN &&
+         integrity_level < base::MEDIUM_INTEGRITY;
 #else
   return false;
 #endif

@@ -6,6 +6,7 @@
 #define COMPONENTS_MEMORY_PRESSURE_MULTI_SOURCE_MEMORY_PRESSURE_MONITOR_H_
 
 #include "base/memory/memory_pressure_monitor.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/memory_pressure/memory_pressure_level_reporter.h"
@@ -26,7 +27,6 @@ class MultiSourceMemoryPressureMonitor
     : public base::MemoryPressureMonitor,
       public MemoryPressureVoteAggregator::Delegate {
  public:
-  using MemoryPressureLevel = base::MemoryPressureMonitor::MemoryPressureLevel;
   using DispatchCallback = base::MemoryPressureMonitor::DispatchCallback;
 
   MultiSourceMemoryPressureMonitor();
@@ -37,32 +37,43 @@ class MultiSourceMemoryPressureMonitor
   MultiSourceMemoryPressureMonitor& operator=(
       const MultiSourceMemoryPressureMonitor&) = delete;
 
-  // Start monitoring memory pressure using the platform-specific voter.
-  void Start();
+  // Start monitoring memory pressure by creating the platform-specific voter.
+  // Does nothing on ChromeOS & Chromecast, for which there is no default
+  // system evaluator implementations.
+  void MaybeStartPlatformVoter();
 
   // MemoryPressureMonitor implementation.
-  MemoryPressureLevel GetCurrentPressureLevel() const override;
-  void SetDispatchCallback(const DispatchCallback& callback) override;
+  base::MemoryPressureLevel GetCurrentPressureLevel(
+      base::MemoryPressureMonitorTag tag) const override;
 
   // Creates a MemoryPressureVoter to be owned/used by a source that wishes to
   // have input on the overall memory pressure level.
   std::unique_ptr<MemoryPressureVoter> CreateVoter();
 
+  // Sets the system evaluator on platforms where no default implementation
+  // exists, because of layering concerns (ChromeOS & Chromecast).
+  void SetSystemEvaluator(
+      std::unique_ptr<SystemMemoryPressureEvaluator> evaluator);
+
+  // Allows tests to override the call to
+  // `base::MemoryPressureListener::NotifyMemoryPressure` that is done whenever
+  // `OnNotifyListenersRequested` is invoked.
+  void SetDispatchCallbackForTesting(const DispatchCallback& callback);
+
   MemoryPressureVoteAggregator* aggregator_for_testing() {
     return &aggregator_;
   }
 
-  void ResetSystemEvaluatorForTesting();
-
-  void SetSystemEvaluator(
-      std::unique_ptr<SystemMemoryPressureEvaluator> evaluator);
+  SystemMemoryPressureEvaluator* system_evaluator_for_testing() {
+    return system_evaluator_.get();
+  }
 
  private:
   // Delegate implementation.
-  void OnMemoryPressureLevelChanged(MemoryPressureLevel level) override;
+  void OnMemoryPressureLevelChanged(base::MemoryPressureLevel level) override;
   void OnNotifyListenersRequested() override;
 
-  MemoryPressureLevel current_pressure_level_;
+  base::MemoryPressureLevel current_pressure_level_;
 
   DispatchCallback dispatch_callback_;
 

@@ -22,10 +22,6 @@ scoped_refptr<internal::JobTaskSource> CreateJobTaskSource(
   DCHECK(ThreadPoolInstance::Get())
       << "Hint: if this is in a unit test, you're likely merely missing a "
          "base::test::TaskEnvironment member in your fixture.\n";
-  // ThreadPool is implicitly the destination for PostJob(). Extension traits
-  // cannot be used.
-  DCHECK_EQ(traits.extension_id(),
-            TaskTraitsExtensionStorage::kInvalidExtensionId);
 
   return base::MakeRefCounted<internal::JobTaskSource>(
       from_here, traits, std::move(worker_task),
@@ -44,8 +40,9 @@ JobDelegate::JobDelegate(
 }
 
 JobDelegate::~JobDelegate() {
-  if (task_id_ != kInvalidTaskId)
+  if (task_id_ != kInvalidTaskId) {
     task_source_->ReleaseTaskId(task_id_);
+  }
 }
 
 bool JobDelegate::ShouldYield() {
@@ -65,7 +62,7 @@ bool JobDelegate::ShouldYield() {
 }
 
 void JobDelegate::YieldIfNeeded() {
-  // TODO(crbug.com/839091): Implement this.
+  // TODO(crbug.com/40574605): Implement this.
 }
 
 void JobDelegate::NotifyConcurrencyIncrease() {
@@ -73,8 +70,9 @@ void JobDelegate::NotifyConcurrencyIncrease() {
 }
 
 uint8_t JobDelegate::GetTaskId() {
-  if (task_id_ == kInvalidTaskId)
+  if (task_id_ == kInvalidTaskId) {
     task_id_ = task_source_->AcquireTaskId();
+  }
   return task_id_;
 }
 
@@ -134,8 +132,9 @@ void JobHandle::Join() {
     task_source_->delegate()->EnqueueJobTaskSource(task_source_);
   }
   bool must_run = task_source_->WillJoin();
-  while (must_run)
+  while (must_run) {
     must_run = task_source_->RunJoinTask();
+  }
   // Remove |task_source_| from the ThreadPool to prevent access to
   // |max_concurrency_callback| after Join().
   task_source_->delegate()->RemoveJobTaskSource(task_source_);
@@ -174,8 +173,9 @@ JobHandle PostJob(const Location& from_here,
   const bool queued =
       static_cast<internal::ThreadPoolImpl*>(ThreadPoolInstance::Get())
           ->EnqueueJobTaskSource(task_source);
-  if (queued)
+  if (queued) {
     return internal::JobTaskSource::CreateJobHandle(std::move(task_source));
+  }
   return JobHandle();
 }
 

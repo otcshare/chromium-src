@@ -22,10 +22,6 @@ body {
   min-width: 47em;
 }
 
-a {
-  text-decoration: none;
-}
-
 #header {
   background: url(./warning.svg) left center / 48px no-repeat;
   box-sizing: border-box;
@@ -53,10 +49,6 @@ h1 {
 
 #blurb-container {
   font-size: 120%;
-  padding-bottom: 1.5em;
-}
-
-#third-party-conflicts-status {
   padding-bottom: 1.5em;
 }
 
@@ -146,13 +138,6 @@ html[dir=rtl] .clearing {
 
   <dom-bind>
     <template>
-      <div id="third-party-conflicts-status">
-        Third-Party Module Features Status
-        <div>
-          <span>[[data.thirdPartyFeatureStatus]]</span>
-        </div>
-      </div>
-
       <div id="container" class="vbox-container">
         <div id="top" class="wbox">
           <div class="section-header">
@@ -173,28 +158,25 @@ html[dir=rtl] .clearing {
               <td valign="top">
                 <table cellpadding="2" cellspacing="0" border="0">
                   <tr>
-                    <td class="datacell">
+                    <th role="columnheader">
                       <span dir="ltr">Software</span>
-                    </td>
-                    <td class="datacell">
+                    </th>
+                    <th role="columnheader">
                       <span dir="ltr">Signed by</span>
-                    </td>
-                    <td class="datacell">
+                    </th>
+                    <th role="columnheader">
                       <span dir="ltr">Version</span>
-                    </td>
-                    <td class="datacell">
+                    </th>
+                    <th role="columnheader">
                       <span dir="ltr">Code Id</span>
-                    </td>
-                    <td class="datacell">
+                    </th>
+
+                    <th role="columnheader">
                       <span dir="ltr">Process types</span>
-                    </td>
-                    <td class="datacell">
+                    </th>
+                    <th role="columnheader">
                       <span dir="ltr">Location</span>
-                    </td>
-                    <td hidden$="[[!data.thirdPartyFeatureEnabled]]"
-                        class="datacell">
-                      <span dir="ltr">Conflicts Status</span>
-                    </td>
+                    </th>
                   </tr>
 
                   <template is="dom-repeat" items="[[data.moduleList]]">
@@ -234,10 +216,6 @@ html[dir=rtl] .clearing {
                               )
                           </span>
                         </span>
-                      </td>
-                      <td valign="top" class="datacell nowrap"
-                          hidden$="[[!item.third_party_module_status.length]]">
-                        <span>[[item.third_party_module_status]]</span>
                       </td>
                     </tr>
                   </template>

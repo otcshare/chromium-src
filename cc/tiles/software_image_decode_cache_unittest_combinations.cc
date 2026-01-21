@@ -16,7 +16,7 @@
 namespace cc {
 namespace {
 
-size_t kLockedMemoryLimitBytes = 128 * 1024 * 1024;
+constexpr size_t kLockedMemoryLimitBytes = 128 * 1024 * 1024;
 SkM44 CreateMatrix(const SkSize& scale, bool is_decomposable) {
   SkM44 matrix = SkM44::Scale(scale.width(), scale.height());
 
@@ -77,7 +77,8 @@ class BaseTest : public testing::Test {
   }
   virtual void VerifyEntryExists(int line,
                                  const DrawImage& draw_image,
-                                 const gfx::Size& expected_size) = 0;
+                                 const gfx::Size& expected_size,
+                                 bool expect_color_converted = true) = 0;
 
  private:
   std::unique_ptr<SoftwareImageDecodeCache> cache_;
@@ -119,7 +120,8 @@ class AtRaster : public virtual BaseTest {
   }
   void VerifyEntryExists(int line,
                          const DrawImage& draw_image,
-                         const gfx::Size& expected_size) override {
+                         const gfx::Size& expected_size,
+                         bool expect_color_converted = true) override {
     auto decoded = cache().GetDecodedImageForDraw(draw_image);
     SCOPED_TRACE(base::StringPrintf("Failure from line %d", line));
     EXPECT_EQ(decoded.image()->width(), expected_size.width());
@@ -142,11 +144,17 @@ class Predecode : public virtual BaseTest {
 
   void VerifyEntryExists(int line,
                          const DrawImage& draw_image,
-                         const gfx::Size& expected_size) override {
+                         const gfx::Size& expected_size,
+                         bool expect_color_converted = true) override {
     auto decoded = cache().GetDecodedImageForDraw(draw_image);
-    EXPECT_TRUE(SkColorSpace::Equals(
-        decoded.image()->colorSpace(),
-        draw_image.target_color_space().ToSkColorSpace().get()));
+    if (expect_color_converted) {
+      EXPECT_TRUE(SkColorSpace::Equals(
+          decoded.image()->colorSpace(),
+          draw_image.target_color_space().ToSkColorSpace().get()));
+    } else {
+      EXPECT_TRUE(SkColorSpace::Equals(decoded.image()->colorSpace(),
+                                       draw_image.paint_image().color_space()));
+    }
     SCOPED_TRACE(base::StringPrintf("Failure from line %d", line));
     EXPECT_EQ(decoded.image()->width(), expected_size.width());
     EXPECT_EQ(decoded.image()->height(), expected_size.height());
@@ -195,6 +203,17 @@ class WideGamutCanvasColorSpace : public virtual BaseTest {
         gfx::ColorSpace::PrimaryID::P3, gfx::ColorSpace::TransferID::LINEAR));
   }
 };
+
+class HdrCanvasColorSpace : public virtual BaseTest {
+ protected:
+  TargetColorParams GetTargetColorParams() const override {
+    TargetColorParams result(gfx::ColorSpace(
+        gfx::ColorSpace::PrimaryID::P3, gfx::ColorSpace::TransferID::SRGB_HDR));
+    result.hdr_headroom = 2.f;
+    return result;
+  }
+};
+
 class SoftwareImageDecodeCacheTest_Typical : public N32Cache,
                                              public Predecode,
                                              public NoDecodeToScaleSupport,
@@ -499,6 +518,60 @@ TEST_F(SoftwareImageDecodeCacheTest_F16_WideGamutCanvasColorSpace,
 
   cache().UnrefImage(draw_image_50);
   cache().UnrefImage(draw_image_125);
+}
+
+class PaintImageN32HDR : public virtual BaseTest {
+ protected:
+  PaintImage CreatePaintImage(const gfx::Size& size) override {
+    PaintImage paint_image = CreateDiscardablePaintImage(
+        size, gfx::ColorSpace::CreateHDR10().ToSkColorSpace(),
+        true /*allocate_encoded_memory*/, PaintImage::kInvalidId,
+        kN32_SkColorType);
+    return paint_image;
+  }
+};
+
+class SoftwareImageDecodeCacheTest_N32HDR : public N32Cache,
+                                            public Predecode,
+                                            public PaintImageN32HDR,
+                                            public HdrCanvasColorSpace {};
+
+TEST_F(SoftwareImageDecodeCacheTest_N32HDR, DontForceF16Decode) {
+  auto draw_image = CreateDrawImageForScale(1.f);
+  GenerateCacheEntry(draw_image);
+  VerifyEntryExists(__LINE__, draw_image, gfx::Size(512, 512),
+                    /*expect_color_converted=*/false);
+  EXPECT_EQ(kN32_SkColorType, draw_image.paint_image().GetColorType());
+  EXPECT_EQ(1u, cache().GetNumCacheEntriesForTesting());
+
+  cache().UnrefImage(draw_image);
+}
+
+class PaintImageF16HDR : public virtual BaseTest {
+ protected:
+  PaintImage CreatePaintImage(const gfx::Size& size) override {
+    PaintImage paint_image = CreateDiscardablePaintImage(
+        size, gfx::ColorSpace::CreateHDR10().ToSkColorSpace(),
+        true /*allocate_encoded_memory*/, PaintImage::kInvalidId,
+        kRGBA_F16_SkColorType);
+    return paint_image;
+  }
+};
+
+class SoftwareImageDecodeCacheTest_F16HDR : public N32Cache,
+                                            public Predecode,
+                                            public PaintImageF16HDR,
+                                            public HdrCanvasColorSpace {};
+
+TEST_F(SoftwareImageDecodeCacheTest_F16HDR, AllowF16Decode) {
+  auto draw_image = CreateDrawImageForScale(1.f);
+  GenerateCacheEntry(draw_image);
+  VerifyEntryExists(__LINE__, draw_image, gfx::Size(512, 512),
+                    /*expect_color_converted=*/false);
+  EXPECT_EQ(kRGBA_F16_SkColorType, draw_image.paint_image().GetColorType());
+  EXPECT_EQ(1u, cache().GetNumCacheEntriesForTesting());
+
+  cache().UnrefImage(draw_image);
 }
 
 }  // namespace

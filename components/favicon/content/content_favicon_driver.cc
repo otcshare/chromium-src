@@ -4,7 +4,7 @@
 
 #include "components/favicon/content/content_favicon_driver.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "components/favicon/content/favicon_url_util.h"
 #include "components/favicon/core/favicon_service.h"
@@ -76,6 +76,7 @@ ContentFaviconDriver::NavigationManifestData::~NavigationManifestData() =
 
 void ContentFaviconDriver::OnDidDownloadManifest(
     ManifestDownloadCallback callback,
+    blink::mojom::ManifestRequestResult result,
     const GURL& manifest_url,
     blink::mojom::ManifestPtr manifest) {
   // ~WebContentsImpl triggers running any pending callbacks for manifests.
@@ -109,7 +110,7 @@ int ContentFaviconDriver::DownloadImage(const GURL& url,
 
 void ContentFaviconDriver::DownloadManifest(const GURL& url,
                                             ManifestDownloadCallback callback) {
-  // TODO(crbug.com/1201237): This appears to be reachable from pages other
+  // TODO(crbug.com/40762256): This appears to be reachable from pages other
   // than the primary page. This code should likely be refactored so that either
   // this is unreachable from other pages, or the correct page is plumbed in
   // here.

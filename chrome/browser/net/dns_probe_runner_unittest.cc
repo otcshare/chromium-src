@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/net/dns_probe_test_util.h"
@@ -50,7 +50,7 @@ class FakeNetworkContext : public network::TestNetworkContext {
       : result_list_(std::move(result_list)) {}
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override {
     ASSERT_FALSE(resolver_);
     resolver_ = std::make_unique<FakeHostResolver>(std::move(receiver),
@@ -70,7 +70,7 @@ class FirstHangingThenFakeResolverNetworkContext
       : result_list_(std::move(result_list)) {}
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override {
     if (call_num == 0) {
       resolver_ = std::make_unique<HangingHostResolver>(std::move(receiver));
@@ -141,7 +141,7 @@ TEST_F(DnsProbeRunnerTest, Probe_OK) {
 
 TEST_F(DnsProbeRunnerTest, Probe_EMPTY) {
   SetupTest(net::OK, net::ResolveErrorInfo(net::OK),
-            FakeHostResolver::kEmptyResponse);
+            FakeHostResolver::kNoResponse);
   RunTest(DnsProbeRunner::INCORRECT);
 }
 
@@ -159,12 +159,23 @@ TEST_F(DnsProbeRunnerTest, Probe_NXDOMAIN) {
   RunTest(DnsProbeRunner::INCORRECT);
 }
 
-TEST_F(DnsProbeRunnerTest, Probe_FAILING) {
-  SetupTest(net::ERR_NAME_NOT_RESOLVED,
-            net::ResolveErrorInfo(net::ERR_DNS_SERVER_FAILED),
+class DnsProbeRunnerFailingTest : public DnsProbeRunnerTest,
+                                  public testing::WithParamInterface<int> {};
+
+TEST_P(DnsProbeRunnerFailingTest, Probe_FAILING) {
+  int net_error = GetParam();
+  SetupTest(net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net_error),
             FakeHostResolver::kNoResponse);
   RunTest(DnsProbeRunner::FAILING);
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DnsProbeRunnerFailingTest,
+                         testing::Values(net::ERR_DNS_FORMAT_ERROR,
+                                         net::ERR_DNS_SERVER_FAILURE,
+                                         net::ERR_DNS_NOT_IMPLEMENTED,
+                                         net::ERR_DNS_REFUSED,
+                                         net::ERR_DNS_OTHER_FAILURE));
 
 TEST_F(DnsProbeRunnerTest, Probe_DnsNotRun) {
   SetupTest(net::ERR_NAME_NOT_RESOLVED,

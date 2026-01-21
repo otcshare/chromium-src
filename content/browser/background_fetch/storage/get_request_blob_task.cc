@@ -4,12 +4,13 @@
 
 #include "content/browser/background_fetch/storage/get_request_blob_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/background_fetch/background_fetch_request_match_params.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
 #include "content/common/background_fetch/background_fetch_types.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace background_fetch {
@@ -28,8 +29,8 @@ GetRequestBlobTask::~GetRequestBlobTask() = default;
 
 void GetRequestBlobTask::Start() {
   int64_t trace_id = blink::cache_storage::CreateTraceId();
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "GetRequestBlobTask::Start",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "GetRequestBlobTask::Start",
+              perfetto::Flow::Global(trace_id));
 
   OpenCache(registration_id_, trace_id,
             base::BindOnce(&GetRequestBlobTask::DidOpenCache,
@@ -38,9 +39,8 @@ void GetRequestBlobTask::Start() {
 
 void GetRequestBlobTask::DidOpenCache(int64_t trace_id,
                                       blink::mojom::CacheStorageError error) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "GetRequestBlobTask::DidOpenCache",
-                         TRACE_ID_GLOBAL(trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "GetRequestBlobTask::DidOpenCache",
+              perfetto::Flow::Global(trace_id));
   if (error != blink::mojom::CacheStorageError::kSuccess) {
     SetStorageErrorAndFinish(BackgroundFetchStorageError::kCacheStorageError);
     return;
@@ -60,16 +60,16 @@ void GetRequestBlobTask::DidOpenCache(int64_t trace_id,
 
 void GetRequestBlobTask::DidMatchRequest(
     int64_t trace_id,
-    blink::mojom::CacheKeysResultPtr result) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "GetRequestBlobTask::DidMatchRequest",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_IN);
+    blink::mojom::CacheStorageCache::KeysResult result) {
+  TRACE_EVENT("CacheStorage", "GetRequestBlobTask::DidMatchRequest",
+              perfetto::TerminatingFlow::Global(trace_id));
 
-  if (result->is_status() || result->get_keys().size() == 0) {
+  if (!result.has_value() || result.value().size() == 0) {
     SetStorageErrorAndFinish(BackgroundFetchStorageError::kCacheStorageError);
     return;
   }
 
-  auto& keys = result->get_keys();
+  auto& keys = result.value();
   DCHECK_EQ(keys.size(), 1u);
   DCHECK(keys[0]->blob);
 
@@ -79,14 +79,8 @@ void GetRequestBlobTask::DidMatchRequest(
 
 void GetRequestBlobTask::FinishWithError(
     blink::mojom::BackgroundFetchError error) {
-  ReportStorageError();
-
   std::move(callback_).Run(error, std::move(blob_));
   Finished();
-}
-
-std::string GetRequestBlobTask::HistogramName() const {
-  return "GetRequestBlobTask";
 }
 
 }  // namespace background_fetch

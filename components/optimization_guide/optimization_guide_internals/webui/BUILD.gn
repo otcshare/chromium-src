@@ -23,15 +23,13 @@ static_library("webui") {
   public_deps = [
     ":mojo_bindings",
     ":url_constants",
-    "//components/optimization_guide/optimization_guide_internals/resources:resources",
+    "//components/optimization_guide/optimization_guide_internals/resources",
   ]
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
-static_library("url_constants") {
-  sources = [
-    "url_constants.cc",
-    "url_constants.h",
-  ]
+source_set("url_constants") {
+  sources = [ "url_constants.h" ]
 }
 
 mojom("mojo_bindings") {

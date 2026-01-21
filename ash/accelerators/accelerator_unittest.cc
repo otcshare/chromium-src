@@ -2,28 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/accelerators/accelerator_controller_impl.h"
+#include "ui/base/accelerators/accelerator.h"
 
+#include <memory>
+#include <string_view>
+
+#include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/shell.h"
 #include "ash/shell_observer.h"
 #include "ash/system/network/network_observer.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/test/ui_controls_factory_ash.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_observer.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "chromeos/ash/components/dbus/shill/shill_clients.h"
 #include "chromeos/ash/components/network/network_handler.h"
+#include "chromeos/ash/services/assistant/test_support/scoped_assistant_browser_delegate.h"
 #include "ui/aura/window.h"
-#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/test_accelerator_target.h"
-#include "ui/base/test/ui_controls.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
 
 namespace ash {
@@ -56,8 +62,7 @@ class TestNetworkObserver : public NetworkObserver {
 ////////////////////////////////////////////////////////////////////////////////
 
 // This is intended to test few samples from each category of accelerators to
-// make sure they work properly. The test is done as an interactive ui test
-// using ui_controls::Send*() functions.
+// make sure they work properly.
 // This is to catch any future regressions (crbug.com/469235).
 class AcceleratorTest : public AshTestBase, public OverviewObserver {
  public:
@@ -67,8 +72,6 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
   AcceleratorTest& operator=(const AcceleratorTest&) = delete;
 
   void SetUp() override {
-    ui_controls::InstallUIControlsAura(test::CreateAshUIControls());
-
     AshTestBase::SetUp();
 
     Shell::Get()->overview_controller()->AddObserver(this);
@@ -78,8 +81,6 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
     Shell::Get()->overview_controller()->RemoveObserver(this);
 
     AshTestBase::TearDown();
-
-    ui_controls::InstallUIControlsAura(nullptr);
   }
 
   // Sends a key press event and waits synchronously until it's completely
@@ -88,11 +89,8 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
                         bool control,
                         bool shift,
                         bool alt) {
-    base::RunLoop loop;
-    ui_controls::SendKeyPressNotifyWhenDone(Shell::GetPrimaryRootWindow(), key,
-                                            control, shift, alt, false,
-                                            loop.QuitClosure());
-    loop.Run();
+    ui::test::EmulateFullKeyPressReleaseSequence(
+        GetEventGenerator(), key, control, shift, alt, /*command=*/false);
   }
 
   // OverviewObserver:
@@ -140,9 +138,9 @@ TEST_F(AcceleratorTest, Basic) {
 TEST_F(AcceleratorTest, NonRepeatableNeedingWindowActions) {
   // Create a bunch of windows to work with.
   aura::Window* window_1 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100));
+      CreateTestWindowInShell({.bounds = {100, 100}, .window_id = 0});
   aura::Window* window_2 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100));
+      CreateTestWindowInShell({.bounds = {100, 100}, .window_id = 0});
   window_1->Show();
   wm::ActivateWindow(window_1);
   window_2->Show();
@@ -184,6 +182,44 @@ TEST_F(AcceleratorTest, ToggleAppList) {
   SendKeyPressSync(ui::VKEY_LWIN, false, false, false);
   base::RunLoop().RunUntilIdle();
   GetAppListTestHelper()->CheckVisibility(false);
+}
+
+TEST_F(AcceleratorTest, AssistantKeyWithNewEntryPointEnabled) {
+  base::UserActionTester user_action_tester;
+
+  base::test::TestFuture<void> open_new_entry_point_future;
+  assistant::ScopedAssistantBrowserDelegate scoped_assistant_browser_delegate;
+  scoped_assistant_browser_delegate.SetOpenNewEntryPointClosure(
+      open_new_entry_point_future.GetCallback());
+
+  ui::test::EmulateFullKeyPressReleaseSequence(
+      GetEventGenerator(), ui::VKEY_ASSISTANT,
+      /*control=*/false, /*shift=*/false, /*alt=*/false, /*command=*/false);
+
+  EXPECT_TRUE(open_new_entry_point_future.Wait());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "Assistant.NewEntryPoint.AssistantKey"));
+}
+
+TEST_F(AcceleratorTest, NoSearchPlusAWithNewEntryPointEnabled) {
+  base::UserActionTester user_action_tester;
+
+  base::test::TestFuture<void> open_new_entry_point_future;
+  assistant::ScopedAssistantBrowserDelegate scoped_assistant_browser_delegate;
+  scoped_assistant_browser_delegate.SetOpenNewEntryPointClosure(
+      open_new_entry_point_future.GetCallback());
+
+  ui::test::EmulateFullKeyPressReleaseSequence(
+      GetEventGenerator(), ui::VKEY_A,
+      /*control=*/false, /*shift=*/false, /*alt=*/false, /*command=*/true);
+
+  task_environment()->RunUntilIdle();
+  EXPECT_FALSE(open_new_entry_point_future.IsReady())
+      << "Search+A shortcut won't be available if new entry point flag is on. "
+         "New entry point won't be expected to be opened.";
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "VoiceInteraction.Started.Search_A"));
 }
 
 }  // namespace ash

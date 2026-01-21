@@ -4,7 +4,7 @@
 
 #include "chrome/browser/infobars/infobar_responder.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -14,18 +14,14 @@
 InfoBarResponder::InfoBarResponder(
     infobars::ContentInfoBarManager* infobar_manager,
     AutoResponseType response)
-    : infobar_manager_(infobar_manager), response_(response) {
-  infobar_manager_->AddObserver(this);
+    : response_(response) {
+  infobar_scoped_observation_.Observe(infobar_manager);
 }
 
-InfoBarResponder::~InfoBarResponder() {
-  // This is safe even if we were already removed as an observer in
-  // OnInfoBarAdded().
-  infobar_manager_->RemoveObserver(this);
-}
+InfoBarResponder::~InfoBarResponder() = default;
 
 void InfoBarResponder::OnInfoBarAdded(infobars::InfoBar* infobar) {
-  infobar_manager_->RemoveObserver(this);
+  infobar_scoped_observation_.Reset();
   ConfirmInfoBarDelegate* delegate =
       infobar->delegate()->AsConfirmInfoBarDelegate();
   DCHECK(delegate);

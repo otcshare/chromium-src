@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_POLICY_DEVELOPER_TOOLS_POLICY_HANDLER_H_
 
 #include "components/policy/core/browser/configuration_policy_handler.h"
+#include "extensions/buildflags/buildflags.h"
 
-class PrefService;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/policy/extension_developer_mode_policy_handler.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
+class Profile;
 
 namespace policy {
 
@@ -29,8 +30,8 @@ class DeveloperToolsPolicyHandler : public ConfigurationPolicyHandler {
   // Developer tools availability as set by policy. The values must match the
   // 'DeveloperToolsAvailability' policy definition.
   enum class Availability {
-    // Default: Developer tools are allowed, except for
-    // force-installed extensions.
+    // Default: Developer tools are allowed, except for policy-installed
+    // extensions and, if this is a managed profile, component extensions.
     kDisallowedForForceInstalledExtensions = 0,
     // Developer tools allowed in all contexts.
     kAllowed = 1,
@@ -46,26 +47,16 @@ class DeveloperToolsPolicyHandler : public ConfigurationPolicyHandler {
   void ApplyPolicySettings(const PolicyMap& policies,
                            PrefValueMap* prefs) override;
 
-  // Registers the pref for policy-set developer tools availability in
-  // |registry|.
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+  // Returns the effective developer tools availability for the profile.
+  static Availability GetEffectiveAvailability(Profile* profile);
 
-  // Returns the current policy-set developer tools availability according to
-  // the values in |pref_service|. If no policy mandating developer tools
-  // availability is set, the default will be
-  // |Availability::kDisallowedForForceInstalledExtensions|.
-  static Availability GetDevToolsAvailability(const PrefService* pref_service);
-
-  // Returns true if developer tools availability is set by an active policy in
-  // |pref_service|.
-  static bool IsDevToolsAvailabilitySetByPolicy(
-      const PrefService* pref_service);
-
-  // Returns the most restrictive availability within [|availability_1|,
-  // |availability_2|].
-  static Availability GetMostRestrictiveAvailability(
-      Availability availability_1,
-      Availability availability_2);
+ private:
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // This instance should only be used for calling IsValidPolicySet() and not
+  // for applying the policy settings. The latter is done by the instance which
+  // is added in `ConfigurationPolicyHandlerList`.
+  ExtensionDeveloperModePolicyHandler extension_developer_mode_policy_handler_;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 };
 
 }  // namespace policy

@@ -3,8 +3,11 @@
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/service/mocks.h"
+
+#include "base/compiler_specific.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
+#include "gpu/command_buffer/service/command_buffer_direct.h"
 #include "gpu/command_buffer/service/command_buffer_service.h"
 
 using testing::Invoke;
@@ -13,8 +16,10 @@ using testing::_;
 namespace gpu {
 
 AsyncAPIMock::AsyncAPIMock(bool default_do_commands,
+                           CommandBufferDirect* command_buffer,
                            CommandBufferServiceBase* command_buffer_service)
-    : command_buffer_service_(command_buffer_service) {
+    : command_buffer_(command_buffer),
+      command_buffer_service_(command_buffer_service) {
   testing::DefaultValue<error::Error>::Set(
       error::kNoError);
 
@@ -22,9 +27,16 @@ AsyncAPIMock::AsyncAPIMock(bool default_do_commands,
     ON_CALL(*this, DoCommands(_, _, _, _))
         .WillByDefault(Invoke(this, &AsyncAPIMock::FakeDoCommands));
   }
+  if (command_buffer_) {
+    command_buffer_->set_handler(this);
+  }
 }
 
-AsyncAPIMock::~AsyncAPIMock() = default;
+AsyncAPIMock::~AsyncAPIMock() {
+  if (command_buffer_) {
+    command_buffer_->set_handler(nullptr);
+  }
+}
 
 error::Error AsyncAPIMock::FakeDoCommands(unsigned int num_commands,
                                           const volatile void* buffer,
@@ -50,7 +62,7 @@ error::Error AsyncAPIMock::FakeDoCommands(unsigned int num_commands,
 
     if (result != error::kDeferCommandUntilLater) {
       process_pos += header.size;
-      cmd_data += header.size;
+      UNSAFE_TODO(cmd_data += header.size);
     }
   }
 

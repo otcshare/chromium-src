@@ -6,7 +6,11 @@
 #define COMPONENTS_GWP_ASAN_CLIENT_GWP_ASAN_H_
 
 #include <stddef.h>  // for size_t
+
+#include <string_view>
+
 #include "components/gwp_asan/client/export.h"
+#include "components/gwp_asan/common/lightweight_detector_state.h"
 
 namespace gwp_asan {
 
@@ -17,6 +21,8 @@ struct AllocatorSettings {
   size_t num_metadata;
   size_t total_pages;
   size_t sampling_frequency;
+  size_t sampling_min_size;
+  size_t sampling_max_size;
 };
 
 }  // namespace internal
@@ -29,9 +35,14 @@ struct AllocatorSettings {
 // metrics broken out per-process.
 
 GWP_ASAN_EXPORT void EnableForMalloc(bool boost_sampling,
-                                     const char* process_type);
+                                     std::string_view process_type);
 GWP_ASAN_EXPORT void EnableForPartitionAlloc(bool boost_sampling,
-                                             const char* process_type);
+                                             std::string_view process_type);
+GWP_ASAN_EXPORT void MaybeEnableLightweightDetector(bool boost_sampling,
+                                                    const char* process_type);
+GWP_ASAN_EXPORT void MaybeEnableExtremeLightweightDetector(
+    bool boost_sampling,
+    std::string_view process_type);
 
 }  // namespace gwp_asan
 

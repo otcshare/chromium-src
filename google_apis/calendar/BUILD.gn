@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/features.gni")
 import("//testing/test.gni")
 
 static_library("calendar") {
@@ -17,14 +16,15 @@ static_library("calendar") {
 
   deps = [
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//components/signin/public/identity_manager",
     "//crypto",
-    "//google_apis:google_apis",
-    "//google_apis/common:common",
+    "//google_apis",
+    "//google_apis/common",
     "//net",
     "//services/network/public/cpp",
   ]
+
+  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 source_set("test_support") {
@@ -37,7 +37,7 @@ source_set("test_support") {
     "//base",
     "//base/test:test_support",
     "//google_apis:test_support",
-    "//google_apis/common:common",
+    "//google_apis/common",
     "//google_apis/common:test_support",
     "//net:test_support",
   ]

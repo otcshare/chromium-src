@@ -5,7 +5,7 @@
 # Common modules that do not have any //media dependencies.
 
 import("//build/buildflag_header.gni")
-import("//build/config/chromecast_build.gni")
+import("//build/config/cast.gni")
 import("//chromecast/chromecast.gni")
 
 group("all") {
@@ -40,7 +40,7 @@ cast_source_set("media_pipeline_backend_manager") {
     ":media_resource_tracker",
     "//base",
     "//chromecast:chromecast_buildflags",
-    "//chromecast/base/metrics:metrics",
+    "//chromecast/base/metrics",
     "//chromecast/media/common/base",
   ]
 

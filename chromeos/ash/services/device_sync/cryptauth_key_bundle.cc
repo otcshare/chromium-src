@@ -4,17 +4,15 @@
 
 #include "chromeos/ash/services/device_sync/cryptauth_key_bundle.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
 #include "base/values.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/device_sync/cryptauth_enrollment_constants.h"
 #include "chromeos/ash/services/device_sync/value_string_encoding.h"
 
-namespace ash {
-
-namespace device_sync {
+namespace ash::device_sync {
 
 namespace {
 
@@ -61,7 +59,7 @@ std::string CryptAuthKeyBundle::KeyBundleNameEnumToString(
 }
 
 // static
-absl::optional<CryptAuthKeyBundle::Name>
+std::optional<CryptAuthKeyBundle::Name>
 CryptAuthKeyBundle::KeyBundleNameStringToEnum(const std::string& name) {
   if (name == kCryptAuthUserKeyPairName)
     return CryptAuthKeyBundle::Name::kUserKeyPair;
@@ -72,44 +70,45 @@ CryptAuthKeyBundle::KeyBundleNameStringToEnum(const std::string& name) {
   if (name == kDeviceSyncBetterTogetherGroupKeyName)
     return CryptAuthKeyBundle::Name::kDeviceSyncBetterTogetherGroupKey;
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 // static
-absl::optional<CryptAuthKeyBundle> CryptAuthKeyBundle::FromDictionary(
+std::optional<CryptAuthKeyBundle> CryptAuthKeyBundle::FromDictionary(
     const base::Value::Dict& dict) {
   const std::string* name_string = dict.FindString(kBundleNameDictKey);
   if (!name_string)
-    return absl::nullopt;
+    return std::nullopt;
 
-  absl::optional<CryptAuthKeyBundle::Name> name =
+  std::optional<CryptAuthKeyBundle::Name> name =
       KeyBundleNameStringToEnum(*name_string);
   if (!name)
-    return absl::nullopt;
+    return std::nullopt;
 
   CryptAuthKeyBundle bundle(*name);
 
   const base::Value::List* keys = dict.FindList(kKeyListDictKey);
   if (!keys)
-    return absl::nullopt;
+    return std::nullopt;
 
   bool active_key_exists = false;
   for (const base::Value& key_dict : *keys) {
-    absl::optional<CryptAuthKey> key = CryptAuthKey::FromDictionary(key_dict);
+    std::optional<CryptAuthKey> key =
+        CryptAuthKey::FromDictionary(key_dict.GetDict());
     if (!key)
-      return absl::nullopt;
+      return std::nullopt;
 
     // Return nullopt if there are multiple active keys.
     if (key->status() == CryptAuthKey::Status::kActive) {
       if (active_key_exists)
-        return absl::nullopt;
+        return std::nullopt;
 
       active_key_exists = true;
     }
 
     // Return nullopt if duplicate handles exist.
-    if (base::Contains(bundle.handle_to_key_map(), key->handle()))
-      return absl::nullopt;
+    if (bundle.handle_to_key_map().contains(key->handle()))
+      return std::nullopt;
 
     bundle.AddKey(*key);
   }
@@ -117,11 +116,11 @@ absl::optional<CryptAuthKeyBundle> CryptAuthKeyBundle::FromDictionary(
   const base::Value* encoded_serialized_key_directive =
       dict.Find(kKeyDirectiveDictKey);
   if (encoded_serialized_key_directive) {
-    absl::optional<cryptauthv2::KeyDirective> key_directive =
+    std::optional<cryptauthv2::KeyDirective> key_directive =
         util::DecodeProtoMessageFromValueString<cryptauthv2::KeyDirective>(
             encoded_serialized_key_directive);
     if (!key_directive)
-      return absl::nullopt;
+      return std::nullopt;
 
     bundle.set_key_directive(*key_directive);
   }
@@ -137,10 +136,10 @@ CryptAuthKeyBundle::~CryptAuthKeyBundle() = default;
 
 const CryptAuthKey* CryptAuthKeyBundle::GetActiveKey() const {
   const auto& it =
-      base::ranges::find(handle_to_key_map_, CryptAuthKey::Status::kActive,
-                         [](const HandleToKeyMap::value_type& handle_key_pair) {
-                           return handle_key_pair.second.status();
-                         });
+      std::ranges::find(handle_to_key_map_, CryptAuthKey::Status::kActive,
+                        [](const HandleToKeyMap::value_type& handle_key_pair) {
+                          return handle_key_pair.second.status();
+                        });
 
   if (it == handle_to_key_map_.end())
     return nullptr;
@@ -166,7 +165,7 @@ void CryptAuthKeyBundle::SetActiveKey(const std::string& handle) {
 }
 
 void CryptAuthKeyBundle::DeleteKey(const std::string& handle) {
-  DCHECK(base::Contains(handle_to_key_map_, handle));
+  DCHECK(handle_to_key_map_.contains(handle));
   handle_to_key_map_.erase(handle);
 }
 
@@ -175,7 +174,7 @@ void CryptAuthKeyBundle::DeactivateKeys() {
     handle_key_pair.second.set_status(CryptAuthKey::Status::kInactive);
 }
 
-base::Value CryptAuthKeyBundle::AsDictionary() const {
+base::Value::Dict CryptAuthKeyBundle::AsDictionary() const {
   base::Value::Dict dict;
 
   dict.Set(kBundleNameDictKey, KeyBundleNameEnumToString(name_));
@@ -197,7 +196,7 @@ base::Value CryptAuthKeyBundle::AsDictionary() const {
              util::EncodeProtoMessageAsValueString(&key_directive_.value()));
   }
 
-  return base::Value(std::move(dict));
+  return dict;
 }
 
 bool CryptAuthKeyBundle::operator==(const CryptAuthKeyBundle& other) const {
@@ -212,6 +211,4 @@ bool CryptAuthKeyBundle::operator!=(const CryptAuthKeyBundle& other) const {
   return !(*this == other);
 }
 
-}  // namespace device_sync
-
-}  // namespace ash
+}  // namespace ash::device_sync

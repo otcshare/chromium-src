@@ -6,8 +6,10 @@
 #define ASH_WEBUI_DIAGNOSTICS_UI_BACKEND_SYSTEM_SYSTEM_ROUTINE_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 
 #include "ash/webui/diagnostics_ui/mojom/system_routine_controller.mojom.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
@@ -15,10 +17,8 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
 #include "services/device/public/mojom/wake_lock_provider.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class OneShotTimer;
@@ -29,14 +29,11 @@ namespace ash::diagnostics {
 using RunRoutineCallback =
     base::OnceCallback<void(cros_healthd::mojom::RunRoutineResponsePtr)>;
 
-class RoutineLog;
-
 constexpr int32_t kInvalidRoutineId = 0;
 
 class SystemRoutineController : public mojom::SystemRoutineController {
  public:
   SystemRoutineController();
-  explicit SystemRoutineController(RoutineLog* routine_log_ptr);
   ~SystemRoutineController() override;
 
   SystemRoutineController(const SystemRoutineController&) = delete;
@@ -103,9 +100,6 @@ class SystemRoutineController : public mojom::SystemRoutineController {
   void OnPowerRoutineResultFetched(mojom::RoutineType routine_type,
                                    const std::string& file_contents);
 
-  void OnPowerRoutineJsonParsed(mojom::RoutineType routine_type,
-                                data_decoder::DataDecoder::ValueOrError result);
-
   void OnStandardRoutineResult(mojom::RoutineType routine_type,
                                mojom::StandardRoutineResult result);
 
@@ -125,13 +119,9 @@ class SystemRoutineController : public mojom::SystemRoutineController {
   void OnRoutineCancelAttempted(
       cros_healthd::mojom::RoutineUpdatePtr update_ptr);
 
-  bool IsLoggingEnabled() const;
-
   void AcquireWakeLock();
 
   void ReleaseWakeLock();
-
-  RoutineLog* routine_log_ptr_ = nullptr;  // Not Owned.
 
   // Keeps track of the id created by CrosHealthd for the currently running
   // routine.
@@ -139,7 +129,7 @@ class SystemRoutineController : public mojom::SystemRoutineController {
 
   // The currently inflight routine (if any). This is used to correctly
   // attribute cancellations.
-  absl::optional<mojom::RoutineType> inflight_routine_type_;
+  std::optional<mojom::RoutineType> inflight_routine_type_;
 
   // Records the number of routines that a user attempts to run during one
   // session in the app. Emitted when the app is closed.

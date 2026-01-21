@@ -6,13 +6,23 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIARECORDER_AUDIO_TRACK_RECORDER_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread_checker.h"
+#include "media/base/audio_encoder.h"
+#include "media/base/decoder_buffer.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_audio_sink.h"
+#include "third_party/blink/renderer/modules/mediarecorder/audio_track_encoder.h"
 #include "third_party/blink/renderer/modules/mediarecorder/track_recorder.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/heap/weak_cell.h"
+#include "third_party/blink/renderer/platform/wtf/sequence_bound.h"
 
 namespace media {
 class AudioBus;
@@ -20,10 +30,7 @@ class AudioParameters;
 }  // namespace media
 
 namespace blink {
-
-class AudioTrackEncoder;
 class MediaStreamComponent;
-class NonMainThread;
 
 // AudioTrackRecorder is a MediaStreamAudioSink that encodes the audio buses
 // received from a Stream Audio Track. The class is constructed on a
@@ -35,32 +42,40 @@ class NonMainThread;
 class MODULES_EXPORT AudioTrackRecorder
     : public TrackRecorder<WebMediaStreamAudioSink> {
  public:
-  enum class CodecId {
-    // Do not change the order of codecs. Add new ones right before kLast.
-    kOpus,
-    kPcm,  // 32-bit little-endian float.
-    kAac,
-    kLast
-  };
-
   enum class BitrateMode { kConstant, kVariable };
 
-  using OnEncodedAudioCB =
-      base::RepeatingCallback<void(const media::AudioParameters& params,
-                                   std::string encoded_data,
-                                   base::TimeTicks capture_time)>;
+  // Callback interface for AudioTrackRecorders. The methods here need to all be
+  // called on the main thread.
+  class CallbackInterface : public GarbageCollectedMixin {
+   public:
+    // Called to indicate there is encoded audio data available.
+    virtual void OnEncodedAudio(
+        const media::AudioParameters& params,
+        scoped_refptr<media::DecoderBuffer> encoded_data,
+        std::optional<media::AudioEncoder::CodecDescription> codec_description,
+        base::TimeTicks capture_time) = 0;
 
-  static CodecId GetPreferredCodecId();
+    // Called when an error occurs during encoding. Once it is called, there
+    // is no more calling of `OnEncodedAudio()`.
+    virtual void OnAudioEncodingError(media::EncoderStatus error_status) = 0;
 
-  AudioTrackRecorder(CodecId codec,
-                     MediaStreamComponent* track,
-                     OnEncodedAudioCB on_encoded_audio_cb,
-                     base::OnceClosure on_track_source_ended_cb,
-                     uint32_t bits_per_second,
-                     BitrateMode bitrate_mode,
-                     std::unique_ptr<NonMainThread> encoder_thread =
-                         NonMainThread::CreateThread(ThreadCreationParams(
-                             ThreadType::kAudioEncoderThread)));
+    // Called when a track's ready state changes.
+    virtual void OnSourceReadyStateChanged() = 0;
+  };
+
+  static media::AudioCodec GetPreferredCodec(
+      MediaTrackContainerType container_type);
+
+  AudioTrackRecorder(
+      scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner,
+      media::AudioCodec codec,
+      MediaStreamComponent* track,
+      WeakCell<CallbackInterface>* callback_interface,
+      uint32_t bits_per_second,
+      BitrateMode bitrate_mode,
+      scoped_refptr<base::SequencedTaskRunner> encoder_task_runner =
+          base::ThreadPool::CreateSequencedTaskRunner(
+              {base::TaskPriority::USER_VISIBLE}));
 
   AudioTrackRecorder(const AudioTrackRecorder&) = delete;
   AudioTrackRecorder& operator=(const AudioTrackRecorder&) = delete;
@@ -75,36 +90,33 @@ class MODULES_EXPORT AudioTrackRecorder
   void Pause();
   void Resume();
 
+  WeakCell<CallbackInterface>* callback_interface_for_testing() {
+    return callback_interface_;
+  }
+
  private:
   // Creates an audio encoder from |codec|. Returns nullptr if the codec is
   // invalid.
-  static scoped_refptr<AudioTrackEncoder> CreateAudioEncoder(
-      CodecId codec,
-      OnEncodedAudioCB on_encoded_audio_cb,
+  SequenceBound<AudioTrackEncoder> CreateAudioEncoder(
+      media::AudioCodec codec,
+      AudioTrackEncoder::OnEncodedAudioCB on_encoded_audio_cb,
+      AudioTrackEncoder::OnEncodedAudioErrorCB on_encoded_audio_error_cb,
       uint32_t bits_per_second,
       BitrateMode bitrate_mode);
 
   void ConnectToTrack();
   void DisconnectFromTrack();
-  void ShutdownEncoder();
 
   void Prefinalize();
 
   // We need to hold on to the Blink track to remove ourselves on destruction.
   Persistent<MediaStreamComponent> track_;
 
+  // Sequence used for the encoder, backed by the thread pool.
+  const scoped_refptr<base::SequencedTaskRunner> encoder_task_runner_;
+
   // Thin wrapper around the chosen encoder.
-  // |encoder_| should be initialized before |encoder_thread_| such that
-  // |encoder_thread_| is destructed first. This, combined with all
-  // AudioTrackEncoder work (aside from construction and destruction) happening
-  // on |encoder_thread_|, should allow us to be sure that all AudioTrackEncoder
-  // work is done by the time we destroy it on ATR's thread.
-  const scoped_refptr<AudioTrackEncoder> encoder_;
-
-  // The thread on which |encoder_| works.
-  std::unique_ptr<NonMainThread> encoder_thread_;
-
-  scoped_refptr<base::SingleThreadTaskRunner> encoder_task_runner_;
+  SequenceBound<AudioTrackEncoder> encoder_;
 
   // Number of frames per chunked buffer passed to the encoder.
   int frames_per_chunk_ = 0;
@@ -115,6 +127,7 @@ class MODULES_EXPORT AudioTrackRecorder
 #if DCHECK_IS_ON()
   std::atomic<int> race_checker_{0};
 #endif
+  Persistent<WeakCell<CallbackInterface>> callback_interface_;
 };
 
 }  // namespace blink

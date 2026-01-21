@@ -6,23 +6,25 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
-#include "chrome/android/chrome_jni_headers/ContextualSearchTabHelper_jni.h"
 #include "chrome/browser/android/contextualsearch/unhandled_tap_web_contents_observer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ContextualSearchTabHelper_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using contextual_search::UnhandledTapWebContentsObserver;
 
-ContextualSearchTabHelper::ContextualSearchTabHelper(JNIEnv* env,
-                                                     jobject obj,
-                                                     Profile* profile)
+ContextualSearchTabHelper::ContextualSearchTabHelper(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& obj,
+    Profile* profile)
     : weak_java_ref_(env, obj),
       pref_change_registrar_(new PrefChangeRegistrar()) {
   pref_change_registrar_->Init(profile->GetPrefs());
@@ -52,14 +54,13 @@ void ContextualSearchTabHelper::OnShowUnhandledTapUIIfNeeded(int x_px,
                                                              int y_px) {
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobject> jobj = weak_java_ref_.get(env);
-  Java_ContextualSearchTabHelper_onShowUnhandledTapUIIfNeeded(env, jobj, x_px,
+  Java_ContextualSearchTabHelper_onShowUnhandledTapUiIfNeeded(env, jobj, x_px,
                                                               y_px);
 }
 
 void ContextualSearchTabHelper::InstallUnhandledTapNotifierIfNeeded(
     JNIEnv* env,
-    jobject obj,
-    const JavaParamRef<jobject>& j_base_web_contents,
+    const JavaRef<jobject>& j_base_web_contents,
     jfloat device_scale_factor) {
   DCHECK(j_base_web_contents);
   content::WebContents* base_web_contents =
@@ -83,18 +84,17 @@ void ContextualSearchTabHelper::InstallUnhandledTapNotifierIfNeeded(
   }
 }
 
-void ContextualSearchTabHelper::Destroy(JNIEnv* env,
-                                        const JavaParamRef<jobject>& obj) {
+void ContextualSearchTabHelper::Destroy(JNIEnv* env) {
   delete this;
 }
 
-static jlong JNI_ContextualSearchTabHelper_Init(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jobject>& java_profile) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(java_profile);
+static int64_t JNI_ContextualSearchTabHelper_Init(JNIEnv* env,
+                                                  const JavaRef<jobject>& obj,
+                                                  Profile* profile) {
   CHECK(profile);
   ContextualSearchTabHelper* tab = new ContextualSearchTabHelper(
       env, obj, profile);
   return reinterpret_cast<intptr_t>(tab);
 }
+
+DEFINE_JNI(ContextualSearchTabHelper)

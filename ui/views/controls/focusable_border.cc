@@ -15,6 +15,7 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/scoped_canvas.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/textfield/textfield.h"
 
 namespace {
@@ -25,13 +26,12 @@ constexpr int kInsetSize = 1;
 
 namespace views {
 
-FocusableBorder::FocusableBorder() : insets_(kInsetSize) {}
+FocusableBorder::FocusableBorder()
+    : insets_(kInsetSize), corner_radius_(FocusRing::kDefaultCornerRadiusDp) {
+  SetColor(ui::kColorFocusableBorderUnfocused);
+}
 
 FocusableBorder::~FocusableBorder() = default;
-
-void FocusableBorder::SetColorId(const absl::optional<ui::ColorId>& color_id) {
-  override_color_id_ = color_id;
-}
 
 void FocusableBorder::Paint(const View& view, gfx::Canvas* canvas) {
   cc::PaintFlags flags;
@@ -39,23 +39,19 @@ void FocusableBorder::Paint(const View& view, gfx::Canvas* canvas) {
   flags.setColor(GetCurrentColor(view));
 
   gfx::ScopedCanvas scoped(canvas);
-  float dsf = canvas->UndoDeviceScaleFactor();
+  const float dsf = canvas->UndoDeviceScaleFactor();
 
-  constexpr int kStrokeWidthPx = 1;
-  flags.setStrokeWidth(SkIntToScalar(kStrokeWidthPx));
+  const float kStrokeWidth = dsf;
+  flags.setStrokeWidth(kStrokeWidth);
 
   // Scale the rect and snap to pixel boundaries.
   gfx::RectF rect(gfx::ScaleToEnclosedRect(view.GetLocalBounds(), dsf));
-  rect.Inset(gfx::InsetsF(kStrokeWidthPx / 2.0f));
+  rect.Inset(gfx::InsetsF(kStrokeWidth / 2.0f));
 
-  SkPath path;
   flags.setAntiAlias(true);
-  float corner_radius_px =
-      (features::IsChromeRefresh2023() ? kChromeRefresh2023CornerRadiusDp
-                                       : kCornerRadiusDp) *
-      dsf;
-  path.addRoundRect(gfx::RectFToSkRect(rect), corner_radius_px,
-                    corner_radius_px);
+  float corner_radius_px = corner_radius_ * dsf;
+  const SkPath path = SkPath::RRect(gfx::RectFToSkRect(rect), corner_radius_px,
+                                    corner_radius_px);
 
   canvas->DrawPath(path, flags);
 }
@@ -72,15 +68,15 @@ void FocusableBorder::SetInsets(const gfx::Insets& insets) {
   insets_ = insets;
 }
 
-SkColor FocusableBorder::GetCurrentColor(const View& view) const {
-  ui::ColorId color_id = ui::kColorFocusableBorderUnfocused;
-  if (override_color_id_)
-    color_id = *override_color_id_;
+void FocusableBorder::SetCornerRadius(float radius) {
+  corner_radius_ = radius;
+}
 
-  SkColor color = view.GetColorProvider()->GetColor(color_id);
-  return view.GetEnabled() ? color
+SkColor FocusableBorder::GetCurrentColor(const View& view) const {
+  SkColor resolved_color = color().ResolveToSkColor(view.GetColorProvider());
+  return view.GetEnabled() ? resolved_color
                            : color_utils::BlendTowardMaxContrast(
-                                 color, gfx::kDisabledControlAlpha);
+                                 resolved_color, gfx::kDisabledControlAlpha);
 }
 
 }  // namespace views

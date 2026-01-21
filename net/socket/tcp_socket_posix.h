@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
@@ -38,10 +38,13 @@ class NET_EXPORT TCPSocketPosix {
  public:
   // |socket_performance_watcher| is notified of the performance metrics related
   // to this socket. |socket_performance_watcher| may be null.
-  TCPSocketPosix(
+  static std::unique_ptr<TCPSocketPosix> Create(
       std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
       NetLog* net_log,
       const NetLogSource& source);
+  static std::unique_ptr<TCPSocketPosix> Create(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLogWithSource net_log_source);
 
   TCPSocketPosix(const TCPSocketPosix&) = delete;
   TCPSocketPosix& operator=(const TCPSocketPosix&) = delete;
@@ -120,6 +123,7 @@ class NET_EXPORT TCPSocketPosix {
   int SetSendBufferSize(int32_t size);
   bool SetKeepAlive(bool enable, int delay);
   bool SetNoDelay(bool no_delay);
+  int SetIPv6Only(bool ipv6_only);
 
   // Gets the estimated RTT. Returns false if the RTT is
   // unavailable. May also return false when estimated RTT is 0.
@@ -175,6 +179,14 @@ class NET_EXPORT TCPSocketPosix {
   int BindToNetwork(handles::NetworkHandle network);
 
  private:
+  TCPSocketPosix(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLog* net_log,
+      const NetLogSource& source);
+  TCPSocketPosix(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLogWithSource net_log_source);
+
   void AcceptCompleted(std::unique_ptr<TCPSocketPosix>* tcp_socket,
                        IPEndPoint* address,
                        CompletionOnceCallback callback,

@@ -5,21 +5,21 @@
 #include "base/trace_event/memory_dump_provider_info.h"
 
 #include <tuple>
+#include <utility>
 
 #include "base/task/sequenced_task_runner.h"
 
-namespace base {
-namespace trace_event {
+namespace base::trace_event {
 
 MemoryDumpProviderInfo::MemoryDumpProviderInfo(
     MemoryDumpProvider* dump_provider,
-    const char* name,
+    MemoryDumpProvider::Name name,
     scoped_refptr<SequencedTaskRunner> task_runner,
     const MemoryDumpProvider::Options& options,
     bool allowed_in_background_mode)
     : dump_provider(dump_provider),
       options(options),
-      name(name),
+      name(std::move(name)),
       task_runner(std::move(task_runner)),
       allowed_in_background_mode(allowed_in_background_mode),
       consecutive_failures(0),
@@ -30,8 +30,9 @@ MemoryDumpProviderInfo::~MemoryDumpProviderInfo() = default;
 bool MemoryDumpProviderInfo::Comparator::operator()(
     const scoped_refptr<MemoryDumpProviderInfo>& a,
     const scoped_refptr<MemoryDumpProviderInfo>& b) const {
-  if (!a || !b)
+  if (!a || !b) {
     return a.get() < b.get();
+  }
   // Ensure that unbound providers (task_runner == nullptr) always run last.
   // Rationale: some unbound dump providers are known to be slow, keep them last
   // to avoid skewing timings of the other dump providers.
@@ -39,5 +40,4 @@ bool MemoryDumpProviderInfo::Comparator::operator()(
          std::tie(b->task_runner, b->dump_provider);
 }
 
-}  // namespace trace_event
-}  // namespace base
+}  // namespace base::trace_event

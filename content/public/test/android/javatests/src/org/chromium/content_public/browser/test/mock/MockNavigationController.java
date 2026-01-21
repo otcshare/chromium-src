@@ -7,11 +7,10 @@ package org.chromium.content_public.browser.test.mock;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
+import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.NavigationHistory;
 
-/**
- * Mock NavigationController implementation for Test.
- */
+/** Mock NavigationController implementation for Test. */
 public class MockNavigationController implements NavigationController {
     @Override
     public boolean canGoBack() {
@@ -66,7 +65,9 @@ public class MockNavigationController implements NavigationController {
     public void continuePendingReload() {}
 
     @Override
-    public void loadUrl(LoadUrlParams params) {}
+    public NavigationHandle loadUrl(LoadUrlParams params) {
+        return null;
+    }
 
     @Override
     public void clearHistory() {}
@@ -85,7 +86,8 @@ public class MockNavigationController implements NavigationController {
     }
 
     @Override
-    public void setUseDesktopUserAgent(boolean override, boolean reloadOnChange, int caller) {}
+    public void setUseDesktopUserAgent(
+            boolean override, boolean reloadOnChange, boolean skipOnInitialNavigation) {}
 
     @Override
     public NavigationEntry getEntryAtIndex(int index) {
@@ -116,6 +118,11 @@ public class MockNavigationController implements NavigationController {
     }
 
     @Override
+    public boolean canViewSource() {
+        return false;
+    }
+
+    @Override
     public boolean removeEntryAtIndex(int index) {
         return false;
     }
@@ -132,7 +139,5 @@ public class MockNavigationController implements NavigationController {
     public void setEntryExtraData(int index, String key, String value) {}
 
     @Override
-    public boolean isEntryMarkedToBeSkipped(int index) {
-        return false;
-    }
+    public void copyStateFrom(NavigationController sourceNavigationController) {}
 }

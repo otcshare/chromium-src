@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/files/file_path.h"
 
 namespace sys {
 class ServiceDirectory;

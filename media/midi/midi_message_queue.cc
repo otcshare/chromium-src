@@ -7,6 +7,8 @@
 #include <algorithm>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "media/midi/message_util.h"
 
@@ -17,12 +19,8 @@ MidiMessageQueue::MidiMessageQueue(bool allow_running_status)
 
 MidiMessageQueue::~MidiMessageQueue() = default;
 
-void MidiMessageQueue::Add(const std::vector<uint8_t>& data) {
+void MidiMessageQueue::Add(base::span<const uint8_t> data) {
   queue_.insert(queue_.end(), data.begin(), data.end());
-}
-
-void MidiMessageQueue::Add(const uint8_t* data, size_t length) {
-  queue_.insert(queue_.end(), data, data + length);
 }
 
 void MidiMessageQueue::Get(std::vector<uint8_t>* message) {

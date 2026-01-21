@@ -33,6 +33,7 @@ ready.then(async function() {
           `http://a.test:${port}/extensions/api_test/webnavigation/prerendering/`;
       const prerenderTargetUrl = urlPrefix + 'a.html';
       const initiatorUrl = urlPrefix + 'prerender.html';
+
       let expectedEvents = [
         // events
         {
@@ -191,30 +192,6 @@ ready.then(async function() {
       ];
 
       let expectedPrerenderedOrder = ['onBeforeNavigate-2', 'onCommitted-2'];
-
-      if (!inServiceWorker) {
-        expectedEvents.push(
-          // TODO(crbug.com/1349987): Remove this expectation when the crbug
-          // is fixed.
-          {
-            label: 'onCommitted-2-activation-callback',
-            event: 'onCommitted',
-            details: {
-              documentId: 2,
-              documentLifecycle: 'prerender',
-              frameId: 1,
-              frameType: 'outermost_frame',
-              parentFrameId: -1,
-              processId: 1,
-              tabId: 0,
-              timeStamp: 0,
-              transitionQualifiers:[],
-              transitionType:"link",
-              url: prerenderTargetUrl
-            }
-          });
-          expectedPrerenderedOrder.push('onCommitted-2-activation-callback');
-      }
 
       expect(
           expectedEvents,

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
 
@@ -25,9 +26,12 @@ namespace extensions {
 // used to drive the tests.
 class NativeMessageEchoHost : public NativeMessageHost {
  public:
-  static const char* const kHostName;
-  static const char* const kOrigins[];
-  static const size_t kOriginCount;
+  // Must match ScopedTestNativeMessagingHost::kHostName.
+  static constexpr char kHostName[] = "com.google.chrome.test.echo";
+
+  // Must match ScopedTestNativeMessagingHost::kExtensionId.
+  static constexpr const char* kOrigins[] = {
+      "chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/"};
 
   static std::unique_ptr<NativeMessageHost> Create(
       content::BrowserContext* browser_context);
@@ -44,11 +48,12 @@ class NativeMessageEchoHost : public NativeMessageHost {
 
  private:
   void ProcessEcho(const base::Value::Dict& request);
+  void SendInvalidResponse();
 
   // Counter used to ensure message uniqueness for testing.
   int message_number_ = 0;
 
-  // |client_| must outlive this test instance.
+  // `client_` must outlive this test instance.
   raw_ptr<Client> client_ = nullptr;
 };
 

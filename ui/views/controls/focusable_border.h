@@ -5,7 +5,8 @@
 #ifndef UI_VIEWS_CONTROLS_FOCUSABLE_BORDER_H_
 #define UI_VIEWS_CONTROLS_FOCUSABLE_BORDER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/border.h"
@@ -20,11 +21,6 @@ namespace views {
 // A Border class to draw a focused border around a field (e.g textfield).
 class VIEWS_EXPORT FocusableBorder : public Border {
  public:
-  static constexpr float kCornerRadiusDp = 2.f;
-
-  // TODO(crbug.com/1392549): Replace placeholder corner radius value.
-  static constexpr float kChromeRefresh2023CornerRadiusDp = 30.f;
-
   FocusableBorder();
 
   FocusableBorder(const FocusableBorder&) = delete;
@@ -35,22 +31,19 @@ class VIEWS_EXPORT FocusableBorder : public Border {
   // Sets the insets of the border.
   void SetInsets(const gfx::Insets& insets);
 
-  // Sets the color id to use for this border. When unsupplied, the color will
-  // depend on the focus state.
-  void SetColorId(const absl::optional<ui::ColorId>& color_id);
+  // Sets the corner radius.
+  void SetCornerRadius(float corner_radius);
 
   // Overridden from Border:
   void Paint(const View& view, gfx::Canvas* canvas) override;
   gfx::Insets GetInsets() const override;
   gfx::Size GetMinimumSize() const override;
 
- protected:
+ private:
   SkColor GetCurrentColor(const View& view) const;
 
- private:
   gfx::Insets insets_;
-
-  absl::optional<ui::ColorId> override_color_id_;
+  float corner_radius_;
 };
 
 }  // namespace views

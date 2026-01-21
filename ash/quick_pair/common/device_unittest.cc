@@ -10,8 +10,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 class DeviceTest : public testing::Test {
  protected:
@@ -22,7 +21,7 @@ class DeviceTest : public testing::Test {
 };
 
 TEST_F(DeviceTest, GetAndSetAccountKey) {
-  absl::optional<std::vector<uint8_t>> accountKey;
+  std::optional<std::vector<uint8_t>> accountKey;
   std::vector<uint8_t> data = {0};
   device_->set_account_key(data);
   accountKey = device_->account_key();
@@ -37,7 +36,7 @@ TEST_F(DeviceTest, GetAndSetAccountKey) {
 
 TEST_F(DeviceTest, GetAndSetName) {
   // Test that name returns null before any sets.
-  absl::optional<std::string> name = device_->display_name();
+  std::optional<std::string> name = device_->display_name();
   EXPECT_FALSE(name.has_value());
 
   // Test that name returns the set value.
@@ -54,5 +53,4 @@ TEST_F(DeviceTest, GetAndSetName) {
   EXPECT_TRUE(name.has_value());
   EXPECT_EQ(name.value(), new_test_name);
 }
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

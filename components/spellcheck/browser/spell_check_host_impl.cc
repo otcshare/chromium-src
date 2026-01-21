@@ -5,18 +5,30 @@
 #include "components/spellcheck/browser/spell_check_host_impl.h"
 
 #include "build/build_config.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
 #include "content/public/browser/browser_thread.h"
 
+#if BUILDFLAG(USE_BROWSER_SPELLCHECKER) && !BUILDFLAG(ENABLE_SPELLING_SERVICE)
+namespace {
+
+bool AreSpellingMarkersValid(
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+    size_t text_length) {
+  for (const spellcheck::SpellingMarker& marker : spelling_markers) {
+    if (marker.start >= text_length || marker.end > text_length) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+#endif  //  BUILDFLAG(USE_BROWSER_SPELLCHECKER) &&
+        //  !BUILDFLAG(ENABLE_SPELLING_SERVICE)
+
 SpellCheckHostImpl::SpellCheckHostImpl() = default;
 SpellCheckHostImpl::~SpellCheckHostImpl() = default;
-
-void SpellCheckHostImpl::RequestDictionary() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  // This API requires Chrome-only features.
-  return;
-}
 
 void SpellCheckHostImpl::NotifyChecked(const std::u16string& word,
                                        bool misspelled) {
@@ -43,9 +55,10 @@ void SpellCheckHostImpl::CallSpellingService(
 #endif  // BUILDFLAG(USE_RENDERER_SPELLCHECKER)
 
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER) && !BUILDFLAG(ENABLE_SPELLING_SERVICE)
-void SpellCheckHostImpl::RequestTextCheck(const std::u16string& text,
-                                          int route_id,
-                                          RequestTextCheckCallback callback) {
+void SpellCheckHostImpl::RequestTextCheck(
+    const std::u16string& text,
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+    RequestTextCheckCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (text.empty()) {
@@ -53,23 +66,13 @@ void SpellCheckHostImpl::RequestTextCheck(const std::u16string& text,
     return;
   }
 
-  session_bridge_.RequestTextCheck(text, std::move(callback));
-}
+  if (!AreSpellingMarkersValid(spelling_markers, text.length())) {
+    mojo::ReportBadMessage(
+        "Requested text check with out-of-bound spelling markers");
+    return;
+  }
 
-void SpellCheckHostImpl::CheckSpelling(const std::u16string& word,
-                                       int route_id,
-                                       CheckSpellingCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  NOTREACHED();
-  std::move(callback).Run(false);
-}
-
-void SpellCheckHostImpl::FillSuggestionList(
-    const std::u16string& word,
-    FillSuggestionListCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  NOTREACHED();
-  std::move(callback).Run({});
+  session_bridge_.RequestTextCheck(text, spelling_markers, std::move(callback));
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -77,8 +80,6 @@ void SpellCheckHostImpl::InitializeDictionaries(
     InitializeDictionariesCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   NOTREACHED();
-  std::move(callback).Run(/*dictionaries=*/{}, /*custom_words=*/{},
-                          /*enable=*/false);
 }
 #endif  // BUILDFLAG(IS_WIN)
 #endif  //  BUILDFLAG(USE_BROWSER_SPELLCHECKER) &&

@@ -35,17 +35,14 @@ bool URLLoaderCompletionStatus::operator==(
   return error_code == rhs.error_code &&
          extended_error_code == rhs.extended_error_code &&
          exists_in_cache == rhs.exists_in_cache &&
-         exists_in_memory_cache == rhs.exists_in_memory_cache &&
          completion_time == rhs.completion_time &&
          encoded_data_length == rhs.encoded_data_length &&
          encoded_body_length == rhs.encoded_body_length &&
          decoded_body_length == rhs.decoded_body_length &&
          cors_error_status == rhs.cors_error_status &&
          blocked_by_response_reason == rhs.blocked_by_response_reason &&
-         should_report_corb_blocking == rhs.should_report_corb_blocking &&
-         proxy_server == rhs.proxy_server &&
-         should_collapse_initiator == rhs.should_collapse_initiator &&
-         pervasive_payload_requested == rhs.pervasive_payload_requested;
+         should_report_orb_blocking == rhs.should_report_orb_blocking &&
+         should_collapse_initiator == rhs.should_collapse_initiator;
 }
 
 void URLLoaderCompletionStatus::WriteIntoTrace(

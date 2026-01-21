@@ -10,6 +10,9 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "remoting/proto/event.pb.h"
 #include "remoting/proto/internal.pb.h"
@@ -20,8 +23,7 @@ namespace remoting::protocol {
 
 static const unsigned int kTestKey = 142;
 
-static void AppendMessage(const EventMessage& msg,
-                          std::string* buffer) {
+static void AppendMessage(const EventMessage& msg, std::string* buffer) {
   // Contains one encoded message.
   scoped_refptr<net::IOBufferWithSize> encoded_msg;
   encoded_msg = SerializeAndFrameMessage(msg);
@@ -29,7 +31,7 @@ static void AppendMessage(const EventMessage& msg,
 }
 
 // Construct and prepare data in the |output_stream|.
-static void PrepareData(uint8_t** buffer, int* size) {
+static base::HeapArray<uint8_t> PrepareData(int* size) {
   // Contains all encoded messages.
   std::string encoded_data;
 
@@ -43,16 +45,15 @@ static void PrepareData(uint8_t** buffer, int* size) {
   }
 
   *size = encoded_data.length();
-  *buffer = new uint8_t[*size];
-  memcpy(*buffer, encoded_data.c_str(), *size);
+  auto buffer = base::HeapArray<uint8_t>::Uninit(*size);
+  base::span(buffer).copy_from(base::as_byte_span(encoded_data));
+  return buffer;
 }
 
-void SimulateReadSequence(const int read_sequence[], int sequence_size) {
+void SimulateReadSequence(base::span<const int> read_sequence) {
   // Prepare encoded data for testing.
   int size;
-  uint8_t* test_data;
-  PrepareData(&test_data, &size);
-  std::unique_ptr<uint8_t[]> memory_deleter(test_data);
+  auto test_data = PrepareData(&size);
 
   // Then simulate using MessageDecoder to decode variable
   // size of encoded data.
@@ -67,17 +68,18 @@ void SimulateReadSequence(const int read_sequence[], int sequence_size) {
     SCOPED_TRACE("Input position: " + base::NumberToString(pos));
 
     // First generate the amount to feed the decoder.
-    int read = std::min(size - pos, read_sequence[pos % sequence_size]);
+    int read = std::min(size - pos, read_sequence[pos % read_sequence.size()]);
 
     // And then prepare an IOBuffer for feeding it.
-    scoped_refptr<net::IOBuffer> buffer =
-        base::MakeRefCounted<net::IOBuffer>(read);
-    memcpy(buffer->data(), test_data + pos, read);
+    auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(read);
+    buffer->first(read).copy_from(base::span(test_data).subspan(
+        static_cast<size_t>(pos), static_cast<size_t>(read)));
     decoder.AddData(buffer, read);
     while (true) {
       std::unique_ptr<CompoundBuffer> message(decoder.GetNextMessage());
-      if (!message.get())
+      if (!message.get()) {
         break;
+      }
 
       std::unique_ptr<EventMessage> event = std::make_unique<EventMessage>();
       CompoundBufferInputStream stream(message.get());
@@ -107,17 +109,17 @@ void SimulateReadSequence(const int read_sequence[], int sequence_size) {
 
 TEST(MessageDecoderTest, SmallReads) {
   const int kReads[] = {1, 2, 3, 1};
-  SimulateReadSequence(kReads, std::size(kReads));
+  SimulateReadSequence(kReads);
 }
 
 TEST(MessageDecoderTest, LargeReads) {
   const int kReads[] = {50, 50, 5};
-  SimulateReadSequence(kReads, std::size(kReads));
+  SimulateReadSequence(kReads);
 }
 
 TEST(MessageDecoderTest, EmptyReads) {
   const int kReads[] = {4, 0, 50, 0};
-  SimulateReadSequence(kReads, std::size(kReads));
+  SimulateReadSequence(kReads);
 }
 
 }  // namespace remoting::protocol

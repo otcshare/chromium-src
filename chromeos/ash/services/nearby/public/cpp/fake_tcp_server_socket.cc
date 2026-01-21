@@ -10,8 +10,7 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/net_errors.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 FakeTcpServerSocket::FakeTcpServerSocket() = default;
 
@@ -30,14 +29,14 @@ void FakeTcpServerSocket::SetAcceptCallExpectations(
 
 void FakeTcpServerSocket::FinishNextAccept(
     int32_t net_error,
-    const absl::optional<::net::IPEndPoint>& remote_addr) {
+    const std::optional<::net::IPEndPoint>& remote_addr) {
   DCHECK(!pending_accept_callbacks_.empty());
   AcceptCallback callback = std::move(pending_accept_callbacks_.front());
   pending_accept_callbacks_.pop_front();
 
   if (net_error != net::OK) {
     std::move(callback).Run(
-        net_error, /*remote_addr=*/absl::nullopt,
+        net_error, /*remote_addr=*/std::nullopt,
         /*connected_socket=*/mojo::NullRemote(),
         /*receive_stream=*/mojo::ScopedDataPipeConsumerHandle(),
         /*send_stream=*/mojo::ScopedDataPipeProducerHandle());
@@ -82,5 +81,4 @@ void FakeTcpServerSocket::Accept(
   }
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

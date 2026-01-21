@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_POLICY_REPORTING_INSTALL_EVENT_LOG_UPLOADER_BASE_H_
 #define CHROME_BROWSER_ASH_POLICY_REPORTING_INSTALL_EVENT_LOG_UPLOADER_BASE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 
 class Profile;
@@ -24,7 +25,7 @@ class InstallEventLogUploaderBase : public CloudPolicyClient::Observer {
 
   // Will construct a non-CloudPolicyClient::Observer version of
   // InstallEventLogUploaderBase.
-  // TODO(crbug.com/1078512) This exists to support the move to using
+  // TODO(crbug.com/40689377) This exists to support the move to using
   // reporting::ReportQueue, which owns its own CloudPolicyClient. Once
   // ArcInstallEventLogUploader is ready to move to using
   // reporting::ReportQueue, we can likely do a small refactor removing all
@@ -55,7 +56,6 @@ class InstallEventLogUploaderBase : public CloudPolicyClient::Observer {
   virtual void CheckDelegateSet() = 0;
 
   // CloudPolicyClient::Observer:
-  void OnPolicyFetched(CloudPolicyClient* client) override {}
   // Uploads are only possible while the client is registered with the server.
   // If an upload is requested while the client is not registered, the request
   // is stored until the client registers. If the client loses its registration
@@ -64,17 +64,15 @@ class InstallEventLogUploaderBase : public CloudPolicyClient::Observer {
   // request when the client registers, by asking the delegate to serialize logs
   // and with the exponential backoff reset to its minimum.
   void OnRegistrationStateChanged(CloudPolicyClient* client) override;
-  void OnClientError(CloudPolicyClient* client) override {}
 
   // Asks the delegate to serialize the current logs into a protobuf and pass it
   // a callback.
   virtual void StartSerialization() = 0;
 
-  // Notification by the client that the most recent log upload has succeeded if
-  // |success| is |true| or retries have been exhausted if |success| is |false|.
+  // |result| contains the result of the most recent log upload.
   // Forwards success to the delegate and schedules a retry with exponential
   // backoff in case of failure.
-  void OnUploadDone(bool success);
+  void OnUploadDone(CloudPolicyClient::Result result);
 
   // Notifies delegate on success of upload.
   virtual void OnUploadSuccess() = 0;
@@ -83,10 +81,10 @@ class InstallEventLogUploaderBase : public CloudPolicyClient::Observer {
   virtual void PostTaskForStartSerialization() = 0;
 
   // The client used to upload logs to the server.
-  CloudPolicyClient* client_ = nullptr;
+  raw_ptr<CloudPolicyClient> client_ = nullptr;
 
   // Profile used to fetch the context attributes for report request.
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
 
   // |true| if log upload has been requested and not completed yet.
   bool upload_requested_ = false;

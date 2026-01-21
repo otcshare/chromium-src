@@ -8,6 +8,7 @@
 
 #include <algorithm>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -37,16 +38,18 @@ VkSurfaceTransformFlagBitsKHR ToVkSurfaceTransformFlag(
       return VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR;
     case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL:
       return VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR;
-    case gfx::OVERLAY_TRANSFORM_ROTATE_90:
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90:
       return VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR;
-    case gfx::OVERLAY_TRANSFORM_ROTATE_180:
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_180:
       return VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR;
-    case gfx::OVERLAY_TRANSFORM_ROTATE_270:
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270:
       return VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
-    default:
-      NOTREACHED() << "transform:" << transform;
-      return VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_90:
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_270:
+    case gfx::OVERLAY_TRANSFORM_INVALID:
+      break;
   };
+  NOTREACHED() << "transform:" << transform;
 }
 
 gfx::OverlayTransform FromVkSurfaceTransformFlag(
@@ -59,19 +62,18 @@ gfx::OverlayTransform FromVkSurfaceTransformFlag(
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR:
       return gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL;
     case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-      return gfx::OVERLAY_TRANSFORM_ROTATE_90;
+      return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90;
     case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
-      return gfx::OVERLAY_TRANSFORM_ROTATE_180;
+      return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_180;
     case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-      return gfx::OVERLAY_TRANSFORM_ROTATE_270;
+      return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270;
     default:
       NOTREACHED() << "transform:" << transform;
-      return gfx::OVERLAY_TRANSFORM_INVALID;
   }
 }
 
 // Minimum VkImages in a vulkan swap chain.
-uint32_t kMinImageCount = 3u;
+constexpr uint32_t kMinImageCount = 3u;
 
 }  // namespace
 
@@ -139,12 +141,12 @@ bool VulkanSurface::Initialize(VulkanDeviceQueue* device_queue,
     return false;
   }
 
-  const VkFormat* preferred_formats = (format == FORMAT_RGBA_32)
-                                          ? kPreferredVkFormats32
-                                          : kPreferredVkFormats16;
-  unsigned int size = (format == FORMAT_RGBA_32)
-                          ? std::size(kPreferredVkFormats32)
-                          : std::size(kPreferredVkFormats16);
+  base::span<const VkFormat> preferred_formats;
+  if (format == FORMAT_RGBA_32) {
+    preferred_formats = kPreferredVkFormats32;
+  } else {
+    preferred_formats = kPreferredVkFormats16;
+  }
 
   if (formats.size() == 1 && VK_FORMAT_UNDEFINED == formats[0].format) {
     surface_format_.format = preferred_formats[0];
@@ -152,17 +154,17 @@ bool VulkanSurface::Initialize(VulkanDeviceQueue* device_queue,
   } else {
     bool format_set = false;
     for (VkSurfaceFormatKHR supported_format : formats) {
-      unsigned int counter = 0;
-      while (counter < size && format_set == false) {
-        if (supported_format.format == preferred_formats[counter]) {
+      for (const auto& preferred_format : preferred_formats) {
+        if (supported_format.format == preferred_format) {
           surface_format_ = supported_format;
           surface_format_.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
           format_set = true;
+          break;
         }
-        counter++;
       }
-      if (format_set)
+      if (format_set) {
         break;
+      }
     }
     if (!format_set) {
       DLOG(ERROR) << "Format not supported.";
@@ -257,7 +259,6 @@ bool VulkanSurface::CreateSwapChain(const gfx::Size& size,
   if (VK_SUCCESS != result) {
     LOG(FATAL) << "vkGetPhysicalDeviceSurfaceCapabilitiesKHR() failed: "
                << result;
-    return false;
   }
 
   auto vk_transform = transform != gfx::OVERLAY_TRANSFORM_INVALID
@@ -285,8 +286,8 @@ bool VulkanSurface::CreateSwapChain(const gfx::Size& size,
       image_size.SetSize(surface_caps.currentExtent.width,
                          surface_caps.currentExtent.height);
     }
-    if (transform == gfx::OVERLAY_TRANSFORM_ROTATE_90 ||
-        transform == gfx::OVERLAY_TRANSFORM_ROTATE_270) {
+    if (transform == gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90 ||
+        transform == gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270) {
       image_size.SetSize(image_size.height(), image_size.width());
     }
   }
@@ -364,8 +365,9 @@ void VulkanSurface::PostSubBufferCompleted(
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(presentation_callback), feedback));
   } else {
-    // For webview_instrumentation_test, ThreadTaskRunnerHandle is not set, so
-    // we have to call the callback directly.
+    // For webview_instrumentation_test,
+    // SingleThreadTaskRunner::CurrentDefaultHandle is not set, so we have to
+    // call the callback directly.
     std::move(presentation_callback).Run(feedback);
   }
 }

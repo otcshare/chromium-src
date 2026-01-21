@@ -4,38 +4,62 @@
 
 package org.chromium.chrome.browser;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.os.Build.VERSION;
+import android.os.Build.VERSION_CODES;
+import android.view.HapticFeedbackConstants;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.Nullable;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.browser_controls.BottomOverscrollHandler;
 import org.chromium.chrome.browser.gesturenav.HistoryNavigationCoordinator;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabWebContentsUserData;
-import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.third_party.android.swiperefresh.SwipeRefreshLayout;
 import org.chromium.ui.OverscrollAction;
 import org.chromium.ui.OverscrollRefreshHandler;
+import org.chromium.ui.base.BackGestureEventSwipeEdge;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
- * An overscroll handler implemented in terms a modified version of the Android
- * compat library's SwipeRefreshLayout effect.
+ * An overscroll handler implemented in terms a modified version of the Android compat library's
+ * SwipeRefreshLayout effect.
  */
-public class SwipeRefreshHandler
-        extends TabWebContentsUserData implements OverscrollRefreshHandler {
+@NullMarked
+public class SwipeRefreshHandler extends TabWebContentsUserData
+        implements OverscrollRefreshHandler {
+
+    /** Creates a {@link SwipeRefreshLayout} given a {@link Context}. */
+    public interface SwipeRefreshLayoutCreator {
+        /**
+         * Returns a {@link SwipeRefreshLayout} given a {@link Context}.
+         *
+         * @param context The {@link Context} to use.
+         * @return A {@link SwipeRefreshLayout} for the context.
+         */
+        SwipeRefreshLayout create(Context context);
+    }
+
+    private static final SwipeRefreshLayoutCreator DEFAULT_SWIPE_REFRESH_LAYOUT_CREATOR =
+            SwipeRefreshLayout::new;
+
     private static final Class<SwipeRefreshHandler> USER_DATA_KEY = SwipeRefreshHandler.class;
 
     // Synthetic delay between the {@link #didStopRefreshing()} signal and the
@@ -48,46 +72,62 @@ public class SwipeRefreshHandler
 
     private @OverscrollAction int mSwipeType;
 
+    // Creates new values for mSwipeRefreshLayout when mSwipeRefreshLayout needs to be non-null.
+    // We allow this to be customized (instead of mSwipeRefreshLayout = new SwipeRefreshLayout()
+    // directly) so that we can pass in mock values for tests.
+    private final SwipeRefreshLayoutCreator mSwipeRefreshLayoutCreator;
+
     // The modified AppCompat version of the refresh effect, handling all core
     // logic, rendering and animation.
-    private SwipeRefreshLayout mSwipeRefreshLayout;
+    private @Nullable SwipeRefreshLayout mSwipeRefreshLayout;
 
     // The Tab where the swipe occurs.
-    private Tab mTab;
+    private final Tab mTab;
 
-    private EmptyTabObserver mTabObserver;
+    private final EmptyTabObserver mTabObserver;
 
     // The container view the SwipeRefreshHandler instance is currently
     // associated with.
-    private ViewGroup mContainerView;
+    private @Nullable ViewGroup mContainerView;
 
     // Async runnable for ending the refresh animation after the page first
     // loads a frame. This is used to provide a reasonable minimum animation time.
-    private Runnable mStopRefreshingRunnable;
+    private @Nullable Runnable mStopRefreshingRunnable;
 
     // Handles removing the layout from the view hierarchy.  This is posted to ensure it does not
     // conflict with pending Android draws.
-    private Runnable mDetachRefreshLayoutRunnable;
+    private @Nullable Runnable mDetachRefreshLayoutRunnable;
 
     // Accessibility utterance used to indicate refresh activation.
-    private String mAccessibilityRefreshString;
+    private @Nullable String mAccessibilityRefreshString;
 
     // Handles overscroll history navigation. Gesture events from native layer are forwarded
     // to this object. Remains null while navigation feature is disabled due to feature flag,
     // system settings (Q and forward), etc.
-    private HistoryNavigationCoordinator mNavigationCoordinator;
+    private @Nullable HistoryNavigationCoordinator mNavigationCoordinator;
+
+    // Handles overscroll PULL_FROM_BOTTOM_EDGE. This is used to track the browser controls
+    // state.
+    private @Nullable BottomOverscrollHandler mBottomOverscrollHandler;
 
     public static SwipeRefreshHandler from(Tab tab) {
+        return SwipeRefreshHandler.from(tab, DEFAULT_SWIPE_REFRESH_LAYOUT_CREATOR);
+    }
+
+    public static SwipeRefreshHandler from(
+            Tab tab, SwipeRefreshLayoutCreator swipeRefreshLayoutCreator) {
         SwipeRefreshHandler handler = get(tab);
         if (handler == null) {
             handler =
-                    tab.getUserDataHost().setUserData(USER_DATA_KEY, new SwipeRefreshHandler(tab));
+                    tab.getUserDataHost()
+                            .setUserData(
+                                    USER_DATA_KEY,
+                                    new SwipeRefreshHandler(tab, swipeRefreshLayoutCreator));
         }
         return handler;
     }
 
-    @Nullable
-    public static SwipeRefreshHandler get(Tab tab) {
+    public static @Nullable SwipeRefreshHandler get(Tab tab) {
         return tab.getUserDataHost().getUserData(USER_DATA_KEY);
     }
 
@@ -95,60 +135,76 @@ public class SwipeRefreshHandler
      * Simple constructor to use when creating an OverscrollRefresh instance from code.
      *
      * @param tab The Tab where the swipe occurs.
+     * @param swipeRefreshLayoutCreator Creates {@link SwipeRefreshLayout}.
      */
-    private SwipeRefreshHandler(Tab tab) {
+    private SwipeRefreshHandler(Tab tab, SwipeRefreshLayoutCreator swipeRefreshLayoutCreator) {
         super(tab);
         mTab = tab;
-        mTabObserver = new EmptyTabObserver() {
-            @Override
-            public void onActivityAttachmentChanged(Tab tab, @Nullable WindowAndroid window) {
-                if (window == null && mSwipeRefreshLayout != null) {
-                    cancelStopRefreshingRunnable();
-                    detachSwipeRefreshLayoutIfNecessary();
-                    mSwipeRefreshLayout.setOnRefreshListener(null);
-                    mSwipeRefreshLayout.setOnResetListener(null);
-                    mSwipeRefreshLayout = null;
-                }
-            }
-        };
+        mTabObserver =
+                new EmptyTabObserver() {
+                    @Override
+                    public void onActivityAttachmentChanged(
+                            Tab tab, @Nullable WindowAndroid window) {
+                        if (window == null && mSwipeRefreshLayout != null) {
+                            cancelStopRefreshingRunnable();
+                            detachSwipeRefreshLayoutIfNecessary();
+                            mSwipeRefreshLayout.setOnRefreshListener(null);
+                            mSwipeRefreshLayout.setOnResetListener(null);
+                            mSwipeRefreshLayout = null;
+                        }
+                    }
+                };
         mTab.addObserver(mTabObserver);
+        mSwipeRefreshLayoutCreator = swipeRefreshLayoutCreator;
     }
 
     private void initSwipeRefreshLayout(final Context context) {
-        mSwipeRefreshLayout = new SwipeRefreshLayout(context);
+        mSwipeRefreshLayout = mSwipeRefreshLayoutCreator.create(context);
         mSwipeRefreshLayout.setLayoutParams(
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-        final boolean incognito = mTab.isIncognito();
-        final @ColorInt int backgroundColor = incognito
-                ? context.getColor(R.color.default_bg_color_dark_elev_2_baseline)
-                : ChromeColors.getSurfaceColor(context, R.dimen.default_elevation_2);
+        final boolean incognitoBranded = mTab.isIncognitoBranded();
+        final @ColorInt int backgroundColor =
+                incognitoBranded
+                        ? context.getColor(R.color.incognito_swipe_refresh_layout_bg)
+                        : SemanticColorUtils.getColorSurfaceContainer(context);
         mSwipeRefreshLayout.setProgressBackgroundColorSchemeColor(backgroundColor);
-        final @ColorInt int iconColor = incognito
-                ? context.getColor(R.color.default_icon_color_blue_light)
-                : SemanticColorUtils.getDefaultIconColorAccent1(context);
+        final @ColorInt int iconColor =
+                incognitoBranded
+                        ? context.getColor(R.color.default_icon_color_blue_light)
+                        : SemanticColorUtils.getDefaultIconColorAccent1(context);
         mSwipeRefreshLayout.setColorSchemeColors(iconColor);
         if (mContainerView != null) mSwipeRefreshLayout.setEnabled(true);
+        mSwipeRefreshLayout.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
 
-        mSwipeRefreshLayout.setOnRefreshListener(() -> {
-            cancelStopRefreshingRunnable();
-            PostTask.postDelayedTask(UiThreadTaskTraits.DEFAULT, getStopRefreshingRunnable(),
-                    MAX_REFRESH_ANIMATION_DURATION_MS);
-            if (mAccessibilityRefreshString == null) {
-                int resId = R.string.accessibility_swipe_refresh;
-                mAccessibilityRefreshString = context.getResources().getString(resId);
-            }
-            mSwipeRefreshLayout.announceForAccessibility(mAccessibilityRefreshString);
-            mTab.reload();
-            RecordUserAction.record("MobilePullGestureReload");
-        });
-        mSwipeRefreshLayout.setOnResetListener(() -> {
-            if (mDetachRefreshLayoutRunnable != null) return;
-            mDetachRefreshLayoutRunnable = () -> {
-                mDetachRefreshLayoutRunnable = null;
-                detachSwipeRefreshLayoutIfNecessary();
-            };
-            PostTask.postTask(UiThreadTaskTraits.DEFAULT, mDetachRefreshLayoutRunnable);
-        });
+        mSwipeRefreshLayout.setOnRefreshListener(
+                () -> {
+                    assumeNonNull(mSwipeRefreshLayout);
+                    cancelStopRefreshingRunnable();
+                    PostTask.postDelayedTask(
+                            TaskTraits.UI_DEFAULT,
+                            getStopRefreshingRunnable(),
+                            MAX_REFRESH_ANIMATION_DURATION_MS);
+                    if (mAccessibilityRefreshString == null) {
+                        int resId = R.string.accessibility_swipe_refresh;
+                        mAccessibilityRefreshString = context.getString(resId);
+                    }
+                    mSwipeRefreshLayout.setContentDescription(mAccessibilityRefreshString);
+                    if (VERSION.SDK_INT >= VERSION_CODES.R) {
+                        mSwipeRefreshLayout.performHapticFeedback(HapticFeedbackConstants.CONFIRM);
+                    }
+                    mTab.reload();
+                    RecordUserAction.record("MobilePullGestureReload");
+                });
+        mSwipeRefreshLayout.setOnResetListener(
+                () -> {
+                    if (mDetachRefreshLayoutRunnable != null) return;
+                    mDetachRefreshLayoutRunnable =
+                            () -> {
+                                mDetachRefreshLayoutRunnable = null;
+                                detachSwipeRefreshLayoutIfNecessary();
+                            };
+                    PostTask.postTask(TaskTraits.UI_DEFAULT, mDetachRefreshLayoutRunnable);
+                });
     }
 
     @SuppressLint("NewApi")
@@ -165,6 +221,7 @@ public class SwipeRefreshHandler
         detachSwipeRefreshLayoutIfNecessary();
         mContainerView = null;
         mNavigationCoordinator = null;
+        mBottomOverscrollHandler = null;
         setEnabled(false);
     }
 
@@ -190,40 +247,51 @@ public class SwipeRefreshHandler
 
     @Override
     public boolean start(
-            @OverscrollAction int type, float startX, float startY, boolean navigateForward) {
+            @OverscrollAction int type, @BackGestureEventSwipeEdge int initiatingEdge) {
         mSwipeType = type;
         if (type == OverscrollAction.PULL_TO_REFRESH) {
             if (mSwipeRefreshLayout == null) initSwipeRefreshLayout(mTab.getContext());
+            assumeNonNull(mSwipeRefreshLayout);
             attachSwipeRefreshLayoutIfNecessary();
             return mSwipeRefreshLayout.start();
         } else if (type == OverscrollAction.HISTORY_NAVIGATION) {
             if (mNavigationCoordinator != null) {
                 mNavigationCoordinator.startGesture();
-                boolean navigable =
-                        mNavigationCoordinator.triggerUi(navigateForward, startX, startY);
-                boolean showGlow = navigateForward && !mTab.canGoForward();
-                return showGlow || navigable;
+                // Note: triggerUi returns true as long as the handler is in a valid state, i.e.
+                // even if the navigation direction doesn't have further history entries.
+                boolean navigable = mNavigationCoordinator.triggerUi(initiatingEdge);
+                return navigable;
+            }
+        } else if (type == OverscrollAction.PULL_FROM_BOTTOM_EDGE) {
+            if (mBottomOverscrollHandler != null) {
+                return mBottomOverscrollHandler.start();
             }
         }
+
         mSwipeType = OverscrollAction.NONE;
         return false;
     }
 
-    /**
-     * Sets {@link HistoryNavigationCoordinator} object.
-     * @param layout {@link HistoryNavigationCoordinator} object.
-     */
+    /** Sets {@link HistoryNavigationCoordinator} object. */
     public void setNavigationCoordinator(HistoryNavigationCoordinator navigationHandler) {
         mNavigationCoordinator = navigationHandler;
+    }
+
+    /** Sets {@link BottomOverscrollHandler} instance to handle pull from bottom edge. */
+    public void setBottomOverscrollHandler(BottomOverscrollHandler bottomOverscrollHandler) {
+        mBottomOverscrollHandler = bottomOverscrollHandler;
     }
 
     @Override
     public void pull(float xDelta, float yDelta) {
         TraceEvent.begin("SwipeRefreshHandler.pull");
+        assumeNonNull(mSwipeRefreshLayout);
         if (mSwipeType == OverscrollAction.PULL_TO_REFRESH) {
             mSwipeRefreshLayout.pull(yDelta);
         } else if (mSwipeType == OverscrollAction.HISTORY_NAVIGATION) {
-            if (mNavigationCoordinator != null) mNavigationCoordinator.pull(xDelta);
+            if (mNavigationCoordinator != null) mNavigationCoordinator.pull(xDelta, yDelta);
+        } else if (mSwipeType == OverscrollAction.PULL_FROM_BOTTOM_EDGE) {
+            if (mBottomOverscrollHandler != null) mBottomOverscrollHandler.pull(yDelta);
         }
         TraceEvent.end("SwipeRefreshHandler.pull");
     }
@@ -231,10 +299,15 @@ public class SwipeRefreshHandler
     @Override
     public void release(boolean allowRefresh) {
         TraceEvent.begin("SwipeRefreshHandler.release");
+        assumeNonNull(mSwipeRefreshLayout);
         if (mSwipeType == OverscrollAction.PULL_TO_REFRESH) {
             mSwipeRefreshLayout.release(allowRefresh);
         } else if (mSwipeType == OverscrollAction.HISTORY_NAVIGATION) {
             if (mNavigationCoordinator != null) mNavigationCoordinator.release(allowRefresh);
+        } else if (mSwipeType == OverscrollAction.PULL_FROM_BOTTOM_EDGE) {
+            if (mBottomOverscrollHandler != null) {
+                mBottomOverscrollHandler.release(allowRefresh);
+            }
         }
         TraceEvent.end("SwipeRefreshHandler.release");
     }
@@ -244,6 +317,7 @@ public class SwipeRefreshHandler
         cancelStopRefreshingRunnable();
         if (mSwipeRefreshLayout != null) mSwipeRefreshLayout.reset();
         if (mNavigationCoordinator != null) mNavigationCoordinator.reset();
+        if (mBottomOverscrollHandler != null) mBottomOverscrollHandler.reset();
     }
 
     @Override
@@ -255,6 +329,9 @@ public class SwipeRefreshHandler
         if (mStopRefreshingRunnable != null) {
             ThreadUtils.getUiThreadHandler().removeCallbacks(mStopRefreshingRunnable);
         }
+        // Reset the content description, so that if the refresh is canceled, we can set it to
+        // mAccessibilityRefreshString and get an announcement.
+        if (mSwipeRefreshLayout != null) mSwipeRefreshLayout.setContentDescription(null);
     }
 
     private void cancelDetachLayoutRunnable() {
@@ -266,11 +343,12 @@ public class SwipeRefreshHandler
 
     private Runnable getStopRefreshingRunnable() {
         if (mStopRefreshingRunnable == null) {
-            mStopRefreshingRunnable = () -> {
-                if (mSwipeRefreshLayout != null) {
-                    mSwipeRefreshLayout.setRefreshing(false);
-                }
-            };
+            mStopRefreshingRunnable =
+                    () -> {
+                        if (mSwipeRefreshLayout != null) {
+                            mSwipeRefreshLayout.setRefreshing(false);
+                        }
+                    };
         }
         return mStopRefreshingRunnable;
     }
@@ -278,9 +356,10 @@ public class SwipeRefreshHandler
     // The animation view is attached/detached on-demand to minimize overlap
     // with composited SurfaceView content.
     private void attachSwipeRefreshLayoutIfNecessary() {
+        if (mSwipeRefreshLayout == null) return;
         cancelDetachLayoutRunnable();
         if (mSwipeRefreshLayout.getParent() == null) {
-            mContainerView.addView(mSwipeRefreshLayout);
+            assumeNonNull(mContainerView).addView(mSwipeRefreshLayout);
         }
     }
 
@@ -288,7 +367,7 @@ public class SwipeRefreshHandler
         if (mSwipeRefreshLayout == null) return;
         cancelDetachLayoutRunnable();
         if (mSwipeRefreshLayout.getParent() != null) {
-            mContainerView.removeView(mSwipeRefreshLayout);
+            assumeNonNull(mContainerView).removeView(mSwipeRefreshLayout);
         }
     }
 }

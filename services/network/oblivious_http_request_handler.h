@@ -5,6 +5,9 @@
 #ifndef SERVICES_NETWORK_OBLIVIOUS_HTTP_REQUEST_HANDLER_H_
 #define SERVICES_NETWORK_OBLIVIOUS_HTTP_REQUEST_HANDLER_H_
 
+#include <optional>
+#include <string>
+
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/network/public/mojom/oblivious_http_request.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -67,36 +70,43 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ObliviousHttpRequestHandler {
   // operation started successfully and then calls ContinueHandlingRequest.
   void OnDoneBeginningTrustTokenOperation(
       mojo::RemoteSetElementId id,
-      absl::optional<net::HttpRequestHeaders> headers,
+      std::optional<net::HttpRequestHeaders> headers,
       mojom::TrustTokenOperationStatus status);
 
   // Constructs the binary HTTP request including any trust token headers in the
   // RequestState, encrypts the request, and starts the outer request's
   // SimpleURLLoader.
-  void ContinueHandlingRequest(absl::optional<net::HttpRequestHeaders> headers,
+  void ContinueHandlingRequest(std::optional<net::HttpRequestHeaders> headers,
                                mojo::RemoteSetElementId id);
 
-  // Calls the completed event with the specified error code on the
-  // corresponding client. The client with the specified id must be in the
-  // `clients_` set and the `client_state_` map.
-  void RespondWithError(mojo::RemoteSetElementId id, int error_code);
+  // Calls the completed event with the specified net error code and HTTP
+  // response error code on the corresponding client. The client with the
+  // specified id must be in the `clients_` set and the `client_state_` map.
+  void RespondWithError(mojo::RemoteSetElementId id,
+                        int error_code,
+                        std::optional<int> outer_response_error_code);
 
   // Called by the SimpleURLLoader when the outer request has completed.
   // Performs steps 5 and 6 of the OHTTP request procedure above.
   void OnRequestComplete(mojo::RemoteSetElementId id,
-                         std::unique_ptr<std::string> response);
+                         std::optional<std::string> response);
 
   // Callback from TrustTokenRequestHelper::Finalize. Checks that the trust
   // token operation completed successfully and calls the client with the
   // result.
   void OnDoneFinalizingTrustTokenOperation(
       mojo::RemoteSetElementId id,
+      int inner_response_code,
+      scoped_refptr<net::HttpResponseHeaders> headers,
       std::string body,
       mojom::TrustTokenOperationStatus status);
 
   // Notifies the client that the request completed successfully with the
-  // provided response body.
-  void NotifyComplete(mojo::RemoteSetElementId id, std::string body);
+  // provided response headers and body.
+  void NotifyComplete(mojo::RemoteSetElementId id,
+                      int inner_response_code,
+                      scoped_refptr<net::HttpResponseHeaders> headers,
+                      std::string body);
 
   // Handles cleaning up when an ObliviousHttpClient disconnects.
   void OnClientDisconnect(mojo::RemoteSetElementId id);

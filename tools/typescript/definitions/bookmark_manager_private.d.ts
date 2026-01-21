@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 /** @fileoverview Definitions for chrome.bookmarkManagerPrivate API. */
-// TODO(crbug.com/1203307): Auto-generate this file.
+// TODO(crbug.com/40179454): Auto-generate this file.
 
 import {ChromeEvent} from './chrome_event.js';
 
@@ -23,29 +23,36 @@ declare global {
         elements: BookmarkNodeDataElement[];
       }
 
-      export function copy(idList: string[], callback: () => void): void;
-      export function cut(idList: string[], callback?: () => void): void;
-      export function paste(
-          parentId: string, selectedIdList?: string[],
-          callback?: () => void): void;
-      export function canPaste(
-          parentId: string, callback: (p1: boolean) => void): void;
+      interface OpenInNewTabParams {
+        active?: boolean;
+        split?: boolean;
+      }
+
+      export function copy(idList: string[]): Promise<void>;
+      export function cut(idList: string[]): Promise<void>;
+      export function paste(parentId: string, selectedIdList?: string[]):
+          Promise<void>;
+      export function canPaste(parentId: string): Promise<boolean>;
+      export function isActiveTabInSplit(): Promise<boolean>;
       export function sortChildren(parentId: string): void;
       export function startDrag(
           idList: string[], dragNodeIndex: number, isFromTouch: boolean,
           x: number, y: number): void;
-      export function drop(
-          parentId: string, index?: number, callback?: () => void): void;
-      export function getSubtree(
-          id: string, foldersOnly: boolean,
-          callback: (p1: chrome.bookmarks.BookmarkTreeNode[]) => void): void;
-      export function removeTrees(idList: string[], callback?: () => void):
-          void;
+      export function drop(parentId: string, index?: number): Promise<void>;
+      export function getSubtree(id: string, foldersOnly: boolean):
+          Promise<chrome.bookmarks.BookmarkTreeNode[]>;
+      export function removeTrees(idList: string[]): Promise<void>;
       export function undo(): void;
       export function redo(): void;
-      export function openInNewTab(id: string, active: boolean): void;
+      export function openInNewTab(
+          id: string, params?: OpenInNewTabParams): void;
       export function openInNewWindow(idList: string[], incognito: boolean):
           void;
+      export function openInNewTabGroup(idList: string[]): void;
+      function importAlias(): Promise<void>;
+      function exportAlias(): Promise<void>;
+      export {importAlias as import};
+      export {exportAlias as export};
 
       export interface DragData {
         elements: chrome.bookmarks.BookmarkTreeNode[]|null;

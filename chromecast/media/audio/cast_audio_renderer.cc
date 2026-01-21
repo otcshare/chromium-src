@@ -6,10 +6,10 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/numerics/ranges.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -22,7 +22,7 @@
 #include "media/base/renderer_client.h"
 #include "media/filters/decrypting_demuxer_stream.h"
 #include "net/base/io_buffer.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 
 #define RUN_ON_MAIN_THREAD(method, ...)                     \
   main_task_runner_->PostTask(                              \
@@ -200,7 +200,7 @@ void CastAudioRenderer::SetVolume(float volume) {
 }
 
 void CastAudioRenderer::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+    std::optional<base::TimeDelta> latency_hint) {
   NOTIMPLEMENTED();
 }
 
@@ -208,8 +208,8 @@ void CastAudioRenderer::SetPreservesPitch(bool preverves_pitch) {
   NOTIMPLEMENTED();
 }
 
-void CastAudioRenderer::SetWasPlayedWithUserActivation(
-    bool was_played_with_user_activation) {
+void CastAudioRenderer::SetWasPlayedWithUserActivationAndHighMediaEngagement(
+    bool was_played_with_user_activation_and_high_media_engagement) {
   NOTIMPLEMENTED();
 }
 
@@ -252,7 +252,7 @@ void CastAudioRenderer::SetPlaybackRate(double playback_rate) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(output_connection_);
 
-  playback_rate = base::ranges::clamp(playback_rate, 0.0, 2.0);
+  playback_rate = std::ranges::clamp(playback_rate, 0.0, 2.0);
   {
     base::AutoLock lock(timeline_lock_);
     if (playback_rate == 0.0) {
@@ -427,8 +427,17 @@ void CastAudioRenderer::FetchNextBuffer() {
 
   DCHECK(!is_pending_demuxer_read_);
   is_pending_demuxer_read_ = true;
-  demuxer_stream_->Read(base::BindOnce(&CastAudioRenderer::OnNewBuffer,
-                                       weak_factory_.GetWeakPtr()));
+  demuxer_stream_->Read(1, base::BindOnce(&CastAudioRenderer::OnNewBuffersRead,
+                                          weak_factory_.GetWeakPtr()));
+}
+
+void CastAudioRenderer::OnNewBuffersRead(
+    ::media::DemuxerStream::Status status,
+    ::media::DemuxerStream::DecoderBufferVector buffers_queue) {
+  CHECK_LE(buffers_queue.size(), 1u)
+      << "CastAudioRenderer only reads a single-buffer.";
+  OnNewBuffer(status,
+              buffers_queue.empty() ? nullptr : std::move(buffers_queue[0]));
 }
 
 void CastAudioRenderer::OnNewBuffer(
@@ -466,20 +475,20 @@ void CastAudioRenderer::OnNewBuffer(
 
   DCHECK_EQ(status, ::media::DemuxerStream::kOk);
 
-  size_t filled_bytes = buffer->end_of_stream() ? 0 : buffer->data_size();
+  size_t filled_bytes = buffer->end_of_stream() ? 0 : buffer->size();
   size_t io_buffer_size =
       audio_output_service::OutputSocket::kAudioMessageHeaderSize +
       filled_bytes;
-  auto io_buffer = base::MakeRefCounted<net::IOBuffer>(io_buffer_size);
+  auto io_buffer = base::MakeRefCounted<net::IOBufferWithSize>(io_buffer_size);
   if (buffer->end_of_stream()) {
     OnEndOfStream();
     return;
   }
 
   last_pushed_timestamp_ = buffer->timestamp() + buffer->duration();
-  memcpy(io_buffer->data() +
-             audio_output_service::OutputSocket::kAudioMessageHeaderSize,
-         buffer->data(), buffer->data_size());
+  io_buffer->span()
+      .subspan(audio_output_service::OutputSocket::kAudioMessageHeaderSize)
+      .copy_from(*buffer);
 
   output_connection_
       .AsyncCall(&audio_output_service::OutputStreamConnection::SendAudioBuffer)

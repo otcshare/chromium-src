@@ -7,7 +7,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/tether/asynchronous_shutdown_object_container.h"
 #include "chromeos/ash/components/tether/disconnect_tethering_request_sender.h"
 
@@ -81,6 +82,7 @@ class AsynchronousShutdownObjectContainerImpl
       override;
   NetworkConfigurationRemover* network_configuration_remover() override;
   WifiHotspotDisconnector* wifi_hotspot_disconnector() override;
+  HostConnection::Factory* host_connection_factory() override;
 
  protected:
   AsynchronousShutdownObjectContainerImpl(
@@ -104,7 +106,8 @@ class AsynchronousShutdownObjectContainerImpl
   void SetTestDoubles(std::unique_ptr<DisconnectTetheringRequestSender>
                           disconnect_tethering_request_sender);
 
-  TetherHostFetcher* tether_host_fetcher_;
+  raw_ptr<TetherHostFetcher> tether_host_fetcher_;
+  std::unique_ptr<HostConnection::Factory> host_connection_factory_;
   std::unique_ptr<DisconnectTetheringRequestSender>
       disconnect_tethering_request_sender_;
   std::unique_ptr<NetworkConfigurationRemover> network_configuration_remover_;

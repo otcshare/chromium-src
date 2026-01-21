@@ -4,7 +4,6 @@
 
 """Module containing utility functions for reporting results."""
 
-from __future__ import print_function
 
 import logging
 import os
@@ -75,8 +74,12 @@ def _LogToFlakinessDashboard(results, test_type, test_package,
     logging.exception('Failure while logging to %s', flakiness_server)
 
 
-def LogFull(results, test_type, test_package, annotation=None,
-            flakiness_server=None):
+def LogFull(results,
+            test_type,
+            test_package,
+            annotation=None,
+            flakiness_server=None,
+            quiet=False):
   """Log the tests results for the test suite.
 
   The results will be logged three different ways:
@@ -99,7 +102,7 @@ def LogFull(results, test_type, test_package, annotation=None,
   # pylint: disable=no-member
   black_on_white = (logging_utils.BACK.WHITE, logging_utils.FORE.BLACK)
   with logging_utils.OverrideColor(logging.CRITICAL, black_on_white):
-    if not results.DidRunPass():
+    if not results.DidRunPass() and not quiet:
       logging.critical('*' * 80)
       logging.critical('Detailed Logs')
       logging.critical('*' * 80)

@@ -6,17 +6,17 @@
 #define COMPONENTS_SEARCH_START_SUGGEST_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_forward.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/search_engines/template_url.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "url/gurl.h"
 
 class AutocompleteSchemeClassifier;
@@ -32,12 +32,8 @@ class SharedURLLoaderFactory;
 
 class QuerySuggestion {
  public:
-  bool operator==(const QuerySuggestion& other) const {
-    return query == other.query && destination_url == other.destination_url;
-  }
-  bool operator!=(const QuerySuggestion& other) const {
-    return !(this == &other);
-  }
+  friend bool operator==(const QuerySuggestion&,
+                         const QuerySuggestion&) = default;
 
   // Query suggestion.
   std::u16string query;
@@ -87,9 +83,7 @@ class StartSuggestService : public KeyedService {
   // Handles request response from the server.
   void SuggestResponseLoaded(network::SimpleURLLoader* loader,
                              SuggestResultCallback callback,
-                             std::unique_ptr<std::string> response);
-  void SuggestionsParsed(SuggestResultCallback callback,
-                         data_decoder::DataDecoder::ValueOrError result);
+                             std::optional<std::string> response);
 
   // Cannot be null. Must outlive `this`.
   raw_ptr<TemplateURLService> template_url_service_;

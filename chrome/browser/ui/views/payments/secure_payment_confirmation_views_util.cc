@@ -4,29 +4,34 @@
 
 #include "chrome/browser/ui/views/payments/secure_payment_confirmation_views_util.h"
 
+#include "base/feature_list.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/payments/core/features.h"
 #include "components/payments/core/sizes.h"
+#include "third_party/blink/public/common/features.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/progress_bar.h"
 #include "ui/views/controls/styled_label.h"
-#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
 namespace payments {
+
 namespace {
 
 const gfx::VectorIcon& GetPlatformVectorIcon(bool dark_mode) {
@@ -44,81 +49,55 @@ int GetSecurePaymentConfirmationHeaderWidth() {
       views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH);
 }
 
-const gfx::ImageSkia GetHeaderImageSkia(bool dark_mode) {
-  return ui::ResourceBundle::GetSharedInstance()
-      .GetImageNamed(dark_mode ? IDR_SAVE_CARD_DARK : IDR_SAVE_CARD)
-      .AsImageSkia();
+ui::ImageModel GetHeaderImageSkia(bool dark_mode) {
+  return ui::ImageModel::FromResourceId(dark_mode ? IDR_SAVE_CARD_DARK
+                                                  : IDR_SAVE_CARD);
 }
 
-class SecurePaymentConfirmationIconView : public NonAccessibleImageView {
- public:
-  METADATA_HEADER(SecurePaymentConfirmationIconView);
+class SecurePaymentConfirmationHeaderIconView : public NonAccessibleImageView {
+  METADATA_HEADER(SecurePaymentConfirmationHeaderIconView,
+                  NonAccessibleImageView)
 
-  explicit SecurePaymentConfirmationIconView(bool use_cart_image = false)
+ public:
+  explicit SecurePaymentConfirmationHeaderIconView(bool use_cart_image = false)
       : use_cart_image_{use_cart_image} {
     const gfx::Size header_size(
         GetSecurePaymentConfirmationHeaderWidth(),
         use_cart_image_ ? kShoppingCartHeaderIconHeight : kHeaderIconHeight);
-    SetSize(header_size);
     SetPreferredSize(header_size);
     SetVerticalAlignment(views::ImageView::Alignment::kLeading);
   }
-  ~SecurePaymentConfirmationIconView() override = default;
+  ~SecurePaymentConfirmationHeaderIconView() override = default;
 
   // NonAccessibleImageView:
   void OnThemeChanged() override {
     NonAccessibleImageView::OnThemeChanged();
-    SetImage(use_cart_image_
-                 ? GetHeaderImageSkia(GetNativeTheme()->ShouldUseDarkColors())
-                 : gfx::CreateVectorIcon(GetPlatformVectorIcon(
-                       GetNativeTheme()->ShouldUseDarkColors())));
+    const bool dark_mode = GetNativeTheme()->preferred_color_scheme() ==
+                           ui::NativeTheme::PreferredColorScheme::kDark;
+    SetImage(use_cart_image_ ? GetHeaderImageSkia(dark_mode)
+                             : ui::ImageModel::FromVectorIcon(
+                                   GetPlatformVectorIcon(dark_mode),
+                                   gfx::kPlaceholderColor));
   }
 
  private:
   bool use_cart_image_;
 };
 
-BEGIN_METADATA(SecurePaymentConfirmationIconView, NonAccessibleImageView)
+BEGIN_METADATA(SecurePaymentConfirmationHeaderIconView)
 END_METADATA
 
 }  // namespace
 
-std::unique_ptr<views::ProgressBar>
-CreateSecurePaymentConfirmationProgressBarView() {
-  auto progress_bar = std::make_unique<views::ProgressBar>(
-      kProgressBarHeight, /*allow_round_corner=*/false);
-  progress_bar->SetValue(-1);  // infinite animation.
-  progress_bar->SetBackgroundColor(SK_ColorTRANSPARENT);
-  progress_bar->SetPreferredSize(
-      gfx::Size(GetSecurePaymentConfirmationHeaderWidth(), kProgressBarHeight));
-  progress_bar->SizeToPreferredSize();
-
-  return progress_bar;
-}
-
-std::unique_ptr<views::View> CreateSecurePaymentConfirmationHeaderView(
-    int progress_bar_id,
+std::unique_ptr<views::View> CreateSecurePaymentConfirmationHeaderIcon(
     int header_icon_id,
     bool use_cart_image) {
-  auto header = std::make_unique<views::BoxLayoutView>();
-  header->SetOrientation(views::BoxLayout::Orientation::kVertical);
-  header->SetBetweenChildSpacing(kHeaderIconTopPadding);
-
-  // Progress bar
-  auto progress_bar = CreateSecurePaymentConfirmationProgressBarView();
-  progress_bar->SetID(progress_bar_id);
-  progress_bar->SetVisible(false);
-  auto* container = header->AddChildView(std::make_unique<views::View>());
-  container->SetPreferredSize(progress_bar->GetPreferredSize());
-  container->AddChildView(std::move(progress_bar));
-
-  // Header icon
   auto image_view =
-      std::make_unique<SecurePaymentConfirmationIconView>(use_cart_image);
+      std::make_unique<SecurePaymentConfirmationHeaderIconView>(use_cart_image);
   image_view->SetID(header_icon_id);
-  header->AddChildView(std::move(image_view));
-
-  return header;
+  image_view->SetProperty(views::kMarginsKey,
+                          gfx::Insets().set_top(kHeaderIconTopPadding));
+  return image_view;
 }
 
 std::unique_ptr<views::Label> CreateSecurePaymentConfirmationTitleLabel(
@@ -127,31 +106,34 @@ std::unique_ptr<views::Label> CreateSecurePaymentConfirmationTitleLabel(
       title, views::style::CONTEXT_DIALOG_TITLE, views::style::STYLE_PRIMARY);
   title_label->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
   title_label->SetLineHeight(kTitleLineHeight);
-  title_label->SetBorder(
-      views::CreateEmptyBorder(gfx::Insets::TLBR(0, 0, kBodyInsets, 0)));
 
   return title_label;
 }
 
-std::unique_ptr<views::ImageView>
-CreateSecurePaymentConfirmationInstrumentIconView(const gfx::ImageSkia& image) {
+std::unique_ptr<views::ImageView> CreateSecurePaymentConfirmationIconView(
+    const gfx::ImageSkia& image) {
+  return CreateSecurePaymentConfirmationIconView(
+      ui::ImageModel::FromImageSkia(image));
+}
+
+std::unique_ptr<views::ImageView> CreateSecurePaymentConfirmationIconView(
+    const ui::ImageModel& image) {
   std::unique_ptr<views::ImageView> icon_view =
       std::make_unique<views::ImageView>();
   icon_view->SetImage(image);
 
-  gfx::Size image_size = image.size();
+  gfx::Size image_size = image.Size();
   // Resize to a constant height, with a variable width in the acceptable range
   // based on the aspect ratio.
   float aspect_ratio =
       static_cast<float>(image_size.width()) / image_size.height();
-  int preferred_width = static_cast<int>(
-      kSecurePaymentConfirmationInstrumentIconHeightPx * aspect_ratio);
-  int icon_width =
-      std::max(std::min(preferred_width,
-                        kSecurePaymentConfirmationInstrumentIconMaximumWidthPx),
-               kSecurePaymentConfirmationInstrumentIconDefaultWidthPx);
+  int preferred_width =
+      static_cast<int>(kSecurePaymentConfirmationIconHeightPx * aspect_ratio);
+  int icon_width = std::max(
+      std::min(preferred_width, kSecurePaymentConfirmationIconMaximumWidthPx),
+      kSecurePaymentConfirmationIconDefaultWidthPx);
   icon_view->SetImageSize(
-      gfx::Size(icon_width, kSecurePaymentConfirmationInstrumentIconHeightPx));
+      gfx::Size(icon_width, kSecurePaymentConfirmationIconHeightPx));
   icon_view->SetPaintToLayer();
   icon_view->layer()->SetFillsBoundsOpaquely(false);
 
@@ -159,8 +141,8 @@ CreateSecurePaymentConfirmationInstrumentIconView(const gfx::ImageSkia& image) {
 }
 
 std::u16string FormatMerchantLabel(
-    const absl::optional<std::u16string>& merchant_name,
-    const absl::optional<std::u16string>& merchant_origin) {
+    const std::optional<std::u16string>& merchant_name,
+    const std::optional<std::u16string>& merchant_origin) {
   DCHECK(merchant_name.has_value() || merchant_origin.has_value());
 
   if (merchant_name.has_value() && merchant_origin.has_value()) {
@@ -181,7 +163,14 @@ std::unique_ptr<views::StyledLabel> CreateSecurePaymentConfirmationOptOutView(
   std::vector<size_t> offsets;
   std::u16string opt_out_text =
       base::ReplaceStringPlaceholders(opt_out_label, subst, &offsets);
-  DCHECK_EQ(2U, offsets.size());
+
+  // TODO: crbug.com/441560182 - This is a temporary workaround to ensure that
+  // tests are not broken. This should be removed when the new UX Refresh view
+  // is implemented.
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kSecurePaymentConfirmationUxRefresh)) {
+    DCHECK_EQ(2U, offsets.size());
+  }
 
   views::StyledLabel::RangeStyleInfo link_style =
       views::StyledLabel::RangeStyleInfo::CreateForLink(on_click);

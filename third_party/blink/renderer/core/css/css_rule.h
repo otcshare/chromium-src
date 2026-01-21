@@ -59,26 +59,39 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
     kPageRule = 6,
     kKeyframesRule = 7,
     kKeyframeRule = 8,
+    kMarginRule = 9,
     kNamespaceRule = 10,
     kCounterStyleRule = 11,
     kSupportsRule = 12,
     kFontFeatureValuesRule = 14,
-    kViewportRule = 15,
     // CSSOM constants are deprecated [1], and there will be no new
     // web-exposed values.
     //
     // [1] https://wiki.csswg.org/spec/cssom-constants
 
     // Values for internal use, not web-exposed:
-    kPropertyRule = 16,
-    kContainerRule = 17,
-    kLayerBlockRule = 18,
-    kLayerStatementRule = 19,
-    kFontPaletteValuesRule = 20,
-    kScopeRule = 21,
-    kPositionFallbackRule = 22,
-    kTryRule = 23,
-    kFontFeatureRule = 24,
+    kFirstInternalRule = 16,
+    // go/keep-sorted start
+    kApplyMixinRule = kFirstInternalRule,
+    kContainerRule,
+    kContentsMixinRule,
+    kCustomMediaRule,
+    kFontFeatureRule,
+    kFontPaletteValuesRule,
+    kFunctionDeclarationsRule,
+    kFunctionRule,
+    kLayerBlockRule,
+    kLayerStatementRule,
+    kMixinRule,
+    kNavigationRule,
+    kNestedDeclarationsRule,
+    kPositionTryRule,
+    kPropertyRule,
+    kRouteRule,
+    kScopeRule,
+    kStartingStyleRule,
+    kViewTransitionRule,
+    // go/keep-sorted end
   };
 
   virtual Type GetType() const = 0;
@@ -86,7 +99,7 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
   // https://drafts.csswg.org/cssom/#dom-cssrule-type
   int type() const {
     Type type = GetType();
-    return type > Type::kViewportRule ? 0 : static_cast<int>(type);
+    return type >= Type::kFirstInternalRule ? 0 : static_cast<int>(type);
   }
 
   virtual String cssText() const = 0;
@@ -102,8 +115,9 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
   void Trace(Visitor*) const override;
 
   CSSStyleSheet* parentStyleSheet() const {
-    if (parent_is_rule_)
+    if (parent_is_rule_) {
       return parent_ ? ParentAsCSSRule()->parentStyleSheet() : nullptr;
+    }
     return ParentAsCSSStyleSheet();
   }
 
@@ -154,7 +168,7 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
       const String& rule_string,
       unsigned index,
       size_t num_child_rules,
-      const CSSRule& parent_rule,
+      CSSRule& parent_rule,
       ExceptionState& exception_state);
 };
 

@@ -12,49 +12,44 @@
 
 #include <windows.h>
 
-// Must be after windows.h.
-#include <versionhelpers.h>
-
 #include <sddl.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <versionhelpers.h>
+
+#include "base/compiler_specific.h"
 #define STRSAFE_NO_DEPRECATE
 #include <objbase.h>
+
 #include <strsafe.h>
 #include <tlhelp32.h>
-#include <wrl/client.h>
 
-#include <cstdlib>
-#include <iterator>
 #include <limits>
 #include <set>
 #include <string>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "base/win/elevation_util.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/wmi.h"
-#include "chrome/installer/gcapi/gcapi_omaha_experiment.h"
 #include "chrome/installer/gcapi/gcapi_reactivation.h"
 #include "chrome/installer/gcapi/google_update_util.h"
 #include "chrome/installer/launcher_support/chrome_launcher_support.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/util_constants.h"
-#include "google_update/google_update_idl.h"
 
 using base::Time;
 using base::win::RegKey;
 using base::win::ScopedCOMInitializer;
-using base::win::ScopedHandle;
-using Microsoft::WRL::ComPtr;
 
 namespace {
 
@@ -87,7 +82,7 @@ bool GetCompanyName(const wchar_t* filename, wchar_t* buffer, DWORD out_len) {
     return false;
 
   buffer_size = _countof(file_version_info);
-  memset(file_version_info, 0, buffer_size);
+  UNSAFE_TODO(memset(file_version_info, 0, buffer_size));
   if (!::GetFileVersionInfo(filename, handle, buffer_size, file_version_info))
     return false;
 
@@ -106,7 +101,7 @@ bool GetCompanyName(const wchar_t* filename, wchar_t* buffer, DWORD out_len) {
   DWORD lang = 0;
   // Formulate the string to retrieve the company name of the specific
   // language codepage.
-  memcpy(&lang, data, 4);
+  UNSAFE_TODO(memcpy(&lang, data, 4));
   ::StringCchPrintf(info_name, _countof(info_name),
                     L"\\StringFileInfo\\%02X%02X%02X%02X\\CompanyName",
                     (lang & 0xff00) >> 8, (lang & 0xff),
@@ -120,7 +115,7 @@ bool GetCompanyName(const wchar_t* filename, wchar_t* buffer, DWORD out_len) {
   if (data_len <= 0 || data_len >= (out_len / sizeof(wchar_t)))
     return false;
 
-  memset(buffer, 0, out_len);
+  UNSAFE_TODO(memset(buffer, 0, out_len));
   ::StringCchCopyN(buffer, (out_len / sizeof(wchar_t)),
                    reinterpret_cast<const wchar_t*>(data), data_len);
   return true;
@@ -267,57 +262,6 @@ bool VerifyHKLMAccess() {
   return result;
 }
 
-bool IsRunningElevated() {
-  // This method should be called only for Vista or later.
-  if (!IsWindowsVersionSupported() || !VerifyAdminGroup())
-    return false;
-
-  HANDLE process_token;
-  if (!::OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &process_token))
-    return false;
-
-  TOKEN_ELEVATION_TYPE elevation_type = TokenElevationTypeDefault;
-  DWORD size_returned = 0;
-  if (!::GetTokenInformation(process_token, TokenElevationType, &elevation_type,
-                             sizeof(elevation_type), &size_returned)) {
-    ::CloseHandle(process_token);
-    return false;
-  }
-
-  ::CloseHandle(process_token);
-  return (elevation_type == TokenElevationTypeFull);
-}
-
-bool GetUserIdForProcess(size_t pid, wchar_t** user_sid) {
-  HANDLE process_handle =
-      ::OpenProcess(PROCESS_QUERY_INFORMATION, TRUE, static_cast<DWORD>(pid));
-  if (process_handle == nullptr)
-    return false;
-
-  HANDLE process_token;
-  bool result = false;
-  if (::OpenProcessToken(process_handle, TOKEN_QUERY, &process_token)) {
-    DWORD size = 0;
-    ::GetTokenInformation(process_token, TokenUser, nullptr, 0, &size);
-    if (::GetLastError() == ERROR_INSUFFICIENT_BUFFER ||
-        ::GetLastError() == ERROR_SUCCESS) {
-      DWORD actual_size = 0;
-      BYTE* token_user = new BYTE[size];
-      if ((::GetTokenInformation(process_token, TokenUser, token_user, size,
-                                 &actual_size)) &&
-          (actual_size <= size)) {
-        PSID sid = reinterpret_cast<TOKEN_USER*>(token_user)->User.Sid;
-        if (::ConvertSidToStringSid(sid, user_sid))
-          result = true;
-      }
-      delete[] token_user;
-    }
-    ::CloseHandle(process_token);
-  }
-  ::CloseHandle(process_handle);
-  return result;
-}
-
 struct SetWindowPosParams {
   int x;
   int y;
@@ -412,86 +356,9 @@ BOOL __stdcall GoogleChromeCompatibilityCheck(BOOL set_flag,
 
 BOOL __stdcall LaunchGoogleChrome() {
   base::FilePath chrome_exe_path;
-  if (!GetGoogleChromePath(&chrome_exe_path))
-    return false;
-
-  ScopedCOMInitializer com_initializer;
-  if (::CoInitializeSecurity(nullptr, -1, nullptr, nullptr,
-                             RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-                             RPC_C_IMP_LEVEL_IDENTIFY, nullptr,
-                             EOAC_DYNAMIC_CLOAKING, nullptr) != S_OK) {
-    return false;
-  }
-
-  bool impersonation_success = false;
-  if (IsRunningElevated()) {
-    wchar_t* curr_proc_sid;
-    if (!GetUserIdForProcess(GetCurrentProcessId(), &curr_proc_sid)) {
-      return false;
-    }
-
-    DWORD pid = 0;
-    ::GetWindowThreadProcessId(::GetShellWindow(), &pid);
-    if (pid <= 0) {
-      ::LocalFree(curr_proc_sid);
-      return false;
-    }
-
-    wchar_t* exp_proc_sid;
-    if (GetUserIdForProcess(pid, &exp_proc_sid)) {
-      if (_wcsicmp(curr_proc_sid, exp_proc_sid) == 0) {
-        ScopedHandle process_handle(::OpenProcess(
-            PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, TRUE, pid));
-        if (process_handle.IsValid()) {
-          HANDLE process_token = nullptr;
-          HANDLE user_token = nullptr;
-          if (::OpenProcessToken(process_handle.Get(),
-                                 TOKEN_DUPLICATE | TOKEN_QUERY,
-                                 &process_token) &&
-              ::DuplicateTokenEx(process_token,
-                                 TOKEN_IMPERSONATE | TOKEN_QUERY |
-                                     TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE,
-                                 nullptr, SecurityImpersonation, TokenPrimary,
-                                 &user_token) &&
-              (::ImpersonateLoggedOnUser(user_token) != 0)) {
-            impersonation_success = true;
-          }
-          if (user_token)
-            ::CloseHandle(user_token);
-          if (process_token)
-            ::CloseHandle(process_token);
-        }
-      }
-      ::LocalFree(exp_proc_sid);
-    }
-
-    ::LocalFree(curr_proc_sid);
-    if (!impersonation_success) {
-      return false;
-    }
-  }
-
-  base::CommandLine chrome_command(chrome_exe_path);
-
-  bool ret = false;
-  ComPtr<IProcessLauncher> ipl;
-  if (SUCCEEDED(::CoCreateInstance(__uuidof(ProcessLauncherClass), nullptr,
-                                   CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&ipl)))) {
-    if (SUCCEEDED(
-            ipl->LaunchCmdLine(chrome_command.GetCommandLineString().c_str())))
-      ret = true;
-    ipl.Reset();
-  } else {
-    // Couldn't get Omaha's process launcher, Omaha may not be installed at
-    // system level. Try just running Chrome instead.
-    ret = base::LaunchProcess(chrome_command.GetCommandLineString(),
-                              base::LaunchOptions())
-              .IsValid();
-  }
-
-  if (impersonation_success)
-    ::RevertToSelf();
-  return ret;
+  return GetGoogleChromePath(&chrome_exe_path) &&
+         base::win::RunDeElevated(base::CommandLine(chrome_exe_path))
+             .has_value();
 }
 
 BOOL __stdcall LaunchGoogleChromeWithDimensions(int x,
@@ -642,21 +509,18 @@ BOOL __stdcall CanOfferReactivation(const wchar_t* brand_code,
 BOOL __stdcall ReactivateChrome(const wchar_t* brand_code,
                                 int shell_mode,
                                 DWORD* error_code) {
-  BOOL result = FALSE;
-  if (CanOfferReactivation(brand_code, shell_mode, error_code)) {
-    if (SetReactivationBrandCode(brand_code, shell_mode)) {
-      // Currently set this as a best-effort thing. We return TRUE if
-      // reactivation succeeded regardless of the experiment label result.
-      SetReactivationExperimentLabels(brand_code, shell_mode);
-
-      result = TRUE;
-    } else {
-      if (error_code)
-        *error_code = REACTIVATE_ERROR_REACTIVATION_FAILED;
-    }
+  if (!CanOfferReactivation(brand_code, shell_mode, error_code)) {
+    return FALSE;
   }
 
-  return result;
+  if (SetReactivationBrandCode(brand_code, shell_mode)) {
+    return TRUE;
+  }
+
+  if (error_code) {
+    *error_code = REACTIVATE_ERROR_REACTIVATION_FAILED;
+  }
+  return FALSE;
 }
 
 BOOL __stdcall CanOfferRelaunch(const wchar_t** partner_brandcode_list,
@@ -687,7 +551,8 @@ BOOL __stdcall CanOfferRelaunch(const wchar_t** partner_brandcode_list,
   bool valid_brandcode = false;
   if (gcapi_internals::GetBrand(&installed_brandcode)) {
     for (int i = 0; i < partner_brandcode_list_length; ++i) {
-      if (!_wcsicmp(installed_brandcode.c_str(), partner_brandcode_list[i])) {
+      if (!_wcsicmp(installed_brandcode.c_str(),
+                    UNSAFE_TODO(partner_brandcode_list[i]))) {
         valid_brandcode = true;
         break;
       }
@@ -743,15 +608,14 @@ BOOL __stdcall SetRelaunchOffered(const wchar_t** partner_brandcode_list,
     return FALSE;
 
   // Store the relaunched brand code and the minimum date for relaunch (6 months
-  // from now), and set the Omaha experiment label.
+  // from now).
   RegKey key;
   if (key.Create(HKEY_CURRENT_USER, gcapi_internals::kChromeRegClientStateKey,
                  KEY_SET_VALUE | KEY_WOW64_32KEY) != ERROR_SUCCESS ||
       key.WriteValue(kRelaunchBrandcodeValue, relaunch_brandcode) !=
           ERROR_SUCCESS ||
       key.WriteValue(kRelaunchAllowedAfterValue, FormatDateOffsetByMonths(6)) !=
-          ERROR_SUCCESS ||
-      !SetRelaunchExperimentLabels(relaunch_brandcode, shell_mode)) {
+          ERROR_SUCCESS) {
     if (error_code)
       *error_code = RELAUNCH_ERROR_RELAUNCH_FAILED;
     return FALSE;

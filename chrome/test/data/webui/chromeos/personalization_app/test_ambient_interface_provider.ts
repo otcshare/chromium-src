@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {AmbientModeAlbum, AmbientObserverInterface, AmbientObserverRemote, AmbientProviderInterface, AnimationTheme, TemperatureUnit, TopicSource} from 'chrome://personalization/js/personalization_app.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+import type {AmbientModeAlbum, AmbientObserverInterface, AmbientObserverRemote, AmbientProviderInterface} from 'chrome://personalization/js/personalization_app.js';
+import {AmbientTheme, TemperatureUnit, TopicSource} from 'chrome://personalization/js/personalization_app.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 export class TestAmbientProvider extends TestBrowserProxy implements
     AmbientProviderInterface {
-  public albums: AmbientModeAlbum[] = [
+  albums: AmbientModeAlbum[] = [
     {
       id: '0',
       checked: false,
@@ -45,27 +46,62 @@ export class TestAmbientProvider extends TestBrowserProxy implements
       topicSource: TopicSource.kGooglePhotos,
       url: {url: 'http://test_url3'},
     },
+    {
+      id: '4',
+      checked: true,
+      title: '4',
+      description: '4',
+      numberOfPhotos: 1,
+      topicSource: TopicSource.kVideo,
+      url: {url: 'http://test_url4'},
+    },
+    {
+      id: '5',
+      checked: false,
+      title: '5',
+      description: '5',
+      numberOfPhotos: 1,
+      topicSource: TopicSource.kVideo,
+      url: {url: 'http://test_url5'},
+    },
   ];
 
-  public googlePhotosAlbumsPreviews: Url[] = [
+  shouldShowBanner: boolean = true;
+  geolocationEnabled: boolean = true;
+  geolocationIsUserModifiable: boolean = true;
+
+  previews: Url[] = [
     {url: 'http://preview0'},
     {url: 'http://preview1'},
     {url: 'http://preview2'},
     {url: 'http://preview#'},
   ];
 
+  ambientThemePreviews = {
+    [AmbientTheme.kSlideshow]: {url: 'chrome://1.png'},
+    [AmbientTheme.kFeelTheBreeze]: {url: 'chrome://2.png'},
+    [AmbientTheme.kFloatOnBy]: {url: 'chrome://3.png'},
+    [AmbientTheme.kVideo]: {url: 'chrome://4.png'},
+  };
+
   constructor() {
     super([
       'isAmbientModeEnabled',
       'setAmbientObserver',
       'setAmbientModeEnabled',
-      'setAnimationTheme',
+      'setAmbientTheme',
       'setPageViewed',
+      'setScreenSaverDuration',
       'setTopicSource',
       'setTemperatureUnit',
       'setAlbumSelected',
       'startScreenSaverPreview',
       'fetchSettingsAndAlbums',
+      'shouldShowTimeOfDayBanner',
+      'handleTimeOfDayBannerDismissed',
+      'isGeolocationEnabledForSystemServices',
+      'isGeolocationUserModifiable',
+      'enableGeolocationForSystemServices',
     ]);
   }
 
@@ -87,21 +123,25 @@ export class TestAmbientProvider extends TestBrowserProxy implements
         /*ambientModeEnabled=*/ true);
 
     this.ambientObserverRemote!.onAlbumsChanged(this.albums);
-    this.ambientObserverRemote!.onAnimationThemeChanged(
-        AnimationTheme.kSlideshow);
+    this.ambientObserverRemote!.onAmbientThemePreviewImagesChanged(
+        this.ambientThemePreviews);
+    this.ambientObserverRemote!.onAmbientThemeChanged(AmbientTheme.kSlideshow);
     this.ambientObserverRemote!.onTopicSourceChanged(TopicSource.kArtGallery);
     this.ambientObserverRemote!.onTemperatureUnitChanged(
         TemperatureUnit.kFahrenheit);
-    this.ambientObserverRemote!.onGooglePhotosAlbumsPreviewsFetched(
-        this.googlePhotosAlbumsPreviews);
+    this.ambientObserverRemote!.onPreviewsFetched(this.previews);
   }
 
   setAmbientModeEnabled(ambientModeEnabled: boolean) {
     this.methodCalled('setAmbientModeEnabled', ambientModeEnabled);
   }
 
-  setAnimationTheme(animationTheme: AnimationTheme) {
-    this.methodCalled('setAnimationTheme', animationTheme);
+  setAmbientTheme(ambientTheme: AmbientTheme) {
+    this.methodCalled('setAmbientTheme', ambientTheme);
+  }
+
+  setScreenSaverDuration(minutes: number): void {
+    this.methodCalled('setScreenSaverDuration', minutes);
   }
 
   setTopicSource(topicSource: TopicSource) {
@@ -126,5 +166,32 @@ export class TestAmbientProvider extends TestBrowserProxy implements
 
   fetchSettingsAndAlbums() {
     this.methodCalled('fetchSettingsAndAlbums');
+  }
+
+  shouldShowTimeOfDayBanner(): Promise<{shouldShowBanner: boolean}> {
+    this.methodCalled('shouldShowTimeOfDayBanner');
+    return Promise.resolve({shouldShowBanner: this.shouldShowBanner});
+  }
+
+  handleTimeOfDayBannerDismissed(): void {
+    this.methodCalled('handleTimeOfDayBannerDismissed');
+  }
+
+  isGeolocationEnabledForSystemServices():
+      Promise<{geolocationEnabled: boolean}> {
+    this.methodCalled('isGeolocationEnabledForSystemServices');
+    return Promise.resolve({geolocationEnabled: this.geolocationEnabled});
+  }
+
+  isGeolocationUserModifiable():
+      Promise<{geolocationIsUserModifiable: boolean}> {
+    this.methodCalled('isGeolocationUserModifiable');
+    return Promise.resolve(
+        {geolocationIsUserModifiable: this.geolocationIsUserModifiable});
+  }
+
+  enableGeolocationForSystemServices() {
+    this.geolocationEnabled = true;
+    this.methodCalled('enableGeolocationForSystemServices');
   }
 }

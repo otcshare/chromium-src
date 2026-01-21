@@ -5,10 +5,10 @@
 #ifndef CHROME_TEST_BASE_BROWSER_PROCESS_PLATFORM_PART_TEST_API_CHROMEOS_H_
 #define CHROME_TEST_BASE_BROWSER_PROCESS_PLATFORM_PART_TEST_API_CHROMEOS_H_
 
-#include "chrome/browser/component_updater/cros_component_manager.h"
+#include "base/memory/raw_ptr.h"
+#include "components/component_updater/ash/component_manager_ash.h"
 
 class BrowserProcessPlatformPart;
-class Profile;
 
 // Used to override parts of BrowserProcessPlatformParts in tests.
 class BrowserProcessPlatformPartTestApi {
@@ -21,20 +21,17 @@ class BrowserProcessPlatformPartTestApi {
       const BrowserProcessPlatformPartTestApi&) = delete;
   ~BrowserProcessPlatformPartTestApi();
 
-  // Initializes cros component manager for tests. Expects that cros component
-  // manager has not previously been initialized.
-  void InitializeCrosComponentManager(
-      scoped_refptr<component_updater::CrOSComponentManager>
+  // Initializes ComponentManagerAsh for tests. Expects that ComponentManagerAsh
+  // has not previously been initialized.
+  void InitializeComponentManager(
+      scoped_refptr<component_updater::ComponentManagerAsh>
           cros_component_manager);
 
-  // Shuts down the cros component manager set by
-  // InitializeCrosComponentManager().
-  void ShutdownCrosComponentManager();
-
-  bool CanRestoreUrlsForProfile(const Profile* profile);
+  // Shuts down ComponentManagerAsh set by InitializeComponentManager().
+  void ShutdownComponentManager();
 
  private:
-  BrowserProcessPlatformPart* const platform_part_;
+  const raw_ptr<BrowserProcessPlatformPart> platform_part_;
 };
 
 #endif  // CHROME_TEST_BASE_BROWSER_PROCESS_PLATFORM_PART_TEST_API_CHROMEOS_H_

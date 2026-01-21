@@ -4,13 +4,15 @@
 
 #include "storage/browser/blob/blob_builder_from_stream.h"
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "storage/browser/blob/blob_data_item.h"
@@ -79,7 +81,7 @@ class DataPipeConsumerHelper {
   virtual ~DataPipeConsumerHelper() = default;
 
   // Return false if population fails.
-  virtual bool Populate(base::span<const char> data,
+  virtual bool Populate(base::span<const uint8_t> data,
                         uint64_t bytes_previously_written) = 0;
   virtual void InvokeDone(
       mojo::ScopedDataPipeConsumerHandle pipe,
@@ -101,9 +103,8 @@ class DataPipeConsumerHelper {
     }
 
     while (current_offset_ < max_bytes_to_read_) {
-      const void* data;
-      uint32_t size;
-      result = pipe_->BeginReadData(&data, &size, MOJO_READ_DATA_FLAG_NONE);
+      base::span<const uint8_t> data;
+      result = pipe_->BeginReadData(MOJO_READ_DATA_FLAG_NONE, data);
       if (result == MOJO_RESULT_INVALID_ARGUMENT) {
         // `pipe_` is not actually a ScopedDataPipeConsumerHandle.
         InvokeDone(mojo::ScopedDataPipeConsumerHandle(), PassProgressClient(),
@@ -123,18 +124,18 @@ class DataPipeConsumerHelper {
         break;
       }
       DCHECK_EQ(MOJO_RESULT_OK, result);
-      size = std::min<uint64_t>(size, max_bytes_to_read_ - current_offset_);
-      if (!Populate(base::make_span(static_cast<const char*>(data), size),
-                    current_offset_)) {
+      data = data.first(base::checked_cast<size_t>(std::min(
+          uint64_t{data.size()}, max_bytes_to_read_ - current_offset_)));
+      if (!Populate(data, current_offset_)) {
         InvokeDone(mojo::ScopedDataPipeConsumerHandle(), PassProgressClient(),
                    false, current_offset_);
         delete this;
         return;
       }
       if (progress_client_)
-        progress_client_->OnProgress(size);
-      current_offset_ += size;
-      result = pipe_->EndReadData(size);
+        progress_client_->OnProgress(data.size());
+      current_offset_ += data.size();
+      result = pipe_->EndReadData(data.size());
       DCHECK_EQ(MOJO_RESULT_OK, result);
     }
 
@@ -250,9 +251,9 @@ class BlobBuilderFromStream::WritePipeToFileHelper
         reply_runner_(std::move(reply_runner)),
         callback_(std::move(callback)) {}
 
-  bool Populate(base::span<const char> data,
+  bool Populate(base::span<const uint8_t> data,
                 uint64_t bytes_previously_written) override {
-    return file_.WriteAtCurrentPos(data.data(), data.size()) >= 0;
+    return file_.WriteAtCurrentPos(data).has_value();
   }
 
   void InvokeDone(mojo::ScopedDataPipeConsumerHandle pipe,
@@ -311,14 +312,14 @@ class BlobBuilderFromStream::WritePipeToFutureDataHelper
         item_(std::move(item)),
         callback_(std::move(callback)) {}
 
-  bool Populate(base::span<const char> data,
+  bool Populate(base::span<const uint8_t> data,
                 uint64_t bytes_previously_written) override {
     if (item_->type() == BlobDataItem::Type::kBytesDescription)
       item_->AllocateBytes();
-    std::memcpy(item_->mutable_bytes()
-                    .subspan(bytes_previously_written, data.size())
-                    .data(),
-                data.data(), data.size());
+    item_->mutable_bytes()
+        .subspan(base::checked_cast<size_t>(bytes_previously_written),
+                 data.size())
+        .copy_from(data);
     return true;
   }
 
@@ -669,15 +670,22 @@ void BlobBuilderFromStream::OnError(Result result) {
 
   if (!callback_)
     return;
+  RecordResult(result);
   std::move(callback_).Run(this, nullptr);
 }
 
 void BlobBuilderFromStream::OnSuccess() {
   DCHECK(context_);
   DCHECK(callback_);
+  RecordResult(Result::kSuccess);
   std::move(callback_).Run(
-      this, context_->AddFinishedBlob(base::GenerateGUID(), content_type_,
-                                      content_disposition_, std::move(items_)));
+      this, context_->AddFinishedBlob(
+                base::Uuid::GenerateRandomV4().AsLowercaseString(),
+                content_type_, content_disposition_, std::move(items_)));
+}
+
+void BlobBuilderFromStream::RecordResult(Result result) {
+  UMA_HISTOGRAM_ENUMERATION("Storage.Blob.BuildFromStreamResult2", result);
 }
 
 bool BlobBuilderFromStream::ShouldStoreNextBlockOnDisk(uint64_t length_hint) {

@@ -1,7 +1,6 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {dp, session} = await testRunner.startBlank(
       `Tests that tracking and untracking IndexedDB for storage key works\n`);
-
   await dp.Page.enable();
   const protocolMessages = [];
   const originalDispatchMessage = DevToolsAPI.dispatchMessage;
@@ -13,20 +12,19 @@
   DevToolsAPI._sendCommand = (sessionId, method, params) => {
     protocolMessages.push({sessionId, method, params});
     return originalSendCommand(sessionId, method, params);
-  }
+  };
   window.onerror = (msg) => testRunner.log('onerror: ' + msg);
   window.onunhandledrejection = (e) => testRunner.log('onunhandledrejection: ' + e.reason);
   let errorForLog = new Error();
   setTimeout(() => {
     testRunner.log(protocolMessages);
-    testRunner.die('Timeout', errorForLog);
-  }, 5000);
+    testRunner.die('Took longer than 25s', errorForLog);
+  }, 25000);
 
   const frameId = (await dp.Page.getResourceTree()).result.frameTree.frame.id;
   errorForLog = new Error();
-  const storageKey = (await dp.Storage.getStorageKeyForFrame({
-                       frameId: frameId
-                     })).result.storageKey;
+  const storageKey =
+      (await dp.Storage.getStorageKey({frameId: frameId})).result.storageKey;
   errorForLog = new Error();
   await dp.Storage.trackIndexedDBForStorageKey({storageKey});
   errorForLog = new Error();
@@ -37,11 +35,12 @@
       message => {return `indexedDB content updated for ${message.params}`});
 
   testRunner.log(`Open database, object store and set value`);
+  const id = Math.random();
 
   // Create database, objectStore and add a key-value pair.
   const valuePromise = session.evaluateAsync(`
     new Promise(async resolve => {
-      const request = window.indexedDB.open("test-database");
+      const request = window.indexedDB.open("test-database${id}");
       request.onerror = (event) => {
         resolve('failed to create a database');
       };
@@ -50,12 +49,18 @@
         const objectStore = db.createObjectStore("test-store");
         objectStore.add("test-data", "test-key");
         resolve('key-value pair added successfully');
+        db.close();
       };
     })
   `);
 
-  testRunner.log(await Promise.all(
-      [listUpdatedPromise, contentUpdatedPromise, valuePromise]));
+  const [listUpdatedEvent, contentUpdatedEvent, value] = await Promise.all(
+    [listUpdatedPromise, contentUpdatedPromise, valuePromise]);
+  testRunner.log(
+      listUpdatedEvent, '', ['databaseName', 'sessionId', 'bucketId']);
+  testRunner.log(
+      contentUpdatedEvent, '', ['databaseName', 'sessionId', 'bucketId']);
+  testRunner.log(value);
   errorForLog = new Error();
 
   testRunner.log('\nUntrack IndexedDB for storage key');
@@ -70,7 +75,7 @@
   // Open database, objectStore and add another value.
   const oneMoreValue = await session.evaluateAsync(`
     new Promise(async resolve => {
-      const openreq = window.indexedDB.open("test-database");
+      const openreq = window.indexedDB.open("test-database${id}");
       openreq.onerror = (event) => {
         resolve("not able to open database");
       }
@@ -79,6 +84,7 @@
         const store = db.transaction(['test-store'],'readwrite').objectStore('test-store');
         store.add("one-more-test-data", "one-more-test-key");
         resolve("one more key-value pair added");
+        db.close();
       };
     })
   `);
@@ -86,9 +92,19 @@
 
   testRunner.log(oneMoreValue);
 
-  // Clean up
-  await dp.IndexedDB.deleteDatabase({storageKey, databaseName: "test-database"});
-  errorForLog = new Error();
+    // Clean up
+  try {
+    await session.evaluateAsync(`
+      new Promise(async (resolve, reject) => {
+        const req = window.indexedDB.deleteDatabase("test-database${id}");
+        req.onsuccess = resolve;
+        req.onerror = reject;
+      });
+    `);
+  } catch (e) {
+    testRunner.log(e);
+  } finally {
+    testRunner.completeTest();
+  }
 
-  testRunner.completeTest();
 })

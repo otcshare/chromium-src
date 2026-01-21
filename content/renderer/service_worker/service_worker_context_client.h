@@ -8,16 +8,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/id_map.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
-#include "ipc/ipc_listener.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -26,7 +25,10 @@
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/mojom/interface_provider.mojom.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom-forward.h"
+#include "third_party/blink/public/mojom/frame/reporting_observer.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_app.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/embedded_worker.mojom.h"
@@ -36,7 +38,6 @@
 #include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom-forward.h"
 #include "third_party/blink/public/mojom/worker/subresource_loader_updater.mojom-forward.h"
-#include "third_party/blink/public/mojom/worker/worker_content_settings_proxy.mojom-forward.h"
 #include "third_party/blink/public/mojom/worker/worker_content_settings_proxy.mojom.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_error.h"
 #include "third_party/blink/public/web/modules/service_worker/web_service_worker_context_client.h"
@@ -116,7 +117,9 @@ class ServiceWorkerContextClient
       const GURL& script_url_to_skip_throttling,
       scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner,
       int32_t service_worker_route_id,
-      const std::vector<std::string>& cors_exempt_header_list);
+      const std::vector<std::string>& cors_exempt_header_list,
+      const blink::StorageKey& storage_key,
+      const blink::ServiceWorkerToken& service_worker_token);
 
   ServiceWorkerContextClient(const ServiceWorkerContextClient&) = delete;
   ServiceWorkerContextClient& operator=(const ServiceWorkerContextClient&) =
@@ -134,7 +137,11 @@ class ServiceWorkerContextClient
           content_settings,
       mojo::PendingRemote<blink::mojom::CacheStorage> cache_storage,
       mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker>
-          browser_interface_broker);
+          browser_interface_broker,
+      mojo::PendingReceiver<blink::mojom::ReportingObserver>
+          coep_reporting_observer,
+      mojo::PendingReceiver<blink::mojom::ReportingObserver>
+          dip_reporting_observer);
 
   // Called on the initiator thread.
   blink::WebEmbeddedWorker& worker();
@@ -177,6 +184,8 @@ class ServiceWorkerContextClient
                                   network::mojom::URLLoaderClientInterfaceBase>
                                   preload_url_loader_client_receiver) override;
   void RequestTermination(RequestTerminationCallback callback) override;
+  bool ShouldNotifyServiceWorkerOnWebSocketActivity(
+      v8::Local<v8::Context> context) override;
   scoped_refptr<blink::WebServiceWorkerFetchContext>
   CreateWorkerFetchContextOnInitiatorThread() override;
   void OnNavigationPreloadResponse(
@@ -232,7 +241,7 @@ class ServiceWorkerContextClient
   scoped_refptr<base::SequencedTaskRunner> worker_task_runner_;
 
   // Not owned; |this| is destroyed when |proxy_| becomes invalid.
-  blink::WebServiceWorkerContextProxy* proxy_;
+  raw_ptr<blink::WebServiceWorkerContextProxy> proxy_;
 
   // These Mojo objects are bound on the worker thread.
   mojo::PendingReceiver<blink::mojom::ServiceWorker>
@@ -267,7 +276,7 @@ class ServiceWorkerContextClient
       service_worker_provider_info_;
 
   // Must be accessed on the initiator thread only.
-  EmbeddedWorkerInstanceClientImpl* owner_;
+  raw_ptr<EmbeddedWorkerInstanceClientImpl> owner_;
 
   // Initialized on the worker thread in WorkerContextStarted and
   // destructed on the worker thread in WillDestroyWorkerContext.
@@ -298,6 +307,12 @@ class ServiceWorkerContextClient
   int32_t service_worker_route_id_;
 
   std::vector<std::string> cors_exempt_header_list_;
+
+  base::TimeTicks top_level_script_loading_start_time_ = base::TimeTicks::Now();
+
+  blink::StorageKey storage_key_;
+
+  blink::ServiceWorkerToken service_worker_token_;
 };
 
 }  // namespace content

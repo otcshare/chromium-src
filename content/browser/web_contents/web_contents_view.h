@@ -10,10 +10,11 @@
 #include "build/build_config.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 
+class BackForwardTransitionAnimationManager;
 class RenderViewHost;
 class RenderViewHostDelegateView;
 class RenderWidgetHost;
@@ -67,8 +68,14 @@ class WebContentsView {
   // Returns the current drop data, if any.
   virtual DropData* GetDropData() const = 0;
 
-  // Get the bounds of the View, relative to the parent.
+  // Get the bounds of the View in the global screen position.
   virtual gfx::Rect GetViewBounds() const = 0;
+
+  // Resizes the view to the new bounds.
+  virtual void Resize(const gfx::Rect& new_bounds) = 0;
+
+  // Returns the size of the view.
+  virtual gfx::Size GetSize() const = 0;
 
   virtual void CreateView(gfx::NativeView context) = 0;
 
@@ -114,6 +121,15 @@ class WebContentsView {
 #endif
 
   virtual void FullscreenStateChanged(bool is_fullscreen) = 0;
+
+  // Returns an animation manager that displays a preview of the history page
+  // during a session history navigation gesture. Only non-null if supported for
+  // the platform.
+  virtual BackForwardTransitionAnimationManager*
+  GetBackForwardTransitionAnimationManager() = 0;
+
+  // Reset the above animation manager.
+  virtual void DestroyBackForwardTransitionAnimationManager() = 0;
 };
 
 // Factory function to create `WebContentsView`s. Implemented in the platform
@@ -121,7 +137,7 @@ class WebContentsView {
 std::unique_ptr<WebContentsView> CreateWebContentsView(
     WebContentsImpl* web_contents,
     std::unique_ptr<WebContentsViewDelegate> delegate,
-    RenderViewHostDelegateView** render_view_host_delegate_view);
+    raw_ptr<RenderViewHostDelegateView>* render_view_host_delegate_view);
 
 }  // namespace content
 

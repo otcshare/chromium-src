@@ -4,19 +4,19 @@
 
 #include "components/reporting/encryption/primitives.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/check_op.h"
 #include "crypto/aead.h"
-#include "crypto/openssl_util.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
 #include "third_party/boringssl/src/include/openssl/digest.h"
 #include "third_party/boringssl/src/include/openssl/hkdf.h"
 
-#include "base/strings/string_piece.h"
 
 namespace reporting {
 
@@ -27,61 +27,44 @@ static_assert(ED25519_PRIVATE_KEY_LEN == kSignKeySize, "ED25519 mismatch");
 static_assert(ED25519_PUBLIC_KEY_LEN == kKeySize, "ED25519 mismatch");
 static_assert(ED25519_SIGNATURE_LEN == kSignatureSize, "ED25519 mismatch");
 
-bool ComputeSharedSecret(const uint8_t peer_public_value[kKeySize],
-                         uint8_t shared_secret[kKeySize],
-                         uint8_t generated_public_value[kKeySize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
+// TODO(https://issues.chromium.org/issues/431824286): use crypto/keyexchange.
+bool ComputeSharedSecret(base::span<const uint8_t, kKeySize> peer_public_value,
+                         base::span<uint8_t, kKeySize> shared_secret,
+                         base::span<uint8_t, kKeySize> generated_public_value) {
   // Generate new pair of private key and public value.
-  uint8_t out_private_key[kKeySize];
-  X25519_keypair(generated_public_value, out_private_key);
+  std::array<uint8_t, kKeySize> out_private_key;
+  X25519_keypair(generated_public_value.data(), out_private_key.data());
 
   // Compute shared secret.
-  if (1 != X25519(shared_secret, out_private_key, peer_public_value)) {
-    return false;
-  }
-
-  // Success.
-  return true;
+  return X25519(shared_secret.data(), out_private_key.data(),
+                peer_public_value.data()) == 1;
 }
 
-bool ProduceSymmetricKey(const uint8_t shared_secret[kKeySize],
-                         uint8_t symmetric_key[kKeySize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
+bool ProduceSymmetricKey(base::span<const uint8_t, kKeySize> shared_secret,
+                         base::span<uint8_t, kKeySize> symmetric_key) {
   // Produce symmetric key from shared secret using HKDF.
   // Since the original keys were only used once, no salt and context is needed.
   // Since the keys above are only used once, no salt and context is provided.
-  if (1 != HKDF(symmetric_key, kKeySize, /*digest=*/EVP_sha256(), shared_secret,
-                kKeySize,
-                /*salt=*/nullptr, /*salt_len=*/0,
-                /*info=*/nullptr, /*info_len=*/0)) {
-    return false;
-  }
-
-  // Success.
-  return true;
+  return HKDF(symmetric_key.data(), symmetric_key.size(),
+              /*digest=*/EVP_sha256(), shared_secret.data(),
+              shared_secret.size(), /*salt=*/nullptr, /*salt_len=*/0,
+              /*info=*/nullptr, /*info_len=*/0) == 1;
 }
 
-bool PerformSymmetricEncryption(const uint8_t symmetric_key[kKeySize],
-                                base::StringPiece input_data,
+bool PerformSymmetricEncryption(base::span<const uint8_t, kKeySize> key,
+                                std::string_view input_data,
                                 std::string* output_data) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
   // Encrypt the data with symmetric key using AEAD interface.
   crypto::Aead aead(crypto::Aead::CHACHA20_POLY1305);
-  DCHECK_EQ(aead.KeyLength(), kKeySize);
+  CHECK_EQ(aead.KeyLength(), kKeySize);
 
   // Use the symmetric key for data encryption.
-  aead.Init(base::make_span(symmetric_key, kKeySize));
+  aead.Init(key);
 
   // Set nonce to 0s, since a symmetric key is only used once.
   // Note: if we ever start reusing the same symmetric key, we will need
   // to generate new nonce for every record and transfer it to the peer.
-  DCHECK_EQ(aead.NonceLength(), kNonceSize);
+  CHECK_EQ(aead.NonceLength(), kNonceSize);
   std::string nonce(kNonceSize, 0);
 
   // Encrypt the whole record.
@@ -94,20 +77,13 @@ bool PerformSymmetricEncryption(const uint8_t symmetric_key[kKeySize],
   return true;
 }
 
-bool VerifySignature(const uint8_t verification_key[kKeySize],
-                     base::StringPiece message,
-                     const uint8_t signature[kSignatureSize]) {
-  // Make sure OpenSSL is initialized, in order to avoid data races later.
-  crypto::EnsureOpenSSLInit();
-
+bool VerifySignature(base::span<const uint8_t, kKeySize> verification_key,
+                     std::string_view message,
+                     base::span<const uint8_t, kSignatureSize> signature) {
   // Verify message
-  if (1 != ED25519_verify(reinterpret_cast<const uint8_t*>(message.data()),
-                          message.size(), signature, verification_key)) {
-    return false;
-  }
-
-  // Success.
-  return true;
+  base::span<const uint8_t> message_span = base::as_byte_span(message);
+  return ED25519_verify(message_span.data(), message_span.size(),
+                        signature.data(), verification_key.data()) == 1;
 }
 
 }  // namespace reporting

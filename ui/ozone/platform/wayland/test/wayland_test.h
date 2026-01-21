@@ -14,6 +14,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/buildflags.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine.h"
 #include "ui/ozone/common/features.h"
 #include "ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h"
@@ -45,22 +46,33 @@ class WaylandTestBase {
   void SetUp();
   void TearDown();
 
-  // Posts 'callback' or 'closure' to run on the client thread; blocks till the
+  // Posts 'callback' or 'closure' to run on the server thread; blocks till the
   // callable is run and all pending Wayland requests and events are delivered.
+  // Note: This by default uses base::RunLoops which causes all posted tasks,
+  // including tasks posted with a delay, to run during this call before all
+  // server's events are processed by the client.
+  // The 'no_nested_runloops' parameter can be used to not use runloops for
+  // testing code that posts delayed tasks and the delay can be controlled in
+  // the test without them being executed unexpectedly during this call.
   void PostToServerAndWait(
-      base::OnceCallback<void(wl::TestWaylandServerThread* server)> callback);
-  void PostToServerAndWait(base::OnceClosure closure);
+      base::OnceCallback<void(wl::TestWaylandServerThread* server)> callback,
+      bool no_nested_runloops = true);
+  void PostToServerAndWait(base::OnceClosure closure,
+                           bool no_nested_runloops = true);
 
   // Similar to the two methods above, but provides the convenience of using a
   // capturing lambda directly.
-  template <
-      typename Lambda,
-      typename = std::enable_if_t<
-          std::is_invocable_r_v<void, Lambda, wl::TestWaylandServerThread*> ||
-          std::is_invocable_r_v<void, Lambda>>>
-  void PostToServerAndWait(Lambda&& lambda) {
-    PostToServerAndWait(base::BindLambdaForTesting(std::move(lambda)));
+  template <typename Lambda>
+    requires(
+        std::is_invocable_r_v<void, Lambda, wl::TestWaylandServerThread*> ||
+        std::is_invocable_r_v<void, Lambda>)
+  void PostToServerAndWait(Lambda&& lambda, bool no_nested_runloops = true) {
+    PostToServerAndWait(base::BindLambdaForTesting(std::move(lambda)),
+                        no_nested_runloops);
   }
+
+  // Convenience wrapper function for WaylandConnectionTestApi::SyncDisplay.
+  void SyncDisplay();
 
  protected:
   // Disables client-server sync during the teardown.  Used by tests that
@@ -75,17 +87,14 @@ class WaylandTestBase {
   void SendConfigureEvent(uint32_t surface_id,
                           const gfx::Size& size,
                           const wl::ScopedWlArray& states,
-                          absl::optional<uint32_t> serial = absl::nullopt);
+                          std::optional<uint32_t> serial = std::nullopt);
 
   // Sends XDG_TOPLEVEL_STATE_ACTIVATED to the surface that has |surface_id| and
   // has xdg surface role with width and height set to 0, which results in
   // asking the client to set the width and height of the surface. The client
   // test may pass |serial| that will be used to activate the surface.
   void ActivateSurface(uint32_t surface_id,
-                       absl::optional<uint32_t> serial = absl::nullopt);
-
-  // Initializes SurfaceAugmenter in |server_|.
-  void InitializeSurfaceAugmenter();
+                       std::optional<uint32_t> serial = std::nullopt);
 
   // A helper method that sets up the XKB configuration for tests that require
   // it.
@@ -101,17 +110,22 @@ class WaylandTestBase {
       PlatformWindowType type,
       const gfx::Rect bounds,
       MockWaylandPlatformWindowDelegate* delegate,
-      gfx::AcceleratedWidget parent_widget = gfx::kNullAcceleratedWidget);
+      gfx::AcceleratedWidget parent_widget = gfx::kNullAcceleratedWidget,
+      bool inactive = false);
 
   base::test::TaskEnvironment task_environment_;
 
   wl::TestWaylandServerThread server_;
 
-  ::testing::NiceMock<MockWaylandPlatformWindowDelegate> delegate_;
+#if BUILDFLAG(USE_XKBCOMMON)
+  XkbEvdevCodes xkb_evdev_code_converter_;
+#endif
+
   std::unique_ptr<ScopedKeyboardLayoutEngine> scoped_keyboard_layout_engine_;
-  std::unique_ptr<WaylandSurfaceFactory> surface_factory_;
-  std::unique_ptr<WaylandBufferManagerGpu> buffer_manager_gpu_;
   std::unique_ptr<WaylandConnection> connection_;
+  ::testing::NiceMock<MockWaylandPlatformWindowDelegate> delegate_;
+  std::unique_ptr<WaylandBufferManagerGpu> buffer_manager_gpu_;
+  std::unique_ptr<WaylandSurfaceFactory> surface_factory_;
   std::unique_ptr<WaylandScreen> screen_;
   std::unique_ptr<WaylandWindow> window_;
   gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
@@ -121,15 +135,8 @@ class WaylandTestBase {
 
  private:
   bool initialized_ = false;
-
-#if BUILDFLAG(USE_XKBCOMMON)
-  XkbEvdevCodes xkb_evdev_code_converter_;
-#endif
-
   std::unique_ptr<KeyboardLayoutEngine> keyboard_layout_engine_;
   base::test::ScopedFeatureList feature_list_;
-
-  const wl::ServerConfig config_;
 };
 
 // Version of WaylandTestBase that uses parametrised tests (TEST_P).
@@ -143,31 +150,16 @@ class WaylandTest : public WaylandTestBase,
 
   void SetUp() override;
   void TearDown() override;
-
-  bool IsAuraShellEnabled();
 };
 
 // Version of WaylandTest that uses simple test fixtures (TEST_F).
 class WaylandTestSimple : public WaylandTestBase, public ::testing::Test {
  public:
   WaylandTestSimple();
+  explicit WaylandTestSimple(wl::ServerConfig);
   WaylandTestSimple(const WaylandTestSimple&) = delete;
   WaylandTestSimple& operator=(const WaylandTestSimple&) = delete;
   ~WaylandTestSimple() override;
-
-  void SetUp() override;
-  void TearDown() override;
-};
-
-// Version of WaylandTest that uses simple test fixtures (TEST_F) and
-// aura_shell enabled.
-class WaylandTestSimpleWithAuraShell : public WaylandTestBase,
-                                       public ::testing::Test {
- public:
-  WaylandTestSimpleWithAuraShell();
-  WaylandTestSimpleWithAuraShell(const WaylandTestSimple&) = delete;
-  WaylandTestSimpleWithAuraShell& operator=(const WaylandTestSimple&) = delete;
-  ~WaylandTestSimpleWithAuraShell() override;
 
   void SetUp() override;
   void TearDown() override;

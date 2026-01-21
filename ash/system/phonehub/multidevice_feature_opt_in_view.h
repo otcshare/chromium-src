@@ -7,6 +7,7 @@
 
 #include "ash/ash_export.h"
 #include "ash/system/phonehub/sub_feature_opt_in_view.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ash/components/phonehub/multidevice_feature_access_manager.h"
 #include "chromeos/ash/components/phonehub/util/histogram_util.h"
@@ -20,9 +21,9 @@ namespace ash {
 class ASH_EXPORT MultideviceFeatureOptInView
     : public SubFeatureOptInView,
       public phonehub::MultideviceFeatureAccessManager::Observer {
- public:
-  METADATA_HEADER(MultideviceFeatureOptInView);
+  METADATA_HEADER(MultideviceFeatureOptInView, SubFeatureOptInView)
 
+ public:
   explicit MultideviceFeatureOptInView(
       phonehub::MultideviceFeatureAccessManager*
           multidevice_feature_access_manager);
@@ -45,7 +46,7 @@ class ASH_EXPORT MultideviceFeatureOptInView
   void UpdateVisibility(bool was_visible);
   void ClosePhoneHubBubble();
 
-  phonehub::MultideviceFeatureAccessManager*
+  raw_ptr<phonehub::MultideviceFeatureAccessManager>
       multidevice_feature_access_manager_;
 
   base::ScopedObservation<phonehub::MultideviceFeatureAccessManager,

@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
@@ -18,7 +19,6 @@
 
 namespace ash {
 
-class NetworkHandler;
 class NetworkStateHandler;
 
 class COMPONENT_EXPORT(CHROMEOS_NETWORK) AutoConnectHandler
@@ -43,20 +43,29 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) AutoConnectHandler
 
   AutoConnectHandler(const AutoConnectHandler&) = delete;
   AutoConnectHandler& operator=(const AutoConnectHandler&) = delete;
-
+  AutoConnectHandler();
   ~AutoConnectHandler() override;
+
+  void Init(ClientCertResolver* client_cert_resolver,
+            NetworkConnectionHandler* network_connection_handler,
+            NetworkStateHandler* network_state_handler,
+            ManagedNetworkConfigurationHandler*
+                managed_network_configuration_handler);
 
   // LoginState::Observer
   void LoggedInStateChanged() override;
 
   // NetworkConnectionObserver
-  void ConnectToNetworkRequested(const std::string& service_path) override;
+  ConnectToNetworkRequestVerdict ConnectToNetworkRequested(
+      const std::string& service_path) override;
 
   // NetworkPolicyObserver
   void PoliciesApplied(const std::string& userhash) override;
 
   // NetworkStateHandlerObserver
   void ScanCompleted(const DeviceState* device) override;
+  void DevicePropertiesUpdated(const DeviceState* device) override;
+  void DeviceListChanged() override;
 
   // ClientCertResolver::Observer
   void ResolveRequestCompleted(bool network_properties_changed) override;
@@ -67,17 +76,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) AutoConnectHandler
   void NotifyAutoConnectInitiatedForTest(int auto_connect_reasons);
 
  private:
-  friend class NetworkHandler;
-  friend class AutoConnectHandlerTest;
-
-  AutoConnectHandler();
-
-  void Init(ClientCertResolver* client_cert_resolver,
-            NetworkConnectionHandler* network_connection_handler,
-            NetworkStateHandler* network_state_handler,
-            ManagedNetworkConfigurationHandler*
-                managed_network_configuration_handler);
-
   void NotifyAutoConnectInitiated(int auto_connect_reasons);
 
   // This function is called whenever the logged in state changes or when a new
@@ -134,12 +132,19 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) AutoConnectHandler
   // Calls Shill.Manager.ScanAndConnectToBestServices().
   void CallShillScanAndConnectToBestServices();
 
+  // Returns true if the AllowOnlyPolicyWiFiToConnectIfAvailable policy is
+  // enabled and should be enforced. It will only be enforced in a user session.
+  bool ShouldEnforceIsAllowOnlyPolicyWiFiToConnectIfAvailable();
+
+  // Evaluates wifi enablement and resets `initial_scan_done_` if needed.
+  void CheckWifiEnabled();
+
   // Local references to the associated handler instances.
-  ClientCertResolver* client_cert_resolver_;
-  NetworkConnectionHandler* network_connection_handler_;
-  NetworkStateHandler* network_state_handler_;
+  raw_ptr<ClientCertResolver> client_cert_resolver_;
+  raw_ptr<NetworkConnectionHandler> network_connection_handler_;
+  raw_ptr<NetworkStateHandler> network_state_handler_;
   NetworkStateHandlerScopedObservation network_state_handler_observer_{this};
-  ManagedNetworkConfigurationHandler* managed_configuration_handler_;
+  raw_ptr<ManagedNetworkConfigurationHandler> managed_configuration_handler_;
 
   // Whether a request to connect to the best network is pending. If true, once
   // all requirements are met (like policy loaded, certificate patterns being
@@ -158,6 +163,18 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) AutoConnectHandler
   // existed resolved. Even if there are no certificate patterns, this will be
   // eventually true.
   bool client_certs_resolved_;
+
+  // Tracks the state of wifi enablement, so actions can be taken when wifi gets
+  // enabled. It will be initialized to the initial wifi enablement state in
+  // Init().
+  bool wifi_enabled_ = false;
+
+  // This is true if an "initial wifi scan" has been done.
+  // It gets reset to false when a scan is requested by AutoConnectHandler after
+  // user login, or when wifi gets (re)enabled (which implicitly triggers a
+  // scan).
+  // It is set to true when a wifi scan has completed.
+  bool initial_scan_done_ = false;
 
   // Whether the autoconnect policy was applied already, see
   // DisconnectWiFiIfPolicyRequires() and DisconnectCellularIfPolicyRequires().

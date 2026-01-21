@@ -77,7 +77,8 @@ const char kCustomTraceConfigStringDevToolsStyle[] =
 class TracingHandlerTest : public testing::Test {
  public:
   void SetUp() override {
-    tracing_handler_ = std::make_unique<TracingHandler>(nullptr);
+    tracing_handler_ =
+        std::make_unique<TracingHandler>(nullptr, nullptr, nullptr);
   }
 
   void TearDown() override { tracing_handler_.reset(); }
@@ -95,7 +96,9 @@ class TracingHandlerTest : public testing::Test {
 
 TEST_F(TracingHandlerTest, GetTraceConfigFromDevToolsConfig) {
   base::Value devtools_config =
-      base::JSONReader::Read(kCustomTraceConfigStringDevToolsStyle).value();
+      base::JSONReader::Read(kCustomTraceConfigStringDevToolsStyle,
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          .value();
 
   base::trace_event::TraceConfig trace_config =
       TracingHandler::GetTraceConfigFromDevToolsConfig(devtools_config);

@@ -19,6 +19,8 @@ class CertProvisioningSchedulerUserService : public KeyedService {
   explicit CertProvisioningSchedulerUserService(Profile* profile);
   ~CertProvisioningSchedulerUserService() override;
 
+  void Shutdown() override;
+
   CertProvisioningScheduler* scheduler() { return scheduler_.get(); }
 
  private:
@@ -37,10 +39,9 @@ class CertProvisioningSchedulerUserServiceFactory
   CertProvisioningSchedulerUserServiceFactory();
   ~CertProvisioningSchedulerUserServiceFactory() override = default;
 
-  // BrowserStateKeyedServiceFactory implementation.
+  // BrowserContextKeyedServiceFactory implementation.
   bool ServiceIsCreatedWithBrowserContext() const override;
-  // BrowserStateKeyedServiceFactory implementation.
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
 };
 

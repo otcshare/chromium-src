@@ -36,7 +36,8 @@ namespace blink {
 MediaQueryList::MediaQueryList(ExecutionContext* context,
                                MediaQueryMatcher* matcher,
                                MediaQuerySet* media)
-    : ExecutionContextLifecycleObserver(context),
+    : ActiveScriptWrappable<MediaQueryList>({}),
+      ExecutionContextLifecycleObserver(context),
       matcher_(matcher),
       media_(media),
       matches_dirty_(true),
@@ -60,15 +61,17 @@ void MediaQueryList::removeDeprecatedListener(V8EventListener* listener) {
 }
 
 void MediaQueryList::AddListener(MediaQueryListListener* listener) {
-  if (!listener)
+  if (!listener) {
     return;
+  }
 
   listeners_.insert(listener);
 }
 
 void MediaQueryList::RemoveListener(MediaQueryListListener* listener) {
-  if (!listener)
+  if (!listener) {
     return;
+  }
 
   listeners_.erase(listener);
 }
@@ -86,8 +89,9 @@ void MediaQueryList::ContextDestroyed() {
 bool MediaQueryList::MediaFeaturesChanged(
     HeapVector<Member<MediaQueryListListener>>* listeners_to_notify) {
   matches_dirty_ = true;
-  if (!UpdateMatches())
+  if (!UpdateMatches()) {
     return false;
+  }
   for (const auto& listener : listeners_) {
     listeners_to_notify->push_back(listener);
   }
@@ -121,7 +125,7 @@ void MediaQueryList::Trace(Visitor* visitor) const {
   visitor->Trace(matcher_);
   visitor->Trace(media_);
   visitor->Trace(listeners_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
 }
 

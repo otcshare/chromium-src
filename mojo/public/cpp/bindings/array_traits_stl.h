@@ -8,11 +8,13 @@
 #include <array>
 #include <map>
 #include <set>
+#include <type_traits>
 #include <unordered_set>
-#include <vector>
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "mojo/public/cpp/bindings/array_traits.h"
+#include "mojo/public/cpp/bindings/lib/default_construct_tag_internal.h"
 
 namespace mojo {
 
@@ -39,56 +41,6 @@ struct ArrayTraits<std::unordered_set<T>> {
   static const T& GetValue(ConstIterator& iterator) { return *iterator; }
 };
 
-template <typename T>
-struct ArrayTraits<std::vector<T>> {
-  using Element = T;
-
-  static bool IsNull(const std::vector<T>& input) {
-    // std::vector<> is always converted to non-null mojom array.
-    return false;
-  }
-
-  static void SetToNull(std::vector<T>* output) {
-    // std::vector<> doesn't support null state. Set it to empty instead.
-    output->clear();
-  }
-
-  static size_t GetSize(const std::vector<T>& input) { return input.size(); }
-
-  static T* GetData(std::vector<T>& input) { return input.data(); }
-
-  static const T* GetData(const std::vector<T>& input) { return input.data(); }
-
-  static typename std::vector<T>::reference GetAt(std::vector<T>& input,
-                                                  size_t index) {
-    return input[index];
-  }
-
-  static typename std::vector<T>::const_reference GetAt(
-      const std::vector<T>& input,
-      size_t index) {
-    return input[index];
-  }
-
-  static inline bool Resize(std::vector<T>& input, size_t size) {
-    // Instead of calling std::vector<T>::resize() directly, this is a hack to
-    // make compilers happy. Some compilers (e.g., Mac, Android, Linux MSan)
-    // currently don't allow resizing types like
-    // std::vector<std::vector<MoveOnlyType>>.
-    // Because the deserialization code doesn't care about the original contents
-    // of |input|, we discard them directly.
-    //
-    // The "inline" keyword of this method matters. Without it, we have observed
-    // significant perf regression with some tests on Mac. crbug.com/631415
-    if (input.size() != size) {
-      std::vector<T> temp(size);
-      input.swap(temp);
-    }
-
-    return true;
-  }
-};
-
 // This ArrayTraits specialization is used only for serialization.
 template <typename T>
 struct ArrayTraits<std::set<T>> {
@@ -105,12 +57,8 @@ struct ArrayTraits<std::set<T>> {
   static ConstIterator GetBegin(const std::set<T>& input) {
     return input.begin();
   }
-  static void AdvanceIterator(ConstIterator& iterator) {
-    ++iterator;
-  }
-  static const T& GetValue(ConstIterator& iterator) {
-    return *iterator;
-  }
+  static void AdvanceIterator(ConstIterator& iterator) { ++iterator; }
+  static const T& GetValue(ConstIterator& iterator) { return *iterator; }
 };
 
 // This ArrayTraits specialization is used only for serialization.
@@ -134,7 +82,8 @@ struct ArrayTraits<base::flat_set<T>> {
 template <typename K, typename V>
 struct MapValuesArrayView {
   explicit MapValuesArrayView(const std::map<K, V>& map) : map(map) {}
-  const std::map<K, V>& map;
+  // RAW_PTR_EXCLUSION: Binary size increase.
+  RAW_PTR_EXCLUSION const std::map<K, V>& map;
 };
 
 // Convenience function to create a MapValuesArrayView<> that infers the
@@ -185,8 +134,9 @@ struct ArrayTraits<std::array<T, N>> {
 
   // std::array is fixed size but this is called during deserialization.
   static bool Resize(std::array<T, N>& input, size_t size) {
-    if (size != N)
+    if (size != N) {
       return false;
+    }
     return true;
   }
 };

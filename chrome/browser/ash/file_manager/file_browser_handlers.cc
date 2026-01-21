@@ -10,21 +10,19 @@
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/file_manager/open_with_browser.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/common/extensions/api/file_browser_handlers/file_browser_handler.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
 #include "content/public/browser/browser_thread.h"
@@ -117,7 +115,7 @@ class FileBrowserHandlerExecutor {
       const Extension* extension,
       int handler_pid);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   scoped_refptr<const Extension> extension_;
   const std::string action_id_;
   file_tasks::FileTaskFinishedCallback done_;
@@ -132,8 +130,7 @@ FileBrowserHandlerExecutor::SetupFileAccessPermissions(
     const std::vector<FileSystemURL>& file_urls) {
   DCHECK(handler_extension.get());
 
-  storage::ExternalFileSystemBackend* backend =
-      file_system_context_handler->external_backend();
+  auto* backend = ash::FileSystemBackend::Get(*file_system_context_handler);
 
   std::unique_ptr<FileDefinitionList> file_definition_list(
       new FileDefinitionList);
@@ -146,9 +143,7 @@ FileBrowserHandlerExecutor::SetupFileAccessPermissions(
     base::FilePath local_path = url.path();
     base::FilePath virtual_path = url.virtual_path();
 
-    const bool is_native_file =
-        url.type() == storage::kFileSystemTypeLocal ||
-        url.type() == storage::kFileSystemTypeRestrictedLocal;
+    const bool is_native_file = url.type() == storage::kFileSystemTypeLocal;
 
     // If the file is from a physical volume, actual file must be found.
     if (is_native_file) {
@@ -225,8 +220,8 @@ void FileBrowserHandlerExecutor::ExecuteDoneOnUIThread(
     // TASK_RESULT_MESSAGE_SENT.
     std::move(done_).Run(
         success
-            ? extensions::api::file_manager_private::TASK_RESULT_MESSAGE_SENT
-            : extensions::api::file_manager_private::TASK_RESULT_FAILED,
+            ? extensions::api::file_manager_private::TaskResult::kMessageSent
+            : extensions::api::file_manager_private::TaskResult::kFailed,
         failure_reason);
   }
   delete this;
@@ -247,7 +242,9 @@ void FileBrowserHandlerExecutor::ExecuteFileActionsOnUIThread(
   extensions::ExtensionHost* extension_host =
       manager->GetBackgroundHostForExtension(extension_->id());
 
-  const extensions::LazyContextId context_id(profile_, extension_->id());
+  const auto context_id =
+      extensions::LazyContextId::ForExtension(profile_, extension_.get());
+  CHECK(context_id.IsForBackgroundPage());
   extensions::LazyContextTaskQueue* task_queue = context_id.GetTaskQueue();
 
   if (task_queue->ShouldEnqueueTask(profile_, extension_.get())) {
@@ -277,7 +274,7 @@ void FileBrowserHandlerExecutor::SetupPermissionsAndDispatchEvent(
     return;
   }
 
-  int handler_pid = context_info->render_process_host->GetID();
+  int handler_pid = context_info->render_process_host->GetDeprecatedID();
   if (handler_pid <= 0) {
     ExecuteDoneOnUIThread(false, "No app available");
     return;
@@ -318,8 +315,9 @@ void FileBrowserHandlerExecutor::SetupHandlerHostFileAccessPermissions(
       FileBrowserHandler::FindForActionId(extension_.get(), action_id_);
   for (FileDefinitionList::const_iterator iter = file_definition_list->begin();
        iter != file_definition_list->end(); ++iter) {
-    if (!action)
+    if (!action) {
       continue;
+    }
     if (action->CanRead()) {
       content::ChildProcessSecurityPolicy::GetInstance()->GrantReadFile(
           handler_pid, iter->absolute_path);
@@ -339,8 +337,9 @@ bool ExecuteFileBrowserHandler(Profile* profile,
                                const std::vector<FileSystemURL>& file_urls,
                                file_tasks::FileTaskFinishedCallback done) {
   // Forbid calling undeclared handlers.
-  if (!FileBrowserHandler::FindForActionId(extension, action_id))
+  if (!FileBrowserHandler::FindForActionId(extension, action_id)) {
     return false;
+  }
 
   // The executor object will be self deleted on completion.
   (new FileBrowserHandlerExecutor(profile, extension, action_id))

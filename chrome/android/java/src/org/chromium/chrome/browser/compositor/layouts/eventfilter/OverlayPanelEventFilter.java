@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.compositor.layouts.eventfilter;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -13,9 +15,10 @@ import android.view.ViewGroup;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManager;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener;
 import org.chromium.content_public.browser.WebContents;
 
@@ -24,14 +27,12 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 
 /**
- * The {@link GestureEventFilter} used when an overlay panel is being shown. It filters
- * events that happen in the Content View area and propagates them to the appropriate
- * WebContents.
+ * The {@link MotionEventFilter} used when an overlay panel is being shown. It filters events that
+ * happen in the Content View area and propagates them to the appropriate WebContents.
  */
-public class OverlayPanelEventFilter extends GestureEventFilter {
-    /**
-     * The targets that can handle MotionEvents.
-     */
+@NullMarked
+public class OverlayPanelEventFilter extends MotionEventFilter {
+    /** The targets that can handle MotionEvents. */
     @IntDef({EventTarget.UNDETERMINED, EventTarget.PANEL, EventTarget.CONTENT_VIEW})
     @Retention(RetentionPolicy.SOURCE)
     private @interface EventTarget {
@@ -40,11 +41,12 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         int CONTENT_VIEW = 2;
     }
 
-    /**
-     * The direction of the gesture.
-     */
-    @IntDef({GestureOrientation.UNDETERMINED, GestureOrientation.HORIZONTAL,
-            GestureOrientation.VERTICAL})
+    /** The direction of the gesture. */
+    @IntDef({
+        GestureOrientation.UNDETERMINED,
+        GestureOrientation.HORIZONTAL,
+        GestureOrientation.VERTICAL
+    })
     @Retention(RetentionPolicy.SOURCE)
     private @interface GestureOrientation {
         int UNDETERMINED = 0;
@@ -113,7 +115,7 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
     private float mSyntheticActionDownY;
 
     /** The list of recorded events. */
-    private final ArrayList<MotionEvent> mRecordedEvents = new ArrayList<MotionEvent>();
+    private final ArrayList<MotionEvent> mRecordedEvents = new ArrayList<>();
 
     /** The initial Y position of the current gesture. */
     private float mInitialEventY;
@@ -134,9 +136,9 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
     }
 
     /**
-     * Creates a {@link GestureEventFilter} with offset touch events.
+     * Creates a {@link MotionEventFilter} with offset touch events.
+     *
      * @param context The {@link Context} for Android.
-     * @param panelManager The {@link OverlayPanelManager} responsible for showing panels.
      */
     public OverlayPanelEventFilter(Context context, OverlayPanel panel) {
         super(context, panel, false, false);
@@ -168,10 +170,10 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
     public boolean onInterceptTouchEventInternal(MotionEvent e, boolean isKeyboardShowing) {
         if (mPanel.isShowing()
                 && (mPanel.isCoordinateInsideOverlayPanel(e.getX() * mPxToDp, e.getY() * mPxToDp)
-                // When the Panel is opened, all events should be forwarded to the Panel,
-                // even those who are not inside the Panel. This is to prevent any events
-                // being forward to the base page when the Panel is expanded.
-                || mPanel.isPanelOpened())) {
+                        // When the Panel is opened, all events should be forwarded to the Panel,
+                        // even those who are not inside the Panel. This is to prevent any events
+                        // being forward to the base page when the Panel is expanded.
+                        || mPanel.isPanelOpened())) {
             return super.onInterceptTouchEventInternal(e, isKeyboardShowing);
         }
 
@@ -303,9 +305,7 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         propagateEvent(e, mEventTarget);
     }
 
-    /**
-     * Resumes recorded events by propagating all of them to the current {@link EventTarget}.
-     */
+    /** Resumes recorded events by propagating all of them to the current {@link EventTarget}. */
     private void resumeRecordedEvents() {
         for (int i = 0, size = mRecordedEvents.size(); i < size; i++) {
             propagateAndRecycleEvent(mRecordedEvents.get(i), mEventTarget);
@@ -373,16 +373,17 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
             // return an event with a single pointer, which is necessary to prevent
             // the app from crashing when the motion involves multiple pointers.
             // See: crbug.com/486901
-            event = MotionEvent.obtain(
-                    e.getDownTime(),
-                    e.getEventTime(),
-                    // NOTE(pedrosimonetti): Use getActionMasked() to make sure we're not
-                    // send any pointer information to the event, given that getAction()
-                    // may have the pointer Id associated to it.
-                    e.getActionMasked(),
-                    e.getX(),
-                    mInitialEventY,
-                    e.getMetaState());
+            event =
+                    MotionEvent.obtain(
+                            e.getDownTime(),
+                            e.getEventTime(),
+                            // NOTE(pedrosimonetti): Use getActionMasked() to make sure we're not
+                            // send any pointer information to the event, given that getAction()
+                            // may have the pointer Id associated to it.
+                            e.getActionMasked(),
+                            e.getX(),
+                            mInitialEventY,
+                            e.getMetaState());
 
             isSyntheticEvent = true;
         }
@@ -394,7 +395,6 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         event.offsetLocation(-contentViewOffsetXPx, -contentViewOffsetYPx);
 
         // Get the container view to propagate the event to.
-        WebContents webContents = mPanel.getWebContents();
         ViewGroup containerView = mPanel.getContainerView();
 
         boolean wasEventCanceled = false;
@@ -441,9 +441,10 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         // If the panel is peeking then the panel was already notified in #onTouchEventInternal().
         if (mPanel.getPanelState() == PanelState.PEEKED) return false;
 
-        setEventTarget(mPanel.isCoordinateInsideContent(
-                e.getX() * mPxToDp, e.getY() * mPxToDp)
-                ? EventTarget.CONTENT_VIEW : EventTarget.PANEL);
+        setEventTarget(
+                mPanel.isCoordinateInsideContent(e.getX() * mPxToDp, e.getY() * mPxToDp)
+                        ? EventTarget.CONTENT_VIEW
+                        : EventTarget.PANEL);
         return false;
     }
 
@@ -487,8 +488,10 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
     private void determineGestureOrientation(MotionEvent e1, MotionEvent e2) {
         float deltaX = Math.abs(e2.getX() - e1.getX());
         float deltaY = Math.abs(e2.getY() - e1.getY());
-        mGestureOrientation = deltaY * VERTICAL_DETERMINATION_BOOST > deltaX
-                ? GestureOrientation.VERTICAL : GestureOrientation.HORIZONTAL;
+        mGestureOrientation =
+                deltaY * VERTICAL_DETERMINATION_BOOST > deltaX
+                        ? GestureOrientation.VERTICAL
+                        : GestureOrientation.HORIZONTAL;
         mHasDeterminedGestureOrientation = true;
     }
 
@@ -506,9 +509,8 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         if (mPanel.isMaximized()) {
             // Allow overscroll in the Content View to move the Panel.
             boolean isMovingDown = distanceY < 0;
-            shouldPropagateEventsToPanel = isVertical
-                    && isMovingDown
-                    && getContentViewVerticalScroll() == 0;
+            shouldPropagateEventsToPanel =
+                    isVertical && isMovingDown && getContentViewVerticalScroll() == 0;
         } else {
             // Only allow horizontal movements to be propagated to the Content View
             // when the Panel is expanded (that is, not maximized).
@@ -525,8 +527,9 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
             mPreviousEventTarget = mEventTarget;
             setEventTarget(target);
 
-            mHasChangedEventTarget = mEventTarget != mPreviousEventTarget
-                    && mPreviousEventTarget != EventTarget.UNDETERMINED;
+            mHasChangedEventTarget =
+                    mEventTarget != mPreviousEventTarget
+                            && mPreviousEventTarget != EventTarget.UNDETERMINED;
         }
     }
 
@@ -562,9 +565,7 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         return deltaX * deltaX + deltaY * deltaY > mTouchSlopSquarePx;
     }
 
-    /**
-     * Internal GestureDetector class that is responsible for determining the event target.
-     */
+    /** Internal GestureDetector class that is responsible for determining the event target. */
     private class InternalGestureDetector extends GestureDetector.SimpleOnGestureListener {
         @Override
         public void onShowPress(MotionEvent e) {
@@ -577,8 +578,12 @@ public class OverlayPanelEventFilter extends GestureEventFilter {
         }
 
         @Override
-        public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-            return handleScroll(e1, e2, distanceY);
+        public boolean onScroll(
+                @Nullable MotionEvent e1,
+                @Nullable MotionEvent e2,
+                float distanceX,
+                float distanceY) {
+            return handleScroll(assumeNonNull(e1), assumeNonNull(e2), distanceY);
         }
     }
 }

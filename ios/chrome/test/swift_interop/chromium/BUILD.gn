@@ -1,0 +1,33 @@
+# Copyright 2025 The Chromium Authors. All rights resAerved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/apple/swift_source_set.gni")
+
+if (enable_swift_cxx_interop) {
+  swift_modulemap("base_imports") {
+    modules = [
+      {
+        name = "BaseImports"
+        sources = [
+          "//base/system/sys_info.h",
+          "//base/time/time.h",
+        ]
+      },
+    ]
+
+    public_deps = [ "//base" ]
+  }
+
+  swift_source_set("tests") {
+    testonly = true
+    sources = [
+      "sys_info_xctest.swift",
+      "time_xctest.swift",
+    ]
+    deps = [
+      ":base_imports",
+      "//build/config/ios:xctest",
+    ]
+  }
+}

@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert} from 'chrome://resources/js/assert_ts.js';
-import {BigBuffer, BigBufferSharedMemoryRegion} from 'chrome://resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import type {BigBuffer, BigBufferSharedMemoryRegion} from 'chrome://resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
 
-import {UserProviderInterface} from '../personalization_app.mojom-webui.js';
-import {PersonalizationStore} from '../personalization_store.js';
+import type {UserProviderInterface} from '../../personalization_app.mojom-webui.js';
+import type {PersonalizationStore} from '../personalization_store.js';
 
 import {setDefaultUserImagesAction, setUserInfoAction} from './user_actions.js';
 
@@ -34,10 +34,12 @@ export function saveCameraImage(
       Mojo.createSharedBuffer(numBytes);
   assert(
       createSharedBufferResult === Mojo.RESULT_OK,
-      'Could not create shared buffer');
+      `Could not create shared buffer. error: ${createSharedBufferResult}`);
 
   const {buffer, result: mapBufferResult} = handle.mapBuffer(0, numBytes);
-  assert(mapBufferResult === Mojo.RESULT_OK, 'Could not map shared buffer');
+  assert(
+      mapBufferResult === Mojo.RESULT_OK,
+      `Could not map shared buffer. error: ${mapBufferResult}`);
 
   const uint8View = new Uint8Array(buffer);
   uint8View.set(pngBinary);

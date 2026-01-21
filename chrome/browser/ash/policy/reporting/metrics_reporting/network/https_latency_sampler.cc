@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/policy/reporting/metrics_reporting/network/https_latency_sampler.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/task/bind_post_task.h"
@@ -13,9 +14,9 @@
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
 #include "components/reporting/proto/synced/metric_data.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace reporting {
+
 namespace {
 
 namespace network_diagnostics_mojom = ::chromeos::network_diagnostics::mojom;
@@ -69,11 +70,11 @@ void ConvertMojomRoutineResultToTelemetry(
       break;
   }
 }
+
 }  // namespace
 
 void HttpsLatencySampler::Delegate::BindDiagnosticsReceiver(
-    mojo::PendingReceiver<
-        ::chromeos::network_diagnostics::mojom::NetworkDiagnosticsRoutines>
+    mojo::PendingReceiver<network_diagnostics_mojom::NetworkDiagnosticsRoutines>
         receiver) {
   ash::network_health::NetworkHealthManager::GetInstance()
       ->BindDiagnosticsReceiver(std::move(receiver));
@@ -97,7 +98,7 @@ void HttpsLatencySampler::MaybeCollect(OptionalMetricCallback callback) {
           ->network_state_handler()
           ->ConnectedNetworkByType(ash::NetworkTypePattern::Default());
   if (!network_state || !network_state->IsOnline()) {
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
@@ -114,14 +115,14 @@ void HttpsLatencySampler::MaybeCollect(OptionalMetricCallback callback) {
       base::BindOnce(&HttpsLatencySampler::OnHttpsLatencyRoutineCompleted,
                      weak_ptr_factory_.GetWeakPtr());
   network_diagnostics_service_->RunHttpsLatency(
-      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
-                         std::move(routine_callback)));
+      network_diagnostics_mojom::RoutineCallSource::kMetricsReporting,
+      base::BindPostTaskToCurrentDefault(std::move(routine_callback)));
 
   is_routine_running_ = true;
 }
 
 void HttpsLatencySampler::OnHttpsLatencyRoutineCompleted(
-    ::chromeos::network_diagnostics::mojom::RoutineResultPtr routine_result) {
+    network_diagnostics_mojom::RoutineResultPtr routine_result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   is_routine_running_ = false;

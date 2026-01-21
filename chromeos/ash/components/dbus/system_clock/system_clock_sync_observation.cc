@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/components/dbus/system_clock/system_clock_sync_observation.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/dbus/system_clock/system_clock_client.h"
@@ -78,7 +78,7 @@ void SystemClockSyncObservation::RunCallbackWithResult(bool result) {
   if (callback_.is_null())
     return;
 
-  timeout_timer_.AbandonAndStop();
+  timeout_timer_.Stop();
   weak_ptr_factory_.InvalidateWeakPtrs();
 
   std::move(callback_).Run(result);

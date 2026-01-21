@@ -7,11 +7,9 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "content/browser/bluetooth/bluetooth_blocklist.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using device::BluetoothUUID;
 
@@ -110,7 +108,7 @@ bool BluetoothAllowedDevices::IsAllowedToAccessService(
   auto id_iter = device_id_to_services_map_.find(device_id);
   return id_iter == device_id_to_services_map_.end()
              ? false
-             : base::Contains(id_iter->second, service_uuid);
+             : id_iter->second.contains(service_uuid);
 }
 
 bool BluetoothAllowedDevices::IsAllowedToGATTConnect(
@@ -127,12 +125,12 @@ bool BluetoothAllowedDevices::IsAllowedToAccessManufacturerData(
   auto id_iter = device_id_to_manufacturers_map_.find(device_id);
   return id_iter == device_id_to_manufacturers_map_.end()
              ? false
-             : base::Contains(id_iter->second, manufacturer_code);
+             : id_iter->second.contains(manufacturer_code);
 }
 
 blink::WebBluetoothDeviceId BluetoothAllowedDevices::GenerateUniqueDeviceId() {
   blink::WebBluetoothDeviceId device_id = blink::WebBluetoothDeviceId::Create();
-  while (base::Contains(device_id_set_, device_id)) {
+  while (device_id_set_.contains(device_id)) {
     LOG(WARNING) << "Generated repeated id.";
     device_id = blink::WebBluetoothDeviceId::Create();
   }

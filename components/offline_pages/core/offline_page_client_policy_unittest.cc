@@ -8,7 +8,6 @@
 #include <memory>
 #include <set>
 
-#include "base/containers/contains.h"
 #include "components/offline_pages/core/client_namespace_constants.h"
 #include "components/offline_pages/core/offline_page_feature.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,14 +39,15 @@ class ClientPolicyTest : public testing::Test {
 };
 
 void ClientPolicyTest::ExpectTemporary(std::string name_space) {
-  EXPECT_TRUE(base::Contains(GetTemporaryPolicyNamespaces(), name_space))
+  EXPECT_TRUE(std::ranges::contains(GetTemporaryPolicyNamespaces(), name_space))
       << "Namespace " << name_space
       << " had incorrect lifetime type when getting temporary namespaces.";
   EXPECT_EQ(GetPolicy(name_space).lifetime_type, LifetimeType::TEMPORARY)
       << "Namespace " << name_space
       << " had incorrect lifetime type setting when directly checking"
          " if it is temporary.";
-  EXPECT_FALSE(base::Contains(GetPersistentPolicyNamespaces(), name_space))
+  EXPECT_FALSE(
+      std::ranges::contains(GetPersistentPolicyNamespaces(), name_space))
       << "Namespace " << name_space
       << " had incorrect lifetime type when getting persistent namespaces.";
 }
@@ -61,14 +61,16 @@ void ClientPolicyTest::ExpectDownloadSupport(std::string name_space,
 }
 
 void ClientPolicyTest::ExpectPersistent(std::string name_space) {
-  EXPECT_FALSE(base::Contains(GetTemporaryPolicyNamespaces(), name_space))
+  EXPECT_FALSE(
+      std::ranges::contains(GetTemporaryPolicyNamespaces(), name_space))
       << "Namespace " << name_space
       << " had incorrect lifetime type when getting temporary namespaces.";
   EXPECT_EQ(GetPolicy(name_space).lifetime_type, LifetimeType::PERSISTENT)
       << "Namespace " << name_space
       << " had incorrect lifetime type setting when directly checking"
          " if it is temporary.";
-  EXPECT_TRUE(base::Contains(GetPersistentPolicyNamespaces(), name_space))
+  EXPECT_TRUE(
+      std::ranges::contains(GetPersistentPolicyNamespaces(), name_space))
       << "Namespace " << name_space
       << " had incorrect lifetime type when getting persistent namespaces.";
 }
@@ -96,8 +98,8 @@ TEST_F(ClientPolicyTest, FallbackTest) {
   EXPECT_EQ(policy.name_space, kDefaultNamespace);
   EXPECT_TRUE(isTemporary(policy));
   ExpectTemporary(kDefaultNamespace);
-  EXPECT_FALSE(
-      base::Contains(GetTemporaryPolicyNamespaces(), kUndefinedNamespace));
+  EXPECT_FALSE(std::ranges::contains(GetTemporaryPolicyNamespaces(),
+                                     kUndefinedNamespace));
   EXPECT_EQ(GetPolicy(kUndefinedNamespace).lifetime_type,
             LifetimeType::TEMPORARY);
   ExpectDownloadSupport(kUndefinedNamespace, false);
@@ -168,16 +170,6 @@ TEST_F(ClientPolicyTest, CheckNTPSuggestionsDefined) {
   ExpectRequiresSpecificUserSettings(kNTPSuggestionsNamespace, false);
 }
 
-TEST_F(ClientPolicyTest, CheckSuggestedArticlesDefined) {
-  OfflinePageClientPolicy policy = GetPolicy(kSuggestedArticlesNamespace);
-  EXPECT_EQ(policy.name_space, kSuggestedArticlesNamespace);
-  EXPECT_TRUE(isTemporary(policy));
-  ExpectTemporary(kSuggestedArticlesNamespace);
-  ExpectDownloadSupport(kSuggestedArticlesNamespace, true);
-  ExpectRestrictedToTabFromClientId(kSuggestedArticlesNamespace, false);
-  ExpectRequiresSpecificUserSettings(kSuggestedArticlesNamespace, false);
-}
-
 TEST_F(ClientPolicyTest, CheckLivePageSharingDefined) {
   OfflinePageClientPolicy policy = GetPolicy(kLivePageSharingNamespace);
   EXPECT_EQ(policy.name_space, kLivePageSharingNamespace);
@@ -195,10 +187,11 @@ TEST_F(ClientPolicyTest, AllTemporaryNamespaces) {
   std::set<std::string> cache_reset_namespaces(
       cache_reset_namespaces_list.begin(), cache_reset_namespaces_list.end());
   for (auto name_space : cache_reset_namespaces) {
-    if (cache_reset_namespaces.count(name_space) > 0)
+    if (cache_reset_namespaces.count(name_space) > 0) {
       ExpectTemporary(name_space);
-    else
+    } else {
       ExpectPersistent(name_space);
+    }
   }
 }
 

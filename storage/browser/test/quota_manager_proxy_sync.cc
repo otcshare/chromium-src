@@ -5,6 +5,7 @@
 #include "storage/browser/test/quota_manager_proxy_sync.h"
 
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "components/services/storage/public/cpp/buckets/bucket_info.h"
 #include "components/services/storage/public/cpp/buckets/constants.h"
@@ -22,12 +23,11 @@ QuotaManagerProxySync::~QuotaManagerProxySync() = default;
 
 QuotaErrorOr<BucketInfo> QuotaManagerProxySync::GetBucket(
     const blink::StorageKey& storage_key,
-    const std::string& bucket_name,
-    blink::mojom::StorageType storage_type) {
+    const std::string& bucket_name) {
   QuotaErrorOr<BucketInfo> result;
   base::RunLoop run_loop;
-  proxy_->GetBucketForTesting(
-      storage_key, bucket_name, storage_type,
+  proxy_->GetBucketByNameUnsafe(
+      storage_key, bucket_name,
       base::SingleThreadTaskRunner::GetCurrentDefault().get(),
       base::BindLambdaForTesting([&](QuotaErrorOr<BucketInfo> bucket_info) {
         result = std::move(bucket_info);

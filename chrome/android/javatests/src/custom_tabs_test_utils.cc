@@ -2,16 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/contains.h"
-#include "chrome/android/chrome_test_util_jni_headers/CustomTabsTestUtils_jni.h"
+#include <algorithm>
+
 #include "components/variations/variations_ids_provider.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_test_util_jni/CustomTabsTestUtils_jni.h"
 
 namespace customtabs {
 
-static jboolean JNI_CustomTabsTestUtils_HasVariationId(JNIEnv* env, jint id) {
+static bool JNI_CustomTabsTestUtils_HasVariationId(JNIEnv* env, int32_t id) {
   auto ids = variations::VariationsIdsProvider::GetInstance()
                  ->GetVariationsVectorForWebPropertiesKeys();
-  return base::Contains(ids, id);
+  return std::ranges::contains(ids, id);
 }
 
 }  // namespace customtabs
+
+DEFINE_JNI(CustomTabsTestUtils)

@@ -94,13 +94,10 @@ class WebTestRunner(object):
         self._test_inputs = test_inputs
 
         # dynamically set exit_after_n_failures and exit_after_n_crashes_or_timeouts
-        self._exit_after_n_failures = (self._options.exit_after_n_failures
-                                       or max(5000,
-                                              len(test_inputs) // 2))
-        self._exit_after_n_crashes_or_timeouts = (
-            self._options.exit_after_n_crashes_or_timeouts
-            or max(100,
-                   len(test_inputs) // 33))
+        self._exit_after_n_failures = self._port.max_allowed_failures(
+            len(test_inputs))
+        self._exit_after_n_crashes_or_timeouts = self._port.max_allowed_crash_or_timeouts(
+            len(test_inputs))
 
         test_run_results = TestRunResults(
             self._expectations,
@@ -112,11 +109,13 @@ class WebTestRunner(object):
         self._printer.num_completed = 0
 
         for test_name in set(tests_to_skip):
-            result = test_results.TestResult(test_name)
+            result = test_results.TestResult(
+                test_name,
+                expected=frozenset([ResultType.Skip]),
+            )
             result.type = ResultType.Skip
             test_run_results.add(
                 result,
-                expected=True,
                 test_is_slow=self._test_is_slow(test_name))
 
         self._printer.write_update('Sharding tests ...')
@@ -200,20 +199,26 @@ class WebTestRunner(object):
                 result = test_results.TestResult(
                     test_input.test_name,
                     failures=[test_failures.FailureEarlyExit()])
+                if self._expectations:
+                    result.expected = self._expectations.get_expectations(
+                        test_input.test_name).results
                 # FIXME: We probably need to loop here if there are multiple iterations.
                 # FIXME: Also, these results are really neither expected nor unexpected. We probably
                 # need a third type of result.
                 test_run_results.add(
                     result,
-                    expected=False,
                     test_is_slow=self._test_is_slow(test_input.test_name))
 
     def _interrupt_if_at_failure_limits(self, test_run_results):
         def interrupt_if_at_failure_limit(limit, failure_count,
                                           test_run_results, message):
             if limit and failure_count >= limit:
-                message += ' %d tests run.' % (
-                    test_run_results.expected + test_run_results.unexpected)
+                # Skipped tests are not run, so they don't count towards the number
+                # of run tests.
+                num_run = (
+                    test_run_results.expected + test_run_results.unexpected -
+                    len(test_run_results.tests_by_expectation[ResultType.Skip]))
+                message += f' {num_run} tests run.'
                 self._mark_interrupted_tests_as_skipped(test_run_results)
                 raise TestRunInterruptedException(
                     message, InterruptReason.TOO_MANY_FAILURES)
@@ -234,20 +239,21 @@ class WebTestRunner(object):
         if not self._expectations:
             return
 
-        expected = self._expectations.matches_an_expected_result(
-            result.test_name, result.type)
-        expectation_string = ' '.join(
-            self._expectations.get_expectations(result.test_name).results)
-
         if result.device_failed:
-            self._printer.print_finished_test(self._port, result, False,
-                                              expectation_string, 'Aborted')
-            return
+            status_displayed = 'Aborted'
+            # Device failures are always unexpected, so don't update the result
+            # from `TestExpectations`.
+            assert result.expected == {ResultType.Pass}, result.expected
+        else:
+            status_displayed = result.type
+            result.expected = self._expectations.get_expectations(
+                result.test_name).results
 
-        test_run_results.add(result, expected,
-                             self._test_is_slow(result.test_name))
-        self._printer.print_finished_test(self._port, result, expected,
-                                          expectation_string, result.type)
+        expectation_string = ' '.join(result.expected)
+        test_run_results.add(result, self._test_is_slow(result.test_name))
+        self._printer.print_finished_test(self._port, result,
+                                          result.is_expected,
+                                          expectation_string, status_displayed)
         self._interrupt_if_at_failure_limits(test_run_results)
 
     def handle(self, name, source, *args):
@@ -368,8 +374,7 @@ class Worker(object):
             # ensure that the trace is recorded properly.
             tracing_enabled = self._port.get_option(
                 'enable_tracing') is not None or any(
-                    flag.startswith(tracing_command) for tracing_command in
-                    ['--trace-startup', '--trace-shutdown']
+                    flag.startswith('--trace-startup')
                     for flag in self._options.additional_driver_flag)
 
             if tracing_enabled:

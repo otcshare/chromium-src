@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_test_helpers.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_test_helpers.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -31,11 +32,13 @@ class ConstructorFails : public TestCustomElementDefinition {
 }  // namespace
 
 TEST_F(CustomElementDefinitionTest, upgrade_clearsReactionQueueOnFailure) {
-  Element& element = *CreateElement("a-a").InDocument(&GetDocument());
+  CustomElementTestingScope testing_scope;
+  Element& element =
+      *CreateElement(AtomicString("a-a")).InDocument(&GetDocument());
   EXPECT_EQ(CustomElementState::kUndefined, element.GetCustomElementState())
       << "sanity check: this element should be ready to upgrade";
   {
-    CEReactionsScope reactions;
+    CEReactionsScope reactions(testing_scope.GetIsolate());
     HeapVector<Member<Command>> commands;
     commands.push_back(MakeGarbageCollected<Unreached>(
         "upgrade failure should clear the reaction queue"));
@@ -44,8 +47,9 @@ TEST_F(CustomElementDefinitionTest, upgrade_clearsReactionQueueOnFailure) {
     reactions.EnqueueToCurrentQueue(
         stack, element,
         *MakeGarbageCollected<TestReaction>(std::move(commands)));
-    ConstructorFails definition(CustomElementDescriptor("a-a", "a-a"));
-    definition.Upgrade(element);
+    ConstructorFails* definition = MakeGarbageCollected<ConstructorFails>(
+        CustomElementDescriptor(AtomicString("a-a"), AtomicString("a-a")));
+    definition->Upgrade(element);
   }
   EXPECT_EQ(CustomElementState::kFailed, element.GetCustomElementState())
       << "failing to construct should have set the 'failed' element state";
@@ -53,7 +57,9 @@ TEST_F(CustomElementDefinitionTest, upgrade_clearsReactionQueueOnFailure) {
 
 TEST_F(CustomElementDefinitionTest,
        upgrade_clearsReactionQueueOnFailure_backupStack) {
-  Element& element = *CreateElement("a-a").InDocument(&GetDocument());
+  CustomElementTestingScope testing_scope;
+  Element& element =
+      *CreateElement(AtomicString("a-a")).InDocument(&GetDocument());
   EXPECT_EQ(CustomElementState::kUndefined, element.GetCustomElementState())
       << "sanity check: this element should be ready to upgrade";
   ResetCustomElementReactionStackForTest reset_reaction_stack(
@@ -63,8 +69,9 @@ TEST_F(CustomElementDefinitionTest,
       "upgrade failure should clear the reaction queue"));
   reset_reaction_stack.Stack().EnqueueToBackupQueue(
       element, *MakeGarbageCollected<TestReaction>(std::move(commands)));
-  ConstructorFails definition(CustomElementDescriptor("a-a", "a-a"));
-  definition.Upgrade(element);
+  ConstructorFails* definition = MakeGarbageCollected<ConstructorFails>(
+      CustomElementDescriptor(AtomicString("a-a"), AtomicString("a-a")));
+  definition->Upgrade(element);
   EXPECT_EQ(CustomElementState::kFailed, element.GetCustomElementState())
       << "failing to construct should have set the 'failed' element state";
 }

@@ -7,28 +7,15 @@
 #include "base/check.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
+#include "base/time/time.h"
 
 namespace autofill {
-namespace {
-const base::Clock* g_autofill_clock = nullptr;
-}  // namespace
+
+const base::Clock* AutofillClock::test_clock_ = nullptr;
 
 // static
 base::Time AutofillClock::Now() {
-  if (!g_autofill_clock)
-    SetClock();
-  return g_autofill_clock->Now();
-}
-
-// static
-void AutofillClock::SetClock() {
-  g_autofill_clock = base::DefaultClock::GetInstance();
-}
-
-// static
-void AutofillClock::SetTestClock(const base::Clock* clock) {
-  DCHECK(clock);
-  g_autofill_clock = clock;
+  return (test_clock_ ? test_clock_ : base::DefaultClock::GetInstance())->Now();
 }
 
 }  // namespace autofill

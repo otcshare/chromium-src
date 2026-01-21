@@ -6,8 +6,7 @@
 
 #include "base/at_exit.h"
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -160,7 +159,7 @@ void HidService::RemoveDevice(const HidPlatformDeviceId& platform_device_id) {
   if (found_guid) {
     HID_LOG(USER) << "HID device removed: deviceId='" << platform_device_id
                   << "'";
-    DCHECK(base::Contains(devices_, *found_guid));
+    DCHECK(devices_.contains(*found_guid));
 
     scoped_refptr<HidDeviceInfo> device_info = devices_[*found_guid];
     if (enumeration_ready_) {
@@ -194,7 +193,7 @@ void HidService::FirstEnumerationComplete() {
   }
 }
 
-absl::optional<std::string> HidService::FindDeviceGuidInDeviceMap(
+std::optional<std::string> HidService::FindDeviceGuidInDeviceMap(
     const HidPlatformDeviceId& platform_device_id) {
   for (const auto& device_entry : devices_) {
     const auto& platform_device_map =
@@ -204,7 +203,7 @@ absl::optional<std::string> HidService::FindDeviceGuidInDeviceMap(
         return device_entry.first;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 scoped_refptr<HidDeviceInfo> HidService::FindSiblingDevice(

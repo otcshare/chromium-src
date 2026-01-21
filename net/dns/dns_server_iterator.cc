@@ -4,10 +4,11 @@
 
 #include "net/dns/dns_server_iterator.h"
 
+#include <optional>
+
 #include "base/time/time.h"
 #include "net/dns/dns_session.h"
 #include "net/dns/resolve_context.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 DnsServerIterator::DnsServerIterator(size_t nameservers_size,
@@ -21,7 +22,9 @@ DnsServerIterator::DnsServerIterator(size_t nameservers_size,
       max_failures_(max_failures),
       resolve_context_(resolve_context),
       next_index_(starting_index),
-      session_(session) {}
+      session_(session) {
+  CHECK(starting_index < nameservers_size || nameservers_size == 0);
+}
 
 DnsServerIterator::~DnsServerIterator() = default;
 
@@ -34,7 +37,7 @@ size_t DohDnsServerIterator::GetNextAttemptIndex() {
 
   // Check if the next index is available and hasn't hit its failure limit. If
   // not, try the next one and so on until we've tried them all.
-  absl::optional<size_t> least_recently_failed_index;
+  std::optional<size_t> least_recently_failed_index;
   base::TimeTicks least_recently_failed_time;
 
   size_t previous_index = next_index_;
@@ -108,7 +111,7 @@ size_t ClassicDnsServerIterator::GetNextAttemptIndex() {
 
   // Check if the next index is available and hasn't hit its failure limit. If
   // not, try the next one and so on until we've tried them all.
-  absl::optional<size_t> least_recently_failed_index;
+  std::optional<size_t> least_recently_failed_index;
   base::TimeTicks least_recently_failed_time;
 
   size_t previous_index = next_index_;

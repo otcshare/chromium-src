@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/web/modules/mediastream/media_stream_video_source.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
@@ -41,23 +42,21 @@ class MODULES_EXPORT MediaStreamRemoteVideoSource
 
   // MediaStreamVideoSource overrides.
   bool SupportsEncodedOutput() const override;
-  void RequestRefreshFrame() override;
+  void RequestKeyFrame() override;
   base::WeakPtr<MediaStreamVideoSource> GetWeakPtr() override;
 
  protected:
   // Implements MediaStreamVideoSource.
   void StartSourceImpl(
-      VideoCaptureDeliverFrameCB frame_callback,
-      EncodedVideoFrameCB encoded_frame_callback,
-      VideoCaptureCropVersionCB crop_version_callback) override;
+      MediaStreamVideoSourceCallbacks media_stream_callbacks) override;
   void StopSourceImpl() override;
   void OnEncodedSinkEnabled() override;
   void OnEncodedSinkDisabled() override;
 
   // Used by tests to test that a frame can be received and that the
   // MediaStreamRemoteVideoSource behaves as expected.
-  rtc::VideoSinkInterface<webrtc::VideoFrame>* SinkInterfaceForTesting();
-  rtc::VideoSinkInterface<webrtc::RecordableEncodedFrame>*
+  webrtc::VideoSinkInterface<webrtc::VideoFrame>* SinkInterfaceForTesting();
+  webrtc::VideoSinkInterface<webrtc::RecordableEncodedFrame>*
   EncodedSinkInterfaceForTesting();
 
  private:

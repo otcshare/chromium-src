@@ -6,15 +6,28 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
+#include "base/barrier_closure.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "components/attribution_reporting/data_host.mojom-blink.h"
+#include "components/attribution_reporting/os_registration.h"
+#include "components/attribution_reporting/registration_header_error.h"
+#include "components/attribution_reporting/source_registration.h"
+#include "components/attribution_reporting/suitable_origin.h"
+#include "components/attribution_reporting/trigger_registration.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/common/features.h"
@@ -33,8 +46,11 @@
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
+#include "third_party/blink/renderer/core/html/html_area_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
@@ -46,11 +62,16 @@
 #include "third_party/blink/renderer/platform/mediastream/media_stream_descriptor.h"
 #include "third_party/blink/renderer/platform/testing/empty_web_media_player.h"
 #include "third_party/blink/renderer/platform/testing/scoped_mocked_url.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory_impl.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
-#include "third_party/blink/renderer/platform/testing/weburl_loader_mock.h"
-#include "third_party/blink/renderer/platform/testing/weburl_loader_mock_factory_impl.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink.h"
 #include "ui/gfx/geometry/rect.h"
 
 using testing::Return;
@@ -104,34 +125,34 @@ class TestWebFrameClientImpl : public frame_test_helpers::TestWebFrameClient {
 
   void UpdateContextMenuDataForTesting(
       const ContextMenuData& data,
-      const absl::optional<gfx::Point>& host_context_menu_location) override {
+      const std::optional<gfx::Point>& host_context_menu_location) override {
     context_menu_data_ = data;
     host_context_menu_location_ = host_context_menu_location;
   }
 
-  WebMediaPlayer* CreateMediaPlayer(
+  std::unique_ptr<WebMediaPlayer> CreateMediaPlayer(
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*,
       blink::MediaInspectorContext*,
       WebMediaPlayerEncryptedMediaClient*,
       WebContentDecryptionModule*,
       const WebString& sink_id,
-      const cc::LayerTreeSettings& settings,
+      const cc::LayerTreeSettings* settings,
       scoped_refptr<base::TaskRunner> compositor_worker_task_runner) override {
-    return new MockWebMediaPlayerForContextMenu();
+    return std::make_unique<MockWebMediaPlayerForContextMenu>();
   }
 
   const ContextMenuData& GetContextMenuData() const {
     return context_menu_data_;
   }
 
-  const absl::optional<gfx::Point>& host_context_menu_location() const {
+  const std::optional<gfx::Point>& host_context_menu_location() const {
     return host_context_menu_location_;
   }
 
  private:
   ContextMenuData context_menu_data_;
-  absl::optional<gfx::Point> host_context_menu_location_;
+  std::optional<gfx::Point> host_context_menu_location_;
 };
 
 void RegisterMockedImageURLLoad(const String& url) {
@@ -140,6 +161,99 @@ void RegisterMockedImageURLLoad(const String& url) {
       test::CoreTestDataPath(kTestResourceFilename), kTestResourceMimeType);
 }
 
+class MockAttributionHost
+    : public mojom::blink::AttributionHost,
+      public attribution_reporting::mojom::blink::DataHost {
+ public:
+  explicit MockAttributionHost(blink::AssociatedInterfaceProvider* provider)
+      : provider_(provider), on_data_host_bound_(base::DoNothing()) {
+    provider_->OverrideBinderForTesting(
+        mojom::blink::AttributionHost::Name_,
+        BindRepeating(&MockAttributionHost::BindReceiver, Unretained(this)));
+  }
+
+  ~MockAttributionHost() override {
+    CHECK(provider_);
+    provider_->OverrideBinderForTesting(mojom::blink::AttributionHost::Name_,
+                                        base::NullCallback());
+  }
+
+  size_t NumBoundDataHosts() {
+    // Ensure that any pending disconnects have been propagated.
+    receiver_.FlushForTesting();
+    return data_hosts_.size();
+  }
+
+  void WaitUntilDataHostsBound(size_t expected) {
+    if (data_hosts_.size() >= expected) {
+      return;
+    }
+    base::RunLoop wait_loop;
+    on_data_host_bound_ = base::BarrierClosure(expected - data_hosts_.size(),
+                                               wait_loop.QuitClosure());
+    wait_loop.Run();
+  }
+
+ private:
+  // mojom::blink::AttributionHost:
+
+  void BindReceiver(mojo::ScopedInterfaceEndpointHandle handle) {
+    receiver_.Bind(
+        mojo::PendingAssociatedReceiver<mojom::blink::AttributionHost>(
+            std::move(handle)));
+  }
+
+  void RegisterDataHost(
+      mojo::PendingReceiver<attribution_reporting::mojom::blink::DataHost>,
+      attribution_reporting::mojom::RegistrationEligibility,
+      bool is_for_background_requests,
+      const Vector<scoped_refptr<const blink::SecurityOrigin>>&
+          reporting_origins) override {}
+
+  void RegisterNavigationDataHost(
+      mojo::PendingReceiver<attribution_reporting::mojom::blink::DataHost>
+          data_host,
+      const AttributionSrcToken&) override {
+    data_hosts_.Add(this, std::move(data_host));
+    on_data_host_bound_.Run();
+  }
+
+  void NotifyNavigationWithBackgroundRegistrationsWillStart(
+      const AttributionSrcToken&,
+      uint32_t expected_registrations) override {}
+
+  // attribution_reporting::mojom::blink::DataHost:
+
+  void SourceDataAvailable(
+      attribution_reporting::SuitableOrigin reporting_origin,
+      attribution_reporting::SourceRegistration,
+      bool was_fetched_via_serivce_worker) override {}
+
+  void TriggerDataAvailable(
+      attribution_reporting::SuitableOrigin reporting_origin,
+      attribution_reporting::TriggerRegistration,
+      bool was_fetched_via_serivce_worker) override {}
+
+  void OsSourceDataAvailable(
+      std::vector<attribution_reporting::OsRegistrationItem>,
+      bool was_fetched_via_serivce_worker) override {}
+
+  void OsTriggerDataAvailable(
+      std::vector<attribution_reporting::OsRegistrationItem>,
+      bool was_fetched_via_serivce_worker) override {}
+
+  void ReportRegistrationHeaderError(
+      attribution_reporting::SuitableOrigin reporting_origin,
+      attribution_reporting::RegistrationHeaderError) override {}
+
+  blink::AssociatedInterfaceProvider* provider_;
+  mojo::AssociatedReceiver<mojom::blink::AttributionHost> receiver_{this};
+
+  base::RepeatingClosure on_data_host_bound_;
+
+  mojo::ReceiverSet<attribution_reporting::mojom::blink::DataHost> data_hosts_;
+};
+
 }  // namespace
 
 template <>
@@ -147,15 +261,9 @@ struct DowncastTraits<ContextMenuControllerTestPlugin> {
   static bool AllowFrom(const WebPlugin& object) { return true; }
 };
 
-class ContextMenuControllerTest : public testing::Test,
-                                  public ::testing::WithParamInterface<bool> {
+class ContextMenuControllerTest : public testing::Test {
  public:
-  ContextMenuControllerTest() {
-    bool penetrating_image_selection_enabled = GetParam();
-    feature_list_.InitWithFeatureState(
-        features::kEnablePenetratingImageSelection,
-        penetrating_image_selection_enabled);
-  }
+  ContextMenuControllerTest() = default;
 
   void SetUp() override {
     web_view_helper_.Initialize(&web_frame_client_);
@@ -183,7 +291,7 @@ class ContextMenuControllerTest : public testing::Test,
   }
 
   bool ShowContextMenuForElement(Element* element, WebMenuSourceType source) {
-    const DOMRect* rect = element->getBoundingClientRect();
+    const DOMRect* rect = element->GetBoundingClientRect();
     PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                             LayoutUnit((rect->top() + rect->bottom()) / 2));
     ContextMenuAllowedScope context_menu_allowed_scope;
@@ -206,6 +314,8 @@ class ContextMenuControllerTest : public testing::Test,
     return web_frame_client_;
   }
 
+  TestWebFrameClientImpl& GetWebFrameClient() { return web_frame_client_; }
+
   void DurationChanged(HTMLVideoElement* video) { video->DurationChanged(); }
 
   void SetReadyState(HTMLVideoElement* video,
@@ -214,14 +324,13 @@ class ContextMenuControllerTest : public testing::Test,
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
   TestWebFrameClientImpl web_frame_client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
 };
 
-INSTANTIATE_TEST_SUITE_P(, ContextMenuControllerTest, ::testing::Bool());
-
-TEST_P(ContextMenuControllerTest, CopyFromPlugin) {
+TEST_F(ContextMenuControllerTest, CopyFromPlugin) {
   ContextMenuAllowedScope context_menu_allowed_scope;
   frame_test_helpers::LoadFrame(LocalMainFrame(), R"HTML(data:text/html,
   <html>
@@ -236,7 +345,7 @@ TEST_P(ContextMenuControllerTest, CopyFromPlugin) {
   Document* document = GetDocument();
   ASSERT_TRUE(IsA<HTMLDocument>(document));
 
-  Element* embed_element = document->getElementById("embed");
+  Element* embed_element = document->getElementById(AtomicString("embed"));
   ASSERT_TRUE(IsA<HTMLEmbedElement>(embed_element));
 
   auto* embedded =
@@ -293,10 +402,10 @@ TEST_P(ContextMenuControllerTest, CopyFromPlugin) {
       !!(context_menu_data.edit_flags & ContextMenuDataEditFlags::kCanCopy));
 }
 
-TEST_P(ContextMenuControllerTest, VideoNotLoaded) {
+TEST_F(ContextMenuControllerTest, VideoNotLoaded) {
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Make sure Picture-in-Picture is enabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(true);
@@ -315,7 +424,7 @@ TEST_P(ContextMenuControllerTest, VideoNotLoaded) {
               HasVideo())
       .WillRepeatedly(Return(false));
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -324,7 +433,7 @@ TEST_P(ContextMenuControllerTest, VideoNotLoaded) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kVideo,
             context_menu_data.media_type);
-  EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+  EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
 
   const Vector<std::pair<ContextMenuData::MediaFlags, bool>>
       expected_media_flags = {
@@ -350,10 +459,10 @@ TEST_P(ContextMenuControllerTest, VideoNotLoaded) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, VideoWithAudioOnly) {
+TEST_F(ContextMenuControllerTest, VideoWithAudioOnly) {
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Make sure Picture-in-Picture is enabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(true);
@@ -376,7 +485,7 @@ TEST_P(ContextMenuControllerTest, VideoWithAudioOnly) {
               HasAudio())
       .WillRepeatedly(Return(true));
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -385,7 +494,7 @@ TEST_P(ContextMenuControllerTest, VideoWithAudioOnly) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kAudio,
             context_menu_data.media_type);
-  EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+  EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
 
   const Vector<std::pair<ContextMenuData::MediaFlags, bool>>
       expected_media_flags = {
@@ -411,13 +520,13 @@ TEST_P(ContextMenuControllerTest, VideoWithAudioOnly) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, PictureInPictureEnabledVideoLoaded) {
+TEST_F(ContextMenuControllerTest, PictureInPictureEnabledVideoLoaded) {
   // Make sure Picture-in-Picture is enabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(true);
 
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Setup video element.
   Persistent<HTMLVideoElement> video =
@@ -433,7 +542,7 @@ TEST_P(ContextMenuControllerTest, PictureInPictureEnabledVideoLoaded) {
               HasVideo())
       .WillRepeatedly(Return(true));
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -442,7 +551,7 @@ TEST_P(ContextMenuControllerTest, PictureInPictureEnabledVideoLoaded) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kVideo,
             context_menu_data.media_type);
-  EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+  EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
 
   const Vector<std::pair<ContextMenuData::MediaFlags, bool>>
       expected_media_flags = {
@@ -468,13 +577,13 @@ TEST_P(ContextMenuControllerTest, PictureInPictureEnabledVideoLoaded) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, PictureInPictureDisabledVideoLoaded) {
+TEST_F(ContextMenuControllerTest, PictureInPictureDisabledVideoLoaded) {
   // Make sure Picture-in-Picture is disabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(false);
 
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Setup video element.
   Persistent<HTMLVideoElement> video =
@@ -490,7 +599,7 @@ TEST_P(ContextMenuControllerTest, PictureInPictureDisabledVideoLoaded) {
               HasVideo())
       .WillRepeatedly(Return(true));
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -499,7 +608,7 @@ TEST_P(ContextMenuControllerTest, PictureInPictureDisabledVideoLoaded) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kVideo,
             context_menu_data.media_type);
-  EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+  EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
 
   const Vector<std::pair<ContextMenuData::MediaFlags, bool>>
       expected_media_flags = {
@@ -525,7 +634,7 @@ TEST_P(ContextMenuControllerTest, PictureInPictureDisabledVideoLoaded) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, MediaStreamVideoLoaded) {
+TEST_F(ContextMenuControllerTest, MediaStreamVideoLoaded) {
   // Make sure Picture-in-Picture is enabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(true);
 
@@ -549,7 +658,7 @@ TEST_P(ContextMenuControllerTest, MediaStreamVideoLoaded) {
               HasVideo())
       .WillRepeatedly(Return(true));
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -583,13 +692,13 @@ TEST_P(ContextMenuControllerTest, MediaStreamVideoLoaded) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, InfiniteDurationVideoLoaded) {
+TEST_F(ContextMenuControllerTest, InfiniteDurationVideoLoaded) {
   // Make sure Picture-in-Picture is enabled.
   GetDocument()->GetSettings()->SetPictureInPictureEnabled(true);
 
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Setup video element.
   Persistent<HTMLVideoElement> video =
@@ -611,7 +720,7 @@ TEST_P(ContextMenuControllerTest, InfiniteDurationVideoLoaded) {
       .WillRepeatedly(Return(std::numeric_limits<double>::infinity()));
   DurationChanged(video.Get());
 
-  DOMRect* rect = video->getBoundingClientRect();
+  DOMRect* rect = video->GetBoundingClientRect();
   PhysicalOffset location(LayoutUnit((rect->left() + rect->right()) / 2),
                           LayoutUnit((rect->top() + rect->bottom()) / 2));
   EXPECT_TRUE(ShowContextMenu(location, kMenuSourceMouse));
@@ -620,7 +729,7 @@ TEST_P(ContextMenuControllerTest, InfiniteDurationVideoLoaded) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kVideo,
             context_menu_data.media_type);
-  EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+  EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
 
   const Vector<std::pair<ContextMenuData::MediaFlags, bool>>
       expected_media_flags = {
@@ -646,13 +755,13 @@ TEST_P(ContextMenuControllerTest, InfiniteDurationVideoLoaded) {
   }
 }
 
-TEST_P(ContextMenuControllerTest, HitTestVideoChildElements) {
+TEST_F(ContextMenuControllerTest, HitTestVideoChildElements) {
   // Test that hit tests on parts of a video element result in hits on the video
   // element itself as opposed to its child elements.
 
   ContextMenuAllowedScope context_menu_allowed_scope;
   HitTestResult hit_test_result;
-  const char video_url[] = "https://example.com/foo.webm";
+  AtomicString video_url("https://example.com/foo.webm");
 
   // Setup video element.
   Persistent<HTMLVideoElement> video =
@@ -660,7 +769,8 @@ TEST_P(ContextMenuControllerTest, HitTestVideoChildElements) {
   video->SetSrc(video_url);
   video->setAttribute(
       html_names::kStyleAttr,
-      "position: absolute; left: 0; top: 0; width: 200px; height: 200px");
+      AtomicString(
+          "position: absolute; left: 0; top: 0; width: 200px; height: 200px"));
   GetDocument()->body()->AppendChild(video);
   test::RunPendingTasks();
   SetReadyState(video.Get(), HTMLMediaElement::kHaveMetadata);
@@ -673,7 +783,7 @@ TEST_P(ContextMenuControllerTest, HitTestVideoChildElements) {
         GetWebFrameClient().GetContextMenuData();
     EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kVideo,
               context_menu_data.media_type);
-    EXPECT_EQ(video_url, context_menu_data.src_url.spec());
+    EXPECT_EQ(video_url, context_menu_data.src_url.spec().c_str());
   };
 
   // Center of video.
@@ -686,7 +796,7 @@ TEST_P(ContextMenuControllerTest, HitTestVideoChildElements) {
   check_location(PhysicalOffset(100, 195));
 }
 
-TEST_P(ContextMenuControllerTest, EditingActionsEnabledInSVGDocument) {
+TEST_F(ContextMenuControllerTest, EditingActionsEnabledInSVGDocument) {
   frame_test_helpers::LoadFrame(LocalMainFrame(), R"SVG(data:image/svg+xml,
     <svg xmlns='http://www.w3.org/2000/svg'
          xmlns:h='http://www.w3.org/1999/xhtml'
@@ -705,7 +815,7 @@ TEST_P(ContextMenuControllerTest, EditingActionsEnabledInSVGDocument) {
   Document* document = GetDocument();
   ASSERT_TRUE(document->IsSVGDocument());
 
-  Element* text_element = document->getElementById("t");
+  Element* text_element = document->getElementById(AtomicString("t"));
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   FrameSelection& selection = document->GetFrame()->Selection();
 
@@ -720,7 +830,7 @@ TEST_P(ContextMenuControllerTest, EditingActionsEnabledInSVGDocument) {
   EXPECT_EQ(context_menu_data.selected_text, "able tex");
 
   // <div contenteditable=true>
-  Element* editable_element = document->getElementById("e");
+  Element* editable_element = document->getElementById(AtomicString("e"));
   selection.SelectSubString(*editable_element, 0, 42);
   EXPECT_TRUE(ShowContextMenuForElement(editable_element, kMenuSourceMouse));
 
@@ -735,7 +845,7 @@ TEST_P(ContextMenuControllerTest, EditingActionsEnabledInSVGDocument) {
                 ContextMenuDataEditFlags::kCanEditRichly);
 }
 
-TEST_P(ContextMenuControllerTest, EditingActionsEnabledInXMLDocument) {
+TEST_F(ContextMenuControllerTest, EditingActionsEnabledInXMLDocument) {
   frame_test_helpers::LoadFrame(LocalMainFrame(), R"XML(data:text/xml,
     <root>
       <style xmlns="http://www.w3.org/1999/xhtml">
@@ -749,7 +859,7 @@ TEST_P(ContextMenuControllerTest, EditingActionsEnabledInXMLDocument) {
   ASSERT_TRUE(IsA<XMLDocument>(document));
   ASSERT_FALSE(IsA<HTMLDocument>(document));
 
-  Element* text_element = document->getElementById("t");
+  Element* text_element = document->getElementById(AtomicString("t"));
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   FrameSelection& selection = document->GetFrame()->Selection();
 
@@ -763,16 +873,16 @@ TEST_P(ContextMenuControllerTest, EditingActionsEnabledInXMLDocument) {
   EXPECT_EQ(context_menu_data.selected_text, "Blue text");
 }
 
-TEST_P(ContextMenuControllerTest, ShowNonLocatedContextMenuEvent) {
-  GetDocument()->documentElement()->setInnerHTML(
+TEST_F(ContextMenuControllerTest, ShowNonLocatedContextMenuEvent) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<input id='sample' type='text' size='5' value='Sample Input Text'>");
 
   Document* document = GetDocument();
-  Element* input_element = document->getElementById("sample");
+  Element* input_element = document->getElementById(AtomicString("sample"));
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
 
   // Select the 'Sample' of |input|.
-  DOMRect* rect = input_element->getBoundingClientRect();
+  DOMRect* rect = input_element->GetBoundingClientRect();
   WebGestureEvent gesture_event(
       WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
       base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
@@ -788,7 +898,7 @@ TEST_P(ContextMenuControllerTest, ShowNonLocatedContextMenuEvent) {
                           (rect->top() + rect->bottom()) / 2);
   LocalMainFrame()->MoveRangeSelectionExtent(middle_point);
   LocalMainFrame()->LocalRootFrameWidget()->ShowContextMenu(
-      ui::mojom::MenuSourceType::TOUCH_HANDLE, middle_point);
+      ui::mojom::blink::MenuSourceType::kTouchHandle, middle_point);
 
   context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_NE(context_menu_data.selected_text, "");
@@ -801,7 +911,7 @@ TEST_P(ContextMenuControllerTest, ShowNonLocatedContextMenuEvent) {
   LocalMainFrame()->MoveRangeSelectionExtent(
       gfx::Point(rect->right(), rect->bottom()));
   LocalMainFrame()->LocalRootFrameWidget()->ShowContextMenu(
-      ui::mojom::MenuSourceType::TOUCH_HANDLE,
+      ui::mojom::blink::MenuSourceType::kTouchHandle,
       gfx::Point(rect->right() / 2, rect->bottom() / 2));
 
   context_menu_data = GetWebFrameClient().GetContextMenuData();
@@ -810,14 +920,15 @@ TEST_P(ContextMenuControllerTest, ShowNonLocatedContextMenuEvent) {
 
 #if !BUILDFLAG(IS_MAC)
 // Mac has no way to open a context menu based on a keyboard event.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ValidateNonLocatedContextMenuOnLargeImageElement) {
-  GetDocument()->documentElement()->setInnerHTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<img src=\"http://example.test/cat.jpg\" id=\"sample_image\" "
       "width=\"200\" height=\"10000\" tabindex=\"-1\" />");
 
   Document* document = GetDocument();
-  Element* image_element = document->getElementById("sample_image");
+  Element* image_element =
+      document->getElementById(AtomicString("sample_image"));
   // Set focus on the image element.
   image_element->Focus();
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
@@ -840,17 +951,44 @@ TEST_P(ContextMenuControllerTest,
 }
 #endif
 
-TEST_P(ContextMenuControllerTest, SelectionRectClipped) {
-  GetDocument()->documentElement()->setInnerHTML(
+TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestSVGImageElement) {
+  RegisterMockedImageURLLoad("http://test.png");
+  Document* document = GetDocument();
+
+  ContextMenuAllowedScope context_menu_allowed_scope;
+  document->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <svg>
+      <image id="target" href="http://test.png" width="100" height="100"/>
+    </svg>
+  )HTML");
+
+  // Flush the image-loading microtask.
+  base::RunLoop().RunUntilIdle();
+
+  url_test_helpers::ServeAsynchronousRequests();
+
+  Element* image = document->getElementById(AtomicString("target"));
+  EXPECT_TRUE(ShowContextMenuForElement(image, kMenuSourceLongPress));
+
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ("http://test.png/", context_menu_data.src_url.spec());
+  EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kImage,
+            context_menu_data.media_type);
+  EXPECT_TRUE(context_menu_data.has_image_contents);
+}
+
+TEST_F(ContextMenuControllerTest, SelectionRectClipped) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<textarea id='text-area' cols=6 rows=2>Sample editable text</textarea>");
 
   Document* document = GetDocument();
-  Element* editable_element = document->getElementById("text-area");
+  Element* editable_element =
+      document->getElementById(AtomicString("text-area"));
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   FrameSelection& selection = document->GetFrame()->Selection();
 
   // Select the 'Sample' of |textarea|.
-  DOMRect* rect = editable_element->getBoundingClientRect();
+  DOMRect* rect = editable_element->GetBoundingClientRect();
   WebGestureEvent gesture_event(
       WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
       base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
@@ -903,79 +1041,17 @@ class MockEventListener final : public NativeEventListener {
   MOCK_METHOD2(Invoke, void(ExecutionContext*, Event*));
 };
 
-// Test that a basic image hit test works without penetration enabled.
-TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestStandardImageControl) {
-  if (base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
-  RegisterMockedImageURLLoad("http://test.png");
-  ContextMenuAllowedScope context_menu_allowed_scope;
-
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
-    <body>
-      <style>
-        #target {
-          top: 0;
-          left: 0;
-          position: absolute;
-          width: 100px;
-          height: 100px;
-          z-index: 1;
-        }
-      </style>
-      <img id=target src='http://test.png'>
-    </body>
-  )HTML");
-
-  base::HistogramTester histograms;
-
-  PhysicalOffset location(LayoutUnit(5), LayoutUnit(5));
-  EXPECT_TRUE(ShowContextMenu(location, kMenuSourceLongPress));
-
-  // Context menu info are sent to the WebLocalFrameClient.
-  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
-  EXPECT_EQ("http://test.png/", context_menu_data.src_url.spec());
-  // EXPECT_TRUE(context_menu_data.has_image_contents);
-  EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kImage,
-            context_menu_data.media_type);
-
-  // No histograms should be sent in the control group.
-  histograms.ExpectBucketCount(
-      "Blink.ContextMenu.ImageSelection.Outcome",
-      ContextMenuController::ImageSelectionOutcome::kImageFoundStandard, 0);
-  histograms.ExpectBucketCount(
-      "Blink.ContextMenu.ImageSelection.Outcome",
-      ContextMenuController::ImageSelectionOutcome::kImageFoundPenetrating, 0);
-  histograms.ExpectBucketCount(
-      "Blink.ContextMenu.ImageSelection.Outcome",
-      ContextMenuController::ImageSelectionOutcome::kBlockedByOpaqueNode, 0);
-  histograms.ExpectBucketCount(
-      "Blink.ContextMenu.ImageSelection.Outcome",
-      ContextMenuController::ImageSelectionOutcome::kFoundContextMenuListener,
-      0);
-  histograms.ExpectBucketCount(
-      "Blink.ContextMenu.ImageSelection.Outcome",
-      ContextMenuController::ImageSelectionOutcome::kBlockedByCrossFrameNode,
-      0);
-}
-
 // Test that a basic image hit test works and is no† impacted by
 // penetrating image selection logic.
-TEST_P(ContextMenuControllerTest,
-       ContextMenuImageHitTestStandardImageSelectionExperiment) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
-
+TEST_F(ContextMenuControllerTest,
+       ContextMenuImageHitTestStandardImageSelection) {
   String url = "http://test.png";
   LOG(ERROR) << "URL IS: " << url.Utf8().c_str();
   RegisterMockedImageURLLoad(url);
 
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1023,15 +1099,11 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that image selection can penetrate through a fully transparent div
 // above the target image.
-TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestSucceededPenetrating) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
+TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestSucceededPenetrating) {
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1088,14 +1160,10 @@ TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestSucceededPenetrating) {
 
 // Test that a basic image hit test works and is no† impacted by
 // penetrating image selection logic.
-TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestStandardCanvas) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
+TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestStandardCanvas) {
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1142,15 +1210,11 @@ TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestStandardCanvas) {
 
 // Test that  an image node will not be selected through an opaque div
 // above the target image.
-TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestOpaqueNodeBlocking) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
+TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestOpaqueNodeBlocking) {
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1218,16 +1282,12 @@ TEST_P(ContextMenuControllerTest, ContextMenuImageHitTestOpaqueNodeBlocking) {
 // Test that an image node will not be selected if a node with a context menu
 // listener is above the image node, but that we will still log the presence of
 // the image.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageHitTestContextMenuListenerAboveImageBlocking) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1265,7 +1325,7 @@ TEST_P(ContextMenuControllerTest,
       MakeGarbageCollected<MockEventListener>();
   base::HistogramTester histograms;
 
-  Element* target_image = GetDocument()->getElementById("target");
+  Element* target_image = GetDocument()->getElementById(AtomicString("target"));
   target_image->addEventListener(event_type_names::kContextmenu,
                                  event_listener);
 
@@ -1298,16 +1358,12 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that an image node will not be selected if the image node itself has a
 // context menu listener on it (and the image node is not the topmost element)
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageHitTestContextMenuListenerOnImageBlocking) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1337,7 +1393,7 @@ TEST_P(ContextMenuControllerTest,
       MakeGarbageCollected<MockEventListener>();
   base::HistogramTester histograms;
 
-  Element* target_image = GetDocument()->getElementById("target");
+  Element* target_image = GetDocument()->getElementById(AtomicString("target"));
   target_image->addEventListener(event_type_names::kContextmenu,
                                  event_listener);
 
@@ -1370,16 +1426,12 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that an image node will be selected if the image node itself has an
 // unrelated event listener on it.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageHitTestNonBlockingNonContextMenuListenerOnImage) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1408,7 +1460,7 @@ TEST_P(ContextMenuControllerTest,
       MakeGarbageCollected<MockEventListener>();
   base::HistogramTester histograms;
 
-  Element* target_image = GetDocument()->getElementById("target");
+  Element* target_image = GetDocument()->getElementById(AtomicString("target"));
   target_image->addEventListener(event_type_names::kClick, event_listener);
 
   PhysicalOffset location(LayoutUnit(5), LayoutUnit(5));
@@ -1440,16 +1492,12 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that an image node will still be selected if it is the topmost node
 // despite an ancestor having a context menu listener attached to it.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageHitTestStandardContextMenuListenerAncestorNonBlocking) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #hiddenancestor {
@@ -1479,7 +1527,8 @@ TEST_P(ContextMenuControllerTest,
       MakeGarbageCollected<MockEventListener>();
   base::HistogramTester histograms;
 
-  Element* hidden_ancestor = GetDocument()->getElementById("hiddenancestor");
+  Element* hidden_ancestor =
+      GetDocument()->getElementById(AtomicString("hiddenancestor"));
   hidden_ancestor->addEventListener(event_type_names::kContextmenu,
                                     event_listener);
 
@@ -1514,16 +1563,12 @@ TEST_P(ContextMenuControllerTest,
 // Test that an image node will not be selected if a non image node with a
 // context listener ancestor is above it and verify that topmost context menu
 // listener special logic only applies if the topmost node is an image.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageHitTestContextMenuListenerAncestorBlocking) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1562,7 +1607,8 @@ TEST_P(ContextMenuControllerTest,
       MakeGarbageCollected<MockEventListener>();
   base::HistogramTester histograms;
 
-  Element* hidden_ancestor = GetDocument()->getElementById("hiddenancestor");
+  Element* hidden_ancestor =
+      GetDocument()->getElementById(AtomicString("hiddenancestor"));
   hidden_ancestor->addEventListener(event_type_names::kContextmenu,
                                     event_listener);
 
@@ -1595,15 +1641,11 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that an image node is successfully cached and retrieved in the common
 // case.
-TEST_P(ContextMenuControllerTest, ContextMenuImageRetrievalCachedImageFound) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
+TEST_F(ContextMenuControllerTest, ContextMenuImageRetrievalCachedImageFound) {
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1654,16 +1696,12 @@ TEST_P(ContextMenuControllerTest, ContextMenuImageRetrievalCachedImageFound) {
 
 // Test that an image node is not successfully retrieved if a hit test was never
 // conducted.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageRetrievalCachedImageNotFound) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1712,16 +1750,12 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that the retrieved image node is null if another hit test has been
 // conducted in the same controller before the retrieval occurred.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageRetrievalAfterCachedImageReset) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1776,16 +1810,12 @@ TEST_P(ContextMenuControllerTest,
 
 // Test that the retrieved image node is null if the retrieval frame is
 // different than the one used in the initial context menu image selection.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        ContextMenuImageRetrievalCachedImageCrossFrame) {
-  if (!base::FeatureList::IsEnabled(
-          features::kEnablePenetratingImageSelection)) {
-    return;
-  }
   RegisterMockedImageURLLoad("http://test.png");
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <style>
         #target {
@@ -1835,7 +1865,7 @@ TEST_P(ContextMenuControllerTest,
       1);
 }
 
-TEST_P(ContextMenuControllerTest, OpenedFromHighlight) {
+TEST_F(ContextMenuControllerTest, AnnotationType) {
   WebURL url = url_test_helpers::ToKURL("http://www.test.com/");
   frame_test_helpers::LoadHTMLString(LocalMainFrame(),
                                      R"(<html><head><style>body
@@ -1844,6 +1874,8 @@ TEST_P(ContextMenuControllerTest, OpenedFromHighlight) {
       <p id="two">This is a test page two</p>
       <p id="three">This is a test page three</p>
       <p id="four">This is a test page four</p>
+      <p id="five">This is a test page five</p>
+      <p id="six">This is a test page six</p>
       </html>
       )",
                                      url);
@@ -1851,50 +1883,95 @@ TEST_P(ContextMenuControllerTest, OpenedFromHighlight) {
   Document* document = GetDocument();
   ASSERT_TRUE(IsA<HTMLDocument>(document));
 
-  Element* first_element = document->getElementById("one");
-  Element* middle_element = document->getElementById("one");
-  Element* third_element = document->getElementById("three");
-  Element* last_element = document->getElementById("four");
+  Element* first_element = document->getElementById(AtomicString("one"));
+  Element* second_element = document->getElementById(AtomicString("one"));
+  Element* third_element = document->getElementById(AtomicString("three"));
+  Element* fourth_element = document->getElementById(AtomicString("four"));
+  Element* fifth_element = document->getElementById(AtomicString("five"));
+  Element* last_element = document->getElementById(AtomicString("six"));
 
   // Install a text fragment marker from the beginning of <p> one to near the
-  // end of <p> three.
+  // end of <p> four.
   EphemeralRange dom_range =
       EphemeralRange(Position(first_element->firstChild(), 0),
-                     Position(third_element->firstChild(), 22));
+                     Position(fourth_element->firstChild(), 21));
   document->Markers().AddTextFragmentMarker(dom_range);
+
+  // Install a glic marker from the beginning of <p> four to near the end of
+  // of <p> five.
+  dom_range = EphemeralRange(Position(fourth_element->firstChild(), 0),
+                             Position(fifth_element->firstChild(), 21));
+  document->Markers().AddGlicMarker(dom_range);
+
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
 
   // Opening the context menu from the last <p> should not set
-  // |opened_from_highlight|.
+  // `annotation_type`.
   EXPECT_TRUE(ShowContextMenuForElement(last_element, kMenuSourceMouse));
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
-  EXPECT_FALSE(context_menu_data.opened_from_highlight);
+  EXPECT_EQ(context_menu_data.annotation_type, std::nullopt);
 
-  // Opening the context menu from the second <p> should set
-  // |opened_from_highlight|.
-  EXPECT_TRUE(ShowContextMenuForElement(middle_element, kMenuSourceMouse));
+  // Opening the context menu from the second <p> should set `annotation_type`.
+  EXPECT_TRUE(ShowContextMenuForElement(second_element, kMenuSourceMouse));
   context_menu_data = GetWebFrameClient().GetContextMenuData();
-  EXPECT_TRUE(context_menu_data.opened_from_highlight);
+  EXPECT_EQ(context_menu_data.annotation_type,
+            mojom::AnnotationType::kSharedHighlight);
 
   // Opening the context menu from the middle of the third <p> should set
-  // |opened_from_highlight|.
+  // `annotation_type`.
   EXPECT_TRUE(ShowContextMenuForElement(third_element, kMenuSourceMouse));
   context_menu_data = GetWebFrameClient().GetContextMenuData();
-  EXPECT_TRUE(context_menu_data.opened_from_highlight);
+  EXPECT_EQ(context_menu_data.annotation_type,
+            mojom::AnnotationType::kSharedHighlight);
+
+  // Opening the context menu from fifth <p> should set `annotation_type` to
+  // kGlic.
+  EXPECT_TRUE(ShowContextMenuForElement(fifth_element, kMenuSourceMouse));
+  context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data.annotation_type, mojom::AnnotationType::kGlic);
+
+  // Opening the context menu from fourth <p> should set `annotation_type` to
+  // kGlic (even though there's also an overlapping annotation of type
+  // kSharedHighlight).
+  EXPECT_TRUE(ShowContextMenuForElement(fourth_element, kMenuSourceMouse));
+  context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data.annotation_type, mojom::AnnotationType::kGlic);
+}
+
+TEST_F(ContextMenuControllerTest, SelectAllEnabledForEditContext) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <body>
+      <div id=target>123</div>
+    </body>
+  )HTML");
+  Element* target = GetDocument()->getElementById(AtomicString("target"));
+  // Attach `EditContext` to the target.
+  Element* script = GetDocument()->CreateRawElement(html_names::kScriptTag);
+  script->SetInnerHTMLWithoutTrustedTypes(
+      "document.getElementById('target').editContext = new EditContext()");
+  GetDocument()->body()->AppendChild(script);
+  target->Focus();
+
+  EXPECT_TRUE(target->editContext());
+  EXPECT_TRUE(ShowContextMenuForElement(target, kMenuSourceMouse));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_TRUE(!!(context_menu_data.edit_flags &
+                 ContextMenuDataEditFlags::kCanSelectAll));
 }
 
 // Test that opening context menu with keyboard does not change text selection.
-TEST_P(ContextMenuControllerTest,
+TEST_F(ContextMenuControllerTest,
        KeyboardTriggeredContextMenuPreservesSelection) {
   ContextMenuAllowedScope context_menu_allowed_scope;
 
-  GetDocument()->documentElement()->setInnerHTML(R"HTML(
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <body>
       <p id='first'>This is a sample text."</p>
     </body>
   )HTML");
 
-  Node* first_paragraph = GetDocument()->getElementById("first")->firstChild();
+  Node* first_paragraph =
+      GetDocument()->getElementById(AtomicString("first"))->firstChild();
   const auto& selected_start = Position(first_paragraph, 5);
   const auto& selected_end = Position(first_paragraph, 9);
 
@@ -1911,7 +1988,7 @@ TEST_P(ContextMenuControllerTest,
   EXPECT_EQ(GetDocument()->GetFrame()->Selection().SelectedText(), "is a");
 }
 
-TEST_P(ContextMenuControllerTest, CheckRendererIdFromContextMenuOnTextField) {
+TEST_F(ContextMenuControllerTest, CheckRendererIdFromContextMenuOnTextField) {
   WebURL url = url_test_helpers::ToKURL("http://www.test.com/");
   frame_test_helpers::LoadHTMLString(LocalMainFrame(),
                                      R"(<html><head><style>body
@@ -1935,41 +2012,38 @@ TEST_P(ContextMenuControllerTest, CheckRendererIdFromContextMenuOnTextField) {
   ASSERT_TRUE(IsA<HTMLDocument>(document));
 
   // field_id, is_form_renderer_id_present, is_field_renderer_id_present,
-  // input_field_type
+  // form_control_type
   std::vector<std::tuple<AtomicString, bool, bool,
-                         mojom::ContextMenuDataInputFieldType>>
-      expectations = {
-          // Input Text Field
-          {"name", true, true,
-           mojom::ContextMenuDataInputFieldType::kPlainText},
-          // Text Area Field
-          {"address", true, true,
-           mojom::ContextMenuDataInputFieldType::kPlainText},
-          // Non form element
-          {"one", false, false, mojom::ContextMenuDataInputFieldType::kNone},
-          // Formless Input field
-          {"two", false, true,
-           mojom::ContextMenuDataInputFieldType::kPlainText},
-          // Formless text area field
-          {"three", false, true,
-           mojom::ContextMenuDataInputFieldType::kPlainText}};
+                         std::optional<mojom::FormControlType>>>
+      expectations = {// Input Text Field
+                      {AtomicString("name"), true, true,
+                       mojom::FormControlType::kInputText},
+                      // Text Area Field
+                      {AtomicString("address"), true, true,
+                       mojom::FormControlType::kTextArea},
+                      // Non form element
+                      {AtomicString("one"), false, false, std::nullopt},
+                      // Formless Input field
+                      {AtomicString("two"), false, true,
+                       mojom::FormControlType::kInputText},
+                      // Formless text area field
+                      {AtomicString("three"), false, true,
+                       mojom::FormControlType::kTextArea}};
 
   for (const auto& expectation : expectations) {
     auto [field_id, is_form_renderer_id_present, is_field_renderer_id_present,
-          input_field_type] = expectation;
+          form_control_type] = expectation;
     Element* form_element = document->getElementById(field_id);
     EXPECT_TRUE(ShowContextMenuForElement(form_element, kMenuSourceMouse));
     ContextMenuData context_menu_data =
         GetWebFrameClient().GetContextMenuData();
-    EXPECT_EQ(context_menu_data.form_renderer_id.has_value(),
+    EXPECT_EQ(context_menu_data.form_renderer_id != 0,
               is_form_renderer_id_present);
-    EXPECT_EQ(context_menu_data.field_renderer_id.has_value(),
-              is_field_renderer_id_present);
-    EXPECT_EQ(context_menu_data.input_field_type, input_field_type);
+    EXPECT_EQ(context_menu_data.form_control_type, form_control_type);
   }
 }
 
-TEST_P(ContextMenuControllerTest, AttributionSrc) {
+TEST_F(ContextMenuControllerTest, AttributionSrc) {
   // The context must be secure for attributionsrc to work at all.
   frame_test_helpers::LoadHTMLString(
       LocalMainFrame(), R"(<html><body>)",
@@ -2021,7 +2095,6 @@ TEST_P(ContextMenuControllerTest, AttributionSrc) {
       {
           .href = kInsecureURL,
           .attributionsrc = kSecureURL,
-          // TODO(crbug.com/1381123): This should be false.
           .impression_expected = true,
       },
       {
@@ -2046,56 +2119,157 @@ TEST_P(ContextMenuControllerTest, AttributionSrc) {
       },
   };
 
-  for (const auto& test_case : kTestCases) {
-    absl::optional<blink::test::ScopedMockedURLLoad> load;
-    if (test_case.attributionsrc == kSecureURL) {
-      // TODO(crbug.com/1381123): Remove this once the background attributionsrc
-      // request is made on the navigation, not context-menu creation.
-      load.emplace(url_test_helpers::ToKURL(kSecureURL),
-                   test::CoreTestDataPath("foo.html"));
-    }
+  for (bool use_anchor : {true, false}) {
+    for (const auto& test_case : kTestCases) {
+      Persistent<HTMLAnchorElementBase> anchor;
+      if (use_anchor) {
+        anchor = MakeGarbageCollected<HTMLAnchorElement>(*GetDocument());
+      } else {
+        anchor = MakeGarbageCollected<HTMLAreaElement>(*GetDocument());
+      }
 
-    Persistent<HTMLAnchorElement> anchor =
-        MakeGarbageCollected<HTMLAnchorElement>(*GetDocument());
-    anchor->setInnerText("abc");
+      anchor->setInnerText("abc");
 
-    if (test_case.href)
-      anchor->SetHref(test_case.href);
+      if (test_case.href) {
+        anchor->SetHref(AtomicString(test_case.href));
+      }
 
-    if (test_case.attributionsrc) {
-      anchor->setAttribute(html_names::kAttributionsrcAttr,
-                           test_case.attributionsrc);
-    }
+      if (test_case.attributionsrc) {
+        anchor->setAttribute(html_names::kAttributionsrcAttr,
+                             AtomicString(test_case.attributionsrc));
+      }
 
-    GetDocument()->body()->AppendChild(anchor);
-    ASSERT_TRUE(ShowContextMenuForElement(anchor, kMenuSourceMouse));
+      GetPage()->SetAttributionSupport(
+          network::mojom::AttributionSupport::kWeb);
 
-    url_test_helpers::ServeAsynchronousRequests();
+      GetDocument()->body()->AppendChild(anchor);
+      ASSERT_TRUE(ShowContextMenuForElement(anchor, kMenuSourceMouse));
 
-    ContextMenuData context_menu_data =
-        GetWebFrameClient().GetContextMenuData();
+      ContextMenuData context_menu_data =
+          GetWebFrameClient().GetContextMenuData();
 
-    EXPECT_EQ(context_menu_data.impression.has_value(),
-              test_case.impression_expected);
-    if (context_menu_data.impression.has_value()) {
-      EXPECT_EQ(context_menu_data.impression->nav_type,
-                mojom::blink::AttributionNavigationType::kContextMenu);
+      EXPECT_EQ(context_menu_data.impression.has_value(),
+                test_case.impression_expected);
     }
   }
 }
 
-// TODO(crbug.com/1184996): Add additional unit test for blocking frame logging.
+TEST_F(ContextMenuControllerTest, AttributionSrc_DataHostLifetime) {
+  // The context must be secure for attributionsrc to work at all.
+  frame_test_helpers::LoadHTMLString(
+      LocalMainFrame(), R"(<html><body>)",
+      url_test_helpers::ToKURL("https://test.com/"));
 
-class ContextMenuControllerRemoteParentFrameTest
-    : public testing::Test,
-      public ::testing::WithParamInterface<bool> {
- public:
-  ContextMenuControllerRemoteParentFrameTest() {
-    bool penetrating_image_selection_enabled = GetParam();
-    feature_list_.InitWithFeatureState(
-        features::kEnablePenetratingImageSelection,
-        penetrating_image_selection_enabled);
+  Persistent<HTMLAnchorElement> anchor =
+      MakeGarbageCollected<HTMLAnchorElement>(*GetDocument());
+  anchor->setInnerText("abc");
+
+  anchor->SetHref(AtomicString("https://a.com/"));
+
+  anchor->setAttribute(html_names::kAttributionsrcAttr,
+                       AtomicString("https://b.com/ https://c.com/"));
+
+  GetPage()->SetAttributionSupport(network::mojom::AttributionSupport::kWeb);
+
+  GetDocument()->body()->AppendChild(anchor);
+
+  enum CloseMechanism {
+    kContextMenuClosedInvalidNavigationUrl,
+    kContextMenuClosedValidNavigationUrl,
+    kClearContextMenu,
+  };
+
+  for (CloseMechanism close_mechanism :
+       {kContextMenuClosedInvalidNavigationUrl,
+        kContextMenuClosedValidNavigationUrl, kClearContextMenu}) {
+    SCOPED_TRACE(close_mechanism);
+
+    MockAttributionHost host(
+        GetWebFrameClient().GetRemoteNavigationAssociatedInterfaces());
+
+    ASSERT_TRUE(ShowContextMenuForElement(anchor, kMenuSourceMouse));
+
+    // https://b.com/ and https://c.com/ should share a single data host.
+    host.WaitUntilDataHostsBound(/*expected=*/1);
+
+    ContextMenuData context_menu_data =
+        GetWebFrameClient().GetContextMenuData();
+
+    ASSERT_TRUE(context_menu_data.impression.has_value());
+
+    switch (close_mechanism) {
+      case kContextMenuClosedInvalidNavigationUrl:
+        GetPage()->GetContextMenuController().ContextMenuClosed(
+            KURL(), context_menu_data.impression);
+        EXPECT_EQ(host.NumBoundDataHosts(), 0u);
+        break;
+      case kContextMenuClosedValidNavigationUrl:
+        RegisterMockedImageURLLoad("https://b.com/");
+        RegisterMockedImageURLLoad("https://c.com/");
+
+        GetPage()->GetContextMenuController().ContextMenuClosed(
+            url_test_helpers::ToKURL("https://d.com/"),
+            context_menu_data.impression);
+
+        // The data host should remain bound because it will be used to handle
+        // responses from https://b.com/ and https://c.com/.
+        EXPECT_EQ(host.NumBoundDataHosts(), 1u);
+
+        // Flush the image-loading microtasks to prevent DCHECK failure on test
+        // exit.
+        base::RunLoop().RunUntilIdle();
+        url_test_helpers::ServeAsynchronousRequests();
+        break;
+      case kClearContextMenu:
+        GetPage()->GetContextMenuController().ClearContextMenu();
+        EXPECT_EQ(host.NumBoundDataHosts(), 0u);
+        break;
+    }
   }
+}
+
+// Test that if text selection contains unselectable content, the opened context
+// menu should omit the unselectable content.
+TEST_F(ContextMenuControllerTest, SelectUnselectableContent) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <body>
+      <p id="test">A <span style="user-select:none;">test_none <span>test_span
+        </span><span style="user-select:all;">test_all</span></span> B</p>
+    </body>
+  )HTML");
+
+  Document* document = GetDocument();
+  Element* element = document->getElementById(AtomicString("test"));
+
+  // Select text, which has nested unselectable and selectable content.
+  const auto& start = Position(element->firstChild(), 0);
+  const auto& end = Position(element->lastChild(), 2);
+  document->GetFrame()->Selection().SetSelection(
+      SelectionInDOMTree::Builder().SetBaseAndExtent(start, end).Build(),
+      SetSelectionOptions());
+
+  // The context menu should omit the unselectable content from the selected
+  // text.
+  EXPECT_TRUE(ShowContextMenuForElement(element, kMenuSourceMouse));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data.selected_text, "A test_all B");
+}
+
+// http://crbug.com/447973114
+TEST_F(ContextMenuControllerTest, FileInputSelectAllShowsContextMenuNoCrash) {
+  Document* document = GetDocument();
+  document->documentElement()->SetInnerHTMLWithoutTrustedTypes(
+      "<input type=file id=test>");
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  document->GetFrame()->Selection().SelectAll();
+  Element* element = document->getElementById(AtomicString("test"));
+  // Passed without crashing.
+  EXPECT_TRUE(ShowContextMenuForElement(element, kMenuSourceMouse));
+}
+
+class ContextMenuControllerRemoteParentFrameTest : public testing::Test {
+ public:
+  ContextMenuControllerRemoteParentFrameTest() = default;
 
   void SetUp() override {
     web_view_helper_.InitializeRemote();
@@ -2117,7 +2291,7 @@ class ContextMenuControllerRemoteParentFrameTest
 
   void ShowContextMenu(const gfx::Point& point) {
     child_frame_->LocalRootFrameWidget()->ShowContextMenu(
-        ui::mojom::MenuSourceType::MOUSE, point);
+        ui::mojom::blink::MenuSourceType::kMouse, point);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -2126,24 +2300,154 @@ class ContextMenuControllerRemoteParentFrameTest
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
   TestWebFrameClientImpl child_web_frame_client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
   Persistent<WebLocalFrameImpl> child_frame_;
 };
 
-INSTANTIATE_TEST_SUITE_P(,
-                         ContextMenuControllerRemoteParentFrameTest,
-                         ::testing::Bool());
-
-TEST_P(ContextMenuControllerRemoteParentFrameTest, ShowContextMenuInChild) {
+TEST_F(ContextMenuControllerRemoteParentFrameTest, ShowContextMenuInChild) {
   const gfx::Point kPoint(123, 234);
   ShowContextMenu(kPoint);
 
-  const absl::optional<gfx::Point>& host_context_menu_location =
+  const std::optional<gfx::Point>& host_context_menu_location =
       child_web_frame_client().host_context_menu_location();
   ASSERT_TRUE(host_context_menu_location.has_value());
   EXPECT_EQ(kPoint, host_context_menu_location.value());
+}
+
+class InterestForTouchscreenTest : public ContextMenuControllerTest {};
+
+TEST_F(InterestForTouchscreenTest, NoInterestFor) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"(
+    <button id=button>Button</button>
+    <a id=link>Link</a>
+    <div id=plain interestfor=popover>Plain div</button>
+    <div popover id=popover>Popover</div>
+    )");
+  Document* document = GetDocument();
+  Element* button = document->getElementById(AtomicString("button"));
+  Element* link = document->getElementById(AtomicString("link"));
+  Element* div = document->getElementById(AtomicString("plain"));
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+  // Long-press the button
+  gfx::PointF gesture_location = button->GetBoundingClientRect()->Center();
+  WebGestureEvent gesture_event(
+      WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
+  gesture_event.SetPositionInWidget(gesture_location);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(gesture_event, ui::LatencyInfo()));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_FALSE(context_menu_data.opened_from_interest_for);
+
+  // Long-press the link with interestfor
+  gesture_location = link->GetBoundingClientRect()->Center();
+  WebGestureEvent gesture_event_link(
+      WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
+  gesture_event_link.SetPositionInWidget(gesture_location);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(gesture_event_link, ui::LatencyInfo()));
+  ContextMenuData context_menu_data_link =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_FALSE(context_menu_data_link.opened_from_interest_for);
+
+  // Long-press the plain div with interestfor
+  gesture_location = div->GetBoundingClientRect()->Center();
+  WebGestureEvent gesture_event_div(
+      WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
+  gesture_event_div.SetPositionInWidget(gesture_location);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(gesture_event_div, ui::LatencyInfo()));
+  ContextMenuData context_menu_data_div =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_FALSE(context_menu_data_div.opened_from_interest_for);
+}
+
+TEST_F(InterestForTouchscreenTest, ButtonWithInterestFor) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"(
+    <button interestfor=target id=button type=button>Button</button>
+    <div id=target>Target</div>
+    )");
+  Document* document = GetDocument();
+  Element* button = document->getElementById(AtomicString("button"));
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(button->GetInterestState(), Element::InterestState::kNoInterest);
+
+  // Long-press the button
+  gfx::PointF gesture_location = button->GetBoundingClientRect()->Center();
+  WebGestureEvent gesture_event(
+      WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
+  gesture_event.SetPositionInWidget(gesture_location);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(gesture_event, ui::LatencyInfo()));
+
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_TRUE(context_menu_data.opened_from_interest_for);
+  EXPECT_EQ(context_menu_data.link_text, "");
+  EXPECT_EQ(context_menu_data.selected_text, "");
+  EXPECT_EQ(context_menu_data.source_type,
+            WebMenuSourceType::kMenuSourceLongPress);
+  // Interest is shown immediately for buttons.
+  EXPECT_EQ(button->GetInterestState(), Element::InterestState::kFullInterest);
+
+  // Now simulate the pointerup that happens when the touch is released - this
+  // should not lose interest.
+  WebPointerEvent pointerup_event(
+      WebInputEvent::Type::kPointerUp,
+      WebPointerProperties(1, WebPointerProperties::PointerType::kTouch,
+                           WebPointerProperties::Button::kLeft,
+                           gesture_location, gesture_location),
+      1.0f, 1.0f);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(pointerup_event, ui::LatencyInfo()));
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(button->GetInterestState(), Element::InterestState::kFullInterest);
+}
+
+TEST_F(InterestForTouchscreenTest, LinkWithInterestFor) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"(
+    <a href="foo.html" interestfor=target id=link>Link</a>
+    <div target id=target popover>Target</div>
+
+    <!-- Without this, the bounding client rect of `<a id=link>` is 8,8 1.89062x1 -->
+    <style> a {display:block; width: 50px; height: 20px;} </style>
+    )");
+  Document* document = GetDocument();
+  Element* link = document->getElementById(AtomicString("link"));
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
+
+  // Long-press the link
+  gfx::PointF gesture_location = link->GetBoundingClientRect()->Center();
+  WebGestureEvent gesture_event(
+      WebInputEvent::Type::kGestureLongPress, WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now(), WebGestureDevice::kTouchscreen);
+  gesture_event.SetPositionInWidget(gesture_location);
+  GetWebView()->MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(gesture_event, ui::LatencyInfo()));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_TRUE(context_menu_data.opened_from_interest_for);
+  EXPECT_EQ(context_menu_data.link_text, "Link");
+  EXPECT_EQ(context_menu_data.selected_text, "");
+  EXPECT_EQ(context_menu_data.source_type,
+            WebMenuSourceType::kMenuSourceLongPress);
+  EXPECT_FALSE(context_menu_data.form_control_type.has_value());
+  // Interest is *not* shown immediately for links, because the context menu
+  // shows up.
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
+
+  // Simulate choosing the "Show details" context menu item
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
+  link->ShowInterestNow();
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kFullInterest);
 }
 
 }  // namespace blink

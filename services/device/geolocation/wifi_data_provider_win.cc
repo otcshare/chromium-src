@@ -5,18 +5,17 @@
 #include "services/device/geolocation/wifi_data_provider_win.h"
 
 #include <windows.h>
+
 #include <winioctl.h>
 #include <wlanapi.h>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/memory/free_deleter.h"
-#include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/win/windows_version.h"
+#include "base/win/win_util.h"
 #include "services/device/geolocation/wifi_data_provider_common.h"
 #include "services/device/geolocation/wifi_data_provider_common_win.h"
 #include "services/device/geolocation/wifi_data_provider_handle.h"
+#include "services/device/public/mojom/geolocation_internals.mojom.h"
 
 namespace device {
 
@@ -57,15 +56,11 @@ typedef DWORD(WINAPI* WlanCloseHandleFunction)(HANDLE hClientHandle,
                                                PVOID pReserved);
 
 // Extracts data for an access point and converts to AccessPointData.
-AccessPointData GetNetworkData(const WLAN_BSS_ENTRY& bss_entry) {
-  AccessPointData access_point_data;
-  // Currently we get only MAC address, signal strength and SSID.
-  access_point_data.mac_address = MacAddressAsString16(bss_entry.dot11Bssid);
+mojom::AccessPointData GetNetworkData(const WLAN_BSS_ENTRY& bss_entry) {
+  mojom::AccessPointData access_point_data;
+  // Currently we get only MAC address and signal strength.
+  access_point_data.mac_address = MacAddressAsString(bss_entry.dot11Bssid);
   access_point_data.radio_signal_strength = bss_entry.lRssi;
-  // bss_entry.dot11Ssid.ucSSID is not null-terminated.
-  base::UTF8ToUTF16(reinterpret_cast<const char*>(bss_entry.dot11Ssid.ucSSID),
-                    static_cast<ULONG>(bss_entry.dot11Ssid.uSSIDLength),
-                    &access_point_data.ssid);
 
   // TODO(steveblock): Is it possible to get the following?
   // access_point_data.signal_to_noise
@@ -88,7 +83,9 @@ class WindowsWlanApi : public WifiDataProviderCommon::WlanApiInterface {
   ~WindowsWlanApi() override;
 
   // WlanApiInterface implementation
-  bool GetAccessPointData(WifiData::AccessPointDataSet* data) override;
+  void GetAccessPointData(
+      base::OnceCallback<void(std::unique_ptr<WifiData::AccessPointDataSet>)>
+          callback) override;
 
  private:
   bool GetInterfaceDataWLAN(HANDLE wlan_handle,
@@ -108,12 +105,18 @@ class WindowsWlanApi : public WifiDataProviderCommon::WlanApiInterface {
 // static
 std::unique_ptr<WindowsWlanApi> WindowsWlanApi::Create() {
   // Use an absolute path to load the DLL to avoid DLL preloading attacks.
-  static const wchar_t* const kDLL = L"%WINDIR%\\system32\\wlanapi.dll";
-  wchar_t path[MAX_PATH] = {0};
-  ExpandEnvironmentStrings(kDLL, path, std::size(path));
-  HINSTANCE library = LoadLibraryEx(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-  if (!library)
+  auto path =
+      base::win::ExpandEnvironmentVariables(L"%WINDIR%\\system32\\wlanapi.dll");
+  if (!path) {
     return nullptr;
+  }
+
+  HINSTANCE library =
+      LoadLibraryEx(path->c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+  if (!library) {
+    return nullptr;
+  }
+
   return std::make_unique<WindowsWlanApi>(library);
 }
 
@@ -141,9 +144,10 @@ WindowsWlanApi::~WindowsWlanApi() {
   FreeLibrary(library_);
 }
 
-bool WindowsWlanApi::GetAccessPointData(WifiData::AccessPointDataSet* data) {
-  DCHECK(data);
-
+void WindowsWlanApi::GetAccessPointData(
+    base::OnceCallback<void(std::unique_ptr<WifiData::AccessPointDataSet>)>
+        callback) {
+  auto data = std::make_unique<WifiData::AccessPointDataSet>();
   DWORD negotiated_version;
   HANDLE wlan_handle = nullptr;
   // Highest WLAN API version supported by the client; pass the lowest. It seems
@@ -153,7 +157,8 @@ bool WindowsWlanApi::GetAccessPointData(WifiData::AccessPointDataSet* data) {
   if ((*WlanOpenHandle_function_)(kXpWlanClientVersion, NULL,
                                   &negotiated_version,
                                   &wlan_handle) != ERROR_SUCCESS) {
-    return false;
+    std::move(callback).Run(nullptr);
+    return;
   }
   DCHECK(wlan_handle);
 
@@ -161,13 +166,16 @@ bool WindowsWlanApi::GetAccessPointData(WifiData::AccessPointDataSet* data) {
   WLAN_INTERFACE_INFO_LIST* interface_list = nullptr;
   if ((*WlanEnumInterfaces_function_)(wlan_handle, NULL, &interface_list) !=
       ERROR_SUCCESS) {
-    return false;
+    (*WlanCloseHandle_function_)(wlan_handle, NULL);
+    std::move(callback).Run(nullptr);
+    return;
   }
   DCHECK(interface_list);
 
   // Go through the list of interfaces and get the data for each.
   for (size_t i = 0; i < interface_list->dwNumberOfItems; ++i) {
-    const WLAN_INTERFACE_INFO interface_info = interface_list->InterfaceInfo[i];
+    const WLAN_INTERFACE_INFO interface_info =
+        UNSAFE_TODO(interface_list->InterfaceInfo[i]);
 
     // Skip any interface that is midway through association; the
     // WlanGetNetworkBssList function call is known to hang indefinitely
@@ -179,12 +187,13 @@ bool WindowsWlanApi::GetAccessPointData(WifiData::AccessPointDataSet* data) {
                        "indicates a non-responding adapter.";
       continue;
     }
-    GetInterfaceDataWLAN(wlan_handle, interface_info.InterfaceGuid, data);
+    GetInterfaceDataWLAN(wlan_handle, interface_info.InterfaceGuid, data.get());
   }
 
   (*WlanFreeMemory_function_)(interface_list);
 
-  return (*WlanCloseHandle_function_)(wlan_handle, NULL) == ERROR_SUCCESS;
+  (*WlanCloseHandle_function_)(wlan_handle, NULL);
+  std::move(callback).Run(std::move(data));
 }
 
 // Appends the data for a single interface to |data|. Returns false for error.
@@ -206,7 +215,7 @@ bool WindowsWlanApi::GetInterfaceDataWLAN(const HANDLE wlan_handle,
     return false;
 
   for (size_t i = 0; i < bss_list->dwNumberOfItems; ++i)
-    data->insert(GetNetworkData(bss_list->wlanBssEntries[i]));
+    data->insert(GetNetworkData(UNSAFE_TODO(bss_list->wlanBssEntries[i])));
 
   (*WlanFreeMemory_function_)(bss_list);
 

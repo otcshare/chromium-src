@@ -5,8 +5,9 @@
 #ifndef UI_GL_CA_RENDERER_LAYER_PARAMS_H_
 #define UI_GL_CA_RENDERER_LAYER_PARAMS_H_
 
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/point.h"
@@ -42,10 +43,10 @@ struct GL_EXPORT CARendererLayerParams {
                         SkColor4f background_color,
                         unsigned edge_aa_mask,
                         float opacity,
-                        unsigned filter,
-                        gfx::HDRMode hdr_mode,
-                        absl::optional<gfx::HDRMetadata> hdr_metadata,
-                        gfx::ProtectedVideoType protected_video_type);
+                        bool nearest_neighbor_filter,
+                        const gfx::HDRMetadata& hdr_metadata,
+                        gfx::ProtectedVideoType protected_video_type,
+                        bool is_render_pass_draw_quad);
   CARendererLayerParams(const CARendererLayerParams& other);
   ~CARendererLayerParams();
 
@@ -61,10 +62,10 @@ struct GL_EXPORT CARendererLayerParams {
   SkColor4f background_color;
   unsigned edge_aa_mask;
   float opacity;
-  unsigned filter;
-  const gfx::HDRMode hdr_mode;
-  absl::optional<gfx::HDRMetadata> hdr_metadata;
+  bool nearest_neighbor_filter;
+  gfx::HDRMetadata hdr_metadata;
   gfx::ProtectedVideoType protected_video_type;
+  bool is_render_pass_draw_quad;
 };
 
 }  // namespace ui

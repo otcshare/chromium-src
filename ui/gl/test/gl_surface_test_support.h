@@ -14,11 +14,11 @@ class GLSurfaceTestSupport {
  public:
   static GLDisplay* InitializeOneOff();
   static GLDisplay* InitializeNoExtensionsOneOff();
-  static GLDisplay* InitializeOneOffImplementation(
-      GLImplementationParts impl,
-      bool fallback_to_swiftshader);
+  static GLDisplay* InitializeOneOffImplementation(GLImplementationParts impl);
   static GLDisplay* InitializeOneOffWithMockBindings();
   static GLDisplay* InitializeOneOffWithStubBindings();
+  static GLDisplay* InitializeOneOffWithNullAngleBindings();
+
   static void ShutdownGL(GLDisplay* display);
 };
 

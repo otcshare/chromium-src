@@ -7,10 +7,12 @@
 
 #include <memory>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "content/browser/file_system_access/file_system_access_capacity_allocation_host_impl.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "content/browser/file_system_access/file_system_access_file_delegate_host_impl.h"
+#include "content/browser/file_system_access/file_system_access_file_modification_host_impl.h"
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -26,21 +28,20 @@ namespace content {
 class FileSystemAccessAccessHandleHostImpl
     : public blink::mojom::FileSystemAccessAccessHandleHost {
  public:
-  // Creates an AccessHandleHost that acts as an exclusive write lock on the
-  // file. AccessHandleHosts should only be created via the
+  // Creates an AccessHandleHost that has a lock on the file.
+  // AccessHandleHosts should only be created via the
   // FileSystemAccessManagerImpl.
   FileSystemAccessAccessHandleHostImpl(
       FileSystemAccessManagerImpl* manager,
       const storage::FileSystemURL& url,
-      scoped_refptr<FileSystemAccessWriteLockManager::WriteLock> lock,
+      scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
       base::PassKey<FileSystemAccessManagerImpl> pass_key,
       mojo::PendingReceiver<blink::mojom::FileSystemAccessAccessHandleHost>
           receiver,
       mojo::PendingReceiver<blink::mojom::FileSystemAccessFileDelegateHost>
           file_delegate_receiver,
-      mojo::PendingReceiver<
-          blink::mojom::FileSystemAccessCapacityAllocationHost>
-          capacity_allocation_host_receiver,
+      mojo::PendingReceiver<blink::mojom::FileSystemAccessFileModificationHost>
+          file_modification_host_receiver,
       int64_t file_size,
       base::ScopedClosureRunner on_close_callback);
   FileSystemAccessAccessHandleHostImpl(
@@ -55,9 +56,9 @@ class FileSystemAccessAccessHandleHostImpl
   // Returns the the total capacity allocated for the file whose capacity is
   // managed through this host.
   int64_t granted_capacity() const {
-    DCHECK(capacity_allocation_host_)
-        << "Capacity allocation requires a CapacityAllocationHost";
-    return capacity_allocation_host_->granted_capacity();
+    DCHECK(file_modification_host_)
+        << "Capacity allocation requires a FileModificationHost";
+    return file_modification_host_->granted_capacity();
   }
 
   storage::FileSystemURL url() const { return url_; }
@@ -68,10 +69,7 @@ class FileSystemAccessAccessHandleHostImpl
   void OnDisconnect();
 
   // The FileSystemAccessManagerImpl that owns this instance.
-  const raw_ptr<FileSystemAccessManagerImpl> manager_;
-
-  // Exclusive write lock on the file. It is released on destruction.
-  scoped_refptr<FileSystemAccessWriteLockManager::WriteLock> lock_;
+  const raw_ptr<FileSystemAccessManagerImpl> manager_ = nullptr;
 
   mojo::Receiver<blink::mojom::FileSystemAccessAccessHandleHost> receiver_;
 
@@ -83,7 +81,7 @@ class FileSystemAccessAccessHandleHostImpl
   // Non-incognito file I/O operations on Access Handles are performed in the
   // renderer process. Before increasing a file's size, the renderer must
   // request additional capacity from the
-  // FileSystemAccessCapacityAllocationHostImpl. The host grants capacity if the
+  // FileSystemAccessFileModificationHostImpl. The host grants capacity if the
   // quota management system allows it. From the browser's perspective, all
   // granted capacity is fully used by the file.
   //
@@ -91,8 +89,8 @@ class FileSystemAccessAccessHandleHostImpl
   // between the perceived file size, as reported by `granted_capacity()`, and
   // the actual file size on disk. This step is
   // performed by the FileSystemAccessManagerImpl owning this host.
-  std::unique_ptr<FileSystemAccessCapacityAllocationHostImpl>
-      capacity_allocation_host_;
+  std::unique_ptr<FileSystemAccessFileModificationHostImpl>
+      file_modification_host_;
 
   const storage::FileSystemURL url_;
 
@@ -108,6 +106,12 @@ class FileSystemAccessAccessHandleHostImpl
   // will run when `this` is destroyed, which errs on the side of not running
   // the callback too early, before the file is actually closed.
   base::ScopedClosureRunner on_close_callback_;
+
+  // Lock on the file. It is released on destruction. This member must be
+  // declared after `close_callback_` to ensure that the lock is released before
+  // the FileSystemSyncAccessHandle.close() method returns. See
+  // https://github.com/whatwg/fs/issues/83.
+  scoped_refptr<FileSystemAccessLockManager::LockHandle> lock_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

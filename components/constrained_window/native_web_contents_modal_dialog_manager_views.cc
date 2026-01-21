@@ -15,7 +15,6 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
-#include "ui/views/window/non_client_view.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/client/aura_constants.h"
@@ -45,8 +44,9 @@ NativeWebContentsModalDialogManagerViews::
   if (host_)
     host_->RemoveObserver(this);
 
-  for (auto* widget : observed_widgets_)
+  for (views::Widget* widget : observed_widgets_) {
     widget->RemoveObserver(this);
+  }
   CHECK(!IsInObserverList());
 }
 
@@ -78,6 +78,10 @@ void NativeWebContentsModalDialogManagerViews::ManageDialog() {
 }
 
 // SingleWebContentsDialogManager:
+
+bool NativeWebContentsModalDialogManagerViews::IsActive() const {
+  return GetWidget(dialog_)->IsActive();
+}
 
 void NativeWebContentsModalDialogManagerViews::Show() {
   // The host destroying means the dialogs will be destroyed in short order.
@@ -151,8 +155,9 @@ void NativeWebContentsModalDialogManagerViews::Pulse() {}
 void NativeWebContentsModalDialogManagerViews::OnPositionRequiresUpdate() {
   DCHECK(host_);
 
-  for (auto* widget : observed_widgets_)
+  for (views::Widget* widget : observed_widgets_) {
     constrained_window::UpdateWebContentsModalDialogPosition(widget, host_);
+  }
 }
 
 void NativeWebContentsModalDialogManagerViews::OnHostDestroying() {
@@ -184,7 +189,7 @@ void NativeWebContentsModalDialogManagerViews::HostChanged(
   if (host_) {
     host_->AddObserver(this);
 
-    for (auto* widget : observed_widgets_) {
+    for (views::Widget* widget : observed_widgets_) {
       views::Widget::ReparentNativeView(widget->GetNativeView(),
                                         host_->GetHostView());
     }

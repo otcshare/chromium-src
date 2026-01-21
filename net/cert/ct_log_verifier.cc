@@ -4,22 +4,24 @@
 
 #include "net/cert/ct_log_verifier.h"
 
-#include <string.h>
+#include <stdint.h>
 
+#include <bit>
+#include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/bits.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_view_util.h"
+#include "crypto/evp.h"
+#include "crypto/hash.h"
 #include "crypto/openssl_util.h"
-#include "crypto/sha2.h"
 #include "net/cert/ct_log_verifier_util.h"
 #include "net/cert/ct_serialization.h"
 #include "net/cert/merkle_audit_proof.h"
 #include "net/cert/merkle_consistency_proof.h"
 #include "net/cert/signed_tree_head.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 
 namespace net {
@@ -27,7 +29,7 @@ namespace net {
 namespace {
 
 // The SHA-256 hash of the empty string.
-const unsigned char kSHA256EmptyStringHash[ct::kSthRootHashLength] = {
+constexpr std::array<uint8_t, ct::kSthRootHashLength> kSHA256EmptyStringHash = {
     0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4,
     0xc8, 0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b,
     0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55};
@@ -49,7 +51,6 @@ const EVP_MD* GetEvpAlg(ct::DigitallySigned::HashAlgorithm alg) {
     case ct::DigitallySigned::HASH_ALGO_NONE:
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -57,7 +58,7 @@ const EVP_MD* GetEvpAlg(ct::DigitallySigned::HashAlgorithm alg) {
 
 // static
 scoped_refptr<const CTLogVerifier> CTLogVerifier::Create(
-    base::StringPiece public_key,
+    std::string_view public_key,
     std::string description) {
   auto result = base::WrapRefCounted(new CTLogVerifier(std::move(description)));
   if (!result->Init(public_key))
@@ -92,8 +93,7 @@ bool CTLogVerifier::VerifySignedTreeHead(
 
   if (signed_tree_head.tree_size == 0) {
     // Root hash must equate SHA256 hash of the empty string.
-    return memcmp(signed_tree_head.sha256_root_hash, kSHA256EmptyStringHash,
-                  ct::kSthRootHashLength) == 0;
+    return signed_tree_head.sha256_root_hash == kSHA256EmptyStringHash;
   }
 
   return true;
@@ -146,9 +146,9 @@ bool CTLogVerifier::VerifyConsistencyProof(
 
   // 1. If "first" is an exact power of 2, then prepend "first_hash" to the
   // "consistency_path" array.
-  base::StringPiece first_proof_node = old_tree_hash;
+  std::string_view first_proof_node = old_tree_hash;
   auto iter = proof.nodes.begin();
-  if (!base::bits::IsPowerOfTwo(proof.first_tree_size)) {
+  if (!std::has_single_bit(proof.first_tree_size)) {
     if (iter == proof.nodes.end())
       return false;
     first_proof_node = *iter;
@@ -262,28 +262,21 @@ bool CTLogVerifier::VerifyAuditProof(const ct::MerkleAuditProof& proof,
   return sn == 0 && r == root_hash;
 }
 
-CTLogVerifier::~CTLogVerifier() {
+CTLogVerifier::~CTLogVerifier() = default;
+
+bool CTLogVerifier::Init(std::string_view public_key) {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
-  if (public_key_)
-    EVP_PKEY_free(public_key_);
-}
-
-bool CTLogVerifier::Init(base::StringPiece public_key) {
-  crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-
-  CBS cbs;
-  CBS_init(&cbs, reinterpret_cast<const uint8_t*>(public_key.data()),
-           public_key.size());
-  public_key_ = EVP_parse_public_key(&cbs);
-  if (!public_key_ || CBS_len(&cbs) != 0)
+  public_key_ = crypto::evp::PublicKeyFromBytes(base::as_byte_span(public_key));
+  if (!public_key_) {
     return false;
+  }
 
-  key_id_ = crypto::SHA256HashString(public_key);
+  key_id_ = base::as_string_view(crypto::hash::Sha256(public_key));
 
   // Right now, only RSASSA-PKCS1v15 with SHA-256 and ECDSA with SHA-256 are
   // supported.
-  switch (EVP_PKEY_id(public_key_)) {
+  switch (EVP_PKEY_id(public_key_.get())) {
     case EVP_PKEY_RSA:
       hash_algorithm_ = ct::DigitallySigned::HASH_ALGO_SHA256;
       signature_algorithm_ = ct::DigitallySigned::SIG_ALGO_RSA;
@@ -299,22 +292,22 @@ bool CTLogVerifier::Init(base::StringPiece public_key) {
   // Extra safety check: Require RSA keys of at least 2048 bits.
   // EVP_PKEY_size returns the size in bytes. 256 = 2048-bit RSA key.
   if (signature_algorithm_ == ct::DigitallySigned::SIG_ALGO_RSA &&
-      EVP_PKEY_size(public_key_) < 256) {
+      EVP_PKEY_size(public_key_.get()) < 256) {
     return false;
   }
 
   return true;
 }
 
-bool CTLogVerifier::VerifySignature(base::StringPiece data_to_sign,
-                                    base::StringPiece signature) const {
+bool CTLogVerifier::VerifySignature(std::string_view data_to_sign,
+                                    std::string_view signature) const {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   const EVP_MD* hash_alg = GetEvpAlg(hash_algorithm_);
   bssl::ScopedEVP_MD_CTX ctx;
   return hash_alg &&
          EVP_DigestVerifyInit(ctx.get(), nullptr, hash_alg, nullptr,
-                              public_key_) &&
+                              public_key_.get()) &&
          EVP_DigestVerifyUpdate(ctx.get(), data_to_sign.data(),
                                 data_to_sign.size()) &&
          EVP_DigestVerifyFinal(

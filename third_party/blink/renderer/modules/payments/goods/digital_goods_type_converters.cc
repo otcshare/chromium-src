@@ -4,12 +4,12 @@
 
 #include "third_party/blink/renderer/modules/payments/goods/digital_goods_type_converters.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/notreached.h"
 #include "components/digital_goods/mojom/digital_goods.mojom-blink.h"
 #include "components/payments/mojom/payment_request_data.mojom-blink-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/digital_goods/digital_goods.mojom-blink.h"
 #include "third_party/blink/renderer/modules/payments/payment_event_data_conversion.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -23,7 +23,8 @@ using payments::mojom::blink::ItemDetailsPtr;
 using payments::mojom::blink::ItemType;
 using payments::mojom::blink::PurchaseReferencePtr;
 
-WTF::String TypeConverter<WTF::String, CreateDigitalGoodsResponseCode>::Convert(
+blink::String
+TypeConverter<blink::String, CreateDigitalGoodsResponseCode>::Convert(
     const CreateDigitalGoodsResponseCode& input) {
   switch (input) {
     case CreateDigitalGoodsResponseCode::kOk:
@@ -69,23 +70,25 @@ blink::ItemDetails* TypeConverter<blink::ItemDetails*, ItemDetailsPtr>::Convert(
       // Omit setting ItemType on output.
       break;
     case ItemType::kProduct:
-      output->setType("product");
+      output->setType(blink::V8ItemType::Enum::kProduct);
       break;
     case ItemType::kSubscription:
-      output->setType("subscription");
+      output->setType(blink::V8ItemType::Enum::kSubscription);
       break;
   }
-  WTF::Vector<WTF::String> icon_urls;
+  blink::Vector<blink::String> icon_urls;
   if (input->icon_urls.has_value()) {
     for (const blink::KURL& icon_url : input->icon_urls.value()) {
-      icon_urls.push_back(icon_url.GetString());
+      if (icon_url.IsValid() && !icon_url.IsEmpty()) {
+        icon_urls.push_back(icon_url.GetString());
+      }
     }
   }
   output->setIconURLs(std::move(icon_urls));
   return output;
 }
 
-WTF::String TypeConverter<WTF::String, BillingResponseCode>::Convert(
+blink::String TypeConverter<blink::String, BillingResponseCode>::Convert(
     const BillingResponseCode& input) {
   switch (input) {
     case BillingResponseCode::kOk:

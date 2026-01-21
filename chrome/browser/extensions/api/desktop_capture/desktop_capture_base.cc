@@ -8,10 +8,9 @@
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -21,18 +20,22 @@
 #include "chrome/browser/media/webrtc/native_desktop_media_list.h"
 #include "chrome/browser/media/webrtc/tab_desktop_media_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/grit/branded_strings.h"
 #include "content/public/browser/desktop_capture.h"
 #include "content/public/browser/desktop_streams_registry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/switches.h"
+#include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::DesktopMediaID;
 using extensions::api::desktop_capture::ChooseDesktopMedia::Results::Options;
@@ -86,7 +89,7 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
     bool suppress_local_audio_playback_intended,
     content::RenderFrameHost* render_frame_host,
     const GURL& origin,
-    const std::u16string target_name) {
+    const std::u16string& target_name) {
   DCHECK(!picker_controller_);
 
   if (!render_frame_host->IsActive())
@@ -102,33 +105,43 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
   // be null. We are going to make the picker modal to the current browser
   // window.
   if (!parent_window) {
-    Browser* target_browser = chrome::FindLastActiveWithProfile(
-        Profile::FromBrowserContext(web_contents->GetBrowserContext()));
-
-    if (target_browser)
-      parent_window = target_browser->window()->GetNativeWindow();
+    auto* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    // Find the last active browser window with a matching profile.
+    BrowserWindowInterface* browser = nullptr;
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [profile, &browser](BrowserWindowInterface* bwi) {
+          if (bwi->GetProfile() == profile) {
+            browser = bwi;
+            return false;  // Stop iterating.
+          }
+          return true;  // Keep iterating.
+        });
+    if (browser) {
+      parent_window = browser->GetWindow()->GetNativeWindow();
+    }
   }
 
   bool request_audio = false;
   std::vector<DesktopMediaList::Type> media_types;
   for (auto source_type : sources) {
     switch (source_type) {
-      case api::desktop_capture::DESKTOP_CAPTURE_SOURCE_TYPE_NONE: {
+      case api::desktop_capture::DesktopCaptureSourceType::kNone: {
         return RespondNow(Error(kInvalidSourceNameError));
       }
-      case api::desktop_capture::DESKTOP_CAPTURE_SOURCE_TYPE_SCREEN: {
+      case api::desktop_capture::DesktopCaptureSourceType::kScreen: {
         media_types.push_back(DesktopMediaList::Type::kScreen);
         break;
       }
-      case api::desktop_capture::DESKTOP_CAPTURE_SOURCE_TYPE_WINDOW: {
+      case api::desktop_capture::DesktopCaptureSourceType::kWindow: {
         media_types.push_back(DesktopMediaList::Type::kWindow);
         break;
       }
-      case api::desktop_capture::DESKTOP_CAPTURE_SOURCE_TYPE_TAB: {
+      case api::desktop_capture::DesktopCaptureSourceType::kTab: {
         media_types.push_back(DesktopMediaList::Type::kWebContents);
         break;
       }
-      case api::desktop_capture::DESKTOP_CAPTURE_SOURCE_TYPE_AUDIO: {
+      case api::desktop_capture::DesktopCaptureSourceType::kAudio: {
         request_audio = true;
         break;
       }
@@ -150,7 +163,8 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
   DesktopMediaPickerController::DoneCallback callback = base::BindOnce(
       &DesktopCaptureChooseDesktopMediaFunctionBase::OnPickerDialogResults,
       this, origin, render_frame_host->GetGlobalId());
-  DesktopMediaPickerController::Params picker_params;
+  DesktopMediaPickerController::Params picker_params(
+      DesktopMediaPickerController::Params::RequestSource::kExtension);
   picker_params.web_contents = web_contents;
   picker_params.context = parent_window;
   picker_params.parent = parent_window;
@@ -160,12 +174,20 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
   picker_params.exclude_system_audio = exclude_system_audio;
   picker_params.suppress_local_audio_playback =
       suppress_local_audio_playback_intended;
+  picker_params.includable_web_contents_filter =
+      std::move(includable_web_contents_filter);
+  // TODO(crbug.com/405218400): Add more Android-specific parameters here, like
+  // Params::capture_this_tab and Params::exclude_monitor_type_surfaces.
+#if BUILDFLAG(IS_ANDROID)
+  picker_params.exclude_self_browser_surface = exclude_self_browser_surface;
+  picker_params.allowed_capture_level = capture_level;
+#endif
   picker_controller_ =
       std::make_unique<DesktopMediaPickerController>(g_picker_factory);
   picker_params.restricted_by_policy =
       (capture_level != AllowedScreenCaptureLevel::kUnrestricted);
   picker_controller_->Show(picker_params, std::move(media_types),
-                           includable_web_contents_filter, std::move(callback));
+                           std::move(callback));
   return RespondLater();
 }
 
@@ -199,10 +221,11 @@ void DesktopCaptureChooseDesktopMediaFunctionBase::OnPickerDialogResults(
 
   std::string result;
   if (source.type != DesktopMediaID::TYPE_NONE) {
+    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
     result = content::DesktopStreamsRegistry::GetInstance()->RegisterStream(
-        render_frame_host_id.child_id, render_frame_host_id.frame_routing_id,
-        url::Origin::Create(origin), source, extension()->name(),
-        content::kRegistryStreamTypeDesktop);
+        render_frame_host_id.child_id.GetUnsafeValue(),
+        render_frame_host_id.frame_routing_id, url::Origin::Create(origin),
+        source, content::kRegistryStreamTypeDesktop);
   }
 
   Options options;
@@ -221,10 +244,10 @@ bool DesktopCaptureRequestsRegistry::RequestId::operator<(
 }
 
 DesktopCaptureCancelChooseDesktopMediaFunctionBase::
-    DesktopCaptureCancelChooseDesktopMediaFunctionBase() {}
+    DesktopCaptureCancelChooseDesktopMediaFunctionBase() = default;
 
 DesktopCaptureCancelChooseDesktopMediaFunctionBase::
-    ~DesktopCaptureCancelChooseDesktopMediaFunctionBase() {}
+    ~DesktopCaptureCancelChooseDesktopMediaFunctionBase() = default;
 
 ExtensionFunction::ResponseAction
 DesktopCaptureCancelChooseDesktopMediaFunctionBase::Run() {
@@ -237,8 +260,8 @@ DesktopCaptureCancelChooseDesktopMediaFunctionBase::Run() {
   return RespondNow(NoArguments());
 }
 
-DesktopCaptureRequestsRegistry::DesktopCaptureRequestsRegistry() {}
-DesktopCaptureRequestsRegistry::~DesktopCaptureRequestsRegistry() {}
+DesktopCaptureRequestsRegistry::DesktopCaptureRequestsRegistry() = default;
+DesktopCaptureRequestsRegistry::~DesktopCaptureRequestsRegistry() = default;
 
 // static
 DesktopCaptureRequestsRegistry* DesktopCaptureRequestsRegistry::GetInstance() {
@@ -261,8 +284,9 @@ void DesktopCaptureRequestsRegistry::RemoveRequest(int process_id,
 void DesktopCaptureRequestsRegistry::CancelRequest(int process_id,
                                                    int request_id) {
   auto it = requests_.find(RequestId(process_id, request_id));
-  if (it != requests_.end())
+  if (it != requests_.end()) {
     it->second->Cancel();
+  }
 }
 
 }  // namespace extensions

@@ -8,17 +8,20 @@ source_set("latency") {
   sources = [
     "latency_info.cc",
     "latency_info.h",
-    "latency_tracker.cc",
-    "latency_tracker.h",
   ]
 
   deps = [
     "//base",
-    "//services/tracing/public/cpp:cpp",
+    "//build:blink_buildflags",
+    "//services/tracing/public/cpp",
     "//ui/gfx",
   ]
 
   public_deps = [ "//services/metrics/public/cpp:metrics_cpp" ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("test_support") {
@@ -46,7 +49,6 @@ test("latency_unittests") {
       "mojom/mojom_traits_unittest.cc",
     ]
     deps += [
-      "//ipc:test_support",
       "//mojo/public/cpp/bindings",
       "//ui/gfx/ipc/geometry",
       "//ui/latency/ipc",

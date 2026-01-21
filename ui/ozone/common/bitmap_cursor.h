@@ -24,8 +24,10 @@ class BitmapCursor : public PlatformCursor {
       scoped_refptr<PlatformCursor> platform_cursor);
 
   // Creates a cursor that doesn't need backing bitmaps (for example, a
-  // server-side cursor for Lacros).
-  BitmapCursor(mojom::CursorType type, float cursor_image_scale_factor);
+  // server-side cursor for Lacros). Scale only applies to bitmaps so
+  // no need to provide scale. Server-side will provide both bitmap and
+  // scale.
+  explicit BitmapCursor(mojom::CursorType type);
 
   // Creates a cursor with a single backing bitmap.
   BitmapCursor(mojom::CursorType type,
@@ -58,6 +60,7 @@ class BitmapCursor : public PlatformCursor {
 
   // For theme cursors.
   void* platform_data() { return platform_data_; }
+  void clear_platform_data() { platform_data_ = nullptr; }
 
   float cursor_image_scale_factor() const { return cursor_image_scale_factor_; }
 
@@ -72,7 +75,7 @@ class BitmapCursor : public PlatformCursor {
 
   // Platform cursor data.  Having this non-nullptr means that this cursor
   // is supplied by the platform.
-  const raw_ptr<void> platform_data_ = nullptr;
+  raw_ptr<void> platform_data_ = nullptr;
 
   float cursor_image_scale_factor_ = 1.f;
 };

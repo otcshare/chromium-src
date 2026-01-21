@@ -7,8 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
@@ -34,7 +34,9 @@ std::unique_ptr<media::AudioBus> AudioPacketToAudioBus(
   std::unique_ptr<media::AudioBus> result =
       media::AudioBus::Create(packet.channels(), frame_count);
   result->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-      reinterpret_cast<const int16_t*>(packet.data(0).data()), frame_count);
+      // TODO(crbug.com/428945428): Fix unsafe uses of std::string::data().
+      UNSAFE_TODO(reinterpret_cast<const int16_t*>(packet.data(0).data())),
+      frame_count);
   return result;
 }
 
@@ -42,8 +44,8 @@ std::unique_ptr<remoting::AudioPacket> AudioBusToAudioPacket(
     const media::AudioBus& packet) {
   std::unique_ptr<remoting::AudioPacket> result =
       std::make_unique<remoting::AudioPacket>();
-  result->add_data()->resize(
-      packet.channels() * packet.frames() * sizeof(int16_t));
+  result->add_data()->resize(packet.channels() * packet.frames() *
+                             sizeof(int16_t));
   packet.ToInterleaved<media::SignedInt16SampleTypeTraits>(
       packet.frames(),
       reinterpret_cast<int16_t*>(&(result->mutable_data(0)->at(0))));
@@ -77,7 +79,6 @@ media::ChannelLayout RetrieveLayout(const remoting::AudioPacket& packet) {
       return media::CHANNEL_LAYOUT_7_1;
   }
   NOTREACHED() << "Invalid AudioPacket::Channels";
-  return media::CHANNEL_LAYOUT_UNSUPPORTED;
 }
 
 }  // namespace
@@ -185,7 +186,7 @@ void AudioPump::Core::EncodeAudioPacket(std::unique_ptr<AudioPacket> packet) {
     return;
   }
 
-  int packet_size = encoded_packet->ByteSize();
+  int packet_size = encoded_packet->ByteSizeLong();
   bytes_pending_ += packet_size;
 
   pump_task_runner_->PostTask(
@@ -208,7 +209,8 @@ std::unique_ptr<AudioPacket> AudioPump::Core::Downmix(
   if (!mixer_ || mixer_input_layout_ != input_layout) {
     mixer_input_layout_ = input_layout;
     mixer_ = std::make_unique<media::ChannelMixer>(
-        input_layout, media::CHANNEL_LAYOUT_STEREO);
+        input_layout, packet->channels(), media::CHANNEL_LAYOUT_STEREO,
+        ChannelLayoutToChannelCount(media::CHANNEL_LAYOUT_STEREO));
   }
 
   std::unique_ptr<media::AudioBus> input = AudioPacketToAudioBus(*packet);

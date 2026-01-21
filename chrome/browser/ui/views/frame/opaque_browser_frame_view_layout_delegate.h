@@ -8,16 +8,15 @@
 #include <string>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #include "ui/base/ui_base_types.h"
 #endif
 
 namespace gfx {
 class Size;
 class Rect;
-}
+}  // namespace gfx
 
 // Delegate interface to control layout decisions without having to depend on
 // Browser{,Frame,View}.
@@ -59,14 +58,10 @@ class OpaqueBrowserFrameViewLayoutDelegate {
   virtual bool IsMaximized() const = 0;
   virtual bool IsMinimized() const = 0;
   virtual bool IsFullscreen() const = 0;
+  virtual bool GetBorderlessModeEnabled() const = 0;
 
   virtual bool IsTabStripVisible() const = 0;
-  virtual int GetTabStripHeight() const = 0;
   virtual bool IsToolbarVisible() const = 0;
-
-  // Returns the tabstrips minimum size so the frame layout can work around
-  // it.
-  virtual gfx::Size GetTabstripMinimumSize() const = 0;
 
   // Computes the height of the top area of the frame.
   virtual int GetTopAreaHeight() const = 0;
@@ -80,27 +75,22 @@ class OpaqueBrowserFrameViewLayoutDelegate {
   // the thick frame border and rounded corners.
   virtual bool IsFrameCondensed() const = 0;
 
-  // Returns whether the shapes of background tabs are visible against the frame
-  // for either active or inactive windows.
-  virtual bool EverHasVisibleBackgroundTabShapes() const = 0;
-
   // Indicates the type of the frame buttons.
   virtual FrameButtonStyle GetFrameButtonStyle() const;
 
-  virtual void UpdateWindowControlsOverlay(
-      const gfx::Rect& bounding_rect) const = 0;
-
-  // Returns true if the system compositor supports translucent windows.
-  virtual bool IsTranslucentWindowOpacitySupported() const = 0;
+  virtual void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) = 0;
 
   // Returns true if a client-side shadow should be drawn for restored windows.
   virtual bool ShouldDrawRestoredFrameShadow() const = 0;
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Returns which edges of the window are snapped to the edges of the desktop
-  // (or "tiled").
-  virtual ui::WindowTiledEdges GetTiledEdges() const = 0;
+#if BUILDFLAG(IS_LINUX)
+  // Returns whether the window is in a tiled state.
+  virtual bool IsTiled() const = 0;
 #endif
+
+  // Returns the (preferred) heights of buttons in the web app frame toolbar. If
+  // the toolbar isn't visible, this returns 0.
+  virtual int WebAppButtonHeight() const = 0;
 
  protected:
   virtual ~OpaqueBrowserFrameViewLayoutDelegate() = default;

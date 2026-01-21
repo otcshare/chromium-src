@@ -9,9 +9,9 @@
 
 namespace external_intents {
 
-// Alphabetical:
-BASE_DECLARE_FEATURE(kBlockExternalFormSubmitWithoutGesture);
 BASE_DECLARE_FEATURE(kExternalNavigationDebugLogs);
+BASE_DECLARE_FEATURE(kBlockFrameRenavigations);
+BASE_DECLARE_FEATURE(kNavigationCaptureRefactorAndroid);
 
 }  // namespace external_intents
 

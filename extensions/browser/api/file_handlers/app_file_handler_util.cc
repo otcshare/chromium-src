@@ -7,13 +7,10 @@
 #include <set>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/task_traits.h"
@@ -36,7 +33,7 @@
 #include "storage/common/file_system/file_system_mount_option.h"
 #include "storage/common/file_system/file_system_types.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/browser/api/file_handlers/non_native_file_system_delegate.h"
 #endif
 
@@ -198,8 +195,8 @@ WritableFileChecker::WritableFileChecker(
 void WritableFileChecker::Check() {
   outstanding_tasks_ = paths_.size();
   for (const auto& path : paths_) {
-    bool is_directory = directory_paths_.find(path) != directory_paths_.end();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+    bool is_directory = directory_paths_.contains(path);
+#if BUILDFLAG(IS_CHROMEOS)
     NonNativeFileSystemDelegate* delegate =
         ExtensionsAPIClient::Get()->GetNonNativeFileSystemDelegate();
     if (delegate && delegate->IsUnderNonNativeLocalPath(context_, path)) {
@@ -238,7 +235,7 @@ void WritableFileChecker::Check() {
   }
 }
 
-WritableFileChecker::~WritableFileChecker() {}
+WritableFileChecker::~WritableFileChecker() = default;
 
 void WritableFileChecker::TaskDone() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -288,7 +285,7 @@ bool WebAppFileHandlerMatch::matched_file_extension() const {
 }
 
 bool WebAppFileHandlerMatch::DoMatch(const EntryInfo& entry) {
-  // TODO(crbug.com/1060026): At the moment, apps::FileHandler doesn't have
+  // TODO(crbug.com/40678811): At the moment, apps::FileHandler doesn't have
   // an include_directories flag. It may be necessary to add one as this new
   // representation replaces apps::FileHandlerInfo.
   if (entry.is_directory)
@@ -412,7 +409,7 @@ bool FileHandlerCanHandleEntry(const apps::FileHandlerInfo& handler,
 
 bool WebAppFileHandlerCanHandleEntry(const apps::FileHandler& handler,
                                      const EntryInfo& entry) {
-  // TODO(crbug.com/938103): At the moment, apps::FileHandler doesn't have an
+  // TODO(crbug.com/41444843): At the moment, apps::FileHandler doesn't have an
   // include_directories flag. It may be necessary to add one as this new
   // representation replaces apps::FileHandlerInfo.
   if (entry.is_directory)
@@ -545,7 +542,7 @@ std::vector<extensions::EntryInfo> CreateEntryInfos(
   for (size_t i = 0; i < entry_paths.size(); ++i) {
     const std::string mime_type =
         mime_types[i].empty() ? kFallbackMimeType : mime_types[i];
-    bool is_directory = base::Contains(directory_paths, entry_paths[i]);
+    bool is_directory = directory_paths.contains(entry_paths[i]);
     entry_infos.emplace_back(entry_paths[i], mime_type, is_directory);
   }
   return entry_infos;

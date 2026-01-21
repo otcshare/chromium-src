@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/ash/net/network_diagnostics/network_diagnostics_routine.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -18,7 +18,8 @@ namespace network_diagnostics {
 // Tests whether the internet connection is trapped behind a captive portal.
 class CaptivePortalRoutine : public NetworkDiagnosticsRoutine {
  public:
-  CaptivePortalRoutine();
+  explicit CaptivePortalRoutine(
+      chromeos::network_diagnostics::mojom::RoutineCallSource source);
   CaptivePortalRoutine(const CaptivePortalRoutine&) = delete;
   CaptivePortalRoutine& operator=(const CaptivePortalRoutine&) = delete;
   ~CaptivePortalRoutine() override;

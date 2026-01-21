@@ -32,7 +32,7 @@
 
 #include <memory>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
 #include "cc/animation/animation_id_provider.h"
@@ -42,11 +42,7 @@
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 
-// This should be after all other #includes.
-#if defined(_WINDOWS_)  // Detect whether windows.h was included.
-// See base/win/windows_h_disallowed.h for details.
-#error Windows.h was included unexpectedly.
-#endif  // defined(_WINDOWS_)
+#include "base/win/windows_h_disallowed.h"
 
 namespace blink {
 
@@ -64,8 +60,9 @@ ScrollAnimator::ScrollAnimator(ScrollableArea* scrollable_area,
       last_granularity_(ui::ScrollGranularity::kScrollByPixel) {}
 
 ScrollAnimator::~ScrollAnimator() {
-  if (on_finish_)
-    std::move(on_finish_).Run();
+  if (on_finish_) {
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
+  }
 }
 
 ScrollOffset ScrollAnimator::DesiredTargetOffset() const {
@@ -75,12 +72,6 @@ ScrollOffset ScrollAnimator::DesiredTargetOffset() const {
           run_state_ == RunState::kWaitingToSendToCompositor)
              ? target_offset_
              : CurrentOffset();
-}
-
-bool ScrollAnimator::HasRunningAnimation() const {
-  return run_state_ != RunState::kPostAnimationCleanup &&
-         (animation_curve_ ||
-          run_state_ == RunState::kWaitingToSendToCompositor);
 }
 
 ScrollOffset ScrollAnimator::ComputeDeltaToConsume(
@@ -96,31 +87,35 @@ void ScrollAnimator::ResetAnimationState() {
     animation_curve_.reset();
   start_time_ = base::TimeTicks();
   if (on_finish_)
-    std::move(on_finish_).Run();
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
 }
 
 ScrollResult ScrollAnimator::UserScroll(
     ui::ScrollGranularity granularity,
     const ScrollOffset& delta,
+    cc::ScrollSourceType source_type,
     ScrollableArea::ScrollCallback on_finish) {
   // We only store on_finish_ when running an animation, and it should be
   // invoked as soon as the animation is finished. If we don't animate the
   // scroll, the callback is invoked immediately without being stored.
   DCHECK(HasRunningAnimation() || on_finish_.is_null());
 
-#if BUILDFLAG(IS_MAC)
-  have_scrolled_since_page_load_ = true;
-#endif
-
-  base::ScopedClosureRunner run_on_return(std::move(on_finish));
+  ScrollableArea::ScrollCallback run_on_return(blink::BindOnce(
+      [](ScrollableArea::ScrollCallback callback,
+         ScrollableArea::ScrollCompletionMode mode) {
+        if (callback) {
+          std::move(callback).Run(mode);
+        }
+      },
+      std::move(on_finish)));
 
   if (!scrollable_area_->ScrollAnimatorEnabled() ||
       granularity == ui::ScrollGranularity::kScrollByPrecisePixel) {
     // Cancel scroll animation because asked to instant scroll.
     if (HasRunningAnimation())
       CancelAnimation();
-    return ScrollAnimatorBase::UserScroll(granularity, delta,
-                                          run_on_return.Release());
+    return ScrollAnimatorBase::UserScroll(granularity, delta, source_type,
+                                          std::move(run_on_return));
   }
 
   TRACE_EVENT0("blink", "ScrollAnimator::scroll");
@@ -135,10 +130,13 @@ ScrollResult ScrollAnimator::UserScroll(
   target_offset += consumed_delta;
 
   if (WillAnimateToOffset(target_offset)) {
+    source_type_ = source_type;
     last_granularity_ = granularity;
-    if (on_finish_)
-      std::move(on_finish_).Run();
-    on_finish_ = run_on_return.Release();
+    if (on_finish_) {
+      std::move(on_finish_)
+          .Run(ScrollableArea::ScrollCompletionMode::kInterruptedByScroll);
+    }
+    on_finish_ = std::move(run_on_return);
     // Report unused delta only if there is no animation running. See
     // comment below regarding scroll latching.
     // TODO(bokan): Need to standardize how ScrollAnimators report
@@ -156,7 +154,9 @@ ScrollResult ScrollAnimator::UserScroll(
   // starting one. This ensures we latch for the duration of the
   // animation rather than animating multiple scrollers at the same time.
   if (on_finish_)
-    std::move(on_finish_).Run();
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
+
+  std::move(run_on_return).Run(ScrollableArea::ScrollCompletionMode::kFinished);
   return ScrollResult(false, false, delta.x(), delta.y());
 }
 
@@ -235,11 +235,14 @@ void ScrollAnimator::AdjustAnimation(const gfx::Vector2d& adjustment) {
 }
 
 void ScrollAnimator::ScrollToOffsetWithoutAnimation(
-    const ScrollOffset& offset) {
+    const ScrollOffset& offset,
+    cc::ScrollSourceType source_type) {
   current_offset_ = offset;
+  source_type_ = source_type;
 
   ResetAnimationState();
-  ScrollOffsetChanged(current_offset_, mojom::blink::ScrollType::kUser);
+  ScrollOffsetChanged(current_offset_, mojom::blink::ScrollType::kUser,
+                      source_type);
 }
 
 void ScrollAnimator::TickAnimation(base::TimeTicks monotonic_time) {
@@ -260,14 +263,17 @@ void ScrollAnimator::TickAnimation(base::TimeTicks monotonic_time) {
 
   if (is_finished) {
     run_state_ = RunState::kPostAnimationCleanup;
-    if (on_finish_)
-      std::move(on_finish_).Run();
+    if (on_finish_) {
+      std::move(on_finish_)
+          .Run(ScrollableArea::ScrollCompletionMode::kFinished);
+    }
   } else {
     GetScrollableArea()->ScheduleAnimation();
   }
 
   TRACE_EVENT0("blink", "ScrollAnimator::notifyOffsetChanged");
-  ScrollOffsetChanged(current_offset_, mojom::blink::ScrollType::kUser);
+  ScrollOffsetChanged(current_offset_, mojom::blink::ScrollType::kUser,
+                      source_type_);
 }
 
 bool ScrollAnimator::SendAnimationToCompositor() {
@@ -298,10 +304,10 @@ void ScrollAnimator::CreateAnimationCurve() {
   DCHECK(!animation_curve_);
   // It is not correct to assume the input type from the granularity, but we've
   // historically determined animation parameters from granularity.
-  cc::ScrollOffsetAnimationCurveFactory::ScrollType scroll_type =
+  cc::ScrollOffsetAnimationCurve::ScrollType scroll_type =
       (last_granularity_ == ui::ScrollGranularity::kScrollByPixel)
-          ? cc::ScrollOffsetAnimationCurveFactory::ScrollType::kMouseWheel
-          : cc::ScrollOffsetAnimationCurveFactory::ScrollType::kKeyboard;
+          ? cc::ScrollOffsetAnimationCurve::ScrollType::kMouseWheel
+          : cc::ScrollOffsetAnimationCurve::ScrollType::kKeyboard;
   animation_curve_ = cc::ScrollOffsetAnimationCurveFactory::CreateAnimation(
       CompositorOffsetFromBlinkOffset(target_offset_), scroll_type);
   animation_curve_->SetInitialValue(
@@ -381,37 +387,29 @@ void ScrollAnimator::NotifyCompositorAnimationAborted(int group_id) {
   // animation.
   ScrollAnimatorCompositorCoordinator::CompositorAnimationFinished(group_id);
   if (on_finish_)
-    std::move(on_finish_).Run();
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
 }
 
 void ScrollAnimator::NotifyCompositorAnimationFinished(int group_id) {
   ScrollAnimatorCompositorCoordinator::CompositorAnimationFinished(group_id);
   if (on_finish_)
-    std::move(on_finish_).Run();
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
 }
 
 void ScrollAnimator::CancelAnimation() {
   ScrollAnimatorCompositorCoordinator::CancelAnimation();
   if (on_finish_)
-    std::move(on_finish_).Run();
-#if BUILDFLAG(IS_MAC)
-  have_scrolled_since_page_load_ = false;
-#endif
+    std::move(on_finish_).Run(ScrollableArea::ScrollCompletionMode::kFinished);
 }
 
 void ScrollAnimator::TakeOverCompositorAnimation() {
   ScrollAnimatorCompositorCoordinator::TakeOverCompositorAnimation();
 }
 
-void ScrollAnimator::MainThreadScrollingDidChange() {
-  ReattachCompositorAnimationIfNeeded(
-      GetScrollableArea()->GetCompositorAnimationTimeline());
-}
-
 bool ScrollAnimator::RegisterAndScheduleAnimation() {
   GetScrollableArea()->RegisterForAnimation();
   if (!scrollable_area_->ScheduleAnimation()) {
-    ScrollToOffsetWithoutAnimation(target_offset_);
+    ScrollToOffsetWithoutAnimation(target_offset_, source_type_);
     ResetAnimationState();
     return false;
   }

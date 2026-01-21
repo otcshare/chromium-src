@@ -10,6 +10,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
+#include "base/strings/string_view_util.h"
 #include "net/base/address_list.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
@@ -39,20 +40,29 @@ class TCPServerSocketTest : public PlatformTest, public WithTaskEnvironment {
 
   void SetUpIPv4() {
     IPEndPoint address(IPAddress::IPv4Localhost(), 0);
-    ASSERT_THAT(socket_.Listen(address, kListenBacklog), IsOk());
+    ASSERT_THAT(
+        socket_.Listen(address, kListenBacklog, /*ipv6_only=*/std::nullopt),
+        IsOk());
     ASSERT_THAT(socket_.GetLocalAddress(&local_address_), IsOk());
   }
 
   void SetUpIPv6(bool* success) {
     *success = false;
     IPEndPoint address(IPAddress::IPv6Localhost(), 0);
-    if (socket_.Listen(address, kListenBacklog) != 0) {
+    if (socket_.Listen(address, kListenBacklog, /*ipv6_only=*/std::nullopt) !=
+        0) {
       LOG(ERROR) << "Failed to listen on ::1 - probably because IPv6 is "
           "disabled. Skipping the test";
       return;
     }
     ASSERT_THAT(socket_.GetLocalAddress(&local_address_), IsOk());
     *success = true;
+  }
+
+  void SetUpIPv6AllInterfaces(bool ipv6_only) {
+    IPEndPoint address(IPAddress::IPv6AllZeros(), 0);
+    ASSERT_THAT(socket_.Listen(address, kListenBacklog, ipv6_only), IsOk());
+    ASSERT_THAT(socket_.GetLocalAddress(&local_address_), IsOk());
   }
 
   static IPEndPoint GetPeerAddress(StreamSocket* socket) {
@@ -232,6 +242,58 @@ TEST_F(TCPServerSocketTest, AcceptIPv6) {
   EXPECT_THAT(connect_callback.GetResult(connect_result), IsOk());
 }
 
+class TCPServerSocketTestWithIPv6Only
+    : public TCPServerSocketTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  void AttemptToConnect(const IPAddress& dest_addr, bool should_succeed) {
+    TCPClientSocket connecting_socket(
+        AddressList(IPEndPoint(dest_addr, local_address_.port())), nullptr,
+        nullptr, nullptr, NetLogSource());
+
+    TestCompletionCallback connect_cb;
+    int connect_result = connecting_socket.Connect(connect_cb.callback());
+    if (!should_succeed) {
+      connect_result = connect_cb.GetResult(connect_result);
+      ASSERT_EQ(connect_result, net::ERR_CONNECTION_REFUSED);
+      return;
+    }
+
+    std::unique_ptr<StreamSocket> accepted_socket;
+    IPEndPoint peer_address;
+
+    TestCompletionCallback accept_cb;
+    int accept_result =
+        socket_.Accept(&accepted_socket, accept_cb.callback(), &peer_address);
+    ASSERT_EQ(accept_cb.GetResult(accept_result), net::OK);
+    ASSERT_EQ(connect_cb.GetResult(connect_result), net::OK);
+
+    // |accepted_socket| should be available.
+    ASSERT_NE(accepted_socket.get(), nullptr);
+
+    // |peer_address| should be correctly populated.
+    if (peer_address.address().IsIPv4MappedIPv6()) {
+      ASSERT_EQ(ConvertIPv4MappedIPv6ToIPv4(peer_address.address()), dest_addr);
+    } else {
+      ASSERT_EQ(peer_address.address(), dest_addr);
+    }
+  }
+};
+
+TEST_P(TCPServerSocketTestWithIPv6Only, AcceptIPv6Only) {
+  const bool ipv6_only = GetParam();
+  ASSERT_NO_FATAL_FAILURE(SetUpIPv6AllInterfaces(ipv6_only));
+  ASSERT_FALSE(local_address_list().empty());
+
+  // 127.0.0.1 succeeds when |ipv6_only| is false and vice versa.
+  AttemptToConnect(IPAddress::IPv4Localhost(), /*should_succeed=*/!ipv6_only);
+
+  // ::1 succeeds regardless of |ipv6_only|.
+  AttemptToConnect(IPAddress::IPv6Localhost(), /*should_succeed=*/true);
+}
+
+INSTANTIATE_TEST_SUITE_P(All, TCPServerSocketTestWithIPv6Only, testing::Bool());
+
 TEST_F(TCPServerSocketTest, AcceptIO) {
   ASSERT_NO_FATAL_FAILURE(SetUpIPv4());
 
@@ -259,40 +321,34 @@ TEST_F(TCPServerSocketTest, AcceptIO) {
   EXPECT_THAT(connect_callback.GetResult(connect_result), IsOk());
 
   const std::string message("test message");
-  std::vector<char> buffer(message.size());
 
-  size_t bytes_written = 0;
-  while (bytes_written < message.size()) {
-    scoped_refptr<IOBufferWithSize> write_buffer =
-        base::MakeRefCounted<IOBufferWithSize>(message.size() - bytes_written);
-    memmove(write_buffer->data(), message.data(), message.size());
-
+  auto write_buffer = base::MakeRefCounted<DrainableIOBuffer>(
+      base::MakeRefCounted<StringIOBuffer>(message), message.size());
+  while (write_buffer->size() > 0u) {
     TestCompletionCallback write_callback;
     int write_result = accepted_socket->Write(
         write_buffer.get(), write_buffer->size(), write_callback.callback(),
         TRAFFIC_ANNOTATION_FOR_TESTS);
     write_result = write_callback.GetResult(write_result);
-    ASSERT_TRUE(write_result >= 0);
-    ASSERT_TRUE(bytes_written + write_result <= message.size());
-    bytes_written += write_result;
+    ASSERT_GE(write_result, 0);
+    ASSERT_LE(write_result, write_buffer->size());
+    write_buffer->DidConsume(write_result);
   }
 
-  size_t bytes_read = 0;
-  while (bytes_read < message.size()) {
-    scoped_refptr<IOBufferWithSize> read_buffer =
-        base::MakeRefCounted<IOBufferWithSize>(message.size() - bytes_read);
+  auto read_buffer = base::MakeRefCounted<DrainableIOBuffer>(
+      base::MakeRefCounted<IOBufferWithSize>(message.size()), message.size());
+  while (read_buffer->size() > 0u) {
     TestCompletionCallback read_callback;
     int read_result = connecting_socket.Read(
         read_buffer.get(), read_buffer->size(), read_callback.callback());
     read_result = read_callback.GetResult(read_result);
-    ASSERT_TRUE(read_result >= 0);
-    ASSERT_TRUE(bytes_read + read_result <= message.size());
-    memmove(&buffer[bytes_read], read_buffer->data(), read_result);
-    bytes_read += read_result;
+    ASSERT_GE(read_result, 0);
+    ASSERT_LE(read_result, read_buffer->size());
+    read_buffer->DidConsume(read_result);
   }
 
-  std::string received_message(buffer.begin(), buffer.end());
-  ASSERT_EQ(message, received_message);
+  read_buffer->SetOffset(0);
+  ASSERT_EQ(message, base::as_string_view(read_buffer->span()));
 }
 
 }  // namespace

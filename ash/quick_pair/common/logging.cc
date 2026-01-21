@@ -7,8 +7,7 @@
 #include "ash/quick_pair/common/log_buffer.h"
 #include "base/time/time.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 namespace {
 
@@ -24,7 +23,7 @@ ScopedDisableLoggingForTesting::~ScopedDisableLoggingForTesting() {
   g_logging_enabled = true;
 }
 
-ScopedLogMessage::ScopedLogMessage(const char* file,
+ScopedLogMessage::ScopedLogMessage(std::string_view file,
                                    int line,
                                    logging::LogSeverity severity)
     : file_(file), line_(line), severity_(severity) {}
@@ -35,20 +34,19 @@ ScopedLogMessage::~ScopedLogMessage() {
 
   const std::string string_from_stream = stream_.str();
   LogBuffer::GetInstance()->AddLogMessage(LogBuffer::LogMessage(
-      string_from_stream, base::Time::Now(), file_, line_, severity_));
+      string_from_stream, base::Time::Now(), file_.data(), line_, severity_));
 
   // Don't emit VERBOSE-level logging to the standard logging system unless
   // verbose logging is enabled for the source file.
-  if (severity_ <= logging::LOG_VERBOSE &&
-      logging::GetVlogLevelHelper(file_, strlen(file_) + 1) <= 0) {
+  if (severity_ <= logging::LOGGING_VERBOSE &&
+      logging::GetVlogLevelHelper(file_.data(), file_.size()) <= 0) {
     return;
   }
 
   // The destructor of |log_message| also creates a log for the standard logging
   // system.
-  logging::LogMessage log_message(file_, line_, severity_);
+  logging::LogMessage log_message(file_.data(), line_, severity_);
   log_message.stream() << string_from_stream;
 }
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair

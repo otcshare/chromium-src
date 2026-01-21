@@ -4,26 +4,44 @@
 
 package org.chromium.chrome.browser.ui.native_page;
 
-import android.net.Uri;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
-/**
- * An interface for pages that will be using Android views instead of html/rendered Web content.
- */
+/** An interface for pages that will be using Android views instead of html/rendered Web content. */
+@NullMarked
 public interface NativePage {
+
+    /** An interface to trigger the native page's smooth transition. */
+    interface SmoothTransitionDelegate {
+
+        /** A callback for delegate to set the initial state of the smooth transition. */
+        void prepare();
+
+        /**
+         * Start the smooth transition.
+         *
+         * @param onEnd A runnable to be invoked when the transition is complete.
+         */
+        void start(Runnable onEnd);
+
+        /** Cancel the smooth transition. */
+        void cancel();
+    }
+
     /**
      * @return The View to display the page. This is always non-null.
      */
-    View getView();
+    @Nullable View getView();
 
     /**
      * @return The title of the page.
@@ -46,6 +64,15 @@ public interface NativePage {
     int getBackgroundColor();
 
     /**
+     * Returns whether to use a light tint on icons of the toolbar and status bar for this tab. For
+     * example, new tab page can use a light tint icons on icons of toolbar and status bar when a
+     * customized background image is applied.
+     */
+    default boolean useLightIconTint() {
+        return false;
+    }
+
+    /**
      * @param defaultColor Default color if not customized.
      * @return The color of the toolbar textbox background.
      */
@@ -62,17 +89,7 @@ public interface NativePage {
         return defaultColor;
     }
 
-    /**
-     * @param defaultAlpha Default alpha if not customized.
-     * @return Alpha for the toolbar textbox.
-     */
-    default float getToolbarTextBoxAlpha(float defaultColor) {
-        return defaultColor;
-    }
-
-    /**
-     * Reloads the native page.
-     */
+    /** Reloads the native page. */
     default void reload() {}
 
     /**
@@ -80,10 +97,31 @@ public interface NativePage {
      */
     boolean needsToolbarShadow();
 
+    /** Whether the native page supports drawing edge to edge into the bottom system bar insets. */
+    default boolean supportsEdgeToEdge() {
+        return false;
+    }
+
     /**
-     * Updates the native page based on the given url.
+     * Whether the native page supports drawing edge to edge into the top system bar insets e.g.
+     * status bar.
      */
+    default boolean supportsEdgeToEdgeOnTop() {
+        return false;
+    }
+
+    /** Returns the top inset of the native page. */
+    default int getTopInset() {
+        return 0;
+    }
+
+    /** Updates the native page based on the given url. */
     void updateForUrl(String url);
+
+    /** Get the height of the region of the native page view that overlaps top browser controls. */
+    default int getHeightOverlappedWithTopControls() {
+        return 0;
+    }
 
     /**
      * @return {@code true} if the native page is in inactive/frozen state.
@@ -93,20 +131,56 @@ public interface NativePage {
     }
 
     /**
-     * Notify the native page that it is about to be navigated back or hidden by a back press.
+     * @return {@code true} if the native page is a pdf page.
      */
+    default boolean isPdf() {
+        return false;
+    }
+
+    /**
+     * @return the filepath or null if not available. Only pdf native page supports filepath now.
+     */
+    default @Nullable String getCanonicalFilepath() {
+        return null;
+    }
+
+    /**
+     * @return {@code true} if the associated download is from secure source or there is no
+     *     associated download.
+     */
+    default boolean isDownloadSafe() {
+        return true;
+    }
+
+    /** Notify the native page that it is about to be navigated back or hidden by a back press. */
     default void notifyHidingWithBack() {}
 
     /**
-     * Called after a page has been removed from the view hierarchy and will no longer be used.
+     * Enable the smooth transition for the native page. Defaults to null which means not supported.
+     * Return a {@link SmoothTransitionDelegate} which will signal the start and execute the given
+     * post-task.
      */
+    default @Nullable SmoothTransitionDelegate enableSmoothTransition() {
+        return null;
+    }
+
+    /** Called after a page has been removed from the view hierarchy and will no longer be used. */
     void destroy();
 
-    @IntDef({NativePageType.NONE, NativePageType.CANDIDATE, NativePageType.NTP,
-            NativePageType.BOOKMARKS, NativePageType.RECENT_TABS, NativePageType.DOWNLOADS,
-            NativePageType.HISTORY, NativePageType.EXPLORE, NativePageType.MANAGEMENT})
+    @IntDef({
+        NativePageType.NONE,
+        NativePageType.CANDIDATE,
+        NativePageType.NTP,
+        NativePageType.BOOKMARKS,
+        NativePageType.RECENT_TABS,
+        NativePageType.DOWNLOADS,
+        NativePageType.HISTORY,
+        NativePageType.EXPLORE,
+        NativePageType.MANAGEMENT,
+        NativePageType.PDF
+    })
     @Retention(RetentionPolicy.SOURCE)
-    public @interface NativePageType {
+    @interface NativePageType {
         int NONE = 0;
         int CANDIDATE = 1;
         int NTP = 2;
@@ -116,44 +190,79 @@ public interface NativePage {
         int HISTORY = 6;
         int EXPLORE = 7;
         int MANAGEMENT = 8;
+        int PDF = 9;
     }
 
     /**
-     * Returns whether the URL would navigate to a native page.
-     *
      * @param url The URL to be checked.
      * @param isIncognito Whether the page will be displayed in incognito mode.
-     * @return Whether the host and the scheme of the passed in URL matches one of the supported
-     *         native pages.
+     * @param hasPdfDownload Whether the page has an associated pdf download.
+     * @return Whether the URL would navigate to a native page.
      */
-    @Deprecated // Use GURL-variant instead.
-    public static boolean isNativePageUrl(String url, boolean isIncognito) {
-        return nativePageType(url, null, isIncognito) != NativePageType.NONE;
+    static boolean isNativePageUrl(GURL url, boolean isIncognito, boolean hasPdfDownload) {
+        return url != null
+                && nativePageType(url, null, isIncognito, hasPdfDownload) != NativePageType.NONE;
     }
 
-    public static boolean isNativePageUrl(GURL url, boolean isIncognito) {
-        return url != null
-                && nativePageType(url.getSpec(), null, isIncognito) != NativePageType.NONE;
+    /**
+     * @param url The URL to be checked.
+     * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @return Whether the URL would navigate to a native page, excluding pdf native page which do
+     *     not have chrome or chrome-native scheme.
+     */
+    static boolean isChromePageUrl(GURL url, boolean isIncognito) {
+        return url != null && chromePageType(url, null, isIncognito) != NativePageType.NONE;
+    }
+
+    /**
+     * @param url The URL to be checked.
+     * @param candidatePage NativePage to return as result if the url is matched.
+     * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @param hasPdfDownload Whether the page has an associated pdf download.
+     * @return Type of the native page defined in {@link NativePageType}.
+     */
+    static @NativePageType int nativePageType(
+            GURL url,
+            @Nullable NativePage candidatePage,
+            boolean isIncognito,
+            boolean hasPdfDownload) {
+        if (hasPdfDownload) {
+            // For navigation with associated pdf download (e.g. open a pdf link), pdf page should
+            // be created.
+            // Unlike other native pages, each pdf page could be different. We need to compare
+            // the entire url instead of the host to determine if the pdf candidate page could
+            // be reused.
+            if (candidatePage != null && candidatePage.getUrl().equals(url.getSpec())) {
+                return NativePageType.CANDIDATE;
+            } else {
+                return NativePageType.PDF;
+            }
+        } else if (UrlConstants.PDF_HOST.equals(url.getHost())) {
+            // For navigation to chrome-native://pdf/ without associated pdf download (e.g. navigate
+            // back/forward to pdf page), do not create pdf page yet. The pdf page will be
+            // created after the pdf document is re-downloaded in other parts of the code.
+            return NativePageType.NONE;
+        } else {
+            return chromePageType(url, candidatePage, isIncognito);
+        }
     }
 
     /**
      * @param url The URL to be checked.
      * @param candidatePage NativePage to return as result if the host is matched.
      * @param isIncognito Whether the page will be displayed in incognito mode.
-     * @return Type of the native page defined in {@link NativePageType}.
+     * @return Type of the native page defined in {@link NativePageType}, excluding pdf native page
+     *     which do not have chrome or chrome-native scheme.
      */
-    // TODO(crbug/783819) - Convert to using GURL.
-    public static @NativePageType int nativePageType(
-            String url, NativePage candidatePage, boolean isIncognito) {
-        if (url == null) return NativePageType.NONE;
-
-        Uri uri = Uri.parse(url);
-        if (!UrlConstants.CHROME_NATIVE_SCHEME.equals(uri.getScheme())
-                && !UrlConstants.CHROME_SCHEME.equals(uri.getScheme())) {
+    private static @NativePageType int chromePageType(
+            GURL url, @Nullable NativePage candidatePage, boolean isIncognito) {
+        String host = url.getHost();
+        String scheme = url.getScheme();
+        if (!UrlConstants.CHROME_NATIVE_SCHEME.equals(scheme)
+                && !UrlConstants.CHROME_SCHEME.equals(scheme)) {
             return NativePageType.NONE;
         }
 
-        String host = uri.getHost();
         if (candidatePage != null && candidatePage.getHost().equals(host)) {
             return NativePageType.CANDIDATE;
         }

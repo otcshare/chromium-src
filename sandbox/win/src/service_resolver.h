@@ -7,7 +7,7 @@
 
 #include <stddef.h>
 
-#include "sandbox/win/src/nt_internals.h"
+#include "base/win/windows_types.h"
 #include "sandbox/win/src/resolver.h"
 
 namespace sandbox {
@@ -31,18 +31,11 @@ class [[clang::lto_visibility_public]] ServiceResolverThunk
 
   // Implementation of Resolver::Setup.
   NTSTATUS Setup(const void* target_module,
-                 const void* interceptor_module,
                  const char* target_name,
-                 const char* interceptor_name,
                  const void* interceptor_entry_point,
                  void* thunk_storage,
                  size_t storage_bytes,
                  size_t* storage_used) override;
-
-  // Implementation of Resolver::ResolveInterceptor.
-  NTSTATUS ResolveInterceptor(const void* module,
-                              const char* function_name,
-                              const void** address) override;
 
   // Implementation of Resolver::ResolveTarget.
   NTSTATUS ResolveTarget(const void* module,
@@ -75,6 +68,14 @@ class [[clang::lto_visibility_public]] ServiceResolverThunk
 
   // Handle of the child process.
   HANDLE process_;
+
+  // Writes |length| bytes from the provided |buffer| into the address space of
+  // |child_process|, at the specified |address|, preserving the original write
+  // protection attributes. Returns true on success.
+  static bool WriteProtectedChildMemory(HANDLE child_process,
+                                        void* address,
+                                        const void* buffer,
+                                        size_t length);
 
   // Returns true if the code pointer by target_ corresponds to the expected
   // type of function. Saves that code on the first part of the thunk pointed

@@ -4,6 +4,13 @@
 
 import("//build/config/ui.gni")
 
+source_set("common") {
+  sources = [
+    "common/switches.cc",
+    "common/switches.h",
+  ]
+}
+
 static_library("client") {
   output_name = "demo_client"
 
@@ -24,10 +31,13 @@ static_library("host") {
   sources = [
     "host/demo_host.cc",
     "host/demo_host.h",
+    "host/demo_host_display_client.cc",
+    "host/demo_host_display_client.h",
   ]
 
   deps = [
     ":client",
+    ":common",
     "//components/viz/common",
     "//components/viz/host",
     "//mojo/public/cpp/system",
@@ -43,10 +53,14 @@ static_library("service") {
   ]
 
   deps = [
+    ":common",
     "//components/viz/common",
+    "//components/viz/service",
     "//components/viz/service/main",
+    "//gpu/ipc/host",
     "//mojo/public/cpp/system",
     "//services/viz/privileged/mojom",
+    "//services/viz/privileged/mojom/gl",
   ]
 }
 
@@ -54,6 +68,7 @@ executable("viz_demo") {
   sources = [ "demo_main.cc" ]
 
   deps = [
+    ":common",
     "//base",
     "//base:base_static",
     "//base:i18n",
@@ -76,4 +91,8 @@ executable("viz_demo") {
   if (use_ozone) {
     deps += [ "//ui/ozone:ozone_gpu_test_support" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

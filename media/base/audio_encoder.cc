@@ -4,10 +4,11 @@
 
 #include "media/base/audio_encoder.h"
 
+#include "base/containers/heap_array.h"
 #include "base/logging.h"
+#include "base/task/bind_post_task.h"
 #include "base/time/time.h"
 #include "media/base/audio_timestamp_helper.h"
-#include "media/base/bind_to_current_loop.h"
 
 namespace media {
 
@@ -17,13 +18,11 @@ AudioEncoder::Options::~Options() = default;
 
 EncodedAudioBuffer::EncodedAudioBuffer() = default;
 EncodedAudioBuffer::EncodedAudioBuffer(const AudioParameters& params,
-                                       std::unique_ptr<uint8_t[]> data,
-                                       size_t size,
+                                       base::HeapArray<uint8_t> data,
                                        base::TimeTicks timestamp,
                                        base::TimeDelta duration)
     : params(params),
       encoded_data(std::move(data)),
-      encoded_data_size(size),
       timestamp(timestamp),
       duration(duration) {}
 
@@ -47,14 +46,16 @@ void AudioEncoder::DisablePostedCallbacks() {
 
 AudioEncoder::OutputCB AudioEncoder::BindCallbackToCurrentLoopIfNeeded(
     OutputCB&& callback) {
-  return post_callbacks_ ? BindToCurrentLoop(std::move(callback))
-                         : std::move(callback);
+  return post_callbacks_
+             ? base::BindPostTaskToCurrentDefault(std::move(callback))
+             : std::move(callback);
 }
 
 AudioEncoder::EncoderStatusCB AudioEncoder::BindCallbackToCurrentLoopIfNeeded(
     EncoderStatusCB&& callback) {
-  return post_callbacks_ ? BindToCurrentLoop(std::move(callback))
-                         : std::move(callback);
+  return post_callbacks_
+             ? base::BindPostTaskToCurrentDefault(std::move(callback))
+             : std::move(callback);
 }
 
 }  // namespace media

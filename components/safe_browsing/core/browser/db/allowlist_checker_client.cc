@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 
 namespace safe_browsing {
@@ -83,7 +83,8 @@ AllowlistCheckerClient::AllowlistCheckerClient(
     base::OnceCallback<void(bool)> callback_for_result,
     scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
     bool default_does_match_allowlist)
-    : callback_for_result_(std::move(callback_for_result)),
+    : SafeBrowsingDatabaseManager::Client(GetPassKey()),
+      callback_for_result_(std::move(callback_for_result)),
       database_manager_(database_manager),
       default_does_match_allowlist_(default_does_match_allowlist) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

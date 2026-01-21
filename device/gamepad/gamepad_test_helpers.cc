@@ -4,6 +4,8 @@
 
 #include "device/gamepad/gamepad_test_helpers.h"
 
+#include "base/compiler_specific.h"
+
 namespace device {
 
 MockGamepadDataFetcher::MockGamepadDataFetcher(const Gamepads& test_data)
@@ -25,7 +27,8 @@ void MockGamepadDataFetcher::GetGamepadData(bool devices_changed_hint) {
       if (test_data_.items[i].connected) {
         PadState* pad = GetPadState(i);
         if (pad)
-          memcpy(&pad->data, &test_data_.items[i], sizeof(Gamepad));
+          UNSAFE_TODO(
+              memcpy(&pad->data, &test_data_.items[i], sizeof(Gamepad)));
       }
     }
   }

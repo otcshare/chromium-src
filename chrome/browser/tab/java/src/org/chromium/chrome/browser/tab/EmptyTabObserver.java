@@ -6,6 +6,13 @@ package org.chromium.chrome.browser.tab;
 
 import android.graphics.Bitmap;
 
+import org.chromium.base.Token;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.cc.input.BrowserControlsState;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
+import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
+import org.chromium.chrome.browser.tab.Tab.MediaState;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -20,9 +27,10 @@ import org.chromium.url.GURL;
  * Note: Do not replace this with TabObserver with default interface methods as it inadvertently
  * bloats the number of methods. See https://crbug.com/781359.
  */
+@NullMarked
 public class EmptyTabObserver implements TabObserver {
     @Override
-    public void onInitialized(Tab tab, String appId) {}
+    public void onInitialized(Tab tab, @Nullable String appId) {}
 
     @Override
     public void onShown(Tab tab, @TabSelectionType int type) {}
@@ -40,7 +48,7 @@ public class EmptyTabObserver implements TabObserver {
     public void onContentChanged(Tab tab) {}
 
     @Override
-    public void onLoadUrl(Tab tab, LoadUrlParams params, int loadType) {}
+    public void onLoadUrl(Tab tab, LoadUrlParams params, LoadUrlResult loadUrlResult) {}
 
     @Override
     public void onPageLoadStarted(Tab tab, GURL url) {}
@@ -58,7 +66,10 @@ public class EmptyTabObserver implements TabObserver {
     public void onRestoreFailed(Tab tab) {}
 
     @Override
-    public void onFaviconUpdated(Tab tab, Bitmap icon, GURL iconUrl) {}
+    public void onFaviconUpdated(Tab tab, @Nullable Bitmap icon, @Nullable GURL iconUrl) {}
+
+    @Override
+    public void onMediaStateChanged(Tab tab, @MediaState int mediaState) {}
 
     @Override
     public void onTitleUpdated(Tab tab) {}
@@ -71,12 +82,6 @@ public class EmptyTabObserver implements TabObserver {
 
     @Override
     public void onCrash(Tab tab) {}
-
-    @Override
-    public void webContentsWillSwap(Tab tab) {}
-
-    @Override
-    public void onWebContentsSwapped(Tab tab, boolean didStartLoad, boolean didFinishLoad) {}
 
     @Override
     public void onContextMenuShown(Tab tab) {}
@@ -94,14 +99,11 @@ public class EmptyTabObserver implements TabObserver {
     public void onLoadProgressChanged(Tab tab, float progress) {}
 
     @Override
-    public void onUpdateUrl(Tab tab, GURL url) {}
+    public void onUpdateTargetUrl(Tab tab, GURL url) {}
 
     @Override
-    public void onDidStartNavigationInPrimaryMainFrame(Tab tab, NavigationHandle navigationHandle) {
-    }
-
-    @Override
-    public void onDidStartNavigationNoop(Tab tab, NavigationHandle navigationHandle) {}
+    public void onDidStartNavigationInPrimaryMainFrame(
+            Tab tab, NavigationHandle navigationHandle) {}
 
     @Override
     public void onDidRedirectNavigation(Tab tab, NavigationHandle navigationHandle) {}
@@ -111,7 +113,7 @@ public class EmptyTabObserver implements TabObserver {
             Tab tab, NavigationHandle navigationHandle) {}
 
     @Override
-    public void onDidFinishNavigationNoop(Tab tab, NavigationHandle navigationHandle) {}
+    public void onDidFinishNavigationEnd() {}
 
     @Override
     public void didFirstVisuallyNonEmptyPaint(Tab tab) {}
@@ -132,6 +134,9 @@ public class EmptyTabObserver implements TabObserver {
     public void onRendererResponsiveStateChanged(Tab tab, boolean isResponsive) {}
 
     @Override
+    public void onNavigationEntriesAppended(Tab tab) {}
+
+    @Override
     public void onNavigationEntriesDeleted(Tab tab) {}
 
     @Override
@@ -141,10 +146,57 @@ public class EmptyTabObserver implements TabObserver {
     public void onFindMatchRectsAvailable(FindMatchRectsDetails result) {}
 
     @Override
-    public void onBrowserControlsOffsetChanged(Tab tab, int topControlsOffsetY,
-            int bottomControlsOffsetY, int contentOffsetY, int topControlsMinHeightOffsetY,
+    public void onBrowserControlsOffsetChanged(
+            Tab tab,
+            int topControlsOffsetY,
+            int bottomControlsOffsetY,
+            int contentOffsetY,
+            int topControlsMinHeightOffsetY,
             int bottomControlsMinHeightOffsetY) {}
 
     @Override
+    public void onOffsetTagsInfoChanged(
+            Tab tab,
+            BrowserControlsOffsetTagsInfo oldOffsetTagsInfo,
+            BrowserControlsOffsetTagsInfo offsetTagsInfo,
+            @BrowserControlsState int constraints) {}
+
+    @Override
+    public void onWillShowBrowserControls(Tab tab, boolean viewTransitionOptIn) {}
+
+    @Override
     public void onContentViewScrollingStateChanged(boolean scrolling) {}
+
+    @Override
+    public void onNavigationStateChanged() {}
+
+    @Override
+    public void onDidChangeCloseSignalInterceptStatus() {}
+
+    @Override
+    public void onRootIdChanged(Tab tab, int newRootId) {}
+
+    @Override
+    public void onTabGroupIdChanged(Tab tab, @Nullable Token tabGroupId) {}
+
+    @Override
+    public void onGestureBegin() {}
+
+    @Override
+    public void onGestureEnd() {}
+
+    @Override
+    public void onTouchDown() {}
+
+    @Override
+    public void onTouchUp() {}
+
+    @Override
+    public void didBackForwardTransitionAnimationChange(Tab tab) {}
+
+    @Override
+    public void onTabContentSensitivityChanged(Tab tab, boolean contentIsSensitive) {}
+
+    @Override
+    public void onTabUnarchived(Tab tab) {}
 }

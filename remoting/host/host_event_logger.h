@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
 
 namespace remoting {
 
@@ -32,6 +32,6 @@ class HostEventLogger {
   HostEventLogger() {}
 };
 
-}
+}  // namespace remoting
 
 #endif  // REMOTING_HOST_HOST_EVENT_LOGGER_H_

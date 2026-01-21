@@ -65,7 +65,8 @@ ERROR_REMAP = {
 }
 
 _EXTENDED_ATTRIBUTES_APPLICABLE_TO_TYPES = [
-    'Clamp', 'EnforceRange', 'StringContext', 'TreatNullAs']
+    'Clamp', 'EnforceRange', 'TreatNullAs'
+]
 
 
 def Boolean(val):
@@ -681,9 +682,14 @@ class IDLParser(object):
     p[0] = self.BuildProduction('Iterable', p, 2, childlist)
 
   def p_AsyncIterable(self, p):
-    """AsyncIterable : ASYNC ITERABLE '<' TypeWithExtendedAttributes OptionalType '>' OptionalArgumentList ';'"""
-    childlist = ListFromConcat(p[4], p[5], p[7])
+    """AsyncIterable : AsyncIterableKeyword '<' TypeWithExtendedAttributes OptionalType '>' OptionalArgumentList ';'"""
+    childlist = ListFromConcat(p[3], p[4], p[6])
     p[0] = self.BuildProduction('AsyncIterable', p, 2, childlist)
+
+  def p_AsyncIterableKeyword(self, p):
+    # TODO(433299826): remove old syntax.
+    """AsyncIterableKeyword : ASYNC_ITERABLE
+                            | ASYNC ITERABLE"""
 
   def p_OptionalType(self, p):
     """OptionalType : ',' TypeWithExtendedAttributes
@@ -945,6 +951,7 @@ class IDLParser(object):
     """PrimitiveType : UnsignedIntegerType
                      | UnrestrictedFloatType
                      | StringType
+                     | BIGINT
                      | BOOLEAN
                      | BYTE
                      | OCTET
@@ -1303,7 +1310,7 @@ class IDLParser(object):
 
     try:
       self.lexer.Tokenize(data, filename)
-      nodes = self.yaccobj.parse(lexer=self.lexer) or []
+      nodes = self.yaccobj.parse(lexer=self.lexer, tracking=True) or []
       name = self.BuildAttribute('NAME', filename)
       return IDLNode('File', filename, 0, 0, nodes + [name])
 
@@ -1315,7 +1322,7 @@ class IDLParser(object):
 
 def ParseFile(parser, filename):
   """Parse a file and return a File type of node."""
-  with open(filename) as fileobject:
+  with open(filename, encoding='utf-8') as fileobject:
     try:
       out = parser.ParseText(filename, fileobject.read())
       out.SetProperty('ERRORS', parser.GetErrors())

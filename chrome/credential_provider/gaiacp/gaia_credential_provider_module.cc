@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/strings/string_util.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
@@ -26,6 +27,7 @@
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 #include "components/crash/core/app/crash_switches.h"
+#include "components/crash/core/app/crashpad.h"
 #include "content/public/common/content_switches.h"
 
 namespace credential_provider {
@@ -64,7 +66,7 @@ CGaiaCredentialProviderModule::CGaiaCredentialProviderModule()
       gcpw_extension_check_performed_(0),
       crashpad_initialized_(0) {}
 
-CGaiaCredentialProviderModule::~CGaiaCredentialProviderModule() {}
+CGaiaCredentialProviderModule::~CGaiaCredentialProviderModule() = default;
 
 // static
 HRESULT WINAPI
@@ -135,13 +137,12 @@ void CGaiaCredentialProviderModule::InitializeCrashReporting() {
 }
 
 void CGaiaCredentialProviderModule::LogProcessDetails() {
-  wchar_t process_name[MAX_PATH] = {0};
+  wchar_t process_name[MAX_PATH] = {};
   GetModuleFileName(nullptr, process_name, MAX_PATH);
 
   LOGFN(INFO) << "GCPW Initialized in " << process_name
               << " GCPW Version: " << (CHROME_VERSION_STRING)
-              << " Windows Build: "
-              << base::win::OSInfo::GetInstance()->Kernel32BaseVersion()
+              << " Windows Build: " << base::win::OSInfo::Kernel32BaseVersion()
               << " Version:" << GetWindowsVersion();
 }
 
@@ -160,6 +161,17 @@ BOOL CGaiaCredentialProviderModule::DllMain(HINSTANCE /*hinstance*/,
       // Initialize logging.
       logging::LoggingSettings settings;
       settings.logging_dest = logging::LOG_NONE;
+
+      std::wstring log_file_path =
+          GetGlobalFlagOrDefault(kRegLogFilePath, std::wstring{});
+      if (not log_file_path.empty()) {
+        settings.logging_dest = logging::LOG_TO_FILE;
+        bool append_log = GetGlobalFlagOrDefault(kRegLogFileAppend, 0);
+        settings.delete_old = append_log ? logging::APPEND_TO_OLD_LOG_FILE
+                                         : logging::DELETE_OLD_LOG_FILE;
+        settings.log_file_path = log_file_path;
+      }
+
       logging::InitLogging(settings);
       logging::SetLogItems(true,    // Enable process id.
                            true,    // Enable thread id.
@@ -167,7 +179,7 @@ BOOL CGaiaCredentialProviderModule::DllMain(HINSTANCE /*hinstance*/,
                            false);  // Enable tickcount.
       logging::SetEventSource("GCPW", GCPW_CATEGORY, MSG_LOG_MESSAGE);
       if (GetGlobalFlagOrDefault(kRegEnableVerboseLogging, 0))
-        logging::SetMinLogLevel(logging::LOG_VERBOSE);
+        logging::SetMinLogLevel(logging::LOGGING_VERBOSE);
       break;
     }
     case DLL_PROCESS_DETACH:
@@ -180,6 +192,8 @@ BOOL CGaiaCredentialProviderModule::DllMain(HINSTANCE /*hinstance*/,
 
       _set_invalid_parameter_handler(nullptr);
       exit_manager_.reset();
+
+      crash_reporter::DestroyCrashpadClient();
       break;
 
     default:

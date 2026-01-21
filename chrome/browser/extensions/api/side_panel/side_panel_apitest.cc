@@ -3,29 +3,23 @@
 // found in the LICENSE file.
 
 #include <optional>
-#include "base/test/scoped_feature_list.h"
+
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/version_info/channel.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_host_test_helper.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/test_extension_registry_observer.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/test/test_extension_dir.h"
 
 namespace extensions {
 
 class SidePanelApiTest : public ExtensionApiTest {
- public:
-  SidePanelApiTest() {
-    feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionSidePanelIntegration);
-  }
-
  private:
-  base::test::ScopedFeatureList feature_list_;
   ScopedCurrentChannel current_channel_{version_info::Channel::CANARY};
 };
 
@@ -40,9 +34,20 @@ IN_PROC_BROWSER_TEST_F(SidePanelApiTest, PermissionMissing) {
   ASSERT_TRUE(RunExtensionTest("side_panel/permission_missing")) << message_;
 }
 
-// Verify chrome.sidePanel.get behavior without side_panel manifest key.
+// Verify chrome.sidePanel.getOptions behavior without side_panel manifest key.
 IN_PROC_BROWSER_TEST_F(SidePanelApiTest, MissingManifestKey) {
   ASSERT_TRUE(RunExtensionTest("side_panel/missing_manifest_key")) << message_;
+}
+
+// Verify chrome.sidePanel.get/setPanelBehavior behavior.
+IN_PROC_BROWSER_TEST_F(SidePanelApiTest, PanelBehavior) {
+  ASSERT_TRUE(RunExtensionTest("side_panel/panel_behavior")) << message_;
+}
+
+// Verify normal chrome.sidePanel functionality.
+IN_PROC_BROWSER_TEST_F(SidePanelApiTest, ApiOnly) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  ASSERT_TRUE(RunExtensionTest("side_panel/api_only")) << message_;
 }
 
 class SidePanelApiWithExtensionTest : public SidePanelApiTest {
@@ -76,13 +81,15 @@ IN_PROC_BROWSER_TEST_F(SidePanelApiWithExtensionTest, ExtensionRegistry) {
   // Test cases.
   void (*test_cases[])(const ExtensionId& id,
                        extensions::TestExtensionRegistryObserver* observer,
-                       ExtensionService* extension_service) = {
+                       ExtensionService* extension_service,
+                       ExtensionRegistrar* extension_registrar) = {
       // "Unload extension"
       [](const ExtensionId& id,
          extensions::TestExtensionRegistryObserver* observer,
-         ExtensionService* extension_service) {
-        extension_service->DisableExtension(
-            id, disable_reason::DISABLE_USER_ACTION);
+         ExtensionService* extension_service,
+         ExtensionRegistrar* extension_registrar) {
+        extension_registrar->DisableExtension(
+            id, {disable_reason::DISABLE_USER_ACTION});
         observer->WaitForExtensionUnloaded();
       },
       // "Uninstall extension",
@@ -93,8 +100,9 @@ IN_PROC_BROWSER_TEST_F(SidePanelApiWithExtensionTest, ExtensionRegistry) {
       // Confirmation is obtained via `HasExtensionPanelOptions()`.
       [](const ExtensionId& id,
          extensions::TestExtensionRegistryObserver* observer,
-         ExtensionService* extension_service) {
-        extension_service->UninstallExtension(
+         ExtensionService* extension_service,
+         ExtensionRegistrar* extension_registrar) {
+        extension_registrar->UninstallExtension(
             id, UninstallReason::UNINSTALL_REASON_FOR_TESTING, nullptr);
         observer->WaitForExtensionUninstalled();
       }};
@@ -122,11 +130,19 @@ IN_PROC_BROWSER_TEST_F(SidePanelApiWithExtensionTest, ExtensionRegistry) {
     EXPECT_TRUE(service->HasExtensionPanelOptionsForTest(extension->id()));
     extensions::TestExtensionRegistryObserver observer(
         extensions::ExtensionRegistry::Get(profile()), extension->id());
-    test_case(extension->id(), &observer, extension_service());
+    test_case(extension->id(), &observer, extension_service(),
+              extension_registrar());
     options = service->GetOptions(*extension, tab_id);
     EXPECT_EQ("default_path.html", options.path.value());
     EXPECT_FALSE(service->HasExtensionPanelOptionsForTest(extension->id()));
   }
 }
 
+IN_PROC_BROWSER_TEST_F(SidePanelApiTest, OpenPanelErrors) {
+  ASSERT_TRUE(RunExtensionTest("side_panel/open_panel_errors"));
+}
+
+IN_PROC_BROWSER_TEST_F(SidePanelApiTest, ClosePanelErrors) {
+  ASSERT_TRUE(RunExtensionTest("side_panel/close_panel_errors"));
+}
 }  // namespace extensions

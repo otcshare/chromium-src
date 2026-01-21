@@ -9,12 +9,15 @@ import android.view.ViewGroup.MarginLayoutParams;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import androidx.core.widget.ImageViewCompat;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.widget.R;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Binder wiring for the TileView. */
+@NullMarked
 public class TileViewBinder {
     /** @see PropertyModelChangeProcessor.ViewBinder#bind(Object, Object, Object) */
     public static void bind(PropertyModel model, TileView view, PropertyKey propertyKey) {
@@ -30,12 +33,13 @@ public class TileViewBinder {
             iconView.setImageDrawable(model.get(TileViewProperties.ICON));
         } else if (propertyKey == TileViewProperties.ICON_TINT) {
             final ImageView iconView = view.findViewById(R.id.tile_view_icon);
-            ApiCompatibilityUtils.setImageTintList(
-                    iconView, model.get(TileViewProperties.ICON_TINT));
-        } else if (propertyKey == TileViewProperties.BADGE_VISIBLE) {
-            final View badgeView = view.findViewById(R.id.offline_badge);
-            final boolean isVisible = model.get(TileViewProperties.BADGE_VISIBLE);
-            badgeView.setVisibility(isVisible ? View.VISIBLE : View.GONE);
+            ImageViewCompat.setImageTintList(iconView, model.get(TileViewProperties.ICON_TINT));
+        } else if (propertyKey == TileViewProperties.OFFLINE_BADGE_VISIBLE) {
+            final boolean isVisible = model.get(TileViewProperties.OFFLINE_BADGE_VISIBLE);
+            view.setOfflineBadgeVisibility(isVisible);
+        } else if (propertyKey == TileViewProperties.PINNED_SHORTCUT_BADGE_VISIBLE) {
+            final boolean isVisible = model.get(TileViewProperties.PINNED_SHORTCUT_BADGE_VISIBLE);
+            view.togglePinnedShortcutBadge(isVisible);
         } else if (propertyKey == TileViewProperties.SHOW_LARGE_ICON) {
             final boolean useLargeIcon = model.get(TileViewProperties.SHOW_LARGE_ICON);
             final int iconEdgeSize = getIconEdgeSizePx(view.getResources(), useLargeIcon);
@@ -68,11 +72,11 @@ public class TileViewBinder {
         if (model.get(TileViewProperties.SHOW_LARGE_ICON)) {
             // Pick the large icon dimension as a rounding radius. This guarantees that the icon
             // will be fully circular.
-            roundingRadiusPx = getIconEdgeSizePx(view.getResources(), /* useLargeIcon=*/true);
+            roundingRadiusPx = getIconEdgeSizePx(view.getResources(), /* useLargeIcon= */ true);
         } else {
             roundingRadiusPx = model.get(TileViewProperties.SMALL_ICON_ROUNDING_RADIUS);
             assert roundingRadiusPx >= 0
-                : "Invalid rounding radius specified: must be non-negative integer";
+                    : "Invalid rounding radius specified: must be non-negative integer";
         }
         view.setRoundingRadius(roundingRadiusPx);
     }
@@ -83,7 +87,8 @@ public class TileViewBinder {
     }
 
     private static int getIconTopMarginSizePx(Resources res, boolean useLargeIcon) {
-        return res.getDimensionPixelSize(useLargeIcon
+        return res.getDimensionPixelSize(
+                useLargeIcon
                         ? R.dimen.tile_view_icon_background_margin_top_modern
                         : R.dimen.tile_view_icon_margin_top_modern);
     }

@@ -14,7 +14,7 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/views/animation/ink_drop.h"
-#include "ui/views/animation/ink_drop_host_view.h"
+#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -43,7 +43,7 @@ void PaddedButton::OnThemeChanged() {
       color_utils::GetColorWithMaxContrast(background_color));
 }
 
-BEGIN_METADATA(PaddedButton, views::ImageButton)
+BEGIN_METADATA(PaddedButton)
 END_METADATA
 
 }  // namespace message_center

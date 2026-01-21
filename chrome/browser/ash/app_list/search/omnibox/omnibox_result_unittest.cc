@@ -13,14 +13,16 @@
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/public/cpp/app_list/vector_icons/vector_icons.h"
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
+#include "chrome/browser/ash/app_list/search/omnibox/omnibox_util.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
-#include "chrome/browser/chromeos/launcher_search/search_util.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -92,12 +94,6 @@ gfx::ImageSkia TestIcon() {
   return gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
 }
 
-// Returns the given vector icon using the standard system size and color.
-gfx::ImageSkia SystemIcon(const gfx::VectorIcon& icon) {
-  return gfx::CreateVectorIcon(icon, kSystemIconDimension,
-                               GetGenericIconColor());
-}
-
 // Returns true if the pixels of the two given images are identical.
 bool ImageSkiasEqual(const gfx::ImageSkia& a, const gfx::ImageSkia& b) {
   return gfx::BitmapsAreEqual(*a.bitmap(), *b.bitmap());
@@ -134,8 +130,8 @@ bool IsSingletonTextVector(const std::vector<ash::SearchResultTextItem>& v,
     return false;
 
   for (int i = 0; i < ArraySize; ++i) {
-    if (result_tags[i].styles != tags[i].styles ||
-        result_tags[i].range != tags[i].range) {
+    if (result_tags[i].styles != UNSAFE_TODO(tags[i]).styles ||
+        result_tags[i].range != UNSAFE_TODO(tags[i]).range) {
       return false;
     }
   }
@@ -165,8 +161,7 @@ class OmniboxResultTest : public testing::Test {
         BookmarkModelFactory::GetInstance(),
         BookmarkModelFactory::GetDefaultFactory());
     profile_builder.SetSharedURLLoaderFactory(
-        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-            &test_url_loader_factory_));
+        test_url_loader_factory_.GetSafeWeakWrapper());
     profile_ = profile_builder.Build();
 
     app_list_controller_delegate_ =
@@ -184,11 +179,12 @@ class OmniboxResultTest : public testing::Test {
   std::unique_ptr<OmniboxResult> CreateOmniboxResult(
       const std::string& destination_url,
       AutocompleteMatchType::Type type,
-      const GURL& image_url = GURL()) {
+      const GURL& image_url = GURL(),
+      const std::u16string query = kFullQuery) {
     AutocompleteMatch match;
     match.search_terms_args =
-        std::make_unique<TemplateURLRef::SearchTermsArgs>(kFullQuery);
-    match.search_terms_args->original_query = kFullQuery;
+        std::make_unique<TemplateURLRef::SearchTermsArgs>(query);
+    match.search_terms_args->original_query = query;
     match.relevance = kRelevance;
     match.destination_url = GURL(destination_url);
     match.stripped_destination_url = match.destination_url;
@@ -208,9 +204,9 @@ class OmniboxResultTest : public testing::Test {
 
     return std::make_unique<OmniboxResult>(
         profile_.get(), app_list_controller_delegate_.get(),
-        crosapi::CreateResult(match, /*controller=*/nullptr,
-                              favicon_cache_.get(), bookmark_model_, input_),
-        /*query=*/kFullQuery);
+        CreateResult(match, /*controller=*/nullptr, favicon_cache_.get(),
+                     bookmark_model_, input_),
+        /*query=*/query);
   }
 
   const GURL& GetLastOpenedUrl() const {
@@ -232,12 +228,11 @@ class OmniboxResultTest : public testing::Test {
 
  protected:
   network::TestURLLoaderFactory test_url_loader_factory_;
-
   std::unique_ptr<TestingProfile> profile_;
 
   testing::NiceMock<favicon::MockFaviconService> favicon_service_;
 
-  bookmarks::BookmarkModel* bookmark_model_;
+  raw_ptr<bookmarks::BookmarkModel> bookmark_model_;
 };
 
 TEST_F(OmniboxResultTest, Basic) {
@@ -247,6 +242,7 @@ TEST_F(OmniboxResultTest, Basic) {
   EXPECT_EQ(kExampleContents, result->details());
   EXPECT_EQ(kExampleDescription, result->title());
   EXPECT_EQ(kAppListRelevance, result->relevance());
+  EXPECT_FALSE(result->scoring().filtered());
 
   result->Open(0);
   EXPECT_EQ(kExampleUrl, GetLastOpenedUrl().spec());
@@ -282,8 +278,8 @@ TEST_F(OmniboxResultTest, Metrics) {
   const auto bookmarked_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::HISTORY_URL);
   EXPECT_EQ(ash::OMNIBOX_BOOKMARK, bookmarked_result->metrics_type());
-  EXPECT_TRUE(ImageSkiasEqual(SystemIcon(omnibox::kBookmarkIcon),
-                              bookmarked_result->icon().icon));
+  EXPECT_EQ(&omnibox::kBookmarkIcon,
+            bookmarked_result->icon().icon.GetVectorIcon().vector_icon());
 
   // Unbookmarked URLs belong to the general "recently visited" category and
   // have a generic icon.
@@ -291,8 +287,8 @@ TEST_F(OmniboxResultTest, Metrics) {
       "https://fake.com", AutocompleteMatchType::HISTORY_URL);
   EXPECT_EQ(ash::OMNIBOX_RECENTLY_VISITED_WEBSITE,
             unbookmarked_result->metrics_type());
-  EXPECT_TRUE(ImageSkiasEqual(SystemIcon(ash::kOmniboxGenericIcon),
-                              unbookmarked_result->icon().icon));
+  EXPECT_EQ(&ash::kOmniboxGenericIcon,
+            unbookmarked_result->icon().icon.GetVectorIcon().vector_icon());
 }
 
 // Test that the Omnibox search results are specially handled.
@@ -301,7 +297,6 @@ TEST_F(OmniboxResultTest, OmniboxSearchResult) {
   // action set.
   const auto search_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::SEARCH_SUGGEST);
-  EXPECT_TRUE(search_result->CloneMetadata()->is_omnibox_search);
   ASSERT_EQ(1u, search_result->actions().size());
   EXPECT_EQ(ash::SearchResultActionType::kRemove,
             search_result->actions()[0].type);
@@ -309,7 +304,6 @@ TEST_F(OmniboxResultTest, OmniboxSearchResult) {
   // Non-Omnibox-search-type results have no actions.
   const auto non_search_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::HISTORY_URL);
-  EXPECT_FALSE(non_search_result->CloneMetadata()->is_omnibox_search);
   EXPECT_EQ(0u, non_search_result->actions().size());
 }
 
@@ -365,12 +359,14 @@ TEST_F(OmniboxResultTest, Favicon) {
   std::move(return_icon_callback).Run(mock_icon_result);
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(ImageSkiasEqual(TestIcon(), result->icon().icon));
+  EXPECT_TRUE(
+      ImageSkiasEqual(TestIcon(), result->icon().icon.Rasterize(nullptr)));
 
   // A subsequent result with the same favicon should use the cached result.
   const auto next_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::HISTORY_URL);
-  EXPECT_TRUE(ImageSkiasEqual(TestIcon(), next_result->icon().icon));
+  EXPECT_TRUE(
+      ImageSkiasEqual(TestIcon(), next_result->icon().icon.Rasterize(nullptr)));
 
   // Favicon shouldn't overwrite metrics type.
   EXPECT_EQ(ash::OMNIBOX_RECENTLY_VISITED_WEBSITE, next_result->metrics_type());
@@ -394,20 +390,20 @@ TEST_F(OmniboxResultTest, RichEntityIcon) {
 
   EXPECT_EQ(ash::AppListSearchResultCategory::kSearchAndAssistant,
             result->category());
-  EXPECT_TRUE(ImageSkiasEqual(TestIcon(), result->icon().icon));
+  EXPECT_TRUE(
+      ImageSkiasEqual(TestIcon(), result->icon().icon.Rasterize(nullptr)));
 }
 
 // Test that results have generic icons for their result type.
 TEST_F(OmniboxResultTest, GenericIcon) {
   const auto domain_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::HISTORY_URL);
-  EXPECT_TRUE(ImageSkiasEqual(SystemIcon(ash::kOmniboxGenericIcon),
-                              domain_result->icon().icon));
-
+  EXPECT_EQ(&ash::kOmniboxGenericIcon,
+            domain_result->icon().icon.GetVectorIcon().vector_icon());
   const auto search_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::SEARCH_SUGGEST);
-  EXPECT_TRUE(ImageSkiasEqual(SystemIcon(ash::kSearchIcon),
-                              search_result->icon().icon));
+  EXPECT_EQ(&ash::kSearchIcon,
+            search_result->icon().icon.GetVectorIcon().vector_icon());
 }
 
 // Test that URLs with descriptions have their contents and descriptions
@@ -468,6 +464,20 @@ TEST_F(OmniboxResultTest, SearchResultText) {
 
   // Accessible name should not be set.
   EXPECT_TRUE(result->accessible_name().empty());
+}
+
+TEST_F(OmniboxResultTest, RelevanceWithFuzzyMatchCutoff) {
+  std::unique_ptr<OmniboxResult> result_high_fuzzy_relevance =
+      CreateOmniboxResult(kExampleUrl, AutocompleteMatchType::HISTORY_URL,
+                          GURL(), kExampleDescription);
+  std::unique_ptr<OmniboxResult> result_low_fuzzy_relevance =
+      CreateOmniboxResult(kExampleUrl, AutocompleteMatchType::HISTORY_URL,
+                          GURL(), u"different");
+
+  EXPECT_EQ(kAppListRelevance, result_high_fuzzy_relevance->relevance());
+  EXPECT_EQ(kAppListRelevance, result_low_fuzzy_relevance->relevance());
+  EXPECT_TRUE(result_low_fuzzy_relevance->scoring().filtered());
+  EXPECT_FALSE(result_high_fuzzy_relevance->scoring().filtered());
 }
 
 }  // namespace app_list::test

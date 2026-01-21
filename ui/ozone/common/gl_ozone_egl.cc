@@ -13,13 +13,16 @@
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_utils.h"
+#include "ui/gl/presenter.h"
 
 namespace ui {
 
 gl::GLDisplay* GLOzoneEGL::InitializeGLOneOffPlatform(
-    uint64_t system_device_id) {
-  gl::GLDisplayEGL* display = gl::GetDisplayEGL(system_device_id);
-  if (!display->Initialize(GetNativeDisplay())) {
+    bool supports_angle,
+    std::vector<gl::DisplayType> init_displays,
+    gl::GpuPreference gpu_preference) {
+  gl::GLDisplayEGL* display = gl::GetDisplayEGL(gpu_preference);
+  if (!display->Initialize(supports_angle, init_displays, GetNativeDisplay())) {
     LOG(ERROR) << "GLDisplayEGL::Initialize failed.";
     return nullptr;
   }
@@ -56,13 +59,13 @@ void GLOzoneEGL::ShutdownGL(gl::GLDisplay* display) {
   gl::ClearBindingsEGL();
 }
 
-bool GLOzoneEGL::CanImportNativePixmap() {
+bool GLOzoneEGL::CanImportNativePixmap(viz::SharedImageFormat format) {
   return false;
 }
 
 std::unique_ptr<NativePixmapGLBinding> GLOzoneEGL::ImportNativePixmap(
     scoped_refptr<gfx::NativePixmap> pixmap,
-    gfx::BufferFormat plane_format,
+    viz::SharedImageFormat plane_format,
     gfx::BufferPlane plane,
     gfx::Size plane_size,
     const gfx::ColorSpace& color_space,

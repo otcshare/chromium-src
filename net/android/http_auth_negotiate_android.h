@@ -11,7 +11,7 @@
 #include <string>
 
 #include "base/android/jni_android.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/completion_once_callback.h"
@@ -48,9 +48,8 @@ class NET_EXPORT_PRIVATE JavaNegotiateResultWrapper {
       base::OnceCallback<void(int, const std::string&)> thread_safe_callback);
 
   void SetResult(JNIEnv* env,
-                 const base::android::JavaParamRef<jobject>& obj,
                  int result,
-                 const base::android::JavaParamRef<jstring>& token);
+                 const base::android::JavaRef<jstring>& token);
 
  private:
   // Class is only allowed to delete itself, nobody else is allowed to delete.

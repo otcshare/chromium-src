@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_OMNIBOX_BROWSER_ON_DEVICE_TAIL_TOKENIZER_H_
 #define COMPONENTS_OMNIBOX_BROWSER_ON_DEVICE_TAIL_TOKENIZER_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -69,6 +70,14 @@ class OnDeviceTailTokenizer {
 
   // Returns the size of the vocabulary.
   size_t vocab_size() const { return token_to_id_.size(); }
+
+  // Special query token related helpers.
+  bool IsEndQueryTokenId(TokenId token_id) const;
+  bool IsBeginQueryTokenId(TokenId token_id) const;
+  TokenId GetEndQueryTokenId() const;
+
+  // Determines if the token related to the given ID can be properly printed.
+  bool IsTokenPrintable(TokenId token_id) const;
 
  private:
   // Determines if the given token is ambiguous.

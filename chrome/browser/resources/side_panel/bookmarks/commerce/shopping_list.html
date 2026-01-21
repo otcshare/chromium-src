@@ -228,6 +228,11 @@
   .action-button:focus {
     box-shadow: none;
   }
+
+  cr-toast {
+    justify-content: space-between;
+    margin: 8px;
+  }
 </style>
 
 <div id="container" role="treeitem" aria-expanded="[[open_]]">
@@ -239,8 +244,7 @@
           open$="[[open_]]" tabindex="-1">
       </cr-icon-button>
     </div>
-    <iron-icon
-        class="icon" icon="shopping-list:shopping-list-icon"></iron-icon>
+    <cr-icon class="icon" icon="shopping-list:shopping-list-icon"></cr-icon>
     <div class="title">$i18n{shoppingListFolderTitle}</div>
   </button>
   <template is="dom-if" if="[[open_]]" restamp>
@@ -284,4 +288,10 @@
       </button>
     </template>
   </template>
+  <cr-toast id="errorToast" duration="5000">
+    <div>$i18n{shoppingListErrorMessage}</div>
+    <cr-button on-click="onErrorRetryClicked_">
+      $i18n{shoppingListErrorButton}
+    </cr-button>
+  </cr-toast>
 </div>

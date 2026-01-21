@@ -8,13 +8,30 @@
  * strings and for debugging. They are not intended to be drectly user facing.
  */
 
-import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
-import {assert, assertNotReached} from 'chrome://resources/ash/common/assert.js';
-import {ActivationStateType, ApnProperties, AuthenticationType, ConfigProperties, DeviceStateProperties as MojomDeviceStateProperties, HiddenSsidMode, InhibitReason, IPConfigProperties, ManagedApnList, ManagedBoolean, ManagedInt32, ManagedProperties, ManagedString, ManagedStringList, ManagedSubjectAltNameMatchList, NetworkStateProperties as MojomNetworkStateProperties, ProxyMode, SecurityType, SIMInfo, SIMLockStatus, SubjectAltName, SubjectAltName_Type, TetherStateProperties, TrafficCounterProperties, VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
-import {ConnectionStateType, DeviceStateType, IPConfigType, NetworkType, OncSource, PolicySource, PortalState} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
-import {IPAddress} from 'chrome://resources/mojo/services/network/public/mojom/ip_address.mojom-webui.js';
+import {assert, assertNotReached} from '//resources/ash/common/assert.js';
+import {loadTimeData} from '//resources/ash/common/load_time_data.m.js';
+import {ActivationStateType, AuthenticationType, HiddenSsidMode, InhibitReason, MatchType, ProxyMode, SecurityType, SubjectAltName_Type, VpnType} from '//resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import {ConnectionStateType, DeviceStateType, IPConfigType, NetworkType, OncSource, PolicySource, PortalState} from '//resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
 
-
+// Type aliases for js-webui to ts-webui migration
+/** @typedef {*} ApnProperties */
+/** @typedef {*} ConfigProperties */
+/** @typedef {*} IPAddress */
+/** @typedef {*} IPConfigProperties */
+/** @typedef {*} ManagedApnList */
+/** @typedef {*} ManagedBoolean */
+/** @typedef {*} ManagedInt32 */
+/** @typedef {*} ManagedProperties */
+/** @typedef {*} ManagedString */
+/** @typedef {*} ManagedStringList */
+/** @typedef {*} ManagedSubjectAltNameMatchList */
+/** @typedef {*} MojomDeviceStateProperties */
+/** @typedef {*} MojomNetworkStateProperties */
+/** @typedef {*} SIMInfo */
+/** @typedef {*} SIMLockStatus */
+/** @typedef {*} SubjectAltName */
+/** @typedef {*} TetherStateProperties */
+/** @typedef {*} TrafficCounterProperties */
 
 // Used to indicate a saved but unknown credential value. Will appear as
 // placeholder character in the credential (passphrase, password, etc.) field by
@@ -34,7 +51,7 @@ export class OncMojo {
    * @return {string}
    */
   static getEnumString(value) {
-    if (value === undefined) {
+    if (value === undefined || value === null) {
       return 'undefined';
     }
     return value.toString();
@@ -100,8 +117,6 @@ export class OncMojo {
         return 'PortalSuspected';
       case PortalState.kPortal:
         return 'Portal';
-      case PortalState.kProxyAuthRequired:
-        return 'ProxyAuthRequired';
       case PortalState.kNoInternet:
         return 'NoInternet';
     }
@@ -204,6 +219,7 @@ export class OncMojo {
       case DeviceStateType.kDisabling:
       case DeviceStateType.kEnabling:
       case DeviceStateType.kUnavailable:
+        return true;
       case DeviceStateType.kDisabled:
       case DeviceStateType.kEnabled:
       case DeviceStateType.kProhibited:
@@ -223,6 +239,18 @@ export class OncMojo {
     }
 
     return device.inhibitReason !== InhibitReason.kNotInhibited;
+  }
+
+  /**
+   * @param {?MojomDeviceStateProperties|undefined} device
+   * @return {boolean}
+   */
+  static deviceIsFlashing(device) {
+    if (!device) {
+      return false;
+    }
+
+    return device.isFlashing;
   }
 
   /**
@@ -379,12 +407,14 @@ export class OncMojo {
    */
   static getVpnTypeString(value) {
     switch (value) {
+      case VpnType.kIKEv2:
+        return 'IKEv2';
       case VpnType.kL2TPIPsec:
         return 'L2TP-IPsec';
       case VpnType.kOpenVPN:
         return 'OpenVPN';
       case VpnType.kWireGuard:
-        return 'WireGuardVPN';
+        return 'WireGuard';
       case VpnType.kExtension:
         return 'ThirdPartyVPN';
       case VpnType.kArc:
@@ -392,25 +422,6 @@ export class OncMojo {
     }
     assertNotReached('Unexpected enum value: ' + OncMojo.getEnumString(value));
     return '';
-  }
-
-  /**
-   * @param {string} value
-   * @return {!VpnType}
-   */
-  static getVpnTypeFromString(value) {
-    switch (value) {
-      case 'L2TP-IPsec':
-        return VpnType.kL2TPIPsec;
-      case 'OpenVPN':
-        return VpnType.kOpenVPN;
-      case 'ThirdPartyVPN':
-        return VpnType.kExtension;
-      case 'ARCVPN':
-        return VpnType.kArc;
-    }
-    assertNotReached('Unexpected value: ' + value);
-    return VpnType.kOpenVPN;
   }
 
   /**
@@ -483,46 +494,42 @@ export class OncMojo {
   }
 
   /**
-   * @param {string} networkName
-   * @param {string|undefined} providerName
-   * @return {string}
-   */
-  static getVpnDisplayName(networkName, providerName) {
-    if (providerName) {
-      return loadTimeData.getStringF(
-          'vpnNameTemplate', providerName, networkName);
-    }
-    return networkName;
-  }
-
-  /**
+   * WARNING: The string returned by this method may contain malicious HTML and
+   * should not be used for Polymer bindings in CSS code. For additional
+   * information see b/286254915.
+   *
    * @param {!MojomNetworkStateProperties} network
    * @return {string}
    */
-  static getNetworkStateDisplayName(network) {
+  static getNetworkStateDisplayNameUnsafe(network) {
     if (!network.name) {
       return OncMojo.getNetworkTypeDisplayName(network.type);
     }
     if (network.type === NetworkType.kVPN &&
         network.typeState.vpn.providerName) {
-      return OncMojo.getVpnDisplayName(
-          network.name, network.typeState.vpn.providerName);
+      return loadTimeData.getStringF(
+          'vpnNameTemplate', network.typeState.vpn.providerName, network.name);
     }
     return network.name;
   }
 
   /**
+   * WARNING: The string returned by this method may contain malicious HTML and
+   * should not be used for Polymer bindings in CSS code. For additional
+   * information see b/286254915.
+   *
    * @param {!ManagedProperties} network
    * @return {string}
    */
-  static getNetworkName(network) {
+  static getNetworkNameUnsafe(network) {
     if (!network.name || !network.name.activeValue) {
       return OncMojo.getNetworkTypeDisplayName(network.type);
     }
     if (network.type === NetworkType.kVPN &&
         network.typeProperties.vpn.providerName) {
-      return OncMojo.getVpnDisplayName(
-          network.name.activeValue, network.typeProperties.vpn.providerName);
+      return loadTimeData.getStringF(
+          'vpnNameTemplate', network.typeProperties.vpn.providerName,
+          network.name.activeValue);
     }
     return network.name.activeValue;
   }
@@ -608,7 +615,6 @@ export class OncMojo {
       source: OncSource.kNone,
       type: type,
       typeState: {},
-      dnsQueriesMonitored: false,
     };
     switch (type) {
       case NetworkType.kCellular:
@@ -622,6 +628,8 @@ export class OncMojo {
           simLockEnabled: false,
           simLocked: false,
           simLockType: '',
+          hasNickName: false,
+          networkOperator: '',
         };
         break;
       case NetworkType.kEthernet:
@@ -653,6 +661,8 @@ export class OncMojo {
           security: SecurityType.kNone,
           signalStrength: 0,
           ssid: '',
+          passpointId: '',
+          visible: true,
         };
         break;
       default:
@@ -687,6 +697,8 @@ export class OncMojo {
         networkState.typeState.cellular.eid = cellularProperties.eid || '';
         networkState.typeState.cellular.activationState =
             cellularProperties.activationState;
+        networkState.typeState.cellular.paymentPortal =
+            cellularProperties.paymentPortal;
         networkState.typeState.cellular.networkTechnology =
             cellularProperties.networkTechnology || '';
         networkState.typeState.cellular.roaming =
@@ -695,6 +707,8 @@ export class OncMojo {
             cellularProperties.signalStrength;
         networkState.typeState.cellular.simLocked =
             cellularProperties.simLocked;
+        networkState.typeState.cellular.simLockType =
+            cellularProperties.simLockType;
         break;
       case NetworkType.kEthernet:
         networkState.typeState.ethernet.authentication =
@@ -726,6 +740,8 @@ export class OncMojo {
             wifiProperties.signalStrength;
         networkState.typeState.wifi.ssid =
             OncMojo.getActiveString(wifiProperties.ssid);
+        networkState.typeState.wifi.hiddenSsid =
+            !!OncMojo.getActiveValue(wifiProperties.hiddenSsid);
         break;
     }
     return networkState;
@@ -759,6 +775,7 @@ export class OncMojo {
             activationState: ActivationStateType.kUnknown,
             signalStrength: 0,
             simLocked: false,
+            simLockType: '',
             supportNetworkScan: false,
           },
         };
@@ -797,6 +814,8 @@ export class OncMojo {
             signalStrength: 0,
             isSyncable: false,
             isConfiguredByActiveUser: false,
+            passpointId: '',
+            passpointMatchType: MatchType.kNoMatch,
           },
         };
         break;
@@ -805,37 +824,105 @@ export class OncMojo {
   }
 
   /**
-   * Returns a ConfigProperties object with a default networkType struct
-   * based on |type|.
-   * @param {!NetworkType} type
+   * Returns a ConfigProperties object based on |managedProperties| that is
+   * suitable for updating a network's configuration. The returned object
+   * will have a default |typeConfig| created based on the network type.
+   *
+   * Due to imperfect handling of certain network properties in the ONC-to-Shill
+   * layer, this function explicitly copies certain existing network
+   * properties to its output when *any* property is changed. The intention of
+   * always including these properties is to preserve their value; the output of
+   * this function, without additional changes, should not result in any changes
+   * when applied. For more information see https://crbug.com/448829077.
+   *
+   * @param {!ManagedProperties} managedProperties
    * @return {!ConfigProperties}
    */
-  static getDefaultConfigProperties(type) {
+  static getBaselineConfigProperties(managedProperties) {
+    const type = managedProperties.type;
+    const config = {};
     switch (type) {
       case NetworkType.kCellular:
-        return {typeConfig: {cellular: {}}};
+        config.typeConfig = {cellular: {}};
         break;
       case NetworkType.kEthernet:
-        return {typeConfig: {ethernet: {}}};
+        config.typeConfig = {ethernet: {}};
         break;
       case NetworkType.kVPN:
-        return {typeConfig: {vpn: {}}};
+        config.typeConfig = {vpn: {}};
         break;
       case NetworkType.kWiFi:
-        // Note: wifi.security can not be changed, so |security| will be ignored
-        // for existing configurations.
-        return {
-          typeConfig: {
-            wifi: {
-              security: SecurityType.kNone,
-              hiddenSsid: HiddenSsidMode.kAutomatic,
-            },
+        // Note: wifi.security can not be changed, so |security| will be
+        // ignored for existing configurations.
+        config.typeConfig = {
+          wifi: {
+            security: SecurityType.kNone,
+            // The automatic hidden SSID mode is the default value and
+            // effectively means that Chrome should defer to the platform layer
+            // for the actual value. The result is that we satisfy the
+            // requirement of providing a value here while knowing that this
+            // value will not result in any changes to the network.
+            hiddenSsid: HiddenSsidMode.kAutomatic,
           },
         };
         break;
+      default:
+        assertNotReached('Unexpected type: ' + type.toString());
+        config.typeConfig = {};
     }
-    assertNotReached('Unexpected type: ' + type.toString());
-    return {typeConfig: {}};
+
+    // Unlike most properties, if the IP address or name servers config type are
+    // missing when setting any property the static IP config will be cleared.
+    // To avoid wrongly clearing the static IP config we resend the existing
+    // values of the IP address and name servers config types, and the static IP
+    // config entirely, if they exist. For more information see
+    // https://crbug.com/448829077.
+    const ipAddressConfigType =
+        OncMojo.getActiveValue(managedProperties.ipAddressConfigType);
+    if (ipAddressConfigType) {
+      config.ipAddressConfigType = ipAddressConfigType;
+    }
+    const nameServersConfigType =
+        OncMojo.getActiveValue(managedProperties.nameServersConfigType);
+    if (nameServersConfigType) {
+      config.nameServersConfigType = nameServersConfigType;
+    }
+    // The static IP config is not a managed field so we can copy it directly.
+    if ((ipAddressConfigType !== 'Static' &&
+         nameServersConfigType !== 'Static') ||
+        !managedProperties.staticIpConfig) {
+      return config;
+    }
+
+    const staticIpConfig = managedProperties.staticIpConfig;
+    const newStaticIpConfig = {
+      // The type is not provided as a managed value and can be copied directly.
+      type: staticIpConfig.type,
+    };
+
+    if (staticIpConfig.ipAddress) {
+      newStaticIpConfig.ipAddress =
+          OncMojo.getActiveValue(staticIpConfig.ipAddress);
+    }
+    if (staticIpConfig.gateway) {
+      newStaticIpConfig.gateway =
+          OncMojo.getActiveValue(staticIpConfig.gateway);
+    }
+    if (staticIpConfig.routingPrefix) {
+      newStaticIpConfig.routingPrefix =
+          OncMojo.getActiveValue(staticIpConfig.routingPrefix);
+    }
+    if (staticIpConfig.nameServers) {
+      newStaticIpConfig.nameServers =
+          OncMojo.getActiveValue(staticIpConfig.nameServers);
+    }
+    if (staticIpConfig.webProxyAutoDiscoveryUrl) {
+      newStaticIpConfig.webProxyAutoDiscoveryUrl =
+          OncMojo.getActiveValue(staticIpConfig.webProxyAutoDiscoveryUrl);
+    }
+    config.staticIpConfig = newStaticIpConfig;
+
+    return config;
   }
 
   /**
@@ -1037,7 +1124,7 @@ export class OncMojo {
     }
 
     // Set ONC IP config properties to existing values + new values.
-    const config = OncMojo.getDefaultConfigProperties(managedProperties.type);
+    const config = OncMojo.getBaselineConfigProperties(managedProperties);
     config.ipAddressConfigType = ipConfigType;
     config.nameServersConfigType = nsConfigType;
     if (ipConfigType === 'Static') {
@@ -1215,8 +1302,8 @@ export class OncMojo {
 
   /**
    * Returns true if the APN List matches.
-   * @param {Array<!ApnProperties>|undefined} a
-   * @param {Array<!ApnProperties>|undefined} b
+   * @param {Array<!ApnProperties>|undefined|null} a
+   * @param {Array<!ApnProperties>|undefined|null} b
    * @return {boolean}
    */
   static apnListMatch(a, b) {
@@ -1244,7 +1331,6 @@ export class OncMojo {
         return false;
       case PortalState.kPortalSuspected:
       case PortalState.kPortal:
-      case PortalState.kProxyAuthRequired:
       case PortalState.kNoInternet:
         return true;
     }
@@ -1398,14 +1484,14 @@ OncMojo.ManagedProperty;
 /**
  * Modified version of IPConfigProperties to store routingPrefix as
  * a human-readable netmask string instead of as a number. Used in
- * network_ip_config.js.
+ * network_ip_config.ts.
  * @typedef {{
- *   gateway: (string|undefined),
- *   ipAddress: (string|undefined),
- *   nameServers: (Array<string>|undefined),
- *   netmask: (string|undefined),
+ *   gateway: (string|null),
+ *   ipAddress: (string|null),
+ *   nameServers: (Array<string>|null),
+ *   netmask: (string|null),
  *   type: !IPConfigType,
- *   webProxyAutoDiscoveryUrl: (string|undefined),
+ *   webProxyAutoDiscoveryUrl: (string|null),
  * }}
  */
 OncMojo.IPConfigUIProperties;

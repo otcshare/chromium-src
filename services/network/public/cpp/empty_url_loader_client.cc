@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -67,7 +66,7 @@ void EmptyURLLoaderClient::OnReceiveEarlyHints(
 void EmptyURLLoaderClient::OnReceiveResponse(
     const mojom::URLResponseHeadPtr head,
     mojo::ScopedDataPipeConsumerHandle body,
-    absl::optional<mojo_base::BigBuffer> cached_metadata) {
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   if (!body)
     return;
 
@@ -98,8 +97,7 @@ void EmptyURLLoaderClient::OnComplete(const URLLoaderCompletionStatus& status) {
   MaybeDone();
 }
 
-void EmptyURLLoaderClient::OnDataAvailable(const void* data, size_t num_bytes) {
-}
+void EmptyURLLoaderClient::OnDataAvailable(base::span<const uint8_t> data) {}
 
 void EmptyURLLoaderClient::OnDataComplete() {
   response_body_drainer_.reset();

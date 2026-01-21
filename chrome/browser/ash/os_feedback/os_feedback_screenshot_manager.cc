@@ -7,7 +7,7 @@
 #include <utility>
 #include "ash/shell.h"
 #include "base/barrier_callback.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
@@ -115,7 +115,7 @@ void OsFeedbackScreenshotManager::TakeScreenshot(ScreenshotCallback callback) {
 
   for (aura::Window* root_window : all_windows) {
     gfx::Rect rect = root_window->bounds();
-    ui::GrabWindowSnapshotAsyncPNG(
+    ui::GrabWindowSnapshotAsPNG(
         root_window, rect,
         base::BindOnce(OnOneScreenshotTaken, barrier_callback));
   }

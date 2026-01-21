@@ -5,18 +5,24 @@
 #include "cc/trees/layer_tree_frame_sink.h"
 
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/bind.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "cc/trees/layer_context.h"
 #include "cc/trees/layer_tree_frame_sink_client.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/context_support.h"
 #include "gpu/command_buffer/client/raster_interface.h"
+#include "gpu/command_buffer/client/shared_image_interface.h"
 
 namespace cc {
 
@@ -42,22 +48,25 @@ class LayerTreeFrameSink::ContextLostForwarder
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };
 
+LayerTreeFrameSink::LayerTreeFrameSink()
+    : LayerTreeFrameSink(nullptr, nullptr, nullptr, nullptr) {}
+
 LayerTreeFrameSink::LayerTreeFrameSink(
-    scoped_refptr<viz::ContextProvider> context_provider,
-    scoped_refptr<RasterContextProviderWrapper> worker_context_provider_wrapper,
+    scoped_refptr<viz::RasterContextProvider> context_provider,
+    scoped_refptr<viz::RasterContextProvider> worker_context_provider,
     scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner,
-    gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager)
+    scoped_refptr<gpu::SharedImageInterface> shared_image_interface)
     : context_provider_(std::move(context_provider)),
-      worker_context_provider_wrapper_(
-          std::move(worker_context_provider_wrapper)),
+      worker_context_provider_(std::move(worker_context_provider)),
       compositor_task_runner_(std::move(compositor_task_runner)),
-      gpu_memory_buffer_manager_(gpu_memory_buffer_manager) {
+      shared_image_interface_(std::move(shared_image_interface)) {
   DETACH_FROM_THREAD(thread_checker_);
 }
 
 LayerTreeFrameSink::~LayerTreeFrameSink() {
-  if (client_)
+  if (client_) {
     DetachFromClient();
+  }
 }
 
 base::WeakPtr<LayerTreeFrameSink> LayerTreeFrameSink::GetWeakPtr() {
@@ -103,13 +112,25 @@ bool LayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
         worker_context_lost_forwarder_.get());
   }
 
+  // Add GpuChannelLost observer when in software rendering mode.
+  if (shared_image_interface_ &&
+      (!context_provider_ && !worker_context_provider())) {
+    task_gpu_channel_lost_on_client_thread_ =
+        base::BindPostTaskToCurrentDefault(base::BindOnce(
+            &LayerTreeFrameSink::GpuChannelLostOnClientThread, GetWeakPtr()));
+    if (!shared_image_interface_->AddGpuChannelLostObserver(this)) {
+      task_gpu_channel_lost_on_client_thread_.Reset();
+      shared_image_interface_ = nullptr;
+      return false;
+    }
+  }
+
   client_ = client;
 
   return true;
 }
 
 void LayerTreeFrameSink::DetachFromClient() {
-  DCHECK(client_);
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   client_ = nullptr;
@@ -122,14 +143,26 @@ void LayerTreeFrameSink::DetachFromClient() {
     context_provider_->RemoveObserver(this);
     context_provider_ = nullptr;
   }
-
-  if (auto* worker_context_provider_ptr = worker_context_provider()) {
+  if (worker_context_lost_forwarder_) {
+    auto* worker_context_provider_ptr = worker_context_provider();
+    CHECK(worker_context_provider_ptr);
     viz::RasterContextProvider::ScopedRasterContextLock lock(
         worker_context_provider_ptr);
     worker_context_provider_ptr->RemoveObserver(
         worker_context_lost_forwarder_.get());
     worker_context_lost_forwarder_ = nullptr;
   }
+  if (shared_image_interface_) {
+    if (task_gpu_channel_lost_on_client_thread_) {
+      shared_image_interface_->RemoveGpuChannelLostObserver(this);
+    }
+    shared_image_interface_.reset();
+  }
+}
+
+std::unique_ptr<LayerContext> LayerTreeFrameSink::CreateLayerContext(
+    LayerTreeHostImpl& host_impl) {
+  return nullptr;
 }
 
 void LayerTreeFrameSink::OnContextLost() {
@@ -137,6 +170,34 @@ void LayerTreeFrameSink::OnContextLost() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   TRACE_EVENT0("cc", "LayerTreeFrameSink::OnContextLost");
   client_->DidLoseLayerTreeFrameSink();
+}
+
+void LayerTreeFrameSink::OnGpuChannelLost() {
+  // OnGpuChannelLost() is called on the IOThread. so it has to be forwareded
+  // to LayerTreeFrameSink::OnGpuChannelLostClientThread(), which is on the same
+  // thread where BindToClient is called, either the BrowserMain thread or the
+  // compositor thread.
+  if (task_gpu_channel_lost_on_client_thread_) {
+    std::move(task_gpu_channel_lost_on_client_thread_).Run();
+  }
+}
+void LayerTreeFrameSink::GpuChannelLostOnClientThread() {
+  // No need to RemoveObserver(). The Observable removes all observers
+  // after completing GpuChannelLost notification.
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  shared_image_interface_.reset();
+
+  DCHECK(client_);
+  client_->DidLoseLayerTreeFrameSink();
+}
+
+scoped_refptr<gpu::SharedImageInterface>
+LayerTreeFrameSink::shared_image_interface() const {
+  if (context_provider_) {
+    return context_provider_->SharedImageInterface();
+  }
+
+  return shared_image_interface_;
 }
 
 }  // namespace cc

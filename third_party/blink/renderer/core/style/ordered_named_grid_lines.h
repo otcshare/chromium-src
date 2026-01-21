@@ -7,6 +7,7 @@
 
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -30,10 +31,7 @@ struct NamedGridLine {
 };
 
 using OrderedNamedGridLines =
-    HashMap<size_t,
-            Vector<NamedGridLine>,
-            WTF::IntHash<size_t>,
-            WTF::UnsignedWithZeroKeyHashTraits<size_t>>;
+    HashMap<size_t, Vector<NamedGridLine>, IntWithZeroKeyHashTraits<size_t>>;
 
 }  // namespace blink
 

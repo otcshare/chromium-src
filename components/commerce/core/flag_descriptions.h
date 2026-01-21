@@ -5,19 +5,36 @@
 #ifndef COMPONENTS_COMMERCE_CORE_FLAG_DESCRIPTIONS_H_
 #define COMPONENTS_COMMERCE_CORE_FLAG_DESCRIPTIONS_H_
 
+#include "build/build_config.h"
+
 namespace commerce::flag_descriptions {
 
-// Enables the user to track prices of the Shopping URLs they are visiting.
-// The first variation is to display price drops in the Tab Switching UI when
-// they are identified.
-extern const char kCommercePriceTrackingName[];
-extern const char kCommercePriceTrackingDescription[];
+extern const char kProductSpecificationsName[];
+extern const char kProductSpecificationsDescription[];
 
 extern const char kShoppingListName[];
 extern const char kShoppingListDescription[];
 
-extern const char kChromeCartDomBasedHeuristicsName[];
-extern const char kChromeCartDomBasedHeuristicsDescription[];
+extern const char kPriceInsightsName[];
+extern const char kPriceInsightsDescription[];
+
+extern const char kDiscountOnNavigationName[];
+extern const char kDiscountOnNavigationDescription[];
+
+extern const char kShoppingPageTypesName[];
+extern const char kShoppingPageTypesDescription[];
+
+extern const char kPriceTrackingSubscriptionServiceLocaleKeyName[];
+extern const char kPriceTrackingSubscriptionServiceLocaleKeyDescription[];
+
+extern const char kPriceTrackingSubscriptionServiceProductVersionName[];
+extern const char kPriceTrackingSubscriptionServiceProductVersionDescription[];
+
+extern const char kDiscountAutofillName[];
+extern const char kDiscountAutofillDescription[];
+
+extern const char kShoppingAlternateServerName[];
+extern const char kShoppingAlternateServerDescription[];
 
 }  // namespace commerce::flag_descriptions
 

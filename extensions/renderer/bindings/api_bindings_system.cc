@@ -6,10 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "extensions/renderer/bindings/api_binding_hooks.h"
+#include "extensions/renderer/bindings/api_binding_hooks_delegate.h"
 #include "extensions/renderer/bindings/api_binding_util.h"
 #include "extensions/renderer/bindings/api_response_validator.h"
 #include "extensions/renderer/bindings/interaction_provider.h"
@@ -19,7 +20,6 @@ namespace extensions {
 APIBindingsSystem::APIBindingsSystem(
     GetAPISchemaMethod get_api_schema,
     BindingAccessChecker::APIAvailabilityCallback api_available,
-    BindingAccessChecker::PromiseAvailabilityCallback promises_available,
     APIRequestHandler::SendRequestMethod send_request,
     std::unique_ptr<InteractionProvider> interaction_provider,
     APIEventListeners::ListenersUpdated event_listeners_changed,
@@ -39,7 +39,7 @@ APIBindingsSystem::APIBindingsSystem(
       event_handler_(std::move(event_listeners_changed),
                      std::move(context_owner_getter),
                      &exception_handler_),
-      access_checker_(std::move(api_available), std::move(promises_available)),
+      access_checker_(std::move(api_available)),
       get_api_schema_(std::move(get_api_schema)),
       on_silent_request_(std::move(on_silent_request)) {
   if (binding::IsResponseValidationEnabled()) {
@@ -50,7 +50,7 @@ APIBindingsSystem::APIBindingsSystem(
   }
 }
 
-APIBindingsSystem::~APIBindingsSystem() {}
+APIBindingsSystem::~APIBindingsSystem() = default;
 
 v8::Local<v8::Object> APIBindingsSystem::CreateAPIInstance(
     const std::string& api_name,
@@ -111,7 +111,7 @@ void APIBindingsSystem::InitializeType(const std::string& type_name) {
   std::string api_name = type_name.substr(0, dot);
   // If we've already instantiated the binding, the type should have been in
   // there.
-  DCHECK(api_bindings_.find(api_name) == api_bindings_.end()) << api_name;
+  DCHECK(!api_bindings_.contains(api_name)) << api_name;
 
   api_bindings_[api_name] = CreateNewAPIBinding(api_name);
 }
@@ -134,21 +134,27 @@ void APIBindingsSystem::FireEventInContext(
                                     std::move(filter));
 }
 
-APIBindingHooks* APIBindingsSystem::GetHooksForAPI(
-    const std::string& api_name) {
+void APIBindingsSystem::RegisterHooksDelegate(
+    const std::string& api_name,
+    std::unique_ptr<APIBindingHooksDelegate> delegate) {
   DCHECK(api_bindings_.empty())
       << "Hook registration must happen before creating any binding instances.";
   std::unique_ptr<APIBindingHooks>& hooks = binding_hooks_[api_name];
-  if (!hooks)
+  if (!hooks) {
     hooks = std::make_unique<APIBindingHooks>(api_name, &request_handler_);
-  return hooks.get();
+  }
+  hooks->SetDelegate(std::move(delegate));
 }
 
 void APIBindingsSystem::RegisterCustomType(const std::string& type_name,
                                            CustomTypeHandler function) {
-  DCHECK(custom_types_.find(type_name) == custom_types_.end())
+  DCHECK(!custom_types_.contains(type_name))
       << "Custom type already registered: " << type_name;
   custom_types_[type_name] = std::move(function);
+}
+
+void APIBindingsSystem::DidCreateContext(v8::Local<v8::Context> context) {
+  binding::InitializeContext(context);
 }
 
 void APIBindingsSystem::WillReleaseContext(v8::Local<v8::Context> context) {
@@ -163,7 +169,7 @@ v8::Local<v8::Object> APIBindingsSystem::CreateCustomType(
     const std::string& property_name,
     const base::Value::List* property_values) {
   auto iter = custom_types_.find(type_name);
-  DCHECK(iter != custom_types_.end()) << "Custom type not found: " << type_name;
+  CHECK(iter != custom_types_.end()) << "Custom type not found: " << type_name;
   return iter->second.Run(isolate, property_name, property_values,
                           &request_handler_, &event_handler_,
                           &type_reference_map_, &access_checker_);

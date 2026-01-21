@@ -16,6 +16,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/strings/sys_string_conversions.h"
 
 #include "puffin/file_stream.h"
@@ -297,7 +298,7 @@ bool Main(int argc, char** argv) {
   settings.logging_dest = logging::LOG_TO_ALL;
   settings.log_file_path = FILE_PATH_LITERAL("puffin.log");
   std::ignore = logging::InitLogging(settings);
-  logging::SetMinLogLevel(logging::LOG_VERBOSE);
+  logging::SetMinLogLevel(logging::LOGGING_VERBOSE);
   bool cmd_puffdiff = command_line.HasSwitch("puffdiff");
   bool cmd_puffpatch = command_line.HasSwitch("puffpatch");
 

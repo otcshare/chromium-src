@@ -5,8 +5,12 @@
 #include "extensions/browser/api/offscreen/offscreen_api.h"
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/page_type.h"
 #include "extensions/browser/api/offscreen/offscreen_document_manager.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
@@ -29,9 +33,12 @@ namespace {
 content::BrowserContext& GetBrowserContextToUse(
     content::BrowserContext& calling_context,
     const Extension& extension) {
+  ExtensionsBrowserClient* client = ExtensionsBrowserClient::Get();
+
   // The on-the-record profile always uses itself.
-  if (!calling_context.IsOffTheRecord())
-    return calling_context;
+  if (!calling_context.IsOffTheRecord()) {
+    return *client->GetContextForOriginalOnly(&calling_context);
+  }
 
   DCHECK(util::IsIncognitoEnabled(extension.id(), &calling_context))
       << "Only incognito-enabled extensions should have an incognito context";
@@ -39,9 +46,9 @@ content::BrowserContext& GetBrowserContextToUse(
   // Split-mode extensions use the incognito (calling) context; spanning mode
   // extensions fall back to the original profile.
   bool is_split_mode = IncognitoInfo::IsSplitMode(&extension);
-  return is_split_mode ? calling_context
-                       : *ExtensionsBrowserClient::Get()->GetOriginalContext(
-                             &calling_context);
+  return is_split_mode
+             ? *client->GetContextOwnInstance(&calling_context)
+             : *client->GetContextRedirectedToOriginal(&calling_context);
 }
 
 // Similar to the above, returns the OffscreenDocumentManager to use for the
@@ -59,14 +66,15 @@ OffscreenCreateDocumentFunction::OffscreenCreateDocumentFunction() = default;
 OffscreenCreateDocumentFunction::~OffscreenCreateDocumentFunction() = default;
 
 ExtensionFunction::ResponseAction OffscreenCreateDocumentFunction::Run() {
-  std::unique_ptr<api::offscreen::CreateDocument::Params> params(
-      api::offscreen::CreateDocument::Params::Create(args()));
+  std::optional<api::offscreen::CreateDocument::Params> params =
+      api::offscreen::CreateDocument::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   EXTENSION_FUNCTION_VALIDATE(extension());
 
   GURL url(params->parameters.url);
-  if (!url.is_valid())
-    url = extension()->GetResourceURL(params->parameters.url);
+  if (!url.is_valid()) {
+    url = extension()->ResolveExtensionURL(params->parameters.url);
+  }
 
   if (!url.is_valid() || url::Origin::Create(url) != extension()->origin()) {
     return RespondNow(Error("Invalid URL."));
@@ -88,11 +96,7 @@ ExtensionFunction::ResponseAction OffscreenCreateDocumentFunction::Run() {
     return RespondNow(Error("A `reason` must be provided."));
   }
 
-  if (deduped_reasons.size() > 1) {
-    return RespondNow(Error("Only a single `reason` is currently supported."));
-  }
-
-  if (base::Contains(deduped_reasons, api::offscreen::REASON_TESTING) &&
+  if (deduped_reasons.contains(api::offscreen::Reason::kTesting) &&
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kOffscreenDocumentTesting)) {
     return RespondNow(Error(base::StringPrintf(
@@ -101,8 +105,8 @@ ExtensionFunction::ResponseAction OffscreenCreateDocumentFunction::Run() {
         switches::kOffscreenDocumentTesting)));
   }
 
-  OffscreenDocumentHost* offscreen_document = manager->CreateOffscreenDocument(
-      *extension(), url, *deduped_reasons.begin());
+  OffscreenDocumentHost* offscreen_document =
+      manager->CreateOffscreenDocument(*extension(), url, deduped_reasons);
   DCHECK(offscreen_document);
 
   // We assume it's impossible for a document to entirely synchronously load. If
@@ -133,13 +137,62 @@ void OffscreenCreateDocumentFunction::OnExtensionHostDestroyed(
     ExtensionHost* host) {
   SendResponseToExtension(
       Error("Offscreen document closed before fully loading."));
-  // The host is destroyed, so ensure we're no longer observing it.
-  DCHECK(!host_observer_.IsObserving());
+  // WARNING: `this` can be deleted now!
 }
 
 void OffscreenCreateDocumentFunction::OnExtensionHostDidStopFirstLoad(
     const ExtensionHost* host) {
+  content::NavigationEntry* nav_entry =
+      host->host_contents()->GetController().GetLastCommittedEntry();
+  // If the page failed to load, fire an error instead.
+  if (!nav_entry || nav_entry->GetPageType() == content::PAGE_TYPE_ERROR) {
+    // We need to do this asynchronously by posting a task since this is
+    // currently within the context of being notified as an observer that the
+    // ExtensionHost finished its first load. `NotifyPageFailedToLoad()` will
+    // delete the extension host, which isn't allowed in the middle of observer
+    // iteration.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&OffscreenCreateDocumentFunction::NotifyPageFailedToLoad,
+                       this));
+    return;
+  }
+
   SendResponseToExtension(NoArguments());
+}
+
+void OffscreenCreateDocumentFunction::NotifyPageFailedToLoad() {
+  OffscreenDocumentManager* manager =
+      GetManagerToUse(*browser_context(), *extension());
+  OffscreenDocumentHost* offscreen_document =
+      manager->GetOffscreenDocumentForExtension(*extension());
+  if (!offscreen_document ||
+      !host_observer_.IsObservingSource(offscreen_document)) {
+    // It's possible the offscreen document went away in between when we
+    // queued up the task to notify the page failed to load and when the
+    // task ran (or, rarer yet, that it went away and there's a whole new
+    // offscreen document in its place). In that case, the function should
+    // have already responded (such as due to the ExtensionHost closing), or
+    // it should be an edge case such as the browser shutting down. Bail out.
+    // ExtensionFunction's dtor will check that this function properly
+    // responded, if it should have.
+    return;
+  }
+
+  // In any other case, we shouldn't have responded to the extension yet.
+  CHECK(!did_respond());
+
+  // The document still exists. Since it failed to load, we should close it and
+  // notify the extension.
+
+  // Remove ourselves as an observer, since otherwise closing the document
+  // would trigger `OnExtensionHostDestroyed()`.
+  host_observer_.Reset();
+
+  // Close out the document and notify the calling extension.
+  manager->CloseOffscreenDocumentForExtension(*extension());
+  SendResponseToExtension(Error("Page failed to load."));
+  return;
 }
 
 void OffscreenCreateDocumentFunction::SendResponseToExtension(
@@ -155,6 +208,7 @@ void OffscreenCreateDocumentFunction::SendResponseToExtension(
 
   Respond(std::move(response_value));
   Release();  // Balanced in Run().
+  // WARNING: `this` can be deleted now!
 }
 
 OffscreenCloseDocumentFunction::OffscreenCloseDocumentFunction() = default;
@@ -167,8 +221,9 @@ ExtensionFunction::ResponseAction OffscreenCloseDocumentFunction::Run() {
       GetManagerToUse(*browser_context(), *extension());
   OffscreenDocumentHost* offscreen_document =
       manager->GetOffscreenDocumentForExtension(*extension());
-  if (!offscreen_document)
+  if (!offscreen_document) {
     return RespondNow(Error("No current offscreen document."));
+  }
 
   host_observer_.Observe(offscreen_document);
 
@@ -221,7 +276,7 @@ ExtensionFunction::ResponseAction OffscreenHasDocumentFunction::Run() {
   bool has_document =
       GetManagerToUse(*browser_context(), *extension())
           ->GetOffscreenDocumentForExtension(*extension()) != nullptr;
-  return RespondNow(OneArgument(base::Value(has_document)));
+  return RespondNow(WithArguments(has_document));
 }
 
 }  // namespace extensions

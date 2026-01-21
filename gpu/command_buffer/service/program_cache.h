@@ -6,14 +6,19 @@
 #define GPU_COMMAND_BUFFER_SERVICE_PROGRAM_CACHE_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
+#include <array>
 #include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/hash/sha1.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/stack_allocated.h"
+#include "base/synchronization/lock.h"
 #include "gpu/command_buffer/common/gl2_types.h"
 #include "gpu/gpu_gles2_export.h"
 
@@ -29,6 +34,8 @@ class Shader;
 class GPU_GLES2_EXPORT ProgramCache {
  public:
   static const size_t kHashLength = base::kSHA1Length;
+  using Hash = std::array<uint8_t, kHashLength>;
+  using HashView = base::span<const uint8_t, kHashLength>;
 
   typedef std::map<std::string, GLint> LocationMap;
   using CacheProgramCallback =
@@ -45,12 +52,19 @@ class GPU_GLES2_EXPORT ProgramCache {
   };
 
   class GPU_GLES2_EXPORT ScopedCacheUse {
+    STACK_ALLOCATED();
+
    public:
     ScopedCacheUse(ProgramCache* cache, CacheProgramCallback callback);
+    // Disallow copy/assign as it is subtle and error prone (only one
+    // ScopedCacheUse should reset the callback on destruction).
+    ScopedCacheUse(const ScopedCacheUse& other) = delete;
+    ScopedCacheUse& operator=(const ScopedCacheUse& other) = delete;
+    // Disallow move as the destructor dereferences `cache_` after it has been
+    // moved out.
+    ScopedCacheUse(ScopedCacheUse&& other) = delete;
+    ScopedCacheUse& operator=(ScopedCacheUse&& other) = delete;
     ~ScopedCacheUse();
-
-    ScopedCacheUse(ScopedCacheUse&&) = default;
-    ScopedCacheUse& operator=(ScopedCacheUse&& other) = default;
 
    private:
     ProgramCache* cache_;
@@ -111,43 +125,44 @@ class GPU_GLES2_EXPORT ProgramCache {
   // Returns the number of bytes of memory freed.
   virtual size_t Trim(size_t limit) = 0;
 
-  // Reduces cache usage based on the given MemoryPressureLevel
-  void HandleMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
-
  protected:
   size_t max_size_bytes() const { return max_size_bytes_; }
 
   // called by implementing class after a shader was successfully cached
-  void LinkedProgramCacheSuccess(const std::string& program_hash);
+  void LinkedProgramCacheSuccess(const Hash& program_hash);
 
-  void CompiledShaderCacheSuccess(const std::string& shader_hash);
+  void CompiledShaderCacheSuccess(const Hash& shader_hash);
 
-  // result is not null terminated
-  void ComputeShaderHash(const std::string& shader,
-                         char* result) const;
+  void ComputeShaderHash(std::string_view shader, Hash& result) const;
 
-  // result is not null terminated.  hashed shaders are expected to be
-  // kHashLength in length
   void ComputeProgramHash(
-      const char* hashed_shader_0,
-      const char* hashed_shader_1,
+      HashView hashed_shader_0,
+      HashView hashed_shader_1,
       const LocationMap* bind_attrib_location_map,
       const std::vector<std::string>& transform_feedback_varyings,
       GLenum transform_feedback_buffer_mode,
-      char* result) const;
+      Hash& result) const;
 
-  void Evict(const std::string& program_hash,
-             const std::string& shader_0_hash,
-             const std::string& shader_1_hash);
+  // TODO(dcheng): Maybe this can take a HashView.
+  void Evict(const Hash& program_hash,
+             const Hash& shader_0_hash,
+             const Hash& shader_1_hash);
+
+  // Will also be used by derived class to guard some members.
+  mutable base::Lock lock_;
 
   // Used by the passthrough program cache to notify when a new blob is
   // inserted.
-  CacheProgramCallback cache_program_callback_;
+  CacheProgramCallback cache_program_callback_ GUARDED_BY(lock_);
 
  private:
-  typedef std::unordered_map<std::string, LinkedProgramStatus> LinkStatusMap;
-  typedef std::unordered_set<std::string> CachedCompiledShaderSet;
+  struct HashHasher {
+    size_t operator()(const Hash& hash) const;
+  };
+
+  using LinkStatusMap =
+      std::unordered_map<Hash, LinkedProgramStatus, HashHasher>;
+  using CachedCompiledShaderSet = std::unordered_set<Hash, HashHasher>;
 
   // called to clear the backend cache
   virtual void ClearBackend() = 0;

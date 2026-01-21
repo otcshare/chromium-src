@@ -4,6 +4,8 @@
 
 #include "extensions/common/manifest.h"
 
+#include <algorithm>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -102,7 +104,7 @@ int GetManifestVersion(const base::Value::Dict& manifest_value,
   // Platform apps were launched after manifest version 2 was the preferred
   // version, so they default to that.
   return manifest_value.FindInt(keys::kManifestVersion)
-      .value_or(type == Manifest::TYPE_PLATFORM_APP ? 2 : 1);
+      .value_or(type == Manifest::Type::kPlatformApp ? 2 : 1);
 }
 
 // Helper class to filter available values from a manifest.
@@ -126,8 +128,9 @@ class AvailableValuesFilter {
       std::string child_path = CombineKeys(current_path, it.first);
 
       // Unavailable key, skip it.
-      if (!CanAccessFeature(manifest, child_path))
+      if (!CanAccessFeature(manifest, child_path)) {
         continue;
+      }
 
       // If |child_path| corresponds to a leaf node, copy it.
       bool is_leaf_node = !it.second.is_dict();
@@ -156,13 +159,14 @@ class AvailableValuesFilter {
     const Feature* feature =
         FeatureProvider::GetManifestFeatures()->GetFeature(feature_path);
 
-    // TODO(crbug.com/1171466): We assume that if a feature does not exist,
+    // TODO(crbug.com/40745121): We assume that if a feature does not exist,
     // it is available. This is ok for child features (if its parent is
     // available) but is probably not correct for top-level features. We
     // should see if false can be returned for these non-existent top-level
     // features here.
-    if (!feature)
+    if (!feature) {
       return true;
+    }
 
     return feature
         ->IsAvailableToManifest(
@@ -173,8 +177,9 @@ class AvailableValuesFilter {
 
   static std::string CombineKeys(const std::string& parent,
                                  const std::string& child) {
-    if (parent.empty())
+    if (parent.empty()) {
       return child;
+    }
 
     return base::StrCat({parent, ".", child});
   }
@@ -185,8 +190,9 @@ class AvailableValuesFilter {
 // static
 ManifestLocation Manifest::GetHigherPriorityLocation(ManifestLocation loc1,
                                                      ManifestLocation loc2) {
-  if (loc1 == loc2)
+  if (loc1 == loc2) {
     return loc1;
+  }
 
   int loc1_rank = GetLocationRank(loc1);
   int loc2_rank = GetLocationRank(loc2);
@@ -196,35 +202,35 @@ ManifestLocation Manifest::GetHigherPriorityLocation(ManifestLocation loc1,
   CHECK(loc1_rank != loc2_rank);
 
   // Highest rank has highest priority.
-  return (loc1_rank > loc2_rank ? loc1 : loc2 );
+  return loc1_rank > loc2_rank ? loc1 : loc2;
 }
 
 // static
 Manifest::Type Manifest::GetTypeFromManifestValue(
     const base::Value::Dict& value,
     bool for_login_screen) {
-  Type type = TYPE_UNKNOWN;
+  Type type = Type::kUnknown;
   if (value.Find(keys::kTheme)) {
-    type = TYPE_THEME;
+    type = Type::kTheme;
   } else if (value.Find(api::shared_module::ManifestKeys::kExport)) {
-    type = TYPE_SHARED_MODULE;
+    type = Type::kSharedModule;
   } else if (value.Find(keys::kApp)) {
     if (value.FindByDottedPath(keys::kWebURLs) ||
         value.FindByDottedPath(keys::kLaunchWebURL)) {
-      type = TYPE_HOSTED_APP;
+      type = Type::kHostedApp;
     } else if (value.FindByDottedPath(keys::kPlatformAppBackground)) {
-      type = TYPE_PLATFORM_APP;
+      type = Type::kPlatformApp;
     } else {
-      type = TYPE_LEGACY_PACKAGED_APP;
+      type = Type::kLegacyPackagedApp;
     }
   } else if (value.Find(keys::kChromeOSSystemExtension)) {
-    type = TYPE_CHROMEOS_SYSTEM_EXTENSION;
+    type = Type::kChromeOSSystemExtension;
   } else if (for_login_screen) {
-    type = TYPE_LOGIN_SCREEN_EXTENSION;
+    type = Type::kLoginScreenExtension;
   } else {
-    type = TYPE_EXTENSION;
+    type = Type::kExtension;
   }
-  DCHECK_NE(type, TYPE_UNKNOWN);
+  DCHECK_NE(type, Type::kUnknown);
 
   return type;
 }
@@ -232,15 +238,18 @@ Manifest::Type Manifest::GetTypeFromManifestValue(
 // static
 bool Manifest::ShouldAlwaysLoadExtension(ManifestLocation location,
                                          bool is_theme) {
-  if (location == ManifestLocation::kComponent)
+  if (location == ManifestLocation::kComponent) {
     return true;  // Component extensions are always allowed.
+  }
 
-  if (is_theme)
+  if (is_theme) {
     return true;  // Themes are allowed, even with --disable-extensions.
+  }
 
   // TODO(devlin): This seems wrong. See https://crbug.com/833540.
-  if (Manifest::IsExternalLocation(location))
+  if (Manifest::IsExternalLocation(location)) {
     return true;
+  }
 
   return false;
 }
@@ -273,16 +282,12 @@ Manifest::Manifest(ManifestLocation location,
       manifest_version_(GetManifestVersion(value_, type_)) {
   DCHECK(!extension_id_.empty());
 
-  available_values_ = base::Value(AvailableValuesFilter::Filter(*this));
+  available_values_ = AvailableValuesFilter::Filter(*this);
 }
 
 Manifest::~Manifest() = default;
 
-bool Manifest::ValidateManifest(
-    std::string* error,
-    std::vector<InstallWarning>* warnings) const {
-  *error = "";
-
+void Manifest::ValidateManifest(std::vector<InstallWarning>* warnings) const {
   // Check every feature to see if it's in the manifest. Note that this means
   // we will ignore keys that are not features; we do this for forward
   // compatibility.
@@ -290,90 +295,70 @@ bool Manifest::ValidateManifest(
   const FeatureProvider* manifest_feature_provider =
       FeatureProvider::GetManifestFeatures();
   for (const auto& map_entry : manifest_feature_provider->GetAllFeatures()) {
-    if (!value_.FindByDottedPath(map_entry.first))
+    if (!value_.FindByDottedPath(map_entry.first)) {
       continue;
+    }
 
     Feature::Availability result = map_entry.second->IsAvailableToManifest(
         hashed_id_, type_, location_, manifest_version_, kUnspecifiedContextId);
-    if (!result.is_available())
-      warnings->push_back(InstallWarning(result.message(), map_entry.first));
+    if (!result.is_available()) {
+      warnings->emplace_back(result.message(), map_entry.first);
+    }
   }
 
   // Also generate warnings for keys that are not features.
   for (const auto item : value_) {
     if (!manifest_feature_provider->GetFeature(item.first)) {
-      warnings->push_back(InstallWarning(
+      // There are a set of keys that are not handled by Chrome, but that we
+      // explicitly allow. Don't add a warning for those keys.
+      if (std::ranges::contains(keys::kIgnoredUnrecognizedKeys, item.first)) {
+        continue;
+      }
+
+      warnings->emplace_back(
           ErrorUtils::FormatErrorMessage(
               manifest_errors::kUnrecognizedManifestKey, item.first),
-          item.first));
+          item.first);
     }
   }
 
   if (IsUnpackedLocation(location_) &&
       value_.FindByDottedPath(manifest_keys::kDifferentialFingerprint)) {
-    warnings->push_back(
-        InstallWarning(manifest_errors::kHasDifferentialFingerprint,
-                       manifest_keys::kDifferentialFingerprint));
+    warnings->emplace_back(manifest_errors::kHasDifferentialFingerprint,
+                           manifest_keys::kDifferentialFingerprint);
   }
-  return true;
 }
 
-const base::Value* Manifest::FindKey(base::StringPiece key) const {
-  return available_values_.GetDict().Find(key);
+const base::Value* Manifest::FindKey(std::string_view key) const {
+  return available_values_.Find(key);
 }
 
-const base::Value* Manifest::FindPath(base::StringPiece path) const {
-  return available_values_.GetDict().FindByDottedPath(path);
+const base::Value* Manifest::FindPath(std::string_view path) const {
+  return available_values_.FindByDottedPath(path);
 }
 
-absl::optional<bool> Manifest::FindBoolPath(base::StringPiece path) const {
-  return available_values_.GetDict().FindBoolByDottedPath(path);
+std::optional<bool> Manifest::FindBoolPath(std::string_view path) const {
+  return available_values_.FindBoolByDottedPath(path);
 }
 
-absl::optional<int> Manifest::FindIntPath(base::StringPiece path) const {
-  return available_values_.GetDict().FindIntByDottedPath(path);
+std::optional<int> Manifest::FindIntPath(std::string_view path) const {
+  return available_values_.FindIntByDottedPath(path);
 }
 
-const std::string* Manifest::FindStringPath(base::StringPiece path) const {
-  return available_values_.GetDict().FindStringByDottedPath(path);
+const std::string* Manifest::FindStringPath(std::string_view path) const {
+  return available_values_.FindStringByDottedPath(path);
 }
 
-const base::Value::Dict* Manifest::FindDictPath(base::StringPiece path) const {
-  return available_values_.GetDict().FindDictByDottedPath(path);
-}
-
-const base::Value* Manifest::FindDictPathAsValue(base::StringPiece path) const {
-  const base::Value* result =
-      available_values_.GetDict().FindByDottedPath(path);
-  if (result && result->is_dict())
-    return result;
-  return nullptr;
-}
-
-bool Manifest::GetDictionary(
-    const std::string& path, const base::DictionaryValue** out_value) const {
-  const base::Value* value;
-  if (!GetDictionary(path, &value)) {
-    return false;
-  }
-  *out_value = &base::Value::AsDictionaryValue(*value);
-  return true;
-}
-
-bool Manifest::GetDictionary(const std::string& path,
-                             const base::Value** out_value) const {
-  const base::Value* value = available_values_.GetDict().FindByDottedPath(path);
-  if (!value || !value->is_dict())
-    return false;
-  *out_value = value;
-  return true;
+const base::Value::Dict* Manifest::FindDictPath(std::string_view path) const {
+  return available_values_.FindDictByDottedPath(path);
 }
 
 bool Manifest::GetList(const std::string& path,
                        const base::Value** out_value) const {
-  const base::Value* value = available_values_.GetDict().FindByDottedPath(path);
-  if (!value || !value->is_list())
+  const base::Value* value = available_values_.FindByDottedPath(path);
+  if (!value || !value->is_list()) {
     return false;
+  }
   *out_value = value;
   return true;
 }

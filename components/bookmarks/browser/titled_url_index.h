@@ -9,16 +9,16 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "components/bookmarks/browser/titled_url_node_sorter.h"
-#include "components/bookmarks/common/bookmark_features.h"
 #include "components/query_parser/query_parser.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace bookmarks {
 
@@ -33,9 +33,10 @@ struct TitledUrlMatch;
 // TitledUrlNodes that contain that string in their title or URL.
 class TitledUrlIndex {
  public:
-  using TitledUrlNodeSet = base::flat_set<const TitledUrlNode*>;
+  using TitledUrlNodeSet =
+      base::flat_set<raw_ptr<const TitledUrlNode, CtnExperimental>>;
 
-  // Constructs a TitledUrlIndex. |sorter| is used to construct a sorted list
+  // Constructs a TitledUrlIndex. `sorter` is used to construct a sorted list
   // of matches when matches are returned from the index. If null, matches are
   // returned unsorted.
   explicit TitledUrlIndex(
@@ -45,10 +46,6 @@ class TitledUrlIndex {
   TitledUrlIndex& operator=(const TitledUrlIndex&) = delete;
 
   ~TitledUrlIndex();
-
-  // Records to UMA histograms sizes of `index_` and `path_index_`; called once
-  // at startup.
-  void RecordMemoryUsage() const;
 
   void SetNodeSorter(std::unique_ptr<TitledUrlNodeSorter> sorter);
 
@@ -64,23 +61,27 @@ class TitledUrlIndex {
   // Invoked when a folder has been removed from the model.
   void RemovePath(const TitledUrlNode* node);
 
-  // Returns up to |max_count| of matches containing each term from the text
-  // |query| in either the title, URL, or, if |match_ancestor_titles| is true,
-  // the titles of ancestor nodes. |matching_algorithm| determines the algorithm
-  // used by QueryParser internally to parse |query|.
+  // Returns up to `max_count` of matches containing each term from the text
+  // `query` in either the title, URL, or the titles of ancestor nodes.
+  // `matching_algorithm` determines the algorithm used by QueryParser
+  // internally to parse `query`.
   std::vector<TitledUrlMatch> GetResultsMatching(
       const std::u16string& query,
       size_t max_count,
-      query_parser::MatchingAlgorithm matching_algorithm,
-      bool match_ancestor_titles);
+      query_parser::MatchingAlgorithm matching_algorithm);
+
+  // Returns a normalized version of the UTF16 string `text`.  If it fails to
+  // normalize the string, returns `text` itself as a best-effort.
+  static std::u16string Normalize(std::u16string_view text);
 
  private:
   friend class TitledUrlIndexFake;
 
-  using TitledUrlNodes = std::vector<const TitledUrlNode*>;
+  using TitledUrlNodes =
+      std::vector<raw_ptr<const TitledUrlNode, CtnExperimental>>;
   using Index = std::map<std::u16string, TitledUrlNodeSet>;
 
-  // Constructs |sorted_nodes| by copying the matches in |matches| and sorting
+  // Constructs `sorted_nodes` by copying the matches in `matches` and sorting
   // them.
   void SortMatches(const TitledUrlNodeSet& matches,
                    TitledUrlNodes* sorted_nodes) const;
@@ -91,18 +92,16 @@ class TitledUrlIndex {
       const TitledUrlNodes& nodes,
       const query_parser::QueryNodeVector& query_nodes,
       const std::vector<std::u16string>& query_terms,
-      size_t max_count,
-      bool match_ancestor_titles);
+      size_t max_count);
 
-  // Finds |query_nodes| matches in |node| and returns a TitledUrlMatch
-  // containing |node| and the matches.
-  absl::optional<TitledUrlMatch> MatchTitledUrlNodeWithQuery(
+  // Finds `query_nodes` matches in `node` and returns a TitledUrlMatch
+  // containing `node` and the matches.
+  std::optional<TitledUrlMatch> MatchTitledUrlNodeWithQuery(
       const TitledUrlNode* node,
       const query_parser::QueryNodeVector& query_nodes,
-      const std::vector<std::u16string>& query_terms,
-      bool match_ancestor_titles);
+      const std::vector<std::u16string>& query_terms);
 
-  // Return matches for the specified |terms|. This is an intersection of each
+  // Return matches for the specified `terms`. This is an intersection of each
   // term's matches.
   TitledUrlNodeSet RetrieveNodesMatchingAllTerms(
       const std::vector<std::u16string>& terms,
@@ -119,7 +118,7 @@ class TitledUrlIndex {
       query_parser::MatchingAlgorithm matching_algorithm,
       size_t max_nodes) const;
 
-  // Return matches for the specified |term|. May return duplicates.
+  // Return matches for the specified `term`. May return duplicates.
   TitledUrlNodes RetrieveNodesMatchingTerm(
       const std::u16string& term,
       query_parser::MatchingAlgorithm matching_algorithm) const;
@@ -129,18 +128,18 @@ class TitledUrlIndex {
       const std::u16string& term,
       query_parser::MatchingAlgorithm matching_algorithm) const;
 
-  // Returns the set of query words from |query|.
+  // Returns the set of query words from `query`.
   static std::vector<std::u16string> ExtractQueryWords(
       const std::u16string& query);
 
-  // Return the index terms for |node|.
+  // Return the index terms for `node`.
   static std::vector<std::u16string> ExtractIndexTerms(
       const TitledUrlNode* node);
 
-  // Adds |node| to |index_|.
+  // Adds `node` to `index_`.
   void RegisterNode(const std::u16string& term, const TitledUrlNode* node);
 
-  // Removes |node| from |index_|.
+  // Removes `node` from `index_`.
   void UnregisterNode(const std::u16string& term, const TitledUrlNode* node);
 
   // A map of terms and the nodes containing those terms in their titles or
@@ -160,13 +159,6 @@ class TitledUrlIndex {
   std::map<std::u16string, size_t> path_index_;
 
   std::unique_ptr<TitledUrlNodeSorter> sorter_;
-
-  // Cached as a member variables as they're read up to 3000 times per omnibox
-  // keystroke and `IsEnabled()` is too expensive to call that frequently.
-  const bool approximate_node_match_ =
-      base::FeatureList::IsEnabled(kApproximateNodeMatch);
-  const bool index_paths_ =
-      base::FeatureList::IsEnabled(bookmarks::kIndexPaths);
 };
 
 }  // namespace bookmarks

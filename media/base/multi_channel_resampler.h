@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "media/base/sinc_resampler.h"
 
 namespace media {
@@ -66,6 +66,9 @@ class MEDIA_EXPORT MultiChannelResampler {
   // See SincResampler::PrimeWithSilence.
   void PrimeWithSilence();
 
+  // See SincResampler::KernelSize().
+  int KernelSize() const;
+
  private:
   // SincResampler::ReadCB implementation.  ProvideInput() will be called for
   // each channel (in channel order) as SincResampler needs more data.
@@ -86,7 +89,7 @@ class MEDIA_EXPORT MultiChannelResampler {
 
   // The number of output frames that have successfully been processed during
   // the current Resample() call.
-  int output_frames_ready_;
+  size_t output_frames_ready_ = 0u;
 };
 
 }  // namespace media

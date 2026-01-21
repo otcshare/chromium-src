@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ash/arc/intent_helper/arc_intent_helper_mojo_ash.h"
 
-#include "ash/components/arc/mojom/scale_factor.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "base/barrier_closure.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chromeos/ash/experiences/arc/mojom/scale_factor.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 
 namespace arc {
 
@@ -123,7 +124,7 @@ void ArcIntentHelperMojoAsh::OnRequestTextSelectionActions(
     std::vector<mojom::TextSelectionActionPtr> actions) {
   size_t actions_count = actions.size();
   auto converted_actions = std::vector<TextSelectionAction*>(actions_count);
-  TextSelectionAction** converted_actions_ptr = &converted_actions[0];
+  TextSelectionAction** converted_actions_ptr = converted_actions.data();
   base::RepeatingClosure barrier_closure = base::BarrierClosure(
       actions_count, base::BindOnce(
                          [](std::vector<TextSelectionAction*> actions,
@@ -141,7 +142,8 @@ void ArcIntentHelperMojoAsh::OnRequestTextSelectionActions(
 
   for (size_t idx = 0; idx < actions_count; ++idx) {
     auto action = std::move(actions[idx]);
-    TextSelectionAction** converted_action = &converted_actions_ptr[idx];
+    TextSelectionAction** converted_action =
+        UNSAFE_TODO(&converted_actions_ptr[idx]);
 
     // If action->icon doesn't meet the size condition, skip generating image.
     if (action->icon->width > kMaxIconSizeInPx ||

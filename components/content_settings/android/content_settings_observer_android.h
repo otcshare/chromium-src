@@ -18,11 +18,12 @@ class AndroidObserver : public Observer {
  public:
   AndroidObserver(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jbrowser_context_handle);
+      const base::android::JavaRef<jobject>& obj,
+      const base::android::JavaRef<jobject>& jbrowser_context_handle);
 
-  // Called by the Java counterpart when it is getting garbage collected.
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  // Destroys the AndroidObserver object. This needs to be called on the java
+  // side when the object is not in use anymore.
+  void Destroy(JNIEnv* env);
 
   // content_settings::Observer:
   void OnContentSettingChanged(

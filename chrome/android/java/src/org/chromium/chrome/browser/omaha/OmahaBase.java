@@ -4,7 +4,8 @@
 
 package org.chromium.chrome.browser.omaha;
 
-import android.content.Context;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.SharedPreferences;
 import android.text.format.DateUtils;
 
@@ -12,11 +13,14 @@ import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.StreamUtil;
 import org.chromium.base.ThreadUtils;
-import org.chromium.components.version_info.VersionInfo;
+import org.chromium.base.version_info.VersionInfo;
+import org.chromium.build.annotations.EnsuresNonNullIf;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.net.ChromiumNetworkAdapter;
 import org.chromium.net.NetworkTrafficAnnotationTag;
 
@@ -36,38 +40,42 @@ import java.util.Date;
  * Keeps tabs on the current state of Chrome, tracking if and when a request should be sent to the
  * Omaha Server.
  *
- * When Chrome is brought to the foreground, it will trigger a call to
- * {@link OmahaBase#onForegroundSessionStart}, which kicks off a series of scheduled events
- * that allow the class to run.  A single alarm is used to trigger the whole pipeline when needed.
- * - If Chrome isn't running when the alarm is fired, no pings or update checks will be performed.
- * - If Chrome doesn't have a pending request to POST, no POST will be performed.
+ * <p>When Chrome is brought to the foreground, it will trigger a call to {@link
+ * OmahaBase#onForegroundSessionStart}, which kicks off a series of scheduled events that allow the
+ * class to run. A single alarm is used to trigger the whole pipeline when needed. - If Chrome isn't
+ * running when the alarm is fired, no pings or update checks will be performed. - If Chrome doesn't
+ * have a pending request to POST, no POST will be performed.
  *
- * When a fresh install is detected (or the user clears their data), OmahaBase will send an XML
+ * <p>When a fresh install is detected (or the user clears their data), OmahaBase will send an XML
  * request saying that a new install was detected, then follow up with an XML request saying that
  * the user was active and that we need to check for Chrome updates.
  *
- * mevissen suggested being conservative with our timers for sending requests.
- * POST attempts that fail to be acknowledged by the server are re-attempted, with at least
- * one hour between each attempt.
+ * <p>mevissen suggested being conservative with our timers for sending requests. POST attempts that
+ * fail to be acknowledged by the server are re-attempted, with at least one hour between each
+ * attempt.
  *
- * Status is saved directly to the the disk after every run of the pipeline.
+ * <p>Status is saved directly to the the disk after every run of the pipeline.
  *
- * Implementation notes:
+ * <p>Implementation notes:
  * http://docs.google.com/a/google.com/document/d/1scTCovqASf5ktkOeVj8wFRkWTCeDYw2LrOBNn05CDB0/edit
  */
+@NullMarked
 public class OmahaBase {
     // Used in various org.chromium.chrome.browser.omaha files.
     static final String TAG = "omaha";
 
     /** Version config data structure. */
     public static class VersionConfig {
-        public final String latestVersion;
-        public final String downloadUrl;
+        public final @Nullable String latestVersion;
+        public final @Nullable String downloadUrl;
         public final int serverDate;
-        public final String updateStatus;
+        public final @Nullable String updateStatus;
 
         protected VersionConfig(
-                String latestVersion, String downloadUrl, int serverDate, String updateStatus) {
+                @Nullable String latestVersion,
+                @Nullable String downloadUrl,
+                int serverDate,
+                @Nullable String updateStatus) {
             this.latestVersion = latestVersion;
             this.downloadUrl = downloadUrl;
             this.serverDate = serverDate;
@@ -76,8 +84,12 @@ public class OmahaBase {
     }
 
     /** Represents the status of a manually-triggered update check. */
-    @IntDef({UpdateStatus.UPDATED, UpdateStatus.OUTDATED, UpdateStatus.OFFLINE,
-            UpdateStatus.FAILED})
+    @IntDef({
+        UpdateStatus.UPDATED,
+        UpdateStatus.OUTDATED,
+        UpdateStatus.OFFLINE,
+        UpdateStatus.FAILED
+    })
     @Retention(RetentionPolicy.SOURCE)
     public @interface UpdateStatus {
         int UPDATED = 0;
@@ -86,24 +98,10 @@ public class OmahaBase {
         int FAILED = 3;
     }
 
-    // Flags for retrieving the OmahaClient's state after it's written to disk.
-    // The PREF_PACKAGE doesn't match the current OmahaClient package for historical reasons.
-    static final String PREF_PACKAGE = "com.google.android.apps.chrome.omaha";
-    static final String PREF_INSTALL_SOURCE = "installSource";
-    static final String PREF_LATEST_VERSION = "latestVersion";
-    static final String PREF_MARKET_URL = "marketURL";
-    static final String PREF_SERVER_DATE = "serverDate";
-    static final String PREF_PERSISTED_REQUEST_ID = "persistedRequestID";
-    static final String PREF_SEND_INSTALL_EVENT = "sendInstallEvent";
-    static final String PREF_TIMESTAMP_FOR_NEW_REQUEST = "timestampForNewRequest";
-    static final String PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT = "timestampForNextPostAttempt";
-    static final String PREF_TIMESTAMP_OF_INSTALL = "timestampOfInstall";
-    static final String PREF_TIMESTAMP_OF_REQUEST = "timestampOfRequest";
-
     private static final int UNKNOWN_DATE = -2;
 
     /** Whether or not the Omaha server should really be contacted. */
-    private static boolean sIsDisabled;
+    private static boolean sDisabledForTesting;
 
     // Results of {@link #handlePostRequest()}.
     @IntDef({PostResult.NO_REQUEST, PostResult.SENT, PostResult.FAILED, PostResult.SCHEDULED})
@@ -114,10 +112,6 @@ public class OmahaBase {
         int FAILED = 2;
         int SCHEDULED = 3;
     }
-
-    /** Deprecated; kept around to cancel alarms set for OmahaClient pre-M58. */
-    private static final String ACTION_REGISTER_REQUEST =
-            "org.chromium.chrome.browser.omaha.ACTION_REGISTER_REQUEST";
 
     // Delays between events.
     static final long MS_POST_BASE_DELAY = DateUtils.HOUR_IN_MILLIS;
@@ -138,26 +132,24 @@ public class OmahaBase {
     private boolean mStateHasBeenRestored;
 
     // State saved written to and read from disk.
-    private RequestData mCurrentRequest;
+    private @Nullable RequestData mCurrentRequest;
     private long mTimestampOfInstall;
     private long mTimestampForNextPostAttempt;
     private long mTimestampForNewRequest;
-    private int mServerDate;
-    private String mInstallSource;
-    protected VersionConfig mVersionConfig;
+    private @Nullable String mInstallSource;
+    protected @Nullable VersionConfig mVersionConfig;
     protected boolean mSendInstallEvent;
 
     // Request failure error code.
     private int mRequestErrorCode;
 
-    /** See {@link #sIsDisabled}. */
     public static void setIsDisabledForTesting(boolean state) {
-        sIsDisabled = state;
+        sDisabledForTesting = state;
+        ResettersForTesting.register(() -> sDisabledForTesting = false);
     }
 
-    /** See {@link #sIsDisabled}. */
     static boolean isDisabled() {
-        return sIsDisabled;
+        return sDisabledForTesting;
     }
 
     /**
@@ -176,12 +168,10 @@ public class OmahaBase {
         // Since this update check is synchronous and blocking on the network
         // connection, it should not be run on the UI thread.
         ThreadUtils.assertOnBackgroundThread();
-        Log.i(TAG,
-                "OmahaBase::checkForUpdates(): Current version String: \"" + getInstalledVersion()
-                        + "\"");
         // This is not available on developer builds.
         if (getRequestGenerator() == null) {
-            Log.w(TAG,
+            Log.w(
+                    TAG,
                     "OmahaBase::checkForUpdates(): Request generator is null. This is probably "
                             + "a developer build.");
             return UpdateStatus.FAILED;
@@ -191,13 +181,15 @@ public class OmahaBase {
         String installSource =
                 mDelegate.isInSystemImage() ? INSTALL_SOURCE_SYSTEM : INSTALL_SOURCE_ORGANIC;
         RequestData currentRequest =
-                createRequestData(false, currentTimestamp, null, installSource);
+                createRequestData(false, currentTimestamp, /* persistedID= */ null, installSource);
         String sessionID = mDelegate.generateUUID();
-        long timestampOfInstall = OmahaBase.getSharedPreferences().getLong(
-                OmahaBase.PREF_TIMESTAMP_OF_INSTALL, currentTimestamp);
+        long timestampOfInstall =
+                OmahaPrefUtils.getSharedPreferences()
+                        .getLong(OmahaPrefUtils.PREF_TIMESTAMP_OF_INSTALL, currentTimestamp);
         // Send the request and parse the response.
-        VersionConfig versionConfig = generateAndPostRequest(
-                currentTimestamp, sessionID, currentRequest, timestampOfInstall);
+        VersionConfig versionConfig =
+                generateAndPostRequest(
+                        currentTimestamp, sessionID, currentRequest, timestampOfInstall);
         if (versionConfig == null) {
             Log.w(TAG, "OmahaBase::checkForUpdates(): versionConfig parsed from response is null.");
             return (mRequestErrorCode == RequestFailureException.ERROR_CONNECTIVITY)
@@ -209,9 +201,6 @@ public class OmahaBase {
         if (versionConfig.updateStatus != null && versionConfig.updateStatus.equals("noupdate")) {
             return UpdateStatus.UPDATED;
         }
-        Log.i(TAG,
-                "OmahaBase::checkForUpdates(): Received latest version String from Omaha "
-                        + "server: \"" + versionConfig.latestVersion + "\"");
         // Compare the current version with the latest received from the server.
         VersionNumber current = VersionNumber.fromString(getInstalledVersion());
         VersionNumber latest = VersionNumber.fromString(versionConfig.latestVersion);
@@ -236,8 +225,7 @@ public class OmahaBase {
         }
 
         if (hasRequest()) {
-            @PostResult
-            int result = handlePostRequest();
+            @PostResult int result = handlePostRequest();
             if (result == PostResult.FAILED || result == PostResult.SCHEDULED) {
                 nextTimestamp = Math.min(nextTimestamp, mTimestampForNextPostAttempt);
             }
@@ -247,7 +235,7 @@ public class OmahaBase {
         //                    case a scheduling error occurs.
         if (nextTimestamp != Long.MAX_VALUE && nextTimestamp >= 0) {
             long currentTimestamp = mDelegate.getScheduler().getCurrentTime();
-            Log.i(TAG, "Attempting to schedule next job for: " + new Date(nextTimestamp));
+            Log.d(TAG, "Attempting to schedule next job for: " + new Date(nextTimestamp));
             mDelegate.scheduleService(currentTimestamp, nextTimestamp);
         }
 
@@ -261,17 +249,17 @@ public class OmahaBase {
     private void handleRegisterActiveRequest() {
         // If the current request is too old, generate a new one.
         long currentTimestamp = getBackoffScheduler().getCurrentTime();
-        boolean isTooOld = hasRequest()
-                && mCurrentRequest.getAgeInMilliseconds(currentTimestamp) >= MS_BETWEEN_REQUESTS;
+        boolean isTooOld =
+                hasRequest()
+                        && mCurrentRequest.getAgeInMilliseconds(currentTimestamp)
+                                >= MS_BETWEEN_REQUESTS;
         boolean isOverdue = currentTimestamp >= mTimestampForNewRequest;
         if (isTooOld || isOverdue) {
             registerNewRequest(currentTimestamp);
         }
     }
 
-    /**
-     * Sends the request it is holding.
-     */
+    /** Sends the request it is holding. */
     private @PostResult int handlePostRequest() {
         if (!hasRequest()) {
             mDelegate.onHandlePostRequestDone(PostResult.NO_REQUEST, false);
@@ -279,8 +267,7 @@ public class OmahaBase {
         }
 
         // If enough time has passed since the last attempt, try sending a request.
-        @PostResult
-        int result;
+        @PostResult int result;
         long currentTimestamp = getBackoffScheduler().getCurrentTime();
         boolean installEventWasSent = false;
         if (currentTimestamp >= mTimestampForNextPostAttempt) {
@@ -320,31 +307,41 @@ public class OmahaBase {
     }
 
     protected boolean generateAndPostRequest(long currentTimestamp, String sessionID) {
-        mVersionConfig = generateAndPostRequest(
-                currentTimestamp, sessionID, mCurrentRequest, mTimestampOfInstall);
+        assert mCurrentRequest != null;
+        mVersionConfig =
+                generateAndPostRequest(
+                        currentTimestamp, sessionID, mCurrentRequest, mTimestampOfInstall);
         return mVersionConfig != null;
     }
 
-    protected VersionConfig generateAndPostRequest(long currentTimestamp, String sessionID,
-            RequestData currentRequest, long timestampOfInstall) {
+    protected @Nullable VersionConfig generateAndPostRequest(
+            long currentTimestamp,
+            String sessionID,
+            RequestData currentRequest,
+            long timestampOfInstall) {
+        RequestGenerator requestGenerator = getRequestGenerator();
+        assumeNonNull(requestGenerator);
+
         try {
             // Generate the XML for the current request.
-            long installAgeInDays = RequestGenerator.installAge(
-                    currentTimestamp, timestampOfInstall, currentRequest.isSendInstallEvent());
-            String xml = getRequestGenerator().generateXML(sessionID, getInstalledVersion(),
-                    installAgeInDays,
-                    mVersionConfig == null ? UNKNOWN_DATE : mVersionConfig.serverDate,
-                    currentRequest);
-            Log.i(TAG, "OmahaBase::generateAndPostRequest(): Sending request to Omaha:\n" + xml);
+            long installAgeInDays =
+                    RequestGenerator.installAge(
+                            currentTimestamp,
+                            timestampOfInstall,
+                            currentRequest.isSendInstallEvent());
+            String xml =
+                    requestGenerator.generateXML(
+                            sessionID,
+                            getInstalledVersion(),
+                            installAgeInDays,
+                            mVersionConfig == null ? UNKNOWN_DATE : mVersionConfig.serverDate,
+                            currentRequest);
 
             // Send the request to the server & wait for a response.
             String response = postRequest(currentTimestamp, xml);
-            Log.i(TAG,
-                    "OmahaBase::generateAndPostRequest(): Received response from Omaha:\n"
-                            + response);
 
             // Parse out the response.
-            String appId = getRequestGenerator().getAppId();
+            String appId = requestGenerator.getAppId();
             ResponseParser parser = new ResponseParser(appId, currentRequest.isSendInstallEvent());
             return parser.parseResponse(response);
         } catch (RequestFailureException e) {
@@ -363,7 +360,8 @@ public class OmahaBase {
             scheduler.resetFailedAttempts();
             mTimestampForNewRequest = scheduler.getCurrentTime() + MS_BETWEEN_REQUESTS;
             mTimestampForNextPostAttempt = scheduler.calculateNextTimestamp();
-            Log.i(TAG,
+            Log.d(
+                    TAG,
                     "Request to Server Successful. Timestamp for next request:"
                             + mTimestampForNextPostAttempt);
         } else {
@@ -394,12 +392,15 @@ public class OmahaBase {
         mDelegate.onRegisterNewRequestDone(mTimestampForNewRequest, mTimestampForNextPostAttempt);
     }
 
-    private RequestData createRequestData(long currentTimestamp, String persistedID) {
+    private RequestData createRequestData(long currentTimestamp, @Nullable String persistedID) {
         return createRequestData(mSendInstallEvent, currentTimestamp, persistedID, mInstallSource);
     }
 
-    private RequestData createRequestData(boolean sendInstallEvent, long currentTimestamp,
-            String persistedID, String installSource) {
+    private RequestData createRequestData(
+            boolean sendInstallEvent,
+            long currentTimestamp,
+            @Nullable String persistedID,
+            @Nullable String installSource) {
         // If we're sending a persisted event, keep trying to send the same request ID.
         String requestID;
         if (persistedID == null || INVALID_REQUEST_ID.equals(persistedID)) {
@@ -410,6 +411,7 @@ public class OmahaBase {
         return new RequestData(sendInstallEvent, currentTimestamp, requestID, installSource);
     }
 
+    @EnsuresNonNullIf("mCurrentRequest")
     private boolean hasRequest() {
         return mCurrentRequest != null;
     }
@@ -427,6 +429,7 @@ public class OmahaBase {
             urlConnection.setFixedLengthStreamingMode(
                     ApiCompatibilityUtils.getBytesUtf8(xml).length);
             if (mSendInstallEvent && getBackoffScheduler().getNumFailedAttempts() > 0) {
+                assumeNonNull(mCurrentRequest);
                 String age = Long.toString(mCurrentRequest.getAgeInSeconds(timestamp));
                 urlConnection.addRequestProperty("X-RequestAge", age);
             }
@@ -437,48 +440,50 @@ public class OmahaBase {
         }
     }
 
-    /**
-     * Returns a HttpURLConnection to the server.
-     */
+    /** Returns a HttpURLConnection to the server. */
     @VisibleForTesting
     protected HttpURLConnection createConnection() throws RequestFailureException {
         // TODO(crbug.com/1139505): Remove the note about UID when UID fallback is removed.
-        NetworkTrafficAnnotationTag annotation = NetworkTrafficAnnotationTag.createComplete(
-                "omaha_client_android_uc",
-                "semantics {"
-                        + "  sender: 'Updates'"
-                        + "  description: "
-                        + "    'This traffic checks whether the browser is up-to-date and '"
-                        + "    'provides basic browser telemetry using the Omaha protocol.'"
-                        + "  trigger: 'Manual or automatic checks for updates.'"
-                        + "  data:"
-                        + "    'Various OS and browser parameters such as version, '"
-                        + "    'architecture, channel, and the calendar date of the previous '"
-                        + "    'communication. '"
-                        + "    'A unique identifier for the device may be transmitted.'"
-                        + "  destination: GOOGLE_OWNED_SERVICE"
-                        + "}"
-                        + "policy {"
-                        + "  cookies_allowed: NO"
-                        + "  policy_exception_justification: 'Not implemented.'"
-                        + "  setting: 'This feature cannot be disabled.'"
-                        + "}");
+        NetworkTrafficAnnotationTag annotation =
+                NetworkTrafficAnnotationTag.createComplete(
+                        "omaha_client_android_uc",
+                        """
+                semantics {
+                  sender: 'Updates'
+                  description:
+                    'This traffic checks whether the browser is up-to-date and '
+                    'provides basic browser telemetry using the Omaha protocol.'
+                  trigger: 'Manual or automatic checks for updates.'
+                  data:
+                    'Various OS and browser parameters such as version, '
+                    'architecture, channel, and the calendar date of the previous '
+                    'communication. '
+                    'A unique identifier for the device may be transmitted.'
+                  destination: GOOGLE_OWNED_SERVICE
+                }
+                policy {
+                  cookies_allowed: NO
+                  policy_exception_justification: 'Not implemented.'
+                  setting: 'This feature cannot be disabled.'
+                }""");
         try {
-            URL url = new URL(getRequestGenerator().getServerUrl());
+            URL url = new URL(assumeNonNull(getRequestGenerator()).getServerUrl());
             HttpURLConnection connection =
                     (HttpURLConnection) ChromiumNetworkAdapter.openConnection(url, annotation);
             connection.setConnectTimeout(MS_CONNECTION_TIMEOUT);
             connection.setReadTimeout(MS_CONNECTION_TIMEOUT);
             return connection;
         } catch (IOException e) {
-            throw new RequestFailureException("Failed to open connection to URL", e,
+            throw new RequestFailureException(
+                    "Failed to open connection to URL",
+                    e,
                     RequestFailureException.ERROR_CONNECTIVITY);
         }
     }
 
     /**
      * Reads the data back from the file it was saved to.  Uses SharedPreferences to handle I/O.
-     * Sanity checks are performed on the timestamps to guard against clock changing.
+     * Validity checks are performed on the timestamps to guard against clock changing.
      */
     private void restoreState() {
         if (mStateHasBeenRestored) return;
@@ -488,32 +493,39 @@ public class OmahaBase {
         ExponentialBackoffScheduler scheduler = getBackoffScheduler();
         long currentTime = scheduler.getCurrentTime();
 
-        SharedPreferences preferences = OmahaBase.getSharedPreferences();
+        SharedPreferences preferences = OmahaPrefUtils.getSharedPreferences();
         mTimestampForNewRequest =
-                preferences.getLong(OmahaBase.PREF_TIMESTAMP_FOR_NEW_REQUEST, currentTime);
+                preferences.getLong(OmahaPrefUtils.PREF_TIMESTAMP_FOR_NEW_REQUEST, currentTime);
         mTimestampForNextPostAttempt =
-                preferences.getLong(OmahaBase.PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT, currentTime);
-        mTimestampOfInstall = preferences.getLong(OmahaBase.PREF_TIMESTAMP_OF_INSTALL, currentTime);
-        mSendInstallEvent = preferences.getBoolean(OmahaBase.PREF_SEND_INSTALL_EVENT, true);
-        mInstallSource = preferences.getString(OmahaBase.PREF_INSTALL_SOURCE, installSource);
+                preferences.getLong(
+                        OmahaPrefUtils.PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT, currentTime);
+        mTimestampOfInstall =
+                preferences.getLong(OmahaPrefUtils.PREF_TIMESTAMP_OF_INSTALL, currentTime);
+        mSendInstallEvent = preferences.getBoolean(OmahaPrefUtils.PREF_SEND_INSTALL_EVENT, true);
+        mInstallSource = preferences.getString(OmahaPrefUtils.PREF_INSTALL_SOURCE, installSource);
         mVersionConfig = getVersionConfig(preferences);
 
         // If we're not sending an install event, don't bother restoring the request ID:
         // the server does not expect to have persisted request IDs for pings or update checks.
-        String persistedRequestId = mSendInstallEvent
-                ? preferences.getString(OmahaBase.PREF_PERSISTED_REQUEST_ID, INVALID_REQUEST_ID)
-                : INVALID_REQUEST_ID;
+        String persistedRequestId =
+                mSendInstallEvent
+                        ? preferences.getString(
+                                OmahaPrefUtils.PREF_PERSISTED_REQUEST_ID, INVALID_REQUEST_ID)
+                        : INVALID_REQUEST_ID;
         long requestTimestamp =
-                preferences.getLong(OmahaBase.PREF_TIMESTAMP_OF_REQUEST, INVALID_TIMESTAMP);
-        mCurrentRequest = requestTimestamp == INVALID_TIMESTAMP
-                ? null
-                : createRequestData(requestTimestamp, persistedRequestId);
+                preferences.getLong(OmahaPrefUtils.PREF_TIMESTAMP_OF_REQUEST, INVALID_TIMESTAMP);
+        mCurrentRequest =
+                requestTimestamp == INVALID_TIMESTAMP
+                        ? null
+                        : createRequestData(requestTimestamp, persistedRequestId);
 
         // Confirm that the timestamp for the next request is less than the base delay.
         long delayToNewRequest = mTimestampForNewRequest - currentTime;
         if (delayToNewRequest > MS_BETWEEN_REQUESTS) {
-            Log.w(TAG,
-                    "Delay to next request (" + delayToNewRequest
+            Log.w(
+                    TAG,
+                    "Delay to next request ("
+                            + delayToNewRequest
                             + ") is longer than expected.  Resetting to now.");
             mTimestampForNewRequest = currentTime;
         }
@@ -522,9 +534,12 @@ public class OmahaBase {
         long delayToNextPost = mTimestampForNextPostAttempt - currentTime;
         long lastGeneratedDelay = scheduler.getGeneratedDelay();
         if (delayToNextPost > lastGeneratedDelay) {
-            Log.w(TAG,
-                    "Delay to next post attempt (" + delayToNextPost
-                            + ") is greater than expected (" + lastGeneratedDelay
+            Log.w(
+                    TAG,
+                    "Delay to next post attempt ("
+                            + delayToNextPost
+                            + ") is greater than expected ("
+                            + lastGeneratedDelay
                             + ").  Resetting to now.");
             mTimestampForNextPostAttempt = currentTime;
         }
@@ -532,29 +547,29 @@ public class OmahaBase {
         mStateHasBeenRestored = true;
     }
 
-    /**
-     * Writes out the current state to a file.
-     */
+    /** Writes out the current state to a file. */
     private void saveState() {
-        SharedPreferences prefs = OmahaBase.getSharedPreferences();
+        SharedPreferences prefs = OmahaPrefUtils.getSharedPreferences();
         SharedPreferences.Editor editor = prefs.edit();
-        editor.putBoolean(OmahaBase.PREF_SEND_INSTALL_EVENT, mSendInstallEvent);
-        editor.putLong(OmahaBase.PREF_TIMESTAMP_OF_INSTALL, mTimestampOfInstall);
+        editor.putBoolean(OmahaPrefUtils.PREF_SEND_INSTALL_EVENT, mSendInstallEvent);
+        editor.putLong(OmahaPrefUtils.PREF_TIMESTAMP_OF_INSTALL, mTimestampOfInstall);
         editor.putLong(
-                OmahaBase.PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT, mTimestampForNextPostAttempt);
-        editor.putLong(OmahaBase.PREF_TIMESTAMP_FOR_NEW_REQUEST, mTimestampForNewRequest);
-        editor.putLong(OmahaBase.PREF_TIMESTAMP_OF_REQUEST,
+                OmahaPrefUtils.PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT, mTimestampForNextPostAttempt);
+        editor.putLong(OmahaPrefUtils.PREF_TIMESTAMP_FOR_NEW_REQUEST, mTimestampForNewRequest);
+        editor.putLong(
+                OmahaPrefUtils.PREF_TIMESTAMP_OF_REQUEST,
                 hasRequest() ? mCurrentRequest.getCreationTimestamp() : INVALID_TIMESTAMP);
-        editor.putString(OmahaBase.PREF_PERSISTED_REQUEST_ID,
+        editor.putString(
+                OmahaPrefUtils.PREF_PERSISTED_REQUEST_ID,
                 hasRequest() ? mCurrentRequest.getRequestID() : INVALID_REQUEST_ID);
-        editor.putString(OmahaBase.PREF_INSTALL_SOURCE, mInstallSource);
+        editor.putString(OmahaPrefUtils.PREF_INSTALL_SOURCE, mInstallSource);
         setVersionConfig(editor, mVersionConfig);
         editor.apply();
 
         mDelegate.onSaveStateDone(mTimestampForNewRequest, mTimestampForNextPostAttempt);
     }
 
-    private RequestGenerator getRequestGenerator() {
+    private @Nullable RequestGenerator getRequestGenerator() {
         return mDelegate.getRequestGenerator();
     }
 
@@ -570,8 +585,8 @@ public class OmahaBase {
 
     /** Checks whether Chrome has ever tried contacting Omaha before. */
     public static boolean isProbablyFreshInstall() {
-        SharedPreferences prefs = getSharedPreferences();
-        return prefs.getLong(PREF_TIMESTAMP_OF_INSTALL, -1) == -1;
+        SharedPreferences prefs = OmahaPrefUtils.getSharedPreferences();
+        return prefs.getLong(OmahaPrefUtils.PREF_TIMESTAMP_OF_INSTALL, -1) == -1;
     }
 
     /** Sends the request to the server and returns the response. */
@@ -583,12 +598,15 @@ public class OmahaBase {
             writer.write(request, 0, request.length());
             StreamUtil.closeQuietly(writer);
             checkServerResponseCode(urlConnection);
-        } catch (IOException | SecurityException | IndexOutOfBoundsException
+        } catch (IOException
+                | SecurityException
+                | IndexOutOfBoundsException
                 | IllegalArgumentException e) {
             // IndexOutOfBoundsException is thought to be triggered by a bug in okio.
-            // TODO(crbug.com/1111334): Record IndexOutOfBoundsException specifically.
             // IllegalArgumentException is triggered by a bug in okio. crbug.com/1149863.
-            throw new RequestFailureException("Failed to write request to server: ", e,
+            throw new RequestFailureException(
+                    "Failed to write request to server: ",
+                    e,
                     RequestFailureException.ERROR_CONNECTIVITY);
         }
 
@@ -606,7 +624,9 @@ public class OmahaBase {
                 StreamUtil.closeQuietly(in);
             }
         } catch (IOException e) {
-            throw new RequestFailureException("Failed when reading response from server: ", e,
+            throw new RequestFailureException(
+                    "Failed when reading response from server: ",
+                    e,
                     RequestFailureException.ERROR_CONNECTIVITY);
         }
     }
@@ -616,34 +636,34 @@ public class OmahaBase {
             throws RequestFailureException {
         try {
             if (urlConnection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                throw new RequestFailureException("Received " + urlConnection.getResponseCode()
-                        + " code instead of 200 (OK) from the server.  Aborting.");
+                throw new RequestFailureException(
+                        "Received "
+                                + urlConnection.getResponseCode()
+                                + " code instead of 200 (OK) from the server.  Aborting.");
             }
         } catch (IOException e) {
             throw new RequestFailureException("Failed to read response code from server: ", e);
         }
     }
 
-    /** Returns the Omaha SharedPreferences. */
-    public static SharedPreferences getSharedPreferences() {
-        return ContextUtils.getApplicationContext().getSharedPreferences(
-                PREF_PACKAGE, Context.MODE_PRIVATE);
-    }
-
-    static void setVersionConfig(SharedPreferences.Editor editor, VersionConfig versionConfig) {
-        editor.putString(OmahaBase.PREF_LATEST_VERSION,
+    static void setVersionConfig(
+            SharedPreferences.Editor editor, @Nullable VersionConfig versionConfig) {
+        editor.putString(
+                OmahaPrefUtils.PREF_LATEST_VERSION,
                 versionConfig == null ? "" : versionConfig.latestVersion);
         editor.putString(
-                OmahaBase.PREF_MARKET_URL, versionConfig == null ? "" : versionConfig.downloadUrl);
+                OmahaPrefUtils.PREF_MARKET_URL,
+                versionConfig == null ? "" : versionConfig.downloadUrl);
         if (versionConfig != null) {
-            editor.putInt(OmahaBase.PREF_SERVER_DATE, versionConfig.serverDate);
+            editor.putInt(OmahaPrefUtils.PREF_SERVER_DATE, versionConfig.serverDate);
         }
     }
 
     static VersionConfig getVersionConfig(SharedPreferences sharedPref) {
-        return new VersionConfig(sharedPref.getString(OmahaBase.PREF_LATEST_VERSION, ""),
-                sharedPref.getString(OmahaBase.PREF_MARKET_URL, ""),
-                sharedPref.getInt(OmahaBase.PREF_SERVER_DATE, -2),
+        return new VersionConfig(
+                sharedPref.getString(OmahaPrefUtils.PREF_LATEST_VERSION, ""),
+                sharedPref.getString(OmahaPrefUtils.PREF_MARKET_URL, ""),
+                sharedPref.getInt(OmahaPrefUtils.PREF_SERVER_DATE, -2),
                 // updateStatus is only used for the on-demand check.
                 null);
     }

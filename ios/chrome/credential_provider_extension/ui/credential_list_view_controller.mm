@@ -4,7 +4,7 @@
 
 #import "ios/chrome/credential_provider_extension/ui/credential_list_view_controller.h"
 
-#import "base/mac/foundation_util.h"
+#import "base/apple/foundation_util.h"
 #import "base/numerics/safe_conversions.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
 #import "ios/chrome/common/app_group/app_group_metrics.h"
@@ -15,21 +15,19 @@
 #import "ios/chrome/common/ui/favicon/favicon_view.h"
 #import "ios/chrome/common/ui/table_view/favicon_table_view_cell.h"
 #import "ios/chrome/common/ui/util/pointer_interaction_util.h"
+#import "ios/chrome/credential_provider_extension/favicon_util.h"
+#import "ios/chrome/credential_provider_extension/generated_localized_strings.h"
 #import "ios/chrome/credential_provider_extension/metrics_util.h"
 #import "ios/chrome/credential_provider_extension/ui/credential_list_global_header_view.h"
 #import "ios/chrome/credential_provider_extension/ui/credential_list_header_view.h"
-#import "ios/chrome/credential_provider_extension/ui/feature_flags.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/credential_provider_extension/ui/ui_util.h"
 
 namespace {
 
 // Reuse Identifiers for table views.
-NSString* kHeaderIdentifier = @"clvcHeader";
-NSString* kCredentialCellIdentifier = @"clvcCredentialCell";
-NSString* kNewPasswordCellIdentifier = @"clvcNewPasswordCell";
+NSString* const kHeaderIdentifier = @"clvcHeader";
+NSString* const kCredentialCellIdentifier = @"clvcCredentialCell";
+NSString* const kNewPasswordCellIdentifier = @"clvcNewPasswordCell";
 
 const CGFloat kNewCredentialHeaderHeight = 35;
 // Add extra space to offset the top of the table view from the search bar.
@@ -38,7 +36,7 @@ const CGFloat kTableViewTopSpace = 8;
 UIColor* BackgroundColor() {
   return [UIColor colorNamed:kGroupedPrimaryBackgroundColor];
 }
-}
+}  // namespace
 
 // This cell just adds a simple hover pointer interaction to the TableViewCell.
 @interface CredentialListCell : FaviconTableViewCell
@@ -63,11 +61,11 @@ UIColor* BackgroundColor() {
 // Search controller that contains search bar.
 @property(nonatomic, strong) UISearchController* searchController;
 
-// Current list of suggested passwords.
-@property(nonatomic, copy) NSArray<id<Credential>>* suggestedPasswords;
+// Current list of suggested credentials.
+@property(nonatomic, copy) NSArray<id<Credential>>* suggestedCredentials;
 
-// Current list of all passwords.
-@property(nonatomic, copy) NSArray<id<Credential>>* allPasswords;
+// Current list of all credentials.
+@property(nonatomic, copy) NSArray<id<Credential>>* allCredentials;
 
 // Indicates if the option to create a new password should be presented.
 @property(nonatomic, assign) BOOL showNewPasswordOption;
@@ -90,15 +88,7 @@ UIColor* BackgroundColor() {
 - (void)viewDidLoad {
   [super viewDidLoad];
 
-  if (IsPasswordManagerBrandingUpdateEnable()) {
-    self.title = NSLocalizedString(
-        @"IDS_IOS_CREDENTIAL_PROVIDER_CREDENTIAL_LIST_BRANDED_TITLE",
-        @"Google Password Manager");
-  } else {
-    self.title =
-        NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_CREDENTIAL_LIST_TITLE",
-                          @"AutoFill Chrome Password");
-  }
+  self.title = CredentialProviderCredentialListBrandedTitleString();
 
   self.view.backgroundColor = BackgroundColor();
   self.navigationItem.leftBarButtonItem = [self navigationCancelButton];
@@ -121,14 +111,7 @@ UIColor* BackgroundColor() {
       [[UINavigationBarAppearance alloc] init];
   [appearance configureWithDefaultBackground];
   appearance.backgroundColor = BackgroundColor();
-  if (@available(iOS 15, *)) {
-    self.navigationItem.scrollEdgeAppearance = appearance;
-  } else {
-    // On iOS 14, scrollEdgeAppearance only affects navigation bars with large
-    // titles, so it can't be used. Instead, the navigation bar will always be
-    // the same style.
-    self.navigationItem.standardAppearance = appearance;
-  }
+  self.navigationItem.scrollEdgeAppearance = appearance;
   self.navigationController.navigationBar.tintColor =
       [UIColor colorNamed:kBlueColor];
 
@@ -148,12 +131,12 @@ UIColor* BackgroundColor() {
 
 #pragma mark - CredentialListConsumer
 
-- (void)presentSuggestedPasswords:(NSArray<id<Credential>>*)suggested
-                     allPasswords:(NSArray<id<Credential>>*)all
-                    showSearchBar:(BOOL)showSearchBar
-            showNewPasswordOption:(BOOL)showNewPasswordOption {
-  self.suggestedPasswords = suggested;
-  self.allPasswords = all;
+- (void)presentSuggestedCredentials:(NSArray<id<Credential>>*)suggested
+                     allCredentials:(NSArray<id<Credential>>*)all
+                      showSearchBar:(BOOL)showSearchBar
+              showNewPasswordOption:(BOOL)showNewPasswordOption {
+  self.suggestedCredentials = suggested;
+  self.allCredentials = all;
   self.showNewPasswordOption = showNewPasswordOption;
   [self.tableView reloadData];
   [self.tableView layoutIfNeeded];
@@ -184,10 +167,10 @@ UIColor* BackgroundColor() {
     numberOfRowsInSection:(NSInteger)section {
   if ([self isEmptyTable]) {
     return 0;
-  } else if ([self isSuggestedPasswordSection:section]) {
-    return [self numberOfRowsInSuggestedPasswordSection];
+  } else if ([self isSuggestedCredentialSection:section]) {
+    return [self numberOfRowsInSuggestedCredentialSection];
   } else {
-    return self.allPasswords.count;
+    return self.allCredentials.count;
   }
 }
 
@@ -201,9 +184,7 @@ UIColor* BackgroundColor() {
                                     reuseIdentifier:kNewPasswordCellIdentifier];
     }
     cell.backgroundColor = [UIColor colorNamed:kBackgroundColor];
-    cell.textLabel.text =
-        NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_CREATE_PASSWORD_ROW",
-                          @"Add New Password");
+    cell.textLabel.text = CredentialProviderCreatePasswordRowString();
     cell.textLabel.textColor = [UIColor colorNamed:kBlueColor];
     return cell;
   }
@@ -213,40 +194,39 @@ UIColor* BackgroundColor() {
   UITableViewCell* cell =
       [tableView dequeueReusableCellWithIdentifier:kCredentialCellIdentifier];
 
-    if (!cell) {
-      cell =
-          [[CredentialListCell alloc] initWithStyle:UITableViewCellStyleDefault
-                                    reuseIdentifier:kCredentialCellIdentifier];
-      cell.accessoryView = [self infoIconButton];
-    }
+  if (!cell) {
+    cell = [[CredentialListCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                     reuseIdentifier:kCredentialCellIdentifier];
+    cell.accessoryView = [self infoIconButton];
+  }
 
-    CredentialListCell* credentialCell =
-        base::mac::ObjCCastStrict<CredentialListCell>(cell);
+  CredentialListCell* credentialCell =
+      base::apple::ObjCCastStrict<CredentialListCell>(cell);
 
-    credentialCell.textLabel.text = credential.serviceName;
-    credentialCell.detailTextLabel.text = credential.user;
-    credentialCell.uniqueIdentifier = credential.serviceIdentifier;
-    credentialCell.selectionStyle = UITableViewCellSelectionStyleDefault;
-    credentialCell.backgroundColor = [UIColor colorNamed:kBackgroundColor];
-    credentialCell.accessibilityTraits |= UIAccessibilityTraitButton;
+  credentialCell.textLabel.text = credential.serviceName;
+  credentialCell.detailTextLabel.text = credential.username;
+  credentialCell.uniqueIdentifier = credential.serviceIdentifier;
+  credentialCell.selectionStyle = UITableViewCellSelectionStyleDefault;
+  credentialCell.backgroundColor = [UIColor colorNamed:kBackgroundColor];
+  credentialCell.accessibilityTraits |= UIAccessibilityTraitButton;
 
-    // Load favicon.
-    if (credential.favicon) {
-      // Load the favicon from disk.
-      [self loadFaviconAtIndexPath:indexPath forCell:cell];
-    }
+  // Load favicon.
+  if (credential.favicon) {
+    // Load the favicon from disk.
+    [self loadFaviconAtIndexPath:indexPath forCell:cell];
+  }
 
-    // Use the default world icon as fallback.
-    if (!self.defaultWorldIconAttributes) {
-      self.defaultWorldIconAttributes = [FaviconAttributes
-          attributesWithImage:
-              [[UIImage imageNamed:@"default_world_favicon"]
-                  imageWithTintColor:[UIColor colorNamed:kTextQuaternaryColor]
-                       renderingMode:UIImageRenderingModeAlwaysOriginal]];
-    }
-    [credentialCell.faviconView
-        configureWithAttributes:self.defaultWorldIconAttributes];
-    return credentialCell;
+  // Use the default world icon as fallback.
+  if (!self.defaultWorldIconAttributes) {
+    self.defaultWorldIconAttributes = [FaviconAttributes
+        attributesWithImage:
+            [[UIImage imageNamed:@"default_world_favicon"]
+                imageWithTintColor:[UIColor colorNamed:kTextQuaternaryColor]
+                     renderingMode:UIImageRenderingModeAlwaysOriginal]];
+  }
+  [credentialCell.faviconView
+      configureWithAttributes:self.defaultWorldIconAttributes];
+  return credentialCell;
 }
 
 // Asynchronously loads favicon for given index path. The loads are cancelled
@@ -256,33 +236,19 @@ UIColor* BackgroundColor() {
   id<Credential> credential = [self credentialForIndexPath:indexPath];
   DCHECK(credential);
   DCHECK(cell);
-  CredentialListCell* credentialCell =
-      base::mac::ObjCCastStrict<CredentialListCell>(cell);
+  __weak CredentialListCell* credentialCell =
+      base::apple::ObjCCastStrict<CredentialListCell>(cell);
   NSString* serviceIdentifier = credential.serviceIdentifier;
 
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-    NSURL* filePath = [app_group::SharedFaviconAttributesFolder()
-        URLByAppendingPathComponent:credential.favicon
-                        isDirectory:NO];
-    NSError* error = nil;
-    NSData* data = [NSData dataWithContentsOfURL:filePath
-                                         options:0
-                                           error:&error];
-    if (data && !error) {
-      NSKeyedUnarchiver* unarchiver =
-          [[NSKeyedUnarchiver alloc] initForReadingFromData:data error:nil];
-      unarchiver.requiresSecureCoding = NO;
-      FaviconAttributes* attributes =
-          [unarchiver decodeObjectForKey:NSKeyedArchiveRootObjectKey];
-      // Only set favicon if the cell hasn't been reused.
-      if ([credentialCell.uniqueIdentifier isEqualToString:serviceIdentifier]) {
-        // Update the UI on the main thread.
-        dispatch_async(dispatch_get_main_queue(), ^{
-          if (attributes) {
-            [credentialCell.faviconView configureWithAttributes:attributes];
-          }
-        });
-      }
+  FetchFaviconAsync(credential.favicon, ^(FaviconAttributes* attributes) {
+    // Only set favicon if the cell hasn't been reused.
+    if ([credentialCell.uniqueIdentifier isEqualToString:serviceIdentifier]) {
+      // Update the UI on the main thread.
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (attributes) {
+          [credentialCell.faviconView configureWithAttributes:attributes];
+        }
+      });
     }
   });
 }
@@ -308,7 +274,7 @@ UIColor* BackgroundColor() {
   if ([self isGlobalHeaderSection:section]) {
     return UITableViewAutomaticDimension;
   }
-  if ([self isSuggestedPasswordSection:section]) {
+  if ([self isSuggestedCredentialSection:section]) {
     return 0;
   }
   return kNewCredentialHeaderHeight;
@@ -321,11 +287,13 @@ UIColor* BackgroundColor() {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     return;
   }
-  UpdateUMACountForKey(app_group::kCredentialExtensionPasswordUseCount);
   id<Credential> credential = [self credentialForIndexPath:indexPath];
   if (!credential) {
     return;
   }
+  UpdateUMACountForKey(credential.isPasskey
+                           ? app_group::kCredentialExtensionPasskeyUseCount
+                           : app_group::kCredentialExtensionPasswordUseCount);
   [self.delegate userSelectedCredential:credential];
 }
 
@@ -351,10 +319,9 @@ UIColor* BackgroundColor() {
   return cancelButton;
 }
 
-// Creates a button to be displayed as accessory of the password row item.
+// Creates a button to be displayed as accessory of the credential row item.
 - (UIView*)infoIconButton {
-  UIImage* image = [UIImage imageNamed:@"info_icon"];
-  image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+  UIImage* image = GetCredentialInfoIcon();
 
   HighlightButton* button = [HighlightButton buttonWithType:UIButtonTypeCustom];
   button.frame = CGRectMake(0.0, 0.0, image.size.width, image.size.height);
@@ -363,9 +330,8 @@ UIColor* BackgroundColor() {
   [button addTarget:self
                 action:@selector(infoIconButtonTapped:event:)
       forControlEvents:UIControlEventTouchUpInside];
-  button.accessibilityLabel = NSLocalizedString(
-      @"IDS_IOS_CREDENTIAL_PROVIDER_SHOW_DETAILS_ACCESSIBILITY_LABEL",
-      @"Show Details.");
+  button.accessibilityLabel =
+      CredentialProviderShowDetailsAccessibilityLabelString();
 
   button.pointerInteractionEnabled = YES;
   button.pointerStyleProvider = ^UIPointerStyle*(
@@ -386,9 +352,9 @@ UIColor* BackgroundColor() {
 
 // Called when info icon is tapped.
 - (void)infoIconButtonTapped:(id)sender event:(id)event {
-  CGPoint hitPoint =
-      [base::mac::ObjCCastStrict<UIButton>(sender) convertPoint:CGPointZero
-                                                         toView:self.tableView];
+  CGPoint hitPoint = [base::apple::ObjCCastStrict<UIButton>(sender)
+      convertPoint:CGPointZero
+            toView:self.tableView];
   NSIndexPath* indexPath = [self.tableView indexPathForRowAtPoint:hitPoint];
   id<Credential> credential = [self credentialForIndexPath:indexPath];
   if (!credential) {
@@ -397,11 +363,12 @@ UIColor* BackgroundColor() {
   [self.delegate showDetailsForCredential:credential];
 }
 
-// Returns number of sections to display based on `suggestedPasswords` and
-// `allPasswords`. If no sections with data, returns 1 for the 'no data' banner.
+// Returns number of sections to display based on `suggestedCredentials` and
+// `allCredentials`. If no sections with data, returns 1 for the 'no data'
+// banner.
 - (int)numberOfSections {
-  if ([self numberOfRowsInSuggestedPasswordSection] == 0 ||
-      [self.allPasswords count] == 0) {
+  if ([self numberOfRowsInSuggestedCredentialSection] == 0 ||
+      [self.allCredentials count] == 0) {
     return 1;
   }
   return 2;
@@ -409,15 +376,15 @@ UIColor* BackgroundColor() {
 
 // Returns YES if there is no data to display.
 - (BOOL)isEmptyTable {
-  return [self numberOfRowsInSuggestedPasswordSection] == 0 &&
-         [self.allPasswords count] == 0;
+  return [self numberOfRowsInSuggestedCredentialSection] == 0 &&
+         [self.allCredentials count] == 0;
 }
 
-// Returns YES if given section is for suggested passwords.
-- (BOOL)isSuggestedPasswordSection:(int)section {
+// Returns YES if given section is for suggested credentials.
+- (BOOL)isSuggestedCredentialSection:(int)section {
   int sections = [self numberOfSections];
   if ((sections == 2 && section == 0) ||
-      (sections == 1 && [self numberOfRowsInSuggestedPasswordSection])) {
+      (sections == 1 && [self numberOfRowsInSuggestedCredentialSection])) {
     return YES;
   } else {
     return NO;
@@ -426,50 +393,51 @@ UIColor* BackgroundColor() {
 
 // Returns YES if given section is for global header.
 - (BOOL)isGlobalHeaderSection:(int)section {
-  return section == 0 && IsPasswordManagerBrandingUpdateEnable() &&
-         ![self isEmptyTable];
+  return section == 0 && ![self isEmptyTable];
 }
 
 // Returns the credential at the passed index.
 - (id<Credential>)credentialForIndexPath:(NSIndexPath*)indexPath {
-  if ([self isSuggestedPasswordSection:indexPath.section]) {
+  if ([self isSuggestedCredentialSection:indexPath.section]) {
     if (indexPath.row >=
-        base::checked_cast<NSInteger>(self.suggestedPasswords.count)) {
+        base::checked_cast<NSInteger>(self.suggestedCredentials.count)) {
       return nil;
     }
-    return self.suggestedPasswords[indexPath.row];
+    return self.suggestedCredentials[indexPath.row];
   } else {
     if (indexPath.row >=
-        base::checked_cast<NSInteger>(self.allPasswords.count)) {
+        base::checked_cast<NSInteger>(self.allCredentials.count)) {
       return nil;
     }
-    return self.allPasswords[indexPath.row];
+    return self.allCredentials[indexPath.row];
   }
 }
 
 // Returns true if the passed index corresponds to the Create New Password Cell.
 - (BOOL)isIndexPathNewPasswordRow:(NSIndexPath*)indexPath {
-  if ([self isSuggestedPasswordSection:indexPath.section]) {
-    return indexPath.row == NSInteger(self.suggestedPasswords.count);
+  if ([self isSuggestedCredentialSection:indexPath.section]) {
+    return indexPath.row == NSInteger(self.suggestedCredentials.count);
   }
   return NO;
 }
 
-// Returns the number of rows in suggested passwords section.
-- (NSUInteger)numberOfRowsInSuggestedPasswordSection {
-  return [self.suggestedPasswords count] + (self.showNewPasswordOption ? 1 : 0);
+// Returns the number of rows in suggested credentials section.
+- (NSUInteger)numberOfRowsInSuggestedCredentialSection {
+  return
+      [self.suggestedCredentials count] + (self.showNewPasswordOption ? 1 : 0);
 }
 
 // Returns the title of the given section
 - (NSString*)titleForHeaderInSection:(NSInteger)section {
   if ([self isEmptyTable]) {
-    return NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_NO_SEARCH_RESULTS",
-                             @"No search results found");
-  } else if ([self isSuggestedPasswordSection:section]) {
+    return CredentialProviderNoSearchResultsString();
+  } else if ([self isSuggestedCredentialSection:section]) {
     return nil;
+  } else if ([self.allCredentials count] > 0 &&
+             self.allCredentials[0].isPasskey) {
+    return CredentialProviderAllPasskeysString();
   } else {
-    return NSLocalizedString(@"IDS_IOS_CREDENTIAL_PROVIDER_ALL_PASSWORDS",
-                             @"All Passwords");
+    return CredentialProviderAllPasswordsString();
   }
 }
 

@@ -11,7 +11,7 @@
 
 namespace blink {
 
-ScriptPromise ElementFullscreen::requestFullscreen(
+ScriptPromise<IDLUndefined> ElementFullscreen::requestFullscreen(
     ScriptState* script_state,
     Element& element,
     const FullscreenOptions* options,
@@ -23,7 +23,7 @@ ScriptPromise ElementFullscreen::requestFullscreen(
 
 void ElementFullscreen::webkitRequestFullscreen(Element& element) {
   FullscreenOptions* options = FullscreenOptions::Create();
-  options->setNavigationUI("hide");
+  options->setNavigationUI(V8FullscreenNavigationUI::Enum::kHide);
   webkitRequestFullscreen(element, options);
 }
 

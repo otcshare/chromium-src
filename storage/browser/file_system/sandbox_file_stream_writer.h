@@ -12,13 +12,13 @@
 #include "base/component_export.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "components/services/storage/public/cpp/quota_error_or.h"
 #include "storage/browser/blob/shareable_file_reference.h"
 #include "storage/browser/file_system/file_stream_writer.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
-#include "url/gurl.h"
 
 namespace storage {
 
@@ -43,7 +43,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
             int buf_len,
             net::CompletionOnceCallback callback) override;
   int Cancel(net::CompletionOnceCallback callback) override;
-  int Flush(net::CompletionOnceCallback callback) override;
+  int Flush(FlushMode flush_mode,
+            net::CompletionOnceCallback callback) override;
 
   // Used only by tests.
   void set_default_quota(int64_t quota) { default_quota_ = quota; }
@@ -61,10 +62,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
                              const base::File::Info& file_info,
                              const base::FilePath& platform_path,
                              scoped_refptr<ShareableFileReference> file_ref);
-  void DidGetUsageAndQuota(net::CompletionOnceCallback callback,
-                           blink::mojom::QuotaStatusCode status,
-                           int64_t usage,
-                           int64_t quota);
+  void DidGetBucketSpaceRemaining(
+      net::CompletionOnceCallback callback,
+      storage::QuotaErrorOr<int64_t> space_remaining);
   void DidInitializeForWrite(net::IOBuffer* buf, int buf_len, int init_status);
 
   // Will call |write_callback_| if set, or return synchronously.

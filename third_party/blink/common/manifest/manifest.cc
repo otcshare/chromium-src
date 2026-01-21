@@ -4,6 +4,15 @@
 
 #include "third_party/blink/public/common/manifest/manifest.h"
 
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom-shared.h"
+#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-shared.h"
+
 namespace blink {
 
 Manifest::ImageResource::ImageResource() = default;
@@ -27,7 +36,8 @@ Manifest::ShortcutItem::~ShortcutItem() = default;
 bool Manifest::ShortcutItem::operator==(const ShortcutItem& other) const {
   auto AsTuple = [](const auto& item) {
     return std::tie(item.name, item.short_name, item.description, item.url,
-                    item.icons);
+                    item.icons, item.icons_localized, item.name_localized,
+                    item.short_name_localized, item.description_localized);
   };
   return AsTuple(*this) == AsTuple(other);
 }
@@ -74,16 +84,28 @@ bool Manifest::RelatedApplication::operator==(
   return AsTuple(*this) == AsTuple(other);
 }
 
-bool Manifest::LaunchHandler::operator==(const LaunchHandler& other) const {
-  return client_mode == other.client_mode;
+Manifest::LaunchHandler::LaunchHandler() = default;
+
+Manifest::LaunchHandler::LaunchHandler(std::optional<ClientMode> client_mode)
+    : client_mode_(client_mode) {}
+
+// See https://wicg.github.io/web-app-launch/#dfn-process-the-client_mode-member
+// for more details.
+Manifest::LaunchHandler::ClientMode
+Manifest::LaunchHandler::parsed_client_mode() const {
+  return client_mode_.value_or(Manifest::LaunchHandler::ClientMode::kAuto);
 }
 
-bool Manifest::LaunchHandler::operator!=(const LaunchHandler& other) const {
-  return !(*this == other);
+bool Manifest::LaunchHandler::client_mode_valid_and_specified() const {
+  return client_mode_.has_value();
+}
+
+bool Manifest::LaunchHandler::operator==(const LaunchHandler& other) const {
+  return parsed_client_mode() == other.parsed_client_mode();
 }
 
 bool Manifest::LaunchHandler::TargetsExistingClients() const {
-  switch (client_mode) {
+  switch (parsed_client_mode()) {
     case ClientMode::kAuto:
     case ClientMode::kNavigateNew:
       return false;
@@ -94,7 +116,7 @@ bool Manifest::LaunchHandler::TargetsExistingClients() const {
 }
 
 bool Manifest::LaunchHandler::NeverNavigateExistingClients() const {
-  switch (client_mode) {
+  switch (parsed_client_mode()) {
     case ClientMode::kAuto:
     case ClientMode::kNavigateNew:
     case ClientMode::kNavigateExisting:
@@ -120,7 +142,10 @@ Manifest::HomeTabParams::HomeTabParams() = default;
 Manifest::HomeTabParams::~HomeTabParams() = default;
 
 bool Manifest::HomeTabParams::operator==(const HomeTabParams& other) const {
-  return icons == other.icons;
+  auto AsTuple = [](const auto& item) {
+    return std::tie(item.icons, item.scope_patterns);
+  };
+  return AsTuple(*this) == AsTuple(other);
 }
 
 Manifest::NewTabButtonParams::NewTabButtonParams() = default;
@@ -142,5 +167,40 @@ bool Manifest::TabStrip::operator==(const TabStrip& other) const {
   };
   return AsTuple(*this) == AsTuple(other);
 }
+
+// static
+Manifest::DisplayOverride Manifest::DisplayOverride::Create(
+    blink::mojom::DisplayMode display_mode) {
+  return DisplayOverride(display_mode, {});
+}
+
+// static
+Manifest::DisplayOverride Manifest::DisplayOverride::CreateUnframed(
+    std::vector<SafeUrlPattern> url_patterns) {
+  return DisplayOverride(blink::mojom::DisplayMode::kBorderless,
+                         std::move(url_patterns));
+}
+
+Manifest::DisplayOverride::DisplayOverride(
+    blink::mojom::DisplayMode display_mode,
+    std::vector<SafeUrlPattern> patterns)
+    : display_(display_mode), url_patterns_(std::move(patterns)) {
+  CHECK(url_patterns_.empty() ||
+        display_ == blink::mojom::DisplayMode::kBorderless)
+      << "url_patterns is not allowed in display modes other than 'unframed'";
+}
+
+Manifest::DisplayOverride::DisplayOverride() = default;
+Manifest::DisplayOverride::DisplayOverride(const DisplayOverride& other) =
+    default;
+Manifest::DisplayOverride::DisplayOverride(DisplayOverride&& other) = default;
+Manifest::DisplayOverride& Manifest::DisplayOverride::operator=(
+    const DisplayOverride& other) = default;
+Manifest::DisplayOverride& Manifest::DisplayOverride::operator=(
+    DisplayOverride&& other) = default;
+Manifest::DisplayOverride::~DisplayOverride() = default;
+
+bool Manifest::DisplayOverride::operator==(const DisplayOverride& other) const =
+    default;
 
 }  // namespace blink

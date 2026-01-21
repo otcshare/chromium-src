@@ -8,24 +8,27 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Log;
 import org.chromium.base.PiiElider;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.minidump_uploader.CrashFileManager;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedList;
+import java.util.Deque;
 import java.util.List;
 
 /**
  * Extracts the recent logcat output from an Android device, elides PII sensitive info from it,
  * prepends the logcat data to the caller-provided minidump file.
  *
- * Elided information includes: Emails, IP address, MAC address, URL/domains as well as Javascript
- * console messages.
+ * <p>Elided information includes: Emails, IP address, MAC address, URL/domains as well as
+ * Javascript console messages.
  */
+@NullMarked
 public class LogcatCrashExtractor {
     private static final String TAG = "LogcatCrashExtractor";
     private static final long HALF_SECOND = 500;
@@ -34,15 +37,15 @@ public class LogcatCrashExtractor {
 
     @VisibleForTesting
     protected static final String BEGIN_MICRODUMP = "-----BEGIN BREAKPAD MICRODUMP-----";
+
     @VisibleForTesting
     protected static final String END_MICRODUMP = "-----END BREAKPAD MICRODUMP-----";
+
     @VisibleForTesting
     protected static final String SNIPPED_MICRODUMP =
             "-----SNIPPED OUT BREAKPAD MICRODUMP FOR THIS CRASH-----";
 
-    /**
-     * @param minidump The minidump file that needs logcat output to be attached.
-     */
+    /** @param minidump The minidump file that needs logcat output to be attached. */
     public File attachLogcatToMinidump(File minidump, CrashFileManager fileManager) {
         Log.i(TAG, "Trying to extract logcat for minidump %s.", minidump.getName());
 
@@ -72,7 +75,7 @@ public class LogcatCrashExtractor {
         // fills up.
         Process p = Runtime.getRuntime().exec("logcat -d");
         BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-        LinkedList<String> rawLogcat = new LinkedList<>();
+        Deque<String> rawLogcat = new ArrayDeque<>();
         Integer exitValue = null;
         try {
             while (exitValue == null) {
@@ -100,7 +103,7 @@ public class LogcatCrashExtractor {
             throw new IOException(msg);
         }
 
-        return trimLogcat(rawLogcat, LOGCAT_SIZE);
+        return trimLogcat(new ArrayList<>(rawLogcat), LOGCAT_SIZE);
     }
 
     /**

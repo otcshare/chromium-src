@@ -10,14 +10,16 @@ namespace network::switches {
 // connection type.
 const char kForceEffectiveConnectionType[] = "force-effective-connection-type";
 
+// If set, the unload event cannot be disabled by default by Permissions-Policy.
+const char kForcePermissionPolicyUnloadDefaultEnabled[] =
+    "force-permission-policy-unload-default-enabled";
+
 // These mappings only apply to the host resolver.
 const char kHostResolverRules[] = "host-resolver-rules";
-
-// Causes net::URLFetchers to ignore requests for SSL client certificates,
-// causing them to attempt an unauthenticated SSL/TLS session. This is intended
-// for use when testing various service URLs (eg: kPromoServerURL, kSbURLPrefix,
-// kSyncServiceURL, etc).
-const char kIgnoreUrlFetcherCertRequests[] = "ignore-urlfetcher-cert-requests";
+// Deprecated alias for backwards compatibility, now does the same thing as
+// --host-resolver-rules which should be used instead.
+// TODO(crbug.com/40070729): consider removing in some future release.
+const char kHostRules[] = "host-rules";
 
 // A set of public key hashes for which to ignore certificate-related errors.
 //
@@ -38,6 +40,11 @@ const char kIgnoreCertificateErrorsSPKIList[] =
 // user data directory.
 const char kLogNetLog[] = "log-net-log";
 
+// Specifies the duration (in seconds) for network logging. When this flag is
+// provided with a positive integer value X, Chrome will automatically stop
+// collecting NetLog events after X seconds and flush the log to disk.
+const char kLogNetLogDuration[] = "net-log-duration";
+
 // Sets the granularity of events to capture in the network log. The mode can be
 // set to one of the following values:
 //   "Default"
@@ -48,11 +55,17 @@ const char kLogNetLog[] = "log-net-log";
 // description of their meanings.
 const char kNetLogCaptureMode[] = "net-log-capture-mode";
 
+// Sets the maximum size, in megabytes. The log file can grow to before older
+// data is overwritten. Do not use this flag if you want an unlimited file size.
+const char kNetLogMaxSizeMb[] = "net-log-max-size-mb";
+
 // Causes SSL key material to be logged to the specified file for debugging
 // purposes. See
 // https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 // for the format.
 const char kSSLKeyLogFile[] = "ssl-key-log-file";
+
+const char kTestThirdPartyCookiePhaseout[] = "test-third-party-cookie-phaseout";
 
 // Treat given (insecure) origins as secure origins. Multiple origins can be
 // supplied as a comma-separated list. For the definition of secure contexts,
@@ -64,8 +77,8 @@ const char kSSLKeyLogFile[] = "ssl-key-log-file";
 const char kUnsafelyTreatInsecureOriginAsSecure[] =
     "unsafely-treat-insecure-origin-as-secure";
 
-// Manually sets additional Trust Tokens key commitments in the network service
-// to the given value, which should be a JSON dictionary satisfying the
+// Manually sets additional Private State Tokens key commitments in the network
+// service to the given value, which should be a JSON dictionary satisfying the
 // requirements of TrustTokenKeyCommitmentParser::ParseMultipleIssuers.
 //
 // These keys are available in addition to keys provided by the most recent call
@@ -79,35 +92,59 @@ const char kUnsafelyTreatInsecureOriginAsSecure[] =
 // keys were overwritten some time after startup when the component updater
 // runs.
 const char kAdditionalTrustTokenKeyCommitments[] =
-    "additional-trust-token-key-commitments";
+    "additional-private-state-token-key-commitments";
 
-// Allows the manual specification of a First-Party Set, as a comma-separated
-// list of origins. The first origin in the list is treated as the owner of the
-// set.
+// Allows the manual specification of a First-Party Set. The format is the same
+// as that of `--use-related-website-set`.
+//
+// DEPRECATED(crbug.com/1486689): This switch is under deprecation due to
+// renaming "First-Party Set" to "Related Website Set". Please use
+// `kUseRelatedWebsiteSet` instead.
 const char kUseFirstPartySet[] = "use-first-party-set";
 
+// Allows the manual specification of a Related Website Set. The set should be
+// provided as a stringified JSON object, whose format matches the format of the
+// JSON in https://github.com/GoogleChrome/related-website-sets.
+const char kUseRelatedWebsiteSet[] = "use-related-website-set";
+
 // Specifies manual overrides to the IP endpoint -> IP address space mapping.
-// This allows running local tests against "public" and "private" IP addresses.
+// This allows running local tests against "public" and "local" IP addresses.
 //
 // This switch is specified as a comma-separated list of overrides. Each
-// override is given as a colon-separated "<endpoint>:<address space>" pair.
+// override is an equals-separated "<endpoint|ip-range>=<address space>" pair.
+//
 // Grammar, in pseudo-BNF format:
 //
 //   switch := override-list
 //   override-list := override “,” override-list | <nil>
-//   override := ip-endpoint “=” address-space
-//   address-space := “public” | “private” | “local”
+//   override := (ip-endpoint | ip_range) “=” address-space
+//   address-space := “public” | “private” | “local” | "loopback"
 //   ip-endpoint := ip-address ":" port
 //   ip-address := see `net::ParseURLHostnameToAddress()` for details
 //   port := integer in the [0-65535] range
+//   ip-range := ip-address "/" bitmask
+//   bitmask := integer in the [0-128] range
 //
-// Any invalid entries in the comma-separated list are ignored.
+// Any invalid entries in the comma-separated list are ignored. If the port
+// specified is 0, all ports for the given ip-address will be overridden.
 //
 // See also the design doc:
 // https://docs.google.com/document/d/1-umCGylIOuSG02k9KGDwKayt3bzBXtGwVlCQHHkIcnQ/edit#
 //
 // And the Web Platform Test RFC #72 behind it:
 // https://github.com/web-platform-tests/rfcs/blob/master/rfcs/address_space_overrides.md
+//
+// Note that since the doc and the RFC were written, the address space names
+// have changed slightly due to Local Network Access (LNA) replacing Private
+// Network Access (PNA).
 const char kIpAddressSpaceOverrides[] = "ip-address-space-overrides";
+
+// The switch to disable the shared dictionary storage clean up task. Only for
+// testing.
+const char kDisableSharedDictionaryStorageCleanupForTesting[] =
+    "disable-shared-dictionary-storage-cleanup-for-testing";
+
+// The switch to ignore bad mojo message reports. Only for testing.
+const char kIgnoreBadMessageForTesting[] = "ignore-bad-message-for-testing";
 
 }  // namespace network::switches

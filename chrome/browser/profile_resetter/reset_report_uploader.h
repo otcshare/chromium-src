@@ -6,8 +6,10 @@
 #define CHROME_BROWSER_PROFILE_RESETTER_RESET_REPORT_UPLOADER_H_
 
 #include <list>
+#include <optional>
+#include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "url/gurl.h"
 
@@ -18,6 +20,10 @@ class SharedURLLoaderFactory;
 
 namespace reset_report {
 class ChromeResetReport;
+}
+
+namespace net {
+class HttpResponseHeaders;
 }
 
 // Service whose job is up upload ChromeResetReports.
@@ -42,7 +48,7 @@ class ResetReportUploader : public KeyedService {
       std::list<std::unique_ptr<network::SimpleURLLoader>>;
 
   void OnSimpleLoaderComplete(SimpleURLLoaderList::iterator it,
-                              std::unique_ptr<std::string> response_body);
+                              scoped_refptr<net::HttpResponseHeaders> headers);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   SimpleURLLoaderList simple_url_loaders_;

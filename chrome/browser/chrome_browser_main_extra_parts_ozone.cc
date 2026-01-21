@@ -4,9 +4,10 @@
 
 #include "chrome/browser/chrome_browser_main_extra_parts_ozone.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "build/build_config.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -15,10 +16,6 @@
 ChromeBrowserMainExtraPartsOzone::ChromeBrowserMainExtraPartsOzone() = default;
 
 ChromeBrowserMainExtraPartsOzone::~ChromeBrowserMainExtraPartsOzone() = default;
-
-void ChromeBrowserMainExtraPartsOzone::PreEarlyInitialization() {
-    ui::OzonePlatform::PreEarlyInitialization();
-}
 
 void ChromeBrowserMainExtraPartsOzone::PostCreateMainMessageLoop() {
   auto shutdown_cb = base::BindOnce([] {
@@ -31,5 +28,7 @@ void ChromeBrowserMainExtraPartsOzone::PostCreateMainMessageLoop() {
 }
 
 void ChromeBrowserMainExtraPartsOzone::PostMainMessageLoopRun() {
-    ui::OzonePlatform::GetInstance()->PostMainMessageLoopRun();
+#if !BUILDFLAG(IS_LINUX)
+  ui::OzonePlatform::GetInstance()->PostMainMessageLoopRun();
+#endif
 }

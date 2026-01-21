@@ -23,8 +23,7 @@ class FakeHostResolver : public network::mojom::HostResolver {
  public:
   enum Response {
     kNoResponse = 0,
-    kEmptyResponse = 1,
-    kOneAddressResponse = 2,
+    kOneAddressResponse = 1,
   };
 
   struct SingleResult {
@@ -100,7 +99,7 @@ class FakeHostResolverNetworkContext : public network::TestNetworkContext {
   ~FakeHostResolverNetworkContext() override;
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override;
 
  private:
@@ -116,7 +115,7 @@ class HangingHostResolverNetworkContext : public network::TestNetworkContext {
   ~HangingHostResolverNetworkContext() override;
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override;
 
  private:

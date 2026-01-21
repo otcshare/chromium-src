@@ -15,15 +15,17 @@
 #include "device/bluetooth/bluetooth_low_energy_scan_session.h"
 #include "device/bluetooth/bluetooth_socket.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
-struct Device;
+class Device;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. The numbers here correspond to the
 // ordering of the flow. This enum should be kept in sync with the
-// FastPairEngagementFlowEvent enum in src/tools/metrics/histograms/enums.xml.
+// FastPairEngagementFlowEvent enum in
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairEngagementFlowEvent)
 enum COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairEngagementFlowEvent {
   kDiscoveryUiShown = 1,
   kDiscoveryUiDismissed = 11,
@@ -42,12 +44,15 @@ enum COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairEngagementFlowEvent {
   kErrorUiDismissedByUser = 1213,
   kPairingSucceededAlreadyPaired = 1221,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairEngagementFlowEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. The numbers here correspond to the
 // ordering of the flow. This enum should be kept in sync with the
 // FastPairRetroactiveEngagementFlowEvent enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairRetroactiveEngagementFlowEvent)
 enum COMPONENT_EXPORT(QUICK_PAIR_COMMON)
     FastPairRetroactiveEngagementFlowEvent {
       kAssociateAccountUiShown = 1,
@@ -61,12 +66,15 @@ enum COMPONENT_EXPORT(QUICK_PAIR_COMMON)
       kAssociateAccountDismissedAfterLearnMorePressed = 133,
       kAssociateAccountDismissedByTimeoutAfterLearnMorePressed = 134,
     };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairRetroactiveEngagementFlowEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. The numbers here correspond to the
 // ordering of the flow. This enum should be kept in sync with the
 // FastPairInitialSuccessFunnelEvent enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/fastpair/enums.xml.
+//
+// LINT.IfChange(FastPairInitialSuccessFunnelEvent)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
     FastPairInitialSuccessFunnelEvent {
       kNotificationsClicked = 0,
@@ -81,12 +89,15 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
       kProcessComplete = 9,
       kMaxValue = kProcessComplete,
     };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/fastpair/enums.xml:FastPairInitialSuccessFunnelEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. The numbers here correspond to the
 // ordering of the flow. This enum should be kept in sync with the
 // FastPairSubsequentSuccessFunnelEvent enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/fastpair/enums.xml.
+//
+// LINT.IfChange(FastPairSubsequentSuccessFunnelEvent)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
     FastPairSubsequentSuccessFunnelEvent {
       kNotificationsClicked = 0,
@@ -95,12 +106,15 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
       kProcessComplete = 3,
       kMaxValue = kProcessComplete,
     };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/fastpair/enums.xml:FastPairSubsequentSuccessFunnelEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. The numbers here correspond to the
 // ordering of the flow. This enum should be kept in sync with the
 // FastPairRetroactiveSuccessFunnelEvent enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/fastpair/enums.xml.
+//
+// LINT.IfChange(FastPairRetroactiveSuccessFunnelEvent)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
     FastPairRetroactiveSuccessFunnelEvent {
       kDeviceDetected = 0,
@@ -114,11 +128,14 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
       kSaveComplete = 8,
       kMaxValue = kSaveComplete,
     };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/fastpair/enums.xml:FastPairRetroactiveSuccessFunnelEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
 // with the FastPairInitializePairingProcessEvent enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/fastpair/enums.xml.
+//
+// LINT.IfChange(FastPairInitializePairingProcessEvent)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
     FastPairInitializePairingProcessEvent {
       kInitializationStarted = 0,
@@ -129,21 +146,27 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON)
       kInitializationComplete = 5,
       kMaxValue = kInitializationComplete,
     };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/fastpair/enums.xml:FastPairInitializePairingProcessEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
 // with the FastPairPairingMethod enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairPairingMethod)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) PairingMethod {
   kFastPair = 0,
   kSystemPairingUi = 1,
   kMaxValue = kSystemPairingUi,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairPairingMethod)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
 // with the FastPairHandshakeFailureReason enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairHandshakeFailureReason)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) HandshakeFailureReason {
   kFailedGattInit = 0,
   kFailedCreateEncryptor = 1,
@@ -152,20 +175,27 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) HandshakeFailureReason {
   kFailedIncorrectResponseType = 4,
   kMaxValue = kFailedIncorrectResponseType,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairHandshakeFailureReason)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
-// with the FastPairVersion enum in src/tools/metrics/histograms/enums.xml.
+// with the FastPairVersion enum in
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairVersion)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairVersion {
   kVersion1 = 0,
   kVersion2 = 1,
   kMaxValue = kVersion2,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairVersion)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
 // with the FastPairHandshakeSteps enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairHandshakeSteps)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairHandshakeSteps {
   kHandshakeStarted = 0,
   kGattInitalized = 1,
@@ -173,11 +203,14 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairHandshakeSteps {
   kHandshakeComplete = 3,
   kMaxValue = kHandshakeComplete,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairHandshakeSteps)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
 // with the FastPairGattConnectionSteps enum in
-// src/tools/metrics/histograms/enums.xml.
+// //tools/metrics/histograms/metadata/fastpair/enums.xml.
+//
+// LINT.IfChange(FastPairGattConnectionSteps)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairGattConnectionSteps {
   kConnectionStarted = 0,
   kConnectionReady = 1,
@@ -186,23 +219,27 @@ enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairGattConnectionSteps {
   kConnectionEstablished = 4,
   kMaxValue = kConnectionEstablished
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/fastpair/enums.xml:FastPairGattConnectionSteps)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync
-// with the FastPairHandshakeSteps enum in
-// src/tools/metrics/histograms/enums.xml.
+// with the FastPairProtocolPairingSteps enum in
+// //tools/metrics/histograms/metadata/bluetooth/enums.xml.
+//
+// LINT.IfChange(FastPairProtocolPairingSteps)
 enum class COMPONENT_EXPORT(QUICK_PAIR_COMMON) FastPairProtocolPairingSteps {
   kPairingStarted = 0,
   kExhaustedRetries = 1,
   kAlreadyPaired = 2,
-  kBondSuccessful = 3,
+  kPairingComplete = 3,
   kPasskeyNegotiated = 4,
   kRecievedPasskeyResponse = 5,
   kPasskeyValidated = 6,
   kPasskeyConfirmed = 7,
-  kPairingComplete = 8,
-  kMaxValue = kPairingComplete,
+  kDeviceConnected = 8,
+  kMaxValue = kDeviceConnected,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bluetooth/enums.xml:FastPairProtocolPairingSteps)
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordFastPairDeviceAndNotificationSpecificEngagementFlow(
@@ -273,6 +310,9 @@ void RecordEffectiveGattConnectionSuccess(bool success);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordGattConnectionAttemptCount(int num_attempts);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordGattRetryFailureReason(PairFailure failure);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordPairingFailureReason(const Device& device, PairFailure failure);
@@ -381,6 +421,12 @@ void RecordGattInitializationStep(
     FastPairGattConnectionSteps initialization_step);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordEffectiveHandshakeSuccess(bool success);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordHandshakeAttemptCount(int num_attempts);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordHandshakeResult(bool success);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
@@ -427,6 +473,27 @@ COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordConfirmPasskeyAskTime(base::TimeDelta total_ask_time);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordGattServiceDiscoveryTime(
+    base::TimeDelta total_gatt_service_discovery_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordCreateBondTime(base::TimeDelta total_create_bond_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordPasskeyNotifyTime(base::TimeDelta total_passkey_notify_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordKeyBasedNotifyTime(base::TimeDelta total_key_based_notify_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordPasskeyWriteRequestTime(
+    base::TimeDelta total_passkey_write_request_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordKeyBasedWriteRequestTime(
+    base::TimeDelta total_key_based_write_request_time);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordPairFailureRetry(int num_retries);
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
@@ -445,7 +512,22 @@ void RecordSavedDevicesTotalUxLoadTime(base::TimeDelta total_load_time);
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 void RecordSavedDevicesCount(int num_devices);
 
-}  // namespace quick_pair
-}  // namespace ash
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordStructuredDiscoveryNotificationShown(
+    const Device& device,
+    const device::BluetoothDevice* bt_device);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordStructuredPairingStarted(const Device& device,
+                                    const device::BluetoothDevice* bt_device);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordStructuredPairingComplete(const Device& device,
+                                     const device::BluetoothDevice* bt_device);
+
+COMPONENT_EXPORT(QUICK_PAIR_COMMON)
+void RecordStructuredPairFailure(const Device& device, PairFailure failure);
+
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_FAST_PAIR_FAST_PAIR_METRICS_H_

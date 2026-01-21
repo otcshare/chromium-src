@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_ASH_SERVICES_DEVICE_SYNC_FAKE_ATTESTATION_CERTIFICATES_SYNCER_H_
 #define CHROMEOS_ASH_SERVICES_DEVICE_SYNC_FAKE_ATTESTATION_CERTIFICATES_SYNCER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/services/device_sync/attestation_certificates_syncer.h"
 #include "chromeos/ash/services/device_sync/attestation_certificates_syncer_impl.h"
 
@@ -53,11 +54,11 @@ class FakeAttestationCertificatesSyncerFactory
       AttestationCertificatesSyncer::GetAttestationCertificatesFunction
           get_attestation_certificates_function) override;
 
-  AttestationCertificatesSyncer* last_created_ = nullptr;
+  raw_ptr<AttestationCertificatesSyncer> last_created_ = nullptr;
 };
 
 }  // namespace device_sync
 
 }  // namespace ash
 
-#endif  // CHROMEOS_SERVICES_DEVICE_SYNC_FAKE_ATTESTATION_CERTIFICATES_SYNCER_H_
+#endif  // CHROMEOS_ASH_SERVICES_DEVICE_SYNC_FAKE_ATTESTATION_CERTIFICATES_SYNCER_H_

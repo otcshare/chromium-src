@@ -2,33 +2,47 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "base/base_paths.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
-#include "base/process/launch.h"
 #include "base/process/process_iterator.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/test_timeouts.h"
+#include "base/time/time.h"
+#include "build/branding_buildflags.h"
+#include "chrome/updater/activity.h"
 #include "chrome/updater/activity_impl_util_posix.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/external_constants_builder.h"
+#include "chrome/updater/linux/systemd_util.h"
+#include "chrome/updater/persisted_data.h"
+#include "chrome/updater/prefs.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/service_proxy_factory.h"
 #include "chrome/updater/test/integration_tests_impl.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/update_service.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/linux_util.h"
+#include "chrome/updater/util/posix_util.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace updater::test {
@@ -42,7 +56,7 @@ base::FilePath GetExecutablePath() {
 }
 }  // namespace
 
-absl::optional<base::FilePath> GetFakeUpdaterInstallFolderPath(
+std::optional<base::FilePath> GetFakeUpdaterInstallFolderPath(
     UpdaterScope scope,
     const base::Version& version) {
   return GetVersionedInstallDirectory(scope, version);
@@ -53,30 +67,29 @@ base::FilePath GetSetupExecutablePath() {
   return GetExecutablePath();
 }
 
-absl::optional<base::FilePath> GetInstalledExecutablePath(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetVersionedInstallDirectory(scope);
+std::optional<base::FilePath> GetInstalledExecutablePath(UpdaterScope scope) {
+  std::optional<base::FilePath> path = GetVersionedInstallDirectory(scope);
   if (!path) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return path->Append(GetExecutableRelativePath());
 }
 
-bool WaitForUpdaterExit(UpdaterScope /*scope*/) {
-  return WaitFor(base::BindRepeating([]() {
-                   return !base::NamedProcessIterator(kExecutableName, nullptr)
-                               .NextProcessEntry();
-                 }),
-                 base::BindLambdaForTesting([]() {
-                   VLOG(0) << "Still waiting for updater to exit...";
-                 }));
-}
-
-absl::optional<base::FilePath> GetDataDirPath(UpdaterScope scope) {
-  return GetBaseDataDirectory(scope);
+bool WaitForUpdaterExit() {
+  const std::set<base::FilePath::StringType> process_names =
+      GetTestProcessNames();
+  return WaitFor(
+      [&] {
+        return std::ranges::none_of(process_names,
+                                    [](const auto& process_name) {
+                                      return IsProcessRunning(process_name);
+                                    });
+      },
+      [] { VLOG(0) << "Still waiting for updater to exit..."; });
 }
 
 void Uninstall(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetExecutablePath();
+  std::optional<base::FilePath> path = GetExecutablePath();
   ASSERT_TRUE(path);
   base::CommandLine command_line(*path);
   command_line.AppendSwitch(kUninstallSwitch);
@@ -85,24 +98,16 @@ void Uninstall(UpdaterScope scope) {
   EXPECT_EQ(exit_code, 0);
 }
 
-void ExpectActiveUpdater(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetInstalledExecutablePath(scope);
-  EXPECT_TRUE(path);
-  if (path) {
-    EXPECT_TRUE(base::PathExists(*path));
-  }
-}
-
 void ExpectCandidateUninstalled(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetVersionedInstallDirectory(scope);
-  EXPECT_TRUE(path);
-  if (path) {
-    EXPECT_FALSE(base::PathExists(*path));
-  }
+  std::optional<base::FilePath> path = GetVersionedInstallDirectory(scope);
+  ASSERT_TRUE(path);
+  ASSERT_TRUE(WaitFor(
+      [&] { return !base::PathExists(*path); },
+      [] { VLOG(0) << "Waiting for the candidate to be uninstalled."; }));
 }
 
 void ExpectInstalled(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetInstalledExecutablePath(scope);
+  std::optional<base::FilePath> path = GetInstalledExecutablePath(scope);
   EXPECT_TRUE(path);
   if (path) {
     EXPECT_TRUE(base::PathExists(*path));
@@ -110,41 +115,53 @@ void ExpectInstalled(UpdaterScope scope) {
 }
 
 void Clean(UpdaterScope scope) {
-  absl::optional<base::FilePath> path = GetBaseDataDirectory(scope);
+  std::optional<base::FilePath> path = GetInstallDirectory(scope);
   EXPECT_TRUE(path);
   if (path) {
     EXPECT_TRUE(base::DeletePathRecursively(*path));
+  }
+
+  EXPECT_TRUE(UninstallSystemdUnits(scope));
+
+  if (IsSystemInstall(scope)) {
+    ASSERT_NO_FATAL_FAILURE(UninstallEnterpriseCompanionApp());
+  }
+}
+
+// The uninstaller cannot reliably completely remove the installer directory
+// itself, because it uses the prefs file and writes the log file while it
+// is operating. If the provided path exists, it must be a directory with
+// only these residual files present to be considered "clean".
+void ExpectMostlyClean(std::optional<base::FilePath> path) {
+  EXPECT_TRUE(path);
+  if (!path || !base::PathExists(*path)) {
+    return;
+  }
+
+  // If the path exists, expect only the log and prefs files to be present.
+  int count = CountDirectoryFiles(*path);
+  EXPECT_LE(count, 2);
+  if (count >= 1) {
+    EXPECT_TRUE(base::PathExists(path->Append("updater.log")));
+  }
+  if (count == 2) {
+    EXPECT_TRUE(base::PathExists(path->Append("prefs.json")));
   }
 }
 
 void ExpectClean(UpdaterScope scope) {
   ExpectCleanProcesses();
-
-  absl::optional<base::FilePath> path = GetBaseDataDirectory(scope);
-  EXPECT_TRUE(path);
-  if (path && base::PathExists(*path)) {
-    // If the path exists, then expect only the log file to be present.
-    int count = CountDirectoryFiles(*path);
-    EXPECT_LT(count, 2);
-    if (count == 1) {
-      EXPECT_TRUE(base::PathExists(path->AppendASCII("updater.log")));
-    }
-  }
+  ExpectMostlyClean(GetInstallDirectory(scope));
+  EXPECT_FALSE(SystemdUnitsInstalled(scope));
+  ASSERT_NO_FATAL_FAILURE(ExpectEnterpriseCompanionAppNotInstalled());
 }
 
-void EnterTestMode(const GURL& url) {
-  ASSERT_TRUE(ExternalConstantsBuilder()
-                  .SetUpdateURL({url.spec()})
-                  .SetUseCUP(false)
-                  .SetInitialDelay(base::Milliseconds(100))
-                  .SetServerKeepAliveTime(base::Seconds(1))
-                  .SetCrxVerifierFormat(crx_file::VerifierFormat::CRX3)
-                  .SetOverinstallTimeout(TestTimeouts::action_timeout())
-                  .Modify());
+base::TimeDelta GetOverinstallTimeoutForEnterTestMode() {
+  return TestTimeouts::action_timeout();
 }
 
 void SetActive(UpdaterScope scope, const std::string& app_id) {
-  const absl::optional<base::FilePath> path =
+  const std::optional<base::FilePath> path =
       GetActiveFile(base::GetHomeDir(), app_id);
   ASSERT_TRUE(path);
   base::File::Error err = base::File::FILE_OK;
@@ -154,7 +171,7 @@ void SetActive(UpdaterScope scope, const std::string& app_id) {
 }
 
 void ExpectActive(UpdaterScope scope, const std::string& app_id) {
-  const absl::optional<base::FilePath> path =
+  const std::optional<base::FilePath> path =
       GetActiveFile(base::GetHomeDir(), app_id);
   ASSERT_TRUE(path);
   EXPECT_TRUE(base::PathExists(*path));
@@ -162,50 +179,89 @@ void ExpectActive(UpdaterScope scope, const std::string& app_id) {
 }
 
 void ExpectNotActive(UpdaterScope scope, const std::string& app_id) {
-  const absl::optional<base::FilePath> path =
+  const std::optional<base::FilePath> path =
       GetActiveFile(base::GetHomeDir(), app_id);
   ASSERT_TRUE(path);
   EXPECT_FALSE(base::PathExists(*path));
   EXPECT_FALSE(base::PathIsWritable(*path));
 }
 
-void SetupRealUpdaterLowerVersion(UpdaterScope scope) {
-  // TODO(crbug.com/1398845): Add CI for `old_updater`.
-  NOTIMPLEMENTED();
+std::vector<TestUpdaterVersion> GetRealUpdaterLowerVersions(
+    const std::string& arch_suffix) {
+  base::FilePath exe_path;
+  EXPECT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_path));
+  base::FilePath old_updater_path =
+      exe_path.Append(FILE_PATH_LITERAL("old_updater"))
+          .Append(base::StrCat({base::ToLowerASCII(BROWSER_NAME_STRING),
+                                "_linux64", arch_suffix}));
+
+#if BUILDFLAG(CHROMIUM_BRANDING) || BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  old_updater_path = old_updater_path.Append("cipd");
+#endif
+
+  // Linux currently does not have a way to get version information for the
+  // executable via `FileVersionInfo`.
+  return {{old_updater_path.Append(
+               base::StrCat({kExecutableName, kExecutableSuffix})),
+           {}}};
 }
 
-void SetupFakeLegacyUpdaterData(UpdaterScope scope) {
+void SetupFakeLegacyUpdater(UpdaterScope scope) {
   // No legacy migration for Linux.
 }
 
-void ExpectLegacyUpdaterDataMigrated(UpdaterScope scope) {
+void ExpectLegacyUpdaterMigrated(UpdaterScope scope) {
   // No legacy migration for Linux.
 }
 
-void InstallApp(UpdaterScope scope, const std::string& app_id) {
-  scoped_refptr<UpdateService> update_service = CreateUpdateServiceProxy(scope);
+void InstallApp(UpdaterScope scope,
+                const std::string& app_id,
+                const base::Version& version) {
   RegistrationRequest registration;
   registration.app_id = app_id;
-  registration.version = base::Version("0.1");
-  base::RunLoop loop;
-  update_service->RegisterApp(registration,
-                              base::BindLambdaForTesting([&loop](int result) {
-                                EXPECT_EQ(result, 0);
-                                loop.Quit();
-                              }));
-  loop.Run();
+  registration.version = version.GetString();
+  RegisterApp(scope, registration);
 }
 
 void UninstallApp(UpdaterScope scope, const std::string& app_id) {
   // This can probably be combined with mac into integration_tests_posix.cc.
+  const base::FilePath& install_path =
+      base::MakeRefCounted<PersistedData>(
+          scope, CreateGlobalPrefs(scope)->GetPrefService(), nullptr)
+          ->GetExistenceCheckerPath(app_id);
+  VLOG(1) << "Deleting app install path: " << install_path;
+  base::DeletePathRecursively(install_path);
   SetExistenceCheckerPath(scope, app_id,
                           base::FilePath(FILE_PATH_LITERAL("NONE")));
 }
 
-void RunOfflineInstall(UpdaterScope scope,
-                       bool is_legacy_install,
-                       bool is_silent_install) {
-  // TODO(crbug.com/1286574).
+base::CommandLine MakeElevated(base::CommandLine command_line) {
+  command_line.PrependWrapper("/usr/bin/sudo");
+  return command_line;
+}
+
+void SetPlatformPolicies(const base::Value::Dict& values) {}
+
+void ExpectAppVersion(UpdaterScope scope,
+                      const std::string& app_id,
+                      const base::Version& version) {
+  const base::Version app_version =
+      base::MakeRefCounted<PersistedData>(
+          scope, CreateGlobalPrefs(scope)->GetPrefService(), nullptr)
+          ->GetProductVersion(app_id);
+  EXPECT_TRUE(app_version.IsValid());
+  EXPECT_EQ(version, app_version);
+}
+
+void SetAppAllowsUsageStats(UpdaterScope scope,
+                            const std::string& identifier,
+                            bool allowed) {
+  ADD_FAILURE() << "Usage statistics are not supported on Linux.";
+}
+
+void ClearAppAllowsUsageStats(UpdaterScope scope,
+                              const std::string& identifier) {
+  ADD_FAILURE() << "Usage statistics are not supported on Linux.";
 }
 
 }  // namespace updater::test

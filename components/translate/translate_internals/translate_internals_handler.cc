@@ -6,12 +6,12 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/types/cxx23_to_underlying.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/values.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -32,7 +32,6 @@ TranslateInternalsHandler::TranslateInternalsHandler() {
       translate::TranslateDownloadManager::GetInstance()->language_list();
   if (!language_list) {
     NOTREACHED();
-    return;
   }
 
   error_subscription_ =
@@ -58,8 +57,8 @@ base::Value::Dict TranslateInternalsHandler::GetLanguages() {
 
   const std::string app_locale =
       translate::TranslateDownloadManager::GetInstance()->application_locale();
-  std::vector<std::string> language_codes;
-  l10n_util::GetAcceptLanguagesForLocale(app_locale, &language_codes);
+  std::vector<std::string> language_codes =
+      l10n_util::GetAcceptLanguagesForLocale(app_locale);
 
   for (auto& lang_code : language_codes) {
     std::u16string lang_name =
@@ -91,7 +90,8 @@ void TranslateInternalsHandler::RegisterMessageCallbacks() {
 void TranslateInternalsHandler::AddLanguageDetectionDetails(
     const translate::LanguageDetectionDetails& details) {
   base::Value::Dict dict;
-  dict.Set("time", details.time.ToJsTime());
+  dict.Set("has_run_lang_detection", details.has_run_lang_detection);
+  dict.Set("time", details.time.InMillisecondsFSinceUnixEpoch());
   dict.Set("url", details.url.spec());
   dict.Set("content_language", details.content_language);
   dict.Set("model_detected_language", details.model_detected_language);
@@ -108,9 +108,9 @@ void TranslateInternalsHandler::AddLanguageDetectionDetails(
 void TranslateInternalsHandler::OnTranslateError(
     const translate::TranslateErrorDetails& details) {
   base::Value::Dict dict;
-  dict.Set("time", details.time.ToJsTime());
+  dict.Set("time", details.time.InMillisecondsFSinceUnixEpoch());
   dict.Set("url", details.url.spec());
-  dict.Set("error", base::to_underlying(details.error));
+  dict.Set("error", std::to_underlying(details.error));
   SendMessageToJs("translateErrorDetailsAdded", dict);
 }
 
@@ -119,7 +119,7 @@ void TranslateInternalsHandler::OnTranslateInit(
   if (!GetTranslateClient()->IsTranslatableURL(details.url))
     return;
   base::Value::Dict dict;
-  dict.Set("time", details.time.ToJsTime());
+  dict.Set("time", details.time.InMillisecondsFSinceUnixEpoch());
   dict.Set("url", details.url.spec());
 
   dict.Set("page_language_code", details.page_language_code);
@@ -151,7 +151,7 @@ void TranslateInternalsHandler::OnTranslateInit(
 void TranslateInternalsHandler::OnTranslateEvent(
     const translate::TranslateEventDetails& details) {
   base::Value::Dict dict;
-  dict.Set("time", details.time.ToJsTime());
+  dict.Set("time", details.time.InMillisecondsFSinceUnixEpoch());
   dict.Set("filename", details.filename);
   dict.Set("line", details.line);
   dict.Set("message", details.message);
@@ -183,8 +183,7 @@ void TranslateInternalsHandler::OnRemovePrefItem(
     if (!args[2].is_string())
       return;
     const std::string& from = args[1].GetString();
-    const std::string& to = args[2].GetString();
-    translate_prefs->RemoveLanguagePairFromAlwaysTranslateList(from, to);
+    translate_prefs->RemoveLanguagePairFromAlwaysTranslateList(from);
   } else {
     return;
   }
@@ -224,7 +223,7 @@ void TranslateInternalsHandler::OnRequestInfo(
 }
 
 void TranslateInternalsHandler::SendMessageToJs(
-    base::StringPiece message,
+    std::string_view message,
     const base::Value::Dict& value) {
   const char func[] = "cr.webUIListenerCallback";
   base::Value message_data(message);
@@ -276,7 +275,7 @@ void TranslateInternalsHandler::SendSupportedLanguagesToJs() {
 
   base::Value::Dict dict;
   dict.Set("languages", std::move(languages_list));
-  dict.Set("last_updated", last_updated.ToJsTime());
+  dict.Set("last_updated", last_updated.InMillisecondsFSinceUnixEpoch());
   SendMessageToJs("supportedLanguagesUpdated", dict);
 }
 

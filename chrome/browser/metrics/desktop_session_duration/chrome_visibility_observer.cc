@@ -4,25 +4,27 @@
 
 #include "chrome/browser/metrics/desktop_session_duration/chrome_visibility_observer.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/singleton.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "components/variations/variations_associated_data.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 
 namespace metrics {
 
 ChromeVisibilityObserver::ChromeVisibilityObserver() {
-  BrowserList::AddObserver(this);
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
   InitVisibilityGapTimeout();
 }
 
-ChromeVisibilityObserver::~ChromeVisibilityObserver() {
-  BrowserList::RemoveObserver(this);
-}
+ChromeVisibilityObserver::~ChromeVisibilityObserver() = default;
 
 void ChromeVisibilityObserver::SendVisibilityChangeEvent(
     bool active,
@@ -34,30 +36,42 @@ void ChromeVisibilityObserver::CancelVisibilityChange() {
   weak_factory_.InvalidateWeakPtrs();
 }
 
-void ChromeVisibilityObserver::OnBrowserSetLastActive(Browser* browser) {
-  if (weak_factory_.HasWeakPtrs())
+void ChromeVisibilityObserver::OnBrowserActivated(
+    BrowserWindowInterface* browser) {
+  if (weak_factory_.HasWeakPtrs()) {
     CancelVisibilityChange();
-  else
-    SendVisibilityChangeEvent(true, base::TimeDelta());
-}
-
-void ChromeVisibilityObserver::OnBrowserNoLongerActive(Browser* browser) {
-  if (visibility_gap_timeout_.InMicroseconds() == 0) {
-    SendVisibilityChangeEvent(false, base::TimeDelta());
   } else {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&ChromeVisibilityObserver::SendVisibilityChangeEvent,
-                       weak_factory_.GetWeakPtr(), false,
-                       visibility_gap_timeout_),
-        visibility_gap_timeout_);
+    SendVisibilityChangeEvent(true, base::TimeDelta());
   }
 }
 
-void ChromeVisibilityObserver::OnBrowserRemoved(Browser* browser) {
+void ChromeVisibilityObserver::OnBrowserDeactivated(
+    BrowserWindowInterface* browser) {
+  // Check if there is an active browser instead of assuming ordering of the
+  // observation calls when we are switching between browsers.
+  const auto* const last_active_bwi =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+  bool is_active = last_active_bwi && last_active_bwi->IsActive();
+
+  if (!is_active) {
+    if (visibility_gap_timeout_.InMicroseconds() == 0) {
+      SendVisibilityChangeEvent(false, base::TimeDelta());
+    } else {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&ChromeVisibilityObserver::SendVisibilityChangeEvent,
+                         weak_factory_.GetWeakPtr(), false,
+                         visibility_gap_timeout_),
+          visibility_gap_timeout_);
+    }
+  }
+}
+
+void ChromeVisibilityObserver::OnBrowserClosed(
+    BrowserWindowInterface* browser) {
   // If there are no browser instances left then we should notify that browser
   // is not visible anymore immediately without waiting.
-  if (BrowserList::GetInstance()->empty()) {
+  if (GlobalBrowserCollection::GetInstance()->IsEmpty()) {
     CancelVisibilityChange();
     SendVisibilityChangeEvent(false, base::TimeDelta());
   }
@@ -67,10 +81,11 @@ void ChromeVisibilityObserver::InitVisibilityGapTimeout() {
   const int kDefaultVisibilityGapTimeout = 3;
 
   int timeout_seconds = kDefaultVisibilityGapTimeout;
-  std::string param_value = variations::GetVariationParamValue(
+  std::string param_value = base::GetFieldTrialParamValue(
       "DesktopSessionDuration", "visibility_gap_timeout");
-  if (!param_value.empty())
+  if (!param_value.empty()) {
     base::StringToInt(param_value, &timeout_seconds);
+  }
 
   visibility_gap_timeout_ = base::Seconds(timeout_seconds);
 }

@@ -55,7 +55,7 @@ void Presentation::Trace(Visitor* visitor) const {
 }
 
 PresentationRequest* Presentation::defaultRequest() const {
-  return default_request_;
+  return default_request_.Get();
 }
 
 void Presentation::setDefaultRequest(PresentationRequest* request) {
@@ -67,7 +67,7 @@ void Presentation::setDefaultRequest(PresentationRequest* request) {
 
   PresentationController* controller = PresentationController::From(*window);
   controller->GetPresentationService()->SetDefaultPresentationUrls(
-      request ? request->Urls() : WTF::Vector<KURL>());
+      request ? request->Urls() : Vector<KURL>());
 }
 
 void Presentation::MaybeInitReceiver() {
@@ -80,7 +80,7 @@ void Presentation::MaybeInitReceiver() {
 
 PresentationReceiver* Presentation::receiver() {
   MaybeInitReceiver();
-  return receiver_;
+  return receiver_.Get();
 }
 
 }  // namespace blink

@@ -14,8 +14,8 @@
 #include <iosfwd>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
@@ -216,9 +216,9 @@ TYPED_TEST_P(SequencedTaskRunnerTest, NonNestablePostFromNonNestableTask) {
 
   this->delegate_.StopTaskRunner();
 
-  EXPECT_TRUE(CheckNonNestableInvariants(
-      this->task_tracker_->GetTaskEvents(),
-      kParentCount * (kChildrenPerParent + 1)));
+  EXPECT_TRUE(
+      CheckNonNestableInvariants(this->task_tracker_->GetTaskEvents(),
+                                 kParentCount * (kChildrenPerParent + 1)));
 }
 
 // This test posts two tasks with the same delay, and checks that the tasks are

@@ -17,11 +17,9 @@
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 
-namespace gfx {
-class Canvas;
+namespace ui {
+class ColorProvider;
 }
-
-class SkPath;
 
 // Holds the basic logic for rendering tabs, including preferred sizes, paths,
 // etc.
@@ -62,6 +60,13 @@ class TabStyle {
   enum class HideHoverStyle {
     kGradual,    // The hover should fade out.
     kImmediate,  // The hover should cut off, with no fade out.
+  };
+
+  // The states the tab can be in throughout its selection lifecycle.
+  enum class TabSelectionState {
+    kActive,
+    kSelected,
+    kInactive,
   };
 
   // If we want to draw vertical separators between tabs, these are the leading
@@ -106,96 +111,110 @@ class TabStyle {
 
   TabStyle(const TabStyle&) = delete;
   TabStyle& operator=(const TabStyle&) = delete;
-  virtual ~TabStyle();
+  ~TabStyle();
 
-  // Gets the specific |path_type| associated with the specific |tab|.
-  // If |force_active| is true, applies an active appearance on the tab (usually
-  // involving painting an optional stroke) even if the tab is not the active
-  // tab.
-  virtual SkPath GetPath(
-      PathType path_type,
-      float scale,
-      bool force_active = false,
-      RenderUnits render_units = RenderUnits::kPixels) const = 0;
-
-  // Returns the insets to use for laying out tab contents.
-  virtual gfx::Insets GetContentsInsets() const = 0;
-
-  // Returns the z-value of the tab, which should be used to paint them in
-  // ascending order. Return values are in the range (0,
-  // TabStyle::GetMaximumZValue()).
-  virtual float GetZValue() const = 0;
-
-  // Returns the current opacity of the "active" portion of the tab's state.
-  virtual float GetActiveOpacity() const = 0;
-
-  // Returns whichever of (active, inactive) the tab appears more like given the
-  // active opacity.
-  virtual TabActive GetApparentActiveState() const = 0;
-
-  // Derives and returns colors for the tab. See TabColors, above.
-  virtual TabColors CalculateColors() const = 0;
-
-  // Returns the appropriate fonts for the current theme and active state.
-  virtual const gfx::FontList& GetFontList() const = 0;
-
-  // Paints the tab.
-  virtual void PaintTab(gfx::Canvas* canvas) const = 0;
-
-  // Sets the center of the radial highlight in the hover animation.
-  virtual void SetHoverLocation(const gfx::Point& location) = 0;
-
-  // Shows the hover animation.
-  virtual void ShowHover(ShowHoverStyle style) = 0;
-
-  // Hides the hover animation.
-  virtual void HideHover(HideHoverStyle style) = 0;
-
-  // Opacity of the active tab background painted over inactive selected tabs.
-  static constexpr float kSelectedTabOpacity = 0.75f;
+  // Returns the standard height of a single Tab.
+  int GetStandardHeight() const;
 
   // Returns the preferred width of a single Tab, assuming space is
   // available.
-  static int GetStandardWidth();
+  int GetStandardWidth(const bool is_split) const;
 
   // Returns the width for pinned tabs. Pinned tabs always have this width.
-  static int GetPinnedWidth();
+  int GetPinnedWidth(const bool is_split) const;
+
+  // Returns the minimum possible width of an active Tab. Active tabs must
+  // always show a close button, and thus have a larger minimum size than
+  // inactive tabs.
+  int GetMinimumActiveWidth(const bool is_split) const;
+
+  // Returns the minimum possible width of a single inactive Tab.
+  int GetMinimumInactiveWidth() const;
 
   // Returns the overlap between adjacent tabs.
-  static int GetTabOverlap();
-
-  // Get the space only partially occupied by a tab that we should
-  // consider to be padding rather than part of the body of the tab for
-  // interaction purposes.
-  static gfx::Insets GetTabInternalPadding();
+  int GetTabOverlap() const;
 
   // Gets the size of the separator drawn between tabs, if any.
-  static gfx::Size GetSeparatorSize();
+  gfx::Size GetSeparatorSize() const;
+
+  // Gets the distance between the separator and tab, if any.
+  gfx::Insets GetSeparatorMargins() const;
+
+  // Gets the radius of the rounded rect used to draw the separator.
+  int GetSeparatorCornerRadius() const;
 
   // Returns, for a tab of height |height|, how far the window top drag handle
   // can extend down into inactive tabs or the new tab button. This behavior
   // is not used in all cases.
-  static int GetDragHandleExtension(int height);
+  int GetDragHandleExtension(int height) const;
 
   // Gets the preferred size for tab previews, which could be screencaps, hero
   // or og:image images, etc.
-  static gfx::Size GetPreviewImageSize();
+  gfx::Size GetPreviewImageSize() const;
 
   // Returns the radius of the outer corners of the tab shape.
-  static int GetCornerRadius();
+  int GetTopCornerRadius() const;
+
+  // Returns the radius of the outer corners of the tab shape.
+  int GetBottomCornerRadius() const;
+
+  std::tuple<float, float, float, SkColor> GetContrastRatioValues(
+      bool frame_active,
+      const ui::ColorProvider* color_provider) const;
+
+  TabStyle::TabColors CalculateTargetColors(
+      const TabSelectionState state,
+      const bool apparently_active,
+      const bool hovered,
+      const bool frame_active,
+      const ui::ColorProvider* color_provider) const;
+
+  // Returns the tab foreground color of the the text based on `active` and the
+  // activation state of the window.
+  SkColor GetTabForegroundColor(const bool apparently_active,
+                                const bool frame_active,
+                                const ui::ColorProvider* color_provider) const;
+
+  // Returns the target background color of a tab with selection state `state`
+  // and hover state `hovered`. `frame_active` is whether the tab's widget is
+  // painted as active or not.
+  // TODO(tbergquist): Non-Tab callers of this should probably be refactored to
+  // use their own color ids.
+  SkColor GetTabBackgroundColor(const TabSelectionState state,
+                                const bool hovered,
+                                const bool frame_active,
+                                const ui::ColorProvider* color_provider) const;
+
+  // Returns the background color of a tab with selection state `state` and
+  // hover state `hovered`. If `hovered`, this blends the hovered and unhovered
+  // background colors according to the `hover_animation_value`.
+  // `frame_active` is whether the tab's widget is painted as active or not.
+  SkColor GetCurrentTabBackgroundColor(
+      const TabSelectionState state,
+      const bool hovered,
+      float hover_animation_value,
+      const bool frame_active,
+      const ui::ColorProvider* color_provider) const;
+
+  // Opacity of the active tab background painted over inactive selected tabs.
+  float GetSelectedTabOpacity() const;
+
+  // Returns how far from the leading and trailing edges of a tab the contents
+  // should actually be laid out.
+  gfx::Insets GetContentsInsets() const;
 
   // The largest valid value of TabStyle::GetZValue(). Currently,
   // GM2TabStyle::GetZValue is the only implementation, and it can't return
   // values larger than 7.
   static constexpr float kMaximumZValue = 7.0f;
 
+  static constexpr float kDefaultSelectedTabOpacity = 0.75f;
+
+  static const TabStyle* Get();
+
  protected:
   // Avoid implicitly-deleted constructor.
   TabStyle() = default;
-
-  // Returns how far from the leading and trailing edges of a tab the contents
-  // should actually be laid out.
-  static int GetContentsHorizontalInsetSize();
 };
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_STYLE_H_

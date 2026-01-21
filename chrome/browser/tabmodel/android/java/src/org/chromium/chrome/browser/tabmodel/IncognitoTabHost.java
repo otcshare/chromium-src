@@ -4,9 +4,10 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
-/**
- * Implemented by entities that may host incognito tabs.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Implemented by entities that may host incognito tabs. */
+@NullMarked
 public interface IncognitoTabHost {
     /** Whether has any incognito tabs at the moment. */
     boolean hasIncognitoTabs();
@@ -14,6 +15,9 @@ public interface IncognitoTabHost {
     /** Close all incognito tabs. */
     void closeAllIncognitoTabs();
 
-    /** Whether there is any active incognito session at the moment.*/
+    /** An async version of {@link #closeAllIncognitoTabs()}, that will wait for init to finish. */
+    void closeAllIncognitoTabsOnInit();
+
+    /** Whether there is any active incognito session at the moment. */
     boolean isActiveModel();
 }

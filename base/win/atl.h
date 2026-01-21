@@ -10,15 +10,26 @@
 // Undefine before windows header will make the poisonous defines
 #include "base/win/windows_undefines.inc"
 
+// clang-format off
 // Declare our own exception thrower (atl_throw.h includes atldef.h).
 #include "base/win/atl_throw.h"
+// clang-format on
 
-#include <atlbase.h>      // NOLINT(build/include_order)
-#include <atlcom.h>       // NOLINT(build/include_order)
-#include <atlctl.h>       // NOLINT(build/include_order)
-#include <atlhost.h>      // NOLINT(build/include_order)
-#include <atlsecurity.h>  // NOLINT(build/include_order)
-#include <atlwin.h>       // NOLINT(build/include_order)
+// Now include the real ATL headers.
+#include <atlbase.h>
+
+// clang-format off
+// TODO(crbug.com/445551452): Remove this.
+// This needs to come before atlcom.h
+#include <utility>
+// clang-format on
+#include <atlcom.h>
+#include <atlcomcli.h>
+#include <atlctl.h>
+#include <atlhost.h>
+#include <atlsecurity.h>
+#include <atltypes.h>
+#include <atlwin.h>
 
 // Undefine the poisonous defines
 #include "base/win/windows_undefines.inc"  // NOLINT(build/include)

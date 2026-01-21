@@ -31,15 +31,17 @@
 #include "third_party/blink/renderer/platform/wtf/decimal.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-
-namespace WTF {
-class TextEncoding;
-}
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
+class TextEncoding;
+
 // Strip leading and trailing whitespace as defined by the HTML specification.
 CORE_EXPORT String StripLeadingAndTrailingHTMLSpaces(const String&);
+
+// https://infra.spec.whatwg.org/#split-on-ascii-whitespace
+CORE_EXPORT Vector<String> SplitOnASCIIWhitespace(const String&);
 
 // An implementation of the HTML specification's algorithm to convert a number
 // to a string for number and range types.
@@ -76,7 +78,7 @@ CORE_EXPORT Vector<double> ParseHTMLListOfFloatingPointNumbers(const String&);
 
 typedef Vector<std::pair<String, String>> HTMLAttributeList;
 // The returned encoding might not be valid.
-WTF::TextEncoding EncodingFromMetaAttributes(const HTMLAttributeList&);
+TextEncoding EncodingFromMetaAttributes(const HTMLAttributeList&);
 
 // Space characters as defined by the HTML specification.
 template <typename CharType>
@@ -96,6 +98,12 @@ inline bool IsHTMLSpace(CharType character) {
   return character <= ' ' &&
          (character == ' ' || character == '\n' || character == '\t' ||
           character == '\r' || character == '\f');
+}
+
+template <typename CharType>
+ALWAYS_INLINE bool IsHTMLSpecialWhitespace(CharType character) {
+  return character <= '\r' && (character == '\r' || character == '\n' ||
+                               character == '\t' || character == '\f');
 }
 
 template <typename CharType>
@@ -122,40 +130,30 @@ inline bool IsNotHTMLSpace(CharType character) {
   return !IsHTMLSpace<CharType>(character);
 }
 
+template <typename CharType>
+inline bool IsHTMLSpaceNotLineBreak(CharType character) {
+  return IsHTMLSpace<CharType>(character) && !IsHTMLLineBreak(character);
+}
+
 bool ThreadSafeMatch(const QualifiedName&, const QualifiedName&);
 bool ThreadSafeMatch(const String&, const QualifiedName&);
 
 enum CharacterWidth { kLikely8Bit, kForce8Bit, kForce16Bit };
 
-String AttemptStaticStringCreation(const LChar*, wtf_size_t);
-
-String AttemptStaticStringCreation(const UChar*, wtf_size_t, CharacterWidth);
-
-template <wtf_size_t inlineCapacity>
-inline static String AttemptStaticStringCreation(
-    const UCharLiteralBuffer<inlineCapacity>& vector,
-    CharacterWidth width) {
-  if (g_literal_buffer_create_string_with_encoding) {
-    // TODO(sky): once this is made the default, remove `width` parameter.
-    return AttemptStaticStringCreation(
-        vector.data(), vector.size(),
-        vector.Is8Bit() ? kForce8Bit : kForce16Bit);
-  }
-  return AttemptStaticStringCreation(vector.data(), vector.size(), width);
-}
+String AttemptStaticStringCreation(base::span<const LChar>);
+String AttemptStaticStringCreation(base::span<const UChar>, CharacterWidth);
 
 template <wtf_size_t inlineCapacity>
 inline static String AttemptStaticStringCreation(
-    const Vector<UChar, inlineCapacity>& vector,
-    CharacterWidth width) {
-  return AttemptStaticStringCreation(vector.data(), vector.size(), width);
+    const UCharLiteralBuffer<inlineCapacity>& vector) {
+  return AttemptStaticStringCreation(
+      vector, vector.Is8Bit() ? kForce8Bit : kForce16Bit);
 }
 
-inline static String AttemptStaticStringCreation(const String str) {
+inline static String AttemptStaticStringCreation(const String& str) {
   if (!str.Is8Bit())
-    return AttemptStaticStringCreation(str.Characters16(), str.length(),
-                                       kForce16Bit);
-  return AttemptStaticStringCreation(str.Characters8(), str.length());
+    return AttemptStaticStringCreation(str.Span16(), kForce16Bit);
+  return AttemptStaticStringCreation(str.Span8());
 }
 
 }  // namespace blink

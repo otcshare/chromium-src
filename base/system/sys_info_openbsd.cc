@@ -11,20 +11,23 @@
 #include <sys/sysctl.h>
 
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/posix/sysctl.h"
+
+namespace base {
 
 namespace {
 
-uint64_t AmountOfMemory(int pages_name) {
+ByteSize AmountOfMemory(int pages_name) {
   long pages = sysconf(pages_name);
   long page_size = sysconf(_SC_PAGESIZE);
-  if (pages < 0 || page_size < 0)
-    return 0;
-  return static_cast<uint64_t>(pages) * static_cast<uint64_t>(page_size);
+  if (pages < 0 || page_size < 0) {
+    return ByteSize(0);
+  }
+  return ByteSize(checked_cast<unsigned long>(page_size)) * pages;
 }
 
 }  // namespace
-
-namespace base {
 
 // static
 int SysInfo::NumberOfProcessors() {
@@ -33,18 +36,17 @@ int SysInfo::NumberOfProcessors() {
   size_t size = sizeof(ncpu);
   if (sysctl(mib, std::size(mib), &ncpu, &size, NULL, 0) < 0) {
     NOTREACHED();
-    return 1;
   }
   return ncpu;
 }
 
 // static
-uint64_t SysInfo::AmountOfPhysicalMemoryImpl() {
+ByteSize SysInfo::AmountOfTotalPhysicalMemoryImpl() {
   return AmountOfMemory(_SC_PHYS_PAGES);
 }
 
 // static
-uint64_t SysInfo::AmountOfAvailablePhysicalMemoryImpl() {
+ByteSize SysInfo::AmountOfAvailablePhysicalMemoryImpl() {
   // We should add inactive file-backed memory also but there is no such
   // information from OpenBSD unfortunately.
   return AmountOfMemory(_SC_AVPHYS_PAGES);
@@ -57,21 +59,13 @@ uint64_t SysInfo::MaxSharedMemorySize() {
   size_t size = sizeof(limit);
   if (sysctl(mib, std::size(mib), &limit, &size, NULL, 0) < 0) {
     NOTREACHED();
-    return 0;
   }
   return static_cast<uint64_t>(limit);
 }
 
 // static
 std::string SysInfo::CPUModelName() {
-  int mib[] = {CTL_HW, HW_MODEL};
-  char name[256];
-  size_t len = std::size(name);
-  if (sysctl(mib, std::size(mib), name, &len, NULL, 0) < 0) {
-    NOTREACHED();
-    return std::string();
-  }
-  return name;
+  return StringSysctl({CTL_HW, HW_MODEL}).value();
 }
 
 }  // namespace base

@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/enterprise/platform_auth/platform_auth_provider_manager.h"
 #include "url/origin.h"
 
@@ -30,6 +30,12 @@ class PlatformAuthProvider {
   // be attempted.
   using FetchOriginsCallback =
       base::OnceCallback<void(std::unique_ptr<std::vector<url::Origin>>)>;
+
+  // Returns true if the provider supports origin filtering. If this returns
+  // true, `FetchOrigins` must be called to get the set of origins for which
+  // `GetData` may provide authentication data; otherwise, `GetData` must be
+  // called on every request.
+  virtual bool SupportsOriginFiltering() = 0;
 
   // Initiates an asynchronous fetch for IdP/STS origins. `on_fetch_complete`
   // will be run on the caller's sequence with the results. Note: destruction of

@@ -7,10 +7,9 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/environment.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -20,6 +19,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/system/isolated_connection.h"
+#include "remoting/base/constants.h"
 #include "remoting/host/mojo_caller_security_checker.h"
 #include "remoting/host/mojom/chromoting_host_services.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,10 +41,9 @@ class ChromotingHostServicesClientTest : public testing::Test,
  protected:
   void SetChromeRemoteDesktopSessionEnvVar(bool is_crd_session);
   void WaitForSessionServicesBound();
-  void SetRemoteDisconnectCallback(base::OnceClosure callback);
 
   base::test::TaskEnvironment task_environment_;
-  raw_ptr<base::Environment> environment_;
+  raw_ptr<base::Environment, DanglingUntriaged> environment_;
   bool is_server_started_ = true;
   std::unique_ptr<ChromotingHostServicesClient> client_;
   mojo::ReceiverSet<mojom::ChromotingHostServices> host_services_receivers_;
@@ -52,8 +51,7 @@ class ChromotingHostServicesClientTest : public testing::Test,
       session_services_receivers_;
 
  private:
-  mojo::PendingRemote<mojom::ChromotingHostServices> ConnectToServer(
-      mojo::IsolatedConnection& connection);
+  mojo::PendingRemote<mojom::ChromotingHostServices> ConnectToServer();
 
   // Used to block the thread until a session services bind request is received.
   std::unique_ptr<base::RunLoop> session_services_bound_run_loop_;
@@ -86,11 +84,9 @@ void ChromotingHostServicesClientTest::SetChromeRemoteDesktopSessionEnvVar(
     bool is_crd_session) {
 #if BUILDFLAG(IS_LINUX)
   if (is_crd_session) {
-    environment_->SetVar(
-        ChromotingHostServicesClient::kChromeRemoteDesktopSessionEnvVar, "1");
+    environment_->SetVar(kChromeRemoteDesktopSessionEnvVar, "1");
   } else {
-    environment_->UnSetVar(
-        ChromotingHostServicesClient::kChromeRemoteDesktopSessionEnvVar);
+    environment_->UnSetVar(kChromeRemoteDesktopSessionEnvVar);
   }
 #endif
   // No-op on other platforms.
@@ -101,14 +97,8 @@ void ChromotingHostServicesClientTest::WaitForSessionServicesBound() {
   session_services_bound_run_loop_ = std::make_unique<base::RunLoop>();
 }
 
-void ChromotingHostServicesClientTest::SetRemoteDisconnectCallback(
-    base::OnceClosure callback) {
-  client_->on_session_disconnected_callback_for_testing_ = std::move(callback);
-}
-
 mojo::PendingRemote<mojom::ChromotingHostServices>
-ChromotingHostServicesClientTest::ConnectToServer(
-    mojo::IsolatedConnection& connection) {
+ChromotingHostServicesClientTest::ConnectToServer() {
   if (!is_server_started_) {
     return mojo::PendingRemote<mojom::ChromotingHostServices>();
   }
@@ -147,13 +137,25 @@ TEST_F(ChromotingHostServicesClientTest,
 }
 
 TEST_F(ChromotingHostServicesClientTest,
-       ServerClosesReceiverAndClientReconnects) {
+       ServerClosesSessionHostReceiver_DisconnectHandlerCalled) {
   ASSERT_NE(client_->GetSessionServices(), nullptr);
   WaitForSessionServicesBound();
   ASSERT_EQ(session_services_receivers_.size(), 1u);
 
   base::RunLoop remote_disconnect_run_loop;
-  SetRemoteDisconnectCallback(remote_disconnect_run_loop.QuitClosure());
+  client_->set_disconnect_handler(remote_disconnect_run_loop.QuitClosure());
+  host_services_receivers_.Clear();
+  remote_disconnect_run_loop.Run();
+}
+
+TEST_F(ChromotingHostServicesClientTest,
+       ServerClosesSessionServicesReceiverAndClientReconnects) {
+  ASSERT_NE(client_->GetSessionServices(), nullptr);
+  WaitForSessionServicesBound();
+  ASSERT_EQ(session_services_receivers_.size(), 1u);
+
+  base::RunLoop remote_disconnect_run_loop;
+  client_->set_disconnect_handler(remote_disconnect_run_loop.QuitClosure());
   session_services_receivers_.clear();
   remote_disconnect_run_loop.Run();
 

@@ -4,6 +4,8 @@
 
 #include "base/timer/elapsed_timer.h"
 
+#include <concepts>
+
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -14,6 +16,15 @@ namespace {
 
 constexpr TimeDelta kSleepDuration = Milliseconds(20);
 }
+
+static_assert(std::movable<ElapsedTimer>);
+static_assert(std::copyable<ElapsedTimer>);
+
+static_assert(std::movable<ElapsedThreadTimer>);
+static_assert(std::copyable<ElapsedThreadTimer>);
+
+static_assert(std::movable<ElapsedLiveTimer>);
+static_assert(std::copyable<ElapsedLiveTimer>);
 
 TEST(ElapsedTimerTest, Simple) {
   ElapsedTimer timer;
@@ -40,8 +51,9 @@ TEST(ElapsedTimerTest, Mocked) {
 class ElapsedThreadTimerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    if (ThreadTicks::IsSupported())
+    if (ThreadTicks::IsSupported()) {
       ThreadTicks::WaitUntilInitialized();
+    }
   }
 };
 
@@ -56,8 +68,9 @@ TEST_F(ElapsedThreadTimerTest, IsSupported) {
 }
 
 TEST_F(ElapsedThreadTimerTest, Simple) {
-  if (!ThreadTicks::IsSupported())
+  if (!ThreadTicks::IsSupported()) {
     return;
+  }
 
   ElapsedThreadTimer timer;
   EXPECT_TRUE(timer.is_supported());
@@ -72,8 +85,9 @@ TEST_F(ElapsedThreadTimerTest, Simple) {
 }
 
 TEST_F(ElapsedThreadTimerTest, DoesNotCountSleep) {
-  if (!ThreadTicks::IsSupported())
+  if (!ThreadTicks::IsSupported()) {
     return;
+  }
 
   ElapsedThreadTimer timer;
   EXPECT_TRUE(timer.is_supported());
@@ -84,12 +98,35 @@ TEST_F(ElapsedThreadTimerTest, DoesNotCountSleep) {
 }
 
 TEST_F(ElapsedThreadTimerTest, Mocked) {
-  if (!ThreadTicks::IsSupported())
+  if (!ThreadTicks::IsSupported()) {
     return;
+  }
 
   ScopedMockElapsedTimersForTest mock_elapsed_timer;
 
   ElapsedThreadTimer timer;
+  EXPECT_EQ(timer.Elapsed(), ScopedMockElapsedTimersForTest::kMockElapsedTime);
+
+  // Real-time doesn't matter.
+  PlatformThread::Sleep(kSleepDuration);
+  EXPECT_EQ(timer.Elapsed(), ScopedMockElapsedTimersForTest::kMockElapsedTime);
+}
+
+TEST(ElapsedLiveTimerTest, Simple) {
+  ElapsedLiveTimer timer;
+
+  PlatformThread::Sleep(kSleepDuration);
+  EXPECT_GE(timer.Elapsed(), kSleepDuration);
+
+  // Can call |Elapsed()| multiple times.
+  PlatformThread::Sleep(kSleepDuration);
+  EXPECT_GE(timer.Elapsed(), 2 * kSleepDuration);
+}
+
+TEST(ElapsedLiveTimerTest, Mocked) {
+  ScopedMockElapsedTimersForTest mock_elapsed_timer;
+
+  ElapsedLiveTimer timer;
   EXPECT_EQ(timer.Elapsed(), ScopedMockElapsedTimersForTest::kMockElapsedTime);
 
   // Real-time doesn't matter.

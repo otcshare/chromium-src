@@ -60,7 +60,7 @@ void TextTrackCue::CueDidChange(CueMutationAffectsOrder affects_order) {
 }
 
 TextTrack* TextTrackCue::track() const {
-  return track_;
+  return track_.Get();
 }
 
 void TextTrackCue::SetTrack(TextTrack* track) {
@@ -123,8 +123,9 @@ unsigned TextTrackCue::CueIndex() {
 
 DispatchEventResult TextTrackCue::DispatchEventInternal(Event& event) {
   // When a TextTrack's mode is disabled: no cues are active, no events fired.
-  if (!track() || track()->mode() == TextTrackMode::kDisabled)
+  if (track() && track()->mode() == TextTrackMode::kDisabled) {
     return DispatchEventResult::kCanceledBeforeDispatch;
+  }
 
   return EventTarget::DispatchEventInternal(event);
 }
@@ -135,7 +136,7 @@ const AtomicString& TextTrackCue::InterfaceName() const {
 
 void TextTrackCue::Trace(Visitor* visitor) const {
   visitor->Trace(track_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
 }
 
 }  // namespace blink

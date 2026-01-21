@@ -1,13 +1,16 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/k_anonymity_service/k_anonymity_service_client.h"
 
+#include <optional>
+#include <string>
+
 #include "base/base64.h"
 #include "base/base64url.h"
-#include "base/callback.h"
 #include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
@@ -18,13 +21,16 @@
 #include "chrome/browser/k_anonymity_service/remote_trust_token_query_answerer.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/chrome_features.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
-#include "crypto/sha2.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -38,14 +44,14 @@ namespace {
 
 constexpr base::TimeDelta kRequestTimeout = base::Seconds(5);
 constexpr base::TimeDelta kRequestMargin = base::Minutes(5);
-constexpr base::TimeDelta kKeyCacheDuration = base::Hours(4);
+constexpr base::TimeDelta kKeyCacheDuration = base::Hours(24);
 constexpr int kMaxRetries = 5;
-constexpr size_t kMaxQueueSize = 100;
+constexpr size_t kMaxQueueSize = 400;
 
+// TODO(behamilton): Allow the KAnonType to be specified by the client.
 const char kKAnonType[] = "fledge";
+const char kKAnonymityServiceStoragePath[] = "KAnonymityService";
 
-// TODO(behamilton): Change description once indirect (OHTTP) requests are
-// supported.
 constexpr net::NetworkTrafficAnnotationTag
     kKAnonymityServiceJoinSetTrafficAnnotation =
         net::DefineNetworkTrafficAnnotation("k_anonymity_service_join_set",
@@ -53,7 +59,7 @@ constexpr net::NetworkTrafficAnnotationTag
     semantics {
       sender: "Chrome k-Anonymity Service Client"
       description:
-        "Request to the Chrome k-Anonymity JoinSet server to notify it of use "
+        "Request to the Chrome k-Anonymity Join server to notify it of use "
         "of a k-anonymity protected element."
       trigger:
         "Use of a k-anonymity protected element."
@@ -75,8 +81,6 @@ constexpr net::NetworkTrafficAnnotationTag
       ""
     )");
 
-// TODO(behamilton): Change description once indirect (OHTTP) requests are
-// supported.
 constexpr net::NetworkTrafficAnnotationTag
     kKAnonymityServiceQuerySetTrafficAnnotation =
         net::DefineNetworkTrafficAnnotation("k_anonymity_service_query_set",
@@ -84,7 +88,7 @@ constexpr net::NetworkTrafficAnnotationTag
     semantics {
       sender: "Chrome k-Anonymity Service Client"
       description:
-        "Request to the Chrome k-Anonymity JoinSet server to query if "
+        "Request to the Chrome k-Anonymity Query server to query if "
         "k-anonymity protected element is k-anonymous. These results are "
         "typically cached."
       trigger:
@@ -112,25 +116,39 @@ constexpr net::NetworkTrafficAnnotationTag
 class KAnonObliviousHttpClient : public network::mojom::ObliviousHttpClient {
  public:
   using OnCompletedCallback =
-      base::OnceCallback<void(const absl::optional<std::string>&, int)>;
+      base::OnceCallback<void(const std::optional<std::string>&, int)>;
 
   explicit KAnonObliviousHttpClient(OnCompletedCallback callback)
       : callback_(std::move(callback)) {}
 
   ~KAnonObliviousHttpClient() override {
     if (!called_) {
-      std::move(callback_).Run(absl::nullopt, net::ERR_FAILED);
+      std::move(callback_).Run(std::nullopt, net::ERR_FAILED);
     }
   }
 
-  void OnCompleted(const absl::optional<std::string>& response,
-                   int net_error) override {
+  void OnCompleted(
+      network::mojom::ObliviousHttpCompletionResultPtr status) override {
     if (called_) {
       mojo::ReportBadMessage("OnCompleted called more than once");
       return;
     }
     called_ = true;
-    std::move(callback_).Run(response, net_error);
+    if (status->is_net_error()) {
+      std::move(callback_).Run(std::nullopt, status->get_net_error());
+    } else if (status->is_outer_response_error_code()) {
+      std::move(callback_).Run(std::nullopt,
+                               net::ERR_HTTP_RESPONSE_CODE_FAILURE);
+    } else {
+      DCHECK(status->is_inner_response());
+      if (status->get_inner_response()->response_code != net::HTTP_OK) {
+        std::move(callback_).Run(std::nullopt,
+                                 net::ERR_HTTP_RESPONSE_CODE_FAILURE);
+      } else {
+        std::move(callback_).Run(status->get_inner_response()->response_body,
+                                 net::OK);
+      }
+    }
   }
 
  private:
@@ -162,18 +180,23 @@ KAnonymityServiceClient::KAnonymityServiceClient(Profile* profile)
     : url_loader_factory_(profile->GetURLLoaderFactory()),
       enable_ohttp_requests_(base::FeatureList::IsEnabled(
           features::kKAnonymityServiceOHTTPRequests)),
+      storage_(
+          (base::FeatureList::IsEnabled(features::kKAnonymityServiceStorage) &&
+           profile && !profile->IsOffTheRecord())
+              ? CreateKAnonymitySqlStorageForPath(
+                    profile->GetDefaultStoragePartition()
+                        ->GetPath()
+                        .AppendASCII(kKAnonymityServiceStoragePath))
+              : std::make_unique<KAnonymityServiceMemoryStorage>()),
       // Pass the auth server origin as if it is our "top frame".
       trust_token_answerer_(url::Origin::Create(GURL(
                                 features::kKAnonymityServiceAuthServer.Get())),
                             profile),
       token_getter_(IdentityManagerFactory::GetForProfile(profile),
                     url_loader_factory_,
-                    &trust_token_answerer_),
+                    &trust_token_answerer_,
+                    storage_.get()),
       profile_(profile) {
-  // We are currently relying on callers of this service to limit which users
-  // are allowed to use this service. No children should use this service
-  // since we are not approved to process their data.
-  DCHECK(!profile->IsChild());
   join_origin_ =
       url::Origin::Create(GURL(features::kKAnonymityServiceJoinServer.Get()));
   DCHECK(!join_origin_.opaque());
@@ -184,8 +207,27 @@ KAnonymityServiceClient::KAnonymityServiceClient(Profile* profile)
 
 KAnonymityServiceClient::~KAnonymityServiceClient() = default;
 
+bool KAnonymityServiceClient::CanUseKAnonymityService(Profile* profile) {
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  if (!identity_manager) {
+    return false;
+  }
+  const AccountInfo account_info = identity_manager->FindExtendedAccountInfo(
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin));
+  auto capability =
+      account_info.capabilities.can_run_chrome_privacy_sandbox_trials();
+  return capability == signin::Tribool::kTrue;
+}
+
 void KAnonymityServiceClient::JoinSet(std::string id,
                                       base::OnceCallback<void(bool)> callback) {
+  if (!CanUseKAnonymityService(profile_)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), false));
+    return;
+  }
+
   RecordJoinSetAction(KAnonymityServiceJoinSetAction::kJoinSet);
 
   // Fail immediately if the queue is full.
@@ -201,6 +243,18 @@ void KAnonymityServiceClient::JoinSet(std::string id,
       std::make_unique<PendingJoinRequest>(std::move(id), std::move(callback)));
   if (join_queue_.size() > 1)
     return;
+
+  storage_->WaitUntilReady(
+      base::BindOnce(&KAnonymityServiceClient::JoinSetOnStorageReady,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void KAnonymityServiceClient::JoinSetOnStorageReady(
+    KAnonymityServiceStorage::InitStatus status) {
+  if (status != KAnonymityServiceStorage::InitStatus::kInitOk) {
+    FailJoinSetRequests();
+    return;
+  }
   JoinSetStartNextQueued();
 }
 
@@ -211,12 +265,16 @@ void KAnonymityServiceClient::JoinSetStartNextQueued() {
 
 void KAnonymityServiceClient::JoinSetCheckOHTTPKey() {
   // We need the OHTTP key to send the OHTTP request.
-  if (enable_ohttp_requests_ && joinset_ohttp_key_with_expiration_.expiration <=
-                                    base::Time::Now() + kRequestMargin) {
+  std::optional<OHTTPKeyAndExpiration> ohttp_key =
+      storage_->GetOHTTPKeyFor(join_origin_);
+  if (enable_ohttp_requests_ &&
+      (!ohttp_key ||
+       ohttp_key->expiration <= base::Time::Now() + kRequestMargin)) {
     RequestJoinSetOHTTPKey();
     return;
   }
-  JoinSetCheckTrustTokens();
+  JoinSetCheckTrustTokens(
+      std::move(ohttp_key).value_or(OHTTPKeyAndExpiration{}));
 }
 
 void KAnonymityServiceClient::RequestJoinSetOHTTPKey() {
@@ -238,7 +296,7 @@ void KAnonymityServiceClient::RequestJoinSetOHTTPKey() {
 }
 
 void KAnonymityServiceClient::OnGotJoinSetOHTTPKey(
-    std::unique_ptr<std::string> response) {
+    std::optional<std::string> response) {
   join_url_loader_.reset();
   if (!response) {
     RecordJoinSetAction(
@@ -247,20 +305,22 @@ void KAnonymityServiceClient::OnGotJoinSetOHTTPKey(
     return;
   }
 
-  joinset_ohttp_key_with_expiration_ =
-      OHTTPKeyAndExpiration{*response, base::Time::Now() + kKeyCacheDuration};
-  JoinSetCheckTrustTokens();
+  OHTTPKeyAndExpiration ohttp_key{*std::move(response),
+                                  base::Time::Now() + kKeyCacheDuration};
+  storage_->UpdateOHTTPKeyFor(join_origin_, ohttp_key);
+  JoinSetCheckTrustTokens(std::move(ohttp_key));
 }
 
-void KAnonymityServiceClient::JoinSetCheckTrustTokens() {
+void KAnonymityServiceClient::JoinSetCheckTrustTokens(
+    OHTTPKeyAndExpiration ohttp_key) {
   token_getter_.TryGetTrustTokenAndKey(
       base::BindOnce(&KAnonymityServiceClient::OnMaybeHasTrustTokens,
-                     weak_ptr_factory_.GetWeakPtr()));
+                     weak_ptr_factory_.GetWeakPtr(), std::move(ohttp_key)));
 }
 
 void KAnonymityServiceClient::OnMaybeHasTrustTokens(
-    absl::optional<KAnonymityTrustTokenGetter::KeyAndNonUniqueUserId>
-        maybe_key_and_id) {
+    OHTTPKeyAndExpiration ohttp_key,
+    std::optional<KeyAndNonUniqueUserId> maybe_key_and_id) {
   if (!maybe_key_and_id) {
     FailJoinSetRequests();
     return;
@@ -272,23 +332,23 @@ void KAnonymityServiceClient::OnMaybeHasTrustTokens(
   }
   // Once we know we have a trust token and have the OHTTP key we can send the
   // request.
-  JoinSetSendRequest(std::move(*maybe_key_and_id));
+  JoinSetSendRequest(std::move(ohttp_key), std::move(*maybe_key_and_id));
 }
 
 void KAnonymityServiceClient::JoinSetSendRequest(
-    KAnonymityTrustTokenGetter::KeyAndNonUniqueUserId key_and_id) {
+    OHTTPKeyAndExpiration ohttp_key,
+    KeyAndNonUniqueUserId key_and_id) {
   RecordJoinSetAction(KAnonymityServiceJoinSetAction::kSendJoinSetRequest);
-  std::string hashed_id = crypto::SHA256HashString(join_queue_.front()->id);
   std::string encoded_id;
-  base::Base64UrlEncode(hashed_id, base::Base64UrlEncodePolicy::OMIT_PADDING,
-                        &encoded_id);
+  base::Base64UrlEncode(join_queue_.front()->id,
+                        base::Base64UrlEncodePolicy::OMIT_PADDING, &encoded_id);
 
   network::mojom::ObliviousHttpRequestPtr request =
       network::mojom::ObliviousHttpRequest::New();
   request->relay_url = GURL(features::kKAnonymityServiceJoinRelayServer.Get());
   request->traffic_annotation = net::MutableNetworkTrafficAnnotationTag(
       kKAnonymityServiceJoinSetTrafficAnnotation);
-  request->key_config = joinset_ohttp_key_with_expiration_.key;
+  request->key_config = ohttp_key.key;
 
   request->resource_url = join_origin_.GetURL().Resolve(
       base::StringPrintf(kJoinSetPathFmt, kKAnonType, encoded_id.c_str(),
@@ -302,6 +362,12 @@ void KAnonymityServiceClient::JoinSetSendRequest(
   request->request_body = network::mojom::ObliviousHttpRequestBody::New(
       payload, /*content_type=*/"application/json");
 
+  // Add padding to reduce the exposure through traffic analysis.
+  request->padding_params =
+      network::mojom::ObliviousHttpPaddingParameters::New();
+  request->padding_params->add_exponential_pad = false;
+  request->padding_params->pad_to_next_power_of_two = true;
+
   // We want to send the redemption request to the join_origin, but the tokens
   // are scoped to auth_origin. That means we need to specify auth_origin as the
   // issuer.
@@ -309,7 +375,7 @@ void KAnonymityServiceClient::JoinSetSendRequest(
       url::Origin::Create(GURL(features::kKAnonymityServiceAuthServer.Get()));
   network::mojom::TrustTokenParamsPtr params =
       network::mojom::TrustTokenParams::New();
-  params->type = network::mojom::TrustTokenOperationType::kRedemption;
+  params->operation = network::mojom::TrustTokenOperationType::kRedemption;
   params->refresh_policy = network::mojom::TrustTokenRefreshPolicy::kRefresh;
   params->custom_key_commitment = key_and_id.key_commitment;
   params->custom_issuer = auth_origin;
@@ -330,7 +396,7 @@ void KAnonymityServiceClient::JoinSetSendRequest(
 }
 
 void KAnonymityServiceClient::JoinSetOnGotResponse(
-    const absl::optional<std::string>& response,
+    const std::optional<std::string>& response,
     int error_code) {
   if (error_code != net::OK) {
     // If failure was because we didn't have the trust token (it was used before
@@ -338,7 +404,9 @@ void KAnonymityServiceClient::JoinSetOnGotResponse(
     // this error implies that the server is not overloaded.
     if (error_code == net::ERR_TRUST_TOKEN_OPERATION_FAILED &&
         join_queue_.front()->retries++ < kMaxRetries) {
-      JoinSetCheckTrustTokens();
+      // Retry from checking the OHTTP Key. This will also get a trust token and
+      // send the request again.
+      JoinSetCheckOHTTPKey();
       return;
     }
     RecordJoinSetAction(KAnonymityServiceJoinSetAction::kJoinSetRequestFailed);
@@ -377,6 +445,12 @@ void KAnonymityServiceClient::DoJoinSetCallback(bool status) {
 void KAnonymityServiceClient::QuerySets(
     std::vector<std::string> set_ids,
     base::OnceCallback<void(std::vector<bool>)> callback) {
+  if (!CanUseKAnonymityService(profile_)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::vector<bool>()));
+    return;
+  }
+
   RecordQuerySetAction(KAnonymityServiceQuerySetAction::kQuerySet);
   RecordQuerySetSize(set_ids.size());
 
@@ -402,16 +476,30 @@ void KAnonymityServiceClient::QuerySets(
   // We only process one query at a time for simplicity.
   if (query_queue_.size() > 1)
     return;
+
+  storage_->WaitUntilReady(
+      base::BindOnce(&KAnonymityServiceClient::QuerySetsOnStorageReady,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void KAnonymityServiceClient::QuerySetsOnStorageReady(
+    KAnonymityServiceStorage::InitStatus status) {
+  if (status != KAnonymityServiceStorage::InitStatus::kInitOk) {
+    FailQuerySetsRequests();
+    return;
+  }
   QuerySetsCheckOHTTPKey();
 }
 
 void KAnonymityServiceClient::QuerySetsCheckOHTTPKey() {
-  if (queryset_ohttp_key_with_expiration_.expiration <=
-      base::Time::Now() + kRequestMargin) {
+  std::optional<OHTTPKeyAndExpiration> ohttp_key =
+      storage_->GetOHTTPKeyFor(query_origin_);
+  if (!ohttp_key ||
+      ohttp_key->expiration <= base::Time::Now() + kRequestMargin) {
     RequestQuerySetOHTTPKey();
     return;
   }
-  QuerySetsSendRequest();
+  QuerySetsSendRequest(std::move(ohttp_key.value()));
 }
 
 void KAnonymityServiceClient::RequestQuerySetOHTTPKey() {
@@ -436,7 +524,7 @@ void KAnonymityServiceClient::RequestQuerySetOHTTPKey() {
 }
 
 void KAnonymityServiceClient::OnGotQuerySetOHTTPKey(
-    std::unique_ptr<std::string> response) {
+    std::optional<std::string> response) {
   query_url_loader_.reset();
   if (!response) {
     RecordQuerySetAction(
@@ -444,13 +532,14 @@ void KAnonymityServiceClient::OnGotQuerySetOHTTPKey(
     FailQuerySetsRequests();
     return;
   }
-
-  queryset_ohttp_key_with_expiration_ =
-      OHTTPKeyAndExpiration{*response, base::Time::Now() + kKeyCacheDuration};
-  QuerySetsSendRequest();
+  OHTTPKeyAndExpiration ohttp_key{*std::move(response),
+                                  base::Time::Now() + kKeyCacheDuration};
+  storage_->UpdateOHTTPKeyFor(query_origin_, ohttp_key);
+  QuerySetsSendRequest(std::move(ohttp_key));
 }
 
-void KAnonymityServiceClient::QuerySetsSendRequest() {
+void KAnonymityServiceClient::QuerySetsSendRequest(
+    OHTTPKeyAndExpiration ohttp_key) {
   DCHECK(!query_url_loader_);
   RecordQuerySetAction(KAnonymityServiceQuerySetAction::kSendQuerySetRequest);
 
@@ -463,10 +552,7 @@ void KAnonymityServiceClient::QuerySetsSendRequest() {
 
   base::Value::List request_hashes;
   for (const auto& id : query_queue_.front()->ids) {
-    std::string hashed_id = crypto::SHA256HashString(id);
-    std::string encoded_name;
-    base::Base64Encode(hashed_id, &encoded_name);
-    request_hashes.Append(encoded_name);
+    request_hashes.Append(base::Base64Encode(id));
   }
   base::Value::Dict sets_for_type;
   sets_for_type.Set("type", kKAnonType);
@@ -478,15 +564,14 @@ void KAnonymityServiceClient::QuerySetsSendRequest() {
   base::Value::Dict request_dict;
   request_dict.Set("setsForType", std::move(types));
 
-  std::string request_body;
-  base::JSONWriter::Write(request_dict, &request_body);
+  std::string request_body = base::WriteJson(request_dict).value_or("");
 
   network::mojom::ObliviousHttpRequestPtr request =
       network::mojom::ObliviousHttpRequest::New();
   request->relay_url = GURL(features::kKAnonymityServiceQueryRelayServer.Get());
   request->traffic_annotation = net::MutableNetworkTrafficAnnotationTag(
       kKAnonymityServiceQuerySetTrafficAnnotation);
-  request->key_config = queryset_ohttp_key_with_expiration_.key;
+  request->key_config = ohttp_key.key;
 
   request->resource_url = query_origin_.GetURL().Resolve(
       base::StrCat({kQuerySetsPath, google_apis::GetAPIKey()}));
@@ -494,6 +579,12 @@ void KAnonymityServiceClient::QuerySetsSendRequest() {
 
   request->request_body = network::mojom::ObliviousHttpRequestBody::New(
       request_body, /*content_type=*/"application/json");
+
+  // Add padding to reduce the exposure through traffic analysis.
+  request->padding_params =
+      network::mojom::ObliviousHttpPaddingParameters::New();
+  request->padding_params->add_exponential_pad = false;
+  request->padding_params->pad_to_next_power_of_two = true;
 
   mojo::PendingReceiver<network::mojom::ObliviousHttpClient> pending_receiver;
   profile_->GetDefaultStoragePartition()
@@ -508,7 +599,7 @@ void KAnonymityServiceClient::QuerySetsSendRequest() {
 }
 
 void KAnonymityServiceClient::QuerySetsOnGotResponse(
-    const absl::optional<std::string>& response,
+    const std::optional<std::string>& response,
     int error_code) {
   if (error_code != net::OK) {
     RecordQuerySetAction(
@@ -602,8 +693,7 @@ void KAnonymityServiceClient::QuerySetsOnParsedResponse(
   std::vector<bool> output;
   output.reserve(query_queue_.front()->ids.size());
   for (const auto& id : query_queue_.front()->ids) {
-    std::string hashed_id = crypto::SHA256HashString(id);
-    output.push_back(k_anon_set.contains(hashed_id));
+    output.push_back(k_anon_set.contains(id));
   }
 
   // Only record latency for successful requests.

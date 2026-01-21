@@ -9,13 +9,12 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "media/base/android/android_util.h"
 #include "media/base/android/media_codec_bridge.h"
 #include "media/base/android/media_codec_bridge_impl.h"
 #include "media/gpu/media_gpu_export.h"

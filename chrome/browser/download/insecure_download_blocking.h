@@ -13,27 +13,31 @@
 // Each download is recorded with two histograms.
 // This histogram always summarizes the type of download. See
 // InsecureDownloadSecurityStatus.
-const char* const kInsecureDownloadHistogramName =
+inline constexpr char kInsecureDownloadHistogramName[] =
     "Download.InsecureBlocking.Totals";
 // Base name (prefix) for histogram recording the file extension of the
 // download. One histogram is recorded per download. See
 // InsecureDownloadExtensions for file extensions recorded.
-const char* const kInsecureDownloadExtensionHistogramBase =
+inline constexpr char kInsecureDownloadExtensionHistogramBase[] =
     "Download.InsecureBlocking.Extensions";
 // Interfixes for histogram names.
-const char* const kInsecureDownloadExtensionInitiatorUnknown =
+inline constexpr char kInsecureDownloadExtensionInitiatorUnknown[] =
     "InitiatorUnknown";
-const char* const kInsecureDownloadExtensionInitiatorSecure =
+inline constexpr char kInsecureDownloadExtensionInitiatorSecure[] =
     "InitiatorKnownSecure";
-const char* const kInsecureDownloadExtensionInitiatorInsecure =
+inline constexpr char kInsecureDownloadExtensionInitiatorInsecure[] =
     "InitiatorKnownInsecure";
-const char* const kInsecureDownloadExtensionInitiatorInferredSecure =
+inline constexpr char kInsecureDownloadExtensionInitiatorInferredSecure[] =
     "InitiatorInferredSecure";
-const char* const kInsecureDownloadExtensionInitiatorInferredInsecure =
+inline constexpr char kInsecureDownloadExtensionInitiatorInferredInsecure[] =
     "InitiatorInferredInsecure";
+inline constexpr char kInsecureDownloadExtensionInitiatorInsecureNonUnique[] =
+    "InitiatorInsecureNonUnique";
 // Suffixes for histogram names.
-const char* const kInsecureDownloadHistogramTargetSecure = "DownloadSecure";
-const char* const kInsecureDownloadHistogramTargetInsecure = "DownloadInsecure";
+inline constexpr char kInsecureDownloadHistogramTargetSecure[] =
+    "DownloadSecure";
+inline constexpr char kInsecureDownloadHistogramTargetInsecure[] =
+    "DownloadInsecure";
 
 // These values are logged to UMA. Entries should not be renumbered and numeric
 // values should never be reused.  Please keep in sync with
@@ -50,7 +54,9 @@ enum class InsecureDownloadSecurityStatus {
   kInitiatorInferredInsecureFileSecure = 8,
   kInitiatorInferredInsecureFileInsecure = 9,
   kDownloadIgnored = 10,
-  kMaxValue = kDownloadIgnored,
+  kInitiatorInsecureNonUniqueFileSecure = 11,
+  kInitiatorInsecureNonUniqueFileInsecure = 12,
+  kMaxValue = kInitiatorInsecureNonUniqueFileInsecure,
 };
 
 // These values are logged to UMA. Entries should not be renumbered and numeric

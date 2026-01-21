@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {$} from 'chrome://resources/js/util_ts.js';
+import {$} from 'chrome://resources/js/util.js';
 
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {millisecondsToString} from './util.js';
+import '/strings.m.js';
+
 
 /**
  * CSS classes added / removed in JS to trigger styling changes.
@@ -14,7 +17,9 @@ const ClientRendererCss = {
   NO_PLAYERS_SELECTED: 'no-players-selected',
   NO_COMPONENTS_SELECTED: 'no-components-selected',
   SELECTABLE_BUTTON: 'selectable-button',
-  DESTRUCTED_PLAYER: 'destructed-player',
+  ERRORED_PLAYER: 'errored-player',
+  ENDED_PLAYER: 'ended-player',
+  ACTIVE_PLAYER: 'active-player',
 };
 
 function removeChildren(element) {
@@ -24,29 +29,31 @@ function removeChildren(element) {
 }
 
 function createSelectableButton(
-    id, groupName, buttonLabel, select_cb, isDestructed) {
+    id, groupName, buttonLabel, selectCb, playerState) {
   // For CSS styling.
-  var radioButton = document.createElement('input');
+  const radioButton = document.createElement('input');
   radioButton.classList.add(ClientRendererCss.SELECTABLE_BUTTON);
   radioButton.type = 'radio';
   radioButton.id = id;
   radioButton.name = groupName;
 
   buttonLabel.classList.add(ClientRendererCss.SELECTABLE_BUTTON);
-  if (isDestructed) {
-    buttonLabel.classList.add(ClientRendererCss.DESTRUCTED_PLAYER);
+  if (playerState === 'errored') {
+    buttonLabel.classList.add(ClientRendererCss.ERRORED_PLAYER);
+  } else if (playerState === 'ended') {
+    buttonLabel.classList.add(ClientRendererCss.ENDED_PLAYER);
+  } else {
+    buttonLabel.classList.add(ClientRendererCss.ACTIVE_PLAYER);
   }
   buttonLabel.setAttribute('for', radioButton.id);
 
-  var fragment = document.createDocumentFragment();
+  const fragment = document.createDocumentFragment();
   fragment.appendChild(radioButton);
   fragment.appendChild(buttonLabel);
 
   // Listen to 'change' rather than 'click' to keep styling in sync with
   // button behavior.
-  radioButton.addEventListener('change', function() {
-    select_cb();
-  });
+  radioButton.addEventListener('change', selectCb);
 
   return fragment;
 }
@@ -54,7 +61,7 @@ function createSelectableButton(
 function selectSelectableButton(id) {
   // |id| is usually not a valid selector for querySelector so we cannot use $
   // here.
-  var element = document.getElementById(id);
+  const element = document.getElementById(id);
   if (!element) {
     console.error('failed to select button with id: ' + id);
     return;
@@ -64,8 +71,8 @@ function selectSelectableButton(id) {
 }
 
 function downloadLog(text) {
-  var file = new Blob([text], {type: 'text/plain'});
-  var a = document.createElement('a');
+  const file = new Blob([text], {type: 'text/plain'});
+  const a = document.createElement('a');
   a.href = URL.createObjectURL(file);
   a.download = 'media-internals.txt';
   a.click();
@@ -74,15 +81,15 @@ function downloadLog(text) {
 export class ClientRenderer {
   constructor() {
     this.playerListElement = $('player-list');
-    var audioTableElement = $('audio-property-table');
+    const audioTableElement = $('audio-property-table');
     if (audioTableElement) {
       this.audioPropertiesTable = audioTableElement.querySelector('tbody');
     }
-    var playerTableElement = $('player-property-table');
+    const playerTableElement = $('player-property-table');
     if (playerTableElement) {
       this.playerPropertiesTable = playerTableElement.querySelector('tbody');
     }
-    var logElement = $('log');
+    const logElement = $('log');
     if (logElement) {
       this.logTable = logElement.querySelector('tbody');
     }
@@ -90,7 +97,7 @@ export class ClientRenderer {
     this.audioPropertyName = $('audio-property-name');
     this.audioFocusSessionListElement_ = $('audio-focus-session-list');
     this.cdmListElement_ =  $('cdm-list');
-    var generalAudioInformationTableElement = $('general-audio-info-table');
+    const generalAudioInformationTableElement = $('general-audio-info-table');
     if (generalAudioInformationTableElement) {
       this.generalAudioInformationTable =
           generalAudioInformationTableElement.querySelector('tbody');
@@ -111,26 +118,10 @@ export class ClientRenderer {
     if (this.filterText) {
       this.filterText.onkeyup = this.onTextChange_.bind(this);
     }
-    this.clipboardDialog = $('clipboard-dialog');
 
-    this.clipboardTextarea = $('clipboard-textarea');
-    if (this.clipboardTextarea) {
-      this.clipboardTextarea.onblur = this.hideClipboard_.bind(this);
-    }
-
-    var copyPropertiesButtons =
-        document.getElementsByClassName('copy-properties-button');
-    if (copyPropertiesButtons) {
-      for (var i = 0; i < copyPropertiesButtons.length; i++) {
-        copyPropertiesButtons[i].onclick = this.copyProperties_.bind(this);
-      }
-    }
-
-    var copyLogButtons = document.getElementsByClassName('copy-log-button');
-    if (copyLogButtons) {
-      for (var i = 0; i < copyLogButtons.length; i++) {
-        copyLogButtons[i].onclick = this.copyLog_.bind(this);
-      }
+    this.copyLogButton = $('copy-log-button');
+    if (this.copyLogButton) {
+      this.copyLogButton.onclick = this.copyLog_.bind(this);
     }
 
     this.saveLogButton = $('save-log-button');
@@ -138,11 +129,31 @@ export class ClientRenderer {
       this.saveLogButton.onclick = this.saveLog_.bind(this);
     }
 
-    this.hiddenKeys = ['component_id', 'component_type', 'owner_id'];
+    this.closePlayerViewButton = $('close-player-view-button');
+    if (this.closePlayerViewButton) {
+      this.closePlayerViewButton.onclick = () => {
+        $('main-container').classList.remove('mobile-player-view-active');
+        document.body.classList.add(ClientRendererCss.NO_PLAYERS_SELECTED);
+        if (this.selectedPlayer) {
+          const element = this.playerListElement.querySelector(
+              `.tree-item[data-id="${this.selectedPlayer.id}"]`);
+          if (element) {
+            element.classList.remove('selected');
+          }
+          this.selectedPlayer = null;
+          const titleElement = $('player-details-title');
+          if (titleElement) {
+            titleElement.textContent = 'Player Properties';
+            titleElement.title = '';
+          }
+        }
+      };
+    }
 
-    // Tell CSS to hide certain content prior to making selections.
+    this.hiddenKeys = ['component_id', 'component_type', 'owner_id'];
+    this.revision = loadTimeData.getString('revision');
+
     document.body.classList.add(ClientRendererCss.NO_PLAYERS_SELECTED);
-    document.body.classList.add(ClientRendererCss.NO_COMPONENTS_SELECTED);
   }
 
   /**
@@ -231,6 +242,12 @@ export class ClientRenderer {
       removeChildren(this.logTable);
       removeChildren(this.graphElement);
       document.body.classList.add(ClientRendererCss.NO_PLAYERS_SELECTED);
+      this.selectedPlayer = null;
+      const titleElement = $('player-details-title');
+      if (titleElement) {
+        titleElement.textContent = 'Player Properties';
+        titleElement.title = '';
+      }
     }
     this.redrawPlayerList_(players);
   }
@@ -247,8 +264,12 @@ export class ClientRenderer {
       this.drawProperties_(player.properties, this.playerPropertiesTable);
       this.drawLog_();
     }
-    if (key === 'event' && value === 'WEBMEDIAPLAYER_DESTROYED') {
-      player.destructed = true;
+    if (key === 'error') {
+      player.playerState = 'errored';
+    } else if (
+        key === 'event' && value === 'kWebMediaPlayerDestroyed' &&
+        player.playerState !== 'errored') {
+      player.playerState = 'ended';
     }
     if ([
           'url',
@@ -259,6 +280,7 @@ export class ClientRenderer {
           'width',
           'height',
           'event',
+          'error',
         ].includes(key)) {
       this.redrawPlayerList_(players);
     }
@@ -269,21 +291,21 @@ export class ClientRenderer {
       return document.createTextNode('No formats');
     }
 
-    var table = document.createElement('table');
-    var thead = document.createElement('thead');
-    var theadRow = document.createElement('tr');
-    for (var key in formats[0]) {
-      var th = document.createElement('th');
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const theadRow = document.createElement('tr');
+    for (const key in formats[0]) {
+      const th = document.createElement('th');
       th.appendChild(document.createTextNode(key));
       theadRow.appendChild(th);
     }
     thead.appendChild(theadRow);
     table.appendChild(thead);
-    var tbody = document.createElement('tbody');
-    for (var i = 0; i < formats.length; ++i) {
-      var tr = document.createElement('tr');
-      for (var key in formats[i]) {
-        var td = document.createElement('td');
+    const tbody = document.createElement('tbody');
+    for (let i = 0; i < formats.length; ++i) {
+      const tr = document.createElement('tr');
+      for (const key in formats[i]) {
+        const td = document.createElement('td');
         td.appendChild(document.createTextNode(formats[i][key]));
         tr.appendChild(td);
       }
@@ -295,21 +317,21 @@ export class ClientRenderer {
   }
 
   redrawVideoCaptureCapabilities(videoCaptureCapabilities, keys) {
-    var copyButtonElement = $('video-capture-capabilities-copy-button');
+    const copyButtonElement = $('video-capture-capabilities-copy-button');
     copyButtonElement.onclick = function() {
-      this.showClipboard(JSON.stringify(videoCaptureCapabilities, null, 2));
+      this.renderClipboard(JSON.stringify(videoCaptureCapabilities, null, 2));
     }.bind(this);
 
-    var videoTableBodyElement = $('video-capture-capabilities-tbody');
+    const videoTableBodyElement = $('video-capture-capabilities-tbody');
     removeChildren(videoTableBodyElement);
 
-    for (var component in videoCaptureCapabilities) {
-      var tableRow = document.createElement('tr');
-      var device = videoCaptureCapabilities[component];
-      for (var i in keys) {
-        var value = device[keys[i]];
-        var tableCell = document.createElement('td');
-        var cellElement;
+    for (const component in videoCaptureCapabilities) {
+      const tableRow = document.createElement('tr');
+      const device = videoCaptureCapabilities[component];
+      for (const i in keys) {
+        const value = device[keys[i]];
+        const tableCell = document.createElement('td');
+        let cellElement;
         if ((typeof value) === (typeof[])) {
           cellElement = this.createVideoCaptureFormatTable(value);
         } else {
@@ -324,7 +346,7 @@ export class ClientRenderer {
   }
 
   getAudioComponentName_(componentType, id) {
-    var baseName;
+    let baseName;
     switch (componentType) {
       case 0:
       case 1:
@@ -342,7 +364,7 @@ export class ClientRenderer {
   }
 
   getListElementForAudioComponent_(componentType) {
-    var listElement;
+    let listElement;
     switch (componentType) {
       case 0:
         listElement = $('audio-input-controller-list');
@@ -362,28 +384,38 @@ export class ClientRenderer {
   }
 
   redrawAudioComponentList_(componentType, components) {
-    // Group name imposes rule that only one component can be selected
-    // (and have its properties displayed) at a time.
-    var buttonGroupName = 'audio-components';
-
-    var listElement = this.getListElementForAudioComponent_(componentType);
+    const listElement = this.getListElementForAudioComponent_(componentType);
     if (!listElement) {
       console.error(
           'Failed to find list element for component type: ' + componentType);
       return;
     }
 
-    var fragment = document.createDocumentFragment();
-    for (var id in components) {
-      var li = document.createElement('li');
-      var buttonCb = this.selectAudioComponent_.bind(
-          this, componentType, id, components[id]);
-      var friendlyName = this.getAudioComponentName_(componentType, id);
-      var label = document.createElement('label');
-      label.appendChild(document.createTextNode(friendlyName));
-      li.appendChild(
-          createSelectableButton(id, buttonGroupName, label, buttonCb));
-      fragment.appendChild(li);
+    const fragment = document.createDocumentFragment();
+    for (const id in components) {
+      const component = components[id];
+
+      const treeItem = document.createElement('div');
+      treeItem.classList.add('tree-item');
+      treeItem.dataset.id = id;
+      treeItem.classList.add(ClientRendererCss.ACTIVE_PLAYER);
+
+      const treeItemHeader = document.createElement('div');
+      treeItemHeader.classList.add('tree-item-header');
+      treeItemHeader.textContent =
+          this.getAudioComponentName_(componentType, id);
+      treeItem.appendChild(treeItemHeader);
+
+      const children = document.createElement('div');
+      children.classList.add('tree-item-children');
+      treeItem.appendChild(children);
+
+      treeItemHeader.addEventListener('click', (e) => {
+        treeItem.classList.toggle('expanded');
+        this.selectAudioComponent_(componentType, id, component);
+      });
+
+      fragment.appendChild(treeItem);
     }
     removeChildren(listElement);
     listElement.appendChild(fragment);
@@ -392,12 +424,32 @@ export class ClientRenderer {
         this.selectedAudioComponentType === componentType &&
         this.selectedAudioComponentId in components) {
       // Re-select the selected component since the button was just recreated.
-      selectSelectableButton(this.selectedAudioComponentId);
+      const element = listElement.querySelector(
+          `.tree-item[data-id="${this.selectedAudioComponentId}"]`);
+      if (element) {
+        element.classList.add('selected');
+      }
     }
   }
 
   selectAudioComponent_(componentType, componentId, componentData) {
-    document.body.classList.remove(ClientRendererCss.NO_COMPONENTS_SELECTED);
+    const audioWrapper = $('audio-component-list-wrapper');
+    if (audioWrapper) {
+      const previouslySelected =
+          audioWrapper.querySelector('.tree-item.selected');
+      if (previouslySelected) {
+        previouslySelected.classList.remove('selected');
+      }
+    }
+
+    const listElement = this.getListElementForAudioComponent_(componentType);
+    if (listElement) {
+      const element =
+          listElement.querySelector(`.tree-item[data-id="${componentId}"]`);
+      if (element) {
+        element.classList.add('selected');
+      }
+    }
 
     this.selectedAudioComponentType = componentType;
     this.selectedAudioComponentId = componentId;
@@ -412,82 +464,96 @@ export class ClientRenderer {
   redrawPlayerList_(players) {
     this.players = players;
 
-    // Group name imposes rule that only one component can be selected
-    // (and have its properties displayed) at a time.
-    var buttonGroupName = 'player-buttons';
+    const fragment = document.createDocumentFragment();
+    for (const id in players) {
+      const player = players[id];
+      const p = player.properties;
 
-    var hasPlayers = false;
-    var fragment = document.createDocumentFragment();
-    for (var id in players) {
-      hasPlayers = true;
-      var player = players[id];
-      var p = player.properties;
-      var label = document.createElement('label');
+      const treeItem = document.createElement('div');
+      treeItem.classList.add('tree-item');
+      if (player.playerState === 'errored') {
+        treeItem.classList.add(ClientRendererCss.ERRORED_PLAYER);
+      } else if (player.playerState === 'ended') {
+        treeItem.classList.add(ClientRendererCss.ENDED_PLAYER);
+      } else {
+        treeItem.classList.add(ClientRendererCss.ACTIVE_PLAYER);
+      }
+      treeItem.dataset.id = id;
 
-      var nameText = p.url || 'Player ' + player.id;
-      var nameNode = document.createElement('div');
-      nameNode.appendChild(document.createTextNode(nameText));
-      nameNode.className = 'player-name';
-      label.appendChild(nameNode);
+      const treeItemHeader = document.createElement('div');
+      treeItemHeader.classList.add('tree-item-header');
+      treeItemHeader.classList.add('selectable-button');
 
-      var frame = [];
-      if (p.frame_title) {
-        frame.push(p.frame_title);
+      const playerName = document.createElement('div');
+      playerName.classList.add('player-name');
+      const url = p.url || 'Player ' + player.id;
+      if (url.length > 64) {
+        playerName.textContent = url.substring(0, 61) + '...';
+      } else {
+        playerName.textContent = url;
       }
-      if (p.frame_url) {
-        frame.push(p.frame_url);
-      }
-      var frameText = frame.join(' - ');
-      if (frameText) {
-        var frameNode = document.createElement('div');
-        frameNode.className = 'player-frame';
-        frameNode.appendChild(document.createTextNode(frameText));
-        label.appendChild(frameNode);
-      }
+      playerName.title = url;
+      treeItemHeader.appendChild(playerName);
 
-      var desc = [];
-      if (p.width && p.height) {
-        desc.push(p.width + 'x' + p.height);
-      }
-      if (p.video_codec_name) {
-        desc.push(p.video_codec_name);
-      }
-      if (p.video_codec_name && p.audio_codec_name) {
-        desc.push('+');
-      }
-      if (p.audio_codec_name) {
-        desc.push(p.audio_codec_name);
-      }
-      if (p.event) {
-        desc.push('(' + p.event + ')');
-      }
-      var descText = desc.join(' ');
-      if (descText) {
-        var descNode = document.createElement('div');
-        descNode.className = 'player-desc';
-        descNode.appendChild(document.createTextNode(descText));
-        label.appendChild(descNode);
+      let lastEvent = '';
+      for (let i = player.allEvents.length - 1; i >= 0; i--) {
+        if (player.allEvents[i].key === 'event') {
+          lastEvent = player.allEvents[i].value;
+          break;
+        }
       }
 
-      var li = document.createElement('li');
-      var buttonCb = this.selectPlayer_.bind(this, player);
-      li.appendChild(createSelectableButton(
-          id, buttonGroupName, label, buttonCb, player.destructed));
-      fragment.appendChild(li);
+      if (lastEvent) {
+        const playerFrame = document.createElement('div');
+        playerFrame.classList.add('player-frame');
+        playerFrame.textContent =
+            lastEvent === 'kWebMediaPlayerDestroyed' ? 'Destroyed' : lastEvent;
+        treeItemHeader.appendChild(playerFrame);
+      }
+      treeItem.appendChild(treeItemHeader);
+
+      const children = document.createElement('div');
+      children.classList.add('tree-item-children');
+      treeItem.appendChild(children);
+
+      treeItemHeader.addEventListener('click', (e) => {
+        treeItem.classList.toggle('expanded');
+        this.selectPlayer_(player);
+      });
+
+      fragment.appendChild(treeItem);
     }
     removeChildren(this.playerListElement);
     this.playerListElement.appendChild(fragment);
 
     if (this.selectedPlayer && this.selectedPlayer.id in players) {
       // Re-select the selected player since the button was just recreated.
-      selectSelectableButton(this.selectedPlayer.id);
+      const element = this.playerListElement.querySelector(
+          `.tree-item[data-id="${this.selectedPlayer.id}"]`);
+      if (element) {
+        element.classList.add('selected');
+      }
     }
-
-    this.saveLogButton.style.display = hasPlayers ? 'inline-block' : 'none';
   }
 
   selectPlayer_(player) {
+    if (window.innerWidth <= 768) {
+      $('main-container').classList.add('mobile-player-view-active');
+    }
+
     document.body.classList.remove(ClientRendererCss.NO_PLAYERS_SELECTED);
+
+    const previouslySelected =
+        this.playerListElement.querySelector('.tree-item.selected');
+    if (previouslySelected) {
+      previouslySelected.classList.remove('selected');
+    }
+
+    const element = this.playerListElement.querySelector(
+        `.tree-item[data-id="${player.id}"]`);
+    if (element) {
+      element.classList.add('selected');
+    }
 
     this.selectedPlayer = player;
     this.selectedPlayerLogIndex = 0;
@@ -499,52 +565,126 @@ export class ClientRenderer {
     removeChildren(this.logTable);
     removeChildren(this.graphElement);
     this.drawLog_();
+
+    const titleElement = $('player-details-title');
+    if (titleElement) {
+      const playerName = player.properties.url || 'Player ' + player.id;
+      titleElement.textContent = playerName;
+      titleElement.title = playerName;
+    }
   }
 
   drawProperties_(propertyMap, propertiesTable) {
     removeChildren(propertiesTable);
-    var sortedKeys = Object.keys(propertyMap).sort();
-    for (var i = 0; i < sortedKeys.length; ++i) {
-      var key = sortedKeys[i];
+    const sortedKeys = Object.keys(propertyMap).sort();
+    for (let i = 0; i < sortedKeys.length; ++i) {
+      const key = sortedKeys[i];
       if (this.hiddenKeys.indexOf(key) >= 0) {
         continue;
       }
 
-      var value = propertyMap[key];
-      var row = propertiesTable.insertRow(-1);
-      var keyCell = row.insertCell(-1);
-      var valueCell = row.insertCell(-1);
+      const value = propertyMap[key];
+      const row = propertiesTable.insertRow(-1);
+      const keyCell = row.insertCell(-1);
+      const valueCell = row.insertCell(-1);
 
       keyCell.appendChild(document.createTextNode(key));
-      valueCell.appendChild(document.createTextNode(JSON.stringify(value)));
+      valueCell.appendChild(this.createValueCellContent_(key, value));
+    }
+  }
+
+  applyCodeSearchLinkage_(status_obj) {
+    if (status_obj.hasOwnProperty('stack')) {
+      status_obj['stack'] = status_obj['stack'].map(e => {
+        if (typeof(e) === 'string') return e;
+        return '~{' + e['file'] + '%' + e['line'] + '}~';
+      });
+    }
+    if (status_obj.hasOwnProperty('cause')) {
+      status_obj['cause'] = this.applyCodeSearchLinkage_(status_obj['cause']);
+    }
+    return status_obj;
+  }
+
+  createValueCellContent_(key, value) {
+    // This is a bit of a hack, but it's the only way to get the stack trace
+    // to link to the code search.
+    const urlPrefix = 'https://source.chromium.org/chromium/chromium/src/+/main:';
+
+    const re = new RegExp('~{([^%]*)%([0-9]+)}~', 'g');
+    try {
+      if (key === 'kHlsBufferedRanges') {
+        return document.createTextNode(JSON.stringify(value));
+      }
+      const pre = document.createElement('pre');
+      const text = JSON.stringify(this.applyCodeSearchLinkage_(value), null, 2);
+      let lastIndex = 0;
+      for (const match of text.matchAll(re)) {
+        if (match.index > lastIndex) {
+          pre.appendChild(
+              document.createTextNode(text.substring(lastIndex, match.index)));
+        }
+        const a = document.createElement('a');
+        a.href = urlPrefix + match[1] + ';l=' + match[2];
+
+        // Building locally gives a commit hash of 80 zeros separated in the
+        // middle by a dash.
+        if (!this.revision.startsWith('0000000')) {
+          a.href += ';drc=' + this.revision;
+        }
+
+        a.textContent = match[1] + '#' + match[2];
+        a.target = '_blank';
+        a.rel = 'noopener';
+        pre.appendChild(a);
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < text.length) {
+        pre.appendChild(document.createTextNode(text.substring(lastIndex)));
+      }
+      return pre;
+    } catch (e) {
+      return document.createTextNode(JSON.stringify(value));
     }
   }
 
   appendEventToLog_(event) {
     if (this.filterFunction(event.key)) {
-      var row = this.logTable.insertRow(-1);
+      const row = this.logTable.insertRow(-1);
+      row.classList.add('log-entry');
 
-      var timestampCell = row.insertCell(-1);
-      timestampCell.classList.add('timestamp');
-      timestampCell.appendChild(
-          document.createTextNode(millisecondsToString(event.time)));
-      row.insertCell(-1).appendChild(document.createTextNode(event.key));
-      row.insertCell(-1).appendChild(
-          document.createTextNode(JSON.stringify(event.value)));
+      const timestampCell = row.insertCell(-1);
+      timestampCell.classList.add('log-timestamp');
+      timestampCell.textContent = millisecondsToString(event.time);
+
+      const propertyCell = row.insertCell(-1);
+      propertyCell.classList.add('log-property');
+      propertyCell.textContent = event.key;
+
+      const valueCell = row.insertCell(-1);
+      valueCell.classList.add('log-value');
+      valueCell.appendChild(
+          this.createValueCellContent_(event.key, event.value));
+
+      if (event.key.toLowerCase().includes('error')) {
+        row.classList.add('log-error');
+      } else if (event.key.toLowerCase().includes('warning')) {
+        row.classList.add('log-warning');
+      }
     }
   }
 
   drawLog_() {
-    var toDraw =
+    const toDraw =
         this.selectedPlayer.allEvents.slice(this.selectedPlayerLogIndex);
     toDraw.forEach(this.appendEventToLog_.bind(this));
     this.selectedPlayerLogIndex = this.selectedPlayer.allEvents.length;
   }
 
   saveLog_() {
-    var strippedPlayers = [];
-    for (var id in this.players) {
-      var p = this.players[id];
+    const strippedPlayers = [];
+    for (const id in this.players) {
+      const p = this.players[id];
       strippedPlayers.push({properties: p.properties, events: p.allEvents});
     }
     downloadLog(JSON.stringify(strippedPlayers, null, 2));
@@ -557,53 +697,25 @@ export class ClientRenderer {
 
     // Copy both properties and events for convenience since both are useful
     // in bug reports.
-    var p = this.selectedPlayer;
-    var playerLog = {properties: p.properties, events: p.allEvents};
+    const p = this.selectedPlayer;
+    const playerLog = {properties: p.properties, events: p.allEvents};
 
-    this.showClipboard(JSON.stringify(playerLog, null, 2));
+    this.renderClipboard(JSON.stringify(playerLog, null, 2));
   }
 
-  showClipboard(string) {
-    this.clipboardTextarea.value = string;
-    this.clipboardDialog.showModal();
-    this.clipboardTextarea.focus();
-    this.clipboardTextarea.select();
-  }
-
-  hideClipboard_() {
-    if (this.clipboardDialog.open) {
-      this.clipboardDialog.close();
-    }
-  }
-
-  copyProperties_() {
-    if (!this.selectedPlayer && !this.selectedAudioCompontentData) {
-      return;
-    }
-    var properties =
-        this.selectedAudioCompontentData || this.selectedPlayer.properties;
-    var stringBuffer = [];
-
-    for (var key in properties) {
-      var value = properties[key];
-      stringBuffer.push(key.toString());
-      stringBuffer.push(': ');
-      stringBuffer.push(value.toString());
-      stringBuffer.push('\n');
-    }
-
-    this.showClipboard(stringBuffer.join(''));
+  renderClipboard(string) {
+    navigator.clipboard.writeText(string);
   }
 
   onTextChange_(event) {
-    var text = this.filterText.value.toLowerCase();
-    var parts = text.split(',')
-                    .map(function(part) {
-                      return part.trim();
-                    })
-                    .filter(function(part) {
-                      return part.trim().length > 0;
-                    });
+    const text = this.filterText.value.toLowerCase();
+    const parts = text.split(',')
+                      .map(function(part) {
+                        return part.trim();
+                      })
+                      .filter(function(part) {
+                        return part.trim().length > 0;
+                      });
 
     this.filterFunction = function(text) {
       text = text.toLowerCase();
@@ -630,14 +742,32 @@ export class ClientRenderer {
 
   createCdmRow_(cdm) {
     const template = $('cdm-row');
-    const span = template.content.querySelectorAll('span');
-    span[0].textContent = 'Key System: ' + cdm.key_system;
-    span[1].textContent = 'Robustness: ' + cdm.robustness;
-    span[2].textContent = 'Name: ' + cdm.name;
-    span[3].textContent = 'Version: ' + cdm.version;
-    span[4].textContent = 'Path: ' + cdm.path;
-    span[5].textContent = 'Status: ' + cdm.status;
-    span[6].textContent = 'Capabilities: ' + JSON.stringify(cdm.capability);
-    return document.importNode(template.content, true);
+    const clone = document.importNode(template.content, true);
+    const tableBody = clone.querySelector('tbody');
+
+
+    const addRow = (key, value) => {
+      const row = tableBody.insertRow(-1);
+      const keyCell = row.insertCell(-1);
+      const valueCell = row.insertCell(-1);
+      keyCell.textContent = key;
+      if (typeof value === 'object') {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(value, null, 2);
+        valueCell.appendChild(pre);
+      } else {
+        valueCell.textContent = value;
+      }
+    };
+
+    addRow('Key System', cdm.key_system);
+    addRow('Robustness', cdm.robustness);
+    addRow('Name', cdm.name);
+    addRow('Version', cdm.version);
+    addRow('Path', cdm.path);
+    addRow('Status', cdm.status);
+    addRow('Capabilities', cdm.capability);
+
+    return clone;
   }
 }

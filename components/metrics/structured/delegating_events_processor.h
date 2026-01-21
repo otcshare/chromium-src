@@ -6,11 +6,17 @@
 #define COMPONENTS_METRICS_STRUCTURED_DELEGATING_EVENTS_PROCESSOR_H_
 
 #include <memory>
+#include <vector>
 
 #include "components/metrics/structured/event.h"
 #include "components/metrics/structured/events_processor_interface.h"
 
 namespace metrics::structured {
+namespace {
+
+using ::metrics::ChromeUserMetricsExtension;
+
+}
 
 // DelegatingEventsProcessor manages a set of other EventsProcessorInterfaces.
 // Calls to this events processor are forwarded to all of the registered events
@@ -27,6 +33,10 @@ class DelegatingEventsProcessor final : public EventsProcessorInterface {
   // EventsProcessor:
   bool ShouldProcessOnEventRecord(const Event& event) override;
   void OnEventsRecord(Event* event) override;
+  void OnEventRecorded(StructuredEventProto* event) override;
+  void OnProvideIndependentMetrics(
+      ChromeUserMetricsExtension* uma_proto) override;
+  void OnProfileAdded(const base::FilePath& path) override;
 
  private:
   std::vector<std::unique_ptr<EventsProcessorInterface>> events_processors_;

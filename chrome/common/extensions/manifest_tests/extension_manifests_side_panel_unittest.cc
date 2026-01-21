@@ -2,13 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/common/extensions/api/side_panel/side_panel_info.h"
+#include <memory>
 
+#include "base/files/scoped_temp_dir.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/values_test_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/common/extensions/api/side_panel/side_panel_info.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/manifest_constants.h"
+#include "extensions/common/switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
@@ -24,10 +28,8 @@ class SidePanelManifestTest : public ChromeManifestTest {
         "manifest_version": %d,
         "side_panel": %s
       })";
-    base::Value manifest_value = base::test::ParseJson(base::StringPrintf(
+    return ManifestData::FromJSON(base::StringPrintf(
         kManifestStub, manifest_version, side_panel.c_str()));
-    EXPECT_TRUE(manifest_value.is_dict());
-    return ManifestData(std::move(manifest_value).TakeDict());
   }
 };
 
@@ -63,43 +65,64 @@ class SidePanelExtensionsTest : public testing::Test {
 
  protected:
   // Empty filepath doesn't exist test coverage.
-  scoped_refptr<Extension> CreateExtension(const base::Value::Dict& manifest) {
+  scoped_refptr<Extension> CreateExtension(const base::Value::Dict& manifest,
+                                           std::u16string* error) {
     base::Value::Dict manifest_base;
     manifest_base.Set("name", "test");
     manifest_base.Set("version", "1.0");
     manifest_base.Set("manifest_version", 3);
     manifest_base.Merge(manifest.Clone());
-    std::string error;
-    scoped_refptr<Extension> extension = Extension::Create(
-        temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked, manifest_base,
-        Extension::NO_FLAGS, "", &error);
-    if (!extension.get())
-      return nullptr;
-    return extension;
+    return Extension::Create(temp_dir_.GetPath(),
+                             mojom::ManifestLocation::kUnpacked, manifest_base,
+                             Extension::NO_FLAGS, "", error);
   }
 
  private:
   base::ScopedTempDir temp_dir_;
 };
 
-#if defined(OFFICIAL_BUILD)
-#define MAYBE_FileDoesntExist DISABLED_FileDoesntExist
-#else
-#define MAYBE_FileDoesntExist FileDoesntExist
-#endif  // defined(OFFICIAL_BUILD)
-// Error loading extension when filepath doesn't exist or is empty.
-TEST_F(SidePanelExtensionsTest, MAYBE_FileDoesntExist) {
-  for (const auto* default_path : {"", "error"}) {
-    std::string error;
-    std::vector<InstallWarning> warnings;
-    base::Value::Dict manifest;
+// Error loading extension when filepath is invalid.
+TEST_F(SidePanelExtensionsTest, ValidateFileInvalid) {
+  static constexpr struct {
+    const char* relative_path;
+  } test_cases[] = {
+      {""},
+      {"?"},
+      {"dir/"},
+      {"https://example.com"},
+  };
+
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.relative_path);
+
     base::Value::Dict side_panel;
-    side_panel.Set("default_path", default_path);
+    side_panel.Set("default_path", test_case.relative_path);
+    base::Value::Dict manifest;
     manifest.Set("side_panel", base::Value(std::move(side_panel)));
-    auto extension = CreateExtension(manifest);
-    ManifestHandler::ValidateExtension(extension.get(), &error, &warnings);
-    ASSERT_EQ("Side panel file path must exist.", error);
+
+    std::u16string error;
+    auto extension = CreateExtension(manifest, &error);
+    ASSERT_FALSE(extension);
+    ASSERT_EQ(manifest_errors::kSidePanelManifestDefaultPathInvalid, error);
   }
+}
+
+// Error loading extension when filepath doesn't exist.
+TEST_F(SidePanelExtensionsTest, ValidateFileDoesntExist) {
+  base::Value::Dict side_panel;
+  side_panel.Set("default_path", "does_not_exist.html");
+  base::Value::Dict manifest;
+  manifest.Set("side_panel", base::Value(std::move(side_panel)));
+
+  std::u16string error;
+  auto extension = CreateExtension(manifest, &error);
+  ASSERT_TRUE(extension);
+
+  std::vector<InstallWarning> warnings;
+  std::string utf8_error;
+  ManifestHandler::ValidateExtension(extension.get(), &utf8_error, &warnings);
+  ASSERT_EQ(manifest_errors::kSidePanelManifestDefaultPathDoesNotExist,
+            utf8_error);
 }
 
 }  // namespace extensions

@@ -9,6 +9,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 SimpleOverlayWindowImageButton::SimpleOverlayWindowImageButton(
     PressedCallback callback,
@@ -18,7 +19,7 @@ SimpleOverlayWindowImageButton::SimpleOverlayWindowImageButton(
   UpdateImage();
 
   // Accessibility.
-  SetAccessibleName(label);
+  GetViewAccessibility().SetName(label);
   SetTooltipText(label);
 }
 
@@ -31,11 +32,13 @@ void SimpleOverlayWindowImageButton::SetVisible(bool visible) {
 
 void SimpleOverlayWindowImageButton::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
-  if (!size().IsEmpty())
+  if (!size().IsEmpty()) {
     last_visible_size_ = size();
+  }
 
-  if (size() == previous_bounds.size())
+  if (size() == previous_bounds.size()) {
     return;
+  }
 
   UpdateImage();
 }
@@ -43,9 +46,12 @@ void SimpleOverlayWindowImageButton::OnBoundsChanged(
 void SimpleOverlayWindowImageButton::UpdateImage() {
   const int icon_size = std::max(0, width() - (2 * kPipWindowIconPadding));
   SetImageModel(views::Button::STATE_NORMAL,
-                ui::ImageModel::FromVectorIcon(icon_, kColorPipWindowForeground,
-                                               icon_size));
+                ui::ImageModel::FromVectorIcon(
+                    *icon_, kColorPipWindowForeground, icon_size));
+  SetImageModel(views::Button::STATE_DISABLED,
+                ui::ImageModel::FromVectorIcon(
+                    *icon_, kColorPipWindowForegroundInactive, icon_size));
 }
 
-BEGIN_METADATA(SimpleOverlayWindowImageButton, OverlayWindowImageButton)
+BEGIN_METADATA(SimpleOverlayWindowImageButton)
 END_METADATA

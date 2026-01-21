@@ -2,18 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/ozone/demo/surfaceless_gl_renderer.h"
 
 #include <stddef.h>
+
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/gfx/frame_data.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -22,10 +27,10 @@
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_fence.h"
-#include "ui/gl/gl_image_native_pixmap.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/init/gl_factory.h"
 #include "ui/gl/presenter.h"
+#include "ui/ozone/public/native_pixmap_gl_binding.h"
 #include "ui/ozone/public/overlay_candidates_ozone.h"
 #include "ui/ozone/public/overlay_manager_ozone.h"
 #include "ui/ozone/public/ozone_platform.h"
@@ -66,21 +71,20 @@ OverlaySurfaceCandidate MakeOverlayCandidate(int z_order,
 
 }  // namespace
 
-SurfacelessGlRenderer::BufferWrapper::BufferWrapper() {}
+SurfacelessGlRenderer::BufferWrapper::BufferWrapper() = default;
 
 SurfacelessGlRenderer::BufferWrapper::~BufferWrapper() {
   if (gl_fb_)
     glDeleteFramebuffersEXT(1, &gl_fb_);
 
   if (gl_tex_) {
-    image_->ReleaseTexImage(GL_TEXTURE_2D);
     glDeleteTextures(1, &gl_tex_);
   }
 }
 
 scoped_refptr<gfx::NativePixmap> SurfacelessGlRenderer::BufferWrapper::image()
     const {
-  return image_->GetNativePixmap();
+  return pixmap_;
 }
 
 bool SurfacelessGlRenderer::BufferWrapper::Initialize(
@@ -89,21 +93,25 @@ bool SurfacelessGlRenderer::BufferWrapper::Initialize(
   glGenFramebuffersEXT(1, &gl_fb_);
   glGenTextures(1, &gl_tex_);
 
-  gfx::BufferFormat format = display::DisplaySnapshot::PrimaryFormat();
-  scoped_refptr<gfx::NativePixmap> pixmap =
-      OzonePlatform::GetInstance()
-          ->GetSurfaceFactoryOzone()
-          ->CreateNativePixmap(widget, nullptr, size, format,
-                               gfx::BufferUsage::SCANOUT);
-  image_ = gl::GLImageNativePixmap::Create(size, format, std::move(pixmap));
-  if (!image_) {
-    LOG(ERROR) << "Failed to create GLImage";
-    return false;
-  }
+  auto format = display::DisplaySnapshot::PrimaryFormat();
+  pixmap_ = OzonePlatform::GetInstance()
+                ->GetSurfaceFactoryOzone()
+                ->CreateNativePixmap(widget, nullptr, size, format,
+                                     gfx::BufferUsage::SCANOUT);
 
   glBindFramebufferEXT(GL_FRAMEBUFFER, gl_fb_);
-  glBindTexture(GL_TEXTURE_2D, gl_tex_);
-  image_->BindTexImage(GL_TEXTURE_2D);
+
+  pixmap_gl_binding_ =
+      OzonePlatform::GetInstance()
+          ->GetSurfaceFactoryOzone()
+          ->GetCurrentGLOzone()
+          ->ImportNativePixmap(pixmap_, format, gfx::BufferPlane::DEFAULT, size,
+                               gfx::ColorSpace(), GL_TEXTURE_2D, gl_tex_);
+
+  if (!pixmap_gl_binding_) {
+    LOG(ERROR) << "Failed to create NativePixmapEGLBinding";
+    return false;
+  }
 
   glFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                             gl_tex_, 0);
@@ -179,10 +187,9 @@ bool SurfacelessGlRenderer::Initialize() {
 
   if (command_line->HasSwitch("enable-overlay")) {
     int requested_overlay_cnt;
-    base::StringToInt(
-        command_line->GetSwitchValueASCII("enable-overlay").c_str(),
-        &requested_overlay_cnt);
-    overlay_cnt_ = base::clamp(requested_overlay_cnt, 1, kMaxLayers);
+    base::StringToInt(command_line->GetSwitchValueASCII("enable-overlay"),
+                      &requested_overlay_cnt);
+    overlay_cnt_ = std::clamp(requested_overlay_cnt, 1, kMaxLayers);
 
     const gfx::Size overlay_size =
         gfx::Size(size_.width() / 8, size_.height() / 8);
@@ -218,7 +225,7 @@ void SurfacelessGlRenderer::RenderFrame() {
 
   float fraction = NextFraction();
 
-  gfx::Rect overlay_rect[kMaxLayers];
+  std::array<gfx::Rect, kMaxLayers> overlay_rect;
   const gfx::RectF unity_rect = gfx::RectF(0, 0, 1, 1);
 
   OverlayCandidatesOzone::OverlaySurfaceCandidateList overlay_list;
@@ -279,7 +286,7 @@ void SurfacelessGlRenderer::RenderFrame() {
             0, gfx::OVERLAY_TRANSFORM_NONE, gfx::RectF(primary_plane_rect_),
             unity_rect, false, gfx::Rect(buffers_[back_buffer_]->size()), 1.0f,
             gfx::OverlayPriorityHint::kNone, gfx::RRectF(),
-            gfx::ColorSpace::CreateSRGB(), absl::nullopt));
+            gfx::ColorSpace::CreateSRGB(), std::nullopt));
   }
 
   for (size_t i = 0; i < overlay_cnt_; ++i) {
@@ -291,7 +298,7 @@ void SurfacelessGlRenderer::RenderFrame() {
               unity_rect, false,
               gfx::Rect(overlay_buffers_[i][back_buffer_]->size()), 1.0f,
               gfx::OverlayPriorityHint::kNone, gfx::RRectF(),
-              gfx::ColorSpace::CreateSRGB(), absl::nullopt));
+              gfx::ColorSpace::CreateSRGB(), std::nullopt));
     }
   }
 
@@ -323,7 +330,6 @@ void SurfacelessGlRenderer::PostRenderFrameTask(
     case gfx::SwapResult::SWAP_SKIPPED:
     case gfx::SwapResult::SWAP_FAILED:
       LOG(FATAL) << "Failed to swap buffers";
-      break;
   }
 }
 

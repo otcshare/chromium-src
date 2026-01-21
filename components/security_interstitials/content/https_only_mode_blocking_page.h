@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_HTTPS_ONLY_MODE_BLOCKING_PAGE_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_HTTPS_ONLY_MODE_BLOCKING_PAGE_H_
 
+#include "base/functional/callback.h"
 #include "components/security_interstitials/content/security_interstitial_page.h"
+#include "components/security_interstitials/core/https_only_mode_metrics.h"
 
 namespace security_interstitials {
 
@@ -13,12 +15,22 @@ namespace security_interstitials {
 // to upgrade a navigation to HTTPS.
 class HttpsOnlyModeBlockingPage : public SecurityInterstitialPage {
  public:
+  using MetricsCallback =
+      base::RepeatingCallback<void(https_only_mode::BlockingResult result)>;
+
   HttpsOnlyModeBlockingPage(
       content::WebContents* web_contents,
       const GURL& request_url,
-      std::unique_ptr<SecurityInterstitialControllerClient> controller_client);
+      std::unique_ptr<SecurityInterstitialControllerClient> controller_client,
+      const security_interstitials::https_only_mode::HttpInterstitialState&
+          interstitial_state,
+      MetricsCallback metrics_callback);
 
   static const SecurityInterstitialPage::TypeID kTypeForTesting;
+
+  // URL to open when the user clicks "Learn More".
+  static const char kLearnMoreLink[];
+
   ~HttpsOnlyModeBlockingPage() override;
 
   // SecurityInterstitialPage:
@@ -32,6 +44,10 @@ class HttpsOnlyModeBlockingPage : public SecurityInterstitialPage {
 
  private:
   bool user_made_decision_ = false;
+  const security_interstitials::https_only_mode::HttpInterstitialState
+      interstitial_state_;
+  MetricsCallback metrics_callback_;
+  bool ukm_recorded_ = false;
 };
 
 }  // namespace security_interstitials

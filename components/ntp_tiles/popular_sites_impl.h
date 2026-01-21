@@ -7,9 +7,10 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/ntp_tiles/popular_sites.h"
@@ -19,7 +20,7 @@
 namespace network {
 class SimpleURLLoader;
 class SharedURLLoaderFactory;
-}
+}  // namespace network
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -52,7 +53,6 @@ class PopularSitesImpl : public PopularSites {
   // PopularSites implementation.
   bool MaybeStartFetch(bool force_download, FinishedCallback callback) override;
   const std::map<SectionType, SitesVector>& sections() const override;
-  GURL GetLastURLFetched() const override;
   GURL GetURLToFetch() override;
   std::string GetDirectoryToFetch() override;
   std::string GetCountryToFetch() override;
@@ -69,7 +69,7 @@ class PopularSitesImpl : public PopularSites {
   void FetchPopularSites();
 
   // Called once SimpleURLLoader completes the network request.
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
   void OnDownloadFailed();

@@ -9,17 +9,23 @@
 
 #include "ash/public/cpp/screen_backlight_observer.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/timer/elapsed_timer.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/login_client_cert_usage_observer.h"
+#include "chrome/browser/ash/login/gaia_reauth_token_fetcher.h"
+#include "chrome/browser/ash/login/oobe_quick_start/target_device_bootstrap_controller.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/online_login_helper.h"
+#include "chromeos/ash/components/login/auth/auth_factor_editor.h"
+#include "chromeos/ash/components/login/auth/public/authentication_error.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/account_id/account_id.h"
+
+namespace policy {
+struct AccountStatus;
+class AccountStatusCheckFetcher;
+}  // namespace policy
 
 namespace ash {
 
@@ -34,10 +40,14 @@ class GaiaScreen : public BaseScreen, public ScreenBacklightObserver {
 
   enum class Result {
     BACK,
+    // used to distinguish clicking back on the child sign-in/sign-up screen
+    // vs. default Gaia screen
+    BACK_CHILD,
     CANCEL,
     ENTERPRISE_ENROLL,
-    START_CONSUMER_KIOSK,
-    LOGIN_SUCCESS,
+    ENTER_QUICK_START,
+    QUICK_START_ONGOING,
+    ERROR_OOBE_NOT_COMPLETED,
   };
 
   static std::string GetResultString(Result result);
@@ -52,83 +62,59 @@ class GaiaScreen : public BaseScreen, public ScreenBacklightObserver {
 
   ~GaiaScreen() override;
 
-  // Loads online Gaia into the webview.
-  void LoadOnline(const AccountId& account);
-  // Loads online Gaia (for child signup) into the webview.
-  void LoadOnlineForChildSignup();
-  // Loads online Gaia (for child signin) into the webview.
-  void LoadOnlineForChildSignin();
-  void ShowAllowlistCheckFailedError();
+  // Loads online GAIA into the webview.
+  void LoadOnlineGaia();
   // Reset authenticator.
   void Reset();
   // Calls authenticator reload on JS side.
   void ReloadGaiaAuthenticator();
+
+  const std::string& EnrollmentNudgeEmail();
 
   // ScreenBacklightObserver:
   void OnScreenBacklightStateChanged(
       ScreenBacklightState screen_backlight_state) override;
 
  private:
+  bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
   void OnUserAction(const base::Value::List& args) override;
   bool HandleAccelerator(LoginAcceleratorAction action) override;
-
-  // Handle user actions.
-  void HandleCompleteAuthentication(
-      const std::string& gaia_id,
-      const std::string& email,
-      const std::string& password,
-      const base::Value::List& scraped_saml_passwords_value,
-      bool using_saml,
-      const base::Value::List& services_list,
-      bool services_provided,
-      const base::Value::Dict& password_attributes,
-      const base::Value::Dict& sync_trusted_vault_keys);
-  // TODO(yunkez): This is only used in `Oobe.loginForTesting` in tast tests. We
-  // could remove this or use HandleCompleteAuthentication instead.
-  void HandleCompleteLoginForTesting(const std::string& gaia_id,
-                                     const std::string& typed_email,
-                                     const std::string& password,
-                                     bool using_saml);
   void HandleIdentifierEntered(const std::string& account_identifier);
-  void HandlePasswordEntered();
-  void HandleGaiaLoaded();
 
-  // Handles SAML/GAIA login flow metrics
-  // is_third_party_idp == false means GAIA-based authentication
-  void HandleUsingSAMLAPI(bool is_third_party_idp);
+  void OnGetAuthFactorsConfiguration(std::unique_ptr<UserContext> user_context,
+                                     std::optional<AuthenticationError> error);
+  // Fetch Gaia reauth request token from the recovery service.
+  void FetchGaiaReauthToken(const AccountId& account);
+  void OnGaiaReauthTokenFetched(const AccountId& account,
+                                const std::string& token);
+  void OnAccountStatusFetched(const std::string& user_email,
+                              bool result,
+                              policy::AccountStatus status);
 
-  void LoadGaiaAsync(const AccountId& account_id);
+  // Triggers the enrollment nudge flow and returns true if all requirements are
+  // met, otherwise does nothing and returns false.
+  bool ShouldFetchEnrollmentNudgePolicy(const std::string& user_email);
 
-  // Updates the member variable and UMA histogram indicating whether the
-  // Chrome Credentials Passing API was used during SAML login.
-  void OnSamlPrincipalsAPIUsed(bool is_third_party_idp, bool is_api_used);
+  // Called when quick start button is clicked.
+  void OnQuickStartButtonClicked();
+  void SetQuickStartButtonVisibility(bool visible);
 
-  void RecordScrapedPasswordCount(int password_count);
-  bool IsSamlUserPasswordless();
+  // Starts online authentication for a given account (can be empty if
+  // user is unknown). If `force_default_gaia_page` is true, will
+  // choose the Gaia path corresponding to
+  // `WizardContext::GaiaPath::kDefault`.
+  void LoadOnlineGaiaForAccount(const AccountId& account,
+                                bool force_default_gaia_page = false);
 
-  void OnCookieWaitTimeout();
+  // Whether the QuickStart entry point visibility has already been determined.
+  // This flag prevents duplicate histogram entries.
+  bool has_emitted_quick_start_visible = false;
 
-  void OnCompleteLogin(std::unique_ptr<UserContext> user_context);
-  void SAMLConfirmPassword(::login::StringList scraped_saml_passwords,
-                           std::unique_ptr<UserContext> user_context);
-
-  // This flag is set when user authenticated using the Chrome Credentials
-  // Passing API (the login could happen via SAML or, with the current
-  // server-side implementation, via Gaia).
-  bool using_saml_api_ = false;
-
-  std::unique_ptr<LoginClientCertUsageObserver>
-      extension_provided_client_cert_usage_observer_;
-
-  std::unique_ptr<OnlineLoginHelper> online_login_helper_;
-
-  GaiaView::GaiaLoginVariant login_request_variant_ =
-      GaiaView::GaiaLoginVariant::kUnknown;
-
-  // Used to record amount of time user needed for successful online login.
-  std::unique_ptr<base::ElapsedTimer> elapsed_timer_;
+  AuthFactorEditor auth_factor_editor_;
+  std::unique_ptr<GaiaReauthTokenFetcher> gaia_reauth_token_fetcher_;
+  std::unique_ptr<policy::AccountStatusCheckFetcher> account_status_fetcher_;
 
   base::WeakPtr<TView> view_;
 
@@ -137,7 +123,11 @@ class GaiaScreen : public BaseScreen, public ScreenBacklightObserver {
   base::ScopedObservation<BacklightsForcedOffSetter, ScreenBacklightObserver>
       backlights_forced_off_observation_{this};
 
-  base::WeakPtrFactory<GaiaScreen> weak_factory_{this};
+  // Used to cache email between "identifierEntered" event and a switch to
+  // enrollment screen.
+  std::string enrollment_nudge_email_;
+
+  base::WeakPtrFactory<GaiaScreen> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

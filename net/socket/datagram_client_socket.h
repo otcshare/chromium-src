@@ -5,7 +5,6 @@
 #ifndef NET_SOCKET_DATAGRAM_CLIENT_SOCKET_H_
 #define NET_SOCKET_DATAGRAM_CLIENT_SOCKET_H_
 
-#include "net/base/datagram_buffer.h"
 #include "net/base/net_export.h"
 #include "net/base/network_handle.h"
 #include "net/socket/datagram_socket.h"
@@ -21,22 +20,24 @@ class NET_EXPORT_PRIVATE DatagramClientSocket : public DatagramSocket,
  public:
   ~DatagramClientSocket() override = default;
 
-  // Initialize this socket as a client socket to server at |address|.
-  // Returns a network error code.
+  // Initialize this socket as a client socket to server at |address|. This
+  // method can only be called once, as it opens a socket and socket reuse is
+  // not supported. Returns a network error code.
   // TODO(liza): Remove this method once consumers have been updated.
   virtual int Connect(const IPEndPoint& address) = 0;
 
   // Binds this socket to |network| and initializes socket as a client socket
   // to server at |address|. All data traffic on the socket will be sent and
   // received via |network|. This call will fail if |network| has disconnected.
-  // Communication using this socket will fail if |network| disconnects.
-  // Returns a net error code.
+  // Communication using this socket will fail if |network| disconnects. Like
+  // Connect, this method can only be called once. Returns a net error code.
   // TODO(liza): Remove this method once consumers have been updated.
   virtual int ConnectUsingNetwork(handles::NetworkHandle network,
                                   const IPEndPoint& address) = 0;
 
   // Same as ConnectUsingNetwork, except that the current default network is
-  // used. Returns a net error code.
+  // used. Like Connect, this method can only be called once. Returns a net
+  // error code.
   // TODO(liza): Remove this method once consumers have been updated.
   virtual int ConnectUsingDefaultNetwork(const IPEndPoint& address) = 0;
 
@@ -86,10 +87,16 @@ class NET_EXPORT_PRIVATE DatagramClientSocket : public DatagramSocket,
   // No-op by default.
   virtual void SetIOSNetworkServiceType(int ios_network_service_type) {}
 
-  // Set "don't close" flag for socket.
-  // No-op by default.
-  // TODO(nidhijaju): Remove this method once crbug.com/1383390 is fixed.
-  virtual void SetDontClose(bool dont_close) {}
+  // Register a QUIC UDP payload that can close a QUIC connection and the
+  // underlying socket to the Android system server. When the app loses network
+  // access, the system server destroys the registered socket and sends the
+  // registered UDP payload to the server.
+  virtual void RegisterQuicConnectionClosePayload(base::span<uint8_t> payload) {
+  }
+
+  // Unregister the underlying socket and its associated UDP payload that were
+  // previously registered by RegisterQuicConnectionClosePayload
+  virtual void UnregisterQuicConnectionClosePayload() {}
 };
 
 }  // namespace net

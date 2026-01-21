@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -274,18 +275,19 @@ struct DataPoint {
   double increment_ms;
 };
 
-void ReplayCheckingSamplerDecisions(const DataPoint* data_points,
-                                    size_t num_data_points,
-                                    SmoothEventSampler* sampler) {
+void ReplayCheckingSamplerDecisions(
+    base::span<const DataPoint> data_points,
+    SmoothEventSampler* sampler) {
   base::TimeTicks t = InitialTestTimeTicks();
-  for (size_t i = 0; i < num_data_points; ++i) {
+  for (size_t i = 0; i < data_points.size(); ++i) {
     t += base::Microseconds(
         static_cast<int64_t>(data_points[i].increment_ms * 1000));
     ASSERT_EQ(data_points[i].should_capture,
               AddEventAndConsiderSampling(sampler, t))
         << "at data_points[" << i << ']';
-    if (data_points[i].should_capture)
+    if (data_points[i].should_capture) {
       sampler->RecordSample();
+    }
   }
 }
 
@@ -368,7 +370,7 @@ TEST(SmoothEventSamplerTest, DrawingAt24FpsWith60HzVsyncSampledAt30Hertz) {
                                           {false, 0}};
 
   SmoothEventSampler sampler(base::Seconds(1) / 30);
-  ReplayCheckingSamplerDecisions(data_points, std::size(data_points), &sampler);
+  ReplayCheckingSamplerDecisions(data_points, &sampler);
 }
 
 TEST(SmoothEventSamplerTest, DrawingAt30FpsWith60HzVsyncSampledAt30Hertz) {
@@ -477,7 +479,7 @@ TEST(SmoothEventSamplerTest, DrawingAt30FpsWith60HzVsyncSampledAt30Hertz) {
                                           {true, 33.44}};
 
   SmoothEventSampler sampler(base::Seconds(1) / 30);
-  ReplayCheckingSamplerDecisions(data_points, std::size(data_points), &sampler);
+  ReplayCheckingSamplerDecisions(data_points, &sampler);
 }
 
 TEST(SmoothEventSamplerTest, DrawingAt60FpsWith60HzVsyncSampledAt30Hertz) {
@@ -610,7 +612,7 @@ TEST(SmoothEventSamplerTest, DrawingAt60FpsWith60HzVsyncSampledAt30Hertz) {
                                           {true, 50.16}};
 
   SmoothEventSampler sampler(base::Seconds(1) / 30);
-  ReplayCheckingSamplerDecisions(data_points, std::size(data_points), &sampler);
+  ReplayCheckingSamplerDecisions(data_points, &sampler);
 }
 
 }  // namespace media

@@ -10,6 +10,7 @@
 #include "ash/system/phonehub/onboarding_view.h"
 #include "ash/system/phonehub/phone_hub_content_view.h"
 #include "ash/system/phonehub/phone_status_view.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/timer/timer.h"
@@ -120,10 +121,10 @@ class ASH_EXPORT PhoneHubUiController
 
   void RecordStatusOnBubbleOpened();
   void OnGetHostLastSeenTimestamp(UiState ui_state_when_opened,
-                                  absl::optional<base::Time> timestamp);
+                                  std::optional<base::Time> timestamp);
 
   // The PhoneHubManager that provides data for the UI.
-  phonehub::PhoneHubManager* phone_hub_manager_ = nullptr;
+  raw_ptr<phonehub::PhoneHubManager> phone_hub_manager_ = nullptr;
 
   // The current UI state.
   UiState ui_state_ = UiState::kHidden;

@@ -17,13 +17,13 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/api/proxy/proxy_api.h"
-#endif
+#endif // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 using content::BrowserThread;
 
@@ -31,20 +31,20 @@ ProxyConfigMonitor::ProxyConfigMonitor(Profile* profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   profile_ = profile;
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 // If this is the ChromeOS sign-in or lock screen profile, just create the
 // tracker from global state.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (ash::ProfileHelper::IsSigninProfile(profile) ||
       ash::ProfileHelper::IsLockScreenProfile(profile)) {
     pref_proxy_config_tracker_ =
         ProxyServiceFactory::CreatePrefProxyConfigTrackerOfLocalState(
             g_browser_process->local_state());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (!pref_proxy_config_tracker_) {
     pref_proxy_config_tracker_ =
@@ -85,14 +85,16 @@ void ProxyConfigMonitor::AddToNetworkContextParams(
       proxy_config_client.InitWithNewPipeAndPassReceiver();
   proxy_config_client_set_.Add(std::move(proxy_config_client));
 
-  poller_receiver_set_.Add(this,
-                           network_context_params->proxy_config_poller_client
-                               .InitWithNewPipeAndPassReceiver());
+  if (proxy_config_service_->UsesPolling()) {
+    poller_receiver_set_.Add(this,
+                             network_context_params->proxy_config_poller_client
+                                 .InitWithNewPipeAndPassReceiver());
+  }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   error_receiver_set_.Add(this, network_context_params->proxy_error_client
                                     .InitWithNewPipeAndPassReceiver());
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   net::ProxyConfigWithAnnotation proxy_config;
   net::ProxyConfigService::ConfigAvailability availability =
@@ -121,7 +123,6 @@ void ProxyConfigMonitor::OnProxyConfigChanged(
         break;
       case net::ProxyConfigService::CONFIG_PENDING:
         NOTREACHED();
-        break;
     }
   }
 }
@@ -130,13 +131,12 @@ void ProxyConfigMonitor::OnLazyProxyConfigPoll() {
   proxy_config_service_->OnLazyPoll();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 void ProxyConfigMonitor::OnPACScriptError(int32_t line_number,
                                           const std::string& details) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   extensions::ProxyEventRouter::GetInstance()->OnPACScriptError(
-      g_browser_process->extension_event_router_forwarder(), profile_,
-      line_number, base::UTF8ToUTF16(details));
+      profile_, line_number, base::UTF8ToUTF16(details));
 }
 
 void ProxyConfigMonitor::OnRequestMaybeFailedDueToProxySettings(
@@ -151,8 +151,7 @@ void ProxyConfigMonitor::OnRequestMaybeFailedDueToProxySettings(
     return;
   }
 
-  extensions::ProxyEventRouter::GetInstance()->OnProxyError(
-      g_browser_process->extension_event_router_forwarder(), profile_,
-      net_error);
+  extensions::ProxyEventRouter::GetInstance()->OnProxyError(profile_,
+                                                            net_error);
 }
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)

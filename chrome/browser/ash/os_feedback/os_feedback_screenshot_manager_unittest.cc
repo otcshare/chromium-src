@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/test/task_environment.h"
@@ -28,7 +28,7 @@ class OsFeedbackScreenshotManagerTest : public ::testing::Test {
 
   scoped_refptr<base::RefCountedMemory> CreateFakePngData() {
     const unsigned char kData[] = {12, 11, 99};
-    return base::MakeRefCounted<base::RefCountedBytes>(kData, std::size(kData));
+    return base::MakeRefCounted<base::RefCountedBytes>(kData);
   }
 };
 

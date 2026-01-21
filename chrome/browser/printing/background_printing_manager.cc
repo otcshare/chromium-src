@@ -4,18 +4,13 @@
 
 #include "chrome/browser/printing/background_printing_manager.h"
 
-#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 
 using content::BrowserContext;
@@ -73,16 +68,6 @@ void BackgroundPrintingManager::OwnPrintPreviewDialog(
       std::make_unique<Observer>(this, raw_preview_dialog);
   printing_contents.contents = std::move(preview_dialog);
   printing_contents_map_[raw_preview_dialog] = std::move(printing_contents);
-
-  // Activate the initiator.
-  PrintPreviewDialogController* dialog_controller =
-      PrintPreviewDialogController::GetInstance();
-  if (!dialog_controller)
-    return;
-  WebContents* initiator = dialog_controller->GetInitiator(raw_preview_dialog);
-  if (!initiator)
-    return;
-  initiator->GetDelegate()->ActivateContents(initiator);
 }
 
 void BackgroundPrintingManager::DeletePreviewContentsForBrowserContext(
@@ -136,7 +121,7 @@ std::set<content::WebContents*> BackgroundPrintingManager::CurrentContentSet() {
 
 bool BackgroundPrintingManager::HasPrintPreviewDialog(
     WebContents* preview_dialog) {
-  return base::Contains(printing_contents_map_, preview_dialog);
+  return printing_contents_map_.contains(preview_dialog);
 }
 
 BackgroundPrintingManager::PrintingContents::PrintingContents() = default;

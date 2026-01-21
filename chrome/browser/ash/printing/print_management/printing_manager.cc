@@ -4,8 +4,7 @@
 
 #include "chrome/browser/ash/printing/print_management/printing_manager.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/printing/cups_print_job.h"
 #include "chrome/browser/ash/printing/history/print_job_history_service.h"
 #include "chrome/browser/ash/printing/history/print_job_history_service_factory.h"
@@ -37,7 +36,7 @@ PrintingManager::PrintingManager(
       cups_print_job_manager_(cups_print_job_manager) {
   DCHECK(history_service_);
   DCHECK(cups_print_job_manager_);
-  history_service_observation_.Observe(history_service_);
+  history_service_observation_.Observe(history_service_.get());
   cups_print_job_manager_->AddObserver(this);
 
   delete_print_job_history_allowed_.Init(prefs::kDeletePrintJobHistoryAllowed,
@@ -77,7 +76,7 @@ void PrintingManager::CancelPrintJob(const std::string& id,
                                      CancelPrintJobCallback callback) {
   // Checks if the print job is still stored in the local cache and the validity
   // of the WeakPtr and do not attempt to cancel an invalid print job.
-  if (!base::Contains(active_print_jobs_, id) || !active_print_jobs_[id]) {
+  if (!active_print_jobs_.contains(id) || !active_print_jobs_[id]) {
     std::move(callback).Run(/*attempted_cancel=*/false);
     return;
   }
@@ -99,8 +98,8 @@ void PrintingManager::GetDeletePrintJobHistoryAllowedByPolicy(
   return std::move(callback).Run(IsHistoryDeletionAllowedByPolicy());
 }
 
-void PrintingManager::OnURLsDeleted(HistoryService* history_service,
-                                    const DeletionInfo& deletion_info) {
+void PrintingManager::OnHistoryDeletions(HistoryService* history_service,
+                                         const DeletionInfo& deletion_info) {
   // We only handle deletion of all history because it is an explicit action by
   // user to explicitly remove all their history-related content.
   if (!IsHistoryDeletionAllowedByPolicy() || !deletion_info.IsAllHistory()) {

@@ -2,16 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/cdm/win/media_foundation_cdm.h"
 
 #include <mferror.h>
-
 #include <stdlib.h>
+
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
+#include "base/notimplemented.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -20,6 +27,7 @@
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "media/base/cdm_promise.h"
+#include "media/base/media_switches.h"
 #include "media/base/win/hresults.h"
 #include "media/base/win/media_foundation_cdm_proxy.h"
 #include "media/base/win/mf_helpers.h"
@@ -119,8 +127,8 @@ int GetHdcpValue(HdcpVersion hdcp_version) {
 // the generated session ID is `DUMMY_9F656F4D76BE30D4`.
 std::string GenerateDummySessionId() {
   uint8_t random_bytes[8];
-  base::RandBytes(random_bytes, sizeof(random_bytes));
-  return "DUMMY_" + base::HexEncode(random_bytes, sizeof(random_bytes));
+  base::RandBytes(random_bytes);
+  return "DUMMY_" + base::HexEncode(random_bytes);
 }
 
 class CdmProxyImpl : public MediaFoundationCdmProxy {
@@ -225,6 +233,9 @@ class CdmProxyImpl : public MediaFoundationCdmProxy {
     input_trust_authorities_.clear();
     last_key_ids_.clear();
 
+    // `CdmEvent::kHardwareContextReset` will be reported in
+    // `hardware_context_reset_cb_` below.
+
     // Must be the last call because `this` could be destructed when running
     // the callback. We are not certain because `this` is ref-counted.
     hardware_context_reset_cb_.Run();
@@ -234,8 +245,8 @@ class CdmProxyImpl : public MediaFoundationCdmProxy {
     cdm_event_cb_.Run(CdmEvent::kSignificantPlayback, S_OK);
   }
 
-  void OnPlaybackError(HRESULT hresult) override {
-    cdm_event_cb_.Run(CdmEvent::kPlaybackError, hresult);
+  void OnPlaybackError(HRESULT hr) override {
+    cdm_event_cb_.Run(CdmEvent::kPlaybackError, hr);
   }
 
  private:
@@ -271,10 +282,11 @@ class CdmProxyImpl : public MediaFoundationCdmProxy {
   // 1. The same ITA should always be returned in GetInputTrustAuthority() for
   // the same |stream_id|.
   // 2. The ITA must keep alive for decryptors to work.
-  std::map<uint32_t, ComPtr<IMFInputTrustAuthority>> input_trust_authorities_;
+  absl::flat_hash_map<uint32_t, ComPtr<IMFInputTrustAuthority>>
+      input_trust_authorities_;
 
   // |stream_id| to last used key ID mapping.
-  std::map<uint32_t, GUID> last_key_ids_;
+  absl::flat_hash_map<uint32_t, GUID> last_key_ids_;
 };
 
 }  // namespace
@@ -304,13 +316,13 @@ MediaFoundationCdm::MediaFoundationCdm(
       session_keys_change_cb_(session_keys_change_cb),
       session_expiration_update_cb_(session_expiration_update_cb) {
   DVLOG_FUNC(1);
-  DCHECK(!uma_prefix_.empty());
-  DCHECK(create_mf_cdm_cb_);
-  DCHECK(is_type_supported_cb_);
-  DCHECK(session_message_cb_);
-  DCHECK(session_closed_cb_);
-  DCHECK(session_keys_change_cb_);
-  DCHECK(session_expiration_update_cb_);
+  CHECK(!uma_prefix_.empty());
+  CHECK(create_mf_cdm_cb_);
+  CHECK(is_type_supported_cb_);
+  CHECK(session_message_cb_);
+  CHECK(session_closed_cb_);
+  CHECK(session_keys_change_cb_);
+  CHECK(session_expiration_update_cb_);
 }
 
 MediaFoundationCdm::~MediaFoundationCdm() {
@@ -318,16 +330,19 @@ MediaFoundationCdm::~MediaFoundationCdm() {
 }
 
 HRESULT MediaFoundationCdm::Initialize() {
-  HRESULT hresult = E_FAIL;
+  HRESULT hr = E_FAIL;
   ComPtr<IMFContentDecryptionModule> mf_cdm;
-  create_mf_cdm_cb_.Run(hresult, mf_cdm);
+  create_mf_cdm_cb_.Run(hr, mf_cdm);
   if (!mf_cdm) {
-    DCHECK(FAILED(hresult));
-    // Only report CdmEvent::kCdmError here as this is where most failures
-    // happen, and other errors can be easily triggered by sites, e.g. a bad
-    // server certificate or a bad license.
-    OnCdmEvent(CdmEvent::kCdmError, hresult);
-    return hresult;
+    CHECK(FAILED(hr));
+
+    if (hr == DRM_E_TEE_INVALID_HWDRM_STATE) {
+      OnCdmEvent(CdmEvent::kHardwareContextReset, hr);
+    } else {
+      OnCdmEvent(CdmEvent::kCdmError, hr);
+    }
+
+    return hr;
   }
 
   mf_cdm_.Swap(mf_cdm);
@@ -357,6 +372,7 @@ void MediaFoundationCdm::SetServerCertificate(
     return;
   }
 
+  server_certificate_set_ = true;
   promise->resolve();
 }
 
@@ -382,7 +398,7 @@ void MediaFoundationCdm::GetStatusForPolicy(
 
   is_type_supported_cb_.Run(
       content_type,
-      base::BindOnce(&MediaFoundationCdm::OnIsTypeSupportedResult,
+      base::BindOnce(&MediaFoundationCdm::OnGetStatusForPolicyResult,
                      weak_factory_.GetWeakPtr(), std::move(promise)));
 }
 
@@ -395,6 +411,17 @@ void MediaFoundationCdm::CreateSessionAndGenerateRequest(
 
   if (!mf_cdm_) {
     promise->reject(Exception::INVALID_STATE_ERROR, 0, "CDM Unavailable");
+    return;
+  }
+
+  // Check if server certificate requirement is enforced
+  if (base::FeatureList::IsEnabled(
+          kHardwareSecureDecryptionRequireServerCert) &&
+      MediaFoundationCdmModule::GetInstance()->IsOsCdm() &&
+      !server_certificate_set_) {
+    promise->reject(Exception::INVALID_STATE_ERROR, 0,
+                    "setServerCertificate must be called before "
+                    "generateRequest");
     return;
   }
 
@@ -511,7 +538,7 @@ void MediaFoundationCdm::CloseSession(
     std::unique_ptr<SimpleCdmPromise> promise) {
   DVLOG_FUNC(1);
 
-  // TODO(crbug.com/1298192): Handle DRM_E_TEE_INVALID_HWDRM_STATE. Right now
+  // TODO(crbug.com/40215444): Handle DRM_E_TEE_INVALID_HWDRM_STATE. Right now
   // DRM_E_TEE_INVALID_HWDRM_STATE is very rare in CloseSession() and there's
   // an open discussion on how this should behave in EME spec discussion.
   CloseSessionInternal(session_id, CdmSessionClosedReason::kClose,
@@ -587,9 +614,9 @@ bool MediaFoundationCdm::OnSessionId(
                 << ", session_id=" << session_id;
 
   auto itr = pending_sessions_.find(session_token);
-  DCHECK(itr != pending_sessions_.end());
+  CHECK(itr != pending_sessions_.end());
   auto session = std::move(itr->second);
-  DCHECK(session);
+  CHECK(session);
   pending_sessions_.erase(itr);
 
   if (session_id.empty() || sessions_.count(session_id)) {
@@ -659,6 +686,8 @@ void MediaFoundationCdm::CloseSessionInternal(
 void MediaFoundationCdm::OnHardwareContextReset() {
   DVLOG_FUNC(1);
 
+  OnCdmEvent(CdmEvent::kHardwareContextReset, DRM_E_TEE_INVALID_HWDRM_STATE);
+
   // Collect all the session IDs to avoid iterating the map while we delete
   // entries in the map (in `CloseSession()`).
   std::vector<std::string> session_ids;
@@ -676,21 +705,31 @@ void MediaFoundationCdm::OnHardwareContextReset() {
   // Reset IMFContentDecryptionModule which also holds the old ITA.
   mf_cdm_.Reset();
 
+  // Reset server certificate flag since the CDM is being recreated
+  server_certificate_set_ = false;
+
   // Recreates IMFContentDecryptionModule so we can create new sessions.
   if (FAILED(Initialize())) {
     DLOG(ERROR) << __func__ << ": Re-initialization failed";
-    DCHECK(!mf_cdm_);
+    CHECK(!mf_cdm_);
   }
 }
 
-void MediaFoundationCdm::OnCdmEvent(CdmEvent event, HRESULT hresult) {
-  DVLOG_FUNC(1);
-  cdm_event_cb_.Run(event, hresult);
+void MediaFoundationCdm::OnCdmEvent(CdmEvent event, HRESULT hr) {
+  DVLOG_FUNC(1) << "event=" << static_cast<int>(event) << ": " << PrintHr(hr);
+  cdm_event_cb_.Run(event, hr);
 }
 
-void MediaFoundationCdm::OnIsTypeSupportedResult(
+void MediaFoundationCdm::OnGetStatusForPolicyResult(
     std::unique_ptr<KeyStatusCdmPromise> promise,
-    bool is_supported) {
+    IsTypeSupportedValueOrError value_or_error) {
+  if (!value_or_error.has_value()) {
+    base::UmaHistogramSparse(uma_prefix_ + "GetStatusForPolicy",
+                             value_or_error.error());
+  }
+
+  auto is_supported = value_or_error.value_or(false);
+
   if (is_supported) {
     promise->resolve(CdmKeyInformation::KeyStatus::USABLE);
   } else {

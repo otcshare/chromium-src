@@ -7,8 +7,11 @@
 
 #include <climits>
 #include <map>
+#include <optional>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/feed/core/proto/v2/store.pb.h"
@@ -18,7 +21,6 @@
 #include "components/feed/core/v2/public/stream_type.h"
 #include "components/feed/core/v2/public/web_feed_subscriptions.h"
 #include "components/feed/core/v2/types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefService;
 namespace feedstore {
@@ -44,8 +46,7 @@ class MetricsReporter {
     // subscribed.
     virtual void SubscribedWebFeedCount(
         base::OnceCallback<void(int)> callback) = 0;
-    virtual void RegisterFeedUserSettingsFieldTrial(
-        base::StringPiece group) = 0;
+    virtual void RegisterFeedUserSettingsFieldTrial(std::string_view group) = 0;
     virtual ContentOrder GetContentOrder(
         const StreamType& stream_type) const = 0;
   };
@@ -77,6 +78,7 @@ class MetricsReporter {
   void PageLoaded();
   void OtherUserAction(const StreamType& stream_type,
                        FeedUserActionType action_type);
+  void OtherUserAction(FeedUserActionType action_type);
   // Report a period of time during which at least one content slice was visible
   // enough or covering enough of the viewport.
   void ReportStableContentSliceVisibilityTimeForGoodVisits(
@@ -88,7 +90,10 @@ class MetricsReporter {
   void StreamScrollStart();
 
   // Called when the Feed surface is opened and closed.
-  void SurfaceOpened(const StreamType& stream_type, SurfaceId surface_id);
+  void SurfaceOpened(const StreamType& stream_type,
+                     SurfaceId surface_id,
+                     SingleWebFeedEntryPoint single_web_feed_entry_point =
+                         SingleWebFeedEntryPoint::kOther);
   void SurfaceClosed(SurfaceId surface_id);
 
   // Network metrics.
@@ -102,22 +107,15 @@ class MetricsReporter {
 
   struct LoadStreamResultSummary {
     LoadStreamResultSummary();
-    LoadStreamResultSummary(
-        LoadStreamStatus load_from_store_status,
-        LoadStreamStatus final_status,
-        bool is_initial_load,
-        bool loaded_new_content_from_network,
-        base::TimeDelta stored_content_age,
-        ContentOrder content_order,
-        absl::optional<feedstore::Metadata::StreamMetadata> stream_metadata);
+    LoadStreamResultSummary(const LoadStreamResultSummary& src);
     ~LoadStreamResultSummary();
-    LoadStreamStatus load_from_store_status;
-    LoadStreamStatus final_status;
-    bool is_initial_load;
-    bool loaded_new_content_from_network;
+    LoadStreamStatus load_from_store_status = LoadStreamStatus::kNoStatus;
+    LoadStreamStatus final_status = LoadStreamStatus::kNoStatus;
+    bool is_initial_load = false;
+    bool loaded_new_content_from_network = false;
     base::TimeDelta stored_content_age;
-    ContentOrder content_order;
-    absl::optional<feedstore::Metadata::StreamMetadata> stream_metadata;
+    ContentOrder content_order = ContentOrder::kUnspecified;
+    std::optional<feedstore::Metadata::StreamMetadata> stream_metadata;
   };
   virtual void OnLoadStream(const StreamType& stream_type,
                             const LoadStreamResultSummary& result_summary,
@@ -133,13 +131,13 @@ class MetricsReporter {
   virtual void OnLoadMore(const StreamType& stream_type,
                           LoadStreamStatus final_status,
                           const ContentStats& content_stats);
-  virtual void OnClearAll(base::TimeDelta time_since_last_clear);
   // Called each time the surface receives new content.
   void SurfaceReceivedContent(SurfaceId surface_id);
   // Called when Chrome is entering the background.
   void OnEnterBackground();
 
   static void OnImageFetched(const GURL& url, int net_error_or_http_status);
+  static void OnResourceFetched(int net_error_or_http_status);
 
   // Actions upload.
   static void OnUploadActionsBatch(UploadActionsBatchStatus status);
@@ -159,6 +157,7 @@ class MetricsReporter {
   void RefreshSubscribedWebFeedsAttempted(bool subscriptions_were_stale,
                                           WebFeedRefreshStatus status,
                                           int subscribed_web_feed_count);
+  void OnQueryAttempt(const WebFeedSubscriptions::QueryWebFeedResult& result);
 
   // Info card events.
   void OnInfoCardTrackViewStarted(const StreamType& stream_type,
@@ -221,7 +220,7 @@ class MetricsReporter {
   StreamStats& ForStream(const StreamType& stream_type);
 
   raw_ptr<PrefService> profile_prefs_;
-  raw_ptr<Delegate> delegate_ = nullptr;
+  raw_ptr<Delegate, DanglingUntriaged> delegate_ = nullptr;
 
   StreamStats for_you_stats_;
   StreamStats web_feed_stats_;
@@ -249,7 +248,7 @@ class MetricsReporter {
   SurfaceWaiting pending_open_;
 
   // For tracking time spent in the Feed.
-  absl::optional<base::TimeTicks> time_in_feed_start_;
+  std::optional<base::TimeTicks> time_in_feed_start_;
   // For TimeSpentOnFeed.
   base::TimeDelta tracked_visit_time_in_feed_;
   // Non-null only directly after a stream load.
@@ -271,9 +270,9 @@ class MetricsReporter {
 
     // Owned by MetricsReporter. Will live through the lifetime of
     // GoodVisitState.
-    PersistentMetricsData& data_;
+    const raw_ref<PersistentMetricsData> data_;
   };
-  absl::optional<GoodVisitState> good_visit_state_;
+  GoodVisitState good_visit_state_;
 
   base::WeakPtrFactory<MetricsReporter> weak_ptr_factory_{this};
 };

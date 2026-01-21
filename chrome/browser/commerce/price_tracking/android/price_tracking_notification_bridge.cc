@@ -6,8 +6,11 @@
 
 #include "base/android/jni_array.h"
 #include "base/memory/ptr_util.h"
-#include "chrome/browser/commerce/price_tracking/android/jni_headers/PriceTrackingNotificationBridge_jni.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/commerce/price_tracking/android/jni_headers/PriceTrackingNotificationBridge_jni.h"
 
 using OptimizationType = optimization_guide::proto::OptimizationType;
 
@@ -19,17 +22,19 @@ PriceTrackingNotificationBridge::GetForBrowserContext(
     content::BrowserContext* context) {
   if (!context->GetUserData(kUserDataKey)) {
     context->SetUserData(kUserDataKey,
-                         base::WrapUnique(new PriceTrackingNotificationBridge));
+                         base::WrapUnique(new PriceTrackingNotificationBridge(
+                             Profile::FromBrowserContext(context))));
   }
   return static_cast<PriceTrackingNotificationBridge*>(
       context->GetUserData(kUserDataKey));
 }
 
-PriceTrackingNotificationBridge::PriceTrackingNotificationBridge() {
-  JNIEnv* env = base::android::AttachCurrentThread();
+PriceTrackingNotificationBridge::PriceTrackingNotificationBridge(
+    Profile* profile) {
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   java_obj_.Reset(env, Java_PriceTrackingNotificationBridge_create(
-                           env, reinterpret_cast<intptr_t>(this))
-                           .obj());
+                           env, reinterpret_cast<intptr_t>(this),
+                           profile->GetJavaObject()));
 }
 
 PriceTrackingNotificationBridge::~PriceTrackingNotificationBridge() = default;
@@ -44,7 +49,9 @@ void PriceTrackingNotificationBridge::OnNotificationPayload(
   }
 
   // Pass the payload to Java.
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   Java_PriceTrackingNotificationBridge_showNotification(
       env, java_obj_, base::android::ToJavaByteArray(env, payload.value()));
 }
+
+DEFINE_JNI(PriceTrackingNotificationBridge)

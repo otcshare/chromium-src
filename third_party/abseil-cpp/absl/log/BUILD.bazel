@@ -14,6 +14,8 @@
 # limitations under the License.
 #
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load(
     "//absl:copts/configure_copts.bzl",
     "ABSL_DEFAULT_COPTS",
@@ -21,7 +23,14 @@ load(
     "ABSL_TEST_COPTS",
 )
 
-package(default_visibility = ["//visibility:public"])
+package(
+    default_visibility = ["//visibility:public"],
+    features = [
+        "header_modules",
+        "layering_check",
+        "parse_headers",
+    ],
+)
 
 licenses(["notice"])
 
@@ -71,6 +80,8 @@ cc_library(
         ":log",
         "//absl/base:config",
         "//absl/base:core_headers",
+        "//absl/base:nullability",
+        "//absl/base:nullability_traits_internal",
         "//absl/strings",
     ],
 )
@@ -91,6 +102,7 @@ cc_library(
         "//absl/flags:marshalling",
         "//absl/log/internal:config",
         "//absl/log/internal:flags",
+        "//absl/log/internal:vlog_config",
         "//absl/strings",
     ],
     # Binaries which do not access these flags from C++ still want this library linked in.
@@ -109,7 +121,9 @@ cc_library(
         "//absl/base:config",
         "//absl/base:core_headers",
         "//absl/base:log_severity",
+        "//absl/base:raw_logging_internal",
         "//absl/hash",
+        "//absl/log/internal:vlog_config",
         "//absl/strings",
     ],
 )
@@ -135,6 +149,7 @@ cc_library(
     copts = ABSL_DEFAULT_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
     deps = [
+        ":vlog_is_on",
         "//absl/log/internal:log_impl",
     ],
 )
@@ -150,6 +165,7 @@ cc_library(
         "//absl/base:core_headers",
         "//absl/base:log_severity",
         "//absl/log/internal:config",
+        "//absl/log/internal:proto",
         "//absl/strings",
         "//absl/time",
         "//absl/types:span",
@@ -176,6 +192,7 @@ cc_library(
     deps = [
         ":log_sink",
         "//absl/base:config",
+        "//absl/base:nullability",
         "//absl/log/internal:log_sink_set",
     ],
 )
@@ -186,7 +203,7 @@ cc_library(
     copts = ABSL_DEFAULT_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
     deps = [
-        ":log",
+        ":absl_log",
         "//absl/base:config",
         "//absl/base:log_severity",
         "//absl/strings",
@@ -211,7 +228,7 @@ cc_library(
         "//absl/base:log_severity",
         "//absl/base:raw_logging_internal",
         "//absl/strings",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )
 
@@ -222,8 +239,55 @@ cc_library(
     linkopts = ABSL_DEFAULT_LINKOPTS,
     deps = [
         "//absl/base:config",
+        "//absl/base:core_headers",
         "//absl/log/internal:structured",
         "//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "absl_vlog_is_on",
+    hdrs = ["absl_vlog_is_on.h"],
+    copts = ABSL_DEFAULT_COPTS,
+    linkopts = ABSL_DEFAULT_LINKOPTS,
+    deps = [
+        "//absl/base:config",
+        "//absl/base:core_headers",
+        "//absl/log/internal:vlog_config",
+        "//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "vlog_is_on",
+    hdrs = ["vlog_is_on.h"],
+    copts = ABSL_DEFAULT_COPTS,
+    linkopts = ABSL_DEFAULT_LINKOPTS,
+    deps = [
+        ":absl_vlog_is_on",
+    ],
+)
+
+# TODO(b/200695798): run this in TAP projects with -DABSL_MAX_VLOG_VERBOSITY={-100,100}
+cc_test(
+    name = "vlog_is_on_test",
+    size = "small",
+    srcs = [
+        "vlog_is_on_test.cc",
+    ],
+    copts = ABSL_TEST_COPTS,
+    linkopts = ABSL_DEFAULT_LINKOPTS,
+    deps = [
+        ":flags",
+        ":globals",
+        ":log",
+        ":scoped_mock_log",
+        ":vlog_is_on",
+        "//absl/base:log_severity",
+        "//absl/flags:flag",
+        "//absl/types:optional",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -232,6 +296,7 @@ cc_library(
 cc_test(
     name = "absl_check_test",
     size = "small",
+    timeout = "moderate",
     srcs = ["absl_check_test.cc"],
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
@@ -243,26 +308,30 @@ cc_test(
     deps = [
         ":absl_check",
         ":check_test_impl",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
 cc_test(
     name = "absl_log_basic_test",
     size = "small",
+    timeout = "moderate",
     srcs = ["absl_log_basic_test.cc"],
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
     deps = [
         ":absl_log",
         ":log_basic_test_impl",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
 cc_test(
     name = "check_test",
     size = "small",
+    timeout = "moderate",
     srcs = ["check_test.cc"],
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
@@ -274,7 +343,8 @@ cc_test(
     deps = [
         ":check",
         ":check_test_impl",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -288,14 +358,16 @@ cc_library(
         "no_test_ios",
         "no_test_wasm",
     ],
-    textual_hdrs = ["check_test_impl.h"],
+    textual_hdrs = ["check_test_impl.inc"],
     visibility = ["//visibility:private"],
     deps = [
         "//absl/base:config",
         "//absl/base:core_headers",
         "//absl/log/internal:test_helpers",
         "//absl/status",
-        "@com_google_googletest//:gtest",
+        "//absl/strings",
+        "//absl/strings:string_view",
+        "@googletest//:gtest",
     ],
 )
 
@@ -309,7 +381,8 @@ cc_test(
         ":die_if_null",
         "//absl/base:core_headers",
         "//absl/log/internal:test_helpers",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -332,7 +405,8 @@ cc_test(
         "//absl/log/internal:test_helpers",
         "//absl/log/internal:test_matchers",
         "//absl/strings",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -350,20 +424,23 @@ cc_test(
         "//absl/base:log_severity",
         "//absl/log/internal:globals",
         "//absl/log/internal:test_helpers",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
 cc_test(
     name = "log_basic_test",
     size = "small",
+    timeout = "moderate",
     srcs = ["log_basic_test.cc"],
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
     deps = [
         ":log",
         ":log_basic_test_impl",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -372,7 +449,7 @@ cc_library(
     testonly = True,
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
-    textual_hdrs = ["log_basic_test_impl.h"],
+    textual_hdrs = ["log_basic_test_impl.inc"],
     visibility = ["//visibility:private"],
     deps = [
         "//absl/base",
@@ -380,10 +457,11 @@ cc_library(
         "//absl/log:globals",
         "//absl/log:log_entry",
         "//absl/log:scoped_mock_log",
+        "//absl/log/internal:globals",
         "//absl/log/internal:test_actions",
         "//absl/log/internal:test_helpers",
         "//absl/log/internal:test_matchers",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )
 
@@ -404,7 +482,8 @@ cc_test(
         "//absl/strings",
         "//absl/time",
         "//absl/types:span",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -418,10 +497,13 @@ cc_test(
         ":check",
         ":log",
         ":scoped_mock_log",
+        "//absl/base:config",
         "//absl/log/internal:test_matchers",
         "//absl/strings",
         "//absl/strings:str_format",
-        "@com_google_googletest//:gtest_main",
+        "//absl/types:optional",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -436,7 +518,8 @@ cc_test(
         ":scoped_mock_log",
         "//absl/base:core_headers",
         "//absl/base:log_severity",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -457,12 +540,12 @@ cc_test(
         ":log_sink_registry",
         ":scoped_mock_log",
         "//absl/base:core_headers",
-        "//absl/base:raw_logging_internal",
         "//absl/log/internal:test_actions",
         "//absl/log/internal:test_helpers",
         "//absl/log/internal:test_matchers",
         "//absl/strings",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -483,7 +566,8 @@ cc_test(
         "//absl/log/internal:test_helpers",
         "//absl/log/internal:test_matchers",
         "//absl/strings",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -502,7 +586,8 @@ cc_test(
         "//absl/log/internal:test_matchers",
         "//absl/strings",
         "//absl/time",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -529,7 +614,8 @@ cc_test(
         "//absl/memory",
         "//absl/strings",
         "//absl/synchronization",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -545,12 +631,15 @@ cc_test(
     deps = [
         ":check",
         ":log",
+        "//absl/base:log_severity",
         "//absl/base:strerror",
         "//absl/flags:program_name",
         "//absl/log/internal:test_helpers",
+        "//absl/status",
         "//absl/strings",
         "//absl/strings:str_format",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -567,13 +656,14 @@ cc_test(
         "//absl/base:core_headers",
         "//absl/log/internal:test_helpers",
         "//absl/log/internal:test_matchers",
-        "@com_google_googletest//:gtest_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
     ],
 )
 
-cc_binary(
+cc_test(
     name = "log_benchmark",
-    testonly = 1,
+    size = "small",
     srcs = ["log_benchmark.cc"],
     copts = ABSL_TEST_COPTS,
     linkopts = ABSL_DEFAULT_LINKOPTS,
@@ -586,10 +676,11 @@ cc_binary(
         ":log_entry",
         ":log_sink",
         ":log_sink_registry",
+        ":vlog_is_on",
         "//absl/base:core_headers",
         "//absl/base:log_severity",
         "//absl/flags:flag",
         "//absl/log/internal:flags",
-        "@com_github_google_benchmark//:benchmark_main",
+        "@google_benchmark//:benchmark_main",
     ],
 )

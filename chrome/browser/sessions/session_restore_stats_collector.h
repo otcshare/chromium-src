@@ -6,11 +6,13 @@
 #define CHROME_BROWSER_SESSIONS_SESSION_RESTORE_STATS_COLLECTOR_H_
 
 #include <stddef.h>
+
 #include <map>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/sessions/session_restore.h"
@@ -34,7 +36,7 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
   // Values other than PAINT_FINISHED_UMA_DONE indicate why FirstPaint time
   // was not recorded.
   enum SessionRestorePaintFinishReasonUma {
-    // SessionRestore.ForegroundTabFirstPaint4_XX successfully recorded.
+    // SessionRestore.ForegroundTabFirstPaint4 successfully recorded.
     PAINT_FINISHED_UMA_DONE = 0,
     // No tabs were visible the whole time before first paint.
     PAINT_FINISHED_UMA_NO_COMPLETELY_VISIBLE_TABS = 1,
@@ -47,8 +49,8 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
   };
 
   // Houses all of the statistics gathered by the SessionRestoreStatsCollector
-  // while the underlying TabLoader is active. These statistics are all reported
-  // at once via the reporting delegate.
+  // while a session restore is active. These statistics are all reported at
+  // once via the reporting delegate.
   struct TabLoaderStats {
     // Constructor that initializes everything to zero.
     TabLoaderStats();
@@ -63,11 +65,25 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
     // any of the tabs involved in the session restore. If this is zero it is
     // because it has not been recorded (all restored tabs were closed or
     // hidden before they were painted, or were never painted). Corresponds to
-    // "SessionRestore.ForegroundTabFirstPaint4" and its _XX variants.
+    // "SessionRestore.ForegroundTabFirstPaint4" and its ".NTabs" variants.
     base::TimeDelta foreground_tab_first_paint;
 
     // Whether we recorded |foreground_tab_first_paint| and if not, why.
     SessionRestorePaintFinishReasonUma tab_first_paint_reason;
+
+    // Count of tabs in a session with various properties tracked in
+    // SessionRestoreDelegate::RestoredTab.
+    size_t active_tab_count = 0;
+    size_t app_tab_count = 0;
+    size_t internal_page_tab_count = 0;
+    size_t pinned_tab_count = 0;
+    size_t grouped_tab_count = 0;
+
+    // Count of tabs in a session with notification permission.
+    size_t notification_permission_tab_count = 0;
+
+    // Count of tabs in a session that update title or favicon in background.
+    size_t updates_in_background_tab_count = 0;
   };
 
   // The StatsReportingDelegate is responsible for delivering statistics
@@ -117,6 +133,11 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
   // Report stats and self-deletes.
   void ReportStatsAndSelfDestroy();
 
+  // Updates counts that depend on async lookup of UpdatesFaviconInBackground()
+  // and UpdatesTitleInBackground() in SiteDataReader.
+  void OnTabUpdatesInBackground(bool notification_permission,
+                                bool updates_in_background);
+
   // Won't record time for foreground tab paint because a non-restored
   // tab was painted first.
   bool non_restored_tab_painted_first_;
@@ -131,7 +152,7 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
   // to a bool indicating whether the tab was ever hidden or occluded.
   std::map<content::RenderWidgetHost*, bool> tracked_tabs_occluded_map_;
 
-  // Statistics gathered regarding the TabLoader.
+  // Statistics gathered regarding tab loading during session restore.
   TabLoaderStats tab_loader_stats_;
 
   // The reporting delegate used to report gathered statistics.
@@ -140,24 +161,22 @@ class SessionRestoreStatsCollector : public content::RenderWidgetHostObserver {
   base::ScopedMultiSourceObservation<content::RenderWidgetHost,
                                      content::RenderWidgetHostObserver>
       render_widget_host_observations_{this};
+
+  base::WeakPtrFactory<SessionRestoreStatsCollector> weak_factory_{this};
 };
 
 // An abstract reporting delegate is used as a testing seam.
 class SessionRestoreStatsCollector::StatsReportingDelegate {
  public:
-  StatsReportingDelegate() {}
+  StatsReportingDelegate() = default;
 
   StatsReportingDelegate(const StatsReportingDelegate&) = delete;
   StatsReportingDelegate& operator=(const StatsReportingDelegate&) = delete;
 
-  virtual ~StatsReportingDelegate() {}
+  virtual ~StatsReportingDelegate() = default;
 
-  // Called when TabLoader has completed its work.
+  // Called when tab loading is finished.
   virtual void ReportTabLoaderStats(const TabLoaderStats& tab_loader_stats) = 0;
-
-  // Called when a tab starts being tracked. Logs the relative time since last
-  // use of the tab.
-  virtual void ReportTabTimeSinceActive(base::TimeDelta elapsed) = 0;
 };
 
 // The default reporting delegate, which reports statistics via UMA.
@@ -170,11 +189,10 @@ class SessionRestoreStatsCollector::UmaStatsReportingDelegate
   UmaStatsReportingDelegate& operator=(const UmaStatsReportingDelegate&) =
       delete;
 
-  ~UmaStatsReportingDelegate() override {}
+  ~UmaStatsReportingDelegate() override = default;
 
   // StatsReportingDelegate:
   void ReportTabLoaderStats(const TabLoaderStats& tab_loader_stats) override;
-  void ReportTabTimeSinceActive(base::TimeDelta elapsed) override;
 };
 
 #endif  // CHROME_BROWSER_SESSIONS_SESSION_RESTORE_STATS_COLLECTOR_H_

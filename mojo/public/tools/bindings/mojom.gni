@@ -2,11 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//mojo/public/tools/bindings/mojom_rust.gni")
 import("//third_party/closure_compiler/closure_args.gni")
 import("//third_party/closure_compiler/compile_js.gni")
 import("//third_party/protobuf/proto_library.gni")
 import("//ui/webui/resources/tools/generate_grd.gni")
 import("//ui/webui/webui_features.gni")
+
+import("//build/config/cast.gni")
 
 # TODO(rockot): Maybe we can factor these dependencies out of //mojo. They're
 # used to conditionally enable message ID scrambling in a way which is
@@ -14,14 +17,12 @@ import("//ui/webui/webui_features.gni")
 # Chrome builds. Ideally we could create some generic knobs here that could be
 # flipped elsewhere though.
 import("//build/config/chrome_build.gni")
-import("//build/config/chromecast_build.gni")
-import("//build/config/chromeos/ui_mode.gni")
-import("//build/config/nacl/config.gni")
+import("//build/config/features.gni")
+import("//build/config/sanitizers/sanitizers.gni")
+import("//build/rust/rust_static_library.gni")
 import("//build/toolchain/kythe.gni")
-import("//components/nacl/features.gni")
 import("//third_party/jinja2/jinja2.gni")
 import("//third_party/ply/ply.gni")
-import("//tools/ipc_fuzzer/ipc_fuzzer.gni")
 declare_args() {
   # Indicates whether typemapping should be supported in this build
   # configuration. This may be disabled when building external projects which
@@ -35,41 +36,40 @@ declare_args() {
 
   # Controls message ID scrambling behavior. If |true|, message IDs are
   # scrambled (i.e. randomized based on the contents of //chrome/VERSION) on
-  # non-Chrome OS desktop platforms. Set to |false| to disable message ID
-  # scrambling on all platforms.
-  enable_mojom_message_id_scrambling = true
-
-  # Enables Closure compilation of generated JS lite bindings. In environments
-  # where compilation is supported, any mojom target "foo" will also have a
-  # corresponding "foo_js_library_for_compile" target generated.
-  enable_mojom_closure_compile = enable_js_type_check && optimize_webui
+  # non-Chrome OS desktop platforms. Enabled on official builds by default.
+  # Set to |true| to enable message ID scrambling on a specific build.
+  # See also `enable_scrambled_message_ids` below for more details.
+  enable_mojom_message_id_scrambling = is_official_build
 
   # Enables generating javascript fuzzing-related code and the bindings for the
   # MojoLPM fuzzer targets. Off by default.
   enable_mojom_fuzzer = false
+
+  # Enables Closure compilation of generated JS lite bindings. In environments
+  # where compilation is supported, any mojom target "foo" will also have a
+  # corresponding "foo_js_library_for_compile" target generated.
+  if (is_chromeos) {
+    enable_mojom_closure_compile = enable_js_type_check && optimize_webui
+  }
+}
+
+# Closure libraries are needed for mojom_closure_compile, and when
+# js_type_check is enabled on Ash.
+if (is_chromeos) {
+  generate_mojom_closure_libraries =
+      enable_mojom_closure_compile || enable_js_type_check
+} else {
+  generate_mojom_closure_libraries = false
 }
 
 # NOTE: We would like to avoid scrambling message IDs where it doesn't add
-# value, so we limit the behavior to desktop builds for now. There is some
-# redundancy in the conditions here, but it is tolerated for clarity:
-# We're explicit about Mac, Windows, and Linux desktop support, but it's
-# also necessary to ensure that bindings in alternate toolchains (e.g.
-# NaCl IRT) are always consistent with the default toolchain; for that
-# reason we always enable scrambling within NaCl toolchains when possible,
-# as well as within the default toolchain when NaCl is enabled.
-#
-# Finally, because we *cannot* enable scrambling on Chrome OS (it would break
-# ARC) we have to explicitly opt out there even when NaCl is enabled (and
-# consequently also when building for NaCl toolchains.) For this reason we
-# check |target_os| explicitly, as it's consistent across all toolchains.
-#
-# TODO(crbug.com/1052397): Remove !chromeos_is_browser_only once
-# lacros-chrome switches to target_os="chromeos"
-enable_scrambled_message_ids =
-    enable_mojom_message_id_scrambling &&
-    (is_mac || is_win || (is_linux && !is_castos) ||
-     ((enable_nacl || is_nacl) &&
-      (target_os != "chromeos" && !chromeos_is_browser_only)))
+# value, so we limit the behavior to desktop builds for now.
+# We *cannot* enable scrambling on Chrome OS (it would break ARC).
+enable_scrambled_message_ids = enable_mojom_message_id_scrambling &&
+                               (is_mac || is_win || (is_linux && !is_castos))
+if (enable_scrambled_message_ids) {
+  assert(!is_chromeos)
+}
 
 _mojom_tools_root = "//mojo/public/tools"
 _mojom_library_root = "$_mojom_tools_root/mojom/mojom"
@@ -90,7 +90,6 @@ mojom_parser_sources = [
   "$_mojom_library_root/parse/conditional_features.py",
   "$_mojom_library_root/parse/lexer.py",
   "$_mojom_library_root/parse/parser.py",
-  "//tools/diagnosis/crbug_1001171.py",
 ]
 
 mojom_generator_root = "$_mojom_tools_root/bindings"
@@ -100,6 +99,8 @@ mojom_generator_sources =
       "$mojom_generator_root/checks/__init__.py",
       "$mojom_generator_root/checks/mojom_attributes_check.py",
       "$mojom_generator_root/checks/mojom_definitions_check.py",
+      "$mojom_generator_root/checks/mojom_interface_direct_receiver_check.py",
+      "$mojom_generator_root/checks/mojom_interface_feature_check.py",
       "$mojom_generator_root/checks/mojom_restrictions_check.py",
       "$mojom_generator_root/generators/__init__.py",
       "$mojom_generator_root/generators/cpp_util.py",
@@ -107,8 +108,12 @@ mojom_generator_sources =
       "$mojom_generator_root/generators/mojom_java_generator.py",
       "$mojom_generator_root/generators/mojom_js_generator.py",
       "$mojom_generator_root/generators/mojom_mojolpm_generator.py",
+      "$mojom_generator_root/generators/mojom_rust_generator.py",
       "$mojom_generator_root/generators/mojom_ts_generator.py",
       "$mojom_generator_script",
+      "//build/action_helpers.py",
+      "//build/gn_helpers.py",
+      "//build/zip_helpers.py",
     ]
 
 if (enable_scrambled_message_ids) {
@@ -204,6 +209,14 @@ if (enable_scrambled_message_ids) {
 #       to a non-mojom C++ type, including necessary deps and headers required
 #       for the mapping to work. See the Typemaps section below.
 #
+#   ts_typemaps (optional)
+#       A list of typemaps to be applied to the generated ts bindings for this
+#       mojom target.
+#
+#       Every typemap is a GN scope describing how one or more mojom types maps
+#       to a non-mojom ts type, including the converter type name and the import
+#       path for the converter.
+#
 #   blink_cpp_typemaps (optional)
 #       Same as above, but for the Blink variant of generated C++ bindings.
 #
@@ -249,19 +262,20 @@ if (enable_scrambled_message_ids) {
 #       |cpp_only| is set to true, it overrides this to prevent generation of
 #       Java bindings.
 #
-#   enable_fuzzing (optional)
-#       Enables generation of fuzzing sources for the target if the global build
-#       arg |enable_mojom_fuzzer| is also set to |true|. Defaults to |true|. If
-#       fuzzing generation is enabled for a target, the target will always
-#       generate JS bindings even if |cpp_only| is set to |true|. See note
-#       above.
+#   generate_rust (optional, under development)
+#       If set to true, Rust bindings are generated, unless |cpp_only| is also
+#       set to true. Still being worked on, and not ready for production use.
 #
-#   support_lazy_serialization (optional)
-#       If set to |true|, generated C++ bindings will effectively prefer to
-#       transmit messages in an unserialized form when going between endpoints
-#       in the same process. This avoids the runtime cost of serialization,
-#       deserialization, and validation logic at the expensive of increased
-#       code size. Defaults to |false|.
+#   enable_js_fuzzing (optional)
+#       Enables generation of javascript fuzzing sources for the target if the
+#       global build arg |enable_mojom_fuzzer| is also set to |true|.
+#       Defaults to |true|. If JS fuzzing generation is enabled for a target,
+#       the target will always generate JS bindings even if |cpp_only| is set to
+#       |true|. See note above.
+#
+#   enable_mojolpm_fuzzing (optional)
+#       Enables generation of fuzzing sources for the target if the global build
+#       arg |enable_mojom_fuzzer| is also set to |true|. Defaults to |true|.
 #
 #   disable_variants (optional)
 #       If |true|, no variant sources will be generated for the target. Defaults
@@ -316,8 +330,10 @@ if (enable_scrambled_message_ids) {
 #       correct dependency order. Note that this only has an effect if
 #       the |enable_mojom_closure_compile| global arg is set to |true| as well.
 #
-#   use_typescript_sources (optional)
-#       Uses the Typescript generator to generate JavaScript bindings.
+#   generate_legacy_js_bindings (optional)
+#       Generate js_data_deps target containing legacy JavaScript bindings files
+#       for Blink tests and other non-WebUI users when generating TypeScript
+#       bindings for WebUI.
 #
 #   js_generate_struct_deserializers (optional)
 #       Generates JS deerialize methods for structs.
@@ -329,17 +345,21 @@ if (enable_scrambled_message_ids) {
 #   webui_module_path (optional)
 #       The path or URL at which modules generated by this target will be
 #       accessible to WebUI pages. This may either be an absolute path or
-#       a full URL path starting with "chrome://resources/mojo".
+#       a full URL path starting with "chrome://resources/mojo". If this path
+#       is not specified, WebUI bindings will not be generated.
 #
 #       If an absolute path, a WebUI page may only import these modules if
-#       they are manually packaged and mapped independently by that page's
-#       WebUIDataSource. The mapped path must match the path given here.
+#       they are added to that page's data source (usually by adding the
+#       modules to the mojo_files list for build_webui(), or by listing the
+#       files as inputs to the page's ts_library() and/or generate_grd() build
+#       steps.
 #
 #       If this is is instead a URL string starting with
-#       "chrome://resources/mojo", the generated resources must be added to
-#       content_resources.grd and registered with
-#       content::SharedResourcesDataSource with a corresponding path, at which
-#       point they will be made available to all WebUI pages at the given URL.
+#       "chrome://resources/mojo", the resulting bindings files should
+#       be added to one of the lists in ui/webui/resources/mojo/BUILD.gn,
+#       at which point they will be made available to all WebUI pages at the
+#       given URL.
+#
 #
 # The following parameters are used to support the component build. They are
 # needed so that bindings which are linked with a component can use the same
@@ -408,21 +428,45 @@ if (enable_scrambled_message_ids) {
 #             should be mapped in generated bindings. This is a string like
 #             "::base::Value" or "std::vector<::base::Value>".
 #
+#         copyable_pass_by_value (optional)
+#             A boolean value (default false) which effectively indicates
+#             whether the C++ type is very cheap to copy. If so, generated
+#             bindings will pass by value but not use std::move() at call sites.
+#
+#         default_constructible (optional)
+#             A boolean value (default true) which indicates whether the C++
+#             type is default constructible. If a C++ type is not default
+#             constructible (e.g. the implementor of the type prefers not to
+#             publicly expose a default constructor that creates an object in an
+#             invalid state), Mojo will instead construct C++ type with an
+#             argument of the type `mojo::DefaultConstruct::Tag` (essentially a
+#             passkey-like type specifically for this use case).
+#
+#         force_serialize (optional)
+#             A boolean value (default false) which disables lazy serialization
+#             of the typemapped type if lazy serialization is enabled for the
+#             mojom target applying this typemap.
+#
 #         forward_declaration (optional)
 #             A forward declaration of the C++ type, which bindings that don't
 #             need the full type definition can use to reduce the size of
 #             the generated code. This is a string like
 #             "namespace base { class Value; }".
 #
+#         hashable (optional)
+#             A boolean value (default false) indicating whether the C++ type is
+#             hashable. Set to true if true AND needed (i.e. you need to use the
+#             type as the key of a mojom map).
+#
 #         move_only (optional)
 #             A boolean value (default false) which indicates whether the C++
 #             type is move-only. If true, generated bindings will pass the type
 #             by value and use std::move() at call sites.
 #
-#         copyable_pass_by_value (optional)
-#             A boolean value (default false) which effectively indicates
-#             whether the C++ type is very cheap to copy. If so, generated
-#             bindings will pass by value but not use std::move() at call sites.
+#         non_const_ref (optional)
+#             A boolean value (default false) which indicates whether the C++
+#             type not const. If true, generated bindings will omit const for
+#             the type within bindings.
 #
 #         nullable_is_same_type (optional)
 #             A boolean value (default false) which indicates that the C++ type
@@ -430,18 +474,8 @@ if (enable_scrambled_message_ids) {
 #             traits for the type must define IsNull and SetToNull methods.
 #
 #             When false, nullable fields are represented by wrapping the C++
-#             type with absl::optional, and null values are simply
-#             absl::nullopt.
-#
-#         hashable (optional)
-#             A boolean value (default false) indicating whether the C++ type is
-#             hashable. Set to true if true AND needed (i.e. you need to use the
-#             type as the key of a mojom map).
-#
-#         force_serialize (optional)
-#             A boolean value (default false) which disables lazy serialization
-#             of the typemapped type if lazy serialization is enabled for the
-#             mojom target applying this typemap.
+#             type with std::optional, and null values are simply
+#             std::nullopt.
 #
 # Additional typemap scope parameters:
 #
@@ -607,13 +641,18 @@ template("mojom") {
         [ string_replace(path, rebase_path(root_gen_dir, "//") + "/", "") ]
   }
 
-  # Sanity check that either all input files have a .mojom extension, or
-  # all input files have a .test-mojom extension AND |testonly| is |true|.
+  # Sanity check that either all input files have a .mojom extension, or, for
+  # testonly targets, that all input files have a .test-mojom extension.
   sources_list_filenames =
       process_file_template(sources_list, "{{source_file_part}}")
   sources_list_filenames_with_mojom_extension =
       process_file_template(sources_list, "{{source_name_part}}.mojom")
-  if (sources_list_filenames != sources_list_filenames_with_mojom_extension) {
+  if (sources_list_filenames == sources_list_filenames_with_mojom_extension) {
+    if (defined(invoker.sources)) {
+      assert(!defined(invoker.testonly) || !invoker.testonly,
+             "testonly mojom target has non- .test-mojom files")
+    }
+  } else {
     sources_list_filenames_with_test_mojom_extension =
         process_file_template(sources_list, "{{source_name_part}}.test-mojom")
     if (sources_list_filenames ==
@@ -642,14 +681,24 @@ template("mojom") {
         [ rebase_path("$dep_target_gen_dir/$dep_name.build_metadata",
                       target_gen_dir) ]
   }
-  write_file(build_metadata_filename, build_metadata, "json")
+  build_metadata_target_name = "${target_name}__build_metadata"
+  generated_file(build_metadata_target_name) {
+    outputs = [ build_metadata_filename ]
+    contents = build_metadata
+    output_conversion = "json"
+  }
 
-  generate_fuzzing =
-      (!defined(invoker.enable_fuzzing) || invoker.enable_fuzzing) &&
+  generate_js_fuzzing =
+      (!defined(invoker.enable_js_fuzzing) || invoker.enable_js_fuzzing) &&
       enable_mojom_fuzzer && (!defined(invoker.testonly) || !invoker.testonly)
 
+  generate_mojolpm_fuzzing =
+      (!defined(invoker.enable_mojolpm_fuzzing) ||
+       invoker.enable_mojolpm_fuzzing) && enable_mojom_fuzzer &&
+      (!defined(invoker.testonly) || !invoker.testonly)
+
   parser_target_name = "${target_name}__parser"
-  parser_deps = []
+  parser_deps = [ ":${build_metadata_target_name}" ]
   foreach(dep, all_deps) {
     _label = get_label_info(dep, "label_no_toolchain")
     parser_deps += [ "${_label}__parser" ]
@@ -657,6 +706,17 @@ template("mojom") {
   if (defined(invoker.parser_deps)) {
     parser_deps += invoker.parser_deps
   }
+
+  config("${parser_target_name}_inputs") {
+    inputs = sources_list + [ build_metadata_filename ]
+  }
+  group("${parser_target_name}_deps") {
+    public_configs = [ ":${parser_target_name}_inputs" ]
+    public_deps = parser_deps
+  }
+
+  parser_deps += [ ":${parser_target_name}_deps" ]
+
   if (sources_list == []) {
     # Even without sources we generate a parser target to at least forward
     # other parser dependencies.
@@ -673,46 +733,47 @@ template("mojom") {
     }
     if (is_android) {
       enabled_features += [ "is_android" ]
-    } else if (is_chromeos_ash) {
-      enabled_features += [
-        "is_chromeos",
-        "is_chromeos_ash",
-      ]
+    } else if (is_chromeos) {
+      enabled_features += [ "is_chromeos" ]
     } else if (is_fuchsia) {
       enabled_features += [ "is_fuchsia" ]
     } else if (is_ios) {
       enabled_features += [ "is_ios" ]
-    } else if (is_linux || is_chromeos_lacros) {
+    } else if (is_linux) {
       enabled_features += [ "is_linux" ]
-      if (is_chromeos_lacros) {
-        enabled_features += [
-          "is_chromeos",
-          "is_chromeos_lacros",
-        ]
-      }
     } else if (is_mac) {
       enabled_features += [ "is_mac" ]
     } else if (is_win) {
       enabled_features += [ "is_win" ]
     }
 
-    action(parser_target_name) {
+    if (is_apple) {
+      enabled_features += [ "is_apple" ]
+    }
+
+    action_outputs = []
+    foreach(base_path, output_file_base_paths) {
+      filename = get_path_info(base_path, "file")
+      dirname = get_path_info(base_path, "dir")
+      action_outputs += [ "$root_gen_dir/$dirname/${filename}-module" ]
+    }
+
+    action("${parser_target_name}_action") {
       script = mojom_parser_script
       inputs = mojom_parser_sources + ply_sources + [ build_metadata_filename ]
       sources = sources_list
       public_deps = parser_deps
-      outputs = []
-      foreach(base_path, output_file_base_paths) {
-        filename = get_path_info(base_path, "file")
-        dirname = get_path_info(base_path, "dir")
-        outputs += [ "$root_gen_dir/$dirname/${filename}-module" ]
-      }
+      outputs = action_outputs
 
       filelist = []
       foreach(source, sources_list) {
         filelist += [ rebase_path(source, root_build_dir) ]
       }
-      response_file_contents = filelist
+
+      # Workaround for https://github.com/ninja-build/ninja/issues/1966.
+      rsp_file = "$target_gen_dir/${target_name}.rsp"
+      write_file(rsp_file, filelist)
+      inputs += [ rsp_file ]
 
       args = [
         # Resolve relative input mojom paths against both the root src dir and
@@ -725,7 +786,7 @@ template("mojom") {
         "--output-root",
         rebase_path(root_gen_dir, root_build_dir),
 
-        "--mojom-file-list={{response_file_name}}",
+        "--mojom-file-list=" + rebase_path(rsp_file, root_build_dir),
 
         "--check-imports",
         rebase_path(build_metadata_filename, root_build_dir),
@@ -751,6 +812,17 @@ template("mojom") {
           "webui_module_path=${invoker.webui_module_path}",
         ]
       }
+    }
+
+    # This config is to propagate mojom-module files to descendant targets'
+    # input properly.
+    config("${parser_target_name}_outputs") {
+      inputs = action_outputs
+    }
+
+    group(parser_target_name) {
+      public_configs = [ ":${parser_target_name}_outputs" ]
+      public_deps = [ ":${parser_target_name}_action" ]
     }
   }
 
@@ -809,12 +881,9 @@ template("mojom") {
     } else if (defined(invoker.export_class_attribute_shared) ||
                defined(invoker.export_class_attribute)) {
       if (defined(invoker.export_class_attribute_shared)) {
-        assert(defined(invoker.export_header_shared))
         shared_component_export_macro = invoker.export_class_attribute_shared
         shared_component_impl_macro = invoker.export_define_shared
       } else {
-        assert(!defined(invoker.export_header_shared))
-
         # If no explicit shared attribute/define was provided by the invoker,
         # we derive some reasonable settings frorm the default variant.
         shared_component_export_macro = "COMPONENT_EXPORT(MOJOM_SHARED_" +
@@ -856,10 +925,13 @@ template("mojom") {
         outputs += [ "$root_gen_dir/$base_path-shared-message-ids.h" ]
       }
 
-      response_file_contents = filelist
+      # Workaround for https://github.com/ninja-build/ninja/issues/1966.
+      rsp_file = "$target_gen_dir/${target_name}.rsp"
+      write_file(rsp_file, filelist)
+      inputs += [ rsp_file ]
 
       args += [
-        "--filelist={{response_file_name}}",
+        "--filelist=" + rebase_path(rsp_file, root_build_dir),
         "--generate_non_variant_code",
         "--generate_message_ids",
         "-g",
@@ -902,17 +974,23 @@ template("mojom") {
         inputs += [ "$root_gen_dir/$dirname/${filename}-module" ]
 
         outputs += [
+          "$root_gen_dir/$base_path-data-view.h",
+          "$root_gen_dir/$base_path-features.h",
           "$root_gen_dir/$base_path-params-data.h",
+          "$root_gen_dir/$base_path-send-validation.h",
           "$root_gen_dir/$base_path-shared-internal.h",
           "$root_gen_dir/$base_path-shared.cc",
           "$root_gen_dir/$base_path-shared.h",
         ]
       }
 
-      response_file_contents = filelist
+      # Workaround for https://github.com/ninja-build/ninja/issues/1966.
+      rsp_file = "$target_gen_dir/${target_name}.rsp"
+      write_file(rsp_file, filelist)
+      inputs += [ rsp_file ]
 
       args += [
-        "--filelist={{response_file_name}}",
+        "--filelist=" + rebase_path(rsp_file, root_build_dir),
         "--generate_non_variant_code",
         "-g",
         "c++",
@@ -943,13 +1021,17 @@ template("mojom") {
     if (defined(invoker.testonly)) {
       testonly = invoker.testonly
     }
+    configs += [ "//build/config/compiler:wexit_time_destructors" ]
     deps = []
     public_deps = []
     if (output_file_base_paths != []) {
       sources = []
       foreach(base_path, output_file_base_paths) {
         sources += [
+          "$root_gen_dir/$base_path-data-view.h",
+          "$root_gen_dir/$base_path-features.h",
           "$root_gen_dir/$base_path-params-data.h",
+          "$root_gen_dir/$base_path-send-validation.h",
           "$root_gen_dir/$base_path-shared-internal.h",
           "$root_gen_dir/$base_path-shared.cc",
           "$root_gen_dir/$base_path-shared.h",
@@ -992,7 +1074,7 @@ template("mojom") {
     }
   }
 
-  if (generate_fuzzing) {
+  if (generate_mojolpm_fuzzing) {
     # This block generates the proto files used for the MojoLPM fuzzer,
     # and the corresponding proto targets that will be linked in the fuzzer
     # targets. These are independent of the typemappings, and can be done
@@ -1041,10 +1123,13 @@ template("mojom") {
         outputs += [ "$target_gen_dir/$source_file.mojolpm.proto" ]
       }
 
-      response_file_contents = filelist
+      # Workaround for https://github.com/ninja-build/ninja/issues/1966.
+      rsp_file = "$target_gen_dir/${target_name}.rsp"
+      write_file(rsp_file, filelist)
+      inputs += [ rsp_file ]
 
       args += [
-        "--filelist={{response_file_name}}",
+        "--filelist=" + rebase_path(rsp_file, root_build_dir),
         "--generate_non_variant_code",
         "-g",
         "mojolpm",
@@ -1073,16 +1158,16 @@ template("mojom") {
         import_dirs = [ "//" ]
         proto_in_dir = "${root_gen_dir}"
         proto_out_dir = "."
+        deps = [ "//mojo/public/tools/fuzzers:mojolpm_proto" ]
         proto_deps = [ ":$generator_mojolpm_proto_target_name" ]
-        link_deps = [ "//mojo/public/tools/fuzzers:mojolpm_proto" ]
+        link_deps = []
 
         foreach(d, all_deps) {
           # Resolve the name, so that a target //mojo/something becomes
           # //mojo/something:something and we can append mojolpm_proto_suffix
           # to get the proto dependency name.
           full_name = get_label_info("$d", "label_no_toolchain")
-          proto_deps += [ "${full_name}_mojolpm_proto" ]
-          link_deps += [ "${full_name}_mojolpm_proto" ]
+          deps += [ "${full_name}_mojolpm_proto" ]
         }
       }
     } else {
@@ -1108,7 +1193,7 @@ template("mojom") {
     component_macro_suffix = ""
   }
   if ((!defined(invoker.disable_variants) || !invoker.disable_variants) &&
-      !is_ios) {
+      use_blink) {
     blink_variant = {
       variant = "blink"
       component_macro_suffix = "_BLINK"
@@ -1134,6 +1219,7 @@ template("mojom") {
     }
 
     cpp_typemap_configs = []
+    ts_typemap_configs = []
     export_defines = []
     export_defines_overridden = false
     force_source_set = false
@@ -1146,6 +1232,9 @@ template("mojom") {
         bindings_configuration.for_blink) {
       if (defined(invoker.blink_cpp_typemaps)) {
         cpp_typemap_configs = invoker.blink_cpp_typemaps
+      }
+      if (defined(invoker.ts_typemaps)) {
+        ts_typemap_configs = invoker.ts_typemaps
       }
       if (defined(invoker.export_define_blink)) {
         export_defines_overridden = true
@@ -1168,6 +1257,9 @@ template("mojom") {
     } else {
       if (defined(invoker.cpp_typemaps)) {
         cpp_typemap_configs = invoker.cpp_typemaps
+      }
+      if (defined(invoker.ts_typemaps)) {
+        ts_typemap_configs = invoker.ts_typemaps
       }
       if (defined(invoker.export_define)) {
         export_defines_overridden = true
@@ -1202,39 +1294,6 @@ template("mojom") {
             "${bindings_configuration.component_macro_suffix}_IMPL" ]
     }
 
-    export_args = []
-    export_args_overridden = false
-    if (defined(bindings_configuration.for_blink) &&
-        bindings_configuration.for_blink) {
-      if (defined(invoker.export_class_attribute_blink)) {
-        export_args_overridden = true
-        export_args += [
-          "--export_attribute",
-          invoker.export_class_attribute_blink,
-          "--export_header",
-          invoker.export_header_blink,
-        ]
-      }
-    } else if (defined(invoker.export_class_attribute)) {
-      export_args_overridden = true
-      export_args += [
-        "--export_attribute",
-        invoker.export_class_attribute,
-        "--export_header",
-        invoker.export_header,
-      ]
-    }
-
-    if (!export_args_overridden && defined(invoker.component_macro_prefix)) {
-      export_args += [
-        "--export_attribute",
-        "COMPONENT_EXPORT(${invoker.component_macro_prefix}" +
-            "${bindings_configuration.component_macro_suffix})",
-        "--export_header",
-        "base/component_export.h",
-      ]
-    }
-
     generate_java = false
     if (!cpp_only && defined(invoker.generate_java)) {
       generate_java = invoker.generate_java
@@ -1243,6 +1302,41 @@ template("mojom") {
     type_mappings_path =
         "$target_gen_dir/${target_name}${variant_suffix}__type_mappings"
     if (sources_list != []) {
+      export_args = []
+      export_args_overridden = false
+      if (defined(bindings_configuration.for_blink) &&
+          bindings_configuration.for_blink) {
+        if (defined(invoker.export_class_attribute_blink)) {
+          export_args_overridden = true
+          export_args += [
+            "--export_attribute",
+            invoker.export_class_attribute_blink,
+            "--export_header",
+            invoker.export_header_blink,
+          ]
+        }
+      } else if (defined(invoker.export_class_attribute)) {
+        export_args_overridden = true
+        export_args += [
+          "--export_attribute",
+          invoker.export_class_attribute,
+          "--export_header",
+          invoker.export_header,
+        ]
+      }
+      if (!export_args_overridden && defined(invoker.component_macro_prefix)) {
+        export_args += [
+          "--export_attribute",
+          "COMPONENT_EXPORT(${invoker.component_macro_prefix}" +
+              "${bindings_configuration.component_macro_suffix})",
+          "--export_header",
+          "base/component_export.h",
+        ]
+      }
+      if (defined(variant) && variant == "blink") {
+        export_defines += [ "BLINK_MOJO_IMPL=1" ]
+      }
+
       generator_cpp_output_suffixes = []
       variant_dash_suffix = ""
       if (defined(variant)) {
@@ -1258,7 +1352,7 @@ template("mojom") {
 
       generator_target_name = "${target_name}${variant_suffix}__generator"
 
-      # TODO(crbug.com/1194274): Investigate nondeterminism in Py3 builds.
+      # TODO(crbug.com/40758345): Investigate nondeterminism in Py3 builds.
       action(generator_target_name) {
         visibility = [ ":*" ]
         script = mojom_generator_script
@@ -1268,7 +1362,8 @@ template("mojom") {
               "$root_gen_dir/mojo/public/tools/bindings/cpp_templates.zip",
               type_mappings_path,
             ]
-        if (generate_fuzzing && !defined(bindings_configuration.variant)) {
+        if (generate_mojolpm_fuzzing &&
+            !defined(bindings_configuration.variant)) {
           sources += [
             "$root_gen_dir/mojo/public/tools/bindings/mojolpm_templates.zip",
           ]
@@ -1300,7 +1395,8 @@ template("mojom") {
             "$root_gen_dir/${base_path}${variant_dash_suffix}.cc",
             "$root_gen_dir/${base_path}${variant_dash_suffix}.h",
           ]
-          if (generate_fuzzing && !defined(bindings_configuration.variant)) {
+          if (generate_mojolpm_fuzzing &&
+              !defined(bindings_configuration.variant)) {
             outputs += [
               "$root_gen_dir/${base_path}${variant_dash_suffix}-mojolpm.cc",
               "$root_gen_dir/${base_path}${variant_dash_suffix}-mojolpm.h",
@@ -1308,14 +1404,17 @@ template("mojom") {
           }
         }
 
-        response_file_contents = filelist
-
+        # Workaround for https://github.com/ninja-build/ninja/issues/1966.
+        rsp_file = "$target_gen_dir/${target_name}.rsp"
+        write_file(rsp_file, filelist)
+        inputs += [ rsp_file ]
         args += [
-          "--filelist={{response_file_name}}",
+          "--filelist=" + rebase_path("$rsp_file", root_build_dir),
           "-g",
         ]
 
-        if (generate_fuzzing && !defined(bindings_configuration.variant)) {
+        if (generate_mojolpm_fuzzing &&
+            !defined(bindings_configuration.variant)) {
           args += [ "c++,mojolpm" ]
         } else {
           args += [ "c++" ]
@@ -1336,11 +1435,6 @@ template("mojom") {
         if (defined(bindings_configuration.for_blink) &&
             bindings_configuration.for_blink) {
           args += [ "--for_blink" ]
-        }
-
-        if (defined(invoker.support_lazy_serialization) &&
-            invoker.support_lazy_serialization) {
-          args += [ "--support_lazy_serialization" ]
         }
 
         if (enable_kythe_annotations) {
@@ -1373,78 +1467,11 @@ template("mojom") {
       }
     }
 
-    if (generate_fuzzing && !defined(variant)) {
-      # This block contains the C++ targets for the MojoLPM fuzzer, we need to
-      # do this here so that we can use the typemap configuration for the
-      # empty-variant Mojo target.
-
-      mojolpm_target_name = "${target_name}_mojolpm"
-      mojolpm_generator_target_name = "${target_name}__generator"
-      source_set(mojolpm_target_name) {
-        # There are still a few missing header dependencies between mojo targets
-        # with typemaps and the dependencies of their typemap headers. It would
-        # be good to enable include checking for these in the future though.
-        check_includes = false
-        testonly = true
-        if (defined(invoker.sources)) {
-          # Split the input into generated and non-generated source files. They
-          # need to be processed separately.
-          gen_dir_path_wildcard = get_path_info("//", "gen_dir") + "/*"
-          non_gen_sources =
-              filter_exclude(invoker.sources, [ gen_dir_path_wildcard ])
-          gen_sources =
-              filter_include(invoker.sources, [ gen_dir_path_wildcard ])
-          sources = process_file_template(
-                  non_gen_sources,
-                  [
-                    "{{source_gen_dir}}/{{source_file_part}}-mojolpm.cc",
-                    "{{source_gen_dir}}/{{source_file_part}}-mojolpm.h",
-                  ])
-          sources += process_file_template(
-                  gen_sources,
-                  [
-                    "{{source_dir}}/{{source_file_part}}-mojolpm.cc",
-                    "{{source_dir}}/{{source_file_part}}-mojolpm.h",
-                  ])
-          deps = []
-        } else {
-          sources = []
-          deps = []
-        }
-
-        public_deps = [
-          ":$generator_shared_target_name",
-
-          # NB: hardcoded dependency on the no-variant variant generator, since
-          # mojolpm only uses the no-variant type.
-          ":$mojolpm_generator_target_name",
-          ":$mojolpm_proto_target_name",
-          "//base",
-          "//mojo/public/tools/fuzzers:mojolpm",
-        ]
-
-        foreach(d, all_deps) {
-          # Resolve the name, so that a target //mojo/something becomes
-          # //mojo/something:something and we can append variant_suffix to
-          # get the cpp dependency name.
-          full_name = get_label_info("$d", "label_no_toolchain")
-          public_deps += [ "${full_name}_mojolpm" ]
-        }
-
-        foreach(config, cpp_typemap_configs) {
-          if (defined(config.traits_deps)) {
-            deps += config.traits_deps
-          }
-          if (defined(config.traits_public_deps)) {
-            public_deps += config.traits_public_deps
-          }
-        }
-      }
-    }
-
     # Write the typemapping configuration for this target out to a file to be
     # validated by a Python script. This helps catch mistakes that can't
     # be caught by logic in GN.
+    _mojom_target_name = target_name
+
     _typemap_config_filename =
         "$target_gen_dir/${target_name}${variant_suffix}.typemap_config"
     _typemap_stamp_filename = "${_typemap_config_filename}.validated"
@@ -1467,7 +1494,6 @@ template("mojom") {
       _rebased_typemap_configs += [ _rebased_config ]
     }
     write_file(_typemap_config_filename, _rebased_typemap_configs, "json")
-    _mojom_target_name = target_name
 
     action(_typemap_validator_target_name) {
       script = "$mojom_generator_root/validate_typemap_config.py"
@@ -1480,12 +1506,33 @@ template("mojom") {
       ]
     }
 
+    _ts_typemap_config_filename =
+        "$target_gen_dir/${target_name}${variant_suffix}.ts_typemap_config"
+    _ts_typemap_stamp_filename = "${_ts_typemap_config_filename}.validated"
+    _ts_typemap_validator_target_name =
+        "${type_mappings_target_name}_ts__validator"
+    write_file(_ts_typemap_config_filename, ts_typemap_configs, "json")
+
+    action(_ts_typemap_validator_target_name) {
+      script = "$mojom_generator_root/validate_ts_typemap_config.py"
+      inputs = [ _ts_typemap_config_filename ]
+      outputs = [ _ts_typemap_stamp_filename ]
+      args = [
+        get_label_info(_mojom_target_name, "label_no_toolchain"),
+        rebase_path(_ts_typemap_config_filename, root_build_dir),
+        rebase_path(_ts_typemap_stamp_filename, root_build_dir),
+      ]
+    }
+
     action(type_mappings_target_name) {
       inputs =
           mojom_generator_sources + jinja2_sources + [ _typemap_stamp_filename ]
       outputs = [ type_mappings_path ]
       script = "$mojom_generator_root/generate_type_mappings.py"
-      deps = [ ":$_typemap_validator_target_name" ]
+      deps = [
+        ":$_ts_typemap_validator_target_name",
+        ":$_typemap_validator_target_name",
+      ]
       args = [
         "--output",
         rebase_path(type_mappings_path, root_build_dir),
@@ -1510,10 +1557,15 @@ template("mojom") {
       }
 
       # Newer GN-based typemaps are aggregated into a single config.
-      inputs += [ _typemap_config_filename ]
+      inputs += [
+        _typemap_config_filename,
+        _ts_typemap_config_filename,
+      ]
       args += [
         "--cpp-typemap-config",
         rebase_path(_typemap_config_filename, root_build_dir),
+        "--ts-typemap-config",
+        rebase_path(_ts_typemap_config_filename, root_build_dir),
       ]
     }
 
@@ -1559,15 +1611,29 @@ template("mojom") {
       sources_target_name = output_target_name
     }
 
+    generate_rust = false
+    if (!cpp_only && defined(invoker.generate_rust)) {
+      generate_rust = invoker.generate_rust
+    }
+
+    if (generate_rust) {
+      mojom_rust("${output_target_name}_rust") {
+      }
+    }
+
     target(sources_target_type, sources_target_name) {
       if (defined(output_name_override)) {
         output_name = output_name_override
       }
-      visibility = output_visibility + [ ":$output_target_name" ]
+      visibility = output_visibility + [
+                     ":$output_target_name",
+                     ":${target_name}_mojolpm",
+                   ]
       if (defined(invoker.testonly)) {
         testonly = invoker.testonly
       }
       defines = export_defines
+      configs += [ "//build/config/compiler:wexit_time_destructors" ]
       configs += extra_configs
       if (output_file_base_paths != []) {
         sources = []
@@ -1586,6 +1652,7 @@ template("mojom") {
         ":$shared_cpp_library_target_name",
         "//base",
       ]
+
       if (require_full_cpp_deps) {
         public_deps += [ "//mojo/public/cpp/bindings" ]
       } else {
@@ -1653,6 +1720,81 @@ template("mojom") {
       if (defined(bindings_configuration.for_blink) &&
           bindings_configuration.for_blink) {
         public_deps += [ "//mojo/public/cpp/bindings:wtf_support" ]
+      }
+    }
+
+    if (generate_mojolpm_fuzzing && !defined(variant)) {
+      # This block contains the C++ targets for the MojoLPM fuzzer, we need to
+      # do this here so that we can use the typemap configuration for the
+      # empty-variant Mojo target.
+
+      mojolpm_target_name = "${target_name}_mojolpm"
+      mojolpm_generator_target_name = "${target_name}__generator"
+      source_set(mojolpm_target_name) {
+        # There are still a few missing header dependencies between mojo targets
+        # with typemaps and the dependencies of their typemap headers. It would
+        # be good to enable include checking for these in the future though.
+        check_includes = false
+        testonly = true
+
+        # This removes coverage for MojoLPM generated files. Coverage is only
+        # interesting in the code that's actually fuzzed. On big fuzzer, this
+        # might also speed up the fuzzing rate.
+        configs -= fuzzing_engine_remove_configs
+        configs += fuzzing_engine_add_configs
+        if (defined(invoker.sources)) {
+          # Split the input into generated and non-generated source files. They
+          # need to be processed separately.
+          gen_dir_path_wildcard = get_path_info("//", "gen_dir") + "/*"
+          non_gen_sources =
+              filter_exclude(invoker.sources, [ gen_dir_path_wildcard ])
+          gen_sources =
+              filter_include(invoker.sources, [ gen_dir_path_wildcard ])
+          sources = process_file_template(
+                  non_gen_sources,
+                  [
+                    "{{source_gen_dir}}/{{source_file_part}}-mojolpm.cc",
+                    "{{source_gen_dir}}/{{source_file_part}}-mojolpm.h",
+                  ])
+          sources += process_file_template(
+                  gen_sources,
+                  [
+                    "{{source_dir}}/{{source_file_part}}-mojolpm.cc",
+                    "{{source_dir}}/{{source_file_part}}-mojolpm.h",
+                  ])
+          deps = [ ":$output_target_name" ]
+        } else {
+          sources = []
+          deps = []
+        }
+
+        public_deps = [
+          ":$generator_shared_target_name",
+
+          # NB: hardcoded dependency on the no-variant variant generator, since
+          # mojolpm only uses the no-variant type.
+          ":$mojolpm_generator_target_name",
+          ":$mojolpm_proto_target_name",
+          "//base",
+          "//mojo/public/tools/fuzzers:mojolpm",
+        ]
+
+        foreach(d, all_deps) {
+          # Resolve the name, so that a target //mojo/something becomes
+          # //mojo/something:something and we can append variant_suffix to
+          # get the cpp dependency name.
+          full_name = get_label_info("$d", "label_no_toolchain")
+          public_deps += [ "${full_name}_mojolpm" ]
+        }
+
+        foreach(config, cpp_typemap_configs) {
+          if (defined(config.traits_deps)) {
+            deps += config.traits_deps
+          }
+          if (defined(config.traits_public_deps)) {
+            public_deps += config.traits_public_deps
+          }
+        }
       }
     }
 
@@ -1727,6 +1869,7 @@ template("mojom") {
       android_library(java_target_name) {
         forward_variables_from(invoker, [ "enable_bytecode_checks" ])
         deps = [
+          "//build/android:build_java",
           "//mojo/public/java:bindings_java",
           "//mojo/public/java:system_java",
           "//third_party/androidx:androidx_annotation_annotation_java",
@@ -1748,16 +1891,24 @@ template("mojom") {
     }
   }
 
-  use_typescript_for_target =
-      defined(invoker.use_typescript_sources) &&
-      invoker.use_typescript_sources && defined(invoker.webui_module_path)
+  use_typescript_for_target = defined(invoker.webui_module_path)
 
-  if (!use_typescript_for_target && defined(invoker.use_typescript_sources)) {
-    not_needed(invoker, [ "use_typescript_sources" ])
+  generate_legacy_js = !use_typescript_for_target ||
+                       (defined(invoker.generate_legacy_js_bindings) &&
+                        invoker.generate_legacy_js_bindings)
+
+  if (!use_typescript_for_target &&
+      defined(invoker.generate_legacy_js_bindings)) {
+    not_needed(invoker, [ "generate_legacy_js_bindings" ])
   }
 
-  if ((generate_fuzzing || !defined(invoker.cpp_only) || !invoker.cpp_only) &&
-      !use_typescript_for_target) {
+  # Targets needed by both TS and JS bindings targets. These are needed
+  # unconditionally for JS bindings targets, and are needed for TS bindings
+  # targets when generate_legacy_js_bindings is true. This option is provided
+  # since the legacy bindings are needed by Blink tests and non-Chromium users,
+  # which are not expected to migrate to modules or TypeScript.
+  if (generate_legacy_js && (generate_js_fuzzing ||
+                             !defined(invoker.cpp_only) || !invoker.cpp_only)) {
     if (sources_list != []) {
       generator_js_target_name = "${target_name}_js__generator"
 
@@ -1785,10 +1936,6 @@ template("mojom") {
             "$root_gen_dir/$base_path-lite.js",
             "$root_gen_dir/$base_path-lite-for-compile.js",
           ]
-
-          if (defined(invoker.webui_module_path)) {
-            outputs += [ "$root_gen_dir/mojom-webui/$base_path-webui.js" ]
-          }
         }
 
         response_file_contents = filelist
@@ -1810,7 +1957,7 @@ template("mojom") {
           args += message_scrambling_args
         }
 
-        if (generate_fuzzing) {
+        if (generate_js_fuzzing) {
           args += [ "--generate_fuzzing" ]
         }
       }
@@ -1854,31 +2001,13 @@ template("mojom") {
         data_deps += [ "${full_name}_js_data_deps" ]
       }
     }
+  }
 
-    js_library_target_name = "${target_name}_js_library"
-    if (sources_list != []) {
-      js_library(js_library_target_name) {
-        extra_public_deps = [ ":$generator_js_target_name" ]
-        sources = []
-        foreach(base_path, output_file_base_paths) {
-          sources += [ "$root_gen_dir/${base_path}-lite.js" ]
-        }
-        externs_list = [
-          "${externs_path}/mojo_core.js",
-          "${externs_path}/pending.js",
-        ]
-
-        deps = []
-        foreach(d, all_deps) {
-          full_name = get_label_info(d, "label_no_toolchain")
-          deps += [ "${full_name}_js_library" ]
-        }
-      }
-    } else {
-      group(js_library_target_name) {
-      }
-    }
-
+  # js_library() closure compiler targets, primarily used on ChromeOS. Only
+  # generate these targets if the mojom target is not C++ only and is not using
+  # TypeScript.
+  if (generate_mojom_closure_libraries &&
+      (!defined(invoker.cpp_only) || !invoker.cpp_only) && generate_legacy_js) {
     js_library_for_compile_target_name = "${target_name}_js_library_for_compile"
     if (sources_list != []) {
       js_library(js_library_for_compile_target_name) {
@@ -1904,85 +2033,9 @@ template("mojom") {
       group(js_library_for_compile_target_name) {
       }
     }
-
-    js_modules_target_name = "${target_name}_js_modules"
-    if (sources_list != []) {
-      js_library(js_modules_target_name) {
-        extra_public_deps = [ ":$generator_js_target_name" ]
-        sources = []
-        foreach(base_path, output_file_base_paths) {
-          sources += [ "$root_gen_dir/${base_path}.m.js" ]
-        }
-        externs_list = [
-          "${externs_path}/mojo_core.js",
-          "${externs_path}/pending.js",
-        ]
-        if (defined(invoker.disallow_native_types) &&
-            invoker.disallow_native_types) {
-          deps = []
-        } else {
-          deps = [ "//mojo/public/js:bindings_uncompiled" ]
-        }
-        foreach(d, all_deps) {
-          full_name = get_label_info(d, "label_no_toolchain")
-          deps += [ "${full_name}_js_modules" ]
-        }
-      }
-    } else {
-      group(js_modules_target_name) {
-      }
-    }
-
-    if (defined(invoker.webui_module_path)) {
-      webui_js_target_name = "${target_name}_webui_js"
-      if (sources_list != []) {
-        js_library(webui_js_target_name) {
-          extra_public_deps = [ ":$generator_js_target_name" ]
-          sources = []
-          foreach(base_path, output_file_base_paths) {
-            sources += [ "$root_gen_dir/mojom-webui/${base_path}-webui.js" ]
-          }
-          externs_list = [
-            "${externs_path}/mojo_core.js",
-            "${externs_path}/pending.js",
-          ]
-          if (defined(invoker.disallow_native_types) &&
-              invoker.disallow_native_types) {
-            deps = []
-          } else {
-            deps = [ "//mojo/public/js:bindings_uncompiled" ]
-          }
-          foreach(d, all_deps) {
-            full_name = get_label_info(d, "label_no_toolchain")
-            deps += [ "${full_name}_webui_js" ]
-          }
-        }
-      } else {
-        group(webui_js_target_name) {
-        }
-      }
-
-      webui_grdp_target_name = "${target_name}_webui_grdp"
-      out_grd = "$target_gen_dir/${target_name}_webui_resources.grdp"
-      grd_prefix = "${target_name}_webui"
-      generate_grd(webui_grdp_target_name) {
-        grd_prefix = grd_prefix
-        out_grd = out_grd
-
-        deps = [ ":$webui_js_target_name" ]
-
-        input_files = []
-        foreach(base_path, output_file_base_paths) {
-          input_files += [ "${base_path}-webui.js" ]
-        }
-
-        input_files_base_dir =
-            rebase_path("$root_gen_dir/mojom-webui", "$root_build_dir")
-      }
-    }
   }
-  if ((generate_fuzzing || !defined(invoker.cpp_only) || !invoker.cpp_only) &&
-      use_typescript_for_target) {
+  if ((generate_js_fuzzing || !defined(invoker.cpp_only) ||
+       !invoker.cpp_only) && use_typescript_for_target) {
     if (sources_list != []) {
       source_filelist = []
       foreach(source, sources_list) {
@@ -1992,18 +2045,33 @@ template("mojom") {
       # Generate Typescript bindings.
       generator_ts_target_name = "${target_name}_ts__generator"
 
-      action(generator_ts_target_name) {
+      if (defined(invoker.ts_typemaps)) {
+        converter_sources = []
+        foreach(typemap, invoker.ts_typemaps) {
+          converter_sources += [ typemap.source ]
+        }
+        copy("${target_name}_ts__copy_converters") {
+          sources = converter_sources
+          outputs = [ "{{source_gen_dir}}/{{source_file_part}}" ]
+        }
+      }
+
+      action("${generator_ts_target_name}") {
         script = mojom_generator_script
         inputs = mojom_generator_sources + jinja2_sources
-        sources = sources_list
+        sources = sources_list + [ type_mappings_path ]
         deps = [
           ":$parser_target_name",
+          ":$type_mappings_target_name",
           "//mojo/public/tools/bindings:precompile_templates",
         ]
 
         outputs = []
         foreach(base_path, output_file_base_paths) {
-          outputs += [ "$root_gen_dir/$base_path-webui.ts" ]
+          outputs += [
+            "$root_gen_dir/$base_path-webui.ts",
+            "$root_gen_dir/$base_path-converters.ts",
+          ]
         }
         args = common_generator_args
         response_file_contents = source_filelist
@@ -2012,6 +2080,8 @@ template("mojom") {
           "--filelist={{response_file_name}}",
           "-g",
           "typescript",
+          "--typemap",
+          rebase_path(type_mappings_path, root_build_dir),
         ]
 
         if (!defined(invoker.scramble_message_ids) ||
@@ -2020,30 +2090,15 @@ template("mojom") {
           args += message_scrambling_args
         }
 
-        # TODO(crbug.com/1007587): Support scramble_message_ids if above is
+        if (defined(invoker.js_generate_struct_deserializers) &&
+            invoker.js_generate_struct_deserializers) {
+          args += [ "--js_generate_struct_deserializers" ]
+        }
+
+        # TODO(crbug.com/40100373): Support scramble_message_ids if above is
         # insufficient.
-        # TODO(crbug.com/1007591): Support generate_fuzzing.
+        # TODO(crbug.com/40100376): Support generate_fuzzing.
       }
-    }
-
-    ts_target_name = target_name + "_ts"
-    group(ts_target_name) {
-      public_deps = []
-      if (sources_list != []) {
-        public_deps += [ ":$generator_ts_target_name" ]
-      }
-
-      foreach(d, all_deps) {
-        full_name = get_label_info(d, "label_no_toolchain")
-        public_deps += [ "${full_name}_js" ]
-      }
-    }
-
-    # Use |js_target_name| to track dependencies since TS targets may depend on
-    # either TS or JS targets.
-    js_target_name = target_name + "_js"
-    group(js_target_name) {
-      public_deps = [ ":$ts_target_name" ]
     }
   }
 }

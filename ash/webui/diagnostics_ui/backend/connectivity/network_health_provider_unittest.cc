@@ -4,29 +4,33 @@
 
 #include "ash/webui/diagnostics_ui/backend/connectivity/network_health_provider.h"
 
-#include "ash/constants/ash_features.h"
+#include <utility>
+
+#include "ash/system/diagnostics/diagnostics_log_controller.h"
+#include "ash/system/diagnostics/fake_diagnostics_browser_delegate.h"
 #include "ash/system/diagnostics/networking_log.h"
+#include "ash/test/ash_test_base.h"
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
-#include "base/feature_list.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_ipconfig_client.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_cert_loader.h"
 #include "chromeos/ash/components/network/network_device_handler.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
+#include "chromeos/ash/components/network/network_profile_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
 #include "chromeos/ash/components/network/onc/network_onc_utils.h"
 #include "chromeos/ash/components/network/system_token_cert_db_storage.h"
-#include "chromeos/services/network_config/cros_network_config.h"
-#include "chromeos/services/network_config/in_process_instance.h"
+#include "chromeos/ash/components/network/technology_state_controller.h"
+#include "chromeos/ash/components/test/ash_test_suite.h"
+#include "chromeos/ash/services/network_config/cros_network_config.h"
+#include "chromeos/ash/services/network_config/in_process_instance.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "chromeos/services/network_config/public/mojom/network_types.mojom-shared.h"
 #include "components/onc/onc_constants.h"
@@ -35,12 +39,15 @@
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/user_manager/fake_user_manager.h"
+#include "components/user_manager/scoped_user_manager.h"
 #include "dbus/object_path.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
+#include "ui/base/resource/resource_bundle.h"
 
-namespace ash {
-namespace diagnostics {
+namespace ash::diagnostics {
+
 namespace {
 
 constexpr char kEth0DevicePath[] = "/device/eth0";
@@ -59,9 +66,6 @@ constexpr char kNetworkDataError[] = "ChromeOS.DiagnosticsUi.Error.Network";
 // Due to how CrosNetworkConfig notifies observers of changes, the
 // expectation_not_met_error will be triggered 4 times for every change.
 constexpr int kExpectationNotMetErrorCount = 4;
-
-// TODO(https://crbug.com/1164001): remove when network_config is moved to ash.
-namespace network_config = ::chromeos::network_config;
 
 class FakeNetworkListObserver : public mojom::NetworkListObserver {
  public:
@@ -151,11 +155,24 @@ void VerifyNetworkDataErrorBucketCounts(
 
 }  // namespace
 
-class NetworkHealthProviderTest : public testing::Test {
+class NetworkHealthProviderTest : public AshTestBase {
  public:
-  NetworkHealthProviderTest() {
-    LoginState::Initialize();
+  NetworkHealthProviderTest() = default;
+
+  NetworkHealthProviderTest(const NetworkHealthProviderTest&) = delete;
+  NetworkHealthProviderTest& operator=(const NetworkHealthProviderTest&) =
+      delete;
+
+  ~NetworkHealthProviderTest() override = default;
+
+  void SetUp() override {
+    ui::ResourceBundle::CleanupSharedInstance();
+    AshTestSuite::LoadTestResources();
+    AshTestBase::SetUp();
     SystemTokenCertDbStorage::Initialize();
+
+    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
+        std::make_unique<user_manager::FakeUserManager>(local_state()));
 
     // NetworkHandler has pieces that depend on NetworkCertLoader so it's better
     // to initialize NetworkHandlerTestHelper after
@@ -165,11 +182,11 @@ class NetworkHealthProviderTest : public testing::Test {
     network_handler_test_helper_ = std::make_unique<NetworkHandlerTestHelper>();
     network_handler_test_helper_->AddDefaultProfiles();
     network_handler_test_helper_->RegisterPrefs(user_prefs_.registry(),
-                                                local_state_.registry());
+                                                local_state()->registry());
     PrefProxyConfigTrackerImpl::RegisterProfilePrefs(user_prefs_.registry());
-    PrefProxyConfigTrackerImpl::RegisterPrefs(local_state_.registry());
+    PrefProxyConfigTrackerImpl::RegisterPrefs(local_state()->registry());
 
-    network_handler_test_helper_->InitializePrefs(&user_prefs_, &local_state_);
+    network_handler_test_helper_->InitializePrefs(&user_prefs_, local_state());
     ClearDevicesAndServices();
 
     cros_network_config_ =
@@ -184,14 +201,16 @@ class NetworkHealthProviderTest : public testing::Test {
     managed_network_configuration_handler->SetPolicy(
         ::onc::ONC_SOURCE_DEVICE_POLICY,
         /*userhash=*/std::string(),
-        /*network_configs_onc=*/base::ListValue(),
-        /*global_network_config=*/base::DictionaryValue());
+        /*network_configs_onc=*/base::Value::List(),
+        /*global_network_config=*/base::Value::Dict());
 
     EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
     network_health_provider_ = std::make_unique<NetworkHealthProvider>();
+    DiagnosticsLogController::Initialize(
+        std::make_unique<FakeDiagnosticsBrowserDelegate>());
   }
 
-  ~NetworkHealthProviderTest() override {
+  void TearDown() override {
     // Clear in process instance prior to destroying cros_network_config_ to
     // avoid UaF errors.
     network_config::OverrideInProcessInstanceForTesting(nullptr);
@@ -202,8 +221,9 @@ class NetworkHealthProviderTest : public testing::Test {
     cros_network_config_.reset();
     network_handler_test_helper_.reset();
     NetworkCertLoader::Shutdown();
+    scoped_user_manager_.reset();
     SystemTokenCertDbStorage::Shutdown();
-    LoginState::Shutdown();
+    AshTestBase::TearDown();
   }
 
  protected:
@@ -301,8 +321,10 @@ class NetworkHealthProviderTest : public testing::Test {
     NetworkTypePattern pattern = type == shill::kTypeEthernet
                                      ? NetworkTypePattern::Ethernet()
                                      : NetworkTypePattern::WiFi();
-    NetworkHandler::Get()->network_state_handler()->SetTechnologyEnabled(
-        pattern, enabled, network_handler::ErrorCallback());
+    NetworkHandler::Get()
+        ->technology_state_controller()
+        ->SetTechnologiesEnabled(pattern, enabled,
+                                 network_handler::ErrorCallback());
     base::RunLoop().RunUntilIdle();
   }
 
@@ -359,66 +381,61 @@ class NetworkHealthProviderTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  void SetCellularProperty(std::string property, base::Value value) {
+  void SetCellularProperty(std::string property, base::ValueView value) {
     network_handler_test_helper_->SetServiceProperty(kCellular0DevicePath,
-                                                     property, value);
+                                                     property, value.ToValue());
     base::RunLoop().RunUntilIdle();
   }
 
   void SetCellularIccid(std::string iccid) {
-    SetCellularProperty(shill::kIccidProperty, base::Value(iccid));
+    SetCellularProperty(shill::kIccidProperty, iccid);
   }
 
   void SetCellularNetworkTechnology(std::string technology) {
-    SetCellularProperty(shill::kNetworkTechnologyProperty,
-                        base::Value(technology));
+    SetCellularProperty(shill::kNetworkTechnologyProperty, technology);
   }
 
   void SetCellularEid(std::string eid) {
-    SetCellularProperty(shill::kEidProperty, base::Value(eid));
+    SetCellularProperty(shill::kEidProperty, eid);
   }
 
   void SetCellularSignalStrength(int signal_strength) {
-    SetCellularProperty(shill::kSignalStrengthProperty,
-                        base::Value(signal_strength));
+    SetCellularProperty(shill::kSignalStrengthProperty, signal_strength);
   }
 
   void SetCellularSimLockStatus(std::string lock_type, bool sim_locked) {
-    base::Value sim_lock_status(base::Value::Type::DICTIONARY);
-    sim_lock_status.SetKey(shill::kSIMLockEnabledProperty,
-                           base::Value(sim_locked));
-    sim_lock_status.SetKey(shill::kSIMLockTypeProperty, base::Value(lock_type));
-    sim_lock_status.SetKey(shill::kSIMLockRetriesLeftProperty, base::Value(3));
+    base::Value::Dict sim_lock_status;
+    sim_lock_status.Set(shill::kSIMLockEnabledProperty, sim_locked);
+    sim_lock_status.Set(shill::kSIMLockTypeProperty, lock_type);
+    sim_lock_status.Set(shill::kSIMLockRetriesLeftProperty, 3);
     network_handler_test_helper_->device_test()->SetDeviceProperty(
         kCellular0DevicePath, shill::kSIMLockStatusProperty,
-        std::move(sim_lock_status),
+        base::Value(std::move(sim_lock_status)),
         /*notify_changed=*/true);
 
     base::RunLoop().RunUntilIdle();
   }
 
   void SetCellularRoamingState(std::string roaming_state) {
-    SetCellularProperty(shill::kRoamingStateProperty,
-                        base::Value(roaming_state));
+    SetCellularProperty(shill::kRoamingStateProperty, roaming_state);
   }
 
-  void SetWifiProperty(std::string property, base::Value value) {
+  void SetWifiProperty(std::string property, base::ValueView value) {
     network_handler_test_helper_->SetServiceProperty(kWlan0DevicePath, property,
-                                                     value);
+                                                     value.ToValue());
     base::RunLoop().RunUntilIdle();
   }
 
   void SetWifiSignalStrength(int signal_strength) {
-    SetWifiProperty(shill::kSignalStrengthProperty,
-                    base::Value(signal_strength));
+    SetWifiProperty(shill::kSignalStrengthProperty, signal_strength);
   }
 
   void SetWifiFrequency(int frequency) {
-    SetWifiProperty(shill::kWifiFrequency, base::Value(frequency));
+    SetWifiProperty(shill::kWifiFrequency, frequency);
   }
 
   void SetWifiBssid(std::string bssid) {
-    SetWifiProperty(shill::kWifiBSsid, base::Value(bssid));
+    SetWifiProperty(shill::kWifiBSsid, bssid);
   }
 
   void SetEthernetMacAddress(const std::string& mac_address) {
@@ -449,10 +466,10 @@ class NetworkHealthProviderTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  void SetNameServersForIPConfig(const base::ListValue& dns_servers) {
-    ShillIPConfigClient::Get()->SetProperty(dbus::ObjectPath(kTestIPConfigPath),
-                                            shill::kNameServersProperty,
-                                            dns_servers, base::DoNothing());
+  void SetNameServersForIPConfig(base::Value::List dns_servers) {
+    ShillIPConfigClient::Get()->SetProperty(
+        dbus::ObjectPath(kTestIPConfigPath), shill::kNameServersProperty,
+        base::Value(std::move(dns_servers)), base::DoNothing());
     base::RunLoop().RunUntilIdle();
   }
 
@@ -466,11 +483,11 @@ class NetworkHealthProviderTest : public testing::Test {
   void SetWifiSecurity(const std::string& securityClass,
                        const std::string& eapKeyMgmt) {
     SetWifiSecurity(securityClass);
-    SetWifiProperty(shill::kEapKeyMgmtProperty, base::Value(eapKeyMgmt));
+    SetWifiProperty(shill::kEapKeyMgmtProperty, eapKeyMgmt);
   }
 
   void SetWifiSecurity(const std::string& securityClass) {
-    SetWifiProperty(shill::kSecurityClassProperty, base::Value(securityClass));
+    SetWifiProperty(shill::kSecurityClassProperty, securityClass);
   }
 
   void SetupObserver(FakeNetworkListObserver* observer) {
@@ -487,10 +504,10 @@ class NetworkHealthProviderTest : public testing::Test {
 
   void ClearDevicesAndServices() {
     // Clear test devices and services.
-    task_environment_.RunUntilIdle();
+    task_environment()->RunUntilIdle();
     network_handler_test_helper_->ClearDevices();
     network_handler_test_helper_->ClearServices();
-    task_environment_.RunUntilIdle();
+    task_environment()->RunUntilIdle();
   }
 
   mojom::IPConfigPropertiesPtr SetupRoutingPrefixToTestDataError(
@@ -520,9 +537,8 @@ class NetworkHealthProviderTest : public testing::Test {
     return ip_config;
   }
 
-  base::test::TaskEnvironment task_environment_;
   sync_preferences::TestingPrefServiceSyncable user_prefs_;
-  TestingPrefServiceSimple local_state_;
+  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
   std::unique_ptr<NetworkHandlerTestHelper> network_handler_test_helper_;
   std::unique_ptr<network_config::CrosNetworkConfig> cros_network_config_;
   std::unique_ptr<NetworkHealthProvider> network_health_provider_;
@@ -1049,6 +1065,15 @@ TEST_F(NetworkHealthProviderTest, ChangingCellularProperties) {
       observer.GetLatestState()->type_properties->get_cellular()->sim_locked,
       true);
 
+  SetCellularSimLockStatus(shill::kSIMLockNetworkPin, /**sim_locked=*/true);
+  ExpectStateObserverFired(observer, &state_call_count);
+  EXPECT_EQ(
+      mojom::LockType::kNetworkPin,
+      observer.GetLatestState()->type_properties->get_cellular()->lock_type);
+  EXPECT_EQ(
+      true,
+      observer.GetLatestState()->type_properties->get_cellular()->sim_locked);
+
   SetCellularSimLockStatus(/**lock_type=*/"", /**sim_locked=*/false);
   ExpectStateObserverFired(observer, &state_call_count);
   EXPECT_EQ(
@@ -1246,12 +1271,12 @@ TEST_F(NetworkHealthProviderTest, IPConfig) {
   SetIPAddressForIPConfig(ip_address);
   const int routing_prefix = 1;
   SetRoutingPrefixForIPConfig(routing_prefix);
-  base::ListValue dns_servers;
+  base::Value::List dns_servers;
   const std::string dns_server_1 = "192.168.1.100";
   const std::string dns_server_2 = "192.168.1.101";
   dns_servers.Append(dns_server_1);
   dns_servers.Append(dns_server_2);
-  SetNameServersForIPConfig(dns_servers);
+  SetNameServersForIPConfig(std::move(dns_servers));
 
   AssociateWifiWithIPConfig();
   SetWifiOnline();
@@ -1442,8 +1467,9 @@ TEST_F(NetworkHealthProviderTest, EthernetAndWifiOrderedCorrectly) {
 }
 
 TEST_F(NetworkHealthProviderTest, NetworkingLog) {
-  NetworkingLog log(temp_dir_.GetPath());
-  network_health_provider_->SetNetworkingLogForTesting(&log);
+  DiagnosticsLogController::Get()->SetNetworkingLogForTesting(
+      std::make_unique<NetworkingLog>(temp_dir_.GetPath()));
+  size_t list_call_count = 0;
 
   // Observe the network list.
   FakeNetworkListObserver list_observer;
@@ -1457,10 +1483,19 @@ TEST_F(NetworkHealthProviderTest, NetworkingLog) {
 
   SetupObserver(&observer, list_observer.observer_guids()[0]);
   AssociateWifi();
+  ExpectListObserverFired(list_observer, &list_call_count);
+  // List Oberver is fired but UpdateNetworkList() is not called because
+  // active_guid_ is empty.
+  EXPECT_EQ(0u, DiagnosticsLogController::Get()
+                    ->GetNetworkingLog()
+                    .update_network_list_call_count_for_testing());
   EXPECT_TRUE(list_observer.active_guid().empty());
 
   // The non-active network still appears in the log.
-  EXPECT_FALSE(log.GetNetworkInfo().empty());
+  EXPECT_FALSE(DiagnosticsLogController::Get()
+                   ->GetNetworkingLog()
+                   .GetNetworkInfo()
+                   .empty());
 
   // Put wifi into online state.
   SetWifiOnline();
@@ -1468,15 +1503,25 @@ TEST_F(NetworkHealthProviderTest, NetworkingLog) {
   // Log is populated with network info now that WiFi is online.
   // Log contents tested in networking_log_unittest.cc -
   // NetworkingLogTest.DetailedLogContentsWiFi.
-  EXPECT_FALSE(log.GetNetworkInfo().empty());
+  EXPECT_FALSE(DiagnosticsLogController::Get()
+                   ->GetNetworkingLog()
+                   .GetNetworkInfo()
+                   .empty());
+
+  // List Oberver is fired and UpdateNetworkList() is called because
+  // active_guid_ is not empty.
+  ExpectListObserverFired(list_observer, &list_call_count);
+  EXPECT_GE(DiagnosticsLogController::Get()
+                ->GetNetworkingLog()
+                .update_network_list_call_count_for_testing(),
+            0u);
+  EXPECT_FALSE(list_observer.active_guid().empty());
 }
 
 TEST_F(NetworkHealthProviderTest, ResetReceiverOnBindInterface) {
   // This test simulates a user refreshing the WebUI page. The receiver should
   // be reset before binding the new receiver. Otherwise we would get a DCHECK
   // error from mojo::Receiver
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(features::kEnableNetworkingInDiagnosticsApp);
   mojo::Remote<mojom::NetworkHealthProvider> remote;
   network_health_provider_->BindInterface(remote.BindNewPipeAndPassReceiver());
   base::RunLoop().RunUntilIdle();
@@ -1487,5 +1532,4 @@ TEST_F(NetworkHealthProviderTest, ResetReceiverOnBindInterface) {
   base::RunLoop().RunUntilIdle();
 }
 
-}  // namespace diagnostics
-}  // namespace ash
+}  // namespace ash::diagnostics

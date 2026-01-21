@@ -41,8 +41,8 @@ class TestContentPaymentRequestDelegate : public ContentPaymentRequestDelegate {
   content::RenderFrameHost* GetRenderFrameHost() const override;
   std::unique_ptr<webauthn::InternalAuthenticator> CreateInternalAuthenticator()
       const override;
-  scoped_refptr<PaymentManifestWebDataService>
-  GetPaymentManifestWebDataService() const override;
+  scoped_refptr<WebPaymentsWebDataService> GetWebPaymentsWebDataService()
+      const override;
   PaymentRequestDisplayManager* GetDisplayManager() override;
   void ShowDialog(base::WeakPtr<PaymentRequest> request) override;
   void RetryDialog() override;
@@ -50,7 +50,7 @@ class TestContentPaymentRequestDelegate : public ContentPaymentRequestDelegate {
   void ShowErrorMessage() override;
   void ShowProcessingSpinner() override;
   bool IsBrowserWindowActive() const override;
-  std::string GetTwaPackageName() const override;
+  void GetTwaPackageName(GetTwaPackageNameCallback callback) const override;
   PaymentRequestDialog* GetDialogForTesting() override;
   SecurePaymentConfirmationNoCreds* GetNoMatchingCredentialsDialogForTesting()
       override;
@@ -78,6 +78,9 @@ class TestContentPaymentRequestDelegate : public ContentPaymentRequestDelegate {
       const std::string& rp_id,
       base::OnceClosure response_callback,
       base::OnceClosure opt_out_callback) override;
+  std::optional<base::UnguessableToken> GetChromeOSTWAInstanceId()
+      const override;
+  std::string GetSecurePaymentConfirmationKeychainAccessGroup() const override;
 
   // Must be called if GetRenderFrameHost() needs to return non-null.
   void set_frame_routing_id(content::GlobalRenderFrameHostId frame_routing_id) {

@@ -12,6 +12,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 
 namespace mojo {
 
@@ -38,6 +39,9 @@ class SelfOwnedAssociatedReceiver {
       std::unique_ptr<Interface> impl,
       PendingAssociatedReceiver<Interface> receiver,
       scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr) {
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      return nullptr;
+    }
     SelfOwnedAssociatedReceiver* self_owned = new SelfOwnedAssociatedReceiver(
         std::move(impl), std::move(receiver), std::move(task_runner));
     return self_owned->weak_factory_.GetWeakPtr();
@@ -91,6 +95,25 @@ class SelfOwnedAssociatedReceiver {
     std::ignore = receiver_.SwapImplForTesting(new_impl.get());
     impl_.swap(new_impl);
     return new_impl;
+  }
+
+  // Reports the currently dispatching message as bad. This destroys the
+  // SelfOwnedAssociatedReceiver instance.
+  void ReportBadMessage(std::string_view error) {
+    GetBadMessageCallback().Run(error);
+  }
+
+  ReportBadMessageCallback GetBadMessageCallback() {
+    return base::BindOnce(
+        [](ReportBadMessageCallback inner_callback,
+           base::WeakPtr<SelfOwnedAssociatedReceiver> self_owner,
+           std::string_view error) {
+          std::move(inner_callback).Run(error);
+          if (self_owner) {
+            self_owner->Close();
+          }
+        },
+        receiver_.GetBadMessageCallback(), weak_factory_.GetWeakPtr());
   }
 
  private:

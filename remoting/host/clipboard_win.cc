@@ -9,12 +9,15 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "base/win/message_window.h"
 #include "base/win/scoped_hglobal.h"
 #include "remoting/base/constants.h"
@@ -29,8 +32,7 @@ namespace {
 // ui/base/clipboard/clipboard_win.cc.
 class ScopedClipboard {
  public:
-  ScopedClipboard() : opened_(false) {
-  }
+  ScopedClipboard() : opened_(false) {}
 
   ~ScopedClipboard() {
     if (opened_) {
@@ -50,7 +52,6 @@ class ScopedClipboard {
 
     if (opened_) {
       NOTREACHED();
-      return true;
     }
 
     // This code runs on the UI thread, so we can block only very briefly.
@@ -69,7 +70,6 @@ class ScopedClipboard {
   BOOL Empty() {
     if (!opened_) {
       NOTREACHED();
-      return false;
     }
     return ::EmptyClipboard();
   }
@@ -77,7 +77,6 @@ class ScopedClipboard {
   void SetData(UINT uFormat, HANDLE hMem) {
     if (!opened_) {
       NOTREACHED();
-      return;
     }
     // The caller must not close the handle that ::SetClipboardData returns.
     ::SetClipboardData(uFormat, hMem);
@@ -89,7 +88,6 @@ class ScopedClipboard {
   HANDLE GetData(UINT format) {
     if (!opened_) {
       NOTREACHED();
-      return nullptr;
     }
     return ::GetClipboardData(format);
   }
@@ -113,8 +111,7 @@ class ClipboardWin : public Clipboard {
 
   void Start(
       std::unique_ptr<protocol::ClipboardStub> client_clipboard) override;
-  void InjectClipboardEvent(
-      const protocol::ClipboardEvent& event) override;
+  void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
 
  private:
   void OnClipboardUpdate();
@@ -133,8 +130,9 @@ class ClipboardWin : public Clipboard {
 ClipboardWin::ClipboardWin() {}
 
 ClipboardWin::~ClipboardWin() {
-  if (window_)
+  if (window_) {
     ::RemoveClipboardFormatListener(window_->hwnd());
+  }
 }
 
 void ClipboardWin::Start(
@@ -156,14 +154,15 @@ void ClipboardWin::Start(
   }
 }
 
-void ClipboardWin::InjectClipboardEvent(
-    const protocol::ClipboardEvent& event) {
-  if (!window_)
+void ClipboardWin::InjectClipboardEvent(const protocol::ClipboardEvent& event) {
+  if (!window_) {
     return;
+  }
 
   // Currently we only handle UTF-8 text.
-  if (event.mime_type().compare(kMimeTypeTextUtf8) != 0)
+  if (event.mime_type().compare(kMimeTypeTextUtf8) != 0) {
     return;
+  }
   if (!base::IsStringUTF8AllowingNoncharacters(event.data())) {
     LOG(ERROR) << "ClipboardEvent: data is not UTF-8 encoded.";
     return;
@@ -179,8 +178,8 @@ void ClipboardWin::InjectClipboardEvent(
 
   clipboard.Empty();
 
-  HGLOBAL text_global =
-      ::GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(WCHAR));
+  const size_t num_chars = text.size() + 1;
+  HGLOBAL text_global = ::GlobalAlloc(GMEM_MOVEABLE, num_chars * sizeof(WCHAR));
   if (!text_global) {
     LOG(WARNING) << "Couldn't allocate global memory.";
     return;
@@ -188,8 +187,19 @@ void ClipboardWin::InjectClipboardEvent(
 
   LPWSTR text_global_locked =
       reinterpret_cast<LPWSTR>(::GlobalLock(text_global));
-  memcpy(text_global_locked, text.data(), text.size() * sizeof(WCHAR));
-  text_global_locked[text.size()] = (WCHAR)0;
+
+  // SAFETY: Have to trust GlobalAlloc/GlobalLock returned num_chars bytes.
+  auto dest_span = UNSAFE_BUFFERS(base::span(text_global_locked, num_chars));
+
+  // Use as_writable_chars to view both sides as compatible character types.
+  // This bypasses the wchar_t vs char16_t strict aliasing check.
+  auto dest_chars = base::as_writable_chars(dest_span);
+  auto src_chars = base::as_chars(base::span(text));
+
+  dest_chars.first(src_chars.size()).copy_from(src_chars);
+
+  // Set the null terminator using the original span (which is WCHAR).
+  dest_span[text.size()] = L'\0';
   ::GlobalUnlock(text_global);
 
   clipboard.SetData(CF_UNICODETEXT, text_global);
@@ -217,11 +227,11 @@ void ClipboardWin::OnClipboardUpdate() {
       }
 
       base::win::ScopedHGlobal<WCHAR*> text_lock(text_global);
-      if (!text_lock.get()) {
+      if (!text_lock.data()) {
         LOG(WARNING) << "Couldn't lock clipboard data: " << GetLastError();
         return;
       }
-      text.assign(text_lock.get());
+      text.assign(text_lock.data());
     }
 
     protocol::ClipboardEvent event;
@@ -234,8 +244,10 @@ void ClipboardWin::OnClipboardUpdate() {
   }
 }
 
-bool ClipboardWin::HandleMessage(
-    UINT message, WPARAM wparam, LPARAM lparam, LRESULT* result) {
+bool ClipboardWin::HandleMessage(UINT message,
+                                 WPARAM wparam,
+                                 LPARAM lparam,
+                                 LRESULT* result) {
   if (message == WM_CLIPBOARDUPDATE) {
     OnClipboardUpdate();
     *result = 0;

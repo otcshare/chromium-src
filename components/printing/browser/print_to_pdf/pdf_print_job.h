@@ -11,14 +11,11 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "components/printing/browser/print_to_pdf/pdf_print_result.h"
-#include "components/printing/common/print.mojom-forward.h"
+#include "components/printing/common/print.mojom.h"
 #include "components/services/print_compositor/public/mojom/print_compositor.mojom.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/geometry/size.h"
 
 namespace base {
 class ReadOnlySharedMemoryRegion;
@@ -59,11 +56,9 @@ class PdfPrintJob : public content::WebContentsObserver {
   // WebContentsObserver overrides:
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
 
-  void OnDidPrintWithParams(printing::mojom::PrintWithParamsResultPtr result);
+  void OnDidPrintWithParams(
+      printing::mojom::PrintRenderFrame::PrintWithParamsResult result);
   void OnCompositeDocumentToPdfDone(
-      const gfx::Size& page_size,
-      const gfx::Rect& content_area,
-      const gfx::Point& physical_offsets,
       printing::mojom::PrintCompositor::Status status,
       base::ReadOnlySharedMemoryRegion region);
 

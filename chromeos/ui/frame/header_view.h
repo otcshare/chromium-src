@@ -9,15 +9,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ui/frame/frame_header.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_delegate.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/display/display_observer.h"
 #include "ui/views/view.h"
 
@@ -29,7 +29,7 @@ namespace views {
 class FrameCaptionButton;
 class ImageView;
 class Widget;
-class NonClientFrameView;
+class FrameView;
 }  // namespace views
 
 namespace chromeos {
@@ -46,21 +46,20 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) HeaderView
       public chromeos::ImmersiveFullscreenControllerDelegate,
       public aura::WindowObserver,
       public display::DisplayObserver {
+  METADATA_HEADER(HeaderView, views::View)
+
  public:
   // |target_widget| is the widget that the caption buttons act on.
   // |target_widget| is not necessarily the same as the widget the header is
   // placed in. For example, in immersive fullscreen this view may be painted in
   // a widget that slides in and out on top of the main app or browser window.
   // However, clicking a caption button should act on the target widget.
-  HeaderView(views::Widget* target_widget,
-             views::NonClientFrameView* frame_view);
+  HeaderView(views::Widget* target_widget, views::FrameView* frame_view);
 
   HeaderView(const HeaderView&) = delete;
   HeaderView& operator=(const HeaderView&) = delete;
 
   ~HeaderView() override;
-
-  METADATA_HEADER(HeaderView);
 
   // Initialize the parts with side effects.
   void Init();
@@ -93,8 +92,10 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) HeaderView
 
   void SetWidthInPixels(int width_in_pixels);
 
+  void SetHeaderCornerRadius(int radius);
+
   // views::View:
-  void Layout() override;
+  void Layout(PassKey) override;
   void ChildPreferredSizeChanged(views::View* child) override;
   bool IsDrawn() const override;
 
@@ -145,25 +146,21 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) HeaderView
   void UpdateCaptionButtonsVisibility();
 
   // The widget that the caption buttons act on.
-  views::Widget* target_widget_;
+  raw_ptr<views::Widget> target_widget_;
 
   // A callback to run when |in_immersive_mode_| changes.
   base::RepeatingClosure immersive_mode_changed_callback_;
 
-  // Helper for painting the header. The exact type of FrameHeader will depend
-  // on the type of window: In Mash, Chrome Browser windows use
-  // CustomFrameHeader which is aware of theming. In classic Ash, Chrome Browser
-  // windows won't use HeaderView at all. In either configuration, non Browser
-  // windows will use DefaultFrameHeader.
+  // Helper for painting the header.
   std::unique_ptr<chromeos::DefaultFrameHeader> frame_header_;
 
-  views::ImageView* avatar_icon_ = nullptr;
+  raw_ptr<views::ImageView, DanglingUntriaged> avatar_icon_ = nullptr;
 
   // View which draws the content of the frame.
-  HeaderContentView* header_content_view_ = nullptr;
+  raw_ptr<HeaderContentView> header_content_view_ = nullptr;
 
   // View which contains the window caption buttons.
-  chromeos::FrameCaptionButtonContainerView* caption_button_container_ =
+  raw_ptr<chromeos::FrameCaptionButtonContainerView> caption_button_container_ =
       nullptr;
 
   // The fraction of the header's height which is visible while in fullscreen.
@@ -188,6 +185,8 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) HeaderView
   // Observes property changes to |target_widget_|'s window.
   base::ScopedObservation<aura::Window, aura::WindowObserver>
       window_observation_{this};
+
+  std::optional<display::ScopedDisplayObserver> display_observer_;
 };
 
 }  // namespace chromeos

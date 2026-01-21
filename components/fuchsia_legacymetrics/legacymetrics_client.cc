@@ -13,13 +13,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "components/fuchsia_legacymetrics/legacymetrics_histogram_flattener.h"
+#include "components/fuchsia_legacymetrics/legacymetrics_deltas.h"
 
 namespace fuchsia_legacymetrics {
 
@@ -255,7 +254,7 @@ void LegacyMetricsClient::FlushAndDisconnect(
   if (is_flushing_)
     return;
 
-  report_timer_.AbandonAndStop();
+  report_timer_.Stop();
 
   is_flushing_ = true;
   if (notify_flush_callback_) {
@@ -288,7 +287,7 @@ void LegacyMetricsClient::CompleteFlush() {
 
 void LegacyMetricsClient::ResetMetricsRecorderState() {
   // Stop reporting metric events.
-  report_timer_.AbandonAndStop();
+  report_timer_.Stop();
 
   record_ack_pending_ = false;
 

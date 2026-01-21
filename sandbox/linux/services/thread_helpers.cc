@@ -13,9 +13,9 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
@@ -102,8 +102,6 @@ void RunWhileTrue(const base::RepeatingCallback<bool(void)>& cb,
   }
 
   LOG(FATAL) << message << " (iterations: " << kMaxIterations << ")";
-
-  NOTREACHED();
 }
 
 bool IsMultiThreaded(int proc_fd) {
@@ -129,7 +127,7 @@ bool ChangeThreadStateAndWatchProcFS(
 
   const base::PlatformThreadId thread_id = thread->GetThreadId();
   const std::string thread_id_dir_str =
-      "self/task/" + base::NumberToString(thread_id) + "/";
+      "self/task/" + base::NumberToString(thread_id.raw()) + "/";
 
   if (action == ThreadAction::Stop) {
     // The target thread should exist in /proc.

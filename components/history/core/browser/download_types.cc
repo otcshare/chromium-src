@@ -7,6 +7,7 @@
 #include <ostream>
 
 #include "base/check_op.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "components/history/core/browser/download_constants.h"
 
@@ -23,10 +24,8 @@ DownloadState IntToDownloadState(int state) {
     case DownloadState::INVALID:
     case DownloadState::BUG_140687:
       NOTREACHED();
-      return DownloadState::INVALID;
   }
   NOTREACHED();
-  return DownloadState::INVALID;
 }
 
 int DownloadStateToInt(DownloadState state) {
@@ -50,7 +49,6 @@ std::ostream& operator<<(std::ostream& stream, DownloadState state) {
       return stream << "history::DownloadState::INTERRUPTED";
   }
   NOTREACHED();
-  return stream;
 }
 
 DownloadDangerType IntToDownloadDangerType(int danger_type) {
@@ -74,15 +72,19 @@ DownloadDangerType IntToDownloadDangerType(int danger_type) {
     case DownloadDangerType::DEEP_SCANNED_OPENED_DANGEROUS:
     case DownloadDangerType::PROMPT_FOR_SCANNING:
     case DownloadDangerType::BLOCKED_UNSUPPORTED_FILETYPE:
-    case DownloadDangerType::DANGEROUS_ACCOUNT_COMRPOMISE:
+    case DownloadDangerType::DANGEROUS_ACCOUNT_COMPROMISE:
+    case DownloadDangerType::DEEP_SCANNED_FAILED:
+    case DownloadDangerType::PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
+    case DownloadDangerType::ASYNC_LOCAL_PASSWORD_SCANNING:
+    case DownloadDangerType::BLOCKED_SCAN_FAILED:
+    case DownloadDangerType::FORCED_SAVE_TO_GDRIVE:
+    case DownloadDangerType::FORCED_SAVE_TO_ONEDRIVE:
       return static_cast<DownloadDangerType>(danger_type);
 
     case DownloadDangerType::INVALID:
       NOTREACHED();
-      return DownloadDangerType::INVALID;
   }
   NOTREACHED();
-  return DownloadDangerType::INVALID;
 }
 
 int DownloadDangerTypeToInt(DownloadDangerType danger_type) {
@@ -135,12 +137,25 @@ std::ostream& operator<<(std::ostream& stream, DownloadDangerType danger_type) {
     case DownloadDangerType::BLOCKED_UNSUPPORTED_FILETYPE:
       return stream
              << "history::DownloadDangerType::BLOCKED_UNSUPPORTED_FILETYPE";
-    case DownloadDangerType::DANGEROUS_ACCOUNT_COMRPOMISE:
+    case DownloadDangerType::DANGEROUS_ACCOUNT_COMPROMISE:
       return stream
-             << "history::DownloadDangerType::DANGEROUS_ACCOUNT_COMRPOMISE";
+             << "history::DownloadDangerType::DANGEROUS_ACCOUNT_COMPROMISE";
+    case DownloadDangerType::DEEP_SCANNED_FAILED:
+      return stream << "history::DownloadDangerType::DEEP_SCANNED_FAILED";
+    case DownloadDangerType::PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
+      return stream << "history::DownloadDangerType::PROMPT_FOR_LOCAL_PASSWORD_"
+                       "SCANNING";
+    case DownloadDangerType::ASYNC_LOCAL_PASSWORD_SCANNING:
+      return stream
+             << "history::DownloadDangerType::ASYNC_LOCAL_PASSWORD_SCANNING";
+    case DownloadDangerType::BLOCKED_SCAN_FAILED:
+      return stream << "history::DownloadDangerType::BLOCKED_SCAN_FAILED";
+    case DownloadDangerType::FORCED_SAVE_TO_GDRIVE:
+      return stream << "history::DownloadDangerType::FORCED_SAVE_TO_GDRIVE";
+    case DownloadDangerType::FORCED_SAVE_TO_ONEDRIVE:
+      return stream << "history::DownloadDangerType::FORCED_SAVE_TO_ONEDRIVE";
   }
   NOTREACHED();
-  return stream;
 }
 
 DownloadInterruptReason IntToDownloadInterruptReason(int interrupt_reason) {

@@ -5,6 +5,7 @@
 #include "chrome/browser/hid/hid_policy_allowed_devices.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/strings/string_number_conversions.h"
@@ -33,22 +34,28 @@ class HidPolicyAllowedDevicesTest : public testing::Test {
 
   ~HidPolicyAllowedDevicesTest() override = default;
 
-  void InitializePolicy() {
+  void InitializePolicy(bool on_login_screen = false) {
     EXPECT_FALSE(policy_);
-    policy_ = std::make_unique<HidPolicyAllowedDevices>(&local_state_);
+    policy_ = std::make_unique<HidPolicyAllowedDevices>(&local_state_,
+                                                        on_login_screen);
   }
 
-  void SetAllowDevicesForUrlsPrefValue(base::StringPiece policy) {
+  void SetAllowDevicesForUrlsPrefValue(std::string_view policy) {
     local_state_.Set(prefs::kManagedWebHidAllowDevicesForUrls,
                      ParseJson(policy));
   }
 
-  void SetAllowDevicesWithHidUsagesForUrlsPrefValue(base::StringPiece policy) {
+  void SetAllowDevicesForUrlsOnLoginScreenPrefValue(std::string_view policy) {
+    local_state_.Set(prefs::kManagedWebHidAllowDevicesForUrlsOnLoginScreen,
+                     ParseJson(policy));
+  }
+
+  void SetAllowDevicesWithHidUsagesForUrlsPrefValue(std::string_view policy) {
     local_state_.Set(prefs::kManagedWebHidAllowDevicesWithHidUsagesForUrls,
                      ParseJson(policy));
   }
 
-  void SetAllowAllDevicesForUrlsPrefValue(base::StringPiece policy) {
+  void SetAllowAllDevicesForUrlsPrefValue(std::string_view policy) {
     local_state_.Set(prefs::kManagedWebHidAllowAllDevicesForUrls,
                      ParseJson(policy));
   }
@@ -89,6 +96,7 @@ TEST_F(HidPolicyAllowedDevicesTest, InitializeWithMissingPrefValue) {
 
 TEST_F(HidPolicyAllowedDevicesTest, InitializeWithExistingEmptyPrefValue) {
   SetAllowDevicesForUrlsPrefValue("[]");
+  SetAllowDevicesForUrlsOnLoginScreenPrefValue("[]");
   SetAllowDevicesWithHidUsagesForUrlsPrefValue("[]");
   SetAllowAllDevicesForUrlsPrefValue("[]");
 
@@ -154,20 +162,20 @@ TEST_F(HidPolicyAllowedDevicesTest, InitializeWithPrefValues) {
   EXPECT_EQ(1u, policy()->all_devices_policy().size());
 
   const auto device_key = std::make_pair(kTestVendorId1, kTestProductId1);
-  ASSERT_TRUE(base::Contains(policy()->device_policy(), device_key));
+  ASSERT_TRUE(policy()->device_policy().contains(device_key));
   EXPECT_THAT(policy()->device_policy().at(device_key),
               UnorderedElementsAre(kOrigin1));
 
-  ASSERT_TRUE(base::Contains(policy()->vendor_policy(), kTestVendorId2));
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId2));
   EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId2),
               UnorderedElementsAre(kOrigin1));
 
   const auto usage_key = std::make_pair(kTestUsagePage1, kTestUsage1);
-  ASSERT_TRUE(base::Contains(policy()->usage_policy(), usage_key));
+  ASSERT_TRUE(policy()->usage_policy().contains(usage_key));
   EXPECT_THAT(policy()->usage_policy().at(usage_key),
               UnorderedElementsAre(kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->usage_page_policy(), kTestUsagePage2));
+  ASSERT_TRUE(policy()->usage_page_policy().contains(kTestUsagePage2));
   EXPECT_THAT(policy()->usage_page_policy().at(kTestUsagePage2),
               UnorderedElementsAre(kOrigin2));
 
@@ -235,20 +243,20 @@ TEST_F(HidPolicyAllowedDevicesTest, InitializeWithMissingPrefValuesThenUpdate) {
   EXPECT_EQ(1u, policy()->all_devices_policy().size());
 
   const auto device_key = std::make_pair(kTestVendorId1, kTestProductId1);
-  ASSERT_TRUE(base::Contains(policy()->device_policy(), device_key));
+  ASSERT_TRUE(policy()->device_policy().contains(device_key));
   EXPECT_THAT(policy()->device_policy().at(device_key),
               UnorderedElementsAre(kOrigin1));
 
-  ASSERT_TRUE(base::Contains(policy()->vendor_policy(), kTestVendorId2));
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId2));
   EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId2),
               UnorderedElementsAre(kOrigin1));
 
   const auto usage_key = std::make_pair(kTestUsagePage1, kTestUsage1);
-  ASSERT_TRUE(base::Contains(policy()->usage_policy(), usage_key));
+  ASSERT_TRUE(policy()->usage_policy().contains(usage_key));
   EXPECT_THAT(policy()->usage_policy().at(usage_key),
               UnorderedElementsAre(kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->usage_page_policy(), kTestUsagePage2));
+  ASSERT_TRUE(policy()->usage_page_policy().contains(kTestUsagePage2));
   EXPECT_THAT(policy()->usage_page_policy().at(kTestUsagePage2),
               UnorderedElementsAre(kOrigin2));
 
@@ -289,6 +297,52 @@ TEST_F(HidPolicyAllowedDevicesTest, InitializeWithMissingPrefValuesThenUpdate) {
   EXPECT_FALSE(policy()->HasDevicePermission(kOrigin1, *device));
   EXPECT_TRUE(policy()->HasDevicePermission(kOrigin2, *device));
   EXPECT_TRUE(policy()->HasDevicePermission(kOrigin3, *device));
+}
+
+TEST_F(HidPolicyAllowedDevicesTest,
+       InitializeWithMissingPrefValuesThenUpdateOnLoginScreen) {
+  const auto kOrigin1 = url::Origin::Create(GURL("https://origin1"));
+  const auto kOrigin2 = url::Origin::Create(GURL("https://origin2"));
+
+  InitializePolicy(/*on_login_screen=*/true);
+
+  EXPECT_EQ(0u, policy()->device_policy().size());
+  EXPECT_EQ(0u, policy()->vendor_policy().size());
+  EXPECT_EQ(0u, policy()->usage_page_policy().size());
+  EXPECT_EQ(0u, policy()->usage_policy().size());
+  EXPECT_EQ(0u, policy()->all_devices_policy().size());
+
+  SetAllowDevicesForUrlsOnLoginScreenPrefValue(kAllowDevicesForUrls);
+
+  EXPECT_EQ(1u, policy()->device_policy().size());
+  EXPECT_EQ(1u, policy()->vendor_policy().size());
+  EXPECT_EQ(0u, policy()->usage_page_policy().size());
+  EXPECT_EQ(0u, policy()->usage_policy().size());
+  EXPECT_EQ(0u, policy()->all_devices_policy().size());
+
+  const auto device_key = std::make_pair(kTestVendorId1, kTestProductId1);
+  ASSERT_TRUE(policy()->device_policy().contains(device_key));
+  EXPECT_THAT(policy()->device_policy().at(device_key),
+              UnorderedElementsAre(kOrigin1));
+
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId2));
+  EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId2),
+              UnorderedElementsAre(kOrigin1));
+
+  auto device = CreateAndAddDevice(kTestVendorId1, kTestProductId1,
+                                   /*usage_page=*/0xff00, /*usage=*/1);
+  EXPECT_TRUE(policy()->HasDevicePermission(kOrigin1, *device));
+  EXPECT_FALSE(policy()->HasDevicePermission(kOrigin2, *device));
+
+  device = CreateAndAddDevice(kTestVendorId1, kTestProductId2,
+                              /*usage_page=*/0xff00, /*usage=*/1);
+  EXPECT_FALSE(policy()->HasDevicePermission(kOrigin1, *device));
+  EXPECT_FALSE(policy()->HasDevicePermission(kOrigin2, *device));
+
+  device = CreateAndAddDevice(kTestVendorId2, kTestProductId2,
+                              /*usage_page=*/0xff00, /*usage=*/1);
+  EXPECT_TRUE(policy()->HasDevicePermission(kOrigin1, *device));
+  EXPECT_FALSE(policy()->HasDevicePermission(kOrigin2, *device));
 }
 
 TEST_F(HidPolicyAllowedDevicesTest, InitializeWithPrefValuesThenRemovePolicy) {
@@ -368,20 +422,20 @@ TEST_F(HidPolicyAllowedDevicesTest, MultipleUrls) {
   EXPECT_EQ(2u, policy()->all_devices_policy().size());
 
   const auto device_key = std::make_pair(kTestVendorId1, kTestProductId1);
-  ASSERT_TRUE(base::Contains(policy()->device_policy(), device_key));
+  ASSERT_TRUE(policy()->device_policy().contains(device_key));
   EXPECT_THAT(policy()->device_policy().at(device_key),
               UnorderedElementsAre(kOrigin1, kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->vendor_policy(), kTestVendorId1));
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId1));
   EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId1),
               UnorderedElementsAre(kOrigin1, kOrigin2));
 
   const auto usage_key = std::make_pair(kTestUsagePage1, kTestUsage1);
-  ASSERT_TRUE(base::Contains(policy()->usage_policy(), usage_key));
+  ASSERT_TRUE(policy()->usage_policy().contains(usage_key));
   EXPECT_THAT(policy()->usage_policy().at(usage_key),
               UnorderedElementsAre(kOrigin1, kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->usage_page_policy(), kTestUsagePage1));
+  ASSERT_TRUE(policy()->usage_page_policy().contains(kTestUsagePage1));
   EXPECT_THAT(policy()->usage_page_policy().at(kTestUsagePage1),
               UnorderedElementsAre(kOrigin1, kOrigin2));
 
@@ -443,38 +497,38 @@ TEST_F(HidPolicyAllowedDevicesTest, MultipleItemsWithOverlap) {
   EXPECT_EQ(0u, policy()->all_devices_policy().size());
 
   const auto device_key1 = std::make_pair(kTestVendorId1, kTestProductId1);
-  ASSERT_TRUE(base::Contains(policy()->device_policy(), device_key1));
+  ASSERT_TRUE(policy()->device_policy().contains(device_key1));
   EXPECT_THAT(policy()->device_policy().at(device_key1),
               UnorderedElementsAre(kOrigin1));
 
   const auto device_key2 = std::make_pair(kTestVendorId2, kTestProductId2);
-  ASSERT_TRUE(base::Contains(policy()->device_policy(), device_key2));
+  ASSERT_TRUE(policy()->device_policy().contains(device_key2));
   EXPECT_THAT(policy()->device_policy().at(device_key2),
               UnorderedElementsAre(kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->vendor_policy(), kTestVendorId1));
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId1));
   EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId1),
               UnorderedElementsAre(kOrigin2));
 
-  ASSERT_TRUE(base::Contains(policy()->vendor_policy(), kTestVendorId2));
+  ASSERT_TRUE(policy()->vendor_policy().contains(kTestVendorId2));
   EXPECT_THAT(policy()->vendor_policy().at(kTestVendorId2),
               UnorderedElementsAre(kOrigin1));
 
   const auto usage_key1 = std::make_pair(kTestUsagePage1, kTestUsage1);
-  ASSERT_TRUE(base::Contains(policy()->usage_policy(), usage_key1));
+  ASSERT_TRUE(policy()->usage_policy().contains(usage_key1));
   EXPECT_THAT(policy()->usage_policy().at(usage_key1),
               UnorderedElementsAre(kOrigin3));
 
   const auto usage_key2 = std::make_pair(kTestUsagePage2, kTestUsage2);
-  ASSERT_TRUE(base::Contains(policy()->usage_policy(), usage_key2));
+  ASSERT_TRUE(policy()->usage_policy().contains(usage_key2));
   EXPECT_THAT(policy()->usage_policy().at(usage_key2),
               UnorderedElementsAre(kOrigin4));
 
-  ASSERT_TRUE(base::Contains(policy()->usage_page_policy(), kTestUsagePage1));
+  ASSERT_TRUE(policy()->usage_page_policy().contains(kTestUsagePage1));
   EXPECT_THAT(policy()->usage_page_policy().at(kTestUsagePage1),
               UnorderedElementsAre(kOrigin4));
 
-  ASSERT_TRUE(base::Contains(policy()->usage_page_policy(), kTestUsagePage2));
+  ASSERT_TRUE(policy()->usage_page_policy().contains(kTestUsagePage2));
   EXPECT_THAT(policy()->usage_page_policy().at(kTestUsagePage2),
               UnorderedElementsAre(kOrigin3));
 

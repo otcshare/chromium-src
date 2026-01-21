@@ -5,8 +5,13 @@
 #ifndef COMPONENTS_DEVICE_SIGNALS_CORE_COMMON_PLATFORM_UTILS_H_
 #define COMPONENTS_DEVICE_SIGNALS_CORE_COMMON_PLATFORM_UTILS_H_
 
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "base/process/process_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "build/build_config.h"
+#include "components/device_signals/core/common/common_types.h"
 
 namespace base {
 class FilePath;
@@ -26,11 +31,46 @@ bool ResolvePath(const base::FilePath& file_path,
 
 // Returns the file path pointing to the executable file that spawned
 // the given process `pid`.
-absl::optional<base::FilePath> GetProcessExePath(base::ProcessId pid);
+std::optional<base::FilePath> GetProcessExePath(base::ProcessId pid);
 
-// Returns details about an installed CrowdStrike agent, if any.
-absl::optional<CrowdStrikeSignals> GetCrowdStrikeSignals();
+// Returns details about an installed CrowdStrike agent (if any) read
+// from location which can be accessed synchronously (i.e. not the
+// data.zta file). For a more robust retrieval, see the
+// CrowdStrikeClient class.
+std::optional<CrowdStrikeSignals> GetCrowdStrikeSignals();
 
+base::FilePath GetCrowdStrikeZtaFilePath();
+
+std::string GetOsName();
+std::string GetOsVersion();
+std::string GetDeviceModel();
+std::string GetSerialNumber();
+SettingValue GetScreenlockSecured();
+SettingValue GetDiskEncrypted();
+std::vector<std::string> GetMacAddresses();
+
+#if BUILDFLAG(IS_WIN)
+SettingValue GetSecureBootEnabled();
+std::optional<std::string> GetWindowsMachineDomain();
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+// Return the distribution VERSION_ID contained in
+// /etc/os-release, if it exists.
+std::optional<std::string> GetDistributionVersion();
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
+namespace internal {
+
+// Sets a `mac_addresses` vector to be used for testing purposes. The vector
+// will be copied into static storage.
+void SetMacAddressesForTesting(const std::vector<std::string>& mac_addresses);
+
+void ClearMacAddressesForTesting();
+
+std::vector<std::string> GetMacAddressesImpl();
+
+}  // namespace internal
 }  // namespace device_signals
 
 #endif  // COMPONENTS_DEVICE_SIGNALS_CORE_COMMON_PLATFORM_UTILS_H_

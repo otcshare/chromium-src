@@ -35,6 +35,7 @@ component("aura") {
     "host_frame_rate_throttler.h",
     "input_state_lookup.h",
     "layout_manager.h",
+    "native_window_occlusion_tracker.h",
     "null_window_targeter.h",
     "scoped_enable_unadjusted_mouse_events.h",
     "scoped_keyboard_hook.h",
@@ -45,7 +46,6 @@ component("aura") {
     "window.h",
     "window_delegate.h",
     "window_event_dispatcher.h",
-    "window_event_dispatcher_observer.h",
     "window_observer.h",
     "window_occlusion_change_builder.h",
     "window_occlusion_tracker.h",
@@ -80,7 +80,6 @@ component("aura") {
     "input_state_lookup.cc",
     "layout_manager.cc",
     "native_window_occlusion_tracker.cc",
-    "native_window_occlusion_tracker.h",
     "null_window_targeter.cc",
     "scoped_keyboard_hook.cc",
     "scoped_simple_keyboard_hook.cc",
@@ -106,8 +105,6 @@ component("aura") {
   deps = [
     "//base",
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
-    "//build:chromeos_buildflags",
     "//cc",
     "//cc/mojo_embedder",
     "//components/discardable_memory/client",
@@ -143,6 +140,8 @@ component("aura") {
     "//ui/base/dragdrop/mojom:mojom_headers",
     "//ui/base/ime",
     "//ui/base/metadata",
+    "//ui/base/mojom",
+    "//ui/base/mojom:ui_base_types",
     "//ui/compositor",
   ]
 
@@ -192,12 +191,15 @@ static_library("test_support") {
     "test/env_test_helper.h",
     "test/event_generator_delegate_aura.cc",
     "test/event_generator_delegate_aura.h",
+    "test/find_window.h",
     "test/test_cursor_client.cc",
     "test/test_cursor_client.h",
     "test/test_focus_client.cc",
     "test/test_focus_client.h",
     "test/test_screen.cc",
     "test/test_screen.h",
+    "test/test_window_builder.cc",
+    "test/test_window_builder.h",
     "test/test_window_delegate.cc",
     "test/test_window_delegate.h",
     "test/test_window_parenting_client.cc",
@@ -206,6 +208,7 @@ static_library("test_support") {
     "test/test_window_targeter.h",
     "test/test_windows.cc",
     "test/test_windows.h",
+    "test/ui_controls_aurawin.h",
     "test/ui_controls_factory_aura.h",
     "test/window_event_dispatcher_test_api.cc",
     "test/window_event_dispatcher_test_api.h",
@@ -239,19 +242,17 @@ static_library("test_support") {
     "//ui/events:events_base",
     "//ui/events:test_support",
     "//ui/gfx",
+    "//ui/gfx:animation_scale",
     "//ui/gfx/geometry",
     "//ui/platform_window",
     "//ui/wm",
   ]
 
   if (is_win) {
-    sources += [ "test/ui_controls_factory_aurawin.cc" ]
+    sources += [ "test/ui_controls_aurawin.cc" ]
   }
 
-  if (use_ozone) {
-    if (is_fuchsia) {
-      deps += [ "//ui/ozone" ]
-    }
+  if (use_ozone && (is_chromeos || is_castos)) {
     sources += [
       "test/ui_controls_ozone.cc",
       "test/ui_controls_ozone.h",
@@ -261,6 +262,10 @@ static_library("test_support") {
   if (is_linux || is_chromeos) {
     deps += [ "//ui/platform_window/common" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 executable("aura_demo") {
@@ -310,15 +315,9 @@ test("aura_unittests") {
     "window_unittest.cc",
   ]
 
-  if (is_win) {
-    sources += [ "native_window_occlusion_tracker_unittest.cc" ]
-    libs = [ "dwmapi.lib" ]
-  }
-
   deps = [
     ":test_support",
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
     "//cc/mojo_embedder",
     "//components/viz/client",
     "//mojo/core/embedder",
@@ -338,6 +337,7 @@ test("aura_unittests") {
     "//ui/gl:test_support",
     "//ui/platform_window",
     "//ui/platform_window/stub",
+    "//ui/resources:ui_test_pak",
     "//ui/wm",
   ]
 
@@ -352,30 +352,8 @@ test("aura_unittests") {
     ]
   }
 
-  data_deps = [ "//third_party/mesa_headers" ]
-}
-
-# This target is added as a dependency of browser interactive_ui_tests. It must
-# be source_set, otherwise the linker will drop the tests as dead code.
-source_set("aura_interactive_ui_tests") {
-  testonly = true
-  if (is_win) {
-    sources = [ "native_window_occlusion_tracker_win_interactive_test.cc" ]
-
-    deps = [
-      ":aura",
-      ":test_support",
-      "//base/test:test_support",
-      "//mojo/core/embedder",
-      "//testing/gtest",
-      "//ui/base:test_support",
-      "//ui/base/ime/init",
-      "//ui/display:display",
-      "//ui/gfx",
-      "//ui/gfx/geometry",
-      "//ui/gl:test_support",
-      "//ui/gl/init",
-      "//ui/views:views",
-    ]
-  }
+  data_deps = [
+    "//third_party/angle:includes",
+    "//ui/resources:ui_test_pak_data",
+  ]
 }

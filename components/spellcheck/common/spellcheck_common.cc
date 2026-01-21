@@ -4,18 +4,21 @@
 
 #include "components/spellcheck/common/spellcheck_common.h"
 
+#include <algorithm>
+#include <string_view>
+
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/metrics/field_trial.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "third_party/icu/source/common/unicode/uloc.h"
 #include "third_party/icu/source/common/unicode/urename.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
 
 namespace spellcheck {
+
+namespace {
 
 struct LanguageRegion {
   const char* language;         // The language.
@@ -57,6 +60,7 @@ static constexpr LanguageRegion kSupportedSpellCheckerLanguages[] = {
     {"fo", "fo-FO"},
     {"fr", "fr-FR"},
     {"fr-FR", "fr-FR"},
+    {"gl", "gl"},
     {"he", "he-IL"},
     {"hi", "hi-IN"},
     {"hr", "hr-HR"},
@@ -90,17 +94,9 @@ static constexpr LanguageRegion kSupportedSpellCheckerLanguages[] = {
     // clang-format on
 };
 
-bool IsValidRegion(const std::string& region) {
-  for (const auto& lang_region : kSupportedSpellCheckerLanguages) {
-    if (lang_region.language_region == region)
-      return true;
-  }
-  return false;
-}
-
 // This function returns the language-region version of language name.
 // e.g. returns hi-IN for hi.
-std::string GetSpellCheckLanguageRegion(base::StringPiece input_language) {
+std::string GetSpellCheckLanguageRegion(std::string_view input_language) {
   for (const auto& lang_region : kSupportedSpellCheckerLanguages) {
     if (lang_region.language == input_language)
       return lang_region.language_region;
@@ -109,7 +105,9 @@ std::string GetSpellCheckLanguageRegion(base::StringPiece input_language) {
   return std::string(input_language);
 }
 
-base::FilePath GetVersionedFileName(base::StringPiece input_language,
+}  // namespace
+
+base::FilePath GetVersionedFileName(std::string_view input_language,
                                     const base::FilePath& dict_dir) {
   // The default dictionary version is 3-0. This version indicates that the bdic
   // file contains a checksum.
@@ -149,6 +147,9 @@ base::FilePath GetVersionedFileName(base::StringPiece input_language,
 
       // March 2022: Update uk-UA dictionary from upstream.
       {"uk-UA", "-5-0"},
+
+      // Nov 2025: Initial check-in of Galician
+      {"gl", "-1-0"},
   };
 
   // Generate the bdict file name using default version string or special
@@ -165,7 +166,7 @@ base::FilePath GetVersionedFileName(base::StringPiece input_language,
   return dict_dir.AppendASCII(versioned_bdict_file_name);
 }
 
-std::string GetCorrespondingSpellCheckLanguage(base::StringPiece language) {
+std::string GetCorrespondingSpellCheckLanguage(std::string_view language) {
   std::string best_match;
   // Look for exact match in the Spell Check language list.
   for (const auto& lang_region : kSupportedSpellCheckerLanguages) {
@@ -230,7 +231,7 @@ void FillSuggestions(
 
     const std::u16string& suggestion = suggestions_list[language][index];
     // Only add the suggestion if it's unique.
-    if (!base::Contains(*optional_suggestions, suggestion)) {
+    if (!std::ranges::contains(*optional_suggestions, suggestion)) {
       optional_suggestions->push_back(suggestion);
     }
     if (optional_suggestions->size() >= kMaxSuggestions) {

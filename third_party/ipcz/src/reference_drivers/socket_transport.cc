@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "reference_drivers/socket_transport.h"
-
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
@@ -15,17 +13,19 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "reference_drivers/file_descriptor.h"
 #include "reference_drivers/handle_eintr.h"
+#include "reference_drivers/socket_transport.h"
 #include "third_party/abseil-cpp/absl/synchronization/mutex.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/abseil-cpp/absl/types/span.h"
 #include "util/log.h"
 #include "util/ref_counted.h"
 #include "util/safe_math.h"
+#include "util/unsafe_buffers.h"
 
 namespace ipcz::reference_drivers {
 
@@ -160,7 +160,7 @@ bool SocketTransport::Send(Message message) {
       return true;
     }
 
-    absl::optional<size_t> bytes_sent = TrySend(header_bytes, message);
+    std::optional<size_t> bytes_sent = TrySend(header_bytes, message);
     if (!bytes_sent.has_value()) {
       return false;
     }
@@ -204,8 +204,8 @@ FileDescriptor SocketTransport::TakeDescriptor() {
   return std::move(socket_);
 }
 
-absl::optional<size_t> SocketTransport::TrySend(absl::Span<uint8_t> header,
-                                                Message message) {
+std::optional<size_t> SocketTransport::TrySend(absl::Span<uint8_t> header,
+                                               Message message) {
   ABSL_ASSERT(socket_.is_valid());
 
   iovec iovs[] = {
@@ -228,7 +228,8 @@ absl::optional<size_t> SocketTransport::TrySend(absl::Span<uint8_t> header,
   size_t next_descriptor = 0;
   for (const FileDescriptor& fd : message.descriptors) {
     ABSL_ASSERT(fd.is_valid());
-    reinterpret_cast<int*>(CMSG_DATA(cmsg))[next_descriptor++] = fd.get();
+    IPCZ_UNSAFE_TODO(
+        reinterpret_cast<int*>(CMSG_DATA(cmsg))[next_descriptor++]) = fd.get();
   }
 
   for (;;) {
@@ -243,13 +244,12 @@ absl::optional<size_t> SocketTransport::TrySend(absl::Span<uint8_t> header,
       if (errno == EPIPE || errno == ECONNRESET) {
         // Peer closed. Not an error condition per se, but it means we can
         // terminate the transport anyway.
-        return absl::nullopt;
+        return std::nullopt;
       }
 
       // Unrecoverable error.
       const char* error = strerror(errno);
       LOG(FATAL) << "sendmsg: " << error;
-      return absl::nullopt;
     }
 
     return static_cast<size_t>(result);
@@ -349,7 +349,7 @@ void SocketTransport::RunIOThread() {
           const int* fds = reinterpret_cast<int*>(CMSG_DATA(cmsg));
           descriptors.resize(num_fds);
           for (size_t i = 0; i < num_fds; ++i) {
-            descriptors[i] = FileDescriptor(fds[i]);
+            descriptors[i] = FileDescriptor(IPCZ_UNSAFE_TODO(fds[i]));
           }
         }
       }
@@ -447,7 +447,7 @@ void SocketTransport::TryFlushingOutgoingQueue() {
         m = outgoing_queue_[i].AsMessage();
       }
 
-      absl::optional<size_t> bytes_sent = TrySend({}, m);
+      std::optional<size_t> bytes_sent = TrySend({}, m);
       if (!bytes_sent.has_value()) {
         // Error!
         NotifyError();

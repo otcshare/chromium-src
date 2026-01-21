@@ -4,7 +4,7 @@
 
 #include "chromeos/ash/components/multidevice/secure_message_delegate_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/dbus/easy_unlock/easy_unlock_client.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -25,7 +25,6 @@ std::string EncSchemeToString(securemessage::EncScheme scheme) {
   }
 
   NOTREACHED();
-  return std::string();
 }
 
 // Converts signature type to a string representation used by EasyUnlock dbus
@@ -39,11 +38,9 @@ std::string SigSchemeToString(securemessage::SigScheme scheme) {
     case securemessage::RSA2048_SHA256:
       // RSA2048_SHA256 is not supported by the daemon.
       NOTREACHED();
-      return std::string();
   }
 
   NOTREACHED();
-  return std::string();
 }
 
 }  // namespace

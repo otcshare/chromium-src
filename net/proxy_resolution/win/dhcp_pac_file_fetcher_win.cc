@@ -4,12 +4,16 @@
 
 #include "net/proxy_resolution/win/dhcp_pac_file_fetcher_win.h"
 
+#include <winsock2.h>
+
+#include <iphlpapi.h>
+
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/free_deleter.h"
 #include "base/synchronization/lock.h"
 #include "base/task/task_runner.h"
@@ -19,9 +23,6 @@
 #include "net/base/net_errors.h"
 #include "net/log/net_log.h"
 #include "net/proxy_resolution/win/dhcp_pac_file_adapter_fetcher_win.h"
-
-#include <winsock2.h>
-#include <iphlpapi.h>
 
 namespace net {
 
@@ -200,7 +201,8 @@ class TaskRunnerWithCap : public base::TaskRunner {
   base::queue<LocationAndTask> pending_tasks_;
 };
 
-base::Value NetLogGetAdaptersDoneParams(DhcpAdapterNamesLoggingInfo* info) {
+base::Value::Dict NetLogGetAdaptersDoneParams(
+    DhcpAdapterNamesLoggingInfo* info) {
   base::Value::Dict result;
 
   // Add information on each of the adapters enumerated (including those that
@@ -240,16 +242,16 @@ base::Value NetLogGetAdaptersDoneParams(DhcpAdapterNamesLoggingInfo* info) {
   if (info->error != ERROR_SUCCESS)
     result.Set("error", static_cast<int>(info->error));
 
-  return base::Value(std::move(result));
+  return result;
 }
 
-base::Value NetLogFetcherDoneParams(int fetcher_index, int net_error) {
+base::Value::Dict NetLogFetcherDoneParams(int fetcher_index, int net_error) {
   base::Value::Dict result;
 
   result.Set("fetcher_index", fetcher_index);
   result.Set("net_error", net_error);
 
-  return base::Value(std::move(result));
+  return result;
 }
 
 }  // namespace
@@ -275,7 +277,6 @@ int DhcpPacFileFetcherWin::Fetch(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (state_ != STATE_START && state_ != STATE_DONE) {
     NOTREACHED();
-    return ERR_UNEXPECTED;
   }
 
   net_log_ = net_log;
@@ -302,7 +303,8 @@ int DhcpPacFileFetcherWin::Fetch(
           &DhcpPacFileFetcherWin::AdapterQuery::GetCandidateAdapterNames,
           last_query_.get()),
       base::BindOnce(&DhcpPacFileFetcherWin::OnGetCandidateAdapterNamesDone,
-                     AsWeakPtr(), last_query_, traffic_annotation));
+                     weak_ptr_factory_.GetWeakPtr(), last_query_,
+                     traffic_annotation));
 
   return ERR_IO_PENDING;
 }
@@ -339,6 +341,7 @@ void DhcpPacFileFetcherWin::CancelImpl() {
 
     fetchers_.clear();
   }
+  destination_string_ = nullptr;
 }
 
 void DhcpPacFileFetcherWin::OnGetCandidateAdapterNamesDone(

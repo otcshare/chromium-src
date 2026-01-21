@@ -5,7 +5,7 @@
 #import <memory>
 #import <string>
 
-#import "base/bind.h"
+#import "base/functional/bind.h"
 #import "base/run_loop.h"
 #import "base/test/ios/wait_util.h"
 #import "ios/web/grit/ios_web_resources.h"
@@ -22,10 +22,6 @@
 #import "ios/web/web_state/web_state_impl.h"
 #import "url/gurl.h"
 #import "url/scheme_host_port.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -74,18 +70,22 @@ class TestWebUIControllerFactory : public WebUIIOSControllerFactory {
   std::unique_ptr<WebUIIOSController> CreateWebUIIOSControllerForURL(
       WebUIIOS* web_ui,
       const GURL& url) const override {
-    if (!url.SchemeIs(kTestWebUIScheme))
+    if (!url.SchemeIs(kTestWebUIScheme)) {
       return nullptr;
-    if (url.host() == kTestWebUIURLHost) {
-      return std::make_unique<TestUI>(web_ui, url.host(), IDR_WEBUI_TEST_HTML);
     }
-    DCHECK_EQ(url.host(), kTestWebUIURLHost2);
-    return std::make_unique<TestUI>(web_ui, url.host(), IDR_WEBUI_TEST_HTML_2);
+    if (url.GetHost() == kTestWebUIURLHost) {
+      return std::make_unique<TestUI>(web_ui, url.GetHost(),
+                                      IDR_WEBUI_TEST_HTML);
+    }
+    DCHECK_EQ(url.GetHost(), kTestWebUIURLHost2);
+    return std::make_unique<TestUI>(web_ui, url.GetHost(),
+                                    IDR_WEBUI_TEST_HTML_2);
   }
 
   NSInteger GetErrorCodeForWebUIURL(const GURL& url) const override {
-    if (url.SchemeIs(kTestWebUIScheme))
+    if (url.SchemeIs(kTestWebUIScheme)) {
       return 0;
+    }
     return NSURLErrorUnsupportedURL;
   }
 };
@@ -106,7 +106,7 @@ class WebUITest : public WebTestWithWebState {
     test::LoadUrl(web_state(), url);
 
     // LoadIfNecessary is needed because the view is not created (but needed)
-    // when loading the page. TODO(crbug.com/705819): Remove this call.
+    // when loading the page. TODO(crbug.com/41309809): Remove this call.
     web_state()->GetNavigationManager()->LoadIfNecessary();
 
     ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^{
@@ -129,7 +129,7 @@ class WebUITest : public WebTestWithWebState {
 // Tests that a web UI page is loaded and that the WebState correctly reports
 // `WebStateImpl::HasWebUI`.
 TEST_F(WebUITest, LoadWebUIPage) {
-  ASSERT_TRUE(static_cast<WebStateImpl*>(web_state())->HasWebUI());
+  ASSERT_TRUE(WebStateImpl::FromWebState(web_state())->HasWebUI());
 
   EXPECT_TRUE(WaitForWebViewContainingText(web_state(), kWebUIPageText));
 }
@@ -147,7 +147,7 @@ TEST_F(WebUITest, LoadWebUIPageLoadViaLinkClick) {
     return !web_state()->IsLoading() && url.spec() == BaseUrl();
   }));
 
-  ASSERT_TRUE(static_cast<WebStateImpl*>(web_state())->HasWebUI());
+  ASSERT_TRUE(WebStateImpl::FromWebState(web_state())->HasWebUI());
 }
 
 }  // namespace web

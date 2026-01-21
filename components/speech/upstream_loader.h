@@ -9,18 +9,23 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom.h"
 
+namespace net {
+class HttpResponseHeaders;
+}  // namespace net
+
 namespace speech {
 
 class UpstreamLoaderClient;
 
 // Maximum amount of data written per Mojo write.
-const uint32_t kMaxUploadWrite = 128 * 1024;
+const size_t kMaxUploadWrite = 128 * 1024;
 
 // Streams sound data up to the server. Buffers entire request body into memory,
 // so it can be replayed in the case of redirects or retries.
@@ -40,7 +45,7 @@ class UpstreamLoader : public network::mojom::ChunkedDataPipeGetter {
 
  private:
   void OnUploadPipeWriteable(MojoResult unused);
-  void OnComplete(std::unique_ptr<std::string> response_body);
+  void OnComplete(scoped_refptr<net::HttpResponseHeaders> headers);
 
   // mojom::ChunkedDataPipeGetter implementation:
   void GetSize(GetSizeCallback get_size_callback) override;

@@ -26,7 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FILEAPI_PUBLIC_URL_MANAGER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FILEAPI_PUBLIC_URL_MANAGER_H_
 
-#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink.h"
@@ -43,6 +43,7 @@ namespace blink {
 
 class KURL;
 class ExecutionContext;
+class GlobalStorageAccessHandle;
 class URLRegistry;
 class URLRegistrable;
 
@@ -51,6 +52,10 @@ class CORE_EXPORT PublicURLManager final
       public ExecutionContextLifecycleObserver {
  public:
   explicit PublicURLManager(ExecutionContext*);
+  explicit PublicURLManager(
+      base::PassKey<GlobalStorageAccessHandle>,
+      ExecutionContext*,
+      mojo::PendingAssociatedRemote<mojom::blink::BlobURLStore>);
 
   // Generates a new Blob URL and registers the URLRegistrable to the
   // corresponding URLRegistry with the Blob URL. Returns the serialization
@@ -66,7 +71,9 @@ class CORE_EXPORT PublicURLManager final
   // BlobURLToken. This token can be used by the browser process to securely
   // lookup what blob a URL used to refer to, even after the URL is revoked.
   // If the URL fails to resolve the request will simply be disconnected.
-  void Resolve(const KURL&, mojo::PendingReceiver<mojom::blink::BlobURLToken>);
+  void ResolveAsBlobURLToken(const KURL&,
+                             mojo::PendingReceiver<mojom::blink::BlobURLToken>,
+                             bool is_top_level_navigation);
 
   // ExecutionContextLifecycleObserver interface.
   void ContextDestroyed() override;
@@ -89,7 +96,7 @@ class CORE_EXPORT PublicURLManager final
   URLToRegistryMap url_to_registry_;
   HashSet<URLString> mojo_urls_;
 
-  bool is_stopped_;
+  bool is_stopped_ = false;
 
   // For a frame context or from a main thread worklet context, a
   // navigation-associated interface is used to preserve message ordering.

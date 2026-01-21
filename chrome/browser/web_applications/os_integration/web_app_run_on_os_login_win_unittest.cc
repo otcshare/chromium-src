@@ -7,10 +7,12 @@
 #include <vector>
 
 #include "base/base_paths_win.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
+#include "base/test/test_future.h"
 #include "base/win/shortcut.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
@@ -43,7 +45,7 @@ class WebAppRunOnOsLoginWinTest : public WebAppTest {
 
   std::unique_ptr<ShortcutInfo> GetShortcutInfo() {
     auto shortcut_info = std::make_unique<ShortcutInfo>();
-    shortcut_info->extension_id = "app-id";
+    shortcut_info->app_id = "app-id";
     shortcut_info->title = kAppTitle;
     shortcut_info->profile_path = profile()->GetPath();
 
@@ -90,38 +92,38 @@ class WebAppRunOnOsLoginWinTest : public WebAppTest {
     std::vector<base::FilePath> shortcuts = GetShortcuts();
     EXPECT_EQ(shortcuts.size(), 0u);
   }
-
- private:
-  base::ScopedPathOverride override_user_startup{base::DIR_USER_STARTUP};
 };
 
 TEST_F(WebAppRunOnOsLoginWinTest, Register) {
   std::unique_ptr<ShortcutInfo> shortcut_info = GetShortcutInfo();
-  bool result = internals::RegisterRunOnOsLogin(*shortcut_info);
-  EXPECT_TRUE(result);
+  base::test::TestFuture<Result> result;
+  internals::RegisterRunOnOsLogin(*shortcut_info, result.GetCallback());
+  EXPECT_EQ(result.Get(), Result::kOk);
   VerifyShortcutCreated();
 }
 
 TEST_F(WebAppRunOnOsLoginWinTest, RegisterMultipleTimes) {
   std::unique_ptr<ShortcutInfo> shortcut_info = GetShortcutInfo();
-  bool result = internals::RegisterRunOnOsLogin(*shortcut_info);
-  EXPECT_TRUE(result);
+  base::test::TestFuture<Result> result;
+  internals::RegisterRunOnOsLogin(*shortcut_info, result.GetCallback());
+  EXPECT_EQ(result.Get(), Result::kOk);
   VerifyShortcutCreated();
 
+  result.Clear();
   // There should still only be one shortcut created.
-  result = internals::RegisterRunOnOsLogin(*shortcut_info);
-  EXPECT_TRUE(result);
+  internals::RegisterRunOnOsLogin(*shortcut_info, result.GetCallback());
   VerifyShortcutCreated();
 }
 
 TEST_F(WebAppRunOnOsLoginWinTest, Unregister) {
   std::unique_ptr<ShortcutInfo> shortcut_info = GetShortcutInfo();
-  bool result = internals::RegisterRunOnOsLogin(*shortcut_info);
-  EXPECT_TRUE(result);
+  base::test::TestFuture<Result> result;
+  internals::RegisterRunOnOsLogin(*shortcut_info, result.GetCallback());
+  EXPECT_EQ(result.Get(), Result::kOk);
   VerifyShortcutCreated();
 
-  internals::UnregisterRunOnOsLogin(shortcut_info->extension_id,
-                                    profile()->GetPath(), kAppTitle);
+  internals::UnregisterRunOnOsLogin(shortcut_info->app_id, profile()->GetPath(),
+                                    kAppTitle);
   VerifyShortcutDeleted();
 }
 

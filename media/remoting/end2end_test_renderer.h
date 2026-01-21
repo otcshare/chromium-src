@@ -9,13 +9,17 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/renderer.h"
 #include "media/remoting/stream_provider.h"
-#include "third_party/openscreen/src/cast/streaming/rpc_messenger.h"
+#include "third_party/openscreen/src/cast/streaming/public/rpc_messenger.h"
 
 namespace media {
+
+class DecoderBuffer;
+
 namespace remoting {
 
 class RendererController;
@@ -33,7 +37,7 @@ class End2EndTestRenderer final : public Renderer {
   void Initialize(MediaResource* media_resource,
                   RendererClient* client,
                   PipelineStatusCallback init_cb) override;
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void SetPreservesPitch(bool preserves_pitch) override;
   void Flush(base::OnceClosure flush_cb) override;
   void StartPlayingFrom(base::TimeDelta time) override;
@@ -42,13 +46,9 @@ class End2EndTestRenderer final : public Renderer {
   base::TimeDelta GetMediaTime() override;
   RendererType GetRendererType() override;
 
-  void OnSelectedVideoTracksChanged(
-      const std::vector<DemuxerStream*>& enabled_tracks,
-      base::OnceClosure change_completed_cb) override;
-
-  void OnEnabledAudioTracksChanged(
-      const std::vector<DemuxerStream*>& enabled_tracks,
-      base::OnceClosure change_completed_cb) override;
+  void OnTracksChanged(DemuxerStream::Type track_type,
+                       DemuxerStream* enabled_track,
+                       base::OnceClosure change_completed_cb) override;
 
  private:
   class TestRemotee;
@@ -60,7 +60,7 @@ class End2EndTestRenderer final : public Renderer {
 
   // Called to send frame data to |receiver_|.
   void SendFrameToSink(uint32_t frame_count,
-                       const std::vector<uint8_t>& data,
+                       scoped_refptr<media::DecoderBuffer> decoder_buffer,
                        DemuxerStream::Type type);
 
   // Called when receives RPC messages from |receiver_|.

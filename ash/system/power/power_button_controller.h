@@ -11,13 +11,14 @@
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/public/cpp/system/power/power_button_controller_base.h"
-#include "ash/public/cpp/tablet_mode_observer.h"
 #include "ash/shutdown_reason.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
 #include "ash/wm/lock_state_observer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chromeos/dbus/power/power_manager_client.h"
+#include "ui/display/display_observer.h"
 #include "ui/display/manager/display_configurator.h"
 #include "ui/views/widget/widget.h"
 
@@ -25,6 +26,10 @@ namespace base {
 class TickClock;
 class TimeTicks;
 }  // namespace base
+
+namespace display {
+enum class TabletState;
+}  // namespace display
 
 namespace ash {
 
@@ -40,11 +45,11 @@ class PowerButtonScreenshotController;
 // screenshot.
 class ASH_EXPORT PowerButtonController
     : public PowerButtonControllerBase,
+      public display::DisplayObserver,
       public display::DisplayConfigurator::Observer,
       public chromeos::PowerManagerClient::Observer,
       public AccelerometerReader::Observer,
       public ScreenBacklightObserver,
-      public TabletModeObserver,
       public LockStateObserver,
       public SessionObserver {
  public:
@@ -112,6 +117,11 @@ class ASH_EXPORT PowerButtonController
   // True if the menu is opened.
   bool IsMenuOpened() const;
 
+  // Called when DEBUG_TOGGLE_POWER_BUTTON_MENU is pressed. This is used to help
+  // bring up the menu for debugging without pressing the physical power
+  // button. The menu will be shown without pre-shutdown.
+  void ShowMenuOnDebugAccelerator();
+
   // Dismisses the menu.
   void DismissMenu();
 
@@ -122,8 +132,11 @@ class ASH_EXPORT PowerButtonController
   void OnArcPowerButtonMenuEvent() override;
   void CancelPowerButtonEvent() override;
 
+  // display::DisplayObserver:
+  void OnDisplayTabletStateChanged(display::TabletState state) override;
+
   // display::DisplayConfigurator::Observer:
-  void OnDisplayModeChanged(
+  void OnDisplayConfigurationChanged(
       const display::DisplayConfigurator::DisplayStateList& outputs) override;
 
   // chromeos::PowerManagerClient::Observer:
@@ -139,7 +152,7 @@ class ASH_EXPORT PowerButtonController
   // Initializes |screenshot_controller_| according to the tablet mode switch in
   // |result|.
   void OnGetSwitchStates(
-      absl::optional<chromeos::PowerManagerClient::SwitchStates> result);
+      std::optional<chromeos::PowerManagerClient::SwitchStates> result);
 
   // TODO(minch): Remove this if/when all applicable devices expose a tablet
   // mode switch: https://crbug.com/798646.
@@ -152,9 +165,10 @@ class ASH_EXPORT PowerButtonController
   void OnScreenBacklightStateChanged(
       ScreenBacklightState screen_backlight_state) override;
 
-  // TabletModeObserver:
-  void OnTabletModeStarted() override;
-  void OnTabletModeEnded() override;
+  // Used by the `ash::curtain::Session` to notify when power button is
+  // enabled/disabled.
+  void OnSecurityCurtainEnabled();
+  void OnSecurityCurtainDisabled();
 
   // LockStateObserver:
   void OnLockStateEvent(LockStateObserver::EventType event) override;
@@ -165,6 +179,9 @@ class ASH_EXPORT PowerButtonController
   // Returns true if tablet power button behavior (i.e. tapping the button turns
   // the screen off) should currently be used.
   bool UseTabletBehavior() const;
+
+  // Returns true if power button should be disabled.
+  bool IsPowerButtonDisabled() const;
 
   // Stops |power_button_menu_timer_|, |shutdown_timer_| and dismisses the power
   // button menu.
@@ -233,6 +250,9 @@ class ASH_EXPORT PowerButtonController
   // button behavior even while in laptop mode.
   bool force_tablet_power_button_ = false;
 
+  // If set, the power button in tablet mode is disabled.
+  bool disable_power_button_in_tablet_mode_ = false;
+
   // True if the screen was off when the power button was pressed.
   bool screen_off_when_power_button_down_ = false;
 
@@ -243,12 +263,13 @@ class ASH_EXPORT PowerButtonController
   bool force_off_on_button_up_ = false;
 
   // Used to force backlights off, when needed.
-  BacklightsForcedOffSetter* backlights_forced_off_setter_;  // Not owned.
+  raw_ptr<BacklightsForcedOffSetter>
+      backlights_forced_off_setter_;  // Not owned.
 
-  LockStateController* lock_state_controller_;  // Not owned.
+  raw_ptr<LockStateController> lock_state_controller_;  // Not owned.
 
   // Time source for performed action times.
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   // Used to interact with the display.
   std::unique_ptr<PowerButtonDisplayController> display_controller_;
@@ -292,6 +313,8 @@ class ASH_EXPORT PowerButtonController
   // showing menu.
   std::unique_ptr<views::Widget::PaintAsActiveLock>
       active_window_paint_as_active_lock_;
+
+  display::ScopedDisplayObserver display_observer_{this};
 
   base::WeakPtrFactory<PowerButtonController> weak_factory_{this};
 };

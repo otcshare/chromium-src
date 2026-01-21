@@ -4,8 +4,8 @@
 
 #include "components/policy/test_support/request_handler_for_policy.h"
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -26,6 +26,43 @@ namespace em = enterprise_management;
 
 namespace policy {
 
+namespace {
+
+// As policy test server can be used not only for regular managed users,
+// but also for unicorn users, we need to handle some policy aspects for
+// them in a special way.
+inline constexpr char kUnicornUsersDomain[] = "gmail.com";
+
+// Returns a string representation of the given `extension_ids_and_versions`,
+// for logging.
+std::string JoinExtensionIdsAndVersions(
+    const google::protobuf::RepeatedPtrField<em::ExtensionIdAndVersion>&
+        extension_ids_and_versions) {
+  std::vector<std::string> extension_ids_and_versions_strings;
+  for (const auto& extension_id_and_version : extension_ids_and_versions) {
+    extension_ids_and_versions_strings.push_back(base::StringPrintf(
+        "'%s@%s'", extension_id_and_version.extension_id().c_str(),
+        extension_id_and_version.extension_version().c_str()));
+  }
+  return "[" + base::JoinString(extension_ids_and_versions_strings, ", ") + "]";
+}
+
+// Returns a string representation of the given `fetch_request`, for logging.
+std::string FetchRequestToString(const em::PolicyFetchRequest& fetch_request) {
+  std::string result = "{ policy_type: '";
+  result += fetch_request.policy_type();
+  result += "'";
+  if (fetch_request.has_settings_entity_id()) {
+    result += ", settings_entity_id: '";
+    result += fetch_request.settings_entity_id();
+    result += "'";
+  }
+  result += " }";
+  return result;
+}
+
+}  // namespace
+
 RequestHandlerForPolicy::RequestHandlerForPolicy(
     EmbeddedPolicyTestServer* parent)
     : EmbeddedPolicyTestServer::RequestHandler(parent) {}
@@ -42,22 +79,31 @@ std::unique_ptr<HttpResponse> RequestHandlerForPolicy::HandleRequest(
       dm_protocol::kChromeDevicePolicyType,
       dm_protocol::kChromeExtensionPolicyType,
       dm_protocol::kChromeMachineLevelUserCloudPolicyType,
-      dm_protocol::kChromeMachineLevelUserCloudPolicyAndroidType,
-      dm_protocol::kChromeMachineLevelUserCloudPolicyIOSType,
       dm_protocol::kChromeMachineLevelExtensionCloudPolicyType,
       dm_protocol::kChromePublicAccountPolicyType,
       dm_protocol::kChromeSigninExtensionPolicyType,
-      dm_protocol::kChromeUserPolicyType,
+      dm_protocol::GetChromeUserPolicyType(),
+      dm_protocol::kGoogleUpdateMachineLevelAppsPolicyType,
+      dm_protocol::kGoogleUpdateMachineLevelOmahaPolicyType,
+      dm_protocol::kChromeExtensionInstallUserCloudPolicyType,
+      dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType,
   };
   const base::flat_set<std::string> kExtensionPolicyTypes{
       dm_protocol::kChromeExtensionPolicyType,
       dm_protocol::kChromeMachineLevelExtensionCloudPolicyType,
       dm_protocol::kChromeSigninExtensionPolicyType,
+      dm_protocol::kChromeExtensionInstallUserCloudPolicyType,
+      dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType,
+  };
+  const base::flat_set<std::string> kExtensionInstallPolicyTypes{
+      dm_protocol::kChromeExtensionInstallUserCloudPolicyType,
+      dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType,
   };
 
   std::string request_device_token;
-  if (!GetDeviceTokenFromRequest(request, &request_device_token))
+  if (!GetDeviceTokenFromRequest(request, &request_device_token)) {
     return CreateHttpResponse(net::HTTP_UNAUTHORIZED, "Invalid device token.");
+  }
 
   em::DeviceManagementResponse device_management_response;
   const ClientStorage::ClientInfo* client_info =
@@ -66,8 +112,7 @@ std::unique_ptr<HttpResponse> RequestHandlerForPolicy::HandleRequest(
   if (!client_info || client_info->device_token != request_device_token) {
     device_management_response.add_error_detail(
         policy_storage()->error_detail());
-    return CreateHttpResponse(net::HTTP_GONE,
-                              device_management_response.SerializeAsString());
+    return CreateHttpResponse(net::HTTP_GONE, device_management_response);
   }
 
   em::DeviceManagementRequest device_management_request;
@@ -77,45 +122,73 @@ std::unique_ptr<HttpResponse> RequestHandlerForPolicy::HandleRequest(
   // request as the |username|. This is required to validate policy for
   // extensions in device-local accounts.
   ClientStorage::ClientInfo modified_client_info(*client_info);
+  std::vector<em::PolicyFetchRequest> fetch_requests;
   for (const auto& fetch_request :
        device_management_request.policy_request().requests()) {
     if (fetch_request.policy_type() ==
         dm_protocol::kChromePublicAccountPolicyType) {
       modified_client_info.username = fetch_request.settings_entity_id();
       client_info = &modified_client_info;
-      break;
+    }
+
+    if (fetch_request.policy_type() ==
+        dm_protocol::kGoogleUpdateMachineLevelAppsPolicyType) {
+      // The "google/machine-level-apps" policy type has a special behavior in
+      // that the server should auto-expand it to fetch requests for
+      // "google/machine-level-omaha", "google/chrome/machine-level-user", and
+      // "google/chrome/machine-level-extension".
+      for (const auto& new_policy_type :
+           {dm_protocol::kGoogleUpdateMachineLevelOmahaPolicyType,
+            dm_protocol::kChromeMachineLevelUserCloudPolicyType,
+            dm_protocol::kChromeMachineLevelExtensionCloudPolicyType}) {
+        em::PolicyFetchRequest new_fetch_request = fetch_request;
+        new_fetch_request.set_policy_type(new_policy_type);
+        fetch_requests.push_back(new_fetch_request);
+      }
+    } else {
+      fetch_requests.push_back(fetch_request);
     }
   }
 
-  for (const auto& fetch_request :
-       device_management_request.policy_request().requests()) {
+  for (const auto& fetch_request : fetch_requests) {
     const std::string& policy_type = fetch_request.policy_type();
-    // TODO(crbug.com/1221328): Add other policy types as needed.
-    if (!base::Contains(kCloudPolicyTypes, policy_type)) {
+    // TODO(crbug.com/40773420): Add other policy types as needed.
+    if (!kCloudPolicyTypes.contains(policy_type)) {
       return CreateHttpResponse(
           net::HTTP_BAD_REQUEST,
           base::StringPrintf("Invalid policy_type: %s", policy_type.c_str()));
     }
 
+    LOG(INFO) << "PolicyFetchRequest: " << FetchRequestToString(fetch_request);
     std::string error_msg;
-    if (base::Contains(kExtensionPolicyTypes, policy_type)) {
+    if (kExtensionInstallPolicyTypes.contains(policy_type) &&
+        fetch_request.extension_ids_and_version_size() > 0) {
+      if (!ProcessCloudPolicyForExtensionInstall(
+              fetch_request, *client_info,
+              device_management_response.mutable_policy_response(),
+              &error_msg)) {
+        return CreateHttpResponse(net::HTTP_BAD_REQUEST, error_msg);
+      }
+    } else if (kExtensionPolicyTypes.contains(policy_type)) {
       if (!ProcessCloudPolicyForExtensions(
               fetch_request, *client_info,
               device_management_response.mutable_policy_response(),
               &error_msg)) {
         return CreateHttpResponse(net::HTTP_BAD_REQUEST, error_msg);
       }
-    } else if (!ProcessCloudPolicy(
-                   fetch_request, *client_info,
-                   device_management_response.mutable_policy_response()
-                       ->add_responses(),
-                   &error_msg)) {
-      return CreateHttpResponse(net::HTTP_BAD_REQUEST, error_msg);
+    } else {
+      LOG(INFO) << "Processing cloud policy.";
+      if (!ProcessCloudPolicy(
+              fetch_request, *client_info,
+              device_management_response.mutable_policy_response()
+                  ->add_responses(),
+              &error_msg)) {
+        return CreateHttpResponse(net::HTTP_BAD_REQUEST, error_msg);
+      }
     }
   }
 
-  return CreateHttpResponse(net::HTTP_OK,
-                            device_management_response.SerializeAsString());
+  return CreateHttpResponse(net::HTTP_OK, device_management_response);
 }
 
 bool RequestHandlerForPolicy::ProcessCloudPolicy(
@@ -161,9 +234,10 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
 
   em::PolicyData policy_data;
   policy_data.set_policy_type(policy_type);
-  policy_data.set_timestamp(policy_storage()->timestamp().is_null()
-                                ? base::Time::Now().ToJavaTime()
-                                : policy_storage()->timestamp().ToJavaTime());
+  policy_data.set_timestamp(
+      policy_storage()->timestamp().is_null()
+          ? base::Time::Now().InMillisecondsSinceUnixEpoch()
+          : policy_storage()->timestamp().InMillisecondsSinceUnixEpoch());
   policy_data.set_request_token(client_info.device_token);
   policy_data.set_policy_value(policy_storage()->GetPolicyPayload(
       policy_type, fetch_request.settings_entity_id()));
@@ -179,15 +253,21 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
                                         ? kDefaultUsername
                                         : policy_storage()->policy_user());
   policy_data.set_username(username);
-  policy_data.set_managed_by(
-      gaia::ExtractDomainName(gaia::SanitizeEmail(username)));
+
+  std::string domain = gaia::ExtractDomainName(gaia::SanitizeEmail(username));
+
+  if (domain != kUnicornUsersDomain) {
+    // Unicorn users don't have "managed by" field.
+    policy_data.set_managed_by(domain);
+  }
   policy_data.set_policy_invalidation_topic(
       policy_storage()->policy_invalidation_topic());
 
-  if (fetch_request.signature_type() != em::PolicyFetchRequest::NONE)
+  if (fetch_request.signature_type() != em::PolicyFetchRequest::NONE) {
     policy_data.set_public_key_version(signing_key_version);
+  }
 
-  if (policy_type == dm_protocol::kChromeUserPolicyType ||
+  if (policy_type == policy::dm_protocol::GetChromeUserPolicyType() ||
       policy_type == dm_protocol::kChromePublicAccountPolicyType) {
     std::vector<std::string> user_affiliation_ids =
         policy_storage()->user_affiliation_ids();
@@ -196,6 +276,16 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
         policy_data.add_user_affiliation_ids(user_affiliation_id);
       }
     }
+    if (policy_storage()->metrics_log_segment()) {
+      policy_data.set_metrics_log_segment(
+          policy_storage()->metrics_log_segment().value());
+    }
+    if (policy_storage()->k12_age_classification_metrics_log_segment()) {
+      policy_data.set_k12_age_classification_metrics_log_segment(
+          policy_storage()
+              ->k12_age_classification_metrics_log_segment()
+              .value());
+    }
   } else if (policy_type == dm_protocol::kChromeDevicePolicyType) {
     std::vector<std::string> device_affiliation_ids =
         policy_storage()->device_affiliation_ids();
@@ -203,6 +293,10 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
       for (const std::string& device_affiliation_id : device_affiliation_ids) {
         policy_data.add_device_affiliation_ids(device_affiliation_id);
       }
+    }
+    if (policy_storage()->market_segment()) {
+      policy_data.set_market_segment(
+          policy_storage()->market_segment().value());
     }
   }
 
@@ -213,9 +307,10 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
 
   policy_data.SerializeToString(fetch_response->mutable_policy_data());
 
-  if (fetch_request.signature_type() == em::PolicyFetchRequest::SHA1_RSA) {
+  if (fetch_request.signature_type() != em::PolicyFetchRequest::NONE) {
     // Sign the serialized policy data.
     if (!signing_key->Sign(fetch_response->policy_data(),
+                           fetch_request.signature_type(),
                            fetch_response->mutable_policy_data_signature())) {
       error_msg->assign("Error signing policy_data");
       return false;
@@ -224,13 +319,28 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
     if (!fetch_request.has_public_key_version() ||
         public_key_version != signing_key_version) {
       fetch_response->set_new_public_key(signing_key->public_key());
+
+      // Add the new public key verification data.
+      em::PublicKeyVerificationData new_signing_key_verification_data;
+      new_signing_key_verification_data.set_new_public_key(
+          signing_key->public_key());
+      new_signing_key_verification_data.set_domain(domain);
+      new_signing_key_verification_data.set_new_public_key_version(
+          signing_key_version);
+      std::string new_signing_key_verification_data_as_string;
+      CHECK(new_signing_key_verification_data.SerializeToString(
+          &new_signing_key_verification_data_as_string));
+      fetch_response->set_new_public_key_verification_data(
+          new_signing_key_verification_data_as_string);
+      CHECK(signature_provider->SignVerificationData(
+          new_signing_key_verification_data_as_string,
+          fetch_response
+              ->mutable_new_public_key_verification_data_signature()));
     }
 
     // Set the verification signature appropriate for the policy domain.
     // TODO(http://crbug.com/328038): Use the enrollment domain for public
     // accounts when we add key validation for ChromeOS.
-    std::string domain =
-        gaia::ExtractDomainName(gaia::SanitizeEmail(policy_data.username()));
     if (!signing_key->GetSignatureForDomain(
             domain,
             fetch_response
@@ -242,10 +352,14 @@ bool RequestHandlerForPolicy::ProcessCloudPolicy(
 
     if (client_key &&
         !client_key->Sign(fetch_response->new_public_key(),
+                          fetch_request.signature_type(),
                           fetch_response->mutable_new_public_key_signature())) {
       error_msg->assign("Error signing new_public_key");
       return false;
     }
+
+    fetch_response->set_policy_data_signature_type(
+        fetch_request.signature_type());
   }
 
   return true;
@@ -256,6 +370,7 @@ bool RequestHandlerForPolicy::ProcessCloudPolicyForExtensions(
     const ClientStorage::ClientInfo& client_info,
     em::DevicePolicyResponse* response,
     std::string* error_msg) {
+  LOG(INFO) << "Processing policy for extensions.";
   // Send one PolicyFetchResponse for each extension configured on the server as
   // the client does not actually tell us which extensions it has installed to
   // protect user privacy.
@@ -270,6 +385,61 @@ bool RequestHandlerForPolicy::ProcessCloudPolicyForExtensions(
       return false;
     }
   }
+
+  return true;
+}
+
+bool RequestHandlerForPolicy::ProcessCloudPolicyForExtensionInstall(
+    const em::PolicyFetchRequest& fetch_request,
+    const ClientStorage::ClientInfo& client_info,
+    em::DevicePolicyResponse* response,
+    std::string* error_msg) {
+  LOG(INFO) << "Processing policy for extension install.";
+  LOG(INFO) << "extension_ids_and_version = "
+            << JoinExtensionIdsAndVersions(
+                   fetch_request.extension_ids_and_version());
+
+  // Merge the ExtensionInstallPolicies protos into one uber-proto based on the
+  // request's extension_ids_and_version list.
+  em::ExtensionInstallPolicies result;
+  for (const auto& extension : fetch_request.extension_ids_and_version()) {
+    em::PolicyFetchRequest fetch_request_with_id;
+    fetch_request_with_id.CopyFrom(fetch_request);
+    fetch_request_with_id.set_settings_entity_id(
+        extension.extension_id() + "@" + extension.extension_version());
+    em::PolicyFetchResponse inner_response;
+    if (!ProcessCloudPolicy(fetch_request_with_id, client_info, &inner_response,
+                            error_msg)) {
+      return false;
+    }
+    // Get the payload from the inner response.
+    em::PolicyData policy_data;
+    policy_data.ParseFromString(inner_response.policy_data());
+    em::ExtensionInstallPolicies extension_install_policies;
+    if (!extension_install_policies.ParseFromString(
+            policy_data.policy_value())) {
+      *error_msg = "Failed to parse payload as ExtensionInstallPolicies.";
+      return false;
+    }
+    if (extension_install_policies.policies_size() > 1) {
+      *error_msg = "More than one extension install policy found.";
+      return false;
+    }
+    if (extension_install_policies.policies_size() == 1) {
+      result.add_policies()->CopyFrom(extension_install_policies.policies(0));
+    }
+  }
+
+  // Wrap the uber-proto with PolicyData and add it to the response.
+  em::PolicyData policy_data;
+  policy_data.set_policy_type(fetch_request.policy_type());
+  policy_data.set_policy_value(result.SerializeAsString());
+  if (fetch_request.extension_ids_and_version_size() == 1) {
+    policy_data.set_settings_entity_id(
+        fetch_request.extension_ids_and_version(0).extension_id());
+  }
+  policy_data.SerializeToString(
+      response->add_responses()->mutable_policy_data());
 
   return true;
 }

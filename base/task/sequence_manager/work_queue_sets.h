@@ -5,29 +5,33 @@
 #ifndef BASE_TASK_SEQUENCE_MANAGER_WORK_QUEUE_SETS_H_
 #define BASE_TASK_SEQUENCE_MANAGER_WORK_QUEUE_SETS_H_
 
-#include <array>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "base/base_export.h"
 #include "base/containers/intrusive_heap.h"
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/stack_allocated.h"
 #include "base/task/sequence_manager/sequence_manager.h"
 #include "base/task/sequence_manager/task_order.h"
 #include "base/task/sequence_manager/task_queue_impl.h"
 #include "base/task/sequence_manager/work_queue.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 namespace sequence_manager {
 namespace internal {
 
 struct WorkQueueAndTaskOrder {
+  STACK_ALLOCATED();
+
+ public:
   WorkQueueAndTaskOrder(WorkQueue& work_queue, const TaskOrder& task_order)
       : queue(&work_queue), order(task_order) {}
 
-  raw_ptr<WorkQueue> queue;
+  WorkQueue* queue = nullptr;
   TaskOrder order;
 };
 
@@ -38,7 +42,7 @@ class BASE_EXPORT WorkQueueSets {
  public:
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     virtual void WorkQueueSetBecameEmpty(size_t set_index) = 0;
 
@@ -76,12 +80,12 @@ class BASE_EXPORT WorkQueueSets {
   void OnQueueBlocked(WorkQueue* work_queue);
 
   // O(1)
-  absl::optional<WorkQueueAndTaskOrder> GetOldestQueueAndTaskOrderInSet(
+  std::optional<WorkQueueAndTaskOrder> GetOldestQueueAndTaskOrderInSet(
       size_t set_index) const;
 
 #if DCHECK_IS_ON()
   // O(1)
-  absl::optional<WorkQueueAndTaskOrder> GetRandomQueueAndTaskOrderInSet(
+  std::optional<WorkQueueAndTaskOrder> GetRandomQueueAndTaskOrderInSet(
       size_t set_index) const;
 #endif
 
@@ -105,7 +109,8 @@ class BASE_EXPORT WorkQueueSets {
  private:
   struct OldestTaskOrder {
     TaskOrder key;
-    raw_ptr<WorkQueue> value;
+    // RAW_PTR_EXCLUSION: Performance: visible in sampling profiler stacks.
+    RAW_PTR_EXCLUSION WorkQueue* value = nullptr;
 
     // Used for a min-heap.
     bool operator>(const OldestTaskOrder& other) const {
@@ -123,9 +128,7 @@ class BASE_EXPORT WorkQueueSets {
 
   // For each set |work_queue_heaps_| has a queue of WorkQueue ordered by the
   // oldest task in each WorkQueue.
-  std::array<IntrusiveHeap<OldestTaskOrder, std::greater<>>,
-             TaskQueue::kQueuePriorityCount>
-      work_queue_heaps_;
+  std::vector<IntrusiveHeap<OldestTaskOrder, std::greater<>>> work_queue_heaps_;
 
 #if DCHECK_IS_ON()
   static inline uint64_t MurmurHash3(uint64_t value) {
@@ -139,7 +142,7 @@ class BASE_EXPORT WorkQueueSets {
 
   // This is for a debugging feature which lets us randomize task selection. Its
   // not for production use.
-  // TODO(crbug.com/1350190): Use a seedable PRNG from ::base if one is added.
+  // TODO(crbug.com/40234060): Use a seedable PRNG from ::base if one is added.
   uint64_t Random() const {
     last_rand_ = MurmurHash3(last_rand_);
     return last_rand_;

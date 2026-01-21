@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
@@ -15,6 +15,7 @@
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace background_fetch {
@@ -57,8 +58,8 @@ DeleteRegistrationTask::~DeleteRegistrationTask() = default;
 
 void DeleteRegistrationTask::Start() {
   int64_t trace_id = blink::cache_storage::CreateTraceId();
-  TRACE_EVENT_WITH_FLOW0("CacheStorage", "DeleteRegistrationTask::Start",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "DeleteRegistrationTask::Start",
+              perfetto::Flow::Global(trace_id));
 
   base::RepeatingClosure barrier_closure = base::BarrierClosure(
       2u, base::BindOnce(&DeleteRegistrationTask::FinishWithError,
@@ -135,9 +136,8 @@ void DeleteRegistrationTask::DidDeleteCache(
     base::OnceClosure done_closure,
     int64_t trace_id,
     blink::mojom::CacheStorageError error) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "DeleteRegistrationTask::DidDeleteCache",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_IN);
+  TRACE_EVENT("CacheStorage", "DeleteRegistrationTask::DidDeleteCache",
+              perfetto::TerminatingFlow::Global(trace_id));
   if (error != blink::mojom::CacheStorageError::kSuccess &&
       error != blink::mojom::CacheStorageError::kErrorNotFound) {
     SetStorageError(BackgroundFetchStorageError::kCacheStorageError);
@@ -149,13 +149,8 @@ void DeleteRegistrationTask::FinishWithError(
     blink::mojom::BackgroundFetchError error) {
   if (HasStorageError())
     error = blink::mojom::BackgroundFetchError::STORAGE_ERROR;
-  ReportStorageError();
   std::move(callback_).Run(error);
   Finished();  // Destroys |this|.
-}
-
-std::string DeleteRegistrationTask::HistogramName() const {
-  return "DeleteRegistrationTask";
 }
 
 }  // namespace background_fetch

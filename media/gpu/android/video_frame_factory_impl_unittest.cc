@@ -4,8 +4,8 @@
 
 #include "media/gpu/android/video_frame_factory_impl.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/gmock_callback_support.h"
@@ -28,6 +28,7 @@
 
 using base::test::RunOnceCallback;
 using testing::_;
+using testing::Return;
 using testing::SaveArg;
 
 namespace gpu {
@@ -54,6 +55,8 @@ class MockFrameInfoHelper : public FrameInfoHelper,
 
     std::move(cb).Run(std::move(buffer_renderer), info);
   }
+
+  MOCK_CONST_METHOD0(IsStalled, bool());
 };
 
 class VideoFrameFactoryImplTest : public testing::Test {
@@ -67,6 +70,7 @@ class VideoFrameFactoryImplTest : public testing::Test {
     mre_manager_raw_ = mre_manager.get();
 
     auto info_helper = std::make_unique<MockFrameInfoHelper>();
+    info_helper_raw_ = info_helper.get();
 
     impl_ = std::make_unique<VideoFrameFactoryImpl>(
         task_runner_, gpu_preferences_, std::move(image_provider),
@@ -74,8 +78,8 @@ class VideoFrameFactoryImplTest : public testing::Test {
         features::NeedThreadSafeAndroidMedia()
             ? base::MakeRefCounted<gpu::RefCountedLockForTest>()
             : nullptr);
-    auto texture_owner = base::MakeRefCounted<NiceMock<gpu::MockTextureOwner>>(
-        0, nullptr, nullptr, true);
+    auto texture_owner =
+        base::MakeRefCounted<NiceMock<gpu::MockTextureOwner>>();
     auto codec_buffer_wait_coordinator =
         base::MakeRefCounted<CodecBufferWaitCoordinator>(
             std::move(texture_owner),
@@ -99,7 +103,8 @@ class VideoFrameFactoryImplTest : public testing::Test {
 
   void RequestVideoFrame() {
     auto output_buffer = CodecOutputBuffer::CreateForTesting(
-        0, video_frame_params_.coded_size, video_frame_params_.color_space);
+        0, video_frame_params_.coded_size, video_frame_params_.color_space,
+        std::nullopt);
     ASSERT_TRUE(VideoFrame::IsValidConfig(
         PIXEL_FORMAT_ARGB, VideoFrame::STORAGE_OPAQUE,
         video_frame_params_.coded_size, video_frame_params_.visible_rect,
@@ -127,7 +132,14 @@ class VideoFrameFactoryImplTest : public testing::Test {
   SharedImageVideoProvider::ImageRecord MakeImageRecord(
       bool* release_cb_called_flag = nullptr) {
     SharedImageVideoProvider::ImageRecord record;
-    record.mailbox = gpu::Mailbox::Generate();
+    gpu::SharedImageMetadata metadata;
+    metadata.format = viz::SinglePlaneFormat::kRGBA_8888;
+    metadata.size = video_frame_params_.coded_size;
+    metadata.color_space = video_frame_params_.color_space;
+    metadata.surface_origin = kTopLeft_GrSurfaceOrigin;
+    metadata.alpha_type = kOpaque_SkAlphaType;
+    metadata.usage = gpu::SharedImageUsageSet();
+    record.shared_image = gpu::ClientSharedImage::CreateForTesting(metadata);
     if (release_cb_called_flag)
       *release_cb_called_flag = false;
     record.release_cb = base::BindOnce(
@@ -153,6 +165,7 @@ class VideoFrameFactoryImplTest : public testing::Test {
 
   raw_ptr<MockMaybeRenderEarlyManager> mre_manager_raw_ = nullptr;
   raw_ptr<MockSharedImageVideoProvider> image_provider_raw_ = nullptr;
+  raw_ptr<MockFrameInfoHelper> info_helper_raw_ = nullptr;
 
   // Most recently created CodecOutputBuffer.
   raw_ptr<CodecOutputBuffer> output_buffer_raw_ = nullptr;
@@ -188,8 +201,7 @@ TEST_F(VideoFrameFactoryImplTest,
   // Also provide a non-null TextureOwner to it.
   scoped_refptr<CodecSurfaceBundle> surface_bundle =
       base::MakeRefCounted<CodecSurfaceBundle>(
-          base::MakeRefCounted<NiceMock<gpu::MockTextureOwner>>(0, nullptr,
-                                                                nullptr, true),
+          base::MakeRefCounted<NiceMock<gpu::MockTextureOwner>>(),
           features::NeedThreadSafeAndroidMedia()
               ? base::MakeRefCounted<gpu::RefCountedLockForTest>()
               : nullptr);
@@ -204,8 +216,8 @@ TEST_F(VideoFrameFactoryImplTest, CreateVideoFrameFailsIfUnsupportedFormat) {
   gfx::Size coded_size(limits::kMaxDimension + 1, limits::kMaxDimension + 1);
   gfx::Rect visible_rect(coded_size);
   gfx::Size natural_size(0, 0);
-  auto output_buffer =
-      CodecOutputBuffer::CreateForTesting(0, coded_size, gfx::ColorSpace());
+  auto output_buffer = CodecOutputBuffer::CreateForTesting(
+      0, coded_size, gfx::ColorSpace(), std::nullopt);
   ASSERT_FALSE(VideoFrame::IsValidConfig(PIXEL_FORMAT_ARGB,
                                          VideoFrame::STORAGE_OPAQUE, coded_size,
                                          visible_rect, natural_size));
@@ -263,4 +275,12 @@ TEST_F(VideoFrameFactoryImplTest,
   impl_ = nullptr;
   base::RunLoop().RunUntilIdle();
 }
+
+TEST_F(VideoFrameFactoryImplTest, IsStalled) {
+  EXPECT_CALL(*info_helper_raw_, IsStalled()).WillOnce(Return(false));
+  EXPECT_FALSE(impl_->IsStalled());
+  EXPECT_CALL(*info_helper_raw_, IsStalled()).WillOnce(Return(true));
+  EXPECT_TRUE(impl_->IsStalled());
+}
+
 }  // namespace media

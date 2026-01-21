@@ -8,11 +8,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.h"
 #include "third_party/blink/renderer/platform/scheduler/public/web_scheduling_priority.h"
+#include "third_party/blink/renderer/platform/scheduler/public/web_scheduling_queue_type.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -75,6 +76,7 @@ class PLATFORM_EXPORT FrameTaskQueueController {
 
   scoped_refptr<MainThreadTaskQueue> NewWebSchedulingTaskQueue(
       MainThreadTaskQueue::QueueTraits,
+      WebSchedulingQueueType,
       WebSchedulingPriority);
 
   void RemoveWebSchedulingTaskQueue(MainThreadTaskQueue*);
@@ -108,18 +110,18 @@ class PLATFORM_EXPORT FrameTaskQueueController {
   static MainThreadTaskQueue::QueueType QueueTypeFromQueueTraits(
       MainThreadTaskQueue::QueueTraits);
 
-  MainThreadSchedulerImpl* const main_thread_scheduler_impl_;
-  FrameSchedulerImpl* const frame_scheduler_impl_;
-  Delegate* const delegate_;
+  const raw_ptr<MainThreadSchedulerImpl, DanglingUntriaged>
+      main_thread_scheduler_impl_;
+  const raw_ptr<FrameSchedulerImpl> frame_scheduler_impl_;
+  const raw_ptr<Delegate> delegate_;
 
-  using TaskQueueMap =
-      WTF::HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
-                   scoped_refptr<MainThreadTaskQueue>>;
+  using TaskQueueMap = HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
+                               scoped_refptr<MainThreadTaskQueue>>;
 
   // Map of all TaskQueues, indexed by QueueTraits.
   TaskQueueMap task_queues_;
 
-  using TaskQueueEnabledVoterMap = WTF::HashMap<
+  using TaskQueueEnabledVoterMap = HashMap<
       scoped_refptr<MainThreadTaskQueue>,
       std::unique_ptr<base::sequence_manager::TaskQueue::QueueEnabledVoter>>;
 

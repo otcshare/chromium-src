@@ -5,6 +5,7 @@
 #include "ash/public/cpp/tab_cluster/correlation_clusterer.h"
 
 #include <map>
+#include <optional>
 #include <set>
 
 #include "ash/public/cpp/tab_cluster/undirected_graph.h"
@@ -12,7 +13,6 @@
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
@@ -113,9 +113,9 @@ void CorrelationClusterer::RefineClusters(
   auto try_moves = [&](std::vector<std::set<int>>* clusters_to_try) {
     base::RandomShuffle(clusters_to_try->begin(), clusters_to_try->end());
     for (const auto& cluster : *clusters_to_try) {
-      std::pair<absl::optional<int>, double> best_move = BestMove(cluster);
+      std::pair<std::optional<int>, double> best_move = BestMove(cluster);
       if (best_move.second > 0) {
-        absl::optional<int> new_cluster = best_move.first;
+        std::optional<int> new_cluster = best_move.first;
         MoveNodesToCluster(cluster, new_cluster);
         objective += best_move.second;
       }
@@ -180,8 +180,8 @@ void CorrelationClusterer::MoveNodeToCluster(const int node,
   cluster_sizes_[old_cluster] -= 1;
   cluster_weights_[old_cluster] -= weight;
   if (cluster_sizes_[old_cluster] == 0) {
-    DCHECK_EQ(static_cast<int>(cluster_sizes_.erase(old_cluster)), 1);
-    DCHECK_EQ(static_cast<int>(cluster_weights_.erase(old_cluster)), 1);
+    DCHECK_EQ(cluster_sizes_.erase(old_cluster), 1u);
+    DCHECK_EQ(cluster_weights_.erase(old_cluster), 1u);
   }
   clustering_[node] = new_cluster;
   cluster_sizes_[new_cluster] += 1;
@@ -190,14 +190,14 @@ void CorrelationClusterer::MoveNodeToCluster(const int node,
 
 // Null optional means make a new cluster.
 void CorrelationClusterer::MoveNodesToCluster(const std::set<int>& nodes,
-                                              absl::optional<int> new_cluster) {
+                                              std::optional<int> new_cluster) {
   int actual_new_cluster = new_cluster ? *new_cluster : NewClusterId();
   for (const auto& node : nodes) {
     MoveNodeToCluster(node, actual_new_cluster);
   }
 }
 
-std::pair<absl::optional<int>, double> CorrelationClusterer::BestMove(
+std::pair<std::optional<int>, double> CorrelationClusterer::BestMove(
     const std::set<int>& moving_nodes) {
   // Weight of nodes in each cluster that are moving.
   std::map<int, double> cluster_moving_weights;
@@ -217,7 +217,7 @@ std::pair<absl::optional<int>, double> CorrelationClusterer::BestMove(
       const auto neighbor = edge.first;
       const auto weight = edge.second;
       const int neighbor_cluster = clustering_[neighbor];
-      if (moving_nodes.find(neighbor) != moving_nodes.end()) {
+      if (moving_nodes.contains(neighbor)) {
         // Class 2 edge.
         if (node_cluster != neighbor_cluster) {
           class_2_currently_separate.Add(weight);
@@ -241,7 +241,7 @@ std::pair<absl::optional<int>, double> CorrelationClusterer::BestMove(
                            class_1_currently_together, class_1_together_after);
 }
 
-std::pair<absl::optional<int>, double> CorrelationClusterer::BestMoveFromStats(
+std::pair<std::optional<int>, double> CorrelationClusterer::BestMoveFromStats(
     double moving_nodes_weight,
     std::map<int, double>& cluster_moving_weights,
     const EdgeSum& class_2_currently_separate,
@@ -266,8 +266,8 @@ std::pair<absl::optional<int>, double> CorrelationClusterer::BestMoveFromStats(
   change_in_objective -=
       class_1_currently_together.NetWeight(max_edges, config_);
 
-  std::pair<absl::optional<int>, double> best_move;
-  best_move.first = absl::nullopt;
+  std::pair<std::optional<int>, double> best_move;
+  best_move.first = std::nullopt;
   best_move.second = change_in_objective;
   for (const auto& cluster_data : class_1_together_after) {
     int cluster = cluster_data.first;

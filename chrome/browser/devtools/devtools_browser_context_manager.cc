@@ -4,15 +4,17 @@
 
 #include "chrome/browser/devtools/devtools_browser_context_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 
 namespace {
 
@@ -27,7 +29,7 @@ void DestroyOTRProfileWhenAppropriate(base::WeakPtr<Profile> weak_profile) {
 
 }  // namespace
 
-DevToolsBrowserContextManager::DevToolsBrowserContextManager() {}
+DevToolsBrowserContextManager::DevToolsBrowserContextManager() = default;
 
 DevToolsBrowserContextManager::~DevToolsBrowserContextManager() = default;
 
@@ -39,6 +41,11 @@ DevToolsBrowserContextManager& DevToolsBrowserContextManager::GetInstance() {
 
 Profile* DevToolsBrowserContextManager::GetProfileById(
     const std::string& context_id) {
+  Profile* default_profile =
+      ProfileManager::GetLastUsedProfile()->GetOriginalProfile();
+  if (context_id == default_profile->UniqueId()) {
+    return default_profile;
+  }
   auto it = otr_profiles_.find(context_id);
   if (it == otr_profiles_.end())
     return nullptr;
@@ -92,12 +99,15 @@ void DevToolsBrowserContextManager::DisposeBrowserContext(
 
   Profile* profile = it->second;
   bool has_opened_browser = false;
-  for (auto* opened_browser : *BrowserList::GetInstance()) {
-    if (opened_browser->profile() == profile) {
-      has_opened_browser = true;
-      break;
-    }
-  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile,
+       &has_opened_browser](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == profile) {
+          has_opened_browser = true;
+          return false;
+        }
+        return true;
+      });
 
   // If no browsers are opened - dispose right away.
   if (!has_opened_browser) {
@@ -111,21 +121,19 @@ void DevToolsBrowserContextManager::DisposeBrowserContext(
     BrowserList::AddObserver(this);
 
   pending_context_disposals_[context_id] = std::move(callback);
-  BrowserList::CloseAllBrowsersWithIncognitoProfile(
-      profile, base::DoNothing(), base::DoNothing(),
-      true /* skip_beforeunload */);
+  chrome::CloseAllBrowsersWithIncognitoProfile(profile);
 }
 
 void DevToolsBrowserContextManager::OnProfileWillBeDestroyed(Profile* profile) {
   // This is likely happening during shutdown. We'll immediately
   // close all browser windows for our profile without unload handling.
-  BrowserList::BrowserVector browsers_to_close;
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->profile() == profile)
-      browsers_to_close.push_back(browser);
-  }
-  for (auto* browser : browsers_to_close)
-    browser->window()->Close();
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == profile) {
+          browser_window_interface->GetWindow()->Close();
+        }
+        return true;
+      });
 
   StopObservingProfileIfAny(profile);
 }
@@ -135,9 +143,17 @@ void DevToolsBrowserContextManager::OnBrowserRemoved(Browser* browser) {
   auto pending_disposal = pending_context_disposals_.find(context_id);
   if (pending_disposal == pending_context_disposals_.end())
     return;
-  for (auto* opened_browser : *BrowserList::GetInstance()) {
-    if (opened_browser->profile() == browser->profile())
-      return;
+  bool found = false;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [browser, &found](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == browser->profile()) {
+          found = true;
+          return false;
+        }
+        return true;
+      });
+  if (found) {
+    return;
   }
 
   StopObservingProfileIfAny(browser->profile());

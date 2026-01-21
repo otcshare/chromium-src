@@ -101,46 +101,60 @@ namespace downloads {
     DOMString? body;
   };
 
-  // <dl><dt>file</dt>
-  //     <dd>The download's filename is suspicious.</dd>
-  //     <dt>url</dt>
-  //     <dd>The download's URL is known to be malicious.</dd>
-  //     <dt>content</dt>
-  //     <dd>The downloaded file is known to be malicious.</dd>
-  //     <dt>uncommon</dt>
-  //     <dd>The download's URL is not commonly downloaded and could be
-  //     dangerous.</dd>
-  //     <dt>host</dt>
-  //     <dd>The download came from a host known to distribute malicious
-  //     binaries and is likely dangerous.</dd>
-  //     <dt>unwanted</dt>
-  //     <dd>The download is potentially unwanted or unsafe. E.g. it could make
-  //     changes to browser or computer settings.</dd>
-  //     <dt>safe</dt>
-  //     <dd>The download presents no known danger to the user's computer.</dd>
-  //     <dt>accepted</dt>
-  //     <dd>The user has accepted the dangerous download.</dd>
-  // </dl>
   enum DangerType {
+    // The download's filename is suspicious.
     file,
+
+    // The download's URL is known to be malicious.
     url,
+
+    // The downloaded file is known to be malicious.
     content,
+
+
+    // The download's URL is not commonly downloaded and could be dangerous.
     uncommon,
+
+    // The download came from a host known to distribute malicious binaries and
+    // is likely dangerous.
     host,
+
+    // The download is potentially unwanted or unsafe. E.g. it could make
+    // changes to browser or computer settings.
     unwanted,
+
+
+    // The download presents no known danger to the user's computer.
     safe,
+
+    // The user has accepted the dangerous download.
     accepted,
+
+    // Enterprise-related values.
     allowlistedByPolicy,
     asyncScanning,
+    asyncLocalPasswordScanning,
     passwordProtected,
     blockedTooLarge,
     sensitiveContentWarning,
     sensitiveContentBlock,
-    unsupportedFileType,
+    deepScannedFailed,
     deepScannedSafe,
     deepScannedOpenedDangerous,
-    promptForScaning,
-    accountCompromise
+    promptForScanning,
+    promptForLocalPasswordScanning,
+    accountCompromise,
+    blockedScanFailed,
+
+    // For use by the Secure Enterprise Browser extension. When required, Chrome
+    // will block the download to disc and download the file directly to Google
+    // Drive.
+    forceSaveToGdrive,
+
+    // For use by the Secure Enterprise Browser extension. When required, Chrome
+    // will block the download to disc and download the file directly to
+    // OneDrive.
+    forceSaveToOnedrive
   };
 
   // <dl><dt>in_progress</dt>
@@ -260,19 +274,19 @@ namespace downloads {
     DOMString[]? query;
 
     // Limits results to $(ref:DownloadItem) that
-    // started before the given ms since the epoch.
+    // started before the given ms in ISO 8601 format.
     DOMString? startedBefore;
 
     // Limits results to $(ref:DownloadItem) that
-    // started after the given ms since the epoch.
+    // started after the given ms in ISO 8601 format.
     DOMString? startedAfter;
 
-    // Limits results to $(ref:DownloadItem) that ended before the given ms since the
-    // epoch.
+    // Limits results to $(ref:DownloadItem) that ended before the given ms in
+    // ISO 8601 format.
     DOMString? endedBefore;
 
-    // Limits results to $(ref:DownloadItem) that ended after the given ms since the
-    // epoch.
+    // Limits results to $(ref:DownloadItem) that ended after the given ms in
+    // ISO 8601 format
     DOMString? endedAfter;
 
     // Limits results to $(ref:DownloadItem) whose
@@ -428,7 +442,7 @@ namespace downloads {
     // size * size pixels. The default and largest size for the icon is 32x32
     // pixels. The only supported sizes are 16 and 32. It is an error to specify
     // any other size.
-    [legalValues=(16,32)] long? size;
+    long? size;
   };
 
   // Encapsulates a change in the download UI.
@@ -458,8 +472,9 @@ namespace downloads {
     // a descriptive string. The error strings are not guaranteed to remain
     // backwards compatible between releases. Extensions must not parse it.
     // |options|: What to download and how.
-    // |callback|: Called with the id of the new $(ref:DownloadItem).
-    [supportsPromises] static void download(
+    // |callback|: Returns a Promise which resolves with the id of the new
+    // $(ref:DownloadItem).
+    static void download(
         DownloadOptions options,
         optional DownloadCallback callback);
 
@@ -469,31 +484,38 @@ namespace downloads {
     // <code>orderBy: ['-startTime']</code>, set <code>limit</code> to the
     // number of items per page, and set <code>startedAfter</code> to the
     // <code>startTime</code> of the last item from the last page.
-    [supportsPromises] static void search(DownloadQuery query,
-                                          SearchCallback callback);
+    static void search(
+        DownloadQuery query,
+        SearchCallback callback);
 
     // Pause the download. If the request was successful the download is in a
     // paused state. Otherwise $(ref:runtime.lastError) contains an error message.
     // The request will fail if the download is not active.
     // |downloadId|: The id of the download to pause.
-    // |callback|: Called when the pause request is completed.
-    [supportsPromises] static void pause(long downloadId,
-                                         optional NullCallback callback);
+    // |callback|: Returns a Promise which resolves when the pause request is
+    // completed.
+    static void pause(
+        long downloadId,
+        optional NullCallback callback);
 
     // Resume a paused download. If the request was successful the download is
     // in progress and unpaused. Otherwise $(ref:runtime.lastError) contains an
     // error message. The request will fail if the download is not active.
     // |downloadId|: The id of the download to resume.
-    // |callback|: Called when the resume request is completed.
-    [supportsPromises] static void resume(long downloadId,
-                                          optional NullCallback callback);
+    // |callback|: Returns a Promise which resolves when the resume request is
+    // completed.
+    static void resume(
+        long downloadId,
+        optional NullCallback callback);
 
     // Cancel a download. When <code>callback</code> is run, the download is
     // cancelled, completed, interrupted or doesn't exist anymore.
     // |downloadId|: The id of the download to cancel.
-    // |callback|: Called when the cancel request is completed.
-    [supportsPromises] static void cancel(long downloadId,
-                                          optional NullCallback callback);
+    // |callback|: Returns a Promise which resolves when the cancel request is
+    // completed.
+    static void cancel(
+        long downloadId,
+        optional NullCallback callback);
 
     // Retrieve an icon for the specified download. For new downloads, file
     // icons are available after the $(ref:onCreated) event has been received. The
@@ -505,19 +527,22 @@ namespace downloads {
     // registered file types and visual theme. If a file icon cannot be
     // determined, $(ref:runtime.lastError) will contain an error message.
     // |downloadId|: The identifier for the download.
-    // |callback|: A URL to an image that represents the download.
-    [supportsPromises] static void getFileIcon(
+    // |callback|: Returns a Promise which resolves with a URL to an image that
+    // represents the download.
+    static void getFileIcon(
         long downloadId,
         optional GetFileIconOptions options,
         GetFileIconCallback callback);
 
-    // Open the downloaded file now if the $(ref:DownloadItem) is complete;
-    // otherwise returns an error through $(ref:runtime.lastError). Requires the
-    // <code>"downloads.open"</code> permission in addition to the
-    // <code>"downloads"</code> permission. An $(ref:onChanged) event will fire
-    // when the item is opened for the first time.
+    // Opens the downloaded file now if the $(ref:DownloadItem) is complete;
+    // otherwise returns an error through $(ref:runtime.lastError). This method
+    // requires the <code>"downloads.open"</code> permission in addition to the
+    // <code>"downloads"</code> permission. An $(ref:onChanged) event fires
+    // when the item is opened for the first time. This method can only be called
+    // in response to a user gesture.
     // |downloadId|: The identifier for the downloaded file.
-    static void open(long downloadId);
+    static void open(long downloadId,
+                     optional NullCallback callback);
 
     // Show the downloaded file in its folder in a file manager.
     // |downloadId|: The identifier for the downloaded file.
@@ -530,13 +555,15 @@ namespace downloads {
     // downloaded file. An $(ref:onErased) event will fire for each
     // $(ref:DownloadItem) that matches <code>query</code>, then
     // <code>callback</code> will be called.
-    [supportsPromises] static void erase(DownloadQuery query,
-                                         optional EraseCallback callback);
+    static void erase(
+        DownloadQuery query,
+        optional EraseCallback callback);
 
     // Remove the downloaded file if it exists and the $(ref:DownloadItem) is
     // complete; otherwise return an error through $(ref:runtime.lastError).
-    [supportsPromises] static void removeFile(long downloadId,
-                                              optional NullCallback callback);
+    static void removeFile(
+        long downloadId,
+        optional NullCallback callback);
 
     // Prompt the user to accept a dangerous download. Can only be called from a
     // visible context (tab, window, or page/browser action popup). Does not
@@ -547,9 +574,11 @@ namespace downloads {
     // temporary file is renamed to the target filename, the |state| changes to
     // 'complete', and $(ref:onChanged) fires.
     // |downloadId|: The identifier for the $(ref:DownloadItem).
-    // |callback|: Called when the danger prompt dialog closes.
-    [supportsPromises] static void acceptDanger(long downloadId,
-                                                optional NullCallback callback);
+    // |callback|: Returns a Promise which resolves when the danger prompt
+    // dialog closes.
+    static void acceptDanger(
+        long downloadId,
+        optional NullCallback callback);
 
     // Enable or disable the gray shelf at the bottom of every window associated
     // with the current browser profile. The shelf will be disabled as long as
@@ -557,6 +586,7 @@ namespace downloads {
     // one other extension has disabled it will return an error through
     // $(ref:runtime.lastError). Requires the <code>"downloads.shelf"</code>
     // permission in addition to the <code>"downloads"</code> permission.
+    [deprecated="Use $(ref:setUiOptions) instead."]
     static void setShelfEnabled(boolean enabled);
 
     // Change the download UI of every window associated with the current
@@ -567,9 +597,11 @@ namespace downloads {
     // $(ref:runtime.lastError). Requires the <code>"downloads.ui"</code>
     // permission in addition to the <code>"downloads"</code> permission.
     // |options|: Encapsulate a change to the download UI.
-    // |callback|: Called when the UI update is completed.
-    [supportsPromises] static void setUiOptions(UiOptions options,
-                                                optional NullCallback callback);
+    // |callback|: Returns a Promise which resolves when the UI update is
+    // completed.
+    static void setUiOptions(
+        UiOptions options,
+        optional NullCallback callback);
   };
 
   interface Events {

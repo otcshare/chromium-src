@@ -40,19 +40,17 @@ void SnapFlingController::ClearSnapFling() {
 
 bool SnapFlingController::HandleGestureScrollUpdate(
     const SnapFlingController::GestureScrollUpdateInfo& info) {
-  DCHECK(state_ != State::kActive && state_ != State::kFinished);
-  if (state_ != State::kIdle)
+  DCHECK(state_ == State::kIdle || state_ == State::kIgnored);
+  if (!info.is_in_inertial_phase || info.is_overscroll) {
     return false;
-
-  if (!info.is_in_inertial_phase)
-    return false;
+  }
 
   gfx::Vector2dF ending_displacement =
       SnapFlingCurve::EstimateDisplacement(info.delta);
 
   gfx::PointF target_offset, start_offset;
   if (!client_->GetSnapFlingInfoAndSetAnimatingSnapTarget(
-          ending_displacement, &start_offset, &target_offset)) {
+          info.delta, ending_displacement, &start_offset, &target_offset)) {
     state_ = State::kIgnored;
     return false;
   }

@@ -10,10 +10,9 @@
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 
-// Responsible for receiving message updates from the remote phone device.
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
+// Responsible for receiving message updates from the remote phone device.
 class MessageReceiver {
  public:
   class Observer : public base::CheckedObserver {
@@ -55,6 +54,11 @@ class MessageReceiver {
     // Called when there is an update of streamable apps.
     virtual void OnAppListUpdateReceived(
         const proto::AppListUpdate app_list_update) {}
+
+    // Called when there is an incremental update to apps list, i.e. app added
+    // and app removal.
+    virtual void OnAppListIncrementalUpdateReceived(
+        const proto::AppListIncrementalUpdate app_list_incremental_update) {}
   };
 
   MessageReceiver(const MessageReceiver&) = delete;
@@ -80,12 +84,13 @@ class MessageReceiver {
   void NotifyAppStreamUpdateReceived(
       const proto::AppStreamUpdate app_stream_update);
   void NotifyAppListUpdateReceived(const proto::AppListUpdate app_list_update);
+  void NotifyAppListIncrementalUpdateReceived(
+      const proto::AppListIncrementalUpdate app_list_incremental_update);
 
  private:
   base::ObserverList<Observer> observer_list_;
 };
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub
 
 #endif  // CHROMEOS_ASH_COMPONENTS_PHONEHUB_MESSAGE_RECEIVER_H_

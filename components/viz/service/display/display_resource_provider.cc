@@ -15,8 +15,9 @@
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "components/viz/common/resources/resource_sizes.h"
+#include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/shared_image_trace_utils.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gl/trace_util.h"
 
@@ -32,10 +33,10 @@ base::AtomicSequenceNumber g_next_display_resource_provider_tracing_id;
 DisplayResourceProvider::DisplayResourceProvider(Mode mode)
     : mode_(mode),
       tracing_id_(g_next_display_resource_provider_tracing_id.GetNext()) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  // In certain cases, ThreadTaskRunnerHandle isn't set (Android Webview).
-  // Don't register a dump provider in these cases.
-  // TODO(crbug.com/517156): Get this working in Android Webview.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // In certain cases, SingleThreadTaskRunner::CurrentDefaultHandle isn't set
+  // (Android Webview).  Don't register a dump provider in these cases.
+  // TODO(crbug.com/40430067): Get this working in Android Webview.
   if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
     base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
         this, "cc::ResourceProvider",
@@ -58,16 +59,18 @@ void DisplayResourceProvider::Destroy() {
 bool DisplayResourceProvider::OnMemoryDump(
     const base::trace_event::MemoryDumpArgs& args,
     base::trace_event::ProcessMemoryDump* pmd) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   for (const auto& resource_entry : resources_) {
     const auto& resource = resource_entry.second;
 
     bool backing_memory_allocated = false;
-    if (resource.transferable.is_software)
-      backing_memory_allocated = !!resource.shared_bitmap;
-    else
+    if (resource.transferable.GetIsSoftware()) {
+      backing_memory_allocated =
+          resource.shared_image_representation_created_and_set;
+    } else {
       backing_memory_allocated = !!resource.image_context;
+    }
 
     if (!backing_memory_allocated) {
       // Don't log unallocated resources - they have no backing memory.
@@ -84,12 +87,10 @@ bool DisplayResourceProvider::OnMemoryDump(
 
     // Texture resources may not come with a size, in which case don't report
     // one.
-    if (!resource.transferable.size.IsEmpty()) {
-      // TODO (hitawala): Update size check to use multiplanar
-      // SharedImageFormat.
-      uint64_t total_bytes = ResourceSizes::UncheckedSizeInBytesAligned<size_t>(
-          resource.transferable.size,
-          resource.transferable.format.resource_format());
+    if (!resource.transferable.GetSize().IsEmpty()) {
+      uint64_t total_bytes =
+          resource.transferable.GetFormat().EstimatedSizeInBytes(
+              resource.transferable.GetSize());
       dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
                       base::trace_event::MemoryAllocatorDump::kUnitsBytes,
                       static_cast<uint64_t>(total_bytes));
@@ -97,24 +98,14 @@ bool DisplayResourceProvider::OnMemoryDump(
 
     // Resources may be shared across processes and require a shared GUID to
     // prevent double counting the memory.
-
-    // The client that owns the resource will use a higher importance (2), and
-    // the GPU service will use a lower one (0).
-    constexpr int kImportance = 1;
-
-    if (resource.transferable.is_software) {
-      pmd->CreateSharedMemoryOwnershipEdge(
-          dump->guid(), resource.shared_bitmap_tracing_guid, kImportance);
-    } else {
-      // Shared ownership edges for legacy mailboxes aren't supported.
-      if (!resource.transferable.mailbox_holder.mailbox.IsSharedImage())
-        continue;
-
-      auto guid = GetSharedImageGUIDForTracing(
-          resource.transferable.mailbox_holder.mailbox);
+    //
+    // The client that owns the resource will use a higher importance, and the
+    // GPU service will use a lower one.
+    constexpr int kImportance =
+        static_cast<int>(gpu::TracingImportance::kServiceOwner);
+      auto guid = GetSharedImageGUIDForTracing(resource.transferable.mailbox());
       pmd->CreateSharedGlobalAllocatorDump(guid);
       pmd->AddOwnershipEdge(dump->guid(), guid, kImportance);
-    }
   }
 
   return true;
@@ -125,15 +116,16 @@ base::WeakPtr<DisplayResourceProvider> DisplayResourceProvider::GetWeakPtr() {
 }
 
 #if BUILDFLAG(IS_ANDROID)
-bool DisplayResourceProvider::IsBackedBySurfaceTexture(ResourceId id) {
-  ChildResource* resource = GetResource(id);
-  return resource->transferable.is_backed_by_surface_texture;
+bool DisplayResourceProvider::IsBackedBySurfaceView(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.is_backed_by_surface_view;
 }
 #endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
-bool DisplayResourceProvider::DoesResourceWantPromotionHint(ResourceId id) {
-  ChildResource* resource = TryGetResource(id);
+bool DisplayResourceProvider::DoesResourceWantPromotionHint(
+    ResourceId id) const {
+  const ChildResource* resource = TryGetResource(id);
   // TODO(ericrk): We should never fail TryGetResource, but we appear to
   // be doing so on Android in rare cases. Handle this gracefully until a
   // better solution can be found. https://crbug.com/811858
@@ -141,62 +133,89 @@ bool DisplayResourceProvider::DoesResourceWantPromotionHint(ResourceId id) {
 }
 #endif
 
-bool DisplayResourceProvider::IsOverlayCandidate(ResourceId id) {
-  ChildResource* resource = TryGetResource(id);
+bool DisplayResourceProvider::IsOverlayCandidate(ResourceId id) const {
+  const ChildResource* resource = TryGetResource(id);
   // TODO(ericrk): We should never fail TryGetResource, but we appear to
   // be doing so on Android in rare cases. Handle this gracefully until a
   // better solution can be found. https://crbug.com/811858
-  return resource && resource->transferable.is_overlay_candidate;
+  if (!resource) {
+    return false;
+  }
+  // Agtm rendering is currently only implemented in shaders. Use the
+  // mechanism of claiming that resources which have Agtm metadata were
+  // not marked as overlays to ensure that rendering falls back to shaders
+  // on all platforms.
+  // https://crbug.com/395659818
+  if (gfx::HdrMetadataAgtm::IsEnabled()) {
+    if (resource->transferable.hdr_metadata.getSerializedAgtm()) {
+      return false;
+    }
+  }
+  return resource->transferable.GetIsOverlayCandidate();
 }
 
-SurfaceId DisplayResourceProvider::GetSurfaceId(ResourceId id) {
-  ChildResource* resource = GetResource(id);
-  return children_[resource->child_id].surface_id;
+bool DisplayResourceProvider::IsLowLatencyRendering(ResourceId id) const {
+  const ChildResource* resource = TryGetResource(id);
+  return resource && resource->transferable.is_low_latency_rendering;
 }
 
-int DisplayResourceProvider::GetChildId(ResourceId id) {
-  ChildResource* resource = GetResource(id);
+SurfaceId DisplayResourceProvider::GetSurfaceId(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  if (auto it = children_.find(resource->child_id); it != children_.end()) {
+    return it->second.surface_id;
+  }
+  return SurfaceId();
+}
+
+int DisplayResourceProvider::GetChildId(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
   return resource->child_id;
 }
 
-bool DisplayResourceProvider::IsResourceSoftwareBacked(ResourceId id) {
-  return GetResource(id)->transferable.is_software;
+bool DisplayResourceProvider::IsResourceSoftwareBacked(ResourceId id) const {
+  return GetResource(id)->transferable.GetIsSoftware();
 }
 
-const gfx::Size DisplayResourceProvider::GetResourceBackedSize(ResourceId id) {
-  return GetResource(id)->transferable.size;
+const gfx::Size DisplayResourceProvider::GetResourceBackedSize(
+    ResourceId id) const {
+  return GetResource(id)->transferable.GetSize();
 }
 
-gfx::BufferFormat DisplayResourceProvider::GetBufferFormat(ResourceId id) {
-  return BufferFormat(GetResourceFormat(id));
+SharedImageFormat DisplayResourceProvider::GetSharedImageFormat(
+    ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.GetFormat();
 }
 
-ResourceFormat DisplayResourceProvider::GetResourceFormat(ResourceId id) {
-  ChildResource* resource = GetResource(id);
-  return resource->transferable.format.resource_format();
+gfx::ColorSpace DisplayResourceProvider::GetColorSpace(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.GetColorSpace();
 }
 
-const gfx::ColorSpace& DisplayResourceProvider::GetOverlayColorSpace(
-    ResourceId id) {
-  ChildResource* resource = GetResource(id);
-  return resource->transferable.color_space;
+bool DisplayResourceProvider::GetNeedsDetiling(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.needs_detiling;
 }
 
-gfx::ColorSpace DisplayResourceProvider::GetSamplerColorSpace(ResourceId id) {
-  ChildResource* resource = GetResource(id);
-  return resource->transferable.color_space_when_sampled.value_or(
-      resource->transferable.color_space);
-}
-
-const absl::optional<gfx::HDRMetadata>& DisplayResourceProvider::GetHDRMetadata(
-    ResourceId id) {
-  ChildResource* resource = GetResource(id);
+const gfx::HDRMetadata& DisplayResourceProvider::GetHDRMetadata(
+    ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
   return resource->transferable.hdr_metadata;
+}
+
+GrSurfaceOrigin DisplayResourceProvider::GetOrigin(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.GetOrigin();
+}
+
+SkAlphaType DisplayResourceProvider::GetAlphaType(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
+  return resource->transferable.GetAlphaType();
 }
 
 int DisplayResourceProvider::CreateChild(ReturnCallback return_callback,
                                          const SurfaceId& surface_id) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   int child_id = next_child_++;
   Child& child = children_[child_id];
@@ -209,14 +228,14 @@ int DisplayResourceProvider::CreateChild(ReturnCallback return_callback,
 
 void DisplayResourceProvider::DestroyChild(int child_id) {
   auto it = children_.find(child_id);
-  DCHECK(it != children_.end());
+  CHECK(it != children_.end());
   DestroyChildInternal(it, NORMAL);
 }
 
 void DisplayResourceProvider::ReceiveFromChild(
     int child_id,
     const std::vector<TransferableResource>& resources) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto child_it = children_.find(child_id);
   DCHECK(child_it != children_.end());
@@ -233,19 +252,17 @@ void DisplayResourceProvider::ReceiveFromChild(
       continue;
     }
 
-    if (transferable_resource.is_software != IsSoftware() ||
-        transferable_resource.mailbox_holder.mailbox.IsZero()) {
+    if (transferable_resource.GetIsSoftware() != IsSoftware() ||
+        transferable_resource.is_empty()) {
       TRACE_EVENT0(
           "viz", "DisplayResourceProvider::ReceiveFromChild dropping invalid");
-      std::vector<ReturnedResource> returned;
-      returned.push_back(transferable_resource.ToReturnedResource());
+      std::vector<ReturnedResourceViz> returned;
+      returned.push_back(transferable_resource.ToReturnedResourceViz());
       child_info.return_callback.Run(std::move(returned));
       continue;
     }
 
     ResourceId local_id = resource_id_generator_.GenerateNextId();
-    DCHECK(!transferable_resource.is_software ||
-           transferable_resource.format.IsBitmapFormatSupported());
     resources_.emplace(local_id,
                        ChildResource(child_id, transferable_resource));
     child_info.child_to_parent_map[transferable_resource.id] = local_id;
@@ -255,7 +272,7 @@ void DisplayResourceProvider::ReceiveFromChild(
 void DisplayResourceProvider::DeclareUsedResourcesFromChild(
     int child,
     const ResourceIdSet& resources_from_child) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto child_it = children_.find(child);
   DCHECK(child_it != children_.end());
@@ -273,45 +290,57 @@ void DisplayResourceProvider::DeclareUsedResourcesFromChild(
   DeleteAndReturnUnusedResourcesToChild(child_it, NORMAL, unused);
 }
 
-gpu::Mailbox DisplayResourceProvider::GetMailbox(ResourceId resource_id) {
-  ChildResource* resource = TryGetResource(resource_id);
+gpu::Mailbox DisplayResourceProvider::GetMailbox(ResourceId resource_id) const {
+  const ChildResource* resource = TryGetResource(resource_id);
   if (!resource)
     return gpu::Mailbox();
-  return resource->transferable.mailbox_holder.mailbox;
+  return resource->transferable.mailbox();
 }
 
 const std::unordered_map<ResourceId, ResourceId, ResourceIdHasher>&
 DisplayResourceProvider::GetChildToParentMap(int child) const {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = children_.find(child);
-  DCHECK(it != children_.end());
+  CHECK(it != children_.end());
   DCHECK(!it->second.marked_for_deletion);
   return it->second.child_to_parent_map;
 }
 
-bool DisplayResourceProvider::InUse(ResourceId id) {
-  ChildResource* resource = GetResource(id);
+bool DisplayResourceProvider::InUse(ResourceId id) const {
+  const ChildResource* resource = GetResource(id);
   return resource->InUse();
+}
+
+const DisplayResourceProvider::ChildResource*
+DisplayResourceProvider::GetResource(ResourceId id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(id);
+  auto it = resources_.find(id);
+  CHECK(it != resources_.end());
+  return &it->second;
 }
 
 DisplayResourceProvider::ChildResource* DisplayResourceProvider::GetResource(
     ResourceId id) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(id);
-  auto it = resources_.find(id);
-  DCHECK(it != resources_.end());
-  return &it->second;
+  return const_cast<DisplayResourceProvider::ChildResource*>(
+      const_cast<const DisplayResourceProvider*>(this)->GetResource(id));
 }
 
-DisplayResourceProvider::ChildResource* DisplayResourceProvider::TryGetResource(
-    ResourceId id) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+const DisplayResourceProvider::ChildResource*
+DisplayResourceProvider::TryGetResource(ResourceId id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!id)
     return nullptr;
   auto it = resources_.find(id);
   if (it == resources_.end())
     return nullptr;
   return &it->second;
+}
+
+DisplayResourceProvider::ChildResource* DisplayResourceProvider::TryGetResource(
+    ResourceId id) {
+  return const_cast<DisplayResourceProvider::ChildResource*>(
+      const_cast<const DisplayResourceProvider*>(this)->TryGetResource(id));
 }
 
 void DisplayResourceProvider::OnResourceFencePassed(
@@ -336,14 +365,14 @@ void DisplayResourceProvider::TryReleaseResource(ResourceId id,
 }
 
 bool DisplayResourceProvider::ResourceFenceHasPassed(
-    const ChildResource* resource) {
+    const ChildResource* resource) const {
   return !resource->resource_fence || resource->resource_fence->HasPassed();
 }
 
 DisplayResourceProvider::CanDeleteNowResult
 DisplayResourceProvider::CanDeleteNow(const Child& child_info,
                                       const ChildResource& resource,
-                                      DeleteStyle style) {
+                                      DeleteStyle style) const {
   if (resource.InUse()) {
     // We can't postpone the deletion, so we'll have to lose it.
     if (style == FOR_SHUTDOWN)
@@ -368,7 +397,7 @@ void DisplayResourceProvider::DeleteAndReturnUnusedResourcesToChild(
     ChildMap::iterator child_it,
     DeleteStyle style,
     const std::vector<ResourceId>& unused) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(child_it != children_.end());
   Child& child_info = child_it->second;
 
@@ -385,7 +414,7 @@ void DisplayResourceProvider::DeleteAndReturnUnusedResourcesToChild(
     return;
   }
 
-  std::vector<ReturnedResource> to_return =
+  std::vector<ReturnedResourceViz> to_return =
       DeleteAndReturnUnusedResourcesToChildImpl(child_info, style, unused);
 
   if (!to_return.empty())
@@ -399,7 +428,7 @@ void DisplayResourceProvider::DeleteAndReturnUnusedResourcesToChild(
 
 void DisplayResourceProvider::DestroyChildInternal(ChildMap::iterator it,
                                                    DeleteStyle style) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   Child& child = it->second;
   DCHECK(style == FOR_SHUTDOWN || !child.marked_for_deletion);
@@ -463,10 +492,6 @@ DisplayResourceProvider::ScopedReadLockSharedImage::ScopedReadLockSharedImage(
       resource_(resource_provider_->GetResource(resource_id_)) {
   DCHECK(resource_);
   DCHECK(resource_->is_gpu_resource_type());
-  // Remove this #if BUILDFLAG(IS_WIN), when shared image is used on Windows.
-#if !BUILDFLAG(IS_WIN)
-  DCHECK(resource_->transferable.mailbox_holder.mailbox.IsSharedImage());
-#endif
   resource_->lock_for_overlay_count++;
 }
 
@@ -496,14 +521,16 @@ DisplayResourceProvider::ScopedReadLockSharedImage::operator=(
 void DisplayResourceProvider::ScopedReadLockSharedImage::SetReleaseFence(
     gfx::GpuFenceHandle release_fence) {
   DCHECK(resource_);
+  DCHECK_EQ(SynchronizationType(),
+            TransferableResource::SynchronizationType::kReleaseFence);
   resource_->release_fence = std::move(release_fence);
 }
 
-bool DisplayResourceProvider::ScopedReadLockSharedImage::HasReadLockFence()
+TransferableResource::SynchronizationType
+DisplayResourceProvider::ScopedReadLockSharedImage::SynchronizationType()
     const {
   DCHECK(resource_);
-  return resource_->transferable.synchronization_type ==
-         TransferableResource::SynchronizationType::kGpuCommandsCompleted;
+  return resource_->transferable.synchronization_type;
 }
 
 void DisplayResourceProvider::ScopedReadLockSharedImage::Reset() {
@@ -511,8 +538,7 @@ void DisplayResourceProvider::ScopedReadLockSharedImage::Reset() {
     return;
   DCHECK(resource_->lock_for_overlay_count);
   resource_->lock_for_overlay_count--;
-  resource_provider_->TryReleaseResource(resource_id_,
-                                         resource_.ExtractAsDangling());
+  resource_provider_->TryReleaseResource(resource_id_, resource_);
   resource_provider_ = nullptr;
   resource_id_ = kInvalidResourceId;
 }
@@ -546,7 +572,7 @@ DisplayResourceProvider::ChildResource::ChildResource(
     const TransferableResource& transferable)
     : child_id(child_id), transferable(transferable) {
   if (is_gpu_resource_type())
-    UpdateSyncToken(transferable.mailbox_holder.sync_token);
+    UpdateSyncToken(transferable.sync_token());
 }
 
 DisplayResourceProvider::ChildResource::ChildResource(ChildResource&& other) =

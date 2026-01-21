@@ -5,10 +5,13 @@
 
 import mojom.generate.generator as generator
 import mojom.generate.module as mojom
+import mojom.generate.pack as pack
+import itertools
 import os
 import sys
 import urllib.request
 from mojom.generate.template_expander import UseJinja
+from pathlib import Path
 
 _kind_to_javascript_default_value = {
     mojom.BOOL: "false",
@@ -50,6 +53,17 @@ _kind_to_ts_type = {
     mojom.INT64: "bigint",
     mojom.UINT64: "bigint",
     mojom.DOUBLE: "number",
+    mojom.NULLABLE_BOOL: "boolean",
+    mojom.NULLABLE_INT8: "number",
+    mojom.NULLABLE_UINT8: "number",
+    mojom.NULLABLE_INT16: "number",
+    mojom.NULLABLE_UINT16: "number",
+    mojom.NULLABLE_INT32: "number",
+    mojom.NULLABLE_UINT32: "number",
+    mojom.NULLABLE_FLOAT: "number",
+    mojom.NULLABLE_INT64: "bigint",
+    mojom.NULLABLE_UINT64: "bigint",
+    mojom.NULLABLE_DOUBLE: "number",
     mojom.STRING: "string",
     mojom.NULLABLE_STRING: "string",
     mojom.HANDLE: "MojoHandle",
@@ -75,6 +89,14 @@ _kind_to_lite_js_type = {
     mojom.INT32: "mojo.internal.Int32",
     mojom.UINT32: "mojo.internal.Uint32",
     mojom.FLOAT: "mojo.internal.Float",
+    mojom.NULLABLE_BOOL: "mojo.internal.Bool",
+    mojom.NULLABLE_INT8: "mojo.internal.Int8",
+    mojom.NULLABLE_UINT8: "mojo.internal.Uint8",
+    mojom.NULLABLE_INT16: "mojo.internal.Int16",
+    mojom.NULLABLE_UINT16: "mojo.internal.Uint16",
+    mojom.NULLABLE_INT32: "mojo.internal.Int32",
+    mojom.NULLABLE_UINT32: "mojo.internal.Uint32",
+    mojom.NULLABLE_FLOAT: "mojo.internal.Float",
     mojom.HANDLE: "mojo.internal.Handle",
     mojom.DCPIPE: "mojo.internal.Handle",
     mojom.DPPIPE: "mojo.internal.Handle",
@@ -90,6 +112,9 @@ _kind_to_lite_js_type = {
     mojom.INT64: "mojo.internal.Int64",
     mojom.UINT64: "mojo.internal.Uint64",
     mojom.DOUBLE: "mojo.internal.Double",
+    mojom.NULLABLE_INT64: "mojo.internal.Int64",
+    mojom.NULLABLE_UINT64: "mojo.internal.Uint64",
+    mojom.NULLABLE_DOUBLE: "mojo.internal.Double",
     mojom.STRING: "mojo.internal.String",
     mojom.NULLABLE_STRING: "mojo.internal.String",
 }
@@ -141,11 +166,18 @@ _js_reserved_keywords = [
     'yield',
 ]
 
-_SHARED_MODULE_PREFIX = 'chrome://resources/mojo'
+_CHROME_SCHEME_PREFIX = 'chrome:'
+_SHARED_MODULE_PREFIX = '//resources/mojo'
+
+
+def _IsSharedModulePath(path):
+  return path.startswith(_SHARED_MODULE_PREFIX) or \
+      path.startswith(_CHROME_SCHEME_PREFIX + _SHARED_MODULE_PREFIX)
 
 
 def _IsAbsoluteChromeResourcesPath(path):
-  return path.startswith('chrome://resources/')
+  return path.startswith('chrome://resources/') or \
+      path.startswith('//resources/')
 
 
 def _GetWebUiModulePath(module):
@@ -155,11 +187,21 @@ def _GetWebUiModulePath(module):
   path. Otherwise, returned paths always end in a '/' and begin with either
   `chrome://resources/` or a '/'."""
   path = module.metadata.get('webui_module_path')
-  if path is None or path == '/':
-    return path
+  if path is None:
+    return None
+  if path == '' or path == '/':
+    return '/'
   if _IsAbsoluteChromeResourcesPath(path):
     return path.rstrip('/') + '/'
   return '/{}/'.format(path.strip('/'))
+
+
+def _GetTypemapImport(typemap):
+  return Path(typemap['converter_import']).with_suffix('.js').name
+
+
+def _NameToFieldTag(name):
+  return generator.ToUpperSnakeCase(name)
 
 
 class TypeScriptStylizer(generator.Stylizer):
@@ -196,28 +238,23 @@ class TypeScriptStylizer(generator.Stylizer):
 class Generator(generator.Generator):
   def _GetParameters(self):
     return {
-        "bindings_library_path":
-        self._GetBindingsLibraryPath(),
-        "enums":
-        self.module.enums,
-        "for_bindings_internals":
-        self.disallow_native_types,
-        "interfaces":
-        self.module.interfaces,
-        "js_module_imports":
-        self._GetJsModuleImports(),
-        "kinds":
-        self.module.kinds,
-        "module":
-        self.module,
-        "mojom_namespace":
-        self.module.mojom_namespace,
-        "structs":
-        self.module.structs + self._GetStructsFromMethods(),
-        "unions":
-        self.module.unions,
-        "generate_struct_deserializers":
-        self.js_generate_struct_deserializers,
+        "bindings_library_path": self._GetBindingsLibraryPath(),
+        "enums": self.module.enums,
+        "for_bindings_internals": self.disallow_native_types,
+        "interfaces": self.module.interfaces,
+        "js_module_imports": self._GetJsModuleImports(),
+        "kinds": self.module.kinds,
+        "module": self.module,
+        "module_filename": Path(self._GetModuleFilename(filetype='js')).name,
+        "converters_filename":
+        Path(self._GetConvertersFilename(filetype='js')).name,
+        "mojom_namespace": self.module.mojom_namespace,
+        "structs": self.module.structs + self._GetStructsFromMethods(),
+        "unions": self.module.unions,
+        "generate_struct_deserializers": self.js_generate_struct_deserializers,
+        "typemapped_structs": self._TypeMappedStructs(),
+        "typemap_imports": self._TypeMapImports(),
+        "converter_imports": self._ConverterImports(),
     }
 
   @staticmethod
@@ -226,7 +263,12 @@ class Generator(generator.Generator):
 
   def GetFilters(self):
     ts_filters = {
+        "is_nullable_value_kind_packed_field":
+        pack.IsNullableValueKindPackedField,
+        "is_primary_nullable_value_kind_packed_field":
+        pack.IsPrimaryNullableValueKindPackedField,
         "constant_value": self._GetConstantValue,
+        "converter_import": _GetTypemapImport,
         "default_ts_value": self._GetDefaultValue,
         "imports_for_kind": self._GetImportsForKind,
         "is_bool_kind": mojom.IsBoolKind,
@@ -234,12 +276,23 @@ class Generator(generator.Generator):
         "ts_type": self._TypescriptType,
         "ts_type_maybe_nullable": self._TypescriptTypeMaybeNullable,
         "sanitize_identifier": self._TypeScriptSanitizeIdentifier,
+        "to_union_field_tag_name": _NameToFieldTag,
     }
     return ts_filters
+
+  @UseJinja("converter_interface_declarations.tmpl")
+  def _GenerateConverterInterfaces(self):
+    return self._GetParameters()
 
   @UseJinja("module_definition.tmpl")
   def _GenerateWebUiModule(self):
     return self._GetParameters()
+
+  def _GetModuleFilename(self, filetype='ts'):
+    return f"{self.module.path}-webui.{filetype}"
+
+  def _GetConvertersFilename(self, filetype='ts'):
+    return f"{self.module.path}-converters.{filetype}"
 
   def GenerateFiles(self, args):
     if self.variant:
@@ -247,14 +300,17 @@ class Generator(generator.Generator):
 
     self.module.Stylize(TypeScriptStylizer())
 
-    # TODO(crbug.com/795977): Change the media router extension to not mess with
-    # the mojo namespace, so that namespaces such as "mojo.common.mojom" are not
-    # affected and we can remove this method.
+    # TODO(crbug.com/41361453): Change the media router extension to not mess
+    # with the mojo namespace, so that namespaces such as "mojo.common.mojom"
+    # are not affected and we can remove this method.
     self._SetUniqueNameForImports()
 
     assert(_GetWebUiModulePath(self.module) is not None)
     self.WriteWithComment(self._GenerateWebUiModule(),
-                          "%s-webui.ts" % self.module.path)
+                          self._GetModuleFilename())
+    self.WriteWithComment(self._GenerateConverterInterfaces(),
+                          self._GetConvertersFilename())
+
 
   def _GetBindingsLibraryPath(self):
     return "//resources/mojo/mojo/public/js/bindings.js"
@@ -288,6 +344,8 @@ class Generator(generator.Generator):
             or mojom.IsDoubleKind(kind) or mojom.IsStringKind(kind))
 
   def _TypescriptType(self, kind, maybe_nullable=False):
+    typemap = self._TypeMappedStructs()
+
     def recurse_nullable(kind):
       return self._TypescriptType(kind, maybe_nullable=True)
 
@@ -313,8 +371,7 @@ class Generator(generator.Generator):
         return "Map<%s, %s>" % (recurse_nullable(
             kind.key_kind), recurse_nullable(kind.value_kind))
 
-      if (mojom.IsAssociatedKind(kind) or mojom.IsInterfaceRequestKind(kind)
-          or mojom.IsPendingRemoteKind(kind)
+      if (mojom.IsAssociatedKind(kind) or mojom.IsPendingRemoteKind(kind)
           or mojom.IsPendingReceiverKind(kind)
           or mojom.IsPendingAssociatedRemoteKind(kind)
           or mojom.IsPendingAssociatedReceiverKind(kind)):
@@ -337,21 +394,19 @@ class Generator(generator.Generator):
         name = "_".join(name)
       name = name.replace('.', '_')
 
-      if (mojom.IsStructKind(kind) or mojom.IsUnionKind(kind)
-          or mojom.IsEnumKind(kind)):
+      if mojom.IsStructKind(kind):
+        if kind.qualified_name in self.typemap:
+          return self.typemap[kind.qualified_name]['typename']
+        return name
+      if mojom.IsUnionKind(kind) or mojom.IsEnumKind(kind):
         return name
       if mojom.IsInterfaceKind(kind) or mojom.IsPendingRemoteKind(kind):
         return name + "Remote"
-      if mojom.IsInterfaceRequestKind(kind) or mojom.IsPendingReceiverKind(
-          kind):
+      if mojom.IsPendingReceiverKind(
+          kind) or mojom.IsPendingAssociatedReceiverKind(kind):
         return name + "PendingReceiver"
-      # TODO(calamity): Support associated interfaces properly.
-      if (mojom.IsAssociatedInterfaceKind(kind)
-          or mojom.IsPendingAssociatedRemoteKind(kind)):
-        return "object"
       # TODO(calamity): Support associated interface requests properly.
-      if (mojom.IsAssociatedInterfaceRequestKind(kind)
-          or mojom.IsPendingAssociatedReceiverKind(kind)):
+      if mojom.IsPendingAssociatedRemoteKind(kind):
         return "object"
 
       raise Exception("Type is not supported yet.")
@@ -372,6 +427,15 @@ class Generator(generator.Generator):
       qualifier += kind.parent_kind.name + '.'
     return (qualifier + kind.name).replace('.', '_')
 
+  # In a mojom file, there will be a list of imports
+  #
+  # For each of the files listed in the imports, each type of mojo
+  # abstraction will be evaluated against all the method parameters
+  # and mojo abstractions in the mojom file to assess if the type
+  # should be imported.
+  #
+  # Any matching imports should be added to the top of the typescript
+  # file
   def _GetImportsForKind(self, kind):
     qualified_name = self._GetNameInJsModule(kind)
 
@@ -383,14 +447,51 @@ class Generator(generator.Generator):
 
       return ImportInfo(name + suffix, qualified_name + suffix)
 
+    # This will evaluate to see if any of the interfaces in the imports
+    # are used in any method parameters of the interfaces of the mojom
+    # file.
+    #
+    # If it finds the interface as a remote and/or a receiver, it will
+    # update the relevant key in the dictionary
+    def find_interface_imports(kind_to_check, interfaces):
+      imported_receiver = False
+      imported_remote = False
+      visited_remotes = set()
+      visited_receivers = set()
+      for interface in interfaces:
+        for method in interface.methods:
+          if imported_remote and imported_receiver:
+            return (imported_remote, imported_receiver)
+          if not imported_remote:
+            imported_remote = mojom.MethodNeedsRemoteKind(
+                method, kind_to_check, visited_remotes)
+          if not imported_receiver:
+            imported_receiver = mojom.MethodNeedsReceiverKind(
+                method, kind_to_check, visited_receivers)
+      return (imported_remote, imported_receiver)
+
     if (mojom.IsEnumKind(kind) or mojom.IsStructKind(kind)
         or mojom.IsUnionKind(kind)):
-      return [make_import(kind.name), make_import(kind.name, 'Spec')]
+      imports = [make_import(kind.name, 'Spec')]
+      # if the type is typemapped, the typemap import will replace the
+      # mojo type, so no need to import it here.
+      if not kind.qualified_name in self.typemap:
+        imports += [make_import(kind.name)]
+      return imports
     if mojom.IsInterfaceKind(kind):
-      return [
-          make_import(kind.name, 'Remote'),
-          make_import(kind.name, 'PendingReceiver')
-      ]
+      # Typescript will output an error if types are included
+      # that are not used or are double included. Only include
+      # what is needed!
+      imports = []
+      (imported_remote,
+       imported_receiver) = find_interface_imports(kind, self.module.interfaces)
+
+      if imported_receiver:
+        imports.append(make_import(kind.name, 'PendingReceiver'))
+      if imported_remote:
+        imports.append(make_import(kind.name, 'Remote'))
+      return imports
+
     assert False, kind.name
 
   def _GetSpecType(self, kind):
@@ -405,8 +506,7 @@ class Generator(generator.Generator):
             get_spec(kind.key_kind), get_spec(kind.value_kind),
             "true" if mojom.IsNullableKind(kind.value_kind) else "false")
 
-      if (mojom.IsAssociatedKind(kind) or mojom.IsInterfaceRequestKind(kind)
-          or mojom.IsPendingRemoteKind(kind)
+      if (mojom.IsAssociatedKind(kind) or mojom.IsPendingRemoteKind(kind)
           or mojom.IsPendingReceiverKind(kind)
           or mojom.IsPendingAssociatedRemoteKind(kind)
           or mojom.IsPendingAssociatedReceiverKind(kind)):
@@ -430,15 +530,12 @@ class Generator(generator.Generator):
         return "%sSpec.$" % name
       if mojom.IsInterfaceKind(kind) or mojom.IsPendingRemoteKind(kind):
         return "mojo.internal.InterfaceProxy(%sRemote)" % name
-      if mojom.IsInterfaceRequestKind(kind) or mojom.IsPendingReceiverKind(
-          kind):
+      if mojom.IsPendingReceiverKind(kind):
         return "mojo.internal.InterfaceRequest(%sPendingReceiver)" % name
-      if (mojom.IsAssociatedInterfaceKind(kind)
-          or mojom.IsPendingAssociatedRemoteKind(kind)):
+      if mojom.IsPendingAssociatedRemoteKind(kind):
         # TODO(rockot): Implement associated interfaces.
         return "mojo.internal.AssociatedInterfaceProxy(%sRemote)" % (name)
-      if (mojom.IsAssociatedInterfaceRequestKind(kind)
-          or mojom.IsPendingAssociatedReceiverKind(kind)):
+      if mojom.IsPendingAssociatedReceiverKind(kind):
         return "mojo.internal.AssociatedInterfaceRequest(%sPendingReceiver)" % (
             name)
 
@@ -462,7 +559,7 @@ class Generator(generator.Generator):
     if field.kind in mojom.PRIMITIVES:
       return _kind_to_javascript_default_value[field.kind]
     if mojom.IsEnumKind(field.kind):
-      return "0"
+      return "0" if field.kind.min_value is None else str(field.kind.min_value)
     return "null"
 
   def _TypeScriptSanitizeIdentifier(self, identifier):
@@ -532,17 +629,25 @@ class Generator(generator.Generator):
 
   def _GetJsModuleImports(self):
     this_module_path = _GetWebUiModulePath(self.module)
-    this_module_is_shared = bool(
-        this_module_path and this_module_path.startswith(_SHARED_MODULE_PREFIX))
+    this_module_is_shared = bool(this_module_path
+                                 and _IsSharedModulePath(this_module_path))
     imports = dict()
+
+    def strip_prefix(s, prefix):
+      if s.startswith(prefix):
+        return s[len(prefix):]
+      return s
+
     for spec, kind in self.module.imported_kinds.items():
       assert this_module_path is not None
       base_path = _GetWebUiModulePath(kind.module)
-      assert base_path is not None
+      assert base_path is not None, \
+          "No WebUI bindings found for dependency {0!r} imported by " \
+              "{1!r}".format(kind.module, self.module)
       import_path = '{}{}-webui.js'.format(base_path,
                                            os.path.basename(kind.module.path))
 
-      import_module_is_shared = import_path.startswith(_SHARED_MODULE_PREFIX)
+      import_module_is_shared = _IsSharedModulePath(import_path)
       if this_module_is_shared:
         assert import_module_is_shared, \
             'Shared WebUI module "{}" cannot depend on non-shared WebUI ' \
@@ -567,19 +672,19 @@ class Generator(generator.Generator):
               import_module_is_shared == this_module_is_shared
 
       if use_relative_path:
-
-        def strip_prefix(s, prefix):
-          if s.startswith(prefix):
-            return s[len(prefix):]
-          return s
-
         import_path = urllib.request.pathname2url(
             os.path.relpath(
-                strip_prefix(import_path, _SHARED_MODULE_PREFIX),
-                strip_prefix(this_module_path, _SHARED_MODULE_PREFIX)))
+                strip_prefix(strip_prefix(import_path, _CHROME_SCHEME_PREFIX),
+                             _SHARED_MODULE_PREFIX),
+                strip_prefix(
+                    strip_prefix(this_module_path, _CHROME_SCHEME_PREFIX),
+                    _SHARED_MODULE_PREFIX)))
         if (not import_path.startswith('.')
             and not import_path.startswith('/')):
           import_path = './' + import_path
+      else:
+        # Import absolute imports from scheme-relative paths.
+        import_path = strip_prefix(import_path, _CHROME_SCHEME_PREFIX)
 
       if import_path not in imports:
         imports[import_path] = []
@@ -597,3 +702,93 @@ class Generator(generator.Generator):
 
   def _IsPrimitiveKind(self, kind):
     return kind in mojom.PRIMITIVES
+
+  def _TypeMappedStructs(self):
+    if len(self.typemap) == 0:
+      return {}
+
+    mapped_structs = {}
+    for struct in self.module.structs:
+      if struct.qualified_name in self.typemap:
+        mapped_structs[struct] = self.typemap[struct.qualified_name]
+    return mapped_structs
+
+  # Returns a list of imports in the format:
+  #   {
+  #      <import path>: [list of types],
+  #      ...
+  #   }
+  def _TypeMapImports(self):
+    imports = {}
+    typemaps = self._TypeMappedStructs()
+
+    for typemap in typemaps.values():
+      type_import = typemap['type_import']
+      # The typemapping could just be a native type, in which case there would
+      # not be any import.
+      if not type_import:
+        continue
+
+      imports.setdefault(type_import, []).append(typemap['typename'])
+
+    return imports
+
+  # Returns a list of imports in the format:
+  #   {
+  #      <import path>: [list of types],
+  #      ...
+  #   }
+  def _ConverterImports(self):
+
+    def needs_import(kind):
+      return mojom.IsStructKind(kind) or mojom.IsUnionKind(
+          kind) or mojom.IsEnumKind(kind)
+
+    class Import:
+
+      def __init__(self, typename, path, alias=None):
+        self.typename = typename
+        self.path = path
+        self.alias = alias
+
+      def import_name(self):
+        if self.alias:
+          return f"{self.typename} as {self.alias}"
+        return self.typename
+
+    # A dictionary keyed by the qualified type name to an import configuration.
+    qualified_type_to_import = {}
+
+    # Build up our import repository.
+    # Add the mojom module imports first.
+    for import_path, kinds in self._GetJsModuleImports().items():
+      for kind in kinds:
+        if needs_import(kind):
+          qualified_type_to_import[kind.qualified_name] = Import(
+              kind.name, import_path, self._GetNameInJsModule(kind))
+
+    # Then add the typemap imports.
+    for qualified_name, typemap in self.typemap.items():
+      qualified_type_to_import[qualified_name] = Import(typemap['typename'],
+                                                        typemap['type_import'])
+
+    for struct in self.module.structs:
+      for enum in struct.enums:
+        qualified_type_to_import[enum.qualified_name] = Import(
+            self._TypescriptType(enum),
+            './' + Path(self._GetModuleFilename('js')).name)
+
+    # Now we create the list of imports, based on the struct deps.
+    imports = {}
+    for struct in self._TypeMappedStructs():
+      for field in struct.fields:
+        if needs_import(field.kind):
+          qualified = field.kind.qualified_name
+          type_import = qualified_type_to_import[qualified]
+          # We should have an entry for all non-primitive types
+          assert type_import != None
+
+          imports.setdefault(type_import.path,
+                             []).append(type_import.import_name())
+
+    return imports

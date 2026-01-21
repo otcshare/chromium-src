@@ -68,7 +68,8 @@ viz::mojom::blink::BeginFrameInfoPtr MakeBeginFrameInfo(uint32_t sink_id) {
       viz::BeginFrameArgs::Create(BEGINFRAME_FROM_HERE, 1, 1, base::TimeTicks(),
                                   base::TimeTicks(), base::TimeDelta(),
                                   viz::BeginFrameArgs::NORMAL),
-      WTF::HashMap<uint32_t, viz::FrameTimingDetails>());
+      HashMap<uint32_t, viz::FrameTimingDetails>(),
+      Vector<viz::ReturnedResource>());
 }
 
 class MockFrameSinkBundleClient
@@ -77,12 +78,11 @@ class MockFrameSinkBundleClient
   ~MockFrameSinkBundleClient() override = default;
 
   // viz::mojom::blink::FrameSinkBundleClient implementation:
-  MOCK_METHOD3(
-      FlushNotifications,
-      void(WTF::Vector<viz::mojom::blink::BundledReturnedResourcesPtr> acks,
-           WTF::Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames,
-           WTF::Vector<viz::mojom::blink::BundledReturnedResourcesPtr>
-               reclaimed_resources));
+  MOCK_METHOD3(FlushNotifications,
+               void(Vector<viz::mojom::blink::BundledReturnedResourcesPtr> acks,
+                    Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames,
+                    Vector<viz::mojom::blink::BundledReturnedResourcesPtr>
+                        reclaimed_resources));
   MOCK_METHOD2(OnBeginFramePausedChanged, void(uint32_t sink_id, bool paused));
   MOCK_METHOD2(OnCompositorFrameTransitionDirectiveProcessed,
                void(uint32_t sink_id, uint32_t sequence_id));
@@ -90,7 +90,7 @@ class MockFrameSinkBundleClient
 
 const viz::LocalSurfaceId kTestSurfaceId(
     1,
-    base::UnguessableToken::Deserialize(1, 2));
+    base::UnguessableToken::CreateForTesting(1, 2));
 
 class VideoFrameSinkBundleTest : public testing::Test {
  public:
@@ -170,7 +170,7 @@ TEST_F(VideoFrameSinkBundleTest, PassThrough) {
   CreateTestBundle();
   VideoFrameSinkBundle& bundle = test_bundle();
   bundle.SubmitCompositorFrame(
-      2, kTestSurfaceId, viz::MakeDefaultCompositorFrame(), absl::nullopt, 0);
+      2, kTestSurfaceId, viz::MakeDefaultCompositorFrame(), std::nullopt, 0);
   EXPECT_CALL(mock_frame_sink_bundle(),
               Submit(ElementsAre(AllOf(IsFrame(), ForSink(2u)))))
       .Times(1);
@@ -214,7 +214,7 @@ TEST_F(VideoFrameSinkBundleTest, BatchSubmissionsDuringOnBeginFrame) {
   EXPECT_CALL(mock_client1, OnBeginFrame).Times(1).WillOnce([&] {
     bundle.SubmitCompositorFrame(kTestVideoSinkId1.sink_id(), kTestSurfaceId,
                                  viz::MakeDefaultCompositorFrame(),
-                                 absl::nullopt, 0);
+                                 std::nullopt, 0);
   });
   EXPECT_CALL(mock_client2, OnBeginFrame).Times(1).WillOnce([&] {
     bundle.DidNotProduceFrame(kTestVideoSinkId2.sink_id(),
@@ -223,10 +223,10 @@ TEST_F(VideoFrameSinkBundleTest, BatchSubmissionsDuringOnBeginFrame) {
   EXPECT_CALL(mock_client3, OnBeginFrame).Times(1).WillOnce([&] {
     bundle.SubmitCompositorFrame(kTestVideoSinkId3.sink_id(), kTestSurfaceId,
                                  viz::MakeDefaultCompositorFrame(),
-                                 absl::nullopt, 0);
+                                 std::nullopt, 0);
   });
 
-  WTF::Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames;
+  Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames;
   begin_frames.push_back(MakeBeginFrameInfo(kTestVideoSinkId1.sink_id()));
   begin_frames.push_back(MakeBeginFrameInfo(kTestVideoSinkId2.sink_id()));
   begin_frames.push_back(MakeBeginFrameInfo(kTestVideoSinkId3.sink_id()));
@@ -288,7 +288,7 @@ TEST_F(VideoFrameSinkBundleTest,
   VideoFrameSinkBundle& bundle = test_bundle();
 
   auto make_begin_frames = [] {
-    WTF::Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames;
+    Vector<viz::mojom::blink::BeginFrameInfoPtr> begin_frames;
     begin_frames.push_back(MakeBeginFrameInfo(kTestVideoSinkId1.sink_id()));
     return begin_frames;
   };

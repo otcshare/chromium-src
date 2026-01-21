@@ -9,27 +9,29 @@
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
 #include "third_party/blink/renderer/core/css/properties/longhands/custom_property.h"
 #include "third_party/blink/renderer/core/css/resolver/cascade_priority.h"
+#include "third_party/blink/renderer/core/css/style_rule.h"
 
 namespace blink {
 
-bool CascadeResolver::IsLocked(const CSSProperty& property) const {
-  return Find(property) != kNotFound;
+void CascadeResolver::CycleNode::Trace(blink::Visitor* visitor) const {
+  visitor->Trace(function);
 }
 
 bool CascadeResolver::AllowSubstitution(CSSVariableData* data) const {
   if (data && data->IsAnimationTainted() && stack_.size()) {
     const CSSProperty* property = CurrentProperty();
-    if (IsA<CustomProperty>(*property))
+    if (IsA<CustomProperty>(*property)) {
       return true;
+    }
     return !CSSAnimations::IsAnimationAffectingProperty(*property);
   }
   return true;
 }
 
-bool CascadeResolver::DetectCycle(const CSSProperty& property) {
-  wtf_size_t index = Find(property);
-  if (index == kNotFound)
+bool CascadeResolver::DetectCycle(wtf_size_t index) {
+  if (index == kNotFound) {
     return false;
+  }
   cycle_start_ = std::min(cycle_start_, index);
   cycle_end_ = stack_.size();
   DCHECK(InCycle());
@@ -40,21 +42,22 @@ bool CascadeResolver::InCycle() const {
   return stack_.size() > cycle_start_ && stack_.size() <= cycle_end_;
 }
 
-wtf_size_t CascadeResolver::Find(const CSSProperty& property) const {
+wtf_size_t CascadeResolver::Find(const CycleNode& node) const {
   wtf_size_t index = 0;
-  for (const CSSProperty* p : stack_) {
-    if (p->HasEqualCSSPropertyName(property))
+  for (const CycleNode& stack_node : stack_) {
+    if (stack_node == node) {
       return index;
+    }
     ++index;
   }
   return kNotFound;
 }
 
-CascadeResolver::AutoLock::AutoLock(const CSSProperty& property,
+CascadeResolver::AutoLock::AutoLock(const CycleNode& node,
                                     CascadeResolver& resolver)
     : resolver_(resolver) {
-  DCHECK(!resolver.IsLocked(property));
-  resolver_.stack_.push_back(&property);
+  DCHECK(!resolver.IsLocked(node));
+  resolver_.stack_.push_back(node);
 }
 
 CascadeResolver::AutoLock::~AutoLock() {

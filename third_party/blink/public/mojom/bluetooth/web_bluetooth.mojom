@@ -5,6 +5,7 @@
 module blink.mojom;
 
 import "device/bluetooth/public/mojom/uuid.mojom";
+import "mojo/public/mojom/base/read_only_buffer.mojom";
 
 // Bluetooth Terminology:
 //
@@ -72,6 +73,13 @@ enum WebBluetoothResult {
   CONNECT_ALREADY_CONNECTED,
   CONNECT_ALREADY_EXISTS,
   CONNECT_NOT_CONNECTED,
+  CONNECT_NON_AUTH_TIMEOUT,
+  CONNECT_NO_MEMORY,
+  CONNECT_JNI_ENVIRONMENT,
+  CONNECT_JNI_THREAD_ATTACH,
+  CONNECT_WAKELOCK,
+  CONNECT_UNEXPECTED_STATE,
+  CONNECT_SOCKET_ERROR,
   // NotFoundError:
   NO_BLUETOOTH_ADAPTER,
   CHOSEN_DEVICE_VANISHED,
@@ -123,8 +131,8 @@ struct WebBluetoothLeScanFilter {
 
 // A Bluetooth company identifier is a unique number assigned by the Bluetooth
 // SIG to member companies. This struct is currently required in
-// WebBluetoothLeScanFilter because WTF::HashMap doesn't allow integer keys of 0
-// and -1, 0xffff being -1 in a uint16t. See crbug.com/1204960
+// WebBluetoothLeScanFilter because blink::HashMap doesn't allow integer keys of
+// 0 and -1, 0xffff being -1 in a uint16t. See crbug.com/1204960
 struct WebBluetoothCompany {
   uint16 id;
 };
@@ -140,6 +148,7 @@ struct WebBluetoothDataFilter {
 
 struct WebBluetoothRequestDeviceOptions {
   array<WebBluetoothLeScanFilter>? filters;
+  array<WebBluetoothLeScanFilter>? exclusion_filters;
   array<bluetooth.mojom.UUID> optional_services;
   array<uint16> optional_manufacturer_data;
   bool accept_all_devices;
@@ -192,7 +201,7 @@ struct WebBluetoothAdvertisingEvent {
   uint8 tx_power;
   bool rssi_is_set;
   uint8 rssi;
-  map<uint16, array<uint8>> manufacturer_data;
+  map<WebBluetoothCompany, array<uint8>> manufacturer_data;
   map<bluetooth.mojom.UUID, array<uint8>> service_data;
 };
 
@@ -208,15 +217,18 @@ enum WebBluetoothWriteType {
   kWriteWithoutResponse,
 };
 
-// Web Bluetooth Interface that Blink can use to perform
-// Bluetooth GATT Operations on Bluetooth Devices.
+// Web Bluetooth Interface implemented by the browser process and provided to
+// Blink in the renderer for Bluetooth GATT Operations on Bluetooth Devices. An
+// instance of this interface is 1:1 with Document.
 interface WebBluetoothService {
   // Checks if Web Bluetooth is allowed and if a Bluetooth radio is available.
   GetAvailability() => (bool is_available);
 
-  // Requests access to a Bluetooth device which matches
-  // |options->filters->services|. Access is limited to the current origin, and
-  // to the union of |options->filters->services| and
+  // Requests access to a Bluetooth device. A chooser dialog is displayed with
+  // a list of nearby devices. If |options->accept_all_devices| is false, the
+  // list is filtered to contain only the ones that match |options->filters|
+  // and exclude |options->exclusion_filters|. Access is limited to the current
+  // origin, and to the union of |options->filters->services| and
   // |options->optional_services|. Multiple devices may be discoverable that
   // match and one must be selected via a chooser user interface.
   RequestDevice(WebBluetoothRequestDeviceOptions options)
@@ -275,11 +287,11 @@ interface WebBluetoothService {
   // |characteristic_instance_id|. If the value is successfully read the
   // callback will be run with WebBluetoothResult::SUCCESS and the
   // characteristic's value. If the value is not successfully read the
-  // callback with be run with the corresponding error and nullptr for value.
+  // callback with be run with the corresponding error and an empty value.
   RemoteCharacteristicReadValue(
     string characteristic_instance_id) => (
     WebBluetoothResult result,
-    array<uint8>? value);
+    mojo_base.mojom.ReadOnlyBuffer value);
 
   // Writes a value to the characteristic identified by
   // |characteristic_instance_id|. The callback is run with
@@ -287,7 +299,7 @@ interface WebBluetoothService {
   // written.
   RemoteCharacteristicWriteValue(
     string characteristic_instance_id,
-    array<uint8> value,
+    mojo_base.mojom.ReadOnlyBuffer value,
     WebBluetoothWriteType write_type) => (WebBluetoothResult result);
 
   // Starts notifications for the characteristic identified by
@@ -320,11 +332,11 @@ interface WebBluetoothService {
   // |descriptor_instance_id|. If the value is successfully read the callback
   // will be run with WebBluetoothResult::SUCCESS and the descriptor's value. If
   // the value is not successfully read the callback with be run with the
-  // corresponding error and nullptr for value
+  // corresponding error and an empty value.
   RemoteDescriptorReadValue(
     string descriptor_instance_id) => (
     WebBluetoothResult result,
-    array<uint8>? value);
+    mojo_base.mojom.ReadOnlyBuffer value);
 
   // Writes a value to the descriptor identified by
   // |descriptor_instance_id|. The callback is run with
@@ -332,7 +344,7 @@ interface WebBluetoothService {
   // written.
   RemoteDescriptorWriteValue(
     string descriptor_instance_id,
-    array<uint8> value) => (WebBluetoothResult result);
+    mojo_base.mojom.ReadOnlyBuffer value) => (WebBluetoothResult result);
 
   // Starts scanning for low energy devices.
   RequestScanningStart(
@@ -360,7 +372,7 @@ interface WebBluetoothServerClient {
 // events.
 interface WebBluetoothCharacteristicClient {
   // Called when we receive a notification for the characteristic.
-  RemoteCharacteristicValueChanged(array<uint8> value);
+  RemoteCharacteristicValueChanged(mojo_base.mojom.ReadOnlyBuffer value);
 };
 
 // Classes that implement this interface will be notified of device

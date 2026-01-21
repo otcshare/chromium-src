@@ -6,6 +6,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/files/file_path.h"
@@ -24,7 +25,6 @@
 #include "components/device_signals/core/system_signals/win/wsc_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using device_signals::MockFileSystemService;
 using device_signals::MockWmiClient;
@@ -59,12 +59,14 @@ class WinSystemSignalsServiceTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
-  absl::optional<base::test::ScopedOSInfoOverride> os_info_override_;
+  std::optional<base::test::ScopedOSInfoOverride> os_info_override_;
 
+  std::unique_ptr<WinSystemSignalsService> win_system_signals_service_;
+
+  // Owned by win_system_signals_service_.
   raw_ptr<MockFileSystemService> file_system_service_;
   raw_ptr<MockWmiClient> wmi_client_;
   raw_ptr<MockWscClient> wsc_client_;
-  std::unique_ptr<WinSystemSignalsService> win_system_signals_service_;
 };
 
 // Tests that GetFileSystemSignals forwards the signal collection to
@@ -130,7 +132,6 @@ TEST_F(WinSystemSignalsServiceTest, GetAntiVirusSignals_Wsc_Success) {
 
     device_signals::AvProduct fake_av_product;
     fake_av_product.display_name = "some display name";
-    fake_av_product.product_id = "some product id";
     fake_av_product.state = device_signals::AvProductState::kOn;
 
     device_signals::WscAvProductsResponse fake_response;
@@ -145,8 +146,6 @@ TEST_F(WinSystemSignalsServiceTest, GetAntiVirusSignals_Wsc_Success) {
 
     const auto& av_products = future.Get();
     EXPECT_EQ(av_products.size(), fake_response.av_products.size());
-    EXPECT_EQ(av_products[0].product_id,
-              fake_response.av_products[0].product_id);
 
     histogram_tester_.ExpectUniqueSample(
         "Enterprise.SystemSignals.Collection.WSC.AntiVirus.ParsingError.Rate",
@@ -201,7 +200,6 @@ TEST_F(WinSystemSignalsServiceTest, GetAntiVirusSignals_Wsc_MixedParsingError) {
   os_info_override_.emplace(base::test::ScopedOSInfoOverride::Type::kWin10Pro);
   device_signals::AvProduct fake_av_product;
   fake_av_product.display_name = "some display name";
-  fake_av_product.product_id = "some product id";
   fake_av_product.state = device_signals::AvProductState::kOn;
 
   // Adding 2 success and 2 failures, so the error rate should be 50%.

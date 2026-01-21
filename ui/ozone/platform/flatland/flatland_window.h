@@ -5,25 +5,27 @@
 #ifndef UI_OZONE_PLATFORM_FLATLAND_FLATLAND_WINDOW_H_
 #define UI_OZONE_PLATFORM_FLATLAND_FLATLAND_WINDOW_H_
 
+#include <fidl/fuchsia.ui.input3/cpp/fidl.h>
+#include <fuchsia/element/cpp/fidl.h>
 #include <fuchsia/ui/composition/cpp/fidl.h>
-#include <fuchsia/ui/input3/cpp/fidl.h>
 #include <fuchsia/ui/views/cpp/fidl.h>
-#include <lib/ui/scenic/cpp/view_ref_pair.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/fuchsia/fidl_event_handler.h"
 #include "base/functional/callback.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/ime/fuchsia/keyboard_client.h"
 #include "ui/events/fuchsia/input_event_sink.h"
 #include "ui/events/fuchsia/pointer_events_handler.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/platform/flatland/flatland_connection.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_delegate.h"
@@ -47,6 +49,8 @@ class COMPONENT_EXPORT(OZONE) FlatlandWindow : public PlatformWindow,
   ~FlatlandWindow() override;
   FlatlandWindow(const FlatlandWindow&) = delete;
   FlatlandWindow& operator=(const FlatlandWindow&) = delete;
+
+  void ResetSurfaceContent();
 
   // Embeds the Flatland identified by |token| into the scene graph.
   void AttachSurfaceContent(fuchsia::ui::views::ViewportCreationToken token);
@@ -111,14 +115,17 @@ class COMPONENT_EXPORT(OZONE) FlatlandWindow : public PlatformWindow,
 
   void UpdateSize();
 
+  void OnFlatlandError(fuchsia::ui::composition::FlatlandError error);
   void OnViewControllerDisconnected(zx_status_t status);
 
-  FlatlandWindowManager* const manager_;
-  PlatformWindowDelegate* const platform_window_delegate_;
-  ScenicWindowDelegate* const scenic_window_delegate_;
+  const raw_ptr<FlatlandWindowManager> manager_;
+  const raw_ptr<PlatformWindowDelegate> platform_window_delegate_;
+  const raw_ptr<ScenicWindowDelegate> scenic_window_delegate_;
   gfx::AcceleratedWidget const window_id_;
 
-  fuchsia::ui::input3::KeyboardPtr keyboard_service_;
+  fidl::Client<fuchsia_ui_input3::Keyboard> keyboard_fidl_client_;
+  base::FidlErrorEventLogger<fuchsia_ui_input3::Keyboard>
+      fidl_error_event_logger_;
   std::unique_ptr<KeyboardClient> keyboard_client_;
   std::unique_ptr<PointerEventsHandler> pointer_handler_;
 
@@ -136,6 +143,8 @@ class COMPONENT_EXPORT(OZONE) FlatlandWindow : public PlatformWindow,
 
   fuchsia::ui::composition::TransformId root_transform_id_;
   fuchsia::ui::composition::TransformId surface_transform_id_;
+  fuchsia::ui::composition::TransformId shield_transform_id_;
+
   fuchsia::ui::composition::ContentId surface_content_id_;
 
   // Pending Viewport creation callback waiting on |logical_size_|.
@@ -147,7 +156,7 @@ class COMPONENT_EXPORT(OZONE) FlatlandWindow : public PlatformWindow,
   fuchsia::ui::views::ViewRefFocusedPtr view_ref_focused_;
 
   // Flatland View size in logical pixels.
-  absl::optional<gfx::Size> logical_size_;
+  std::optional<gfx::Size> logical_size_;
 
   // The scale between logical pixels and physical pixels, set based on the
   // fuchsia::ui::composition::LayoutInfo. It's used to calculate dimensions of

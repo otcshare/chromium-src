@@ -7,12 +7,17 @@
 #include <vector>
 
 #include "ui/display/display.h"
+#include "ui/gfx/native_ui_types.h"
 
-namespace display {
-namespace test {
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ui/display/display_list.h"
+#include "ui/display/display_observer.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+namespace display::test {
 namespace {
 TestScreen* test_screen = nullptr;
-}
+}  // namespace
 
 // static
 constexpr gfx::Rect TestScreen::kDefaultScreenBounds;
@@ -33,7 +38,7 @@ TestScreen::TestScreen(bool create_display, bool register_screen)
 TestScreen::~TestScreen() {
   DCHECK_EQ(test_screen, this);
   if (register_screen_) {
-    DCHECK_EQ(Screen::GetScreen(), this);
+    DCHECK_EQ(Screen::Get(), this);
     Screen::SetScreenInstance(nullptr);
   }
   test_screen = nullptr;
@@ -41,7 +46,7 @@ TestScreen::~TestScreen() {
 
 // static
 TestScreen* TestScreen::Get() {
-  DCHECK_EQ(Screen::GetScreen(), test_screen);
+  DCHECK_EQ(Screen::Get(), test_screen);
   return test_screen;
 }
 
@@ -58,7 +63,7 @@ bool TestScreen::IsWindowUnderCursor(gfx::NativeWindow window) {
 }
 
 gfx::NativeWindow TestScreen::GetWindowAtScreenPoint(const gfx::Point& point) {
-  return nullptr;
+  return gfx::NativeWindow();
 }
 
 Display TestScreen::GetDisplayNearestWindow(gfx::NativeWindow window) const {
@@ -69,5 +74,21 @@ void TestScreen::SetCursorScreenPointForTesting(const gfx::Point& point) {
   cursor_screen_point_ = point;
 }
 
-}  // namespace test
-}  // namespace display
+#if BUILDFLAG(IS_CHROMEOS)
+TabletState TestScreen::GetTabletState() const {
+  return state_;
+}
+
+void TestScreen::OverrideTabletStateForTesting(TabletState state) {
+  if (state_ == state) {
+    return;
+  }
+
+  state_ = state;
+
+  display_list().observers()->Notify(
+      &DisplayObserver::OnDisplayTabletStateChanged, state);
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+}  // namespace display::test

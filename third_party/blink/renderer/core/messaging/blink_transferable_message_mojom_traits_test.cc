@@ -4,7 +4,13 @@
 
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message_mojom_traits.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/run_loop.h"
+#include "base/test/bind.h"
+#include "base/test/null_task_runner.h"
+#include "components/viz/test/test_raster_interface.h"
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
@@ -15,16 +21,26 @@
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_image_bitmap.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
+#include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
+#include "third_party/blink/renderer/platform/graphics/test/fake_web_graphics_context_3d_provider.h"
+#include "third_party/blink/renderer/platform/graphics/test/gpu_test_utils.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkSurface.h"
+
+using testing::_;
+using testing::Test;
 
 namespace blink {
 
@@ -34,10 +50,8 @@ scoped_refptr<SerializedScriptValue> BuildSerializedScriptValue(
     Transferables& transferables) {
   SerializedScriptValue::SerializeOptions options;
   options.transferables = &transferables;
-  ExceptionState exceptionState(isolate, ExceptionState::kExecutionContext,
-                                "MessageChannel", "postMessage");
   return SerializedScriptValue::Serialize(isolate, value, options,
-                                          exceptionState);
+                                          PassThroughException(isolate));
 }
 
 TEST(BlinkTransferableMessageStructTraitsTest,
@@ -45,6 +59,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   // More exhaustive tests in web_tests/. This is a sanity check.
   // Build the original ArrayBuffer in a block scope to simulate situations
   // where a buffer may be freed twice.
+  test::TaskEnvironment task_environment;
   mojo::Message mojo_message;
   {
     V8TestingScope scope;
@@ -53,9 +68,11 @@ TEST(BlinkTransferableMessageStructTraitsTest,
     v8::Local<v8::ArrayBuffer> v8_buffer =
         v8::ArrayBuffer::New(isolate, num_elements);
     auto backing_store = v8_buffer->GetBackingStore();
-    uint8_t* original_data = static_cast<uint8_t*>(backing_store->Data());
-    for (size_t i = 0; i < num_elements; i++)
-      original_data[i] = static_cast<uint8_t>(i);
+    {
+      ArrayBufferContents buffer_contents(backing_store);
+      uint8_t i = 0;
+      std::ranges::generate(buffer_contents.ByteSpan(), [&i]() { return i++; });
+    }
 
     DOMArrayBuffer* array_buffer =
         NativeValueTraits<DOMArrayBuffer>::NativeValue(
@@ -77,8 +94,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ArrayBufferContents& deserialized_contents =
       out.message->GetArrayBufferContentsArray()[0];
   Vector<uint8_t> deserialized_data;
-  deserialized_data.Append(static_cast<uint8_t*>(deserialized_contents.Data()),
-                           8);
+  deserialized_data.AppendSpan(deserialized_contents.ByteSpan().first(8u));
   ASSERT_EQ(deserialized_data.size(), 8U);
   for (wtf_size_t i = 0; i < deserialized_data.size(); i++) {
     ASSERT_TRUE(deserialized_data[i] == i);
@@ -88,16 +104,19 @@ TEST(BlinkTransferableMessageStructTraitsTest,
 TEST(BlinkTransferableMessageStructTraitsTest,
      ArrayBufferContentsLazySerializationSucceeds) {
   // More exhaustive tests in web_tests/. This is a sanity check.
+  test::TaskEnvironment task_environment;
   V8TestingScope scope;
   v8::Isolate* isolate = scope.GetIsolate();
   size_t num_elements = 8;
   v8::Local<v8::ArrayBuffer> v8_buffer =
       v8::ArrayBuffer::New(isolate, num_elements);
   auto backing_store = v8_buffer->GetBackingStore();
-  void* originalContentsData = backing_store->Data();
-  uint8_t* contents = static_cast<uint8_t*>(originalContentsData);
-  for (size_t i = 0; i < num_elements; i++)
-    contents[i] = static_cast<uint8_t>(i);
+  auto* originalContentsData = static_cast<uint8_t*>(backing_store->Data());
+  {
+    ArrayBufferContents buffer_contents(backing_store);
+    uint8_t i = 0;
+    std::ranges::generate(buffer_contents.ByteSpan(), [&i]() { return i++; });
+  }
 
   DOMArrayBuffer* original_array_buffer =
       NativeValueTraits<DOMArrayBuffer>::NativeValue(isolate, v8_buffer,
@@ -124,12 +143,14 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ASSERT_EQ(originalContentsData, deserialized_contents.Data());
 
   // The original ArrayBufferContents should be detached.
-  ASSERT_EQ(nullptr, v8_buffer->GetBackingStore()->Data());
+  ASSERT_TRUE(v8_buffer->WasDetached());
+  ASSERT_EQ(0UL, v8_buffer->GetBackingStore()->ByteLength());
   ASSERT_TRUE(original_array_buffer->IsDetached());
 }
 
 ImageBitmap* CreateBitmap() {
-  sk_sp<SkSurface> surface = SkSurface::MakeRasterN32Premul(8, 4);
+  sk_sp<SkSurface> surface =
+      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 4));
   surface->getCanvas()->clear(SK_ColorRED);
   return MakeGarbageCollected<ImageBitmap>(
       UnacceleratedStaticBitmapImage::Create(surface->makeImageSnapshot()));
@@ -140,13 +161,13 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   // More exhaustive tests in web_tests/. This is a sanity check.
   // Build the original ImageBitmap in a block scope to simulate situations
   // where a buffer may be freed twice.
+  test::TaskEnvironment task_environment;
   mojo::Message mojo_message;
   {
     V8TestingScope scope;
     ImageBitmap* image_bitmap = CreateBitmap();
     v8::Local<v8::Value> wrapper =
-        ToV8Traits<ImageBitmap>::ToV8(scope.GetScriptState(), image_bitmap)
-            .ToLocalChecked();
+        ToV8Traits<ImageBitmap>::ToV8(scope.GetScriptState(), image_bitmap);
     Transferables transferables;
     transferables.image_bitmaps.push_back(image_bitmap);
     BlinkTransferableMessage msg;
@@ -166,6 +187,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
 TEST(BlinkTransferableMessageStructTraitsTest,
      BitmapLazySerializationSucceeds) {
   // More exhaustive tests in web_tests/. This is a sanity check.
+  test::TaskEnvironment task_environment;
   V8TestingScope scope;
   ImageBitmap* original_bitmap = CreateBitmap();
   // The original bitmap's height and width will be 0 after it is transferred.
@@ -173,7 +195,8 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   size_t original_bitmap_width = original_bitmap->width();
   scoped_refptr<SharedBuffer> original_bitmap_data =
       original_bitmap->BitmapImage()->Data();
-  v8::Local<v8::Value> wrapper = ToV8(original_bitmap, scope.GetScriptState());
+  v8::Local<v8::Value> wrapper =
+      ToV8Traits<ImageBitmap>::ToV8(scope.GetScriptState(), original_bitmap);
   Transferables transferables;
   transferables.image_bitmaps.push_back(std::move(original_bitmap));
   BlinkTransferableMessage msg;
@@ -199,6 +222,137 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   // the original bitmap' data (as opposed to a copy of the data).
   ASSERT_EQ(original_bitmap_data, deserialized_bitmap->BitmapImage()->Data());
   ASSERT_TRUE(original_bitmap->IsNeutered());
+}
+
+class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
+ public:
+  void SetUp() override {
+    context_provider_ = viz::TestContextProvider::CreateRaster();
+    InitializeSharedGpuContextRaster(context_provider_.get());
+  }
+
+  void TearDown() override {
+    SharedGpuContext::Reset();
+  }
+
+  gpu::SyncToken GenTestSyncToken(GLbyte id) {
+    gpu::SyncToken token;
+    token.Set(gpu::CommandBufferNamespace::GPU_IO,
+              gpu::CommandBufferId::FromUnsafeValue(64), id);
+    token.SetVerifyFlush();
+    return token;
+  }
+
+  ImageBitmap* CreateAcceleratedStaticImageBitmap() {
+    auto client_si = gpu::ClientSharedImage::CreateForTesting(
+        gpu::SHARED_IMAGE_USAGE_RASTER_READ);
+
+    return MakeGarbageCollected<ImageBitmap>(
+        AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
+            std::move(client_si), GenTestSyncToken(100), kPremul_SkAlphaType,
+            SharedGpuContext::ContextProviderWrapper(),
+            base::PlatformThread::CurrentRef(),
+            base::MakeRefCounted<base::NullTaskRunner>(),
+            BindOnce(&BlinkTransferableMessageStructTraitsWithFakeGpuTest::
+                         OnImageDestroyed,
+                     Unretained(this))));
+  }
+
+  void OnImageDestroyed(const gpu::SyncToken&, bool) {
+    image_destroyed_ = true;
+  }
+
+ protected:
+  scoped_refptr<viz::TestContextProvider> context_provider_;
+
+  bool image_destroyed_ = false;
+};
+
+TEST_F(BlinkTransferableMessageStructTraitsWithFakeGpuTest,
+       AcceleratedImageTransferSuccess) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  scope.GetExecutionContext()
+      ->GetTaskRunner(TaskType::kInternalTest)
+      ->PostTask(
+          FROM_HERE, base::BindLambdaForTesting([&]() {
+            ImageBitmap* image_bitmap = CreateAcceleratedStaticImageBitmap();
+            v8::Local<v8::Value> wrapper = ToV8Traits<ImageBitmap>::ToV8(
+                scope.GetScriptState(), image_bitmap);
+            Transferables transferables;
+            transferables.image_bitmaps.push_back(image_bitmap);
+            BlinkTransferableMessage msg;
+            msg.sender_origin = SecurityOrigin::CreateUniqueOpaque();
+            msg.sender_agent_cluster_id = base::UnguessableToken::Create();
+            msg.message = BuildSerializedScriptValue(scope.GetIsolate(),
+                                                     wrapper, transferables);
+            mojo::Message mojo_message =
+                mojom::blink::TransferableMessage::SerializeAsMessage(&msg);
+
+            // Without this, deserialization of a PendingRemote in the message
+            // always fails with VALIDATION_ERROR_ILLEGAL_HANDLE.
+            mojo::ScopedMessageHandle handle = mojo_message.TakeMojoMessage();
+            mojo_message = mojo::Message::CreateFromMessageHandle(&handle);
+
+            // The original bitmap must be held alive until the transfer
+            // completes.
+            EXPECT_FALSE(image_destroyed_);
+            BlinkTransferableMessage out;
+            ASSERT_TRUE(
+                mojom::blink::TransferableMessage::DeserializeFromMessage(
+                    std::move(mojo_message), &out));
+            ASSERT_EQ(out.message->GetImageBitmapContentsArray().size(), 1U);
+          }));
+  base::RunLoop().RunUntilIdle();
+
+  // The original bitmap shouldn't be held anywhere after deserialization has
+  // completed. Because release callbacks are posted over mojo, check the
+  // completion in a new task.
+  scope.GetExecutionContext()
+      ->GetTaskRunner(TaskType::kInternalTest)
+      ->PostTask(FROM_HERE, base::BindLambdaForTesting(
+                                [&]() { EXPECT_TRUE(image_destroyed_); }));
+  base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(BlinkTransferableMessageStructTraitsWithFakeGpuTest,
+       AcceleratedImageTransferReceiverCrash) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  scope.GetExecutionContext()
+      ->GetTaskRunner(TaskType::kInternalTest)
+      ->PostTask(
+          FROM_HERE, base::BindLambdaForTesting([&]() {
+            ImageBitmap* image_bitmap = CreateAcceleratedStaticImageBitmap();
+
+            v8::Local<v8::Value> wrapper = ToV8Traits<ImageBitmap>::ToV8(
+                scope.GetScriptState(), image_bitmap);
+            Transferables transferables;
+            transferables.image_bitmaps.push_back(image_bitmap);
+            BlinkTransferableMessage msg;
+            msg.sender_origin = SecurityOrigin::CreateUniqueOpaque();
+            msg.sender_agent_cluster_id = base::UnguessableToken::Create();
+            msg.message = BuildSerializedScriptValue(scope.GetIsolate(),
+                                                     wrapper, transferables);
+            mojo::Message mojo_message =
+                mojom::blink::TransferableMessage::SerializeAsMessage(&msg);
+            // The original bitmap must be held alive before the transfer
+            // completes.
+            EXPECT_FALSE(image_destroyed_);
+
+            // The mojo message is destroyed without deserialization to simulate
+            // the receiver process crash.
+          }));
+  base::RunLoop().RunUntilIdle();
+
+  // The original bitmap shouldn't be held anywhere after the mojo message is
+  // lost. Because release callbacks are posted over mojo, check the completion
+  // in a new task.
+  scope.GetExecutionContext()
+      ->GetTaskRunner(TaskType::kInternalTest)
+      ->PostTask(FROM_HERE, base::BindLambdaForTesting(
+                                [&]() { EXPECT_TRUE(image_destroyed_); }));
+  base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace blink

@@ -7,15 +7,14 @@
 
 #include "chromeos/ash/components/phonehub/camera_roll_thumbnail_decoder.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/data_decoder/public/cpp/decode_image.h"
 #include "ui/gfx/image/image.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 class CameraRollThumbnailDecoderImpl : public CameraRollThumbnailDecoder {
  public:
@@ -95,7 +94,6 @@ class CameraRollThumbnailDecoderImpl : public CameraRollThumbnailDecoder {
   base::WeakPtrFactory<CameraRollThumbnailDecoderImpl> weak_ptr_factory_{this};
 };
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub
 
 #endif  // CHROMEOS_ASH_COMPONENTS_PHONEHUB_CAMERA_ROLL_THUMBNAIL_DECODER_IMPL_H_

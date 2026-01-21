@@ -12,7 +12,9 @@ import androidx.annotation.VisibleForTesting;
 
 import org.xmlpull.v1.XmlSerializer;
 
-import org.chromium.base.BuildInfo;
+import org.chromium.base.ApkInfo;
+import org.chromium.base.DeviceInfo;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.uid.SettingsSecureBasedIdentificationGenerator;
 import org.chromium.chrome.browser.uid.UniqueIdentificationGeneratorFactory;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -21,12 +23,9 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.Locale;
 
-/**
- * Generates XML requests to send to the Omaha server.
- */
+/** Generates XML requests to send to the Omaha server. */
+@NullMarked
 public abstract class RequestGenerator {
-    private static final String TAG = "RequestGenerator";
-
     // The Omaha specs say that new installs should use "-1".
     public static final int INSTALL_AGE_IMMEDIATELY_AFTER_INSTALLING = -1;
 
@@ -36,7 +35,8 @@ public abstract class RequestGenerator {
     protected RequestGenerator() {
         UniqueIdentificationGeneratorFactory.registerGenerator(
                 SettingsSecureBasedIdentificationGenerator.GENERATOR_ID,
-                new SettingsSecureBasedIdentificationGenerator(), false);
+                new SettingsSecureBasedIdentificationGenerator(),
+                false);
     }
 
     /**
@@ -55,10 +55,15 @@ public abstract class RequestGenerator {
     /**
      * Generates the XML for the current request. Follows the format laid out at
      * https://github.com/google/omaha/blob/master/doc/ServerProtocolV3.md
-     * with some additional dummy values supplied.
+     * with some additional placeholder values supplied.
      */
-    public String generateXML(String sessionID, String versionName, long installAge,
-            int lastCheckDate, RequestData data) throws RequestFailureException {
+    public String generateXML(
+            String sessionID,
+            String versionName,
+            long installAge,
+            int lastCheckDate,
+            RequestData data)
+            throws RequestFailureException {
         XmlSerializer serializer = Xml.newSerializer();
         StringWriter writer = new StringWriter();
         try {
@@ -70,8 +75,10 @@ public abstract class RequestGenerator {
             serializer.attribute(null, "protocol", "3.0");
             serializer.attribute(null, "updater", "Android");
             serializer.attribute(null, "updaterversion", versionName);
-            serializer.attribute(null, "updaterchannel",
-                    StringSanitizer.sanitize(BuildInfo.getInstance().hostPackageLabel));
+            serializer.attribute(
+                    null,
+                    "updaterchannel",
+                    StringSanitizer.sanitize(ApkInfo.getHostPackageLabel()));
             serializer.attribute(null, "ismachine", "1");
             serializer.attribute(null, "requestid", "{" + data.getRequestID() + "}");
             serializer.attribute(null, "sessionid", "{" + sessionID + "}");
@@ -82,7 +89,7 @@ public abstract class RequestGenerator {
             serializer.startTag(null, "os");
             serializer.attribute(null, "platform", "android");
             serializer.attribute(null, "version", Build.VERSION.RELEASE);
-            serializer.attribute(null, "arch", "arm");
+            serializer.attribute(null, "arch", DeviceInfo.getArch());
             serializer.endTag(null, "os");
 
             // Set up <app version="" ...>
@@ -147,26 +154,22 @@ public abstract class RequestGenerator {
     }
 
     /**
-     * Sends additional info that might be useful for statistics generation,
-     * including information about channel and device type.
-     * This string is partially sanitized for dashboard viewing and because people randomly set
-     * these strings when building their own custom Android ROMs.
+     * Sends additional info that might be useful for statistics generation, including information
+     * about channel and device type. This string is partially sanitized for dashboard viewing and
+     * because people randomly set these strings when building their own custom Android ROMs.
      */
     public String getAdditionalParameters() {
-        String applicationLabel =
-                StringSanitizer.sanitize(BuildInfo.getInstance().hostPackageLabel);
+        String applicationLabel = StringSanitizer.sanitize(ApkInfo.getHostPackageLabel());
         String brand = StringSanitizer.sanitize(Build.BRAND);
         String model = StringSanitizer.sanitize(Build.MODEL);
         return applicationLabel + ";" + brand + ";" + model;
     }
 
-    /**
-     * Return a device-specific ID.
-     */
+    /** Return a device-specific ID. */
     public String getDeviceID() {
         try {
-            return UniqueIdentificationGeneratorFactory
-                    .getInstance(SettingsSecureBasedIdentificationGenerator.GENERATOR_ID)
+            return UniqueIdentificationGeneratorFactory.getInstance(
+                            SettingsSecureBasedIdentificationGenerator.GENERATOR_ID)
                     .getUniqueId(SALT);
         } catch (SecurityException unused) {
             // In some cases the browser lacks permission to get the ID. Consult crbug.com/1158707.

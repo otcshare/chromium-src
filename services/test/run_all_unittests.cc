@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/path_service.h"
@@ -14,6 +14,7 @@
 #include "mojo/core/embedder/configuration.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "ui/base/ui_base_paths.h"
@@ -54,10 +55,16 @@ class ServiceTestSuite : public base::TestSuite {
         path.Append(FILE_PATH_LITERAL("bluetooth_test_strings.pak"));
     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
         bluetooth_test_strings, ui::kScaleFactorNone);
+    base::FilePath services_test_strings =
+        path.Append(FILE_PATH_LITERAL("services_test_strings.pak"));
+    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
+        services_test_strings, ui::kScaleFactorNone);
 #endif  // !BUILDFLAG(IS_IOS)
 
     // base::TestSuite and ViewsInit both try to load icu. That's ok for tests.
     base::i18n::AllowMultipleInitializeCallsForTesting();
+
+    perfetto::internal::TrackRegistry::InitializeInstance();
   }
 
   void Shutdown() override {

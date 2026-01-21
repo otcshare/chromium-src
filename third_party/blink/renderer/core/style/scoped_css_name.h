@@ -5,8 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SCOPED_CSS_NAME_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SCOPED_CSS_NAME_H_
 
+#include <algorithm>
+
 #include "base/memory/values_equivalent.h"
-#include "base/ranges/algorithm.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -31,19 +32,15 @@ class CORE_EXPORT ScopedCSSName : public GarbageCollected<ScopedCSSName> {
   }
 
   const AtomicString& GetName() const { return name_; }
-  const TreeScope* GetTreeScope() const { return tree_scope_; }
+  const TreeScope* GetTreeScope() const { return tree_scope_.Get(); }
 
   bool operator==(const ScopedCSSName& other) const {
     return name_ == other.name_ && tree_scope_ == other.tree_scope_;
   }
-  bool operator!=(const ScopedCSSName& other) const {
-    return !operator==(other);
-  }
 
   unsigned GetHash() const {
-    unsigned hash = WTF::AtomicStringHash::GetHash(name_);
-    WTF::AddIntToHash(
-        hash, WTF::PtrHash<const TreeScope>::GetHash(tree_scope_.Get()));
+    unsigned hash = blink::GetHash(name_);
+    AddIntToHash(hash, blink::GetHash(tree_scope_.Get()));
     return hash;
   }
 
@@ -59,14 +56,13 @@ class CORE_EXPORT ScopedCSSName : public GarbageCollected<ScopedCSSName> {
 
 // Represents a list of tree-scoped names (or tree-scoped references).
 //
-// https://drafts.csswg.org/css-scoping/#css-tree-scoped-name
-// https://drafts.csswg.org/css-scoping/#css-tree-scoped-reference
+// https://drafts.csswg.org/css-shadow/#css-tree-scoped-name
+// https://drafts.csswg.org/css-shadow/#css-tree-scoped-reference
 class CORE_EXPORT ScopedCSSNameList
     : public GarbageCollected<ScopedCSSNameList> {
  public:
   explicit ScopedCSSNameList(HeapVector<Member<const ScopedCSSName>> names)
       : names_(std::move(names)) {
-    DCHECK(!names_.empty());
   }
 
   const HeapVector<Member<const ScopedCSSName>>& GetNames() const {
@@ -74,13 +70,10 @@ class CORE_EXPORT ScopedCSSNameList
   }
 
   bool operator==(const ScopedCSSNameList& other) const {
-    return base::ranges::equal(names_, other.names_,
-                               [](const auto& a, const auto& b) {
-                                 return base::ValuesEquivalent(a, b);
-                               });
-  }
-  bool operator!=(const ScopedCSSNameList& other) const {
-    return !operator==(other);
+    return std::ranges::equal(names_, other.names_,
+                              [](const auto& a, const auto& b) {
+                                return base::ValuesEquivalent(a, b);
+                              });
   }
 
   void Trace(Visitor* visitor) const;
@@ -89,36 +82,31 @@ class CORE_EXPORT ScopedCSSNameList
   HeapVector<Member<const ScopedCSSName>> names_;
 };
 
-}  // namespace blink
-
-namespace WTF {
-
 // Allows creating a hash table of ScopedCSSName in wrapper pointers (e.g.,
 // HeapHashSet<Member<ScopedCSSName>>) that hashes the ScopedCSSNames directly
 // instead of the wrapper pointers.
 
-template <typename ScopedCSSNameWrapperPtr>
-struct ScopedCSSNameWrapperPtrHash {
-  STATIC_ONLY(ScopedCSSNameWrapperPtrHash);
-  static unsigned GetHash(const ScopedCSSNameWrapperPtr& name) {
-    return name->GetHash();
-  }
-  static bool Equal(const ScopedCSSNameWrapperPtr& a,
-                    const ScopedCSSNameWrapperPtr& b) {
+template <typename ScopedCSSNameWrapperType>
+struct ScopedCSSNameWrapperPtrHashTraits
+    : MemberHashTraits<ScopedCSSNameWrapperType> {
+  using TraitType =
+      typename MemberHashTraits<ScopedCSSNameWrapperType>::TraitType;
+  static unsigned GetHash(const TraitType& name) { return name->GetHash(); }
+  static bool Equal(const TraitType& a, const TraitType& b) {
     return base::ValuesEquivalent(a, b);
   }
   // Set this flag to 'false', otherwise Equal above will see gibberish values
   // that aren't safe to call ValuesEquivalent on.
-  static const bool safe_to_compare_to_empty_or_deleted = false;
+  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
 };
 
 template <>
-struct DefaultHash<blink::Member<blink::ScopedCSSName>>
-    : ScopedCSSNameWrapperPtrHash<blink::Member<blink::ScopedCSSName>> {};
+struct HashTraits<Member<ScopedCSSName>>
+    : ScopedCSSNameWrapperPtrHashTraits<ScopedCSSName> {};
 template <>
-struct DefaultHash<blink::Member<const blink::ScopedCSSName>>
-    : ScopedCSSNameWrapperPtrHash<blink::Member<const blink::ScopedCSSName>> {};
+struct HashTraits<Member<const ScopedCSSName>>
+    : ScopedCSSNameWrapperPtrHashTraits<const ScopedCSSName> {};
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SCOPED_CSS_NAME_H_

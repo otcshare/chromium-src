@@ -6,14 +6,11 @@
 
 #include <windows.h>
 
-#include <dwmapi.h>
-#include <uxtheme.h>
-
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/process/process_handle.h"
 #include "base/strings/utf_string_conversions.h"
@@ -27,23 +24,45 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_frame.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/browser_window_property_manager_win.h"
+#include "chrome/browser/ui/views/frame/opaque_browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/system_menu_insertion_delegate_win.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+#include "chrome/browser/ui/views/frame/windows_caption_button.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/win/app_icon.h"
 #include "chrome/browser/win/titlebar_config.h"
 #include "chrome/common/chrome_constants.h"
 #include "components/policy/core/common/policy_pref_names.h"
+#include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/theme_provider.h"
 #include "ui/base/win/hwnd_metrics.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image_family.h"
+#include "ui/gfx/win/icon_util.h"
 #include "ui/views/controls/menu/native_menu_win.h"
+#include "ui/views/view_utils.h"
+
+namespace {
+
+int GetTopAreaHeight(const BrowserFrameView* frame) {
+  if (auto* const opaque = views::AsViewClass<OpaqueBrowserFrameView>(frame)) {
+    return opaque->GetTopAreaHeight();
+  } else if (auto* const frame_win =
+                 views::AsViewClass<BrowserFrameViewWin>(frame)) {
+    return frame_win->TopAreaHeight(false);
+  }
+  return 0;
+}
+
+}  // namespace
 
 class VirtualDesktopHelper
     : public base::RefCountedDeleteOnSequence<VirtualDesktopHelper> {
@@ -95,7 +114,7 @@ class VirtualDesktopHelper
   // last we checked. This is used to tell if the window has moved to a
   // different desktop, and notify listeners. It will only be set if
   // we created |virtual_desktop_helper_|.
-  absl::optional<std::string> workspace_;
+  std::optional<std::string> workspace_;
 
   bool initial_workspace_remembered_ = false;
 
@@ -108,7 +127,9 @@ class VirtualDesktopHelper
 
 VirtualDesktopHelper::VirtualDesktopHelper(const std::string& initial_workspace)
     : base::RefCountedDeleteOnSequence<VirtualDesktopHelper>(
-          base::ThreadPool::CreateCOMSTATaskRunner({base::MayBlock()})),
+          base::ThreadPool::CreateCOMSTATaskRunner(
+              {base::MayBlock(),
+               base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})),
       initial_workspace_(initial_workspace) {}
 
 void VirtualDesktopHelper::Init(HWND hwnd) {
@@ -118,12 +139,13 @@ void VirtualDesktopHelper::Init(HWND hwnd) {
                                 initial_workspace_));
 }
 
-VirtualDesktopHelper::~VirtualDesktopHelper() {}
+VirtualDesktopHelper::~VirtualDesktopHelper() = default;
 
 std::string VirtualDesktopHelper::GetWorkspace() {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  if (!workspace_.has_value())
+  if (!workspace_.has_value()) {
     workspace_ = initial_workspace_;
+  }
 
   return workspace_.value_or(std::string());
 }
@@ -154,13 +176,15 @@ void VirtualDesktopHelper::SetWorkspace(WorkspaceChangedCallback callback,
   // If GetWindowDesktopId() fails, |workspace| will be empty, and it's most
   // likely that the current value of |workspace_| is still correct, so don't
   // overwrite it.
-  if (workspace.empty())
+  if (workspace.empty()) {
     return;
+  }
 
   bool workspace_changed = workspace != workspace_.value_or(std::string());
   workspace_ = workspace;
-  if (workspace_changed)
+  if (workspace_changed) {
     std::move(callback).Run();
+  }
 }
 
 void VirtualDesktopHelper::InitImpl(HWND hwnd,
@@ -190,14 +214,16 @@ std::string VirtualDesktopHelper::GetWindowDesktopIdImpl(
     HWND hwnd,
     Microsoft::WRL::ComPtr<IVirtualDesktopManager> virtual_desktop_manager) {
   DCHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  if (!virtual_desktop_manager)
+  if (!virtual_desktop_manager) {
     return std::string();
+  }
 
   GUID workspace_guid;
   HRESULT hr =
       virtual_desktop_manager->GetWindowDesktopId(hwnd, &workspace_guid);
-  if (FAILED(hr) || workspace_guid == GUID_NULL)
+  if (FAILED(hr) || workspace_guid == GUID_NULL) {
     return std::string();
+  }
 
   LPOLESTR workspace_widestr;
   StringFromCLSID(workspace_guid, &workspace_widestr);
@@ -213,16 +239,16 @@ BrowserDesktopWindowTreeHostWin::BrowserDesktopWindowTreeHostWin(
     views::internal::NativeWidgetDelegate* native_widget_delegate,
     views::DesktopNativeWidgetAura* desktop_native_widget_aura,
     BrowserView* browser_view,
-    BrowserFrame* browser_frame)
+    BrowserWidget* browser_widget)
     : DesktopWindowTreeHostWin(native_widget_delegate,
                                desktop_native_widget_aura),
       browser_view_(browser_view),
-      browser_frame_(browser_frame),
+      browser_widget_(browser_widget),
       virtual_desktop_helper_(nullptr) {
   profile_observation_.Observe(
       &g_browser_process->profile_manager()->GetProfileAttributesStorage());
 
-  // TODO(crbug.com/1051306) Make turning off this policy turn off
+  // TODO(crbug.com/40118412) Make turning off this policy turn off
   // native window occlusion on this browser win.
   if (!g_browser_process->local_state()->GetBoolean(
           policy::policy_prefs::kNativeWindowOcclusionEnabled)) {
@@ -230,13 +256,14 @@ BrowserDesktopWindowTreeHostWin::BrowserDesktopWindowTreeHostWin(
   }
 }
 
-BrowserDesktopWindowTreeHostWin::~BrowserDesktopWindowTreeHostWin() {}
+BrowserDesktopWindowTreeHostWin::~BrowserDesktopWindowTreeHostWin() = default;
 
 views::NativeMenuWin* BrowserDesktopWindowTreeHostWin::GetSystemMenu() {
   if (!system_menu_.get()) {
+    CHECK(browser_widget_);
     SystemMenuInsertionDelegateWin insertion_delegate;
     system_menu_ = std::make_unique<views::NativeMenuWin>(
-        browser_frame_->GetSystemMenuModel(), GetHWND());
+        browser_widget_->GetSystemMenuModel(), GetHWND());
     system_menu_->Rebuild(&insertion_delegate);
   }
   return system_menu_.get();
@@ -246,12 +273,8 @@ views::NativeMenuWin* BrowserDesktopWindowTreeHostWin::GetSystemMenu() {
 // BrowserDesktopWindowTreeHostWin, BrowserDesktopWindowTreeHost implementation:
 
 views::DesktopWindowTreeHost*
-    BrowserDesktopWindowTreeHostWin::AsDesktopWindowTreeHost() {
+BrowserDesktopWindowTreeHostWin::AsDesktopWindowTreeHost() {
   return this;
-}
-
-int BrowserDesktopWindowTreeHostWin::GetMinimizeButtonOffset() const {
-  return minimize_button_metrics_.GetMinimizeButtonOffsetX();
 }
 
 bool BrowserDesktopWindowTreeHostWin::UsesNativeSystemMenu() const {
@@ -264,15 +287,13 @@ bool BrowserDesktopWindowTreeHostWin::UsesNativeSystemMenu() const {
 void BrowserDesktopWindowTreeHostWin::Init(
     const views::Widget::InitParams& params) {
   DesktopWindowTreeHostWin::Init(params);
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;  // VirtualDesktopManager isn't supported pre Win-10.
-
   virtual_desktop_helper_ = new VirtualDesktopHelper(params.workspace);
   virtual_desktop_helper_->Init(GetHWND());
 }
 
-void BrowserDesktopWindowTreeHostWin::Show(ui::WindowShowState show_state,
-                                           const gfx::Rect& restore_bounds) {
+void BrowserDesktopWindowTreeHostWin::Show(
+    ui::mojom::WindowShowState show_state,
+    const gfx::Rect& restore_bounds) {
   // This will make BrowserWindowState remember the initial workspace.
   // It has to be called after DesktopNativeWidgetAura is observing the host
   // and the session service is tracking the window.
@@ -280,20 +301,20 @@ void BrowserDesktopWindowTreeHostWin::Show(ui::WindowShowState show_state,
       !virtual_desktop_helper_->GetInitialWorkspaceRemembered()) {
     // If |virtual_desktop_helper_| has an empty workspace, kick off an update,
     // which will eventually call OnHostWorkspaceChanged.
-    if (virtual_desktop_helper_->GetWorkspace().empty())
+    if (virtual_desktop_helper_->GetWorkspace().empty()) {
       UpdateWorkspace();
-    else
+    } else {
       OnHostWorkspaceChanged();
+    }
   }
   DesktopWindowTreeHostWin::Show(show_state, restore_bounds);
 }
 
 void BrowserDesktopWindowTreeHostWin::HandleWindowMinimizedOrRestored(
     bool restored) {
-  // This is necessary since OnWidgetVisibilityChanged() doesn't get called on
-  // Windows when the window is minimized or restored.
-  if (base::FeatureList::IsEnabled(
-          features::kStopLoadingAnimationForHiddenWindow)) {
+  DesktopWindowTreeHostWin::HandleWindowMinimizedOrRestored(restored);
+
+  if (browser_view_) {
     browser_view_->UpdateLoadingAnimations(restored);
   }
 }
@@ -313,21 +334,23 @@ int BrowserDesktopWindowTreeHostWin::GetInitialShowState() const {
 
 bool BrowserDesktopWindowTreeHostWin::GetClientAreaInsets(
     gfx::Insets* insets,
-    HMONITOR monitor) const {
+    int frame_thickness) const {
   // Always use default insets for opaque frame.
-  if (!ShouldUseNativeFrame())
+  if (!browser_view_ || !ShouldUseNativeFrame()) {
     return false;
+  }
 
   // Use default insets for popups and apps, unless we are custom drawing the
   // titlebar.
-  if (!ShouldCustomDrawSystemTitlebar() && !browser_view_->GetIsNormalType())
+  if (!ShouldBrowserCustomDrawTitlebar(browser_view_) &&
+      !browser_view_->GetIsNormalType()) {
     return false;
+  }
 
   if (GetWidget()->IsFullscreen()) {
     // In fullscreen mode there is no frame.
     *insets = gfx::Insets();
   } else {
-    const int frame_thickness = ui::GetFrameThickness(monitor);
     // Reduce the non-client border size; UpdateDWMFrame() will instead extend
     // the border into the window client area. For maximized windows, Windows
     // outdents the window rect from the screen's client rect by
@@ -338,8 +361,10 @@ bool BrowserDesktopWindowTreeHostWin::GetClientAreaInsets(
     // area, Windows will draw a full native titlebar outside the client area.
     // (This doesn't occur in the maximized case.)
     int top_thickness = 0;
-    if (ShouldCustomDrawSystemTitlebar() && GetWidget()->IsMaximized())
+    if (ShouldBrowserCustomDrawTitlebar(browser_view_) &&
+        GetWidget()->IsMaximized()) {
       top_thickness = frame_thickness;
+    }
     *insets = gfx::Insets::TLBR(top_thickness, frame_thickness, frame_thickness,
                                 frame_thickness);
   }
@@ -356,35 +381,36 @@ bool BrowserDesktopWindowTreeHostWin::GetDwmFrameInsetsInPixels(
   // an opaque frame, leading to graphical glitches behind the opaque frame.
   // Instead, we use that function below to tell us whether the frame is
   // currently native or opaque.
-  if (!GetWidget()->client_view() || !browser_view_->GetIsNormalType() ||
-      !DesktopWindowTreeHostWin::ShouldUseNativeFrame())
+  if (!browser_view_ || !browser_widget_ || !GetWidget()->client_view() ||
+      !browser_view_->GetIsNormalType() ||
+      !DesktopWindowTreeHostWin::ShouldUseNativeFrame()) {
     return false;
+  }
 
   // Don't extend the glass in at all if it won't be visible.
   if (!ShouldUseNativeFrame() || GetWidget()->IsFullscreen() ||
-      ShouldCustomDrawSystemTitlebar()) {
+      ShouldBrowserCustomDrawTitlebar(browser_view_)) {
     *insets = gfx::Insets();
   } else {
     // The glass should extend to the bottom of the tabstrip.
-    HWND hwnd = GetHWND();
-    gfx::Rect tabstrip_region_bounds(browser_frame_->GetBoundsForTabStripRegion(
-        browser_view_->tab_strip_region_view()->GetMinimumSize()));
-    tabstrip_region_bounds =
-        display::win::ScreenWin::DIPToClientRect(hwnd, tabstrip_region_bounds);
-
-    // The 2 px (not DIP) at the inner edges of Win 7 glass are a light and dark
-    // line, so we must inset further to account for those.
-    constexpr int kWin7GlassInset = 2;
-    const int inset = (base::win::GetVersion() < base::win::Version::WIN8)
-                          ? kWin7GlassInset
-                          : 0;
-    *insets = gfx::Insets::TLBR(tabstrip_region_bounds.bottom() + inset, inset,
-                                inset, inset);
+    auto* const frame = browser_widget_->GetFrameView();
+    const int bottom =
+        GetTopAreaHeight(frame) +
+        browser_view_->GetFrameElementInfo().tabstrip_preferred_height;
+    const int tabstrip_region_bottom =
+        display::win::GetScreenWin()
+            ->DIPToClientPoint(GetHWND(), gfx::Point(0, bottom))
+            .y();
+    *insets = gfx::Insets::TLBR(tabstrip_region_bottom, 0, 0, 0);
   }
   return true;
 }
 
 void BrowserDesktopWindowTreeHostWin::HandleCreate() {
+  if (!browser_view_) {
+    return;
+  }
+
   DesktopWindowTreeHostWin::HandleCreate();
   browser_window_property_manager_ =
       BrowserWindowPropertyManager::CreateBrowserWindowPropertyManager(
@@ -405,28 +431,11 @@ void BrowserDesktopWindowTreeHostWin::HandleDestroying() {
   DesktopWindowTreeHostWin::HandleDestroying();
 }
 
-void BrowserDesktopWindowTreeHostWin::HandleFrameChanged() {
-  // Reinitialize the status bubble, since it needs to be initialized
-  // differently depending on whether or not DWM composition is enabled
-  browser_view_->InitStatusBubble();
-  DesktopWindowTreeHostWin::HandleFrameChanged();
-}
-
-void BrowserDesktopWindowTreeHostWin::HandleWindowScaleFactorChanged(
-    float window_scale_factor) {
-  DesktopWindowTreeHostWin::HandleWindowScaleFactorChanged(window_scale_factor);
-  minimize_button_metrics_.OnDpiChanged();
-}
-
 bool BrowserDesktopWindowTreeHostWin::PreHandleMSG(UINT message,
                                                    WPARAM w_param,
                                                    LPARAM l_param,
                                                    LRESULT* result) {
   switch (message) {
-    case WM_ACTIVATE:
-      if (LOWORD(w_param) != WA_INACTIVE)
-        minimize_button_metrics_.OnHWNDActivated();
-      return false;
     case WM_ENDSESSION:
       chrome::SessionEnding();
       return true;
@@ -434,21 +443,22 @@ bool BrowserDesktopWindowTreeHostWin::PreHandleMSG(UINT message,
       GetSystemMenu()->UpdateStates();
       return true;
   }
-  return DesktopWindowTreeHostWin::PreHandleMSG(
-      message, w_param, l_param, result);
+  return DesktopWindowTreeHostWin::PreHandleMSG(message, w_param, l_param,
+                                                result);
 }
 
 void BrowserDesktopWindowTreeHostWin::PostHandleMSG(UINT message,
                                                     WPARAM w_param,
                                                     LPARAM l_param) {
+  if (!GetWidget()) {
+    return;
+  }
+
   switch (message) {
     case WM_SETFOCUS: {
       UpdateWorkspace();
       break;
     }
-    case WM_CREATE:
-      minimize_button_metrics_.Init(GetHWND());
-      break;
     case WM_WINDOWPOSCHANGED: {
       // Windows lies to us about the position of the minimize button before a
       // window is visible. We use this position to place the incognito avatar
@@ -463,7 +473,7 @@ void BrowserDesktopWindowTreeHostWin::PostHandleMSG(UINT message,
       WINDOWPOS* window_pos = reinterpret_cast<WINDOWPOS*>(l_param);
       views::NonClientView* non_client_view = GetWidget()->non_client_view();
       if (window_pos->flags & SWP_SHOWWINDOW && non_client_view) {
-        non_client_view->Layout();
+        non_client_view->DeprecatedLayoutImmediately();
         non_client_view->SchedulePaint();
       }
       break;
@@ -471,19 +481,22 @@ void BrowserDesktopWindowTreeHostWin::PostHandleMSG(UINT message,
     case WM_DWMCOLORIZATIONCOLORCHANGED: {
       // The activation border may have changed color.
       views::NonClientView* non_client_view = GetWidget()->non_client_view();
-      if (non_client_view)
+      if (non_client_view) {
         non_client_view->SchedulePaint();
+      }
       break;
     }
   }
 }
 
 views::FrameMode BrowserDesktopWindowTreeHostWin::GetFrameMode() const {
-  if (IsOpaqueHostedAppFrame())
-    return views::FrameMode::CUSTOM_DRAWN;
+  if (!browser_view_) {
+    // If there is no browser view the frame should be system drawn.
+    return views::FrameMode::SYSTEM_DRAWN;
+  }
 
   const views::FrameMode system_frame_mode =
-      ShouldCustomDrawSystemTitlebar()
+      ShouldBrowserCustomDrawTitlebar(browser_view_)
           ? views::FrameMode::SYSTEM_DRAWN_NO_CONTROLS
           : views::FrameMode::SYSTEM_DRAWN;
 
@@ -504,21 +517,22 @@ views::FrameMode BrowserDesktopWindowTreeHostWin::GetFrameMode() const {
 }
 
 bool BrowserDesktopWindowTreeHostWin::ShouldUseNativeFrame() const {
-  if (!views::DesktopWindowTreeHostWin::ShouldUseNativeFrame())
+  if (!browser_view_ ||
+      !views::DesktopWindowTreeHostWin::ShouldUseNativeFrame()) {
     return false;
+  }
   // This function can get called when the Browser window is closed i.e. in the
   // context of the BrowserView destructor.
-  if (!browser_view_->browser())
+  if (!browser_view_->browser()) {
     return false;
-
-  if (IsOpaqueHostedAppFrame())
-    return false;
+  }
 
   // We don't theme popup or app windows, so regardless of whether or not a
   // theme is active for normal browser windows, we don't want to use the custom
   // frame for popups/apps.
-  if (!browser_view_->GetIsNormalType())
+  if (!browser_view_->GetIsNormalType()) {
     return true;
+  }
   // Otherwise, we use the native frame when we're told we should by the theme
   // provider (e.g. no custom theme is active).
   return GetWidget()->GetThemeProvider()->ShouldUseNativeFrame();
@@ -526,8 +540,18 @@ bool BrowserDesktopWindowTreeHostWin::ShouldUseNativeFrame() const {
 
 bool BrowserDesktopWindowTreeHostWin::ShouldWindowContentsBeTransparent()
     const {
-  return !ShouldCustomDrawSystemTitlebar() &&
+  CHECK(browser_view_);
+  return !ShouldBrowserCustomDrawTitlebar(browser_view_) &&
          views::DesktopWindowTreeHostWin::ShouldWindowContentsBeTransparent();
+}
+
+void BrowserDesktopWindowTreeHostWin::ClientDestroyedWidget() {
+  profile_observation_.Reset();
+  system_menu_.reset();
+  browser_window_property_manager_.reset();
+  browser_widget_ = nullptr;
+  browser_view_ = nullptr;
+  DesktopWindowTreeHostWin::ClientDestroyedWidget();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -537,6 +561,7 @@ void BrowserDesktopWindowTreeHostWin::OnProfileAvatarChanged(
     const base::FilePath& profile_path) {
   // If we're currently badging the window icon (>1 available profile),
   // and this window's profile's avatar changed, update the window icon.
+  CHECK(browser_view_);
   if (browser_view_->browser()->profile()->GetPath() == profile_path &&
       g_browser_process->profile_manager()
               ->GetProfileAttributesStorage()
@@ -570,39 +595,36 @@ void BrowserDesktopWindowTreeHostWin::OnProfileWasRemoved(
 // BrowserDesktopWindowTreeHostWin, private:
 
 void BrowserDesktopWindowTreeHostWin::UpdateWorkspace() {
-  if (!virtual_desktop_helper_)
+  if (!virtual_desktop_helper_) {
     return;
+  }
   virtual_desktop_helper_->UpdateWindowDesktopId(
       GetHWND(),
       base::BindOnce(&BrowserDesktopWindowTreeHostWin::OnHostWorkspaceChanged,
                      weak_factory_.GetWeakPtr()));
 }
 
-bool BrowserDesktopWindowTreeHostWin::IsOpaqueHostedAppFrame() const {
-  // TODO(https://crbug.com/868239): Support Windows 7 Aero glass for web-app
-  // window titlebar controls.
-  return browser_view_->GetIsWebAppType() &&
-         base::win::GetVersion() < base::win::Version::WIN10;
-}
-
 SkBitmap GetBadgedIconBitmapForProfile(Profile* profile) {
   std::unique_ptr<gfx::ImageFamily> family = GetAppIconImageFamily();
-  if (!family)
+  if (!family) {
     return SkBitmap();
+  }
 
   SkBitmap app_icon_bitmap = family
                                  ->CreateExact(profiles::kShortcutIconSizeWin,
                                                profiles::kShortcutIconSizeWin)
                                  .AsBitmap();
-  if (app_icon_bitmap.isNull())
+  if (app_icon_bitmap.isNull()) {
     return SkBitmap();
+  }
 
   ProfileAttributesEntry* entry =
       g_browser_process->profile_manager()
           ->GetProfileAttributesStorage()
           .GetProfileAttributesWithPath(profile->GetPath());
-  if (!entry)
+  if (!entry) {
     return SkBitmap();
+  }
 
   SkBitmap avatar_bitmap_2x = profiles::GetWin2xAvatarImage(entry);
   return profiles::GetBadgedWinIconBitmapForAvatar(app_icon_bitmap,
@@ -612,8 +634,9 @@ SkBitmap GetBadgedIconBitmapForProfile(Profile* profile) {
 void BrowserDesktopWindowTreeHostWin::SetWindowIcon(bool badged) {
   // Hold onto the previous icon so that the currently displayed
   // icon is valid until replaced with the new icon.
-  base::win::ScopedHICON previous_icon = std::move(icon_handle_);
+  base::win::ScopedGDIObject<HICON> previous_icon = std::move(icon_handle_);
   if (badged) {
+    CHECK(browser_view_);
     icon_handle_ = IconUtil::CreateHICONFromSkBitmap(
         GetBadgedIconBitmapForProfile(browser_view_->browser()->profile()));
   } else {
@@ -630,12 +653,12 @@ void BrowserDesktopWindowTreeHostWin::SetWindowIcon(bool badged) {
 
 // static
 BrowserDesktopWindowTreeHost*
-    BrowserDesktopWindowTreeHost::CreateBrowserDesktopWindowTreeHost(
-        views::internal::NativeWidgetDelegate* native_widget_delegate,
-        views::DesktopNativeWidgetAura* desktop_native_widget_aura,
-        BrowserView* browser_view,
-        BrowserFrame* browser_frame) {
+BrowserDesktopWindowTreeHost::CreateBrowserDesktopWindowTreeHost(
+    views::internal::NativeWidgetDelegate* native_widget_delegate,
+    views::DesktopNativeWidgetAura* desktop_native_widget_aura,
+    BrowserView* browser_view,
+    BrowserWidget* browser_widget) {
   return new BrowserDesktopWindowTreeHostWin(native_widget_delegate,
                                              desktop_native_widget_aura,
-                                             browser_view, browser_frame);
+                                             browser_view, browser_widget);
 }

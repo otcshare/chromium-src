@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/containers/span.h"
@@ -15,9 +16,10 @@
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/types/expected.h"
 #include "components/reporting/encryption/encryption.h"
 #include "components/reporting/encryption/primitives.h"
 #include "components/reporting/encryption/testing_primitives.h"
@@ -27,32 +29,32 @@
 namespace reporting {
 namespace test {
 
-Decryptor::Handle::Handle(base::StringPiece shared_secret,
+Decryptor::Handle::Handle(std::string_view shared_secret,
                           scoped_refptr<Decryptor> decryptor)
     : shared_secret_(shared_secret), decryptor_(decryptor) {}
 
 Decryptor::Handle::~Handle() = default;
 
-void Decryptor::Handle::AddToRecord(base::StringPiece data,
+void Decryptor::Handle::AddToRecord(std::string_view data,
                                     base::OnceCallback<void(Status)> cb) {
   // Add piece of data to the record.
-  record_.append(data.data(), data.size());
+  record_.append(data);
   std::move(cb).Run(Status::StatusOK());
 }
 
 void Decryptor::Handle::CloseRecord(
-    base::OnceCallback<void(StatusOr<base::StringPiece>)> cb) {
+    base::OnceCallback<void(StatusOr<std::string_view>)> cb) {
   // Make sure the record self-destructs when returning from this method.
   const auto self_destruct = base::WrapUnique(this);
 
   // Produce symmetric key from shared secret using HKDF.
   // Since the original keys were only used once, no salt and context is needed.
-  uint8_t out_symmetric_key[kKeySize];
-  if (!ProduceSymmetricKey(
-          reinterpret_cast<const uint8_t*>(shared_secret_.data()),
-          out_symmetric_key)) {
-    std::move(cb).Run(
-        Status(error::INTERNAL, "Symmetric key extraction failed"));
+  std::array<uint8_t, kKeySize> out_symmetric_key;
+  auto shared_secret =
+      *base::as_byte_span(shared_secret_).to_fixed_extent<kKeySize>();
+  if (!ProduceSymmetricKey(shared_secret, out_symmetric_key)) {
+    std::move(cb).Run(base::unexpected(
+        Status(error::INTERNAL, "Symmetric key extraction failed")));
     return;
   }
 
@@ -64,37 +66,38 @@ void Decryptor::Handle::CloseRecord(
   std::move(cb).Run(decrypted);
 }
 
-void Decryptor::OpenRecord(base::StringPiece shared_secret,
+void Decryptor::OpenRecord(std::string_view shared_secret,
                            base::OnceCallback<void(StatusOr<Handle*>)> cb) {
   std::move(cb).Run(new Handle(shared_secret, this));
 }
 
 StatusOr<std::string> Decryptor::DecryptSecret(
-    base::StringPiece private_key,
-    base::StringPiece peer_public_value) {
+    std::string_view private_key,
+    std::string_view peer_public_value) {
   // Verify the keys.
   if (private_key.size() != kKeySize) {
-    return Status(error::FAILED_PRECONDITION,
-                  base::StrCat({"Private key size mismatch, expected=",
-                                base::NumberToString(kKeySize), " actual=",
-                                base::NumberToString(private_key.size())}));
+    return base::unexpected(Status(
+        error::FAILED_PRECONDITION,
+        base::StrCat({"Private key size mismatch, expected=",
+                      base::NumberToString(kKeySize),
+                      " actual=", base::NumberToString(private_key.size())})));
   }
   if (peer_public_value.size() != kKeySize) {
-    return Status(
-        error::FAILED_PRECONDITION,
-        base::StrCat({"Public key size mismatch, expected=",
-                      base::NumberToString(kKeySize), " actual=",
-                      base::NumberToString(peer_public_value.size())}));
+    return base::unexpected(
+        Status(error::FAILED_PRECONDITION,
+               base::StrCat({"Public key size mismatch, expected=",
+                             base::NumberToString(kKeySize), " actual=",
+                             base::NumberToString(peer_public_value.size())})));
   }
 
   // Compute shared secret.
-  uint8_t out_shared_value[kKeySize];
-  RestoreSharedSecret(
-      reinterpret_cast<const uint8_t*>(private_key.data()),
-      reinterpret_cast<const uint8_t*>(peer_public_value.data()),
-      out_shared_value);
+  auto key = *base::as_byte_span(private_key).to_fixed_extent<kKeySize>();
+  auto peer_pubkey =
+      *base::as_byte_span(peer_public_value).to_fixed_extent<kKeySize>();
+  std::array<uint8_t, kKeySize> out_shared_value;
+  RestoreSharedSecret(key, peer_pubkey, out_shared_value);
 
-  return std::string(reinterpret_cast<const char*>(out_shared_value), kKeySize);
+  return std::string(base::as_string_view(out_shared_value));
 }
 
 Decryptor::Decryptor()
@@ -106,8 +109,8 @@ Decryptor::Decryptor()
 Decryptor::~Decryptor() = default;
 
 void Decryptor::RecordKeyPair(
-    base::StringPiece private_key,
-    base::StringPiece public_key,
+    std::string_view private_key,
+    std::string_view public_key,
     base::OnceCallback<void(StatusOr<Encryptor::PublicKeyId>)> cb) {
   // Schedule key recording on the sequenced task runner.
   keys_sequenced_task_runner_->PostTask(
@@ -117,20 +120,21 @@ void Decryptor::RecordKeyPair(
              base::OnceCallback<void(StatusOr<Encryptor::PublicKeyId>)> cb,
              scoped_refptr<Decryptor> decryptor) {
             DCHECK_CALLED_ON_VALID_SEQUENCE(decryptor->keys_sequence_checker_);
-            StatusOr<Encryptor::PublicKeyId> result;
+            StatusOr<Encryptor::PublicKeyId> result =
+                CreateUnknownErrorStatusOr();
             if (key_info.private_key.size() != kKeySize) {
-              result = Status(
+              result = base::unexpected(Status(
                   error::FAILED_PRECONDITION,
                   base::StrCat(
                       {"Private key size mismatch, expected=",
                        base::NumberToString(kKeySize), " actual=",
-                       base::NumberToString(key_info.private_key.size())}));
+                       base::NumberToString(key_info.private_key.size())})));
             } else if (public_key.size() != kKeySize) {
-              result = Status(
+              result = base::unexpected(Status(
                   error::FAILED_PRECONDITION,
                   base::StrCat({"Public key size mismatch, expected=",
                                 base::NumberToString(kKeySize), " actual=",
-                                base::NumberToString(public_key.size())}));
+                                base::NumberToString(public_key.size())})));
             } else {
               // Assign a random number to be public key id for testing purposes
               // only (in production it will be retrieved from the server as
@@ -138,9 +142,10 @@ void Decryptor::RecordKeyPair(
               const Encryptor::PublicKeyId public_key_id = base::RandGenerator(
                   std::numeric_limits<Encryptor::PublicKeyId>::max());
               if (!decryptor->keys_.emplace(public_key_id, key_info).second) {
-                result = Status(error::ALREADY_EXISTS,
-                                base::StrCat({"Public key='", public_key,
-                                              "' already recorded"}));
+                result = base::unexpected(
+                    Status(error::ALREADY_EXISTS,
+                           base::StrCat({"Public key='", public_key,
+                                         "' already recorded"})));
               } else {
                 result = public_key_id;
               }
@@ -174,8 +179,8 @@ void Decryptor::RetrieveMatchingPrivateKey(
             DCHECK_CALLED_ON_VALID_SEQUENCE(decryptor->keys_sequence_checker_);
             auto key_info_it = decryptor->keys_.find(public_key_id);
             if (key_info_it != decryptor->keys_.end()) {
-              DCHECK_EQ(key_info_it->second.private_key.size(),
-                        static_cast<size_t>(kKeySize));
+              CHECK_EQ(key_info_it->second.private_key.size(),
+                       static_cast<size_t>(kKeySize));
             }
             // Schedule response on a generic thread pool.
             base::ThreadPool::PostTask(
@@ -187,8 +192,8 @@ void Decryptor::RetrieveMatchingPrivateKey(
                     },
                     std::move(cb),
                     key_info_it == decryptor->keys_.end()
-                        ? StatusOr<std::string>(Status(
-                              error::NOT_FOUND, "Matching key not found"))
+                        ? StatusOr<std::string>(base::unexpected(Status(
+                              error::NOT_FOUND, "Matching key not found")))
                         : key_info_it->second.private_key));
           },
           public_key_id, std::move(cb), base::WrapRefCounted(this)));

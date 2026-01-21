@@ -4,12 +4,14 @@
 
 #include "sandbox/win/src/service_resolver.h"
 
+#include <windows.h>
+#include <winternl.h>
+
+#include <ntstatus.h>
 #include <stddef.h>
 
-#include <memory>
-
-#include "base/bit_cast.h"
-#include "sandbox/win/src/win_utils.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 
 namespace {
 #pragma pack(push, 1)
@@ -115,7 +117,7 @@ bool IsFunctionAService32(HANDLE process, void* target, void* local_thunk) {
   }
 
   // Save the verified code
-  memcpy(local_thunk, &function_code, sizeof(function_code));
+  UNSAFE_TODO(memcpy(local_thunk, &function_code, sizeof(function_code)));
 
   return true;
 }
@@ -137,7 +139,7 @@ bool IsFunctionAServiceWow64(HANDLE process, void* target, void* local_thunk) {
   }
 
   // Save the verified code
-  memcpy(local_thunk, &function_code, sizeof(function_code));
+  UNSAFE_TODO(memcpy(local_thunk, &function_code, sizeof(function_code)));
   return true;
 }
 
@@ -146,24 +148,22 @@ bool IsFunctionAServiceWow64(HANDLE process, void* target, void* local_thunk) {
 namespace sandbox {
 
 NTSTATUS ServiceResolverThunk::Setup(const void* target_module,
-                                     const void* interceptor_module,
                                      const char* target_name,
-                                     const char* interceptor_name,
                                      const void* interceptor_entry_point,
                                      void* thunk_storage,
                                      size_t storage_bytes,
                                      size_t* storage_used) {
-  NTSTATUS ret =
-      Init(target_module, interceptor_module, target_name, interceptor_name,
-           interceptor_entry_point, thunk_storage, storage_bytes);
+  NTSTATUS ret = Init(target_module, target_name, interceptor_entry_point,
+                      thunk_storage, storage_bytes);
   if (!NT_SUCCESS(ret))
     return ret;
 
   relative_jump_ = 0;
   size_t thunk_bytes = GetThunkSize();
-  std::unique_ptr<char[]> thunk_buffer(new char[thunk_bytes]);
+  base::HeapArray<char> thunk_buffer =
+      base::HeapArray<char>::Uninit(thunk_bytes);
   ServiceFullThunk* thunk =
-      reinterpret_cast<ServiceFullThunk*>(thunk_buffer.get());
+      reinterpret_cast<ServiceFullThunk*>(thunk_buffer.data());
 
   if (!IsFunctionAService(&thunk->original) &&
       (!relaxed_ || !SaveOriginalFunction(&thunk->original, thunk_storage))) {
@@ -224,13 +224,13 @@ NTSTATUS ServiceResolverThunk::PerformPatch(void* local_thunk,
       reinterpret_cast<ServiceFullThunk*>(remote_thunk);
 
   // patch the original code
-  memcpy(&intercepted_code, &full_local_thunk->original,
-         sizeof(intercepted_code));
+  UNSAFE_TODO(memcpy(&intercepted_code, &full_local_thunk->original,
+                     sizeof(intercepted_code)));
   intercepted_code.mov_eax = kMovEax;
   intercepted_code.service_id = full_local_thunk->original.service_id;
   intercepted_code.mov_edx = kMovEdx;
   intercepted_code.mov_edx_param =
-      base::bit_cast<ULONG>(&full_remote_thunk->internal_thunk);
+      reinterpret_cast<ULONG>(&full_remote_thunk->internal_thunk);
   intercepted_code.call_edx = kJmpEdx;
   bytes_to_write = kMinServiceSize;
 
@@ -288,8 +288,8 @@ bool ServiceResolverThunk::SaveOriginalFunction(void* local_thunk,
     ULONG relative = function_code.service_id;
 
     // First, fix our copy of their patch.
-    relative +=
-        base::bit_cast<ULONG>(target_) - base::bit_cast<ULONG>(remote_thunk);
+    relative += reinterpret_cast<ULONG>(target_) -
+                reinterpret_cast<ULONG>(remote_thunk);
 
     function_code.service_id = relative;
 
@@ -299,12 +299,12 @@ bool ServiceResolverThunk::SaveOriginalFunction(void* local_thunk,
 
     const ULONG kJmp32Size = 5;
 
-    relative_jump_ = base::bit_cast<ULONG>(&full_thunk->internal_thunk) -
-                     base::bit_cast<ULONG>(target_) - kJmp32Size;
+    relative_jump_ = reinterpret_cast<ULONG>(&full_thunk->internal_thunk) -
+                     reinterpret_cast<ULONG>(target_) - kJmp32Size;
   }
 
   // Save the verified code
-  memcpy(local_thunk, &function_code, sizeof(function_code));
+  UNSAFE_TODO(memcpy(local_thunk, &function_code, sizeof(function_code)));
 
   return true;
 }
@@ -317,8 +317,8 @@ bool ServiceResolverThunk::VerifyJumpTargetForTesting(
     return false;
   }
 
-  ULONG source_addr = base::bit_cast<ULONG>(target_);
-  ULONG target_addr = base::bit_cast<ULONG>(thunk_storage);
+  ULONG source_addr = reinterpret_cast<ULONG>(target_);
+  ULONG target_addr = reinterpret_cast<ULONG>(thunk_storage);
   return target_addr + kMaxServiceSize - kJmp32Size - source_addr ==
          patched->service_id;
 }

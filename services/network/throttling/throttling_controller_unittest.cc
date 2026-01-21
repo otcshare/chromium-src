@@ -10,7 +10,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -37,7 +37,7 @@ using net::MockTransaction;
 using net::TEST_MODE_SYNC_NET_START;
 
 const char kUploadData[] = "upload_data";
-int64_t kUploadIdentifier = 17;
+constexpr int64_t kUploadIdentifier = 17;
 
 class TestCallback {
  public:
@@ -60,33 +60,40 @@ class ThrottlingControllerTestHelper {
       MockTransaction mock_transaction = kSimpleGET_Transaction)
       : completion_callback_(base::BindRepeating(&TestCallback::Run,
                                                  base::Unretained(&callback_))),
-        mock_transaction_(mock_transaction),
-        buffer_(base::MakeRefCounted<net::IOBuffer>(64)),
+        mock_transaction_(mock_transaction, "http://dot.com"),
+        buffer_(base::MakeRefCounted<net::IOBufferWithSize>(64)),
         net_log_with_source_(
             net::NetLogWithSource::Make(net::NetLog::Get(),
                                         net::NetLogSourceType::URL_REQUEST)),
         profile_id_(base::UnguessableToken::Create()) {
     mock_transaction_.test_mode = TEST_MODE_SYNC_NET_START;
-    mock_transaction_.url = "http://dot.com";
-    AddMockTransaction(&mock_transaction_);
 
-    std::unique_ptr<net::HttpTransaction> network_transaction;
-    network_layer_.CreateTransaction(net::DEFAULT_PRIORITY,
-                                     &network_transaction);
+    auto network_transaction =
+        network_layer_.CreateTransaction(net::DEFAULT_PRIORITY);
+    CHECK(network_transaction);
     transaction_ = std::make_unique<ThrottlingNetworkTransaction>(
         std::move(network_transaction));
   }
-
-  void SetNetworkState(bool offline, double download, double upload) {
-    std::unique_ptr<NetworkConditions> conditions(
-        new NetworkConditions(offline, 0, download, upload));
+  void SetNetworkState(std::vector<MatchedNetworkConditions> conditions) {
     ThrottlingController::SetConditions(profile_id_, std::move(conditions));
   }
 
+  void SetNetworkState(bool offline, double download, double upload) {
+    ThrottlingController::SetConditions(
+        profile_id_, {{{}, NetworkConditions{offline, 0, download, upload}}});
+  }
+
   void SetNetworkState(const base::UnguessableToken& id, bool offline) {
-    std::unique_ptr<NetworkConditions> conditions(
-        new NetworkConditions(offline));
-    ThrottlingController::SetConditions(id, std::move(conditions));
+    ThrottlingController::SetConditions(id, {{{}, NetworkConditions{offline}}});
+  }
+
+  ThrottlingController::ThrottlingProfile* GetThrottlingProfile() {
+    auto interceptors =
+        ThrottlingController::instance().interceptors_.find(profile_id_);
+    if (interceptors == ThrottlingController::instance().interceptors_.end()) {
+      return nullptr;
+    }
+    return &interceptors->second;
   }
 
   int Start(bool with_upload) {
@@ -97,8 +104,8 @@ class ThrottlingControllerTestHelper {
     if (with_upload) {
       upload_data_stream_ =
           std::make_unique<net::ChunkedUploadDataStream>(kUploadIdentifier);
-      upload_data_stream_->AppendData(kUploadData, std::size(kUploadData),
-                                      true);
+      upload_data_stream_->AppendData(
+          base::byte_span_with_nul_from_cstring(kUploadData), true);
       request_->upload_data_stream = upload_data_stream_.get();
     }
 
@@ -115,15 +122,17 @@ class ThrottlingControllerTestHelper {
   int Read() { return Read(buffer_.get(), 64); }
 
   bool ShouldFail() {
-    if (transaction_->interceptor_)
+    if (transaction_->interceptor_) {
       return transaction_->interceptor_->IsOffline();
+    }
     ThrottlingNetworkInterceptor* interceptor =
-        ThrottlingController::GetInterceptor(net_log_with_source_.source().id);
+        ThrottlingController::GetInterceptor(net_log_with_source_.source().id,
+                                             GURL());
     EXPECT_TRUE(!!interceptor);
     return interceptor->IsOffline();
   }
 
-  bool HasStarted() { return !!transaction_->request_; }
+  bool HasStarted() { return transaction_->started_; }
 
   bool HasFailed() { return transaction_->failed_; }
 
@@ -136,9 +145,7 @@ class ThrottlingControllerTestHelper {
                                                           completion_callback_);
   }
 
-  ~ThrottlingControllerTestHelper() {
-    RemoveMockTransaction(&mock_transaction_);
-  }
+  ~ThrottlingControllerTestHelper() = default;
 
   TestCallback* callback() { return &callback_; }
   ThrottlingNetworkTransaction* transaction() { return transaction_.get(); }
@@ -153,10 +160,10 @@ class ThrottlingControllerTestHelper {
   MockNetworkLayer network_layer_;
   TestCallback callback_;
   net::CompletionRepeatingCallback completion_callback_;
-  MockTransaction mock_transaction_;
+  net::ScopedMockTransaction mock_transaction_;
+  std::unique_ptr<net::ChunkedUploadDataStream> upload_data_stream_;
   std::unique_ptr<ThrottlingNetworkTransaction> transaction_;
   scoped_refptr<net::IOBuffer> buffer_;
-  std::unique_ptr<net::ChunkedUploadDataStream> upload_data_stream_;
   std::unique_ptr<MockHttpRequest> request_;
   std::unique_ptr<network::ScopedThrottlingToken> throttling_token_;
   const net::NetLogWithSource net_log_with_source_;
@@ -202,54 +209,6 @@ TEST(ThrottlingControllerTest, FailOnStart) {
   int rv = helper.Start(false);
   EXPECT_EQ(rv, net::ERR_INTERNET_DISCONNECTED);
 
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(helper.callback()->run_count(), 0);
-}
-
-TEST(ThrottlingControllerTest, FailRunningTransaction) {
-  ThrottlingControllerTestHelper helper;
-  helper.SetNetworkState(false, 0, 0);
-  TestCallback* callback = helper.callback();
-
-  int rv = helper.Start(false);
-  EXPECT_EQ(rv, net::OK);
-
-  rv = helper.Read();
-  EXPECT_EQ(rv, net::ERR_IO_PENDING);
-  EXPECT_EQ(callback->run_count(), 0);
-
-  helper.SetNetworkState(true, 0, 0);
-  EXPECT_EQ(callback->run_count(), 0);
-
-  // Wait until HttpTrancation completes reading and invokes callback.
-  // ThrottlingNetworkTransaction should report error instead.
-  helper.FastForwardUntilNoTasksRemain();
-  EXPECT_EQ(callback->run_count(), 1);
-  EXPECT_EQ(callback->value(), net::ERR_INTERNET_DISCONNECTED);
-
-  // Check that transaction is not failed second time.
-  helper.SetNetworkState(false, 0, 0);
-  helper.SetNetworkState(true, 0, 0);
-  EXPECT_EQ(callback->run_count(), 1);
-}
-
-TEST(ThrottlingControllerTest, ReadAfterFail) {
-  ThrottlingControllerTestHelper helper;
-  helper.SetNetworkState(false, 0, 0);
-
-  int rv = helper.Start(false);
-  EXPECT_EQ(rv, net::OK);
-  EXPECT_TRUE(helper.HasStarted());
-
-  helper.SetNetworkState(true, 0, 0);
-  // Not failed yet, as no IO was initiated.
-  EXPECT_FALSE(helper.HasFailed());
-
-  rv = helper.Read();
-  // Fails on first IO.
-  EXPECT_EQ(rv, net::ERR_INTERNET_DISCONNECTED);
-
-  // Check that callback is never invoked.
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(helper.callback()->run_count(), 0);
 }
@@ -349,7 +308,8 @@ TEST(ThrottlingControllerTest, DownloadBufferSizeIsNotModifiedIfNotThrottled) {
   int rv = helper.Start(false);
   EXPECT_EQ(rv, net::OK);
 
-  auto large_data_buffer = base::MakeRefCounted<net::IOBuffer>(kLargeDataSize);
+  auto large_data_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(kLargeDataSize);
   rv = helper.Read(large_data_buffer.get(), kLargeDataSize);
   EXPECT_EQ(rv, net::ERR_IO_PENDING);
   helper.FastForwardUntilNoTasksRemain();
@@ -372,7 +332,8 @@ TEST(ThrottlingControllerTest, DownloadIsStreamed) {
   EXPECT_EQ(callback->run_count(), 1);
   EXPECT_GE(callback->value(), net::OK);
 
-  auto large_data_buffer = base::MakeRefCounted<net::IOBuffer>(kLargeDataSize);
+  auto large_data_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(kLargeDataSize);
   helper.Read(large_data_buffer.get(), kLargeDataSize);
   EXPECT_EQ(rv, net::ERR_IO_PENDING);
   EXPECT_EQ(callback->run_count(), 1);
@@ -380,6 +341,148 @@ TEST(ThrottlingControllerTest, DownloadIsStreamed) {
   EXPECT_EQ(callback->run_count(), 2);
   EXPECT_GT(callback->value(), net::OK);
   EXPECT_LT(callback->value(), kLargeDataSize);
+}
+
+TEST(ThrottlingControllerTest, SetConditions) {
+  ThrottlingControllerTestHelper helper;
+  // Set global conditions
+  helper.SetNetworkState({{std::string{}, NetworkConditions{true}}});
+
+  // Test that only global conditions are set
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 1u);
+
+  // Set matched conditions
+  helper.SetNetworkState({{"http://*/*", NetworkConditions{true}}});
+
+  // Test that only one matched condition is set
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 1u);
+
+  // Set both global and local conditions
+  helper.SetNetworkState({
+      {"http://*/*", NetworkConditions{true}},
+      {std::string{}, NetworkConditions{false}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 2u);
+
+  // Set them the other way around
+  helper.SetNetworkState({
+      {std::string{}, NetworkConditions{false}},
+      {"http://*/*", NetworkConditions{true}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 2u);
+
+  // Try to set an invalid pattern. The parser accepts a lot of weird inputs,
+  // but in some cases fails to parse:
+  helper.SetNetworkState({
+      {"ht tp://", NetworkConditions{false}},
+      {"*.css", NetworkConditions{false}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 0u);
+}
+
+TEST(ThrottlingControllerTest, MultipleGlobalConditions) {
+  ThrottlingControllerTestHelper helper;
+
+  // Set multiple global conditions. The first one wins.
+  helper.SetNetworkState({
+      {std::string{}, NetworkConditions{false, 0.0, 1.0, 0.5}},
+      {std::string{}, NetworkConditions{true}},
+  });
+
+  auto* interceptor = helper.GetThrottlingProfile()->FindInterceptor(
+      GURL("http://example.com"));
+  EXPECT_TRUE(interceptor);
+  EXPECT_EQ(interceptor->conditions().upload_throughput(), 0.5);
+}
+
+TEST(ThrottlingControllerTest, UpdateConditions) {
+  ThrottlingControllerTestHelper helper;
+
+  helper.SetNetworkState({
+      {"http://*", NetworkConditions{false, 0.0, 1.0, 0.5}},
+      {std::string{}, NetworkConditions{false, 0.0, 0.5, 1.0}},
+  });
+
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("http://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            0.5);
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("https://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            1.0);
+
+  // Update conditions for the same patterns.
+  helper.SetNetworkState({
+      {"http://*", NetworkConditions{false, 0.0, 0.5, 1.0}},
+      {std::string{}, NetworkConditions{false, 0.0, 1.0, 0.5}},
+  });
+
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("http://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            1.0);
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("https://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            0.5);
+}
+
+TEST(ThrottlingControllerTest, GroupingMatchedConditions) {
+  ThrottlingControllerTestHelper helper;
+
+  // Multiple patterns with the same conditions get grouped into a single pipe.
+  helper.SetNetworkState({
+      {"http://*", NetworkConditions{true}},
+      {"https://*", NetworkConditions{true}},
+  });
+
+  EXPECT_EQ(helper.GetThrottlingProfile()->matcher_count(), 1u);
+  EXPECT_TRUE(helper.GetThrottlingProfile()->FindInterceptor(
+      GURL("http://example.com")));
+  EXPECT_TRUE(helper.GetThrottlingProfile()->FindInterceptor(
+      GURL("https://example.com")));
+}
+
+TEST(ThrottlingControllerTest, MultipleMatchedConditions) {
+  ThrottlingControllerTestHelper helper;
+
+  // If multiple conditions match a URL, the first one wins.
+  helper.SetNetworkState({
+      {"http://*", NetworkConditions{false, 0.0, 0.5, 1.0}},
+      {"http://example.com", NetworkConditions{false, 0.0, 1.0, 0.5}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("http://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            1.0);
+
+  // Flip the order.
+  helper.SetNetworkState({
+      {"http://example.com", NetworkConditions{false, 0.0, 1.0, 0.5}},
+      {"http://*", NetworkConditions{false, 0.0, 0.5, 1.0}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("http://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            0.5);
+
+  // Global conditions respect the ordering as well
+  helper.SetNetworkState({
+      {std::string{}, NetworkConditions{false, 0.0, 0.5, 1.0}},
+      {"http://example.com", NetworkConditions{false, 0.0, 1.0, 0.5}},
+  });
+  EXPECT_EQ(helper.GetThrottlingProfile()
+                ->FindInterceptor(GURL("http://example.com"))
+                ->conditions()
+                .upload_throughput(),
+            1.0);
 }
 
 }  // namespace network

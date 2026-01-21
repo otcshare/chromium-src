@@ -4,10 +4,15 @@
 
 #include "third_party/blink/renderer/core/loader/render_blocking_resource_manager.h"
 
+#include "base/test/scoped_feature_list.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_shift_tracker.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
@@ -20,8 +25,7 @@ namespace blink {
 class RenderBlockingResourceManagerTest : public SimTest {
  public:
   static Vector<char> ReadAhemWoff2() {
-    return test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2"))
-        ->CopyAs<Vector<char>>();
+    return *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2"));
   }
 
  protected:
@@ -43,10 +47,12 @@ class RenderBlockingResourceManagerTest : public SimTest {
     return GetRenderBlockingResourceManager().FontPreloadTimerIsActiveForTest();
   }
 
-  Element* GetTarget() { return GetDocument().getElementById("target"); }
+  Element* GetTarget() {
+    return GetDocument().getElementById(AtomicString("target"));
+  }
 
   const Font& GetTargetFont() {
-    return GetTarget()->GetLayoutObject()->Style()->GetFont();
+    return *GetTarget()->GetLayoutObject()->Style()->GetFont();
   }
 };
 
@@ -368,7 +374,7 @@ TEST_F(RenderBlockingResourceManagerTest, OptionalFontRemoveAndReadd) {
 
   font_resource.Complete(ReadAhemWoff2());
 
-  Element* style = GetDocument().QuerySelector("style");
+  Element* style = GetDocument().QuerySelector(AtomicString("style"));
   style->remove();
   GetDocument().head()->appendChild(style);
 
@@ -575,7 +581,7 @@ TEST_F(RenderBlockingResourceManagerTest, ScriptInsertedBodyUnblocksRendering) {
     <link rel="stylesheet" href="sheet.css">
   )HTML");
 
-  Element* body = GetDocument().CreateElementForBinding("body");
+  Element* body = GetDocument().CreateElementForBinding(AtomicString("body"));
   GetDocument().setBody(To<HTMLElement>(body), ASSERT_NO_EXCEPTION);
 
   // Rendering should be blocked by the pending stylesheet.
@@ -620,7 +626,7 @@ TEST_F(RenderBlockingResourceManagerTest, ParserBlockingScriptBeforeFont) {
   EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
 
   // Parser is blocked by the synchronous script, so <link> isn't inserted yet.
-  EXPECT_FALSE(GetDocument().QuerySelector("link"));
+  EXPECT_FALSE(GetDocument().QuerySelector(AtomicString("link")));
 
   // Preload scanner should have started font preloading and also the timer.
   // This should happen before the parser sets up the preload link element.
@@ -628,6 +634,385 @@ TEST_F(RenderBlockingResourceManagerTest, ParserBlockingScriptBeforeFont) {
 
   script_resource.Complete();
   font_resource.Complete();
+}
+
+TEST_F(RenderBlockingResourceManagerTest, PausedPageBlocksFontLoading) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <style>
+      @font-face {
+        font-family: custom-font;
+        src: url(https://example.com/font.woff2) format("woff2");
+      }
+      #target {
+        font-size: 10px;
+        position:relative;
+      }
+      @media print {
+        #target {
+            font: 25px/1 custom-font, monospace;
+        }
+      }
+    </style>
+    <span id=target style="">0123456789</span>
+  )HTML");
+
+  auto expected_web_font_width = 250;
+
+  Compositor().BeginFrame();
+  auto original_width = GetTarget()->OffsetWidth();
+  EXPECT_GT(expected_web_font_width, original_width);
+  EXPECT_FALSE(GetTargetFont().ShouldSkipDrawing());
+
+  {
+    // The "custom-font" has not loaded yet.
+    // Print and apply "font: 25px/1 custom-font, monospace" to #target.
+    GetDocument().GetFrame()->StartPrinting(
+        WebPrintParams(gfx::SizeF(300, 400)));
+
+    Compositor().BeginFrame();
+    auto fallback_font_width = GetTarget()->OffsetWidth();
+    // The font size is changed from 10px to 25px.
+    EXPECT_GT(fallback_font_width, original_width);
+    // The web font has not applied yet.
+    EXPECT_GT(expected_web_font_width, fallback_font_width);
+    // The font won't load until the page is resumed, it should render with the
+    // fallback font to avoid invisible text.
+    EXPECT_FALSE(GetTargetFont().ShouldSkipDrawing());
+    GetDocument().GetFrame()->EndPrinting();
+  }
+
+  Compositor().BeginFrame();
+  // The font size is changed back to 10px.
+  EXPECT_EQ(original_width, GetTarget()->OffsetWidth());
+  EXPECT_FALSE(GetTargetFont().ShouldSkipDrawing());
+
+  // Simulate the font resource being fully loaded after the page resumes.
+  font_resource.Complete(ReadAhemWoff2());
+  Compositor().BeginFrame();
+  EXPECT_EQ(original_width, GetTarget()->OffsetWidth());
+  EXPECT_FALSE(GetTargetFont().ShouldSkipDrawing());
+
+  {
+    // The "custom-font" has loaded now.
+    // Print and apply again "font: 25px/1 custom-font, monospace" to #target.
+    GetDocument().GetFrame()->StartPrinting(
+        WebPrintParams(gfx::SizeF(300, 400)));
+
+    Compositor().BeginFrame();
+    // Now that the web font has loaded, it should be used.
+    EXPECT_EQ(expected_web_font_width, GetTarget()->OffsetWidth());
+    EXPECT_FALSE(GetTargetFont().ShouldSkipDrawing());
+    GetDocument().GetFrame()->EndPrinting();
+  }
+}
+
+class RenderBlockingFontTest : public RenderBlockingResourceManagerTest {
+ public:
+  void SetUp() override {
+    // Use a longer timeout to prevent flakiness when test is running slow.
+    std::map<std::string, std::string> parameters;
+    parameters["max-fcp-delay"] = "500";
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        features::kRenderBlockingFonts, parameters);
+    SimTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(RenderBlockingFontTest, FastFontPreloadWithoutOtherBlockingResources) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    Body Content
+  )HTML");
+
+  // Rendering is blocked by font.
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+  test::RunPendingTasks();
+
+  // Rendering is unblocked after font preload finishes.
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+}
+
+TEST_F(RenderBlockingFontTest, SlowFontPreloadWithoutOtherBlockingResources) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    Body Content
+  )HTML");
+
+  // Rendering is blocked by font.
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  // Wait until we've delayed FCP for the max allowed amount of time, and the
+  // relevant timeout fires.
+  test::RunDelayedTasks(
+      base::Milliseconds(features::kMaxFCPDelayMsForRenderBlockingFonts.Get()));
+
+  // Rendering is unblocked as max FCP delay is reached.
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+}
+
+TEST_F(RenderBlockingFontTest,
+       SlowFontPreloadAndSlowBodyWithoutOtherBlockingResources) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+
+  LoadURL("https://example.com");
+  main_resource.Write(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+  )HTML");
+
+  // Rendering is blocked by font.
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  // Wait until we've blocked rendering for the max allowed amount of time since
+  // navigation, and the relevant timeout fires.
+  test::RunDelayedTasks(base::Milliseconds(
+      features::kMaxBlockingTimeMsForRenderBlockingFonts.Get()));
+
+  // The font preload is no longer render-blocking, but Rendering is still
+  // blocked because the document has no body.
+  EXPECT_FALSE(GetRenderBlockingResourceManager().HasRenderBlockingFonts());
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  main_resource.Complete("Body Content");
+
+  // Rendering is unblocked after body is inserted.
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+}
+
+TEST_F(RenderBlockingFontTest, FastFontPreloadWithOtherBlockingResources) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    <link rel="stylesheet" href="https://example.com/style.css">
+    Body Content
+  )HTML");
+
+  font_resource.Complete(ReadAhemWoff2());
+  test::RunPendingTasks();
+
+  // Rendering is still blocked by the style sheet.
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  css_resource.Complete("body { color: red; }");
+  test::RunPendingTasks();
+
+  // Rendering is unblocked after all resources are loaded.
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+}
+
+TEST_F(RenderBlockingFontTest, FontPreloadExceedingMaxBlockingTime) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    <link rel="stylesheet" href="https://example.com/style.css">
+    Body Content
+  )HTML");
+
+  // Wait until we've blocked rendering for the max allowed amount of time since
+  // navigation, and the relevant timeout fires.
+  test::RunDelayedTasks(base::Milliseconds(
+      features::kMaxBlockingTimeMsForRenderBlockingFonts.Get()));
+
+  // The font preload is no longer render-blocking, but we still have a
+  // render-blocking style sheet.
+  EXPECT_FALSE(GetRenderBlockingResourceManager().HasRenderBlockingFonts());
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  css_resource.Complete("body { color: red; }");
+  test::RunPendingTasks();
+
+  // Rendering is unblocked after the style sheet is loaded.
+  EXPECT_FALSE(GetRenderBlockingResourceManager().HasRenderBlockingFonts());
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+}
+
+TEST_F(RenderBlockingFontTest, FontPreloadExceedingMaxFCPDelay) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    <link rel="stylesheet" href="https://example.com/style.css">
+    Body Content
+  )HTML");
+
+  css_resource.Complete("body { color: red; }");
+  test::RunPendingTasks();
+
+  // Now the font is the only render-blocking resource, and rendering would have
+  // started without the font.
+  EXPECT_TRUE(GetRenderBlockingResourceManager().HasRenderBlockingFonts());
+  EXPECT_FALSE(
+      GetRenderBlockingResourceManager().HasNonFontRenderBlockingResources());
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  test::RunDelayedTasks(
+      base::Milliseconds(features::kMaxFCPDelayMsForRenderBlockingFonts.Get()));
+
+  // After delaying FCP for the max allowed time, the font is no longer
+  // render-blocking.
+  EXPECT_FALSE(GetRenderBlockingResourceManager().HasRenderBlockingFonts());
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+}
+
+TEST_F(RenderBlockingFontTest, FontPreloadExceedingBothLimits) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest font_resource("https://example.com/font.woff2",
+                                      "font/woff2");
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css");
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!doctype html>
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+          href="https://example.com/font.woff2">
+    <link rel="stylesheet" href="https://example.com/style.css">
+    Body Content
+  )HTML");
+
+  css_resource.Complete("body { color: red; }");
+
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  test::RunDelayedTasks(
+      base::Milliseconds(features::kMaxFCPDelayMsForRenderBlockingFonts.Get()));
+  test::RunDelayedTasks(base::Milliseconds(
+      features::kMaxBlockingTimeMsForRenderBlockingFonts.Get()));
+
+  EXPECT_FALSE(Compositor().DeferMainFrameUpdate());
+
+  font_resource.Complete(ReadAhemWoff2());
+}
+
+TEST_F(RenderBlockingResourceManagerTest,
+       FontReadyPromiseResolvesWhileRenderThrottled) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  SimRequest iframe_resource("https://cross-origin.com/", "text/html");
+  SimSubresourceRequest font_resource("https://cross-origin.com/font.woff2",
+                                      "font/woff2");
+
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <iframe sandbox="allow-scripts" src="https://cross-origin.com/"></iframe>
+    <div style='height: 200vh'></div>
+  )HTML");
+
+  iframe_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <style>
+      @font-face {
+        font-family: custom-font;
+        src: url(font.woff2) format("woff2");
+      }
+      div {
+        font-family: custom-font;
+      }
+    </style>
+    <div>text</div>
+    <script>
+      var promise_resolved = false;
+      document.fonts.ready.then(() => {
+        promise_resolved = true;
+      });
+    </script>
+  )HTML");
+
+  Compositor().BeginFrame();
+
+  auto* iframe_element = To<HTMLIFrameElement>(
+      GetDocument().QuerySelector(AtomicString("iframe")));
+  LocalFrame* iframe_frame = To<LocalFrame>(iframe_element->ContentFrame());
+  LocalFrameView* iframe_view = iframe_frame->View();
+
+  // Scroll the iframe out of view; iframe rendering should become throttled.
+  GetDocument().domWindow()->scrollByForTesting(
+      0, GetDocument().View()->Size().height());
+  GetDocument().View()->ScheduleAnimation();
+  Compositor().BeginFrame();
+  ASSERT_TRUE(iframe_view->CanThrottleRendering());
+
+  // Complete load of the font resource; this will schedule
+  // FireDoneEventIfPossible via PostTask.
+  font_resource.Complete(ReadAhemWoff2());
+
+  // Dirty layout; this is equivalent to JS:
+  //   div.style.height = "2rem"; getComputedStyle(div).color;
+  Element* iframe_div =
+      iframe_frame->GetDocument()->QuerySelector(AtomicString("div"));
+  iframe_div->SetInlineStyleProperty(CSSPropertyID::kHeight, "2rem");
+  MakeGarbageCollected<CSSComputedStyleDeclaration>(iframe_div)
+      ->GetPropertyCSSValue(CSSPropertyID::kColor);
+
+  // Iframe is throttled, layout should remain dirty after BeginFrame().
+  Compositor().BeginFrame();
+  ASSERT_TRUE(iframe_view->NeedsLayout());
+
+  // Even with dirty layout, we should still resolve `document.fonts.ready`.
+  test::RunPendingTasks();
+  v8::HandleScope scope(iframe_frame->DomWindow()->GetIsolate());
+  EXPECT_TRUE(WebLocalFrameImpl::FromFrame(iframe_frame)
+                  ->ExecuteScriptAndReturnValue(
+                      WebScriptSource(WebString::FromASCII("promise_resolved")))
+                  ->IsTrue());
 }
 
 }  // namespace blink

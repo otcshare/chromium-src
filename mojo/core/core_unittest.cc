@@ -8,7 +8,8 @@
 
 #include <limits>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
 #include "mojo/core/core_test_base.h"
@@ -33,6 +34,10 @@ const MojoHandleSignals kAllSignals =
 using CoreTest = test::CoreTestBase;
 
 TEST_F(CoreTest, GetTimeTicksNow) {
+  if (IsMojoIpczEnabled()) {
+    GTEST_SKIP() << "Not relevant when MojoIpcz is enabled.";
+  }
+
   const MojoTimeTicks start = core()->GetTimeTicksNow();
   ASSERT_NE(static_cast<MojoTimeTicks>(0), start)
       << "GetTimeTicksNow should return nonzero value";
@@ -382,8 +387,8 @@ TEST_F(CoreTest, DataPipe) {
 
   // Actually write the data, and complete it now.
   static_cast<char*>(write_ptr)[0] = 'C';
-  static_cast<char*>(write_ptr)[1] = 'D';
-  static_cast<char*>(write_ptr)[2] = 'E';
+  UNSAFE_TODO(static_cast<char*>(write_ptr)[1]) = 'D';
+  UNSAFE_TODO(static_cast<char*>(write_ptr)[2]) = 'E';
   ASSERT_EQ(MOJO_RESULT_OK, core()->EndWriteData(ph, 3u, nullptr));
 
   // Wait for the data to arrive to the consumer.
@@ -444,8 +449,8 @@ TEST_F(CoreTest, DataPipe) {
 
   // Actually check our data and end the two-phase read.
   ASSERT_EQ('C', static_cast<const char*>(read_ptr)[0]);
-  ASSERT_EQ('D', static_cast<const char*>(read_ptr)[1]);
-  ASSERT_EQ('E', static_cast<const char*>(read_ptr)[2]);
+  UNSAFE_TODO(ASSERT_EQ('D', static_cast<const char*>(read_ptr)[1]));
+  UNSAFE_TODO(ASSERT_EQ('E', static_cast<const char*>(read_ptr)[2]));
   ASSERT_EQ(MOJO_RESULT_OK, core()->EndReadData(ch, 3u, nullptr));
 
   // Consumer should now be no longer readable.

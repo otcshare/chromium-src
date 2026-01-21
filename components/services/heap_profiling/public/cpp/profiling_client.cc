@@ -6,33 +6,28 @@
 
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "base/allocator/partition_allocator/partition_alloc_buildflags.h"
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/debug/stack_trace.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/sampling_heap_profiler/poisson_allocation_sampler.h"
 #include "base/sampling_heap_profiler/sampling_heap_profiler.h"
-#include "base/task/thread_pool.h"
 #include "base/trace_event/heap_profiler_allocation_context_tracker.h"
 #include "base/trace_event/malloc_dump_provider.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "build/build_config.h"
+#include "partition_alloc/buildflags.h"
 
-#if !BUILDFLAG(IS_IOS)
-#include "components/services/heap_profiling/public/cpp/heap_profiling_trace_source.h"
-#endif
+#if BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+#include "partition_alloc/shim/allocator_interception_apple.h"
+#endif  // BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        // && PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
-#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
-    defined(OFFICIAL_BUILD)
-#include "base/trace_event/cfi_backtrace_android.h"
-#endif
-
-#if BUILDFLAG(IS_APPLE)
-#include "base/allocator/partition_allocator/shim/allocator_interception_mac.h"
-#endif
+using base::allocator::dispatcher::AllocationSubsystem;
 
 namespace heap_profiling {
 
@@ -44,46 +39,46 @@ void ProfilingClient::BindToInterface(
   receivers_.Add(this, std::move(receiver));
 }
 
+#if BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+void ShimNewMallocZonesAndReschedule(base::Time end_time,
+                                     base::TimeDelta delay) {
+  allocator_shim::ShimNewMallocZones();
+
+  if (base::Time::Now() > end_time) {
+    return;
+  }
+
+  base::TimeDelta next_delay = delay * 2;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&ShimNewMallocZonesAndReschedule, end_time, next_delay),
+      delay);
+}
+#endif  // BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        // && BULDFLAG(USE_ALLOCATOR_SHIM)
+
 void ProfilingClient::StartProfiling(mojom::ProfilingParamsPtr params,
                                      StartProfilingCallback callback) {
   if (started_profiling_)
     return;
   started_profiling_ = true;
 
-#if BUILDFLAG(IS_APPLE) && !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
   // On macOS, this call is necessary to shim malloc zones that were created
   // after startup. This cannot be done during shim initialization because the
   // task scheduler has not yet been initialized.
   //
   // Wth PartitionAlloc, the shims are already in place, calling this leads to
   // an infinite loop.
-  allocator_shim::PeriodicallyShimNewMallocZones();
-#endif  // BUILDFLAG(IS_APPLE) && !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  base::Time end_time = base::Time::Now() + base::Minutes(1);
+  base::TimeDelta initial_delay = base::Seconds(1);
+  ShimNewMallocZonesAndReschedule(end_time, initial_delay);
+#endif  // BUILDFLAG(IS_APPLE) && !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        // && PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
-#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
-    defined(OFFICIAL_BUILD)
-  // On Android the unwinder initialization requires file reading before
-  // initializing shim. So, post task on background thread.
-  base::ThreadPool::PostTaskAndReply(
-      FROM_HERE,
-      {base::TaskPriority::BEST_EFFORT, base::MayBlock(),
-       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce([]() {
-        base::trace_event::CFIBacktraceAndroid::GetInitializedInstance()
-            ->can_unwind_stack_frames();
-        // Ignore failures since the default unwind tables are used as backup.
-      }),
-      base::BindOnce(&ProfilingClient::StartProfilingInternal,
-                     base::Unretained(this), std::move(params),
-                     std::move(callback)));
-#else
   StartProfilingInternal(std::move(params), std::move(callback));
-#endif
-
-#if !BUILDFLAG(IS_IOS)
-  // Create trace source so that it registers itself to the tracing system.
-  HeapProfilingTraceSource::GetInstance();
-#endif
 }
 
 namespace {
@@ -112,19 +107,23 @@ void InitAllocationRecorder(mojom::ProfilingParamsPtr params) {
   using base::trace_event::AllocationContextTracker;
   using CaptureMode = base::trace_event::AllocationContextTracker::CaptureMode;
 
-  // Must be done before hooking any functions that make stack traces.
+#if !BUILDFLAG(IS_WIN) || !defined(OFFICIAL_BUILD)
+  // Must be done before hooking any functions that make stack traces. Windows
+  // release builds crash if symbols are requested after sandbox lockdown, but
+  // will still produce address-only stacks if this function not called.
   base::debug::EnableInProcessStackDumping();
+#endif
 
   if (params->stack_mode == mojom::StackMode::NATIVE_WITH_THREAD_NAMES) {
     g_include_thread_names = true;
-    base::SamplingHeapProfiler::Get()->SetRecordThreadNames(true);
+    base::SamplingHeapProfiler::Get()->EnableRecordThreadNames();
   }
 
   switch (params->stack_mode) {
     case mojom::StackMode::NATIVE_WITH_THREAD_NAMES:
     case mojom::StackMode::NATIVE_WITHOUT_THREAD_NAMES:
       // This would track task contexts only.
-      AllocationContextTracker::SetCaptureMode(CaptureMode::NATIVE_STACK);
+      AllocationContextTracker::SetCaptureMode(CaptureMode::kNativeStack);
       break;
   }
 }
@@ -139,16 +138,14 @@ void AllocatorHooksHaveBeenInitialized() {
       FROM_HERE, std::move(GetOnInitAllocatorShimCallback()));
 }
 
-mojom::AllocatorType ConvertType(
-    base::PoissonAllocationSampler::AllocatorType type) {
+mojom::AllocatorType ConvertType(AllocationSubsystem type) {
   switch (type) {
-    case base::PoissonAllocationSampler::AllocatorType::kMalloc:
+    case AllocationSubsystem::kAllocatorShim:
       return mojom::AllocatorType::kMalloc;
-    case base::PoissonAllocationSampler::AllocatorType::kPartitionAlloc:
+    case AllocationSubsystem::kPartitionAllocator:
       return mojom::AllocatorType::kPartitionAlloc;
-    case base::PoissonAllocationSampler::AllocatorType::kManualForTesting:
+    case AllocationSubsystem::kManualForTesting:
       NOTREACHED();
-      return mojom::AllocatorType::kMalloc;
   }
 }
 
@@ -202,8 +199,8 @@ void ProfilingClient::RetrieveHeapProfile(
     mojo_sample->stack.insert(
         mojo_sample->stack.end(),
         reinterpret_cast<const uintptr_t*>(sample.stack.data()),
-        reinterpret_cast<const uintptr_t*>(sample.stack.data() +
-                                           sample.stack.size()));
+        reinterpret_cast<const uintptr_t*>(
+            UNSAFE_TODO(sample.stack.data() + sample.stack.size())));
     if (g_include_thread_names) {
       static const char* kUnknownThreadName = "<unknown>";
       const char* thread_name =
@@ -220,24 +217,6 @@ void ProfilingClient::RetrieveHeapProfile(
     profile->strings.emplace(reinterpret_cast<uintptr_t>(string), string);
 
   std::move(callback).Run(std::move(profile));
-}
-
-void ProfilingClient::AddHeapProfileToTrace(
-    AddHeapProfileToTraceCallback callback) {
-  auto* profiler = base::SamplingHeapProfiler::Get();
-  std::vector<base::SamplingHeapProfiler::Sample> samples =
-      profiler->GetSamples(/*profile_id=*/0);
-
-#if !BUILDFLAG(IS_IOS)
-  bool success =
-      HeapProfilingTraceSource::GetInstance()->AddToTraceIfEnabled(samples);
-#else
-  bool success = false;
-  // Tracing is not supported in iOS.
-  NOTREACHED();
-#endif
-
-  std::move(callback).Run(success);
 }
 
 }  // namespace heap_profiling

@@ -6,9 +6,9 @@
 #define SERVICES_DEVICE_SERIAL_BLUETOOTH_SERIAL_PORT_IMPL_H_
 
 #include "base/containers/span.h"
+#include "base/memory/raw_span.h"
 #include "base/sequence_checker.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_socket.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -76,10 +76,8 @@ class BluetoothSerialPortImpl : public mojom::SerialPort {
   void ReadMore();
   void WriteMore();
 
-  void OnSocketConnected(OpenCallback callback,
-                         scoped_refptr<BluetoothSocket> socket);
-  void OnSocketConnectedError(OpenCallback callback,
-                              const std::string& message);
+  void OnSocketConnected(scoped_refptr<BluetoothSocket> socket);
+  void OnSocketConnectedError(const std::string& message);
 
   void OnBluetoothSocketReceive(int num_bytes_received,
                                 scoped_refptr<net::IOBuffer> receive_buffer);
@@ -102,7 +100,7 @@ class BluetoothSerialPortImpl : public mojom::SerialPort {
 
   // Used for pending writes to |out_stream_|. When empty this indicates that
   // |out_stream_| has been closed (and possibly replaced).
-  base::span<char> pending_write_buffer_;
+  base::raw_span<char> pending_write_buffer_;
 
   // Holds the callback for a drain until pending operations have been
   // completed.
@@ -126,6 +124,9 @@ class BluetoothSerialPortImpl : public mojom::SerialPort {
   scoped_refptr<net::IOBuffer> receive_buffer_;
 
   mojom::SerialConnectionOptionsPtr options_;
+
+  // Callback for the ongoing connect socket request.
+  OpenCallback open_callback_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

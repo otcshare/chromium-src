@@ -34,11 +34,13 @@
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/literal_buffer.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
-class DoctypeData {
+struct DoctypeData {
   USING_FAST_MALLOC(DoctypeData);
 
  public:
@@ -51,9 +53,37 @@ class DoctypeData {
 
   bool has_public_identifier_;
   bool has_system_identifier_;
-  WTF::Vector<UChar> public_identifier_;
-  WTF::Vector<UChar> system_identifier_;
+  Vector<UChar> public_identifier_;
+  Vector<UChar> system_identifier_;
   bool force_quirks_;
+};
+
+enum class DOMPartTokenType {
+  kChildNodePartStart,
+  kChildNodePartEnd,
+};
+
+struct DOMPartData {
+  USING_FAST_MALLOC(DOMPartData);
+
+ public:
+  explicit DOMPartData(DOMPartTokenType type) : type_(type) {
+    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+  }
+  DOMPartData(const DOMPartData&) = delete;
+  DOMPartData& operator=(const DOMPartData&) = delete;
+
+  Vector<String> metadata_;
+  DOMPartTokenType type_;
+};
+
+struct DOMPartsNeeded {
+ public:
+  bool needs_node_part{false};
+  Vector<AtomicString> needs_attribute_parts{};
+  explicit operator bool() const {
+    return needs_node_part || !needs_attribute_parts.empty();
+  }
 };
 
 static inline Attribute* FindAttributeInVector(base::span<Attribute> attributes,
@@ -77,6 +107,7 @@ class HTMLToken {
     kComment,
     kCharacter,
     kEndOfFile,
+    kDOMPart,
   };
 
   class Attribute {
@@ -87,19 +118,12 @@ class HTMLToken {
     const UCharLiteralBuffer<32>& NameBuffer() const { return name_; }
 
     String NameAttemptStaticStringCreation() const {
-      return AttemptStaticStringCreation(name_, kLikely8Bit);
+      return AttemptStaticStringCreation(name_);
     }
 
     bool NameIsEmpty() const { return name_.IsEmpty(); }
     void AppendToName(UChar c) { name_.AddChar(c); }
 
-    String Value8BitIfNecessary() const {
-      // TODO(sky): remove this function and convert callers to Value() once
-      // `g_literal_buffer_create_string_with_encoding` is removed.
-      if (!g_literal_buffer_create_string_with_encoding)
-        return StringImpl::Create8BitIfPossible(value_.data(), value_.size());
-      return value_.AsString();
-    }
     String Value() const { return value_.AsString(); }
 
     void AppendToValue(UChar c) { value_.AddChar(c); }
@@ -131,8 +155,10 @@ class HTMLToken {
     copy->data_ = std::move(data_);
     copy->attributes_ = std::move(attributes_);
     copy->doctype_data_ = std::move(doctype_data_);
+    copy->dom_part_data_ = std::move(dom_part_data_);
     copy->type_ = type_;
     copy->self_closing_ = self_closing_;
+    copy->dom_parts_needed_ = dom_parts_needed_;
     // Reset to uninitialized.
     Clear();
     return copy;
@@ -163,8 +189,6 @@ class HTMLToken {
            type_ == kEndTag);
     return data_;
   }
-
-  ALWAYS_INLINE bool IsAll8BitData() const { return data_.Is8Bit(); }
 
   const DataVector& GetName() const {
     DCHECK(type_ == kStartTag || type_ == kEndTag || type_ == DOCTYPE);
@@ -202,13 +226,13 @@ class HTMLToken {
   }
 
   // FIXME: Distinguish between a missing public identifer and an empty one.
-  const WTF::Vector<UChar>& PublicIdentifier() const {
+  const Vector<UChar>& PublicIdentifier() const {
     DCHECK_EQ(type_, DOCTYPE);
     return doctype_data_->public_identifier_;
   }
 
   // FIXME: Distinguish between a missing system identifer and an empty one.
-  const WTF::Vector<UChar>& SystemIdentifier() const {
+  const Vector<UChar>& SystemIdentifier() const {
     DCHECK_EQ(type_, DOCTYPE);
     return doctype_data_->system_identifier_;
   }
@@ -260,6 +284,7 @@ class HTMLToken {
     DCHECK_EQ(type_, kUninitialized);
     type_ = kStartTag;
     self_closing_ = false;
+    dom_parts_needed_ = {};
     DCHECK(!current_attribute_);
     DCHECK(attributes_.empty());
 
@@ -366,6 +391,37 @@ class HTMLToken {
     data_.AddChar(character);
   }
 
+  /* DOM Part Tokens */
+
+  ALWAYS_INLINE void BeginDOMPart(DOMPartTokenType type) {
+    DCHECK_EQ(type_, kUninitialized);
+    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+    type_ = kDOMPart;
+    dom_part_data_ = std::make_unique<DOMPartData>(type);
+  }
+
+  std::unique_ptr<DOMPartData> ReleaseDOMPartData() {
+    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
+    return std::move(dom_part_data_);
+  }
+
+  DOMPartsNeeded GetDOMPartsNeeded() {
+    DCHECK_EQ(type_, kStartTag);
+    return dom_parts_needed_;
+  }
+
+  void SetNeedsNodePart() {
+    DCHECK_EQ(type_, kStartTag);
+    dom_parts_needed_.needs_node_part = true;
+  }
+
+  void SetNeedsAttributePart() {
+    DCHECK_EQ(type_, kStartTag);
+    DCHECK(!current_attribute_->NameIsEmpty());
+    dom_parts_needed_.needs_attribute_parts.push_back(
+        current_attribute_->GetName());
+  }
+
  private:
   DataVector data_;
 
@@ -376,6 +432,10 @@ class HTMLToken {
 
   // For DOCTYPE
   std::unique_ptr<DoctypeData> doctype_data_;
+
+  // For DOM Parts API
+  std::unique_ptr<DOMPartData> dom_part_data_;
+  DOMPartsNeeded dom_parts_needed_;
 
   TokenType type_ = kUninitialized;
 

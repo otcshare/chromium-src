@@ -7,12 +7,12 @@
 #include <utility>
 
 #include "ash/constants/ash_paths.h"
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/ash/login/test/embedded_policy_test_server_mixin.h"
+#include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
@@ -21,6 +21,7 @@
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/dbus/constants/dbus_paths.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace ash {
 
@@ -80,9 +81,8 @@ void UserPolicyMixin::SetUpUserKeysFile(const std::string& user_key_bits) {
       user_keys_dir.AppendASCII(sanitized_username).AppendASCII("policy.pub");
 
   CHECK(base::CreateDirectory(user_key_file.DirName()));
-  int write_result = base::WriteFile(user_key_file, user_key_bits.data(),
-                                     user_key_bits.length());
-  DCHECK_EQ(static_cast<int>(user_key_bits.length()), write_result);
+  bool success = base::WriteFile(user_key_file, user_key_bits);
+  DCHECK(success);
 }
 
 void UserPolicyMixin::SetUpPolicy() {
@@ -92,7 +92,8 @@ void UserPolicyMixin::SetUpPolicy() {
   }
 
   user_policy_builder_.policy_data().set_username(account_id_.GetUserEmail());
-  user_policy_builder_.policy_data().set_gaia_id(account_id_.GetGaiaId());
+  user_policy_builder_.policy_data().set_gaia_id(
+      account_id_.GetGaiaId().ToString());
   user_policy_builder_.policy_data().set_public_key_version(1);
 
   user_policy_builder_.SetDefaultSigningKey();

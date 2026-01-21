@@ -6,21 +6,23 @@
 #define UI_OZONE_PUBLIC_SURFACE_FACTORY_OZONE_H_
 
 #include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/native_library.h"
 #include "gpu/vulkan/buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_pixmap.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/overlay_transform.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/ozone/public/drm_modifiers_filter.h"
 #include "ui/ozone/public/gl_ozone.h"
 
 #if BUILDFLAG(ENABLE_VULKAN)
@@ -97,13 +99,12 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
       bool use_swiftshader,
       bool allow_protected_memory);
 
-  // Creates a scanout NativePixmap that can be rendered using Vulkan.
+  // Creates a BGRA_8888 scanout NativePixmap that can be rendered using Vulkan.
   // TODO(spang): Remove this once VK_EXT_image_drm_format_modifier is
   // available.
   virtual scoped_refptr<gfx::NativePixmap> CreateNativePixmapForVulkan(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
       gfx::BufferUsage usage,
       VkDevice vk_device,
       VkDeviceMemory* vk_device_memory,
@@ -146,28 +147,18 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
       gfx::AcceleratedWidget widget,
       gpu::VulkanDeviceQueue* device_queue,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
-      absl::optional<gfx::Size> framebuffer_size = absl::nullopt);
+      std::optional<gfx::Size> framebuffer_size = std::nullopt);
 
-  virtual bool CanCreateNativePixmapForFormat(gfx::BufferFormat format);
-
-  // Similar to CreateNativePixmap, but returns the result asynchronously.
-  using NativePixmapCallback =
-      base::OnceCallback<void(scoped_refptr<gfx::NativePixmap>)>;
-  virtual void CreateNativePixmapAsync(gfx::AcceleratedWidget widget,
-                                       gpu::VulkanDeviceQueue* device_queue,
-                                       gfx::Size size,
-                                       gfx::BufferFormat format,
-                                       gfx::BufferUsage usage,
-                                       NativePixmapCallback callback);
+  virtual bool CanCreateNativePixmapForFormat(viz::SharedImageFormat format);
 
   // Create a single native buffer from an existing handle. Takes ownership of
   // |handle| and can be called on any thread.
   virtual scoped_refptr<gfx::NativePixmap> CreateNativePixmapFromHandle(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle);
 
   // A temporary solution that allows protected NativePixmap management to be
@@ -179,7 +170,7 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
   virtual scoped_refptr<gfx::NativePixmap>
   CreateNativePixmapForProtectedBufferHandle(gfx::AcceleratedWidget widget,
                                              gfx::Size size,
-                                             gfx::BufferFormat format,
+                                             viz::SharedImageFormat format,
                                              gfx::NativePixmapHandle handle);
 
   // This callback can be used by implementations of this interface to query
@@ -201,16 +192,30 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
       const GetProtectedNativePixmapCallback&
           get_protected_native_pixmap_callback);
 
-  // Enumerates the BufferFormats that the platform can allocate (and use for
-  // texturing) via CreateNativePixmap(), or returns empty if those could not be
-  // retrieved or the platform doesn't know in advance.
+  // Returns whether the platform supports an external filter on DRM modifiers.
+  virtual bool SupportsDrmModifiersFilter() const;
+
+  // Sets the filter that can remove modifiers incompatible with usage elsewhere
+  // in Chrome.
+  virtual void SetDrmModifiersFilter(
+      std::unique_ptr<DrmModifiersFilter> filter);
+
+  // Checks if the platform can allocate (and use for texturing) via
+  // CreateNativePixmap() the provided `format`. Checks should not be assumed to
+  // take a trivial amount of time.
+  virtual bool IsFormatSupportedForTexturing(
+      viz::SharedImageFormat format) const;
+
+  // Enumerates the SharedImageFormats that the platform can import via
+  // CreateNativePixmapFromHandle() to use for GL, or returns empty if those
+  // could not be retrieved or the platform doesn't know in advance.
   // Enumeration should not be assumed to take a trivial amount of time.
-  virtual std::vector<gfx::BufferFormat> GetSupportedFormatsForTexturing()
-      const;
+  std::vector<viz::SharedImageFormat>
+  GetSupportedFormatsForGLNativePixmapImport();
 
   // This returns a preferred format for solid color image on Wayland.
-  virtual absl::optional<gfx::BufferFormat> GetPreferredFormatForSolidColor()
-      const;
+  virtual std::optional<viz::SharedImageFormat>
+  GetPreferredFormatForSolidColor() const;
 
  protected:
   SurfaceFactoryOzone();

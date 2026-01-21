@@ -4,7 +4,6 @@
 
 #include "chrome/browser/policy/messaging_layer/util/report_queue_manual_test_context.h"
 
-#include "base/bind.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
@@ -24,7 +23,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::IsEmpty;
 using ::testing::WithArgs;
 
@@ -45,8 +43,7 @@ class ReportQueueManualTestContextTest : public testing::Test {
         std::unique_ptr<MockReportQueue, base::OnTaskRunnerDeleter>(
             new MockReportQueue(), base::OnTaskRunnerDeleter(task_runner_));
 
-    policy::SetDMTokenForTesting(
-        policy::DMToken::CreateValidTokenForTesting("ABCDEF"));
+    policy::SetDMTokenForTesting(policy::DMToken::CreateValidToken("ABCDEF"));
   }
 
   StatusOr<std::unique_ptr<ReportQueue, base::OnTaskRunnerDeleter>> BuildQueue(
@@ -73,7 +70,7 @@ class ReportQueueManualTestContextTest : public testing::Test {
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 };
 
-// TODO(crbug.com/1383860) Disabled due to flake on Mac.
+// TODO(crbug.com/40878091) Disabled due to flake on Mac.
 #if BUILDFLAG(IS_MAC)
 TEST_F(
     ReportQueueManualTestContextTest,
@@ -85,14 +82,39 @@ TEST_F(ReportQueueManualTestContextTest,
   EXPECT_CALL(*mock_report_queue_, AddRecord(_, _, _))
       .Times(kNumberOfMessagesToEnqueue)
       .WillRepeatedly(
-          WithArgs<2>(Invoke([](ReportQueue::EnqueueCallback enqueue_callback) {
+          WithArgs<2>([](ReportQueue::EnqueueCallback enqueue_callback) {
             std::move(enqueue_callback).Run(Status::StatusOK());
-          })));
+          }));
 
   test::TestEvent<Status> completion_event;
   Start<ReportQueueManualTestContext>(
       kMessagePeriod, kNumberOfMessagesToEnqueue, kDestination, kPriority,
-      completion_event.cb(), task_runner_, GetQueueBuilder());
+      EventType::kDevice, completion_event.cb(), task_runner_,
+      GetQueueBuilder());
+
+  const Status status = completion_event.result();
+  EXPECT_OK(status) << status;
+  EXPECT_THAT(dm_token_, IsEmpty());
+}
+
+#if BUILDFLAG(IS_MAC)
+TEST_F(ReportQueueManualTestContextTest,
+       DISABLED_BuildsReportQueueManualTestContextAndUploadsUserEventMessages) {
+#else
+TEST_F(ReportQueueManualTestContextTest,
+       BuildsReportQueueManualTestContextAndUploadsUserEventMessages) {
+#endif
+  EXPECT_CALL(*mock_report_queue_, AddRecord(_, _, _))
+      .Times(kNumberOfMessagesToEnqueue)
+      .WillRepeatedly(
+          WithArgs<2>([](ReportQueue::EnqueueCallback enqueue_callback) {
+            std::move(enqueue_callback).Run(Status::StatusOK());
+          }));
+
+  test::TestEvent<Status> completion_event;
+  Start<ReportQueueManualTestContext>(
+      kMessagePeriod, kNumberOfMessagesToEnqueue, kDestination, kPriority,
+      EventType::kUser, completion_event.cb(), task_runner_, GetQueueBuilder());
 
   const Status status = completion_event.result();
   EXPECT_OK(status) << status;

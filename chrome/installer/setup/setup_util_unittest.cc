@@ -4,17 +4,20 @@
 
 #include "chrome/installer/setup/setup_util_unittest.h"
 
-#include <shlobj.h>
 #include <windows.h>
 
+#include <shlobj.h>
+
+#include <algorithm>
 #include <ios>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
@@ -33,7 +36,6 @@
 #include "base/win/scoped_handle.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_for_testing/buildflags.h"
 #include "chrome/install_static/install_details.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/install_static/test/scoped_install_details.h"
@@ -95,7 +97,7 @@ TEST(SetupUtilTest, DeleteFileFromTempProcess) {
   base::FilePath test_file;
   base::CreateTemporaryFileInDir(test_dir.GetPath(), &test_file);
   ASSERT_TRUE(base::PathExists(test_file));
-  base::WriteFile(test_file, "foo", 3);
+  base::WriteFile(test_file, "foo");
   EXPECT_TRUE(installer::DeleteFileFromTempProcess(test_file, 0));
   base::PlatformThread::Sleep(TestTimeouts::tiny_timeout() * 3);
   EXPECT_FALSE(base::PathExists(test_file)) << test_file.value();
@@ -136,10 +138,10 @@ TEST(SetupUtilTest, RegisterEventLogProvider) {
             key.Open(HKEY_LOCAL_MACHINE, reg_path.c_str(), KEY_READ));
 }
 
-const char kAdjustProcessPriority[] = "adjust-process-priority";
+const char kAdjustThreadPriority[] = "adjust-thread-priority";
 
-PriorityClassChangeResult DoProcessPriorityAdjustment() {
-  return installer::AdjustProcessPriority() ? PCCR_CHANGED : PCCR_UNCHANGED;
+PriorityClassChangeResult DoThreadPriorityAdjustment() {
+  return installer::AdjustThreadPriority() ? PCCR_CHANGED : PCCR_UNCHANGED;
 }
 
 namespace {
@@ -186,9 +188,9 @@ ScopedPriorityClass::~ScopedPriorityClass() {
   EXPECT_NE(FALSE, result);
 }
 
-PriorityClassChangeResult RelaunchAndDoProcessPriorityAdjustment() {
+PriorityClassChangeResult RelaunchAndDoThreadPriorityAdjustment() {
   base::CommandLine cmd_line(*base::CommandLine::ForCurrentProcess());
-  cmd_line.AppendSwitch(kAdjustProcessPriority);
+  cmd_line.AppendSwitch(kAdjustThreadPriority);
   base::Process process = base::LaunchProcess(cmd_line, base::LaunchOptions());
   int exit_code = 0;
   if (!process.IsValid()) {
@@ -212,7 +214,7 @@ TEST(SetupUtilTest, AdjustFromNormalPriority) {
                  << std::hex << priority_class;
     return;
   }
-  EXPECT_EQ(PCCR_UNCHANGED, RelaunchAndDoProcessPriorityAdjustment());
+  EXPECT_EQ(PCCR_UNCHANGED, RelaunchAndDoThreadPriorityAdjustment());
 }
 
 // Launching a subprocess below normal priority class drops it to bg mode for
@@ -224,7 +226,7 @@ TEST(SetupUtilTest, AdjustFromBelowNormalPriority) {
     below_normal = ScopedPriorityClass::Create(BELOW_NORMAL_PRIORITY_CLASS);
     ASSERT_TRUE(below_normal);
   }
-  EXPECT_EQ(PCCR_CHANGED, RelaunchAndDoProcessPriorityAdjustment());
+  EXPECT_EQ(PCCR_CHANGED, RelaunchAndDoThreadPriorityAdjustment());
 }
 
 TEST(SetupUtilTest, GetInstallAge) {
@@ -246,7 +248,7 @@ TEST(SetupUtilTest, GetInstallAge) {
       FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-  ASSERT_TRUE(dir.IsValid());
+  ASSERT_TRUE(dir.is_valid());
 
   FILE_BASIC_INFO info = {};
   ASSERT_NE(0, ::GetFileInformationByHandleEx(dir.Get(), FileBasicInfo, &info,
@@ -263,16 +265,17 @@ TEST(SetupUtilTest, GetInstallAge) {
 TEST(SetupUtilTest, RecordUnPackMetricsTest) {
   base::HistogramTester histogram_tester;
   std::string unpack_status_metrics_name =
-      std::string(installer::kUnPackStatusMetricsName) + "_SetupExePatch";
+      std::string(installer::kUnPackStatusMetricsName) +
+      "_UncompressedChromeArchive";
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 0);
 
   RecordUnPackMetrics(UnPackStatus::UNPACK_NO_ERROR,
-                      installer::UnPackConsumer::SETUP_EXE_PATCH);
+                      installer::UnPackConsumer::UNCOMPRESSED_CHROME_ARCHIVE);
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 1);
   histogram_tester.ExpectBucketCount(unpack_status_metrics_name, 0, 1);
 
   RecordUnPackMetrics(UnPackStatus::UNPACK_EXTRACT_ERROR,
-                      installer::UnPackConsumer::SETUP_EXE_PATCH);
+                      installer::UnPackConsumer::UNCOMPRESSED_CHROME_ARCHIVE);
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 2);
   histogram_tester.ExpectBucketCount(unpack_status_metrics_name, 4, 1);
 }
@@ -372,177 +375,11 @@ TEST(SetupUtilTest, DeleteDowngradeVersion) {
   ASSERT_FALSE(InstallUtil::GetDowngradeVersion());
 }
 
-namespace {
-
-// A test fixture that configures an InstallationState and an InstallerState
-// with a product being updated.
-class FindArchiveToPatchTest : public testing::Test {
- public:
-  FindArchiveToPatchTest(const FindArchiveToPatchTest&) = delete;
-  FindArchiveToPatchTest& operator=(const FindArchiveToPatchTest&) = delete;
-
- protected:
-  class FakeInstallationState : public installer::InstallationState {};
-
-  class FakeProductState : public installer::ProductState {
-   public:
-    static FakeProductState* FromProductState(const ProductState* product) {
-      return static_cast<FakeProductState*>(const_cast<ProductState*>(product));
-    }
-
-    void set_version(const base::Version& version) {
-      if (version.IsValid())
-        version_ = std::make_unique<base::Version>(version);
-      else
-        version_.reset();
-    }
-
-    void set_uninstall_command(const base::CommandLine& uninstall_command) {
-      uninstall_command_ = uninstall_command;
-    }
-  };
-
-  FindArchiveToPatchTest() {}
-
-  void SetUp() override {
-    ASSERT_TRUE(test_dir_.CreateUniqueTempDir());
-    ASSERT_NO_FATAL_FAILURE(
-        registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER));
-    ASSERT_NO_FATAL_FAILURE(
-        registry_override_manager_.OverrideRegistry(HKEY_LOCAL_MACHINE));
-    product_version_ = base::Version("30.0.1559.0");
-    max_version_ = base::Version("47.0.1559.0");
-
-    // Install the product according to the version.
-    original_state_ = std::make_unique<FakeInstallationState>();
-    InstallProduct();
-
-    // Prepare to update the product in the temp dir.
-    installer_state_ = std::make_unique<installer::InstallerState>(
-        kSystemInstall_ ? installer::InstallerState::SYSTEM_LEVEL
-                        : installer::InstallerState::USER_LEVEL);
-    installer_state_->set_target_path_for_testing(test_dir_.GetPath());
-
-    // Create archives in the two version dirs.
-    ASSERT_TRUE(
-        base::CreateDirectory(GetProductVersionArchivePath().DirName()));
-    ASSERT_EQ(1, base::WriteFile(GetProductVersionArchivePath(), "a", 1));
-    ASSERT_TRUE(base::CreateDirectory(GetMaxVersionArchivePath().DirName()));
-    ASSERT_EQ(1, base::WriteFile(GetMaxVersionArchivePath(), "b", 1));
-  }
-
-  void TearDown() override { original_state_.reset(); }
-
-  base::FilePath GetArchivePath(const base::Version& version) const {
-    return test_dir_.GetPath()
-        .AppendASCII(version.GetString())
-        .Append(installer::kInstallerDir)
-        .Append(installer::kChromeArchive);
-  }
-
-  base::FilePath GetMaxVersionArchivePath() const {
-    return GetArchivePath(max_version_);
-  }
-
-  base::FilePath GetProductVersionArchivePath() const {
-    return GetArchivePath(product_version_);
-  }
-
-  void InstallProduct() {
-    FakeProductState* product = FakeProductState::FromProductState(
-        original_state_->GetNonVersionedProductState(kSystemInstall_));
-
-    product->set_version(product_version_);
-    base::CommandLine uninstall_command(
-        test_dir_.GetPath()
-            .AppendASCII(product_version_.GetString())
-            .Append(installer::kInstallerDir)
-            .Append(installer::kSetupExe));
-    uninstall_command.AppendSwitch(installer::switches::kUninstall);
-    product->set_uninstall_command(uninstall_command);
-  }
-
-  void UninstallProduct() {
-    FakeProductState::FromProductState(
-        original_state_->GetNonVersionedProductState(kSystemInstall_))
-        ->set_version(base::Version());
-  }
-
-  static const bool kSystemInstall_;
-  base::ScopedTempDir test_dir_;
-  base::Version product_version_;
-  base::Version max_version_;
-  std::unique_ptr<FakeInstallationState> original_state_;
-  std::unique_ptr<installer::InstallerState> installer_state_;
-
- private:
-  registry_util::RegistryOverrideManager registry_override_manager_;
-};
-
-const bool FindArchiveToPatchTest::kSystemInstall_ = false;
-
-}  // namespace
-
-// Test that the path to the advertised product version is found.
-TEST_F(FindArchiveToPatchTest, ProductVersionFound) {
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(GetProductVersionArchivePath().value(), patch_source.value());
-}
-
-// Test that the path to the max version is found if the advertised version is
-// missing.
-TEST_F(FindArchiveToPatchTest, MaxVersionFound) {
-  // The patch file is absent.
-  ASSERT_TRUE(base::DeleteFile(GetProductVersionArchivePath()));
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source.value());
-
-  // The product doesn't appear to be installed, so the max version is found.
-  UninstallProduct();
-  patch_source = installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version());
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source.value());
-}
-
-// Test that an empty path is returned if no version is found.
-TEST_F(FindArchiveToPatchTest, NoVersionFound) {
-  // The product doesn't appear to be installed and no archives are present.
-  UninstallProduct();
-  ASSERT_TRUE(base::DeleteFile(GetProductVersionArchivePath()));
-  ASSERT_TRUE(base::DeleteFile(GetMaxVersionArchivePath()));
-
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(base::FilePath::StringType(), patch_source.value());
-}
-
-TEST_F(FindArchiveToPatchTest, DesiredVersionFound) {
-  base::FilePath patch_source1(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, product_version_));
-  EXPECT_EQ(GetProductVersionArchivePath().value(), patch_source1.value());
-  base::FilePath patch_source2(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, max_version_));
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source2.value());
-}
-
-TEST_F(FindArchiveToPatchTest, DesiredVersionNotFound) {
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version("1.2.3.4")));
-  EXPECT_EQ(base::FilePath().value(), patch_source.value());
-}
-
 TEST(SetupUtilTest, ContainsUnsupportedSwitch) {
   EXPECT_FALSE(installer::ContainsUnsupportedSwitch(
       base::CommandLine::FromString(L"foo.exe")));
   EXPECT_TRUE(installer::ContainsUnsupportedSwitch(
       base::CommandLine::FromString(L"foo.exe --chrome-frame")));
-}
-
-TEST(SetupUtilTest, GetConsoleSessionStartTime) {
-  base::Time start_time = installer::GetConsoleSessionStartTime();
-  EXPECT_FALSE(start_time.is_null());
 }
 
 TEST(SetupUtilTest, DecodeDMTokenSwitchValue) {
@@ -552,8 +389,7 @@ TEST(SetupUtilTest, DecodeDMTokenSwitchValue) {
   EXPECT_FALSE(installer::DecodeDMTokenSwitchValue(L"not-base64-string"));
 
   std::string token("this is a token");
-  std::string encoded;
-  base::Base64Encode(token, &encoded);
+  std::string encoded = base::Base64Encode(token);
   EXPECT_EQ(token,
             *installer::DecodeDMTokenSwitchValue(base::UTF8ToWide(encoded)));
 }
@@ -582,7 +418,8 @@ TEST(SetupUtilTest, StoreDMTokenToRegistrySuccess) {
             key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
   EXPECT_EQ(REG_BINARY, dtype);
   ASSERT_EQ(kExpectedSize, size);
-  EXPECT_EQ(0, memcmp(token.data(), raw_value.data(), kExpectedSize));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(token.data(), raw_value.data(), kExpectedSize)));
 
   std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
       InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
@@ -593,7 +430,8 @@ TEST(SetupUtilTest, StoreDMTokenToRegistrySuccess) {
             key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
   EXPECT_EQ(REG_BINARY, dtype);
   ASSERT_EQ(kExpectedSize, size);
-  EXPECT_EQ(0, memcmp(token.data(), raw_value.data(), kExpectedSize));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(token.data(), raw_value.data(), kExpectedSize)));
 }
 
 TEST(SetupUtilTest, StoreDMTokenToRegistryShouldFailWhenDMTokenTooLarge) {
@@ -855,10 +693,10 @@ TEST_F(DeleteRegistryKeyPartialTest, NonEmptyKeyWithPreserve) {
   {
     base::win::RegistryKeyIterator it(root_, path_.c_str());
     ASSERT_EQ(to_preserve_.size(), it.SubkeyCount());
-    std::wstring (*to_lower)(base::WStringPiece) = &base::ToLowerASCII;
+    std::wstring (*to_lower)(std::wstring_view) = &base::ToLowerASCII;
     for (; it.Valid(); ++it) {
-      ASSERT_TRUE(
-          base::Contains(to_preserve_, base::ToLowerASCII(it.Name()), to_lower))
+      ASSERT_TRUE(std::ranges::contains(
+          to_preserve_, base::ToLowerASCII(it.Name()), to_lower))
           << it.Name();
     }
   }

@@ -6,9 +6,11 @@
 #define CHROME_BROWSER_ASH_ARC_AUTH_ARC_BACKGROUND_AUTH_CODE_FETCHER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/arc/arc_optin_uma.h"
 #include "chrome/browser/ash/arc/auth/arc_auth_code_fetcher.h"
@@ -29,7 +31,7 @@ class SharedURLLoaderFactory;
 namespace arc {
 
 // Exposed for testing.
-extern const char kAuthTokenExchangeEndPoint[];
+extern const char kTokenBootstrapEndPoint[];
 
 // The instance is not reusable, so for each Fetch(), the instance must be
 // re-created. Deleting the instance cancels inflight operation.
@@ -62,14 +64,14 @@ class ArcBackgroundAuthCodeFetcher : public ArcAuthCodeFetcher {
                                   signin::AccessTokenInfo token_info);
 
   void OnSimpleLoaderComplete(signin::AccessTokenInfo token_info,
-                              std::unique_ptr<std::string> response_body);
+                              std::optional<std::string> response_body);
 
   void ReportResult(const std::string& auth_code,
                     OptInSilentAuthCode uma_status);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   // Unowned pointer.
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   ArcAuthContext context_;
   FetchCallback callback_;
 
@@ -88,7 +90,7 @@ class ArcBackgroundAuthCodeFetcher : public ArcAuthCodeFetcher {
   // Account on Chrome OS.
   const bool is_primary_account_;
 
-  // Indicates if the request to `kAuthTokenExchangeEndPoint` which fetches the
+  // Indicates if the request to `kTokenBootstrapEndPoint` which fetches the
   // auth code to be used for Google Play Store sign-in should bypass the proxy.
   // Currently we only set the value to true if the network is configured to use
   // a mandatory PAC script which is broken or not reachable.

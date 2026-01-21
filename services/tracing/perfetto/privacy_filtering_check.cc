@@ -10,6 +10,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "services/tracing/perfetto/privacy_filtered_fields-inl.h"
 #include "third_party/perfetto/include/perfetto/protozero/proto_utils.h"
@@ -30,9 +31,10 @@ using protozero::ProtoDecoder;
 
 // Find the index of |value| in |arr|.
 int FindIndexOfValue(const int* const arr, uint32_t value) {
-  for (unsigned i = 0; arr[i] != -1; ++i) {
-    if (static_cast<int>(value) == arr[i])
+  for (unsigned i = 0; UNSAFE_TODO(arr[i]) != -1; ++i) {
+    if (static_cast<int>(value) == UNSAFE_TODO(arr[i])) {
       return i;
+    }
   }
   return -1;
 }
@@ -52,7 +54,7 @@ void LogDisallowedField(std::vector<uint32_t>* parent_ids, uint32_t field_id) {
 
 uint8_t* OffsetToPtr(size_t offset, std::string& str) {
   DCHECK_LT(offset, str.size());
-  return reinterpret_cast<uint8_t*>(&str[0] + offset);
+  return reinterpret_cast<uint8_t*>(UNSAFE_TODO(&str[0] + offset));
 }
 
 // Recursively copies the |proto|'s accepted field IDs including all sub
@@ -76,7 +78,7 @@ bool FilterProtoRecursively(const MessageInfo* root,
   const uint8_t* next_field_start = nullptr;
   for (auto f = proto->ReadField(); f.valid();
        f = proto->ReadField(), current_field_start = next_field_start) {
-    next_field_start = proto->begin() + proto->read_offset();
+    next_field_start = UNSAFE_TODO(proto->begin() + proto->read_offset());
 
     // If the field is not available in the accepted fields, then skip copying.
     int index = FindIndexOfValue(root->accepted_field_ids, f.id());
@@ -92,7 +94,8 @@ bool FilterProtoRecursively(const MessageInfo* root,
     // POD. If it's a nested message, then the message description will be
     // part of |sub_messages| list. If the message description is nullptr, then
     // assume it is POD.
-    if (!root->sub_messages || root->sub_messages[index] == nullptr) {
+    if (!root->sub_messages ||
+        UNSAFE_TODO(root->sub_messages[index]) == nullptr) {
       // PODs can just be copied over to output. Packed fields can be treated
       // just like primitive fields, by just copying over the full data. Note
       // that there cannot be packed nested messages. Note that we cannot use
@@ -104,17 +107,12 @@ bool FilterProtoRecursively(const MessageInfo* root,
       ProtoDecoder decoder(f.data(), f.size());
       parent_ids->push_back(f.id());
       has_blocked_fields |= FilterProtoRecursively(
-          root->sub_messages[index], &decoder, parent_ids, output);
+          UNSAFE_TODO(root->sub_messages[index]), &decoder, parent_ids, output);
       parent_ids->pop_back();
     }
   }
 
   const uint32_t payload_size = output.size() - out_msg_start_offset;
-
-  // If there are any fields added, only then write the message to output.
-  if (payload_size == 0) {
-    return has_blocked_fields;
-  }
 
   // The format is <field id><payload size><message data>.
   // This function wrote the payload of the current message starting from the
@@ -132,18 +130,22 @@ bool FilterProtoRecursively(const MessageInfo* root,
       protozero::proto_utils::WriteVarInt(payload_size, payload_size_buf);
   const uint8_t payload_size_length = payload_size_end - payload_size_buf;
 
-  // Resize |output| and move the payload, by size of the preamble.
-  const size_t out_payload_start_offset =
-      out_msg_start_offset + field_id_length + payload_size_length;
   output.append(field_id_length + payload_size_length, 0);
-  memmove(OffsetToPtr(out_payload_start_offset, output),
-          OffsetToPtr(out_msg_start_offset, output), payload_size);
+  if (payload_size != 0) {
+    // Resize |output| and move the payload, by size of the preamble.
+    const size_t out_payload_start_offset =
+        out_msg_start_offset + field_id_length + payload_size_length;
+    UNSAFE_TODO(memmove(OffsetToPtr(out_payload_start_offset, output),
+                        OffsetToPtr(out_msg_start_offset, output),
+                        payload_size));
+  }
 
   // Insert field id and payload length.
-  memcpy(OffsetToPtr(out_msg_start_offset, output), field_id_buf,
-         field_id_length);
-  memcpy(OffsetToPtr(out_msg_start_offset + field_id_length, output),
-         payload_size_buf, payload_size_length);
+  UNSAFE_TODO(memcpy(OffsetToPtr(out_msg_start_offset, output), field_id_buf,
+                     field_id_length));
+  UNSAFE_TODO(
+      memcpy(OffsetToPtr(out_msg_start_offset + field_id_length, output),
+             payload_size_buf, payload_size_length));
 
   return has_blocked_fields;
 }

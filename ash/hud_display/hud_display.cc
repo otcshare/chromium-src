@@ -6,7 +6,7 @@
 
 #include "ash/fast_ink/view_tree_host_root_view.h"
 #include "ash/fast_ink/view_tree_host_widget.h"
-#include "ash/frame/non_client_frame_view_ash.h"
+#include "ash/frame/frame_view_ash.h"
 #include "ash/hud_display/graphs_container_view.h"
 #include "ash/hud_display/hud_constants.h"
 #include "ash/hud_display/hud_header_view.h"
@@ -16,7 +16,8 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/aura/window.h"
@@ -28,6 +29,7 @@
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/native_widget.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -72,9 +74,9 @@ bool g_hud_overlay_mode = true;
 // ClientView that return HTNOWHERE by default. A child view can receive event
 // by setting kHitTestComponentKey property to HTCLIENT.
 class HTClientView : public views::ClientView {
- public:
-  METADATA_HEADER(HTClientView);
+  METADATA_HEADER(HTClientView, views::ClientView)
 
+ public:
   HTClientView(HUDDisplayView* hud_display,
                views::Widget* widget,
                views::View* contents_view)
@@ -92,32 +94,18 @@ class HTClientView : public views::ClientView {
   HUDDisplayView* GetHUDDisplayViewForTesting() { return hud_display_; }
 
  private:
-  HUDDisplayView* hud_display_;
+  raw_ptr<HUDDisplayView> hud_display_;
 };
 
-BEGIN_METADATA(HTClientView, views::ClientView)
+BEGIN_METADATA(HTClientView)
 END_METADATA
-
-std::unique_ptr<views::ClientView> MakeClientView(views::Widget* widget) {
-  auto view = std::make_unique<HUDDisplayView>();
-  auto* weak_view = view.get();
-  return std::make_unique<HTClientView>(weak_view, widget, view.release());
-}
-
-void InitializeFrameView(views::WidgetDelegate* delegate) {
-  auto* frame_view = static_cast<NonClientFrameViewAsh*>(
-      delegate->GetWidget()->non_client_view()->frame_view());
-  // TODO(oshima): support component type with TYPE_WINDOW_FLAMELESS widget.
-  if (frame_view)
-    frame_view->SetFrameEnabled(false);
-}
 
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // HUDDisplayView, public:
 
-BEGIN_METADATA(HUDDisplayView, views::View)
+BEGIN_METADATA(HUDDisplayView)
 END_METADATA
 
 // static
@@ -134,21 +122,32 @@ void HUDDisplayView::Toggle() {
   }
 
   auto delegate = std::make_unique<views::WidgetDelegate>();
-  delegate->SetClientViewFactory(base::BindOnce(&MakeClientView));
-  delegate->RegisterWidgetInitializedCallback(
-      base::BindOnce(&InitializeFrameView, base::Unretained(delegate.get())));
-  delegate->SetOwnedByWidget(true);
+  delegate->SetContentsView(std::make_unique<HUDDisplayView>());
+  delegate->SetOwnedByWidget(views::WidgetDelegate::OwnedByWidgetPassKey());
+  delegate->SetClientViewFactory(base::BindOnce(
+      [](views::Widget* widget,
+         views::View* contents_view) -> std::unique_ptr<views::ClientView> {
+        return std::make_unique<HTClientView>(
+            /*hud_display=*/static_cast<HUDDisplayView*>(contents_view), widget,
+            contents_view);
+      }));
 
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.delegate = delegate.release();
+  params.name = "HUDDisplay";
   params.parent = Shell::GetContainer(Shell::GetPrimaryRootWindow(),
                                       kShellWindowId_OverlayContainer);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.bounds = gfx::Rect(kHUDWidth, kHUDHeightWithGraph);
+  params.remove_standard_frame = true;
   auto* widget = CreateViewTreeHostWidget(std::move(params));
   widget->GetLayer()->SetName("HUDDisplayView");
-  static_cast<ViewTreeHostRootView*>(widget->GetRootView())
-      ->SetIsOverlayCandidate(g_hud_overlay_mode);
+
+  ViewTreeHostRootView* root_view =
+      static_cast<ViewTreeHostRootView*>(widget->GetRootView());
+  root_view->SetIsOverlayCandidate(g_hud_overlay_mode);
+  root_view->Init(widget->GetNativeView());
   widget->Show();
 
   g_hud_widget = widget;

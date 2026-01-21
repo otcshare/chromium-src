@@ -43,7 +43,8 @@ Releasing a TaskRunner reference does not wait for tasks previously posted to
 the TaskRunner to complete their execution. Tasks can run normally after the
 last client reference to the TaskRunner to which they were posted has been
 released and it can even be kept alive indefinitely through
-`SequencedTaskRunnerHandle::Get()` or `ThreadTaskRunnerHandle::Get()`.
+`SequencedTaskRunner::GetCurrentDefault()` or
+`SingleThreadTaskRunner::GetCurrentDefault()`.
 
 If you want some state to be deleted only after all tasks currently posted to a
 SequencedTaskRunner have run, store that state in a helper object and schedule
@@ -150,7 +151,8 @@ The following mappings can be useful when migrating code from a
 
 * base::SingleThreadTaskRunner -> base::SequencedTaskRunner
     * SingleThreadTaskRunner::BelongsToCurrentThread() -> SequencedTaskRunner::RunsTasksInCurrentSequence()
-* base::ThreadTaskRunnerHandle -> base::SequencedTaskRunnerHandle
+* base::SingleThreadTaskRunner::CurrentDefaultHandle ->
+  base::SequencedTaskRunnerHandle::CurrentDefaultHandle
 * THREAD_CHECKER -> SEQUENCE_CHECKER
 * base::ThreadLocalStorage::Slot -> base::SequenceLocalStorageSlot
 * BrowserThread::DeleteOnThread -> base::OnTaskRunnerDeleter / base::RefCountedDeleteOnSequence
@@ -191,7 +193,7 @@ int g_condition = false;
 
 base::RunLoop run_loop;
 base::ThreadPool::PostTask(FROM_HERE, {}, base::BindOnce(
-    [] (base::OnceClosure closure) {
+    [] (base::OnceClosure quit_closure) {
         g_condition = true;
         std::move(quit_closure).Run();
     }, run_loop.QuitClosure()));

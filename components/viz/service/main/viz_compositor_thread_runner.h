@@ -5,8 +5,8 @@
 #ifndef COMPONENTS_VIZ_SERVICE_MAIN_VIZ_COMPOSITOR_THREAD_RUNNER_H_
 #define COMPONENTS_VIZ_SERVICE_MAIN_VIZ_COMPOSITOR_THREAD_RUNNER_H_
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/threading/platform_thread.h"
 #include "services/viz/privileged/mojom/viz_main.mojom.h"
 
@@ -31,6 +31,9 @@ class VizCompositorThreadRunner {
   virtual bool CreateHintSessionFactory(
       base::flat_set<base::PlatformThreadId> thread_ids,
       base::RepeatingClosure* wake_up_closure) = 0;
+  virtual void SetIOThreadId(base::PlatformThreadId io_thread_id) = 0;
+  virtual void SetGpuMainThreadId(
+      base::PlatformThreadId gpu_main_thread_id) = 0;
 
   // Creates FrameSinkManager from |params|. If |gpu_service| is null the
   // display compositor will only support software compositing. Should be called
@@ -38,6 +41,8 @@ class VizCompositorThreadRunner {
   // VizCompositorThread.
   virtual void CreateFrameSinkManager(mojom::FrameSinkManagerParamsPtr params,
                                       GpuServiceImpl* gpu_service) = 0;
+  virtual void RequestBeginFrameForGpuService(bool toggle) {}
+  virtual void NotifyWorkloadIncrease() = 0;
 };
 
 }  // namespace viz

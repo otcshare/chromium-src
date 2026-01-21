@@ -6,6 +6,8 @@
 
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -61,7 +63,8 @@ void RoundedImageView::SetCornerRadius(int corner_radius) {
   SetCornerRadii(corner_radius, corner_radius, corner_radius, corner_radius);
 }
 
-gfx::Size RoundedImageView::CalculatePreferredSize() const {
+gfx::Size RoundedImageView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(GetImageSize().width() + GetInsets().width(),
                    GetImageSize().height() + GetInsets().height());
 }
@@ -75,13 +78,12 @@ void RoundedImageView::OnPaint(gfx::Canvas* canvas) {
   // than that of the image to draw.
   drawn_image_bounds.ClampToCenteredSize(GetImageSize());
 
-  const SkScalar kRadius[8] = {
-      SkIntToScalar(corner_radius_[0]), SkIntToScalar(corner_radius_[0]),
-      SkIntToScalar(corner_radius_[1]), SkIntToScalar(corner_radius_[1]),
-      SkIntToScalar(corner_radius_[2]), SkIntToScalar(corner_radius_[2]),
-      SkIntToScalar(corner_radius_[3]), SkIntToScalar(corner_radius_[3])};
-  SkPath path;
-  path.addRoundRect(gfx::RectToSkRect(drawn_image_bounds), kRadius);
+  const SkVector kRadius[4] = {SkVector(corner_radius_[0], corner_radius_[0]),
+                               SkVector(corner_radius_[1], corner_radius_[1]),
+                               SkVector(corner_radius_[2], corner_radius_[2]),
+                               SkVector(corner_radius_[3], corner_radius_[3])};
+  const SkPath path = SkPath::RRect(
+      SkRRect::MakeRectRadii(gfx::RectToSkRect(drawn_image_bounds), kRadius));
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
 
@@ -111,12 +113,11 @@ void RoundedImageView::OnPaint(gfx::Canvas* canvas) {
                           drawn_image_bounds.y(), path, flags);
 }
 
-const char* RoundedImageView::GetClassName() const {
-  return "RoundedImageView";
-}
-
 gfx::Size RoundedImageView::GetImageSize() const {
   return resized_image_.size();
 }
+
+BEGIN_METADATA(RoundedImageView)
+END_METADATA
 
 }  // namespace ash

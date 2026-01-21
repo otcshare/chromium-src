@@ -7,8 +7,11 @@
 #include <algorithm>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
+#include "base/base_paths.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/cpu.h"
 #include "base/debug/leak_annotations.h"
@@ -16,6 +19,7 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/metrics/field_trial.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
@@ -31,18 +35,19 @@
 #include "chromecast/common/global_descriptors.h"
 #include "chromecast/gpu/cast_content_gpu_client.h"
 #include "chromecast/renderer/cast_content_renderer_client.h"
-#include "chromecast/utility/cast_content_utility_client.h"
 #include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/common/crash_key.h"
 #include "content/public/app/initialize_mojo_core.h"
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/common/content_switches.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_paths.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/apk_assets.h"
+#include "base/android/java_exception_reporter.h"
 #include "chromecast/app/android/cast_crash_reporter_client_android.h"
+#include "components/crash/core/app/crashpad.h"
 #include "ui/base/resource/resource_bundle_android.h"
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "chromecast/app/linux/cast_crash_reporter_client.h"
@@ -50,14 +55,6 @@
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 namespace {
-
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-chromecast::CastCrashReporterClient* GetCastCrashReporter() {
-  static base::NoDestructor<chromecast::CastCrashReporterClient>
-      crash_reporter_client;
-  return crash_reporter_client.get();
-}
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID)
 const int kMaxCrashFiles = 10;
@@ -72,7 +69,7 @@ CastMainDelegate::CastMainDelegate() {}
 
 CastMainDelegate::~CastMainDelegate() {}
 
-absl::optional<int> CastMainDelegate::BasicStartupComplete() {
+std::optional<int> CastMainDelegate::BasicStartupComplete() {
   RegisterPathProvider();
 
   logging::LoggingSettings settings;
@@ -160,7 +157,7 @@ absl::optional<int> CastMainDelegate::BasicStartupComplete() {
   if (settings.logging_dest & logging::LOG_TO_FILE) {
     LOG(INFO) << "Logging to file: " << settings.log_file_path;
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void CastMainDelegate::PreSandboxStartup() {
@@ -180,21 +177,31 @@ void CastMainDelegate::PreSandboxStartup() {
   bool enable_crash_reporter =
       !command_line->HasSwitch(switches::kDisableCrashReporter);
   if (enable_crash_reporter) {
-    // TODO(crbug.com/1226159): Complete crash reporting integration on Fuchsia.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-    crash_reporter::SetCrashReporterClient(GetCastCrashReporter());
+#if BUILDFLAG(IS_ANDROID)
+    static base::NoDestructor<chromecast::CastCrashReporterClientAndroid>
+        crash_reporter_client(process_type);
+#else
+    static base::NoDestructor<CastCrashReporterClient> crash_reporter_client;
+#endif
+    crash_reporter::SetCrashReporterClient(crash_reporter_client.get());
 
+    // TODO(crbug.com/40188745): Complete crash reporting integration on
+    // Fuchsia.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     if (process_type != switches::kZygoteProcess) {
       CastCrashReporterClient::InitCrashReporter(process_type);
     }
-    crash_reporter::InitializeCrashKeys();
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID)
+    crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
+    base::android::InitJavaExceptionReporter();
+#endif
+    crash_reporter::InitializeCrashKeys();
   }
-
   InitializeResourceBundle();
 }
 
-absl::variant<int, content::MainFunctionParams> CastMainDelegate::RunProcess(
+std::variant<int, content::MainFunctionParams> CastMainDelegate::RunProcess(
     const std::string& process_type,
     content::MainFunctionParams main_function_params) {
 #if BUILDFLAG(IS_ANDROID)
@@ -229,18 +236,18 @@ void CastMainDelegate::ZygoteForked() {
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 bool CastMainDelegate::ShouldCreateFeatureList(InvokedIn invoked_in) {
-  return absl::holds_alternative<InvokedInChildProcess>(invoked_in);
+  return std::holds_alternative<InvokedInChildProcess>(invoked_in);
 }
 
 bool CastMainDelegate::ShouldInitializeMojo(InvokedIn invoked_in) {
   return ShouldCreateFeatureList(invoked_in);
 }
 
-absl::optional<int> CastMainDelegate::PostEarlyInitialization(
+std::optional<int> CastMainDelegate::PostEarlyInitialization(
     InvokedIn invoked_in) {
   if (ShouldCreateFeatureList(invoked_in)) {
     // content is handling the feature list.
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   DCHECK(cast_feature_list_creator_);
@@ -253,14 +260,14 @@ absl::optional<int> CastMainDelegate::PostEarlyInitialization(
   CHECK(base::CreateDirectory(home_dir));
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-  // TODO(crbug/1249485): If we're able to create the MetricsStateManager
+  // TODO(crbug.com/40791269): If we're able to create the MetricsStateManager
   // earlier, clean up the below if and else blocks and call
   // MetricsStateManager::InstantiateFieldTrialList().
   //
   // The FieldTrialList is a dependency of the feature list. In tests, it is
   // constructed as part of the test suite.
   const auto* invoked_in_browser =
-      absl::get_if<InvokedInBrowserProcess>(&invoked_in);
+      std::get_if<InvokedInBrowserProcess>(&invoked_in);
   if (invoked_in_browser && invoked_in_browser->is_running_test) {
     DCHECK(base::FieldTrialList::GetInstance());
   } else {
@@ -284,7 +291,7 @@ absl::optional<int> CastMainDelegate::PostEarlyInitialization(
 
   content::InitializeMojoCore();
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void CastMainDelegate::InitializeResourceBundle() {
@@ -321,6 +328,15 @@ void CastMainDelegate::InitializeResourceBundle() {
 #endif  // BUILDFLAG(IS_ANDROID)
 
   resource_delegate_.reset(new CastResourceDelegate());
+
+  // Override ui::DIR_LOCALES to point to the chromecast_locales directory.
+  CHECK(base::PathService::OverrideAndCreateIfNeeded(
+      ui::DIR_LOCALES,
+      base::PathService::CheckedGet(base::DIR_ASSETS)
+          .Append(FILE_PATH_LITERAL("chromecast_locales")),
+      /*is_absolute=*/true,
+      /*create=*/false));
+
   // TODO(gunsch): Use LOAD_COMMON_RESOURCES once ResourceBundle no longer
   // hardcodes resource file names.
   ui::ResourceBundle::InitSharedInstanceWithLocale(
@@ -357,11 +373,6 @@ content::ContentRendererClient*
 CastMainDelegate::CreateContentRendererClient() {
   renderer_client_ = CastContentRendererClient::Create();
   return renderer_client_.get();
-}
-
-content::ContentUtilityClient* CastMainDelegate::CreateContentUtilityClient() {
-  utility_client_ = CastContentUtilityClient::Create();
-  return utility_client_.get();
 }
 
 }  // namespace shell

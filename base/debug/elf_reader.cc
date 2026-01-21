@@ -8,19 +8,21 @@
 #include <elf.h>
 #include <string.h>
 
+#include <optional>
+#include <string_view>
+
 #include "base/bits.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/hash/sha1.h"
 #include "base/strings/safe_sprintf.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // NOTE: This code may be used in crash handling code, so the implementation
 // must avoid dynamic memory allocation or using data structures which rely on
 // dynamic allocation.
 
-namespace base {
-namespace debug {
+namespace base::debug {
 namespace {
 
 // See https://refspecs.linuxbase.org/elf/elf.pdf for the ELF specification.
@@ -47,9 +49,10 @@ constexpr char kGnuNoteName[] = "GNU";
 // null pointer if the header is invalid. Here and below |elf_mapped_base| is a
 // pointer to the start of the ELF image.
 const Ehdr* GetElfHeader(const void* elf_mapped_base) {
-  if (strncmp(reinterpret_cast<const char*>(elf_mapped_base), ELFMAG,
-              SELFMAG) != 0)
+  if (UNSAFE_TODO(strncmp(reinterpret_cast<const char*>(elf_mapped_base),
+                          ELFMAG, SELFMAG)) != 0) {
     return nullptr;
+  }
 
   return reinterpret_cast<const Ehdr*>(elf_mapped_base);
 }
@@ -62,58 +65,65 @@ size_t ReadElfBuildId(const void* elf_mapped_base,
   // NOTE: Function should use async signal safe calls only.
 
   const Ehdr* elf_header = GetElfHeader(elf_mapped_base);
-  if (!elf_header)
+  if (!elf_header) {
     return 0;
+  }
 
   const size_t relocation_offset = GetRelocationOffset(elf_mapped_base);
   for (const Phdr& header : GetElfProgramHeaders(elf_mapped_base)) {
-    if (header.p_type != PT_NOTE)
+    if (header.p_type != PT_NOTE) {
       continue;
+    }
 
     // Look for a NT_GNU_BUILD_ID note with name == "GNU".
     const char* current_section =
         reinterpret_cast<const char*>(header.p_vaddr + relocation_offset);
-    const char* section_end = current_section + header.p_memsz;
+    const char* section_end = UNSAFE_TODO(current_section + header.p_memsz);
     const Nhdr* current_note = nullptr;
     bool found = false;
     while (current_section < section_end) {
       current_note = reinterpret_cast<const Nhdr*>(current_section);
       if (current_note->n_type == NT_GNU_BUILD_ID) {
-        StringPiece note_name(current_section + sizeof(Nhdr),
-                              current_note->n_namesz);
+        std::string_view note_name(UNSAFE_TODO(current_section + sizeof(Nhdr)),
+                                   current_note->n_namesz);
         // Explicit constructor is used to include the '\0' character.
-        if (note_name == StringPiece(kGnuNoteName, sizeof(kGnuNoteName))) {
+        if (note_name == std::string_view(kGnuNoteName, sizeof(kGnuNoteName))) {
           found = true;
           break;
         }
       }
 
-      size_t section_size = bits::AlignUp(current_note->n_namesz, 4u) +
-                            bits::AlignUp(current_note->n_descsz, 4u) +
-                            sizeof(Nhdr);
-      if (section_size > static_cast<size_t>(section_end - current_section))
+      size_t section_size =
+          bits::AlignUp(current_note->n_namesz, static_cast<Word>(4)) +
+          bits::AlignUp(current_note->n_descsz, static_cast<Word>(4)) +
+          sizeof(Nhdr);
+      if (section_size > static_cast<size_t>(section_end - current_section)) {
         return 0;
-      current_section += section_size;
+      }
+      UNSAFE_TODO(current_section += section_size);
     }
 
-    if (!found)
+    if (!found) {
       continue;
+    }
 
     // Validate that the serialized build ID will fit inside |build_id|.
     size_t note_size = current_note->n_descsz;
-    if ((note_size * 2) > kMaxBuildIdStringLength)
+    if ((note_size * 2) > kMaxBuildIdStringLength) {
       continue;
+    }
 
     // Write out the build ID as a null-terminated hex string.
-    const uint8_t* build_id_raw =
+    const uint8_t* build_id_raw = UNSAFE_TODO(
         reinterpret_cast<const uint8_t*>(current_note) + sizeof(Nhdr) +
-        bits::AlignUp(current_note->n_namesz, 4u);
+        bits::AlignUp(current_note->n_namesz, static_cast<Word>(4)));
     size_t i = 0;
     for (i = 0; i < current_note->n_descsz; ++i) {
-      strings::SafeSNPrintf(&build_id[i * 2], 3, (uppercase ? "%02X" : "%02x"),
-                            build_id_raw[i]);
+      strings::SafeSNPrintf(&UNSAFE_TODO(build_id[i * 2]), 3,
+                            (uppercase ? "%02X" : "%02x"),
+                            UNSAFE_TODO(build_id_raw[i]));
     }
-    build_id[i * 2] = '\0';
+    UNSAFE_TODO(build_id[i * 2]) = '\0';
 
     // Return the length of the string.
     return i * 2;
@@ -122,17 +132,20 @@ size_t ReadElfBuildId(const void* elf_mapped_base,
   return 0;
 }
 
-absl::optional<StringPiece> ReadElfLibraryName(const void* elf_mapped_base) {
+std::optional<std::string_view> ReadElfLibraryName(
+    const void* elf_mapped_base) {
   // NOTE: Function should use async signal safe calls only.
 
   const Ehdr* elf_header = GetElfHeader(elf_mapped_base);
-  if (!elf_header)
+  if (!elf_header) {
     return {};
+  }
 
   const size_t relocation_offset = GetRelocationOffset(elf_mapped_base);
   for (const Phdr& header : GetElfProgramHeaders(elf_mapped_base)) {
-    if (header.p_type != PT_DYNAMIC)
+    if (header.p_type != PT_DYNAMIC) {
       continue;
+    }
 
     // Read through the ELF dynamic sections to find the string table and
     // SONAME offsets, which are used to compute the offset of the library
@@ -142,14 +155,19 @@ absl::optional<StringPiece> ReadElfLibraryName(const void* elf_mapped_base) {
     const Dyn* dynamic_end = reinterpret_cast<const Dyn*>(
         header.p_vaddr + relocation_offset + header.p_memsz);
     Xword soname_strtab_offset = 0;
-    const char* strtab_addr = 0;
+    const char* strtab_addr = nullptr;
     for (const Dyn* dynamic_iter = dynamic_start; dynamic_iter < dynamic_end;
-         ++dynamic_iter) {
+         UNSAFE_TODO(++dynamic_iter)) {
       if (dynamic_iter->d_tag == DT_STRTAB) {
-#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
-        // Fuchsia and Android do not relocate the symtab pointer on ELF load.
-        strtab_addr = static_cast<size_t>(dynamic_iter->d_un.d_ptr) +
-                      reinterpret_cast<const char*>(relocation_offset);
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID) || \
+    (defined(ARCH_CPU_RISCV_FAMILY) && BUILDFLAG(IS_LINUX))
+        // Fuchsia and Android do not relocate the strtab pointer on ELF load.
+        // When the dynamic section is readonly, the strtab pointer is also not
+        // relocated. This is the default ABI behavior on RISC-V GNU Linux (See
+        // sysdeps/riscv/dl-relocate-ld.h).
+        strtab_addr =
+            UNSAFE_TODO(static_cast<size_t>(dynamic_iter->d_un.d_ptr) +
+                        reinterpret_cast<const char*>(relocation_offset));
 #else
         strtab_addr = reinterpret_cast<const char*>(dynamic_iter->d_un.d_ptr);
 #endif
@@ -159,24 +177,26 @@ absl::optional<StringPiece> ReadElfLibraryName(const void* elf_mapped_base) {
         soname_strtab_offset = static_cast<Xword>(dynamic_iter->d_un.d_val);
       }
     }
-    if (soname_strtab_offset && strtab_addr)
-      return StringPiece(strtab_addr + soname_strtab_offset);
+    if (soname_strtab_offset && strtab_addr) {
+      return std::string_view(UNSAFE_TODO(strtab_addr + soname_strtab_offset));
+    }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 span<const Phdr> GetElfProgramHeaders(const void* elf_mapped_base) {
   // NOTE: Function should use async signal safe calls only.
 
   const Ehdr* elf_header = GetElfHeader(elf_mapped_base);
-  if (!elf_header)
+  if (!elf_header) {
     return {};
+  }
 
-  const char* phdr_start =
-      reinterpret_cast<const char*>(elf_header) + elf_header->e_phoff;
-  return span<const Phdr>(reinterpret_cast<const Phdr*>(phdr_start),
-                          elf_header->e_phnum);
+  const char* phdr_start = UNSAFE_TODO(
+      reinterpret_cast<const char*>(elf_header) + elf_header->e_phoff);
+  return UNSAFE_TODO(span<const Phdr>(reinterpret_cast<const Phdr*>(phdr_start),
+                                      elf_header->e_phnum));
 }
 
 // Returns the offset to add to virtual addresses in the image to compute the
@@ -188,8 +208,8 @@ size_t GetRelocationOffset(const void* elf_mapped_base) {
       // |elf_mapped_base| + |header.p_offset| is the mapped address of this
       // segment. |header.p_vaddr| is the specified virtual address within the
       // ELF image.
-      const char* const mapped_address =
-          reinterpret_cast<const char*>(elf_mapped_base) + header.p_offset;
+      const char* const mapped_address = UNSAFE_TODO(
+          reinterpret_cast<const char*>(elf_mapped_base) + header.p_offset);
       return reinterpret_cast<uintptr_t>(mapped_address) - header.p_vaddr;
     }
   }
@@ -200,5 +220,4 @@ size_t GetRelocationOffset(const void* elf_mapped_base) {
                              reinterpret_cast<uintptr_t>(nullptr));
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

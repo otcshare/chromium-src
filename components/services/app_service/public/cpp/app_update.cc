@@ -4,13 +4,21 @@
 
 #include "components/services/app_service/public/cpp/app_update.h"
 
+#include <variant>
+
+#include "base/check.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
 #include "components/services/app_service/public/cpp/macros.h"
 #include "components/services/app_service/public/cpp/run_on_os_login_types.h"
+#include "components/services/app_service/public/cpp/types_util.h"
+
+namespace apps {
 
 namespace {
 
@@ -23,36 +31,87 @@ static const std::vector<std::string>& EmptyStringVector() {
   return g_empty_string_vector;
 }
 
-void CloneMojomPermissions(
-    const std::vector<apps::mojom::PermissionPtr>& clone_from,
-    std::vector<apps::mojom::PermissionPtr>* clone_to) {
-  for (const auto& permission : clone_from) {
-    clone_to->push_back(permission->Clone());
-  }
-}
-
-void CloneMojomIntentFilters(
-    const std::vector<apps::mojom::IntentFilterPtr>& clone_from,
-    std::vector<apps::mojom::IntentFilterPtr>* clone_to) {
-  for (const auto& intent_filter : clone_from) {
-    clone_to->push_back(intent_filter->Clone());
-  }
-}
-
-absl::optional<apps::RunOnOsLogin> CloneRunOnOsLogin(
+std::optional<apps::RunOnOsLogin> CloneRunOnOsLogin(
     const apps::RunOnOsLogin& login_data) {
   return apps::RunOnOsLogin(login_data.login_mode, login_data.is_managed);
 }
 
-}  // namespace
+std::string FormatBytes(std::optional<uint64_t> bytes) {
+  return bytes.has_value() ? base::NumberToString(bytes.value()) : "null";
+}
 
-namespace apps {
+// Merges `delta`'s `icon_key` to `new_delta`'s `icon_key`.
+void MergeIconKeyDelta(App* new_delta, App* delta) {
+  CHECK(new_delta);
 
-// static
-void AppUpdate::Merge(apps::mojom::App* state, const apps::mojom::App* delta) {
-  DCHECK(state);
-  if (!delta) {
+  // `new_delta` should hold a bool icon version only.
+  CHECK(!new_delta->icon_key.has_value() ||
+        std::holds_alternative<bool>(new_delta->icon_key->update_version));
+
+  // `delta` should hold a bool icon version only.
+  CHECK(!delta || !delta->icon_key.has_value() ||
+        std::holds_alternative<bool>(delta->icon_key->update_version));
+
+  if (delta && delta->readiness != Readiness::kUnknown &&
+      !apps_util::IsInstalled(delta->readiness)) {
+    // When the app is uninstalled, reset `icon_key` to clear the icon key, to
+    // refresh the icon for AppService clients, and reload the icon when the app
+    // is installed back again.
+    new_delta->icon_key.reset();
     return;
+  }
+
+  if (!delta || !delta->icon_key.has_value()) {
+    return;
+  }
+
+  if (new_delta->icon_key.has_value()) {
+    // If `new_delta`'s `update_version` is true, or `delta`'s `update_version`
+    // is true, the new `update_version` should be true.
+    delta->icon_key->update_version =
+        std::get<bool>(new_delta->icon_key->update_version) ||
+        std::get<bool>(delta->icon_key->update_version);
+  }
+
+  new_delta->icon_key = std::move(delta->icon_key);
+  return;
+}
+
+// Merges `delta`'s `icon_key` to `state`'s `icon_key`, and  returns's the
+// merge result.
+//
+// For `icon_key`, if `delta`'s `update_version` is true, increase `state`'s
+// `update_version`.
+std::optional<apps::IconKey> MergeIconKey(const App* state, const App* delta) {
+  //`state` should have int32_t `update_version` only.
+  CHECK(!state || !state->icon_key.has_value() ||
+        std::holds_alternative<int32_t>(state->icon_key->update_version));
+
+  // `delta` should hold a bool icon version only.
+  CHECK(!delta || !delta->icon_key.has_value() ||
+        std::holds_alternative<bool>(delta->icon_key->update_version));
+
+  if (delta && delta->readiness != Readiness::kUnknown &&
+      !apps_util::IsInstalled(delta->readiness)) {
+    // When the app is uninstalled, reset `icon_key` to clear the icon key, to
+    // refresh the icon for AppService clients, and reload the icon when the app
+    // is installed back again.
+    IconKey icon_key;
+    icon_key.update_version = IconKey::kInvalidVersion;
+    return icon_key;
+  }
+
+  return MergeIconKey(
+      state && state->icon_key.has_value() ? &state->icon_key.value() : nullptr,
+      delta && delta->icon_key.has_value() ? &delta->icon_key.value()
+                                           : nullptr);
+}
+
+bool MergeWithoutIconKey(App* state, const App* delta) {
+  CHECK(state);
+
+  if (!delta) {
+    return false;
   }
 
   if ((delta->app_type != state->app_type) ||
@@ -60,144 +119,24 @@ void AppUpdate::Merge(apps::mojom::App* state, const apps::mojom::App* delta) {
     LOG(ERROR) << "inconsistent (app_type, app_id): (" << delta->app_type
                << ", " << delta->app_id << ") vs (" << state->app_type << ", "
                << state->app_id << ") ";
-    DCHECK(false);
-    return;
-  }
-
-  // You can not merge removed states.
-  DCHECK(state->readiness != mojom::Readiness::kRemoved);
-  DCHECK(delta->readiness != mojom::Readiness::kRemoved);
-
-  if (delta->readiness != apps::mojom::Readiness::kUnknown) {
-    state->readiness = delta->readiness;
-  }
-  if (delta->name.has_value()) {
-    state->name = delta->name;
-  }
-  if (delta->short_name.has_value()) {
-    state->short_name = delta->short_name;
-  }
-  if (delta->publisher_id.has_value()) {
-    state->publisher_id = delta->publisher_id;
-  }
-  if (delta->description.has_value()) {
-    state->description = delta->description;
-  }
-  if (delta->version.has_value()) {
-    state->version = delta->version;
-  }
-  if (!delta->additional_search_terms.empty()) {
-    state->additional_search_terms.clear();
-    state->additional_search_terms = delta->additional_search_terms;
-  }
-  if (!delta->icon_key.is_null()) {
-    state->icon_key = delta->icon_key.Clone();
-  }
-  if (delta->last_launch_time.has_value()) {
-    state->last_launch_time = delta->last_launch_time;
-  }
-  if (delta->install_time.has_value()) {
-    state->install_time = delta->install_time;
-  }
-  if (!delta->permissions.empty()) {
-    state->permissions.clear();
-    ::CloneMojomPermissions(delta->permissions, &state->permissions);
-  }
-  if (delta->install_reason != apps::mojom::InstallReason::kUnknown) {
-    state->install_reason = delta->install_reason;
-  }
-  if (delta->install_source != apps::mojom::InstallSource::kUnknown) {
-    state->install_source = delta->install_source;
-  }
-  if (!delta->policy_ids.empty()) {
-    state->policy_ids.clear();
-    state->policy_ids = delta->policy_ids;
-  }
-  if (delta->is_platform_app != apps::mojom::OptionalBool::kUnknown) {
-    state->is_platform_app = delta->is_platform_app;
-  }
-  if (delta->recommendable != apps::mojom::OptionalBool::kUnknown) {
-    state->recommendable = delta->recommendable;
-  }
-  if (delta->searchable != apps::mojom::OptionalBool::kUnknown) {
-    state->searchable = delta->searchable;
-  }
-  if (delta->show_in_launcher != apps::mojom::OptionalBool::kUnknown) {
-    state->show_in_launcher = delta->show_in_launcher;
-  }
-  if (delta->show_in_shelf != apps::mojom::OptionalBool::kUnknown) {
-    state->show_in_shelf = delta->show_in_shelf;
-  }
-  if (delta->show_in_search != apps::mojom::OptionalBool::kUnknown) {
-    state->show_in_search = delta->show_in_search;
-  }
-  if (delta->show_in_management != apps::mojom::OptionalBool::kUnknown) {
-    state->show_in_management = delta->show_in_management;
-  }
-  if (delta->handles_intents != apps::mojom::OptionalBool::kUnknown) {
-    state->handles_intents = delta->handles_intents;
-  }
-  if (delta->allow_uninstall != apps::mojom::OptionalBool::kUnknown) {
-    state->allow_uninstall = delta->allow_uninstall;
-  }
-  if (delta->has_badge != apps::mojom::OptionalBool::kUnknown) {
-    state->has_badge = delta->has_badge;
-  }
-  if (delta->paused != apps::mojom::OptionalBool::kUnknown) {
-    state->paused = delta->paused;
-  }
-  if (!delta->intent_filters.empty()) {
-    state->intent_filters.clear();
-    ::CloneMojomIntentFilters(delta->intent_filters, &state->intent_filters);
-  }
-  if (delta->resize_locked != apps::mojom::OptionalBool::kUnknown) {
-    state->resize_locked = delta->resize_locked;
-  }
-  if (delta->window_mode != apps::mojom::WindowMode::kUnknown) {
-    state->window_mode = delta->window_mode;
-  }
-  if (!delta->run_on_os_login.is_null()) {
-    state->run_on_os_login = delta->run_on_os_login.Clone();
-  }
-
-  // When adding new fields to the App Mojo type, this function should also be
-  // updated.
-}
-
-// static
-void AppUpdate::Merge(App* state, const App* delta) {
-  DCHECK(state);
-  if (!delta) {
-    return;
-  }
-
-  if ((delta->app_type != state->app_type) ||
-      (delta->app_id != state->app_id)) {
-    LOG(ERROR) << "inconsistent (app_type, app_id): ("
-               << EnumToString(delta->app_type) << ", " << delta->app_id
-               << ") vs (" << EnumToString(state->app_type) << ", "
-               << state->app_id << ") ";
-    return;
+    return false;
   }
 
   // You can not merge removed states.
   DCHECK_NE(state->readiness, Readiness::kRemoved);
   DCHECK_NE(delta->readiness, Readiness::kRemoved);
 
-  SET_ENUM_VALUE(readiness, apps::Readiness::kUnknown);
+  SET_ENUM_VALUE(readiness, Readiness::kUnknown);
   SET_OPTIONAL_VALUE(name)
   SET_OPTIONAL_VALUE(short_name)
   SET_OPTIONAL_VALUE(publisher_id)
+  SET_OPTIONAL_VALUE(installer_package_id)
   SET_OPTIONAL_VALUE(description)
   SET_OPTIONAL_VALUE(version)
 
   if (!delta->additional_search_terms.empty()) {
     state->additional_search_terms.clear();
     state->additional_search_terms = delta->additional_search_terms;
-  }
-
-  if (delta->icon_key.has_value()) {
-    state->icon_key = std::move(*delta->icon_key->Clone());
   }
 
   SET_OPTIONAL_VALUE(last_launch_time);
@@ -227,10 +166,14 @@ void AppUpdate::Merge(App* state, const App* delta) {
   SET_OPTIONAL_VALUE(allow_uninstall);
   SET_OPTIONAL_VALUE(has_badge);
   SET_OPTIONAL_VALUE(paused);
+  SET_OPTIONAL_VALUE(allow_window_mode_selection);
 
-  if (!delta->intent_filters.empty()) {
-    state->intent_filters.clear();
-    state->intent_filters = CloneIntentFilters(delta->intent_filters);
+  if (delta->intent_filters) {
+    if (delta->intent_filters->empty()) {
+      state->intent_filters = std::nullopt;
+    } else {
+      state->intent_filters = CloneIntentFilters(*delta->intent_filters);
+    }
   }
 
   SET_OPTIONAL_VALUE(resize_locked)
@@ -239,17 +182,85 @@ void AppUpdate::Merge(App* state, const App* delta) {
   if (delta->run_on_os_login.has_value()) {
     state->run_on_os_login = CloneRunOnOsLogin(delta->run_on_os_login.value());
   }
-
-  if (!delta->shortcuts.empty()) {
-    state->shortcuts.clear();
-    state->shortcuts = CloneShortcuts(delta->shortcuts);
-  }
+  SET_OPTIONAL_VALUE(allow_close);
 
   SET_OPTIONAL_VALUE(app_size_in_bytes);
   SET_OPTIONAL_VALUE(data_size_in_bytes);
 
+  if (!delta->supported_locales.empty()) {
+    state->supported_locales.clear();
+    state->supported_locales = delta->supported_locales;
+  }
+  SET_OPTIONAL_VALUE(selected_locale);
+
+  if (delta->extra.has_value()) {
+    state->extra = delta->extra->Clone();
+  }
+
   // When adding new fields to the App type, this function should also be
   // updated.
+
+  return true;
+}
+
+}  // namespace
+
+// static
+void AppUpdate::MergeDelta(App* new_delta, App* delta) {
+  if (!MergeWithoutIconKey(new_delta, delta)) {
+    return;
+  }
+
+  MergeIconKeyDelta(new_delta, delta);
+}
+
+// static
+void AppUpdate::Merge(App* state, const App* delta) {
+  if (!MergeWithoutIconKey(state, delta)) {
+    return;
+  }
+
+  state->icon_key = MergeIconKey(state, delta);
+}
+
+// static
+bool AppUpdate::IsChanged(const App* state, const App* delta) {
+  if (!delta) {
+    return false;
+  }
+
+  if (!state) {
+    return true;
+  }
+
+  CHECK_EQ(state->app_id, delta->app_id);
+
+  if (state->app_type != delta->app_type) {
+    return true;
+  }
+
+  ::AccountId acount_id;
+  AppUpdate update(state, delta, acount_id);
+  return update.ReadinessChanged() || update.NameChanged() ||
+         update.ShortNameChanged() || update.PublisherIdChanged() ||
+         update.InstallerPackageIdChanged() || update.DescriptionChanged() ||
+         update.VersionChanged() || update.AdditionalSearchTermsChanged() ||
+         update.IconKeyChanged() || update.LastLaunchTimeChanged() ||
+         update.InstallTimeChanged() || update.PermissionsChanged() ||
+         update.InstallReasonChanged() || update.InstallSourceChanged() ||
+         update.PolicyIdsChanged() || update.IsPlatformAppChanged() ||
+         update.RecommendableChanged() || update.SearchableChanged() ||
+         update.ShowInLauncherChanged() || update.ShowInShelfChanged() ||
+         update.ShowInSearchChanged() || update.ShowInManagementChanged() ||
+         update.HandlesIntentsChanged() || update.AllowUninstallChanged() ||
+         update.HasBadgeChanged() || update.PausedChanged() ||
+         update.IntentFiltersChanged() || update.ResizeLockedChanged() ||
+         update.WindowModeChanged() ||
+         update.AllowWindowModeSelectionChanged() ||
+         update.RunOnOsLoginChanged() || update.AllowCloseChanged() ||
+         update.AppSizeInBytesChanged() || update.DataSizeInBytesChanged() ||
+         update.SupportedLocalesChanged() || update.SelectedLocaleChanged() ||
+         update.ExtraChanged();
 }
 
 AppUpdate::AppUpdate(const App* state,
@@ -262,6 +273,9 @@ AppUpdate::AppUpdate(const App* state,
     DCHECK_EQ(state_->app_id, delta->app_id);
   }
 }
+
+AppUpdate::AppUpdate(const AppUpdate&) = default;
+AppUpdate& AppUpdate::operator=(const AppUpdate&) = default;
 
 bool AppUpdate::StateIsNull() const {
   return state_ == nullptr;
@@ -311,6 +325,14 @@ bool AppUpdate::PublisherIdChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(publisher_id)
 }
 
+const std::optional<PackageId> AppUpdate::InstallerPackageId() const {
+  GET_VALUE_WITH_FALLBACK(installer_package_id, std::nullopt)
+}
+
+bool AppUpdate::InstallerPackageIdChanged() const {
+  RETURN_OPTIONAL_VALUE_CHANGED(installer_package_id)
+}
+
 const std::string& AppUpdate::Description() const {
   GET_VALUE_WITH_FALLBACK(description, base::EmptyString())
 }
@@ -336,18 +358,13 @@ bool AppUpdate::AdditionalSearchTermsChanged() const {
   IS_VALUE_CHANGED_WITH_CHECK(additional_search_terms, empty);
 }
 
-absl::optional<apps::IconKey> AppUpdate::IconKey() const {
-  if (delta_ && delta_->icon_key.has_value()) {
-    return std::move(*delta_->icon_key->Clone());
-  }
-  if (state_ && state_->icon_key.has_value()) {
-    return std::move(*state_->icon_key->Clone());
-  }
-  return absl::nullopt;
+std::optional<apps::IconKey> AppUpdate::IconKey() const {
+  return MergeIconKey(state_, delta_);
 }
 
 bool AppUpdate::IconKeyChanged() const {
-  RETURN_OPTIONAL_VALUE_CHANGED(icon_key);
+  return delta_ && delta_->icon_key.has_value() &&
+         (!state_ || (MergeIconKey(state_, delta_) != state_->icon_key));
 }
 
 base::Time AppUpdate::LastLaunchTime() const {
@@ -422,88 +439,88 @@ bool AppUpdate::InstalledInternally() const {
   }
 }
 
-absl::optional<bool> AppUpdate::IsPlatformApp() const {
-  GET_VALUE_WITH_FALLBACK(is_platform_app, absl::nullopt)
+std::optional<bool> AppUpdate::IsPlatformApp() const {
+  GET_VALUE_WITH_FALLBACK(is_platform_app, std::nullopt)
 }
 
 bool AppUpdate::IsPlatformAppChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(is_platform_app);
 }
 
-absl::optional<bool> AppUpdate::Recommendable() const {
-  GET_VALUE_WITH_FALLBACK(recommendable, absl::nullopt)
+std::optional<bool> AppUpdate::Recommendable() const {
+  GET_VALUE_WITH_FALLBACK(recommendable, std::nullopt)
 }
 
 bool AppUpdate::RecommendableChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(recommendable);
 }
 
-absl::optional<bool> AppUpdate::Searchable() const {
-  GET_VALUE_WITH_FALLBACK(searchable, absl::nullopt)
+std::optional<bool> AppUpdate::Searchable() const {
+  GET_VALUE_WITH_FALLBACK(searchable, std::nullopt)
 }
 
 bool AppUpdate::SearchableChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(searchable);
 }
 
-absl::optional<bool> AppUpdate::ShowInLauncher() const {
-  GET_VALUE_WITH_FALLBACK(show_in_launcher, absl::nullopt)
+std::optional<bool> AppUpdate::ShowInLauncher() const {
+  GET_VALUE_WITH_FALLBACK(show_in_launcher, std::nullopt)
 }
 
 bool AppUpdate::ShowInLauncherChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(show_in_launcher);
 }
 
-absl::optional<bool> AppUpdate::ShowInShelf() const {
-  GET_VALUE_WITH_FALLBACK(show_in_shelf, absl::nullopt)
+std::optional<bool> AppUpdate::ShowInShelf() const {
+  GET_VALUE_WITH_FALLBACK(show_in_shelf, std::nullopt)
 }
 
 bool AppUpdate::ShowInShelfChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(show_in_shelf);
 }
 
-absl::optional<bool> AppUpdate::ShowInSearch() const {
-  GET_VALUE_WITH_FALLBACK(show_in_search, absl::nullopt)
+std::optional<bool> AppUpdate::ShowInSearch() const {
+  GET_VALUE_WITH_FALLBACK(show_in_search, std::nullopt)
 }
 
 bool AppUpdate::ShowInSearchChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(show_in_search);
 }
 
-absl::optional<bool> AppUpdate::ShowInManagement() const {
-  GET_VALUE_WITH_FALLBACK(show_in_management, absl::nullopt)
+std::optional<bool> AppUpdate::ShowInManagement() const {
+  GET_VALUE_WITH_FALLBACK(show_in_management, std::nullopt)
 }
 
 bool AppUpdate::ShowInManagementChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(show_in_management);
 }
 
-absl::optional<bool> AppUpdate::HandlesIntents() const {
-  GET_VALUE_WITH_FALLBACK(handles_intents, absl::nullopt)
+std::optional<bool> AppUpdate::HandlesIntents() const {
+  GET_VALUE_WITH_FALLBACK(handles_intents, std::nullopt)
 }
 
 bool AppUpdate::HandlesIntentsChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(handles_intents);
 }
 
-absl::optional<bool> AppUpdate::AllowUninstall() const {
-  GET_VALUE_WITH_FALLBACK(allow_uninstall, absl::nullopt)
+std::optional<bool> AppUpdate::AllowUninstall() const {
+  GET_VALUE_WITH_FALLBACK(allow_uninstall, std::nullopt)
 }
 
 bool AppUpdate::AllowUninstallChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(allow_uninstall);
 }
 
-absl::optional<bool> AppUpdate::HasBadge() const {
-  GET_VALUE_WITH_FALLBACK(has_badge, absl::nullopt)
+std::optional<bool> AppUpdate::HasBadge() const {
+  GET_VALUE_WITH_FALLBACK(has_badge, std::nullopt)
 }
 
 bool AppUpdate::HasBadgeChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(has_badge);
 }
 
-absl::optional<bool> AppUpdate::Paused() const {
-  GET_VALUE_WITH_FALLBACK(paused, absl::nullopt);
+std::optional<bool> AppUpdate::Paused() const {
+  GET_VALUE_WITH_FALLBACK(paused, std::nullopt);
 }
 
 bool AppUpdate::PausedChanged() const {
@@ -511,26 +528,39 @@ bool AppUpdate::PausedChanged() const {
 }
 
 apps::IntentFilters AppUpdate::IntentFilters() const {
-  if (delta_ && !delta_->intent_filters.empty()) {
-    return CloneIntentFilters(delta_->intent_filters);
+  if (delta_ && delta_->intent_filters) {
+    return CloneIntentFilters(*delta_->intent_filters);
   }
-  if (state_ && !state_->intent_filters.empty()) {
-    return CloneIntentFilters(state_->intent_filters);
+  if (state_ && state_->intent_filters) {
+    return CloneIntentFilters(*state_->intent_filters);
   }
-  return std::vector<IntentFilterPtr>{};
+  return {};
 }
 
 bool AppUpdate::IntentFiltersChanged() const {
-  return delta_ && !delta_->intent_filters.empty() &&
-         (!state_ || !IsEqual(delta_->intent_filters, state_->intent_filters));
+  if (!delta_ || !delta_->intent_filters) {
+    return false;
+  }
+  if (!state_ || !state_->intent_filters) {
+    return !delta_->intent_filters->empty();
+  }
+  return !IsEqual(*state_->intent_filters, *delta_->intent_filters);
 }
 
-absl::optional<bool> AppUpdate::ResizeLocked() const {
-  GET_VALUE_WITH_FALLBACK(resize_locked, absl::nullopt);
+std::optional<bool> AppUpdate::ResizeLocked() const {
+  GET_VALUE_WITH_FALLBACK(resize_locked, std::nullopt);
 }
 
 bool AppUpdate::ResizeLockedChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(resize_locked);
+}
+
+std::optional<bool> AppUpdate::AllowWindowModeSelection() const {
+  GET_VALUE_WITH_FALLBACK(allow_window_mode_selection, true);
+}
+
+bool AppUpdate::AllowWindowModeSelectionChanged() const {
+  RETURN_OPTIONAL_VALUE_CHANGED(allow_window_mode_selection);
 }
 
 apps::WindowMode AppUpdate::WindowMode() const {
@@ -541,61 +571,90 @@ bool AppUpdate::WindowModeChanged() const {
   IS_VALUE_CHANGED_WITH_DEFAULT_VALUE(window_mode, WindowMode::kUnknown);
 }
 
-absl::optional<apps::RunOnOsLogin> AppUpdate::RunOnOsLogin() const {
+std::optional<apps::RunOnOsLogin> AppUpdate::RunOnOsLogin() const {
   if (delta_ && delta_->run_on_os_login.has_value()) {
     return CloneRunOnOsLogin(delta_->run_on_os_login.value());
   }
   if (state_ && state_->run_on_os_login.has_value()) {
     return CloneRunOnOsLogin(state_->run_on_os_login.value());
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool AppUpdate::RunOnOsLoginChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(run_on_os_login);
 }
 
-apps::Shortcuts AppUpdate::Shortcuts() const {
-  if (delta_ && !delta_->shortcuts.empty()) {
-    return CloneShortcuts(delta_->shortcuts);
-  } else if (state_ && !state_->shortcuts.empty()) {
-    return CloneShortcuts(state_->shortcuts);
-  }
-  return std::vector<ShortcutPtr>{};
+std::optional<bool> AppUpdate::AllowClose() const {
+  GET_VALUE_WITH_FALLBACK(allow_close, std::nullopt)
 }
 
-bool AppUpdate::ShortcutsChanged() const {
-  return delta_ && !delta_->shortcuts.empty() &&
-         (!state_ || !IsEqual(delta_->shortcuts, state_->shortcuts));
+bool AppUpdate::AllowCloseChanged() const {
+  RETURN_OPTIONAL_VALUE_CHANGED(allow_close);
 }
 
 const ::AccountId& AppUpdate::AccountId() const {
   return *account_id_;
 }
 
-absl::optional<uint64_t> AppUpdate::AppSizeInBytes() const {
-  GET_VALUE_WITH_FALLBACK(app_size_in_bytes, absl::nullopt);
+std::optional<uint64_t> AppUpdate::AppSizeInBytes() const {
+  GET_VALUE_WITH_FALLBACK(app_size_in_bytes, std::nullopt);
 }
 
 bool AppUpdate::AppSizeInBytesChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(app_size_in_bytes);
 }
 
-absl::optional<uint64_t> AppUpdate::DataSizeInBytes() const {
-  GET_VALUE_WITH_FALLBACK(data_size_in_bytes, absl::nullopt);
+std::optional<uint64_t> AppUpdate::DataSizeInBytes() const {
+  GET_VALUE_WITH_FALLBACK(data_size_in_bytes, std::nullopt);
 }
 
 bool AppUpdate::DataSizeInBytesChanged() const {
   RETURN_OPTIONAL_VALUE_CHANGED(data_size_in_bytes);
 }
 
+const std::vector<std::string>& AppUpdate::SupportedLocales() const {
+  GET_VALUE_WITH_CHECK_AND_DEFAULT_RETURN(supported_locales, empty,
+                                          EmptyStringVector());
+}
+
+bool AppUpdate::SupportedLocalesChanged() const {
+  IS_VALUE_CHANGED_WITH_CHECK(supported_locales, empty);
+}
+
+std::optional<std::string> AppUpdate::SelectedLocale() const {
+  GET_VALUE_WITH_FALLBACK(selected_locale, std::string())
+}
+
+bool AppUpdate::SelectedLocaleChanged() const {
+    RETURN_OPTIONAL_VALUE_CHANGED(selected_locale)}
+
+std::optional<base::Value::Dict> AppUpdate::Extra() const {
+  if (delta_ && delta_->extra.has_value()) {
+    return delta_->extra->Clone();
+  }
+  if (state_ && state_->extra.has_value()) {
+    return state_->extra->Clone();
+  }
+  return std::nullopt;
+}
+
+bool AppUpdate::ExtraChanged() const {
+  RETURN_OPTIONAL_VALUE_CHANGED(extra);
+}
+
 std::ostream& operator<<(std::ostream& out, const AppUpdate& app) {
-  out << "AppType: " << EnumToString(app.AppType()) << std::endl;
+  out << "AppType: " << app.AppType() << std::endl;
   out << "AppId: " << app.AppId() << std::endl;
-  out << "Readiness: " << EnumToString(app.Readiness()) << std::endl;
+  out << "Readiness: " << app.Readiness() << std::endl;
   out << "Name: " << app.Name() << std::endl;
   out << "ShortName: " << app.ShortName() << std::endl;
   out << "PublisherId: " << app.PublisherId() << std::endl;
+  out << "InstallerPackageId: "
+      << (app.InstallerPackageId().has_value()
+              ? app.InstallerPackageId()->ToString()
+              : "null")
+      << std::endl;
   out << "Description: " << app.Description() << std::endl;
   out << "Version: " << app.Version() << std::endl;
 
@@ -607,50 +666,62 @@ std::ostream& operator<<(std::ostream& out, const AppUpdate& app) {
 
   out << "Permissions:" << std::endl;
   for (const auto& permission : app.Permissions()) {
-    out << permission->ToString();
+    out << permission->ToString() << std::endl;
   }
 
-  out << "InstallReason: " << EnumToString(app.InstallReason()) << std::endl;
-  out << "InstallSource: " << EnumToString(app.InstallSource()) << std::endl;
+  out << "InstallReason: " << app.InstallReason() << std::endl;
+  out << "InstallSource: " << app.InstallSource() << std::endl;
 
   out << "PolicyId: " << base::JoinString(app.PolicyIds(), ", ") << std::endl;
 
   out << "InstalledInternally: " << app.InstalledInternally() << std::endl;
-  out << "IsPlatformApp: " << PRINT_OPTIONAL_VALUE(IsPlatformApp) << std::endl;
-  out << "Recommendable: " << PRINT_OPTIONAL_VALUE(Recommendable) << std::endl;
-  out << "Searchable: " << PRINT_OPTIONAL_VALUE(Searchable) << std::endl;
-  out << "ShowInLauncher: " << PRINT_OPTIONAL_VALUE(ShowInLauncher)
+  out << "IsPlatformApp: " << PRINT_OPTIONAL_BOOL(app.IsPlatformApp())
       << std::endl;
-  out << "ShowInShelf: " << PRINT_OPTIONAL_VALUE(ShowInShelf) << std::endl;
-  out << "ShowInSearch: " << PRINT_OPTIONAL_VALUE(ShowInSearch) << std::endl;
-  out << "ShowInManagement: " << PRINT_OPTIONAL_VALUE(ShowInManagement)
+  out << "Recommendable: " << PRINT_OPTIONAL_BOOL(app.Recommendable())
       << std::endl;
-  out << "HandlesIntents: " << PRINT_OPTIONAL_VALUE(HandlesIntents)
+  out << "Searchable: " << PRINT_OPTIONAL_BOOL(app.Searchable()) << std::endl;
+  out << "ShowInLauncher: " << PRINT_OPTIONAL_BOOL(app.ShowInLauncher())
       << std::endl;
-  out << "AllowUninstall: " << PRINT_OPTIONAL_VALUE(AllowUninstall)
+  out << "ShowInShelf: " << PRINT_OPTIONAL_BOOL(app.ShowInShelf()) << std::endl;
+  out << "ShowInSearch: " << PRINT_OPTIONAL_BOOL(app.ShowInSearch())
       << std::endl;
-  out << "HasBadge: " << PRINT_OPTIONAL_VALUE(HasBadge) << std::endl;
-  out << "Paused: " << PRINT_OPTIONAL_VALUE(Paused) << std::endl;
+  out << "ShowInManagement: " << PRINT_OPTIONAL_BOOL(app.ShowInManagement())
+      << std::endl;
+  out << "HandlesIntents: " << PRINT_OPTIONAL_BOOL(app.HandlesIntents())
+      << std::endl;
+  out << "AllowUninstall: " << PRINT_OPTIONAL_BOOL(app.AllowUninstall())
+      << std::endl;
+  out << "HasBadge: " << PRINT_OPTIONAL_BOOL(app.HasBadge()) << std::endl;
+  out << "Paused: " << PRINT_OPTIONAL_BOOL(app.Paused()) << std::endl;
 
   out << "IntentFilters: " << std::endl;
   for (const auto& filter : app.IntentFilters()) {
     out << filter->ToString() << std::endl;
   }
 
-  out << "ResizeLocked: " << PRINT_OPTIONAL_VALUE(ResizeLocked) << std::endl;
-  out << "WindowMode: " << EnumToString(app.WindowMode()) << std::endl;
+  out << "ResizeLocked: " << PRINT_OPTIONAL_BOOL(app.ResizeLocked())
+      << std::endl;
+  out << "AllowWindowModeSelection: "
+      << PRINT_OPTIONAL_BOOL(app.AllowWindowModeSelection()) << std::endl;
+  out << "WindowMode: " << app.WindowMode() << std::endl;
   if (app.RunOnOsLogin().has_value()) {
     out << "RunOnOsLoginMode: "
         << EnumToString(app.RunOnOsLogin().value().login_mode) << std::endl;
   }
+  out << "Allow Close: " << PRINT_OPTIONAL_BOOL(app.AllowClose()) << std::endl;
 
-  out << "Shortcuts: " << std::endl;
-  for (const auto& shortcut : app.Shortcuts()) {
-    out << shortcut->ToString() << std::endl;
-  }
+  out << "App Size: " << FormatBytes(app.AppSizeInBytes()) << std::endl;
+  out << "Data Size: " << FormatBytes(app.DataSizeInBytes()) << std::endl;
 
-  out << "App Size: " << app.AppSizeInBytes().value_or(-1) << std::endl;
-  out << "Data Size: " << app.DataSizeInBytes().value_or(-1) << std::endl;
+  out << "Supported locales: " << base::JoinString(app.SupportedLocales(), ", ")
+      << std::endl;
+  out << "Selected locale: "
+      << (app.SelectedLocale().has_value() ? app.SelectedLocale().value()
+                                           : "No selected_locale")
+      << std::endl;
+  out << "Extra: "
+      << (app.Extra().has_value() ? app.Extra()->DebugString() : "No Extra")
+      << std::endl;
 
   return out;
 }

@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/c/system/trap.h"
+
 #include <stdint.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/rand_util.h"
 #include "base/synchronization/waitable_event.h"
@@ -20,7 +25,6 @@
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/c/system/data_pipe.h"
-#include "mojo/public/c/system/trap.h"
 #include "mojo/public/c/system/types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -79,10 +83,11 @@ class TriggerHelper {
     }
 
     void Notify(const MojoTrapEvent& event) {
-      if (event.result == MOJO_RESULT_CANCELLED && cancel_callback_)
+      if (event.result == MOJO_RESULT_CANCELLED && cancel_callback_) {
         std::move(cancel_callback_).Run();
-      else
+      } else {
         callback_.Run(event);
+      }
     }
 
    private:
@@ -1610,7 +1615,7 @@ TEST_F(TrapTest, ArmFailureCirculation) {
 
   constexpr size_t kNumTestPipes = 100;
   constexpr size_t kNumTestHandles = kNumTestPipes * 2;
-  MojoHandle handles[kNumTestHandles];
+  std::array<MojoHandle, kNumTestHandles> handles;
 
   // Create a bunch of pipes and make sure they're all readable.
   for (size_t i = 0; i < kNumTestPipes; ++i) {
@@ -1645,8 +1650,9 @@ TEST_F(TrapTest, ArmFailureCirculation) {
     ready_contexts.insert(blocking_event.trigger_context);
   }
 
-  for (size_t i = 0; i < kNumTestHandles; ++i)
+  for (size_t i = 0; i < kNumTestHandles; ++i) {
     EXPECT_EQ(MOJO_RESULT_OK, MojoClose(handles[i]));
+  }
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(t));
 }
 
@@ -1747,35 +1753,140 @@ TEST_F(TrapTest, TriggerDuringDestruction) {
   MojoClose(b);
 }
 
+TEST_F(TrapTest, RaceDispatchAndBlockedCancel) {
+  // Regression test for https://crbug.com/1508753. This bug was caused by
+  // reordering of a MOJO_RESULT_CANCELLED event to before some other event for
+  // the same trap context, violating an API constraint that must be upheld for
+  // memory safety in application code. The scenario which could elicit the bug
+  // was as follows:
+  //
+  //   1. A single trap is watching two pipes, P and Q.
+  //   2. Thread A closes pipe P, triggering a CANCELLED event.
+  //   3. Thread A re-arms the trap from within the CANCELLED event handler.
+  //   4. Thread B changes Q's state to elicit a event for Q (not CANCELLED).
+  //   5. Thread B dispatch is blocked because thread A is still dispatching.
+  //   6. Before thread B gets a chance to be scheduled, thread A closes Q.
+  //   7. Thread A dispatches a CANCELLED event for Q.
+  //   8. Thread B is scheduled and proceeds to dispatch its Q event. [BAD]
+
+  struct State;
+
+  struct Pipe {
+    explicit Pipe(State* state) : state(state) { CreateMessagePipe(&a, &b); }
+
+    uintptr_t context() const { return reinterpret_cast<uintptr_t>(this); }
+
+    MojoHandle a;
+    MojoHandle b;
+    bool trigger_cancelled = false;
+
+    // Back-reference to common state so it's reachable from the event handler.
+    const raw_ptr<State> state;
+  };
+
+  struct State {
+    Pipe pipe0{this};
+    Pipe pipe1{this};
+    MojoHandle trap;
+    base::WaitableEvent event;
+  };
+  State state;
+
+  // NOTE: + to turn the lambda into a function pointer.
+  const MojoTrapEventHandler event_handler = +[](const MojoTrapEvent* event) {
+    auto& pipe = *reinterpret_cast<Pipe*>(event->trigger_context);
+    auto& state = *pipe.state;
+
+    // If the bug is present, this expectation can fail flakily. No event should
+    // fire for a pipe after its watch has been cancelled.
+    EXPECT_FALSE(pipe.trigger_cancelled);
+
+    if (event->result == MOJO_RESULT_CANCELLED) {
+      pipe.trigger_cancelled = true;
+
+      if (&pipe == &state.pipe0) {
+        // When pipe0's watch is cancelled (on the main thread by closure down
+        // below) we re-arm the trap immediately. This must succeed because
+        // `pipe1.a` is now the only handle being watched, and it's still in an
+        // uninteresting state.
+        EXPECT_EQ(MOJO_RESULT_OK,
+                  MojoArmTrap(state.trap, nullptr, nullptr, nullptr));
+
+        // Unblock the other thread so it can elicit a trap event on pipe1 now
+        // that the trap is re-armed. It will still block just before
+        // dispatching as long as we're still in this event handler on the main
+        // thread.
+        state.event.Signal();
+
+        // A nice long delay to make it very likely for the waiting
+        // ThreadedRunner to progress right up to its event dispatch.
+        base::PlatformThread::Sleep(base::Milliseconds(10));
+
+        // Trigger cancellation for pipe1 by closing its `a`. This will queue a
+        // CANCELLED event to fire on the same thread immediately after we
+        // return from this handler.
+        MojoClose(state.pipe1.a);
+      }
+    }
+  };
+
+  EXPECT_EQ(MOJO_RESULT_OK,
+            MojoCreateTrap(event_handler, nullptr, &state.trap));
+  EXPECT_EQ(
+      MOJO_RESULT_OK,
+      MojoAddTrigger(state.trap, state.pipe0.a, MOJO_HANDLE_SIGNAL_READABLE,
+                     MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
+                     state.pipe0.context(), nullptr));
+  EXPECT_EQ(
+      MOJO_RESULT_OK,
+      MojoAddTrigger(state.trap, state.pipe1.a, MOJO_HANDLE_SIGNAL_READABLE,
+                     MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
+                     state.pipe1.context(), nullptr));
+  EXPECT_EQ(MOJO_RESULT_OK, MojoArmTrap(state.trap, nullptr, nullptr, nullptr));
+
+  ThreadedRunner close_pipe1_b(base::BindLambdaForTesting([&] {
+    state.event.Wait();
+    MojoClose(state.pipe1.b);
+  }));
+  close_pipe1_b.Start();
+
+  // Trigger cancellation of the watch on `pipe0.a`. See event_handler above.
+  MojoClose(state.pipe0.a);
+
+  close_pipe1_b.Join();
+  MojoClose(state.pipe0.b);
+  MojoClose(state.trap);
+}
+
 base::RepeatingClosure g_do_random_thing_callback;
 
 void ReadAllMessages(const MojoTrapEvent* event) {
   if (event->result == MOJO_RESULT_OK) {
     MojoHandle handle = static_cast<MojoHandle>(event->trigger_context);
     MojoMessageHandle message;
-    while (MojoReadMessage(handle, nullptr, &message) == MOJO_RESULT_OK)
+    while (MojoReadMessage(handle, nullptr, &message) == MOJO_RESULT_OK) {
       MojoDestroyMessage(message);
+    }
   }
 
   constexpr size_t kNumRandomThingsToDoOnNotify = 5;
-  for (size_t i = 0; i < kNumRandomThingsToDoOnNotify; ++i)
+  for (size_t i = 0; i < kNumRandomThingsToDoOnNotify; ++i) {
     g_do_random_thing_callback.Run();
+  }
 }
 
-MojoHandle RandomHandle(MojoHandle* handles, size_t size) {
-  return handles[base::RandInt(0, static_cast<int>(size) - 1)];
+MojoHandle RandomHandle(base::span<MojoHandle> handles) {
+  return handles[base::RandInt(0, static_cast<int>(handles.size()) - 1)];
 }
 
-void DoRandomThing(MojoHandle* traps,
-                   size_t num_traps,
-                   MojoHandle* watched_handles,
-                   size_t num_watched_handles) {
+void DoRandomThing(base::span<MojoHandle> traps,
+                   base::span<MojoHandle> watched_handles) {
   switch (base::RandInt(0, 10)) {
     case 0:
-      MojoClose(RandomHandle(traps, num_traps));
+      MojoClose(RandomHandle(traps));
       break;
     case 1:
-      MojoClose(RandomHandle(watched_handles, num_watched_handles));
+      MojoClose(RandomHandle(watched_handles));
       break;
     case 2:
     case 3:
@@ -1784,14 +1895,13 @@ void DoRandomThing(MojoHandle* traps,
       ASSERT_EQ(MOJO_RESULT_OK, MojoCreateMessage(nullptr, &message));
       ASSERT_EQ(MOJO_RESULT_OK,
                 MojoSetMessageContext(message, 1, nullptr, nullptr, nullptr));
-      MojoWriteMessage(RandomHandle(watched_handles, num_watched_handles),
-                       message, nullptr);
+      MojoWriteMessage(RandomHandle(watched_handles), message, nullptr);
       break;
     }
     case 5:
     case 6: {
-      MojoHandle t = RandomHandle(traps, num_traps);
-      MojoHandle h = RandomHandle(watched_handles, num_watched_handles);
+      MojoHandle t = RandomHandle(traps);
+      MojoHandle h = RandomHandle(watched_handles);
       MojoAddTrigger(t, h, MOJO_HANDLE_SIGNAL_READABLE,
                      MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
                      static_cast<uintptr_t>(h), nullptr);
@@ -1801,8 +1911,7 @@ void DoRandomThing(MojoHandle* traps,
     case 8: {
       uint32_t num_blocking_events = 1;
       MojoTrapEvent blocking_event = {sizeof(blocking_event)};
-      if (MojoArmTrap(RandomHandle(traps, num_traps), nullptr,
-                      &num_blocking_events,
+      if (MojoArmTrap(RandomHandle(traps), nullptr, &num_blocking_events,
                       &blocking_event) == MOJO_RESULT_FAILED_PRECONDITION &&
           blocking_event.result == MOJO_RESULT_OK) {
         ReadAllMessages(&blocking_event);
@@ -1811,14 +1920,13 @@ void DoRandomThing(MojoHandle* traps,
     }
     case 9:
     case 10: {
-      MojoHandle t = RandomHandle(traps, num_traps);
-      MojoHandle h = RandomHandle(watched_handles, num_watched_handles);
+      MojoHandle t = RandomHandle(traps);
+      MojoHandle h = RandomHandle(watched_handles);
       MojoRemoveTrigger(t, static_cast<uintptr_t>(h), nullptr);
       break;
     }
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -1838,30 +1946,38 @@ TEST_F(TrapTest, ConcurrencyStressTest) {
   constexpr size_t kNumThreads = 10;
   static constexpr size_t kNumOperationsPerThread = 400;
 
-  MojoHandle traps[kNumTraps];
-  MojoHandle watched_handles[kNumWatchedHandles];
+  std::array<MojoHandle, kNumTraps> traps;
+  std::array<MojoHandle, kNumWatchedHandles> watched_handles;
   g_do_random_thing_callback = base::BindRepeating(
-      &DoRandomThing, traps, kNumTraps, watched_handles, kNumWatchedHandles);
+      &DoRandomThing, base::span(traps), base::span(watched_handles));
 
-  for (size_t i = 0; i < kNumTraps; ++i)
+  for (size_t i = 0; i < kNumTraps; ++i) {
     MojoCreateTrap(&ReadAllMessages, nullptr, &traps[i]);
-  for (size_t i = 0; i < kNumWatchedHandles; i += 2)
+  }
+  for (size_t i = 0; i < kNumWatchedHandles; i += 2) {
     CreateMessagePipe(&watched_handles[i], &watched_handles[i + 1]);
+  }
 
-  std::unique_ptr<ThreadedRunner> threads[kNumThreads];
+  std::array<std::unique_ptr<ThreadedRunner>, kNumThreads> threads;
   for (size_t i = 0; i < kNumThreads; ++i) {
     threads[i] = std::make_unique<ThreadedRunner>(base::BindOnce([] {
-      for (size_t i = 0; i < kNumOperationsPerThread; ++i)
+      for (size_t i = 0; i < kNumOperationsPerThread; ++i) {
         g_do_random_thing_callback.Run();
+      }
     }));
     threads[i]->Start();
   }
-  for (size_t i = 0; i < kNumThreads; ++i)
+  for (size_t i = 0; i < kNumThreads; ++i) {
     threads[i]->Join();
-  for (size_t i = 0; i < kNumTraps; ++i)
+  }
+  for (size_t i = 0; i < kNumTraps; ++i) {
     MojoClose(traps[i]);
-  for (size_t i = 0; i < kNumWatchedHandles; ++i)
+  }
+  for (size_t i = 0; i < kNumWatchedHandles; ++i) {
     MojoClose(watched_handles[i]);
+  }
+
+  g_do_random_thing_callback.Reset();
 }
 
 }  // namespace

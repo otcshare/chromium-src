@@ -11,17 +11,16 @@
 #include "gpu/command_buffer/common/context_creation_attribs.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/sequence_id.h"
-#include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/gpu_gles2_export.h"
 #include "gpu/ipc/common/command_buffer_id.h"
 
 namespace gpu {
-class MailboxManager;
 class SyncPointManager;
 class SharedImageManager;
 struct GpuFeatureInfo;
 struct GpuPreferences;
+class SharedContextState;
 
 // This class holds ownership of data structure that is only used on the gpu
 // thread. This class is expected to be 1:1 relationship with the display
@@ -30,7 +29,6 @@ class GPU_GLES2_EXPORT DisplayCompositorMemoryAndTaskControllerOnGpu {
  public:
   DisplayCompositorMemoryAndTaskControllerOnGpu(
       scoped_refptr<SharedContextState> shared_context_state,
-      MailboxManager* mailbox_manager,
       SharedImageManager* shared_image_manager,
       SyncPointManager* sync_point_manager,
       const GpuPreferences& gpu_preferences,
@@ -52,7 +50,6 @@ class GPU_GLES2_EXPORT DisplayCompositorMemoryAndTaskControllerOnGpu {
   // GPU process. Not Used for cross process shared image stub.
   static gpu::CommandBufferId NextCommandBufferId();
 
-  MailboxManager* mailbox_manager() const { return mailbox_manager_; }
   SharedImageManager* shared_image_manager() const {
     return shared_image_manager_;
   }
@@ -69,7 +66,6 @@ class GPU_GLES2_EXPORT DisplayCompositorMemoryAndTaskControllerOnGpu {
   const CommandBufferId command_buffer_id_;
 
   // Used for creating SharedImageFactory.
-  raw_ptr<MailboxManager> mailbox_manager_;
   raw_ptr<SharedImageManager> shared_image_manager_;
   raw_ptr<SyncPointManager> sync_point_manager_;
   const raw_ref<const GpuPreferences> gpu_preferences_;

@@ -7,6 +7,7 @@
 
 #include "third_party/blink/renderer/modules/sensor/sensor_proxy.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -89,7 +90,7 @@ class SensorProxyImpl final : public SensorProxy,
   std::pair<double, double> frequency_limits_;
   bool suspended_ = false;
 
-  WTF::Vector<double> active_frequencies_;
+  Vector<double> active_frequencies_;
   HeapTaskRunnerTimer<SensorProxyImpl> polling_timer_;
 };
 

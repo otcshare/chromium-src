@@ -4,13 +4,13 @@
 
 #include "services/network/trust_tokens/trust_token_request_issuance_helper.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/callback.h"
 #include "base/command_line.h"
+#include "base/functional/callback.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/thread_pool.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
@@ -36,7 +36,7 @@ using Cryptographer = TrustTokenRequestIssuanceHelper::Cryptographer;
 
 struct TrustTokenRequestIssuanceHelper::CryptographerAndBlindedTokens {
   std::unique_ptr<Cryptographer> cryptographer;
-  absl::optional<std::string> blinded_tokens;
+  std::optional<std::string> blinded_tokens;
 };
 
 struct TrustTokenRequestIssuanceHelper::CryptographerAndUnblindedTokens {
@@ -49,7 +49,7 @@ namespace {
 TrustTokenRequestIssuanceHelper::CryptographerAndBlindedTokens
 BeginIssuanceOnPostedSequence(std::unique_ptr<Cryptographer> cryptographer,
                               int batch_size) {
-  absl::optional<std::string> blinded_tokens =
+  std::optional<std::string> blinded_tokens =
       cryptographer->BeginIssuance(batch_size);
   return {std::move(cryptographer), std::move(blinded_tokens)};
 }
@@ -57,8 +57,9 @@ BeginIssuanceOnPostedSequence(std::unique_ptr<Cryptographer> cryptographer,
 TrustTokenRequestIssuanceHelper::CryptographerAndUnblindedTokens
 ConfirmIssuanceOnPostedSequence(std::unique_ptr<Cryptographer> cryptographer,
                                 std::string response_header) {
-  // From the "spec" (design doc): "If the response has an empty Sec-Trust-Token
-  // header, return; this is a 'success' response bearing 0 tokens"
+  // From the "spec" (design doc): "If the response has an empty
+  // Sec-Private-State-Token header, return; this is a 'success' response
+  // bearing 0 tokens"
   if (response_header.empty()) {
     return {std::move(cryptographer),
             std::make_unique<Cryptographer::UnblindedTokens>()};
@@ -69,17 +70,15 @@ ConfirmIssuanceOnPostedSequence(std::unique_ptr<Cryptographer> cryptographer,
   return {std::move(cryptographer), std::move(unblinded_tokens)};
 }
 
-base::Value CreateLogValue(base::StringPiece outcome) {
-  base::Value ret(base::Value::Type::DICTIONARY);
-  ret.SetStringKey("outcome", outcome);
-  return ret;
+base::Value::Dict CreateLogValue(std::string_view outcome) {
+  return base::Value::Dict().Set("outcome", outcome);
 }
 
 // Define convenience aliases for the NetLogEventTypes for brevity.
 enum NetLogOp { kBegin, kFinalize };
 void LogOutcome(const net::NetLogWithSource& log,
                 NetLogOp begin_or_finalize,
-                base::StringPiece outcome) {
+                std::string_view outcome) {
   log.EndEvent(
       begin_or_finalize == kBegin
           ? net::NetLogEventType::TRUST_TOKEN_OPERATION_BEGIN_ISSUANCE
@@ -93,8 +92,8 @@ TrustTokenRequestIssuanceHelper::TrustTokenRequestIssuanceHelper(
     SuitableTrustTokenOrigin top_level_origin,
     TrustTokenStore* token_store,
     const TrustTokenKeyCommitmentGetter* key_commitment_getter,
-    absl::optional<std::string> custom_key_commitment,
-    absl::optional<url::Origin> custom_issuer,
+    std::optional<std::string> custom_key_commitment,
+    std::optional<url::Origin> custom_issuer,
     std::unique_ptr<Cryptographer> cryptographer,
     net::NetLogWithSource net_log)
     : top_level_origin_(std::move(top_level_origin)),
@@ -118,7 +117,7 @@ TrustTokenRequestIssuanceHelper::Cryptographer::UnblindedTokens::
 
 void TrustTokenRequestIssuanceHelper::Begin(
     const GURL& url,
-    base::OnceCallback<void(absl::optional<net::HttpRequestHeaders>,
+    base::OnceCallback<void(std::optional<net::HttpRequestHeaders>,
                             mojom::TrustTokenOperationStatus)> done) {
   net_log_.BeginEvent(
       net::NetLogEventType::TRUST_TOKEN_OPERATION_BEGIN_ISSUANCE);
@@ -131,17 +130,19 @@ void TrustTokenRequestIssuanceHelper::Begin(
 
   if (!issuer_) {
     LogOutcome(net_log_, kBegin, "Unsuitable issuer URL");
-    std::move(done).Run(absl::nullopt,
+    std::move(done).Run(std::nullopt,
                         mojom::TrustTokenOperationStatus::kInvalidArgument);
     return;
   }
+
+  token_store_->RecordIssuance(*issuer_);
 
   if (custom_key_commitment_) {
     mojom::TrustTokenKeyCommitmentResultPtr keys =
         TrustTokenKeyCommitmentParser().Parse(*custom_key_commitment_);
     if (!keys) {
       LogOutcome(net_log_, kBegin, "Failed to parse custom keys");
-      std::move(done).Run(absl::nullopt,
+      std::move(done).Run(std::nullopt,
                           mojom::TrustTokenOperationStatus::kInvalidArgument);
       return;
     }
@@ -151,16 +152,16 @@ void TrustTokenRequestIssuanceHelper::Begin(
 
   if (!token_store_->SetAssociation(*issuer_, top_level_origin_)) {
     LogOutcome(net_log_, kBegin, "Couldn't set issuer-toplevel association");
-    std::move(done).Run(absl::nullopt,
-                        mojom::TrustTokenOperationStatus::kResourceExhausted);
+    std::move(done).Run(std::nullopt,
+                        mojom::TrustTokenOperationStatus::kSiteIssuerLimit);
     return;
   }
 
   if (token_store_->CountTokens(*issuer_) ==
       kTrustTokenPerIssuerTokenCapacity) {
     LogOutcome(net_log_, kBegin, "Tokens at capacity");
-    std::move(done).Run(absl::nullopt,
-                        mojom::TrustTokenOperationStatus::kResourceExhausted);
+    std::move(done).Run(std::nullopt,
+                        mojom::TrustTokenOperationStatus::kResourceLimited);
     return;
   }
 
@@ -173,23 +174,25 @@ void TrustTokenRequestIssuanceHelper::Begin(
 
 void TrustTokenRequestIssuanceHelper::OnGotKeyCommitment(
     const GURL& url,
-    base::OnceCallback<void(absl::optional<net::HttpRequestHeaders>,
+    base::OnceCallback<void(std::optional<net::HttpRequestHeaders>,
                             mojom::TrustTokenOperationStatus)> done,
     mojom::TrustTokenKeyCommitmentResultPtr commitment_result) {
   if (!commitment_result) {
     LogOutcome(net_log_, kBegin, "No keys for issuer");
-    std::move(done).Run(absl::nullopt,
-                        mojom::TrustTokenOperationStatus::kFailedPrecondition);
+    std::move(done).Run(std::nullopt,
+                        mojom::TrustTokenOperationStatus::kMissingIssuerKeys);
     return;
   }
 
   protocol_version_ = commitment_result->protocol_version;
+  base::UmaHistogramEnumeration("Net.TrustTokens.ProtocolVersion",
+                                protocol_version_);
   if (!commitment_result->batch_size ||
       !cryptographer_->Initialize(protocol_version_,
                                   commitment_result->batch_size)) {
     LogOutcome(net_log_, kBegin,
                "Internal error initializing cryptography delegate");
-    std::move(done).Run(absl::nullopt,
+    std::move(done).Run(std::nullopt,
                         mojom::TrustTokenOperationStatus::kInternalError);
     return;
   }
@@ -199,7 +202,7 @@ void TrustTokenRequestIssuanceHelper::OnGotKeyCommitment(
     if (!cryptographer_->AddKey(key->body)) {
       LogOutcome(net_log_, kBegin, "Bad key");
       std::move(done).Run(
-          absl::nullopt, mojom::TrustTokenOperationStatus::kFailedPrecondition);
+          std::nullopt, mojom::TrustTokenOperationStatus::kFailedPrecondition);
       return;
     }
   }
@@ -225,16 +228,16 @@ void TrustTokenRequestIssuanceHelper::OnGotKeyCommitment(
 
 void TrustTokenRequestIssuanceHelper::OnDelegateBeginIssuanceCallComplete(
     const GURL& url,
-    base::OnceCallback<void(absl::optional<net::HttpRequestHeaders>,
+    base::OnceCallback<void(std::optional<net::HttpRequestHeaders>,
                             mojom::TrustTokenOperationStatus)> done,
     CryptographerAndBlindedTokens cryptographer_and_blinded_tokens) {
   cryptographer_ = std::move(cryptographer_and_blinded_tokens.cryptographer);
-  absl::optional<std::string>& maybe_blinded_tokens =
+  std::optional<std::string>& maybe_blinded_tokens =
       cryptographer_and_blinded_tokens.blinded_tokens;  // Convenience alias
 
   if (!maybe_blinded_tokens) {
     LogOutcome(net_log_, kBegin, "Internal error generating blinded tokens");
-    std::move(done).Run(absl::nullopt,
+    std::move(done).Run(std::nullopt,
                         mojom::TrustTokenOperationStatus::kInternalError);
     return;
   }
@@ -259,28 +262,22 @@ void TrustTokenRequestIssuanceHelper::Finalize(
   net_log_.BeginEvent(
       net::NetLogEventType::TRUST_TOKEN_OPERATION_FINALIZE_ISSUANCE);
 
-  std::string header_value;
+  // EnumerateHeader(|iter|=nullptr) asks for a previous instance of the header,
+  // and returns the next one.
+  std::optional<std::string_view> header_value =
+      response_headers.EnumerateHeader(
+          /*iter=*/nullptr, kTrustTokensSecTrustTokenHeader);
 
-  // EnumerateHeader(|iter|=nullptr) asks for the first instance of the header,
-  // if any.
-  if (!response_headers.EnumerateHeader(
-          /*iter=*/nullptr, kTrustTokensSecTrustTokenHeader, &header_value)) {
+  if (!header_value) {
     LogOutcome(net_log_, kFinalize, "Response missing Trust Tokens header");
-    response_headers.RemoveHeader(
-        kTrustTokensResponseHeaderSecTrustTokenClearData);
     std::move(done).Run(mojom::TrustTokenOperationStatus::kBadResponse);
     return;
   }
 
+  ProcessIssuanceResponse(std::string(*header_value), std::move(done));
+  // Can only remove the header after the last user of `header_value`, since it
+  // holds a pointer to the kTrustTokensSecTrustTokenHeader header's value.
   response_headers.RemoveHeader(kTrustTokensSecTrustTokenHeader);
-  if (response_headers.HasHeaderValue(
-          kTrustTokensResponseHeaderSecTrustTokenClearData, "all")) {
-    static_cast<void>(token_store_->DeleteStoredTrustTokens(*issuer_));
-  }
-  response_headers.RemoveHeader(
-      kTrustTokensResponseHeaderSecTrustTokenClearData);
-
-  ProcessIssuanceResponse(std::move(header_value), std::move(done));
 }
 
 void TrustTokenRequestIssuanceHelper::ProcessIssuanceResponse(
@@ -319,7 +316,7 @@ void TrustTokenRequestIssuanceHelper::OnDoneProcessingIssuanceResponse(
     return;
   }
 
-  token_store_->AddTokens(*issuer_, base::make_span(maybe_tokens->tokens),
+  token_store_->AddTokens(*issuer_, base::span(maybe_tokens->tokens),
                           maybe_tokens->body_of_verifying_key);
 
   num_obtained_tokens_ = maybe_tokens->tokens.size();
@@ -327,9 +324,8 @@ void TrustTokenRequestIssuanceHelper::OnDoneProcessingIssuanceResponse(
   net_log_.EndEvent(
       net::NetLogEventType::TRUST_TOKEN_OPERATION_FINALIZE_ISSUANCE,
       [num_obtained_tokens = *num_obtained_tokens_]() {
-        base::Value ret = CreateLogValue("Success");
-        ret.SetIntKey("# tokens obtained", num_obtained_tokens);
-        return ret;
+        return CreateLogValue("Success").Set(
+            "# tokens obtained", static_cast<int>(num_obtained_tokens));
       });
   std::move(done).Run(mojom::TrustTokenOperationStatus::kOk);
   return;
@@ -341,7 +337,7 @@ TrustTokenRequestIssuanceHelper::CollectOperationResultWithStatus(
   mojom::TrustTokenOperationResultPtr operation_result =
       mojom::TrustTokenOperationResult::New();
   operation_result->status = status;
-  operation_result->type = mojom::TrustTokenOperationType::kIssuance;
+  operation_result->operation = mojom::TrustTokenOperationType::kIssuance;
   operation_result->top_level_origin = top_level_origin_;
   if (issuer_) {
     operation_result->issuer = *issuer_;

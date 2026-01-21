@@ -5,10 +5,10 @@
 #include "chrome/browser/media/webrtc/tab_desktop_media_list.h"
 
 #include <memory>
+#include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/files/file_util.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -17,15 +17,17 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/gmock_callback_support.h"
-#include "build/chromeos_buildflags.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
+#include "chrome/browser/media/webrtc/tab_desktop_media_list_mock_observer.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/apps/chrome_app_delegate.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/fake_profile_manager.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -42,14 +44,17 @@
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/app_window/test_app_window_contents.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/scoped_test_user_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "components/prefs/pref_service.h"
+#include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 using content::WebContents;
 using content::WebContentsTester;
@@ -69,13 +74,17 @@ gfx::Image CreateGrayscaleImage(gfx::Size size, uint8_t greyscale_value) {
   // Set greyscale value for all pixels.
   for (int y = 0; y < result.height(); ++y) {
     for (int x = 0; x < result.width(); ++x) {
-      pixels_data[result.rowBytes() * y + x * result.bytesPerPixel()] =
+      UNSAFE_TODO(
+          pixels_data[result.rowBytes() * y + x * result.bytesPerPixel()]) =
           greyscale_value;
-      pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 1] =
+      UNSAFE_TODO(
+          pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 1]) =
           greyscale_value;
-      pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 2] =
+      UNSAFE_TODO(
+          pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 2]) =
           greyscale_value;
-      pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 3] =
+      UNSAFE_TODO(
+          pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 3]) =
           0xff;
     }
   }
@@ -83,31 +92,8 @@ gfx::Image CreateGrayscaleImage(gfx::Size size, uint8_t greyscale_value) {
   return gfx::Image::CreateFrom1xBitmap(result);
 }
 
-}  // namespace
-
-class MockObserver : public DesktopMediaListObserver {
- public:
-  MOCK_METHOD1(OnSourceAdded, void(int index));
-  MOCK_METHOD1(OnSourceRemoved, void(int index));
-  MOCK_METHOD2(OnSourceMoved, void(int old_index, int new_index));
-  MOCK_METHOD1(OnSourceNameChanged, void(int index));
-  MOCK_METHOD1(OnSourceThumbnailChanged, void(int index));
-  MOCK_METHOD1(OnSourcePreviewChanged, void(size_t index));
-  MOCK_METHOD0(OnDelegatedSourceListSelection, void());
-  MOCK_METHOD0(OnDelegatedSourceListDismissed, void());
-
-  void VerifyAndClearExpectations() {
-    testing::Mock::VerifyAndClearExpectations(this);
-  }
-};
-
 ACTION_P2(CheckListSize, list, expected_list_size) {
   EXPECT_EQ(expected_list_size, list->GetSourceCount());
-}
-
-ACTION(QuitMessageLoop) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
 }
 
 // This is a helper class to abstract away some of the details of creating and
@@ -152,14 +138,16 @@ class TestAppWindow : public content::WebContentsObserver {
   raw_ptr<extensions::AppWindow> window_;
 };
 
-class TabDesktopMediaListTest : public testing::Test {
+}  // namespace
+
+class TabDesktopMediaListTest : public testing::Test,
+                                public testing::WithParamInterface<bool> {
  public:
   TabDesktopMediaListTest(const TabDesktopMediaListTest&) = delete;
   TabDesktopMediaListTest& operator=(const TabDesktopMediaListTest&) = delete;
 
  protected:
-  TabDesktopMediaListTest()
-      : local_state_(TestingBrowserProcess::GetGlobal()) {}
+  TabDesktopMediaListTest() : picker_called_from_web_contents_(GetParam()) {}
 
   std::unique_ptr<content::WebContents> CreateWebContents(
       int favicon_greyscale) {
@@ -170,7 +158,7 @@ class TabDesktopMediaListTest : public testing::Test {
       return nullptr;
 
     WebContentsTester::For(contents.get())
-        ->SetLastActiveTime(base::TimeTicks::Now());
+        ->SetLastActiveTimeTicks(base::TimeTicks::Now());
 
     // Get or create a NavigationEntry and add a title and a favicon to it.
     content::NavigationEntry* entry =
@@ -204,11 +192,10 @@ class TabDesktopMediaListTest : public testing::Test {
     if (!extension_) {
       extension_ =
           extensions::ExtensionBuilder()
-              .SetManifest(extensions::DictionaryBuilder()
+              .SetManifest(base::Value::Dict()
                                .Set("name", "TabListUnitTest Extension")
                                .Set("version", "1.0")
-                               .Set("manifest_version", 2)
-                               .Build())
+                               .Set("manifest_version", 2))
               .Build();
     }
     return extension_.get();
@@ -230,7 +217,7 @@ class TabDesktopMediaListTest : public testing::Test {
 
     base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
     cl->AppendSwitch(switches::kNoFirstRun);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     cl->AppendSwitch(switches::kTestType);
 #endif
 
@@ -271,12 +258,20 @@ class TabDesktopMediaListTest : public testing::Test {
   }
 
   void CreateDefaultList() {
+    DCHECK(!list_);
+
+    content::WebContents* const web_contents =
+        picker_called_from_web_contents_
+            ? browser_->tab_strip_model()->GetWebContentsAt(0)
+            : nullptr;
+
     // The actual "default" for |include_chrome_app_windows| is false; but for
     // the purposes of the tests we make the default true, so that all paths are
     // exercised.
     list_ = std::make_unique<TabDesktopMediaList>(
-        base::BindRepeating(
-            [](content::WebContents* contents) { return true; }),
+        web_contents, base::BindRepeating([](content::WebContents* contents) {
+          return true;
+        }),
         /*include_chrome_app_windows=*/true);
     list_->SetThumbnailSize(gfx::Size(kThumbnailSize, kThumbnailSize));
 
@@ -287,7 +282,7 @@ class TabDesktopMediaListTest : public testing::Test {
 
   void InitializeAndVerify() {
     CreateDefaultList();
-
+    base::RunLoop loop;
     // The tabs in media source list are sorted in decreasing time order. The
     // latest one is listed first. However, tabs are added to TabStripModel in
     // increasing time order, the oldest one is added first.
@@ -304,11 +299,11 @@ class TabDesktopMediaListTest : public testing::Test {
                     OnSourceThumbnailChanged(kDefaultSourceCount - 1 - i));
       }
       EXPECT_CALL(observer_, OnSourceThumbnailChanged(0))
-          .WillOnce(QuitMessageLoop());
+          .WillOnce(base::test::RunClosure(loop.QuitClosure()));
     }
 
     list_->StartUpdating(&observer_);
-    base::RunLoop().Run();
+    loop.Run();
 
     for (int i = 0; i < kDefaultSourceCount; ++i) {
       EXPECT_EQ(list_->GetSource(i).id.type,
@@ -318,44 +313,52 @@ class TabDesktopMediaListTest : public testing::Test {
     observer_.VerifyAndClearExpectations();
   }
 
+  const bool picker_called_from_web_contents_;
+
   // The path to temporary directory used to contain the test operations.
   base::ScopedTempDir temp_dir_;
-  ScopedTestingLocalState local_state_;
 
   std::unique_ptr<content::RenderViewHostTestEnabler> rvh_test_enabler_;
-  raw_ptr<Profile> profile_;
+  raw_ptr<Profile, DanglingUntriaged> profile_;
   std::unique_ptr<Browser> browser_;
 
   // Must be listed before |list_|, so it's destroyed last.
-  MockObserver observer_;
+  DesktopMediaListMockObserver observer_;
   std::unique_ptr<TabDesktopMediaList> list_;
-  std::vector<WebContents*> manually_added_web_contents_;
+  std::vector<raw_ptr<WebContents, VectorExperimental>>
+      manually_added_web_contents_;
   std::vector<std::unique_ptr<TestAppWindow>> manually_added_app_windows_;
 
   content::BrowserTaskEnvironment task_environment_;
 
   scoped_refptr<const extensions::Extension> extension_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-  ash::ScopedTestUserManager test_user_manager_;
+  user_manager::ScopedUserManager user_manager_{
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<ash::UserManagerDelegateImpl>(),
+          TestingBrowserProcess::GetGlobal()->local_state(),
+          ash::CrosSettings::Get())};
 #endif
 };
 
-TEST_F(TabDesktopMediaListTest, AddTab) {
-  InitializeAndVerify();
+INSTANTIATE_TEST_SUITE_P(, TabDesktopMediaListTest, testing::Bool());
 
+TEST_P(TabDesktopMediaListTest, AddTab) {
+  InitializeAndVerify();
+  base::RunLoop loop;
   AddWebcontents(10);
 
   EXPECT_CALL(observer_, OnSourceAdded(0))
       .WillOnce(CheckListSize(list_.get(), kDefaultSourceCount + 1));
   EXPECT_CALL(observer_, OnSourceThumbnailChanged(0))
-      .WillOnce(QuitMessageLoop());
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
 
-  base::RunLoop().Run();
+  loop.Run();
 }
 
-TEST_F(TabDesktopMediaListTest, AddAppWindow) {
+TEST_P(TabDesktopMediaListTest, AddAppWindow) {
   InitializeAndVerify();
 
   AddAppWindow();
@@ -372,50 +375,50 @@ TEST_F(TabDesktopMediaListTest, AddAppWindow) {
   loop.Run();
 }
 
-TEST_F(TabDesktopMediaListTest, RemoveTab) {
+TEST_P(TabDesktopMediaListTest, RemoveTab) {
   InitializeAndVerify();
-
+  base::RunLoop loop;
   TabStripModel* tab_strip_model = browser_->tab_strip_model();
   ASSERT_TRUE(tab_strip_model);
-  std::unique_ptr<WebContents> released_web_contents =
-      tab_strip_model->DetachWebContentsAtForInsertion(kDefaultSourceCount - 1);
-  base::Erase(manually_added_web_contents_, released_web_contents.get());
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      tab_strip_model->DetachTabAtForInsertion(kDefaultSourceCount - 1);
+  std::erase(manually_added_web_contents_, detached_tab.get()->GetContents());
 
   EXPECT_CALL(observer_, OnSourceRemoved(0))
       .WillOnce(
           testing::DoAll(CheckListSize(list_.get(), kDefaultSourceCount - 1),
-                         QuitMessageLoop()));
+                         base::test::RunClosure(loop.QuitClosure())));
 
-  base::RunLoop().Run();
+  loop.Run();
 }
 
-TEST_F(TabDesktopMediaListTest, MoveTab) {
+TEST_P(TabDesktopMediaListTest, MoveTab) {
   InitializeAndVerify();
-
+  base::RunLoop loop;
   // Swap the two media sources by swap their time stamps.
   TabStripModel* tab_strip_model = browser_->tab_strip_model();
   ASSERT_TRUE(tab_strip_model);
 
   WebContents* contents0 = tab_strip_model->GetWebContentsAt(0);
   ASSERT_TRUE(contents0);
-  base::TimeTicks t0 = contents0->GetLastActiveTime();
+  base::TimeTicks t0 = contents0->GetLastActiveTimeTicks();
   WebContents* contents1 = tab_strip_model->GetWebContentsAt(1);
   ASSERT_TRUE(contents1);
-  base::TimeTicks t1 = contents1->GetLastActiveTime();
+  base::TimeTicks t1 = contents1->GetLastActiveTimeTicks();
 
-  WebContentsTester::For(contents0)->SetLastActiveTime(t1);
-  WebContentsTester::For(contents1)->SetLastActiveTime(t0);
+  WebContentsTester::For(contents0)->SetLastActiveTimeTicks(t1);
+  WebContentsTester::For(contents1)->SetLastActiveTimeTicks(t0);
 
   EXPECT_CALL(observer_, OnSourceMoved(1, 0))
       .WillOnce(testing::DoAll(CheckListSize(list_.get(), kDefaultSourceCount),
-                               QuitMessageLoop()));
+                               base::test::RunClosure(loop.QuitClosure())));
 
-  base::RunLoop().Run();
+  loop.Run();
 }
 
-TEST_F(TabDesktopMediaListTest, UpdateTitle) {
+TEST_P(TabDesktopMediaListTest, UpdateTitle) {
   InitializeAndVerify();
-
+  base::RunLoop loop;
   // Change tab's title.
   TabStripModel* tab_strip_model = browser_->tab_strip_model();
   ASSERT_TRUE(tab_strip_model);
@@ -426,16 +429,18 @@ TEST_F(TabDesktopMediaListTest, UpdateTitle) {
   contents->UpdateTitleForEntry(controller.GetLastCommittedEntry(),
                                 u"New test tab");
 
-  EXPECT_CALL(observer_, OnSourceNameChanged(0)).WillOnce(QuitMessageLoop());
+  EXPECT_CALL(observer_, OnSourceNameChanged(0))
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
 
-  base::RunLoop().Run();
+  loop.Run();
 
   EXPECT_EQ(list_->GetSource(0).name, u"New test tab");
 }
 
-TEST_F(TabDesktopMediaListTest, UpdateThumbnail) {
+TEST_P(TabDesktopMediaListTest, UpdateThumbnail) {
   InitializeAndVerify();
 
+  base::RunLoop loop;
   // Change tab's favicon.
   TabStripModel* tab_strip_model = browser_->tab_strip_model();
   ASSERT_TRUE(tab_strip_model);
@@ -449,16 +454,16 @@ TEST_F(TabDesktopMediaListTest, UpdateThumbnail) {
       favicon_info;
 
   EXPECT_CALL(observer_, OnSourceThumbnailChanged(0))
-      .WillOnce(QuitMessageLoop());
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
 
-  base::RunLoop().Run();
+  loop.Run();
 }
 
 // Test that a source which is set as the one being previewed is marked as being
 // visibly captured, so that it is still painted even when hidden.
-TEST_F(TabDesktopMediaListTest, SetPreviewMarksTabAsVisiblyCaptured) {
+TEST_P(TabDesktopMediaListTest, SetPreviewMarksTabAsVisiblyCaptured) {
   InitializeAndVerify();
-
+  base::RunLoop loop;
   TabStripModel* tab_strip_model = browser_->tab_strip_model();
   ASSERT_TRUE(tab_strip_model);
   WebContents* contents =
@@ -469,7 +474,8 @@ TEST_F(TabDesktopMediaListTest, SetPreviewMarksTabAsVisiblyCaptured) {
 
   EXPECT_TRUE(contents->IsBeingVisiblyCaptured());
 
-  EXPECT_CALL(observer_, OnSourcePreviewChanged(0)).WillOnce(QuitMessageLoop());
+  EXPECT_CALL(observer_, OnSourcePreviewChanged(0))
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
 
-  base::RunLoop().Run();
+  loop.Run();
 }

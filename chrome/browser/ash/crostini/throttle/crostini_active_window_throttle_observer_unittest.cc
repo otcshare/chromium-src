@@ -4,10 +4,11 @@
 
 #include "chrome/browser/ash/crostini/throttle/crostini_active_window_throttle_observer.h"
 
-#include "ash/constants/app_types.h"
 #include "ash/public/cpp/window_properties.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/test/test_window_delegate.h"
@@ -37,28 +38,24 @@ TEST_F(CrostiniActiveWindowThrottleObserverTest, TestConstructDestruct) {}
 
 TEST_F(CrostiniActiveWindowThrottleObserverTest, TestOnWindowActivated) {
   aura::test::TestWindowDelegate dummy_delegate;
-  std::unique_ptr<aura::Window> crostini_window(
-      aura::test::CreateTestWindowWithDelegate(&dummy_delegate, 1, gfx::Rect(),
-                                               nullptr));
-  std::unique_ptr<aura::Window> chrome_window(
-      aura::test::CreateTestWindowWithDelegate(&dummy_delegate, 2, gfx::Rect(),
-                                               nullptr));
-  std::unique_ptr<aura::Window> terminal_window(
-      aura::test::CreateTestWindowWithDelegate(&dummy_delegate, 3, gfx::Rect(),
-                                               nullptr));
-  std::unique_ptr<aura::Window> chrome_app_window(
-      aura::test::CreateTestWindowWithDelegate(&dummy_delegate, 4, gfx::Rect(),
-                                               nullptr));
-  crostini_window->SetProperty(aura::client::kAppType,
-                               static_cast<int>(ash::AppType::CROSTINI_APP));
-  chrome_window->SetProperty(aura::client::kAppType,
-                             static_cast<int>(ash::AppType::BROWSER));
-  terminal_window->SetProperty(aura::client::kAppType,
-                               static_cast<int>(ash::AppType::CHROME_APP));
+  std::unique_ptr<aura::Window> crostini_window = aura::test::CreateTestWindow(
+      {.delegate = &dummy_delegate, .window_id = 1});
+  std::unique_ptr<aura::Window> chrome_window = aura::test::CreateTestWindow(
+      {.delegate = &dummy_delegate, .window_id = 2});
+  std::unique_ptr<aura::Window> terminal_window = aura::test::CreateTestWindow(
+      {.delegate = &dummy_delegate, .window_id = 3});
+  std::unique_ptr<aura::Window> chrome_app_window =
+      aura::test::CreateTestWindow(
+          {.delegate = &dummy_delegate, .window_id = 4});
+  crostini_window->SetProperty(chromeos::kAppTypeKey,
+                               chromeos::AppType::CROSTINI_APP);
+  chrome_window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::BROWSER);
+  terminal_window->SetProperty(chromeos::kAppTypeKey,
+                               chromeos::AppType::CHROME_APP);
   terminal_window->SetProperty<std::string>(ash::kAppIDKey,
                                             guest_os::kTerminalSystemAppId);
-  chrome_app_window->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(ash::AppType::CHROME_APP));
+  chrome_app_window->SetProperty(chromeos::kAppTypeKey,
+                                 chromeos::AppType::CHROME_APP);
   chrome_app_window->SetProperty<std::string>(ash::kAppIDKey,
                                               "this_is_another_chrome_app");
 

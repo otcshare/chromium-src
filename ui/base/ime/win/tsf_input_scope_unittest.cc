@@ -2,13 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/base/ime/win/tsf_input_scope.h"
 
 #include <InputScope.h>
 #include <stddef.h>
 #include <wrl/client.h>
 
-#include "base/win/windows_version.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ui {
@@ -35,7 +39,7 @@ const GetInputScopesTestCase kGetInputScopesTestCases[] = {
     // Test cases of TextInputType.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, 1, {IS_DEFAULT}},
     {TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_MODE_DEFAULT, 1, {IS_DEFAULT}},
-    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, 1, {IS_PASSWORD}},
+    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, 1, {IS_PRIVATE}},
     {TEXT_INPUT_TYPE_SEARCH, TEXT_INPUT_MODE_DEFAULT, 1, {IS_SEARCH}},
     {TEXT_INPUT_TYPE_EMAIL,
      TEXT_INPUT_MODE_DEFAULT,
@@ -118,7 +122,7 @@ const CreateInputScopesTestCase kCreateInputScopesTestCases[] = {
     // Test cases of TextInputType.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_DEFAULT}},
     {TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_MODE_DEFAULT, false, 1, {IS_PRIVATE}},
-    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_PASSWORD}},
+    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_PRIVATE}},
     {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, false, 1, {IS_PRIVATE}},
     // Test cases of TextInputMode.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_DEFAULT}},
@@ -134,8 +138,6 @@ const CreateInputScopesTestCase kCreateInputScopesTestCases[] = {
     {TEXT_INPUT_TYPE_NUMBER, TEXT_INPUT_MODE_NUMERIC, false, 1, {IS_PRIVATE}},
 };
 TEST_P(TSFCreateInputScopeTest, CreateInputScopes) {
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;
   const CreateInputScopesTestCase& test_case = GetParam();
   Microsoft::WRL::ComPtr<ITfInputScope> input_scope =
       tsf_inputscope::CreateInputScope(test_case.input_type,

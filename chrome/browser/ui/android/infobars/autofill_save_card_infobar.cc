@@ -8,7 +8,6 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/AutofillSaveCardInfoBar_jni.h"
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "components/autofill/core/browser/payments/autofill_save_card_infobar_delegate_mobile.h"
@@ -19,6 +18,9 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/gurl.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/AutofillSaveCardInfoBar_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 
@@ -37,9 +39,9 @@ AutofillSaveCardInfoBar::AutofillSaveCardInfoBar(
 
 AutofillSaveCardInfoBar::~AutofillSaveCardInfoBar() = default;
 
-void AutofillSaveCardInfoBar::OnLegalMessageLinkClicked(JNIEnv* env,
-                                                        jobject obj,
-                                                        jstring url) {
+void AutofillSaveCardInfoBar::OnLegalMessageLinkClicked(
+    JNIEnv* env,
+    const base::android::JavaRef<jstring>& url) {
   GetSaveCardDelegate()->OnLegalMessageLinkClicked(
       GURL(base::android::ConvertJavaStringToUTF16(env, url)));
 }
@@ -63,7 +65,7 @@ AutofillSaveCardInfoBar::CreateRenderInfoBar(
               env, GetTextFor(ConfirmInfoBarDelegate::BUTTON_OK)),
           base::android::ConvertUTF16ToJavaString(
               env, GetTextFor(ConfirmInfoBarDelegate::BUTTON_CANCEL)),
-          delegate->IsGooglePayBrandingEnabled(),
+          delegate->IsChromeBrandingEnabled(),
           delegate->displayed_target_account_email().empty()
               ? nullptr
               : base::android::ConvertUTF16ToJavaString(
@@ -105,3 +107,5 @@ AutofillSaveCardInfoBar::GetSaveCardDelegate() {
   return static_cast<autofill::AutofillSaveCardInfoBarDelegateMobile*>(
       GetDelegate());
 }
+
+DEFINE_JNI(AutofillSaveCardInfoBar)

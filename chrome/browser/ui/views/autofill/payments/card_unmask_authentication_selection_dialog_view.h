@@ -8,8 +8,8 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/ui/autofill/payments/card_unmask_authentication_selection_dialog.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/ui/payments/card_unmask_authentication_selection_dialog.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/image_view.h"
@@ -61,8 +61,11 @@ class CardUnmaskAuthenticationSelectionDialogView
   void ReplaceContentWithProgressThrobber();
 
   // Sets the selected challenge option id in the
-  // CardUnmaskAuthenticationSelectionDialogController.
-  void SetSelectedChallengeOptionId(std::string selected_challenge_option_id);
+  // CardUnmaskAuthenticationSelectionDialogController, as well as updates the
+  // accept button text based on the challenge option.
+  void OnChallengeOptionSelected(
+      const CardUnmaskChallengeOption::ChallengeOptionId&
+          selected_challenge_option_id);
 
   // Creates a radio button with a callback to SetSelectedChallengeOptionId.
   std::unique_ptr<views::RadioButton> CreateChallengeOptionRadioButton(
@@ -78,6 +81,9 @@ class CardUnmaskAuthenticationSelectionDialogView
   // used.
   std::vector<base::CallbackListSubscription>
       radio_button_checked_changed_subscriptions_;
+
+  base::WeakPtrFactory<CardUnmaskAuthenticationSelectionDialogView>
+      weak_ptr_factory_{this};
 };
 
 }  // namespace autofill

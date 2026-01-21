@@ -5,23 +5,31 @@
 #ifndef CHROME_BROWSER_CHROMEOS_APP_MODE_CHROME_KIOSK_APP_LAUNCHER_H_
 #define CHROME_BROWSER_CHROMEOS_APP_MODE_CHROME_KIOSK_APP_LAUNCHER_H_
 
-#include "base/callback.h"
+#include <string>
+
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/types/expected.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_service_launcher.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chromeos/crosapi/mojom/chrome_app_kiosk_service.mojom.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/common/extension.h"
 
-namespace ash {
+namespace chromeos {
 
 class ChromeKioskAppLauncher : public extensions::AppWindowRegistry::Observer {
  public:
-  using LaunchResult = crosapi::mojom::ChromeKioskLaunchResult;
-  using LaunchCallback =
-      crosapi::mojom::ChromeKioskLaunchController::LaunchKioskAppCallback;
+  using LaunchCallback = base::OnceCallback<void(bool)>;
+
+  enum PreLaunchError {
+    kPrimaryAppMissing,
+    kSecondaryAppsMissing,
+    kChromeAppDeprecated,
+    kPrimaryAppNotKioskEnabled,
+    kNetworkMissing
+  };
 
   ChromeKioskAppLauncher(Profile* profile,
                          const std::string& app_id,
@@ -30,19 +38,20 @@ class ChromeKioskAppLauncher : public extensions::AppWindowRegistry::Observer {
   ChromeKioskAppLauncher& operator=(const ChromeKioskAppLauncher&) = delete;
   ~ChromeKioskAppLauncher() override;
 
+  base::expected<void, PreLaunchError> PerformPreLaunchChecks();
   void LaunchApp(LaunchCallback callback);
 
  private:
   // AppWindowRegistry::Observer:
   void OnAppWindowAdded(extensions::AppWindow* app_window) override;
 
-  // |KioskAppServiceLauncher| callback.
+  // `KioskAppServiceLauncher` callback.
   void OnAppServiceAppLaunched(bool success);
 
   void WaitForAppWindow();
 
   void ReportLaunchSuccess();
-  void ReportLaunchFailure(LaunchResult result);
+  void ReportLaunchFailure();
 
   const extensions::Extension* GetPrimaryAppExtension() const;
 
@@ -71,6 +80,6 @@ class ChromeKioskAppLauncher : public extensions::AppWindowRegistry::Observer {
   base::WeakPtrFactory<ChromeKioskAppLauncher> weak_ptr_factory_{this};
 };
 
-}  // namespace ash
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_APP_MODE_CHROME_KIOSK_APP_LAUNCHER_H_

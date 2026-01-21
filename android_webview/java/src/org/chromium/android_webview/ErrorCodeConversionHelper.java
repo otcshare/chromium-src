@@ -4,11 +4,13 @@
 
 package org.chromium.android_webview;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.net.NetError;
 
 /**
  * This is a helper class to map native error code about loading a page to Android specific ones.
  */
+@NullMarked
 public final class ErrorCodeConversionHelper {
     static @WebviewErrorCode int convertErrorCode(@NetError int netError) {
         // Note: many NetError.Error constants don't have an obvious mapping.
@@ -71,7 +73,6 @@ public final class ErrorCodeConversionHelper {
             case NetError.ERR_SSL_PROTOCOL_ERROR:
             case NetError.ERR_SSL_CLIENT_AUTH_CERT_NEEDED:
             case NetError.ERR_TUNNEL_CONNECTION_FAILED:
-            case NetError.ERR_NO_SSL_VERSIONS_ENABLED:
             case NetError.ERR_SSL_VERSION_OR_CIPHER_MISMATCH:
             case NetError.ERR_SSL_RENEGOTIATION_REQUESTED:
             case NetError.ERR_BAD_SSL_CLIENT_AUTH_CERT:
@@ -88,8 +89,8 @@ public final class ErrorCodeConversionHelper {
             case NetError.ERR_UNEXPECTED_PROXY_AUTH:
                 return WebviewErrorCode.ERROR_PROXY_AUTHENTICATION;
 
-            // The certificate errors are handled by onReceivedSslError
-            // and don't need to be reported here.
+                // The certificate errors are handled by onReceivedSslError
+                // and don't need to be reported here.
             case NetError.ERR_CERT_KNOWN_INTERCEPTION_BLOCKED:
             case NetError.ERR_CERT_COMMON_NAME_INVALID:
             case NetError.ERR_CERT_DATE_INVALID:

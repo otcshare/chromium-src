@@ -8,6 +8,7 @@
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/cursor_manager_test_api.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/test/aura_test_utils.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
@@ -24,46 +25,19 @@
 
 namespace ash {
 
-namespace {
-
-// A delegate for recording a mouse event location.
-class MouseEventLocationDelegate : public aura::test::TestWindowDelegate {
- public:
-  MouseEventLocationDelegate() = default;
-
-  MouseEventLocationDelegate(const MouseEventLocationDelegate&) = delete;
-  MouseEventLocationDelegate& operator=(const MouseEventLocationDelegate&) =
-      delete;
-
-  ~MouseEventLocationDelegate() override = default;
-
-  gfx::Point GetMouseEventLocationAndReset() {
-    gfx::Point p = mouse_event_location_;
-    mouse_event_location_.SetPoint(-100, -100);
-    return p;
-  }
-
-  void OnMouseEvent(ui::MouseEvent* event) override {
-    mouse_event_location_ = event->location();
-    event->SetHandled();
-  }
-
- private:
-  gfx::Point mouse_event_location_;
-};
-
-}  // namespace
-
 using NativeCursorManagerAshTest = AshTestBase;
 
 TEST_F(NativeCursorManagerAshTest, LockCursor) {
   ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+  const auto& cursor_shape_client = aura::client::GetCursorShapeClient();
   CursorManagerTestApi test_api;
 
   cursor_manager->SetCursor(ui::mojom::CursorType::kCopy);
   EXPECT_EQ(ui::mojom::CursorType::kCopy, cursor_manager->GetCursor().type());
   UpdateDisplay("800x700*2/r");
-  EXPECT_EQ(2.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(2.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
   EXPECT_EQ(ui::CursorSize::kNormal, cursor_manager->GetCursorSize());
   EXPECT_EQ(display::Display::ROTATE_90, test_api.GetCurrentCursorRotation());
   EXPECT_TRUE(cursor_manager->GetCursor().platform());
@@ -86,7 +60,9 @@ TEST_F(NativeCursorManagerAshTest, LockCursor) {
 
   // Device scale factor and rotation do change even while cursor is locked.
   UpdateDisplay("800x700/u");
-  EXPECT_EQ(1.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
   EXPECT_EQ(display::Display::ROTATE_180, test_api.GetCurrentCursorRotation());
 
   cursor_manager->UnlockCursor();
@@ -95,7 +71,9 @@ TEST_F(NativeCursorManagerAshTest, LockCursor) {
   // Cursor type changes to the one specified while cursor is locked.
   EXPECT_EQ(ui::mojom::CursorType::kPointer,
             cursor_manager->GetCursor().type());
-  EXPECT_EQ(1.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
   EXPECT_TRUE(cursor_manager->GetCursor().platform());
 }
 
@@ -125,27 +103,78 @@ TEST_F(NativeCursorManagerAshTest, SetCursorSize) {
   EXPECT_EQ(ui::CursorSize::kNormal, cursor_manager->GetCursorSize());
 }
 
+TEST_F(NativeCursorManagerAshTest, SetCursorColor) {
+  ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+
+  EXPECT_EQ(ui::kDefaultCursorColor, cursor_manager->GetCursorColor());
+
+  cursor_manager->SetCursorColor(SK_ColorRED);
+  EXPECT_EQ(SK_ColorRED, cursor_manager->GetCursorColor());
+
+  cursor_manager->SetCursorColor(SK_ColorGREEN);
+  EXPECT_EQ(SK_ColorGREEN, cursor_manager->GetCursorColor());
+
+  cursor_manager->SetCursorColor(SK_ColorYELLOW);
+  EXPECT_EQ(SK_ColorYELLOW, cursor_manager->GetCursorColor());
+
+  cursor_manager->SetCursorColor(ui::kDefaultCursorColor);
+  EXPECT_EQ(ui::kDefaultCursorColor, cursor_manager->GetCursorColor());
+}
+
+TEST_F(NativeCursorManagerAshTest, SetLargeCursorSizeInDip) {
+  ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+
+  EXPECT_EQ(ui::kDefaultLargeCursorSize,
+            cursor_manager->GetLargeCursorSizeInDip());
+
+  cursor_manager->SetLargeCursorSizeInDip(ui::kMaxLargeCursorSize);
+  EXPECT_EQ(ui::kMaxLargeCursorSize, cursor_manager->GetLargeCursorSizeInDip());
+
+  cursor_manager->SetLargeCursorSizeInDip(ui::kMaxLargeCursorSize + 1);
+  EXPECT_EQ(ui::kMaxLargeCursorSize, cursor_manager->GetLargeCursorSizeInDip());
+
+  cursor_manager->SetLargeCursorSizeInDip(ui::kMinLargeCursorSize);
+  EXPECT_EQ(ui::kMinLargeCursorSize, cursor_manager->GetLargeCursorSizeInDip());
+
+  cursor_manager->SetLargeCursorSizeInDip(ui::kMinLargeCursorSize - 1);
+  EXPECT_EQ(ui::kMinLargeCursorSize, cursor_manager->GetLargeCursorSizeInDip());
+
+  cursor_manager->SetLargeCursorSizeInDip(ui::kDefaultLargeCursorSize);
+  EXPECT_EQ(ui::kDefaultLargeCursorSize,
+            cursor_manager->GetLargeCursorSizeInDip());
+}
+
 TEST_F(NativeCursorManagerAshTest, SetDeviceScaleFactorAndRotation) {
   ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+  const auto& cursor_shape_client = aura::client::GetCursorShapeClient();
   CursorManagerTestApi test_api;
   UpdateDisplay("800x100*2");
-  EXPECT_EQ(2.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(2.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
   EXPECT_EQ(display::Display::ROTATE_0, test_api.GetCurrentCursorRotation());
 
   UpdateDisplay("800x100/l");
-  EXPECT_EQ(1.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
   EXPECT_EQ(display::Display::ROTATE_270, test_api.GetCurrentCursorRotation());
 }
 
 TEST_F(NativeCursorManagerAshTest, RotationWithPanelOrientation) {
-  int64_t display_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t display_id = display::Screen::Get()->GetPrimaryDisplay().id();
 
   display::test::ScopedSetInternalDisplayId set_internal(display_manager(),
                                                          display_id);
 
   // The panel is portrait but its orientation is landscape.
+  const gfx::Rect bounds = gfx::Rect(0, 0, 1920, 1080);
   display::ManagedDisplayInfo native_display_info =
-      display::CreateDisplayInfo(display_id, gfx::Rect(0, 0, 1920, 1080));
+      display::CreateDisplayInfo(display_id, bounds);
+  // Each display should have at least one native mode.
+  display::ManagedDisplayMode mode(bounds.size(), /*refresh_rate=*/60.f,
+                                   /*is_interlaced=*/true,
+                                   /*native=*/true);
   native_display_info.set_panel_orientation(
       display::PanelOrientation::kRightUp);
   std::vector<display::ManagedDisplayInfo> display_info_list{
@@ -154,15 +183,18 @@ TEST_F(NativeCursorManagerAshTest, RotationWithPanelOrientation) {
 
   CursorManagerTestApi test_api;
   ASSERT_EQ(gfx::Size(1080, 1920),
-            display::Screen::GetScreen()->GetPrimaryDisplay().size());
+            display::Screen::Get()->GetPrimaryDisplay().size());
   EXPECT_EQ(display::Display::ROTATE_90, test_api.GetCurrentCursorRotation());
 }
 
 TEST_F(NativeCursorManagerAshTest, FractionalScale) {
   ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+  const auto& cursor_shape_client = aura::client::GetCursorShapeClient();
   // Cursor should use the resource scale factor.
   UpdateDisplay("800x100*1.25");
-  EXPECT_EQ(1.0f, cursor_manager->GetCursor().image_scale_factor());
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
 }
 
 }  // namespace ash

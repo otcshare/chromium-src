@@ -26,7 +26,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_ASH) MockComponentExtensionIMEManagerDelegate
       const MockComponentExtensionIMEManagerDelegate&) = delete;
 
   std::vector<ComponentExtensionIME> ListIME() override;
-  void Load(Profile*,
+  void Load(content::BrowserContext*,
             const std::string& extension_id,
             const std::string& manifest,
             const base::FilePath& path) override;
@@ -52,12 +52,5 @@ class COMPONENT_EXPORT(UI_BASE_IME_ASH) MockComponentExtensionIMEManagerDelegate
 
 }  // namespace input_method
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when the migration is finished.
-namespace chromeos {
-namespace input_method {
-using ::ash::input_method::MockComponentExtensionIMEManagerDelegate;
-}
-}  // namespace chromeos
 
 #endif  // UI_BASE_IME_ASH_MOCK_COMPONENT_EXTENSION_IME_MANAGER_DELEGATE_H_

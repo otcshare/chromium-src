@@ -4,14 +4,14 @@
 
 package org.chromium.chrome.browser.ui.autofill;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
-import java.util.Optional;
-
+@NullMarked
 class OtpVerificationDialogProperties {
     /** Interface for the mediator to be notified of view actions. */
     interface ViewDelegate {
@@ -21,9 +21,8 @@ class OtpVerificationDialogProperties {
          * @param s The current text in the edit text field.
          */
         void onTextChanged(CharSequence s);
-        /**
-         * Notifies the mediator that the resend link was clicked.
-         */
+
+        /** Notifies the mediator that the resend link was clicked. */
         void onResendLinkClicked();
     }
 
@@ -38,17 +37,17 @@ class OtpVerificationDialogProperties {
     static final WritableObjectPropertyKey<ViewDelegate> VIEW_DELEGATE =
             new WritableObjectPropertyKey<>();
 
-    // |EDIT_TEXT| is a one-to-one mapping of the edit text on the dialog. Empty |EDIT_TEXT|
+    // |EDIT_TEXT| is a one-to-one mapping of the edit text on the dialog. Null |EDIT_TEXT|
     // indicates that there should be no edit text shown on the dialog, while
     // |OTP_ERROR_MESSAGE| with a value indicates that value should be displayed on the dialog.
-    static final WritableObjectPropertyKey<Optional<CharSequence>> EDIT_TEXT =
+    static final WritableObjectPropertyKey<CharSequence> EDIT_TEXT =
             new WritableObjectPropertyKey<>();
 
-    // |OTP_ERROR_MESSAGE| is a one-to-one mapping of the error message on the dialog. Empty
+    // |OTP_ERROR_MESSAGE| is a one-to-one mapping of the error message on the dialog. Null
     // |OTP_ERROR_MESSAGE| indicates that there should be no error message shown on the dialog,
     // while |OTP_ERROR_MESSAGE| with a value indicates that value should be displayed on the
     // dialog.
-    static final WritableObjectPropertyKey<Optional<String>> OTP_ERROR_MESSAGE =
+    static final WritableObjectPropertyKey<String> OTP_ERROR_MESSAGE =
             new WritableObjectPropertyKey<>();
 
     static final WritableObjectPropertyKey<String> SHOW_CONFIRMATION =
@@ -57,6 +56,13 @@ class OtpVerificationDialogProperties {
     static final WritableBooleanPropertyKey SHOW_PROGRESS_BAR_OVERLAY =
             new WritableBooleanPropertyKey();
 
-    static final PropertyKey[] ALL_KEYS = {OTP_LENGTH, EDIT_TEXT, EDIT_TEXT_HINT, VIEW_DELEGATE,
-            OTP_ERROR_MESSAGE, SHOW_CONFIRMATION, SHOW_PROGRESS_BAR_OVERLAY};
+    static final PropertyKey[] ALL_KEYS = {
+        OTP_LENGTH,
+        EDIT_TEXT,
+        EDIT_TEXT_HINT,
+        VIEW_DELEGATE,
+        OTP_ERROR_MESSAGE,
+        SHOW_CONFIRMATION,
+        SHOW_PROGRESS_BAR_OVERLAY
+    };
 }

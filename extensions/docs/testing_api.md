@@ -105,8 +105,23 @@ chrome.test.runTests([
 ]);
 ```
 
+### Checks
+
+#### checkDeepEq(expected, actual)
+Checks if `expected` is equal to `actual`. If `expected` is an object, this will
+perform a deep-equals check (i.e., verifying that two objects are equivalent by
+value, rather than have the same address) and return `true`. Otherwise returns
+`false`.
+
+**Important Notes:**
+- Primitive wrappers (`Number`, `Boolean`, `String`): are value compared to
+  their internal representation, even if `NaN`.
+- `Date`s: compared to their `Date.getTime()` representation, even if `NaN`.
+- `undefined` is implicitly converted to `null` so it is not currently supported
+for value checking. This means that `checkDeepEq(undefined, null) === true`.
+
 ### Assertions
-The ``chrome.test API`` provides a number of basic assertion methods.
+The `chrome.test API` provides a number of basic assertion methods.
 
 #### assertTrue(condition, message?)
 Asserts that the given condition is true, printing out the optional error
@@ -116,12 +131,11 @@ message if it is not.
 Asserts that the given condition is false, printing out the optional error
 message if it is not.
 
-#### assertEq(expected, actual, message?)
-Asserts that the provided value matches the expected value.  If `expected` is
-an object, this will perform a deep-equals check (i.e., verifying that two
-objects are logically equivalent, rather than have the same address).  If the
-expected value does not match the actual value, this will print out the
-expected and actual values (through `JSON.stringify()` for objects).
+#### assertEq/assertNe(expected, actual, message?)
+Asserts that the provided value matches (or doesn't match) the expected value
+via `checkDeepEq(expected, actual)`. If the expected value does not match (or
+unexpectedly matches) the actual value, this will print out the expected and/or
+actual values.
 
 #### assertNoLastError()
 Asserts that `chrome.runtime.lastError` is undefined, printing out the error
@@ -131,9 +145,9 @@ otherwise.
 Asserts that `chrome.runtime.lastError.message` is equivalent to
 `expectedError`, printing out the expected and actual errors otherwise.
 
-#### assertThrows(fn, self?, args, expectedError?)
+#### assertThrows(fn, self?, args[], expectedError?)
 Asserts that executing `fn` with the context object of `self` (if defined) and
-the specified `arguments` throws a runtime error, which is then validated
+the specified `args` array throws a runtime error, which is then validated
 against `expectedError`.  `expectedError` may be either a string (which must
 match exactly) or a `RegExp`.
 
@@ -170,8 +184,8 @@ chrome.test.runTests([
 Here, we want to have `step1()` finish after both the new tab has been created
 and a storage value has been set (again, this is admittedly contrived).  There
 is no hard guarantee about which function will finish first, so putting a
-chrome.test.succeed() call in either may result in succeeding and continuing to
-the next step too early.  Putting a `chrome.test.succeed()` call in both will
+`chrome.test.succeed()` call in either may result in succeeding and continuing
+to the next step too early.  Putting a `chrome.test.succeed()` call in both will
 result in badness (see the [Do's And Don't's]).
 
 `callbackPass()` lets the testing infrastructure handle this.  `callbackPass()`
@@ -240,16 +254,16 @@ two separate test functions, passed serially in the array to
 ```js
 chrome.test.runTests([
   function createTab() {
-    chrome.tabs.create({url: 'http://example.com'}, callbackPass(() => {
+    chrome.tabs.create({url: 'http://example.com'}, () => {
       <verify state>
       chrome.test.succeed();
-    }));
+    });
   },
   function initializeStorage() {
-    chrome.storage.local.set({foo: 'bar'}, callbackPass(() => {
+    chrome.storage.local.set({foo: 'bar'}, () => {
       <verify state>
       chrome.test.succeed();
-    }));
+    });
   },
   function nextStep() {
     ...
@@ -305,7 +319,12 @@ const tab =
 <verify state>
 ```
 
-This, too, will be even more readable with Promise-based APIs.
+For Promise-based calls in MV3 tests this can be simplified even more:
+
+```js
+const tab = await chrome.tabs.create({url: url});
+<verify state>
+```
 
 ### listenOnce() and listenForever()
 `chrome.test.listenOnce()` and `chrome.test.listenForever()` are utility
@@ -387,7 +406,7 @@ unless the use of it is explicitly necessary for the test.)
 ### **Don't** Mix chrome.test.notifyPass() and chrome.test.runTests()
 `chrome.test.notifyPass()` (or `chrome.test.notifyFail()`) will finish the
 entire suite.  It should not be used with `chrome.test.runTests()`.  Instead,
-use chrome.test.succeed().
+use `chrome.test.succeed()`.
 
 ### **Don't** Mix chrome.test.callbackPass() et al. and chrome.test.succeed()
 If the callback counter is incremented anywhere in a test function, the test

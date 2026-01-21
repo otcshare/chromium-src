@@ -5,8 +5,8 @@
 #ifndef CHROMECAST_MEDIA_CMA_BASE_CODED_FRAME_PROVIDER_H_
 #define CHROMECAST_MEDIA_CMA_BASE_CODED_FRAME_PROVIDER_H_
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 
 namespace media {
 class AudioDecoderConfig;

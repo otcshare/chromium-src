@@ -6,17 +6,19 @@
 #define ASH_WM_DESKS_DESK_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "ash/ash_export.h"
-#include "base/auto_reset.h"
+#include "ash/wm/desks/desks_histogram_enums.h"
 #include "base/containers/flat_map.h"
-#include "base/guid.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "base/time/clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/uuid.h"
+#include "chromeos/ash/services/coral/public/mojom/coral_service.mojom.h"
 #include "ui/aura/window_observer.h"
 
 namespace ash {
@@ -34,6 +36,12 @@ class DeskContainerObserver;
 // the desk is inactive, those containers are hidden.
 class ASH_EXPORT Desk {
  public:
+  enum class Type {
+    kRestored,  // A restored desk.
+    kCoral,     // A desk created from a coral group.
+    kNormal,    // Other normal type of desks.
+  };
+
   class Observer : public base::CheckedObserver {
    public:
     // Called when the desk's content change as a result of windows addition or
@@ -50,11 +58,39 @@ class ASH_EXPORT Desk {
     virtual void OnDeskNameChanged(const std::u16string& new_name) = 0;
   };
 
+  // Suspends notification of content updates within its scope. Note that the
+  // relevant `Desk` must outlive this class.
+  class ScopedContentUpdateNotificationDisabler {
+   public:
+    // `desks` are the desks whose content update will be suspended. If
+    // `notify_when_destroyed` is true, it will send out a notification when
+    // this is destroyed and there are no other disablers.
+    ScopedContentUpdateNotificationDisabler(
+        const std::vector<std::unique_ptr<Desk>>& desks,
+        bool notify_when_destroyed);
+    ScopedContentUpdateNotificationDisabler(const std::vector<Desk*>& desks,
+                                            bool notify_when_destroyed);
+
+    ScopedContentUpdateNotificationDisabler(
+        const ScopedContentUpdateNotificationDisabler&) = delete;
+    ScopedContentUpdateNotificationDisabler& operator=(
+        const ScopedContentUpdateNotificationDisabler&) = delete;
+
+    ~ScopedContentUpdateNotificationDisabler();
+
+   private:
+    std::vector<raw_ptr<Desk, VectorExperimental>> desks_;
+
+    // Notifies all desks in `desks_` via `NotifyContentChanged()` when this is
+    // destroyed and there are no other disablers.
+    const bool notify_when_destroyed_;
+  };
+
   // Tracks stacking order for a window that is visible on all desks. This is
   // used to support per-desk z-orders for all-desk windows. Entries are stored
   // in ascending `order`.
   struct AllDeskWindowStackingData {
-    aura::Window* window = nullptr;
+    raw_ptr<aura::Window, DanglingUntriaged> window = nullptr;
     // The z-order of the window.
     // Note: this is reversed from how child windows are ordered in
     // `aura::Window`, so an entry with `order == 0` means topmost.
@@ -62,7 +98,7 @@ class ASH_EXPORT Desk {
     size_t order = 0;
   };
 
-  explicit Desk(int associated_container_id, bool desk_being_restored = false);
+  explicit Desk(int associated_container_id, Type type = Type::kNormal);
 
   Desk(const Desk&) = delete;
   Desk& operator=(const Desk&) = delete;
@@ -72,19 +108,20 @@ class ASH_EXPORT Desk {
   static void SetWeeklyActiveDesks(int weekly_active_desks);
   static int GetWeeklyActiveDesks();
 
+  Type type() const { return type_; }
+
   int container_id() const { return container_id_; }
 
-  const base::GUID& uuid() const { return uuid_; }
+  const base::Uuid& uuid() const { return uuid_; }
 
-  const std::vector<aura::Window*>& windows() const { return windows_; }
+  const std::vector<raw_ptr<aura::Window, VectorExperimental>>& windows()
+      const {
+    return windows_;
+  }
 
   const std::u16string& name() const { return name_; }
 
   bool is_active() const { return is_active_; }
-
-  bool should_notify_content_changed() const {
-    return should_notify_content_changed_;
-  }
 
   bool is_name_set_by_user() const { return is_name_set_by_user_; }
 
@@ -118,6 +155,14 @@ class ASH_EXPORT Desk {
     return all_desk_window_stacking_;
   }
 
+  void set_tab_app_entities(
+      std::vector<coral::mojom::EntityPtr> tab_app_entities) {
+    tab_app_entities_ = std::move(tab_app_entities);
+  }
+  const std::vector<coral::mojom::EntityPtr>& tab_app_entities() const {
+    return tab_app_entities_;
+  }
+
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
@@ -129,14 +174,16 @@ class ASH_EXPORT Desk {
 
   void WillRemoveWindowFromDesk(aura::Window* window);
 
-  base::AutoReset<bool> GetScopedNotifyContentChangedDisabler();
-
   bool ContainsAppWindows() const;
 
   // Sets the desk's name to |new_name| and updates the observers.
   // |set_by_user| should be true if this name was given to the desk by the user
   // from its mini view in overview mode.
   void SetName(std::u16string new_name, bool set_by_user);
+
+  // Sets the desks `uuid_` to the `new_guid` if `new_guid` is valid, used when
+  // restoring desks on sign-in. If `new_guid` is invalid no change happens.
+  void SetGuid(base::Uuid new_guid);
 
   // Prepares for the animation to activate this desk (i.e. this desk is not
   // active yet), by showing its containers on all root windows while setting
@@ -207,13 +254,15 @@ class ASH_EXPORT Desk {
   void RecordAndResetConsecutiveDailyVisits(bool being_removed);
 
   // Gets all app windows on this desk that should be closed.
-  std::vector<aura::Window*> GetAllAppWindows() const;
+  std::vector<raw_ptr<aura::Window, VectorExperimental>> GetAllAppWindows()
+      const;
 
   // Gets desk windows including floated window (if any).
   // Note that floated window isn't tracked in `windows_` but still "belongs" to
   // this desk, it's stored in the float container and managed by
   // `FloatController`.
-  std::vector<aura::Window*> GetAllAssociatedWindows() const;
+  std::vector<raw_ptr<aura::Window, VectorExperimental>>
+  GetAllAssociatedWindows() const;
 
   // Construct stacking data for windows that appear on all desks. This is done
   // just as a desk becomes inactive. The stacking data is then later used by
@@ -224,12 +273,21 @@ class ASH_EXPORT Desk {
   // windows. This is a no-op if there is no data for the current desk.
   void RestackAllDeskWindows();
 
-  // Called when an all-desk window has been added.
-  void AddAllDeskWindow(aura::Window* window);
+  // Start tracking the z-order of `window`. Called when `window` has been
+  // turned into an all-desk window, or if it has been moved to a new root.
+  void TrackAllDeskWindow(aura::Window* window);
 
-  // Called when an all-desk window has been removed (either from being closed
-  // or not longer being all-desk).
-  void RemoveAllDeskWindow(aura::Window* window);
+  // Remove all-desk window tracking for `window`. Called when an all-desk
+  // window has been removed, or moved to a new root. `recent_root` is the root
+  // that we have all desk window data associated with and when the window has
+  // moved to a new root, it will be different than `window->GetRootWindow()`.
+  void UntrackAllDeskWindow(aura::Window* window, aura::Window* recent_root);
+
+  // Called when an all-desk window has been moved from one root to another.
+  void AllDeskWindowMovedToNewRoot(aura::Window* window);
+
+  // Returns true if notification of content update is suspended.
+  bool ContentUpdateNotificationSuspended() const;
 
  private:
   friend class DesksTestApi;
@@ -254,16 +312,32 @@ class ASH_EXPORT Desk {
   // |g_weekly_active_desks| and set |this| to interacted with.
   void MaybeIncrementWeeklyActiveDesks();
 
+  // Suspends notification of content update.
+  void SuspendContentUpdateNotification();
+
+  // Resumes notification of content update. If `notify_when_fully_resumed` is
+  // true, it will send out one notification at the end about the content update
+  // if there are no remaining pending suspensions, e.g. there are no other
+  // content update notification disablers.
+  void ResumeContentUpdateNotification(bool notify_when_fully_resumed);
+
+  // Returns true if this desk has ADW tracking data for `window` on a root
+  // other than its current root. This indicates that `window` has been moved
+  // from one root to another.
+  bool HasAllDeskWindowDataOnOtherRoot(aura::Window* window) const;
+
   // Uniquely identifies the desk.
-  const base::GUID uuid_;
+  base::Uuid uuid_;
 
   // The associated container ID with this desk.
   const int container_id_;
 
+  const Type type_;
+
   // Windows tracked on this desk. Clients of the DesksController can use this
   // list when they're notified of desk change events.
   // TODO(afakhry): Change this to track MRU windows on this desk.
-  std::vector<aura::Window*> windows_;
+  std::vector<raw_ptr<aura::Window, VectorExperimental>> windows_;
 
   // The name given to this desk.
   std::u16string name_;
@@ -277,10 +351,11 @@ class ASH_EXPORT Desk {
 
   bool is_active_ = false;
 
-  // If false, observers won't be notified of desk's contents changes. This is
-  // used to throttle those notifications when we add or remove many windows,
-  // and we want to notify observers only once.
-  bool should_notify_content_changed_ = true;
+  // Count of pending content update notification suspensions. If it is greater
+  // than 0, observers won't be notified of desk's content changes. This is used
+  // to throttle those notifications when we add or remove many windows, and we
+  // want to notify observers only once.
+  int content_update_notification_suspend_count_ = 0;
 
   // True if the `PrepareForActivationAnimation()` was called, and this desk's
   // containers are shown while their layer opacities are temporarily set to 0.
@@ -312,6 +387,10 @@ class ASH_EXPORT Desk {
   base::flat_map<aura::Window*, std::vector<AllDeskWindowStackingData>>
       all_desk_window_stacking_;
 
+  // Used to track the last active root when the desk is being deactivated.
+  // Should be null if the current desk is active.
+  raw_ptr<aura::Window> last_active_root_ = nullptr;
+
   // Tracks whether |this| has been interacted with this week. This value is
   // reset by the DesksController.
   bool interacted_with_this_week_ = false;
@@ -319,6 +398,11 @@ class ASH_EXPORT Desk {
   // A timer for marking |this| as interacted with only if the user remains on
   // |this| for a brief period of time.
   base::OneShotTimer active_desk_timer_;
+
+  // The tab and app items associated with the desk if the desk is created or
+  // restored by Coral. Entities in this vector are used by Coral service to
+  // avoid suggesting groups with similar context.
+  std::vector<coral::mojom::EntityPtr> tab_app_entities_;
 };
 
 }  // namespace ash

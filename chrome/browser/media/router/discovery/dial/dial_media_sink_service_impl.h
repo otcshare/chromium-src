@@ -55,10 +55,12 @@ class DialMediaSinkServiceImpl : public MediaSinkServiceBase,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner);
   ~DialMediaSinkServiceImpl() override;
 
-  virtual void Start();
+  virtual void Initialize();
+
+  void StartDiscovery();
 
   // MediaSinkServiceBase implementation.
-  void OnUserGesture() override;
+  void DiscoverSinksNow() override;
 
   // Returns the SequencedTaskRunner that should be used to invoke methods on
   // this instance. Can be invoked on any thread.

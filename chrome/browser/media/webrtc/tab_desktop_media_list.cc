@@ -6,18 +6,23 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
+#include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_layout_config.h"
+#include "chrome/browser/media/webrtc/desktop_media_picker_utils.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "components/favicon/content/content_favicon_driver.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -25,86 +30,26 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
-#include "media/base/video_util.h"
-#include "third_party/skia/include/core/SkCanvas.h"
-#include "third_party/skia/include/core/SkImage.h"
-#include "ui/gfx/favicon_size.h"
-#include "ui/gfx/image/image.h"
-#include "ui/gfx/image/image_skia_operations.h"
 
 using content::BrowserThread;
 using content::DesktopMediaID;
+using content::WebContents;
 
 namespace {
 
-gfx::ImageSkia CreateEnclosedFaviconImage(gfx::Size size,
-                                          const gfx::ImageSkia& favicon) {
-  DCHECK_GE(size.width(), gfx::kFaviconSize);
-  DCHECK_GE(size.height(), gfx::kFaviconSize);
-
-  // Create a bitmap.
-  SkBitmap result;
-  result.allocN32Pixels(size.width(), size.height(), false);
-  SkCanvas canvas(result, SkSurfaceProps{});
-  canvas.clear(SK_ColorTRANSPARENT);
-
-  // Draw the favicon image into the center of result image. If the favicon is
-  // too big, scale it down.
-  gfx::Size fill_size = favicon.size();
-  if (result.width() < favicon.width() || result.height() < favicon.height())
-    fill_size = media::ScaleSizeToFitWithinTarget(favicon.size(), size);
-
-  gfx::Rect center_rect(result.width(), result.height());
-  center_rect.ClampToCenteredSize(fill_size);
-  SkRect dest_rect =
-      SkRect::MakeLTRB(center_rect.x(), center_rect.y(), center_rect.right(),
-                       center_rect.bottom());
-  canvas.drawImageRect(favicon.bitmap()->asImage(), dest_rect,
-                       SkSamplingOptions());
-
-  return gfx::ImageSkia::CreateFrom1xBitmap(result);
-}
-
 // Update the list once per second.
-const int kDefaultTabDesktopMediaListUpdatePeriod = 1000;
-
-gfx::ImageSkia ScaleBitmap(const SkBitmap& bitmap, gfx::Size size) {
-  const gfx::Rect scaled_rect = media::ComputeLetterboxRegion(
-      gfx::Rect(0, 0, size.width(), size.height()),
-      gfx::Size(bitmap.info().width(), bitmap.info().height()));
-
-  // TODO(crbug.com/1246835): Consider changing to ResizeMethod::BEST after
-  // verifying CPU impact isn't too high.
-  const gfx::ImageSkia resized = gfx::ImageSkiaOperations::CreateResizedImage(
-      gfx::ImageSkia::CreateFromBitmap(bitmap, 1.f),
-      skia::ImageOperations::ResizeMethod::RESIZE_GOOD, scaled_rect.size());
-
-  SkBitmap result(*resized.bitmap());
-
-  // Set alpha channel values to 255 for all pixels.
-  // TODO(crbug.com/264424): Fix screen/window capturers to capture alpha
-  // channel and remove this code. Currently screen/window capturers (at least
-  // some implementations) only capture R, G and B channels and set Alpha to 0.
-  uint8_t* pixels_data = reinterpret_cast<uint8_t*>(result.getPixels());
-  for (int y = 0; y < result.height(); ++y) {
-    for (int x = 0; x < result.width(); ++x) {
-      pixels_data[result.rowBytes() * y + x * result.bytesPerPixel() + 3] =
-          0xff;
-    }
-  }
-
-  return gfx::ImageSkia::CreateFrom1xBitmap(result);
-}
+constexpr base::TimeDelta kDefaultTabDesktopMediaListUpdatePeriod =
+    base::Seconds(1);
 
 void HandleCapturedBitmap(
     base::OnceCallback<void(uint32_t, const gfx::ImageSkia&)> reply,
-    absl::optional<uint32_t> last_hash,
+    std::optional<uint32_t> last_hash,
     const SkBitmap& bitmap) {
   gfx::ImageSkia image;
 
   // Only scale and update if the frame appears to be new.
-  const uint32_t hash = base::FastHash(base::make_span(
-      static_cast<uint8_t*>(bitmap.getPixels()), bitmap.computeByteSize()));
+  const uint32_t hash = base::FastHash(UNSAFE_TODO(base::span(
+      static_cast<uint8_t*>(bitmap.getPixels()), bitmap.computeByteSize())));
   if (!last_hash.has_value() || hash != last_hash.value()) {
     image = ScaleBitmap(bitmap, desktopcapture::kPreviewSize);
   }
@@ -116,10 +61,13 @@ void HandleCapturedBitmap(
 }  // namespace
 
 TabDesktopMediaList::TabDesktopMediaList(
+    WebContents* web_contents,
     DesktopMediaList::WebContentsFilter includable_web_contents_filter,
     bool include_chrome_app_windows)
-    : DesktopMediaListBase(
-          base::Milliseconds(kDefaultTabDesktopMediaListUpdatePeriod)),
+    : DesktopMediaListBase(kDefaultTabDesktopMediaListUpdatePeriod),
+      web_contents_(web_contents
+                        ? std::make_optional(web_contents->GetWeakPtr())
+                        : std::nullopt),
       includable_web_contents_filter_(
           std::move(includable_web_contents_filter)),
       include_chrome_app_windows_(include_chrome_app_windows) {
@@ -146,33 +94,51 @@ void TabDesktopMediaList::CompleteRefreshAfterThumbnailProcessing() {
                      weak_factory_.GetWeakPtr()));
 }
 
-void TabDesktopMediaList::Refresh(bool update_thumnails) {
+void TabDesktopMediaList::Refresh(bool update_thumbnails) {
   DCHECK(can_refresh());
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  Profile* profile = ProfileManager::GetLastUsedProfileAllowedByPolicy();
+  Profile* profile;
+  if (web_contents_.has_value()) {
+    const base::WeakPtr<WebContents>& wc_weak_ref = web_contents_.value();
+    // Profile::FromBrowserContext is robust to receiving nullptr as input.
+    profile = Profile::FromBrowserContext(
+        wc_weak_ref ? wc_weak_ref->GetBrowserContext() : nullptr);
+  } else {
+    // When going through DesktopMediaPickerController::Show(), it can be that
+    // no WebContents was ever associated. In that case, fall back on the
+    // legacy behavior of using the last-used profile.
+    profile = ProfileManager::GetLastUsedProfileAllowedByPolicy();
+  }
   if (!profile) {
     OnRefreshComplete();
     return;
   }
 
-  std::vector<Browser*> browsers;
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->profile()->GetOriginalProfile() ==
-        profile->GetOriginalProfile()) {
-      browsers.push_back(browser);
-    }
-  }
+  std::vector<BrowserWindowInterface*> browsers;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&browsers, profile](BrowserWindowInterface* browser) {
+        // Omit all the IWAs for TabDesktopMediaList as they are already
+        // present in NativeDesktopMediaList.
+        if ((!base::FeatureList::IsEnabled(
+                 features::kRemovalOfIWAsFromTabCapture) ||
+             !web_app::AppBrowserController::IsIsolatedWebApp(browser)) &&
+            browser->GetProfile()->GetOriginalProfile() ==
+                profile->GetOriginalProfile()) {
+          browsers.push_back(browser);
+        }
+        return true;
+      });
 
-  std::vector<content::WebContents*> contents_list;
+  std::vector<WebContents*> contents_list;
   // Enumerate all tabs for a user profile.
-  for (auto* browser : browsers) {
-    const TabStripModel* tab_strip_model = browser->tab_strip_model();
+  for (BrowserWindowInterface* const browser : browsers) {
+    const TabStripModel* tab_strip_model = browser->GetTabStripModel();
     DCHECK(tab_strip_model);
 
     for (int i = 0; i < tab_strip_model->count(); i++) {
       // Create id for tab.
-      content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
+      WebContents* contents = tab_strip_model->GetWebContentsAt(i);
       DCHECK(contents);
       contents_list.push_back(contents);
     }
@@ -182,7 +148,7 @@ void TabDesktopMediaList::Refresh(bool update_thumnails) {
     // Find all AppWindows for the given profile.
     const extensions::AppWindowRegistry::AppWindowList& window_list =
         extensions::AppWindowRegistry::Get(profile)->app_windows();
-    for (const auto* app_window : window_list) {
+    for (const extensions::AppWindow* app_window : window_list) {
       if (!app_window->is_hidden())
         contents_list.push_back(app_window->web_contents());
     }
@@ -194,29 +160,33 @@ void TabDesktopMediaList::Refresh(bool update_thumnails) {
   std::vector<std::pair<DesktopMediaID, gfx::ImageSkia>> favicon_pairs;
   // Fetch title, favicons, and update time for all tabs to show.
   for (auto* contents : contents_list) {
-    if (!includable_web_contents_filter_.Run(contents))
+    if (!includable_web_contents_filter_.Run(contents)) {
       continue;
+    }
     content::RenderFrameHost* main_frame = contents->GetPrimaryMainFrame();
     DCHECK(main_frame);
-    DesktopMediaID media_id(
-        DesktopMediaID::TYPE_WEB_CONTENTS, DesktopMediaID::kNullId,
-        content::WebContentsMediaCaptureId(main_frame->GetProcess()->GetID(),
-                                           main_frame->GetRoutingID()));
+    DesktopMediaID media_id(DesktopMediaID::TYPE_WEB_CONTENTS,
+                            DesktopMediaID::kNullId,
+                            content::WebContentsMediaCaptureId(
+                                main_frame->GetProcess()->GetDeprecatedID(),
+                                main_frame->GetRoutingID()));
 
     // Get tab's last active time stamp.
-    const base::TimeTicks t = contents->GetLastActiveTime();
+    const base::TimeTicks t = contents->GetLastActiveTimeTicks();
     tab_map.insert(
         std::make_pair(t, SourceDescription(media_id, contents->GetTitle())));
 
     // Get favicon for tab.
     favicon::FaviconDriver* favicon_driver =
         favicon::ContentFaviconDriver::FromWebContents(contents);
-    if (!favicon_driver)
+    if (!favicon_driver) {
       continue;
+    }
 
     gfx::Image favicon = favicon_driver->GetFavicon();
-    if (favicon.IsEmpty())
+    if (favicon.IsEmpty()) {
       continue;
+    }
 
     // Only new or changed favicon need update.
     new_favicon_hashes[media_id] = GetImageHash(favicon);
@@ -224,7 +194,7 @@ void TabDesktopMediaList::Refresh(bool update_thumnails) {
         (favicon_hashes_[media_id] != new_favicon_hashes[media_id])) {
       gfx::ImageSkia image = favicon.AsImageSkia();
       image.MakeThreadSafe();
-      favicon_pairs.push_back(std::make_pair(media_id, image));
+      favicon_pairs.emplace_back(media_id, image);
     }
   }
   favicon_hashes_ = new_favicon_hashes;
@@ -235,14 +205,8 @@ void TabDesktopMediaList::Refresh(bool update_thumnails) {
 
   UpdateSourcesList(sources);
 
-  for (const auto& it : favicon_pairs) {
-    // Create a thumbail in a different thread and update the thumbnail in
-    // current thread.
-    image_resize_task_runner_->PostTaskAndReplyWithResult(
-        FROM_HERE,
-        base::BindOnce(&CreateEnclosedFaviconImage, thumbnail_size_, it.second),
-        base::BindOnce(&TabDesktopMediaList::UpdateSourceThumbnail,
-                       weak_factory_.GetWeakPtr(), it.first));
+  for (const auto& favicon_pair : favicon_pairs) {
+    UpdateSourceThumbnail(favicon_pair.first, favicon_pair.second);
   }
 
   if (previewed_source_) {
@@ -253,7 +217,7 @@ void TabDesktopMediaList::Refresh(bool update_thumnails) {
                           weak_factory_.GetWeakPtr()));
   } else {
     // No preview to update.
-    CompleteRefreshAfterThumbnailProcessing();
+    OnRefreshComplete();
   }
 }
 
@@ -280,7 +244,7 @@ void TabDesktopMediaList::TriggerScreenshot(
   }
 
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(),
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
       base::BindPostTask(
           content::GetUIThreadTaskRunner({}),
           base::BindOnce(&TabDesktopMediaList::ScreenshotReceived,
@@ -293,16 +257,15 @@ void TabDesktopMediaList::ScreenshotReceived(
     int remaining_retries,
     const content::DesktopMediaID& id,
     std::unique_ptr<TabDesktopMediaList::RefreshCompleter> refresh_completer,
-    const SkBitmap& bitmap) {
+    const content::CopyFromSurfaceResult& result) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
   if (id != previewed_source_) {
     // Selection has changed since triggering this screenshot. Quit early to
     // avoid rescaling the image unnecessarily.
     return;
   }
 
-  // TODO(crbug.com/1224342): Listen for a newly drawn frame to be ready when a
+  // TODO(crbug.com/40187992): Listen for a newly drawn frame to be ready when a
   // hidden tab is woken up,rather than just retrying after an arbitrary delay.
   constexpr base::TimeDelta kScreenshotRetryDelayMs = base::Milliseconds(20);
 
@@ -310,7 +273,7 @@ void TabDesktopMediaList::ScreenshotReceived(
   // by calling IncrementCapturerCount before it starts painting actual frames,
   // so do a few retries before giving up and proceeding with an empty image
   // meaning the preview is cleared.
-  if (bitmap.drawsNothing() && remaining_retries > 0) {
+  if (!result.has_value() && remaining_retries > 0) {
     content::GetUIThreadTaskRunner({})->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&TabDesktopMediaList::TriggerScreenshot,
@@ -324,8 +287,9 @@ void TabDesktopMediaList::ScreenshotReceived(
                               weak_factory_.GetWeakPtr(), id,
                               std::move(refresh_completer));
   image_resize_task_runner_.get()->PostTask(
-      FROM_HERE, base::BindOnce(&HandleCapturedBitmap, std::move(reply),
-                                last_hash_, bitmap));
+      FROM_HERE,
+      base::BindOnce(&HandleCapturedBitmap, std::move(reply), last_hash_,
+                     result.has_value() ? result->bitmap : SkBitmap()));
 }
 
 void TabDesktopMediaList::OnPreviewCaptureHandled(
@@ -342,7 +306,7 @@ void TabDesktopMediaList::OnPreviewCaptureHandled(
 }
 
 void TabDesktopMediaList::SetPreviewedSource(
-    const absl::optional<content::DesktopMediaID>& id) {
+    const std::optional<content::DesktopMediaID>& id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!(id.has_value() && id.value().is_null()));
 
@@ -357,8 +321,7 @@ void TabDesktopMediaList::SetPreviewedSource(
       id->web_contents_id.render_process_id,
       id->web_contents_id.main_render_frame_id);
   // Note host may be nullptr, but FromRenderFrameHost handles that for us.
-  content::WebContents* const source_contents =
-      content::WebContents::FromRenderFrameHost(host);
+  WebContents* const source_contents = WebContents::FromRenderFrameHost(host);
   if (!source_contents) {
     // No WebContents instance found, likely the selected tab has been recently
     // closed or crashed and the list of sources hasn't been updated yet.
@@ -375,7 +338,7 @@ void TabDesktopMediaList::SetPreviewedSource(
       /*is_activity=*/false);
 
   // Capture a new previewed image.
-  // TODO(crbug.com/1224342): Schedule this delayed if there has been another
+  // TODO(crbug.com/40187992): Schedule this delayed if there has been another
   // update recently to avoid churning when a user scrolls quickly through the
   // list.
   constexpr int kMaxPreviewRetries = 5;

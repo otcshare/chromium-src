@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
@@ -30,8 +32,9 @@ class ArcSupportMessageHost : public extensions::NativeMessageHost {
   ArcSupportMessageHost(const ArcSupportMessageHost&) = delete;
   ArcSupportMessageHost& operator=(const ArcSupportMessageHost&) = delete;
 
-  static const char kHostName[];
-  static const char* const kHostOrigin[];
+  static constexpr char kHostName[] = "com.google.arc_support";
+  static constexpr const char* kHostOrigin[] = {
+      "chrome-extension://cnbgggchhmkkdmeppjobngjoejnihlei/"};
 
   // Called when the arc_support connects the "port". Returns the
   // instance of ArcSupportMessageHost.
@@ -57,8 +60,8 @@ class ArcSupportMessageHost : public extensions::NativeMessageHost {
   void OnMessage(const std::string& request_string) override;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner() const override;
 
-  Observer* observer_ = nullptr;
-  Client* client_ = nullptr;
+  raw_ptr<Observer> observer_ = nullptr;
+  raw_ptr<Client> client_ = nullptr;
 };
 
 }  // namespace arc

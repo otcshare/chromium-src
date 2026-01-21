@@ -44,18 +44,19 @@ wl::Object<struct wl_buffer> WaylandBufferFactory::CreateShmBuffer(
     size_t length,
     const gfx::Size& size,
     bool with_alpha_channel) const {
-  if (UNLIKELY(!wayland_shm_))
+  if (!wayland_shm_) [[unlikely]] {
     return {};
+  }
   return wayland_shm_->CreateBuffer(fd, length, size, with_alpha_channel);
 }
 
-wl::BufferFormatsWithModifiersMap
-WaylandBufferFactory::GetSupportedBufferFormats() const {
+wl::SharedImageFormatsWithModifiersMap
+WaylandBufferFactory::GetSupportedSharedImageFormats() const {
 #if defined(WAYLAND_GBM)
   if (wayland_zwp_dmabuf_)
-    return wayland_zwp_dmabuf_->supported_buffer_formats();
+    return wayland_zwp_dmabuf_->supported_formats();
   else if (wayland_drm_)
-    return wayland_drm_->supported_buffer_formats();
+    return wayland_drm_->supported_formats();
 #endif
   return {};
 }

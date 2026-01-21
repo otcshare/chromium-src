@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/audio_bus.h"
+
 #include <stdint.h>
+
 #include <memory>
 
+#include "base/containers/heap_array.h"
 #include "base/time/time.h"
-#include "media/base/audio_bus.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/fake_audio_render_callback.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,28 +32,39 @@ namespace media {
 static const int kBenchmarkIterations = 20;
 static const int kSampleRate = 48000;
 
-template <typename T, class SampleTraits>
+template <typename T, class SampleTraits, bool use_span>
 void RunInterleaveBench(AudioBus* bus,
                         const std::string& trace_name,
                         bool to_interleaved_only = false) {
   const int frame_size = bus->frames() * bus->channels();
-  std::unique_ptr<T[]> interleaved(new T[frame_size]);
+  auto interleaved = base::HeapArray<T>::Uninit(frame_size);
   perf_test::PerfResultReporter reporter = SetUpReporter(trace_name);
 
   base::TimeTicks start = base::TimeTicks::Now();
-  for (int i = 0; i < kBenchmarkIterations; ++i)
-    bus->ToInterleaved<SampleTraits>(bus->frames(), interleaved.get());
+  for (int i = 0; i < kBenchmarkIterations; ++i) {
+    if constexpr (use_span) {
+      bus->ToInterleaved<SampleTraits>(interleaved);
+    } else {
+      bus->ToInterleaved<SampleTraits>(bus->frames(), interleaved.data());
+    }
+  }
   double total_time_milliseconds =
       (base::TimeTicks::Now() - start).InMillisecondsF();
   reporter.AddResult("_to_interleaved",
                      total_time_milliseconds / kBenchmarkIterations);
 
-  if (to_interleaved_only)
+  if (to_interleaved_only) {
     return;
+  }
 
   start = base::TimeTicks::Now();
-  for (int i = 0; i < kBenchmarkIterations; ++i)
-    bus->FromInterleaved<SampleTraits>(interleaved.get(), bus->frames());
+  for (int i = 0; i < kBenchmarkIterations; ++i) {
+    if constexpr (use_span) {
+      bus->FromInterleaved<SampleTraits>(interleaved);
+    } else {
+      bus->FromInterleaved<SampleTraits>(interleaved.data(), bus->frames());
+    }
+  }
   total_time_milliseconds = (base::TimeTicks::Now() - start).InMillisecondsF();
   reporter.AddResult("_from_interleaved",
                      total_time_milliseconds / kBenchmarkIterations);
@@ -63,9 +77,23 @@ TEST(AudioBusPerfTest, Interleave) {
   callback.Render(base::TimeDelta(), base::TimeTicks::Now(), {}, bus.get());
 
   // Only benchmark these two types since they're the only commonly used ones.
-  RunInterleaveBench<int16_t, SignedInt16SampleTypeTraits>(bus.get(),
-                                                           "int16_t");
-  RunInterleaveBench<float, Float32SampleTypeTraits>(bus.get(), "float");
+  RunInterleaveBench<int16_t, SignedInt16SampleTypeTraits, false>(bus.get(),
+                                                                  "int16_t");
+  RunInterleaveBench<float, Float32SampleTypeTraits, false>(bus.get(), "float");
+}
+
+// Benchmark the FromInterleaved() and ToInterleaved() methods.
+TEST(AudioBusPerfTest, DISABLED_Interleave_Span) {
+  std::unique_ptr<AudioBus> bus = AudioBus::Create(2, kSampleRate * 120);
+  FakeAudioRenderCallback callback(0.2, kSampleRate);
+  callback.Render(base::TimeDelta(), base::TimeTicks::Now(), {}, bus.get());
+
+  // Only benchmark these two types since they're the only commonly used ones.
+  RunInterleaveBench<int16_t, SignedInt16SampleTypeTraits, true>(
+      bus.get(), "int16_t (span)");
+
+  RunInterleaveBench<float, Float32SampleTypeTraits, true>(bus.get(),
+                                                           "float (span)");
 }
 
 TEST(AudioBusPerfTest, DISABLED_ToInterleavedFloat) {
@@ -73,9 +101,9 @@ TEST(AudioBusPerfTest, DISABLED_ToInterleavedFloat) {
   FakeAudioRenderCallback callback(0.2, kSampleRate);
   callback.Render(base::TimeDelta(), base::TimeTicks::Now(), {}, bus.get());
 
-  RunInterleaveBench<float, Float32SampleTypeTraits>(
+  RunInterleaveBench<float, Float32SampleTypeTraits, false>(
       bus.get(), "to_interleave_float", true);
-  RunInterleaveBench<float, Float32SampleTypeTraitsNoClip>(
+  RunInterleaveBench<float, Float32SampleTypeTraitsNoClip, false>(
       bus.get(), "to_interleave_float_no_clip", true);
 }
 

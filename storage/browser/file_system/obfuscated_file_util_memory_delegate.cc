@@ -7,14 +7,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/allocator/partition_allocator/partition_alloc_constants.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "partition_alloc/partition_alloc_constants.h"
 
 namespace {
 
@@ -33,7 +35,7 @@ bool IsMemoryAvailable(size_t required_memory) {
   return true;
 #else
   uint64_t max_allocatable =
-      std::min(base::SysInfo::AmountOfAvailablePhysicalMemory(),
+      std::min(base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes(),
                static_cast<uint64_t>(partition_alloc::MaxDirectMapped()));
 
   return max_allocatable >= required_memory;
@@ -74,10 +76,10 @@ struct ObfuscatedFileUtilMemoryDelegate::Entry {
 struct ObfuscatedFileUtilMemoryDelegate::DecomposedPath {
   // Entry in the directory structure that the input |path| referes to,
   // nullptr if the entry does not exist.
-  Entry* entry = nullptr;
+  raw_ptr<Entry, DanglingUntriaged> entry = nullptr;
 
   // Parent of the |path| in the directory structure, nullptr if not exists.
-  Entry* parent = nullptr;
+  raw_ptr<Entry, DanglingUntriaged> parent = nullptr;
 
   // Normalized components of the path after the |root_|. E.g., if the root
   // is 'foo/' and the path is 'foo/./bar/baz', it will be ['bar', 'baz'].
@@ -95,7 +97,7 @@ ObfuscatedFileUtilMemoryDelegate::~ObfuscatedFileUtilMemoryDelegate() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-absl::optional<ObfuscatedFileUtilMemoryDelegate::DecomposedPath>
+std::optional<ObfuscatedFileUtilMemoryDelegate::DecomposedPath>
 ObfuscatedFileUtilMemoryDelegate::ParsePath(const base::FilePath& path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DecomposedPath dp;
@@ -103,11 +105,11 @@ ObfuscatedFileUtilMemoryDelegate::ParsePath(const base::FilePath& path) {
 
   // Ensure |path| is under |root_|.
   if (dp.components.size() < root_path_components_.size())
-    return absl::nullopt;
+    return std::nullopt;
 
   for (size_t i = 0; i < root_path_components_.size(); i++)
     if (dp.components[i] != root_path_components_[i])
-      return absl::nullopt;
+      return std::nullopt;
 
   dp.components.erase(dp.components.begin(),
                       dp.components.begin() + root_path_components_.size());
@@ -120,7 +122,7 @@ ObfuscatedFileUtilMemoryDelegate::ParsePath(const base::FilePath& path) {
     } else if (dp.components[i] == base::FilePath::kParentDirectory) {
       // Beyond |root|?
       if (!i)
-        return absl::nullopt;
+        return std::nullopt;
       dp.components.erase(dp.components.begin() + i - 1,
                           dp.components.begin() + i + 1);
       i -= 2;
@@ -153,7 +155,7 @@ ObfuscatedFileUtilMemoryDelegate::ParsePath(const base::FilePath& path) {
 bool ObfuscatedFileUtilMemoryDelegate::DirectoryExists(
     const base::FilePath& path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   return dp && dp->entry && dp->entry->type == Entry::kDirectory;
 }
 
@@ -162,7 +164,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::CreateDirectory(
     bool exclusive,
     bool recursive) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp)
     return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -206,7 +208,7 @@ bool ObfuscatedFileUtilMemoryDelegate::DeleteFileOrDirectory(
     const base::FilePath& path,
     bool recursive) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp)
     return false;
 
@@ -229,7 +231,7 @@ bool ObfuscatedFileUtilMemoryDelegate::IsLink(const base::FilePath& file_path) {
 
 bool ObfuscatedFileUtilMemoryDelegate::PathExists(const base::FilePath& path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   return dp && dp->entry;
 }
 
@@ -263,7 +265,7 @@ void ObfuscatedFileUtilMemoryDelegate::CreateOrOpenInternal(
 base::File::Error ObfuscatedFileUtilMemoryDelegate::DeleteFile(
     const base::FilePath& path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || !dp->entry)
     return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -278,7 +280,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::EnsureFileExists(
     const base::FilePath& path,
     bool* created) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   *created = false;
   if (!dp || !dp->parent)
     return base::File::FILE_ERROR_NOT_FOUND;
@@ -297,7 +299,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::GetFileInfo(
     const base::FilePath& path,
     base::File::Info* file_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || !dp->entry)
     return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -317,7 +319,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::Touch(
     const base::Time& last_access_time,
     const base::Time& last_modified_time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || !dp->entry)
     return base::File::FILE_ERROR_FAILED;
 
@@ -331,7 +333,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::Truncate(
     const base::FilePath& path,
     int64_t length) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || !dp->entry || dp->entry->type != Entry::kFile)
     return base::File::FILE_ERROR_NOT_FOUND;
 
@@ -361,8 +363,8 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::CopyOrMoveFile(
     FileSystemOperation::CopyOrMoveOptionSet options,
     NativeFileUtil::CopyOrMoveMode mode) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> src_dp = ParsePath(src_path);
-  absl::optional<DecomposedPath> dest_dp = ParsePath(dest_path);
+  std::optional<DecomposedPath> src_dp = ParsePath(src_path);
+  std::optional<DecomposedPath> dest_dp = ParsePath(dest_path);
 
   if (!src_dp || !src_dp->entry || !dest_dp || !dest_dp->parent)
     return base::File::FILE_ERROR_NOT_FOUND;
@@ -471,7 +473,7 @@ bool ObfuscatedFileUtilMemoryDelegate::CopyOrMoveFileInternal(
 size_t ObfuscatedFileUtilMemoryDelegate::ComputeDirectorySize(
     const base::FilePath& path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || !dp->entry || dp->entry->type != Entry::kDirectory)
     return 0;
 
@@ -497,23 +499,28 @@ int ObfuscatedFileUtilMemoryDelegate::ReadFile(const base::FilePath& path,
                                                scoped_refptr<net::IOBuffer> buf,
                                                int buf_len) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   if (!dp || dp->entry->type != Entry::kFile)
     return net::ERR_FILE_NOT_FOUND;
 
-  int64_t remaining = dp->entry->file_content.size() - offset;
-  if (offset < 0)
+  if (offset < 0 || buf_len < 0) {
     return net::ERR_INVALID_ARGUMENT;
+  }
 
   // Seeking past the end of the file is ok, but returns nothing.
   // This matches FileStream::Context behavior.
-  if (remaining < 0)
+  int64_t remaining = dp->entry->file_content.size() - offset;
+  if (remaining < 0) {
     return 0;
+  }
 
   if (buf_len > remaining)
     buf_len = static_cast<int>(remaining);
 
-  memcpy(buf->data(), dp->entry->file_content.data() + offset, buf_len);
+  std::ranges::copy(
+      base::span(dp->entry->file_content)
+          .subspan(static_cast<size_t>(offset), static_cast<size_t>(buf_len)),
+      buf->data());
 
   return buf_len;
 }
@@ -524,7 +531,7 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
     scoped_refptr<net::IOBuffer> buf,
     int buf_len) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
 
   if (!dp || !dp->entry || dp->entry->type != Entry::kFile)
     return net::ERR_FILE_NOT_FOUND;
@@ -552,7 +559,7 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 // (crbug.com/986608)
 #if !BUILDFLAG(IS_FUCHSIA)
     if (last_position >= partition_alloc::MaxDirectMapped() / 2) {
-      // TODO(https://crbug.com/1043914): Allocated memory is rounded up to
+      // TODO(crbug.com/40669351): Allocated memory is rounded up to
       // 100MB blocks to reduce memory allocation delays. Switch to a more
       // proper container to remove this dependency.
       const size_t round_up_size = 100 * 1024 * 1024;
@@ -566,14 +573,15 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 
   if (offset_u == dp->entry->file_content.size()) {
     dp->entry->file_content.insert(dp->entry->file_content.end(), buf->data(),
-                                   buf->data() + buf_len);
+                                   UNSAFE_TODO(buf->data() + buf_len));
   } else {
     if (last_position > dp->entry->file_content.size())
       dp->entry->file_content.resize(last_position);
 
     // if |offset_u| is larger than the original file size, there will be null
     // bytes between the end of the file and |offset_u|.
-    memcpy(dp->entry->file_content.data() + offset, buf->data(), buf_len);
+    UNSAFE_TODO(
+        memcpy(dp->entry->file_content.data() + offset, buf->data(), buf_len));
   }
   return buf_len;
 }
@@ -587,7 +595,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::CreateFileForTesting(
   if (result != base::File::FILE_OK)
     return result;
 
-  absl::optional<DecomposedPath> dp = ParsePath(path);
+  std::optional<DecomposedPath> dp = ParsePath(path);
   DCHECK(dp && dp->entry->type == Entry::kFile);
 
   dp->entry->file_content =
@@ -602,7 +610,7 @@ base::File::Error ObfuscatedFileUtilMemoryDelegate::CopyInForeignFile(
     FileSystemOperation::CopyOrMoveOptionSet /* options */,
     NativeFileUtil::CopyOrMoveMode /* mode */) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  absl::optional<DecomposedPath> dest_dp = ParsePath(dest_path);
+  std::optional<DecomposedPath> dest_dp = ParsePath(dest_path);
 
   if (!dest_dp || !dest_dp->parent)
     return base::File::FILE_ERROR_NOT_FOUND;

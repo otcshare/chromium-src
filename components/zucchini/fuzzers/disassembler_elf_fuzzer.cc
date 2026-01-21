@@ -2,19 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/zucchini/disassembler_elf.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "components/zucchini/buffer_view.h"
 #include "components/zucchini/disassembler.h"
-#include "components/zucchini/disassembler_elf.h"
 #include "components/zucchini/fuzzers/fuzz_utils.h"
 
 namespace {
 
 struct Environment {
-  Environment() { logging::SetMinLogLevel(logging::LOG_FATAL); }
+  Environment() { logging::SetMinLogLevel(logging::LOGGING_FATAL); }
 };
 
 }  // namespace
@@ -24,7 +26,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (!size)
     return 0;
   // Prepare data.
-  std::vector<uint8_t> mutable_data(data, data + size);
+  std::vector<uint8_t> mutable_data(data, UNSAFE_TODO(data + size));
   zucchini::ConstBufferView image(mutable_data.data(), mutable_data.size());
 
   // Create disassembler. Early exit on failure.

@@ -15,6 +15,8 @@ import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
@@ -28,35 +30,32 @@ import androidx.test.espresso.ViewAssertion;
 import androidx.test.filters.MediumTest;
 
 import org.junit.Before;
-import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.StrictModeContext;
-import org.chromium.base.test.metrics.HistogramTestRule;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.JniMocker;
-import org.chromium.chrome.R;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.browser.compositor.bottombar.ephemeraltab.EphemeralTabCoordinator;
+import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tabmodel.TabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelObserver;
+import org.chromium.chrome.browser.tabbed_mode.TabbedRootUiCoordinator;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
+import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.components.page_info.PageInfoAction;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.components.page_info.PageInfoController;
 import org.chromium.components.page_info.proto.AboutThisSiteMetadataProto.Hyperlink;
 import org.chromium.components.page_info.proto.AboutThisSiteMetadataProto.MoreAbout;
@@ -64,46 +63,35 @@ import org.chromium.components.page_info.proto.AboutThisSiteMetadataProto.SiteDe
 import org.chromium.components.page_info.proto.AboutThisSiteMetadataProto.SiteInfo;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.net.test.EmbeddedTestServerRule;
 import org.chromium.url.GURL;
 
 import java.io.IOException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests for PageInfoAboutThisSite.
- */
+/** Tests for PageInfoAboutThisSite. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@Features.EnableFeatures({ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_EN,
-        ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_NON_EN})
-@CommandLineFlags.
-Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, ChromeSwitches.DISABLE_STARTUP_PROMOS,
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1", "ignore-certificate-errors"})
+@EnableFeatures({ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_LANGS})
+@CommandLineFlags.Add({
+    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    ChromeSwitches.DISABLE_STARTUP_PROMOS,
+    ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1",
+    "ignore-certificate-errors"
+})
 @Batch(Batch.PER_CLASS)
 @SuppressLint("VisibleForTests")
 public class PageInfoAboutThisSiteTest {
     private static final String sSimpleHtml = "/chrome/test/data/android/simple.html";
     private static final String sAboutHtml = "/chrome/test/data/android/about.html";
 
-    @ClassRule
-    public static final ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public final BlankCTATabInitialStateRule mInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, false);
+    public final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
-    @Rule
-    public EmbeddedTestServerRule mTestServerRule = new EmbeddedTestServerRule();
-
-    @Rule
-    public HistogramTestRule mHistogramTester = new HistogramTestRule();
-
-    @Rule
-    public JniMocker mMocker = new JniMocker();
+    @Rule public EmbeddedTestServerRule mTestServerRule = new EmbeddedTestServerRule();
 
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
@@ -111,48 +99,91 @@ public class PageInfoAboutThisSiteTest {
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_BUBBLES_PAGE_INFO)
                     .build();
 
-    @Mock
-    private PageInfoAboutThisSiteController.Natives mMockAboutThisSiteJni;
+    private WebPageStation mStartingPage;
+    private EphemeralTabCoordinator mEphemeralTabCoordinator;
 
-    @Mock
-    private EphemeralTabCoordinator mMockEphemeralTabCoordinator;
+    private BottomSheetTestSupport mSheetTestSupport;
+
+    @Mock private PageInfoAboutThisSiteController.Natives mMockAboutThisSiteJni;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         doReturn(true).when(mMockAboutThisSiteJni).isFeatureEnabled();
-        mMocker.mock(PageInfoAboutThisSiteControllerJni.TEST_HOOKS, mMockAboutThisSiteJni);
+        doReturn(R.drawable.ic_info_24dp).when(mMockAboutThisSiteJni).getJavaDrawableIconId();
+        PageInfoAboutThisSiteControllerJni.setInstanceForTesting(mMockAboutThisSiteJni);
         mTestServerRule.setServerUsesHttps(true);
-        sActivityTestRule.loadUrl(mTestServerRule.getServer().getURL(sSimpleHtml));
+        mStartingPage =
+                mActivityTestRule
+                        .startOnBlankPage()
+                        .loadWebPageProgrammatically(
+                                mTestServerRule.getServer().getURL(sSimpleHtml));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    TabbedRootUiCoordinator tabbedRootUiCoordinator =
+                            ((TabbedRootUiCoordinator)
+                                    mActivityTestRule
+                                            .getActivity()
+                                            .getRootUiCoordinatorForTesting());
+                    mEphemeralTabCoordinator =
+                            tabbedRootUiCoordinator.getEphemeralTabCoordinatorSupplier().get();
+                });
+
+        mSheetTestSupport =
+                new BottomSheetTestSupport(
+                        mActivityTestRule
+                                .getActivity()
+                                .getRootUiCoordinatorForTesting()
+                                .getBottomSheetController());
     }
 
     private void openPageInfo() {
-        ChromeTabbedActivity activity = sActivityTestRule.getActivity();
-        Tab tab = activity.getActivityTab();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            new ChromePageInfo(activity.getModalDialogManagerSupplier(), null,
-                    PageInfoController.OpenedFromSource.TOOLBAR, null,
-                    () -> mMockEphemeralTabCoordinator)
-                    .show(tab, ChromePageInfoHighlight.noHighlight());
-        });
-        onViewWaiting(allOf(withId(org.chromium.chrome.R.id.page_info_url_wrapper), isDisplayed()));
+        ChromeTabbedActivity activity = mActivityTestRule.getActivity();
+        Tab tab = mActivityTestRule.getActivityTab();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    new ChromePageInfo(
+                                    activity.getModalDialogManagerSupplier(),
+                                    null,
+                                    PageInfoController.OpenedFromSource.TOOLBAR,
+                                    null,
+                                    () -> mEphemeralTabCoordinator,
+                                    null)
+                            .show(tab, ChromePageInfoHighlight.noHighlight());
+                });
+        onViewWaiting(allOf(withId(R.id.page_info_url_wrapper), isDisplayed()), true);
     }
 
     private void dismissPageInfo() throws TimeoutException {
         CallbackHelper helper = new CallbackHelper();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PageInfoController.getLastPageInfoControllerForTesting().runAfterDismiss(
-                    helper::notifyCalled);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PageInfoController.getLastPageInfoController()
+                            .runAfterDismiss(helper::notifyCalled);
+                });
         helper.waitForCallback(0);
     }
 
-    @NonNull
-    private ViewAssertion renderView(String renderId) {
+    /**
+     * End all animations that already started before so that the UI will be in a state ready for
+     * the next command.
+     */
+    private void endAnimations() {
+        ThreadUtils.runOnUiThreadBlocking(mSheetTestSupport::endAllAnimations);
+    }
+
+    private void closeBottomSheet() {
+        ThreadUtils.runOnUiThreadBlocking(mEphemeralTabCoordinator::close);
+        endAnimations();
+        assertFalse(
+                "The bottomsheet should have closed but did not indicate closed",
+                mEphemeralTabCoordinator.isOpened());
+    }
+
+    private @NonNull ViewAssertion renderView(String renderId) {
         return (v, noMatchException) -> {
             if (noMatchException != null) throw noMatchException;
-            // Allow disk writes and slow calls to render from UI thread.
-            try (StrictModeContext ignored = StrictModeContext.allowAllThreadPolicies()) {
+            try {
                 mRenderTestRule.render(v, renderId);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -191,7 +222,7 @@ public class PageInfoAboutThisSiteTest {
     @Test
     @MediumTest
     public void testAboutThisSiteRowWithDataOnInsecureSite() {
-        sActivityTestRule.loadUrl(
+        mActivityTestRule.loadUrl(
                 mTestServerRule.getServer().getURLWithHostName("invalidcert.com", sSimpleHtml));
         mockResponse(createDescription());
         openPageInfo();
@@ -229,102 +260,63 @@ public class PageInfoAboutThisSiteTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    @Features.DisableFeatures(ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_INFO)
-    public void testAboutThisSiteSubPageRendering() {
-        mockResponse(createDescription());
-        openPageInfo();
-        onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
-        onView(withId(R.id.page_info_wrapper))
-                .check(renderView("page_info_about_this_site_subpage"));
-    }
-
-    @Test
-    @MediumTest
-    @Features.DisableFeatures(ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_INFO)
-    public void testAboutThisSiteSubPageSourceClicked()
-            throws ExecutionException, TimeoutException {
-        assertEquals(0, mHistogramTester.getHistogramTotalCount("WebsiteSettings.Action"));
-        mockResponse(createDescription());
-        openPageInfo();
-        assertEquals(1, mHistogramTester.getHistogramTotalCount("WebsiteSettings.Action"));
-        assertEquals(1,
-                mHistogramTester.getHistogramValueCount(
-                        "WebsiteSettings.Action", PageInfoAction.PAGE_INFO_OPENED));
-
-        onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
-        assertEquals(2, mHistogramTester.getHistogramTotalCount("WebsiteSettings.Action"));
-        assertEquals(1,
-                mHistogramTester.getHistogramValueCount("WebsiteSettings.Action",
-                        PageInfoAction.PAGE_INFO_ABOUT_THIS_SITE_PAGE_OPENED));
-
-        onView(withText(containsString("Example Source"))).perform(click());
-        String sourceUrl = mTestServerRule.getServer().getURL(sSimpleHtml);
-        verify(mMockEphemeralTabCoordinator)
-                .requestOpenSheetWithFullPageUrl(/*url=*/new GURL(sourceUrl),
-                        /*fullPageUrl=*/new GURL(sourceUrl), /*title=*/"From the web",
-                        /*isIncognito=*/false);
-        assertEquals(3, mHistogramTester.getHistogramTotalCount("WebsiteSettings.Action"));
-        assertEquals(1,
-                mHistogramTester.getHistogramValueCount("WebsiteSettings.Action",
-                        PageInfoAction.PAGE_INFO_ABOUT_THIS_SITE_SOURCE_LINK_CLICKED));
-    }
-
-    @Test
-    @MediumTest
-    @Features.DisableFeatures(ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_INFO)
-    public void testAboutThisSiteSubPageSourceClickedWithoutEphemeralTabCreator()
-            throws ExecutionException, TimeoutException {
-        // Test the path without ephemeralTabCreator.
-        mMockEphemeralTabCoordinator = null;
-        mockResponse(createDescription());
-        openPageInfo();
-        onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
-
-        final CallbackHelper onTabAdded = new CallbackHelper();
-        final TabModelObserver observer = new TabModelObserver() {
-            @Override
-            public void willAddTab(Tab tab, @TabLaunchType int type) {
-                onTabAdded.notifyCalled();
-            }
-        };
-        final TabModel tabModel = sActivityTestRule.getActivity().getCurrentTabModel();
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabModel.addObserver(observer));
-
-        final int callCount = onTabAdded.getCallCount();
-        onView(withText(containsString("Example Source"))).perform(click());
-        onTabAdded.waitForCallback(callCount);
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabModel.removeObserver(observer));
-    }
-
-    @Test
-    @MediumTest
-    @Features.EnableFeatures({ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_EN,
-            ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_NON_EN,
-            ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_INFO})
-    public void
-    testAboutThisSiteOpensEphemeralTab() throws Exception {
+    public void testAboutThisSiteOpensEphemeralTabWithImprovedBottomSheetEnabled() {
         mockResponse(createDescription());
         openPageInfo();
 
         onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
-        String moreAboutUrl = mTestServerRule.getServer().getURL(sAboutHtml);
-        verify(mMockEphemeralTabCoordinator)
-                .requestOpenSheetWithFullPageUrl(/*url=*/new GURL(moreAboutUrl + "?ilrm=minimal"),
-                        /*fullPageUrl=*/new GURL(moreAboutUrl), /*title=*/"About this page",
-                        /*isIncognito=*/false);
         verify(mMockAboutThisSiteJni).onAboutThisSiteRowClicked(true);
+        endAnimations();
+        assertTrue("The bottomsheet did not open", mEphemeralTabCoordinator.isOpened());
+
+        String moreAboutUrl = mTestServerRule.getServer().getURL(sAboutHtml);
+        assertEquals(
+                new GURL(moreAboutUrl + "?ilrm=minimal%2Cnohead"),
+                mEphemeralTabCoordinator.getUrlForTesting());
+        assertEquals(new GURL(moreAboutUrl), mEphemeralTabCoordinator.getFullPageUrlForTesting());
+
+        onView(withId(R.id.bottom_sheet))
+                .check(renderView("page_info_about_this_site_improved_bottomsheet"));
+
+        closeBottomSheet();
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures({ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_EN,
-            ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_NON_EN,
-            ChromeFeatureList.PAGE_INFO_ABOUT_THIS_SITE_MORE_INFO})
-    public void
-    testAboutThisSiteWithoutDescription() throws Exception {
+    public void testAboutThisSiteWithoutDescription() {
         mockResponse(createDescription().clearDescription());
         openPageInfo();
+
         onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
+        endAnimations();
+        assertTrue("The bottomsheet did not open", mEphemeralTabCoordinator.isOpened());
+
         verify(mMockAboutThisSiteJni).onAboutThisSiteRowClicked(false);
+
+        closeBottomSheet();
+    }
+
+    @Test
+    @MediumTest
+    public void testAboutThisSiteRowWithNullTabCreator() throws TimeoutException {
+        mockResponse(createDescription());
+        ChromeTabbedActivity activity = mActivityTestRule.getActivity();
+        Tab tab = mActivityTestRule.getActivityTab();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    new ChromePageInfo(
+                                    activity.getModalDialogManagerSupplier(),
+                                    null,
+                                    PageInfoController.OpenedFromSource.TOOLBAR,
+                                    null,
+                                    () -> null,
+                                    null)
+                            .show(tab, ChromePageInfoHighlight.noHighlight());
+                });
+        onViewWaiting(allOf(withId(R.id.page_info_url_wrapper), isDisplayed()), true);
+
+        onView(withId(PageInfoAboutThisSiteController.ROW_ID)).perform(click());
+        verify(mMockAboutThisSiteJni).onAboutThisSiteRowClicked(true);
+        dismissPageInfo();
     }
 }

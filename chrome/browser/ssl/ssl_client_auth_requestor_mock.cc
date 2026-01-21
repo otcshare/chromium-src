@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -52,7 +52,7 @@ SSLClientAuthRequestorMock::SSLClientAuthRequestorMock(
     : cert_request_info_(cert_request_info) {
 }
 
-SSLClientAuthRequestorMock::~SSLClientAuthRequestorMock() {}
+SSLClientAuthRequestorMock::~SSLClientAuthRequestorMock() = default;
 
 std::unique_ptr<content::ClientCertificateDelegate>
 SSLClientAuthRequestorMock::CreateDelegate() {

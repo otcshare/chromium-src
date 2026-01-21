@@ -4,11 +4,10 @@
 
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 
 namespace media_session {
 namespace test {
@@ -65,31 +64,40 @@ void MockMediaSessionMojoObserver::MediaSessionInfoChanged(
 
   if (expected_controllable_.has_value() &&
       expected_controllable_ == session_info_->is_controllable) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     expected_controllable_.reset();
+  } else if (expected_hide_metadata_.has_value() &&
+             expected_hide_metadata_ == session_info_->hide_metadata) {
+    QuitWaitingIfNeeded();
+    expected_hide_metadata_.reset();
+  } else if (expected_meets_visibility_threshold_.has_value() &&
+             expected_meets_visibility_threshold_ ==
+                 session_info_->meets_visibility_threshold) {
+    QuitWaitingIfNeeded();
+    expected_meets_visibility_threshold_.reset();
   } else {
     if (wanted_state_ == session_info_->state ||
         session_info_->playback_state == wanted_playback_state_ ||
         session_info_->microphone_state == wanted_microphone_state_ ||
         session_info_->camera_state == wanted_camera_state_ ||
         (wanted_audio_video_states_ &&
-         base::ranges::is_permutation(*session_info_->audio_video_states,
-                                      *wanted_audio_video_states_))) {
-      run_loop_->Quit();
+         std::ranges::is_permutation(*session_info_->audio_video_states,
+                                     *wanted_audio_video_states_))) {
+      QuitWaitingIfNeeded();
     }
   }
 }
 
 void MockMediaSessionMojoObserver::MediaSessionMetadataChanged(
-    const absl::optional<MediaMetadata>& metadata) {
+    const std::optional<MediaMetadata>& metadata) {
   session_metadata_ = metadata;
 
   if (expected_metadata_.has_value() && expected_metadata_ == metadata) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     expected_metadata_.reset();
   } else if (waiting_for_empty_metadata_ &&
              (!metadata.has_value() || metadata->IsEmpty())) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     waiting_for_empty_metadata_ = false;
   }
 }
@@ -100,7 +108,7 @@ void MockMediaSessionMojoObserver::MediaSessionActionsChanged(
       std::set<mojom::MediaSessionAction>(actions.begin(), actions.end());
 
   if (expected_actions_.has_value() && expected_actions_ == session_actions_) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     expected_actions_.reset();
   }
 }
@@ -116,26 +124,26 @@ void MockMediaSessionMojoObserver::MediaSessionImagesChanged(
     auto it = session_images_->find(type);
 
     if (it != session_images_->end() && it->second == expected_images) {
-      run_loop_->Quit();
+      QuitWaitingIfNeeded();
       expected_images_of_type_.reset();
     }
   }
 }
 
 void MockMediaSessionMojoObserver::MediaSessionPositionChanged(
-    const absl::optional<media_session::MediaPosition>& position) {
+    const std::optional<media_session::MediaPosition>& position) {
   session_position_ = position;
 
   if (position.has_value() && expected_position_.has_value() &&
       IsPositionEqual(*position, *expected_position_)) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     expected_position_.reset();
   } else if (position.has_value() && minimum_expected_position_.has_value() &&
              IsPositionGreaterOrEqual(*position, *minimum_expected_position_)) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     minimum_expected_position_.reset();
   } else if (waiting_for_empty_position_ && !position.has_value()) {
-    run_loop_->Quit();
+    QuitWaitingIfNeeded();
     waiting_for_empty_position_ = false;
   }
 }
@@ -180,7 +188,7 @@ void MockMediaSessionMojoObserver::WaitForCameraState(
 
 void MockMediaSessionMojoObserver::WaitForAudioVideoStates(
     const std::vector<mojom::MediaAudioVideoState>& wanted_states) {
-  if (session_info_ && base::ranges::is_permutation(
+  if (session_info_ && std::ranges::is_permutation(
                            *session_info_->audio_video_states, wanted_states)) {
     return;
   }
@@ -197,9 +205,20 @@ void MockMediaSessionMojoObserver::WaitForControllable(bool is_controllable) {
   StartWaiting();
 }
 
-void MockMediaSessionMojoObserver::WaitForEmptyMetadata() {
-  if (session_metadata_.has_value() || !session_metadata_->has_value())
+void MockMediaSessionMojoObserver::WaitForExpectedHideMetadata(
+    bool hide_metadata) {
+  if (session_info_ && session_info_->hide_metadata == hide_metadata) {
     return;
+  }
+
+  expected_hide_metadata_ = hide_metadata;
+  StartWaiting();
+}
+
+void MockMediaSessionMojoObserver::WaitForEmptyMetadata() {
+  if (!session_metadata_.has_value() || !session_metadata_->has_value()) {
+    return;
+  }
 
   waiting_for_empty_metadata_ = true;
   StartWaiting();
@@ -241,7 +260,7 @@ void MockMediaSessionMojoObserver::WaitForExpectedImagesOfType(
 }
 
 void MockMediaSessionMojoObserver::WaitForEmptyPosition() {
-  // |session_position_| is doubly wrapped in absl::optional so we must check
+  // |session_position_| is doubly wrapped in std::optional so we must check
   // both values.
   if (session_position_.has_value() && !session_position_->has_value())
     return;
@@ -275,12 +294,29 @@ base::TimeDelta MockMediaSessionMojoObserver::WaitForExpectedPositionAtLeast(
       ->GetPositionAtTime((*session_position_)->last_updated_time());
 }
 
-void MockMediaSessionMojoObserver::StartWaiting() {
-  DCHECK(!run_loop_);
+bool MockMediaSessionMojoObserver::WaitForMeetsVisibilityThreshold(
+    bool meets_visibility_threshold) {
+  if (session_info_ &&
+      session_info_->meets_visibility_threshold == meets_visibility_threshold) {
+    return meets_visibility_threshold;
+  }
 
+  expected_meets_visibility_threshold_ = meets_visibility_threshold;
+  StartWaiting();
+  return meets_visibility_threshold;
+}
+
+void MockMediaSessionMojoObserver::StartWaiting() {
+  CHECK(!run_loop_);
   run_loop_ = std::make_unique<base::RunLoop>();
   run_loop_->Run();
   run_loop_.reset();
+}
+
+void MockMediaSessionMojoObserver::QuitWaitingIfNeeded() {
+  if (run_loop_) {
+    run_loop_->Quit();
+  }
 }
 
 MockMediaSession::MockMediaSession() = default;
@@ -347,6 +383,10 @@ void MockMediaSession::NextTrack() {
   next_track_count_++;
 }
 
+void MockMediaSession::SkipAd() {
+  skip_ad_count_++;
+}
+
 void MockMediaSession::Seek(base::TimeDelta seek_time) {
   seek_count_++;
 }
@@ -379,11 +419,17 @@ void MockMediaSession::ScrubTo(base::TimeDelta seek_time) {
 }
 
 void MockMediaSession::EnterPictureInPicture() {
-  // TODO(crbug.com/1040263): Implement EnterPictureinpicture.
+  is_in_picture_in_picture_ = true;
+  NotifyObservers();
 }
 
 void MockMediaSession::ExitPictureInPicture() {
-  // TODO(crbug.com/1040263): Implement ExitPictureinpicture.
+  is_in_picture_in_picture_ = false;
+  NotifyObservers();
+}
+
+void MockMediaSession::GetVisibility(GetVisibilityCallback callback) {
+  std::move(callback).Run(false);
 }
 
 void MockMediaSession::SetIsControllable(bool value) {
@@ -478,14 +524,14 @@ void MockMediaSession::FlushForTesting() {
 }
 
 void MockMediaSession::SimulateMetadataChanged(
-    const absl::optional<MediaMetadata>& metadata) {
+    const std::optional<MediaMetadata>& metadata) {
   for (auto& observer : observers_) {
     observer->MediaSessionMetadataChanged(metadata);
   }
 }
 
 void MockMediaSession::SimulatePositionChanged(
-    const absl::optional<MediaPosition>& position) {
+    const std::optional<MediaPosition>& position) {
   for (auto& observer : observers_) {
     observer->MediaSessionPositionChanged(position);
   }
@@ -509,7 +555,7 @@ void MockMediaSession::SetImagesOfType(mojom::MediaSessionImageType type,
 }
 
 void MockMediaSession::EnableAction(mojom::MediaSessionAction action) {
-  if (base::Contains(actions_, action))
+  if (actions_.contains(action))
     return;
 
   actions_.insert(action);
@@ -517,7 +563,7 @@ void MockMediaSession::EnableAction(mojom::MediaSessionAction action) {
 }
 
 void MockMediaSession::DisableAction(mojom::MediaSessionAction action) {
-  if (!base::Contains(actions_, action))
+  if (!actions_.contains(action))
     return;
 
   actions_.erase(action);
@@ -532,8 +578,9 @@ void MockMediaSession::SetState(mojom::MediaSessionInfo::SessionState state) {
 void MockMediaSession::NotifyObservers() {
   mojom::MediaSessionInfoPtr session_info = GetMediaSessionInfoSync();
 
-  if (afr_client_.is_bound())
+  if (afr_client_.is_bound()) {
     afr_client_->MediaSessionInfoChanged(session_info.Clone());
+  }
 
   for (auto& observer : observers_) {
     observer->MediaSessionInfoChanged(session_info.Clone());
@@ -553,6 +600,10 @@ mojom::MediaSessionInfoPtr MockMediaSession::GetMediaSessionInfoSync() const {
 
   info->is_controllable = is_controllable_;
   info->prefer_stop_for_gain_focus_loss = prefer_stop_;
+  info->picture_in_picture_state =
+      (is_in_picture_in_picture_
+           ? mojom::MediaPictureInPictureState::kInPictureInPicture
+           : mojom::MediaPictureInPictureState::kNotInPictureInPicture);
 
   return info;
 }

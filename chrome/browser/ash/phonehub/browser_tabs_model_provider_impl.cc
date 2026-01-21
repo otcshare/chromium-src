@@ -4,16 +4,17 @@
 
 #include "chrome/browser/ash/phonehub/browser_tabs_model_provider_impl.h"
 
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/multidevice/remote_device_ref.h"
 #include "chromeos/ash/components/phonehub/browser_tabs_metadata_fetcher.h"
 #include "chromeos/ash/components/phonehub/browser_tabs_model.h"
-#include "components/sync/base/model_type.h"
-#include "components/sync/driver/sync_service.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
+#include "components/sync/service/sync_service.h"
 #include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "components/sync_sessions/session_sync_service.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 BrowserTabsModelProviderImpl::BrowserTabsModelProviderImpl(
     multidevice_setup::MultiDeviceSetupClient* multidevice_setup_client,
@@ -37,12 +38,13 @@ BrowserTabsModelProviderImpl::~BrowserTabsModelProviderImpl() {
   multidevice_setup_client_->RemoveObserver(this);
 }
 
-absl::optional<std::string> BrowserTabsModelProviderImpl::GetSessionName()
+std::optional<std::string> BrowserTabsModelProviderImpl::GetHostDeviceName()
     const {
   const multidevice_setup::MultiDeviceSetupClient::HostStatusWithDevice&
       host_device_with_status = multidevice_setup_client_->GetHostStatus();
-  if (!host_device_with_status.second)
-    return absl::nullopt;
+  if (!host_device_with_status.second) {
+    return std::nullopt;
+  }
   // The pii_free_name field of the device matches the session name for
   // sync.
   return host_device_with_status.second->pii_free_name();
@@ -61,20 +63,27 @@ void BrowserTabsModelProviderImpl::TriggerRefresh() {
   // sources of latency (e.g. for delivering an invalidation), but not others
   // (e.g. backend replication delay). I.e SyncService::TriggerRefresh() will
   // not guarantee an immediate update.
-  sync_service_->TriggerRefresh({syncer::SESSIONS});
+  sync_service_->TriggerRefresh(
+      syncer::SyncService::TriggerRefreshSource::kBrowserTabsModelProvider,
+      {syncer::SESSIONS});
+}
+
+bool BrowserTabsModelProviderImpl::IsBrowserTabSyncEnabled() {
+  NOTREACHED();
 }
 
 void BrowserTabsModelProviderImpl::AttemptBrowserTabsModelUpdate() {
-  absl::optional<std::string> session_name = GetSessionName();
+  std::optional<std::string> host_device_name = GetHostDeviceName();
   sync_sessions::OpenTabsUIDelegate* open_tabs =
       session_sync_service_->GetOpenTabsUIDelegate();
   // Tab sync is disabled or no valid |pii_free_name_|.
-  if (!open_tabs || !session_name) {
+  if (!open_tabs || !host_device_name) {
     InvalidateWeakPtrsAndClearTabMetadata(/*is_tab_sync_enabled=*/false);
     return;
   }
 
-  std::vector<const sync_sessions::SyncedSession*> sessions;
+  std::vector<raw_ptr<const sync_sessions::SyncedSession, VectorExperimental>>
+      sessions;
   bool was_fetch_successful = open_tabs->GetAllForeignSessions(&sessions);
   // No tabs were found, clear all tab metadata.
   if (!was_fetch_successful) {
@@ -88,12 +97,13 @@ void BrowserTabsModelProviderImpl::AttemptBrowserTabsModelUpdate() {
   // multiple phones of the same type, |phone_session| will have the latest
   // |modified_time|.
   const sync_sessions::SyncedSession* phone_session = nullptr;
-  for (const auto* session : sessions) {
-    if (session->session_name != *session_name)
+  for (const sync_sessions::SyncedSession* session : sessions) {
+    if (session->GetSessionName() != *host_device_name) {
       continue;
+    }
 
     if (!phone_session ||
-        phone_session->modified_time < session->modified_time) {
+        phone_session->GetModifiedTime() < session->GetModifiedTime()) {
       phone_session = session;
     }
   }
@@ -119,14 +129,13 @@ void BrowserTabsModelProviderImpl::InvalidateWeakPtrsAndClearTabMetadata(
 }
 
 void BrowserTabsModelProviderImpl::OnMetadataFetched(
-    absl::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>>
-        metadata) {
+    std::optional<std::vector<BrowserTabsModel::BrowserTabMetadata>> metadata) {
   // The operation to fetch metadata was cancelled.
-  if (!metadata)
+  if (!metadata) {
     return;
+  }
   NotifyBrowserTabsUpdated(
       /*is_tab_sync_enabled=*/true, *metadata);
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

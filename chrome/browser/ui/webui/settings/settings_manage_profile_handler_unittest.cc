@@ -8,7 +8,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
-#include "chrome/browser/ui/signin/profile_colors_util.h"
+#include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -16,6 +16,7 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/webui/web_ui_util.h"
@@ -30,8 +31,8 @@ class TestManageProfileHandler : public ManageProfileHandler {
   explicit TestManageProfileHandler(Profile* profile)
       : ManageProfileHandler(profile) {}
 
-  using ManageProfileHandler::set_web_ui;
   using ManageProfileHandler::AllowJavascript;
+  using ManageProfileHandler::set_web_ui;
 };
 
 }  // namespace
@@ -57,7 +58,7 @@ class ManageProfileHandlerTest : public testing::Test {
 
   void SetSignedInProfile() {
     gfx::Image gaia_image(gfx::test::CreateImage(256, 256));
-    entry()->SetAuthInfo("gaia_id", u"user@gmail.com", false);
+    entry()->SetAuthInfo(GaiaId("gaia_id"), u"user@gmail.com", false);
     entry()->SetGAIAPicture("GAIA_IMAGE_URL_WITH_SIZE", gaia_image);
     EXPECT_TRUE(entry()->IsUsingDefaultAvatar());
     EXPECT_TRUE(entry()->IsUsingGAIAPicture());
@@ -91,11 +92,12 @@ class ManageProfileHandlerTest : public testing::Test {
       const base::Value& icon = icons->GetList()[i];
       EXPECT_TRUE(icon.is_dict());
 
-      const std::string* icon_url = icon.FindStringKey("url");
+      const base::Value::Dict& icon_dict = icon.GetDict();
+      const std::string* icon_url = icon_dict.FindString("url");
       EXPECT_TRUE(icon_url);
       EXPECT_FALSE(icon_url->empty());
 
-      int icon_index_int = *icon.FindIntKey("index");
+      int icon_index_int = *icon_dict.FindInt("index");
       EXPECT_TRUE(profiles::IsDefaultAvatarIconIndex(icon_index_int));
       size_t icon_index = static_cast<size_t>(icon_index_int);
       EXPECT_NE(icon_index, profiles::GetPlaceholderAvatarIndex());
@@ -103,8 +105,8 @@ class ManageProfileHandlerTest : public testing::Test {
       size_t url_icon_index;
       EXPECT_TRUE(profiles::IsDefaultAvatarIconUrl(*icon_url, &url_icon_index));
       EXPECT_EQ(icon_index, url_icon_index);
-      EXPECT_TRUE(!icon.FindStringKey("label")->empty());
-      absl::optional<bool> current_selected = icon.FindBoolKey("selected");
+      EXPECT_TRUE(!icon_dict.FindString("label")->empty());
+      std::optional<bool> current_selected = icon_dict.FindBool("selected");
       if (selected_index == icon_index) {
         EXPECT_FALSE(selected_found);
         EXPECT_TRUE(current_selected.value_or(false));
@@ -134,27 +136,29 @@ class ManageProfileHandlerTest : public testing::Test {
   void VerifyGaiaAvatar(const base::Value* icons, bool gaia_selected) {
     const base::Value& icon = icons->GetList()[0];
     EXPECT_TRUE(icon.is_dict());
-    EXPECT_EQ(*icon.FindIntKey("index"), 0);
+    const base::Value::Dict& icon_dict = icon.GetDict();
+    EXPECT_EQ(*icon_dict.FindInt("index"), 0);
 
     const gfx::Image* avatar_icon = entry()->GetGAIAPicture();
     ASSERT_TRUE(avatar_icon);
-    EXPECT_EQ(*icon.FindStringKey("url"),
+    EXPECT_EQ(*icon_dict.FindString("url"),
               webui::GetBitmapDataUrl(
                   profiles::GetAvatarIconForWebUI(*avatar_icon).AsBitmap()));
-    EXPECT_TRUE(!icon.FindStringKey("label")->empty());
-    EXPECT_EQ(*icon.FindBoolPath("selected"), gaia_selected);
+    EXPECT_TRUE(!icon_dict.FindString("label")->empty());
+    EXPECT_EQ(*icon_dict.FindBool("selected"), gaia_selected);
   }
 
   void VerifyDefaultGenericAvatar(const base::Value* icons,
                                   size_t selected_index) {
     const base::Value& icon = icons->GetList()[0];
     EXPECT_TRUE(icon.is_dict());
-    EXPECT_TRUE(!icon.FindStringKey("label")->empty());
-    int icon_index_int = icon.FindIntKey("index").value_or(0);
+    const base::Value::Dict& icon_dict = icon.GetDict();
+    EXPECT_TRUE(!icon_dict.FindString("label")->empty());
+    int icon_index_int = icon_dict.FindInt("index").value_or(0);
     EXPECT_TRUE(icon_index_int != 0);
     size_t icon_index = static_cast<size_t>(icon_index_int);
     EXPECT_EQ(icon_index, profiles::GetPlaceholderAvatarIndex());
-    EXPECT_EQ(*icon.FindBoolPath("selected"), selected_index == icon_index);
+    EXPECT_EQ(*icon_dict.FindBool("selected"), selected_index == icon_index);
   }
 };
 
@@ -273,7 +277,7 @@ TEST_F(ManageProfileHandlerTest, GetAvailableIconsSignedInProfile) {
                  /*gaia_selected=*/false);
 
   // Sign out.
-  entry()->SetAuthInfo("", std::u16string(), false);
+  entry()->SetAuthInfo(GaiaId(), std::u16string(), false);
   entry()->SetGAIAPicture(std::string(), gfx::Image());
 
   const content::TestWebUI::CallData& data_2 = *web_ui()->call_data().back();
@@ -352,7 +356,7 @@ TEST_F(ManageProfileHandlerTest, ProfileThemeColorsChangedWebUIEvent) {
   entry()->SetAvatarIconIndex(37);
   web_ui()->ClearTrackedCalls();
 
-  entry()->SetProfileThemeColors(absl::nullopt);
+  entry()->SetProfileThemeColors(std::nullopt);
   EXPECT_EQ(1U, web_ui()->call_data().size());
 
   const content::TestWebUI::CallData& data_1 = *web_ui()->call_data().back();

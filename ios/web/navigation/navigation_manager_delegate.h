@@ -8,12 +8,14 @@
 #include <stddef.h>
 
 #include "ios/web/common/user_agent.h"
+#import "url/gurl.h"
 
 @protocol CRWWebViewNavigationProxy;
 @class WKBackForwardListItem;
 
 namespace web {
 
+enum class BackForwardNavigationType;
 enum class NavigationInitiationType;
 class NavigationItem;
 class NavigationItemImpl;
@@ -59,10 +61,12 @@ class NavigationManagerDelegate {
   // Instructs WKWebView to navigate to the given navigation item. `wk_item` and
   // `item` must point to the same navigation item. Calling this method may
   // result in an iframe navigation.
-  virtual void GoToBackForwardListItem(WKBackForwardListItem* wk_item,
-                                       NavigationItem* item,
-                                       NavigationInitiationType type,
-                                       bool has_user_gesture) = 0;
+  virtual void GoToBackForwardListItem(
+      WKBackForwardListItem* wk_item,
+      NavigationItem* item,
+      BackForwardNavigationType navigation_type,
+      NavigationInitiationType initiation_type,
+      bool has_user_gesture) = 0;
 
   // Instructs the delegate to remove the underlying web view. The only use case
   // currently is to clear back-forward history in web view before restoring
@@ -71,6 +75,15 @@ class NavigationManagerDelegate {
 
   // Used to access pending item stored in NavigationContext.
   virtual NavigationItemImpl* GetPendingItem() = 0;
+
+  // Instructs the delegate to update the SSL status for the current navigation
+  // item.
+  virtual void UpdateSSLStatusForCurrentNavigationItem() = 0;
+
+  // Returns the NavigationManagerDelegate's view of the current URL. This is
+  // used as a fallback in situations where the NavigationManager doesn't trust
+  // its own view of the last committed item.
+  virtual GURL GetCurrentURL() const = 0;
 };
 
 }  // namespace web

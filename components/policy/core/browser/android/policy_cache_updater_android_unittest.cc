@@ -13,7 +13,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
-#include "components/policy/android/test_jni_headers/PolicyCacheUpdaterTestSupporter_jni.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/policy_conversions_client.h"
 #include "components/policy/core/browser/policy_error_map.h"
@@ -23,6 +22,9 @@
 #include "components/policy/core/common/policy_service_impl.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/policy/android/test_jni_headers/PolicyCacheUpdaterTestSupporter_jni.h"
 
 using ::testing::_;
 using ::testing::Return;
@@ -80,14 +82,19 @@ class PolicyCacheUpdaterAndroidTest : public ::testing::Test {
         true /* is_first_policy_load_complete_return */);
     j_support_ = Java_PolicyCacheUpdaterTestSupporter_Constructor(env_);
     policy_service_ = std::make_unique<policy::PolicyServiceImpl>(
-        std::vector<ConfigurationPolicyProvider*>({&policy_provider_}));
+        std::vector<raw_ptr<ConfigurationPolicyProvider, VectorExperimental>>{
+            &policy_provider_});
     policy_handler_list_ = std::make_unique<ConfigurationPolicyHandlerList>(
         ConfigurationPolicyHandlerList::
             PopulatePolicyHandlerParametersCallback(),
         GetChromePolicyDetailsCallback(),
-        /*allow_future_policies=*/false);
+        /*are_future_policies_allowed_by_default=*/false);
   }
   ~PolicyCacheUpdaterAndroidTest() override = default;
+
+  void TearDown() override {
+    Java_PolicyCacheUpdaterTestSupporter_resetPolicyCache(env_, j_support_);
+  }
 
   void SetPolicy(const std::string& policy, int policy_value) {
     policy_map_.Set(policy, PolicyLevel::POLICY_LEVEL_MANDATORY,
@@ -99,12 +106,15 @@ class PolicyCacheUpdaterAndroidTest : public ::testing::Test {
 
   void UpdatePolicy() { policy_provider_.UpdateChromePolicy(policy_map_); }
 
-  void VerifyPolicyName(const std::string& policy,
-                        bool has_value,
-                        int expected_value) {
-    Java_PolicyCacheUpdaterTestSupporter_verifyPolicyCacheIntValue(
+  void VerifyIntPolicyNotCached(const std::string& policy) {
+    Java_PolicyCacheUpdaterTestSupporter_verifyIntPolicyNotCached(
+        env_, j_support_, base::android::ConvertUTF8ToJavaString(env_, policy));
+  }
+
+  void VerifyIntPolicyHasValue(const std::string& policy, int expected_value) {
+    Java_PolicyCacheUpdaterTestSupporter_verifyIntPolicyHasValue(
         env_, j_support_, base::android::ConvertUTF8ToJavaString(env_, policy),
-        has_value, expected_value);
+        expected_value);
   }
 
   ConfigurationPolicyHandlerList* policy_handler_list() {
@@ -132,7 +142,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestCachePolicy) {
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/true, kPolicyValue);
+  VerifyIntPolicyHasValue(kPolicyName, kPolicyValue);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyNotExist) {
@@ -141,7 +151,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyNotExist) {
 
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyErrorPolicy) {
@@ -151,7 +161,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyErrorPolicy) {
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapIgnoredPolicy) {
@@ -162,7 +172,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapIgnoredPolicy) {
   SetPolicy(kPolicyName, kPolicyValue);
   policy_map()->GetMutable(kPolicyName)->SetIgnored();
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapErrorMessagePolicy) {
@@ -175,7 +185,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapErrorMessagePolicy) {
       ->GetMutable(kPolicyName)
       ->AddMessage(PolicyMap::MessageType::kError, IDS_POLICY_BLOCKED);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapWarningMessagePolicy) {
@@ -188,7 +198,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyMapWarningMessagePolicy) {
       ->GetMutable(kPolicyName)
       ->AddMessage(PolicyMap::MessageType::kWarning, IDS_POLICY_BLOCKED);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/true, kPolicyValue);
+  VerifyIntPolicyHasValue(kPolicyName, kPolicyValue);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyUpdatedBeforeUpdaterCreated) {
@@ -197,9 +207,9 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestPolicyUpdatedBeforeUpdaterCreated) {
 
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
-  VerifyPolicyName(kPolicyName, /*has_value=*/true, kPolicyValue);
+  VerifyIntPolicyHasValue(kPolicyName, kPolicyValue);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest,
@@ -210,7 +220,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest,
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/false, kPolicyValue);
+  VerifyIntPolicyNotCached(kPolicyName);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestWithWarningError_PolicyHasValue) {
@@ -220,7 +230,7 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestWithWarningError_PolicyHasValue) {
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/true, kPolicyValue);
+  VerifyIntPolicyHasValue(kPolicyName, kPolicyValue);
 }
 
 TEST_F(PolicyCacheUpdaterAndroidTest, TestWithInfoError_PolicyHasValue) {
@@ -230,8 +240,10 @@ TEST_F(PolicyCacheUpdaterAndroidTest, TestWithInfoError_PolicyHasValue) {
   PolicyCacheUpdater updater(policy_service(), policy_handler_list());
   SetPolicy(kPolicyName, kPolicyValue);
   UpdatePolicy();
-  VerifyPolicyName(kPolicyName, /*has_value=*/true, kPolicyValue);
+  VerifyIntPolicyHasValue(kPolicyName, kPolicyValue);
 }
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(PolicyCacheUpdaterTestSupporter)

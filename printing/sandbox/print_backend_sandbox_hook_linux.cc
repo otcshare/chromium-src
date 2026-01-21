@@ -14,7 +14,6 @@
 #include "sandbox/linux/syscall_broker/broker_file_permission.h"
 #include "sandbox/policy/export.h"
 #include "sandbox/policy/linux/sandbox_linux.h"
-#include "services/network/network_sandbox_hook_linux.h"
 
 #if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CUPS)
 #include "printing/backend/cups_connection_pool.h"
@@ -39,9 +38,6 @@ sandbox::syscall_broker::BrokerCommandSet GetPrintBackendBrokerCommandSet() {
           sandbox::syscall_broker::COMMAND_STAT,
           sandbox::syscall_broker::COMMAND_UNLINK,
       });
-
-  // Need networking for a TCP connection to CUPS servers.
-  broker_command_set |= network::GetNetworkBrokerCommandSet();
 
   return broker_command_set;
 }
@@ -75,11 +71,6 @@ std::vector<BrokerFilePermission> GetPrintBackendFilePermissions() {
       BrokerFilePermission::ReadWriteCreateTemporary(temp_dir_path.value()),
   };
 
-  // To support networking for a TCP connection to CUPS servers.
-  auto network_permissions = network::GetNetworkFilePermissions();
-  permissions.insert(permissions.end(), network_permissions.begin(),
-                     network_permissions.end());
-
   return permissions;
 #endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CUPS)
 }
@@ -96,9 +87,8 @@ bool PrintBackendPreSandboxHook(
 
   auto* instance = sandbox::policy::SandboxLinux::GetInstance();
 
-  instance->StartBrokerProcess(
-      GetPrintBackendBrokerCommandSet(), GetPrintBackendFilePermissions(),
-      sandbox::policy::SandboxLinux::PreSandboxHook(), options);
+  instance->StartBrokerProcess(GetPrintBackendBrokerCommandSet(),
+                               GetPrintBackendFilePermissions(), options);
 
   instance->EngageNamespaceSandboxIfPossible();
   return true;

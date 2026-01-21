@@ -5,17 +5,17 @@
 #include "ui/base/page_transition_types.h"
 
 #include <ostream>
+#include <utility>
 
 #include "base/check_op.h"
 #include "base/notreached.h"
-#include "base/types/cxx23_to_underlying.h"
 
 namespace ui {
 
 bool PageTransitionCoreTypeIs(PageTransition lhs,
                               PageTransition rhs) {
   // Expect the rhs to have no qualifiers.
-  DCHECK(IsValidPageTransitionType(base::to_underlying(rhs)));
+  DCHECK(IsValidPageTransitionType(std::to_underlying(rhs)));
   const auto rhs_core = PageTransitionStripQualifier(rhs);
   DCHECK(PageTransitionTypeIncludingQualifiersIs(rhs, rhs_core));
   return PageTransitionTypeIncludingQualifiersIs(
@@ -24,7 +24,7 @@ bool PageTransitionCoreTypeIs(PageTransition lhs,
 
 bool PageTransitionTypeIncludingQualifiersIs(PageTransition lhs,
                                              PageTransition rhs) {
-  return base::to_underlying(lhs) == base::to_underlying(rhs);
+  return std::to_underlying(lhs) == std::to_underlying(rhs);
 }
 
 PageTransition PageTransitionStripQualifier(PageTransition type) {
@@ -36,12 +36,10 @@ bool IsValidPageTransitionType(int32_t type) {
 }
 
 PageTransition PageTransitionFromInt(int32_t type) {
-  if (!IsValidPageTransitionType(type)) {
-    NOTREACHED() << "Invalid transition type " << type;
-
-    // Return a safe default so we don't have corrupt data in release mode.
-    return PAGE_TRANSITION_LINK;
-  }
+  CHECK(IsValidPageTransitionType(type))
+      << "Invalid transition type: " << type
+      << ". Untrusted data needs to be validated using "
+         "IsValidPageTransitionType().";
   return static_cast<PageTransition>(type);
 }
 
@@ -92,7 +90,6 @@ const char* PageTransitionGetCoreTransitionString(PageTransition type) {
     case PAGE_TRANSITION_KEYWORD_GENERATED: return "keyword_generated";
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

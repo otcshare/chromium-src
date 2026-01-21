@@ -5,9 +5,10 @@
 #include "third_party/blink/renderer/modules/mediastream/media_stream_track.h"
 
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_constraints.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_track_state.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/modules/mediastream/media_constraints_impl.h"
-#include "third_party/blink/renderer/modules/mediastream/media_error_state.h"
+#include "third_party/blink/renderer/modules/mediastream/media_stream_track_video_stats.h"
 #include "third_party/blink/renderer/modules/mediastream/transferred_media_stream_track.h"
 #include "third_party/blink/renderer/modules/mediastream/user_media_client.h"
 #include "third_party/blink/renderer/modules/mediastream/user_media_request.h"
@@ -24,10 +25,14 @@ class GetOpenDeviceRequestCallbacks final : public UserMediaRequest::Callbacks {
                  CaptureController* capture_controller) override {}
   void OnError(ScriptWrappable* callback_this_value,
                const V8MediaStreamError* error,
-               CaptureController* capture_controller) override {}
+               CaptureController* capture_controller,
+               UserMediaRequestResult result) override {}
 };
 
 }  // namespace
+
+MediaStreamTrack::MediaStreamTrack()
+    : ActiveScriptWrappable<MediaStreamTrack>({}) {}
 
 String ContentHintToString(
     const WebMediaStreamTrack::ContentHintType& content_hint) {
@@ -46,21 +51,20 @@ String ContentHintToString(
       return kContentHintStringVideoText;
   }
   NOTREACHED();
-  return kContentHintStringNone;
 }
 
-String ReadyStateToString(const MediaStreamSource::ReadyState& ready_state) {
+V8MediaStreamTrackState ReadyStateToV8TrackState(
+    const MediaStreamSource::ReadyState& ready_state) {
   // Although muted is tracked as a ReadyState, only "live" and "ended" are
   // visible externally.
   switch (ready_state) {
     case MediaStreamSource::kReadyStateLive:
     case MediaStreamSource::kReadyStateMuted:
-      return "live";
+      return V8MediaStreamTrackState(V8MediaStreamTrackState::Enum::kLive);
     case MediaStreamSource::kReadyStateEnded:
-      return "ended";
+      return V8MediaStreamTrackState(V8MediaStreamTrackState::Enum::kEnded);
   }
   NOTREACHED();
-  return String();
 }
 
 // static
@@ -76,15 +80,15 @@ MediaStreamTrack* MediaStreamTrack::FromTransferredState(
 
   auto* window =
       DynamicTo<LocalDOMWindow>(ExecutionContext::From(script_state));
-  if (!window)
+  if (!window) {
     return nullptr;
+  }
 
   UserMediaClient* user_media_client = UserMediaClient::From(window);
   if (!user_media_client) {
     return nullptr;
   }
 
-  MediaErrorState error_state;
   // TODO(1288839): Set media_type, options, callbacks, surface appropriately
   MediaConstraints audio = (data.kind == "audio")
                                ? media_constraints_impl::Create()
@@ -95,12 +99,10 @@ MediaStreamTrack* MediaStreamTrack::FromTransferredState(
   UserMediaRequest* const request = MakeGarbageCollected<UserMediaRequest>(
       window, user_media_client, UserMediaRequestType::kDisplayMedia, audio,
       video, /*should_prefer_current_tab=*/false,
-      /*auto_select_all_screens=*/false,
       /*capture_controller=*/nullptr,
-      MakeGarbageCollected<GetOpenDeviceRequestCallbacks>(),
-      IdentifiableSurface());
+      MakeGarbageCollected<GetOpenDeviceRequestCallbacks>());
   if (!request) {
-      return nullptr;
+    return nullptr;
   }
 
   // TODO(1288839): Create a TransferredMediaStreamTrack implementing interfaces
@@ -124,7 +126,6 @@ MediaStreamTrack* MediaStreamTrack::FromTransferredState(
                  << data.track_impl_subtype->interface_name
                  << " but instead it is "
                  << track->GetWrapperTypeInfo()->interface_name;
-    return nullptr;
   }
   return track;
 }

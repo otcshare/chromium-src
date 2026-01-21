@@ -24,18 +24,19 @@ import static org.chromium.chrome.browser.download.interstitial.DownloadIntersti
 import static org.chromium.chrome.browser.download.interstitial.DownloadInterstitialProperties.DOWNLOAD_ITEM;
 import static org.chromium.chrome.browser.download.interstitial.DownloadInterstitialProperties.STATE;
 
-import android.support.test.InstrumentationRegistry;
-
+import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.BlockJUnit4ClassRunner;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.download.home.StubbedOfflineContentProvider;
 import org.chromium.chrome.browser.download.home.list.ListProperties;
@@ -58,7 +59,7 @@ import java.util.Map;
  * Unit tests for the {@link DownloadInterstitialMediator}. Modifies the page state through the
  * {@link PropertyModel} and observes changes to the mediator/model.
  */
-@RunWith(BlockJUnit4ClassRunner.class)
+@RunWith(BaseJUnit4ClassRunner.class)
 public class DownloadInterstitialMediatorTest {
     private static final String DOWNLOAD_BUTTON_TEXT = "Download";
     private static final String CANCEL_BUTTON_TEXT = "Cancel";
@@ -66,13 +67,13 @@ public class DownloadInterstitialMediatorTest {
     private static final String OPEN_BUTTON_TEXT = "Open";
     private static final String DELETE_BUTTON_TEXT = "Delete";
 
-    @Mock
-    private SnackbarManager mSnackbarManager;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private SnackbarManager mSnackbarManager;
 
     private final TestOfflineContentProvider mProvider = new TestOfflineContentProvider();
     private FakeModalDialogManager mModalDialogManager;
     private DownloadInterstitialMediator mMediator;
-    private UmaTestingHelper mUmaTestingHelper = new UmaTestingHelper();
+    private final UmaTestingHelper mUmaTestingHelper = new UmaTestingHelper();
     private PropertyModel mModel;
     private OfflineItem mItem0;
 
@@ -80,7 +81,6 @@ public class DownloadInterstitialMediatorTest {
 
     @Before
     public void before() {
-        MockitoAnnotations.initMocks(this);
         mSnackbarShown = false;
         doAnswer((invocation) -> mSnackbarShown = true)
                 .when(mSnackbarManager)
@@ -94,8 +94,14 @@ public class DownloadInterstitialMediatorTest {
         mModel.set(DownloadInterstitialProperties.SECONDARY_BUTTON_TEXT, CANCEL_BUTTON_TEXT);
         mModel.set(DownloadInterstitialProperties.RELOAD_TAB, this::reloadTab);
         mProvider.addItem(mItem0);
-        mMediator = new DownloadInterstitialMediator(InstrumentationRegistry::getContext, mModel,
-                mItem0.originalUrl.getSpec(), mProvider, mSnackbarManager, mModalDialogManager);
+        mMediator =
+                new DownloadInterstitialMediator(
+                        ApplicationProvider::getApplicationContext,
+                        mModel,
+                        mItem0.originalUrl.getSpec(),
+                        mProvider,
+                        mSnackbarManager,
+                        mModalDialogManager);
         // Increment progress to trigger onItemUpdated method for OfflineContentProvider observers.
         // This attaches the OfflineItem to the mediator.
         mProvider.incrementProgress(mItem0.id);
@@ -114,7 +120,7 @@ public class DownloadInterstitialMediatorTest {
     @Feature({"NewDownloadTab"})
     public void testSecondDownloadNotAttached() {
         OfflineItem item1 = createOfflineItem("item1");
-        item1.originalUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1);
+        item1.originalUrl = JUnitTestGURLs.URL_1;
         mProvider.addItem(item1);
         mProvider.incrementProgress(item1.id);
         assertEquals(mItem0, mModel.get(DOWNLOAD_ITEM));
@@ -126,12 +132,18 @@ public class DownloadInterstitialMediatorTest {
     @Feature({"NewDownloadTab"})
     public void testInProgressDownloadNotAttached() {
         OfflineItem item1 = createOfflineItem("item1");
-        item1.originalUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1);
+        item1.originalUrl = JUnitTestGURLs.URL_1;
         // Remove observer so that the mediator can attach its own observer.
         mProvider.setObserver(null);
         mModel.set(DOWNLOAD_ITEM, null);
-        mMediator = new DownloadInterstitialMediator(InstrumentationRegistry::getContext, mModel,
-                item1.originalUrl.getSpec(), mProvider, mSnackbarManager, mModalDialogManager);
+        mMediator =
+                new DownloadInterstitialMediator(
+                        ApplicationProvider::getApplicationContext,
+                        mModel,
+                        item1.originalUrl.getSpec(),
+                        mProvider,
+                        mSnackbarManager,
+                        mModalDialogManager);
         mProvider.incrementProgress(mItem0.id);
         mProvider.addItem(item1);
         mProvider.incrementProgress(item1.id);
@@ -314,7 +326,7 @@ public class DownloadInterstitialMediatorTest {
         item.state = OfflineItemState.IN_PROGRESS;
         item.title = "Test Item";
         item.description = "Test Description";
-        item.originalUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_2);
+        item.originalUrl = JUnitTestGURLs.URL_2;
         return item;
     }
 
@@ -324,15 +336,15 @@ public class DownloadInterstitialMediatorTest {
      * logs to test how many metrics of each type were logged during the test.
      */
     private static class UmaTestingHelper {
-        private Map<Integer, Integer> mValues;
+        private final Map<Integer, Integer> mValues;
 
         UmaTestingHelper() {
-            mValues = new HashMap<Integer, Integer>();
+            mValues = new HashMap<>();
         }
 
         /**
-         * Captures the number of each metric logged at a given moment.
-         * Should be called during test setup.
+         * Captures the number of each metric logged at a given moment. Should be called during test
+         * setup.
          */
         void initialise() {
             mValues.put(INITIATED, getValueCount(INITIATED));
@@ -349,6 +361,7 @@ public class DownloadInterstitialMediatorTest {
 
         /**
          * Asserts that an action was logged a certain number of times.
+         *
          * @param action The action that is being queried.
          * @param numberOfTimes The expected number of times the action has been logged.
          */
@@ -383,8 +396,9 @@ public class DownloadInterstitialMediatorTest {
         /** Called to increment the progress of an offline item and notify observers. */
         public void incrementProgress(ContentId id) {
             OfflineItem item = findItem(id);
-            item.progress = new OfflineItem.Progress(
-                    item.progress.value + 1, item.progress.max, item.progress.unit);
+            item.progress =
+                    new OfflineItem.Progress(
+                            item.progress.value + 1, item.progress.max, item.progress.unit);
             if (item.progress.value == item.progress.max) {
                 item.state = OfflineItemState.COMPLETE;
             }
@@ -397,8 +411,9 @@ public class DownloadInterstitialMediatorTest {
          */
         public void completeDownload(ContentId id) {
             OfflineItem item = findItem(id);
-            item.progress = new OfflineItem.Progress(
-                    item.progress.max, item.progress.max, item.progress.unit);
+            item.progress =
+                    new OfflineItem.Progress(
+                            item.progress.max, item.progress.max, item.progress.unit);
             item.state = OfflineItemState.COMPLETE;
             notifyObservers(id);
         }
@@ -415,7 +430,7 @@ public class DownloadInterstitialMediatorTest {
         }
 
         @Override
-        public void resumeDownload(ContentId id, boolean hasUserGesture) {
+        public void resumeDownload(ContentId id) {
             if (findItem(id).state != OfflineItemState.COMPLETE) {
                 findItem(id).state = OfflineItemState.IN_PROGRESS;
             }

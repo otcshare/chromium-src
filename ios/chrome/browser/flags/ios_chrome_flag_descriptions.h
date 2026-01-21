@@ -5,791 +5,985 @@
 #ifndef IOS_CHROME_BROWSER_FLAGS_IOS_CHROME_FLAG_DESCRIPTIONS_H_
 #define IOS_CHROME_BROWSER_FLAGS_IOS_CHROME_FLAG_DESCRIPTIONS_H_
 
-#include "Availability.h"
-
 #include "base/debug/debugging_buildflags.h"
 
+// This file declares strings used in chrome://flags. These messages are not
+// translated, because instead of end-users they target Chromium developers and
+// testers. See https://crbug.com/587272 and https://crbug.com/703134 for more
+// details.
+//
+// Do not add comments or pre-processor lines. The contents of the strings
+// (which appear in the UI) should be good enough documentation for what flags
+// do and when they apply. If they aren't, fix them.
+//
 // Please add names and descriptions in alphabetical order.
 
 namespace flag_descriptions {
 
-// Title and description for the flag to enable kAdaptiveSuggestionsCount flag
-// on iOS.
-extern const char kAdaptiveSuggestionsCountName[];
-extern const char kAdaptiveSuggestionsCountDescription[];
+extern const char kAIHubNewBadgeName[];
+extern const char kAIHubNewBadgeDescription[];
 
-// Title and description for the flag to enable the App Store Rating promo.
-extern const char kAppStoreRatingName[];
-extern const char kAppStoreRatingDescription[];
+extern const char kAIMEligibilityRefreshNTPModulesName[];
+extern const char kAIMEligibilityRefreshNTPModulesDescription[];
 
-// Title and description for the flag to enable Chrome branding on form input
-// suggestions.
-extern const char kAutofillBrandingIOSName[];
-extern const char kAutofillBrandingIOSDescription[];
+extern const char kAIMEligibilityServiceStartWithProfileName[];
+extern const char kAIMEligibilityServiceStartWithProfileDescription[];
 
-// Title and description for the flag to control upstreaming credit cards.
-extern const char kAutofillCreditCardUploadName[];
-extern const char kAutofillCreditCardUploadDescription[];
+extern const char kAIMNTPEntrypointTabletName[];
+extern const char kAIMNTPEntrypointTabletDescription[];
 
-// Title and description for the flag to enable the new Card Unmask Prompt View
-// in Autofill.
-extern const char kAutofillEnableNewCardUnmaskPromptViewName[];
-extern const char kAutofillEnableNewCardUnmaskPromptViewDescription[];
+extern const char kAnimatedDefaultBrowserPromoInFREName[];
+extern const char kAnimatedDefaultBrowserPromoInFREDescription[];
 
-// Title and description for the flag to control the new autofill suggestion
-// ranking formula.
-extern const char kAutofillEnableRankingFormulaName[];
-extern const char kAutofillEnableRankingFormulaDescription[];
+extern const char kAppBackgroundRefreshName[];
+extern const char kAppBackgroundRefreshDescription[];
 
-// Title and description for the flag that controls whether the remade Autofill
-// Downstream metrics are enabled.
-extern const char kAutofillEnableRemadeDownstreamMetricsName[];
-extern const char kAutofillEnableRemadeDownstreamMetricsDescription[];
-
-// Title and description for flag to enable showing card product name (instead
-// of issuer network) in Payments UI.
-extern const char kAutofillEnableCardProductNameName[];
-extern const char kAutofillEnableCardProductNameDescription[];
-
-// Title and description for flag to enforce delays between offering Autofill
-// opportunities.
-extern const char kAutofillEnforceDelaysInStrikeDatabaseName[];
-extern const char kAutofillEnforceDelaysInStrikeDatabaseDescription[];
-
-// Title and description for the flag to fill promo code fields with Autofill.
-extern const char kAutofillFillMerchantPromoCodeFieldsName[];
-extern const char kAutofillFillMerchantPromoCodeFieldsDescription[];
-
-// Title and description for the flag to control the autofill delay.
-extern const char kAutofillIOSDelayBetweenFieldsName[];
-extern const char kAutofillIOSDelayBetweenFieldsDescription[];
-
-// Title and description for the flag to control whether the autofill should
-// ffer credit card save for cards with same last-4 but different expiration
-// dates.
-extern const char kAutofillOfferToSaveCardWithSameLastFourName[];
-extern const char kAutofillOfferToSaveCardWithSameLastFourDescription[];
-
-// Title and description for the flag to parse IBAN fields in Autofill.
-extern const char kAutofillParseIBANFieldsName[];
-extern const char kAutofillParseIBANFieldsDescription[];
-
-// Title and description for the flag to parse standalone CVC fields for VCN
-// card on file in Autofill.
-extern const char kAutofillParseVcnCardOnFileStandaloneCvcFieldsName[];
-extern const char kAutofillParseVcnCardOnFileStandaloneCvcFieldsDescription[];
-
-// Title and description for the flag that controls whether the maximum number
-// of Autofill suggestions shown is pruned.
-extern const char kAutofillPruneSuggestionsName[];
-extern const char kAutofillPruneSuggestionsDescription[];
-
-// Title and description for the flag to control dismissing the Save Card
-// Infobar on Navigation.
-extern const char kAutofillSaveCardDismissOnNavigationName[];
-extern const char kAutofillSaveCardDismissOnNavigationDescription[];
-
-// Title and description for the flag to control allowing credit card upload
-// save for accounts from common email providers.
-extern const char kAutofillUpstreamAllowAdditionalEmailDomainsName[];
-extern const char kAutofillUpstreamAllowAdditionalEmailDomainsDescription[];
-
-// Title and description for the flag to control allowing credit card upload
-// save for all accounts, regardless of the email domain.
-extern const char kAutofillUpstreamAllowAllEmailDomainsName[];
-extern const char kAutofillUpstreamAllowAllEmailDomainsDescription[];
-
-// Title and description for the flag that controls whether Autofill's
-// suggestions' labels are formatting with a mobile-friendly approach.
-extern const char kAutofillUseMobileLabelDisambiguationName[];
-extern const char kAutofillUseMobileLabelDisambiguationDescription[];
-
-// Title and description for the flag that controls whether Autofill's
-// logic is using numeric unique renderer IDs instead of string IDs for
-// form and field elements.
-extern const char kAutofillUseRendererIDsName[];
-extern const char kAutofillUseRendererIDsDescription[];
-
-// Title and description for the flag to control if initial uploading of crash
-// reports is delayed.
-extern const char kBreakpadNoDelayInitialUploadName[];
-extern const char kBreakpadNoDelayInitialUploadDescription[];
-
-// Title and description for the flag to enable the rich iph experiment on
-// bubble views.
-extern const char kBubbleRichIPHName[];
-extern const char kBubbleRichIPHDescription[];
-
-// Title and description for the flag to enable experience kit calendar events.
-extern const char kCalendarExperienceKitName[];
-extern const char kCalendarExperienceKitDescription[];
-
-// Title and description for the flag to enable experience kit apple calendar
-// events.
 extern const char kAppleCalendarExperienceKitName[];
 extern const char kAppleCalendarExperienceKitDescription[];
 
-// Title and description for the flag to enable phone numbers detection and
-// processing.
-extern const char kPhoneNumberName[];
-extern const char kPhoneNumberDescription[];
+extern const char kApplyClientsideModelPredictionsForPasswordTypesName[];
+extern const char kApplyClientsideModelPredictionsForPasswordTypesDescription[];
 
-// Title and description for the flag to enable text classifier entity detection
-// in experience kit calendar.
-extern const char kEnableExpKitCalendarTextClassifierName[];
-extern const char kEnableExpKitCalendarTextClassifierDescription[];
+extern const char kAskGeminiChipName[];
+extern const char kAskGeminiChipDescription[];
 
-// Title and description for the flag to enable text classifier entity detection
-// in experience kit for different entity types.
-extern const char kEnableExpKitTextClassifierName[];
-extern const char kEnableExpKitTextClassifierDescription[];
+extern const char kAssistantSheetName[];
+extern const char kAssistantSheetDescription[];
 
-// Title and description for popout omnibox on iPad feature.
-extern const char kEnablePopoutOmniboxIpadName[];
-extern const char kEnablePopoutOmniboxIpadDescription[];
+extern const char kAutofillAcrossIframesName[];
+extern const char kAutofillAcrossIframesDescription[];
 
-// Title and description for the flag to enable long press surrounding text.
-extern const char kLongPressSurroundingTextName[];
-extern const char kLongPressSurroundingTextDescription[];
+extern const char kAutofillBottomSheetNewBlurName[];
+extern const char kAutofillBottomSheetNewBlurDescription[];
 
-// Title and description for the flag to enable experience kit maps location and
-// directions.
-extern const char kMapsExperienceKitName[];
-extern const char kMapsExperienceKitDescription[];
+extern const char kAutofillCreditCardScannerIosName[];
+extern const char kAutofillCreditCardScannerIosDescription[];
 
-// Title and description for the flag that updates the Content Suggestions to a
-// new module design.
-extern const char kContentSuggestionsUIModuleRefreshName[];
-extern const char kContentSuggestionsUIModuleRefreshDescription[];
+extern const char kAutofillCreditCardUploadName[];
+extern const char kAutofillCreditCardUploadDescription[];
 
-// Title and description for the flag to control which crash generation tool
-// is used.
-extern const char kCrashpadIOSName[];
-extern const char kCrashpadIOSDescription[];
+extern const char kAutofillDisableProfileUpdatesName[];
+extern const char kAutofillDisableProfileUpdatesDescription[];
 
-// Title and description for the flag to enable the Credential
-// Provider Extension promo.
+extern const char kAutofillDisableSilentProfileUpdatesName[];
+extern const char kAutofillDisableSilentProfileUpdatesDescription[];
+
+extern const char kAutofillEnableCardBenefitsForAmericanExpressName[];
+extern const char kAutofillEnableCardBenefitsForAmericanExpressDescription[];
+
+extern const char kAutofillEnableCardBenefitsForBmoName[];
+extern const char kAutofillEnableCardBenefitsForBmoDescription[];
+
+extern const char kAutofillEnableCardBenefitsSyncName[];
+extern const char kAutofillEnableCardBenefitsSyncDescription[];
+
+extern const char kAutofillEnableCardInfoRuntimeRetrievalName[];
+extern const char kAutofillEnableCardInfoRuntimeRetrievalDescription[];
+
+extern const char kAutofillEnableCvcStorageAndFillingEnhancementName[];
+extern const char kAutofillEnableCvcStorageAndFillingEnhancementDescription[];
+
+extern const char kAutofillEnableCvcStorageAndFillingName[];
+extern const char kAutofillEnableCvcStorageAndFillingDescription[];
+
+extern const char
+    kAutofillEnableCvcStorageAndFillingStandaloneFormEnhancementName[];
+extern const char
+    kAutofillEnableCvcStorageAndFillingStandaloneFormEnhancementDescription[];
+
+extern const char kAutofillEnableFlatRateCardBenefitsFromCurinosName[];
+extern const char kAutofillEnableFlatRateCardBenefitsFromCurinosDescription[];
+
+extern const char kAutofillEnablePrefetchingRiskDataForRetrievalName[];
+extern const char kAutofillEnablePrefetchingRiskDataForRetrievalDescription[];
+
+extern const char kAutofillEnableSupportForHomeAndWorkName[];
+extern const char kAutofillEnableSupportForHomeAndWorkDescription[];
+
+extern const char kAutofillEnableSupportForNameAndEmailName[];
+extern const char kAutofillEnableSupportForNameAndEmailDescription[];
+
+extern const char kAutofillEnableWalletBrandingName[];
+extern const char kAutofillEnableWalletBrandingDescription[];
+
+extern const char kAutofillLocalSaveCardBottomSheetName[];
+extern const char kAutofillLocalSaveCardBottomSheetDescription[];
+
+extern const char kAutofillManualTestingDataName[];
+extern const char kAutofillManualTestingDataDescription[];
+
+extern const char kAutofillPaymentsFieldSwappingName[];
+extern const char kAutofillPaymentsFieldSwappingDescription[];
+
+extern const char kAutofillPaymentsSheetV2Name[];
+extern const char kAutofillPaymentsSheetV2Description[];
+
+extern const char kAutofillPruneSuggestionsName[];
+extern const char kAutofillPruneSuggestionsDescription[];
+
+extern const char kAutofillSaveCardBottomSheetName[];
+extern const char kAutofillSaveCardBottomSheetDescription[];
+
+extern const char kAutofillShowManualFillForVirtualCardsName[];
+extern const char kAutofillShowManualFillForVirtualCardsDescription[];
+
+extern const char kAutofillThrottleDocumentFormScanName[];
+extern const char kAutofillThrottleDocumentFormScanDescription[];
+
+extern const char kAutofillThrottleFilteredDocumentFormScanName[];
+extern const char kAutofillThrottleFilteredDocumentFormScanDescription[];
+
+extern const char kAutofillUnmaskCardRequestTimeoutName[];
+extern const char kAutofillUnmaskCardRequestTimeoutDescription[];
+
+extern const char kAutofillUseRendererIDsName[];
+extern const char kAutofillUseRendererIDsDescription[];
+
+extern const char kAutofillVcnEnrollStrikeExpiryTimeName[];
+extern const char kAutofillVcnEnrollStrikeExpiryTimeDescription[];
+
+extern const char kBWGPreciseLocationName[];
+extern const char kBWGPreciseLocationDescription[];
+
+extern const char kBWGPromoConsentName[];
+extern const char kBWGPromoConsentDescription[];
+
+extern const char kBeginCursorAtPointTentativeFixName[];
+extern const char kBeginCursorAtPointTentativeFixDescription[];
+
+extern const char kBestFeaturesScreenInFirstRunName[];
+extern const char kBestFeaturesScreenInFirstRunDescription[];
+
+extern const char kBestOfAppFREName[];
+extern const char kBestOfAppFREDescription[];
+
+extern const char kBlueDotOnToolsMenuButtonName[];
+extern const char kBlueDotOnToolsMenuButtonDescription[];
+
+extern const char kBottomOmniboxEvolutionName[];
+extern const char kBottomOmniboxEvolutionDescription[];
+
+extern const char kBreakpadNoDelayInitialUploadName[];
+extern const char kBreakpadNoDelayInitialUploadDescription[];
+
+extern const char kCacheIdentityListInChromeName[];
+extern const char kCacheIdentityListInChromeDescription[];
+
+extern const char kChromeNextIaName[];
+extern const char kChromeNextIaDescription[];
+
+extern const char kCloseOtherTabsName[];
+extern const char kCloseOtherTabsDescription[];
+
+extern const char kCollaborationMessagingName[];
+extern const char kCollaborationMessagingDescription[];
+
+extern const char kComposeboxAIMDisabledName[];
+extern const char kComposeboxAIMDisabledDescription[];
+
+extern const char kComposeboxAIMNudgeName[];
+extern const char kComposeboxAIMNudgeDescription[];
+
+extern const char kComposeboxAttachmentsTypedStateName[];
+extern const char kComposeboxAttachmentsTypedStateDescription[];
+
+extern const char kComposeboxAutoattachTabName[];
+extern const char kComposeboxAutoattachTabDescription[];
+
+extern const char kComposeboxCloseButtonTopAlignName[];
+extern const char kComposeboxCloseButtonTopAlignDescription[];
+
+extern const char kComposeboxCompactModeName[];
+extern const char kComposeboxCompactModeDescription[];
+
+extern const char kComposeboxDevToolsName[];
+extern const char kComposeboxDevToolsDescription[];
+
+extern const char kComposeboxFetchContextualSuggestionsForImageName[];
+extern const char kComposeboxFetchContextualSuggestionsForImageDescription[];
+
+extern const char
+    kComposeboxFetchContextualSuggestionsForMultipleAttachmentsName[];
+extern const char
+    kComposeboxFetchContextualSuggestionsForMultipleAttachmentsDescription[];
+
+extern const char kComposeboxForceTopName[];
+extern const char kComposeboxForceTopDescription[];
+
+extern const char kComposeboxIOSName[];
+extern const char kComposeboxIOSDescription[];
+
+extern const char kComposeboxImmersiveSRPName[];
+extern const char kComposeboxImmersiveSRPDescription[];
+
+extern const char kComposeboxIpadName[];
+extern const char kComposeboxIpadDescription[];
+
+extern const char kComposeboxMenuTitleName[];
+extern const char kComposeboxMenuTitleDescription[];
+
+extern const char kComposeboxTabPickerVariationName[];
+extern const char kComposeboxTabPickerVariationDescription[];
+
+extern const char kConfirmationButtonSwapOrderName[];
+extern const char kConfirmationButtonSwapOrderDescription[];
+
+extern const char kConsistentLogoDoodleHeightName[];
+extern const char kConsistentLogoDoodleHeightDescription[];
+
+extern const char kContentNotificationProvisionalIgnoreConditionsName[];
+extern const char kContentNotificationProvisionalIgnoreConditionsDescription[];
+
+extern const char kContentPushNotificationsName[];
+extern const char kContentPushNotificationsDescription[];
+
 extern const char kCredentialProviderExtensionPromoName[];
 extern const char kCredentialProviderExtensionPromoDescription[];
 
-// Title and description for the flag to enable the default browser blue dot
-// promo.
-extern const char kDefaultBrowserBlueDotPromoName[];
-extern const char kDefaultBrowserBlueDotPromoDescription[];
+extern const char kCredentialProviderPasskeyLargeBlobName[];
+extern const char kCredentialProviderPasskeyLargeBlobDescription[];
 
-// Title and description for the flag to show a modified fullscreen modal promo
-// with a button that would send the users in the Settings.app to update the
-// default browser.
-extern const char kDefaultBrowserFullscreenPromoExperimentName[];
-extern const char kDefaultBrowserFullscreenPromoExperimentDescription[];
+extern const char kCredentialProviderPasskeyPRFName[];
+extern const char kCredentialProviderPasskeyPRFDescription[];
 
-// Title and description for the flag to show the default browser tutorial from
-// an external app.
-extern const char kDefaultBrowserIntentsShowSettingsName[];
-extern const char kDefaultBrowserIntentsShowSettingsDescription[];
+extern const char kCredentialProviderPerformanceImprovementsName[];
+extern const char kCredentialProviderPerformanceImprovementsDescription[];
 
-// Title and description for the flag to control if a crash report is generated
-// on main thread freeze.
+extern const char kDataSharingDebugLogsName[];
+extern const char kDataSharingDebugLogsDescription[];
+
+extern const char kDataSharingJoinOnlyName[];
+extern const char kDataSharingJoinOnlyDescription[];
+
+extern const char kDataSharingName[];
+extern const char kDataSharingDescription[];
+
+extern const char kDataSharingSharedDataTypesEnabled[];
+extern const char kDataSharingSharedDataTypesEnabledWithUi[];
+
+extern const char kDataSharingVersioningStatesName[];
+extern const char kDataSharingVersioningStatesDescription[];
+
+extern const char kDefaultBrowserMagicStackIosName[];
+extern const char kDefaultBrowserMagicStackIosDescription[];
+
+extern const char kDefaultBrowserOffCyclePromoName[];
+extern const char kDefaultBrowserOffCyclePromoDescription[];
+
+extern const char kDefaultBrowserPromoIpadInstructionsName[];
+extern const char kDefaultBrowserPromoIpadInstructionsDescription[];
+
+extern const char kDefaultBrowserPromoPropensityModelName[];
+extern const char kDefaultBrowserPromoPropensityModelDescription[];
+
+extern const char kDefaultBrowserPromoRefreshName[];
+extern const char kDefaultBrowserPromoRefreshDescription[];
+
 extern const char kDetectMainThreadFreezeName[];
 extern const char kDetectMainThreadFreezeDescription[];
 
-// Title and description for the flag to enable checking feed visibility on
-// attention log start.
-extern const char kEnableCheckVisibilityOnAttentionLogStartName[];
-extern const char kEnableCheckVisibilityOnAttentionLogStartDescription[];
+extern const char kDisableAutofillStrikeSystemName[];
+extern const char kDisableAutofillStrikeSystemDescription[];
 
-// Title and description for the flag to enable the muting of compromised
-// passwords in the Password Manager.
-extern const char kEnableCompromisedPasswordsMutingName[];
-extern const char kEnableCompromisedPasswordsMutingDescription[];
+extern const char kDisableKeyboardAccessoryName[];
+extern const char kDisableKeyboardAccessoryDescription[];
 
-// Title and description for the flag to enable the sync promotion on top of the
-// discover feed.
-extern const char kEnableDiscoverFeedTopSyncPromoName[];
-extern const char kEnableDiscoverFeedTopSyncPromoDescription[];
+extern const char kDisableLensCameraName[];
+extern const char kDisableLensCameraDescription[];
 
-// Title and description for the flag to enable the sign-in promotion at the
-// bottom of the discover feed.
-extern const char kEnableFeedBottomSignInPromoName[];
-extern const char kEnableFeedBottomSignInPromoDescription[];
+extern const char kDownloadAutoDeletionClearFilesOnEveryStartupName[];
+extern const char kDownloadAutoDeletionClearFilesOnEveryStartupDescription[];
 
-// Title and description for the flag to enable the sign-in promotion triggered
-// by the discover feed card menu.
-extern const char kEnableFeedCardMenuSignInPromoName[];
-extern const char kEnableFeedCardMenuSignInPromoDescription[];
+extern const char kDownloadAutoDeletionName[];
+extern const char kDownloadAutoDeletionDescription[];
 
-// Title and description for the flag to enable DMToken deletion.
-extern const char kDmTokenDeletionName[];
-extern const char kDmTokenDeletionDescription[];
+extern const char kDownloadListName[];
+extern const char kDownloadListDescription[];
 
-// Title and description for the flag to enable kEditPasswordsInSettings flag on
-// iOS.
-extern const char kEditPasswordsInSettingsName[];
-extern const char kEditPasswordsInSettingsDescription[];
-
-// Title and description for the flag to enable kTailoredSecurityIntegration
-// flag on iOS.
-extern const char kTailoredSecurityIntegrationName[];
-extern const char kTailoredSecurityIntegrationDescription[];
-
-// Title and description for the flag to enable address verification support in
-// autofill address save prompts.
-extern const char kEnableAutofillAddressSavePromptAddressVerificationName[];
-extern const char
-    kEnableAutofillAddressSavePromptAddressVerificationDescription[];
-
-// Title and description for the flag to enable autofill address save prompts.
-extern const char kEnableAutofillAddressSavePromptName[];
-extern const char kEnableAutofillAddressSavePromptDescription[];
-
-// Title and description for the flag to enable sign-out in Clear Browser Data
-// settings.
-extern const char kEnableCBDSignOutName[];
-extern const char kEnableCBDSignOutDescription[];
-
-// Title and description for the flag to enable the discover feed discofeed
-// endpoint.
-extern const char kEnableDiscoverFeedDiscoFeedEndpointName[];
-extern const char kEnableDiscoverFeedDiscoFeedEndpointDescription[];
-
-// Title and description for the flag to show ghost cards when refreshing the
-// discover feed.
-extern const char kEnableDiscoverFeedGhostCardsName[];
-extern const char kEnableDiscoverFeedGhostCardsDescription[];
-
-// Title and description for the flag to remove the Feed from the NTP.
-extern const char kEnableFeedAblationName[];
-extern const char kEnableFeedAblationDescription[];
-
-// Title and description for the flag to test the FRE default browser promo
-// experiment.
-extern const char kEnableFREDefaultBrowserPromoScreenName[];
-extern const char kEnableFREDefaultBrowserPromoScreenDescription[];
-
-// Title and description for the flag to enable the Fullscreen API.
-extern const char kEnableFullscreenAPIName[];
-extern const char kEnableFullscreenAPIDescription[];
-
-// Title and description for the flag to enable password grouping for the
-// Password Manager.
-extern const char kPasswordsGroupingName[];
-extern const char kPasswordsGroupingDescription[];
-
-// Title and description for the flag to enable open in download.
-extern const char kEnableOpenInDownloadName[];
-extern const char kEnableOpenInDownloadDescription[];
-
-// Title and description for the flag to enable the passwords account storage.
-extern const char kEnablePasswordsAccountStorageName[];
-extern const char kEnablePasswordsAccountStorageDescription[];
-
-// Title and description for the flag to enable pinned tabs.
-extern const char kEnablePinnedTabsName[];
-extern const char kEnablePinnedTabsDescription[];
-
-// Title and description for the flag to enable refining data source reload
-// reporting when having a very short attention log.
-extern const char kEnableRefineDataSourceReloadReportingName[];
-extern const char kEnableRefineDataSourceReloadReportingDescription[];
-
-// Title and description for the flag to enable omnibox suggestions scrolling on
-// iPad.
-extern const char kEnableSuggestionsScrollingOnIPadName[];
-extern const char kEnableSuggestionsScrollingOnIPadDescription[];
-
-// Title and description for the flag to enable user policies.
-extern const char kEnableUserPolicyName[];
-extern const char kEnableUserPolicyDescription[];
-
-// Title and description for the flag to introduce following web channels on
-// Chrome iOS.
-extern const char kEnableWebChannelsName[];
-extern const char kEnableWebChannelsDescription[];
-
-// Title and description for the flag to enable an expanded tab strip.
-extern const char kExpandedTabStripName[];
-extern const char kExpandedTabStripDescription[];
-
-// Title and description for the flag to enable feed background refresh.
-extern const char kFeedBackgroundRefreshName[];
-extern const char kFeedBackgroundRefreshDescription[];
-
-// Title and description for the flag to enable filling across affiliated
-// websites.
-extern const char kFillingAcrossAffiliatedWebsitesName[];
-extern const char kFillingAcrossAffiliatedWebsitesDescription[];
-
-// Title and description for the flag to set the default Following feed sort
-// type.
-extern const char kFollowingFeedDefaultSortTypeName[];
-extern const char kFollowingFeedDefaultSortTypeDescription[];
-
-// Title and description for the flag to trigger the startup sign-in promo.
-extern const char kForceStartupSigninPromoName[];
-extern const char kForceStartupSigninPromoDescription[];
-
-// Title and description for the flag to show signed-out avatar on NTP.
-extern const char kIdentityStatusConsistencyName[];
-extern const char kIdentityStatusConsistencyDescription[];
-
-// Title and description for the flag to enable sign-in with a Unicorn account.
-extern const char kEnableUnicornAccountSupportName[];
-extern const char kEnableUnicornAccountSupportDescription[];
-
-// Title and description for the flag to enable displaying fullscreen promos via
-// the Fullscreen Promos Manager.
-extern const char kFullscreenPromosManagerName[];
-extern const char kFullscreenPromosManagerDescription[];
-
-// Title and description for the flag to enable skipping the internal impression
-// limits of the Fullscreen Promos Manager.
-extern const char kFullscreenPromosManagerSkipInternalLimitsName[];
-extern const char kFullscreenPromosManagerSkipInternalLimitsDescription[];
-
-// Title and description for the flag to enable web page detected intents
-// annotations.
-extern const char kEnableWebPageAnnotationsName[];
-extern const char kEnableWebPageAnnotationsDescription[];
-
-// Title and description for the command line switch used to determine the
-// active fullscreen viewport adjustment mode.
-extern const char kFullscreenSmoothScrollingName[];
-extern const char kFullscreenSmoothScrollingDescription[];
-
-// Title and description for the flag to enable HTTPS-Only Mode setting.
-extern const char kHttpsOnlyModeName[];
-extern const char kHttpsOnlyModeDescription[];
-
-// Title and description for the flag to enable revamped Incognito NTP page.
-extern const char kIncognitoNtpRevampName[];
-extern const char kIncognitoNtpRevampDescription[];
-
-// Title and description for the flag to enable feature_engagement::Tracker
-// demo mode.
-extern const char kInProductHelpDemoModeName[];
-extern const char kInProductHelpDemoModeDescription[];
-
-// Title and description for the flag to enable third-party intents in
-// Incognito.
-extern const char kIOS3PIntentsInIncognitoName[];
-extern const char kIOS3PIntentsInIncognitoDescription[];
-
-// Title and description for the flag to enable updated password manager
-// branding.
-extern const char kIOSEnablePasswordManagerBrandingUpdateName[];
-extern const char kIOSEnablePasswordManagerBrandingUpdateDescription[];
-
-// Title and description for the flag to enable force translate when language
-// detection failed.
-extern const char kIOSForceTranslateEnabledName[];
-extern const char kIOSForceTranslateEnabledDescription[];
-
-// Title and description for the flag to enable the new iOS post-restore
-// sign-in prompt.
-extern const char kIOSNewPostRestoreExperienceName[];
-extern const char kIOSNewPostRestoreExperienceDescription[];
-
-// Title and description for the flag to split password settings and password
-// management into two separate UIs.
-extern const char kIOSPasswordUISplitName[];
-extern const char kIOSPasswordUISplitDescription[];
-
-// Title and description for the flag to enable password saving and
-// filling in cross-origin iframes on IOS.
-extern const char kIOSPasswordManagerCrossOriginIframeSupportName[];
-extern const char kIOSPasswordManagerCrossOriginIframeSupportDescription[];
-
-// Title and description of the flag to enable improved default suggestions of
-// popular sites.
-extern const char kIOSPopularSitesImprovedSuggestionsName[];
-extern const char kIOSPopularSitesImprovedSuggestionsDescription[];
-
-// Title and description for the flag to enable Shared Highlighting color
-// change in iOS.
-extern const char kIOSSharedHighlightingColorChangeName[];
-extern const char kIOSSharedHighlightingColorChangeDescription[];
-
-// Title and description for the flag to enable Shared Highlighting on AMP pages
-// in iOS.
-extern const char kIOSSharedHighlightingAmpName[];
-extern const char kIOSSharedHighlightingAmpDescription[];
-
-// Title and description for the flag to enable browser-layer improvements to
-// the text fragments UI.
-extern const char kIOSSharedHighlightingV2Name[];
-extern const char kIOSSharedHighlightingV2Description[];
-
-// Title and description for the flag to enable Keyboard Shortcuts Refresh.
-extern const char kKeyboardShortcutsMenuName[];
-extern const char kKeyboardShortcutsMenuDescription[];
-
-// Title and description for the flag to lock the bottom toolbar into place.
-extern const char kLockBottomToolbarName[];
-extern const char kLockBottomToolbarDescription[];
-
-// Title and description for the flag that controls whether event breadcrumbs
-// are captured.
-extern const char kLogBreadcrumbsName[];
-extern const char kLogBreadcrumbsDescription[];
-
-// Title and description for the flag to control camera and/or microphone access
-// for a specific site through site settings during its lifespan.
-extern const char kMediaPermissionsControlName[];
-extern const char kMediaPermissionsControlDescription[];
-
-// Title and description for the flag that controls sending metrickit non-crash
-// reports.
-extern const char kMetrickitNonCrashReportName[];
-extern const char kMetrickitNonCrashReportDescription[];
-
-// TODO(crbug.com/1128242): Remove this flag after the refactoring work is
-// finished.
-// Title and description for the flag used to test the newly
-// implemented tabstrip.
-extern const char kModernTabStripName[];
-extern const char kModernTabStripDescription[];
-
-// Title and description of the flag to enable the most visited tiles in the
-// omnibox.
-extern const char kMostVisitedTilesName[];
-extern const char kMostVisitedTilesDescription[];
-
-// Title and description for the flag to use the new MICe FRE.
-extern const char kNewMobileIdentityConsistencyFREName[];
-extern const char kNewMobileIdentityConsistencyFREDescription[];
-
-// Title and description for the flag to enable the new overflow menu.
-extern const char kNewOverflowMenuName[];
-extern const char kNewOverflowMenuDescription[];
-
-// Title and description for the flag to enable the new overflow menu alternate
-// IPH flow.
-extern const char kNewOverflowMenuAlternateIPHName[];
-extern const char kNewOverflowMenuAlternateIPHDescription[];
-
-// Title and description for temporary bug fix to broken NTP view hierarhy.
-// TODO(crbug.com/1262536): Remove this when fixed.
-extern const char kNTPViewHierarchyRepairName[];
-extern const char kNTPViewHierarchyRepairDescription[];
-
-// Title and description for dynamic spacing in Omnibox Carousel.
-extern const char kOmniboxCarouselDynamicSpacingName[];
-extern const char kOmniboxCarouselDynamicSpacingDescription[];
-
-// Title and description for fuzzy URL suggestions feature.
-extern const char kOmniboxFuzzyUrlSuggestionsName[];
-extern const char kOmniboxFuzzyUrlSuggestionsDescription[];
-
-// Title and description for the flag to enable Omnibox HTTPS upgrades for
-// schemeless navigations.
-extern const char kOmniboxHttpsUpgradesName[];
-extern const char kOmniboxHttpsUpgradesDescription[];
-
-// Title and description for the flag to enable paste button in the omnibox's
-// keyboard accessory.
-extern const char kOmniboxKeyboardPasteButtonName[];
-extern const char kOmniboxKeyboardPasteButtonDescription[];
-
-// Title and description for the flag to change the max number of autocomplete
-// matches in the omnibox popup.
-extern const char kOmniboxUIMaxAutocompleteMatchesName[];
-extern const char kOmniboxUIMaxAutocompleteMatchesDescription[];
-
-// Title and description for the flag to change the max number of ZPS
-// matches in the omnibox popup.
-extern const char kOmniboxMaxZPSMatchesName[];
-extern const char kOmniboxMaxZPSMatchesDescription[];
-
-// Title and description for the flag to enable Omnibox On Device Head
-// suggestions (incognito).
-extern const char kOmniboxOnDeviceHeadSuggestionsIncognitoName[];
-extern const char kOmniboxOnDeviceHeadSuggestionsIncognitoDescription[];
-
-// Title and description for the flag to enable Omnibox On Device Head
-// suggestions (non incognito).
-extern const char kOmniboxOnDeviceHeadSuggestionsNonIncognitoName[];
-extern const char kOmniboxOnDeviceHeadSuggestionsNonIncognitoDescription[];
-
-// Title and description for the flag to control Omnibox on-focus suggestions.
-extern const char kOmniboxOnFocusSuggestionsName[];
-extern const char kOmniboxOnFocusSuggestionsDescription[];
-
-// Title and description for the maximum number of URL matches.
-extern const char kOmniboxMaxURLMatchesName[];
-extern const char kOmniboxMaxURLMatchesDescription[];
-
-// Title and description for the flag to swap Omnibox Textfield implementation
-// to a new experimental one.
-extern const char kOmniboxNewImplementationName[];
-extern const char kOmniboxNewImplementationDescription[];
-
-// Title and description for the flag to fetch contextual zero-prefix
-// suggestions related to current page (on normal web pages).
-extern const char kOmniboxFocusTriggersContextualWebZeroSuggestName[];
-extern const char kOmniboxFocusTriggersContextualWebZeroSuggestDescription[];
-
-// Title and description for the flag to fetch contextual zero-prefix
-// suggestions on search results page.
-extern const char kOmniboxFocusTriggersSRPZeroSuggestName[];
-extern const char kOmniboxFocusTriggersSRPZeroSuggestDescription[];
-
-// Title and description for the flag to enable paste button on clipboard
-// suggestion.
-extern const char kOmniboxPasteButtonName[];
-extern const char kOmniboxPasteButtonDescription[];
-
-// Title and description for local history zero-prefix suggestions beyond NTP.
-extern const char kOmniboxLocalHistoryZeroSuggestBeyondNTPName[];
-extern const char kOmniboxLocalHistoryZeroSuggestBeyondNTPDescription[];
-
-// Title and description for the zero-suggest prefetching on the New Tab Page.
-extern const char kOmniboxZeroSuggestPrefetchingName[];
-extern const char kOmniboxZeroSuggestPrefetchingDescription[];
-
-// Title and description for the zero-suggest prefetching on the Search Results
-// Page.
-extern const char kOmniboxZeroSuggestPrefetchingOnSRPName[];
-extern const char kOmniboxZeroSuggestPrefetchingOnSRPDescription[];
-
-// Title and description for the zero-suggest prefetching on any Web Page.
-extern const char kOmniboxZeroSuggestPrefetchingOnWebName[];
-extern const char kOmniboxZeroSuggestPrefetchingOnWebDescription[];
-
-// Title and description for the use of in-memory zero-suggest caching.
-extern const char kOmniboxZeroSuggestInMemoryCachingName[];
-extern const char kOmniboxZeroSuggestInMemoryCachingDescription[];
-
-// Title and description for omnibox on device tail suggest.
-extern const char kOmniboxOnDeviceTailSuggestionsName[];
-extern const char kOmniboxOnDeviceTailSuggestionsDescription[];
-
-// Title and description for the flag to enable ChromeActions (and optionally
-// SwiftUI omnibox popup implementation).
-extern const char kIOSOmniboxUpdatedPopupUIName[];
-extern const char kIOSOmniboxUpdatedPopupUIDescription[];
-
-// Title and description for the flag to enable Optimization Guide debug logs.
-extern const char kOptimizationGuideDebugLogsName[];
-extern const char kOptimizationGuideDebugLogsDescription[];
-
-// Title and description for the flag enable download service to download in
-// foreground.
 extern const char kDownloadServiceForegroundSessionName[];
 extern const char kDownloadServiceForegroundSessionDescription[];
 
-// Title and description for the flag to enable TFLite model downloading.
-extern const char kOptimizationGuideModelDownloadingName[];
-extern const char kOptimizationGuideModelDownloadingDescription[];
+extern const char kEditPasswordsInSettingsName[];
+extern const char kEditPasswordsInSettingsDescription[];
 
-// Title and description for the flag to enable the prediction of optimization
-// targets.
-extern const char kOptimizationTargetPredictionDescription[];
-extern const char kOptimizationTargetPredictionName[];
+extern const char kEnableACPrefetchName[];
+extern const char kEnableACPrefetchDescription[];
 
-// Title and description for the flag to enable PhishGuard password reuse
-// detection.
-extern const char kPasswordReuseDetectionName[];
-extern const char kPasswordReuseDetectionDescription[];
+extern const char kEnableASWebAuthenticationSessionName[];
+extern const char kEnableASWebAuthenticationSessionDescription[];
 
-// Title and description for the flag to enable PriceNotifications IPH to be
-// alwayws be displayed.
-extern const char kIPHPriceNotificationsWhileBrowsingName[];
-extern const char kIPHPriceNotificationsWhileBrowsingDescription[];
+extern const char kEnableAutofillAddressSavePromptName[];
+extern const char kEnableAutofillAddressSavePromptDescription[];
 
-// Title and description for the flag to native restore web states.
-extern const char kRestoreSessionFromCacheName[];
-extern const char kRestoreSessionFromCacheDescription[];
+extern const char kEnableClipboardDataControlsIOSName[];
+extern const char kEnableClipboardDataControlsIOSDescription[];
 
-extern const char kRecordSnapshotSizeName[];
-extern const char kRecordSnapshotSizeDescription[];
+extern const char kEnableCompromisedPasswordsMutingName[];
+extern const char kEnableCompromisedPasswordsMutingDescription[];
 
-extern const char kRemoveCrashInfobarName[];
-extern const char kRemoveCrashInfobarDescription[];
+extern const char kEnableCrossDevicePrefTrackerName[];
+extern const char kEnableCrossDevicePrefTrackerDescription[];
 
-// Title and description for the flag to remove excess NTP tabs that don't have
-// navigation history.
-extern const char kRemoveExcessNTPsExperimentName[];
-extern const char kRemoveExcessNTPsExperimentDescription[];
+extern const char kEnableFamilyLinkControlsName[];
+extern const char kEnableFamilyLinkControlsDescription[];
 
-// Title and description for the flag that makes Safe Browsing available.
-extern const char kSafeBrowsingAvailableName[];
-extern const char kSafeBrowsingAvailableDescription[];
+extern const char kEnableFeedAblationName[];
+extern const char kEnableFeedAblationDescription[];
 
-// Title and description for the flag to enable real-time Safe Browsing lookups.
-extern const char kSafeBrowsingRealTimeLookupName[];
-extern const char kSafeBrowsingRealTimeLookupDescription[];
+extern const char kEnableFeedCardMenuSignInPromoName[];
+extern const char kEnableFeedCardMenuSignInPromoDescription[];
 
-// Title and description for the flag to enable saving one file per webstate.
-extern const char kSaveSessionTabsToSeparateFilesName[];
-extern const char kSaveSessionTabsToSeparateFilesDescription[];
+extern const char kEnableFeedHeaderSettingsName[];
+extern const char kEnableFeedHeaderSettingsDescription[];
 
-// Title and description for the flag to enable integration with the ScreenTime
-// system.
-extern const char kScreenTimeIntegrationName[];
-extern const char kScreenTimeIntegrationDescription[];
-
-// Title and description for the flag to show a sign-in promo if the user tries
-// to use send-tab-to-self while being signed-out.
-extern const char kSendTabToSelfSigninPromoName[];
-extern const char kSendTabToSelfSigninPromoDescription[];
-
-// Title and description for the flag to send UMA data over any network.
-extern const char kSendUmaOverAnyNetwork[];
-extern const char kSendUmaOverAnyNetworkDescription[];
-
-// Title and description for the flag to enable Shared Highlighting (Link to
-// Text Edit Menu option).
-extern const char kSharedHighlightingIOSName[];
-extern const char kSharedHighlightingIOSDescription[];
-
-// Title and description for the flag to enable annotating web forms with
-// Autofill field type predictions as placeholder.
-extern const char kShowAutofillTypePredictionsName[];
-extern const char kShowAutofillTypePredictionsDescription[];
-
-// Title and description for the flag to enable smart sorting the new overflow
-// menu.
-extern const char kSmartSortingNewOverflowMenuName[];
-extern const char kSmartSortingNewOverflowMenuDescription[];
-
-// Title and description for the flag to enable the Share Chrome App action
-// in the new overflow menu.
-extern const char kNewOverflowMenuShareChromeActionName[];
-extern const char kNewOverflowMenuShareChromeActionDescription[];
-
-// Title and description for the flag to enable the Start Surface.
-extern const char kStartSurfaceName[];
-extern const char kStartSurfaceDescription[];
-
-// Title and description for the flag to control if Chrome Sync should use the
-// sandbox servers.
-extern const char kSyncSandboxName[];
-extern const char kSyncSandboxDescription[];
-
-// Title and description for the flag to synthesize native restore web states.
-extern const char kSynthesizedRestoreSessionName[];
-extern const char kSynthesizedRestoreSessionDescription[];
-
-// Title and description for the flag to enable the Sync History data type.
-extern const char kSyncEnableHistoryDataTypeName[];
-extern const char kSyncEnableHistoryDataTypeDescription[];
-
-// Title and description for the flag to control if Chrome Sync should support
-// trusted vault passphrase promos.
-extern const char kSyncTrustedVaultPassphrasePromoName[];
-extern const char kSyncTrustedVaultPassphrasePromoDescription[];
-
-// Title and description for the flag to control if Chrome Sync should support
-// trusted vault passphrase type with improved recovery.
-extern const char kSyncTrustedVaultPassphraseRecoveryName[];
-extern const char kSyncTrustedVaultPassphraseRecoveryDescription[];
-
-// Title and description for the flag to enable Sync standalone invalidations.
-extern const char kSyncInvalidationsName[];
-extern const char kSyncInvalidationsDescription[];
-
-// Title and description for the flag to enable Sync standalone invalidations
-// for the Wallet and Offer data types.
-extern const char kSyncInvalidationsWalletAndOfferName[];
-extern const char kSyncInvalidationsWalletAndOfferDescription[];
-
-// Title and description for the flag to enable TFLite for language detection.
-extern const char kTFLiteLanguageDetectionName[];
-extern const char kTFLiteLanguageDetectionDescription[];
-
-// Title and description for the flag to compute both TFLite and CLD3 detection
-// and ignore TFLite one.
-extern const char kTFLiteLanguageDetectionIgnoreName[];
-extern const char kTFLiteLanguageDetectionIgnoreDescription[];
-
-// Title and description for the flag to enable the toolbar container
-// implementation.
-extern const char kToolbarContainerName[];
-extern const char kToolbarContainerDescription[];
-
-// Title and Description for the flag to enable the trending queries module.
-extern const char kTrendingQueriesModuleName[];
-extern const char kTrendingQueriesModuleDescription[];
-
-// Title and description for the flag to enable removing any entry points to the
-// history UI from Incognito mode.
-extern const char kUpdateHistoryEntryPointsInIncognitoName[];
-extern const char kUpdateHistoryEntryPointsInIncognitoDescription[];
-
-// Title and description for the flag to enable using Lens to search for an
-// image from the long press context menu.
-extern const char kUseLensToSearchForImageName[];
-extern const char kUseLensToSearchForImageDescription[];
-
-// Title and description for the flag to enable using Lens to search using
-// the device camera from the home screen widget.
-extern const char kEnableLensInHomeScreenWidgetName[];
-extern const char kEnableLensInHomeScreenWidgetDescription[];
-
-// Title and description for the flag to enable using Lens to search using
-// the device camera from the keyboard.
-extern const char kEnableLensInKeyboardName[];
-extern const char kEnableLensInKeyboardDescription[];
-
-// Title and description for the flag to enable using Lens to search using
-// the device camera from the ntp.
-extern const char kEnableLensInNTPName[];
-extern const char kEnableLensInNTPDescription[];
-
-// Title and description for the flag to enable using Lens to search using
-// copied images in the omnibox.
 extern const char kEnableLensInOmniboxCopiedImageName[];
 extern const char kEnableLensInOmniboxCopiedImageDescription[];
 
-// Title and description for the flag to sort the tab by recency in the TabGrid.
-extern const char kTabGridRecencySortName[];
-extern const char kTabGridRecencySortDescription[];
+extern const char kEnableLensOverlayName[];
+extern const char kEnableLensOverlayDescription[];
 
-// Title and description for the flag to enable using the
-// loadSimulatedRequest:responseHTMLString: API for displaying error pages in
-// CRWWKNavigationHandler.
-extern const char kUseLoadSimulatedRequestForOfflinePageName[];
-extern const char kUseLoadSimulatedRequestForOfflinePageDescription[];
+extern const char kEnableNewStartupFlowName[];
+extern const char kEnableNewStartupFlowDescription[];
 
-// Title and description for the flag to enable the replacement of images
-// by SFSymbols.
-extern const char kUseSFSymbolsName[];
-extern const char kUseSFSymbolsDescription[];
+extern const char kEnableReadingListAccountStorageName[];
+extern const char kEnableReadingListAccountStorageDescription[];
 
-// Title and description for the flag to enable the replacement of images
-// by SFSymbols in omnibox.
-extern const char kUseSFSymbolsInOmniboxName[];
-extern const char kUseSFSymbolsInOmniboxDescription[];
+extern const char kEnableReadingListSignInPromoName[];
+extern const char kEnableReadingListSignInPromoDescription[];
 
-// Title and description for the flag to control the maximum wait time (in
-// seconds) for a response from the Account Capabilities API.
+extern const char kEnableTraitCollectionRegistrationName[];
+extern const char kEnableTraitCollectionRegistrationDescription[];
+
+extern const char kEnableVariationsGoogleGroupFilteringName[];
+extern const char kEnableVariationsGoogleGroupFilteringDescription[];
+
+extern const char kEnhancedCalendarName[];
+extern const char kEnhancedCalendarDescription[];
+
+extern const char kFRESignInHeaderTextUpdateName[];
+extern const char kFRESignInHeaderTextUpdateDescription[];
+
+extern const char kFeedBackgroundRefreshName[];
+extern const char kFeedBackgroundRefreshDescription[];
+
+extern const char kFeedSwipeInProductHelpName[];
+extern const char kFeedSwipeInProductHelpDescription[];
+
+extern const char kForceStartupSigninPromoName[];
+extern const char kForceStartupSigninPromoDescription[];
+
+extern const char kFullscreenPromosManagerSkipInternalLimitsName[];
+extern const char kFullscreenPromosManagerSkipInternalLimitsDescription[];
+
+extern const char kFullscreenScrollThresholdName[];
+extern const char kFullscreenScrollThresholdDescription[];
+
+extern const char kFullscreenSmoothScrollingName[];
+extern const char kFullscreenSmoothScrollingDescription[];
+
+extern const char kFullscreenTransitionSpeedName[];
+extern const char kFullscreenTransitionSpeedDescription[];
+
+extern const char kGeminiCopresenceName[];
+extern const char kGeminiCopresenceDescription[];
+
+extern const char kGeminiCrossTabName[];
+extern const char kGeminiCrossTabDescription[];
+
+extern const char kGeminiDynamicSettingsName[];
+extern const char kGeminiDynamicSettingsDescription[];
+
+extern const char kGeminiFullChatHistoryName[];
+extern const char kGeminiFullChatHistoryDescription[];
+
+extern const char kGeminiImageRemixToolName[];
+extern const char kGeminiImageRemixToolDescription[];
+
+extern const char kGeminiImmediateOverlayName[];
+extern const char kGeminiImmediateOverlayDescription[];
+
+extern const char kGeminiLatencyImprovementName[];
+extern const char kGeminiLatencyImprovementDescription[];
+
+extern const char kGeminiLiveName[];
+extern const char kGeminiLiveDescription[];
+
+extern const char kGeminiLoadingStateRedesignName[];
+extern const char kGeminiLoadingStateRedesignDescription[];
+
+extern const char kGeminiNavigationPromoName[];
+extern const char kGeminiNavigationPromoDescription[];
+
+extern const char kGeminiOnboardingCardsName[];
+extern const char kGeminiOnboardingCardsDescription[];
+
+extern const char kGeminiPersonalizationName[];
+extern const char kGeminiPersonalizationDescription[];
+
+extern const char kGeminiRefactoredFREName[];
+extern const char kGeminiRefactoredFREDescription[];
+
+extern const char kHandleMdmErrorsForDasherAccountsName[];
+extern const char kHandleMdmErrorsForDasherAccountsDescription[];
+
+extern const char kHideToolbarsInOverflowMenuName[];
+extern const char kHideToolbarsInOverflowMenuDescription[];
+
+extern const char kHomeMemoryImprovementsName[];
+extern const char kHomeMemoryImprovementsDescription[];
+
+extern const char kHttpsUpgradesName[];
+extern const char kHttpsUpgradesDescription[];
+
+extern const char kIOSAppBundlePromoEphemeralCardName[];
+extern const char kIOSAppBundlePromoEphemeralCardDescription[];
+
+extern const char kIOSAutoOpenRemoteTabGroupsSettingsName[];
+extern const char kIOSAutoOpenRemoteTabGroupsSettingsDescription[];
+
+extern const char kIOSBrowserEditMenuMetricsName[];
+extern const char kIOSBrowserEditMenuMetricsDescription[];
+
+extern const char kIOSBrowserReportIncludeAllProfilesName[];
+extern const char kIOSBrowserReportIncludeAllProfilesDescription[];
+
+extern const char kIOSChooseFromDriveName[];
+extern const char kIOSChooseFromDriveDescription[];
+
+extern const char kIOSCustomFileUploadMenuName[];
+extern const char kIOSCustomFileUploadMenuDescription[];
+
+extern const char kIOSDockingPromoName[];
+extern const char kIOSDockingPromoDescription[];
+
+extern const char kIOSEnableCloudProfileReportingName[];
+extern const char kIOSEnableCloudProfileReportingDescription[];
+
+extern const char kIOSEnableRealtimeEventReportingName[];
+extern const char kIOSEnableRealtimeEventReportingDescription[];
+
+extern const char kIOSExpandedSetupListName[];
+extern const char kIOSExpandedSetupListDescription[];
+
+extern const char kIOSExpandedTipsName[];
+extern const char kIOSExpandedTipsDescription[];
+
+extern const char kIOSFillRecoveryPasswordName[];
+extern const char kIOSFillRecoveryPasswordDescription[];
+
+extern const char kIOSKeyboardAccessoryDefaultViewName[];
+extern const char kIOSKeyboardAccessoryDefaultViewDescription[];
+
+extern const char kIOSKeyboardAccessoryTwoBubbleName[];
+extern const char kIOSKeyboardAccessoryTwoBubbleDescription[];
+
+extern const char kIOSOmniboxAimServerEligibilityEnName[];
+extern const char kIOSOmniboxAimServerEligibilityEnDescription[];
+
+extern const char kIOSOmniboxAimServerEligibilityName[];
+extern const char kIOSOmniboxAimServerEligibilityDescription[];
+
+extern const char kIOSOmniboxAimShortcutName[];
+extern const char kIOSOmniboxAimShortcutDescription[];
+
+extern const char kIOSOneTapMiniMapRestrictionsName[];
+extern const char kIOSOneTapMiniMapRestrictionsDescription[];
+
+extern const char kIOSOneTimeDefaultBrowserNotificationName[];
+extern const char kIOSOneTimeDefaultBrowserNotificationDescription[];
+
+extern const char kIOSProactivePasswordGenerationBottomSheetName[];
+extern const char kIOSProactivePasswordGenerationBottomSheetDescription[];
+
+extern const char kIOSProvidesAppNotificationSettingsName[];
+extern const char kIOSProvidesAppNotificationSettingsDescription[];
+
+extern const char kIOSReactivationNotificationsName[];
+extern const char kIOSReactivationNotificationsDescription[];
+
+extern const char kIOSSaveToDriveClientFolderName[];
+extern const char kIOSSaveToDriveClientFolderDescription[];
+
+extern const char kIOSSoftLockName[];
+extern const char kIOSSoftLockDescription[];
+
+extern const char kIOSSyncedSetUpName[];
+extern const char kIOSSyncedSetUpDescription[];
+
+extern const char kIOSTipsNotificationsStringAlternativesName[];
+extern const char kIOSTipsNotificationsStringAlternativesDescription[];
+
+extern const char kIOSTrustedVaultNotificationName[];
+extern const char kIOSTrustedVaultNotificationDescription[];
+
+extern const char kIOSWebContextMenuNewTitleName[];
+extern const char kIOSWebContextMenuNewTitleDescription[];
+
+extern const char kIdentityConfirmationSnackbarName[];
+extern const char kIdentityConfirmationSnackbarDescription[];
+
+extern const char kImportPasswordsFromSafariName[];
+extern const char kImportPasswordsFromSafariDescription[];
+
+extern const char kInProductHelpDemoModeName[];
+extern const char kInProductHelpDemoModeDescription[];
+
+extern const char kIndicateIdentityErrorInOverflowMenuName[];
+extern const char kIndicateIdentityErrorInOverflowMenuDescription[];
+
+extern const char kInvalidateSearchEngineChoiceOnDeviceRestoreDetectionName[];
+extern const char
+    kInvalidateSearchEngineChoiceOnDeviceRestoreDetectionDescription[];
+
+extern const char
+    kLensBlockFetchObjectsInteractionRPCsOnSeparateHandshakeName[];
+extern const char
+    kLensBlockFetchObjectsInteractionRPCsOnSeparateHandshakeDescription[];
+
+extern const char kLensCameraNoStillOutputRequiredName[];
+extern const char kLensCameraNoStillOutputRequiredDescription[];
+
+extern const char kLensCameraUnbinnedCaptureFormatsPreferredName[];
+extern const char kLensCameraUnbinnedCaptureFormatsPreferredDescription[];
+
+extern const char kLensContinuousZoomEnabledName[];
+extern const char kLensContinuousZoomEnabledDescription[];
+
+extern const char kLensExactMatchesEnabledName[];
+extern const char kLensExactMatchesEnabledDescription[];
+
+extern const char kLensFetchSrpApiEnabledName[];
+extern const char kLensFetchSrpApiEnabledDescription[];
+
+extern const char kLensFiltersAblationModeEnabledName[];
+extern const char kLensFiltersAblationModeEnabledDescription[];
+
+extern const char kLensGestureTextSelectionDisabledName[];
+extern const char kLensGestureTextSelectionDisabledDescription[];
+
+extern const char kLensInitialLvfZoomLevel90PercentName[];
+extern const char kLensInitialLvfZoomLevel90PercentDescription[];
+
+extern const char kLensLoadAIMInLensResultPageName[];
+extern const char kLensLoadAIMInLensResultPageDescription[];
+
+extern const char kLensOmnientShaderV2EnabledName[];
+extern const char kLensOmnientShaderV2EnabledDescription[];
+
+extern const char kLensOverlayCustomBottomSheetName[];
+extern const char kLensOverlayCustomBottomSheetDescription[];
+
+extern const char kLensOverlayDisableIPHPanGestureName[];
+extern const char kLensOverlayDisableIPHPanGestureDescription[];
+
+extern const char kLensOverlayEnableLandscapeCompatibilityName[];
+extern const char kLensOverlayEnableLandscapeCompatibilityDescription[];
+
+extern const char kLensOverlayForceShowOnboardingScreenName[];
+extern const char kLensOverlayForceShowOnboardingScreenDescription[];
+
+extern const char kLensOverlayNavigationHistoryName[];
+extern const char kLensOverlayNavigationHistoryDescription[];
+
+extern const char kLensPrewarmHardStickinessInInputSelectionName[];
+extern const char kLensPrewarmHardStickinessInInputSelectionDescription[];
+
+extern const char kLensPrewarmHardStickinessInQueryFormulationName[];
+extern const char kLensPrewarmHardStickinessInQueryFormulationDescription[];
+
+extern const char kLensSearchHeadersCheckEnabledName[];
+extern const char kLensSearchHeadersCheckEnabledDescription[];
+
+extern const char kLensSingleTapTextSelectionDisabledName[];
+extern const char kLensSingleTapTextSelectionDisabledDescription[];
+
+extern const char kLensStreamServiceWebChannelTransportEnabledName[];
+extern const char kLensStreamServiceWebChannelTransportEnabledDescription[];
+
+extern const char kLensTranslateToggleModeEnabledName[];
+extern const char kLensTranslateToggleModeEnabledDescription[];
+
+extern const char kLensTripleCameraEnabledName[];
+extern const char kLensTripleCameraEnabledDescription[];
+
+extern const char kLensUnaryApiSalientTextEnabledName[];
+extern const char kLensUnaryApiSalientTextEnabledDescription[];
+
+extern const char kLensUnaryApisWithHttpTransportEnabledName[];
+extern const char kLensUnaryApisWithHttpTransportEnabledDescription[];
+
+extern const char kLensUnaryHttpTransportEnabledName[];
+extern const char kLensUnaryHttpTransportEnabledDescription[];
+
+extern const char kLensWebPageLoadOptimizationEnabledName[];
+extern const char kLensWebPageLoadOptimizationEnabledDescription[];
+
+extern const char kLocationBarBadgeMigrationName[];
+extern const char kLocationBarBadgeMigrationDescription[];
+
+extern const char kLockBottomToolbarName[];
+extern const char kLockBottomToolbarDescription[];
+
+extern const char kManualLogUploadsInFREName[];
+extern const char kManualLogUploadsInFREDescription[];
+
+extern const char kMeasurementsName[];
+extern const char kMeasurementsDescription[];
+
+extern const char kMetrickitNonCrashReportName[];
+extern const char kMetrickitNonCrashReportDescription[];
+
+extern const char kMigrateAccountPrefsOnMobileName[];
+extern const char kMigrateAccountPrefsOnMobileDescription[];
+
+extern const char kMigrateIOSKeychainAccessibilityName[];
+extern const char kMigrateIOSKeychainAccessibilityDescription[];
+
+extern const char kMobilePromoOnDesktopName[];
+extern const char kMobilePromoOnDesktopDescription[];
+
+extern const char kMobilePromoOnDesktopRecordActiveDaysName[];
+extern const char kMobilePromoOnDesktopRecordActiveDaysDescription[];
+
+extern const char kMostVisitedTilesCustomizationName[];
+extern const char kMostVisitedTilesCustomizationDescription[];
+
+extern const char kMostVisitedTilesHorizontalRenderGroupName[];
+extern const char kMostVisitedTilesHorizontalRenderGroupDescription[];
+
+extern const char kMultilineBrowserOmniboxName[];
+extern const char kMultilineBrowserOmniboxDescription[];
+
+extern const char kNTPBackgroundColorSliderName[];
+extern const char kNTPBackgroundColorSliderDescription[];
+
+extern const char kNTPBackgroundCustomizationName[];
+extern const char kNTPBackgroundCustomizationDescription[];
+
+extern const char kNTPMIAEntrypointName[];
+extern const char kNTPMIAEntrypointDescription[];
+
+extern const char kNTPViewHierarchyRepairName[];
+extern const char kNTPViewHierarchyRepairDescription[];
+
+extern const char kNativeFindInPageName[];
+extern const char kNativeFindInPageDescription[];
+
+extern const char kNewTabPageFieldTrialName[];
+extern const char kNewTabPageFieldTrialDescription[];
+
+extern const char kNonModalSignInPromoName[];
+extern const char kNonModalSignInPromoDescription[];
+
+extern const char kNotificationCollisionManagementName[];
+extern const char kNotificationCollisionManagementDescription[];
+
+extern const char kNtpAlphaBackgroundCollectionsName[];
+extern const char kNtpAlphaBackgroundCollectionsDescription[];
+
+extern const char kNtpComposeboxUsesChromeComposeClientName[];
+extern const char kNtpComposeboxUsesChromeComposeClientDescription[];
+
+extern const char kOmniboxDRSPrototypeName[];
+extern const char kOmniboxDRSPrototypeDescription[];
+
+extern const char kOmniboxDRSPrototypeName[];
+extern const char kOmniboxDRSPrototypeDescription[];
+
+extern const char kOmniboxGroupingFrameworkForTypedSuggestionsName[];
+extern const char kOmniboxGroupingFrameworkForTypedSuggestionsDescription[];
+
+extern const char kOmniboxGroupingFrameworkForZPSName[];
+extern const char kOmniboxGroupingFrameworkForZPSDescription[];
+
+extern const char kOmniboxHttpsUpgradesName[];
+extern const char kOmniboxHttpsUpgradesDescription[];
+
+extern const char kOmniboxInspireMeSignedOutName[];
+extern const char kOmniboxInspireMeSignedOutDescription[];
+
+extern const char kOmniboxLocalHistoryZeroSuggestBeyondNTPName[];
+extern const char kOmniboxLocalHistoryZeroSuggestBeyondNTPDescription[];
+
+extern const char kOmniboxMaxURLMatchesName[];
+extern const char kOmniboxMaxURLMatchesDescription[];
+
+extern const char kOmniboxMiaZpsName[];
+extern const char kOmniboxMiaZpsDescription[];
+
+extern const char kOmniboxMlLogUrlScoringSignalsName[];
+extern const char kOmniboxMlLogUrlScoringSignalsDescription[];
+
+extern const char kOmniboxMlUrlPiecewiseMappedSearchBlendingName[];
+extern const char kOmniboxMlUrlPiecewiseMappedSearchBlendingDescription[];
+
+extern const char kOmniboxMlUrlScoreCachingName[];
+extern const char kOmniboxMlUrlScoreCachingDescription[];
+
+extern const char kOmniboxMlUrlScoringModelName[];
+extern const char kOmniboxMlUrlScoringModelDescription[];
+
+extern const char kOmniboxMlUrlScoringName[];
+extern const char kOmniboxMlUrlScoringDescription[];
+
+extern const char kOmniboxMlUrlSearchBlendingName[];
+extern const char kOmniboxMlUrlSearchBlendingDescription[];
+
+extern const char kOmniboxMobileParityUpdateName[];
+extern const char kOmniboxMobileParityUpdateDescription[];
+
+extern const char kOmniboxMobileParityUpdateV2Name[];
+extern const char kOmniboxMobileParityUpdateV2Description[];
+
+extern const char kOmniboxOnClobberFocusTypeOnIOSName[];
+extern const char kOmniboxOnClobberFocusTypeOnIOSDescription[];
+
+extern const char kOmniboxOnDeviceHeadSuggestionsIncognitoName[];
+extern const char kOmniboxOnDeviceHeadSuggestionsIncognitoDescription[];
+
+extern const char kOmniboxOnDeviceHeadSuggestionsNonIncognitoName[];
+extern const char kOmniboxOnDeviceHeadSuggestionsNonIncognitoDescription[];
+
+extern const char kOmniboxOnDeviceTailSuggestionsName[];
+extern const char kOmniboxOnDeviceTailSuggestionsDescription[];
+
+extern const char kOmniboxSuggestionAnswerMigrationName[];
+extern const char kOmniboxSuggestionAnswerMigrationDescription[];
+
+extern const char kOmniboxUIMaxAutocompleteMatchesName[];
+extern const char kOmniboxUIMaxAutocompleteMatchesDescription[];
+
+extern const char kOmniboxZeroSuggestPrefetchingOnSRPName[];
+extern const char kOmniboxZeroSuggestPrefetchingOnSRPDescription[];
+
+extern const char kOmniboxZeroSuggestPrefetchingOnWebName[];
+extern const char kOmniboxZeroSuggestPrefetchingOnWebDescription[];
+
+extern const char kOptimizationGuideDebugLogsName[];
+extern const char kOptimizationGuideDebugLogsDescription[];
+
+extern const char kPageActionMenuName[];
+extern const char kPageActionMenuDescription[];
+
+extern const char kPageContentAnnotationsName[];
+extern const char kPageContentAnnotationsDescription[];
+
+extern const char kPageContentAnnotationsRemotePageMetadataName[];
+extern const char kPageContentAnnotationsRemotePageMetadataDescription[];
+
+extern const char kPageContextAnchorTagsName[];
+extern const char kPageContextAnchorTagsDescription[];
+
+extern const char kPageVisibilityPageContentAnnotationsName[];
+extern const char kPageVisibilityPageContentAnnotationsDescription[];
+
+extern const char kPasswordFormClientsideClassifierName[];
+extern const char kPasswordFormClientsideClassifierDescription[];
+
+extern const char kPasswordRemovalFromDeleteBrowsingDataName[];
+extern const char kPasswordRemovalFromDeleteBrowsingDataDescription[];
+
+extern const char kPasswordReuseDetectionName[];
+extern const char kPasswordReuseDetectionDescription[];
+
+extern const char kPasswordSharingName[];
+extern const char kPasswordSharingDescription[];
+
+extern const char kPersistTabContextName[];
+extern const char kPersistTabContextDescription[];
+
+extern const char kPersistentDefaultBrowserPromoName[];
+extern const char kPersistentDefaultBrowserPromoDescription[];
+
+extern const char kPhoneNumberName[];
+extern const char kPhoneNumberDescription[];
+
+extern const char kPriceTrackingPromoName[];
+extern const char kPriceTrackingPromoDescription[];
+
+extern const char kProactiveSuggestionsFrameworkName[];
+extern const char kProactiveSuggestionsFrameworkDescription[];
+
+extern const char kProactiveSuggestionsFrameworkPopupBlockerName[];
+extern const char kProactiveSuggestionsFrameworkPopupBlockerDescription[];
+
+extern const char kProvisionalNotificationAlertName[];
+extern const char kProvisionalNotificationAlertDescription[];
+
+extern const char kRcapsDynamicProfileCountryName[];
+extern const char kRcapsDynamicProfileCountryDescription[];
+
+extern const char kReaderModeOmniboxEntrypointInUSName[];
+extern const char kReaderModeOmniboxEntrypointInUSDescription[];
+
+extern const char kReaderModeOptimizationGuideEligibilityName[];
+extern const char kReaderModeOptimizationGuideEligibilityDescription[];
+
+extern const char kReaderModeReadabilityDistillerName[];
+extern const char kReaderModeReadabilityDistillerDescription[];
+
+extern const char kReaderModeReadabilityHeuristicName[];
+extern const char kReaderModeReadabilityHeuristicDescription[];
+
+extern const char kReaderModeSupportNewFontsName[];
+extern const char kReaderModeSupportNewFontsDescription[];
+
+extern const char kReaderModeTranslationWithInfobarName[];
+extern const char kReaderModeTranslationWithInfobarDescription[];
+
+extern const char kReaderModeUSEnabledName[];
+extern const char kReaderModeUSEnabledDescription[];
+
+extern const char kRefactorToolbarsSizeName[];
+extern const char kRefactorToolbarsSizeDescription[];
+
+extern const char kRemoveExcessNTPsExperimentName[];
+extern const char kRemoveExcessNTPsExperimentDescription[];
+
+extern const char kSafeBrowsingAvailableName[];
+extern const char kSafeBrowsingAvailableDescription[];
+
+extern const char kSafeBrowsingLocalListsUseSBv5Name[];
+extern const char kSafeBrowsingLocalListsUseSBv5Description[];
+
+extern const char kSafeBrowsingRealTimeLookupName[];
+extern const char kSafeBrowsingRealTimeLookupDescription[];
+
+extern const char kSafeBrowsingTrustedURLName[];
+extern const char kSafeBrowsingTrustedURLDescription[];
+
+extern const char kSegmentationPlatformEphemeralCardRankerName[];
+extern const char kSegmentationPlatformEphemeralCardRankerDescription[];
+
+extern const char kSegmentationPlatformIosModuleRankerCachingName[];
+extern const char kSegmentationPlatformIosModuleRankerCachingDescription[];
+
+extern const char kSegmentationPlatformIosModuleRankerName[];
+extern const char kSegmentationPlatformIosModuleRankerDescription[];
+
+extern const char kSegmentationPlatformIosModuleRankerSplitBySurfaceName[];
+extern const char
+    kSegmentationPlatformIosModuleRankerSplitBySurfaceDescription[];
+
+extern const char kSendTabToSelfIOSPushNotificationsName[];
+extern const char kSendTabToSelfIOSPushNotificationsDescription[];
+
+extern const char kSharedHighlightingIOSName[];
+extern const char kSharedHighlightingIOSDescription[];
+
+extern const char kShopCardImpressionLimitsName[];
+extern const char kShopCardImpressionLimitsDescription[];
+
+extern const char kShopCardName[];
+extern const char kShopCardDescription[];
+
+extern const char kShowAutofillTypePredictionsName[];
+extern const char kShowAutofillTypePredictionsDescription[];
+
+extern const char kShowTabGroupInGridOnStartName[];
+extern const char kShowTabGroupInGridOnStartDescription[];
+
+extern const char kSkipDefaultBrowserPromoInFirstRunName[];
+extern const char kSkipDefaultBrowserPromoInFirstRunDescription[];
+
+extern const char kSmartTabGroupingName[];
+extern const char kSmartTabGroupingDescription[];
+
+extern const char kSpotlightNeverRetainIndexName[];
+extern const char kSpotlightNeverRetainIndexDescription[];
+
+extern const char kStrokesAPIEnabledName[];
+extern const char kStrokesAPIEnabledDescription[];
+
+extern const char kSupervisedUserBlockInterstitialV3Name[];
+extern const char kSupervisedUserBlockInterstitialV3Description[];
+
+extern const char kSyncAutofillWalletCredentialDataName[];
+extern const char kSyncAutofillWalletCredentialDataDescription[];
+
+extern const char kSyncSandboxName[];
+extern const char kSyncSandboxDescription[];
+
+extern const char kSyncTrustedVaultInfobarMessageImprovementsName[];
+extern const char kSyncTrustedVaultInfobarMessageImprovementsDescription[];
+
+extern const char kTabGridDragAndDropName[];
+extern const char kTabGridDragAndDropDescription[];
+
+extern const char kTabGridNewTransitionsName[];
+extern const char kTabGridNewTransitionsDescription[];
+
+extern const char kTabGroupColorOnSurfaceName[];
+extern const char kTabGroupColorOnSurfaceDescription[];
+
+extern const char kTabGroupInOverflowMenuName[];
+extern const char kTabGroupInOverflowMenuDescription[];
+
+extern const char kTabGroupInTabIconContextMenuName[];
+extern const char kTabGroupInTabIconContextMenuDescription[];
+
+extern const char kTabGroupIndicatorName[];
+extern const char kTabGroupIndicatorDescription[];
+
+extern const char kTabGroupSyncName[];
+extern const char kTabGroupSyncDescription[];
+
+extern const char kTabRecallNewTabGroupButtonName[];
+extern const char kTabRecallNewTabGroupButtonDescription[];
+
+extern const char kTabResumptionImagesName[];
+extern const char kTabResumptionImagesDescription[];
+
+extern const char kTabResumptionName[];
+extern const char kTabResumptionDescription[];
+
+extern const char kTabSwitcherOverflowMenuName[];
+extern const char kTabSwitcherOverflowMenuDescription[];
+
+extern const char kTaiyakiName[];
+extern const char kTaiyakiDescription[];
+
+extern const char kUpdatedFRESequenceName[];
+extern const char kUpdatedFRESequenceDescription[];
+
+extern const char kUseDefaultAppsDestinationForPromosName[];
+extern const char kUseDefaultAppsDestinationForPromosDescription[];
+
+extern const char kUseFeedEligibilityServiceName[];
+extern const char kUseFeedEligibilityServiceDescription[];
+
+extern const char kVariationsSeedCorpusName[];
+extern const char kVariationsSeedCorpusDescription[];
+
+extern const char kViewCertificateInformationName[];
+extern const char kViewCertificateInformationDescription[];
+
 extern const char kWaitThresholdMillisecondsForCapabilitiesApiName[];
 extern const char kWaitThresholdMillisecondsForCapabilitiesApiDescription[];
 
-// Title and description for the flag to control if Google Payments API calls
-// should use the sandbox servers.
 extern const char kWalletServiceUseSandboxName[];
 extern const char kWalletServiceUseSandboxDescription[];
 
-// Title and description for the flag to tie the default text zoom level to
-// the dynamic type setting.
-extern const char kWebPageDefaultZoomFromDynamicTypeName[];
-extern const char kWebPageDefaultZoomFromDynamicTypeDescription[];
-
-// Title and description for the flag to enable a different method of zooming
-// web pages.
 extern const char kWebPageAlternativeTextZoomName[];
 extern const char kWebPageAlternativeTextZoomDescription[];
 
-// Title and description for the flag to (re)-enable text zoom on iPad.
+extern const char kWebPageDefaultZoomFromDynamicTypeName[];
+extern const char kWebPageDefaultZoomFromDynamicTypeDescription[];
+
+extern const char kWebPageReportedImagesSheetName[];
+extern const char kWebPageReportedImagesSheetDescription[];
+
 extern const char kWebPageTextZoomIPadName[];
 extern const char kWebPageTextZoomIPadDescription[];
 
-// Title and description for the flag to enable What's New.
-extern const char kWhatsNewIOSName[];
-extern const char kWhatsNewIOSDescription[];
+extern const char kWelcomeBackName[];
+extern const char kWelcomeBackDescription[];
 
-// Please add names and descriptions above in alphabetical order.
+extern const char kYoutubeIncognitoName[];
+extern const char kYoutubeIncognitoDescription[];
+
+extern const char kZeroStateSuggestionsName[];
+extern const char kZeroStateSuggestionsDescription[];
 
 }  // namespace flag_descriptions
 

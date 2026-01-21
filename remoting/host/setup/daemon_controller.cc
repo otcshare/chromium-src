@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/task/single_thread_task_runner.h"
@@ -118,7 +118,7 @@ DaemonController::~DaemonController() {
 void DaemonController::DoGetConfig(GetConfigCallback done) {
   DCHECK(delegate_task_runner_->BelongsToCurrentThread());
 
-  absl::optional<base::Value::Dict> config = delegate_->GetConfig();
+  std::optional<base::Value::Dict> config = delegate_->GetConfig();
   caller_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(done), std::move(config)));
 }
@@ -171,7 +171,7 @@ void DaemonController::InvokeCompletionCallbackAndScheduleNext(
 
 void DaemonController::InvokeConfigCallbackAndScheduleNext(
     GetConfigCallback done,
-    absl::optional<base::Value::Dict> config) {
+    std::optional<base::Value::Dict> config) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   std::move(done).Run(std::move(config));
@@ -196,8 +196,9 @@ void DaemonController::OnServicingDone() {
 
 void DaemonController::ServiceOrQueueRequest(base::OnceClosure request) {
   pending_requests_.push(std::move(request));
-  if (!servicing_request_)
+  if (!servicing_request_) {
     ServiceNextRequest();
+  }
 }
 
 void DaemonController::ServiceNextRequest() {

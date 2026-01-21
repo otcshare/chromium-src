@@ -4,9 +4,10 @@
 
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_uma_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -31,12 +32,12 @@ constexpr net::NetworkTrafficAnnotationTag
       semantics {
           sender: "Web App Origin Association Fetcher"
           description:
-            "PWAs can specify URL Handlers in the Manifest. To verify the "
+            "PWAs can specify Scope Extensions in the Manifest. To verify the "
             "handlers, we download the corresponding web app origin "
             "association files."
           trigger:
-            "A PWA that has URL Handlers declared in the Manifest is "
-            "installed, updated, or when DevTools displays URL Handler "
+            "A PWA that has Scope Extensions declared in the Manifest is "
+            "installed, updated, or when DevTools displays Scope Extensions "
             "information to users."
           data:
             "Nothing."
@@ -88,7 +89,7 @@ bool ShouldFetchAssociationFile(const GURL& resource_url) {
 
   // Host cannot be a TLD or invalid.
   if (registry_length == 0 || registry_length == std::string::npos ||
-      registry_length >= resource_url.host().length()) {
+      registry_length >= resource_url.GetHost().length()) {
     return false;
   }
 
@@ -110,17 +111,16 @@ void WebAppOriginAssociationFetcher::SetRetryOptionsForTest(
 }
 
 void WebAppOriginAssociationFetcher::FetchWebAppOriginAssociationFile(
-    const apps::UrlHandlerInfo& url_handler,
+    const url::Origin& origin,
     scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     FetchFileCallback callback) {
-  const GURL resource_url =
-      url_handler.origin.GetURL().Resolve(association_file_name);
+  const GURL resource_url = origin.GetURL().Resolve(association_file_name);
   if (!ShouldFetchAssociationFile(resource_url)) {
     // Do not proceed if |resource_url| is not valid.
     webapps::WebAppOriginAssociationMetrics::RecordFetchResult(
         webapps::WebAppOriginAssociationMetrics::FetchResult::
             kFetchFailedInvalidUrl);
-    std::move(callback).Run(nullptr);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
@@ -142,7 +142,7 @@ void WebAppOriginAssociationFetcher::SendRequest(
 
 void WebAppOriginAssociationFetcher::OnResponse(
     FetchFileCallback callback,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   if (!response_body) {
     webapps::WebAppOriginAssociationMetrics::RecordFetchResult(
         webapps::WebAppOriginAssociationMetrics::FetchResult::

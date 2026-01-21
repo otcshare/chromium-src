@@ -8,11 +8,13 @@ from page_sets.login_helpers import google_login
 from page_sets.login_helpers import linkedin_login
 from page_sets.rendering import rendering_story
 from page_sets.rendering import story_tags
+from page_sets.system_health import platforms
 
 
 class TopRealWorldDesktopPage(rendering_story.RenderingStory):
   ABSTRACT_STORY = True
   TAGS = [story_tags.GPU_RASTERIZATION, story_tags.TOP_REAL_WORLD_DESKTOP]
+  SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
 
   def __init__(self,
                page_set,
@@ -331,11 +333,12 @@ class Gmail2018SmoothPage(TopRealWorldDesktopPage):
   BASE_NAME = 'gmail'
   YEAR = '2018'
   URL = 'https://mail.google.com/mail/'
+  EXTRA_BROWSER_ARGUMENTS = ['--allow-browser-signin=false']
 
   def RunNavigateSteps(self, action_runner):
     if self.wpr_mode != wpr_modes.WPR_REPLAY:
-      if self.wpr_mode == wpr_modes.WPR_OFF:
-        google_login.ManualLoginGoogleAccount(action_runner)
+      if self.wpr_mode in [wpr_modes.WPR_OFF, wpr_modes.WPR_RECORD]:
+        google_login.LoginWithLoginUrl(action_runner, self.URL)
       else:
         google_login.NewLoginGoogleAccount(action_runner, 'googletest')
 
@@ -362,11 +365,12 @@ class GoogleCalendar2018SmoothPage(TopRealWorldDesktopPage):
   BASE_NAME='google_calendar'
   YEAR = '2018'
   URL='https://www.google.com/calendar/'
+  EXTRA_BROWSER_ARGUMENTS = ['--allow-browser-signin=false']
 
   def RunNavigateSteps(self, action_runner):
     if self.wpr_mode != wpr_modes.WPR_REPLAY:
-      if self.wpr_mode == wpr_modes.WPR_OFF:
-        google_login.ManualLoginGoogleAccount(action_runner)
+      if self.wpr_mode in [wpr_modes.WPR_OFF, wpr_modes.WPR_RECORD]:
+        google_login.LoginWithLoginUrl(action_runner, self.URL)
       else:
         google_login.NewLoginGoogleAccount(action_runner, 'googletest')
     super(GoogleCalendar2018SmoothPage, self).RunNavigateSteps(action_runner)

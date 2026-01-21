@@ -59,8 +59,7 @@ class MIDI_EXPORT MidiManagerClient {
   // |length| is the number of bytes in |data|.
   // |timestamp| is the time the data was received, in seconds.
   virtual void ReceiveMidiData(uint32_t port_index,
-                               const uint8_t* data,
-                               size_t length,
+                               base::span<const uint8_t> data,
                                base::TimeTicks timestamp) = 0;
 
   // AccumulateMidiBytesSent() is called to acknowledge when bytes have
@@ -129,6 +128,8 @@ class MIDI_EXPORT MidiManager {
  protected:
   friend class MidiManagerUsb;
 
+  virtual const char* GetBackendName() const;
+
   // Initializes the platform dependent MIDI system. MidiManager class has a
   // default implementation that synchronously calls CompleteInitialization()
   // with mojom::Result::NOT_SUPPORTED. A derived class for a specific platform
@@ -159,8 +160,7 @@ class MIDI_EXPORT MidiManager {
 
   // Dispatches to all clients. Can be called on any thread.
   void ReceiveMidiData(uint32_t port_index,
-                       const uint8_t* data,
-                       size_t length,
+                       base::span<const uint8_t> data,
                        base::TimeTicks time);
 
   // Only for testing.
@@ -187,10 +187,12 @@ class MIDI_EXPORT MidiManager {
   mojom::Result result_ = mojom::Result::NOT_INITIALIZED;
 
   // Keeps track of all clients who are waiting for CompleteStartSession().
-  std::set<MidiManagerClient*> pending_clients_ GUARDED_BY(lock_);
+  std::set<raw_ptr<MidiManagerClient, SetExperimental>> pending_clients_
+      GUARDED_BY(lock_);
 
   // Keeps track of all clients who wish to receive MIDI data.
-  std::set<MidiManagerClient*> clients_ GUARDED_BY(lock_);
+  std::set<raw_ptr<MidiManagerClient, SetExperimental>> clients_
+      GUARDED_BY(lock_);
 
   // Keeps a SingleThreadTaskRunner of the thread that calls StartSession in
   // order to invoke CompleteStartSession() on the thread. This is touched only

@@ -7,10 +7,12 @@
 
 #include <fuchsia/web/cpp/fidl.h>
 #include <lib/fidl/cpp/binding.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "build/chromecast_buildflags.h"
 #include "content/public/browser/browser_main_parts.h"
 #include "fuchsia_web/webengine/browser/context_impl.h"
@@ -20,10 +22,11 @@
 
 namespace base {
 class FuchsiaIntlProfileWatcher;
+class ProcessLifecycle;
 }
 
-namespace display {
-class ScopedNativeScreen;
+namespace aura {
+class ScreenOzone;
 }
 
 namespace content {
@@ -40,7 +43,11 @@ namespace media {
 class FuchsiaCdmManager;
 }
 
-namespace sys {
+namespace network {
+class NetworkConnectionTracker;
+}
+
+namespace inspect {
 class ComponentInspector;
 }
 
@@ -53,11 +60,15 @@ class FrameHostImpl final : public fuchsia::web::FrameHost {
   explicit FrameHostImpl(
       inspect::Node inspect_node,
       WebEngineDevToolsController* devtools_controller,
-      network::NetworkQualityTracker* network_quality_tracker)
-      : context_(
-            WebEngineBrowserContext::CreateIncognito(network_quality_tracker),
-            std::move(inspect_node),
-            devtools_controller) {}
+      network::NetworkQualityTracker* network_quality_tracker,
+      os_crypt_async::OSCryptAsync* os_crypt_async,
+      network::NetworkConnectionTracker* network_connection_tracker)
+      : context_(WebEngineBrowserContext::CreateIncognito(
+                     network_quality_tracker,
+                     os_crypt_async,
+                     network_connection_tracker),
+                 std::move(inspect_node),
+                 devtools_controller) {}
   ~FrameHostImpl() override = default;
 
   FrameHostImpl(const FrameHostImpl&) = delete;
@@ -91,7 +102,6 @@ class WEB_ENGINE_EXPORT WebEngineBrowserMainParts
   }
 
   // content::BrowserMainParts overrides.
-  int PreEarlyInitialization() override;
   void PostEarlyInitialization() override;
   int PreMainMessageLoopRun() override;
   void WillRunMainMessageLoop(
@@ -121,12 +131,12 @@ class WEB_ENGINE_EXPORT WebEngineBrowserMainParts
   // Quits the main loop and gracefully shuts down the instance.
   void BeginGracefulShutdown();
 
-  content::ContentBrowserClient* const browser_client_;
+  const raw_ptr<content::ContentBrowserClient> browser_client_;
 
-  std::unique_ptr<display::ScopedNativeScreen> screen_;
+  std::unique_ptr<aura::ScreenOzone> screen_;
 
   // Used to publish diagnostics including the active Contexts and FrameHosts.
-  std::unique_ptr<sys::ComponentInspector> component_inspector_;
+  std::unique_ptr<inspect::ComponentInspector> component_inspector_;
   std::unique_ptr<WebEngineMemoryInspector> memory_inspector_;
 
   // Browsing contexts for the connected clients. There is at most one
@@ -154,6 +164,14 @@ class WEB_ENGINE_EXPORT WebEngineBrowserMainParts
   std::unique_ptr<
       network::NetworkQualityTracker::RTTAndThroughputEstimatesObserver>
       network_quality_observer_;
+
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
+
+  raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
+
+  // Allows the instance to respond gracefully to explicit teardown via the
+  // component framework.
+  std::unique_ptr<base::ProcessLifecycle> lifecycle_;
 
   base::OnceClosure quit_closure_;
 };

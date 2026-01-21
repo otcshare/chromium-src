@@ -5,22 +5,20 @@
 #ifndef CHROMECAST_BROWSER_CAST_WEB_CONTENTS_BROWSERTEST_H_
 #define CHROMECAST_BROWSER_CAST_WEB_CONTENTS_BROWSERTEST_H_
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
-#include "base/files/file_util.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/browser/cast_browser_context.h"
@@ -28,6 +26,7 @@
 #include "chromecast/browser/cast_web_contents_impl.h"
 #include "chromecast/browser/cast_web_contents_observer.h"
 #include "chromecast/browser/mojom/cast_web_service.mojom.h"
+#include "chromecast/browser/test/cast_browser_test.h"
 #include "chromecast/browser/test_interfaces.test-mojom.h"
 #include "chromecast/mojo/interface_bundle.h"
 #include "content/public/browser/browser_thread.h"
@@ -36,7 +35,6 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -60,7 +58,6 @@ using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Expectation;
 using ::testing::InSequence;
-using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
 using ::testing::NiceMock;
@@ -84,7 +81,7 @@ base::FilePath GetTestDataPath() {
 
 base::FilePath GetTestDataFilePath(const std::string& name) {
   base::FilePath file_path;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &file_path));
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &file_path));
   return file_path.Append(GetTestDataPath()).AppendASCII(name);
 }
 
@@ -175,8 +172,8 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
   ~TestMessageReceiver() override = default;
 
   void WaitForNextIncomingMessage(
-      base::OnceCallback<
-          void(std::string, absl::optional<blink::WebMessagePort>)> callback) {
+      base::OnceCallback<void(std::string,
+                              std::optional<blink::WebMessagePort>)> callback) {
     DCHECK(message_received_callback_.is_null())
         << "Only one waiting event is allowed.";
     message_received_callback_ = std::move(callback);
@@ -194,12 +191,12 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
       return false;
     }
 
-    absl::optional<blink::WebMessagePort> incoming_port = absl::nullopt;
+    std::optional<blink::WebMessagePort> incoming_port = std::nullopt;
     // Only one MessagePort should be sent to here.
     if (!message.ports.empty()) {
       DCHECK(message.ports.size() == 1)
           << "Only one control port can be provided";
-      incoming_port = absl::make_optional<blink::WebMessagePort>(
+      incoming_port = std::make_optional<blink::WebMessagePort>(
           std::move(message.ports[0]));
     }
 
@@ -211,12 +208,13 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
   }
 
   void OnPipeError() override {
-    if (on_pipe_error_callback_)
+    if (on_pipe_error_callback_) {
       std::move(on_pipe_error_callback_).Run();
+    }
   }
 
   base::OnceCallback<void(std::string,
-                          absl::optional<blink::WebMessagePort> incoming_port)>
+                          std::optional<blink::WebMessagePort> incoming_port)>
       message_received_callback_;
 
   base::OnceCallback<void()> on_pipe_error_callback_;
@@ -227,25 +225,14 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
 // =============================================================================
 // Test class
 // =============================================================================
-class CastWebContentsBrowserTest : public content::BrowserTestBase,
+class CastWebContentsBrowserTest : public shell::CastBrowserTest,
                                    public content::WebContentsObserver {
- public:
-  CastWebContentsBrowserTest(const CastWebContentsBrowserTest&) = delete;
-  CastWebContentsBrowserTest& operator=(const CastWebContentsBrowserTest&) =
-      delete;
-
  protected:
-  CastWebContentsBrowserTest() = default;
-  ~CastWebContentsBrowserTest() override = default;
-
-  void SetUp() final {
-    SetUpCommandLine(base::CommandLine::ForCurrentProcess());
-    BrowserTestBase::SetUp();
-  }
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitchASCII(switches::kTestType, "browser");
+    CastBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures, "MojoJS");
   }
+
   void PreRunTestOnMainThread() override {
     // Pump startup related events.
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -269,6 +256,7 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
 
     run_loop_ = std::make_unique<base::RunLoop>();
   }
+
   void PostRunTestOnMainThread() override {
     cast_web_contents_.reset();
     web_contents_.reset();
@@ -302,8 +290,9 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
 };
 
 MATCHER_P2(CheckPageState, cwc_ptr, expected_state, "") {
-  if (arg != cwc_ptr)
+  if (arg != cwc_ptr) {
     return false;
+  }
   return arg->page_state() == expected_state;
 }
 
@@ -471,10 +460,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
       "iframe.src = 'about:blank';";
   ASSERT_TRUE(ExecJs(web_contents_.get(), script));
 
-  ASSERT_EQ(2, (int)render_frames_.size());
+  ASSERT_EQ(2u, render_frames_.size());
   auto it =
-      base::ranges::find(render_frames_, web_contents_->GetPrimaryMainFrame(),
-                         &content::RenderFrameHost::GetParent);
+      std::ranges::find(render_frames_, web_contents_->GetPrimaryMainFrame(),
+                        &content::RenderFrameHost::GetParent);
   ASSERT_NE(render_frames_.end(), it);
   content::RenderFrameHost* sub_frame = *it;
   ASSERT_NE(nullptr, sub_frame);
@@ -539,8 +528,9 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailed) {
   content::URLLoaderInterceptor url_interceptor(base::BindRepeating(
       [](const GURL& url,
          content::URLLoaderInterceptor::RequestParams* params) {
-        if (params->url_request.url != url)
+        if (params->url_request.url != url) {
           return false;
+        }
         network::URLLoaderCompletionStatus status;
         status.error_code = net::ERR_ADDRESS_UNREACHABLE;
         params->client->OnComplete(status);
@@ -809,7 +799,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("got_port", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -830,7 +820,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("ack ping", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -876,7 +866,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("got_port", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -983,7 +973,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   EXPECT_CALL(mock_api_bindings, GetAll(_))
       .Times(1)
       .WillOnce(
-          WithArgs<0>(Invoke([](MockApiBindings::GetAllCallback callback) {
+          WithArgs<0>([](MockApiBindings::GetAllCallback callback) {
             std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
             bindings_vector.emplace_back(
                 chromecast::mojom::ApiBinding::New("let res = 0;"));
@@ -994,7 +984,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
             bindings_vector.emplace_back(
                 chromecast::mojom::ApiBinding::New("res += 3;"));
             std::move(callback).Run(std::move(bindings_vector));
-          })));
+          }));
 
   // Binds mocked |mojom::ApiBindings|.
   cast_web_contents_->ConnectToBindingsService(
@@ -1028,11 +1018,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   MockApiBindings mock_api_bindings;
   EXPECT_CALL(mock_api_bindings, GetAll(_))
       .Times(1)
-      .WillOnce(
-          WithArgs<0>(Invoke([](MockApiBindings::GetAllCallback callback) {
-            std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
-            std::move(callback).Run(std::move(bindings_vector));
-          })));
+      .WillOnce(WithArgs<0>([](MockApiBindings::GetAllCallback callback) {
+        std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
+        std::move(callback).Run(std::move(bindings_vector));
+      }));
 
   // Binds mocked |mojom::ApiBindings|.
   cast_web_contents_->ConnectToBindingsService(
@@ -1102,11 +1091,13 @@ class TestInterfaceProvider : public mojom::TestAdder,
 
  private:
   void OnRequestHandled() {
-    if (num_requests_to_wait_for_ == 0)
+    if (num_requests_to_wait_for_ == 0) {
       return;
+    }
     DCHECK(wait_callback_);
-    if (--num_requests_to_wait_for_ == 0)
+    if (--num_requests_to_wait_for_ == 0) {
       std::move(wait_callback_).Run();
+    }
   }
 
   mojo::ReceiverSet<mojom::TestAdder> adders_;

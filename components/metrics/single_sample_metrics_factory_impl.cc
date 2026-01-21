@@ -26,7 +26,7 @@ class SingleSampleMetricImpl : public base::SingleSampleMetric {
     DCHECK(thread_checker_.CalledOnValidThread());
   }
 
-  void SetSample(base::HistogramBase::Sample sample) override {
+  void SetSample(base::HistogramBase::Sample32 sample) override {
     DCHECK(thread_checker_.CalledOnValidThread());
     metric_->SetSample(sample);
   }
@@ -36,34 +36,36 @@ class SingleSampleMetricImpl : public base::SingleSampleMetric {
   mojo::Remote<mojom::SingleSampleMetric> metric_;
 };
 
+constinit thread_local mojo::Remote<mojom::SingleSampleMetricsProvider>*
+    provider = nullptr;
+
 }  // namespace
 
 SingleSampleMetricsFactoryImpl::SingleSampleMetricsFactoryImpl(
     CreateProviderCB create_provider_cb)
     : create_provider_cb_(std::move(create_provider_cb)) {}
 
-SingleSampleMetricsFactoryImpl::~SingleSampleMetricsFactoryImpl() {}
+SingleSampleMetricsFactoryImpl::~SingleSampleMetricsFactoryImpl() = default;
 
 std::unique_ptr<base::SingleSampleMetric>
 SingleSampleMetricsFactoryImpl::CreateCustomCountsMetric(
     const std::string& histogram_name,
-    base::HistogramBase::Sample min,
-    base::HistogramBase::Sample max,
+    base::HistogramBase::Sample32 min,
+    base::HistogramBase::Sample32 max,
     uint32_t bucket_count) {
   return CreateMetric(histogram_name, min, max, bucket_count,
                       base::HistogramBase::kUmaTargetedHistogramFlag);
 }
 
 void SingleSampleMetricsFactoryImpl::DestroyProviderForTesting() {
-  if (auto* provider = provider_tls_.Get())
-    delete provider;
-  provider_tls_.Set(nullptr);
+  delete provider;
+  provider = nullptr;
 }
 
 std::unique_ptr<base::SingleSampleMetric>
 SingleSampleMetricsFactoryImpl::CreateMetric(const std::string& histogram_name,
-                                             base::HistogramBase::Sample min,
-                                             base::HistogramBase::Sample max,
+                                             base::HistogramBase::Sample32 min,
+                                             base::HistogramBase::Sample32 max,
                                              uint32_t bucket_count,
                                              int32_t flags) {
   mojo::PendingRemote<mojom::SingleSampleMetric> metric;
@@ -77,18 +79,15 @@ mojom::SingleSampleMetricsProvider*
 SingleSampleMetricsFactoryImpl::GetProvider() {
   // Check the current TLS slot to see if we have created a provider already for
   // this thread.
-  if (auto* provider = provider_tls_.Get())
-    return provider->get();
+  if (!provider) {
+    // If not, create a new one which will persist until process shutdown and
+    // put it in the TLS slot for the current thread.
+    provider = new mojo::Remote<mojom::SingleSampleMetricsProvider>();
 
-  // If not, create a new one which will persist until process shutdown and put
-  // it in the TLS slot for the current thread.
-  mojo::Remote<mojom::SingleSampleMetricsProvider>* provider =
-      new mojo::Remote<mojom::SingleSampleMetricsProvider>();
-  provider_tls_.Set(provider);
-
-  // Start the provider connection and return it; it won't be fully connected
-  // until later, but mojo will buffer all calls prior to completion.
-  create_provider_cb_.Run(provider->BindNewPipeAndPassReceiver());
+    // Start the provider connection and return it; it won't be fully connected
+    // until later, but mojo will buffer all calls prior to completion.
+    create_provider_cb_.Run(provider->BindNewPipeAndPassReceiver());
+  }
   return provider->get();
 }
 

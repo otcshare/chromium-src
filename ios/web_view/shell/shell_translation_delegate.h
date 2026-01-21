@@ -10,7 +10,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface ShellTranslationDelegate : NSObject<CWVTranslationControllerDelegate>
+@interface ShellTranslationDelegate
+    : NSObject <CWVTranslationControllerDelegate>
 @end
 
 NS_ASSUME_NONNULL_END

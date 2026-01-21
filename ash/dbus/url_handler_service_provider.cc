@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "ash/public/cpp/new_window_delegate.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -50,8 +50,7 @@ void UrlHandlerServiceProvider::Start(
 }
 
 bool UrlHandlerServiceProvider::UrlAllowed(const GURL& gurl) const {
-  return gurl.is_valid() &&
-         allowed_url_schemes_.find(gurl.scheme()) != allowed_url_schemes_.end();
+  return gurl.is_valid() && allowed_url_schemes_.contains(gurl.GetScheme());
 }
 
 void UrlHandlerServiceProvider::OpenUrl(
@@ -80,7 +79,7 @@ void UrlHandlerServiceProvider::OpenUrl(
 
   VLOG(1) << "Opening url now";
 
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       gurl, NewWindowDelegate::OpenUrlFrom::kUnspecified,
       NewWindowDelegate::Disposition::kNewForegroundTab);
   std::move(response_sender).Run(dbus::Response::FromMethodCall(method_call));

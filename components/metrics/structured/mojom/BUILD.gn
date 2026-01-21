@@ -9,12 +9,15 @@ mojom("mojom") {
 
   public_deps = [ "//mojo/public/mojom/base" ]
 
+  webui_module_path = "/"
+
   cpp_typemaps = [
     {
       types = [
         {
           mojom = "metrics.structured.mojom.Event"
           cpp = "::metrics::structured::Event"
+          move_only = true
         },
       ]
       traits_headers = [ "event_mojom_traits.h" ]

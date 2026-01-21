@@ -2,20 +2,30 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# Don't let any targets in this file be used by default, unless they override
+# their visibility
+visibility = [ ":*" ]
+import("//third_party/libwebp/visibility.gni")
+
 import("//build/config/arm.gni")
 import("//build/config/sanitizers/sanitizers.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 
-config("libwebp_config") {
+# Public configuration exported to users of the libwebp targets.
+config("libwebp_public_config") {
+  visibility += allowed_visibility
+
   include_dirs = [ "./src/src" ]
   defines = [ "WEBP_EXTERN=extern" ]
 }
 
-config("libwebp_config_internal") {
+# Private configuration used in building libwebp.
+config("libwebp_config") {
   include_dirs = [ "./src" ]
   defines = [
     "WEBP_NEAR_LOSSLESS=0",
     "WEBP_DISABLE_STATS",
+    "WEBP_USE_THREAD",
   ]
   if (!is_chromeos) {
     defines += [ "WEBP_REDUCE_SIZE" ]
@@ -25,16 +35,17 @@ config("libwebp_config_internal") {
   }
 }
 
-set_opt_level = !is_debug && (is_posix || is_fuchsia) &&
+set_opt_level = !is_debug && (is_posix || is_fuchsia || is_win) &&
                 (current_cpu == "arm" || current_cpu == "arm64")
 
 # webp's dsp code can be built for all configurations. Skipping it when both
 # arm_use_neon and arm_optionally_use_neon are false will result in link errors
 # for its dsp init functions.
-use_dsp_neon =
-    current_cpu == "arm64" || (current_cpu == "arm" && arm_version >= 7)
+use_dsp_neon = current_cpu == "arm64" || current_cpu == "arm"
 
 source_set("libwebp_webp") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/webp/decode.h",
     "src/src/webp/demux.h",
@@ -47,6 +58,8 @@ source_set("libwebp_webp") {
 }
 
 static_library("libwebp_dec") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/dec/alpha_dec.c",
     "src/src/dec/alphai_dec.h",
@@ -66,7 +79,7 @@ static_library("libwebp_dec") {
     "src/src/dec/webpi_dec.h",
   ]
 
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -79,14 +92,16 @@ static_library("libwebp_dec") {
     ":libwebp_utils",
     ":libwebp_webp",
   ]
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
   allow_circular_includes_from = [ ":libwebp_dsp_headers" ]
 }
 
 static_library("libwebp_demux") {
+  visibility += allowed_visibility
+
   sources = [ "src/src/demux/demux.c" ]
-  all_dependent_configs = [ ":libwebp_config" ]
-  configs += [ ":libwebp_config_internal" ]
+  public_configs = [ ":libwebp_public_config" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   deps = [
@@ -96,6 +111,8 @@ static_library("libwebp_demux") {
 }
 
 static_library("libwebp_mux") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/mux/anim_encode.c",
     "src/src/mux/animi.h",
@@ -104,8 +121,8 @@ static_library("libwebp_mux") {
     "src/src/mux/muxinternal.c",
     "src/src/mux/muxread.c",
   ]
-  all_dependent_configs = [ ":libwebp_config" ]
-  configs += [ ":libwebp_config_internal" ]
+  public_configs = [ ":libwebp_public_config" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   deps = [
@@ -116,6 +133,8 @@ static_library("libwebp_mux") {
 }
 
 source_set("libwebp_dsp_headers") {
+  visibility += allowed_visibility
+
   public = [
     "src/src/dsp/cpu.h",
     "src/src/dsp/dsp.h",
@@ -130,6 +149,8 @@ source_set("libwebp_dsp_headers") {
 }
 
 static_library("libwebp_dsp") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/dsp/alpha_processing.c",
     "src/src/dsp/alpha_processing_mips_dsp_r2.c",
@@ -168,7 +189,7 @@ static_library("libwebp_dsp") {
     "src/src/dsp/yuv_mips32.c",
     "src/src/dsp/yuv_mips_dsp_r2.c",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -176,23 +197,28 @@ static_library("libwebp_dsp") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
   deps = [
     ":libwebp_dec",
+    ":libwebp_dsp_avx2",
     ":libwebp_dsp_sse2",
     ":libwebp_dsp_sse41",
     ":libwebp_enc",
     ":libwebp_utils",
     ":libwebp_webp",
   ]
+  if (use_dsp_neon) {
+    deps += [ ":libwebp_dsp_neon" ]
+  }
   public_deps = [ ":libwebp_dsp_headers" ]
   if (is_android) {
-    deps += [ "//third_party/android_ndk:cpu_features" ]
+    deps += [ "//third_party/cpu_features:ndk_compat" ]
   }
   if (current_cpu == "x86" || current_cpu == "x64") {
     defines = [
       "WEBP_HAVE_SSE2",
       "WEBP_HAVE_SSE41",
+      "WEBP_HAVE_AVX2",
     ]
   }
   allow_circular_includes_from = [
@@ -200,9 +226,43 @@ static_library("libwebp_dsp") {
     ":libwebp_dsp_sse41",
     ":libwebp_utils",
   ]
+  if (use_dsp_neon) {
+    allow_circular_includes_from += [ ":libwebp_dsp_neon" ]
+  }
+}
+
+static_library("libwebp_dsp_avx2") {
+  visibility += allowed_visibility
+
+  sources = [
+    "src/src/dsp/lossless_avx2.c",
+    "src/src/dsp/lossless_enc_avx2.c",
+  ]
+  configs += [ ":libwebp_config" ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+  if (set_opt_level) {
+    configs -= [ "//build/config/compiler:default_optimization" ]
+    configs += [ "//build/config/compiler:optimize_max" ]
+  }
+
+  public_configs = [ ":libwebp_public_config" ]
+  if (!is_msan) {
+    if ((current_cpu == "x86" || current_cpu == "x64") &&
+        (!is_win || is_clang)) {
+      cflags = [ "-mavx2" ]
+    }
+  }
+  deps = [
+    ":libwebp_dsp_headers",
+    ":libwebp_utils",
+    ":libwebp_webp",
+  ]
 }
 
 static_library("libwebp_dsp_sse41") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/dsp/alpha_processing_sse41.c",
     "src/src/dsp/common_sse41.h",
@@ -213,7 +273,7 @@ static_library("libwebp_dsp_sse41") {
     "src/src/dsp/upsampling_sse41.c",
     "src/src/dsp/yuv_sse41.c",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -221,17 +281,22 @@ static_library("libwebp_dsp_sse41") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
   if (!is_msan) {
     if ((current_cpu == "x86" || current_cpu == "x64") &&
         (!is_win || is_clang)) {
       cflags = [ "-msse4.1" ]
     }
   }
-  deps = [ ":libwebp_dsp_sse2" ]
+  deps = [
+    ":libwebp_dsp_sse2",
+    ":libwebp_webp",
+  ]
 }
 
 static_library("libwebp_dsp_sse2") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/dsp/alpha_processing_sse2.c",
     "src/src/dsp/common_sse2.h",
@@ -246,7 +311,7 @@ static_library("libwebp_dsp_sse2") {
     "src/src/dsp/upsampling_sse2.c",
     "src/src/dsp/yuv_sse2.c",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -254,7 +319,7 @@ static_library("libwebp_dsp_sse2") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
   if (!is_msan) {
     if ((current_cpu == "x86" || current_cpu == "x64") &&
         (!is_win || is_clang)) {
@@ -267,6 +332,7 @@ static_library("libwebp_dsp_sse2") {
     ":libwebp_enc",
     ":libwebp_utils",
   ]
+  deps = [ ":libwebp_webp" ]
 }
 
 if (use_dsp_neon) {
@@ -286,30 +352,24 @@ if (use_dsp_neon) {
 
     deps = [
       ":libwebp_dec",
-      ":libwebp_dsp",
+      ":libwebp_dsp_headers",
       ":libwebp_enc",
       ":libwebp_utils",
+      ":libwebp_webp",
     ]
 
-    configs += [ ":libwebp_config_internal" ]
+    configs += [ ":libwebp_config" ]
 
     if (set_opt_level) {
       configs -= [ "//build/config/compiler:default_optimization" ]
       configs += [ "//build/config/compiler:optimize_max" ]
     }
-
-    if (current_cpu == "arm") {
-      # behavior similar to *.c.neon in an Android.mk
-      configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
-      cflags = [ "-mfpu=neon" ]
-    } else if (current_cpu == "arm64" && !is_clang) {
-      # avoid an ICE with gcc-4.9: b/15574841
-      cflags = [ "-frename-registers" ]
-    }
   }
 }  # use_dsp_neon
 
 static_library("libwebp_enc") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/enc/alpha_enc.c",
     "src/src/enc/analysis_enc.c",
@@ -340,7 +400,7 @@ static_library("libwebp_enc") {
     "src/src/enc/vp8li_enc.h",
     "src/src/enc/webp_enc.c",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -348,7 +408,7 @@ static_library("libwebp_enc") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
 
   deps = [
     ":libwebp_dec",
@@ -362,19 +422,37 @@ static_library("libwebp_enc") {
 }
 
 source_set("libwebp_sharpyuv_dsp_headers") {
+  visibility += allowed_visibility
+
   public = [ "src/sharpyuv/sharpyuv_dsp.h" ]
 }
 
+source_set("libwebp_dsp_cpu_c") {
+  visibility += allowed_visibility
+
+  public = [ "src/src/dsp/cpu.c" ]
+}
+
+config("libwebp_sharpyuv_public_config") {
+  visibility += allowed_visibility
+
+  include_dirs = [ "src" ]
+}
+
 static_library("libwebp_sharpyuv") {
+  visibility += allowed_visibility
+
   sources = [
     "src/sharpyuv/sharpyuv.c",
     "src/sharpyuv/sharpyuv.h",
+    "src/sharpyuv/sharpyuv_cpu.c",
+    "src/sharpyuv/sharpyuv_cpu.h",
     "src/sharpyuv/sharpyuv_csp.c",
     "src/sharpyuv/sharpyuv_csp.h",
     "src/sharpyuv/sharpyuv_gamma.c",
     "src/sharpyuv/sharpyuv_gamma.h",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -382,9 +460,13 @@ static_library("libwebp_sharpyuv") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [
+    ":libwebp_public_config",
+    ":libwebp_sharpyuv_public_config",
+  ]
 
   deps = [
+    ":libwebp_dsp_cpu_c",
     ":libwebp_dsp_headers",
     ":libwebp_sharpyuv_dsp",
     ":libwebp_webp",
@@ -392,11 +474,15 @@ static_library("libwebp_sharpyuv") {
 }
 
 static_library("libwebp_sharpyuv_dsp") {
+  visibility += allowed_visibility
+
   sources = [
+    "src/sharpyuv/sharpyuv.h",
+    "src/sharpyuv/sharpyuv_cpu.h",
     "src/sharpyuv/sharpyuv_dsp.c",
     "src/sharpyuv/sharpyuv_dsp.h",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -404,7 +490,7 @@ static_library("libwebp_sharpyuv_dsp") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
 
   deps = [
     ":libwebp_dsp_headers",
@@ -418,6 +504,7 @@ static_library("libwebp_sharpyuv_dsp") {
 
 if (use_dsp_neon) {
   static_library("libwebp_sharpyuv_neon") {
+    visibility += allowed_visibility
     sources = [ "src/sharpyuv/sharpyuv_neon.c" ]
 
     deps = [
@@ -425,7 +512,7 @@ if (use_dsp_neon) {
       ":libwebp_sharpyuv_dsp_headers",
     ]
 
-    configs += [ ":libwebp_config_internal" ]
+    configs += [ ":libwebp_config" ]
 
     if (set_opt_level) {
       configs -= [ "//build/config/compiler:default_optimization" ]
@@ -436,16 +523,15 @@ if (use_dsp_neon) {
       # behavior similar to *.c.neon in an Android.mk
       configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
       cflags = [ "-mfpu=neon" ]
-    } else if (current_cpu == "arm64" && !is_clang) {
-      # avoid an ICE with gcc-4.9: b/15574841
-      cflags = [ "-frename-registers" ]
     }
   }
 }  # use_dsp_neon
 
 static_library("libwebp_sharpyuv_sse2") {
+  visibility += allowed_visibility
+
   sources = [ "src/sharpyuv/sharpyuv_sse2.c" ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -453,7 +539,7 @@ static_library("libwebp_sharpyuv_sse2") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
   if (!is_msan) {
     if ((current_cpu == "x86" || current_cpu == "x64") &&
         (!is_win || is_clang)) {
@@ -464,9 +550,12 @@ static_library("libwebp_sharpyuv_sse2") {
     ":libwebp_dsp_headers",
     ":libwebp_sharpyuv_dsp_headers",
   ]
+  deps = [ ":libwebp_webp" ]
 }
 
 static_library("libwebp_utils") {
+  visibility += allowed_visibility
+
   sources = [
     "src/src/utils/bit_reader_inl_utils.h",
     "src/src/utils/bit_reader_utils.c",
@@ -482,6 +571,8 @@ static_library("libwebp_utils") {
     "src/src/utils/huffman_encode_utils.h",
     "src/src/utils/huffman_utils.c",
     "src/src/utils/huffman_utils.h",
+    "src/src/utils/palette.c",
+    "src/src/utils/palette.h",
     "src/src/utils/quant_levels_dec_utils.c",
     "src/src/utils/quant_levels_dec_utils.h",
     "src/src/utils/quant_levels_utils.c",
@@ -495,7 +586,7 @@ static_library("libwebp_utils") {
     "src/src/utils/utils.c",
     "src/src/utils/utils.h",
   ]
-  configs += [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   if (set_opt_level) {
@@ -503,7 +594,7 @@ static_library("libwebp_utils") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  all_dependent_configs = [ ":libwebp_config" ]
+  public_configs = [ ":libwebp_public_config" ]
 
   deps = [
     ":libwebp_dsp_headers",
@@ -512,6 +603,8 @@ static_library("libwebp_utils") {
 }
 
 group("libwebp") {
+  visibility += allowed_visibility
+
   deps = [
     ":libwebp_dec",
     ":libwebp_demux",
@@ -521,10 +614,7 @@ group("libwebp") {
     ":libwebp_utils",
   ]
   public_deps = [ ":libwebp_webp" ]
-  public_configs = [ ":libwebp_config" ]
-  if (use_dsp_neon) {
-    deps += [ ":libwebp_dsp_neon" ]
-  }
+  public_configs = [ ":libwebp_public_config" ]
 }
 
 ###############################################################################
@@ -547,9 +637,10 @@ if (current_toolchain == host_toolchain) {
       ":imageio_util",
       ":libwebp_webp",
     ]
-    configs += [ ":libwebp_config" ]
-    configs += [ ":libwebp_config_internal" ]
-    visibility = [ ":*" ]
+    configs += [
+      ":libwebp_public_config",
+      ":libwebp_config",
+    ]
   }
 
   source_set("imageio_util") {
@@ -566,9 +657,10 @@ if (current_toolchain == host_toolchain) {
     }
 
     deps = [ ":libwebp_webp" ]
-    configs += [ ":libwebp_config" ]
-    configs += [ ":libwebp_config_internal" ]
-    visibility = [ ":*" ]
+    configs += [
+      ":libwebp_public_config",
+      ":libwebp_config",
+    ]
   }
 
   source_set("imagedec") {
@@ -592,7 +684,7 @@ if (current_toolchain == host_toolchain) {
       "src/imageio/wicdec.h",
     ]
     defines = [ "WEBP_HAVE_PNG" ]
-    configs += [ ":libwebp_config_internal" ]
+    configs += [ ":libwebp_config" ]
     configs -= [ "//build/config/compiler:chromium_code" ]
     configs += [ "//build/config/compiler:no_chromium_code" ]
     if (set_opt_level) {
@@ -600,39 +692,21 @@ if (current_toolchain == host_toolchain) {
       configs += [ "//build/config/compiler:optimize_max" ]
     }
 
+    visibility = []
+    visibility = [ ":cwebp" ]
     deps = [
       ":imageio_util",
       ":libwebp_webp",
       "//third_party/libpng",
       "//third_party/zlib",
     ]
-    configs += [ ":libwebp_config" ]
-    visibility = [ ":*" ]
-  }
-
-  source_set("imageenc") {
-    sources = [
-      "src/examples/unicode.h",
-      "src/imageio/image_enc.c",
-      "src/imageio/image_enc.h",
-    ]
-    configs += [ ":libwebp_config_internal" ]
-    configs -= [ "//build/config/compiler:chromium_code" ]
-    configs += [ "//build/config/compiler:no_chromium_code" ]
-    if (set_opt_level) {
-      configs -= [ "//build/config/compiler:default_optimization" ]
-      configs += [ "//build/config/compiler:optimize_max" ]
-    }
-
-    deps = [
-      ":imageio_util",
-      ":libwebp_webp",
-    ]
-    configs += [ ":libwebp_config" ]
-    visibility = [ ":*" ]
+    configs += [ ":libwebp_public_config" ]
   }
 
   executable("cwebp") {
+    visibility = []
+    visibility = cwebp_exe_allowed_visibility
+
     sources = [
       "src/examples/cwebp.c",
       "src/examples/stopwatch.h",
@@ -644,37 +718,12 @@ if (current_toolchain == host_toolchain) {
       ":imagedec",
       ":imageio_util",
       ":libwebp",
+      ":libwebp_sharpyuv",
       ":libwebp_webp",
       "//base",
       "//build/win:default_exe_manifest",
     ]
-    configs += [ ":libwebp_config_internal" ]
-    configs -= [ "//build/config/compiler:chromium_code" ]
-    configs += [ "//build/config/compiler:no_chromium_code" ]
-    if (set_opt_level) {
-      configs -= [ "//build/config/compiler:default_optimization" ]
-      configs += [ "//build/config/compiler:optimize_max" ]
-    }
-  }
-
-  executable("dwebp") {
-    sources = [
-      "src/examples/dwebp.c",
-      "src/examples/stopwatch.h",
-      "src/examples/unicode.h",
-    ]
-
-    deps = [
-      ":example_util",
-      ":imagedec",
-      ":imageenc",
-      ":imageio_util",
-      ":libwebp",
-      ":libwebp_webp",
-      "//base",
-      "//build/win:default_exe_manifest",
-    ]
-    configs += [ ":libwebp_config_internal" ]
+    configs += [ ":libwebp_config" ]
     configs -= [ "//build/config/compiler:chromium_code" ]
     configs += [ "//build/config/compiler:no_chromium_code" ]
     if (set_opt_level) {
@@ -687,78 +736,130 @@ if (current_toolchain == host_toolchain) {
 ################################################################################
 # Fuzzers
 
-fuzzer_test("libwebp_simple_api_fuzzer") {
-  sources = [ "src/tests/fuzzer/simple_api_fuzzer.c" ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
+source_set("libwebp_fuzz_utils") {
+  visibility += allowed_visibility
+
+  public = [ "src/tests/fuzzer/fuzz_utils.h" ]
+  sources = [ "src/tests/fuzzer/fuzz_utils.cc" ]
+  testonly = true
+  configs += [ ":libwebp_config" ]
   deps = [
-    ":libwebp",
+    ":libwebp_dsp_headers",
     ":libwebp_webp",
+    "//third_party/fuzztest",
   ]
-  defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
 }
 
-fuzzer_test("libwebp_advanced_api_fuzzer") {
-  sources = [ "src/tests/fuzzer/advanced_api_fuzzer.c" ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
+test("libwebp_simple_api_fuzzer") {
+  visibility += allowed_visibility
+
+  sources = [ "src/tests/fuzzer/simple_api_fuzzer.cc" ]
   deps = [
     ":libwebp",
+    ":libwebp_fuzz_utils",
     ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
   ]
   defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
 }
 
-fuzzer_test("libwebp_animation_api_fuzzer") {
-  sources = [
-    "src/src/demux/anim_decode.c",
-    "src/tests/fuzzer/animation_api_fuzzer.c",
-  ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
+test("libwebp_advanced_api_fuzzer") {
+  visibility += allowed_visibility
+
+  sources = [ "src/tests/fuzzer/advanced_api_fuzzer.cc" ]
   deps = [
-    ":libwebp",
+    ":libwebp_dec",
+    ":libwebp_dsp",
+    ":libwebp_fuzz_utils",
     ":libwebp_utils",
     ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
   ]
   defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
 }
 
-fuzzer_test("libwebp_mux_demux_api_fuzzer") {
-  sources = [ "src/tests/fuzzer/mux_demux_api_fuzzer.c" ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
+test("libwebp_animation_api_fuzzer") {
+  visibility += allowed_visibility
+
+  sources = [
+    "src/src/demux/anim_decode.c",
+    "src/tests/fuzzer/animation_api_fuzzer.cc",
+  ]
   deps = [
     ":libwebp",
+    ":libwebp_fuzz_utils",
+    ":libwebp_utils",
     ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
   ]
   defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
 }
 
-fuzzer_test("libwebp_animencoder_fuzzer") {
+test("libwebp_mux_demux_api_fuzzer") {
+  visibility += allowed_visibility
+
+  sources = [ "src/tests/fuzzer/mux_demux_api_fuzzer.cc" ]
+  deps = [
+    ":libwebp",
+    ":libwebp_fuzz_utils",
+    ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
+  ]
+  defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
+  configs += [ ":libwebp_config" ]
+}
+
+test("libwebp_animencoder_fuzzer") {
+  visibility += allowed_visibility
+
   sources = [ "src/tests/fuzzer/animencoder_fuzzer.cc" ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
   deps = [
     ":libwebp",
+    ":libwebp_dsp_headers",
+    ":libwebp_fuzz_utils",
     ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
   ]
   defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
 }
 
-fuzzer_test("libwebp_enc_dec_api_fuzzer") {
+test("libwebp_enc_dec_api_fuzzer") {
+  visibility += allowed_visibility
+
   sources = [ "src/tests/fuzzer/enc_dec_fuzzer.cc" ]
-  dict = "src/tests/fuzzer/fuzz.dict"
-  seed_corpus = "fuzzing/fuzz_seed_corpus"
   deps = [
     ":libwebp",
+    ":libwebp_dsp_headers",
+    ":libwebp_fuzz_utils",
     ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
   ]
   defines = [ "WEBP_MAX_IMAGE_SIZE=838860800" ]
-  additional_configs = [ ":libwebp_config_internal" ]
+  configs += [ ":libwebp_config" ]
+}
+
+test("libwebp_huffman_fuzzer") {
+  visibility += allowed_visibility
+
+  sources = [ "src/tests/fuzzer/huffman_fuzzer.cc" ]
+  deps = [
+    ":libwebp",
+    ":libwebp_dec",
+    ":libwebp_fuzz_utils",
+    ":libwebp_utils",
+    ":libwebp_webp",
+    "//third_party/fuzztest",
+    "//third_party/fuzztest:fuzztest_gtest_main",
+  ]
+  configs += [ ":libwebp_config" ]
 }

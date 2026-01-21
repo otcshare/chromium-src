@@ -10,7 +10,6 @@
 #include "base/containers/flat_set.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/key_system_info.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace cdm {
 
@@ -60,10 +59,10 @@ class WidevineKeySystemInfo : public media::KeySystemInfo {
   media::EmeFeatureSupport GetPersistentStateSupport() const override;
   media::EmeFeatureSupport GetDistinctiveIdentifierSupport() const override;
 
-// `is_experimental_` is used to differentiate between
-// `kWidevineExperimentKeySystem` and `kWidevineKeySystem`. Please refer to
-// b/219818166 for more information.
 #if BUILDFLAG(IS_WIN)
+  // `is_experimental_` is used to differentiate between
+  // `kWidevineExperimentKeySystem` and `kWidevineKeySystem`. Please refer to
+  // b/219818166 for more information.
   void set_experimental() { is_experimental_ = true; }
 #endif  // BUILDFLAG(IS_WIN)
 

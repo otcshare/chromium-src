@@ -2,43 +2,93 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {CanonicalTopic, PrivacySandboxBrowserProxy} from 'chrome://settings/settings.js';
+import type {CanonicalTopic, FirstLevelTopicsState, FledgeState, PrivacySandboxBrowserProxy, TopicsState} from 'chrome://settings/settings.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 export class TestPrivacySandboxBrowserProxy extends TestBrowserProxy implements
     PrivacySandboxBrowserProxy {
+  private fledgeState_: FledgeState = {joiningSites: [], blockedSites: []};
+  private topicsState_: TopicsState = {blockedTopics: [], topTopics: []};
+  private firstLevelTopicsState_:
+      FirstLevelTopicsState = {firstLevelTopics: [], blockedTopics: []};
+  private childTopicsCurrentlyAssigned_: CanonicalTopic[] = [];
+  private shouldShowAdTopicsContentParity = false;
+
   constructor() {
     super([
+      'getChildTopicsCurrentlyAssigned',
       'getFledgeState',
-      'setFledgeJoiningAllowed',
+      'getFirstLevelTopics',
       'getTopicsState',
+      'setFledgeJoiningAllowed',
       'setTopicAllowed',
+      'topicsToggleChanged',
+      'shouldShowPrivacySandboxAdTopicsContentParity',
     ]);
   }
 
+  // Setters for test
+  setChildTopics(childTopics: CanonicalTopic[]) {
+    this.childTopicsCurrentlyAssigned_ = childTopics;
+  }
+
+  setFirstLevelTopicsState(firstLevelTopicsState: FirstLevelTopicsState) {
+    this.firstLevelTopicsState_ = firstLevelTopicsState;
+  }
+
+  setTestTopicState(topicsState: TopicsState) {
+    this.topicsState_ = topicsState;
+  }
+
+  setFledgeState(fledgeState: FledgeState) {
+    this.fledgeState_ = fledgeState;
+  }
+
+  setShouldShowPrivacySandboxAdTopicsContentParity(shouldShow: boolean) {
+    this.shouldShowAdTopicsContentParity = shouldShow;
+  }
+
+  // Test Proxy Functions
   getFledgeState() {
     this.methodCalled('getFledgeState');
-    return Promise.resolve({
-      joiningSites: ['test-site-one.com'],
-      blockedSites: ['test-site-two.com'],
-    });
+    return Promise.resolve(this.fledgeState_);
   }
 
   setFledgeJoiningAllowed(site: string, allowed: boolean) {
     this.methodCalled('setFledgeJoiningAllowed', [site, allowed]);
   }
 
+  setTopicsState(topicsState: TopicsState) {
+    this.topicsState_ = topicsState;
+  }
+
   getTopicsState() {
     this.methodCalled('getTopicsState');
-    return Promise.resolve({
-      topTopics:
-          [{topicId: 1, taxonomyVersion: 1, displayString: 'test-topic-1'}],
-      blockedTopics:
-          [{topicId: 2, taxonomyVersion: 1, displayString: 'test-topic-2'}],
-    });
+    return Promise.resolve(this.topicsState_);
   }
 
   setTopicAllowed(topic: CanonicalTopic, allowed: boolean) {
     this.methodCalled('setTopicAllowed', [topic, allowed]);
+  }
+
+  topicsToggleChanged(newToggleValue: boolean) {
+    this.methodCalled('topicsToggleChanged', [newToggleValue]);
+  }
+
+  getFirstLevelTopics() {
+    this.methodCalled('getFirstLevelTopics');
+    return Promise.resolve(this.firstLevelTopicsState_);
+  }
+
+  getChildTopicsCurrentlyAssigned(topic: CanonicalTopic) {
+    this.methodCalled(
+        'getChildTopicsCurrentlyAssigned', topic.topicId,
+        topic.taxonomyVersion);
+    return Promise.resolve(this.childTopicsCurrentlyAssigned_.slice());
+  }
+
+  shouldShowPrivacySandboxAdTopicsContentParity() {
+    this.methodCalled('shouldShowPrivacySandboxAdTopicsContentParity');
+    return Promise.resolve(this.shouldShowAdTopicsContentParity);
   }
 }

@@ -6,19 +6,23 @@
 #define CHROME_BROWSER_ANDROID_LOCALE_LOCALE_TEMPLATE_URL_LOADER_H_
 
 #include "base/android/scoped_java_ref.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "components/search_engines/template_url.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 class TemplateURLService;
 
-class LocaleTemplateUrlLoader {
+class LocaleTemplateUrlLoader : public ProfileObserver {
  public:
   LocaleTemplateUrlLoader(const std::string& locale,
-                          TemplateURLService* service);
+                          TemplateURLService* service,
+                          Profile* profile);
   void Destroy(JNIEnv* env);
-  jboolean LoadTemplateUrls(JNIEnv* env);
+  bool LoadTemplateUrls(JNIEnv* env);
   void RemoveTemplateUrls(JNIEnv* env);
   void OverrideDefaultSearchProvider(JNIEnv* env);
   void SetGoogleAsDefaultSearch(JNIEnv* env);
@@ -26,7 +30,10 @@ class LocaleTemplateUrlLoader {
   LocaleTemplateUrlLoader(const LocaleTemplateUrlLoader&) = delete;
   LocaleTemplateUrlLoader& operator=(const LocaleTemplateUrlLoader&) = delete;
 
-  virtual ~LocaleTemplateUrlLoader();
+  ~LocaleTemplateUrlLoader() override;
+
+  // ProfileObserver overrides.
+  void OnProfileWillBeDestroyed(Profile* profile) override;
 
  protected:
   virtual std::vector<std::unique_ptr<TemplateURLData>>
@@ -34,6 +41,11 @@ class LocaleTemplateUrlLoader {
   virtual int GetDesignatedSearchEngineForChina();
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(LocaleTemplateUrlLoaderTest,
+                           GetLocalPrepopulatedEngines);
+  FRIEND_TEST_ALL_PREFIXES(LocaleTemplateUrlLoaderTest,
+                           OnProfileWillBeDestroyed);
+
   std::string locale_;
 
   // Tracks all local search engines that were added to TURL service.
@@ -41,6 +53,8 @@ class LocaleTemplateUrlLoader {
 
   // Pointer to the TemplateUrlService for the main profile.
   raw_ptr<TemplateURLService> template_url_service_;
+
+  base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
 };
 
 #endif  // CHROME_BROWSER_ANDROID_LOCALE_LOCALE_TEMPLATE_URL_LOADER_H_

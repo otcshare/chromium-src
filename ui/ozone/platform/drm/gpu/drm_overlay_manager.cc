@@ -4,18 +4,22 @@
 
 #include "ui/ozone/platform/drm/gpu/drm_overlay_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
+#include <variant>
 
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/ozone/platform/drm/gpu/drm_overlay_candidates.h"
 #include "ui/ozone/public/overlay_surface_candidate.h"
 
 namespace ui {
+
 namespace {
 
 // Maximum number of overlay configurations to keep in MRU cache.
@@ -144,6 +148,12 @@ void DrmOverlayManager::CheckOverlaySupport(
     // the primary plane.
     DCHECK(can_handle || candidate.plane_z_order != 0);
 
+    // Also verify if hardware supports required buffer format. It can happen,
+    // that a system doesn't support overlays for certain buffer formats. Thus,
+    // doing IPC below to do validation is just waste of resources given |this|
+    // is aware of that limitation.
+    can_handle &= IsFormatSupported(candidate.format, widget);
+
     // If we can't handle the candidate in an overlay replace it with default
     // value. The quad might have a non-integer display rect which hits a
     // DCHECK when converting to gfx::Rect in the comparator.
@@ -177,7 +187,7 @@ void DrmOverlayManager::CheckOverlaySupport(
   auto iter = cache.Get(cache_key);
   if (iter == cache.end()) {
     // We can skip GPU side validation in case all candidates are invalid.
-    bool needs_gpu_validation = base::ranges::any_of(
+    bool needs_gpu_validation = std::ranges::any_of(
         result_candidates,
         [](OverlaySurfaceCandidate& c) { return c.overlay_handled; });
     OverlayValidationCacheValue value;
@@ -215,14 +225,41 @@ void DrmOverlayManager::RegisterOverlayRequirement(
     widgets_with_required_overlays_.erase(widget);
 }
 
+void DrmOverlayManager::OnSwapBuffersComplete(gfx::SwapResult swap_result) {
+  DCHECK(!in_flight_overlay_types_.empty());
+  auto committed_overlay_types = std::move(in_flight_overlay_types_.front());
+  in_flight_overlay_types_.pop_front();
+}
+
+void DrmOverlayManager::SetSupportedSharedImageFormats(
+    gfx::AcceleratedWidget widget,
+    base::flat_set<viz::SharedImageFormat> supported_formats) {
+  per_widget_overlay_supported_formats_.insert_or_assign(
+      widget, std::move(supported_formats));
+}
+
+void DrmOverlayManager::OnPromotedOverlayTypes(
+    std::vector<gfx::OverlayType> promoted_overlay_types) {
+  // Hold promoted overlay types so that it's possible to distinguish swap
+  // buffers completion calls.
+  in_flight_overlay_types_.push_back(std::move(promoted_overlay_types));
+}
+
 bool DrmOverlayManager::CanHandleCandidate(
     const OverlaySurfaceCandidate& candidate,
     gfx::AcceleratedWidget widget) const {
-  if (candidate.buffer_size.IsEmpty())
+  if (candidate.buffer_size.IsEmpty()) {
+    VLOG(3) << "Overlay Rejected: buffer_size="
+            << candidate.buffer_size.ToString();
     return false;
+  }
 
-  if (candidate.transform == gfx::OVERLAY_TRANSFORM_INVALID)
+  if (!std::holds_alternative<gfx::OverlayTransform>(candidate.transform) ||
+      std::get<gfx::OverlayTransform>(candidate.transform) ==
+          gfx::OVERLAY_TRANSFORM_INVALID) {
+    VLOG(3) << "Overlay Rejected: invalid transform";
     return false;
+  }
 
   // The remaining checks are for ensuring consistency between GL compositing
   // and overlays. If we must use an overlay, then skip the remaining checks.
@@ -256,6 +293,24 @@ bool DrmOverlayManager::CanHandleCandidate(
   }
 
   return true;
+}
+
+bool DrmOverlayManager::IsFormatSupported(
+    viz::SharedImageFormat required_overlay_format,
+    gfx::AcceleratedWidget widget) const {
+  auto supported_formats_it =
+      per_widget_overlay_supported_formats_.find(widget);
+  if (supported_formats_it == per_widget_overlay_supported_formats_.end()) {
+    // Supported formats are unknown.
+    return false;
+  }
+
+  auto format_it = std::ranges::find_if(
+      supported_formats_it->second,
+      [required_overlay_format](const auto& supported_format) {
+        return required_overlay_format == supported_format;
+      });
+  return format_it != supported_formats_it->second.end();
 }
 
 void DrmOverlayManager::UpdateCacheForOverlayCandidates(

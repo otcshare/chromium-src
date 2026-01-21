@@ -7,11 +7,12 @@
 
 #include <list>
 #include <queue>
+#include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -25,6 +26,10 @@ struct ResourceRequest;
 class SimpleURLLoader;
 }  // namespace network
 
+namespace net {
+class HttpResponseHeaders;
+}
+
 namespace feedback {
 
 class FeedbackReport;
@@ -32,8 +37,7 @@ class FeedbackReport;
 // FeedbackUploader is used to add a feedback report to the queue of reports
 // being uploaded. In case uploading a report fails, it is written to disk and
 // tried again when it's turn comes up next in the queue.
-class FeedbackUploader : public KeyedService,
-                         public base::SupportsWeakPtr<FeedbackUploader> {
+class FeedbackUploader : public KeyedService {
  public:
   // Some embedders want to delay the creation of the SharedURLLoaderFactory
   // until it is required as the creation could be expensive. In that case,
@@ -61,8 +65,11 @@ class FeedbackUploader : public KeyedService,
   // Queues a report for uploading.
   // |data|: The serialized userfeedback::ExtensionSubmit proto to send.
   // |has_email|: True iff the user included their email address in the report.
+  // |product_id|: The product ID for the report.
   // virtual for testing.
-  virtual void QueueReport(std::unique_ptr<std::string> data, bool has_email);
+  virtual void QueueReport(std::unique_ptr<std::string> data,
+                           bool has_email,
+                           int product_id);
 
   // Re-queues an existing report from disk for uploading.
   void RequeueReport(scoped_refptr<FeedbackReport> report);
@@ -78,6 +85,10 @@ class FeedbackUploader : public KeyedService,
   }
 
   base::TimeDelta retry_delay() const { return retry_delay_; }
+
+  // Deriving classes must implement this and return the appropriate
+  // WeakPtr.
+  virtual base::WeakPtr<FeedbackUploader> AsWeakPtr() = 0;
 
  protected:
   // Virtual to give implementers a chance to do work before the report is
@@ -131,7 +142,7 @@ class FeedbackUploader : public KeyedService,
   void DispatchReport();
 
   void OnDispatchComplete(UrlLoaderList::iterator it,
-                          std::unique_ptr<std::string> response_body);
+                          scoped_refptr<net::HttpResponseHeaders> headers);
 
   // Update our timer for uploading the next report.
   void UpdateUploadTimer();

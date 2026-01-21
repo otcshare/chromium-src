@@ -5,67 +5,120 @@
 package org.chromium.chrome.browser.feed;
 
 import org.chromium.base.Callback;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.content_public.browser.LoadUrlParams;
 
-/** Interface for Feed actions implemented by the Browser.*/
+/** Interface for Feed actions implemented by the Browser. */
+@NullMarked
 public interface FeedActionDelegate {
     /** Information about a page visit. */
-    public class VisitResult {
+    class VisitResult {
         // Total page visit time.
         public long visitTimeMs;
     }
-    /** Downloads a web page.*/
-    void downloadPage(String url);
+
+    /** Observing page load events. */
+    interface PageLoadObserver {
+        /**
+         * Called when the page starts loading.
+         *
+         * @param pageId The unique ID for the page being opened.
+         */
+        void onPageLoadStarted(int pageId);
+
+        /**
+         * Called when the page finishes loading successfully.
+         *
+         * @param pageId The unique ID for the page being opened.
+         */
+        void onPageLoadFinished(int pageId, boolean inNewTab);
+
+        /**
+         * Called when the page fails to load.
+         *
+         * @param pageId The unique ID for the page being opened.
+         * @param errorCode The error code that causes the page to fail loading.
+         */
+        void onPageLoadFailed(int pageId, int errorCode);
+
+        /**
+         * Called when the page finishes first paint after non-empty layout.
+         *
+         * @param pageId The unique ID for the page being opened.
+         */
+        void onPageFirstContentfulPaint(int pageId);
+    }
 
     /**
      * Opens a url that was presented to the user as suggested content.
+     *
      * @param disposition A `org.chromium.ui.mojom.WindowOpenDisposition` value.
      * @param params What to load.
      * @param inGroup Whether to open the url in a tab in group.
-     * @param onPageLoaded Called when the page completes loading.
+     * @param pageId An unique ID identifying the page to load.
+     * @param pageLoadObserver Observer to get called with page load events.
      * @param onVisitComplete Called when the user closes or navigates away from the page.
      */
-    void openSuggestionUrl(int disposition, LoadUrlParams params, boolean inGroup,
-            Runnable onPageLoaded, Callback<VisitResult> onVisitComplete);
+    void openSuggestionUrl(
+            int disposition,
+            LoadUrlParams params,
+            boolean inGroup,
+            int pageId,
+            PageLoadObserver pageLoadObserver,
+            Callback<VisitResult> onVisitComplete);
 
     /**
      * Opens a page.
+     *
      * @param disposition A `org.chromium.ui.mojom.WindowOpenDisposition` value.
      * @param params What to load.
      */
-    void openUrl(int disposition, LoadUrlParams params);
+    default void openUrl(int disposition, LoadUrlParams params) {}
 
     /**
-     * Opens the NTP help page.
+     * Downloads a web page.
+     * @param url url of the page to download.
      */
-    void openHelpPage();
+    default void downloadPage(String url) {}
+
+    /** Opens the NTP help page. */
+    default void openHelpPage() {}
+
+    /** Add an item to the reading list. */
+    default void addToReadingList(String title, String url) {}
 
     /**
-     * Add an item to the reading list.
+     * Opens a specific WebFeed by name.
+     * @param webFeedName the relevant web feed name.
      */
-    void addToReadingList(String title, String url);
-
-    /**
-     * Opens the Crow page for the url.
-     */
-    void openCrow(String url);
+    default void openWebFeed(String webFeedName, @SingleWebFeedEntryPoint int entryPoint) {}
 
     //
     // Optional methods for handing events.
     //
 
-    /**
-     * Informs that content on the Feed has changed.
-     */
-    void onContentsChanged();
+    /** Informs that content on the Feed has changed. */
+    default void onContentsChanged() {}
+
+    /** Informs that the stream was created. */
+    default void onStreamCreated() {}
 
     /**
-     * Informs that the stream was created.
+     * Starts sign in flow as a result of a feed user action.
+     *
+     * @param signinAccessPoint the entry point for the signin.
      */
-    void onStreamCreated();
+    default void startSigninFlow(@SigninAccessPoint int signinAccessPoint) {}
 
     /**
-     * Shows a sign in activity as a result of a feed user action.
+     * Shows a sign in interstitial as a result of a feed user action.
+     *
+     * @param signinAccessPoint the entry point for the signin.
+     * @param mBottomSheetController bottomsheet controller attached to the activity.
      */
-    void showSignInActivity();
+    default void showSignInInterstitial(
+            @SigninAccessPoint int signinAccessPoint,
+            BottomSheetController mBottomSheetController) {}
 }

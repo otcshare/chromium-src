@@ -47,7 +47,6 @@ gfx::Point GetArrowAnchorPointFromAnchorRect(BubbleBorder::Arrow arrow,
 
     default:
       NOTREACHED();
-      return gfx::Point();
   }
 }
 
@@ -94,7 +93,6 @@ gfx::Vector2d GetContentBoundsOffsetToArrowAnchorPoint(
 
     default:
       NOTREACHED();
-      return gfx::Vector2d();
   }
 }
 

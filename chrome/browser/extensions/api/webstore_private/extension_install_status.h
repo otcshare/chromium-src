@@ -5,8 +5,12 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_WEBSTORE_PRIVATE_EXTENSION_INSTALL_STATUS_H_
 #define CHROME_BROWSER_EXTENSIONS_API_WEBSTORE_PRIVATE_EXTENSION_INSTALL_STATUS_H_
 
+#include "base/version.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -31,14 +35,21 @@ enum ExtensionInstallStatus {
   kTerminated,
   // Extension is blocklisted.
   kBlocklisted,
-  // Extension requires custodian approval to enable.
+  // Existing extension requires custodian approval to enable.
   kCustodianApprovalRequired,
+  // New extension requires custodian approval to be installed.
+  kCustodianApprovalRequiredForInstallation,
   // Extension is force installed or recommended by policy.
-  kForceInstalled
+  kForceInstalled,
+  // The extension may not be installed because it uses an unsupported manifest
+  // version.
+  kDeprecatedManifestVersion,
+  // Extension has been installed but it's corrupted.
+  kCorrupted,
 };
 
 // Returns the Extension install status for a Chrome web store extension with
-// |extension_id| in |profile|. Note that this function won't check whether the
+// `extension_id` in `profile`. Note that this function won't check whether the
 // extension's manifest type, required permissions are blocked by enterprise
 // policy. type blocking or permission blocking or manifest version. Please use
 // this function only if manifest file is not available.
@@ -46,17 +57,24 @@ ExtensionInstallStatus GetWebstoreExtensionInstallStatus(
     const ExtensionId& extension_id,
     Profile* profile);
 
-// Returns the Extension install status for a Chrome web store extension with
-// `extension_id` in `profile`. Also check if `manifest_type`, any permission
-// in `required_permission_set` is blocked by enterprise policy or
-// `manifest_version` is allowed.  `manifest_version` is only valid for
+// Calls `callback` with the Extension install status for a Chrome web store
+// extension with `extension_id` in `profile`. Also checks if `manifest_type`,
+// any permission in `required_permission_set` is blocked by enterprise policy
+// or `manifest_version` is allowed. `manifest_version` is only valid for
 // TYPE_EXTENSION.
-ExtensionInstallStatus GetWebstoreExtensionInstallStatus(
+//
+// If `extension_version` is valid, and the
+// ExtensionInstallCloudPolicyChecksEnabled policy is enabled, this uses
+// ExtensionInstallPolicyService to perform cloud-based policy checks
+// asynchronously.
+void GetWebstoreExtensionInstallStatus(
     const ExtensionId& extension_id,
     Profile* profile,
+    const base::Version& extension_version,
     const Manifest::Type manifest_type,
     const PermissionSet& required_permission_set,
-    int manifest_version = 3);
+    int manifest_version,
+    base::OnceCallback<void(ExtensionInstallStatus)> callback);
 
 }  // namespace extensions
 

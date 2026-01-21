@@ -4,9 +4,9 @@
 
 #include "fuchsia_web/webengine/context_provider_main.h"
 
+#include <lib/inspect/component/cpp/component.h>
 #include <lib/sys/cpp/component_context.h>
 #include <lib/sys/cpp/outgoing_directory.h>
-#include <lib/sys/inspect/cpp/component.h>
 
 #include "base/command_line.h"
 #include "base/fuchsia/process_context.h"
@@ -31,8 +31,6 @@ constexpr char kCrashProductName[] = "FuchsiaWebEngine";
 // The URL cannot be obtained programmatically - see fxbug.dev/51490.
 constexpr char kComponentUrl[] =
     "fuchsia-pkg://fuchsia.com/web_engine#meta/context_provider.cm";
-constexpr char kComponentUrlCfv1[] =
-    "fuchsia-pkg://fuchsia.com/web_engine#meta/context_provider.cmx";
 
 }  // namespace
 
@@ -42,9 +40,8 @@ int ContextProviderMain() {
   // Register with crash reporting, under the appropriate component URL.
   const base::CommandLine* const command_line =
       base::CommandLine::ForCurrentProcess();
-  const bool enable_cfv2 = command_line->HasSwitch(switches::kEnableCfv2);
   fuchsia_component_support::RegisterProductDataForCrashReporting(
-      enable_cfv2 ? kComponentUrl : kComponentUrlCfv1, kCrashProductName);
+      kComponentUrl, kCrashProductName);
 
   if (!InitLoggingFromCommandLine(*command_line)) {
     return 1;
@@ -52,25 +49,22 @@ int ContextProviderMain() {
 
   LogComponentStartWithVersion("WebEngine context_provider");
 
-  ContextProviderImpl context_provider;
-
-  // Publish the ContextProvider and Debug services.
   sys::OutgoingDirectory* const directory =
       base::ComponentContextForProcess()->outgoing().get();
-  base::ScopedServiceBinding<fuchsia::web::ContextProvider> binding(
-      directory, &context_provider);
-  base::ScopedServiceBinding<fuchsia::web::Debug> debug_binding(
-      directory->debug_dir(), context_provider.debug_api());
 
-  absl::optional<base::ScopedServiceBinding<fuchsia::web::Debug>>
-      debug_binding_cfv2;
-  if (enable_cfv2) {
-    debug_binding_cfv2.emplace(directory, context_provider.debug_api());
-  }
+  ContextProviderImpl context_provider(*directory);
+
+  // Publish the ContextProvider and Debug services.
+  base::ScopedServiceBinding<fuchsia::web::ContextProvider> context_binding(
+      directory, &context_provider);
+  base::ScopedServiceBinding<fuchsia::web::Debug> debug_hub_binding(
+      directory->debug_dir(), context_provider.debug_api());
+  base::ScopedServiceBinding<fuchsia::web::Debug> debug_binding(
+      directory, context_provider.debug_api());
 
   // Publish version information for this component to Inspect.
-  sys::ComponentInspector inspect(base::ComponentContextForProcess());
-  fuchsia_component_support::PublishVersionInfoToInspect(&inspect);
+  inspect::ComponentInspector inspect(async_get_default_dispatcher(), {});
+  fuchsia_component_support::PublishVersionInfoToInspect(&inspect.root());
 
   // Serve outgoing directory only after publishing all services.
   directory->ServeFromStartupInfo();

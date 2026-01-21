@@ -10,11 +10,12 @@
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/session_manager/session_manager_types.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -32,10 +33,6 @@ constexpr char kUMAParentAccessCodeValidationResultBase[] =
 // Suffix of the histogram to log aggregated parent access code validation
 // results.
 constexpr char kUMAValidationResultSuffixAll[] = "All";
-
-// Suffix of the histogram to log parent access code validation results for
-// reauth flow.
-constexpr char kUMAValidationResultSuffixReauth[] = "Reauth";
 
 // Suffix of the histogram to log parent access code validation results for add
 // user flow.
@@ -66,7 +63,6 @@ std::u16string GetTitle(SupervisedAction action) {
       title_id = IDS_ASH_LOGIN_PARENT_ACCESS_TITLE_CHANGE_TIMEZONE;
       break;
     case SupervisedAction::kAddUser:
-    case SupervisedAction::kReauth:
       title_id = IDS_ASH_LOGIN_PARENT_ACCESS_GENERIC_TITLE;
       break;
   }
@@ -85,9 +81,6 @@ std::u16string GetDescription(SupervisedAction action) {
       break;
     case SupervisedAction::kAddUser:
       description_id = IDS_ASH_LOGIN_PARENT_ACCESS_DESCRIPTION_ADD_USER;
-      break;
-    case SupervisedAction::kReauth:
-      description_id = IDS_ASH_LOGIN_PARENT_ACCESS_DESCRIPTION_REAUTH;
       break;
   }
   return l10n_util::GetStringUTF16(description_id);
@@ -136,7 +129,7 @@ void RecordParentCodeValidationResult(ParentCodeValidationResult result,
   // Record the action to the aggregated histogram.
   const std::string all_results_histogram =
       ParentAccessControllerImpl::GetUMAParentCodeValidationResultHistorgam(
-          absl::nullopt);
+          std::nullopt);
   RecordParentCodeValidationResultToHistogram(result, all_results_histogram);
 }
 
@@ -151,7 +144,7 @@ constexpr char ParentAccessControllerImpl::kUMAParentAccessCodeUsage[];
 // static
 std::string
 ParentAccessControllerImpl::GetUMAParentCodeValidationResultHistorgam(
-    absl::optional<SupervisedAction> action) {
+    std::optional<SupervisedAction> action) {
   const std::string separator = ".";
   if (!action) {
     return base::JoinString({kUMAParentAccessCodeValidationResultBase,
@@ -167,10 +160,6 @@ ParentAccessControllerImpl::GetUMAParentCodeValidationResultHistorgam(
     case SupervisedAction::kAddUser:
       return base::JoinString({kUMAParentAccessCodeValidationResultBase,
                                kUMAValidationResultSuffixAddUser},
-                              separator);
-    case SupervisedAction::kReauth:
-      return base::JoinString({kUMAParentAccessCodeValidationResultBase,
-                               kUMAValidationResultSuffixReauth},
                               separator);
     case SupervisedAction::kUpdateTimezone:
       return base::JoinString({kUMAParentAccessCodeValidationResultBase,
@@ -222,11 +211,6 @@ void RecordParentAccessUsage(const AccountId& child_account_id,
           ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
           ParentAccessControllerImpl::UMAUsage::kAddUserLoginScreen);
       return;
-    case SupervisedAction::kReauth:
-      UMA_HISTOGRAM_ENUMERATION(
-          ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
-          ParentAccessControllerImpl::UMAUsage::kReauhLoginScreen);
-      return;
   }
   NOTREACHED() << "Unknown SupervisedAction";
 }
@@ -262,7 +246,7 @@ void ParentAccessControllerImpl::OnBack() {
 
 void ParentAccessControllerImpl::OnHelp() {
   RecordParentAccessAction(ParentAccessControllerImpl::UMAAction::kGetHelp);
-  // TODO(https://crbug.com/999387): Remove this when handling touch
+  // TODO(crbug.com/40642787): Remove this when handling touch
   // cancellation is fixed for system modal windows.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([]() {

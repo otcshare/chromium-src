@@ -4,42 +4,33 @@
 
 #include "net/base/lookup_string_in_fixed_set.h"
 
-#include <string.h>
-
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <ostream>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "net/base/registry_controlled_domains/effective_tld_names_unittest1-inc.cc"
+#include "net/base/registry_controlled_domains/effective_tld_names_unittest3-inc.cc"
+#include "net/base/registry_controlled_domains/effective_tld_names_unittest4-inc.cc"
+#include "net/base/registry_controlled_domains/effective_tld_names_unittest5-inc.cc"
+#include "net/base/registry_controlled_domains/effective_tld_names_unittest6-inc.cc"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
 namespace {
-namespace test1 {
-#include "net/base/registry_controlled_domains/effective_tld_names_unittest1-inc.cc"
-}
-namespace test3 {
-#include "net/base/registry_controlled_domains/effective_tld_names_unittest3-inc.cc"
-}
-namespace test4 {
-#include "net/base/registry_controlled_domains/effective_tld_names_unittest4-inc.cc"
-}
-namespace test5 {
-#include "net/base/registry_controlled_domains/effective_tld_names_unittest5-inc.cc"
-}
-namespace test6 {
-#include "net/base/registry_controlled_domains/effective_tld_names_unittest6-inc.cc"
-}
 
 struct Expectation {
-  const char* const key;
+  std::string_view key;
   int value;
 };
 
@@ -49,9 +40,8 @@ void PrintTo(const Expectation& expectation, std::ostream* os) {
 
 class LookupStringInFixedSetTest : public testing::TestWithParam<Expectation> {
  protected:
-  template <size_t N>
-  int LookupInGraph(const unsigned char(&graph)[N], const char* key) {
-    return LookupStringInFixedSet(graph, N, key, strlen(key));
+  int LookupInGraph(base::span<const uint8_t> graph, std::string_view key) {
+    return LookupStringInFixedSet(graph, key);
   }
 };
 
@@ -96,9 +86,9 @@ void RecursivelyEnumerateDafsaLanguage(const FixedSetIncrementalLookup& lookup,
 
 // Uses FixedSetIncrementalLookup to build a vector of every string in the
 // language of the DAFSA.
-template <typename Graph>
-std::vector<std::string> EnumerateDafsaLanguage(const Graph& graph) {
-  FixedSetIncrementalLookup query(graph, sizeof(Graph));
+std::vector<std::string> EnumerateDafsaLanguage(
+    base::span<const uint8_t> graph) {
+  FixedSetIncrementalLookup query(graph);
   std::vector<char> sequence;
   std::vector<std::string> language;
   RecursivelyEnumerateDafsaLanguage(query, &sequence, &language);
@@ -215,9 +205,10 @@ TEST(LookupStringInFixedSetTest, Dafsa1EnumerateLanguage) {
   // These are the lines of effective_tld_names_unittest1.gperf, in sorted
   // order.
   std::vector<std::string> expected_language = {
-      "ac.jp, 0",       "b.c, 1",     "bar.baz.com, 0", "bar.jp, 2",
-      "baz.bar.jp, 2",  "c, 2",       "jp, 0",          "no, 0",
-      "pref.bar.jp, 1", "priv.no, 4", "private, 4",     "xn--fiqs8s, 0",
+      "ac.jp, 0",      "b.c, 1",         "bar.baz.com, 0", "bar.jp, 2",
+      "baz.bar.jp, 2", "c, 2",           "er, 2",          "jp, 0",
+      "no, 0",         "pref.bar.jp, 1", "priv.no, 4",     "private, 4",
+      "xn--fiqs8s, 0",
   };
 
   EXPECT_EQ(expected_language, language);

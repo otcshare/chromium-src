@@ -10,6 +10,7 @@
 #include "base/check_op.h"
 #include "base/hash/hash.h"
 #include "base/notreached.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/metrics_proto/ukm/source.pb.h"
 
 namespace ukm {
@@ -51,7 +52,7 @@ SourceType ToProtobufSourceType(SourceIdType source_id_type) {
       return SourceType::WEBAPK_ID;
     case SourceIdType::PAYMENT_APP_ID:
       return SourceType::PAYMENT_APP_ID;
-    case SourceIdType::DESKTOP_WEB_APP_ID:
+    case SourceIdType::DEPRECATED_DESKTOP_WEB_APP_ID:
       return SourceType::DESKTOP_WEB_APP_ID;
     case SourceIdType::WORKER_ID:
       return SourceType::WORKER_ID;
@@ -61,6 +62,14 @@ SourceType ToProtobufSourceType(SourceIdType source_id_type) {
       return SourceType::REDIRECT_ID;
     case SourceIdType::WEB_IDENTITY_ID:
       return SourceType::WEB_IDENTITY_ID;
+    case SourceIdType::CHROMEOS_WEBSITE_ID:
+      return SourceType::CHROMEOS_WEBSITE_ID;
+    case SourceIdType::EXTENSION_ID:
+      return SourceType::EXTENSION_ID;
+    case SourceIdType::NOTIFICATION_ID:
+      return SourceType::NOTIFICATION_ID;
+    case SourceIdType::CDM_ID:
+      return SourceType::CDM_ID;
   }
 }
 
@@ -76,9 +85,12 @@ AndroidActivityType ToProtobufActivityType(int32_t type) {
       return AndroidActivityType::WEB_APP;
     case 4:
       return AndroidActivityType::WEB_APK;
+    case 5:
+      return AndroidActivityType::PRE_FIRST_TAB;
+    case 6:
+      return AndroidActivityType::AUTH_TAB;
     default:
       NOTREACHED();
-      return AndroidActivityType::TABBED;
   }
 }
 
@@ -151,7 +163,6 @@ void UkmSource::UpdateUrl(const GURL& new_url) {
 void UkmSource::PopulateProto(Source* proto_source) const {
   DCHECK(!proto_source->has_id());
   DCHECK(!proto_source->has_type());
-  DCHECK(!proto_source->has_url());
 
   proto_source->set_id(id_);
   proto_source->set_type(ToProtobufSourceType(type_));

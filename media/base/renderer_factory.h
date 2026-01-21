@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/task/sequenced_task_runner.h"
 #include "media/base/media_export.h"
 #include "media/base/media_resource.h"
 #include "media/base/overlay_info.h"
@@ -16,6 +15,7 @@
 #include "ui/gfx/color_space.h"
 
 namespace base {
+class SequencedTaskRunner;
 class TaskRunner;
 }
 
@@ -46,11 +46,6 @@ class MEDIA_EXPORT RendererFactory {
       VideoRendererSink* video_renderer_sink,
       RequestOverlayInfoCB request_overlay_info_cb,
       const gfx::ColorSpace& target_color_space) = 0;
-
-  // Returns the MediaResource::Type that should be used with the renderers
-  // created by this factory.
-  // NOTE: Returns Type::STREAM by default.
-  virtual MediaResource::Type GetRequiredMediaResourceType();
 };
 
 }  // namespace media

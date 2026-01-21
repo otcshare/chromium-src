@@ -4,16 +4,52 @@
 
 #include "chrome/browser/enterprise/platform_auth/platform_auth_features.h"
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
 
 namespace enterprise_auth {
 
-#if BUILDFLAG(IS_WIN)
-BASE_FEATURE(kCloudApAuth, "CloudApAuth", base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kEnableExtensibleEnterpriseSSO, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kCloudApAuthAttachAsHeader,
-             "CloudApAuthAttachAsHeader",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC)
+// Enables native SSO support with Okta services.
+BASE_FEATURE(kOktaSSO, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Allowlist for request headers on the Okta SSO URL request.
+// Header names must be lowercase. The list is comma-separated.
+// If this list is empty all request headers will be allowed.
+BASE_FEATURE_PARAM(std::string,
+                   kOktaSsoRequestHeadersAllowlist,
+                   &kOktaSSO,
+                   "OktaSsoRequestHeadersAllowlist",
+                   "accept,accept-language,content-type,user-agent,x-okta-user-"
+                   "agent-extended");
+
+// Allowlist for response headers on the Okta SSO URL request.
+// Header names must be lowercase. The list is comma-separated.
+// If this list is empty all response headers will be allowed.
+BASE_FEATURE_PARAM(
+    std::string,
+    kOktaSsoResponseHeadersAllowlist,
+    &kOktaSSO,
+    "OktaSsoResponseHeadersAllowlist",
+    "accept-ch,access-control-allow-credentials,access-control-allow-headers,"
+    "access-control-allow-origin,cache-control,challengerequest,content-"
+    "security-policy,content-security-policy-report-only,content-type,date,"
+    "expires,referrer-policy,server,strict-transport-security,vary,www-"
+    "authenticate,x-content-type-options,x-okta-request-id,x-rate-limit-limit,"
+    "x-rate-limit-remaining,x-robots-tag");
+
+// Fixed response headers appended to the Okta SSO URL request response.
+// Format: list of pipe-separated pairs. Values within a pair are
+// semicolon-separated.
+BASE_FEATURE_PARAM(
+    std::string,
+    kOktaSsoFixedRequestHeaders,
+    &kOktaSSO,
+    "OktaSsoFixedResponseHeaders",
+    "Cache-Control;no-cache|Pragma;no-cache|Priority;u=1, "
+    "i|Sec-Fetch-Dest;empty|Sec-Fetch-Mode;cors|Sec-Fetch-Site;same-origin");
+#endif
 
 }  // namespace enterprise_auth

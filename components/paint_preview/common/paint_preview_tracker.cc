@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "components/paint_preview/common/glyph_usage.h"
 #include "components/paint_preview/common/mojom/paint_preview_recorder.mojom.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -27,7 +27,7 @@ namespace {
 constexpr int kMaxGlyphsForDenseGlyphUsage = 10000;
 
 // Heuristically choose between a dense and sparse glyph usage map.
-// TODO(crbug/1009538): Gather data to make this heuristic better.
+// TODO(crbug.com/40101107): Gather data to make this heuristic better.
 bool ShouldUseDenseGlyphUsage(SkTypeface* typeface) {
   // DenseGlyphUsage is a bitset; it is efficient if lots of glyphs are used.
   // SparseGlyphUsage is a set; it is efficient if few glyphs are used.
@@ -40,7 +40,7 @@ bool ShouldUseDenseGlyphUsage(SkTypeface* typeface) {
 
 PaintPreviewTracker::PaintPreviewTracker(
     const base::UnguessableToken& guid,
-    const absl::optional<base::UnguessableToken>& embedding_token,
+    const std::optional<base::UnguessableToken>& embedding_token,
     bool is_main_frame)
     : guid_(guid),
       embedding_token_(embedding_token),
@@ -97,8 +97,7 @@ uint32_t PaintPreviewTracker::CreateContentForRemoteFrame(
   sk_sp<SkPicture> pic = SkPicture::MakePlaceholder(
       SkRect::MakeXYWH(rect.x(), rect.y(), rect.width(), rect.height()));
   const uint32_t content_id = pic->uniqueID();
-  DCHECK(!base::Contains(picture_context_.content_id_to_embedding_token,
-                         content_id));
+  DCHECK(!picture_context_.content_id_to_embedding_token.contains(content_id));
   picture_context_.content_id_to_embedding_token[content_id] = embedding_token;
   subframe_pics_[content_id] = pic;
   return content_id;
@@ -113,7 +112,7 @@ void PaintPreviewTracker::AddGlyphs(const SkTextBlob* blob) {
     // Fail fast if the number of glyphs is undetermined or 0.
     if (typeface->countGlyphs() <= 0)
       continue;
-    if (!base::Contains(typeface_glyph_usage_, typeface->uniqueID())) {
+    if (!typeface_glyph_usage_.contains(typeface->uniqueID())) {
       if (ShouldUseDenseGlyphUsage(typeface)) {
         typeface_glyph_usage_.insert(
             {typeface->uniqueID(),
@@ -130,7 +129,7 @@ void PaintPreviewTracker::AddGlyphs(const SkTextBlob* blob) {
     }
     const uint16_t* glyphs = run.fGlyphIndices;
     for (int i = 0; i < run.fGlyphCount; ++i)
-      typeface_glyph_usage_[typeface->uniqueID()]->Set(glyphs[i]);
+      typeface_glyph_usage_[typeface->uniqueID()]->Set(UNSAFE_TODO(glyphs[i]));
   }
 }
 
@@ -161,7 +160,7 @@ void PaintPreviewTracker::CustomDataToSkPictureCallback(SkCanvas* canvas,
   auto it = subframe_pics_.find(content_id);
   // DCHECK is sufficient as |subframe_pics_| has same entries as
   // |content_id_to_proxy_id|.
-  DCHECK(it != subframe_pics_.end());
+  CHECK(it != subframe_pics_.end());
 
   SkRect rect = it->second->cullRect();
   SkMatrix subframe_offset = SkMatrix::Translate(rect.x(), rect.y());

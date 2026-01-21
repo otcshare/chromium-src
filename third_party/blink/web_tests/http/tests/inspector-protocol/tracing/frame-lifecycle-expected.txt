@@ -108,6 +108,7 @@ Object: {
 			frame: string
 			layerId: number
 			nodeId: number
+			nodeName: string
 		}
 	}
 	cat: string
@@ -118,7 +119,7 @@ Object: {
 	tid: number
 	ts: number
 }
-Got CompositeLayers event:
+Got Commit event:
 Object: {
 	args: {
 		frameSeqId: number

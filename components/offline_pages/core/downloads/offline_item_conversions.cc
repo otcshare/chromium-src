@@ -23,13 +23,13 @@ const std::string GetDisplayName(const offline_pages::OfflinePageItem& page) {
   if (!page.title.empty())
     return base::UTF16ToUTF8(page.title);
 
-  std::string host = page.url.host();
+  std::string host = page.url.GetHost();
   return host.empty() ? page.url.spec() : host;
 }
 
 const std::string GetDisplayName(
     const offline_pages::SavePageRequest& request) {
-  std::string host = request.url().host();
+  std::string host = request.url().GetHost();
   return host.empty() ? request.url().spec() : host;
 }
 
@@ -42,8 +42,7 @@ const std::string GetMimeType() {
 namespace offline_pages {
 
 OfflineItem OfflineItemConversions::CreateOfflineItem(
-    const OfflinePageItem& page,
-    bool is_suggested) {
+    const OfflinePageItem& page) {
   OfflineItem item;
   item.id = ContentId(kOfflinePageNamespace, page.client_id.id);
   item.title = GetDisplayName(page);
@@ -62,7 +61,6 @@ OfflineItem OfflineItemConversions::CreateOfflineItem(
   item.progress.value = 100;
   item.progress.max = 100;
   item.progress.unit = OfflineItemProgressUnit::PERCENTAGE;
-  item.is_suggested = is_suggested;
   item.is_openable = true;
   item.externally_removed = page.file_missing_time != base::Time();
   item.description = page.snippet;

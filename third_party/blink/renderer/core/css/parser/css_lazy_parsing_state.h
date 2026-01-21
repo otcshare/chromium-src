@@ -7,10 +7,11 @@
 
 #include "third_party/blink/renderer/core/css/css_selector_list.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_mode.h"
-#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+
+class StyleSheetContents;
 
 // This class helps lazy parsing by retaining necessary state. It should not
 // outlive the StyleSheetContents that initiated the parse, as it retains a raw
@@ -38,7 +39,14 @@ class CSSLazyParsingState final : public GarbageCollected<CSSLazyParsingState> {
   String sheet_text_;
 
   // Weak to ensure lazy state will never cause the contents to live longer than
-  // it should (we DCHECK this fact).
+  // it should (we DCHECK this fact). Normally, the <link> tag will keep the
+  // StyleSheetContents alive.
+  //
+  // When we mutate a stylesheet's rules, we do copy-on-write on its
+  // StyleSheetContents, invalidating this pointer. However, we also Copy()
+  // every single rule, which parses them eagerly, so we don't need to worry
+  // about what happens to the CSSLazyParsingState in that case.
+  // This happens in StyleSheetContents' copy constructor.
   WeakMember<StyleSheetContents> owning_contents_;
 
   // Cache the document as a proxy for caching the UseCounter. Grabbing the

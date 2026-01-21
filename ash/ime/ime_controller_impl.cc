@@ -4,6 +4,7 @@
 
 #include "ash/ime/ime_controller_impl.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "ash/ime/ime_mode_indicator_view.h"
@@ -11,10 +12,8 @@
 #include "ash/ime/mode_indicator_observer.h"
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray_notifier.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/display/manager/display_manager.h"
@@ -114,7 +113,7 @@ void ImeControllerImpl::SwitchImeWithAccelerator(
       GetCandidateImesForAccelerator(accelerator);
   if (candidate_ids.empty())
     return;
-  auto it = base::ranges::find(candidate_ids, current_ime_.id);
+  auto it = std::ranges::find(candidate_ids, current_ime_.id);
   if (it != candidate_ids.end())
     ++it;
   if (it == candidate_ids.end())
@@ -171,16 +170,24 @@ void ImeControllerImpl::ShowImeMenuOnShelf(bool show) {
 void ImeControllerImpl::UpdateCapsLockState(bool caps_enabled) {
   is_caps_lock_enabled_ = caps_enabled;
 
-  for (ImeControllerImpl::Observer& observer : observers_)
+  for (ImeController::Observer& observer : observers_) {
     observer.OnCapsLockChanged(caps_enabled);
+  }
 }
 
 void ImeControllerImpl::OnKeyboardLayoutNameChanged(
     const std::string& layout_name) {
   keyboard_layout_name_ = layout_name;
 
-  for (ImeControllerImpl::Observer& observer : observers_)
+  for (ImeController::Observer& observer : observers_) {
     observer.OnKeyboardLayoutNameChanged(layout_name);
+  }
+}
+
+void ImeControllerImpl::OnKeyboardEnabledChanged(bool is_enabled) {
+  if (!is_enabled) {
+    OverrideKeyboardKeyset(input_method::ImeKeyset::kNone);
+  }
 }
 
 void ImeControllerImpl::SetExtraInputOptionsEnabledState(
@@ -258,7 +265,7 @@ std::vector<std::string> ImeControllerImpl::GetCandidateImesForAccelerator(
 
   // Obtain the intersection of input_method_ids_to_switch and available_imes_.
   for (const ImeInfo& ime : available_imes_) {
-    if (base::Contains(input_method_ids_to_switch, ime.id))
+    if (std::ranges::contains(input_method_ids_to_switch, ime.id))
       candidate_ids.push_back(ime.id);
   }
   return candidate_ids;

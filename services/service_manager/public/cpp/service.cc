@@ -4,7 +4,7 @@
 
 #include "services/service_manager/public/cpp/service.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 
 namespace service_manager {
@@ -42,7 +42,7 @@ void Service::CreatePackagedServiceInstance(
     const std::string& service_name,
     mojo::PendingReceiver<mojom::Service> service_receiver,
     CreatePackagedServiceInstanceCallback callback) {
-  std::move(callback).Run(absl::nullopt);
+  std::move(callback).Run(std::nullopt);
 }
 
 void Service::OnDisconnected() {

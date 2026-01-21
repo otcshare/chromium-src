@@ -6,15 +6,26 @@
 #define COMPONENTS_CUSTOM_HANDLERS_PROTOCOL_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/feature_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "url/gurl.h"
 
 namespace custom_handlers {
+
+namespace features {
+
+// When enabled, it strips credentials from URL to mitigate the mitigate the
+// risk of credential leakage when registering protocol handlers for standard
+// schemes. This feature is enabled by default and meant to be used as a
+// killswitch.
+// https://html.spec.whatwg.org/multipage/system-state.html#security-and-privacy
+BASE_DECLARE_FEATURE(kStripCredentialsForExternalProtocolHandler);
+}  // namespace features
 
 // A single tuple of (protocol, url, last_modified) that indicates how URLs
 // of the given protocol should be rewritten to be handled.
@@ -38,10 +49,17 @@ class ProtocolHandler {
       const GURL& url,
       const std::string& app_id);
 
+  static ProtocolHandler CreateExtensionProtocolHandler(
+      const std::string& protocol,
+      const GURL& url,
+      const std::string& extension_id);
+
   ProtocolHandler(const std::string& protocol,
                   const GURL& url,
-                  const std::string& app_id,
+                  std::optional<std::string> app_id,
+                  std::optional<std::string> extension_id,
                   base::Time last_modified,
+                  bool is_confirmed,
                   blink::ProtocolHandlerSecurityLevel security_level);
 
   ProtocolHandler(const ProtocolHandler& other);
@@ -68,6 +86,9 @@ class ProtocolHandler {
   static const ProtocolHandler& EmptyProtocolHandler();
 
   // Interpolates the given URL into the URL template of this handler.
+  // It mitigates the risk of credential leakage by stripping the credentials
+  // from the url. See
+  // https://html.spec.whatwg.org/multipage/system-state.html#security-and-privacy
   GURL TranslateUrl(const GURL& url) const;
 
   // Returns true if the handlers are considered equivalent when determining
@@ -86,12 +107,24 @@ class ProtocolHandler {
   // this function returns |this.protocol_|.
   std::u16string GetProtocolDisplayName() const;
 
+  // Mark the protocol handler as confirmed by the user.
+  void Confirm() { is_confirmed_ = true; }
+
   const std::string& protocol() const { return protocol_; }
   const GURL& url() const { return url_; }
-  const absl::optional<std::string>& web_app_id() const { return web_app_id_; }
+  const std::optional<std::string>& web_app_id() const { return web_app_id_; }
+  const std::optional<std::string>& extension_id() const {
+    return extension_id_;
+  }
   const base::Time& last_modified() const { return last_modified_; }
 
+  // Returns true if the user has granted permission explicitly to use this
+  // protocol handler. Unconfirmed protocol handlers can be registered by Web
+  // Extensions, through the 'protocol_handlers' Manifest key.
+  bool is_confirmed() const { return is_confirmed_; }
+
   bool IsEmpty() const { return protocol_.empty(); }
+  bool IsExtensionHandler() const { return extension_id_.has_value(); }
 
 #if !defined(NDEBUG)
   // Returns a string representation suitable for use in debugging.
@@ -106,8 +139,10 @@ class ProtocolHandler {
 
   std::string protocol_;
   GURL url_;
-  absl::optional<std::string> web_app_id_;
+  std::optional<std::string> web_app_id_;
+  std::optional<std::string> extension_id_;
   base::Time last_modified_;
+  bool is_confirmed_{true};
   blink::ProtocolHandlerSecurityLevel security_level_;
 };
 

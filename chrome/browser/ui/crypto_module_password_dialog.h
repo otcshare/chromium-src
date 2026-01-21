@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/functional/callback.h"
+#include "ui/gfx/native_ui_types.h"
 
 // An enum to describe the reason for the password request.
 enum CryptoModulePasswordReason {

@@ -6,14 +6,16 @@
 
 #include <memory>
 
-#include "base/files/file_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
-#include "chrome/browser/extensions/pending_extension_manager.h"
+#include "chrome/browser/extensions/external_provider_manager.h"
 #include "chrome/test/base/testing_profile.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/pending_extension_manager.h"
 #include "extensions/common/extension_builder.h"
 
 namespace extensions {
@@ -23,64 +25,73 @@ namespace {
 const char kOldId[] = "oooooooooooooooooooooooooooooooo";
 const char kNewId[] = "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn";
 
-scoped_refptr<const Extension> CreateExtension(const std::string& id) {
-  return ExtensionBuilder("test").SetID(id).Build();
+scoped_refptr<const Extension> CreateExtension(
+    const std::string& id,
+    mojom::ManifestLocation location) {
+  return ExtensionBuilder("test").SetID(id).SetLocation(location).Build();
 }
 
 }  // namespace
 
 class ExtensionMigratorTest : public ExtensionServiceTestBase {
  public:
-  ExtensionMigratorTest() {}
+  ExtensionMigratorTest() = default;
 
   ExtensionMigratorTest(const ExtensionMigratorTest&) = delete;
   ExtensionMigratorTest& operator=(const ExtensionMigratorTest&) = delete;
 
-  ~ExtensionMigratorTest() override {}
+  ~ExtensionMigratorTest() override = default;
 
  protected:
   void InitWithExistingProfile() {
-    ExtensionServiceInitParams params = CreateDefaultInitParams();
-    params.is_first_run = false;
+    ExtensionServiceInitParams params;
     // Create prefs file to make the profile not new.
-    const char prefs[] = "{}";
-    EXPECT_EQ(int(sizeof(prefs)),
-              base::WriteFile(params.pref_file, prefs, sizeof(prefs)));
-    InitializeExtensionService(params);
+    params.prefs_content = "{}";
+    params.is_first_run = false;
+    InitializeExtensionService(std::move(params));
     service()->Init();
     AddMigratorProvider();
   }
 
   void AddMigratorProvider() {
-    service()->AddProviderForTesting(std::make_unique<ExternalProviderImpl>(
-        service(), new ExtensionMigrator(profile(), kOldId, kNewId), profile(),
-        mojom::ManifestLocation::kExternalPref,
-        mojom::ManifestLocation::kExternalPrefDownload,
-        Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
+    ExternalProviderManager::Get(profile())->AddProviderForTesting(
+        std::make_unique<ExternalProviderImpl>(
+            external_provider_manager(),
+            base::MakeRefCounted<ExtensionMigrator>(profile(), kOldId, kNewId),
+            profile(), mojom::ManifestLocation::kExternalPref,
+            mojom::ManifestLocation::kExternalPrefDownload,
+            Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
   }
 
-  void AddExtension(const std::string& id) {
-    scoped_refptr<const Extension> fake_app = CreateExtension(id);
-    service()->AddExtension(fake_app.get());
+  scoped_refptr<const Extension> AddExtension(
+      const std::string& id,
+      mojom::ManifestLocation location) {
+    scoped_refptr<const Extension> fake_app = CreateExtension(id, location);
+    registrar()->AddExtension(fake_app);
+    return fake_app;
   }
 
   bool HasNewExtension() {
-    return service()->pending_extension_manager()->IsIdPending(kNewId) ||
+    return PendingExtensionManager::Get(profile())->IsIdPending(kNewId) ||
            registry()->GetInstalledExtension(kNewId);
+  }
+
+  ExternalProviderManager* external_provider_manager() {
+    return ExternalProviderManager::Get(profile());
   }
 };
 
 TEST_F(ExtensionMigratorTest, NoExistingOld) {
   InitWithExistingProfile();
-  service()->CheckForExternalUpdates();
+  external_provider_manager()->CheckForExternalUpdates();
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(HasNewExtension());
 }
 
 TEST_F(ExtensionMigratorTest, HasExistingOld) {
   InitWithExistingProfile();
-  AddExtension(kOldId);
-  service()->CheckForExternalUpdates();
+  AddExtension(kOldId, mojom::ManifestLocation::kExternalPrefDownload);
+  external_provider_manager()->CheckForExternalUpdates();
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(HasNewExtension());
   EXPECT_TRUE(registry()->GetInstalledExtension(kOldId));
@@ -88,20 +99,34 @@ TEST_F(ExtensionMigratorTest, HasExistingOld) {
 
 TEST_F(ExtensionMigratorTest, KeepExistingNew) {
   InitWithExistingProfile();
-  AddExtension(kNewId);
-  service()->CheckForExternalUpdates();
+  AddExtension(kNewId, mojom::ManifestLocation::kExternalPrefDownload);
+  external_provider_manager()->CheckForExternalUpdates();
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(registry()->GetInstalledExtension(kNewId));
 }
 
 TEST_F(ExtensionMigratorTest, HasBothOldAndNew) {
   InitWithExistingProfile();
-  AddExtension(kOldId);
-  AddExtension(kNewId);
-  service()->CheckForExternalUpdates();
+  AddExtension(kOldId, mojom::ManifestLocation::kExternalPrefDownload);
+  AddExtension(kNewId, mojom::ManifestLocation::kExternalPrefDownload);
+  external_provider_manager()->CheckForExternalUpdates();
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(registry()->GetInstalledExtension(kOldId));
   EXPECT_TRUE(registry()->GetInstalledExtension(kNewId));
+}
+
+// Tests that a previously-force-installed extension can be uninstalled.
+// crbug.com/1416682
+TEST_F(ExtensionMigratorTest, HasPreviouslyForceInstalledNew) {
+  InitWithExistingProfile();
+  scoped_refptr<const Extension> extension =
+      AddExtension(kNewId, mojom::ManifestLocation::kExternalPolicyDownload);
+  registrar()->OnExtensionInstalled(extension.get(), syncer::StringOrdinal());
+  external_provider_manager()->CheckForExternalUpdates();
+  base::RunLoop().RunUntilIdle();
+  // A previously-force-installed-extension should not be persisted by the
+  // ExtensionMigrator.
+  EXPECT_FALSE(registry()->GetInstalledExtension(kNewId));
 }
 
 }  // namespace extensions

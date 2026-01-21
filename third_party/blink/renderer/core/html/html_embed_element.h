@@ -43,15 +43,18 @@ class CORE_EXPORT HTMLEmbedElement final : public HTMLPlugInElement {
     return FrameOwnerElementType::kEmbed;
   }
 
+  const V8UnionTrustedScriptURLOrUSVString* src();
+  void setSrc(const V8UnionTrustedScriptURLOrUSVString*, ExceptionState&);
+
  private:
   void ParseAttribute(const AttributeModificationParams&) override;
   bool IsPresentationAttribute(const QualifiedName&) const override;
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
 
   bool IsURLAttribute(const Attribute&) const override;
   const QualifiedName& SubResourceAttributeName() const override;

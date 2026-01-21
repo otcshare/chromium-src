@@ -5,35 +5,37 @@
 #include "components/heap_profiling/multi_process/heap_profiling_test_shim.h"
 
 #include "base/android/jni_string.h"
-#include "components/heap_profiling/multi_process/jni_headers/HeapProfilingTestShim_jni.h"
 #include "components/heap_profiling/multi_process/test_driver.h"
 #include "components/services/heap_profiling/public/cpp/settings.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/heap_profiling/multi_process/jni_headers/HeapProfilingTestShim_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
-static jlong JNI_HeapProfilingTestShim_Init(JNIEnv* env,
-                                            const JavaParamRef<jobject>& obj) {
+static int64_t JNI_HeapProfilingTestShim_Init(JNIEnv* env,
+                                              const JavaRef<jobject>& obj) {
   HeapProfilingTestShim* profiler = new HeapProfilingTestShim(env, obj);
   return reinterpret_cast<intptr_t>(profiler);
 }
 
-HeapProfilingTestShim::HeapProfilingTestShim(JNIEnv* env, jobject obj) {}
+HeapProfilingTestShim::HeapProfilingTestShim(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& obj) {}
 HeapProfilingTestShim::~HeapProfilingTestShim() = default;
 
-void HeapProfilingTestShim::Destroy(JNIEnv* env,
-                                    const JavaParamRef<jobject>& obj) {
+void HeapProfilingTestShim::Destroy(JNIEnv* env) {
   delete this;
 }
 
-jboolean HeapProfilingTestShim::RunTestForMode(
+bool HeapProfilingTestShim::RunTestForMode(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj,
-    const base::android::JavaParamRef<jstring>& mode,
-    jboolean dynamically_start_profiling,
-    const base::android::JavaParamRef<jstring>& stack_mode,
-    jboolean should_sample,
-    jboolean sample_everything) {
+    const base::android::JavaRef<jstring>& mode,
+    bool dynamically_start_profiling,
+    const base::android::JavaRef<jstring>& stack_mode,
+    bool should_sample,
+    bool sample_everything) {
   heap_profiling::TestDriver driver;
   heap_profiling::TestDriver::Options options;
   options.mode = heap_profiling::ConvertStringToMode(
@@ -43,3 +45,5 @@ jboolean HeapProfilingTestShim::RunTestForMode(
   options.profiling_already_started = !dynamically_start_profiling;
   return driver.RunTest(options);
 }
+
+DEFINE_JNI(HeapProfilingTestShim)

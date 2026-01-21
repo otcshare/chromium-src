@@ -11,7 +11,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -19,9 +18,7 @@ import org.chromium.mojo_base.BigBufferUtil;
 import org.chromium.skia.mojom.BitmapN32;
 import org.chromium.skia.mojom.BitmapN32ImageInfo;
 
-/**
- * Test suite for conversion-to-Frame utils.
- */
+/** Test suite for conversion-to-Frame utils. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class BitmapUtilsTest {
@@ -35,13 +32,10 @@ public class BitmapUtilsTest {
 
     @Before
     public void setUp() {
-        ShadowLog.stream = System.out;
         MockitoAnnotations.initMocks(this);
     }
 
-    /**
-     * Verify conversion fails if the Bitmap is invalid.
-     */
+    /** Verify conversion fails if the Bitmap is invalid. */
     @Test
     @Feature({"ShapeDetection"})
     public void testConversionFailsWithInvalidBitmap() {
@@ -52,9 +46,7 @@ public class BitmapUtilsTest {
         assertNull(BitmapUtils.convertToFrame(bitmap));
     }
 
-    /**
-     * Verify conversion fails if the sent dimensions are ugly.
-     */
+    /** Verify conversion fails if the sent dimensions are ugly. */
     @Test
     @Feature({"ShapeDetection"})
     public void testConversionFailsWithInvalidDimensions() {
@@ -67,9 +59,7 @@ public class BitmapUtilsTest {
         assertNull(BitmapUtils.convertToFrame(bitmap));
     }
 
-    /**
-     * Verify conversion fails if Bitmap fails to wrap().
-     */
+    /** Verify conversion fails if Bitmap fails to wrap(). */
     @Test
     @Feature({"ShapeDetection"})
     public void testConversionFailsWithWronglyWrappedData() {

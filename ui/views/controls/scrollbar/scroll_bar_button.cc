@@ -5,8 +5,9 @@
 #include "ui/views/controls/scrollbar/scroll_bar_button.h"
 
 #include <utility>
+#include <variant>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/time/tick_clock.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/display/screen.h"
@@ -32,9 +33,11 @@ ScrollBarButton::ScrollBarButton(PressedCallback callback,
 
 ScrollBarButton::~ScrollBarButton() = default;
 
-gfx::Size ScrollBarButton::CalculatePreferredSize() const {
-  if (!GetWidget())
+gfx::Size ScrollBarButton::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
+  if (!GetWidget()) {
     return gfx::Size();
+  }
   return GetNativeTheme()->GetPartSize(
       GetNativeThemePart(), GetNativeThemeState(), GetNativeThemeParams());
 }
@@ -59,16 +62,16 @@ void ScrollBarButton::OnThemeChanged() {
 }
 
 void ScrollBarButton::PaintButtonContents(gfx::Canvas* canvas) {
-  gfx::Rect bounds(GetPreferredSize());
+  gfx::Rect bounds(GetPreferredSize({}));
   GetNativeTheme()->Paint(canvas->sk_canvas(), GetColorProvider(),
                           GetNativeThemePart(), GetNativeThemeState(), bounds,
                           GetNativeThemeParams());
 }
 
 ui::NativeTheme::ExtraParams ScrollBarButton::GetNativeThemeParams() const {
-  ui::NativeTheme::ExtraParams params;
-  params.scrollbar_arrow.is_hovering = GetState() == Button::STATE_HOVERED;
-  return params;
+  ui::NativeTheme::ScrollbarArrowExtraParams scrollbar_arrow;
+  scrollbar_arrow.is_hovering = GetState() == Button::STATE_HOVERED;
+  return ui::NativeTheme::ExtraParams(scrollbar_arrow);
 }
 
 ui::NativeTheme::Part ScrollBarButton::GetNativeThemePart() const {
@@ -84,7 +87,6 @@ ui::NativeTheme::Part ScrollBarButton::GetNativeThemePart() const {
   }
 
   NOTREACHED();
-  return ui::NativeTheme::kScrollbarUpArrow;
 }
 
 ui::NativeTheme::State ScrollBarButton::GetNativeThemeState() const {
@@ -102,19 +104,17 @@ ui::NativeTheme::State ScrollBarButton::GetNativeThemeState() const {
   }
 
   NOTREACHED();
-  return ui::NativeTheme::kNormal;
 }
 
 void ScrollBarButton::RepeaterNotifyClick() {
-  gfx::Point cursor_point =
-      display::Screen::GetScreen()->GetCursorScreenPoint();
-  ui::MouseEvent event(ui::ET_MOUSE_RELEASED, cursor_point, cursor_point,
-                       ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
-                       ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point cursor_point = display::Screen::Get()->GetCursorScreenPoint();
+  ui::MouseEvent event(ui::EventType::kMouseReleased, cursor_point,
+                       cursor_point, ui::EventTimeForNow(),
+                       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
   Button::NotifyClick(event);
 }
 
-BEGIN_METADATA(ScrollBarButton, Button)
+BEGIN_METADATA(ScrollBarButton)
 END_METADATA
 
 }  // namespace views

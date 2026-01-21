@@ -4,7 +4,9 @@
 
 #include "chromecast/device/bluetooth/le/le_scan_result.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/compiler_specific.h"
 #include "chromecast/device/bluetooth/bluetooth_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -61,15 +63,17 @@ TEST(LeScanResultTest, Name) {
   scan_result.type_to_data[LeScanResult::kGapShortName].push_back(
       std::vector<uint8_t>(
           reinterpret_cast<const uint8_t*>(kName1),
-          reinterpret_cast<const uint8_t*>(kName1) + strlen(kName1)));
-  absl::optional<std::string> name = scan_result.Name();
+          UNSAFE_TODO(reinterpret_cast<const uint8_t*>(kName1) +
+                      strlen(kName1))));
+  std::optional<std::string> name = scan_result.Name();
   ASSERT_TRUE(name);
   EXPECT_EQ(kName1, *name);
 
   scan_result.type_to_data[LeScanResult::kGapCompleteName].push_back(
       std::vector<uint8_t>(
           reinterpret_cast<const uint8_t*>(kName2),
-          reinterpret_cast<const uint8_t*>(kName2) + strlen(kName2)));
+          UNSAFE_TODO(reinterpret_cast<const uint8_t*>(kName2) +
+                      strlen(kName2))));
 
   name = scan_result.Name();
   ASSERT_TRUE(name);
@@ -121,7 +125,7 @@ TEST(LeScanResultTest, AllUuids) {
   ASSERT_EQ(6ul, all_uuids->size());
 
   auto exists = [&all_uuids](const bluetooth_v2_shlib::Uuid& uuid) {
-    return base::Contains(*all_uuids, uuid);
+    return std::ranges::contains(*all_uuids, uuid);
   };
 
   EXPECT_TRUE(exists(util::UuidFromInt16(kIncompleteUuid16)));

@@ -11,6 +11,8 @@
 
 #include "base/check.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "mojo/core/ipcz_driver/shared_buffer.h"
 #include "mojo/core/ipcz_driver/shared_buffer_mapping.h"
@@ -50,8 +52,9 @@ class MOJO_SYSTEM_IMPL_EXPORT RingBuffer {
     }
 
    private:
-    RingBuffer* buffer_;
-    const Bytes bytes_;
+    raw_ptr<RingBuffer> buffer_;
+    // TODO(367764863) Rewrite to base::raw_span
+    RAW_PTR_EXCLUSION const Bytes bytes_;
   };
 
   // A DirectReader exposes the first contiguous span of data within a
@@ -80,8 +83,9 @@ class MOJO_SYSTEM_IMPL_EXPORT RingBuffer {
     }
 
    private:
-    RingBuffer* buffer_;
-    const Bytes bytes_;
+    raw_ptr<RingBuffer> buffer_;
+    // TODO(367764863) Rewrite to base::raw_span
+    RAW_PTR_EXCLUSION const Bytes bytes_;
   };
 
   // Constructs a new empty RingBuffer backed by the entire region of `mapping`.
@@ -147,6 +151,7 @@ class MOJO_SYSTEM_IMPL_EXPORT RingBuffer {
     uint32_t offset = 0;
     uint32_t size = 0;
   };
+  static_assert(sizeof(SerializedState) == 8, "Invalid SerializedState size");
   void Serialize(SerializedState& state);
   bool Deserialize(const SerializedState& state);
 

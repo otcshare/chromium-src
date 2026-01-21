@@ -4,69 +4,115 @@
 
 #include "chrome/browser/ash/policy/reporting/metrics_reporting/apps/app_events_observer.h"
 
+#include <cstddef>
 #include <memory>
+#include <optional>
+#include <string_view>
 
+#include "base/check.h"
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
+#include "base/values.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
+#include "chrome/browser/ash/policy/reporting/metrics_reporting/apps/app_metric_reporting_utils.h"
+#include "chrome/browser/ash/policy/reporting/metrics_reporting/apps/app_platform_metrics_retriever.h"
+#include "chrome/browser/ash/policy/reporting/metrics_reporting/metric_reporting_prefs.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/reporting/metrics/metric_event_observer.h"
+#include "components/reporting/metrics/reporting_settings.h"
 #include "components/reporting/proto/synced/metric_data.pb.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/protos/app_types.pb.h"
 
 namespace reporting {
 
-bool AppEventsObserver::Delegate::IsAppServiceAvailableForProfile(
-    Profile* profile) {
-  return ::apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-      profile);
-}
-
-::apps::AppPlatformMetrics*
-AppEventsObserver::Delegate::GetAppPlatformMetricsForProfile(Profile* profile) {
-  return ::apps::AppServiceProxyFactory::GetForProfile(profile)
-      ->AppPlatformMetrics();
-}
-
 // static
 std::unique_ptr<AppEventsObserver> AppEventsObserver::CreateForProfile(
-    Profile* profile) {
-  auto delegate = std::make_unique<AppEventsObserver::Delegate>();
-  return base::WrapUnique(new AppEventsObserver(profile, std::move(delegate)));
+    Profile* profile,
+    const ReportingSettings* reporting_settings) {
+  CHECK(profile);
+  const auto profile_weak_ptr = profile->GetWeakPtr();
+  auto app_platform_metrics_retriever =
+      std::make_unique<AppPlatformMetricsRetriever>(profile_weak_ptr);
+  return base::WrapUnique(new AppEventsObserver(
+      profile_weak_ptr, std::move(app_platform_metrics_retriever),
+      reporting_settings));
 }
 
 // static
 std::unique_ptr<AppEventsObserver> AppEventsObserver::CreateForTest(
     Profile* profile,
-    std::unique_ptr<AppEventsObserver::Delegate> delegate) {
-  return base::WrapUnique(new AppEventsObserver(profile, std::move(delegate)));
+    std::unique_ptr<AppPlatformMetricsRetriever> app_platform_metrics_retriever,
+    const ReportingSettings* reporting_settings) {
+  CHECK(profile);
+  return base::WrapUnique(new AppEventsObserver(
+      profile->GetWeakPtr(), std::move(app_platform_metrics_retriever),
+      reporting_settings));
+}
+
+AppEventsObserver::AppInstallTracker::AppInstallTracker(
+    base::WeakPtr<Profile> profile)
+    : profile_(profile) {}
+
+AppEventsObserver::AppInstallTracker::~AppInstallTracker() = default;
+
+void AppEventsObserver::AppInstallTracker::Add(std::string_view app_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!profile_) {
+    // Profile destroyed. Skip.
+    return;
+  }
+  CHECK(!Contains(app_id)) << "App already being tracked";
+  ScopedListPrefUpdate apps_installed_pref(profile_->GetPrefs(),
+                                           ::ash::reporting::kAppsInstalled);
+  apps_installed_pref->Append(app_id);
+}
+
+void AppEventsObserver::AppInstallTracker::Remove(std::string_view app_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!profile_) {
+    // Profile destroyed. Skip.
+    return;
+  }
+  CHECK(Contains(app_id)) << "App not being tracked";
+  ScopedListPrefUpdate apps_installed_pref(profile_->GetPrefs(),
+                                           ::ash::reporting::kAppsInstalled);
+  apps_installed_pref->EraseValue(base::Value(app_id));
+}
+
+bool AppEventsObserver::AppInstallTracker::Contains(
+    std::string_view app_id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(profile_);
+  return profile_->GetPrefs()
+      ->GetList(::ash::reporting::kAppsInstalled)
+      .contains(app_id);
 }
 
 AppEventsObserver::AppEventsObserver(
-    Profile* profile,
-    std::unique_ptr<AppEventsObserver::Delegate> delegate)
-    : profile_(profile), delegate_(std::move(delegate)) {
-  if (!delegate_->IsAppServiceAvailableForProfile(profile)) {
-    // Profile cannot run apps, so we just return.
-    return;
-  }
+    base::WeakPtr<Profile> profile,
+    std::unique_ptr<AppPlatformMetricsRetriever> app_platform_metrics_retriever,
+    const ReportingSettings* reporting_settings)
+    : profile_(profile),
+      app_platform_metrics_retriever_(
+          std::move(app_platform_metrics_retriever)),
+      reporting_settings_(reporting_settings) {
+  app_install_tracker_ = std::make_unique<AppInstallTracker>(profile);
 
-  // Register instance so we can start observing app events.
-  auto* const app_platform_metrics =
-      delegate_->GetAppPlatformMetricsForProfile(profile);
-  app_platform_metrics->AddObserver(this);
+  CHECK(app_platform_metrics_retriever_);
+  app_platform_metrics_retriever_->GetAppPlatformMetrics(base::BindOnce(
+      &AppEventsObserver::InitEventObserver, weak_ptr_factory_.GetWeakPtr()));
 }
 
-AppEventsObserver::~AppEventsObserver() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (IsInObserverList()) {
-    delegate_->GetAppPlatformMetricsForProfile(profile_)->RemoveObserver(this);
-  }
-}
+AppEventsObserver::~AppEventsObserver() = default;
 
 void AppEventsObserver::SetOnEventObservedCallback(
     MetricRepeatingCallback callback) {
@@ -75,8 +121,22 @@ void AppEventsObserver::SetOnEventObservedCallback(
 }
 
 void AppEventsObserver::SetReportingEnabled(bool is_enabled) {
+  // Do nothing. We retrieve the reporting setting and validate the app type is
+  // allowed before we report observed events.
+}
+
+void AppEventsObserver::InitEventObserver(
+    ::apps::AppPlatformMetrics* app_platform_metrics) {
+  // Runs on the same sequence as the `AppPlatformMetricsRetriever` because they
+  // both use the UI thread.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  is_enabled_ = is_enabled;
+  if (!app_platform_metrics) {
+    // This can happen if the `AppPlatformMetrics` component initialization
+    // failed (for example, component was destructed). We just abort
+    // initialization of the event observer when this happens.
+    return;
+  }
+  observer_.Observe(app_platform_metrics);
 }
 
 void AppEventsObserver::OnAppInstalled(const std::string& app_id,
@@ -85,7 +145,23 @@ void AppEventsObserver::OnAppInstalled(const std::string& app_id,
                                        ::apps::InstallReason app_install_reason,
                                        ::apps::InstallTime app_install_time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!is_enabled_) {
+  CHECK(reporting_settings_);
+  if (!profile_) {
+    // Either the profile was destroyed. Skip.
+    return;
+  }
+
+  // The app was already installed (likely in a prior session). Skip
+  if (app_install_tracker_->Contains(app_id)) {
+    return;
+  }
+
+  // Track app install to prevent future install event reports.
+  app_install_tracker_->Add(app_id);
+
+  if (!::ash::reporting::IsAppTypeAllowed(
+          app_type, reporting_settings_.get(),
+          ::ash::reporting::kReportAppInventory)) {
     return;
   }
 
@@ -95,7 +171,13 @@ void AppEventsObserver::OnAppInstalled(const std::string& app_id,
   auto* const app_install_data = metric_data.mutable_telemetry_data()
                                      ->mutable_app_telemetry()
                                      ->mutable_app_install_data();
-  app_install_data->set_app_id(app_id);
+  auto public_app_id = app_id;
+  if (const std::optional<std::string> app_publisher_id =
+          GetPublisherIdForApp(app_id, profile_.get());
+      app_publisher_id.has_value()) {
+    public_app_id = app_publisher_id.value();
+  }
+  app_install_data->set_app_id(public_app_id);
   app_install_data->set_app_type(
       ::apps::ConvertAppTypeToProtoApplicationType(app_type));
   app_install_data->set_app_install_source(
@@ -115,7 +197,10 @@ void AppEventsObserver::OnAppLaunched(const std::string& app_id,
                                       ::apps::AppType app_type,
                                       ::apps::LaunchSource app_launch_source) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!is_enabled_) {
+  CHECK(reporting_settings_);
+  if (!profile_ || !::ash::reporting::IsAppTypeAllowed(
+                       app_type, reporting_settings_.get(),
+                       ::ash::reporting::kReportAppInventory)) {
     return;
   }
 
@@ -125,7 +210,13 @@ void AppEventsObserver::OnAppLaunched(const std::string& app_id,
   auto* const app_launch_data = metric_data.mutable_telemetry_data()
                                     ->mutable_app_telemetry()
                                     ->mutable_app_launch_data();
-  app_launch_data->set_app_id(app_id);
+  auto public_app_id = app_id;
+  if (const std::optional<std::string> app_publisher_id =
+          GetPublisherIdForApp(app_id, profile_.get());
+      app_publisher_id.has_value()) {
+    public_app_id = app_publisher_id.value();
+  }
+  app_launch_data->set_app_id(public_app_id);
   app_launch_data->set_app_type(
       ::apps::ConvertAppTypeToProtoApplicationType(app_type));
   app_launch_data->set_app_launch_source(
@@ -140,7 +231,19 @@ void AppEventsObserver::OnAppUninstalled(
     ::apps::AppType app_type,
     ::apps::UninstallSource app_uninstall_source) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!is_enabled_) {
+  CHECK(reporting_settings_);
+  if (!profile_) {
+    // Profile destroyed. Return.
+    return;
+  }
+
+  if (app_install_tracker_ && app_install_tracker_->Contains(app_id)) {
+    // Stop tracking app install if it is being tracked.
+    app_install_tracker_->Remove(app_id);
+  }
+  if (!::ash::reporting::IsAppTypeAllowed(
+          app_type, reporting_settings_.get(),
+          ::ash::reporting::kReportAppInventory)) {
     return;
   }
 
@@ -150,7 +253,13 @@ void AppEventsObserver::OnAppUninstalled(
   auto* const app_uninstall_data = metric_data.mutable_telemetry_data()
                                        ->mutable_app_telemetry()
                                        ->mutable_app_uninstall_data();
-  app_uninstall_data->set_app_id(app_id);
+  auto public_app_id = app_id;
+  if (const std::optional<std::string> app_publisher_id =
+          GetPublisherIdForApp(app_id, profile_.get());
+      app_publisher_id.has_value()) {
+    public_app_id = app_publisher_id.value();
+  }
+  app_uninstall_data->set_app_id(public_app_id);
   app_uninstall_data->set_app_type(
       ::apps::ConvertAppTypeToProtoApplicationType(app_type));
   app_uninstall_data->set_app_uninstall_source(
@@ -158,6 +267,11 @@ void AppEventsObserver::OnAppUninstalled(
           app_uninstall_source));
 
   on_metric_observed_.Run(std::move(metric_data));
+}
+
+void AppEventsObserver::OnAppPlatformMetricsDestroyed() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  observer_.Reset();
 }
 
 }  // namespace reporting

@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
 #include "media/mojo/mojom/capture_handle.mojom.h"
@@ -19,7 +19,7 @@
 namespace content {
 
 // This class lives on the UI thread.
-// TODO(crbug.com/1208868): Document this class.
+// TODO(crbug.com/40181897): Document this class.
 class CONTENT_EXPORT CaptureHandleManager {
  public:
   using DeviceCaptureHandleChangeCallback = base::RepeatingCallback<void(

@@ -26,10 +26,10 @@ import datetime
 import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__),
-                             os.pardir, os.pardir, os.pardir,
-                             'build', 'android', 'gyp'))
-from util import build_utils
+sys.path.append(
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', 'build'))
+import action_helpers
+
 
 # six is a dependency of javalang
 sys.path.insert(
@@ -207,6 +207,14 @@ def main(args):
   with open(options.input, 'r') as f:
     content = f.read()
 
+  if '<@Nullable' in content:
+    sys.stderr.write("""
+Error: @Nullable annotations inside generic types are not supported.
+Please remove them from {file_path}.
+See https://crbug.com/433562519 for details.
+""".format(file_path=options.input))
+    sys.exit(1)
+
   java_ast = javalang.parse.parse(content)
   assert len(java_ast.types) == 1, 'Can only process Java files with one class'
   clazz = java_ast.types[0]
@@ -226,7 +234,7 @@ def main(args):
       'CLASS_NAME': clazz.name,
       'METHODS': '\n'.join(['    ' + m for m in formatted_public_methods])
   }
-  with build_utils.AtomicOutput(options.output, mode='w') as f:
+  with action_helpers.atomic_output(options.output, mode='w') as f:
     f.write(_FILE_TEMPLATE.format(**file_dict))
 
 

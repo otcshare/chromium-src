@@ -10,10 +10,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
 #include "base/cpu.h"
+#include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -31,8 +31,8 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_id_name_manager.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "content/common/process_visibility_tracker.h"
+#include "base/types/expected.h"
+#include "content/common/process_priority_tracker.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
 
@@ -43,7 +43,7 @@ namespace {
 bool g_ignore_histogram_allocator_for_testing = false;
 
 static_assert(static_cast<int>(ProcessTypeForUma::kMaxValue) ==
-                  PROCESS_TYPE_PPAPI_BROKER,
+                  PROCESS_TYPE_PPAPI_BROKER_DEPRECATED,
               "ProcessTypeForUma and CurrentProcessType() require updating");
 
 ProcessTypeForUma CurrentProcessType() {
@@ -60,10 +60,7 @@ ProcessTypeForUma CurrentProcessType() {
     return ProcessTypeForUma::kSandboxHelper;
   if (process_type == switches::kGpuProcess)
     return ProcessTypeForUma::kGpu;
-  if (process_type == switches::kPpapiPluginProcess)
-    return ProcessTypeForUma::kPpapiPlugin;
   NOTREACHED() << "Unexpected process type: " << process_type;
-  return ProcessTypeForUma::kUnknown;
 }
 
 const char* GetPerThreadHistogramNameForProcessType(ProcessTypeForUma type) {
@@ -76,6 +73,48 @@ const char* GetPerThreadHistogramNameForProcessType(ProcessTypeForUma type) {
       return "Power.CpuTimeSecondsPerThreadType.GPU";
     default:
       return "Power.CpuTimeSecondsPerThreadType.Other";
+  }
+}
+
+const char* GetPerThreadHistogramNameForProcessTypeForeground(
+    ProcessTypeForUma type) {
+  switch (type) {
+    case ProcessTypeForUma::kBrowser:
+      return "Power.CpuTimeSecondsPerThreadType.Browser.Foreground";
+    case ProcessTypeForUma::kRenderer:
+      return "Power.CpuTimeSecondsPerThreadType.Renderer.Foreground";
+    case ProcessTypeForUma::kGpu:
+      return "Power.CpuTimeSecondsPerThreadType.GPU.Foreground";
+    default:
+      return "Power.CpuTimeSecondsPerThreadType.Other.Foreground";
+  }
+}
+
+const char* GetPerThreadHistogramNameForProcessTypeBackground(
+    ProcessTypeForUma type) {
+  switch (type) {
+    case ProcessTypeForUma::kBrowser:
+      return "Power.CpuTimeSecondsPerThreadType.Browser.Background";
+    case ProcessTypeForUma::kRenderer:
+      return "Power.CpuTimeSecondsPerThreadType.Renderer.Background";
+    case ProcessTypeForUma::kGpu:
+      return "Power.CpuTimeSecondsPerThreadType.GPU.Background";
+    default:
+      return "Power.CpuTimeSecondsPerThreadType.Other.Background";
+  }
+}
+
+const char* GetPerThreadHistogramNameForProcessTypeUnattributed(
+    ProcessTypeForUma type) {
+  switch (type) {
+    case ProcessTypeForUma::kBrowser:
+      return "Power.CpuTimeSecondsPerThreadType.Browser.Unattributed";
+    case ProcessTypeForUma::kRenderer:
+      return "Power.CpuTimeSecondsPerThreadType.Renderer.Unattributed";
+    case ProcessTypeForUma::kGpu:
+      return "Power.CpuTimeSecondsPerThreadType.GPU.Unattributed";
+    default:
+      return "Power.CpuTimeSecondsPerThreadType.Other.Unattributed";
   }
 }
 
@@ -210,7 +249,7 @@ class ProcessCpuTimeMetrics::DetailedCpuTimeMetrics {
     DETACH_FROM_SEQUENCE(thread_pool_);
   }
 
-  void CollectOnThreadPool() {
+  void CollectOnThreadPool(std::optional<bool> is_foregrounded) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(thread_pool_);
 
     // This might overflow. We only care that it is different for each cycle.
@@ -224,13 +263,12 @@ class ProcessCpuTimeMetrics::DetailedCpuTimeMetrics {
       return;
     }
 
-    // GetCumulativeCPUUsage() may return a negative value if sampling failed.
-    base::TimeDelta cumulative_cpu_time =
-        process_metrics_->GetCumulativeCPUUsage();
-    base::TimeDelta process_cpu_time_delta =
-        cumulative_cpu_time - reported_cpu_time_;
-    if (process_cpu_time_delta.is_positive()) {
-      reported_cpu_time_ = cumulative_cpu_time;
+    const base::expected<base::TimeDelta, base::ProcessCPUUsageError>
+        cumulative_cpu_time = process_metrics_->GetCumulativeCPUUsage();
+    base::TimeDelta process_cpu_time_delta;
+    if (cumulative_cpu_time.has_value()) {
+      process_cpu_time_delta = cumulative_cpu_time.value() - reported_cpu_time_;
+      reported_cpu_time_ = cumulative_cpu_time.value();
     }
 
     // Also report a breakdown by thread type.
@@ -266,7 +304,8 @@ class ProcessCpuTimeMetrics::DetailedCpuTimeMetrics {
             cumulative_time - thread_details->reported_cpu_time;
         unattributed_delta -= thread_delta;
 
-        ReportThreadCpuTimeDelta(thread_details->type, thread_delta);
+        ReportThreadCpuTimeDelta(thread_details->type, thread_delta,
+                                 is_foregrounded);
         thread_details->reported_cpu_time = cumulative_time;
       }
 
@@ -283,9 +322,12 @@ class ProcessCpuTimeMetrics::DetailedCpuTimeMetrics {
 
     // Report the difference of the process's total CPU time and all thread's
     // CPU time as unattributed time (e.g. time consumed by threads that died).
+    // `unattributed_delta` can be negative if GetCumulativeCPUUsagePerThread()
+    // reported more time than GetCumulativeCPUUsage() did, or if
+    // GetCumulativeCPUUsage() failed so `unattributed_delta` started at 0.
     if (unattributed_delta.is_positive()) {
       ReportThreadCpuTimeDelta(CpuTimeMetricsThreadType::kUnattributedThread,
-                               unattributed_delta);
+                               unattributed_delta, is_foregrounded);
     }
   }
 
@@ -297,14 +339,40 @@ class ProcessCpuTimeMetrics::DetailedCpuTimeMetrics {
   };
 
   void ReportThreadCpuTimeDelta(CpuTimeMetricsThreadType type,
-                                base::TimeDelta cpu_time_delta) {
+                                base::TimeDelta cpu_time_delta,
+                                std::optional<bool> is_foregrounded) {
     // Histogram name cannot change after being used once. That's ok since this
     // only depends on the process type, which also doesn't change.
     static const char* histogram_name =
         GetPerThreadHistogramNameForProcessType(process_type_);
-    UMA_HISTOGRAM_SCALED_ENUMERATION(histogram_name, type,
-                                     cpu_time_delta.InMicroseconds(),
+    static const char* histogram_name_foreground =
+        GetPerThreadHistogramNameForProcessTypeForeground(process_type_);
+    static const char* histogram_name_background =
+        GetPerThreadHistogramNameForProcessTypeBackground(process_type_);
+    static const char* histogram_name_unattributed =
+        GetPerThreadHistogramNameForProcessTypeUnattributed(process_type_);
+
+    // Histograms use int internally. Make sure it doesn't overflow.
+    int capped_value = std::min<int64_t>(cpu_time_delta.InMicroseconds(),
+                                         std::numeric_limits<int>::max());
+    UMA_HISTOGRAM_SCALED_ENUMERATION(histogram_name, type, capped_value,
                                      base::Time::kMicrosecondsPerSecond);
+
+    if (is_foregrounded.has_value()) {
+      if (*is_foregrounded) {
+        UMA_HISTOGRAM_SCALED_ENUMERATION(histogram_name_foreground, type,
+                                         capped_value,
+                                         base::Time::kMicrosecondsPerSecond);
+      } else {
+        UMA_HISTOGRAM_SCALED_ENUMERATION(histogram_name_background, type,
+                                         capped_value,
+                                         base::Time::kMicrosecondsPerSecond);
+      }
+    } else {
+      UMA_HISTOGRAM_SCALED_ENUMERATION(histogram_name_unattributed, type,
+                                       capped_value,
+                                       base::Time::kMicrosecondsPerSecond);
+    }
   }
 
   CpuTimeMetricsThreadType GuessThreadType(base::PlatformThreadId tid) {
@@ -371,11 +439,11 @@ ProcessCpuTimeMetrics::~ProcessCpuTimeMetrics() {
   // the members and observer registrations but assume that the test takes
   // care of any threading issues.
   base::CurrentThread::Get()->RemoveTaskObserver(this);
-  ProcessVisibilityTracker::GetInstance()->RemoveObserver(this);
+  ProcessPriorityTracker::GetInstance()->RemoveObserver(this);
 }
 
 void ProcessCpuTimeMetrics::InitializeOnThreadPool() {
-  ProcessVisibilityTracker::GetInstance()->AddObserver(this);
+  ProcessPriorityTracker::GetInstance()->AddObserver(this);
   PerformFullCollectionOnThreadPool();
 }
 
@@ -400,19 +468,21 @@ void ProcessCpuTimeMetrics::DidProcessTask(
   }
 }
 
-// ProcessVisibilityTracker::ProcessVisibilityObserver implementation:
-void ProcessCpuTimeMetrics::OnVisibilityChanged(bool visible) {
+// ProcessPriorityTracker::ProcessPriorityObserver implementation:
+void ProcessCpuTimeMetrics::OnPriorityChanged(
+    base::Process::Priority priority) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(thread_pool_);
   // Collect high-level metrics that include a visibility breakdown and
-  // attribute them to the old value of |is_visible_| before updating it.
+  // attribute them to the old value of |is_foregrounded_| before updating it.
   CollectHighLevelMetricsOnThreadPool();
-  is_visible_ = visible;
+  detailed_metrics_->CollectOnThreadPool(is_foregrounded_);
+  is_foregrounded_ = (priority != base::Process::Priority::kBestEffort);
 }
 
 void ProcessCpuTimeMetrics::PerformFullCollectionOnThreadPool() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(thread_pool_);
   CollectHighLevelMetricsOnThreadPool();
-  detailed_metrics_->CollectOnThreadPool();
+  detailed_metrics_->CollectOnThreadPool(is_foregrounded_);
 }
 
 void ProcessCpuTimeMetrics::CollectHighLevelMetricsOnThreadPool() {
@@ -424,18 +494,22 @@ void ProcessCpuTimeMetrics::CollectHighLevelMetricsOnThreadPool() {
     return;
   }
 
-  // GetCumulativeCPUUsage() may return a negative value if sampling failed.
-  base::TimeDelta cumulative_cpu_time =
-      process_metrics_->GetCumulativeCPUUsage();
-  base::TimeDelta process_cpu_time_delta =
-      cumulative_cpu_time - reported_cpu_time_;
+  const base::expected<base::TimeDelta, base::ProcessCPUUsageError>
+      cumulative_cpu_usage = process_metrics_->GetCumulativeCPUUsage();
+  base::TimeDelta process_cpu_time_delta;
+  if (cumulative_cpu_usage.has_value()) {
+    process_cpu_time_delta = cumulative_cpu_usage.value() - reported_cpu_time_;
+  }
+  // Don't report anything if GetCumulativeCPUUsage() failed or the delta is 0.
   if (process_cpu_time_delta.is_positive()) {
+    const base::TimeDelta cumulative_cpu_time = cumulative_cpu_usage.value();
+
     UMA_HISTOGRAM_SCALED_ENUMERATION("Power.CpuTimeSecondsPerProcessType",
                                      process_type_,
                                      process_cpu_time_delta.InMicroseconds(),
                                      base::Time::kMicrosecondsPerSecond);
-    if (is_visible_.has_value()) {
-      if (*is_visible_) {
+    if (is_foregrounded_.has_value()) {
+      if (*is_foregrounded_) {
         UMA_HISTOGRAM_SCALED_ENUMERATION(
             "Power.CpuTimeSecondsPerProcessType.Foreground", process_type_,
             process_cpu_time_delta.InMicroseconds(),
@@ -482,14 +556,6 @@ void ProcessCpuTimeMetrics::ReportAverageCpuLoad(
     cpu_load_report_time_ = now;
     cpu_time_on_last_load_report_ = cumulative_cpu_time;
   }
-}
-
-void ProcessCpuTimeMetrics::PerformFullCollectionForTesting() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_);
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ProcessCpuTimeMetrics::PerformFullCollectionOnThreadPool,
-                     base::Unretained(this)));
 }
 
 void ProcessCpuTimeMetrics::WaitForCollectionForTesting() const {

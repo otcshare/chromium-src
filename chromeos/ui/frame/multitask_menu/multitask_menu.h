@@ -6,11 +6,15 @@
 #define CHROMEOS_UI_FRAME_MULTITASK_MENU_MULTITASK_MENU_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu_view.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_observer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/display/display_observer.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/widget/unique_widget_ptr.h"
 
 namespace views {
 class View;
@@ -19,48 +23,49 @@ class Widget;
 
 namespace chromeos {
 
-// MultitaskMenu is the window operation menu attached to frame
-// size button.
+// MultitaskMenu is the window layout menu attached to frame size button.
 class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) MultitaskMenu
     : public views::BubbleDialogDelegateView,
-      public views::WidgetObserver,
-      public display::DisplayObserver {
+      public display::DisplayObserver,
+      public aura::WindowObserver {
+  METADATA_HEADER(MultitaskMenu, views::BubbleDialogDelegateView)
+
  public:
-  METADATA_HEADER(MultitaskMenu);
-
-  MultitaskMenu(views::View* anchor, views::Widget* parent_widget);
-
+  MultitaskMenu(views::View* anchor,
+                views::Widget* parent_widget,
+                bool close_on_move_out);
   MultitaskMenu(const MultitaskMenu&) = delete;
   MultitaskMenu& operator=(const MultitaskMenu&) = delete;
-
   ~MultitaskMenu() override;
 
-  // views::WidgetObserver:
-  void OnWidgetDestroying(views::Widget* widget) override;
+  MultitaskMenuView* multitask_menu_view() {
+    return multitask_menu_view_.get();
+  }
+
+  void HideBubble();
+
+  base::WeakPtr<MultitaskMenu> GetWeakPtr();
 
   // display::DisplayObserver:
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
   void OnDisplayTabletStateChanged(display::TabletState state) override;
 
-  // Displays the MultitaskMenu.
-  void ShowBubble();
-
-  // Hides the currently-showing MultitaskMenu.
-  void HideBubble();
-
-  MultitaskMenuView* multitask_menu_view_for_testing() {
-    return multitask_menu_view_.get();
-  }
+  // aura::WindowObserver:
+  void OnWindowPropertyChanged(aura::Window* window,
+                               const void* key,
+                               intptr_t old) override;
+  void OnWindowDestroying(aura::Window* window) override;
 
  private:
-  raw_ptr<views::Widget> bubble_widget_ = nullptr;
-  base::ScopedObservation<views::Widget, views::WidgetObserver>
-      bubble_widget_observer_{this};
-
   raw_ptr<MultitaskMenuView> multitask_menu_view_ = nullptr;
 
-  absl::optional<display::ScopedDisplayObserver> display_observer_;
+  std::optional<display::ScopedDisplayObserver> display_observer_;
+
+  base::ScopedObservation<aura::Window, aura::WindowObserver>
+      window_observation_{this};
+
+  base::WeakPtrFactory<MultitaskMenu> weak_factory_{this};
 };
 
 }  // namespace chromeos

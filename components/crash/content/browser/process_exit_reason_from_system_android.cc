@@ -6,7 +6,9 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "components/crash/android/jni_headers/ProcessExitReasonFromSystem_jni.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/crash/content/browser/jni_headers/ProcessExitReasonFromSystem_jni.h"
 
 namespace crash_reporter {
 
@@ -20,3 +22,5 @@ void ProcessExitReasonFromSystem::RecordExitReasonToUma(
 }
 
 }  // namespace crash_reporter
+
+DEFINE_JNI(ProcessExitReasonFromSystem)

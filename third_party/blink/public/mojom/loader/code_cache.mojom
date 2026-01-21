@@ -4,6 +4,7 @@
 
 module blink.mojom;
 
+import "components/persistent_cache/mojom/persistent_cache.mojom";
 import "mojo/public/mojom/base/big_buffer.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "url/mojom/origin.mojom";
@@ -19,6 +20,12 @@ enum CodeCacheType {
 // can use this interface to persistently store and retrieve executable code
 // generated for a URL.
 interface CodeCacheHost {
+  // Requests a pending backend for an independent read-only connection to a
+  // PersistentCache for the specified `cache_type`. `pending_backend` will be
+  // empty if the cache is not functioning.
+  GetPendingBackend(CodeCacheType cache_type) =>
+      (persistent_cache.mojom.PendingReadOnlyBackend? pending_backend);
+
   // Requests that the browser cache |data| associated with |url| and
   // |expected_response_time|.
   DidGenerateCacheableMetadata(CodeCacheType cache_type,
@@ -32,11 +39,9 @@ interface CodeCacheHost {
   ClearCodeCacheEntry(CodeCacheType cache_type, url.mojom.Url url);
 
   // Requests that the browser cache |data| for the specified CacheStorage entry.
-  // TODO(https://crbug.com/779444): Verify or remove |cache_storage_origin|.
   // TODO(kinuko): Consider making the renderer-side code directly call into the
   // origin's CacheStoragePtr.
   DidGenerateCacheableMetadataInCacheStorage(
       url.mojom.Url url, mojo_base.mojom.Time expected_response_time,
-      mojo_base.mojom.BigBuffer data, url.mojom.Origin cache_storage_origin,
-      string cache_storage_cache_name);
+      mojo_base.mojom.BigBuffer data, string cache_storage_cache_name);
 };

@@ -2,9 +2,116 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/ui.gni")
 import("//media/gpu/args.gni")
+import("//media/media_options.gni")
+
+if (enable_av1_decoder &&
+    (use_linux_video_acceleration || is_win || is_android)) {
+  test("video_decode_accelerator_tests") {
+    testonly = true
+    sources = [
+      "video_decode_accelerator_test_suite.cc",
+      "video_decode_accelerator_test_suite.h",
+      "video_decode_accelerator_tests.cc",
+    ]
+    data = [ "//media/test/data/" ]
+    deps = [
+      ":frame_file_writer",
+      ":frame_validator",
+      ":helpers",
+      ":test_helpers",
+      ":video_player",
+      ":video_player_test_environment",
+      "//base/test:test_support",
+      "//media:test_support",
+      "//media/gpu:buildflags",
+      "//testing/gmock",
+      "//testing/gtest",
+    ]
+
+    if (is_chromeos || is_linux) {
+      deps += [ "//media/gpu/chromeos:common" ]
+    }
+
+    if (use_vaapi) {
+      data_deps = [ "//media/gpu/vaapi/test/fake_libva_driver:fake_drv_video" ]
+    }
+
+    if (use_v4l2_codec) {
+      deps += [ "//media/gpu/v4l2" ]
+    }
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+
+  test("video_decode_accelerator_perf_tests") {
+    testonly = true
+    sources = [ "video_decode_accelerator_perf_tests.cc" ]
+    data = [ "//media/test/data/" ]
+    deps = [
+      ":helpers",
+      ":video_player",
+      ":video_player_test_environment",
+      "//media:test_support",
+      "//media/gpu:buildflags",
+      "//testing/gtest",
+    ]
+
+    if (use_linux_video_acceleration) {
+      deps += [ "//sandbox/linux:sandbox_services" ]
+    }
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+
+  test("video_encode_accelerator_tests") {
+    testonly = true
+    sources = [ "video_encode_accelerator_tests.cc" ]
+    data = [ "//media/test/data/" ]
+    deps = [
+      ":frame_file_writer",
+      ":frame_validator",
+      ":helpers",
+      ":test_helpers",
+      ":video_encoder",
+      ":video_encoder_test_environment",
+      "//media:test_support",
+      "//media/gpu:buildflags",
+      "//testing/gmock",
+      "//testing/gtest",
+    ]
+
+    if (is_android) {
+      deps += [
+        # The test needs the java dependencies to add the java classes for their
+        # native counterparts to the test apk.
+        "//media/base/android:media_java",
+      ]
+    }
+  }
+
+  test("video_encode_accelerator_perf_tests") {
+    testonly = true
+    sources = [ "video_encode_accelerator_perf_tests.cc" ]
+    data = [ "//media/test/data/" ]
+    deps = [
+      ":frame_validator",
+      ":helpers",
+      ":test_helpers",
+      ":video_encoder",
+      ":video_encoder_test_environment",
+      "//base/test:test_support",
+      "//media:test_support",
+      "//media/gpu:buildflags",
+      "//testing/gtest",
+    ]
+  }
+}
 
 source_set("helpers") {
   testonly = true
@@ -13,15 +120,19 @@ source_set("helpers") {
     "image.h",
     "image_quality_metrics.cc",
     "image_quality_metrics.h",
-    "video.cc",
-    "video.h",
+    "raw_video.cc",
+    "raw_video.h",
+    "video_bitstream.cc",
+    "video_bitstream.h",
     "video_frame_helpers.cc",
     "video_frame_helpers.h",
   ]
   deps = [
-    "//base:base",
+    "//base",
     "//base/test:test_config",
     "//base/test:test_support",
+    "//crypto",
+    "//gpu:test_support",
     "//gpu/ipc/common",
     "//media:test_support",
     "//media/gpu",
@@ -29,6 +140,10 @@ source_set("helpers") {
     "//third_party/libyuv",
   ]
   public_deps = [ "//testing/gtest" ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("frame_validator") {
@@ -40,9 +155,15 @@ source_set("frame_validator") {
   deps = [
     ":helpers",
     ":test_helpers",
-    "//build:chromeos_buildflags",
+    "//crypto",
+    "//gpu:test_support",
     "//media/gpu",
+    "//testing/gmock",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("frame_file_writer") {
@@ -53,9 +174,8 @@ source_set("frame_file_writer") {
   ]
   deps = [
     ":helpers",
-    "//build:chromeos_buildflags",
     "//media/gpu",
-    "//ui/gfx/codec:codec",
+    "//ui/gfx/codec",
   ]
 }
 
@@ -70,15 +190,13 @@ source_set("test_helpers") {
     "//media:test_support",
   ]
   deps = [
+    "//gpu:test_support",
     "//media/gpu",
-    "//media/parsers",
     "//mojo/public/cpp/system",
+    "//testing/gmock",
     "//testing/gtest",
     "//third_party/libyuv",
   ]
-  if (use_ozone) {
-    deps += [ "//ui/ozone" ]
-  }
 }
 
 static_library("video_player") {
@@ -95,9 +213,19 @@ static_library("video_player") {
   ]
   deps = [
     ":test_helpers",
+    "//gpu:test_support",
     "//media/gpu",
-    "//testing/gtest:gtest",
+    "//testing/gmock",
+    "//testing/gtest",
   ]
+
+  if (use_linux_video_acceleration) {
+    sources += [
+      "video_player/mappable_video_frame_converter.cc",
+      "video_player/mappable_video_frame_converter.h",
+    ]
+    deps += [ "//media/gpu/chromeos:common" ]
+  }
 }
 
 static_library("video_test_environment") {
@@ -109,20 +237,17 @@ static_library("video_test_environment") {
 
   deps = [
     ":helpers",
-    "//base:base",
+    "//base",
     "//base/test:test_support",
     "//media:test_support",
     "//media/gpu",
-    "//mojo/core/embedder:embedder",
+    "//mojo/core/embedder",
   ]
 
   public_deps = [
     ":frame_file_writer",
     "//testing/gtest",
   ]
-  if (use_ozone) {
-    public_deps += [ "//ui/ozone" ]
-  }
 }
 
 static_library("video_player_test_environment") {
@@ -137,7 +262,6 @@ static_library("video_player_test_environment") {
     ":helpers",
     ":video_player",
     ":video_test_environment",
-    "//build:chromeos_buildflags",
     "//media/gpu",
   ]
 }
@@ -158,11 +282,13 @@ static_library("video_encoder") {
     "video_encoder/video_encoder_client.cc",
     "video_encoder/video_encoder_client.h",
   ]
+  public_deps = [ "//third_party/libgav1:libgav1_parser" ]
   deps = [
     ":test_helpers",
+    "//gpu:test_support",
     "//media/gpu",
-    "//media/parsers",
-    "//testing/gtest:gtest",
+    "//testing/gmock",
+    "//testing/gtest",
   ]
 }
 
@@ -176,15 +302,12 @@ static_library("video_encoder_test_environment") {
   public_deps = [
     ":helpers",
     ":video_test_environment",
-  ]
-  deps = [
-    "//base:base",
-    "//build:chromeos_buildflags",
     "//media/gpu",
   ]
+  deps = [ "//base" ]
 }
 
-if (use_vaapi || use_v4l2_codec) {
+if (use_linux_video_acceleration) {
   static_library("image_processor") {
     testonly = true
     sources = [
@@ -193,10 +316,11 @@ if (use_vaapi || use_v4l2_codec) {
     ]
     deps = [
       ":helpers",
-      "//build:chromeos_buildflags",
+      "//gpu:test_support",
       "//media:test_support",
       "//media/gpu",
       "//media/gpu/chromeos",
+      "//testing/gmock",
       "//testing/gtest",
       "//third_party/libyuv",
     ]
@@ -204,20 +328,22 @@ if (use_vaapi || use_v4l2_codec) {
   }
 }
 
-if (is_chromeos_ash) {
+if (is_chromeos) {
   static_library("local_gpu_memory_buffer_manager") {
     testonly = true
     sources = [
-      "local_gpu_memory_buffer_manager.cc",
-      "local_gpu_memory_buffer_manager.h",
+      "test_gbm_buffer_manager.cc",
+      "test_gbm_buffer_manager.h",
     ]
     deps = [
       "//base",
       "//build/config/linux/libdrm",
       "//gpu/command_buffer/client",
+      "//gpu/ipc/common:surface_handle_type",
       "//third_party/minigbm",
       "//ui/gfx:memory_buffer",
       "//ui/gfx/geometry",
+      "//ui/gfx/linux:gbm",
     ]
   }
 }

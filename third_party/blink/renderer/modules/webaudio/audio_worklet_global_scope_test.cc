@@ -6,7 +6,9 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/synchronization/waitable_event.h"
+#include "media/base/audio_bus.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -96,7 +98,7 @@ class AudioWorkletGlobalScopeTest : public PageTestBase, public ModuleTestBase {
             BeginFrameProviderParams(), nullptr /* parent_permissions_policy */,
             window->GetAgentClusterID(), ukm::kInvalidSourceId,
             window->GetExecutionContextToken()),
-        absl::nullopt, std::make_unique<WorkerDevToolsParams>());
+        std::nullopt, std::make_unique<WorkerDevToolsParams>());
     return thread;
   }
 
@@ -214,8 +216,7 @@ class AudioWorkletGlobalScopeTest : public PageTestBase, public ModuleTestBase {
     EXPECT_TRUE(processor);
     EXPECT_EQ(processor->Name(), "testProcessor");
     v8::Local<v8::Value> processor_value =
-        ToV8Traits<AudioWorkletProcessor>::ToV8(script_state, processor)
-            .ToLocalChecked();
+        ToV8Traits<AudioWorkletProcessor>::ToV8(script_state, processor);
     EXPECT_TRUE(processor_value->IsObject());
 
     wait_event->Signal();
@@ -333,15 +334,16 @@ class AudioWorkletGlobalScopeTest : public PageTestBase, public ModuleTestBase {
     output_buses.push_back(output_bus.get());
 
     // Fill `input_channel` with 1 and zero out `output_bus`.
-    std::fill(input_channel->MutableData(),
-              input_channel->MutableData() + input_channel->length(), 1);
+    std::fill(
+        input_channel->MutableData(),
+        UNSAFE_TODO(input_channel->MutableData() + input_channel->length()), 1);
     output_bus->Zero();
 
     // Then invoke the process() method to perform JS buffer manipulation. The
     // output buffer should contain a constant value of 2.
     processor->Process(input_buses, output_buses, param_data_map);
     for (unsigned i = 0; i < output_channel->length(); ++i) {
-      EXPECT_EQ(output_channel->Data()[i], 2);
+      UNSAFE_TODO(EXPECT_EQ(output_channel->Data()[i], 2));
     }
 
     wait_event->Signal();

@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/stringprintf.h"
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_with_install.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/value_store/value_store_factory_impl.h"
 #include "extensions/browser/api/storage/storage_api.h"
 #include "extensions/browser/api/storage/storage_frontend.h"
@@ -12,7 +14,11 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/test/test_extension_dir.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -27,7 +33,8 @@ std::unique_ptr<KeyedService> CreateStorageFrontendForTesting(
 
 std::unique_ptr<KeyedService> BuildEventRouter(
     content::BrowserContext* profile) {
-  return std::make_unique<extensions::EventRouter>(profile, nullptr);
+  return std::make_unique<extensions::EventRouter>(
+      profile, ExtensionPrefs::Get(profile));
 }
 
 }  // namespace
@@ -49,7 +56,7 @@ class SessionStorageApiUnittest : public ExtensionServiceTestWithInstall {
 
   // Returns the session storage of the given extension with the associated
   // profile.
-  absl::optional<base::Value> GetStorage(
+  std::optional<base::Value> GetStorage(
       scoped_refptr<const Extension> extension);
 
   // ExtensionServiceTestBase:
@@ -71,7 +78,7 @@ void SessionStorageApiUnittest::RunFunction(
       profile()));
 }
 
-absl::optional<base::Value> SessionStorageApiUnittest::GetStorage(
+std::optional<base::Value> SessionStorageApiUnittest::GetStorage(
     scoped_refptr<const Extension> extension) {
   scoped_refptr<ExtensionFunction> function =
       base::MakeRefCounted<StorageStorageAreaGetFunction>();
@@ -101,7 +108,7 @@ void SessionStorageApiUnittest::SetFunctionProperties(
     scoped_refptr<ExtensionFunction> function,
     scoped_refptr<const Extension> extension) {
   function->set_extension(extension);
-  function->set_source_context_type(Feature::BLESSED_EXTENSION_CONTEXT);
+  function->set_source_context_type(mojom::ContextType::kPrivilegedExtension);
 }
 
 TEST_F(SessionStorageApiUnittest,
@@ -123,7 +130,7 @@ TEST_F(SessionStorageApiUnittest,
 
   // Reload the extension and check the session storage is cleared.
   TestExtensionRegistryObserver registry_observer(registry(), extension_id);
-  service()->ReloadExtension(extension_id);
+  registrar()->ReloadExtension(extension_id);
   scoped_refptr<const Extension> reloaded_extension =
       registry_observer.WaitForExtensionLoaded();
   EXPECT_THAT(*GetStorage(reloaded_extension), base::test::IsJson(R"({})"));

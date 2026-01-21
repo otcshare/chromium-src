@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/metrics/metrics_provider.h"
 
 namespace syncer {
@@ -43,9 +43,6 @@ class DeviceCountMetricsProvider : public metrics::MetricsProvider {
       metrics::ChromeUserMetricsExtension* uma_proto) override;
 
  private:
-  // Returns the max number of active devices across all accounts.
-  int MaxActiveDeviceCount() const;
-
   const ProvideTrackersCallback provide_trackers_;
 };
 

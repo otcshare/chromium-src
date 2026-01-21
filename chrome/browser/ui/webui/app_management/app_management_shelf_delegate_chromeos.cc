@@ -4,22 +4,21 @@
 
 #include "chrome/browser/ui/webui/app_management/app_management_shelf_delegate_chromeos.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/shelf_item.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "base/containers/contains.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/app_shortcut_shelf_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_prefs.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
-#include "chrome/browser/ui/webui/app_management/app_management_page_handler.h"
-
-using app_management::mojom::OptionalBool;
+#include "chrome/browser/ui/webui/app_management/app_management_page_handler_chromeos.h"
 
 AppManagementShelfDelegate::AppManagementShelfDelegate(
-    AppManagementPageHandler* page_handler,
+    AppManagementPageHandlerChromeOs* page_handler,
     Profile* profile)
     : page_handler_(page_handler),
       shelf_controller_helper_(
@@ -73,24 +72,22 @@ bool AppManagementShelfDelegate::IsPolicyPinned(
   }
   // The app doesn't exist on the shelf - check launcher prefs instead.
   std::vector<std::string> policy_pinned_apps =
-      shelf_controller->shelf_prefs()->GetAppsPinnedByPolicy(
-          shelf_controller_helper_.get());
-  return base::Contains(policy_pinned_apps, app_id);
+      ChromeShelfPrefs::GetAppsPinnedByPolicy(
+          shelf_controller_helper_->profile());
+  return std::ranges::contains(policy_pinned_apps, app_id);
 }
 
 void AppManagementShelfDelegate::SetPinned(const std::string& app_id,
-                                           OptionalBool pinned) {
+                                           bool pinned) {
   auto* shelf_controller = ChromeShelfController::instance();
   if (!shelf_controller) {
     return;
   }
 
-  if (pinned == OptionalBool::kTrue) {
+  if (pinned) {
     PinAppWithIDToShelf(app_id);
-  } else if (pinned == OptionalBool::kFalse) {
-    UnpinAppWithIDFromShelf(app_id);
   } else {
-    NOTREACHED();
+    UnpinAppWithIDFromShelf(app_id);
   }
 }
 

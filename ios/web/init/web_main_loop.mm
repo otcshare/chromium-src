@@ -8,8 +8,8 @@
 
 #import <utility>
 
-#import "base/bind.h"
 #import "base/command_line.h"
+#import "base/functional/bind.h"
 #import "base/logging.h"
 #import "base/message_loop/message_pump_type.h"
 #import "base/metrics/histogram_macros.h"
@@ -18,9 +18,9 @@
 #import "base/power_monitor/power_monitor_device_source.h"
 #import "base/process/process_metrics.h"
 #import "base/task/single_thread_task_executor.h"
+#import "base/task/single_thread_task_runner.h"
 #import "base/task/thread_pool/thread_pool_instance.h"
 #import "base/threading/thread_restrictions.h"
-#import "base/threading/thread_task_runner_handle.h"
 #import "ios/web/net/cookie_notification_bridge.h"
 #import "ios/web/public/init/ios_global_state.h"
 #import "ios/web/public/init/web_main_parts.h"
@@ -31,14 +31,10 @@
 #import "ios/web/web_thread_impl.h"
 #import "ios/web/webui/url_data_manager_ios.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace web {
 
 // The currently-running WebMainLoop.  There can be one or zero.
-// TODO(crbug.com/965889): Desktop uses this to implement
+// TODO(crbug.com/41460416): Desktop uses this to implement
 // ImmediateShutdownAndExitProcess.  If we don't need that functionality, we can
 // remove this.
 WebMainLoop* g_current_web_main_loop = nullptr;
@@ -79,11 +75,6 @@ void WebMainLoop::CreateMainMessageLoop() {
 
   InitializeMainThread();
 
-  // TODO(crbug.com/807279): Do we need PowerMonitor on iOS, or can we get rid
-  // of it?
-  base::PowerMonitor::Initialize(
-      std::make_unique<base::PowerMonitorDeviceSource>());
-
   ios_global_state::CreateNetworkChangeNotifier();
 
   if (parts_) {
@@ -94,20 +85,29 @@ void WebMainLoop::CreateMainMessageLoop() {
 void WebMainLoop::CreateStartupTasks() {
   int result = 0;
   result = PreCreateThreads();
-  if (result > 0)
+  if (result > 0) {
     return;
+  }
 
   result = CreateThreads();
-  if (result > 0)
+  if (result > 0) {
     return;
+  }
+
+  result = PostCreateThreads();
+  if (result > 0) {
+    return;
+  }
 
   result = WebThreadsStarted();
-  if (result > 0)
+  if (result > 0) {
     return;
+  }
 
   result = PreMainMessageLoopRun();
-  if (result > 0)
+  if (result > 0) {
     return;
+  }
 }
 
 int WebMainLoop::PreCreateThreads() {
@@ -115,6 +115,20 @@ int WebMainLoop::PreCreateThreads() {
     parts_->PreCreateThreads();
   }
 
+  // TODO(crbug.com/40560534): Do we need PowerMonitor on iOS, or can we get rid
+  // of it?
+  // TODO(crbug.com/40240952): Remove this once we have confidence PowerMonitor
+  // is not needed for iOS
+  base::PowerMonitor::GetInstance()->Initialize(
+      std::make_unique<base::PowerMonitorDeviceSource>());
+
+  return result_code_;
+}
+
+int WebMainLoop::PostCreateThreads() {
+  if (parts_) {
+    parts_->PostCreateThreads();
+  }
   return result_code_;
 }
 
@@ -124,8 +138,9 @@ int WebMainLoop::CreateThreads() {
   base::Thread::Options io_message_loop_options;
   io_message_loop_options.message_pump_type = base::MessagePumpType::IO;
   io_thread_ = std::make_unique<WebSubThread>(WebThread::IO);
-  if (!io_thread_->StartWithOptions(std::move(io_message_loop_options)))
+  if (!io_thread_->StartWithOptions(std::move(io_message_loop_options))) {
     LOG(FATAL) << "Failed to start WebThread::IO";
+  }
   io_thread_->RegisterAsWebThread();
 
   // Only start IO thread above as this is the only WebThread besides UI (which
@@ -161,7 +176,7 @@ void WebMainLoop::ShutdownThreadsAndCleanUp() {
                      &base::PermanentThreadAllowance::AllowBlocking)));
 
   // Also allow waiting to join threads.
-  // TODO(crbug.com/800808): Ideally this (and the above AllowBlocking() would
+  // TODO(crbug.com/40557572): Ideally this (and the above AllowBlocking() would
   // be scoped allowances). That would be one of the first step to ensure no
   // persistent work is being done after ThreadPoolInstance::Shutdown() in order
   // to move towards atomic shutdown.
@@ -197,10 +212,13 @@ void WebMainLoop::ShutdownThreadsAndCleanUp() {
 }
 
 void WebMainLoop::InitializeMainThread() {
-  base::PlatformThread::SetName("CrWebMain");
+  const std::string name = web::GetWebClient()->GetMainThreadName();
+  if (!name.empty()) {
+    base::PlatformThread::SetName(name);
+  }
 
   // Register the main thread by instantiating it, but don't call any methods.
-  DCHECK(base::ThreadTaskRunnerHandle::IsSet());
+  DCHECK(base::SingleThreadTaskRunner::HasCurrentDefault());
   main_thread_.reset(new WebThreadImpl(
       WebThread::UI,
       ios_global_state::GetMainThreadTaskExecutor()->task_runner()));

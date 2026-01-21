@@ -6,16 +6,18 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/constants.h"
@@ -28,14 +30,12 @@
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager_impl.h"
-#include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/raster_decoder.h"
-#include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "gpu/command_buffer/service/transfer_buffer_manager.h"
+#include "gpu/ipc/common/surface_handle.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_context_egl.h"
@@ -115,7 +115,6 @@ constexpr const char* kExtensions[] = {
     "GL_CHROMIUM_color_buffer_float_rgba",
     "GL_CHROMIUM_copy_compressed_texture",
     "GL_CHROMIUM_copy_texture",
-    "GL_CHROMIUM_texture_filtering_hint",
     "GL_EXT_blend_func_extended",
     "GL_EXT_blend_minmax",
     "GL_EXT_float_blend",
@@ -199,7 +198,7 @@ class BitIterator {
   bool GetBit() {
     if (offset_ == size_)
       return false;
-    bool value = !!(data_[offset_] & (1u << bit_));
+    bool value = !!(UNSAFE_TODO(data_[offset_]) & (1u << bit_));
     if (++bit_ == 8) {
       bit_ = 0;
       ++offset_;
@@ -230,31 +229,21 @@ class BitIterator {
 struct Config {
   size_t MakeFromBits(const uint8_t* bits, size_t size) {
     BitIterator it(bits, size);
-    attrib_helper.red_size = 8;
-    attrib_helper.green_size = 8;
-    attrib_helper.blue_size = 8;
-    attrib_helper.alpha_size = it.GetBit() ? 8 : 0;
-    attrib_helper.depth_size = it.GetBit() ? 24 : 0;
-    attrib_helper.stencil_size = it.GetBit() ? 8 : 0;
-    attrib_helper.buffer_preserved = it.GetBit();
-    attrib_helper.bind_generates_resource = it.GetBit();
-    attrib_helper.single_buffer = it.GetBit();
     [[maybe_unused]] bool es3 = it.GetBit();
 #if defined(GPU_FUZZER_USE_RASTER_DECODER)
-    attrib_helper.context_type = CONTEXT_TYPE_OPENGLES2;
+    context_type = CONTEXT_TYPE_OPENGLES2;
 #else
     bool es31 = it.GetBit();
     if (es3) {
-      attrib_helper.context_type =
+      context_type =
           es31 ? CONTEXT_TYPE_OPENGLES31_FOR_TESTING : CONTEXT_TYPE_OPENGLES3;
     } else {
-      attrib_helper.context_type = CONTEXT_TYPE_OPENGLES2;
+      context_type = CONTEXT_TYPE_OPENGLES2;
     }
 #endif
-    attrib_helper.enable_oop_rasterization = it.GetBit();
 
 #if defined(GPU_FUZZER_USE_STUB)
-    std::vector<base::StringPiece> enabled_extensions;
+    std::vector<std::string_view> enabled_extensions;
     enabled_extensions.reserve(kExtensionCount);
     for (const char* extension : kExtensions) {
       if (it.GetBit())
@@ -264,7 +253,7 @@ struct Config {
 
     bool desktop_driver = it.GetBit();
     size_t version_index = (desktop_driver ? 2 : 0) + (es3 ? 1 : 0);
-    version = kDriverVersions[version_index];
+    version = UNSAFE_TODO(kDriverVersions[version_index]);
 #else
     // We consume bits even if we don't use them, so that the same inputs can be
     // used for every fuzzer variation
@@ -277,24 +266,25 @@ struct Config {
 
 #if defined(GPU_FUZZER_USE_PASSTHROUGH_CMD_DECODER) && \
     !defined(GPU_FUZZER_USE_RASTER_DECODER)
-    gl_context_attribs.bind_generates_resource =
-        attrib_helper.bind_generates_resource;
     gl_context_attribs.webgl_compatibility_context =
-        IsWebGLContextType(attrib_helper.context_type);
+        IsWebGLContextType(context_type);
+    gl_context_attribs.hardened_context =
+        !gl_context_attribs.webgl_compatibility_context;
     gl_context_attribs.global_texture_share_group = true;
     gl_context_attribs.robust_resource_initialization = true;
     gl_context_attribs.robust_buffer_access = true;
+    gl_context_attribs.allow_client_arrays = false;
     gl_context_attribs.client_major_es_version =
-        IsWebGL2OrES3OrHigherContextType(attrib_helper.context_type) ? 3 : 2;
+        IsWebGL2OrES3OrHigherContextType(context_type) ? 3 : 2;
     gl_context_attribs.client_minor_es_version =
-        IsES31ForTestingContextType(attrib_helper.context_type) ? 1 : 0;
+        IsES31ForTestingContextType(context_type) ? 1 : 0;
 #endif
 
     return it.consumed_bytes();
   }
 
+  ContextType context_type = CONTEXT_TYPE_OPENGLES2;
   GpuDriverBugWorkarounds workarounds;
-  ContextCreationAttribs attrib_helper;
   gl::GLContextAttribs gl_context_attribs;
 #if defined(GPU_FUZZER_USE_STUB)
   const char* version;
@@ -317,7 +307,7 @@ class CommandBufferSetup {
         gpu_preferences_(GetGpuPreferences()),
         share_group_(new gl::GLShareGroup),
         translator_cache_(gpu_preferences_) {
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
     CHECK(base::i18n::InitializeICU());
     base::CommandLine::Init(0, nullptr);
 
@@ -340,12 +330,11 @@ class CommandBufferSetup {
 #endif
 
     CHECK(gl::init::InitializeStaticGLBindingsImplementation(
-        gl::GLImplementationParts(gl::kGLImplementationEGLANGLE), false));
+        gl::GLImplementationParts(gl::kGLImplementationEGLANGLE)));
     display_ = gl::init::InitializeGLOneOffPlatformImplementation(
-        /*fallback_to_software_gl=*/false,
         /*disable_gl_drawing=*/false,
         /*init_extensions=*/true,
-        /*system_device_id=*/0);
+        /*gpu_preference=*/gl::GpuPreference::kDefault);
     CHECK(display_);
 #elif defined(GPU_FUZZER_USE_STUB)
     gl::GLSurfaceTestSupport::InitializeOneOffWithStubBindings();
@@ -355,15 +344,9 @@ class CommandBufferSetup {
 #else
 #error invalid configuration
 #endif
-    discardable_manager_ =
-        std::make_unique<ServiceDiscardableManager>(gpu_preferences_);
-    passthrough_discardable_manager_ =
-        std::make_unique<PassthroughDiscardableManager>(gpu_preferences_);
-
     if (gpu_preferences_.use_passthrough_cmd_decoder)
       recreate_context_ = true;
 
-    surface_ = gl::init::CreateOffscreenGLSurface(display_, gfx::Size());
     if (!recreate_context_) {
       InitContext();
     }
@@ -381,10 +364,10 @@ class CommandBufferSetup {
       InitContext();
     }
 
-    context_->MakeCurrent(surface_.get());
+    context_->MakeCurrentDefault();
     GpuFeatureInfo gpu_feature_info;
 #if defined(GPU_FUZZER_USE_RASTER_DECODER)
-    gpu_feature_info.status_values[GPU_FEATURE_TYPE_GPU_RASTERIZATION] =
+    gpu_feature_info.status_values[GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION] =
         kGpuFeatureStatusEnabled;
 #endif
     auto feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
@@ -402,13 +385,13 @@ class CommandBufferSetup {
     } else {
       shared_context = CreateContext();
     }
-    shared_context->MakeCurrent(surface_.get());
+    shared_context->MakeCurrentDefault();
     context_state_ = base::MakeRefCounted<SharedContextState>(
-        share_group_, surface_, std::move(shared_context),
+        share_group_, shared_context->default_surface(),
+        std::move(shared_context),
         config_.workarounds.use_virtualized_gl_contexts, base::DoNothing(),
         gpu_preferences_.gr_context_type);
-    context_state_->InitializeGrContext(gpu_preferences_, config_.workarounds,
-                                        nullptr);
+    context_state_->InitializeSkia(gpu_preferences_, config_.workarounds);
     context_state_->InitializeGL(gpu_preferences_, feature_info);
 
     shared_image_manager_ = std::make_unique<SharedImageManager>();
@@ -417,10 +400,10 @@ class CommandBufferSetup {
         context_state_.get(), shared_image_manager_.get(),
         /*memory_tracker=*/nullptr,
         /*is_for_display_compositor=*/false);
-    for (uint32_t usage = SHARED_IMAGE_USAGE_GLES2; usage <= LAST_CLIENT_USAGE;
-         usage <<= 1) {
+    for (uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+         usage <= LAST_CLIENT_USAGE; usage <<= 1) {
       Mailbox::Name name;
-      memset(name, 0, sizeof(name));
+      UNSAFE_TODO(memset(name, 0, sizeof(name)));
       name[0] = usage;
 
       // Mark this as a SharedImage mailbox.
@@ -430,49 +413,55 @@ class CommandBufferSetup {
 
       Mailbox mailbox;
       mailbox.SetName(name);
-      viz::SharedImageFormat si_format =
-          viz::SharedImageFormat::SinglePlane(viz::RGBA_8888);
+      viz::SharedImageFormat si_format = viz::SinglePlaneFormat::kRGBA_8888;
 
       shared_image_factory_->CreateSharedImage(
           mailbox, si_format, gfx::Size(256, 256),
           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
-          kPremul_SkAlphaType, gfx::kNullAcceleratedWidget, usage);
+          kPremul_SkAlphaType, gpu::kNullSurfaceHandle,
+          SharedImageUsageSet(usage), "TestLabel");
     }
 
 #if defined(GPU_FUZZER_USE_RASTER_DECODER)
     context_state_->MakeCurrent(nullptr);
-    auto* context = context_state_->context();
-    decoder_.reset(raster::RasterDecoder::Create(
+    decoder_ = raster::RasterDecoder::Create(
         command_buffer_.get(), command_buffer_->service(), &outputter_,
-        gpu_feature_info, gpu_preferences_, nullptr /* memory_tracker */,
-        shared_image_manager_.get(), context_state_, true /* is_privileged */));
+        gpu_feature_info, gpu_preferences_, /*memory_tracker=*/nullptr,
+        shared_image_manager_.get(), context_state_, /*is_privileged=*/true);
+    decoder_->GetLogger()->set_log_synthesized_gl_errors(false);
+
+    auto result =
+        decoder_->Initialize(/*lose_context_when_out_of_memory=*/false);
+    if (result != gpu::ContextResult::kSuccess) {
+      return false;
+    }
 #else
-    context_->MakeCurrent(surface_.get());
+    context_->MakeCurrentDefault();
     // GLES2Decoder may Initialize feature_info differently than
     // SharedContextState and should have its own.
     auto decoder_feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
         config_.workarounds, gpu_feature_info);
-    scoped_refptr<gles2::ContextGroup> context_group = new gles2::ContextGroup(
-        gpu_preferences_, true, &mailbox_manager_, nullptr /* memory_tracker */,
-        &translator_cache_, &completeness_cache_, decoder_feature_info,
-        config_.attrib_helper.bind_generates_resource,
-        nullptr /* progress_reporter */, gpu_feature_info,
-        discardable_manager_.get(), passthrough_discardable_manager_.get(),
-        shared_image_manager_.get());
+    scoped_refptr<gles2::ContextGroup> context_group =
+        MakeRefCounted<gles2::ContextGroup>(
+            gpu_preferences_, /*memory_tracker=*/nullptr, &translator_cache_,
+            &completeness_cache_, decoder_feature_info,
+            /*progress_reporter=*/nullptr, gpu_feature_info,
+            shared_image_manager_.get());
     auto* context = context_.get();
-    decoder_.reset(gles2::GLES2Decoder::Create(
-        command_buffer_.get(), command_buffer_->service(), &outputter_,
-        context_group.get()));
-#endif
-
+    decoder_ = gles2::GLES2Decoder::Create(command_buffer_.get(),
+                                           command_buffer_->service(),
+                                           &outputter_, context_group.get());
     decoder_->GetLogger()->set_log_synthesized_gl_errors(false);
 
-    auto result = decoder_->Initialize(surface_.get(), context, true,
-                                       gles2::DisallowedFeatures(),
-                                       config_.attrib_helper);
+    auto result =
+        decoder_->Initialize(context->default_surface(), context,
+                             /*offscreen=*/true, config_.context_type,
+                             /*lose_context_when_out_of_memory=*/false);
     if (result != gpu::ContextResult::kSuccess) {
       return false;
     }
+#endif
+
     decoder_initialized_ = true;
 
     command_buffer_->set_handler(decoder_.get());
@@ -539,7 +528,7 @@ class CommandBufferSetup {
     consumed = (consumed + 3) & ~3;
     if (consumed > size)
       return;
-    data += consumed;
+    UNSAFE_TODO(data += consumed);
     size -= consumed;
     // The commands are flushed at a uint32_t granularity. If the data is not
     // a full command, we zero-pad it.
@@ -558,9 +547,9 @@ class CommandBufferSetup {
     CHECK_LE(padded_size, buffer_size);
     command_buffer_->SetGetBuffer(buffer_id_);
     auto* memory = static_cast<char*>(buffer_->memory());
-    memcpy(memory, data, size);
+    UNSAFE_TODO(memcpy(memory, data, size));
     if (size < buffer_size)
-      memset(memory + size, 0, buffer_size - size);
+      UNSAFE_TODO(memset(memory + size, 0, buffer_size - size));
     command_buffer_->Flush(padded_size / 4);
     ResetDecoder();
   }
@@ -569,7 +558,7 @@ class CommandBufferSetup {
   void CreateTransferBuffer(uint32_t size, int32_t id) {
     scoped_refptr<Buffer> buffer =
         command_buffer_->CreateTransferBufferWithId(size, id);
-    memset(buffer->memory(), 0, size);
+    UNSAFE_TODO(memset(buffer->memory(), 0, size));
   }
 
   void InitializeInitialCommandBuffer() {
@@ -587,15 +576,20 @@ class CommandBufferSetup {
   }
 
   scoped_refptr<gl::GLContext> CreateContext() {
+    // The surface will be owned by the |context|.
+    auto surface = gl::init::CreateOffscreenGLSurface(display_, gfx::Size());
 #if defined(GPU_FUZZER_USE_STUB)
     auto stub = base::MakeRefCounted<gl::GLContextStub>(share_group_.get());
     stub->SetGLVersionString(config_.version);
     stub->SetExtensionsString(config_.extensions.c_str());
     stub->SetUseStubApi(true);
+    // The stub ctx needs to be initialized so that the gl::GLContext can
+    // store the |compatible_surface|.
+    stub->Initialize(surface.get(), {});
     return stub;
 #else
     auto context = base::MakeRefCounted<gl::GLContextEGL>(share_group_.get());
-    context->Initialize(surface_.get(), config_.gl_context_attribs);
+    context->Initialize(surface.get(), config_.gl_context_attribs);
     return context;
 #endif
   }
@@ -608,7 +602,7 @@ class CommandBufferSetup {
 // callback to catch them if it does.
 #if defined(GPU_FUZZER_USE_ANGLE) && \
     !defined(GPU_FUZZER_USE_PASSTHROUGH_CMD_DECODER)
-    context_->MakeCurrent(surface_.get());
+    context_->MakeCurrentDefault();
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 
@@ -621,13 +615,13 @@ class CommandBufferSetup {
 #endif
   }
 
-  static void APIENTRY LogGLDebugMessage(GLenum source,
-                                         GLenum type,
-                                         GLuint id,
-                                         GLenum severity,
-                                         GLsizei length,
-                                         const GLchar* message,
-                                         const GLvoid* user_param) {
+  static void GL_APIENTRY LogGLDebugMessage(GLenum source,
+                                            GLenum type,
+                                            GLuint id,
+                                            GLenum severity,
+                                            GLsizei length,
+                                            const GLchar* message,
+                                            const GLvoid* user_param) {
     LOG_IF(FATAL, (id != GL_OUT_OF_MEMORY)) << "GL Driver Message: " << message;
   }
 
@@ -637,18 +631,13 @@ class CommandBufferSetup {
 
   Config config_;
 
-  gles2::MailboxManagerImpl mailbox_manager_;
   gles2::TraceOutputter outputter_;
   scoped_refptr<gl::GLShareGroup> share_group_;
-  std::unique_ptr<ServiceDiscardableManager> discardable_manager_;
-  std::unique_ptr<PassthroughDiscardableManager>
-      passthrough_discardable_manager_;
   std::unique_ptr<SharedImageManager> shared_image_manager_;
   std::unique_ptr<SharedImageFactory> shared_image_factory_;
 
   bool recreate_context_ = false;
-  gl::GLDisplay* display_ = nullptr;
-  scoped_refptr<gl::GLSurface> surface_;
+  raw_ptr<gl::GLDisplay> display_ = nullptr;
   scoped_refptr<gl::GLContext> context_;
   scoped_refptr<SharedContextState> context_state_;
 

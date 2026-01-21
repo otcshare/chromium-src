@@ -6,9 +6,11 @@
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_factory.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/core/html/custom/element_internals.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
@@ -18,15 +20,18 @@
 namespace blink {
 
 CustomElementDefinition::CustomElementDefinition(
+    CustomElementRegistry& registry,
     const CustomElementDescriptor& descriptor)
-    : descriptor_(descriptor) {}
+    : registry_(registry), descriptor_(descriptor) {}
 
 CustomElementDefinition::CustomElementDefinition(
+    CustomElementRegistry& registry,
     const CustomElementDescriptor& descriptor,
     const HashSet<AtomicString>& observed_attributes,
     const Vector<String>& disabled_features,
     FormAssociationFlag form_association_flag)
-    : descriptor_(descriptor),
+    : registry_(registry),
+      descriptor_(descriptor),
       observed_attributes_(observed_attributes),
       has_style_attribute_changed_callback_(
           observed_attributes.Contains(html_names::kStyleAttr.LocalName())),
@@ -37,7 +42,7 @@ CustomElementDefinition::CustomElementDefinition(
 CustomElementDefinition::~CustomElementDefinition() = default;
 
 void CustomElementDefinition::Trace(Visitor* visitor) const {
-  visitor->Trace(construction_stack_);
+  visitor->Trace(registry_);
   ElementRareDataField::Trace(visitor);
 }
 
@@ -124,13 +129,13 @@ HTMLElement* CustomElementDefinition::CreateElement(
       CustomElement::ShouldCreateCustomizedBuiltinElement(tag_name, document))
       << tag_name;
 
-  // 5. If definition is non-null, and definition’s name is not equal to
+  // 4. If definition is non-null, and definition’s name is not equal to
   // its local name (i.e., definition represents a customized built-in
   // element), then:
   if (!descriptor_.IsAutonomous()) {
-    // 5.1. Let interface be the element interface for localName and the
+    // 4.1. Let interface be the element interface for localName and the
     // HTML namespace.
-    // 5.2. Set result to a new element that implements interface, with
+    // 4.2. Set result to a new element that implements interface, with
     // no attributes, namespace set to the HTML namespace, namespace
     // prefix set to prefix, local name set to localName, custom element
     // state set to "undefined", custom element definition set to null,
@@ -140,7 +145,7 @@ HTMLElement* CustomElementDefinition::CreateElement(
     result->SetIsValue(Descriptor().GetName());
 
     if (!flags.IsAsyncCustomElements()) {
-      // 5.3 If the synchronous custom elements flag is set, then run this step
+      // 4.3 If the synchronous custom elements flag is set, then run this step
       // while catching any exceptions:
       //   1. Upgrade element using definition.
       // If this step threw an exception, then:
@@ -148,46 +153,46 @@ HTMLElement* CustomElementDefinition::CreateElement(
       //   2. Set result's custom element state to "failed".
       Upgrade(*result);
     } else {
-      // 5.4. Otherwise, enqueue a custom element upgrade reaction given
+      // 4.4. Otherwise, enqueue a custom element upgrade reaction given
       // result and definition.
       EnqueueUpgradeReaction(*result);
     }
     return To<HTMLElement>(result);
   }
 
-  // 6. If definition is non-null, then:
-  // 6.1. If the synchronous custom elements flag is set, then run these
+  // 5. If definition is non-null, then:
+  // 5.1. If the synchronous custom elements flag is set, then run these
   // steps while catching any exceptions:
-  if (!flags.IsAsyncCustomElements())
-    return CreateAutonomousCustomElementSync(document, tag_name);
+  if (!flags.IsAsyncCustomElements()) {
+    // We push the construction stack while creating element from scoped
+    // custom element registry as we don't have access to scoped registry
+    // in HTMLConstructor
+    if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
+        !registry_->IsGlobalRegistry()) {
+      Element* element = CreateElementForConstructor(document);
+      CustomElementConstructionStackScope construction_stack_scope(*this,
+                                                                   *element);
+      // Keeping the following creation call here to avoid the construction
+      // stack above fall out of scope.
+      return CreateAutonomousCustomElementSync(document, tag_name, registry_);
+    }
+    return CreateAutonomousCustomElementSync(document, tag_name, registry_);
+  }
 
-  // 6.2. Otherwise: (the synchronous custom elements flag is not set)
-  // 6.2.1. Set result to a new element that implements the HTMLElement
+  // 5.2. Otherwise: (the synchronous custom elements flag is not set)
+  // 5.2.1. Set result to a new element that implements the HTMLElement
   // interface, with no attributes, namespace set to the HTML namespace,
   // namespace prefix set to prefix, local name set to localName, custom
   // element state set to "undefined", and node document set to document.
   auto* element = MakeGarbageCollected<HTMLElement>(tag_name, document);
   element->SetCustomElementState(CustomElementState::kUndefined);
-  // 6.2.2. Enqueue a custom element upgrade reaction given result and
+  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
+    element->SetCustomElementRegistry(registry_);
+  }
+  // 5.2.2. Enqueue a custom element upgrade reaction given result and
   // definition.
   EnqueueUpgradeReaction(*element);
   return element;
-}
-
-CustomElementDefinition::ConstructionStackScope::ConstructionStackScope(
-    CustomElementDefinition& definition,
-    Element& element)
-    : construction_stack_(definition.construction_stack_), element_(&element) {
-  // Push the construction stack.
-  construction_stack_.push_back(&element);
-  depth_ = construction_stack_.size();
-}
-
-CustomElementDefinition::ConstructionStackScope::~ConstructionStackScope() {
-  // Pop the construction stack.
-  DCHECK(!construction_stack_.back() || construction_stack_.back() == element_);
-  DCHECK_EQ(construction_stack_.size(), depth_);  // It's a *stack*.
-  construction_stack_.pop_back();
 }
 
 // https://html.spec.whatwg.org/C/#concept-upgrade-an-element
@@ -218,7 +223,8 @@ void CustomElementDefinition::Upgrade(Element& element) {
   bool succeeded = false;
   {
     // 4.13.5.6: Add element to the end of definition's construction stack.
-    ConstructionStackScope construction_stack_scope(*this, element);
+    CustomElementConstructionStackScope construction_stack_scope(*this,
+                                                                 element);
     // 4.13.5.8: Run the constructor, catching exceptions.
     succeeded = RunConstructor(element);
   }
@@ -269,6 +275,11 @@ void CustomElementDefinition::EnqueueConnectedCallback(Element& element) {
 void CustomElementDefinition::EnqueueDisconnectedCallback(Element& element) {
   CustomElement::Enqueue(
       element, CustomElementReactionFactory::CreateDisconnected(*this));
+}
+
+void CustomElementDefinition::EnqueueConnectedMoveCallback(Element& element) {
+  CustomElement::Enqueue(
+      element, CustomElementReactionFactory::CreateConnectedMove(*this));
 }
 
 void CustomElementDefinition::EnqueueAdoptedCallback(Element& element,

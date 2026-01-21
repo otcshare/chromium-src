@@ -8,7 +8,6 @@
 #include "components/dom_distiller/content/renderer/distiller_native_javascript.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "v8/include/v8.h"
 
@@ -25,7 +24,7 @@ class DistillerJsRenderFrameObserver : public content::RenderFrameObserver {
   // RenderFrameObserver implementation.
   void DidStartNavigation(
       const GURL& url,
-      absl::optional<blink::WebNavigationType> navigation_type) override;
+      std::optional<blink::WebNavigationType> navigation_type) override;
   void DidCreateScriptContext(v8::Local<v8::Context> context,
                               int32_t world_id) override;
 

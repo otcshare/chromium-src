@@ -6,7 +6,7 @@
 #define COMPONENTS_OFFLINE_PAGES_CORE_VISUALS_DECODER_H_
 
 #include <string>
-#include "base/callback.h"
+#include "base/functional/callback.h"
 
 namespace gfx {
 class Image;
@@ -19,7 +19,7 @@ namespace offline_pages {
 class VisualsDecoder {
  public:
   using DecodeComplete = base::OnceCallback<void(const gfx::Image&)>;
-  virtual ~VisualsDecoder() {}
+  virtual ~VisualsDecoder() = default;
 
   // Decode a thumbnail or favicon image and crop it square. Calls
   // complete_callback when decoding completes successfully or otherwise. If

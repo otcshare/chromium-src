@@ -6,18 +6,21 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <limits>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
+#include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "components/sessions/core/command_storage_manager.h"
@@ -44,8 +47,9 @@ std::unique_ptr<SessionCommand> CreateCommandFromData(const TestData& data) {
   std::unique_ptr<SessionCommand> command = std::make_unique<SessionCommand>(
       data.command_id,
       static_cast<SessionCommand::size_type>(data.data.size()));
-  if (!data.data.empty())
-    memcpy(command->contents(), data.data.c_str(), data.data.size());
+  if (!data.data.empty()) {
+    command->contents().copy_from(base::as_byte_span(data.data));
+  }
   return command;
 }
 
@@ -66,25 +70,25 @@ class CommandStorageBackendTest : public testing::Test {
                                const SessionCommand* command) {
     EXPECT_EQ(data.command_id, command->id());
     EXPECT_EQ(data.data.size(), command->size());
-    EXPECT_TRUE(
-        memcmp(command->contents(), data.data.c_str(), command->size()) == 0);
+    EXPECT_EQ(command->contents(), base::as_byte_span(data.data));
   }
 
   void AssertCommandsEqualsData(
-      const TestData* data,
-      size_t data_length,
+      base::span<const TestData> data,
       const std::vector<std::unique_ptr<SessionCommand>>& commands) {
-    ASSERT_EQ(data_length, commands.size());
-    for (size_t i = 0; i < data_length; ++i)
+    ASSERT_EQ(data.size(), commands.size());
+    for (size_t i = 0; i < data.size(); ++i) {
       EXPECT_NO_FATAL_FAILURE(
           AssertCommandEqualsData(data[i], commands[i].get()));
+    }
   }
 
   scoped_refptr<CommandStorageBackend> CreateBackend(
-      const std::vector<uint8_t>& decryption_key = {}) {
+      const std::vector<uint8_t>& decryption_key = {},
+      base::Clock* clock = nullptr) {
     return MakeRefCounted<CommandStorageBackend>(
         task_environment_.GetMainThreadTaskRunner(), file_path_,
-        CommandStorageManager::SessionType::kOther, decryption_key);
+        CommandStorageManager::SessionType::kOther, decryption_key, clock);
   }
 
   scoped_refptr<CommandStorageBackend> CreateBackendWithRestoreType() {
@@ -95,7 +99,7 @@ class CommandStorageBackendTest : public testing::Test {
   }
 
   // Functions that call into private members of CommandStorageBackend.
-  absl::optional<CommandStorageBackend::SessionInfo> GetLastSessionInfo(
+  std::optional<CommandStorageBackend::SessionInfo> GetLastSessionInfo(
       CommandStorageBackend* backend) {
     // Force `last_session_info_` to be updated.
     backend->InitIfNecessary();
@@ -195,7 +199,7 @@ TEST_F(CommandStorageBackendTest, SimpleReadWriteEncrypted) {
 }
 
 TEST_F(CommandStorageBackendTest, RandomDataEncrypted) {
-  struct TestData data[] = {
+  auto data = std::to_array<TestData>({
       {1, "a"},
       {2, "ab"},
       {3, "abc"},
@@ -209,7 +213,7 @@ TEST_F(CommandStorageBackendTest, RandomDataEncrypted) {
       {11, "abcdefghijk"},
       {12, "abcdefghijkl"},
       {13, "abcdefghijklm"},
-  };
+  });
 
   const std::vector<uint8_t> key = CommandStorageManager::CreateCryptoKey();
   for (size_t i = 0; i < std::size(data); ++i) {
@@ -233,10 +237,10 @@ TEST_F(CommandStorageBackendTest, RandomDataEncrypted) {
 }
 
 TEST_F(CommandStorageBackendTest, BigDataEncrypted) {
-  struct TestData data[] = {
+  auto data = std::to_array<TestData>({
       {1, "a"},
       {2, "ab"},
-  };
+  });
 
   const std::vector<uint8_t> key = CommandStorageManager::CreateCryptoKey();
   scoped_refptr<CommandStorageBackend> backend = CreateBackend();
@@ -248,8 +252,8 @@ TEST_F(CommandStorageBackendTest, BigDataEncrypted) {
   const SessionCommand::id_type big_id = 50;
   std::unique_ptr<SessionCommand> big_command =
       std::make_unique<SessionCommand>(big_id, big_size);
-  reinterpret_cast<char*>(big_command->contents())[0] = 'a';
-  reinterpret_cast<char*>(big_command->contents())[big_size - 1] = 'z';
+  big_command->contents()[0] = 'a';
+  big_command->contents()[big_size - 1] = 'z';
   commands.push_back(std::move(big_command));
   commands.push_back(CreateCommandFromData(data[1]));
   backend->AppendCommands(std::move(commands), true, base::DoNothing(), key);
@@ -264,9 +268,8 @@ TEST_F(CommandStorageBackendTest, BigDataEncrypted) {
 
   EXPECT_EQ(big_id, commands[1]->id());
   ASSERT_EQ(big_size, commands[1]->size());
-  EXPECT_EQ('a', reinterpret_cast<char*>(commands[1]->contents())[0]);
-  EXPECT_EQ('z',
-            reinterpret_cast<char*>(commands[1]->contents())[big_size - 1]);
+  EXPECT_EQ('a', commands[1]->contents()[0]);
+  EXPECT_EQ('z', commands[1]->contents()[big_size - 1]);
 }
 
 TEST_F(CommandStorageBackendTest, MarkerOnlyEncrypted) {
@@ -315,8 +318,9 @@ std::unique_ptr<SessionCommand> CreateCommandWithMaxSize() {
   const size_type max_size_value = std::numeric_limits<size_type>::max();
   std::unique_ptr<SessionCommand> command =
       std::make_unique<SessionCommand>(11, max_size_value);
-  for (int i = 0; i <= max_size_value; ++i)
-    (command->contents())[i] = i;
+  for (int i = 0; i < max_size_value; ++i) {
+    command->contents()[i] = i;
+  }
   return command;
 }
 
@@ -342,8 +346,8 @@ TEST_F(CommandStorageBackendTest, MaxSizeTypeEncrypted) {
       CommandStorageBackend::kEncryptionOverheadInBytes -
       sizeof(SessionCommand::id_type);
   ASSERT_EQ(expected_size, (commands[0])->size());
-  EXPECT_TRUE(memcmp(commands[0]->contents(), expected_command->contents(),
-                     expected_size) == 0);
+  EXPECT_EQ(commands[0]->contents(),
+            expected_command->contents().first(expected_size));
 }
 
 TEST_F(CommandStorageBackendTest, MaxSizeType) {
@@ -364,8 +368,8 @@ TEST_F(CommandStorageBackendTest, MaxSizeType) {
   const size_type expected_size =
       expected_command->size() - sizeof(SessionCommand::id_type);
   ASSERT_EQ(expected_size, (commands[0])->size());
-  EXPECT_TRUE(memcmp(commands[0]->contents(), expected_command->contents(),
-                     expected_size) == 0);
+  EXPECT_EQ(commands[0]->contents(),
+            expected_command->contents().first(expected_size));
 }
 
 TEST_F(CommandStorageBackendTest, IsValidFileWithInvalidFiles) {
@@ -415,7 +419,7 @@ TEST_F(CommandStorageBackendTest, SimpleReadWriteWithRestoreType) {
 }
 
 TEST_F(CommandStorageBackendTest, RandomDataWithRestoreType) {
-  struct TestData data[] = {
+  auto data = std::to_array<TestData>({
       {1, "a"},
       {2, "ab"},
       {3, "abc"},
@@ -429,7 +433,7 @@ TEST_F(CommandStorageBackendTest, RandomDataWithRestoreType) {
       {11, "abcdefghijk"},
       {12, "abcdefghijkl"},
       {13, "abcdefghijklm"},
-  };
+  });
 
   for (size_t i = 0; i < std::size(data); ++i) {
     scoped_refptr<CommandStorageBackend> backend =
@@ -452,10 +456,10 @@ TEST_F(CommandStorageBackendTest, RandomDataWithRestoreType) {
 }
 
 TEST_F(CommandStorageBackendTest, BigDataWithRestoreType) {
-  struct TestData data[] = {
+  auto data = std::to_array<TestData>({
       {1, "a"},
       {2, "ab"},
-  };
+  });
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
   std::vector<std::unique_ptr<SessionCommand>> commands;
@@ -466,8 +470,8 @@ TEST_F(CommandStorageBackendTest, BigDataWithRestoreType) {
   const SessionCommand::id_type big_id = 50;
   std::unique_ptr<SessionCommand> big_command =
       std::make_unique<SessionCommand>(big_id, big_size);
-  reinterpret_cast<char*>(big_command->contents())[0] = 'a';
-  reinterpret_cast<char*>(big_command->contents())[big_size - 1] = 'z';
+  big_command->contents()[0] = 'a';
+  big_command->contents()[big_size - 1] = 'z';
   commands.push_back(std::move(big_command));
   commands.push_back(CreateCommandFromData(data[1]));
   backend->AppendCommands(std::move(commands), true, base::DoNothing());
@@ -482,9 +486,8 @@ TEST_F(CommandStorageBackendTest, BigDataWithRestoreType) {
 
   EXPECT_EQ(big_id, commands[1]->id());
   ASSERT_EQ(big_size, commands[1]->size());
-  EXPECT_EQ('a', reinterpret_cast<char*>(commands[1]->contents())[0]);
-  EXPECT_EQ('z',
-            reinterpret_cast<char*>(commands[1]->contents())[big_size - 1]);
+  EXPECT_EQ('a', commands[1]->contents()[0]);
+  EXPECT_EQ('z', commands[1]->contents()[big_size - 1]);
 }
 
 TEST_F(CommandStorageBackendTest, CommandWithRestoreType) {
@@ -587,7 +590,7 @@ TEST_F(CommandStorageBackendTest,
       base::FilePath(kSessionsDirectory)
           .Append(FILE_PATH_LITERAL("Session_13235178308836991")));
   ASSERT_TRUE(base::CreateDirectory(prev_path.DirName()));
-  ASSERT_EQ(0, base::WriteFile(prev_path, "", 0));
+  ASSERT_TRUE(base::WriteFile(prev_path, ""));
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
   auto last_session_info = GetLastSessionInfo(backend.get());
@@ -607,9 +610,9 @@ TEST_F(CommandStorageBackendTest,
       sessions_dir.Append(FILE_PATH_LITERAL("Session_13235178308548874"));
   const auto old_path_2 = sessions_dir.Append(FILE_PATH_LITERAL("Session_0"));
   ASSERT_TRUE(base::CreateDirectory(prev_path.DirName()));
-  ASSERT_EQ(0, base::WriteFile(prev_path, "", 0));
-  ASSERT_EQ(0, base::WriteFile(old_path_1, "", 0));
-  ASSERT_EQ(0, base::WriteFile(old_path_2, "", 0));
+  ASSERT_TRUE(base::WriteFile(prev_path, ""));
+  ASSERT_TRUE(base::WriteFile(old_path_1, ""));
+  ASSERT_TRUE(base::WriteFile(old_path_2, ""));
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
   auto last_session_info = GetLastSessionInfo(backend.get());
@@ -624,7 +627,7 @@ TEST_F(CommandStorageBackendTest,
       restore_path().Append(base::FilePath(kSessionsDirectory)
                                 .Append(FILE_PATH_LITERAL("Session_invalid")));
   ASSERT_TRUE(base::CreateDirectory(prev_path.DirName()));
-  ASSERT_EQ(0, base::WriteFile(prev_path, "", 0));
+  ASSERT_TRUE(base::WriteFile(prev_path, ""));
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
   auto last_session_info = GetLastSessionInfo(backend.get());
@@ -639,7 +642,7 @@ TEST_F(CommandStorageBackendTest,
   const auto last_session =
       sessions_dir.Append(FILE_PATH_LITERAL("Session_13235178308548874"));
   ASSERT_TRUE(base::CreateDirectory(last_session.DirName()));
-  ASSERT_EQ(0, base::WriteFile(last_session, "", 0));
+  ASSERT_TRUE(base::WriteFile(last_session, ""));
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
   char buffer[1];
@@ -652,36 +655,31 @@ TEST_F(CommandStorageBackendTest, GetSessionFiles) {
   EXPECT_TRUE(CommandStorageBackend::GetSessionFilePaths(
                   file_path(), CommandStorageManager::kOther)
                   .empty());
-  ASSERT_EQ(0, base::WriteFile(file_path(), "", 0));
+  ASSERT_TRUE(base::WriteFile(file_path(), ""));
   // Not a valid name, as doesn't contain timestamp separator.
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session 123"),
-                               "", 0));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session 123"), ""));
   // Valid name.
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session_124"),
-                               "", 0));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session_124"), ""));
   // Valid name, but should not be returned as beginning doesn't match.
-  ASSERT_EQ(
-      0, base::WriteFile(file_path().DirName().AppendASCII("Foo_125"), "", 0));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Foo_125"), ""));
   auto paths = CommandStorageBackend::GetSessionFilePaths(
       file_path(), CommandStorageManager::kOther);
   ASSERT_EQ(1u, paths.size());
   EXPECT_EQ("Session_124", paths.begin()->BaseName().MaybeAsASCII());
 }
 
-TEST_F(CommandStorageBackendTest, TimestampSeparatorIsAscii) {
-  // Code in WebLayer relies on the timestamp separator being ascii.
-  ASSERT_TRUE(!base::FilePath(kTimestampSeparator).MaybeAsASCII().empty());
-}
-
 TEST_F(CommandStorageBackendTest, GetSessionFilesAreSortedByReverseTimestamp) {
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session_130"),
-                               "", 0));
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session_120"),
-                               "", 0));
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session_125"),
-                               "", 0));
-  ASSERT_EQ(0, base::WriteFile(file_path().DirName().AppendASCII("Session_128"),
-                               "", 0));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session_130"), ""));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session_120"), ""));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session_125"), ""));
+  ASSERT_TRUE(
+      base::WriteFile(file_path().DirName().AppendASCII("Session_128"), ""));
   auto paths = GetSessionFilePathsSortedByReverseTimestamp();
   ASSERT_EQ(4u, paths.size());
   EXPECT_EQ("Session_130", paths[0].BaseName().MaybeAsASCII());
@@ -713,7 +711,8 @@ TEST_F(CommandStorageBackendTest, UseMarkerWithoutValidMarker) {
 // incompatible manner.
 TEST_F(CommandStorageBackendTest, ReadPreviouslyWrittenData) {
   base::FilePath test_data_path;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &test_data_path));
+  ASSERT_TRUE(
+      base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &test_data_path));
   test_data_path = test_data_path.AppendASCII("components")
                        .AppendASCII("test")
                        .AppendASCII("data")
@@ -738,8 +737,7 @@ TEST_F(CommandStorageBackendTest, ReadPreviouslyWrittenData) {
   ASSERT_TRUE(base::CopyFile(
       test_data_path, restore_path().Append(kLegacyCurrentSessionFileName)));
   scoped_refptr<CommandStorageBackend> backend = CreateBackendWithRestoreType();
-  AssertCommandsEqualsData(data, std::size(data),
-                           backend->ReadLastSessionCommands().commands);
+  AssertCommandsEqualsData(data, backend->ReadLastSessionCommands().commands);
 }
 
 TEST_F(CommandStorageBackendTest, NewFileOnTruncate) {
@@ -756,13 +754,27 @@ TEST_F(CommandStorageBackendTest, NewFileOnTruncate) {
   backend->AppendCommands(std::move(commands), false, base::DoNothing());
   EXPECT_EQ(path1, backend->current_path());
 
-  // Path should change on truncate, and `path1` should be removed.
+  // Path should change on truncate, and `path1` should not be removed.
   commands.clear();
   commands.push_back(CreateCommandFromData(data));
   backend->AppendCommands(std::move(commands), true, base::DoNothing());
-  EXPECT_TRUE(!backend->current_path().empty());
-  EXPECT_NE(path1, backend->current_path());
+  const base::FilePath path2 = backend->current_path();
+  EXPECT_TRUE(!path2.empty());
+  EXPECT_NE(path1, path2);
+  EXPECT_TRUE(base::PathExists(path1));
+  EXPECT_TRUE(base::PathExists(path2));
+
+  // Repeat. This time `path1` should be removed.
+  commands.clear();
+  commands.push_back(CreateCommandFromData(data));
+  backend->AppendCommands(std::move(commands), true, base::DoNothing());
+  const base::FilePath path3 = backend->current_path();
+  EXPECT_TRUE(!path3.empty());
+  EXPECT_NE(path1, path3);
+  EXPECT_NE(path2, path3);
   EXPECT_FALSE(base::PathExists(path1));
+  EXPECT_TRUE(base::PathExists(path2));
+  EXPECT_TRUE(base::PathExists(path3));
 }
 
 TEST_F(CommandStorageBackendTest, AppendCommandsCallbackRunOnError) {
@@ -780,19 +792,17 @@ TEST_F(CommandStorageBackendTest, RestoresFileWithMarkerAfterFailure) {
   SessionCommands commands;
   commands.push_back(CreateCommandFromData(data));
   backend->AppendCommands(std::move(commands), true, base::DoNothing());
-  const base::FilePath path1 = backend->current_path();
-  EXPECT_FALSE(path1.empty());
+  EXPECT_TRUE(backend->IsFileOpen());
 
   // Make appending fail, which should close the file.
   backend->ForceAppendCommandsToFailForTesting();
   backend->AppendCommands({}, false, base::DoNothing());
+  EXPECT_FALSE(backend->IsFileOpen());
 
-  // Append again, with another fail. Should attempt to reopen file.
+  // Append again, with another fail. Should attempt to reopen file and file.
   backend->ForceAppendCommandsToFailForTesting();
   backend->AppendCommands({}, true, base::DoNothing());
-  const base::FilePath path2 = backend->current_path();
-  EXPECT_FALSE(path2.empty());
-  EXPECT_NE(path1, path2);
+  EXPECT_FALSE(backend->IsFileOpen());
 
   // Reopen and read last session. Should get `data` and marker.
   backend = nullptr;
@@ -801,6 +811,37 @@ TEST_F(CommandStorageBackendTest, RestoresFileWithMarkerAfterFailure) {
   commands = backend->ReadLastSessionCommands().commands;
   ASSERT_EQ(1u, commands.size());
   AssertCommandEqualsData(data, commands[0].get());
+}
+
+TEST_F(CommandStorageBackendTest, PathTimeIncreases) {
+  base::SimpleTestClock test_clock;
+  test_clock.SetNow(base::Time::Now());
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend({}, &test_clock);
+  // Write `data` and a marker.
+  struct TestData data = {11, "X"};
+  SessionCommands commands;
+  commands.push_back(CreateCommandFromData(data));
+  backend->AppendCommands(std::move(commands), true, base::DoNothing());
+  const base::FilePath path1 = backend->current_path();
+  EXPECT_FALSE(path1.empty());
+  base::Time path1_time;
+  EXPECT_TRUE(CommandStorageBackend::TimestampFromPath(path1, path1_time));
+
+  test_clock.Advance(base::Seconds(-1));
+  SessionCommands commands2;
+  commands2.push_back(CreateCommandFromData(data));
+  backend->AppendCommands(std::move(commands2), true, base::DoNothing());
+  const base::FilePath path2 = backend->current_path();
+  EXPECT_FALSE(path2.empty());
+  EXPECT_NE(path1, path2);
+  base::Time path2_time;
+  EXPECT_TRUE(CommandStorageBackend::TimestampFromPath(path2, path2_time));
+  // Even though the current time is before the previous time, the timestamp
+  // of the file should increase.
+  EXPECT_GT(path2_time, path1_time);
+  // Backend needs to be destroyed before test_clock so we don't end up with
+  // dangling reference.
+  backend.reset();
 }
 
 }  // namespace sessions

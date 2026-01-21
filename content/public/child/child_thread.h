@@ -7,10 +7,10 @@
 
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "content/common/buildflags.h"
 #include "content/common/content_export.h"
-#include "ipc/ipc_sender.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -26,13 +26,13 @@ namespace content {
 
 // An abstract base class that contains logic shared between most child
 // processes of the embedder.
-class CONTENT_EXPORT ChildThread : public IPC::Sender {
+class CONTENT_EXPORT ChildThread {
  public:
   // Returns the one child thread for this process.  Note that this can only be
   // accessed when running on the child thread itself.
   static ChildThread* Get();
 
-  ~ChildThread() override {}
+  virtual ~ChildThread() = default;
 
   // Sends over a base::UserMetricsAction to be recorded by user metrics as
   // an action. Once a new user metric is added, run
@@ -66,7 +66,7 @@ class CONTENT_EXPORT ChildThread : public IPC::Sender {
   //       2. Main thread, RenderProcessHostImpl::BindHostReceiver.
   //       3. Main thread, ContentBrowserClient::BindHostReceiverForRenderer.
   //
-  // TODO(crbug.com/977637): Document behavior for other process types when
+  // TODO(crbug.com/40633267): Document behavior for other process types when
   // their support is added.
   virtual void BindHostReceiver(mojo::GenericPendingReceiver receiver) = 0;
 

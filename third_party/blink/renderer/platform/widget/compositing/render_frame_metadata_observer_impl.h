@@ -43,10 +43,14 @@ class PLATFORM_EXPORT RenderFrameMetadataObserverImpl
       const cc::RenderFrameMetadata& render_frame_metadata,
       viz::CompositorFrameMetadata* compositor_frame_metadata,
       bool force_send) override;
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  void DidEndScroll() override;
+#endif
 
   // mojom::RenderFrameMetadataObserver:
-#if BUILDFLAG(IS_ANDROID)
-  void ReportAllRootScrolls(bool enabled) override;
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  void UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::blink::RootScrollOffsetUpdateFrequency frequency) override;
 #endif
   void ReportAllFrameSubmissionsForTesting(bool enabled) override;
 
@@ -65,10 +69,14 @@ class PLATFORM_EXPORT RenderFrameMetadataObserverImpl
 
   void SendLastRenderFrameMetadata();
 
-#if BUILDFLAG(IS_ANDROID)
-  // When true this will notify |render_frame_metadata_observer_client_| of all
-  // frame submissions that involve a root scroll offset change.
-  bool report_all_root_scrolls_enabled_ = false;
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // This will determine the frequency to notify
+  // |render_frame_metadata_observer_client_| of the frame submissions that
+  // involve a root scroll offset change. See |RootScrollOffsetUpdateFrequency|
+  // for details.
+  std::optional<cc::mojom::blink::RootScrollOffsetUpdateFrequency>
+      root_scroll_offset_update_frequency_;
+  std::optional<gfx::PointF> last_root_scroll_offset_;
 #endif
 
   // When true this will notify |render_frame_metadata_observer_client_| of all
@@ -76,7 +84,7 @@ class PLATFORM_EXPORT RenderFrameMetadataObserverImpl
   bool report_all_frame_submissions_for_testing_enabled_ = false;
 
   uint32_t last_frame_token_ = 0;
-  absl::optional<cc::RenderFrameMetadata> last_render_frame_metadata_;
+  std::optional<cc::RenderFrameMetadata> last_render_frame_metadata_;
 
   // These are destroyed when BindToCurrentSequence() is called.
   mojo::PendingReceiver<cc::mojom::blink::RenderFrameMetadataObserver>

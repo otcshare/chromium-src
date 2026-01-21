@@ -54,7 +54,7 @@ class ChromeManagementServiceTest : public testing::Test {
                             const bool& permissions_callback_result,
                             const int& rotation_callback_result,
                             std::unique_ptr<MojoHelper> mojo_helper,
-                            absl::optional<ManagementServiceError> error) {
+                            std::optional<ManagementServiceError> error) {
     base::HistogramTester histogram_tester;
     base::test::SingleThreadTaskEnvironment single_threaded_task_environment;
     base::MockCallback<ChromeManagementService::PermissionsCallback>
@@ -87,7 +87,7 @@ class ChromeManagementServiceTest : public testing::Test {
       EXPECT_CALL(mock_rotation_callback, Run(_)).Times(0);
     }
 
-    ChromeManagementService chrome_management_service = ChromeManagementService(
+    ChromeManagementService chrome_management_service(
         mock_permissions_callback.Get(), mock_rotation_callback.Get(),
         std::move(mojo_helper));
 
@@ -148,7 +148,7 @@ class ChromeManagementServiceTest : public testing::Test {
 // rotate the key.
 MULTIPROCESS_TEST_MAIN(Successful) {
   return ChromeManagementServiceTest::TestRunProcess(
-      "Successful", true, kSuccess, MojoHelper::Create(), absl::nullopt);
+      "Successful", true, kSuccess, MojoHelper::Create(), std::nullopt);
 }
 
 TEST_F(ChromeManagementServiceTest, Success_Nonce) {
@@ -212,7 +212,7 @@ TEST_F(ChromeManagementServiceTest, Failure_IncorrectPermissions) {
   int exit_code = 0;
   ASSERT_TRUE(base::WaitForMultiprocessTestChildExit(
       child_process, TestTimeouts::action_timeout(), &exit_code));
-  EXPECT_EQ(kFailure, exit_code);
+  EXPECT_EQ(exit_code, kFailedInsufficientPermissions);
 }
 
 // Tests when the chrome management service failed due to an invalid platform
@@ -475,8 +475,7 @@ TEST_F(ChromeManagementServiceTest,
 // key rotation.
 MULTIPROCESS_TEST_MAIN(RotateDTKeyFailure) {
   return ChromeManagementServiceTest::TestRunProcess(
-      "RotateDTKeyFailure", true, kFailure, MojoHelper::Create(),
-      absl::nullopt);
+      "RotateDTKeyFailure", true, kFailure, MojoHelper::Create(), std::nullopt);
 }
 
 TEST_F(ChromeManagementServiceTest, Failure_RotateDTKeyFailure) {

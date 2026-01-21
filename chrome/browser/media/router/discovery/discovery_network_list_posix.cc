@@ -13,6 +13,7 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/router/discovery/discovery_network_list_wifi.h"
@@ -84,7 +85,7 @@ void GetDiscoveryNetworkInfoListImpl(
 
     network_info_list->push_back(
         {name, base::HexEncode(reinterpret_cast<const unsigned char*>(
-                                   SOCKET_ADDRESS(ll_addr)),
+                                   UNSAFE_TODO(SOCKET_ADDRESS(ll_addr))),
                                SOCKET_ADDRESS_LEN(ll_addr))});
   }
 }

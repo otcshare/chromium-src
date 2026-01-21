@@ -23,6 +23,10 @@ const char kWebViewSafebrowsingBlockAllResources[] =
 // tint. This is useful for identifying WebViews in an Android application.
 const char kHighlightAllWebViews[] = "highlight-all-webviews";
 
+// Enable net logging from WebView. This captures network activity for debugging
+// purposes, and stores the files in DevUi.
+const char kNetLog[] = "net-log";
+
 // WebView will log additional debugging information to logcat, such as
 // variations and commandline state.
 const char kWebViewVerboseLogging[] = "webview-verbose-logging";
@@ -60,28 +64,70 @@ const char kFinchSeedMinUpdatePeriod[] = "finch-seed-min-update-period";
 const char kWebViewEnableModernCookieSameSite[] =
     "webview-enable-modern-cookie-same-site";
 
-// Disables throttling querying apps package names allowlist components in
-// WebView clients.
-const char kWebViewDisablePackageAllowlistThrottling[] =
-    "webview-disable-package-allowlist-throttling";
+// Enables FencedFrames. This also enables PrivacySandboxAdsAPIsOverride.
+const char kWebViewFencedFrames[] = "webview-fenced-frames";
 
-// Enables use selective image inversion to automatically darken page, it will
-// be used when WebView is in dark mode, but website doesn't provide dark style.
-const char kWebViewSelectiveImageInversionDarkening[] =
-    "webview-selective-image-inversion-darkening";
+// Force disables 3rd party cookie for all apps.
+const char kWebViewForceDisable3pcs[] = "webview-force-disable-3pcs";
 
-// Enables MPArch-based FencedFrames. This also implies
-// PrivacySandboxAdsAPIsOverride and SharedStorageAPI.
-const char kWebViewMPArchFencedFrames[] = "webview-mparch-fenced-frames";
+// Enables crashes during WebView startup in the Java layer
+const char kWebViewForceCrashJava[] = "webview-force-crash-java";
 
-// Enables ShadowDOM-based FencedFrames. This also implies
-// PrivacySandboxAdsAPIsOverride and SharedStorageAPI.
-const char kWebViewShadowDOMFencedFrames[] = "webview-shadow-dom-fenced-frames";
+// Enables crashes during WebView startup in the Native layer
+const char kWebViewForceCrashNative[] = "webview-force-crash-native";
 
-// Disables WebView from checking for app recovery mitigations.
-const char kWebViewDisableAppRecovery[] = "webview-disable-app-recovery";
+// Use WebView's context for resource lookups instead of the embedding app's.
+const char kWebViewUseSeparateResourceContext[] =
+    "webview-use-separate-resource-context";
 
-// Enables WebView to check for app recovery mitigations.
-const char kWebViewEnableAppRecovery[] = "webview-enable-app-recovery";
+// Override and enable features useful for BSA library testing/debugging.
+const char kDebugBsa[] = "debug-bsa";
+
+// Enables using startup tasks logic for webview chromium initialization which
+// - runs the startup tasks asynchronously if startup is triggered from a
+// background thread. Otherwise runs startup synchronously.
+// - caches any chromium startup exception and rethrows it if startup is retried
+// without a restart.
+// Note: WebViewUseStartupTasksLogicP2 and kWebViewStartupTasksYieldToNative
+// also enable the same behaviour as this flag.
+const char kWebViewUseStartupTasksLogic[] = "webview-use-startup-tasks-logic";
+
+// Enables phase 2 of using startup tasks logic for webview chromium
+// initialization which also starts browser process asynchronously, when
+// starting webview asynchronously.
+// Note: This also enables the same behaviour as WebViewUseStartupTasksLogic and
+// WebViewStartupTasksYieldToNative with minor differences.
+const char kWebViewUseStartupTasksLogicP2[] =
+    "webview-use-startup-tasks-logic-p2";
+
+// Enables running native startup tasks asynchronously if WebView startup is
+// asynchronous.
+// Note: This also enables the same behaviour as WebViewUseStartupTasksLogic and
+// WebViewUseStartupTasksLogicP2, with minor additions.
+const char kWebViewStartupTasksYieldToNative[] =
+    "webview-startup-tasks-yield-to-native";
+
+// Enables running native startup tasks asynchronously if WebView startup is
+// asynchronous in addition to preventing multiprocess enabled checks from
+// starting chromium.
+const char kWebViewStartupTasksPlusMultiProcess[] =
+    "webview-startup-tasks-plus-multi-process";
+
+// Stop browser startup in isMultiProcessEnabled.
+const char kWebViewStopBrowserStartupInIsMultiProcessEnabled[] =
+    "webview-stop-browser-startup-in-is-multi-process-enabled";
+
+const char kStartupNonBlockingWebViewConstructor[] =
+    "startup-non-blocking-webview-constructor";
+
+// Opts in WebView to GMSCore's bindService optimizations
+const char kWebViewOptInToGmsBindServiceOptimization[] =
+    "webview-opt-in-to-gms-bind-service-optimization";
+
+// Enables/disables renderer-side native library prefetching.
+const char kWebViewRendererLibraryPrefetch[] =
+    "webview-renderer-library-prefetch";
+const char kWebViewRendererLibraryPrefetchDisabled[] = "disabled";
+const char kWebViewRendererLibraryPrefetchEnabled[] = "enabled";
 
 }  // namespace switches

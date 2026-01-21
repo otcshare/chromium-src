@@ -19,12 +19,19 @@ void GestureNavigationScreenHandler::Show() {
   ShowInWebUI();
 }
 
+base::WeakPtr<GestureNavigationScreenView>
+GestureNavigationScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void GestureNavigationScreenHandler::DeclareLocalizedValues(
     ::login::LocalizedValuesBuilder* builder) {
   builder->Add("gestureNavigationIntroTitle",
                IDS_OOBE_GESTURE_NAVIGATION_INTRO_TITLE);
   builder->Add("gestureNavigationIntroNextButton",
                IDS_OOBE_GESTURE_NAVIGATION_INTRO_NEXT_BUTTON);
+  builder->Add("gestureNavigationIntroSkipButton",
+               IDS_OOBE_GESTURE_NAVIGATION_INTRO_SKIP);
   builder->Add("gestureNavigationIntroGoHomeItem",
                IDS_OOBE_GESTURE_NAVIGATION_INTRO_GO_HOME);
   builder->Add("gestureNavigationIntroSwitchAppItem",

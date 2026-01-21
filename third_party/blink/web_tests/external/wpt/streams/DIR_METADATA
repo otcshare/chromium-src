@@ -1,8 +1,10 @@
-monorail {
+monorail: {
   component: "Blink>Network>StreamsAPI"
 }
-team_email: "blink-network-dev@chromium.org"
-wpt {
+team_email: "net-dev@chromium.org"
+wpt: {
   notify: YES
 }
-
+buganizer_public: {
+  component_id: 1456125
+}

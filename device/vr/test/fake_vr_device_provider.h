@@ -11,7 +11,6 @@
 #include "device/vr/public/cpp/vr_device_provider.h"
 #include "device/vr/vr_device_base.h"
 #include "device/vr/vr_export.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 
 namespace device {
 
@@ -30,7 +29,8 @@ class DEVICE_VR_EXPORT FakeVRDeviceProvider : public VRDeviceProvider {
   void AddDevice(std::unique_ptr<VRDeviceBase> device);
   void RemoveDevice(mojom::XRDeviceId device_id);
 
-  void Initialize(VRDeviceProviderClient* client) override;
+  void Initialize(VRDeviceProviderClient* client,
+                  content::WebContents* initializing_web_contents) override;
   bool Initialized() override;
 
  private:

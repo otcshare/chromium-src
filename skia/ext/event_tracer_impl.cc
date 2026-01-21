@@ -2,20 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "skia/ext/event_tracer_impl.h"
+
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/trace_event/trace_event.h"
-#include "skia/ext/event_tracer_impl.h"
 #include "third_party/skia/include/utils/SkEventTracer.h"
-
-namespace {
-// Experiment with not deleting the Skia event tracer at process exit
-// to measure the improvement in performance. See crbug.com/1329594
-BASE_FEATURE(kLeakSkiaEventTracerAtExit,
-             "LeakSkiaEventTracerAtExit",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-}  // namespace
 
 namespace skia {
 
@@ -43,7 +37,7 @@ const uint8_t*
 
 const char* SkChromiumEventTracer::getCategoryGroupName(
       const uint8_t* categoryEnabledFlag) {
-  return base::trace_event::TraceLog::GetCategoryGroupName(categoryEnabledFlag);
+  return TRACE_EVENT_API_GET_CATEGORY_GROUP_NAME(categoryEnabledFlag);
 }
 
 SkEventTracer::Handle
@@ -59,12 +53,9 @@ SkEventTracer::Handle
   base::trace_event::TraceArguments args(
       numArgs, argNames, argTypes,
       reinterpret_cast<const unsigned long long*>(argValues));
-  base::trace_event::TraceEventHandle handle = TRACE_EVENT_API_ADD_TRACE_EVENT(
-      phase, categoryEnabledFlag, name, trace_event_internal::kGlobalScope, id,
-      &args, flags);
-  SkEventTracer::Handle result;
-  memcpy(&result, &handle, sizeof(result));
-  return result;
+  TRACE_EVENT_API_ADD_TRACE_EVENT(phase, categoryEnabledFlag, name, id, &args,
+                                  flags);
+  return 0;
 }
 
 void
@@ -72,10 +63,7 @@ void
         const uint8_t* categoryEnabledFlag,
         const char *name,
         SkEventTracer::Handle handle) {
-  base::trace_event::TraceEventHandle traceEventHandle;
-      memcpy(&traceEventHandle, &handle, sizeof(handle));
-      TRACE_EVENT_API_UPDATE_TRACE_EVENT_DURATION(
-          categoryEnabledFlag, name, traceEventHandle);
+  TRACE_EVENT_API_UPDATE_TRACE_EVENT_DURATION(categoryEnabledFlag, name);
 }
 
 }  // namespace skia
@@ -83,7 +71,5 @@ void
 void InitSkiaEventTracer() {
   // Initialize the binding to Skia's tracing events. Skia will
   // take ownership of and clean up the memory allocated here.
-  SkEventTracer::SetInstance(
-      new skia::SkChromiumEventTracer(),
-      base::FeatureList::IsEnabled(kLeakSkiaEventTracerAtExit));
+  SkEventTracer::SetInstance(new skia::SkChromiumEventTracer());
 }

@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "media/capture/content/video_capture_oracle.h"
 
 #include <algorithm>
 #include <limits>
 #include <utility>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -47,7 +48,7 @@ constexpr auto kMaxTimeSinceLastFeedbackUpdate = base::Seconds(1);
 
 // The amount of additional time, since content animation was last detected, to
 // continue being extra-careful about increasing the capture size.  This is used
-// to prevent breif periods of non-animating content from throwing off the
+// to prevent brief periods of non-animating content from throwing off the
 // heuristics that decide whether to increase the capture size.
 constexpr auto kDebouncingPeriodForAnimatedContent = base::Seconds(3);
 
@@ -191,7 +192,6 @@ bool VideoCaptureOracle::ObserveEventAndDecideCapture(
 
     case kNumEvents:
       NOTREACHED();
-      break;
   }
 
   if (!should_sample)
@@ -230,8 +230,8 @@ bool VideoCaptureOracle::ObserveEventAndDecideCapture(
   return true;
 }
 
-void VideoCaptureOracle::RecordCapture(double pool_utilization) {
-  DCHECK(std::isfinite(pool_utilization) && pool_utilization >= 0.0);
+void VideoCaptureOracle::RecordCapture(float pool_utilization) {
+  DCHECK(std::isfinite(pool_utilization) && pool_utilization >= 0.0f);
 
   smoothing_sampler_.RecordSample();
   const base::TimeTicks timestamp = GetFrameTimestamp(next_frame_number_);
@@ -246,12 +246,12 @@ void VideoCaptureOracle::RecordCapture(double pool_utilization) {
   next_frame_number_++;
 }
 
-void VideoCaptureOracle::RecordWillNotCapture(double pool_utilization) {
+void VideoCaptureOracle::RecordWillNotCapture(float pool_utilization) {
   VLOG(1) << "Client rejects proposal to capture frame (at #"
           << next_frame_number_ << ").";
 
   if (capture_size_throttling_mode_ == kThrottlingActive) {
-    DCHECK(std::isfinite(pool_utilization) && pool_utilization >= 0.0);
+    DCHECK(std::isfinite(pool_utilization) && pool_utilization >= 0.0f);
     const base::TimeTicks timestamp = GetFrameTimestamp(next_frame_number_);
     buffer_pool_utilization_.Update(pool_utilization, timestamp);
     AnalyzeAndAdjust(timestamp);
@@ -423,7 +423,6 @@ const char* VideoCaptureOracle::EventAsString(Event event) {
       break;
   }
   NOTREACHED();
-  return "unknown";
 }
 
 base::TimeTicks VideoCaptureOracle::GetFrameTimestamp(int frame_number) const {

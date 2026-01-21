@@ -8,18 +8,28 @@
 #include <grpcpp/generic/async_generic_service.h>
 #include <grpcpp/grpcpp.h>
 
+#include <optional>
+
 #include "base/check_op.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "chromecast/cast_core/grpc/grpc_status_or.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace cast {
 namespace utils {
+
+// Returns a standard error for failed reads.
+const grpc::Status& GetStandardReadsFailedError();
+
+// Returns a standard error for failed writes.
+const grpc::Status& GetStandardWritesFailedError();
 
 // A base class for gRPC server reactors.
 template <typename TRequest, typename TResponse>
 class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
  public:
+  using RequestType = TRequest;
+
   GrpcServerReactor(const std::string& name,
                     grpc::CallbackServerContext* context)
       : name_(name), context_(context) {}
@@ -31,13 +41,20 @@ class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
   GrpcServerReactor& operator=(const GrpcServerReactor&) = delete;
   GrpcServerReactor& operator=(GrpcServerReactor&&) = delete;
 
+  // Flags that the reactor is done (finished or cancelled).
+  virtual bool is_done() = 0;
+
   // Set of overloaded methods to write responses or status to the clients.
   // Writes a status. No writes can be done after this call.
   void Write(const grpc::Status& status) { FinishWriting(nullptr, status); }
 
   // Writes a defined response.
   void Write(TResponse response = TResponse()) {
-    DCHECK(!response_byte_buffer_) << "Writing is already in progress";
+    if (response_byte_buffer_) {
+      LOG(ERROR) << "Writing is already in progress or reactor is cancelled";
+      OnWriteDone(false);
+      return;
+    }
     DVLOG(1) << "Writing response: " << name();
     response_byte_buffer_.emplace();
     Serialize(response, *response_byte_buffer_);
@@ -52,8 +69,11 @@ class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
  protected:
   // Starts reading a request.
   void ReadRequest() {
-    DCHECK(!request_byte_buffer_)
-        << "Reading is already in progress: " << name();
+    if (request_byte_buffer_) {
+      LOG(ERROR) << "Reading is already in progress: " << name();
+      OnReadDone(false);
+      return;
+    }
     DVLOG(1) << "Reading request: " << name();
     request_byte_buffer_.emplace();
     StartRead(&*request_byte_buffer_);
@@ -79,12 +99,10 @@ class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
 
   // Implements grpc::ServerGenericBidiReactor APIs.
   void OnReadDone(bool ok) override {
-    static const grpc::Status kReadsFailedError(grpc::StatusCode::ABORTED,
-                                                "Reads failed");
     DVLOG(1) << "Reads done: " << name() << ", ok=" << ok;
     if (!ok) {
       DVLOG(1) << "Reads failed: " << name();
-      OnRequestDone(kReadsFailedError);
+      OnRequestDone(GetStandardReadsFailedError());
       return;
     }
 
@@ -94,13 +112,11 @@ class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
   }
 
   void OnWriteDone(bool ok) override {
-    static const grpc::Status kWritesFailedError(grpc::StatusCode::ABORTED,
-                                                 "Writes failed");
     DVLOG(1) << "Writes done: " << name() << ", ok=" << ok;
     response_byte_buffer_.reset();
     if (!ok) {
       DVLOG(1) << "Writes failed: " << name();
-      OnResponseDone(kWritesFailedError);
+      OnResponseDone(GetStandardWritesFailedError());
       return;
     }
 
@@ -129,10 +145,10 @@ class GrpcServerReactor : public grpc::ServerGenericBidiReactor {
   }
 
   const std::string name_;
-  grpc::CallbackServerContext* context_;
+  raw_ptr<grpc::CallbackServerContext> context_;
 
-  absl::optional<grpc::ByteBuffer> request_byte_buffer_;
-  absl::optional<grpc::ByteBuffer> response_byte_buffer_;
+  std::optional<grpc::ByteBuffer> request_byte_buffer_;
+  std::optional<grpc::ByteBuffer> response_byte_buffer_;
 };
 
 }  // namespace utils

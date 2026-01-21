@@ -24,8 +24,8 @@ aura::Window* TestKeyboardUI::LoadKeyboardWindow(LoadCallback callback) {
   keyboard_window_->Init(ui::LAYER_NOT_DRAWN);
 
   // Set a default size for the keyboard.
-  display::Screen* screen = display::Screen::GetScreen();
-  keyboard_window_->SetBounds(keyboard::KeyboardBoundsFromRootBounds(
+  display::Screen* screen = display::Screen::Get();
+  keyboard_window_->SetBounds(keyboard::test::KeyboardBoundsFromRootBounds(
       screen->GetPrimaryDisplay().bounds()));
 
   // Simulate an asynchronous load.

@@ -103,9 +103,10 @@ class PaintWorkletTest : public PageTestBase {
     EXPECT_EQ(num_paints_before_switch, expected_num_paints_before_switch);
   }
 
-  void Terminate() {
+  void TearDown() override {
     proxy_->TerminateWorkletGlobalScope();
     proxy_ = nullptr;
+    PageTestBase::TearDown();
   }
 
  private:
@@ -151,6 +152,10 @@ TEST_F(PaintWorkletTest, PaintWithNullPaintArguments) {
 // registered. In the real world, this document paint definition should not be
 // used to paint until we see a second one being registed with the same name.
 TEST_F(PaintWorkletTest, SinglyRegisteredDocumentDefinitionNotUsed) {
+  PaintWorklet* paint_worklet_to_test =
+      PaintWorklet::From(*GetFrame().GetDocument()->domWindow());
+  paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
+
   PaintWorkletGlobalScope* global_scope = GetProxy()->global_scope();
   ClassicScript::CreateUnspecifiedScript(
       "registerPaint('foo', class { paint() { } });")
@@ -184,9 +189,6 @@ TEST_F(PaintWorkletTest, GlobalScopeSelection) {
   // In the last one where |paints_to_switch| is 20, there is no switching after
   // the first paint call.
   ExpectSwitchGlobalScope(false, 10, 20, 0, paint_worklet_to_test);
-
-  // Delete the page & associated objects.
-  Terminate();
 }
 
 TEST_F(PaintWorkletTest, NativeAndCustomProperties) {
@@ -196,9 +198,9 @@ TEST_F(PaintWorkletTest, NativeAndCustomProperties) {
       CSSPropertyID::kZoom,
       CSSPropertyID::kTop,
   };
-  Vector<String> custom_invalidation_properties = {
-      "--my-property",
-      "--another-property",
+  Vector<AtomicString> custom_invalidation_properties = {
+      AtomicString("--my-property"),
+      AtomicString("--another-property"),
   };
 
   TestPaintWorklet* paint_worklet_to_test = GetTestPaintWorklet();
@@ -305,7 +307,14 @@ TEST_P(MainOrOffThreadPaintWorkletTest, ConsistentGlobalScopeOnMainThread) {
   EXPECT_TRUE(paint_worklet_to_test->GetDocumentDefinitionMap().at("bar"));
 }
 
-TEST_P(MainOrOffThreadPaintWorkletTest, AllGlobalScopesMustBeCreated) {
+// TODO(crbug.com/1430318): All/MainOrOffThreadPaintWorkletTest.
+// AllGlobalScopesMustBeCreated/1 is failing on Linux TSan Tests.
+#if defined(THREAD_SANITIZER)
+#define MAYBE_AllGlobalScopesMustBeCreated DISABLED_AllGlobalScopesMustBeCreated
+#else
+#define MAYBE_AllGlobalScopesMustBeCreated AllGlobalScopesMustBeCreated
+#endif
+TEST_P(MainOrOffThreadPaintWorkletTest, MAYBE_AllGlobalScopesMustBeCreated) {
   PaintWorklet* paint_worklet_to_test =
       MakeGarbageCollected<PaintWorklet>(*GetFrame().DomWindow());
   paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
@@ -409,13 +418,10 @@ TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
   EXPECT_FALSE(paint_worklet_to_test->GetDocumentDefinitionMap().at("foo"));
 
   CSSPaintDefinition* definition = global_scopes[0]->FindDefinition("foo");
-  Vector<String> foo_custom_properties;
-  for (const auto& s : definition->CustomInvalidationProperties()) {
-    foo_custom_properties.push_back(s);
-  }
 
   paint_worklet_to_test->RegisterMainThreadDocumentPaintDefinition(
-      "foo", definition->NativeInvalidationProperties(), foo_custom_properties,
+      "foo", definition->NativeInvalidationProperties(),
+      definition->CustomInvalidationProperties(),
       definition->InputArgumentTypes(),
       definition->GetPaintRenderingContext2DSettings()->alpha());
 
@@ -436,7 +442,7 @@ TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
   definition = global_scopes[0]->FindDefinition("bar");
 
   // Manually change the custom properties
-  Vector<String> bar_custom_properties({"--bar1"});
+  Vector<AtomicString> bar_custom_properties = {AtomicString("--bar1")};
 
   paint_worklet_to_test->RegisterMainThreadDocumentPaintDefinition(
       "bar", definition->NativeInvalidationProperties(), bar_custom_properties,
@@ -456,13 +462,10 @@ TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
   EXPECT_TRUE(paint_worklet_to_test->GetDocumentDefinitionMap().at("loo"));
 
   definition = global_scopes[0]->FindDefinition("loo");
-  Vector<String> loo_custom_properties;
-  for (const auto& s : definition->CustomInvalidationProperties()) {
-    loo_custom_properties.push_back(s);
-  }
 
   paint_worklet_to_test->RegisterMainThreadDocumentPaintDefinition(
-      "loo", definition->NativeInvalidationProperties(), loo_custom_properties,
+      "loo", definition->NativeInvalidationProperties(),
+      definition->CustomInvalidationProperties(),
       definition->InputArgumentTypes(),
       definition->GetPaintRenderingContext2DSettings()->alpha());
 
@@ -486,7 +489,7 @@ TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
   definition = global_scopes[0]->FindDefinition("gar");
 
   // Manually change custom properties
-  Vector<String> gar_custom_properties({"--gar1"});
+  Vector<AtomicString> gar_custom_properties = {AtomicString("--gar1")};
 
   paint_worklet_to_test->RegisterMainThreadDocumentPaintDefinition(
       "gar", definition->NativeInvalidationProperties(), gar_custom_properties,
@@ -545,16 +548,13 @@ TEST_F(PaintWorkletTest, GeneratorNotifiedAfterAllRegistrations) {
   EXPECT_TRUE(paint_worklet_to_test->GetDocumentDefinitionMap().at("foo"));
 
   CSSPaintDefinition* definition = global_scopes[0]->FindDefinition("foo");
-  Vector<String> custom_properties;
-  for (const auto& s : definition->CustomInvalidationProperties()) {
-    custom_properties.push_back(s);
-  }
 
   // The cross thread check should cause the generator to fire
   EXPECT_CALL(*observer, PaintImageGeneratorReady).Times(1);
 
   paint_worklet_to_test->RegisterMainThreadDocumentPaintDefinition(
-      "foo", definition->NativeInvalidationProperties(), custom_properties,
+      "foo", definition->NativeInvalidationProperties(),
+      definition->CustomInvalidationProperties(),
       definition->InputArgumentTypes(),
       definition->GetPaintRenderingContext2DSettings()->alpha());
 

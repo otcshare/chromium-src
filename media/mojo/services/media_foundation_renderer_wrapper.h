@@ -5,16 +5,18 @@
 #ifndef MEDIA_MOJO_SERVICES_MEDIA_FOUNDATION_RENDERER_WRAPPER_H_
 #define MEDIA_MOJO_SERVICES_MEDIA_FOUNDATION_RENDERER_WRAPPER_H_
 
-#include "base/callback.h"
 #include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/base/media_resource.h"
 #include "media/base/pipeline_status.h"
 #include "media/base/renderer.h"
 #include "media/base/renderer_client.h"
 #include "media/mojo/mojom/dcomp_surface_registry.mojom.h"
 #include "media/mojo/mojom/frame_interface_factory.mojom.h"
+#include "media/mojo/mojom/media_log.mojom-forward.h"
 #include "media/mojo/mojom/renderer_extensions.mojom.h"
 #include "media/renderers/win/media_foundation_renderer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -31,14 +33,12 @@ class MediaFoundationRendererWrapper final
       public mojom::MuteStateObserver {
  public:
   using RendererExtension = mojom::MediaFoundationRendererExtension;
-  using ClientExtension = mojom::MediaFoundationRendererClientExtension;
 
   MediaFoundationRendererWrapper(
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       mojom::FrameInterfaceFactory* frame_interfaces,
       mojo::PendingRemote<mojom::MediaLog> media_log_remote,
-      mojo::PendingReceiver<RendererExtension> renderer_extension_receiver,
-      mojo::PendingRemote<ClientExtension> client_extension_remote);
+      mojo::PendingReceiver<RendererExtension> renderer_extension_receiver);
   MediaFoundationRendererWrapper(const MediaFoundationRendererWrapper&) =
       delete;
   MediaFoundationRendererWrapper operator=(
@@ -50,7 +50,7 @@ class MediaFoundationRendererWrapper final
                   RendererClient* client,
                   PipelineStatusCallback init_cb) override;
   void SetCdm(CdmContext* cdm_context, CdmAttachedCB cdm_attached_cb) override;
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void Flush(base::OnceClosure flush_cb) override;
   void StartPlayingFrom(base::TimeDelta time) override;
   void SetPlaybackRate(double playback_rate) override;
@@ -63,10 +63,6 @@ class MediaFoundationRendererWrapper final
   void SetVideoStreamEnabled(bool enabled) override;
   void SetOutputRect(const gfx::Rect& output_rect,
                      SetOutputRectCallback callback) override;
-  void NotifyFrameReleased(const base::UnguessableToken& frame_token) override;
-  void RequestNextFrame() override;
-  void SetMediaFoundationRenderingMode(
-      MediaFoundationRenderingMode mode) override;
 
   // mojom::MuteStateObserver implementation.
   void OnMuteStateChange(bool muted) override;
@@ -78,20 +74,12 @@ class MediaFoundationRendererWrapper final
                              const std::string& error);
   void OnDCOMPSurfaceHandleRegistered(
       GetDCOMPSurfaceCallback callback,
-      const absl::optional<base::UnguessableToken>& token);
-  void OnFrameGeneratedByMediaFoundation(
-      const base::UnguessableToken& frame_token,
-      const gfx::Size& frame_size,
-      base::TimeDelta frame_timestamp);
-  void OnFramePoolInitialized(
-      std::vector<MediaFoundationFrameInfo> frame_textures,
-      const gfx::Size& texture_size);
+      const std::optional<base::UnguessableToken>& token);
 
-  raw_ptr<mojom::FrameInterfaceFactory> frame_interfaces_;
+  raw_ptr<mojom::FrameInterfaceFactory, FlakyDanglingUntriaged>
+      frame_interfaces_;
   std::unique_ptr<MediaFoundationRenderer> renderer_;
   mojo::Receiver<MediaFoundationRendererExtension> renderer_extension_receiver_;
-  mojo::Remote<media::mojom::MediaFoundationRendererClientExtension>
-      client_extension_remote_;
   mojo::Receiver<mojom::MuteStateObserver> site_mute_observer_;
 
   base::CallbackListSubscription luid_update_subscription_;

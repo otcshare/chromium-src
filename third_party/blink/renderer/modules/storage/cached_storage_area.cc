@@ -8,16 +8,23 @@
 
 #include <algorithm>
 
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
+#include "base/time/time.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/copy_lchars_from_uchar_source.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
@@ -34,7 +41,7 @@ enum class StorageFormat : uint8_t { UTF16 = 0, Latin1 = 1 };
 // These methods are used to pack and unpack the page_url/storage_area_id into
 // source strings to/from the browser.
 String PackSource(const KURL& page_url, const String& storage_area_id) {
-  return page_url.GetString() + "\n" + storage_area_id;
+  return StrCat({page_url.GetString(), "\n", storage_area_id});
 }
 
 void UnpackSource(const String& source,
@@ -56,8 +63,8 @@ base::OnceCallback<void(bool)> MakeSuccessCallback(
           "CachedStorageArea",
           WebScopedVirtualTimePauser::VirtualTaskDuration::kNonInstant);
   virtual_time_pauser.PauseVirtualTime();
-  return WTF::BindOnce([](WebScopedVirtualTimePauser, bool) {},
-                       std::move(virtual_time_pauser));
+  return BindOnce([](WebScopedVirtualTimePauser, bool) {},
+                  std::move(virtual_time_pauser));
 }
 
 }  // namespace
@@ -95,7 +102,7 @@ bool CachedStorageArea::SetItem(const String& key,
     return false;
 
   const FormatOption value_format = GetValueFormat();
-  absl::optional<Vector<uint8_t>> optional_old_value;
+  std::optional<Vector<uint8_t>> optional_old_value;
   if (!old_value.IsNull() && should_send_old_value_on_mutations_)
     optional_old_value = StringToUint8Vector(old_value, value_format);
   KURL page_url = source->GetPageUrl();
@@ -123,7 +130,7 @@ void CachedStorageArea::RemoveItem(const String& key, Source* source) {
   if (!map_->RemoveItem(key, &old_value))
     return;
 
-  absl::optional<Vector<uint8_t>> optional_old_value;
+  std::optional<Vector<uint8_t>> optional_old_value;
   if (should_send_old_value_on_mutations_)
     optional_old_value = StringToUint8Vector(old_value, GetValueFormat());
   KURL page_url = source->GetPageUrl();
@@ -195,7 +202,8 @@ CachedStorageArea::CachedStorageArea(
       storage_key_(storage_key),
       storage_namespace_(storage_namespace),
       is_session_storage_for_prerendering_(is_session_storage_for_prerendering),
-      areas_(MakeGarbageCollected<HeapHashMap<WeakMember<Source>, String>>()) {
+      areas_(
+          MakeGarbageCollected<GCedHeapHashMap<WeakMember<Source>, String>>()) {
   BindStorageArea(std::move(storage_area), local_dom_window);
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       this, "DOMStorage",
@@ -244,7 +252,7 @@ void CachedStorageArea::BindStorageArea(
     remote_area_.Bind(std::move(new_area), task_runner);
   } else if (storage_namespace_) {
     storage_namespace_->BindStorageArea(
-        *local_dom_window,
+        storage_key_, local_dom_window->GetLocalFrameToken(),
         remote_area_.BindNewPipeAndPassReceiver(task_runner));
   } else {
     return;
@@ -338,7 +346,7 @@ void CachedStorageArea::ResetConnection(
 void CachedStorageArea::KeyChanged(
     const Vector<uint8_t>& key,
     const Vector<uint8_t>& new_value,
-    const absl::optional<Vector<uint8_t>>& old_value,
+    const std::optional<Vector<uint8_t>>& old_value,
     const String& source) {
   DCHECK(!IsSessionStorage());
 
@@ -418,7 +426,7 @@ void CachedStorageArea::KeyChangeFailed(const Vector<uint8_t>& key,
 
 void CachedStorageArea::KeyDeleted(
     const Vector<uint8_t>& key,
-    const absl::optional<Vector<uint8_t>>& old_value,
+    const std::optional<Vector<uint8_t>>& old_value,
     const String& source) {
   DCHECK(!IsSessionStorage());
 
@@ -499,15 +507,14 @@ bool CachedStorageArea::OnMemoryDump(
     base::trace_event::ProcessMemoryDump* pmd) {
   using base::trace_event::MemoryAllocatorDump;
 
-  WTF::String dump_name = WTF::String::Format(
-      "site_storage/%s/0x%" PRIXPTR "/cache_size",
-      IsSessionStorage() ? "session_storage" : "local_storage",
-      reinterpret_cast<uintptr_t>(this));
+  String dump_name = UNSAFE_TODO(
+      String::Format("site_storage/%s/0x%" PRIXPTR "/cache_size",
+                     IsSessionStorage() ? "session_storage" : "local_storage",
+                     reinterpret_cast<uintptr_t>(this)));
   MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name.Utf8());
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
                   MemoryAllocatorDump::kUnitsBytes, memory_used());
-  pmd->AddSuballocation(dump->guid(),
-                        WTF::Partitions::kAllocatedObjectPoolName);
+  pmd->AddSuballocation(dump->guid(), Partitions::kAllocatedObjectPoolName);
   return true;
 }
 
@@ -556,7 +563,7 @@ CachedStorageArea::PopPendingMutation(const String& source) {
   const String key = mutation->key;
   if (!key.IsNull()) {
     auto key_queue_iter = pending_mutations_by_key_.find(key);
-    DCHECK(key_queue_iter != pending_mutations_by_key_.end());
+    CHECK(key_queue_iter != pending_mutations_by_key_.end());
     DCHECK_EQ(key_queue_iter->value.front(), mutation.get());
     key_queue_iter->value.pop_front();
     if (key_queue_iter->value.empty())
@@ -594,6 +601,19 @@ void CachedStorageArea::MaybeApplyNonLocalMutationForKey(
   key_queue_iter->value.front()->old_value = new_value;
 }
 
+// Controls whether we apply an artificial delay to priming the DOMStorage data.
+// There are 2 parameters that influence how long the delay is, `factor` and
+// `offset`. If the actual time taken is `time_to_prime` then the delay will be
+// `time_to_prime * factor + offset`.
+BASE_FEATURE(kDomStorageAblation, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(double,
+                   kDomStorageAblationDelayFactor,
+                   &kDomStorageAblation,
+                   "factor",
+                   0);
+const base::FeatureParam<base::TimeDelta> kDomStorageAblationDelayOffset{
+    &kDomStorageAblation, "offset", base::Milliseconds(0)};
+
 void CachedStorageArea::EnsureLoaded() {
   if (map_)
     return;
@@ -628,13 +648,24 @@ void CachedStorageArea::EnsureLoaded() {
   base::TimeDelta time_to_prime = base::TimeTicks::Now() - before;
   UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrime", time_to_prime);
 
+  if (base::FeatureList::IsEnabled(kDomStorageAblation)) {
+    base::TimeDelta delay =
+        time_to_prime * kDomStorageAblationDelayFactor.Get() +
+        kDomStorageAblationDelayOffset.Get();
+    base::UmaHistogramMediumTimes("LocalStorage.MojoTimeToPrimeAblationDelay",
+                                  delay);
+    if (delay.is_positive()) {
+      base::PlatformThread::Sleep(delay);
+    }
+  }
+
   size_t local_storage_size_kb = map_->quota_used() / 1024;
   // Track localStorage size, from 0-6MB. Note that the maximum size should be
   // 10MB, but we add some slop since we want to make sure the max size is
   // always above what we see in practice, since histograms can't change.
   UMA_HISTOGRAM_CUSTOM_COUNTS(
       "LocalStorage.MojoSizeInKB",
-      base::saturated_cast<base::Histogram::Sample>(local_storage_size_kb), 1,
+      base::saturated_cast<base::Histogram::Sample32>(local_storage_size_kb), 1,
       6 * 1024, 50);
   if (local_storage_size_kb < 100) {
     UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrimeForUnder100KB",
@@ -691,17 +722,16 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
                                               FormatOption format_option) {
   if (input.empty())
     return g_empty_string;
-  const wtf_size_t input_size = input.size();
   String result;
   bool corrupt = false;
   switch (format_option) {
     case FormatOption::kSessionStorageForceUTF16: {
-      if (input_size % sizeof(UChar) != 0) {
+      if (input.size() % sizeof(UChar) != 0) {
         corrupt = true;
         break;
       }
-      StringBuffer<UChar> buffer(input_size / sizeof(UChar));
-      std::memcpy(buffer.Characters(), input.data(), input_size);
+      StringBuffer<UChar> buffer(input.size() / sizeof(UChar));
+      base::as_writable_bytes(buffer.Span()).copy_from(input);
       result = String::Adopt(buffer);
       break;
     }
@@ -709,7 +739,7 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
       // TODO(mek): When this lived in content it used to do a "lenient"
       // conversion, while this is a strict conversion. Figure out if that
       // difference actually matters in practice.
-      result = String::FromUTF8(input.data(), input_size);
+      result = String::FromUTF8(input);
       if (result.IsNull()) {
         corrupt = true;
         break;
@@ -717,22 +747,21 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
       break;
     }
     case FormatOption::kLocalStorageDetectFormat: {
-      StorageFormat format = static_cast<StorageFormat>(input[0]);
-      const wtf_size_t payload_size = input_size - 1;
+      auto [format_byte, payload] = base::span(input).split_at<1u>();
+      StorageFormat format = static_cast<StorageFormat>(format_byte[0]);
       switch (format) {
         case StorageFormat::UTF16: {
-          if (payload_size % sizeof(UChar) != 0) {
+          if (payload.size() % sizeof(UChar) != 0) {
             corrupt = true;
             break;
           }
-          StringBuffer<UChar> buffer(payload_size / sizeof(UChar));
-          std::memcpy(buffer.Characters(), input.data() + 1, payload_size);
+          StringBuffer<UChar> buffer(payload.size() / sizeof(UChar));
+          base::as_writable_bytes(buffer.Span()).copy_from(payload);
           result = String::Adopt(buffer);
           break;
         }
         case StorageFormat::Latin1:
-          result = String(reinterpret_cast<const char*>(input.data() + 1),
-                          payload_size);
+          result = String(payload);
           break;
         default:
           corrupt = true;
@@ -757,66 +786,61 @@ Vector<uint8_t> CachedStorageArea::StringToUint8Vector(
   switch (format_option) {
     case FormatOption::kSessionStorageForceUTF16: {
       Vector<uint8_t> result(input.length() * sizeof(UChar));
-      input.CopyTo(reinterpret_cast<UChar*>(result.data()), 0, input.length());
+      input.CopyTo(
+          UNSAFE_TODO(base::span(reinterpret_cast<UChar*>(result.data()),
+                                 input.length())),
+          0);
       return result;
     }
     case FormatOption::kSessionStorageForceUTF8: {
       unsigned length = input.length();
       if (input.Is8Bit() && input.ContainsOnlyASCIIOrEmpty()) {
         Vector<uint8_t> result(length);
-        std::memcpy(result.data(), input.Characters8(), length);
+        base::span(result).copy_from(input.Span8());
         return result;
       }
       // Handle 8 bit case where it's not only ascii.
       if (input.Is8Bit()) {
-        // This code is copied from WTF::String::Utf8(), except the vector
+        // This code is copied from String::Utf8(), except the vector
         // doesn't have a stack-allocated capacity.
         // We do this because there isn't a way to transform the std::string we
-        // get from WTF::String::Utf8() to a Vector without an extra copy.
+        // get from String::Utf8() to a Vector without an extra copy.
         if (length > std::numeric_limits<unsigned>::max() / 3)
           return Vector<uint8_t>();
         Vector<uint8_t> buffer_vector(length * 3);
-        uint8_t* buffer = buffer_vector.data();
-        const LChar* characters = input.Characters8();
 
-        WTF::unicode::ConversionResult result =
-            WTF::unicode::ConvertLatin1ToUTF8(
-                &characters, characters + length,
-                reinterpret_cast<char**>(&buffer),
-                reinterpret_cast<char*>(buffer + buffer_vector.size()));
+        unicode::ConversionResult result = unicode::ConvertLatin1ToUtf8(
+            input.Span8(), base::span(buffer_vector));
         // (length * 3) should be sufficient for any conversion
-        DCHECK_NE(result, WTF::unicode::kTargetExhausted);
-        buffer_vector.Shrink(
-            static_cast<wtf_size_t>(buffer - buffer_vector.data()));
+        DCHECK_NE(result.status, unicode::kTargetExhausted);
+        buffer_vector.Shrink(static_cast<wtf_size_t>(result.converted.size()));
         return buffer_vector;
       }
 
       // TODO(dmurph): Figure out how to avoid a copy here.
       // TODO(dmurph): Handle invalid UTF16 better. https://crbug.com/873280.
-      StringUTF8Adaptor utf8(
-          input, WTF::kStrictUTF8ConversionReplacingUnpairedSurrogatesWithFFFD);
+      StringUtf8Adaptor utf8(input, Utf8ConversionMode::kStrictReplacingErrors);
       Vector<uint8_t> result(utf8.size());
-      std::memcpy(result.data(), utf8.data(), utf8.size());
+      base::span(result).copy_from(base::as_byte_span(utf8));
       return result;
     }
     case FormatOption::kLocalStorageDetectFormat: {
       if (input.ContainsOnlyLatin1OrEmpty()) {
         Vector<uint8_t> result(input.length() + 1);
-        result[0] = static_cast<uint8_t>(StorageFormat::Latin1);
+        auto [format, payload] = base::span(result).split_at<1u>();
+        format[0] = static_cast<uint8_t>(StorageFormat::Latin1);
         if (input.Is8Bit()) {
-          std::memcpy(result.data() + 1, input.Characters8(), input.length());
+          payload.copy_from(input.Span8());
         } else {
-          for (unsigned i = 0; i < input.length(); ++i) {
-            result[i + 1] = input[i];
-          }
+          CopyLCharsFromUCharSource(payload, input.Span16());
         }
         return result;
       }
       DCHECK(!input.Is8Bit());
-      Vector<uint8_t> result(input.length() * sizeof(UChar) + 1);
-      result[0] = static_cast<uint8_t>(StorageFormat::UTF16);
-      std::memcpy(result.data() + 1, input.Characters16(),
-                  input.length() * sizeof(UChar));
+      Vector<uint8_t> result(input.CharactersSizeInBytes() + 1);
+      auto [format, payload] = base::span(result).split_at<1u>();
+      format[0] = static_cast<uint8_t>(StorageFormat::UTF16);
+      payload.copy_from(input.RawByteSpan());
       return result;
     }
   }

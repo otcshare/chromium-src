@@ -4,9 +4,8 @@
 
 #include "chrome/test/base/test_chrome_web_ui_controller_factory.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/test_data_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/web_ui_test_data_source.h"
 #include "content/public/browser/url_data_source.h"
@@ -17,14 +16,11 @@ using content::WebContents;
 using content::WebUI;
 using content::WebUIController;
 
-TestChromeWebUIControllerFactory::WebUIProvider::~WebUIProvider() {
-}
+TestChromeWebUIControllerFactory::WebUIProvider::~WebUIProvider() = default;
 
-TestChromeWebUIControllerFactory::TestChromeWebUIControllerFactory() {
-}
+TestChromeWebUIControllerFactory::TestChromeWebUIControllerFactory() = default;
 
-TestChromeWebUIControllerFactory::~TestChromeWebUIControllerFactory() {
-}
+TestChromeWebUIControllerFactory::~TestChromeWebUIControllerFactory() = default;
 
 void TestChromeWebUIControllerFactory::set_webui_host(
     const std::string& webui_host) {
@@ -68,10 +64,10 @@ TestChromeWebUIControllerFactory::CreateWebUIControllerForURL(
 
   // Add an empty callback since managed-footnote always sends this message.
   web_ui->RegisterMessageCallback("observeManagedUI", base::DoNothing());
-  content::WebUIDataSource* source = webui::CreateWebUITestDataSource();
+  content::WebUIDataSource* source =
+      webui::CreateAndAddWebUITestDataSource(profile);
   if (provider)
     provider->DataSourceOverrides(source);
-  content::WebUIDataSource::Add(profile, source);
 
   return controller;
 }
@@ -80,13 +76,14 @@ TestChromeWebUIControllerFactory::WebUIProvider*
     TestChromeWebUIControllerFactory::GetWebUIProvider(
         Profile* profile, const GURL& url) const {
   const GURL& webui_url = TestURLToWebUIURL(url);
-  auto found = factory_overrides_.find(webui_url.host());
+  auto found = factory_overrides_.find(webui_url.GetHost());
   return found != factory_overrides_.end() ? found->second : nullptr;
 }
 
 GURL TestChromeWebUIControllerFactory::TestURLToWebUIURL(
     const GURL& url) const {
-  if ((url.host() != "test" && url.host() != chrome::kChromeUIWebUITestHost) ||
+  if ((url.GetHost() != "test" &&
+       url.GetHost() != chrome::kChromeUIWebUITestHost) ||
       webui_host_.empty()) {
     return url;
   }

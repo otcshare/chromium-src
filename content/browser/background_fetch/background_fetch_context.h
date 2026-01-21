@@ -7,10 +7,12 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -20,7 +22,6 @@
 #include "content/browser/devtools/devtools_background_services_context_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 
@@ -54,7 +55,7 @@ class CONTENT_EXPORT BackgroundFetchContext
       base::WeakPtr<StoragePartitionImpl> storage_partition,
       const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context,
       scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
-      scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context);
+      DevToolsBackgroundServicesContextImpl& devtools_context);
 
   BackgroundFetchContext(const BackgroundFetchContext&) = delete;
   BackgroundFetchContext& operator=(const BackgroundFetchContext&) = delete;
@@ -129,8 +130,8 @@ class CONTENT_EXPORT BackgroundFetchContext
   // internal |icon| is guarnteed to be not null.
   void UpdateUI(
       const BackgroundFetchRegistrationId& registration_id,
-      const absl::optional<std::string>& title,
-      const absl::optional<SkBitmap>& icon,
+      const std::optional<std::string>& title,
+      const std::optional<SkBitmap>& icon,
       blink::mojom::BackgroundFetchRegistrationService::UpdateUICallback
           callback);
 
@@ -200,7 +201,8 @@ class CONTENT_EXPORT BackgroundFetchContext
 
   std::unique_ptr<BackgroundFetchDataManager> data_manager_;
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
-  scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context_;
+  // Owned by StoragePartitionImpl; cleared during `Shutdown()`.
+  raw_ptr<DevToolsBackgroundServicesContextImpl> devtools_context_;
   std::unique_ptr<BackgroundFetchRegistrationNotifier> registration_notifier_;
   BackgroundFetchDelegateProxy delegate_proxy_;
   std::unique_ptr<BackgroundFetchScheduler> scheduler_;

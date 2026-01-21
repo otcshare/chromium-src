@@ -17,7 +17,7 @@ class RenderFrameHost;
 // Receiver for speculation rules from the web platform. See
 // third_party/blink/renderer/core/speculation_rules/README.md
 class CONTENT_EXPORT SpeculationHostImpl final
-    : public content::DocumentService<blink::mojom::SpeculationHost> {
+    : public DocumentService<blink::mojom::SpeculationHost> {
  public:
   // Creates and binds an instance of this per-frame.
   static void Bind(
@@ -36,8 +36,10 @@ class CONTENT_EXPORT SpeculationHostImpl final
   ~SpeculationHostImpl() override;
 
   void UpdateSpeculationCandidates(
-      std::vector<blink::mojom::SpeculationCandidatePtr> candidates) override;
-  void EnableNoVarySearchSupport() override;
+      std::vector<blink::mojom::SpeculationCandidatePtr> candidates,
+      bool enable_cross_origin_prerender_iframes) override;
+  void OnLCPPredicted() override;
+  void InitiatePreview(const GURL& url) override;
 };
 
 }  // namespace content

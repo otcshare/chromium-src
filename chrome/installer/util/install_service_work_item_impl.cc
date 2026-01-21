@@ -9,13 +9,17 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/win/registry.h"
 #include "base/win/win_util.h"
@@ -27,6 +31,44 @@ namespace installer {
 
 namespace {
 
+enum class Operation {
+  kChangeServiceConfig,
+  kChangeServiceConfig2,
+  kCreateService,
+  kDeleteService,
+  kOpenSCManager,
+  kOpenService,
+  kQueryServiceConfig,
+  kQueryServiceConfig2,
+};
+
+std::string_view ToString(Operation operation) {
+  switch (operation) {
+    case Operation::kChangeServiceConfig:
+      return "ChangeServiceConfig";
+    case Operation::kChangeServiceConfig2:
+      return "ChangeServiceConfig2";
+    case Operation::kCreateService:
+      return "CreateService";
+    case Operation::kDeleteService:
+      return "DeleteService";
+    case Operation::kOpenSCManager:
+      return "OpenSCManager";
+    case Operation::kOpenService:
+      return "OpenService";
+    case Operation::kQueryServiceConfig:
+      return "QueryServiceConfig";
+    case Operation::kQueryServiceConfig2:
+      return "QueryServiceConfig2";
+  }
+}
+
+void RecordResult(Operation operation, DWORD error_code) {
+  base::UmaHistogramSparse(
+      base::StrCat({"Setup.Install.SCM.", ToString(operation), ".Result"}),
+      static_cast<int>(error_code));
+}
+
 constexpr uint32_t kServiceType = SERVICE_WIN32_OWN_PROCESS;
 constexpr uint32_t kServiceErrorControl = SERVICE_ERROR_NORMAL;
 constexpr wchar_t kServiceDependencies[] = L"RPCSS\0";
@@ -36,33 +78,7 @@ constexpr wchar_t kServiceDependencies[] = L"RPCSS\0";
 constexpr uint32_t kServiceAccess =
     DELETE | SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG;
 
-// One value for each possible outcome of DoImpl.
-// These values are logged to histograms. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class ServiceInstallResult {
-  kFailedFreshInstall = 0,
-  kFailedInstallNewAfterFailedUpgrade = 1,
-  kFailedOpenSCManager = 2,
-  kSucceededChangeServiceConfig = 3,
-  kSucceededFreshInstall = 4,
-  kSucceededInstallNewAndDeleteOriginal = 5,
-  kSucceededInstallNewAndFailedDeleteOriginal = 6,
-  kSucceededServiceCorrectlyConfigured = 7,
-  kMaxValue = kSucceededServiceCorrectlyConfigured,
-};
-
-// One value for each possible outcome of RollbackImpl.
-// These values are logged to histograms. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class ServiceRollbackResult {
-  kFailedDeleteCurrentService = 0,
-  kFailedRollbackOriginalServiceConfig = 1,
-  kSucceededDeleteCurrentService = 2,
-  kSucceededRollbackOriginalServiceConfig = 3,
-  kMaxValue = kSucceededRollbackOriginalServiceConfig,
-};
-
-std::wstring GetComRegistryPath(base::WStringPiece hive, const GUID& guid) {
+std::wstring GetComRegistryPath(std::wstring_view hive, const GUID& guid) {
   return base::StrCat(
       {L"Software\\Classes\\", hive, L"\\", base::win::WStringFromGUID(guid)});
 }
@@ -121,6 +137,7 @@ bool operator==(const InstallServiceWorkItemImpl::ServiceConfig& lhs,
 InstallServiceWorkItemImpl::InstallServiceWorkItemImpl(
     const std::wstring& service_name,
     const std::wstring& display_name,
+    const std::wstring& description,
     uint32_t start_type,
     const base::CommandLine& service_cmd_line,
     const base::CommandLine& com_service_cmd_line_args,
@@ -130,6 +147,7 @@ InstallServiceWorkItemImpl::InstallServiceWorkItemImpl(
     : com_registration_work_items_(WorkItem::CreateWorkItemList()),
       service_name_(service_name),
       display_name_(display_name),
+      description_(description),
       start_type_(start_type),
       service_cmd_line_(service_cmd_line),
       com_service_cmd_line_args_(com_service_cmd_line_args),
@@ -149,10 +167,13 @@ bool InstallServiceWorkItemImpl::DoImpl() {
 bool InstallServiceWorkItemImpl::DoInstallService() {
   scm_.Set(::OpenSCManager(nullptr, nullptr,
                            SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE));
-  if (!scm_.IsValid()) {
+  if (!scm_.is_valid()) {
+    auto error = ::GetLastError();
     PLOG(ERROR) << "::OpenSCManager Failed";
+    RecordResult(Operation::kOpenSCManager, error);
     return false;
   }
+  RecordResult(Operation::kOpenSCManager, ERROR_SUCCESS);
 
   if (!OpenService()) {
     VPLOG(1) << "Attempting to install new service following failure to open";
@@ -225,52 +246,47 @@ bool InstallServiceWorkItemImpl::DoComRegistration() {
   for (const auto& iid : iids_) {
     const std::wstring iid_reg_path = GetComIidRegistryPath(iid);
     const std::wstring typelib_reg_path = GetComTypeLibRegistryPath(iid);
+    const std::wstring iid_string = base::win::WStringFromGUID(iid);
 
-    // Registering the Ole Automation marshaler with the CLSID
-    // {00020424-0000-0000-C000-000000000046} as the proxy/stub for the
-    // interface.
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path, WorkItem::kWow64Default);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path + L"\\ProxyStubClsid32",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddSetRegValueWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path + L"\\ProxyStubClsid32",
-        WorkItem::kWow64Default, L"", L"{00020424-0000-0000-C000-000000000046}",
-        true);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path + L"\\TypeLib",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddSetRegValueWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path + L"\\TypeLib",
-        WorkItem::kWow64Default, L"", base::win::WStringFromGUID(iid), true);
-    com_registration_work_items_->AddSetRegValueWorkItem(
-        HKEY_LOCAL_MACHINE, iid_reg_path + L"\\TypeLib",
-        WorkItem::kWow64Default, L"Version", L"1.0", true);
+    for (const auto& key_flag : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
+      // Registering the Ole Automation marshaler with the CLSID
+      // {00020424-0000-0000-C000-000000000046} as the proxy/stub for the
+      // interface.
+      {
+        const std::wstring path = iid_reg_path + L"\\ProxyStubClsid32";
+        com_registration_work_items_->AddCreateRegKeyWorkItem(
+            HKEY_LOCAL_MACHINE, path, key_flag);
+        com_registration_work_items_->AddSetRegValueWorkItem(
+            HKEY_LOCAL_MACHINE, path, key_flag, L"",
+            L"{00020424-0000-0000-C000-000000000046}", true);
+      }
+      {
+        const std::wstring path = iid_reg_path + L"\\TypeLib";
+        com_registration_work_items_->AddCreateRegKeyWorkItem(
+            HKEY_LOCAL_MACHINE, path, key_flag);
+        com_registration_work_items_->AddSetRegValueWorkItem(
+            HKEY_LOCAL_MACHINE, path, key_flag, L"", iid_string, true);
+        com_registration_work_items_->AddSetRegValueWorkItem(
+            HKEY_LOCAL_MACHINE, path, key_flag, L"Version", L"1.0", true);
+      }
+      com_registration_work_items_->AddSetRegValueWorkItem(
+          HKEY_LOCAL_MACHINE, iid_reg_path, key_flag, L"",
+          base::StrCat({L"Interface ", iid_string}), true);
+    }
 
     // The TypeLib registration for the Ole Automation marshaler.
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path, WorkItem::kWow64Default);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
+    for (const auto& path : {typelib_reg_path + L"\\1.0\\0\\win32",
+                             typelib_reg_path + L"\\1.0\\0\\win64"}) {
+      com_registration_work_items_->AddCreateRegKeyWorkItem(
+          HKEY_LOCAL_MACHINE, path, WorkItem::kWow64Default);
+      com_registration_work_items_->AddSetRegValueWorkItem(
+          HKEY_LOCAL_MACHINE, path, WorkItem::kWow64Default, L"",
+          service_cmd_line_.GetProgram().value(), true);
+    }
+    com_registration_work_items_->AddSetRegValueWorkItem(
         HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0\\0",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0\\0\\win32",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddSetRegValueWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0\\0\\win32",
-        WorkItem::kWow64Default, L"", service_cmd_line_.GetProgram().value(),
-        true);
-    com_registration_work_items_->AddCreateRegKeyWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0\\0\\win64",
-        WorkItem::kWow64Default);
-    com_registration_work_items_->AddSetRegValueWorkItem(
-        HKEY_LOCAL_MACHINE, typelib_reg_path + L"\\1.0\\0\\win64",
-        WorkItem::kWow64Default, L"", service_cmd_line_.GetProgram().value(),
-        true);
+        WorkItem::kWow64Default, L"",
+        base::StrCat({L"TypeLib for Interface ", iid_string}), true);
   }
 
   return com_registration_work_items_->Do();
@@ -285,14 +301,14 @@ void InstallServiceWorkItemImpl::RollbackImpl() {
     return;
 
   if (rollback_existing_service_) {
-    DCHECK(service_.IsValid());
+    DCHECK(service_.is_valid());
     DCHECK(original_service_config_.is_valid);
     RestoreOriginalServiceConfig();
     return;
   }
 
   DCHECK(rollback_new_service_);
-  DCHECK(service_.IsValid());
+  DCHECK(service_.is_valid());
 
   // Delete the newly created service.
   DeleteCurrentService();
@@ -327,18 +343,27 @@ bool InstallServiceWorkItemImpl::DeleteServiceImpl() {
   }
 
   for (const auto& iid : iids_) {
-    for (const auto& reg_path :
-         {GetComIidRegistryPath(iid), GetComTypeLibRegistryPath(iid)}) {
+    {
+      const std::wstring reg_path = GetComIidRegistryPath(iid);
+      for (const auto& key_flag : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
+        installer::DeleteRegistryKey(HKEY_LOCAL_MACHINE, reg_path, key_flag);
+      }
+    }
+    {
+      const std::wstring reg_path = GetComTypeLibRegistryPath(iid);
       installer::DeleteRegistryKey(HKEY_LOCAL_MACHINE, reg_path,
                                    WorkItem::kWow64Default);
     }
   }
 
   scm_.Set(::OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT));
-  if (!scm_.IsValid()) {
+  if (!scm_.is_valid()) {
+    auto error = ::GetLastError();
     DPLOG(ERROR) << "::OpenSCManager Failed";
+    RecordResult(Operation::kOpenSCManager, error);
     return false;
   }
+  RecordResult(Operation::kOpenSCManager, ERROR_SUCCESS);
 
   if (!OpenService())
     return false;
@@ -397,7 +422,7 @@ bool InstallServiceWorkItemImpl::IsUpgradeNeeded(
 
 bool InstallServiceWorkItemImpl::ChangeServiceConfig(
     const ServiceConfig& config) {
-  DCHECK(service_.IsValid());
+  DCHECK(service_.is_valid());
 
   // Change the configuration of the existing service.
   // If the service is deleted, ::ChangeServiceConfig will fail with the error
@@ -411,10 +436,13 @@ bool InstallServiceWorkItemImpl::ChangeServiceConfig(
           /*lpServiceStartName=*/nullptr, /*lpPassword=*/nullptr,
           !config.display_name.empty() ? config.display_name.c_str()
                                        : nullptr)) {
+    auto error = ::GetLastError();
     PLOG(WARNING) << "Failed to change service config "
                   << GetCurrentServiceName().c_str();
+    RecordResult(Operation::kChangeServiceConfig, error);
     return false;
   }
+  RecordResult(Operation::kChangeServiceConfig, ERROR_SUCCESS);
 
   return true;
 }
@@ -424,15 +452,21 @@ bool InstallServiceWorkItemImpl::DeleteCurrentService() {
 }
 
 bool InstallServiceWorkItemImpl::OpenService() {
-  DCHECK(scm_.IsValid());
+  DCHECK(scm_.is_valid());
   service_.Set(::OpenService(scm_.Get(), GetCurrentServiceName().c_str(),
                              kServiceAccess));
-  return service_.IsValid();
+  if (!service_.is_valid()) {
+    auto error = ::GetLastError();
+    RecordResult(Operation::kOpenService, error);
+    return false;
+  }
+  RecordResult(Operation::kOpenService, ERROR_SUCCESS);
+  return true;
 }
 
 bool InstallServiceWorkItemImpl::GetServiceConfig(ServiceConfig* config) const {
   DCHECK(config);
-  DCHECK(service_.IsValid());
+  DCHECK(service_.is_valid());
 
   constexpr uint32_t kMaxQueryConfigBufferBytes = 8 * 1024;
 
@@ -446,10 +480,13 @@ bool InstallServiceWorkItemImpl::GetServiceConfig(ServiceConfig* config) const {
   if (!::QueryServiceConfig(service_.Get(), service_config,
                             kMaxQueryConfigBufferBytes,
                             &bytes_needed_ignored)) {
+    auto error = ::GetLastError();
     PLOG(ERROR) << "QueryServiceConfig failed "
                 << GetCurrentServiceName().c_str();
+    RecordResult(Operation::kQueryServiceConfig, error);
     return false;
   }
+  RecordResult(Operation::kQueryServiceConfig, ERROR_SUCCESS);
 
   *config = ServiceConfig(
       service_config->dwServiceType, service_config->dwStartType,
@@ -496,22 +533,11 @@ bool InstallServiceWorkItemImpl::SetServiceName(
 }
 
 std::wstring InstallServiceWorkItemImpl::GetCurrentServiceName() const {
-  base::win::RegKey key;
-
-  auto result = key.Open(HKEY_LOCAL_MACHINE, registry_path_.c_str(),
-                         KEY_QUERY_VALUE | KEY_WOW64_32KEY);
-  if (result != ERROR_SUCCESS)
-    return service_name_;
-
-  std::wstring versioned_service_name;
-  key.ReadValue(service_name_.c_str(), &versioned_service_name);
-  return versioned_service_name.empty() ? service_name_
-                                        : versioned_service_name;
+  return GetCurrentServiceName(service_name_, registry_path_);
 }
 
 std::wstring InstallServiceWorkItemImpl::GetCurrentServiceDisplayName() const {
-  return base::StringPrintf(L"%ls (%ls)", display_name_.c_str(),
-                            GetCurrentServiceName().c_str());
+  return base::StrCat({display_name_, L" (", GetCurrentServiceName(), L")"});
 }
 
 std::vector<wchar_t> InstallServiceWorkItemImpl::MultiSzToVector(
@@ -526,25 +552,100 @@ std::vector<wchar_t> InstallServiceWorkItemImpl::MultiSzToVector(
   // strings in the multi-sz.
   const wchar_t* scan = multi_sz;
   do {
-    scan += wcslen(scan) + 1;
+    UNSAFE_TODO(scan += wcslen(scan) + 1);
   } while (*scan);
 
-  return std::vector<wchar_t>(multi_sz, scan + 1);
+  return std::vector<wchar_t>(multi_sz, UNSAFE_TODO(scan + 1));
+}
+
+// static
+bool InstallServiceWorkItemImpl::IsComServiceInstalled(const GUID& clsid) {
+  std::wstring appid_reg_path = GetComAppidRegistryPath(clsid);
+  return base::win::RegKey(HKEY_LOCAL_MACHINE, appid_reg_path.c_str(),
+                           KEY_QUERY_VALUE)
+      .HasValue(L"LocalService");
+}
+
+// static
+std::wstring InstallServiceWorkItemImpl::GetCurrentServiceName(
+    base::wcstring_view service_name,
+    base::wcstring_view registry_path) {
+  if (std::wstring versioned_service_name;
+      base::win::RegKey(HKEY_LOCAL_MACHINE, registry_path.c_str(),
+                        KEY_QUERY_VALUE | KEY_WOW64_32KEY)
+              .ReadValue(service_name.c_str(), &versioned_service_name) ==
+          ERROR_SUCCESS &&
+      !versioned_service_name.empty()) {
+    return versioned_service_name;
+  }
+
+  return std::wstring(service_name);
+}
+
+std::wstring InstallServiceWorkItemImpl::GetCurrentServiceDescription() const {
+  DCHECK(service_.is_valid());
+
+  constexpr uint32_t kMaxQueryConfigBufferBytes = 8 * 1024;
+
+  // ::QueryServiceConfig2 expects a buffer of at most 8K bytes, according to
+  // documentation. While the size of the buffer can be dynamically computed,
+  // we just assume the maximum size for simplicity.
+  auto buffer = std::make_unique<uint8_t[]>(kMaxQueryConfigBufferBytes);
+  DWORD bytes_needed_ignored = 0;
+  SERVICE_DESCRIPTION* description =
+      reinterpret_cast<SERVICE_DESCRIPTION*>(buffer.get());
+  if (!::QueryServiceConfig2(service_.Get(), SERVICE_CONFIG_DESCRIPTION,
+                             buffer.get(), kMaxQueryConfigBufferBytes,
+                             &bytes_needed_ignored)) {
+    auto error = ::GetLastError();
+    PLOG(ERROR) << "QueryServiceConfig2 failed "
+                << GetCurrentServiceName().c_str();
+    RecordResult(Operation::kQueryServiceConfig2, error);
+    return {};
+  }
+  RecordResult(Operation::kQueryServiceConfig2, ERROR_SUCCESS);
+
+  return description->lpDescription ? description->lpDescription : L"";
+}
+
+void InstallServiceWorkItemImpl::SetDescription() {
+  DCHECK(service_.is_valid());
+
+  if (description_.empty()) {
+    return;
+  }
+
+  std::wstring desc = description_;
+  SERVICE_DESCRIPTION description = {desc.data()};
+  if (!::ChangeServiceConfig2(service_.Get(), SERVICE_CONFIG_DESCRIPTION,
+                              &description)) {
+    auto error = ::GetLastError();
+    PLOG(WARNING) << "Failed to set service description: "
+                  << GetCurrentServiceName().c_str() << ": " << description_;
+    RecordResult(Operation::kChangeServiceConfig2, error);
+  } else {
+    RecordResult(Operation::kChangeServiceConfig2, ERROR_SUCCESS);
+  }
 }
 
 bool InstallServiceWorkItemImpl::InstallNewService() {
-  DCHECK(!service_.IsValid());
-  bool success = InstallService(
-      ServiceConfig(kServiceType, start_type_, kServiceErrorControl,
-                    service_cmd_line_.GetCommandLineString(),
-                    kServiceDependencies, GetCurrentServiceDisplayName()));
-  if (success)
-    rollback_new_service_ = true;
-  return success;
+  DCHECK(!service_.is_valid());
+  if (!InstallService(ServiceConfig(
+          kServiceType, start_type_, kServiceErrorControl,
+          service_cmd_line_.GetCommandLineString(), kServiceDependencies,
+          GetCurrentServiceDisplayName()))) {
+    return false;
+  }
+
+  rollback_new_service_ = true;
+
+  SetDescription();
+
+  return true;
 }
 
 bool InstallServiceWorkItemImpl::UpgradeService() {
-  DCHECK(service_.IsValid());
+  DCHECK(service_.is_valid());
   DCHECK(!original_service_config_.is_valid);
 
   ServiceConfig original_config;
@@ -568,6 +669,7 @@ bool InstallServiceWorkItemImpl::UpgradeService() {
   if (success && upgrade_needed)
     rollback_existing_service_ = true;
 
+  SetDescription();
   return success;
 }
 
@@ -586,33 +688,40 @@ bool InstallServiceWorkItemImpl::InstallService(const ServiceConfig& config) {
       config.cmd_line.c_str(), nullptr, nullptr,
       !config.dependencies.empty() ? config.dependencies.data() : nullptr,
       nullptr, nullptr));
-  if (!service.IsValid()) {
+  if (!service.is_valid()) {
+    auto error = ::GetLastError();
     PLOG(WARNING) << "Failed to create service "
                   << GetCurrentServiceName().c_str();
+    RecordResult(Operation::kCreateService, error);
     return false;
   }
+  RecordResult(Operation::kCreateService, ERROR_SUCCESS);
 
   service_ = std::move(service);
   return true;
 }
 
 bool InstallServiceWorkItemImpl::DeleteService(ScopedScHandle service) const {
-  if (!service.IsValid())
+  if (!service.is_valid()) {
     return false;
+  }
 
   if (!::DeleteService(service.Get())) {
     DWORD error = ::GetLastError();
     PLOG(WARNING) << "DeleteService failed " << GetCurrentServiceName().c_str();
+    RecordResult(Operation::kDeleteService, error);
     return error == ERROR_SERVICE_MARKED_FOR_DELETE;
   }
+  RecordResult(Operation::kDeleteService, ERROR_SUCCESS);
 
   return true;
 }
 
 std::wstring InstallServiceWorkItemImpl::GenerateVersionedServiceName() const {
   const FILETIME filetime = base::Time::Now().ToFileTime();
-  return base::StringPrintf(L"%ls%x%x", service_name_.c_str(),
-                            filetime.dwHighDateTime, filetime.dwLowDateTime);
+  return service_name_ +
+         base::ASCIIToWide(base::StringPrintf("%lx%lx", filetime.dwHighDateTime,
+                                              filetime.dwLowDateTime));
 }
 
 }  // namespace installer

@@ -6,9 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
@@ -17,10 +18,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
 #include "components/gcm_driver/instance_id/instance_id_profile_service.h"
+#include "components/safe_browsing/buildflags.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/android_sms/android_sms_service_factory.h"
-#include "chrome/browser/ash/multidevice_setup/multidevice_setup_client_factory.h"
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #endif
 
 // static
@@ -37,39 +39,58 @@ PushMessagingServiceImpl* PushMessagingServiceFactory::GetForProfile(
 
 // static
 PushMessagingServiceFactory* PushMessagingServiceFactory::GetInstance() {
-  return base::Singleton<PushMessagingServiceFactory>::get();
+  static base::NoDestructor<PushMessagingServiceFactory> instance;
+  return instance.get();
 }
 
 PushMessagingServiceFactory::PushMessagingServiceFactory()
     : ProfileKeyedServiceFactory(
           "PushMessagingProfileService",
-          ProfileSelections::BuildForRegularAndIncognito()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {
   DependsOn(gcm::GCMProfileServiceFactory::GetInstance());
   DependsOn(instance_id::InstanceIDProfileServiceFactory::GetInstance());
   DependsOn(HostContentSettingsMapFactory::GetInstance());
   DependsOn(PermissionManagerFactory::GetInstance());
   DependsOn(site_engagement::SiteEngagementServiceFactory::GetInstance());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  DependsOn(ash::android_sms::AndroidSmsServiceFactory::GetInstance());
-  DependsOn(
-      ash::multidevice_setup::MultiDeviceSetupClientFactory::GetInstance());
-#endif
 }
 
-PushMessagingServiceFactory::~PushMessagingServiceFactory() {}
+PushMessagingServiceFactory::~PushMessagingServiceFactory() = default;
 
 void PushMessagingServiceFactory::RestoreFactoryForTests(
     content::BrowserContext* context) {
-  SetTestingFactory(context,
-                    base::BindRepeating([](content::BrowserContext* context) {
-                      return base::WrapUnique(
-                          GetInstance()->BuildServiceInstanceFor(context));
-                    }));
+  SetTestingFactory(
+      context, base::BindRepeating([](content::BrowserContext* context) {
+        return GetInstance()->BuildServiceInstanceForBrowserContext(context);
+      }));
 }
 
-KeyedService* PushMessagingServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+PushMessagingServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
   CHECK(!profile->IsOffTheRecord());
-  return new PushMessagingServiceImpl(profile);
+  // Reporting service worker network requests should only be done for ESB
+  // users. The check below is the first ESB check. A second ESB check is
+  // performed before anything about the service worker is sent off device to
+  // Safe Browsing. If at the time of the second check the user is found to no
+  // longer be an ESB user, no Safe Browsing report will be sent.
+  scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> db_manager;
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  if (g_browser_process && g_browser_process->safe_browsing_service() &&
+      safe_browsing::IsEnhancedProtectionEnabled(*profile->GetPrefs())) {
+    db_manager = g_browser_process->safe_browsing_service()->database_manager();
+  }
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
+  return std::make_unique<PushMessagingServiceImpl>(profile,
+                                                    std::move(db_manager));
 }

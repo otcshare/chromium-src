@@ -11,9 +11,10 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "remoting/base/constants.h"
 #include "remoting/base/session_options.h"
 #include "remoting/protocol/desktop_capturer.h"
 #include "remoting/protocol/video_channel_state_observer.h"
@@ -40,8 +41,7 @@ class WebrtcTransport;
 
 class WebrtcVideoStream : public VideoStream, public VideoChannelStateObserver {
  public:
-  WebrtcVideoStream(const std::string& stream_name,
-                    const SessionOptions& options);
+  explicit WebrtcVideoStream(const SessionOptions& options);
 
   WebrtcVideoStream(const WebrtcVideoStream&) = delete;
   WebrtcVideoStream& operator=(const WebrtcVideoStream&) = delete;
@@ -53,11 +53,13 @@ class WebrtcVideoStream : public VideoStream, public VideoChannelStateObserver {
     video_stats_dispatcher_ = video_stats_dispatcher;
   }
 
-  void Start(std::unique_ptr<DesktopCapturer> desktop_capturer,
+  // |screen_id| should be kFullDesktopScreenId for single-stream mode, or
+  // the screen being captured for multi-stream mode.
+  void Start(webrtc::ScreenId screen_id,
+             std::unique_ptr<DesktopCapturer> desktop_capturer,
              WebrtcTransport* webrtc_transport,
              WebrtcVideoEncoderFactory* video_encoder_factory);
 
-  // VideoStream interface.
   void SetEventTimestampsSource(scoped_refptr<InputEventTimestampsSource>
                                     event_timestamps_source) override;
   void Pause(bool pause) override;
@@ -67,11 +69,16 @@ class WebrtcVideoStream : public VideoStream, public VideoChannelStateObserver {
   void SetMouseCursor(
       std::unique_ptr<webrtc::MouseCursor> mouse_cursor) override;
   void SetMouseCursorPosition(const webrtc::DesktopVector& position) override;
+  void SetTargetFramerate(int framerate) override;
   void BoostFramerate(base::TimeDelta capture_interval,
                       base::TimeDelta boost_duration) override;
 
+  // Returns the stream name corresponding to the initial `screen_id` passed to
+  // Start(). Used for sending VideoLayout messages to the client, which
+  // include the stream-name for each display.
+  static std::string StreamNameForId(webrtc::ScreenId id);
+
   // VideoChannelStateObserver interface.
-  void OnTargetFramerateChanged(int framerate) override;
   void OnEncodedFrameSent(
       webrtc::EncodedImageCallback::Result result,
       const WebrtcVideoEncoder::EncodedFrame& frame) override;
@@ -81,7 +88,7 @@ class WebrtcVideoStream : public VideoStream, public VideoChannelStateObserver {
   struct FrameStats;
 
   // Called by |video_track_source_|.
-  void OnSinkAddedOrUpdated(const rtc::VideoSinkWants& wants);
+  void OnSinkAddedOrUpdated(const webrtc::VideoSinkWants& wants);
 
   // Called from |core_|.
   void OnVideoSizeChanged(webrtc::DesktopSize frame_size,
@@ -90,14 +97,15 @@ class WebrtcVideoStream : public VideoStream, public VideoChannelStateObserver {
       std::unique_ptr<webrtc::DesktopFrame> desktop_frame,
       std::unique_ptr<WebrtcVideoEncoder::FrameStats> frame_stats);
 
-  // Label of the associated WebRTC video-stream.
-  std::string stream_name_;
+  // Store the target framerate so we can set it on the RTP Sender when the SDP
+  // is renegotiated (such as when the codec or codec profile is changed).
+  int target_framerate_ = kTargetFrameRate;
 
   // Used to send captured frames to the encoder.
-  rtc::scoped_refptr<WebrtcVideoTrackSource> video_track_source_;
+  webrtc::scoped_refptr<WebrtcVideoTrackSource> video_track_source_;
 
   // The transceiver created for this video-stream.
-  rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver_;
+  webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver_;
 
   scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
 

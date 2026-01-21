@@ -6,10 +6,10 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
@@ -22,10 +22,6 @@
 namespace storage_monitor {
 
 namespace {
-
-#if !BUILDFLAG(IS_WIN)
-const char kRootPath[] = "/";
-#endif
 
 typedef std::vector<StorageInfo> StorageInfoList;
 
@@ -88,11 +84,9 @@ bool MediaStorageUtil::HasDcim(const base::FilePath& mount_point) {
 bool MediaStorageUtil::CanCreateFileSystem(const std::string& device_id,
                                            const base::FilePath& path) {
   StorageInfo::Type type;
-  if (!StorageInfo::CrackDeviceId(device_id, &type, nullptr))
+  if (!StorageInfo::CrackDeviceId(device_id, &type, nullptr)) {
     return false;
-
-  if (type == StorageInfo::MAC_IMAGE_CAPTURE)
-    return true;
+  }
 
   return !path.empty() && path.IsAbsolute() && !path.ReferencesParent();
 }
@@ -171,17 +165,12 @@ base::FilePath MediaStorageUtil::FindDevicePathById(
     return base::FilePath::FromUTF8Unsafe(unique_id);
   }
 
-  // For ImageCapture, the synthetic filesystem will be rooted at a fake
-  // top-level directory which is the device_id.
-  if (type == StorageInfo::MAC_IMAGE_CAPTURE) {
-#if !BUILDFLAG(IS_WIN)
-    return base::FilePath(kRootPath + device_id);
+  DCHECK(
+#if BUILDFLAG(IS_CHROMEOS)
+      type == StorageInfo::MTP_OR_PTP ||
 #endif
-  }
-
-  DCHECK(type == StorageInfo::MTP_OR_PTP ||
-         type == StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM ||
-         type == StorageInfo::REMOVABLE_MASS_STORAGE_NO_DCIM);
+      type == StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM ||
+      type == StorageInfo::REMOVABLE_MASS_STORAGE_NO_DCIM);
   return base::FilePath(FindRemovableStorageLocationById(device_id));
 }
 

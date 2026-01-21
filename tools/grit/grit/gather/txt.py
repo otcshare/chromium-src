@@ -5,9 +5,9 @@
 '''Supports making amessage from a text file.
 '''
 
-from __future__ import print_function
 
 from grit.gather import interface
+from grit import constants
 from grit import tclib
 
 
@@ -33,6 +33,6 @@ class TxtFile(interface.GathererBase):
 
   def Translate(self, lang, pseudo_if_not_available=True,
                 skeleton_gatherer=None, fallback_to_english=False):
-    return self.clique_.MessageForLanguage(lang,
-                                           pseudo_if_not_available,
-                                           fallback_to_english).GetRealContent()
+    return self.clique_.MessageForLanguageAndGender(
+        lang, constants.DEFAULT_GENDER, pseudo_if_not_available,
+        fallback_to_english).GetRealContent()

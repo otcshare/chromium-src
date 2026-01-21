@@ -6,11 +6,11 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
@@ -58,11 +58,9 @@ void URLDataManagerIOS::AddDataSourceOnIOThread(
 }
 
 URLDataManagerIOS::URLDataManagerIOS(BrowserState* browser_state)
-    : browser_state_(browser_state) {
-}
+    : browser_state_(browser_state) {}
 
-URLDataManagerIOS::~URLDataManagerIOS() {
-}
+URLDataManagerIOS::~URLDataManagerIOS() {}
 
 void URLDataManagerIOS::AddDataSource(URLDataSourceIOSImpl* source) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
@@ -78,12 +76,14 @@ void URLDataManagerIOS::DeleteDataSources() {
   URLDataSources sources;
   {
     base::AutoLock lock(GetDeleteLock());
-    if (!data_sources_)
+    if (!data_sources_) {
       return;
+    }
     data_sources_->swap(sources);
   }
-  for (size_t i = 0; i < sources.size(); ++i)
+  for (size_t i = 0; i < sources.size(); ++i) {
     delete sources[i];
+  }
 }
 
 // static
@@ -101,8 +101,9 @@ void URLDataManagerIOS::DeleteDataSource(
   bool schedule_delete = false;
   {
     base::AutoLock lock(GetDeleteLock());
-    if (!data_sources_)
+    if (!data_sources_) {
       data_sources_ = new URLDataSources();
+    }
     schedule_delete = data_sources_->empty();
     data_sources_->push_back(data_source);
   }
@@ -131,9 +132,10 @@ void URLDataManagerIOS::AddWebUIIOSDataSource(BrowserState* browser_state,
 bool URLDataManagerIOS::IsScheduledForDeletion(
     const URLDataSourceIOSImpl* data_source) {
   base::AutoLock lock(GetDeleteLock());
-  if (!data_sources_)
+  if (!data_sources_) {
     return false;
-  return base::Contains(*data_sources_, data_source);
+  }
+  return std::ranges::contains(*data_sources_, data_source);
 }
 
 }  // namespace web

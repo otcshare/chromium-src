@@ -1,0 +1,71 @@
+// Copyright 2023 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import {assertInstanceof} from './assert.js';
+import {reportError} from './error.js';
+import {FileAccessEntry} from './models/file_system_access_entry.js';
+import {extractImageFromBlob} from './thumbnailer.js';
+import {
+  ErrorLevel,
+  ErrorType,
+  ImageFormat,
+  MimeType,
+} from './type.js';
+
+/**
+ * Cover photo of gallery button.
+ */
+export class CoverPhoto {
+  readonly url: string|null;
+
+  /**
+   * @param name File name of cover photo.
+   * @param blob Blob to its cover photo. Might be null if the cover is failed
+   *     to load.
+   * @param draggable If the file type support share by drag/drop cover photo.
+   */
+  private constructor(
+      readonly name: string,
+      readonly blob: Blob|null,
+      readonly draggable: boolean,
+  ) {
+    this.url = blob !== null ? URL.createObjectURL(blob) : null;
+  }
+
+  /**
+   * Releases resources used by this cover photo.
+   */
+  release(): void {
+    if (this.url !== null) {
+      URL.revokeObjectURL(this.url);
+    }
+  }
+
+  /**
+   * Creates CoverPhoto objects from photo file.
+   */
+  static async create(file: FileAccessEntry, format: ImageFormat):
+      Promise<CoverPhoto|null> {
+    const blob = await file.file();
+    if (blob.size === 0) {
+      reportError(
+          ErrorType.EMPTY_FILE,
+          ErrorLevel.ERROR,
+          new Error('The file to generate cover photo is empty'),
+      );
+      return null;
+    }
+
+    try {
+      const cover = await extractImageFromBlob(blob, format);
+      const draggable = blob.type !== MimeType.MP4;
+      return new CoverPhoto(file.name, cover, draggable);
+    } catch (e) {
+      reportError(
+          ErrorType.BROKEN_THUMBNAIL, ErrorLevel.ERROR,
+          assertInstanceof(e, Error));
+      return new CoverPhoto(file.name, null, false);
+    }
+  }
+}

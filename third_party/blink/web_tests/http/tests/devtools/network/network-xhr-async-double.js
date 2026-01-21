@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as TextUtils from 'devtools/models/text_utils/text_utils.js';
+
 (async function() {
   TestRunner.addResult(`Tests responses in network tab for two XHRs sent without any delay between them. Bug 91630\n`);
-  await TestRunner.loadTestModule('network_test_runner');
-  await TestRunner.loadLegacyModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('network');
 
   function initArgs(method, url, async, payload) {
@@ -35,8 +39,8 @@
     var requests = NetworkTestRunner.networkRequests();
     var request1 = requests[requests.length - 2];
     var request2 = requests[requests.length - 1];
-    var request1Content = await request1.requestContent();
-    var request2Content = await request2.requestContent();
+    var request1Content = await request1.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent);
+    var request2Content = await request2.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent);
 
     TestRunner.addResult('resource1.content: ' + request1Content.content);
     TestRunner.addResult('resource2.content: ' + request2Content.content);

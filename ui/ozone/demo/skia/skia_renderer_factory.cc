@@ -36,7 +36,7 @@ scoped_refptr<gl::GLSurface> CreateGLSurface(gl::GLDisplay* display,
 }
 }  // namespace
 
-SkiaRendererFactory::SkiaRendererFactory() {}
+SkiaRendererFactory::SkiaRendererFactory() = default;
 
 SkiaRendererFactory::~SkiaRendererFactory() {
   if (display_) {
@@ -46,7 +46,8 @@ SkiaRendererFactory::~SkiaRendererFactory() {
 }
 
 bool SkiaRendererFactory::Initialize() {
-  display_ = gl::init::InitializeGLOneOff(/*system_device_id=*/0);
+  display_ = gl::init::InitializeGLOneOff(
+      /*gpu_preference=*/gl::GpuPreference::kDefault);
   if (!display_) {
     LOG(FATAL) << "Failed to initialize GL";
   }
@@ -65,7 +66,7 @@ std::unique_ptr<Renderer> SkiaRendererFactory::CreateRenderer(
   if (auto presenter = CreatePresenter(display_, widget)) {
     return std::make_unique<SurfacelessSkiaGlRenderer>(
         widget, std::move(window_surface),
-        gl::init::CreateOffscreenGLSurface(display_, gfx::Size(1, 1)),
+        gl::init::CreateOffscreenGLSurface(display_, gfx::Size(0, 0)),
         std::move(presenter), size);
   }
   scoped_refptr<gl::GLSurface> gl_surface = CreateGLSurface(display_, widget);

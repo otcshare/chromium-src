@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/fonts/opentype/font_settings.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -14,8 +15,8 @@ namespace {
 template <typename T, typename U>
 scoped_refptr<T> MakeSettings(std::initializer_list<U> items) {
   scoped_refptr<T> settings = T::Create();
-  for (auto item = items.begin(); item != items.end(); ++item) {
-    settings->Append(*item);
+  for (const auto& item : items) {
+    settings->Append(item);
   }
   return settings;
 }
@@ -25,16 +26,18 @@ scoped_refptr<T> MakeSettings(std::initializer_list<U> items) {
 TEST(FontSettingsTest, HashTest) {
   scoped_refptr<FontVariationSettings> one_axis_a =
       MakeSettings<FontVariationSettings, FontVariationAxis>(
-          {FontVariationAxis{"a   ", 0}});
+          {FontVariationAxis{AtomicString("a   "), 0}});
   scoped_refptr<FontVariationSettings> one_axis_b =
       MakeSettings<FontVariationSettings, FontVariationAxis>(
-          {FontVariationAxis{"b   ", 0}});
+          {FontVariationAxis{AtomicString("b   "), 0}});
   scoped_refptr<FontVariationSettings> two_axes =
       MakeSettings<FontVariationSettings, FontVariationAxis>(
-          {FontVariationAxis{"a   ", 0}, FontVariationAxis{"b   ", 0}});
+          {FontVariationAxis{AtomicString("a   "), 0},
+           FontVariationAxis{AtomicString("b   "), 0}});
   scoped_refptr<FontVariationSettings> two_axes_different_value =
       MakeSettings<FontVariationSettings, FontVariationAxis>(
-          {FontVariationAxis{"a   ", 0}, FontVariationAxis{"b   ", 1}});
+          {FontVariationAxis{AtomicString("a   "), 0},
+           FontVariationAxis{AtomicString("b   "), 1}});
 
   scoped_refptr<FontVariationSettings> empty_variation_settings =
       FontVariationSettings::Create();
@@ -50,13 +53,15 @@ TEST(FontSettingsTest, ToString) {
   {
     scoped_refptr<FontVariationSettings> settings =
         MakeSettings<FontVariationSettings, FontVariationAxis>(
-            {FontVariationAxis{"aaaa", 42}, FontVariationAxis{"bbbb", 8118}});
+            {FontVariationAxis{AtomicString("aaaa"), 42},
+             FontVariationAxis{AtomicString("bbbb"), 8118}});
     EXPECT_EQ("aaaa=42,bbbb=8118", settings->ToString());
   }
   {
     scoped_refptr<FontFeatureSettings> settings =
         MakeSettings<FontFeatureSettings, FontFeature>(
-            {FontFeature{"aaaa", 42}, FontFeature{"bbbb", 8118}});
+            {FontFeature{AtomicString("aaaa"), 42},
+             FontFeature{AtomicString("bbbb"), 8118}});
     EXPECT_EQ("aaaa=42,bbbb=8118", settings->ToString());
   }
 }
@@ -64,7 +69,8 @@ TEST(FontSettingsTest, FindTest) {
   {
     scoped_refptr<FontVariationSettings> settings =
         MakeSettings<FontVariationSettings, FontVariationAxis>(
-            {FontVariationAxis{"abcd", 42}, FontVariationAxis{"efgh", 8118}});
+            {FontVariationAxis{AtomicString("abcd"), 42},
+             FontVariationAxis{AtomicString("efgh"), 8118}});
     FontVariationAxis found_axis(0, 0);
     ASSERT_FALSE(settings->FindPair('aaaa', &found_axis));
     ASSERT_FALSE(settings->FindPair('bbbb', &found_axis));

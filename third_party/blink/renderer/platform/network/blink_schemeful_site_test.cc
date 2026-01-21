@@ -111,7 +111,7 @@ TEST(BlinkSchemefulSiteTest, FromWire) {
 }
 
 TEST(BlinkSchemefulSiteTest, HashBlinkSchemefulSite) {
-  WTF::HashMap<BlinkSchemefulSite, int> blink_schemeful_site_map_;
+  HashMap<BlinkSchemefulSite, int> blink_schemeful_site_map_;
 
   BlinkSchemefulSite blink_site_1(
       SecurityOrigin::CreateFromString("https://example.com"));
@@ -134,6 +134,14 @@ TEST(BlinkSchemefulSiteTest, HashBlinkSchemefulSite) {
   blink_schemeful_site_map_.erase(opaque_site_1);
   EXPECT_FALSE(blink_schemeful_site_map_.Contains(blink_site_1));
   EXPECT_FALSE(blink_schemeful_site_map_.Contains(opaque_site_1));
+}
+
+TEST(BlinkSchemefulSiteTest, IsOpaque) {
+  BlinkSchemefulSite site(
+      SecurityOrigin::CreateFromString("https://example.com"));
+  EXPECT_FALSE(site.IsOpaque());
+  BlinkSchemefulSite opaque_site;
+  EXPECT_TRUE(opaque_site.IsOpaque());
 }
 
 }  // namespace blink

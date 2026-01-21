@@ -43,8 +43,8 @@ $$
 #ifndef BASE_TEST_MOCK_CALLBACK_H_
 #define BASE_TEST_MOCK_CALLBACK_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace base {
@@ -75,7 +75,7 @@ class MockCallback<RepeatingCallback<$run_type>> {
   MockCallback(const MockCallback&) = delete;
   MockCallback& operator=(const MockCallback&) = delete;
 
-  MOCK_METHOD$(i)_T(Run, $run_type);
+  MOCK_METHOD(R, Run, ($for j, [[A$j]]));
 
   RepeatingCallback<$run_type> Get() {
     return ::base::BindRepeating(&MockCallback::Run, ::base::Unretained(this));
@@ -90,7 +90,7 @@ class MockCallback<OnceCallback<$run_type>> {
   MockCallback(const MockCallback&) = delete;
   MockCallback& operator=(const MockCallback&) = delete;
 
-  MOCK_METHOD$(i)_T(Run, $run_type);
+  MOCK_METHOD(R, Run, ($for j, [[A$j]]));
 
   OnceCallback<$run_type> Get() {
     return ::base::BindOnce(&MockCallback::Run, ::base::Unretained(this));

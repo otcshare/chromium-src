@@ -6,6 +6,7 @@
 #define SERVICES_NETWORK_SCT_AUDITING_SCT_AUDITING_HANDLER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/containers/lru_cache.h"
 #include "base/files/important_file_writer.h"
@@ -21,7 +22,6 @@
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/sct_auditing/sct_auditing_cache.h"
 #include "services/network/sct_auditing/sct_auditing_reporter.h"
-#include "url/gurl.h"
 
 namespace sct_auditing {
 class SCTClientReport;
@@ -77,7 +77,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SCTAuditingHandler
   //
   // Each entry in the dictionary includes sufficient information to deserialize
   // and recreate the entries in the SCTAuditingHandler's pending reporters set.
-  bool SerializeData(std::string* output) override;
+  std::optional<std::string> SerializeData() override;
 
   void DeserializeData(const std::string& serialized);
 
@@ -94,7 +94,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SCTAuditingHandler
   void AddReporter(
       net::HashValue reporter_key,
       std::unique_ptr<sct_auditing::SCTClientReport> report,
-      absl::optional<SCTAuditingReporter::SCTHashdanceMetadata> sct_metadata,
+      std::optional<SCTAuditingReporter::SCTHashdanceMetadata> sct_metadata,
       std::unique_ptr<net::BackoffEntry> backoff_entry = nullptr,
       bool already_counted = false);
 

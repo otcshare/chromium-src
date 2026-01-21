@@ -8,10 +8,9 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -22,8 +21,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 IconDecoderImpl::DecoderDelegate::DecoderDelegate() = default;
 
@@ -32,9 +30,9 @@ IconDecoderImpl::DecoderDelegate::~DecoderDelegate() = default;
 void IconDecoderImpl::DecoderDelegate::Decode(
     const DecodingData& request,
     data_decoder::DecodeImageCallback callback) {
-  const std::string& encoded_icon = request.input_data;
+  const std::string& encoded_icon = *request.input_data;
   data_decoder::DecodeImage(
-      &data_decoder_, base::as_bytes(base::make_span(encoded_icon)),
+      &data_decoder_, base::as_byte_span(encoded_icon),
       data_decoder::mojom::ImageCodec::kDefault,
       /*shrink_to_fit=*/true, data_decoder::kDefaultMaxSizeInBytes,
       /*desired_image_frame_size=*/gfx::Size(), std::move(callback));
@@ -93,5 +91,4 @@ void IconDecoderImpl::CancelPendingRequests() {
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

@@ -43,12 +43,16 @@ class DefaultProvider : public ObservableProvider {
       ContentSettingsType content_type,
       bool off_the_record) const override;
 
-  bool SetWebsiteSetting(
-      const ContentSettingsPattern& primary_pattern,
-      const ContentSettingsPattern& secondary_pattern,
-      ContentSettingsType content_type,
-      base::Value&& value,
-      const ContentSettingConstraints& constraint = {}) override;
+  std::unique_ptr<Rule> GetRule(const GURL& primary_url,
+                                const GURL& secondary_url,
+                                ContentSettingsType content_type,
+                                bool off_the_record) const override;
+
+  bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
+                         const ContentSettingsPattern& secondary_pattern,
+                         ContentSettingsType content_type,
+                         base::Value&& value,
+                         const ContentSettingConstraints& constraints) override;
 
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
 
@@ -77,6 +81,14 @@ class DefaultProvider : public ObservableProvider {
 
   // Clean up the obsolete preferences from the user's profile.
   void DiscardOrMigrateObsoletePreferences();
+
+  // Migrate between GEOLOCATION and GEOLOCATION_WITH_OPTIONS.
+  void MigrateGeolocationDefaultValue();
+
+#if !BUILDFLAG(IS_IOS)
+  // Migrate between LOCAL_NETWORK_ACCESS and LOCAL_NETWORK/LOOPBACK_NETWORK
+  void MigrateLocalNetworkAccessDefaultValue();
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Record Histograms Metrics.
   void RecordHistogramMetrics();

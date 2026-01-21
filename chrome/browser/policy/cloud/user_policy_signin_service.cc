@@ -7,39 +7,38 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/enterprise/remote_commands/user_remote_commands_service.h"
+#include "chrome/browser/enterprise/remote_commands/user_remote_commands_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
-#include "chrome/browser/policy/cloud/user_policy_signin_service_internal.h"
 #include "chrome/browser/policy/cloud/user_policy_signin_service_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/account_id_from_account_info.h"
+#include "chrome/browser/signin/chrome_signin_client.h"
+#include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/browser/cloud/user_policy_signin_service_util.h"
-#include "components/policy/core/common/cloud/cloud_policy_client_registration_helper.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/storage_partition.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "user_policy_signin_service.h"
 
 namespace policy {
-namespace internal {
-bool g_force_prohibit_signout_for_tests = false;
-}
 
 ProfileManagerObserverBridge::ProfileManagerObserverBridge(
     UserPolicySigninService* user_policy_signin_service)
@@ -84,27 +83,17 @@ UserPolicySigninService::UserPolicySigninService(
   }
 }
 
-UserPolicySigninService::~UserPolicySigninService() {
-}
-
-void UserPolicySigninService::PrepareForUserCloudPolicyManagerShutdown() {
-  // Stop any pending registration helper activity. We do this here instead of
-  // in the destructor because we want to shutdown the registration helper
-  // before UserCloudPolicyManager shuts down the CloudPolicyClient.
-  registration_helper_.reset();
-
-  UserPolicySigninServiceBase::PrepareForUserCloudPolicyManagerShutdown();
-}
+UserPolicySigninService::~UserPolicySigninService() = default;
 
 void UserPolicySigninService::OnPrimaryAccountChanged(
     const signin::PrimaryAccountChangeEvent& event) {
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-  if (profile_manager && IsSignoutEvent(event)) {
-    UpdateProfileAttributesWhenSignout(profile_, profile_manager);
-    ShutdownUserCloudPolicyManager();
-  } else if (IsTurnOffSyncEvent(event) &&
-             !CanApplyPolicies(/*check_for_refresh_token=*/true)) {
-    ShutdownUserCloudPolicyManager();
+  if (IsSignoutEvent(event)) {
+    if (ProfileManager* profile_manager =
+            g_browser_process->profile_manager()) {
+      // `ProfileManager` may be null in tests.
+      UpdateProfileAttributesWhenSignout(profile_, profile_manager);
+    }
+    ShutdownCloudPolicyManager();
   }
 
   if (!IsAnySigninEvent(event))
@@ -115,7 +104,7 @@ void UserPolicySigninService::OnPrimaryAccountChanged(
     return;
 
   // IdentityManager has a refresh token for the primary account, so initialize
-  // the UserCloudPolicyManager.
+  // the CloudPolicyManager.
   TryInitializeForSignedInUser();
 }
 
@@ -129,14 +118,14 @@ void UserPolicySigninService::OnRefreshTokenUpdatedForAccount(
   }
 
   // ProfileOAuth2TokenService now has a refresh token for the primary account
-  // so initialize the UserCloudPolicyManager.
+  // so initialize the CloudPolicyManager.
   TryInitializeForSignedInUser();
 }
 
 void UserPolicySigninService::TryInitializeForSignedInUser() {
   DCHECK(CanApplyPolicies(/*check_for_refresh_token=*/true));
 
-  // If using a TestingProfile with no UserCloudPolicyManager, skip
+  // If using a TestingProfile with no CloudPolicyManager, skip
   // initialization.
   if (!policy_manager()) {
     DVLOG(1) << "Skipping initialization for tests due to missing components.";
@@ -152,55 +141,44 @@ void UserPolicySigninService::TryInitializeForSignedInUser() {
           ->GetURLLoaderFactoryForBrowserProcess());
 }
 
-void UserPolicySigninService::InitializeUserCloudPolicyManager(
+void UserPolicySigninService::InitializeCloudPolicyManager(
     const AccountId& account_id,
     std::unique_ptr<CloudPolicyClient> client) {
-  UserPolicySigninServiceBase::InitializeUserCloudPolicyManager(
-      account_id, std::move(client));
-  ProhibitSignoutIfNeeded();
+  UserCloudPolicyManager* manager =
+      static_cast<UserCloudPolicyManager*>(policy_manager());
+  manager->SetSigninAccountId(account_id);
+  UserPolicySigninServiceBase::InitializeCloudPolicyManager(account_id,
+                                                            std::move(client));
+  // Triggers the initialization of user remote commands service.
+  auto* remote_command_service =
+      enterprise_commands::UserRemoteCommandsServiceFactory::GetForProfile(
+          profile_);
+  if (remote_command_service) {
+    remote_command_service->Init();
+  }
 }
 
 void UserPolicySigninService::Shutdown() {
   if (identity_manager())
     identity_manager()->RemoveObserver(this);
   UserPolicySigninServiceBase::Shutdown();
+  profile_ = nullptr;
 }
 
-void UserPolicySigninService::ShutdownUserCloudPolicyManager() {
-  UserCloudPolicyManager* manager = policy_manager();
-  // Allow the user to signout again.
-  if (manager) {
-    signin_util::UserSignoutSetting::GetForProfile(profile_)
-        ->ResetSignoutSetting();
+void UserPolicySigninService::ShutdownCloudPolicyManager() {
+  auto* remote_command_service =
+      enterprise_commands::UserRemoteCommandsServiceFactory::GetForProfile(
+          profile_);
+  if (remote_command_service) {
+    remote_command_service->Shutdown();
   }
-
-  UserPolicySigninServiceBase::ShutdownUserCloudPolicyManager();
+  UserPolicySigninServiceBase::ShutdownCloudPolicyManager();
 }
 
 void UserPolicySigninService::OnProfileUserManagementAcceptanceChanged(
     const base::FilePath& profile_path) {
   if (CanApplyPolicies(/*check_for_refresh_token=*/true))
     TryInitializeForSignedInUser();
-}
-
-void UserPolicySigninService::ProhibitSignoutIfNeeded() {
-  if (!policy_manager()->IsClientRegistered() &&
-      !internal::g_force_prohibit_signout_for_tests) {
-    return;
-  }
-
-  DVLOG(1) << "User is registered for policy - prohibiting signout";
-
-  if (!chrome::enterprise_util::UserAcceptedAccountManagement(profile_) &&
-      identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync)) {
-    // Ensure user accepted management bit is set.
-    chrome::enterprise_util::SetUserAcceptedAccountManagement(profile_, true);
-  }
-
-  if (identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync)) {
-    signin_util::UserSignoutSetting::GetForProfile(profile_)
-        ->SetRevokeSyncConsentAllowed(false);
-  }
 }
 
 void UserPolicySigninService::OnProfileReady(Profile* profile) {
@@ -216,13 +194,13 @@ void UserPolicySigninService::InitializeOnProfileReady(Profile* profile) {
   DCHECK_EQ(profile, profile_);
 
   // If using a TestingProfile with no IdentityManager or
-  // UserCloudPolicyManager, skip initialization.
+  // CloudPolicyManager, skip initialization.
   if (!policy_manager() || !identity_manager()) {
     DVLOG(1) << "Skipping initialization for tests due to missing components.";
     return;
   }
 
-  // Shutdown the UserCloudPolicyManager when the user signs out. We start
+  // Shutdown the CloudPolicyManager when the user signs out. We start
   // observing the IdentityManager here because we don't want to get signout
   // notifications until after the profile has started initializing
   // (http://crbug.com/316229).
@@ -231,7 +209,7 @@ void UserPolicySigninService::InitializeOnProfileReady(Profile* profile) {
   AccountId account_id = AccountIdFromAccountInfo(
       identity_manager()->GetPrimaryAccountInfo(consent_level()));
   if (!CanApplyPolicies(/*check_for_refresh_token=*/false)) {
-    ShutdownUserCloudPolicyManager();
+    ShutdownCloudPolicyManager();
   } else {
     InitializeForSignedInUser(account_id,
                               profile->GetDefaultStoragePartition()
@@ -246,7 +224,19 @@ bool UserPolicySigninService::CanApplyPolicies(bool check_for_refresh_token) {
   }
 
   return (profile_can_be_managed_for_testing_ ||
-          chrome::enterprise_util::ProfileCanBeManaged(profile_));
+          enterprise_util::ProfileCanBeManaged(profile_));
+}
+
+CloudPolicyClient::DeviceDMTokenCallback
+UserPolicySigninService::GetDeviceDMTokenIfAffiliatedCallback() {
+  if (device_dm_token_callback_for_testing_) {
+    return device_dm_token_callback_for_testing_;
+  }
+  return base::BindRepeating(&GetDeviceDMTokenIfAffiliated);
+}
+
+std::string UserPolicySigninService::GetProfileId() {
+  return ::policy::GetProfileId(profile_);
 }
 
 }  // namespace policy

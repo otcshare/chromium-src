@@ -88,13 +88,6 @@ class TestURLRequestTestJobBackedByFile : public URLRequestTestJobBackedByFile {
   const raw_ptr<std::string> observed_content_;
 };
 
-// Helper function to create a file at |path| filled with |content|.
-// Returns true on success.
-bool CreateFileWithContent(const std::string& content,
-                           const base::FilePath& path) {
-  return base::WriteFile(path, content.c_str(), content.length()) != -1;
-}
-
 // A simple holder for start/end used in http range requests.
 struct Range {
   int start;
@@ -135,7 +128,7 @@ class URLRequestTestJobBackedByFileEventsTest : public TestWithTaskEnvironment {
   void RunSuccessfulRequestWithString(
       const std::string& content,
       const std::string& expected_content,
-      const base::FilePath::StringPieceType& file_extension,
+      const base::FilePath::StringViewType& file_extension,
       const Range* range);
 
   // Creates and runs a TestURLRequestTestJobBackedByFile job to read from file
@@ -174,13 +167,13 @@ void URLRequestTestJobBackedByFileEventsTest::RunSuccessfulRequestWithString(
 void URLRequestTestJobBackedByFileEventsTest::RunSuccessfulRequestWithString(
     const std::string& raw_content,
     const std::string& expected_content,
-    const base::FilePath::StringPieceType& file_extension,
+    const base::FilePath::StringViewType& file_extension,
     const Range* range) {
   ASSERT_TRUE(directory_.CreateUniqueTempDir());
   base::FilePath path = directory_.GetPath().Append(FILE_PATH_LITERAL("test"));
   if (!file_extension.empty())
     path = path.AddExtension(file_extension);
-  ASSERT_TRUE(CreateFileWithContent(raw_content, path));
+  ASSERT_TRUE(base::WriteFile(path, raw_content));
 
   std::string range_value;
   if (range) {
@@ -242,8 +235,7 @@ void URLRequestTestJobBackedByFileEventsTest::RunRequestWithPath(
                                          true /*overwrite*/);
   }
   request->Start();
-
-  base::RunLoop().Run();
+  delegate_.RunUntilComplete();
 }
 
 // Helper function to make a character array filled with |size| bytes of
@@ -270,7 +262,13 @@ TEST_F(URLRequestTestJobBackedByFileEventsTest, SmallFile) {
   RunSuccessfulRequestWithString(MakeContentOfSize(17 * 1024), nullptr);
 }
 
-TEST_F(URLRequestTestJobBackedByFileEventsTest, BigFile) {
+// TODO(crbug.com/398792039): Re-enable this test
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_BigFile DISABLED_BigFile
+#else
+#define MAYBE_BigFile BigFile
+#endif
+TEST_F(URLRequestTestJobBackedByFileEventsTest, MAYBE_BigFile) {
   RunSuccessfulRequestWithString(MakeContentOfSize(3 * 1024 * 1024), nullptr);
 }
 
@@ -297,7 +295,7 @@ TEST_F(URLRequestTestJobBackedByFileEventsTest, DecodeSvgzFile) {
 
 TEST_F(URLRequestTestJobBackedByFileEventsTest, OpenNonExistentFile) {
   base::FilePath path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
   path = path.Append(
       FILE_PATH_LITERAL("net/data/url_request_unittest/non-existent.txt"));
 
@@ -315,7 +313,7 @@ TEST_F(URLRequestTestJobBackedByFileEventsTest, OpenNonExistentFile) {
 
 TEST_F(URLRequestTestJobBackedByFileEventsTest, MultiRangeRequestNotSupported) {
   base::FilePath path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
   path = path.Append(
       FILE_PATH_LITERAL("net/data/url_request_unittest/BullRunSpeech.txt"));
 
@@ -334,7 +332,7 @@ TEST_F(URLRequestTestJobBackedByFileEventsTest, MultiRangeRequestNotSupported) {
 
 TEST_F(URLRequestTestJobBackedByFileEventsTest, RangeExceedingFileSize) {
   base::FilePath path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
   path = path.Append(
       FILE_PATH_LITERAL("net/data/url_request_unittest/BullRunSpeech.txt"));
 
@@ -353,7 +351,7 @@ TEST_F(URLRequestTestJobBackedByFileEventsTest, RangeExceedingFileSize) {
 
 TEST_F(URLRequestTestJobBackedByFileEventsTest, IgnoreRangeParsingError) {
   base::FilePath path;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
   path = path.Append(
       FILE_PATH_LITERAL("net/data/url_request_unittest/simple.html"));
 

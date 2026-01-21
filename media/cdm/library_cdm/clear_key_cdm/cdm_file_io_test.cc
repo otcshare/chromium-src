@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <limits>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 
@@ -33,11 +34,11 @@ const uint32_t kLargeDataSize = 20 * 1024 + 7;
 
 // |test_name| is also used as the file name. File name validity tests relies
 // on this to work.
-#define START_TEST_CASE(test_name)                      \
-  do {                                                  \
-    std::unique_ptr<FileIOTest> test_case(              \
-        new FileIOTest(create_file_io_cb_, test_name)); \
-    CREATE_FILE_IO  // Create FileIO for each test case.
+#define START_TEST_CASE(test_name)                                   \
+  do {                                                               \
+    auto test_case =                                                 \
+        std::make_unique<FileIOTest>(create_file_io_cb_, test_name); \
+  CREATE_FILE_IO  // Create FileIO for each test case.
 
 #define ADD_TEST_STEP(type, status, data, data_size)                          \
   test_case->AddTestStep(FileIOTest::type, cdm::FileIOClient::Status::status, \
@@ -91,7 +92,7 @@ FileIOTestRunner::~FileIOTestRunner() {
   if (remaining_tests_.empty())
     return;
 
-  DCHECK_LT(num_passed_tests_, total_num_tests_);
+  CHECK_LT(num_passed_tests_, total_num_tests_);
   FILE_IO_DVLOG(1) << "Not Finished (probably due to timeout). "
                    << num_passed_tests_ << " passed in "
                    << total_num_tests_ << " tests.";
@@ -555,7 +556,7 @@ void FileIOTest::AddResultReadEither(Status status,
                                      uint32_t data_size,
                                      const uint8_t* data2,
                                      uint32_t data2_size) {
-  DCHECK_NE(data_size, data2_size);
+  CHECK_NE(data_size, data2_size);
   test_steps_.push_back(TestStep(FileIOTest::RESULT_READ, status, data,
                                  data_size, data2, data2_size));
 }
@@ -563,7 +564,7 @@ void FileIOTest::AddResultReadEither(Status status,
 void FileIOTest::Run(CompletionCB completion_cb) {
   FILE_IO_DVLOG(3) << "Run " << test_name_;
   completion_cb_ = std::move(completion_cb);
-  DCHECK(!test_steps_.empty() && !IsResult(test_steps_.front()));
+  CHECK(!test_steps_.empty() && !IsResult(test_steps_.front()));
   RunNextStep();
 }
 
@@ -595,12 +596,11 @@ bool FileIOTest::IsResult(const TestStep& test_step) {
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 bool FileIOTest::MatchesResult(const TestStep& a, const TestStep& b) {
-  DCHECK(IsResult(a) && IsResult(b));
-  DCHECK(!b.data2);
+  CHECK(IsResult(a) && IsResult(b));
+  CHECK(!b.data2);
 
   if (a.type != b.type || a.status != b.status)
     return false;
@@ -611,10 +611,10 @@ bool FileIOTest::MatchesResult(const TestStep& a, const TestStep& b) {
   // If |a| specifies a data2, compare it first. If the size matches, compare
   // the contents.
   if (a.data2 && b.data_size == a.data2_size)
-    return std::equal(a.data2, a.data2 + a.data2_size, b.data);
+    return std::equal(a.data2, UNSAFE_TODO(a.data2 + a.data2_size), b.data);
 
   return (a.data_size == b.data_size &&
-          std::equal(a.data, a.data + a.data_size, b.data));
+          std::equal(a.data, UNSAFE_TODO(a.data + a.data_size), b.data));
 }
 
 void FileIOTest::RunNextStep() {
@@ -663,7 +663,7 @@ void FileIOTest::RunNextStep() {
 }
 
 void FileIOTest::OnResult(const TestStep& result) {
-  DCHECK(IsResult(result));
+  CHECK(IsResult(result));
   if (!CheckResult(result)) {
     LOG(WARNING) << test_name_ << " got unexpected result. type=" << result.type
                  << ", status=" << (uint32_t)result.status

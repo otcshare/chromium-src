@@ -4,10 +4,11 @@
 
 #include "third_party/blink/renderer/platform/scheduler/worker/non_main_thread_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task/task_executor.h"
+#include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
@@ -18,7 +19,6 @@
 using testing::_;
 using testing::AnyOf;
 using testing::ElementsAre;
-using testing::Invoke;
 
 namespace blink {
 namespace scheduler {
@@ -49,7 +49,7 @@ class TestObserver : public Thread::TaskObserver {
   }
 
  private:
-  StringBuilder* calls_;  // NOT OWNED
+  raw_ptr<StringBuilder> calls_;  // NOT OWNED
 };
 
 void RunTestTask(StringBuilder* calls) {
@@ -81,6 +81,13 @@ class NonMainThreadImplTest : public testing::Test {
         ThreadCreationParams(ThreadType::kTestThread));
   }
 
+#if DCHECK_IS_ON()
+  void TearDown() override {
+    thread_.reset();
+    SetIsBeforeThreadCreatedForTest();
+  }
+#endif  // DCHECK_IS_ON()
+
   void RunOnWorkerThread(const base::Location& from_here,
                          base::OnceClosure task) {
     base::WaitableEvent completion(
@@ -110,13 +117,11 @@ TEST_F(NonMainThreadImplTest, TestDefaultTask) {
       base::WaitableEvent::InitialState::NOT_SIGNALED);
 
   EXPECT_CALL(task, Run());
-  ON_CALL(task, Run()).WillByDefault(Invoke([&completion]() {
-    completion.Signal();
-  }));
+  ON_CALL(task, Run()).WillByDefault([&completion]() { completion.Signal(); });
 
   PostCrossThreadTask(
       *thread_->GetTaskRunner(), FROM_HERE,
-      CrossThreadBindOnce(&MockTask::Run, WTF::CrossThreadUnretained(&task)));
+      CrossThreadBindOnce(&MockTask::Run, CrossThreadUnretained(&task)));
   completion.Wait();
 }
 
@@ -128,7 +133,7 @@ TEST_F(NonMainThreadImplTest, TestTaskObserver) {
                     base::BindOnce(&AddTaskObserver, thread_.get(), &observer));
   PostCrossThreadTask(
       *thread_->GetTaskRunner(), FROM_HERE,
-      CrossThreadBindOnce(&RunTestTask, WTF::CrossThreadUnretained(&calls)));
+      CrossThreadBindOnce(&RunTestTask, CrossThreadUnretained(&calls)));
   RunOnWorkerThread(
       FROM_HERE, base::BindOnce(&RemoveTaskObserver, thread_.get(), &observer));
 
@@ -152,15 +157,41 @@ TEST_F(NonMainThreadImplTest, TestShutdown) {
                     base::BindOnce(&ShutdownOnThread, thread_.get()));
   PostCrossThreadTask(
       *thread_->GetTaskRunner(), FROM_HERE,
-      CrossThreadBindOnce(&MockTask::Run, WTF::CrossThreadUnretained(&task)));
+      CrossThreadBindOnce(&MockTask::Run, CrossThreadUnretained(&task)));
   PostDelayedCrossThreadTask(
       *thread_->GetTaskRunner(), FROM_HERE,
-      CrossThreadBindOnce(&MockTask::Run,
-                          WTF::CrossThreadUnretained(&delayed_task)),
+      CrossThreadBindOnce(&MockTask::Run, CrossThreadUnretained(&delayed_task)),
       base::Milliseconds(50));
   thread_.reset();
 }
 
 }  // namespace worker_thread_unittest
+
+// Needs to be in scheduler namespace for FRIEND_TEST_ALL_PREFIXES to work
+#if BUILDFLAG(IS_APPLE)
+TEST(NonMainThreadImplRealtimePeriodTest, RealtimePeriodConfiguration) {
+  ThreadCreationParams params(ThreadType::kTestThread);
+  params.realtime_period = base::Milliseconds(10);
+
+  auto non_main_thread = std::make_unique<NonMainThreadImpl>(params);
+  non_main_thread->Init();
+  // No period configuration for a non-real-time thread.
+  EXPECT_EQ(static_cast<base::PlatformThread::Delegate*>(
+                non_main_thread->thread_.get())
+                ->GetRealtimePeriod(),
+            base::TimeDelta());
+
+  params.base_thread_type = base::ThreadType::kRealtimeAudio;
+
+  non_main_thread = std::make_unique<NonMainThreadImpl>(params);
+  non_main_thread->Init();
+  // Delegate correctly reports period for a real-time thread.
+  EXPECT_EQ(static_cast<base::PlatformThread::Delegate*>(
+                non_main_thread->thread_.get())
+                ->GetRealtimePeriod(),
+            params.realtime_period);
+}
+#endif
+
 }  // namespace scheduler
 }  // namespace blink

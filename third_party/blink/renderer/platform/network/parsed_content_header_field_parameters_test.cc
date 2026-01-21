@@ -3,18 +3,24 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/network/parsed_content_header_field_parameters.h"
+
+#include <vector>
+
+#include "base/containers/span.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/network/header_field_tokenizer.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_disposition.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_type.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/case_map.h"
-
-#include "testing/gtest/include/gtest/gtest.h"
 
 namespace blink {
 
 namespace {
 
 using Mode = ParsedContentHeaderFieldParameters::Mode;
+using NameValue = ParsedContentHeaderFieldParameters::NameValue;
 
 void CheckValidity(bool expected,
                    const String& input,
@@ -80,7 +86,7 @@ TEST(ParsedContentHeaderFieldParametersTest, ParameterName) {
 
   CheckValidity(true, input);
 
-  absl::optional<ParsedContentHeaderFieldParameters> t =
+  std::optional<ParsedContentHeaderFieldParameters> t =
       ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer(input),
                                                 Mode::kNormal);
   ASSERT_TRUE(t);
@@ -105,7 +111,7 @@ TEST(ParsedContentHeaderFieldParametersTest, RelaxedParameterName) {
 
   CheckValidity(true, input, Mode::kRelaxed);
 
-  absl::optional<ParsedContentHeaderFieldParameters> t =
+  std::optional<ParsedContentHeaderFieldParameters> t =
       ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer(input),
                                                 Mode::kRelaxed);
   ASSERT_TRUE(t);
@@ -115,62 +121,39 @@ TEST(ParsedContentHeaderFieldParametersTest, RelaxedParameterName) {
   EXPECT_EQ("u", t->ParameterValueForName("y"));
 }
 
+MATCHER_P2(NameValuePairIs, name, value, "") {
+  return arg.name == name && arg.value == value;
+}
+
 TEST(ParsedContentHeaderFieldParametersTest, BeginEnd) {
   String input = "; a=b; a=c; b=d";
 
-  absl::optional<ParsedContentHeaderFieldParameters> t =
+  std::optional<ParsedContentHeaderFieldParameters> t =
       ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer(input),
                                                 Mode::kNormal);
   ASSERT_TRUE(t);
   EXPECT_TRUE(t->HasDuplicatedNames());
   EXPECT_EQ(3u, t->ParameterCount());
 
-  auto* i = t->begin();
-  ASSERT_NE(i, t->end());
-  EXPECT_EQ(i->name, "a");
-  EXPECT_EQ(i->value, "b");
-
-  ++i;
-  ASSERT_NE(i, t->end());
-  EXPECT_EQ(i->name, "a");
-  EXPECT_EQ(i->value, "c");
-
-  ++i;
-  ASSERT_NE(i, t->end());
-  EXPECT_EQ(i->name, "b");
-  EXPECT_EQ(i->value, "d");
-
-  ++i;
-  ASSERT_EQ(i, t->end());
+  EXPECT_THAT(base::span(*t), testing::ElementsAre(NameValuePairIs("a", "b"),
+                                                   NameValuePairIs("a", "c"),
+                                                   NameValuePairIs("b", "d")));
 }
 
 TEST(ParsedContentHeaderFieldParametersTest, RBeginEnd) {
   String input = "; a=B; A=c; b=d";
 
-  absl::optional<ParsedContentHeaderFieldParameters> t =
+  std::optional<ParsedContentHeaderFieldParameters> t =
       ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer(input),
                                                 Mode::kNormal);
   ASSERT_TRUE(t);
   EXPECT_TRUE(t->HasDuplicatedNames());
   EXPECT_EQ(3u, t->ParameterCount());
 
-  auto i = t->rbegin();
-  ASSERT_NE(i, t->rend());
-  EXPECT_EQ(i->name, "b");
-  EXPECT_EQ(i->value, "d");
-
-  ++i;
-  ASSERT_NE(i, t->rend());
-  EXPECT_EQ(i->name, "A");
-  EXPECT_EQ(i->value, "c");
-
-  ++i;
-  ASSERT_NE(i, t->rend());
-  EXPECT_EQ(i->name, "a");
-  EXPECT_EQ(i->value, "B");
-
-  ++i;
-  ASSERT_EQ(i, t->rend());
+  EXPECT_THAT(
+      std::vector(t->rbegin(), t->rend()),
+      testing::ElementsAre(NameValuePairIs("b", "d"), NameValuePairIs("A", "c"),
+                           NameValuePairIs("a", "B")));
 }
 
 }  // namespace

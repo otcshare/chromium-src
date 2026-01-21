@@ -233,8 +233,8 @@ TEST(DeviceSyncCryptAuthKeyBundleTest, DeleteKey) {
 
 TEST(DeviceSyncCryptAuthKeyBundleTest, ToAndFromDictionary_Trivial) {
   CryptAuthKeyBundle bundle(CryptAuthKeyBundle::Name::kLegacyAuthzenKey);
-  absl::optional<CryptAuthKeyBundle> bundle_from_dict =
-      CryptAuthKeyBundle::FromDictionary(bundle.AsDictionary().GetDict());
+  std::optional<CryptAuthKeyBundle> bundle_from_dict =
+      CryptAuthKeyBundle::FromDictionary(bundle.AsDictionary());
   ASSERT_TRUE(bundle_from_dict);
   EXPECT_EQ(*bundle_from_dict, bundle);
 }
@@ -258,8 +258,8 @@ TEST(DeviceSyncCryptAuthKeyBundleTest, ToAndFromDictionary) {
   key_directive.set_enroll_time_millis(1000);
   bundle.set_key_directive(key_directive);
 
-  absl::optional<CryptAuthKeyBundle> bundle_from_dict =
-      CryptAuthKeyBundle::FromDictionary(bundle.AsDictionary().GetDict());
+  std::optional<CryptAuthKeyBundle> bundle_from_dict =
+      CryptAuthKeyBundle::FromDictionary(bundle.AsDictionary());
   ASSERT_TRUE(bundle_from_dict);
   EXPECT_EQ(*bundle_from_dict, bundle);
 }

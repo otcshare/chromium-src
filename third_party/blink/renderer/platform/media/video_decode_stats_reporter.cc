@@ -7,23 +7,28 @@
 #include <cmath>
 #include <limits>
 
-#include "base/bind.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/capabilities/bucket_utility.h"
-#include "media/mojo/mojom/media_types.mojom.h"
+#include "media/mojo/mojom/media_types.mojom-blink.h"
+#include "media/mojo/mojom/video_decode_stats_recorder.mojom-blink.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
 VideoDecodeStatsReporter::VideoDecodeStatsReporter(
-    mojo::PendingRemote<media::mojom::VideoDecodeStatsRecorder> recorder_remote,
+    mojo::PendingRemote<media::mojom::blink::VideoDecodeStatsRecorder>
+        recorder_remote,
     GetPipelineStatsCB get_pipeline_stats_cb,
     media::VideoCodecProfile codec_profile,
     const gfx::Size& natural_size,
-    absl::optional<media::CdmConfig> cdm_config,
+    std::optional<media::CdmConfig> cdm_config,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     const base::TickClock* tick_clock)
-    : kRecordingInterval(base::Milliseconds(kRecordingIntervalMs)),
-      kTinyFpsWindowDuration(base::Milliseconds(kTinyFpsWindowMs)),
+    : kRecordingInterval(
+          base::Milliseconds(std::to_underlying(kRecordingIntervalMs))),
+      kTinyFpsWindowDuration(
+          base::Milliseconds(std::to_underlying(kTinyFpsWindowMs))),
       recorder_remote_(std::move(recorder_remote)),
       get_pipeline_stats_cb_(std::move(get_pipeline_stats_cb)),
       codec_profile_(codec_profile),
@@ -37,8 +42,8 @@ VideoDecodeStatsReporter::VideoDecodeStatsReporter(
   DCHECK(get_pipeline_stats_cb_);
   DCHECK_NE(media::VIDEO_CODEC_PROFILE_UNKNOWN, codec_profile_);
 
-  recorder_remote_.set_disconnect_handler(base::BindOnce(
-      &VideoDecodeStatsReporter::OnIpcConnectionError, base::Unretained(this)));
+  recorder_remote_.set_disconnect_handler(BindOnce(
+      &VideoDecodeStatsReporter::OnIpcConnectionError, Unretained(this)));
   stats_cb_timer_.SetTaskRunner(task_runner);
 }
 
@@ -66,7 +71,7 @@ void VideoDecodeStatsReporter::OnPaused() {
   is_playing_ = false;
 
   // Stop timer until playing resumes.
-  stats_cb_timer_.AbandonAndStop();
+  stats_cb_timer_.Stop();
 }
 
 void VideoDecodeStatsReporter::OnHidden() {
@@ -78,7 +83,7 @@ void VideoDecodeStatsReporter::OnHidden() {
   is_backgrounded_ = true;
 
   // Stop timer until no longer hidden.
-  stats_cb_timer_.AbandonAndStop();
+  stats_cb_timer_.Stop();
 }
 
 void VideoDecodeStatsReporter::OnShown() {
@@ -148,7 +153,7 @@ void VideoDecodeStatsReporter::StartNewRecord(
       frames_decoded_power_efficient_offset;
 
   bool use_hw_secure_codecs = use_hw_secure_codecs_;
-  auto features = media::mojom::PredictionFeatures::New(
+  auto features = media::mojom::blink::PredictionFeatures::New(
       codec_profile_, natural_size_, last_observed_fps_, key_system_,
       use_hw_secure_codecs);
 
@@ -176,7 +181,7 @@ void VideoDecodeStatsReporter::OnIpcConnectionError() {
   // service is unavailable. Otherwise, errors are unexpected.
   DVLOG(2) << __func__ << " IPC disconnected. Stopping reporting.";
   is_ipc_connected_ = false;
-  stats_cb_timer_.AbandonAndStop();
+  stats_cb_timer_.Stop();
 }
 
 bool VideoDecodeStatsReporter::UpdateDecodeProgress(
@@ -231,7 +236,7 @@ bool VideoDecodeStatsReporter::UpdateFrameRateStability(
         if (num_consecutive_tiny_fps_windows_ >= kMaxTinyFpsWindows) {
           DVLOG(2) << __func__ << " Too many tiny fps windows. Stopping timer";
           fps_stabilization_failed_ = true;
-          stats_cb_timer_.AbandonAndStop();
+          stats_cb_timer_.Stop();
           return false;
         }
       } else {
@@ -244,7 +249,7 @@ bool VideoDecodeStatsReporter::UpdateFrameRateStability(
       // config) to change before trying again.
       DVLOG(2) << __func__ << " Unable to stabilize FPS. Stopping timer.";
       fps_stabilization_failed_ = true;
-      stats_cb_timer_.AbandonAndStop();
+      stats_cb_timer_.Stop();
       return false;
     }
 
@@ -315,7 +320,7 @@ void VideoDecodeStatsReporter::UpdateStats() {
                    frames_decoded_power_efficient_offset_,
                frames_decoded);
 
-  auto targets = media::mojom::PredictionTargets::New(
+  auto targets = media::mojom::blink::PredictionTargets::New(
       frames_decoded, frames_dropped, frames_power_efficient);
 
   DVLOG(2) << __func__ << " Recording -- dropped:" << targets->frames_dropped

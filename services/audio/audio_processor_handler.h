@@ -6,10 +6,12 @@
 #define SERVICES_AUDIO_AUDIO_PROCESSOR_HANDLER_H_
 
 #include <atomic>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/audio/aecdump_recording_manager.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_processing.h"
 #include "media/mojo/mojom/audio_processing.mojom.h"
 #include "media/webrtc/audio_processor.h"
@@ -22,6 +24,8 @@ class AudioParameters;
 }  // namespace media
 
 namespace audio {
+class MlModelHandle;
+class MlModelManager;
 
 // Encapsulates audio processing effects in the audio process, using a
 // media::AudioProcessor. Forwards capture audio, playout audio, and
@@ -41,10 +45,14 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
                                     public media::mojom::AudioProcessorControls,
                                     public media::AecdumpRecordingSource {
  public:
-  using DeliverProcessedAudioCallback =
-      media::AudioProcessor::DeliverProcessedAudioCallback;
+  using DeliverProcessedAudioCallback = base::RepeatingCallback<void(
+      const media::AudioBus& audio_bus,
+      base::TimeTicks audio_capture_time,
+      std::optional<double> new_volume,
+      const media::AudioGlitchInfo& audio_glitch_info)>;
 
-  using LogCallback = base::RepeatingCallback<void(base::StringPiece)>;
+  using LogCallback = base::RepeatingCallback<void(std::string_view)>;
+  using ReferenceStreamErrorCallback = base::RepeatingCallback<void()>;
 
   // |settings| specifies which audio processing effects to apply. Some effect
   // must be required, i.e. the AudioProcessorHandler may only be created if
@@ -64,9 +72,12 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
       const media::AudioParameters& output_format,
       LogCallback log_callback,
       DeliverProcessedAudioCallback deliver_processed_audio_callback,
+      // reference_stream_error_callback will be called on the main thread.
+      ReferenceStreamErrorCallback reference_stream_error_callback,
       mojo::PendingReceiver<media::mojom::AudioProcessorControls>
           controls_receiver,
-      media::AecdumpRecordingManager* aecdump_recording_manager);
+      media::AecdumpRecordingManager* aecdump_recording_manager,
+      raw_ptr<MlModelManager> ml_model_manager);
 
   AudioProcessorHandler(const AudioProcessorHandler&) = delete;
   AudioProcessorHandler& operator=(const AudioProcessorHandler&) = delete;
@@ -78,12 +89,18 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   void ProcessCapturedAudio(const media::AudioBus& audio_source,
                             base::TimeTicks audio_capture_time,
                             double volume,
-                            bool key_pressed);
+                            const media::AudioGlitchInfo& audio_glitch_info);
 
   // The format of audio input to the processor; constant throughout its
   // lifetime.
   const media::AudioParameters& input_format() const {
     return audio_processor_->input_format();
+  }
+
+  // If true, `audio::ReferenceOutput::Listener::OnPlayoutData()` should be
+  // called.
+  bool needs_playout_reference() const {
+    return audio_processor_->needs_playout_reference();
   }
 
  private:
@@ -96,6 +113,8 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   void OnPlayoutData(const media::AudioBus& audio_bus,
                      int sample_rate,
                      base::TimeDelta delay) final;
+  // Called on `owning_sequence_`.
+  void OnReferenceStreamError() final;
 
   // mojom::AudioProcessorControls implementation.
   void GetStats(GetStatsCallback callback) final;
@@ -105,12 +124,24 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   void StartAecdump(base::File aecdump_file) final;
   void StopAecdump() final;
 
+  void DeliverProcessedAudio(const media::AudioBus& audio_bus,
+                             base::TimeTicks audio_capture_time,
+                             std::optional<double> new_volume);
+
   SEQUENCE_CHECKER(owning_sequence_);
+
+  // Lifetime management handle for ML models. Must outlive audio_processor_.
+  const std::unique_ptr<MlModelHandle> residual_echo_estimation_model_handle_;
 
   // The audio processor is accessed on all threads (OS capture thread, OS
   // playout thread, owning sequence) and created / destroyed on the owning
   // sequence.
   const std::unique_ptr<media::AudioProcessor> audio_processor_;
+
+  const DeliverProcessedAudioCallback deliver_processed_audio_callback_;
+
+  const ReferenceStreamErrorCallback reference_stream_error_callback_
+      GUARDED_BY_CONTEXT(owning_sequence_);
 
   mojo::Receiver<media::mojom::AudioProcessorControls> receiver_
       GUARDED_BY_CONTEXT(owning_sequence_);
@@ -127,6 +158,8 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   // We use an atomic instead of a lock in order to avoid blocking on the
   // real-time thread.
   std::atomic<int32_t> num_preferred_channels_ = 1;
+
+  media::AudioGlitchInfo::Accumulator glitch_info_accumulator_;
 };
 
 }  // namespace audio

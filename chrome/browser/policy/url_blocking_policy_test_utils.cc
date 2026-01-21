@@ -9,9 +9,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/url_constants.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
 using content::BrowserThread;
@@ -24,36 +28,47 @@ UrlBlockingPolicyTest::~UrlBlockingPolicyTest() = default;
 
 void UrlBlockingPolicyTest::CheckURLIsBlockedInWebContents(
     content::WebContents* web_contents,
-    const GURL& url) {
+    const GURL& url,
+    bool is_blocked_by_incognito_policy) {
   EXPECT_EQ(url, web_contents->GetLastCommittedURL());
 
   std::u16string blocked_page_title;
   if (url.has_host()) {
-    blocked_page_title = base::UTF8ToUTF16(url.host());
+    blocked_page_title = base::UTF8ToUTF16(url.GetHost());
+  } else if (url.SchemeIs(content::kViewSourceScheme)) {
+    blocked_page_title = base::UTF8ToUTF16(GURL(url.GetContent()).GetHost());
   } else {
     // Local file paths show the full URL.
     blocked_page_title = base::UTF8ToUTF16(url.spec());
   }
   EXPECT_EQ(blocked_page_title, web_contents->GetTitle());
 
+  // Depending if the URL is blocked by the incognito policy or not, a different
+  // error page is displayed.
+  std::string error_page_text = l10n_util::GetStringUTF8(
+      is_blocked_by_incognito_policy
+          ? IDS_ERRORPAGES_HEADING_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR
+          : IDS_ERRORPAGES_SUMMARY_BLOCKED_BY_ADMINISTRATOR);
   // Verify that the expected error page is being displayed.
-  bool result = false;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      web_contents,
-      "var textContent = document.body.textContent;"
-      "var hasError = textContent.indexOf('ERR_BLOCKED_BY_ADMINISTRATOR') >= 0;"
-      "domAutomationController.send(hasError);",
-      &result));
-  EXPECT_TRUE(result);
+  EXPECT_EQ(true,
+            content::EvalJs(web_contents,
+                            content::JsReplace(
+                                "var textContent = document.body.textContent;"
+                                "var hasError = "
+                                "textContent.indexOf($1) >= 0;"
+                                "hasError;",
+                                error_page_text)));
 }
 
-void UrlBlockingPolicyTest::CheckURLIsBlocked(Browser* browser,
-                                              const std::string& spec) {
+void UrlBlockingPolicyTest::CheckURLIsBlocked(
+    Browser* browser,
+    const std::string& spec,
+    bool is_blocked_by_incognito_policy) {
   GURL url(spec);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, url));
   content::WebContents* contents =
       browser->tab_strip_model()->GetActiveWebContents();
-  CheckURLIsBlockedInWebContents(contents, url);
+  CheckURLIsBlockedInWebContents(contents, url, is_blocked_by_incognito_policy);
 }
 
 void UrlBlockingPolicyTest::CheckViewSourceURLIsBlocked(
@@ -64,7 +79,7 @@ void UrlBlockingPolicyTest::CheckViewSourceURLIsBlocked(
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, view_source_url));
   content::WebContents* contents =
       browser->tab_strip_model()->GetActiveWebContents();
-  CheckURLIsBlockedInWebContents(contents, url);
+  CheckURLIsBlockedInWebContents(contents, view_source_url);
 }
 
 }  // namespace policy

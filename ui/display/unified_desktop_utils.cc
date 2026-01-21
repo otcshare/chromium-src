@@ -4,13 +4,12 @@
 
 #include "ui/display/unified_desktop_utils.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 
-#include "base/containers/contains.h"
 #include "base/containers/stack.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "ui/display/types/display_constants.h"
 
 namespace display {
@@ -85,9 +84,9 @@ UnifiedDesktopLayoutMatrix BuildDisplayMatrix(const DisplayLayout& layout) {
     base::stack<DisplayPlacement> unhandled_displays;
     while (displays_cells.count(current_display_id) == 0) {
       auto placement_iter =
-          base::ranges::find(layout.placement_list, current_display_id,
-                             &DisplayPlacement::display_id);
-      DCHECK(placement_iter != layout.placement_list.end());
+          std::ranges::find(layout.placement_list, current_display_id,
+                            &DisplayPlacement::display_id);
+      CHECK(placement_iter != layout.placement_list.end());
       unhandled_displays.emplace(*placement_iter);
       current_display_id = placement_iter->parent_display_id;
     }
@@ -152,7 +151,7 @@ UnifiedDesktopLayoutMatrix BuildDisplayMatrix(const DisplayLayout& layout) {
   const size_t num_columns = max_column - min_column + 1;
 
   if (displays_cells.size() != num_rows * num_columns) {
-    LOG(ERROR) << "Unified Desktop layout matrix has wrong dimentions";
+    LOG(ERROR) << "Unified Desktop layout matrix has wrong dimensions";
     // Return an empty matrix, ValidateMatrix() will catch it as invalid.
     return matrix;
   }
@@ -203,7 +202,7 @@ bool BuildUnifiedDesktopMatrix(const DisplayIdList& ids_list,
                                const DisplayLayout& layout,
                                UnifiedDesktopLayoutMatrix* out_matrix) {
   // The primary display should be in the IDs list.
-  if (!base::Contains(ids_list, layout.primary_id)) {
+  if (!std::ranges::contains(ids_list, layout.primary_id)) {
     LOG(ERROR) << "The primary ID: " << layout.primary_id
                << " is not in the IDs list.";
     return false;
@@ -214,8 +213,8 @@ bool BuildUnifiedDesktopMatrix(const DisplayIdList& ids_list,
   for (const auto& id : ids_list) {
     if (id == layout.primary_id)
       continue;
-    if (!base::Contains(layout.placement_list, id,
-                        &DisplayPlacement::display_id)) {
+    if (!std::ranges::contains(layout.placement_list, id,
+                               &DisplayPlacement::display_id)) {
       LOG(ERROR) << "Display with ID: " << id << " has no placement.";
       return false;
     }
@@ -227,7 +226,7 @@ bool BuildUnifiedDesktopMatrix(const DisplayIdList& ids_list,
   }
 
   // This map is used to validate that each display has no more than one child
-  // on eithr of its sides.
+  // on either of its sides.
   std::map<int64_t, std::set<DisplayPlacement::Position>> displays_filled_sides;
 
   // This map is used to validate that all displays has a path to the primary
@@ -254,13 +253,13 @@ bool BuildUnifiedDesktopMatrix(const DisplayIdList& ids_list,
       LOG(ERROR) << "display_id must not be the same as parent_display_id";
       return false;
     }
-    if (!base::Contains(ids_list, placement.display_id)) {
+    if (!std::ranges::contains(ids_list, placement.display_id)) {
       LOG(ERROR) << "display_id: " << placement.display_id
                  << " is not in the id list: " << placement.ToString();
       return false;
     }
 
-    if (!base::Contains(ids_list, placement.parent_display_id)) {
+    if (!std::ranges::contains(ids_list, placement.parent_display_id)) {
       LOG(ERROR) << "parent_display_id: " << placement.parent_display_id
                  << " is not in the id list: " << placement.ToString();
       return false;

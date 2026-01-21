@@ -8,7 +8,6 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
-USE_PYTHON3 = True
 
 import re
 
@@ -18,12 +17,13 @@ def _FilterFile(affected_file):
       ('.h', '.cc', '.cpp', '.cxx', '.mm'))
 
 def _CheckForUseOfGlobalTaskRunnerGetter(input_api, output_api):
-  """Check that base::ThreadTaskRunnerHandle::Get() or
-  base::SequencedTaskRunnerHandle::Get() is not used."""
+  """Check that static getters in base::SingleThreadTaskRunner and
+  base::SequencedTaskRunner are not used."""
 
   problems = []
   getter_re = input_api.re.compile(
-      r'(^|\b)base::(Thread|Sequenced)TaskRunnerHandle::Get\(\)')
+      r'(^|\b)base::(SingleThread|Sequenced)TaskRunner::'
+      r'GetCurrent(Default|BestEffort)\(\)')
   for f in input_api.AffectedSourceFiles(_FilterFile):
     for line_number, line in f.ChangedContents():
       if getter_re.search(line):
@@ -31,11 +31,12 @@ def _CheckForUseOfGlobalTaskRunnerGetter(input_api, output_api):
 
   if problems:
     return [output_api.PresubmitPromptWarning(
-      'base::ThreadTaskRunnerHandle::Get() and'
-      ' base::SequencedTaskRunnerHandle::Get() are deprecated in renderer;'
-      ' please use RenderFrame::GetTaskRunner for production code and'
-      ' blink::scheduler::Get*TaskRunnerForTesting for tests. Please reach'
-      ' out to scheduler-dev@ if you have any questions.', problems)]
+        'The GetCurrentDefault() and GetCurrentBestEffort() methods of '
+        'base::SingleThreadTaskRunner / base::SequencedTaskRunner are '
+        'deprecated in renderer; please use RenderFrame::GetTaskRunner for '
+        'production code and blink::scheduler::Get*TaskRunnerForTesting for '
+        'tests. Please reach out to scheduler-dev@ if you have any questions.',
+        problems)]
   return []
 
 def _CommonCheck(input_api, output_api):

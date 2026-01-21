@@ -5,12 +5,15 @@
 #include "components/zucchini/disassembler_ztf.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 #include <numeric>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ref.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
@@ -259,9 +262,9 @@ class ZtfWriter {
   void WriteNumber(ztf::dim_t value) {
     size_t size = config_.digits_per_dim + 1;
     DCHECK_LE(size, kMaxDigitCount + 1);
-    char digits[kMaxDigitCount + 1];  // + 1 for terminator.
-    int len =
-        snprintf(digits, size, "%0*u", config_.digits_per_dim, std::abs(value));
+    std::array<char, kMaxDigitCount + 1> digits;  // + 1 for terminator.
+    int len = UNSAFE_TODO(snprintf(digits.data(), size, "%0*u",
+                                   config_.digits_per_dim, std::abs(value)));
     DCHECK_EQ(len, config_.digits_per_dim);
     for (int i = 0; i < len; ++i)
       image_.write(offset_++, digits[i]);
@@ -293,7 +296,7 @@ class ZtfReferenceReader : public ReferenceReader {
 
   // Walks |offset_| from |lo| to |hi_| running |parser_|. If any matches are
   // found they are returned.
-  absl::optional<Reference> GetNext() override {
+  std::optional<Reference> GetNext() override {
     T line_col;
     for (; offset_ < hi_; ++offset_) {
       if (!parser_.MatchAtOffset(offset_, &line_col))
@@ -307,7 +310,7 @@ class ZtfReferenceReader : public ReferenceReader {
       offset_ += config_.Width(line_col);
       return Reference{location, target};
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
 
  private:
@@ -398,7 +401,7 @@ bool ReadZtfHeader(ConstBufferView image) {
 
 /******** ZtfTranslator ********/
 
-ZtfTranslator::ZtfTranslator() {}
+ZtfTranslator::ZtfTranslator() = default;
 
 ZtfTranslator::~ZtfTranslator() = default;
 
@@ -459,12 +462,12 @@ offset_t ZtfTranslator::LineColToOffset(ztf::LineCol lc) const {
   return target;
 }
 
-absl::optional<ztf::LineCol> ZtfTranslator::OffsetToLineCol(
+std::optional<ztf::LineCol> ZtfTranslator::OffsetToLineCol(
     offset_t offset) const {
   DCHECK(!line_starts_.empty());
   // Don't place a target outside the image.
   if (offset >= line_starts_.back())
-    return absl::nullopt;
+    return std::nullopt;
   auto it = SearchForRange(offset);
   ztf::LineCol lc;
   lc.line = std::distance(line_starts_.cbegin(), it) + 1;

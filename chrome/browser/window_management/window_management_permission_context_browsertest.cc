@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -11,35 +10,45 @@
 #include "components/permissions/permission_request_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/display/screen_base.h"
-#include "ui/display/test/scoped_screen_override.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/shell.h"
 #include "ui/display/test/display_manager_test_api.h"  // nogncheck
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif                                                 // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
-constexpr char kGetScreens[] = R"(
+constexpr char kGetScreensScript[] = R"(
   (async () => {
     try {
       const screenDetails = await self.getScreenDetails();
     } catch {
       return 'error';
     }
-    return (await navigator.permissions.query({name:'window-placement'})).state;
+    try {
+      return (await navigator.permissions.query({name:'window-management'}))
+              .state;
+    } catch {
+      return "permission_error";
+    }
   })();
 )";
 
-constexpr char kCheckPermission[] = R"(
+constexpr char kCheckPermissionScript[] = R"(
   (async () => {
-    return (await navigator.permissions.query({name:'window-placement'})).state;
-  })();
+    try {
+      return (await navigator.permissions.query({name:'window-management'}))
+              .state;
+     } catch {
+      return 'permission_error';
+    }  })();
 )";
 
 // Tests of WindowManagementPermissionContext behavior.
@@ -88,35 +97,39 @@ class WindowManagementPermissionContextTest : public InProcessBrowserTest {
 class MultiscreenWindowManagementPermissionContextTest
     : public WindowManagementPermissionContextTest {
  public:
+#if !BUILDFLAG(IS_CHROMEOS)
+  ~MultiscreenWindowManagementPermissionContextTest() override {
+    display::Screen::SetScreenInstance(nullptr);
+  }
+#endif
+
   void SetScreenInstance() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Use the default, see SetUpOnMainThread.
     WindowManagementPermissionContextTest::SetScreenInstance();
 #else
-    screen_override_.emplace(&screen_);
+    display::Screen::SetScreenInstance(&screen_);
     screen_.display_list().AddDisplay({1, gfx::Rect(100, 100, 801, 802)},
                                       display::DisplayList::Type::PRIMARY);
-    screen_.display_list().AddDisplay({2, gfx::Rect(901, 100, 802, 802)},
+    screen_.display_list().AddDisplay({2, gfx::Rect(901, 100, 802, 803)},
                                       display::DisplayList::Type::NOT_PRIMARY);
-    ASSERT_EQ(2, display::Screen::GetScreen()->GetNumDisplays());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+    ASSERT_EQ(2, display::Screen::Get()->GetNumDisplays());
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   void SetUpOnMainThread() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // This has to happen later than SetScreenInstance as the ash shell
     // does not exist yet.
     display::test::DisplayManagerTestApi(ash::Shell::Get()->display_manager())
-        .UpdateDisplay("100+100-801x802,901+100-802x802");
-    ASSERT_EQ(2, display::Screen::GetScreen()->GetNumDisplays());
+        .UpdateDisplay("100+100-801x802,901+100-802x803");
+    ASSERT_EQ(2, display::Screen::Get()->GetNumDisplays());
 #endif
-
     WindowManagementPermissionContextTest::SetUpOnMainThread();
   }
 
  private:
   display::ScreenBase screen_;
-  absl::optional<display::test::ScopedScreenOverride> screen_override_;
 };
 
 // Tests gesture requirements (a gesture is only needed to prompt the user).
@@ -135,28 +148,28 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest, GestureToPrompt) {
   // will not prompt the user, and leaves the permission in the default "prompt"
   // state.
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
-  EXPECT_EQ("error",
-            EvalJs(tab, kGetScreens, content::EXECUTE_SCRIPT_NO_USER_GESTURE));
-  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermission,
+  EXPECT_EQ("error", EvalJs(tab, kGetScreensScript,
+                            content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermissionScript,
                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 
   // Calling getScreenDetails() with a gesture will show the prompt, and
   // auto-accept.
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
-  EXPECT_EQ("granted", EvalJs(tab, kGetScreens));
+  EXPECT_EQ("granted", EvalJs(tab, kGetScreensScript));
   EXPECT_TRUE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
 
   // Calling getScreenDetails() without a gesture, but with pre-existing
   // permission, will succeed, since it does not need to prompt the user.
   WaitForUserActivationExpiry();
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
-  EXPECT_EQ("granted",
-            EvalJs(tab, kGetScreens, content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+  EXPECT_EQ("granted", EvalJs(tab, kGetScreensScript,
+                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
 }
 
-// TODO(crbug.com/1290805): Test failing on linux-chromeos-chrome.
-// TODO(crbug.com/1290660): Test failing on linux.
+// TODO(crbug.com/40212482): Test failing on linux-chromeos-chrome.
+// TODO(crbug.com/40212443): Test failing on linux.
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 #define MAYBE_DismissAndDeny DISABLED_DismissAndDeny
 #else
@@ -177,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
   WaitForUserActivationExpiry();
   ASSERT_TRUE(permission_request_manager->IsRequestInProgress());
   permission_request_manager->Dismiss();
-  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermission,
+  EXPECT_EQ("prompt", EvalJs(tab, kCheckPermissionScript,
                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
 
@@ -186,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
   WaitForUserActivationExpiry();
   ASSERT_TRUE(permission_request_manager->IsRequestInProgress());
   permission_request_manager->Deny();
-  EXPECT_EQ("denied", EvalJs(tab, kCheckPermission,
+  EXPECT_EQ("denied", EvalJs(tab, kCheckPermissionScript,
                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_FALSE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
 }
@@ -205,7 +218,7 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest, Accept) {
   WaitForUserActivationExpiry();
   ASSERT_TRUE(permission_request_manager->IsRequestInProgress());
   permission_request_manager->Accept();
-  EXPECT_EQ("granted", EvalJs(tab, kCheckPermission,
+  EXPECT_EQ("granted", EvalJs(tab, kCheckPermissionScript,
                               content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_TRUE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
 }
@@ -229,7 +242,7 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
   WaitForUserActivationExpiry();
   ASSERT_TRUE(permission_request_manager->IsRequestInProgress());
   permission_request_manager->Accept();
-  EXPECT_EQ("granted", EvalJs(child, kCheckPermission,
+  EXPECT_EQ("granted", EvalJs(child, kCheckPermissionScript,
                               content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_TRUE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
   EXPECT_TRUE(child->GetMainFrame()->HasTransientUserActivation());
@@ -253,13 +266,13 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
       permissions::PermissionRequestManager::FromWebContents(tab);
 
   // PermissionRequestManager will accept any window management permission
-  // dialogs that appear. However, the window-placement permission is not
+  // dialogs that appear. However, the window-management permission is not
   // explicitly allowed on the iframe, so requests made by the child frame will
   // be automatically denied before a prompt might be issued.
   permission_request_manager->set_auto_response_for_test(
       permissions::PermissionRequestManager::ACCEPT_ALL);
-  EXPECT_EQ("error", EvalJs(child, kGetScreens));
-  EXPECT_EQ("denied", EvalJs(child, kCheckPermission,
+  EXPECT_EQ("error", EvalJs(child, kGetScreensScript));
+  EXPECT_EQ("denied", EvalJs(child, kCheckPermissionScript,
                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 }
 
@@ -272,8 +285,9 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
   // See https://w3c.github.io/webappsec-permissions-policy/ for more
   // information on permissions policies and allowing cross-origin iframes
   // to have particular permissions.
-  EXPECT_TRUE(ExecJs(tab, R"(const frame = document.getElementById('test');
-    frame.setAttribute('allow', 'window-placement');)",
+  EXPECT_TRUE(ExecJs(tab,
+                     R"(const frame = document.getElementById('test');
+                          frame.setAttribute('allow', 'window-management');)",
                      content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 
   GURL subframe_url(https_test_server()->GetURL("b.test", "/title1.html"));
@@ -290,9 +304,10 @@ IN_PROC_BROWSER_TEST_F(WindowManagementPermissionContextTest,
   // Accept the prompt after activation expires, expect an activation signal.
   ExecuteScriptAsync(child, "getScreenDetails()");
   WaitForUserActivationExpiry();
+
   ASSERT_TRUE(permission_request_manager->IsRequestInProgress());
   permission_request_manager->Accept();
-  EXPECT_EQ("granted", EvalJs(child, kCheckPermission,
+  EXPECT_EQ("granted", EvalJs(child, kCheckPermissionScript,
                               content::EXECUTE_SCRIPT_NO_USER_GESTURE));
   EXPECT_TRUE(tab->GetPrimaryMainFrame()->HasTransientUserActivation());
   EXPECT_TRUE(child->GetMainFrame()->HasTransientUserActivation());
@@ -351,7 +366,7 @@ IN_PROC_BROWSER_TEST_F(MultiscreenWindowManagementPermissionContextTest,
   // information on permissions policies and allowing cross-origin iframes
   // to have particular permissions.
   EXPECT_TRUE(ExecJs(tab, R"(const frame = document.getElementById('test');
-    frame.setAttribute('allow', 'window-placement');)",
+                          frame.setAttribute('allow', 'window-management');)",
                      content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 
   GURL subframe_url(https_test_server()->GetURL("b.test", "/title1.html"));

@@ -22,13 +22,20 @@ boundaries, integration with security APIs and security UX. We have written
 those based on the Web Platform Security team experience of conducting security
 reviews, in partnership with other security teams at Google. This is based on
 concerns that have come up in security reviews, and a few items that we
-envision could be problematic. 
+envision could be problematic.
 
 The goal of this document is not to provide a checklist, where if every item in
 the list is checked a feature can be considered secure. If you find that your
 feature cannot meet some of the security guidelines on this list, please reach
 out to the Web Platform Security team earlier rather than later, and we can
 work together on how to support your feature’s needs in a secure manner.
+
+Beyond the guidelines in this document, we also have
+[specific guidance on avoiding leaks]
+(https://chromium.googlesource.com/chromium/src/+/master/docs/security/stop-leaks-policy.md)
+that you can check. We also have a [web platform security questionnaire]
+(https://chromium.googlesource.com/chromium/src/+/master/docs/security/web-platform-security-questionnaire.md)
+to help you do a first assessment of potential security issues in your web API.
 
 ## Guidelines
 
@@ -162,7 +169,7 @@ context where they could potentially be read by their embedder. This means
 that cross-origin resources in a crossOriginIsolated context are either ok
 with a Spectre attack (opt-in model), or of no interest to an attacker
 (credentialless model). Because of this, we allow higher precision timers in
-crossOriginIsolated contexts. 
+crossOriginIsolated contexts.
 * APIs that can be used to create timers (e.g. SharedArrayBuffers) that are
 more precise than timers available in cross-origin isolated contexts should
 be gated behind crossOriginIsolation, in order to avoid introducing high
@@ -242,7 +249,7 @@ way to protect users from abusive UX behavior from sites.
 > Any feature that impacts the lifetime of documents or that modifies
 > navigation is likely to have far-reaching security implications. Please
 > discuss the implications with the Web Platform Security team as soon as
-> possible. 
+> possible.
 
 * Modifying the navigation stack could cause URL spoofing attacks.
 * Modifying the navigation stack or the document lifetime could result in wrong
@@ -259,13 +266,13 @@ origin or security policies being applied to the document.
 > [CSP](https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP),
 > [COOP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Opener-Policy),
 > [COEP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Embedder-Policy),
-> and [Private Network access](https://wicg.github.io/private-network-access/).
+> and [Local Network access](https://wicg.github.io/local-network-access/).
 
-* XFO, CSP, COEP and Private Network access can block document load. This
+* XFO, CSP, COEP and Local Network access can block document load. This
 should be respected.
 * COOP can trigger a browsing context group switch which should be respected as
 well.
-* CSP, COEP and Private Network access are computed when loading a document and
+* CSP, COEP and Local Network access are computed when loading a document and
 may apply to all of the document resources. Failure to integrate properly
 with them could result in the policies being bypassed.
 
@@ -280,7 +287,7 @@ with them could result in the policies being bypassed.
 > [CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS),
 > [CORB](https://fetch.spec.whatwg.org/#corb),
 > [SRI](https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity)
-> and [Private Network access](https://wicg.github.io/private-network-access/).
+> and [Local Network access](https://wicg.github.io/local-network-access/).
 
 * All of the policies above may block unsafe resource loads and must be
 properly applied to any subresource load.
@@ -314,11 +321,11 @@ as an extension to the
 other origins. In an ideal world, all cross-origin authenticated requests
 would require CORS, but this is impossible for compatibility reasons.
 However, new elements should not add a new source of non CORS requests to the
-platform. 
+platform.
 * Elements that are allowed to make cross-origin authenticated requests without
 CORS introduce a hole in the platform that may be exploited in a MIME
 mismatch attack to bypass CORS protections for resources that are normally
-loaded through Fetch or into elements that require CORS. 
+loaded through Fetch or into elements that require CORS.
 
 <a name="TOC-mime-types"></a>
 #### MIME types

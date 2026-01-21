@@ -6,11 +6,14 @@
 #define ASH_SYSTEM_MEDIA_UNIFIED_MEDIA_CONTROLS_DETAILED_VIEW_H_
 
 #include "ash/system/tray/tray_detailed_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
 // Detailed view displaying all active media sessions
 class UnifiedMediaControlsDetailedView : public TrayDetailedView {
+  METADATA_HEADER(UnifiedMediaControlsDetailedView, TrayDetailedView)
+
  public:
   UnifiedMediaControlsDetailedView(
       DetailedViewDelegate* delegate,

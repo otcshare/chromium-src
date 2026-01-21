@@ -14,11 +14,12 @@ features:
   dynamic_refresh: true
   per_profile: false
 owners:
-- snijhara@google.com
-- marcgrimme@chromium.org
+- rbock@google.com
+- chromeos-commercial-remote-management@google.com
 schema:
   type: string
 supported_on:
 - chrome_os:86-
 tags: []
 type: string
+generate_device_proto: False

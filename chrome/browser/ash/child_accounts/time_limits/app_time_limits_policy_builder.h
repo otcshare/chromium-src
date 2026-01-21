@@ -7,8 +7,7 @@
 
 #include "base/values.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 class AppId;
 class AppLimit;
@@ -30,13 +29,12 @@ class AppTimeLimitsPolicyBuilder {
 
   void SetAppActivityReportingEnabled(bool enabled);
 
-  const base::Value& value() const { return value_; }
+  const base::Value::Dict& value() const { return value_; }
 
  private:
-  base::Value value_{base::Value::Type::DICTIONARY};
+  base::Value::Dict value_;
 };
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_TIME_LIMITS_APP_TIME_LIMITS_POLICY_BUILDER_H_

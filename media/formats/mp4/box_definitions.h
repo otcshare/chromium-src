@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,13 +20,15 @@
 #include "media/base/media_log.h"
 #include "media/base/video_codecs.h"
 #include "media/formats/mp4/aac.h"
+#include "media/formats/mp4/ac3.h"
+#include "media/formats/mp4/ac4.h"
 #include "media/formats/mp4/avc.h"
 #include "media/formats/mp4/box_reader.h"
 #include "media/formats/mp4/dts.h"
 #include "media/formats/mp4/dtsx.h"
+#include "media/formats/mp4/eac3.h"
 #include "media/formats/mp4/fourccs.h"
 #include "media/media_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 namespace mp4 {
@@ -91,7 +95,7 @@ struct MEDIA_EXPORT SampleEncryptionEntry {
 
   // Parse SampleEncryptionEntry from |reader|.
   // |iv_size| specifies the size of initialization vector. |has_subsamples|
-  // indicates whether this sample encryption entry constains subsamples.
+  // indicates whether this sample encryption entry contains subsamples.
   // Returns false if parsing fails.
   bool Parse(BufferReader* reader, uint8_t iv_size, bool has_subsamples);
 
@@ -99,7 +103,7 @@ struct MEDIA_EXPORT SampleEncryptionEntry {
   // anywhere.
   bool GetTotalSizeOfSubsamples(size_t* total_size) const;
 
-  uint8_t initialization_vector[kInitializationVectorSize];
+  std::array<uint8_t, kInitializationVectorSize> initialization_vector{};
   std::vector<SubsampleEntry> subsamples;
 };
 
@@ -140,7 +144,7 @@ struct MEDIA_EXPORT TrackEncryption : Box {
   uint8_t default_crypt_byte_block;
   uint8_t default_skip_byte_block;
   uint8_t default_constant_iv_size;
-  uint8_t default_constant_iv[kInitializationVectorSize];
+  std::array<uint8_t, kInitializationVectorSize> default_constant_iv;
 };
 
 struct MEDIA_EXPORT SchemeInfo : Box {
@@ -229,7 +233,7 @@ struct MEDIA_EXPORT AVCDecoderConfigurationRecord : Box {
   //       context and therefore the box header is not expected to be present
   //       in |data|.
   // Returns true if |data| was successfully parsed.
-  bool Parse(const uint8_t* data, int data_size);
+  bool Parse(base::span<const uint8_t> data);
   bool Serialize(std::vector<uint8_t>& output) const;
 
   uint8_t version;
@@ -238,14 +242,18 @@ struct MEDIA_EXPORT AVCDecoderConfigurationRecord : Box {
   uint8_t avc_level;
   uint8_t length_size;
 
-  typedef std::vector<uint8_t> SPS;
-  typedef std::vector<uint8_t> PPS;
+  std::vector<std::vector<uint8_t>> sps_list;
+  std::vector<std::vector<uint8_t>> pps_list;
 
-  std::vector<SPS> sps_list;
-  std::vector<PPS> pps_list;
+  uint8_t chroma_format;
+  uint8_t bit_depth_luma_minus8;
+  uint8_t bit_depth_chroma_minus8;
+
+  std::vector<std::vector<uint8_t>> sps_ext_list;
 
  private:
   bool ParseInternal(BufferReader* reader, MediaLog* media_log);
+  bool ParseREXT(BufferReader* reader, MediaLog* media_log);
 };
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
@@ -339,17 +347,22 @@ struct MEDIA_EXPORT VideoSampleEntry : Box {
   ProtectionSchemeInfo sinf;
 
   VideoDecoderConfig::AlphaMode alpha_mode;
-
-  VideoCodec video_codec;
-  VideoCodecProfile video_codec_profile;
-  VideoCodecLevel video_codec_level;
   VideoColorSpace video_color_space;
+  CodecProfileLevel video_info;
 
-  absl::optional<gfx::HDRMetadata> hdr_metadata;
+  // When set and found on a Dolby Vision source buffer, `dv_info`
+  // will be used to upgrade `video_info` from its backwards
+  // compatible codec (e.g., H.264, H.265) to a Dolby Vision codec.
+  std::optional<CodecProfileLevel> dv_info;
+  gfx::HDRMetadata hdr_metadata;
 
   bool IsFormatValid() const;
 
   scoped_refptr<BitstreamConverter> frame_bitstream_converter;
+
+  // Static method for testing.
+  static VideoColorSpace ConvertColorParameterInformationToColorSpace(
+      const ColorParameterInformation& info);
 };
 
 struct MEDIA_EXPORT ElementaryStreamDescriptor : Box {
@@ -403,6 +416,41 @@ struct MEDIA_EXPORT DtsUhdSpecificBox : Box {
 };
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+struct MEDIA_EXPORT AC3SpecificBox : Box {
+  DECLARE_BOX_METHODS(AC3SpecificBox);
+  AC3 dac3;
+};
+
+struct MEDIA_EXPORT EC3SpecificBox : Box {
+  DECLARE_BOX_METHODS(EC3SpecificBox);
+  EAC3 dec3;
+};
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+struct MEDIA_EXPORT AC4SpecificBox : Box {
+  DECLARE_BOX_METHODS(AC4SpecificBox);
+  AC4 dac4;
+};
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+struct MEDIA_EXPORT IamfSpecificBox : Box {
+  DECLARE_BOX_METHODS(IamfSpecificBox);
+  bool ReadOBU(BufferReader* reader);
+  bool ReadOBUHeader(BufferReader* reader,
+                     uint8_t* obu_type,
+                     uint32_t* obu_size);
+  bool ReadLeb128Value(BufferReader* reader, uint32_t* value) const;
+
+  uint8_t profile;
+  bool redundant_copy = false;
+
+  std::vector<uint8_t> ia_descriptors;
+};
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+
 struct MEDIA_EXPORT AudioSampleEntry : Box {
   DECLARE_BOX_METHODS(AudioSampleEntry);
 
@@ -420,6 +468,16 @@ struct MEDIA_EXPORT AudioSampleEntry : Box {
   DtsSpecificBox ddts;
   DtsUhdSpecificBox udts;
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+  AC3SpecificBox ac3;
+  EC3SpecificBox eac3;
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+  AC4SpecificBox ac4;
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+  IamfSpecificBox iacb;
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
 };
 
 struct MEDIA_EXPORT SampleDescription : Box {
@@ -442,7 +500,7 @@ struct MEDIA_EXPORT CencSampleEncryptionInfoEntry {
   uint8_t crypt_byte_block;
   uint8_t skip_byte_block;
   uint8_t constant_iv_size;
-  uint8_t constant_iv[kInitializationVectorSize];
+  std::array<uint8_t, kInitializationVectorSize> constant_iv;
 };
 
 struct MEDIA_EXPORT SampleGroupDescription : Box {  // 'sgpd'.

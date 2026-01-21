@@ -4,33 +4,35 @@
 
 package org.chromium.components.browser_ui.util;
 
-import android.app.DownloadManager;
 import android.content.Context;
 import android.net.Uri;
-import android.os.Build;
 import android.text.TextUtils;
 
-import androidx.core.app.NotificationManagerCompat;
-
-import org.chromium.base.ContextUtils;
-import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.download.DownloadDangerType;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.offline_items_collection.FailState;
+import org.chromium.components.offline_items_collection.OfflineItem;
+import org.chromium.components.offline_items_collection.OfflineItemState;
 import org.chromium.components.url_formatter.SchemeDisplay;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
-/**
- * A class containing some utility static methods.
- */
+/** A class containing some utility static methods. */
+@NullMarked
 public class DownloadUtils {
     public static final long INVALID_SYSTEM_DOWNLOAD_ID = -1;
     private static final int[] BYTES_STRINGS = {
-            R.string.download_ui_kb, R.string.download_ui_mb, R.string.download_ui_gb};
+        R.string.download_ui_kb, R.string.download_ui_mb, R.string.download_ui_gb
+    };
 
     // Limit the origin length so that the eTLD+1 cannot be hidden. If the origin exceeds this
     // length the eTLD+1 is extracted and shown.
-    private static final int MAX_ORIGIN_LENGTH = 40;
+    public static final int MAX_ORIGIN_LENGTH_FOR_NOTIFICATION = 40;
+    public static final int MAX_ORIGIN_LENGTH_FOR_DOWNLOAD_HOME_CAPTION = 25;
 
     /**
      * Format the number of bytes into KB, MB, or GB and return the corresponding generated string.
@@ -65,42 +67,17 @@ public class DownloadUtils {
             bytesInCorrectUnits = bytes / (float) ConversionUtils.BYTES_PER_GIGABYTE;
         }
 
-        return context.getResources().getString(resourceId, bytesInCorrectUnits);
-    }
-
-    /**
-     * Adds a download to the Android DownloadManager.
-     * @see android.app.DownloadManager#addCompletedDownload(String, String, boolean, String,
-     * String, long, boolean)
-     */
-    public static long addCompletedDownload(String fileName, String description, String mimeType,
-            String filePath, long fileSizeBytes, String originalUrl, String referer) {
-        assert !ThreadUtils.runningOnUiThread();
-        assert Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-            : "addCompletedDownload is deprecated in Q, may cause crash.";
-        Context context = ContextUtils.getApplicationContext();
-        DownloadManager manager =
-                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
-        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
-        boolean useSystemNotification = !notificationManager.areNotificationsEnabled();
-        try {
-            // OriginalUri has to be null or non-empty http(s) scheme.
-            Uri originalUri = parseOriginalUrl(originalUrl);
-            Uri refererUri = TextUtils.isEmpty(referer) ? null : Uri.parse(referer);
-            return manager.addCompletedDownload(fileName, description, true, mimeType, filePath,
-                    fileSizeBytes, useSystemNotification, originalUri, refererUri);
-        } catch (Exception e) {
-            return INVALID_SYSTEM_DOWNLOAD_ID;
-        }
+        return context.getString(resourceId, bytesInCorrectUnits);
     }
 
     /**
      * Parses an originating URL string and returns a valid Uri that can be inserted into
      * DownloadManager. The returned Uri has to be null or non-empty http(s) scheme.
+     *
      * @param originalUrl String representation of the originating URL.
      * @return A valid Uri that can be accepted by DownloadManager.
      */
-    public static Uri parseOriginalUrl(String originalUrl) {
+    public static @Nullable Uri parseOriginalUrl(String originalUrl) {
         Uri originalUri = TextUtils.isEmpty(originalUrl) ? null : Uri.parse(originalUrl);
         if (originalUri != null) {
             String scheme = originalUri.normalizeScheme().getScheme();
@@ -114,20 +91,72 @@ public class DownloadUtils {
     }
 
     /**
-     * Adjusts a URL for display to the user in the subtext of an Android notification.
+     * Adjusts a URL for display to the user in a text view subject to char limits. Could elide
+     * parts the URL if it is too long as per readability and security aspects.
+     *
+     * <p>This returns null for invalid or non-standard URLs, or if there is no suitable way to
+     * format the URL within the character limit.
      *
      * @param url The full URL.
-     * @param return The URL that should be displayed, or null if the input was invalid.
+     * @param limit Character limit.
+     * @return The text to display, or null if the input was invalid or cannot be shortened enough.
      */
-    public static String formatUrlForDisplayInNotification(GURL url) {
+    public static @Nullable String formatUrlForDisplayInNotification(
+            @Nullable GURL url, int limit) {
         if (GURL.isEmptyOrInvalid(url)) return null;
+
+        // Don't attempt to format and display invalid or non-standard URLs which have opaque
+        // origins. For such URLs (e.g. "data:" scheme URLs), it is not quite meaningful to display
+        // (parts of) the URL in the UI, unlike normal "webby" schemes ("http" and "https") where an
+        // eTLD+1 may be meaningfully extracted from the host part to help the user make a security
+        // decision about the download.
+        // TODO(chlily): Consider exposing url::Origin::Resolve() to JNI and using it to get the
+        // precursor origin to display to the user in cases where the origin itself is opaque.
+        if (Origin.create(url).isOpaque()) {
+            return null;
+        }
 
         String formattedUrl =
                 UrlFormatter.formatUrlForSecurityDisplay(url, SchemeDisplay.OMIT_HTTP_AND_HTTPS);
-        if (formattedUrl.length() <= MAX_ORIGIN_LENGTH) return formattedUrl;
+        if (!TextUtils.isEmpty(formattedUrl) && formattedUrl.length() <= limit) {
+            return formattedUrl;
+        }
 
-        // The origin is too long. Strip down to eTLD+1.
-        return UrlUtilities.getDomainAndRegistry(
-                url.getSpec(), false /* includePrivateRegistries */);
+        // The formatted URL is unsuitable. One possible fallback is eTLD+1, but we should be
+        // careful to only parse for eTLD+1 if the origin has a host portion (some URL schemes
+        // don't).
+        GURL originAsUrl = url.getOrigin();
+        String fallback =
+                !GURL.isEmptyOrInvalid(originAsUrl) && !originAsUrl.getHost().isEmpty()
+                        ? UrlUtilities.getDomainAndRegistry(
+                                originAsUrl.getSpec(), /* includePrivateRegistries= */ true)
+                        : originAsUrl.getPossiblyInvalidSpec();
+        if (!TextUtils.isEmpty(fallback) && fallback.length() <= limit) {
+            return fallback;
+        }
+        return null;
+    }
+
+    /**
+     * @return Whether a download should be displayed as "dangerous" throughout the Android download
+     *     UI. Used for items with Safe Browsing download warnings.
+     */
+    public static boolean shouldDisplayDownloadAsDangerous(
+            @DownloadDangerType int dangerType, @OfflineItemState int state) {
+        // TODO(crbug.com/397407934): These are the only danger types which we currently choose to
+        // show warning UI for. In the future, this may or may not expand to other danger types.
+        // Note that this is a stricter subset of danger types than we count as
+        // {@link OfflineItem#isDangerous}.
+        boolean dangerTypeShouldDisplayAsDangerous =
+                dangerType == DownloadDangerType.DANGEROUS_CONTENT
+                        || dangerType == DownloadDangerType.POTENTIALLY_UNWANTED;
+        return dangerTypeShouldDisplayAsDangerous && state != OfflineItemState.CANCELLED;
+    }
+
+    /** Returns whether a download is blocked due to sensitive content. */
+    public static boolean isBlockedSensitiveDownload(OfflineItem item) {
+        return item.state == OfflineItemState.FAILED
+                && item.failState == FailState.FILE_BLOCKED
+                && item.dangerType == DownloadDangerType.SENSITIVE_CONTENT_BLOCK;
     }
 }

@@ -26,7 +26,9 @@
 #include "third_party/blink/renderer/core/script/html_parser_script_runner.h"
 
 #include <inttypes.h>
+
 #include <memory>
+
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -38,12 +40,13 @@
 #include "third_party/blink/renderer/core/html/parser/html_input_stream.h"
 #include "third_party/blink/renderer/core/script/html_parser_script_runner_host.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
-#include "third_party/blink/renderer/core/script/script_runner.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace blink {
 
@@ -74,9 +77,10 @@ std::unique_ptr<TracedValue> GetTraceArgsForScriptElement(
 }
 
 void DoExecuteScript(PendingScript* pending_script, Document& document) {
-  TRACE_EVENT_WITH_FLOW1(
+  TRACE_EVENT(
       "blink", "HTMLParserScriptRunner ExecuteScript",
-      pending_script->GetElement(), TRACE_EVENT_FLAG_FLOW_IN, "data",
+      perfetto::TerminatingFlow::FromPointer(pending_script->GetElement()),
+      "data",
       GetTraceArgsForScriptElement(document, pending_script->StartingPosition(),
                                    pending_script->UrlForTracing()));
   pending_script->ExecuteScriptBlock();
@@ -105,23 +109,26 @@ void TraceParserBlockingScript(const PendingScript* pending_script,
   if (!element)
     return;
   bool waiting_for_resources = !document.IsScriptExecutionReady();
-  std::unique_ptr<TracedValue> args =
-      GetTraceArgsForScriptElement(document, pending_script->StartingPosition(),
-                                   pending_script->UrlForTracing());
+
+  auto script_element_trace_lambda = [&]() {
+    return GetTraceArgsForScriptElement(document,
+                                        pending_script->StartingPosition(),
+                                        pending_script->UrlForTracing());
+  };
   if (!pending_script->IsReady()) {
     if (waiting_for_resources) {
-      TRACE_EVENT_WITH_FLOW1(
-          "blink", "YieldParserForScriptLoadAndBlockingResources", element,
-          TRACE_EVENT_FLAG_FLOW_OUT, "data", std::move(args));
+      TRACE_EVENT("blink", "YieldParserForScriptLoadAndBlockingResources",
+                  perfetto::Flow::FromPointer(element), "data",
+                  script_element_trace_lambda());
     } else {
-      TRACE_EVENT_WITH_FLOW1("blink", "YieldParserForScriptLoad", element,
-                             TRACE_EVENT_FLAG_FLOW_OUT, "data",
-                             std::move(args));
+      TRACE_EVENT("blink", "YieldParserForScriptLoad",
+                  perfetto::Flow::FromPointer(element), "data",
+                  script_element_trace_lambda());
     }
   } else if (waiting_for_resources) {
-    TRACE_EVENT_WITH_FLOW1("blink", "YieldParserForScriptBlockingResources",
-                           element, TRACE_EVENT_FLAG_FLOW_OUT, "data",
-                           std::move(args));
+    TRACE_EVENT("blink", "YieldParserForScriptBlockingResources",
+                perfetto::Flow::FromPointer(element), "data",
+                script_element_trace_lambda());
   }
 }
 
@@ -131,12 +138,7 @@ HTMLParserScriptRunner::HTMLParserScriptRunner(
     HTMLParserReentryPermit* reentry_permit,
     Document* document,
     HTMLParserScriptRunnerHost* host)
-    : reentry_permit_(reentry_permit),
-      document_(document),
-      host_(host),
-      delayer_for_force_defer_(MakeGarbageCollected<ScriptRunnerDelayer>(
-          document_->GetScriptRunner(),
-          ScriptRunner::DelayReason::kForceDefer)) {
+    : reentry_permit_(reentry_permit), document_(document), host_(host) {
   DCHECK(host_);
 }
 
@@ -149,14 +151,6 @@ void HTMLParserScriptRunner::Detach() {
   if (parser_blocking_script_)
     parser_blocking_script_->Dispose();
   parser_blocking_script_ = nullptr;
-
-  while (!force_deferred_scripts_.empty()) {
-    DCHECK(
-        base::FeatureList::IsEnabled(features::kForceDeferScriptIntervention));
-    PendingScript* pending_script = force_deferred_scripts_.TakeFirst();
-    pending_script->Dispose();
-  }
-  delayer_for_force_defer_->Deactivate();
 
   while (!scripts_to_execute_after_parsing_.empty()) {
     PendingScript* pending_script =
@@ -171,13 +165,10 @@ void HTMLParserScriptRunner::Detach() {
 
 bool HTMLParserScriptRunner::IsParserBlockingScriptReady() {
   DCHECK(ParserBlockingScript());
-  if (!document_->IsScriptExecutionReady())
+  if (!document_->IsScriptExecutionReady() ||
+      document_->IsScriptBlockedUntilPrerenderActivation()) {
     return false;
-  // TODO(crbug.com/1344772) Consider moving this condition to
-  // Document::IsScriptExecutionReady(), while we are not yet sure.
-  if (base::FeatureList::IsEnabled(features::kForceInOrderScript) &&
-      document_->GetScriptRunner()->HasForceInOrderScripts())
-    return false;
+  }
   return ParserBlockingScript()->IsReady();
 }
 
@@ -203,8 +194,10 @@ void HTMLParserScriptRunner::
     document_->GetAgent().event_loop()->PerformMicrotaskCheckpoint();
     // The parser cannot be unblocked as a microtask requested another
     // resource
-    if (!document_->IsScriptExecutionReady())
+    if (!document_->IsScriptExecutionReady() ||
+        document_->IsScriptBlockedUntilPrerenderActivation()) {
       return;
+    }
   }
 
   // <spec step="B.2">Set the pending parsing-blocking script to null.</spec>
@@ -275,9 +268,9 @@ void HTMLParserScriptRunner::PendingScriptFinished(
   // yielding for cooperative scheduling. Cooperative scheduling requires that
   // the Blink C++ stack be thin when it executes JavaScript.
   document_->GetTaskRunner(TaskType::kInternalContinueScriptLoading)
-      ->PostTask(FROM_HERE,
-                 WTF::BindOnce(&HTMLParserScriptRunnerHost::NotifyScriptLoaded,
-                               WrapPersistent(host_.Get())));
+      ->PostTask(FROM_HERE, blink::BindOnce(
+                                &HTMLParserScriptRunnerHost::NotifyScriptLoaded,
+                                WrapPersistent(host_.Get())));
 }
 
 // <specdef href="https://html.spec.whatwg.org/C/#scriptEndTag">
@@ -296,6 +289,17 @@ void HTMLParserScriptRunner::ProcessScriptElement(
   //
   // Try to execute the script given to us.
   ProcessScriptElementInternal(script_element, script_start_position);
+
+  if (!document_) {
+    // The microtask checkpoint might have aborted the parser.  In that
+    // case it's best to return, although it's not entirely clear from
+    // the spec when we should return early.  See
+    // https://github.com/whatwg/html/issues/11393
+    //
+    // It would be nice to DCHECK() that the parser was aborted but it's
+    // not obvious how to do that without document_.
+    return;
+  }
 
   // <spec>... At this stage, if the pending parsing-blocking script is not
   // null, then:</spec>
@@ -399,6 +403,19 @@ void HTMLParserScriptRunner::ExecuteScriptsWaitingForResources() {
   ExecuteParsingBlockingScripts();
 }
 
+void HTMLParserScriptRunner::UnblockForPrerenderActivation() {
+  // Should be aligned with `ExecuteScriptsWaitingForResources`.
+  CHECK(document_);
+  CHECK(!IsExecutingScript());
+  // We cannot check if the RuntimeEnabledFeature of PrerenderUntilScript is
+  // enabled or not here, because the OriginTrial token may attached to the
+  // initiator page only.
+  // TODO(crbug.com/428500219): Bring the check back after the feature is
+  // shipped.
+  CHECK(!document_->IsScriptBlockedUntilPrerenderActivation());
+  ExecuteParsingBlockingScripts();
+}
+
 // <specdef href="https://html.spec.whatwg.org/C/#stop-parsing">
 PendingScript* HTMLParserScriptRunner::TryTakeReadyScriptWaitingForParsing(
     HeapDeque<Member<PendingScript>>* waiting_scripts) {
@@ -408,8 +425,10 @@ PendingScript* HTMLParserScriptRunner::TryTakeReadyScriptWaitingForParsing(
   // scripts that will execute when the document has finished parsing has its
   // ready to be parser-executed set to true and the parser's Document has no
   // style sheet that is blocking scripts.</spec>
-  if (!document_->IsScriptExecutionReady())
+  if (!document_->IsScriptExecutionReady() ||
+      document_->IsScriptBlockedUntilPrerenderActivation()) {
     return nullptr;
+  }
   PendingScript* script = waiting_scripts->front();
   if (!script->IsReady()) {
     if (!script->IsWatchingForLoad()) {
@@ -425,42 +444,86 @@ PendingScript* HTMLParserScriptRunner::TryTakeReadyScriptWaitingForParsing(
     }
     return nullptr;
   }
-  return waiting_scripts->TakeFirst();
+  return waiting_scripts->TakeFirst().Get();
 }
 
 // <specdef href="https://html.spec.whatwg.org/C/#stop-parsing">
 //
-// This will also run any forced deferred scripts before running any developer
-// deferred scripts.
+// This will run the developer deferred scripts.
 bool HTMLParserScriptRunner::ExecuteScriptsWaitingForParsing() {
   TRACE_EVENT0("blink",
                "HTMLParserScriptRunner::executeScriptsWaitingForParsing");
 
-  // <spec step="5">While the list of scripts that will execute when the
-  // document has finished parsing is not empty:</spec>
-  while (!force_deferred_scripts_.empty() ||
-         !scripts_to_execute_after_parsing_.empty()) {
+  // If the feature is enabled, execute scripts one at a time with event loop
+  // yields between them to prevent long tasks and improve responsiveness.
+  if (RuntimeEnabledFeatures::SeparateDeferModuleScriptTasksEnabled()) {
+    // If we're already executing scripts asynchronously, check if we have more
+    // scripts to process.
+    if (scripts_to_execute_after_parsing_.empty()) {
+      // All scripts completed, allow parsing to complete.
+      return true;
+    }
+
     DCHECK(!IsExecutingScript());
     DCHECK(!HasParserBlockingScript());
-    DCHECK(scripts_to_execute_after_parsing_.empty() ||
-           scripts_to_execute_after_parsing_.front()->IsExternalOrModule());
+    DCHECK(scripts_to_execute_after_parsing_.front()->IsExternalOrModule());
 
     // <spec step="5.3">Remove the first script element from the list of scripts
     // that will execute when the document has finished parsing (i.e. shift out
     // the first entry in the list).</spec>
-    PendingScript* first = nullptr;
-
-    // First execute the scripts that were forced-deferred. If no such scripts
-    // are present, then try executing scripts that were deferred by the web
-    // developer.
-    if (!force_deferred_scripts_.empty()) {
-      DCHECK(base::FeatureList::IsEnabled(
-          features::kForceDeferScriptIntervention));
-      first = TryTakeReadyScriptWaitingForParsing(&force_deferred_scripts_);
-    } else {
-      first = TryTakeReadyScriptWaitingForParsing(
-          &scripts_to_execute_after_parsing_);
+    PendingScript* first =
+        TryTakeReadyScriptWaitingForParsing(&scripts_to_execute_after_parsing_);
+    if (!first) {
+      return false;
     }
+
+    // <spec step="5.2">Execute the script element given by the first script in
+    // the list of scripts that will execute when the document has finished
+    // parsing.</spec>
+    ExecutePendingDeferredScriptAndDispatchEvent(first);
+
+    // FIXME: What is this m_document check for?
+    if (!document_) {
+      return false;
+    }
+
+    // If there are more scripts to execute, post a task to continue execution
+    // in the next iteration of the event loop, yielding control between
+    // scripts. This achieves the goal of separating script execution into
+    // individual tasks.
+    if (!scripts_to_execute_after_parsing_.empty()) {
+      document_->GetTaskRunner(TaskType::kInternalContinueScriptLoading)
+          ->PostTask(FROM_HERE,
+                     blink::BindOnce(
+                         [](HTMLParserScriptRunner* runner) {
+                           // Continue execution and potentially resume parser
+                           if (runner->ExecuteScriptsWaitingForParsing()) {
+                             // If all scripts are done, need to notify parser
+                             // The parser will be resumed when it tries again
+                             runner->host_->NotifyScriptLoaded();
+                           }
+                         },
+                         WrapPersistent(this)));
+      // Return false to keep the parser paused until all scripts complete
+      return false;
+    }
+
+    // All scripts executed, allow parsing to continue
+    return true;
+  }
+
+  // <spec step="5">While the list of scripts that will execute when the
+  // document has finished parsing is not empty:</spec>
+  while (!scripts_to_execute_after_parsing_.empty()) {
+    DCHECK(!IsExecutingScript());
+    DCHECK(!HasParserBlockingScript());
+    DCHECK(scripts_to_execute_after_parsing_.front()->IsExternalOrModule());
+
+    // <spec step="5.3">Remove the first script element from the list of scripts
+    // that will execute when the document has finished parsing (i.e. shift out
+    // the first entry in the list).</spec>
+    PendingScript* first =
+        TryTakeReadyScriptWaitingForParsing(&scripts_to_execute_after_parsing_);
     if (!first)
       return false;
 
@@ -474,23 +537,6 @@ bool HTMLParserScriptRunner::ExecuteScriptsWaitingForParsing() {
       return false;
   }
 
-  // Block the DOMContentLoaded event if there are pending async scripts, just
-  // like pending defer scripts do so by returning false here. The
-  // DOMContentLoaded event will be unblocked when this method is called from
-  // |NotifyNoRemainingAsyncScripts()| after all pending async scripts are
-  // evaluated.
-  if (base::FeatureList::IsEnabled(
-          features::kDOMContentLoadedWaitForAsyncScript) &&
-      document_ && document_->GetScriptRunner() &&
-      document_->GetScriptRunner()->HasAsyncScripts()) {
-    return false;
-  }
-
-  // All scripts waiting for parsing have now executed (end of spec step 3),
-  // including any force deferred syncrhonous scripts. Now resume async
-  // script execution if it was suspended by force deferral.
-  DCHECK(force_deferred_scripts_.empty());
-  delayer_for_force_defer_->Deactivate();
   return true;
 }
 
@@ -552,17 +598,6 @@ void HTMLParserScriptRunner::ProcessScriptElementInternal(
         scripts_to_execute_after_parsing_.push_back(pending_script);
         break;
 
-      case ScriptSchedulingType::kForceDefer:
-        // Force defer this otherwise parser-blocking script.
-        DCHECK(base::FeatureList::IsEnabled(
-            features::kForceDeferScriptIntervention));
-        // Add the element to the end of the list of forced deferred scripts
-        // that will execute when the document has finished parsing associated
-        // with the Document of the parser that created the element.
-        force_deferred_scripts_.push_back(pending_script);
-        delayer_for_force_defer_->Activate();
-        break;
-
       case ScriptSchedulingType::kParserBlocking:
         // <spec label="prepare-the-script-element" step="31.5.1">Set el's
         // parser document's pending parsing-blocking script to el.</spec>
@@ -583,11 +618,10 @@ void HTMLParserScriptRunner::ProcessScriptElementInternal(
 
       case ScriptSchedulingType::kAsync:
       case ScriptSchedulingType::kInOrder:
-      case ScriptSchedulingType::kForceInOrder:
       case ScriptSchedulingType::kImmediate:
       case ScriptSchedulingType::kNotSet:
+      case ScriptSchedulingType::kDeprecatedForceDefer:
         NOTREACHED();
-        break;
     }
 
     // <spec>... Decrement the parser's script nesting level by one. If the
@@ -603,44 +637,12 @@ void HTMLParserScriptRunner::ProcessScriptElementInternal(
   }
 }
 
-void HTMLParserScriptRunner::RecordMetricsAtParseEnd() const {
-  // This method is called just before starting execution of force defer
-  // scripts in order to capture the all force deferred scripts in
-  // |force_deferred_scripts_| before any are popped for execution.
-
-  if (!document_->GetFrame())
-    return;
-
-  if (base::FeatureList::IsEnabled(features::kForceDeferScriptIntervention)) {
-    uint32_t force_deferred_external_script_count = 0;
-    for (const auto& pending_script : force_deferred_scripts_) {
-      if (pending_script->IsExternal())
-        force_deferred_external_script_count++;
-    }
-    if (document_->IsInMainFrame()) {
-      UMA_HISTOGRAM_COUNTS_100("Blink.Script.ForceDeferredScripts.Mainframe",
-                               force_deferred_scripts_.size());
-      UMA_HISTOGRAM_COUNTS_100(
-          "Blink.Script.ForceDeferredScripts.Mainframe.External",
-          force_deferred_external_script_count);
-    } else {
-      UMA_HISTOGRAM_COUNTS_100("Blink.Script.ForceDeferredScripts.Subframe",
-                               force_deferred_scripts_.size());
-      UMA_HISTOGRAM_COUNTS_100(
-          "Blink.Script.ForceDeferredScripts.Subframe.External",
-          force_deferred_external_script_count);
-    }
-  }
-}
-
 void HTMLParserScriptRunner::Trace(Visitor* visitor) const {
   visitor->Trace(reentry_permit_);
   visitor->Trace(document_);
   visitor->Trace(host_);
   visitor->Trace(parser_blocking_script_);
-  visitor->Trace(force_deferred_scripts_);
   visitor->Trace(scripts_to_execute_after_parsing_);
-  visitor->Trace(delayer_for_force_defer_);
   PendingScriptClient::Trace(visitor);
 }
 

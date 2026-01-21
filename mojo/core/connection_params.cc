@@ -6,7 +6,6 @@
 
 #include <utility>
 
-
 namespace mojo {
 namespace core {
 
@@ -14,10 +13,6 @@ ConnectionParams::ConnectionParams() = default;
 
 ConnectionParams::ConnectionParams(PlatformChannelEndpoint endpoint)
     : endpoint_(std::move(endpoint)) {}
-
-ConnectionParams::ConnectionParams(
-    PlatformChannelServerEndpoint server_endpoint)
-    : server_endpoint_(std::move(server_endpoint)) {}
 
 ConnectionParams::ConnectionParams(ConnectionParams&&) = default;
 

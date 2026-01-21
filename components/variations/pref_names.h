@@ -20,7 +20,10 @@ COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsCountry[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsCrashStreak[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsFailedToFetchSeedStreak[];
+COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsGoogleGroups[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsLastFetchTime[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsLimitedEntropySyntheticTrialSeed[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedMilestone[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsPermanentConsistencyCountry[];
@@ -41,6 +44,14 @@ extern const char kVariationsSafeSeedSessionConsistencyCountry[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSafeSeedSignature[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedDate[];
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedSignature[];
+COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedSerialNumber[];
+COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsStickyStudies[];
+
+// For chrome://field-trial-internals.
+COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsForcedFieldTrials[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsForcedTrialExpiration[];
+COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsForcedTrialStarts[];
 
 }  // namespace prefs
 }  // namespace variations

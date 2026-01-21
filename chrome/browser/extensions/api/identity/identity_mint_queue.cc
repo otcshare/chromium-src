@@ -5,13 +5,15 @@
 #include "chrome/browser/extensions/api/identity/identity_mint_queue.h"
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/trace_event/trace_event.h"
+#include "extensions/buildflags/buildflags.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
-IdentityMintRequestQueue::IdentityMintRequestQueue() {
-}
+IdentityMintRequestQueue::IdentityMintRequestQueue() = default;
 
 IdentityMintRequestQueue::~IdentityMintRequestQueue() {
   for (RequestQueueMap::const_iterator
@@ -32,8 +34,8 @@ void IdentityMintRequestQueue::RequestStart(
     IdentityMintRequestQueue::MintType type,
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("identity", "IdentityMintRequestQueue",
-                                    request, "type", type);
+  TRACE_EVENT_BEGIN("identity", "IdentityMintRequestQueue",
+                    perfetto::Track::FromPointer(request), "type", type);
   RequestQueue& request_queue = GetRequestQueueMap(type)[key];
   request_queue.push_back(request);
   // If this is the first request, start it now. RequestComplete will start
@@ -46,8 +48,8 @@ void IdentityMintRequestQueue::RequestComplete(
     IdentityMintRequestQueue::MintType type,
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
-  TRACE_EVENT_NESTABLE_ASYNC_END1("identity", "IdentityMintRequestQueue",
-                                  request, "completed", "RequestComplete");
+  TRACE_EVENT_END("identity", perfetto::Track::FromPointer(request),
+                  "completed", "RequestComplete");
   RequestQueue& request_queue = GetRequestQueueMap(type)[key];
   CHECK_EQ(request_queue.front(), request);
   request_queue.pop_front();
@@ -58,8 +60,8 @@ void IdentityMintRequestQueue::RequestComplete(
 void IdentityMintRequestQueue::RequestCancel(
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
-  TRACE_EVENT_NESTABLE_ASYNC_END1("identity", "IdentityMintRequestQueue",
-                                  request, "completed", "RequestCancel");
+  TRACE_EVENT_END("identity", perfetto::Track::FromPointer(request),
+                  "completed", "RequestCancel");
   GetRequestQueueMap(MINT_TYPE_INTERACTIVE)[key].remove(request);
   GetRequestQueueMap(MINT_TYPE_NONINTERACTIVE)[key].remove(request);
 }
@@ -67,7 +69,7 @@ void IdentityMintRequestQueue::RequestCancel(
 bool IdentityMintRequestQueue::empty(IdentityMintRequestQueue::MintType type,
                                      const ExtensionTokenKey& key) {
   RequestQueueMap& request_queue_map = GetRequestQueueMap(type);
-  return !base::Contains(request_queue_map, key) ||
+  return !request_queue_map.contains(key) ||
          (request_queue_map.find(key))->second.empty();
 }
 
@@ -81,8 +83,8 @@ IdentityMintRequestQueue::GetRequestQueueMap(
 void IdentityMintRequestQueue::RunRequest(
     IdentityMintRequestQueue::MintType type,
     RequestQueue& request_queue) {
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("identity", "RunRequest",
-                                      request_queue.front());
+  TRACE_EVENT_INSTANT("identity", "RunRequest",
+                      perfetto::Track::FromPointer(request_queue.front()));
   request_queue.front()->StartMintToken(type);
 }
 

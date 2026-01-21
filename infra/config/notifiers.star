@@ -2,29 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("//lib/branches.star", "branches")
+load("@chromium-luci//notifiers.star", "notifiers")
 
 luci.notifier(
-    name = "chromesec-lkgr-failures",
+    name = "chrome-fuzzing-core",
     on_status_change = True,
     notify_emails = [
-        "chromesec-lkgr-failures@google.com",
-    ],
-)
-
-luci.notifier(
-    name = "chrome-lacros-engprod-alerts",
-    on_status_change = True,
-    notify_emails = [
-        "chrome-lacros-engprod-alerts@google.com",
-    ],
-)
-
-luci.notifier(
-    name = "chrome-memory-safety",
-    on_status_change = True,
-    notify_emails = [
-        "chrome-memory-safety+bots@google.com",
+        "chrome-fuzzing-core+bots@google.com",
     ],
 )
 
@@ -48,10 +32,12 @@ luci.notifier(
 )
 
 luci.notifier(
-    name = "chrome-memory-sheriffs",
-    on_status_change = True,
+    name = "chromium-android-device-flasher",
+    # android-device-flasher runs only once a week. So have it sends
+    # notifications whenever there is an infra failure.
+    on_occurrence = ["INFRA_FAILURE"],
     notify_emails = [
-        "chrome-memory-sheriffs+bots@google.com",
+        "chromium-infra+failures@google.com",
     ],
 )
 
@@ -64,10 +50,18 @@ luci.notifier(
 )
 
 luci.notifier(
-    name = "chromium-3pp-packager",
-    on_new_status = ["FAILURE"],
+    name = "chromium-infra",
+    on_new_status = ["FAILURE", "INFRA_FAILURE"],
     notify_emails = [
-        "chromium-3pp-packager+failures@google.com",
+        "chromium-infra+failures@google.com",
+    ],
+)
+
+luci.notifier(
+    name = "codeql-infra",
+    on_status_change = True,
+    notify_emails = [
+        "flowerhack@google.com",
     ],
 )
 
@@ -75,15 +69,7 @@ luci.notifier(
     name = "cr-fuchsia",
     on_status_change = True,
     notify_emails = [
-        "chrome-fuchsia-gardener@grotations.appspotmail.com",
-    ],
-)
-
-luci.notifier(
-    name = "cr-fuchsia-engprod",
-    on_status_change = True,
-    notify_emails = [
-        "chrome-fuchsia-engprod+builder-notification@google.com",
+        "chrome-fuchsia-engprod+builder-notification@grotations.appspotmail.com",
     ],
 )
 
@@ -104,18 +90,11 @@ luci.notifier(
     ],
 )
 
-luci.notifier(
-    name = "weblayer-sheriff",
-    on_new_status = ["FAILURE"],
-    notify_emails = [
-        "weblayer-sheriff@grotations.appspotmail.com",
-    ],
-)
-
 TREE_CLOSING_STEPS_REGEXP = "\\b({})\\b".format("|".join([
     "bot_update",
     "compile",
     "gclient runhooks",
+    "generate_build_files",
     "runhooks",
     "update",
     "\\w*nocompile_test",
@@ -133,7 +112,7 @@ def _empty_notifier(*, name):
     )
 
 def tree_closer(*, name, tree_status_host, **kwargs):
-    if branches.matches(branches.MAIN):
+    if notifiers.tree_closer_branch():
         luci.tree_closer(
             name = name,
             tree_status_host = tree_status_host,
@@ -154,7 +133,7 @@ tree_closer(
 )
 
 def tree_closure_notifier(*, name, **kwargs):
-    if branches.matches(branches.MAIN):
+    if notifiers.tree_closer_branch():
         luci.notifier(
             name = name,
             on_occurrence = ["FAILURE"],
@@ -207,18 +186,6 @@ tree_closure_notifier(
     ],
 )
 
-tree_closure_notifier(
-    name = "linux-ozone-rel",
-    notify_emails = [
-        "fwang@chromium.org",
-        "maksim.sisov@chromium.org",
-        "rjkroege@chromium.org",
-        "thomasanderson@chromium.org",
-        "timbrown@chromium.org",
-        "tonikitoo@chromium.org",
-    ],
-)
-
 luci.notifier(
     name = "Site Isolation Android",
     notify_emails = [
@@ -257,8 +224,9 @@ luci.notifier(
 luci.notifier(
     name = "annotator-rel",
     notify_emails = [
-        "pastarmovj@chromium.org",
+        "crmullins@chromium.org",
         "nicolaso@chromium.org",
+        "pastarmovj@chromium.org",
     ],
     on_new_status = ["FAILURE"],
 )
@@ -284,4 +252,200 @@ luci.notifier(
         "chrome-a11y-alerts@google.com",
     ],
     on_new_status = ["FAILURE"],
+)
+
+luci.notifier(
+    name = "chrometto-sheriff",
+    notify_emails = [
+        "chrometto-sheriff-oncall@google.com",
+    ],
+    on_new_status = ["FAILURE"],
+)
+
+luci.notifier(
+    name = "peeps-security-core-ssci",
+    notify_emails = [
+        "chops-security-core+ssci-alert@google.com",
+    ],
+    on_occurrence = ["FAILURE"],
+    on_new_status = ["SUCCESS", "INFRA_FAILURE"],
+    template = luci.notifier_template(
+        name = "build_with_step_summary_template",
+        body = io.read_file("templates/build_with_step_summary.template"),
+    ),
+)
+
+luci.notifier(
+    name = "Chromium Build Time Watcher",
+    notify_emails = [
+        "jwata@google.com",
+        "pasthana@google.com",
+        "thakis@google.com",
+    ],
+    on_new_status = ["INFRA_FAILURE"],
+)
+
+luci.notifier(
+    name = "chrome-fake-vaapi-test",
+    on_occurrence = ["SUCCESS", "FAILURE", "INFRA_FAILURE"],
+    failed_step_regexp = "video_decode_accelerator_tests_fake_vaapi.*",
+    notify_emails = [
+        "bchoobineh@google.com",
+    ],
+)
+
+luci.notifier(
+    name = "chrome-v4l2-visl-test",
+    on_occurrence = ["SUCCESS", "FAILURE", "INFRA_FAILURE"],
+    failed_step_regexp = "video_decode_accelerator_tests_v4l2*",
+    notify_emails = [
+        "stevecho@google.com",
+    ],
+)
+
+luci.notifier(
+    name = "multiscreen-owners",
+    on_new_status = ["FAILURE"],
+    notify_emails = [
+        "web-windowing-team@google.com",
+    ],
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-browser-infra-team@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = True,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-fuchsia-engprod@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "clank-build@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "clank-engprod@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-gpu-infra@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "angle-team@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "browser-automation-staff@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "cronet-team@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "cronet-sheriff@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "bling-engprod@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chromeos-chrome-build@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "core-devices-eng@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-fuzzing-core@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "v8-infra@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-desktop-engprod@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-build-team@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "cast-eng@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-linux-engprod@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "chrome-security-architecture@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
+    gardened_builders_only = True,
+)
+
+luci.builder_health_notifier(
+    owner_email = "omaha-core@google.com",
+    ignore_buckets = ["try"],
+    notify_all_healthy = False,
 )

@@ -4,17 +4,21 @@
 
 #include "remoting/host/native_messaging/native_messaging_reader.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
@@ -33,7 +37,7 @@ namespace {
 // uint32_t is specified in the protocol as the type for the message header.
 typedef uint32_t MessageLengthType;
 
-const int kMessageHeaderSize = sizeof(MessageLengthType);
+constexpr size_t kMessageHeaderSize = sizeof(MessageLengthType);
 
 // Limit the size of received messages, to avoid excessive memory-allocation in
 // this process, and potential overflow issues when casting to a signed 32-bit
@@ -83,8 +87,7 @@ NativeMessagingReader::Core::Core(
     : read_stream_(std::move(file)),
       reader_(reader),
       caller_task_runner_(caller_task_runner),
-      read_task_runner_(read_task_runner) {
-}
+      read_task_runner_(read_task_runner) {}
 
 NativeMessagingReader::Core::~Core() = default;
 
@@ -93,18 +96,21 @@ void NativeMessagingReader::Core::ReadMessage() {
 
   // Keep reading messages until the stream is closed or an error occurs.
   while (true) {
-    MessageLengthType message_length;
-    int read_result = read_stream_.ReadAtCurrentPos(
-        reinterpret_cast<char*>(&message_length), kMessageHeaderSize);
+    std::array<uint8_t, kMessageHeaderSize> message_length_bytes;
+    std::optional<size_t> read_result =
+        read_stream_.ReadAtCurrentPos(message_length_bytes);
     if (read_result != kMessageHeaderSize) {
       // 0 means EOF which is normal and should not be logged as an error.
-      if (read_result != 0) {
+      if (!read_result || *read_result != 0) {
         LOG(ERROR) << "Failed to read message header, read returned "
-                   << read_result;
+                   << read_result.value_or(-1);
       }
       NotifyEof();
       return;
     }
+
+    MessageLengthType message_length =
+        base::U32FromNativeEndian(message_length_bytes);
 
     if (message_length > kMaximumMessageSize) {
       LOG(ERROR) << "Message size too large: " << message_length;
@@ -113,19 +119,19 @@ void NativeMessagingReader::Core::ReadMessage() {
     }
 
     std::string message_json(message_length, '\0');
-    read_result =
-        read_stream_.ReadAtCurrentPos(std::data(message_json), message_length);
-    if (read_result != static_cast<int>(message_length)) {
+    read_result = read_stream_.ReadAtCurrentPos(
+        base::as_writable_byte_span(message_json));
+    if (read_result != message_length) {
       LOG(ERROR) << "Failed to read message body, read returned "
-                 << read_result;
+                 << read_result.value_or(-1);
       NotifyEof();
       return;
     }
 
-    std::unique_ptr<base::Value> message =
-        base::JSONReader::ReadDeprecated(message_json);
+    std::optional<base::Value> message = base::JSONReader::Read(
+        message_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (!message) {
-      LOG(ERROR) << "Failed to parse JSON message: " << message.get();
+      LOG(ERROR) << "Failed to parse JSON message: " << message_json;
       NotifyEof();
       return;
     }
@@ -133,7 +139,7 @@ void NativeMessagingReader::Core::ReadMessage() {
     // Notify callback of new message.
     caller_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&NativeMessagingReader::InvokeMessageCallback,
-                                  reader_, std::move(message)));
+                                  reader_, std::move(*message)));
   }
 }
 
@@ -171,7 +177,7 @@ NativeMessagingReader::~NativeMessagingReader() {
   // needed for POSIX since it works correctly.
   base::PlatformThreadId thread_id = reader_thread_.GetThreadId();
   base::win::ScopedHandle thread_handle(
-      OpenThread(THREAD_TERMINATE, /*bInheritHandle=*/false, thread_id));
+      OpenThread(THREAD_TERMINATE, /*bInheritHandle=*/false, thread_id.raw()));
   if (!CancelSynchronousIo(thread_handle.Get())) {
     // ERROR_NOT_FOUND means there were no pending IO requests so don't treat
     // that result as an error.
@@ -194,8 +200,7 @@ void NativeMessagingReader::Start(const MessageCallback& message_callback,
                                 base::Unretained(core_.get())));
 }
 
-void NativeMessagingReader::InvokeMessageCallback(
-    std::unique_ptr<base::Value> message) {
+void NativeMessagingReader::InvokeMessageCallback(base::Value message) {
   message_callback_.Run(std::move(message));
 }
 

@@ -160,10 +160,6 @@ void CastContentWindowAura::EnableTouchInput(bool enabled) {
 void CastContentWindowAura::RequestVisibility(
     VisibilityPriority visibility_priority) {}
 
-void CastContentWindowAura::SetActivityContext(base::Value activity_context) {}
-
-void CastContentWindowAura::SetHostContext(base::Value host_context) {}
-
 void CastContentWindowAura::OnWindowVisibilityChanged(aura::Window* window,
                                                       bool visible) {
   if (visible) {
@@ -189,8 +185,7 @@ void CastContentWindowAura::DidStartNavigation(
 
 void CastContentWindowAura::SetFullWindowBounds() {
 #if !BUILDFLAG(IS_CAST_AUDIO_ONLY)
-  gfx::Size display_size =
-      display::Screen::GetScreen()->GetPrimaryDisplay().size();
+  gfx::Size display_size = display::Screen::Get()->GetPrimaryDisplay().size();
   window_->SetBounds(gfx::Rect(display_size.width(), display_size.height()));
 #endif
 }

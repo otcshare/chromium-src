@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "base/atomic_ref_count.h"
-#include "base/bind.h"
-#include "base/callback_forward.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -21,8 +21,7 @@
 #include "base/thread_annotations.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace reporting {
-namespace test {
+namespace reporting::test {
 
 // Usage (in tests only):
 //
@@ -50,6 +49,7 @@ class TestMultiEvent {
         !IsMovable<TupleType>(),
         "std::tuple<ResType...> is not movable. Please use result().");
     RunUntilHasResult();
+    CHECK(result_.has_value()) << "Result must have been set";
     return result_.value();
   }
 
@@ -57,8 +57,13 @@ class TestMultiEvent {
     static_assert(
         IsMovable<TupleType>(),
         "std::tuple<ResType...> is movable. Please use ref_result().");
+    CHECK(!result_retrieved_) << "Result already retrieved";
     RunUntilHasResult();
-    return std::move(result_.value());
+    CHECK(result_.has_value()) << "Result must have been set";
+    auto value = std::move(result_.value());
+    result_.reset();
+    result_retrieved_ = true;
+    return value;
   }
 
   // Returns true if the event callback was never invoked.
@@ -66,9 +71,8 @@ class TestMultiEvent {
 
   // Completion callback to hand over to the processing method.
   [[nodiscard]] base::OnceCallback<void(ResType... res)> cb() {
-    return base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
-                              base::BindOnce(&TestMultiEvent::SetResult,
-                                             weak_ptr_factory_.GetWeakPtr()));
+    return base::BindPostTaskToCurrentDefault(base::BindOnce(
+        &TestMultiEvent::SetResult, weak_ptr_factory_.GetWeakPtr()));
   }
 
   // Repeating completion callback to hand over to the processing method.
@@ -76,10 +80,18 @@ class TestMultiEvent {
   // `result` only waits for one value; repeating declaration is only needed
   // for cases when the caller requires it.
   [[nodiscard]] base::RepeatingCallback<void(ResType... res)> repeating_cb() {
-    return base::BindPostTask(
-        base::SequencedTaskRunner::GetCurrentDefault(),
-        base::BindRepeating(&TestMultiEvent::SetResult,
-                            weak_ptr_factory_.GetWeakPtr()));
+    return base::BindPostTaskToCurrentDefault(base::BindRepeating(
+        [](base::WeakPtr<TestMultiEvent<ResType...>> self, ResType... res) {
+          if (!self) {
+            return;
+          }
+          ASSERT_FALSE(self->repeated_cb_called_)
+              << "repeating_cb() called more than once, but it is only "
+                 "intended to be called once.";
+          self->SetResult(std::forward<ResType>(res)...);
+          self->repeated_cb_called_ = true;
+        },
+        weak_ptr_factory_.GetWeakPtr()));
   }
 
  protected:
@@ -105,11 +117,14 @@ class TestMultiEvent {
 
   void SetResult(ResType... res) {
     base::AutoLock auto_lock(lock_);
+    CHECK(!result_.has_value()) << "Can only be called once";
     result_.emplace(std::forward<ResType>(res)...);
   }
 
   base::Lock lock_;
-  absl::optional<TupleType> result_;
+  std::optional<TupleType> result_;
+  bool repeated_cb_called_ = false;
+  bool result_retrieved_ = false;
   base::WeakPtrFactory<TestMultiEvent<ResType...>> weak_ptr_factory_{this};
 };
 
@@ -134,7 +149,7 @@ class TestEvent : public TestMultiEvent<ResType> {
 
   [[nodiscard]] const ResType& ref_result() {
     static_assert(!TestMultiEvent<ResType>::template IsMovable<ResType>(),
-                  "ResType is movable. Plesae use result().");
+                  "ResType is movable. Please use result().");
     return std::get<0>(TestMultiEvent<ResType>::ref_result());
   }
 
@@ -169,7 +184,7 @@ class TestCallbackWaiter : public TestEvent<bool> {
 
   void Attach(int more = 1) {
     const int old_counter = counter_.Increment(more);
-    DCHECK_GT(old_counter, 0) << "Cannot attach when already being released";
+    CHECK_GT(old_counter, 0) << "Cannot attach when already being released";
   }
 
   void Signal() {
@@ -206,8 +221,6 @@ class TestCallbackAutoWaiter : public TestCallbackWaiter {
   TestCallbackAutoWaiter();
   ~TestCallbackAutoWaiter();
 };
-
-}  // namespace test
-}  // namespace reporting
+}  // namespace reporting::test
 
 #endif  // COMPONENTS_REPORTING_UTIL_TEST_SUPPORT_CALLBACKS_H_

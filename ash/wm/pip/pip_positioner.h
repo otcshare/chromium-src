@@ -6,7 +6,6 @@
 #define ASH_WM_PIP_PIP_POSITIONER_H_
 
 #include "ash/ash_export.h"
-#include "base/memory/weak_ptr.h"
 #include "ui/aura/window.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/rect.h"
@@ -30,8 +29,12 @@ class ASH_EXPORT PipPositioner {
 
   // Adjusts bounds during a drag of a PIP window. For example, this will
   // ensure that the PIP window cannot leave the PIP movement area.
+  // If the window is transformed with `gfx::Transform`, it returns
+  // bounds with unscaled size but with origin that avoids obstacles
+  // even when the scale is applied.
   static gfx::Rect GetBoundsForDrag(const display::Display& display,
-                                    const gfx::Rect& bounds_in_screen);
+                                    const gfx::Rect& bounds_in_screen,
+                                    const gfx::Transform& transform);
 
   // Based on the current PIP window position, finds a final location of where
   // the PIP window should be animated to to show a dismissal off the side

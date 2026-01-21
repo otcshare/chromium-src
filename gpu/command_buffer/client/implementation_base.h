@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/trace_event/memory_dump_provider.h"
@@ -25,8 +25,6 @@
 #include "gpu/command_buffer/client/transfer_buffer.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/context_result.h"
-
-class GrDirectContext;
 
 namespace gpu {
 
@@ -86,10 +84,6 @@ class GLES2_IMPL_EXPORT ImplementationBase
   void GetGpuFence(uint32_t gpu_fence_id,
                    base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)>
                        callback) override;
-  void SetGrContext(GrDirectContext* gr) override;
-  bool HasGrContextSupport() const override;
-  void WillCallGLFromSkia() override;
-  void DidCallGLFromSkia() override;
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,

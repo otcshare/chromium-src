@@ -39,6 +39,7 @@ class EventModelImpl : public EventModel {
                          uint32_t window_size) const override;
   void IncrementEvent(const std::string& event_name,
                       uint32_t current_day) override;
+  void ClearEvent(const std::string& event_name) override;
   void IncrementSnooze(const std::string& event_name,
                        uint32_t current_day,
                        base::Time current_time) override;
@@ -51,6 +52,8 @@ class EventModelImpl : public EventModel {
   bool IsSnoozeDismissed(const std::string& event_name) const override;
 
  private:
+  friend class EventStorageMigration;
+
   // Callback for loading the underlying store.
   void OnStoreLoaded(OnModelInitializationFinished callback,
                      uint32_t current_day,

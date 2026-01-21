@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#import "base/memory/raw_ptr.h"
 #include "components/language/ios/browser/ios_language_detection_tab_helper.h"
 
 namespace web {
@@ -37,13 +38,14 @@ class FakeLanguageDetectionTabHelperObserver
   void ResetLanguageDetectionDetails();
 
  private:
-  web::WebState* web_state_;
+  raw_ptr<web::WebState> web_state_;
   std::unique_ptr<translate::LanguageDetectionDetails>
       language_detection_details_;
 
   // Stops observing the IOSLanguageDetectionTabHelper instance associated with
   // `web_state_` and sets `web_state_` to null.
-  void StopObservingIOSLanguageDetectionTabHelper();
+  void StopObservingIOSLanguageDetectionTabHelper(
+      language::IOSLanguageDetectionTabHelper* tab_helper);
 };
 
 #endif  // IOS_CHROME_TEST_FAKES_FAKE_LANGUAGE_DETECTION_TAB_HELPER_OBSERVER_H_

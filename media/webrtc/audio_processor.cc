@@ -4,6 +4,7 @@
 
 #include "media/webrtc/audio_processor.h"
 
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -11,30 +12,35 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/containers/heap_array.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
-#include "build/chromeos_buildflags.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_fifo.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/channel_layout.h"
 #include "media/base/limits.h"
+#include "media/base/media_switches.h"
 #include "media/webrtc/constants.h"
 #include "media/webrtc/helpers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "media/webrtc/webrtc_features.h"
+#include "third_party/tflite/src/tensorflow/lite/model_builder.h"
 #include "third_party/webrtc/modules/audio_processing/include/audio_processing.h"
 #include "third_party/webrtc_overrides/task_queue_factory.h"
 
 namespace media {
-
 namespace {
 constexpr int kBuffersPerSecond = 100;  // 10 ms per buffer.
 
@@ -62,13 +68,31 @@ int GetCaptureBufferSize(bool need_webrtc_processing,
   // size was provided, use it. It can be harmful, in terms of CPU/power
   // consumption, to use smaller buffer sizes than the native size.
   // (https://crbug.com/362261).
-  if (int hardware_buffer_size = device_format.frames_per_buffer())
+  if (int hardware_buffer_size = device_format.frames_per_buffer()) {
     return hardware_buffer_size;
+  }
 
   // If the buffer size is missing from the device parameters, provide 10ms as
   // a fall-back.
   return buffer_size_10_ms;
 #endif
+}
+
+bool ApmNeedsPlayoutReference(const webrtc::AudioProcessing* apm) {
+  if (!apm) {
+    // APM is not available; hence, observing the playout reference is not
+    // needed.
+    return false;
+  }
+  // TODO(crbug.com/40889535): Move the logic below into WebRTC APM since APM
+  // may use injected sub-modules the usage of which is not reflected in the APM
+  // config (e.g., render side processing).
+  const webrtc::AudioProcessing::Config config = apm->GetConfig();
+  const bool aec = config.echo_canceller.enabled;
+  const bool legacy_agc =
+      config.gain_controller1.enabled &&
+      !config.gain_controller1.analog_gain_controller.enabled;
+  return aec || legacy_agc;
 }
 }  // namespace
 
@@ -80,22 +104,23 @@ class AudioProcessorCaptureBus {
  public:
   AudioProcessorCaptureBus(int channels, int frames)
       : bus_(media::AudioBus::Create(channels, frames)),
-        channel_ptrs_(new float*[channels]) {
+        channel_ptrs_(
+            base::HeapArray<float*>::WithSize(static_cast<size_t>(channels))) {
     bus_->Zero();
   }
 
   media::AudioBus* bus() { return bus_.get(); }
 
-  float* const* channel_ptrs() {
+  base::span<float* const> channel_ptrs() {
     for (int i = 0; i < bus_->channels(); ++i) {
-      channel_ptrs_[i] = bus_->channel(i);
+      channel_ptrs_[i] = bus_->channel(i).data();
     }
-    return channel_ptrs_.get();
+    return channel_ptrs_;
   }
 
  private:
   std::unique_ptr<media::AudioBus> bus_;
-  std::unique_ptr<float*[]> channel_ptrs_;
+  base::HeapArray<float*> channel_ptrs_;
 };
 
 // Wraps AudioFifo to provide a cleaner interface to AudioProcessor.
@@ -145,16 +170,14 @@ class AudioProcessorCaptureFifo {
     const media::AudioBus* source_to_push = &source;
 
     if (audio_source_intermediate_) {
-      for (int i = 0; i < destination_->bus()->channels(); ++i) {
-        audio_source_intermediate_->SetChannelData(
-            i, const_cast<float*>(source.channel(i)));
-      }
       audio_source_intermediate_->set_frames(source.frames());
+      audio_source_intermediate_->SetAllChannels(source.AllChannels());
       source_to_push = audio_source_intermediate_.get();
     }
 
     if (fifo_) {
-      CHECK_LT(fifo_->frames(), destination_->bus()->frames());
+      CHECK_LT(fifo_->frames(),
+               static_cast<size_t>(destination_->bus()->frames()));
       next_audio_delay_ =
           audio_delay + fifo_->frames() * base::Seconds(1) / sample_rate_;
       fifo_->Push(source_to_push);
@@ -171,16 +194,19 @@ class AudioProcessorCaptureFifo {
   bool Consume(AudioProcessorCaptureBus** destination,
                base::TimeDelta* audio_delay) {
     if (fifo_) {
-      if (fifo_->frames() < destination_->bus()->frames())
+      if (fifo_->frames() <
+          static_cast<size_t>(destination_->bus()->frames())) {
         return false;
+      }
 
       fifo_->Consume(destination_->bus(), 0, destination_->bus()->frames());
       *audio_delay = next_audio_delay_;
       next_audio_delay_ -=
           destination_->bus()->frames() * base::Seconds(1) / sample_rate_;
     } else {
-      if (!data_available_)
+      if (!data_available_) {
         return false;
+      }
       *audio_delay = next_audio_delay_;
       // The data was already copied to |destination_| in this case.
       data_available_ = false;
@@ -216,18 +242,21 @@ std::unique_ptr<AudioProcessor> AudioProcessor::Create(
     LogCallback log_callback,
     const AudioProcessingSettings& settings,
     const media::AudioParameters& input_format,
-    const media::AudioParameters& output_format) {
+    const media::AudioParameters& output_format,
+    raw_ptr<const tflite::FlatBufferModel>
+        neural_residual_echo_estimator_model) {
   log_callback.Run(base::StringPrintf(
       "AudioProcessor::Create({multi_channel_capture_processing=%s})",
-      settings.multi_channel_capture_processing ? "true" : "false"));
+      base::ToString(settings.multi_channel_capture_processing)));
 
-  rtc::scoped_refptr<webrtc::AudioProcessing> webrtc_audio_processing =
-      media::CreateWebRtcAudioProcessingModule(settings);
+  auto [webrtc_audio_processing, added_aec_delay] =
+      media::CreateWebRtcAudioProcessingModule(
+          settings, neural_residual_echo_estimator_model);
 
   return std::make_unique<AudioProcessor>(
       std::move(deliver_processed_audio_callback), std::move(log_callback),
       input_format, output_format, std::move(webrtc_audio_processing),
-      settings.stereo_mirroring);
+      ApmNeedsPlayoutReference(webrtc_audio_processing.get()), added_aec_delay);
 }
 
 AudioProcessor::AudioProcessor(
@@ -235,11 +264,13 @@ AudioProcessor::AudioProcessor(
     LogCallback log_callback,
     const media::AudioParameters& input_format,
     const media::AudioParameters& output_format,
-    rtc::scoped_refptr<webrtc::AudioProcessing> webrtc_audio_processing,
-    bool stereo_mirroring)
+    webrtc::scoped_refptr<webrtc::AudioProcessing> webrtc_audio_processing,
+    bool needs_playout_reference,
+    base::TimeDelta added_aec_delay)
     : webrtc_audio_processing_(webrtc_audio_processing),
-      stereo_mirroring_(stereo_mirroring),
+      needs_playout_reference_(needs_playout_reference),
       log_callback_(std::move(log_callback)),
+      added_aec_delay_(added_aec_delay),
       input_format_(input_format),
       output_format_(output_format),
       deliver_processed_audio_callback_(
@@ -270,9 +301,10 @@ AudioProcessor::AudioProcessor(
         __func__, input_format_.sample_rate(), output_format_.sample_rate()));
   }
   SendLogMessage(base::StringPrintf(
-      "%s({input_format_=[%s], output_format_=[%s]})", __func__,
-      input_format_.AsHumanReadableString().c_str(),
-      output_format_.AsHumanReadableString().c_str()));
+      "%s({input_format_=[%s], output_format_=[%s], added_aec_delay=[%d]})",
+      __func__, input_format_.AsHumanReadableString().c_str(),
+      output_format_.AsHumanReadableString().c_str(),
+      added_aec_delay_.InMilliseconds()));
 
   // If audio processing is needed, rebuffer to APM frame size. If not, rebuffer
   // to the requested output format.
@@ -302,8 +334,7 @@ AudioProcessor::~AudioProcessor() {
 void AudioProcessor::ProcessCapturedAudio(const media::AudioBus& audio_source,
                                           base::TimeTicks audio_capture_time,
                                           int num_preferred_channels,
-                                          double volume,
-                                          bool key_pressed) {
+                                          double volume) {
   DCHECK(deliver_processed_audio_callback_);
   // Sanity-check the input audio format in debug builds.
   DCHECK(input_format_.IsValid());
@@ -311,8 +342,10 @@ void AudioProcessor::ProcessCapturedAudio(const media::AudioBus& audio_source,
   DCHECK_EQ(audio_source.frames(), input_format_.frames_per_buffer());
 
   base::TimeDelta capture_delay = base::TimeTicks::Now() - audio_capture_time;
-  TRACE_EVENT1("audio", "AudioProcessor::ProcessCapturedAudio", "delay (ms)",
-               capture_delay.InMillisecondsF());
+  TRACE_EVENT("audio", "AudioProcessor::ProcessCapturedAudio",
+              "capture_time (ms)",
+              (audio_capture_time - base::TimeTicks()).InMillisecondsF(),
+              "capture_delay (ms)", capture_delay.InMillisecondsF());
 
   capture_fifo_->Push(audio_source, capture_delay);
 
@@ -322,31 +355,23 @@ void AudioProcessor::ProcessCapturedAudio(const media::AudioBus& audio_source,
   while (capture_fifo_->Consume(&process_bus, &capture_delay)) {
     // Use the process bus directly if audio processing is disabled.
     AudioProcessorCaptureBus* output_bus = process_bus;
-    absl::optional<double> new_volume;
+    std::optional<double> new_volume;
     if (webrtc_audio_processing_) {
       output_bus = output_bus_.get();
-      new_volume =
-          ProcessData(process_bus->channel_ptrs(), process_bus->bus()->frames(),
-                      capture_delay, volume, key_pressed,
-                      num_preferred_channels, output_bus->channel_ptrs());
+      new_volume = ProcessData(process_bus->channel_ptrs(),
+                               process_bus->bus()->frames(), capture_delay,
+                               volume, num_preferred_channels, output_bus);
     }
 
-    // Swap channels before interleaving the data.
-    if (stereo_mirroring_ &&
-        output_format_.channel_layout() == media::CHANNEL_LAYOUT_STEREO) {
-      // Swap the first and second channels.
-      output_bus->bus()->SwapChannels(0, 1);
-    }
-
-    deliver_processed_audio_callback_.Run(*output_bus->bus(),
-                                          audio_capture_time, new_volume);
+    deliver_processed_audio_callback_.Run(
+        *output_bus->bus(), audio_capture_time - added_aec_delay_, new_volume);
   }
 }
 
 void AudioProcessor::SetOutputWillBeMuted(bool muted) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   SendLogMessage(
-      base::StringPrintf("%s({muted=%s})", __func__, muted ? "true" : "false"));
+      base::StringPrintf("%s({muted=%s})", __func__, base::ToString(muted)));
   if (webrtc_audio_processing_) {
     webrtc_audio_processing_->set_output_will_be_muted(muted);
   }
@@ -358,8 +383,8 @@ void AudioProcessor::OnStartDump(base::File dump_file) {
 
   if (webrtc_audio_processing_) {
     if (!worker_queue_) {
-      worker_queue_ = std::make_unique<rtc::TaskQueue>(
-          CreateWebRtcTaskQueue(rtc::TaskQueue::Priority::LOW));
+      worker_queue_ =
+          CreateWebRtcTaskQueue(webrtc::TaskQueueFactory::Priority::LOW);
     }
     // Here tasks will be posted on the |worker_queue_|. It must be
     // kept alive until media::StopEchoCancellationDump is called or the
@@ -376,17 +401,19 @@ void AudioProcessor::OnStartDump(base::File dump_file) {
 
 void AudioProcessor::OnStopDump() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (!worker_queue_)
+  if (!worker_queue_) {
     return;
-  if (webrtc_audio_processing_)
+  }
+  if (webrtc_audio_processing_) {
     media::StopEchoCancellationDump(webrtc_audio_processing_.get());
-  worker_queue_.reset(nullptr);
+  }
+  worker_queue_ = nullptr;
 }
 
 void AudioProcessor::OnPlayoutData(const AudioBus& audio_bus,
                                    int sample_rate,
                                    base::TimeDelta audio_delay) {
-  TRACE_EVENT1("audio", "AudioProcessor::OnPlayoutData", "delay (ms)",
+  TRACE_EVENT1("audio", "AudioProcessor::OnPlayoutData", "playout_delay (ms)",
                audio_delay.InMillisecondsF());
 
   if (!webrtc_audio_processing_) {
@@ -419,14 +446,16 @@ void AudioProcessor::AnalyzePlayoutData(const AudioBus& audio_bus,
       unbuffered_playout_delay_ +
       AudioTimestampHelper::FramesToTime(frame_delay, *playout_sample_rate_hz_);
   playout_delay_ = playout_delay;
-  TRACE_EVENT1("audio", "AudioProcessor::AnalyzePlayoutData", "delay (ms)",
-               playout_delay.InMillisecondsF());
+  TRACE_EVENT("audio", "AudioProcessor::AnalyzePlayoutData", "delay (frames)",
+              frame_delay, "playout_delay (ms)",
+              playout_delay.InMillisecondsF());
 
   webrtc::StreamConfig input_stream_config(*playout_sample_rate_hz_,
                                            audio_bus.channels());
   std::array<const float*, media::limits::kMaxChannels> input_ptrs;
-  for (int i = 0; i < audio_bus.channels(); ++i)
-    input_ptrs[i] = audio_bus.channel(i);
+  for (int i = 0; i < audio_bus.channels(); ++i) {
+    input_ptrs[i] = audio_bus.channel(i).data();
+  }
 
   const int apm_error = webrtc_audio_processing_->AnalyzeReverseStream(
       input_ptrs.data(), input_stream_config);
@@ -439,19 +468,19 @@ void AudioProcessor::AnalyzePlayoutData(const AudioBus& audio_bus,
 }
 
 webrtc::AudioProcessingStats AudioProcessor::GetStats() {
-  if (!webrtc_audio_processing_)
+  if (!webrtc_audio_processing_) {
     return {};
+  }
   return webrtc_audio_processing_->GetStatistics();
 }
 
-absl::optional<double> AudioProcessor::ProcessData(
-    const float* const* process_ptrs,
+std::optional<double> AudioProcessor::ProcessData(
+    base::span<const float* const> process_ptrs,
     int process_frames,
     base::TimeDelta capture_delay,
     double volume,
-    bool key_pressed,
     int num_preferred_channels,
-    float* const* output_ptrs) {
+    AudioProcessorCaptureBus* output_bus) {
   DCHECK(webrtc_audio_processing_);
 
   const base::TimeDelta playout_delay = playout_delay_;
@@ -487,8 +516,7 @@ absl::optional<double> AudioProcessor::ProcessData(
   // controller.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   DCHECK_LE(volume, 1.0);
-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS) || \
-    BUILDFLAG(IS_OPENBSD)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_OPENBSD)
   // We have a special situation on Linux where the microphone volume can be
   // "higher than maximum". The input volume slider in the sound preference
   // allows the user to set a scaling that is higher than 100%. It means that
@@ -507,7 +535,6 @@ absl::optional<double> AudioProcessor::ProcessData(
   DCHECK_LE(current_analog_gain_level, max_analog_gain_level);
 
   ap->set_stream_analog_level(current_analog_gain_level);
-  ap->set_stream_key_pressed(key_pressed);
 
   // Depending on how many channels the sinks prefer, the number of APM output
   // channels is allowed to vary between 1 and the number of channels of the
@@ -525,8 +552,9 @@ absl::optional<double> AudioProcessor::ProcessData(
   const webrtc::StreamConfig apm_output_config = webrtc::StreamConfig(
       output_format_.sample_rate(), num_apm_output_channels);
 
-  int err = ap->ProcessStream(process_ptrs, CreateStreamConfig(input_format_),
-                              apm_output_config, output_ptrs);
+  int err =
+      ap->ProcessStream(process_ptrs.data(), CreateStreamConfig(input_format_),
+                        apm_output_config, output_bus->channel_ptrs().data());
   DCHECK_EQ(err, 0) << "ProcessStream() error: " << err;
 
   // Upmix if the number of channels processed by APM is less than the number
@@ -535,8 +563,9 @@ absl::optional<double> AudioProcessor::ProcessData(
     if (num_apm_output_channels == 1) {
       // The right channel is a copy of the left channel. Remaining channels
       // have already been set to zero at initialization.
-      memcpy(&output_ptrs[1][0], &output_ptrs[0][0],
-             output_format_.frames_per_buffer() * sizeof(output_ptrs[0][0]));
+      CHECK_GE(output_bus->bus()->channels(), 2);
+      output_bus->bus()->channel(1).copy_from_nonoverlapping(
+          output_bus->bus()->channel(0));
     }
   }
 
@@ -544,7 +573,7 @@ absl::optional<double> AudioProcessor::ProcessData(
   const int recommended_analog_gain_level =
       ap->recommended_stream_analog_level();
   if (recommended_analog_gain_level == current_analog_gain_level) {
-    return absl::nullopt;
+    return std::nullopt;
   } else {
     return static_cast<double>(recommended_analog_gain_level) /
            media::MaxWebRtcAnalogGainLevel();
@@ -558,7 +587,7 @@ void AudioProcessor::SendLogMessage(const std::string& message) {
                                        reinterpret_cast<uintptr_t>(this)));
 }
 
-absl::optional<AudioParameters> AudioProcessor::ComputeInputFormat(
+std::optional<AudioParameters> AudioProcessor::ComputeInputFormat(
     const AudioParameters& device_format,
     const AudioProcessingSettings& audio_processing_settings) {
   const ChannelLayout channel_layout = device_format.channel_layout();
@@ -567,7 +596,7 @@ absl::optional<AudioParameters> AudioProcessor::ComputeInputFormat(
   if (channel_layout != CHANNEL_LAYOUT_MONO &&
       channel_layout != CHANNEL_LAYOUT_STEREO &&
       channel_layout != CHANNEL_LAYOUT_DISCRETE) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   AudioParameters params(
@@ -597,14 +626,15 @@ AudioParameters AudioProcessor::GetDefaultOutputFormat(
   // TODO(crbug.com/1336055): Investigate why chromecast devices need special
   // logic here.
   const int output_sample_rate =
-      need_webrtc_audio_processing ?
+      need_webrtc_audio_processing
+          ?
 #if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-                                   std::min(media::kAudioProcessingSampleRateHz,
-                                            input_format.sample_rate())
+          std::min(media::WebRtcAudioProcessingSampleRateHz(),
+                   input_format.sample_rate())
 #else
-                                   media::kAudioProcessingSampleRateHz
+          media::WebRtcAudioProcessingSampleRateHz()
 #endif
-                                   : input_format.sample_rate();
+          : input_format.sample_rate();
 
   media::ChannelLayoutConfig output_channel_layout_config;
   if (!need_webrtc_audio_processing) {
@@ -648,4 +678,5 @@ AudioParameters AudioProcessor::GetDefaultOutputFormat(
       output_frames);
   return output_format;
 }
+
 }  // namespace media

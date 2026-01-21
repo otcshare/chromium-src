@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -66,7 +66,7 @@ PacFileDataWithSource::PacFileDataWithSource(const PacFileDataWithSource&) =
 PacFileDataWithSource& PacFileDataWithSource::operator=(
     const PacFileDataWithSource&) = default;
 
-base::Value PacFileDecider::PacSource::NetLogParams(
+base::Value::Dict PacFileDecider::PacSource::NetLogParams(
     const GURL& effective_pac_url) const {
   base::Value::Dict dict;
   std::string source;
@@ -84,7 +84,7 @@ base::Value PacFileDecider::PacSource::NetLogParams(
       break;
   }
   dict.Set("source", source);
-  return base::Value(std::move(dict));
+  return dict;
 }
 
 PacFileDecider::PacFileDecider(PacFileFetcher* pac_file_fetcher,
@@ -119,6 +119,7 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
 
   pac_mandatory_ = config.value().pac_mandatory();
   have_custom_pac_url_ = config.value().has_pac_url();
+  proxy_override_rules_ = config.value().proxy_override_rules();
 
   pac_sources_ = BuildPacSourcesFallbackList(config.value());
   DCHECK(!pac_sources_.empty());
@@ -217,8 +218,6 @@ int PacFileDecider::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;
@@ -260,7 +259,7 @@ int PacFileDecider::DoQuickCheck() {
     return OK;
   }
 
-  std::string host = current_pac_source().url.host();
+  std::string host = current_pac_source().url.GetHost();
 
   HostResolver::ResolveHostParameters parameters;
   // We use HIGHEST here because proxy decision blocks doing any other requests.
@@ -282,7 +281,7 @@ int PacFileDecider::DoQuickCheck() {
   HostResolver* host_resolver =
       pac_file_fetcher_->GetRequestContext()->host_resolver();
   resolve_request_ = host_resolver->CreateRequest(
-      HostPortPair(host, 80),
+      HostPortPair(std::move(host), 80),
       pac_file_fetcher_->isolation_info().network_anonymization_key(), net_log_,
       parameters);
 
@@ -412,6 +411,8 @@ int PacFileDecider::DoVerifyPacScriptComplete(int result) {
       config = ProxyConfig::CreateAutoDetect();
     }
   }
+
+  config.set_proxy_override_rules(proxy_override_rules_);
 
   effective_config_ = ProxyConfigWithAnnotation(
       config, net::NetworkTrafficAnnotationTag(traffic_annotation_));
